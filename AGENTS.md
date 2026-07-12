@@ -487,6 +487,13 @@ Frontend-specific rendering:
 - `displaySourceMessages` inserts archive placeholders for large histories without mutating true session messages
 - tool card components render read groups, diffs, command output, MCP tools, and sub-agent progress
 - `AskToolCard` renders one question per Tab, supports multiple selections and custom answers, and submits all answers together
+
+UI internationalization:
+
+- `frontend/src/i18n.mjs` is the source of truth for UI translations and locale helpers.
+- Only `zh-CN` and `en-US` are supported. The primary `navigator.languages` / `navigator.language` entry decides the locale at startup: values beginning with `zh` use Chinese; all others use English.
+- The root Naive UI `NConfigProvider` and discrete APIs must receive the matching component locale and date locale.
+- New user-facing UI text must be added to both locale tables and referenced through `t()` / `$t()`; do not translate model output, file contents, command output, or raw tool results.
 - Startup performs one best-effort GitHub latest-release check. A newer semantic version shows a green update icon in `AppHeader`; clicking it opens the Ally GitHub repository in the system browser.
 
 ---

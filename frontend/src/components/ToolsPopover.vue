@@ -7,16 +7,16 @@
     @clickoutside="visible = false"
   >
     <template #trigger>
-      <button type="button" class="tools-trigger" title="查看模型可调用工具" @click.stop="visible = !visible">
-        {{ toolCount }} tools
+      <button type="button" class="tools-trigger" :title="$t('tools.open')" @click.stop="visible = !visible">
+        {{ $t('tools.count', { count: toolCount }) }}
       </button>
     </template>
     <div class="tools-popover" @click.stop>
-      <div class="tools-overview">模型可调用 {{ toolCount }} 个工具 · 内置 {{ builtinTools.length }} · MCP {{ mcpTools.length }}</div>
+      <div class="tools-overview">{{ $t('tools.overview', { total: toolCount, builtin: builtinTools.length, mcp: mcpTools.length }) }}</div>
       <div v-if="builtinToolGroups.length" class="tools-section">
-        <div class="tools-section-title">内置能力</div>
+        <div class="tools-section-title">{{ $t('tools.builtin') }}</div>
         <div v-for="group in builtinToolGroups" :key="group.key" class="tool-list-item">
-          <div class="tool-list-name">{{ group.label }}<span class="tool-list-server"> · {{ group.count }} tools</span></div>
+          <div class="tool-list-name">{{ group.label }}<span class="tool-list-server"> · {{ $t('tools.count', { count: group.count }) }}</span></div>
           <div class="tool-list-desc">{{ group.description }}</div>
         </div>
       </div>
@@ -24,7 +24,7 @@
         <div class="tools-section-title">MCP</div>
         <div v-for="tool in mcpTools" :key="tool.name" class="tool-list-item">
           <div class="tool-list-name">{{ tool.name }}<span v-if="tool.server" class="tool-list-server"> · {{ tool.server }}</span></div>
-          <div class="tool-list-desc">{{ tool.description || 'No description' }}</div>
+          <div class="tool-list-desc">{{ tool.description || $t('common.noDescription') }}</div>
         </div>
       </div>
     </div>
@@ -33,6 +33,7 @@
 
 <script setup>
 import { computed, ref } from 'vue';
+import { t } from '../i18n.mjs';
 
 const props = defineProps({
   tools: { type: Array, default: () => [] },
@@ -47,63 +48,63 @@ const builtinToolGroups = computed(() => groupBuiltinTools(builtinTools.value));
 const BUILTIN_TOOL_GROUPS = [
   {
     key: 'read',
-    label: '文件浏览/读取',
+    label: t('tools.group.read'),
     names: ['list_files', 'batch_read'],
-    description: '浏览目录、批量读取文件内容；运行时统一显示为读取类卡片。',
+    description: t('tools.group.readDescription'),
   },
   {
     key: 'search',
-    label: '搜索',
+    label: t('tools.group.search'),
     names: ['grep_files'],
-    description: '在工作区里按正则搜索文件内容。',
+    description: t('tools.group.searchDescription'),
   },
   {
     key: 'write',
-    label: '文件修改',
+    label: t('tools.group.write'),
     names: ['edit', 'create_file', 'delete_path'],
-    description: '编辑、创建和删除工作区文件。',
+    description: t('tools.group.writeDescription'),
   },
   {
     key: 'command',
-    label: '命令/后台进程',
+    label: t('tools.group.command'),
     names: ['run_command', 'background_process'],
-    description: '运行短时命令，或启动和停止不阻塞 Agent 的长驻进程。',
+    description: t('tools.group.commandDescription'),
   },
   {
     key: 'network',
-    label: '网络读取',
+    label: t('tools.group.network'),
     names: ['http_request', 'web_fetch'],
-    description: '读取 HTTP API 或网页文本。',
+    description: t('tools.group.networkDescription'),
   },
   {
     key: 'remote',
-    label: '远程 SSH',
+    label: t('tools.group.remote'),
     names: ['remote_list_files', 'remote_read_file', 'remote_edit', 'remote_create_file', 'remote_delete_path', 'remote_run_command'],
-    description: '在远程 SSH 工作区执行读取、编辑和命令。',
+    description: t('tools.group.remoteDescription'),
   },
   {
     key: 'state',
-    label: '任务状态',
+    label: t('tools.group.state'),
     names: ['todo_write', 'create_goal', 'update_goal', 'get_goal', 'scheduled_task'],
-    description: '维护 todo、目标模式和持久化定时任务。',
+    description: t('tools.group.stateDescription'),
   },
   {
     key: 'memory',
-    label: '记忆',
+    label: t('tools.group.memory'),
     names: ['memory_read', 'memory_write'],
-    description: '读取和写入全局长期记忆。',
+    description: t('tools.group.memoryDescription'),
   },
   {
     key: 'agent',
-    label: '代理/技能',
+    label: t('tools.group.agent'),
     names: ['agent_delegate', 'Skill'],
-    description: '加载技能或启动子代理执行子任务。',
+    description: t('tools.group.agentDescription'),
   },
   {
     key: 'utility',
-    label: '实用工具',
+    label: t('tools.group.utility'),
     names: ['calculate', 'wait', 'ask'],
-    description: '执行本地确定性计算、短时等待或向用户提问。',
+    description: t('tools.group.utilityDescription'),
   },
 ];
 
@@ -121,9 +122,9 @@ function groupBuiltinTools(tools) {
   if (otherCount) {
     groups.push({
       key: 'other',
-      label: '其他',
+      label: t('tools.group.other'),
       count: otherCount,
-      description: '尚未归类的内置模型工具。',
+      description: t('tools.group.otherDescription'),
     });
   }
   return groups;

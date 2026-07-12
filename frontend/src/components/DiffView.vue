@@ -33,7 +33,7 @@
 
     <!-- Expand/collapse toggle -->
     <div v-if="collapsed && hasMore" class="diff-expand-hint" @click="onToggle">
-      … show full diff …
+      {{ $t('tools.showFullDiff') }}
     </div>
   </div>
 </template>

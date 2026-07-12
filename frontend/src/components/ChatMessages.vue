@@ -4,33 +4,34 @@
       <div ref="messagesRootRef" class="messages" @click="$emit('clearFocus')">
         <template v-for="(msg, index) in messages" :key="`${index}-${msg.role}-${msg.kind || ''}-${msg.readEntries?.length || 0}`">
         <button v-if="msg.role === 'archive'" class="message-archive-toggle" @click.stop="$emit('toggleArchive', msg.sessionId)">
-          <span>{{ msg.expanded ? '收起早期消息' : '展开早期消息' }}</span>
-          <span>{{ msg.count }} 条 · 约 {{ fmtK(msg.tokens) }} tokens</span>
+          <span>{{ msg.expanded ? $t('chat.archive.collapse') : $t('chat.archive.expand') }}</span>
+          <span>{{ $t('chat.archive.summary', { count: msg.count, tokens: fmtK(msg.tokens) }) }}</span>
         </button>
         <div v-else-if="msg.role === 'user'" :class="['message', msg.role, { error: msg.error }]" data-user-question>
+          <span class="user-prefix">{{ $t('chat.askPrefix') }}</span>
           <div class="message-body user-text markdown-body" v-html="renderFn(msg.content, false)"></div>
-          <RenderBoundary label="附件"><MessageAttachments :attachments="msg.attachments || []" /></RenderBoundary>
+          <RenderBoundary :label="$t('chat.attachment')"><MessageAttachments :attachments="msg.attachments || []" /></RenderBoundary>
         </div>
         <div v-else-if="msg.role !== 'tool_call'" :class="['message', msg.role, { error: msg.error, system: msg.system }]">
           <pre v-if="msg.reasoningBody" class="reasoning-body">{{ msg.reasoningBody }}</pre>
-          <RenderBoundary v-if="msg.welcome" label="欢迎消息"><WelcomeMessage :welcome="msg.welcome" :tools="tools" /></RenderBoundary>
+          <RenderBoundary v-if="msg.welcome" :label="$t('chat.welcome')"><WelcomeMessage :welcome="msg.welcome" :tools="tools" /></RenderBoundary>
           <div v-else class="message-body markdown-body" v-html="renderFn(msg.content, msg.streaming)"></div>
-          <RenderBoundary label="附件"><MessageAttachments :attachments="msg.attachments || []" /></RenderBoundary>
+          <RenderBoundary :label="$t('chat.attachment')"><MessageAttachments :attachments="msg.attachments || []" /></RenderBoundary>
           <div v-if="msg.role === 'assistant' && msg.roundDurationText && !msg.streaming" class="message-duration">
-            本轮耗时 {{ msg.roundDurationText }}
+            {{ $t('chat.duration', { duration: msg.roundDurationText }) }}
             <span class="duration-sep">·</span>
-            <span class="export-btn" @click.stop="$emit('exportOneMsg', msg)" title="导出本条回答">导出回答</span>
+            <span class="export-btn" @click.stop="$emit('exportOneMsg', msg)" :title="$t('chat.export.responseTitle')">{{ $t('chat.export.response') }}</span>
             <span class="duration-sep">·</span>
-            <span class="export-btn" @click.stop="$emit('exportAllMsgs')" title="导出完整会话">导出会话</span>
+            <span class="export-btn" @click.stop="$emit('exportAllMsgs')" :title="$t('chat.export.sessionTitle')">{{ $t('chat.export.session') }}</span>
           </div>
         </div>
-        <RenderBoundary v-else-if="msg.kind === 'ask'" label="交互提问">
+        <RenderBoundary v-else-if="msg.kind === 'ask'" :label="$t('chat.ask')">
           <AskToolCard :msg="msg" @submit="$emit('submitAsk', msg, $event)" />
         </RenderBoundary>
         <!-- Tool call cards -->
         <RenderBoundary
           v-else-if="['edit','create','read','command','calculate','delete','glob','grep','other','todo','scheduled','memory','service','wait','mcp'].includes(msg.kind) && msg.kind !== 'run'"
-          label="工具卡"
+          :label="$t('chat.toolCard')"
         >
           <ToolCallCard
             :msg="msg"
@@ -40,7 +41,7 @@
           />
         </RenderBoundary>
         <!-- Read group card -->
-        <RenderBoundary v-else-if="msg.kind === 'read-group'" label="读取结果">
+        <RenderBoundary v-else-if="msg.kind === 'read-group'" :label="$t('chat.readResult')">
           <ReadGroupCard
             :msg="msg"
             :focused="focusedId === msg.eventId"
@@ -49,10 +50,10 @@
           />
         </RenderBoundary>
         <!-- Sub-agent -->
-        <RenderBoundary v-else-if="msg.kind === 'subagent'" label="子代理状态"><SubagentInlineCard :msg="msg" /></RenderBoundary>
+        <RenderBoundary v-else-if="msg.kind === 'subagent'" :label="$t('chat.subagent')"><SubagentInlineCard :msg="msg" /></RenderBoundary>
         </template>
         <div v-if="messages.length === 0" class="empty-chat">
-          <n-empty description="开始一个任务，或输入 / 选择指令" />
+          <n-empty :description="$t('chat.empty')" />
         </div>
       </div>
     </n-scrollbar>
@@ -251,8 +252,7 @@ defineExpose({ scrollbarRef, scrollToBottom, scrollToUserQuestion, saveScrollPos
   gap: 8px;
 }
 
-.message.user::before {
-  content: "Ask: ";
+.user-prefix {
   flex: none;
   margin-top: 6px;
   color: #f7b977;

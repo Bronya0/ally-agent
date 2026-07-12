@@ -6,21 +6,21 @@
     :native-scrollbar="true"
     @update:show="(value) => !value && $emit('close')"
   >
-    <n-drawer-content title="定时任务" closable>
+    <n-drawer-content :title="$t('scheduled.title')" closable>
       <template #header-extra>
-        <n-button size="small" quaternary :loading="loading" @click="$emit('refresh')">刷新</n-button>
+        <n-button size="small" quaternary :loading="loading" @click="$emit('refresh')">{{ $t('common.refresh') }}</n-button>
       </template>
 
       <div class="scheduled-overview">
-        <span>共 {{ tasks.length }} 个任务</span>
-        <span>运行中 {{ runningCount }}</span>
-        <span>任务仅在 Ally 打开时执行</span>
+        <span>{{ $t('scheduled.total', { count: tasks.length }) }}</span>
+        <span>{{ $t('scheduled.runningCount', { count: runningCount }) }}</span>
+        <span>{{ $t('scheduled.openOnly') }}</span>
       </div>
 
       <n-spin :show="loading">
-        <n-empty v-if="!tasks.length" description="暂无定时任务">
+        <n-empty v-if="!tasks.length" :description="$t('scheduled.empty')">
           <template #extra>
-            <span class="scheduled-empty-hint">可以让模型通过 scheduled_task 工具创建。</span>
+            <span class="scheduled-empty-hint">{{ $t('scheduled.emptyHint') }}</span>
           </template>
         </n-empty>
 
@@ -38,36 +38,36 @@
             </div>
 
             <div class="scheduled-grid">
-              <div><span>调度</span><strong>{{ scheduleLabel(task.schedule) }}</strong></div>
-              <div><span>下次运行</span><strong>{{ formatTime(task.nextRunAt) }}</strong></div>
-              <div><span>上次运行</span><strong>{{ formatTime(task.lastRunAt) }}</strong></div>
-              <div><span>运行次数</span><strong>{{ task.runCount || 0 }}</strong></div>
-              <div><span>单次限制</span><strong>{{ task.maxSteps }} steps · {{ durationLabel(task.timeoutSeconds) }}</strong></div>
-              <div><span>连续失败</span><strong>{{ task.consecutiveFailures || 0 }}</strong></div>
+              <div><span>{{ $t('scheduled.schedule') }}</span><strong>{{ scheduleLabel(task.schedule) }}</strong></div>
+              <div><span>{{ $t('scheduled.nextRun') }}</span><strong>{{ formatTime(task.nextRunAt) }}</strong></div>
+              <div><span>{{ $t('scheduled.lastRun') }}</span><strong>{{ formatTime(task.lastRunAt) }}</strong></div>
+              <div><span>{{ $t('scheduled.runCount') }}</span><strong>{{ task.runCount || 0 }}</strong></div>
+              <div><span>{{ $t('scheduled.limit') }}</span><strong>{{ $t('common.steps', { count: task.maxSteps }) }} · {{ durationLabel(task.timeoutSeconds) }}</strong></div>
+              <div><span>{{ $t('scheduled.failures') }}</span><strong>{{ task.consecutiveFailures || 0 }}</strong></div>
             </div>
 
             <div class="scheduled-workspace" :title="task.workspace">{{ task.workspace }}</div>
             <div class="scheduled-instruction">{{ task.instruction }}</div>
 
             <div v-if="task.lastSummary" class="scheduled-output">
-              <div class="scheduled-output-title">最近输出</div>
+              <div class="scheduled-output-title">{{ $t('scheduled.latestOutput') }}</div>
               <pre>{{ task.lastSummary }}</pre>
             </div>
             <div v-if="task.lastError" class="scheduled-output error">
-              <div class="scheduled-output-title">最近错误</div>
+              <div class="scheduled-output-title">{{ $t('scheduled.latestError') }}</div>
               <pre>{{ task.lastError }}</pre>
             </div>
 
             <div class="scheduled-actions">
               <n-popconfirm
-                positive-text="删除"
-                negative-text="取消"
+                :positive-text="$t('common.delete')"
+                :negative-text="$t('common.cancel')"
                 @positive-click="$emit('delete', task.id)"
               >
                 <template #trigger>
-                  <n-button size="small" type="error" ghost :loading="deletingIds.includes(task.id)">删除任务</n-button>
+                  <n-button size="small" type="error" ghost :loading="deletingIds.includes(task.id)">{{ $t('scheduled.deleteTask') }}</n-button>
                 </template>
-                删除后会取消正在运行的任务，且无法恢复。确定继续？
+                {{ $t('scheduled.deleteConfirm') }}
               </n-popconfirm>
             </div>
           </article>
@@ -79,6 +79,7 @@
 
 <script setup>
 import { computed } from 'vue';
+import { formatDateTime, t } from '../i18n.mjs';
 
 const props = defineProps({
   show: { type: Boolean, default: false },
@@ -92,12 +93,12 @@ defineEmits(['close', 'refresh', 'delete']);
 const runningCount = computed(() => props.tasks.filter((task) => task?.running).length);
 
 function statusLabel(task) {
-  if (task?.running) return '运行中';
+  if (task?.running) return t('common.running');
   const labels = {
-    scheduled: '等待中', completed: '已完成', failed: '失败', timed_out: '超时',
-    cancelled: '已取消', skipped: '已跳过', missed: '已错过', invalid: '无效',
+    scheduled: t('scheduled.status.waiting'), completed: t('scheduled.status.completed'), failed: t('scheduled.status.failed'), timed_out: t('scheduled.status.timedOut'),
+    cancelled: t('scheduled.status.cancelled'), skipped: t('scheduled.status.skipped'), missed: t('scheduled.status.missed'), invalid: t('scheduled.status.invalid'),
   };
-  return labels[task?.lastStatus] || task?.lastStatus || '等待中';
+  return labels[task?.lastStatus] || task?.lastStatus || t('scheduled.status.waiting');
 }
 
 function statusType(task) {
@@ -109,16 +110,16 @@ function statusType(task) {
 }
 
 function scheduleLabel(schedule = {}) {
-  if (schedule.type === 'once') return `单次 · ${schedule.at || '-'}`;
-  if (schedule.type === 'interval') return `每 ${schedule.every || '-'}`;
-  if (schedule.type === 'cron') return `Cron ${schedule.cron || '-'} · ${schedule.timezone || '本地时区'}`;
+  if (schedule.type === 'once') return t('scheduled.once', { at: schedule.at || '-' });
+  if (schedule.type === 'interval') return t('scheduled.interval', { interval: schedule.every || '-' });
+  if (schedule.type === 'cron') return t('scheduled.cron', { cron: schedule.cron || '-', timezone: schedule.timezone || t('common.localTimezone') });
   return '-';
 }
 
 function formatTime(value) {
   const timestamp = Number(value || 0);
   if (!timestamp) return '-';
-  return new Date(timestamp).toLocaleString();
+  return formatDateTime(timestamp);
 }
 
 function durationLabel(seconds) {

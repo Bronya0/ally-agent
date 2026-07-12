@@ -32,6 +32,7 @@ import { computed } from 'vue';
 import AllyAvatar from './AllyAvatar.vue';
 import ToolsPopover from './ToolsPopover.vue';
 import { buildVersion } from '../utils/buildVersion';
+import { t } from '../i18n.mjs';
 
 const props = defineProps({
   welcome: { type: Object, required: true },
@@ -41,7 +42,7 @@ const props = defineProps({
 const tableRows = computed(() => {
   const items = [
     ...(Array.isArray(props.welcome?.rows) ? props.welcome.rows : []),
-    { label: '工具', kind: 'tools' },
+    { label: t('common.tools'), kind: 'tools' },
   ];
   const rows = [];
   for (let index = 0; index < items.length; index += 2) {

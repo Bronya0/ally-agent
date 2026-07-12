@@ -34,37 +34,37 @@
           <span class="model-item-model">{{ m.model || '-' }}</span>
           <span class="model-item-name">{{ providerLabel(m) }}</span>
         </div>
-        <div v-if="!config.models || config.models.length === 0" class="model-empty">暂无已保存模型</div>
+        <div v-if="!config.models || config.models.length === 0" class="model-empty">{{ $t('composer.models.empty') }}</div>
         <div class="model-menu-actions">
-          <n-button size="tiny" quaternary @click="openConfig">管理模型</n-button>
+          <n-button size="tiny" quaternary @click="openConfig">{{ $t('composer.models.manage') }}</n-button>
         </div>
       </div>
     </n-popover>
     <span class="info-workspace">
-      <button class="info-workspace-btn" type="button" title="在资源管理器中打开工作区" @click.stop="$emit('openWorkspace')">
-        {{ config.workspace || '未选择工作区' }}
+      <button class="info-workspace-btn" type="button" :title="$t('composer.workspace.open')" @click.stop="$emit('openWorkspace')">
+        {{ config.workspace || $t('composer.workspace.none') }}
       </button>
     </span>
     <button
       type="button"
       :class="['scheduled-task-chip', { running: scheduledTaskRunningCount > 0 }]"
-      title="查看定时任务"
+      :title="$t('composer.scheduled.open')"
       @click.stop="$emit('openScheduledTasks')"
     >
       <span class="scheduled-task-icon">◷</span>
       <span>{{ scheduledTaskCount }}</span>
     </button>
-    <span class="question-jump-controls" title="跳转到我的提问">
-      <button type="button" class="question-jump-btn" title="上一个我的提问" @click.stop="$emit('jumpQuestion', 'up')">↑</button>
-      <button type="button" class="question-jump-btn" title="下一个我的提问" @click.stop="$emit('jumpQuestion', 'down')">↓</button>
+    <span class="question-jump-controls" :title="$t('composer.question.jump')">
+      <button type="button" class="question-jump-btn" :title="$t('composer.question.previous')" @click.stop="$emit('jumpQuestion', 'up')">↑</button>
+      <button type="button" class="question-jump-btn" :title="$t('composer.question.next')" @click.stop="$emit('jumpQuestion', 'down')">↓</button>
     </span>
     <template v-if="gitStatus.isRepo">
       <span class="info-sep">·</span>
-      <span class="info-git" title="查看 Git 改动" @click.stop="$emit('openGitDiff')">
+      <span class="info-git" :title="$t('composer.git.open')" @click.stop="$emit('openGitDiff')">
         <span class="info-git-branch">{{ gitStatus.branch }}</span>
-        <span v-if="gitStatus.added > 0" class="git-stat added" title="新增文件数">+{{ gitStatus.added }}</span>
-        <span v-if="gitStatus.modified > 0" class="git-stat modified" title="已修改文件数">~{{ gitStatus.modified }}</span>
-        <span v-if="gitStatus.deleted > 0" class="git-stat deleted" title="已删除文件数">-{{ gitStatus.deleted }}</span>
+        <span v-if="gitStatus.added > 0" class="git-stat added" :title="$t('composer.git.added')">+{{ gitStatus.added }}</span>
+        <span v-if="gitStatus.modified > 0" class="git-stat modified" :title="$t('composer.git.modified')">~{{ gitStatus.modified }}</span>
+        <span v-if="gitStatus.deleted > 0" class="git-stat deleted" :title="$t('composer.git.deleted')">-{{ gitStatus.deleted }}</span>
       </span>
     </template>
     <n-popover v-if="contextBreakdown" :show="contextPopoverVisible" trigger="manual" placement="top" :show-arrow="false" @clickoutside="contextPopoverVisible = false">
@@ -80,7 +80,7 @@
       </template>
       <div class="context-breakdown">
         <div class="context-breakdown-row">
-          <span>系统提示词</span>
+          <span>{{ $t('composer.context.system') }}</span>
           <span>{{ fmtK(contextBreakdown.systemPrompt) }}</span>
         </div>
         <div
@@ -88,35 +88,35 @@
           :key="part.label"
           class="context-breakdown-row context-breakdown-subrow"
         >
-          <span>{{ part.label }}</span>
+          <span>{{ contextPartLabel(part.label) }}</span>
           <span>{{ fmtK(part.tokens) }}</span>
         </div>
         <div class="context-breakdown-row">
-          <span>工具 Schema</span>
+          <span>{{ $t('composer.context.tools') }}</span>
           <span>{{ fmtK(contextBreakdown.toolSchemas) }}</span>
         </div>
         <div class="context-breakdown-row">
-          <span>用户提问</span>
+          <span>{{ $t('composer.context.user') }}</span>
           <span>{{ fmtK(contextBreakdown.userMessages) }}</span>
         </div>
         <div class="context-breakdown-row">
-          <span>AI 回复</span>
+          <span>{{ $t('composer.context.assistant') }}</span>
           <span>{{ fmtK(contextBreakdown.assistantMsgs) }}</span>
         </div>
         <div class="context-breakdown-row">
-          <span>工具结果</span>
+          <span>{{ $t('composer.context.results') }}</span>
           <span>{{ fmtK(contextBreakdown.toolResults) }}</span>
         </div>
         <div v-if="contextBreakdown.reasoning" class="context-breakdown-row">
-          <span>思考内容</span>
+          <span>{{ $t('composer.context.reasoning') }}</span>
           <span>{{ fmtK(contextBreakdown.reasoning) }}</span>
         </div>
         <div class="context-breakdown-row context-breakdown-total">
-          <span>累计输入</span>
+          <span>{{ $t('composer.context.input') }}</span>
           <span>{{ workspaceInputTokens }}</span>
         </div>
         <div class="context-breakdown-row">
-          <span>累计输出</span>
+          <span>{{ $t('composer.context.output') }}</span>
           <span>{{ workspaceOutputTokens }}</span>
         </div>
       </div>
@@ -135,6 +135,7 @@
 <script setup>
 import { computed, ref } from 'vue';
 import ContextUsageInline from './ContextUsageInline.vue';
+import { formatDateTime, t } from '../i18n.mjs';
 
 function formatMessageContent(msg) {
   if (!msg) return '';
@@ -174,8 +175,8 @@ function exportFullSession() {
   const msgs = props.sessionMessages;
   if (!msgs || !msgs.length) return;
   const parts = [];
-  parts.push(`# ${props.sessionTitle || 'Ally 会话'}\n`);
-  parts.push(`> 导出时间: ${new Date().toLocaleString()}`);
+  parts.push(`# ${props.sessionTitle || t('app.export.sessionTitle')}\n`);
+  parts.push(`> ${t('app.export.time', { time: formatDateTime(new Date()) })}`);
   parts.push('');
   for (const msg of msgs) {
     if (msg.welcome) continue;
@@ -251,6 +252,19 @@ const systemPromptParts = computed(() => (
     ? props.contextBreakdown.systemPromptParts.filter((part) => part && part.tokens > 0)
     : []
 ));
+
+function contextPartLabel(label) {
+  const labels = {
+    '核心系统提示词': 'composer.context.part.core',
+    '技能元数据': 'composer.context.part.skills',
+    '全局记忆索引': 'composer.context.part.memory',
+    'AGENTS.md / 项目指令': 'composer.context.part.instructions',
+    '自定义提示词': 'composer.context.part.custom',
+    '工作区文件结构': 'composer.context.part.workspace',
+    '目标上下文': 'composer.context.part.goal',
+  };
+  return labels[label] ? t(labels[label]) : label;
+}
 
 function selectModel(index) {
   modelMenuVisible.value = false;

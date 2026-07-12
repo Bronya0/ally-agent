@@ -1,6 +1,6 @@
 <template>
   <div v-if="visible" class="command-menu">
-    <div class="command-title">指令 {{ builtinCount }} · 技能 {{ skillsCount }}</div>
+    <div class="command-title">{{ $t('commands.title', { commands: builtinCount, skills: skillsCount }) }}</div>
     <div ref="commandScrollRef" class="command-scroll">
       <button
         v-for="(cmd, index) in commands"
@@ -12,7 +12,7 @@
         <span class="command-desc">{{ cmd.description }}</span>
       </button>
     </div>
-    <div v-if="commands.length === 0" class="command-empty">无匹配指令</div>
+    <div v-if="commands.length === 0" class="command-empty">{{ $t('commands.empty') }}</div>
   </div>
 </template>
 

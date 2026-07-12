@@ -1,19 +1,19 @@
 <template>
-  <n-modal v-model:show="visible" preset="card" title="Git 改动" class="git-diff-modal" @after-leave="cleanup">
+  <n-modal v-model:show="visible" preset="card" :title="$t('git.title')" class="git-diff-modal" @after-leave="cleanup">
     <div class="git-diff-toolbar">
       <div class="git-diff-summary">
         <span class="git-diff-branch">{{ diffResult?.branch || gitStatus.branch || '-' }}</span>
         <span v-if="gitStatus.added > 0" class="git-stat added">+{{ gitStatus.added }}</span>
         <span v-if="gitStatus.modified > 0" class="git-stat modified">~{{ gitStatus.modified }}</span>
         <span v-if="gitStatus.deleted > 0" class="git-stat deleted">-{{ gitStatus.deleted }}</span>
-        <span v-if="diffResult?.truncated" class="git-diff-truncated">已截断</span>
+        <span v-if="diffResult?.truncated" class="git-diff-truncated">{{ $t('common.truncated') }}</span>
       </div>
-      <n-button size="small" secondary :loading="loading" @click="loadDiff(true)">刷新</n-button>
+      <n-button size="small" secondary :loading="loading" @click="loadDiff(true)">{{ $t('common.refresh') }}</n-button>
     </div>
 
-    <div v-if="loading" class="git-diff-loading">正在加载 diff...</div>
+    <div v-if="loading" class="git-diff-loading">{{ $t('git.loading') }}</div>
     <div v-else-if="diffResult?.error" class="git-diff-error">{{ diffResult.error }}</div>
-    <div v-else-if="!files.length" class="git-diff-empty">当前没有 Git 改动。</div>
+    <div v-else-if="!files.length" class="git-diff-empty">{{ $t('git.empty') }}</div>
     <div v-else class="git-diff-layout">
       <div class="git-diff-tree">
         <button
@@ -25,7 +25,7 @@
         >
           <span class="git-diff-disclosure">{{ row.type === 'dir' ? (treeExpanded[row.path] === false ? '▸' : '▾') : '' }}</span>
           <span v-if="row.type === 'file'" :class="['git-diff-status', row.file.status]">{{ statusLabel(row.file.status) }}</span>
-          <span v-else class="git-diff-dir-icon">dir</span>
+          <span v-else class="git-diff-dir-icon">{{ $t('common.directory') }}</span>
           <span class="git-diff-tree-name" :title="row.path">{{ row.name }}</span>
           <span v-if="row.added > 0" class="diff-stat-added">+{{ row.added }}</span>
           <span v-if="row.deleted > 0" class="diff-stat-removed">-{{ row.deleted }}</span>
@@ -39,8 +39,8 @@
             <span class="git-diff-preview-path" :title="selectedFile.path">{{ selectedFile.path }}</span>
             <span v-if="selectedFile.added > 0" class="diff-stat-added">+{{ selectedFile.added }}</span>
             <span v-if="selectedFile.deleted > 0" class="diff-stat-removed">-{{ selectedFile.deleted }}</span>
-            <span v-if="selectedFile.binary" class="git-diff-chip">binary</span>
-            <span v-if="selectedFile.truncated" class="git-diff-chip">truncated</span>
+            <span v-if="selectedFile.binary" class="git-diff-chip">{{ $t('common.binary') }}</span>
+            <span v-if="selectedFile.truncated" class="git-diff-chip">{{ $t('common.truncated') }}</span>
           </div>
           <DiffView
             v-if="selectedFile.diff && !selectedFile.binary"
@@ -51,10 +51,10 @@
             :collapsed="false"
             :show-header="false"
           />
-          <pre v-else class="git-diff-placeholder">{{ selectedFile.diff || selectedFile.error || '无文本 diff。' }}</pre>
+          <pre v-else class="git-diff-placeholder">{{ selectedFile.diff || selectedFile.error || $t('git.noText') }}</pre>
           <div v-if="selectedFile.error" class="git-diff-error compact">{{ selectedFile.error }}</div>
         </template>
-        <div v-else class="git-diff-empty">选择一个文件查看 diff。</div>
+        <div v-else class="git-diff-empty">{{ $t('git.selectFile') }}</div>
       </div>
     </div>
   </n-modal>
@@ -64,6 +64,7 @@
 import { computed, ref, shallowRef, watch } from 'vue';
 import DiffView from './DiffView.vue';
 import { CancelGitDiff, GetGitDiff } from '../../wailsjs/go/main/App';
+import { t } from '../i18n.mjs';
 
 const props = defineProps({
   show: { type: Boolean, default: false },
@@ -117,7 +118,7 @@ async function loadDiff(force = false) {
     }
   } catch (err) {
     if (seq !== loadSeq.value) return;
-    diffResult.value = { isRepo: false, files: [], error: String(err || '加载 Git diff 失败') };
+    diffResult.value = { isRepo: false, files: [], error: String(err || t('git.loadFailed')) };
     loadedKey.value = key;
     selectedPath.value = '';
   } finally {

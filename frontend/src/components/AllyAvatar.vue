@@ -1,5 +1,5 @@
 <template>
-  <div class="ally-avatar" role="img" aria-label="会眨眼和转头的 Ally 头像">
+  <div class="ally-avatar" role="img" :aria-label="$t('avatar.aria')">
     <svg viewBox="0 0 160 116" aria-hidden="true">
       <ellipse class="avatar-glow" cx="80" cy="62" rx="54" ry="46" />
       <path class="avatar-shoulders" d="M35 108c5-18 20-27 45-27s40 9 45 27" />

@@ -4,7 +4,7 @@
     <div class="splash-content">
       <AllyWordmark class="splash-brand" />
       <div class="build-version">{{ buildVersion }}</div>
-      <div class="splash-line">正在点亮工作区，整理上下文和工具链。</div>
+      <div class="splash-line">{{ $t('splash.loading') }}</div>
     </div>
   </div>
 </template>

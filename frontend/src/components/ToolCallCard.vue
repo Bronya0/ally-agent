@@ -24,10 +24,10 @@
     <div v-if="msg.kind === 'edit' && msg.editEntries?.length" class="edit-file-groups">
       <div v-for="(entry, ei) in msg.editEntries" :key="entry.path || ei" class="edit-file-group">
         <div class="edit-file-header">
-          <span class="edit-file-name">{{ entry.path || `File ${ei + 1}` }}</span>
+        <span class="edit-file-name">{{ entry.path || $t('tools.file', { index: ei + 1 }) }}</span>
           <span v-if="entry.added" class="edit-chip-added">+{{ entry.added }}</span>
           <span v-if="entry.removed" class="edit-chip-removed">-{{ entry.removed }}</span>
-          <span class="edit-file-meta">{{ entry.changes?.length || 0 }} changes</span>
+          <span class="edit-file-meta">{{ $t('tools.changes', { count: entry.changes?.length || 0 }) }}</span>
         </div>
         <div class="edit-file-content">
           <DiffView v-if="entry.diff" :diff-text="entry.diff" :file-path="entry.path" :show-header="false" :collapsed="!msg.expanded" :added-count="entry.added || 0" :removed-count="entry.removed || 0" />
@@ -71,6 +71,7 @@ import hljs from 'highlight.js/lib/core';
 import bash from 'highlight.js/lib/languages/bash';
 import powershell from 'highlight.js/lib/languages/powershell';
 import { highlightShellCommand } from '../utils/shellHighlight.mjs';
+import { t } from '../i18n.mjs';
 
 const BODY_PREVIEW_LINES = 6;
 
@@ -99,7 +100,7 @@ const waitCountdown = computed(() => {
   const startedAt = Number(props.msg.waitStartedAt || 0);
   if (!seconds || !startedAt) return '';
   const remaining = Math.max(0, Math.ceil((startedAt + seconds * 1000 - nowMs.value) / 1000));
-  return `· ${remaining}s remaining`;
+  return t('tools.wait.remaining', { seconds: remaining });
 });
 
 watch(
@@ -123,22 +124,22 @@ onUnmounted(() => {
 
 function toolKindLabel(kind) {
   const labels = {
-    edit: 'Edit',
-    create: 'Create',
-    delete: 'Delete',
-    command: 'Command',
-    calculate: 'Calculate',
-    read: 'Read',
-    glob: 'Glob',
-    grep: 'Grep',
-    run: 'Run',
-    other: 'Tool',
-    todo: 'Todo',
-    scheduled: 'Scheduled Task',
-    memory: 'Memory',
-    service: 'Service',
-    wait: 'Wait',
-    subagent: 'Sub-agent',
+    edit: t('tools.kind.edit'),
+    create: t('tools.kind.create'),
+    delete: t('tools.kind.delete'),
+    command: t('tools.kind.command'),
+    calculate: t('tools.kind.calculate'),
+    read: t('tools.kind.read'),
+    glob: t('tools.kind.glob'),
+    grep: t('tools.kind.grep'),
+    run: t('tools.kind.run'),
+    other: t('tools.kind.tool'),
+    todo: t('tools.kind.todo'),
+    scheduled: t('tools.kind.scheduled'),
+    memory: t('tools.kind.memory'),
+    service: t('tools.kind.service'),
+    wait: t('tools.kind.wait'),
+    subagent: t('tools.kind.subagent'),
     mcp: 'MCP',
   };
   return labels[kind] || '';
@@ -152,7 +153,7 @@ function toolDisplayName(msg) {
   if (String(msg.name || '').startsWith('remote_')) return formatToolName(msg.name);
   const kindLabel = toolKindLabel(msg.kind);
   if (kindLabel && msg.kind !== 'other') return kindLabel;
-  return formatToolName(msg.name) || 'Tool';
+  return formatToolName(msg.name) || t('tools.kind.tool');
 }
 
 function formatToolName(name) {
@@ -168,11 +169,11 @@ function toolIcon(msg) {
 }
 
 function toolVerb(msg) {
-  if (msg.status === 'error') return 'Failed';
-  if (msg.kind === 'wait') return msg.status === 'success' ? 'Waited' : 'Waiting';
-  if (msg.kind === 'todo') return msg.status === 'running' ? 'Using' : 'Use';
-  if (msg.status === 'success') return 'Used';
-  return 'Using';
+  if (msg.status === 'error') return t('tools.status.failed');
+  if (msg.kind === 'wait') return msg.status === 'success' ? t('tools.status.waited') : t('tools.status.waiting');
+  if (msg.kind === 'todo') return msg.status === 'running' ? t('tools.status.using') : t('tools.status.use');
+  if (msg.status === 'success') return t('tools.status.used');
+  return t('tools.status.using');
 }
 
 function highlightCommand(msg) {

@@ -1,5 +1,5 @@
 <template>
-  <n-config-provider :theme="darkTheme" :theme-overrides="themeOverrides" inline-theme-disabled>
+  <n-config-provider :theme="darkTheme" :theme-overrides="themeOverrides" :locale="naiveLocale" :date-locale="naiveDateLocale" inline-theme-disabled>
     <n-dialog-provider>
       <n-notification-provider>
         <n-message-provider>
@@ -47,7 +47,7 @@
               <!-- Fixed todo panel -->
               <Transition name="todo-panel">
                 <div v-if="showTodoPanel" :class="['todo-panel', { collapsed: todoPanelCollapsed }]">
-                  <button class="todo-panel-header" :title="todoPanelCollapsed ? '展开 Todo' : '折叠 Todo'" @click="todoPanelCollapsed = !todoPanelCollapsed">
+                  <button class="todo-panel-header" :title="todoPanelCollapsed ? $t('app.todo.expand') : $t('app.todo.collapse')" @click="todoPanelCollapsed = !todoPanelCollapsed">
                     <span>Todo</span>
                     <span class="todo-panel-count">{{ activeTodoCount }}/{{ todos.length }}</span>
                     <span class="todo-panel-toggle">{{ todoPanelCollapsed ? '▸' : '▾' }}</span>
@@ -71,7 +71,7 @@
                   @select="applyCommand"
                 />
                 <div v-if="sessionsVisible" class="sessions-menu">
-                  <div class="command-title">会话 ({{ sessions.length }})</div>
+                  <div class="command-title">{{ $t('app.sessions.title', { count: sessions.length }) }}</div>
                   <div ref="sessionsScrollRef" class="command-scroll">
                     <div
                       v-for="(s, index) in sessions"
@@ -82,20 +82,20 @@
                     >
                       <span class="session-index">{{ index + 1 }}</span>
                       <div class="session-body">
-                        <span class="session-label">{{ s.title || '新会话' }}</span>
+                        <span class="session-label">{{ s.title || $t('app.sessions.new') }}</span>
                         <span class="session-time">
                           {{ fmtTime(s.createdAt) }}
-                          <template v-if="s.id === activeSessionId && s.isRunning"> ~ 进行中</template>
+                          <template v-if="s.id === activeSessionId && s.isRunning"> ~ {{ $t('app.sessions.inProgress') }}</template>
                           <template v-else-if="s.updatedAt && s.updatedAt !== s.createdAt"> ~ {{ fmtTime(s.updatedAt) }}</template>
                         </span>
                       </div>
-                      <span class="session-meta">{{ msgCount(s) }}条 · {{ ctxSize(s) }}t</span>
-                      <span v-if="s.id === activeSessionId" class="session-current">当前</span>
+                      <span class="session-meta">{{ $t('app.sessions.messages', { count: msgCount(s) }) }} · {{ ctxSize(s) }}t</span>
+                      <span v-if="s.id === activeSessionId" class="session-current">{{ $t('app.sessions.current') }}</span>
                       <span v-if="s.isRunning" class="session-running">●</span>
                       <button
                         type="button"
                         class="session-delete"
-                        title="删除会话"
+                        :title="$t('app.sessions.delete')"
                         :disabled="s.isRunning || !!s.runId"
                         @mousedown.stop.prevent
                         @click.stop="deleteSession(index)"
@@ -118,7 +118,7 @@
                   type="textarea"
                   :input-props="{ onPaste: handlePromptPaste }"
                   :autosize="{ minRows: 2, maxRows: 5 }"
-                  placeholder="输入任务，Enter 发送，Shift+Enter 换行，Esc 中断 · 按 / 打开指令菜单"
+                  :placeholder="$t('app.composer.placeholder')"
                   @keydown="handlePromptKeydown"
                   @input="handlePromptInput"
                 />
@@ -127,7 +127,7 @@
                     <span class="pending-attachment-icon">{{ attachmentIcon(att) }}</span>
                     <span class="pending-attachment-name" :title="att.name">{{ att.name }}</span>
                     <span class="pending-attachment-size">{{ fmtBytes(att.size) }}</span>
-                    <button class="pending-attachment-remove" @click="removeAttachment(att.id)" title="移除">×</button>
+                    <button class="pending-attachment-remove" @click="removeAttachment(att.id)" :title="$t('app.attachment.remove')">×</button>
                   </div>
                 </div>
                 <input ref="attachmentInputRef" type="file" multiple class="hidden-file-input" @change="handleAttachmentSelected" />
@@ -179,7 +179,7 @@
             @refresh="loadScheduledTasks"
             @delete="deleteScheduledTask"
           />
-          <RenderBoundary label="Git 改动"><GitDiffModal v-model:show="gitDiffVisible" :git-status="gitStatus" :workspace="config.workspace" /></RenderBoundary>
+          <RenderBoundary :label="$t('app.gitChanges')"><GitDiffModal v-model:show="gitDiffVisible" :git-status="gitStatus" :workspace="config.workspace" /></RenderBoundary>
 
           <SplashScreen v-if="splashVisible" @done="splashVisible = false" />
         </n-message-provider>
@@ -259,6 +259,7 @@ import { assignConfig, defaultConfig } from './utils/config.mjs';
 import { buildVersion } from './utils/buildVersion.js';
 import { computeEditStats, formatEditStats } from './utils/diff.js';
 import { isNewerReleaseVersion } from './utils/versionCheck.mjs';
+import { formatDateTime, naiveDateLocale, naiveLocale, t, welcomeGreeting as localizedWelcomeGreeting } from './i18n.mjs';
 import {
   DEFAULT_TOOL_PREVIEW_LINES,
   displaySourceMessages as buildDisplaySourceMessages,
@@ -319,6 +320,8 @@ const { message } = createDiscreteApi(['message'], {
   configProviderProps: {
     theme: darkTheme,
     themeOverrides,
+    locale: naiveLocale,
+    dateLocale: naiveDateLocale,
   },
 });
 
@@ -402,8 +405,8 @@ function renderMermaidFence(code, spec) {
   scheduleMermaidRender();
   return [
     `<div class="markdown-mermaid" data-mermaid-source="${markdown.utils.escapeHtml(encodedSource)}">`,
-    '<div class="markdown-mermaid-toolbar" aria-label="图表操作">',
-    '<button type="button" class="markdown-mermaid-action" data-mermaid-action="download" title="下载 SVG" aria-label="下载 SVG"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg></button>',
+    `<div class="markdown-mermaid-toolbar" aria-label="${t('app.mermaid.actions')}">`,
+    `<button type="button" class="markdown-mermaid-action" data-mermaid-action="download" title="${t('app.mermaid.download')}" aria-label="${t('app.mermaid.download')}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg></button>`,
     '</div>',
     '<div class="markdown-mermaid-output"></div>',
     `<pre class="hljs code-block markdown-mermaid-fallback"><code>${markdown.utils.escapeHtml(source)}</code></pre>`,
@@ -511,7 +514,7 @@ async function renderPendingMermaidDiagrams() {
     mermaid = await loadMermaidModule();
   } catch (err) {
     for (const node of nodes) {
-      markMermaidError(node, `Mermaid 加载失败：${err?.message || err || 'unknown error'}`);
+      markMermaidError(node, t('app.mermaid.loadFailed', { error: err?.message || err || 'unknown error' }));
     }
     return;
   }
@@ -533,7 +536,7 @@ async function renderPendingMermaidDiagrams() {
       node.dataset.mermaidRendered = 'true';
       node.classList.add('rendered');
     } catch (err) {
-      markMermaidError(node, err?.message || String(err || 'Mermaid 渲染失败'));
+      markMermaidError(node, err?.message || String(err || t('app.mermaid.renderFailed')));
     } finally {
       delete node.dataset.mermaidRendering;
     }
@@ -550,7 +553,7 @@ function markMermaidError(node, messageText) {
     error.className = 'markdown-mermaid-error';
     node.prepend(error);
   }
-  error.textContent = messageText || 'Mermaid 渲染失败';
+  error.textContent = messageText || t('app.mermaid.renderFailed');
 }
 
 function handleMermaidToolbarClick(event) {
@@ -603,8 +606,8 @@ const sessions = ref([]);
 const activeSessionId = ref('');
 const activeRunId = ref('');
 const files = ref([]);
-const filePreview = ref('选择文件查看内容。');
-const previewTitle = ref('文件预览');
+const filePreview = ref(t('app.filePreview.empty'));
+const previewTitle = ref(t('app.filePreview.title'));
 const currentPreview = ref('');
 const currentFileDir = ref('');
 const sessionPromptTexts = reactive({});
@@ -714,16 +717,16 @@ function modelPlaceholder(value) {
 
 
 const builtinCommands = [
-  { key: 'new', label: '/new', description: '新建会话，清空上下文', text: '', special: 'new' },
-  { key: 'goal', label: '/goal', description: '设置目标模式', text: '', special: 'goal' },
-  { key: 'skills', label: '/skills', description: '查看可用技能', text: '', special: 'skills' },
-  { key: 'clearskills', label: '/clearskills', description: '停用所有技能', text: '', special: 'clear_skills' },
-  { key: 'sessions', label: '/sessions', description: '查看和切换历史会话', text: '', special: 'sessions' },
-  { key: 'reload', label: '/reload', description: '重新加载模型配置文件', text: '', special: 'reload' },
-  { key: 'init', label: '/init', description: '分析项目并生成 AGENTS.md', text: '', special: 'init' },
-  { key: 'note', label: '/note', description: '保存长期记忆', text: '', special: 'remember' },
-  { key: 'remember', label: '/remember', description: '同 /note，保存长期记忆', text: '', special: 'remember' },
-  { key: 'compact', label: '/compact', description: '压缩对话上下文，用摘要替换历史消息', text: '', special: 'compact' },
+  { key: 'new', label: '/new', description: t('commands.new'), text: '', special: 'new' },
+  { key: 'goal', label: '/goal', description: t('commands.goal'), text: '', special: 'goal' },
+  { key: 'skills', label: '/skills', description: t('commands.skills'), text: '', special: 'skills' },
+  { key: 'clearskills', label: '/clearskills', description: t('commands.clearSkills'), text: '', special: 'clear_skills' },
+  { key: 'sessions', label: '/sessions', description: t('commands.sessions'), text: '', special: 'sessions' },
+  { key: 'reload', label: '/reload', description: t('commands.reload'), text: '', special: 'reload' },
+  { key: 'init', label: '/init', description: t('commands.init'), text: '', special: 'init' },
+  { key: 'note', label: '/note', description: t('commands.note'), text: '', special: 'remember' },
+  { key: 'remember', label: '/remember', description: t('commands.remember'), text: '', special: 'remember' },
+  { key: 'compact', label: '/compact', description: t('commands.compact'), text: '', special: 'compact' },
 ];
 
 // Dynamically includes skill commands
@@ -953,7 +956,7 @@ async function openWorkspaceInFileManager() {
   try {
     await OpenWorkspaceInFileManager();
   } catch (err) {
-    message.warning(`无法打开工作区：${err}`);
+    message.warning(t('app.workspace.openFailed', { error: err }));
   }
 }
 
@@ -1096,7 +1099,7 @@ function addPromptHistory(text) {
 
 const historyOptions = computed(() => {
   const recent = [...workspaceHistory.value].reverse().slice(0, 10);
-  if (recent.length === 0) return [{ label: '无历史记录', disabled: true, key: '__empty__' }];
+  if (recent.length === 0) return [{ label: t('app.history.empty'), disabled: true, key: '__empty__' }];
   return recent.map((path) => {
     const label = path.split(/[/\\]/).filter(Boolean).pop() || path;
     return {
@@ -1105,7 +1108,7 @@ const historyOptions = computed(() => {
         h('span', { class: 'hist-path' }, `  —  ${path}`),
         h('span', {
           class: 'hist-del',
-          title: '从历史移除',
+          title: t('app.history.remove'),
           onClick: (e) => { e.stopPropagation(); removeFromHistory(path); },
         }, '×'),
       ]),
@@ -1122,173 +1125,19 @@ function onHistorySelect(key) {
 }
 
 function welcomeGreeting() {
-  const now = new Date();
-  const days = ['日', '一', '二', '三', '四', '五', '六'];
-  const hh = String(now.getHours()).padStart(2, '0');
-  const mm = String(now.getMinutes()).padStart(2, '0');
-  const hour = now.getHours();
-  const greetingGroups = [
-    {
-      start: 0,
-      end: 4,
-      lines: [
-        '凌晨还亮着屏幕的人，多半心里装着没放下的事；先把最要紧的一步说出来，我陪你慢慢拆。',
-        '夜已经很深了，别让脑子一个人硬扛太久；我们先把问题摊开，能解决的现在解决，不能解决的先放稳。',
-        '这个点还在工作，说明事情确实压着你；我会尽量把话说清楚，把弯路省掉一点。',
-        '凌晨适合安静地处理难题，也适合提醒自己别透支太狠；先做一小段，做完就该休息。',
-        '现在是大多数人睡着的时候，你还在推进事情；我在这里，先从最卡住的地方开始。',
-        '深夜容易把问题想得很重，我们把它切小一点，一步一步来，不急着一次全赢。',
-        '凌晨的世界很安静，你的问题也会变得清晰一些；我们先挑最简单的一环解开它。',
-        '这个点还在和自己较劲，说明你在意这件事；我在，不急着要结果，先把思路理顺。',
-        '深夜不是做决定的好时候，却是理清思路的好时候；我们把选项列出来，天亮再选。',
-        '别让一个问题在脑子里绕太多次；把它写下来给我，我帮你看看有没有遗漏的角度。',
-        '凌晨的工作有一种特别的专注，但也容易钻牛角尖；我们先退一步看看全局。',
-        '如果你是因为焦虑睡不着，那就把焦虑拆成具体的问题；能解决的我们今晚就解决，不能解决的先放下。',
-      ],
-    },
-    {
-      start: 4,
-      end: 6,
-      lines: [
-        '天快亮了，如果你是早起，那就从一件清楚的小事开始；如果你是熬到现在，也记得给自己留点余地。',
-        '清晨前的这段时间很安静，适合整理思路；把目标说具体一点，我帮你把第一步落下来。',
-        '这个时间很珍贵，也很容易疲惫；我们把任务处理得干净些，别让它拖到一整天都心烦。',
-        '快到早晨了，先别急着冲刺，把今天最重要的事排个顺序，会轻松很多。',
-        '如果这一夜不太好过，至少现在可以把问题交给一个稳定的流程；你说任务，我来拆解。',
-        '黎明前的脑子有时很清醒，有时很混乱；我们先抓住事实，再决定怎么做。',
-        '清晨的光线还很淡，很适合做不需要太多勇气的事——比如先列一个今日清单。',
-        '天亮之前是最好的准备时间；把今天可能遇到的难点提前想一遍，心里就有底了。',
-        '早起的人已经有了先机，不用贪多；完成一件重要的事，今天就算赢了。',
-        '如果你是一夜没睡，这个点该停一停了；把最紧急的事处理完，剩下的交给我。',
-        '清晨的脑子像一张白纸，别让杂事先落笔；先做那件最有价值的事。',
-        '天色在变亮，节奏也要慢慢跟上；先喝点水，再告诉我今天从哪里开始。',
-      ],
-    },
-    {
-      start: 6,
-      end: 9,
-      lines: [
-        '早上好，新的工作日先不用急着满负荷启动；把今天最重要的一件事交出来，我们先稳稳推进。',
-        '早上好，先让思路比日程更早醒过来；我可以帮你把目标、风险和下一步都理清楚。',
-        '早上好，适合做决定，也适合把昨天遗留的问题收个口；我们从最明确的部分开始。',
-        '早上好，今天不必一开始就追求完美，先把方向找准，后面的速度自然会上来。',
-        '早上好，愿你今天少一点被打断，多一点完成感；把任务说出来，我们把它变成可执行的步骤。',
-        '早上好，喝口水，打开项目，别急；先确认要解决什么，再动手会省很多力气。',
-        '早上好，每个高效的一天都从明确目标开始；我们不贪多，但求每一步都踏实。',
-        '早上好，别让昨天的情绪带进今天的代码里；新的一天有新的解法。',
-        '早上好，一日之计在于晨，但不必把一整天的计划都在十分钟内定完；先确定第一件事就好。',
-        '早上好，如果你今天有很多会，那就把最需要脑子的事排在会前做。',
-        '早上好，不一定每天都要有进展，但每天至少要有方向；把今天的目标说出来。',
-        '早上好，好的开始不一定需要完美的计划，只需要一个清晰的下一个动作。',
-      ],
-    },
-    {
-      start: 9,
-      end: 12,
-      lines: [
-        '上午好，现在是适合深度工作的时间；把复杂问题拿出来，我们尽量一次看透关键路径。',
-        '上午好，脑子通常还比较清爽，适合处理需要判断力的事；我会帮你把信息压实，不绕圈。',
-        '上午好，如果今天事情很多，先别被列表吓住；我们挑最有影响的一项开始推进。',
-        '上午好，适合写代码、查问题、做设计，也适合把含糊的需求说清楚。',
-        '上午好，别让零碎消息把节奏切碎；把任务放到这里，我们按优先级处理。',
-        '上午好，当前精力值得用在真正重要的地方；先说目标，我帮你找最短的可靠路径。',
-        '上午好，这段时间的注意力最值钱；别让它浪费在切换上下文上，我们专心搞定一件事。',
-        '上午好，如果感觉时间被切得很碎，那就用最小可用方案先跑通再说。',
-        '上午好，很多问题只要开始动手，就会发现比想象中简单；从最丑的方案开始也行。',
-        '上午好，如果你在犹豫先做哪个，那就选那个卡住别人最久的；解了它，整条路就通了。',
-        '上午好，别急着把答案做完美，先把问题定义清楚；好的问题已经解决了大半。',
-        '上午好，深度工作的时间窗口有限；关掉消息提醒，我们把最难啃的一块先啃掉。',
-      ],
-    },
-    {
-      start: 12,
-      end: 14,
-      lines: [
-        '中午好，忙到现在也该稍微喘口气；如果事情还没停，我们就用更省力的方式把它处理掉。',
-        '中午好，午间适合复盘上午的进展；把卡住的点说出来，我们看看是信息不够还是路径不对。',
-        '中午好，别把午饭时间全交给焦虑；我们先把任务拆成能落地的几步，再继续往前。',
-        '中午好，如果你刚回来，先不用急着进入高压状态；从一个明确的小目标开始就行。',
-        '中午好，上午已经消耗了一部分精力，接下来更要讲方法；我帮你把复杂度降下来。',
-        '中午好，适合把半天的混乱整理成清单；你给我现状，我给你下一步。',
-        '中午好，别在屏幕前边吃边焦虑；站起来五分钟换回来的效率，比硬撑一小时还多。',
-        '中午好，上午如果有没搞定的事，别急着继续撞墙；换个角度想，或者先放一放。',
-        '中午好，离下午还有一点时间；适合做不用脑子的杂务，也适合什么都不做。',
-        '中午好，别让一个卡壳毁了一整天的节奏；卡住了就告诉我，我们一起找突破口。',
-        '中午好，如果上午效率很高，下午就稍微降低预期；保持可持续比冲刺更重要。',
-        '中午好，适当休息不是偷懒，是对注意力的一种管理；你先歇着，我帮你把下一步准备一下。',
-      ],
-    },
-    {
-      start: 14,
-      end: 18,
-      lines: [
-        '下午好，这个时间容易被各种事情拉扯；我们把注意力收回来，先解决最影响进度的问题。',
-        '下午好，如果精力有点下滑，就更需要清晰的步骤；我会把任务拆到能直接执行。',
-        '下午好，很多问题不是难，而是堆在一起显得乱；我们先分层，再逐个处理。',
-        '下午好，适合推进实现、补测试、修边角；把你想完成的结果说清楚，我来协助落地。',
-        '下午好，别让一个小 bug 偷走整段时间；我们先建立反馈信号，再定位原因。',
-        '下午好，今天还有一段可用时间，足够把关键事情往前推一截；从最有价值的部分开始。',
-        '下午好，这个时段容易犯困，也容易烦躁；我们先做那些不需要太多创造力的任务。',
-        '下午好，如果脑子已经转不动了，就别硬写逻辑；改改文案、清清冗余、补补注释，都是推进。',
-        '下午好，别被"下午效率低"的心理暗示困住；把大目标切成小动作，一个一个来。',
-        '下午好，适合复盘、重构和清理旧问题；把历史债务还一点，项目的利息就会低一些。',
-        '下午好，如果今天的任务太多，就分两类："必须今天交的"和"今天做了明天会轻松的"。',
-        '下午好，有时候慢下来才是快的捷径；先把方向确认对，再用力。',
-      ],
-    },
-    {
-      start: 18,
-      end: 21,
-      lines: [
-        '晚上好，白天已经够忙了，接下来尽量把事情处理得利落一点；你说目标，我帮你收尾。',
-        '晚上好，这个时间适合整理、修复和把未完成的事关上门；我们不拖泥带水地推进。',
-        '晚上好，如果你还在工作，至少让流程轻一点；我会帮你少绕路、多确认。',
-        '晚上好，适合把一天里最烦的那个问题拿出来解决；解决不了也要把原因查清楚。',
-        '晚上好，别让任务在脑子里过夜；我们先把它写清楚、拆清楚、处理清楚。',
-        '晚上好，今天剩下的时间很宝贵，适合做明确、有边界的事；把范围给我，我们开始。',
-        '晚上好，白天没做完的事不用全在今天消化；挑一件最有收尾价值的，做完就收工。',
-        '晚上好，适合梳理一天的工作，也适合把遗留问题明确化；给明天的自己留一份清楚的任务书。',
-        '晚上好，如果你还在为某个问题烦躁，说明它触动了一个真问题；我们一起找到它到底是什么。',
-        '晚上好，别把"今天不够高效"当作自责的理由；能推进一点就是胜利。',
-        '晚上好，这个时间做的每一件事，都是在给明天铺路；走稳一步就值了。',
-        '晚上好，如果今天没什么产出，那就至少把原因总结出来；有时候排除错误的路径也是一种进度。',
-      ],
-    },
-    {
-      start: 21,
-      end: 24,
-      lines: [
-        '夜里好，今天已经走到尾声了；如果还要做事，我们就尽量做得克制、准确、可收尾。',
-        '夜里好，别把自己逼到太晚；先处理最关键的一步，剩下的可以规划到明天。',
-        '夜里好，适合安静地排查问题，也适合给今天做个清楚的结论；我们从事实开始。',
-        '夜里好，如果你只是想把心里的任务放下来，那也可以；我帮你整理成明天能接上的状态。',
-        '夜里好，屏幕前的人辛苦了；我们把问题处理得稳一点，别让它继续消耗你。',
-        '夜里好，今天无论顺不顺，都可以先把眼前这件事做好一点；把需求说出来，我在。',
-        '夜里好，今天的辛苦到这里就可以了；我们把还没收尾的事记下来，明天再续。',
-        '夜里好，越晚越容易低估问题的难度或高估自己的精力；先停下来，明天看会更清楚。',
-        '夜里好，如果你还在改东西，记得改完这一版就保存休息；好的代码需要清醒的头脑。',
-        '夜里好，今天解决不了的问题，不代表明天也解决不了；你只是需要一觉的时间。',
-        '夜里好，睡前给自己三分钟想想今天做对了什么；哪怕只有一件，也值得肯定。',
-        '夜里好，关机之前告诉自己：今天已经尽力了，剩下的交给明天的自己。',
-      ],
-    },
-  ];
-  const group = greetingGroups.find((item) => hour >= item.start && hour < item.end) || greetingGroups[0];
-  const seed = now.getFullYear() * 10000 + (now.getMonth() + 1) * 100 + now.getDate() + hour;
-  const greeting = group.lines[seed % group.lines.length];
-  return `今天是 ${now.getMonth() + 1}月${now.getDate()}日 周${days[now.getDay()]}，现在是 ${hh}:${mm}。${greeting}`;
+  return localizedWelcomeGreeting();
 }
 
 function buildWelcomeMessage(workspacePath = '') {
   const skillCount = availableSkills.value.length;
   const rows = [];
   if (workspacePath !== null) {
-    rows.push({ label: '工作区', value: workspacePath || '未选择' });
+    rows.push({ kind: 'workspace', label: t('common.workspace'), value: workspacePath || t('common.notSelected') });
   }
-  rows.push({ label: '模型', value: `${config.providerName || '-'} · ${config.model || '-'}` });
-  rows.push({ label: 'MCP', value: formatMcpSummary() });
+  rows.push({ kind: 'model', label: t('common.model'), value: `${config.providerName || '-'} · ${config.model || '-'}` });
+  rows.push({ kind: 'mcp', label: 'MCP', value: formatMcpSummary() });
   if (skillCount > 0) {
-    rows.push({ label: '技能', value: `${skillCount} 个可用，输入 /<skillname> 加载` });
+    rows.push({ kind: 'skills', label: t('common.skills'), value: t('welcome.skillsAvailable', { count: skillCount }) });
   }
 
   const title = 'Ally';
@@ -1306,9 +1155,9 @@ function formatMcpSummary() {
   const servers = Array.isArray(mcpServers.value) ? mcpServers.value : [];
   const connected = servers.filter((srv) => srv.status === 'connected').length;
   const tools = servers.reduce((sum, srv) => sum + (Number(srv.toolCount) || 0), 0);
-  if (servers.length === 0) return '0 个服务';
-  if (connected === 0) return `${servers.length} 个服务，未连接`;
-  return `${connected}/${servers.length} 个服务，${tools} 个工具`;
+  if (servers.length === 0) return t('app.mcp.noServices');
+  if (connected === 0) return t('app.mcp.disconnected', { count: servers.length });
+  return t('app.mcp.summary', { connected, count: servers.length, tools });
 }
 
 function updateWelcomeMcpRows() {
@@ -1316,12 +1165,12 @@ function updateWelcomeMcpRows() {
   for (const session of sessions.value) {
     for (const msg of session.messages || []) {
       if (!msg.welcome || !Array.isArray(msg.welcome.rows)) continue;
-      const rows = msg.welcome.rows.filter((row) => row.label !== '指令');
-      const existing = rows.find((row) => row.label === 'MCP');
+      const rows = msg.welcome.rows.filter((row) => row.kind !== 'commands' && row.label !== '指令' && row.label !== 'Commands');
+      const existing = rows.find((row) => row.kind === 'mcp' || row.label === 'MCP');
       if (existing) existing.value = value;
       else {
-        const modelIndex = rows.findIndex((row) => row.label === '模型');
-        rows.splice(modelIndex >= 0 ? modelIndex + 1 : rows.length, 0, { label: 'MCP', value });
+        const modelIndex = rows.findIndex((row) => row.kind === 'model' || row.label === '模型' || row.label === 'Model');
+        rows.splice(modelIndex >= 0 ? modelIndex + 1 : rows.length, 0, { kind: 'mcp', label: 'MCP', value });
       }
       msg.welcome.rows = rows;
       msg.content = buildWelcomeContent(msg.welcome);
@@ -1331,11 +1180,11 @@ function updateWelcomeMcpRows() {
 
 function buildWelcomeContent(welcome) {
   const table = (welcome.rows || []).map((row) => `| ${row.label} | ${row.value} |`).join('\n');
-  return `${welcome.title || 'Ally'}\n\n| 项目 | 信息 |\n|------|------|\n${table}\n\n${welcome.greeting || ''}`;
+  return `${welcome.title || 'Ally'}\n\n| ${t('common.project')} | ${t('common.info')} |\n|------|------|\n${table}\n\n${welcome.greeting || ''}`;
 }
 
 function workspaceLabel(path) {
-  return path ? (path.split(/[/\\]/).filter(Boolean).pop() || path) : '未选择工作区';
+  return path ? (path.split(/[/\\]/).filter(Boolean).pop() || path) : t('app.workspace.none');
 }
 
 function inferSessionWorkspace(session) {
@@ -1344,9 +1193,9 @@ function inferSessionWorkspace(session) {
   for (const msg of session.messages || []) {
     const rows = msg?.welcome?.rows;
     if (!Array.isArray(rows)) continue;
-    const row = rows.find((item) => item?.label === '工作区');
+    const row = rows.find((item) => item?.kind === 'workspace' || item?.label === '工作区' || item?.label === 'Workspace');
     const value = String(row?.value || '').trim();
-    if (value && value !== '未选择') return value;
+    if (value && value !== '未选择' && value !== 'Not selected') return value;
   }
   return '';
 }
@@ -1382,7 +1231,7 @@ function createWorkspaceTab(path) {
   const sessionId = crypto.randomUUID ? crypto.randomUUID() : `s-${Date.now()}-${Math.random()}`;
   const now = Date.now();
   const session = { id: sessionId, title: label, workspace: path || '', messages: [], runId: '', isRunning: false, grillMode: false, createdAt: now, updatedAt: now };
-  session.messages.push(buildWelcomeMessage(path || '未选择'));
+  session.messages.push(buildWelcomeMessage(path || t('common.notSelected')));
   sessions.value.unshift(session);
   // Reset cumulative token usage for this workspace (new workspace = fresh counter)
   if (path) {
@@ -1553,7 +1402,7 @@ function commitModelDraft() {
   if (!configDraft.models) configDraft.models = [];
   const model = (modelDraft.model || '').trim();
   if (!model) {
-    message.warning('请填写 Model');
+    message.warning(t('app.config.modelRequired'));
     return;
   }
   const providerName = normalizedProviderName(modelDraft.providerName);
@@ -1637,7 +1486,7 @@ function newSession(title) {
   const id = crypto.randomUUID ? crypto.randomUUID() : `s-${Date.now()}-${Math.random()}`;
   const now = Date.now();
   const workspace = config.workspace || '';
-  sessions.value.unshift({ id, title: title || '新会话', workspace, messages: [], runId: '', isRunning: false, grillMode: false, createdAt: now, updatedAt: now });
+  sessions.value.unshift({ id, title: title || t('app.sessions.new'), workspace, messages: [], runId: '', isRunning: false, grillMode: false, createdAt: now, updatedAt: now });
   activeSessionId.value = id;
   promptText.value = '';
   addWelcome(workspace);
@@ -1647,6 +1496,14 @@ function newSession(title) {
     ResetWorkspaceTokenUsage(ws);
     workspaceTokenUsage.value = { inputTokens: 0, outputTokens: 0 };
   }
+}
+
+function isDefaultSessionTitle(title) {
+  const value = String(title || '');
+  return value === '默认会话'
+    || value === 'Default session'
+    || value.startsWith('会话')
+    || value.startsWith('Session ');
 }
 
 function selectSession(index) {
@@ -1662,11 +1519,11 @@ function selectSession(index) {
   scrollMessagesToBottom();
 }
 
-function createReplacementSession(title = '新会话', workspacePath = '') {
+function createReplacementSession(title = t('app.sessions.new'), workspacePath = '') {
   const id = crypto.randomUUID ? crypto.randomUUID() : `s-${Date.now()}-${Math.random()}`;
   const now = Date.now();
   const session = { id, title, workspace: workspacePath || '', messages: [], runId: '', isRunning: false, grillMode: false, createdAt: now, updatedAt: now };
-  session.messages.push(buildWelcomeMessage(workspacePath || '未选择'));
+  session.messages.push(buildWelcomeMessage(workspacePath || t('common.notSelected')));
   return session;
 }
 
@@ -1675,7 +1532,7 @@ function deleteSession(index) {
   const target = sessions.value[index];
   if (!target) return;
   if (target.runId || target.isRunning) {
-    message.warning('会话运行中，不能删除');
+    message.warning(t('app.sessions.runningDeleteBlocked'));
     return;
   }
 
@@ -1689,7 +1546,7 @@ function deleteSession(index) {
   let replacement = null;
   if (linkedTabs.length > 0 || sessions.value.length === 0) {
     const tab = linkedTabs.find((item) => item.id === activeWorkspaceId.value) || linkedTabs[0];
-    replacement = createReplacementSession(tab?.label || '新会话', tab?.path || '');
+    replacement = createReplacementSession(tab?.label || t('app.sessions.new'), tab?.path || '');
     sessions.value.unshift(replacement);
   }
 
@@ -1726,7 +1583,7 @@ function addWelcome(workspacePath = config.workspace || '') {
   const session = activeSession.value;
   if (!session) return;
   if (workspacePath) session.workspace = workspacePath;
-  session.messages.push(buildWelcomeMessage(workspacePath || '未选择'));
+  session.messages.push(buildWelcomeMessage(workspacePath || t('common.notSelected')));
 }
 
 async function init() {
@@ -1735,7 +1592,7 @@ async function init() {
     assignConfig(config, loaded);
     assignConfig(configDraft, loaded);
   } catch (err) {
-    message.error(`读取配置失败：${err}`);
+    message.error(t('app.config.readFailed', { error: err }));
   }
 
   // Init workspace tabs from config
@@ -1953,7 +1810,7 @@ function bindRuntimeEvents() {
     missingDependencyWarningsShown.add(tool);
     const steps = Array.isArray(data?.installSteps) ? data.installSteps : [];
     const detail = steps.length ? '\n\n' + steps.join('\n') : '';
-    message.warning(`${data?.message || `${tool} 未安装`}${detail}`, { duration: 18000 });
+    message.warning(`${data?.message || t('app.tool.notInstalled', { tool })}${detail}`, { duration: 18000 });
   });
 
   onRuntimeEvent('run:delta', (data) => {
@@ -1991,7 +1848,7 @@ function bindRuntimeEvents() {
     existing.askSubmitting = false;
     existing.title = existing.askQuestions.length === 1
       ? (existing.askQuestions[0]?.question || '')
-      : `${existing.askQuestions.length} 个问题`;
+      : t('app.ask.questions', { count: existing.askQuestions.length });
     saveSessions();
     if (session.id === activeSessionId.value) scrollMessagesToBottom();
   });
@@ -2003,7 +1860,7 @@ function bindRuntimeEvents() {
       existing.askReady = false;
       existing.askSubmitting = false;
       existing.status = 'error';
-      existing.body = '提问已取消';
+      existing.body = t('app.ask.cancelled');
     }
     saveSessions();
   });
@@ -2137,7 +1994,7 @@ function bindRuntimeEvents() {
       if (data.name === 'ask') {
         existing.askReady = false;
         existing.askSubmitting = false;
-        if (existing.errorCode === 'E_ASK_CANCELLED') existing.body = '提问已取消';
+        if (existing.errorCode === 'E_ASK_CANCELLED') existing.body = t('app.ask.cancelled');
       }
       existing.durationMs = Number(data.durationMs || 0);
       existing.durationText = formatDurationShort(existing.durationMs);
@@ -2201,8 +2058,8 @@ function bindRuntimeEvents() {
     if (session.id === activeSessionId.value) {
       activeRunId.value = '';
       const err = data.error || 'unknown error';
-      const cancelled = err === '已取消' || String(err).toLowerCase().includes('context canceled');
-      session.messages.push({ role: 'assistant', content: cancelled ? '已取消。' : '运行失败：' + err, error: !cancelled, system: cancelled });
+      const cancelled = err === '已取消' || err === 'Cancelled' || String(err).toLowerCase().includes('context canceled');
+      session.messages.push({ role: 'assistant', content: cancelled ? t('app.run.cancelled') : t('app.run.failed', { error: err }), error: !cancelled, system: cancelled });
       setLastAssistantRoundDuration(session, data.durationMs);
       playCompletionSound(cancelled ? 'cancelled' : 'error');
     } else {
@@ -2472,7 +2329,7 @@ async function handlePromptPaste(event) {
 async function addPendingAttachmentFiles(files) {
   for (const file of files) {
     if (pendingAttachments.value.length >= MAX_ATTACHMENTS_PER_MESSAGE) {
-      message.warning(`单次最多添加 ${MAX_ATTACHMENTS_PER_MESSAGE} 个文件`);
+      message.warning(t('app.attachment.limit', { count: MAX_ATTACHMENTS_PER_MESSAGE }));
       break;
     }
     const att = await fileToAttachment(file);
@@ -2549,7 +2406,7 @@ async function fileToAttachment(file) {
       base.dataUrl = await readFileAsDataUrl(file);
     } else if (kind === 'image' && file.size > MAX_IMAGE_INPUT_BYTES) {
       base.truncated = true;
-      base.error = '图片超过可发送上限，仅保留预览和元信息';
+      base.error = t('app.attachment.imageTooLarge');
     }
     if (isTextAttachment(file) && file.size <= MAX_TEXT_ATTACHMENT_BYTES) {
       base.kind = kind === 'file' ? 'text' : kind;
@@ -2557,10 +2414,10 @@ async function fileToAttachment(file) {
     } else if (isTextAttachment(file) && file.size > MAX_TEXT_ATTACHMENT_BYTES) {
       base.kind = kind === 'file' ? 'text' : kind;
       base.truncated = true;
-      base.error = '文本文件超过可发送上限，仅保留元信息';
+      base.error = t('app.attachment.textTooLarge');
     }
   } catch (err) {
-    base.error = String(err?.message || err || '文件读取失败');
+    base.error = String(err?.message || err || t('app.attachment.readFailed'));
   }
   return base;
 }
@@ -2597,7 +2454,7 @@ function readFileAsDataUrl(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result || ''));
-    reader.onerror = () => reject(reader.error || new Error('读取文件失败'));
+    reader.onerror = () => reject(reader.error || new Error(t('app.attachment.readFailed')));
     reader.readAsDataURL(file);
   });
 }
@@ -2606,7 +2463,7 @@ function readFileAsText(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result || ''));
-    reader.onerror = () => reject(reader.error || new Error('读取文件失败'));
+    reader.onerror = () => reject(reader.error || new Error(t('app.attachment.readFailed')));
     reader.readAsText(file);
   });
 }
@@ -2675,8 +2532,8 @@ function fmtBytes(size) {
 
 function attachmentDisplayLabel(attachments) {
   if (!attachments.length) return '';
-  if (attachments.length === 1) return `附件：${attachments[0].name}`;
-  return `附件：${attachments[0].name} 等 ${attachments.length} 个文件`;
+  if (attachments.length === 1) return t('app.attachment.single', { name: attachments[0].name });
+  return t('app.attachment.multiple', { name: attachments[0].name, count: attachments.length });
 }
 
 function attachmentsForModel(attachments) {
@@ -2749,9 +2606,9 @@ async function switchToModel(index) {
     await SwitchModel(index);
     const loaded = await GetConfig();
     assignConfig(config, loaded);
-    message.success(`已切换到 ${loaded.model}`);
+    message.success(t('app.model.switched', { model: loaded.model }));
   } catch (err) {
-    message.error(`切换模型失败：${err}`);
+    message.error(t('app.model.switchFailed', { error: err }));
   }
 }
 
@@ -2759,20 +2616,20 @@ const mcpConfigParseResult = computed(() => parseMcpConfigText(mcpConfigText.val
 const mcpConfigValid = computed(() => mcpConfigParseResult.value.valid);
 const mcpConfigValidationText = computed(() => {
   const result = mcpConfigParseResult.value;
-  if (!result.valid) return `JSON 格式错误：${result.error}`;
+  if (!result.valid) return t('app.mcp.jsonError', { error: result.error });
   const servers = Object.keys(result.config.mcpServers || {}).length;
-  return `JSON 格式正确 · ${servers} 个服务配置`;
+  return t('app.mcp.jsonValid', { count: servers });
 });
 
 function parseMcpConfigText(text) {
   try {
     const parsed = JSON.parse(text || '{"mcpServers":{}}');
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      return { valid: false, error: '根节点必须是对象', config: { mcpServers: {} } };
+      return { valid: false, error: t('app.mcp.rootObject'), config: { mcpServers: {} } };
     }
     if (parsed.mcpServers === undefined) parsed.mcpServers = {};
     if (!parsed.mcpServers || typeof parsed.mcpServers !== 'object' || Array.isArray(parsed.mcpServers)) {
-      return { valid: false, error: 'mcpServers 必须是对象', config: { mcpServers: {} } };
+      return { valid: false, error: t('app.mcp.serversObject'), config: { mcpServers: {} } };
     }
     return { valid: true, error: '', config: parsed };
   } catch (err) {
@@ -2788,7 +2645,7 @@ async function loadMcpConfig() {
     await refreshToolList();
     updateWelcomeMcpRows();
   } catch (err) {
-    message.error(`读取 MCP 配置失败：${err}`);
+    message.error(t('app.mcp.readFailed', { error: err }));
   } finally {
     mcpLoading.value = false;
   }
@@ -2814,9 +2671,9 @@ async function saveMcpConfigText() {
     mcpServers.value = await GetMcpServers() || [];
     await refreshToolList();
     updateWelcomeMcpRows();
-    message.success('MCP 配置已保存并重连');
+    message.success(t('app.mcp.saved'));
   } catch (err) {
-    message.error(`保存 MCP 配置失败：${err}`);
+    message.error(t('app.mcp.saveFailed', { error: err }));
   } finally {
     mcpLoading.value = false;
   }
@@ -2931,14 +2788,14 @@ async function sendPrompt() {
   if (!config.apiKey) {
     settingsPage.value = 'models';
     configVisible.value = true;
-    message.warning('请先填写 API Key');
+    message.warning(t('app.config.apiKeyRequired'));
     return;
   }
   if (!session) return;
   if (config.workspace) session.workspace = config.workspace;
   const userMessage = { role: 'user', content: displayText, attachments, done: true };
   session.messages.push(userMessage);
-  if (session.title === '默认会话' || session.title.startsWith('会话')) {
+  if (isDefaultSessionTitle(session.title)) {
     session.title = displayText.length > 20 ? `${displayText.slice(0, 20)}…` : displayText;
   }
   // Save to workspace-scoped prompt history
@@ -2963,7 +2820,7 @@ async function sendPrompt() {
     if (session.id === activeSessionId.value) {
       activeRunId.value = '';
     }
-    pushMessage('assistant', '启动失败：' + err, { error: true });
+    pushMessage('assistant', t('app.run.startFailed', { error: err }), { error: true });
   }
 }
 
@@ -2973,7 +2830,7 @@ async function stopRun() {
   try {
     await CancelRun(session.runId);
   } catch (err) {
-    message.error(`终止失败：${err}`);
+    message.error(t('app.run.stopFailed', { error: err }));
   }
 }
 
@@ -2988,7 +2845,7 @@ async function chooseWorkspace() {
     await refreshFiles(workspace);
     return workspace;
   } catch (err) {
-    message.error(`选择工作区失败：${err}`);
+    message.error(t('app.workspace.selectFailed', { error: err }));
     return null;
   }
 }
@@ -3004,21 +2861,21 @@ async function refreshFiles(path = '') {
 
 async function previewFile(path) {
   previewTitle.value = path;
-  filePreview.value = '读取中...';
+  filePreview.value = t('app.filePreview.loading');
   try {
     const result = await ReadFile({ path, startLine: 1, lineCount: 220 });
     currentPreview.value = result.content || '';
     filePreview.value = `${result.content || ''}\n\n---\nmd5: ${result.md5}\nlines: ${result.totalLines}\nending: ${result.lineEnding}${result.truncated ? '\n(truncated)' : ''}`;
   } catch (err) {
     currentPreview.value = '';
-    filePreview.value = `读取失败：${err}`;
+    filePreview.value = t('app.filePreview.failed', { error: err });
   }
 }
 
 async function copyPreview() {
   if (!currentPreview.value) return;
   await navigator.clipboard.writeText(currentPreview.value);
-  message.success('已复制');
+  message.success(t('app.copy.done'));
 }
 
 async function onSettingsSave(draftData) {
@@ -3027,9 +2884,9 @@ async function onSettingsSave(draftData) {
   try {
     await SaveConfig({ ...configDraft });
     syncConfigToActiveTab();
-    message.success('配置已保存');
+    message.success(t('app.config.saved'));
   } catch (err) {
-    message.error(`保存失败：${err}`);
+    message.error(t('app.config.saveFailed', { error: err }));
   }
 }
 
@@ -3048,9 +2905,9 @@ async function reloadConfigFromFile() {
     assignConfig(config, loaded);
     assignConfig(configDraft, loaded);
     syncConfigToActiveTab();
-    message.success(`已重新加载配置：${loaded.model || '-'}`);
+    message.success(t('app.config.reloaded', { model: loaded.model || '-' }));
   } catch (err) {
-    message.error(`重新加载配置失败：${err}`);
+    message.error(t('app.config.reloadFailed', { error: err }));
   }
 }
 
@@ -3223,7 +3080,7 @@ async function handleBuiltinCommand(command) {
     return true;
   }
   if (command.special === 'goal') {
-    promptText.value = '请帮我设定一个目标模式：';
+    promptText.value = t('app.goal.prompt');
     commandMenuVisible.value = false;
     nextTick(() => promptInputRef.value?.focus());
     return true;
@@ -3683,7 +3540,7 @@ async function submitAskResponse(msg, answers) {
     saveSessions();
   } catch (err) {
     msg.askSubmitting = false;
-    message.error(`提交回答失败：${err}`);
+    message.error(t('app.ask.submitFailed', { error: err }));
   }
 }
 
@@ -3729,7 +3586,7 @@ async function loadScheduledTasks() {
   try {
     scheduledTasks.value = sortScheduledTasks(await ListScheduledTasks() || []);
   } catch (err) {
-    message.error(`加载定时任务失败：${err}`);
+    message.error(t('app.scheduled.loadFailed', { error: err }));
   } finally {
     scheduledTasksLoading.value = false;
   }
@@ -3746,9 +3603,9 @@ async function deleteScheduledTask(id) {
   try {
     await DeleteScheduledTask(id);
     scheduledTasks.value = scheduledTasks.value.filter((task) => task.id !== id);
-    message.success('定时任务已删除');
+    message.success(t('app.scheduled.deleted'));
   } catch (err) {
-    message.error(`删除定时任务失败：${err}`);
+    message.error(t('app.scheduled.deleteFailed', { error: err }));
   } finally {
     scheduledTaskDeletingIds.value = scheduledTaskDeletingIds.value.filter((item) => item !== id);
   }
@@ -3841,18 +3698,18 @@ function sanitizeStoredMessages(messages) {
 
 function sanitizeStoredMessage(msg) {
   const next = { ...msg };
-  next.content = truncateStoredText(next.content, MAX_STORED_MESSAGE_CHARS, '[内容过长，已裁剪本地缓存]');
-  next.reasoningBody = truncateStoredText(next.reasoningBody, MAX_STORED_MESSAGE_CHARS, '[思考内容过长，已裁剪本地缓存]');
-  next.body = truncateStoredText(next.body, MAX_STORED_TOOL_BODY_CHARS, '[工具输出过长，已裁剪本地缓存]');
-  next.codeContent = truncateStoredText(next.codeContent, MAX_STORED_TOOL_BODY_CHARS, '[文件预览过长，已裁剪本地缓存]');
-  next.editDiff = truncateStoredText(next.editDiff, MAX_STORED_TOOL_BODY_CHARS, '[Diff 过长，已裁剪本地缓存]');
+  next.content = truncateStoredText(next.content, MAX_STORED_MESSAGE_CHARS, t('app.cache.contentTrimmed'));
+  next.reasoningBody = truncateStoredText(next.reasoningBody, MAX_STORED_MESSAGE_CHARS, t('app.cache.reasoningTrimmed'));
+  next.body = truncateStoredText(next.body, MAX_STORED_TOOL_BODY_CHARS, t('app.cache.toolTrimmed'));
+  next.codeContent = truncateStoredText(next.codeContent, MAX_STORED_TOOL_BODY_CHARS, t('app.cache.previewTrimmed'));
+  next.editDiff = truncateStoredText(next.editDiff, MAX_STORED_TOOL_BODY_CHARS, t('app.cache.diffTrimmed'));
   next.editOldString = '';
   next.editNewString = '';
   if (Array.isArray(next.editEntries)) {
     next.editEntries = next.editEntries.map((entry) => ({
       ...entry,
       changes: [],
-      diff: truncateStoredText(entry?.diff, MAX_STORED_TOOL_BODY_CHARS, '[Diff 过长，已裁剪本地缓存]'),
+      diff: truncateStoredText(entry?.diff, MAX_STORED_TOOL_BODY_CHARS, t('app.cache.diffTrimmed')),
     }));
   }
   if (Array.isArray(next.attachments)) {
@@ -3860,7 +3717,7 @@ function sanitizeStoredMessage(msg) {
       const keepPreview = typeof att.previewUrl === 'string'
         && att.previewUrl.startsWith('data:')
         && att.previewUrl.length <= 500000;
-      const text = truncateStoredText(att.text, MAX_STORED_ATTACHMENT_TEXT_CHARS, '[附件文本过长，已裁剪本地缓存]');
+      const text = truncateStoredText(att.text, MAX_STORED_ATTACHMENT_TEXT_CHARS, t('app.cache.attachmentTrimmed'));
       return { ...att, previewUrl: keepPreview ? att.previewUrl : '', dataUrl: '', text };
     });
   }
@@ -3895,7 +3752,7 @@ function loadSavedSessions() {
       if (!existing) {
         const restored = {
           id: s.id,
-          title: s.title || '历史会话',
+          title: s.title || t('app.sessions.history'),
           workspace: s.workspace || '',
           messages: s.messages || [],
           runId: '',
@@ -3947,8 +3804,8 @@ function handleInitCommand() {
   if (!session) return;
   // Send the init exploration prompt to the LLM
   session.messages.push({ role: 'user', content: INIT_PROMPT, done: true });
-  if (session.title === '默认会话' || session.title.startsWith('会话')) {
-    session.title = '/init - 项目分析';
+  if (isDefaultSessionTitle(session.title)) {
+    session.title = t('app.init.title');
   }
   scrollMessagesToBottom();
   saveSessions();
@@ -3963,7 +3820,7 @@ function handleInitCommand() {
     .catch((err) => {
       session.runId = '';
       session.isRunning = false;
-      pushMessage('assistant', '初始化失败：' + err, { error: true });
+      pushMessage('assistant', t('app.init.failed', { error: err }), { error: true });
     });
 }
 
@@ -3975,9 +3832,9 @@ function handleRememberCommand() {
     .map((msg) => ({ role: msg.role, content: msg.content }));
   history.push({ role: 'user', content: REMEMBER_PROMPT });
 
-  session.messages.push({ role: 'user', content: '/note 保存长期记忆', done: true });
-  if (session.title === '默认会话' || session.title.startsWith('会话')) {
-    session.title = '/note - 保存长期记忆';
+  session.messages.push({ role: 'user', content: t('app.note.visibleText'), done: true });
+  if (isDefaultSessionTitle(session.title)) {
+    session.title = t('app.note.title');
   }
   scrollMessagesToBottom();
   saveSessions();
@@ -3987,29 +3844,29 @@ function handleRememberCommand() {
     .catch((err) => {
       session.runId = '';
       session.isRunning = false;
-      pushMessage('assistant', '保存项目知识失败：' + err, { error: true });
+      pushMessage('assistant', t('app.note.failed', { error: err }), { error: true });
     });
 }
 
 async function handleCompactCommand() {
   const session = activeSession.value;
   if (!session) return;
-  if (session.runId) { message.warning('请先等待当前任务完成'); return; }
+  if (session.runId) { message.warning(t('app.compact.wait')); return; }
 
-  pushMessage('system', '## 正在压缩对话上下文...\n\n正在生成摘要并替换历史消息，请稍候。', { system: true });
+  pushMessage('system', t('app.compact.running'), { system: true });
   saveSessions();
 
   try {
     const result = await CompactSession(session.id, '');
     const tBefore = result.tokensBefore || 0;
     const tAfter = result.tokensAfter || 0;
-    const saved = tBefore - tAfter > 0 ? ` (节省 ${fmtK(tBefore - tAfter)} tokens)` : '';
+    const saved = tBefore - tAfter > 0 ? t('app.compact.saved', { tokens: fmtK(tBefore - tAfter) }) : '';
 
     // Replace messages with the compacted summary
     session.messages = [
       {
         role: 'assistant',
-        content: `## 对话已压缩${saved}\n\n<details><summary>摘要预览</summary>\n\n${result.summary || ''}\n\n</details>\n\n上下文已从 ${fmtK(tBefore)} tokens 压缩至 ${fmtK(tAfter)} tokens。可以继续对话。`,
+        content: t('app.compact.done', { saved, summary: result.summary || '', before: fmtK(tBefore), after: fmtK(tAfter) }),
         system: true,
       },
     ];
@@ -4017,15 +3874,15 @@ async function handleCompactCommand() {
     // Refresh context
     refreshContextTokens(session.id);
     scrollMessagesToBottom();
-    message.success(`压缩完成：${fmtK(tBefore)} → ${fmtK(tAfter)} tokens`);
+    message.success(t('app.compact.success', { before: fmtK(tBefore), after: fmtK(tAfter) }));
   } catch (err) {
-    pushMessage('assistant', '压缩失败：' + (err?.message || err), { error: true });
+    pushMessage('assistant', t('app.compact.failed', { error: err?.message || err }), { error: true });
   }
 }
 
 function createNewSession() {
-  newSession('新会话 ' + (sessions.value.length + 1));
-  message.success('已创建新会话');
+  newSession(`${t('app.sessions.new')} ${sessions.value.length + 1}`);
+  message.success(t('app.sessions.created'));
   scrollMessagesToBottom();
 }
 
@@ -4034,17 +3891,17 @@ async function loadAndShowSkills() {
     await refreshSkillState();
     const skills = availableSkills.value;
     if (skills && skills.length > 0) {
-      let table = '| 命令 | 描述 | 来源 |\n|------|------|------|\n';
+      let table = t('app.skills.tableHeader');
       for (const s of skills) {
-        const status = isSkillActive(s.name) ? '已启用' : '已停用';
+        const status = isSkillActive(s.name) ? t('app.skills.enabled') : t('app.skills.disabled');
         table += `| \`/${s.name}\` | ${s.description || '-'} | ${s.source || '-'} · ${status} |\n`;
       }
-      pushMessage('assistant', `## 可用技能（${skills.length}）\n\n${table}\n\n输入 /skillname 加载对应技能。`, { system: true });
+      pushMessage('assistant', t('app.skills.list', { count: skills.length, table }), { system: true });
     } else {
-      pushMessage('assistant', '当前没有找到可用技能。技能文件存放在 `.agents/skills/` 目录下。', { system: true });
+      pushMessage('assistant', t('app.skills.empty'), { system: true });
     }
   } catch (err) {
-    message.error(`读取技能列表失败：${err}`);
+    message.error(t('app.skills.listFailed', { error: err }));
   }
   scrollMessagesToBottom();
 }
@@ -4074,7 +3931,7 @@ async function refreshSkillState() {
     config.disabledSkills = disabled;
     configDraft.disabledSkills = [...disabled];
   } catch (err) {
-    message.error(`读取技能状态失败：${err}`);
+    message.error(t('app.skills.stateFailed', { error: err }));
   } finally {
     skillsLoading.value = false;
   }
@@ -4098,13 +3955,13 @@ async function activateSkillByName(skillName, skillArgs = '', injectIntoChat = t
       }
     }
     if (!alreadyActive) {
-      message.success(`技能 "${skillName}" 已启用`);
+      message.success(t('app.skills.activated', { name: skillName }));
     } else if (alreadyActive) {
-      message.info(injectIntoChat ? `技能 "${skillName}" 已加载` : `技能 "${skillName}" 已启用`);
+      message.info(injectIntoChat ? t('app.skills.loaded', { name: skillName }) : t('app.skills.activated', { name: skillName }));
     }
     await refreshSkillState();
   } catch (err) {
-    message.error(`启用技能失败：${err}`);
+    message.error(t('app.skills.activateFailed', { error: err }));
   }
   scrollMessagesToBottom();
 }
@@ -4113,9 +3970,9 @@ async function deactivateSkillByName(skillName) {
   try {
     await DeactivateSkill(skillName);
     await refreshSkillState();
-    message.success(`技能 "${skillName}" 已停用`);
+    message.success(t('app.skills.deactivated', { name: skillName }));
   } catch (err) {
-    message.error(`停用技能失败：${err}`);
+    message.error(t('app.skills.deactivateFailed', { error: err }));
   }
 }
 
@@ -4140,11 +3997,11 @@ async function clearLoadedSkills(announce = true) {
     // Refresh skill list to update command menu
     try { await refreshSkillState(); } catch (_) { /* ignore */ }
     if (announce) {
-      pushMessage('assistant', '所有技能已停用。', { system: true });
+      pushMessage('assistant', t('app.skills.allDeactivated'), { system: true });
     }
-    message.success('技能已停用');
+    message.success(t('app.skills.deactivatedToast'));
   } catch (err) {
-    message.error(`停用技能失败：${err}`);
+    message.error(t('app.skills.deactivateFailed', { error: err }));
   }
   if (announce) {
     scrollMessagesToBottom();
@@ -4155,7 +4012,7 @@ async function setRunMode(mode) {
   const session = activeSession.value;
   if (!session) return;
   if (session.runId || session.isRunning) {
-    message.warning('请等待当前任务完成后再切换模式');
+    message.warning(t('app.run.waitBeforeMode'));
     return;
   }
   const nextPlan = mode === 'plan';
@@ -4170,9 +4027,9 @@ async function setRunMode(mode) {
     session.updatedAt = Date.now();
     saveSessions();
     refreshContextTokens(activeSessionId.value);
-    message.success(`已切换到 ${String(mode || 'yolo').toUpperCase()} 模式`);
+    message.success(t('app.run.modeChanged', { mode: String(mode || 'yolo').toUpperCase() }));
   } catch (err) {
-    message.error(`切换模式失败：${err}`);
+    message.error(t('app.run.modeFailed', { error: err }));
   }
 }
 
@@ -4185,7 +4042,7 @@ async function initPlanMode() {
 
 // Goal mode helpers
 function trackGoal(objective) {
-  pushMessage('user', `## Goal\n\n${objective}\n\n请确认任务是否达成，并在完成后告诉我。`, { system: false });
+  pushMessage('user', `## Goal\n\n${objective}\n\n${t('app.goal.confirm')}`, { system: false });
   scrollMessagesToBottom();
 }
 
@@ -4252,7 +4109,7 @@ function makeToolTitle(name, args, meta = {}) {
   if (name === 'ask') {
     const questions = Array.isArray(parsed.questions) ? parsed.questions : [];
     if (questions.length === 1) return questions[0]?.question || '';
-    return questions.length ? `${questions.length} 个问题` : '';
+    return questions.length ? t('app.ask.questions', { count: questions.length }) : '';
   }
   if (name === 'start_service') {
     const command = parsed.command || '';
@@ -4620,8 +4477,8 @@ function formatScheduledTaskToolDetail(task = {}) {
   lines.push(`Schedule: ${formatScheduledToolSchedule(task.schedule || {})}`);
   if (task.workspace) lines.push(`Workspace: ${task.workspace}`);
   lines.push('Mode: YOLO');
-  if (task.nextRunAt) lines.push(`Next run: ${new Date(Number(task.nextRunAt)).toLocaleString()}`);
-  if (task.lastRunAt) lines.push(`Last run: ${new Date(Number(task.lastRunAt)).toLocaleString()}`);
+  if (task.nextRunAt) lines.push(`Next run: ${formatDateTime(Number(task.nextRunAt))}`);
+  if (task.lastRunAt) lines.push(`Last run: ${formatDateTime(Number(task.lastRunAt))}`);
   if (task.lastStatus) lines.push(`Status: ${task.running ? 'running' : task.lastStatus}`);
   if (task.runCount !== undefined) lines.push(`Runs: ${task.runCount}`);
   if (task.maxSteps || task.timeoutSeconds) {
@@ -4673,7 +4530,7 @@ function formatUnixTimestamp(value) {
   const seconds = Number(value) || 0;
   if (!seconds) return '';
   try {
-    return new Date(seconds * 1000).toLocaleString();
+    return formatDateTime(seconds * 1000);
   } catch (_) {
     return String(value);
   }
@@ -4776,8 +4633,8 @@ function exportAllMessages() {
   const msgs = activeMessages.value;
   if (!msgs || !msgs.length) return;
   const parts = [];
-  parts.push(`# ${activeSession.value?.title || 'Ally 会话'}\n`);
-  parts.push(`> 导出时间: ${new Date().toLocaleString()}`);
+  parts.push(`# ${activeSession.value?.title || t('app.export.sessionTitle')}\n`);
+  parts.push(`> ${t('app.export.time', { time: formatDateTime(new Date()) })}`);
   parts.push('');
   for (const msg of msgs) {
     if (msg.welcome || msg.role === 'tool_call') continue;
@@ -4811,13 +4668,7 @@ function compactJSON(raw) {
 
 function fmtTime(ts) {
   if (!ts) return '';
-  const d = new Date(ts);
-  const pad = (n) => String(n).padStart(2, '0');
-  const month = pad(d.getMonth() + 1);
-  const day = pad(d.getDate());
-  const hour = pad(d.getHours());
-  const min = pad(d.getMinutes());
-  return `${month}/${day} ${hour}:${min}`;
+  return formatDateTime(ts, { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
 }
 
 function msgCount(s) {

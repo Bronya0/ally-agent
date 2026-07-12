@@ -4,15 +4,15 @@
       <span :class="['tool-status-icon', msg.status]">{{ statusIcon }}</span>
       <span class="tool-verb">{{ statusVerb }}</span>
       <span class="tool-name">Ask</span>
-      <span class="tool-chip">· {{ questions.length }} 个问题</span>
+      <span class="tool-chip">{{ $t('ask.questionCount', { count: questions.length }) }}</span>
       <span v-if="msg.durationText" class="tool-duration">{{ msg.durationText }}</span>
     </div>
 
-    <div v-if="msg.status === 'error'" class="ask-closed-state">{{ msg.body || '提问已取消' }}</div>
+    <div v-if="msg.status === 'error'" class="ask-closed-state">{{ msg.body || $t('app.ask.cancelled') }}</div>
 
     <div v-else-if="questions.length" class="ask-content">
       <div class="ask-tabs-row">
-        <button class="ask-nav-btn" type="button" title="上一个问题" :disabled="activeIndex === 0" @click="activeIndex--">‹</button>
+        <button class="ask-nav-btn" type="button" :title="$t('ask.previous')" :disabled="activeIndex === 0" @click="activeIndex--">‹</button>
         <div class="ask-tabs" role="tablist">
           <button
             v-for="(question, index) in questions"
@@ -26,7 +26,7 @@
             {{ index + 1 }}
           </button>
         </div>
-        <button class="ask-nav-btn" type="button" title="下一个问题" :disabled="activeIndex >= questions.length - 1" @click="activeIndex++">›</button>
+        <button class="ask-nav-btn" type="button" :title="$t('ask.next')" :disabled="activeIndex >= questions.length - 1" @click="activeIndex++">›</button>
       </div>
 
       <template v-if="activeQuestion">
@@ -38,7 +38,7 @@
           <div v-for="selection in submittedSelections(activeQuestion)" :key="selectionKey(selection)" class="ask-answer-line">
             <span class="ask-answer-check">✓</span>
             <span>{{ selection.label }}</span>
-            <span v-if="selection.recommended" class="ask-recommended">推荐</span>
+            <span v-if="selection.recommended" class="ask-recommended">{{ $t('ask.recommended') }}</span>
           </div>
         </div>
 
@@ -53,7 +53,7 @@
             <span class="ask-option-copy">
               <span class="ask-option-title-row">
                 <span class="ask-option-label">{{ option.label }}</span>
-                <span v-if="option.recommended" class="ask-recommended">推荐</span>
+                <span v-if="option.recommended" class="ask-recommended">{{ $t('ask.recommended') }}</span>
               </span>
               <span class="ask-option-description">{{ option.description }}</span>
             </span>
@@ -67,13 +67,13 @@
               @change="toggleCustom(activeQuestion.id)"
             />
             <span class="ask-option-copy">
-              <span class="ask-option-label">自定义回答</span>
+              <span class="ask-option-label">{{ $t('ask.custom') }}</span>
               <textarea
                 v-if="answerState(activeQuestion.id).customSelected"
                 v-model="answerState(activeQuestion.id).customText"
                 class="ask-custom-input"
                 rows="3"
-                placeholder="输入你的回答"
+                :placeholder="$t('ask.customPlaceholder')"
                 :disabled="msg.askSubmitting"
                 @click.stop
               ></textarea>
@@ -83,9 +83,9 @@
       </template>
 
       <div v-if="!msg.askSubmitted && msg.status !== 'success'" class="ask-actions">
-        <span class="ask-progress">{{ answeredCount }}/{{ questions.length }} 已回答</span>
+        <span class="ask-progress">{{ $t('ask.progress', { answered: answeredCount, count: questions.length }) }}</span>
         <button class="ask-submit-btn" type="button" :disabled="!canSubmit || msg.askSubmitting || !msg.askReady" @click="submitAnswers">
-          {{ msg.askSubmitting ? '提交中' : '提交回答' }}
+          {{ msg.askSubmitting ? $t('ask.submitting') : $t('ask.submit') }}
         </button>
       </div>
     </div>
@@ -94,6 +94,7 @@
 
 <script setup>
 import { computed, reactive, ref, watch } from 'vue';
+import { t } from '../i18n.mjs';
 
 const props = defineProps({
   msg: { type: Object, required: true },
@@ -153,9 +154,11 @@ const statusIcon = computed(() => {
 });
 
 const statusVerb = computed(() => {
-  if (props.msg.status === 'success') return 'Answered';
-  if (props.msg.status === 'error') return props.msg.errorCode === 'E_ASK_CANCELLED' || props.msg.body === '提问已取消' ? 'Cancelled' : 'Failed';
-  return 'Asking';
+  if (props.msg.status === 'success') return t('ask.status.answered');
+  if (props.msg.status === 'error') return props.msg.errorCode === 'E_ASK_CANCELLED' || props.msg.body === t('app.ask.cancelled') || props.msg.body === '提问已取消'
+    ? t('ask.status.cancelled')
+    : t('ask.status.failed');
+  return t('ask.status.asking');
 });
 
 function submitAnswers() {

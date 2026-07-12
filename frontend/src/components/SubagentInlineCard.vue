@@ -3,9 +3,9 @@
     <div class="tool-line">
       <span :class="['tool-status-icon', msg.status]">{{ statusIcon(msg.status) }}</span>
       <span class="tool-verb">{{ subagentVerb(msg.status) }}</span>
-      <span class="tool-name">Sub-agent</span>
+      <span class="tool-name">{{ $t('tools.kind.subagent') }}</span>
       <span class="tool-arg" :title="msg.description">({{ msg.description }})</span>
-      <span class="tool-chip">{{ msg.steps }}/{{ msg.maxSteps }} steps</span>
+      <span class="tool-chip">{{ $t('subagent.steps', { current: msg.steps, max: msg.maxSteps }) }}</span>
       <span v-if="msg.durationText" class="tool-duration">{{ msg.durationText }}</span>
     </div>
     <div v-if="recentTools.length" class="subagent-inline-body">
@@ -24,6 +24,7 @@
 
 <script setup>
 import { computed } from 'vue';
+import { t } from '../i18n.mjs';
 
 const props = defineProps({
   msg: { type: Object, required: true },
@@ -41,15 +42,15 @@ function statusIcon(status) {
 }
 
 function subagentVerb(status) {
-  if (status === 'running') return 'Running';
-  if (status === 'completed') return 'Completed';
-  if (status === 'timed_out') return 'Stopped';
-  return 'Failed';
+  if (status === 'running') return t('subagent.running');
+  if (status === 'completed') return t('subagent.completed');
+  if (status === 'timed_out') return t('subagent.stopped');
+  return t('subagent.failed');
 }
 
 function subToolPendingText(status) {
-  if (status === 'running') return 'running';
-  if (status === 'error') return 'failed';
+  if (status === 'running') return t('subagent.running').toLowerCase();
+  if (status === 'error') return t('subagent.failed').toLowerCase();
   return '';
 }
 
@@ -61,21 +62,21 @@ function compactSubagentSummary(summary) {
 
 function subToolLabel(name) {
   const labels = {
-    read_file: 'Read',
+    read_file: t('tools.kind.read'),
     remote_read_file: 'remote_read_file',
-    batch_read: 'Read',
-    edit: 'Edit',
+    batch_read: t('tools.kind.read'),
+    edit: t('tools.kind.edit'),
     remote_edit: 'remote_edit',
-    create_file: 'Create',
+    create_file: t('tools.kind.create'),
     remote_create_file: 'remote_create_file',
-    delete_path: 'Delete',
+    delete_path: t('tools.kind.delete'),
     remote_delete_path: 'remote_delete_path',
-    run_command: 'Command',
+    run_command: t('tools.kind.command'),
     remote_run_command: 'remote_run_command',
-    grep_files: 'Grep',
-    list_files: 'List',
+    grep_files: t('tools.kind.grep'),
+    list_files: t('tools.kind.read'),
     remote_list_files: 'remote_list_files',
   };
-  return labels[name] || name || 'Tool';
+  return labels[name] || name || t('tools.kind.tool');
 }
 </script>

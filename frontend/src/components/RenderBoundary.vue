@@ -1,16 +1,17 @@
 <template>
   <div v-if="error" class="render-boundary-error">
-    <span>{{ label }} 渲染失败</span>
-    <button @click="reset">重试</button>
+    <span>{{ $t('render.failed', { label }) }}</span>
+    <button @click="reset">{{ $t('common.retry') }}</button>
   </div>
   <slot v-else />
 </template>
 
 <script setup>
 import { onErrorCaptured, ref } from 'vue';
+import { t } from '../i18n.mjs';
 
 const props = defineProps({
-  label: { type: String, default: '内容' },
+  label: { type: String, default: () => t('common.content') },
 });
 
 const error = ref(null);

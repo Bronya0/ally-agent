@@ -15,6 +15,8 @@
 </template>
 
 <script setup>
+import { t } from '../i18n.mjs';
+
 defineProps({
   attachments: { type: Array, default: () => [] },
 });
@@ -33,8 +35,8 @@ function attachmentSource(att) {
 
 function attachmentState(att) {
   const parts = [fmtBytes(att.size)];
-  if (att.text) parts.push('文本');
-  if (att.truncated) parts.push('已裁剪');
+  if (att.text) parts.push(t('common.text'));
+  if (att.truncated) parts.push(t('common.trimmed'));
   return parts.filter(Boolean).join(' · ');
 }
 
