@@ -9,12 +9,15 @@
               :active-workspace-id="activeWorkspaceId"
               :plan-mode-active="planModeActive"
               :grill-mode-active="!!activeSession?.grillMode"
+              :update-available="updateAvailable"
+              :latest-version="latestReleaseVersion"
               :is-maximised="isMaximised"
               :history-options="historyOptions"
               @switch-workspace="switchWorkspaceTab"
               @close-workspace="closeWorkspaceTab"
               @add-workspace="addWorkspaceTab"
               @history-select="onHistorySelect"
+              @open-update="openUpdatePage"
               @open-settings="configVisible = true"
               @minimise="minimiseWindow"
               @toggle-maximise="toggleMaximiseWindow"
@@ -237,7 +240,7 @@ import {
   ReleaseSession,
   SubmitAskResponse,
 } from '../wailsjs/go/main/App';
-import { Environment, EventsOn, WindowMinimise, WindowMaximise, WindowUnmaximise, WindowIsMaximised, Quit } from '../wailsjs/runtime/runtime';
+import { BrowserOpenURL, Environment, EventsOn, WindowMinimise, WindowMaximise, WindowUnmaximise, WindowIsMaximised, Quit } from '../wailsjs/runtime/runtime';
 import AllyWordmark from './components/AllyWordmark.vue';
 import ComposerInfoBar from './components/ComposerInfoBar.vue';
 import MessageAttachments from './components/MessageAttachments.vue';
@@ -253,7 +256,9 @@ import SettingsModal from './components/SettingsModal.vue';
 import ChatMessages from './components/ChatMessages.vue';
 import ScheduledTasksPanel from './components/ScheduledTasksPanel.vue';
 import { assignConfig, defaultConfig } from './utils/config.mjs';
+import { buildVersion } from './utils/buildVersion.js';
 import { computeEditStats, formatEditStats } from './utils/diff.js';
+import { isNewerReleaseVersion } from './utils/versionCheck.mjs';
 import {
   DEFAULT_TOOL_PREVIEW_LINES,
   displaySourceMessages as buildDisplaySourceMessages,
@@ -661,6 +666,11 @@ const MAX_TEXT_ATTACHMENT_BYTES = 200 * 1024;
 const MAX_STORED_ATTACHMENT_TEXT_CHARS = 20000;
 const splashVisible = ref(true);
 const expandedArchiveSessions = ref(new Set());
+const updateAvailable = ref(false);
+const latestReleaseVersion = ref('');
+
+const ALLY_REPOSITORY_URL = 'https://github.com/Bronya0/ally-agent';
+const ALLY_LATEST_RELEASE_API = 'https://api.github.com/repos/Bronya0/ally-agent/releases/latest';
 
 const apiFormatOptions = [
   { label: 'OpenAI Chat Completions', value: 'openai_chat' },
@@ -4960,6 +4970,32 @@ function handleAudioUnlock() {
   primeCompletionAudio();
 }
 
+async function checkForUpdates() {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 8000);
+  try {
+    const response = await fetch(ALLY_LATEST_RELEASE_API, {
+      signal: controller.signal,
+      cache: 'no-store',
+      headers: { Accept: 'application/vnd.github+json' },
+    });
+    if (!response.ok) return;
+    const release = await response.json();
+    const latest = String(release?.tag_name || '').trim();
+    if (!isNewerReleaseVersion(latest, buildVersion)) return;
+    latestReleaseVersion.value = latest;
+    updateAvailable.value = true;
+  } catch (_) {
+    // Update checks are best-effort and must never block startup.
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
+
+function openUpdatePage() {
+  BrowserOpenURL(ALLY_REPOSITORY_URL);
+}
+
 async function applyPlatformClass() {
   let platform = '';
   try {
@@ -4981,6 +5017,7 @@ onMounted(async () => {
   window.addEventListener('resize', refreshWindowMaximisedState);
   window.addEventListener('focus', refreshWindowMaximisedState);
   bindRuntimeEvents();
+  void checkForUpdates();
   // Pre-load skills before init so welcome message has the count
   try { await refreshSkillState(); } catch (_) { /* ignore */ }
   await init();

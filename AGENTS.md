@@ -482,6 +482,7 @@ Frontend-specific rendering:
 - `displaySourceMessages` inserts archive placeholders for large histories without mutating true session messages
 - tool card components render read groups, diffs, command output, MCP tools, and sub-agent progress
 - `AskToolCard` renders one question per Tab, supports multiple selections and custom answers, and submits all answers together
+- Startup performs one best-effort GitHub latest-release check. A newer semantic version shows a green update icon in `AppHeader`; clicking it opens the Ally GitHub repository in the system browser.
 
 ---
 

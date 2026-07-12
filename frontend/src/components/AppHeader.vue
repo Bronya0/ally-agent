@@ -31,6 +31,21 @@
     <n-space align="center" :size="6">
       <n-tag v-if="planModeActive" size="small" round type="warning" bordered>PLAN</n-tag>
       <n-tag v-if="grillModeActive" size="small" round type="error" bordered>GRILL</n-tag>
+      <n-button
+        v-if="updateAvailable"
+        class="update-button"
+        size="small"
+        quaternary
+        :title="`发现新版本 ${latestVersion}，点击前往 GitHub`"
+        aria-label="发现新版本，前往 GitHub"
+        @click="$emit('openUpdate')"
+      >
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="9" />
+          <path d="M12 16V8" />
+          <path d="m8.5 11.5 3.5-3.5 3.5 3.5" />
+        </svg>
+      </n-button>
       <n-button size="small" quaternary @click="$emit('openSettings')" title="Settings">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <circle cx="12" cy="12" r="3"/>
@@ -68,6 +83,8 @@ defineProps({
   activeWorkspaceId: { type: String, required: true },
   planModeActive: { type: Boolean, default: false },
   grillModeActive: { type: Boolean, default: false },
+  updateAvailable: { type: Boolean, default: false },
+  latestVersion: { type: String, default: '' },
   isMaximised: { type: Boolean, default: false },
   historyOptions: { type: Array, default: () => [] },
 });
@@ -77,6 +94,7 @@ const emit = defineEmits([
   'closeWorkspace',
   'addWorkspace',
   'historySelect',
+  'openUpdate',
   'openSettings',
   'minimise',
   'toggleMaximise',
@@ -123,6 +141,17 @@ function onHistorySelect(key) {
 .n-button:focus-visible,
 .n-button:hover {
   box-shadow: none !important;
+}
+
+.update-button {
+  color: #67d99b !important;
+  background: rgba(74, 222, 128, 0.1) !important;
+  --wails-draggable: no-drag;
+}
+
+.update-button:hover {
+  color: #9af0bd !important;
+  background: rgba(74, 222, 128, 0.18) !important;
 }
 
 .brand {

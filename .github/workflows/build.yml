@@ -12,6 +12,7 @@ env:
   APP_NAME: Ally
   WAILS_VERSION: v2.12.0
   RG_VERSION: 15.1.0
+  ALLY_BUILD_VERSION: ${{ github.event.release.tag_name || github.ref_name }}
   NODE_OPTIONS: --max-old-space-size=4096
 
 jobs:
