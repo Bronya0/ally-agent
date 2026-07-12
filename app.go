@@ -519,6 +519,8 @@ type pendingAsk struct {
 	sessionID string
 	request   AskRequest
 	answers   chan AskResult
+	mu        sync.Mutex
+	cancelled bool
 }
 
 type toolExecutionMeta struct {
@@ -1408,6 +1410,13 @@ func (a *App) handleSkillToolCall(skillName, skillArgs string) (map[string]any, 
 	skills = a.enabledSkillsFrom(skills)
 	for _, sk := range skills {
 		if strings.EqualFold(sk.Name, skillName) {
+			info, err := os.Stat(sk.Path)
+			if err != nil {
+				return nil, fmt.Errorf("failed to stat skill: %w", err)
+			}
+			if info.Size() > maxReadFileBytes {
+				return nil, fmt.Errorf("skill file is too large: %d bytes (max %d)", info.Size(), maxReadFileBytes)
+			}
 			content, err := os.ReadFile(sk.Path)
 			if err != nil {
 				return nil, fmt.Errorf("failed to read skill: %w", err)
@@ -2645,8 +2654,9 @@ func calculateExpression(req CalculateRequest) (CalculateResult, error) {
 }
 
 type mathParser struct {
-	s   string
-	pos int
+	s     string
+	pos   int
+	depth int
 }
 
 func (p *mathParser) parseExpression() (float64, error) {
@@ -2746,6 +2756,10 @@ func (p *mathParser) parseUnary() (float64, error) {
 func (p *mathParser) parsePrimary() (float64, error) {
 	p.skipSpace()
 	if p.match('(') {
+		p.depth++
+		if p.depth > 200 {
+			return 0, errors.New("expression nesting too deep")
+		}
 		v, err := p.parseExpression()
 		if err != nil {
 			return 0, err
@@ -2754,6 +2768,7 @@ func (p *mathParser) parsePrimary() (float64, error) {
 		if !p.match(')') {
 			return 0, errors.New("missing closing parenthesis")
 		}
+		p.depth--
 		return v, nil
 	}
 	if p.pos < len(p.s) && (isAlpha(p.s[p.pos]) || p.s[p.pos] == '_') {
@@ -6372,6 +6387,9 @@ func (a *App) executeAsk(ctx context.Context, sessionID string, req AskRequest) 
 	case result := <-pending.answers:
 		return result, nil
 	case <-ctx.Done():
+		pending.mu.Lock()
+		pending.cancelled = true
+		pending.mu.Unlock()
 		a.emit("ask:closed", map[string]any{"askId": askID, "sessionId": sessionID})
 		return AskResult{}, codedToolError("E_ASK_CANCELLED", errors.New("ask was cancelled"))
 	}
@@ -6441,6 +6459,11 @@ func (a *App) SubmitAskResponse(req AskSubmitRequest) error {
 	result, err := resolveAskSubmission(askID, pending.request, req.Answers)
 	if err != nil {
 		return err
+	}
+	pending.mu.Lock()
+	defer pending.mu.Unlock()
+	if pending.cancelled {
+		return codedToolError("E_ASK_CANCELLED", errors.New("ask was cancelled"))
 	}
 	select {
 	case pending.answers <- result:
@@ -7281,6 +7304,10 @@ func (a *App) createGoal(sessionID string, objective string, completionCriterion
 		CreatedAt:           time.Now().Unix(),
 	}
 	a.mu.Lock()
+	if existing := a.goalStates[key]; existing != nil && existing.Status == "active" {
+		a.mu.Unlock()
+		return nil, errors.New("an active goal already exists; complete or pause it before creating a new one")
+	}
 	a.goalStates[key] = goal
 	a.mu.Unlock()
 	return goal, nil
@@ -7308,7 +7335,8 @@ func (a *App) getActiveGoal(sessionID string) *GoalState {
 	defer a.mu.Unlock()
 	goal := a.goalStates[goalSessionKey(sessionID)]
 	if goal != nil && goal.Status == "active" {
-		return goal
+		cp := *goal
+		return &cp
 	}
 	return nil
 }
@@ -7456,7 +7484,7 @@ func (a *App) webFetchTool(ctx context.Context, req WebFetchRequest) (WebFetchRe
 	} else if fetched.Result.BodyEncoding == "text" {
 		text = fetched.Result.Body
 	} else {
-		return WebFetchResult{}, fmt.Errorf("web_fetch expected readable text/html, got %q", contentType)
+		return WebFetchResult{}, codedToolError("E_WEB_FETCH_NOT_TEXT", fmt.Errorf("web_fetch expected readable text/html, got %q", contentType))
 	}
 
 	text = normalizeWhitespace(text)
@@ -7488,12 +7516,12 @@ func (a *App) doHTTPRequest(parent context.Context, req HTTPRequestToolRequest, 
 		method = http.MethodGet
 	}
 	if strings.ContainsAny(method, " \t\r\n") {
-		return httpFetchResult{}, fmt.Errorf("invalid HTTP method %q", method)
+		return httpFetchResult{}, codedToolError("E_HTTP_BAD_METHOD", fmt.Errorf("invalid HTTP method %q", method))
 	}
-	allowPrivateNetwork := boolDefault(req.AllowPrivateNetwork, true)
+	allowPrivateNetwork := boolDefault(req.AllowPrivateNetwork, false)
 	target, err := normalizeHTTPRequestURL(req.URL, req.Query)
 	if err != nil {
-		return httpFetchResult{}, err
+		return httpFetchResult{}, codedToolError("E_HTTP_BAD_URL", err)
 	}
 	if err := validateHTTPURLAccess(target, allowPrivateNetwork); err != nil {
 		return httpFetchResult{}, err
@@ -8880,18 +8908,29 @@ func (a *App) remoteEdit(ctx context.Context, req RemoteEditRequest) (MultiEditR
 		data []byte
 	}
 	backups := make([]remoteBackup, 0, len(req.Files))
+	var rollbackErrors []string
 	for _, file := range req.Files {
 		rt, original, err := a.remoteReadRaw(ctx, req.Target, file.Path)
 		if err != nil {
 			for i := len(backups) - 1; i >= 0; i-- {
-				_ = a.remoteWriteRaw(ctx, backups[i].rt, backups[i].path, backups[i].data, true, true)
+				if rbErr := a.remoteWriteRaw(ctx, backups[i].rt, backups[i].path, backups[i].data, true, true); rbErr != nil {
+					rollbackErrors = append(rollbackErrors, fmt.Sprintf("%s: %v", backups[i].path, rbErr))
+				}
+			}
+			if len(rollbackErrors) > 0 {
+				err = fmt.Errorf("%w (rollback failures: %s)", err, strings.Join(rollbackErrors, "; "))
 			}
 			return MultiEditResult{}, err
 		}
-		edited, err := a.remoteEditOne(ctx, req.Target, file)
+		edited, err := a.remoteEditOne(ctx, rt, file, original)
 		if err != nil {
 			for i := len(backups) - 1; i >= 0; i-- {
-				_ = a.remoteWriteRaw(ctx, backups[i].rt, backups[i].path, backups[i].data, true, true)
+				if rbErr := a.remoteWriteRaw(ctx, backups[i].rt, backups[i].path, backups[i].data, true, true); rbErr != nil {
+					rollbackErrors = append(rollbackErrors, fmt.Sprintf("%s: %v", backups[i].path, rbErr))
+				}
+			}
+			if len(rollbackErrors) > 0 {
+				err = fmt.Errorf("%w (rollback failures: %s)", err, strings.Join(rollbackErrors, "; "))
 			}
 			return MultiEditResult{}, err
 		}
@@ -8906,11 +8945,7 @@ func (a *App) remoteEdit(ctx context.Context, req RemoteEditRequest) (MultiEditR
 	return result, nil
 }
 
-func (a *App) remoteEditOne(ctx context.Context, target string, req FileTextEdits) (EditResult, error) {
-	rt, file, err := a.remoteReadRaw(ctx, target, req.Path)
-	if err != nil {
-		return EditResult{}, err
-	}
+func (a *App) remoteEditOne(ctx context.Context, rt remoteTarget, req FileTextEdits, file remoteRawFile) (EditResult, error) {
 	beforeHash := hashBytes(file.Data)
 	beforeMD5 := hashMD5(file.Data)
 	if !strings.EqualFold(req.ExpectedMD5, beforeMD5) {
@@ -8923,7 +8958,7 @@ func (a *App) remoteEditOne(ctx context.Context, target string, req FileTextEdit
 	}
 	after := encodeLineEnding(result.content, ending)
 	if bytes.Equal(file.Data, after) {
-		return EditResult{}, errors.New("[E_NOOP] edit produced no content changes")
+		return EditResult{}, codedToolError("E_NOOP", errors.New("edit produced no content changes"))
 	}
 	if err := a.remoteWriteRaw(ctx, rt, req.Path, after, true, true); err != nil {
 		return EditResult{}, err
@@ -8985,11 +9020,7 @@ func (a *App) remoteCreateFile(ctx context.Context, req RemoteCreateFileRequest)
 	if err := a.remoteWriteRaw(ctx, rt, cleanPath, encoded, req.Overwrite, true); err != nil {
 		return EditResult{}, err
 	}
-	_, afterFile, err := a.remoteReadRaw(ctx, req.Target, cleanPath)
-	if err != nil {
-		return EditResult{}, err
-	}
-	return makeEditResult(cleanPath, beforeHash, before, afterFile.Data, ending, 1, string(before), content), nil
+	return makeEditResult(cleanPath, beforeHash, before, encoded, ending, 1, string(before), content), nil
 }
 
 func (a *App) remoteDeletePath(ctx context.Context, req RemoteDeletePathRequest) (map[string]any, error) {
@@ -9002,11 +9033,11 @@ func (a *App) remoteDeletePath(ctx context.Context, req RemoteDeletePathRequest)
 		return nil, err
 	}
 	if cleanPath == "." {
-		return nil, errors.New("refusing to delete remote workspace root")
+		return nil, codedToolError("E_DELETE_BLOCKED", errors.New("refusing to delete remote workspace root"))
 	}
 	for _, part := range strings.Split(cleanPath, "/") {
 		if part == ".git" || part == ".svn" || part == ".hg" {
-			return nil, errors.New("refusing to delete VCS metadata")
+			return nil, codedToolError("E_DELETE_BLOCKED", errors.New("refusing to delete VCS metadata"))
 		}
 	}
 	var result map[string]any
@@ -9018,8 +9049,11 @@ func (a *App) remoteRunCommand(ctx context.Context, req RemoteRunCommandRequest)
 	if strings.TrimSpace(req.Command) == "" {
 		return CommandResult{}, errors.New("command is required")
 	}
-	if containsExplicitDeleteCommand(req.Command) {
-		return CommandResult{}, fmt.Errorf("remote_run_command refuses explicit deletion commands. Use remote_delete_path for deletion.\n被拦截的命令: %s", req.Command)
+	if containsExplicitDeleteCommand(req.Command) && !isAllowedDeleteContext(req.Command) {
+		return CommandResult{}, codedToolError("E_COMMAND_BLOCKED", fmt.Errorf("remote_run_command refuses explicit deletion commands. Use remote_delete_path for deletion.\n被拦截的命令: %s", req.Command))
+	}
+	if err := validateRemoteCommandSafety(req.Command); err != nil {
+		return CommandResult{}, err
 	}
 	rt, err := parseRemoteTarget(req.Target)
 	if err != nil {
@@ -9035,6 +9069,19 @@ func (a *App) remoteRunCommand(ctx context.Context, req RemoteRunCommandRequest)
 	}
 	if timeout > 600 {
 		timeout = 600
+	}
+	shell := strings.TrimSpace(req.Shell)
+	if shell != "" {
+		allowed := false
+		for _, s := range []string{"/bin/bash", "/bin/sh", "/usr/bin/bash", "/usr/bin/sh", "/usr/bin/zsh", "/bin/zsh"} {
+			if shell == s {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return CommandResult{}, codedToolError("E_BAD_SHELL", fmt.Errorf("unsupported shell %q: only bash, sh, zsh are allowed", shell))
+		}
 	}
 	var result CommandResult
 	err = a.invokeRemotePython(ctx, rt, remotePayload(rt, "run", map[string]any{
@@ -9064,11 +9111,11 @@ func (a *App) listFilesWithConfig(cfg ConfigState, req ListFilesRequest) (ListFi
 		return ListFilesResult{}, err
 	}
 	if !info.IsDir() {
-		return ListFilesResult{}, fmt.Errorf("not a directory: %s", req.Path)
+		return ListFilesResult{}, codedToolError("E_BAD_PATH", fmt.Errorf("not a directory: %s", req.Path))
 	}
 	if !insideRoot(root, start) {
 		if blocked, reason := isDangerousSearchRoot(start); blocked {
-			return ListFilesResult{}, fmt.Errorf("%s\n\nThis listing has been blocked for safety. Specify a narrower project subdirectory or explicit file path.", reason)
+			return ListFilesResult{}, codedToolError("E_SEARCH_ROOT_BLOCKED", fmt.Errorf("%s\n\nThis listing has been blocked for safety. Specify a narrower project subdirectory or explicit file path.", reason))
 		}
 	}
 
@@ -10715,20 +10762,20 @@ func readTextFile(path string) ([]byte, os.FileInfo, error) {
 		return nil, nil, err
 	}
 	if info.IsDir() {
-		return nil, nil, errors.New("path is a directory")
+		return nil, nil, codedToolError("E_IS_DIRECTORY", errors.New("path is a directory"))
 	}
 	if info.Size() > maxReadFileBytes {
-		return nil, nil, fmt.Errorf("file is too large: %d bytes", info.Size())
+		return nil, nil, codedToolError("E_FILE_TOO_LARGE", fmt.Errorf("file is too large: %d bytes", info.Size()))
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, nil, err
 	}
 	if bytes.Contains(data, []byte{0}) {
-		return nil, nil, errors.New("binary file is not supported")
+		return nil, nil, codedToolError("E_BINARY_FILE", errors.New("binary file is not supported"))
 	}
 	if !utf8.Valid(data) {
-		return nil, nil, errors.New("file is not valid UTF-8")
+		return nil, nil, codedToolError("E_NOT_UTF8", errors.New("file is not valid UTF-8"))
 	}
 	return data, info, nil
 }
@@ -11329,56 +11376,84 @@ func isDangerousSearchRoot(absPath string) (bool, string) {
 	return false, ""
 }
 
+var (
+	deleteCommandRE = regexp.MustCompile(`(?i)(^|[\s;&|()])(?:rm|unlink|rmdir|del|erase|rd|remove-item|ri)\b`)
+	winPathRE       = regexp.MustCompile(`(?i)\b[A-Z]:[\\/][^\s"'<>|;&()]+`)
+	unixPathRE      = regexp.MustCompile(`(?i)(?:^|[\s"'=])(/[^\s"'<>|;&()]+)`)
+
+	allowedDeleteREs = []*regexp.Regexp{
+		regexp.MustCompile(`(?i)\bgit\s+rm\b`),
+		regexp.MustCompile(`(?i)\bdocker\s+rm\b`),
+		regexp.MustCompile(`(?i)\bdocker\s+(container|image|volume|network)\s+rm\b`),
+		regexp.MustCompile(`(?i)\bkubectl\s+delete\b`),
+		regexp.MustCompile(`(?i)\bminikube\s+delete\b`),
+		regexp.MustCompile(`(?i)\bnpm\s+(uninstall|remove)\b`),
+		regexp.MustCompile(`(?i)\bpnpm\s+(uninstall|remove)\b`),
+		regexp.MustCompile(`(?i)\byarn\s+remove\b`),
+	}
+)
+
+var commandRiskPatterns = []struct {
+	re     *regexp.Regexp
+	reason string
+}{
+	{regexp.MustCompile(`(?i)rm\s+-rf\s+/\s*$`), "递归删除文件系统根目录"},
+	{regexp.MustCompile(`(?i)rm\s+-rf\s+/\*`), "递归删除文件系统根目录（通配符）"},
+	{regexp.MustCompile(`(?i)rm\s+-rf\s+~\b`), "递归删除用户主目录"},
+	{regexp.MustCompile(`(?i)rm\s+-rf\s+/home/`), "递归删除 /home 目录"},
+	{regexp.MustCompile(`(?i)rm\s+-rf\s+/Users/`), "递归删除 /Users 目录"},
+	{regexp.MustCompile(`(?i)rm\s+-rf\s+/root\b`), "递归删除 root 用户目录"},
+	{regexp.MustCompile(`(?i)\bmkfs\b`), "格式化文件系统"},
+	{regexp.MustCompile(`(?i)\bdd\s+if=`), "通过 dd 直接写入磁盘"},
+	{regexp.MustCompile(`(?i)\bdd\s+of=`), "通过 dd 直接写入磁盘"},
+	{regexp.MustCompile(`(?i)\bshutdown\b`), "系统关机命令"},
+	{regexp.MustCompile(`(?i)\breboot\b`), "系统重启命令"},
+	{regexp.MustCompile(`(?i)\bpoweroff\b`), "系统断电命令"},
+	{regexp.MustCompile(`(?i)sudo\s+rm`), "提权递归删除"},
+	{regexp.MustCompile(`(?i)\bcp\s+/dev/zero\b`), "覆写磁盘数据"},
+	{regexp.MustCompile(`(?i):\(\s*\)\s*\{`), "fork炸弹"},
+	{regexp.MustCompile(`(?i)\bchmod\s+0[0-7]{2}\b`), "移除所有文件权限"},
+	{regexp.MustCompile(`(?i)>\s+/dev/sd`), "直接写入块设备"},
+}
+
 // checkCommandSafety inspects commands for high-risk patterns and routes
 // explicit deletion through delete_path, where workspace and OS guards apply.
 func checkCommandSafety(req CommandRequest, workspaceRoot string) error {
 	cmd := req.Command
-	if containsExplicitDeleteCommand(cmd) {
+	if containsExplicitDeleteCommand(cmd) && !isAllowedDeleteContext(cmd) {
 		return codedToolError("E_COMMAND_BLOCKED", fmt.Errorf("run_command refuses explicit deletion commands. Use delete_path for file deletion so workspace and OS safety checks can be applied.\n被拦截的命令: %s", cmd))
 	}
 	if outsidePath := firstAbsolutePathOutsideWorkspace(cmd, workspaceRoot); outsidePath != "" {
 		return codedToolError("E_PATH_OUTSIDE", fmt.Errorf("run_command refuses explicit absolute paths outside the workspace. Use batch_read, list_files, or grep_files for read-only external inspection.\n外部路径: %s", outsidePath))
 	}
-
-	// High-risk command patterns (matched case-insensitive)
-	type riskPattern struct {
-		re     *regexp.Regexp
-		reason string
-	}
-	risks := []riskPattern{
-		{regexp.MustCompile(`(?i)rm\s+-rf\s+/\s*$`), "递归删除文件系统根目录"},
-		{regexp.MustCompile(`(?i)rm\s+-rf\s+/\*`), "递归删除文件系统根目录（通配符）"},
-		{regexp.MustCompile(`(?i)rm\s+-rf\s+~\b`), "递归删除用户主目录"},
-		{regexp.MustCompile(`(?i)rm\s+-rf\s+/home/`), "递归删除 /home 目录"},
-		{regexp.MustCompile(`(?i)rm\s+-rf\s+/Users/`), "递归删除 /Users 目录"},
-		{regexp.MustCompile(`(?i)rm\s+-rf\s+/root\b`), "递归删除 root 用户目录"},
-		{regexp.MustCompile(`(?i)\bmkfs\b`), "格式化文件系统"},
-		{regexp.MustCompile(`(?i)\bdd\s+if=`), "通过 dd 直接写入磁盘"},
-		{regexp.MustCompile(`(?i)\bdd\s+of=`), "通过 dd 直接写入磁盘"},
-		{regexp.MustCompile(`(?i)\bshutdown\b`), "系统关机命令"},
-		{regexp.MustCompile(`(?i)\breboot\b`), "系统重启命令"},
-		{regexp.MustCompile(`(?i)\bpoweroff\b`), "系统断电命令"},
-		{regexp.MustCompile(`(?i)sudo\s+rm`), "提权递归删除"},
-		{regexp.MustCompile(`(?i)\bcp\s+/dev/zero\b`), "覆写磁盘数据"},
-		{regexp.MustCompile(`(?i):\(\s*\)\s*\{`), "fork炸弹"},
-		{regexp.MustCompile(`(?i)\bchmod\s+0[0-7]{2}\b`), "移除所有文件权限"},
-		{regexp.MustCompile(`(?i)>\s+/dev/sd`), "直接写入块设备"},
-	}
-
-	for _, r := range risks {
+	for _, r := range commandRiskPatterns {
 		if r.re.MatchString(cmd) {
 			return codedToolError("E_COMMAND_BLOCKED", fmt.Errorf("高危命令拒绝: 检测到%s - 命令已被安全围栏拦截。\n如需执行此操作，请手动在终端中执行。\n被拦截的命令: %s", r.reason, cmd))
 		}
 	}
+	return nil
+}
 
+func isAllowedDeleteContext(command string) bool {
+	for _, re := range allowedDeleteREs {
+		if re.MatchString(command) {
+			return true
+		}
+	}
+	return false
+}
+
+func validateRemoteCommandSafety(cmd string) error {
+	for _, r := range commandRiskPatterns {
+		if r.re.MatchString(cmd) {
+			return codedToolError("E_COMMAND_BLOCKED", fmt.Errorf("高危命令拒绝: 检测到%s - 命令已被安全围栏拦截。\n如需执行此操作，请手动在终端中执行。\n被拦截的命令: %s", r.reason, cmd))
+		}
+	}
 	return nil
 }
 
 func containsExplicitDeleteCommand(command string) bool {
-	if regexp.MustCompile(`(?i)(^|[\s;&|()])(?:rm|unlink|rmdir|del|erase|rd|remove-item|ri)\b`).MatchString(command) {
-		return true
-	}
-	return false
+	return deleteCommandRE.MatchString(command)
 }
 
 func firstAbsolutePathOutsideWorkspace(command string, workspaceRoot string) string {
@@ -11397,16 +11472,14 @@ func firstAbsolutePathOutsideWorkspace(command string, workspaceRoot string) str
 
 func absolutePathCandidates(command string) []string {
 	candidates := []string{}
-	winPath := regexp.MustCompile(`(?i)\b[A-Z]:[\\/][^\s"'<>|;&()]+`)
-	for _, match := range winPath.FindAllString(command, -1) {
+	for _, match := range winPathRE.FindAllString(command, -1) {
 		value := strings.TrimRight(match, `.,:;`)
 		if value != "" {
 			candidates = append(candidates, value)
 		}
 	}
 	if goruntime.GOOS != "windows" {
-		unixPath := regexp.MustCompile(`(?i)(?:^|[\s"'=])(/[^\s"'<>|;&()]+)`)
-		for _, match := range unixPath.FindAllStringSubmatch(command, -1) {
+		for _, match := range unixPathRE.FindAllStringSubmatch(command, -1) {
 			value := match[1]
 			value = strings.Trim(value, ` "'`)
 			value = strings.TrimRight(value, `.,:;`)
@@ -11784,6 +11857,17 @@ func (a *App) handleTodoList(sessionID string, req TodoListRequest) (any, error)
 	sid := strings.TrimSpace(sessionID)
 	if sid == "" {
 		return nil, errors.New("no active session")
+	}
+
+	for _, todo := range req.Todos {
+		switch todo.Status {
+		case "pending", "in_progress", "done":
+		default:
+			return nil, fmt.Errorf("invalid todo status %q: must be pending, in_progress, or done", todo.Status)
+		}
+		if strings.TrimSpace(todo.Title) == "" {
+			return nil, errors.New("todo title is required")
+		}
 	}
 
 	a.mu.Lock()
