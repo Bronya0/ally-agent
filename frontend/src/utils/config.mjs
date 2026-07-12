@@ -10,6 +10,7 @@ export function defaultConfig() {
     maxTokens: 128000,
     contextWindow: 1048576,
     customPrompt: '',
+    allowPrivateNetwork: true,
     disabledSkills: [],
     models: [],
   };

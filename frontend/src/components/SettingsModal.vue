@@ -49,6 +49,12 @@
               :placeholder="$t('settings.customPromptPlaceholder')"
             />
           </n-form-item>
+          <n-form-item :label="$t('settings.allowPrivateNetwork')">
+            <div class="settings-toggle-row">
+              <n-switch v-model:value="draft.allowPrivateNetwork" />
+              <span class="settings-toggle-hint">{{ $t('settings.allowPrivateNetworkHint') }}</span>
+            </div>
+          </n-form-item>
         </section>
 
         <!-- Models -->
@@ -767,6 +773,18 @@ watch(() => props.visible, (visible) => {
   font-size: 12px;
   color: #8a8a8a;
   margin-top: 2px;
+}
+
+.settings-toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.settings-toggle-hint {
+  font-size: 12px;
+  color: #8a8a8a;
+  line-height: 1.5;
 }
 
 .current-model-panel {

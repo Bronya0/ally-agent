@@ -279,21 +279,22 @@ type ModelConfig struct {
 }
 
 type ConfigState struct {
-	ProviderName   string        `json:"providerName"`
-	APIFormat      string        `json:"apiFormat"`
-	BaseURL        string        `json:"baseUrl"`
-	APIKey         string        `json:"apiKey"`
-	Model          string        `json:"model"`
-	Workspace      string        `json:"workspace"`
-	Temperature    float32       `json:"temperature"`
-	MaxTokens      int           `json:"maxTokens"`
-	ContextWindow  int           `json:"contextWindow"`
-	CustomPrompt   string        `json:"customPrompt"`
-	PlanMode       bool          `json:"planMode"`
-	Models         []ModelConfig `json:"models,omitempty"`
-	DisabledSkills []string      `json:"disabledSkills,omitempty"`
-	grillMode      bool
-	temperatureSet bool
+	ProviderName        string        `json:"providerName"`
+	APIFormat           string        `json:"apiFormat"`
+	BaseURL             string        `json:"baseUrl"`
+	APIKey              string        `json:"apiKey"`
+	Model               string        `json:"model"`
+	Workspace           string        `json:"workspace"`
+	Temperature         float32       `json:"temperature"`
+	MaxTokens           int           `json:"maxTokens"`
+	ContextWindow       int           `json:"contextWindow"`
+	CustomPrompt        string        `json:"customPrompt"`
+	PlanMode            bool          `json:"planMode"`
+	AllowPrivateNetwork bool          `json:"allowPrivateNetwork"`
+	Models              []ModelConfig `json:"models,omitempty"`
+	DisabledSkills      []string      `json:"disabledSkills,omitempty"`
+	grillMode           bool
+	temperatureSet      bool
 }
 
 type ToolDefinitionSummary struct {
@@ -1128,14 +1129,15 @@ func defaultConfigState() ConfigState {
 		execDir = filepath.Dir(exe)
 	}
 	return ConfigState{
-		ProviderName:  "OpenAI Compatible",
-		APIFormat:     apiFormatOpenAIChat,
-		BaseURL:       defaultBaseURL,
-		Model:         defaultModel,
-		Workspace:     execDir,
-		Temperature:   0.2,
-		MaxTokens:     128000,
-		ContextWindow: 1048576,
+		ProviderName:        "OpenAI Compatible",
+		APIFormat:           apiFormatOpenAIChat,
+		BaseURL:             defaultBaseURL,
+		Model:               defaultModel,
+		Workspace:           execDir,
+		Temperature:         0.2,
+		MaxTokens:           128000,
+		ContextWindow:       1048576,
+		AllowPrivateNetwork: true,
 	}
 }
 
@@ -3635,6 +3637,7 @@ func (a *App) SaveConfig(req ConfigState) error {
 	a.config = mergeConfig(a.config, req)
 	a.config.Temperature = req.Temperature
 	a.config.CustomPrompt = req.CustomPrompt
+	a.config.AllowPrivateNetwork = req.AllowPrivateNetwork
 	a.disabledSkills = normalizeSkillNameList(a.config.DisabledSkills)
 	a.config.DisabledSkills = cloneStringSlice(a.disabledSkills)
 	cfg := a.config
@@ -4298,6 +4301,13 @@ func (a *App) effectiveConfig(overlay ConfigState) ConfigState {
 	base := a.config
 	a.mu.Unlock()
 	return mergeConfig(base, overlay)
+}
+
+func (a *App) effectiveConfigSafe() ConfigState {
+	if err := a.ensureInitialized(); err != nil {
+		return defaultConfigState()
+	}
+	return a.effectiveConfig(ConfigState{})
 }
 
 func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg ConfigState) {
@@ -6127,7 +6137,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		var req WebFetchRequest
 		err = decode(&req)
 		if err == nil {
-			data, err = a.webFetchTool(ctx, req)
+			data, err = a.webFetchToolWithConfig(ctx, cfg, req)
 		}
 	case "remote_list_files":
 		var req RemoteListFilesRequest
@@ -7411,14 +7421,18 @@ type httpFetchResult struct {
 }
 
 func (a *App) httpRequestTool(ctx context.Context, req HTTPRequestToolRequest) (HTTPRequestToolResult, error) {
-	return a.httpRequestToolWithConfig(ctx, a.effectiveConfig(ConfigState{}), req)
+	return a.httpRequestToolWithConfig(ctx, a.effectiveConfigSafe(), req)
 }
 
 func (a *App) httpRequestToolWithConfig(ctx context.Context, cfg ConfigState, req HTTPRequestToolRequest) (HTTPRequestToolResult, error) {
 	if strings.TrimSpace(req.SaveTo) != "" && req.MaxBytes <= 0 {
 		req.MaxBytes = maxHTTPBodyBytes
 	}
-	fetched, err := a.doHTTPRequest(ctx, req, false)
+	allowPrivate := cfg.AllowPrivateNetwork
+	if req.AllowPrivateNetwork != nil {
+		allowPrivate = *req.AllowPrivateNetwork
+	}
+	fetched, err := a.doHTTPRequest(ctx, req, false, allowPrivate)
 	if err != nil {
 		return HTTPRequestToolResult{}, err
 	}
@@ -7441,7 +7455,7 @@ func (a *App) httpRequestToolWithConfig(ctx context.Context, cfg ConfigState, re
 	return fetched.Result, nil
 }
 
-func (a *App) webFetchTool(ctx context.Context, req WebFetchRequest) (WebFetchResult, error) {
+func (a *App) webFetchToolWithConfig(ctx context.Context, cfg ConfigState, req WebFetchRequest) (WebFetchResult, error) {
 	if strings.TrimSpace(req.URL) == "" {
 		return WebFetchResult{}, errors.New("url is required")
 	}
@@ -7457,6 +7471,10 @@ func (a *App) webFetchTool(ctx context.Context, req WebFetchRequest) (WebFetchRe
 		v := false
 		respectRobots = &v
 	}
+	allowPrivate := cfg.AllowPrivateNetwork
+	if req.AllowPrivateNetwork != nil {
+		allowPrivate = *req.AllowPrivateNetwork
+	}
 	fetched, err := a.doHTTPRequest(ctx, HTTPRequestToolRequest{
 		Method:              "GET",
 		URL:                 req.URL,
@@ -7465,8 +7483,7 @@ func (a *App) webFetchTool(ctx context.Context, req WebFetchRequest) (WebFetchRe
 		MaxBytes:            req.MaxBytes,
 		FollowRedirects:     boolPtr(true),
 		RespectRobots:       respectRobots,
-		AllowPrivateNetwork: req.AllowPrivateNetwork,
-	}, true)
+	}, true, allowPrivate)
 	if err != nil {
 		return WebFetchResult{}, err
 	}
@@ -7510,7 +7527,7 @@ func (a *App) webFetchTool(ctx context.Context, req WebFetchRequest) (WebFetchRe
 	}, nil
 }
 
-func (a *App) doHTTPRequest(parent context.Context, req HTTPRequestToolRequest, preferText bool) (httpFetchResult, error) {
+func (a *App) doHTTPRequest(parent context.Context, req HTTPRequestToolRequest, preferText bool, allowPrivateNetwork bool) (httpFetchResult, error) {
 	method := strings.ToUpper(strings.TrimSpace(req.Method))
 	if method == "" {
 		method = http.MethodGet
@@ -7518,7 +7535,6 @@ func (a *App) doHTTPRequest(parent context.Context, req HTTPRequestToolRequest, 
 	if strings.ContainsAny(method, " \t\r\n") {
 		return httpFetchResult{}, codedToolError("E_HTTP_BAD_METHOD", fmt.Errorf("invalid HTTP method %q", method))
 	}
-	allowPrivateNetwork := boolDefault(req.AllowPrivateNetwork, false)
 	target, err := normalizeHTTPRequestURL(req.URL, req.Query)
 	if err != nil {
 		return httpFetchResult{}, codedToolError("E_HTTP_BAD_URL", err)

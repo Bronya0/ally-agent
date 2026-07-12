@@ -16,8 +16,6 @@ import (
 	openai "github.com/sashabaranov/go-openai"
 )
 
-func ptrBool(b bool) *bool { return &b }
-
 func TestHTTPRequestRedirectStripsSensitiveHeadersAcrossOrigins(t *testing.T) {
 	received := make(chan http.Header, 1)
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -34,8 +32,7 @@ func TestHTTPRequestRedirectStripsSensitiveHeadersAcrossOrigins(t *testing.T) {
 
 	app := NewApp()
 	_, err := app.httpRequestTool(context.Background(), HTTPRequestToolRequest{
-		URL:                 source.URL + "/redirect",
-		AllowPrivateNetwork: ptrBool(true),
+		URL:     source.URL + "/redirect",
 		Headers: map[string]string{
 			"Authorization": "Bearer secret",
 			"Cookie":        "sid=secret",
@@ -80,8 +77,7 @@ func TestHTTPRequestRedirectPreservesSensitiveHeadersOnSameOrigin(t *testing.T) 
 
 	app := NewApp()
 	_, err := app.httpRequestTool(context.Background(), HTTPRequestToolRequest{
-		URL:                 server.URL + "/redirect",
-		AllowPrivateNetwork: ptrBool(true),
+		URL:     server.URL + "/redirect",
 		Headers: map[string]string{
 			"Authorization": "Bearer secret",
 			"Cookie":        "sid=secret",
@@ -109,8 +105,7 @@ func TestHTTPRequestParsesJSONResponse(t *testing.T) {
 
 	app := NewApp()
 	got, err := app.httpRequestTool(context.Background(), HTTPRequestToolRequest{
-		URL:                 server.URL,
-		AllowPrivateNetwork: ptrBool(true),
+		URL: server.URL,
 	})
 	if err != nil {
 		t.Fatal(err)
