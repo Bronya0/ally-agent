@@ -1,0 +1,221 @@
+name: Build Wails releases
+
+on:
+  workflow_dispatch:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+env:
+  APP_NAME: Ally
+  WAILS_VERSION: v2.12.0
+  RG_VERSION: 15.1.0
+  NODE_OPTIONS: --max-old-space-size=4096
+
+jobs:
+  windows:
+    name: Windows x64
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Wails
+        shell: pwsh
+        run: go install "github.com/wailsapp/wails/v2/cmd/wails@${{ env.WAILS_VERSION }}"
+
+      - name: Test and build
+        shell: pwsh
+        run: |
+          go test ./...
+          wails build -clean -o "${{ env.APP_NAME }}.exe"
+
+      - name: Bundle ripgrep and licenses
+        shell: pwsh
+        run: |
+          $asset = "ripgrep-${{ env.RG_VERSION }}-x86_64-pc-windows-msvc.zip"
+          $base = "https://github.com/BurntSushi/ripgrep/releases/download/${{ env.RG_VERSION }}"
+          Invoke-WebRequest "$base/$asset" -OutFile $asset
+          Invoke-WebRequest "$base/$asset.sha256" -OutFile "$asset.sha256"
+          $expected = [regex]::Match((Get-Content "$asset.sha256" -Raw), '(?i)\b[0-9a-f]{64}\b').Value.ToLowerInvariant()
+          if (-not $expected) { throw "ripgrep checksum file did not contain a SHA-256 hash" }
+          $actual = (Get-FileHash $asset -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) { throw "ripgrep checksum mismatch" }
+
+          Expand-Archive $asset -DestinationPath rg-dist
+          $rg = Get-ChildItem rg-dist -Recurse -Filter rg.exe | Select-Object -First 1
+          if (-not $rg) { throw "rg.exe was not found in the ripgrep archive" }
+
+          New-Item -ItemType Directory -Force dist/tools, dist/third_party/ripgrep | Out-Null
+          Copy-Item "build/bin/${{ env.APP_NAME }}.exe" dist/
+          Copy-Item $rg.FullName dist/tools/rg.exe
+          Copy-Item LICENSE, THIRD_PARTY_NOTICES.md, README.md dist/
+          Copy-Item third_party/ripgrep/* dist/third_party/ripgrep/
+          & dist/tools/rg.exe --version
+
+          $version = "${{ github.event.release.tag_name || github.ref_name }}"
+          Compress-Archive -Path dist/* -DestinationPath "${{ env.APP_NAME }}-$version-windows-x64.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Ally-windows-x64
+          path: Ally-*-windows-x64.zip
+          if-no-files-found: error
+
+      - uses: softprops/action-gh-release@v2
+        if: github.event_name == 'release'
+        with:
+          files: Ally-*-windows-x64.zip
+          fail_on_unmatched_files: true
+
+  linux:
+    name: Linux x64
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libgtk-3-dev libwebkit2gtk-4.0-dev
+
+      - name: Install Wails
+        run: go install "github.com/wailsapp/wails/v2/cmd/wails@${{ env.WAILS_VERSION }}"
+
+      - name: Test and build
+        run: |
+          go test ./...
+          wails build -clean -o "${{ env.APP_NAME }}"
+
+      - name: Bundle ripgrep and licenses
+        shell: bash
+        run: |
+          set -euo pipefail
+          asset="ripgrep-${RG_VERSION}-x86_64-unknown-linux-musl.tar.gz"
+          base="https://github.com/BurntSushi/ripgrep/releases/download/${RG_VERSION}"
+          curl --fail --location --retry 3 -o "$asset" "$base/$asset"
+          curl --fail --location --retry 3 -o "$asset.sha256" "$base/$asset.sha256"
+          sha256sum --check "$asset.sha256"
+
+          mkdir -p rg-dist dist/tools dist/third_party/ripgrep
+          tar -xzf "$asset" -C rg-dist
+          rg_path="$(find rg-dist -type f -name rg -print -quit)"
+          test -n "$rg_path"
+
+          cp "build/bin/${APP_NAME}" dist/
+          cp "$rg_path" dist/tools/rg
+          cp LICENSE THIRD_PARTY_NOTICES.md README.md dist/
+          cp third_party/ripgrep/* dist/third_party/ripgrep/
+          chmod +x "dist/${APP_NAME}" dist/tools/rg
+          dist/tools/rg --version
+
+          version="${{ github.event.release.tag_name || github.ref_name }}"
+          tar -C dist -czf "${APP_NAME}-$version-linux-x64.tar.gz" .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Ally-linux-x64
+          path: Ally-*-linux-x64.tar.gz
+          if-no-files-found: error
+
+      - uses: softprops/action-gh-release@v2
+        if: github.event_name == 'release'
+        with:
+          files: Ally-*-linux-x64.tar.gz
+          fail_on_unmatched_files: true
+
+  macos:
+    name: macOS universal
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Wails
+        run: go install "github.com/wailsapp/wails/v2/cmd/wails@${{ env.WAILS_VERSION }}"
+
+      - name: Test and build
+        run: |
+          go test ./...
+          wails build -clean -platform darwin/universal -o "${{ env.APP_NAME }}"
+
+      - name: Bundle universal ripgrep and licenses
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="https://github.com/BurntSushi/ripgrep/releases/download/${RG_VERSION}"
+          mkdir -p rg-arm64 rg-x64
+
+          for arch in aarch64 x86_64; do
+            asset="ripgrep-${RG_VERSION}-${arch}-apple-darwin.tar.gz"
+            curl --fail --location --retry 3 -o "$asset" "$base/$asset"
+            curl --fail --location --retry 3 -o "$asset.sha256" "$base/$asset.sha256"
+            shasum -a 256 -c "$asset.sha256"
+            if [ "$arch" = "aarch64" ]; then target=rg-arm64; else target=rg-x64; fi
+            tar -xzf "$asset" -C "$target"
+          done
+
+          arm_rg="$(find rg-arm64 -type f -name rg -print -quit)"
+          x64_rg="$(find rg-x64 -type f -name rg -print -quit)"
+          test -n "$arm_rg"
+          test -n "$x64_rg"
+
+          app="build/bin/${APP_NAME}.app"
+          mkdir -p "$app/Contents/MacOS/tools" "$app/Contents/Resources/licenses/ripgrep"
+          lipo -create "$arm_rg" "$x64_rg" -output "$app/Contents/MacOS/tools/rg"
+          chmod +x "$app/Contents/MacOS/tools/rg"
+          cp LICENSE THIRD_PARTY_NOTICES.md "$app/Contents/Resources/licenses/"
+          cp third_party/ripgrep/* "$app/Contents/Resources/licenses/ripgrep/"
+          lipo -info "$app/Contents/MacOS/tools/rg"
+          "$app/Contents/MacOS/tools/rg" --version
+
+          mkdir -p dmg-root
+          cp -R "$app" dmg-root/
+          cp LICENSE THIRD_PARTY_NOTICES.md README.md dmg-root/
+          version="${{ github.event.release.tag_name || github.ref_name }}"
+          hdiutil create -volname "${APP_NAME}" -srcfolder dmg-root -ov -format UDZO "${APP_NAME}-$version-macos-universal.dmg"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Ally-macos-universal
+          path: Ally-*-macos-universal.dmg
+          if-no-files-found: error
+
+      - uses: softprops/action-gh-release@v2
+        if: github.event_name == 'release'
+        with:
+          files: Ally-*-macos-universal.dmg
+          fail_on_unmatched_files: true

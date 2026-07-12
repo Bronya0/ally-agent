@@ -1,0 +1,29 @@
+# ── Build output ──
+build/bin/
+frontend/dist/
+
+# ── Dependencies ──
+frontend/node_modules/
+node_modules/
+
+# ── IDE & editors ──
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ── OS files ──
+.DS_Store
+Thumbs.db
+
+# ── Logs ──
+*.log
+
+# ── Wails build cache ──
+*.exe
+*.dll
+nul
+temp_demo/
+temp_test.txt
+nul

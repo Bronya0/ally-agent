@@ -1,0 +1,956 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+	"time"
+
+	anthropic "github.com/anthropics/anthropic-sdk-go"
+	anthropicoption "github.com/anthropics/anthropic-sdk-go/option"
+	oa "github.com/openai/openai-go"
+	"github.com/openai/openai-go/packages/ssestream"
+	oaresp "github.com/openai/openai-go/responses"
+	legacyopenai "github.com/sashabaranov/go-openai"
+)
+
+const (
+	apiFormatOpenAIChat         = "openai_chat"
+	apiFormatOpenAIResponses    = "openai_responses"
+	apiFormatAnthropicMessages  = "anthropic_messages"
+	defaultOpenAIResponsesURL   = "https://api.openai.com/v1"
+	defaultAnthropicMessagesURL = "https://api.anthropic.com"
+)
+
+type modelUsage struct {
+	PromptTokens     int
+	CompletionTokens int
+}
+
+type modelStreamEvent struct {
+	ContentDelta   string
+	ReasoningDelta string
+	ToolCalls      []legacyopenai.ToolCall
+}
+
+type modelStreamResult struct {
+	Content   string
+	Reasoning string
+	ToolCalls []legacyopenai.ToolCall
+	Usage     *modelUsage
+}
+
+func normalizeAPIFormat(value string) string {
+	v := strings.ToLower(strings.TrimSpace(value))
+	v = strings.NewReplacer("-", "_", " ", "_").Replace(v)
+	switch v {
+	case "", "openai", "openai_compatible", "openai_chat", "chat", "chat_completions", "chat_completion":
+		return apiFormatOpenAIChat
+	case "openai_responses", "responses", "response":
+		return apiFormatOpenAIResponses
+	case "anthropic", "anthropic_messages", "claude", "claude_messages", "messages":
+		return apiFormatAnthropicMessages
+	default:
+		return apiFormatOpenAIChat
+	}
+}
+
+func defaultBaseURLForAPIFormat(format string) string {
+	switch normalizeAPIFormat(format) {
+	case apiFormatOpenAIResponses:
+		return defaultOpenAIResponsesURL
+	case apiFormatAnthropicMessages:
+		return defaultAnthropicMessagesURL
+	default:
+		return defaultBaseURL
+	}
+}
+
+func baseURLForAPIFormat(cfg ConfigState) string {
+	base := strings.TrimSpace(cfg.BaseURL)
+	if base == "" {
+		base = defaultBaseURLForAPIFormat(cfg.APIFormat)
+	}
+	return strings.TrimRight(base, "/")
+}
+
+func (a *App) completeModelText(ctx context.Context, cfg ConfigState, model string, messages []legacyopenai.ChatCompletionMessage, maxTokens int, temperature float32) (string, error) {
+	next := cfg
+	next.MaxTokens = maxTokens
+	next.Temperature = temperature
+	result, err := a.streamModelResponse(ctx, next, model, messages, nil, nil)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(result.Content), nil
+}
+
+func (a *App) streamModelResponse(ctx context.Context, cfg ConfigState, model string, messages []legacyopenai.ChatCompletionMessage, tools []legacyopenai.Tool, onEvent func(modelStreamEvent)) (*modelStreamResult, error) {
+	cfg.APIFormat = normalizeAPIFormat(cfg.APIFormat)
+	if strings.TrimSpace(model) == "" {
+		model = cfg.Model
+	}
+	if strings.TrimSpace(model) == "" {
+		return nil, errors.New("model is required")
+	}
+	if strings.TrimSpace(cfg.APIKey) == "" {
+		return nil, errors.New("API key is required")
+	}
+	if cfg.MaxTokens <= 0 {
+		cfg.MaxTokens = 128000
+	}
+	switch cfg.APIFormat {
+	case apiFormatOpenAIResponses:
+		return a.streamOpenAIResponses(ctx, cfg, model, messages, tools, onEvent)
+	case apiFormatAnthropicMessages:
+		return a.streamAnthropicMessages(ctx, cfg, model, messages, tools, onEvent)
+	default:
+		return a.streamOpenAIChat(ctx, cfg, model, messages, tools, onEvent)
+	}
+}
+
+func emitModelStreamEvent(onEvent func(modelStreamEvent), event modelStreamEvent) {
+	if onEvent != nil {
+		onEvent(event)
+	}
+}
+
+func (a *App) streamOpenAIChat(ctx context.Context, cfg ConfigState, model string, messages []legacyopenai.ChatCompletionMessage, tools []legacyopenai.Tool, onEvent func(modelStreamEvent)) (*modelStreamResult, error) {
+	clientCfg := legacyopenai.DefaultConfig(cfg.APIKey)
+	clientCfg.BaseURL = baseURLForAPIFormat(cfg)
+	client := legacyopenai.NewClientWithConfig(clientCfg)
+
+	streamReq := legacyopenai.ChatCompletionRequest{
+		Model:               model,
+		Messages:            messages,
+		Temperature:         cfg.Temperature,
+		MaxCompletionTokens: cfg.MaxTokens,
+		StreamOptions:       &legacyopenai.StreamOptions{IncludeUsage: true},
+	}
+	if len(tools) > 0 {
+		streamReq.Tools = tools
+		streamReq.ToolChoice = "auto"
+		streamReq.ParallelToolCalls = true
+	}
+
+	var stream *legacyopenai.ChatCompletionStream
+	var err error
+	for attempt := 0; attempt <= defaultLLMRetries; attempt++ {
+		stream, err = client.CreateChatCompletionStream(ctx, streamReq)
+		if err != nil && strings.Contains(strings.ToLower(err.Error()), "stream_options") {
+			streamReq.StreamOptions = nil
+			stream, err = client.CreateChatCompletionStream(ctx, streamReq)
+		}
+		if err != nil && shouldRetryChatWithMaxTokens(err) && streamReq.MaxCompletionTokens > 0 {
+			streamReq.MaxTokens = streamReq.MaxCompletionTokens
+			streamReq.MaxCompletionTokens = 0
+			stream, err = client.CreateChatCompletionStream(ctx, streamReq)
+		}
+		if err == nil || ctx.Err() != nil {
+			break
+		}
+		time.Sleep(time.Duration(attempt+1) * 500 * time.Millisecond)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer stream.Close()
+
+	var assistant strings.Builder
+	var reasoning strings.Builder
+	toolCalls := []legacyopenai.ToolCall{}
+	var usage *modelUsage
+	for {
+		raw, err := stream.RecvRaw()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		raw = bytes.TrimSpace(raw)
+		if len(raw) == 0 {
+			continue
+		}
+		var resp legacyopenai.ChatCompletionStreamResponse
+		if err := json.Unmarshal(raw, &resp); err != nil {
+			if isIncompleteChatStreamJSON(err) && len(toolCalls) == 0 && (assistant.Len() > 0 || reasoning.Len() > 0) {
+				break
+			}
+			return nil, fmt.Errorf("decode chat stream event: %w", err)
+		}
+		if resp.Usage != nil {
+			usage = modelUsageFromLegacy(resp.Usage)
+		}
+		if len(resp.Choices) == 0 {
+			continue
+		}
+		delta := resp.Choices[0].Delta
+		if delta.Content != "" {
+			assistant.WriteString(delta.Content)
+			emitModelStreamEvent(onEvent, modelStreamEvent{ContentDelta: delta.Content})
+		}
+		if delta.ReasoningContent != "" {
+			reasoning.WriteString(delta.ReasoningContent)
+			emitModelStreamEvent(onEvent, modelStreamEvent{ReasoningDelta: delta.ReasoningContent})
+		}
+		if len(delta.ToolCalls) > 0 {
+			mergeToolCallDeltas(&toolCalls, delta.ToolCalls)
+			emitModelStreamEvent(onEvent, modelStreamEvent{ToolCalls: cloneToolCalls(toolCalls)})
+		}
+	}
+	return &modelStreamResult{
+		Content:   assistant.String(),
+		Reasoning: reasoning.String(),
+		ToolCalls: normalizeToolCalls(toolCalls),
+		Usage:     usage,
+	}, nil
+}
+
+func isIncompleteChatStreamJSON(err error) bool {
+	return isIncompleteStreamJSON(err)
+}
+
+func isIncompleteStreamJSON(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "unexpected end of json input") || strings.Contains(msg, "unexpected eof")
+}
+
+func shouldRetryChatWithMaxTokens(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	if strings.Contains(msg, "max_completion_tokens") {
+		return strings.Contains(msg, "unsupported") ||
+			strings.Contains(msg, "unrecognized") ||
+			strings.Contains(msg, "unknown") ||
+			strings.Contains(msg, "invalid") ||
+			strings.Contains(msg, "extra") ||
+			strings.Contains(msg, "not supported")
+	}
+	return false
+}
+
+func (a *App) streamOpenAIResponses(ctx context.Context, cfg ConfigState, model string, messages []legacyopenai.ChatCompletionMessage, tools []legacyopenai.Tool, onEvent func(modelStreamEvent)) (*modelStreamResult, error) {
+	instructions, inputItems := buildOpenAIResponsesInput(messages)
+	body := oaresp.ResponseNewParams{
+		Model:             oaresp.ResponsesModel(model),
+		Input:             oaresp.ResponseNewParamsInputUnion{OfInputItemList: inputItems},
+		MaxOutputTokens:   oa.Int(int64(cfg.MaxTokens)),
+		Temperature:       oa.Float(float64(cfg.Temperature)),
+		ParallelToolCalls: oa.Bool(true),
+		Store:             oa.Bool(false),
+	}
+	if strings.TrimSpace(instructions) != "" {
+		body.Instructions = oa.String(instructions)
+	}
+	if len(tools) > 0 {
+		body.Tools = convertToolsToOpenAIResponses(tools)
+		body.ToolChoice = oaresp.ResponseNewParamsToolChoiceUnion{OfToolChoiceMode: oa.Opt(oaresp.ToolChoiceOptionsAuto)}
+	}
+
+	stream, err := newOpenAIResponsesSSEStream(ctx, cfg, body)
+	if err != nil {
+		return nil, err
+	}
+	defer stream.Close()
+
+	var assistant strings.Builder
+	var reasoning strings.Builder
+	toolCalls := []legacyopenai.ToolCall{}
+	toolIndexByOutput := map[int64]int{}
+	toolIndexByItemID := map[string]int{}
+	var usage *modelUsage
+	finalOutputText := ""
+	var streamErr error
+
+	for stream.Next() {
+		event, err := stream.Event()
+		if err != nil {
+			if isIncompleteStreamJSON(err) && len(toolCalls) == 0 && (assistant.Len() > 0 || reasoning.Len() > 0) {
+				break
+			}
+			return nil, fmt.Errorf("decode responses stream event: %w", err)
+		}
+		switch event.Type {
+		case "response.output_text.delta":
+			ev := event.AsResponseOutputTextDelta()
+			if ev.Delta != "" {
+				assistant.WriteString(ev.Delta)
+				emitModelStreamEvent(onEvent, modelStreamEvent{ContentDelta: ev.Delta})
+			}
+		case "response.reasoning_summary_text.delta":
+			ev := event.AsResponseReasoningSummaryTextDelta()
+			if ev.Delta != "" {
+				reasoning.WriteString(ev.Delta)
+				emitModelStreamEvent(onEvent, modelStreamEvent{ReasoningDelta: ev.Delta})
+			}
+		case "response.output_item.added":
+			ev := event.AsResponseOutputItemAdded()
+			if ev.Item.Type == "function_call" {
+				idx := ensureResponsesToolCall(&toolCalls, toolIndexByOutput, toolIndexByItemID, ev.OutputIndex, ev.Item.ID)
+				updateToolCallFromResponsesItem(&toolCalls[idx], ev.Item)
+				emitModelStreamEvent(onEvent, modelStreamEvent{ToolCalls: cloneToolCalls(toolCalls)})
+			}
+		case "response.function_call_arguments.delta":
+			ev := event.AsResponseFunctionCallArgumentsDelta()
+			idx := ensureResponsesToolCall(&toolCalls, toolIndexByOutput, toolIndexByItemID, ev.OutputIndex, ev.ItemID)
+			toolCalls[idx].Function.Arguments += ev.Delta
+			emitModelStreamEvent(onEvent, modelStreamEvent{ToolCalls: cloneToolCalls(toolCalls)})
+		case "response.function_call_arguments.done":
+			ev := event.AsResponseFunctionCallArgumentsDone()
+			idx := ensureResponsesToolCall(&toolCalls, toolIndexByOutput, toolIndexByItemID, ev.OutputIndex, ev.ItemID)
+			toolCalls[idx].Function.Arguments = ev.Arguments
+			emitModelStreamEvent(onEvent, modelStreamEvent{ToolCalls: cloneToolCalls(toolCalls)})
+		case "response.output_item.done":
+			ev := event.AsResponseOutputItemDone()
+			if ev.Item.Type == "function_call" {
+				idx := ensureResponsesToolCall(&toolCalls, toolIndexByOutput, toolIndexByItemID, ev.OutputIndex, ev.Item.ID)
+				updateToolCallFromResponsesItem(&toolCalls[idx], ev.Item)
+				emitModelStreamEvent(onEvent, modelStreamEvent{ToolCalls: cloneToolCalls(toolCalls)})
+			}
+		case "response.completed":
+			ev := event.AsResponseCompleted()
+			usage = modelUsageFromResponses(ev.Response.Usage)
+			finalOutputText = ev.Response.OutputText()
+		case "error":
+			ev := event.AsError()
+			streamErr = fmt.Errorf("%s: %s", strings.TrimSpace(ev.Code), strings.TrimSpace(ev.Message))
+		case "response.failed":
+			ev := event.AsResponseFailed()
+			if ev.Response.Error.Message != "" {
+				streamErr = fmt.Errorf("%s: %s", ev.Response.Error.Code, ev.Response.Error.Message)
+			} else {
+				streamErr = errors.New("response failed")
+			}
+		case "response.incomplete":
+			ev := event.AsResponseIncomplete()
+			if ev.Response.IncompleteDetails.Reason != "" {
+				streamErr = fmt.Errorf("response incomplete: %s", ev.Response.IncompleteDetails.Reason)
+			}
+		}
+		if streamErr != nil {
+			break
+		}
+	}
+	if err := stream.Err(); err != nil {
+		return nil, err
+	}
+	if streamErr != nil {
+		return nil, streamErr
+	}
+	content := assistant.String()
+	if content == "" && finalOutputText != "" {
+		content = finalOutputText
+	}
+	return &modelStreamResult{
+		Content:   content,
+		Reasoning: reasoning.String(),
+		ToolCalls: normalizeToolCalls(toolCalls),
+		Usage:     usage,
+	}, nil
+}
+
+type openAIResponsesSSEStream struct {
+	decoder ssestream.Decoder
+}
+
+func newOpenAIResponsesSSEStream(ctx context.Context, cfg ConfigState, body oaresp.ResponseNewParams) (*openAIResponsesSSEStream, error) {
+	payload, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	var requestBody map[string]any
+	if err := json.Unmarshal(payload, &requestBody); err != nil {
+		return nil, err
+	}
+	requestBody["stream"] = true
+	payload, err = json.Marshal(requestBody)
+	if err != nil {
+		return nil, err
+	}
+
+	endpoint := strings.TrimRight(baseURLForAPIFormat(cfg), "/") + "/responses"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	if apiKey := strings.TrimSpace(cfg.APIKey); apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		defer resp.Body.Close()
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxToolOutput))
+		msg := strings.TrimSpace(string(raw))
+		if msg == "" {
+			msg = resp.Status
+		}
+		return nil, fmt.Errorf("responses request failed: %s", msg)
+	}
+	decoder := ssestream.NewDecoder(resp)
+	if decoder == nil {
+		resp.Body.Close()
+		return nil, errors.New("responses stream was empty")
+	}
+	return &openAIResponsesSSEStream{decoder: decoder}, nil
+}
+
+func (s *openAIResponsesSSEStream) Next() bool {
+	if s == nil || s.decoder == nil {
+		return false
+	}
+	return s.decoder.Next()
+}
+
+func (s *openAIResponsesSSEStream) Event() (oaresp.ResponseStreamEventUnion, error) {
+	var event oaresp.ResponseStreamEventUnion
+	if s == nil || s.decoder == nil {
+		return event, io.EOF
+	}
+	raw := bytes.TrimSpace(s.decoder.Event().Data)
+	if len(raw) == 0 || bytes.Equal(raw, []byte("[DONE]")) {
+		return event, nil
+	}
+	if err := json.Unmarshal(raw, &event); err != nil {
+		return event, err
+	}
+	return event, nil
+}
+
+func (s *openAIResponsesSSEStream) Err() error {
+	if s == nil || s.decoder == nil {
+		return nil
+	}
+	return s.decoder.Err()
+}
+
+func (s *openAIResponsesSSEStream) Close() error {
+	if s == nil || s.decoder == nil {
+		return nil
+	}
+	return s.decoder.Close()
+}
+
+func (a *App) streamAnthropicMessages(ctx context.Context, cfg ConfigState, model string, messages []legacyopenai.ChatCompletionMessage, tools []legacyopenai.Tool, onEvent func(modelStreamEvent)) (*modelStreamResult, error) {
+	client := anthropic.NewClient(
+		anthropicoption.WithAPIKey(cfg.APIKey),
+		anthropicoption.WithBaseURL(baseURLForAPIFormat(cfg)),
+		anthropicoption.WithMaxRetries(defaultLLMRetries),
+	)
+
+	system, anthropicMessages := buildAnthropicMessages(messages)
+	if len(anthropicMessages) == 0 {
+		anthropicMessages = append(anthropicMessages, anthropic.NewUserMessage(anthropic.NewTextBlock("")))
+	}
+	params := anthropic.MessageNewParams{
+		Model:       anthropic.Model(model),
+		Messages:    anthropicMessages,
+		MaxTokens:   int64(cfg.MaxTokens),
+		Temperature: anthropic.Float(float64(cfg.Temperature)),
+	}
+	if system != "" {
+		params.System = []anthropic.TextBlockParam{{Text: system}}
+	}
+	if len(tools) > 0 {
+		params.Tools = convertToolsToAnthropic(tools)
+	}
+
+	stream := client.Messages.NewStreaming(ctx, params)
+	defer stream.Close()
+
+	var assistant strings.Builder
+	var reasoning strings.Builder
+	toolCalls := []legacyopenai.ToolCall{}
+	toolIndexByBlock := map[int64]int{}
+	var usage *modelUsage
+
+	for stream.Next() {
+		event := stream.Current()
+		switch event.Type {
+		case "message_start":
+			ev := event.AsMessageStart()
+			usage = modelUsageFromAnthropic(ev.Message.Usage)
+		case "message_delta":
+			ev := event.AsMessageDelta()
+			usage = mergeAnthropicUsage(usage, ev.Usage)
+		case "content_block_start":
+			ev := event.AsContentBlockStart()
+			block := ev.ContentBlock
+			switch block.Type {
+			case "text":
+				if block.Text != "" {
+					assistant.WriteString(block.Text)
+					emitModelStreamEvent(onEvent, modelStreamEvent{ContentDelta: block.Text})
+				}
+			case "thinking":
+				if block.Thinking != "" {
+					reasoning.WriteString(block.Thinking)
+					emitModelStreamEvent(onEvent, modelStreamEvent{ReasoningDelta: block.Thinking})
+				}
+			case "tool_use":
+				idx := len(toolCalls)
+				toolIndexByBlock[ev.Index] = idx
+				args := ""
+				if block.Input != nil {
+					if raw, err := json.Marshal(block.Input); err == nil && string(raw) != "null" && string(raw) != "{}" {
+						args = string(raw)
+					}
+				}
+				toolCalls = append(toolCalls, legacyopenai.ToolCall{
+					ID:   block.ID,
+					Type: legacyopenai.ToolTypeFunction,
+					Function: legacyopenai.FunctionCall{
+						Name:      block.Name,
+						Arguments: args,
+					},
+				})
+				emitModelStreamEvent(onEvent, modelStreamEvent{ToolCalls: cloneToolCalls(toolCalls)})
+			}
+		case "content_block_delta":
+			ev := event.AsContentBlockDelta()
+			delta := ev.Delta
+			switch delta.Type {
+			case "text_delta":
+				if delta.Text != "" {
+					assistant.WriteString(delta.Text)
+					emitModelStreamEvent(onEvent, modelStreamEvent{ContentDelta: delta.Text})
+				}
+			case "thinking_delta":
+				if delta.Thinking != "" {
+					reasoning.WriteString(delta.Thinking)
+					emitModelStreamEvent(onEvent, modelStreamEvent{ReasoningDelta: delta.Thinking})
+				}
+			case "input_json_delta":
+				if idx, ok := toolIndexByBlock[ev.Index]; ok {
+					toolCalls[idx].Function.Arguments += delta.PartialJSON
+					emitModelStreamEvent(onEvent, modelStreamEvent{ToolCalls: cloneToolCalls(toolCalls)})
+				}
+			}
+		}
+	}
+	if err := stream.Err(); err != nil {
+		return nil, err
+	}
+	for i := range toolCalls {
+		if strings.TrimSpace(toolCalls[i].Function.Arguments) == "" {
+			toolCalls[i].Function.Arguments = "{}"
+		}
+	}
+	return &modelStreamResult{
+		Content:   assistant.String(),
+		Reasoning: reasoning.String(),
+		ToolCalls: normalizeToolCalls(toolCalls),
+		Usage:     usage,
+	}, nil
+}
+
+func buildOpenAIResponsesInput(messages []legacyopenai.ChatCompletionMessage) (string, oaresp.ResponseInputParam) {
+	systemParts := []string{}
+	input := oaresp.ResponseInputParam{}
+	for _, m := range messages {
+		role := strings.TrimSpace(m.Role)
+		switch role {
+		case legacyopenai.ChatMessageRoleSystem:
+			if text := messageText(m); text != "" {
+				systemParts = append(systemParts, text)
+			}
+		case legacyopenai.ChatMessageRoleUser, legacyopenai.ChatMessageRoleAssistant:
+			if role == legacyopenai.ChatMessageRoleAssistant && len(m.ToolCalls) > 0 {
+				if text := messageText(m); text != "" {
+					input = append(input, oaresp.ResponseInputItemParamOfMessage(text, oaresp.EasyInputMessageRoleAssistant))
+				}
+				for _, call := range m.ToolCalls {
+					input = append(input, responseInputItemParamOfFunctionCall(call))
+				}
+				continue
+			}
+			if len(m.MultiContent) > 0 {
+				content := openAIResponsesContentFromMulti(m)
+				if len(content) > 0 {
+					input = append(input, oaresp.ResponseInputItemParamOfMessage(content, oaresp.EasyInputMessageRole(role)))
+				}
+			} else if text := strings.TrimSpace(m.Content); text != "" {
+				input = append(input, oaresp.ResponseInputItemParamOfMessage(text, oaresp.EasyInputMessageRole(role)))
+			}
+		case legacyopenai.ChatMessageRoleTool:
+			if strings.TrimSpace(m.ToolCallID) != "" {
+				input = append(input, oaresp.ResponseInputItemParamOfFunctionCallOutput(m.ToolCallID, m.Content))
+			}
+		}
+	}
+	return strings.Join(systemParts, "\n\n"), input
+}
+
+func responseInputItemParamOfFunctionCall(call legacyopenai.ToolCall) oaresp.ResponseInputItemUnionParam {
+	item := oaresp.ResponseInputItemParamOfFunctionCall(call.Function.Arguments, effectiveToolCallID(call), call.Function.Name)
+	if item.OfFunctionCall != nil {
+		item.OfFunctionCall.ID = oa.String(effectiveResponsesFunctionCallItemID(call))
+	}
+	return item
+}
+
+func effectiveResponsesFunctionCallItemID(call legacyopenai.ToolCall) string {
+	if strings.TrimSpace(call.ID) != "" {
+		return "fc_" + strings.TrimPrefix(call.ID, "fc_")
+	}
+	if strings.TrimSpace(call.Function.Name) != "" {
+		return "fc_" + call.Function.Name
+	}
+	return "fc_unknown"
+}
+
+func openAIResponsesContentFromMulti(m legacyopenai.ChatCompletionMessage) oaresp.ResponseInputMessageContentListParam {
+	content := oaresp.ResponseInputMessageContentListParam{}
+	if strings.TrimSpace(m.Content) != "" {
+		content = append(content, oaresp.ResponseInputContentParamOfInputText(m.Content))
+	}
+	for _, part := range m.MultiContent {
+		switch part.Type {
+		case legacyopenai.ChatMessagePartTypeText:
+			if strings.TrimSpace(part.Text) != "" {
+				content = append(content, oaresp.ResponseInputContentParamOfInputText(part.Text))
+			}
+		case legacyopenai.ChatMessagePartTypeImageURL:
+			if part.ImageURL != nil && validImageDataURL(part.ImageURL.URL) {
+				img := oaresp.ResponseInputContentParamOfInputImage(oaresp.ResponseInputImageDetailAuto)
+				if img.OfInputImage != nil {
+					img.OfInputImage.ImageURL = oa.String(part.ImageURL.URL)
+				}
+				content = append(content, img)
+			}
+		}
+	}
+	return content
+}
+
+func buildAnthropicMessages(messages []legacyopenai.ChatCompletionMessage) (string, []anthropic.MessageParam) {
+	systemParts := []string{}
+	out := []anthropic.MessageParam{}
+	for i := 0; i < len(messages); i++ {
+		m := messages[i]
+		switch m.Role {
+		case legacyopenai.ChatMessageRoleSystem:
+			if text := messageText(m); text != "" {
+				systemParts = append(systemParts, text)
+			}
+		case legacyopenai.ChatMessageRoleUser:
+			blocks := anthropicBlocksFromMessage(m)
+			if len(blocks) > 0 {
+				out = append(out, anthropic.NewUserMessage(blocks...))
+			}
+		case legacyopenai.ChatMessageRoleAssistant:
+			blocks := []anthropic.ContentBlockParamUnion{}
+			if text := messageText(m); text != "" {
+				blocks = append(blocks, anthropic.NewTextBlock(text))
+			}
+			for _, call := range m.ToolCalls {
+				blocks = append(blocks, anthropic.NewToolUseBlock(effectiveToolCallID(call), decodeToolArguments(call.Function.Arguments), call.Function.Name))
+			}
+			if len(blocks) > 0 {
+				out = append(out, anthropic.NewAssistantMessage(blocks...))
+			}
+		case legacyopenai.ChatMessageRoleTool:
+			blocks := []anthropic.ContentBlockParamUnion{}
+			for i < len(messages) && messages[i].Role == legacyopenai.ChatMessageRoleTool {
+				toolMsg := messages[i]
+				if strings.TrimSpace(toolMsg.ToolCallID) != "" {
+					blocks = append(blocks, anthropic.NewToolResultBlock(toolMsg.ToolCallID, toolMsg.Content, false))
+				}
+				i++
+			}
+			i--
+			if len(blocks) > 0 {
+				out = append(out, anthropic.NewUserMessage(blocks...))
+			}
+		}
+	}
+	return strings.Join(systemParts, "\n\n"), out
+}
+
+func anthropicBlocksFromMessage(m legacyopenai.ChatCompletionMessage) []anthropic.ContentBlockParamUnion {
+	blocks := []anthropic.ContentBlockParamUnion{}
+	if strings.TrimSpace(m.Content) != "" {
+		blocks = append(blocks, anthropic.NewTextBlock(m.Content))
+	}
+	for _, part := range m.MultiContent {
+		switch part.Type {
+		case legacyopenai.ChatMessagePartTypeText:
+			if strings.TrimSpace(part.Text) != "" {
+				blocks = append(blocks, anthropic.NewTextBlock(part.Text))
+			}
+		case legacyopenai.ChatMessagePartTypeImageURL:
+			if part.ImageURL == nil {
+				continue
+			}
+			mediaType, data, ok := splitImageDataURL(part.ImageURL.URL)
+			if !ok {
+				continue
+			}
+			blocks = append(blocks, anthropic.NewImageBlock(anthropic.Base64ImageSourceParam{
+				MediaType: anthropic.Base64ImageSourceMediaType(mediaType),
+				Data:      data,
+			}))
+		}
+	}
+	return blocks
+}
+
+func convertToolsToOpenAIResponses(tools []legacyopenai.Tool) []oaresp.ToolUnionParam {
+	out := make([]oaresp.ToolUnionParam, 0, len(tools))
+	for _, tool := range tools {
+		if tool.Function == nil {
+			continue
+		}
+		params := schemaMap(tool.Function.Parameters)
+		next := oaresp.ToolParamOfFunction(tool.Function.Name, params, false)
+		if next.OfFunction != nil && strings.TrimSpace(tool.Function.Description) != "" {
+			next.OfFunction.Description = oa.String(tool.Function.Description)
+		}
+		out = append(out, next)
+	}
+	return out
+}
+
+func convertToolsToAnthropic(tools []legacyopenai.Tool) []anthropic.ToolUnionParam {
+	out := make([]anthropic.ToolUnionParam, 0, len(tools))
+	for _, tool := range tools {
+		if tool.Function == nil {
+			continue
+		}
+		t := anthropic.ToolParam{
+			Name:        tool.Function.Name,
+			InputSchema: anthropicInputSchema(schemaMap(tool.Function.Parameters)),
+		}
+		if strings.TrimSpace(tool.Function.Description) != "" {
+			t.Description = anthropic.String(tool.Function.Description)
+		}
+		out = append(out, anthropic.ToolUnionParam{OfTool: &t})
+	}
+	return out
+}
+
+func schemaMap(value any) map[string]any {
+	if value == nil {
+		return map[string]any{"type": "object", "properties": map[string]any{}}
+	}
+	if m, ok := value.(map[string]any); ok {
+		return m
+	}
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return map[string]any{"type": "object", "properties": map[string]any{}}
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil || m == nil {
+		return map[string]any{"type": "object", "properties": map[string]any{}}
+	}
+	return m
+}
+
+func anthropicInputSchema(schema map[string]any) anthropic.ToolInputSchemaParam {
+	result := anthropic.ToolInputSchemaParam{}
+	if props, ok := schema["properties"]; ok {
+		result.Properties = props
+	} else {
+		result.Properties = map[string]any{}
+	}
+	result.Required = stringSliceFromAny(schema["required"])
+	result.ExtraFields = map[string]any{}
+	for key, value := range schema {
+		switch key {
+		case "type", "properties", "required":
+			continue
+		default:
+			result.ExtraFields[key] = value
+		}
+	}
+	if len(result.ExtraFields) == 0 {
+		result.ExtraFields = nil
+	}
+	return result
+}
+
+func stringSliceFromAny(value any) []string {
+	switch v := value.(type) {
+	case []string:
+		return v
+	case []any:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func ensureResponsesToolCall(toolCalls *[]legacyopenai.ToolCall, byOutput map[int64]int, byItemID map[string]int, outputIndex int64, itemID string) int {
+	if idx, ok := byOutput[outputIndex]; ok {
+		if itemID != "" {
+			byItemID[itemID] = idx
+		}
+		return idx
+	}
+	if itemID != "" {
+		if idx, ok := byItemID[itemID]; ok {
+			byOutput[outputIndex] = idx
+			return idx
+		}
+	}
+	idx := len(*toolCalls)
+	*toolCalls = append(*toolCalls, legacyopenai.ToolCall{Type: legacyopenai.ToolTypeFunction})
+	byOutput[outputIndex] = idx
+	if itemID != "" {
+		byItemID[itemID] = idx
+	}
+	return idx
+}
+
+func updateToolCallFromResponsesItem(call *legacyopenai.ToolCall, item oaresp.ResponseOutputItemUnion) {
+	if item.CallID != "" {
+		call.ID = item.CallID
+	} else if call.ID == "" {
+		call.ID = item.ID
+	}
+	call.Type = legacyopenai.ToolTypeFunction
+	if item.Name != "" {
+		call.Function.Name = item.Name
+	}
+	if item.Arguments != "" {
+		call.Function.Arguments = item.Arguments
+	}
+}
+
+func normalizeToolCalls(toolCalls []legacyopenai.ToolCall) []legacyopenai.ToolCall {
+	out := cloneToolCalls(toolCalls)
+	for i := range out {
+		if out[i].Type == "" {
+			out[i].Type = legacyopenai.ToolTypeFunction
+		}
+		if strings.TrimSpace(out[i].Function.Arguments) == "" {
+			out[i].Function.Arguments = "{}"
+		}
+	}
+	return out
+}
+
+func cloneToolCalls(toolCalls []legacyopenai.ToolCall) []legacyopenai.ToolCall {
+	if len(toolCalls) == 0 {
+		return nil
+	}
+	out := make([]legacyopenai.ToolCall, len(toolCalls))
+	copy(out, toolCalls)
+	return out
+}
+
+func effectiveToolCallID(call legacyopenai.ToolCall) string {
+	if strings.TrimSpace(call.ID) != "" {
+		return call.ID
+	}
+	if strings.TrimSpace(call.Function.Name) != "" {
+		return "call_" + call.Function.Name
+	}
+	return "call_unknown"
+}
+
+func decodeToolArguments(args string) any {
+	args = strings.TrimSpace(args)
+	if args == "" {
+		return map[string]any{}
+	}
+	var decoded any
+	if err := json.Unmarshal([]byte(args), &decoded); err == nil && decoded != nil {
+		return decoded
+	}
+	return map[string]any{"_raw": args}
+}
+
+func messageText(m legacyopenai.ChatCompletionMessage) string {
+	if strings.TrimSpace(m.Content) != "" {
+		return m.Content
+	}
+	if len(m.MultiContent) > 0 {
+		return textFromMultiContent(m.MultiContent)
+	}
+	return ""
+}
+
+func splitImageDataURL(value string) (string, string, bool) {
+	if !validImageDataURL(value) {
+		return "", "", false
+	}
+	prefix, data, ok := strings.Cut(value, ",")
+	if !ok {
+		return "", "", false
+	}
+	mediaType := strings.TrimPrefix(prefix, "data:")
+	mediaType = strings.TrimSuffix(mediaType, ";base64")
+	mediaType = strings.ToLower(strings.TrimSpace(mediaType))
+	switch mediaType {
+	case "image/png", "image/jpeg", "image/jpg", "image/webp", "image/gif":
+		if mediaType == "image/jpg" {
+			mediaType = "image/jpeg"
+		}
+		return mediaType, data, strings.TrimSpace(data) != ""
+	default:
+		return "", "", false
+	}
+}
+
+func modelUsageFromLegacy(usage *legacyopenai.Usage) *modelUsage {
+	if usage == nil {
+		return nil
+	}
+	return &modelUsage{
+		PromptTokens:     usage.PromptTokens,
+		CompletionTokens: usage.CompletionTokens,
+	}
+}
+
+func modelUsageFromResponses(usage oaresp.ResponseUsage) *modelUsage {
+	if usage.InputTokens <= 0 && usage.OutputTokens <= 0 {
+		return nil
+	}
+	return &modelUsage{
+		PromptTokens:     int(usage.InputTokens),
+		CompletionTokens: int(usage.OutputTokens),
+	}
+}
+
+func modelUsageFromAnthropic(usage anthropic.Usage) *modelUsage {
+	input := usage.InputTokens + usage.CacheCreationInputTokens + usage.CacheReadInputTokens
+	output := usage.OutputTokens
+	if input <= 0 && output <= 0 {
+		return nil
+	}
+	return &modelUsage{PromptTokens: int(input), CompletionTokens: int(output)}
+}
+
+func mergeAnthropicUsage(current *modelUsage, usage anthropic.MessageDeltaUsage) *modelUsage {
+	if current == nil {
+		current = &modelUsage{}
+	}
+	if usage.OutputTokens > 0 {
+		current.CompletionTokens = int(usage.OutputTokens)
+	}
+	return current
+}
