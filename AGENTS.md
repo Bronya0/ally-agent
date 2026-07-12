@@ -19,6 +19,31 @@ This file is read by AI coding agents. Keep it current when the app architecture
 
 ---
 
+## Release Process
+
+Git tags and GitHub Releases are the source of truth for Ally versions. Release tags use `vMAJOR.MINOR.PATCH`; `.github/workflows/build.yml` injects the published tag through `ALLY_BUILD_VERSION`. Do not treat `frontend/package.json`'s `0.0.0` as the app release version and do not change it only for a release.
+
+1. Synchronize and identify the current release:
+   - Require a clean worktree on `main` and make sure it matches `origin/main`.
+   - Run `git fetch origin --tags --prune`.
+   - Inspect `git tag --sort=-v:refname` and the latest GitHub Release before choosing the next semantic version.
+2. Choose the next version and prepare the release notes:
+   - Use a patch bump for compatible fixes or maintenance, a minor bump for backward-compatible features, and a major bump for breaking changes.
+   - Summarize user-visible changes from `git log <previous-tag>..HEAD`; do not claim changes that are not present in that range.
+   - End the notes with `**Full Changelog**: https://github.com/Bronya0/ally-agent/compare/<previous-tag>...<new-tag>`.
+3. Verify the exact commit that will be released:
+   - `npm --prefix frontend ci`
+   - `npm --prefix frontend run build`
+   - `go test ./...`
+   - `go build ./...`
+   - `wails build -clean -s -skipbindings`
+4. Commit the release-related repository changes and push `main` to `origin`. Recheck that the worktree is clean and local `HEAD` equals `origin/main`.
+5. Publish a non-draft GitHub Release targeting `main`, with tag `<new-tag>`, title `Ally <new-tag>`, and the prepared notes. Authentication must come from GitHub CLI login or a `GITHUB_TOKEN` environment variable with repository contents write permission. Never place a token value in repository files, release notes, scripts, or copied command text.
+
+Publishing the Release triggers `.github/workflows/build.yml`, which builds and attaches the Windows x64, Linux x64, and macOS universal packages.
+
+---
+
 ## Repository Layout
 
 ```
