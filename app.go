@@ -3026,7 +3026,7 @@ func buildSystemPromptParts(planMode bool, allSkills []SkillDefinition, workspac
 
 	if planMode {
 		b.WriteString("\n── PLAN MODE ACTIVE ──\n" +
-			"You are in workspace-read-only plan mode. Do not write, edit, create, delete, delegate, run shell commands, make network requests, update todos, create or update goals, write memories, or call MCP tools. You may use read-only local/remote file and search tools, memory_read, calculate, get_goal, and Skill. Analyze the codebase and report a plan.\n")
+			"You are in workspace-read-only plan mode. Do not write, edit, create, delete, delegate, run shell commands, make network requests, update todos, create or update goals, write memories, or call MCP tools. Specifically, do not use `memory_write`. You may use read-only local/remote file and search tools, memory_read, calculate, get_goal, and Skill. Analyze the codebase and report a plan.\n")
 	}
 
 	parts = append(parts, systemPromptPart{label: "核心系统提示词", content: b.String()})
