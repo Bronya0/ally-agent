@@ -2,6 +2,7 @@
   <div :class="['splash-screen', { leaving }]" @click="finish">
     <canvas ref="canvasRef" class="splash-canvas"></canvas>
     <div class="splash-content">
+      <AllyAvatar class="splash-avatar" />
       <AllyWordmark class="splash-brand" />
       <div class="build-version">{{ buildVersion }}</div>
       <div class="splash-line">{{ $t('splash.loading') }}</div>
@@ -11,6 +12,7 @@
 
 <script setup>
 import { nextTick, onMounted, onUnmounted, ref } from 'vue';
+import AllyAvatar from './AllyAvatar.vue';
 import AllyWordmark from './AllyWordmark.vue';
 import { buildVersion } from '../utils/buildVersion';
 

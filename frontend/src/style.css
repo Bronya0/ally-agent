@@ -122,6 +122,16 @@ code, pre {
   font-size: clamp(56px, 10vw, 118px);
 }
 
+.splash-avatar {
+  width: 128px;
+  height: auto;
+  filter: drop-shadow(0 8px 24px rgba(94, 143, 210, 0.28));
+  --avatar-turn-duration: 3.6s;
+  --avatar-gaze-duration: 3.6s;
+  --avatar-blink-duration: 2.5s;
+  --avatar-light-duration: 1.8s;
+}
+
 .build-version {
   color: rgba(199, 210, 254, 0.76);
   font-family: var(--ally-mono-font);

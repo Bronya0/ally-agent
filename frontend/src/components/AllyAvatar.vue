@@ -77,19 +77,19 @@
 
 .avatar-head {
   transform-origin: 80px 62px;
-  animation: ally-avatar-turn 9s ease-in-out infinite;
+  animation: ally-avatar-turn var(--avatar-turn-duration, 9s) ease-in-out infinite;
 }
 
 .avatar-eyes {
   transform-origin: 80px 55px;
-  animation: ally-avatar-gaze 9s ease-in-out infinite;
+  animation: ally-avatar-gaze var(--avatar-gaze-duration, 9s) ease-in-out infinite;
 }
 
 .avatar-eye {
   fill: #8fd4b4;
   transform-box: fill-box;
   transform-origin: center;
-  animation: ally-avatar-blink 5.8s ease-in-out infinite;
+  animation: ally-avatar-blink var(--avatar-blink-duration, 5.8s) ease-in-out infinite;
 }
 
 .avatar-mouth {
@@ -103,7 +103,7 @@
 
 .avatar-antenna-light {
   fill: #d7bf72;
-  animation: ally-avatar-light 3.6s ease-in-out infinite;
+  animation: ally-avatar-light var(--avatar-light-duration, 3.6s) ease-in-out infinite;
 }
 
 @keyframes ally-avatar-blink {
