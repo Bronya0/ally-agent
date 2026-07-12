@@ -201,3 +201,7 @@ export function SubmitAskResponse(arg1) {
 export function SwitchModel(arg1) {
   return window['go']['main']['App']['SwitchModel'](arg1);
 }
+
+export function TestModelConnection(arg1) {
+  return window['go']['main']['App']['TestModelConnection'](arg1);
+}

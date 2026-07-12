@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -26,6 +27,19 @@ func TestNormalizeAPIFormatAliases(t *testing.T) {
 		if got := normalizeAPIFormat(input); got != want {
 			t.Fatalf("normalizeAPIFormat(%q) = %q, want %q", input, got, want)
 		}
+	}
+}
+
+func TestAnthropicBaseURLRemovesVersionSuffix(t *testing.T) {
+	got := baseURLForAPIFormat(ConfigState{APIFormat: apiFormatAnthropicMessages, BaseURL: "https://api.anthropic.com/v1/"})
+	if got != "https://api.anthropic.com" {
+		t.Fatalf("unexpected Anthropic base URL: %q", got)
+	}
+}
+
+func TestAnthropicDefaultMaxTokensIsConservative(t *testing.T) {
+	if got := defaultMaxTokensForAPIFormat(apiFormatAnthropicMessages); got != 8192 {
+		t.Fatalf("unexpected Anthropic default max tokens: %d", got)
 	}
 }
 
@@ -240,6 +254,90 @@ func TestAnthropicMessagesPreserveToolUseAndResult(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Fatalf("expected Anthropic message JSON to contain %s\n%s", want, text)
 		}
+	}
+}
+
+func TestAnthropicMessagesMarkFailedToolResultAsError(t *testing.T) {
+	messages := []openai.ChatCompletionMessage{
+		{
+			Role: openai.ChatMessageRoleAssistant,
+			ToolCalls: []openai.ToolCall{{
+				ID:   "toolu_failed",
+				Type: openai.ToolTypeFunction,
+				Function: openai.FunctionCall{
+					Name:      "read_file",
+					Arguments: `{"path":"missing.go"}`,
+				},
+			}},
+		},
+		{Role: openai.ChatMessageRoleTool, ToolCallID: "toolu_failed", Content: `{"ok":false,"error":"not found"}`},
+	}
+
+	_, converted := buildAnthropicMessages(messages)
+	raw, err := json.Marshal(converted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"is_error":true`) {
+		t.Fatalf("expected failed tool result to set is_error=true: %s", raw)
+	}
+}
+
+func TestAnthropicStopReasonErrors(t *testing.T) {
+	for _, reason := range []string{"max_tokens", "refusal", "pause_turn", "model_context_window_exceeded", "future_reason"} {
+		if err := anthropicStopReasonError(reason); err == nil {
+			t.Fatalf("expected stop reason %q to fail", reason)
+		}
+	}
+	for _, reason := range []string{"", "end_turn", "tool_use", "stop_sequence"} {
+		if err := anthropicStopReasonError(reason); err != nil {
+			t.Fatalf("expected stop reason %q to be accepted, got %v", reason, err)
+		}
+	}
+}
+
+func TestStreamAnthropicMessagesCapturesStopReason(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/messages" {
+			t.Errorf("unexpected request path: %s", r.URL.Path)
+		}
+		if r.Header.Get("x-api-key") != "test-key" {
+			t.Errorf("missing Anthropic API key header")
+		}
+		if r.Header.Get("anthropic-version") == "" {
+			t.Errorf("missing anthropic-version header")
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "event: message_start\n")
+		_, _ = fmt.Fprint(w, `data: {"type":"message_start","message":{"id":"msg_test","type":"message","role":"assistant","model":"claude-sonnet-5","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":3,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}`+"\n\n")
+		_, _ = fmt.Fprint(w, "event: content_block_start\n")
+		_, _ = fmt.Fprint(w, `data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":"partial"}}`+"\n\n")
+		_, _ = fmt.Fprint(w, "event: content_block_stop\n")
+		_, _ = fmt.Fprint(w, `data: {"type":"content_block_stop","index":0}`+"\n\n")
+		_, _ = fmt.Fprint(w, "event: message_delta\n")
+		_, _ = fmt.Fprint(w, `data: {"type":"message_delta","delta":{"stop_reason":"max_tokens","stop_sequence":null},"usage":{"output_tokens":4}}`+"\n\n")
+		_, _ = fmt.Fprint(w, "event: message_stop\n")
+		_, _ = fmt.Fprint(w, `data: {"type":"message_stop"}`+"\n\n")
+	}))
+	defer server.Close()
+
+	app := NewApp()
+	result, err := app.streamAnthropicMessages(context.Background(), ConfigState{
+		APIFormat:   apiFormatAnthropicMessages,
+		APIKey:      "test-key",
+		BaseURL:     server.URL,
+		Model:       "claude-sonnet-5",
+		MaxTokens:   16,
+		Temperature: 0.2,
+	}, "claude-sonnet-5", []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleUser, Content: "hello"}}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Content != "partial" || result.StopReason != "max_tokens" {
+		t.Fatalf("unexpected Anthropic stream result: %#v", result)
+	}
+	if result.Usage == nil || result.Usage.PromptTokens != 3 || result.Usage.CompletionTokens != 4 {
+		t.Fatalf("unexpected Anthropic usage: %#v", result.Usage)
 	}
 }
 

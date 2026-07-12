@@ -39,10 +39,12 @@ type modelStreamEvent struct {
 }
 
 type modelStreamResult struct {
-	Content   string
-	Reasoning string
-	ToolCalls []legacyopenai.ToolCall
-	Usage     *modelUsage
+	Content      string
+	Reasoning    string
+	ToolCalls    []legacyopenai.ToolCall
+	Usage        *modelUsage
+	StopReason   string
+	StopSequence string
 }
 
 func normalizeAPIFormat(value string) string {
@@ -76,7 +78,18 @@ func baseURLForAPIFormat(cfg ConfigState) string {
 	if base == "" {
 		base = defaultBaseURLForAPIFormat(cfg.APIFormat)
 	}
-	return strings.TrimRight(base, "/")
+	base = strings.TrimRight(base, "/")
+	if normalizeAPIFormat(cfg.APIFormat) == apiFormatAnthropicMessages && strings.HasSuffix(strings.ToLower(base), "/v1") {
+		base = base[:len(base)-3]
+	}
+	return base
+}
+
+func defaultMaxTokensForAPIFormat(format string) int {
+	if normalizeAPIFormat(format) == apiFormatAnthropicMessages {
+		return 8192
+	}
+	return 128000
 }
 
 func (a *App) completeModelText(ctx context.Context, cfg ConfigState, model string, messages []legacyopenai.ChatCompletionMessage, maxTokens int, temperature float32) (string, error) {
@@ -85,6 +98,9 @@ func (a *App) completeModelText(ctx context.Context, cfg ConfigState, model stri
 	next.Temperature = temperature
 	result, err := a.streamModelResponse(ctx, next, model, messages, nil, nil)
 	if err != nil {
+		return "", err
+	}
+	if err := modelResponseStopError(next, result); err != nil {
 		return "", err
 	}
 	return strings.TrimSpace(result.Content), nil
@@ -102,7 +118,7 @@ func (a *App) streamModelResponse(ctx context.Context, cfg ConfigState, model st
 		return nil, errors.New("API key is required")
 	}
 	if cfg.MaxTokens <= 0 {
-		cfg.MaxTokens = 128000
+		cfg.MaxTokens = defaultMaxTokensForAPIFormat(cfg.APIFormat)
 	}
 	switch cfg.APIFormat {
 	case apiFormatOpenAIResponses:
@@ -448,9 +464,10 @@ func (s *openAIResponsesSSEStream) Close() error {
 }
 
 func (a *App) streamAnthropicMessages(ctx context.Context, cfg ConfigState, model string, messages []legacyopenai.ChatCompletionMessage, tools []legacyopenai.Tool, onEvent func(modelStreamEvent)) (*modelStreamResult, error) {
+	baseURL := baseURLForAPIFormat(cfg)
 	client := anthropic.NewClient(
 		anthropicoption.WithAPIKey(cfg.APIKey),
-		anthropicoption.WithBaseURL(baseURLForAPIFormat(cfg)),
+		anthropicoption.WithBaseURL(baseURL),
 		anthropicoption.WithMaxRetries(defaultLLMRetries),
 	)
 
@@ -470,6 +487,9 @@ func (a *App) streamAnthropicMessages(ctx context.Context, cfg ConfigState, mode
 	if len(tools) > 0 {
 		params.Tools = convertToolsToAnthropic(tools)
 	}
+	if baseURL == defaultAnthropicMessagesURL {
+		params.CacheControl = anthropic.CacheControlEphemeralParam{TTL: anthropic.CacheControlEphemeralTTLTTL5m}
+	}
 
 	stream := client.Messages.NewStreaming(ctx, params)
 	defer stream.Close()
@@ -479,6 +499,8 @@ func (a *App) streamAnthropicMessages(ctx context.Context, cfg ConfigState, mode
 	toolCalls := []legacyopenai.ToolCall{}
 	toolIndexByBlock := map[int64]int{}
 	var usage *modelUsage
+	var stopReason string
+	var stopSequence string
 
 	for stream.Next() {
 		event := stream.Current()
@@ -489,6 +511,8 @@ func (a *App) streamAnthropicMessages(ctx context.Context, cfg ConfigState, mode
 		case "message_delta":
 			ev := event.AsMessageDelta()
 			usage = mergeAnthropicUsage(usage, ev.Usage)
+			stopReason = string(ev.Delta.StopReason)
+			stopSequence = ev.Delta.StopSequence
 		case "content_block_start":
 			ev := event.AsContentBlockStart()
 			block := ev.ContentBlock
@@ -553,11 +577,37 @@ func (a *App) streamAnthropicMessages(ctx context.Context, cfg ConfigState, mode
 		}
 	}
 	return &modelStreamResult{
-		Content:   assistant.String(),
-		Reasoning: reasoning.String(),
-		ToolCalls: normalizeToolCalls(toolCalls),
-		Usage:     usage,
+		Content:      assistant.String(),
+		Reasoning:    reasoning.String(),
+		ToolCalls:    normalizeToolCalls(toolCalls),
+		Usage:        usage,
+		StopReason:   stopReason,
+		StopSequence: stopSequence,
 	}, nil
+}
+
+func anthropicStopReasonError(reason string) error {
+	switch strings.TrimSpace(reason) {
+	case "", "end_turn", "tool_use", "stop_sequence":
+		return nil
+	case "max_tokens":
+		return errors.New("Anthropic response reached the Max Tokens limit; increase Max Tokens or shorten the conversation")
+	case "refusal":
+		return errors.New("Anthropic refused the request")
+	case "pause_turn":
+		return errors.New("Anthropic paused the turn, which is not supported by the current client-tool workflow")
+	case "model_context_window_exceeded":
+		return errors.New("Anthropic stopped because the model context window was exceeded")
+	default:
+		return fmt.Errorf("Anthropic stopped with unsupported reason %q", reason)
+	}
+}
+
+func modelResponseStopError(cfg ConfigState, result *modelStreamResult) error {
+	if result == nil || normalizeAPIFormat(cfg.APIFormat) != apiFormatAnthropicMessages {
+		return nil
+	}
+	return anthropicStopReasonError(result.StopReason)
 }
 
 func buildOpenAIResponsesInput(messages []legacyopenai.ChatCompletionMessage) (string, oaresp.ResponseInputParam) {
@@ -670,7 +720,7 @@ func buildAnthropicMessages(messages []legacyopenai.ChatCompletionMessage) (stri
 			for i < len(messages) && messages[i].Role == legacyopenai.ChatMessageRoleTool {
 				toolMsg := messages[i]
 				if strings.TrimSpace(toolMsg.ToolCallID) != "" {
-					blocks = append(blocks, anthropic.NewToolResultBlock(toolMsg.ToolCallID, toolMsg.Content, false))
+					blocks = append(blocks, anthropic.NewToolResultBlock(toolMsg.ToolCallID, toolMsg.Content, anthropicToolResultIsError(toolMsg.Content)))
 				}
 				i++
 			}
@@ -681,6 +731,16 @@ func buildAnthropicMessages(messages []legacyopenai.ChatCompletionMessage) (stri
 		}
 	}
 	return strings.Join(systemParts, "\n\n"), out
+}
+
+func anthropicToolResultIsError(content string) bool {
+	var result struct {
+		OK *bool `json:"ok"`
+	}
+	if err := json.Unmarshal([]byte(content), &result); err != nil || result.OK == nil {
+		return false
+	}
+	return !*result.OK
 }
 
 func anthropicBlocksFromMessage(m legacyopenai.ChatCompletionMessage) []anthropic.ContentBlockParamUnion {

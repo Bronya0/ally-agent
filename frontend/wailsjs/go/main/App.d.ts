@@ -101,3 +101,5 @@ export function StopSubagent(arg1:string):Promise<void>;
 export function SubmitAskResponse(arg1:main.AskSubmitRequest):Promise<void>;
 
 export function SwitchModel(arg1:number):Promise<void>;
+
+export function TestModelConnection(arg1:main.ModelConfig):Promise<void>;

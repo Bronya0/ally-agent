@@ -293,6 +293,7 @@ type ConfigState struct {
 	Models         []ModelConfig `json:"models,omitempty"`
 	DisabledSkills []string      `json:"disabledSkills,omitempty"`
 	grillMode      bool
+	temperatureSet bool
 }
 
 type ToolDefinitionSummary struct {
@@ -1160,6 +1161,10 @@ func readConfigFile(path string) (ConfigState, error) {
 	var loaded ConfigState
 	if err := json.Unmarshal(data, &loaded); err != nil {
 		return ConfigState{}, err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err == nil {
+		_, loaded.temperatureSet = fields["temperature"]
 	}
 	return loaded, nil
 }
@@ -3548,7 +3553,7 @@ func mergeConfig(base, overlay ConfigState) ConfigState {
 	if overlay.Workspace != "" {
 		base.Workspace = overlay.Workspace
 	}
-	if overlay.Temperature != 0 {
+	if overlay.temperatureSet || overlay.Temperature != 0 {
 		base.Temperature = overlay.Temperature
 	}
 	if overlay.MaxTokens != 0 {
@@ -3613,6 +3618,7 @@ func (a *App) SaveConfig(req ConfigState) error {
 	}
 	a.mu.Lock()
 	a.config = mergeConfig(a.config, req)
+	a.config.Temperature = req.Temperature
 	a.config.CustomPrompt = req.CustomPrompt
 	a.disabledSkills = normalizeSkillNameList(a.config.DisabledSkills)
 	a.config.DisabledSkills = cloneStringSlice(a.disabledSkills)
@@ -3628,6 +3634,36 @@ func (a *App) SaveConfig(req ConfigState) error {
 		return err
 	}
 	return os.WriteFile(path, data, 0o600)
+}
+
+func (a *App) TestModelConnection(model ModelConfig) error {
+	cfg := ConfigState{
+		ProviderName:  model.ProviderName,
+		APIFormat:     normalizeAPIFormat(model.APIFormat),
+		BaseURL:       strings.TrimSpace(model.BaseURL),
+		APIKey:        strings.TrimSpace(model.APIKey),
+		Model:         strings.TrimSpace(model.Model),
+		Temperature:   model.Temperature,
+		MaxTokens:     32,
+		ContextWindow: model.ContextWindow,
+	}
+	if cfg.Model == "" {
+		return errors.New("model is required")
+	}
+	if cfg.APIKey == "" {
+		return errors.New("API key is required")
+	}
+	ctx := context.Background()
+	if a.ctx != nil {
+		ctx = a.ctx
+	}
+	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
+	defer cancel()
+	_, err := a.completeModelText(ctx, cfg, cfg.Model, []openai.ChatCompletionMessage{{
+		Role:    openai.ChatMessageRoleUser,
+		Content: "Reply only with OK.",
+	}}, 32, cfg.Temperature)
+	return err
 }
 
 func (a *App) SelectWorkspace() (string, error) {
@@ -4364,6 +4400,18 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			reasoning := modelResp.Reasoning
 			toolCalls = modelResp.ToolCalls
 			a.recordWorkspaceTokenUsage(cfg.Workspace, modelResp.Usage, estimateRequestTokens(messages, tools), estimateCompletionTokens(content, reasoning, toolCalls))
+			if stopErr := modelResponseStopError(cfg, modelResp); stopErr != nil {
+				if content != "" || reasoning != "" {
+					messages = append(messages, openai.ChatCompletionMessage{
+						Role:             openai.ChatMessageRoleAssistant,
+						Content:          content,
+						ReasoningContent: reasoning,
+					})
+				}
+				a.saveHistory(req.SessionID, messages)
+				emitRunEnd("run:error", map[string]any{"error": stopErr.Error(), "stopReason": modelResp.StopReason})
+				return
+			}
 			if len(toolCalls) == 0 {
 				if content != "" {
 					messages = append(messages, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleAssistant, Content: content})
@@ -6523,6 +6571,9 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 		}
 
 		modelResp, err := a.streamModelResponse(ctx, cfg, model, messages, tools, nil)
+		if err == nil {
+			err = modelResponseStopError(cfg, modelResp)
+		}
 		if err != nil {
 			a.subRunsMu.Lock()
 			run.Status = "failed"

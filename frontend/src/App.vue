@@ -1477,7 +1477,7 @@ function defaultModelDraft(source = {}) {
     baseUrl: configDraft?.baseUrl || '',
     apiKey: configDraft?.apiKey || '',
     model: '',
-    temperature: configDraft?.temperature || 0.2,
+    temperature: configDraft?.temperature ?? 0.2,
     maxTokens: configDraft?.maxTokens || 128000,
     contextWindow: configDraft?.contextWindow || 1048576,
     ...source,
@@ -1564,7 +1564,7 @@ function commitModelDraft() {
     baseUrl: (modelDraft.baseUrl || '').trim(),
     apiKey: modelDraft.apiKey || '',
     model,
-    temperature: modelDraft.temperature || configDraft.temperature || 0.2,
+    temperature: modelDraft.temperature ?? configDraft.temperature ?? 0.2,
     maxTokens: modelDraft.maxTokens || configDraft.maxTokens || 128000,
     contextWindow: modelDraft.contextWindow || configDraft.contextWindow || 1048576,
   };
@@ -1588,7 +1588,7 @@ function applyModelToDraft(model) {
   configDraft.baseUrl = model.baseUrl || '';
   configDraft.apiKey = model.apiKey || '';
   configDraft.model = model.model || '';
-  configDraft.temperature = model.temperature || configDraft.temperature || 0.2;
+  configDraft.temperature = model.temperature ?? configDraft.temperature ?? 0.2;
   configDraft.maxTokens = model.maxTokens || configDraft.maxTokens || 128000;
   configDraft.contextWindow = model.contextWindow || configDraft.contextWindow || 1048576;
   alignActiveProviderTab(normalizedProviderName(model.providerName));

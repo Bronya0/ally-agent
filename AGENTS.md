@@ -172,6 +172,11 @@ Supported API formats:
 - Consecutive tool-result messages become one user message with `tool_result` blocks.
 - Image attachments are accepted only as valid `data:image/...;base64,...` URLs.
 - Tool schemas are mapped to `ToolInputSchemaParam`; `properties` and `required` are first-class fields, while JSON Schema constraints such as `additionalProperties`, `anyOf`, and `not` are preserved through `ExtraFields`.
+- Stream `stop_reason` values are preserved. `max_tokens`, `refusal`, `pause_turn`, context-window overflow, and unknown reasons stop the run with an explicit error instead of being treated as normal completion.
+- Tool result envelopes with `ok:false` are sent back as Anthropic `tool_result` blocks with `is_error:true`.
+- Anthropic Base URLs ending in `/v1` are normalized because the official SDK appends `/v1/messages`; non-positive Max Tokens default to 8192 for this format.
+- Requests sent to the official Anthropic base URL enable a top-level five-minute prompt-cache breakpoint; custom compatible endpoints do not receive this field.
+- Extended Thinking is not exposed as a configurable feature until thinking signatures and redacted-thinking blocks can be replayed losslessly across tool turns.
 
 ---
 
@@ -678,4 +683,5 @@ Frontend utility tests cover:
 - Settings → Skills manages enable/disable state and does not inject full skill content.
 - Settings → MCP manages raw MCP JSON and reconnects servers.
 - Settings → Models owns provider presets and the current active provider/model.
+- The model editor's connection test sends one isolated minimal request using the unsaved form values; it does not mutate or persist the active configuration.
 - The context popover should keep system prompt parts separate, especially AGENTS.md/project instructions.

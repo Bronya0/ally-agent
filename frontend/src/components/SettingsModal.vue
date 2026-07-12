@@ -220,22 +220,29 @@
         <n-form-item-gi label="Model">
           <n-input v-model:value="modelDraft.model" :placeholder="modelPlaceholder(modelDraft.apiFormat)" />
         </n-form-item-gi>
-        <n-form-item-gi label="Base URL">
-          <n-input v-model:value="modelDraft.baseUrl" placeholder="https://api.example.com/v1" />
+        <n-form-item-gi :label="normalizeApiFormat(modelDraft.apiFormat) === 'anthropic_messages' ? 'Base URL（无需 /v1）' : 'Base URL'">
+          <n-input v-model:value="modelDraft.baseUrl" :placeholder="apiFormatDefaultBaseUrl(modelDraft.apiFormat)" />
         </n-form-item-gi>
         <n-form-item-gi label="API Key" :span="2">
           <n-input v-model:value="modelDraft.apiKey" type="password" show-password-on="click" />
         </n-form-item-gi>
+        <n-form-item-gi label="Temperature">
+          <n-input-number v-model:value="modelDraft.temperature" :min="0" :max="1" :step="0.1" style="width: 100%" />
+        </n-form-item-gi>
         <n-form-item-gi label="Max Tokens">
           <n-input-number v-model:value="modelDraft.maxTokens" :min="1" :step="1024" style="width: 100%" />
         </n-form-item-gi>
-        <n-form-item-gi label="上下文窗口">
+        <n-form-item-gi label="上下文窗口" :span="2">
           <n-input-number v-model:value="modelDraft.contextWindow" :min="1024" :step="1024" style="width: 100%" />
         </n-form-item-gi>
       </n-grid>
+      <n-alert v-if="normalizeApiFormat(modelDraft.apiFormat) === 'anthropic_messages'" type="info" :show-icon="false" class="model-format-hint">
+        官方地址填写 https://api.anthropic.com，末尾无需添加 /v1。当前接入支持 Messages、图片和工具调用；尚未开放 Extended Thinking 配置。
+      </n-alert>
     </n-form>
     <template #footer>
       <n-space justify="end">
+        <n-button secondary :loading="testingModel" @click="testModelConnection">测试连接</n-button>
         <n-button @click="modelEditorVisible = false">取消</n-button>
         <n-button type="primary" @click="commitModelDraft">{{ modelEditorIndex >= 0 ? '保存修改' : '添加' }}</n-button>
       </n-space>
@@ -251,6 +258,7 @@ import {
   GetMcpConfig, GetMcpServers, SaveMcpConfig, RestartMcpServers,
   ListSkills, ActivateSkill, DeactivateSkill, ClearSkills, GetActiveSkills,
   ListTools,
+  TestModelConnection,
 } from '../../wailsjs/go/main/App';
 
 const { message } = createDiscreteApi(['message'], {
@@ -283,6 +291,7 @@ const modelFormModalStyle = {
 const page = ref('general');
 const modelEditorVisible = ref(false);
 const modelEditorIndex = ref(-1);
+const testingModel = ref(false);
 
 function defaultModelDraft(source = {}) {
   return {
@@ -291,7 +300,7 @@ function defaultModelDraft(source = {}) {
     baseUrl: draft?.baseUrl || '',
     apiKey: draft?.apiKey || '',
     model: '',
-    temperature: draft?.temperature || 0.2,
+    temperature: draft?.temperature ?? 0.2,
     maxTokens: draft?.maxTokens || 128000,
     contextWindow: draft?.contextWindow || 1048576,
     ...source,
@@ -396,6 +405,38 @@ function cancelModelDraft() {
   modelEditorIndex.value = -1;
 }
 
+async function testModelConnection() {
+  if (testingModel.value) return;
+  const model = (modelDraft.model || '').trim();
+  const apiKey = (modelDraft.apiKey || '').trim();
+  if (!model) {
+    message.warning('请填写 Model');
+    return;
+  }
+  if (!apiKey) {
+    message.warning('请填写 API Key');
+    return;
+  }
+  testingModel.value = true;
+  try {
+    await TestModelConnection({
+      providerName: normalizedProviderName(modelDraft.providerName),
+      apiFormat: normalizeApiFormat(modelDraft.apiFormat),
+      baseUrl: (modelDraft.baseUrl || '').trim(),
+      apiKey,
+      model,
+      temperature: modelDraft.temperature ?? 0.2,
+      maxTokens: modelDraft.maxTokens || 8192,
+      contextWindow: modelDraft.contextWindow || 1048576,
+    });
+    message.success('连接成功');
+  } catch (err) {
+    message.error(`连接失败：${err}`);
+  } finally {
+    testingModel.value = false;
+  }
+}
+
 function commitModelDraft() {
   if (!draft.models) draft.models = [];
   const model = (modelDraft.model || '').trim();
@@ -411,7 +452,7 @@ function commitModelDraft() {
     baseUrl: (modelDraft.baseUrl || '').trim(),
     apiKey: modelDraft.apiKey || '',
     model,
-    temperature: modelDraft.temperature || draft.temperature || 0.2,
+    temperature: modelDraft.temperature ?? draft.temperature ?? 0.2,
     maxTokens: modelDraft.maxTokens || draft.maxTokens || 128000,
     contextWindow: modelDraft.contextWindow || draft.contextWindow || 1048576,
   };
@@ -433,7 +474,7 @@ function applyModelToDraft(model) {
   draft.baseUrl = model.baseUrl || '';
   draft.apiKey = model.apiKey || '';
   draft.model = model.model || '';
-  draft.temperature = model.temperature || draft.temperature || 0.2;
+  draft.temperature = model.temperature ?? draft.temperature ?? 0.2;
   draft.maxTokens = model.maxTokens || draft.maxTokens || 128000;
   draft.contextWindow = model.contextWindow || draft.contextWindow || 1048576;
   alignActiveProviderTab(normalizedProviderName(model.providerName));
@@ -699,6 +740,10 @@ watch(() => props.visible, (visible) => {
   color: rgba(255, 255, 255, 0.94);
   font-size: 15px;
   font-weight: 650;
+}
+
+.model-format-hint {
+  margin-top: 4px;
 }
 
 .config-section-header {
