@@ -1,5 +1,7 @@
 # Ally
 
+[English](README.md) | [简体中文](README_zh-CN.md)
+
 **Ally** is a desktop AI coding agent powered by Wails and configurable LLM providers. It sits in your project directory, understands your codebase, and helps you read, edit, search, and manage files through natural conversation.
 
 Ally supports tool-assisted file editing, syntax-highlighted diff previews, regex search, batch file operations, MCP servers, skills injection, plan mode, goal tracking, session management, and more.
