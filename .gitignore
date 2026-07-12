@@ -5,6 +5,7 @@ frontend/dist/
 # ── Dependencies ──
 frontend/node_modules/
 node_modules/
+frontend/package.json.md5
 
 # ── IDE & editors ──
 .idea/
