@@ -1207,10 +1207,9 @@ func (a *App) ListSkills() ([]SkillDefinition, error) {
 	if err != nil {
 		return nil, err
 	}
-	root, err := workspaceRoot(cfg)
-	if err != nil {
-		return nil, err
-	}
+	// If the configured workspace no longer exists, still scan user-level
+	// skills so the app remains usable and the user can add a new workspace.
+	root, _ := workspaceRoot(cfg)
 	skills := []SkillDefinition{}
 	seen := map[string]bool{}
 
@@ -1219,8 +1218,10 @@ func (a *App) ListSkills() ([]SkillDefinition, error) {
 		scanSkillDir(filepath.Join(homeDir, ".agents", "skills"), "user", &skills, seen)
 	}
 	// Project skills (<workspace>/.agents/skills/)
-	for _, sub := range skillScanDirs {
-		scanSkillDir(filepath.Join(root, sub), "project", &skills, seen)
+	if root != "" {
+		for _, sub := range skillScanDirs {
+			scanSkillDir(filepath.Join(root, sub), "project", &skills, seen)
+		}
 	}
 
 	return skills, nil
@@ -3692,6 +3693,14 @@ func (a *App) SelectWorkspace() (string, error) {
 		return "", err
 	}
 	current := a.config.Workspace
+	// If the saved workspace no longer exists, fall back to the user's home
+	// directory so the directory dialog can still open and the user can pick
+	// a valid workspace.
+	if info, err := os.Stat(current); err != nil || !info.IsDir() {
+		if homeDir, err := os.UserHomeDir(); err == nil {
+			current = homeDir
+		}
+	}
 	selected, err := wruntime.OpenDirectoryDialog(a.ctx, wruntime.OpenDialogOptions{
 		Title:            "选择 Agent 工作区",
 		DefaultDirectory: current,

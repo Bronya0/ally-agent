@@ -1266,7 +1266,7 @@ function closeWorkspaceTab(id) {
     delete sessionPromptTexts[tab.sessionId];
     delete todosBySession[tab.sessionId];
     delete todoRevisionsBySession[tab.sessionId];
-    delete sessionScrollTops[tab.sessionId];
+    delete sessionScrollAnchors[tab.sessionId];
     DeleteSession(tab.sessionId).catch(() => {});
   }
   saveSessions();
@@ -1276,15 +1276,18 @@ function closeWorkspaceTab(id) {
   }
 }
 
-const sessionScrollTops = {};
+// Per-session scroll anchors: { index, offset } pointing to the topmost
+// visible message element. Unlike absolute scrollTop, anchors are immune
+// to content-visibility placeholder-height drift on Tab switch.
+const sessionScrollAnchors = {};
 
 function switchWorkspaceTab(id) {
   const tab = workspaceTabs.value.find((t) => t.id === id);
   if (!tab) return;
-  // Save current session's scroll position before switching
-  const prevTop = chatMessagesRef.value?.saveScrollPosition();
-  if (activeSessionId.value && prevTop != null) {
-    sessionScrollTops[activeSessionId.value] = prevTop;
+  // Save current session's scroll anchor before switching
+  const prevAnchor = chatMessagesRef.value?.saveScrollPosition();
+  if (activeSessionId.value && prevAnchor != null) {
+    sessionScrollAnchors[activeSessionId.value] = prevAnchor;
   }
   saveSessions();
   activeWorkspaceId.value = id;
@@ -1301,10 +1304,10 @@ function switchWorkspaceTab(id) {
   if (tab.sessionId) {
     activeSessionId.value = tab.sessionId;
     loadTodos(tab.sessionId);
-    // Restore saved scroll position for this session, or stay at default
-    const savedTop = sessionScrollTops[tab.sessionId];
-    if (savedTop != null) {
-      nextTick(() => chatMessagesRef.value?.restoreScrollPosition(savedTop));
+    // Restore saved scroll anchor for this session, or stay at default
+    const savedAnchor = sessionScrollAnchors[tab.sessionId];
+    if (savedAnchor != null) {
+      nextTick(() => chatMessagesRef.value?.restoreScrollPosition(savedAnchor));
     }
   }
 }
@@ -1569,7 +1572,7 @@ function deleteSession(index) {
   delete todosBySession[deletedId];
   delete todoRevisionsBySession[deletedId];
   delete sessionPromptTexts[deletedId];
-  delete sessionScrollTops[deletedId];
+  delete sessionScrollAnchors[deletedId];
   DeleteSession(deletedId).catch(() => {});
   const expanded = new Set(expandedArchiveSessions.value);
   expanded.delete(deletedId);
@@ -2804,7 +2807,7 @@ async function sendPrompt() {
   promptText.value = '';
   pendingAttachments.value = [];
   commandMenuVisible.value = false;
-  scrollMessagesToBottom();
+  scrollMessagesToBottom({ force: true });
 
   try {
     const history = buildSessionMessagesForModel(session, {
@@ -3657,7 +3660,7 @@ function trimRuntimeSessions() {
     delete todosBySession[session.id];
     delete todoRevisionsBySession[session.id];
     delete sessionPromptTexts[session.id];
-    delete sessionScrollTops[session.id];
+    delete sessionScrollAnchors[session.id];
     ReleaseSession(session.id).catch(() => {});
     const expanded = new Set(expandedArchiveSessions.value);
     expanded.delete(session.id);

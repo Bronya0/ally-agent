@@ -171,21 +171,67 @@ function scrollToUserQuestion(direction) {
   target?.scrollIntoView({ block: 'start', behavior: 'smooth' });
 }
 
+/**
+ * Save the current scroll position as an anchor: the index of the topmost
+ * visible message element plus its pixel offset from the viewport top.
+ *
+ * Unlike absolute scrollTop, an anchor is immune to content-visibility
+ * placeholder-height drift — when we restore, we scroll the *same element*
+ * back into view rather than trusting a pixel offset that was computed
+ * against fake placeholder heights.
+ */
 function saveScrollPosition() {
+  const root = messagesRootRef.value;
   const viewport = getScrollViewport();
-  return viewport ? viewport.scrollTop : 0;
+  if (!root || !viewport) return null;
+  const children = root.children;
+  if (!children.length) return null;
+  const viewportTop = viewport.getBoundingClientRect().top;
+  // Find the topmost child whose bottom edge is below the viewport top
+  // (i.e. at least partially visible).
+  for (let i = 0; i < children.length; i++) {
+    const rect = children[i].getBoundingClientRect();
+    if (rect.bottom > viewportTop + 1) {
+      return { index: i, offset: Math.round(rect.top - viewportTop) };
+    }
+  }
+  return { index: children.length - 1, offset: 0 };
 }
 
-function restoreScrollPosition(top) {
-  if (top == null) return;
+/**
+ * Restore a previously saved anchor by scrolling the indexed message element
+ * back to its recorded offset from the viewport top.
+ *
+ * Two correction passes are performed (each a double-rAF apart). The first
+ * pass positions the element; the second pass corrects drift caused by
+ * content-visibility: auto elements above the target expanding from their
+ * placeholder heights to real heights once they scroll near the viewport.
+ */
+function restoreScrollPosition(anchor) {
+  if (!anchor || typeof anchor !== 'object' || anchor.index == null) return;
+  const apply = () => {
+    const root = messagesRootRef.value;
+    const viewport = getScrollViewport();
+    if (!root || !viewport) return;
+    const child = root.children[anchor.index];
+    if (!child) return;
+    const viewportTop = viewport.getBoundingClientRect().top;
+    const currentOffset = child.getBoundingClientRect().top - viewportTop;
+    const delta = currentOffset - anchor.offset;
+    if (Math.abs(delta) < 1) return;
+    const target = viewport.scrollTop + delta;
+    scrollbarRef.value?.scrollTo({ top: target });
+    viewport.scrollTop = target;
+  };
   nextTick(() => {
-    // Double rAF to let the browser finish layout (content-visibility needs
-    // at least one paint frame to resolve real element sizes from placeholders).
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
-        scrollbarRef.value?.scrollTo({ top });
-        const viewport = getScrollViewport();
-        if (viewport) viewport.scrollTop = top;
+        apply();
+        // Second pass: content-visibility elements above the target may have
+        // expanded after the first scroll, shifting the anchor. Re-correct.
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => apply());
+        });
       });
     });
   });
