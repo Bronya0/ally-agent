@@ -214,8 +214,6 @@ defineExpose({ scrollbarRef, scrollToBottom, scrollToUserQuestion, saveScrollPos
 
 .message {
   margin-bottom: 10px;
-  content-visibility: auto;
-  contain-intrinsic-size: 64px;
 }
 
 .message-archive-toggle {
