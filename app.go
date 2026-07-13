@@ -51,22 +51,22 @@ const (
 	appName              = "Ally"
 	defaultModel         = "deepseek-v4-flash"
 	defaultBaseURL       = "https://api.deepseek.com"
-	maxReadFileBytes     = 2 * 1024 * 1024
+	maxReadFileBytes     = 10 * 1024 * 1024
 	maxToolOutput        = 128 * 1024
 	maxFinishedSubagents = 50
 	maxSubagentToolCalls = 100
 	maxModelToolOutput   = 12 * 1024
 	modelToolHeadBytes   = 4 * 1024
 	modelToolTailBytes   = 8 * 1024
-	maxModelGrepMatches  = 120
+	maxModelGrepMatches  = 200
 	maxAgentSteps        = 9999
 	defaultLLMRetries    = 2
 	defaultShellLimit    = 120
-	defaultHTTPTimeout   = 30
+	defaultHTTPTimeout   = 60
 	defaultGrepTimeout   = 30
 	maxGrepTimeout       = 120
-	maxWaitSeconds       = 600
-	maxHTTPBodyBytes     = 2 * 1024 * 1024
+	maxWaitSeconds       = 3600
+	maxHTTPBodyBytes     = 50 * 1024 * 1024
 	defaultHTTPMaxBody   = 256 * 1024
 	maxHTTPJSONPreview   = 24 * 1024
 	httpRateDelay        = 1 * time.Second
@@ -1701,7 +1701,7 @@ func grepLimits(req GrepRequest) (maxDepth, maxFiles, maxMatches int) {
 func ripgrepBaseArgs(req GrepRequest, maxDepth int) []string {
 	args := []string{
 		"--color=never",
-		"--max-filesize", "256K",
+		"--max-filesize", "10M",
 		"--max-depth", strconv.Itoa(maxDepth),
 		"--sort", "path",
 	}
@@ -3022,8 +3022,10 @@ func buildSystemPromptParts(planMode bool, allSkills []SkillDefinition, workspac
 	b.WriteString("**Batch and parallelize aggressively** — this is the #1 way to reduce round-trips and save tokens:\n" +
 		"- If you need file contents, prefer one `batch_read` call with all relevant paths instead of separate reads.\n" +
 		"- For `batch_read`, omit both range fields to read the whole file; use optional `startLine` and `endLine` only when you need a specific inclusive range.\n" +
+		"- If you need to edit files, put all cross-file changes in one `edit` call.\n" +
 		"- If you need to search across files, send one `grep_files` instead of reading each file.\n" +
 		"- Batch independent reads and commands; use current MD5 values for dependent edits.\n" +
+		"- Only call tools one at a time when a strict serial dependency exists between them.\n" +
 		"The backend executes independent non-file tool calls in parallel; built-in file mutations are ordered by tool-call index.\n\n")
 
 	b.WriteString("Use `todo_write` outside plan mode only when longer work genuinely benefits from visible progress tracking; keep entries short and current.\n\n")
@@ -5516,7 +5518,7 @@ func chatTools() []openai.Tool {
 		functionTool("wait", "Pause the current agent run for a short, cancellable delay after an asynchronous operation has started or while a concrete external condition is expected to change. Call wait as the only tool in the model response, then verify the condition after it completes. Do not use it for user input or long schedules. Error codes: E_BAD_WAIT, E_WAIT_CANCELLED, E_WAIT_BATCH_CONFLICT.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"seconds": map[string]any{"type": "integer", "minimum": 1, "maximum": maxWaitSeconds, "description": "Delay in whole seconds, from 1 to 600."},
+				"seconds": map[string]any{"type": "integer", "minimum": 1, "maximum": maxWaitSeconds, "description": "Delay in whole seconds, from 1 to 3600."},
 				"reason":  map[string]any{"type": "string", "minLength": 1, "maxLength": 200, "pattern": ".*\\S.*", "description": "Short user-visible reason for waiting."},
 			},
 			"required": []string{"seconds", "reason"},
@@ -7299,7 +7301,7 @@ func (a *App) createGoal(sessionID string, objective string, completionCriterion
 		return nil, errors.New("objective is required")
 	}
 	if maxTurns <= 0 {
-		maxTurns = 10
+		maxTurns = 200
 	}
 	key := goalSessionKey(sessionID)
 	goal := &GoalState{
@@ -10289,9 +10291,6 @@ func buildLineNumberContextBlock(result string, firstLine, lastLine int) string 
 }
 
 func countEditDiffStats(diff string, beforeLines, afterLines []string) (int, int) {
-	if strings.Contains(diff, "[diff truncated:") {
-		return countChangedLineStats(beforeLines, afterLines)
-	}
 	added, removed := 0, 0
 	for _, line := range strings.Split(diff, "\n") {
 		if strings.HasPrefix(line, "+++") || strings.HasPrefix(line, "---") {
@@ -10303,21 +10302,17 @@ func countEditDiffStats(diff string, beforeLines, afterLines []string) (int, int
 			removed++
 		}
 	}
+	// When a large change span is localized and truncated, the diff embeds the
+	// omitted counts in a marker. Add them back so the UI stats reflect the true
+	// change size instead of only the lines actually shown.
+	if idx := strings.Index(diff, "[diff truncated: omitted "); idx >= 0 {
+		var omittedRemoved, omittedAdded int
+		if _, err := fmt.Sscanf(diff[idx:], "[diff truncated: omitted %d removed and %d added lines]", &omittedRemoved, &omittedAdded); err == nil {
+			added += omittedAdded
+			removed += omittedRemoved
+		}
+	}
 	return added, removed
-}
-
-func countChangedLineStats(beforeLines, afterLines []string) (int, int) {
-	prefix := 0
-	for prefix < len(beforeLines) && prefix < len(afterLines) && beforeLines[prefix] == afterLines[prefix] {
-		prefix++
-	}
-	beforeEnd := len(beforeLines)
-	afterEnd := len(afterLines)
-	for beforeEnd > prefix && afterEnd > prefix && beforeLines[beforeEnd-1] == afterLines[afterEnd-1] {
-		beforeEnd--
-		afterEnd--
-	}
-	return afterEnd - prefix, beforeEnd - prefix
 }
 
 func approximateLineDelta(beforeLines, afterLines []string) (int, int) {

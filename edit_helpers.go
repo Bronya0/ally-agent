@@ -81,7 +81,7 @@ func computeChangedLineRange(original, result string) changedLineRange {
 }
 
 const (
-	maxReadRangeLines          = 5000
+	maxReadRangeLines          = 10000
 	changedLineContextLines    = 2
 	changedLineMaxOutputLines  = 12
 	changedLineTextBudgetBytes = 50 * 1024
