@@ -1701,6 +1701,7 @@ func grepLimits(req GrepRequest) (maxDepth, maxFiles, maxMatches int) {
 func ripgrepBaseArgs(req GrepRequest, maxDepth int) []string {
 	args := []string{
 		"--color=never",
+		"--ignore-case",
 		"--max-filesize", "10M",
 		"--max-depth", strconv.Itoa(maxDepth),
 		"--sort", "path",
@@ -5445,7 +5446,7 @@ func chatTools() []openai.Tool {
 					"type":        "array",
 					"minItems":    1,
 					"maxItems":    20,
-					"description": "Files to edit in this call. Each normalized path may appear once; total changes across all files must not exceed 200.",
+					"description": "Files to edit in this call. Put all independent changes for the same file in one changes array (max 50). Each normalized path may appear once; total changes across all files must not exceed 200.",
 					"items": map[string]any{
 						"type": "object",
 						"properties": map[string]any{
@@ -5651,7 +5652,7 @@ func chatTools() []openai.Tool {
 			},
 			"required": []string{"target", "command"},
 		}),
-		functionTool("grep_files", "Search UTF-8 text file contents using ripgrep (`rg`). Release packages bundle `rg`; development builds also search PATH. Workspace-relative paths are resolved under the workspace; explicit absolute paths are allowed for read-only search subject to safety checks. Returns match samples plus exact stats: count, occurrences, files, statsExact, samplesTruncated. `count` is matching lines; `occurrences` is total regex hits and should be used for questions like \"how many times does X appear\". `samplesTruncated=true` means only returned match samples were truncated; stats remain exact when statsExact=true. Error results include errorCode values such as E_GREP_REGEX, E_GREP_GLOB, E_GREP_TIMEOUT, E_GREP_PATH, E_SEARCH_ROOT_BLOCKED, and E_RIPGREP_NOT_FOUND. Skips binary/large/heavy directories. Use glob for basename patterns like *.go or relative path patterns like frontend/src/*.vue.", map[string]any{
+		functionTool("grep_files", "Search UTF-8 text file contents using ripgrep (`rg`). Search is case-insensitive by default. Release packages bundle `rg`; development builds also search PATH. Workspace-relative paths are resolved under the workspace; explicit absolute paths are allowed for read-only search subject to safety checks. Returns match samples plus exact stats: count, occurrences, files, statsExact, samplesTruncated. `count` is matching lines; `occurrences` is total regex hits and should be used for questions like \"how many times does X appear\". `samplesTruncated=true` means only returned match samples were truncated; stats remain exact when statsExact=true. Error results include errorCode values such as E_GREP_REGEX, E_GREP_GLOB, E_GREP_TIMEOUT, E_GREP_PATH, E_SEARCH_ROOT_BLOCKED, and E_RIPGREP_NOT_FOUND. Skips binary/large/heavy directories. Use glob for basename patterns like *.go or relative path patterns like frontend/src/*.vue.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"pattern":        map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "ripgrep regex pattern to search for."},
