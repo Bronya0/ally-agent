@@ -17,6 +17,18 @@ This file is read by AI coding agents. Keep it current when the app architecture
 | `cd frontend && npm test` | Run frontend unit tests when present |
 | `wails generate module` | Regenerate Go-to-JS bindings after adding or changing exported Go methods |
 
+## Git Convention
+
+When developing Ally itself, push with the author set to `ally agent`:
+
+```powershell
+git add -A
+git -c user.name="ally agent" -c user.email="ally@agent.dev" commit -m "..."
+git push origin main
+```
+
+This uses `-c` to override the commit author per-command only, leaving the developer's global Git config unchanged.
+
 ---
 
 ## Release Process
