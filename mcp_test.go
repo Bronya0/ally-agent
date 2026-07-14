@@ -6,6 +6,23 @@ import (
 	"testing"
 )
 
+func TestNormalizedMcpTransport(t *testing.T) {
+	tests := []struct {
+		cfg  McpServerConfig
+		want string
+	}{
+		{cfg: McpServerConfig{Command: "npx"}, want: "stdio"},
+		{cfg: McpServerConfig{Transport: "sse", URL: "https://example.com/sse"}, want: "sse"},
+		{cfg: McpServerConfig{URL: "https://example.com/mcp"}, want: "streamable-http"},
+		{cfg: McpServerConfig{Transport: "http", URL: "https://example.com/mcp"}, want: "streamable-http"},
+	}
+	for _, tt := range tests {
+		if got := normalizedMcpTransport(tt.cfg); got != tt.want {
+			t.Fatalf("normalizedMcpTransport(%#v) = %q, want %q", tt.cfg, got, tt.want)
+		}
+	}
+}
+
 func TestLoadConfigsSkipsDisabledServers(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

@@ -12,7 +12,7 @@ export function defaultConfig() {
     customPrompt: '',
     allowPrivateNetwork: true,
     gitBashPath: '',
-    reasoningTag: '',
+    reasoningTag: 'reasoning_content',
     disabledSkills: [],
     models: [],
   };
@@ -24,6 +24,7 @@ export function assignConfig(target, source) {
     ...(source || {}),
   };
   delete next.systemPrompt;
+  next.reasoningTag = String(next.reasoningTag || '').trim() || 'reasoning_content';
   next.models = cloneModelConfigs(next.models);
   delete target.systemPrompt;
   Object.assign(target, next);
@@ -31,5 +32,8 @@ export function assignConfig(target, source) {
 
 export function cloneModelConfigs(models) {
   if (!Array.isArray(models)) return [];
-  return models.map((model) => ({ ...(model || {}) }));
+  return models.map((model) => ({
+    ...(model || {}),
+    reasoningTag: String(model?.reasoningTag || '').trim() || 'reasoning_content',
+  }));
 }

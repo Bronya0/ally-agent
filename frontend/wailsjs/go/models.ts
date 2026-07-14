@@ -263,6 +263,7 @@ export namespace main {
 	    temperature: number;
 	    maxTokens: number;
 	    contextWindow: number;
+	    reasoningTag?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new ModelConfig(source);
@@ -278,6 +279,7 @@ export namespace main {
 	        this.temperature = source["temperature"];
 	        this.maxTokens = source["maxTokens"];
 	        this.contextWindow = source["contextWindow"];
+	        this.reasoningTag = source["reasoningTag"];
 	    }
 	}
 	export class ConfigState {
@@ -294,6 +296,7 @@ export namespace main {
 	    planMode: boolean;
 	    allowPrivateNetwork: boolean;
 	    gitBashPath: string;
+	    reasoningTag?: string;
 	    models?: ModelConfig[];
 	    disabledSkills?: string[];
 	
@@ -316,6 +319,7 @@ export namespace main {
 	        this.planMode = source["planMode"];
 	        this.allowPrivateNetwork = source["allowPrivateNetwork"];
 	        this.gitBashPath = source["gitBashPath"];
+	        this.reasoningTag = source["reasoningTag"];
 	        this.models = this.convertValues(source["models"], ModelConfig);
 	        this.disabledSkills = source["disabledSkills"];
 	    }
@@ -1124,6 +1128,9 @@ export namespace main {
 	    error?: string;
 	    toolCalls?: SubToolEvent[];
 	    startTime: number;
+	    inputTokens?: number;
+	    outputTokens?: number;
+	    totalTokens?: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new SubagentRun(source);
@@ -1144,6 +1151,9 @@ export namespace main {
 	        this.error = source["error"];
 	        this.toolCalls = this.convertValues(source["toolCalls"], SubToolEvent);
 	        this.startTime = source["startTime"];
+	        this.inputTokens = source["inputTokens"];
+	        this.outputTokens = source["outputTokens"];
+	        this.totalTokens = source["totalTokens"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

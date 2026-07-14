@@ -1180,6 +1180,10 @@ function buildWelcomeMessage(workspacePath = '') {
   if (workspacePath !== null) {
     rows.push({ kind: 'workspace', label: t('common.workspace'), value: workspacePath || t('common.notSelected') });
   }
+  const gitBashDir = gitBashDirectory(config.gitBashPath);
+  if (gitBashDir) {
+    rows.push({ kind: 'gitbash', label: t('welcome.gitBash'), value: gitBashDir });
+  }
   rows.push({ kind: 'model', label: t('common.model'), value: `${config.providerName || '-'} · ${config.model || '-'}` });
   rows.push({ kind: 'mcp', label: 'MCP', value: formatMcpSummary() });
   if (skillCount > 0) {
@@ -1197,6 +1201,13 @@ function buildWelcomeMessage(workspacePath = '') {
   };
 }
 
+function gitBashDirectory(shellPath = '') {
+  const value = String(shellPath || '').trim().replace(/[\\/]+$/, '');
+  if (!value) return '';
+  if (!/bash(?:\.exe)?$/i.test(value)) return value;
+  return value.replace(/[\\/][^\\/]+$/, '') || value;
+}
+
 function formatMcpSummary() {
   const servers = Array.isArray(mcpServers.value) ? mcpServers.value : [];
   const connected = servers.filter((srv) => srv.status === 'connected').length;
@@ -1208,10 +1219,15 @@ function formatMcpSummary() {
 
 function updateWelcomeMcpRows() {
   const value = formatMcpSummary();
+  const gitBashDir = gitBashDirectory(config.gitBashPath);
   for (const session of sessions.value) {
     for (const msg of session.messages || []) {
       if (!msg.welcome || !Array.isArray(msg.welcome.rows)) continue;
-      const rows = msg.welcome.rows.filter((row) => row.kind !== 'commands' && row.label !== '指令' && row.label !== 'Commands');
+      const rows = msg.welcome.rows.filter((row) => row.kind !== 'commands' && row.label !== '指令' && row.label !== 'Commands' && row.kind !== 'gitbash');
+      if (gitBashDir) {
+        const workspaceIndex = rows.findIndex((row) => row.kind === 'workspace' || row.label === '工作区' || row.label === 'Workspace');
+        rows.splice(workspaceIndex >= 0 ? workspaceIndex + 1 : 0, 0, { kind: 'gitbash', label: t('welcome.gitBash'), value: gitBashDir });
+      }
       const existing = rows.find((row) => row.kind === 'mcp' || row.label === 'MCP');
       if (existing) existing.value = value;
       else {
@@ -1377,6 +1393,7 @@ function defaultModelDraft(source = {}) {
     maxTokens: configDraft?.maxTokens || 128000,
     contextWindow: configDraft?.contextWindow || 1048576,
     ...source,
+    reasoningTag: String(source.reasoningTag || configDraft?.reasoningTag || 'reasoning_content').trim() || 'reasoning_content',
   };
 }
 
@@ -1855,9 +1872,15 @@ function bindRuntimeEvents() {
     const tool = data?.tool || data?.name || 'dependency';
     if (missingDependencyWarningsShown.has(tool)) return;
     missingDependencyWarningsShown.add(tool);
-    const steps = Array.isArray(data?.installSteps) ? data.installSteps : [];
+    const messageText = data?.messageKey
+      ? t(data.messageKey, data?.messageParams || {})
+      : (data?.message || t('app.tool.notInstalled', { tool }));
+    const stepKeys = Array.isArray(data?.installStepKeys) ? data.installStepKeys : [];
+    const steps = stepKeys.length
+      ? stepKeys.map((key) => t(key))
+      : (Array.isArray(data?.installSteps) ? data.installSteps : []);
     const detail = steps.length ? '\n\n' + steps.join('\n') : '';
-    message.warning(`${data?.message || t('app.tool.notInstalled', { tool })}${detail}`, { duration: 18000 });
+    message.warning(`${messageText}${detail}`, { duration: 18000 });
   });
 
   onRuntimeEvent('config:warning', (data) => {
@@ -1929,6 +1952,22 @@ function bindRuntimeEvents() {
       existing.toolBatchId = data.toolBatchId || existing.toolBatchId || '';
       existing.toolCallId = data.toolCallId || existing.toolCallId || '';
       if (data.toolCallIndex !== undefined && data.toolCallIndex !== null) existing.toolCallIndex = data.toolCallIndex;
+      const resultData = parseToolResultData(data.result);
+      if (data.name === 'agent_delegate' && existing.kind === 'subagent') {
+        existing.subagentId = resultData.agentId || existing.subagentId || '';
+        existing.status = resultData.status || 'completed';
+        existing.description = resultData.description || existing.description || '';
+        existing.summary = resultData.summary || existing.summary || '';
+        existing.filesRead = resultData.filesRead || existing.filesRead || [];
+        existing.filesEdited = resultData.filesEdited || existing.filesEdited || [];
+        existing.steps = resultData.steps || existing.steps || 0;
+        existing.error = resultData.error || '';
+        existing.durationMs = Number(data.durationMs || existing.durationMs || 0);
+        existing.durationText = formatDurationShort(existing.durationMs);
+        existing.time = new Date().toLocaleTimeString();
+        saveSessions();
+        return;
+      }
       existing.status = 'success';
       existing.body = formatToolBody(data.name, data.result);
       existing.chip = formatToolChip(data.name, data.result);
@@ -1937,7 +1976,6 @@ function bindRuntimeEvents() {
       if (data.mcpServer) existing.mcpServer = data.mcpServer;
       if (data.mcpTool) existing.mcpTool = data.mcpTool;
       existing.time = new Date().toLocaleTimeString();
-      const resultData = parseToolResultData(data.result);
       if (data.name === 'ask') {
         existing.askReady = false;
         existing.askSubmitting = false;
@@ -2040,6 +2078,17 @@ function bindRuntimeEvents() {
       existing.toolBatchId = data.toolBatchId || existing.toolBatchId || '';
       existing.toolCallId = data.toolCallId || existing.toolCallId || '';
       if (data.toolCallIndex !== undefined && data.toolCallIndex !== null) existing.toolCallIndex = data.toolCallIndex;
+      if (data.name === 'agent_delegate' && existing.kind === 'subagent') {
+        existing.status = 'failed';
+        existing.error = data.error || '';
+        existing.body = '';
+        existing.errorCode = data.errorCode || '';
+        existing.durationMs = Number(data.durationMs || existing.durationMs || 0);
+        existing.durationText = formatDurationShort(existing.durationMs);
+        existing.time = new Date().toLocaleTimeString();
+        saveSessions();
+        return;
+      }
       existing.status = 'error';
       existing.body = data.error || '';
       existing.errorCode = data.errorCode || '';
@@ -2181,17 +2230,14 @@ function bindRuntimeEvents() {
   function findSubagentMsg(id, sessionId = '') {
     const session = sessionId ? sessions.value.find(s => s.id === sessionId) : activeSession.value;
     if (!session) return null;
-    return session.messages.find(m => m.kind === 'subagent' && m.eventId === id) || null;
+    return session.messages.find(m => m.kind === 'subagent' && (m.subagentId === id || m.eventId === id)) || null;
   }
 
   onRuntimeEvent('sub:spawn', (data) => {
     const session = sessionByEvent(data);
     const isActiveSession = session && session.id === activeSessionId.value;
-    if (session) {
-      session.messages = session.messages.filter(m => !(m.role === 'tool_call' && m.name === 'agent_delegate'));
-    }
     // Sidebar tracking
-    if (isActiveSession) {
+    if (isActiveSession && !subRuns.value.some((item) => item.id === data.id)) {
       subRuns.value.push({
         id: data.id,
         description: data.description || '',
@@ -2212,12 +2258,21 @@ function bindRuntimeEvents() {
         totalTokens: 0,
       });
     }
-    // Main chat message
+    // Upgrade the original agent_delegate card in place. Keeping the parent
+    // tool identity lets the eventual tool:result/tool:error update this same
+    // card instead of appending a second raw JSON result card.
     if (session) {
-      session.messages.push({
+      const existing = findToolEventMessage(session, { ...data, name: 'agent_delegate' });
+      const payload = {
         role: 'tool_call',
         kind: 'subagent',
-        eventId: data.id,
+        eventId: existing?.eventId || data.toolCallId || data.id,
+        runId: data.runId || existing?.runId || '',
+        toolBatchId: data.toolBatchId || existing?.toolBatchId || '',
+        toolCallId: data.toolCallId || existing?.toolCallId || '',
+        toolCallIndex: data.toolCallIndex ?? existing?.toolCallIndex,
+        name: 'agent_delegate',
+        subagentId: data.id,
         status: 'running',
         description: data.description || '',
         profile: data.profile || 'coder',
@@ -2226,14 +2281,16 @@ function bindRuntimeEvents() {
         summary: '',
         filesEdited: [],
         error: '',
-        toolCalls: [],
+        toolCalls: existing?.toolCalls || [],
         time: new Date().toLocaleTimeString(),
         durationMs: 0,
         durationText: '',
         inputTokens: 0,
         outputTokens: 0,
         totalTokens: 0,
-      });
+      };
+      if (existing) Object.assign(existing, payload);
+      else session.messages.push(payload);
     }
   });
   onRuntimeEvent('sub:step', (data) => {
@@ -3300,6 +3357,21 @@ function appendToolEventFallback(session, data = {}, status = 'running') {
     askSubmitting: false,
     askSubmitted: false,
     askAnswers: [],
+    ...(data.name === 'agent_delegate' ? {
+      subagentId: '',
+      description: title || '',
+      profile: 'coder',
+      steps: 0,
+      maxSteps: 5,
+      summary: '',
+      filesRead: [],
+      filesEdited: [],
+      error: '',
+      toolCalls: [],
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+    } : {}),
   };
   session.messages.push(payload);
   return payload;
@@ -3586,6 +3658,21 @@ function updateToolEvent(id, name, title, body, status = 'default', meta = {}, t
     askSubmitting: existing?.askSubmitting || false,
     askSubmitted: existing?.askSubmitted || false,
     askAnswers: existing?.askAnswers || [],
+    ...(name === 'agent_delegate' ? {
+      subagentId: existing?.subagentId || '',
+      description: parsed.description || existing?.description || parsed.task || '',
+      profile: existing?.profile || 'coder',
+      steps: existing?.steps || 0,
+      maxSteps: Number(parsed.maxSteps || existing?.maxSteps || 5),
+      summary: existing?.summary || '',
+      filesRead: existing?.filesRead || [],
+      filesEdited: existing?.filesEdited || [],
+      error: existing?.error || '',
+      toolCalls: existing?.toolCalls || [],
+      inputTokens: existing?.inputTokens || 0,
+      outputTokens: existing?.outputTokens || 0,
+      totalTokens: existing?.totalTokens || 0,
+    } : {}),
   };
 
   if (existing) {
@@ -4180,7 +4267,7 @@ function toolKind(name) {
   if (name === 'todo_write') return 'todo';
   if (name === 'scheduled_task') return 'scheduled';
   if (name === 'memory_read' || name === 'memory_write') return 'memory';
-  if (name === 'agent_delegate') return 'other';
+  if (name === 'agent_delegate') return 'subagent';
   if (name === 'render_html') return 'render_html';
 
   return 'other';

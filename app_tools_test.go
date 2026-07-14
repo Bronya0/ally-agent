@@ -997,6 +997,100 @@ func TestRunCommandRejectsLongRunningService(t *testing.T) {
 	}
 }
 
+func TestLooksLikeLongRunningServiceAllowsOrdinaryListCommand(t *testing.T) {
+	if looksLikeLongRunningService("ls -la") {
+		t.Fatal("ls -la must not be classified as a long-running service")
+	}
+}
+
+func TestCommandSafetyAllowsCmdSlashCOption(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("cmd.exe /c is Windows-specific")
+	}
+	if err := checkCommandSafety(CommandRequest{Command: "cmd.exe /c ver"}, t.TempDir()); err != nil {
+		t.Fatalf("cmd.exe /c option must not be treated as a C drive path: %v", err)
+	}
+}
+
+func TestFindWindowsBashDerivesPortableInstallFromGitPath(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows shell discovery is Windows-specific")
+	}
+	root := t.TempDir()
+	gitPath := filepath.Join(root, "cmd", "git.exe")
+	bashPath := filepath.Join(root, "bin", "bash.exe")
+	for _, path := range []string{gitPath, bashPath} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("test fixture"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	t.Setenv("ProgramFiles", filepath.Join(root, "missing-program-files"))
+	t.Setenv("ProgramFiles(x86)", filepath.Join(root, "missing-program-files-x86"))
+	t.Setenv("LOCALAPPDATA", filepath.Join(root, "missing-local-app-data"))
+	t.Setenv("PATH", filepath.Dir(gitPath))
+
+	got, name := findWindowsBash("")
+	if name != "bash" || !samePath(got, bashPath) {
+		t.Fatalf("expected derived Git Bash %q, got name=%q path=%q", bashPath, name, got)
+	}
+}
+
+func TestFindWindowsBashRejectsUnrelatedBashExecutable(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows shell discovery is Windows-specific")
+	}
+	root := t.TempDir()
+	bashPath := filepath.Join(root, "System32", "bash.exe")
+	if err := os.MkdirAll(filepath.Dir(bashPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bashPath, []byte("not Git Bash"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("ProgramFiles", filepath.Join(root, "missing-program-files"))
+	t.Setenv("ProgramFiles(x86)", filepath.Join(root, "missing-program-files-x86"))
+	t.Setenv("LOCALAPPDATA", filepath.Join(root, "missing-local-app-data"))
+	t.Setenv("PATH", filepath.Dir(bashPath))
+
+	if got, name := findWindowsBash(""); got != "" || name != "" {
+		t.Fatalf("expected unrelated bash.exe to be rejected, got name=%q path=%q", name, got)
+	}
+}
+
+func TestRunCommandWithGitBashResolvesWindowsToolchainAndShellExpansion(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows Git Bash behavior is Windows-specific")
+	}
+	bashPath, _ := findWindowsBash("")
+	if bashPath == "" {
+		t.Skip("Git Bash is not installed")
+	}
+
+	app := NewApp()
+	result, err := app.runCommandWithConfig(context.Background(), ConfigState{Workspace: t.TempDir()}, CommandRequest{
+		Command: `go version; value=$(printf 'ok'); printf 'value=%s\nbash=%s\n' "$value" "$BASH_VERSION"`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ExitCode != 0 {
+		t.Fatalf("expected Git Bash command to succeed, got exit=%d output=%q", result.ExitCode, result.Output)
+	}
+	if !samePath(result.ShellPath, bashPath) {
+		t.Fatalf("expected shell path %q, got %q", bashPath, result.ShellPath)
+	}
+	for _, want := range []string{"go version", "value=ok", "bash="} {
+		if !strings.Contains(result.Output, want) {
+			t.Fatalf("expected output to contain %q, got %q", want, result.Output)
+		}
+	}
+}
+
 func TestListServicesStartsEmpty(t *testing.T) {
 	app := NewApp()
 	data := app.ListServices()

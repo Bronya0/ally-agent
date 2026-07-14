@@ -51,6 +51,7 @@ const (
 	appName              = "Ally"
 	defaultModel         = "deepseek-v4-flash"
 	defaultBaseURL       = "https://api.deepseek.com"
+	defaultReasoningTag  = "reasoning_content"
 	maxReadFileBytes     = 10 * 1024 * 1024
 	maxToolOutput        = 128 * 1024
 	maxFinishedSubagents = 50
@@ -1135,7 +1136,7 @@ func defaultConfigState() ConfigState {
 	if err == nil {
 		execDir = filepath.Dir(exe)
 	}
-	return ConfigState{
+	cfg := ConfigState{
 		ProviderName:        "OpenAI Compatible",
 		APIFormat:           apiFormatOpenAIChat,
 		BaseURL:             defaultBaseURL,
@@ -1145,7 +1146,12 @@ func defaultConfigState() ConfigState {
 		MaxTokens:           128000,
 		ContextWindow:       1048576,
 		AllowPrivateNetwork: true,
+		ReasoningTag:        defaultReasoningTag,
 	}
+	if goruntime.GOOS == "windows" {
+		cfg.GitBashPath, _ = findWindowsBash("")
+	}
+	return cfg
 }
 
 func resolveConfigLoadPath(configPath string) (string, error) {
@@ -2116,9 +2122,14 @@ func (a *App) emitGitBashMissingIfNeeded() {
 		return
 	}
 	a.emit("dependency:missing", map[string]any{
-		"tool":    "bash",
-		"name":    "Git Bash",
-		"message": "Git Bash was not found. run_command will fall back to PowerShell. Install Git for Windows, or set the Git Bash path in Settings → General → Git Bash Path.",
+		"tool":       "bash",
+		"name":       "Git Bash",
+		"messageKey": "app.dependency.gitBashMissing",
+		"message":    "Git Bash was not found. run_command will fall back to PowerShell. Install Git for Windows, or set the Git Bash path in Settings → General → Git Bash Path.",
+		"installStepKeys": []string{
+			"app.dependency.gitBashDownload",
+			"app.dependency.gitBashConfigure",
+		},
 		"installSteps": []string{
 			"Download from https://git-scm.com/download/win",
 			"Or set the path manually in Settings, e.g. C:\\Program Files\\Git\\bin\\bash.exe",
@@ -3688,7 +3699,24 @@ func mergeConfig(base, overlay ConfigState) ConfigState {
 	if base.APIFormat == "" {
 		base.APIFormat = apiFormatOpenAIChat
 	}
+	base.ReasoningTag = normalizeReasoningTag(base.ReasoningTag)
+	for i := range base.Models {
+		base.Models[i].ReasoningTag = normalizeReasoningTag(base.Models[i].ReasoningTag)
+	}
+	if goruntime.GOOS == "windows" {
+		if detected, _ := findWindowsBash(base.GitBashPath); detected != "" {
+			base.GitBashPath = detected
+		}
+	}
 	return base
+}
+
+func normalizeReasoningTag(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return defaultReasoningTag
+	}
+	return value
 }
 
 func (a *App) GetConfig() (ConfigState, error) {
@@ -3736,7 +3764,12 @@ func (a *App) SaveConfig(req ConfigState) error {
 	a.config.CustomPrompt = req.CustomPrompt
 	a.config.AllowPrivateNetwork = req.AllowPrivateNetwork
 	a.config.GitBashPath = req.GitBashPath
-	a.config.ReasoningTag = req.ReasoningTag
+	if goruntime.GOOS == "windows" {
+		if detected, _ := findWindowsBash(req.GitBashPath); detected != "" {
+			a.config.GitBashPath = detected
+		}
+	}
+	a.config.ReasoningTag = normalizeReasoningTag(req.ReasoningTag)
 	a.disabledSkills = normalizeSkillNameList(a.config.DisabledSkills)
 	a.config.DisabledSkills = cloneStringSlice(a.disabledSkills)
 	cfg := a.config
@@ -3776,7 +3809,7 @@ func (a *App) TestModelConnection(model ModelConfig) error {
 		Temperature:   model.Temperature,
 		MaxTokens:     32,
 		ContextWindow: model.ContextWindow,
-		ReasoningTag:  model.ReasoningTag,
+		ReasoningTag:  normalizeReasoningTag(model.ReasoningTag),
 	}
 	if cfg.Model == "" {
 		return errors.New("model is required")
@@ -6733,7 +6766,14 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 	a.subRuns[subID] = run
 	a.subRunsMu.Unlock()
 	defer a.finishSubagentRecord(subID)
-	a.emit("sub:spawn", map[string]any{"id": subID, "sessionId": sessionID, "description": desc, "profile": "coder", "maxSteps": maxSteps})
+	spawnPayload := map[string]any{"id": subID, "sessionId": sessionID, "description": desc, "profile": "coder", "maxSteps": maxSteps}
+	if meta, ok := ctx.Value(toolExecutionMetaContextKey{}).(toolExecutionMeta); ok {
+		spawnPayload["runId"] = meta.runID
+		spawnPayload["toolBatchId"] = meta.toolBatchID
+		spawnPayload["toolCallIndex"] = meta.toolCallIndex
+		spawnPayload["toolCallId"] = meta.toolCallID
+	}
+	a.emit("sub:spawn", spawnPayload)
 
 	// Build messages for the sub-agent
 	messages := []openai.ChatCompletionMessage{
@@ -10768,8 +10808,9 @@ type shellInvocation struct {
 // Linux/macOS. Detection order:
 //  1. The gitBashPath setting (manual user override, passed as configuredPath)
 //  2. Git for Windows common installation paths
-//  3. bash.exe found on PATH
-//  4. Fallback to PowerShell (pwsh.exe → powershell.exe), which is always
+//  3. A Git for Windows installation found through git.exe on PATH
+//  4. A Git Bash executable found on PATH
+//  5. Fallback to PowerShell (pwsh.exe → powershell.exe), which is always
 //     available on Windows (5.1 is built-in, no installation required).
 //
 // On Linux/macOS it uses bash -c directly and ignores configuredPath.
@@ -10800,10 +10841,8 @@ type shellBinary struct {
 // ("bash"), or empty strings if no bash was found.
 func findWindowsBash(configuredPath string) (string, string) {
 	// 1. User-configured path (manual override).
-	if configuredPath != "" {
-		if info, err := os.Stat(configuredPath); err == nil && !info.IsDir() {
-			return configuredPath, "bash"
-		}
+	if p := existingGitBashPath(configuredPath); p != "" {
+		return p, "bash"
 	}
 
 	// 2. Git for Windows common installation paths.
@@ -10827,17 +10866,82 @@ func findWindowsBash(configuredPath string) (string, string) {
 		)
 	}
 	for _, p := range gitBashPaths {
-		if info, err := os.Stat(p); err == nil && !info.IsDir() {
+		if p = existingGitBashPath(p); p != "" {
 			return p, "bash"
 		}
 	}
 
-	// 3. bash.exe on PATH.
+	// 3. Derive Git Bash from git.exe on PATH. This supports portable and
+	// non-default Git for Windows installations without accidentally selecting
+	// C:\Windows\System32\bash.exe, which is the legacy WSL launcher.
+	for _, gitName := range []string{"git.exe", "git"} {
+		gitPath, err := exec.LookPath(gitName)
+		if err != nil {
+			continue
+		}
+		for _, candidate := range gitBashCandidatesFromGitExecutable(gitPath) {
+			if p := existingGitBashPath(candidate); p != "" {
+				return p, "bash"
+			}
+		}
+	}
+
+	// 4. bash.exe on PATH, but only when it belongs to a Git for Windows
+	// installation. Accepting an arbitrary bash.exe here can select WSL, whose
+	// command-line forwarding and Linux PATH semantics break Windows tools and
+	// can cause shell input such as $BASH_VERSION or $(...) to be parsed twice.
 	if p, err := exec.LookPath("bash.exe"); err == nil {
-		return p, "bash"
+		if p = existingGitBashPath(p); p != "" {
+			return p, "bash"
+		}
 	}
 
 	return "", ""
+}
+
+func gitBashCandidatesFromGitExecutable(gitPath string) []string {
+	dir := filepath.Dir(filepath.Clean(strings.TrimSpace(gitPath)))
+	base := strings.ToLower(filepath.Base(dir))
+	var root string
+	switch base {
+	case "cmd", "bin":
+		root = filepath.Dir(dir)
+	default:
+		return nil
+	}
+	return []string{
+		filepath.Join(root, "bin", "bash.exe"),
+		filepath.Join(root, "usr", "bin", "bash.exe"),
+	}
+}
+
+func existingGitBashPath(candidate string) string {
+	candidate = strings.TrimSpace(candidate)
+	if candidate == "" {
+		return ""
+	}
+	info, err := os.Stat(candidate)
+	if err != nil || info.IsDir() {
+		return ""
+	}
+
+	dir := filepath.Dir(filepath.Clean(candidate))
+	if !strings.EqualFold(filepath.Base(dir), "bin") {
+		return ""
+	}
+	root := filepath.Dir(dir)
+	if strings.EqualFold(filepath.Base(root), "usr") {
+		root = filepath.Dir(root)
+	}
+	for _, gitPath := range []string{
+		filepath.Join(root, "cmd", "git.exe"),
+		filepath.Join(root, "bin", "git.exe"),
+	} {
+		if gitInfo, statErr := os.Stat(gitPath); statErr == nil && !gitInfo.IsDir() {
+			return candidate
+		}
+	}
+	return ""
 }
 
 // windowsPowerShell resolves the best available PowerShell on Windows.
@@ -11835,7 +11939,9 @@ func absolutePathCandidates(command string) []string {
 			if len(value) >= 3 && value[0] == '/' && isASCIILetter(value[1]) && value[2] == '/' {
 				value = string(toUpperByte(value[1])) + ":\\" + value[3:]
 			} else if len(value) == 2 && value[0] == '/' && isASCIILetter(value[1]) {
-				value = string(toUpperByte(value[1])) + ":\\"
+				// A bare /c is commonly the option used by cmd.exe /c, not an
+				// MSYS2 drive path. Drive roots remain detectable as /c/.
+				continue
 			}
 		}
 		candidates = append(candidates, filepath.FromSlash(value))
@@ -12209,7 +12315,7 @@ func (a *App) SwitchModel(index int) error {
 	if m.ContextWindow > 0 {
 		a.config.ContextWindow = m.ContextWindow
 	}
-	a.config.ReasoningTag = m.ReasoningTag
+	a.config.ReasoningTag = normalizeReasoningTag(m.ReasoningTag)
 	cfg := a.config
 	a.mu.Unlock()
 	return a.saveConfig(cfg)

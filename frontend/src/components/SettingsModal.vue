@@ -56,10 +56,13 @@
             </div>
           </n-form-item>
           <n-form-item v-if="isWindows" :label="$t('settings.gitBashPath')">
-            <n-input
-              v-model:value="draft.gitBashPath"
-              :placeholder="$t('settings.gitBashPathPlaceholder')"
-            />
+            <div class="settings-field-stack">
+              <n-input
+                v-model:value="draft.gitBashPath"
+                :placeholder="$t('settings.gitBashPathPlaceholder')"
+              />
+              <span class="settings-field-hint">{{ $t('settings.gitBashPathHint') }}</span>
+            </div>
           </n-form-item>
         </section>
 
@@ -160,24 +163,30 @@
               <div class="config-section-title">{{ $t('settings.mcpTitle') }}</div>
               <div class="config-section-subtitle">{{ $t('settings.mcpSubtitle') }}</div>
             </div>
-            <n-space>
+          </div>
+          <div class="mcp-toolbar">
+            <div class="mcp-toolbar-mode">
               <n-button-group size="small">
                 <n-button :type="mcpEditMode === 'form' ? 'primary' : 'default'" @click="switchMcpMode('form')">{{ $t('settings.mcpForm') }}</n-button>
                 <n-button :type="mcpEditMode === 'json' ? 'primary' : 'default'" @click="switchMcpMode('json')">{{ $t('settings.mcpJson') }}</n-button>
               </n-button-group>
+            </div>
+            <div class="mcp-toolbar-actions">
               <n-button size="small" secondary :loading="mcpLoading" @click="loadMcpConfig">{{ $t('common.refresh') }}</n-button>
-              <n-button size="small" type="primary" :loading="mcpLoading" :disabled="!mcpSaveEnabled" @click="saveMcpConfig">{{ $t('settings.mcpSaveReconnect') }}</n-button>
-            </n-space>
+              <n-button size="small" type="primary" :loading="mcpLoading" :disabled="!mcpSaveEnabled" @click="saveMcpConfig">{{ $t('settings.mcpApplyReconnect') }}</n-button>
+            </div>
           </div>
+          <div class="mcp-save-scope">{{ $t('settings.mcpSaveScope') }}</div>
           <!-- Form mode -->
           <div v-if="mcpEditMode === 'form'" class="mcp-form-mode">
             <div v-for="(srv, idx) in mcpFormServers" :key="idx" class="mcp-server-card">
               <div class="mcp-server-card-header">
-                <n-input v-model:value="srv.name" :placeholder="$t('settings.mcpServerName')" size="small" style="width: 200px" />
+                <n-input v-model:value="srv.name" :placeholder="$t('settings.mcpServerName')" size="small" class="mcp-server-name-input" />
                 <n-select v-model:value="srv.transport" :options="[
                   { label: $t('settings.mcpTransportStdio'), value: 'stdio' },
                   { label: $t('settings.mcpTransportSse'), value: 'sse' },
-                ]" size="small" style="width: 120px" />
+                  { label: $t('settings.mcpTransportStreamableHttp'), value: 'streamable-http' },
+                ]" size="small" class="mcp-transport-select" />
                 <n-switch v-model:value="srv.enabled" size="small" />
                 <n-button size="small" quaternary type="error" @click="removeMcpServer(idx)">✕</n-button>
               </div>
@@ -187,7 +196,7 @@
                 <n-input v-model:value="srv.args" type="textarea" :rows="2" :placeholder="$t('settings.mcpArgs')" size="small" spellcheck="false" />
                 <n-input v-model:value="srv.env" type="textarea" :rows="2" :placeholder="$t('settings.mcpEnv')" size="small" spellcheck="false" />
               </template>
-              <!-- sse fields -->
+              <!-- HTTP fields -->
               <template v-else>
                 <n-input v-model:value="srv.url" :placeholder="$t('settings.mcpUrl')" size="small" />
                 <n-input v-model:value="srv.headers" type="textarea" :rows="2" :placeholder="$t('settings.mcpHeaders')" size="small" spellcheck="false" />
@@ -204,7 +213,7 @@
             :autosize="false"
             :rows="10"
             spellcheck="false"
-            placeholder='{"mcpServers":{"serviceName":{"enabled":true,"transport":"sse","url":"https://...","headers":{"Authorization":"Bearer ***"}}}}'
+            placeholder='{"mcpServers":{"serviceName":{"enabled":true,"transport":"streamable-http","url":"https://...","headers":{"Authorization":"Bearer ***"}}}}'
           />
           <div v-if="mcpEditMode === 'json'" :class="['mcp-json-check', mcpConfigValid ? 'valid' : 'invalid']">
             {{ mcpConfigValidationText }}
@@ -215,6 +224,7 @@
               <span :class="['mcp-dot', srv.status]"></span>
               <span class="mcp-name">{{ srv.name }}</span>
               <span class="mcp-status">{{ srv.status }}</span>
+              <span v-if="srv.transport" class="mcp-transport">{{ srv.transport }}</span>
               <span class="mcp-tools">{{ $t('tools.count', { count: srv.toolCount || 0 }) }}</span>
               <span v-if="srv.error" class="mcp-error" :title="srv.error">{{ srv.error }}</span>
             </div>
@@ -242,7 +252,7 @@
     <template #footer>
       <n-space justify="end">
         <n-button @click="onClose">{{ $t('common.cancel') }}</n-button>
-        <n-button type="primary" @click="onSave">{{ $t('common.save') }}</n-button>
+        <n-button type="primary" @click="onSave">{{ $t('settings.saveAppSettings') }}</n-button>
       </n-space>
     </template>
   </n-modal>
@@ -363,8 +373,8 @@ function defaultModelDraft(source = {}) {
     temperature: draft?.temperature ?? 0.2,
     maxTokens: draft?.maxTokens || 128000,
     contextWindow: draft?.contextWindow || 1048576,
-    reasoningTag: draft?.reasoningTag || '',
     ...source,
+    reasoningTag: String(source.reasoningTag || draft?.reasoningTag || 'reasoning_content').trim() || 'reasoning_content',
   };
 }
 
@@ -489,7 +499,7 @@ async function testModelConnection() {
       temperature: modelDraft.temperature ?? 0.2,
       maxTokens: modelDraft.maxTokens || 8192,
       contextWindow: modelDraft.contextWindow || 1048576,
-      reasoningTag: modelDraft.reasoningTag || '',
+      reasoningTag: modelDraft.reasoningTag || 'reasoning_content',
     });
     message.success(t('settings.connectionSuccess'));
   } catch (err) {
@@ -517,7 +527,7 @@ function commitModelDraft() {
     temperature: modelDraft.temperature ?? draft.temperature ?? 0.2,
     maxTokens: modelDraft.maxTokens || draft.maxTokens || 128000,
     contextWindow: modelDraft.contextWindow || draft.contextWindow || 1048576,
-    reasoningTag: modelDraft.reasoningTag || '',
+    reasoningTag: modelDraft.reasoningTag || 'reasoning_content',
   };
   const wasActive = modelEditorIndex.value >= 0 && isDraftModelActive(draft.models[modelEditorIndex.value]);
   if (modelEditorIndex.value >= 0) {
@@ -540,7 +550,7 @@ function applyModelToDraft(model) {
   draft.temperature = model.temperature ?? draft.temperature ?? 0.2;
   draft.maxTokens = model.maxTokens || draft.maxTokens || 128000;
   draft.contextWindow = model.contextWindow || draft.contextWindow || 1048576;
-  draft.reasoningTag = model.reasoningTag || '';
+  draft.reasoningTag = model.reasoningTag || 'reasoning_content';
   alignActiveProviderTab(normalizedProviderName(model.providerName));
 }
 
@@ -604,7 +614,13 @@ const mcpConfigValidationText = computed(() => mcpConfigParseResult.value.text);
 const mcpSaveEnabled = computed(() => mcpEditMode.value === 'form' || mcpConfigValid.value);
 
 function cloneConfigDraft(source) {
-  return JSON.parse(JSON.stringify(source || {}));
+  const next = JSON.parse(JSON.stringify(source || {}));
+  next.reasoningTag = String(next.reasoningTag || '').trim() || 'reasoning_content';
+  next.models = Array.isArray(next.models) ? next.models.map((model) => ({
+    ...model,
+    reasoningTag: String(model?.reasoningTag || '').trim() || 'reasoning_content',
+  })) : [];
+  return next;
 }
 
 function syncDraftFromProps() {
@@ -676,7 +692,7 @@ function syncJsonToForm() {
       command: cfg.command || '',
       args: (cfg.args || []).join('\n'),
       env: Object.entries(cfg.env || {}).map(([k, v]) => `${k}=${v}`).join('\n'),
-      transport: cfg.transport || 'stdio',
+      transport: normalizeMcpTransport(cfg),
       url: cfg.url || '',
       headers: Object.entries(cfg.headers || {}).map(([k, v]) => `${k}: ${v}`).join('\n'),
       enabled: cfg.enabled !== false,
@@ -691,8 +707,8 @@ function syncFormToJson() {
   for (const srv of mcpFormServers.value) {
     if (!srv.name?.trim()) continue;
     const cfg = {};
-    if (srv.transport === 'sse') {
-      cfg.transport = 'sse';
+    if (srv.transport !== 'stdio') {
+      cfg.transport = srv.transport === 'sse' ? 'sse' : 'streamable-http';
       if (srv.url?.trim()) cfg.url = srv.url.trim();
       const headers = {};
       (srv.headers || '').split('\n').forEach(line => {
@@ -715,6 +731,14 @@ function syncFormToJson() {
     servers[srv.name.trim()] = cfg;
   }
   mcpConfigText.value = JSON.stringify({ mcpServers: servers }, null, 2);
+}
+
+function normalizeMcpTransport(cfg = {}) {
+  const value = String(cfg.transport || '').trim().toLowerCase();
+  if (value === 'sse') return 'sse';
+  if (['streamable-http', 'http', 'rest'].includes(value)) return 'streamable-http';
+  if (!value && cfg.url && !cfg.command) return 'streamable-http';
+  return 'stdio';
 }
 
 function addMcpServer() {
@@ -943,6 +967,20 @@ watch(() => props.visible, (visible) => {
   line-height: 1.5;
 }
 
+.settings-field-stack {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.settings-field-hint,
+.mcp-save-scope {
+  color: #777;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
 .current-model-panel {
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid rgba(255, 255, 255, 0.08);
@@ -1160,6 +1198,25 @@ watch(() => props.visible, (visible) => {
   gap: 8px;
 }
 
+.mcp-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: -4px 0 6px;
+}
+
+.mcp-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+
+.mcp-save-scope {
+  margin-bottom: 12px;
+}
+
 .mcp-server-card {
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 8px;
@@ -1174,6 +1231,16 @@ watch(() => props.visible, (visible) => {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.mcp-server-name-input {
+  flex: 1;
+  min-width: 140px;
+}
+
+.mcp-transport-select {
+  width: 164px;
+  flex: none;
 }
 
 .mcp-server-card-header > :last-child {
@@ -1245,6 +1312,12 @@ watch(() => props.visible, (visible) => {
   font-size: 12px;
 }
 
+.mcp-transport {
+  color: #6f91b8;
+  font-family: var(--ally-mono-font);
+  font-size: 11px;
+}
+
 .mcp-tools {
   color: #737373;
   font-size: 11px;
@@ -1269,6 +1342,18 @@ watch(() => props.visible, (visible) => {
   .config-modal,
   .model-form-modal {
     max-width: calc(100vw - 24px);
+  }
+
+  .mcp-toolbar,
+  .mcp-server-card-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .mcp-toolbar-actions,
+  .mcp-server-name-input,
+  .mcp-transport-select {
+    width: 100%;
   }
 
   .settings-layout {

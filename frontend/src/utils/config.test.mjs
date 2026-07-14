@@ -2,6 +2,15 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { assignConfig, defaultConfig } from './config.mjs';
 
+test('reasoning tag defaults to reasoning_content', () => {
+  assert.equal(defaultConfig().reasoningTag, 'reasoning_content');
+
+  const draft = defaultConfig();
+  assignConfig(draft, { reasoningTag: '', models: [{ model: 'test', reasoningTag: '' }] });
+  assert.equal(draft.reasoningTag, 'reasoning_content');
+  assert.equal(draft.models[0].reasoningTag, 'reasoning_content');
+});
+
 test('assignConfig does not share the model list with a draft config', () => {
   const config = defaultConfig();
   const draft = defaultConfig();

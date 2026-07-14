@@ -1959,11 +1959,34 @@ body.platform-darwin .ally-wordmark {
 }
 
 .tool-error-detail {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   color: #fca5a5;
   font-size: 13px;
-  padding: 2px 8px 4px 18px;
-  cursor: help;
+  padding: 2px 8px 2px 18px;
   line-height: 1.4;
+}
+
+.tool-error-detail code {
+  color: #f8b4b4;
+  font-family: var(--ally-mono-font);
+  font-size: 11px;
+  opacity: 0.72;
+}
+
+.tool-error-reason {
+  margin: 0;
+  padding: 2px 8px 5px 18px;
+  color: #fecaca;
+  background: transparent;
+  font-family: var(--ally-ui-font);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 180px;
+  overflow: auto;
 }
 
 .tool-body:hover {

@@ -31,6 +31,18 @@ func TestMergeConfigKeepsModelsWhenOmitted(t *testing.T) {
 	}
 }
 
+func TestMergeConfigDefaultsReasoningTags(t *testing.T) {
+	got := mergeConfig(ConfigState{}, ConfigState{
+		Models: []ModelConfig{{Model: "test-model"}},
+	})
+	if got.ReasoningTag != defaultReasoningTag {
+		t.Fatalf("expected default reasoning tag %q, got %q", defaultReasoningTag, got.ReasoningTag)
+	}
+	if len(got.Models) != 1 || got.Models[0].ReasoningTag != defaultReasoningTag {
+		t.Fatalf("expected saved model reasoning tag to default to %q, got %#v", defaultReasoningTag, got.Models)
+	}
+}
+
 func TestMergeConfigClearsModelsWhenEmptyListProvided(t *testing.T) {
 	base := ConfigState{
 		Models: []ModelConfig{{Model: "saved-model"}},

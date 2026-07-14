@@ -54,15 +54,21 @@
     </div>
     <pre v-if="msg.expanded && msg.editChangedLinesBlock" class="edit-changed-lines-block">{{ msg.editChangedLinesBlock }}</pre>
     <CodeView
-      v-else-if="msg.kind === 'create'"
+      v-else-if="msg.kind === 'create' && msg.status !== 'error'"
       :code="msg.codeContent || ''"
       :file-path="msg.editFilePath || ''"
       :collapsed="isCreatePreview(msg)"
       :max-lines="BODY_PREVIEW_LINES"
       preview-mode="tail"
     />
-    <pre v-else-if="msg.body && !msg.errorCode && (msg.kind !== 'edit' || msg.status === 'error') && (msg.kind !== 'read' || msg.status === 'error')" :class="['tool-body', { 'fixed-scroll': isFixedKind(msg.kind), 'body-preview': isBodyPreview(msg) }]">{{ toolBodyText(msg) }}</pre>
-    <div v-if="msg.status === 'error' && msg.errorCode" class="tool-error-detail" :title="msg.body">{{ errorDescription(msg) }}</div>
+    <pre v-else-if="msg.body && msg.status !== 'error' && msg.kind !== 'edit' && msg.kind !== 'read'" :class="['tool-body', { 'fixed-scroll': isFixedKind(msg.kind), 'body-preview': isBodyPreview(msg) }]">{{ toolBodyText(msg) }}</pre>
+    <div v-if="msg.status === 'error'" class="tool-error-block">
+      <div v-if="msg.errorCode" class="tool-error-detail">
+        <span>{{ errorDescription(msg) }}</span>
+        <code>{{ msg.errorCode }}</code>
+      </div>
+      <pre v-if="msg.body" class="tool-error-reason">{{ msg.body }}</pre>
+    </div>
   </div>
 </template>
 

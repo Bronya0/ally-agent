@@ -161,6 +161,8 @@ Important config behavior:
 - `disabledSkills` is normalized and persisted.
 - Skill enable/disable operations update both memory and `config.json`.
 - Frontend `defaultConfig()` also includes `disabledSkills` so saving settings does not erase skill state.
+- `reasoningTag` defaults to `reasoning_content` in both backend and frontend model drafts.
+- On Windows, an auto-detected valid Git Bash path is returned in config so Settings can show the executable actually in use.
 
 ---
 
@@ -472,7 +474,7 @@ Settings page:
 Manager flow:
 
 1. Load `mcpServers` config.
-2. Spawn configured servers with stdio clients.
+2. Connect configured servers through stdio, SSE, or Streamable HTTP clients.
 3. `Initialize()`.
 4. `ListTools()`.
 5. Sanitize tool names into OpenAI function names.
@@ -590,7 +592,8 @@ Completed sub-agent records release their cancel function, keep at most 100 tool
 Sub-agent UI:
 
 - backend emits `sub:*` events
-- frontend removes the temporary `agent_delegate` tool card on `sub:spawn`
+- `sub:spawn` includes the parent tool-call identity so the frontend upgrades the original `agent_delegate` card in place
+- `tool:result` / `tool:error` finalize that same inline sub-agent card instead of appending raw JSON result cards
 - frontend displays a lightweight inline sub-agent progress row
 
 Goal mode:
@@ -658,7 +661,7 @@ Example MCP config:
 - Prefer `delete_path` / `remote_delete_path` over shell deletion.
 - `readTextFile` rejects binary files using NUL checks.
 - Release packages bundle ripgrep under the executable's `tools/` directory; development builds fall back to `rg` from `PATH`.
-- On Windows, `run_command` and `background_process` prefer **bash** (from Git for Windows) over PowerShell. Detection order: the `gitBashPath` setting (manual override) → Git for Windows common install paths → `bash.exe` on `PATH` → fallback to PowerShell (`pwsh.exe` → `powershell.exe`). When bash is not detected, startup warns the user to set `gitBashPath` in Settings. The system prompt dynamically reflects which shell is active so the model generates correct syntax. Linux/macOS always use `bash -c` and ignore `gitBashPath`.
+- On Windows, `run_command` and `background_process` prefer **bash** from Git for Windows over PowerShell. Detection order: a validated `gitBashPath` setting (manual override) → Git for Windows common install paths → derive Git Bash from `git.exe` on `PATH` → a `bash.exe` on `PATH` only when it belongs to the same Git for Windows installation → fallback to PowerShell (`pwsh.exe` → `powershell.exe`). Arbitrary `bash.exe` launchers such as `C:\Windows\System32\bash.exe` (legacy WSL) are rejected because their Linux PATH and argument forwarding break Windows tool discovery and shell expansion. When Git Bash is not detected, startup warns the user to set `gitBashPath` in Settings. The system prompt dynamically reflects which shell is active so the model generates correct syntax. Linux/macOS always use `bash -c` and ignore `gitBashPath`.
 - When bash is active on Windows, safety checks detect both Windows-style (`C:\...`) and MSYS2-style (`/c/...`) absolute paths outside the workspace.
 - Tool output is capped by `maxToolOutput`.
 - HTTP tools use bounded response sizes, timeouts, redirect limits, and clear user agent defaults.

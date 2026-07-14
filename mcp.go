@@ -495,9 +495,24 @@ func (m *McpManager) GetServerStatuses() []map[string]any {
 			"status":    handle.Status,
 			"error":     handle.Error,
 			"toolCount": len(handle.ToolDefs),
+			"transport": normalizedMcpTransport(handle.Config),
 		})
 	}
 	return result
+}
+
+func normalizedMcpTransport(cfg McpServerConfig) string {
+	name := strings.ToLower(strings.TrimSpace(cfg.Transport))
+	if name == "" && cfg.Command != "" {
+		return "stdio"
+	}
+	if name == "" && cfg.URL != "" {
+		return "streamable-http"
+	}
+	if name == "http" || name == "rest" {
+		return "streamable-http"
+	}
+	return name
 }
 
 func (m *McpManager) notifyChange() {
