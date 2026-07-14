@@ -221,6 +221,49 @@ code, pre {
   border-radius: 10px;
 }
 
+.code-block-wrapper {
+  position: relative;
+}
+
+.code-block-wrapper .code-copy-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  background: rgba(30, 30, 30, 0.85);
+  color: #8a8a8a;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s, color 0.15s;
+}
+
+.code-block-wrapper:hover .code-copy-btn,
+.code-block-wrapper:focus-within .code-copy-btn {
+  opacity: 1;
+}
+
+.code-block-wrapper .code-copy-btn:hover {
+  color: #18a058;
+  border-color: rgba(24, 160, 88, 0.3);
+}
+
+.code-block-wrapper .code-copy-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+.code-block-wrapper .code-block {
+  margin: 0;
+}
+
 .empty-chat {
   display: grid;
   place-items: center;

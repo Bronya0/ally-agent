@@ -3776,6 +3776,15 @@ func (a *App) OpenWorkspaceInFileManager() error {
 	return openPathInFileManager(root)
 }
 
+// OpenPathInFileManager opens a file or directory in the system file manager.
+// If path points to a file, the parent directory is opened instead.
+func (a *App) OpenPathInFileManager(path string) error {
+	if err := a.ensureInitialized(); err != nil {
+		return err
+	}
+	return openPathInFileManager(path)
+}
+
 func openPathInFileManager(path string) error {
 	if strings.TrimSpace(path) == "" {
 		return errors.New("path is required")

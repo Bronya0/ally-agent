@@ -432,15 +432,15 @@ const markdown = new MarkdownIt({
       return `<pre class="ascii-banner"><code>${markdown.utils.escapeHtml(code)}</code></pre>`;
     }
     if (isShellLanguage(lang)) {
-      return `<pre class="hljs code-block shell-code"><code>${highlightShellCommand(code)}</code></pre>`;
+      return `<div class="code-block-wrapper"><button class="code-copy-btn" title="Copy" aria-label="Copy code"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" fill="none" stroke="currentColor" stroke-width="2"/></svg></button><pre class="hljs code-block shell-code"><code>${highlightShellCommand(code)}</code></pre></div>`;
     }
     try {
       const highlighted = lang && hljs.getLanguage(lang)
         ? hljs.highlight(code, { language: lang }).value
         : hljs.highlightAuto(code).value;
-      return `<pre class="hljs code-block"><code>${highlighted}</code></pre>`;
+      return `<div class="code-block-wrapper"><button class="code-copy-btn" title="Copy" aria-label="Copy code"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" fill="none" stroke="currentColor" stroke-width="2"/></svg></button><pre class="hljs code-block"><code>${highlighted}</code></pre></div>`;
     } catch (_) {
-      return `<pre class="hljs code-block"><code>${markdown.utils.escapeHtml(code)}</code></pre>`;
+      return `<div class="code-block-wrapper"><button class="code-copy-btn" title="Copy" aria-label="Copy code"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" fill="none" stroke="currentColor" stroke-width="2"/></svg></button><pre class="hljs code-block"><code>${markdown.utils.escapeHtml(code)}</code></pre></div>`;
     }
   },
 });
@@ -566,6 +566,52 @@ function handleMermaidToolbarClick(event) {
   const action = button.dataset.mermaidAction || '';
   if (action === 'download') {
     downloadMermaidSvg(node);
+  }
+}
+
+function handleCodeCopyClick(event) {
+  const btn = event.target?.closest?.('.code-copy-btn');
+  if (!btn) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const wrapper = btn.closest('.code-block-wrapper');
+  const codeEl = wrapper?.querySelector('code');
+  const code = codeEl?.textContent || '';
+  if (!code) return;
+
+  const showCopied = () => {
+    if (!document.body.contains(btn)) return;
+    const original = btn.innerHTML;
+    btn.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><polyline points="20 6 9 17 4 12" fill="none" stroke="currentColor" stroke-width="2"/></svg>';
+    const timer = setTimeout(() => {
+      if (document.body.contains(btn)) btn.innerHTML = original;
+    }, 1500);
+    // Store timer on the element so it can be cleared if needed
+    btn._copyTimer = timer;
+  };
+
+  if (navigator.clipboard?.writeText) {
+    navigator.clipboard.writeText(code).then(showCopied).catch(() => {
+      fallbackCopy(code, showCopied);
+    });
+  } else {
+    fallbackCopy(code, showCopied);
+  }
+}
+
+function fallbackCopy(text, onSuccess) {
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    onSuccess();
+  } catch (_) {
+    message.error(t('app.copy.failed'));
   }
 }
 
@@ -4899,6 +4945,7 @@ onMounted(async () => {
   applyPlatformClass();
   window.addEventListener('keydown', handleGlobalKeydown, true);
   document.addEventListener('click', handleMermaidToolbarClick, true);
+  document.addEventListener('click', handleCodeCopyClick, true);
   window.addEventListener('pointerdown', handleAudioUnlock, { once: true, passive: true });
   window.addEventListener('keydown', handleAudioUnlock, { once: true });
   window.addEventListener('resize', refreshWindowMaximisedState);
@@ -4916,6 +4963,7 @@ onMounted(async () => {
 onUnmounted(() => {
   window.removeEventListener('keydown', handleGlobalKeydown, true);
   document.removeEventListener('click', handleMermaidToolbarClick, true);
+  document.removeEventListener('click', handleCodeCopyClick, true);
   window.removeEventListener('pointerdown', handleAudioUnlock);
   window.removeEventListener('keydown', handleAudioUnlock);
   window.removeEventListener('resize', refreshWindowMaximisedState);

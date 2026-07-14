@@ -138,7 +138,11 @@
                   <span v-if="isSkillActive(sk.name)" class="skill-badge loaded">{{ $t('common.enabled') }}</span>
                 </div>
                 <div class="skill-description">{{ sk.description || sk.whenToUse || $t('common.noDescription') }}</div>
-                <div class="skill-meta" :title="sk.path">{{ sk.path || sk.dir || '-' }}</div>
+                <div
+                  class="skill-meta clickable"
+                  :title="$t('settings.openSkillPath', { path: sk.path || sk.dir })"
+                  @click="handleOpenSkillPath(sk)"
+                >{{ sk.path || sk.dir || '-' }}</div>
               </div>
               <n-switch
                 :value="isSkillActive(sk.name)"
@@ -270,7 +274,7 @@ import { BrowserOpenURL } from '../../wailsjs/runtime/runtime';
 import {
   GetMcpConfig, GetMcpServers, SaveMcpConfig, RestartMcpServers,
   ListSkills, ActivateSkill, DeactivateSkill, ClearSkills, GetActiveSkills,
-  ListTools,
+  ListTools, OpenPathInFileManager,
   TestModelConnection,
 } from '../../wailsjs/go/main/App';
 
@@ -612,6 +616,16 @@ function normalizeSkillName(name) {
 function isSkillActive(name) {
   const target = normalizeSkillName(name);
   return activeSkillNames.value.some((item) => normalizeSkillName(item) === target);
+}
+
+async function handleOpenSkillPath(sk) {
+  const path = sk?.path || sk?.dir;
+  if (!path) return;
+  try {
+    await OpenPathInFileManager(path);
+  } catch (err) {
+    message.warning(t('settings.openSkillPathFailed', { error: err }));
+  }
 }
 
 async function refreshSkillState() {
@@ -990,6 +1004,16 @@ watch(() => props.visible, (visible) => {
   text-overflow: ellipsis;
   white-space: nowrap;
   max-width: 320px;
+}
+
+.skill-meta.clickable {
+  cursor: pointer;
+  color: #888;
+}
+
+.skill-meta.clickable:hover {
+  color: #18a058;
+  text-decoration: underline;
 }
 
 .mcp-config-editor {

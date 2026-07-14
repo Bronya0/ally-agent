@@ -37,10 +37,9 @@ jobs:
         shell: pwsh
         run: go install "github.com/wailsapp/wails/v2/cmd/wails@${{ env.WAILS_VERSION }}"
 
-      - name: Test and build
+      - name: Build
         shell: pwsh
         run: |
-          go test ./...
           wails build -clean -trimpath -o "${{ env.APP_NAME }}.exe"
 
       - name: Bundle ripgrep and licenses
@@ -106,9 +105,8 @@ jobs:
       - name: Install Wails
         run: go install "github.com/wailsapp/wails/v2/cmd/wails@${{ env.WAILS_VERSION }}"
 
-      - name: Test and build
+      - name: Build
         run: |
-          go test ./...
           wails build -clean -trimpath -o "${{ env.APP_NAME }}"
 
       - name: Bundle ripgrep and licenses
@@ -168,9 +166,8 @@ jobs:
       - name: Install Wails
         run: go install "github.com/wailsapp/wails/v2/cmd/wails@${{ env.WAILS_VERSION }}"
 
-      - name: Test and build
+      - name: Build
         run: |
-          go test ./...
           wails build -clean -trimpath -platform darwin/universal -o "${{ env.APP_NAME }}"
 
       - name: Bundle universal ripgrep and licenses

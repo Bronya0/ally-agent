@@ -64,6 +64,8 @@ export function ListSkills():Promise<Array<main.SkillDefinition>>;
 
 export function ListTools():Promise<Array<main.ToolDefinitionSummary>>;
 
+export function OpenPathInFileManager(arg1:string):Promise<void>;
+
 export function OpenWorkspaceInFileManager():Promise<void>;
 
 export function ReadFile(arg1:main.ReadFileRequest):Promise<main.ReadFileResult>;

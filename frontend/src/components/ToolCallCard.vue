@@ -30,8 +30,8 @@
           <span class="edit-file-meta">{{ $t('tools.changes', { count: entry.changes?.length || 0 }) }}</span>
         </div>
         <div class="edit-file-content">
-          <DiffView v-if="entry.diff" :diff-text="entry.diff" :file-path="entry.path" :show-header="false" :collapsed="!msg.expanded" :added-count="entry.added || 0" :removed-count="entry.removed || 0" />
-          <DiffView v-for="(change, ci) in entry.changes" v-else :key="ci" :old-text="change.oldText || ''" :new-text="change.newText || ''" :file-path="entry.path" :show-header="false" :collapsed="!msg.expanded" :is-incomplete="msg.status === 'running'" />
+          <DiffView v-if="entry.diff" :diff-text="entry.diff" :file-path="entry.path" :show-header="false" :collapsed="!msg.expanded" :added-count="entry.added || 0" :removed-count="entry.removed || 0" @toggle="handleToggle(msg)" />
+          <DiffView v-for="(change, ci) in entry.changes" v-else :key="ci" :old-text="change.oldText || ''" :new-text="change.newText || ''" :file-path="entry.path" :show-header="false" :collapsed="!msg.expanded" :is-incomplete="msg.status === 'running'" @toggle="handleToggle(msg)" />
         </div>
       </div>
     </div>

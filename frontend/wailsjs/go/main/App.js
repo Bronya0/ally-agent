@@ -126,6 +126,10 @@ export function ListTools() {
   return window['go']['main']['App']['ListTools']();
 }
 
+export function OpenPathInFileManager(arg1) {
+  return window['go']['main']['App']['OpenPathInFileManager'](arg1);
+}
+
 export function OpenWorkspaceInFileManager() {
   return window['go']['main']['App']['OpenWorkspaceInFileManager']();
 }

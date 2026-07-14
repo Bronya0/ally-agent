@@ -292,6 +292,8 @@ export namespace main {
 	    contextWindow: number;
 	    customPrompt: string;
 	    planMode: boolean;
+	    allowPrivateNetwork: boolean;
+	    gitBashPath: string;
 	    models?: ModelConfig[];
 	    disabledSkills?: string[];
 	
@@ -312,6 +314,8 @@ export namespace main {
 	        this.contextWindow = source["contextWindow"];
 	        this.customPrompt = source["customPrompt"];
 	        this.planMode = source["planMode"];
+	        this.allowPrivateNetwork = source["allowPrivateNetwork"];
+	        this.gitBashPath = source["gitBashPath"];
 	        this.models = this.convertValues(source["models"], ModelConfig);
 	        this.disabledSkills = source["disabledSkills"];
 	    }
