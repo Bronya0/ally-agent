@@ -143,9 +143,12 @@ function scrollToBottom(options = {}) {
         return;
       }
       const viewport = getScrollViewport();
-      const bottom = viewport?.scrollHeight || 999999;
-      scrollbarRef.value?.scrollTo({ top: bottom });
-      if (viewport) viewport.scrollTop = bottom;
+      // Use a large sentinel value so the browser clamps to the true
+      // scrollable bottom. This is robust against content-visibility: auto
+      // elements whose contain-intrinsic-size placeholders make scrollHeight
+      // smaller than the actual rendered content height.
+      scrollbarRef.value?.scrollTo({ top: 999999999 });
+      if (viewport) viewport.scrollTop = 999999999;
       autoFollow.value = true;
       showJumpToBottom.value = false;
     });
@@ -196,23 +199,30 @@ function saveScrollPosition() {
   for (let i = 0; i < children.length; i++) {
     const rect = children[i].getBoundingClientRect();
     if (rect.bottom > viewportTop + 1) {
-      return { index: i, offset: Math.round(rect.top - viewportTop) };
+      return { index: i, offset: Math.round(rect.top - viewportTop), scrollTop: viewport.scrollTop };
     }
   }
-  return { index: children.length - 1, offset: 0 };
+  return { index: children.length - 1, offset: 0, scrollTop: viewport.scrollTop };
 }
 
 /**
  * Restore a previously saved anchor by scrolling the indexed message element
  * back to its recorded offset from the viewport top.
  *
- * Two correction passes are performed (each a double-rAF apart). The first
- * pass positions the element; the second pass corrects drift caused by
- * content-visibility: auto elements above the target expanding from their
- * placeholder heights to real heights once they scroll near the viewport.
+ * Pass 0 restores the absolute scrollTop immediately (before the next paint)
+ * so the user never sees the top of the chat. Pass 1 and 2 correct drift
+ * caused by content-visibility: auto elements above the target expanding
+ * from their placeholder heights to real heights once they scroll near
+ * the viewport.
  */
 function restoreScrollPosition(anchor) {
   if (!anchor || typeof anchor !== 'object' || anchor.index == null) return;
+  // Pass 0: immediate absolute scrollTop restoration — runs before the
+  // next paint, eliminating the flash of showing the top of the chat.
+  if (anchor.scrollTop != null) {
+    const viewport = getScrollViewport();
+    if (viewport) viewport.scrollTop = anchor.scrollTop;
+  }
   const apply = () => {
     const root = messagesRootRef.value;
     const viewport = getScrollViewport();
