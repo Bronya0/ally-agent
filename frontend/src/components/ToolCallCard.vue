@@ -61,7 +61,8 @@
       :max-lines="BODY_PREVIEW_LINES"
       preview-mode="tail"
     />
-    <pre v-else-if="msg.body && (msg.kind !== 'edit' || msg.status === 'error') && (msg.kind !== 'read' || msg.status === 'error')" :class="['tool-body', { 'fixed-scroll': isFixedKind(msg.kind), 'body-preview': isBodyPreview(msg) }]">{{ toolBodyText(msg) }}</pre>
+    <pre v-else-if="msg.body && !msg.errorCode && (msg.kind !== 'edit' || msg.status === 'error') && (msg.kind !== 'read' || msg.status === 'error')" :class="['tool-body', { 'fixed-scroll': isFixedKind(msg.kind), 'body-preview': isBodyPreview(msg) }]">{{ toolBodyText(msg) }}</pre>
+    <div v-if="msg.status === 'error' && msg.errorCode" class="tool-error-detail" :title="msg.body">{{ errorDescription(msg) }}</div>
   </div>
 </template>
 
@@ -238,6 +239,14 @@ function toolBodyText(msg) {
   const body = String(msg.body || '');
   if (!isBodyPreview(msg)) return body;
   return normalizedLines(body).slice(0, BODY_PREVIEW_LINES).join('\n');
+}
+
+function errorDescription(msg) {
+  const code = msg.errorCode;
+  if (!code) return String(msg.body || '');
+  const key = `tools.error.${code}`;
+  const translated = t(key);
+  return translated !== key ? translated : t('tools.error.unknown');
 }
 
 function hasEditPreview(msg) {

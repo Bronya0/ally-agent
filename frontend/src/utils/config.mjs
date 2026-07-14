@@ -12,6 +12,7 @@ export function defaultConfig() {
     customPrompt: '',
     allowPrivateNetwork: true,
     gitBashPath: '',
+    reasoningTag: '',
     disabledSkills: [],
     models: [],
   };

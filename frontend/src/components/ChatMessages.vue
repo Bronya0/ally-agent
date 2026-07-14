@@ -55,6 +55,10 @@
         </RenderBoundary>
         <!-- Sub-agent -->
         <RenderBoundary v-else-if="msg.kind === 'subagent'" :label="$t('chat.subagent')"><SubagentInlineCard :msg="msg" /></RenderBoundary>
+        <!-- HTML Render -->
+        <RenderBoundary v-else-if="msg.kind === 'render_html'" :label="$t('tools.kind.renderHtml')">
+          <HtmlRenderCard :msg="msg" />
+        </RenderBoundary>
         </template>
         <div v-if="messages.length === 0" class="empty-chat">
           <n-empty :description="$t('chat.empty')" />
@@ -75,6 +79,7 @@ import ToolCallCard from './ToolCallCard.vue';
 import AskToolCard from './AskToolCard.vue';
 import ReadGroupCard from './ReadGroupCard.vue';
 import SubagentInlineCard from './SubagentInlineCard.vue';
+import HtmlRenderCard from './HtmlRenderCard.vue';
 import RenderBoundary from './RenderBoundary.vue';
 
 defineProps({

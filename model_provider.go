@@ -136,6 +136,23 @@ func emitModelStreamEvent(onEvent func(modelStreamEvent), event modelStreamEvent
 	}
 }
 
+// partialTagMatch returns the length of the suffix of s that is a prefix of tag.
+// For example, if tag is "<sink>" then partialTagMatch("abc<sin", tag) returns 4
+// because "<sin" is both a prefix of tag and a suffix of s.
+// This is used to detect tags that may be split across streaming chunks.
+func partialTagMatch(s, tag string) int {
+	maxLen := len(s)
+	if len(tag) < maxLen {
+		maxLen = len(tag)
+	}
+	for n := maxLen; n > 0; n-- {
+		if strings.HasPrefix(tag, s[len(s)-n:]) {
+			return n
+		}
+	}
+	return 0
+}
+
 func (a *App) streamOpenAIChat(ctx context.Context, cfg ConfigState, model string, messages []legacyopenai.ChatCompletionMessage, tools []legacyopenai.Tool, onEvent func(modelStreamEvent)) (*modelStreamResult, error) {
 	clientCfg := legacyopenai.DefaultConfig(cfg.APIKey)
 	clientCfg.BaseURL = baseURLForAPIFormat(cfg)
@@ -179,6 +196,18 @@ func (a *App) streamOpenAIChat(ctx context.Context, cfg ConfigState, model strin
 
 	var assistant strings.Builder
 	var reasoning strings.Builder
+	var reasoningState struct {
+		tag      string
+		openTag  string
+		closeTag string
+		inTag    bool
+		partial  string
+	}
+	if cfg.ReasoningTag != "" && cfg.ReasoningTag != "reasoning_content" {
+		reasoningState.tag = cfg.ReasoningTag
+		reasoningState.openTag = "<" + cfg.ReasoningTag + ">"
+		reasoningState.closeTag = "</" + cfg.ReasoningTag + ">"
+	}
 	toolCalls := []legacyopenai.ToolCall{}
 	var usage *modelUsage
 	for {
@@ -207,19 +236,92 @@ func (a *App) streamOpenAIChat(ctx context.Context, cfg ConfigState, model strin
 			continue
 		}
 		delta := resp.Choices[0].Delta
-		if delta.Content != "" {
-			assistant.WriteString(delta.Content)
-			emitModelStreamEvent(onEvent, modelStreamEvent{ContentDelta: delta.Content})
-		}
-		if delta.ReasoningContent != "" {
-			reasoning.WriteString(delta.ReasoningContent)
-			emitModelStreamEvent(onEvent, modelStreamEvent{ReasoningDelta: delta.ReasoningContent})
+		if reasoningState.tag != "" {
+			// Parse content-level reasoning tags embedded in delta.Content
+			// (e.g. <sink>...</sink> or any configured <tag>...</tag>).
+			text := delta.Content
+			if reasoningState.partial != "" {
+				text = reasoningState.partial + text
+				reasoningState.partial = ""
+			}
+			remaining := text
+			for len(remaining) > 0 {
+				if reasoningState.inTag {
+					// Look for close tag.
+					idx := strings.Index(remaining, reasoningState.closeTag)
+					if idx >= 0 {
+						reasoning.WriteString(remaining[:idx])
+						emitModelStreamEvent(onEvent, modelStreamEvent{ReasoningDelta: remaining[:idx]})
+						remaining = remaining[idx+len(reasoningState.closeTag):]
+						reasoningState.inTag = false
+					} else {
+						// Check if remaining ends with a partial close tag.
+						overlap := partialTagMatch(remaining, reasoningState.closeTag)
+						if overlap > 0 {
+							reasoning.WriteString(remaining[:len(remaining)-overlap])
+							emitModelStreamEvent(onEvent, modelStreamEvent{ReasoningDelta: remaining[:len(remaining)-overlap]})
+							reasoningState.partial = remaining[len(remaining)-overlap:]
+							remaining = ""
+						} else {
+							reasoning.WriteString(remaining)
+							emitModelStreamEvent(onEvent, modelStreamEvent{ReasoningDelta: remaining})
+							remaining = ""
+						}
+					}
+				} else {
+					// Look for open tag.
+					idx := strings.Index(remaining, reasoningState.openTag)
+					if idx >= 0 {
+						if idx > 0 {
+							assistant.WriteString(remaining[:idx])
+							emitModelStreamEvent(onEvent, modelStreamEvent{ContentDelta: remaining[:idx]})
+						}
+						remaining = remaining[idx+len(reasoningState.openTag):]
+						reasoningState.inTag = true
+					} else {
+						// Check if remaining ends with a partial open tag.
+						overlap := partialTagMatch(remaining, reasoningState.openTag)
+						if overlap > 0 && overlap < len(reasoningState.openTag) {
+							assistant.WriteString(remaining[:len(remaining)-overlap])
+							emitModelStreamEvent(onEvent, modelStreamEvent{ContentDelta: remaining[:len(remaining)-overlap]})
+							reasoningState.partial = remaining[len(remaining)-overlap:]
+							remaining = ""
+						} else {
+							assistant.WriteString(remaining)
+							emitModelStreamEvent(onEvent, modelStreamEvent{ContentDelta: remaining})
+							remaining = ""
+						}
+					}
+				}
+			}
+		} else {
+			// Original behavior: use delta.Content and delta.ReasoningContent separately.
+			if delta.Content != "" {
+				assistant.WriteString(delta.Content)
+				emitModelStreamEvent(onEvent, modelStreamEvent{ContentDelta: delta.Content})
+			}
+			if delta.ReasoningContent != "" {
+				reasoning.WriteString(delta.ReasoningContent)
+				emitModelStreamEvent(onEvent, modelStreamEvent{ReasoningDelta: delta.ReasoningContent})
+			}
 		}
 		if len(delta.ToolCalls) > 0 {
 			mergeToolCallDeltas(&toolCalls, delta.ToolCalls)
 			emitModelStreamEvent(onEvent, modelStreamEvent{ToolCalls: cloneToolCalls(toolCalls)})
 		}
 	}
+
+	// Flush any residual partial tag content left in the streaming parser.
+	if reasoningState.tag != "" && reasoningState.partial != "" {
+		if reasoningState.inTag {
+			reasoning.WriteString(reasoningState.partial)
+			emitModelStreamEvent(onEvent, modelStreamEvent{ReasoningDelta: reasoningState.partial})
+		} else {
+			assistant.WriteString(reasoningState.partial)
+			emitModelStreamEvent(onEvent, modelStreamEvent{ContentDelta: reasoningState.partial})
+		}
+	}
+
 	return &modelStreamResult{
 		Content:   assistant.String(),
 		Reasoning: reasoning.String(),

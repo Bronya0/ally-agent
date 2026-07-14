@@ -658,7 +658,7 @@ Example MCP config:
 - Prefer `delete_path` / `remote_delete_path` over shell deletion.
 - `readTextFile` rejects binary files using NUL checks.
 - Release packages bundle ripgrep under the executable's `tools/` directory; development builds fall back to `rg` from `PATH`.
-- On Windows, `run_command` and `background_process` prefer **bash** (from Git for Windows) over PowerShell. Detection order: the `gitBashPath` setting (manual override) → Git for Windows common install paths → `bash.exe` on `PATH` → fallback to PowerShell (`pwsh.exe` → `powershell.exe`). When bash is not detected, startup warns the user to set `gitBashPath` in Settings. The system prompt dynamically reflects which shell is active so the model generates correct syntax. Linux/macOS always use `bash -lc` and ignore `gitBashPath`.
+- On Windows, `run_command` and `background_process` prefer **bash** (from Git for Windows) over PowerShell. Detection order: the `gitBashPath` setting (manual override) → Git for Windows common install paths → `bash.exe` on `PATH` → fallback to PowerShell (`pwsh.exe` → `powershell.exe`). When bash is not detected, startup warns the user to set `gitBashPath` in Settings. The system prompt dynamically reflects which shell is active so the model generates correct syntax. Linux/macOS always use `bash -c` and ignore `gitBashPath`.
 - When bash is active on Windows, safety checks detect both Windows-style (`C:\...`) and MSYS2-style (`/c/...`) absolute paths outside the workspace.
 - Tool output is capped by `maxToolOutput`.
 - HTTP tools use bounded response sizes, timeouts, redirect limits, and clear user agent defaults.

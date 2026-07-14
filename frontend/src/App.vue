@@ -2055,6 +2055,21 @@ function bindRuntimeEvents() {
       existing.time = new Date().toLocaleTimeString();
     }
   });
+  onRuntimeEvent('render:html', (data) => {
+    const session = sessions.value.find(s => s.id === data.sessionId);
+    if (!session) return;
+    session.messages.push({
+      role: 'tool_call',
+      kind: 'render_html',
+      title: data.title || '',
+      htmlContent: data.html || '',
+      status: 'success',
+      time: new Date().toLocaleTimeString(),
+    });
+    if (session.id === activeSessionId.value) {
+      scrollMessagesToBottom();
+    }
+  });
   onRuntimeEvent('run:done', (data) => {    flushStreamBuffer(data.runId);
     thinking.value = false;
 	  refreshGitStatus();
@@ -2192,6 +2207,9 @@ function bindRuntimeEvents() {
         startTime: Date.now(),
         durationMs: 0,
         durationText: '',
+        inputTokens: 0,
+        outputTokens: 0,
+        totalTokens: 0,
       });
     }
     // Main chat message
@@ -2212,14 +2230,27 @@ function bindRuntimeEvents() {
         time: new Date().toLocaleTimeString(),
         durationMs: 0,
         durationText: '',
+        inputTokens: 0,
+        outputTokens: 0,
+        totalTokens: 0,
       });
     }
   });
   onRuntimeEvent('sub:step', (data) => {
     const r = subRuns.value.find(s => s.id === data.id);
-    if (r) r.steps = data.step || 0;
+    if (r) {
+      r.steps = data.step || 0;
+      r.inputTokens = data.inputTokens || 0;
+      r.outputTokens = data.outputTokens || 0;
+      r.totalTokens = data.totalTokens || 0;
+    }
     const msg = findSubagentMsg(data.id, data.sessionId || '');
-    if (msg) msg.steps = data.step || 0;
+    if (msg) {
+      msg.steps = data.step || 0;
+      msg.inputTokens = data.inputTokens || 0;
+      msg.outputTokens = data.outputTokens || 0;
+      msg.totalTokens = data.totalTokens || 0;
+    }
   });
   onRuntimeEvent('sub:tool:start', (data) => {
     const r = subRuns.value.find(s => s.id === data.id);
@@ -2265,6 +2296,9 @@ function bindRuntimeEvents() {
       r.steps = data.steps || r.steps;
       r.durationMs = Number(data.durationMs || 0);
       r.durationText = formatDurationShort(r.durationMs);
+      r.inputTokens = data.inputTokens || 0;
+      r.outputTokens = data.outputTokens || 0;
+      r.totalTokens = data.totalTokens || 0;
     }
     const msg = findSubagentMsg(data.id, data.sessionId || '');
     if (msg) {
@@ -2275,6 +2309,9 @@ function bindRuntimeEvents() {
       msg.time = new Date().toLocaleTimeString();
       msg.durationMs = Number(data.durationMs || 0);
       msg.durationText = formatDurationShort(msg.durationMs);
+      msg.inputTokens = data.inputTokens || 0;
+      msg.outputTokens = data.outputTokens || 0;
+      msg.totalTokens = data.totalTokens || 0;
     }
   });
   onRuntimeEvent('sub:error', (data) => {
@@ -4144,6 +4181,7 @@ function toolKind(name) {
   if (name === 'scheduled_task') return 'scheduled';
   if (name === 'memory_read' || name === 'memory_write') return 'memory';
   if (name === 'agent_delegate') return 'other';
+  if (name === 'render_html') return 'render_html';
 
   return 'other';
 }

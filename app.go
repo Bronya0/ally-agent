@@ -277,6 +277,7 @@ type ModelConfig struct {
 	Temperature   float32 `json:"temperature"`
 	MaxTokens     int     `json:"maxTokens"`
 	ContextWindow int     `json:"contextWindow"`
+	ReasoningTag  string  `json:"reasoningTag,omitempty"`
 }
 
 type ConfigState struct {
@@ -293,6 +294,7 @@ type ConfigState struct {
 	PlanMode            bool          `json:"planMode"`
 	AllowPrivateNetwork bool          `json:"allowPrivateNetwork"`
 	GitBashPath         string        `json:"gitBashPath"`
+	ReasoningTag        string        `json:"reasoningTag,omitempty"`
 	Models              []ModelConfig `json:"models,omitempty"`
 	DisabledSkills      []string      `json:"disabledSkills,omitempty"`
 	grillMode           bool
@@ -989,20 +991,23 @@ type AgentDelegateResult struct {
 
 // SubagentRun tracks a running/complete sub-agent instance.
 type SubagentRun struct {
-	ID          string             `json:"id"`
-	SessionID   string             `json:"sessionId,omitempty"`
-	Description string             `json:"description"`
-	Profile     string             `json:"profile"`
-	Status      string             `json:"status"` // running, completed, failed, timed_out
-	Steps       int                `json:"steps"`
-	MaxSteps    int                `json:"maxSteps"`
-	Summary     string             `json:"summary,omitempty"`
-	FilesRead   []string           `json:"filesRead,omitempty"`
-	FilesEdited []string           `json:"filesEdited,omitempty"`
-	Error       string             `json:"error,omitempty"`
-	ToolCalls   []SubToolEvent     `json:"toolCalls,omitempty"`
-	StartTime   int64              `json:"startTime"`
-	cancel      context.CancelFunc `json:"-"`
+	ID            string             `json:"id"`
+	SessionID     string             `json:"sessionId,omitempty"`
+	Description   string             `json:"description"`
+	Profile       string             `json:"profile"`
+	Status        string             `json:"status"` // running, completed, failed, timed_out
+	Steps         int                `json:"steps"`
+	MaxSteps      int                `json:"maxSteps"`
+	Summary       string             `json:"summary,omitempty"`
+	FilesRead     []string           `json:"filesRead,omitempty"`
+	FilesEdited   []string           `json:"filesEdited,omitempty"`
+	Error         string             `json:"error,omitempty"`
+	ToolCalls     []SubToolEvent     `json:"toolCalls,omitempty"`
+	StartTime     int64              `json:"startTime"`
+	InputTokens   int                `json:"inputTokens,omitempty"`
+	OutputTokens  int                `json:"outputTokens,omitempty"`
+	TotalTokens   int                `json:"totalTokens,omitempty"`
+	cancel        context.CancelFunc `json:"-"`
 }
 
 // SubToolEvent records a single tool invocation inside a sub-agent.
@@ -3057,6 +3062,56 @@ func buildSystemPromptParts(planMode bool, allSkills []SkillDefinition, workspac
 
 	b.WriteString("Use `todo_write` outside plan mode only when longer work genuinely benefits from visible progress tracking; keep entries short and current.\n\n")
 
+	b.WriteString("Use `render_html` only for interactive widgets or custom visualizations that Mermaid diagrams and Markdown cannot express — for example interactive calculators, dynamic data explorers, styled component mockups, or custom animated SVG. Do NOT use it for diagrams, flowcharts, pie charts, or tables: use Mermaid fenced code blocks for diagrams and Markdown tables for tabular data. Keep HTML self-contained with inline CSS, no external resources, limit to 50,000 characters. After calling it, briefly describe in your text response what was rendered.\n\n")
+
+	b.WriteString("# Delegation\n\n" +
+		"Use `agent_delegate` to proactively offload substantial, self-contained sub-tasks to a child agent. Each child agent runs its own tool loop and returns only a summary, so it absorbs intermediate token costs (file reads, search results) that would otherwise bloat your context.\n\n" +
+		"Proactively delegate when:\n" +
+		"- A request involves multiple independent sub-tasks (e.g. refactor backend handlers AND update frontend components AND adjust tests). Delegate each sub-task as a separate `agent_delegate` call in the same response.\n" +
+		"- A sub-task requires extensive file reading or searching that produces large outputs you only need a summary of.\n" +
+		"- The user asks to implement something across many files where the changes per file or module are well-defined.\n\n" +
+		"Do NOT delegate when:\n" +
+		"- The task is a single focused edit or read — do it directly.\n" +
+		"- Later steps depend on exact prior output (file contents, specific values) — do it sequentially yourself.\n" +
+		"- You haven't explored enough to know what to delegate — explore first, then delegate with a concrete task.\n\n" +
+		"Each `agent_delegate` call should include a specific `task` with file paths and expected outcomes, and a short `description` for UI display. Set `cleanContext` to true for tasks that don't depend on project structure.\n\n")
+
+	b.WriteString("# Response Format\n\n" +
+		"Use light Markdown. Match the user's language. Do not use emoji unless the user does first.\n" +
+		"- When comparing entities across multiple dimensions, use Markdown tables instead of lists.\n" +
+		"- Keep lists flat (single level); do not nest bullets.\n" +
+		"- Put code symbols and file paths in backticks: `getSha256()`, `src/app.ts`.\n" +
+		"- Do not place a Markdown header before the opening sentence; answer directly first.\n" +
+		"- Match answer complexity to task complexity: trivial questions get one-liners.\n\n" +
+		"# Visual Output\n\n" +
+		"The UI renders Mermaid fenced code blocks (```mermaid or ```flowchart, ```sequence, ```gantt, etc.) as interactive diagrams. Supported types:\n" +
+		"- `flowchart` / `graph` — flowcharts and decision trees\n" +
+		"- `sequenceDiagram` — sequence/interaction diagrams\n" +
+		"- `classDiagram` — class structure and relationships\n" +
+		"- `stateDiagram` / `stateDiagram-v2` — state machines\n" +
+		"- `erDiagram` — entity-relationship diagrams\n" +
+		"- `gantt` — Gantt charts and schedules\n" +
+		"- `pie` — pie charts and proportions\n" +
+		"- `gitGraph` — Git branch/commit history\n" +
+		"- `journey` — user journey maps\n" +
+		"- `mindmap` — mind maps and concept hierarchies\n" +
+		"- `timeline` — chronological timelines\n" +
+		"- `quadrantChart` — quadrant analysis\n" +
+		"- `requirementDiagram` — requirement modeling\n" +
+		"- `c4Diagram` — C4 architecture diagrams\n" +
+		"- `sankey-beta` — Sankey flow diagrams\n" +
+		"- `xychart-beta` — XY line/bar charts\n" +
+		"- `block-beta` — block architecture diagrams\n" +
+		"- `architecture-beta` — architecture overview\n" +
+		"- `packet-beta` — network packet structure\n" +
+		"Prefer Mermaid for all diagrams. Use Markdown tables for tabular data. Use `render_html` only for interactive content that neither Mermaid nor Markdown can express.\n\n")
+
+	b.WriteString("# Citation\n\n" +
+		"When incorporating factual information from web sources (via `web_fetch` or `http_request`), cite the source with an inline Markdown link immediately after the claim. Use the format: [source](full-url). Example: React 19 introduces a new compiler [source](https://react.dev/blog/react-19).\n" +
+		"- Cite when you first introduce a specific fact, number, or claim from a source.\n" +
+		"- Do not repeat citations in summaries or conclusions that restate already-cited facts.\n" +
+		"- Never fabricate URLs.\n\n")
+
 	b.WriteString(buildPlatformInfo(gitBashPath))
 
 	b.WriteString("# Coding Guidelines\n\n" +
@@ -3072,6 +3127,8 @@ func buildSystemPromptParts(planMode bool, allSkills []SkillDefinition, workspac
 		"- Destructive operations: never delete or overwrite workspace root, home roots, system directories, or any path containing .git.\n" +
 		"- Batch commands: review commands with wildcards or variable-expanded paths before execution to avoid unintended side effects.\n" +
 		"- When in doubt about whether a path is safe, stop and ask the user.\n\n" +
+		"# Temporary Files\n\n" +
+		"When creating intermediate artifacts (scripts, drafts, test fixtures, build outputs) that are not final deliverables, place them under a `.tmp/` directory within the current workspace. Create `.tmp/` if it does not exist. This keeps the workspace clean and makes cleanup trivial. Final deliverables and user-requested output files go in their intended workspace location, not in `.tmp/`.\n\n" +
 		"# Context Management\n\n" +
 		"When the conversation grows long, older turns are automatically condensed into a summary. Preserve its confirmed conclusions and do not redo completed work, but do not treat it as a current file snapshot: read again whenever exact text, current MD5, or other live state is required. If something is genuinely missing, recover it with tools or ask the user; do not guess.\n")
 
@@ -3156,6 +3213,7 @@ func buildPlatformInfo(gitBashPath string) string {
 		b.WriteString("Use standard bash commands: pipes (`|`), `&&`, `||`, `;`, `$VAR`, `export`.\n")
 		if osName == "windows" {
 			b.WriteString("Paths use forward slashes (`/`); Windows drive letters are accessed as `/c/...` (e.g. `/c/Users`). Native project tools (`go`, `npm`, `git`, `rg`) run normally and their exit code is propagated.\n")
+			b.WriteString("To run PowerShell commands from within bash, prefix with `powershell.exe -NoProfile -Command \"...\"` (or `pwsh.exe` for PowerShell 7+). To run legacy CMD commands, use `cmd.exe /c \"...\"`. This allows mixing bash pipelines with Windows-native tooling.\n")
 		}
 	} else {
 		b.WriteString("Use **PowerShell commands**: `Get-ChildItem`, `Get-Content`, `Select-String`, `Where-Object`, `$_`, `$env:NAME`.\n")
@@ -3618,6 +3676,9 @@ func mergeConfig(base, overlay ConfigState) ConfigState {
 	if overlay.GitBashPath != "" {
 		base.GitBashPath = overlay.GitBashPath
 	}
+	if overlay.ReasoningTag != "" {
+		base.ReasoningTag = overlay.ReasoningTag
+	}
 	if overlay.Models != nil {
 		base.Models = overlay.Models
 	}
@@ -3675,6 +3736,7 @@ func (a *App) SaveConfig(req ConfigState) error {
 	a.config.CustomPrompt = req.CustomPrompt
 	a.config.AllowPrivateNetwork = req.AllowPrivateNetwork
 	a.config.GitBashPath = req.GitBashPath
+	a.config.ReasoningTag = req.ReasoningTag
 	a.disabledSkills = normalizeSkillNameList(a.config.DisabledSkills)
 	a.config.DisabledSkills = cloneStringSlice(a.disabledSkills)
 	cfg := a.config
@@ -3714,6 +3776,7 @@ func (a *App) TestModelConnection(model ModelConfig) error {
 		Temperature:   model.Temperature,
 		MaxTokens:     32,
 		ContextWindow: model.ContextWindow,
+		ReasoningTag:  model.ReasoningTag,
 	}
 	if cfg.Model == "" {
 		return errors.New("model is required")
@@ -5761,6 +5824,23 @@ func chatTools() []openai.Tool {
 			},
 			"required": []string{"expression"},
 		}),
+		functionTool("render_html", "Render a self-contained HTML snippet inline in the chat UI. Use ONLY for interactive widgets or custom visualizations that Mermaid and Markdown cannot express — interactive calculators, dynamic data explorers, styled mockups, custom animated SVG. Do NOT use for diagrams, flowcharts, pie charts, or tables (use Mermaid fenced blocks and Markdown tables instead). Rendered in a sandboxed iframe with a dark theme. Maximum 50,000 characters. No external resources. Return a short text summary in your response explaining what was rendered.", map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"html": map[string]any{
+					"type":        "string",
+					"minLength":   1,
+					"maxLength":   50000,
+					"description": "Self-contained HTML snippet with inline CSS. No external scripts or resources. Use inline <style> tags for styling. SVG is supported for diagrams.",
+				},
+				"title": map[string]any{
+					"type":        "string",
+					"maxLength":   200,
+					"description": "Optional short title for the rendered content.",
+				},
+			},
+			"required": []string{"html"},
+		}),
 		functionTool("todo_write", "Create or update a visible task list only when longer work genuinely benefits from progress tracking. Do not use it for trivial tasks or merely to demonstrate activity.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -5778,7 +5858,7 @@ func chatTools() []openai.Tool {
 				},
 			},
 		}),
-		functionTool("agent_delegate", "Delegate a sub-task to a child agent with its own tool-access loop. The child agent explores/edits files independently; only the final summary is returned. Use for complex, self-contained sub-problems.", map[string]any{
+		functionTool("agent_delegate", "Delegate a sub-task to a child agent with its own tool-access loop. The child agent explores/edits files independently; only the final summary is returned.\n\nWhen to use:\n- Complex multi-step tasks that can be handled independently (e.g. refactor a module, implement a self-contained feature across multiple files).\n- Tasks that will produce large amounts of intermediate output (file reads, search results) that you do not need verbatim afterward — the sub-agent absorbs that token cost.\n- When changes span many layers (frontend, backend, API) and each layer's work can be specified independently after an initial plan.\n- When the user explicitly asks you to use an agent or sub-agent.\n\nWhen NOT to use:\n- Sequential tasks where later steps depend on the exact output (file contents, specific values) of earlier steps.\n- A single focused edit in one file — do it directly.\n- Read-only exploration of 1-2 files — use batch_read directly.\n- When you are unsure what changes to make — explore first yourself.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"task":         map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "The task for the child agent. Be specific — include file paths and expected outcomes."},
@@ -6280,6 +6360,27 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		if err == nil {
 			data, err = calculateExpression(reqCalc)
 		}
+	case "render_html":
+		var req struct {
+			HTML  string `json:"html"`
+			Title string `json:"title"`
+		}
+		err = decode(&req)
+		if err == nil {
+			if len(req.HTML) > 50000 {
+				err = errors.New("HTML content exceeds 50,000 character limit")
+			} else {
+				a.emit("render:html", map[string]any{
+					"sessionId": sessionID,
+					"html":      req.HTML,
+					"title":     req.Title,
+				})
+				data = map[string]any{
+					"rendered": true,
+					"length":   len(req.HTML),
+				}
+			}
+		}
 	case "agent_delegate":
 		var adReq AgentDelegateRequest
 		err = decode(&adReq)
@@ -6684,6 +6785,15 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 			return &AgentDelegateResult{AgentID: subID, Description: desc, Status: "failed", Steps: step, Error: err.Error(), Model: model}, err
 		}
 
+		// Accumulate token usage from the sub-agent's model response
+		if modelResp.Usage != nil {
+			a.subRunsMu.Lock()
+			run.InputTokens += modelResp.Usage.PromptTokens
+			run.OutputTokens += modelResp.Usage.CompletionTokens
+			run.TotalTokens = run.InputTokens + run.OutputTokens
+			a.subRunsMu.Unlock()
+		}
+
 		assistantMessage := openai.ChatCompletionMessage{
 			Role:      openai.ChatMessageRoleAssistant,
 			Content:   modelResp.Content,
@@ -6704,6 +6814,7 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 			a.emit("sub:done", map[string]any{
 				"id": subID, "sessionId": sessionID, "status": "completed", "steps": step,
 				"summary": summary, "filesRead": filesRead, "filesEdited": filesEdited, "durationMs": time.Now().UnixMilli() - run.StartTime,
+				"inputTokens": run.InputTokens, "outputTokens": run.OutputTokens, "totalTokens": run.TotalTokens,
 			})
 			return &AgentDelegateResult{
 				AgentID: subID, Description: desc, Status: "completed",
@@ -6712,7 +6823,7 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 			}, nil
 		}
 
-		// Execute tool calls
+		// Execute tool calls — parallel for non-file tools, ordered for file mutations
 		toolIDs := make([]string, len(assistantMessage.ToolCalls))
 		for i := range assistantMessage.ToolCalls {
 			if assistantMessage.ToolCalls[i].ID == "" {
@@ -6723,6 +6834,7 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 		messages = append(messages, assistantMessage)
 		toolConflicts := detectToolBatchConflicts(cfg, assistantMessage.ToolCalls)
 
+		// Register all tool calls as running and emit start events
 		for i, call := range assistantMessage.ToolCalls {
 			name := call.Function.Name
 			args := call.Function.Arguments
@@ -6734,56 +6846,108 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 			}
 			a.subRunsMu.Unlock()
 			a.emit("sub:tool:start", map[string]any{"id": subID, "sessionId": sessionID, "toolCallId": cid, "name": name, "args": args})
+		}
 
+		// Parallel execution: non-file tools run concurrently, file mutations run afterward in order
+		type subToolOutcome struct {
+			index     int
+			callID    string
+			name      string
+			args      string
+			result    toolResult
+			modelJSON string
+			duration  int64
+		}
+		totalCalls := len(assistantMessage.ToolCalls)
+		subToolSem := make(chan struct{}, 4)
+		subOutcomes := make([]subToolOutcome, totalCalls)
+
+		executeSubCall := func(idx int, c openai.ToolCall) {
 			started := time.Now()
-			result := toolResult{}
-			if conflictErr, conflict := toolConflicts[i]; conflict {
-				result = toolErrorResult(conflictErr)
-			} else {
-				result = a.executeTool(ctx, cfg, sessionID, name, []byte(args))
-			}
+			r := a.executeTool(ctx, cfg, sessionID, c.Function.Name, []byte(c.Function.Arguments))
 			duration := time.Since(started).Milliseconds()
-			resultJSON, _ := json.Marshal(result)
-			fullResultJSON := string(resultJSON)
-			modelResultJSON := compactToolResultForModel(name, result, fullResultJSON)
+			rj, _ := json.Marshal(r)
+			fullJSON := string(rj)
+			subOutcomes[idx] = subToolOutcome{
+				index: idx, callID: toolIDs[idx], name: c.Function.Name,
+				args: c.Function.Arguments, result: r,
+				modelJSON: compactToolResultForModel(c.Function.Name, r, fullJSON), duration: duration,
+			}
+		}
+		setSubConflictOutcome := func(idx int, c openai.ToolCall, conflictErr error) {
+			r := toolErrorResult(conflictErr)
+			rj, _ := json.Marshal(r)
+			fullJSON := string(rj)
+			subOutcomes[idx] = subToolOutcome{
+				index: idx, callID: toolIDs[idx], name: c.Function.Name,
+				args: c.Function.Arguments, result: r,
+				modelJSON: fullJSON,
+			}
+		}
 
-			trackFileFromToolResult(name, args, &result, &filesRead, &filesEdited, seenFiles)
+		var subWg sync.WaitGroup
+		for i, call := range assistantMessage.ToolCalls {
+			if conflictErr, conflict := toolConflicts[i]; conflict {
+				setSubConflictOutcome(i, call, conflictErr)
+				continue
+			}
+			if isOrderedFileMutationTool(call.Function.Name) {
+				continue
+			}
+			subWg.Add(1)
+			go func(idx int, c openai.ToolCall) {
+				defer subWg.Done()
+				subToolSem <- struct{}{}
+				defer func() { <-subToolSem }()
+				executeSubCall(idx, c)
+			}(i, call)
+		}
+		subWg.Wait()
+		for i, call := range assistantMessage.ToolCalls {
+			if _, conflict := toolConflicts[i]; conflict || !isOrderedFileMutationTool(call.Function.Name) {
+				continue
+			}
+			executeSubCall(i, call)
+		}
 
-			if result.OK {
-				summary := toolResultSummary(name, &result)
+		// Process outcomes in order
+		for _, o := range subOutcomes {
+			trackFileFromToolResult(o.name, o.args, &o.result, &filesRead, &filesEdited, seenFiles)
+			if o.result.OK {
+				summary := toolResultSummary(o.name, &o.result)
 				a.subRunsMu.Lock()
 				for ti := range run.ToolCalls {
-					if run.ToolCalls[ti].ToolCallID == cid {
+					if run.ToolCalls[ti].ToolCallID == o.callID {
 						run.ToolCalls[ti].Status = "success"
 						run.ToolCalls[ti].Summary = truncateRunes(summary, 2048)
-						run.ToolCalls[ti].DurationMS = duration
+						run.ToolCalls[ti].DurationMS = o.duration
 						break
 					}
 				}
 				a.subRunsMu.Unlock()
-				a.emit("sub:tool:result", map[string]any{"id": subID, "sessionId": sessionID, "toolCallId": cid, "name": name, "summary": summary, "durationMs": duration})
+				a.emit("sub:tool:result", map[string]any{"id": subID, "sessionId": sessionID, "toolCallId": o.callID, "name": o.name, "summary": summary, "durationMs": o.duration})
 			} else {
 				a.subRunsMu.Lock()
 				for ti := range run.ToolCalls {
-					if run.ToolCalls[ti].ToolCallID == cid {
+					if run.ToolCalls[ti].ToolCallID == o.callID {
 						run.ToolCalls[ti].Status = "error"
-						run.ToolCalls[ti].Summary = truncateRunes(result.Error, 2048)
-						run.ToolCalls[ti].DurationMS = duration
+						run.ToolCalls[ti].Summary = truncateRunes(o.result.Error, 2048)
+						run.ToolCalls[ti].DurationMS = o.duration
 						break
 					}
 				}
 				a.subRunsMu.Unlock()
-				a.emit("sub:tool:error", map[string]any{"id": subID, "sessionId": sessionID, "toolCallId": cid, "name": name, "error": result.Error, "errorCode": result.ErrorCode, "durationMs": duration})
+				a.emit("sub:tool:error", map[string]any{"id": subID, "sessionId": sessionID, "toolCallId": o.callID, "name": o.name, "error": o.result.Error, "errorCode": o.result.ErrorCode, "durationMs": o.duration})
 			}
 			messages = append(messages, openai.ChatCompletionMessage{
-				Role: openai.ChatMessageRoleTool, ToolCallID: cid, Content: modelResultJSON,
+				Role: openai.ChatMessageRoleTool, ToolCallID: o.callID, Content: o.modelJSON,
 			})
 		}
 		step++
 		a.subRunsMu.Lock()
 		run.Steps = step
 		a.subRunsMu.Unlock()
-		a.emit("sub:step", map[string]any{"id": subID, "sessionId": sessionID, "step": step})
+		a.emit("sub:step", map[string]any{"id": subID, "sessionId": sessionID, "step": step, "inputTokens": run.InputTokens, "outputTokens": run.OutputTokens, "totalTokens": run.TotalTokens})
 	}
 
 	// Max steps reached
@@ -6796,6 +6960,7 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 	a.emit("sub:done", map[string]any{
 		"id": subID, "sessionId": sessionID, "status": "timed_out", "steps": step,
 		"filesRead": filesRead, "filesEdited": filesEdited, "durationMs": time.Now().UnixMilli() - run.StartTime,
+		"inputTokens": run.InputTokens, "outputTokens": run.OutputTokens, "totalTokens": run.TotalTokens,
 	})
 	return &AgentDelegateResult{
 		AgentID: subID, Description: desc, Status: "timed_out",
@@ -6844,7 +7009,7 @@ func (a *App) releaseSubagentSlot() {
 	<-a.subSem
 }
 
-// subagentSystemPrompt returns a minimal system prompt for sub-agents.
+// subagentSystemPrompt returns the system prompt for sub-agents.
 func subagentSystemPrompt() string {
 	osName := goruntime.GOOS
 	arch := goruntime.GOARCH
@@ -6866,24 +7031,50 @@ func subagentSystemPrompt() string {
 
 	return `You are an Ally sub-agent. Complete the delegated task using available tools, then return a concise summary.
 
-- Prefer dedicated tools over shell commands: grep_files for search, batch_read for file content, edit/create_file/delete_path for file changes.
-- When done, write a summary of what you did and which files you changed.
+# Tool Use
+
+Prefer dedicated tools over shell commands: grep_files for search, batch_read for file content, edit/create_file/delete_path for file changes, list_files for directory listings.
+
+**Batch and parallelize aggressively** — this is the #1 way to reduce round-trips:
+- If you need file contents, prefer one batch_read call with all relevant paths instead of separate reads.
+- If you need to edit files, put all cross-file changes in one edit call.
+- If you need to search across files, send one grep_files instead of reading each file.
+- The backend executes independent non-file tool calls in parallel; built-in file mutations are ordered by tool-call index.
+
+# Edit Rules
+
+- Read files before their first edit. batch_read returns raw content and md5; edit accepts a files array with path, expectedMd5, and changes per file.
+- A successful edit returns afterMd5 for every file. Reuse it for a follow-up edit when exact current oldText is already known. Re-read only when content is unknown, external modification is possible, or E_VERSION_MISMATCH/E_NO_MATCH/E_MULTI_MATCH occurs.
+- Put every independent replacement for the same file in one edit call. Each oldText must be non-empty, exact, unique in the original snapshot, and non-overlapping with other changes.
+- Empty newText deletes oldText. Insert by replacing a unique anchor with the anchor plus inserted content.
+- Do not use patch, unified diff, git apply, or patch-style edits.
+- Never send multiple file mutations for the same path in one tool batch; the backend rejects the entire conflicting path group.
+- Each file path may appear at most once in the files array of one edit call.
+
+# Coding Guidelines
+
+- Understand relevant code before changing it; fix root causes with focused changes and update all affected call sites.
+- Do not weaken valid assertions merely to make tests pass; update tests when the intended behavior changes.
+- Avoid unrelated cleanup and premature abstractions.
+- After edits, run the narrowest relevant build/test/lint command when feasible and include the result in your summary.
+
+# Safety
+
+- Workspace boundary: write/edit/create/delete and shell commands are allowed only inside the workspace, except ~/.ally_agent is also allowed for Ally global config.
 - Do NOT ask the user questions — the user cannot see you.
 - Do NOT call agent_delegate — nested delegation is not supported.
 - Do NOT write global memories or call MCP tools. The parent agent owns durable memory and MCP side effects.
 - Use network tools only when the delegated task explicitly requires external information.
 - Do NOT use shell deletion commands; use delete_path for deletion.
-- Read files before their first edit. batch_read returns raw content and md5; edit accepts a files array with path, expectedMd5, and changes per file.
-- A successful edit returns afterMd5 for every file. Reuse it for a follow-up edit when exact current oldText is already known. Re-read only when content is unknown, external modification is possible, or E_VERSION_MISMATCH/E_NO_MATCH/E_MULTI_MATCH occurs.
-- Put every independent replacement for the same file in one edit call. Each oldText must be non-empty, exact, unique in the original snapshot, and non-overlapping with other changes.
-- Empty newText deletes oldText. Insert by replacing a unique anchor with the anchor plus inserted content.
-- Batch reads when practical.
-- Use wait only for a concrete short delay after asynchronous work has started. It must be the only tool call in that response; verify the condition afterward.
-- Do not use patch, unified diff, git apply, or patch-style edits.
-- Never send multiple file mutations for the same path in one tool batch; the backend rejects the entire conflicting path group.
-- After edits, run the narrowest relevant verification command when feasible and include the result in your summary.
-- For remote work, every remote tool call must include an explicit target such as host:/absolute/workspace.
+- Never delete or overwrite workspace root, home roots, system directories, or any path containing .git.
+- When creating intermediate artifacts (scripts, drafts, test fixtures) that are not final deliverables, place them under a ` + "`.tmp/`" + ` directory within the workspace.
+
+# Output
+
 - Be concise. The parent agent only sees your final summary.
+- When done, write a summary of what you did, which files you changed, and any verification results.
+- Use wait only for a concrete short delay after asynchronous work has started. It must be the only tool call in that response.
+- For remote work, every remote tool call must include an explicit target such as host:/absolute/workspace.
 - ` + platformNote + `. Use command syntax appropriate for this platform.`
 }
 
@@ -7543,13 +7734,13 @@ func (a *App) webFetchToolWithConfig(ctx context.Context, cfg ConfigState, req W
 		allowPrivate = *req.AllowPrivateNetwork
 	}
 	fetched, err := a.doHTTPRequest(ctx, HTTPRequestToolRequest{
-		Method:              "GET",
-		URL:                 req.URL,
-		Headers:             mergeStringMaps(map[string]string{"Accept": "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.5"}, req.Headers),
-		TimeoutSeconds:      req.TimeoutSeconds,
-		MaxBytes:            req.MaxBytes,
-		FollowRedirects:     boolPtr(true),
-		RespectRobots:       respectRobots,
+		Method:          "GET",
+		URL:             req.URL,
+		Headers:         mergeStringMaps(map[string]string{"Accept": "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.5"}, req.Headers),
+		TimeoutSeconds:  req.TimeoutSeconds,
+		MaxBytes:        req.MaxBytes,
+		FollowRedirects: boolPtr(true),
+		RespectRobots:   respectRobots,
 	}, true, allowPrivate)
 	if err != nil {
 		return WebFetchResult{}, err
@@ -10581,11 +10772,11 @@ type shellInvocation struct {
 //  4. Fallback to PowerShell (pwsh.exe → powershell.exe), which is always
 //     available on Windows (5.1 is built-in, no installation required).
 //
-// On Linux/macOS it uses bash -lc directly and ignores configuredPath.
+// On Linux/macOS it uses bash -c directly and ignores configuredPath.
 func commandShell(command, configuredPath string) shellInvocation {
 	if goruntime.GOOS == "windows" {
 		if bashPath, bashName := findWindowsBash(configuredPath); bashPath != "" {
-			return shellInvocation{name: bashName, path: bashPath, args: []string{"-lc", command}}
+			return shellInvocation{name: bashName, path: bashPath, args: []string{"-c", command}}
 		}
 		shell := windowsPowerShell()
 		return shellInvocation{
@@ -10594,7 +10785,7 @@ func commandShell(command, configuredPath string) shellInvocation {
 			args: []string{"-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", wrapPowerShellCommand(command)},
 		}
 	}
-	return shellInvocation{name: "bash", path: "bash", args: []string{"-lc", command}}
+	return shellInvocation{name: "bash", path: "bash", args: []string{"-c", command}}
 }
 
 // shellBinary holds a resolved shell name and executable path.
@@ -12018,6 +12209,7 @@ func (a *App) SwitchModel(index int) error {
 	if m.ContextWindow > 0 {
 		a.config.ContextWindow = m.ContextWindow
 	}
+	a.config.ReasoningTag = m.ReasoningTag
 	cfg := a.config
 	a.mu.Unlock()
 	return a.saveConfig(cfg)

@@ -1958,6 +1958,14 @@ body.platform-darwin .ally-wordmark {
   color: #fecaca;
 }
 
+.tool-error-detail {
+  color: #fca5a5;
+  font-size: 13px;
+  padding: 2px 8px 4px 18px;
+  cursor: help;
+  line-height: 1.4;
+}
+
 .tool-body:hover {
   overflow-y: auto;
 }
@@ -2519,6 +2527,21 @@ body.platform-darwin .ally-wordmark {
   flex-shrink: 0;
 }
 
+.subagent-inline-verb {
+  color: #737373;
+  flex-shrink: 0;
+}
+
+.subagent-inline-args {
+  color: #9a9a9a;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 280px;
+  flex-shrink: 1;
+  min-width: 0;
+}
+
 .subagent-inline-summary {
   color: #737373;
   overflow: hidden;
@@ -2532,6 +2555,12 @@ body.platform-darwin .ally-wordmark {
   font-size: 12px;
   flex-shrink: 0;
   margin-left: 4px;
+}
+
+.subagent-token-chip {
+  color: #6b8aad;
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
 }
 
 .subagent-inline-result {

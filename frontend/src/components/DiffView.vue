@@ -132,11 +132,23 @@ const hasMore = computed(() => {
 })
 
 const diffHeader = computed(() => {
-  return {
-    added: props.addedCount || 0,
-    removed: props.removedCount || 0,
-    filePath: props.filePath || '',
+  // If caller provided explicit counts, use them
+  if (props.addedCount > 0 || props.removedCount > 0) {
+    return {
+      added: props.addedCount || 0,
+      removed: props.removedCount || 0,
+      filePath: props.filePath || '',
+    }
   }
+  // Otherwise auto-count from the computed diff lines
+  let added = 0
+  let removed = 0
+  for (const line of localDiffLines.value) {
+    if (line.isSeparator) continue
+    if (line.kind === 'add') added++
+    else if (line.kind === 'delete') removed++
+  }
+  return { added, removed, filePath: props.filePath || '' }
 })
 
 function lineClasses(line) {

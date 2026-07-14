@@ -6,14 +6,18 @@
       <span class="tool-name">{{ $t('tools.kind.subagent') }}</span>
       <span class="tool-arg" :title="msg.description">({{ msg.description }})</span>
       <span class="tool-chip">{{ $t('subagent.steps', { current: msg.steps, max: msg.maxSteps }) }}</span>
+      <span v-if="msg.toolCalls?.length" class="tool-chip">{{ $t('subagent.toolCount', { count: msg.toolCalls.length }) }}</span>
+      <span v-if="msg.totalTokens > 0" class="tool-chip subagent-token-chip" :title="tokenTooltip">{{ tokenChip }}</span>
       <span v-if="msg.durationText" class="tool-duration">{{ msg.durationText }}</span>
     </div>
     <div v-if="recentTools.length" class="subagent-inline-body">
       <div v-for="(tc, ti) in recentTools" :key="tc.toolCallId || ti" :class="['subagent-inline-entry', tc.status]">
         <span class="subagent-inline-tree">{{ ti === recentTools.length - 1 ? '└─' : '├─' }}</span>
-        <span class="subagent-inline-icon">{{ statusIcon(tc.status) }}</span>
+        <span :class="['subagent-inline-icon', tc.status]">{{ statusIcon(tc.status) }}</span>
+        <span class="subagent-inline-verb">{{ toolVerb(tc.status) }}</span>
         <span class="subagent-inline-name">{{ subToolLabel(tc.name) }}</span>
-        <span class="subagent-inline-summary">{{ tc.summary || subToolPendingText(tc.status) }}</span>
+        <span v-if="toolArgsTitle(tc)" class="subagent-inline-args" :title="toolArgsTitle(tc)">({{ toolArgsTitle(tc) }})</span>
+        <span v-if="tc.summary" class="subagent-inline-summary">{{ compactSummary(tc.summary) }}</span>
         <span v-if="tc.durationText" class="subagent-inline-duration">{{ tc.durationText }}</span>
       </div>
     </div>
@@ -32,7 +36,27 @@ const props = defineProps({
 
 const recentTools = computed(() => {
   const tools = Array.isArray(props.msg?.toolCalls) ? props.msg.toolCalls : [];
-  return tools.slice(Math.max(0, tools.length - 5));
+  return tools.slice(Math.max(0, tools.length - 8));
+});
+
+function formatTokens(n) {
+  if (!n || n <= 0) return '0';
+  if (n < 1000) return String(n);
+  if (n < 1000000) return (n / 1000).toFixed(1) + 'k';
+  return (n / 1000000).toFixed(1) + 'M';
+}
+
+const tokenChip = computed(() => {
+  const total = props.msg?.totalTokens || 0;
+  if (total <= 0) return '';
+  return `↑${formatTokens(props.msg?.inputTokens)} ↓${formatTokens(props.msg?.outputTokens)}`;
+});
+
+const tokenTooltip = computed(() => {
+  const input = props.msg?.inputTokens || 0;
+  const output = props.msg?.outputTokens || 0;
+  const total = props.msg?.totalTokens || 0;
+  return `Input: ${input} · Output: ${output} · Total: ${total}`;
 });
 
 function statusIcon(status) {
@@ -48,10 +72,16 @@ function subagentVerb(status) {
   return t('subagent.failed');
 }
 
-function subToolPendingText(status) {
-  if (status === 'running') return t('subagent.running').toLowerCase();
-  if (status === 'error') return t('subagent.failed').toLowerCase();
-  return '';
+function toolVerb(status) {
+  if (status === 'error') return t('tools.status.failed');
+  if (status === 'success') return t('subagent.used');
+  return t('subagent.using');
+}
+
+function compactSummary(text) {
+  const s = String(text || '').replace(/\s+/g, ' ').trim();
+  if (s.length <= 120) return s;
+  return s.slice(0, 117) + '...';
 }
 
 function compactSubagentSummary(summary) {
@@ -60,23 +90,127 @@ function compactSubagentSummary(summary) {
   return text.slice(0, 177) + '...';
 }
 
+function parseToolArgs(raw) {
+  const text = String(raw || '');
+  if (!text.trim()) return {};
+  try {
+    const parsed = JSON.parse(text);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch (_) {
+    return {};
+  }
+}
+
+function toolArgsTitle(tc) {
+  const name = tc.name || '';
+  const parsed = parseToolArgs(tc.args);
+
+  if (name === 'run_command' || name === 'remote_run_command') {
+    const cmd = parsed.command || parsed.cmd || '';
+    if (name === 'remote_run_command' && parsed.target) return `${parsed.target} · ${cmd}`;
+    return cmd;
+  }
+  if (name === 'background_process') {
+    if (parsed.action === 'stop') return `stop · ${parsed.id || ''}`;
+    const parts = ['start'];
+    if (parsed.name) parts.push(parsed.name);
+    if (parsed.command) parts.push(parsed.command);
+    return parts.join(' · ');
+  }
+  if (name === 'wait') {
+    return parsed.reason || (parsed.seconds ? `${parsed.seconds}s` : '');
+  }
+  if (name === 'ask') {
+    const questions = Array.isArray(parsed.questions) ? parsed.questions : [];
+    if (questions.length === 1) return questions[0]?.question || '';
+    return questions.length ? t('app.ask.questions', { count: questions.length }) : '';
+  }
+  if (name === 'edit' || name === 'remote_edit') {
+    if (Array.isArray(parsed.files)) return parsed.files.length === 1 ? (parsed.files[0]?.path || '') : `${parsed.files.length} files`;
+    return parsed.target ? `${parsed.target} · ${parsed.path || ''}` : (parsed.path || '');
+  }
+  if (name === 'create_file' || name === 'delete_path' || name === 'remote_create_file' || name === 'remote_delete_path') {
+    return parsed.target ? `${parsed.target} · ${parsed.path || ''}` : (parsed.path || '');
+  }
+  if (name === 'batch_read' || name === 'read_file' || name === 'remote_read_file') {
+    if (parsed.target) return `${parsed.target} · ${parsed.path || ''}`;
+    if (parsed.path) return parsed.path;
+    const paths = Array.isArray(parsed.paths) ? parsed.paths : [];
+    if (paths.length > 0) return paths.join(', ');
+    const files = Array.isArray(parsed.files) ? parsed.files.map(f => f && f.path).filter(Boolean) : [];
+    if (files.length > 0) return files.join(', ');
+  }
+  if (name === 'grep_files') {
+    return parsed.pattern || '';
+  }
+  if (name === 'list_files' || name === 'remote_list_files') {
+    if (parsed.target) return `${parsed.target}${parsed.path ? ' · ' + parsed.path : ''}`;
+    return parsed.path || parsed.pattern || '';
+  }
+  if (name === 'http_request' || name === 'web_fetch') {
+    return parsed.url || '';
+  }
+  if (name === 'memory_read' || name === 'memory_write') {
+    return parsed.path || parsed.description || '';
+  }
+  if (name === 'calculate') {
+    return parsed.expression || '';
+  }
+  if (name === 'scheduled_task') {
+    if (parsed.action === 'create') return `create · ${parsed.name || ''}`;
+    if (parsed.action === 'delete') return `delete · ${parsed.id || ''}`;
+    return parsed.action || 'list';
+  }
+  if (name === 'render_html') {
+    return parsed.title || '';
+  }
+  if (name === 'Skill') {
+    return parsed.name || '';
+  }
+  if (name === 'todo_write') {
+    const todos = Array.isArray(parsed.todos) ? parsed.todos : [];
+    return todos.length ? `${todos.length} items` : '';
+  }
+  if (name === 'create_goal' || name === 'update_goal' || name === 'get_goal') {
+    return parsed.objective || parsed.status || '';
+  }
+  return '';
+}
+
 function subToolLabel(name) {
   const labels = {
     read_file: t('tools.kind.read'),
-    remote_read_file: 'remote_read_file',
     batch_read: t('tools.kind.read'),
-    edit: t('tools.kind.edit'),
-    remote_edit: 'remote_edit',
-    create_file: t('tools.kind.create'),
-    remote_create_file: 'remote_create_file',
-    delete_path: t('tools.kind.delete'),
-    remote_delete_path: 'remote_delete_path',
-    run_command: t('tools.kind.command'),
-    remote_run_command: 'remote_run_command',
-    grep_files: t('tools.kind.grep'),
     list_files: t('tools.kind.read'),
-    remote_list_files: 'remote_list_files',
+    remote_read_file: t('tools.kind.read'),
+    remote_list_files: t('tools.kind.read'),
+    edit: t('tools.kind.edit'),
+    remote_edit: t('tools.kind.edit'),
+    create_file: t('tools.kind.create'),
+    remote_create_file: t('tools.kind.create'),
+    delete_path: t('tools.kind.delete'),
+    remote_delete_path: t('tools.kind.delete'),
+    run_command: t('tools.kind.command'),
+    remote_run_command: t('tools.kind.command'),
+    background_process: t('tools.kind.service'),
+    grep_files: t('tools.kind.grep'),
+    http_request: t('tools.kind.http'),
+    web_fetch: t('tools.kind.webFetch'),
+    render_html: t('tools.kind.renderHtml'),
+    ask: t('tools.kind.ask'),
+    wait: t('tools.kind.wait'),
+    calculate: t('tools.kind.calculate'),
+    memory_read: t('tools.kind.memory'),
+    memory_write: t('tools.kind.memory'),
+    todo_write: t('tools.kind.todo'),
+    scheduled_task: t('tools.kind.scheduled'),
+    Skill: t('tools.kind.skill'),
+    create_goal: t('tools.kind.goal'),
+    update_goal: t('tools.kind.goal'),
+    get_goal: t('tools.kind.goal'),
   };
   return labels[name] || name || t('tools.kind.tool');
 }
 </script>
+
+

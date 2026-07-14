@@ -380,3 +380,138 @@ func TestSplitImageDataURLNormalizesJPG(t *testing.T) {
 		t.Fatalf("unexpected split result: %q %q", mediaType, data)
 	}
 }
+
+func TestPartialTagMatch(t *testing.T) {
+	cases := []struct {
+		s, tag string
+		want   int
+	}{
+		{"hello", "<sink>", 0},
+		{"hello<sin", "<sink>", 4},
+		{"hello<sink", "<sink>", 5},
+		{"hello<sink>", "<sink>", 6},
+		{"", "<sink>", 0},
+		{"<s", "<sink>", 2},
+		{"<sink>rest", "<sink>", 0},
+	}
+	for _, c := range cases {
+		got := partialTagMatch(c.s, c.tag)
+		if got != c.want {
+			t.Errorf("partialTagMatch(%q, %q) = %d, want %d", c.s, c.tag, got, c.want)
+		}
+	}
+}
+
+func TestOpenAIChatStreamParsesReasoningTags(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(`data: {"id":"1","object":"chat.completion.chunk","created":1,"model":"test","choices":[{"index":0,"delta":{"content":"Hello <sink>Let me think"},"finish_reason":""}]}` + "\n\n"))
+		_, _ = w.Write([]byte(`data: {"id":"2","object":"chat.completion.chunk","created":1,"model":"test","choices":[{"index":0,"delta":{"content":" about this</sink> World"},"finish_reason":""}]}` + "\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer server.Close()
+
+	app := NewApp()
+	var contentDeltas, reasoningDeltas []string
+	onEvent := func(e modelStreamEvent) {
+		if e.ContentDelta != "" {
+			contentDeltas = append(contentDeltas, e.ContentDelta)
+		}
+		if e.ReasoningDelta != "" {
+			reasoningDeltas = append(reasoningDeltas, e.ReasoningDelta)
+		}
+	}
+	got, err := app.streamOpenAIChat(context.Background(), ConfigState{
+		APIKey:       "test-key",
+		BaseURL:      server.URL + "/v1",
+		Model:        "test-model",
+		MaxTokens:    16,
+		Temperature:  0,
+		ReasoningTag: "sink",
+	}, "test-model", []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleUser, Content: "hi"}}, nil, onEvent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Content != "Hello  World" {
+		t.Fatalf("expected content %q, got %q", "Hello  World", got.Content)
+	}
+	if got.Reasoning != "Let me think about this" {
+		t.Fatalf("expected reasoning %q, got %q", "Let me think about this", got.Reasoning)
+	}
+	expectedContentDeltas := []string{"Hello ", " World"}
+	if len(contentDeltas) != len(expectedContentDeltas) {
+		t.Fatalf("expected %d content deltas, got %d: %v", len(expectedContentDeltas), len(contentDeltas), contentDeltas)
+	}
+	for i, expected := range expectedContentDeltas {
+		if contentDeltas[i] != expected {
+			t.Fatalf("content delta %d: expected %q, got %q", i, expected, contentDeltas[i])
+		}
+	}
+	expectedReasoningDeltas := []string{"Let me think", " about this"}
+	if len(reasoningDeltas) != len(expectedReasoningDeltas) {
+		t.Fatalf("expected %d reasoning deltas, got %d: %v", len(expectedReasoningDeltas), len(reasoningDeltas), reasoningDeltas)
+	}
+	for i, expected := range expectedReasoningDeltas {
+		if reasoningDeltas[i] != expected {
+			t.Fatalf("reasoning delta %d: expected %q, got %q", i, expected, reasoningDeltas[i])
+		}
+	}
+}
+
+func TestOpenAIChatStreamParsesSplitReasoningTags(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(`data: {"id":"1","object":"chat.completion.chunk","created":1,"model":"test","choices":[{"index":0,"delta":{"content":"Hello <si"},"finish_reason":""}]}` + "\n\n"))
+		_, _ = w.Write([]byte(`data: {"id":"2","object":"chat.completion.chunk","created":1,"model":"test","choices":[{"index":0,"delta":{"content":"nk>thinking"},"finish_reason":""}]}` + "\n\n"))
+		_, _ = w.Write([]byte(`data: {"id":"3","object":"chat.completion.chunk","created":1,"model":"test","choices":[{"index":0,"delta":{"content":"done</si"},"finish_reason":""}]}` + "\n\n"))
+		_, _ = w.Write([]byte(`data: {"id":"4","object":"chat.completion.chunk","created":1,"model":"test","choices":[{"index":0,"delta":{"content":"nk> result"},"finish_reason":""}]}` + "\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer server.Close()
+
+	app := NewApp()
+	got, err := app.streamOpenAIChat(context.Background(), ConfigState{
+		APIKey:       "test-key",
+		BaseURL:      server.URL + "/v1",
+		Model:        "test-model",
+		MaxTokens:    16,
+		Temperature:  0,
+		ReasoningTag: "sink",
+	}, "test-model", []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleUser, Content: "hi"}}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Content != "Hello  result" {
+		t.Fatalf("expected content %q, got %q", "Hello  result", got.Content)
+	}
+	if got.Reasoning != "thinkingdone" {
+		t.Fatalf("expected reasoning %q, got %q", "thinkingdone", got.Reasoning)
+	}
+}
+
+func TestOpenAIChatStreamNoReasoningTagUsesReasoningContent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(`data: {"id":"1","object":"chat.completion.chunk","created":1,"model":"test","choices":[{"index":0,"delta":{"content":"answer","reasoning_content":"because"},"finish_reason":""}]}` + "\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer server.Close()
+
+	app := NewApp()
+	got, err := app.streamOpenAIChat(context.Background(), ConfigState{
+		APIKey:      "test-key",
+		BaseURL:     server.URL + "/v1",
+		Model:       "test-model",
+		MaxTokens:   16,
+		Temperature: 0,
+	}, "test-model", []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleUser, Content: "hi"}}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Content != "answer" {
+		t.Fatalf("expected content %q, got %q", "answer", got.Content)
+	}
+	if got.Reasoning != "because" {
+		t.Fatalf("expected reasoning %q, got %q", "because", got.Reasoning)
+	}
+}
