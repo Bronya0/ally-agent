@@ -16,16 +16,20 @@ Download packages for Windows, macOS, and Linux from the [Releases page](https:/
 
 ## Features
 
-- Work with a project through natural-language conversations
-- Read, search, create, and edit files
-- Review clear visual diffs before or after changes
-- Use OpenAI-compatible and Anthropic model providers
-- Connect external tools through MCP
-- Extend workflows with Skills
-- Manage multiple workspaces and chat sessions
-- Use execution, planning, and interview modes
-- Delegate work and create scheduled tasks
-- Bundled code search—no separate ripgrep installation required
+- Work with local projects through natural-language conversations, attachments, and persistent sessions
+- Read, search, create, edit, and safely delete files with workspace boundaries and optimistic concurrency checks
+- Review bounded visual diffs, multi-file edits, command output, and detailed tool failure reasons directly in chat
+- Use OpenAI Chat Completions, OpenAI Responses, Anthropic Messages, and compatible model services
+- Capture provider reasoning fields or configurable reasoning tags such as `reasoning_content`, `think`, and `sink`
+- Render sandboxed interactive HTML results in chat for small tools, previews, and widgets
+- Delegate substantial work to parallel sub-agents with live steps, tool activity, token usage, and inline final summaries
+- Connect MCP servers through stdio, SSE, or Streamable HTTP using either a form editor or raw JSON
+- Extend workflows with discoverable Skills and durable cross-project memory
+- Manage multiple workspaces, chat sessions, todos, goal mode, and persistent scheduled tasks
+- Switch between execution, planning, and interview/grill modes
+- Run short shell commands and tracked background processes; Windows automatically discovers Git Bash and falls back to PowerShell when necessary
+- Use localized Chinese or English UI, startup warnings, settings, and tool status messages
+- Search code with bundled ripgrep—no separate installation required in release packages
 
 ## Getting started
 
@@ -47,4 +51,3 @@ Copyright (C) 2026 Bronya0.
 Ally is free software licensed under the [GNU General Public License v3.0 only](LICENSE) (`GPL-3.0-only`). You may use, study, modify, and redistribute it under those terms. Distributions of Ally or modified versions must provide the corresponding source code and retain the GPLv3 license notices.
 
 Release packages include [ripgrep](https://github.com/BurntSushi/ripgrep) under its own MIT/Unlicense terms. Other third-party resources retain their respective licenses; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
-
