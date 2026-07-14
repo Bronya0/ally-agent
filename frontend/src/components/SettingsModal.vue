@@ -55,6 +55,12 @@
               <span class="settings-toggle-hint">{{ $t('settings.allowPrivateNetworkHint') }}</span>
             </div>
           </n-form-item>
+          <n-form-item v-if="isWindows" :label="$t('settings.gitBashPath')">
+            <n-input
+              v-model:value="draft.gitBashPath"
+              :placeholder="$t('settings.gitBashPathPlaceholder')"
+            />
+          </n-form-item>
         </section>
 
         <!-- Models -->
@@ -299,6 +305,11 @@ const page = ref('general');
 const modelEditorVisible = ref(false);
 const modelEditorIndex = ref(-1);
 const testingModel = ref(false);
+
+const isWindows = computed(() => {
+  return document.body.classList.contains('platform-windows') ||
+    document.body.classList.contains('platform-win32');
+});
 
 function defaultModelDraft(source = {}) {
   return {

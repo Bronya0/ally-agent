@@ -77,7 +77,7 @@ func (a *App) startServiceWithConfig(cfg ConfigState, req StartServiceRequest) (
 
 	id := "svc_" + newID()
 	ctx, cancel := context.WithCancel(context.Background())
-	shell := commandShell(req.Command)
+	shell := commandShell(req.Command, cfg.GitBashPath)
 	cmd := exec.CommandContext(ctx, shell.path, shell.args...)
 	cmd.Dir = cwd
 	cmd.Env = os.Environ()

@@ -40,10 +40,8 @@ jobs:
       - name: Test and build
         shell: pwsh
         run: |
-          npm --prefix frontend ci
-          npm --prefix frontend run build
           go test ./...
-          wails build -clean -s -skipbindings -o "${{ env.APP_NAME }}.exe"
+          wails build -clean -trimpath -o "${{ env.APP_NAME }}.exe"
 
       - name: Bundle ripgrep and licenses
         shell: pwsh
@@ -110,10 +108,8 @@ jobs:
 
       - name: Test and build
         run: |
-          npm --prefix frontend ci
-          npm --prefix frontend run build
           go test ./...
-          wails build -clean -s -skipbindings -o "${{ env.APP_NAME }}"
+          wails build -clean -trimpath -o "${{ env.APP_NAME }}"
 
       - name: Bundle ripgrep and licenses
         shell: bash
@@ -174,10 +170,8 @@ jobs:
 
       - name: Test and build
         run: |
-          npm --prefix frontend ci
-          npm --prefix frontend run build
           go test ./...
-          wails build -clean -s -skipbindings -platform darwin/universal -o "${{ env.APP_NAME }}"
+          wails build -clean -trimpath -platform darwin/universal -o "${{ env.APP_NAME }}"
 
       - name: Bundle universal ripgrep and licenses
         shell: bash

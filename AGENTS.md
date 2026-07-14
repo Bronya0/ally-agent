@@ -44,11 +44,9 @@ Git tags and GitHub Releases are the source of truth for Ally versions. Release 
    - Summarize user-visible changes from `git log <previous-tag>..HEAD`; do not claim changes that are not present in that range.
    - End the notes with `**Full Changelog**: https://github.com/Bronya0/ally-agent/compare/<previous-tag>...<new-tag>`.
 3. Verify the exact commit that will be released:
-   - `npm --prefix frontend ci`
-   - `npm --prefix frontend run build`
    - `go test ./...`
    - `go build ./...`
-   - `wails build -clean -s -skipbindings`
+   - `wails build -clean -trimpath`
 4. Commit the release-related repository changes and push `main` to `origin`. Recheck that the worktree is clean and local `HEAD` equals `origin/main`.
 5. Publish a non-draft GitHub Release targeting `main`, with tag `<new-tag>`, title `Ally <new-tag>`, and the prepared notes. Authentication must come from GitHub CLI login or a `GITHUB_TOKEN` environment variable with repository contents write permission. Never place a token value in repository files, release notes, scripts, or copied command text.
 
@@ -99,6 +97,7 @@ Publishing the Release triggers `.github/workflows/build.yml`, which builds and 
 │   ├── wailsjs/              # Generated Wails JS/TS bindings
 │   ├── package.json
 │   └── vite.config.js
+├── third_party/             # Third-party license files (ripgrep)
 └── build/                    # Build assets and platform metadata
 ```
 
@@ -659,6 +658,8 @@ Example MCP config:
 - Prefer `delete_path` / `remote_delete_path` over shell deletion.
 - `readTextFile` rejects binary files using NUL checks.
 - Release packages bundle ripgrep under the executable's `tools/` directory; development builds fall back to `rg` from `PATH`.
+- On Windows, `run_command` and `background_process` prefer **bash** (from Git for Windows) over PowerShell. Detection order: the `gitBashPath` setting (manual override) → Git for Windows common install paths → `bash.exe` on `PATH` → fallback to PowerShell (`pwsh.exe` → `powershell.exe`). When bash is not detected, startup warns the user to set `gitBashPath` in Settings. The system prompt dynamically reflects which shell is active so the model generates correct syntax. Linux/macOS always use `bash -lc` and ignore `gitBashPath`.
+- When bash is active on Windows, safety checks detect both Windows-style (`C:\...`) and MSYS2-style (`/c/...`) absolute paths outside the workspace.
 - Tool output is capped by `maxToolOutput`.
 - HTTP tools use bounded response sizes, timeouts, redirect limits, and clear user agent defaults.
 - Plan mode disables write/edit/delete/run/network/delegate tools and MCP tools.

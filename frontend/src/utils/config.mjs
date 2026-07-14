@@ -11,6 +11,7 @@ export function defaultConfig() {
     contextWindow: 1048576,
     customPrompt: '',
     allowPrivateNetwork: true,
+    gitBashPath: '',
     disabledSkills: [],
     models: [],
   };

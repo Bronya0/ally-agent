@@ -182,6 +182,7 @@ func (a *App) startup(ctx context.Context) {
 			return
 		case <-timer.C:
 			a.emitRipgrepMissingIfNeeded()
+			a.emitGitBashMissingIfNeeded()
 		}
 	}()
 	// Initialize MCP manager
@@ -291,6 +292,7 @@ type ConfigState struct {
 	CustomPrompt        string        `json:"customPrompt"`
 	PlanMode            bool          `json:"planMode"`
 	AllowPrivateNetwork bool          `json:"allowPrivateNetwork"`
+	GitBashPath         string        `json:"gitBashPath"`
 	Models              []ModelConfig `json:"models,omitempty"`
 	DisabledSkills      []string      `json:"disabledSkills,omitempty"`
 	grillMode           bool
@@ -2097,6 +2099,28 @@ func (a *App) emitRipgrepMissingIfNeeded() {
 	})
 }
 
+func (a *App) emitGitBashMissingIfNeeded() {
+	if goruntime.GOOS != "windows" {
+		return
+	}
+	cfg, err := a.getConfig()
+	if err != nil {
+		return
+	}
+	if _, bashName := findWindowsBash(cfg.GitBashPath); bashName != "" {
+		return
+	}
+	a.emit("dependency:missing", map[string]any{
+		"tool":    "bash",
+		"name":    "Git Bash",
+		"message": "Git Bash was not found. run_command will fall back to PowerShell. Install Git for Windows, or set the Git Bash path in Settings → General → Git Bash Path.",
+		"installSteps": []string{
+			"Download from https://git-scm.com/download/win",
+			"Or set the path manually in Settings, e.g. C:\\Program Files\\Git\\bin\\bash.exe",
+		},
+	})
+}
+
 func matchToolGlob(pattern, relPath, base string) (bool, error) {
 	pattern = filepath.ToSlash(pattern)
 	if strings.Contains(pattern, "/") {
@@ -2990,8 +3014,8 @@ type systemPromptPart struct {
 	content string
 }
 
-func defaultSystemPrompt(planMode bool, allSkills []SkillDefinition, workspaceRoot, customPrompt string) string {
-	return joinSystemPromptParts(buildSystemPromptParts(planMode, allSkills, workspaceRoot, customPrompt))
+func defaultSystemPrompt(planMode bool, allSkills []SkillDefinition, workspaceRoot, customPrompt, gitBashPath string) string {
+	return joinSystemPromptParts(buildSystemPromptParts(planMode, allSkills, workspaceRoot, customPrompt, gitBashPath))
 }
 
 func joinSystemPromptParts(parts []systemPromptPart) string {
@@ -3002,7 +3026,7 @@ func joinSystemPromptParts(parts []systemPromptPart) string {
 	return b.String()
 }
 
-func buildSystemPromptParts(planMode bool, allSkills []SkillDefinition, workspaceRoot, customPrompt string) []systemPromptPart {
+func buildSystemPromptParts(planMode bool, allSkills []SkillDefinition, workspaceRoot, customPrompt, gitBashPath string) []systemPromptPart {
 	var parts []systemPromptPart
 	var b strings.Builder
 	b.WriteString("You are Ally, an AI agent.\n\n" +
@@ -3019,20 +3043,21 @@ func buildSystemPromptParts(planMode bool, allSkills []SkillDefinition, workspac
 		"Edit rules:\n" +
 		"1. Before a file's first edit, use `batch_read` to obtain exact content and `md5`. After a successful edit, reuse its `afterMd5` when the next exact `oldText` is already known; re-read only when content is unknown, an external change is possible, or a version/match error occurs.\n" +
 		"2. Put all known changes across affected files in one `edit` call. Use exact, unique `oldText`; the schema defines the batch limits and replacement behavior.\n" +
-		"3. Never send multiple file-mutation tool calls for the same path in one model response. Do not use patch, unified diff, or git apply.\n\n")
+		"3. Never send multiple file-mutation tool calls for the same path in one model response. Do not use patch, unified diff, or git apply.\n" +
+		"4. **Critical**: within a single `edit` call, each file path may appear **at most once** in the `files` array — do not repeat the same path across multiple entries. Merge all changes for the same file into one `changes` array instead. Violating this causes the entire call to be rejected with `E_WRITE_BATCH_CONFLICT`.\n\n")
 
 	b.WriteString("**Batch and parallelize aggressively** — this is the #1 way to reduce round-trips and save tokens:\n" +
 		"- If you need file contents, prefer one `batch_read` call with all relevant paths instead of separate reads.\n" +
 		"- For `batch_read`, omit both range fields to read the whole file; use optional `startLine` and `endLine` only when you need a specific inclusive range.\n" +
 		"- If you need to edit files, put all cross-file changes in one `edit` call.\n" +
 		"- If you need to search across files, send one `grep_files` instead of reading each file.\n" +
-		"- Batch independent reads and commands; use current MD5 values for dependent edits.\n" +
+		"- Batch independent reads and commands (no duplicates); use current MD5 values for dependent edits.\n" +
 		"- Only call tools one at a time when a strict serial dependency exists between them.\n" +
 		"The backend executes independent non-file tool calls in parallel; built-in file mutations are ordered by tool-call index.\n\n")
 
 	b.WriteString("Use `todo_write` outside plan mode only when longer work genuinely benefits from visible progress tracking; keep entries short and current.\n\n")
 
-	b.WriteString(buildPlatformInfo())
+	b.WriteString(buildPlatformInfo(gitBashPath))
 
 	b.WriteString("# Coding Guidelines\n\n" +
 		"- Understand relevant code before changing it; fix root causes with focused changes and update all affected call sites.\n" +
@@ -3092,7 +3117,7 @@ func buildSystemPromptParts(planMode bool, allSkills []SkillDefinition, workspac
 	return parts
 }
 
-func buildPlatformInfo() string {
+func buildPlatformInfo(gitBashPath string) string {
 	osName := goruntime.GOOS
 	arch := goruntime.GOARCH
 
@@ -3119,19 +3144,23 @@ func buildPlatformInfo() string {
 	b.WriteString("## Command Execution\n\n")
 	b.WriteString("`run_command` runs shell commands and returns stdout/stderr combined in `output`")
 
-	if osName == "windows" {
-		shell := windowsPowerShell()
-		b.WriteString(" via **" + shell.name + "**")
-		if shell.path != "" {
-			b.WriteString(" (`" + shell.path + "`)")
+	shellInfo := windowsShellInfo(gitBashPath)
+	usingBash := shellInfo.name == "bash"
+	b.WriteString(" via **" + shellInfo.name + "**")
+	if shellInfo.path != "" {
+		b.WriteString(" (`" + shellInfo.path + "`)")
+	}
+	b.WriteString(".\n\n")
+
+	if usingBash {
+		b.WriteString("Use standard bash commands: pipes (`|`), `&&`, `||`, `;`, `$VAR`, `export`.\n")
+		if osName == "windows" {
+			b.WriteString("Paths use forward slashes (`/`); Windows drive letters are accessed as `/c/...` (e.g. `/c/Users`). Native project tools (`go`, `npm`, `git`, `rg`) run normally and their exit code is propagated.\n")
 		}
-		b.WriteString(".\n\n")
+	} else {
 		b.WriteString("Use **PowerShell commands**: `Get-ChildItem`, `Get-Content`, `Select-String`, `Where-Object`, `$_`, `$env:NAME`.\n")
 		b.WriteString("For native project tools (`go`, `npm`, `git`, `rg`), call them normally; their exit code is propagated.\n")
 		b.WriteString("Do not use bash-only syntax such as `export FOO=bar`, `$VAR`, `grep`, `cat`, `ls -la`, `&&` assumptions, or `/c/...` paths unless you explicitly invoke another shell or the selected shell supports them.\n")
-	} else {
-		b.WriteString(" via **bash**.\n\n")
-		b.WriteString("Use standard bash commands: pipes (`|`), `&&`, `||`, `;`, `$VAR`.\n")
 	}
 	b.WriteString("Do not use shell deletion commands; use `delete_path` for deleting files or directories.\n")
 
@@ -3586,6 +3615,9 @@ func mergeConfig(base, overlay ConfigState) ConfigState {
 	if overlay.CustomPrompt != "" {
 		base.CustomPrompt = overlay.CustomPrompt
 	}
+	if overlay.GitBashPath != "" {
+		base.GitBashPath = overlay.GitBashPath
+	}
 	if overlay.Models != nil {
 		base.Models = overlay.Models
 	}
@@ -3642,6 +3674,7 @@ func (a *App) SaveConfig(req ConfigState) error {
 	a.config.Temperature = req.Temperature
 	a.config.CustomPrompt = req.CustomPrompt
 	a.config.AllowPrivateNetwork = req.AllowPrivateNetwork
+	a.config.GitBashPath = req.GitBashPath
 	a.disabledSkills = normalizeSkillNameList(a.config.DisabledSkills)
 	a.config.DisabledSkills = cloneStringSlice(a.disabledSkills)
 	cfg := a.config
@@ -3655,7 +3688,20 @@ func (a *App) SaveConfig(req ConfigState) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o600)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		return err
+	}
+
+	// Validate gitBashPath on Windows: if set but invalid, warn the user.
+	if goruntime.GOOS == "windows" && cfg.GitBashPath != "" {
+		if info, err := os.Stat(cfg.GitBashPath); err != nil || info.IsDir() {
+			a.emit("config:warning", map[string]any{
+				"field":   "gitBashPath",
+				"message": "The configured Git Bash path does not exist or is a directory. run_command will fall back to auto-detection or PowerShell.",
+			})
+		}
+	}
+	return nil
 }
 
 func (a *App) TestModelConnection(model ModelConfig) error {
@@ -4684,7 +4730,7 @@ func isGoalProgressMessage(m openai.ChatCompletionMessage) bool {
 
 func (a *App) buildSystemContextMessages(sessionID string, cfg ConfigState, allSkills []SkillDefinition) []openai.ChatCompletionMessage {
 	messages := []openai.ChatCompletionMessage{}
-	systemPrompt := defaultSystemPrompt(cfg.PlanMode, allSkills, cfg.Workspace, cfg.CustomPrompt)
+	systemPrompt := defaultSystemPrompt(cfg.PlanMode, allSkills, cfg.Workspace, cfg.CustomPrompt, cfg.GitBashPath)
 	if systemPrompt != "" {
 		messages = append(messages, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleSystem, Content: systemPrompt})
 	}
@@ -5498,7 +5544,7 @@ func chatTools() []openai.Tool {
 			},
 			"required": []string{"path"},
 		}),
-		functionTool("run_command", "Run a shell command in the workspace. Use only for commands that exit, such as builds, tests, and inspections. For long-running frontend/backend development processes, use background_process with action=start. Explicit deletion commands, unsafe cwd symlinks, and explicit absolute paths outside the workspace are refused. Error codes: E_COMMAND_BLOCKED, E_PATH_OUTSIDE, E_CWD_INVALID, E_LONG_RUNNING_COMMAND.", map[string]any{
+		functionTool("run_command", "Run a shell command in the workspace. On Windows, bash (from Git for Windows) is used when available, falling back to PowerShell; on macOS/Linux, bash is used. The system prompt indicates which shell is active. Use only for commands that exit, such as builds, tests, and inspections. For long-running frontend/backend development processes, use background_process with action=start. Explicit deletion commands, unsafe cwd symlinks, and explicit absolute paths outside the workspace are refused. Error codes: E_COMMAND_BLOCKED, E_PATH_OUTSIDE, E_CWD_INVALID, E_LONG_RUNNING_COMMAND.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"command":        map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*"},
@@ -10473,7 +10519,7 @@ func (a *App) runCommandWithConfig(parent context.Context, cfg ConfigState, req 
 	ctx, cancel := context.WithTimeout(parent, time.Duration(timeout)*time.Second)
 	defer cancel()
 
-	shell := commandShell(req.Command)
+	shell := commandShell(req.Command, cfg.GitBashPath)
 	cmd := exec.CommandContext(ctx, shell.path, shell.args...)
 	cmd.Dir = cwd
 	cmd.Env = os.Environ()
@@ -10516,8 +10562,22 @@ type shellInvocation struct {
 	args []string
 }
 
-func commandShell(command string) shellInvocation {
+// commandShell determines which shell to use for executing a command.
+//
+// On Windows it prefers Git Bash (bash.exe) so command syntax is unified with
+// Linux/macOS. Detection order:
+//  1. The gitBashPath setting (manual user override, passed as configuredPath)
+//  2. Git for Windows common installation paths
+//  3. bash.exe found on PATH
+//  4. Fallback to PowerShell (pwsh.exe → powershell.exe), which is always
+//     available on Windows (5.1 is built-in, no installation required).
+//
+// On Linux/macOS it uses bash -lc directly and ignores configuredPath.
+func commandShell(command, configuredPath string) shellInvocation {
 	if goruntime.GOOS == "windows" {
+		if bashPath, bashName := findWindowsBash(configuredPath); bashPath != "" {
+			return shellInvocation{name: bashName, path: bashPath, args: []string{"-lc", command}}
+		}
 		shell := windowsPowerShell()
 		return shellInvocation{
 			name: shell.name,
@@ -10528,11 +10588,59 @@ func commandShell(command string) shellInvocation {
 	return shellInvocation{name: "bash", path: "bash", args: []string{"-lc", command}}
 }
 
+// shellBinary holds a resolved shell name and executable path.
 type shellBinary struct {
 	name string
 	path string
 }
 
+// findWindowsBash searches for a usable bash.exe on Windows.
+// configuredPath is an explicit user override from the gitBashPath setting;
+// when set and valid it takes priority. Returns the path and a display name
+// ("bash"), or empty strings if no bash was found.
+func findWindowsBash(configuredPath string) (string, string) {
+	// 1. User-configured path (manual override).
+	if configuredPath != "" {
+		if info, err := os.Stat(configuredPath); err == nil && !info.IsDir() {
+			return configuredPath, "bash"
+		}
+	}
+
+	// 2. Git for Windows common installation paths.
+	gitBashPaths := []string{}
+	if progFiles := os.Getenv("ProgramFiles"); progFiles != "" {
+		gitBashPaths = append(gitBashPaths,
+			filepath.Join(progFiles, "Git", "bin", "bash.exe"),
+			filepath.Join(progFiles, "Git", "usr", "bin", "bash.exe"),
+		)
+	}
+	if progFilesX86 := os.Getenv("ProgramFiles(x86)"); progFilesX86 != "" {
+		gitBashPaths = append(gitBashPaths,
+			filepath.Join(progFilesX86, "Git", "bin", "bash.exe"),
+			filepath.Join(progFilesX86, "Git", "usr", "bin", "bash.exe"),
+		)
+	}
+	if localAppData := os.Getenv("LOCALAPPDATA"); localAppData != "" {
+		gitBashPaths = append(gitBashPaths,
+			filepath.Join(localAppData, "Programs", "Git", "bin", "bash.exe"),
+			filepath.Join(localAppData, "Programs", "Git", "usr", "bin", "bash.exe"),
+		)
+	}
+	for _, p := range gitBashPaths {
+		if info, err := os.Stat(p); err == nil && !info.IsDir() {
+			return p, "bash"
+		}
+	}
+
+	// 3. bash.exe on PATH.
+	if p, err := exec.LookPath("bash.exe"); err == nil {
+		return p, "bash"
+	}
+
+	return "", ""
+}
+
+// windowsPowerShell resolves the best available PowerShell on Windows.
 func windowsPowerShell() shellBinary {
 	for _, candidate := range []string{"pwsh.exe", "pwsh", "powershell.exe", "powershell"} {
 		if p, err := exec.LookPath(candidate); err == nil {
@@ -10541,6 +10649,18 @@ func windowsPowerShell() shellBinary {
 		}
 	}
 	return shellBinary{name: "powershell", path: "powershell.exe"}
+}
+
+// windowsShellInfo returns the display name and path of the shell that
+// commandShell will use on Windows. On non-Windows it returns ("bash", "bash").
+func windowsShellInfo(configuredPath string) shellBinary {
+	if goruntime.GOOS != "windows" {
+		return shellBinary{name: "bash", path: "bash"}
+	}
+	if bashPath, _ := findWindowsBash(configuredPath); bashPath != "" {
+		return shellBinary{name: "bash", path: bashPath}
+	}
+	return windowsPowerShell()
 }
 
 func wrapPowerShellCommand(command string) string {
@@ -11499,18 +11619,39 @@ func absolutePathCandidates(command string) []string {
 			candidates = append(candidates, value)
 		}
 	}
-	if goruntime.GOOS != "windows" {
-		for _, match := range unixPathRE.FindAllStringSubmatch(command, -1) {
-			value := match[1]
-			value = strings.Trim(value, ` "'`)
-			value = strings.TrimRight(value, `.,:;`)
-			if value == "" || strings.HasPrefix(value, "//") {
-				continue
-			}
-			candidates = append(candidates, filepath.FromSlash(value))
+	// On Windows with bash (Git Bash / MSYS2), commands may use Unix-style
+	// paths such as /c/Users or /tmp. Always check unixPathRE on Windows too,
+	// converting MSYS2 drive paths (/c/...) to Windows paths (C:\...) so they
+	// can be compared against the workspace root.
+	for _, match := range unixPathRE.FindAllStringSubmatch(command, -1) {
+		value := match[1]
+		value = strings.Trim(value, ` "'`)
+		value = strings.TrimRight(value, `.,:;`)
+		if value == "" || strings.HasPrefix(value, "//") {
+			continue
 		}
+		if goruntime.GOOS == "windows" {
+			// Convert MSYS2 drive paths /c/... → C:\...
+			if len(value) >= 3 && value[0] == '/' && isASCIILetter(value[1]) && value[2] == '/' {
+				value = string(toUpperByte(value[1])) + ":\\" + value[3:]
+			} else if len(value) == 2 && value[0] == '/' && isASCIILetter(value[1]) {
+				value = string(toUpperByte(value[1])) + ":\\"
+			}
+		}
+		candidates = append(candidates, filepath.FromSlash(value))
 	}
 	return candidates
+}
+
+func isASCIILetter(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
+}
+
+func toUpperByte(b byte) byte {
+	if b >= 'a' && b <= 'z' {
+		return b - 32
+	}
+	return b
 }
 
 func (a *App) emit(name string, payload any) {
@@ -11741,7 +11882,7 @@ func (a *App) getContextBreakdown(sessionID string) ContextBreakdown {
 	a.mu.Unlock()
 
 	result := ContextBreakdown{}
-	for _, part := range buildSystemPromptParts(cfg.PlanMode, a.listCachedSkills(), cfg.Workspace, cfg.CustomPrompt) {
+	for _, part := range buildSystemPromptParts(cfg.PlanMode, a.listCachedSkills(), cfg.Workspace, cfg.CustomPrompt, cfg.GitBashPath) {
 		tokens := estimateTokensFromText(part.content)
 		if tokens <= 0 {
 			continue

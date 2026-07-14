@@ -964,7 +964,10 @@ func TestRunCommandInvalidatesWorkspaceMapCache(t *testing.T) {
 
 	command := "printf 'hello\\n' > generated.txt"
 	if runtime.GOOS == "windows" {
-		command = "Set-Content -Path generated.txt -Value hello"
+		// Use PowerShell syntax only when bash is not available.
+		if _, bashName := findWindowsBash(""); bashName == "" {
+			command = "Set-Content -Path generated.txt -Value hello"
+		}
 	}
 	args, err := json.Marshal(CommandRequest{Command: command})
 	if err != nil {

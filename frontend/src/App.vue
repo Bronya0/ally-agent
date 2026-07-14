@@ -1256,18 +1256,16 @@ function closeWorkspaceTab(id) {
   if (idx === -1) return;
   const tab = workspaceTabs.value[idx];
   workspaceTabs.value.splice(idx, 1);
-  // Remove linked session to free memory
+  // Release the linked session's backend resources but keep it in the session
+  // list so it remains accessible via /sessions. The session's workspace is
+  // preserved via session.workspace / inferSessionWorkspace.
   if (tab && tab.sessionId) {
-    const sidx = sessions.value.findIndex(s => s.id === tab.sessionId);
-    if (sidx !== -1) {
-      releaseSessionAttachments(sessions.value[sidx]);
-      sessions.value.splice(sidx, 1);
-    }
+    releaseSessionAttachments(sessions.value.find(s => s.id === tab.sessionId));
     delete sessionPromptTexts[tab.sessionId];
     delete todosBySession[tab.sessionId];
     delete todoRevisionsBySession[tab.sessionId];
     delete sessionScrollAnchors[tab.sessionId];
-    DeleteSession(tab.sessionId).catch(() => {});
+    ReleaseSession(tab.sessionId).catch(() => {});
   }
   saveSessions();
   if (activeWorkspaceId.value === id) {
@@ -1814,6 +1812,11 @@ function bindRuntimeEvents() {
     const steps = Array.isArray(data?.installSteps) ? data.installSteps : [];
     const detail = steps.length ? '\n\n' + steps.join('\n') : '';
     message.warning(`${data?.message || t('app.tool.notInstalled', { tool })}${detail}`, { duration: 18000 });
+  });
+
+  onRuntimeEvent('config:warning', (data) => {
+    if (!data?.message) return;
+    message.warning(data.message, { duration: 10000 });
   });
 
   onRuntimeEvent('run:delta', (data) => {

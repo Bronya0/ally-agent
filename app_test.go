@@ -441,7 +441,7 @@ func TestSubagentInstructionContextIncludesProjectAndCustomInstructions(t *testi
 }
 
 func TestPlanModeMemoryPromptDoesNotRequestMemoryWrite(t *testing.T) {
-	prompt := defaultSystemPrompt(true, nil, "", "")
+	prompt := defaultSystemPrompt(true, nil, "", "", "")
 
 	if strings.Contains(prompt, "call `memory_write`") {
 		t.Fatalf("plan mode system prompt must not request memory_write: %s", prompt)
@@ -452,7 +452,7 @@ func TestPlanModeMemoryPromptDoesNotRequestMemoryWrite(t *testing.T) {
 }
 
 func TestSystemPromptDefinesWaitSequencing(t *testing.T) {
-	prompt := defaultSystemPrompt(false, nil, "", "")
+	prompt := defaultSystemPrompt(false, nil, "", "", "")
 	for _, expected := range []string{"Use `wait` only", "only tool in that model response", "verify the condition after it completes"} {
 		if !strings.Contains(prompt, expected) {
 			t.Fatalf("system prompt missing wait guidance %q", expected)
