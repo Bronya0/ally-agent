@@ -3734,8 +3734,14 @@ function truncateStoredText(value, limit, marker) {
 
 function estimateStoredMessageChars(msg) {
   let chars = 200;
-  for (const key of ['content', 'reasoningBody', 'body', 'codeContent', 'editDiff']) {
-    chars += String(msg?.[key] || '').length;
+  if (msg?.skill) {
+    // Skill messages store full model content but only display the chip + args.
+    // Estimate by the visible portion plus a modest skill-name overhead.
+    chars += 64 + String(msg.skill.args || '').length;
+  } else {
+    for (const key of ['content', 'reasoningBody', 'body', 'codeContent', 'editDiff']) {
+      chars += String(msg?.[key] || '').length;
+    }
   }
   for (const entry of Array.isArray(msg?.editEntries) ? msg.editEntries : []) chars += String(entry?.diff || '').length + 100;
   for (const att of Array.isArray(msg?.attachments) ? msg.attachments : []) {
@@ -3947,11 +3953,27 @@ async function activateSkillByName(skillName, skillArgs = '', injectIntoChat = t
     if (injectIntoChat && xmlBlock) {
       const session = activeSession.value;
       if (session) {
-        session.messages.push({ role: 'user', content: xmlBlock, done: true, system: true });
+        // User custom text first, then the skill block below it.
+        const userText = (skillArgs || '').trim();
+        const modelContent = userText ? `${userText}\n\n${xmlBlock}` : xmlBlock;
+        // system:true keeps this message out of buildSessionMessagesForModel so the
+        // backend history (source of truth) is never re-sent or deduplicated against
+        // a potentially truncated localStorage copy — preserving prefix-cache stability.
+        session.messages.push({
+          role: 'user',
+          content: modelContent,
+          done: true,
+          system: true,
+          skill: { name: skillName, args: userText },
+        });
+        if (isDefaultSessionTitle(session.title)) {
+          const titleBase = userText || `/${skillName}`;
+          session.title = titleBase.length > 20 ? `${titleBase.slice(0, 20)}…` : titleBase;
+        }
         scrollMessagesToBottom();
         if (config.apiKey) {
           markSessionRunning(session);
-          await StartChat({ sessionId: session.id, message: '', messages: [{ role: 'user', content: xmlBlock }], grillMode: !!session.grillMode, config: { ...config } }).catch(() => {
+          await StartChat({ sessionId: session.id, message: '', messages: [{ role: 'user', content: modelContent }], grillMode: !!session.grillMode, config: { ...config } }).catch(() => {
             session.isRunning = false;
           });
         }
@@ -4619,6 +4641,14 @@ function downloadMD(content, filename) {
 function exportMsgAsMD(msg) {
   if (!msg || msg.welcome) return '';
   const roleLabel = msg.role === 'user' ? 'User' : 'Assistant';
+  if (msg.skill) {
+    const chip = `/${msg.skill.name}`;
+    const args = (msg.skill.args || '').trim();
+    const content = args ? `${chip}\n\n${args}` : chip;
+    return `> **${roleLabel}:**
+
+${content}`;
+  }
   const content = msg.content || '';
   if (!content) return '';
   return `> **${roleLabel}:**

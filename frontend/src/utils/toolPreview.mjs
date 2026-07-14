@@ -61,7 +61,12 @@ export function estimateMessageRenderChars(msg, options = {}) {
   if (!msg) return 0;
   const toolPreviewLines = Number(options.toolPreviewLines || DEFAULT_TOOL_PREVIEW_LINES);
   let total = 0;
-  if (msg.content) total += String(msg.content).length;
+  if (msg.skill) {
+    // Skill messages render only a chip + user args, not the full XML content.
+    total += 32 + String(msg.skill.args || '').length;
+  } else if (msg.content) {
+    total += String(msg.content).length;
+  }
   if (msg.reasoningBody) total += String(msg.reasoningBody).length;
   if (msg.body) total += String(msg.body).length;
   if (msg.codeContent) {

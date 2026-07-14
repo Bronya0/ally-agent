@@ -9,7 +9,11 @@
         </button>
         <div v-else-if="msg.role === 'user'" :class="['message', msg.role, { error: msg.error }]" data-user-question>
           <span class="user-prefix">{{ $t('chat.askPrefix') }}</span>
-          <div class="message-body user-text markdown-body" v-html="renderFn(msg.content, false)"></div>
+          <div v-if="msg.skill" class="message-body user-text">
+            <span class="skill-chip">/{{ msg.skill.name }}</span>
+            <div v-if="msg.skill.args" class="skill-user-text markdown-body" v-html="renderFn(msg.skill.args, false)"></div>
+          </div>
+          <div v-else class="message-body user-text markdown-body" v-html="renderFn(msg.content, false)"></div>
           <RenderBoundary :label="$t('chat.attachment')"><MessageAttachments :attachments="msg.attachments || []" /></RenderBoundary>
         </div>
         <div v-else-if="msg.role !== 'tool_call'" :class="['message', msg.role, { error: msg.error, system: msg.system }]">
@@ -288,6 +292,21 @@ defineExpose({ scrollbarRef, scrollToBottom, scrollToUserQuestion, saveScrollPos
 
 .user-text :not(pre) > code {
   color: #b8d7ff !important;
+}
+
+.skill-chip {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 4px;
+  background: rgba(247, 185, 119, 0.14);
+  color: #f7b977;
+  font-weight: 600;
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.skill-user-text {
+  margin-top: 4px;
 }
 
 .message.user {
