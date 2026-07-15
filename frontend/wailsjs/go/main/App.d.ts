@@ -40,8 +40,6 @@ export function GetMcpConfig():Promise<string>;
 
 export function GetMcpServers():Promise<Array<Record<string, any>>>;
 
-export function GetPlanMode():Promise<boolean>;
-
 export function GetSessionContextTokens(arg1:string):Promise<number>;
 
 export function GetSkill(arg1:string):Promise<string>;
@@ -89,8 +87,6 @@ export function SaveConfig(arg1:main.ConfigState):Promise<void>;
 export function SaveMcpConfig(arg1:string):Promise<void>;
 
 export function SelectWorkspace():Promise<string>;
-
-export function SetPlanMode(arg1:boolean):Promise<void>;
 
 export function StartChat(arg1:main.ChatRequest):Promise<string>;
 

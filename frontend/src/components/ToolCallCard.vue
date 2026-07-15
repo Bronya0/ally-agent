@@ -27,7 +27,6 @@
         <span class="edit-file-name">{{ entry.path || $t('tools.file', { index: ei + 1 }) }}</span>
           <span v-if="entry.added" class="edit-chip-added">+{{ entry.added }}</span>
           <span v-if="entry.removed" class="edit-chip-removed">-{{ entry.removed }}</span>
-          <span class="edit-file-meta">{{ $t('tools.changes', { count: entry.changes?.length || 0 }) }}</span>
         </div>
         <div class="edit-file-content">
           <DiffView v-if="entry.diff" :diff-text="entry.diff" :file-path="entry.path" :show-header="false" :collapsed="!msg.expanded" :added-count="entry.added || 0" :removed-count="entry.removed || 0" @toggle="handleToggle(msg)" />

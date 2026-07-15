@@ -30,6 +30,18 @@ func TestNormalizeAPIFormatAliases(t *testing.T) {
 	}
 }
 
+func TestOpenAIResponsesImageGenerationOnlyUsesOfficialEndpoint(t *testing.T) {
+	if !supportsOpenAIResponsesImageGeneration(ConfigState{APIFormat: apiFormatOpenAIResponses, BaseURL: "https://api.openai.com/v1"}) {
+		t.Fatal("official OpenAI Responses endpoint should expose image generation output support")
+	}
+	if supportsOpenAIResponsesImageGeneration(ConfigState{APIFormat: apiFormatOpenAIResponses, BaseURL: "https://compatible.example/v1"}) {
+		t.Fatal("custom compatible endpoints must not receive an unsupported native image tool")
+	}
+	if supportsOpenAIResponsesImageGeneration(ConfigState{APIFormat: apiFormatOpenAIResponses, BaseURL: "https://api.openai.com/v1", grillMode: true}) {
+		t.Fatal("grill mode must remain read-only and exclude image generation")
+	}
+}
+
 func TestAnthropicBaseURLRemovesVersionSuffix(t *testing.T) {
 	got := baseURLForAPIFormat(ConfigState{APIFormat: apiFormatAnthropicMessages, BaseURL: "https://api.anthropic.com/v1/"})
 	if got != "https://api.anthropic.com" {
@@ -210,6 +222,35 @@ func TestOpenAIResponsesStreamKeepsContentWhenTailJSONIsTruncated(t *testing.T) 
 	}
 	if got.Content != "hello" {
 		t.Fatalf("expected content %q, got %q", "hello", got.Content)
+	}
+}
+
+func TestOpenAIResponsesStreamEmitsGeneratedImages(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(`data: {"type":"response.image_generation_call.partial_image","item_id":"img_1","output_index":0,"partial_image_b64":"aGVsbG8=","partial_image_index":0,"sequence_number":1}` + "\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer server.Close()
+
+	var streamed *modelImage
+	app := NewApp()
+	got, err := app.streamOpenAIResponses(context.Background(), ConfigState{
+		APIKey: "test-key", BaseURL: server.URL, Model: "test-model", MaxTokens: 16,
+	}, "test-model", []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleUser, Content: "draw"}}, nil, func(event modelStreamEvent) {
+		if event.Image != nil {
+			copy := *event.Image
+			streamed = &copy
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if streamed == nil || streamed.ID != "img_1" || streamed.DataURL != "data:image/png;base64,aGVsbG8=" || !streamed.Partial {
+		t.Fatalf("unexpected streamed image: %#v", streamed)
+	}
+	if len(got.Images) != 1 || got.Images[0].ID != "img_1" {
+		t.Fatalf("expected generated image in final stream result, got %#v", got.Images)
 	}
 }
 

@@ -78,10 +78,6 @@ export function GetMcpServers() {
   return window['go']['main']['App']['GetMcpServers']();
 }
 
-export function GetPlanMode() {
-  return window['go']['main']['App']['GetPlanMode']();
-}
-
 export function GetSessionContextTokens(arg1) {
   return window['go']['main']['App']['GetSessionContextTokens'](arg1);
 }
@@ -176,10 +172,6 @@ export function SaveMcpConfig(arg1) {
 
 export function SelectWorkspace() {
   return window['go']['main']['App']['SelectWorkspace']();
-}
-
-export function SetPlanMode(arg1) {
-  return window['go']['main']['App']['SetPlanMode'](arg1);
 }
 
 export function StartChat(arg1) {

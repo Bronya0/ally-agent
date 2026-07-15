@@ -150,7 +150,7 @@ Connected MCP tools are sorted by server, tool name, and function name before be
 `ConfigState` is stored in `~/.ally_agent/config.json` and includes:
 
 - provider fields: `providerName`, `apiFormat`, `baseUrl`, `apiKey`, `model`
-- runtime fields: `workspace`, `temperature`, `maxTokens`, `contextWindow`, `planMode`
+- runtime fields: `workspace`, `temperature`, `maxTokens`, `contextWindow`
 - prompt fields: `systemPrompt`, `customPrompt`
 - model presets: `models`
 - skill settings: `disabledSkills`
@@ -199,6 +199,7 @@ Supported API formats:
   - `id`: stable `fc_<call_id>` item ID
 - Tool results are converted to `function_call_output` by `call_id`.
 - Streams output text, reasoning summary text, function-call argument deltas, completion usage, failures, and incomplete responses.
+- On the official OpenAI Responses endpoint, exposes the native image-generation tool and streams generated images through `run:image`; custom compatible endpoints do not receive that provider-specific tool.
 - Tool definitions are converted with `ToolParamOfFunction(..., strict=false)` for provider compatibility.
 
 ### Anthropic Messages
@@ -262,7 +263,6 @@ Tool result channels:
 Prompt parts include:
 
 - core agent rules and tool usage policy
-- plan mode restrictions when enabled
 - enabled skill metadata
 - global memory index from `~/.ally_agent/memories/*.md`
 - project/user instructions loaded from AGENTS/CLAUDE files
@@ -519,11 +519,15 @@ Runtime events are registered through Wails `EventsOn()` and routed by `sessionI
 Frontend-specific rendering:
 
 - MarkdownIt for Markdown
-- highlight.js for code blocks
+- highlight.js with the Darcula theme and compact line counts for code blocks
+- Markdown HTTP(S)/mailto links are intercepted and opened through Wails `BrowserOpenURL` instead of navigating the embedded WebView
 - bounded render cache for non-streaming Markdown
 - streaming messages bypass cache
+- Streaming text deltas are batched to roughly 20 FPS so the active Markdown tree is not reparsed and replaced every display frame.
+- Mermaid diagrams render sequentially during browser idle slots only when they approach the viewport. Rendered SVG DOM is unloaded again beyond the viewport retention margin and restored from a bounded 16-entry / 2M-character LRU when available; evicted diagrams rerender on demand. Drag and wheel transforms are coalesced to one animation-frame write, and GPU `will-change` promotion is held only briefly while transforming. Diagrams use a warm Darcula-derived base theme and remain click-activated viewports supporting cursor-centered wheel zoom, pointer dragging, and double-click reset. Escape or a pointer press outside the diagram clears its interaction focus before other Escape actions run.
 - `displaySourceMessages` inserts archive placeholders for large histories without mutating true session messages
 - tool card components render read groups, diffs, command output, MCP tools, and sub-agent progress
+- `render_html` keeps the iframe unmounted while arguments stream, then mounts one script-enabled, origin-isolated `srcdoc` iframe after completion. A `postMessage` bridge reports height while CSP blocks external resources.
 - `AskToolCard` renders one question per Tab, supports multiple selections and custom answers, and submits all answers together
 
 UI internationalization:
@@ -532,7 +536,7 @@ UI internationalization:
 - Only `zh-CN` and `en-US` are supported. The primary `navigator.languages` / `navigator.language` entry decides the locale at startup: values beginning with `zh` use Chinese; all others use English.
 - The root Naive UI `NConfigProvider` and discrete APIs must receive the matching component locale and date locale.
 - New user-facing UI text must be added to both locale tables and referenced through `t()` / `$t()`; do not translate model output, file contents, command output, or raw tool results.
-- Startup performs one best-effort GitHub latest-release check. A newer semantic version shows a green update icon in `AppHeader`; clicking it opens the Ally GitHub repository in the system browser.
+- `AppHeader` always shows a GitHub repository button that opens the Ally project through the system browser. Startup performs one best-effort latest-release check; when a newer semantic version exists, that same button changes into the green update icon.
 
 ---
 
@@ -563,6 +567,14 @@ Backend histories are separate process-memory histories keyed by session ID. The
 
 Backend session cleanup distinguishes `ReleaseSession`, which frees in-memory history/goal/todo/context state while preserving the persisted history file, from `DeleteSession`, which also removes the persisted history. Saved backend histories are bounded to the latest 40 valid messages. Frontend explicit deletion uses `DeleteSession`; runtime session eviction uses `ReleaseSession`.
 
+Workspace/session invariants:
+
+- Every workspace Tab owns a valid `sessionId`; creating or selecting a session immediately updates that link, including sessions without a selected workspace.
+- Selecting a session already owned by another Tab activates that Tab instead of silently rebinding a different Tab.
+- Runtime events with an explicit `sessionId` never fall back to the currently visible session. Terminal events are accepted only when their `runId` still matches the session's current run.
+- `Ctrl/Cmd+Left/Right` workspace navigation is disabled inside inputs, textareas, selects, and contenteditable elements.
+- `CancelRun` cancels the context immediately but retains `runs`/`runSessions` registration until `runChat` actually exits, so session release/deletion cannot race a cancelling run.
+
 Context accounting:
 
 - `GetContextBreakdown()` reports system prompt parts, history, current session, tools, and workspace context.
@@ -580,12 +592,15 @@ Long-render optimization:
 - Persisted sessions have a 240k-character budget each; large tool previews, edit arguments, attachment payloads, and Diffs are removed or truncated before `localStorage` serialization.
 - Media previews use revocable Blob URLs. Images render from a bounded thumbnail while the original Base64 payload is retained only when it is eligible for model input.
 - Diff rendering uses exact LCS only below a fixed matrix budget. Larger replacements use a linear-memory prefix/suffix fallback, and multi-file edit cards stay collapsed until explicitly expanded.
+- Workspace history is normalized and deduplicated, retains the latest 30 paths, and is displayed in a fixed-height scrollable dropdown.
 
 ---
 
 ## Sub-Agents And Goal Mode
 
-`agent_delegate` starts a child agent loop with its own limited step budget.
+`agent_delegate` starts a child agent loop without an artificial step or wall-clock limit. Cancellation still follows the parent run or an explicit stop request.
+
+Sub-agents receive connected MCP tools and share the manager's invalid-session reconnect path. Interactive/nested tools such as `ask` and `agent_delegate`, plus parent-owned goal/todo/scheduled/memory-write state, remain excluded.
 
 Completed sub-agent records release their cancel function, keep at most 100 tool events each, and are globally pruned to the latest 50 completed records. Running records are never pruned.
 
@@ -605,7 +620,7 @@ Goal mode:
 
 Interactive ask behavior:
 
-- `ask` is available to the visible main Agent session in YOLO, PLAN, and GRILL modes, but is excluded from sub-agents and scheduled tasks.
+- `ask` is available to the visible main Agent session in YOLO and GRILL modes, but is excluded from sub-agents and scheduled tasks.
 - The tool blocks until the frontend submits every question or the run is cancelled. Cancelling emits `ask:closed`, removes the pending request, and returns `E_ASK_CANCELLED`.
 
 ---
@@ -657,7 +672,7 @@ Example MCP config:
 
 - Workspace write operations are confined to the configured workspace, except `~/.ally_agent` is also allowed for Ally global config and memories.
 - Read-only local tools may inspect explicit absolute paths outside the workspace subject to safety checks.
-- `run_command` refuses explicit absolute paths outside the workspace and `~/.ally_agent`, and refuses explicit deletion commands.
+- `run_command` keeps cwd inside the workspace, permits read-only commands to inspect explicit outside paths, and refuses commands that may modify/delete outside paths or perform explicit deletion.
 - Prefer `delete_path` / `remote_delete_path` over shell deletion.
 - `readTextFile` rejects binary files using NUL checks.
 - Release packages bundle ripgrep under the executable's `tools/` directory; development builds fall back to `rg` from `PATH`.
@@ -665,7 +680,6 @@ Example MCP config:
 - When bash is active on Windows, safety checks detect both Windows-style (`C:\...`) and MSYS2-style (`/c/...`) absolute paths outside the workspace.
 - Tool output is capped by `maxToolOutput`.
 - HTTP tools use bounded response sizes, timeouts, redirect limits, and clear user agent defaults.
-- Plan mode disables write/edit/delete/run/network/delegate tools and MCP tools.
 - API keys are stored in the OS user config directory without encryption.
 - MCP servers are spawned as subprocesses from user-controlled config.
 
@@ -720,9 +734,11 @@ Frontend utility tests cover:
 - `executeTool()` is the source of truth for built-in tool dispatch and JSON argument validation.
 - The model-facing `background_process` tool supports only `start` and `stop` so agents can run frontend/backend dev processes without blocking. Do not expose service list/status polling actions; `StartService`, `StopService`, and `ListServices` remain available as Wails/backend APIs.
 - Background-process state contains active processes only. Records are removed after `cmd.Wait()` completes, and the backend rejects starts beyond the 8-process active limit.
-- The model-facing `wait` tool is for short, concrete asynchronous delays only. It is limited to 600 seconds, disabled in plan/grill modes, and displayed in the UI with a local countdown.
-- Grill mode is session-local and request-scoped through `ChatRequest.grillMode`. Its instruction is injected as a transient system message, side-effectful and MCP tools are filtered and execution-guarded, and active goals must wait for the user's next answer instead of auto-continuing.
-- The composer footer owns one three-option run-mode switch: YOLO is the default execution mode, PLAN is read-only analysis, and GRILL is the session-local read-only interview mode. Mode options use names only and do not have command-menu entries.
+- The model-facing `wait` tool is for short, concrete asynchronous delays only. It is limited to 600 seconds, disabled in grill mode, and displayed in the UI with a local countdown.
+- Grill mode is session-local and request-scoped through `ChatRequest.grillMode`. The backend enforces an `ask`-only interview protocol: plain-text questions are retried, while a marked no-questions-left summary ends the mode and returns the session to YOLO. Side-effectful and MCP tools remain filtered and execution-guarded. Users may switch from an active Grill ask back to YOLO, which cancels the pending run.
+- The composer footer owns a two-option run-mode switch: YOLO is the default execution mode and GRILL is the session-local interview mode.
+- `render_html` completion updates the original tool card with one sandboxed iframe rather than appending a second result card.
+- `web_fetch` keeps the default readable-page payload intact for model context. HTTP/web results use a larger dedicated model cap and include explicit reduction metadata only when that cap is exceeded.
 - The scheduled-task drawer is opened from `ComposerInfoBar`, displays full task state and latest output, and supports manual deletion/cancellation. Model-facing `scheduled_task.list` returns bounded metadata without stored output and must not be polled.
 - `compactToolResultForModel()` is the source of truth for model-side tool-result reduction.
 - `batch_read` is the model-facing local read tool; `read_file` may exist for backend compatibility but should not be exposed to the model.

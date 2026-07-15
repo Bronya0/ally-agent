@@ -31,6 +31,70 @@ func TestMergeConfigKeepsModelsWhenOmitted(t *testing.T) {
 	}
 }
 
+func TestCancelRunKeepsSessionRegisteredUntilRunExits(t *testing.T) {
+	app := NewApp()
+	runID := "run-cancel-race"
+	sessionID := "session-cancel-race"
+	ctx, cancel := context.WithCancel(context.Background())
+
+	app.mu.Lock()
+	app.runs[runID] = cancel
+	app.runSessions[runID] = sessionID
+	app.histories[sessionID] = []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleUser, Content: "keep"}}
+	app.mu.Unlock()
+
+	runCanExit := make(chan struct{})
+	runExited := make(chan struct{})
+	go func() {
+		defer close(runExited)
+		<-ctx.Done()
+		<-runCanExit
+		app.finishRun(runID)
+	}()
+
+	if err := app.CancelRun(runID); err != nil {
+		t.Fatalf("CancelRun() error = %v", err)
+	}
+	select {
+	case <-ctx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("CancelRun did not cancel the run context promptly")
+	}
+
+	app.mu.Lock()
+	_, runStillRegistered := app.runs[runID]
+	registeredSession := app.runSessions[runID]
+	app.mu.Unlock()
+	if !runStillRegistered || registeredSession != sessionID {
+		t.Fatalf("cancelled run was unregistered before exit: run=%v session=%q", runStillRegistered, registeredSession)
+	}
+	if err := app.ReleaseSession(sessionID); err == nil || !strings.Contains(err.Error(), "still running") {
+		t.Fatalf("ReleaseSession() while cancelled run is exiting = %v, want still running error", err)
+	}
+	if err := app.DeleteSession(sessionID); err == nil || !strings.Contains(err.Error(), "still running") {
+		t.Fatalf("DeleteSession() while cancelled run is exiting = %v, want still running error", err)
+	}
+
+	close(runCanExit)
+	select {
+	case <-runExited:
+	case <-time.After(time.Second):
+		t.Fatal("run cleanup did not finish")
+	}
+
+	if err := app.ReleaseSession(sessionID); err != nil {
+		t.Fatalf("ReleaseSession() after run exit error = %v", err)
+	}
+	app.mu.Lock()
+	_, runStillRegistered = app.runs[runID]
+	_, sessionStillRegistered := app.runSessions[runID]
+	_, historyStillPresent := app.histories[sessionID]
+	app.mu.Unlock()
+	if runStillRegistered || sessionStillRegistered || historyStillPresent {
+		t.Fatalf("run/session cleanup incomplete: run=%v session=%v history=%v", runStillRegistered, sessionStillRegistered, historyStillPresent)
+	}
+}
+
 func TestMergeConfigDefaultsReasoningTags(t *testing.T) {
 	got := mergeConfig(ConfigState{}, ConfigState{
 		Models: []ModelConfig{{Model: "test-model"}},
@@ -377,6 +441,23 @@ func TestBuildMessagesInsertsGrillModeInstructionAsSystemPolicy(t *testing.T) {
 	if !messageContentExists(got, "new plan") {
 		t.Fatalf("expected latest user message in model context; got %#v", got)
 	}
+	joined := joinMessageContents(got)
+	if !strings.Contains(joined, "Call 'ask' as the only tool call") || !strings.Contains(joined, "<ally-grill-complete/>") {
+		t.Fatalf("expected grill mode to enforce ask-or-complete protocol; got %#v", got)
+	}
+}
+
+func TestStripGrillCompletionMarker(t *testing.T) {
+	content, complete := stripGrillCompletionMarker("  <ally-grill-complete/>\nAll decisions are resolved.  ")
+	if !complete || content != "All decisions are resolved." {
+		t.Fatalf("unexpected grill completion parsing: complete=%v content=%q", complete, content)
+	}
+	if _, complete := stripGrillCompletionMarker("What should we do next?"); complete {
+		t.Fatal("plain assistant text must not complete grill mode")
+	}
+	if _, complete := stripGrillCompletionMarker("<ally-grill-complete/>"); complete {
+		t.Fatal("grill completion requires a final decision summary")
+	}
 }
 
 func TestGrillModeDoesNotAutoContinueGoal(t *testing.T) {
@@ -452,43 +533,12 @@ func TestSubagentInstructionContextIncludesProjectAndCustomInstructions(t *testi
 	}
 }
 
-func TestPlanModeMemoryPromptDoesNotRequestMemoryWrite(t *testing.T) {
-	prompt := defaultSystemPrompt(true, nil, "", "", "")
-
-	if strings.Contains(prompt, "call `memory_write`") {
-		t.Fatalf("plan mode system prompt must not request memory_write: %s", prompt)
-	}
-	if !strings.Contains(prompt, "do not use `memory_write`") {
-		t.Fatalf("plan mode system prompt should explicitly forbid memory_write")
-	}
-}
-
 func TestSystemPromptDefinesWaitSequencing(t *testing.T) {
-	prompt := defaultSystemPrompt(false, nil, "", "", "")
+	prompt := defaultSystemPrompt(nil, "", "", "")
 	for _, expected := range []string{"Use `wait` only", "only tool in that model response", "verify the condition after it completes"} {
 		if !strings.Contains(prompt, expected) {
 			t.Fatalf("system prompt missing wait guidance %q", expected)
 		}
-	}
-}
-
-func TestPlanModeGoalContextDoesNotRequestUpdateGoal(t *testing.T) {
-	app := NewApp()
-	sessionID := "plan-goal-session"
-	app.goalStates[goalSessionKey(sessionID)] = &GoalState{
-		GoalID:    "goal-1",
-		Objective: "audit prompts",
-		Status:    "active",
-	}
-
-	messages := app.buildSystemContextMessages(sessionID, ConfigState{PlanMode: true}, nil)
-	joined := joinMessageContents(messages)
-
-	if strings.Contains(joined, "call update_goal") {
-		t.Fatalf("plan mode goal context must not request update_goal: %s", joined)
-	}
-	if !strings.Contains(joined, "do not use update_goal while plan mode is active") {
-		t.Fatalf("plan mode goal context should explicitly forbid update_goal")
 	}
 }
 
@@ -526,16 +576,32 @@ func TestGoalProgressIsAppendedAfterStableHistory(t *testing.T) {
 	}
 }
 
-func TestSubagentToolsExcludeParentOwnedPersistentTools(t *testing.T) {
+func TestSubagentToolsExcludeInteractiveToolsAndIncludeMCP(t *testing.T) {
 	app := NewApp()
+	app.mcpManager = NewMcpManager(t.TempDir(), nil)
+	app.mcpManager.clients["demo"] = &McpClientHandle{
+		ServerName: "demo",
+		Status:     "connected",
+		ToolDefs: []McpDiscoveredTool{{
+			ServerName: "demo", Name: "lookup", FunctionName: "mcp__demo__lookup",
+			Schema: map[string]any{"type": "object", "properties": map[string]any{}},
+		}},
+	}
 	tools := app.subagentTools(ConfigState{})
+	foundMCP := false
 	for _, tool := range tools {
 		if tool.Function == nil {
 			continue
 		}
-		if tool.Function.Name == "memory_write" || tool.Function.Name == "scheduled_task" || tool.Function.Name == "ask" {
+		if tool.Function.Name == "memory_write" || tool.Function.Name == "scheduled_task" || tool.Function.Name == "ask" || tool.Function.Name == "agent_delegate" {
 			t.Fatalf("sub-agent must not receive %s tool schema", tool.Function.Name)
 		}
+		if tool.Function.Name == "mcp__demo__lookup" {
+			foundMCP = true
+		}
+	}
+	if !foundMCP {
+		t.Fatal("sub-agent should receive connected MCP tool schemas")
 	}
 }
 

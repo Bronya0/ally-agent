@@ -535,7 +535,6 @@ func (m *scheduledTaskManager) run(task ScheduledTask) {
 
 	cfg := m.app.effectiveConfig(ConfigState{Workspace: task.Workspace})
 	cfg.Workspace = task.Workspace
-	cfg.PlanMode = false
 	cfg.grillMode = false
 
 	if err := m.app.acquireSubagentSlot(ctx); err != nil {
@@ -547,7 +546,7 @@ func (m *scheduledTaskManager) run(task ScheduledTask) {
 		Task:         "You are executing a persistent scheduled task in isolated fresh context. Do not create, list, or delete scheduled tasks. Complete the instruction and finish with a concise report for the user.\n\n" + task.Instruction,
 		Description:  "Scheduled: " + task.Name,
 		CleanContext: false,
-		MaxSteps:     task.MaxSteps,
+		maxSteps:     task.MaxSteps,
 		tools:        m.app.scheduledTaskTools(cfg),
 	}, cancel)
 	m.app.releaseSubagentSlot()

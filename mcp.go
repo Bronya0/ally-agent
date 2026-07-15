@@ -52,11 +52,12 @@ type McpClientHandle struct {
 }
 
 type McpManager struct {
-	mu         sync.RWMutex
-	clients    map[string]*McpClientHandle
-	toolLookup map[string]mcpToolRef
-	workDir    string
-	listener   func(tools []McpDiscoveredTool)
+	mu          sync.RWMutex
+	reconnectMu sync.Mutex
+	clients     map[string]*McpClientHandle
+	toolLookup  map[string]mcpToolRef
+	workDir     string
+	listener    func(tools []McpDiscoveredTool)
 }
 
 type mcpToolRef struct {
@@ -259,7 +260,7 @@ func toolSchemaToMap(schema mcp.ToolInputSchema) map[string]any {
 }
 
 func (m *McpManager) CallTool(ctx context.Context, serverName, toolName string, args map[string]any) (string, error) {
-	result, err := m.callToolOnce(ctx, serverName, toolName, args)
+	result, failedClient, err := m.callToolOnce(ctx, serverName, toolName, args)
 	if err == nil {
 		return result, nil
 	}
@@ -267,28 +268,29 @@ func (m *McpManager) CallTool(ctx context.Context, serverName, toolName string, 
 		return "", err
 	}
 
-	if reconnectErr := m.reconnectServer(ctx, serverName); reconnectErr != nil {
+	if reconnectErr := m.reconnectServer(ctx, serverName, failedClient); reconnectErr != nil {
 		return "", fmt.Errorf("MCP call failed: %w; reconnect failed: %w", err, reconnectErr)
 	}
-	return m.callToolOnce(ctx, serverName, toolName, args)
+	result, _, err = m.callToolOnce(ctx, serverName, toolName, args)
+	return result, err
 }
 
-func (m *McpManager) callToolOnce(ctx context.Context, serverName, toolName string, args map[string]any) (string, error) {
+func (m *McpManager) callToolOnce(ctx context.Context, serverName, toolName string, args map[string]any) (string, *client.Client, error) {
 	m.mu.RLock()
 	handle, ok := m.clients[serverName]
 	if !ok {
 		m.mu.RUnlock()
-		return "", fmt.Errorf("MCP server %s not found", serverName)
+		return "", nil, fmt.Errorf("MCP server %s not found", serverName)
 	}
 	status := handle.Status
 	handleErr := handle.Error
 	mcpClient := handle.Client
 	m.mu.RUnlock()
 	if status != "connected" {
-		return "", fmt.Errorf("MCP server %s status: %s/%s", serverName, status, handleErr)
+		return "", mcpClient, fmt.Errorf("MCP server %s status: %s/%s", serverName, status, handleErr)
 	}
 	if mcpClient == nil {
-		return "", fmt.Errorf("MCP server %s has no active client", serverName)
+		return "", nil, fmt.Errorf("MCP server %s has no active client", serverName)
 	}
 
 	req := mcp.CallToolRequest{
@@ -299,7 +301,7 @@ func (m *McpManager) callToolOnce(ctx context.Context, serverName, toolName stri
 	}
 	result, err := mcpClient.CallTool(ctx, req)
 	if err != nil {
-		return "", fmt.Errorf("MCP call failed: %w", err)
+		return "", mcpClient, fmt.Errorf("MCP call failed: %w", err)
 	}
 
 	var parts []string
@@ -308,15 +310,22 @@ func (m *McpManager) callToolOnce(ctx context.Context, serverName, toolName stri
 			parts = append(parts, textContent.Text)
 		}
 	}
-	return strings.Join(parts, "\n"), nil
+	return strings.Join(parts, "\n"), mcpClient, nil
 }
 
-func (m *McpManager) reconnectServer(ctx context.Context, serverName string) error {
+func (m *McpManager) reconnectServer(ctx context.Context, serverName string, failedClient *client.Client) error {
+	m.reconnectMu.Lock()
+	defer m.reconnectMu.Unlock()
+
 	m.mu.Lock()
 	handle, ok := m.clients[serverName]
 	if !ok {
 		m.mu.Unlock()
 		return fmt.Errorf("MCP server %s not found", serverName)
+	}
+	if handle.Status == "connected" && handle.Client != nil && handle.Client != failedClient {
+		m.mu.Unlock()
+		return nil
 	}
 	cfg := handle.Config
 	oldClient := handle.Client

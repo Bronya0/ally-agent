@@ -4,14 +4,14 @@
       trigger="click"
       placement="top-start"
       :options="runModeOptions"
-      :disabled="running"
+      :disabled="running && !grillModeActive"
       @select="selectRunMode"
     >
       <button
         type="button"
         :class="['run-mode-chip', currentRunMode]"
         :title="currentRunModeLabel"
-        :disabled="running"
+        :disabled="running && !grillModeActive"
         @click.stop
       >
         <span class="run-mode-dot"></span>
@@ -212,7 +212,6 @@ const props = defineProps({
   contextUsageStyle: { type: Object, default: () => ({}) },
   workspaceInputTokens: { type: String, default: '0' },
   workspaceOutputTokens: { type: String, default: '0' },
-  planModeActive: { type: Boolean, default: false },
   grillModeActive: { type: Boolean, default: false },
   scheduledTaskCount: { type: Number, default: 0 },
   scheduledTaskRunningCount: { type: Number, default: 0 },
@@ -226,7 +225,6 @@ const contextPopoverVisible = ref(false);
 const currentModelLabel = computed(() => `${props.config.providerName || '-'} · ${props.config.model || '-'}`);
 const currentRunMode = computed(() => {
   if (props.grillModeActive) return 'grill';
-  if (props.planModeActive) return 'plan';
   return 'yolo';
 });
 const currentRunModeLabel = computed(() => currentRunMode.value.toUpperCase());
@@ -235,11 +233,6 @@ const runModeOptions = computed(() => [
     label: 'YOLO',
     key: 'yolo',
     disabled: currentRunMode.value === 'yolo',
-  },
-  {
-    label: 'PLAN',
-    key: 'plan',
-    disabled: currentRunMode.value === 'plan',
   },
   {
     label: 'GRILL',

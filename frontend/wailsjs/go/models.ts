@@ -293,7 +293,6 @@ export namespace main {
 	    maxTokens: number;
 	    contextWindow: number;
 	    customPrompt: string;
-	    planMode: boolean;
 	    allowPrivateNetwork: boolean;
 	    gitBashPath: string;
 	    reasoningTag?: string;
@@ -316,7 +315,6 @@ export namespace main {
 	        this.maxTokens = source["maxTokens"];
 	        this.contextWindow = source["contextWindow"];
 	        this.customPrompt = source["customPrompt"];
-	        this.planMode = source["planMode"];
 	        this.allowPrivateNetwork = source["allowPrivateNetwork"];
 	        this.gitBashPath = source["gitBashPath"];
 	        this.reasoningTag = source["reasoningTag"];
@@ -524,7 +522,6 @@ export namespace main {
 	    afterMd5: string;
 	    beforeBytes: number;
 	    afterBytes: number;
-	    replacements: number;
 	    addedLines: number;
 	    removedLines: number;
 	    lineEnding: string;
@@ -549,7 +546,6 @@ export namespace main {
 	        this.afterMd5 = source["afterMd5"];
 	        this.beforeBytes = source["beforeBytes"];
 	        this.afterBytes = source["afterBytes"];
-	        this.replacements = source["replacements"];
 	        this.addedLines = source["addedLines"];
 	        this.removedLines = source["removedLines"];
 	        this.lineEnding = source["lineEnding"];
@@ -1121,7 +1117,6 @@ export namespace main {
 	    profile: string;
 	    status: string;
 	    steps: number;
-	    maxSteps: number;
 	    summary?: string;
 	    filesRead?: string[];
 	    filesEdited?: string[];
@@ -1144,7 +1139,6 @@ export namespace main {
 	        this.profile = source["profile"];
 	        this.status = source["status"];
 	        this.steps = source["steps"];
-	        this.maxSteps = source["maxSteps"];
 	        this.summary = source["summary"];
 	        this.filesRead = source["filesRead"];
 	        this.filesEdited = source["filesEdited"];

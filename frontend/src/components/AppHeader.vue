@@ -19,7 +19,13 @@
       </div>
       <div class="header-tabs-actions">
         <n-button size="tiny" quaternary @click="$emit('addWorkspace')" :title="$t('header.addWorkspace')">+</n-button>
-        <n-dropdown trigger="click" :options="historyOptions" @select="onHistorySelect">
+        <n-dropdown
+          trigger="click"
+          scrollable
+          :options="historyOptions"
+          :menu-props="historyMenuProps"
+          @select="onHistorySelect"
+        >
           <n-button size="tiny" quaternary :title="$t('header.workspaceHistory')">
             <svg class="header-dropdown-icon" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <polyline points="3 4.5 6 7.5 9 4.5" />
@@ -29,21 +35,22 @@
       </div>
     </div>
     <n-space align="center" :size="6">
-      <n-tag v-if="planModeActive" size="small" round type="warning" bordered>PLAN</n-tag>
       <n-tag v-if="grillModeActive" size="small" round type="error" bordered>GRILL</n-tag>
       <n-button
-        v-if="updateAvailable"
-        class="update-button"
+        :class="['repository-button', { 'update-available': updateAvailable }]"
         size="small"
         quaternary
-        :title="$t('header.update', { version: latestVersion })"
-        :aria-label="$t('header.updateAria')"
-        @click="$emit('openUpdate')"
+        :title="updateAvailable ? $t('header.update', { version: latestVersion }) : $t('header.github')"
+        :aria-label="updateAvailable ? $t('header.updateAria') : $t('header.githubAria')"
+        @click="$emit('openRepository')"
       >
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <svg v-if="updateAvailable" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <circle cx="12" cy="12" r="9" />
           <path d="M12 16V8" />
           <path d="m8.5 11.5 3.5-3.5 3.5 3.5" />
+        </svg>
+        <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <path d="M12 .7a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2.23c-3.22.7-3.9-1.37-3.9-1.37-.52-1.34-1.28-1.69-1.28-1.69-1.05-.72.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.71 1.26 3.37.96.1-.75.4-1.26.73-1.55-2.57-.29-5.27-1.29-5.27-5.68 0-1.26.45-2.28 1.19-3.09-.12-.29-.52-1.47.11-3.05 0 0 .97-.31 3.16 1.18a10.94 10.94 0 0 1 5.76 0c2.2-1.49 3.16-1.18 3.16-1.18.63 1.58.23 2.76.11 3.05.74.81 1.19 1.83 1.19 3.09 0 4.4-2.71 5.38-5.29 5.67.42.36.79 1.07.79 2.16v3.21c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .7Z" />
         </svg>
       </n-button>
       <n-button size="small" quaternary @click="$emit('openSettings')" :title="$t('header.settings')">
@@ -81,7 +88,6 @@ import AllyWordmark from './AllyWordmark.vue';
 defineProps({
   workspaceTabs: { type: Array, required: true },
   activeWorkspaceId: { type: String, required: true },
-  planModeActive: { type: Boolean, default: false },
   grillModeActive: { type: Boolean, default: false },
   updateAvailable: { type: Boolean, default: false },
   latestVersion: { type: String, default: '' },
@@ -94,7 +100,7 @@ const emit = defineEmits([
   'closeWorkspace',
   'addWorkspace',
   'historySelect',
-  'openUpdate',
+  'openRepository',
   'openSettings',
   'minimise',
   'toggleMaximise',
@@ -109,6 +115,13 @@ function onHistorySelect(key) {
   if (key && key !== '__empty__') {
     emit('historySelect', key);
   }
+}
+
+function historyMenuProps() {
+  return {
+    class: 'workspace-history-menu',
+    style: { maxHeight: '360px' },
+  };
 }
 </script>
 
@@ -143,13 +156,21 @@ function onHistorySelect(key) {
   box-shadow: none !important;
 }
 
-.update-button {
-  color: #67d99b !important;
-  background: rgba(74, 222, 128, 0.1) !important;
+.repository-button {
+  color: #8a8a8a !important;
   --wails-draggable: no-drag;
 }
 
-.update-button:hover {
+.repository-button:hover {
+  color: #d4d4d4 !important;
+}
+
+.repository-button.update-available {
+  color: #67d99b !important;
+  background: rgba(74, 222, 128, 0.1) !important;
+}
+
+.repository-button.update-available:hover {
   color: #9af0bd !important;
   background: rgba(74, 222, 128, 0.18) !important;
 }

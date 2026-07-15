@@ -36,12 +36,21 @@ type modelStreamEvent struct {
 	ContentDelta   string
 	ReasoningDelta string
 	ToolCalls      []legacyopenai.ToolCall
+	Image          *modelImage
+}
+
+type modelImage struct {
+	ID       string
+	DataURL  string
+	MimeType string
+	Partial  bool
 }
 
 type modelStreamResult struct {
 	Content      string
 	Reasoning    string
 	ToolCalls    []legacyopenai.ToolCall
+	Images       []modelImage
 	Usage        *modelUsage
 	StopReason   string
 	StopSequence string
@@ -371,8 +380,13 @@ func (a *App) streamOpenAIResponses(ctx context.Context, cfg ConfigState, model 
 	if strings.TrimSpace(instructions) != "" {
 		body.Instructions = oa.String(instructions)
 	}
-	if len(tools) > 0 {
-		body.Tools = convertToolsToOpenAIResponses(tools)
+	body.Tools = convertToolsToOpenAIResponses(tools)
+	if len(tools) > 0 && supportsOpenAIResponsesImageGeneration(cfg) {
+		body.Tools = append(body.Tools, oaresp.ToolUnionParam{
+			OfImageGeneration: &oaresp.ToolImageGenerationParam{OutputFormat: "png"},
+		})
+	}
+	if len(body.Tools) > 0 {
 		body.ToolChoice = oaresp.ResponseNewParamsToolChoiceUnion{OfToolChoiceMode: oa.Opt(oaresp.ToolChoiceOptionsAuto)}
 	}
 
@@ -390,6 +404,23 @@ func (a *App) streamOpenAIResponses(ctx context.Context, cfg ConfigState, model 
 	var usage *modelUsage
 	finalOutputText := ""
 	var streamErr error
+	images := []modelImage{}
+	imageIndexes := map[string]int{}
+	emitImage := func(id, b64 string, partial bool) {
+		id = strings.TrimSpace(id)
+		b64 = strings.TrimSpace(b64)
+		if id == "" || b64 == "" {
+			return
+		}
+		img := modelImage{ID: id, DataURL: "data:image/png;base64," + b64, MimeType: "image/png", Partial: partial}
+		if idx, ok := imageIndexes[id]; ok {
+			images[idx] = img
+		} else {
+			imageIndexes[id] = len(images)
+			images = append(images, img)
+		}
+		emitModelStreamEvent(onEvent, modelStreamEvent{Image: &img})
+	}
 
 	for stream.Next() {
 		event, err := stream.Event()
@@ -435,11 +466,23 @@ func (a *App) streamOpenAIResponses(ctx context.Context, cfg ConfigState, model 
 				idx := ensureResponsesToolCall(&toolCalls, toolIndexByOutput, toolIndexByItemID, ev.OutputIndex, ev.Item.ID)
 				updateToolCallFromResponsesItem(&toolCalls[idx], ev.Item)
 				emitModelStreamEvent(onEvent, modelStreamEvent{ToolCalls: cloneToolCalls(toolCalls)})
+			} else if ev.Item.Type == "image_generation_call" {
+				imageCall := ev.Item.AsImageGenerationCall()
+				emitImage(imageCall.ID, imageCall.Result, false)
 			}
+		case "response.image_generation_call.partial_image":
+			ev := event.AsResponseImageGenerationCallPartialImage()
+			emitImage(ev.ItemID, ev.PartialImageB64, true)
 		case "response.completed":
 			ev := event.AsResponseCompleted()
 			usage = modelUsageFromResponses(ev.Response.Usage)
 			finalOutputText = ev.Response.OutputText()
+			for _, item := range ev.Response.Output {
+				if item.Type == "image_generation_call" {
+					imageCall := item.AsImageGenerationCall()
+					emitImage(imageCall.ID, imageCall.Result, false)
+				}
+			}
 		case "error":
 			ev := event.AsError()
 			streamErr = fmt.Errorf("%s: %s", strings.TrimSpace(ev.Code), strings.TrimSpace(ev.Message))
@@ -474,8 +517,17 @@ func (a *App) streamOpenAIResponses(ctx context.Context, cfg ConfigState, model 
 		Content:   content,
 		Reasoning: reasoning.String(),
 		ToolCalls: normalizeToolCalls(toolCalls),
+		Images:    images,
 		Usage:     usage,
 	}, nil
+}
+
+func supportsOpenAIResponsesImageGeneration(cfg ConfigState) bool {
+	if cfg.grillMode {
+		return false
+	}
+	base := strings.ToLower(strings.TrimRight(baseURLForAPIFormat(cfg), "/"))
+	return base == defaultOpenAIResponsesURL || strings.HasPrefix(base, defaultOpenAIResponsesURL+"/")
 }
 
 type openAIResponsesSSEStream struct {

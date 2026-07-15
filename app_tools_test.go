@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -32,7 +33,7 @@ func TestHTTPRequestRedirectStripsSensitiveHeadersAcrossOrigins(t *testing.T) {
 
 	app := NewApp()
 	_, err := app.httpRequestTool(context.Background(), HTTPRequestToolRequest{
-		URL:     source.URL + "/redirect",
+		URL: source.URL + "/redirect",
 		Headers: map[string]string{
 			"Authorization": "Bearer secret",
 			"Cookie":        "sid=secret",
@@ -77,7 +78,7 @@ func TestHTTPRequestRedirectPreservesSensitiveHeadersOnSameOrigin(t *testing.T) 
 
 	app := NewApp()
 	_, err := app.httpRequestTool(context.Background(), HTTPRequestToolRequest{
-		URL:     server.URL + "/redirect",
+		URL: server.URL + "/redirect",
 		Headers: map[string]string{
 			"Authorization": "Bearer secret",
 			"Cookie":        "sid=secret",
@@ -123,51 +124,6 @@ func TestHTTPRequestParsesJSONResponse(t *testing.T) {
 	}
 	if !strings.Contains(got.JSONPreview, `"ok": true`) {
 		t.Fatalf("expected pretty JSON preview to include ok=true, got %q", got.JSONPreview)
-	}
-}
-
-func TestPlanModeRejectsStateWriteTools(t *testing.T) {
-	app := NewApp()
-	tests := []struct {
-		name string
-		args []byte
-	}{
-		{name: "todo_write", args: []byte(`{"todos":[{"title":"plan","status":"pending"}]}`)},
-		{name: "create_goal", args: []byte(`{"objective":"ship it"}`)},
-		{name: "update_goal", args: []byte(`{"status":"complete"}`)},
-		{name: "wait", args: []byte(`{"seconds":1,"reason":"retry later"}`)},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := app.executeTool(context.Background(), ConfigState{PlanMode: true}, "session-1", tt.name, tt.args)
-			if result.OK {
-				t.Fatalf("expected %s to be rejected in plan mode, got %#v", tt.name, result)
-			}
-			if !strings.Contains(result.Error, "disabled in plan mode") {
-				t.Fatalf("expected plan mode rejection, got %#v", result)
-			}
-		})
-	}
-}
-
-func TestPlanModeFiltersDisabledToolSchemas(t *testing.T) {
-	app := NewApp()
-	tools := app.buildToolsForConfig(ConfigState{PlanMode: true})
-	names := map[string]bool{}
-	for _, tool := range tools {
-		if tool.Function != nil {
-			names[tool.Function.Name] = true
-		}
-	}
-	for _, blocked := range []string{"edit", "create_file", "delete_path", "run_command", "background_process", "wait", "http_request", "web_fetch", "agent_delegate", "memory_write", "todo_write", "create_goal", "update_goal"} {
-		if names[blocked] {
-			t.Fatalf("expected %s schema to be filtered in plan mode", blocked)
-		}
-	}
-	for _, allowed := range []string{"list_files", "batch_read", "grep_files", "memory_read", "calculate", "ask", "get_goal", "Skill"} {
-		if !names[allowed] {
-			t.Fatalf("expected %s schema to remain available in plan mode", allowed)
-		}
 	}
 }
 
@@ -358,6 +314,14 @@ func TestGrillModeRejectsSideEffectToolExecution(t *testing.T) {
 	}
 }
 
+func TestGrillModeRequiresOneAskQuestion(t *testing.T) {
+	app := NewApp()
+	result := app.executeTool(context.Background(), ConfigState{grillMode: true}, "session-1", "ask", []byte(`{"questions":[]}`))
+	if result.OK || result.ErrorCode != "E_GRILL_ASK_COUNT" {
+		t.Fatalf("expected grill ask count guard, got %#v", result)
+	}
+}
+
 func TestChatToolsExposeBackgroundProcessWithoutPollingTools(t *testing.T) {
 	blocked := map[string]bool{"start_service": true, "stop_service": true, "list_services": true}
 	foundBackgroundProcess := false
@@ -485,28 +449,6 @@ func TestCompactBackgroundProcessResultForModelReducesOutput(t *testing.T) {
 	}
 }
 
-func TestListToolsReflectsPlanMode(t *testing.T) {
-	app := NewApp()
-	app.initialized = true
-	app.config = ConfigState{PlanMode: true}
-
-	tools := app.ListTools()
-	names := map[string]bool{}
-	for _, tool := range tools {
-		names[tool.Name] = true
-	}
-	for _, blocked := range []string{"edit", "create_file", "delete_path", "run_command", "background_process", "http_request", "web_fetch", "agent_delegate", "memory_write", "todo_write", "create_goal", "update_goal"} {
-		if names[blocked] {
-			t.Fatalf("expected %s to be hidden from ListTools in plan mode", blocked)
-		}
-	}
-	for _, allowed := range []string{"list_files", "batch_read", "grep_files", "memory_read", "calculate", "get_goal", "Skill"} {
-		if !names[allowed] {
-			t.Fatalf("expected %s to remain visible in ListTools in plan mode", allowed)
-		}
-	}
-}
-
 func TestContextBreakdownIncludesToolSchemas(t *testing.T) {
 	app := NewApp()
 	app.initialized = true
@@ -516,14 +458,6 @@ func TestContextBreakdownIncludesToolSchemas(t *testing.T) {
 		t.Fatalf("expected tool schema tokens to be counted, got %#v", normal)
 	}
 
-	app.config = ConfigState{PlanMode: true}
-	plan := app.getContextBreakdown("session-1")
-	if plan.ToolSchemas <= 0 {
-		t.Fatalf("expected read-only tool schema tokens to remain in plan mode, got %#v", plan)
-	}
-	if plan.ToolSchemas >= normal.ToolSchemas {
-		t.Fatalf("expected plan mode to have fewer tool schema tokens; normal=%d plan=%d", normal.ToolSchemas, plan.ToolSchemas)
-	}
 }
 
 func TestComputeLiveBreakdownSetsTotal(t *testing.T) {
@@ -1009,6 +943,55 @@ func TestCommandSafetyAllowsCmdSlashCOption(t *testing.T) {
 	}
 	if err := checkCommandSafety(CommandRequest{Command: "cmd.exe /c ver"}, t.TempDir()); err != nil {
 		t.Fatalf("cmd.exe /c option must not be treated as a C drive path: %v", err)
+	}
+}
+
+func TestCommandSafetyAllowsReadOnlyOutsidePath(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("MSYS2 drive paths are Windows-specific")
+	}
+	command := `(ls -la /d/coding/python/ | grep xx)`
+	if err := checkCommandSafety(CommandRequest{Command: command}, t.TempDir()); err != nil {
+		t.Fatalf("read-only outside inspection should be allowed: %v", err)
+	}
+}
+
+func TestCommandSafetyBlocksOutsidePathMutation(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("MSYS2 drive paths are Windows-specific")
+	}
+	err := checkCommandSafety(CommandRequest{Command: `touch /d/coding/python/new.txt`}, t.TempDir())
+	if toolErrorCode(err) != "E_PATH_OUTSIDE" {
+		t.Fatalf("outside mutation should be blocked with E_PATH_OUTSIDE, got %v", err)
+	}
+}
+
+func TestWebFetchModelContextKeepsDefaultSizedPage(t *testing.T) {
+	page := strings.Repeat("complete page content\n", 2500)
+	result := toolResult{OK: true, Data: WebFetchResult{URL: "https://example.com", Text: page}}
+	compact := compactToolResultForModel("web_fetch", result, "fallback")
+	if strings.Contains(compact, "characters omitted") || strings.Contains(compact, `"textReduced":true`) {
+		t.Fatalf("default-sized web page should remain complete for the model")
+	}
+	if !strings.Contains(compact, "complete page content") || len(compact) < len(page) {
+		t.Fatalf("expected full web page text in model context: compact=%d page=%d", len(compact), len(page))
+	}
+}
+
+func TestWebFetchDefaultSourceLimitReadsPastLegacyHTTPCap(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = io.WriteString(w, "<html><body><script>"+strings.Repeat("x", 300*1024)+"</script><p>visible tail marker</p></body></html>")
+	}))
+	defer server.Close()
+
+	app := NewApp()
+	got, err := app.webFetchToolWithConfig(context.Background(), ConfigState{AllowPrivateNetwork: true}, WebFetchRequest{URL: server.URL, MaxChars: 1000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got.Text, "visible tail marker") {
+		t.Fatalf("expected readable text after 256KB source boundary, got %q", got.Text)
 	}
 }
 

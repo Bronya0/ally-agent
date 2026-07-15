@@ -7,7 +7,6 @@
             <AppHeader
               :workspace-tabs="workspaceTabsWithStatus"
               :active-workspace-id="activeWorkspaceId"
-              :plan-mode-active="planModeActive"
               :grill-mode-active="!!activeSession?.grillMode"
               :update-available="updateAvailable"
               :latest-version="latestReleaseVersion"
@@ -17,7 +16,7 @@
               @close-workspace="closeWorkspaceTab"
               @add-workspace="addWorkspaceTab"
               @history-select="onHistorySelect"
-              @open-update="openUpdatePage"
+              @open-repository="openRepositoryPage"
               @open-settings="configVisible = true"
               @minimise="minimiseWindow"
               @toggle-maximise="toggleMaximiseWindow"
@@ -32,7 +31,7 @@
                   :messages="displayMessages"
                   :last-user-msg-index="lastUserMsgIndex"
                   :focused-id="focusedToolId"
-                  :render-fn="renderMarkdownWithMode"
+                  :render-fn="renderMarkdown"
                   :fmt-k="fmtK"
                   :tools="visibleAvailableTools"
                   @toggle-archive="toggleArchiveMessages"
@@ -142,7 +141,6 @@
                   :context-usage-style="contextUsageStyle"
                   :workspace-input-tokens="workspaceInputTokens"
                   :workspace-output-tokens="workspaceOutputTokens"
-                  :plan-mode-active="planModeActive"
                   :grill-mode-active="!!activeSession?.grillMode"
                   :scheduled-task-count="scheduledTasks.length"
                   :scheduled-task-running-count="scheduledTaskRunningCount"
@@ -226,8 +224,6 @@ import {
   DeactivateSkill,
   ClearSkills,
   GetActiveSkills,
-  SetPlanMode,
-  GetPlanMode,
   SwitchModel,
   GetTodos,
   GetMcpServers,
@@ -259,6 +255,7 @@ import { assignConfig, defaultConfig } from './utils/config.mjs';
 import { buildVersion } from './utils/buildVersion.js';
 import { computeEditStats, formatEditStats } from './utils/diff.js';
 import { isNewerReleaseVersion } from './utils/versionCheck.mjs';
+import { findSessionWorkspaceTab, isEditableNavigationTarget, shouldAcceptRunTerminal } from './utils/sessionState.mjs';
 import { formatDateTime, naiveDateLocale, naiveLocale, t, welcomeGreeting as localizedWelcomeGreeting } from './i18n.mjs';
 import {
   DEFAULT_TOOL_PREVIEW_LINES,
@@ -374,6 +371,14 @@ let mermaidModulePromise = null;
 let mermaidInitialized = false;
 let mermaidRenderScheduled = false;
 let mermaidRenderSequence = 0;
+let mermaidObserver = null;
+let mermaidRenderQueue = Promise.resolve();
+const mermaidObservedNodes = new Set();
+const mermaidSvgCache = new Map();
+const MERMAID_CACHE_MAX_ENTRIES = 16;
+const MERMAID_CACHE_MAX_CHARS = 2_000_000;
+let mermaidSvgCacheChars = 0;
+let mermaidCacheSequence = 0;
 
 function mermaidFenceSpec(lang) {
   const raw = String(lang || '').trim();
@@ -404,7 +409,7 @@ function renderMermaidFence(code, spec) {
   const encodedSource = encodeURIComponent(source);
   scheduleMermaidRender();
   return [
-    `<div class="markdown-mermaid" data-mermaid-source="${markdown.utils.escapeHtml(encodedSource)}">`,
+    `<div class="markdown-mermaid" data-mermaid-source="${markdown.utils.escapeHtml(encodedSource)}" tabindex="0" title="${markdown.utils.escapeHtml(t('app.mermaid.interactionHint'))}">`,
     `<div class="markdown-mermaid-toolbar" aria-label="${t('app.mermaid.actions')}">`,
     `<button type="button" class="markdown-mermaid-action" data-mermaid-action="download" title="${t('app.mermaid.download')}" aria-label="${t('app.mermaid.download')}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg></button>`,
     '</div>',
@@ -427,23 +432,16 @@ const markdown = new MarkdownIt({
   html: false,
   linkify: true,
   breaks: true,
-  highlight(code, lang) {
-    if (lang === 'ascii-art') {
-      return `<pre class="ascii-banner"><code>${markdown.utils.escapeHtml(code)}</code></pre>`;
-    }
-    if (isShellLanguage(lang)) {
-      return `<div class="code-block-wrapper"><button class="code-copy-btn" title="Copy" aria-label="Copy code"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" fill="none" stroke="currentColor" stroke-width="2"/></svg></button><pre class="hljs code-block shell-code"><code>${highlightShellCommand(code)}</code></pre></div>`;
-    }
-    try {
-      const highlighted = lang && hljs.getLanguage(lang)
-        ? hljs.highlight(code, { language: lang }).value
-        : hljs.highlightAuto(code).value;
-      return `<div class="code-block-wrapper"><button class="code-copy-btn" title="Copy" aria-label="Copy code"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" fill="none" stroke="currentColor" stroke-width="2"/></svg></button><pre class="hljs code-block"><code>${highlighted}</code></pre></div>`;
-    } catch (_) {
-      return `<div class="code-block-wrapper"><button class="code-copy-btn" title="Copy" aria-label="Copy code"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" fill="none" stroke="currentColor" stroke-width="2"/></svg></button><pre class="hljs code-block"><code>${markdown.utils.escapeHtml(code)}</code></pre></div>`;
-    }
-  },
 });
+
+function renderHighlightedCodeBlock(code, highlighted, extraClass = '') {
+  const rawLines = String(code || '').replace(/\r\n/g, '\n').split('\n');
+  if (rawLines.length > 1 && rawLines[rawLines.length - 1] === '') rawLines.pop();
+  const lineCount = Math.max(1, rawLines.length);
+  const copyLabel = markdown.utils.escapeHtml(t('code.copy'));
+  const countLabel = markdown.utils.escapeHtml(t('code.lines', { count: lineCount }));
+  return `<div class="code-block-wrapper"><span class="code-line-count">${countLabel}</span><button class="code-copy-btn" title="${copyLabel}" aria-label="${copyLabel}"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" fill="none" stroke="currentColor" stroke-width="2"/></svg></button><pre class="hljs code-block ${extraClass}"><code>${highlighted}</code></pre></div>`;
+}
 
 const defaultCodeInlineRenderer = markdown.renderer.rules.code_inline || ((tokens, idx, options, _env, self) => self.renderToken(tokens, idx, options));
 markdown.renderer.rules.code_inline = (tokens, idx, options, env, self) => {
@@ -454,7 +452,6 @@ markdown.renderer.rules.code_inline = (tokens, idx, options, env, self) => {
   return defaultCodeInlineRenderer(tokens, idx, options, env, self);
 };
 
-const defaultFenceRenderer = markdown.renderer.rules.fence || ((tokens, idx, options, _env, self) => self.renderToken(tokens, idx, options));
 markdown.renderer.rules.fence = (tokens, idx, options, env, self) => {
   const token = tokens[idx];
   const diagramSpec = mermaidFenceSpec(token.info);
@@ -462,7 +459,19 @@ markdown.renderer.rules.fence = (tokens, idx, options, env, self) => {
     const renderedDiagram = renderMermaidFence(token.content, diagramSpec);
     if (renderedDiagram) return `${renderedDiagram}\n`;
   }
-  return defaultFenceRenderer(tokens, idx, options, env, self);
+  const lang = String(token.info || '').trim().split(/\s+/)[0].toLowerCase();
+  if (lang === 'ascii-art') {
+    return `<pre class="ascii-banner"><code>${markdown.utils.escapeHtml(token.content)}</code></pre>\n`;
+  }
+  try {
+    const highlightLang = isShellLanguage(lang) ? 'bash' : lang;
+    const highlighted = highlightLang && hljs.getLanguage(highlightLang)
+      ? hljs.highlight(token.content, { language: highlightLang }).value
+      : hljs.highlightAuto(token.content).value;
+    return `${renderHighlightedCodeBlock(token.content, highlighted, isShellLanguage(lang) ? 'shell-code' : '')}\n`;
+  } catch (_) {
+    return `${renderHighlightedCodeBlock(token.content, markdown.utils.escapeHtml(token.content), '')}\n`;
+  }
 };
 
 function scheduleMermaidRender() {
@@ -472,8 +481,70 @@ function scheduleMermaidRender() {
   nextTick(() => {
     window.requestAnimationFrame(() => {
       mermaidRenderScheduled = false;
-      renderPendingMermaidDiagrams();
+      observePendingMermaidDiagrams();
     });
+  });
+}
+
+function ensureMermaidObserver() {
+  if (mermaidObserver || typeof IntersectionObserver === 'undefined') return mermaidObserver;
+  mermaidObserver = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      const node = entry.target;
+      node._mermaidNearViewport = entry.isIntersecting;
+      if (entry.isIntersecting) {
+        if (node.dataset.mermaidSuspended === 'true') restoreMermaidDiagram(node);
+        else queueMermaidDiagram(node);
+      } else {
+        suspendMermaidDiagram(node);
+      }
+    }
+  }, { rootMargin: '900px 0px' });
+  return mermaidObserver;
+}
+
+function cleanupDisconnectedMermaidNodes() {
+  for (const node of mermaidObservedNodes) {
+    if (node.isConnected) continue;
+    mermaidObserver?.unobserve(node);
+    node._mermaidCleanup?.();
+    removeMermaidCache(node._mermaidCacheKey);
+    mermaidObservedNodes.delete(node);
+  }
+}
+
+function observePendingMermaidDiagrams() {
+  cleanupDisconnectedMermaidNodes();
+  const nodes = Array.from(document.querySelectorAll('.markdown-mermaid[data-mermaid-source]'));
+  if (!nodes.length) return;
+  const observer = ensureMermaidObserver();
+  if (!observer) {
+    for (const node of nodes) queueMermaidDiagram(node);
+    return;
+  }
+  for (const node of nodes) {
+    if (mermaidObservedNodes.has(node)) continue;
+    mermaidObservedNodes.add(node);
+    observer.observe(node);
+  }
+}
+
+function queueMermaidDiagram(node) {
+  if (!node || node.dataset.mermaidQueued || node.dataset.mermaidRendered || node._mermaidNearViewport === false) return;
+  node.dataset.mermaidQueued = 'true';
+  mermaidRenderQueue = mermaidRenderQueue
+    .then(waitForMermaidRenderSlot)
+    .then(() => renderMermaidDiagram(node))
+    .catch(() => {});
+}
+
+function waitForMermaidRenderSlot() {
+  return new Promise((resolve) => {
+    if (typeof window.requestIdleCallback === 'function') {
+      window.requestIdleCallback(() => resolve(), { timeout: 300 });
+      return;
+    }
+    window.requestAnimationFrame(() => window.setTimeout(resolve, 0));
   });
 }
 
@@ -485,18 +556,59 @@ async function loadMermaidModule() {
         mermaid.initialize({
           startOnLoad: false,
           securityLevel: 'strict',
-          theme: 'dark',
-          themeVariables: {
-            background: '#151515',
-            mainBkg: '#202020',
-            secondBkg: '#262626',
-            primaryColor: '#202020',
-            primaryTextColor: '#edf2ef',
-            primaryBorderColor: '#8ab4ff',
-            lineColor: '#8fd4b4',
-            textColor: '#edf2ef',
-            fontFamily: 'Inter',
+          theme: 'base',
+          darkMode: true,
+          htmlLabels: false,
+          flowchart: {
+            curve: 'linear',
+            useMaxWidth: true,
+            nodeSpacing: 36,
+            rankSpacing: 48,
           },
+          sequence: {
+            useMaxWidth: true,
+            wrap: true,
+            diagramMarginX: 24,
+            diagramMarginY: 18,
+            actorMargin: 48,
+          },
+          themeVariables: {
+            darkMode: true,
+            background: '#2b2b2b',
+            mainBkg: '#323232',
+            secondBkg: '#383838',
+            primaryColor: '#323232',
+            primaryTextColor: '#a9b7c6',
+            primaryBorderColor: '#cc7832',
+            secondaryColor: '#353535',
+            secondaryTextColor: '#a9b7c6',
+            secondaryBorderColor: '#6897bb',
+            tertiaryColor: '#303330',
+            tertiaryTextColor: '#a9b7c6',
+            tertiaryBorderColor: '#6a8759',
+            lineColor: '#808080',
+            textColor: '#a9b7c6',
+            nodeTextColor: '#a9b7c6',
+            noteBkgColor: '#3b352b',
+            noteTextColor: '#d7ba7d',
+            noteBorderColor: '#bbb529',
+            actorBkg: '#323232',
+            actorBorder: '#6897bb',
+            actorTextColor: '#a9b7c6',
+            actorLineColor: '#666666',
+            signalColor: '#a9b7c6',
+            signalTextColor: '#a9b7c6',
+            labelBoxBkgColor: '#323232',
+            labelBoxBorderColor: '#6a8759',
+            labelTextColor: '#a9b7c6',
+            loopTextColor: '#d7ba7d',
+            activationBorderColor: '#cc7832',
+            activationBkgColor: '#3b332b',
+            sequenceNumberColor: '#2b2b2b',
+            fontFamily: 'Inter, "Microsoft YaHei", sans-serif',
+            fontSize: '14px',
+          },
+          themeCSS: '.node rect,.node polygon,.node circle,.node ellipse{stroke-width:1.4px}.edgePath .path,.flowchart-link{stroke-width:1.5px}.nodeLabel,.label text{font-weight:500}.cluster rect{fill:#2f2f2f!important;stroke:#5d5d5d!important}',
         });
         mermaidInitialized = true;
       }
@@ -506,41 +618,266 @@ async function loadMermaidModule() {
   return mermaidModulePromise;
 }
 
-async function renderPendingMermaidDiagrams() {
-  const nodes = Array.from(document.querySelectorAll('.markdown-mermaid[data-mermaid-source]:not([data-mermaid-rendered]):not([data-mermaid-rendering])'));
-  if (!nodes.length) return;
+async function renderMermaidDiagram(node) {
+  if (!node?.isConnected || node.dataset.mermaidRendered || node._mermaidNearViewport === false) {
+    if (node) delete node.dataset.mermaidQueued;
+    return;
+  }
+  node.dataset.mermaidRendering = 'true';
   let mermaid;
   try {
     mermaid = await loadMermaidModule();
   } catch (err) {
-    for (const node of nodes) {
-      markMermaidError(node, t('app.mermaid.loadFailed', { error: err?.message || err || 'unknown error' }));
-    }
+    markMermaidError(node, t('app.mermaid.loadFailed', { error: err?.message || err || 'unknown error' }));
+    delete node.dataset.mermaidQueued;
+    delete node.dataset.mermaidRendering;
     return;
   }
 
-  for (const node of nodes) {
-    if (!node.isConnected || node.dataset.mermaidRendered) continue;
-    node.dataset.mermaidRendering = 'true';
-    try {
-      const source = decodeURIComponent(node.dataset.mermaidSource || '');
-      const output = node.querySelector('.markdown-mermaid-output');
-      if (!source || !output) throw new Error('empty diagram');
-      const id = `ally-mermaid-${Date.now()}-${++mermaidRenderSequence}`;
-      const result = await mermaid.render(id, source);
-      if (!node.isConnected) continue;
-      output.innerHTML = result.svg || '';
-      if (typeof result.bindFunctions === 'function') {
-        result.bindFunctions(output);
-      }
-      node.dataset.mermaidRendered = 'true';
-      node.classList.add('rendered');
-    } catch (err) {
-      markMermaidError(node, err?.message || String(err || t('app.mermaid.renderFailed')));
-    } finally {
-      delete node.dataset.mermaidRendering;
+  try {
+    const source = decodeURIComponent(node.dataset.mermaidSource || '');
+    const output = node.querySelector('.markdown-mermaid-output');
+    if (!source || !output) throw new Error('empty diagram');
+    const id = `ally-mermaid-${Date.now()}-${++mermaidRenderSequence}`;
+    const result = await mermaid.render(id, source);
+    if (!node.isConnected) return;
+    output.innerHTML = result.svg || '';
+    setupMermaidInteraction(node, output, null, true);
+    if (typeof result.bindFunctions === 'function') {
+      result.bindFunctions(output);
     }
+    node.dataset.mermaidRendered = 'true';
+    node.classList.add('rendered');
+    if (node._mermaidNearViewport === false) suspendMermaidDiagram(node);
+  } catch (err) {
+    markMermaidError(node, err?.message || String(err || t('app.mermaid.renderFailed')));
+  } finally {
+    delete node.dataset.mermaidQueued;
+    delete node.dataset.mermaidRendering;
   }
+}
+
+function setupMermaidInteraction(node, output, initialState = null, measureHeight = true) {
+  const svg = output?.querySelector?.('svg');
+  if (!node || !output || !svg) return;
+
+  node._mermaidCleanup?.();
+
+  const stage = document.createElement('div');
+  stage.className = 'markdown-mermaid-stage';
+  stage.appendChild(svg);
+  output.replaceChildren(stage);
+
+  const state = {
+    scale: Number(initialState?.scale) || 1,
+    x: Number(initialState?.x) || 0,
+    y: Number(initialState?.y) || 0,
+    dragging: false,
+    pointerId: null,
+    startX: 0,
+    startY: 0,
+    originX: 0,
+    originY: 0,
+  };
+  let transformFrame = 0;
+  let transformReleaseTimer = 0;
+
+  const persistViewState = () => {
+    node._mermaidViewState = { scale: state.scale, x: state.x, y: state.y };
+  };
+  const flushTransform = () => {
+    transformFrame = 0;
+    if (!stage.isConnected) return;
+    stage.style.transform = `translate(${state.x}px, ${state.y}px) scale(${state.scale})`;
+    persistViewState();
+  };
+  const scheduleTransform = () => {
+    node.classList.add('mermaid-transforming');
+    if (!transformFrame) transformFrame = window.requestAnimationFrame(flushTransform);
+    if (transformReleaseTimer) window.clearTimeout(transformReleaseTimer);
+    transformReleaseTimer = window.setTimeout(() => {
+      transformReleaseTimer = 0;
+      node.classList.remove('mermaid-transforming');
+    }, 160);
+  };
+  const activate = () => {
+    for (const active of document.querySelectorAll('.markdown-mermaid.interaction-active')) {
+      if (active !== node) {
+        active.classList.remove('interaction-active', 'mermaid-transforming');
+        active._mermaidStopTransforming?.();
+      }
+    }
+    node.classList.add('interaction-active');
+    node.focus({ preventScroll: true });
+  };
+  const reset = () => {
+    state.scale = 1;
+    state.x = 0;
+    state.y = 0;
+    scheduleTransform();
+  };
+
+  flushTransform();
+
+  node._mermaidStopTransforming = () => {
+    if (transformReleaseTimer) window.clearTimeout(transformReleaseTimer);
+    transformReleaseTimer = 0;
+    node.classList.remove('mermaid-transforming');
+  };
+  node._mermaidCleanup = () => {
+    if (transformFrame) window.cancelAnimationFrame(transformFrame);
+    transformFrame = 0;
+    node._mermaidStopTransforming?.();
+  };
+
+  output.addEventListener('pointerdown', (event) => {
+    if (event.button !== 0 || event.target?.closest?.('a, button')) return;
+    activate();
+    state.dragging = true;
+    state.pointerId = event.pointerId;
+    state.startX = event.clientX;
+    state.startY = event.clientY;
+    state.originX = state.x;
+    state.originY = state.y;
+    output.classList.add('dragging');
+    output.setPointerCapture?.(event.pointerId);
+    event.preventDefault();
+  });
+
+  output.addEventListener('pointermove', (event) => {
+    if (!state.dragging || event.pointerId !== state.pointerId) return;
+    state.x = state.originX + event.clientX - state.startX;
+    state.y = state.originY + event.clientY - state.startY;
+    scheduleTransform();
+  });
+
+  const stopDragging = (event) => {
+    if (!state.dragging || (event.pointerId !== undefined && event.pointerId !== state.pointerId)) return;
+    state.dragging = false;
+    output.classList.remove('dragging');
+    if (state.pointerId !== null && output.hasPointerCapture?.(state.pointerId)) {
+      output.releasePointerCapture(state.pointerId);
+    }
+    state.pointerId = null;
+  };
+  output.addEventListener('pointerup', stopDragging);
+  output.addEventListener('pointercancel', stopDragging);
+  output.addEventListener('lostpointercapture', stopDragging);
+
+  output.addEventListener('wheel', (event) => {
+    if (!node.classList.contains('interaction-active')) return;
+    event.preventDefault();
+    const rect = output.getBoundingClientRect();
+    const pointerX = event.clientX - rect.left;
+    const pointerY = event.clientY - rect.top;
+    const deltaUnit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? Math.max(output.clientHeight, 1) : 1;
+    const factor = Math.exp(-event.deltaY * deltaUnit * 0.0015);
+    const nextScale = Math.min(5, Math.max(0.25, state.scale * factor));
+    if (Math.abs(nextScale - state.scale) < 0.0001) return;
+    const contentX = (pointerX - state.x) / state.scale;
+    const contentY = (pointerY - state.y) / state.scale;
+    state.x = pointerX - contentX * nextScale;
+    state.y = pointerY - contentY * nextScale;
+    state.scale = nextScale;
+    scheduleTransform();
+  }, { passive: false });
+
+  output.addEventListener('dblclick', (event) => {
+    if (event.target?.closest?.('a, button')) return;
+    activate();
+    reset();
+    event.preventDefault();
+  });
+
+  if (!measureHeight) return;
+  window.requestAnimationFrame(() => {
+    if (!output.isConnected) return;
+    const renderedHeight = Math.ceil(svg.getBoundingClientRect().height || 0);
+    output.style.height = `${Math.min(640, Math.max(180, renderedHeight + 8))}px`;
+  });
+}
+
+function removeMermaidCache(cacheKey) {
+  if (!cacheKey || !mermaidSvgCache.has(cacheKey)) return;
+  const cached = mermaidSvgCache.get(cacheKey);
+  mermaidSvgCacheChars = Math.max(0, mermaidSvgCacheChars - Number(cached?.size || 0));
+  mermaidSvgCache.delete(cacheKey);
+}
+
+function cacheMermaidSvg(node, entry) {
+  const svgText = String(entry?.svg || '');
+  if (!node._mermaidCacheKey) node._mermaidCacheKey = `mermaid-cache-${++mermaidCacheSequence}`;
+  removeMermaidCache(node._mermaidCacheKey);
+  if (!svgText || svgText.length > MERMAID_CACHE_MAX_CHARS) return false;
+  const cached = { ...entry, size: svgText.length };
+  mermaidSvgCache.set(node._mermaidCacheKey, cached);
+  mermaidSvgCacheChars += cached.size;
+  while (mermaidSvgCache.size > MERMAID_CACHE_MAX_ENTRIES || mermaidSvgCacheChars > MERMAID_CACHE_MAX_CHARS) {
+    const oldestKey = mermaidSvgCache.keys().next().value;
+    if (!oldestKey) break;
+    removeMermaidCache(oldestKey);
+  }
+  return mermaidSvgCache.has(node._mermaidCacheKey);
+}
+
+function suspendMermaidDiagram(node) {
+  if (!node?.isConnected || node.dataset.mermaidRendered !== 'true' || node.dataset.mermaidSuspended === 'true') return;
+  const output = node.querySelector('.markdown-mermaid-output');
+  const svg = output?.querySelector?.('svg');
+  if (!output || !svg) return;
+  node.classList.remove('interaction-active', 'mermaid-transforming');
+  if (document.activeElement === node) node.blur();
+  const height = output.style.height || `${Math.max(180, Math.ceil(output.getBoundingClientRect().height || 0))}px`;
+  cacheMermaidSvg(node, {
+    svg: svg.outerHTML,
+    height,
+    state: node._mermaidViewState || { scale: 1, x: 0, y: 0 },
+  });
+  node._mermaidCleanup?.();
+  node._mermaidCleanup = null;
+  node._mermaidStopTransforming = null;
+  const placeholder = output.cloneNode(false);
+  placeholder.style.height = height;
+  output.replaceWith(placeholder);
+  node.dataset.mermaidSuspended = 'true';
+  node.classList.add('mermaid-suspended');
+}
+
+function restoreMermaidDiagram(node) {
+  if (!node?.isConnected || node.dataset.mermaidSuspended !== 'true') return;
+  const cacheKey = node._mermaidCacheKey;
+  const cached = cacheKey ? mermaidSvgCache.get(cacheKey) : null;
+  if (!cached) {
+    delete node.dataset.mermaidRendered;
+    delete node.dataset.mermaidSuspended;
+    node.classList.remove('rendered', 'mermaid-suspended');
+    queueMermaidDiagram(node);
+    return;
+  }
+  mermaidSvgCache.delete(cacheKey);
+  mermaidSvgCache.set(cacheKey, cached);
+  const output = node.querySelector('.markdown-mermaid-output');
+  if (!output) return;
+  output.innerHTML = cached.svg;
+  output.style.height = cached.height || '180px';
+  node._mermaidViewState = cached.state || { scale: 1, x: 0, y: 0 };
+  setupMermaidInteraction(node, output, node._mermaidViewState, false);
+  delete node.dataset.mermaidSuspended;
+  node.classList.remove('mermaid-suspended');
+}
+
+function deactivateMermaidInteraction() {
+  const active = document.querySelector('.markdown-mermaid.interaction-active');
+  if (!active) return false;
+  active.classList.remove('interaction-active', 'mermaid-transforming');
+  active._mermaidStopTransforming?.();
+  if (document.activeElement === active) active.blur();
+  return true;
+}
+
+function handleMermaidOutsidePointerDown(event) {
+  if (event.target?.closest?.('.markdown-mermaid')) return;
+  deactivateMermaidInteraction();
 }
 
 function markMermaidError(node, messageText) {
@@ -599,6 +936,17 @@ function handleCodeCopyClick(event) {
   }
 }
 
+function handleMarkdownLinkClick(event) {
+  const anchor = event.target?.closest?.('.markdown-body a[href]');
+  if (!anchor) return;
+  const rawHref = String(anchor.getAttribute('href') || '').trim();
+  if (!rawHref || rawHref.startsWith('#')) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const href = rawHref.startsWith('//') ? `https:${rawHref}` : rawHref;
+  if (/^(?:https?:|mailto:)/i.test(href)) BrowserOpenURL(href);
+}
+
 function fallbackCopy(text, onSuccess) {
   try {
     const ta = document.createElement('textarea');
@@ -622,6 +970,22 @@ function downloadMermaidSvg(node) {
   if (!copy.getAttribute('xmlns')) {
     copy.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
   }
+  const background = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+  const viewBox = String(copy.getAttribute('viewBox') || '').trim().split(/[\s,]+/).map(Number);
+  if (viewBox.length === 4 && viewBox.every(Number.isFinite)) {
+    background.setAttribute('x', String(viewBox[0]));
+    background.setAttribute('y', String(viewBox[1]));
+    background.setAttribute('width', String(viewBox[2]));
+    background.setAttribute('height', String(viewBox[3]));
+  } else {
+    background.setAttribute('x', '0');
+    background.setAttribute('y', '0');
+    background.setAttribute('width', '100%');
+    background.setAttribute('height', '100%');
+  }
+  background.setAttribute('fill', '#2b2b2b');
+  background.setAttribute('aria-hidden', 'true');
+  copy.insertBefore(background, copy.firstChild);
   const source = decodeURIComponent(node.dataset.mermaidSource || '');
   const svgText = new XMLSerializer().serializeToString(copy);
   const blob = new Blob([svgText], { type: 'image/svg+xml;charset=utf-8' });
@@ -674,7 +1038,6 @@ const workspaceTabs = ref([]);
 const activeWorkspaceId = ref('');
 const workspaceHistory = ref(loadWorkspaceHistory());
 const settingsPage = ref('general');
-const planModeActive = ref(false);
 const showSkillsPanel = ref(false);
 const todos = ref([]);
 const todosBySession = reactive({});
@@ -703,6 +1066,7 @@ const streamBuffers = new Map();
 const runtimeEventOffs = [];
 const missingDependencyWarningsShown = new Set();
 let streamFlushScheduled = false;
+let streamFlushTimer = 0;
 let runtimeEventsBound = false;
 let completionAudioContext = null;
 let lastCompletionSoundAt = 0;
@@ -874,7 +1238,11 @@ function toggleArchiveMessages(sessionId) {
   if (next.has(sessionId)) next.delete(sessionId);
   else next.add(sessionId);
   expandedArchiveSessions.value = next;
-  nextTick(() => chatMessagesRef.value?.scrollbarRef?.scrollTo({ top: 0 }));
+  nextTick(() => {
+    chatMessagesRef.value?.scrollbarRef?.scrollTo({ top: 0 });
+    cleanupDisconnectedMermaidNodes();
+    observePendingMermaidDiagrams();
+  });
 }
 
 // Merge consecutive read tool cards into a single aggregated card.
@@ -981,7 +1349,7 @@ const lastUserMsgIndex = computed(() => {
 
 const canSend = computed(() => {
   const s = activeSession.value;
-  return promptText.value.trim().length > 0 && !(s && (s.runId || s.isRunning));
+  return (promptText.value.trim().length > 0 || pendingAttachments.value.length > 0) && !(s && (s.runId || s.isRunning));
 });
 
 const contextTokens = ref(0);
@@ -1019,6 +1387,13 @@ watch([activeSessionId, activeMessages], async () => {
     contextBreakdown.value = b;
   } catch (_) { /* ignore */ }
 }, { immediate: true, deep: true });
+
+watch(activeSessionId, () => {
+  nextTick(() => {
+    cleanupDisconnectedMermaidNodes();
+    observePendingMermaidDiagrams();
+  });
+});
 
 function refreshContextTokens(sid) {
   if (!sid) return;
@@ -1088,29 +1463,53 @@ const workspaceOutputTokens = computed(() => fmtTokenUnit(workspaceTokenUsage.va
 function loadWorkspaceHistory() {
   try {
     const raw = localStorage.getItem('agent_workspace_history');
-    return raw ? JSON.parse(raw) : [];
+    return dedupeWorkspaceHistory(raw ? JSON.parse(raw) : []);
   } catch (_) {
     return [];
   }
 }
 
+function workspaceHistoryDedupeKey(path) {
+  const original = String(path || '').trim();
+  let value = original.replace(/\\/g, '/').replace(/\/{2,}/g, '/');
+  if (value.length > 1 && !/^[a-z]:\/$/i.test(value)) value = value.replace(/\/+$/, '');
+  const isWindowsPath = /^[a-z]:\//i.test(value) || /^(?:\\\\|\/\/)/.test(original);
+  return isWindowsPath ? value.toLowerCase() : value;
+}
+
+function dedupeWorkspaceHistory(paths, limit = 30) {
+  const source = Array.isArray(paths) ? paths : [];
+  const seen = new Set();
+  const result = [];
+  for (let index = source.length - 1; index >= 0; index--) {
+    const path = String(source[index] || '').trim();
+    const key = workspaceHistoryDedupeKey(path);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    result.push(path);
+    if (result.length >= limit) break;
+  }
+  return result.reverse();
+}
+
 function saveWorkspaceHistory() {
   try {
-    const list = workspaceHistory.value.slice(-20);
+    const list = dedupeWorkspaceHistory(workspaceHistory.value);
+    workspaceHistory.value = list;
     localStorage.setItem('agent_workspace_history', JSON.stringify(list));
   } catch (_) { /* ignore */ }
 }
 
 function addToHistory(path) {
   if (!path) return;
-  workspaceHistory.value = workspaceHistory.value.filter((p) => p !== path);
-  workspaceHistory.value.push(path);
+  workspaceHistory.value = dedupeWorkspaceHistory([...workspaceHistory.value, path]);
   saveWorkspaceHistory();
 }
 
 function removeFromHistory(path) {
   if (!path) return;
-  workspaceHistory.value = workspaceHistory.value.filter((p) => p !== path);
+  const key = workspaceHistoryDedupeKey(path);
+  workspaceHistory.value = workspaceHistory.value.filter((p) => workspaceHistoryDedupeKey(p) !== key);
   saveWorkspaceHistory();
 }
 
@@ -1144,7 +1543,7 @@ function addPromptHistory(text) {
 }
 
 const historyOptions = computed(() => {
-  const recent = [...workspaceHistory.value].reverse().slice(0, 10);
+  const recent = [...workspaceHistory.value].reverse().slice(0, 30);
   if (recent.length === 0) return [{ label: t('app.history.empty'), disabled: true, key: '__empty__' }];
   return recent.map((path) => {
     const label = path.split(/[/\\]/).filter(Boolean).pop() || path;
@@ -1262,17 +1661,29 @@ function inferSessionWorkspace(session) {
   return '';
 }
 
-function applySessionWorkspace(session) {
-  const workspace = inferSessionWorkspace(session);
-  if (!session || !workspace) return false;
-  session.workspace = workspace;
+function bindSessionToActiveWorkspaceTab(session) {
+  if (!session) return null;
+  const tab = workspaceTabs.value.find((item) => item.id === activeWorkspaceId.value) || null;
+  if (tab) tab.sessionId = session.id;
+  return tab;
+}
 
-  const tab = workspaceTabs.value.find((item) => item.id === activeWorkspaceId.value);
+function applySessionWorkspace(session) {
+  if (!session) return false;
+  const workspace = inferSessionWorkspace(session);
+  if (workspace) session.workspace = workspace;
+
+  const tab = bindSessionToActiveWorkspaceTab(session);
   if (tab) {
-    tab.path = workspace;
-    tab.label = workspaceLabel(workspace);
-    tab.sessionId = session.id;
+    if (workspace) {
+      tab.path = workspace;
+      tab.label = workspaceLabel(workspace);
+    }
   }
+
+  // Session/Tab linkage is valid even before a workspace is selected. Only
+  // workspace-dependent refreshes need to wait for a non-empty path.
+  if (!workspace) return true;
 
   config.workspace = workspace;
   configDraft.workspace = workspace;
@@ -1283,6 +1694,47 @@ function applySessionWorkspace(session) {
   SaveConfig({ ...config })
     .then(() => refreshGitStatus())
     .catch(() => { gitStatus.value = { isRepo: false }; });
+  return true;
+}
+
+function ensureWorkspaceTabSession(tab) {
+  if (!tab) return null;
+  const existing = tab.sessionId
+    ? sessions.value.find((session) => session.id === tab.sessionId) || null
+    : null;
+  if (existing) return existing;
+
+  // If the active Tab has a stale link but the UI still has a valid active
+  // session, preserve what the user is viewing and repair the link in place.
+  if (tab.id === activeWorkspaceId.value && activeSession.value) {
+    tab.sessionId = activeSession.value.id;
+    return activeSession.value;
+  }
+
+  const replacement = createReplacementSession(tab.label || t('app.sessions.new'), tab.path || '');
+  sessions.value.unshift(replacement);
+  tab.sessionId = replacement.id;
+  if (tab.id === activeWorkspaceId.value) {
+    activeSessionId.value = replacement.id;
+    activeRunId.value = '';
+  }
+  return replacement;
+}
+
+function activateSelectedSession(target) {
+  if (!target) return false;
+  const currentTab = workspaceTabs.value.find((tab) => tab.id === activeWorkspaceId.value) || null;
+  const linkedTab = currentTab?.sessionId === target.id
+    ? currentTab
+    : findSessionWorkspaceTab(workspaceTabs.value, target.id);
+  if (linkedTab && linkedTab.id !== activeWorkspaceId.value) {
+    switchWorkspaceTab(linkedTab.id);
+    return true;
+  }
+
+  activeSessionId.value = target.id;
+  applySessionWorkspace(target);
+  loadTodos(target.id);
   return true;
 }
 
@@ -1322,12 +1774,17 @@ function closeWorkspaceTab(id) {
   // list so it remains accessible via /sessions. The session's workspace is
   // preserved via session.workspace / inferSessionWorkspace.
   if (tab && tab.sessionId) {
-    releaseSessionAttachments(sessions.value.find(s => s.id === tab.sessionId));
-    delete sessionPromptTexts[tab.sessionId];
-    delete todosBySession[tab.sessionId];
-    delete todoRevisionsBySession[tab.sessionId];
-    delete sessionScrollAnchors[tab.sessionId];
-    ReleaseSession(tab.sessionId).catch(() => {});
+    const linkedSession = sessions.value.find(s => s.id === tab.sessionId) || null;
+    // A closed Tab does not cancel its background run. Keep all session-local
+    // UI/backend state until that run actually finishes.
+    if (!sessionMayHaveBackgroundRun(linkedSession)) {
+      releaseSessionAttachments(linkedSession);
+      delete sessionPromptTexts[tab.sessionId];
+      delete todosBySession[tab.sessionId];
+      delete todoRevisionsBySession[tab.sessionId];
+      delete sessionScrollAnchors[tab.sessionId];
+      ReleaseSession(tab.sessionId).catch(() => {});
+    }
   }
   saveSessions();
   if (activeWorkspaceId.value === id) {
@@ -1344,6 +1801,7 @@ const sessionScrollAnchors = {};
 function switchWorkspaceTab(id) {
   const tab = workspaceTabs.value.find((t) => t.id === id);
   if (!tab) return;
+  const linkedSession = ensureWorkspaceTabSession(tab);
   // Save current session's scroll anchor before switching
   const prevAnchor = chatMessagesRef.value?.saveScrollPosition();
   if (activeSessionId.value && prevAnchor != null) {
@@ -1361,11 +1819,12 @@ function switchWorkspaceTab(id) {
     .then(() => refreshGitStatus())
     .catch(() => { gitStatus.value = { isRepo: false }; });
   // Switch to linked session
-  if (tab.sessionId) {
-    activeSessionId.value = tab.sessionId;
-    loadTodos(tab.sessionId);
+  if (linkedSession) {
+    activeSessionId.value = linkedSession.id;
+    activeRunId.value = linkedSession.runId || '';
+    loadTodos(linkedSession.id);
     // Restore saved scroll anchor for this session, or stay at default
-    const savedAnchor = sessionScrollAnchors[tab.sessionId];
+    const savedAnchor = sessionScrollAnchors[linkedSession.id];
     if (savedAnchor != null) {
       nextTick(() => chatMessagesRef.value?.restoreScrollPosition(savedAnchor));
     }
@@ -1550,8 +2009,10 @@ function newSession(title) {
   const id = crypto.randomUUID ? crypto.randomUUID() : `s-${Date.now()}-${Math.random()}`;
   const now = Date.now();
   const workspace = config.workspace || '';
-  sessions.value.unshift({ id, title: title || t('app.sessions.new'), workspace, messages: [], runId: '', isRunning: false, grillMode: false, createdAt: now, updatedAt: now });
+  const session = { id, title: title || t('app.sessions.new'), workspace, messages: [], runId: '', isRunning: false, grillMode: false, createdAt: now, updatedAt: now };
+  sessions.value.unshift(session);
   activeSessionId.value = id;
+  bindSessionToActiveWorkspaceTab(session);
   promptText.value = '';
   addWelcome(workspace);
   // Reset workspace token usage for new session
@@ -1574,8 +2035,7 @@ function selectSession(index) {
   if (index < 0 || index >= sessions.value.length) return;
   const target = sessions.value[index];
   saveSessions();
-  activeSessionId.value = target.id;
-  applySessionWorkspace(target);
+  activateSelectedSession(target);
   promptText.value = '';
   activeRunId.value = target.runId || '';
   sessionsVisible.value = false;
@@ -1684,6 +2144,15 @@ function sessionByEvent(data) {
   return activeSession.value;
 }
 
+function sessionByTerminalEvent(data) {
+  const sid = data?.sessionId || '';
+  const session = sid
+    ? sessions.value.find((item) => item.id === sid) || null
+    : sessionByRunId(data?.runId || '');
+  if (!session || !shouldAcceptRunTerminal(session.runId, data?.runId)) return null;
+  return session;
+}
+
 function markSessionRunning(session) {
   if (!session) return;
   if (!session.workspace && config.workspace) session.workspace = config.workspace;
@@ -1706,12 +2175,15 @@ function queueStreamDelta(data, field) {
 function scheduleStreamFlush() {
   if (streamFlushScheduled) return;
   streamFlushScheduled = true;
-  requestAnimationFrame(() => {
-    streamFlushScheduled = false;
-    for (const runId of [...streamBuffers.keys()]) {
-      flushStreamBuffer(runId);
-    }
-  });
+  streamFlushTimer = window.setTimeout(() => {
+    window.requestAnimationFrame(() => {
+      streamFlushTimer = 0;
+      streamFlushScheduled = false;
+      for (const runId of [...streamBuffers.keys()]) {
+        flushStreamBuffer(runId);
+      }
+    });
+  }, 48);
 }
 
 function flushStreamBuffer(runId) {
@@ -1837,8 +2309,8 @@ function bindRuntimeEvents() {
   runtimeEventsBound = true;
 
   onRuntimeEvent('run:start', (data) => {
-    const sid = data.sessionId || '';
-    const session = sessions.value.find(s => s.id === sid) || activeSession.value;
+    const sid = data?.sessionId || '';
+    const session = sid ? sessions.value.find((item) => item.id === sid) || null : null;
     if (session) {
       session.runId = data.runId;
       session.isRunning = true;
@@ -1893,6 +2365,50 @@ function bindRuntimeEvents() {
   });
   onRuntimeEvent('run:reasoning', (data) => {
     queueStreamDelta(data, 'reasoning');
+  });
+  onRuntimeEvent('run:image', (data) => {
+    flushStreamBuffer(data.runId);
+    const session = sessionByEvent(data);
+    if (!session || !data?.dataUrl) return;
+    let target = session.messages[session.messages.length - 1];
+    if (!target || target.role !== 'assistant' || target.done || target.error || target.system) {
+      target = { role: 'assistant', content: '', reasoningBody: '', streaming: true, attachments: [] };
+      session.messages.push(target);
+    }
+    target.streaming = true;
+    if (!Array.isArray(target.attachments)) target.attachments = [];
+    const imageId = data.id || `generated-${target.attachments.length + 1}`;
+    let attachment = target.attachments.find((item) => item.id === imageId);
+    if (!attachment) {
+      attachment = {
+        id: imageId,
+        name: t('app.attachment.generatedImage'),
+        type: data.mimeType || 'image/png',
+        size: 0,
+        kind: 'image',
+        previewUrl: '',
+        dataUrl: '',
+        text: '',
+        truncated: false,
+        error: '',
+        generated: true,
+      };
+      target.attachments.push(attachment);
+    }
+    attachment.type = data.mimeType || attachment.type || 'image/png';
+    attachment.previewUrl = data.dataUrl;
+    attachment.dataUrl = data.dataUrl;
+    attachment.partial = !!data.partial;
+    attachment.size = Math.max(0, Math.floor((String(data.dataUrl).length * 3) / 4));
+    if (!data.partial) {
+      createImageThumbnailDataUrl(data.dataUrl).then((thumbnail) => {
+        if (thumbnail && attachment.dataUrl === data.dataUrl) {
+          attachment.previewUrl = thumbnail;
+          saveSessions();
+        }
+      }).catch(() => {});
+    }
+    if (session.id === activeSessionId.value) scrollMessagesToBottom();
   });
   const applyToolProgressEvent = (data) => {
     flushStreamBuffer(data.runId);
@@ -2104,28 +2620,13 @@ function bindRuntimeEvents() {
       existing.time = new Date().toLocaleTimeString();
     }
   });
-  onRuntimeEvent('render:html', (data) => {
-    const session = sessions.value.find(s => s.id === data.sessionId);
+  onRuntimeEvent('run:done', (data) => {
+    flushStreamBuffer(data.runId);
+    const session = sessionByTerminalEvent(data);
     if (!session) return;
-    session.messages.push({
-      role: 'tool_call',
-      kind: 'render_html',
-      title: data.title || '',
-      htmlContent: data.html || '',
-      status: 'success',
-      time: new Date().toLocaleTimeString(),
-    });
-    if (session.id === activeSessionId.value) {
-      scrollMessagesToBottom();
-    }
-  });
-  onRuntimeEvent('run:done', (data) => {    flushStreamBuffer(data.runId);
-    thinking.value = false;
+    if (session.id === activeSessionId.value) thinking.value = false;
 	  refreshGitStatus();
-
-    const sid = data.sessionId || '';
-    const session = sessions.value.find(s => s.id === sid) || activeSession.value;
-    if (!session) return;
+    if (data.grillComplete) session.grillMode = false;
     let i = session.messages.length - 1;
     while (i >= 0) {
       const msg = session.messages[i];
@@ -2150,15 +2651,14 @@ function bindRuntimeEvents() {
       playCompletionSound('done');
     }
     saveSessions();
-    refreshContextTokens(sid);
-    refreshWorkspaceTokenUsage(config.workspace || '');
+    refreshContextTokens(session.id);
+    if (session.id === activeSessionId.value) refreshWorkspaceTokenUsage(config.workspace || '');
   });
-  onRuntimeEvent('run:error', (data) => {    flushStreamBuffer(data.runId);
-    thinking.value = false;
-
-    const sid = data.sessionId || '';
-    const session = sessions.value.find(s => s.id === sid) || activeSession.value;
+  onRuntimeEvent('run:error', (data) => {
+    flushStreamBuffer(data.runId);
+    const session = sessionByTerminalEvent(data);
     if (!session) return;
+    if (session.id === activeSessionId.value) thinking.value = false;
     let i = session.messages.length - 1;
     while (i >= 0) {
       const msg = session.messages[i];
@@ -2183,12 +2683,11 @@ function bindRuntimeEvents() {
     }
     saveSessions();
   });
-  onRuntimeEvent('run:cancelled', (data) => {    flushStreamBuffer(data.runId);
-    thinking.value = false;
-
-    const sid = data.sessionId || '';
-    const session = sessions.value.find(s => s.id === sid) || activeSession.value;
+  onRuntimeEvent('run:cancelled', (data) => {
+    flushStreamBuffer(data.runId);
+    const session = sessionByTerminalEvent(data);
     if (!session) return;
+    if (session.id === activeSessionId.value) thinking.value = false;
     let i = session.messages.length - 1;
     while (i >= 0) {
       const msg = session.messages[i];
@@ -2244,7 +2743,6 @@ function bindRuntimeEvents() {
         profile: data.profile || 'coder',
         status: 'running',
         steps: 0,
-        maxSteps: data.maxSteps || 5,
         summary: '',
         filesRead: [],
         filesEdited: [],
@@ -2277,7 +2775,6 @@ function bindRuntimeEvents() {
         description: data.description || '',
         profile: data.profile || 'coder',
         steps: 0,
-        maxSteps: data.maxSteps || 5,
         summary: '',
         filesEdited: [],
         error: '',
@@ -2549,7 +3046,8 @@ async function fileToAttachment(file) {
       base.previewUrl = URL.createObjectURL(file);
     }
     if (kind === 'image' && file.size <= MAX_IMAGE_INPUT_BYTES) {
-      base.dataUrl = await readFileAsDataUrl(file);
+      base.dataUrl = await createModelImageDataUrl(file);
+      if (!base.dataUrl) base.error = t('app.attachment.imageUnsupported');
     } else if (kind === 'image' && file.size > MAX_IMAGE_INPUT_BYTES) {
       base.truncated = true;
       base.error = t('app.attachment.imageTooLarge');
@@ -2566,6 +3064,29 @@ async function fileToAttachment(file) {
     base.error = String(err?.message || err || t('app.attachment.readFailed'));
   }
   return base;
+}
+
+async function createModelImageDataUrl(file) {
+  const supported = new Set(['image/png', 'image/jpeg', 'image/jpg', 'image/webp', 'image/gif']);
+  if (supported.has(String(file.type || '').toLowerCase())) return readFileAsDataUrl(file);
+  if (typeof createImageBitmap !== 'function') return '';
+  let bitmap;
+  try {
+    bitmap = await createImageBitmap(file);
+    const maxDimension = 2048;
+    const scale = Math.min(1, maxDimension / Math.max(bitmap.width, bitmap.height));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+    const context = canvas.getContext('2d', { alpha: true });
+    if (!context) return '';
+    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL('image/webp', 0.9);
+  } catch (_) {
+    return '';
+  } finally {
+    bitmap?.close?.();
+  }
 }
 
 async function createImageThumbnailUrl(file) {
@@ -2593,6 +3114,30 @@ async function createImageThumbnailUrl(file) {
     return '';
   } finally {
     bitmap.close?.();
+  }
+}
+
+async function createImageThumbnailDataUrl(dataUrl) {
+  if (typeof createImageBitmap !== 'function' || !String(dataUrl || '').startsWith('data:image/')) return '';
+  let bitmap;
+  try {
+    const blob = await (await fetch(dataUrl)).blob();
+    bitmap = await createImageBitmap(blob);
+    const maxDimension = 960;
+    const scale = Math.min(1, maxDimension / Math.max(bitmap.width, bitmap.height));
+    const width = Math.max(1, Math.round(bitmap.width * scale));
+    const height = Math.max(1, Math.round(bitmap.height * scale));
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext('2d', { alpha: true });
+    if (!context) return '';
+    context.drawImage(bitmap, 0, 0, width, height);
+    return canvas.toDataURL('image/webp', 0.78);
+  } catch (_) {
+    return '';
+  } finally {
+    bitmap?.close?.();
   }
 }
 
@@ -3362,7 +3907,6 @@ function appendToolEventFallback(session, data = {}, status = 'running') {
       description: title || '',
       profile: 'coder',
       steps: 0,
-      maxSteps: 5,
       summary: '',
       filesRead: [],
       filesEdited: [],
@@ -3413,6 +3957,9 @@ const PARTIAL_TOOL_ARG_FIELDS = [
   'glob',
   'expression',
   'description',
+  'url',
+  'title',
+  'html',
   'changes',
   'oldText',
   'oldString',
@@ -3554,6 +4101,7 @@ function updateToolEvent(id, name, title, body, status = 'default', meta = {}, t
   let editRemoved = 0;
 	let editEntries = existing?.editEntries || [];
   let codeContent = '';
+  let htmlContent = existing?.htmlContent || '';
   let chip = existing?.chip || '';
   let waitSeconds = Number(existing?.waitSeconds || 0);
   let waitStartedAt = Number(existing?.waitStartedAt || 0);
@@ -3574,7 +4122,7 @@ function updateToolEvent(id, name, title, body, status = 'default', meta = {}, t
     if (changes.length > 0) {
       editOldString = changes.map((change) => String(change?.oldText || '')).join('\n');
       editNewString = changes.map((change) => String(change?.newText || '')).join('\n');
-	  chip = `${files.length} file${files.length !== 1 ? 's' : ''} · ${changes.length} change${changes.length !== 1 ? 's' : ''}`;
+	  chip = files.length > 1 ? `${files.length} files` : '';
     } else if (parsed.startLine && Object.prototype.hasOwnProperty.call(parsed, 'newText')) {
       editNewString = parsed.newText || '';
       const end = parsed.endLine || parsed.startLine;
@@ -3617,6 +4165,9 @@ function updateToolEvent(id, name, title, body, status = 'default', meta = {}, t
     if (normalizeToolStatus(status) === 'running' && !waitStartedAt) waitStartedAt = Date.now();
   } else if (name === 'ask' && Array.isArray(parsed.questions)) {
     askQuestions = parsed.questions;
+  } else if (name === 'render_html') {
+    htmlContent = parsed.html || htmlContent;
+    title = parsed.title || title;
   }
 
   const payload = {
@@ -3650,6 +4201,7 @@ function updateToolEvent(id, name, title, body, status = 'default', meta = {}, t
     editWarnings: [],
     editChangedLinesBlock: '',
     codeContent,
+    htmlContent,
     waitSeconds,
     waitStartedAt,
     askId: existing?.askId || '',
@@ -3663,7 +4215,6 @@ function updateToolEvent(id, name, title, body, status = 'default', meta = {}, t
       description: parsed.description || existing?.description || parsed.task || '',
       profile: existing?.profile || 'coder',
       steps: existing?.steps || 0,
-      maxSteps: Number(parsed.maxSteps || existing?.maxSteps || 5),
       summary: existing?.summary || '',
       filesRead: existing?.filesRead || [],
       filesEdited: existing?.filesEdited || [],
@@ -3688,6 +4239,7 @@ function updateToolEvent(id, name, title, body, status = 'default', meta = {}, t
     if ((!payload.editWarnings || payload.editWarnings.length === 0) && existing.editWarnings) payload.editWarnings = existing.editWarnings;
     if (!payload.editChangedLinesBlock && existing.editChangedLinesBlock) payload.editChangedLinesBlock = existing.editChangedLinesBlock;
     if (!payload.codeContent && existing.codeContent) payload.codeContent = existing.codeContent;
+    if (!payload.htmlContent && existing.htmlContent) payload.htmlContent = existing.htmlContent;
     if (!payload.waitSeconds && existing.waitSeconds) payload.waitSeconds = existing.waitSeconds;
     if (!payload.waitStartedAt && existing.waitStartedAt) payload.waitStartedAt = existing.waitStartedAt;
     if ((!payload.askQuestions || payload.askQuestions.length === 0) && existing.askQuestions) payload.askQuestions = existing.askQuestions;
@@ -3818,13 +4370,16 @@ function saveSessions() {
 }
 
 function trimRuntimeSessions() {
+  // A Tab must never point at an evicted/missing session. Repair legacy or
+  // partially persisted state before calculating the protected set.
+  for (const tab of workspaceTabs.value) ensureWorkspaceTabSession(tab);
   for (const session of sessions.value) trimRuntimeSessionMessages(session);
   if (sessions.value.length <= MAX_RUNTIME_SESSIONS) return;
 
   const protectedIds = new Set([
     activeSessionId.value,
     ...workspaceTabs.value.map((tab) => tab.sessionId || ''),
-    ...sessions.value.filter((session) => session.runId || session.isRunning).map((session) => session.id),
+    ...sessions.value.filter(sessionMayHaveBackgroundRun).map((session) => session.id),
   ]);
   for (let index = sessions.value.length - 1; index >= 0 && sessions.value.length > MAX_RUNTIME_SESSIONS; index--) {
     const session = sessions.value[index];
@@ -3840,6 +4395,14 @@ function trimRuntimeSessions() {
     expandedArchiveSessions.value = expanded;
     sessions.value.splice(index, 1);
   }
+}
+
+function sessionMayHaveBackgroundRun(session) {
+  if (!session) return false;
+  // isRunning covers the StartChat -> run:start window; runId covers an
+  // established backend run. Both must survive runtime eviction even when
+  // their workspace Tab is not active.
+  return !!(session.isRunning || session.runId);
 }
 
 function trimRuntimeSessionMessages(session) {
@@ -3968,8 +4531,7 @@ async function switchToSession(index) {
   const target = sessions.value[idx - 1];
   if (!target) return;
   saveSessions();
-  activeSessionId.value = target.id;
-  applySessionWorkspace(target);
+  activateSelectedSession(target);
   promptText.value = '';
   if (target.runId) {
     activeRunId.value = target.runId;
@@ -4210,17 +4772,15 @@ async function setRunMode(mode) {
   const session = activeSession.value;
   if (!session) return;
   if (session.runId || session.isRunning) {
-    message.warning(t('app.run.waitBeforeMode'));
-    return;
+    if (session.grillMode && mode === 'yolo' && session.runId) {
+      try { await CancelRun(session.runId); } catch (_) { /* run may already be closing */ }
+    } else {
+      message.warning(t('app.run.waitBeforeMode'));
+      return;
+    }
   }
-  const nextPlan = mode === 'plan';
   const nextGrill = mode === 'grill';
   try {
-    if (planModeActive.value !== nextPlan) {
-      await SetPlanMode(nextPlan);
-      planModeActive.value = nextPlan;
-      await refreshToolList();
-    }
     session.grillMode = nextGrill;
     session.updatedAt = Date.now();
     saveSessions();
@@ -4229,13 +4789,6 @@ async function setRunMode(mode) {
   } catch (err) {
     message.error(t('app.run.modeFailed', { error: err }));
   }
-}
-
-async function initPlanMode() {
-  try {
-    const active = await GetPlanMode();
-    planModeActive.value = active;
-  } catch (_) { /* ignore */ }
 }
 
 // Goal mode helpers
@@ -4365,6 +4918,12 @@ function makeToolTitle(name, args, meta = {}) {
     if (parsed.action === 'create') return `create · ${parsed.name || ''}`;
     if (parsed.action === 'delete') return `delete · ${parsed.id || ''}`;
     return parsed.action || 'list';
+  }
+  if (name === 'http_request' || name === 'web_fetch') {
+    return parsed.url || '';
+  }
+  if (name === 'render_html') {
+    return parsed.title || '';
   }
   return '';
 }
@@ -4602,7 +5161,7 @@ function formatToolBody(name, body) {
       const d = parsed.data;
       if (d.diff) return d.diff;
       if (d.summary) return d.summary;
-      return (d.path || '') + ' updated: ' + (d.replacements || 1) + ' replacement(s)';
+      return d.path ? `${d.path} updated` : 'updated';
     }
     // edit result (direct format from tool:result event)
     if ((name === 'edit' || name === 'replace_exact' || name === 'replace_lines' || name === 'remote_edit') && parsed.addedLines !== undefined) {
@@ -5008,6 +5567,11 @@ function switchWorkspaceByOffset(offset) {
 }
 
 function handleGlobalKeydown(event) {
+  if (event.key === 'Escape' && deactivateMermaidInteraction()) {
+    event.preventDefault();
+    event.stopPropagation();
+    return;
+  }
   if (event.key === 'Escape' && activeSession.value?.runId) {
     event.preventDefault();
     event.stopPropagation();
@@ -5015,6 +5579,7 @@ function handleGlobalKeydown(event) {
     return;
   }
   if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
+  if ((event.key === 'ArrowLeft' || event.key === 'ArrowRight') && isEditableNavigationTarget(event.target)) return;
   if (event.key === 'ArrowLeft') {
     event.preventDefault();
     switchWorkspaceByOffset(-1);
@@ -5050,7 +5615,7 @@ async function checkForUpdates() {
   }
 }
 
-function openUpdatePage() {
+function openRepositoryPage() {
   BrowserOpenURL(ALLY_REPOSITORY_URL);
 }
 
@@ -5069,8 +5634,10 @@ async function applyPlatformClass() {
 onMounted(async () => {
   applyPlatformClass();
   window.addEventListener('keydown', handleGlobalKeydown, true);
+  document.addEventListener('pointerdown', handleMermaidOutsidePointerDown, true);
   document.addEventListener('click', handleMermaidToolbarClick, true);
   document.addEventListener('click', handleCodeCopyClick, true);
+  document.addEventListener('click', handleMarkdownLinkClick, true);
   window.addEventListener('pointerdown', handleAudioUnlock, { once: true, passive: true });
   window.addEventListener('keydown', handleAudioUnlock, { once: true });
   window.addEventListener('resize', refreshWindowMaximisedState);
@@ -5080,21 +5647,31 @@ onMounted(async () => {
   // Pre-load skills before init so welcome message has the count
   try { await refreshSkillState(); } catch (_) { /* ignore */ }
   await init();
-  await initPlanMode();
   await loadScheduledTasks();
   await refreshWindowMaximisedState();
 });
 
 onUnmounted(() => {
   window.removeEventListener('keydown', handleGlobalKeydown, true);
+  document.removeEventListener('pointerdown', handleMermaidOutsidePointerDown, true);
   document.removeEventListener('click', handleMermaidToolbarClick, true);
   document.removeEventListener('click', handleCodeCopyClick, true);
+  document.removeEventListener('click', handleMarkdownLinkClick, true);
   window.removeEventListener('pointerdown', handleAudioUnlock);
   window.removeEventListener('keydown', handleAudioUnlock);
   window.removeEventListener('resize', refreshWindowMaximisedState);
   window.removeEventListener('focus', refreshWindowMaximisedState);
   cleanupRuntimeEvents();
+  if (streamFlushTimer) window.clearTimeout(streamFlushTimer);
+  streamFlushTimer = 0;
+  streamFlushScheduled = false;
   streamBuffers.clear();
+  mermaidObserver?.disconnect();
+  mermaidObserver = null;
+  for (const node of mermaidObservedNodes) node._mermaidCleanup?.();
+  mermaidObservedNodes.clear();
+  mermaidSvgCache.clear();
+  mermaidSvgCacheChars = 0;
   for (const att of pendingAttachments.value) releaseAttachmentPreview(att);
   for (const session of sessions.value) releaseSessionAttachments(session);
   closeCompletionAudio();

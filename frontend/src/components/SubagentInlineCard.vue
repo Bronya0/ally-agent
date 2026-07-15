@@ -5,7 +5,7 @@
       <span class="tool-verb">{{ subagentVerb(msg.status) }}</span>
       <span class="tool-name">{{ $t('tools.kind.subagent') }}</span>
       <span class="tool-arg" :title="msg.description">({{ msg.description }})</span>
-      <span class="tool-chip">{{ $t('subagent.steps', { current: msg.steps, max: msg.maxSteps }) }}</span>
+      <span class="tool-chip">{{ $t('subagent.steps', { current: msg.steps }) }}</span>
       <span v-if="msg.toolCalls?.length" class="tool-chip">{{ $t('subagent.toolCount', { count: msg.toolCalls.length }) }}</span>
       <span v-if="msg.totalTokens > 0" class="tool-chip subagent-token-chip" :title="tokenTooltip">{{ tokenChip }}</span>
       <span v-if="msg.durationText" class="tool-duration">{{ msg.durationText }}</span>
@@ -68,7 +68,6 @@ function statusIcon(status) {
 function subagentVerb(status) {
   if (status === 'running') return t('subagent.running');
   if (status === 'completed') return t('subagent.completed');
-  if (status === 'timed_out') return t('subagent.stopped');
   return t('subagent.failed');
 }
 
@@ -212,5 +211,4 @@ function subToolLabel(name) {
   return labels[name] || name || t('tools.kind.tool');
 }
 </script>
-
 

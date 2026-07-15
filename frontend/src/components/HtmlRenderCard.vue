@@ -1,20 +1,31 @@
 <template>
-  <div class="html-render-card">
-    <div v-if="msg.title" class="html-render-title">{{ msg.title }}</div>
-    <div class="html-render-frame-wrapper">
+  <div :class="['html-render-card', msg.status]">
+    <div class="tool-line html-render-header">
+      <span :class="['tool-status-icon', msg.status]">{{ statusIcon }}</span>
+      <span class="tool-verb">{{ statusLabel }}</span>
+      <span class="tool-name">{{ $t('tools.kind.renderHtml') }}</span>
+      <span v-if="msg.title" class="tool-arg" :title="msg.title">({{ msg.title }})</span>
+    </div>
+    <div v-if="msg.status === 'error'" class="html-render-error">{{ msg.body }}</div>
+    <div v-else-if="msg.status === 'running'" class="html-render-writing">
+      <pre><code>{{ tailPreview }}</code></pre>
+    </div>
+    <div v-else class="html-render-frame-wrapper">
       <iframe
         ref="frameRef"
         class="html-render-frame"
-        sandbox="allow-same-origin"
-        :style="{ minHeight: frameHeight + 'px' }"
-        @load="adjustHeight"
+        sandbox="allow-scripts"
+        :srcdoc="renderedDocument"
+        :style="{ height: frameHeight + 'px' }"
+        :title="msg.title || $t('tools.kind.renderHtml')"
       ></iframe>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, watch, nextTick, onMounted } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { t } from '../i18n.mjs';
 
 const props = defineProps({
   msg: { type: Object, required: true },
@@ -22,28 +33,44 @@ const props = defineProps({
 
 const frameRef = ref(null);
 const frameHeight = ref(200);
+const frameToken = `ally-html-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
-function writeHTML() {
-  const frame = frameRef.value;
-  if (!frame) return;
-  const doc = frame.contentDocument;
-  if (!doc) return;
-  const html = props.msg.htmlContent || '';
-  const wrapped = `<!DOCTYPE html>
+const statusIcon = computed(() => props.msg.status === 'success' ? '✓' : props.msg.status === 'error' ? '✗' : '');
+const statusLabel = computed(() => {
+  if (props.msg.status === 'success') return t('tools.status.used');
+  if (props.msg.status === 'error') return t('tools.status.failed');
+  return t('tools.status.using');
+});
+
+const normalizedLines = computed(() => {
+  const html = String(props.msg.htmlContent || '').replace(/\r\n?/g, '\n');
+  if (!html) return [];
+  const lines = html.split('\n');
+  if (lines.length > 1 && lines[lines.length - 1] === '') lines.pop();
+  return lines;
+});
+
+const tailPreview = computed(() => normalizedLines.value.slice(-8).join('\n'));
+
+const renderedDocument = computed(() => {
+  const html = String(props.msg.htmlContent || '');
+  const token = JSON.stringify(frameToken);
+  return `<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:;">
 <style>
-  * { box-sizing: border-box; margin: 0; padding: 0; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; min-height: 100%; background: transparent; }
   body {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
-    background: transparent;
     color: #e5e5f0;
     padding: 12px;
     font-size: 14px;
     line-height: 1.5;
-    overflow: hidden;
+    overflow-x: hidden;
   }
   a { color: #a78bfa; text-decoration: none; }
   a:hover { text-decoration: underline; }
@@ -56,36 +83,42 @@ function writeHTML() {
   img { max-width: 100%; }
 </style>
 </head>
-<body>${html}</body>
+<body>
+${html}
+<script>
+(() => {
+  const token = ${token};
+  let lastHeight = 0;
+  const reportHeight = () => {
+    const height = Math.max(
+      document.documentElement ? document.documentElement.scrollHeight : 0,
+      document.body ? document.body.scrollHeight : 0,
+      100
+    );
+    if (height === lastHeight) return;
+    lastHeight = height;
+    parent.postMessage({ type: 'ally-html-height', token, height }, '*');
+  };
+  new ResizeObserver(reportHeight).observe(document.documentElement);
+  new MutationObserver(reportHeight).observe(document.documentElement, { childList: true, subtree: true, attributes: true });
+  window.addEventListener('load', reportHeight);
+  requestAnimationFrame(reportHeight);
+})();
+<\/script>
+</body>
 </html>`;
-  doc.open();
-  doc.write(wrapped);
-  doc.close();
-  nextTick(adjustHeight);
-}
-
-function adjustHeight() {
-  const frame = frameRef.value;
-  if (!frame) return;
-  try {
-    const doc = frame.contentDocument;
-    if (!doc) return;
-    const body = doc.body;
-    if (!body) return;
-    const height = Math.max(body.scrollHeight, body.offsetHeight, 100);
-    frameHeight.value = Math.min(height + 24, 600);
-  } catch (e) {
-    // ignore cross-origin errors
-  }
-}
-
-onMounted(() => {
-  writeHTML();
 });
 
-watch(() => props.msg.htmlContent, () => {
-  writeHTML();
-});
+function handleFrameMessage(event) {
+  if (event.source !== frameRef.value?.contentWindow) return;
+  if (event.data?.type !== 'ally-html-height' || event.data?.token !== frameToken) return;
+  const height = Number(event.data.height || 0);
+  if (!Number.isFinite(height) || height <= 0) return;
+  frameHeight.value = Math.max(120, Math.min(Math.ceil(height) + 2, 600));
+}
+
+onMounted(() => window.addEventListener('message', handleFrameMessage));
+onBeforeUnmount(() => window.removeEventListener('message', handleFrameMessage));
 </script>
 
 <style scoped>
@@ -97,12 +130,42 @@ watch(() => props.msg.htmlContent, () => {
   background: rgba(255, 255, 255, 0.02);
 }
 
-.html-render-title {
-  padding: 8px 12px;
-  font-size: 13px;
-  font-weight: 500;
-  color: #a78bfa;
+.html-render-header {
+  padding: 6px 8px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.html-render-error {
+  padding: 10px 12px;
+  color: #f2b8b8;
+  white-space: pre-wrap;
+}
+
+.html-render-writing {
+  height: 150px;
+  padding: 10px 12px;
+  overflow: hidden;
+  background: #1e1e1e;
+  border-top: 1px solid rgba(255, 255, 255, 0.025);
+}
+
+.html-render-writing pre {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  display: flex;
+  align-items: flex-end;
+  color: #d4d4d4;
+  font-family: var(--ally-mono-font);
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.html-render-writing code {
+  display: block;
+  width: 100%;
 }
 
 .html-render-frame-wrapper {
@@ -111,6 +174,8 @@ watch(() => props.msg.htmlContent, () => {
 
 .html-render-frame {
   width: 100%;
+  min-height: 120px;
+  max-height: 600px;
   border: none;
   display: block;
   background: transparent;
