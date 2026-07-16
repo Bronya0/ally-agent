@@ -1,4 +1,4 @@
-module PixelArtWails
+module ally-dev
 
 go 1.25.5
 
