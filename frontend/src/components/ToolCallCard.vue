@@ -135,6 +135,7 @@ function toolKindLabel(kind) {
     delete: t('tools.kind.delete'),
     command: t('tools.kind.command'),
     calculate: t('tools.kind.calculate'),
+    list: t('tools.kind.list'),
     read: t('tools.kind.read'),
     glob: t('tools.kind.glob'),
     grep: t('tools.kind.grep'),
@@ -142,6 +143,7 @@ function toolKindLabel(kind) {
     other: t('tools.kind.tool'),
     todo: t('tools.kind.todo'),
     scheduled: t('tools.kind.scheduled'),
+    goal: t('tools.kind.goal'),
     memory: t('tools.kind.memory'),
     service: t('tools.kind.service'),
     wait: t('tools.kind.wait'),
@@ -156,6 +158,7 @@ function toolDisplayName(msg) {
     if (msg.mcpServer && msg.mcpTool) return `${msg.mcpServer}/${msg.mcpTool}`;
     return msg.mcpServer || msg.mcpTool || formatToolName(msg.name) || 'MCP';
   }
+  if (msg.kind === 'list') return formatToolName(msg.name) || 'list_files';
   if (String(msg.name || '').startsWith('remote_')) return formatToolName(msg.name);
   const kindLabel = toolKindLabel(msg.kind);
   if (kindLabel && msg.kind !== 'other') return kindLabel;

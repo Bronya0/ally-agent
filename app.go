@@ -171,6 +171,7 @@ func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	a.fitInitialWindowToScreen(ctx)
 	_ = a.ensureInitialized()
+	_ = a.loadServiceHistory()
 	_ = a.startScheduledTaskManager()
 	go func() {
 		<-ctx.Done()
@@ -196,6 +197,7 @@ func (a *App) startup(ctx context.Context) {
 			a.mcpManager = NewMcpManager(root, func(tools []McpDiscoveredTool) {
 				a.emitMcpStatus()
 			})
+			a.mcpManager.SetNetworkConfigProvider(func() ConfigState { return a.effectiveConfig(ConfigState{}) })
 			go func() {
 				if err := a.mcpManager.StartAll(ctx); err != nil {
 					// MCP start errors are non-fatal
@@ -296,6 +298,9 @@ type ConfigState struct {
 	CustomPrompt        string        `json:"customPrompt"`
 	AllowPrivateNetwork bool          `json:"allowPrivateNetwork"`
 	GitBashPath         string        `json:"gitBashPath"`
+	ProxyMode           string        `json:"proxyMode,omitempty"`
+	ProxyURL            string        `json:"proxyUrl,omitempty"`
+	ProxyNoProxy        string        `json:"proxyNoProxy,omitempty"`
 	ReasoningTag        string        `json:"reasoningTag,omitempty"`
 	Models              []ModelConfig `json:"models,omitempty"`
 	DisabledSkills      []string      `json:"disabledSkills,omitempty"`
@@ -541,22 +546,31 @@ type toolExecutionMeta struct {
 type toolExecutionMetaContextKey struct{}
 
 type ServiceInfo struct {
-	ID         string `json:"id"`
-	Name       string `json:"name,omitempty"`
-	Command    string `json:"command"`
-	Cwd        string `json:"cwd"`
-	PID        int    `json:"pid"`
-	Port       int    `json:"port,omitempty"`
-	Status     string `json:"status"`
-	StartedAt  int64  `json:"startedAt"`
-	StoppedAt  int64  `json:"stoppedAt,omitempty"`
-	ExitCode   int    `json:"exitCode,omitempty"`
-	OutputTail string `json:"outputTail,omitempty"`
-	Error      string `json:"error,omitempty"`
+	ID              string `json:"id"`
+	Name            string `json:"name,omitempty"`
+	Command         string `json:"command"`
+	Cwd             string `json:"cwd"`
+	PID             int    `json:"pid"`
+	Port            int    `json:"port,omitempty"`
+	Status          string `json:"status"`
+	StartedAt       int64  `json:"startedAt"`
+	StoppedAt       int64  `json:"stoppedAt,omitempty"`
+	ExitCode        int    `json:"exitCode,omitempty"`
+	OutputTail      string `json:"outputTail,omitempty"`
+	OutputBytes     int64  `json:"outputBytes,omitempty"`
+	OutputTruncated bool   `json:"outputTruncated,omitempty"`
+	Error           string `json:"error,omitempty"`
 }
 
 type ServiceListResult struct {
 	Services []ServiceInfo `json:"services"`
+}
+
+type ServiceOutputResult struct {
+	ID        string `json:"id"`
+	Output    string `json:"output"`
+	Bytes     int64  `json:"bytes"`
+	Truncated bool   `json:"truncated"`
 }
 
 type CommandResult struct {
@@ -1146,6 +1160,7 @@ func defaultConfigState() ConfigState {
 		MaxTokens:           128000,
 		ContextWindow:       1048576,
 		AllowPrivateNetwork: true,
+		ProxyMode:           proxyModeOff,
 		ReasoningTag:        defaultReasoningTag,
 	}
 	if goruntime.GOOS == "windows" {
@@ -3057,7 +3072,7 @@ func buildSystemPromptParts(allSkills []SkillDefinition, workspaceRoot, customPr
 	b.WriteString("Use `render_html` only for interactive widgets or custom visualizations that Mermaid diagrams and Markdown cannot express — for example interactive calculators, dynamic data explorers, styled component mockups, or custom animated SVG. Do NOT use it for diagrams, flowcharts, pie charts, or tables: use Mermaid fenced code blocks for diagrams and Markdown tables for tabular data. Keep HTML self-contained with inline CSS, no external resources, limit to 50,000 characters. After calling it, briefly describe in your text response what was rendered.\n\n")
 
 	b.WriteString("# Delegation\n\n" +
-		"Use `agent_delegate` for substantial work that is both self-contained and independently useful. Child agents have no artificial step or wall-clock limit; they return a concise summary while absorbing their own intermediate reads, searches, and tool output.\n\n" +
+		"Use `subagent` for substantial work that is both self-contained and independently useful. Child agents have no artificial step or wall-clock limit; they return a concise summary while absorbing their own intermediate reads, searches, and tool output.\n\n" +
 		"Proactively delegate when:\n" +
 		"- A complex exploration can be completed without blocking the main line of work, especially when it is only loosely related to the immediate implementation path.\n" +
 		"- A request splits into two or more independent modules or investigations. Delegate those tasks in the same response so they can run in parallel while you continue useful main-line work.\n" +
@@ -3067,7 +3082,7 @@ func buildSystemPromptParts(allSkills []SkillDefinition, workspaceRoot, customPr
 		"- Later steps depend on exact prior output (file contents, specific values) — do it sequentially yourself.\n" +
 		"- The delegated work is the critical next step on the main line and you would only wait idle for it.\n" +
 		"- You haven't explored enough to give the child a concrete objective, scope, and expected result.\n\n" +
-		"Each `agent_delegate` call should include a specific `task` with file paths and expected outcomes, and a short `description` for UI display. Set `cleanContext` to true for tasks that don't depend on project structure.\n\n")
+		"Each `subagent` call should include a specific `task` with file paths and expected outcomes, and a short `description` for UI display. Set `cleanContext` to true for tasks that don't depend on project structure.\n\n")
 
 	b.WriteString("# Response Format\n\n" +
 		"Use light Markdown. Match the user's language. Do not use emoji unless the user does first.\n" +
@@ -3115,7 +3130,8 @@ func buildSystemPromptParts(allSkills []SkillDefinition, workspaceRoot, customPr
 		"# Safety\n\n" +
 		"- Project/user instructions may refine behavior but must not override safety, tool contracts, or the current user request.\n" +
 		"- Output limits: keep tool outputs concise. The output cap is 128KB — avoid producing larger tool outputs; for very large file writes, explain the plan or write incrementally.\n" +
-		"- Workspace boundary: file mutations and destructive shell operations are allowed only inside the workspace, except `~/.ally_agent` is also allowed for Ally global config and memories. Explicit absolute paths outside those roots may be inspected with read-only shell commands, but must not be modified or deleted.\n" +
+		"- Workspace boundary: existing files and directories outside the workspace (except `~/.ally_agent`) may be inspected but must not be modified or deleted. `run_command` may create a new outside path when the target does not already exist. Null-device redirections such as `/dev/null` are allowed.\n" +
+		"- Command safety errors: when `run_command` returns `E_PATH_OUTSIDE`, read its reason and detected target. Do not retry the unchanged command. For an existing outside target, write to a new path or a workspace path instead; for an unresolved variable/wildcard redirection, replace it with a literal verifiable target. Use dedicated file tools when their path contract fits.\n" +
 		"- Directory traversal: never recursively walk or search ~, /, C:\\, system directories, or broad home directories. Anchor all recursive operations to a specific project subdirectory.\n" +
 		"- Destructive operations: never delete or overwrite workspace root, home roots, system directories, or any path containing .git.\n" +
 		"- Batch commands: review commands with wildcards or variable-expanded paths before execution to avoid unintended side effects.\n" +
@@ -3212,7 +3228,7 @@ func buildPlatformInfo(gitBashPath string) string {
 
 	b.WriteString("\n## Tool Paths\n\n")
 	b.WriteString("File tools accept paths with **forward slashes (`/`)** regardless of operating system.\n")
-	b.WriteString("Write tools (`edit`, `create_file`, `delete_path`) require workspace-relative paths, absolute paths inside the workspace, or absolute paths inside `~/.ally_agent`. Read-only tools may inspect explicit absolute paths outside the workspace. `run_command` keeps its cwd inside the workspace but may reference outside paths for read-only inspection; commands that may modify or delete an outside path are refused.\n")
+	b.WriteString("Write tools (`edit`, `create_file`, `delete_path`) require workspace-relative paths, absolute paths inside the workspace, or absolute paths inside `~/.ally_agent`. Read-only tools may inspect explicit absolute paths outside the workspace. `run_command` keeps its cwd inside the workspace, permits null-device redirection, and may create a new outside path when it does not already exist; modifying or deleting an existing outside path is refused. On `E_PATH_OUTSIDE`, read the returned Chinese explanation and detected target, then change the target or command instead of retrying unchanged. Dynamic redirection targets must be replaced with literal paths that can be checked before execution.\n")
 
 	return b.String()
 }
@@ -3660,6 +3676,15 @@ func mergeConfig(base, overlay ConfigState) ConfigState {
 	if overlay.GitBashPath != "" {
 		base.GitBashPath = overlay.GitBashPath
 	}
+	if overlay.ProxyMode != "" {
+		base.ProxyMode = normalizeProxyMode(overlay.ProxyMode)
+	}
+	if overlay.ProxyURL != "" {
+		base.ProxyURL = overlay.ProxyURL
+	}
+	if overlay.ProxyNoProxy != "" {
+		base.ProxyNoProxy = overlay.ProxyNoProxy
+	}
 	if overlay.ReasoningTag != "" {
 		base.ReasoningTag = overlay.ReasoningTag
 	}
@@ -3731,12 +3756,21 @@ func (a *App) SaveConfig(req ConfigState) error {
 	if err := a.ensureInitialized(); err != nil {
 		return err
 	}
+	if normalizeProxyMode(req.ProxyMode) == proxyModeManual && normalizeProxyURL(req.ProxyURL, "http") == "" {
+		return errors.New("manual proxy URL must be a valid http://, https://, or socks5:// URL")
+	}
 	a.mu.Lock()
+	proxyChanged := normalizeProxyMode(a.config.ProxyMode) != normalizeProxyMode(req.ProxyMode) ||
+		strings.TrimSpace(a.config.ProxyURL) != strings.TrimSpace(req.ProxyURL) ||
+		strings.TrimSpace(a.config.ProxyNoProxy) != strings.TrimSpace(req.ProxyNoProxy)
 	a.config = mergeConfig(a.config, req)
 	a.config.Temperature = req.Temperature
 	a.config.CustomPrompt = req.CustomPrompt
 	a.config.AllowPrivateNetwork = req.AllowPrivateNetwork
 	a.config.GitBashPath = req.GitBashPath
+	a.config.ProxyMode = normalizeProxyMode(req.ProxyMode)
+	a.config.ProxyURL = strings.TrimSpace(req.ProxyURL)
+	a.config.ProxyNoProxy = strings.TrimSpace(req.ProxyNoProxy)
 	if goruntime.GOOS == "windows" {
 		if detected, _ := findWindowsBash(req.GitBashPath); detected != "" {
 			a.config.GitBashPath = detected
@@ -3759,6 +3793,9 @@ func (a *App) SaveConfig(req ConfigState) error {
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		return err
 	}
+	if proxyChanged && a.ctx != nil {
+		go func() { _ = a.RestartMcpServers() }()
+	}
 
 	// Validate gitBashPath on Windows: if set but invalid, warn the user.
 	if goruntime.GOOS == "windows" && cfg.GitBashPath != "" {
@@ -3773,6 +3810,7 @@ func (a *App) SaveConfig(req ConfigState) error {
 }
 
 func (a *App) TestModelConnection(model ModelConfig) error {
+	networkCfg := a.effectiveConfig(ConfigState{})
 	cfg := ConfigState{
 		ProviderName:  model.ProviderName,
 		APIFormat:     normalizeAPIFormat(model.APIFormat),
@@ -3783,6 +3821,9 @@ func (a *App) TestModelConnection(model ModelConfig) error {
 		MaxTokens:     32,
 		ContextWindow: model.ContextWindow,
 		ReasoningTag:  normalizeReasoningTag(model.ReasoningTag),
+		ProxyMode:     networkCfg.ProxyMode,
+		ProxyURL:      networkCfg.ProxyURL,
+		ProxyNoProxy:  networkCfg.ProxyNoProxy,
 	}
 	if cfg.Model == "" {
 		return errors.New("model is required")
@@ -3946,6 +3987,28 @@ func (a *App) GetGitDiff() GitDiffResult {
 	const maxFiles = 80
 	const maxTotalDiffBytes = 512 * 1024
 	const maxDiffBytesPerFile = 96 * 1024
+	const maxAggregateDiffBytes = maxFiles * maxDiffBytesPerFile
+	// Fetch tracked changes in two repository-wide calls. The previous
+	// implementation spawned two git processes per file, which is especially
+	// expensive on Windows and could approach the request's 10-second timeout.
+	unstagedOut, unstagedTruncated, unstagedErr := runGitLimited(ctx, root, maxAggregateDiffBytes, "diff", "--no-ext-diff", "--find-renames", "--find-copies")
+	stagedOut, stagedTruncated, stagedErr := runGitLimited(ctx, root, maxAggregateDiffBytes, "diff", "--cached", "--no-ext-diff", "--find-renames", "--find-copies")
+	unstagedByPath := splitUnifiedDiffByPath(unstagedOut)
+	stagedByPath := splitUnifiedDiffByPath(stagedOut)
+	if unstagedTruncated || stagedTruncated {
+		result.Truncated = true
+	}
+	if unstagedErr != nil || stagedErr != nil {
+		var errs []string
+		if unstagedErr != nil {
+			errs = append(errs, unstagedErr.Error())
+		}
+		if stagedErr != nil {
+			errs = append(errs, stagedErr.Error())
+		}
+		result.Error = strings.Join(errs, "; ")
+		return result
+	}
 	totalBytes := 0
 	for _, entry := range entries {
 		if len(result.Files) >= maxFiles {
@@ -3966,7 +4029,19 @@ func (a *App) GetGitDiff() GitDiffResult {
 		if entry.Untracked {
 			file.Diff, file.Truncated, file.Binary, file.Error = synthesizeUntrackedDiff(root, entry.Path, fileLimit)
 		} else {
-			file.Diff, file.Truncated, file.Error = gitDiffForPath(ctx, root, entry.Path, fileLimit)
+			sections := make([]string, 0, 2)
+			if staged := stagedByPath[entry.Path]; staged != "" {
+				sections = append(sections, staged)
+			}
+			if unstaged := unstagedByPath[entry.Path]; unstaged != "" {
+				sections = append(sections, unstaged)
+			}
+			combined := strings.TrimRight(strings.Join(sections, "\n"), "\n")
+			if len(combined) > fileLimit {
+				combined = combined[:fileLimit]
+				file.Truncated = true
+			}
+			file.Diff = combined
 			file.Binary = looksLikeBinaryDiff(file.Diff)
 		}
 		file.Added, file.Deleted = countUnifiedDiffStats(file.Diff)
@@ -3978,6 +4053,72 @@ func (a *App) GetGitDiff() GitDiffResult {
 	}
 
 	return result
+}
+
+func splitUnifiedDiffByPath(diff string) map[string]string {
+	result := map[string]string{}
+	if strings.TrimSpace(diff) == "" {
+		return result
+	}
+	starts := []int{}
+	for offset := 0; offset < len(diff); {
+		idx := strings.Index(diff[offset:], "diff --git ")
+		if idx < 0 {
+			break
+		}
+		idx += offset
+		if idx == 0 || diff[idx-1] == '\n' {
+			starts = append(starts, idx)
+		}
+		offset = idx + len("diff --git ")
+	}
+	for i, start := range starts {
+		end := len(diff)
+		if i+1 < len(starts) {
+			end = starts[i+1]
+		}
+		section := strings.TrimRight(diff[start:end], "\n")
+		path := unifiedDiffSectionPath(section)
+		if path == "" {
+			continue
+		}
+		if existing := result[path]; existing != "" {
+			result[path] = existing + "\n" + section
+		} else {
+			result[path] = section
+		}
+	}
+	return result
+}
+
+func unifiedDiffSectionPath(section string) string {
+	var oldPath string
+	for _, line := range strings.Split(section, "\n") {
+		if strings.HasPrefix(line, "--- ") {
+			oldPath = decodeGitPatchPath(strings.TrimPrefix(line, "--- "))
+		}
+		if strings.HasPrefix(line, "+++ ") {
+			if path := decodeGitPatchPath(strings.TrimPrefix(line, "+++ ")); path != "" {
+				return path
+			}
+		}
+	}
+	return oldPath
+}
+
+func decodeGitPatchPath(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" || value == "/dev/null" {
+		return ""
+	}
+	if strings.HasPrefix(value, `"`) {
+		if decoded, err := strconv.Unquote(value); err == nil {
+			value = decoded
+		}
+	}
+	value = strings.TrimPrefix(value, "a/")
+	value = strings.TrimPrefix(value, "b/")
+	return filepath.ToSlash(value)
 }
 
 func gitRepoRoot(ctx context.Context, workspace string) (string, error) {
@@ -4079,43 +4220,6 @@ func parseGitStatusZ(out string) []gitStatusEntry {
 		return entries[i].Path < entries[j].Path
 	})
 	return entries
-}
-
-func gitDiffForPath(ctx context.Context, root, rel string, limit int) (string, bool, string) {
-	if limit <= 0 {
-		return "", true, ""
-	}
-	unstaged, unstagedTruncated, unstagedErr := runGitLimited(ctx, root, limit, "diff", "--no-ext-diff", "--find-renames", "--find-copies", "--", rel)
-	remaining := limit - len(unstaged)
-	if remaining < 0 {
-		remaining = 0
-	}
-	if unstagedTruncated || remaining == 0 {
-		errText := ""
-		if unstagedErr != nil {
-			errText = unstagedErr.Error()
-		}
-		return strings.TrimRight(unstaged, "\n"), true, errText
-	}
-	staged, stagedTruncated, stagedErr := runGitLimited(ctx, root, remaining, "diff", "--cached", "--no-ext-diff", "--find-renames", "--find-copies", "--", rel)
-
-	var sections []string
-	if staged != "" {
-		sections = append(sections, staged)
-	}
-	if unstaged != "" {
-		sections = append(sections, unstaged)
-	}
-	diff := strings.TrimRight(strings.Join(sections, "\n"), "\n")
-	truncated := unstagedTruncated || stagedTruncated || len(staged)+len(unstaged) >= limit
-	var errs []string
-	if unstagedErr != nil {
-		errs = append(errs, unstagedErr.Error())
-	}
-	if stagedErr != nil {
-		errs = append(errs, stagedErr.Error())
-	}
-	return diff, truncated, strings.Join(errs, "; ")
 }
 
 func synthesizeUntrackedDiff(root, rel string, limit int) (string, bool, bool, string) {
@@ -4624,16 +4728,13 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 				// Goal mode: continue if active
 				if shouldAutoContinueGoal(req.GrillMode) {
 					if g := a.getActiveGoal(sessionID); g != nil {
-						a.mu.Lock()
-						g.TurnsUsed++
 						bd := computeLiveBreakdown(messages)
 						bd.ToolSchemas = estimateToolSchemaTokens(tools)
 						finalizeContextBreakdownTotal(&bd)
-						g.TokensUsed += bd.Total
-						if g.TurnsUsed == 1 {
-							g.WallClockMs = time.Since(startTime).Milliseconds()
+						g = a.recordGoalTurn(sessionID, bd.Total, time.Since(startTime))
+						if g == nil {
+							return
 						}
-						a.mu.Unlock()
 						if g.TurnBudget > 0 && g.TurnsUsed >= g.TurnBudget {
 							a.updateGoal(sessionID, "blocked", "turn budget reached")
 							emitRunEnd("run:error", map[string]any{"error": "goal turn budget reached"})
@@ -4742,16 +4843,12 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 		if shouldAutoContinueGoal(req.GrillMode) {
 			if g := a.getActiveGoal(sessionID); g != nil && g.TurnsUsed < g.TurnBudget {
 				emitRunEnd("run:done", nil)
-				a.mu.Lock()
-				g.TurnsUsed++
 				bd := computeLiveBreakdown(messages)
 				bd.ToolSchemas = estimateToolSchemaTokens(tools)
 				finalizeContextBreakdownTotal(&bd)
-				g.TokensUsed += bd.Total
-				if g.TurnsUsed == 1 {
-					g.WallClockMs = time.Since(startTime).Milliseconds()
+				if a.recordGoalTurn(sessionID, bd.Total, time.Since(startTime)) == nil {
+					return
 				}
-				a.mu.Unlock()
 				continue
 			}
 		}
@@ -5484,7 +5581,7 @@ func toolDisabledInGrillMode(name string) bool {
 	switch name {
 	case "edit", "create_file", "delete_path", "run_command", "background_process", "wait", "http_request", "web_fetch",
 		"remote_edit", "remote_create_file", "remote_delete_path", "remote_run_command",
-		"agent_delegate", "memory_write", "todo_write", "create_goal", "update_goal", "scheduled_task":
+		"subagent", "agent_delegate", "memory_write", "todo_write", "create_goal", "update_goal", "scheduled_task":
 		return true
 	default:
 		return strings.HasPrefix(name, "mcp__")
@@ -5598,6 +5695,7 @@ func (a *App) RestartMcpServers() error {
 	manager := NewMcpManager(root, func(tools []McpDiscoveredTool) {
 		a.emitMcpStatus()
 	})
+	manager.SetNetworkConfigProvider(func() ConfigState { return a.effectiveConfig(ConfigState{}) })
 	a.mcpManager = manager
 	err = manager.StartAll(a.ctx)
 	a.emitMcpStatus()
@@ -5666,7 +5764,7 @@ func chatTools() []openai.Tool {
 			},
 			"required": []string{"path"},
 		}),
-		functionTool("run_command", "Run a shell command with cwd confined to the workspace. On Windows, bash (from Git for Windows) is used when available, falling back to PowerShell; on macOS/Linux, bash is used. Read-only commands may inspect explicit absolute paths outside the workspace. Commands that can modify/delete outside paths, explicit deletion commands, unsafe cwd symlinks, and long-running services are refused. Error codes: E_COMMAND_BLOCKED, E_PATH_OUTSIDE, E_CWD_INVALID, E_LONG_RUNNING_COMMAND.", map[string]any{
+		functionTool("run_command", "Run a shell command with cwd confined to the workspace. On Windows, bash (from Git for Windows) is used when available, falling back to PowerShell; on macOS/Linux, bash is used. Commands may inspect outside paths, redirect to null devices, and create new outside paths. Modifying/deleting existing outside paths, explicit deletion commands, unsafe cwd symlinks, and long-running services are refused. If E_PATH_OUTSIDE is returned, read the Chinese reason and detected target: do not retry unchanged; use a new/workspace target, or replace dynamic redirections with a literal verifiable path. Error codes: E_COMMAND_BLOCKED, E_PATH_OUTSIDE, E_CWD_INVALID, E_LONG_RUNNING_COMMAND.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"command":        map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*"},
@@ -5675,7 +5773,7 @@ func chatTools() []openai.Tool {
 			},
 			"required": []string{"command"},
 		}),
-		functionTool("background_process", "Start or stop a long-running local process without blocking the agent. Use action=start for frontend/backend dev servers, Wails, Vite, Django, uvicorn, workers, and similar processes; independent frontend and backend starts may be called in parallel. The start result already includes the process id, initial readiness status, and bounded output tail. Do not call this tool repeatedly to check status: there is intentionally no list/status action. Use action=stop with the id returned by start when the process must be stopped.", map[string]any{
+		functionTool("background_process", "Start or stop a long-running local process without blocking the agent. Use action=start for frontend/backend dev servers, Wails, Vite, Django, uvicorn, workers, and similar processes; independent frontend and backend starts may be called in parallel. The service appears in the Task Center, where the user can inspect its live rolling output buffer (latest 512 KiB) and recent persisted history. The start result already includes the process id, initial readiness status, and bounded output tail. Do not call this tool repeatedly to check status: there is intentionally no list/status action. Use action=stop with the id returned by start when the process must be stopped.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"action":         map[string]any{"type": "string", "enum": []string{"start", "stop"}, "description": "Start a new background process or stop one previously started by this tool."},
@@ -5731,7 +5829,7 @@ func chatTools() []openai.Tool {
 			},
 			"required": []string{"questions"},
 		}),
-		functionTool("scheduled_task", "Create, list, or delete persistent scheduled Agent tasks. Create tasks only when the user explicitly requests scheduled or recurring automation. Scheduled executions receive the normal workspace tool set, including commands, file operations, network tools, MCP, and delegation; only scheduled_task itself is withheld to prevent recursive task creation. Tasks run only while Ally is open, use isolated fresh context on every execution, and continue until deleted. Use action=list only when the user asks to inspect tasks or an id is needed; never poll it. Future task results are shown in the Scheduled Tasks UI and are not injected into the current conversation.", map[string]any{
+		functionTool("scheduled_task", "Create, list, or delete temporary scheduled Agent tasks for the current Ally process. Create tasks only when the user explicitly requests scheduled or recurring automation. Scheduled executions receive the normal workspace tool set, including commands, file operations, network tools, MCP, and delegation; only scheduled_task itself is withheld to prevent recursive task creation. Tasks use isolated fresh context on every execution and are cleared whenever Ally closes or starts. Use action=list only when the user asks to inspect tasks or an id is needed; never poll it. Future task results are shown in the Task Center UI and are not injected into the current conversation.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"action":      map[string]any{"type": "string", "enum": []string{"create", "list", "delete"}},
@@ -5748,7 +5846,7 @@ func chatTools() []openai.Tool {
 				map[string]any{"properties": map[string]any{"action": map[string]any{"const": "delete"}}, "required": []string{"id"}},
 			},
 		}),
-		functionTool("http_request", "Make a single HTTP/HTTPS request with custom method, headers, query, body or JSON. Use for APIs, webhooks, internal services, and precise protocol debugging. Safe defaults: bounded response size, timeout, redirect limit, per-host rate limit, clear User-Agent, and private-network access allowed for intranet/local development.", map[string]any{
+		functionTool("http_request", "Make a single HTTP/HTTPS request with custom method, headers, query, body or JSON. Use for APIs, webhooks, internal services, and precise protocol debugging. Safe defaults include a bounded response size, timeout, redirect limit, per-host rate limit, and clear User-Agent. Private/local network access follows the app's allowPrivateNetwork setting, which is enabled by default.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"method":         map[string]any{"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9!#$%&'*+.^_`|~-]*$", "description": "HTTP method token. Default GET; normalized to uppercase before sending."},
@@ -5764,7 +5862,7 @@ func chatTools() []openai.Tool {
 			"required": []string{"url"},
 			"not":      map[string]any{"required": []string{"body", "json"}},
 		}),
-		functionTool("web_fetch", "Fetch a web page and return readable text, title, and links. Use for ordinary page reading instead of curl. Safe defaults: bounded size, timeout, redirect limit, per-host rate limit, clear User-Agent, and private-network access allowed for intranet/local development. robots.txt is not checked unless explicitly requested.", map[string]any{
+		functionTool("web_fetch", "Fetch a web page and return readable text, title, and links. Use for ordinary page reading instead of curl. Safe defaults include a bounded size, timeout, redirect limit, per-host rate limit, and clear User-Agent. Private/local network access follows the app's allowPrivateNetwork setting, which is enabled by default. robots.txt is not checked unless explicitly requested.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"url":            map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Absolute http:// or https:// URL."},
@@ -5847,7 +5945,7 @@ func chatTools() []openai.Tool {
 			},
 			"required": []string{"pattern"},
 		}),
-		functionTool("batch_read", "Read 1–20 files through the required files array. UTF-8 text returns raw copyable content plus md5 for edit. Omit a file's startLine/endLine for the whole file; provide either or both for an inclusive range. Complex documents return non-editable extracted text.", map[string]any{
+		functionTool("batch_read", "Read 1–20 files. Always pass a top-level files array, even for one file. Do not pass top-level path, a string array, offset, or lineCount. UTF-8 text returns raw copyable content plus md5 for edit. Omit startLine/endLine for the whole file; either or both define an inclusive 1-based range. Complex documents return non-editable extracted text.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"files": batchReadFilesSchema(),
@@ -5912,7 +6010,7 @@ func chatTools() []openai.Tool {
 				},
 			},
 		}),
-		functionTool("agent_delegate", "Delegate a substantial, self-contained task to a child agent with its own unrestricted-duration tool loop. Use it for complex independent exploration, work loosely related to the main line, or modules that can run in parallel while you continue useful parent work. The child can use built-in and MCP tools but cannot ask the user or delegate nested agents; only its final summary is returned. Do not delegate a single focused edit, a tiny read, or a critical sequential step whose exact output the parent needs immediately.", map[string]any{
+		functionTool("subagent", "Delegate a substantial, self-contained task to a child agent with its own unrestricted-duration tool loop. Use it for complex independent exploration, work loosely related to the main line, or modules that can run in parallel while you continue useful parent work. The child can use built-in and MCP tools but cannot ask the user or delegate nested agents; only its final summary is returned. Do not delegate a single focused edit, a tiny read, or a critical sequential step whose exact output the parent needs immediately.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"task":         map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "The task for the child agent. Be specific — include file paths and expected outcomes."},
@@ -5954,7 +6052,42 @@ func chatTools() []openai.Tool {
 	}
 }
 
+var builtinToolExamples = map[string]string{
+	"list_files":         `{"path":"frontend/src","maxDepth":2,"limit":200}`,
+	"edit":               `single file with multiple changes: {"files":[{"path":"app.go","expectedMd5":"0123456789abcdef0123456789abcdef","changes":[{"oldText":"const oldName = \"ally\"","newText":"const newName = \"ally\""},{"oldText":"return oldName","newText":"return newName"}]}]}; multiple files with multiple changes per file: {"files":[{"path":"app.go","expectedMd5":"0123456789abcdef0123456789abcdef","changes":[{"oldText":"oldServerName","newText":"newServerName"},{"oldText":"oldServerPort","newText":"newServerPort"}]},{"path":"frontend/src/App.vue","expectedMd5":"fedcba9876543210fedcba9876543210","changes":[{"oldText":"oldTitle","newText":"newTitle"},{"oldText":"oldSubtitle","newText":"newSubtitle"}]}]}`,
+	"create_file":        `{"path":"notes/example.md","content":"# Example\n","overwrite":false}`,
+	"delete_path":        `{"path":"tmp/generated","recursive":true}`,
+	"run_command":        `{"command":"go test ./...","cwd":".","timeoutSeconds":120}`,
+	"background_process": `start: {"action":"start","name":"frontend","command":"npm run dev","cwd":"frontend","port":5173}; stop: {"action":"stop","id":"svc_..."}`,
+	"wait":               `{"seconds":5,"reason":"Wait for the development server to become ready"}`,
+	"ask":                `{"questions":[{"id":"database","question":"Which database should we use?","options":[{"id":"sqlite","label":"SQLite","description":"Simple local storage.","recommended":true},{"id":"postgres","label":"PostgreSQL","description":"Production database.","recommended":false}]}]}`,
+	"scheduled_task":     `create: {"action":"create","name":"daily check","instruction":"Run tests and summarize failures.","schedule":"0 9 * * *","timezone":"Asia/Shanghai"}; list: {"action":"list"}; delete: {"action":"delete","id":"task_..."}`,
+	"http_request":       `{"url":"https://api.example.com/items","method":"GET","query":{"limit":"10"},"timeoutSeconds":60}`,
+	"web_fetch":          `{"url":"https://example.com/docs","maxChars":60000}`,
+	"remote_list_files":  `{"target":"ubuntu@example.com:/srv/app","path":"src","maxDepth":2}`,
+	"remote_read_file":   `{"target":"ubuntu@example.com:/srv/app","path":"main.go","startLine":1,"endLine":200}`,
+	"remote_edit":        `{"target":"ubuntu@example.com:/srv/app","files":[{"path":"main.go","expectedMd5":"0123456789abcdef0123456789abcdef","changes":[{"oldText":"old unique text","newText":"new text"}]}]}`,
+	"remote_create_file": `{"target":"ubuntu@example.com:/srv/app","path":"notes.txt","content":"hello\n","overwrite":false}`,
+	"remote_delete_path": `{"target":"ubuntu@example.com:/srv/app","path":"tmp/output","recursive":true}`,
+	"remote_run_command": `{"target":"ubuntu@example.com:/srv/app","command":"go test ./...","cwd":".","timeoutSeconds":120}`,
+	"grep_files":         `{"pattern":"TODO|FIXME","path":"frontend/src","glob":"*.vue","maxMatches":100}`,
+	"batch_read":         `one file: {"files":[{"path":"app.go"}]}; multiple/range: {"files":[{"path":"app.go"},{"path":"services.go","startLine":1,"endLine":200}]}`,
+	"memory_read":        `{"path":"coding-conventions.md"}`,
+	"memory_write":       `{"path":"coding-conventions.md","description":"Project coding conventions","content":"Use focused changes and run tests."}`,
+	"calculate":          `{"expression":"sqrt(144) + 2^3"}`,
+	"render_html":        `{"title":"Interactive counter","html":"<button id='counter'>0</button><script>const button=document.getElementById('counter');button.onclick=()=>button.textContent=String(Number(button.textContent)+1)</script>"}`,
+	"todo_write":         `update: {"todos":[{"title":"Inspect implementation","status":"in_progress"},{"title":"Run tests","status":"pending"}]}; read current: {}`,
+	"subagent":           `{"task":"Inspect the authentication module and report concrete security issues.","description":"Review authentication","cleanContext":false}`,
+	"create_goal":        `{"objective":"Make all tests pass","completionCriterion":"go test ./... exits successfully","maxTurns":10}`,
+	"update_goal":        `{"status":"complete","reason":"All required tests pass."}`,
+	"get_goal":           `{}`,
+	"Skill":              `{"skill":"review","args":"main"}`,
+}
+
 func functionTool(name, description string, parameters map[string]any) openai.Tool {
+	if example := builtinToolExamples[name]; example != "" {
+		description = strings.TrimSpace(description) + " Canonical JSON example(s): " + example
+	}
 	return rawFunctionTool(name, description, enforceStrictSchema(parameters))
 }
 
@@ -5978,14 +6111,14 @@ func batchReadFilesSchema() map[string]any {
 			"type": "object",
 			"properties": map[string]any{
 				"path":      map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "File path to read."},
-				"startLine": map[string]any{"type": "integer", "minimum": 1, "description": "Optional inclusive 1-based start line for this file. Defaults to the shared startLine or 1."},
-				"endLine":   map[string]any{"type": "integer", "minimum": 1, "description": "Optional inclusive 1-based end line for this file. Defaults to the shared endLine or the final line."},
+				"startLine": map[string]any{"type": "integer", "minimum": 1, "description": "Optional inclusive 1-based start line. If omitted, reading starts at line 1."},
+				"endLine":   map[string]any{"type": "integer", "minimum": 1, "description": "Optional inclusive 1-based end line. If omitted, reading continues to the final line."},
 				"sheet":     map[string]any{"type": "string", "description": "Xlsx sheet name or 1-based sheet index for this file."},
 				"maxChars":  map[string]any{"type": "integer", "minimum": 1, "maximum": 200000, "description": "Maximum extracted characters for this file's document extraction."},
 			},
 			"required": []string{"path"},
 		},
-		"description": "Per-file read requests. File-level range values override shared batch range values.",
+		"description": "Required array of file request objects. Example: [{\"path\":\"app.go\"}]. Each item must be an object with path; never use a string array.",
 	}
 }
 
@@ -6428,7 +6561,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 				}
 			}
 		}
-	case "agent_delegate":
+	case "subagent", "agent_delegate":
 		var adReq AgentDelegateRequest
 		err = decode(&adReq)
 		if err == nil {
@@ -7109,7 +7242,7 @@ Prefer dedicated tools over shell commands: grep_files for search, batch_read fo
 
 - Workspace boundary: write/edit/create/delete and shell commands are allowed only inside the workspace, except ~/.ally_agent is also allowed for Ally global config.
 - Do NOT ask the user questions — the user cannot see you.
-- Do NOT call agent_delegate — nested delegation is not supported.
+- Do NOT call subagent — nested delegation is not supported.
 - MCP tools are available when connected. Use them when they materially help the delegated task, and treat their results like any other tool output.
 - Do NOT write global memories. The parent agent owns durable memory decisions.
 - Use network tools only when the delegated task explicitly requires external information.
@@ -7173,6 +7306,7 @@ func (a *App) subagentTools(cfg ConfigState) []openai.Tool {
 	all := a.buildToolsForConfig(cfg)
 	filtered := make([]openai.Tool, 0, len(all)-1)
 	blocked := map[string]bool{
+		"subagent":       true,
 		"agent_delegate": true,
 		"create_goal":    true,
 		"update_goal":    true,
@@ -7638,14 +7772,15 @@ func (a *App) createGoal(sessionID string, objective string, completionCriterion
 	}
 	a.goalStates[key] = goal
 	a.mu.Unlock()
+	a.emitGoalUpdate(sessionID, goal)
 	return goal, nil
 }
 
 func (a *App) updateGoal(sessionID, status, reason string) (*GoalState, error) {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	goal := a.goalStates[goalSessionKey(sessionID)]
 	if goal == nil {
+		a.mu.Unlock()
 		return nil, errors.New("no active goal")
 	}
 	switch status {
@@ -7653,9 +7788,39 @@ func (a *App) updateGoal(sessionID, status, reason string) (*GoalState, error) {
 		goal.Status = status
 		goal.StatusReason = reason
 	default:
+		a.mu.Unlock()
 		return nil, fmt.Errorf("invalid goal status: %s", status)
 	}
-	return goal, nil
+	result := *goal
+	a.mu.Unlock()
+	a.emitGoalUpdate(sessionID, &result)
+	return &result, nil
+}
+
+func (a *App) emitGoalUpdate(sessionID string, goal *GoalState) {
+	if strings.TrimSpace(sessionID) == "" || goal == nil {
+		return
+	}
+	cp := *goal
+	a.emit("goal:update", map[string]any{"sessionId": sessionID, "goal": cp})
+}
+
+func (a *App) recordGoalTurn(sessionID string, tokens int, elapsed time.Duration) *GoalState {
+	a.mu.Lock()
+	goal := a.goalStates[goalSessionKey(sessionID)]
+	if goal == nil || goal.Status != "active" {
+		a.mu.Unlock()
+		return nil
+	}
+	goal.TurnsUsed++
+	goal.TokensUsed += tokens
+	if goal.TurnsUsed == 1 {
+		goal.WallClockMs = elapsed.Milliseconds()
+	}
+	result := *goal
+	a.mu.Unlock()
+	a.emitGoalUpdate(sessionID, &result)
+	return &result
 }
 
 func (a *App) getActiveGoal(sessionID string) *GoalState {
@@ -7685,6 +7850,11 @@ func (a *App) getGoalResult(sessionID string) any {
 		"turnsUsed": goal.TurnsUsed,
 		"maxTurns":  goal.TurnBudget,
 	}
+}
+
+// GetGoal returns the current goal state for one frontend session.
+func (a *App) GetGoal(sessionID string) any {
+	return a.getGoalResult(sessionID)
 }
 func (a *App) ListFiles(req ListFilesRequest) ([]FileEntry, error) {
 	result, err := a.listFilesWithConfig(a.effectiveConfig(ConfigState{}), req)
@@ -7750,7 +7920,7 @@ func (a *App) httpRequestToolWithConfig(ctx context.Context, cfg ConfigState, re
 	if req.AllowPrivateNetwork != nil {
 		allowPrivate = *req.AllowPrivateNetwork
 	}
-	fetched, err := a.doHTTPRequest(ctx, req, false, allowPrivate)
+	fetched, err := a.doHTTPRequest(ctx, cfg, req, false, allowPrivate)
 	if err != nil {
 		return HTTPRequestToolResult{}, err
 	}
@@ -7796,7 +7966,7 @@ func (a *App) webFetchToolWithConfig(ctx context.Context, cfg ConfigState, req W
 	if req.AllowPrivateNetwork != nil {
 		allowPrivate = *req.AllowPrivateNetwork
 	}
-	fetched, err := a.doHTTPRequest(ctx, HTTPRequestToolRequest{
+	fetched, err := a.doHTTPRequest(ctx, cfg, HTTPRequestToolRequest{
 		Method:          "GET",
 		URL:             req.URL,
 		Headers:         mergeStringMaps(map[string]string{"Accept": "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.5"}, req.Headers),
@@ -7848,7 +8018,7 @@ func (a *App) webFetchToolWithConfig(ctx context.Context, cfg ConfigState, req W
 	}, nil
 }
 
-func (a *App) doHTTPRequest(parent context.Context, req HTTPRequestToolRequest, preferText bool, allowPrivateNetwork bool) (httpFetchResult, error) {
+func (a *App) doHTTPRequest(parent context.Context, cfg ConfigState, req HTTPRequestToolRequest, preferText bool, allowPrivateNetwork bool) (httpFetchResult, error) {
 	method := strings.ToUpper(strings.TrimSpace(req.Method))
 	if method == "" {
 		method = http.MethodGet
@@ -7860,7 +8030,7 @@ func (a *App) doHTTPRequest(parent context.Context, req HTTPRequestToolRequest, 
 	if err != nil {
 		return httpFetchResult{}, codedToolError("E_HTTP_BAD_URL", err)
 	}
-	if err := validateHTTPURLAccess(target, allowPrivateNetwork); err != nil {
+	if err := validateHTTPURLAccessForConfig(target, allowPrivateNetwork, cfg); err != nil {
 		return httpFetchResult{}, err
 	}
 
@@ -7900,7 +8070,7 @@ func (a *App) doHTTPRequest(parent context.Context, req HTTPRequestToolRequest, 
 	}
 
 	if boolDefault(req.RespectRobots, false) && (method == http.MethodGet || method == http.MethodHead) {
-		allowed, err := a.robotsAllows(parent, target, ua, allowPrivateNetwork)
+		allowed, err := a.robotsAllows(parent, cfg, target, ua, allowPrivateNetwork)
 		if err != nil {
 			return httpFetchResult{}, err
 		}
@@ -7933,7 +8103,7 @@ func (a *App) doHTTPRequest(parent context.Context, req HTTPRequestToolRequest, 
 	followRedirects := boolDefault(req.FollowRedirects, true)
 	client := &http.Client{
 		Timeout:   time.Duration(timeout) * time.Second,
-		Transport: httpTransport(allowPrivateNetwork),
+		Transport: httpTransport(cfg, allowPrivateNetwork),
 		CheckRedirect: func(next *http.Request, via []*http.Request) error {
 			if !followRedirects {
 				return http.ErrUseLastResponse
@@ -7941,7 +8111,7 @@ func (a *App) doHTTPRequest(parent context.Context, req HTTPRequestToolRequest, 
 			if len(via) >= 5 {
 				return errors.New("stopped after 5 redirects")
 			}
-			if err := validateHTTPURLAccess(next.URL, allowPrivateNetwork); err != nil {
+			if err := validateHTTPURLAccessForConfig(next.URL, allowPrivateNetwork, cfg); err != nil {
 				return err
 			}
 			redirects = append(redirects, next.URL.String())
@@ -8162,45 +8332,26 @@ func validateHTTPURLAccess(target *url.URL, allowPrivate bool) error {
 	return nil
 }
 
-func httpTransport(allowPrivate bool) *http.Transport {
-	dialer := &net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}
-	return &http.Transport{
-		Proxy: http.ProxyFromEnvironment,
-		DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
-			host, port, err := net.SplitHostPort(address)
-			if err != nil {
-				return nil, err
-			}
-			ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
-			if err != nil {
-				return nil, err
-			}
-			if len(ips) == 0 {
-				return nil, fmt.Errorf("resolve %s: no addresses", host)
-			}
-			var lastErr error
-			for _, ipAddr := range ips {
-				if !allowPrivate && isPrivateHTTPAddress(ipAddr.IP) {
-					lastErr = fmt.Errorf("refusing private or local network address %s for host %s", ipAddr.IP.String(), host)
-					continue
-				}
-				conn, err := dialer.DialContext(ctx, network, net.JoinHostPort(ipAddr.IP.String(), port))
-				if err == nil {
-					return conn, nil
-				}
-				lastErr = err
-			}
-			if lastErr != nil {
-				return nil, lastErr
-			}
-			return nil, fmt.Errorf("no usable address for %s", host)
-		},
-		ForceAttemptHTTP2:     true,
-		MaxIdleConns:          20,
-		IdleConnTimeout:       30 * time.Second,
-		TLSHandshakeTimeout:   10 * time.Second,
-		ExpectContinueTimeout: 1 * time.Second,
+func validateHTTPURLAccessForConfig(target *url.URL, allowPrivate bool, cfg ConfigState) error {
+	if normalizeProxyMode(cfg.ProxyMode) == proxyModeOff {
+		return validateHTTPURLAccess(target, allowPrivate)
 	}
+	if target == nil || (target.Scheme != "http" && target.Scheme != "https") || target.Hostname() == "" {
+		return validateHTTPURLAccess(target, allowPrivate)
+	}
+	if allowPrivate {
+		return nil
+	}
+	if ip := net.ParseIP(target.Hostname()); ip != nil && isPrivateHTTPAddress(ip) {
+		return fmt.Errorf("refusing private or local network address %s because allowPrivateNetwork=false", ip)
+	}
+	// Proxy DNS may resolve names that are intentionally unavailable locally.
+	// Keep literal private IP blocking, but let the configured proxy resolve hostnames.
+	return nil
+}
+
+func httpTransport(cfg ConfigState, allowPrivate bool) *http.Transport {
+	return proxyHTTPTransport(cfg, allowPrivate)
 }
 
 type httpDecodedReadCloser struct {
@@ -8449,13 +8600,13 @@ func isHTMLContentType(contentType string) bool {
 	return contentType == "text/html" || contentType == "application/xhtml+xml" || strings.Contains(contentType, "html")
 }
 
-func (a *App) robotsAllows(ctx context.Context, target *url.URL, userAgent string, allowPrivate bool) (bool, error) {
+func (a *App) robotsAllows(ctx context.Context, cfg ConfigState, target *url.URL, userAgent string, allowPrivate bool) (bool, error) {
 	robotsURL := *target
 	robotsURL.Path = "/robots.txt"
 	robotsURL.RawPath = ""
 	robotsURL.RawQuery = ""
 	robotsURL.Fragment = ""
-	if err := validateHTTPURLAccess(&robotsURL, allowPrivate); err != nil {
+	if err := validateHTTPURLAccessForConfig(&robotsURL, allowPrivate, cfg); err != nil {
 		return false, err
 	}
 	if err := a.waitHTTPRateLimit(ctx, &robotsURL); err != nil {
@@ -8466,7 +8617,7 @@ func (a *App) robotsAllows(ctx context.Context, target *url.URL, userAgent strin
 		return false, err
 	}
 	req.Header.Set("User-Agent", userAgent)
-	client := &http.Client{Timeout: 10 * time.Second, Transport: httpTransport(allowPrivate)}
+	client := &http.Client{Timeout: 10 * time.Second, Transport: httpTransport(cfg, allowPrivate)}
 	resp, err := client.Do(req)
 	if err != nil {
 		return true, nil
@@ -10785,7 +10936,7 @@ func (a *App) runCommandWithConfig(parent context.Context, cfg ConfigState, req 
 	shell := commandShell(req.Command, cfg.GitBashPath)
 	cmd := exec.CommandContext(ctx, shell.path, shell.args...)
 	cmd.Dir = cwd
-	cmd.Env = os.Environ()
+	cmd.Env = proxyEnvironment(cfg, os.Environ())
 	buf := &limitedBuffer{limit: maxToolOutput}
 	cmd.Stdout = buf
 	cmd.Stderr = buf
@@ -11889,12 +12040,10 @@ var commandRiskPatterns = []struct {
 func checkCommandSafety(req CommandRequest, workspaceRoot string) error {
 	cmd := req.Command
 	if containsExplicitDeleteCommand(cmd) && !isAllowedDeleteContext(cmd) {
-		return codedToolError("E_COMMAND_BLOCKED", fmt.Errorf("run_command refuses explicit deletion commands. Use delete_path for file deletion so workspace and OS safety checks can be applied.\n被拦截的命令: %s", cmd))
+		return codedToolError("E_COMMAND_BLOCKED", fmt.Errorf("安全围栏已拦截：run_command 不允许直接执行文件删除命令。\n原因：shell 删除命令可能绕过工作区边界、系统目录和 .git 保护。\n处理方式：请改用 delete_path 工具，由专用工具检查目标路径和递归范围。\n被拦截的命令：%s", cmd))
 	}
-	if outsidePath := firstAbsolutePathOutsideWorkspace(cmd, workspaceRoot); outsidePath != "" {
-		if commandMayModifyOutsidePath(cmd) {
-			return codedToolError("E_PATH_OUTSIDE", fmt.Errorf("run_command allows read-only inspection of outside paths but refuses commands that may modify them.\n外部路径: %s", outsidePath))
-		}
+	if risk := firstExistingOutsideMutationTarget(cmd, workspaceRoot); risk != nil {
+		return codedToolError("E_PATH_OUTSIDE", fmt.Errorf("安全围栏已拦截：命令可能修改工作区外的受保护目标。\n原因：%s。\n检测到的目标：%s\n允许的操作：读取工作区外路径、写入 /dev/null 等空设备、创建不存在的新路径。\n禁止的操作：覆盖、追加、移动、改权限或以其他方式修改已经存在的工作区外文件或目录。\n被拦截的命令：%s", risk.Reason, risk.Path, cmd))
 	}
 	for _, r := range commandRiskPatterns {
 		if r.re.MatchString(cmd) {
@@ -11911,8 +12060,9 @@ var outsidePathMutationPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\b(?:Set|Add|Out|New|Copy|Move|Rename|Remove|Clear)-(?:Content|Item|File)\b`),
 	regexp.MustCompile(`(?i)\b(?:WriteAllText|WriteAllBytes|OpenWrite|FileStream)\b`),
 	regexp.MustCompile(`(?i)(^|[\s;&|()])(?:tar\s+[^\r\n;&|]*-[^\r\n;&|]*x|unzip\b)`),
-	regexp.MustCompile(`(^|[^<])>{1,2}\s*[^&]`),
 }
+
+var shellRedirectionRE = regexp.MustCompile(`(?:^|[^<])>{1,2}\s*(?:"([^"]+)"|'([^']+)'|([^\s;&|()]+))`)
 
 func commandMayModifyOutsidePath(command string) bool {
 	for _, pattern := range outsidePathMutationPatterns {
@@ -11921,6 +12071,99 @@ func commandMayModifyOutsidePath(command string) bool {
 		}
 	}
 	return false
+}
+
+// firstExistingOutsideMutationTarget describes an outside-write risk that the
+// UI can explain directly. Creating a new literal outside path is allowed,
+// while changing an existing path or using an unresolved redirection target
+// remains blocked. Harmless sinks such as /dev/null are ignored.
+type outsideMutationRisk struct {
+	Path   string
+	Reason string
+}
+
+func firstExistingOutsideMutationTarget(command, workspaceRoot string) *outsideMutationRisk {
+	for _, target := range shellRedirectionTargets(command) {
+		if isShellNullDevice(target) {
+			continue
+		}
+		path, ok := resolveCommandLiteralPath(target, workspaceRoot)
+		if !ok {
+			return &outsideMutationRisk{
+				Path:   target,
+				Reason: "重定向目标包含变量、通配符或命令替换，执行前无法确认真实写入位置",
+			}
+		}
+		if insideRoot(workspaceRoot, path) || insideAllyAgentDir(path) {
+			continue
+		}
+		if pathExists(path) {
+			return &outsideMutationRisk{
+				Path:   filepath.ToSlash(path),
+				Reason: "重定向目标已经存在，继续执行可能覆盖或追加其内容",
+			}
+		}
+	}
+
+	if !commandMayModifyOutsidePath(command) {
+		return nil
+	}
+	for _, candidate := range absolutePathCandidates(command) {
+		if isShellNullDevice(candidate) {
+			continue
+		}
+		clean := filepath.Clean(candidate)
+		if insideRoot(workspaceRoot, clean) || insideAllyAgentDir(clean) {
+			continue
+		}
+		if pathExists(clean) {
+			return &outsideMutationRisk{
+				Path:   filepath.ToSlash(clean),
+				Reason: "命令包含写入、移动、改权限或原地修改操作，并引用了已经存在的工作区外路径",
+			}
+		}
+	}
+	return nil
+}
+
+func shellRedirectionTargets(command string) []string {
+	targets := []string{}
+	for _, match := range shellRedirectionRE.FindAllStringSubmatch(command, -1) {
+		for i := 1; i < len(match); i++ {
+			if match[i] != "" {
+				targets = append(targets, match[i])
+				break
+			}
+		}
+	}
+	return targets
+}
+
+func isShellNullDevice(path string) bool {
+	value := strings.ToLower(strings.TrimSpace(strings.Trim(path, `"'`)))
+	value = strings.TrimSuffix(value, ":")
+	return value == "/dev/null" || value == "nul" || value == `\\.\nul` || value == "$null"
+}
+
+func resolveCommandLiteralPath(value, workspaceRoot string) (string, bool) {
+	value = strings.TrimSpace(strings.Trim(value, `"'`))
+	if value == "" || strings.ContainsAny(value, "$%*?[]{}"+"`") || strings.HasPrefix(value, "&") {
+		return "", false
+	}
+	if goruntime.GOOS == "windows" && len(value) >= 3 && value[0] == '/' && isASCIILetter(value[1]) && value[2] == '/' {
+		value = string(toUpperByte(value[1])) + ":\\" + value[3:]
+	} else {
+		value = filepath.FromSlash(value)
+	}
+	if !filepath.IsAbs(value) {
+		value = filepath.Join(workspaceRoot, value)
+	}
+	return filepath.Clean(value), true
+}
+
+func pathExists(path string) bool {
+	_, err := os.Lstat(path)
+	return err == nil || !errors.Is(err, os.ErrNotExist)
 }
 
 func isAllowedDeleteContext(command string) bool {

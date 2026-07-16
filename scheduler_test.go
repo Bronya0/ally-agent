@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -47,6 +48,24 @@ func TestScheduledTaskCreateListDelete(t *testing.T) {
 	}
 	if tasks := app.ListScheduledTasks(); len(tasks) != 0 {
 		t.Fatalf("expected task deletion, got %#v", tasks)
+	}
+}
+
+func TestScheduledTasksClearLegacyPersistenceOnStartup(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "scheduled_tasks.json")
+	if err := os.WriteFile(path, []byte(`[{"id":"legacy"}]`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	app := NewApp()
+	app.configPath = filepath.Join(root, "config.json")
+	app.config = ConfigState{Workspace: root}
+	if err := app.startScheduledTaskManager(); err != nil {
+		t.Fatal(err)
+	}
+	app.stopScheduledTaskManager()
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("scheduled task persistence should be removed, stat err=%v", err)
 	}
 }
 

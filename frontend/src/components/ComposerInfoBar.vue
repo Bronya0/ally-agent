@@ -47,12 +47,12 @@
     </span>
     <button
       type="button"
-      :class="['scheduled-task-chip', { running: scheduledTaskRunningCount > 0 }]"
-      :title="$t('composer.scheduled.open')"
-      @click.stop="$emit('openScheduledTasks')"
+      :class="['scheduled-task-chip', { running: taskCenterRunningCount > 0 }]"
+      :title="$t('composer.taskCenter.open')"
+      @click.stop="$emit('openTaskCenter')"
     >
-      <span class="scheduled-task-icon">◷</span>
-      <span>{{ scheduledTaskCount }}</span>
+      <span class="scheduled-task-icon">▤</span>
+      <span>{{ taskCenterCount }}</span>
     </button>
     <span class="question-jump-controls" :title="$t('composer.question.jump')">
       <button type="button" class="question-jump-btn" :title="$t('composer.question.previous')" @click.stop="$emit('jumpQuestion', 'up')">↑</button>
@@ -213,12 +213,12 @@ const props = defineProps({
   workspaceInputTokens: { type: String, default: '0' },
   workspaceOutputTokens: { type: String, default: '0' },
   grillModeActive: { type: Boolean, default: false },
-  scheduledTaskCount: { type: Number, default: 0 },
-  scheduledTaskRunningCount: { type: Number, default: 0 },
+  taskCenterCount: { type: Number, default: 0 },
+  taskCenterRunningCount: { type: Number, default: 0 },
   fmtK: { type: Function, required: true },
 });
 
-const emit = defineEmits(['switchModel', 'openConfig', 'openGitDiff', 'openWorkspace', 'jumpQuestion', 'setRunMode', 'openScheduledTasks']);
+const emit = defineEmits(['switchModel', 'openConfig', 'openGitDiff', 'openWorkspace', 'jumpQuestion', 'setRunMode', 'openTaskCenter']);
 
 const modelMenuVisible = ref(false);
 const contextPopoverVisible = ref(false);

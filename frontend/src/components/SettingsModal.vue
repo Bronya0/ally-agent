@@ -18,6 +18,10 @@
           <span class="settings-nav-title">{{ $t('settings.models') }}</span>
           <span class="settings-nav-desc">{{ $t('settings.providerKeys') }}</span>
         </button>
+        <button :class="['settings-nav-item', { active: page === 'network' }]" @click="page = 'network'">
+          <span class="settings-nav-title">{{ $t('settings.network') }}</span>
+          <span class="settings-nav-desc">{{ $t('settings.networkDescription') }}</span>
+        </button>
         <button :class="['settings-nav-item', { active: page === 'skills' }]" @click="page = 'skills'">
           <span class="settings-nav-title">Skills</span>
           <span class="settings-nav-desc">{{ $t('settings.skillsDescription') }}</span>
@@ -64,6 +68,47 @@
               <span class="settings-field-hint">{{ $t('settings.gitBashPathHint') }}</span>
             </div>
           </n-form-item>
+        </section>
+
+        <!-- Network -->
+        <section v-else-if="page === 'network'" class="settings-page">
+          <div class="config-section-header">
+            <div>
+              <div class="config-section-title">{{ $t('settings.proxyTitle') }}</div>
+              <div class="config-section-subtitle">{{ $t('settings.proxySubtitle') }}</div>
+            </div>
+          </div>
+          <n-form-item :label="$t('settings.proxyMode')">
+            <n-select v-model:value="draft.proxyMode" :options="proxyModeOptions" />
+          </n-form-item>
+          <n-form-item v-if="draft.proxyMode === 'manual'" :label="$t('settings.proxyUrl')">
+            <n-input v-model:value="draft.proxyUrl" clearable placeholder="http://127.0.0.1:7890 / socks5://127.0.0.1:7891" />
+          </n-form-item>
+          <n-form-item v-if="draft.proxyMode !== 'off'" :label="$t('settings.proxyNoProxy')">
+            <n-input v-model:value="draft.proxyNoProxy" clearable placeholder="localhost,127.0.0.1,::1" />
+          </n-form-item>
+          <n-alert type="warning" :show-icon="true" class="proxy-warning">
+            {{ $t('settings.proxySecurityHint') }}
+          </n-alert>
+          <div class="proxy-actions">
+            <n-button secondary :loading="proxyDetecting" @click="detectProxy">{{ $t('settings.proxyDetect') }}</n-button>
+            <n-button secondary :loading="proxyTesting" :disabled="draft.proxyMode === 'off'" @click="testProxy">{{ $t('settings.proxyTest') }}</n-button>
+          </div>
+          <div v-if="proxyStatus" class="proxy-status-card">
+            <div><span>{{ $t('settings.proxySource') }}</span><strong>{{ proxyStatus.source || '-' }}</strong></div>
+            <div><span>HTTP</span><strong>{{ proxyStatus.httpProxy || '-' }}</strong></div>
+            <div><span>HTTPS</span><strong>{{ proxyStatus.httpsProxy || '-' }}</strong></div>
+            <div><span>NO_PROXY</span><strong>{{ proxyStatus.noProxy || '-' }}</strong></div>
+            <div v-if="proxyStatus.pacUrl"><span>PAC</span><strong>{{ proxyStatus.pacUrl }}</strong></div>
+            <n-alert v-if="proxyStatus.error || proxyStatus.pacUnsupported" type="warning" :show-icon="false">
+              {{ proxyStatus.error || $t('settings.proxyPacUnsupported') }}
+            </n-alert>
+          </div>
+          <n-alert v-if="proxyTestResult" :type="proxyTestResult.ok ? 'success' : 'error'" :show-icon="false" class="proxy-test-result">
+            {{ proxyTestResult.ok
+              ? $t('settings.proxyTestSuccess', { status: proxyTestResult.statusCode, duration: proxyTestResult.durationMs, proxy: proxyTestResult.proxy || $t('settings.proxyDirect') })
+              : $t('settings.proxyTestFailed', { error: proxyTestResult.error || '-' }) }}
+          </n-alert>
         </section>
 
         <!-- Models -->
@@ -324,6 +369,7 @@ import {
   ListSkills, ActivateSkill, DeactivateSkill, ClearSkills, GetActiveSkills,
   ListTools, OpenPathInFileManager,
   TestModelConnection,
+  DetectSystemProxy, TestProxy,
 } from '../../wailsjs/go/main/App';
 
 const { message } = createDiscreteApi(['message'], {
@@ -357,6 +403,44 @@ const page = ref('general');
 const modelEditorVisible = ref(false);
 const modelEditorIndex = ref(-1);
 const testingModel = ref(false);
+const proxyDetecting = ref(false);
+const proxyTesting = ref(false);
+const proxyStatus = ref(null);
+const proxyTestResult = ref(null);
+const proxyModeOptions = computed(() => [
+  { label: t('settings.proxyOff'), value: 'off' },
+  { label: t('settings.proxySystem'), value: 'system' },
+  { label: t('settings.proxyManual'), value: 'manual' },
+]);
+
+async function detectProxy() {
+  proxyDetecting.value = true;
+  try {
+    proxyStatus.value = await DetectSystemProxy();
+    if (proxyStatus.value?.enabled && draft.proxyMode === 'off') draft.proxyMode = 'system';
+  } catch (err) {
+    proxyStatus.value = { error: String(err) };
+  } finally {
+    proxyDetecting.value = false;
+  }
+}
+
+async function testProxy() {
+  proxyTesting.value = true;
+  proxyTestResult.value = null;
+  try {
+    proxyTestResult.value = await TestProxy({
+      mode: draft.proxyMode,
+      url: draft.proxyUrl || '',
+      noProxy: draft.proxyNoProxy || '',
+      targetUrl: draft.baseUrl || '',
+    });
+  } catch (err) {
+    proxyTestResult.value = { ok: false, error: String(err) };
+  } finally {
+    proxyTesting.value = false;
+  }
+}
 
 const isWindows = computed(() => {
   return document.body.classList.contains('platform-windows') ||
@@ -843,6 +927,7 @@ watch(() => props.visible, (visible) => {
     syncDraftFromProps();
     loadMcpConfig();
     refreshSkillState();
+    if (draft.proxyMode === 'system') detectProxy();
   }
 });
 </script>
@@ -935,6 +1020,14 @@ watch(() => props.visible, (visible) => {
 .model-format-hint {
   margin-top: 4px;
 }
+
+.proxy-warning { margin-bottom: 12px; }
+.proxy-actions { display: flex; gap: 8px; margin-bottom: 12px; }
+.proxy-status-card { display: grid; gap: 8px; padding: 12px; border: 1px solid rgba(255,255,255,.08); border-radius: 8px; background: rgba(255,255,255,.025); }
+.proxy-status-card > div { display: grid; grid-template-columns: 90px minmax(0,1fr); gap: 10px; font-size: 12px; }
+.proxy-status-card span { color: #777; }
+.proxy-status-card strong { overflow-wrap: anywhere; color: #d0d0d0; font-family: var(--ally-mono-font); font-weight: 500; }
+.proxy-test-result { margin-top: 12px; }
 
 .config-section-header {
   display: flex;

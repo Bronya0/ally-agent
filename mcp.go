@@ -52,12 +52,29 @@ type McpClientHandle struct {
 }
 
 type McpManager struct {
-	mu          sync.RWMutex
-	reconnectMu sync.Mutex
-	clients     map[string]*McpClientHandle
-	toolLookup  map[string]mcpToolRef
-	workDir     string
-	listener    func(tools []McpDiscoveredTool)
+	mu            sync.RWMutex
+	reconnectMu   sync.Mutex
+	clients       map[string]*McpClientHandle
+	toolLookup    map[string]mcpToolRef
+	workDir       string
+	listener      func(tools []McpDiscoveredTool)
+	networkConfig func() ConfigState
+}
+
+func (m *McpManager) SetNetworkConfigProvider(provider func() ConfigState) {
+	m.mu.Lock()
+	m.networkConfig = provider
+	m.mu.Unlock()
+}
+
+func (m *McpManager) currentNetworkConfig() ConfigState {
+	m.mu.RLock()
+	provider := m.networkConfig
+	m.mu.RUnlock()
+	if provider != nil {
+		return provider()
+	}
+	return ConfigState{}
 }
 
 type mcpToolRef struct {
@@ -132,7 +149,7 @@ func (m *McpManager) connectOne(ctx context.Context, name string, cfg McpServerC
 	m.mu.Unlock()
 	m.notifyChange()
 
-	mcpClient, discovered, err := initializeMcpClient(ctx, name, cfg)
+	mcpClient, discovered, err := m.initializeMcpClient(ctx, name, cfg)
 	if err != nil {
 		m.mu.Lock()
 		handle.Status = "failed"
@@ -152,8 +169,8 @@ func (m *McpManager) connectOne(ctx context.Context, name string, cfg McpServerC
 	m.notifyChange()
 }
 
-func initializeMcpClient(ctx context.Context, name string, cfg McpServerConfig) (*client.Client, []McpDiscoveredTool, error) {
-	mcpClient, err := newMcpClient(ctx, cfg)
+func (m *McpManager) initializeMcpClient(ctx context.Context, name string, cfg McpServerConfig) (*client.Client, []McpDiscoveredTool, error) {
+	mcpClient, err := m.newMcpClient(ctx, cfg)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -196,7 +213,7 @@ func initializeMcpClient(ctx context.Context, name string, cfg McpServerConfig) 
 	return mcpClient, discovered, nil
 }
 
-func newMcpClient(ctx context.Context, cfg McpServerConfig) (*client.Client, error) {
+func (m *McpManager) newMcpClient(ctx context.Context, cfg McpServerConfig) (*client.Client, error) {
 	transportName := strings.ToLower(strings.TrimSpace(cfg.Transport))
 	if transportName == "" && cfg.Command != "" {
 		transportName = "stdio"
@@ -212,7 +229,7 @@ func newMcpClient(ctx context.Context, cfg McpServerConfig) (*client.Client, err
 		if strings.TrimSpace(cfg.Command) == "" {
 			return nil, errors.New("stdio MCP server requires command")
 		}
-		env := os.Environ()
+		env := proxyEnvironment(m.currentNetworkConfig(), os.Environ())
 		for k, v := range cfg.Env {
 			env = append(env, k+"="+v)
 		}
@@ -224,7 +241,8 @@ func newMcpClient(ctx context.Context, cfg McpServerConfig) (*client.Client, err
 		if strings.TrimSpace(cfg.URL) == "" {
 			return nil, errors.New("sse MCP server requires url")
 		}
-		mcpClient, err = client.NewSSEMCPClient(cfg.URL, client.WithHeaders(cfg.Headers))
+		httpClient := proxyHTTPClient(m.currentNetworkConfig(), true, 0)
+		mcpClient, err = client.NewSSEMCPClient(cfg.URL, client.WithHeaders(cfg.Headers), client.WithHTTPClient(httpClient))
 		if err != nil {
 			return nil, fmt.Errorf("sse client failed: %w", err)
 		}
@@ -236,6 +254,7 @@ func newMcpClient(ctx context.Context, cfg McpServerConfig) (*client.Client, err
 			cfg.URL,
 			transport.WithHTTPHeaders(cfg.Headers),
 			transport.WithHTTPTimeout(60*time.Second),
+			transport.WithHTTPBasicClient(proxyHTTPClient(m.currentNetworkConfig(), true, 60*time.Second)),
 		)
 		if err != nil {
 			return nil, fmt.Errorf("http client failed: %w", err)
@@ -339,7 +358,7 @@ func (m *McpManager) reconnectServer(ctx context.Context, serverName string, fai
 		_ = oldClient.Close()
 	}
 
-	mcpClient, discovered, err := initializeMcpClient(ctx, serverName, cfg)
+	mcpClient, discovered, err := m.initializeMcpClient(ctx, serverName, cfg)
 	m.mu.Lock()
 	current, ok := m.clients[serverName]
 	if !ok {

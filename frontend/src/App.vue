@@ -104,11 +104,16 @@
                     </div>
                   </div>
                 </div>
-                <div v-if="activeSessionRunning" class="composer-run-status">
-                  <span class="composer-run-status-dots">
+                <div v-if="activeSessionRunning || activeGoal" class="composer-run-status">
+                  <span v-if="activeSessionRunning" class="composer-run-status-dots">
                     <span class="composer-run-status-dot"></span>
                     <span class="composer-run-status-dot"></span>
                     <span class="composer-run-status-dot"></span>
+                  </span>
+                  <span v-if="activeGoal" class="composer-goal-status" :title="activeGoal.objective || ''">
+                    <span class="composer-goal-label">{{ $t('tools.kind.goal') }}</span>
+                    <span class="composer-goal-objective">{{ activeGoal.objective }}</span>
+                    <span v-if="activeGoal.maxTurns" class="composer-goal-progress">{{ activeGoal.turnsUsed || 0 }}/{{ activeGoal.maxTurns }}</span>
                   </span>
                 </div>
                 <n-input
@@ -142,8 +147,8 @@
                   :workspace-input-tokens="workspaceInputTokens"
                   :workspace-output-tokens="workspaceOutputTokens"
                   :grill-mode-active="!!activeSession?.grillMode"
-                  :scheduled-task-count="scheduledTasks.length"
-                  :scheduled-task-running-count="scheduledTaskRunningCount"
+                  :task-center-count="scheduledTasks.length + services.length"
+                  :task-center-running-count="scheduledTaskRunningCount + serviceRunningCount"
                   :fmt-k="fmtK"
                   @switch-model="switchToModel"
                   @open-config="configVisible = true"
@@ -151,7 +156,7 @@
                   @open-workspace="openWorkspaceInFileManager"
                   @jump-question="jumpToUserQuestion"
                   @set-run-mode="setRunMode"
-                  @open-scheduled-tasks="openScheduledTasks"
+                  @open-task-center="openTaskCenter"
                   :session-messages="activeMessages"
                   :session-title="activeSession?.title || ''"
                 />
@@ -168,14 +173,18 @@
             @skills-changed="onSkillsChanged"
             @mcp-saved="onMcpSaved"
           />
-          <ScheduledTasksPanel
-            :show="scheduledTasksVisible"
+          <TaskCenterPanel
+            :show="taskCenterVisible"
             :tasks="scheduledTasks"
-            :loading="scheduledTasksLoading"
+            :services="services"
+            :scheduled-loading="scheduledTasksLoading"
+            :services-loading="servicesLoading"
             :deleting-ids="scheduledTaskDeletingIds"
-            @close="scheduledTasksVisible = false"
-            @refresh="loadScheduledTasks"
-            @delete="deleteScheduledTask"
+            :stopping-ids="serviceStoppingIds"
+            @close="taskCenterVisible = false"
+            @refresh="refreshTaskCenter"
+            @delete-task="deleteScheduledTask"
+            @stop-service="stopManagedService"
           />
           <RenderBoundary :label="$t('app.gitChanges')"><GitDiffModal v-model:show="gitDiffVisible" :git-status="gitStatus" :workspace="config.workspace" /></RenderBoundary>
 
@@ -226,12 +235,15 @@ import {
   GetActiveSkills,
   SwitchModel,
   GetTodos,
+  GetGoal,
   GetMcpServers,
   GetMcpConfig,
   SaveMcpConfig,
   RestartMcpServers,
   ListScheduledTasks,
   DeleteScheduledTask,
+  ListServices,
+  StopService,
   DeleteSession,
   ReleaseSession,
   SubmitAskResponse,
@@ -250,7 +262,7 @@ import AppHeader from './components/AppHeader.vue';
 import CommandMenu from './components/CommandMenu.vue';
 import SettingsModal from './components/SettingsModal.vue';
 import ChatMessages from './components/ChatMessages.vue';
-import ScheduledTasksPanel from './components/ScheduledTasksPanel.vue';
+import TaskCenterPanel from './components/TaskCenterPanel.vue';
 import { assignConfig, defaultConfig } from './utils/config.mjs';
 import { buildVersion } from './utils/buildVersion.js';
 import { computeEditStats, formatEditStats } from './utils/diff.js';
@@ -1041,6 +1053,7 @@ const settingsPage = ref('general');
 const showSkillsPanel = ref(false);
 const todos = ref([]);
 const todosBySession = reactive({});
+const goalsBySession = reactive({});
 const todoRevisionsBySession = reactive({});
 const todoPanelCollapsed = ref(false);
 const isMaximised = ref(false);
@@ -1050,9 +1063,12 @@ const skillsLoading = ref(false);
 const skillToggleInFlight = ref('');
 const availableTools = ref([]);
 const scheduledTasks = ref([]);
-const scheduledTasksVisible = ref(false);
+const services = ref([]);
+const taskCenterVisible = ref(false);
 const scheduledTasksLoading = ref(false);
+const servicesLoading = ref(false);
 const scheduledTaskDeletingIds = ref([]);
+const serviceStoppingIds = ref([]);
 const subRuns = ref([]);
 const thinking = ref(false);
 const modelEditorVisible = ref(false);
@@ -1192,7 +1208,7 @@ const activeSession = computed(() => sessions.value.find((session) => session.id
 const GRILL_BLOCKED_TOOL_NAMES = new Set([
   'edit', 'create_file', 'delete_path', 'run_command', 'background_process', 'wait',
   'http_request', 'web_fetch', 'remote_edit', 'remote_create_file',
-  'remote_delete_path', 'remote_run_command', 'agent_delegate', 'memory_write',
+  'remote_delete_path', 'remote_run_command', 'subagent', 'agent_delegate', 'memory_write',
   'todo_write', 'create_goal', 'update_goal', 'scheduled_task',
 ]);
 const visibleAvailableTools = computed(() => {
@@ -1209,7 +1225,9 @@ const workspaceTabsWithStatus = computed(() => workspaceTabs.value.map((tab) => 
 const activeMessages = computed(() => activeSession.value?.messages || []);
 const activeSessionRunning = computed(() => !!activeSession.value?.isRunning);
 const scheduledTaskRunningCount = computed(() => scheduledTasks.value.filter((task) => task?.running).length);
+const serviceRunningCount = computed(() => services.value.filter((service) => ['starting', 'running'].includes(service?.status)).length);
 const activeTodoCount = computed(() => todos.value.filter((item) => item?.status !== 'done').length);
+const activeGoal = computed(() => goalsBySession[activeSessionId.value] || null);
 const showTodoPanel = computed(() => todos.value.length > 0 && activeTodoCount.value > 0);
 
 const MAX_RENDER_MESSAGES = 180;
@@ -1389,6 +1407,7 @@ watch([activeSessionId, activeMessages], async () => {
 }, { immediate: true, deep: true });
 
 watch(activeSessionId, () => {
+  loadGoal(activeSessionId.value);
   nextTick(() => {
     cleanupDisconnectedMermaidNodes();
     observePendingMermaidDiagrams();
@@ -2469,7 +2488,7 @@ function bindRuntimeEvents() {
       existing.toolCallId = data.toolCallId || existing.toolCallId || '';
       if (data.toolCallIndex !== undefined && data.toolCallIndex !== null) existing.toolCallIndex = data.toolCallIndex;
       const resultData = parseToolResultData(data.result);
-      if (data.name === 'agent_delegate' && existing.kind === 'subagent') {
+      if ((data.name === 'subagent' || data.name === 'agent_delegate') && existing.kind === 'subagent') {
         existing.subagentId = resultData.agentId || existing.subagentId || '';
         existing.status = resultData.status || 'completed';
         existing.description = resultData.description || existing.description || '';
@@ -2594,7 +2613,7 @@ function bindRuntimeEvents() {
       existing.toolBatchId = data.toolBatchId || existing.toolBatchId || '';
       existing.toolCallId = data.toolCallId || existing.toolCallId || '';
       if (data.toolCallIndex !== undefined && data.toolCallIndex !== null) existing.toolCallIndex = data.toolCallIndex;
-      if (data.name === 'agent_delegate' && existing.kind === 'subagent') {
+      if ((data.name === 'subagent' || data.name === 'agent_delegate') && existing.kind === 'subagent') {
         existing.status = 'failed';
         existing.error = data.error || '';
         existing.body = '';
@@ -2720,9 +2739,17 @@ function bindRuntimeEvents() {
       todos.value = nextTodos;
     }
   });
+  onRuntimeEvent('goal:update', (data) => {
+    const sid = data.sessionId || '';
+    if (!sid) return;
+    const goal = data.goal;
+    if (goal?.status === 'active') goalsBySession[sid] = goal;
+    else delete goalsBySession[sid];
+  });
   for (const eventName of ['scheduled:update', 'scheduled:run_start', 'scheduled:run_done', 'scheduled:run_error']) {
     onRuntimeEvent(eventName, (data) => applyScheduledTaskEvent(data));
   }
+  onRuntimeEvent('service:update', (data) => applyServiceEvent(data));
 
   // ── Sub-agent events ──
 
@@ -2756,11 +2783,12 @@ function bindRuntimeEvents() {
         totalTokens: 0,
       });
     }
-    // Upgrade the original agent_delegate card in place. Keeping the parent
+    // Upgrade the original subagent card in place. Keeping the parent
     // tool identity lets the eventual tool:result/tool:error update this same
     // card instead of appending a second raw JSON result card.
     if (session) {
-      const existing = findToolEventMessage(session, { ...data, name: 'agent_delegate' });
+      const existing = findToolEventMessage(session, { ...data, name: 'subagent' }) ||
+        findToolEventMessage(session, { ...data, name: 'agent_delegate' });
       const payload = {
         role: 'tool_call',
         kind: 'subagent',
@@ -2769,7 +2797,7 @@ function bindRuntimeEvents() {
         toolBatchId: data.toolBatchId || existing?.toolBatchId || '',
         toolCallId: data.toolCallId || existing?.toolCallId || '',
         toolCallIndex: data.toolCallIndex ?? existing?.toolCallIndex,
-        name: 'agent_delegate',
+        name: 'subagent',
         subagentId: data.id,
         status: 'running',
         description: data.description || '',
@@ -3902,7 +3930,7 @@ function appendToolEventFallback(session, data = {}, status = 'running') {
     askSubmitting: false,
     askSubmitted: false,
     askAnswers: [],
-    ...(data.name === 'agent_delegate' ? {
+    ...((data.name === 'subagent' || data.name === 'agent_delegate') ? {
       subagentId: '',
       description: title || '',
       profile: 'coder',
@@ -4210,7 +4238,7 @@ function updateToolEvent(id, name, title, body, status = 'default', meta = {}, t
     askSubmitting: existing?.askSubmitting || false,
     askSubmitted: existing?.askSubmitted || false,
     askAnswers: existing?.askAnswers || [],
-    ...(name === 'agent_delegate' ? {
+    ...((name === 'subagent' || name === 'agent_delegate') ? {
       subagentId: existing?.subagentId || '',
       description: parsed.description || existing?.description || parsed.task || '',
       profile: existing?.profile || 'coder',
@@ -4285,6 +4313,17 @@ async function loadTodos(sid) {
   } catch (_) { todos.value = []; }
 }
 
+async function loadGoal(sid) {
+  if (!sid) return;
+  try {
+    const result = await GetGoal(sid);
+    if (result?.hasGoal && result?.status === 'active') goalsBySession[sid] = result;
+    else delete goalsBySession[sid];
+  } catch (_) {
+    delete goalsBySession[sid];
+  }
+}
+
 function sortScheduledTasks(tasks) {
   return [...tasks].sort((a, b) => {
     if (!!a?.running !== !!b?.running) return a?.running ? -1 : 1;
@@ -4320,9 +4359,56 @@ async function loadScheduledTasks() {
   }
 }
 
-async function openScheduledTasks() {
-  scheduledTasksVisible.value = true;
-  await loadScheduledTasks();
+function applyServiceEvent(data = {}) {
+  const service = data.service;
+  if (!service?.id) return;
+  const next = services.value.filter((item) => item.id !== service.id);
+  next.push(service);
+  services.value = sortServices(next);
+}
+
+function sortServices(items) {
+  return [...items].sort((a, b) => {
+    const aActive = ['starting', 'running'].includes(a?.status);
+    const bActive = ['starting', 'running'].includes(b?.status);
+    if (aActive !== bActive) return aActive ? -1 : 1;
+    return Number(b?.startedAt || 0) - Number(a?.startedAt || 0);
+  });
+}
+
+async function loadServices() {
+  servicesLoading.value = true;
+  try {
+    const result = await ListServices();
+    services.value = sortServices(Array.isArray(result?.services) ? result.services : []);
+  } catch (err) {
+    message.error(t('app.service.loadFailed', { error: err }));
+  } finally {
+    servicesLoading.value = false;
+  }
+}
+
+async function refreshTaskCenter() {
+  await Promise.all([loadScheduledTasks(), loadServices()]);
+}
+
+async function openTaskCenter() {
+  taskCenterVisible.value = true;
+  await refreshTaskCenter();
+}
+
+async function stopManagedService(id) {
+  if (!id || serviceStoppingIds.value.includes(id)) return;
+  serviceStoppingIds.value = [...serviceStoppingIds.value, id];
+  try {
+    const service = await StopService({ id });
+    applyServiceEvent({ service });
+    message.success(t('app.service.stopped'));
+  } catch (err) {
+    message.error(t('app.service.stopFailed', { error: err }));
+  } finally {
+    serviceStoppingIds.value = serviceStoppingIds.value.filter((item) => item !== id);
+  }
 }
 
 async function deleteScheduledTask(id) {
@@ -4813,14 +4899,16 @@ function toolKind(name) {
   if (name === 'wait') return 'wait';
   if (name === 'ask') return 'ask';
   if (name === 'calculate') return 'calculate';
-  if (name === 'read_file' || name === 'remote_read_file' || name === 'list_files' || name === 'remote_list_files' || name === 'batch_read' || name === 'document_read') return 'read';
+  if (name === 'list_files' || name === 'remote_list_files') return 'list';
+  if (name === 'read_file' || name === 'remote_read_file' || name === 'batch_read' || name === 'document_read') return 'read';
   if (name === 'Glob') return 'glob';
   if (name === 'grep_files') return 'grep';
   if (name === 'run') return 'run';
   if (name === 'todo_write') return 'todo';
   if (name === 'scheduled_task') return 'scheduled';
   if (name === 'memory_read' || name === 'memory_write') return 'memory';
-  if (name === 'agent_delegate') return 'subagent';
+  if (name === 'create_goal' || name === 'update_goal' || name === 'get_goal') return 'goal';
+  if (name === 'subagent' || name === 'agent_delegate') return 'subagent';
   if (name === 'render_html') return 'render_html';
 
   return 'other';
@@ -5221,11 +5309,69 @@ function formatToolBody(name, body) {
       if (parsed.data.message) return parsed.data.message;
       if (parsed.data.name) return 'Skill loaded: ' + parsed.data.name;
     }
-    // Fallback: pretty-print JSON
-    return compactJSON(text).slice(0, 12000);
+    if ((name === 'create_goal' || name === 'update_goal' || name === 'get_goal') && parsed.data) {
+      return formatGoalToolResult(parsed.data);
+    }
+    // Never leak a raw tool-result JSON envelope into the UI. Tools without a
+    // dedicated renderer still get a bounded, human-readable key/value view.
+    if (parsed?.ok === false) return String(parsed.error || t('tools.status.failed'));
+    return formatGenericToolData(Object.prototype.hasOwnProperty.call(parsed || {}, 'data') ? parsed.data : parsed);
   } catch (_) {
-    return text.slice(0, 12000);
+    // Plain-text tool output is still useful. JSON-looking malformed/partial
+    // payloads are hidden instead of exposing implementation details.
+    const trimmed = text.trim();
+    if (trimmed.startsWith('{') || trimmed.startsWith('[')) return '';
+    return trimmed.slice(0, 12000);
   }
+}
+
+function formatGoalToolResult(goal = {}) {
+  if (goal.hasGoal === false) return t('tools.goal.noActive');
+  const lines = [];
+  if (goal.objective) lines.push(`${t('tools.goal.objective')}：${goal.objective}`);
+  if (goal.status) lines.push(`${t('tools.goal.status')}：${t(`tools.goal.status.${goal.status}`)}`);
+  if (goal.completionCriterion) lines.push(`${t('tools.goal.criterion')}：${goal.completionCriterion}`);
+  const reason = goal.reason || goal.statusReason || '';
+  if (reason) lines.push(`${t('tools.goal.reason')}：${reason}`);
+  const turnsUsed = Number(goal.turnsUsed ?? 0);
+  const maxTurns = Number(goal.maxTurns ?? goal.turnBudget ?? 0);
+  if (turnsUsed > 0 || maxTurns > 0) {
+    lines.push(`${t('tools.goal.progress')}：${turnsUsed}${maxTurns > 0 ? ` / ${maxTurns}` : ''}`);
+  }
+  return lines.join('\n');
+}
+
+function formatGenericToolData(value) {
+  const lines = [];
+  const visit = (current, label = '', depth = 0) => {
+    if (lines.length >= 200 || depth > 4 || current === null || current === undefined) return;
+    if (Array.isArray(current)) {
+      if (current.length === 0) return;
+      current.slice(0, 100).forEach((item, index) => visit(item, label ? `${label} ${index + 1}` : String(index + 1), depth + 1));
+      if (current.length > 100) lines.push(`… ${current.length - 100} more`);
+      return;
+    }
+    if (typeof current === 'object') {
+      for (const [key, item] of Object.entries(current)) {
+        if (['ok', 'error'].includes(key) || item === null || item === undefined || item === '') continue;
+        visit(item, label ? `${label} · ${humanizeToolResultKey(key)}` : humanizeToolResultKey(key), depth + 1);
+      }
+      return;
+    }
+    const display = typeof current === 'boolean'
+      ? (current ? t('tools.value.yes') : t('tools.value.no'))
+      : String(current);
+    lines.push(label ? `${label}: ${display}` : display);
+  };
+  visit(value);
+  return lines.join('\n').slice(0, 12000);
+}
+
+function humanizeToolResultKey(key) {
+  return String(key || '')
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/[_-]+/g, ' ')
+    .replace(/^./, (char) => char.toUpperCase());
 }
 
 function formatScheduledTaskToolDetail(task = {}) {
@@ -5421,15 +5567,6 @@ function fmtTokenUnit(n) {
   if (value >= 1000000) return Math.round(value / 1000000) + 'M';
   if (value >= 1000) return Math.round(value / 1000) + 'k';
   return String(value);
-}
-
-function compactJSON(raw) {
-  if (!raw) return '';
-  try {
-    return JSON.stringify(JSON.parse(raw), null, 2);
-  } catch (_) {
-    return raw;
-  }
 }
 
 function fmtTime(ts) {
@@ -5647,7 +5784,7 @@ onMounted(async () => {
   // Pre-load skills before init so welcome message has the count
   try { await refreshSkillState(); } catch (_) { /* ignore */ }
   await init();
-  await loadScheduledTasks();
+  await Promise.all([loadScheduledTasks(), loadServices()]);
   await refreshWindowMaximisedState();
 });
 

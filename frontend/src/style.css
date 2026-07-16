@@ -480,6 +480,32 @@ code, pre {
   animation-delay: 0.4s;
 }
 
+.composer-goal-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  max-width: min(70vw, 720px);
+}
+
+.composer-goal-label {
+  color: #60a5fa;
+  flex: none;
+}
+
+.composer-goal-objective {
+  color: #b8c7dc;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-goal-progress {
+  flex: none;
+  color: #7f8da3;
+  font-variant-numeric: tabular-nums;
+}
+
 .composer-info .info-provider,
 .composer-info .info-model {
   color: #bdbdbd;

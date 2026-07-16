@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -10,13 +12,16 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 )
 
 const (
-	serviceOutputLimit       = 32 * 1024
+	serviceOutputLimit       = 512 * 1024
+	serviceOutputPreview     = 8 * 1024
+	maxCompletedServices     = 20
 	defaultServiceReadyLimit = 15
 	maxServiceReadyLimit     = 120
 	maxActiveServices        = 8
@@ -26,7 +31,7 @@ type managedService struct {
 	mu       sync.Mutex
 	info     ServiceInfo
 	cmd      *exec.Cmd
-	output   *limitedBuffer
+	output   *rollingBuffer
 	cancel   context.CancelFunc
 	waitDone chan struct{}
 	waitErr  error
@@ -42,6 +47,21 @@ func (a *App) StopService(req StopServiceRequest) (ServiceInfo, error) {
 
 func (a *App) ListServices() ServiceListResult {
 	return a.listServices()
+}
+
+func (a *App) GetServiceOutput(id string) (ServiceOutputResult, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return ServiceOutputResult{}, errors.New("id is required")
+	}
+	a.servicesMu.Lock()
+	service := a.services[id]
+	a.servicesMu.Unlock()
+	if service == nil {
+		return ServiceOutputResult{}, fmt.Errorf("service not found: %s", id)
+	}
+	output, total, truncated := service.outputSnapshot()
+	return ServiceOutputResult{ID: id, Output: output, Bytes: total, Truncated: truncated}, nil
 }
 
 func (a *App) startServiceWithConfig(cfg ConfigState, req StartServiceRequest) (ServiceInfo, error) {
@@ -69,7 +89,15 @@ func (a *App) startServiceWithConfig(cfg ConfigState, req StartServiceRequest) (
 		return ServiceInfo{}, codedToolError("E_PORT_IN_USE", fmt.Errorf("port %d is already listening; refusing to start another service", req.Port))
 	}
 	a.servicesMu.Lock()
-	activeCount := len(a.services)
+	activeCount := 0
+	for _, service := range a.services {
+		service.mu.Lock()
+		active := service.info.Status == "starting" || service.info.Status == "running"
+		service.mu.Unlock()
+		if active {
+			activeCount++
+		}
+	}
 	a.servicesMu.Unlock()
 	if activeCount >= maxActiveServices {
 		return ServiceInfo{}, codedToolError("E_SERVICE_LIMIT", fmt.Errorf("active service limit reached (%d)", maxActiveServices))
@@ -80,10 +108,10 @@ func (a *App) startServiceWithConfig(cfg ConfigState, req StartServiceRequest) (
 	shell := commandShell(req.Command, cfg.GitBashPath)
 	cmd := exec.CommandContext(ctx, shell.path, shell.args...)
 	cmd.Dir = cwd
-	cmd.Env = os.Environ()
+	cmd.Env = proxyEnvironment(cfg, os.Environ())
 	prepareServiceCommand(cmd)
 
-	buf := &limitedBuffer{limit: serviceOutputLimit}
+	buf := newRollingBuffer(serviceOutputLimit)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		cancel()
@@ -119,6 +147,7 @@ func (a *App) startServiceWithConfig(cfg ConfigState, req StartServiceRequest) (
 	a.servicesMu.Lock()
 	a.services[id] = service
 	a.servicesMu.Unlock()
+	a.emitServiceUpdate(service.snapshot())
 
 	var copyWG sync.WaitGroup
 	copyWG.Add(2)
@@ -129,7 +158,7 @@ func (a *App) startServiceWithConfig(cfg ConfigState, req StartServiceRequest) (
 		copyWG.Wait()
 		service.mu.Lock()
 		service.waitErr = waitErr
-		service.info.OutputTail = tailString(buf.String(), maxToolOutput)
+		service.updateOutputInfoLocked()
 		if service.info.Status != "stopped" {
 			service.info.StoppedAt = time.Now().Unix()
 			service.info.Status = "exited"
@@ -145,19 +174,17 @@ func (a *App) startServiceWithConfig(cfg ConfigState, req StartServiceRequest) (
 		service.mu.Unlock()
 		cancel()
 		close(service.waitDone)
-		a.removeService(id, service)
+		a.finalizeService(id, service)
 	}()
 
 	info := a.waitForServiceReady(service, req)
 	return info, nil
 }
 
-func (a *App) removeService(id string, service *managedService) {
-	a.servicesMu.Lock()
-	if a.services[id] == service {
-		delete(a.services, id)
-	}
-	a.servicesMu.Unlock()
+func (a *App) finalizeService(id string, service *managedService) {
+	_ = a.persistService(service)
+	a.pruneCompletedServices()
+	a.emitServiceUpdate(service.snapshot())
 }
 
 func copyServiceOutput(wg *sync.WaitGroup, dst io.Writer, src io.Reader) {
@@ -207,9 +234,10 @@ func (a *App) waitForServiceReady(service *managedService, req StartServiceReque
 					service.info.Error = fmt.Sprintf("service did not report readiness within %ds; it may still be starting", limit)
 				}
 			}
-			service.info.OutputTail = tailString(out, maxToolOutput)
+			service.updateOutputInfoLocked()
 			info := service.info
 			service.mu.Unlock()
+			a.emitServiceUpdate(info)
 			return info
 		}
 		time.Sleep(100 * time.Millisecond)
@@ -247,10 +275,13 @@ func (a *App) stopService(req StopServiceRequest) (ServiceInfo, error) {
 		service.mu.Lock()
 		service.info.Status = "stopped"
 		service.info.StoppedAt = time.Now().Unix()
-		service.info.OutputTail = tailString(service.output.String(), maxToolOutput)
+		service.updateOutputInfoLocked()
 		service.mu.Unlock()
 	}
-	return service.snapshot(), nil
+	info := service.snapshot()
+	_ = a.persistService(service)
+	a.emitServiceUpdate(info)
+	return info, nil
 }
 
 func (a *App) listServices() ServiceListResult {
@@ -264,6 +295,14 @@ func (a *App) listServices() ServiceListResult {
 	for _, service := range services {
 		infos = append(infos, service.snapshot())
 	}
+	sort.Slice(infos, func(i, j int) bool {
+		iActive := infos[i].Status == "starting" || infos[i].Status == "running"
+		jActive := infos[j].Status == "starting" || infos[j].Status == "running"
+		if iActive != jActive {
+			return iActive
+		}
+		return infos[i].StartedAt > infos[j].StartedAt
+	})
 	return ServiceListResult{Services: infos}
 }
 
@@ -277,10 +316,208 @@ func (s *managedService) snapshot() ServiceInfo {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	info := s.info
-	if s.output != nil {
-		info.OutputTail = tailString(s.output.String(), maxToolOutput)
-	}
+	s.updateOutputInfoLocked()
+	info = s.info
 	return info
+}
+
+func (s *managedService) updateOutputInfoLocked() {
+	if s.output == nil {
+		return
+	}
+	output, total, truncated := s.output.Snapshot()
+	s.info.OutputTail = tailString(output, serviceOutputPreview)
+	s.info.OutputBytes = total
+	s.info.OutputTruncated = truncated
+}
+
+func (s *managedService) outputSnapshot() (string, int64, bool) {
+	if s == nil || s.output == nil {
+		return "", 0, false
+	}
+	return s.output.Snapshot()
+}
+
+func (a *App) emitServiceUpdate(info ServiceInfo) {
+	if a.ctx != nil && a.ctx.Err() == nil {
+		a.emit("service:update", map[string]any{"service": info})
+	}
+}
+
+func (a *App) serviceHistoryDir() string {
+	a.mu.Lock()
+	configPath := a.configPath
+	a.mu.Unlock()
+	if strings.TrimSpace(configPath) == "" {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(configPath), "service_history")
+}
+
+func (a *App) persistService(service *managedService) error {
+	dir := a.serviceHistoryDir()
+	if dir == "" || service == nil {
+		return nil
+	}
+	info := service.snapshot()
+	output, total, truncated := service.outputSnapshot()
+	info.OutputTail = tailString(output, serviceOutputPreview)
+	info.OutputBytes = total
+	info.OutputTruncated = truncated
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	metadata, err := json.MarshalIndent(info, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := atomicWriteFile(filepath.Join(dir, info.ID+".json"), metadata, 0o600); err != nil {
+		return err
+	}
+	return atomicWriteFile(filepath.Join(dir, info.ID+".log"), []byte(output), 0o600)
+}
+
+func (a *App) loadServiceHistory() error {
+	dir := a.serviceHistoryDir()
+	if dir == "" {
+		return nil
+	}
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	loaded := make([]*managedService, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(strings.ToLower(entry.Name()), ".json") {
+			continue
+		}
+		raw, readErr := os.ReadFile(filepath.Join(dir, entry.Name()))
+		if readErr != nil {
+			continue
+		}
+		var info ServiceInfo
+		if json.Unmarshal(raw, &info) != nil || strings.TrimSpace(info.ID) == "" {
+			continue
+		}
+		if info.Status == "starting" || info.Status == "running" {
+			info.Status = "interrupted"
+			info.StoppedAt = time.Now().Unix()
+			info.Error = "Ally exited before the service reported a terminal state"
+		}
+		output, _ := os.ReadFile(filepath.Join(dir, info.ID+".log"))
+		buf := newRollingBuffer(serviceOutputLimit)
+		buf.Restore(output, info.OutputBytes, info.OutputTruncated)
+		service := &managedService{info: info, output: buf, waitDone: closedServiceWaitDone()}
+		loaded = append(loaded, service)
+	}
+	sort.Slice(loaded, func(i, j int) bool { return loaded[i].info.StartedAt > loaded[j].info.StartedAt })
+	a.servicesMu.Lock()
+	for _, service := range loaded {
+		a.services[service.info.ID] = service
+	}
+	a.servicesMu.Unlock()
+	a.pruneCompletedServices()
+	return nil
+}
+
+func closedServiceWaitDone() chan struct{} {
+	done := make(chan struct{})
+	close(done)
+	return done
+}
+
+func (a *App) pruneCompletedServices() {
+	a.servicesMu.Lock()
+	type completedEntry struct {
+		id      string
+		started int64
+	}
+	completed := []completedEntry{}
+	for id, service := range a.services {
+		service.mu.Lock()
+		status := service.info.Status
+		started := service.info.StartedAt
+		service.mu.Unlock()
+		if status != "starting" && status != "running" {
+			completed = append(completed, completedEntry{id: id, started: started})
+		}
+	}
+	sort.Slice(completed, func(i, j int) bool { return completed[i].started > completed[j].started })
+	removeIDs := []string{}
+	if len(completed) > maxCompletedServices {
+		for _, entry := range completed[maxCompletedServices:] {
+			delete(a.services, entry.id)
+			removeIDs = append(removeIDs, entry.id)
+		}
+	}
+	a.servicesMu.Unlock()
+	dir := a.serviceHistoryDir()
+	for _, id := range removeIDs {
+		_ = os.Remove(filepath.Join(dir, id+".json"))
+		_ = os.Remove(filepath.Join(dir, id+".log"))
+	}
+}
+
+type rollingBuffer struct {
+	mu        sync.Mutex
+	buf       []byte
+	limit     int
+	total     int64
+	truncated bool
+}
+
+func newRollingBuffer(limit int) *rollingBuffer {
+	return &rollingBuffer{limit: limit}
+}
+
+func (b *rollingBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.total += int64(len(p))
+	if b.limit <= 0 {
+		return len(p), nil
+	}
+	if len(p) >= b.limit {
+		b.buf = append(b.buf[:0], p[len(p)-b.limit:]...)
+		b.truncated = true
+		return len(p), nil
+	}
+	if overflow := len(b.buf) + len(p) - b.limit; overflow > 0 {
+		copy(b.buf, b.buf[overflow:])
+		b.buf = b.buf[:len(b.buf)-overflow]
+		b.truncated = true
+	}
+	b.buf = append(b.buf, p...)
+	return len(p), nil
+}
+
+func (b *rollingBuffer) String() string {
+	output, _, _ := b.Snapshot()
+	return output
+}
+
+func (b *rollingBuffer) Snapshot() (string, int64, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return string(bytes.Clone(b.buf)), b.total, b.truncated
+}
+
+func (b *rollingBuffer) Restore(output []byte, total int64, truncated bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if len(output) > b.limit {
+		output = output[len(output)-b.limit:]
+		truncated = true
+	}
+	b.buf = append(b.buf[:0], output...)
+	b.total = total
+	if b.total < int64(len(output)) {
+		b.total = int64(len(output))
+	}
+	b.truncated = truncated
 }
 
 func isLocalPortListening(port int) bool {

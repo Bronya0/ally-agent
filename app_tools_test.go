@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -294,7 +295,7 @@ func TestGrillModeFiltersSideEffectToolSchemas(t *testing.T) {
 			names[tool.Function.Name] = true
 		}
 	}
-	for _, blocked := range []string{"edit", "create_file", "delete_path", "run_command", "background_process", "wait", "http_request", "web_fetch", "agent_delegate", "memory_write", "todo_write", "create_goal", "update_goal"} {
+	for _, blocked := range []string{"edit", "create_file", "delete_path", "run_command", "background_process", "wait", "http_request", "web_fetch", "subagent", "memory_write", "todo_write", "create_goal", "update_goal"} {
 		if names[blocked] {
 			t.Fatalf("expected %s schema to be filtered in grill mode", blocked)
 		}
@@ -956,11 +957,95 @@ func TestCommandSafetyAllowsReadOnlyOutsidePath(t *testing.T) {
 	}
 }
 
-func TestCommandSafetyBlocksOutsidePathMutation(t *testing.T) {
+func TestCommandSafetyAllowsGitBashOutsideReadsWithDevNull(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("MSYS2 drive paths are Windows-specific")
 	}
-	err := checkCommandSafety(CommandRequest{Command: `touch /d/coding/python/new.txt`}, t.TempDir())
+	commands := []string{
+		`(ls -la /c/Users/DELL/.agents/ 2>/dev/null && echo "---FOUND---" || echo "---NOT FOUND---")`,
+		`(find /c/Users/DELL/ -maxdepth 5 -name "SKILL.md" -path "ai-writing" 2>/dev/null | head -5)`,
+	}
+	for _, command := range commands {
+		if err := checkCommandSafety(CommandRequest{Command: command}, t.TempDir()); err != nil {
+			t.Fatalf("Git Bash outside read with /dev/null should be allowed: %v", err)
+		}
+	}
+}
+
+func TestCommandSafetyAllowsCreatingNewOutsidePath(t *testing.T) {
+	workspace := t.TempDir()
+	outside := t.TempDir()
+	commands := []string{
+		fmt.Sprintf(`touch %q`, filepath.ToSlash(filepath.Join(outside, "new-touch.txt"))),
+		fmt.Sprintf(`printf created > %q`, filepath.ToSlash(filepath.Join(outside, "new-redirect.txt"))),
+	}
+	for _, command := range commands {
+		if err := checkCommandSafety(CommandRequest{Command: command}, workspace); err != nil {
+			t.Fatalf("creating a new outside path should be allowed for %q: %v", command, err)
+		}
+	}
+}
+
+func TestCommandSafetyBlocksModifyingExistingOutsidePath(t *testing.T) {
+	workspace := t.TempDir()
+	target := filepath.Join(t.TempDir(), "existing.txt")
+	if err := os.WriteFile(target, []byte("keep\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, command := range []string{
+		fmt.Sprintf(`touch %q`, filepath.ToSlash(target)),
+		fmt.Sprintf(`printf changed > %q`, filepath.ToSlash(target)),
+		fmt.Sprintf(`printf changed >> %q`, filepath.ToSlash(target)),
+	} {
+		err := checkCommandSafety(CommandRequest{Command: command}, workspace)
+		if toolErrorCode(err) != "E_PATH_OUTSIDE" {
+			t.Fatalf("existing outside target should be blocked for %q, got %v", command, err)
+		}
+		for _, want := range []string{"安全围栏已拦截", "工作区外", "检测到的目标", "允许的操作", "禁止的操作", command} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("error should explain %q for %q, got %v", want, command, err)
+			}
+		}
+	}
+}
+
+func TestCommandSafetyBlocksDynamicRedirectionTarget(t *testing.T) {
+	err := checkCommandSafety(CommandRequest{Command: `printf changed > "$HOME/existing.txt"`}, t.TempDir())
+	if toolErrorCode(err) != "E_PATH_OUTSIDE" {
+		t.Fatalf("dynamic redirection target should be blocked conservatively, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "无法确认真实写入位置") || !strings.Contains(err.Error(), `$HOME/existing.txt`) {
+		t.Fatalf("dynamic redirection error should explain the uncertainty and target, got %v", err)
+	}
+}
+
+func TestCommandSafetyAllowsWorkspaceRedirectWhileReadingOutside(t *testing.T) {
+	workspace := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "source.txt")
+	if err := os.WriteFile(outside, []byte("source\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	command := fmt.Sprintf(`type %q > result.txt`, filepath.ToSlash(outside))
+	if runtime.GOOS != "windows" {
+		command = fmt.Sprintf(`cat %q > result.txt`, filepath.ToSlash(outside))
+	}
+	if err := checkCommandSafety(CommandRequest{Command: command}, workspace); err != nil {
+		t.Fatalf("workspace redirect while reading outside should be allowed: %v", err)
+	}
+}
+
+func TestCommandSafetyBlocksExistingOutsidePathMutation(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("MSYS2 drive paths are Windows-specific")
+	}
+	outDir := t.TempDir()
+	target := filepath.Join(outDir, "existing.txt")
+	if err := os.WriteFile(target, []byte("keep\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	volume := filepath.VolumeName(target)
+	msysTarget := "/" + strings.ToLower(strings.TrimSuffix(volume, ":")) + filepath.ToSlash(strings.TrimPrefix(target, volume))
+	err := checkCommandSafety(CommandRequest{Command: `touch ` + msysTarget}, t.TempDir())
 	if toolErrorCode(err) != "E_PATH_OUTSIDE" {
 		t.Fatalf("outside mutation should be blocked with E_PATH_OUTSIDE, got %v", err)
 	}

@@ -165,6 +165,7 @@ func partialTagMatch(s, tag string) int {
 func (a *App) streamOpenAIChat(ctx context.Context, cfg ConfigState, model string, messages []legacyopenai.ChatCompletionMessage, tools []legacyopenai.Tool, onEvent func(modelStreamEvent)) (*modelStreamResult, error) {
 	clientCfg := legacyopenai.DefaultConfig(cfg.APIKey)
 	clientCfg.BaseURL = baseURLForAPIFormat(cfg)
+	clientCfg.HTTPClient = proxyHTTPClient(cfg, true, 0)
 	client := legacyopenai.NewClientWithConfig(clientCfg)
 
 	streamReq := legacyopenai.ChatCompletionRequest{
@@ -560,7 +561,7 @@ func newOpenAIResponsesSSEStream(ctx context.Context, cfg ConfigState, body oare
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := proxyHTTPClient(cfg, true, 0).Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -623,6 +624,7 @@ func (a *App) streamAnthropicMessages(ctx context.Context, cfg ConfigState, mode
 		anthropicoption.WithAPIKey(cfg.APIKey),
 		anthropicoption.WithBaseURL(baseURL),
 		anthropicoption.WithMaxRetries(defaultLLMRetries),
+		anthropicoption.WithHTTPClient(proxyHTTPClient(cfg, true, 0)),
 	)
 
 	system, anthropicMessages := buildAnthropicMessages(messages)

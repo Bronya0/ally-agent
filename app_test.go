@@ -275,7 +275,7 @@ func TestAgentDelegateSemaphoreRespectsCancelledContext(t *testing.T) {
 
 	done := make(chan toolResult, 1)
 	go func() {
-		done <- app.executeTool(ctx, ConfigState{}, "session-1", "agent_delegate", []byte(`{"task":"noop"}`))
+		done <- app.executeTool(ctx, ConfigState{}, "session-1", "subagent", []byte(`{"task":"noop"}`))
 	}()
 
 	select {
@@ -287,7 +287,7 @@ func TestAgentDelegateSemaphoreRespectsCancelledContext(t *testing.T) {
 			t.Fatalf("expected context cancellation error, got %q", result.Error)
 		}
 	case <-time.After(500 * time.Millisecond):
-		t.Fatal("agent_delegate blocked while waiting for a sub-agent slot after context cancellation")
+		t.Fatal("subagent blocked while waiting for a sub-agent slot after context cancellation")
 	}
 }
 
@@ -542,6 +542,62 @@ func TestSystemPromptDefinesWaitSequencing(t *testing.T) {
 	}
 }
 
+func TestBatchReadSchemaIncludesCanonicalExamples(t *testing.T) {
+	var description string
+	for _, tool := range chatTools() {
+		if tool.Function != nil && tool.Function.Name == "batch_read" {
+			description = tool.Function.Description
+			break
+		}
+	}
+	for _, expected := range []string{`{"files":[{"path":"app.go"}]}`, "Do not pass top-level path", "string array"} {
+		if !strings.Contains(description, expected) {
+			t.Fatalf("batch_read description missing canonical guidance %q: %s", expected, description)
+		}
+	}
+}
+
+func TestEveryBuiltinToolDescriptionIncludesCanonicalExample(t *testing.T) {
+	for _, tool := range chatTools() {
+		if tool.Function == nil {
+			continue
+		}
+		if !strings.Contains(tool.Function.Description, "Canonical JSON example(s):") {
+			t.Fatalf("tool %s is missing a canonical JSON example", tool.Function.Name)
+		}
+	}
+}
+
+func TestEditDescriptionIncludesSingleAndCrossFileMultiChangeExamples(t *testing.T) {
+	var description string
+	for _, tool := range chatTools() {
+		if tool.Function != nil && tool.Function.Name == "edit" {
+			description = tool.Function.Description
+			break
+		}
+	}
+	for _, expected := range []string{
+		"single file with multiple changes",
+		`"oldText":"const oldName = \"ally\""`,
+		"multiple files with multiple changes per file",
+		`"path":"frontend/src/App.vue"`,
+		`"oldText":"oldSubtitle"`,
+	} {
+		if !strings.Contains(description, expected) {
+			t.Fatalf("edit description missing example guidance %q: %s", expected, description)
+		}
+	}
+}
+
+func TestSystemPromptExplainsRunCommandOutsidePathRecovery(t *testing.T) {
+	prompt := defaultSystemPrompt(nil, "", "", "")
+	for _, expected := range []string{"`E_PATH_OUTSIDE`", "Do not retry the unchanged command", "literal verifiable target", "read the returned Chinese explanation"} {
+		if !strings.Contains(prompt, expected) {
+			t.Fatalf("system prompt missing run_command recovery guidance %q", expected)
+		}
+	}
+}
+
 func TestGoalProgressIsAppendedAfterStableHistory(t *testing.T) {
 	app := NewApp()
 	sessionID := "goal-cache-session"
@@ -593,7 +649,7 @@ func TestSubagentToolsExcludeInteractiveToolsAndIncludeMCP(t *testing.T) {
 		if tool.Function == nil {
 			continue
 		}
-		if tool.Function.Name == "memory_write" || tool.Function.Name == "scheduled_task" || tool.Function.Name == "ask" || tool.Function.Name == "agent_delegate" {
+		if tool.Function.Name == "memory_write" || tool.Function.Name == "scheduled_task" || tool.Function.Name == "ask" || tool.Function.Name == "subagent" {
 			t.Fatalf("sub-agent must not receive %s tool schema", tool.Function.Name)
 		}
 		if tool.Function.Name == "mcp__demo__lookup" {
@@ -1315,6 +1371,41 @@ func TestParseGitStatusZBuildsStableEntries(t *testing.T) {
 		if entry.Status != expected.status || entry.Untracked != expected.untracked {
 			t.Fatalf("unexpected entry for %s: got status=%s untracked=%v", entry.Path, entry.Status, entry.Untracked)
 		}
+	}
+}
+
+func TestSplitUnifiedDiffByPath(t *testing.T) {
+	diff := strings.Join([]string{
+		"diff --git a/app.go b/app.go",
+		"--- a/app.go",
+		"+++ b/app.go",
+		"@@ -1 +1 @@",
+		"-old",
+		"+new",
+		"diff --git a/docs/old name.md b/docs/old name.md",
+		"deleted file mode 100644",
+		"--- a/docs/old name.md",
+		"+++ /dev/null",
+		"@@ -1 +0,0 @@",
+		"-gone",
+	}, "\n")
+
+	got := splitUnifiedDiffByPath(diff)
+	if len(got) != 2 {
+		t.Fatalf("expected two per-file sections, got %#v", got)
+	}
+	if !strings.Contains(got["app.go"], "+new") {
+		t.Fatalf("app.go section missing change: %q", got["app.go"])
+	}
+	if !strings.Contains(got["docs/old name.md"], "deleted file mode") {
+		t.Fatalf("deleted path section missing: %q", got["docs/old name.md"])
+	}
+}
+
+func TestDecodeGitPatchPathSupportsQuotedNames(t *testing.T) {
+	got := decodeGitPatchPath(`"b/docs/file name.md"`)
+	if got != "docs/file name.md" {
+		t.Fatalf("unexpected decoded path %q", got)
 	}
 }
 

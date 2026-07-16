@@ -97,7 +97,7 @@ const BUILTIN_TOOL_GROUPS = [
   {
     key: 'agent',
     label: t('tools.group.agent'),
-    names: ['agent_delegate', 'Skill'],
+    names: ['subagent', 'Skill'],
     description: t('tools.group.agentDescription'),
   },
   {

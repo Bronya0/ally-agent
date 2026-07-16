@@ -34,7 +34,7 @@
         </RenderBoundary>
         <!-- Tool call cards -->
         <RenderBoundary
-          v-else-if="['edit','create','read','command','calculate','delete','glob','grep','other','todo','scheduled','memory','service','wait','mcp'].includes(msg.kind) && msg.kind !== 'run'"
+          v-else-if="!['run','read-group','subagent','render_html'].includes(msg.kind)"
           :label="$t('chat.toolCard')"
         >
           <ToolCallCard

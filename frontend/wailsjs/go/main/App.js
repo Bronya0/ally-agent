@@ -50,6 +50,10 @@ export function DeleteSession(arg1) {
   return window['go']['main']['App']['DeleteSession'](arg1);
 }
 
+export function DetectSystemProxy() {
+  return window['go']['main']['App']['DetectSystemProxy']();
+}
+
 export function GetActiveSkills() {
   return window['go']['main']['App']['GetActiveSkills']();
 }
@@ -70,12 +74,20 @@ export function GetGitStatus() {
   return window['go']['main']['App']['GetGitStatus']();
 }
 
+export function GetGoal(arg1) {
+  return window['go']['main']['App']['GetGoal'](arg1);
+}
+
 export function GetMcpConfig() {
   return window['go']['main']['App']['GetMcpConfig']();
 }
 
 export function GetMcpServers() {
   return window['go']['main']['App']['GetMcpServers']();
+}
+
+export function GetServiceOutput(arg1) {
+  return window['go']['main']['App']['GetServiceOutput'](arg1);
 }
 
 export function GetSessionContextTokens(arg1) {
@@ -200,4 +212,8 @@ export function SwitchModel(arg1) {
 
 export function TestModelConnection(arg1) {
   return window['go']['main']['App']['TestModelConnection'](arg1);
+}
+
+export function TestProxy(arg1) {
+  return window['go']['main']['App']['TestProxy'](arg1);
 }

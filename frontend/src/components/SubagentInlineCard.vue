@@ -204,6 +204,8 @@ function subToolLabel(name) {
     todo_write: t('tools.kind.todo'),
     scheduled_task: t('tools.kind.scheduled'),
     Skill: t('tools.kind.skill'),
+    subagent: t('tools.kind.subagent'),
+    agent_delegate: t('tools.kind.subagent'),
     create_goal: t('tools.kind.goal'),
     update_goal: t('tools.kind.goal'),
     get_goal: t('tools.kind.goal'),
@@ -211,4 +213,3 @@ function subToolLabel(name) {
   return labels[name] || name || t('tools.kind.tool');
 }
 </script>
-

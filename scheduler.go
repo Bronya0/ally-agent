@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -23,7 +22,7 @@ const (
 	maxScheduledTaskTimeout     = 86400
 	minScheduledTaskInterval    = time.Minute
 	maxScheduledTasks           = 100
-	scheduledTaskSummaryLimit   = 32 * 1024
+	scheduledTaskSummaryLimit   = 128 * 1024
 )
 
 type ScheduledTaskSchedule struct {
@@ -202,39 +201,12 @@ func (a *App) executeScheduledTaskTool(cfg ConfigState, req ScheduledTaskToolReq
 }
 
 func (m *scheduledTaskManager) load() error {
-	raw, err := os.ReadFile(m.path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
+	// Scheduled tasks are intentionally process-local. Remove the legacy file
+	// on every startup so older persistent definitions cannot restart silently.
+	if err := os.Remove(m.path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	var tasks []ScheduledTask
-	if err := json.Unmarshal(raw, &tasks); err != nil {
-		backupPath := fmt.Sprintf("%s.invalid-%d", m.path, time.Now().Unix())
-		_ = os.Rename(m.path, backupPath)
-		return fmt.Errorf("parse scheduled tasks: %w", err)
-	}
-	now := time.Now()
-	for i := range tasks {
-		task := tasks[i]
-		task.Running = false
-		task.LastError = strings.TrimSpace(task.LastError)
-		if err := normalizeScheduledTask(&task, now); err != nil {
-			task.LastStatus = "invalid"
-			task.LastError = err.Error()
-			task.NextRunAt = 0
-			m.tasks[task.ID] = &task
-			continue
-		}
-		m.tasks[task.ID] = &task
-		if err := m.registerLocked(&task, now); err != nil {
-			task.LastStatus = "invalid"
-			task.LastError = err.Error()
-			task.NextRunAt = 0
-		}
-	}
-	return m.persistLocked()
+	return nil
 }
 
 func (m *scheduledTaskManager) stop() {
@@ -256,6 +228,7 @@ func (m *scheduledTaskManager) stop() {
 	case <-ctx.Done():
 	case <-time.After(5 * time.Second):
 	}
+	_ = os.Remove(m.path)
 }
 
 func (m *scheduledTaskManager) create(cfg ConfigState, req ScheduledTaskToolRequest) (*ScheduledTask, error) {
@@ -543,7 +516,7 @@ func (m *scheduledTaskManager) run(task ScheduledTask) {
 		return
 	}
 	result, runErr := m.app.executeDelegate(ctx, cfg, "scheduled:"+task.ID, AgentDelegateRequest{
-		Task:         "You are executing a persistent scheduled task in isolated fresh context. Do not create, list, or delete scheduled tasks. Complete the instruction and finish with a concise report for the user.\n\n" + task.Instruction,
+		Task:         "You are executing a temporary scheduled task in isolated fresh context. It exists only for the current Ally process. Do not create, list, or delete scheduled tasks. Complete the instruction and finish with a concise report for the user.\n\n" + task.Instruction,
 		Description:  "Scheduled: " + task.Name,
 		CleanContext: false,
 		maxSteps:     task.MaxSteps,
@@ -618,16 +591,7 @@ func (m *scheduledTaskManager) emit(name string, payload map[string]any) {
 }
 
 func (m *scheduledTaskManager) persistLocked() error {
-	tasks := make([]ScheduledTask, 0, len(m.tasks))
-	for _, task := range m.tasks {
-		tasks = append(tasks, cloneScheduledTask(task))
-	}
-	sort.Slice(tasks, func(i, j int) bool { return tasks[i].CreatedAt < tasks[j].CreatedAt })
-	raw, err := json.MarshalIndent(tasks, "", "  ")
-	if err != nil {
-		return err
-	}
-	return atomicWriteFile(m.path, raw, 0o600)
+	return nil
 }
 
 func normalizeScheduledTask(task *ScheduledTask, now time.Time) error {

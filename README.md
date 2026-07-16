@@ -25,9 +25,10 @@ Download packages for Windows, macOS, and Linux from the [Releases page](https:/
 - Delegate substantial work to parallel sub-agents with live steps, tool activity, token usage, and inline final summaries
 - Connect MCP servers through stdio, SSE, or Streamable HTTP using either a form editor or raw JSON
 - Extend workflows with discoverable Skills and durable cross-project memory
-- Manage multiple workspaces, chat sessions, todos, goal mode, and persistent scheduled tasks
+- Manage multiple workspaces, chat sessions, todos, goal mode, and process-local scheduled tasks
 - Switch between execution, planning, and interview/grill modes
-- Run short shell commands and tracked background processes; Windows automatically discovers Git Bash and falls back to PowerShell when necessary
+- Run short shell commands and tracked background processes with a task-center log viewer; Windows automatically discovers Git Bash and falls back to PowerShell when necessary
+- Optionally follow the Windows system proxy or use a manual HTTP/HTTPS/SOCKS5 proxy consistently across models, HTTP tools, MCP, commands, and background services
 - Use localized Chinese or English UI, startup warnings, settings, and tool status messages
 - Search code with bundled ripgrep—no separate installation required in release packages
 

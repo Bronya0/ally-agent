@@ -60,7 +60,10 @@ Publishing the Release triggers `.github/workflows/build.yml`, which builds and 
 ├── app.go                    # Main Wails-bound backend: config, chat loop, tools, sessions, skills, context accounting
 ├── model_provider.go         # Model provider adapter layer: OpenAI Chat, OpenAI Responses, Anthropic Messages
 ├── mcp.go                    # MCP manager: config loading, process lifecycle, tool discovery, tool dispatch
-├── scheduler.go              # Persistent scheduled Agent tasks powered by robfig/cron
+├── scheduler.go              # Process-local scheduled Agent tasks powered by robfig/cron
+├── proxy.go                  # Unified proxy resolution, transports, subprocess environment, status/test APIs
+├── proxy_windows.go          # Windows WinINET fixed-proxy detection
+├── proxy_other.go            # Environment proxy fallback for non-Windows platforms
 ├── edit_helpers.go           # Read range, changed-line, and diff helpers for text edits
 ├── main.go                   # Wails app entry point, window options, app binding
 ├── procattr_windows.go       # Windows process attributes for hidden shell windows
@@ -84,7 +87,7 @@ Publishing the Release triggers `.github/workflows/build.yml`, which builds and 
 │   │   │   ├── MessageAttachments.vue
 │   │   │   ├── ReadGroupCard.vue
 │   │   │   ├── RenderBoundary.vue
-│   │   │   ├── ScheduledTasksPanel.vue
+│   │   │   ├── TaskCenterPanel.vue
 │   │   │   ├── SplashScreen.vue
 │   │   │   ├── SubagentInlineCard.vue
 │   │   │   ├── ToolCallCard.vue
@@ -141,8 +144,8 @@ Connected MCP tools are sorted by server, tool name, and function name before be
 - `todos`: session-local todo list
 - `todoRevisions`: monotonic todo update revisions emitted with `todo:update`
 - `subRuns`: sub-agent progress records
-- `services`: active background processes only; exited processes are removed and at most 8 may run concurrently
-- `scheduled`: persistent scheduled-task manager; definitions are stored in `~/.ally_agent/scheduled_tasks.json`
+- `services`: active and recent background-service records; at most 8 run concurrently, each keeps a rolling 512 KiB buffer, and the latest 20 completed records/log snapshots are stored under `~/.ally_agent/service_history/`
+- `scheduled`: process-local scheduled-task manager; definitions and results are cleared whenever Ally closes or starts
 - `fileOpsMu`: serializes local write/edit/delete operations
 - `gitDiffMu`: serializes/cancels git diff work
 - workspace token/context caches
@@ -151,6 +154,7 @@ Connected MCP tools are sorted by server, tool name, and function name before be
 
 - provider fields: `providerName`, `apiFormat`, `baseUrl`, `apiKey`, `model`
 - runtime fields: `workspace`, `temperature`, `maxTokens`, `contextWindow`
+- network fields: `proxyMode` (`off`/`system`/`manual`), `proxyUrl`, `proxyNoProxy`
 - prompt fields: `systemPrompt`, `customPrompt`
 - model presets: `models`
 - skill settings: `disabledSkills`
@@ -163,6 +167,7 @@ Important config behavior:
 - Frontend `defaultConfig()` also includes `disabledSkills` so saving settings does not erase skill state.
 - `reasoningTag` defaults to `reasoning_content` in both backend and frontend model drafts.
 - On Windows, an auto-detected valid Git Bash path is returned in config so Settings can show the executable actually in use.
+- Proxy mode is explicit and fail-closed: `off` ignores inherited proxy variables, `system` detects Windows WinINET fixed proxy settings with environment fallback, and `manual` accepts HTTP/HTTPS/SOCKS5 URLs. PAC URLs are reported but not executed yet.
 
 ---
 
@@ -386,8 +391,8 @@ Built-in model-facing tools:
 | `todo_write` | Session todo management |
 | `memory_read` | Read one full global memory Markdown file |
 | `memory_write` | Create/update one global memory Markdown file |
-| `agent_delegate` | Spawn a sub-agent for a scoped task |
-| `scheduled_task` | Create, list, or delete persistent isolated Agent tasks |
+| `subagent` | Spawn a sub-agent for a scoped task |
+| `scheduled_task` | Create, list, or delete temporary isolated Agent tasks for the current Ally process |
 | `create_goal`, `update_goal`, `get_goal` | Goal mode lifecycle |
 | `Skill` | Load an enabled skill |
 
@@ -459,6 +464,8 @@ Important edit contract:
 
 `mcp.go` owns MCP lifecycle.
 
+Network MCP transports use Ally's proxy-aware HTTP client. Stdio MCP servers inherit the normalized proxy environment. Saving changed proxy settings reconnects MCP servers so the new transport takes effect.
+
 Config path:
 
 ```text
@@ -513,6 +520,9 @@ Settings pages:
 - Skills: enable/disable discovered skills; persisted through `disabledSkills`
 - MCP: raw MCP config editor and server status
 - About: GPLv3 notice, warranty disclaimer, and source repository link
+- Network: proxy off/system/manual selection, fixed system-proxy detection, bypass list, redacted status, and a bounded connection test
+
+The composer task-center button opens `TaskCenterPanel`, whose controlled tabs separate temporary scheduled tasks from managed background services. Cards show bounded previews; full scheduled output and service buffers open in a large scrollable modal. Active service buffers refresh while the modal is open.
 
 Runtime events are registered through Wails `EventsOn()` and routed by `sessionId` and `runId`.
 
@@ -598,16 +608,16 @@ Long-render optimization:
 
 ## Sub-Agents And Goal Mode
 
-`agent_delegate` starts a child agent loop without an artificial step or wall-clock limit. Cancellation still follows the parent run or an explicit stop request.
+`subagent` starts a child agent loop without an artificial step or wall-clock limit. Cancellation still follows the parent run or an explicit stop request.
 
-Sub-agents receive connected MCP tools and share the manager's invalid-session reconnect path. Interactive/nested tools such as `ask` and `agent_delegate`, plus parent-owned goal/todo/scheduled/memory-write state, remain excluded.
+Sub-agents receive connected MCP tools and share the manager's invalid-session reconnect path. Interactive/nested tools such as `ask` and `subagent`, plus parent-owned goal/todo/scheduled/memory-write state, remain excluded.
 
 Completed sub-agent records release their cancel function, keep at most 100 tool events each, and are globally pruned to the latest 50 completed records. Running records are never pruned.
 
 Sub-agent UI:
 
 - backend emits `sub:*` events
-- `sub:spawn` includes the parent tool-call identity so the frontend upgrades the original `agent_delegate` card in place
+- `sub:spawn` includes the parent tool-call identity so the frontend upgrades the original `subagent` card in place
 - `tool:result` / `tool:error` finalize that same inline sub-agent card instead of appending raw JSON result cards
 - frontend displays a lightweight inline sub-agent progress row
 
@@ -639,13 +649,21 @@ MCP config:
 ~/.ally_agent/mcp.json
 ```
 
-Scheduled tasks:
+Legacy scheduled-task file (deleted on startup and no longer written):
 
 ```text
 ~/.ally_agent/scheduled_tasks.json
 ```
 
-Scheduled tasks run only while Ally is open. Each execution uses fresh isolated context and a fixed workspace. Runs are globally serialized, cannot overlap with the same task, and retain only the latest bounded summary/error. Tasks persist until manually deleted; per-run defaults are 100 steps and one hour, configurable up to 1000 steps and 24 hours.
+Scheduled tasks exist only for the current Ally process. Each execution uses fresh isolated context and a fixed workspace. Runs are globally serialized, cannot overlap with the same task, and retain only the latest bounded summary/error. Per-run defaults are 100 steps and one hour, configurable up to 1000 steps and 24 hours.
+
+Completed background-service history:
+
+```text
+~/.ally_agent/service_history/
+```
+
+Service processes are stopped when Ally exits and are not auto-restarted. Their latest bounded output and metadata remain visible across restarts; retention is capped at 20 records and 512 KiB per service.
 
 Legacy config fallback:
 
@@ -672,7 +690,8 @@ Example MCP config:
 
 - Workspace write operations are confined to the configured workspace, except `~/.ally_agent` is also allowed for Ally global config and memories.
 - Read-only local tools may inspect explicit absolute paths outside the workspace subject to safety checks.
-- `run_command` keeps cwd inside the workspace, permits read-only commands to inspect explicit outside paths, and refuses commands that may modify/delete outside paths or perform explicit deletion.
+- `run_command` keeps cwd inside the workspace, permits outside reads, null-device redirection, and creation of new outside paths, but refuses commands that may modify/delete existing outside paths or perform explicit deletion.
+- The model-facing system prompt and `run_command` schema explain how to recover from `E_PATH_OUTSIDE`: read the Chinese reason/target, avoid unchanged retries, choose a new or workspace target, and replace dynamic redirections with literal paths.
 - Prefer `delete_path` / `remote_delete_path` over shell deletion.
 - `readTextFile` rejects binary files using NUL checks.
 - Release packages bundle ripgrep under the executable's `tools/` directory; development builds fall back to `rg` from `PATH`.

@@ -26,6 +26,8 @@ export function DeleteScheduledTask(arg1:string):Promise<void>;
 
 export function DeleteSession(arg1:string):Promise<void>;
 
+export function DetectSystemProxy():Promise<main.ProxyStatus>;
+
 export function GetActiveSkills():Promise<Array<string>>;
 
 export function GetConfig():Promise<main.ConfigState>;
@@ -36,9 +38,13 @@ export function GetGitDiff():Promise<main.GitDiffResult>;
 
 export function GetGitStatus():Promise<main.GitStatus>;
 
+export function GetGoal(arg1:string):Promise<any>;
+
 export function GetMcpConfig():Promise<string>;
 
 export function GetMcpServers():Promise<Array<Record<string, any>>>;
+
+export function GetServiceOutput(arg1:string):Promise<main.ServiceOutputResult>;
 
 export function GetSessionContextTokens(arg1:string):Promise<number>;
 
@@ -101,3 +107,5 @@ export function SubmitAskResponse(arg1:main.AskSubmitRequest):Promise<void>;
 export function SwitchModel(arg1:number):Promise<void>;
 
 export function TestModelConnection(arg1:main.ModelConfig):Promise<void>;
+
+export function TestProxy(arg1:main.ProxyTestRequest):Promise<main.ProxyTestResult>;
