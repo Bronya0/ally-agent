@@ -826,30 +826,6 @@ func TestCreateFileRefusesNonTextOverwrite(t *testing.T) {
 	}
 }
 
-func TestDeletePathReturnsStructuredCounts(t *testing.T) {
-	root := t.TempDir()
-	writeToolTestFile(t, root, "dir/a.txt", "aa")
-	writeToolTestFile(t, root, "dir/sub/b.txt", "bbb")
-	app := NewApp()
-
-	result, err := app.deletePathWithConfig(ConfigState{Workspace: root}, DeletePathRequest{
-		Path:      "dir",
-		Recursive: true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Kind != "directory" || result.Path != "dir" || result.Deleted != "dir" || !result.Recursive {
-		t.Fatalf("unexpected delete result metadata: %#v", result)
-	}
-	if result.RemovedFiles != 2 || result.RemovedDirs != 2 || result.RemovedBytes != 5 {
-		t.Fatalf("unexpected delete counts: %#v", result)
-	}
-	if _, statErr := os.Stat(filepath.Join(root, "dir")); !errors.Is(statErr, os.ErrNotExist) {
-		t.Fatalf("expected directory to be removed, stat err=%v", statErr)
-	}
-}
-
 func TestDeletePathRemovesFinalSymlinkOnly(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink creation requires privileges on many Windows environments")

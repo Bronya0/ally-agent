@@ -4558,6 +4558,54 @@ func (a *App) effectiveConfigSafe() ConfigState {
 	return a.effectiveConfig(ConfigState{})
 }
 
+// CheckForUpdatesResult describes the outcome of a latest-release lookup.
+type CheckForUpdatesResult struct {
+	OK    bool   `json:"ok"`
+	Tag   string `json:"tag,omitempty"`
+	Error string `json:"error,omitempty"`
+}
+
+const allyLatestReleaseAPI = "https://api.github.com/repos/Bronya0/ally-agent/releases/latest"
+
+// CheckForUpdates queries GitHub for the latest Ally release through Ally's own
+// proxy-aware HTTP client. It uses a one-minute timeout and never panics; the
+// caller (frontend) treats any non-OK result as "no update detected".
+func (a *App) CheckForUpdates() CheckForUpdatesResult {
+	cfg := a.effectiveConfigSafe()
+	client := proxyHTTPClient(cfg, false, 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, allyLatestReleaseAPI, nil)
+	if err != nil {
+		return CheckForUpdatesResult{Error: err.Error()}
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("User-Agent", "ally-agent-update-check")
+	resp, err := client.Do(req)
+	if err != nil {
+		return CheckForUpdatesResult{Error: err.Error()}
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return CheckForUpdatesResult{Error: fmt.Sprintf("github api status %d", resp.StatusCode)}
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return CheckForUpdatesResult{Error: err.Error()}
+	}
+	var parsed struct {
+		TagName string `json:"tag_name"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return CheckForUpdatesResult{Error: err.Error()}
+	}
+	tag := strings.TrimSpace(parsed.TagName)
+	if tag == "" {
+		return CheckForUpdatesResult{Error: "missing tag_name in response"}
+	}
+	return CheckForUpdatesResult{OK: true, Tag: tag}
+}
+
 func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg ConfigState) {
 	sessionID := req.SessionID
 	cfg.grillMode = req.GrillMode

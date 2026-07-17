@@ -217,6 +217,7 @@ import 'highlight.js/styles/base16/darcula.css';
 import { highlightShellCommand, isShellLanguage, looksLikeShellCommand } from './utils/shellHighlight.mjs';
 import {
   CancelRun,
+  CheckForUpdates,
   GetConfig,
   GetContextBreakdown,
   GetSessionContextTokens,
@@ -1106,7 +1107,6 @@ const updateAvailable = ref(false);
 const latestReleaseVersion = ref('');
 
 const ALLY_REPOSITORY_URL = 'https://github.com/Bronya0/ally-agent';
-const ALLY_LATEST_RELEASE_API = 'https://api.github.com/repos/Bronya0/ally-agent/releases/latest';
 
 const apiFormatOptions = [
   { label: 'OpenAI Chat Completions', value: 'openai_chat' },
@@ -5757,24 +5757,15 @@ function handleAudioUnlock() {
 }
 
 async function checkForUpdates() {
-  const controller = new AbortController();
-  const timeout = window.setTimeout(() => controller.abort(), 8000);
   try {
-    const response = await fetch(ALLY_LATEST_RELEASE_API, {
-      signal: controller.signal,
-      cache: 'no-store',
-      headers: { Accept: 'application/vnd.github+json' },
-    });
-    if (!response.ok) return;
-    const release = await response.json();
-    const latest = String(release?.tag_name || '').trim();
+    const result = await CheckForUpdates();
+    if (!result?.ok) return;
+    const latest = String(result.tag || '').trim();
     if (!isNewerReleaseVersion(latest, buildVersion)) return;
     latestReleaseVersion.value = latest;
     updateAvailable.value = true;
   } catch (_) {
     // Update checks are best-effort and must never block startup.
-  } finally {
-    window.clearTimeout(timeout);
   }
 }
 
