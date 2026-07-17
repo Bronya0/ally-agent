@@ -8955,10 +8955,13 @@ def op_write(root, payload):
     path = safe_join(root, payload.get("path", ""))
     mkdirs = bool(payload.get("mkdirs"))
     overwrite = bool(payload.get("overwrite"))
+    original_mode = None
     if path.exists() and path.is_dir():
         raise ValueError("path is a directory")
     if path.exists() and not overwrite:
         raise FileExistsError("file already exists: " + payload.get("path", ""))
+    if path.exists():
+        original_mode = path.stat().st_mode & 0o7777
     parent = path.parent
     if mkdirs:
         parent.mkdir(parents=True, exist_ok=True)
@@ -8967,19 +8970,27 @@ def op_write(root, payload):
     data = base64.b64decode(payload.get("dataBase64", ""))
     fd, tmp = tempfile.mkstemp(prefix=".ally-write-", dir=str(parent))
     try:
+        if original_mode is not None:
+            os.fchmod(fd, original_mode)
         with os.fdopen(fd, "wb") as f:
+            fd = -1
             f.write(data)
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp, path)
     finally:
+        if fd >= 0:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
         try:
             if os.path.exists(tmp):
                 os.unlink(tmp)
         except OSError:
             pass
     st = path.stat()
-    return {"path": as_posix_rel(root, path), "size": st.st_size, "mode": st.st_mode & 0o777, "modTime": iso_mtime(st)}
+    return {"path": as_posix_rel(root, path), "size": st.st_size, "mode": st.st_mode & 0o7777, "modTime": iso_mtime(st)}
 
 def op_delete(root, payload):
     path = safe_join(root, payload.get("path", ""))
