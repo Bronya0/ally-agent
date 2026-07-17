@@ -2782,7 +2782,7 @@ function bindRuntimeEvents() {
         filesEdited: [],
         error: '',
         toolCalls: [],
-        startTime: Date.now(),
+        startTime: Number(data.startTime || Date.now()),
         durationMs: 0,
         durationText: '',
         inputTokens: 0,
@@ -2815,6 +2815,7 @@ function bindRuntimeEvents() {
         error: '',
         toolCalls: existing?.toolCalls || [],
         time: new Date().toLocaleTimeString(),
+        startTime: Number(data.startTime || Date.now()),
         durationMs: 0,
         durationText: '',
         inputTokens: 0,
@@ -3591,7 +3592,7 @@ async function previewFile(path) {
   try {
     const result = await ReadFile({ path, startLine: 1, lineCount: 220 });
     currentPreview.value = result.content || '';
-    filePreview.value = `${result.content || ''}\n\n---\nmd5: ${result.md5}\nlines: ${result.totalLines}\nending: ${result.lineEnding}${result.truncated ? '\n(truncated)' : ''}`;
+    filePreview.value = `${result.content || ''}\n\n---\nversion: ${result.version}\nlines: ${result.totalLines}\nending: ${result.lineEnding}${result.truncated ? '\n(truncated)' : ''}`;
   } catch (err) {
     currentPreview.value = '';
     filePreview.value = t('app.filePreview.failed', { error: err });

@@ -21,20 +21,37 @@
     </n-dropdown>
     <n-popover :show="modelMenuVisible" trigger="manual" placement="top-start" :show-arrow="false" :style="{ padding: '6px' }" @clickoutside="modelMenuVisible = false">
       <template #trigger>
-        <span class="info-model" @click.stop="modelMenuVisible = !modelMenuVisible" style="cursor:pointer">{{ currentModelLabel }}</span>
+        <span class="info-model" @click.stop="toggleModelMenu" style="cursor:pointer">{{ currentModelLabel }}</span>
       </template>
       <div class="model-menu-inner" @click.stop>
-        <div
-          v-for="(m, idx) in (config.models || [])"
-          :key="idx"
-          class="model-item"
-          :class="{ active: isActiveModel(m) }"
-          @click="selectModel(idx)"
-        >
-          <span class="model-item-model">{{ m.model || '-' }}</span>
-          <span class="model-item-name">{{ providerLabel(m) }}</span>
+        <div v-if="modelGroups.length" class="model-groups">
+          <section v-for="group in modelGroups" :key="group.key" class="model-group">
+            <button
+              type="button"
+              :class="['model-group-header', { active: group.hasActiveModel }]"
+              :aria-expanded="isModelGroupExpanded(group.key)"
+              :title="isModelGroupExpanded(group.key) ? $t('composer.models.collapse') : $t('composer.models.expand')"
+              @click="toggleModelGroup(group.key)"
+            >
+              <span class="model-group-caret">{{ isModelGroupExpanded(group.key) ? '▾' : '▸' }}</span>
+              <span class="model-group-name">{{ group.label }}</span>
+              <span class="model-group-count">{{ group.models.length }}</span>
+            </button>
+            <div v-if="isModelGroupExpanded(group.key)" class="model-group-items">
+              <button
+                v-for="item in group.models"
+                :key="item.index"
+                type="button"
+                :class="['model-item', { active: isActiveModel(item.model) }]"
+                @click="selectModel(item.index)"
+              >
+                <span class="model-item-model">{{ item.model.model || '-' }}</span>
+                <span v-if="isActiveModel(item.model)" class="model-item-active-mark">✓</span>
+              </button>
+            </div>
+          </section>
         </div>
-        <div v-if="!config.models || config.models.length === 0" class="model-empty">{{ $t('composer.models.empty') }}</div>
+        <div v-else class="model-empty">{{ $t('composer.models.empty') }}</div>
         <div class="model-menu-actions">
           <n-button size="tiny" quaternary @click="openConfig">{{ $t('composer.models.manage') }}</n-button>
         </div>
@@ -221,8 +238,27 @@ const props = defineProps({
 const emit = defineEmits(['switchModel', 'openConfig', 'openGitDiff', 'openWorkspace', 'jumpQuestion', 'setRunMode', 'openTaskCenter']);
 
 const modelMenuVisible = ref(false);
+const expandedModelGroups = ref(new Set());
 const contextPopoverVisible = ref(false);
 const currentModelLabel = computed(() => `${props.config.providerName || '-'} · ${props.config.model || '-'}`);
+const modelGroups = computed(() => {
+  const groups = new Map();
+  (props.config.models || []).forEach((model, index) => {
+    const label = providerLabel(model);
+    const key = modelProviderKey(model);
+    if (!groups.has(key)) groups.set(key, { key, label, models: [], hasActiveModel: false });
+    const group = groups.get(key);
+    group.models.push({ model, index });
+    if (isActiveModel(model)) group.hasActiveModel = true;
+  });
+
+  return [...groups.values()]
+    .map((group) => ({
+      ...group,
+      models: group.models.sort((left, right) => compareModelLabels(left.model?.model, right.model?.model)),
+    }))
+    .sort((left, right) => compareModelLabels(left.label, right.label));
+});
 const currentRunMode = computed(() => {
   if (props.grillModeActive) return 'grill';
   return 'yolo';
@@ -259,6 +295,38 @@ function contextPartLabel(label) {
   return labels[label] ? t(labels[label]) : label;
 }
 
+function compareModelLabels(left, right) {
+  return String(left || '').localeCompare(String(right || ''), undefined, {
+    sensitivity: 'base',
+    numeric: true,
+  });
+}
+
+function modelProviderKey(model) {
+  return providerLabel(model).toLocaleLowerCase();
+}
+
+function toggleModelMenu() {
+  const nextVisible = !modelMenuVisible.value;
+  modelMenuVisible.value = nextVisible;
+  if (!nextVisible) return;
+  const currentProvider = modelProviderKey(props.config);
+  const nextExpanded = new Set(expandedModelGroups.value);
+  if (modelGroups.value.some((group) => group.key === currentProvider)) nextExpanded.add(currentProvider);
+  expandedModelGroups.value = nextExpanded;
+}
+
+function isModelGroupExpanded(key) {
+  return expandedModelGroups.value.has(key);
+}
+
+function toggleModelGroup(key) {
+  const nextExpanded = new Set(expandedModelGroups.value);
+  if (nextExpanded.has(key)) nextExpanded.delete(key);
+  else nextExpanded.add(key);
+  expandedModelGroups.value = nextExpanded;
+}
+
 function selectModel(index) {
   modelMenuVisible.value = false;
   emit('switchModel', index);
@@ -274,8 +342,8 @@ function providerLabel(model) {
 }
 
 function isActiveModel(model) {
-  return providerLabel(model) === providerLabel(props.config)
-    && (model?.model || '') === (props.config.model || '');
+  return modelProviderKey(model) === modelProviderKey(props.config)
+    && String(model?.model || '').trim().toLocaleLowerCase() === String(props.config.model || '').trim().toLocaleLowerCase();
 }
 
 function openConfig() {

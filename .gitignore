@@ -1,3 +1,6 @@
+# ── Generated Wails bindings (regenerated on each build) ──
+frontend/wailsjs/
+
 # ── Build output ──
 build/bin/
 frontend/dist/

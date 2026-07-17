@@ -8,7 +8,6 @@ import (
 	"compress/gzip"
 	"compress/zlib"
 	"context"
-	"crypto/md5"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -389,7 +388,7 @@ type ReadFileResult struct {
 	NextStartLine int      `json:"nextStartLine,omitempty"`
 	TotalLines    int      `json:"totalLines"`
 	SHA256        string   `json:"sha256"`
-	MD5           string   `json:"md5"`
+	Version       string   `json:"version"`
 	Size          int64    `json:"size"`
 	LineEnding    string   `json:"lineEnding"`
 	Truncated     bool     `json:"truncated"`
@@ -741,8 +740,8 @@ type EditResult struct {
 	Path              string   `json:"path"`
 	BeforeSHA256      string   `json:"beforeSha256"`
 	AfterSHA256       string   `json:"afterSha256"`
-	BeforeMD5         string   `json:"beforeMd5"`
-	AfterMD5          string   `json:"afterMd5"`
+	BeforeVersion     string   `json:"beforeVersion"`
+	Version           string   `json:"version"`
 	BeforeBytes       int      `json:"beforeBytes"`
 	AfterBytes        int      `json:"afterBytes"`
 	Replacements      int      `json:"-"`
@@ -763,7 +762,7 @@ type EditResult struct {
 type EditRequest struct {
 	Path           string          `json:"path"`
 	ExpectedSHA256 string          `json:"expectedSha256,omitempty"`
-	ExpectedMD5    string          `json:"expectedMd5,omitempty"`
+	Version        string          `json:"version,omitempty"`
 	OldString      string          `json:"oldString,omitempty"`
 	NewString      string          `json:"newString,omitempty"`
 	ReplaceAll     bool            `json:"replaceAll,omitempty"`
@@ -785,9 +784,9 @@ type ModelEditToolRequest struct {
 }
 
 type FileTextEdits struct {
-	Path        string       `json:"path"`
-	ExpectedMD5 string       `json:"expectedMd5"`
-	Changes     []TextChange `json:"changes"`
+	Path    string       `json:"path"`
+	Version string       `json:"version"`
+	Changes []TextChange `json:"changes"`
 }
 
 type TextChange struct {
@@ -880,7 +879,7 @@ type BatchReadResultItem struct {
 	StartLine     int      `json:"startLine"`
 	EndLine       int      `json:"endLine"`
 	NextStartLine int      `json:"nextStartLine,omitempty"`
-	MD5           string   `json:"md5"`
+	Version       string   `json:"version"`
 	Size          int64    `json:"size"`
 	TotalLines    int      `json:"totalLines"`
 	LineEnding    string   `json:"lineEnding"`
@@ -941,7 +940,7 @@ type MemoryReadResult struct {
 	Description string `json:"description"`
 	Content     string `json:"content"`
 	SHA256      string `json:"sha256"`
-	MD5         string `json:"md5"`
+	Version     string `json:"version"`
 	Size        int64  `json:"size"`
 }
 
@@ -949,14 +948,14 @@ type MemoryWriteRequest struct {
 	Path        string `json:"path"`
 	Description string `json:"description"`
 	Content     string `json:"content"`
-	ExpectedMD5 string `json:"expectedMd5,omitempty"`
+	Version     string `json:"version,omitempty"`
 }
 
 type MemoryWriteResult struct {
 	Path         string `json:"path"`
 	Description  string `json:"description"`
 	SHA256       string `json:"sha256"`
-	MD5          string `json:"md5"`
+	Version      string `json:"version"`
 	Size         int64  `json:"size"`
 	Created      bool   `json:"created"`
 	UpdatedIndex bool   `json:"updatedIndex"`
@@ -2322,7 +2321,7 @@ func (a *App) batchReadOneWithConfig(cfg ConfigState, path string, req ReadFileR
 		StartLine:     result.StartLine,
 		EndLine:       result.EndLine,
 		NextStartLine: result.NextStartLine,
-		MD5:           result.MD5,
+		Version:       result.Version,
 		Size:          result.Size,
 		TotalLines:    result.TotalLines,
 		LineEnding:    result.LineEnding,
@@ -3053,7 +3052,7 @@ func buildSystemPromptParts(allSkills []SkillDefinition, workspaceRoot, customPr
 		"Use `ask` when progress genuinely requires one or more user decisions. Provide 2–6 reasonable options per question, mark exactly one recommended option, and do not add an 'Other' option because the UI always appends a custom-answer choice. `ask` must be the only tool call in that model response.\n\n" +
 		"Use `wait` only after starting an asynchronous operation or when a concrete external condition is expected to change. Call it as the only tool in that model response, then verify the condition after it completes. Do not use it to wait for user input or for long schedules; use `scheduled_task` for scheduled automation.\n\n" +
 		"Edit rules:\n" +
-		"1. Before a file's first edit, use `batch_read` to obtain exact content and `md5`. After a successful edit, reuse its `afterMd5` when the next exact `oldText` is already known; re-read only when content is unknown, an external change is possible, or a version/match error occurs.\n" +
+		"1. Before a file's first edit, use `batch_read` to obtain exact content and `version`. After a successful edit, reuse its returned `version` when the next exact `oldText` is already known; re-read only when content is unknown, an external change is possible, or a version/match error occurs.\n" +
 		"2. Put all known changes across affected files in one `edit` call. Use exact, unique `oldText`; the schema defines the batch limits and replacement behavior.\n" +
 		"3. Never send multiple file-mutation tool calls for the same path in one model response. Do not use patch, unified diff, or git apply.\n" +
 		"4. **Critical**: within a single `edit` call, each file path may appear **at most once** in the `files` array — do not repeat the same path across multiple entries. Merge all changes for the same file into one `changes` array instead. Violating this causes the entire call to be rejected with `E_WRITE_BATCH_CONFLICT`.\n\n")
@@ -3063,7 +3062,7 @@ func buildSystemPromptParts(allSkills []SkillDefinition, workspaceRoot, customPr
 		"- For `batch_read`, omit both range fields to read the whole file; use optional `startLine` and `endLine` only when you need a specific inclusive range.\n" +
 		"- If you need to edit files, put all cross-file changes in one `edit` call.\n" +
 		"- If you need to search across files, send one `grep_files` instead of reading each file.\n" +
-		"- Batch independent reads and commands (no duplicates); use current MD5 values for dependent edits.\n" +
+		"- Batch independent reads and commands (no duplicates); use current version values for dependent edits.\n" +
 		"- Only call tools one at a time when a strict serial dependency exists between them.\n" +
 		"The backend executes independent non-file tool calls in parallel; built-in file mutations are ordered by tool-call index.\n\n")
 
@@ -3515,7 +3514,7 @@ func (a *App) memoryRead(req MemoryReadRequest) (MemoryReadResult, error) {
 		Description: desc,
 		Content:     body,
 		SHA256:      hashBytes(data),
-		MD5:         hashMD5(data),
+		Version:     hashVersion(data),
 		Size:        info.Size(),
 	}, nil
 }
@@ -3540,11 +3539,15 @@ func (a *App) memoryWrite(req MemoryWriteRequest) (MemoryWriteResult, error) {
 	if existing, _, err := readTextFile(path); err == nil {
 		before = existing
 		created = false
-		if req.ExpectedMD5 != "" && !strings.EqualFold(req.ExpectedMD5, hashMD5(existing)) {
-			return MemoryWriteResult{}, fmt.Errorf("[E_VERSION_MISMATCH] expectedMd5 %s does not match current memory md5 %s", req.ExpectedMD5, hashMD5(existing))
+		if req.Version == "" {
+			return MemoryWriteResult{}, fmt.Errorf("memory already exists: %s; pass version from memory_read", filepath.ToSlash(path))
 		}
-		if req.ExpectedMD5 == "" {
-			return MemoryWriteResult{}, fmt.Errorf("memory already exists: %s; pass expectedMd5 from memory_read", filepath.ToSlash(path))
+		if err := validateVersion(req.Version); err != nil {
+			return MemoryWriteResult{}, err
+		}
+		currentVersion := hashVersion(existing)
+		if !strings.EqualFold(req.Version, currentVersion) {
+			return MemoryWriteResult{}, fmt.Errorf("[E_VERSION_MISMATCH] version %s does not match current memory version %s", req.Version, currentVersion)
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return MemoryWriteResult{}, err
@@ -3560,7 +3563,7 @@ func (a *App) memoryWrite(req MemoryWriteRequest) (MemoryWriteResult, error) {
 		Path:         filepath.ToSlash(path),
 		Description:  strings.TrimSpace(req.Description),
 		SHA256:       hashBytes(data),
-		MD5:          hashMD5(data),
+		Version:      hashVersion(data),
 		Size:         int64(len(data)),
 		Created:      created,
 		UpdatedIndex: !bytes.Equal(before, data),
@@ -5714,7 +5717,7 @@ func chatTools() []openai.Tool {
 				"includeIgnored": map[string]any{"type": "boolean", "description": "Include heavy ignored directories such as .git, node_modules, dist, build. Default false."},
 			},
 		}),
-		functionTool("edit", "Validate and apply exact replacements across multiple workspace files in one call. Each oldText must occur exactly once in its file's expectedMd5 snapshot, and changes in a file cannot overlap. All files are validated before writing; each file is written atomically, with best-effort cross-file rollback on commit failure. Reuse returned afterMd5 for known follow-up edits; re-read after version or match errors.", map[string]any{
+		functionTool("edit", "Validate and apply exact replacements across multiple workspace files in one call. Each oldText must occur exactly once in its file's version snapshot, and changes in a file cannot overlap. All files are validated before writing; each file is written atomically, with best-effort cross-file rollback on commit failure. Reuse the returned version for known follow-up edits; re-read after version or match errors.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"files": map[string]any{
@@ -5725,8 +5728,8 @@ func chatTools() []openai.Tool {
 					"items": map[string]any{
 						"type": "object",
 						"properties": map[string]any{
-							"path":        map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*"},
-							"expectedMd5": map[string]any{"type": "string", "pattern": "^[a-f0-9]{32}$", "description": "Required current md5 from batch_read or afterMd5 from the preceding successful edit."},
+							"path":    map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*"},
+							"version": map[string]any{"type": "string", "pattern": "^[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{12}$", "description": "Required 12-character current version from batch_read or the preceding successful edit. Comparison is case-insensitive."},
 							"changes": map[string]any{
 								"type":     "array",
 								"minItems": 1,
@@ -5741,7 +5744,7 @@ func chatTools() []openai.Tool {
 								},
 							},
 						},
-						"required": []string{"path", "expectedMd5", "changes"},
+						"required": []string{"path", "version", "changes"},
 					},
 				},
 			},
@@ -5883,7 +5886,7 @@ func chatTools() []openai.Tool {
 			},
 			"required": []string{"target"},
 		}),
-		functionTool("remote_read_file", "Read raw UTF-8 text from a remote SSH workspace. The returned content is directly copyable into remote_edit oldText, and md5 is required as expectedMd5. Omit startLine/endLine to read the whole file. With only startLine, read from that line to the end; with only endLine, read lines 1 through endLine; with both, read that inclusive range.", map[string]any{
+		functionTool("remote_read_file", "Read raw UTF-8 text from a remote SSH workspace. The returned content is directly copyable into remote_edit oldText, and its version is required by remote_edit. Omit startLine/endLine to read the whole file. With only startLine, read from that line to the end; with only endLine, read lines 1 through endLine; with both, read that inclusive range.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"target":    map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Explicit SSH target plus workspace root, e.g. my-dev:/srv/app."},
@@ -5893,7 +5896,7 @@ func chatTools() []openai.Tool {
 			},
 			"required": []string{"target", "path"},
 		}),
-		functionTool("remote_edit", "Validate and apply exact replacements across multiple files under one remote SSH target. Each file uses expectedMd5 and non-overlapping unique changes.", map[string]any{
+		functionTool("remote_edit", "Validate and apply exact replacements across multiple files under one remote SSH target. Each file uses its current version and non-overlapping unique changes.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"target": map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Explicit SSH target plus workspace root, e.g. my-dev:/srv/app."},
@@ -5945,7 +5948,7 @@ func chatTools() []openai.Tool {
 			},
 			"required": []string{"pattern"},
 		}),
-		functionTool("batch_read", "Read 1–20 files. Always pass a top-level files array, even for one file. Do not pass top-level path, a string array, offset, or lineCount. UTF-8 text returns raw copyable content plus md5 for edit. Omit startLine/endLine for the whole file; either or both define an inclusive 1-based range. Complex documents return non-editable extracted text.", map[string]any{
+		functionTool("batch_read", "Read 1–20 files. Always pass a top-level files array, even for one file. Do not pass top-level path, a string array, offset, or lineCount. UTF-8 text returns raw copyable content plus a 12-character version for edit. Omit startLine/endLine for the whole file; either or both define an inclusive 1-based range. Complex documents return non-editable extracted text.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"files": batchReadFilesSchema(),
@@ -5959,13 +5962,13 @@ func chatTools() []openai.Tool {
 			},
 			"required": []string{"path"},
 		}),
-		functionTool("memory_write", "Create or update a global memory Markdown file. Existing memories require expectedMd5 from memory_read.", map[string]any{
+		functionTool("memory_write", "Create or update a global memory Markdown file. Existing memories require version from memory_read.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"path":        map[string]any{"type": "string", "description": "Optional relative .md path under ~/.ally_agent/memories, or absolute path inside that directory. If omitted, a slug is generated from description."},
 				"description": map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Short searchable summary used in the memory index."},
 				"content":     map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Full Markdown memory body, without YAML frontmatter."},
-				"expectedMd5": map[string]any{"type": "string", "pattern": "^[a-fA-F0-9]{32}$", "description": "Required md5 from memory_read when updating an existing memory."},
+				"version":     map[string]any{"type": "string", "pattern": "^[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{12}$", "description": "Required version from memory_read when updating an existing memory. Comparison is case-insensitive."},
 			},
 			"required": []string{"description", "content"},
 		}),
@@ -6054,7 +6057,7 @@ func chatTools() []openai.Tool {
 
 var builtinToolExamples = map[string]string{
 	"list_files":         `{"path":"frontend/src","maxDepth":2,"limit":200}`,
-	"edit":               `single file with multiple changes: {"files":[{"path":"app.go","expectedMd5":"0123456789abcdef0123456789abcdef","changes":[{"oldText":"const oldName = \"ally\"","newText":"const newName = \"ally\""},{"oldText":"return oldName","newText":"return newName"}]}]}; multiple files with multiple changes per file: {"files":[{"path":"app.go","expectedMd5":"0123456789abcdef0123456789abcdef","changes":[{"oldText":"oldServerName","newText":"newServerName"},{"oldText":"oldServerPort","newText":"newServerPort"}]},{"path":"frontend/src/App.vue","expectedMd5":"fedcba9876543210fedcba9876543210","changes":[{"oldText":"oldTitle","newText":"newTitle"},{"oldText":"oldSubtitle","newText":"newSubtitle"}]}]}`,
+	"edit":               `single file with one change: {"files":[{"path":"app.go","version":"9k3m7x2p4t6w","changes":[{"oldText":"const oldName = \"ally\"","newText":"const newName = \"ally\""}]}]}; single file with multiple changes: {"files":[{"path":"app.go","version":"9k3m7x2p4t6w","changes":[{"oldText":"oldServerName","newText":"newServerName"},{"oldText":"oldServerPort","newText":"newServerPort"}]}]}; multiple files with multiple changes per file: {"files":[{"path":"app.go","version":"9k3m7x2p4t6w","changes":[{"oldText":"oldName","newText":"newName"},{"oldText":"oldPort","newText":"newPort"}]},{"path":"frontend/src/App.vue","version":"4v8n2c7m6q1x","changes":[{"oldText":"oldTitle","newText":"newTitle"},{"oldText":"oldSubtitle","newText":"newSubtitle"}]}]}`,
 	"create_file":        `{"path":"notes/example.md","content":"# Example\n","overwrite":false}`,
 	"delete_path":        `{"path":"tmp/generated","recursive":true}`,
 	"run_command":        `{"command":"go test ./...","cwd":".","timeoutSeconds":120}`,
@@ -6066,7 +6069,7 @@ var builtinToolExamples = map[string]string{
 	"web_fetch":          `{"url":"https://example.com/docs","maxChars":60000}`,
 	"remote_list_files":  `{"target":"ubuntu@example.com:/srv/app","path":"src","maxDepth":2}`,
 	"remote_read_file":   `{"target":"ubuntu@example.com:/srv/app","path":"main.go","startLine":1,"endLine":200}`,
-	"remote_edit":        `{"target":"ubuntu@example.com:/srv/app","files":[{"path":"main.go","expectedMd5":"0123456789abcdef0123456789abcdef","changes":[{"oldText":"old unique text","newText":"new text"}]}]}`,
+	"remote_edit":        `{"target":"ubuntu@example.com:/srv/app","files":[{"path":"main.go","version":"9k3m7x2p4t6w","changes":[{"oldText":"old unique text","newText":"new text"}]}]}`,
 	"remote_create_file": `{"target":"ubuntu@example.com:/srv/app","path":"notes.txt","content":"hello\n","overwrite":false}`,
 	"remote_delete_path": `{"target":"ubuntu@example.com:/srv/app","path":"tmp/output","recursive":true}`,
 	"remote_run_command": `{"target":"ubuntu@example.com:/srv/app","command":"go test ./...","cwd":".","timeoutSeconds":120}`,
@@ -6125,12 +6128,12 @@ func batchReadFilesSchema() map[string]any {
 func editFilesSchema() map[string]any {
 	return map[string]any{"type": "array", "minItems": 1, "maxItems": 20, "items": map[string]any{
 		"type": "object", "properties": map[string]any{
-			"path":        map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*"},
-			"expectedMd5": map[string]any{"type": "string", "pattern": "^[a-f0-9]{32}$"},
+			"path":    map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*"},
+			"version": map[string]any{"type": "string", "pattern": "^[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{12}$"},
 			"changes": map[string]any{"type": "array", "minItems": 1, "maxItems": 50, "items": map[string]any{
 				"type": "object", "properties": map[string]any{"oldText": map[string]any{"type": "string", "minLength": 1}, "newText": map[string]any{"type": "string"}}, "required": []string{"oldText", "newText"},
 			}},
-		}, "required": []string{"path", "expectedMd5", "changes"},
+		}, "required": []string{"path", "version", "changes"},
 	}}
 }
 
@@ -6907,7 +6910,7 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 	a.subRuns[subID] = run
 	a.subRunsMu.Unlock()
 	defer a.finishSubagentRecord(subID)
-	spawnPayload := map[string]any{"id": subID, "sessionId": sessionID, "description": desc, "profile": "coder"}
+	spawnPayload := map[string]any{"id": subID, "sessionId": sessionID, "description": desc, "profile": "coder", "startTime": run.StartTime}
 	if meta, ok := ctx.Value(toolExecutionMetaContextKey{}).(toolExecutionMeta); ok {
 		spawnPayload["runId"] = meta.runID
 		spawnPayload["toolBatchId"] = meta.toolBatchID
@@ -7223,8 +7226,8 @@ Prefer dedicated tools over shell commands: grep_files for search, batch_read fo
 
 # Edit Rules
 
-- Read files before their first edit. batch_read returns raw content and md5; edit accepts a files array with path, expectedMd5, and changes per file.
-- A successful edit returns afterMd5 for every file. Reuse it for a follow-up edit when exact current oldText is already known. Re-read only when content is unknown, external modification is possible, or E_VERSION_MISMATCH/E_NO_MATCH/E_MULTI_MATCH occurs.
+- Read files before their first edit. batch_read returns raw content and version; edit accepts a files array with path, version, and changes per file.
+- A successful edit returns the new version for every file. Reuse it for a follow-up edit when exact current oldText is already known. Re-read only when content is unknown, external modification is possible, or E_VERSION_MISMATCH/E_NO_MATCH/E_MULTI_MATCH occurs.
 - Put every independent replacement for the same file in one edit call. Each oldText must be non-empty, exact, unique in the original snapshot, and non-overlapping with other changes.
 - Empty newText deletes oldText. Insert by replacing a unique anchor with the anchor plus inserted content.
 - Do not use patch, unified diff, git apply, or patch-style edits.
@@ -7508,9 +7511,9 @@ func compactToolResultForModel(name string, result toolResult, fullJSON string) 
 		}
 		files := make([]map[string]any, 0, len(r.Files))
 		for _, file := range r.Files {
-			files = append(files, map[string]any{"path": file.Path, "beforeMd5": file.BeforeMD5, "afterMd5": file.AfterMD5, "addedLines": file.AddedLines, "removedLines": file.RemovedLines, "firstChangedLine": file.FirstChanged, "lastChangedLine": file.LastChanged})
+			files = append(files, map[string]any{"path": file.Path, "beforeVersion": file.BeforeVersion, "version": file.Version, "addedLines": file.AddedLines, "removedLines": file.RemovedLines, "firstChangedLine": file.FirstChanged, "lastChangedLine": file.LastChanged})
 		}
-		return marshalToolResultOrFallback(toolResult{OK: true, Data: map[string]any{"files": files, "fileCount": r.FileCount, "addedLines": r.AddedLines, "removedLines": r.RemovedLines, "summary": r.Summary, "postEditNote": "Reuse each file's afterMd5 for a follow-up edit when exact current oldText is known; otherwise re-read that file."}}, fullJSON)
+		return marshalToolResultOrFallback(toolResult{OK: true, Data: map[string]any{"files": files, "fileCount": r.FileCount, "addedLines": r.AddedLines, "removedLines": r.RemovedLines, "summary": r.Summary, "postEditNote": "Reuse each file's version for a follow-up edit when exact current oldText is known; otherwise re-read that file."}}, fullJSON)
 	case "replace_exact", "replace_lines", "create_file":
 		var r EditResult
 		if !decodeToolData(result.Data, &r) {
@@ -7518,8 +7521,8 @@ func compactToolResultForModel(name string, result toolResult, fullJSON string) 
 		}
 		data := map[string]any{
 			"path":             r.Path,
-			"beforeMd5":        r.BeforeMD5,
-			"afterMd5":         r.AfterMD5,
+			"beforeVersion":    r.BeforeVersion,
+			"version":          r.Version,
 			"beforeBytes":      r.BeforeBytes,
 			"afterBytes":       r.AfterBytes,
 			"addedLines":       r.AddedLines,
@@ -7530,7 +7533,7 @@ func compactToolResultForModel(name string, result toolResult, fullJSON string) 
 			"lastChangedLine":  r.LastChanged,
 			"warnings":         r.Warnings,
 			"classification":   r.Classification,
-			"postEditNote":     "Reuse afterMd5 for a follow-up edit when exact current oldText is known; otherwise re-read the file.",
+			"postEditNote":     "Reuse version for a follow-up edit when exact current oldText is known; otherwise re-read the file.",
 		}
 		if r.Diff != "" {
 			data["diffOmitted"] = "Full diff omitted from model context to reduce tokens; use batch_read around firstChangedLine/lastChangedLine if exact post-edit content is needed."
@@ -9384,7 +9387,7 @@ func (a *App) remoteReadFile(ctx context.Context, req RemoteReadFileRequest) (Re
 		NextStartLine: preview.NextStartLine,
 		TotalLines:    preview.TotalLines,
 		SHA256:        hashBytes(file.Data),
-		MD5:           hashMD5(file.Data),
+		Version:       hashVersion(file.Data),
 		Size:          file.Size,
 		LineEnding:    ending,
 		Truncated:     preview.Truncated,
@@ -9446,9 +9449,9 @@ func (a *App) remoteEdit(ctx context.Context, req RemoteEditRequest) (MultiEditR
 
 func (a *App) remoteEditOne(ctx context.Context, rt remoteTarget, req FileTextEdits, file remoteRawFile) (EditResult, error) {
 	beforeHash := hashBytes(file.Data)
-	beforeMD5 := hashMD5(file.Data)
-	if !strings.EqualFold(req.ExpectedMD5, beforeMD5) {
-		return EditResult{}, codedToolError("E_VERSION_MISMATCH", fmt.Errorf("remote file changed: expected md5 %s, current %s. Re-read before editing", req.ExpectedMD5, beforeMD5))
+	beforeVersion := hashVersion(file.Data)
+	if !strings.EqualFold(req.Version, beforeVersion) {
+		return EditResult{}, codedToolError("E_VERSION_MISMATCH", fmt.Errorf("remote file changed: expected version %s, current %s. Re-read before editing", req.Version, beforeVersion))
 	}
 	text, ending := normalizeText(file.Data)
 	result, replacements, err := applyAtomicTextChanges(text, req.Changes)
@@ -9481,8 +9484,8 @@ func (a *App) remoteEditOne(ctx context.Context, rt remoteTarget, req FileTextEd
 		Path:              file.Path,
 		BeforeSHA256:      beforeHash,
 		AfterSHA256:       hashBytes(after),
-		BeforeMD5:         beforeMD5,
-		AfterMD5:          hashMD5(after),
+		BeforeVersion:     beforeVersion,
+		Version:           hashVersion(after),
 		BeforeBytes:       len(file.Data),
 		AfterBytes:        len(after),
 		Replacements:      replacements,
@@ -9941,7 +9944,7 @@ func (a *App) readFileWithConfig(cfg ConfigState, req ReadFileRequest) (ReadFile
 		NextStartLine: preview.NextStartLine,
 		TotalLines:    preview.TotalLines,
 		SHA256:        hashBytes(data),
-		MD5:           hashMD5(data),
+		Version:       hashVersion(data),
 		Size:          info.Size(),
 		LineEnding:    ending,
 		Truncated:     preview.Truncated,
@@ -9980,7 +9983,7 @@ func (a *App) readDocumentAsReadFileWithConfig(cfg ConfigState, req ReadFileRequ
 	if err != nil {
 		return ReadFileResult{}, err
 	}
-	md5Value, err := hashFileMD5(fullPath)
+	version, err := versionFromSHA256Hex(sha)
 	if err != nil {
 		return ReadFileResult{}, err
 	}
@@ -9998,7 +10001,7 @@ func (a *App) readDocumentAsReadFileWithConfig(cfg ConfigState, req ReadFileRequ
 		EndLine:       totalLines,
 		TotalLines:    totalLines,
 		SHA256:        sha,
-		MD5:           md5Value,
+		Version:       version,
 		Size:          info.Size(),
 		Truncated:     doc.Truncated,
 		RangeStatus:   "document",
@@ -10203,9 +10206,9 @@ func (a *App) editFilesWithConfig(cfg ConfigState, files []FileTextEdits) (Multi
 		if err != nil {
 			return MultiEditResult{}, fmt.Errorf("file %d (%s): %w", i+1, file.Path, err)
 		}
-		beforeMD5 := hashMD5(before)
-		if !strings.EqualFold(file.ExpectedMD5, beforeMD5) {
-			return MultiEditResult{}, codedToolError("E_VERSION_MISMATCH", fmt.Errorf("file %s expected md5 %s, current %s; re-read all affected files before retrying", file.Path, file.ExpectedMD5, beforeMD5))
+		beforeVersion := hashVersion(before)
+		if !strings.EqualFold(file.Version, beforeVersion) {
+			return MultiEditResult{}, codedToolError("E_VERSION_MISMATCH", fmt.Errorf("file %s expected version %s, current %s; re-read all affected files before retrying", file.Path, file.Version, beforeVersion))
 		}
 		text, ending := normalizeText(before)
 		applied, replacements, err := applyAtomicTextChanges(text, file.Changes)
@@ -10239,8 +10242,8 @@ func (a *App) editFilesWithConfig(cfg ConfigState, files []FileTextEdits) (Multi
 				Path:              display,
 				BeforeSHA256:      hashBytes(before),
 				AfterSHA256:       hashBytes(after),
-				BeforeMD5:         beforeMD5,
-				AfterMD5:          hashMD5(after),
+				BeforeVersion:     beforeVersion,
+				Version:           hashVersion(after),
 				BeforeBytes:       len(before),
 				AfterBytes:        len(after),
 				Replacements:      replacements,
@@ -10272,7 +10275,7 @@ func (a *App) editFilesWithConfig(cfg ConfigState, files []FileTextEdits) (Multi
 	}
 	for i, item := range prepared {
 		current, _, err := readTextFile(item.path)
-		if err != nil || !strings.EqualFold(hashMD5(current), item.result.BeforeMD5) {
+		if err != nil || !strings.EqualFold(hashVersion(current), item.result.BeforeVersion) {
 			rollbackErr := rollback()
 			msg := fmt.Sprintf("file changed before commit: %s", item.display)
 			if rollbackErr != nil {
@@ -10324,9 +10327,14 @@ func (a *App) editWithConfig(cfg ConfigState, req EditRequest) (EditResult, erro
 		return EditResult{}, err
 	}
 	beforeHash := hashBytes(data)
-	beforeMD5 := hashMD5(data)
-	if req.ExpectedMD5 != "" && !strings.EqualFold(req.ExpectedMD5, beforeMD5) {
-		return EditResult{}, codedToolError("E_VERSION_MISMATCH", fmt.Errorf("expectedMd5 %s does not match current file md5 %s. Re-read the file and retry", req.ExpectedMD5, beforeMD5))
+	beforeVersion := hashVersion(data)
+	if req.Version != "" {
+		if err := validateVersion(req.Version); err != nil {
+			return EditResult{}, err
+		}
+		if !strings.EqualFold(req.Version, beforeVersion) {
+			return EditResult{}, codedToolError("E_VERSION_MISMATCH", fmt.Errorf("version %s does not match current file version %s. Re-read the file and retry", req.Version, beforeVersion))
+		}
 	}
 	if req.ExpectedSHA256 != "" && req.ExpectedSHA256 != beforeHash {
 		return EditResult{}, codedToolError("E_VERSION_MISMATCH", fmt.Errorf("expectedSha256 %s does not match current file hash %s. Re-read the file and retry with fresh text", req.ExpectedSHA256, beforeHash))
@@ -10390,8 +10398,8 @@ func (a *App) editWithConfig(cfg ConfigState, req EditRequest) (EditResult, erro
 		Path:              filepath.ToSlash(req.Path),
 		BeforeSHA256:      beforeHash,
 		AfterSHA256:       hashBytes(after),
-		BeforeMD5:         beforeMD5,
-		AfterMD5:          hashMD5(after),
+		BeforeVersion:     beforeVersion,
+		Version:           hashVersion(after),
 		BeforeBytes:       len(data),
 		AfterBytes:        len(after),
 		Replacements:      replacements,
@@ -10433,7 +10441,7 @@ func validateModelEditToolRequest(files []FileTextEdits) error {
 		if strings.TrimSpace(file.Path) == "" {
 			return codedToolError("E_BAD_EDIT", fmt.Errorf("file %d requires a non-empty path", i+1))
 		}
-		if err := validateExpectedMD5(file.ExpectedMD5); err != nil {
+		if err := validateVersion(file.Version); err != nil {
 			return fmt.Errorf("file %d: %w", i+1, err)
 		}
 		if err := validateAtomicTextChanges(file.Changes); err != nil {
@@ -10447,12 +10455,12 @@ func validateModelEditToolRequest(files []FileTextEdits) error {
 	return nil
 }
 
-func validateExpectedMD5(expectedMD5 string) error {
-	if strings.TrimSpace(expectedMD5) == "" {
-		return codedToolError("E_VERSION_REQUIRED", errors.New("expectedMd5 is required; read the file with batch_read and pass its md5"))
+func validateVersion(version string) error {
+	if strings.TrimSpace(version) == "" {
+		return codedToolError("E_VERSION_REQUIRED", errors.New("version is required; read the file with batch_read and pass its version"))
 	}
-	if !isMD5Hex(expectedMD5) {
-		return codedToolError("E_BAD_MD5", errors.New("expectedMd5 must be exactly 32 hexadecimal characters"))
+	if !isValidVersion(version) {
+		return codedToolError("E_BAD_VERSION", errors.New("version must be exactly 12 Crockford Base32 characters"))
 	}
 	return nil
 }
@@ -10470,13 +10478,13 @@ func isSHA256Hex(value string) bool {
 	return true
 }
 
-func isMD5Hex(value string) bool {
-	if len(value) != 32 {
+func isValidVersion(value string) bool {
+	if len(value) != 12 {
 		return false
 	}
-	for i := 0; i < len(value); i++ {
-		c := value[i]
-		if (c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F') {
+	const alphabet = "0123456789abcdefghjkmnpqrstvwxyz"
+	for _, c := range strings.ToLower(value) {
+		if !strings.ContainsRune(alphabet, c) {
 			return false
 		}
 	}
@@ -11590,18 +11598,18 @@ func makeEditResult(rel string, beforeHash string, before, after []byte, ending 
 		added = 0
 	}
 	return EditResult{
-		Path:         filepath.ToSlash(rel),
-		BeforeSHA256: beforeHash,
-		AfterSHA256:  hashBytes(after),
-		BeforeMD5:    hashMD5(before),
-		AfterMD5:     hashMD5(after),
-		BeforeBytes:  len(before),
-		AfterBytes:   len(after),
-		Replacements: replacements,
-		AddedLines:   added,
-		RemovedLines: removed,
-		LineEnding:   ending,
-		Summary:      fmt.Sprintf("%s updated: %d -> %d bytes", filepath.ToSlash(rel), len(before), len(after)),
+		Path:          filepath.ToSlash(rel),
+		BeforeSHA256:  beforeHash,
+		AfterSHA256:   hashBytes(after),
+		BeforeVersion: hashVersion(before),
+		Version:       hashVersion(after),
+		BeforeBytes:   len(before),
+		AfterBytes:    len(after),
+		Replacements:  replacements,
+		AddedLines:    added,
+		RemovedLines:  removed,
+		LineEnding:    ending,
+		Summary:       fmt.Sprintf("%s updated: %d -> %d bytes", filepath.ToSlash(rel), len(before), len(after)),
 	}
 }
 
@@ -11610,9 +11618,33 @@ func hashBytes(data []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func hashMD5(data []byte) string {
-	sum := md5.Sum(data)
-	return hex.EncodeToString(sum[:])
+func hashVersion(data []byte) string {
+	sum := sha256.Sum256(data)
+	return versionFromSHA256(sum[:])
+}
+
+func versionFromSHA256(sum []byte) string {
+	const alphabet = "0123456789abcdefghjkmnpqrstvwxyz"
+	var out [12]byte
+	for i := range out {
+		bit := i * 5
+		byteIndex := bit / 8
+		shift := 11 - (bit % 8)
+		value := uint16(sum[byteIndex]) << 8
+		if byteIndex+1 < len(sum) {
+			value |= uint16(sum[byteIndex+1])
+		}
+		out[i] = alphabet[(value>>shift)&31]
+	}
+	return string(out[:])
+}
+
+func versionFromSHA256Hex(value string) (string, error) {
+	sum, err := hex.DecodeString(value)
+	if err != nil || len(sum) != sha256.Size {
+		return "", errors.New("invalid SHA-256 digest")
+	}
+	return versionFromSHA256(sum), nil
 }
 
 func hashFileSHA256(path string) (string, error) {
@@ -11622,19 +11654,6 @@ func hashFileSHA256(path string) (string, error) {
 	}
 	defer f.Close()
 	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(h.Sum(nil)), nil
-}
-
-func hashFileMD5(path string) (string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-	h := md5.New()
 	if _, err := io.Copy(h, f); err != nil {
 		return "", err
 	}

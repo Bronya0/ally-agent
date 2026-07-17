@@ -820,8 +820,23 @@ func TestBatchReadKeepsSamePathWithDifferentEffectiveRanges(t *testing.T) {
 	if result.Files[1].Content != "two\nthree\n" {
 		t.Fatalf("expected second read to contain line 2 through EOF, got:\n%s", result.Files[1].Content)
 	}
-	if result.Files[0].ContentFormat != "raw" || result.Files[0].MD5 != hashMD5([]byte("one\ntwo\nthree\n")) {
-		t.Fatalf("expected raw content with md5 metadata, got %#v", result.Files[0])
+	if result.Files[0].ContentFormat != "raw" || result.Files[0].Version != hashVersion([]byte("one\ntwo\nthree\n")) {
+		t.Fatalf("expected raw content with version metadata, got %#v", result.Files[0])
+	}
+}
+
+func TestFileVersionIsStableCrockfordBase32(t *testing.T) {
+	version := hashVersion([]byte("ally"))
+	if version != "fx0t3f9mp005" {
+		t.Fatalf("unexpected version: %q", version)
+	}
+	if !isValidVersion(version) || !isValidVersion(strings.ToUpper(version)) {
+		t.Fatalf("expected version validation to be case-insensitive: %q", version)
+	}
+	for _, invalid := range []string{"", "2q4rsqh3dhn", "2q4rsqh3dhnqq", "2q4rsqh3dhno", "2q4rsqh3dhni"} {
+		if isValidVersion(invalid) {
+			t.Fatalf("expected invalid version %q to be rejected", invalid)
+		}
 	}
 }
 
@@ -907,7 +922,7 @@ func TestExecuteToolRejectsLegacyStringEditFields(t *testing.T) {
 	cfg := ConfigState{Workspace: dir}
 
 	result := app.executeTool(context.Background(), cfg, "session-1", "edit", []byte(`{
-		"files": [{"path": "sample.txt", "expectedMd5": "00000000000000000000000000000000",
+		"files": [{"path": "sample.txt", "version": "000000000000",
 		"edits": [
 			{"oldString": "alpha", "newString": "ALPHA"},
 			{"oldString": "gamma", "newString": "GAMMA"}
@@ -936,12 +951,12 @@ func TestExecuteToolAppliesMultipleAtomicTextChanges(t *testing.T) {
 
 	result := app.executeTool(context.Background(), cfg, "session-1", "edit", []byte(fmt.Sprintf(`{
 		"files": [{"path": "sample.txt",
-		"expectedMd5": %q,
+		"version": %q,
 		"changes": [
 			{"oldText": "alpha", "newText": "ALPHA"},
 			{"oldText": "gamma", "newText": "GAMMA"}
 		]}]
-	}`, hashMD5(original))))
+	}`, strings.ToUpper(hashVersion(original)))))
 	if !result.OK {
 		t.Fatalf("expected atomic edit to succeed, got error %q", result.Error)
 	}
@@ -963,7 +978,7 @@ func TestExecuteToolEditsMultipleFilesInOneCall(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "b.txt"), b, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	args := fmt.Sprintf(`{"files":[{"path":"a.txt","expectedMd5":%q,"changes":[{"oldText":"alpha","newText":"ALPHA"}]},{"path":"b.txt","expectedMd5":%q,"changes":[{"oldText":"beta","newText":"BETA"}]}]}`, hashMD5(a), hashMD5(b))
+	args := fmt.Sprintf(`{"files":[{"path":"a.txt","version":%q,"changes":[{"oldText":"alpha","newText":"ALPHA"}]},{"path":"b.txt","version":%q,"changes":[{"oldText":"beta","newText":"BETA"}]}]}`, hashVersion(a), hashVersion(b))
 	result := NewApp().executeTool(context.Background(), ConfigState{Workspace: dir}, "session-1", "edit", []byte(args))
 	if !result.OK {
 		t.Fatalf("cross-file edit failed: %#v", result)
@@ -979,7 +994,7 @@ func TestExecuteToolEditsMultipleFilesInOneCall(t *testing.T) {
 	}
 }
 
-func TestExecuteToolRequiresExpectedMD5ForEdit(t *testing.T) {
+func TestExecuteToolRequiresVersionForEdit(t *testing.T) {
 	dir := t.TempDir()
 	original := []byte("alpha\nbeta\n")
 	if err := os.WriteFile(filepath.Join(dir, "sample.txt"), original, 0o600); err != nil {
@@ -997,7 +1012,7 @@ func TestExecuteToolRequiresExpectedMD5ForEdit(t *testing.T) {
 		t.Fatal(err)
 	}
 	if string(got) != string(original) {
-		t.Fatalf("expected missing-sha edit to leave file unchanged, got %q", string(got))
+		t.Fatalf("expected missing-version edit to leave file unchanged, got %q", string(got))
 	}
 }
 
@@ -1010,9 +1025,9 @@ func TestExecuteToolEditHandlesUniqueSingleLineSubstring(t *testing.T) {
 	app := NewApp()
 	result := app.executeTool(context.Background(), ConfigState{Workspace: dir}, "session-1", "edit", []byte(fmt.Sprintf(`{
 		"files": [{"path": "config.json",
-		"expectedMd5": %q,
+		"version": %q,
 		"changes": [{"oldText": "false", "newText": "true"}]}]
-	}`, hashMD5(original))))
+	}`, hashVersion(original))))
 	if !result.OK {
 		t.Fatalf("expected edit to succeed, got %#v", result)
 	}
@@ -1047,9 +1062,9 @@ func TestExecuteToolEditRejectsMultipleMatches(t *testing.T) {
 	app := NewApp()
 	result := app.executeTool(context.Background(), ConfigState{Workspace: dir}, "session-1", "edit", []byte(fmt.Sprintf(`{
 		"files": [{"path": "sample.txt",
-		"expectedMd5": %q,
+		"version": %q,
 		"changes": [{"oldText": "foo", "newText": "bar"}]}]
-	}`, hashMD5(original))))
+	}`, hashVersion(original))))
 	if result.OK || !strings.Contains(result.Error, "[E_MULTI_MATCH]") {
 		t.Fatalf("expected edit multi-match failure, got %#v", result)
 	}
@@ -1064,12 +1079,12 @@ func TestExecuteToolEditRejectsOverlappingChangesAtomically(t *testing.T) {
 	app := NewApp()
 	result := app.executeTool(context.Background(), ConfigState{Workspace: dir}, "session-1", "edit", []byte(fmt.Sprintf(`{
 		"files": [{"path": "sample.txt",
-		"expectedMd5": %q,
+		"version": %q,
 		"changes": [
 			{"oldText": "abc", "newText": "ABC"},
 			{"oldText": "bc", "newText": "BC"}
 		]}]
-	}`, hashMD5(original))))
+	}`, hashVersion(original))))
 	if result.OK || result.ErrorCode != "E_OVERLAPPING_CHANGES" {
 		t.Fatalf("expected overlap failure, got %#v", result)
 	}

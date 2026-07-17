@@ -118,7 +118,18 @@
               <div class="config-section-title">{{ $t('settings.modelsTitle') }}</div>
               <div class="config-section-subtitle">{{ $t('settings.modelsSubtitle') }}</div>
             </div>
-            <n-button size="small" type="primary" @click="startAddModelDraft">{{ $t('settings.modelAdd') }}</n-button>
+            <n-space :size="8">
+              <n-button size="small" secondary @click="openModelImport">{{ $t('settings.modelImport') }}</n-button>
+              <n-button size="small" secondary :disabled="!draft.models?.length" @click="exportModelConfigs">{{ $t('settings.modelExport') }}</n-button>
+              <n-button size="small" type="primary" @click="startAddModelDraft">{{ $t('settings.modelAdd') }}</n-button>
+            </n-space>
+            <input
+              ref="modelImportInput"
+              class="model-import-input"
+              type="file"
+              accept="application/json,.json"
+              @change="importModelConfigs"
+            />
           </div>
 
           <div class="current-model-panel">
@@ -314,29 +325,58 @@
   >
     <n-form :model="modelDraft" label-placement="top">
       <n-grid :cols="2" :x-gap="12">
-        <n-form-item-gi :label="$t('settings.providerName')">
-          <n-input v-model:value="modelDraft.providerName" placeholder="OpenAI Compatible" />
+        <n-form-item-gi :label="$t('settings.providerPreset')" :span="2">
+          <n-select
+            v-model:value="selectedCatalogProviderId"
+            :options="catalogProviderOptions"
+            :loading="modelCatalogLoading"
+            filterable
+            :placeholder="$t('settings.providerPresetPlaceholder')"
+            @update:value="selectCatalogProvider"
+          />
         </n-form-item-gi>
-        <n-form-item-gi :label="$t('settings.apiFormat')">
-          <n-select v-model:value="modelDraft.apiFormat" :options="apiFormatOptions" />
-        </n-form-item-gi>
-        <n-form-item-gi label="Model">
-          <n-input v-model:value="modelDraft.model" :placeholder="modelPlaceholder(modelDraft.apiFormat)" />
-        </n-form-item-gi>
-        <n-form-item-gi :label="normalizeApiFormat(modelDraft.apiFormat) === 'anthropic_messages' ? $t('settings.baseUrlNoV1') : 'Base URL'">
-          <n-input v-model:value="modelDraft.baseUrl" :placeholder="apiFormatDefaultBaseUrl(modelDraft.apiFormat)" />
-        </n-form-item-gi>
+        <template v-if="selectedCatalogProvider">
+          <n-form-item-gi :label="$t('settings.catalogModel')" :span="2">
+            <n-select
+              :value="modelDraft.model"
+              :options="selectedCatalogModelOptions"
+              filterable
+              :placeholder="$t('settings.catalogModelPlaceholder')"
+              @update:value="selectCatalogModel"
+            />
+          </n-form-item-gi>
+          <n-form-item-gi :label="$t('settings.apiFormat')">
+            <n-input :value="apiFormatLabel(modelDraft.apiFormat)" disabled />
+          </n-form-item-gi>
+          <n-form-item-gi label="Base URL">
+            <n-input :value="modelDraft.baseUrl" disabled />
+          </n-form-item-gi>
+        </template>
+        <template v-else>
+          <n-form-item-gi :label="$t('settings.providerName')">
+            <n-input v-model:value="modelDraft.providerName" placeholder="OpenAI Compatible" />
+          </n-form-item-gi>
+          <n-form-item-gi :label="$t('settings.apiFormat')">
+            <n-select v-model:value="modelDraft.apiFormat" :options="apiFormatOptions" />
+          </n-form-item-gi>
+          <n-form-item-gi label="Model">
+            <n-input v-model:value="modelDraft.model" :placeholder="modelPlaceholder(modelDraft.apiFormat)" />
+          </n-form-item-gi>
+          <n-form-item-gi :label="normalizeApiFormat(modelDraft.apiFormat) === 'anthropic_messages' ? $t('settings.baseUrlNoV1') : 'Base URL'">
+            <n-input v-model:value="modelDraft.baseUrl" :placeholder="apiFormatDefaultBaseUrl(modelDraft.apiFormat)" autocomplete="off" />
+          </n-form-item-gi>
+        </template>
         <n-form-item-gi label="API Key" :span="2">
-          <n-input v-model:value="modelDraft.apiKey" type="password" show-password-on="click" />
+          <n-input v-model:value="modelDraft.apiKey" type="password" show-password-on="click" autocomplete="new-password" />
         </n-form-item-gi>
         <n-form-item-gi label="Temperature">
           <n-input-number v-model:value="modelDraft.temperature" :min="0" :max="1" :step="0.1" style="width: 100%" />
         </n-form-item-gi>
         <n-form-item-gi label="Max Tokens">
-          <n-input-number v-model:value="modelDraft.maxTokens" :min="1" :step="1024" style="width: 100%" />
+          <n-input-number v-model:value="modelDraft.maxTokens" :min="0" style="width: 100%" />
         </n-form-item-gi>
         <n-form-item-gi :label="$t('settings.contextWindow')" :span="2">
-          <n-input-number v-model:value="modelDraft.contextWindow" :min="1024" :step="1024" style="width: 100%" />
+          <n-input-number v-model:value="modelDraft.contextWindow" :min="0" style="width: 100%" />
         </n-form-item-gi>
         <n-form-item-gi :label="$t('settings.reasoningTag')" :span="2">
           <n-input
@@ -345,7 +385,13 @@
           />
         </n-form-item-gi>
       </n-grid>
-      <n-alert v-if="normalizeApiFormat(modelDraft.apiFormat) === 'anthropic_messages'" type="info" :show-icon="false" class="model-format-hint">
+      <n-alert v-if="selectedCatalogProvider" type="info" :show-icon="false" class="model-format-hint">
+        <span>{{ $t('settings.providerPresetHint', { provider: selectedCatalogProvider.name }) }}</span>
+        <n-button v-if="selectedCatalogProvider.doc" text type="primary" class="provider-doc-button" @click="openProviderDocumentation">
+          {{ $t('settings.providerDocumentation') }}
+        </n-button>
+      </n-alert>
+      <n-alert v-else-if="normalizeApiFormat(modelDraft.apiFormat) === 'anthropic_messages'" type="info" :show-icon="false" class="model-format-hint">
         {{ $t('settings.anthropicHint') }}
       </n-alert>
     </n-form>
@@ -363,6 +409,15 @@
 import { computed, reactive, ref, watch } from 'vue';
 import { createDiscreteApi, darkTheme } from 'naive-ui';
 import { naiveDateLocale, naiveLocale, t } from '../i18n.mjs';
+import { buildModelConfigExport, mergeModelConfigs, modelConfigIdentity, parseModelConfigImport } from '../utils/modelConfigIO.mjs';
+import {
+  CUSTOM_PROVIDER_ID,
+  applyCatalogPreset,
+  findCatalogModel,
+  findCatalogProvider,
+  providerCatalogOptions,
+  providerModelOptions,
+} from '../utils/modelProviderCatalog.mjs';
 import { BrowserOpenURL } from '../../wailsjs/runtime/runtime';
 import {
   GetMcpConfig, GetMcpServers, SaveMcpConfig, RestartMcpServers,
@@ -402,6 +457,10 @@ const modelFormModalStyle = {
 const page = ref('general');
 const modelEditorVisible = ref(false);
 const modelEditorIndex = ref(-1);
+const modelCatalog = ref({ providers: [] });
+const modelCatalogLoading = ref(false);
+const selectedCatalogProviderId = ref(CUSTOM_PROVIDER_ID);
+const modelImportInput = ref(null);
 const testingModel = ref(false);
 const proxyDetecting = ref(false);
 const proxyTesting = ref(false);
@@ -463,6 +522,9 @@ function defaultModelDraft(source = {}) {
 }
 
 const modelDraft = reactive(defaultModelDraft());
+const catalogProviderOptions = computed(() => providerCatalogOptions(modelCatalog.value, t('settings.providerCustom')));
+const selectedCatalogProvider = computed(() => findCatalogProvider(modelCatalog.value, selectedCatalogProviderId.value));
+const selectedCatalogModelOptions = computed(() => providerModelOptions(selectedCatalogProvider.value));
 
 const activeProviderTab = ref('');
 
@@ -527,30 +589,77 @@ function alignActiveProviderTab(preferred = '') {
   activeProviderTab.value = candidates.find((name) => name && names.has(name)) || tabs[0].name;
 }
 
+async function ensureModelCatalog() {
+  if (modelCatalog.value.providers.length || modelCatalogLoading.value) return;
+  modelCatalogLoading.value = true;
+  try {
+    const loaded = await import('../data/modelCatalog.json');
+    modelCatalog.value = loaded.default || loaded;
+  } catch (err) {
+    message.error(t('settings.providerCatalogLoadFailed', { error: err }));
+  } finally {
+    modelCatalogLoading.value = false;
+  }
+}
+
+function matchingCatalogProvider(source = {}) {
+  const modelId = String(source.model || '').trim();
+  const baseUrl = String(source.baseUrl || '').trim().replace(/\/+$/, '').toLowerCase();
+  const providerName = normalizedProviderName(source.providerName).toLowerCase();
+  return (modelCatalog.value.providers || []).find((provider) => {
+    const providerBase = String(provider.baseUrl || '').trim().replace(/\/+$/, '').toLowerCase();
+    const providerMatches = providerBase === baseUrl || String(provider.name || '').trim().toLowerCase() === providerName;
+    return providerMatches && (!modelId || Boolean(findCatalogModel(provider, modelId)));
+  }) || null;
+}
+
 function assignModelDraft(source = {}) {
   Object.assign(modelDraft, defaultModelDraft({
     ...source,
     apiFormat: normalizeApiFormat(source.apiFormat || draft.apiFormat),
   }));
+  selectedCatalogProviderId.value = matchingCatalogProvider(source)?.id || CUSTOM_PROVIDER_ID;
 }
 
-function startAddModelDraft() {
+function selectCatalogProvider(providerId) {
+  selectedCatalogProviderId.value = providerId;
+  const provider = findCatalogProvider(modelCatalog.value, providerId);
+  if (!provider) return;
+  const preferredModel = findCatalogModel(provider, modelDraft.model) || provider.models?.[0];
+  if (preferredModel) Object.assign(modelDraft, applyCatalogPreset(provider, preferredModel, modelDraft));
+}
+
+function selectCatalogModel(modelId) {
+  const provider = selectedCatalogProvider.value;
+  const model = findCatalogModel(provider, modelId);
+  if (provider && model) Object.assign(modelDraft, applyCatalogPreset(provider, model, modelDraft));
+}
+
+function openProviderDocumentation() {
+  if (selectedCatalogProvider.value?.doc) BrowserOpenURL(selectedCatalogProvider.value.doc);
+}
+
+async function startAddModelDraft() {
   modelEditorIndex.value = -1;
+  await ensureModelCatalog();
   const provider = activeProviderTab.value || draft.providerName || 'OpenAI Compatible';
   assignModelDraft({
     providerName: provider,
     apiFormat: normalizeApiFormat(draft.apiFormat),
     baseUrl: draft.baseUrl || '',
     apiKey: draft.apiKey || '',
+    model: draft.model || '',
     maxTokens: draft.maxTokens || 128000,
     contextWindow: draft.contextWindow || 1048576,
   });
+  if (selectedCatalogProvider.value) selectCatalogProvider(selectedCatalogProviderId.value);
   modelEditorVisible.value = true;
 }
 
-function editModelDraft(index) {
+async function editModelDraft(index) {
   if (!draft.models || !draft.models[index]) return;
   modelEditorIndex.value = index;
+  await ensureModelCatalog();
   assignModelDraft(draft.models[index]);
   modelEditorVisible.value = true;
 }
@@ -558,6 +667,7 @@ function editModelDraft(index) {
 function cancelModelDraft() {
   modelEditorVisible.value = false;
   modelEditorIndex.value = -1;
+  selectedCatalogProviderId.value = CUSTOM_PROVIDER_ID;
 }
 
 async function testModelConnection() {
@@ -616,8 +726,14 @@ function commitModelDraft() {
   const wasActive = modelEditorIndex.value >= 0 && isDraftModelActive(draft.models[modelEditorIndex.value]);
   if (modelEditorIndex.value >= 0) {
     draft.models.splice(modelEditorIndex.value, 1, nextModel);
+    const duplicateIndex = draft.models.findIndex((saved, index) => (
+      index !== modelEditorIndex.value && modelConfigIdentity(saved) === modelConfigIdentity(nextModel)
+    ));
+    if (duplicateIndex >= 0) draft.models.splice(duplicateIndex, 1);
   } else {
-    draft.models.push(nextModel);
+    const existingIndex = draft.models.findIndex((saved) => modelConfigIdentity(saved) === modelConfigIdentity(nextModel));
+    if (existingIndex >= 0) draft.models.splice(existingIndex, 1, nextModel);
+    else draft.models.push(nextModel);
   }
   if (wasActive) applyModelToDraft(nextModel);
   alignActiveProviderTab(providerName);
@@ -655,6 +771,48 @@ function removeModelDraft(index) {
   else if (modelEditorIndex.value > index) modelEditorIndex.value -= 1;
   const activeStillExists = providerTabs.value.some((tab) => tab.name === activeProviderTab.value);
   alignActiveProviderTab(activeStillExists ? activeProviderTab.value : removedProvider);
+}
+
+function openModelImport() {
+  if (!modelImportInput.value) return;
+  modelImportInput.value.value = '';
+  modelImportInput.value.click();
+}
+
+async function importModelConfigs(event) {
+  const input = event?.target;
+  const file = input?.files?.[0];
+  if (!file) return;
+  try {
+    if (file.size > 2 * 1024 * 1024) throw Object.assign(new Error('FILE_TOO_LARGE'), { code: 'FILE_TOO_LARGE' });
+    const imported = parseModelConfigImport(await file.text());
+    const activeIdentity = modelConfigIdentity(draft);
+    const importedActiveModel = [...imported].reverse().find((model) => modelConfigIdentity(model) === activeIdentity);
+    const result = mergeModelConfigs(draft.models, imported);
+    draft.models = result.models;
+    if (importedActiveModel) applyModelToDraft(importedActiveModel);
+    alignActiveProviderTab(activeProviderTab.value || normalizedProviderName(draft.providerName));
+    message.success(t('settings.modelImportSuccess', { added: result.added, updated: result.updated }));
+  } catch (err) {
+    const code = String(err?.code || 'UNKNOWN');
+    message.error(t(`settings.modelImportError.${code}`));
+  } finally {
+    if (input) input.value = '';
+  }
+}
+
+function exportModelConfigs() {
+  const payload = buildModelConfigExport(draft.models);
+  const blob = new Blob([`${JSON.stringify(payload, null, 2)}\n`], { type: 'application/json;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `ally-models-${new Date().toISOString().slice(0, 10)}.json`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
+  message.success(t('settings.modelExportSuccess', { count: payload.models.length }));
 }
 
 watch(() => modelDraft.apiFormat, (next, previous) => {
@@ -1021,6 +1179,11 @@ watch(() => props.visible, (visible) => {
   margin-top: 4px;
 }
 
+.provider-doc-button {
+  margin-left: 8px;
+  vertical-align: baseline;
+}
+
 .proxy-warning { margin-bottom: 12px; }
 .proxy-actions { display: flex; gap: 8px; margin-bottom: 12px; }
 .proxy-status-card { display: grid; gap: 8px; padding: 12px; border: 1px solid rgba(255,255,255,.08); border-radius: 8px; background: rgba(255,255,255,.025); }
@@ -1072,6 +1235,10 @@ watch(() => props.visible, (visible) => {
   color: #777;
   font-size: 11px;
   line-height: 1.45;
+}
+
+.model-import-input {
+  display: none;
 }
 
 .current-model-panel {

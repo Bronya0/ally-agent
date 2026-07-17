@@ -219,6 +219,13 @@ func TestEditToolSchemaIsAtomicChangesOnly(t *testing.T) {
 	filesSchema := properties["files"].(map[string]any)
 	fileItems := filesSchema["items"].(map[string]any)
 	fileProperties := fileItems["properties"].(map[string]any)
+	if fileProperties["version"] == nil || fileProperties["expectedMd5"] != nil {
+		t.Fatalf("edit file schema must expose version and reject expectedMd5: %#v", fileProperties)
+	}
+	fileRequired := fileItems["required"].([]string)
+	if !containsString(fileRequired, "version") {
+		t.Fatalf("edit file schema must require version: %#v", fileRequired)
+	}
 	changesSchema, ok := fileProperties["changes"].(map[string]any)
 	if !ok {
 		t.Fatalf("edit changes schema missing: %#v", properties["changes"])
@@ -231,6 +238,18 @@ func TestEditToolSchemaIsAtomicChangesOnly(t *testing.T) {
 	if !ok || len(changeProperties) != 2 {
 		t.Fatalf("edit change should expose oldText/newText only: %#v", items)
 	}
+	if !strings.Contains(editTool.Description, "single file with one change") {
+		t.Fatalf("edit tool description should include the minimal single-change example: %s", editTool.Description)
+	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestDetectWriteBatchConflictsNormalizesSamePath(t *testing.T) {

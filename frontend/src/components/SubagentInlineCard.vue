@@ -8,7 +8,7 @@
       <span class="tool-chip">{{ $t('subagent.steps', { current: msg.steps }) }}</span>
       <span v-if="msg.toolCalls?.length" class="tool-chip">{{ $t('subagent.toolCount', { count: msg.toolCalls.length }) }}</span>
       <span v-if="msg.totalTokens > 0" class="tool-chip subagent-token-chip" :title="tokenTooltip">{{ tokenChip }}</span>
-      <span v-if="msg.durationText" class="tool-duration">{{ msg.durationText }}</span>
+      <span v-if="displayDuration" class="tool-duration">{{ displayDuration }}</span>
     </div>
     <div v-if="recentTools.length" class="subagent-inline-body">
       <div v-for="(tc, ti) in recentTools" :key="tc.toolCallId || ti" :class="['subagent-inline-entry', tc.status]">
@@ -27,11 +27,61 @@
 </template>
 
 <script setup>
-import { computed } from 'vue';
+import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { t } from '../i18n.mjs';
 
 const props = defineProps({
   msg: { type: Object, required: true },
+});
+
+const now = ref(Date.now());
+let durationTimer = null;
+
+function formatDurationShort(ms) {
+  const value = Number(ms);
+  if (!Number.isFinite(value) || value <= 0) return '';
+  if (value < 1000) return '<1s';
+  const secs = Math.max(1, Math.round(value / 1000));
+  const hours = Math.floor(secs / 3600);
+  const mins = Math.floor((secs % 3600) / 60);
+  const rest = secs % 60;
+  if (hours > 0) return `${hours}h${mins > 0 ? `${mins}m` : ''}`;
+  if (mins > 0) return `${mins}m${rest > 0 ? `${rest}s` : ''}`;
+  return `${rest}s`;
+}
+
+function stopDurationTimer() {
+  if (durationTimer === null) return;
+  window.clearInterval(durationTimer);
+  durationTimer = null;
+}
+
+function syncDurationTimer() {
+  if (props.msg?.status !== 'running' || !Number(props.msg?.startTime)) {
+    stopDurationTimer();
+    return;
+  }
+  now.value = Date.now();
+  if (durationTimer === null) {
+    durationTimer = window.setInterval(() => {
+      now.value = Date.now();
+    }, 1000);
+  }
+}
+
+watch(
+  () => [props.msg?.status, props.msg?.startTime],
+  syncDurationTimer,
+  { immediate: true },
+);
+
+onBeforeUnmount(stopDurationTimer);
+
+const displayDuration = computed(() => {
+  if (props.msg?.status !== 'running') return props.msg?.durationText || '';
+  const startTime = Number(props.msg?.startTime || 0);
+  if (!startTime) return '';
+  return formatDurationShort(Math.max(0, now.value - startTime));
 });
 
 const recentTools = computed(() => {

@@ -92,6 +92,8 @@ Publishing the Release triggers `.github/workflows/build.yml`, which builds and 
 │   │   │   ├── SubagentInlineCard.vue
 │   │   │   ├── ToolCallCard.vue
 │   │   │   └── WelcomeMessage.vue
+│   │   ├── data/
+│   │   │   └── modelCatalog.json # Generated Ally-compatible provider/model quick-setup catalog
 │   │   └── utils/
 │   │       ├── ascii.js
 │   │       ├── config.mjs
@@ -100,6 +102,8 @@ Publishing the Release triggers `.github/workflows/build.yml`, which builds and 
 │   ├── wailsjs/              # Generated Wails JS/TS bindings
 │   ├── package.json
 │   └── vite.config.js
+├── scripts/
+│   └── generate-model-catalog.mjs # Regenerate frontend model presets from docs/model_api.json
 ├── third_party/             # Third-party license files (ripgrep)
 └── build/                    # Build assets and platform metadata
 ```
@@ -418,7 +422,7 @@ Text files:
 - must be UTF-8-ish text
 - reject binary/NUL content
 - return raw LF-normalized text that can be copied directly into `edit.changes[].oldText`
-- include metadata: `startLine`, `endLine`, `nextStartLine`, `totalLines`, `truncated`, `md5`, `lineEnding`
+- include metadata: `startLine`, `endLine`, `nextStartLine`, `totalLines`, `truncated`, `version`, `lineEnding`; `version` is a 12-character lowercase Crockford Base32 prefix derived from SHA-256 content and is compared case-insensitively
 
 Document files:
 
@@ -440,20 +444,20 @@ The model-facing `edit` tool has one cross-file batch exact-replacement mode. Li
 Edit parameters:
 
 - `files` (1–20 items)
-- each file contains `path`, required `expectedMd5` from `batch_read`, and 1–50 `changes`
+- each file contains `path`, required `version` from `batch_read`, and 1–50 `changes`
 - each change contains non-empty `oldText` and `newText`; one call permits at most 200 total changes
 
 Important edit contract:
 
 - Read the file first with `batch_read`.
-- `expectedMd5` is mandatory for model-facing local and remote edits. It is a short optimistic-concurrency token, not a security digest; a stale value fails with `E_VERSION_MISMATCH`.
-- Successful edits return `afterMd5` per file. It may be reused directly for a follow-up edit when the exact current `oldText` is already known; re-read only when content is unknown, external modification is possible, or a version/match error occurs.
-- Every `oldText` is matched against the same original MD5 snapshot and must occur exactly once.
+- `version` is mandatory for model-facing local and remote edits. It is a short optimistic-concurrency token; a stale value fails with `E_VERSION_MISMATCH`, and malformed values fail with `E_BAD_VERSION`.
+- Successful edits return the new `version` per file. It may be reused directly for a follow-up edit when the exact current `oldText` is already known; re-read only when content is unknown, external modification is possible, or a version/match error occurs.
+- Every `oldText` is matched against the same original version snapshot and must occur exactly once.
 - Matches must not overlap. The backend locates all matches first, applies them from the end of the file backward, and writes once.
 - All files are validated before writes. Any invalid, missing, ambiguous, overlapping, or stale change fails the entire call without modifying any file.
 - Empty `newText` deletes `oldText`; insertion replaces a unique anchor with the anchor plus inserted content.
 - Put all independent changes across affected files in one call to minimize model round trips. Each file is written once; a later commit failure triggers best-effort rollback of earlier writes.
-- `remote_edit` uses `{target, files}` and the same per-file `expectedMd5`/`changes` contract as local edit.
+- `remote_edit` uses `{target, files}` and the same per-file `version`/`changes` contract as local edit.
 - Multiple file mutations targeting the same normalized local or remote path in one tool-call batch are all rejected with `E_WRITE_BATCH_CONFLICT`; no mutation for that path is executed.
 - Built-in file mutations execute in `toolCallIndex` order after non-file tools complete.
 - backend compatibility APIs may continue using SHA-256 and exact-string helpers internally
@@ -755,7 +759,7 @@ Frontend utility tests cover:
 - Background-process state contains active processes only. Records are removed after `cmd.Wait()` completes, and the backend rejects starts beyond the 8-process active limit.
 - The model-facing `wait` tool is for short, concrete asynchronous delays only. It is limited to 600 seconds, disabled in grill mode, and displayed in the UI with a local countdown.
 - Grill mode is session-local and request-scoped through `ChatRequest.grillMode`. The backend enforces an `ask`-only interview protocol: plain-text questions are retried, while a marked no-questions-left summary ends the mode and returns the session to YOLO. Side-effectful and MCP tools remain filtered and execution-guarded. Users may switch from an active Grill ask back to YOLO, which cancels the pending run.
-- The composer footer owns a two-option run-mode switch: YOLO is the default execution mode and GRILL is the session-local interview mode.
+- The composer footer owns a two-option run-mode switch: YOLO is the default execution mode and GRILL is the session-local interview mode. Its model picker groups presets by normalized provider, sorts providers and model IDs naturally, and opens with the active provider expanded while other groups remain collapsible.
 - `render_html` completion updates the original tool card with one sandboxed iframe rather than appending a second result card.
 - `web_fetch` keeps the default readable-page payload intact for model context. HTTP/web results use a larger dedicated model cap and include explicit reduction metadata only when that cap is exceeded.
 - The scheduled-task drawer is opened from `ComposerInfoBar`, displays full task state and latest output, and supports manual deletion/cancellation. Model-facing `scheduled_task.list` returns bounded metadata without stored output and must not be polled.
@@ -765,6 +769,6 @@ Frontend utility tests cover:
 - Full skill Markdown is loaded only by explicit user slash command or enabled `Skill` tool call.
 - Settings → Skills manages enable/disable state and does not inject full skill content.
 - Settings → MCP manages raw MCP JSON and reconnects servers.
-- Settings → Models owns provider presets and the current active provider/model.
+- Settings → Models owns provider presets and the current active provider/model. Known provider/model quick setup is generated from `docs/model_api.json` into a compact, lazily loaded frontend catalog; only Ally-compatible text-output models with tool calling are included, while custom configuration remains available. Model presets can be exported as unencrypted JSON (including API keys) and incrementally imported; normalized `providerName + model` is the identity, matching entries are replaced, and unrelated presets are retained.
 - The model editor's connection test sends one isolated minimal request using the unsaved form values; it does not mutate or persist the active configuration.
 - The context popover should keep system prompt parts separate, especially AGENTS.md/project instructions.
