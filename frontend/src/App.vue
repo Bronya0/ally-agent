@@ -120,7 +120,12 @@
                   ref="promptInputRef"
                   v-model:value="promptText"
                   type="textarea"
-                  :input-props="{ onPaste: handlePromptPaste }"
+                  :input-props="{
+                    onPaste: handlePromptPaste,
+                    onCompositionstart: handlePromptCompositionStart,
+                    onCompositionend: handlePromptCompositionEnd,
+                    'data-ally-prompt-input': 'true',
+                  }"
                   :autosize="{ minRows: 2, maxRows: 5 }"
                   :placeholder="$t('app.composer.placeholder')"
                   @keydown="handlePromptKeydown"
@@ -286,6 +291,8 @@ onErrorCaptured((err, _instance, info) => {
 const messageScrollbar = ref(null); // kept for scrollMessagesToBottom to work via chatMessagesRef
 const chatMessagesRef = ref(null);
 const promptInputRef = ref(null);
+const promptComposing = ref(false);
+let promptCompositionEndedAt = 0;
 
 const themeOverrides = {
   common: {
@@ -3652,7 +3659,21 @@ function handlePromptInput() {
   }
 }
 
+function handlePromptCompositionStart() {
+  promptComposing.value = true;
+}
+
+function handlePromptCompositionEnd() {
+  promptComposing.value = false;
+  promptCompositionEndedAt = performance.now();
+}
+
 function handlePromptKeydown(event) {
+  // macOS WebKit may emit Enter just after compositionend and report isComposing=false.
+  // keyCode 229 and the short post-composition guard cover those event-order variants.
+  const justCommittedComposition = event.key === 'Enter' && performance.now() - promptCompositionEndedAt < 100;
+  if (promptComposing.value || event.isComposing || event.keyCode === 229 || justCommittedComposition) return;
+
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'c') {
     // Only intercept Ctrl+C as interrupt when there is no text selection to copy
     const hasSelection = window.getSelection?.().toString().length > 0;
@@ -5716,7 +5737,11 @@ function handleGlobalKeydown(event) {
     return;
   }
   if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
-  if ((event.key === 'ArrowLeft' || event.key === 'ArrowRight') && isEditableNavigationTarget(event.target)) return;
+  if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+  if (isEditableNavigationTarget(event.target)) {
+    const isEmptyPrompt = event.target?.closest?.('[data-ally-prompt-input="true"]') && promptText.value.length === 0;
+    if (!isEmptyPrompt) return;
+  }
   if (event.key === 'ArrowLeft') {
     event.preventDefault();
     switchWorkspaceByOffset(-1);

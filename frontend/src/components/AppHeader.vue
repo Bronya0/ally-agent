@@ -134,7 +134,8 @@ function historyMenuProps() {
   display: flex;
   align-items: stretch;
   background: #242424 !important;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  border-bottom: none;
+  box-shadow: inset 0 -1px rgba(255, 255, 255, 0.08);
   --wails-draggable: drag;
   gap: 4px;
 }
