@@ -955,6 +955,12 @@ func TestLooksLikeLongRunningServiceAllowsOrdinaryListCommand(t *testing.T) {
 	if looksLikeLongRunningService("ls -la") {
 		t.Fatal("ls -la must not be classified as a long-running service")
 	}
+	if looksLikeLongRunningService("npx vite build") {
+		t.Fatal("vite build must not be classified as a long-running service")
+	}
+	if looksLikeLongRunningService("vite") {
+		t.Fatal("bare vite is not on the whitelist and must not be blocked")
+	}
 }
 
 func TestCommandSafetyAllowsCmdSlashCOption(t *testing.T) {

@@ -543,8 +543,14 @@ func normalizeServiceCommand(command string) string {
 	return strings.ToLower(strings.Join(strings.Fields(command), " "))
 }
 
+// looksLikeLongRunningService only blocks an explicit whitelist of known dev-server
+// commands. Anything else continues to the normal run_command safety checks/timeouts.
 func looksLikeLongRunningService(command string) bool {
 	cmd := normalizeServiceCommand(command)
+	if cmd == "" {
+		return false
+	}
+	// Whitelist only: miss => allow run_command.
 	patterns := []string{
 		"manage.py runserver",
 		"flask run",
@@ -552,13 +558,17 @@ func looksLikeLongRunningService(command string) bool {
 		"hypercorn ",
 		"fastapi dev",
 		"npm run dev",
+		"pnpm run dev",
 		"pnpm dev",
+		"yarn run dev",
 		"yarn dev",
+		"bun run dev",
 		"bun dev",
-		"vite",
 		"next dev",
 		"nuxt dev",
 		"wails dev",
+		"vite preview",
+		"vite dev",
 	}
 	for _, pattern := range patterns {
 		if strings.Contains(cmd, pattern) {

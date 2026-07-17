@@ -66,7 +66,7 @@
         <span>{{ errorDescription(msg) }}</span>
         <code>{{ msg.errorCode }}</code>
       </div>
-      <pre v-if="msg.body" class="tool-error-reason">{{ msg.body }}</pre>
+      <pre v-if="errorReasonText(msg)" class="tool-error-reason">{{ errorReasonText(msg) }}</pre>
     </div>
   </div>
 </template>
@@ -77,6 +77,7 @@ import hljs from 'highlight.js/lib/core';
 import bash from 'highlight.js/lib/languages/bash';
 import powershell from 'highlight.js/lib/languages/powershell';
 import { highlightShellCommand } from '../utils/shellHighlight.mjs';
+import { formatToolErrorBody } from '../utils/toolError.mjs';
 import { t } from '../i18n.mjs';
 
 const BODY_PREVIEW_LINES = 6;
@@ -251,10 +252,14 @@ function toolBodyText(msg) {
 
 function errorDescription(msg) {
   const code = msg.errorCode;
-  if (!code) return String(msg.body || '');
+  if (!code) return errorReasonText(msg) || String(msg.body || '');
   const key = `tools.error.${code}`;
   const translated = t(key);
   return translated !== key ? translated : t('tools.error.unknown');
+}
+
+function errorReasonText(msg) {
+  return formatToolErrorBody(msg?.body);
 }
 
 function hasEditPreview(msg) {
