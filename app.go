@@ -1452,7 +1452,12 @@ func (a *App) handleSkillToolCall(skillName, skillArgs string) (map[string]any, 
 				return nil, fmt.Errorf("failed to read skill: %w", err)
 			}
 
-			loadedBlock := renderSkillLoadedBlock(sk.Name, sk.Source, sk.Dir, skillArgs, string(content))
+			loadedContent := string(content)
+			if tree := buildSkillDirTree(sk.Dir, sk.Path); tree != "" {
+				loadedContent = loadedContent + "\n" + tree
+			}
+
+			loadedBlock := renderSkillLoadedBlock(sk.Name, sk.Source, sk.Dir, skillArgs, loadedContent)
 			return map[string]any{
 				"loaded":  true,
 				"name":    sk.Name,
@@ -1462,6 +1467,40 @@ func (a *App) handleSkillToolCall(skillName, skillArgs string) (map[string]any, 
 		}
 	}
 	return nil, fmt.Errorf("skill %q is disabled or not found in the current skill listing", skillName)
+}
+
+// buildSkillDirTree returns a compact one-level listing of the skill directory
+// (excluding the already-loaded SKILL.md and hidden files) so the model can see
+// which additional files it may read under the skill's dir. Returns an empty
+// string when the dir is empty, missing, or contains no publishable entries.
+func buildSkillDirTree(dir, loadedPath string) string {
+	if dir == "" {
+		return ""
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return ""
+	}
+	loadedName := filepath.Base(loadedPath)
+	var lines []string
+	for _, entry := range entries {
+		name := entry.Name()
+		if strings.HasPrefix(name, ".") {
+			continue
+		}
+		if strings.EqualFold(name, loadedName) {
+			continue
+		}
+		if entry.IsDir() {
+			lines = append(lines, "- "+name+"/")
+		} else {
+			lines = append(lines, "- "+name)
+		}
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	return "<!-- skill dir tree (one level, use batch_read to read any of these) -->\n" + strings.Join(lines, "\n")
 }
 
 // renderSkillLoadedBlock builds <kimi-skill-loaded name="..." source="..." dir="..." args="...">
@@ -1542,6 +1581,28 @@ func scanSkillDir(dir string, source string, skills *[]SkillDefinition, seen map
 	}
 }
 
+// commonDocumentNames lists lowercase file stems (without extension) that are
+// treated as documentation rather than skills when a Markdown file has no
+// usable YAML frontmatter. Files with explicit frontmatter declaring a name
+// are still treated as skills even if their stem matches this list.
+var commonDocumentNames = map[string]bool{
+	"readme":               true,
+	"license":              true,
+	"licence":              true,
+	"copying":              true,
+	"notice":               true,
+	"changelog":            true,
+	"changes":              true,
+	"history":              true,
+	"contributing":         true,
+	"authors":              true,
+	"contributors":         true,
+	"code_of_conduct":      true,
+	"security":             true,
+	"third_party":          true,
+	"third_party_notices":  true,
+}
+
 func parseSkillFile(path string) SkillDefinition {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -1575,7 +1636,13 @@ func parseSkillFile(path string) SkillDefinition {
 	}
 	// Fallback: use filename (without .md extension)
 	base := filepath.Base(path)
-	meta.Name = strings.TrimSuffix(base, filepath.Ext(base))
+	stem := strings.TrimSuffix(base, filepath.Ext(base))
+	if commonDocumentNames[strings.ToLower(stem)] {
+		// Documentation files (readme, license, ...) without usable
+		// frontmatter are not skills.
+		return SkillDefinition{Path: path}
+	}
+	meta.Name = stem
 	if filepath.Base(filepath.Dir(path)) == meta.Name {
 		// Directory skill: SKILL.md -> use parent dir name
 		meta.Name = filepath.Base(filepath.Dir(path))
@@ -3145,7 +3212,7 @@ func buildSystemPromptParts(allSkills []SkillDefinition, workspaceRoot, customPr
 	// Inject skills metadata listing (not full content)
 	if listing := buildSkillListingMeta(allSkills); listing != "" {
 		var skills strings.Builder
-		skills.WriteString("\n\n# Skills\n\nUse the `Skill` tool when the user requests a listed skill or the task clearly matches it. Do not load skills unnecessarily or read skill files directly. The list is deduplicated with project scope taking precedence.\n\n## Available skills\n")
+		skills.WriteString("\n\n# Skills\n\nUse the `Skill` tool when the user requests a listed skill or the task clearly matches it. Do not load skills unnecessarily. Do not read `SKILL.md` directly with `batch_read`; always load skills through the `Skill` tool. After a skill is loaded, you MAY use `batch_read` to read additional files referenced by the skill under its `dir` (for example `references/*.md` or other sibling files listed in the loaded block). The list is deduplicated with project scope taking precedence.\n\n## Available skills\n")
 		skills.WriteString(listing)
 		parts = append(parts, systemPromptPart{label: "技能元数据", content: skills.String()})
 	}
