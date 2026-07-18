@@ -1092,6 +1092,14 @@ const missingDependencyWarningsShown = new Set();
 let streamFlushScheduled = false;
 let streamFlushTimer = 0;
 let runtimeEventsBound = false;
+// tool:update events carry the full accumulated arguments on every emit.
+// During large payload streams (e.g. create_file with thousands of lines)
+// processing each event synchronously blocks the main thread, freezes the
+// tool card, and balloons webview memory. Buffer the latest event per tool
+// call and flush on a timer so the UI repaints between updates.
+const toolUpdateBuffers = new Map();
+let toolUpdateFlushScheduled = false;
+let toolUpdateFlushTimer = 0;
 let completionAudioContext = null;
 let lastCompletionSoundAt = 0;
 const pendingAttachments = ref([]);
@@ -2235,6 +2243,47 @@ function flushStreamBuffer(runId) {
   }
 }
 
+// Buffer the latest tool:update event per tool call and flush on a timer so
+// the main thread is not blocked by parsing/re-rendering large streaming
+// argument payloads (e.g. create_file content) on every delta.
+function bufferToolUpdate(data) {
+  flushStreamBuffer(data.runId);
+  const session = sessionByRunId(data.runId);
+  if (!session) return;
+  if (session.id === activeSessionId.value) thinking.value = false;
+  toolUpdateBuffers.set(toolEventId(data), data);
+  scheduleToolUpdateFlush();
+}
+
+function scheduleToolUpdateFlush() {
+  if (toolUpdateFlushScheduled) return;
+  toolUpdateFlushScheduled = true;
+  toolUpdateFlushTimer = window.setTimeout(() => {
+    window.requestAnimationFrame(() => {
+      toolUpdateFlushTimer = 0;
+      toolUpdateFlushScheduled = false;
+      flushToolUpdateBuffer();
+    });
+  }, 120);
+}
+
+function flushToolUpdateBuffer() {
+  if (toolUpdateFlushTimer) {
+    clearTimeout(toolUpdateFlushTimer);
+    toolUpdateFlushTimer = 0;
+    toolUpdateFlushScheduled = false;
+  }
+  if (toolUpdateBuffers.size === 0) return;
+  const entries = [...toolUpdateBuffers.values()];
+  toolUpdateBuffers.clear();
+  for (const data of entries) {
+    const session = sessionByRunId(data.runId);
+    if (!session) continue;
+    const title = makeToolTitle(data.name, data.args, data);
+    updateToolEvent(toolEventId(data), data.name, title, data.args || '', 'running', data, session);
+  }
+}
+
 function setLastAssistantRoundDuration(session, durationMs) {
   if (!session) return;
   const text = formatDurationShort(durationMs);
@@ -2444,8 +2493,12 @@ function bindRuntimeEvents() {
     const title = makeToolTitle(data.name, data.args, data);
     updateToolEvent(toolEventId(data), data.name, title, data.args || '', 'running', data, session);
   };
+  // tool:start must create the card immediately so the user sees the tool
+  // call appear. tool:update carries the growing accumulated arguments and is
+  // throttled via bufferToolUpdate to avoid blocking the main thread when
+  // streaming large payloads (e.g. create_file with thousands of lines).
   onRuntimeEvent('tool:start', applyToolProgressEvent);
-  onRuntimeEvent('tool:update', applyToolProgressEvent);
+  onRuntimeEvent('tool:update', bufferToolUpdate);
   onRuntimeEvent('ask:ready', (data) => {
     const session = sessionByEvent(data);
     if (!session) return;
@@ -2483,6 +2536,7 @@ function bindRuntimeEvents() {
   });
   onRuntimeEvent('tool:result', (data) => {
     flushStreamBuffer(data.runId);
+    flushToolUpdateBuffer();
     const session = sessionByEvent(data);
     if (!session) return;
     const eventId = toolEventId(data);
@@ -2609,6 +2663,7 @@ function bindRuntimeEvents() {
   });
   onRuntimeEvent('tool:error', (data) => {
     flushStreamBuffer(data.runId);
+    flushToolUpdateBuffer();
     const session = sessionByEvent(data);
     if (!session) return;
     const eventId = toolEventId(data);
@@ -2648,6 +2703,7 @@ function bindRuntimeEvents() {
   });
   onRuntimeEvent('run:done', (data) => {
     flushStreamBuffer(data.runId);
+    flushToolUpdateBuffer();
     const session = sessionByTerminalEvent(data);
     if (!session) return;
     if (session.id === activeSessionId.value) thinking.value = false;
@@ -2682,6 +2738,7 @@ function bindRuntimeEvents() {
   });
   onRuntimeEvent('run:error', (data) => {
     flushStreamBuffer(data.runId);
+    flushToolUpdateBuffer();
     const session = sessionByTerminalEvent(data);
     if (!session) return;
     if (session.id === activeSessionId.value) thinking.value = false;
@@ -2711,6 +2768,7 @@ function bindRuntimeEvents() {
   });
   onRuntimeEvent('run:cancelled', (data) => {
     flushStreamBuffer(data.runId);
+    flushToolUpdateBuffer();
     const session = sessionByTerminalEvent(data);
     if (!session) return;
     if (session.id === activeSessionId.value) thinking.value = false;
@@ -5820,6 +5878,10 @@ onUnmounted(() => {
   streamFlushTimer = 0;
   streamFlushScheduled = false;
   streamBuffers.clear();
+  if (toolUpdateFlushTimer) window.clearTimeout(toolUpdateFlushTimer);
+  toolUpdateFlushTimer = 0;
+  toolUpdateFlushScheduled = false;
+  toolUpdateBuffers.clear();
   mermaidObserver?.disconnect();
   mermaidObserver = null;
   for (const node of mermaidObservedNodes) node._mermaidCleanup?.();

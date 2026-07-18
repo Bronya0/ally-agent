@@ -4873,7 +4873,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 					toolCalls[i].Type = openai.ToolTypeFunction
 				}
 			}
-			for _, event := range toolProgress.events(runID, sessionID, toolBatchID, toolCalls, a.mcpToolEventMeta) {
+			for _, event := range toolProgress.forceEvents(runID, sessionID, toolBatchID, toolCalls, a.mcpToolEventMeta) {
 				a.emit(event.Name, event.Payload)
 			}
 			messages = append(messages, openai.ChatCompletionMessage{
@@ -5580,33 +5580,72 @@ type toolCallProgressEvent struct {
 type toolCallProgressTracker struct {
 	started   map[int]bool
 	lastState map[int]string
+	lastEmit  map[int]time.Time
 }
+
+// toolUpdateThrottle bounds how often a tool:update event is emitted for a
+// single tool call while streaming large argument payloads. Without this,
+// streaming a large create_file payload produces one event per delta, each
+// carrying the full accumulated arguments, which is O(N^2) in data transfer
+// and floods the frontend webview (causing frozen UI and multi-GB memory
+// growth). The final state is always emitted via forceEvents after the stream
+// completes, so throttling only drops intermediate previews.
+const (
+	toolUpdateThrottle          = 200 * time.Millisecond
+	toolUpdateThreshold  = 2048 // only throttle when args exceed this size
+)
 
 func newToolCallProgressTracker() *toolCallProgressTracker {
 	return &toolCallProgressTracker{
 		started:   map[int]bool{},
 		lastState: map[int]string{},
+		lastEmit:  map[int]time.Time{},
 	}
 }
 
 func (t *toolCallProgressTracker) events(runID, sessionID, batchID string, toolCalls []openai.ToolCall, metaForName func(string) map[string]any) []toolCallProgressEvent {
+	return t.eventsWithForce(runID, sessionID, batchID, toolCalls, metaForName, false)
+}
+
+// forceEvents emits the current state ignoring the update throttle. It is used
+// for the final emit after streaming completes so the frontend always receives
+// the complete arguments even if the last intermediate update was throttled.
+func (t *toolCallProgressTracker) forceEvents(runID, sessionID, batchID string, toolCalls []openai.ToolCall, metaForName func(string) map[string]any) []toolCallProgressEvent {
+	return t.eventsWithForce(runID, sessionID, batchID, toolCalls, metaForName, true)
+}
+
+func (t *toolCallProgressTracker) eventsWithForce(runID, sessionID, batchID string, toolCalls []openai.ToolCall, metaForName func(string) map[string]any, force bool) []toolCallProgressEvent {
 	if t == nil {
 		return nil
 	}
+	now := time.Now()
 	events := make([]toolCallProgressEvent, 0)
 	for idx, call := range toolCalls {
 		if call.ID == "" && call.Type == "" && call.Function.Name == "" && call.Function.Arguments == "" {
 			continue
+		}
+		// Early throttle check for large argument payloads. Constructing the
+		// state string (which includes the full accumulated arguments) is
+		// O(len(args)), and comparing it is another O(len(args)). For a large
+		// create_file payload with thousands of deltas this wastes CPU even
+		// when the event is going to be throttled. Skip the state work entirely
+		// when we're within the throttle window for an already-started tool.
+		started := t.started[idx]
+		if started && !force && len(call.Function.Arguments) > toolUpdateThreshold {
+			if last, ok := t.lastEmit[idx]; ok && now.Sub(last) < toolUpdateThrottle {
+				continue
+			}
 		}
 		state := call.ID + "\x00" + string(call.Type) + "\x00" + call.Function.Name + "\x00" + call.Function.Arguments
 		if t.lastState[idx] == state {
 			continue
 		}
 		eventName := "tool:update"
-		if !t.started[idx] {
+		if !started {
 			eventName = "tool:start"
 			t.started[idx] = true
 		}
+		t.lastEmit[idx] = now
 		payload := map[string]any{
 			"runId":         runID,
 			"sessionId":     sessionID,

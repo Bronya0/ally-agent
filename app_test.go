@@ -346,6 +346,81 @@ func TestToolCallProgressTrackerEmitsStreamingUpdates(t *testing.T) {
 	}
 }
 
+// TestToolCallProgressTrackerThrottlesLargeUpdates verifies that large
+// streaming argument payloads (e.g. create_file with thousands of lines) are
+// throttled to avoid flooding the frontend with O(N^2) data, while small
+// payloads pass through unchanged and forceEvents always emits the final state.
+func TestToolCallProgressTrackerThrottlesLargeUpdates(t *testing.T) {
+	tracker := newToolCallProgressTracker()
+	toolCalls := []openai.ToolCall{}
+	idx := 0
+
+	// Large initial payload (above toolUpdateThreshold) emits tool:start.
+	largePrefix := `{"path":"big.txt","content":"`
+	largeSuffix := strings.Repeat("a", toolUpdateThreshold+100) + `"`
+	mergeToolCallDeltas(&toolCalls, []openai.ToolCall{{
+		Index: &idx,
+		ID:    "call_big",
+		Type:  openai.ToolTypeFunction,
+		Function: openai.FunctionCall{
+			Name:      "create_file",
+			Arguments: largePrefix + largeSuffix,
+		},
+	}})
+	events := tracker.events("run-1", "session-1", "0:0", toolCalls, nil)
+	if len(events) != 1 || events[0].Name != "tool:start" {
+		t.Fatalf("expected one tool:start for large payload, got %#v", events)
+	}
+
+	// A rapid second update with still-large args should be throttled to zero.
+	mergeToolCallDeltas(&toolCalls, []openai.ToolCall{{
+		Index: &idx,
+		Function: openai.FunctionCall{
+			Arguments: `more"`,
+		},
+	}})
+	if events = tracker.events("run-1", "session-1", "0:0", toolCalls, nil); len(events) != 0 {
+		t.Fatalf("expected throttled update to emit nothing, got %#v", events)
+	}
+
+	// forceEvents ignores the throttle and always emits the final state.
+	if events = tracker.forceEvents("run-1", "session-1", "0:0", toolCalls, nil); len(events) != 1 {
+		t.Fatalf("expected forceEvents to emit the final state, got %#v", events)
+	}
+	if events[0].Name != "tool:update" {
+		t.Fatalf("expected tool:update from forceEvents, got %q", events[0].Name)
+	}
+	if events[0].Payload["args"] != largePrefix+largeSuffix+`more"` {
+		t.Fatalf("expected full accumulated args from forceEvents, got %#v", events[0].Payload["args"])
+	}
+
+	// Small payloads (below threshold) are never throttled.
+	smallTracker := newToolCallProgressTracker()
+	smallCalls := []openai.ToolCall{}
+	sidx := 0
+	mergeToolCallDeltas(&smallCalls, []openai.ToolCall{{
+		Index: &sidx,
+		ID:    "call_small",
+		Type:  openai.ToolTypeFunction,
+		Function: openai.FunctionCall{
+			Name:      "list_files",
+			Arguments: `{"path":"."}`,
+		},
+	}})
+	if events := smallTracker.events("run-1", "session-1", "0:0", smallCalls, nil); len(events) != 1 || events[0].Name != "tool:start" {
+		t.Fatalf("expected tool:start for small payload, got %#v", events)
+	}
+	mergeToolCallDeltas(&smallCalls, []openai.ToolCall{{
+		Index: &sidx,
+		Function: openai.FunctionCall{
+			Arguments: `,"depth":2}`,
+		},
+	}})
+	if events = smallTracker.events("run-1", "session-1", "0:0", smallCalls, nil); len(events) != 1 || events[0].Name != "tool:update" {
+		t.Fatalf("expected unthrottled tool:update for small payload, got %#v", events)
+	}
+}
+
 func TestBuildMessagesWithFrontendMessagesKeepsSavedToolActivity(t *testing.T) {
 	app := NewApp()
 	sessionID := "session-with-tools"
