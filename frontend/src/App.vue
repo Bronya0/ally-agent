@@ -1613,9 +1613,9 @@ function buildWelcomeMessage(workspacePath = '') {
   if (workspacePath !== null) {
     rows.push({ kind: 'workspace', label: t('common.workspace'), value: workspacePath || t('common.notSelected') });
   }
-  const gitBashDir = gitBashDirectory(config.gitBashPath);
-  if (gitBashDir) {
-    rows.push({ kind: 'gitbash', label: t('welcome.gitBash'), value: gitBashDir });
+  const gitBashPath = String(config.gitBashPath || '').trim();
+  if (gitBashPath) {
+    rows.push({ kind: 'gitbash', label: t('welcome.gitBash'), value: gitBashPath });
   }
   rows.push({ kind: 'model', label: t('common.model'), value: `${config.providerName || '-'} · ${config.model || '-'}` });
   rows.push({ kind: 'mcp', label: 'MCP', value: formatMcpSummary() });
@@ -1634,13 +1634,6 @@ function buildWelcomeMessage(workspacePath = '') {
   };
 }
 
-function gitBashDirectory(shellPath = '') {
-  const value = String(shellPath || '').trim().replace(/[\\/]+$/, '');
-  if (!value) return '';
-  if (!/bash(?:\.exe)?$/i.test(value)) return value;
-  return value.replace(/[\\/][^\\/]+$/, '') || value;
-}
-
 function formatMcpSummary() {
   const servers = Array.isArray(mcpServers.value) ? mcpServers.value : [];
   const connected = servers.filter((srv) => srv.status === 'connected').length;
@@ -1652,14 +1645,14 @@ function formatMcpSummary() {
 
 function updateWelcomeMcpRows() {
   const value = formatMcpSummary();
-  const gitBashDir = gitBashDirectory(config.gitBashPath);
+  const gitBashPath = String(config.gitBashPath || '').trim();
   for (const session of sessions.value) {
     for (const msg of session.messages || []) {
       if (!msg.welcome || !Array.isArray(msg.welcome.rows)) continue;
       const rows = msg.welcome.rows.filter((row) => row.kind !== 'commands' && row.label !== '指令' && row.label !== 'Commands' && row.kind !== 'gitbash');
-      if (gitBashDir) {
+      if (gitBashPath) {
         const workspaceIndex = rows.findIndex((row) => row.kind === 'workspace' || row.label === '工作区' || row.label === 'Workspace');
-        rows.splice(workspaceIndex >= 0 ? workspaceIndex + 1 : 0, 0, { kind: 'gitbash', label: t('welcome.gitBash'), value: gitBashDir });
+        rows.splice(workspaceIndex >= 0 ? workspaceIndex + 1 : 0, 0, { kind: 'gitbash', label: t('welcome.gitBash'), value: gitBashPath });
       }
       const existing = rows.find((row) => row.kind === 'mcp' || row.label === 'MCP');
       if (existing) existing.value = value;
