@@ -202,6 +202,29 @@ watch(logVisible, (visible) => {
   }
 });
 
+// Stop the polling loop if the service stops while the log viewer is still
+// open — previously the 1.5s GetServiceOutput calls kept firing until the
+// user closed the modal, even though the data had gone static.
+watch(logServiceActive, (active) => {
+  if (!active && logRefreshTimer) {
+    window.clearInterval(logRefreshTimer);
+    logRefreshTimer = 0;
+  }
+});
+
+// Sync logServiceActive with the services prop so the watch above fires when
+// the service backing the open log modal stops running. Without this,
+// logServiceActive only updates on openServiceLog() and would stay true until
+// the modal closes — even though the underlying service had stopped.
+watch(() => props.services, () => {
+  if (!logServiceId.value) return;
+  const svc = props.services.find((s) => s?.id === logServiceId.value);
+  const stillActive = svc ? isActiveService(svc) : false;
+  if (logServiceActive.value !== stillActive) {
+    logServiceActive.value = stillActive;
+  }
+}, { deep: false });
+
 onUnmounted(() => {
   if (logRefreshTimer) window.clearInterval(logRefreshTimer);
 });

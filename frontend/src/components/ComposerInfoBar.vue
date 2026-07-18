@@ -145,7 +145,7 @@ ${content}
 }
 
 function exportLastResponse() {
-  const msgs = props.sessionMessages;
+  const msgs = props.getSessionMessages();
   if (!msgs || !msgs.length) return;
   // Find the last assistant message with content
   let lastAssistant = null;
@@ -162,7 +162,7 @@ function exportLastResponse() {
 }
 
 function exportFullSession() {
-  const msgs = props.sessionMessages;
+  const msgs = props.getSessionMessages();
   if (!msgs || !msgs.length) return;
   const parts = [];
   parts.push(`# ${props.sessionTitle || t('app.export.sessionTitle')}\n`);
@@ -194,7 +194,11 @@ const props = defineProps({
   running: { type: Boolean, default: false },
   gitStatus: { type: Object, default: () => ({ isRepo: false }) },
   contextBreakdown: { type: Object, default: null },
-  sessionMessages: { type: Array, default: () => [] },
+  // Lazy getter for the session's messages array — only invoked when the user
+  // actually triggers an export. Passing the full array as a prop forced Vue
+  // to diff the entire array on every streaming delta / history mutation,
+  // even though ComposerInfoBar's template never reads sessionMessages.
+  getSessionMessages: { type: Function, default: () => [] },
   sessionTitle: { type: String, default: '' },
   contextPercent: { type: String, default: '0.0%' },
   contextUsed: { type: String, default: '0' },

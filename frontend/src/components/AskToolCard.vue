@@ -106,10 +106,14 @@ const answers = reactive({});
 const questions = computed(() => Array.isArray(props.msg.askQuestions) ? props.msg.askQuestions : []);
 const activeQuestion = computed(() => questions.value[activeIndex.value] || null);
 
-watch(questions, (next) => {
-  for (const question of next) answerState(question.id);
-  if (activeIndex.value >= next.length) activeIndex.value = Math.max(0, next.length - 1);
-}, { immediate: true, deep: true });
+// questions.length is sufficient to trigger lazy initialization of answer
+// state and bounds-correct activeIndex. A previous deep:true watch walked the
+// entire questions tree (options, labels, descriptions) on every reactive
+// tick — pure overhead, since answerState() is lazy and only needs the id list.
+watch(() => questions.value.length, (count) => {
+  for (const question of questions.value) answerState(question.id);
+  if (activeIndex.value >= count) activeIndex.value = Math.max(0, count - 1);
+}, { immediate: true });
 
 function answerState(questionId) {
   if (!answers[questionId]) {

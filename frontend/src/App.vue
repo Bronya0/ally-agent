@@ -29,11 +29,11 @@
                 <ChatMessages
                   ref="chatMessagesRef"
                   :messages="displayMessages"
-                  :last-user-msg-index="lastUserMsgIndex"
                   :focused-id="focusedToolId"
                   :render-fn="renderMarkdown"
                   :fmt-k="fmtK"
                   :tools="visibleAvailableTools"
+                  :mcp-servers="mcpServers"
                   @toggle-archive="toggleArchiveMessages"
                   @toggle-tool="toggleToolExpand"
                   @focus-tool="focusTool"
@@ -162,7 +162,7 @@
                   @jump-question="jumpToUserQuestion"
                   @set-run-mode="setRunMode"
                   @open-task-center="openTaskCenter"
-                  :session-messages="activeMessages"
+                  :get-session-messages="() => activeMessages"
                   :session-title="activeSession?.title || ''"
                 />
               </div>
@@ -226,8 +226,6 @@ import {
   GetSubagents,
   GetGitStatus,
   ReloadConfig,
-  ListFiles,
-  ReadFile,
   SaveConfig,
   SelectWorkspace,
   StartChat,
@@ -289,7 +287,6 @@ onErrorCaptured((err, _instance, info) => {
   return false;
 });
 
-const messageScrollbar = ref(null); // kept for scrollMessagesToBottom to work via chatMessagesRef
 const chatMessagesRef = ref(null);
 const promptInputRef = ref(null);
 const promptComposing = ref(false);
@@ -330,6 +327,14 @@ const themeOverrides = {
     colorFocus: '#1a1a1a',
     border: '1px solid rgba(255,255,255,0.12)',
     borderFocus: '1px solid rgba(255,255,255,0.32)',
+  },
+  // Switch 开启态默认沿用 primaryColor（#d4d4d4 灰白），与关闭态（灰）
+  // 区分度太低，看着像没开。这里单独覆盖为项目"激活/已连接"语义的绿色，
+  // 与 session-running / mcp-status-dot.connected 一致。不影响其它依赖
+  // primaryColor 的组件（n-button / n-checkbox / n-tag 等）。
+  Switch: {
+    railColorActive: '#4ade80',
+    loadingColor: '#4ade80',
   },
 };
 
@@ -524,12 +529,30 @@ function ensureMermaidObserver() {
 }
 
 function cleanupDisconnectedMermaidNodes() {
+  let removedAny = false;
   for (const node of mermaidObservedNodes) {
     if (node.isConnected) continue;
     mermaidObserver?.unobserve(node);
     node._mermaidCleanup?.();
     removeMermaidCache(node._mermaidCacheKey);
     mermaidObservedNodes.delete(node);
+    removedAny = true;
+  }
+  // If we removed anything, schedule a self-cleanup pass to drop more
+  // disconnected nodes that may surface after this batch. Without this,
+  // a session that only swaps messages (no archive toggle) would never
+  // call cleanupDisconnectedMermaidNodes again, and orphan nodes with
+  // their 7 event listeners + closures would leak until the next switch.
+  if (removedAny) {
+    requestAnimationFrame(() => {
+      for (const node of mermaidObservedNodes) {
+        if (node.isConnected) continue;
+        mermaidObserver?.unobserve(node);
+        node._mermaidCleanup?.();
+        removeMermaidCache(node._mermaidCacheKey);
+        mermaidObservedNodes.delete(node);
+      }
+    });
   }
 }
 
@@ -938,13 +961,21 @@ function handleCodeCopyClick(event) {
 
   const showCopied = () => {
     if (!document.body.contains(btn)) return;
+    // Clear any previous restore timer so a rapid second click doesn't
+    // restore the original innerHTML early — multiple stacked timers each
+    // captured different "original" states and the last-to-fire would
+    // overwrite an in-flight copy icon. Clearing before starting keeps
+    // the cycle (original → checkmark → original) well-ordered.
+    if (btn._copyTimer) {
+      clearTimeout(btn._copyTimer);
+      btn._copyTimer = null;
+    }
     const original = btn.innerHTML;
     btn.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><polyline points="20 6 9 17 4 12" fill="none" stroke="currentColor" stroke-width="2"/></svg>';
-    const timer = setTimeout(() => {
+    btn._copyTimer = setTimeout(() => {
       if (document.body.contains(btn)) btn.innerHTML = original;
+      btn._copyTimer = null;
     }, 1500);
-    // Store timer on the element so it can be cleared if needed
-    btn._copyTimer = timer;
   };
 
   if (navigator.clipboard?.writeText) {
@@ -1034,12 +1065,6 @@ const config = reactive(defaultConfig());
 const configDraft = reactive(defaultConfig());
 const sessions = ref([]);
 const activeSessionId = ref('');
-const activeRunId = ref('');
-const files = ref([]);
-const filePreview = ref(t('app.filePreview.empty'));
-const previewTitle = ref(t('app.filePreview.title'));
-const currentPreview = ref('');
-const currentFileDir = ref('');
 const sessionPromptTexts = reactive({});
 const promptText = computed({
   get: () => sessionPromptTexts[activeSessionId.value] || '',
@@ -1078,7 +1103,6 @@ const servicesLoading = ref(false);
 const scheduledTaskDeletingIds = ref([]);
 const serviceStoppingIds = ref([]);
 const subRuns = ref([]);
-const thinking = ref(false);
 const modelEditorVisible = ref(false);
 const modelEditorIndex = ref(-1);
 const modelDraft = reactive(defaultModelDraft());
@@ -1233,10 +1257,38 @@ const visibleAvailableTools = computed(() => {
     return tool?.source !== 'mcp' && !name.startsWith('mcp__') && !GRILL_BLOCKED_TOOL_NAMES.has(name);
   });
 });
-const workspaceTabsWithStatus = computed(() => workspaceTabs.value.map((tab) => {
-  const session = tab.sessionId ? sessions.value.find((item) => item.id === tab.sessionId) : null;
-  return { ...tab, isRunning: !!(session?.isRunning || session?.runId) };
-}));
+// Return a stable array reference when nothing actually changed so downstream
+// watchers (AppHeader) short-circuit. The previous version returned a fresh
+// array + fresh per-tab object literals on every recompute, even when every
+// tab's isRunning flag was identical to the previous result — that forced
+// AppHeader to re-render its tab list on every reactive tick that touched
+// sessions or workspaceTabs, even though no tab actually moved.
+let workspaceTabsWithStatusCache = null;
+let workspaceTabsWithStatusSignature = '';
+const workspaceTabsWithStatus = computed(() => {
+  const tabs = workspaceTabs.value;
+  // Build a cheap signature: tab ids + label + path + running flags. If the
+  // signature matches the last computed one, we can reuse the previous array
+  // reference. label/path are included because applySessionWorkspace and
+  // syncConfigToActiveTab mutate them in place — without them in the
+  // signature, AppHeader would keep showing the old tab label after a
+  // workspace switch until isRunning or tab list shape also changed.
+  const parts = [];
+  for (const tab of tabs) {
+    const session = tab.sessionId ? sessions.value.find((item) => item.id === tab.sessionId) : null;
+    parts.push(`${tab.id}:${tab.sessionId || ''}:${tab.label || ''}:${tab.path || ''}:${!!(session?.isRunning || session?.runId) ? 1 : 0}`);
+  }
+  const sig = parts.join('|');
+  if (sig === workspaceTabsWithStatusSignature && workspaceTabsWithStatusCache) {
+    return workspaceTabsWithStatusCache;
+  }
+  workspaceTabsWithStatusSignature = sig;
+  workspaceTabsWithStatusCache = tabs.map((tab) => {
+    const session = tab.sessionId ? sessions.value.find((item) => item.id === tab.sessionId) : null;
+    return { ...tab, isRunning: !!(session?.isRunning || session?.runId) };
+  });
+  return workspaceTabsWithStatusCache;
+});
 const activeMessages = computed(() => activeSession.value?.messages || []);
 const activeSessionRunning = computed(() => !!activeSession.value?.isRunning);
 const scheduledTaskRunningCount = computed(() => scheduledTasks.value.filter((task) => task?.running).length);
@@ -1279,8 +1331,37 @@ function toggleArchiveMessages(sessionId) {
 }
 
 // Merge consecutive read tool cards into a single aggregated card.
+//
+// perf: estimateMessageRenderChars() in displaySourceMessages reads
+// msg.content/reasoningBody/body/etc., which subscribes displayMessages to
+// every streaming content mutation (20 FPS). The merge result itself only
+// depends on the message *list shape* (role/kind/status/length), not on
+// assistant content. So we compute a structural signature and short-circuit
+// to the cached array when the shape hasn't changed — content-only mutations
+// still fire the computed, but it returns immediately without re-running the
+// O(n) merge or re-allocating the output array.
+let displayMessagesCache = null;
+let displayMessagesSig = '';
+function buildDisplayMessagesSignature(session, expanded) {
+  const msgs = session?.messages;
+  if (!msgs) return '';
+  const parts = [`len:${msgs.length}`, `exp:${expanded.has(session?.id) ? 1 : 0}`];
+  // Only structural fields — no content/body access, so we don't subscribe
+  // to streaming content mutations.
+  for (let i = 0; i < msgs.length; i++) {
+    const m = msgs[i];
+    parts.push(`${m.role}:${m.kind || ''}:${m.status || ''}:${m.name || ''}:${m.eventId || ''}`);
+  }
+  return parts.join('|');
+}
 const displayMessages = computed(() => {
-  const src = displaySourceMessages(activeSession.value);
+  const session = activeSession.value;
+  const sig = buildDisplayMessagesSignature(session, expandedArchiveSessions.value);
+  if (sig === displayMessagesSig && displayMessagesCache) {
+    return displayMessagesCache;
+  }
+  displayMessagesSig = sig;
+  const src = displaySourceMessages(session);
   const out = [];
   let i = 0;
   while (i < src.length) {
@@ -1369,15 +1450,8 @@ group.readEntries.push({ title: be.title, chip: be.chip, lineCount: be.lineCount
       i++;
     }
   }
+  displayMessagesCache = out;
   return out;
-});
-
-const lastUserMsgIndex = computed(() => {
-  const msgs = displayMessages.value;
-  for (let i = msgs.length - 1; i >= 0; i--) {
-    if (msgs[i].role === 'user') return i;
-  }
-  return -1;
 });
 
 const canSend = computed(() => {
@@ -1407,8 +1481,11 @@ async function openWorkspaceInFileManager() {
   }
 }
 
-// Context computation — call backend for accurate full-payload token count
-watch([activeSessionId, activeMessages], async () => {
+// Context computation — call backend for accurate full-payload token count.
+// Only react to session switches; in-run token refresh is handled by run:done /
+// run:error / run:cancelled / run:compacted handlers. A previous deep:true watch
+// on activeMessages fired on every streaming delta (40+ IPC/s) — wasteful.
+watch(activeSessionId, async () => {
   const sid = activeSessionId.value;
   if (!sid) { contextTokens.value = 0; contextBreakdown.value = null; return; }
   try {
@@ -1419,7 +1496,7 @@ watch([activeSessionId, activeMessages], async () => {
     const b = await GetContextBreakdown(sid);
     contextBreakdown.value = b;
   } catch (_) { /* ignore */ }
-}, { immediate: true, deep: true });
+}, { immediate: true });
 
 watch(activeSessionId, () => {
   loadGoal(activeSessionId.value);
@@ -1716,7 +1793,6 @@ function applySessionWorkspace(session) {
   configDraft.workspace = workspace;
   addToHistory(workspace);
   loadPromptHistory(workspace);
-  refreshFiles(workspace);
   refreshWorkspaceTokenUsage(workspace);
   SaveConfig({ ...config })
     .then(() => refreshGitStatus())
@@ -1743,7 +1819,6 @@ function ensureWorkspaceTabSession(tab) {
   tab.sessionId = replacement.id;
   if (tab.id === activeWorkspaceId.value) {
     activeSessionId.value = replacement.id;
-    activeRunId.value = '';
   }
   return replacement;
 }
@@ -1840,7 +1915,6 @@ function switchWorkspaceTab(id) {
   configDraft.workspace = tab.path;
   subRuns.value = [];
   loadPromptHistory(tab.path);
-  refreshFiles(tab.path);
   refreshWorkspaceTokenUsage(tab.path);
   SaveConfig({ ...config })
     .then(() => refreshGitStatus())
@@ -1848,7 +1922,6 @@ function switchWorkspaceTab(id) {
   // Switch to linked session
   if (linkedSession) {
     activeSessionId.value = linkedSession.id;
-    activeRunId.value = linkedSession.runId || '';
     loadTodos(linkedSession.id);
     // Restore saved scroll anchor for this session, or stay at default
     const savedAnchor = sessionScrollAnchors[linkedSession.id];
@@ -2064,7 +2137,6 @@ function selectSession(index) {
   saveSessions();
   activateSelectedSession(target);
   promptText.value = '';
-  activeRunId.value = target.runId || '';
   sessionsVisible.value = false;
   subRuns.value = [];
   scrollMessagesToBottom();
@@ -2110,7 +2182,6 @@ function deleteSession(index) {
     activeSessionId.value = replacementId;
     const nextSession = sessions.value.find((item) => item.id === replacementId);
     applySessionWorkspace(nextSession);
-    activeRunId.value = '';
     promptText.value = '';
     subRuns.value = [];
     loadTodos(replacementId);
@@ -2219,7 +2290,6 @@ function flushStreamBuffer(runId) {
   streamBuffers.delete(runId);
   const session = sessionByRunId(runId);
   if (!session) return;
-  if (session.id === activeSessionId.value) thinking.value = false;
   let last = session.messages[session.messages.length - 1];
   if (!last || last.role !== 'assistant' || last.error || last.system || last.done) {
     last = { role: 'assistant', content: '', reasoningBody: '', streaming: true };
@@ -2243,7 +2313,6 @@ function bufferToolUpdate(data) {
   flushStreamBuffer(data.runId);
   const session = sessionByRunId(data.runId);
   if (!session) return;
-  if (session.id === activeSessionId.value) thinking.value = false;
   toolUpdateBuffers.set(toolEventId(data), data);
   scheduleToolUpdateFlush();
 }
@@ -2269,11 +2338,19 @@ function flushToolUpdateBuffer() {
   if (toolUpdateBuffers.size === 0) return;
   const entries = [...toolUpdateBuffers.values()];
   toolUpdateBuffers.clear();
+  let lastActiveSessionId = '';
   for (const data of entries) {
     const session = sessionByRunId(data.runId);
     if (!session) continue;
     const title = makeToolTitle(data.name, data.args, data);
     updateToolEvent(toolEventId(data), data.name, title, data.args || '', 'running', data, session);
+    if (session.id === activeSessionId.value) lastActiveSessionId = session.id;
+  }
+  // After the latest tool card has been rendered, scroll so its header stays
+  // visible (top + 96px padding) rather than pinning scroll to the card's
+  // bottom, which would push the header above the viewport fold.
+  if (lastActiveSessionId) {
+    scrollMessagesToBottom({ alignToLastToolCard: true });
   }
 }
 
@@ -2383,15 +2460,6 @@ function bindRuntimeEvents() {
       session.runId = data.runId;
       session.isRunning = true;
     }
-    if (session && session.id === activeSessionId.value) {
-      activeRunId.value = data.runId;
-    }
-  });
-
-  onRuntimeEvent('run:llm_wait', (data) => {
-    const session = sessionByRunId(data.runId);
-    if (!session || session.id !== activeSessionId.value) return;
-    thinking.value = true;
   });
 
   onRuntimeEvent('tokens:update', (data) => {
@@ -2406,6 +2474,12 @@ function bindRuntimeEvents() {
     mcpServers.value = data?.servers || [];
     refreshToolList();
     updateWelcomeMcpRows();
+    // MCP tool schemas contribute to ToolSchemas in the context breakdown.
+    // When a server finishes ListTools (or fails / disconnects), the set of
+    // injected MCP tool definitions changes and the breakdown must be
+    // recomputed — otherwise the footer context percent stays at the value
+    // from when MCP was still initializing and tool list was empty.
+    if (activeSessionId.value) refreshContextTokens(activeSessionId.value);
   });
 
   onRuntimeEvent('dependency:missing', (data) => {
@@ -2482,8 +2556,7 @@ function bindRuntimeEvents() {
     flushStreamBuffer(data.runId);
     const session = sessionByRunId(data.runId);
     if (!session) return;
-    if (session.id === activeSessionId.value) thinking.value = false;
-    const title = makeToolTitle(data.name, data.args, data);
+      const title = makeToolTitle(data.name, data.args, data);
     updateToolEvent(toolEventId(data), data.name, title, data.args || '', 'running', data, session);
   };
   // tool:start must create the card immediately so the user sees the tool
@@ -2699,8 +2772,7 @@ function bindRuntimeEvents() {
     flushToolUpdateBuffer();
     const session = sessionByTerminalEvent(data);
     if (!session) return;
-    if (session.id === activeSessionId.value) thinking.value = false;
-	  refreshGitStatus();
+  	  refreshGitStatus();
     if (data.grillComplete) session.grillMode = false;
     let i = session.messages.length - 1;
     while (i >= 0) {
@@ -2722,7 +2794,6 @@ function bindRuntimeEvents() {
     session.runId = '';
     session.isRunning = false;
     if (session.id === activeSessionId.value) {
-      activeRunId.value = '';
       playCompletionSound('done');
     }
     saveSessions();
@@ -2734,8 +2805,7 @@ function bindRuntimeEvents() {
     flushToolUpdateBuffer();
     const session = sessionByTerminalEvent(data);
     if (!session) return;
-    if (session.id === activeSessionId.value) thinking.value = false;
-    let i = session.messages.length - 1;
+      let i = session.messages.length - 1;
     while (i >= 0) {
       const msg = session.messages[i];
       if (msg.role === 'assistant' && msg.streaming) {
@@ -2748,7 +2818,6 @@ function bindRuntimeEvents() {
     session.runId = '';
     session.isRunning = false;
     if (session.id === activeSessionId.value) {
-      activeRunId.value = '';
       const err = data.error || 'unknown error';
       const cancelled = err === '已取消' || err === 'Cancelled' || String(err).toLowerCase().includes('context canceled');
       session.messages.push({ role: 'assistant', content: cancelled ? t('app.run.cancelled') : t('app.run.failed', { error: err }), error: !cancelled, system: cancelled });
@@ -2758,14 +2827,17 @@ function bindRuntimeEvents() {
       setLastAssistantRoundDuration(session, data.durationMs);
     }
     saveSessions();
+    // Refresh token count after error: messages already grew with streamed
+    // content, tool args, and the error footer — the context popover should
+    // reflect that immediately instead of waiting for the next session switch.
+    refreshContextTokens(session.id);
   });
   onRuntimeEvent('run:cancelled', (data) => {
     flushStreamBuffer(data.runId);
     flushToolUpdateBuffer();
     const session = sessionByTerminalEvent(data);
     if (!session) return;
-    if (session.id === activeSessionId.value) thinking.value = false;
-    let i = session.messages.length - 1;
+      let i = session.messages.length - 1;
     while (i >= 0) {
       const msg = session.messages[i];
       if (msg.role === 'assistant' && msg.streaming) {
@@ -2779,10 +2851,13 @@ function bindRuntimeEvents() {
     session.runId = '';
     session.isRunning = false;
     if (session.id === activeSessionId.value) {
-      activeRunId.value = '';
       playCompletionSound('cancelled');
     }
     saveSessions();
+    // Refresh token count after cancellation: streaming deltas and any tool
+    // results added before cancellation are now part of the history and the
+    // context popover should reflect the actual remaining budget.
+    refreshContextTokens(session.id);
   });
   // Auto-compaction notification: backend emits run:compacted after an
   // automatic history compression. Surface it to the user so the sudden
@@ -3610,9 +3685,6 @@ async function sendPrompt() {
   } catch (err) {
     session.runId = '';
     session.isRunning = false;
-    if (session.id === activeSessionId.value) {
-      activeRunId.value = '';
-    }
     pushMessage('assistant', t('app.run.startFailed', { error: err }), { error: true });
   }
 }
@@ -3635,40 +3707,11 @@ async function chooseWorkspace() {
     configDraft.workspace = workspace;
     const session = activeSession.value;
     if (session) session.workspace = workspace;
-    await refreshFiles(workspace);
     return workspace;
   } catch (err) {
     message.error(t('app.workspace.selectFailed', { error: err }));
     return null;
   }
-}
-
-async function refreshFiles(path = '') {
-  currentFileDir.value = path || '';
-  try {
-    files.value = await ListFiles({ path, maxDepth: 3, limit: 300, includeHidden: false, includeIgnored: false });
-  } catch (err) {
-    files.value = [];
-  }
-}
-
-async function previewFile(path) {
-  previewTitle.value = path;
-  filePreview.value = t('app.filePreview.loading');
-  try {
-    const result = await ReadFile({ path, startLine: 1, lineCount: 220 });
-    currentPreview.value = result.content || '';
-    filePreview.value = `${result.content || ''}\n\n---\nversion: ${result.version}\nlines: ${result.totalLines}\nending: ${result.lineEnding}${result.truncated ? '\n(truncated)' : ''}`;
-  } catch (err) {
-    currentPreview.value = '';
-    filePreview.value = t('app.filePreview.failed', { error: err });
-  }
-}
-
-async function copyPreview() {
-  if (!currentPreview.value) return;
-  await navigator.clipboard.writeText(currentPreview.value);
-  message.success(t('app.copy.done'));
 }
 
 async function onSettingsSave(draftData, silent = false) {
@@ -4206,7 +4249,17 @@ function updateToolEvent(id, name, title, body, status = 'default', meta = {}, t
   const session = targetSession || activeSession.value;
   if (!session) return;
   const eventId = id || `${name}-${Date.now()}-${Math.random()}`;
-  const existing = session.messages.find((item) => item.role === 'tool_call' && item.eventId === eventId);
+  // Hot path: tool:update flushes fire every 120ms and used to call
+  // session.messages.find() O(n) on the full (up to 180+) message list each
+  // time. Cache the last matched (eventId, msg) pair on the session: typical
+  // access pattern is "same event id keeps updating", so cache hit rate is
+  // ~99%. Fall back to find() only on miss.
+  if (session._lastToolEventId !== eventId) {
+    const found = session.messages.find((item) => item.role === 'tool_call' && item.eventId === eventId);
+    session._lastToolEventId = eventId;
+    session._lastToolMsg = found || null;
+  }
+  const existing = session._lastToolMsg;
 
   // Rich display data
   let editOldString = '';
@@ -4359,7 +4412,15 @@ function updateToolEvent(id, name, title, body, status = 'default', meta = {}, t
     if (!payload.waitSeconds && existing.waitSeconds) payload.waitSeconds = existing.waitSeconds;
     if (!payload.waitStartedAt && existing.waitStartedAt) payload.waitStartedAt = existing.waitStartedAt;
     if ((!payload.askQuestions || payload.askQuestions.length === 0) && existing.askQuestions) payload.askQuestions = existing.askQuestions;
-    Object.assign(existing, payload);
+    // Only assign fields whose value actually changed. The previous
+    // Object.assign(existing, payload) unconditionally triggered setters on
+    // ~30 fields (even unchanged primitives like status='running'), which in
+    // turn re-triggered the displayMessages computed and downstream
+    // ToolCallCard re-renders on every 120ms flush. Manual diffing keeps
+    // the reactive system idle when nothing actually moved.
+    for (const key of Object.keys(payload)) {
+      if (existing[key] !== payload[key]) existing[key] = payload[key];
+    }
   } else {
     session.messages.push(payload);
   }
@@ -4719,11 +4780,6 @@ async function switchToSession(index) {
   saveSessions();
   activateSelectedSession(target);
   promptText.value = '';
-  if (target.runId) {
-    activeRunId.value = target.runId;
-  } else {
-    activeRunId.value = '';
-  }
   scrollMessagesToBottom();
 }
 

@@ -386,7 +386,7 @@ Built-in model-facing tools:
 | `delete_path` | Delete files/directories |
 | `grep_files` | Regex search through bundled ripgrep, with PATH fallback in development |
 | `run_command` | Shell command execution with safety checks |
-| `wait` | Pause the current agent run for a cancellable 1–600 second delay |
+| `wait` | Pause the current agent run for a cancellable 1–3600 second delay |
 | `http_request` | Bounded HTTP/HTTPS API request |
 | `web_fetch` | Bounded webpage fetch and readable-text extraction |
 | `remote_*` | SSH remote list/read/edit/create/delete/run commands |
@@ -757,7 +757,7 @@ Frontend utility tests cover:
 - `executeTool()` is the source of truth for built-in tool dispatch and JSON argument validation.
 - The model-facing `background_process` tool supports only `start` and `stop` so agents can run frontend/backend dev processes without blocking. Do not expose service list/status polling actions; `StartService`, `StopService`, and `ListServices` remain available as Wails/backend APIs.
 - Background-process state contains active processes only. Records are removed after `cmd.Wait()` completes, and the backend rejects starts beyond the 8-process active limit.
-- The model-facing `wait` tool is for short, concrete asynchronous delays only. It is limited to 600 seconds, disabled in grill mode, and displayed in the UI with a local countdown.
+- The model-facing `wait` tool is for short, concrete asynchronous delays only. It is limited to 3600 seconds, disabled in grill mode, and displayed in the UI with a local countdown.
 - Grill mode is session-local and request-scoped through `ChatRequest.grillMode`. The backend enforces an `ask`-only interview protocol: plain-text questions are retried, while a marked no-questions-left summary ends the mode and returns the session to YOLO. Side-effectful and MCP tools remain filtered and execution-guarded. Users may switch from an active Grill ask back to YOLO, which cancels the pending run.
 - The composer footer owns a two-option run-mode switch: YOLO is the default execution mode and GRILL is the session-local interview mode. Its model picker groups presets by normalized provider, sorts providers and model IDs naturally, and opens with the active provider expanded while other groups remain collapsible.
 - `render_html` completion updates the original tool card with one sandboxed iframe rather than appending a second result card.

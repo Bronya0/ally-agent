@@ -5926,7 +5926,7 @@ func chatTools() []openai.Tool {
 			"type": "object",
 			"properties": map[string]any{
 				"path":           map[string]any{"type": "string", "description": "Workspace-relative directory path, or explicit absolute path for read-only listing. Empty means workspace root."},
-				"maxDepth":       map[string]any{"type": "integer", "minimum": 1, "description": "Maximum recursion depth. Default 3."},
+				"maxDepth":       map[string]any{"type": "integer", "minimum": 1, "maximum": 50, "description": "Maximum recursion depth. Default 3, max 50."},
 				"limit":          map[string]any{"type": "integer", "minimum": 1, "maximum": 1000, "description": "Maximum entries returned. Default 200, max 1000. Check truncated."},
 				"includeHidden":  map[string]any{"type": "boolean", "description": "Include dotfiles and dot-directories. Default false."},
 				"includeIgnored": map[string]any{"type": "boolean", "description": "Include heavy ignored directories such as .git, node_modules, dist, build. Default false."},
@@ -5974,7 +5974,7 @@ func chatTools() []openai.Tool {
 			},
 			"required": []string{"path", "content"},
 		}),
-		functionTool("delete_path", "Delete a file, symlink, or directory in the workspace. Directories require recursive=true. Symlink parents are resolved for workspace safety; deleting a final symlink removes the link itself, not its target. Returns path, kind, and removed item counts. Error codes: E_PATH_OUTSIDE, E_PATH_NOT_FOUND, E_DIR_REQUIRES_RECURSIVE, E_DELETE_BLOCKED.", map[string]any{
+		functionTool("delete_path", "Delete a file, symlink, or directory in the workspace. Directories require recursive=true. Refuses the workspace root, VCS metadata (.git, .svn, .hg), and OS-sensitive paths. Symlink parents are resolved for workspace safety; deleting a final symlink removes the link itself, not its target. Returns path, kind, and removed item counts. Error codes: E_PATH_OUTSIDE, E_PATH_NOT_FOUND, E_DIR_REQUIRES_RECURSIVE, E_DELETE_BLOCKED.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"path":      map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*"},
@@ -6138,7 +6138,7 @@ func chatTools() []openai.Tool {
 			},
 			"required": []string{"target", "path"},
 		}),
-		functionTool("remote_run_command", "Run a non-interactive shell command in a remote SSH workspace. Uses system ssh BatchMode=yes and remote python3. Cwd defaults to the target workspace. Explicit deletion commands are refused; use remote_delete_path.", map[string]any{
+		functionTool("remote_run_command", "Run a non-interactive shell command in a remote SSH workspace. Uses system ssh BatchMode=yes and remote python3. Cwd defaults to the target workspace. Explicit deletion commands (rm, unlink, rmdir, del, erase, rd, remove-item) are refused with E_COMMAND_BLOCKED; use remote_delete_path for deletion. Other error codes: E_PATH_OUTSIDE, E_CWD_INVALID, E_LONG_RUNNING_COMMAND.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"target":         map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Explicit SSH target plus workspace root, e.g. my-dev:/srv/app."},
@@ -6163,7 +6163,7 @@ func chatTools() []openai.Tool {
 			},
 			"required": []string{"pattern"},
 		}),
-		functionTool("batch_read", "Read 1–20 files. Always pass a top-level files array, even for one file. Do not pass top-level path, a string array, offset, or lineCount. UTF-8 text returns raw copyable content plus a 12-character version for edit. Omit startLine/endLine for the whole file; either or both define an inclusive 1-based range. Complex documents return non-editable extracted text.", map[string]any{
+		functionTool("batch_read", "Read 1–20 files. Always pass a top-level files array, even for one file. Do not pass top-level path, a string array, offset, or lineCount. UTF-8 text returns raw copyable content plus a 12-character version for edit. Omit startLine/endLine for the whole file; either or both define an inclusive 1-based range. Supported document formats (.docx, .pptx, .xlsx, .pdf) return non-editable extracted text; .xlsx optionally accepts a sheet name or 1-based index.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"files": batchReadFilesSchema(),
@@ -6228,7 +6228,7 @@ func chatTools() []openai.Tool {
 				},
 			},
 		}),
-		functionTool("subagent", "Delegate a substantial, self-contained task to a child agent with its own unrestricted-duration tool loop. Use it for complex independent exploration, work loosely related to the main line, or modules that can run in parallel while you continue useful parent work. The child can use built-in and MCP tools but cannot ask the user or delegate nested agents; only its final summary is returned. Do not delegate a single focused edit, a tiny read, or a critical sequential step whose exact output the parent needs immediately.", map[string]any{
+		functionTool("subagent", "Delegate a task to a child agent with its own tool loop (no step or wall-clock limit). The child can use built-in and MCP tools but cannot ask the user or delegate nested agents; only its final summary is returned. See the Delegation section in the system prompt for when to use this tool.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"task":         map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "The task for the child agent. Be specific — include file paths and expected outcomes."},

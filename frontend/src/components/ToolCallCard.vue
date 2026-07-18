@@ -186,15 +186,38 @@ function toolVerb(msg) {
   return t('tools.status.using');
 }
 
+// Bounded LRU cache for highlighted command HTML. highlight.js is expensive
+// (full tokenize) and ToolCallCard re-renders on every tool:update flush; without
+// caching, a 200ms flush cycle on a long command would re-tokenize it ~5x/s.
+// 128 entries / ~256KB cap covers typical session volume.
+const HIGHLIGHT_CACHE_MAX = 128;
+const highlightCache = new Map();
 function highlightCommand(msg) {
   const command = String(msg?.title || '');
   const language = commandHighlightLanguage(msg, command);
-  if (language === 'bash') return highlightShellCommand(command);
-  try {
-    return hljs.highlight(command, { language, ignoreIllegals: true }).value;
-  } catch {
-    return escapeHtml(command);
+  const cacheKey = `${language}::${command}`;
+  const cached = highlightCache.get(cacheKey);
+  if (cached !== undefined) {
+    // Move-to-end for LRU semantics.
+    highlightCache.delete(cacheKey);
+    highlightCache.set(cacheKey, cached);
+    return cached;
   }
+  let result;
+  if (language === 'bash') result = highlightShellCommand(command);
+  else {
+    try {
+      result = hljs.highlight(command, { language, ignoreIllegals: true }).value;
+    } catch {
+      result = escapeHtml(command);
+    }
+  }
+  highlightCache.set(cacheKey, result);
+  if (highlightCache.size > HIGHLIGHT_CACHE_MAX) {
+    const oldest = highlightCache.keys().next().value;
+    if (oldest !== undefined) highlightCache.delete(oldest);
+  }
+  return result;
 }
 
 function commandHighlightLanguage(msg, command) {

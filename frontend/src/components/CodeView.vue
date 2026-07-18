@@ -101,23 +101,47 @@ const preview = computed(() => codePreviewWindow(props.code, {
 
 const previewStartLine = computed(() => preview.value.startLine || 1)
 
+// Bounded LRU cache for highlighted code HTML. Parent re-renders (e.g. when
+// ToolCallCard flips expanded / receives duration updates) used to re-run
+// hljs.highlight on the entire file body; for multi-KB files this is a 5-20ms
+// hit per re-render. Cache key is (lang, code, maxLines): lang + code identify
+// the tokenization output, maxLines handles the collapsed slice.
+const CODE_HL_CACHE_MAX = 32;
+const codeHlCache = new Map();
+function highlightCached(lang, code, maxLines) {
+  const key = `${lang || 'plain'}|${maxLines}|${code}`;
+  const hit = codeHlCache.get(key);
+  if (hit !== undefined) {
+    codeHlCache.delete(key);
+    codeHlCache.set(key, hit);
+    return hit;
+  }
+  let lines;
+  if (!lang || !hljs.getLanguage(lang)) {
+    lines = escapeHtml(code).split('\n');
+  } else {
+    try {
+      const result = hljs.highlight(code, { language: lang, ignoreIllegals: true });
+      lines = result.value.split('\n');
+    } catch {
+      lines = escapeHtml(code).split('\n');
+    }
+  }
+  if (maxLines > 0) lines = lines.slice(0, maxLines);
+  codeHlCache.set(key, lines);
+  if (codeHlCache.size > CODE_HL_CACHE_MAX) {
+    const oldest = codeHlCache.keys().next().value;
+    if (oldest !== undefined) codeHlCache.delete(oldest);
+  }
+  return lines;
+}
+
 const displayLines = computed(() => {
   const code = preview.value.lines.join('\n')
   if (!code) return []
   const lang = detectLang(props.filePath)
-  let lines = []
-  if (!lang || !hljs.getLanguage(lang)) {
-    lines = escapeHtml(code).split('\n')
-  } else {
-    try {
-      const result = hljs.highlight(code, { language: lang, ignoreIllegals: true })
-      lines = result.value.split('\n')
-    } catch {
-      lines = escapeHtml(code).split('\n')
-    }
-  }
-  if (props.collapsed && props.maxLines > 0) return lines.slice(0, props.maxLines)
-  return lines
+  const maxLines = props.collapsed && props.maxLines > 0 ? props.maxLines : 0;
+  return highlightCached(lang, code, maxLines);
 })
 
 function padGutter(num) {

@@ -2,7 +2,7 @@
   <div class="messages-scroll-shell">
     <n-scrollbar ref="scrollbarRef" class="messages-scroll" @scroll="handleScroll">
       <div ref="messagesRootRef" class="messages" @click="$emit('clearFocus')">
-        <template v-for="(msg, index) in messages" :key="`${index}-${msg.role}-${msg.kind || ''}-${msg.readEntries?.length || 0}`">
+        <template v-for="(msg, index) in messages" :key="msgKey(msg)">
         <button v-if="msg.role === 'archive'" class="message-archive-toggle" @click.stop="$emit('toggleArchive', msg.sessionId)">
           <span>{{ msg.expanded ? $t('chat.archive.collapse') : $t('chat.archive.expand') }}</span>
           <span>{{ $t('chat.archive.summary', { count: msg.count, tokens: fmtK(msg.tokens) }) }}</span>
@@ -18,7 +18,7 @@
         </div>
         <div v-else-if="msg.role !== 'tool_call'" :class="['message', msg.role, { error: msg.error, system: msg.system }]">
           <pre v-if="msg.reasoningBody" class="reasoning-body">{{ msg.reasoningBody }}</pre>
-          <RenderBoundary v-if="msg.welcome" :label="$t('chat.welcome')"><WelcomeMessage :welcome="msg.welcome" :tools="tools" /></RenderBoundary>
+          <RenderBoundary v-if="msg.welcome" :label="$t('chat.welcome')"><WelcomeMessage :welcome="msg.welcome" :tools="tools" :mcp-servers="mcpServers" /></RenderBoundary>
           <div v-else class="message-body markdown-body" v-html="renderFn(msg.content, msg.streaming)"></div>
           <RenderBoundary :label="$t('chat.attachment')"><MessageAttachments :attachments="msg.attachments || []" /></RenderBoundary>
           <div v-if="msg.role === 'assistant' && msg.roundDurationText && !msg.streaming" class="message-duration">
@@ -72,7 +72,7 @@
 </template>
 
 <script setup>
-import { nextTick, ref } from 'vue';
+import { nextTick, onBeforeUnmount, ref } from 'vue';
 import MessageAttachments from './MessageAttachments.vue';
 import WelcomeMessage from './WelcomeMessage.vue';
 import ToolCallCard from './ToolCallCard.vue';
@@ -84,12 +84,31 @@ import RenderBoundary from './RenderBoundary.vue';
 
 defineProps({
   messages: { type: Array, required: true },
-  lastUserMsgIndex: { type: Number, default: -1 },
   focusedId: { type: String, default: '' },
   renderFn: { type: Function, required: true },
   fmtK: { type: Function, required: true },
   tools: { type: Array, default: () => [] },
+  mcpServers: { type: Array, default: () => [] },
 });
+
+// Stable v-for key for messages that lack an eventId (user / assistant /
+// archive / system). tool_call messages already carry a stable eventId, so we
+// reuse it. For the rest, lazily assign a per-object id via WeakMap so the
+// same message object keeps the same key across re-renders even when its
+// content/role/index shifts — previous key used `index` which forced every
+// downstream message to re-mount on any insert.
+const msgKeyMap = new WeakMap();
+let msgKeyCounter = 0;
+function msgKey(msg) {
+  if (msg.eventId) return msg.eventId;
+  let key = msgKeyMap.get(msg);
+  if (!key) {
+    msgKeyCounter++;
+    key = `local-${msg.role || 'msg'}-${msgKeyCounter}`;
+    msgKeyMap.set(msg, key);
+  }
+  return key;
+}
 
 defineEmits([
   'toggleArchive',
@@ -107,6 +126,26 @@ const showJumpToBottom = ref(false);
 const autoFollow = ref(true);
 const bottomThreshold = 96;
 let scrollRaf = 0;
+// All pending rAF ids from scrollToBottom + restoreScrollPosition, so that
+// onBeforeUnmount can cancel them in one pass. Without this, an unmount
+// mid-restore would fire 4 rAFs against a null messagesRootRef and rely on
+// the implicit null check inside apply() to no-op — correct, but wasteful
+// and easy to break if apply() is ever changed.
+const pendingRafs = new Set();
+function scheduleRaf(fn) {
+  const id = requestAnimationFrame(() => {
+    pendingRafs.delete(id);
+    fn();
+  });
+  pendingRafs.add(id);
+  return id;
+}
+
+onBeforeUnmount(() => {
+  if (scrollRaf) cancelAnimationFrame(scrollRaf);
+  for (const id of pendingRafs) cancelAnimationFrame(id);
+  pendingRafs.clear();
+});
 
 function getScrollViewport() {
   const root = messagesRootRef.value;
@@ -132,6 +171,7 @@ function handleScroll() {
 
 function scrollToBottom(options = {}) {
   const force = options?.force === true;
+  const alignToLastToolCard = options?.alignToLastToolCard === true;
   if (!force && !autoFollow.value) {
     showJumpToBottom.value = true;
     return;
@@ -141,13 +181,32 @@ function scrollToBottom(options = {}) {
     scrollRaf = 0;
   }
   scrollRaf = requestAnimationFrame(() => {
-    scrollRaf = requestAnimationFrame(() => {
-      scrollRaf = 0;
+    scrollRaf = 0;
+    scheduleRaf(() => {
       if (!force && !autoFollow.value) {
         showJumpToBottom.value = true;
         return;
       }
       const viewport = getScrollViewport();
+      // When alignToLastToolCard is set, scroll so the latest .rich-tool-card
+      // top sits at viewport top minus the standard bottom threshold (96px).
+      // This keeps the tool call header visible while the card body extends
+      // below the fold, instead of pinning the scroll to the card's bottom
+      // (which would hide the header above the viewport).
+      if (alignToLastToolCard) {
+        const root = messagesRootRef.value;
+        const cards = root?.querySelectorAll('.rich-tool-card');
+        const target = cards?.length ? cards[cards.length - 1] : null;
+        if (target && viewport) {
+          const viewportTop = viewport.getBoundingClientRect().top;
+          const targetTop = target.getBoundingClientRect().top;
+          const delta = targetTop - viewportTop - bottomThreshold;
+          scrollbarRef.value?.scrollTo({ top: viewport.scrollTop + delta });
+          autoFollow.value = true;
+          showJumpToBottom.value = false;
+          return;
+        }
+      }
       // Use a large sentinel value so the browser clamps to the true
       // scrollable bottom. This is robust against content-visibility: auto
       // elements whose contain-intrinsic-size placeholders make scrollHeight
@@ -243,13 +302,13 @@ function restoreScrollPosition(anchor) {
     viewport.scrollTop = target;
   };
   nextTick(() => {
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
+    scheduleRaf(() => {
+      scheduleRaf(() => {
         apply();
         // Second pass: content-visibility elements above the target may have
         // expanded after the first scroll, shifting the anchor. Re-correct.
-        requestAnimationFrame(() => {
-          requestAnimationFrame(() => apply());
+        scheduleRaf(() => {
+          scheduleRaf(() => apply());
         });
       });
     });

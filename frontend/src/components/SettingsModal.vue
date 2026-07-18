@@ -497,6 +497,26 @@ async function testProxy() {
   }
 }
 
+// Network page: persist proxy settings immediately when the user changes any
+// of proxyMode / proxyUrl / proxyNoProxy. Previously these fields were only
+// saved when the user clicked "Test Proxy" or navigated to General and hit
+// Save — so flipping proxyMode to "off" and closing the modal would silently
+// drop the change, and the next launch would fall back to the saved value
+// (often "system"). Silent save (third arg true) matches the Models page.
+//
+// Guard with props.visible so the initial syncDraftFromProps() call (which
+// bulk-assigns all proxy fields at once when the modal opens) doesn't leak
+// through as a spurious save. Real user edits happen only while the modal
+// is visible.
+watch([
+  () => draft.proxyMode,
+  () => draft.proxyUrl,
+  () => draft.proxyNoProxy,
+], () => {
+  if (!props.visible) return;
+  emit('save', { ...draft }, true);
+});
+
 const isWindows = computed(() => {
   return document.body.classList.contains('platform-windows') ||
     document.body.classList.contains('platform-win32');

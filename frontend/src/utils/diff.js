@@ -30,7 +30,11 @@ export function computeDiffLines(oldText, newText, oldStart = 1, newStart = 1, i
   const m = oldLines.length;
   const n = newLines.length;
 
-  if ((m + 1) * (n + 1) > 1_000_000) {
+  // 50K cell threshold (~200KB) — above this, LCS DP on the main thread causes
+  // noticeable UI jank. The fallback is a prefix/suffix scan that is O(m+n).
+  // Previous 1M threshold let a 1000x1000 line diff allocate 4MB and block for
+  // hundreds of milliseconds.
+  if ((m + 1) * (n + 1) > 50_000) {
     return computeLargeDiffFallback(oldLines, newLines, oldStart, newStart, isIncomplete);
   }
 

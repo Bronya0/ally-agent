@@ -150,9 +150,20 @@ function parseToolArgs(raw) {
   }
 }
 
+// Cache parsed args + derived title on the toolCall object itself, so that
+// repeated renders during sub-agent progress updates don't re-run JSON.parse
+// on the same args string. Sub-agent progress events emit ~1/s with the same
+// args payload; without this cache each tool row would parse once per render.
 function toolArgsTitle(tc) {
   const name = tc.name || '';
-  const parsed = parseToolArgs(tc.args);
+  const argsText = String(tc.args || '');
+  // Re-parse only when args actually changed (new tool call, or streaming
+  // completion of a long arg payload like run_command).
+  if (tc._argsCacheKey !== argsText) {
+    tc._argsCacheKey = argsText;
+    tc._argsCacheParsed = parseToolArgs(argsText);
+  }
+  const parsed = tc._argsCacheParsed;
 
   if (name === 'run_command' || name === 'remote_run_command') {
     const cmd = parsed.command || parsed.cmd || '';

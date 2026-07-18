@@ -104,14 +104,21 @@ function parseDiffText(text) {
   return result
 }
 
-const localDiffLines = computed(() => {
+// Cache the raw diff lines separately from the display slice. The previous
+// single computed re-ran the O(mn) LCS DP every time `collapsed` flipped,
+// even though the diff itself only depends on (oldText, newText, diffText,
+// isIncomplete). Splitting the two lets collapsed toggles skip the heavy
+// pass and only re-slice the cached raw lines.
+const rawDiffLines = computed(() => {
   if (props.diffLines) return props.diffLines
-  if (props.diffText) {
-    const raw = parseDiffText(props.diffText)
-    return buildClusteredDisplay(raw, DEFAULT_CONTEXT_LINES, props.collapsed ? DEFAULT_MAX_LINES : undefined)
-  }
+  if (props.diffText) return parseDiffText(props.diffText)
   if (!props.oldText && !props.newText) return []
-  const raw = computeDiffLines(props.oldText, props.newText, 1, 1, props.isIncomplete)
+  return computeDiffLines(props.oldText, props.newText, 1, 1, props.isIncomplete)
+})
+
+const localDiffLines = computed(() => {
+  const raw = rawDiffLines.value
+  if (!raw || raw.length === 0) return raw || []
   return buildClusteredDisplay(raw, DEFAULT_CONTEXT_LINES, props.collapsed ? DEFAULT_MAX_LINES : undefined)
 })
 

@@ -9,7 +9,14 @@ import (
 )
 
 func prepareServiceCommand(cmd *exec.Cmd) {
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: syscall.CREATE_NEW_PROCESS_GROUP}
+	// CREATE_NO_WINDOW prevents a console window from flashing on screen when
+	// a GUI process (Ally) launches a console subprocess (npm/vite/python…).
+	// CREATE_NEW_PROCESS_GROUP is preserved so background services can be
+	// stopped via Ctrl-Break without signaling the parent Ally process.
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		HideWindow:    true,
+		CreationFlags: 0x08000000 | syscall.CREATE_NEW_PROCESS_GROUP, // CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
+	}
 }
 
 func stopProcessTree(pid int) error {

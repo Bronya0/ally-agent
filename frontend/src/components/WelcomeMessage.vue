@@ -12,6 +12,7 @@
               <th>{{ item.label }}</th>
               <td>
                 <ToolsPopover v-if="item.kind === 'tools'" :tools="tools" />
+                <McpStatusPopover v-else-if="item.kind === 'mcp'" :summary="item.value" :servers="mcpServers" />
                 <template v-else>{{ item.value }}</template>
               </td>
             </template>
@@ -31,12 +32,19 @@
 import { computed } from 'vue';
 import AllyAvatar from './AllyAvatar.vue';
 import ToolsPopover from './ToolsPopover.vue';
+import McpStatusPopover from './McpStatusPopover.vue';
 import { buildVersion } from '../utils/buildVersion';
 import { t } from '../i18n.mjs';
 
 const props = defineProps({
   welcome: { type: Object, required: true },
   tools: { type: Array, default: () => [] },
+  // Current MCP server statuses. Backed by the mcp:status runtime event in
+  // App.vue, so this array updates only when a server's status actually
+  // changes — no polling overhead. Passed through to McpStatusPopover so the
+  // welcome table MCP cell can be clicked to inspect per-server connection
+  // state (initialization can take a few seconds, especially for npx).
+  mcpServers: { type: Array, default: () => [] },
 });
 
 const tableRows = computed(() => {

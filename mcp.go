@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -233,7 +234,19 @@ func (m *McpManager) newMcpClient(ctx context.Context, cfg McpServerConfig) (*cl
 		for k, v := range cfg.Env {
 			env = append(env, k+"="+v)
 		}
-		mcpClient, err = client.NewStdioMCPClient(cfg.Command, env, cfg.Args...)
+		// NewStdioMCPClient spawns the subprocess with its own exec.Cmd and
+		// does not set SysProcAttr — on Windows this would flash a console
+		// window for every stdio MCP server (npx / python / node …) on every
+		// reconnect. Use WithCommandFunc to take ownership of Cmd creation
+		// and apply hideCommandWindow().
+		mcpClient, err = client.NewStdioMCPClientWithOptions(cfg.Command, env, cfg.Args,
+			transport.WithCommandFunc(func(ctx context.Context, command string, cmdEnv []string, args []string) (*exec.Cmd, error) {
+				cmd := exec.CommandContext(ctx, command, args...)
+				cmd.Env = cmdEnv
+				hideCommandWindow(cmd)
+				return cmd, nil
+			}),
+		)
 		if err != nil {
 			return nil, fmt.Errorf("stdio spawn failed: %w", err)
 		}
