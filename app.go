@@ -2314,7 +2314,17 @@ func (a *App) batchReadFilesWithConfig(cfg ConfigState, req BatchReadRequest) (*
 		return true
 	}
 
-	results := []BatchReadResultItem{}
+	// Collect (path, fileReq) pairs in request order, then execute in
+	// parallel. Parallel reads are safe: batch_read is purely read-only,
+	// does not touch fileOpsMu, and each file's result is written to its
+	// own slot in a pre-allocated results slice — no cross-file sharing.
+	// The previous serial loop serialized N file opens + reads; with 20
+	// files on a slow disk this was the dominant per-batch_read cost.
+	type pendingRead struct {
+		path string
+		req  ReadFileRequest
+	}
+	pending := make([]pendingRead, 0, pathCount)
 	if strings.TrimSpace(req.Path) != "" {
 		fileReq := ReadFileRequest{
 			Path:      req.Path,
@@ -2324,7 +2334,7 @@ func (a *App) batchReadFilesWithConfig(cfg ConfigState, req BatchReadRequest) (*
 			MaxChars:  req.MaxChars,
 		}
 		if addIfNotSeen(readKey(req.Path, fileReq)) {
-			results = append(results, a.batchReadOneWithConfig(cfg, req.Path, fileReq))
+			pending = append(pending, pendingRead{path: req.Path, req: fileReq})
 		}
 	}
 	for _, p := range req.Paths {
@@ -2336,7 +2346,7 @@ func (a *App) batchReadFilesWithConfig(cfg ConfigState, req BatchReadRequest) (*
 			MaxChars:  req.MaxChars,
 		}
 		if addIfNotSeen(readKey(p, fileReq)) {
-			results = append(results, a.batchReadOneWithConfig(cfg, p, fileReq))
+			pending = append(pending, pendingRead{path: p, req: fileReq})
 		}
 	}
 	for _, file := range req.Files {
@@ -2360,9 +2370,34 @@ func (a *App) batchReadFilesWithConfig(cfg ConfigState, req BatchReadRequest) (*
 			fileReq.MaxChars = req.MaxChars
 		}
 		if addIfNotSeen(readKey(file.Path, fileReq)) {
-			results = append(results, a.batchReadOneWithConfig(cfg, file.Path, fileReq))
+			pending = append(pending, pendingRead{path: file.Path, req: fileReq})
 		}
 	}
+
+	results := make([]BatchReadResultItem, len(pending))
+	if len(pending) <= 1 {
+		// Fast path: 0 or 1 file — no goroutine overhead.
+		for i, p := range pending {
+			results[i] = a.batchReadOneWithConfig(cfg, p.path, p.req)
+		}
+		return &BatchReadResult{Files: results}, nil
+	}
+	// Parallel path: cap concurrency to 4 (matches the non-file tool batch
+	// limit in runChat). 20 files / 4 concurrent ≈ 5 rounds; well below the
+	// 30s tool timeout budget even on slow disks. Result slot is written by
+	// exactly one goroutine per index, so no mutex is needed.
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 4)
+	for i, p := range pending {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(idx int, path string, fileReq ReadFileRequest) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			results[idx] = a.batchReadOneWithConfig(cfg, path, fileReq)
+		}(i, p.path, p.req)
+	}
+	wg.Wait()
 	return &BatchReadResult{Files: results}, nil
 }
 
@@ -3414,8 +3449,15 @@ func buildSkillListingMeta(skills []SkillDefinition) string {
 }
 
 func buildMemoryIndexContext() string {
-	result, err := listMemories()
-	if err != nil || len(result.Memories) == 0 {
+	entries, hit := memoryIndexCache.lookup()
+	if !hit {
+		listed, err := listMemories()
+		if err == nil {
+			memoryIndexCache.store(listed)
+		}
+		entries = listed
+	}
+	if len(entries.Memories) == 0 {
 		return ""
 	}
 	var b strings.Builder
@@ -3424,9 +3466,9 @@ func buildMemoryIndexContext() string {
 	b.WriteString("When a memory description matches the current task, call `memory_read` with the listed path to inspect the full content before relying on it.\n")
 	b.WriteString("When the user asks to add, update, or preserve durable cross-project knowledge, call `memory_write`.\n")
 	b.WriteString("## Memory index\n")
-	for i, mem := range result.Memories {
+	for i, mem := range entries.Memories {
 		if i >= memoryIndexLimit {
-			fmt.Fprintf(&b, "- ... %d more memories omitted from index\n", len(result.Memories)-i)
+			fmt.Fprintf(&b, "- ... %d more memories omitted from index\n", len(entries.Memories)-i)
 			break
 		}
 		desc := mem.Description
@@ -3436,6 +3478,67 @@ func buildMemoryIndexContext() string {
 		fmt.Fprintf(&b, "- %s: %s\n", filepath.ToSlash(mem.Path), desc)
 	}
 	return b.String()
+}
+
+// memoryIndexCache memoizes the result of listMemories() across the process
+// lifetime. The index is rebuilt from disk on every chat step and every
+// getContextBreakdown call (which the context popover polls); for the typical
+// case — memories don't change during a run — this means the same WalkDir +
+// N×readTextFile was being repeated multiple times per second.
+//
+// Invalidation is explicit: memoryWrite invalidates the cache after a
+// successful write so the next buildMemoryIndexContext re-reads from disk.
+// As a safety net for external edits made outside Ally (e.g. user edits a
+// memory file in their editor), the cache also re-checks the directory mtime
+// on each lookup; if the directory mtime advanced, the cache is treated as
+// stale and a fresh WalkDir is performed. (Note: directory mtime advances on
+// file add/remove, not on in-place edits; the explicit memoryWrite invalidate
+// covers the in-place case.)
+//
+// Concurrent access is guarded by a mutex; the read path takes a brief lock
+// to swap in the cached pointer, the write path takes the lock to invalidate.
+// The cached MemoryListResult itself is never mutated after construction.
+type memoryIndexCacheType struct {
+	sync.Mutex
+	result    MemoryListResult
+	dirMtime  time.Time
+	populated bool
+}
+
+var memoryIndexCache = memoryIndexCacheType{}
+
+func (c *memoryIndexCacheType) lookup() (MemoryListResult, bool) {
+	c.Lock()
+	defer c.Unlock()
+	if !c.populated {
+		return MemoryListResult{}, false
+	}
+	if info, err := os.Stat(memoriesDir()); err == nil {
+		if info.ModTime().After(c.dirMtime) {
+			return MemoryListResult{}, false
+		}
+	}
+	return c.result, true
+}
+
+func (c *memoryIndexCacheType) store(result MemoryListResult) {
+	dir := memoriesDir()
+	mtime := time.Time{}
+	if info, err := os.Stat(dir); err == nil {
+		mtime = info.ModTime()
+	}
+	c.Lock()
+	c.result = result
+	c.dirMtime = mtime
+	c.populated = true
+	c.Unlock()
+}
+
+func (c *memoryIndexCacheType) invalidate() {
+	c.Lock()
+	c.populated = false
+	c.result = MemoryListResult{}
+	c.Unlock()
 }
 
 func listMemories() (MemoryListResult, error) {
@@ -3628,6 +3731,7 @@ func (a *App) memoryWrite(req MemoryWriteRequest) (MemoryWriteResult, error) {
 	if err := atomicWriteFile(path, data, 0o644); err != nil {
 		return MemoryWriteResult{}, err
 	}
+	memoryIndexCache.invalidate()
 	return MemoryWriteResult{
 		Path:         filepath.ToSlash(path),
 		Description:  strings.TrimSpace(req.Description),
@@ -3866,6 +3970,9 @@ func (a *App) SaveConfig(req ConfigState) error {
 		return err
 	}
 	if proxyChanged && a.ctx != nil {
+		// Drop cached Transports immediately so idle connections through the
+		// old proxy are released instead of lingering up to IdleConnTimeout.
+		invalidateProxyTransportCache()
 		go func() { _ = a.RestartMcpServers() }()
 	}
 
@@ -5961,7 +6068,27 @@ func (a *App) RestartMcpServers() error {
 	return err
 }
 
+// chatToolsCache memoizes the built-in tool list. The schema is pure static
+// text built from functionTool() + enforceStrictSchema(), all literals — no
+// runtime state leaks in. cache is built once per process and shared across
+// every chatTools() caller (runChat, ListTools, buildToolsForConfig,
+// getContextBreakdown). Callers must not mutate the returned slice or any
+// element's Parameters map — they are shared. The only place that today
+// mutates Parameters is normalizeSchemaNode's recursion during construction,
+// which runs once inside the cached build.
+var chatToolsCache = struct {
+	once  sync.Once
+	tools []openai.Tool
+}{}
+
 func chatTools() []openai.Tool {
+	chatToolsCache.once.Do(func() {
+		chatToolsCache.tools = chatToolsUncached()
+	})
+	return chatToolsCache.tools
+}
+
+func chatToolsUncached() []openai.Tool {
 	return []openai.Tool{
 		functionTool("list_files", "List files and directories. Workspace-relative paths are resolved under the workspace; explicit absolute paths are allowed for read-only inspection subject to safety checks. Returns {entries,count,truncated}.", map[string]any{
 			"type": "object",
@@ -12741,12 +12868,93 @@ func estimateRequestTokens(messages []openai.ChatCompletionMessage, tools []open
 	return total
 }
 
-func estimateToolSchemaTokens(tools []openai.Tool) int {
-	if len(tools) > 0 {
-		data, _ := json.Marshal(tools)
-		return estimateTokensFromText(string(data))
+// builtinToolSchemaTokens caches the token estimate of the built-in tool
+// list (chatTools()), which is static across the process lifetime. MCP tools
+// change over time and must be re-marshaled per call; their contribution is
+// added separately. Combined with chatToolsCache, this avoids re-marshaling
+// the large static schema (typically 5-15KB JSON) on every getContextBreakdown
+// call — the context popover refresh is user-visible and was hitting this
+// path multiple times per second during a run.
+var builtinToolSchemaTokens = sync.OnceValue(func() int {
+	tools := chatTools()
+	if len(tools) == 0 {
+		return 0
 	}
-	return 0
+	data, _ := json.Marshal(tools)
+	return estimateTokensFromText(string(data))
+})
+
+// mcpToolSchemaTokens re-marshals the MCP tool schemas portion of `tools`.
+// `tools` is expected to be a slice returned by buildToolsWithMcp; only the
+// entries whose Function.Name starts with `mcp__` are counted, so the cached
+// built-in portion can be added by the caller without double counting.
+func mcpToolSchemaTokens(tools []openai.Tool) int {
+	if len(tools) == 0 {
+		return 0
+	}
+	// Fast path: if no MCP tools, skip Marshal entirely.
+	hasMcp := false
+	for _, t := range tools {
+		if t.Function != nil && strings.HasPrefix(t.Function.Name, "mcp__") {
+			hasMcp = true
+			break
+		}
+	}
+	if !hasMcp {
+		return 0
+	}
+	// Slow path: marshal only the MCP entries. Avoids re-marshaling the
+	// large built-in schema that is already accounted for by the cache.
+	mcpOnly := make([]openai.Tool, 0, 8)
+	for _, t := range tools {
+		if t.Function != nil && strings.HasPrefix(t.Function.Name, "mcp__") {
+			mcpOnly = append(mcpOnly, t)
+		}
+	}
+	if len(mcpOnly) == 0 {
+		return 0
+	}
+	data, _ := json.Marshal(mcpOnly)
+	return estimateTokensFromText(string(data))
+}
+
+func estimateToolSchemaTokens(tools []openai.Tool) int {
+	if len(tools) == 0 {
+		return 0
+	}
+	// Split into builtin (non-mcp__) and mcp portions. The builtin portion
+	// uses the cache only when it is the full chatTools() set — grill mode
+	// filters out side-effectful builtin tools, so the filtered builtin slice
+	// must be re-marshaled to avoid over-counting the cached full-set tokens.
+	cachedBuiltinCount := len(chatTools())
+	builtinCount := 0
+	hasMcp := false
+	for _, t := range tools {
+		if t.Function != nil && strings.HasPrefix(t.Function.Name, "mcp__") {
+			hasMcp = true
+			continue
+		}
+		builtinCount++
+	}
+	var total int
+	if builtinCount == cachedBuiltinCount {
+		// Full builtin set — use the cached estimate.
+		total = builtinToolSchemaTokens()
+	} else if builtinCount > 0 {
+		// Filtered builtin subset (e.g. grill mode) — marshal directly.
+		builtinOnly := make([]openai.Tool, 0, builtinCount)
+		for _, t := range tools {
+			if t.Function != nil && !strings.HasPrefix(t.Function.Name, "mcp__") {
+				builtinOnly = append(builtinOnly, t)
+			}
+		}
+		data, _ := json.Marshal(builtinOnly)
+		total = estimateTokensFromText(string(data))
+	}
+	if hasMcp {
+		total += mcpToolSchemaTokens(tools)
+	}
+	return total
 }
 
 func finalizeContextBreakdownTotal(result *ContextBreakdown) {

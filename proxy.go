@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/net/http/httpproxy"
@@ -160,13 +161,71 @@ func proxyHTTPClient(cfg ConfigState, allowPrivate bool, timeout time.Duration) 
 	return &http.Client{Transport: proxyHTTPTransport(cfg, allowPrivate), Timeout: timeout}
 }
 
+// proxyTransportCache memoizes *http.Transport instances by (cfg, allowPrivate)
+// so consecutive LLM requests reuse the same HTTP/2 connection pool instead
+// of paying a fresh TLS handshake (100-500ms) on every request. The key is
+// derived only from the proxy-related config fields, so changes to unrelated
+// ConfigState fields (model, temperature, etc.) do not invalidate the cache.
+//
+// The cache has small, bounded cardinality: at most 3 modes × 2 allowPrivate
+// = 6 entries per process, so it never grows unboundedly across a session.
+// Callers must not mutate the returned Transport; it is shared. If the user
+// changes proxy settings, a new Transport is constructed for the new key and
+// the old one becomes idle and eventually GC'd once its connections close.
+var proxyTransportCache = struct {
+	sync.Mutex
+	entries map[proxyTransportKey]*http.Transport
+}{entries: map[proxyTransportKey]*http.Transport{}}
+
+type proxyTransportKey struct {
+	mode         string
+	proxyURL     string
+	proxyNoProxy string
+	allowPrivate bool
+}
+
 func proxyHTTPTransport(cfg ConfigState, allowPrivate bool) *http.Transport {
+	key := proxyTransportKey{
+		mode:         normalizeProxyMode(cfg.ProxyMode),
+		proxyURL:     strings.TrimSpace(cfg.ProxyURL),
+		proxyNoProxy: strings.TrimSpace(cfg.ProxyNoProxy),
+		allowPrivate: allowPrivate,
+	}
+	proxyTransportCache.Lock()
+	if t, ok := proxyTransportCache.entries[key]; ok {
+		proxyTransportCache.Unlock()
+		return t
+	}
+	t := newProxyHTTPTransport(cfg, allowPrivate)
+	proxyTransportCache.entries[key] = t
+	proxyTransportCache.Unlock()
+	return t
+}
+
+// invalidateProxyTransportCache closes and drops every cached *http.Transport.
+// Called by SaveConfig when the user changes proxy-related config fields so
+// that idle connections through the old proxy are released immediately
+// instead of lingering up to IdleConnTimeout (90s). Safe to call from any
+// goroutine; callers that already hold a Transport reference may continue
+// using it — the Transport remains valid until its last reference is gone.
+func invalidateProxyTransportCache() {
+	proxyTransportCache.Lock()
+	old := proxyTransportCache.entries
+	proxyTransportCache.entries = map[proxyTransportKey]*http.Transport{}
+	proxyTransportCache.Unlock()
+	for _, t := range old {
+		t.CloseIdleConnections()
+	}
+}
+
+func newProxyHTTPTransport(cfg ConfigState, allowPrivate bool) *http.Transport {
 	dialer := &net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}
 	transport := &http.Transport{
 		Proxy:                 func(req *http.Request) (*url.URL, error) { return proxyForConfig(cfg, req) },
 		ForceAttemptHTTP2:     true,
-		MaxIdleConns:          20,
-		IdleConnTimeout:       30 * time.Second,
+		MaxIdleConns:          100,
+		MaxIdleConnsPerHost:   10,
+		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: time.Second,
 	}

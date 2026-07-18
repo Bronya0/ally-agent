@@ -2546,7 +2546,7 @@ function bindRuntimeEvents() {
       createImageThumbnailDataUrl(data.dataUrl).then((thumbnail) => {
         if (thumbnail && attachment.dataUrl === data.dataUrl) {
           attachment.previewUrl = thumbnail;
-          saveSessions();
+          scheduleSaveSessions();
         }
       }).catch(() => {});
     }
@@ -2585,7 +2585,7 @@ function bindRuntimeEvents() {
     existing.title = existing.askQuestions.length === 1
       ? (existing.askQuestions[0]?.question || '')
       : t('app.ask.questions', { count: existing.askQuestions.length });
-    saveSessions();
+    scheduleSaveSessions();
     if (session.id === activeSessionId.value) scrollMessagesToBottom();
   });
   onRuntimeEvent('ask:closed', (data) => {
@@ -2598,7 +2598,7 @@ function bindRuntimeEvents() {
       existing.status = 'error';
       existing.body = t('app.ask.cancelled');
     }
-    saveSessions();
+    scheduleSaveSessions();
   });
   onRuntimeEvent('tool:result', (data) => {
     flushStreamBuffer(data.runId);
@@ -2627,7 +2627,7 @@ function bindRuntimeEvents() {
         existing.durationMs = Number(data.durationMs || existing.durationMs || 0);
         existing.durationText = formatDurationShort(existing.durationMs);
         existing.time = new Date().toLocaleTimeString();
-        saveSessions();
+        scheduleSaveSessions();
         return;
       }
       existing.status = 'success';
@@ -2749,7 +2749,7 @@ function bindRuntimeEvents() {
         existing.durationMs = Number(data.durationMs || existing.durationMs || 0);
         existing.durationText = formatDurationShort(existing.durationMs);
         existing.time = new Date().toLocaleTimeString();
-        saveSessions();
+        scheduleSaveSessions();
         return;
       }
       existing.status = 'error';
@@ -4587,7 +4587,19 @@ const MAX_STORED_MESSAGE_CHARS = 60000;
 const MAX_STORED_TOOL_BODY_CHARS = 20000;
 const MAX_STORED_SESSION_CHARS = 240000;
 
+// saveSessions performs a synchronous localStorage write of all sessions.
+// It is intentionally NOT debounced here — callers use saveSessions() for
+// immediate durability (session switch, app exit, run:done/error) and
+// scheduleSaveSessions() for the debounced path (frequent in-run updates
+// like tool:result / ask:ready / sub:done where coalescing writes is safe).
 function saveSessions() {
+  // Cancel any pending debounced save — the caller has decided this write is
+  // urgent (session switch, run:done/error, app exit, etc.) and there is no
+  // point firing the trailing debounced write right after this one.
+  if (saveSessionsTimer) {
+    window.clearTimeout(saveSessionsTimer);
+    saveSessionsTimer = 0;
+  }
   try {
     trimRuntimeSessions();
     const data = sessions.value.slice(0, MAX_STORED_SESSIONS).map(s => ({
@@ -4602,6 +4614,31 @@ function saveSessions() {
     }));
     localStorage.setItem(SESSIONS_STORAGE_KEY, JSON.stringify(data));
   } catch (_) { /* quota exceeded */ }
+}
+
+// Debounced saveSessions: coalesces rapid-fire updates during an active run
+// (tool:result / ask:ready / sub:done / attachment preview generated) into
+// a single trailing write ~400ms after the last call. This avoids
+// re-serializing the full sessions array 5-10 times per second while the
+// agent streams tool calls back to back.
+//
+// Critical points (session switch, app exit, run:done/error/cancelled,
+// beforeunload) MUST call saveSessions() directly to guarantee durability.
+const SAVE_SESSIONS_DEBOUNCE_MS = 400;
+let saveSessionsTimer = 0;
+function scheduleSaveSessions() {
+  if (saveSessionsTimer) window.clearTimeout(saveSessionsTimer);
+  saveSessionsTimer = window.setTimeout(() => {
+    saveSessionsTimer = 0;
+    saveSessions();
+  }, SAVE_SESSIONS_DEBOUNCE_MS);
+}
+function flushPendingSaveSessions() {
+  if (saveSessionsTimer) {
+    window.clearTimeout(saveSessionsTimer);
+    saveSessionsTimer = 0;
+    saveSessions();
+  }
 }
 
 function trimRuntimeSessions() {
@@ -5939,6 +5976,9 @@ async function applyPlatformClass() {
 
 onMounted(async () => {
   applyPlatformClass();
+  // Flush any debounced session save before the window unloads to guarantee
+  // the last in-run updates hit localStorage before the Wails webview exits.
+  window.addEventListener('beforeunload', flushPendingSaveSessions);
   window.addEventListener('keydown', handleGlobalKeydown, true);
   document.addEventListener('pointerdown', handleMermaidOutsidePointerDown, true);
   document.addEventListener('click', handleMermaidToolbarClick, true);
@@ -5958,6 +5998,8 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
+  flushPendingSaveSessions();
+  window.removeEventListener('beforeunload', flushPendingSaveSessions);
   window.removeEventListener('keydown', handleGlobalKeydown, true);
   document.removeEventListener('pointerdown', handleMermaidOutsidePointerDown, true);
   document.removeEventListener('click', handleMermaidToolbarClick, true);
