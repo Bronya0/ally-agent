@@ -145,6 +145,7 @@ const zh = {
   'app.compact.done': '## 对话已压缩{saved}\n\n<details><summary>摘要预览</summary>\n\n{summary}\n\n</details>\n\n上下文已从 {before} tokens 压缩至 {after} tokens。可以继续对话。',
   'app.compact.success': '压缩完成：{before} → {after} tokens',
   'app.compact.failed': '压缩失败：{error}',
+  'app.compact.autoToast': '上下文已自动压缩：{before} → {after} tokens',
   'app.skills.tableHeader': '| 命令 | 描述 | 来源 |\n|------|------|------|\n',
   'app.skills.enabled': '已启用',
   'app.skills.disabled': '已停用',
@@ -231,8 +232,6 @@ const zh = {
 
   'composer.models.empty': '暂无已保存模型',
   'composer.models.manage': '管理模型',
-  'composer.models.expand': '展开 Provider',
-  'composer.models.collapse': '折叠 Provider',
   'composer.workspace.open': '在资源管理器中打开工作区',
   'composer.workspace.none': '未选择工作区',
   'composer.scheduled.open': '查看定时任务',
@@ -626,6 +625,7 @@ const enOverrides = {
   'app.compact.saved': ' ({tokens} tokens saved)',
   'app.compact.done': '## Conversation compacted{saved}\n\n<details><summary>Summary preview</summary>\n\n{summary}\n\n</details>\n\nContext was reduced from {before} tokens to {after} tokens. You can continue the conversation.',
   'app.compact.success': 'Compacted: {before} → {after} tokens', 'app.compact.failed': 'Compaction failed: {error}',
+  'app.compact.autoToast': 'Context auto-compacted: {before} → {after} tokens',
   'app.skills.tableHeader': '| Command | Description | Source |\n|------|------|------|\n',
   'app.skills.enabled': 'Enabled', 'app.skills.disabled': 'Disabled',
   'app.skills.list': '## Available skills ({count})\n\n{table}\n\nEnter /skillname to load a skill.',
@@ -674,7 +674,6 @@ const enOverrides = {
   'ask.status.asking': 'Asking',
 
   'composer.models.empty': 'No saved models', 'composer.models.manage': 'Manage models',
-  'composer.models.expand': 'Expand provider', 'composer.models.collapse': 'Collapse provider',
   'composer.workspace.open': 'Open workspace in file manager', 'composer.workspace.none': 'No workspace selected',
   'composer.scheduled.open': 'View scheduled tasks', 'composer.taskCenter.open': 'Open task center',
   'composer.question.jump': 'Jump between my questions',

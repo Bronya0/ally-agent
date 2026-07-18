@@ -19,44 +19,17 @@
         <span class="run-mode-caret">▾</span>
       </button>
     </n-dropdown>
-    <n-popover :show="modelMenuVisible" trigger="manual" placement="top-start" :show-arrow="false" :style="{ padding: '6px' }" @clickoutside="modelMenuVisible = false">
-      <template #trigger>
-        <span class="info-model" @click.stop="toggleModelMenu" style="cursor:pointer">{{ currentModelLabel }}</span>
-      </template>
-      <div class="model-menu-inner" @click.stop>
-        <div v-if="modelGroups.length" class="model-groups">
-          <section v-for="group in modelGroups" :key="group.key" class="model-group">
-            <button
-              type="button"
-              :class="['model-group-header', { active: group.hasActiveModel }]"
-              :aria-expanded="isModelGroupExpanded(group.key)"
-              :title="isModelGroupExpanded(group.key) ? $t('composer.models.collapse') : $t('composer.models.expand')"
-              @click="toggleModelGroup(group.key)"
-            >
-              <span class="model-group-caret">{{ isModelGroupExpanded(group.key) ? '▾' : '▸' }}</span>
-              <span class="model-group-name">{{ group.label }}</span>
-              <span class="model-group-count">{{ group.models.length }}</span>
-            </button>
-            <div v-if="isModelGroupExpanded(group.key)" class="model-group-items">
-              <button
-                v-for="item in group.models"
-                :key="item.index"
-                type="button"
-                :class="['model-item', { active: isActiveModel(item.model) }]"
-                @click="selectModel(item.index)"
-              >
-                <span class="model-item-model">{{ item.model.model || '-' }}</span>
-                <span v-if="isActiveModel(item.model)" class="model-item-active-mark">✓</span>
-              </button>
-            </div>
-          </section>
-        </div>
-        <div v-else class="model-empty">{{ $t('composer.models.empty') }}</div>
-        <div class="model-menu-actions">
-          <n-button size="tiny" quaternary @click="openConfig">{{ $t('composer.models.manage') }}</n-button>
-        </div>
-      </div>
-    </n-popover>
+    <n-dropdown
+      trigger="click"
+      placement="top-start"
+      scrollable
+      :options="modelMenuOptions"
+      :render-label="renderModelMenuLabel"
+      :menu-props="modelMenuProps"
+      @select="onModelMenuSelect"
+    >
+      <span class="info-model" style="cursor:pointer">{{ currentModelLabel }}</span>
+    </n-dropdown>
     <span class="info-workspace">
       <button class="info-workspace-btn" type="button" :title="$t('composer.workspace.open')" @click.stop="$emit('openWorkspace')">
         {{ config.workspace || $t('composer.workspace.none') }}
@@ -150,7 +123,7 @@
 </template>
 
 <script setup>
-import { computed, ref } from 'vue';
+import { computed, h, ref } from 'vue';
 import ContextUsageInline from './ContextUsageInline.vue';
 import { formatDateTime, t } from '../i18n.mjs';
 
@@ -237,8 +210,6 @@ const props = defineProps({
 
 const emit = defineEmits(['switchModel', 'openConfig', 'openGitDiff', 'openWorkspace', 'jumpQuestion', 'setRunMode', 'openTaskCenter']);
 
-const modelMenuVisible = ref(false);
-const expandedModelGroups = ref(new Set());
 const contextPopoverVisible = ref(false);
 const currentModelLabel = computed(() => `${props.config.providerName || '-'} · ${props.config.model || '-'}`);
 const modelGroups = computed(() => {
@@ -258,6 +229,30 @@ const modelGroups = computed(() => {
       models: group.models.sort((left, right) => compareModelLabels(left.model?.model, right.model?.model)),
     }))
     .sort((left, right) => compareModelLabels(left.label, right.label));
+});
+const modelMenuOptions = computed(() => {
+  const options = [];
+  const groups = modelGroups.value;
+  if (groups.length === 0) {
+    options.push({ key: 'empty', label: t('composer.models.empty'), disabled: true, isEmpty: true });
+  } else {
+    for (const group of groups) {
+      options.push({
+        key: `group:${group.key}`,
+        label: group.label,
+        count: group.models.length,
+        hasActiveModel: group.hasActiveModel,
+        children: group.models.map((item) => ({
+          key: `model:${item.index}`,
+          label: item.model.model || '-',
+          active: isActiveModel(item.model),
+        })),
+      });
+    }
+  }
+  options.push({ type: 'divider', key: 'divider' });
+  options.push({ key: 'manage', label: t('composer.models.manage'), isManage: true });
+  return options;
 });
 const currentRunMode = computed(() => {
   if (props.grillModeActive) return 'grill';
@@ -306,30 +301,41 @@ function modelProviderKey(model) {
   return providerLabel(model).toLocaleLowerCase();
 }
 
-function toggleModelMenu() {
-  const nextVisible = !modelMenuVisible.value;
-  modelMenuVisible.value = nextVisible;
-  if (!nextVisible) return;
-  const currentProvider = modelProviderKey(props.config);
-  const nextExpanded = new Set(expandedModelGroups.value);
-  if (modelGroups.value.some((group) => group.key === currentProvider)) nextExpanded.add(currentProvider);
-  expandedModelGroups.value = nextExpanded;
+function onModelMenuSelect(key) {
+  if (key === 'manage') {
+    emit('openConfig');
+    return;
+  }
+  if (typeof key === 'string' && key.startsWith('model:')) {
+    const index = parseInt(key.slice(6), 10);
+    if (!Number.isNaN(index)) emit('switchModel', index);
+  }
 }
 
-function isModelGroupExpanded(key) {
-  return expandedModelGroups.value.has(key);
+function renderModelMenuLabel(option) {
+  if (option.isManage) {
+    return h('span', { class: 'model-menu-manage' }, option.label);
+  }
+  if (option.isEmpty) {
+    return h('span', { class: 'model-menu-empty' }, option.label);
+  }
+  if (option.children && option.children.length) {
+    return h('span', { class: ['model-menu-group', { active: option.hasActiveModel }] }, [
+      h('span', { class: 'model-menu-group-name' }, option.label),
+      h('span', { class: 'model-menu-group-count' }, String(option.count)),
+    ]);
+  }
+  return h('span', { class: ['model-menu-item', { active: option.active }] }, [
+    h('span', { class: 'model-menu-item-name' }, option.label),
+    option.active ? h('span', { class: 'model-menu-item-mark' }, '✓') : null,
+  ]);
 }
 
-function toggleModelGroup(key) {
-  const nextExpanded = new Set(expandedModelGroups.value);
-  if (nextExpanded.has(key)) nextExpanded.delete(key);
-  else nextExpanded.add(key);
-  expandedModelGroups.value = nextExpanded;
-}
-
-function selectModel(index) {
-  modelMenuVisible.value = false;
-  emit('switchModel', index);
+function modelMenuProps() {
+  return {
+    class: 'model-menu',
+    style: { minWidth: '240px', maxHeight: 'min(420px, calc(100vh - 160px))' },
+  };
 }
 
 function selectRunMode(key) {
@@ -344,11 +350,6 @@ function providerLabel(model) {
 function isActiveModel(model) {
   return modelProviderKey(model) === modelProviderKey(props.config)
     && String(model?.model || '').trim().toLocaleLowerCase() === String(props.config.model || '').trim().toLocaleLowerCase();
-}
-
-function openConfig() {
-  modelMenuVisible.value = false;
-  emit('openConfig');
 }
 
 </script>

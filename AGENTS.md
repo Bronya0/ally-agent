@@ -772,3 +772,17 @@ Frontend utility tests cover:
 - Settings → Models owns provider presets and the current active provider/model. Known provider/model quick setup is generated from `docs/model_api.json` into a compact, lazily loaded frontend catalog; only Ally-compatible text-output models with tool calling are included, while custom configuration remains available. Model presets can be exported as unencrypted JSON (including API keys) and incrementally imported; normalized `providerName + model` is the identity, matching entries are replaced, and unrelated presets are retained.
 - The model editor's connection test sends one isolated minimal request using the unsaved form values; it does not mutate or persist the active configuration.
 - The context popover should keep system prompt parts separate, especially AGENTS.md/project instructions.
+
+---
+
+## Performance And Memory Notes (Ally-specific)
+
+- `tool:update` 事件在 `toolCallProgressTracker.eventsWithForce` (`app.go`) 中带 `toolUpdateThrottle = 200ms` + `toolUpdateThreshold = 2048` 字节节流。累计 `arguments` 超过阈值且仍在窗口内时早 continue，跳过 O(len(args)) 的 state 构造。`forceEvents()` 在流结束后绕过节流，保证最终状态送达。测试见 `TestToolCallProgressTrackerThrottlesLargeUpdates`。
+- 前端 `App.vue` 用 `toolUpdateBuffers` Map + `setTimeout(120ms) → requestAnimationFrame` 批量 flush `tool:update`，并在 `tool:result` / `tool:error` / `run:done` / `run:error` / `run:cancelled` 处理前显式 `flushToolUpdateBuffer()`。`streamBuffers` 走同样的 `queueStreamDelta` 模式处理 `run:delta`。
+- 单 session `localStorage` 预算 240KB，大 tool 预览 / edit 参数 / 附件 Base64 / Diff 在序列化前剥除或截断。
+- 前端 Mermaid SVG DOM 视口外卸载，16 条 / 2M 字符 LRU；`render_html` 流式期间不挂载 iframe，完成后再挂一个 sandboxed iframe。
+- `run_command` / `background_process` 后端 rolling buffer 512KB / 进程，最多 8 个活动进程，最近 20 条完成记录存 `~/.ally_agent/service_history/`。
+- 媒体预览用 revocable Blob URL，session 驱逐时 `URL.revokeObjectURL`；原图 Base64 仅在需要 model 输入时保留。
+- `AppHeader` 容器 `--wails-draggable: drag`，内部所有按钮 / 输入 / 下拉必须 `no-drag`；`ComposerInfoBar` 所有交互 span/button `no-drag`，否则下拉/点击会被拖拽逻辑吞掉。
+- 后台 goroutine（chat run / MCP / scheduled task / service process）都派生自 `app.ctx`，窗口关闭后随 ctx 取消。
+

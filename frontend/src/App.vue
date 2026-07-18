@@ -2784,6 +2784,21 @@ function bindRuntimeEvents() {
     }
     saveSessions();
   });
+  // Auto-compaction notification: backend emits run:compacted after an
+  // automatic history compression. Surface it to the user so the sudden
+  // drop in the footer token counter is no longer mysterious.
+  onRuntimeEvent('run:compacted', (data) => {
+    const sid = data?.sessionId || '';
+    if (!sid) return;
+    const before = Number(data?.tokensBefore || 0);
+    const after = Number(data?.tokensAfter || 0);
+    if (after > 0 && before > after) {
+      message.info(t('app.compact.autoToast', { before: fmtK(before), after: fmtK(after) }));
+    }
+    if (sid === activeSessionId.value) {
+      refreshContextTokens(sid);
+    }
+  });
   onRuntimeEvent('todo:update', (data) => {
     const sid = data.sessionId || '';
     if (!sid) return;
@@ -3656,13 +3671,13 @@ async function copyPreview() {
   message.success(t('app.copy.done'));
 }
 
-async function onSettingsSave(draftData) {
+async function onSettingsSave(draftData, silent = false) {
   assignConfig(config, draftData);
   assignConfig(configDraft, draftData);
   try {
     await SaveConfig({ ...configDraft });
     syncConfigToActiveTab();
-    message.success(t('app.config.saved'));
+    if (!silent) message.success(t('app.config.saved'));
   } catch (err) {
     message.error(t('app.config.saveFailed', { error: err }));
   }
@@ -4654,11 +4669,22 @@ function loadSavedSessions() {
     for (const s of saved) {
       const existing = sessions.value.find(x => x.id === s.id);
       if (!existing) {
+        // Reset streaming markers on restored messages: if the previous run
+        // was interrupted (window closed mid-stream, crash, etc.), messages
+        // may still carry streaming=true. On reload isRunning=false, so a
+        // dangling streaming flag would leave the UI showing a perpetual
+        // "generating..." spinner on that message. Mark them done so the UI
+        // reflects the actual persisted state.
+        const restoredMessages = (s.messages || []).map(m => ({
+          ...m,
+          streaming: false,
+          done: m.role === 'assistant' ? true : !!m.done,
+        }));
         const restored = {
           id: s.id,
           title: s.title || t('app.sessions.history'),
           workspace: s.workspace || '',
-          messages: s.messages || [],
+          messages: restoredMessages,
           runId: '',
           isRunning: false,
           grillMode: !!s.grillMode,
@@ -4678,6 +4704,7 @@ function showSessionList() {
   sessionsVisible.value = true;
   sessionsSelectedIndex.value = 0;
   commandMenuVisible.value = false;
+  refreshSessionTokensList();
   nextTick(() => promptInputRef.value?.focus());
 }
 
@@ -5652,13 +5679,31 @@ function msgCount(s) {
   return s.messages.filter(m => m.role === 'user' || m.role === 'assistant').length;
 }
 
-function ctxSize(s) {
-  if (!s.messages) return '0';
-  let chars = 0;
-  for (const m of s.messages) {
-    if (m.content) chars += m.content.length;
+// Real per-session token counts come from the backend (GetSessionContextTokens),
+// which accounts for tool calls, tool results, reasoning — the bulk of the
+// actual context payload. The previous chars/4 estimate only counted
+// message.content text and missed everything else, so it was always severely
+// understated. We cache the numbers per session id and refresh them when the
+// list is opened.
+const sessionTokensCache = reactive({});
+let sessionTokensRefreshing = false;
+async function refreshSessionTokensList() {
+  if (sessionTokensRefreshing) return;
+  sessionTokensRefreshing = true;
+  try {
+    await Promise.all(sessions.value.map(async (s) => {
+      try {
+        const n = await GetSessionContextTokens(s.id);
+        sessionTokensCache[s.id] = n || 0;
+      } catch (_) { /* ignore single-session failure */ }
+    }));
+  } finally {
+    sessionTokensRefreshing = false;
   }
-  const tokens = Math.round(chars / 4);
+}
+function ctxSize(s) {
+  const tokens = sessionTokensCache[s.id] || 0;
+  if (!tokens) return '—';
   if (tokens >= 1000) return (tokens / 1000).toFixed(1) + 'k';
   return String(tokens);
 }

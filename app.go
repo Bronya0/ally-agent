@@ -3157,6 +3157,8 @@ func buildSystemPromptParts(allSkills []SkillDefinition, workspaceRoot, customPr
 		"- Put code symbols and file paths in backticks: `getSha256()`, `src/app.ts`.\n" +
 		"- Do not place a Markdown header before the opening sentence; answer directly first.\n" +
 		"- Match answer complexity to task complexity: trivial questions get one-liners.\n\n" +
+		"# Speaking Plainly\n\n" +
+		"For explanations and summaries, lead with the conclusion in one plain sentence, then add detail only as needed. Do not pile up function names, variable names, or file paths inside prose — name a symbol once in backticks if it helps, then describe what it does in words. If the user needs full code-level detail, give it — this rule only discourages symbol dump in conceptual answers.\n\n" +
 		"# Visual Output\n\n" +
 		"The UI renders Mermaid fenced code blocks (```mermaid or ```flowchart, ```sequence, ```gantt, etc.) as interactive diagrams. Supported types:\n" +
 		"- `flowchart` / `graph` — flowcharts and decision trees\n" +
@@ -4535,16 +4537,33 @@ func (a *App) compactSession(parent context.Context, sessionID, instruction stri
 	// Count tokens before
 	tokensBefore := estimateTokensFromMessages(history)
 
-	// Build compaction prompt
-	compactPrompt := `The conversation is getting long. Summarize what has been accomplished and what remains to do, so you can continue seamlessly after context is cleared.
+	// Build compaction prompt. Structured sections maximize information density
+	// and give the model concrete anchors to recover from after compaction.
+	compactPrompt := `The conversation is getting long and is being compacted. Produce a structured summary so you can continue seamlessly after context is cleared.
 
-Include:
-- The user's latest request (quote verbatim if possible)
-- What has been done: files edited, commands run, key findings
-- Current state: what works, what's broken, what's unverified
-- The precise next step to take
+Use exactly these sections, in this order, with Markdown headings:
 
-Be concise and factual. Keep file paths, command strings, and identifiers exact. Do not call tools — just write the summary.`
+## User's latest request
+Quote the user's most recent intent verbatim if possible. If unclear, state your best interpretation.
+
+## What has been done
+Bullet list of concrete actions: files edited (with line ranges), commands run, key findings. Keep paths and identifiers exact.
+
+## Current state
+What works, what is broken, what is unverified. Be specific.
+
+## Next step
+The single precise next action to take. If multiple are needed, list them in order.
+
+## Key file paths referenced
+Bullet list of every file path mentioned or touched in the conversation, with a short note per path:
+- <path>: read L<start>-L<end> | edited L<start>-L<end> | created | deleted | listed
+
+Rules:
+- Be concise and factual. Do not call tools.
+- Keep file paths, command strings, and identifiers exact.
+- Do not invent details; if something is unknown, say "unknown".
+- The summary replaces the entire prior conversation, so it must stand alone.`
 
 	if instruction != "" {
 		compactPrompt += "\n\nAdditional instruction: " + instruction
@@ -4721,17 +4740,15 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			a.liveBreakdown[sessionID] = bd
 			a.mu.Unlock()
 
-			// Auto-compact: if context usage exceeds 65% of window, compress history
+			// Auto-compact: when context usage exceeds 80% of window, compact history.
+			// Threshold uses only usedTokens (not usedTokens + maxTokens) so it
+			// reflects actual context state instead of pre-reserving a fixed reply budget.
 			usedTokens := bd.Total
-			respBudget := cfg.MaxTokens
-			if respBudget <= 0 {
-				respBudget = 128000
-			}
 			maxCtx := cfg.ContextWindow
 			if maxCtx <= 0 {
 				maxCtx = 1048576
 			}
-			if usedTokens+respBudget > int(float64(maxCtx)*0.65) {
+			if usedTokens > int(float64(maxCtx)*0.80) {
 				a.mu.Lock()
 				h := sanitizeHistoryMessages(a.histories[sessionID])
 				a.mu.Unlock()
@@ -4759,7 +4776,13 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			toolCalls := []openai.ToolCall{}
 			toolProgress := newToolCallProgressTracker()
 			toolBatchID := fmt.Sprintf("%d:%d", turn, step)
-			modelResp, err := a.streamModelResponse(ctx, cfg, cfg.Model, messages, tools, func(event modelStreamEvent) {
+			// Inject context budget as the final request item so the model can
+			// self-regulate tool usage (e.g. prefer grep over batch_read when
+			// near the limit). Built fresh per request from the live breakdown;
+			// never appended to `messages`, so it is not persisted into history
+			// and does not break prefix-cache reuse of the preceding items.
+			requestMessages := appendContextBudgetMessage(messages, bd.Total, maxCtx)
+			modelResp, err := a.streamModelResponse(ctx, cfg, cfg.Model, requestMessages, tools, func(event modelStreamEvent) {
 				if event.ContentDelta != "" {
 					if !req.GrillMode {
 						a.emit("run:delta", map[string]any{"runId": runID, "sessionId": sessionID, "content": event.ContentDelta})
@@ -5120,6 +5143,44 @@ func (a *App) appendGoalProgressMessage(messages []openai.ChatCompletionMessage,
 	}
 	progress.WriteString("\n</ally-goal-progress>")
 	return append(messages, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: progress.String()})
+}
+
+// appendContextBudgetMessage returns a new slice with a context-budget item
+// appended to the request tail. It deliberately allocates a fresh slice so the
+// caller's `messages` is never mutated; the budget item must not be persisted
+// into saved history (it would bloat storage and break prefix-cache reuse).
+//
+// Placing the budget at the tail follows the same strategy as
+// <ally-goal-progress>: dynamic, low-priority content goes last so the stable
+// prefix (system + history) keeps benefiting from provider prompt caching.
+func appendContextBudgetMessage(messages []openai.ChatCompletionMessage, usedTokens, maxCtx int) []openai.ChatCompletionMessage {
+	if maxCtx <= 0 {
+		maxCtx = 1048576
+	}
+	if usedTokens < 0 {
+		usedTokens = 0
+	}
+	remaining := maxCtx - usedTokens
+	if remaining < 0 {
+		remaining = 0
+	}
+	usedPct := 0
+	if maxCtx > 0 {
+		usedPct = usedTokens * 100 / maxCtx
+	}
+	remainingPct := 100 - usedPct
+	var b strings.Builder
+	b.WriteString("<ally-context-budget>\n")
+	fmt.Fprintf(&b, "Window: %d tokens\n", maxCtx)
+	fmt.Fprintf(&b, "Used: %d tokens (%d%%)\n", usedTokens, usedPct)
+	fmt.Fprintf(&b, "Remaining: %d tokens (%d%%)\n", remaining, remainingPct)
+	b.WriteString("Note: large tool results (batch_read, run_command output) consume budget quickly. ")
+	b.WriteString("When remaining is low, prefer grep/list_files over batch_read, and avoid re-reading files already seen this turn.")
+	b.WriteString("\n</ally-context-budget>")
+	out := make([]openai.ChatCompletionMessage, len(messages)+1)
+	copy(out, messages)
+	out[len(messages)] = openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: b.String()}
+	return out
 }
 
 func (a *App) savedToolActivityContext(sessionID string, requestMessages []ChatMessageInput) []openai.ChatCompletionMessage {

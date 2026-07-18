@@ -68,6 +68,9 @@
               <span class="settings-field-hint">{{ $t('settings.gitBashPathHint') }}</span>
             </div>
           </n-form-item>
+          <div class="settings-page-actions">
+            <n-button type="primary" @click="onSave">{{ $t('common.save') }}</n-button>
+          </div>
         </section>
 
         <!-- Network -->
@@ -305,12 +308,6 @@
         </section>
       </n-form>
     </div>
-    <template #footer>
-      <n-space justify="end">
-        <n-button @click="onClose">{{ $t('common.cancel') }}</n-button>
-        <n-button type="primary" @click="onSave">{{ $t('settings.saveAppSettings') }}</n-button>
-      </n-space>
-    </template>
   </n-modal>
 
   <!-- Model editor sub-modal -->
@@ -476,7 +473,6 @@ async function detectProxy() {
   proxyDetecting.value = true;
   try {
     proxyStatus.value = await DetectSystemProxy();
-    if (proxyStatus.value?.enabled && draft.proxyMode === 'off') draft.proxyMode = 'system';
   } catch (err) {
     proxyStatus.value = { error: String(err) };
   } finally {
@@ -738,6 +734,7 @@ function commitModelDraft() {
   if (wasActive) applyModelToDraft(nextModel);
   alignActiveProviderTab(providerName);
   modelEditorVisible.value = false;
+  emit('save', { ...draft }, true);
 }
 
 function applyModelToDraft(model) {
@@ -752,6 +749,7 @@ function applyModelToDraft(model) {
   draft.contextWindow = model.contextWindow || draft.contextWindow || 1048576;
   draft.reasoningTag = model.reasoningTag || 'reasoning_content';
   alignActiveProviderTab(normalizedProviderName(model.providerName));
+  emit('save', { ...draft }, true);
 }
 
 function isDraftModelActive(model) {
@@ -771,6 +769,7 @@ function removeModelDraft(index) {
   else if (modelEditorIndex.value > index) modelEditorIndex.value -= 1;
   const activeStillExists = providerTabs.value.some((tab) => tab.name === activeProviderTab.value);
   alignActiveProviderTab(activeStillExists ? activeProviderTab.value : removedProvider);
+  emit('save', { ...draft }, true);
 }
 
 function openModelImport() {
@@ -792,6 +791,7 @@ async function importModelConfigs(event) {
     draft.models = result.models;
     if (importedActiveModel) applyModelToDraft(importedActiveModel);
     alignActiveProviderTab(activeProviderTab.value || normalizedProviderName(draft.providerName));
+    emit('save', { ...draft }, true);
     message.success(t('settings.modelImportSuccess', { added: result.added, updated: result.updated }));
   } catch (err) {
     const code = String(err?.code || 'UNKNOWN');
@@ -1157,6 +1157,13 @@ watch(() => props.visible, (visible) => {
 
 .settings-page {
   padding: 0;
+}
+
+.settings-page-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 16px;
+  gap: 8px;
 }
 
 .license-notice {
