@@ -4782,6 +4782,11 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			// never appended to `messages`, so it is not persisted into history
 			// and does not break prefix-cache reuse of the preceding items.
 			requestMessages := appendContextBudgetMessage(messages, bd.Total, maxCtx)
+			// Inject the live todo list every turn so the model can see which
+			// items are still pending/in_progress and decide to flip them via
+			// todo_write before answering. Also not persisted into history —
+			// reconstructed fresh each turn from the live todo state.
+			requestMessages = appendTodoStatusMessage(requestMessages, a.GetTodos(sessionID))
 			modelResp, err := a.streamModelResponse(ctx, cfg, cfg.Model, requestMessages, tools, func(event modelStreamEvent) {
 				if event.ContentDelta != "" {
 					if !req.GrillMode {
@@ -5177,6 +5182,42 @@ func appendContextBudgetMessage(messages []openai.ChatCompletionMessage, usedTok
 	b.WriteString("Note: large tool results (batch_read, run_command output) consume budget quickly. ")
 	b.WriteString("When remaining is low, prefer grep/list_files over batch_read, and avoid re-reading files already seen this turn.")
 	b.WriteString("\n</ally-context-budget>")
+	out := make([]openai.ChatCompletionMessage, len(messages)+1)
+	copy(out, messages)
+	out[len(messages)] = openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: b.String()}
+	return out
+}
+
+// appendTodoStatusMessage returns a new slice with a <ally-todos> item appended
+// to the request tail. The model sees the current todo list every turn — both
+// done and pending items — so it can decide when to call todo_write to update
+// statuses.
+//
+// Why every turn: models typically update todos as "before starting the next
+// item, mark the current done and the next in_progress". After the last item
+// there is no "next", so the model often answers the user directly without a
+// final todo_write. Injecting the current list every turn gives the model a
+// persistent visible reminder of which items are still pending/in_progress,
+// so it can notice "I have a dangling in_progress" and flip it.
+//
+// Like the context-budget message, this item is not persisted into saved
+// history — it is reconstructed fresh each turn from the live todo state.
+// If the list is empty, no item is appended (no todo list = no reminder
+// needed, and skipping keeps the request lean).
+func appendTodoStatusMessage(messages []openai.ChatCompletionMessage, todos []TodoEntry) []openai.ChatCompletionMessage {
+	if len(todos) == 0 {
+		return messages
+	}
+	var b strings.Builder
+	b.WriteString("<ally-todos>\n")
+	b.WriteString("Current todo list state (the user sees this same list in the UI):\n")
+	for i, t := range todos {
+		fmt.Fprintf(&b, "%d. [%s] %s\n", i+1, t.Status, t.Title)
+	}
+	b.WriteString("\nIf you just finished work that completes a pending or in_progress item, ")
+	b.WriteString("call `todo_write` to flip its status to `done` before answering the user. ")
+	b.WriteString("Never end your turn with a dangling `in_progress` item that is actually finished.")
+	b.WriteString("\n</ally-todos>")
 	out := make([]openai.ChatCompletionMessage, len(messages)+1)
 	copy(out, messages)
 	out[len(messages)] = openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: b.String()}
@@ -6477,6 +6518,32 @@ func detectToolBatchConflicts(cfg ConfigState, calls []openai.ToolCall) map[int]
 			conflicts[i] = err
 		}
 		return conflicts
+	}
+	// Deduplicate calls with fully identical arguments within the same batch.
+	// Models occasionally emit two or more tool calls whose function arguments
+	// are byte-for-byte identical (e.g. same run_command, same batch_read, same
+	// http_request URL+method+body). Running them again wastes resources, races
+	// on side effects, and complicates the model's own reasoning. Keep the first
+	// occurrence; reject the rest with E_DUPLICATE_TOOL_CALL so the model can
+	// see the dedup happened and stop retrying.
+	//
+	// Two calls are considered identical when both their function name and the
+	// raw arguments JSON string match exactly. Whitespace-only differences in
+	// the model's JSON serialization are treated as distinct because parsing
+	// them would require per-tool normalization; the common failure mode is
+	// truly identical duplicates, which is what we want to catch.
+	seen := map[string]int{}
+	for i, call := range calls {
+		if _, conflict := conflicts[i]; conflict {
+			continue
+		}
+		key := call.Function.Name + "\x00" + call.Function.Arguments
+		first, ok := seen[key]
+		if !ok {
+			seen[key] = i
+			continue
+		}
+		conflicts[i] = codedToolError("E_DUPLICATE_TOOL_CALL", fmt.Errorf("this tool call is a byte-for-byte duplicate of toolCallIndex %d in the same batch and was skipped; reuse that result instead of re-running the identical call", first))
 	}
 	return conflicts
 }
