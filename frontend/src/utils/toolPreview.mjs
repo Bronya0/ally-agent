@@ -6,6 +6,31 @@ export function normalizedLines(text) {
   return lines;
 }
 
+// formatHttpToolTitle renders the title shown on http_request / web_fetch tool
+// cards. It surfaces enough of the optional fields (method, timeout, body/json
+// presence) that two cards with the same URL but different actual arguments can
+// be told apart at a glance, instead of every card collapsing to just the URL.
+// The URL is still the first segment; everything else is appended after a
+// middle-dot separator so the chip stays compact.
+export function formatHttpToolTitle(parsed) {
+  if (!parsed || typeof parsed !== 'object') return '';
+  const url = String(parsed.url || '').trim();
+  if (!url) return '';
+  const parts = [url];
+  const method = String(parsed.method || '').trim().toUpperCase();
+  if (method && method !== 'GET') parts.push(method);
+  if (parsed.body) parts.push('body');
+  else if (parsed.json !== undefined && parsed.json !== null) parts.push('json');
+  if (parsed.saveTo) parts.push(`→ ${parsed.saveTo}`);
+  if (parsed.timeoutSeconds && Number(parsed.timeoutSeconds) !== 60) {
+    parts.push(`${parsed.timeoutSeconds}s`);
+  }
+  if (parsed.maxBytes && Number(parsed.maxBytes) !== 262144) {
+    parts.push(`≤${parsed.maxBytes}B`);
+  }
+  return parts.join(' · ');
+}
+
 export function codePreviewWindow(code, options = {}) {
   if (!code) {
     return {

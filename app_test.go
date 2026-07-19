@@ -1574,3 +1574,138 @@ func TestCountUnifiedDiffStatsIgnoresHeaders(t *testing.T) {
 		t.Fatalf("expected +2 -1, got +%d -%d", added, deleted)
 	}
 }
+
+// TestNormalizeToolArgsForDedup verifies that the dedup canonicalization is
+// invariant under field reordering and whitespace differences, while still
+// distinguishing genuinely different argument values and preserving array
+// order (e.g. edit.files, ask.questions).
+func TestNormalizeToolArgsForDedup(t *testing.T) {
+	cases := []struct {
+		name string
+		a, b string
+		want bool // true if a and b should dedup to the same key
+	}{
+		{
+			name: "field order",
+			a:    `{"url":"https://x","method":"GET"}`,
+			b:    `{"method":"GET","url":"https://x"}`,
+			want: true,
+		},
+		{
+			name: "whitespace only",
+			a:    `{"url": "https://x", "method": "GET"}`,
+			b:    `{"url":"https://x","method":"GET"}`,
+			want: true,
+		},
+		{
+			name: "different url",
+			a:    `{"url":"https://x"}`,
+			b:    `{"url":"https://y"}`,
+			want: false,
+		},
+		{
+			name: "different method",
+			a:    `{"url":"https://x","method":"GET"}`,
+			b:    `{"url":"https://x","method":"POST"}`,
+			want: false,
+		},
+		{
+			name: "default value present vs absent stays distinct",
+			a:    `{"url":"https://x"}`,
+			b:    `{"url":"https://x","method":"GET"}`,
+			want: false,
+		},
+		{
+			name: "array order preserved",
+			a:    `{"items":["a","b"]}`,
+			b:    `{"items":["b","a"]}`,
+			want: false,
+		},
+		{
+			name: "nested object order",
+			a:    `{"query":{"a":"1","b":"2"}}`,
+			b:    `{"query":{"b":"2","a":"1"}}`,
+			want: true,
+		},
+		{
+			name: "empty strings",
+			a:    ``,
+			b:    ``,
+			want: true,
+		},
+		{
+			name: "invalid json falls back to raw",
+			a:    `not-json`,
+			b:    `not-json`,
+			want: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ka := normalizeToolArgsForDedup(tc.a)
+			kb := normalizeToolArgsForDedup(tc.b)
+			got := ka == kb
+			if got != tc.want {
+				t.Fatalf("normalize(%q)=%q normalize(%q)=%q; want equal=%v got equal=%v",
+					tc.a, ka, tc.b, kb, tc.want, got)
+			}
+		})
+	}
+}
+
+// TestDetectToolBatchConflictsDedupNormalized verifies that batch-level dedup
+// now treats field-reordered and whitespace-different JSON arguments as
+// duplicates, while still distinguishing genuinely different calls.
+func TestDetectToolBatchConflictsDedupNormalized(t *testing.T) {
+	cfg := ConfigState{Workspace: "/ws"}
+	mk := func(id, args string) openai.ToolCall {
+		return openai.ToolCall{
+			ID:   id,
+			Type: openai.ToolTypeFunction,
+			Function: openai.FunctionCall{
+				Name:      "http_request",
+				Arguments: args,
+			},
+		}
+	}
+
+	t.Run("field reorder dedups", func(t *testing.T) {
+		calls := []openai.ToolCall{
+			mk("call_a", `{"url":"https://api.example.com","method":"GET"}`),
+			mk("call_b", `{"method":"GET","url":"https://api.example.com"}`),
+		}
+		conflicts := detectToolBatchConflicts(cfg, calls)
+		if len(conflicts) != 1 {
+			t.Fatalf("expected 1 conflict, got %d: %v", len(conflicts), conflicts)
+		}
+		err, ok := conflicts[1]
+		if !ok {
+			t.Fatalf("expected conflict at index 1")
+		}
+		if !strings.Contains(err.Error(), "E_DUPLICATE_TOOL_CALL") {
+			t.Fatalf("expected E_DUPLICATE_TOOL_CALL, got %v", err)
+		}
+	})
+
+	t.Run("whitespace difference dedups", func(t *testing.T) {
+		calls := []openai.ToolCall{
+			mk("call_a", `{"url": "https://api.example.com"}`),
+			mk("call_b", `{"url":"https://api.example.com"}`),
+		}
+		conflicts := detectToolBatchConflicts(cfg, calls)
+		if len(conflicts) != 1 {
+			t.Fatalf("expected 1 conflict, got %d: %v", len(conflicts), conflicts)
+		}
+	})
+
+	t.Run("different method stays distinct", func(t *testing.T) {
+		calls := []openai.ToolCall{
+			mk("call_a", `{"url":"https://api.example.com","method":"GET"}`),
+			mk("call_b", `{"url":"https://api.example.com","method":"POST"}`),
+		}
+		conflicts := detectToolBatchConflicts(cfg, calls)
+		if len(conflicts) != 0 {
+			t.Fatalf("expected 0 conflicts, got %d: %v", len(conflicts), conflicts)
+		}
+	})
+}

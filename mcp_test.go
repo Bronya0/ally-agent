@@ -4,7 +4,46 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/mark3labs/mcp-go/mcp"
 )
+
+func TestToolSchemaToMapProducesProviderSafeSchema(t *testing.T) {
+	schema := mcp.ToolInputSchema{
+		Type:       "object",
+		Properties: map[string]any{},
+		Defs: map[string]any{
+			"options": map[string]any{
+				"type":       "object",
+				"properties": map[string]any{},
+				"required":   nil,
+			},
+		},
+		AdditionalProperties: false,
+	}
+
+	got := toolSchemaToMap(schema)
+	if got["type"] != "object" {
+		t.Fatalf("type = %#v, want object", got["type"])
+	}
+	if _, ok := got["properties"].(map[string]any); !ok {
+		t.Fatalf("properties must be an object, got %#v", got["properties"])
+	}
+	if required, exists := got["required"]; exists && required == nil {
+		t.Fatal("required must be omitted or an array, not null")
+	}
+	if got["additionalProperties"] != false {
+		t.Fatalf("additionalProperties was not preserved: %#v", got)
+	}
+	defs, ok := got["$defs"].(map[string]any)
+	if !ok {
+		t.Fatalf("$defs was not preserved: %#v", got)
+	}
+	nested := defs["options"].(map[string]any)
+	if required, exists := nested["required"]; exists && required == nil {
+		t.Fatal("nested required must be omitted or an array, not null")
+	}
+}
 
 func TestNormalizedMcpTransport(t *testing.T) {
 	tests := []struct {

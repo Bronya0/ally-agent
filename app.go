@@ -6646,33 +6646,85 @@ func detectToolBatchConflicts(cfg ConfigState, calls []openai.ToolCall) map[int]
 		}
 		return conflicts
 	}
-	// Deduplicate calls with fully identical arguments within the same batch.
-	// Models occasionally emit two or more tool calls whose function arguments
-	// are byte-for-byte identical (e.g. same run_command, same batch_read, same
-	// http_request URL+method+body). Running them again wastes resources, races
-	// on side effects, and complicates the model's own reasoning. Keep the first
-	// occurrence; reject the rest with E_DUPLICATE_TOOL_CALL so the model can
-	// see the dedup happened and stop retrying.
+	// Deduplicate calls with semantically identical arguments within the same batch.
+	// Models occasionally emit two or more tool calls that mean the same thing but
+	// differ in JSON serialization: field order ({"url":"X","method":"GET"} vs
+	// {"method":"GET","url":"X"}), whitespace ({"url": "X"} vs {"url":"X"}), or
+	// default-value fields ({"url":"X"} vs {"url":"X","method":"GET"} when GET is
+	// the default). Running them again wastes resources, races on side effects,
+	// and complicates the model's own reasoning. Keep the first occurrence; reject
+	// the rest with E_DUPLICATE_TOOL_CALL so the model can see the dedup happened
+	// and stop retrying.
 	//
-	// Two calls are considered identical when both their function name and the
-	// raw arguments JSON string match exactly. Whitespace-only differences in
-	// the model's JSON serialization are treated as distinct because parsing
-	// them would require per-tool normalization; the common failure mode is
-	// truly identical duplicates, which is what we want to catch.
+	// The dedup key normalizes the arguments by parsing the JSON (when parseable)
+	// and reserializing with sorted keys and no extra whitespace. This catches
+	// field-order and whitespace differences for free. Default-value normalization
+	// is intentionally NOT done here because it would require per-tool knowledge
+	// and could mask legitimately different intents; the UI is responsible for
+	// making any remaining differences visible.
 	seen := map[string]int{}
 	for i, call := range calls {
 		if _, conflict := conflicts[i]; conflict {
 			continue
 		}
-		key := call.Function.Name + "\x00" + call.Function.Arguments
+		key := call.Function.Name + "\x00" + normalizeToolArgsForDedup(call.Function.Arguments)
 		first, ok := seen[key]
 		if !ok {
 			seen[key] = i
 			continue
 		}
-		conflicts[i] = codedToolError("E_DUPLICATE_TOOL_CALL", fmt.Errorf("this tool call is a byte-for-byte duplicate of toolCallIndex %d in the same batch and was skipped; reuse that result instead of re-running the identical call", first))
+		conflicts[i] = codedToolError("E_DUPLICATE_TOOL_CALL", fmt.Errorf("this tool call is a semantic duplicate of toolCallIndex %d in the same batch (same function and equivalent arguments after JSON normalization) and was skipped; reuse that result instead of re-running the identical call", first))
 	}
 	return conflicts
+}
+
+// normalizeToolArgsForDedup returns a canonical form of a tool-call arguments
+// JSON string used only for deduplication. It parses the JSON and reserializes
+// it with sorted keys and no extra whitespace, so that field-order differences
+// and whitespace differences are treated as identical. If the input is not
+// valid JSON, the raw string is returned unchanged so non-JSON or malformed
+// arguments still dedup on exact bytes.
+func normalizeToolArgsForDedup(args string) string {
+	trimmed := strings.TrimSpace(args)
+	if trimmed == "" {
+		return ""
+	}
+	var parsed any
+	if err := json.Unmarshal([]byte(trimmed), &parsed); err != nil {
+		return trimmed
+	}
+	canonical, err := json.Marshal(sortedJSON(parsed))
+	if err != nil {
+		return trimmed
+	}
+	return string(canonical)
+}
+
+// sortedJSON recursively reorders object keys in a parsed JSON value so that
+// json.Marshal produces a stable canonical form. Arrays keep their order, since
+// argument arrays are typically order-sensitive (e.g. edit.files, ask.questions).
+func sortedJSON(v any) any {
+	switch t := v.(type) {
+	case map[string]any:
+		keys := make([]string, 0, len(t))
+		for k := range t {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		out := make(map[string]any, len(t))
+		for _, k := range keys {
+			out[k] = sortedJSON(t[k])
+		}
+		return out
+	case []any:
+		out := make([]any, len(t))
+		for i, item := range t {
+			out[i] = sortedJSON(item)
+		}
+		return out
+	default:
+		return v
+	}
 }
 
 type fileMutationTarget struct{ key, display string }

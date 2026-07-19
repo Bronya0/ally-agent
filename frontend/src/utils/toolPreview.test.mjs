@@ -4,6 +4,7 @@ import {
   codePreviewWindow,
   displaySourceMessages,
   estimateMessageRenderChars,
+  formatHttpToolTitle,
 } from './toolPreview.mjs';
 
 test('collapsed create preview uses the latest generated lines', () => {
@@ -171,4 +172,74 @@ test('expanded archives remain bounded instead of rendering the whole session', 
   assert.equal(display[0].expanded, true);
   assert.ok(display.length <= 201);
   assert.equal(display.at(-1).content, 'message 999');
+});
+
+test('formatHttpToolTitle shows URL only for default GET, no options', () => {
+  assert.equal(
+    formatHttpToolTitle({ url: 'https://api.example.com' }),
+    'https://api.example.com',
+  );
+});
+
+test('formatHttpToolTitle appends non-default method', () => {
+  assert.equal(
+    formatHttpToolTitle({ url: 'https://api.example.com', method: 'post' }),
+    'https://api.example.com · POST',
+  );
+});
+
+test('formatHttpToolTitle skips GET since it is the default', () => {
+  assert.equal(
+    formatHttpToolTitle({ url: 'https://api.example.com', method: 'GET' }),
+    'https://api.example.com',
+  );
+});
+
+test('formatHttpToolTitle surfaces body/json/saveTo/timeout/maxBytes', () => {
+  assert.equal(
+    formatHttpToolTitle({ url: 'https://api.example.com', body: 'hi' }),
+    'https://api.example.com · body',
+  );
+  assert.equal(
+    formatHttpToolTitle({ url: 'https://api.example.com', json: { a: 1 } }),
+    'https://api.example.com · json',
+  );
+  assert.equal(
+    formatHttpToolTitle({ url: 'https://api.example.com', saveTo: 'out.json' }),
+    'https://api.example.com · → out.json',
+  );
+  assert.equal(
+    formatHttpToolTitle({ url: 'https://api.example.com', timeoutSeconds: 30 }),
+    'https://api.example.com · 30s',
+  );
+  // Default timeout is 60s and is omitted.
+  assert.equal(
+    formatHttpToolTitle({ url: 'https://api.example.com', timeoutSeconds: 60 }),
+    'https://api.example.com',
+  );
+  assert.equal(
+    formatHttpToolTitle({ url: 'https://api.example.com', maxBytes: 1024 }),
+    'https://api.example.com · ≤1024B',
+  );
+});
+
+test('formatHttpToolTitle combines multiple fields in a fixed order', () => {
+  assert.equal(
+    formatHttpToolTitle({
+      url: 'https://api.example.com',
+      method: 'POST',
+      json: { q: 1 },
+      timeoutSeconds: 10,
+      maxBytes: 512,
+      saveTo: 'r.json',
+    }),
+    'https://api.example.com · POST · json · → r.json · 10s · ≤512B',
+  );
+});
+
+test('formatHttpToolTitle returns empty for missing url or non-object input', () => {
+  assert.equal(formatHttpToolTitle(null), '');
+  assert.equal(formatHttpToolTitle(undefined), '');
+  assert.equal(formatHttpToolTitle({}), '');
+  assert.equal(formatHttpToolTitle({ method: 'POST' }), '');
 });

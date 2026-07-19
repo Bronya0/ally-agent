@@ -29,6 +29,7 @@
 <script setup>
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { t } from '../i18n.mjs';
+import { formatHttpToolTitle } from '../utils/toolPreview.mjs';
 
 const props = defineProps({
   msg: { type: Object, required: true },
@@ -208,7 +209,7 @@ function toolArgsTitle(tc) {
     return parsed.path || parsed.pattern || '';
   }
   if (name === 'http_request' || name === 'web_fetch') {
-    return parsed.url || '';
+    return formatHttpToolTitle(parsed);
   }
   if (name === 'memory_read' || name === 'memory_write') {
     return parsed.path || parsed.description || '';

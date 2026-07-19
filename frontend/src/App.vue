@@ -277,8 +277,13 @@ import {
   DEFAULT_TOOL_PREVIEW_LINES,
   displaySourceMessages as buildDisplaySourceMessages,
   estimateMessageRenderChars as estimateToolMessageRenderChars,
+  formatHttpToolTitle,
   isRenderableMessage,
 } from './utils/toolPreview.mjs';
+import {
+  commitToolEventMessage as commitToolEventById,
+  findToolEventMessage as findToolEventById,
+} from './utils/toolEventState.mjs';
 
 const GitDiffModal = defineAsyncComponent(() => import('./components/GitDiffModal.vue'));
 
@@ -4249,17 +4254,7 @@ function updateToolEvent(id, name, title, body, status = 'default', meta = {}, t
   const session = targetSession || activeSession.value;
   if (!session) return;
   const eventId = id || `${name}-${Date.now()}-${Math.random()}`;
-  // Hot path: tool:update flushes fire every 120ms and used to call
-  // session.messages.find() O(n) on the full (up to 180+) message list each
-  // time. Cache the last matched (eventId, msg) pair on the session: typical
-  // access pattern is "same event id keeps updating", so cache hit rate is
-  // ~99%. Fall back to find() only on miss.
-  if (session._lastToolEventId !== eventId) {
-    const found = session.messages.find((item) => item.role === 'tool_call' && item.eventId === eventId);
-    session._lastToolEventId = eventId;
-    session._lastToolMsg = found || null;
-  }
-  const existing = session._lastToolMsg;
+  const existing = findToolEventById(session, eventId);
 
   // Rich display data
   let editOldString = '';
@@ -4412,18 +4407,12 @@ function updateToolEvent(id, name, title, body, status = 'default', meta = {}, t
     if (!payload.waitSeconds && existing.waitSeconds) payload.waitSeconds = existing.waitSeconds;
     if (!payload.waitStartedAt && existing.waitStartedAt) payload.waitStartedAt = existing.waitStartedAt;
     if ((!payload.askQuestions || payload.askQuestions.length === 0) && existing.askQuestions) payload.askQuestions = existing.askQuestions;
-    // Only assign fields whose value actually changed. The previous
-    // Object.assign(existing, payload) unconditionally triggered setters on
-    // ~30 fields (even unchanged primitives like status='running'), which in
-    // turn re-triggered the displayMessages computed and downstream
-    // ToolCallCard re-renders on every 120ms flush. Manual diffing keeps
-    // the reactive system idle when nothing actually moved.
-    for (const key of Object.keys(payload)) {
-      if (existing[key] !== payload[key]) existing[key] = payload[key];
-    }
-  } else {
-    session.messages.push(payload);
   }
+  // Commit also refreshes the hot-path cache after the first insert. Without
+  // that write-back, every later tool:update appended another card with the
+  // same eventId, leaving Vue with duplicate keys and tool:result updating the
+  // earliest (often still argument-less) card.
+  commitToolEventById(session, eventId, existing, payload);
   if (session.id === activeSessionId.value) scrollMessagesToBottom();
 }
 
@@ -5201,7 +5190,7 @@ function makeToolTitle(name, args, meta = {}) {
     return parsed.action || 'list';
   }
   if (name === 'http_request' || name === 'web_fetch') {
-    return parsed.url || '';
+    return formatHttpToolTitle(parsed);
   }
   if (name === 'render_html') {
     return parsed.title || '';

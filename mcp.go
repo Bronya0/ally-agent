@@ -282,12 +282,95 @@ func (m *McpManager) newMcpClient(ctx context.Context, cfg McpServerConfig) (*cl
 	return mcpClient, nil
 }
 
-// toolSchemaToMap converts MCP ToolInputSchema to a map[string]any for OpenAI tool registration.
+// toolSchemaToMap converts an MCP input schema to provider-safe JSON Schema.
+// Marshaling through mcp-go preserves $defs/additionalProperties and turns nil
+// slices/maps into valid []/{} values. The recursive normalization also removes
+// invalid null schema keywords sometimes emitted by compatible MCP servers.
 func toolSchemaToMap(schema mcp.ToolInputSchema) map[string]any {
-	return map[string]any{
-		"type":       schema.Type,
-		"properties": schema.Properties,
-		"required":   schema.Required,
+	raw, err := json.Marshal(schema)
+	if err != nil {
+		return map[string]any{"type": "object", "properties": map[string]any{}}
+	}
+	var result map[string]any
+	if err := json.Unmarshal(raw, &result); err != nil || result == nil {
+		return map[string]any{"type": "object", "properties": map[string]any{}}
+	}
+	normalizeMcpSchemaNode(result, true)
+	return result
+}
+
+func normalizeMcpSchemaNode(node map[string]any, root bool) {
+	if root {
+		if typ, ok := node["type"].(string); !ok || strings.TrimSpace(typ) == "" {
+			node["type"] = "object"
+		}
+	}
+	if node["type"] == "object" {
+		if _, ok := node["properties"].(map[string]any); !ok {
+			node["properties"] = map[string]any{}
+		}
+	}
+
+	if required, ok := normalizedMcpRequired(node["required"]); ok && len(required) > 0 {
+		node["required"] = required
+	} else {
+		delete(node, "required")
+	}
+	if node["additionalProperties"] == nil {
+		delete(node, "additionalProperties")
+	}
+
+	for _, key := range []string{"properties", "patternProperties", "$defs", "definitions", "dependentSchemas"} {
+		children, ok := node[key].(map[string]any)
+		if !ok {
+			if key != "properties" || node["type"] != "object" {
+				delete(node, key)
+			}
+			continue
+		}
+		for _, child := range children {
+			if childSchema, ok := child.(map[string]any); ok {
+				normalizeMcpSchemaNode(childSchema, false)
+			}
+		}
+	}
+	for _, key := range []string{"additionalProperties", "items", "contains", "not", "if", "then", "else", "propertyNames", "unevaluatedProperties", "unevaluatedItems"} {
+		if child, ok := node[key].(map[string]any); ok {
+			normalizeMcpSchemaNode(child, false)
+		}
+	}
+	for _, key := range []string{"allOf", "anyOf", "oneOf", "prefixItems"} {
+		items, ok := node[key].([]any)
+		if !ok {
+			if node[key] == nil {
+				delete(node, key)
+			}
+			continue
+		}
+		for _, item := range items {
+			if child, ok := item.(map[string]any); ok {
+				normalizeMcpSchemaNode(child, false)
+			}
+		}
+	}
+}
+
+func normalizedMcpRequired(value any) ([]string, bool) {
+	switch required := value.(type) {
+	case []string:
+		return required, true
+	case []any:
+		out := make([]string, 0, len(required))
+		for _, item := range required {
+			name, ok := item.(string)
+			if !ok || strings.TrimSpace(name) == "" {
+				return nil, false
+			}
+			out = append(out, name)
+		}
+		return out, true
+	default:
+		return nil, false
 	}
 }
 
