@@ -190,6 +190,11 @@ async function openServiceLog(service) {
   logTitle.value = service.name || service.id;
   logContent.value = service.outputTail || '';
   logVisible.value = true;
+  // Scroll to bottom as soon as the modal opens so the user sees the latest
+  // output (matching openScheduledTaskLog). Without this, the initial render
+  // shows the top of the buffer even though refreshServiceLog will scroll
+  // later — the gap is visible and confusing for long-running services.
+  scrollLogToBottom();
   await refreshServiceLog();
 }
 
@@ -252,8 +257,22 @@ async function copyLog() {
 }
 
 function scrollLogToBottom() {
+  // The log modal may still be mounting (n-modal transition) or the <pre>
+  // may still be laying out a large buffer (up to 512 KiB) when nextTick
+  // fires. Use requestAnimationFrame after nextTick so the browser has
+  // flushed layout, and retry once more on the next frame to catch slow
+  // renders. This matches how dev-tools consoles auto-stick to bottom.
   nextTick(() => {
-    if (logPre.value) logPre.value.scrollTop = logPre.value.scrollHeight;
+    requestAnimationFrame(() => {
+      const pre = logPre.value;
+      if (!pre) return;
+      pre.scrollTop = pre.scrollHeight;
+      // Retry once more on the next frame for large buffers that finish
+      // laying out after the first paint.
+      requestAnimationFrame(() => {
+        if (logPre.value) logPre.value.scrollTop = logPre.value.scrollHeight;
+      });
+    });
   });
 }
 

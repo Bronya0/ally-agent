@@ -60,7 +60,7 @@
       :max-lines="BODY_PREVIEW_LINES"
       preview-mode="tail"
     />
-    <pre v-else-if="msg.body && msg.status !== 'error' && msg.kind !== 'edit' && msg.kind !== 'read'" :class="['tool-body', { 'fixed-scroll': isFixedKind(msg.kind), 'body-preview': isBodyPreview(msg) }]">{{ toolBodyText(msg) }}</pre>
+    <pre v-else-if="msg.body && msg.status !== 'error' && msg.kind !== 'edit' && msg.kind !== 'read'" ref="bodyPreRef" :class="['tool-body', { 'fixed-scroll': isFixedKind(msg.kind), 'body-preview': isBodyPreview(msg), 'tail-default': isServiceReadResult(msg) }]">{{ toolBodyText(msg) }}</pre>
     <div v-if="msg.status === 'error'" class="tool-error-block">
       <div v-if="msg.errorCode" class="tool-error-detail">
         <span>{{ errorDescription(msg) }}</span>
@@ -72,7 +72,7 @@
 </template>
 
 <script setup>
-import { computed, defineAsyncComponent, onUnmounted, ref, watch } from 'vue';
+import { computed, defineAsyncComponent, nextTick, onUnmounted, ref, watch } from 'vue';
 import hljs from 'highlight.js/lib/core';
 import bash from 'highlight.js/lib/languages/bash';
 import powershell from 'highlight.js/lib/languages/powershell';
@@ -81,6 +81,8 @@ import { formatToolErrorBody } from '../utils/toolError.mjs';
 import { t } from '../i18n.mjs';
 
 const BODY_PREVIEW_LINES = 6;
+
+const bodyPreRef = ref(null);
 
 if (!hljs.getLanguage('bash')) {
   hljs.registerLanguage('bash', bash);
@@ -270,7 +272,15 @@ function isCreatePreview(msg) {
 function toolBodyText(msg) {
   const body = String(msg.body || '');
   if (!isBodyPreview(msg)) return body;
-  return normalizedLines(body).slice(0, BODY_PREVIEW_LINES).join('\n');
+  const lines = normalizedLines(body);
+  // Service read results lead with the latest output and end with a metadata
+  // line. In collapsed preview we want the latest output lines visible, so
+  // take the tail instead of the head — matches the auto-scroll behavior of
+  // the expanded <pre>.
+  if (isServiceReadResult(msg)) {
+    return lines.slice(Math.max(0, lines.length - BODY_PREVIEW_LINES)).join('\n');
+  }
+  return lines.slice(0, BODY_PREVIEW_LINES).join('\n');
 }
 
 function errorDescription(msg) {
@@ -301,11 +311,43 @@ function isNonInteractiveTool(msg) {
 }
 
 function isFocusDisabledTool(msg) {
-  const kind = String(msg?.kind || '');
-  if (['read', 'command', 'calculate', 'mcp', 'other', 'wait'].includes(kind)) return true;
-  if (String(msg?.name || '') === 'http_request' || String(msg?.name || '') === 'web_fetch') return true;
-  return isNonInteractiveTool(msg);
+  // All tool cards disable the click-to-focus behavior now. The focused
+  // border was a visual noise source (1px layout shift on toggle) and the
+  // focus state had no functional purpose — tool cards don't receive
+  // keyboard shortcuts or downstream actions based on being focused.
+  return true;
 }
+
+// Service read results (background_process read action) lead with the latest
+// output and end with a metadata block. Auto-scroll the <pre> to the bottom
+// so the user sees the most recent output lines by default instead of the
+// older lines at the top of the tail.
+function isServiceReadResult(msg) {
+  if (msg?.kind !== 'service') return false;
+  const body = String(msg?.body || '');
+  // formatServiceReadResult emits a "---" divider and a " · "-joined metadata
+  // line (id: ... · status: ... · returned: ... B). Detect via the metadata
+  // marker that's unique to read results.
+  return body.includes('---') && body.includes('returned:');
+}
+
+watch(
+  () => [props.msg?.body, props.msg?.expanded, props.msg?.kind],
+  () => {
+    if (!isServiceReadResult(props.msg)) return;
+    nextTick(() => {
+      const pre = bodyPreRef.value;
+      if (!pre) return;
+      pre.scrollTop = pre.scrollHeight;
+      // Retry once more on the next frame in case the <pre> is still laying
+      // out a large body (up to 8 KiB UI cap).
+      requestAnimationFrame(() => {
+        if (bodyPreRef.value) bodyPreRef.value.scrollTop = bodyPreRef.value.scrollHeight;
+      });
+    });
+  },
+  { immediate: true, flush: 'post' },
+);
 
 function handleCardClick(msg) {
   if (isFocusDisabledTool(msg)) return;

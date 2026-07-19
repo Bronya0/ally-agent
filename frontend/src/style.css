@@ -1742,10 +1742,6 @@ body.platform-darwin .ally-wordmark {
   cursor: default;
 }
 
-.rich-tool-card.focused {
-  border: 1px solid rgba(255, 255, 255, 0.15);
-}
-
 .tool-line {
   display: flex !important;
   align-items: center;
@@ -2035,6 +2031,13 @@ body.platform-darwin .ally-wordmark {
 
 .tool-body.body-preview {
   max-height: calc(1.5em * 6 + 6px);
+}
+
+/* Service read results auto-scroll to the bottom (latest output) on render,
+   so the <pre> must be scrollable by default — the generic .tool-body rule
+   uses overflow: hidden which would clip the scroll position. */
+.tool-body.tail-default {
+  overflow-y: auto;
 }
 
 .tool-expand-btn {

@@ -4600,7 +4600,7 @@ function saveSessions() {
       grillMode: !!s.grillMode,
       createdAt: s.createdAt || Date.now(),
       updatedAt: s.updatedAt || s.createdAt || Date.now(),
-    }));
+    })).filter(s => Array.isArray(s.messages) && s.messages.length > 0);
     localStorage.setItem(SESSIONS_STORAGE_KEY, JSON.stringify(data));
   } catch (_) { /* quota exceeded */ }
 }
@@ -5638,19 +5638,16 @@ function formatServiceInfo(service) {
 // backend already clamps output to 32 KiB; here we further bound the body for
 // UI display so a 32 KiB read does not blow up the chat scroll. The full
 // output is still available in the Task Center log viewer.
+//
+// Layout: output content first (so the collapsed tool card preview shows the
+// latest output, not just metadata), then a divider, then the metadata block.
+// The body is rendered in a <pre> that auto-scrolls to the bottom for service
+// read results, so even when expanded the user sees the latest output lines
+// without manual scrolling.
 function formatServiceReadResult(data) {
-  const lines = [];
-  if (data?.id) lines.push(`id: ${data.id}`);
-  if (data?.status) lines.push(`status: ${data.status}`);
-  if (typeof data?.returnedBytes === 'number') lines.push(`returned: ${data.returnedBytes} B`);
-  if (typeof data?.bufferBytes === 'number') lines.push(`buffer: ${data.bufferBytes} B`);
-  if (typeof data?.totalBytes === 'number') lines.push(`total: ${data.totalBytes} B`);
-  if (data?.truncated) lines.push('truncated: true');
-  if (typeof data?.fromByte === 'number' && data.fromByte > 0) lines.push(`from byte: ${data.fromByte}`);
   const output = stripAnsi(String(data?.output || ''));
+  const lines = [];
   if (output) {
-    lines.push('');
-    lines.push('output:');
     // UI cap: show the last 8 KiB of the (already bounded) read payload so
     // tool cards stay compact. The full output is in the Task Center.
     const uiCap = 8 * 1024;
@@ -5659,7 +5656,18 @@ function formatServiceReadResult(data) {
       lines.push(`[showing last ${uiCap} B of ${output.length} B]`);
     }
     lines.push(shown);
+    lines.push('');
+    lines.push('---');
   }
+  const meta = [];
+  if (data?.id) meta.push(`id: ${data.id}`);
+  if (data?.status) meta.push(`status: ${data.status}`);
+  if (typeof data?.returnedBytes === 'number') meta.push(`returned: ${data.returnedBytes} B`);
+  if (typeof data?.bufferBytes === 'number') meta.push(`buffer: ${data.bufferBytes} B`);
+  if (typeof data?.totalBytes === 'number') meta.push(`total: ${data.totalBytes} B`);
+  if (data?.truncated) meta.push('truncated: true');
+  if (typeof data?.fromByte === 'number' && data.fromByte > 0) meta.push(`from byte: ${data.fromByte}`);
+  if (meta.length) lines.push(meta.join(' · '));
   return lines.join('\n');
 }
 
