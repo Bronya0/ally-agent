@@ -88,7 +88,6 @@
                 <div class="meta-grid">
                   <div><span>{{ $t('service.startedAt') }}</span><strong>{{ formatUnixSeconds(service.startedAt) }}</strong></div>
                   <div><span>{{ $t('service.stoppedAt') }}</span><strong>{{ formatUnixSeconds(service.stoppedAt) }}</strong></div>
-                  <div><span>{{ $t('service.port') }}</span><strong>{{ service.port || '-' }}</strong></div>
                   <div><span>{{ $t('service.exitCode') }}</span><strong>{{ isActiveService(service) ? '-' : (service.exitCode ?? 0) }}</strong></div>
                   <div><span>{{ $t('service.bufferSize') }}</span><strong>{{ formatBytes(service.outputBytes) }}</strong></div>
                   <div><span>{{ $t('service.retention') }}</span><strong>{{ service.outputTruncated ? $t('common.truncated') : $t('service.completeBuffer') }}</strong></div>

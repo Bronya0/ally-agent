@@ -361,11 +361,75 @@ func TestChatToolsExposeBackgroundProcessWithoutPollingTools(t *testing.T) {
 	}
 }
 
-func TestBackgroundProcessRejectsStatusPollingAction(t *testing.T) {
+func TestBackgroundProcessRejectsUnknownAction(t *testing.T) {
 	app := NewApp()
 	result := app.executeTool(context.Background(), ConfigState{Workspace: t.TempDir()}, "session-1", "background_process", []byte(`{"action":"status"}`))
 	if result.OK || result.ErrorCode != "E_BAD_BACKGROUND_ACTION" {
-		t.Fatalf("expected status polling action to be rejected, got %#v", result)
+		t.Fatalf("expected unknown action to be rejected, got %#v", result)
+	}
+}
+
+func TestBackgroundProcessListReturnsMetadataOnly(t *testing.T) {
+	app := NewApp()
+	app.servicesMu.Lock()
+	app.services["svc_list_1"] = &managedService{
+		info:   ServiceInfo{ID: "svc_list_1", Command: "npm run dev", Status: "running", PID: 4321, StartedAt: 1700000000},
+		output: newRollingBuffer(serviceOutputLimit),
+	}
+	app.servicesMu.Unlock()
+
+	result := app.executeTool(context.Background(), ConfigState{Workspace: t.TempDir()}, "session-1", "background_process", []byte(`{"action":"list"}`))
+	if !result.OK {
+		t.Fatalf("expected list to succeed, got %#v", result)
+	}
+	var listed ServiceListToolResult
+	if !decodeToolData(result.Data, &listed) {
+		t.Fatalf("expected ServiceListToolResult, got %#v", result.Data)
+	}
+	if listed.ActiveCount != 1 || listed.MaxActive != maxActiveServices || len(listed.Services) != 1 {
+		t.Fatalf("unexpected list payload: %#v", listed)
+	}
+	if listed.Services[0].ID != "svc_list_1" {
+		t.Fatalf("unexpected service id: %#v", listed.Services[0])
+	}
+	// list must not include any output content
+	raw, _ := json.Marshal(listed)
+	if strings.Contains(string(raw), "outputTail") {
+		t.Fatalf("list result must not include outputTail: %s", string(raw))
+	}
+}
+
+func TestBackgroundProcessReadReturnsBoundedOutput(t *testing.T) {
+	app := NewApp()
+	buf := newRollingBuffer(serviceOutputLimit)
+	_, _ = buf.Write([]byte("ready line\n"))
+	app.servicesMu.Lock()
+	app.services["svc_read_1"] = &managedService{
+		info:   ServiceInfo{ID: "svc_read_1", Command: "vite", Status: "running"},
+		output: buf,
+	}
+	app.servicesMu.Unlock()
+
+	args := []byte(`{"action":"read","id":"svc_read_1","tailBytes":4}`)
+	result := app.executeTool(context.Background(), ConfigState{Workspace: t.TempDir()}, "session-1", "background_process", args)
+	if !result.OK {
+		t.Fatalf("expected read to succeed, got %#v", result)
+	}
+	var read ServiceReadResult
+	if !decodeToolData(result.Data, &read) {
+		t.Fatalf("expected ServiceReadResult, got %#v", result.Data)
+	}
+	if read.ID != "svc_read_1" || read.ReturnedBytes != 4 || read.Status != "running" {
+		t.Fatalf("unexpected read payload: %#v", read)
+	}
+	if !strings.HasSuffix(read.Output, "ine\n") {
+		t.Fatalf("expected 4-byte tail of 'ready line\\n', got %q", read.Output)
+	}
+
+	// read on unknown id must return E_SERVICE_NOT_FOUND
+	bad := app.executeTool(context.Background(), ConfigState{Workspace: t.TempDir()}, "session-1", "background_process", []byte(`{"action":"read","id":"svc_missing"}`))
+	if bad.OK || bad.ErrorCode != "E_SERVICE_NOT_FOUND" {
+		t.Fatalf("expected E_SERVICE_NOT_FOUND, got %#v", bad)
 	}
 }
 

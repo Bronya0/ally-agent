@@ -7,11 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -22,9 +20,14 @@ const (
 	serviceOutputLimit       = 512 * 1024
 	serviceOutputPreview     = 8 * 1024
 	maxCompletedServices     = 20
-	defaultServiceReadyLimit = 15
-	maxServiceReadyLimit     = 120
 	maxActiveServices        = 8
+
+	// Tool-facing read defaults. The model can request up to
+	// maxServiceReadTailBytes of recent output per call; larger reads are
+	// clamped so a single background_process.read cannot dominate the model
+	// context window.
+	defaultServiceReadTailBytes = 8 * 1024
+	maxServiceReadTailBytes     = 32 * 1024
 )
 
 type managedService struct {
@@ -82,12 +85,6 @@ func (a *App) startServiceWithConfig(cfg ConfigState, req StartServiceRequest) (
 			return ServiceInfo{}, err
 		}
 	}
-	if req.Port < 0 || req.Port > 65535 {
-		return ServiceInfo{}, codedToolError("E_BAD_SERVICE_PORT", fmt.Errorf("invalid port: %d", req.Port))
-	}
-	if req.Port > 0 && isLocalPortListening(req.Port) {
-		return ServiceInfo{}, codedToolError("E_PORT_IN_USE", fmt.Errorf("port %d is already listening; refusing to start another service", req.Port))
-	}
 	a.servicesMu.Lock()
 	activeCount := 0
 	for _, service := range a.services {
@@ -134,8 +131,7 @@ func (a *App) startServiceWithConfig(cfg ConfigState, req StartServiceRequest) (
 			Command:   req.Command,
 			Cwd:       filepath.ToSlash(cwd),
 			PID:       cmd.Process.Pid,
-			Port:      req.Port,
-			Status:    "starting",
+			Status:    "running",
 			StartedAt: time.Now().Unix(),
 		},
 		cmd:      cmd,
@@ -177,8 +173,10 @@ func (a *App) startServiceWithConfig(cfg ConfigState, req StartServiceRequest) (
 		a.finalizeService(id, service)
 	}()
 
-	info := a.waitForServiceReady(service, req)
-	return info, nil
+	// Return immediately. The process runs in the background; the model can
+	// poll status and output through background_process.list / read instead
+	// of blocking the agent loop on a readiness wait.
+	return service.snapshot(), nil
 }
 
 func (a *App) finalizeService(id string, service *managedService) {
@@ -190,58 +188,6 @@ func (a *App) finalizeService(id string, service *managedService) {
 func copyServiceOutput(wg *sync.WaitGroup, dst io.Writer, src io.Reader) {
 	defer wg.Done()
 	_, _ = io.Copy(dst, src)
-}
-
-func (a *App) waitForServiceReady(service *managedService, req StartServiceRequest) ServiceInfo {
-	limit := req.TimeoutSeconds
-	if limit <= 0 {
-		limit = defaultServiceReadyLimit
-	}
-	if limit > maxServiceReadyLimit {
-		limit = maxServiceReadyLimit
-	}
-	deadline := time.Now().Add(time.Duration(limit) * time.Second)
-	var readyRE *regexp.Regexp
-	if strings.TrimSpace(req.ReadyPattern) != "" {
-		if re, err := regexp.Compile(req.ReadyPattern); err == nil {
-			readyRE = re
-		}
-	}
-	for {
-		select {
-		case <-service.waitDone:
-			return service.snapshot()
-		default:
-		}
-		out := service.output.String()
-		ready := false
-		if readyRE != nil && readyRE.MatchString(out) {
-			ready = true
-		}
-		if !ready && req.Port > 0 && isLocalPortListening(req.Port) {
-			ready = true
-		}
-		if !ready && readyRE == nil && req.Port == 0 && time.Since(time.Unix(service.info.StartedAt, 0)) >= 500*time.Millisecond {
-			ready = true
-		}
-		if ready || time.Now().After(deadline) {
-			service.mu.Lock()
-			if service.info.Status == "starting" {
-				if ready {
-					service.info.Status = "running"
-				} else {
-					service.info.Status = "running"
-					service.info.Error = fmt.Sprintf("service did not report readiness within %ds; it may still be starting", limit)
-				}
-			}
-			service.updateOutputInfoLocked()
-			info := service.info
-			service.mu.Unlock()
-			a.emitServiceUpdate(info)
-			return info
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
 }
 
 func (a *App) stopService(req StopServiceRequest) (ServiceInfo, error) {
@@ -304,6 +250,126 @@ func (a *App) listServices() ServiceListResult {
 		return infos[i].StartedAt > infos[j].StartedAt
 	})
 	return ServiceListResult{Services: infos}
+}
+
+// ServiceListToolResult is the model-facing list payload. It intentionally
+// omits outputTail so listing 8 services cannot dominate the model context;
+// the model must call background_process.read on a specific id to inspect
+// output.
+type ServiceListToolResult struct {
+	ActiveCount int               `json:"activeCount"`
+	MaxActive   int               `json:"maxActive"`
+	Services    []ServiceSummary  `json:"services"`
+}
+
+// ServiceSummary is the per-service metadata returned by the list action. It
+// excludes the output tail; only byte accounting is included so the model can
+// decide whether a read is worthwhile.
+type ServiceSummary struct {
+	ID              string `json:"id"`
+	Name            string `json:"name,omitempty"`
+	Command         string `json:"command"`
+	Cwd             string `json:"cwd,omitempty"`
+	PID             int    `json:"pid,omitempty"`
+	Status          string `json:"status"`
+	StartedAt       int64  `json:"startedAt"`
+	StoppedAt       int64  `json:"stoppedAt,omitempty"`
+	ExitCode        int    `json:"exitCode,omitempty"`
+	OutputBytes     int64  `json:"outputBytes,omitempty"`
+	OutputTruncated bool   `json:"outputTruncated,omitempty"`
+	Error           string `json:"error,omitempty"`
+}
+
+func (a *App) listServicesForTool() ServiceListToolResult {
+	listed := a.listServices()
+	summaries := make([]ServiceSummary, 0, len(listed.Services))
+	activeCount := 0
+	for _, info := range listed.Services {
+		if info.Status == "starting" || info.Status == "running" {
+			activeCount++
+		}
+		summaries = append(summaries, ServiceSummary{
+			ID:              info.ID,
+			Name:            info.Name,
+			Command:         info.Command,
+			Cwd:             info.Cwd,
+			PID:             info.PID,
+			Status:          info.Status,
+			StartedAt:       info.StartedAt,
+			StoppedAt:       info.StoppedAt,
+			ExitCode:        info.ExitCode,
+			OutputBytes:     info.OutputBytes,
+			OutputTruncated: info.OutputTruncated,
+			Error:           info.Error,
+		})
+	}
+	return ServiceListToolResult{
+		ActiveCount: activeCount,
+		MaxActive:   maxActiveServices,
+		Services:    summaries,
+	}
+}
+
+// ServiceReadResult is the model-facing read payload. Output is bounded by
+// maxServiceReadTailBytes so a single read cannot overload the model context.
+type ServiceReadResult struct {
+	ID            string `json:"id"`
+	Output        string `json:"output"`
+	ReturnedBytes int    `json:"returnedBytes"`
+	BufferBytes   int64  `json:"bufferBytes"`
+	TotalBytes    int64  `json:"totalBytes"`
+	Truncated     bool   `json:"truncated"`
+	Status        string `json:"status"`
+	FromByte      int    `json:"fromByte"`
+}
+
+func (a *App) readServiceOutput(req ServiceReadRequest) (ServiceReadResult, error) {
+	id := strings.TrimSpace(req.ID)
+	if id == "" {
+		return ServiceReadResult{}, codedToolError("E_BAD_SERVICE_ID", errors.New("id is required"))
+	}
+	a.servicesMu.Lock()
+	service := a.services[id]
+	a.servicesMu.Unlock()
+	if service == nil {
+		return ServiceReadResult{}, codedToolError("E_SERVICE_NOT_FOUND", fmt.Errorf("service not found: %s", id))
+	}
+
+	tailBytes := req.TailBytes
+	if tailBytes <= 0 {
+		tailBytes = defaultServiceReadTailBytes
+	}
+	if tailBytes > maxServiceReadTailBytes {
+		tailBytes = maxServiceReadTailBytes
+	}
+
+	service.mu.Lock()
+	status := service.info.Status
+	service.mu.Unlock()
+	output, total, truncated := service.outputSnapshot()
+	// The rolling buffer drops early bytes once full. fromByte reflects where
+	// the returned slice starts within the *current* buffer; the model can
+	// infer how much older output was already discarded by comparing
+	// totalBytes (process-lifetime output) and bufferBytes (current retained).
+	bufferBytes := int64(len(output))
+	fromByte := 0
+	if bufferBytes > int64(tailBytes) {
+		fromByte = int(bufferBytes) - tailBytes
+	}
+	returned := output
+	if fromByte > 0 {
+		returned = output[fromByte:]
+	}
+	return ServiceReadResult{
+		ID:            id,
+		Output:        returned,
+		ReturnedBytes: len(returned),
+		BufferBytes:   bufferBytes,
+		TotalBytes:    total,
+		Truncated:     truncated,
+		Status:        status,
+		FromByte:      fromByte,
+	}, nil
 }
 
 func (a *App) stopAllServices() {
@@ -518,18 +584,6 @@ func (b *rollingBuffer) Restore(output []byte, total int64, truncated bool) {
 		b.total = int64(len(output))
 	}
 	b.truncated = truncated
-}
-
-func isLocalPortListening(port int) bool {
-	if port <= 0 || port > 65535 {
-		return false
-	}
-	conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 200*time.Millisecond)
-	if err != nil {
-		return false
-	}
-	_ = conn.Close()
-	return true
 }
 
 func tailString(s string, limit int) string {

@@ -443,12 +443,9 @@ type CommandRequest struct {
 }
 
 type StartServiceRequest struct {
-	Name           string `json:"name,omitempty"`
-	Command        string `json:"command"`
-	Cwd            string `json:"cwd,omitempty"`
-	Port           int    `json:"port,omitempty"`
-	ReadyPattern   string `json:"readyPattern,omitempty"`
-	TimeoutSeconds int    `json:"timeoutSeconds,omitempty"`
+	Name    string `json:"name,omitempty"`
+	Command string `json:"command"`
+	Cwd     string `json:"cwd,omitempty"`
 }
 
 type StopServiceRequest struct {
@@ -456,14 +453,18 @@ type StopServiceRequest struct {
 }
 
 type BackgroundProcessRequest struct {
-	Action         string `json:"action"`
-	Name           string `json:"name,omitempty"`
-	Command        string `json:"command,omitempty"`
-	Cwd            string `json:"cwd,omitempty"`
-	Port           int    `json:"port,omitempty"`
-	ReadyPattern   string `json:"readyPattern,omitempty"`
-	TimeoutSeconds int    `json:"timeoutSeconds,omitempty"`
-	ID             string `json:"id,omitempty"`
+	Action    string `json:"action"`
+	Name      string `json:"name,omitempty"`
+	Command   string `json:"command,omitempty"`
+	Cwd       string `json:"cwd,omitempty"`
+	ID        string `json:"id,omitempty"`
+	TailBytes int    `json:"tailBytes,omitempty"`
+}
+
+// ServiceReadRequest is the model-facing read payload for background_process.
+type ServiceReadRequest struct {
+	ID        string `json:"id"`
+	TailBytes int    `json:"tailBytes,omitempty"`
 }
 
 type WaitRequest struct {
@@ -550,7 +551,6 @@ type ServiceInfo struct {
 	Command         string `json:"command"`
 	Cwd             string `json:"cwd"`
 	PID             int    `json:"pid"`
-	Port            int    `json:"port,omitempty"`
 	Status          string `json:"status"`
 	StartedAt       int64  `json:"startedAt"`
 	StoppedAt       int64  `json:"stoppedAt,omitempty"`
@@ -6159,22 +6159,22 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"command"},
 		}),
-		functionTool("background_process", "Start or stop a long-running local process without blocking the agent. Use action=start for frontend/backend dev servers, Wails, Vite, Django, uvicorn, workers, and similar processes; independent frontend and backend starts may be called in parallel. The service appears in the Task Center, where the user can inspect its live rolling output buffer (latest 512 KiB) and recent persisted history. The start result already includes the process id, initial readiness status, and bounded output tail. Do not call this tool repeatedly to check status: there is intentionally no list/status action. Use action=stop with the id returned by start when the process must be stopped.", map[string]any{
+		functionTool("background_process", "Run, inspect, and stop long-running local processes (frontend/backend dev servers, Wails/Vite/Django/uvicorn, workers) without blocking the agent loop. The process starts in the Ally Task Center, where the user can inspect its live rolling output buffer (latest 512 KiB). action=start returns immediately with the process id and current status; the process keeps running in the background while the agent continues other work. action=list returns metadata for all tracked services without their output (call read to inspect a specific service). action=read returns a bounded tail of one service's output (default 8 KiB, max 32 KiB) plus byte accounting so the model can decide whether to read more. action=stop terminates a service by id. Use list/read sparingly: avoid polling loops, and prefer a single read after a concrete condition (e.g. wait + read) rather than repeated reads. Error codes: E_BAD_COMMAND, E_SERVICE_LIMIT, E_BAD_BACKGROUND_ACTION, E_BAD_SERVICE_ID, E_SERVICE_NOT_FOUND.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"action":         map[string]any{"type": "string", "enum": []string{"start", "stop"}, "description": "Start a new background process or stop one previously started by this tool."},
-				"name":           map[string]any{"type": "string", "description": "Optional label such as frontend or backend. Used only with action=start."},
-				"command":        map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Long-running command. Required with action=start."},
-				"cwd":            map[string]any{"type": "string", "description": "Workspace-relative working directory. Empty means workspace root. Used only with action=start."},
-				"port":           map[string]any{"type": "integer", "minimum": 1, "maximum": 65535, "description": "Optional localhost port used for readiness and conflict checks."},
-				"readyPattern":   map[string]any{"type": "string", "description": "Optional regex matched against startup output to determine readiness."},
-				"timeoutSeconds": map[string]any{"type": "integer", "minimum": 1, "maximum": 120, "description": "Maximum startup readiness wait. Default 15 seconds."},
-				"id":             map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Process id returned by action=start. Required with action=stop."},
+				"action":    map[string]any{"type": "string", "enum": []string{"start", "stop", "list", "read"}, "description": "Start a new background process, stop one by id, list all tracked services, or read a bounded tail of one service's output."},
+				"name":      map[string]any{"type": "string", "description": "Optional label such as frontend or backend. Used only with action=start."},
+				"command":   map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Long-running command. Required with action=start."},
+				"cwd":       map[string]any{"type": "string", "description": "Workspace-relative working directory. Empty means workspace root. Used only with action=start."},
+				"id":        map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Service id returned by action=start. Required with action=stop and action=read."},
+				"tailBytes": map[string]any{"type": "integer", "minimum": 1, "maximum": 32768, "description": "Maximum bytes of output to return with action=read. Default 8192, max 32768. Ignored by other actions."},
 			},
 			"required": []string{"action"},
 			"oneOf": []any{
 				map[string]any{"properties": map[string]any{"action": map[string]any{"const": "start"}}, "required": []string{"command"}},
 				map[string]any{"properties": map[string]any{"action": map[string]any{"const": "stop"}}, "required": []string{"id"}},
+				map[string]any{"properties": map[string]any{"action": map[string]any{"const": "read"}}, "required": []string{"id"}},
+				map[string]any{"properties": map[string]any{"action": map[string]any{"const": "list"}}},
 			},
 		}),
 		functionTool("wait", "Pause the current agent run for a short, cancellable delay after an asynchronous operation has started or while a concrete external condition is expected to change. Call wait as the only tool in the model response, then verify the condition after it completes. Do not use it for user input or long schedules. Error codes: E_BAD_WAIT, E_WAIT_CANCELLED, E_WAIT_BATCH_CONFLICT.", map[string]any{
@@ -6444,7 +6444,7 @@ var builtinToolExamples = map[string]string{
 	"create_file":        `{"path":"notes/example.md","content":"# Example\n","overwrite":false}`,
 	"delete_path":        `{"path":"tmp/generated","recursive":true}`,
 	"run_command":        `{"command":"go test ./...","cwd":".","timeoutSeconds":120}`,
-	"background_process": `start: {"action":"start","name":"frontend","command":"npm run dev","cwd":"frontend","port":5173}; stop: {"action":"stop","id":"svc_..."}`,
+	"background_process": `start: {"action":"start","name":"frontend","command":"npm run dev","cwd":"frontend"}; stop: {"action":"stop","id":"svc_..."}; list: {"action":"list"}; read: {"action":"read","id":"svc_...","tailBytes":8192}`,
 	"wait":               `{"seconds":5,"reason":"Wait for the development server to become ready"}`,
 	"ask":                `{"questions":[{"id":"database","question":"Which database should we use?","options":[{"id":"sqlite","label":"SQLite","description":"Simple local storage.","recommended":true},{"id":"postgres","label":"PostgreSQL","description":"Production database.","recommended":false}]}]}`,
 	"scheduled_task":     `create: {"action":"create","name":"daily check","instruction":"Run tests and summarize failures.","schedule":"0 9 * * *","timezone":"Asia/Shanghai"}; list: {"action":"list"}; delete: {"action":"delete","id":"task_..."}`,
@@ -6887,17 +6887,21 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 			switch strings.ToLower(strings.TrimSpace(req.Action)) {
 			case "start":
 				data, err = a.startServiceWithConfig(cfg, StartServiceRequest{
-					Name:           req.Name,
-					Command:        req.Command,
-					Cwd:            req.Cwd,
-					Port:           req.Port,
-					ReadyPattern:   req.ReadyPattern,
-					TimeoutSeconds: req.TimeoutSeconds,
+					Name:    req.Name,
+					Command: req.Command,
+					Cwd:     req.Cwd,
 				})
 			case "stop":
 				data, err = a.stopService(StopServiceRequest{ID: req.ID})
+			case "list":
+				data = a.listServicesForTool()
+			case "read":
+				data, err = a.readServiceOutput(ServiceReadRequest{
+					ID:        req.ID,
+					TailBytes: req.TailBytes,
+				})
 			default:
-				err = codedToolError("E_BAD_BACKGROUND_ACTION", errors.New("action must be start or stop"))
+				err = codedToolError("E_BAD_BACKGROUND_ACTION", errors.New("action must be start, stop, list, or read"))
 			}
 		}
 	case "wait":
@@ -7910,12 +7914,24 @@ func toolResultSummary(name string, result *toolResult) string {
 			return fmt.Sprintf("exit %d (%dms)", r.ExitCode, r.DurationMS)
 		}
 	case "background_process":
-		var r ServiceInfo
-		if decodeToolData(result.Data, &r) {
-			if r.PID > 0 {
-				return fmt.Sprintf("%s (pid %d)", r.Status, r.PID)
+		switch typed := result.Data.(type) {
+		case ServiceReadResult:
+			return fmt.Sprintf("read %d bytes (status %s)", typed.ReturnedBytes, typed.Status)
+		case ServiceListToolResult:
+			return fmt.Sprintf("%d service(s), %d active", len(typed.Services), typed.ActiveCount)
+		case ServiceInfo:
+			if typed.PID > 0 {
+				return fmt.Sprintf("%s (pid %d)", typed.Status, typed.PID)
 			}
-			return r.Status
+			return typed.Status
+		default:
+			var r ServiceInfo
+			if decodeToolData(result.Data, &r) {
+				if r.PID > 0 {
+					return fmt.Sprintf("%s (pid %d)", r.Status, r.PID)
+				}
+				return r.Status
+			}
 		}
 	case "wait":
 		var r WaitResult
@@ -8024,6 +8040,61 @@ func compactToolResultForModel(name string, result toolResult, fullJSON string) 
 		}
 		return marshalToolResultOrFallback(toolResult{OK: true, Data: data}, fullJSON)
 	case "background_process":
+		// background_process now has four actions with distinct result
+		// types stored in result.Data: start/stop return ServiceInfo, list
+		// returns ServiceListToolResult, read returns ServiceReadResult.
+		// Discriminate by concrete type (not JSON reshaping, which would
+		// silently succeed for overlapping fields) so the model receives a
+		// compact, action-appropriate payload.
+		switch typed := result.Data.(type) {
+		case ServiceReadResult:
+			output := typed.Output
+			const maxReadOutputForModel = 8 * 1024
+			data := map[string]any{
+				"id":            typed.ID,
+				"status":        typed.Status,
+				"returnedBytes": typed.ReturnedBytes,
+				"bufferBytes":   typed.BufferBytes,
+				"totalBytes":    typed.TotalBytes,
+				"truncated":     typed.Truncated,
+				"fromByte":      typed.FromByte,
+				"output":        output,
+			}
+			if len(output) > maxReadOutputForModel {
+				data["output"] = tailString(output, maxReadOutputForModel)
+				data["outputReduced"] = true
+				data["originalOutputChars"] = len(output)
+				data["reductionNote"] = "Service output shortened for model context; UI received the full read."
+			}
+			return marshalToolResultOrFallback(toolResult{OK: true, Data: data}, fullJSON)
+		case ServiceListToolResult:
+			// list already omits output tails; pass through unchanged so the
+			// model sees activeCount/maxActive and the per-service metadata.
+			return marshalToolResultOrFallback(toolResult{OK: true, Data: typed}, fullJSON)
+		case ServiceInfo:
+			r := typed
+			outputTail := tailString(r.OutputTail, 4*1024)
+			data := map[string]any{
+				"id":         r.ID,
+				"name":       r.Name,
+				"command":    r.Command,
+				"cwd":        r.Cwd,
+				"pid":        r.PID,
+				"status":     r.Status,
+				"startedAt":  r.StartedAt,
+				"stoppedAt":  r.StoppedAt,
+				"exitCode":   r.ExitCode,
+				"outputTail": outputTail,
+				"error":      r.Error,
+			}
+			if len(outputTail) < len(r.OutputTail) {
+				data["outputReduced"] = true
+				data["originalOutputChars"] = len(r.OutputTail)
+				data["reductionNote"] = "Startup output shortened for model context; UI received the full output."
+			}
+			return marshalToolResultOrFallback(toolResult{OK: true, Data: data}, fullJSON)
+		}
+		// Fallback for any unexpected shape: try legacy ServiceInfo decode.
 		var r ServiceInfo
 		if !decodeToolData(result.Data, &r) {
 			return fullJSON
@@ -8035,7 +8106,6 @@ func compactToolResultForModel(name string, result toolResult, fullJSON string) 
 			"command":    r.Command,
 			"cwd":        r.Cwd,
 			"pid":        r.PID,
-			"port":       r.Port,
 			"status":     r.Status,
 			"startedAt":  r.StartedAt,
 			"stoppedAt":  r.StoppedAt,

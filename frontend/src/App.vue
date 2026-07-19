@@ -5117,12 +5117,20 @@ function makeToolTitle(name, args, meta = {}) {
     return command;
   }
   if (name === 'background_process') {
-    if (parsed.action === 'stop') return `stop · ${parsed.id || ''}`;
+    const action = String(parsed.action || '').trim();
+    if (action === 'stop') return `stop · ${parsed.id || ''}`;
+    if (action === 'list') return 'list';
+    if (action === 'read') {
+      const parts = ['read'];
+      if (parsed.id) parts.push(parsed.id);
+      if (parsed.tailBytes) parts.push(`${parsed.tailBytes}B`);
+      return parts.join(' · ');
+    }
+    // action === 'start' (default for backwards compatibility with old cards)
     const parts = ['start'];
     if (parsed.name) parts.push(parsed.name);
     if (parsed.command) parts.push(parsed.command);
     if (parsed.cwd) parts.push(`cwd: ${parsed.cwd}`);
-    if (parsed.port) parts.push(`port: ${parsed.port}`);
     return parts.join(' · ');
   }
   if (name === 'wait') {
@@ -5292,7 +5300,18 @@ function formatToolChip(name, result) {
       return '\u00B7 ' + count + ' task' + (count === 1 ? '' : 's');
     }
     if ((name === 'background_process' || name === 'start_service' || name === 'stop_service') && parsed.data) {
-      return formatServiceChip(parsed.data);
+      // background_process now returns distinct result shapes per action.
+      // Discriminate by structural fields (not action args, which the chip
+      // helper does not receive) so list/read render sensible chips instead
+      // of falling through to formatServiceChip with missing fields.
+      const d = parsed.data;
+      if (Array.isArray(d.services)) {
+        return '\u00B7 ' + d.services.length + ' service' + (d.services.length !== 1 ? 's' : '');
+      }
+      if (typeof d.returnedBytes === 'number' && typeof d.bufferBytes === 'number') {
+        return '\u00B7 ' + d.returnedBytes + ' B' + (d.status ? ' \u00B7 ' + d.status : '');
+      }
+      return formatServiceChip(d);
     }
     if (name === 'wait' && parsed.data) return '';
     if (name === 'ask' && parsed.data) return '';
@@ -5419,7 +5438,12 @@ function formatToolBody(name, body) {
       return tasks.map(formatScheduledTaskToolDetail).join('\n\n---\n\n');
     }
     if ((name === 'background_process' || name === 'start_service' || name === 'stop_service') && parsed.data) {
-      return formatServiceInfo(parsed.data);
+      const d = parsed.data;
+      // Discriminate by structural fields so list/read results render as
+      // human-readable summaries instead of JSON dumps.
+      if (Array.isArray(d.services)) return formatServiceListResult(d);
+      if (typeof d.returnedBytes === 'number' && typeof d.bufferBytes === 'number') return formatServiceReadResult(d);
+      return formatServiceInfo(d);
     }
     if (name === 'list_services' && parsed.data) {
       const services = Array.isArray(parsed.data.services) ? parsed.data.services : [];
@@ -5584,7 +5608,6 @@ function formatServiceChip(service) {
   const status = String(service?.status || '').trim() || 'unknown';
   const parts = [status];
   if (service?.pid) parts.push('pid ' + service.pid);
-  if (service?.port) parts.push('port ' + service.port);
   if (service?.exitCode) parts.push('exit ' + service.exitCode);
   return '\u00B7 ' + parts.join(' \u00B7 ');
 }
@@ -5596,7 +5619,6 @@ function formatServiceInfo(service) {
   if (service?.id) lines.push(`id: ${service.id}`);
   if (service?.status) lines.push(`status: ${service.status}`);
   if (service?.pid) lines.push(`pid: ${service.pid}`);
-  if (service?.port) lines.push(`port: ${service.port}`);
   if (service?.command) lines.push(`command: ${service.command}`);
   if (service?.cwd) lines.push(`cwd: ${service.cwd}`);
   if (service?.startedAt) lines.push(`started: ${formatUnixTimestamp(service.startedAt)}`);
@@ -5608,6 +5630,60 @@ function formatServiceInfo(service) {
     lines.push('');
     lines.push('output tail:');
     lines.push(output);
+  }
+  return lines.join('\n');
+}
+
+// formatServiceReadResult renders a background_process.read result. The
+// backend already clamps output to 32 KiB; here we further bound the body for
+// UI display so a 32 KiB read does not blow up the chat scroll. The full
+// output is still available in the Task Center log viewer.
+function formatServiceReadResult(data) {
+  const lines = [];
+  if (data?.id) lines.push(`id: ${data.id}`);
+  if (data?.status) lines.push(`status: ${data.status}`);
+  if (typeof data?.returnedBytes === 'number') lines.push(`returned: ${data.returnedBytes} B`);
+  if (typeof data?.bufferBytes === 'number') lines.push(`buffer: ${data.bufferBytes} B`);
+  if (typeof data?.totalBytes === 'number') lines.push(`total: ${data.totalBytes} B`);
+  if (data?.truncated) lines.push('truncated: true');
+  if (typeof data?.fromByte === 'number' && data.fromByte > 0) lines.push(`from byte: ${data.fromByte}`);
+  const output = stripAnsi(String(data?.output || ''));
+  if (output) {
+    lines.push('');
+    lines.push('output:');
+    // UI cap: show the last 8 KiB of the (already bounded) read payload so
+    // tool cards stay compact. The full output is in the Task Center.
+    const uiCap = 8 * 1024;
+    const shown = output.length > uiCap ? output.slice(output.length - uiCap) : output;
+    if (shown.length < output.length) {
+      lines.push(`[showing last ${uiCap} B of ${output.length} B]`);
+    }
+    lines.push(shown);
+  }
+  return lines.join('\n');
+}
+
+// formatServiceListResult renders a background_process.list result. The
+// backend omits output tails; we render one compact line per service so the
+// model/user can scan all services without context bloat.
+function formatServiceListResult(data) {
+  const services = Array.isArray(data?.services) ? data.services : [];
+  if (services.length === 0) return 'No tracked services.';
+  const header = [];
+  if (typeof data?.activeCount === 'number' && typeof data?.maxActive === 'number') {
+    header.push(`${data.activeCount}/${data.maxActive} active`);
+  }
+  header.push(`${services.length} service${services.length === 1 ? '' : 's'}`);
+  const lines = [header.join(' · '), ''];
+  for (const svc of services) {
+    const parts = [];
+    if (svc?.id) parts.push(svc.id);
+    if (svc?.name) parts.push(`(${svc.name})`);
+    if (svc?.status) parts.push(svc.status);
+    if (svc?.pid) parts.push(`pid ${svc.pid}`);
+    if (svc?.command) parts.push(`· ${svc.command}`);
+    if (typeof svc?.outputBytes === 'number' && svc.outputBytes > 0) parts.push(`${svc.outputBytes} B`);
+    lines.push(parts.join(' '));
   }
   return lines.join('\n');
 }
