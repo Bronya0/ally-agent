@@ -332,42 +332,30 @@
             @update:value="selectCatalogProvider"
           />
         </n-form-item-gi>
-        <template v-if="selectedCatalogProvider">
-          <n-form-item-gi :label="$t('settings.catalogModel')" :span="2">
-            <n-select
-              :value="modelDraft.model"
-              :options="selectedCatalogModelOptions"
-              filterable
-              :placeholder="$t('settings.catalogModelPlaceholder')"
-              @update:value="selectCatalogModel"
-            />
-          </n-form-item-gi>
-          <n-form-item-gi :label="$t('settings.apiFormat')">
-            <n-input :value="apiFormatLabel(modelDraft.apiFormat)" disabled />
-          </n-form-item-gi>
-          <n-form-item-gi label="Base URL">
-            <n-input :value="modelDraft.baseUrl" disabled />
-          </n-form-item-gi>
-        </template>
-        <template v-else>
-          <n-form-item-gi :label="$t('settings.providerName')">
-            <n-input v-model:value="modelDraft.providerName" placeholder="OpenAI Compatible" />
-          </n-form-item-gi>
-          <n-form-item-gi :label="$t('settings.apiFormat')">
-            <n-select v-model:value="modelDraft.apiFormat" :options="apiFormatOptions" />
-          </n-form-item-gi>
-          <n-form-item-gi label="Model">
-            <n-input v-model:value="modelDraft.model" :placeholder="modelPlaceholder(modelDraft.apiFormat)" />
-          </n-form-item-gi>
-          <n-form-item-gi :label="normalizeApiFormat(modelDraft.apiFormat) === 'anthropic_messages' ? $t('settings.baseUrlNoV1') : 'Base URL'">
-            <n-input v-model:value="modelDraft.baseUrl" :placeholder="apiFormatDefaultBaseUrl(modelDraft.apiFormat)" autocomplete="off" />
-          </n-form-item-gi>
-        </template>
+        <n-form-item-gi v-if="selectedCatalogProvider" :label="$t('settings.catalogModel')" :span="2">
+          <n-select
+            :value="modelDraft.model"
+            :options="selectedCatalogModelOptions"
+            filterable
+            tag
+            :placeholder="$t('settings.catalogModelPlaceholder')"
+            @update:value="selectCatalogModel"
+          />
+        </n-form-item-gi>
+        <n-form-item-gi :label="$t('settings.providerName')">
+          <n-input v-model:value="modelDraft.providerName" placeholder="OpenAI Compatible" />
+        </n-form-item-gi>
+        <n-form-item-gi :label="$t('settings.apiFormat')">
+          <n-select v-model:value="modelDraft.apiFormat" :options="apiFormatOptions" />
+        </n-form-item-gi>
+        <n-form-item-gi v-if="!selectedCatalogProvider" label="Model">
+          <n-input v-model:value="modelDraft.model" :placeholder="modelPlaceholder(modelDraft.apiFormat)" />
+        </n-form-item-gi>
+        <n-form-item-gi :label="normalizeApiFormat(modelDraft.apiFormat) === 'anthropic_messages' ? $t('settings.baseUrlNoV1') : 'Base URL'">
+          <n-input v-model:value="modelDraft.baseUrl" :placeholder="apiFormatDefaultBaseUrl(modelDraft.apiFormat)" autocomplete="off" />
+        </n-form-item-gi>
         <n-form-item-gi label="API Key" :span="2">
           <n-input v-model:value="modelDraft.apiKey" type="password" show-password-on="click" autocomplete="new-password" />
-        </n-form-item-gi>
-        <n-form-item-gi label="Temperature">
-          <n-input-number v-model:value="modelDraft.temperature" :min="0" :max="1" :step="0.1" style="width: 100%" />
         </n-form-item-gi>
         <n-form-item-gi label="Max Tokens">
           <n-input-number v-model:value="modelDraft.maxTokens" :min="0" style="width: 100%" />
@@ -618,23 +606,15 @@ async function ensureModelCatalog() {
   }
 }
 
-function matchingCatalogProvider(source = {}) {
-  const modelId = String(source.model || '').trim();
-  const baseUrl = String(source.baseUrl || '').trim().replace(/\/+$/, '').toLowerCase();
-  const providerName = normalizedProviderName(source.providerName).toLowerCase();
-  return (modelCatalog.value.providers || []).find((provider) => {
-    const providerBase = String(provider.baseUrl || '').trim().replace(/\/+$/, '').toLowerCase();
-    const providerMatches = providerBase === baseUrl || String(provider.name || '').trim().toLowerCase() === providerName;
-    return providerMatches && (!modelId || Boolean(findCatalogModel(provider, modelId)));
-  }) || null;
-}
-
 function assignModelDraft(source = {}) {
   Object.assign(modelDraft, defaultModelDraft({
     ...source,
     apiFormat: normalizeApiFormat(source.apiFormat || draft.apiFormat),
   }));
-  selectedCatalogProviderId.value = matchingCatalogProvider(source)?.id || CUSTOM_PROVIDER_ID;
+  // Always default to "Custom" — never auto-match a catalog preset. The
+  // preset dropdown is opt-in; auto-matching was surprising because it
+  // silently switched the form into preset mode and disabled Model/Base URL.
+  selectedCatalogProviderId.value = CUSTOM_PROVIDER_ID;
 }
 
 function selectCatalogProvider(providerId) {
@@ -668,7 +648,6 @@ async function startAddModelDraft() {
     maxTokens: draft.maxTokens || 128000,
     contextWindow: draft.contextWindow || 1048576,
   });
-  if (selectedCatalogProvider.value) selectCatalogProvider(selectedCatalogProviderId.value);
   modelEditorVisible.value = true;
 }
 

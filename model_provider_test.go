@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -96,22 +95,6 @@ func TestOpenAIResponsesInputPreservesFunctionCallRoundTrip(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Fatalf("expected Responses input JSON to contain %s\n%s", want, text)
 		}
-	}
-}
-
-func TestChatMaxCompletionTokensFallbackDetection(t *testing.T) {
-	cases := []string{
-		"unknown parameter: max_completion_tokens",
-		"max_completion_tokens is not supported by this model",
-		"invalid extra field max_completion_tokens",
-	}
-	for _, msg := range cases {
-		if !shouldRetryChatWithMaxTokens(errors.New(msg)) {
-			t.Fatalf("expected fallback for %q", msg)
-		}
-	}
-	if shouldRetryChatWithMaxTokens(errors.New("rate limit exceeded")) {
-		t.Fatal("did not expect fallback for unrelated error")
 	}
 }
 

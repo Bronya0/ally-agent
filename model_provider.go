@@ -101,10 +101,9 @@ func defaultMaxTokensForAPIFormat(format string) int {
 	return 128000
 }
 
-func (a *App) completeModelText(ctx context.Context, cfg ConfigState, model string, messages []legacyopenai.ChatCompletionMessage, maxTokens int, temperature float32) (string, error) {
+func (a *App) completeModelText(ctx context.Context, cfg ConfigState, model string, messages []legacyopenai.ChatCompletionMessage, maxTokens int) (string, error) {
 	next := cfg
 	next.MaxTokens = maxTokens
-	next.Temperature = temperature
 	result, err := a.streamModelResponse(ctx, next, model, messages, nil, nil)
 	if err != nil {
 		return "", err
@@ -168,17 +167,34 @@ func (a *App) streamOpenAIChat(ctx context.Context, cfg ConfigState, model strin
 	clientCfg.HTTPClient = proxyHTTPClient(cfg, true, 0)
 	client := legacyopenai.NewClientWithConfig(clientCfg)
 
+	// Use the legacy `max_tokens` field instead of the newer `max_completion_tokens`.
+	//
+	// `max_tokens` has the broadest compatibility across OpenAI-compatible
+	// providers: DeepSeek, GLM, Qwen, Kimi, Moonshot, MiniMax, Baichuan, Yi,
+	//火山豆包, vLLM, Ollama, SGLang, TGI, OpenRouter, and most Azure OpenAI
+	// deployments all accept it. Only official OpenAI o-series reasoning
+	// models (o1/o3/o4-mini) mandate `max_completion_tokens`, and those users
+	// should use the OpenAI Responses adapter (`openai_responses`) instead of
+	// the Chat adapter anyway.
+	//
+	// Sending `max_completion_tokens` forces a 400 -> retry-with-max_tokens
+	// fallback on every DeepSeek/GLM/Qwen request against gateways that proxy
+	// to those upstreams, adding 200-800ms latency per first turn. Pinning to
+	// `max_tokens` removes that fallback entirely.
 	streamReq := legacyopenai.ChatCompletionRequest{
-		Model:               model,
-		Messages:            messages,
-		Temperature:         cfg.Temperature,
-		MaxCompletionTokens: cfg.MaxTokens,
-		StreamOptions:       &legacyopenai.StreamOptions{IncludeUsage: true},
+		Model:         model,
+		Messages:      messages,
+		MaxTokens:      cfg.MaxTokens,
+		StreamOptions: &legacyopenai.StreamOptions{IncludeUsage: true},
 	}
 	if len(tools) > 0 {
 		streamReq.Tools = tools
-		streamReq.ToolChoice = "auto"
-		streamReq.ParallelToolCalls = true
+		// Do not set ToolChoice. The default is "auto" for OpenAI and all
+		// compatible gateways, so omitting the field is equivalent. Some
+		// gateways (e.g. OpenCode Go forwarding to DeepSeek) trip schema
+		// validation on extra fields, so sending the default value adds risk
+		// with no benefit.
+		// ParallelToolCalls is also intentionally omitted for the same reason.
 	}
 
 	var stream *legacyopenai.ChatCompletionStream
@@ -187,11 +203,6 @@ func (a *App) streamOpenAIChat(ctx context.Context, cfg ConfigState, model strin
 		stream, err = client.CreateChatCompletionStream(ctx, streamReq)
 		if err != nil && strings.Contains(strings.ToLower(err.Error()), "stream_options") {
 			streamReq.StreamOptions = nil
-			stream, err = client.CreateChatCompletionStream(ctx, streamReq)
-		}
-		if err != nil && shouldRetryChatWithMaxTokens(err) && streamReq.MaxCompletionTokens > 0 {
-			streamReq.MaxTokens = streamReq.MaxCompletionTokens
-			streamReq.MaxCompletionTokens = 0
 			stream, err = client.CreateChatCompletionStream(ctx, streamReq)
 		}
 		if err == nil || ctx.Err() != nil {
@@ -352,29 +363,12 @@ func isIncompleteStreamJSON(err error) bool {
 	return strings.Contains(msg, "unexpected end of json input") || strings.Contains(msg, "unexpected eof")
 }
 
-func shouldRetryChatWithMaxTokens(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := strings.ToLower(err.Error())
-	if strings.Contains(msg, "max_completion_tokens") {
-		return strings.Contains(msg, "unsupported") ||
-			strings.Contains(msg, "unrecognized") ||
-			strings.Contains(msg, "unknown") ||
-			strings.Contains(msg, "invalid") ||
-			strings.Contains(msg, "extra") ||
-			strings.Contains(msg, "not supported")
-	}
-	return false
-}
-
 func (a *App) streamOpenAIResponses(ctx context.Context, cfg ConfigState, model string, messages []legacyopenai.ChatCompletionMessage, tools []legacyopenai.Tool, onEvent func(modelStreamEvent)) (*modelStreamResult, error) {
 	instructions, inputItems := buildOpenAIResponsesInput(messages)
 	body := oaresp.ResponseNewParams{
 		Model:             oaresp.ResponsesModel(model),
 		Input:             oaresp.ResponseNewParamsInputUnion{OfInputItemList: inputItems},
 		MaxOutputTokens:   oa.Int(int64(cfg.MaxTokens)),
-		Temperature:       oa.Float(float64(cfg.Temperature)),
 		ParallelToolCalls: oa.Bool(true),
 		Store:             oa.Bool(false),
 	}
@@ -632,10 +626,9 @@ func (a *App) streamAnthropicMessages(ctx context.Context, cfg ConfigState, mode
 		anthropicMessages = append(anthropicMessages, anthropic.NewUserMessage(anthropic.NewTextBlock("")))
 	}
 	params := anthropic.MessageNewParams{
-		Model:       anthropic.Model(model),
-		Messages:    anthropicMessages,
-		MaxTokens:   int64(cfg.MaxTokens),
-		Temperature: anthropic.Float(float64(cfg.Temperature)),
+		Model:     anthropic.Model(model),
+		Messages:  anthropicMessages,
+		MaxTokens: int64(cfg.MaxTokens),
 	}
 	if system != "" {
 		params.System = []anthropic.TextBlockParam{{Text: system}}

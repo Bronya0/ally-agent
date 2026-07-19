@@ -4019,7 +4019,7 @@ func (a *App) TestModelConnection(model ModelConfig) error {
 	_, err := a.completeModelText(ctx, cfg, cfg.Model, []openai.ChatCompletionMessage{{
 		Role:    openai.ChatMessageRoleUser,
 		Content: "Reply only with OK.",
-	}}, 32, cfg.Temperature)
+	}}, 32)
 	return err
 }
 
@@ -4690,7 +4690,7 @@ Rules:
 	if compactionMaxTokens <= 0 || compactionMaxTokens > 8000 {
 		compactionMaxTokens = 8000
 	}
-	summary, err := a.completeModelText(ctx, cfg, cfg.Model, compactionMessages, compactionMaxTokens, 0.2)
+	summary, err := a.completeModelText(ctx, cfg, cfg.Model, compactionMessages, compactionMaxTokens)
 	if err != nil {
 		return nil, fmt.Errorf("compaction failed: %w", err)
 	}
