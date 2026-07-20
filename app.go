@@ -282,6 +282,12 @@ type ModelConfig struct {
 	MaxTokens     int     `json:"maxTokens"`
 	ContextWindow int     `json:"contextWindow"`
 	ReasoningTag  string  `json:"reasoningTag,omitempty"`
+	// TokenParam selects which token-limit field the OpenAI Chat adapter
+	// sends: "auto"/"max_tokens" -> max_tokens (broadest compatibility),
+	// "max_completion_tokens" -> max_completion_tokens (official OpenAI
+	// o-series / newer GPT models that reject the legacy field). Ignored by
+	// the Responses and Anthropic adapters.
+	TokenParam string `json:"tokenParam,omitempty"`
 }
 
 type ConfigState struct {
@@ -294,6 +300,7 @@ type ConfigState struct {
 	Temperature         float32       `json:"temperature"`
 	MaxTokens           int           `json:"maxTokens"`
 	ContextWindow       int           `json:"contextWindow"`
+	TokenParam          string        `json:"tokenParam,omitempty"`
 	CustomPrompt        string        `json:"customPrompt"`
 	AllowPrivateNetwork bool          `json:"allowPrivateNetwork"`
 	GitBashPath         string        `json:"gitBashPath"`
@@ -3846,6 +3853,9 @@ func mergeConfig(base, overlay ConfigState) ConfigState {
 	if overlay.ContextWindow != 0 {
 		base.ContextWindow = overlay.ContextWindow
 	}
+	if overlay.TokenParam != "" {
+		base.TokenParam = overlay.TokenParam
+	}
 	if overlay.CustomPrompt != "" {
 		base.CustomPrompt = overlay.CustomPrompt
 	}
@@ -3999,6 +4009,7 @@ func (a *App) TestModelConnection(model ModelConfig) error {
 		Temperature:   model.Temperature,
 		MaxTokens:     32,
 		ContextWindow: model.ContextWindow,
+		TokenParam:    normalizeTokenParam(model.TokenParam),
 		ReasoningTag:  normalizeReasoningTag(model.ReasoningTag),
 		ProxyMode:     networkCfg.ProxyMode,
 		ProxyURL:      networkCfg.ProxyURL,
@@ -13244,6 +13255,7 @@ func (a *App) SwitchModel(index int) error {
 	if m.ContextWindow > 0 {
 		a.config.ContextWindow = m.ContextWindow
 	}
+	a.config.TokenParam = m.TokenParam
 	a.config.ReasoningTag = normalizeReasoningTag(m.ReasoningTag)
 	cfg := a.config
 	a.mu.Unlock()

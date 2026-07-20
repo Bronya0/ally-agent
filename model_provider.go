@@ -25,7 +25,29 @@ const (
 	apiFormatAnthropicMessages  = "anthropic_messages"
 	defaultOpenAIResponsesURL   = "https://api.openai.com/v1"
 	defaultAnthropicMessagesURL = "https://api.anthropic.com"
+
+	tokenParamAuto                = "auto"
+	tokenParamMaxTokens           = "max_tokens"
+	tokenParamMaxCompletionTokens = "max_completion_tokens"
 )
+
+// normalizeTokenParam resolves the user-facing token-limit selector to a
+// canonical value. An empty or unrecognized value maps to "auto", which the
+// OpenAI Chat adapter treats as the legacy "max_tokens" field for the broadest
+// provider compatibility. Only "max_completion_tokens" opts into the newer
+// field required by official OpenAI o-series / newer GPT models.
+func normalizeTokenParam(value string) string {
+	v := strings.ToLower(strings.TrimSpace(value))
+	v = strings.NewReplacer("-", "_", " ", "_").Replace(v)
+	switch v {
+	case tokenParamMaxCompletionTokens, "max_completion_token", "completion_tokens", "completion":
+		return tokenParamMaxCompletionTokens
+	case tokenParamMaxTokens, "max_token", "tokens", "legacy":
+		return tokenParamMaxTokens
+	default:
+		return tokenParamAuto
+	}
+}
 
 type modelUsage struct {
 	PromptTokens     int
@@ -167,25 +189,22 @@ func (a *App) streamOpenAIChat(ctx context.Context, cfg ConfigState, model strin
 	clientCfg.HTTPClient = proxyHTTPClient(cfg, true, 0)
 	client := legacyopenai.NewClientWithConfig(clientCfg)
 
-	// Use the legacy `max_tokens` field instead of the newer `max_completion_tokens`.
-	//
-	// `max_tokens` has the broadest compatibility across OpenAI-compatible
-	// providers: DeepSeek, GLM, Qwen, Kimi, Moonshot, MiniMax, Baichuan, Yi,
-	//火山豆包, vLLM, Ollama, SGLang, TGI, OpenRouter, and most Azure OpenAI
-	// deployments all accept it. Only official OpenAI o-series reasoning
-	// models (o1/o3/o4-mini) mandate `max_completion_tokens`, and those users
-	// should use the OpenAI Responses adapter (`openai_responses`) instead of
-	// the Chat adapter anyway.
-	//
-	// Sending `max_completion_tokens` forces a 400 -> retry-with-max_tokens
-	// fallback on every DeepSeek/GLM/Qwen request against gateways that proxy
-	// to those upstreams, adding 200-800ms latency per first turn. Pinning to
-	// `max_tokens` removes that fallback entirely.
 	streamReq := legacyopenai.ChatCompletionRequest{
 		Model:         model,
 		Messages:      messages,
-		MaxTokens:      cfg.MaxTokens,
 		StreamOptions: &legacyopenai.StreamOptions{IncludeUsage: true},
+	}
+	// Route the token limit to the field the target provider accepts. Both
+	// fields are `omitempty`, so only the selected one is serialized — never
+	// both. "auto" and "max_tokens" use the legacy field (broadest
+	// compatibility across DeepSeek/GLM/Qwen/Kimi/vLLM/Ollama/OpenRouter/…);
+	// "max_completion_tokens" targets official OpenAI o-series / newer GPT
+	// models that reject `max_tokens` with a "please use max_completion_tokens"
+	// error.
+	if normalizeTokenParam(cfg.TokenParam) == tokenParamMaxCompletionTokens {
+		streamReq.MaxCompletionTokens = cfg.MaxTokens
+	} else {
+		streamReq.MaxTokens = cfg.MaxTokens
 	}
 	if len(tools) > 0 {
 		streamReq.Tools = tools

@@ -10,6 +10,7 @@ const MODEL_FIELDS = [
   'maxTokens',
   'contextWindow',
   'reasoningTag',
+  'tokenParam',
 ];
 
 function importError(code) {
@@ -24,6 +25,17 @@ function normalizeProviderName(value) {
 
 function normalizeModelId(value) {
   return String(value || '').trim();
+}
+
+// normalizeTokenParam mirrors the Go backend: empty/unknown -> 'auto' (legacy
+// max_tokens), only 'max_completion_tokens' opts into the newer field.
+export function normalizeTokenParam(value) {
+  const v = String(value || '').trim().toLowerCase().replace(/[-\s]+/g, '_');
+  if (['max_completion_tokens', 'max_completion_token', 'completion_tokens', 'completion'].includes(v)) {
+    return 'max_completion_tokens';
+  }
+  if (['max_tokens', 'max_token', 'tokens', 'legacy'].includes(v)) return 'max_tokens';
+  return 'auto';
 }
 
 export function modelConfigIdentity(model) {
@@ -56,6 +68,7 @@ function normalizeImportedModel(model) {
     maxTokens: Number.isFinite(Number(model.maxTokens)) && Number(model.maxTokens) > 0 ? Math.trunc(Number(model.maxTokens)) : 128000,
     contextWindow: Number.isFinite(Number(model.contextWindow)) && Number(model.contextWindow) > 0 ? Math.trunc(Number(model.contextWindow)) : 1048576,
     reasoningTag: String(model.reasoningTag || 'reasoning_content').trim() || 'reasoning_content',
+    tokenParam: normalizeTokenParam(model.tokenParam),
   };
 
   return normalized;

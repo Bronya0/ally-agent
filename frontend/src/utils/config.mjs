@@ -9,6 +9,7 @@ export function defaultConfig() {
     temperature: 0.2,
     maxTokens: 128000,
     contextWindow: 1048576,
+    tokenParam: 'auto',
     customPrompt: '',
     allowPrivateNetwork: true,
     gitBashPath: '',
@@ -38,5 +39,6 @@ export function cloneModelConfigs(models) {
   return models.map((model) => ({
     ...(model || {}),
     reasoningTag: String(model?.reasoningTag || '').trim() || 'reasoning_content',
+    tokenParam: String(model?.tokenParam || '').trim() || 'auto',
   }));
 }

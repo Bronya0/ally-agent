@@ -360,6 +360,12 @@
         <n-form-item-gi label="Max Tokens">
           <n-input-number v-model:value="modelDraft.maxTokens" :min="0" style="width: 100%" />
         </n-form-item-gi>
+        <n-form-item-gi
+          v-if="normalizeApiFormat(modelDraft.apiFormat) === 'openai_chat'"
+          :label="$t('settings.tokenParam')"
+        >
+          <n-select v-model:value="modelDraft.tokenParam" :options="tokenParamOptions" />
+        </n-form-item-gi>
         <n-form-item-gi :label="$t('settings.contextWindow')" :span="2">
           <n-input-number v-model:value="modelDraft.contextWindow" :min="0" style="width: 100%" />
         </n-form-item-gi>
@@ -522,7 +528,19 @@ function defaultModelDraft(source = {}) {
     contextWindow: draft?.contextWindow || 1048576,
     ...source,
     reasoningTag: String(source.reasoningTag || draft?.reasoningTag || 'reasoning_content').trim() || 'reasoning_content',
+    // "auto" and the legacy "max_tokens" both send max_tokens, so collapse the
+    // explicit legacy value onto "auto" — otherwise the two-option select would
+    // render blank for an imported config that stored "max_tokens".
+    tokenParam: normalizeDraftTokenParam(source.tokenParam),
   };
+}
+
+// normalizeDraftTokenParam keeps only the two values the select exposes:
+// "max_completion_tokens" (opt-in) and "auto" (everything else, incl. the
+// equivalent legacy "max_tokens").
+function normalizeDraftTokenParam(value) {
+  const v = String(value || '').trim().toLowerCase().replace(/[-\s]+/g, '_');
+  return v === 'max_completion_tokens' ? 'max_completion_tokens' : 'auto';
 }
 
 const modelDraft = reactive(defaultModelDraft());
@@ -537,6 +555,11 @@ const apiFormatOptions = [
   { label: 'OpenAI Responses', value: 'openai_responses' },
   { label: 'Anthropic Messages', value: 'anthropic_messages' },
 ];
+
+const tokenParamOptions = computed(() => [
+  { label: `max_tokens (${t('settings.tokenParamDefault')})`, value: 'auto' },
+  { label: 'max_completion_tokens', value: 'max_completion_tokens' },
+]);
 
 function normalizeApiFormat(value) {
   const v = String(value || '').trim().toLowerCase().replace(/[-\s]+/g, '_');
@@ -689,6 +712,7 @@ async function testModelConnection() {
       maxTokens: modelDraft.maxTokens || 8192,
       contextWindow: modelDraft.contextWindow || 1048576,
       reasoningTag: modelDraft.reasoningTag || 'reasoning_content',
+      tokenParam: modelDraft.tokenParam || 'auto',
     });
     message.success(t('settings.connectionSuccess'));
   } catch (err) {
@@ -717,6 +741,7 @@ function commitModelDraft() {
     maxTokens: modelDraft.maxTokens || draft.maxTokens || 128000,
     contextWindow: modelDraft.contextWindow || draft.contextWindow || 1048576,
     reasoningTag: modelDraft.reasoningTag || 'reasoning_content',
+    tokenParam: modelDraft.tokenParam || 'auto',
   };
   const wasActive = modelEditorIndex.value >= 0 && isDraftModelActive(draft.models[modelEditorIndex.value]);
   if (modelEditorIndex.value >= 0) {
@@ -747,6 +772,7 @@ function applyModelToDraft(model) {
   draft.maxTokens = model.maxTokens || draft.maxTokens || 128000;
   draft.contextWindow = model.contextWindow || draft.contextWindow || 1048576;
   draft.reasoningTag = model.reasoningTag || 'reasoning_content';
+  draft.tokenParam = model.tokenParam || 'auto';
   alignActiveProviderTab(normalizedProviderName(model.providerName));
   emit('save', { ...draft }, true);
 }
