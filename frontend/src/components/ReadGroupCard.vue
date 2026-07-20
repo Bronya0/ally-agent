@@ -3,7 +3,7 @@
     <div class="tool-line">
       <span :class="['tool-status-icon', msg.status]">{{ toolIcon(msg) }}</span>
       <span class="tool-verb">{{ readVerb }}</span>
-      <span class="tool-name">{{ $t('tools.files', { count: msg.readEntries.length, countSuffix: msg.readEntries.length === 1 ? '' : 's' }) }}</span>
+      <span class="tool-count">{{ fileCountLabel }}</span>
       <span v-if="msg.readTotalLines > 0" class="tool-chip">{{ readChip }}</span>
       <span v-if="msg.durationText" class="tool-duration">{{ msg.durationText }}</span>
       <button v-if="hasEntries" class="tool-expand-btn" @click.stop="$emit('toggle')">{{ msg.expanded ? '▾' : '▸' }}</button>
@@ -25,6 +25,7 @@
 <script setup>
 import { computed } from 'vue';
 import { t } from '../i18n.mjs';
+import { toolVerbLabel } from '../utils/toolVerb.mjs';
 
 const props = defineProps({
   msg: { type: Object, required: true },
@@ -35,11 +36,12 @@ defineEmits(['focus', 'toggle']);
 
 const hasEntries = computed(() => Array.isArray(props.msg.readEntries) && props.msg.readEntries.length > 0);
 
-const readVerb = computed(() => {
-  if (props.msg.status === 'error' || props.msg.status === 'failed') return t('tools.status.failed');
-  return props.msg.readTotalLines > 0
-    ? (props.msg.status === 'running' ? t('tools.reading') : t('tools.readDone'))
-    : t('tools.reading');
+const readVerb = computed(() => toolVerbLabel('read_file', 'read', props.msg.status));
+
+// Secondary count, e.g. "1 file" / "3 files" — kept in English to match the verb.
+const fileCountLabel = computed(() => {
+  const n = props.msg.readEntries.length;
+  return `${n} file${n === 1 ? '' : 's'}`;
 });
 
 const readChip = computed(() => {

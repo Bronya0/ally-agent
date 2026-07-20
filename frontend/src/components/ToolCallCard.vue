@@ -78,6 +78,7 @@ import bash from 'highlight.js/lib/languages/bash';
 import powershell from 'highlight.js/lib/languages/powershell';
 import { highlightShellCommand } from '../utils/shellHighlight.mjs';
 import { formatToolErrorBody } from '../utils/toolError.mjs';
+import { toolVerbLabel, hasNamedVerb } from '../utils/toolVerb.mjs';
 import { t } from '../i18n.mjs';
 
 const BODY_PREVIEW_LINES = 6;
@@ -161,8 +162,9 @@ function toolDisplayName(msg) {
     if (msg.mcpServer && msg.mcpTool) return `${msg.mcpServer}/${msg.mcpTool}`;
     return msg.mcpServer || msg.mcpTool || formatToolName(msg.name) || 'MCP';
   }
-  if (msg.kind === 'list') return formatToolName(msg.name) || 'list_files';
-  if (String(msg.name || '').startsWith('remote_')) return formatToolName(msg.name);
+  // When the verb already names the action (Edited/Read/Ran/...), don't repeat it
+  // as the name; the target/file is shown in the (msg.title) arg span.
+  if (hasNamedVerb(msg.name)) return '';
   const kindLabel = toolKindLabel(msg.kind);
   if (kindLabel && msg.kind !== 'other') return kindLabel;
   return formatToolName(msg.name) || t('tools.kind.tool');
@@ -181,11 +183,7 @@ function toolIcon(msg) {
 }
 
 function toolVerb(msg) {
-  if (msg.status === 'error') return t('tools.status.failed');
-  if (msg.kind === 'wait') return msg.status === 'success' ? t('tools.status.waited') : t('tools.status.waiting');
-  if (msg.kind === 'todo') return msg.status === 'running' ? t('tools.status.using') : t('tools.status.use');
-  if (msg.status === 'success') return t('tools.status.used');
-  return t('tools.status.using');
+  return toolVerbLabel(msg.name, msg.kind, msg.status);
 }
 
 // Bounded LRU cache for highlighted command HTML. highlight.js is expensive

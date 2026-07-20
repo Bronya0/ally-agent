@@ -14,8 +14,7 @@
       <div v-for="(tc, ti) in recentTools" :key="tc.toolCallId || ti" :class="['subagent-inline-entry', tc.status]">
         <span class="subagent-inline-tree">{{ ti === recentTools.length - 1 ? '└─' : '├─' }}</span>
         <span :class="['subagent-inline-icon', tc.status]">{{ statusIcon(tc.status) }}</span>
-        <span class="subagent-inline-verb">{{ toolVerb(tc.status) }}</span>
-        <span class="subagent-inline-name">{{ subToolLabel(tc.name) }}</span>
+        <span class="subagent-inline-name">{{ subToolVerb(tc) }}</span>
         <span v-if="toolArgsTitle(tc)" class="subagent-inline-args" :title="toolArgsTitle(tc)">({{ toolArgsTitle(tc) }})</span>
         <span v-if="tc.summary" class="subagent-inline-summary">{{ compactSummary(tc.summary) }}</span>
         <span v-if="tc.durationText" class="subagent-inline-duration">{{ tc.durationText }}</span>
@@ -30,6 +29,7 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { t } from '../i18n.mjs';
 import { formatHttpToolTitle } from '../utils/toolPreview.mjs';
+import { toolVerbLabel } from '../utils/toolVerb.mjs';
 
 const props = defineProps({
   msg: { type: Object, required: true },
@@ -117,15 +117,7 @@ function statusIcon(status) {
 }
 
 function subagentVerb(status) {
-  if (status === 'running') return t('subagent.running');
-  if (status === 'completed') return t('subagent.completed');
-  return t('subagent.failed');
-}
-
-function toolVerb(status) {
-  if (status === 'error') return t('tools.status.failed');
-  if (status === 'success') return t('subagent.used');
-  return t('subagent.using');
+  return toolVerbLabel('subagent', 'subagent', status);
 }
 
 function compactSummary(text) {
@@ -238,40 +230,13 @@ function toolArgsTitle(tc) {
   return '';
 }
 
-function subToolLabel(name) {
-  const labels = {
-    read_file: t('tools.kind.read'),
-    batch_read: t('tools.kind.read'),
-    list_files: t('tools.kind.read'),
-    remote_read_file: t('tools.kind.read'),
-    remote_list_files: t('tools.kind.read'),
-    edit: t('tools.kind.edit'),
-    remote_edit: t('tools.kind.edit'),
-    create_file: t('tools.kind.create'),
-    remote_create_file: t('tools.kind.create'),
-    delete_path: t('tools.kind.delete'),
-    remote_delete_path: t('tools.kind.delete'),
-    run_command: t('tools.kind.command'),
-    remote_run_command: t('tools.kind.command'),
-    background_process: t('tools.kind.service'),
-    grep_files: t('tools.kind.grep'),
-    http_request: t('tools.kind.http'),
-    web_fetch: t('tools.kind.webFetch'),
-    render_html: t('tools.kind.renderHtml'),
-    ask: t('tools.kind.ask'),
-    wait: t('tools.kind.wait'),
-    calculate: t('tools.kind.calculate'),
-    memory_read: t('tools.kind.memory'),
-    memory_write: t('tools.kind.memory'),
-    todo_write: t('tools.kind.todo'),
-    scheduled_task: t('tools.kind.scheduled'),
-    Skill: t('tools.kind.skill'),
-    subagent: t('tools.kind.subagent'),
-    agent_delegate: t('tools.kind.subagent'),
-    create_goal: t('tools.kind.goal'),
-    update_goal: t('tools.kind.goal'),
-    get_goal: t('tools.kind.goal'),
-  };
-  return labels[name] || name || t('tools.kind.tool');
+// Inner sub-agent rows mirror the main tool card: the row's status icon conveys
+// state and the tense verb names the action ("Read" / "Edited" / "Ran" / ...),
+// via the shared verb table. MCP tools (name `mcp__server__tool`) fall back to
+// the mcp kind.
+function subToolVerb(tc) {
+  const name = tc?.name || '';
+  const kind = typeof name === 'string' && name.startsWith('mcp__') ? 'mcp' : '';
+  return toolVerbLabel(name, kind, tc?.status);
 }
 </script>

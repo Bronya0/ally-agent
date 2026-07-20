@@ -1788,7 +1788,7 @@ body.platform-darwin .ally-wordmark {
 }
 
 .tool-verb {
-  color: #e5e5e5;
+  color: #b8d7ff;
   font-size: 14px;
   flex-shrink: 0;
 }
@@ -1800,7 +1800,17 @@ body.platform-darwin .ally-wordmark {
   flex-shrink: 0;
 }
 
-.rich-tool-card.delete .tool-name {
+/* Secondary count label (e.g. "1 file" after the Read verb) — reads as muted
+   text, not a blue tool name. */
+.tool-count {
+  color: #a3a3a3;
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.rich-tool-card.delete .tool-name,
+.rich-tool-card.delete .tool-verb,
+.rich-tool-card.delete .tool-arg {
   color: #ef4444;
 }
 

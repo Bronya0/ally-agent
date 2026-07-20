@@ -3,7 +3,6 @@
     <div class="tool-line html-render-header">
       <span :class="['tool-status-icon', msg.status]">{{ statusIcon }}</span>
       <span class="tool-verb">{{ statusLabel }}</span>
-      <span class="tool-name">{{ $t('tools.kind.renderHtml') }}</span>
       <span v-if="msg.title" class="tool-arg" :title="msg.title">({{ msg.title }})</span>
     </div>
     <div v-if="msg.status === 'error'" class="html-render-error">{{ msg.body }}</div>
@@ -25,7 +24,7 @@
 
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
-import { t } from '../i18n.mjs';
+import { toolVerbLabel } from '../utils/toolVerb.mjs';
 import { buildHtmlRenderDocument, normalizeHtmlFrameHeight } from '../utils/htmlRender.mjs';
 
 const props = defineProps({
@@ -37,11 +36,7 @@ const frameHeight = ref(200);
 const frameToken = `ally-html-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
 const statusIcon = computed(() => props.msg.status === 'success' ? '✓' : props.msg.status === 'error' ? '✗' : '');
-const statusLabel = computed(() => {
-  if (props.msg.status === 'success') return t('tools.status.used');
-  if (props.msg.status === 'error') return t('tools.status.failed');
-  return t('tools.status.using');
-});
+const statusLabel = computed(() => toolVerbLabel('render_html', 'render_html', props.msg.status));
 
 const normalizedLines = computed(() => {
   const html = String(props.msg.htmlContent || '').replace(/\r\n?/g, '\n');
