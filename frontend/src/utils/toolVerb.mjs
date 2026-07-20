@@ -48,6 +48,9 @@ const TOOL_VERBS = {
   wait: ['Waiting', 'Waited', 'Wait'],
   ask: ['Asking', 'Asked', 'Ask'],
   todo_write: ['Updating plan', 'Updated plan', 'Plan update'],
+  // scheduled_task verb depends on the action (create/list/delete), resolved via
+  // SCHEDULED_TASK_VERBS below; this entry is the fallback when the action is
+  // unknown (e.g. an old card whose args weren't captured).
   scheduled_task: ['Scheduling', 'Scheduled', 'Schedule'],
   // memory / goal — noun embedded because the verb alone is ambiguous
   memory_read: ['Reading memory', 'Read memory', 'Memory read'],
@@ -59,6 +62,16 @@ const TOOL_VERBS = {
   subagent: ['Delegating', 'Delegated', 'Sub-agent'],
   agent_delegate: ['Delegating', 'Delegated', 'Sub-agent'],
   Skill: ['Loading skill', 'Loaded skill', 'Skill'],
+};
+
+// scheduled_task is one backend tool multiplexing several actions; a single
+// "Scheduled" verb hides what actually happened. Key by action so the card reads
+// "Created Scheduled Task" / "Deleted Scheduled Task" / "Listed Scheduled Tasks",
+// mirroring how every other tool names its action. [inProgress, done, noun].
+const SCHEDULED_TASK_VERBS = {
+  create: ['Creating Scheduled Task', 'Created Scheduled Task', 'Scheduled task create'],
+  delete: ['Deleting Scheduled Task', 'Deleted Scheduled Task', 'Scheduled task delete'],
+  list: ['Listing Scheduled Tasks', 'Listed Scheduled Tasks', 'Scheduled task list'],
 };
 
 // Fallback verbs by kind, for names not in the table above (e.g. MCP tools whose
@@ -77,9 +90,15 @@ function isError(status) {
 
 // Returns the verb to show for a tool call. `name` is the raw backend tool name,
 // `kind` the derived kind (used only as a fallback), `status` the call status.
+// `action` disambiguates multi-action tools (currently scheduled_task); pass the
+// parsed args.action when available, omit otherwise.
 // On error the label names the action ("Delete failed") rather than a bare "Failed".
-export function toolVerbLabel(name, kind, status) {
-  const forms = TOOL_VERBS[name] || KIND_VERBS[kind] || null;
+export function toolVerbLabel(name, kind, status, action) {
+  let forms = TOOL_VERBS[name] || KIND_VERBS[kind] || null;
+  if (name === 'scheduled_task') {
+    const key = String(action || '').trim().toLowerCase();
+    forms = SCHEDULED_TASK_VERBS[key] || forms;
+  }
   if (isError(status)) return forms ? `${forms[2]} failed` : 'Failed';
   if (forms) return isDone(status) ? forms[1] : forms[0];
   return isDone(status) ? 'Used' : 'Using';

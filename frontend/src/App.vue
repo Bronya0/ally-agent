@@ -4028,6 +4028,9 @@ function appendToolEventFallback(session, data = {}, status = 'running') {
   if (!session) return null;
   const eventId = toolEventId(data);
   const title = makeToolResultTitle(data.name, data.result, data) || makeToolTitle(data.name, data.args || '', data);
+  const scheduledAction = data.name === 'scheduled_task'
+    ? (parseToolArgsBestEffort(data.args || '').action || '')
+    : '';
   const payload = {
     role: 'tool_call',
     eventId,
@@ -4046,6 +4049,7 @@ function appendToolEventFallback(session, data = {}, status = 'running') {
     mcpServer: data.mcpServer || '',
     mcpTool: data.mcpTool || '',
     errorCode: data.errorCode || '',
+    scheduledAction,
     expanded: false,
     chip: '',
     editOldString: '',
@@ -4374,6 +4378,9 @@ function updateToolEvent(id, name, title, body, status = 'default', meta = {}, t
     askSubmitting: existing?.askSubmitting || false,
     askSubmitted: existing?.askSubmitted || false,
     askAnswers: existing?.askAnswers || [],
+    // scheduled_task's card verb depends on the action; capture it (args may be
+    // absent on an early tool:start, so fall back to the existing value).
+    scheduledAction: name === 'scheduled_task' ? (parsed.action || existing?.scheduledAction || '') : (existing?.scheduledAction || ''),
     ...((name === 'subagent' || name === 'agent_delegate') ? {
       subagentId: existing?.subagentId || '',
       description: parsed.description || existing?.description || parsed.task || '',

@@ -5045,6 +5045,20 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			outcomes := make([]toolOutcome, totalCalls)
 			toolConflicts := detectToolBatchConflicts(cfg, toolCalls)
 
+			// emitOutcome pushes a single tool's result/error to the frontend as
+			// soon as that tool finishes, instead of waiting for the whole batch.
+			// The Wails emit chain is concurrency-safe (notifyLock + windowthread
+			// serialization) and the frontend locates cards by
+			// runId:toolBatchId:toolCallIndex, so out-of-order emits land
+			// correctly. messages append stays ordered below.
+			emitOutcome := func(o toolOutcome) {
+				if o.result.OK {
+					a.emit("tool:result", mergeToolEventMeta(map[string]any{"runId": runID, "sessionId": sessionID, "toolBatchId": toolBatchID, "toolCallIndex": o.index, "toolCallId": o.callID, "name": o.name, "result": o.json, "durationMs": o.duration}, a.mcpToolEventMeta(o.name)))
+				} else {
+					a.emit("tool:error", mergeToolEventMeta(map[string]any{"runId": runID, "sessionId": sessionID, "toolBatchId": toolBatchID, "toolCallIndex": o.index, "toolCallId": o.callID, "name": o.name, "error": o.result.Error, "errorCode": o.result.ErrorCode, "durationMs": o.duration}, a.mcpToolEventMeta(o.name)))
+				}
+			}
+
 			executeCall := func(idx int, c openai.ToolCall) {
 				started := time.Now()
 				toolCtx := context.WithValue(ctx, toolExecutionMetaContextKey{}, toolExecutionMeta{
@@ -5055,13 +5069,17 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 				duration := time.Since(started).Milliseconds()
 				rj, _ := json.Marshal(r)
 				fullJSON := string(rj)
-				outcomes[idx] = toolOutcome{index: idx, callID: c.ID, name: c.Function.Name, result: r, json: fullJSON, modelJSON: compactToolResultForModel(c.Function.Name, r, fullJSON), duration: duration}
+				o := toolOutcome{index: idx, callID: c.ID, name: c.Function.Name, result: r, json: fullJSON, modelJSON: compactToolResultForModel(c.Function.Name, r, fullJSON), duration: duration}
+				outcomes[idx] = o
+				emitOutcome(o)
 			}
 			setConflictOutcome := func(idx int, c openai.ToolCall, conflictErr error) {
 				r := toolErrorResult(conflictErr)
 				rj, _ := json.Marshal(r)
 				fullJSON := string(rj)
-				outcomes[idx] = toolOutcome{index: idx, callID: c.ID, name: c.Function.Name, result: r, json: fullJSON, modelJSON: fullJSON}
+				o := toolOutcome{index: idx, callID: c.ID, name: c.Function.Name, result: r, json: fullJSON, modelJSON: fullJSON}
+				outcomes[idx] = o
+				emitOutcome(o)
 			}
 
 			var wg sync.WaitGroup
@@ -5089,12 +5107,9 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 				executeCall(i, call)
 			}
 
+			// Append tool results to the model message history in tool-call
+			// order. Emitting already happened per-tool as each finished.
 			for _, o := range outcomes {
-				if o.result.OK {
-					a.emit("tool:result", mergeToolEventMeta(map[string]any{"runId": runID, "sessionId": sessionID, "toolBatchId": toolBatchID, "toolCallIndex": o.index, "toolCallId": o.callID, "name": o.name, "result": o.json, "durationMs": o.duration}, a.mcpToolEventMeta(o.name)))
-				} else {
-					a.emit("tool:error", mergeToolEventMeta(map[string]any{"runId": runID, "sessionId": sessionID, "toolBatchId": toolBatchID, "toolCallIndex": o.index, "toolCallId": o.callID, "name": o.name, "error": o.result.Error, "errorCode": o.result.ErrorCode, "durationMs": o.duration}, a.mcpToolEventMeta(o.name)))
-				}
 				messages = append(messages, openai.ChatCompletionMessage{
 					Role:       openai.ChatMessageRoleTool,
 					ToolCallID: o.callID,
@@ -7522,6 +7537,43 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 		subToolSem := make(chan struct{}, 4)
 		subOutcomes := make([]subToolOutcome, totalCalls)
 
+		// emitSubOutcome updates the sub-run tool-call status and emits the
+		// result/error event for a single outcome. Called immediately after each
+		// tool finishes (from within the worker goroutine for parallel calls, or
+		// serially for ordered file mutations) so the UI reflects completion as
+		// soon as each tool finishes, instead of waiting for the slowest tool in
+		// the batch. run.ToolCalls is guarded by subRunsMu and a.emit is
+		// concurrency-safe, so this is safe to call from multiple goroutines.
+		emitSubOutcome := func(idx int) {
+			o := subOutcomes[idx]
+			if o.result.OK {
+				summary := toolResultSummary(o.name, &o.result)
+				a.subRunsMu.Lock()
+				for ti := range run.ToolCalls {
+					if run.ToolCalls[ti].ToolCallID == o.callID {
+						run.ToolCalls[ti].Status = "success"
+						run.ToolCalls[ti].Summary = truncateRunes(summary, 2048)
+						run.ToolCalls[ti].DurationMS = o.duration
+						break
+					}
+				}
+				a.subRunsMu.Unlock()
+				a.emit("sub:tool:result", map[string]any{"id": subID, "sessionId": sessionID, "toolCallId": o.callID, "name": o.name, "summary": summary, "durationMs": o.duration})
+			} else {
+				a.subRunsMu.Lock()
+				for ti := range run.ToolCalls {
+					if run.ToolCalls[ti].ToolCallID == o.callID {
+						run.ToolCalls[ti].Status = "error"
+						run.ToolCalls[ti].Summary = truncateRunes(o.result.Error, 2048)
+						run.ToolCalls[ti].DurationMS = o.duration
+						break
+					}
+				}
+				a.subRunsMu.Unlock()
+				a.emit("sub:tool:error", map[string]any{"id": subID, "sessionId": sessionID, "toolCallId": o.callID, "name": o.name, "error": o.result.Error, "errorCode": o.result.ErrorCode, "durationMs": o.duration})
+			}
+		}
+
 		executeSubCall := func(idx int, c openai.ToolCall) {
 			started := time.Now()
 			r := a.executeTool(ctx, cfg, sessionID, c.Function.Name, []byte(c.Function.Arguments))
@@ -7533,6 +7585,7 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 				args: c.Function.Arguments, result: r,
 				modelJSON: compactToolResultForModel(c.Function.Name, r, fullJSON), duration: duration,
 			}
+			emitSubOutcome(idx)
 		}
 		setSubConflictOutcome := func(idx int, c openai.ToolCall, conflictErr error) {
 			r := toolErrorResult(conflictErr)
@@ -7543,6 +7596,7 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 				args: c.Function.Arguments, result: r,
 				modelJSON: fullJSON,
 			}
+			emitSubOutcome(idx)
 		}
 
 		var subWg sync.WaitGroup
@@ -7570,35 +7624,12 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 			executeSubCall(i, call)
 		}
 
-		// Process outcomes in order
+		// Process outcomes in order. File tracking and the model-facing tool
+		// messages must stay ordered (filesRead/filesEdited are order-sensitive
+		// shared slices); the UI-facing status/emit already happened above in
+		// emitSubOutcome as each tool completed.
 		for _, o := range subOutcomes {
 			trackFileFromToolResult(o.name, o.args, &o.result, &filesRead, &filesEdited, seenFiles)
-			if o.result.OK {
-				summary := toolResultSummary(o.name, &o.result)
-				a.subRunsMu.Lock()
-				for ti := range run.ToolCalls {
-					if run.ToolCalls[ti].ToolCallID == o.callID {
-						run.ToolCalls[ti].Status = "success"
-						run.ToolCalls[ti].Summary = truncateRunes(summary, 2048)
-						run.ToolCalls[ti].DurationMS = o.duration
-						break
-					}
-				}
-				a.subRunsMu.Unlock()
-				a.emit("sub:tool:result", map[string]any{"id": subID, "sessionId": sessionID, "toolCallId": o.callID, "name": o.name, "summary": summary, "durationMs": o.duration})
-			} else {
-				a.subRunsMu.Lock()
-				for ti := range run.ToolCalls {
-					if run.ToolCalls[ti].ToolCallID == o.callID {
-						run.ToolCalls[ti].Status = "error"
-						run.ToolCalls[ti].Summary = truncateRunes(o.result.Error, 2048)
-						run.ToolCalls[ti].DurationMS = o.duration
-						break
-					}
-				}
-				a.subRunsMu.Unlock()
-				a.emit("sub:tool:error", map[string]any{"id": subID, "sessionId": sessionID, "toolCallId": o.callID, "name": o.name, "error": o.result.Error, "errorCode": o.result.ErrorCode, "durationMs": o.duration})
-			}
 			messages = append(messages, openai.ChatCompletionMessage{
 				Role: openai.ChatMessageRoleTool, ToolCallID: o.callID, Content: o.modelJSON,
 			})

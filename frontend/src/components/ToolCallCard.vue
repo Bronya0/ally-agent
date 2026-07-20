@@ -183,7 +183,7 @@ function toolIcon(msg) {
 }
 
 function toolVerb(msg) {
-  return toolVerbLabel(msg.name, msg.kind, msg.status);
+  return toolVerbLabel(msg.name, msg.kind, msg.status, msg.scheduledAction);
 }
 
 // Bounded LRU cache for highlighted command HTML. highlight.js is expensive

@@ -237,6 +237,17 @@ function toolArgsTitle(tc) {
 function subToolVerb(tc) {
   const name = tc?.name || '';
   const kind = typeof name === 'string' && name.startsWith('mcp__') ? 'mcp' : '';
-  return toolVerbLabel(name, kind, tc?.status);
+  // scheduled_task's verb depends on its action; reuse the args cache primed by
+  // toolArgsTitle (falling back to a parse) instead of re-parsing every render.
+  let action;
+  if (name === 'scheduled_task') {
+    const argsText = String(tc?.args || '');
+    if (tc._argsCacheKey !== argsText) {
+      tc._argsCacheKey = argsText;
+      tc._argsCacheParsed = parseToolArgs(argsText);
+    }
+    action = tc._argsCacheParsed?.action;
+  }
+  return toolVerbLabel(name, kind, tc?.status, action);
 }
 </script>
