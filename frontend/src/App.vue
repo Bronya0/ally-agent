@@ -2344,18 +2344,25 @@ function flushToolUpdateBuffer() {
   const entries = [...toolUpdateBuffers.values()];
   toolUpdateBuffers.clear();
   let lastActiveSessionId = '';
+  let lastActiveToolName = '';
   for (const data of entries) {
     const session = sessionByRunId(data.runId);
     if (!session) continue;
     const title = makeToolTitle(data.name, data.args, data);
     updateToolEvent(toolEventId(data), data.name, title, data.args || '', 'running', data, session);
-    if (session.id === activeSessionId.value) lastActiveSessionId = session.id;
+    if (session.id === activeSessionId.value) {
+      lastActiveSessionId = session.id;
+      lastActiveToolName = data.name || '';
+    }
   }
   // After the latest tool card has been rendered, scroll so its header stays
   // visible (top + 96px padding) rather than pinning scroll to the card's
-  // bottom, which would push the header above the viewport fold.
+  // bottom, which would push the header above the viewport fold. render_html
+  // uses its own fixed-height streaming preview instead of a rich tool card;
+  // trying to align it would select an older rich card and repeatedly pull the
+  // viewport upward while the HTML arguments stream.
   if (lastActiveSessionId) {
-    scrollMessagesToBottom({ alignToLastToolCard: true });
+    scrollMessagesToBottom({ alignToLastToolCard: lastActiveToolName !== 'render_html' });
   }
 }
 

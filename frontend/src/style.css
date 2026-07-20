@@ -1726,7 +1726,13 @@ body.platform-darwin .ally-wordmark {
 .rich-tool-card {
   border: none;
   background: transparent;
-  overflow: hidden;
+  overflow: visible;
+  /* Extend the card box 20px into the left gutter (negative margin) and add an
+     equal padding-left so the content position is unchanged. This keeps the
+     hanging status icon INSIDE the card's own box, so the paint containment
+     implied by content-visibility:auto does not clip it. */
+  margin-left: -20px;
+  padding-left: 20px;
   margin-bottom: 10px;
   border-radius: 4px;
   content-visibility: auto;
@@ -1746,6 +1752,10 @@ body.platform-darwin .ally-wordmark {
   display: flex !important;
   align-items: center;
   gap: 4px;
+  /* Hanging indent: pull the row left by the icon's footprint (16px width +
+     4px gap) so the status icon hangs into the gutter and everything after it
+     (verb / name / arg) lines up at x=0 with message body text. */
+  margin-left: -20px;
   padding: 2px 8px 2px 0;
   line-height: 1;
 }
@@ -1971,7 +1981,7 @@ body.platform-darwin .ally-wordmark {
 
 .tool-body {
   margin: 0;
-  padding: 2px 8px 4px 18px;
+  padding: 2px 8px 4px 0;
   white-space: pre-wrap;
   word-break: break-word;
   color: #bdbdbd;
@@ -1993,7 +2003,7 @@ body.platform-darwin .ally-wordmark {
   gap: 8px;
   color: #fca5a5;
   font-size: 13px;
-  padding: 2px 8px 2px 18px;
+  padding: 2px 8px 2px 0;
   line-height: 1.4;
 }
 
@@ -2006,7 +2016,7 @@ body.platform-darwin .ally-wordmark {
 
 .tool-error-reason {
   margin: 0;
-  padding: 2px 8px 5px 18px;
+  padding: 2px 8px 5px 0;
   color: #fecaca;
   background: transparent;
   font-family: var(--ally-ui-font);
@@ -2076,7 +2086,7 @@ body.platform-darwin .ally-wordmark {
 /* ── Read group (aggregated parallel reads) ── */
 
 .read-group-body {
-  padding: 2px 8px 4px 26px;
+  padding: 2px 8px 4px 6px;
 }
 
 .read-group-entry {
@@ -2554,7 +2564,7 @@ body.platform-darwin .ally-wordmark {
 /* ── Sub-agent inline progress in main chat ── */
 
 .subagent-inline-body {
-  padding: 2px 8px 4px 18px;
+  padding: 2px 8px 4px 0;
 }
 
 .subagent-inline-entry {
@@ -2639,7 +2649,7 @@ body.platform-darwin .ally-wordmark {
 }
 
 .subagent-inline-result {
-  padding: 2px 8px 4px 26px;
+  padding: 2px 8px 4px 6px;
   color: #8a8a8a;
   font-size: 12px;
   line-height: 1.5;
@@ -2649,7 +2659,7 @@ body.platform-darwin .ally-wordmark {
 }
 
 .subagent-inline-error {
-  padding: 2px 8px 4px 26px;
+  padding: 2px 8px 4px 6px;
   color: #ef4444;
   font-size: 12px;
   line-height: 1.5;
@@ -2660,7 +2670,7 @@ body.platform-darwin .ally-wordmark {
   color: #58a6ff;
   font-weight: 500;
 }
-.edit-file-groups { margin: 4px 0 0 22px; }
+.edit-file-groups { margin: 4px 0 0 2px; }
 .edit-file-group { margin-top: 3px; }
 .edit-file-header { width: 100%; display: flex; align-items: center; gap: 6px; padding: 3px 0; color: var(--text-color-2); text-align: left; }
 .edit-file-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); }
