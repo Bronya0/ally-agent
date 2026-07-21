@@ -54,12 +54,12 @@
   /* Default (amber/warm) markdown palette. All warm hues — headings, bold,
      inline code differentiate by lightness gradient (gold → amber → brown)
      within the warm family, never using red or cool colors. */
-  --md-h1: #f0b66c;      /* 亮琥珀：主标题，最亮 */
-  --md-h2: #e8895a;      /* 暖橙：二级标题 */
-  --md-h3: #f0d166;      /* 金黄：三级标题，亮黄调 */
-  --md-h4: #d9a05a;      /* 焦糖：四级标题 */
-  --md-strong: #d68a3c;  /* 焦糖橙：粗体，明度比 h3 低，靠明度差跳出 */
-  --md-code: #e8d8a0;    /* 羊皮纸暖黄：内联代码 */
+  --md-h1: #d7dedc;
+  --md-h2: #d7dedc;
+  --md-h3: #e8c489;
+  --md-h4: #d7dedc;
+  --md-strong: #c4b894;  /* 低饱和暖灰黄：粗体 */
+  --md-code: #d4a574;    /* 暖棕：内联代码 */
   --md-em: #e8b878;      /* 浅琥珀：斜体 */
   --md-link: #f0b66c;    /* 链接：同 h1，有下划线区分 */
   --md-quote: #e8a55c;   /* 引用块 */
@@ -67,7 +67,7 @@
   --md-quote-bg: rgba(232, 165, 92, 0.1);
   --md-del: #9a8a6a;     /* 删除线：暗棕灰 */
   --md-marker-ul: #f0d166;
-  --md-marker-ol: #f0b66c;
+  --md-marker-ol: color-mix(in srgb, #d7dedc 88%, #f0d166 12%);
 }
 
 /* ── Themes ── each overrides the accent seed plus a same-family markdown
@@ -1390,6 +1390,13 @@ code, pre {
   font-weight: 650;
 }
 
+.markdown-body h1 strong,
+.markdown-body h2 strong,
+.markdown-body h3 strong,
+.markdown-body h4 strong {
+  color: inherit;
+}
+
 .markdown-body em {
   color: var(--md-em);
 }
@@ -1404,7 +1411,7 @@ code, pre {
   height: 1px;
   margin: 1em 0;
   border: 0;
-  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--ally-accent) 32%, transparent), transparent);
+  background: transparent;
 }
 
 .markdown-body ul,
@@ -1600,13 +1607,14 @@ code, pre {
 
 .markdown-body th,
 .markdown-body td {
-  padding: 7px 9px;
+  padding: 8px 12px;
   border: 1px solid var(--md-border);
 }
 
 .markdown-body th {
-  color: var(--ally-accent-pale);
-  background: color-mix(in srgb, var(--ally-accent) 8%, transparent);
+  color: var(--md-white);
+  background: rgba(255, 255, 255, 0.05);
+  font-weight: 600;
 }
 
 .markdown-body td {
@@ -1615,7 +1623,7 @@ code, pre {
 }
 
 .markdown-body tr:nth-child(even) td {
-  background: color-mix(in srgb, var(--ally-accent) 3.5%, transparent);
+  background: rgba(255, 255, 255, 0.025);
 }
 
 .markdown-body pre {
