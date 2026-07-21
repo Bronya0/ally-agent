@@ -47,38 +47,44 @@ import (
 )
 
 const (
-	appName              = "Ally"
-	defaultModel         = "deepseek-v4-flash"
-	defaultBaseURL       = "https://api.deepseek.com"
-	defaultReasoningTag  = "reasoning_content"
-	maxReadFileBytes     = 10 * 1024 * 1024
-	maxToolOutput        = 128 * 1024
-	maxFinishedSubagents = 50
-	maxSubagentToolCalls = 100
-	maxModelToolOutput   = 12 * 1024
-	maxModelWebOutput    = 96 * 1024
-	modelToolHeadBytes   = 4 * 1024
-	modelToolTailBytes   = 8 * 1024
-	maxModelGrepMatches  = 200
-	maxAgentSteps        = 9999
-	defaultLLMRetries    = 2
-	defaultShellLimit    = 120
-	defaultHTTPTimeout   = 60
-	defaultGrepTimeout   = 30
-	maxGrepTimeout       = 120
-	maxWaitSeconds       = 3600
-	maxHTTPBodyBytes     = 50 * 1024 * 1024
-	defaultHTTPMaxBody   = 256 * 1024
-	defaultWebFetchBody  = 2 * 1024 * 1024
-	maxHTTPJSONPreview   = 24 * 1024
-	httpRateDelay        = 1 * time.Second
-	defaultHTTPUA        = "AllyAgent/1.0 (+user-controlled desktop app)"
-	workspaceMapDepth    = 3
-	workspaceMapLimit    = 320
-	workspaceMapTTL      = 30 * time.Second
-	memoryIndexLimit     = 200
-	maxAttachmentText    = 200 * 1024
-	maxAttachmentDataURL = 8 * 1024 * 1024
+	appName                          = "Ally"
+	defaultModel                     = "deepseek-v4-flash"
+	defaultBaseURL                   = "https://api.deepseek.com"
+	defaultReasoningTag              = "reasoning_content"
+	maxReadFileBytes                 = 10 * 1024 * 1024
+	maxToolOutput                    = 128 * 1024
+	maxFinishedSubagents             = 50
+	maxSubagentToolCalls             = 100
+	maxModelToolOutput               = 12 * 1024
+	maxModelWebOutput                = 96 * 1024
+	modelToolHeadBytes               = 4 * 1024
+	modelToolTailBytes               = 8 * 1024
+	maxModelGrepMatches              = 200
+	maxAgentSteps                    = 9999
+	defaultLLMRetries                = 2
+	defaultShellLimit                = 120
+	defaultHTTPTimeout               = 60
+	defaultGrepTimeout               = 30
+	maxGrepTimeout                   = 120
+	maxWaitSeconds                   = 3600
+	maxHTTPBodyBytes                 = 50 * 1024 * 1024
+	defaultHTTPMaxBody               = 256 * 1024
+	defaultWebFetchBody              = 2 * 1024 * 1024
+	maxHTTPJSONPreview               = 24 * 1024
+	httpRateDelay                    = 1 * time.Second
+	defaultHTTPUA                    = "AllyAgent/1.0 (+user-controlled desktop app)"
+	workspaceMapDepth                = 3
+	workspaceMapLimit                = 320
+	workspaceMapTTL                  = 30 * time.Second
+	workspacePathIndexTTL            = 10 * time.Minute
+	workspacePathTruncatedRefreshTTL = 60 * time.Minute
+	workspacePathIndexBuildTimeout   = 8 * time.Second
+	workspacePathIndexMaxEntries     = 50000
+	workspacePathSearchDefaultLimit  = 30
+	workspacePathSearchMaxLimit      = 80
+	memoryIndexLimit                 = 200
+	maxAttachmentText                = 200 * 1024
+	maxAttachmentDataURL             = 8 * 1024 * 1024
 )
 
 var (
@@ -120,8 +126,12 @@ type App struct {
 	gitDiffCancel context.CancelFunc
 	gitDiffRunID  int64
 
-	workspaceMapMu    sync.Mutex
-	workspaceMapCache map[string]workspaceMapCacheEntry
+	workspaceMapMu       sync.Mutex
+	workspaceMapCache    map[string]workspaceMapCacheEntry
+	workspacePathMu      sync.Mutex
+	workspacePathCache   map[string]*workspacePathIndex
+	workspacePathBuilds  map[string]chan struct{}
+	workspacePathVersion int64
 
 	httpRateMu   sync.Mutex
 	httpLastHost map[string]time.Time
@@ -158,6 +168,8 @@ func NewApp() *App {
 		subRuns:             map[string]*SubagentRun{},
 		subSem:              make(chan struct{}, 4),
 		workspaceMapCache:   map[string]workspaceMapCacheEntry{},
+		workspacePathCache:  map[string]*workspacePathIndex{},
+		workspacePathBuilds: map[string]chan struct{}{},
 		httpLastHost:        map[string]time.Time{},
 		liveBreakdown:       map[string]ContextBreakdown{},
 		workspaceTokenUsage: map[string]WorkspaceTokenUsage{},
@@ -368,6 +380,29 @@ type ListFilesResult struct {
 	Entries   []FileEntry `json:"entries"`
 	Count     int         `json:"count"`
 	Truncated bool        `json:"truncated"`
+}
+
+type WorkspacePathSearchRequest struct {
+	Query string `json:"query"`
+	Limit int    `json:"limit"`
+	Force bool   `json:"force"`
+}
+
+type WorkspacePathEntry struct {
+	Path string `json:"path"`
+	Name string `json:"name"`
+	Dir  bool   `json:"dir"`
+}
+
+type WorkspacePathSearchResult struct {
+	Entries       []WorkspacePathEntry `json:"entries"`
+	Count         int                  `json:"count"`
+	Total         int                  `json:"total"`
+	Truncated     bool                 `json:"truncated"`
+	IndexVersion  int64                `json:"indexVersion"`
+	IndexedAt     string               `json:"indexedAt"`
+	BuildDuration int64                `json:"buildDurationMs"`
+	Source        string               `json:"source"`
 }
 
 type ReadFileRequest struct {
@@ -1593,21 +1628,21 @@ func scanSkillDir(dir string, source string, skills *[]SkillDefinition, seen map
 // usable YAML frontmatter. Files with explicit frontmatter declaring a name
 // are still treated as skills even if their stem matches this list.
 var commonDocumentNames = map[string]bool{
-	"readme":               true,
-	"license":              true,
-	"licence":              true,
-	"copying":              true,
-	"notice":               true,
-	"changelog":            true,
-	"changes":              true,
-	"history":              true,
-	"contributing":         true,
-	"authors":              true,
-	"contributors":         true,
-	"code_of_conduct":      true,
-	"security":             true,
-	"third_party":          true,
-	"third_party_notices":  true,
+	"readme":              true,
+	"license":             true,
+	"licence":             true,
+	"copying":             true,
+	"notice":              true,
+	"changelog":           true,
+	"changes":             true,
+	"history":             true,
+	"contributing":        true,
+	"authors":             true,
+	"contributors":        true,
+	"code_of_conduct":     true,
+	"security":            true,
+	"third_party":         true,
+	"third_party_notices": true,
 }
 
 func parseSkillFile(path string) SkillDefinition {
@@ -5826,8 +5861,8 @@ type toolCallProgressTracker struct {
 // growth). The final state is always emitted via forceEvents after the stream
 // completes, so throttling only drops intermediate previews.
 const (
-	toolUpdateThrottle          = 200 * time.Millisecond
-	toolUpdateThreshold  = 2048 // only throttle when args exceed this size
+	toolUpdateThrottle  = 200 * time.Millisecond
+	toolUpdateThreshold = 2048 // only throttle when args exceed this size
 )
 
 func newToolCallProgressTracker() *toolCallProgressTracker {
@@ -8440,6 +8475,10 @@ func (a *App) ListFiles(req ListFilesRequest) ([]FileEntry, error) {
 	return result.Entries, nil
 }
 
+func (a *App) SearchWorkspacePaths(req WorkspacePathSearchRequest) (WorkspacePathSearchResult, error) {
+	return a.searchWorkspacePaths(a.effectiveConfig(ConfigState{}), req)
+}
+
 func (a *App) ReadFile(req ReadFileRequest) (ReadFileResult, error) {
 	return a.readFileWithConfig(a.effectiveConfig(ConfigState{}), req)
 }
@@ -8467,11 +8506,20 @@ func (a *App) ReplaceLines(req ReplaceLinesRequest) (EditResult, error) {
 }
 
 func (a *App) CreateFile(req CreateFileRequest) (EditResult, error) {
-	return a.createFileWithConfig(a.effectiveConfig(ConfigState{}), req)
+	cfg := a.effectiveConfig(ConfigState{})
+	result, err := a.createFileWithConfig(cfg, req)
+	if err == nil {
+		a.invalidateWorkspaceMapCache(cfg)
+	}
+	return result, err
 }
 
 func (a *App) DeletePath(req DeletePathRequest) error {
-	_, err := a.deletePathWithConfig(a.effectiveConfig(ConfigState{}), req)
+	cfg := a.effectiveConfig(ConfigState{})
+	_, err := a.deletePathWithConfig(cfg, req)
+	if err == nil {
+		a.invalidateWorkspaceMapCache(cfg)
+	}
 	return err
 }
 
@@ -10318,6 +10366,423 @@ type workspaceMapBuildResult struct {
 	SkippedIgnored int
 	SkippedHeavy   int
 	SkippedLimit   int
+}
+
+type workspacePathIndex struct {
+	Entries       []workspacePathIndexedEntry
+	GeneratedAt   time.Time
+	BuildDuration time.Duration
+	Version       int64
+	Truncated     bool
+	Source        string
+}
+
+type workspacePathIndexedEntry struct {
+	Path      string
+	Name      string
+	LowerPath string
+	LowerName string
+	Dir       bool
+}
+
+type workspacePathCandidate struct {
+	Entry workspacePathIndexedEntry
+	Score int
+	Pos   int
+}
+
+type workspacePathIndexBuilder struct {
+	entries   []workspacePathIndexedEntry
+	seen      map[string]struct{}
+	truncated bool
+}
+
+func (a *App) searchWorkspacePaths(cfg ConfigState, req WorkspacePathSearchRequest) (WorkspacePathSearchResult, error) {
+	root, err := workspaceRoot(cfg)
+	if err != nil {
+		return WorkspacePathSearchResult{}, err
+	}
+	limit := req.Limit
+	if limit <= 0 {
+		limit = workspacePathSearchDefaultLimit
+	}
+	if limit > workspacePathSearchMaxLimit {
+		limit = workspacePathSearchMaxLimit
+	}
+	index, err := a.workspacePathIndex(root, req.Force)
+	if err != nil {
+		return WorkspacePathSearchResult{}, err
+	}
+	query := strings.TrimSpace(strings.TrimPrefix(req.Query, "@"))
+	query = strings.Trim(query, "\"'")
+	lowerQuery := strings.ToLower(filepath.ToSlash(query))
+	if lowerQuery == "" {
+		count := len(index.Entries)
+		if count > limit {
+			count = limit
+		}
+		entries := make([]WorkspacePathEntry, 0, count)
+		for _, entry := range index.Entries[:count] {
+			entries = append(entries, WorkspacePathEntry{Path: entry.Path, Name: entry.Name, Dir: entry.Dir})
+		}
+		return WorkspacePathSearchResult{
+			Entries:       entries,
+			Count:         len(index.Entries),
+			Total:         len(index.Entries),
+			Truncated:     index.Truncated || len(index.Entries) > len(entries),
+			IndexVersion:  index.Version,
+			IndexedAt:     index.GeneratedAt.Format(time.RFC3339),
+			BuildDuration: index.BuildDuration.Milliseconds(),
+			Source:        index.Source,
+		}, nil
+	}
+
+	candidateCap := min(max(limit*8, 64), 512)
+	candidates := make([]workspacePathCandidate, 0, min(candidateCap, len(index.Entries)))
+	count := 0
+	for pos, entry := range index.Entries {
+		score, ok := workspacePathMatchScore(entry, lowerQuery)
+		if !ok {
+			continue
+		}
+		count++
+		candidate := workspacePathCandidate{Entry: entry, Score: score, Pos: pos}
+		if len(candidates) < candidateCap {
+			candidates = append(candidates, candidate)
+			continue
+		}
+		worst := 0
+		for i := 1; i < len(candidates); i++ {
+			if workspacePathCandidateLess(candidates[worst], candidates[i]) {
+				worst = i
+			}
+		}
+		if workspacePathCandidateLess(candidate, candidates[worst]) {
+			candidates[worst] = candidate
+		}
+	}
+	sort.Slice(candidates, func(i, j int) bool { return workspacePathCandidateLess(candidates[i], candidates[j]) })
+
+	if len(candidates) > limit {
+		candidates = candidates[:limit]
+	}
+	entries := make([]WorkspacePathEntry, 0, len(candidates))
+	for _, candidate := range candidates {
+		entry := candidate.Entry
+		entries = append(entries, WorkspacePathEntry{Path: entry.Path, Name: entry.Name, Dir: entry.Dir})
+	}
+	return WorkspacePathSearchResult{
+		Entries:       entries,
+		Count:         count,
+		Total:         len(index.Entries),
+		Truncated:     index.Truncated || count > len(entries),
+		IndexVersion:  index.Version,
+		IndexedAt:     index.GeneratedAt.Format(time.RFC3339),
+		BuildDuration: index.BuildDuration.Milliseconds(),
+		Source:        index.Source,
+	}, nil
+}
+
+func workspacePathCandidateLess(a, b workspacePathCandidate) bool {
+	if a.Score != b.Score {
+		return a.Score < b.Score
+	}
+	if a.Entry.Dir != b.Entry.Dir {
+		return a.Entry.Dir
+	}
+	if len(a.Entry.Path) != len(b.Entry.Path) {
+		return len(a.Entry.Path) < len(b.Entry.Path)
+	}
+	return a.Pos < b.Pos
+}
+
+func workspacePathMatchScore(entry workspacePathIndexedEntry, query string) (int, bool) {
+	if query == "" {
+		if entry.Dir {
+			return 10, true
+		}
+		return 20, true
+	}
+	if strings.HasPrefix(entry.LowerName, query) {
+		return 0, true
+	}
+	if strings.HasPrefix(entry.LowerPath, query) {
+		return 1, true
+	}
+	if strings.Contains(entry.LowerPath, "/"+query) {
+		return 2, true
+	}
+	for _, part := range strings.Split(entry.LowerPath, "/") {
+		if strings.HasPrefix(part, query) {
+			return 3, true
+		}
+	}
+	return 0, false
+}
+
+func (a *App) workspacePathIndex(root string, force bool) (*workspacePathIndex, error) {
+	key := workspaceMapCacheKey(root)
+	for {
+		a.workspacePathMu.Lock()
+		cached := a.workspacePathCache[key]
+		if !force && cached != nil {
+			if time.Since(cached.GeneratedAt) >= workspacePathIndexRefreshTTL(cached) && !isBroadWorkspacePathRoot(root) {
+				if _, ok := a.workspacePathBuilds[key]; !ok {
+					waitCh := make(chan struct{})
+					a.workspacePathBuilds[key] = waitCh
+					go a.rebuildWorkspacePathIndex(root, key, waitCh)
+				}
+			}
+			a.workspacePathMu.Unlock()
+			return cached, nil
+		}
+		if waitCh, ok := a.workspacePathBuilds[key]; ok {
+			a.workspacePathMu.Unlock()
+			<-waitCh
+			force = false
+			continue
+		}
+		waitCh := make(chan struct{})
+		a.workspacePathBuilds[key] = waitCh
+		a.workspacePathMu.Unlock()
+
+		index, err := a.buildWorkspacePathIndex(root)
+
+		a.workspacePathMu.Lock()
+		a.finishWorkspacePathIndexBuildLocked(key, index, err)
+		close(waitCh)
+		a.workspacePathMu.Unlock()
+		return index, err
+	}
+}
+
+func (a *App) rebuildWorkspacePathIndex(root, key string, waitCh chan struct{}) {
+	index, err := a.buildWorkspacePathIndex(root)
+	a.workspacePathMu.Lock()
+	a.finishWorkspacePathIndexBuildLocked(key, index, err)
+	close(waitCh)
+	a.workspacePathMu.Unlock()
+}
+
+func (a *App) finishWorkspacePathIndexBuildLocked(key string, index *workspacePathIndex, err error) {
+	delete(a.workspacePathBuilds, key)
+	if err == nil && index != nil {
+		a.workspacePathVersion++
+		index.Version = a.workspacePathVersion
+		a.workspacePathCache[key] = index
+	}
+}
+
+func workspacePathIndexRefreshTTL(index *workspacePathIndex) time.Duration {
+	if index != nil && index.Truncated {
+		return workspacePathTruncatedRefreshTTL
+	}
+	return workspacePathIndexTTL
+}
+
+func isBroadWorkspacePathRoot(root string) bool {
+	clean := filepath.Clean(strings.TrimSpace(root))
+	if clean == "." || clean == string(filepath.Separator) || filepath.Dir(clean) == clean {
+		return true
+	}
+	if home, err := os.UserHomeDir(); err == nil && samePath(clean, home) {
+		return true
+	}
+	vol := filepath.VolumeName(clean)
+	rest := strings.Trim(strings.TrimPrefix(clean, vol), `\/`)
+	if rest == "" {
+		return true
+	}
+	parts := strings.FieldsFunc(rest, func(r rune) bool { return r == '/' || r == '\\' })
+	return goruntime.GOOS == "windows" && len(parts) <= 1
+}
+
+func (a *App) buildWorkspacePathIndex(root string) (*workspacePathIndex, error) {
+	started := time.Now()
+	baseCtx := a.ctx
+	if baseCtx == nil {
+		baseCtx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(baseCtx, workspacePathIndexBuildTimeout)
+	defer cancel()
+	builder := newWorkspacePathIndexBuilder()
+	source, truncated, err := workspacePathFilesWithRipgrep(ctx, root, builder.addFile)
+	if err != nil && ctx.Err() == nil {
+		builder = newWorkspacePathIndexBuilder()
+		source, truncated, err = workspacePathFilesWithWalkDir(ctx, root, builder.addFile)
+	}
+	if err != nil && len(builder.entries) == 0 {
+		return nil, err
+	}
+	if err != nil {
+		truncated = true
+	}
+	if builder.truncated {
+		truncated = true
+	}
+	if source == "" {
+		source = "partial"
+	}
+	entries := builder.entries
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].Dir != entries[j].Dir {
+			return entries[i].Dir
+		}
+		return entries[i].LowerPath < entries[j].LowerPath
+	})
+	return &workspacePathIndex{Entries: entries, GeneratedAt: time.Now(), BuildDuration: time.Since(started), Truncated: truncated, Source: source}, nil
+}
+
+func newWorkspacePathIndexBuilder() *workspacePathIndexBuilder {
+	return &workspacePathIndexBuilder{
+		entries: make([]workspacePathIndexedEntry, 0, 1024),
+		seen:    make(map[string]struct{}, 1024),
+	}
+}
+
+func (b *workspacePathIndexBuilder) addFile(rel string) bool {
+	rel = strings.Trim(strings.TrimSpace(filepath.ToSlash(rel)), "/")
+	if rel == "" || rel == "." {
+		return true
+	}
+	if !b.add(rel, false) {
+		return false
+	}
+	parts := strings.Split(rel, "/")
+	if len(parts) <= 1 {
+		return true
+	}
+	cur := ""
+	for i := 0; i < len(parts)-1; i++ {
+		if cur == "" {
+			cur = parts[i]
+		} else {
+			cur += "/" + parts[i]
+		}
+		if !b.add(cur, true) {
+			return false
+		}
+	}
+	return true
+}
+
+func (b *workspacePathIndexBuilder) add(rel string, dir bool) bool {
+	rel = strings.Trim(strings.TrimSpace(filepath.ToSlash(rel)), "/")
+	if rel == "" || rel == "." {
+		return true
+	}
+	key := rel
+	if goruntime.GOOS == "windows" {
+		key = strings.ToLower(key)
+	}
+	if _, ok := b.seen[key]; ok {
+		return true
+	}
+	if len(b.entries) >= workspacePathIndexMaxEntries {
+		b.truncated = true
+		return false
+	}
+	b.seen[key] = struct{}{}
+	name := path.Base(rel)
+	b.entries = append(b.entries, workspacePathIndexedEntry{
+		Path:      rel,
+		Name:      name,
+		LowerPath: strings.ToLower(rel),
+		LowerName: strings.ToLower(name),
+		Dir:       dir,
+	})
+	return true
+}
+
+func workspacePathFilesWithRipgrep(ctx context.Context, root string, add func(string) bool) (string, bool, error) {
+	rgPath, err := findRipgrep()
+	if err != nil {
+		return "", false, err
+	}
+	runCtx, stop := context.WithCancel(ctx)
+	defer stop()
+	args := []string{"--files", "--hidden", "-g", "!.git", "-g", "!.git/**"}
+	for _, dir := range workspacePathIndexIgnoredDirs() {
+		args = append(args, "-g", "!"+dir+"/**", "-g", "!**/"+dir+"/**")
+	}
+	cmd := exec.CommandContext(runCtx, rgPath, args...)
+	cmd.Dir = root
+	hideCommandWindow(cmd)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return "", false, err
+	}
+	stderr := &limitedBuffer{limit: 8 * 1024}
+	cmd.Stderr = stderr
+	if err := cmd.Start(); err != nil {
+		return "", false, err
+	}
+	truncated := false
+	scanner := bufio.NewScanner(stdout)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		p := strings.TrimSpace(scanner.Text())
+		if p == "" {
+			continue
+		}
+		if !add(p) {
+			truncated = true
+			stop()
+			break
+		}
+	}
+	scanErr := scanner.Err()
+	waitErr := cmd.Wait()
+	if ctx.Err() != nil {
+		return "rg", true, ctx.Err()
+	}
+	if scanErr != nil && !truncated {
+		return "", truncated, scanErr
+	}
+	if waitErr != nil && !truncated {
+		msg := strings.TrimSpace(stderr.String())
+		if msg != "" {
+			return "", truncated, fmt.Errorf("rg --files failed: %s", msg)
+		}
+		return "", truncated, waitErr
+	}
+	return "rg", truncated, nil
+}
+
+func workspacePathFilesWithWalkDir(ctx context.Context, root string, add func(string) bool) (string, bool, error) {
+	truncated := false
+	err := filepath.WalkDir(root, func(absPath string, d fs.DirEntry, walkErr error) error {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if walkErr != nil || absPath == root {
+			return nil
+		}
+		name := d.Name()
+		if strings.HasPrefix(name, ".") {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if d.IsDir() {
+			if isWorkspaceMapHeavyDir(name) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		rel, err := filepath.Rel(root, absPath)
+		if err == nil && !add(rel) {
+			truncated = true
+			return fs.SkipAll
+		}
+		return nil
+	})
+	return "walkdir", truncated, err
+}
+
+func workspacePathIndexIgnoredDirs() []string {
+	return []string{".git", "node_modules", "dist", "build", "target", ".next", ".nuxt", ".svelte-kit", "vendor", "__pycache__"}
 }
 
 func buildWorkspaceMapContext(root string) string {

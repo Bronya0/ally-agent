@@ -69,6 +69,14 @@
                   :selected-index="selectedCommandIndex"
                   @select="applyCommand"
                 />
+                <FileMentionMenu
+                  :visible="fileMentionVisible"
+                  :entries="fileMentionEntries"
+                  :selected-index="fileMentionSelectedIndex"
+                  :loading="fileMentionLoading"
+                  :meta="fileMentionMeta"
+                  @select="applyFileMention"
+                />
                 <div v-if="sessionsVisible" class="sessions-menu">
                   <div class="command-title">{{ $t('app.sessions.title', { count: sessions.length }) }}</div>
                   <div ref="sessionsScrollRef" class="command-scroll">
@@ -125,6 +133,8 @@
                     onPaste: handlePromptPaste,
                     onCompositionstart: handlePromptCompositionStart,
                     onCompositionend: handlePromptCompositionEnd,
+                    onClick: handlePromptCursorActivity,
+                    onKeyup: handlePromptKeyup,
                     'data-ally-prompt-input': 'true',
                   }"
                   :autosize="{ minRows: 2, maxRows: 5 }"
@@ -253,6 +263,7 @@ import {
   DeleteSession,
   ReleaseSession,
   SubmitAskResponse,
+  SearchWorkspacePaths,
 } from '../wailsjs/go/main/App';
 import { BrowserOpenURL, Environment, EventsOn, WindowMinimise, WindowMaximise, WindowUnmaximise, WindowIsMaximised, Quit } from '../wailsjs/runtime/runtime';
 import AllyWordmark from './components/AllyWordmark.vue';
@@ -266,6 +277,7 @@ import WelcomeMessage from './components/WelcomeMessage.vue';
 import ToolCallCard from './components/ToolCallCard.vue';
 import AppHeader from './components/AppHeader.vue';
 import CommandMenu from './components/CommandMenu.vue';
+import FileMentionMenu from './components/FileMentionMenu.vue';
 import SettingsModal from './components/SettingsModal.vue';
 import ChatMessages from './components/ChatMessages.vue';
 import TaskCenterPanel from './components/TaskCenterPanel.vue';
@@ -298,6 +310,8 @@ const chatMessagesRef = ref(null);
 const promptInputRef = ref(null);
 const promptComposing = ref(false);
 let promptCompositionEndedAt = 0;
+let fileMentionTimer = 0;
+let fileMentionRequestId = 0;
 
 const themeOverrides = {
   common: {
@@ -1079,6 +1093,12 @@ const promptText = computed({
 });
 const commandMenuVisible = ref(false);
 const selectedCommandIndex = ref(0);
+const fileMentionVisible = ref(false);
+const fileMentionEntries = ref([]);
+const fileMentionSelectedIndex = ref(0);
+const fileMentionLoading = ref(false);
+const fileMentionMeta = ref('');
+const fileMentionRange = ref(null);
 const sessionsVisible = ref(false);
 const sessionsSelectedIndex = ref(0);
 const sessionsScrollRef = ref(null);
@@ -1528,6 +1548,7 @@ function refreshWorkspaceTokenUsage(workspace = config.workspace || '') {
 watch(() => config.workspace, (workspace) => {
   refreshWorkspaceTokenUsage(workspace || '');
   refreshGitStatus();
+  closeFileMentionMenu();
 }, { immediate: true });
 
 
@@ -3774,13 +3795,132 @@ const filteredSkills = computed(() => filteredCommands.value.filter(cmd => cmd.s
 function handlePromptInput() {
   const value = promptText.value;
   if (value.startsWith('/')) {
+    closeFileMentionMenu();
     commandMenuVisible.value = true;
     selectedCommandIndex.value = 0;
     commandHistoryIndex.value = -1;
     sessionsVisible.value = false;
   } else {
     commandMenuVisible.value = false;
+    nextTick(() => updateFileMentionFromCaret());
   }
+}
+
+function getPromptTextarea() {
+  const root = promptInputRef.value?.$el || promptInputRef.value;
+  return root?.querySelector?.('textarea[data-ally-prompt-input="true"], textarea') || document.querySelector('textarea[data-ally-prompt-input="true"]');
+}
+
+function detectFileMention(text, caret) {
+  if (!Number.isFinite(caret) || caret < 0) return null;
+  const at = text.lastIndexOf('@', Math.max(0, caret - 1));
+  if (at < 0) return null;
+  if (at > 0 && !/[\s([{,;:]/.test(text[at - 1])) return null;
+  const raw = text.slice(at + 1, caret);
+  if (raw.includes('\n') || raw.length > 180) return null;
+  if (raw.startsWith('"')) {
+    const query = raw.slice(1);
+    if (query.includes('"')) return null;
+    return { start: at, end: caret, query, quoted: true };
+  }
+  if (raw.startsWith("'")) {
+    const query = raw.slice(1);
+    if (query.includes("'")) return null;
+    return { start: at, end: caret, query, quoted: true };
+  }
+  if (/\s/.test(raw)) return null;
+  return { start: at, end: caret, query: raw, quoted: false };
+}
+
+function updateFileMentionFromCaret(force = false) {
+  if (promptComposing.value || commandMenuVisible.value || sessionsVisible.value) return;
+  const textarea = getPromptTextarea();
+  if (!textarea) {
+    closeFileMentionMenu();
+    return;
+  }
+  const range = detectFileMention(promptText.value, textarea.selectionStart ?? promptText.value.length);
+  if (!range) {
+    closeFileMentionMenu();
+    return;
+  }
+  fileMentionRange.value = range;
+  fileMentionVisible.value = true;
+  fileMentionSelectedIndex.value = 0;
+  scheduleFileMentionSearch(range.query, force);
+}
+
+function scheduleFileMentionSearch(query, force = false) {
+  if (fileMentionTimer) window.clearTimeout(fileMentionTimer);
+  if (fileMentionEntries.value.length === 0) fileMentionLoading.value = true;
+  fileMentionTimer = window.setTimeout(() => {
+    void searchFileMentions(query, force);
+  }, 90);
+}
+
+async function searchFileMentions(query, force = false) {
+  const requestId = ++fileMentionRequestId;
+  fileMentionLoading.value = true;
+  try {
+    const result = await SearchWorkspacePaths({ query, limit: 30, force });
+    if (requestId !== fileMentionRequestId) return;
+    fileMentionEntries.value = Array.isArray(result?.entries) ? result.entries : [];
+    fileMentionMeta.value = result ? `${result.count || 0}/${result.total || 0} · ${result.source || '-'} · ${result.buildDurationMs || 0}ms` : '';
+    if (fileMentionSelectedIndex.value >= fileMentionEntries.value.length) fileMentionSelectedIndex.value = 0;
+  } catch (err) {
+    if (requestId !== fileMentionRequestId) return;
+    fileMentionEntries.value = [];
+    fileMentionMeta.value = String(err || '');
+  } finally {
+    if (requestId === fileMentionRequestId) fileMentionLoading.value = false;
+  }
+}
+
+function closeFileMentionMenu() {
+  if (fileMentionTimer) window.clearTimeout(fileMentionTimer);
+  fileMentionTimer = 0;
+  fileMentionRequestId++;
+  fileMentionVisible.value = false;
+  fileMentionLoading.value = false;
+  fileMentionEntries.value = [];
+  fileMentionMeta.value = '';
+  fileMentionRange.value = null;
+  fileMentionSelectedIndex.value = 0;
+}
+
+function formatFileMentionPath(entry) {
+  const rawPath = String(entry?.path || '').replace(/\\/g, '/');
+  const path = entry?.dir && rawPath && !rawPath.endsWith('/') ? `${rawPath}/` : rawPath;
+  if (/[\s"'@]/.test(path)) return `@"${path.replace(/"/g, '\\"')}"`;
+  return `@${path}`;
+}
+
+function applyFileMention(index = fileMentionSelectedIndex.value) {
+  const entry = fileMentionEntries.value[index];
+  const range = fileMentionRange.value;
+  if (!entry || !range) return;
+  const before = promptText.value.slice(0, range.start);
+  const after = promptText.value.slice(range.end);
+  const replacement = formatFileMentionPath(entry);
+  const suffix = after.startsWith(' ') || after.startsWith('\n') ? '' : ' ';
+  const nextValue = `${before}${replacement}${suffix}${after}`;
+  const caret = before.length + replacement.length + suffix.length;
+  promptText.value = nextValue;
+  closeFileMentionMenu();
+  nextTick(() => {
+    const textarea = getPromptTextarea();
+    textarea?.focus?.();
+    textarea?.setSelectionRange?.(caret, caret);
+  });
+}
+
+function handlePromptCursorActivity() {
+  nextTick(() => updateFileMentionFromCaret());
+}
+
+function handlePromptKeyup(event) {
+  if (!['ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown'].includes(event.key)) return;
+  handlePromptCursorActivity();
 }
 
 function handlePromptCompositionStart() {
@@ -3809,9 +3949,41 @@ function handlePromptKeydown(event) {
     }
   }
   if (event.key === '/' && promptText.value.trim() === '' && !event.ctrlKey && !event.metaKey) {
+    closeFileMentionMenu();
     commandMenuVisible.value = true;
     selectedCommandIndex.value = 0;
     return;
+  }
+  if (fileMentionVisible.value) {
+    const total = fileMentionEntries.value.length;
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      if (total > 0) fileMentionSelectedIndex.value = (fileMentionSelectedIndex.value + 1) % total;
+      return;
+    }
+    if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      if (total > 0) fileMentionSelectedIndex.value = (fileMentionSelectedIndex.value - 1 + total) % total;
+      return;
+    }
+    if (event.key === 'Tab') {
+      event.preventDefault();
+      if (total > 0) applyFileMention(fileMentionSelectedIndex.value);
+      return;
+    }
+    if (event.key === 'Enter' && !event.shiftKey) {
+      if (total > 0 || fileMentionLoading.value) {
+        event.preventDefault();
+        if (total > 0) applyFileMention(fileMentionSelectedIndex.value);
+        return;
+      }
+      closeFileMentionMenu();
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      closeFileMentionMenu();
+      return;
+    }
   }
   if (commandMenuVisible.value) {
     const filtered = filteredCommands.value;
@@ -4616,7 +4788,13 @@ function saveSessions() {
       grillMode: !!s.grillMode,
       createdAt: s.createdAt || Date.now(),
       updatedAt: s.updatedAt || s.createdAt || Date.now(),
-    })).filter(s => Array.isArray(s.messages) && s.messages.length > 0);
+    })).filter(s => {
+      if (!Array.isArray(s.messages) || s.messages.length === 0) return false;
+      // Don't persist sessions that only contain a welcome message and no
+      // real conversation — these are freshly created empty sessions.
+      const hasRealMessage = s.messages.some(m => !m.welcome && !m.system);
+      return hasRealMessage;
+    });
     localStorage.setItem(SESSIONS_STORAGE_KEY, JSON.stringify(data));
   } catch (_) { /* quota exceeded */ }
 }
@@ -6103,6 +6281,8 @@ onUnmounted(() => {
   streamFlushTimer = 0;
   streamFlushScheduled = false;
   streamBuffers.clear();
+  if (fileMentionTimer) window.clearTimeout(fileMentionTimer);
+  fileMentionTimer = 0;
   if (toolUpdateFlushTimer) window.clearTimeout(toolUpdateFlushTimer);
   toolUpdateFlushTimer = 0;
   toolUpdateFlushScheduled = false;

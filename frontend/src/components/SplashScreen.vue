@@ -353,6 +353,14 @@ function finish() {
   if (finished || leaving.value) return;
   leaving.value = true;
   cleanup();
+  // Release the canvas backing store immediately so the GPU doesn't keep the
+  // last rendered frame pinned during the 420ms opacity fade.
+  const canvas = canvasRef.value;
+  const ctx = canvas?.getContext?.('2d');
+  if (canvas && ctx) {
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+  }
   window.setTimeout(() => {
     finished = true;
     emit('done');

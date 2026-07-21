@@ -50,16 +50,132 @@
   --ally-accent-dim:    color-mix(in srgb, var(--ally-accent) 48%, #6f6f6f);
 
   --ally-wordmark-gradient: linear-gradient(120deg, #f8fafc 0%, var(--ally-accent-bright) 34%, #b8f2d0 58%, #f8fafc 100%);
+
+  /* Default (amber/warm) markdown palette. All warm hues — headings, bold,
+     inline code differentiate by lightness gradient (gold → amber → brown)
+     within the warm family, never using red or cool colors. */
+  --md-h1: #f0b66c;      /* 亮琥珀：主标题，最亮 */
+  --md-h2: #e8895a;      /* 暖橙：二级标题 */
+  --md-h3: #f0d166;      /* 金黄：三级标题，亮黄调 */
+  --md-h4: #d9a05a;      /* 焦糖：四级标题 */
+  --md-strong: #d68a3c;  /* 焦糖橙：粗体，明度比 h3 低，靠明度差跳出 */
+  --md-code: #e8d8a0;    /* 羊皮纸暖黄：内联代码 */
+  --md-em: #e8b878;      /* 浅琥珀：斜体 */
+  --md-link: #f0b66c;    /* 链接：同 h1，有下划线区分 */
+  --md-quote: #e8a55c;   /* 引用块 */
+  --md-quote-border: rgba(232, 165, 92, 0.55);
+  --md-quote-bg: rgba(232, 165, 92, 0.1);
+  --md-del: #9a8a6a;     /* 删除线：暗棕灰 */
+  --md-marker-ul: #f0d166;
+  --md-marker-ol: #f0b66c;
 }
 
-/* ── Themes ── each overrides only the accent seed; shades derive above.
-   Default (no data-theme / theme-amber) uses the :root value. */
-:root[data-theme="cool"]    { --ally-accent: #60a5fa; }
-:root[data-theme="emerald"] { --ally-accent: #34d399; }
-:root[data-theme="violet"]  { --ally-accent: #a78bfa; }
-:root[data-theme="rose"]    { --ally-accent: #fb7185; }
-:root[data-theme="cyan"]    { --ally-accent: #22d3ee; }
-:root[data-theme="slate"]   { --ally-accent: #94a3b8; }
+/* ── Themes ── each overrides the accent seed plus a same-family markdown
+   palette so headings, bold, inline code, etc. stay within one color family
+   (warm themes stay warm, cool themes stay cool) and differentiate by
+   lightness and hue shift rather than cold/warm contrast. */
+:root[data-theme="cool"] {
+  --ally-accent: #60a5fa;
+  --md-h1: #7cc0ff;
+  --md-h2: #5fa8e8;
+  --md-h3: #9dd0f5;
+  --md-h4: #6b8fd4;
+  --md-strong: #4f7fd9;
+  --md-code: #6a8fb4;
+  --md-em: #9dd0f5;
+  --md-link: #7cc0ff;
+  --md-quote: #5fa8e8;
+  --md-quote-border: rgba(95, 168, 232, 0.55);
+  --md-quote-bg: rgba(95, 168, 232, 0.1);
+  --md-del: #8a9bd4;
+  --md-marker-ul: #9dd0f5;
+  --md-marker-ol: #7cc0ff;
+}
+:root[data-theme="emerald"] {
+  --ally-accent: #34d399;
+  --md-h1: #4ade80;
+  --md-h2: #2dd4bf;
+  --md-h3: #86efac;
+  --md-h4: #6ee7b7;
+  --md-strong: #15805a;
+  --md-code: #4a9d7a;
+  --md-em: #86efac;
+  --md-link: #4ade80;
+  --md-quote: #2dd4bf;
+  --md-quote-border: rgba(45, 212, 191, 0.55);
+  --md-quote-bg: rgba(45, 212, 191, 0.1);
+  --md-del: #6ee7b7;
+  --md-marker-ul: #86efac;
+  --md-marker-ol: #4ade80;
+}
+:root[data-theme="violet"] {
+  --ally-accent: #a78bfa;
+  --md-h1: #c4b5fd;
+  --md-h2: #a78bfa;
+  --md-h3: #d8b4fe;
+  --md-h4: #c084fc;
+  --md-strong: #7c4edd;
+  --md-code: #9a7ec4;
+  --md-em: #d8b4fe;
+  --md-link: #c4b5fd;
+  --md-quote: #a78bfa;
+  --md-quote-border: rgba(167, 139, 250, 0.55);
+  --md-quote-bg: rgba(167, 139, 250, 0.1);
+  --md-del: #c084fc;
+  --md-marker-ul: #d8b4fe;
+  --md-marker-ol: #c4b5fd;
+}
+:root[data-theme="rose"] {
+  --ally-accent: #fb7185;
+  --md-h1: #fb7185;
+  --md-h2: #f43f5e;
+  --md-h3: #fda4af;
+  --md-h4: #e879a8;
+  --md-strong: #d62f5a;
+  --md-code: #c47a9a;
+  --md-em: #fda4af;
+  --md-link: #fb7185;
+  --md-quote: #f43f5e;
+  --md-quote-border: rgba(244, 63, 94, 0.55);
+  --md-quote-bg: rgba(244, 63, 94, 0.1);
+  --md-del: #e879a8;
+  --md-marker-ul: #fda4af;
+  --md-marker-ol: #fb7185;
+}
+:root[data-theme="cyan"] {
+  --ally-accent: #22d3ee;
+  --md-h1: #22d3ee;
+  --md-h2: #06b6d4;
+  --md-h3: #67e8f9;
+  --md-h4: #2dd4bf;
+  --md-strong: #0e8aa8;
+  --md-code: #4a92a8;
+  --md-em: #67e8f9;
+  --md-link: #22d3ee;
+  --md-quote: #06b6d4;
+  --md-quote-border: rgba(6, 182, 212, 0.55);
+  --md-quote-bg: rgba(6, 182, 212, 0.1);
+  --md-del: #2dd4bf;
+  --md-marker-ul: #67e8f9;
+  --md-marker-ol: #22d3ee;
+}
+:root[data-theme="slate"] {
+  --ally-accent: #94a3b8;
+  --md-h1: #a3b8cc;
+  --md-h2: #8ba3bd;
+  --md-h3: #b0c4de;
+  --md-h4: #7d8fa8;
+  --md-strong: #64748b;
+  --md-code: #7d8fa8;
+  --md-em: #b0c4de;
+  --md-link: #a3b8cc;
+  --md-quote: #8ba3bd;
+  --md-quote-border: rgba(139, 163, 189, 0.55);
+  --md-quote-bg: rgba(139, 163, 189, 0.1);
+  --md-del: #7d8fa8;
+  --md-marker-ul: #b0c4de;
+  --md-marker-ol: #a3b8cc;
+}
 
 body.platform-windows,
 body.platform-win32 {
@@ -1218,20 +1334,12 @@ code, pre {
   --md-text: #d7dedc;
   --md-muted: #9aa6a3;
   --md-faint: #66716e;
-  --md-blue: var(--ally-accent);
-  --md-blue-dim: color-mix(in srgb, var(--ally-accent) 14%, transparent);
-  --md-pink: #eba0ad;
-  --md-teal: #93e2d5;
-  --md-teal-dim: rgba(147, 226, 213, 0.12);
-  --md-green: #a6e3a1;
-  --md-green-dim: rgba(166, 227, 161, 0.12);
-  --md-yellow: #d6bd72;
-  --md-yellow-dim: rgba(214, 189, 114, 0.13);
-  --md-red: #df8b8b;
-  --md-red-dim: rgba(223, 139, 139, 0.12);
   --md-white: #edf2ef;
   --md-border: rgba(215, 222, 220, 0.12);
   --md-surface: rgba(255, 255, 255, 0.035);
+  /* Per-element markdown colors (--md-h1, --md-strong, --md-code, ...) are
+     defined per-theme in :root / [data-theme] blocks above, so each theme
+     ships a coherent same-family palette. */
   color: var(--md-text);
 }
 
@@ -1254,23 +1362,23 @@ code, pre {
 
 .markdown-body h1 {
   font-size: 1.55em;
-  color: var(--md-blue);
+  color: var(--md-h1);
   border-bottom: 1px solid var(--md-border);
   padding-bottom: 0.28em;
 }
 
 .markdown-body h2 {
   font-size: 1.32em;
-  color: var(--md-green);
+  color: var(--md-h2);
 }
 
 .markdown-body h3 {
   font-size: 1.12em;
-  color: var(--md-yellow);
+  color: var(--md-h3);
 }
 
 .markdown-body h4 {
-  color: var(--md-red);
+  color: var(--md-h4);
 }
 
 .markdown-body p {
@@ -1278,18 +1386,18 @@ code, pre {
 }
 
 .markdown-body strong {
-  color: var(--md-blue);
+  color: var(--md-strong);
   font-weight: 650;
 }
 
 .markdown-body em {
-  color: var(--md-green);
+  color: var(--md-em);
 }
 
 .markdown-body del,
 .markdown-body s {
-  color: var(--md-red);
-  text-decoration-color: rgba(223, 139, 139, 0.7);
+  color: var(--md-del);
+  text-decoration-color: color-mix(in srgb, var(--md-del) 70%, transparent);
 }
 
 .markdown-body hr {
@@ -1310,26 +1418,26 @@ code, pre {
 }
 
 .markdown-body li::marker {
-  color: var(--md-yellow);
+  color: var(--md-marker-ul);
 }
 
 .markdown-body ol li::marker {
-  color: var(--md-blue);
+  color: var(--md-marker-ol);
   font-weight: 650;
 }
 
 .markdown-body blockquote {
   margin: 0.7em 0;
   padding: 0.35em 0 0.35em 0.9em;
-  color: #c9d8d2;
-  border-left: 3px solid rgba(143, 212, 180, 0.58);
-  background: var(--md-green-dim);
+  color: var(--md-quote);
+  border-left: 3px solid var(--md-quote-border);
+  background: var(--md-quote-bg);
 }
 
 .markdown-body a {
-  color: var(--md-blue);
+  color: var(--md-link);
   text-decoration: none;
-  border-bottom: 1px solid color-mix(in srgb, var(--ally-accent) 40%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--md-link) 40%, transparent);
 }
 
 .markdown-body a:hover {
@@ -1471,9 +1579,8 @@ code, pre {
 }
 
 .markdown-body :not(pre) > code {
-  color: #e6c78d;
+  color: var(--md-code);
   border: 0;
-
 }
 
 .markdown-body mark {
@@ -1508,7 +1615,7 @@ code, pre {
 }
 
 .markdown-body tr:nth-child(even) td {
-  background: rgba(143, 212, 180, 0.035);
+  background: color-mix(in srgb, var(--ally-accent) 3.5%, transparent);
 }
 
 .markdown-body pre {
@@ -1585,48 +1692,21 @@ code, pre {
   font-weight: 800;
   line-height: 1;
   letter-spacing: 0;
-  color: transparent;
-  background: var(--ally-wordmark-gradient);
-  background-size: 220% 100%;
+  color: #f7f7f2;
+  background: linear-gradient(120deg, #ffffff 0%, #f7f7f2 34%, var(--ally-accent-bright) 66%, var(--ally-accent) 100%);
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
-  text-shadow: 0 10px 28px color-mix(in srgb, var(--ally-accent) 18%, transparent);
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.12), 0 10px 24px rgba(0, 0, 0, 0.22);
   white-space: nowrap;
-  animation: wordmark-sheen 5.5s ease-in-out infinite, wordmark-breathe 4.8s ease-in-out infinite;
 }
 
 body.platform-darwin .ally-wordmark {
-  animation: none;
   filter: none;
 }
 
 .welcome-build-version {
   color: #737373;
-}
-
-@keyframes wordmark-sheen {
-  0%, 100% {
-    background-position: 0% 50%;
-  }
-  50% {
-    background-position: 100% 50%;
-  }
-}
-
-@keyframes wordmark-breathe {
-  0%, 100% {
-    filter: drop-shadow(0 0 0 color-mix(in srgb, var(--ally-accent) 0%, transparent));
-  }
-  50% {
-    filter: drop-shadow(0 0 14px color-mix(in srgb, var(--ally-accent) 18%, transparent));
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .ally-wordmark {
-    animation: none;
-  }
 }
 
 .welcome-info-table {
