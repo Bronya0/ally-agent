@@ -44,8 +44,6 @@ Git tags and GitHub Releases are the source of truth for Ally versions. Release 
    - Summarize user-visible changes from `git log <previous-tag>..HEAD`; do not claim changes that are not present in that range.
    - End the notes with `**Full Changelog**: https://github.com/Bronya0/ally-agent/compare/<previous-tag>...<new-tag>`.
 3. Verify the exact commit that will be released:
-   - `go test ./...`
-   - `go build ./...`
    - `wails build -clean -trimpath`
 4. Commit the release-related repository changes and push `main` to `origin`. Recheck that the worktree is clean and local `HEAD` equals `origin/main`.
 5. Publish a non-draft GitHub Release targeting `main`, with tag `<new-tag>`, title `Ally <new-tag>`, and the prepared notes. Authentication must come from GitHub CLI login or a `GITHUB_TOKEN` environment variable with repository contents write permission. Never place a token value in repository files, release notes, scripts, or copied command text.
@@ -710,29 +708,9 @@ Example MCP config:
 
 ## Tests And Verification
 
-There is no single full integration suite. Use focused checks:
+Verification is done with a single command:
 
-- `go test ./...`
-- `go build ./...`
-- `cd frontend && npx vite build`
-- `cd frontend && npm test` when frontend tests are relevant
-- `wails dev` for manual UI verification
-- `wails build` for release build validation
-
-Provider tests currently cover:
-
-- API format normalization
-- OpenAI Chat stream edge cases
-- OpenAI Chat `max_completion_tokens` fallback detection
-- OpenAI Responses function-call round trips
-- Anthropic Messages tool use/tool result conversion
-- Anthropic JSON Schema field preservation
-
-Frontend utility tests cover:
-
-- config utilities
-- bounded Diff behavior
-- tool preview utilities
+- `wails build` — compiles the Go backend, builds the Vue frontend, and produces the desktop binary. This is the only verification command used.
 
 ---
 

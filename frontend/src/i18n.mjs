@@ -274,7 +274,7 @@ const zh = {
   'git.loadFailed': '加载 Git diff 失败',
 
   'render.failed': '{label} 渲染失败',
-  'avatar.aria': '会眨眼和转头的 Ally 头像',
+  'avatar.aria': '带旋涡和闪电的 Ally 竖瞳',
   'splash.loading': '正在点亮工作区，整理上下文和工具链。',
 
   'scheduled.title': '定时任务',
@@ -367,6 +367,7 @@ const zh = {
   'settings.generalSubtitle': '控制模型每次对话都会看到的附加偏好。',
   'settings.customPrompt': '自定义提示词',
   'settings.customPromptPlaceholder': '例如：请用中文回答、保持回复简洁',
+  'settings.theme': '主题配色',
   'settings.allowPrivateNetwork': '允许访问内网地址',
   'settings.allowPrivateNetworkHint': '开启后 http_request 和 web_fetch 可访问 127.0.0.1、10.x、192.168.x.x 等私有网络。内网开发环境需要时开启。',
   'settings.gitBashPath': 'Git Bash 路径',
@@ -706,7 +707,7 @@ const enOverrides = {
 
   'git.title': 'Git changes', 'git.loading': 'Loading diff...', 'git.empty': 'No Git changes.',
   'git.noText': 'No text diff.', 'git.selectFile': 'Select a file to view its diff.', 'git.loadFailed': 'Failed to load Git diff',
-  'render.failed': '{label} failed to render', 'avatar.aria': 'Animated Ally avatar that blinks and turns',
+  'render.failed': '{label} failed to render', 'avatar.aria': 'Ally vertical eye with a vortex and lightning',
   'splash.loading': 'Lighting up the workspace and preparing context and tools.',
 
   'scheduled.title': 'Scheduled tasks', 'scheduled.total': '{count} tasks', 'scheduled.runningCount': '{count} running',
@@ -752,6 +753,7 @@ const enOverrides = {
   'settings.about': 'About', 'settings.versionLicense': 'Version and license',
   'settings.generalTitle': 'General settings', 'settings.generalSubtitle': 'Extra preferences included in every model conversation.',
   'settings.customPrompt': 'Custom prompt', 'settings.customPromptPlaceholder': 'For example: Keep answers concise',
+  'settings.theme': 'Accent theme',
   'settings.allowPrivateNetwork': 'Allow private network access',
   'settings.allowPrivateNetworkHint': 'When enabled, http_request and web_fetch can access 127.0.0.1, 10.x, 192.168.x.x and other private addresses. Enable for intranet development.',
   'settings.gitBashPath': 'Git Bash path',

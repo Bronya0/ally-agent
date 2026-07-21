@@ -361,19 +361,19 @@ defineExpose({ scrollbarRef, scrollToBottom, scrollToUserQuestion, saveScrollPos
 }
 
 .user-text {
-  color: #f7b977 !important;
+  color: var(--ally-accent-bright) !important;
 }
 
 .user-text :not(pre) > code {
-  color: #b8d7ff !important;
+  color: var(--ally-accent-pale) !important;
 }
 
 .skill-chip {
   display: inline-block;
   padding: 1px 8px;
   border-radius: 4px;
-  background: rgba(247, 185, 119, 0.14);
-  color: #f7b977;
+  background: color-mix(in srgb, var(--ally-accent) 14%, transparent);
+  color: var(--ally-accent-bright);
   font-weight: 600;
   font-size: 14px;
   line-height: 1.7;
@@ -392,7 +392,7 @@ defineExpose({ scrollbarRef, scrollToBottom, scrollToUserQuestion, saveScrollPos
 .user-prefix {
   flex: none;
   margin-top: 6px;
-  color: #f7b977;
+  color: var(--ally-accent-bright);
   font-family: var(--ally-ui-font);
   font-size: 14px;
   font-weight: 600;

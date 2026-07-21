@@ -1,194 +1,113 @@
 <template>
   <div class="ally-avatar" role="img" :aria-label="$t('avatar.aria')">
-    <svg viewBox="0 0 160 116" aria-hidden="true">
-      <ellipse class="avatar-glow" cx="80" cy="62" rx="54" ry="46" />
-      <g class="avatar-wings">
-        <path class="avatar-wing avatar-wing-left" d="M43 45c-10-11-22-10-27 1 8-2 13 1 16 7-8-1-13 3-13 11 9-5 17-3 24 5" />
-        <path class="avatar-wing avatar-wing-right" d="M117 45c10-11 22-10 27 1-8-2-13 1-16 7 8-1 13 3 13 11-9-5-17-3-24 5" />
-      </g>
-      <path class="avatar-shoulders" d="M35 108c5-18 20-27 45-27s40 9 45 27" />
-      <path class="avatar-neck" d="M68 80v13h24V80" />
-      <g class="avatar-halo">
-        <ellipse class="avatar-halo-glow" cx="80" cy="15" rx="24" ry="7" />
-        <ellipse class="avatar-halo-ring" cx="80" cy="15" rx="20" ry="5" />
-      </g>
-      <g class="avatar-head">
-        <path class="avatar-ear" d="M42 48h-7v23h7M118 48h7v23h-7" />
-        <rect class="avatar-shell" x="42" y="27" width="76" height="62" rx="21" />
-        <rect class="avatar-face" x="51" y="40" width="58" height="34" rx="13" />
-        <g class="avatar-eyes">
-          <rect class="avatar-eye" x="61" y="50" width="11" height="10" rx="5" />
-          <rect class="avatar-eye" x="88" y="50" width="11" height="10" rx="5" />
+    <svg class="ally-eye" viewBox="0 0 164 164" aria-hidden="true">
+      <defs>
+        <radialGradient id="ally-eye-iris" cx="50%" cy="50%" r="55%">
+          <stop offset="0" stop-color="#ffd896"/>
+          <stop offset="0.32" stop-color="#d49050"/>
+          <stop offset="0.7" stop-color="#6b3a18"/>
+          <stop offset="1" stop-color="#1a1208"/>
+        </radialGradient>
+        <radialGradient id="ally-eye-glow" cx="50%" cy="50%" r="54%">
+          <stop offset="0" stop-color="#e0a458" stop-opacity="0.34"/>
+          <stop offset="0.58" stop-color="#e0a458" stop-opacity="0.12"/>
+          <stop offset="1" stop-color="#e0a458" stop-opacity="0"/>
+        </radialGradient>
+        <linearGradient id="ally-vortex-grad" x1="0%" y1="0%" x2="0%" y2="100%">
+          <stop offset="0" stop-color="#fff3d6"/>
+          <stop offset="0.5" stop-color="#e0a458"/>
+          <stop offset="1" stop-color="#fff3d6"/>
+        </linearGradient>
+        <!-- Lens-shaped vertical pupil (cat/snake eye slit): pointed at top
+             and bottom, widest at the middle. -->
+        <path id="ally-pupil-shape" d="M82 34 Q 71 82 82 130 Q 93 82 82 34 Z"/>
+        <clipPath id="ally-eye-pupil-clip">
+          <use href="#ally-pupil-shape"/>
+        </clipPath>
+      </defs>
+
+      <ellipse cx="82" cy="88" rx="72" ry="62" fill="url(#ally-eye-glow)"/>
+      <ellipse cx="82" cy="140" rx="42" ry="7" fill="#000" opacity="0.25"/>
+      <path class="ally-eye-shell" d="M17 82c14-28 38-43 65-43s51 15 65 43c-14 28-38 43-65 43S31 110 17 82Z"/>
+      <ellipse cx="82" cy="82" rx="47" ry="47" fill="url(#ally-eye-iris)" stroke="#f2c078" stroke-width="2.2"/>
+      <path d="M40 69c22-21 62-22 84 0" fill="none" stroke="#fff3d6" stroke-width="2" opacity="0.34" stroke-linecap="round"/>
+
+      <use href="#ally-pupil-shape" fill="#05070a"/>
+      <g clip-path="url(#ally-eye-pupil-clip)">
+        <!-- Vortex: a vertical swirl made of two opposing S-curves plus
+             concentric lens-shaped rings, rotating to read as a whirlpool. -->
+        <g class="ally-eye-vortex">
+          <path d="M82 54 Q 88 66 82 78 Q 76 90 82 102 Q 88 114 82 126"
+                fill="none" stroke="url(#ally-vortex-grad)" stroke-width="1.6" stroke-linecap="round" opacity="0.9"/>
+          <path d="M82 54 Q 76 66 82 78 Q 88 90 82 102 Q 76 114 82 126"
+                fill="none" stroke="url(#ally-vortex-grad)" stroke-width="1.2" stroke-linecap="round" opacity="0.65"/>
+          <ellipse cx="82" cy="82" rx="3.5" ry="24" fill="none" stroke="#fff3d6" stroke-width="0.9" opacity="0.55"/>
         </g>
-        <path class="avatar-mouth" d="M70 66c6 5 14 5 20 0" />
-        <circle class="avatar-cheek" cx="58" cy="65" r="2.2" />
-        <circle class="avatar-cheek" cx="102" cy="65" r="2.2" />
+        <g class="ally-eye-vortex ally-eye-vortex-slow">
+          <ellipse cx="82" cy="82" rx="6.5" ry="36" fill="none" stroke="#e0a458" stroke-width="1.2" opacity="0.42"/>
+          <ellipse cx="82" cy="82" rx="2" ry="14" fill="none" stroke="#f8fafc" stroke-width="0.8" opacity="0.5"/>
+        </g>
+        <!-- Lightning bolt running down the slit. -->
+        <path class="ally-eye-lightning" d="M85 50 L 78 76 L 83 76 L 75 114 L 91 70 L 84 70 Z" fill="#fff3d6"/>
       </g>
+
+      <path d="M26 82c13 18 32 28 56 28s43-10 56-28" fill="none" stroke="#e0a458" stroke-width="2" opacity="0.32" stroke-linecap="round"/>
     </svg>
   </div>
 </template>
 
 <style scoped>
 .ally-avatar {
+  position: relative;
   width: 164px;
-  height: 116px;
-  color: #a9c9f5;
-  filter: drop-shadow(0 12px 28px rgba(94, 143, 210, 0.16));
+  height: 164px;
 }
 
-.ally-avatar svg {
+.ally-eye {
   display: block;
   width: 100%;
   height: 100%;
-  overflow: visible;
+  user-select: none;
+  pointer-events: none;
 }
 
-.avatar-glow {
-  fill: rgba(103, 155, 224, 0.07);
-}
-
-.avatar-shoulders {
-  fill: rgba(143, 212, 180, 0.08);
-  stroke: rgba(143, 212, 180, 0.52);
-  stroke-width: 2;
-  stroke-linecap: round;
-}
-
-.avatar-neck,
-.avatar-shell,
-.avatar-ear,
-.avatar-mouth {
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 2.2;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.avatar-wing {
-  fill: rgba(143, 212, 180, 0.035);
-  stroke: rgba(143, 212, 180, 0.58);
-  stroke-width: 1.8;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  transform-box: fill-box;
-}
-
-.avatar-wing-left {
-  transform-origin: right center;
-  animation: ally-avatar-wing-left 4.8s ease-in-out infinite;
-}
-
-.avatar-wing-right {
-  transform-origin: left center;
-  animation: ally-avatar-wing-right 4.8s ease-in-out infinite;
-}
-
-.avatar-halo {
-  transform-origin: 80px 15px;
-  animation: ally-avatar-halo-float 3.8s ease-in-out infinite;
-}
-
-.avatar-halo-ring {
-  fill: rgba(215, 191, 114, 0.05);
-  stroke: #d7bf72;
+.ally-eye-shell {
+  fill: #0b0e13;
+  stroke: #343a45;
   stroke-width: 2;
 }
 
-.avatar-halo-glow {
-  fill: rgba(215, 191, 114, 0.09);
-  filter: blur(2px);
-  animation: ally-avatar-halo-glow 2.8s ease-in-out infinite;
+.ally-eye-vortex {
+  transform-origin: 82px 82px;
+  animation: ally-eye-spin 18s linear infinite;
 }
 
-.avatar-neck {
-  fill: #20262a;
-  stroke: rgba(169, 201, 245, 0.55);
+.ally-eye-vortex-slow {
+  animation-duration: 27s;
+  animation-direction: reverse;
 }
 
-.avatar-shell {
-  fill: #20262a;
+.ally-eye-lightning {
+  opacity: 0;
+  filter: none;
+  animation: ally-eye-flash 5.6s steps(1, end) infinite;
 }
 
-.avatar-face {
-  fill: #151a1d;
-  stroke: rgba(169, 201, 245, 0.38);
-  stroke-width: 1.5;
+@keyframes ally-eye-spin {
+  to { transform: rotate(360deg); }
 }
 
-.avatar-head {
-  transform-origin: 80px 62px;
-  animation: ally-avatar-turn var(--avatar-turn-duration, 9s) ease-in-out infinite;
-}
-
-.avatar-eyes {
-  transform-origin: 80px 55px;
-  animation: ally-avatar-gaze var(--avatar-gaze-duration, 9s) ease-in-out infinite;
-}
-
-.avatar-eye {
-  fill: #8fd4b4;
-  transform-box: fill-box;
-  transform-origin: center;
-  animation: ally-avatar-blink var(--avatar-blink-duration, 5.8s) ease-in-out infinite;
-}
-
-.avatar-mouth {
-  stroke: #8fd4b4;
-  stroke-width: 1.8;
-}
-
-.avatar-cheek {
-  fill: rgba(232, 154, 170, 0.48);
-}
-
-@keyframes ally-avatar-blink {
-  0%, 42%, 46%, 72%, 76%, 100% { transform: scaleY(1); }
-  44%, 74% { transform: scaleY(0.08); }
-}
-
-@keyframes ally-avatar-turn {
-  0%, 48%, 100% { transform: rotate(0deg) translateX(0); }
-  58%, 66% { transform: rotate(-5deg) translateX(-2px); }
-  76%, 84% { transform: rotate(5deg) translateX(2px); }
-  92% { transform: rotate(0deg) translateX(0); }
-}
-
-@keyframes ally-avatar-gaze {
-  0%, 48%, 100% { transform: translateX(0); }
-  58%, 66% { transform: translateX(-2px); }
-  76%, 84% { transform: translateX(2px); }
-  92% { transform: translateX(0); }
-}
-
-@keyframes ally-avatar-halo-float {
-  0%, 100% { transform: translateY(0) rotate(-1deg); }
-  50% { transform: translateY(-2px) rotate(1deg); }
-}
-
-@keyframes ally-avatar-halo-glow {
-  0%, 100% { opacity: 0.45; transform: scale(0.94); }
-  50% { opacity: 1; transform: scale(1.08); }
-}
-
-@keyframes ally-avatar-wing-left {
-  0%, 100% { transform: rotate(0deg) translateX(0); }
-  50% { transform: rotate(-4deg) translateX(-1px); }
-}
-
-@keyframes ally-avatar-wing-right {
-  0%, 100% { transform: rotate(0deg) translateX(0); }
-  50% { transform: rotate(4deg) translateX(1px); }
+@keyframes ally-eye-flash {
+  0%, 76%, 100% { opacity: 0; }
+  77% { opacity: 0.82; }
+  78% { opacity: 0.18; }
+  79% { opacity: 0.64; }
+  80% { opacity: 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .avatar-head,
-  .avatar-eyes,
-  .avatar-eye,
-  .avatar-halo,
-  .avatar-halo-glow,
-  .avatar-wing-left,
-  .avatar-wing-right {
+  .ally-eye-vortex,
+  .ally-eye-lightning {
     animation: none;
   }
 }

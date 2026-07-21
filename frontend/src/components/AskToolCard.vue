@@ -231,8 +231,8 @@ function selectionKey(selection) {
 
 .ask-tab.active {
   color: #e5e5e5;
-  border-color: rgba(96, 165, 250, 0.48);
-  background: rgba(96, 165, 250, 0.1);
+  border-color: color-mix(in srgb, var(--ally-accent) 48%, transparent);
+  background: color-mix(in srgb, var(--ally-accent) 10%, transparent);
 }
 
 .ask-tab.answered::after {
@@ -285,7 +285,7 @@ function selectionKey(selection) {
   width: 15px;
   height: 15px;
   margin: 2px 0 0;
-  accent-color: #5f8fc5;
+  accent-color: var(--ally-accent);
 }
 
 .ask-option-copy {
@@ -347,7 +347,7 @@ function selectionKey(selection) {
 }
 
 .ask-custom-input:focus {
-  border-color: rgba(96, 165, 250, 0.45);
+  border-color: color-mix(in srgb, var(--ally-accent) 45%, transparent);
 }
 
 .ask-actions {
@@ -368,10 +368,10 @@ function selectionKey(selection) {
 .ask-submit-btn {
   min-height: 28px;
   padding: 4px 12px;
-  border: 1px solid rgba(96, 165, 250, 0.38);
+  border: 1px solid color-mix(in srgb, var(--ally-accent) 38%, transparent);
   border-radius: 4px;
-  color: #b9d8fb;
-  background: rgba(96, 165, 250, 0.09);
+  color: var(--ally-accent-soft);
+  background: color-mix(in srgb, var(--ally-accent) 9%, transparent);
   cursor: pointer;
 }
 

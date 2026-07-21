@@ -53,6 +53,23 @@
               :placeholder="$t('settings.customPromptPlaceholder')"
             />
           </n-form-item>
+          <n-form-item :label="$t('settings.theme')">
+            <div class="theme-picker">
+              <button
+                v-for="option in themeOptions"
+                :key="option.id"
+                type="button"
+                :class="['theme-swatch', { active: activeTheme === option.id }]"
+                :title="option.label"
+                :aria-label="option.label"
+                :aria-pressed="activeTheme === option.id"
+                @click="selectTheme(option.id)"
+              >
+                <span class="theme-swatch-dot" :style="{ background: option.swatch }"></span>
+                <span class="theme-swatch-label">{{ option.label }}</span>
+              </button>
+            </div>
+          </n-form-item>
           <n-form-item :label="$t('settings.allowPrivateNetwork')">
             <div class="settings-toggle-row">
               <n-switch v-model:value="draft.allowPrivateNetwork" />
@@ -401,6 +418,7 @@ import { computed, reactive, ref, watch } from 'vue';
 import { createDiscreteApi, darkTheme } from 'naive-ui';
 import { naiveDateLocale, naiveLocale, t } from '../i18n.mjs';
 import { buildModelConfigExport, mergeModelConfigs, modelConfigIdentity, parseModelConfigImport } from '../utils/modelConfigIO.mjs';
+import { THEMES, getStoredTheme, setTheme } from '../utils/theme.mjs';
 import {
   CUSTOM_PROVIDER_ID,
   applyCatalogPreset,
@@ -434,6 +452,14 @@ const emit = defineEmits(['close', 'save', 'skills-changed', 'mcp-saved']);
 
 // Deep-clone the config draft so changes don't mutate parent reactively until save
 const draft = reactive(cloneConfigDraft(props.configDraft));
+
+// Accent theme is a pure front-end preference (localStorage), independent of the
+// backend config draft. Applied live on selection.
+const themeOptions = THEMES;
+const activeTheme = ref(getStoredTheme());
+function selectTheme(id) {
+  activeTheme.value = setTheme(id);
+}
 
 const settingsModalStyle = {
   width: 'min(820px, calc(100vw - 48px))',
@@ -1253,6 +1279,49 @@ watch(() => props.visible, (visible) => {
   font-size: 12px;
   color: #8a8a8a;
   line-height: 1.5;
+}
+
+.theme-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.theme-swatch {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 11px 6px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.025);
+  color: #bdbdbd;
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+
+.theme-swatch:hover {
+  color: #e5e5e5;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.theme-swatch.active {
+  color: #fafafa;
+  border-color: color-mix(in srgb, var(--ally-accent) 55%, transparent);
+  background: color-mix(in srgb, var(--ally-accent) 14%, transparent);
+}
+
+.theme-swatch-dot {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35) inset;
+  flex-shrink: 0;
+}
+
+.theme-swatch-label {
+  white-space: nowrap;
 }
 
 .settings-field-stack {

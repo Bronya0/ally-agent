@@ -118,6 +118,7 @@
                 </div>
                 <n-input
                   ref="promptInputRef"
+                  class="prompt-input"
                   v-model:value="promptText"
                   type="textarea"
                   :input-props="{
@@ -162,6 +163,7 @@
                   @jump-question="jumpToUserQuestion"
                   @set-run-mode="setRunMode"
                   @open-task-center="openTaskCenter"
+                  @new-session="createNewSession"
                   :get-session-messages="() => activeMessages"
                   :session-title="activeSession?.title || ''"
                 />

@@ -1,5 +1,12 @@
 <template>
   <div class="composer-info">
+    <button
+      type="button"
+      class="composer-icon-btn composer-new-session-btn"
+      :title="$t('app.sessions.new')"
+      :aria-label="$t('app.sessions.new')"
+      @click.stop="$emit('newSession')"
+    >+</button>
     <n-dropdown
       trigger="click"
       placement="top-start"
@@ -212,7 +219,7 @@ const props = defineProps({
   fmtK: { type: Function, required: true },
 });
 
-const emit = defineEmits(['switchModel', 'openConfig', 'openGitDiff', 'openWorkspace', 'jumpQuestion', 'setRunMode', 'openTaskCenter']);
+const emit = defineEmits(['switchModel', 'openConfig', 'openGitDiff', 'openWorkspace', 'jumpQuestion', 'setRunMode', 'openTaskCenter', 'newSession']);
 
 const contextPopoverVisible = ref(false);
 const currentModelLabel = computed(() => `${props.config.providerName || '-'} · ${props.config.model || '-'}`);
