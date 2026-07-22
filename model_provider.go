@@ -186,7 +186,7 @@ func partialTagMatch(s, tag string) int {
 func (a *App) streamOpenAIChat(ctx context.Context, cfg ConfigState, model string, messages []legacyopenai.ChatCompletionMessage, tools []legacyopenai.Tool, onEvent func(modelStreamEvent)) (*modelStreamResult, error) {
 	clientCfg := legacyopenai.DefaultConfig(cfg.APIKey)
 	clientCfg.BaseURL = baseURLForAPIFormat(cfg)
-	clientCfg.HTTPClient = proxyHTTPClient(cfg, true, 0)
+	clientCfg.HTTPClient = httpClientWithUserAgent(cfg, true, 0)
 	client := legacyopenai.NewClientWithConfig(clientCfg)
 
 	streamReq := legacyopenai.ChatCompletionRequest{
@@ -573,6 +573,7 @@ func newOpenAIResponsesSSEStream(ctx context.Context, cfg ConfigState, body oare
 	if apiKey := strings.TrimSpace(cfg.APIKey); apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
+	req.Header.Set("User-Agent", effectiveUserAgent(cfg))
 
 	resp, err := proxyHTTPClient(cfg, true, 0).Do(req)
 	if err != nil {
@@ -637,7 +638,7 @@ func (a *App) streamAnthropicMessages(ctx context.Context, cfg ConfigState, mode
 		anthropicoption.WithAPIKey(cfg.APIKey),
 		anthropicoption.WithBaseURL(baseURL),
 		anthropicoption.WithMaxRetries(defaultLLMRetries),
-		anthropicoption.WithHTTPClient(proxyHTTPClient(cfg, true, 0)),
+		anthropicoption.WithHTTPClient(httpClientWithUserAgent(cfg, true, 0)),
 	)
 
 	system, anthropicMessages := buildAnthropicMessages(messages)

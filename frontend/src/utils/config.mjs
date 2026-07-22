@@ -16,6 +16,7 @@ export function defaultConfig() {
     proxyMode: 'off',
     proxyUrl: '',
     proxyNoProxy: '',
+    userAgent: '',
     reasoningTag: 'reasoning_content',
     disabledSkills: [],
     models: [],

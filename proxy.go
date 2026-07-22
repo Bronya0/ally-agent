@@ -161,6 +161,40 @@ func proxyHTTPClient(cfg ConfigState, allowPrivate bool, timeout time.Duration) 
 	return &http.Client{Transport: proxyHTTPTransport(cfg, allowPrivate), Timeout: timeout}
 }
 
+// httpClientWithUserAgent returns an HTTP client that injects the configured
+// User-Agent on every outbound request when the request does not already
+// specify one. Used by LLM SDK clients (go-openai / openai-go / anthropic-sdk-go)
+// that do not expose UA configuration directly. When no custom UA is configured
+// the underlying SDK default is preserved.
+func httpClientWithUserAgent(cfg ConfigState, allowPrivate bool, timeout time.Duration) *http.Client {
+	base := proxyHTTPClient(cfg, allowPrivate, timeout)
+	ua := strings.TrimSpace(cfg.UserAgent)
+	if ua == "" {
+		return base
+	}
+	base.Transport = &userAgentTransport{base: base.Transport, ua: ua}
+	return base
+}
+
+// userAgentTransport wraps an http.RoundTripper and sets the User-Agent header
+// on every request that does not already carry one.
+type userAgentTransport struct {
+	base http.RoundTripper
+	ua   string
+}
+
+func (t *userAgentTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if _, ok := req.Header["User-Agent"]; ok {
+		return t.base.RoundTrip(req)
+	}
+	// Clone the request so the caller's headers are not mutated. Body is
+	// shared by reference, which is safe because the base Transport consumes
+	// it exactly once, same as a direct call.
+	clone := req.Clone(req.Context())
+	clone.Header.Set("User-Agent", t.ua)
+	return t.base.RoundTrip(clone)
+}
+
 // proxyTransportCache memoizes *http.Transport instances by (cfg, allowPrivate)
 // so consecutive LLM requests reuse the same HTTP/2 connection pool instead
 // of paying a fresh TLS handshake (100-500ms) on every request. The key is

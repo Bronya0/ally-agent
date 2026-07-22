@@ -87,6 +87,17 @@ const (
 	maxAttachmentDataURL             = 8 * 1024 * 1024
 )
 
+// effectiveUserAgent returns the User-Agent string to send on outbound HTTP
+// requests. If the user has configured a custom UA in settings, it is used
+// as-is; otherwise the built-in default is returned. The result is never
+// empty, so callers can safely assign it to a request header.
+func effectiveUserAgent(cfg ConfigState) string {
+	if ua := strings.TrimSpace(cfg.UserAgent); ua != "" {
+		return ua
+	}
+	return defaultHTTPUA
+}
+
 var (
 	pythonRuntimeOnce sync.Once
 	pythonRuntimeLine string
@@ -319,6 +330,7 @@ type ConfigState struct {
 	ProxyMode           string        `json:"proxyMode,omitempty"`
 	ProxyURL            string        `json:"proxyUrl,omitempty"`
 	ProxyNoProxy        string        `json:"proxyNoProxy,omitempty"`
+	UserAgent           string        `json:"userAgent,omitempty"`
 	ReasoningTag        string        `json:"reasoningTag,omitempty"`
 	Models              []ModelConfig `json:"models,omitempty"`
 	DisabledSkills      []string      `json:"disabledSkills,omitempty"`
@@ -3909,6 +3921,9 @@ func mergeConfig(base, overlay ConfigState) ConfigState {
 	if overlay.ReasoningTag != "" {
 		base.ReasoningTag = overlay.ReasoningTag
 	}
+	if strings.TrimSpace(overlay.UserAgent) != "" {
+		base.UserAgent = overlay.UserAgent
+	}
 	if overlay.Models != nil {
 		base.Models = overlay.Models
 	}
@@ -3992,6 +4007,7 @@ func (a *App) SaveConfig(req ConfigState) error {
 	a.config.ProxyMode = normalizeProxyMode(req.ProxyMode)
 	a.config.ProxyURL = strings.TrimSpace(req.ProxyURL)
 	a.config.ProxyNoProxy = strings.TrimSpace(req.ProxyNoProxy)
+	a.config.UserAgent = strings.TrimSpace(req.UserAgent)
 	if goruntime.GOOS == "windows" {
 		if detected, _ := findWindowsBash(req.GitBashPath); detected != "" {
 			a.config.GitBashPath = detected
@@ -4049,6 +4065,7 @@ func (a *App) TestModelConnection(model ModelConfig) error {
 		ProxyMode:     networkCfg.ProxyMode,
 		ProxyURL:      networkCfg.ProxyURL,
 		ProxyNoProxy:  networkCfg.ProxyNoProxy,
+		UserAgent:     networkCfg.UserAgent,
 	}
 	if cfg.Model == "" {
 		return errors.New("model is required")

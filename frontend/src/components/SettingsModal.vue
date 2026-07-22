@@ -68,6 +68,15 @@
               <span class="settings-field-hint">{{ $t('settings.gitBashPathHint') }}</span>
             </div>
           </n-form-item>
+          <n-form-item :label="$t('settings.userAgent')">
+            <div class="settings-field-stack">
+              <n-input
+                v-model:value="draft.userAgent"
+                :placeholder="$t('settings.userAgentPlaceholder')"
+              />
+              <span class="settings-field-hint">{{ $t('settings.userAgentHint') }}</span>
+            </div>
+          </n-form-item>
           <div class="settings-page-actions">
             <n-button type="primary" @click="onSave">{{ $t('common.save') }}</n-button>
           </div>
