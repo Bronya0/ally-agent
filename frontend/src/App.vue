@@ -1218,6 +1218,7 @@ const builtinCommands = [
   { key: 'init', label: '/init', description: t('commands.init'), text: '', special: 'init' },
   { key: 'note', label: '/note', description: t('commands.note'), text: '', special: 'remember' },
   { key: 'remember', label: '/remember', description: t('commands.remember'), text: '', special: 'remember' },
+  { key: 'codegraph', label: '/codegraph', description: t('commands.codegraph'), text: '', special: 'codegraph' },
   { key: 'compact', label: '/compact', description: t('commands.compact'), text: '', special: 'compact' },
 ];
 
@@ -1261,6 +1262,125 @@ Popular sections to include:
 - Security considerations
 
 First, explore the codebase, then create or update AGENTS.md. If AGENTS.md exists, read it and update it with edit. If it does not exist, create it with create_file.`;
+
+const CODEGRAPH_PROMPT = `Generate a structured semantic code graph for this project and save it to CODEGRAPH.md in the workspace root.
+
+You are a code graph generator. Your output is NOT for humans — it is for another AI coding agent to quickly understand the project architecture, module responsibilities, dependencies, and data flow before making edits. Optimize for token efficiency and semantic clarity.
+
+## Overall approach
+
+1. Detect the project language(s): Read root config files (go.mod, package.json, Cargo.toml, pyproject.toml, pom.xml, *.csproj, mix.exs, rebar.config, build.gradle, CMakeLists.txt, Makefile, Cargo.toml, etc.) to identify the stack.
+2. Map the module/package tree: Use list_files to walk the directory. Group related files into modules by directory and import patterns.
+3. Read key files in each module: Focus on entry points, core types, public APIs, and files with high line counts. Extract struct/class/interface/trait definitions, function/method signatures, and import/use/require statements.
+4. Build the relational graph: Who imports whom? Which modules depend on which? What are the main call chains from entry points?
+5. Write a self-contained project-name H1 and five H2 sections (see below) into CODEGRAPH.md.
+
+## Output format — strict specification
+
+CODEGRAPH.md MUST follow this exact structure. Every section is an H2. The file starts with a single H1: \`# Code Graph: <project-name>\`. All paths are workspace-relative. End the file with a blank line.
+
+### H2: Language and Build
+One line per major language/framework. Use bullet list:
+- language: <name> (<version or toolchain if detected>)
+
+Examples:
+- language: Go 1.22 (go.mod)
+- language: TypeScript / Node 20 (package.json + vite)
+- language: Python 3.11 / Poetry (pyproject.toml)
+- language: Rust 1.78 (Cargo.toml)
+
+### H2: Module Hierarchy
+Hierarchical bullet list. Each directory/module node has a semantic tag and a one-line purpose statement. Files under it show what the file contributes.
+
+Format:
+- [<tag>] <relative-path>/ — <one-line purpose>
+  - <filename> — <what it contains, key types/functions>
+  - <filename> [Lines: N] — <if large, mention why>
+
+Semantic tags (pick the best single tag per node):
+- \`[entry]\` — program entry point, main, bootstrap, app shell
+- \`[handler]\` — HTTP/event handler, route, controller, presenter
+- \`[model]\` — data model, entity, schema, struct, DTO
+- \`[adapter]\` — external integration, provider wrapper, client, driver
+- \`[service]\` — business logic, use case, workflow, orchestration
+- \`[infra]\` — infrastructure, config, storage, networking, platform
+- \`[util]\` — shared utilities, helpers, constants, types
+- \`[test]\` — test suite, mock, fixture, integration test
+- \`[ui]\` — UI component, page, screen, view, template
+- \`[config]\` — configuration, environment, constants
+- \`[data]\` — data access, repository, DAO, migration, query
+- \`[proto]\` — protobuf / IDL / schema definitions
+- \`[build]\` — build scripts, CI/CD, Docker, tooling
+
+### H2: Key Types / Interfaces
+For each module, list the most architecturally important types. One type per line. Use the format:
+\`[<kind>] <name> — <responsibility>\`
+
+Type kinds: struct, class, interface, trait, enum, config, typedef, type, protocol, record
+
+Only include types that appear across files or are central to the architecture. Skip internal helpers and trivial wrappers.
+
+### H2: Call Flow / Data Flow
+Show the main execution paths. Use indented arrow notation. Indent increases with call depth.
+
+Format:
+- \`[<action>] <source> → <target>  // <semantic meaning>\`
+
+Action prefixes:
+- \`[call]\` — function/method call (direct)
+- \`[data]\` — data flow (return values, channels, streams, props, events)
+- \`[ext]\` — external system call (DB query, API call, filesystem, network)
+- \`[event]\` — event emission, callback, subscription, hook
+- \`[init]\` — initialization / bootstrap time
+
+When the call target is a known module or layer, suffix with \`[<module-tag>]\`.
+
+Example:
+- [call] main() → StartChat  // entry point
+  - [call] StartChat → buildMessages()    [service]
+  - [call] StartChat → buildToolsWithMcp()  [infra]
+    - [ext] buildToolsWithMcp() → mcp.ListTools()  // MCP server discovery
+  - [call] StartChat → streamModelResponse()  [adapter]
+    - [data] streamModelResponse() ← stream delta [entry]
+  - [call] StartChat → executeTool()  [handler]
+
+### H2: Inter-Module Dependencies
+Edges between modules. Format:
+\`<relative-path> → <relative-path>  // <nature of dependency>\`
+
+Example:
+app/ → model_provider/  // LLM streaming calls
+app/ → mcp/  // MCP tool discovery and dispatch
+app/ → proxy/  // HTTP proxy resolution
+
+### H2: Hot Paths / Files to Focus
+Files that are architecturally critical, frequently changed, or very large. Use:
+- \`[***] <path> — <reason>\`  — critical, central, or very large
+- \`[**] <path> — <reason>\`   — important
+- \`[*] <path> — <reason>\`    — noteworthy
+
+## Constraints
+
+- Do NOT output Mermaid, ASCII diagrams, tables, or any visual format.
+- Keep the total file under 800 lines.
+- Every path must be workspace-relative.
+- If the project has >500 source files, focus on the top 3-5 most architecturally significant modules. State that others exist but are omitted.
+- If a module is flat (single file, no internal structure), say so concisely.
+- Prefer module-level granularity over file-level for large projects.
+- The \`project-name\` in the H1 is the basename of the workspace root directory (not the package name).
+- Generate the file using create_file (if it doesn't exist) or edit (if it exists and needs update).
+
+## Verification
+
+After writing, read back the file with batch_read and confirm:
+1. It has at least 15 lines of meaningful content.
+2. It starts with H1: \`# Code Graph: <name>\`.
+3. It contains \`### Language and Build\`, \`### Module Hierarchy\`, and at least two of the other H2 sections.
+4. The last line is blank.
+
+If any check fails, diagnose and fix. If the project is too small for a full code graph, note that the codebase is small and list the files with their roles.
+
+Start by using list_files to walk the project root and reading configuration files to detect the language(s).`;
 
 const REMEMBER_PROMPT = `Save durable project knowledge from this conversation.
 
@@ -3674,7 +3794,7 @@ async function sendPrompt() {
       // Send as normal message
     } else if (slashContent) {
       // Check if it's a builtin command first
-      const builtinPrefixes = ['new','plan','goal','skills','clear','switch','sessions','reload','init','note','remember','compact'];
+      const builtinPrefixes = ['new','plan','goal','skills','clear','switch','sessions','reload','init','note','remember','codegraph','compact'];
       const cmdName = slashContent.split(/\s+/)[0];
       const isBuiltin = builtinPrefixes.includes(cmdName);
       // Also check if any skill name matches
@@ -4157,6 +4277,12 @@ async function handleBuiltinCommand(command) {
     commandMenuVisible.value = false;
     return true;
   }
+  if (command.special === 'codegraph') {
+    handleCodeGraphCommand();
+    promptText.value = '';
+    commandMenuVisible.value = false;
+    return true;
+  }
   if (command.special === 'compact') {
     await handleCompactCommand();
     promptText.value = '';
@@ -4164,6 +4290,30 @@ async function handleBuiltinCommand(command) {
     return true;
   }
   return false;
+}
+
+function handleCodeGraphCommand() {
+  const session = activeSession.value;
+  if (!session) return;
+  session.messages.push({ role: 'user', content: CODEGRAPH_PROMPT, done: true });
+  if (isDefaultSessionTitle(session.title)) {
+    session.title = t('app.codegraph.title');
+  }
+  scrollMessagesToBottom();
+  saveSessions();
+
+  const history = session.messages
+    .filter(isModelHistoryMessage)
+    .map((msg) => ({ role: msg.role, content: msg.content }));
+
+  const text = CODEGRAPH_PROMPT;
+  markSessionRunning(session);
+  StartChat({ sessionId: session.id, message: text, messages: history, grillMode: !!session.grillMode, config: { ...config } })
+    .catch((err) => {
+      session.runId = '';
+      session.isRunning = false;
+      pushMessage('assistant', t('app.codegraph.failed', { error: err }), { error: true });
+    });
 }
 
 function completeCommand(index) {
