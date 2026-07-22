@@ -1612,7 +1612,6 @@ code, pre {
 }
 
 .markdown-body th {
-  color: var(--md-white);
   background: rgba(255, 255, 255, 0.05);
   font-weight: 600;
 }
@@ -1926,7 +1925,7 @@ body.platform-darwin .ally-wordmark {
 }
 
 .tool-name {
-  color: #f0f3f8;
+  color: var(--md-strong);
   font-weight: 650;
   font-size: 14px;
   flex-shrink: 0;
