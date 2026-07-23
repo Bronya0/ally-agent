@@ -2252,7 +2252,8 @@ function newSession(title) {
   const id = crypto.randomUUID ? crypto.randomUUID() : `s-${Date.now()}-${Math.random()}`;
   const now = Date.now();
   const workspace = config.workspace || '';
-  const session = { id, title: title || t('app.sessions.new'), workspace, messages: [], runId: '', isRunning: false, grillMode: false, createdAt: now, updatedAt: now };
+  const sessionTitle = title || (workspace ? workspaceLabel(workspace) : t('app.sessions.new'));
+  const session = { id, title: sessionTitle, workspace, messages: [], runId: '', isRunning: false, grillMode: false, createdAt: now, updatedAt: now };
   sessions.value.unshift(session);
   activeSessionId.value = id;
   bindSessionToActiveWorkspaceTab(session);
@@ -5211,7 +5212,7 @@ async function handleCompactCommand() {
 }
 
 function createNewSession() {
-  newSession(`${t('app.sessions.new')} ${sessions.value.length + 1}`);
+  newSession();
   message.success(t('app.sessions.created'));
   scrollMessagesToBottom();
 }
