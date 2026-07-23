@@ -6290,10 +6290,41 @@ function switchWorkspaceByOffset(offset) {
   switchWorkspaceTab(tabs[next].id);
 }
 
+// Custom overlays (command menu / file mention / sessions list) have no global
+// Escape or outside-click handling; close the topmost one instead of stopping
+// the run. Naive UI modals (settings / task center / git diff) own their ESC
+// handling in the bubble phase, so we let those events pass through untouched.
+function closeTopmostCustomOverlay() {
+  if (sessionsVisible.value) { sessionsVisible.value = false; return true; }
+  if (fileMentionVisible.value) { closeFileMentionMenu(); return true; }
+  if (commandMenuVisible.value) { commandMenuVisible.value = false; return true; }
+  return false;
+}
+
+// Clicking outside a custom overlay (which has no modal mask) closes it.
+function handleOverlayOutsidePointerDown(event) {
+  if (!commandMenuVisible.value && !fileMentionVisible.value && !sessionsVisible.value) return;
+  const target = event.target;
+  if (!(target instanceof Element)) return;
+  if (target.closest('.command-menu, .file-mention-menu, .sessions-menu')) return;
+  if (sessionsVisible.value) sessionsVisible.value = false;
+  if (fileMentionVisible.value) closeFileMentionMenu();
+  if (commandMenuVisible.value) commandMenuVisible.value = false;
+}
+
 function handleGlobalKeydown(event) {
   if (event.key === 'Escape' && deactivateMermaidInteraction()) {
     event.preventDefault();
     event.stopPropagation();
+    return;
+  }
+  if (event.key === 'Escape' && closeTopmostCustomOverlay()) {
+    event.preventDefault();
+    event.stopPropagation();
+    return;
+  }
+  if (event.key === 'Escape' && (configVisible.value || taskCenterVisible.value || gitDiffVisible.value)) {
+    // Let Naive UI modals handle their own ESC (nested stack); do not stop the run.
     return;
   }
   if (event.key === 'Escape' && activeSession.value?.runId) {
@@ -6357,6 +6388,7 @@ onMounted(async () => {
   window.addEventListener('beforeunload', flushPendingSaveSessions);
   window.addEventListener('keydown', handleGlobalKeydown, true);
   document.addEventListener('pointerdown', handleMermaidOutsidePointerDown, true);
+  document.addEventListener('pointerdown', handleOverlayOutsidePointerDown, true);
   document.addEventListener('click', handleMermaidToolbarClick, true);
   document.addEventListener('click', handleCodeCopyClick, true);
   document.addEventListener('click', handleMarkdownLinkClick, true);
@@ -6378,6 +6410,7 @@ onUnmounted(() => {
   window.removeEventListener('beforeunload', flushPendingSaveSessions);
   window.removeEventListener('keydown', handleGlobalKeydown, true);
   document.removeEventListener('pointerdown', handleMermaidOutsidePointerDown, true);
+  document.removeEventListener('pointerdown', handleOverlayOutsidePointerDown, true);
   document.removeEventListener('click', handleMermaidToolbarClick, true);
   document.removeEventListener('click', handleCodeCopyClick, true);
   document.removeEventListener('click', handleMarkdownLinkClick, true);
