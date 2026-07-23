@@ -1261,7 +1261,14 @@ First, explore the codebase, then create or update AGENTS.md. If AGENTS.md exist
 
 const CODEGRAPH_PROMPT = `Generate a structured semantic code graph for this project and save it to CODEGRAPH.md in the workspace root.
 
+This is a direct /codegraph command. Do NOT ask the user for confirmation — write the file directly without discussion.
+
 You are a code graph generator. Your output is NOT for humans — it is for another AI coding agent to quickly understand the project architecture, module responsibilities, dependencies, and data flow before making edits. Optimize for token efficiency and semantic clarity.
+
+## Decision logic
+
+- If CODEGRAPH.md does NOT exist: generate it from scratch.
+- If CODEGRAPH.md ALREADY exists: read the current file and existing code, then compare what has changed (new files, removed files, changed structure). Update CODEGRAPH.md in place — do NOT overwrite or regenerate from scratch. Only modify sections that actually changed, preserving the rest.
 
 ## Overall approach
 
