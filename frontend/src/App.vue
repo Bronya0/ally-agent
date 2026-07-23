@@ -174,6 +174,7 @@
                   @set-run-mode="setRunMode"
                   @open-task-center="openTaskCenter"
                   @new-session="createNewSession"
+                  @show-sessions="showSessionList"
                   :get-session-messages="() => activeMessages"
                   :session-title="activeSession?.title || ''"
                 />
