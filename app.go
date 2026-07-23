@@ -13205,8 +13205,6 @@ var outsidePathMutationPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)(^|[\s;&|()])(?:tar\s+[^\r\n;&|]*-[^\r\n;&|]*x|unzip\b)`),
 }
 
-var shellRedirectionRE = regexp.MustCompile(`(?:^|[^<])>{1,2}\s*(?:"([^"]+)"|'([^']+)'|([^\s;&|()]+))`)
-
 func commandMayModifyOutsidePath(command string) bool {
 	for _, pattern := range outsidePathMutationPatterns {
 		if pattern.MatchString(command) {
@@ -13271,15 +13269,122 @@ func firstExistingOutsideMutationTarget(command, workspaceRoot string) *outsideM
 
 func shellRedirectionTargets(command string) []string {
 	targets := []string{}
-	for _, match := range shellRedirectionRE.FindAllStringSubmatch(command, -1) {
-		for i := 1; i < len(match); i++ {
-			if match[i] != "" {
-				targets = append(targets, match[i])
-				break
+	inSingle := false
+	inDouble := false
+	escaped := false
+	for i := 0; i < len(command); i++ {
+		c := command[i]
+		if escaped {
+			escaped = false
+			continue
+		}
+		if inSingle {
+			if c == '\'' {
+				inSingle = false
+			}
+			continue
+		}
+		if inDouble {
+			if c == '\\' {
+				escaped = true
+				continue
+			}
+			if c == '"' {
+				inDouble = false
+			}
+			continue
+		}
+		switch c {
+		case '\\':
+			escaped = true
+		case '\'':
+			inSingle = true
+		case '"':
+			inDouble = true
+		case '>':
+			if i > 0 && command[i-1] == '<' {
+				continue
+			}
+			next := i + 1
+			if next < len(command) && command[next] == '>' {
+				next++
+			}
+			if next < len(command) && command[next] == '|' {
+				next++
+			}
+			target, end := parseShellRedirectionTarget(command, next)
+			if target != "" && !isShellFDRedirectionTarget(target) {
+				targets = append(targets, target)
+			}
+			if end > i {
+				i = end - 1
 			}
 		}
 	}
 	return targets
+}
+
+func parseShellRedirectionTarget(command string, start int) (string, int) {
+	i := start
+	for i < len(command) && (command[i] == ' ' || command[i] == '\t' || command[i] == '\r' || command[i] == '\n') {
+		i++
+	}
+	if i >= len(command) {
+		return "", i
+	}
+	quote := byte(0)
+	if command[i] == '\'' || command[i] == '"' {
+		quote = command[i]
+		i++
+	}
+	var b strings.Builder
+	escaped := false
+	for i < len(command) {
+		c := command[i]
+		if escaped {
+			b.WriteByte(c)
+			escaped = false
+			i++
+			continue
+		}
+		if c == '\\' {
+			escaped = true
+			i++
+			continue
+		}
+		if quote != 0 {
+			if c == quote {
+				i++
+				break
+			}
+			b.WriteByte(c)
+			i++
+			continue
+		}
+		if c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == ';' || c == '&' || c == '|' || c == '(' || c == ')' {
+			break
+		}
+		b.WriteByte(c)
+		i++
+	}
+	return b.String(), i
+}
+
+func isShellFDRedirectionTarget(target string) bool {
+	value := strings.TrimSpace(target)
+	if strings.HasPrefix(value, "&") {
+		value = strings.TrimPrefix(value, "&")
+		if value == "-" {
+			return true
+		}
+		for _, c := range value {
+			if c < '0' || c > '9' {
+				return false
+			}
+		}
+		return value != ""
+	}
+	return false
 }
 
 func isShellNullDevice(path string) bool {

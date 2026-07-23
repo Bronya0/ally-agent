@@ -1037,6 +1037,13 @@ func TestCommandSafetyAllowsGitBashOutsideReadsWithDevNull(t *testing.T) {
 	}
 }
 
+func TestCommandSafetyAllowsGitLogPrettyFormatWithEmailBrackets(t *testing.T) {
+	command := `git status --short && git log -1 --pretty=format:'%h %an <%ae> %s'`
+	if err := checkCommandSafety(CommandRequest{Command: command}, t.TempDir()); err != nil {
+		t.Fatalf("quoted git pretty format should not be parsed as shell redirection: %v", err)
+	}
+}
+
 func TestCommandSafetyAllowsCreatingNewOutsidePath(t *testing.T) {
 	workspace := t.TempDir()
 	outside := t.TempDir()
