@@ -578,18 +578,6 @@ code, pre {
   opacity: 0.55;
 }
 
-.composer-info .run-mode-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: currentColor;
-}
-
-.composer-info .run-mode-chip.plan .run-mode-dot,
-.composer-info .run-mode-chip.grill .run-mode-dot {
-  background: currentColor;
-}
-
 .composer-info .run-mode-caret {
   color: currentColor;
   font-size: 9px;

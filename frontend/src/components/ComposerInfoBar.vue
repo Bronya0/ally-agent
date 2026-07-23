@@ -28,7 +28,6 @@
         :disabled="running && !grillModeActive"
         @click.stop
       >
-        <span class="run-mode-dot"></span>
         <span>{{ currentRunModeLabel }}</span>
         <span class="run-mode-caret">▾</span>
       </button>
