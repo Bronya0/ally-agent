@@ -148,7 +148,7 @@ ConfigState (~/.ally_agent/config.json)
 ```mermaid
 flowchart LR
     subgraph 文件操作
-        batch_read[batch_read]
+        read[read]
         edit[edit]
         create_file[create_file]
         delete_path[delete_path]
@@ -258,7 +258,7 @@ defaultSystemPrompt() → buildSystemPromptParts()
 
 - 扫描路径：`~/.agents/skills/` / `<workspace>/.agents/skills/` / `<workspace>/.kimi-code/skills/`
 - 默认全部启用，通过 `disabledSkills` 控制禁用
-- 完整技能内容只在 Model 调用 `Skill` 工具或用户输入 `/<skillname>` 时加载
+- 完整技能内容只在 Model 调用 `skill` 工具或用户输入 `/<skillname>` 时加载
 
 ---
 

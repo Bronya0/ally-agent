@@ -620,14 +620,14 @@ func TestSystemPromptDefinesWaitSequencing(t *testing.T) {
 func TestBatchReadSchemaIncludesCanonicalExamples(t *testing.T) {
 	var description string
 	for _, tool := range chatTools() {
-		if tool.Function != nil && tool.Function.Name == "batch_read" {
+		if tool.Function != nil && tool.Function.Name == "read" {
 			description = tool.Function.Description
 			break
 		}
 	}
 	for _, expected := range []string{`{"files":[{"path":"app.go"}]}`, "Do not pass top-level path", "string array"} {
 		if !strings.Contains(description, expected) {
-			t.Fatalf("batch_read description missing canonical guidance %q: %s", expected, description)
+			t.Fatalf("read description missing canonical guidance %q: %s", expected, description)
 		}
 	}
 }

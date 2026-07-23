@@ -49,7 +49,7 @@ const BUILTIN_TOOL_GROUPS = [
   {
     key: 'read',
     label: t('tools.group.read'),
-    names: ['list_files', 'batch_read'],
+    names: ['list_files', 'read', 'batch_read'],
     description: t('tools.group.readDescription'),
   },
   {
@@ -97,7 +97,7 @@ const BUILTIN_TOOL_GROUPS = [
   {
     key: 'agent',
     label: t('tools.group.agent'),
-    names: ['subagent', 'Skill'],
+    names: ['subagent', 'skill', 'Skill'],
     description: t('tools.group.agentDescription'),
   },
   {

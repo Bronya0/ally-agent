@@ -12,6 +12,7 @@
 // instead of a bare "Failed".
 const TOOL_VERBS = {
   // read / list
+  read: ['Reading', 'Read', 'Read'],
   read_file: ['Reading', 'Read', 'Read'],
   remote_read_file: ['Reading', 'Read', 'Read'],
   batch_read: ['Reading', 'Read', 'Read'],
@@ -61,6 +62,7 @@ const TOOL_VERBS = {
   // agents / skills
   subagent: ['Delegating', 'Delegated', 'Sub-agent'],
   agent_delegate: ['Delegating', 'Delegated', 'Sub-agent'],
+  skill: ['Loading skill', 'Loaded skill', 'Skill'],
   Skill: ['Loading skill', 'Loaded skill', 'Skill'],
 };
 

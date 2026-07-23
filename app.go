@@ -1483,7 +1483,7 @@ func skillNameInList(list []string, name string) bool {
 	return false
 }
 
-// handleSkillToolCall is called when the AI invokes the "Skill" tool.
+// handleSkillToolCall is called when the AI invokes the "skill" tool.
 func (a *App) handleSkillToolCall(skillName, skillArgs string) (map[string]any, error) {
 	if strings.TrimSpace(skillName) == "" {
 		return nil, errors.New("skill is required")
@@ -1555,7 +1555,7 @@ func buildSkillDirTree(dir, loadedPath string) string {
 	if len(lines) == 0 {
 		return ""
 	}
-	return "<!-- skill dir tree (one level, use batch_read to read any of these) -->\n" + strings.Join(lines, "\n")
+	return "<!-- skill dir tree (one level, use read to read any of these) -->\n" + strings.Join(lines, "\n")
 }
 
 // renderSkillLoadedBlock builds <kimi-skill-loaded name="..." source="..." dir="..." args="...">
@@ -2336,7 +2336,7 @@ func (a *App) batchReadFilesWithConfig(cfg ConfigState, req BatchReadRequest) (*
 		pathCount++
 	}
 	if pathCount == 0 {
-		return nil, errors.New("batch_read requires at least one path or file")
+		return nil, errors.New("read requires at least one path or file")
 	}
 	if pathCount > 20 {
 		return nil, errors.New("too many files; max 20 per batch")
@@ -2370,11 +2370,11 @@ func (a *App) batchReadFilesWithConfig(cfg ConfigState, req BatchReadRequest) (*
 	}
 
 	// Collect (path, fileReq) pairs in request order, then execute in
-	// parallel. Parallel reads are safe: batch_read is purely read-only,
+	// parallel. Parallel reads are safe: read is purely read-only,
 	// does not touch fileOpsMu, and each file's result is written to its
 	// own slot in a pre-allocated results slice — no cross-file sharing.
 	// The previous serial loop serialized N file opens + reads; with 20
-	// files on a slow disk this was the dominant per-batch_read cost.
+	// files on a slow disk this was the dominant per-read cost.
 	type pendingRead struct {
 		path string
 		req  ReadFileRequest
@@ -3205,18 +3205,18 @@ func buildSystemPromptParts(allSkills []SkillDefinition, workspaceRoot, customPr
 		"For substantial multi-step tasks, keep a concise internal plan. Use `todo_write` only when a visible task list materially helps track longer work. Before tool calls, emit at most one short sentence describing the next action; do not narrate private analysis.\n\n" +
 		"When responding in text, use light Markdown. Use the same language as the user. Do not use emoji unless the user does first.\n\n" +
 		"# Tool Use\n\n" +
-		"Tool schemas are provided as function definitions — use them directly. Prefer dedicated, structured, workspace-safe tools over shell commands: `grep_files` for search/counts, `batch_read` for file content, `list_files` for directory listings, `web_fetch`/`http_request` for network reads, `remote_*` for remote work, and `delete_path` for deletion. Use `run_command` only when no dedicated tool fits, or for builds/tests/inspections that require the shell.\n\n" +
+		"Tool schemas are provided as function definitions — use them directly. Prefer dedicated, structured, workspace-safe tools over shell commands: `grep_files` for search/counts, `read` for file content, `list_files` for directory listings, `web_fetch`/`http_request` for network reads, `remote_*` for remote work, and `delete_path` for deletion. Use `run_command` only when no dedicated tool fits, or for builds/tests/inspections that require the shell.\n\n" +
 		"Use `ask` when progress genuinely requires one or more user decisions. Provide 2–6 reasonable options per question, mark exactly one recommended option, and do not add an 'Other' option because the UI always appends a custom-answer choice. `ask` must be the only tool call in that model response.\n\n" +
 		"Use `wait` only after starting an asynchronous operation or when a concrete external condition is expected to change. Call it as the only tool in that model response, then verify the condition after it completes. Do not use it to wait for user input or for long schedules; use `scheduled_task` for scheduled automation.\n\n" +
 		"Edit rules:\n" +
-		"1. Before a file's first edit, use `batch_read` to obtain exact content and `version`. After a successful edit, reuse its returned `version` when the next exact `oldText` is already known; re-read only when content is unknown, an external change is possible, or a version/match error occurs.\n" +
+		"1. Before a file's first edit, use `read` to obtain exact content and `version`. After a successful edit, reuse its returned `version` when the next exact `oldText` is already known; re-read only when content is unknown, an external change is possible, or a version/match error occurs.\n" +
 		"2. Put all known changes across affected files in one `edit` call. Use exact, unique `oldText`; the schema defines the batch limits and replacement behavior.\n" +
 		"3. Never send multiple file-mutation tool calls for the same path in one model response. Do not use patch, unified diff, or git apply.\n" +
 		"4. **Critical**: within a single `edit` call, each file path may appear **at most once** in the `files` array — do not repeat the same path across multiple entries. Merge all changes for the same file into one `changes` array instead. Violating this causes the entire call to be rejected with `E_WRITE_BATCH_CONFLICT`.\n\n")
 
 	b.WriteString("**Batch and parallelize aggressively** — this is the #1 way to reduce round-trips and save tokens:\n" +
-		"- If you need file contents, prefer one `batch_read` call with all relevant paths instead of separate reads.\n" +
-		"- For `batch_read`, omit both range fields to read the whole file; use optional `startLine` and `endLine` only when you need a specific inclusive range.\n" +
+		"- If you need file contents, prefer one `read` call with all relevant paths instead of separate reads.\n" +
+		"- For `read`, omit both range fields to read the whole file; use optional `startLine` and `endLine` only when you need a specific inclusive range.\n" +
 		"- If you need to edit files, put all cross-file changes in one `edit` call.\n" +
 		"- If you need to search across files, send one `grep_files` instead of reading each file.\n" +
 		"- Batch independent reads and commands (no duplicates); use current version values for dependent edits.\n" +
@@ -3308,7 +3308,7 @@ func buildSystemPromptParts(allSkills []SkillDefinition, workspaceRoot, customPr
 	// Inject skills metadata listing (not full content)
 	if listing := buildSkillListingMeta(allSkills); listing != "" {
 		var skills strings.Builder
-		skills.WriteString("\n\n# Skills\n\nUse the `Skill` tool when the user requests a listed skill or the task clearly matches it. Do not load skills unnecessarily. Do not read `SKILL.md` directly with `batch_read`; always load skills through the `Skill` tool. After a skill is loaded, you MAY use `batch_read` to read additional files referenced by the skill under its `dir` (for example `references/*.md` or other sibling files listed in the loaded block). The list is deduplicated with project scope taking precedence.\n\n## Available skills\n")
+		skills.WriteString("\n\n# Skills\n\nUse the `skill` tool when the user requests a listed skill or the task clearly matches it. Do not load skills unnecessarily. Do not read `SKILL.md` directly with `read`; always load skills through the `skill` tool. After a skill is loaded, you MAY use `read` to read additional files referenced by the skill under its `dir` (for example `references/*.md` or other sibling files listed in the loaded block). The list is deduplicated with project scope taking precedence.\n\n## Available skills\n")
 		skills.WriteString(listing)
 		parts = append(parts, systemPromptPart{label: "技能元数据", content: skills.String()})
 	}
@@ -4996,7 +4996,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			toolProgress := newToolCallProgressTracker()
 			toolBatchID := fmt.Sprintf("%d:%d", turn, step)
 			// Inject context budget as the final request item so the model can
-			// self-regulate tool usage (e.g. prefer grep over batch_read when
+			// self-regulate tool usage (e.g. prefer grep over read when
 			// near the limit). Built fresh per request from the live breakdown;
 			// never appended to `messages`, so it is not persisted into history
 			// and does not break prefix-cache reuse of the preceding items.
@@ -5413,8 +5413,8 @@ func appendContextBudgetMessage(messages []openai.ChatCompletionMessage, usedTok
 	fmt.Fprintf(&b, "Window: %d tokens\n", maxCtx)
 	fmt.Fprintf(&b, "Used: %d tokens (%d%%)\n", usedTokens, usedPct)
 	fmt.Fprintf(&b, "Remaining: %d tokens (%d%%)\n", remaining, remainingPct)
-	b.WriteString("Note: large tool results (batch_read, run_command output) consume budget quickly. ")
-	b.WriteString("When remaining is low, prefer grep/list_files over batch_read, and avoid re-reading files already seen this turn.")
+	b.WriteString("Note: large tool results (read, run_command output) consume budget quickly. ")
+	b.WriteString("When remaining is low, prefer grep/list_files over read, and avoid re-reading files already seen this turn.")
 	b.WriteString("\n</ally-context-budget>")
 	out := make([]openai.ChatCompletionMessage, len(messages)+1)
 	copy(out, messages)
@@ -6239,7 +6239,7 @@ func chatToolsUncached() []openai.Tool {
 						"type": "object",
 						"properties": map[string]any{
 							"path":    map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*"},
-							"version": map[string]any{"type": "string", "pattern": "^[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{12}$", "description": "Required 12-character current version from batch_read or the preceding successful edit. Comparison is case-insensitive."},
+							"version": map[string]any{"type": "string", "pattern": "^[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{12}$", "description": "Required 12-character current version from read or the preceding successful edit. Comparison is case-insensitive."},
 							"changes": map[string]any{
 								"type":     "array",
 								"minItems": 1,
@@ -6247,7 +6247,7 @@ func chatToolsUncached() []openai.Tool {
 								"items": map[string]any{
 									"type": "object",
 									"properties": map[string]any{
-										"oldText": map[string]any{"type": "string", "minLength": 1, "description": "Exact unique current text known from batch_read or a preceding successful edit."},
+										"oldText": map[string]any{"type": "string", "minLength": 1, "description": "Exact unique current text known from read or a preceding successful edit."},
 										"newText": map[string]any{"type": "string", "description": "Replacement text. Empty string deletes oldText."},
 									},
 									"required": []string{"oldText", "newText"},
@@ -6458,7 +6458,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"pattern"},
 		}),
-		functionTool("batch_read", "Read 1–20 files. Always pass a top-level files array, even for one file. Do not pass top-level path, a string array, offset, or lineCount. UTF-8 text returns raw copyable content plus a 12-character version for edit. Omit startLine/endLine for the whole file; either or both define an inclusive 1-based range. Supported document formats (.docx, .pptx, .xlsx, .pdf) return non-editable extracted text; .xlsx optionally accepts a sheet name or 1-based index.", map[string]any{
+		functionTool("read", "Read 1–20 files. Always pass a top-level files array, even for one file. Do not pass top-level path, a string array, offset, or lineCount. UTF-8 text returns raw copyable content plus a 12-character version for edit. Omit startLine/endLine for the whole file; either or both define an inclusive 1-based range. Supported document formats (.docx, .pptx, .xlsx, .pdf) return non-editable extracted text; .xlsx optionally accepts a sheet name or 1-based index.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"files": batchReadFilesSchema(),
@@ -6554,7 +6554,7 @@ func chatToolsUncached() []openai.Tool {
 			"type":       "object",
 			"properties": map[string]any{},
 		}),
-		functionTool("Skill", "Invoke a registered skill from the current skill listing. Use when the user wants to call a skill, or when you need instructions for a specific task covered by a skill.", map[string]any{
+		functionTool("skill", "Invoke a registered skill from the current skill listing. Use when the user wants to call a skill, or when you need instructions for a specific task covered by a skill.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"skill": map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "The exact name of the skill to invoke, spelled as it appears in the current skill listing (e.g. \"codebase-design\", \"diagnosing-bugs\")."},
@@ -6584,7 +6584,7 @@ var builtinToolExamples = map[string]string{
 	"remote_delete_path": `{"target":"ubuntu@example.com:/srv/app","path":"tmp/output","recursive":true}`,
 	"remote_run_command": `{"target":"ubuntu@example.com:/srv/app","command":"go test ./...","cwd":".","timeoutSeconds":120}`,
 	"grep_files":         `{"pattern":"TODO|FIXME","path":"frontend/src","glob":"*.vue","maxMatches":100}`,
-	"batch_read":         `one file: {"files":[{"path":"app.go"}]}; multiple/range: {"files":[{"path":"app.go"},{"path":"services.go","startLine":1,"endLine":200}]}`,
+	"read":               `one file: {"files":[{"path":"app.go"}]}; multiple/range: {"files":[{"path":"app.go"},{"path":"services.go","startLine":1,"endLine":200}]}`,
 	"memory_read":        `{"path":"coding-conventions.md"}`,
 	"memory_write":       `{"path":"coding-conventions.md","description":"Project coding conventions","content":"Use focused changes and run tests."}`,
 	"calculate":          `{"expression":"sqrt(144) + 2^3"}`,
@@ -6594,7 +6594,7 @@ var builtinToolExamples = map[string]string{
 	"create_goal":        `{"objective":"Make all tests pass","completionCriterion":"go test ./... exits successfully","maxTurns":10}`,
 	"update_goal":        `{"status":"complete","reason":"All required tests pass."}`,
 	"get_goal":           `{}`,
-	"Skill":              `{"skill":"review","args":"main"}`,
+	"skill":              `{"skill":"review","args":"main"}`,
 }
 
 func functionTool(name, description string, parameters map[string]any) openai.Tool {
@@ -6923,6 +6923,26 @@ func localMutationTarget(cfg ConfigState, filePath string) (fileMutationTarget, 
 	return fileMutationTarget{"local:" + keyPath, filepath.ToSlash(filePath)}, true
 }
 
+// toolNameAliases maps deprecated tool names to their canonical names.
+// Add an entry here when renaming a built-in tool so historical sessions
+// (whose persisted tool_call names are the old spelling) keep dispatching
+// correctly. The map is consulted after lower-casing, so aliases must use
+// lowercase keys. MCP tool names (mcp__*) are never aliased here.
+var toolNameAliases = map[string]string{
+	"batch_read": "read", // legacy name; kept so historical sessions keep dispatching
+}
+
+// normalizeToolName lower-cases the incoming tool name and resolves any
+// deprecated alias to its canonical name. It is the single entry point for
+// tool-name normalization in executeTool.
+func normalizeToolName(name string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if canonical, ok := toolNameAliases[name]; ok {
+		return canonical
+	}
+	return name
+}
+
 func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name string, args []byte) toolResult {
 	decode := func(v any) error {
 		if len(bytes.TrimSpace(args)) == 0 {
@@ -6939,6 +6959,12 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		}
 		return nil
 	}
+
+	// Normalize once at the boundary: lower-case for case-insensitivity and
+	// resolve deprecated aliases so historical sessions keep working after a
+	// rename. MCP tools (mcp__*) pass through unchanged because their
+	// sanitized names are already lowercase.
+	name = normalizeToolName(name)
 
 	var data any
 	var err error
@@ -7107,7 +7133,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		if err == nil {
 			data, err = a.grepFilesWithConfig(ctx, cfg, reqGF)
 		}
-	case "batch_read":
+	case "read":
 		var reqBR BatchReadRequest
 		err = decode(&reqBR)
 		if err == nil {
@@ -7204,7 +7230,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		if err == nil {
 			data = a.getGoalResult(sessionID)
 		}
-	case "Skill":
+	case "skill":
 		var skReq struct {
 			Skill string `json:"skill"`
 			Args  string `json:"args,omitempty"`
@@ -7824,17 +7850,17 @@ func subagentSystemPrompt() string {
 
 # Tool Use
 
-Prefer dedicated tools over shell commands: grep_files for search, batch_read for file content, edit/create_file/delete_path for file changes, list_files for directory listings.
+Prefer dedicated tools over shell commands: grep_files for search, read for file content, edit/create_file/delete_path for file changes, list_files for directory listings.
 
 **Batch and parallelize aggressively** — this is the #1 way to reduce round-trips:
-- If you need file contents, prefer one batch_read call with all relevant paths instead of separate reads.
+- If you need file contents, prefer one read call with all relevant paths instead of separate reads.
 - If you need to edit files, put all cross-file changes in one edit call.
 - If you need to search across files, send one grep_files instead of reading each file.
 - The backend executes independent non-file tool calls in parallel; built-in file mutations are ordered by tool-call index.
 
 # Edit Rules
 
-- Read files before their first edit. batch_read returns raw content and version; edit accepts a files array with path, version, and changes per file.
+- Read files before their first edit. read returns raw content and version; edit accepts a files array with path, version, and changes per file.
 - A successful edit returns the new version for every file. Reuse it for a follow-up edit when exact current oldText is already known. Re-read only when content is unknown, external modification is possible, or E_VERSION_MISMATCH/E_NO_MATCH/E_MULTI_MATCH occurs.
 - Put every independent replacement for the same file in one edit call. Each oldText must be non-empty, exact, unique in the original snapshot, and non-overlapping with other changes.
 - Empty newText deletes oldText. Insert by replacing a unique anchor with the anchor plus inserted content.
@@ -7932,7 +7958,7 @@ func (a *App) subagentTools(cfg ConfigState) []openai.Tool {
 		"update_goal":    true,
 		"get_goal":       true,
 		"todo_write":     true,
-		"Skill":          true,
+		"skill":          true,
 		"memory_write":   true,
 		"scheduled_task": true,
 		"ask":            true,
@@ -7958,7 +7984,7 @@ func trackFileFromToolResult(name string, args string, result *toolResult, files
 		*list = append(*list, p)
 	}
 	switch name {
-	case "read_file", "batch_read":
+	case "read", "read_file", "batch_read":
 		// extract path from args
 		var req struct {
 			Path  string   `json:"path"`
@@ -8014,7 +8040,7 @@ func toolResultSummary(name string, result *toolResult) string {
 			}
 			return fmt.Sprintf("%d lines (%d-%d of %d)", count, r.StartLine, r.EndLine, r.TotalLines)
 		}
-	case "batch_read":
+	case "read", "batch_read":
 		data, _ := json.Marshal(result.Data)
 		var r BatchReadResult
 		if json.Unmarshal(data, &r) == nil {
@@ -8165,7 +8191,7 @@ func compactToolResultForModel(name string, result toolResult, fullJSON string) 
 			"postEditNote":     "Reuse version for a follow-up edit when exact current oldText is known; otherwise re-read the file.",
 		}
 		if r.Diff != "" {
-			data["diffOmitted"] = "Full diff omitted from model context to reduce tokens; use batch_read around firstChangedLine/lastChangedLine if exact post-edit content is needed."
+			data["diffOmitted"] = "Full diff omitted from model context to reduce tokens; use read around firstChangedLine/lastChangedLine if exact post-edit content is needed."
 		}
 		return marshalToolResultOrFallback(toolResult{OK: true, Data: data}, fullJSON)
 	case "run_command", "remote_run_command":
@@ -8307,7 +8333,7 @@ func compactToolResultForModel(name string, result toolResult, fullJSON string) 
 			data["matchesReduced"] = true
 			data["originalMatchCount"] = len(matches)
 			data["matchesOmitted"] = len(matches) - maxModelGrepMatches
-			data["reductionNote"] = "grep_files matches shortened for model context; UI received the full result. Use a narrower pattern/path/glob or batch_read specific files if more exact context is needed."
+			data["reductionNote"] = "grep_files matches shortened for model context; UI received the full result. Use a narrower pattern/path/glob or read specific files if more exact context is needed."
 		}
 		return marshalToolResultOrFallback(toolResult{OK: true, Data: data}, fullJSON)
 	case "http_request":
@@ -8343,7 +8369,7 @@ func compactToolResultForModel(name string, result toolResult, fullJSON string) 
 		if reduced {
 			data["bodyReduced"] = true
 			data["originalBodyChars"] = len(r.Body)
-			data["reductionNote"] = "The response exceeded the model-context safety cap. Narrow the request, use an API pagination parameter, or saveTo a workspace file and inspect it with batch_read when the full body is required."
+			data["reductionNote"] = "The response exceeded the model-context safety cap. Narrow the request, use an API pagination parameter, or saveTo a workspace file and inspect it with read when the full body is required."
 		}
 		return marshalToolResultOrFallback(toolResult{OK: true, Data: data}, fullJSON)
 	case "web_fetch":
@@ -10895,7 +10921,7 @@ func buildWorkspaceMapContext(root string) string {
 		b.WriteString(name)
 		b.WriteString("\n")
 	}
-	b.WriteString("\nUse batch_read for file contents only when needed.\n")
+	b.WriteString("\nUse read for file contents only when needed.\n")
 	return b.String()
 }
 
@@ -11570,7 +11596,7 @@ func validateModelEditToolRequest(files []FileTextEdits) error {
 
 func validateVersion(version string) error {
 	if strings.TrimSpace(version) == "" {
-		return codedToolError("E_VERSION_REQUIRED", errors.New("version is required; read the file with batch_read and pass its version"))
+		return codedToolError("E_VERSION_REQUIRED", errors.New("version is required; read the file with read and pass its version"))
 	}
 	if !isValidVersion(version) {
 		return codedToolError("E_BAD_VERSION", errors.New("version must be exactly 12 Crockford Base32 characters"))
@@ -11877,7 +11903,7 @@ func buildLineNumberContextBlock(result string, firstLine, lastLine int) string 
 		end = len(lines)
 	}
 	if end < start || end-start+1 > changedLineMaxOutputLines {
-		return "Changed lines omitted; use batch_read for follow-up edits."
+		return "Changed lines omitted; use read for follow-up edits."
 	}
 	width := len(strconv.Itoa(end))
 	var b strings.Builder
@@ -11887,7 +11913,7 @@ func buildLineNumberContextBlock(result string, firstLine, lastLine int) string 
 		b.WriteString(formatNumberedLine(lineNum, lines[lineNum-1], width))
 	}
 	if b.Len() > changedLineTextBudgetBytes {
-		return "Changed lines omitted; use batch_read for follow-up edits."
+		return "Changed lines omitted; use read for follow-up edits."
 	}
 	return b.String()
 }

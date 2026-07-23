@@ -1374,7 +1374,7 @@ Files that are architecturally critical, frequently changed, or very large. Use:
 
 ## Verification
 
-After writing, read back the file with batch_read and confirm:
+After writing, read back the file with read and confirm:
 1. It has at least 15 lines of meaningful content.
 2. It starts with H1: \`# Code Graph: <name>\`.
 3. It contains \`## Language and Build\`, \`## Module Hierarchy\`, and at least two of the other H2 sections.
@@ -1522,8 +1522,8 @@ const displayMessages = computed(() => {
       while (j < src.length && src[j].role === 'tool_call' && src[j].kind === 'read' && src[j].status !== 'error') j++;
       const count = j - i;
       if (count < 2) {
-        // Single read card — handle batch_read specially
-        if (m.name === 'batch_read' && m.batchEntries && m.batchEntries.length > 0) {
+        // Single read card — handle read (and legacy batch_read) specially
+        if ((m.name === 'read' || m.name === 'batch_read') && m.batchEntries && m.batchEntries.length > 0) {
           out.push({
             role: 'tool_call',
             kind: 'read-group',
@@ -1561,8 +1561,8 @@ const displayMessages = computed(() => {
       let hasError = false;
       while (i < j) {
         const entry = src[i];
-        // If this is a batch_read with parsed entries, expand inline
-        if (entry.name === 'batch_read' && entry.batchEntries && entry.batchEntries.length > 0) {
+        // If this is a read (or legacy batch_read) with parsed entries, expand inline
+        if ((entry.name === 'read' || entry.name === 'batch_read') && entry.batchEntries && entry.batchEntries.length > 0) {
           for (const be of entry.batchEntries) {
             const entryStatus = be.status || entry.status;
             if (entryStatus === 'error') hasError = true;
@@ -2821,8 +2821,8 @@ function bindRuntimeEvents() {
           }
         } catch (_) { /* ignore */ }
       }
-      // Store file entries for batch_read (used in tree display)
-      if (data.name === 'batch_read') {
+      // Store file entries for read (and legacy batch_read) (used in tree display)
+      if (data.name === 'read' || data.name === 'batch_read') {
         try {
           const rp = JSON.parse(data.result);
           if (rp.data && rp.data.files) {
@@ -5388,7 +5388,7 @@ function toolKind(name) {
   if (name === 'ask') return 'ask';
   if (name === 'calculate') return 'calculate';
   if (name === 'list_files' || name === 'remote_list_files') return 'list';
-  if (name === 'read_file' || name === 'remote_read_file' || name === 'batch_read' || name === 'document_read') return 'read';
+  if (name === 'read' || name === 'read_file' || name === 'remote_read_file' || name === 'batch_read' || name === 'document_read') return 'read';
   if (name === 'Glob') return 'glob';
   if (name === 'grep_files') return 'grep';
   if (name === 'run') return 'run';
@@ -5397,6 +5397,7 @@ function toolKind(name) {
   if (name === 'memory_read' || name === 'memory_write') return 'memory';
   if (name === 'create_goal' || name === 'update_goal' || name === 'get_goal') return 'goal';
   if (name === 'subagent' || name === 'agent_delegate') return 'subagent';
+  if (name === 'skill' || name === 'Skill') return 'skill';
   if (name === 'render_html') return 'render_html';
 
   return 'other';
@@ -5482,7 +5483,7 @@ function makeToolTitle(name, args, meta = {}) {
     if (parsed.target) return `${parsed.target}${parsed.path ? ' · ' + parsed.path : ''}`;
     return parsed.path || parsed.pattern || '';
   }
-  if (name === 'batch_read') {
+  if (name === 'read' || name === 'batch_read') {
     if (parsed.path) return parsed.path;
     const paths = Array.isArray(parsed.paths) ? parsed.paths : [];
     if (paths.length > 0) return paths.join(', ');
@@ -5508,6 +5509,12 @@ function makeToolTitle(name, args, meta = {}) {
   }
   if (name === 'render_html') {
     return parsed.title || '';
+  }
+  if (name === 'skill' || name === 'Skill') {
+    const skillName = parsed.skill || '';
+    const skillArgs = parsed.args || '';
+    if (skillName && skillArgs) return `${skillName} · ${skillArgs}`;
+    return skillName || '';
   }
   return '';
 }
@@ -5546,8 +5553,8 @@ function formatToolChip(name, result) {
         return formatReadChip(linesReturned, tokenCount);
       }
     }
-    // batch_read: list each file as separate line
-    if (name === 'batch_read' && parsed.data) {
+    // read (and legacy batch_read): list each file as separate line
+    if ((name === 'read' || name === 'batch_read') && parsed.data) {
       if (!parsed.data.files || !Array.isArray(parsed.data.files)) return '';
       const lines = parsed.data.files.map(f => {
         const path = f.path || '';
@@ -5699,8 +5706,8 @@ function formatToolBody(name, body) {
       if (d.output) return d.output;
       return '';
     }
-    // batch_read result: show each file's content
-    if (name === 'batch_read' && parsed.data) {
+    // read (and legacy batch_read) result: show each file's content
+    if ((name === 'read' || name === 'batch_read') && parsed.data) {
       const d = parsed.data;
       if (d.files && Array.isArray(d.files)) {
         return d.files.map(f => {
@@ -5817,7 +5824,7 @@ function formatToolBody(name, body) {
       return out.slice(0, 12000);
     }
     // Skill result: show loaded skill name, not the full JSON wrapper.
-    if (name === 'Skill' && parsed.data) {
+    if ((name === 'skill' || name === 'Skill') && parsed.data) {
       if (parsed.data.message) return parsed.data.message;
       if (parsed.data.name) return 'Skill loaded: ' + parsed.data.name;
     }

@@ -252,7 +252,7 @@ Tool result channels:
 
 - Frontend receives full JSON via `tool:result` / `tool:error`.
 - Model context receives compacted JSON from `compactToolResultForModel()`.
-- `batch_read` content is intentionally not compacted so exact raw snippets remain copyable into edit changes.
+- `read` content is intentionally not compacted so exact raw snippets remain copyable into edit changes.
 
 `saveHistory()`:
 
@@ -285,7 +285,7 @@ Skill metadata:
 
 - Only enabled skills are listed in the system prompt.
 - Full skill Markdown is not injected by default.
-- Disabled skills are omitted from metadata and cannot be loaded through the `Skill` tool.
+- Disabled skills are omitted from metadata and cannot be loaded through the `skill` tool.
 
 Global memory metadata:
 
@@ -335,7 +335,7 @@ Skill settings are controlled by `disabledSkills` in `ConfigState`.
 Disabled skills remain visible in Settings but:
 
 - are not injected into the system prompt metadata
-- are not available to the model through the `Skill` tool
+- are not available to the model through the `skill` tool
 - are marked off in the Settings → Skills page
 
 ### Full Skill Loading
@@ -378,7 +378,7 @@ Built-in model-facing tools:
 | Tool | Purpose |
 |------|---------|
 | `list_files` | List files/directories with depth and limit controls |
-| `batch_read` | Read one or many local files; text returns raw copyable content, documents return extracted text |
+| `read` | Read one or many local files; text returns raw copyable content, documents return extracted text |
 | `edit` | Atomically apply one or many exact replacements to one local file |
 | `create_file` | Create/overwrite text files |
 | `delete_path` | Delete files/directories |
@@ -396,7 +396,7 @@ Built-in model-facing tools:
 | `subagent` | Spawn a sub-agent for a scoped task |
 | `scheduled_task` | Create, list, or delete temporary isolated Agent tasks for the current Ally process |
 | `create_goal`, `update_goal`, `get_goal` | Goal mode lifecycle |
-| `Skill` | Load an enabled skill |
+| `skill` | Load an enabled skill |
 
 MCP tools are named:
 
@@ -408,7 +408,7 @@ mcp__<serverName>__<toolName>
 
 ## Read/Edit Architecture
 
-`batch_read` is the only model-facing local read tool.
+`read` is the only model-facing local read tool.
 
 Accepted read forms:
 
@@ -442,12 +442,12 @@ The model-facing `edit` tool has one cross-file batch exact-replacement mode. Li
 Edit parameters:
 
 - `files` (1–20 items)
-- each file contains `path`, required `version` from `batch_read`, and 1–50 `changes`
+- each file contains `path`, required `version` from `read`, and 1–50 `changes`
 - each change contains non-empty `oldText` and `newText`; one call permits at most 200 total changes
 
 Important edit contract:
 
-- Read the file first with `batch_read`.
+- Read the file first with `read`.
 - `version` is mandatory for model-facing local and remote edits. It is a short optimistic-concurrency token; a stale value fails with `E_VERSION_MISMATCH`, and malformed values fail with `E_BAD_VERSION`.
 - Successful edits return the new `version` per file. It may be reused directly for a follow-up edit when the exact current `oldText` is already known; re-read only when content is unknown, external modification is possible, or a version/match error occurs.
 - Every `oldText` is matched against the same original version snapshot and must occur exactly once.
@@ -742,9 +742,9 @@ Verification is done with a single command:
 - `web_fetch` keeps the default readable-page payload intact for model context. HTTP/web results use a larger dedicated model cap and include explicit reduction metadata only when that cap is exceeded.
 - The scheduled-task drawer is opened from `ComposerInfoBar`, displays full task state and latest output, and supports manual deletion/cancellation. Model-facing `scheduled_task.list` returns bounded metadata without stored output and must not be polled.
 - `compactToolResultForModel()` is the source of truth for model-side tool-result reduction.
-- `batch_read` is the model-facing local read tool; `read_file` may exist for backend compatibility but should not be exposed to the model.
+- `read` is the model-facing local read tool; `read_file` and the legacy `batch_read` alias may exist for backend compatibility but should not be exposed to the model as primary names.
 - Skills are default-enabled metadata only; disabled skills persist through `disabledSkills`.
-- Full skill Markdown is loaded only by explicit user slash command or enabled `Skill` tool call.
+- Full skill Markdown is loaded only by explicit user slash command or enabled `skill` tool call.
 - Settings → Skills manages enable/disable state and does not inject full skill content.
 - Settings → MCP manages raw MCP JSON and reconnects servers.
 - Settings → Models owns provider presets and the current active provider/model. Known provider/model quick setup is generated from `docs/model_api.json` into a compact, lazily loaded frontend catalog; only Ally-compatible text-output models with tool calling are included, while custom configuration remains available. Model presets can be exported as unencrypted JSON (including API keys) and incrementally imported; normalized `providerName + model` is the identity, matching entries are replaced, and unrelated presets are retained.

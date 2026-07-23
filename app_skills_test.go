@@ -118,8 +118,8 @@ func TestBuildSkillDirTreeListsOneLevel(t *testing.T) {
 	if strings.Contains(tree, ".hidden") {
 		t.Fatalf("tree should exclude hidden files, got:\n%s", tree)
 	}
-	if !strings.Contains(tree, "batch_read") {
-		t.Fatalf("tree should hint at batch_read, got:\n%s", tree)
+	if !strings.Contains(tree, "read") {
+		t.Fatalf("tree should hint at read, got:\n%s", tree)
 	}
 }
 

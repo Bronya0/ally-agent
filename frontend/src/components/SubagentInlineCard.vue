@@ -185,7 +185,7 @@ function toolArgsTitle(tc) {
   if (name === 'create_file' || name === 'delete_path' || name === 'remote_create_file' || name === 'remote_delete_path') {
     return parsed.target ? `${parsed.target} · ${parsed.path || ''}` : (parsed.path || '');
   }
-  if (name === 'batch_read' || name === 'read_file' || name === 'remote_read_file') {
+  if (name === 'read' || name === 'batch_read' || name === 'read_file' || name === 'remote_read_file') {
     if (parsed.target) return `${parsed.target} · ${parsed.path || ''}`;
     if (parsed.path) return parsed.path;
     const paths = Array.isArray(parsed.paths) ? parsed.paths : [];
@@ -217,8 +217,8 @@ function toolArgsTitle(tc) {
   if (name === 'render_html') {
     return parsed.title || '';
   }
-  if (name === 'Skill') {
-    return parsed.name || '';
+  if (name === 'skill' || name === 'Skill') {
+    return parsed.skill || '';
   }
   if (name === 'todo_write') {
     const todos = Array.isArray(parsed.todos) ? parsed.todos : [];

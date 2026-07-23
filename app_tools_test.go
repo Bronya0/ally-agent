@@ -319,7 +319,7 @@ func TestGrillModeFiltersSideEffectToolSchemas(t *testing.T) {
 			t.Fatalf("expected %s schema to be filtered in grill mode", blocked)
 		}
 	}
-	for _, allowed := range []string{"list_files", "batch_read", "grep_files", "memory_read", "calculate", "ask", "get_goal", "Skill"} {
+	for _, allowed := range []string{"list_files", "read", "grep_files", "memory_read", "calculate", "ask", "get_goal", "skill"} {
 		if !names[allowed] {
 			t.Fatalf("expected %s schema to remain available in grill mode", allowed)
 		}
