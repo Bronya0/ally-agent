@@ -237,7 +237,6 @@ import {
   ResetWorkspaceTokenUsage,
   GetSubagents,
   GetGitStatus,
-  ReloadConfig,
   SaveConfig,
   SelectWorkspace,
   StartChat,
@@ -247,7 +246,6 @@ import {
   OpenWorkspaceInFileManager,
   ActivateSkill,
   DeactivateSkill,
-  ClearSkills,
   GetActiveSkills,
   SwitchModel,
   GetTodos,
@@ -1212,12 +1210,9 @@ const builtinCommands = [
   { key: 'new', label: '/new', description: t('commands.new'), text: '', special: 'new' },
   { key: 'goal', label: '/goal', description: t('commands.goal'), text: '', special: 'goal' },
   { key: 'skills', label: '/skills', description: t('commands.skills'), text: '', special: 'skills' },
-  { key: 'clearskills', label: '/clearskills', description: t('commands.clearSkills'), text: '', special: 'clear_skills' },
   { key: 'sessions', label: '/sessions', description: t('commands.sessions'), text: '', special: 'sessions' },
-  { key: 'reload', label: '/reload', description: t('commands.reload'), text: '', special: 'reload' },
   { key: 'init', label: '/init', description: t('commands.init'), text: '', special: 'init' },
   { key: 'note', label: '/note', description: t('commands.note'), text: '', special: 'remember' },
-  { key: 'remember', label: '/remember', description: t('commands.remember'), text: '', special: 'remember' },
   { key: 'codegraph', label: '/codegraph', description: t('commands.codegraph'), text: '', special: 'codegraph' },
   { key: 'compact', label: '/compact', description: t('commands.compact'), text: '', special: 'compact' },
 ];
@@ -1279,7 +1274,7 @@ You are a code graph generator. Your output is NOT for humans — it is for anot
 
 CODEGRAPH.md MUST follow this exact structure. Every section is an H2. The file starts with a single H1: \`# Code Graph: <project-name>\`. All paths are workspace-relative. End the file with a blank line.
 
-### H2: Language and Build
+Use this exact H2 heading: \`## Language and Build\`.
 One line per major language/framework. Use bullet list:
 - language: <name> (<version or toolchain if detected>)
 
@@ -1289,7 +1284,7 @@ Examples:
 - language: Python 3.11 / Poetry (pyproject.toml)
 - language: Rust 1.78 (Cargo.toml)
 
-### H2: Module Hierarchy
+Use this exact H2 heading: \`## Module Hierarchy\`.
 Hierarchical bullet list. Each directory/module node has a semantic tag and a one-line purpose statement. Files under it show what the file contributes.
 
 Format:
@@ -1312,7 +1307,7 @@ Semantic tags (pick the best single tag per node):
 - \`[proto]\` — protobuf / IDL / schema definitions
 - \`[build]\` — build scripts, CI/CD, Docker, tooling
 
-### H2: Key Types / Interfaces
+Use this exact H2 heading: \`## Key Types / Interfaces\`.
 For each module, list the most architecturally important types. One type per line. Use the format:
 \`[<kind>] <name> — <responsibility>\`
 
@@ -1320,7 +1315,7 @@ Type kinds: struct, class, interface, trait, enum, config, typedef, type, protoc
 
 Only include types that appear across files or are central to the architecture. Skip internal helpers and trivial wrappers.
 
-### H2: Call Flow / Data Flow
+Use this exact H2 heading: \`## Call Flow / Data Flow\`.
 Show the main execution paths. Use indented arrow notation. Indent increases with call depth.
 
 Format:
@@ -1344,7 +1339,7 @@ Example:
     - [data] streamModelResponse() ← stream delta [entry]
   - [call] StartChat → executeTool()  [handler]
 
-### H2: Inter-Module Dependencies
+Use this exact H2 heading: \`## Inter-Module Dependencies\`.
 Edges between modules. Format:
 \`<relative-path> → <relative-path>  // <nature of dependency>\`
 
@@ -1353,7 +1348,7 @@ app/ → model_provider/  // LLM streaming calls
 app/ → mcp/  // MCP tool discovery and dispatch
 app/ → proxy/  // HTTP proxy resolution
 
-### H2: Hot Paths / Files to Focus
+Use this exact H2 heading: \`## Hot Paths / Files to Focus\`.
 Files that are architecturally critical, frequently changed, or very large. Use:
 - \`[***] <path> — <reason>\`  — critical, central, or very large
 - \`[**] <path> — <reason>\`   — important
@@ -1375,7 +1370,7 @@ Files that are architecturally critical, frequently changed, or very large. Use:
 After writing, read back the file with batch_read and confirm:
 1. It has at least 15 lines of meaningful content.
 2. It starts with H1: \`# Code Graph: <name>\`.
-3. It contains \`### Language and Build\`, \`### Module Hierarchy\`, and at least two of the other H2 sections.
+3. It contains \`## Language and Build\`, \`## Module Hierarchy\`, and at least two of the other H2 sections.
 4. The last line is blank.
 
 If any check fails, diagnose and fix. If the project is too small for a full code graph, note that the codebase is small and list the files with their roles.
@@ -3890,18 +3885,6 @@ function onMcpSaved() {
 }
 
 
-async function reloadConfigFromFile() {
-  try {
-    const loaded = await ReloadConfig();
-    assignConfig(config, loaded);
-    assignConfig(configDraft, loaded);
-    syncConfigToActiveTab();
-    message.success(t('app.config.reloaded', { model: loaded.model || '-' }));
-  } catch (err) {
-    message.error(t('app.config.reloadFailed', { error: err }));
-  }
-}
-
 const filteredCommands = computed(() => {
   const value = promptText.value;
   if (!value.startsWith('/')) return commands.value;
@@ -4247,20 +4230,8 @@ async function handleBuiltinCommand(command) {
     commandMenuVisible.value = false;
     return true;
   }
-  if (command.special === 'clear_skills') {
-    await clearLoadedSkills();
-    promptText.value = '';
-    commandMenuVisible.value = false;
-    return true;
-  }
   if (command.special === 'sessions') {
     showSessionList();
-    promptText.value = '';
-    commandMenuVisible.value = false;
-    return true;
-  }
-  if (command.special === 'reload') {
-    await reloadConfigFromFile();
     promptText.value = '';
     commandMenuVisible.value = false;
     return true;
@@ -4295,20 +4266,23 @@ async function handleBuiltinCommand(command) {
 function handleCodeGraphCommand() {
   const session = activeSession.value;
   if (!session) return;
-  session.messages.push({ role: 'user', content: CODEGRAPH_PROMPT, done: true });
+  const userMessage = { role: 'user', content: '/codegraph', done: true };
+  session.messages.push(userMessage);
   if (isDefaultSessionTitle(session.title)) {
     session.title = t('app.codegraph.title');
   }
+  addPromptHistory('/codegraph');
   scrollMessagesToBottom();
   saveSessions();
 
-  const history = session.messages
-    .filter(isModelHistoryMessage)
-    .map((msg) => ({ role: msg.role, content: msg.content }));
+  const history = buildSessionMessagesForModel(session, {
+    message: userMessage,
+    content: CODEGRAPH_PROMPT,
+    attachments: [],
+  });
 
-  const text = CODEGRAPH_PROMPT;
   markSessionRunning(session);
-  StartChat({ sessionId: session.id, message: text, messages: history, grillMode: !!session.grillMode, config: { ...config } })
+  StartChat({ sessionId: session.id, message: CODEGRAPH_PROMPT, messages: history, grillMode: !!session.grillMode, config: { ...config } })
     .catch((err) => {
       session.runId = '';
       session.isRunning = false;
@@ -5360,23 +5334,6 @@ async function toggleSkillFromSettings(skill, active) {
     }
   } finally {
     skillToggleInFlight.value = '';
-  }
-}
-
-async function clearLoadedSkills(announce = true) {
-  try {
-    await ClearSkills();
-    // Refresh skill list to update command menu
-    try { await refreshSkillState(); } catch (_) { /* ignore */ }
-    if (announce) {
-      pushMessage('assistant', t('app.skills.allDeactivated'), { system: true });
-    }
-    message.success(t('app.skills.deactivatedToast'));
-  } catch (err) {
-    message.error(t('app.skills.deactivateFailed', { error: err }));
-  }
-  if (announce) {
-    scrollMessagesToBottom();
   }
 }
 
