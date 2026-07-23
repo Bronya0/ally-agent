@@ -170,7 +170,6 @@
                   @open-config="configVisible = true"
                   @open-git-diff="openGitDiff"
                   @open-workspace="openWorkspaceInFileManager"
-                  @jump-question="jumpToUserQuestion"
                   @set-run-mode="setRunMode"
                   @open-task-center="openTaskCenter"
                   @new-session="createNewSession"
@@ -3276,9 +3275,6 @@ function scrollMessagesToBottom(options = {}) {
   nextTick(() => chatMessagesRef.value?.scrollToBottom(options));
 }
 
-function jumpToUserQuestion(direction) {
-  nextTick(() => chatMessagesRef.value?.scrollToUserQuestion(direction));
-}
 
 function focusTool(eventId) {
   focusedToolId.value = eventId;

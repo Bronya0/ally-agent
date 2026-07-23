@@ -525,8 +525,7 @@ code, pre {
 .composer-info .info-workspace,
 .composer-info .info-git,
 .composer-info .info-context,
-.composer-info .scheduled-task-chip,
-.composer-info .question-jump-controls {
+.composer-info .scheduled-task-chip {
   display: inline-flex;
   align-items: center;
 }
@@ -774,34 +773,6 @@ code, pre {
 .composer-info .export-btn:hover {
   color: #e5e5e5;
   background: rgba(255, 255, 255, 0.06);
-}
-
-.question-jump-controls {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  flex-shrink: 0;
-  margin-right: 8px;
-  --wails-draggable: no-drag;
-}
-
-.question-jump-btn {
-  width: 18px;
-  height: 18px;
-  padding: 0;
-  color: #8a8a8a;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 5px;
-  background: rgba(255, 255, 255, 0.025);
-  font-size: 12px;
-  line-height: 16px;
-  cursor: pointer;
-}
-
-.question-jump-btn:hover {
-  color: #e5e5e5;
-  border-color: color-mix(in srgb, var(--ally-accent) 28%, transparent);
-  background: color-mix(in srgb, var(--ally-accent) 12%, transparent);
 }
 
 .git-stat {

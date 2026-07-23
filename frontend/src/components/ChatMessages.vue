@@ -65,9 +65,14 @@
         </div>
       </div>
     </n-scrollbar>
-    <button v-if="showJumpToBottom" class="jump-bottom-btn" @click="jumpToBottom">
-      ↓
-    </button>
+    <div v-if="showJumpToBottom" class="jump-controls">
+      <button class="jump-circle-btn" :title="$t('composer.question.previous')" @click="scrollToUserQuestion('up')">
+        ↑
+      </button>
+      <button class="jump-circle-btn" @click="jumpToBottom">
+        ↓
+      </button>
+    </div>
   </div>
 </template>
 
@@ -422,11 +427,19 @@ defineExpose({ scrollbarRef, scrollToBottom, scrollToUserQuestion, saveScrollPos
   min-height: 240px;
 }
 
-.jump-bottom-btn {
+.jump-controls {
   position: absolute;
   right: 24px;
   bottom: 18px;
   z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: center;
+  --wails-draggable: no-drag;
+}
+
+.jump-circle-btn {
   padding: 7px 12px;
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 999px;
@@ -440,7 +453,7 @@ defineExpose({ scrollbarRef, scrollToBottom, scrollToUserQuestion, saveScrollPos
   --wails-draggable: no-drag;
 }
 
-.jump-bottom-btn:hover {
+.jump-circle-btn:hover {
   color: #fff;
   background: rgba(55, 55, 55, 0.96);
   border-color: rgba(255, 255, 255, 0.2);

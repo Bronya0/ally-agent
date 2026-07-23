@@ -248,6 +248,11 @@ func generateTruncatedEditDiffHunk(oldLines, newLines []string, oldStart, oldCha
 
 	removed := oldLines[oldChangeStart:oldChangeEnd]
 	added := newLines[newChangeStart:newChangeEnd]
+	// The change span is too large for an O(n*m) LCS, so count true
+	// removed/added via a multiset difference instead of treating the whole
+	// span as remove-all/add-all. This keeps stats accurate for scattered
+	// small edits separated by thousands of unchanged lines.
+	spanRemoved, spanAdded := lineSetDeltaCounts(removed, added)
 	removedShown := minInt(len(removed), editDiffTruncatedLineLimit)
 	addedShown := minInt(len(added), editDiffTruncatedLineLimit)
 	for _, line := range removed[:removedShown] {
@@ -259,7 +264,7 @@ func generateTruncatedEditDiffHunk(oldLines, newLines []string, oldStart, oldCha
 	removedOmitted := len(removed) - removedShown
 	addedOmitted := len(added) - addedShown
 	if removedOmitted > 0 || addedOmitted > 0 {
-		body = append(body, fmt.Sprintf(" [diff truncated: omitted %d removed and %d added lines]", removedOmitted, addedOmitted))
+		body = append(body, fmt.Sprintf(" [diff truncated: %d removed and %d added lines in span]", spanRemoved, spanAdded))
 	}
 
 	for _, line := range newLines[newChangeEnd:newEnd] {
@@ -288,4 +293,31 @@ func maxInt(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// lineSetDeltaCounts returns the true number of removed and added lines
+// between two line slices using a multiset (bag) difference. Identical lines
+// cancel out; only the surplus on either side counts as a change.
+//
+// It is O(n+m) in time and space, making it suitable for large change spans
+// where an O(n*m) LCS is infeasible. It is order-insensitive, so block moves
+// or reordered repeated lines may be miscounted — but for the common case of
+// scattered small edits inside a large span it is far more accurate than the
+// previous remove-all/add-all approximation.
+func lineSetDeltaCounts(oldLines, newLines []string) (removed, added int) {
+	counts := make(map[string]int, len(oldLines)+len(newLines))
+	for _, line := range oldLines {
+		counts[line]++
+	}
+	for _, line := range newLines {
+		counts[line]--
+	}
+	for _, delta := range counts {
+		if delta > 0 {
+			removed += delta
+		} else if delta < 0 {
+			added += -delta
+		}
+	}
+	return removed, added
 }

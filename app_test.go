@@ -1307,7 +1307,7 @@ func TestHugeEditDiffPreviewIsTruncated(t *testing.T) {
 	if !strings.Contains(diff, "@@ -1,700 +1,700 @@") {
 		t.Fatalf("expected unified hunk header, got:\n%s", diff)
 	}
-	if !strings.Contains(diff, "[diff truncated: omitted") {
+	if !strings.Contains(diff, "[diff truncated:") {
 		t.Fatalf("expected truncation marker, got:\n%s", diff)
 	}
 	if strings.Contains(diff, "[diff omitted:") {

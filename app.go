@@ -11893,6 +11893,18 @@ func buildLineNumberContextBlock(result string, firstLine, lastLine int) string 
 }
 
 func countEditDiffStats(diff string, beforeLines, afterLines []string) (int, int) {
+	// The localized truncated-diff path emits an accurate span-total marker
+	// (computed via multiset difference) alongside the shown lines. It already
+	// reflects the true change size for the whole span, so return it directly
+	// instead of tallying +/- prefixes, which only cover the truncated prefix of
+	// the span and would otherwise count thousands of unchanged lines as
+	// removed/added.
+	if idx := strings.Index(diff, "[diff truncated: "); idx >= 0 {
+		var spanRemoved, spanAdded int
+		if _, err := fmt.Sscanf(diff[idx:], "[diff truncated: %d removed and %d added lines in span]", &spanRemoved, &spanAdded); err == nil {
+			return spanAdded, spanRemoved
+		}
+	}
 	added, removed := 0, 0
 	for _, line := range strings.Split(diff, "\n") {
 		if strings.HasPrefix(line, "+++") || strings.HasPrefix(line, "---") {
@@ -11904,15 +11916,14 @@ func countEditDiffStats(diff string, beforeLines, afterLines []string) (int, int
 			removed++
 		}
 	}
-	// When a large change span is localized and truncated, the diff embeds the
-	// omitted counts in a marker. Add them back so the UI stats reflect the true
-	// change size instead of only the lines actually shown.
+	// Legacy marker from older builds carried omitted counts on top of the
+	// shown lines. Keep supporting it for diffs produced before this change.
 	if idx := strings.Index(diff, "[diff truncated: omitted "); idx >= 0 {
 		var omittedRemoved, omittedAdded int
-		if _, err := fmt.Sscanf(diff[idx:], "[diff truncated: omitted %d removed and %d added lines]", &omittedRemoved, &omittedAdded); err == nil {
-			added += omittedAdded
-			removed += omittedRemoved
-		}
+			if _, err := fmt.Sscanf(diff[idx:], "[diff truncated: omitted %d removed and %d added lines]", &omittedRemoved, &omittedAdded); err == nil {
+				added += omittedAdded
+				removed += omittedRemoved
+			}
 	}
 	return added, removed
 }

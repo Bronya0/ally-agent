@@ -58,10 +58,6 @@
       <span class="scheduled-task-icon">▤</span>
       <span>{{ taskCenterCount }}</span>
     </button>
-    <span class="question-jump-controls" :title="$t('composer.question.jump')">
-      <button type="button" class="question-jump-btn" :title="$t('composer.question.previous')" @click.stop="$emit('jumpQuestion', 'up')">↑</button>
-      <button type="button" class="question-jump-btn" :title="$t('composer.question.next')" @click.stop="$emit('jumpQuestion', 'down')">↓</button>
-    </span>
     <template v-if="gitStatus.isRepo">
       <span class="info-sep">·</span>
       <span class="info-git" :title="$t('composer.git.open')" @click.stop="$emit('openGitDiff')">
@@ -226,7 +222,7 @@ const props = defineProps({
   fmtK: { type: Function, required: true },
 });
 
-const emit = defineEmits(['switchModel', 'openConfig', 'openGitDiff', 'openWorkspace', 'jumpQuestion', 'setRunMode', 'openTaskCenter', 'newSession', 'showSessions']);
+const emit = defineEmits(['switchModel', 'openConfig', 'openGitDiff', 'openWorkspace', 'setRunMode', 'openTaskCenter', 'newSession', 'showSessions']);
 
 const contextPopoverVisible = ref(false);
 const currentModelLabel = computed(() => `${props.config.providerName || '-'} · ${props.config.model || '-'}`);
