@@ -132,7 +132,9 @@ jobs:
           dist/tools/rg --version
 
           version="${{ github.event.release.tag_name || github.ref_name }}"
-          tar -C dist -czf "${APP_NAME}-$version-linux-x64.tar.gz" .
+          root_dir="${APP_NAME}-$version-linux-x64"
+          # 打包时把顶层 dist 重命名为 root_dir，解压后所有文件归在统一目录下
+          tar -czf "${root_dir}.tar.gz" --transform "s,^dist,${root_dir}," dist
 
       - uses: actions/upload-artifact@v4
         with:

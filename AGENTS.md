@@ -9,12 +9,8 @@ This file is read by AI coding agents. Keep it current when the app architecture
 | Command | Description |
 |---------|-------------|
 | `wails dev` | Run the desktop app in development mode with hot reload |
-| `wails build` | Build a distributable desktop binary |
-| `go build ./...` | Compile the Go backend |
-| `go test ./...` | Run Go tests |
+| `wails build` | Build a distributable desktop binary (also the only verification command) |
 | `cd frontend && npm install` | Install frontend dependencies |
-| `cd frontend && npx vite build` | Build the Vue frontend |
-| `cd frontend && npm test` | Run frontend unit tests when present |
 | `wails generate module` | Regenerate Go-to-JS bindings after adding or changing exported Go methods |
 
 ## Git Convention
@@ -146,7 +142,7 @@ Connected MCP tools are sorted by server, tool name, and function name before be
 - `todos`: session-local todo list
 - `todoRevisions`: monotonic todo update revisions emitted with `todo:update`
 - `subRuns`: sub-agent progress records
-- `services`: active and recent background-service records; at most 8 run concurrently, each keeps a rolling 512 KiB buffer, and the latest 20 completed records/log snapshots are stored under `~/.ally_agent/service_history/`
+- `services`: active background-service records; at most 8 run concurrently, each keeps a rolling 512 KiB buffer, and terminal records are removed immediately
 - `scheduled`: process-local scheduled-task manager; definitions and results are cleared whenever Ally closes or starts
 - `fileOpsMu`: serializes local write/edit/delete operations
 - `gitDiffMu`: serializes/cancels git diff work
@@ -659,13 +655,13 @@ Legacy scheduled-task file (deleted on startup and no longer written):
 
 Scheduled tasks exist only for the current Ally process. Each execution uses fresh isolated context and a fixed workspace. Runs are globally serialized, cannot overlap with the same task, and retain only the latest bounded summary/error. Per-run defaults are 100 steps and one hour, configurable up to 1000 steps and 24 hours.
 
-Completed background-service history:
+Legacy completed background-service history (cleaned on startup and no longer written):
 
 ```text
 ~/.ally_agent/service_history/
 ```
 
-Service processes are stopped when Ally exits and are not auto-restarted. Their latest bounded output and metadata remain visible across restarts; retention is capped at 20 records and 512 KiB per service.
+Service processes are stopped when Ally exits and are not auto-restarted. Terminal service records are removed immediately and are not retained across restarts.
 
 Legacy config fallback:
 
@@ -708,9 +704,7 @@ Example MCP config:
 
 ## Tests And Verification
 
-Verification is done with a single command:
-
-- `wails build` — compiles the Go backend, builds the Vue frontend, and produces the desktop binary. This is the only verification command used.
+`wails build` is the only verification command. Run it when a change touches the Go backend; it compiles the backend, builds the Vue frontend, and produces the desktop binary. Pure frontend changes do not require verification.
 
 ---
 
@@ -807,7 +801,7 @@ lowercase + 冒号分隔，如 `run:delta`、`tool:result`、`mcp:status`、`sub
 - 前端 `App.vue` 用 `toolUpdateBuffers` Map + `setTimeout(120ms) → requestAnimationFrame` 批量 flush `tool:update`，并在 `tool:result` / `tool:error` / `run:done` / `run:error` / `run:cancelled` 处理前显式 `flushToolUpdateBuffer()`。`streamBuffers` 走同样的 `queueStreamDelta` 模式处理 `run:delta`。
 - 单 session `localStorage` 预算 240KB，大 tool 预览 / edit 参数 / 附件 Base64 / Diff 在序列化前剥除或截断。
 - 前端 Mermaid SVG DOM 视口外卸载，16 条 / 2M 字符 LRU；`render_html` 流式期间不挂载 iframe，完成后再挂一个 sandboxed iframe。
-- `run_command` / `background_process` 后端 rolling buffer 512KB / 进程，最多 8 个活动进程，最近 20 条完成记录存 `~/.ally_agent/service_history/`。
+- `run_command` / `background_process` 后端 rolling buffer 512KB / 进程，最多 8 个活动进程；服务停止或退出后立即清理记录。
 - 媒体预览用 revocable Blob URL，session 驱逐时 `URL.revokeObjectURL`；原图 Base64 仅在需要 model 输入时保留。
 - `AppHeader` 容器 `--wails-draggable: drag`，内部所有按钮 / 输入 / 下拉必须 `no-drag`；`ComposerInfoBar` 所有交互 span/button `no-drag`，否则下拉/点击会被拖拽逻辑吞掉。
 - 后台 goroutine（chat run / MCP / scheduled task / service process）都派生自 `app.ctx`，窗口关闭后随 ctx 取消。

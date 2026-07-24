@@ -65,7 +65,7 @@ flowchart TD
     startup --> fitWin[fitInitialWindowToScreen: 适配窗口尺寸]
     fitWin --> initCfg[ensureInitialized: 加载配置]
     startup --> initCfg
-    startup --> loadServices[loadServiceHistory: 恢复服务记录]
+    startup --> cleanupServices[loadServiceHistory: 清理旧版完成记录]
     startup --> startSched[startScheduledTaskManager: 启动定时任务]
     startup --> checkDep[延迟检测 ripgrep / Git Bash]
     startup --> mcpInit[初始化 MCP Manager]
@@ -214,7 +214,7 @@ flowchart TD
 
 - 最多 8 个并发活动进程
 - 每个进程 512KB 滚动输出缓冲
-- 最近 20 个已完成记录持久化到 `~/.ally_agent/service_history/`
+- 服务停止或退出后立即移除记录，不持久化完成历史
 - model 可通过 `background_process` 工具（start/stop/list/read）管理
 
 ### 6. 定时任务 (`scheduler.go`)
@@ -338,8 +338,7 @@ defaultSystemPrompt() → buildSystemPromptParts()
 | `defaultHTTPTimeout` | 60s | HTTP 请求超时 |
 | `defaultGrepTimeout` | 30s | grep 搜索超时 |
 | `maxActiveServices` | 8 | 活动后台服务上限 |
-| `maxCompletedServices` | 20 | 保留已完成服务记录上限 |
-| `serviceOutputLimit` | 512 KB | 单个服务输出缓冲上限 |
+| `serviceOutputLimit` | 512 KB | 单个服务活动期间的输出缓冲上限 |
 | `maxScheduledTasks` | 100 | 定时任务上限 |
 | `workspaceMapDepth` | 3 | 工作区文件树扫描深度 |
 | `workspaceMapLimit` | 320 | 工作区文件树条目上限 |
