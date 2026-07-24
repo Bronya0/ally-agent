@@ -59,6 +59,7 @@ type modelStreamEvent struct {
 	ReasoningDelta string
 	ToolCalls      []legacyopenai.ToolCall
 	Image          *modelImage
+	Retry          *modelRetryInfo
 }
 
 type modelImage struct {
@@ -66,6 +67,71 @@ type modelImage struct {
 	DataURL  string
 	MimeType string
 	Partial  bool
+}
+
+// modelRetryInfo 描述一次 LLM 请求重试,前端据此显示重试状态。
+type modelRetryInfo struct {
+	Attempt     int    // 第几次重试,从 1 开始
+	MaxAttempts int    // 最大重试次数(不含首次)
+	Error       string // 触发重试的错误信息
+	WaitMS      int    // 重试前等待毫秒数
+}
+
+// shouldRetryLLMError 判断错误是否值得重试(429/5xx/瞬时网络错误)。
+// context.Canceled / DeadlineExceeded 不重试。
+func shouldRetryLLMError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	if strings.Contains(msg, "429") || strings.Contains(msg, "too many requests") || strings.Contains(msg, "rate limit") {
+		return true
+	}
+	if strings.Contains(msg, "status code: 5") || strings.Contains(msg, "500 ") || strings.Contains(msg, "502 ") || strings.Contains(msg, "503 ") || strings.Contains(msg, "504 ") ||
+		strings.Contains(msg, "bad gateway") || strings.Contains(msg, "service unavailable") || strings.Contains(msg, "gateway timeout") || strings.Contains(msg, "internal server error") {
+		return true
+	}
+	if strings.Contains(msg, "timeout") || strings.Contains(msg, "timed out") ||
+		strings.Contains(msg, "eof") || strings.Contains(msg, "connection reset") ||
+		strings.Contains(msg, "broken pipe") || strings.Contains(msg, "no such host") ||
+		strings.Contains(msg, "connection refused") || strings.Contains(msg, "temporarily unavailable") {
+		return true
+	}
+	return false
+}
+
+// llmRetryDelay 返回第 attempt 次重试(从 1 开始)前的退避时间。
+// 500ms / 1s / 2s / 4s...,上限 10s。
+func llmRetryDelay(attempt int) time.Duration {
+	d := time.Duration(1<<uint(attempt-1)) * 500 * time.Millisecond
+	if d > 10*time.Second {
+		d = 10 * time.Second
+	}
+	return d
+}
+
+// emitLLMRetryEvent 通过 onEvent 通知调用方发生了一次重试。
+func emitLLMRetryEvent(onEvent func(modelStreamEvent), attempt, maxAttempts int, err error, wait time.Duration) {
+	if onEvent == nil || err == nil {
+		return
+	}
+	emitModelStreamEvent(onEvent, modelStreamEvent{Retry: &modelRetryInfo{
+		Attempt:     attempt,
+		MaxAttempts: maxAttempts,
+		Error:       err.Error(),
+		WaitMS:      int(wait.Milliseconds()),
+	}})
+}
+
+// effectiveLLMRetries 返回有效的最大重试次数。
+func effectiveLLMRetries(cfg ConfigState) int {
+	if cfg.LLMRetries > 0 {
+		return cfg.LLMRetries
+	}
+	return defaultLLMRetries
 }
 
 type modelStreamResult struct {
@@ -218,7 +284,8 @@ func (a *App) streamOpenAIChat(ctx context.Context, cfg ConfigState, model strin
 
 	var stream *legacyopenai.ChatCompletionStream
 	var err error
-	for attempt := 0; attempt <= defaultLLMRetries; attempt++ {
+	maxRetries := effectiveLLMRetries(cfg)
+	for attempt := 0; attempt <= maxRetries; attempt++ {
 		stream, err = client.CreateChatCompletionStream(ctx, streamReq)
 		if err != nil && strings.Contains(strings.ToLower(err.Error()), "stream_options") {
 			streamReq.StreamOptions = nil
@@ -227,7 +294,17 @@ func (a *App) streamOpenAIChat(ctx context.Context, cfg ConfigState, model strin
 		if err == nil || ctx.Err() != nil {
 			break
 		}
-		time.Sleep(time.Duration(attempt+1) * 500 * time.Millisecond)
+		if attempt < maxRetries && shouldRetryLLMError(err) {
+			wait := llmRetryDelay(attempt + 1)
+			emitLLMRetryEvent(onEvent, attempt+1, maxRetries, err, wait)
+			select {
+			case <-time.After(wait):
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			continue
+		}
+		break
 	}
 	if err != nil {
 		return nil, err
@@ -404,7 +481,26 @@ func (a *App) streamOpenAIResponses(ctx context.Context, cfg ConfigState, model 
 		body.ToolChoice = oaresp.ResponseNewParamsToolChoiceUnion{OfToolChoiceMode: oa.Opt(oaresp.ToolChoiceOptionsAuto)}
 	}
 
-	stream, err := newOpenAIResponsesSSEStream(ctx, cfg, body)
+	var stream *openAIResponsesSSEStream
+	var err error
+	maxRetries := effectiveLLMRetries(cfg)
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		stream, err = newOpenAIResponsesSSEStream(ctx, cfg, body)
+		if err == nil || ctx.Err() != nil {
+			break
+		}
+		if attempt < maxRetries && shouldRetryLLMError(err) {
+			wait := llmRetryDelay(attempt + 1)
+			emitLLMRetryEvent(onEvent, attempt+1, maxRetries, err, wait)
+			select {
+			case <-time.After(wait):
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			continue
+		}
+		break
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -634,10 +730,11 @@ func (s *openAIResponsesSSEStream) Close() error {
 
 func (a *App) streamAnthropicMessages(ctx context.Context, cfg ConfigState, model string, messages []legacyopenai.ChatCompletionMessage, tools []legacyopenai.Tool, onEvent func(modelStreamEvent)) (*modelStreamResult, error) {
 	baseURL := baseURLForAPIFormat(cfg)
+	// 关闭 SDK 内置重试,改用本模块统一的重试循环以便发出 run:retry 事件。
 	client := anthropic.NewClient(
 		anthropicoption.WithAPIKey(cfg.APIKey),
 		anthropicoption.WithBaseURL(baseURL),
-		anthropicoption.WithMaxRetries(defaultLLMRetries),
+		anthropicoption.WithMaxRetries(0),
 		anthropicoption.WithHTTPClient(httpClientWithUserAgent(cfg, true, 0)),
 	)
 
@@ -660,9 +757,7 @@ func (a *App) streamAnthropicMessages(ctx context.Context, cfg ConfigState, mode
 		params.CacheControl = anthropic.CacheControlEphemeralParam{TTL: anthropic.CacheControlEphemeralTTLTTL5m}
 	}
 
-	stream := client.Messages.NewStreaming(ctx, params)
-	defer stream.Close()
-
+	maxRetries := effectiveLLMRetries(cfg)
 	var assistant strings.Builder
 	var reasoning strings.Builder
 	toolCalls := []legacyopenai.ToolCall{}
@@ -671,74 +766,101 @@ func (a *App) streamAnthropicMessages(ctx context.Context, cfg ConfigState, mode
 	var stopReason string
 	var stopSequence string
 
-	for stream.Next() {
-		event := stream.Current()
-		switch event.Type {
-		case "message_start":
-			ev := event.AsMessageStart()
-			usage = modelUsageFromAnthropic(ev.Message.Usage)
-		case "message_delta":
-			ev := event.AsMessageDelta()
-			usage = mergeAnthropicUsage(usage, ev.Usage)
-			stopReason = string(ev.Delta.StopReason)
-			stopSequence = ev.Delta.StopSequence
-		case "content_block_start":
-			ev := event.AsContentBlockStart()
-			block := ev.ContentBlock
-			switch block.Type {
-			case "text":
-				if block.Text != "" {
-					assistant.WriteString(block.Text)
-					emitModelStreamEvent(onEvent, modelStreamEvent{ContentDelta: block.Text})
-				}
-			case "thinking":
-				if block.Thinking != "" {
-					reasoning.WriteString(block.Thinking)
-					emitModelStreamEvent(onEvent, modelStreamEvent{ReasoningDelta: block.Thinking})
-				}
-			case "tool_use":
-				idx := len(toolCalls)
-				toolIndexByBlock[ev.Index] = idx
-				args := ""
-				if block.Input != nil {
-					if raw, err := json.Marshal(block.Input); err == nil && string(raw) != "null" && string(raw) != "{}" {
-						args = string(raw)
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		assistant.Reset()
+		reasoning.Reset()
+		toolCalls = toolCalls[:0]
+		toolIndexByBlock = map[int64]int{}
+		usage = nil
+		stopReason = ""
+		stopSequence = ""
+		stream := client.Messages.NewStreaming(ctx, params)
+		gotAnyEvent := false
+		for stream.Next() {
+			gotAnyEvent = true
+			event := stream.Current()
+			switch event.Type {
+			case "message_start":
+				ev := event.AsMessageStart()
+				usage = modelUsageFromAnthropic(ev.Message.Usage)
+			case "message_delta":
+				ev := event.AsMessageDelta()
+				usage = mergeAnthropicUsage(usage, ev.Usage)
+				stopReason = string(ev.Delta.StopReason)
+				stopSequence = ev.Delta.StopSequence
+			case "content_block_start":
+				ev := event.AsContentBlockStart()
+				block := ev.ContentBlock
+				switch block.Type {
+				case "text":
+					if block.Text != "" {
+						assistant.WriteString(block.Text)
+						emitModelStreamEvent(onEvent, modelStreamEvent{ContentDelta: block.Text})
 					}
-				}
-				toolCalls = append(toolCalls, legacyopenai.ToolCall{
-					ID:   block.ID,
-					Type: legacyopenai.ToolTypeFunction,
-					Function: legacyopenai.FunctionCall{
-						Name:      block.Name,
-						Arguments: args,
-					},
-				})
-				emitModelStreamEvent(onEvent, modelStreamEvent{ToolCalls: cloneToolCalls(toolCalls)})
-			}
-		case "content_block_delta":
-			ev := event.AsContentBlockDelta()
-			delta := ev.Delta
-			switch delta.Type {
-			case "text_delta":
-				if delta.Text != "" {
-					assistant.WriteString(delta.Text)
-					emitModelStreamEvent(onEvent, modelStreamEvent{ContentDelta: delta.Text})
-				}
-			case "thinking_delta":
-				if delta.Thinking != "" {
-					reasoning.WriteString(delta.Thinking)
-					emitModelStreamEvent(onEvent, modelStreamEvent{ReasoningDelta: delta.Thinking})
-				}
-			case "input_json_delta":
-				if idx, ok := toolIndexByBlock[ev.Index]; ok {
-					toolCalls[idx].Function.Arguments += delta.PartialJSON
+				case "thinking":
+					if block.Thinking != "" {
+						reasoning.WriteString(block.Thinking)
+						emitModelStreamEvent(onEvent, modelStreamEvent{ReasoningDelta: block.Thinking})
+					}
+				case "tool_use":
+					idx := len(toolCalls)
+					toolIndexByBlock[ev.Index] = idx
+					args := ""
+					if block.Input != nil {
+						if raw, err := json.Marshal(block.Input); err == nil && string(raw) != "null" && string(raw) != "{}" {
+							args = string(raw)
+						}
+					}
+					toolCalls = append(toolCalls, legacyopenai.ToolCall{
+						ID:   block.ID,
+						Type: legacyopenai.ToolTypeFunction,
+						Function: legacyopenai.FunctionCall{
+							Name:      block.Name,
+							Arguments: args,
+						},
+					})
 					emitModelStreamEvent(onEvent, modelStreamEvent{ToolCalls: cloneToolCalls(toolCalls)})
+				}
+			case "content_block_delta":
+				ev := event.AsContentBlockDelta()
+				delta := ev.Delta
+				switch delta.Type {
+				case "text_delta":
+					if delta.Text != "" {
+						assistant.WriteString(delta.Text)
+						emitModelStreamEvent(onEvent, modelStreamEvent{ContentDelta: delta.Text})
+					}
+				case "thinking_delta":
+					if delta.Thinking != "" {
+						reasoning.WriteString(delta.Thinking)
+						emitModelStreamEvent(onEvent, modelStreamEvent{ReasoningDelta: delta.Thinking})
+					}
+				case "input_json_delta":
+					if idx, ok := toolIndexByBlock[ev.Index]; ok {
+						toolCalls[idx].Function.Arguments += delta.PartialJSON
+						emitModelStreamEvent(onEvent, modelStreamEvent{ToolCalls: cloneToolCalls(toolCalls)})
+					}
 				}
 			}
 		}
-	}
-	if err := stream.Err(); err != nil {
-		return nil, err
+		streamErr := stream.Err()
+		stream.Close()
+		if streamErr == nil {
+			break
+		}
+		// 已经 emit 过事件的内容不可重试(会重复输出),直接返回错误。
+		// 仅在尚未开始流输出时重试。
+		if !gotAnyEvent && ctx.Err() == nil && attempt < maxRetries && shouldRetryLLMError(streamErr) {
+			wait := llmRetryDelay(attempt + 1)
+			emitLLMRetryEvent(onEvent, attempt+1, maxRetries, streamErr, wait)
+			select {
+			case <-time.After(wait):
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			continue
+		}
+		return nil, streamErr
 	}
 	for i := range toolCalls {
 		if strings.TrimSpace(toolCalls[i].Function.Arguments) == "" {

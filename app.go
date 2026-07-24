@@ -335,6 +335,7 @@ type ConfigState struct {
 	ReasoningTag        string        `json:"reasoningTag,omitempty"`
 	Models              []ModelConfig `json:"models,omitempty"`
 	DisabledSkills      []string      `json:"disabledSkills,omitempty"`
+	LLMRetries          int           `json:"llmRetries,omitempty"`
 	grillMode           bool
 	temperatureSet      bool
 }
@@ -635,6 +636,7 @@ type CommandResult struct {
 	Output     string `json:"output"`
 	ExitCode   int    `json:"exitCode"`
 	TimedOut   bool   `json:"timedOut"`
+	Cancelled  bool   `json:"cancelled"`
 	DurationMS int64  `json:"durationMs"`
 	Truncated  bool   `json:"truncated"`
 }
@@ -3979,6 +3981,9 @@ func mergeConfig(base, overlay ConfigState) ConfigState {
 	if overlay.DisabledSkills != nil {
 		base.DisabledSkills = normalizeSkillNameList(overlay.DisabledSkills)
 	}
+	if overlay.LLMRetries > 0 {
+		base.LLMRetries = overlay.LLMRetries
+	}
 	if base.APIFormat == "" {
 		base.APIFormat = apiFormatOpenAIChat
 	}
@@ -5016,9 +5021,20 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 					}
 				}
 				if event.ReasoningDelta != "" {
-					streamDeltas.addReasoning(event.ReasoningDelta)
-				}
-				if event.Image != nil && event.Image.DataURL != "" {
+				streamDeltas.addReasoning(event.ReasoningDelta)
+			}
+			if event.Retry != nil {
+				streamDeltas.flush()
+				a.emit("run:retry", map[string]any{
+					"runId":       runID,
+					"sessionId":   sessionID,
+					"attempt":     event.Retry.Attempt,
+					"maxAttempts": event.Retry.MaxAttempts,
+					"error":       event.Retry.Error,
+					"waitMs":      event.Retry.WaitMS,
+				})
+			}
+			if event.Image != nil && event.Image.DataURL != "" {
 					streamDeltas.flush()
 					a.emit("run:image", map[string]any{
 						"runId": runID, "sessionId": sessionID, "id": event.Image.ID,
@@ -12179,7 +12195,15 @@ func (a *App) runCommandWithConfig(parent context.Context, cfg ConfigState, req 
 	buf := &limitedBuffer{limit: maxToolOutput}
 	cmd.Stdout = buf
 	cmd.Stderr = buf
-	hideCommandWindow(cmd)
+	prepareServiceCommand(cmd)
+	// ESC 取消运行时，杀掉整棵进程树而不是只杀外壳 bash/powershell，
+	// 否则 npm/vite/devserver 等子进程会变成孤儿继续占用端口。
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			return nil
+		}
+		return stopProcessTree(cmd.Process.Pid)
+	}
 	started := time.Now()
 	err = cmd.Run()
 	duration := time.Since(started).Milliseconds()
@@ -12191,6 +12215,7 @@ func (a *App) runCommandWithConfig(parent context.Context, cfg ConfigState, req 
 		Output:     buf.String(),
 		ExitCode:   0,
 		TimedOut:   errors.Is(ctx.Err(), context.DeadlineExceeded),
+		Cancelled:  errors.Is(ctx.Err(), context.Canceled),
 		DurationMS: duration,
 		Truncated:  buf.truncated,
 	}
