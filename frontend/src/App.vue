@@ -49,7 +49,7 @@
                   <button class="todo-panel-header" :title="todoPanelCollapsed ? $t('app.todo.expand') : $t('app.todo.collapse')" @click="todoPanelCollapsed = !todoPanelCollapsed">
                     <span>Todo</span>
                     <span class="todo-panel-count">{{ activeTodoCount }}/{{ todos.length }}</span>
-                    <span class="todo-panel-toggle">{{ todoPanelCollapsed ? '▸' : '▾' }}</span>
+                    <span :class="['todo-panel-toggle', { expanded: !todoPanelCollapsed }]"></span>
                   </button>
                   <div v-show="!todoPanelCollapsed" class="todo-panel-list">
                     <div v-for="(item, idx) in todos" :key="idx" :class="['todo-item', item.status]">
@@ -2447,16 +2447,32 @@ function flushStreamBuffer(runId) {
     session.messages.push(last);
   }
   last.streaming = true;
-  if (buffer.content) last.content += buffer.content;
   if (buffer.reasoning) {
     if (last.reasoningBody === undefined) last.reasoningBody = '';
+    if (!last.reasoningStartedAt) last.reasoningStartedAt = Date.now();
     last.reasoningBody += buffer.reasoning;
+  }
+  if (buffer.content) {
+    // First content delta marks the end of the thinking phase.
+    if (last.reasoningStartedAt && !last.reasoningEndedAt) {
+      last.reasoningEndedAt = Date.now();
+    }
+    last.content += buffer.content;
   }
   if (session.id === activeSessionId.value) {
     scrollMessagesToBottom();
   }
 }
 
+// finalizeReasoningTiming closes out the thinking window when a run ends
+// without ever emitting a content delta (e.g. pure-reasoning replies, errors,
+// or cancellations), so the "Thought for Xs" label still gets a duration.
+function finalizeReasoningTiming(msg) {
+  if (!msg || msg.role !== 'assistant') return;
+  if (msg.reasoningStartedAt && !msg.reasoningEndedAt) {
+    msg.reasoningEndedAt = Date.now();
+  }
+}
 // Buffer the latest tool:update event per tool call and flush on a timer so
 // the main thread is not blocked by parsing/re-rendering large streaming
 // argument payloads (e.g. create_file content) on every delta.
@@ -2676,6 +2692,8 @@ function bindRuntimeEvents() {
       session.messages.push(target);
     }
     target.streaming = true;
+    // 图片输出意味着思考已结束
+    finalizeReasoningTiming(target);
     if (!Array.isArray(target.attachments)) target.attachments = [];
     const imageId = data.id || `generated-${target.attachments.length + 1}`;
     let attachment = target.attachments.find((item) => item.id === imageId);
@@ -2714,6 +2732,9 @@ function bindRuntimeEvents() {
     flushStreamBuffer(data.runId);
     const session = sessionByRunId(data.runId);
     if (!session) return;
+    // 工具调用开始意味着本轮思考已结束，闭合思考时间窗口
+    const last = session.messages[session.messages.length - 1];
+    finalizeReasoningTiming(last);
       const title = makeToolTitle(data.name, data.args, data);
     updateToolEvent(toolEventId(data), data.name, title, data.args || '', 'running', data, session);
   };
@@ -2938,6 +2959,7 @@ function bindRuntimeEvents() {
       if (msg.role === 'assistant' && msg.streaming) {
         msg.streaming = false;
         msg.done = true;
+        finalizeReasoningTiming(msg);
         // If the model only emitted reasoning content and no regular content,
         // promote reasoning to main content so it shows in the body.
         if (msg.reasoningBody && !msg.content) {
@@ -2969,6 +2991,7 @@ function bindRuntimeEvents() {
       if (msg.role === 'assistant' && msg.streaming) {
         msg.streaming = false;
         msg.done = true;
+        finalizeReasoningTiming(msg);
         break;
       }
       i--;
@@ -3001,6 +3024,7 @@ function bindRuntimeEvents() {
       if (msg.role === 'assistant' && msg.streaming) {
         msg.streaming = false;
         msg.done = true;
+        finalizeReasoningTiming(msg);
         break;
       }
       i--;
@@ -4360,7 +4384,7 @@ function appendToolEventFallback(session, data = {}, status = 'running') {
     mcpTool: data.mcpTool || '',
     errorCode: data.errorCode || '',
     scheduledAction,
-    expanded: false,
+    expanded: !['grep', 'list'].includes(toolKind(data.name)),
     chip: '',
     editOldString: '',
     editNewString: '',
@@ -4584,7 +4608,7 @@ function updateToolEvent(id, name, title, body, status = 'default', meta = {}, t
   let waitSeconds = Number(existing?.waitSeconds || 0);
   let waitStartedAt = Number(existing?.waitStartedAt || 0);
   let askQuestions = existing?.askQuestions || [];
-  const expanded = existing ? existing.expanded : false;
+  const expanded = existing ? existing.expanded : !['grep', 'list'].includes(toolKind(name));
 
   const raw = String(body || '');
   const parsed = parseToolArgsBestEffort(raw);
@@ -5567,14 +5591,14 @@ function formatToolChip(name, result) {
       });
       return '\u00B7 ' + lines.join('  ');
     }
-    // grep_files: · N occurrences / lines
+    // grep_files: · N hits / lines
     if (name === 'grep_files' && parsed.data) {
       const count = parsed.data.count || parsed.data.matches?.length || 0;
       const occurrences = parsed.data.occurrences || 0;
       const ms = parsed.data.durationMs || 0;
       let chip = '';
       if (occurrences > 0) {
-        chip = '\u00B7 ' + occurrences + ' occurrence' + (occurrences > 1 ? 's' : '');
+        chip = '\u00B7 ' + occurrences + ' hit' + (occurrences > 1 ? 's' : '');
         if (count > 0 && count !== occurrences) chip += ' in ' + count + ' line' + (count > 1 ? 's' : '');
       } else if (count > 0) {
         chip = '\u00B7 ' + count + ' match' + (count > 1 ? 'es' : '');
@@ -5604,7 +5628,7 @@ function formatToolChip(name, result) {
       return parsed.data.created ? '\u00B7 created' : '\u00B7 updated';
     }
     if (name === 'calculate' && parsed.data) {
-      return '\u00B7 ' + (parsed.data.text || parsed.data.value);
+      return '= ' + (parsed.data.text || parsed.data.value);
     }
     if (name === 'scheduled_task' && parsed.data) {
       if (parsed.data.task) return '\u00B7 created';
@@ -5790,12 +5814,12 @@ function formatToolBody(name, body) {
       return '';
     }
     if ((name === 'http_request' || name === 'web_fetch') && parsed.data) return '';
-    // grep result: show occurrences and matching lines
+    // grep result: show hits and matching lines
     if (name === 'grep_files' && parsed.data && parsed.data.matches) {
       const d = parsed.data;
       let out = '';
       if (d.occurrences) {
-        out = d.occurrences + ' occurrences';
+        out = d.occurrences + ' hits';
         if (d.count && d.count !== d.occurrences) out += ' in ' + d.count + ' matching lines';
       } else {
         out = d.count + ' matches';

@@ -1,6 +1,6 @@
 <template>
-  <div :class="['html-render-card', msg.status]">
-    <div class="tool-line html-render-header">
+  <div :class="['rich-tool-card', 'render_html', msg.status]">
+    <div class="tool-line">
       <span :class="['tool-status-icon', msg.status]">{{ statusIcon }}</span>
       <span class="tool-verb">{{ statusLabel }}</span>
       <span v-if="msg.title" class="tool-arg" :title="msg.title">({{ msg.title }})</span>
@@ -65,19 +65,6 @@ onBeforeUnmount(() => window.removeEventListener('message', handleFrameMessage))
 </script>
 
 <style scoped>
-.html-render-card {
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 8px;
-  overflow: hidden;
-  margin: 8px 0;
-  background: rgba(255, 255, 255, 0.02);
-}
-
-.html-render-header {
-  padding: 6px 8px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-}
-
 .html-render-error {
   padding: 10px 12px;
   color: #f2b8b8;
@@ -113,6 +100,10 @@ onBeforeUnmount(() => window.removeEventListener('message', handleFrameMessage))
 
 .html-render-frame-wrapper {
   width: 100%;
+  margin-top: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  overflow: hidden;
 }
 
 .html-render-frame {

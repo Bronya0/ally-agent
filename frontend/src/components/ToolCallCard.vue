@@ -1,6 +1,9 @@
 <template>
   <div :class="['rich-tool-card', msg.kind, msg.status, { focused: focused && !isFocusDisabledTool(msg), expanded: msg.expanded, 'non-interactive': isFocusDisabledTool(msg) }]" @click.stop="handleCardClick(msg)">
-    <div class="tool-line">
+    <div
+      :class="['tool-line', { clickable: hasExpandableBody(msg) }]"
+      @click.stop="hasExpandableBody(msg) && handleToggle(msg)"
+    >
       <span :class="['tool-status-icon', msg.status]">{{ toolIcon(msg) }}</span>
       <span class="tool-verb">{{ toolVerb(msg) }}</span>
       <span class="tool-name">{{ toolDisplayName(msg) }}</span>
@@ -18,7 +21,6 @@
       <span v-else-if="msg.kind === 'wait' && waitCountdown" class="tool-chip wait-countdown">{{ waitCountdown }}</span>
       <span v-else-if="msg.chip" class="tool-chip">{{ msg.chip }}</span>
       <span v-if="msg.durationText" class="tool-duration">{{ msg.durationText }}</span>
-      <button v-if="hasExpandableBody(msg) && (msg.kind === 'edit' || !isNonInteractiveTool(msg))" class="tool-expand-btn" @click.stop="handleToggle(msg)">{{ msg.expanded ? '▾' : '▸' }}</button>
     </div>
 
     <div v-if="msg.kind === 'edit' && msg.editEntries?.length" class="edit-file-groups">
@@ -60,7 +62,7 @@
       :max-lines="BODY_PREVIEW_LINES"
       preview-mode="tail"
     />
-    <pre v-else-if="msg.body && msg.status !== 'error' && msg.kind !== 'edit' && msg.kind !== 'read'" ref="bodyPreRef" :class="['tool-body', { 'fixed-scroll': isFixedKind(msg.kind), 'body-preview': isBodyPreview(msg), 'tail-default': isServiceReadResult(msg) }]">{{ toolBodyText(msg) }}</pre>
+    <pre v-else-if="msg.body && msg.status !== 'error' && msg.kind !== 'edit' && msg.kind !== 'read' && msg.kind !== 'calculate' && msg.kind !== 'scheduled' && (!['grep', 'list'].includes(msg.kind) || msg.expanded)" ref="bodyPreRef" :class="['tool-body', { 'fixed-scroll': isFixedKind(msg.kind), 'body-preview': isBodyPreview(msg), 'tail-default': isServiceReadResult(msg) }]">{{ toolBodyText(msg) }}</pre>
     <div v-if="msg.status === 'error'" class="tool-error-block">
       <div v-if="msg.errorCode" class="tool-error-detail">
         <span>{{ errorDescription(msg) }}</span>
@@ -305,7 +307,7 @@ function editDiffText(msg) {
 }
 
 function isNonInteractiveTool(msg) {
-  return ['create', 'edit', 'delete', 'grep', 'todo'].includes(String(msg?.kind || ''));
+  return ['create', 'edit', 'delete', 'grep', 'list', 'todo'].includes(String(msg?.kind || ''));
 }
 
 function isFocusDisabledTool(msg) {
@@ -353,7 +355,6 @@ function handleCardClick(msg) {
 }
 
 function handleToggle(msg) {
-  if (msg.kind !== 'edit' && isNonInteractiveTool(msg)) return;
   emit('toggle');
 }
 
@@ -361,6 +362,10 @@ function hasExpandableBody(msg) {
   if (msg.kind === 'read') return false;
   if (msg.kind === 'edit') return true;
   if (msg.kind === 'create') return lineCount(msg.codeContent) > BODY_PREVIEW_LINES;
-  return lineCount(msg.body) > BODY_PREVIEW_LINES;
+  // calculate: body 只重复 title(expression) + chip(= result)，无需详情卡
+  if (msg.kind === 'calculate') return false;
+  // scheduled_task: 任务详情在 Task Center 面板查看，无需详情卡
+  if (msg.kind === 'scheduled') return false;
+  return lineCount(msg.body) > BODY_PREVIEW_LINES || ['grep', 'list'].includes(String(msg.kind || ''));
 }
 </script>

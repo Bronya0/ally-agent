@@ -17,16 +17,31 @@
           <RenderBoundary :label="$t('chat.attachment')"><MessageAttachments :attachments="msg.attachments || []" /></RenderBoundary>
         </div>
         <div v-else-if="msg.role !== 'tool_call'" :class="['message', msg.role, { error: msg.error, system: msg.system }]">
-          <pre v-if="msg.reasoningBody" class="reasoning-body">{{ msg.reasoningBody }}</pre>
+          <div v-if="msg.reasoningBody" class="reasoning-block">
+            <div class="reasoning-header" @click.stop="msg.reasoningExpanded = !msg.reasoningExpanded">
+              <span class="reasoning-label">
+                <span :class="['reasoning-title', { 'reasoning-title-thinking': !msg.reasoningEndedAt }]">{{ msg.reasoningEndedAt ? (reasoningDurationText(msg) ? 'Thought for ' + reasoningDurationText(msg) : 'Thought') : 'Thinking' }}</span>
+                <span class="reasoning-tokens">{{ msg.reasoningEndedAt ? '' : '·' }} {{ fmtK(Math.max(1, Math.round(String(msg.reasoningBody).length / 3))) }} tokens</span>
+              </span>
+            </div>
+            <pre v-if="msg.reasoningExpanded" class="reasoning-body">{{ msg.reasoningBody }}</pre>
+          </div>
           <RenderBoundary v-if="msg.welcome" :label="$t('chat.welcome')"><WelcomeMessage :welcome="msg.welcome" :tools="tools" :mcp-servers="mcpServers" /></RenderBoundary>
           <div v-else class="message-body markdown-body" v-html="renderFn(msg.content, msg.streaming)"></div>
           <RenderBoundary :label="$t('chat.attachment')"><MessageAttachments :attachments="msg.attachments || []" /></RenderBoundary>
           <div v-if="msg.role === 'assistant' && msg.roundDurationText && !msg.streaming" class="message-duration">
-            {{ $t('chat.duration', { duration: msg.roundDurationText }) }}
-            <span class="duration-sep">·</span>
-            <span class="export-btn" @click.stop="$emit('exportOneMsg', msg)" :title="$t('chat.export.responseTitle')">{{ $t('chat.export.response') }}</span>
-            <span class="duration-sep">·</span>
-            <span class="export-btn" @click.stop="$emit('exportAllMsgs')" :title="$t('chat.export.sessionTitle')">{{ $t('chat.export.session') }}</span>
+            <span class="duration-text">{{ msg.roundDurationText }}</span>
+            <button class="export-icon-btn" @click.stop="$emit('exportOneMsg', msg)" :title="$t('chat.export.responseTitle')" aria-label="export response">
+              <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M8 2v9M4.5 7.5L8 11l3.5-3.5M2.5 13.5h11"/>
+              </svg>
+            </button>
+            <button class="export-icon-btn" @click.stop="$emit('exportAllMsgs')" :title="$t('chat.export.sessionTitle')" aria-label="export session">
+              <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="2.5" y="2" width="9" height="12" rx="1"/>
+                <path d="M5 5h4M5 7.5h4M5 10h2.5M11.5 5.5l2 2v6.5h-2"/>
+              </svg>
+            </button>
           </div>
         </div>
         <RenderBoundary v-else-if="msg.kind === 'ask'" :label="$t('chat.ask')">
@@ -113,6 +128,24 @@ function msgKey(msg) {
     msgKeyMap.set(msg, key);
   }
   return key;
+}
+
+// Format the thinking-phase duration for the "Thought for Xs" label.
+// Returns '' when the thinking window hasn't closed yet or is invalid.
+// 自适应格式：<1s / Ns / Nm / Nm Ns / Nh Nm，与工具卡 durationText 一致。
+function reasoningDurationText(msg) {
+  const start = Number(msg?.reasoningStartedAt || 0);
+  const end = Number(msg?.reasoningEndedAt || 0);
+  if (!start || !end || end < start) return '';
+  const ms = end - start;
+  if (ms < 1000) return '1s';
+  const secs = Math.round(ms / 1000);
+  const hours = Math.floor(secs / 3600);
+  const mins = Math.floor((secs % 3600) / 60);
+  const rest = secs % 60;
+  if (hours > 0) return `${hours}h${mins > 0 ? `${mins}m` : ''}`;
+  if (mins > 0) return `${mins}m${rest > 0 ? `${rest}s` : ''}`;
+  return `${secs}s`;
 }
 
 defineEmits([
@@ -396,7 +429,7 @@ defineExpose({ scrollbarRef, scrollToBottom, scrollToUserQuestion, saveScrollPos
 
 .user-prefix {
   flex: none;
-  margin-top: 6px;
+  margin-top: 0;
   color: var(--ally-accent-bright);
   font-family: var(--ally-ui-font);
   font-size: 14px;
@@ -411,7 +444,7 @@ defineExpose({ scrollbarRef, scrollToBottom, scrollToUserQuestion, saveScrollPos
 }
 
 .message-body {
-  padding: 6px 0;
+  padding: 0;
   line-height: 1.7;
   color: #e5e5e5;
   font-size: 15px;
@@ -460,24 +493,40 @@ defineExpose({ scrollbarRef, scrollToBottom, scrollToUserQuestion, saveScrollPos
 }
 
 .message-duration {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   font-size: 12px;
   color: #737373;
   margin-top: 4px;
 }
 
-.duration-sep {
-  margin: 0 6px;
-  color: #555;
+.duration-text {
+  font-variant-numeric: tabular-nums;
 }
 
-.export-btn {
+.export-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 3px;
+  background: transparent;
+  color: #6a6a6a;
   cursor: pointer;
-  color: inherit;
-  transition: color 0.12s;
+  transition: color 0.12s, background 0.12s;
+  --wails-draggable: no-drag;
 }
 
-.export-btn:hover {
-  color: inherit;
-  text-decoration: underline;
+.export-icon-btn:hover {
+  color: #e5e5e5;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.export-icon-btn svg {
+  display: block;
 }
 </style>

@@ -46,6 +46,12 @@ export default defineConfig({
   define: {
     __ALLY_BUILD_VERSION__: JSON.stringify(allyBuildVersion),
   },
+  optimizeDeps: {
+    // dompurify 3.4.x ships src/*.ts with "./tags.js" imports that vite 3.x
+    // cannot resolve from source. Forcing pre-bundle via the dist ESM entry
+    // sidesteps the broken source-path imports.
+    include: ['dompurify'],
+  },
   build: {
     chunkSizeWarningLimit: 1200,
   },

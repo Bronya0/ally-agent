@@ -1835,7 +1835,16 @@ body.platform-darwin .ally-wordmark {
      (verb / name / arg) lines up at x=0 with message body text. */
   margin-left: -20px;
   padding: 2px 8px 2px 0;
-  line-height: 1;
+  line-height: 1.4;
+}
+
+.tool-line.clickable {
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.tool-line.clickable:hover {
+  background: rgba(255, 255, 255, 0.04);
 }
 
 .tool-status-icon {
@@ -2020,9 +2029,12 @@ body.platform-darwin .ally-wordmark {
 
 .rich-tool-card.create .tool-arg,
 .rich-tool-card.edit .tool-arg,
-.rich-tool-card.read .tool-arg,
 .rich-tool-card.command .tool-arg {
   color: #e5e5e5;
+}
+
+.rich-tool-card.read .tool-arg {
+  color: #a8a8a8;
 }
 
 .edit-change-chip {
@@ -2140,29 +2152,6 @@ body.platform-darwin .ally-wordmark {
   overflow-y: auto;
 }
 
-.tool-expand-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 18px;
-  height: 18px;
-  border: none;
-  background: transparent;
-  color: #5a5a5a;
-  cursor: pointer;
-  font-size: 11px;
-  border-radius: 3px;
-  flex-shrink: 0;
-  --wails-draggable: no-drag;
-  padding: 0;
-  line-height: 1;
-}
-
-.tool-expand-btn:hover {
-  background: rgba(255, 255, 255, 0.08);
-  color: #d4d4d4;
-}
-
 /* ── Read group (aggregated parallel reads) ── */
 
 .read-group-body {
@@ -2184,7 +2173,7 @@ body.platform-darwin .ally-wordmark {
 }
 
 .read-group-path {
-  color: #e5e5e5;
+  color: #a8a8a8;
   font-family: var(--ally-ui-font);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2430,54 +2419,78 @@ body.platform-darwin .ally-wordmark {
   word-break: break-all;
   flex: 1;
   min-width: 0;
-  color: #e5e5e5;
+  color: #a8a8a8;
 }
 
-
-/* ── Tool expand button ── */
-
-.tool-expand-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 20px;
-  height: 20px;
-  border: none;
-  background: transparent;
-  color: #8a8a8a;
-  cursor: pointer;
-  font-size: 12px;
-  border-radius: 4px;
-  flex-shrink: 0;
-  --wails-draggable: no-drag;
-  padding: 0;
-  line-height: 1;
-}
-
-.tool-expand-btn:hover {
-  background: rgba(255, 255, 255, 0.08);
-  color: #e5e5e5;
-}
 
 /* ── Reasoning / thinking block ── */
 
+.reasoning-block {
+  margin: 0 0 10px;
+}
+
+.reasoning-header {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 26px;
+  color: #a9a9a9;
+  font-size: 14px;
+  cursor: pointer;
+  border-radius: 4px;
+  padding: 0;
+  --wails-draggable: no-drag;
+}
+
+.reasoning-header:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.reasoning-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.reasoning-tokens {
+  color: #777;
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+  font-style: italic;
+}
+
+.reasoning-title {
+  color: var(--ally-accent);
+  font-weight: 500;
+  font-style: italic;
+}
+
+/* 思考中：亮橙色 + opacity 脉动，纯 composite 属性，GPU 开销极小 */
+.reasoning-title-thinking {
+  color: var(--ally-accent-bright);
+  font-weight: 600;
+  font-style: italic;
+  animation: reasoning-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes reasoning-pulse {
+  0%, 100% { opacity: 0.65; }
+  50% { opacity: 1; }
+}
+
 .reasoning-body {
-  margin: 8px 0 10px 4px;
-  padding: 8px 10px;
+  margin: 4px 0 0;
+  padding: 6px 10px;
   white-space: pre-wrap;
   word-break: break-word;
-  color: #8a8a8a;
-  background: rgba(255, 255, 255, 0.02);
-  border-left: 2px solid rgba(212, 182, 106, 0.35);
+  color: #9a9a9a;
+  background: rgba(255, 255, 255, 0.03);
   font-family: var(--ally-ui-font);
-  font-size: 14px;
-  font-style: italic;
-  line-height: 1.25;
-  overflow-y: auto;
-  max-height: 56px;
-  border-radius: 0 6px 6px 0;
-  display: flex;
-  flex-direction: column-reverse;
+  font-size: 13px;
+  line-height: 1.5;
+  max-height: 150px;
+  overflow: hidden;
+  border-radius: 4px;
 }
 
 .reasoning-body:hover {
@@ -2548,9 +2561,28 @@ body.platform-darwin .ally-wordmark {
 }
 
 .todo-panel-toggle {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  position: relative;
   color: #9ca3af;
-  font-size: 12px;
   line-height: 1;
+}
+
+.todo-panel-toggle::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 5px;
+  height: 5px;
+  border-right: 1px solid currentColor;
+  border-bottom: 1px solid currentColor;
+  transform: translate(-35%, -50%) rotate(-45deg);
+}
+
+.todo-panel-toggle.expanded::before {
+  transform: translate(-50%, -65%) rotate(45deg);
 }
 
 .todo-panel-list {
