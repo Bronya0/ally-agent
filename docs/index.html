@@ -1,0 +1,669 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ally — 桌面 AI 编程助手</title>
+<meta name="description" content="Ally 是一个面向本地项目的桌面 AI 编程助手。通过对话理解代码、编辑文件、搜索项目、管理任务并完成开发工作。">
+<meta property="og:title" content="Ally — 桌面 AI 编程助手">
+<meta property="og:description" content="面向本地项目的桌面 AI 编程助手，支持 OpenAI / Anthropic / MCP / Skills。">
+<meta property="og:image" content="img.jpg">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Crect width='512' height='512' rx='96' fill='%23101010'/%3E%3Ctext x='256' y='256' font-family='Arial,sans-serif' font-size='340' font-weight='800' fill='%23e0a458' text-anchor='middle' dominant-baseline='central'%3EA%3C/text%3E%3C/svg%3E">
+<style>
+  :root {
+    --accent: #e0a458;
+    --accent-bright: #f0c78a;
+    --accent-dim: rgba(224, 164, 88, .55);
+    --bg: #0a0b0e;
+    --bg-raise: #10131a;
+    --bg-card: #141822;
+    --line: #262c3a;
+    --text: #d7dedc;
+    --text-dim: #8b93a1;
+    --text-faint: #5a6272;
+    --radius: 14px;
+    --maxw: 1120px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+      "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
+  }
+  ::selection { background: rgba(224,164,88,.35); color: #fff; }
+
+  /* ── ambient glow ─────────────────────────── */
+  .glow {
+    position: fixed; inset: 0; pointer-events: none; z-index: 0;
+    background:
+      radial-gradient(560px 420px at 82% -6%, rgba(224,164,88,.13), transparent 62%),
+      radial-gradient(700px 520px at -10% 18%, rgba(224,164,88,.06), transparent 60%);
+  }
+  .wrap { position: relative; z-index: 1; max-width: var(--maxw); margin: 0 auto; padding: 0 28px; }
+
+  /* ── nav ──────────────────────────────────── */
+  nav {
+    position: sticky; top: 0; z-index: 50;
+    backdrop-filter: blur(14px);
+    background: rgba(10,11,14,.72);
+    border-bottom: 1px solid transparent;
+    transition: border-color .3s;
+  }
+  nav.scrolled { border-bottom-color: var(--line); }
+  .nav-inner { max-width: var(--maxw); margin: 0 auto; padding: 14px 28px;
+    display: flex; align-items: center; gap: 14px; }
+  .nav-logo { display: flex; align-items: center; gap: 10px; text-decoration: none; }
+  .nav-logo svg { width: 30px; height: 30px; display: block; }
+  .wordmark {
+    font-size: 19px; font-weight: 700; letter-spacing: .4px;
+    background: linear-gradient(120deg, #f8fafc 0%, var(--accent-bright) 34%, #b8f2d0 58%, #f8fafc 100%);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .nav-links { margin-left: auto; display: flex; align-items: center; gap: 22px; }
+  .nav-links a { color: var(--text-dim); text-decoration: none; font-size: 14px; transition: color .2s; }
+  .nav-links a:hover { color: var(--accent-bright); }
+  .lang-btn {
+    background: none; border: 1px solid var(--line); color: var(--text-dim);
+    border-radius: 8px; padding: 5px 12px; font-size: 13px; cursor: pointer;
+    font-family: inherit; transition: border-color .2s, color .2s;
+  }
+  .lang-btn:hover { border-color: var(--accent-dim); color: var(--accent-bright); }
+
+  /* ── buttons ──────────────────────────────── */
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 12px 26px; border-radius: 10px; font-weight: 600; font-size: 15px;
+    text-decoration: none; transition: transform .18s, box-shadow .18s, border-color .2s;
+    border: 1px solid transparent; cursor: pointer;
+  }
+  .btn:active { transform: translateY(1px); }
+  .btn-primary {
+    background: linear-gradient(135deg, var(--accent-bright), var(--accent));
+    color: #1a1206; box-shadow: 0 4px 24px rgba(224,164,88,.28);
+  }
+  .btn-primary:hover { box-shadow: 0 6px 32px rgba(224,164,88,.42); transform: translateY(-2px); }
+  .btn-ghost { border-color: var(--line); color: var(--text); background: rgba(255,255,255,.02); }
+  .btn-ghost:hover { border-color: var(--accent-dim); color: var(--accent-bright); }
+
+  /* ── hero ─────────────────────────────────── */
+  .hero { padding: 96px 0 72px; text-align: center; }
+  .hero-avatar { width: 96px; height: 96px; margin: 0 auto 26px; display: block;
+    filter: drop-shadow(0 8px 28px rgba(224,164,88,.25)); }
+  .hero h1 {
+    font-size: clamp(38px, 6vw, 62px); font-weight: 700; letter-spacing: -.02em;
+    line-height: 1.14; color: #f2f4f2; margin-bottom: 20px;
+  }
+  .hero h1 .grad {
+    background: linear-gradient(120deg, #f8fafc 0%, var(--accent-bright) 40%, var(--accent) 80%);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .hero p.sub {
+    max-width: 620px; margin: 0 auto 38px; font-size: 17px; color: var(--text-dim);
+  }
+  .hero-badges { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin-top: 44px; }
+  .badge {
+    font-size: 12.5px; color: var(--text-dim); border: 1px solid var(--line);
+    border-radius: 999px; padding: 5px 14px; background: rgba(255,255,255,.02);
+  }
+  .badge b { color: var(--accent-bright); font-weight: 600; }
+
+  /* ── screenshot ───────────────────────────── */
+  .shot-section { padding: 24px 0 88px; }
+  .shot-frame {
+    border: 1px solid var(--line); border-radius: 16px; overflow: hidden;
+    background: var(--bg-raise);
+    box-shadow: 0 24px 80px rgba(0,0,0,.55), 0 0 0 1px rgba(224,164,88,.06),
+      0 0 120px rgba(224,164,88,.07);
+  }
+  .shot-frame .bar {
+    display: flex; align-items: center; gap: 7px; padding: 11px 16px;
+    border-bottom: 1px solid var(--line); background: rgba(255,255,255,.015);
+  }
+  .shot-frame .bar i { width: 11px; height: 11px; border-radius: 50%; background: #2a3140; display: block; }
+  .shot-frame .bar i:first-child { background: rgba(224,164,88,.5); }
+  .shot-frame img { display: block; width: 100%; height: auto; }
+  .shot-tabs { display: flex; gap: 8px; justify-content: center; margin-bottom: 18px; }
+  .shot-tab {
+    border: 1px solid var(--line); background: none; color: var(--text-dim);
+    font-size: 13.5px; padding: 7px 18px; border-radius: 999px; cursor: pointer;
+    font-family: inherit; transition: all .2s;
+  }
+  .shot-tab.active { border-color: var(--accent-dim); color: var(--accent-bright);
+    background: rgba(224,164,88,.08); }
+
+  /* ── sections ─────────────────────────────── */
+  section.block { padding: 88px 0; }
+  .kicker {
+    font-size: 13px; font-weight: 600; letter-spacing: .18em; text-transform: uppercase;
+    color: var(--accent); margin-bottom: 14px;
+  }
+  .block h2 { font-size: clamp(26px, 4vw, 38px); font-weight: 700; letter-spacing: -.01em;
+    color: #ecefee; margin-bottom: 14px; }
+  .block > .lead { max-width: 640px; color: var(--text-dim); font-size: 16px; margin-bottom: 48px; }
+
+  /* ── feature grid ─────────────────────────── */
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+  .card {
+    background: var(--bg-card); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 26px 24px; transition: transform .22s, border-color .22s, box-shadow .22s;
+  }
+  .card:hover {
+    transform: translateY(-4px); border-color: rgba(224,164,88,.35);
+    box-shadow: 0 14px 44px rgba(0,0,0,.4), 0 0 0 1px rgba(224,164,88,.1);
+  }
+  .card .icon {
+    width: 42px; height: 42px; border-radius: 10px; display: flex; align-items: center;
+    justify-content: center; margin-bottom: 16px;
+    background: rgba(224,164,88,.1); border: 1px solid rgba(224,164,88,.22);
+  }
+  .card .icon svg { width: 22px; height: 22px; stroke: var(--accent-bright); }
+  .card h3 { font-size: 16.5px; font-weight: 600; color: #e8ebe9; margin-bottom: 8px; }
+  .card p { font-size: 14px; color: var(--text-dim); }
+
+  /* ── provider strip ───────────────────────── */
+  .providers {
+    display: flex; flex-wrap: wrap; gap: 12px; margin-top: 34px;
+  }
+  .pill {
+    display: inline-flex; align-items: center; gap: 8px;
+    border: 1px solid var(--line); border-radius: 10px; padding: 10px 18px;
+    background: var(--bg-card); font-size: 14px; color: var(--text);
+  }
+  .pill i { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); display: block;
+    box-shadow: 0 0 8px var(--accent-dim); }
+
+  /* ── terminal ─────────────────────────────── */
+  .split { display: grid; grid-template-columns: 1fr 1fr; gap: 48px; align-items: center; }
+  .terminal {
+    background: #0b0d12; border: 1px solid var(--line); border-radius: var(--radius);
+    overflow: hidden; box-shadow: 0 18px 60px rgba(0,0,0,.5);
+    font-family: ui-monospace, "Cascadia Code", Consolas, Menlo, monospace;
+    font-size: 13.5px;
+  }
+  .terminal .bar { display: flex; gap: 7px; padding: 11px 16px; border-bottom: 1px solid var(--line); }
+  .terminal .bar i { width: 10px; height: 10px; border-radius: 50%; background: #252b38; display: block; }
+  .terminal pre { padding: 20px 22px; overflow-x: auto; line-height: 1.8; color: #a9b2bd; }
+  .tk-p { color: var(--accent-bright); }        /* prompt */
+  .tk-c { color: #e6e9e6; }                     /* command/text */
+  .tk-ok { color: #7ed6a2; }
+  .tk-dim { color: #566072; }
+  .check-list { list-style: none; }
+  .check-list li { position: relative; padding-left: 30px; margin-bottom: 14px; color: var(--text-dim); font-size: 15px; }
+  .check-list li::before {
+    content: ""; position: absolute; left: 0; top: 4px; width: 18px; height: 18px;
+    border-radius: 6px; background: rgba(224,164,88,.14);
+    border: 1px solid rgba(224,164,88,.35);
+  }
+  .check-list li::after {
+    content: ""; position: absolute; left: 5px; top: 8px; width: 8px; height: 5px;
+    border-left: 2px solid var(--accent-bright); border-bottom: 2px solid var(--accent-bright);
+    transform: rotate(-45deg);
+  }
+  .check-list li b { color: var(--text); font-weight: 600; }
+
+  /* ── steps ────────────────────────────────── */
+  .steps { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; counter-reset: step; }
+  .step {
+    counter-increment: step; border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 24px 22px; background: var(--bg-card); position: relative;
+  }
+  .step::before {
+    content: counter(step, decimal-leading-zero);
+    font-size: 13px; font-weight: 700; color: var(--accent);
+    letter-spacing: .1em; display: block; margin-bottom: 12px;
+  }
+  .step h3 { font-size: 15.5px; font-weight: 600; color: #e8ebe9; margin-bottom: 6px; }
+  .step p { font-size: 13.5px; color: var(--text-dim); }
+
+  /* ── CTA / footer ─────────────────────────── */
+  .cta { text-align: center; padding: 96px 0; }
+  .cta h2 { font-size: clamp(28px, 4.5vw, 42px); font-weight: 700; color: #f0f3f1; margin-bottom: 16px; }
+  .cta p { color: var(--text-dim); margin-bottom: 36px; }
+  footer {
+    border-top: 1px solid var(--line); padding: 34px 0 44px;
+    color: var(--text-faint); font-size: 13.5px;
+  }
+  .foot-inner { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
+  footer a { color: var(--text-dim); text-decoration: none; transition: color .2s; }
+  footer a:hover { color: var(--accent-bright); }
+  .foot-right { margin-left: auto; display: flex; gap: 18px; }
+
+  /* ── reveal animation ─────────────────────── */
+  .reveal { opacity: 0; transform: translateY(22px); transition: opacity .7s ease, transform .7s ease; }
+  .reveal.visible { opacity: 1; transform: none; }
+
+  /* ── responsive ───────────────────────────── */
+  @media (max-width: 900px) {
+    .grid { grid-template-columns: repeat(2, 1fr); }
+    .steps { grid-template-columns: repeat(2, 1fr); }
+    .split { grid-template-columns: 1fr; }
+    .nav-links a:not(.btn) { display: none; }
+  }
+  @media (max-width: 560px) {
+    .grid, .steps { grid-template-columns: 1fr; }
+    .hero { padding: 64px 0 52px; }
+    section.block { padding: 60px 0; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .reveal { opacity: 1; transform: none; transition: none; }
+    html { scroll-behavior: auto; }
+  }
+</style>
+</head>
+<body>
+<div class="glow"></div>
+
+<nav id="nav">
+  <div class="nav-inner">
+    <a class="nav-logo" href="#top" aria-label="Ally">
+      <!-- Ally avatar (inlined) -->
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160" role="img" aria-label="Ally avatar">
+        <defs>
+          <linearGradient id="nShell" x1="45" y1="34" x2="104" y2="118" gradientUnits="userSpaceOnUse">
+            <stop offset="0" stop-color="#29313d"/><stop offset=".52" stop-color="#10141b"/><stop offset="1" stop-color="#07090d"/>
+          </linearGradient>
+          <linearGradient id="nPanel" x1="54" y1="55" x2="101" y2="96" gradientUnits="userSpaceOnUse">
+            <stop offset="0" stop-color="#202633"/><stop offset="1" stop-color="#0b0e13"/>
+          </linearGradient>
+          <linearGradient id="nEnergy" x1="40" y1="77" x2="124" y2="70" gradientUnits="userSpaceOnUse">
+            <stop offset="0" stop-color="#f8fafc" stop-opacity=".88"/><stop offset=".42" stop-color="#e0a458"/><stop offset="1" stop-color="#f8fafc" stop-opacity=".78"/>
+          </linearGradient>
+        </defs>
+        <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M38 58C51 44 72 42 92 49S119 62 133 50" stroke="#555b66" stroke-width="8"/>
+          <path d="M38 58C51 44 72 42 92 49S119 62 133 50" stroke="#090b10" stroke-width="4"/>
+          <path d="M39 82C58 73 76 74 95 83S122 96 141 88" stroke="#555b66" stroke-width="8"/>
+          <path d="M39 82C58 73 76 74 95 83S122 96 141 88" stroke="#090b10" stroke-width="4"/>
+          <path d="M38 107C55 95 73 92 96 99S122 116 137 106" stroke="#555b66" stroke-width="8"/>
+          <path d="M38 107C55 95 73 92 96 99S122 116 137 106" stroke="#090b10" stroke-width="4"/>
+        </g>
+        <path d="M46 35 94 26 123 55 113 113 58 126 31 82Z" fill="url(#nShell)" stroke="#3b424e" stroke-width="2"/>
+        <path d="M52 54h48l13 19-9 34-47 10-17-34Z" fill="url(#nPanel)" stroke="#4a5260" stroke-width="1.8"/>
+        <path d="M38 38 24 20M105 36 120 17" stroke="#59616d" stroke-width="4"/>
+        <path d="M54 77 70 62 92 67 80 82 101 94" stroke="url(#nEnergy)" stroke-width="3" fill="none"/>
+        <rect x="48" y="78" width="18" height="9" rx="2.5" fill="#f8fafc" opacity=".82"/>
+        <rect x="72" y="103" width="36" height="7" rx="2.5" fill="#d7dde8" opacity=".72"/>
+        <circle cx="130" cy="70" r="20" fill="#010203" stroke="#e0a458" stroke-width="2" opacity=".9"/>
+      </svg>
+      <span class="wordmark">Ally</span>
+    </a>
+    <div class="nav-links">
+      <a href="#features" data-i18n="nav.features">功能</a>
+      <a href="#models" data-i18n="nav.models">模型</a>
+      <a href="#start" data-i18n="nav.start">快速开始</a>
+      <button class="lang-btn" id="langBtn" type="button">EN</button>
+      <a class="btn btn-ghost" style="padding:8px 18px;font-size:14px" href="https://github.com/Bronya0/ally-agent" target="_blank" rel="noopener">GitHub</a>
+    </div>
+  </div>
+</nav>
+
+<div class="wrap" id="top">
+
+  <!-- ═══ HERO ═══ -->
+  <header class="hero">
+    <svg class="hero-avatar" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160" role="img" aria-label="Ally">
+      <defs>
+        <radialGradient id="hGlow" cx="70%" cy="38%" r="46%">
+          <stop offset="0" stop-color="#f8fafc" stop-opacity=".38"/><stop offset=".2" stop-color="#e0a458" stop-opacity=".34"/>
+          <stop offset=".62" stop-color="#2f333c" stop-opacity=".18"/><stop offset="1" stop-color="#000" stop-opacity="0"/>
+        </radialGradient>
+        <linearGradient id="hShell" x1="45" y1="34" x2="104" y2="118" gradientUnits="userSpaceOnUse">
+          <stop offset="0" stop-color="#29313d"/><stop offset=".52" stop-color="#10141b"/><stop offset="1" stop-color="#07090d"/>
+        </linearGradient>
+        <linearGradient id="hPanel" x1="54" y1="55" x2="101" y2="96" gradientUnits="userSpaceOnUse">
+          <stop offset="0" stop-color="#202633"/><stop offset="1" stop-color="#0b0e13"/>
+        </linearGradient>
+        <linearGradient id="hEnergy" x1="40" y1="77" x2="124" y2="70" gradientUnits="userSpaceOnUse">
+          <stop offset="0" stop-color="#f8fafc" stop-opacity=".88"/><stop offset=".42" stop-color="#e0a458"/><stop offset="1" stop-color="#f8fafc" stop-opacity=".78"/>
+        </linearGradient>
+      </defs>
+      <ellipse cx="95" cy="68" rx="56" ry="48" fill="url(#hGlow)"/>
+      <ellipse cx="74" cy="139" rx="50" ry="7" fill="#000" opacity=".26"/>
+      <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M38 58C51 44 72 42 92 49S119 62 133 50" stroke="#555b66" stroke-width="8"/>
+        <path d="M38 58C51 44 72 42 92 49S119 62 133 50" stroke="#090b10" stroke-width="4"/>
+        <path d="M39 82C58 73 76 74 95 83S122 96 141 88" stroke="#555b66" stroke-width="8"/>
+        <path d="M39 82C58 73 76 74 95 83S122 96 141 88" stroke="#090b10" stroke-width="4"/>
+        <path d="M38 107C55 95 73 92 96 99S122 116 137 106" stroke="#555b66" stroke-width="8"/>
+        <path d="M38 107C55 95 73 92 96 99S122 116 137 106" stroke="#090b10" stroke-width="4"/>
+        <path d="M43 58C60 49 77 49 94 56" stroke="#e0a458" stroke-width="2" opacity=".5" stroke-dasharray="12 12"/>
+        <path d="M44 82C63 77 80 80 99 88" stroke="#e0a458" stroke-width="2" opacity=".45" stroke-dasharray="10 14"/>
+        <path d="M44 107C61 99 79 98 99 105" stroke="#e0a458" stroke-width="2" opacity=".4" stroke-dasharray="10 14"/>
+      </g>
+      <path d="M46 35 94 26 123 55 113 113 58 126 31 82Z" fill="url(#hShell)" stroke="#3b424e" stroke-width="2"/>
+      <path d="M52 54h48l13 19-9 34-47 10-17-34Z" fill="url(#hPanel)" stroke="#4a5260" stroke-width="1.8"/>
+      <path d="M50 42 90 35 112 58" stroke="#d7dde8" stroke-width="2" opacity=".28"/>
+      <path d="M38 38 24 20M105 36 120 17" stroke="#59616d" stroke-width="4"/>
+      <path d="M24 20h-8M120 17h9" stroke="#d7dde8" stroke-width="2" opacity=".62"/>
+      <path d="M54 77 70 62 92 67 80 82 101 94" stroke="url(#hEnergy)" stroke-width="3" fill="none"/>
+      <rect x="48" y="78" width="18" height="9" rx="2.5" fill="#f8fafc" opacity=".82"/>
+      <rect x="72" y="103" width="36" height="7" rx="2.5" fill="#d7dde8" opacity=".72"/>
+      <path d="M39 116c12 9 51 11 70-2" stroke="#e0a458" stroke-width="2" opacity=".3"/>
+      <g fill="none" stroke-linecap="round">
+        <circle cx="130" cy="70" r="20" fill="#010203" stroke="#e0a458" stroke-width="2" opacity=".9"/>
+        <ellipse cx="130" cy="70" rx="28" ry="10" stroke="#e0a458" stroke-width="1.6" opacity=".5" transform="rotate(-24 130 70)"/>
+        <ellipse cx="130" cy="70" rx="30" ry="12" stroke="#d7dde8" stroke-width="1.2" opacity=".26" transform="rotate(34 130 70)"/>
+      </g>
+    </svg>
+    <h1><span data-i18n="hero.title.a">你的本地项目，</span><br><span class="grad" data-i18n="hero.title.b">交给 Ally 来对话</span></h1>
+    <p class="sub" data-i18n="hero.sub">面向本地项目的桌面 AI 编程助手——理解代码、编辑文件、搜索工作区、管理任务，一场对话完成整个开发流程。</p>
+    <div style="display:flex;gap:14px;justify-content:center;flex-wrap:wrap">
+      <a class="btn btn-primary" href="https://github.com/Bronya0/ally-agent/releases" target="_blank" rel="noopener">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        <span data-i18n="hero.download">下载 Ally</span>
+      </a>
+      <a class="btn btn-ghost" href="https://github.com/Bronya0/ally-agent" target="_blank" rel="noopener">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.91.58.11.79-.25.79-.55v-2.17c-3.2.7-3.87-1.35-3.87-1.35-.53-1.33-1.28-1.69-1.28-1.69-1.05-.71.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.76 2.7 1.25 3.36.96.1-.75.4-1.25.73-1.54-2.55-.29-5.23-1.28-5.23-5.68 0-1.26.45-2.28 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.78 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.83 1.19 3.09 0 4.41-2.69 5.38-5.25 5.67.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.55A11.51 11.51 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5z"/></svg>
+        GitHub
+      </a>
+    </div>
+    <div class="hero-badges">
+      <span class="badge"><b>GPL-3.0</b> <span data-i18n="badge.os">开源</span></span>
+      <span class="badge">Windows · macOS · Linux</span>
+      <span class="badge" data-i18n="badge.model">多模型服务商</span>
+      <span class="badge">MCP</span>
+      <span class="badge" data-i18n="badge.cn">中英双语界面</span>
+    </div>
+  </header>
+
+  <!-- ═══ SCREENSHOT ═══ -->
+  <section class="shot-section reveal">
+    <div class="shot-tabs">
+      <button class="shot-tab active" data-shot="img.jpg" type="button" data-i18n="shot.main">主界面</button>
+      <button class="shot-tab" data-shot="welcome.jpeg" type="button" data-i18n="shot.welcome">欢迎页</button>
+    </div>
+    <div class="shot-frame">
+      <div class="bar"><i></i><i></i><i></i></div>
+      <img id="shotImg" src="img.jpg" alt="Ally 界面截图" loading="lazy">
+    </div>
+  </section>
+
+  <!-- ═══ FEATURES ═══ -->
+  <section class="block reveal" id="features">
+    <div class="kicker" data-i18n="feat.kicker">功能</div>
+    <h2 data-i18n="feat.title">不只是聊天，是直接干活</h2>
+    <p class="lead" data-i18n="feat.lead">Ally 在严格的工作区安全边界内读写你的项目，每一步操作都有可视化反馈。</p>
+    <div class="grid">
+      <div class="card">
+        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg></div>
+        <h3 data-i18n="f1.t">安全的文件操作</h3>
+        <p data-i18n="f1.d">读取、搜索、创建、编辑、删除都在工作区边界内进行，编辑带乐观并发校验，多文件改动原子提交。</p>
+      </div>
+      <div class="card">
+        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg></div>
+        <h3 data-i18n="f2.t">可视化 Diff</h3>
+        <p data-i18n="f2.d">每次修改都在聊天里直接呈现对比视图、命令输出和完整的失败原因，改动一目了然。</p>
+      </div>
+      <div class="card">
+        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></div>
+        <h3 data-i18n="f3.t">内置 ripgrep 搜索</h3>
+        <p data-i18n="f3.d">发行包自带 ripgrep，无需安装任何东西，开箱即用地在整个工作区里极速搜索代码。</p>
+      </div>
+      <div class="card">
+        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg></div>
+        <h3 data-i18n="f4.t">并行子代理</h3>
+        <p data-i18n="f4.d">把繁重任务委派给并行子代理，实时查看步骤、工具活动和 Token 用量，收回内联的最终摘要。</p>
+      </div>
+      <div class="card">
+        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg></div>
+        <h3 data-i18n="f5.t">Skills 与记忆</h3>
+        <p data-i18n="f5.d">用可发现的 Skills 扩展工作流，通过全局记忆把跨项目的知识沉淀下来，下次自动可用。</p>
+      </div>
+      <div class="card">
+        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></div>
+        <h3 data-i18n="f6.t">后台进程与定时任务</h3>
+        <p data-i18n="f6.d">运行开发服务器等后台进程并在任务中心查看日志，还能创建进程级的定时任务自动执行工作。</p>
+      </div>
+      <div class="card">
+        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg></div>
+        <h3 data-i18n="f7.t">沙箱 HTML 渲染</h3>
+        <p data-i18n="f7.d">在聊天中安全渲染交互式 HTML 结果——小工具、数据预览、组件原型，即写即看。</p>
+      </div>
+      <div class="card">
+        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg></div>
+        <h3 data-i18n="f8.t">三种运行模式</h3>
+        <p data-i18n="f8.d">执行模式直接干活、计划模式只读规划、访谈模式先问清楚再动手——按任务自由选择。</p>
+      </div>
+      <div class="card">
+        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></div>
+        <h3 data-i18n="f9.t">统一代理支持</h3>
+        <p data-i18n="f9.d">跟随系统代理或手动配置 HTTP/HTTPS/SOCKS5，一致应用到模型、MCP、命令和后台服务。</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ MODELS + MCP ═══ -->
+  <section class="block reveal" id="models">
+    <div class="kicker" data-i18n="models.kicker">开放生态</div>
+    <h2 data-i18n="models.title">接入你已有的模型与工具</h2>
+    <p class="lead" data-i18n="models.lead">不被单一服务商绑定。三大 API 格式 + 兼容服务 + MCP 协议，模型和工具随你组合。</p>
+    <div class="providers">
+      <span class="pill"><i></i>OpenAI Chat Completions</span>
+      <span class="pill"><i></i>OpenAI Responses</span>
+      <span class="pill"><i></i>Anthropic Messages</span>
+      <span class="pill"><i></i data-i18n="models.compat">兼容模型服务</span>
+      <span class="pill"><i></i>MCP · stdio / SSE / HTTP</span>
+    </div>
+  </section>
+
+  <!-- ═══ TERMINAL SPLIT ═══ -->
+  <section class="block reveal">
+    <div class="split">
+      <div>
+        <div class="kicker" data-i18n="safe.kicker">可靠执行</div>
+        <h2 data-i18n="safe.title">每一步都在你的掌控之中</h2>
+        <ul class="check-list" style="margin-top:28px">
+          <li data-i18n="safe.1"><b>工作区边界</b>——写入操作严格限定在项目目录内</li>
+          <li data-i18n="safe.2"><b>版本校验</b>——编辑前校验文件版本，拒绝过期改动</li>
+          <li data-i18n="safe.3"><b>失败可解释</b>——工具失败原因完整展示，不静默吞错</li>
+          <li data-i18n="safe.4"><b>中英双语</b>——界面、警告、设置和工具状态全部本地化</li>
+        </ul>
+      </div>
+      <div class="terminal" aria-hidden="true">
+        <div class="bar"><i></i><i></i><i></i></div>
+        <pre><span class="tk-p">ally</span> <span class="tk-dim">›</span> <span class="tk-c">帮我修复登录接口的超时问题</span>
+
+<span class="tk-ok">✓</span> <span class="tk-c">read</span>      <span class="tk-dim">src/api/login.go</span>
+<span class="tk-ok">✓</span> <span class="tk-c">grep</span>      <span class="tk-dim">timeout · 3 matches</span>
+<span class="tk-ok">✓</span> <span class="tk-c">edit</span>      <span class="tk-dim">login.go · +12 -3</span>
+<span class="tk-ok">✓</span> <span class="tk-c">run</span>       <span class="tk-dim">go test ./... · PASS</span>
+
+<span class="tk-p">ally</span> <span class="tk-dim">›</span> <span class="tk-c">已修复：重试逻辑移入 transport 层，
+     超时从 5s 调整为 15s 并支持配置。</span></pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ GETTING STARTED ═══ -->
+  <section class="block reveal" id="start">
+    <div class="kicker" data-i18n="start.kicker">快速开始</div>
+    <h2 data-i18n="start.title">四步上手</h2>
+    <p class="lead" data-i18n="start.lead">无需复杂配置，下载即用。</p>
+    <div class="steps">
+      <div class="step">
+        <h3 data-i18n="s1.t">下载安装包</h3>
+        <p data-i18n="s1.d">从 GitHub Releases 获取 Windows / macOS / Linux 版本</p>
+      </div>
+      <div class="step">
+        <h3 data-i18n="s2.t">选择项目目录</h3>
+        <p data-i18n="s2.d">启动 Ally，选中你要工作的本地项目文件夹</p>
+      </div>
+      <div class="step">
+        <h3 data-i18n="s3.t">配置模型</h3>
+        <p data-i18n="s3.d">在设置中填写服务商、模型、API 地址和 Key</p>
+      </div>
+      <div class="step">
+        <h3 data-i18n="s4.t">开始对话</h3>
+        <p data-i18n="s4.d">用自然语言描述任务，剩下的交给 Ally</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ CTA ═══ -->
+  <section class="cta reveal">
+    <h2 data-i18n="cta.title">现在就开始用 Ally 写代码</h2>
+    <p data-i18n="cta.sub">免费、开源、跨平台。</p>
+    <a class="btn btn-primary" href="https://github.com/Bronya0/ally-agent/releases" target="_blank" rel="noopener">
+      <span data-i18n="cta.btn">前往 Releases 下载</span>
+    </a>
+  </section>
+
+</div>
+
+<footer>
+  <div class="wrap foot-inner">
+    <span>© 2026 Bronya0 · GPL-3.0-only</span>
+    <span class="foot-right">
+      <a href="https://github.com/Bronya0/ally-agent" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://github.com/Bronya0/ally-agent/releases" target="_blank" rel="noopener">Releases</a>
+      <a href="https://github.com/Bronya0/ally-agent/blob/main/LICENSE" target="_blank" rel="noopener">License</a>
+    </span>
+  </div>
+</footer>
+
+<script>
+(function () {
+  "use strict";
+
+  /* ── i18n ─────────────────────────────────── */
+  var dict = {
+    "zh-CN": {
+      "nav.features": "功能", "nav.models": "模型", "nav.start": "快速开始",
+      "hero.title.a": "你的本地项目，", "hero.title.b": "交给 Ally 来对话",
+      "hero.sub": "面向本地项目的桌面 AI 编程助手——理解代码、编辑文件、搜索工作区、管理任务，一场对话完成整个开发流程。",
+      "hero.download": "下载 Ally",
+      "badge.os": "开源", "badge.model": "多模型服务商", "badge.cn": "中英双语界面",
+      "shot.main": "主界面", "shot.welcome": "欢迎页",
+      "feat.kicker": "功能", "feat.title": "不只是聊天，是直接干活",
+      "feat.lead": "Ally 在严格的工作区安全边界内读写你的项目，每一步操作都有可视化反馈。",
+      "f1.t": "安全的文件操作", "f1.d": "读取、搜索、创建、编辑、删除都在工作区边界内进行，编辑带乐观并发校验，多文件改动原子提交。",
+      "f2.t": "可视化 Diff", "f2.d": "每次修改都在聊天里直接呈现对比视图、命令输出和完整的失败原因，改动一目了然。",
+      "f3.t": "内置 ripgrep 搜索", "f3.d": "发行包自带 ripgrep，无需安装任何东西，开箱即用地在整个工作区里极速搜索代码。",
+      "f4.t": "并行子代理", "f4.d": "把繁重任务委派给并行子代理，实时查看步骤、工具活动和 Token 用量，收回内联的最终摘要。",
+      "f5.t": "Skills 与记忆", "f5.d": "用可发现的 Skills 扩展工作流，通过全局记忆把跨项目的知识沉淀下来，下次自动可用。",
+      "f6.t": "后台进程与定时任务", "f6.d": "运行开发服务器等后台进程并在任务中心查看日志，还能创建进程级的定时任务自动执行工作。",
+      "f7.t": "沙箱 HTML 渲染", "f7.d": "在聊天中安全渲染交互式 HTML 结果——小工具、数据预览、组件原型，即写即看。",
+      "f8.t": "三种运行模式", "f8.d": "执行模式直接干活、计划模式只读规划、访谈模式先问清楚再动手——按任务自由选择。",
+      "f9.t": "统一代理支持", "f9.d": "跟随系统代理或手动配置 HTTP/HTTPS/SOCKS5，一致应用到模型、MCP、命令和后台服务。",
+      "models.kicker": "开放生态", "models.title": "接入你已有的模型与工具",
+      "models.lead": "不被单一服务商绑定。三大 API 格式 + 兼容服务 + MCP 协议，模型和工具随你组合。",
+      "models.compat": "兼容模型服务",
+      "safe.kicker": "可靠执行", "safe.title": "每一步都在你的掌控之中",
+      "safe.1": "<b>工作区边界</b>——写入操作严格限定在项目目录内",
+      "safe.2": "<b>版本校验</b>——编辑前校验文件版本，拒绝过期改动",
+      "safe.3": "<b>失败可解释</b>——工具失败原因完整展示，不静默吞错",
+      "safe.4": "<b>中英双语</b>——界面、警告、设置和工具状态全部本地化",
+      "start.kicker": "快速开始", "start.title": "四步上手", "start.lead": "无需复杂配置，下载即用。",
+      "s1.t": "下载安装包", "s1.d": "从 GitHub Releases 获取 Windows / macOS / Linux 版本",
+      "s2.t": "选择项目目录", "s2.d": "启动 Ally，选中你要工作的本地项目文件夹",
+      "s3.t": "配置模型", "s3.d": "在设置中填写服务商、模型、API 地址和 Key",
+      "s4.t": "开始对话", "s4.d": "用自然语言描述任务，剩下的交给 Ally",
+      "cta.title": "现在就开始用 Ally 写代码", "cta.sub": "免费、开源、跨平台。", "cta.btn": "前往 Releases 下载"
+    },
+    "en-US": {
+      "nav.features": "Features", "nav.models": "Models", "nav.start": "Get Started",
+      "hero.title.a": "Your local projects,", "hero.title.b": "in conversation with Ally",
+      "hero.sub": "A desktop AI coding assistant for local projects — understand code, edit files, search the workspace, and manage tasks through conversation.",
+      "hero.download": "Download Ally",
+      "badge.os": "Open Source", "badge.model": "Multi-provider", "badge.cn": "CN & EN UI",
+      "shot.main": "Main UI", "shot.welcome": "Welcome",
+      "feat.kicker": "Features", "feat.title": "Not just chat — real work",
+      "feat.lead": "Ally reads and writes your project inside strict workspace boundaries, with visual feedback for every action.",
+      "f1.t": "Safe file operations", "f1.d": "Read, search, create, edit, and delete within workspace boundaries, with optimistic concurrency checks and atomic multi-file commits.",
+      "f2.t": "Visual diffs", "f2.d": "Every change shows up in chat as a diff view with command output and full failure reasons — nothing hidden.",
+      "f3.t": "Bundled ripgrep", "f3.d": "Release packages ship ripgrep built in. Blazing-fast code search across the workspace, zero setup.",
+      "f4.t": "Parallel sub-agents", "f4.d": "Delegate heavy work to parallel sub-agents with live steps, tool activity, token usage, and inline final summaries.",
+      "f5.t": "Skills & memory", "f5.d": "Extend workflows with discoverable Skills, and keep durable cross-project knowledge in global memory.",
+      "f6.t": "Background processes & schedules", "f6.d": "Run dev servers as tracked background processes with a task-center log viewer, plus process-local scheduled tasks.",
+      "f7.t": "Sandboxed HTML rendering", "f7.d": "Safely render interactive HTML results in chat — small tools, data previews, and component prototypes.",
+      "f8.t": "Three run modes", "f8.d": "Execute mode gets things done, plan mode stays read-only, and interview mode asks before acting.",
+      "f9.t": "Unified proxy support", "f9.d": "Follow the system proxy or set a manual HTTP/HTTPS/SOCKS5 proxy, applied consistently to models, MCP, commands, and services.",
+      "models.kicker": "Open ecosystem", "models.title": "Bring your own models and tools",
+      "models.lead": "No vendor lock-in. Three API formats, compatible services, and the MCP protocol — mix and match freely.",
+      "models.compat": "Compatible services",
+      "safe.kicker": "Reliable execution", "safe.title": "Every step under your control",
+      "safe.1": "<b>Workspace boundary</b> — write operations are strictly confined to the project directory",
+      "safe.2": "<b>Version checks</b> — edits validate file versions and reject stale changes",
+      "safe.3": "<b>Explainable failures</b> — tool failure reasons are shown in full, never swallowed",
+      "safe.4": "<b>Localized UI</b> — interface, warnings, settings, and tool status in Chinese or English",
+      "start.kicker": "Get started", "start.title": "Up and running in four steps", "start.lead": "No complex setup. Download and go.",
+      "s1.t": "Download", "s1.d": "Grab the Windows / macOS / Linux package from GitHub Releases",
+      "s2.t": "Pick a project", "s2.d": "Launch Ally and select the local project folder you want to work on",
+      "s3.t": "Configure a model", "s3.d": "Fill in provider, model, API URL, and API key in Settings",
+      "s4.t": "Start chatting", "s4.d": "Describe the task in natural language and let Ally do the rest",
+      "cta.title": "Start coding with Ally today", "cta.sub": "Free, open source, cross-platform.", "cta.btn": "Get it from Releases"
+    }
+  };
+
+  var html = document.documentElement;
+  var langBtn = document.getElementById("langBtn");
+  var current = (function () {
+    try {
+      var saved = localStorage.getItem("ally-site-lang");
+      if (saved === "zh-CN" || saved === "en-US") return saved;
+    } catch (e) {}
+    return (navigator.language || "").toLowerCase().indexOf("zh") === 0 ? "zh-CN" : "en-US";
+  })();
+
+  function applyLang(lang) {
+    current = lang;
+    html.lang = lang;
+    var table = dict[lang];
+    document.querySelectorAll("[data-i18n]").forEach(function (el) {
+      var key = el.getAttribute("data-i18n");
+      if (table[key] != null) el.innerHTML = table[key];
+    });
+    document.title = lang === "zh-CN" ? "Ally — 桌面 AI 编程助手" : "Ally — Desktop AI Coding Assistant";
+    langBtn.textContent = lang === "zh-CN" ? "EN" : "中文";
+    try { localStorage.setItem("ally-site-lang", lang); } catch (e) {}
+  }
+  langBtn.addEventListener("click", function () {
+    applyLang(current === "zh-CN" ? "en-US" : "zh-CN");
+  });
+  applyLang(current);
+
+  /* ── nav shadow on scroll ─────────────────── */
+  var nav = document.getElementById("nav");
+  function onScroll() { nav.classList.toggle("scrolled", window.scrollY > 12); }
+  window.addEventListener("scroll", onScroll, { passive: true });
+  onScroll();
+
+  /* ── screenshot tabs ──────────────────────── */
+  var shotImg = document.getElementById("shotImg");
+  document.querySelectorAll(".shot-tab").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      document.querySelectorAll(".shot-tab").forEach(function (b) { b.classList.remove("active"); });
+      btn.classList.add("active");
+      var src = btn.getAttribute("data-shot");
+      if (shotImg.getAttribute("src") !== src) {
+        shotImg.style.opacity = "0";
+        var next = new Image();
+        next.onload = function () {
+          shotImg.src = src;
+          shotImg.style.transition = "opacity .35s";
+          shotImg.style.opacity = "1";
+        };
+        next.src = src;
+      }
+    });
+  });
+
+  /* ── reveal on scroll ─────────────────────── */
+  var io = new IntersectionObserver(function (entries) {
+    entries.forEach(function (entry) {
+      if (entry.isIntersecting) {
+        entry.target.classList.add("visible");
+        io.unobserve(entry.target);
+      }
+    });
+  }, { threshold: 0.08, rootMargin: "0px 0px -6% 0px" });
+  document.querySelectorAll(".reveal").forEach(function (el) { io.observe(el); });
+})();
+</script>
+</body>
+</html>
