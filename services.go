@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -17,10 +16,9 @@ import (
 )
 
 const (
-	serviceOutputLimit       = 512 * 1024
-	serviceOutputPreview     = 8 * 1024
-	maxCompletedServices     = 20
-	maxActiveServices        = 8
+	serviceOutputLimit   = 512 * 1024
+	serviceOutputPreview = 8 * 1024
+	maxActiveServices    = 8
 
 	// Tool-facing read defaults. The model can request up to
 	// maxServiceReadTailBytes of recent output per call; larger reads are
@@ -180,9 +178,9 @@ func (a *App) startServiceWithConfig(cfg ConfigState, req StartServiceRequest) (
 }
 
 func (a *App) finalizeService(id string, service *managedService) {
-	_ = a.persistService(service)
-	a.pruneCompletedServices()
-	a.emitServiceUpdate(service.snapshot())
+	info := service.snapshot()
+	a.removeService(id, service)
+	a.emitServiceUpdate(info)
 }
 
 func copyServiceOutput(wg *sync.WaitGroup, dst io.Writer, src io.Reader) {
@@ -225,7 +223,7 @@ func (a *App) stopService(req StopServiceRequest) (ServiceInfo, error) {
 		service.mu.Unlock()
 	}
 	info := service.snapshot()
-	_ = a.persistService(service)
+	a.removeService(id, service)
 	a.emitServiceUpdate(info)
 	return info, nil
 }
@@ -257,9 +255,9 @@ func (a *App) listServices() ServiceListResult {
 // the model must call background_process.read on a specific id to inspect
 // output.
 type ServiceListToolResult struct {
-	ActiveCount int               `json:"activeCount"`
-	MaxActive   int               `json:"maxActive"`
-	Services    []ServiceSummary  `json:"services"`
+	ActiveCount int              `json:"activeCount"`
+	MaxActive   int              `json:"maxActive"`
+	Services    []ServiceSummary `json:"services"`
 }
 
 // ServiceSummary is the per-service metadata returned by the list action. It
@@ -420,29 +418,6 @@ func (a *App) serviceHistoryDir() string {
 	return filepath.Join(filepath.Dir(configPath), "service_history")
 }
 
-func (a *App) persistService(service *managedService) error {
-	dir := a.serviceHistoryDir()
-	if dir == "" || service == nil {
-		return nil
-	}
-	info := service.snapshot()
-	output, total, truncated := service.outputSnapshot()
-	info.OutputTail = tailString(output, serviceOutputPreview)
-	info.OutputBytes = total
-	info.OutputTruncated = truncated
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
-	}
-	metadata, err := json.MarshalIndent(info, "", "  ")
-	if err != nil {
-		return err
-	}
-	if err := atomicWriteFile(filepath.Join(dir, info.ID+".json"), metadata, 0o600); err != nil {
-		return err
-	}
-	return atomicWriteFile(filepath.Join(dir, info.ID+".log"), []byte(output), 0o600)
-}
-
 func (a *App) loadServiceHistory() error {
 	dir := a.serviceHistoryDir()
 	if dir == "" {
@@ -455,73 +430,31 @@ func (a *App) loadServiceHistory() error {
 	if err != nil {
 		return err
 	}
-	loaded := make([]*managedService, 0, len(entries))
+	// Completed services are no longer retained. Remove records written by
+	// older versions so they do not reappear after upgrading.
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(strings.ToLower(entry.Name()), ".json") {
+		if entry.IsDir() {
 			continue
 		}
-		raw, readErr := os.ReadFile(filepath.Join(dir, entry.Name()))
-		if readErr != nil {
-			continue
+		name := strings.ToLower(entry.Name())
+		if strings.HasSuffix(name, ".json") || strings.HasSuffix(name, ".log") {
+			_ = os.Remove(filepath.Join(dir, entry.Name()))
 		}
-		var info ServiceInfo
-		if json.Unmarshal(raw, &info) != nil || strings.TrimSpace(info.ID) == "" {
-			continue
-		}
-		if info.Status == "starting" || info.Status == "running" {
-			info.Status = "interrupted"
-			info.StoppedAt = time.Now().Unix()
-			info.Error = "Ally exited before the service reported a terminal state"
-		}
-		output, _ := os.ReadFile(filepath.Join(dir, info.ID+".log"))
-		buf := newRollingBuffer(serviceOutputLimit)
-		buf.Restore(output, info.OutputBytes, info.OutputTruncated)
-		service := &managedService{info: info, output: buf, waitDone: closedServiceWaitDone()}
-		loaded = append(loaded, service)
 	}
-	sort.Slice(loaded, func(i, j int) bool { return loaded[i].info.StartedAt > loaded[j].info.StartedAt })
-	a.servicesMu.Lock()
-	for _, service := range loaded {
-		a.services[service.info.ID] = service
-	}
-	a.servicesMu.Unlock()
-	a.pruneCompletedServices()
 	return nil
 }
 
-func closedServiceWaitDone() chan struct{} {
-	done := make(chan struct{})
-	close(done)
-	return done
-}
-
-func (a *App) pruneCompletedServices() {
+func (a *App) removeService(id string, service *managedService) {
 	a.servicesMu.Lock()
-	type completedEntry struct {
-		id      string
-		started int64
-	}
-	completed := []completedEntry{}
-	for id, service := range a.services {
-		service.mu.Lock()
-		status := service.info.Status
-		started := service.info.StartedAt
-		service.mu.Unlock()
-		if status != "starting" && status != "running" {
-			completed = append(completed, completedEntry{id: id, started: started})
-		}
-	}
-	sort.Slice(completed, func(i, j int) bool { return completed[i].started > completed[j].started })
-	removeIDs := []string{}
-	if len(completed) > maxCompletedServices {
-		for _, entry := range completed[maxCompletedServices:] {
-			delete(a.services, entry.id)
-			removeIDs = append(removeIDs, entry.id)
-		}
+	if current := a.services[id]; current == service {
+		delete(a.services, id)
 	}
 	a.servicesMu.Unlock()
+
+	// Keep cleanup idempotent for installations upgraded from the old
+	// completed-service retention behavior.
 	dir := a.serviceHistoryDir()
-	for _, id := range removeIDs {
+	if dir != "" {
 		_ = os.Remove(filepath.Join(dir, id+".json"))
 		_ = os.Remove(filepath.Join(dir, id+".log"))
 	}

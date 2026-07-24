@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -67,35 +68,30 @@ func TestLooksLikeLongRunningServiceWhitelistOnly(t *testing.T) {
 	}
 }
 
-func TestServiceHistoryRoundTrip(t *testing.T) {
+func TestServiceHistoryCleanup(t *testing.T) {
 	root := t.TempDir()
 	app := NewApp()
 	app.configPath = filepath.Join(root, "config.json")
-	buffer := newRollingBuffer(serviceOutputLimit)
-	_, _ = buffer.Write([]byte("service output\n"))
-	service := &managedService{
-		info:   ServiceInfo{ID: "svc_test", Name: "test", Command: "test-command", Cwd: root, Status: "stopped", StartedAt: 10, StoppedAt: 20},
-		output: buffer,
-	}
-	if err := app.persistService(service); err != nil {
+	dir := app.serviceHistoryDir()
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-
-	reloaded := NewApp()
-	reloaded.configPath = app.configPath
-	if err := reloaded.loadServiceHistory(); err != nil {
+	for _, name := range []string{"svc_old.json", "svc_old.log"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("legacy"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := app.loadServiceHistory(); err != nil {
 		t.Fatal(err)
 	}
-	listed := reloaded.ListServices()
-	if len(listed.Services) != 1 || listed.Services[0].ID != "svc_test" {
-		t.Fatalf("unexpected persisted services: %#v", listed.Services)
+	if _, err := os.Stat(filepath.Join(dir, "svc_old.json")); !os.IsNotExist(err) {
+		t.Fatalf("expected legacy metadata to be removed, got err=%v", err)
 	}
-	output, err := reloaded.GetServiceOutput("svc_test")
-	if err != nil {
-		t.Fatal(err)
+	if _, err := os.Stat(filepath.Join(dir, "svc_old.log")); !os.IsNotExist(err) {
+		t.Fatalf("expected legacy output to be removed, got err=%v", err)
 	}
-	if !strings.Contains(output.Output, "service output") || output.Bytes != int64(len("service output\n")) {
-		t.Fatalf("unexpected persisted output: %#v", output)
+	if listed := app.ListServices(); len(listed.Services) != 0 {
+		t.Fatalf("expected no completed services after cleanup, got %#v", listed.Services)
 	}
 }
 
