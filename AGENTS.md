@@ -753,6 +753,54 @@ Verification is done with a single command:
 
 ---
 
+## Wails Event Emission Map
+
+后端通过 `App.emit()` (`app.go`) 派发到前端；前端在 `App.vue` 的 `bindRuntimeEvents()` 中通过 `EventsOn()` 统一注册，`runtimeEventOffs` 跟踪卸载。`model_provider.go` 和 `mcp.go` 不直接发 Wails 事件（前者走 in-process `onEvent` 回调，后者无 emit）。
+
+### 高频流（双层节流，仅这两条）
+
+| 事件 | 后端节流位置 | 前端缓冲位置 |
+|------|--------------|--------------|
+| `run:delta` / `run:reasoning` | `runStreamDeltaEmitter` (`app.go` runStreamDeltaThrottle=32ms / runStreamDeltaThreshold=512B)，流末 `flush()` 兜底；`run:image` 发送前先 flush | `queueStreamDelta` + `setTimeout(48ms) → requestAnimationFrame` (`App.vue`) |
+| `tool:update` | `toolCallProgressTracker.eventsWithForce` (`app.go` toolUpdateThrottle=200ms / toolUpdateThreshold=2048B)，超阈值且在窗口内早 continue 跳过 state 构造；`forceEvents()` 流末绕过节流 | `bufferToolUpdate` + `setTimeout(120ms) → requestAnimationFrame`，`toolUpdateBuffers` Map 按 `toolEventId` 去重只留最新帧 (`App.vue`)；`tool:result` / `tool:error` / `run:done` / `run:error` / `run:cancelled` 处理前显式 `flushToolUpdateBuffer()` |
+
+### 生命周期事件（天然低频，无需节流）
+
+**Chat loop (`app.go` `runChat`)**：
+- `run:start` / `run:llm_wait` / `run:done` / `run:error` — 每轮 1 次
+- `run:compact` / `run:compacted` — 压缩时
+- `run:image` — 图片 delta
+- `tool:result` / `tool:error` — 每个工具调用 1 次 (`app.go`)
+- `tokens:update` — `recordWorkspaceTokenUsage` 每个 LLM step 1 次 (`app.go`)
+- `tokens:reset` — `ResetWorkspaceTokenUsage` (`app.go`)
+
+**Ask (`app.go`)**：`ask:ready` / `ask:closed` — 每次 ask 1 次
+
+**Goal (`app.go`)**：`goal:update` — `recordGoalTurn` / `updateGoal` 每轮 1 次
+
+**Todo (`app.go`)**：`todo:update` — `emitTodoUpdate` 写入时
+
+**MCP (`app.go`)**：`mcp:status` — 服务器状态变更时（一次发全部 server 状态）
+
+**Dependencies/Config (`app.go`)**：`dependency:missing` / `config:warning` — 罕见，前端按 tool 去重
+
+**Services (`services.go`)**：`service:update` — 仅 `startServiceWithConfig` / `finalizeService` / `stopService` 三处，不随输出滚动触发
+
+**Scheduled tasks (`scheduler.go`)**：`scheduled:update` / `scheduled:run_start` / `scheduled:run_done` / `scheduled:run_error` — 调度生命周期点
+
+### 子代理 / 调度任务路径
+
+`app.go` `executeDelegate` 调用 `streamModelResponse(ctx, cfg, model, messages, tools, nil)` —— **传入 `nil` onEvent**，子代理和调度任务不发任何 `run:delta` / `tool:update` 流式事件。只发 step 级事件：
+- `sub:spawn` / `sub:done` / `sub:error` — 生命周期
+- `sub:tool:start` / `sub:tool:result` / `sub:tool:error` — 每工具调用 1 次
+- `sub:step` — 每 LLM step 1 次
+
+### 事件命名约定
+
+lowercase + 冒号分隔，如 `run:delta`、`tool:result`、`mcp:status`、`sub:step`、`scheduled:update`、`service:update`、`todo:update`、`goal:update`、`ask:ready`、`tokens:update`、`dependency:missing`、`config:warning`。
+
+---
+
 ## Performance And Memory Notes (Ally-specific)
 
 - `tool:update` 事件在 `toolCallProgressTracker.eventsWithForce` (`app.go`) 中带 `toolUpdateThrottle = 200ms` + `toolUpdateThreshold = 2048` 字节节流。累计 `arguments` 超过阈值且仍在窗口内时早 continue，跳过 O(len(args)) 的 state 构造。`forceEvents()` 在流结束后绕过节流，保证最终状态送达。测试见 `TestToolCallProgressTrackerThrottlesLargeUpdates`。

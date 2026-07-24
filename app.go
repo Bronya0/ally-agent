@@ -4993,6 +4993,9 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 
 			a.emit("run:llm_wait", map[string]any{"runId": runID, "sessionId": sessionID})
 			toolCalls := []openai.ToolCall{}
+			streamDeltas := newRunStreamDeltaEmitter(runID, sessionID, func(name string, payload map[string]any) {
+				a.emit(name, payload)
+			})
 			toolProgress := newToolCallProgressTracker()
 			toolBatchID := fmt.Sprintf("%d:%d", turn, step)
 			// Inject context budget as the final request item so the model can
@@ -5009,19 +5012,21 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			modelResp, err := a.streamModelResponse(ctx, cfg, cfg.Model, requestMessages, tools, func(event modelStreamEvent) {
 				if event.ContentDelta != "" {
 					if !req.GrillMode {
-						a.emit("run:delta", map[string]any{"runId": runID, "sessionId": sessionID, "content": event.ContentDelta})
+						streamDeltas.addContent(event.ContentDelta)
 					}
 				}
 				if event.ReasoningDelta != "" {
-					a.emit("run:reasoning", map[string]any{"runId": runID, "sessionId": sessionID, "content": event.ReasoningDelta})
+					streamDeltas.addReasoning(event.ReasoningDelta)
 				}
 				if event.Image != nil && event.Image.DataURL != "" {
+					streamDeltas.flush()
 					a.emit("run:image", map[string]any{
 						"runId": runID, "sessionId": sessionID, "id": event.Image.ID,
 						"dataUrl": event.Image.DataURL, "mimeType": event.Image.MimeType, "partial": event.Image.Partial,
 					})
 				}
 				if event.ToolCalls != nil {
+					streamDeltas.flush()
 					toolCalls = cloneToolCalls(event.ToolCalls)
 					if !req.GrillMode {
 						for _, toolEvent := range toolProgress.events(runID, sessionID, toolBatchID, toolCalls, a.mcpToolEventMeta) {
@@ -5030,6 +5035,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 					}
 				}
 			})
+			streamDeltas.flush()
 			if err != nil {
 				a.saveHistory(req.SessionID, messages)
 				emitRunEnd("run:error", map[string]any{"error": err.Error()})
@@ -5911,6 +5917,70 @@ func summarizeSavedToolResult(name, content string) (string, string) {
 type toolCallProgressEvent struct {
 	Name    string
 	Payload map[string]any
+}
+
+type runStreamDeltaEmitter struct {
+	runID           string
+	sessionID       string
+	contentBuffer   strings.Builder
+	reasoningBuffer strings.Builder
+	lastEmit        time.Time
+	emit            func(string, map[string]any)
+}
+
+const (
+	runStreamDeltaThrottle  = 32 * time.Millisecond
+	runStreamDeltaThreshold = 512
+)
+
+func newRunStreamDeltaEmitter(runID, sessionID string, emit func(string, map[string]any)) *runStreamDeltaEmitter {
+	return &runStreamDeltaEmitter{runID: runID, sessionID: sessionID, emit: emit}
+}
+
+func (e *runStreamDeltaEmitter) addContent(delta string) {
+	e.add("run:delta", &e.contentBuffer, delta)
+}
+
+func (e *runStreamDeltaEmitter) addReasoning(delta string) {
+	e.add("run:reasoning", &e.reasoningBuffer, delta)
+}
+
+func (e *runStreamDeltaEmitter) add(name string, buffer *strings.Builder, delta string) {
+	if e == nil || delta == "" {
+		return
+	}
+	buffer.WriteString(delta)
+	if e.shouldFlush(buffer.Len()) {
+		e.flushBuffer(name, buffer)
+	}
+}
+
+func (e *runStreamDeltaEmitter) shouldFlush(bufferLen int) bool {
+	if e == nil || bufferLen == 0 {
+		return false
+	}
+	if e.lastEmit.IsZero() || bufferLen >= runStreamDeltaThreshold {
+		return true
+	}
+	return time.Since(e.lastEmit) >= runStreamDeltaThrottle
+}
+
+func (e *runStreamDeltaEmitter) flush() {
+	if e == nil {
+		return
+	}
+	e.flushBuffer("run:reasoning", &e.reasoningBuffer)
+	e.flushBuffer("run:delta", &e.contentBuffer)
+}
+
+func (e *runStreamDeltaEmitter) flushBuffer(name string, buffer *strings.Builder) {
+	if e == nil || buffer == nil || buffer.Len() == 0 || e.emit == nil {
+		return
+	}
+	content := buffer.String()
+	buffer.Reset()
+	e.lastEmit = time.Now()
+	e.emit(name, map[string]any{"runId": e.runID, "sessionId": e.sessionID, "content": content})
 }
 
 type toolCallProgressTracker struct {
@@ -8078,9 +8148,9 @@ func toolResultSummary(name string, result *toolResult) string {
 		var r GrepResult
 		if json.Unmarshal(data, &r) == nil {
 			if r.Occurrences > 0 && r.Occurrences != r.Count {
-				return fmt.Sprintf("%d occurrences in %d matching lines", r.Occurrences, r.Count)
-			}
-			return fmt.Sprintf("%d matches", r.Count)
+			return fmt.Sprintf("%d hits in %d matching lines", r.Occurrences, r.Count)
+		}
+		return fmt.Sprintf("%d matches", r.Count)
 		}
 	case "run_command", "remote_run_command":
 		data, _ := json.Marshal(result.Data)
@@ -11946,10 +12016,10 @@ func countEditDiffStats(diff string, beforeLines, afterLines []string) (int, int
 	// shown lines. Keep supporting it for diffs produced before this change.
 	if idx := strings.Index(diff, "[diff truncated: omitted "); idx >= 0 {
 		var omittedRemoved, omittedAdded int
-			if _, err := fmt.Sscanf(diff[idx:], "[diff truncated: omitted %d removed and %d added lines]", &omittedRemoved, &omittedAdded); err == nil {
-				added += omittedAdded
-				removed += omittedRemoved
-			}
+		if _, err := fmt.Sscanf(diff[idx:], "[diff truncated: omitted %d removed and %d added lines]", &omittedRemoved, &omittedAdded); err == nil {
+			added += omittedAdded
+			removed += omittedRemoved
+		}
 	}
 	return added, removed
 }

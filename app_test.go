@@ -291,6 +291,50 @@ func TestAgentDelegateSemaphoreRespectsCancelledContext(t *testing.T) {
 	}
 }
 
+func TestRunStreamDeltaEmitterBatchesRapidDeltas(t *testing.T) {
+	type event struct {
+		name    string
+		content string
+	}
+	events := []event{}
+	emitter := newRunStreamDeltaEmitter("run-1", "session-1", func(name string, payload map[string]any) {
+		events = append(events, event{name: name, content: payload["content"].(string)})
+	})
+
+	emitter.addContent("你")
+	emitter.addContent("好")
+	if len(events) != 1 {
+		t.Fatalf("expected first delta to emit immediately and second to buffer, got %#v", events)
+	}
+	if events[0].name != "run:delta" || events[0].content != "你" {
+		t.Fatalf("unexpected first event: %#v", events[0])
+	}
+
+	emitter.flush()
+	if len(events) != 2 {
+		t.Fatalf("expected flush to emit buffered delta, got %#v", events)
+	}
+	if events[1].name != "run:delta" || events[1].content != "好" {
+		t.Fatalf("unexpected flushed event: %#v", events[1])
+	}
+}
+
+func TestRunStreamDeltaEmitterFlushesByThreshold(t *testing.T) {
+	events := []string{}
+	emitter := newRunStreamDeltaEmitter("run-1", "session-1", func(name string, payload map[string]any) {
+		events = append(events, payload["content"].(string))
+	})
+
+	emitter.addContent("a")
+	emitter.addContent(strings.Repeat("b", runStreamDeltaThreshold))
+	if len(events) != 2 {
+		t.Fatalf("expected threshold to flush buffered content, got %#v", events)
+	}
+	if events[1] != strings.Repeat("b", runStreamDeltaThreshold) {
+		t.Fatalf("expected threshold flush content, got %q", events[1])
+	}
+}
+
 func TestToolCallProgressTrackerEmitsStreamingUpdates(t *testing.T) {
 	tracker := newToolCallProgressTracker()
 	toolCalls := []openai.ToolCall{}
