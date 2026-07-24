@@ -77,6 +77,18 @@
               <span class="settings-field-hint">{{ $t('settings.userAgentHint') }}</span>
             </div>
           </n-form-item>
+          <n-form-item :label="$t('settings.llmRetries')">
+            <div class="settings-field-stack">
+              <n-input-number
+                v-model:value="draft.llmRetries"
+                :min="0"
+                :max="10"
+                :step="1"
+                style="width: 100%"
+              />
+              <span class="settings-field-hint">{{ $t('settings.llmRetriesHint') }}</span>
+            </div>
+          </n-form-item>
           <div class="settings-page-actions">
             <n-button type="primary" @click="onSave">{{ $t('common.save') }}</n-button>
           </div>

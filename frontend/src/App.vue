@@ -112,6 +112,10 @@
                     </div>
                   </div>
                 </div>
+                <div v-if="retryBanner" class="composer-retry-banner" :title="retryBanner.error">
+                  <span class="composer-retry-icon" aria-hidden="true">↻</span>
+                  <span class="composer-retry-text">{{ $t('app.run.retryBanner', { attempt: retryBanner.attempt, max: retryBanner.maxAttempts, error: retryBanner.error }) }}</span>
+                </div>
                 <div v-if="activeSessionRunning || activeGoal" class="composer-run-status">
                   <span v-if="activeSessionRunning" class="composer-run-status-dots">
                     <span class="composer-run-status-dot"></span>
@@ -1084,6 +1088,8 @@ const config = reactive(defaultConfig());
 const configDraft = reactive(defaultConfig());
 const sessions = ref([]);
 const activeSessionId = ref('');
+// 当前会话的 LLM 请求重试状态(null 表示无重试)。非持久化,切换会话或新一轮 delta 时清除。
+const retryBanner = ref(null);
 const sessionPromptTexts = reactive({});
 const promptText = computed({
   get: () => sessionPromptTexts[activeSessionId.value] || '',
@@ -1648,6 +1654,8 @@ watch(activeSessionId, async () => {
 }, { immediate: true });
 
 watch(activeSessionId, () => {
+  // 切换会话时清掉重试横幅:重试横幅只反映当前可见会话的瞬时状态。
+  retryBanner.value = null;
   loadGoal(activeSessionId.value);
   nextTick(() => {
     cleanupDisconnectedMermaidNodes();
@@ -2677,10 +2685,29 @@ function bindRuntimeEvents() {
   });
 
   onRuntimeEvent('run:delta', (data) => {
+    // 收到任何 delta 都意味着重试已恢复(或本次请求正常开始),清除重试横幅。
+    if (retryBanner.value) {
+      const session = sessionByTerminalEvent(data);
+      if (session && session.id === activeSessionId.value) retryBanner.value = null;
+    }
     queueStreamDelta(data, 'content');
   });
   onRuntimeEvent('run:reasoning', (data) => {
+    if (retryBanner.value) {
+      const session = sessionByTerminalEvent(data);
+      if (session && session.id === activeSessionId.value) retryBanner.value = null;
+    }
     queueStreamDelta(data, 'reasoning');
+  });
+  onRuntimeEvent('run:retry', (data) => {
+    const session = sessionByTerminalEvent(data);
+    if (!session || session.id !== activeSessionId.value) return;
+    retryBanner.value = {
+      attempt: Number(data.attempt || 0),
+      maxAttempts: Number(data.maxAttempts || 0),
+      error: String(data.error || ''),
+      waitMs: Number(data.waitMs || 0),
+    };
   });
   onRuntimeEvent('run:image', (data) => {
     flushStreamBuffer(data.runId);
@@ -2810,6 +2837,13 @@ function bindRuntimeEvents() {
         return;
       }
       existing.status = 'success';
+      // ESC 终止的命令不应显示绿色 √
+      if (data.name === 'run_command' || data.name === 'remote_run_command') {
+        try {
+          const parsed = JSON.parse(data.result);
+          if (parsed?.data?.cancelled) existing.status = 'error';
+        } catch (_) { /* ignore */ }
+      }
       existing.body = formatToolBody(data.name, data.result);
       existing.chip = formatToolChip(data.name, data.result);
       existing.durationMs = Number(data.durationMs || 0);
@@ -2949,6 +2983,10 @@ function bindRuntimeEvents() {
   onRuntimeEvent('run:done', (data) => {
     flushStreamBuffer(data.runId);
     flushToolUpdateBuffer();
+    if (retryBanner.value) {
+      const session = sessionByTerminalEvent(data);
+      if (session && session.id === activeSessionId.value) retryBanner.value = null;
+    }
     const session = sessionByTerminalEvent(data);
     if (!session) return;
   	  refreshGitStatus();
@@ -2983,6 +3021,10 @@ function bindRuntimeEvents() {
   onRuntimeEvent('run:error', (data) => {
     flushStreamBuffer(data.runId);
     flushToolUpdateBuffer();
+    if (retryBanner.value) {
+      const session = sessionByTerminalEvent(data);
+      if (session && session.id === activeSessionId.value) retryBanner.value = null;
+    }
     const session = sessionByTerminalEvent(data);
     if (!session) return;
       let i = session.messages.length - 1;
@@ -3016,6 +3058,10 @@ function bindRuntimeEvents() {
   onRuntimeEvent('run:cancelled', (data) => {
     flushStreamBuffer(data.runId);
     flushToolUpdateBuffer();
+    if (retryBanner.value) {
+      const session = sessionByTerminalEvent(data);
+      if (session && session.id === activeSessionId.value) retryBanner.value = null;
+    }
     const session = sessionByTerminalEvent(data);
     if (!session) return;
       let i = session.messages.length - 1;
@@ -4384,7 +4430,7 @@ function appendToolEventFallback(session, data = {}, status = 'running') {
     mcpTool: data.mcpTool || '',
     errorCode: data.errorCode || '',
     scheduledAction,
-    expanded: !['grep', 'list'].includes(toolKind(data.name)),
+    expanded: !isToolCollapsedByDefault(data.name),
     chip: '',
     editOldString: '',
     editNewString: '',
@@ -4608,7 +4654,7 @@ function updateToolEvent(id, name, title, body, status = 'default', meta = {}, t
   let waitSeconds = Number(existing?.waitSeconds || 0);
   let waitStartedAt = Number(existing?.waitStartedAt || 0);
   let askQuestions = existing?.askQuestions || [];
-  const expanded = existing ? existing.expanded : !['grep', 'list'].includes(toolKind(name));
+  const expanded = existing ? existing.expanded : !isToolCollapsedByDefault(name);
 
   const raw = String(body || '');
   const parsed = parseToolArgsBestEffort(raw);
@@ -4841,6 +4887,10 @@ async function loadScheduledTasks() {
 function applyServiceEvent(data = {}) {
   const service = data.service;
   if (!service?.id) return;
+  if (!['starting', 'running'].includes(service.status)) {
+    services.value = services.value.filter((item) => item.id !== service.id);
+    return;
+  }
   const next = services.value.filter((item) => item.id !== service.id);
   next.push(service);
   services.value = sortServices(next);
@@ -5427,6 +5477,15 @@ function toolKind(name) {
   return 'other';
 }
 
+// Kinds and tool names whose cards start collapsed, showing only the fixed
+// non-scrollable preview lines until the user expands them manually.
+const COLLAPSED_BY_DEFAULT_KINDS = new Set(['grep', 'list', 'create', 'command']);
+const COLLAPSED_BY_DEFAULT_NAMES = new Set(['http_request', 'web_fetch']);
+
+function isToolCollapsedByDefault(name) {
+  return COLLAPSED_BY_DEFAULT_KINDS.has(toolKind(name)) || COLLAPSED_BY_DEFAULT_NAMES.has(name);
+}
+
 function isMcpToolName(name) {
   return typeof name === 'string' && name.startsWith('mcp__');
 }
@@ -5716,6 +5775,7 @@ function formatToolBody(name, body) {
         out += 'exit code: ' + d.exitCode + ' [' + formatDuration(d.durationMs) + ']';
       }
       if (d.timedOut) out += '  TIMED OUT';
+      if (d.cancelled) out += '  CANCELLED';
       if (d.truncated) out += '  [truncated]';
       return out;
     }

@@ -8,7 +8,7 @@
           <span>{{ $t('chat.archive.summary', { count: msg.count, tokens: fmtK(msg.tokens) }) }}</span>
         </button>
         <div v-else-if="msg.role === 'user'" :class="['message', msg.role, { error: msg.error }]" data-user-question>
-          <span class="user-prefix">{{ $t('chat.askPrefix') }}</span>
+          <span class="user-rail" aria-hidden="true">›</span>
           <div v-if="msg.skill" class="message-body user-text">
             <span class="skill-chip">/{{ msg.skill.name }}</span>
             <div v-if="msg.skill.args" class="skill-user-text markdown-body" v-html="renderFn(msg.skill.args, false)"></div>
@@ -20,8 +20,8 @@
           <div v-if="msg.reasoningBody" class="reasoning-block">
             <div class="reasoning-header" @click.stop="msg.reasoningExpanded = !msg.reasoningExpanded">
               <span class="reasoning-label">
-                <span :class="['reasoning-title', { 'reasoning-title-thinking': !msg.reasoningEndedAt }]">{{ msg.reasoningEndedAt ? (reasoningDurationText(msg) ? 'Thought for ' + reasoningDurationText(msg) : 'Thought') : 'Thinking' }}</span>
-                <span class="reasoning-tokens">{{ msg.reasoningEndedAt ? '' : '·' }} {{ fmtK(Math.max(1, Math.round(String(msg.reasoningBody).length / 3))) }} tokens</span>
+                <span :class="['reasoning-title', { 'reasoning-title-thinking': !msg.reasoningEndedAt }]">{{ msg.reasoningEndedAt ? 'Thought' : 'Thinking' }}</span>
+                <span class="reasoning-tokens">{{ fmtK(Math.max(1, Math.round(String(msg.reasoningBody).length / 3))) }} tokens</span>
               </span>
             </div>
             <pre v-if="msg.reasoningExpanded" class="reasoning-body">{{ msg.reasoningBody }}</pre>
@@ -424,17 +424,23 @@ defineExpose({ scrollbarRef, scrollToBottom, scrollToUserQuestion, saveScrollPos
 .message.user {
   display: flex;
   align-items: flex-start;
-  gap: 8px;
+  gap: 4px;
+  /* 与 .rich-tool-card 一致:把 16px 标识挂到左边界外 */
+  margin-left: -20px;
+  padding-left: 20px;
 }
 
-.user-prefix {
+.user-rail {
   flex: none;
-  margin-top: 0;
-  color: var(--ally-accent-bright);
+  width: 16px;
+  margin-left: -20px;
+  text-align: center;
+  color: var(--ally-accent);
   font-family: var(--ally-ui-font);
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 600;
   line-height: 1.7;
+  opacity: 0.85;
 }
 
 .thinking-badge {

@@ -361,8 +361,8 @@ body.platform-darwin .window-close-icon {
 .workspace-tab.active {
   color: var(--header-strong);
   background: var(--header-active-bg);
-  border-color: color-mix(in srgb, var(--ally-accent) 32%, rgba(255, 255, 255, 0.08));
-  box-shadow: inset 0 -1px color-mix(in srgb, var(--ally-accent) 58%, transparent);
+  border-color: transparent;
+  box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--ally-accent) 38%, transparent);
 }
 
 .workspace-tab.running {

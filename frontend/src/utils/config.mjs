@@ -20,6 +20,7 @@ export function defaultConfig() {
     reasoningTag: 'reasoning_content',
     disabledSkills: [],
     models: [],
+    llmRetries: 2,
   };
 }
 

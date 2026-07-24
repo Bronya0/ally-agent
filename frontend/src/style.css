@@ -62,9 +62,9 @@
   --md-code: #d4a574;    /* 暖棕：内联代码 */
   --md-em: #e8b878;      /* 浅琥珀：斜体 */
   --md-link: #f0b66c;    /* 链接：同 h1，有下划线区分 */
-  --md-quote: #e8a55c;   /* 引用块 */
+  --md-quote: #ede0c8;   /* 引用块：暖米色,偏亮但不刺眼 */
   --md-quote-border: rgba(232, 165, 92, 0.55);
-  --md-quote-bg: rgba(232, 165, 92, 0.1);
+  --md-quote-bg: rgba(232, 165, 92, 0.06);
   --md-del: #9a8a6a;     /* 删除线：暗棕灰 */
   --md-marker-ul: #f0d166;
   --md-marker-ol: color-mix(in srgb, #d7dedc 88%, #f0d166 12%);
@@ -592,6 +592,41 @@ code, pre {
   margin: -2px 0 4px 2px;
   color: #8a8a8a;
   font-size: 11px;
+}
+
+/* LLM 请求重试横幅:显示重试次数 + 错误信息(常见 429) */
+.composer-retry-banner {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 4px 2px;
+  padding: 4px 8px;
+  background: rgba(220, 120, 50, 0.12);
+  border: 1px solid rgba(220, 120, 50, 0.35);
+  border-radius: 6px;
+  color: #e0a070;
+  font-size: 11px;
+  line-height: 1.4;
+  overflow: hidden;
+}
+
+.composer-retry-icon {
+  display: inline-block;
+  font-size: 13px;
+  line-height: 1;
+  animation: composer-retry-spin 1.4s linear infinite;
+  flex-shrink: 0;
+}
+
+.composer-retry-text {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@keyframes composer-retry-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
 }
 
 .composer-run-status-dots {
@@ -1657,18 +1692,7 @@ code, pre {
   font-family: Inter;
   font-weight: 800;
   line-height: 1;
-  letter-spacing: 0;
-  color: #f7f7f2;
-  background: linear-gradient(120deg, #ffffff 0%, #f7f7f2 34%, var(--ally-accent-bright) 66%, var(--ally-accent) 100%);
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.12), 0 10px 24px rgba(0, 0, 0, 0.22);
   white-space: nowrap;
-}
-
-body.platform-darwin .ally-wordmark {
-  filter: none;
 }
 
 .welcome-build-version {
@@ -2456,26 +2480,28 @@ body.platform-darwin .ally-wordmark {
   color: #777;
   font-variant-numeric: tabular-nums;
   font-size: 13px;
-  font-style: italic;
 }
 
 .reasoning-title {
-  color: var(--ally-accent);
+  color: #777;
   font-weight: 500;
-  font-style: italic;
 }
 
-/* 思考中：亮橙色 + opacity 脉动，纯 composite 属性，GPU 开销极小 */
+/* 思考中：灰色文字 + 从左到右的 shimmer 擦亮动画（无缝循环） */
 .reasoning-title-thinking {
-  color: var(--ally-accent-bright);
-  font-weight: 600;
-  font-style: italic;
-  animation: reasoning-pulse 1.6s ease-in-out infinite;
+  background: linear-gradient(90deg, #777 25%, #e0e0e0 50%, #777 75%);
+  background-size: 200% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  font-weight: 500;
+  animation: reasoning-shimmer 1.8s linear infinite;
 }
 
-@keyframes reasoning-pulse {
-  0%, 100% { opacity: 0.65; }
-  50% { opacity: 1; }
+@keyframes reasoning-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: 0% 0; }
 }
 
 .reasoning-body {
