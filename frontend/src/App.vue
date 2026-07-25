@@ -5570,7 +5570,10 @@ function makeToolTitle(name, args, meta = {}) {
     return parsed.target ? `${parsed.target} · ${parsed.path || ''}` : (parsed.path || '');
   }
   if (name === 'grep_files') {
-    return parsed.pattern || '';
+    const pattern = parsed.pattern || '';
+    const path = parsed.path || '';
+    if (pattern && path) return `${pattern} · ${path}`;
+    return pattern || path;
   }
   if (name === 'Glob') {
     return parsed.pattern || '';
