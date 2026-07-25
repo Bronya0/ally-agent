@@ -211,7 +211,7 @@ function selectionKey(selection) {
 .ask-tabs {
   display: flex;
   justify-content: center;
-  gap: 5px;
+  gap: 6px;
   min-width: 0;
 }
 
@@ -274,7 +274,7 @@ function selectionKey(selection) {
 .ask-option {
   display: grid;
   grid-template-columns: 18px minmax(0, 1fr);
-  gap: 9px;
+  gap: 10px;
   align-items: start;
   padding: 9px 4px;
   border-top: 1px solid rgba(255, 255, 255, 0.055);
@@ -291,14 +291,14 @@ function selectionKey(selection) {
 .ask-option-copy {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 4px;
   min-width: 0;
 }
 
 .ask-option-title-row {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
   min-width: 0;
 }
 
@@ -324,7 +324,7 @@ function selectionKey(selection) {
   flex-shrink: 0;
   padding: 1px 5px;
   border: 1px solid rgba(111, 164, 125, 0.35);
-  border-radius: 3px;
+  border-radius: 4px;
   color: #88b794;
   font-size: 10px;
   line-height: 15px;
@@ -383,7 +383,7 @@ function selectionKey(selection) {
 .ask-answer-line {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
   padding: 7px 0;
   border-top: 1px solid rgba(255, 255, 255, 0.055);
   color: #d4d4d4;

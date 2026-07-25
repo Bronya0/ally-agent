@@ -47,7 +47,7 @@ watch(() => props.selectedIndex, () => {
   bottom: calc(100% - 2px);
   z-index: 20;
   overflow: hidden;
-  border-radius: 14px;
+  border-radius: 10px;
   background: #1a1a1a;
   border: 1px solid rgba(255, 255, 255, 0.12);
   box-shadow: 0 22px 60px rgba(0, 0, 0, 0.55);

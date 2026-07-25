@@ -519,7 +519,7 @@ defineExpose({ scrollbarRef, scrollToBottom, scrollToUserQuestion, saveScrollPos
   height: 18px;
   padding: 0;
   border: none;
-  border-radius: 3px;
+  border-radius: 4px;
   background: transparent;
   color: #6a6a6a;
   cursor: pointer;

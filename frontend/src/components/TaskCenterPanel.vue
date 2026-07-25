@@ -363,11 +363,11 @@ function formatBytes(value) {
 .meta-grid strong { overflow: hidden; color: #c9c9c9; font-size: 12px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
 .instruction, .command { display: -webkit-box; margin-top: 10px; overflow: hidden; color: #bdbdbd; font-size: 12px; line-height: 1.55; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
 .command { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; -webkit-line-clamp: 2; }
-.buffer-preview { margin-top: 12px; padding: 10px; border-radius: 7px; background: rgba(255,255,255,.035); }
+.buffer-preview { margin-top: 12px; padding: 10px; border-radius: 8px; background: rgba(255,255,255,.035); }
 .buffer-preview.error, .service-error { background: rgba(239,68,68,.08); }
 .buffer-title { margin-bottom: 6px; color: #8f8f8f; font-size: 11px; }
 .buffer-preview pre { display: -webkit-box; margin: 0; overflow: hidden; color: #d4d4d4; font: 11px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace; white-space: pre-wrap; word-break: break-word; -webkit-box-orient: vertical; -webkit-line-clamp: 6; }
-.service-error { margin-top: 10px; padding: 8px 10px; border-radius: 7px; color: #f0a5a5; font-size: 11px; }
+.service-error { margin-top: 10px; padding: 8px 10px; border-radius: 8px; color: #f0a5a5; font-size: 11px; }
 .actions { justify-content: flex-end; margin-top: 12px; }
 .empty-hint { color: #777; font-size: 12px; }
 .log-toolbar { align-items: center; margin-bottom: 10px; color: #858585; font-size: 11px; }

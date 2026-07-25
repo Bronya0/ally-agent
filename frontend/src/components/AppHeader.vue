@@ -263,7 +263,7 @@ body.platform-darwin .brand-wordmark {
   display: flex;
   align-items: center;
   overflow-x: auto;
-  gap: 3px;
+  gap: 4px;
   height: 100%;
   flex: 1;
   min-width: 0;
@@ -276,7 +276,7 @@ body.platform-darwin .brand-wordmark {
 .header-tabs-actions {
   display: flex;
   align-items: center;
-  gap: 3px;
+  gap: 4px;
   margin-left: 4px;
   flex-shrink: 0;
 }
@@ -338,7 +338,7 @@ body.platform-darwin .window-close-icon {
   gap: 6px;
   padding: 0 7px 0 11px;
   height: 34px;
-  border-radius: 7px;
+  border-radius: 8px;
   cursor: pointer;
   color: var(--header-muted);
   font-size: 12px;

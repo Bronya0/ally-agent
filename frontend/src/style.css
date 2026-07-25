@@ -245,7 +245,7 @@ code, pre {
   bottom: clamp(16px, 4vh, 34px);
   z-index: 1;
   display: grid;
-  gap: 7px;
+  gap: 8px;
   max-width: min(420px, calc(100vw - 36px));
   text-align: right;
   text-shadow: 0 2px 18px rgba(0, 0, 0, 0.65);
@@ -317,7 +317,7 @@ code, pre {
 
 .message-body code {
   padding: 2px 5px;
-  border-radius: 5px;
+  border-radius: 6px;
   color: #fafafa;
   background: transparent;
   border: 1px solid rgba(255, 255, 255, 0.08);
@@ -491,7 +491,7 @@ code, pre {
 .composer-icon-btn {
   width: 22px;
   height: 22px;
-  border-radius: 5px;
+  border-radius: 6px;
   flex-shrink: 0;
   font-size: 15px;
 }
@@ -537,7 +537,7 @@ code, pre {
 .composer-info .run-mode-chip {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   height: 20px;
   padding: 0 2px;
   color: color-mix(in srgb, var(--ally-accent) 52%, #8a8a8a);
@@ -631,7 +631,7 @@ code, pre {
 
 .composer-run-status-dots {
   display: inline-flex;
-  gap: 3px;
+  gap: 4px;
 }
 
 .composer-run-status-dot {
@@ -653,7 +653,7 @@ code, pre {
 .composer-goal-status {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   min-width: 0;
   max-width: min(70vw, 720px);
 }
@@ -734,7 +734,7 @@ code, pre {
   font-size: 12px;
   margin-right: 14px;
   padding: 1px 4px;
-  border-radius: 5px;
+  border-radius: 6px;
   cursor: pointer;
   --wails-draggable: no-drag;
 }
@@ -788,7 +788,7 @@ code, pre {
   color: #8a8a8a;
   cursor: pointer;
   padding: 1px 5px;
-  border-radius: 5px;
+  border-radius: 6px;
   font-size: 12px;
   --wails-draggable: no-drag;
 }
@@ -1033,7 +1033,7 @@ code, pre {
 .model-menu .model-menu-group {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
   min-width: 0;
   width: 100%;
 }
@@ -1147,7 +1147,7 @@ code, pre {
   bottom: calc(100% - 2px);
   z-index: 20;
   overflow: visible;
-  border-radius: 14px;
+  border-radius: 10px;
   background: #1a1a1a;
   border: 1px solid rgba(255, 255, 255, 0.12);
   box-shadow: 0 22px 60px rgba(0, 0, 0, 0.55);
@@ -1241,7 +1241,7 @@ code, pre {
   height: 22px;
   padding: 0;
   border: 0;
-  border-radius: 5px;
+  border-radius: 6px;
   background: transparent;
   color: #737373;
   cursor: pointer;
@@ -1684,7 +1684,7 @@ code, pre {
   display: inline-flex;
   flex-direction: column;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
 }
 
 .ally-wordmark {
@@ -2473,7 +2473,7 @@ code, pre {
 .reasoning-label {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
 }
 
 .reasoning-tokens {
