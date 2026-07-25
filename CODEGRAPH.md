@@ -309,6 +309,7 @@ defaultSystemPrompt() → buildSystemPromptParts()
 ## 会话与上下文
 
 - 前端会话：`localStorage` 中的 UI 记录，最多保留 400 条消息 / 30 个未固定会话
+- 首次启动不默认绑定可执行文件或进程目录；用户首次发送普通任务时选择工作区，后端拒绝空工作区
 - 后端历史：`map[sessionID][]ChatCompletionMessage`，已保存会话最多 40 条
 - 上下文统计：`GetContextBreakdown()` 报告系统提示词/历史/当前会话/工具/工作区各部分
 - 自动压缩：当上下文接近限制时自动压缩历史消息
@@ -348,6 +349,7 @@ defaultSystemPrompt() → buildSystemPromptParts()
 ## 安全机制
 
 - 工作区写操作限定在配置的工作区内 + `~/.ally_agent`
+- 工作区必须由用户明确选择；空工作区不会回退到进程当前目录
 - `run_command` 禁止修改/删除工作区外已有路径
 - `readTextFile` 通过 NUL 字节与 UTF-8 有效性检测拒绝二进制和非 UTF-8 文件
 - HTTP 工具有响应大小/超时/重定向限制

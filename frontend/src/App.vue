@@ -3878,6 +3878,18 @@ async function sendPrompt() {
     }
   }
 
+  if (!config.workspace) {
+    const workspace = await chooseWorkspace();
+    if (!workspace) {
+      message.warning(t('app.workspace.required'));
+      return;
+    }
+    syncConfigToActiveTab();
+    addToHistory(workspace);
+    loadPromptHistory(workspace);
+    refreshWorkspaceTokenUsage(workspace);
+    await refreshGitStatus();
+  }
   if (!config.apiKey) {
     settingsPage.value = 'models';
     configVisible.value = true;
@@ -5293,6 +5305,7 @@ function createNewSession() {
   newSession();
   message.success(t('app.sessions.created'));
   scrollMessagesToBottom();
+  nextTick(() => getPromptTextarea()?.focus({ preventScroll: true }));
 }
 
 async function loadAndShowSkills() {

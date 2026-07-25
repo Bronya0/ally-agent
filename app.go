@@ -1201,17 +1201,12 @@ func (a *App) ensureInitialized() error {
 }
 
 func defaultConfigState() ConfigState {
-	exe, err := os.Executable()
-	execDir := "."
-	if err == nil {
-		execDir = filepath.Dir(exe)
-	}
 	cfg := ConfigState{
 		ProviderName:        "OpenAI Compatible",
 		APIFormat:           apiFormatOpenAIChat,
 		BaseURL:             defaultBaseURL,
 		Model:               defaultModel,
-		Workspace:           execDir,
+		Workspace:           "",
 		Temperature:         0.2,
 		MaxTokens:           128000,
 		ContextWindow:       1048576,
@@ -4644,8 +4639,7 @@ func (a *App) StartChat(req ChatRequest) (string, error) {
 		return "", errors.New("API key is required")
 	}
 	if strings.TrimSpace(cfg.Workspace) == "" {
-		cwd, _ := os.Getwd()
-		cfg.Workspace = cwd
+		return "", errors.New("workspace is required")
 	}
 
 	runID := newID()
@@ -5021,20 +5015,20 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 					}
 				}
 				if event.ReasoningDelta != "" {
-				streamDeltas.addReasoning(event.ReasoningDelta)
-			}
-			if event.Retry != nil {
-				streamDeltas.flush()
-				a.emit("run:retry", map[string]any{
-					"runId":       runID,
-					"sessionId":   sessionID,
-					"attempt":     event.Retry.Attempt,
-					"maxAttempts": event.Retry.MaxAttempts,
-					"error":       event.Retry.Error,
-					"waitMs":      event.Retry.WaitMS,
-				})
-			}
-			if event.Image != nil && event.Image.DataURL != "" {
+					streamDeltas.addReasoning(event.ReasoningDelta)
+				}
+				if event.Retry != nil {
+					streamDeltas.flush()
+					a.emit("run:retry", map[string]any{
+						"runId":       runID,
+						"sessionId":   sessionID,
+						"attempt":     event.Retry.Attempt,
+						"maxAttempts": event.Retry.MaxAttempts,
+						"error":       event.Retry.Error,
+						"waitMs":      event.Retry.WaitMS,
+					})
+				}
+				if event.Image != nil && event.Image.DataURL != "" {
 					streamDeltas.flush()
 					a.emit("run:image", map[string]any{
 						"runId": runID, "sessionId": sessionID, "id": event.Image.ID,
@@ -8164,9 +8158,9 @@ func toolResultSummary(name string, result *toolResult) string {
 		var r GrepResult
 		if json.Unmarshal(data, &r) == nil {
 			if r.Occurrences > 0 && r.Occurrences != r.Count {
-			return fmt.Sprintf("%d hits in %d matching lines", r.Occurrences, r.Count)
-		}
-		return fmt.Sprintf("%d matches", r.Count)
+				return fmt.Sprintf("%d hits in %d matching lines", r.Occurrences, r.Count)
+			}
+			return fmt.Sprintf("%d matches", r.Count)
 		}
 	case "run_command", "remote_run_command":
 		data, _ := json.Marshal(result.Data)
@@ -12412,11 +12406,7 @@ func wrapPowerShellCommand(command string) string {
 func workspaceRoot(cfg ConfigState) (string, error) {
 	root := strings.TrimSpace(cfg.Workspace)
 	if root == "" {
-		var err error
-		root, err = os.Getwd()
-		if err != nil {
-			return "", err
-		}
+		return "", errors.New("workspace is required")
 	}
 	abs, err := filepath.Abs(root)
 	if err != nil {

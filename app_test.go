@@ -16,6 +16,32 @@ import (
 	openai "github.com/sashabaranov/go-openai"
 )
 
+func TestDefaultConfigStartsWithoutWorkspace(t *testing.T) {
+	if got := defaultConfigState().Workspace; got != "" {
+		t.Fatalf("default workspace = %q, want empty until the user selects one", got)
+	}
+}
+
+func TestWorkspaceRootRequiresExplicitWorkspace(t *testing.T) {
+	if _, err := workspaceRoot(ConfigState{}); err == nil || !strings.Contains(err.Error(), "workspace is required") {
+		t.Fatalf("workspaceRoot(empty) error = %v, want workspace required", err)
+	}
+}
+
+func TestStartChatRequiresExplicitWorkspace(t *testing.T) {
+	app := NewApp()
+	app.initialized = true
+	app.config = ConfigState{
+		APIFormat: apiFormatOpenAIChat,
+		BaseURL:   defaultBaseURL,
+		APIKey:    "test-key",
+		Model:     defaultModel,
+	}
+	if _, err := app.StartChat(ChatRequest{SessionID: "session-1"}); err == nil || !strings.Contains(err.Error(), "workspace is required") {
+		t.Fatalf("StartChat() error = %v, want workspace required", err)
+	}
+}
+
 func TestMergeConfigKeepsModelsWhenOmitted(t *testing.T) {
 	base := ConfigState{
 		Models: []ModelConfig{{Model: "saved-model"}},
