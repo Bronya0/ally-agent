@@ -489,17 +489,20 @@ code, pre {
 }
 
 .composer-icon-btn {
-  width: 22px;
-  height: 22px;
-  border-radius: 6px;
+  width: 20px;
+  height: 20px;
+  /* 光学居中:符号字形无下伸,墨水偏上,用不对称 padding 向下补偿 1px */
+  padding: 2px 0 0;
+  border-radius: 5px;
   flex-shrink: 0;
-  font-size: 15px;
+  font-size: 14px;
+  line-height: 20px;
 }
 
 .composer-new-session-btn {
-  font-size: 17px;
+  font-size: 16px;
   font-weight: 600;
-  line-height: 1;
+  line-height: 20px;
 }
 
 /* ── Composer info footer ── */
@@ -539,7 +542,8 @@ code, pre {
   align-items: center;
   gap: 6px;
   height: 20px;
-  padding: 0 2px;
+  /* 光学居中:全大写文字无下伸,墨水偏上,向下补偿 1px */
+  padding: 2px 2px 0;
   color: color-mix(in srgb, var(--ally-accent) 52%, #8a8a8a);
   border: 0;
   background: transparent;
@@ -705,6 +709,157 @@ code, pre {
 
 .composer-info .info-workspace-btn:hover {
   color: #d4d4d4;
+}
+
+/* ── Extra roots button + popover ── */
+
+.composer-info .info-workspace {
+  gap: 2px;
+}
+
+.composer-info .extra-roots-btn {
+  position: relative;
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  font-size: 13px;
+  line-height: 1;
+  color: #6a6a6a;
+  flex-shrink: 0;
+}
+
+.composer-info .extra-roots-btn:hover {
+  color: #d4d4d4;
+}
+
+.composer-info .extra-roots-btn.has-roots {
+  color: var(--ally-accent, #e8a55c);
+}
+
+.composer-info .extra-roots-btn.has-roots:hover {
+  color: #f5c890;
+}
+
+.composer-info .extra-roots-count {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 13px;
+  height: 13px;
+  padding: 0 3px;
+  border-radius: 7px;
+  background: var(--ally-accent, #e8a55c);
+  color: #1a1a1a;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 13px;
+  text-align: center;
+  pointer-events: none;
+}
+
+.extra-roots-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 4px 0;
+  font-family: var(--ally-ui-font);
+}
+
+.extra-roots-header {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.extra-roots-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #e4e4e4;
+}
+
+.extra-roots-hint {
+  font-size: 11px;
+  color: #8a8a8a;
+  line-height: 1.4;
+}
+
+.extra-roots-empty {
+  padding: 12px 4px;
+  font-size: 12px;
+  color: #8a8a8a;
+  text-align: center;
+}
+
+.extra-roots-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 200px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.extra-roots-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.extra-roots-item:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.extra-roots-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: #d4d4d4;
+  font-family: var(--ally-mono-font, ui-monospace, monospace);
+}
+
+.extra-roots-remove {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #8a8a8a;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  --wails-draggable: no-drag;
+}
+
+.extra-roots-remove:hover {
+  color: #f5f5f5;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.extra-roots-add {
+  margin-top: 4px;
+  padding: 6px 10px;
+  border: 1px dashed rgba(232, 165, 92, 0.4);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ally-accent, #e8a55c);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  --wails-draggable: no-drag;
+}
+
+.extra-roots-add:hover {
+  background: rgba(232, 165, 92, 0.08);
+  border-color: rgba(232, 165, 92, 0.7);
 }
 
 .composer-info .info-context {

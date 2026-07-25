@@ -679,7 +679,7 @@ func TestSubagentInstructionContextIncludesProjectAndCustomInstructions(t *testi
 }
 
 func TestSystemPromptDefinesWaitSequencing(t *testing.T) {
-	prompt := defaultSystemPrompt(nil, "", "", "")
+	prompt := defaultSystemPrompt(nil, "", nil, "", "")
 	for _, expected := range []string{"Use `wait` only", "only tool in that model response", "verify the condition after it completes"} {
 		if !strings.Contains(prompt, expected) {
 			t.Fatalf("system prompt missing wait guidance %q", expected)
@@ -735,7 +735,7 @@ func TestEditDescriptionIncludesSingleAndCrossFileMultiChangeExamples(t *testing
 }
 
 func TestSystemPromptExplainsRunCommandOutsidePathRecovery(t *testing.T) {
-	prompt := defaultSystemPrompt(nil, "", "", "")
+	prompt := defaultSystemPrompt(nil, "", nil, "", "")
 	for _, expected := range []string{"`E_PATH_OUTSIDE`", "Do not retry the unchanged command", "literal verifiable target", "read the returned Chinese explanation"} {
 		if !strings.Contains(prompt, expected) {
 			t.Fatalf("system prompt missing run_command recovery guidance %q", expected)
@@ -1085,7 +1085,7 @@ func TestExecuteToolRejectsLegacyStringEditFields(t *testing.T) {
 	}
 }
 
-func TestExecuteToolAppliesMultipleAtomicTextChanges(t *testing.T) {
+func TestExecuteToolAppliesMultipleBatchTextChanges(t *testing.T) {
 	dir := t.TempDir()
 	original := []byte("alpha\nbeta\ngamma\n")
 	if err := os.WriteFile(filepath.Join(dir, "sample.txt"), original, 0o600); err != nil {
@@ -1103,7 +1103,7 @@ func TestExecuteToolAppliesMultipleAtomicTextChanges(t *testing.T) {
 		]}]
 	}`, strings.ToUpper(hashVersion(original)))))
 	if !result.OK {
-		t.Fatalf("expected atomic edit to succeed, got error %q", result.Error)
+		t.Fatalf("expected batch edit to succeed, got error %q", result.Error)
 	}
 	got, err := os.ReadFile(filepath.Join(dir, "sample.txt"))
 	if err != nil {
@@ -1186,7 +1186,7 @@ func TestExecuteToolEditHandlesUniqueSingleLineSubstring(t *testing.T) {
 }
 
 func TestEditTreatsCRLFAndLFAsEquivalent(t *testing.T) {
-	result, replacements, err := applyAtomicTextChanges("alpha\nbeta\n", []TextChange{{
+	result, replacements, err := applyBatchTextChanges("alpha\nbeta\n", []TextChange{{
 		OldText: "alpha\r\nbeta",
 		NewText: "ALPHA\r\nBETA",
 	}})
@@ -1215,7 +1215,7 @@ func TestExecuteToolEditRejectsMultipleMatches(t *testing.T) {
 	}
 }
 
-func TestExecuteToolEditRejectsOverlappingChangesAtomically(t *testing.T) {
+func TestExecuteToolEditRejectsOverlappingChangesInBatch(t *testing.T) {
 	dir := t.TempDir()
 	original := []byte("abcdef")
 	if err := os.WriteFile(filepath.Join(dir, "sample.txt"), original, 0o600); err != nil {
@@ -1238,7 +1238,7 @@ func TestExecuteToolEditRejectsOverlappingChangesAtomically(t *testing.T) {
 		t.Fatal(err)
 	}
 	if string(got) != string(original) {
-		t.Fatalf("overlapping edit must be atomic, got %q", string(got))
+		t.Fatalf("overlapping edit must be all-or-nothing, got %q", string(got))
 	}
 }
 
@@ -1299,7 +1299,7 @@ func TestEditLineRangeRequiresExplicitNewText(t *testing.T) {
 	}
 }
 
-func TestEditMultipleReplacementsAreAtomicOnFailure(t *testing.T) {
+func TestEditMultipleReplacementsAreAllOrNothingOnFailure(t *testing.T) {
 	dir := t.TempDir()
 	original := "alpha\nbeta\ngamma\n"
 	if err := os.WriteFile(filepath.Join(dir, "sample.txt"), []byte(original), 0o600); err != nil {

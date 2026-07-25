@@ -170,6 +170,9 @@
                   :task-center-count="scheduledTasks.length + services.length"
                   :task-center-running-count="scheduledTaskRunningCount + serviceRunningCount"
                   :fmt-k="fmtK"
+                  :extra-roots="extraRoots"
+                  @add-extra-root="addExtraRoot"
+                  @remove-extra-root="removeExtraRoot"
                   @switch-model="switchToModel"
                   @open-config="configVisible = true"
                   @open-git-diff="openGitDiff"
@@ -1112,6 +1115,7 @@ const configVisible = ref(false);
 const focusedToolId = ref('');
 const workspaceTabs = ref([]);
 const activeWorkspaceId = ref('');
+const extraRoots = ref([]);
 const workspaceHistory = ref(loadWorkspaceHistory());
 const settingsPage = ref('general');
 const showSkillsPanel = ref(false);
@@ -1782,6 +1786,41 @@ function removeFromHistory(path) {
   saveWorkspaceHistory();
 }
 
+// ── 会话级附加工作区（extraRoots）管理 ──────────────────────────
+// extraRoots 是 session 维度的临时白名单，让安全围栏允许写入主工作区之外的目录。
+// 持久化在 session 对象里，切回历史会话时自动还原。
+async function addExtraRoot() {
+  const path = await SelectWorkspace();
+  if (!path) return;
+  const session = activeSession.value;
+  if (!session) return;
+  // 主工作区无需添加
+  if (config.workspace && workspaceHistoryDedupeKey(path) === workspaceHistoryDedupeKey(config.workspace)) {
+    message.warning(t('extraRoots.duplicatePrimary'));
+    return;
+  }
+  if (!Array.isArray(session.extraRoots)) session.extraRoots = [];
+  // 去重
+  const key = workspaceHistoryDedupeKey(path);
+  if (session.extraRoots.some((p) => workspaceHistoryDedupeKey(p) === key)) {
+    message.warning(t('extraRoots.duplicate'));
+    return;
+  }
+  session.extraRoots.push(path);
+  extraRoots.value = [...session.extraRoots];
+  saveSessions();
+}
+
+function removeExtraRoot(path) {
+  if (!path) return;
+  const session = activeSession.value;
+  if (!session || !Array.isArray(session.extraRoots)) return;
+  const key = workspaceHistoryDedupeKey(path);
+  session.extraRoots = session.extraRoots.filter((p) => workspaceHistoryDedupeKey(p) !== key);
+  extraRoots.value = [...session.extraRoots];
+  saveSessions();
+}
+
 function workspaceHistoryKey(path = config.workspace || '') {
   return `ally_prompt_history:${path || '__none__'}`;
 }
@@ -1935,6 +1974,14 @@ function applySessionWorkspace(session) {
   const workspace = inferSessionWorkspace(session);
   if (workspace) session.workspace = workspace;
 
+  // 恢复会话级 extraRoots（历史会话切回时从 session 字段还原）
+  if (Array.isArray(session.extraRoots)) {
+    extraRoots.value = [...session.extraRoots];
+  } else {
+    session.extraRoots = [];
+    extraRoots.value = [];
+  }
+
   const tab = bindSessionToActiveWorkspaceTab(session);
   if (tab) {
     if (workspace) {
@@ -2004,7 +2051,7 @@ function createWorkspaceTab(path) {
   // Create a linked session for this tab
   const sessionId = crypto.randomUUID ? crypto.randomUUID() : `s-${Date.now()}-${Math.random()}`;
   const now = Date.now();
-  const session = { id: sessionId, title: label, workspace: path || '', messages: [], runId: '', isRunning: false, grillMode: false, createdAt: now, updatedAt: now };
+  const session = { id: sessionId, title: label, workspace: path || '', extraRoots: [], messages: [], runId: '', isRunning: false, grillMode: false, createdAt: now, updatedAt: now };
   session.messages.push(buildWelcomeMessage(path || t('common.notSelected')));
   sessions.value.unshift(session);
   // Reset cumulative token usage for this workspace (new workspace = fresh counter)
@@ -2072,6 +2119,12 @@ function switchWorkspaceTab(id) {
   config.workspace = tab.path;
   configDraft.workspace = tab.path;
   subRuns.value = [];
+  // 切换 Tab 时恢复该 Tab 关联 session 的 extraRoots
+  if (linkedSession && Array.isArray(linkedSession.extraRoots)) {
+    extraRoots.value = [...linkedSession.extraRoots];
+  } else {
+    extraRoots.value = [];
+  }
   loadPromptHistory(tab.path);
   refreshWorkspaceTokenUsage(tab.path);
   SaveConfig({ ...config })
@@ -2268,10 +2321,12 @@ function newSession(title) {
   const now = Date.now();
   const workspace = config.workspace || '';
   const sessionTitle = title || (workspace ? workspaceLabel(workspace) : t('app.sessions.new'));
-  const session = { id, title: sessionTitle, workspace, messages: [], runId: '', isRunning: false, grillMode: false, createdAt: now, updatedAt: now };
+  const session = { id, title: sessionTitle, workspace, extraRoots: [], messages: [], runId: '', isRunning: false, grillMode: false, createdAt: now, updatedAt: now };
   sessions.value.unshift(session);
   activeSessionId.value = id;
   bindSessionToActiveWorkspaceTab(session);
+  // 新会话默认无附加工作区
+  extraRoots.value = [];
   promptText.value = '';
   addWelcome(workspace);
   // Reset workspace token usage for new session
@@ -2304,7 +2359,7 @@ function selectSession(index) {
 function createReplacementSession(title = t('app.sessions.new'), workspacePath = '') {
   const id = crypto.randomUUID ? crypto.randomUUID() : `s-${Date.now()}-${Math.random()}`;
   const now = Date.now();
-  const session = { id, title, workspace: workspacePath || '', messages: [], runId: '', isRunning: false, grillMode: false, createdAt: now, updatedAt: now };
+  const session = { id, title, workspace: workspacePath || '', extraRoots: [], messages: [], runId: '', isRunning: false, grillMode: false, createdAt: now, updatedAt: now };
   session.messages.push(buildWelcomeMessage(workspacePath || t('common.notSelected')));
   return session;
 }
@@ -3918,7 +3973,7 @@ async function sendPrompt() {
       attachments: attachmentsForModel(attachments),
     });
     markSessionRunning(session);
-    await StartChat({ sessionId: session.id, message: sendText, messages: history, grillMode: !!session.grillMode, config: { ...config } });
+    await StartChat({ sessionId: session.id, message: sendText, messages: history, grillMode: !!session.grillMode, config: { ...config, extraRoots: session.extraRoots || [] } });
   } catch (err) {
     session.runId = '';
     session.isRunning = false;
@@ -4369,7 +4424,7 @@ function handleCodeGraphCommand() {
   });
 
   markSessionRunning(session);
-  StartChat({ sessionId: session.id, message: CODEGRAPH_PROMPT, messages: history, grillMode: !!session.grillMode, config: { ...config } })
+  StartChat({ sessionId: session.id, message: CODEGRAPH_PROMPT, messages: history, grillMode: !!session.grillMode, config: { ...config, extraRoots: session.extraRoots || [] } })
     .catch((err) => {
       session.runId = '';
       session.isRunning = false;
@@ -4998,6 +5053,7 @@ function saveSessions() {
       id: s.id,
       title: s.title,
       workspace: inferSessionWorkspace(s) || (s.id === activeSessionId.value ? config.workspace || '' : ''),
+      extraRoots: Array.isArray(s.extraRoots) ? s.extraRoots : [],
       messages: sanitizeStoredMessages(s.messages || []),
       isRunning: s.isRunning || false,
       grillMode: !!s.grillMode,
@@ -5237,7 +5293,7 @@ function handleInitCommand() {
 
   const text = INIT_PROMPT;
   markSessionRunning(session);
-  StartChat({ sessionId: session.id, message: text, messages: history, grillMode: !!session.grillMode, config: { ...config } })
+  StartChat({ sessionId: session.id, message: text, messages: history, grillMode: !!session.grillMode, config: { ...config, extraRoots: session.extraRoots || [] } })
     .catch((err) => {
       session.runId = '';
       session.isRunning = false;
@@ -5261,7 +5317,7 @@ function handleRememberCommand() {
   saveSessions();
 
   markSessionRunning(session);
-  StartChat({ sessionId: session.id, message: '', messages: history, grillMode: !!session.grillMode, config: { ...config } })
+  StartChat({ sessionId: session.id, message: '', messages: history, grillMode: !!session.grillMode, config: { ...config, extraRoots: session.extraRoots || [] } })
     .catch((err) => {
       session.runId = '';
       session.isRunning = false;
@@ -5386,7 +5442,7 @@ async function activateSkillByName(skillName, skillArgs = '', injectIntoChat = t
         scrollMessagesToBottom();
         if (config.apiKey) {
           markSessionRunning(session);
-          await StartChat({ sessionId: session.id, message: '', messages: [{ role: 'user', content: modelContent }], grillMode: !!session.grillMode, config: { ...config } }).catch(() => {
+          await StartChat({ sessionId: session.id, message: '', messages: [{ role: 'user', content: modelContent }], grillMode: !!session.grillMode, config: { ...config, extraRoots: session.extraRoots || [] } }).catch(() => {
             session.isRunning = false;
           });
         }
@@ -5572,7 +5628,7 @@ function makeToolTitle(name, args, meta = {}) {
   if (name === 'grep_files') {
     const pattern = parsed.pattern || '';
     const path = parsed.path || '';
-    if (pattern && path) return `${pattern} · ${path}`;
+    if (pattern && path) return `${pattern}, ${path}`;
     return pattern || path;
   }
   if (name === 'Glob') {

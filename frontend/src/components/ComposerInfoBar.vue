@@ -47,6 +47,53 @@
       <button class="info-workspace-btn" type="button" :title="$t('composer.workspace.open')" @click.stop="$emit('openWorkspace')">
         {{ config.workspace || $t('composer.workspace.none') }}
       </button>
+      <n-popover
+        v-if="config.workspace"
+        trigger="click"
+        placement="top-start"
+        :show-arrow="false"
+        :width="360"
+        class="extra-roots-popover"
+      >
+        <template #trigger>
+          <button
+            type="button"
+            class="composer-icon-btn extra-roots-btn"
+            :class="{ 'has-roots': extraRoots.length > 0 }"
+            :title="$t('extraRoots.button.title')"
+            :aria-label="$t('extraRoots.button.title')"
+            @click.stop
+          >
+            <span class="extra-roots-icon">⊞</span>
+            <span v-if="extraRoots.length > 0" class="extra-roots-count">{{ extraRoots.length }}</span>
+          </button>
+        </template>
+        <div class="extra-roots-panel">
+          <div class="extra-roots-header">
+            <span class="extra-roots-title">{{ $t('extraRoots.panel.title') }}</span>
+            <span class="extra-roots-hint">{{ $t('extraRoots.panel.hint') }}</span>
+          </div>
+          <div v-if="extraRoots.length === 0" class="extra-roots-empty">
+            {{ $t('extraRoots.panel.empty') }}
+          </div>
+          <ul v-else class="extra-roots-list">
+            <li v-for="root in extraRoots" :key="root" class="extra-roots-item">
+              <span class="extra-roots-path" :title="root">{{ root }}</span>
+              <button
+                type="button"
+                class="extra-roots-remove"
+                :title="$t('extraRoots.panel.remove')"
+                @click.stop="$emit('removeExtraRoot', root)"
+              >×</button>
+            </li>
+          </ul>
+          <button
+            type="button"
+            class="extra-roots-add"
+            @click.stop="$emit('addExtraRoot')"
+          >{{ $t('extraRoots.panel.add') }}</button>
+        </div>
+      </n-popover>
     </span>
     <button
       type="button"
@@ -218,10 +265,11 @@ const props = defineProps({
   grillModeActive: { type: Boolean, default: false },
   taskCenterCount: { type: Number, default: 0 },
   taskCenterRunningCount: { type: Number, default: 0 },
+  extraRoots: { type: Array, default: () => [] },
   fmtK: { type: Function, required: true },
 });
 
-const emit = defineEmits(['switchModel', 'openConfig', 'openGitDiff', 'openWorkspace', 'setRunMode', 'openTaskCenter', 'newSession', 'showSessions']);
+const emit = defineEmits(['switchModel', 'openConfig', 'openGitDiff', 'openWorkspace', 'setRunMode', 'openTaskCenter', 'newSession', 'showSessions', 'addExtraRoot', 'removeExtraRoot']);
 
 const contextPopoverVisible = ref(false);
 const currentModelLabel = computed(() => `${props.config.providerName || '-'} · ${props.config.model || '-'}`);

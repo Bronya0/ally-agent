@@ -128,7 +128,7 @@ func TestHTTPRequestParsesJSONResponse(t *testing.T) {
 	}
 }
 
-func TestEditToolSchemaIsAtomicChangesOnly(t *testing.T) {
+func TestEditToolSchemaIsBatchChangesOnly(t *testing.T) {
 	var editTool *openai.FunctionDefinition
 	for _, tool := range chatTools() {
 		if tool.Function != nil && tool.Function.Name == "edit" {
@@ -1007,7 +1007,7 @@ func TestCommandSafetyAllowsCmdSlashCOption(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("cmd.exe /c is Windows-specific")
 	}
-	if err := checkCommandSafety(CommandRequest{Command: "cmd.exe /c ver"}, t.TempDir()); err != nil {
+	if err := checkCommandSafety(CommandRequest{Command: "cmd.exe /c ver"}, []string{t.TempDir()}); err != nil {
 		t.Fatalf("cmd.exe /c option must not be treated as a C drive path: %v", err)
 	}
 }
@@ -1017,7 +1017,7 @@ func TestCommandSafetyAllowsReadOnlyOutsidePath(t *testing.T) {
 		t.Skip("MSYS2 drive paths are Windows-specific")
 	}
 	command := `(ls -la /d/coding/python/ | grep xx)`
-	if err := checkCommandSafety(CommandRequest{Command: command}, t.TempDir()); err != nil {
+	if err := checkCommandSafety(CommandRequest{Command: command}, []string{t.TempDir()}); err != nil {
 		t.Fatalf("read-only outside inspection should be allowed: %v", err)
 	}
 }
@@ -1031,7 +1031,7 @@ func TestCommandSafetyAllowsGitBashOutsideReadsWithDevNull(t *testing.T) {
 		`(find /c/Users/DELL/ -maxdepth 5 -name "SKILL.md" -path "ai-writing" 2>/dev/null | head -5)`,
 	}
 	for _, command := range commands {
-		if err := checkCommandSafety(CommandRequest{Command: command}, t.TempDir()); err != nil {
+		if err := checkCommandSafety(CommandRequest{Command: command}, []string{t.TempDir()}); err != nil {
 			t.Fatalf("Git Bash outside read with /dev/null should be allowed: %v", err)
 		}
 	}
@@ -1039,7 +1039,7 @@ func TestCommandSafetyAllowsGitBashOutsideReadsWithDevNull(t *testing.T) {
 
 func TestCommandSafetyAllowsGitLogPrettyFormatWithEmailBrackets(t *testing.T) {
 	command := `git status --short && git log -1 --pretty=format:'%h %an <%ae> %s'`
-	if err := checkCommandSafety(CommandRequest{Command: command}, t.TempDir()); err != nil {
+	if err := checkCommandSafety(CommandRequest{Command: command}, []string{t.TempDir()}); err != nil {
 		t.Fatalf("quoted git pretty format should not be parsed as shell redirection: %v", err)
 	}
 }
@@ -1052,7 +1052,7 @@ func TestCommandSafetyAllowsCreatingNewOutsidePath(t *testing.T) {
 		fmt.Sprintf(`printf created > %q`, filepath.ToSlash(filepath.Join(outside, "new-redirect.txt"))),
 	}
 	for _, command := range commands {
-		if err := checkCommandSafety(CommandRequest{Command: command}, workspace); err != nil {
+		if err := checkCommandSafety(CommandRequest{Command: command}, []string{workspace}); err != nil {
 			t.Fatalf("creating a new outside path should be allowed for %q: %v", command, err)
 		}
 	}
@@ -1069,7 +1069,7 @@ func TestCommandSafetyBlocksModifyingExistingOutsidePath(t *testing.T) {
 		fmt.Sprintf(`printf changed > %q`, filepath.ToSlash(target)),
 		fmt.Sprintf(`printf changed >> %q`, filepath.ToSlash(target)),
 	} {
-		err := checkCommandSafety(CommandRequest{Command: command}, workspace)
+		err := checkCommandSafety(CommandRequest{Command: command}, []string{workspace})
 		if toolErrorCode(err) != "E_PATH_OUTSIDE" {
 			t.Fatalf("existing outside target should be blocked for %q, got %v", command, err)
 		}
@@ -1082,7 +1082,7 @@ func TestCommandSafetyBlocksModifyingExistingOutsidePath(t *testing.T) {
 }
 
 func TestCommandSafetyBlocksDynamicRedirectionTarget(t *testing.T) {
-	err := checkCommandSafety(CommandRequest{Command: `printf changed > "$HOME/existing.txt"`}, t.TempDir())
+	err := checkCommandSafety(CommandRequest{Command: `printf changed > "$HOME/existing.txt"`}, []string{t.TempDir()})
 	if toolErrorCode(err) != "E_PATH_OUTSIDE" {
 		t.Fatalf("dynamic redirection target should be blocked conservatively, got %v", err)
 	}
@@ -1101,7 +1101,7 @@ func TestCommandSafetyAllowsWorkspaceRedirectWhileReadingOutside(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		command = fmt.Sprintf(`cat %q > result.txt`, filepath.ToSlash(outside))
 	}
-	if err := checkCommandSafety(CommandRequest{Command: command}, workspace); err != nil {
+	if err := checkCommandSafety(CommandRequest{Command: command}, []string{workspace}); err != nil {
 		t.Fatalf("workspace redirect while reading outside should be allowed: %v", err)
 	}
 }
@@ -1117,7 +1117,7 @@ func TestCommandSafetyBlocksExistingOutsidePathMutation(t *testing.T) {
 	}
 	volume := filepath.VolumeName(target)
 	msysTarget := "/" + strings.ToLower(strings.TrimSuffix(volume, ":")) + filepath.ToSlash(strings.TrimPrefix(target, volume))
-	err := checkCommandSafety(CommandRequest{Command: `touch ` + msysTarget}, t.TempDir())
+	err := checkCommandSafety(CommandRequest{Command: `touch ` + msysTarget}, []string{t.TempDir()})
 	if toolErrorCode(err) != "E_PATH_OUTSIDE" {
 		t.Fatalf("outside mutation should be blocked with E_PATH_OUTSIDE, got %v", err)
 	}

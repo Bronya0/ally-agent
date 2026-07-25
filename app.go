@@ -321,6 +321,7 @@ type ConfigState struct {
 	APIKey              string        `json:"apiKey"`
 	Model               string        `json:"model"`
 	Workspace           string        `json:"workspace"`
+	ExtraRoots          []string      `json:"extraRoots,omitempty"`
 	Temperature         float32       `json:"temperature"`
 	MaxTokens           int           `json:"maxTokens"`
 	ContextWindow       int           `json:"contextWindow"`
@@ -815,7 +816,7 @@ type EditResult struct {
 }
 
 // EditRequest is the backend edit engine request. The model-facing edit tool
-// uses AtomicChanges; legacy fields remain for Wails/backend compatibility.
+// uses batched all-or-nothing changes; legacy fields remain for Wails/backend compatibility.
 type EditRequest struct {
 	Path           string          `json:"path"`
 	ExpectedSHA256 string          `json:"expectedSha256,omitempty"`
@@ -827,7 +828,7 @@ type EditRequest struct {
 	EndLine        int             `json:"endLine,omitempty"`
 	NewText        *string         `json:"newText,omitempty"`
 	Edits          []EditOperation `json:"edits,omitempty"`
-	AtomicChanges  []TextChange    `json:"-"`
+	BatchChanges  []TextChange    `json:"-"`
 }
 
 type EditOperation struct {
@@ -3179,8 +3180,8 @@ type systemPromptPart struct {
 	content string
 }
 
-func defaultSystemPrompt(allSkills []SkillDefinition, workspaceRoot, customPrompt, gitBashPath string) string {
-	return joinSystemPromptParts(buildSystemPromptParts(allSkills, workspaceRoot, customPrompt, gitBashPath))
+func defaultSystemPrompt(allSkills []SkillDefinition, workspaceRoot string, extraRoots []string, customPrompt, gitBashPath string) string {
+	return joinSystemPromptParts(buildSystemPromptParts(allSkills, workspaceRoot, extraRoots, customPrompt, gitBashPath))
 }
 
 func joinSystemPromptParts(parts []systemPromptPart) string {
@@ -3191,7 +3192,7 @@ func joinSystemPromptParts(parts []systemPromptPart) string {
 	return b.String()
 }
 
-func buildSystemPromptParts(allSkills []SkillDefinition, workspaceRoot, customPrompt, gitBashPath string) []systemPromptPart {
+func buildSystemPromptParts(allSkills []SkillDefinition, workspaceRoot string, extraRoots []string, customPrompt, gitBashPath string) []systemPromptPart {
 	var parts []systemPromptPart
 	var b strings.Builder
 	b.WriteString("You are Ally, an AI agent.\n\n" +
@@ -3296,8 +3297,18 @@ func buildSystemPromptParts(allSkills []SkillDefinition, workspaceRoot, customPr
 		"- Batch commands: review commands with wildcards or variable-expanded paths before execution to avoid unintended side effects.\n" +
 		"- When in doubt about whether a path is safe, stop and ask the user.\n\n" +
 		"# Temporary Files\n\n" +
-		"When creating intermediate artifacts (scripts, drafts, test fixtures, build outputs) that are not final deliverables, place them under a `.tmp/` directory within the current workspace. Create `.tmp/` if it does not exist. This keeps the workspace clean and makes cleanup trivial. Final deliverables and user-requested output files go in their intended workspace location, not in `.tmp/`.\n\n" +
-		"# Context Management\n\n" +
+		"When creating intermediate artifacts (scripts, drafts, test fixtures, build outputs) that are not final deliverables, place them under a `.tmp/` directory within the current workspace. Create `.tmp/` if it does not exist. This keeps the workspace clean and makes cleanup trivial. Final deliverables and user-requested output files go in their intended workspace location, not in `.tmp/`.\n\n")
+	if len(extraRoots) > 0 {
+		var er strings.Builder
+		er.WriteString("# Session Extra Roots\n\n")
+		er.WriteString("The current session has additional write roots beyond the primary workspace. You may edit, create, and delete files inside these directories using absolute paths:\n\n")
+		for _, root := range extraRoots {
+			er.WriteString("- " + filepath.ToSlash(filepath.Clean(root)) + "\n")
+		}
+		er.WriteString("\nThese roots follow the same safety rules as the primary workspace (refuse to delete any root itself, VCS metadata, system paths). Relative paths still resolve to the primary workspace only.\n\n")
+		b.WriteString(er.String())
+	}
+	b.WriteString("# Context Management\n\n" +
 		"When the conversation grows long, older turns are automatically condensed into a summary. Preserve its confirmed conclusions and do not redo completed work, but do not treat it as a current file snapshot: read again whenever exact text, current MD5, or other live state is required. If something is genuinely missing, recover it with tools or ask the user; do not guess.\n")
 
 	parts = append(parts, systemPromptPart{label: "核心系统提示词", content: b.String()})
@@ -3791,7 +3802,7 @@ func (a *App) memoryWrite(req MemoryWriteRequest) (MemoryWriteResult, error) {
 		return MemoryWriteResult{}, err
 	}
 	data := []byte(formatMemoryMarkdown(req.Description, req.Content))
-	if err := atomicWriteFile(path, data, 0o644); err != nil {
+	if err := safeWriteFile(path, data, 0o644); err != nil {
 		return MemoryWriteResult{}, err
 	}
 	memoryIndexCache.invalidate()
@@ -3936,6 +3947,12 @@ func mergeConfig(base, overlay ConfigState) ConfigState {
 	}
 	if overlay.Workspace != "" {
 		base.Workspace = overlay.Workspace
+	}
+	// ExtraRoots 是会话级配置：overlay 非-nil 时整体替换（包括空切片表示"无附加"）。
+	// 不写入 ~/.ally_agent/config.json，因为 a.config.ExtraRoots 始终为 nil（仅在
+	// 每次 StartChat 时通过 effectiveConfig 透传到 cfg）。
+	if overlay.ExtraRoots != nil {
+		base.ExtraRoots = cloneStringSlice(overlay.ExtraRoots)
 	}
 	if overlay.temperatureSet || overlay.Temperature != 0 {
 		base.Temperature = overlay.Temperature
@@ -4514,7 +4531,7 @@ func parseGitStatusZ(out string) []gitStatusEntry {
 }
 
 func synthesizeUntrackedDiff(root, rel string, limit int) (string, bool, bool, string) {
-	fullPath, err := safeJoin(root, rel)
+	fullPath, err := safeJoin([]string{root}, rel)
 	if err != nil {
 		return "", false, false, err.Error()
 	}
@@ -5363,7 +5380,7 @@ func isGoalProgressMessage(m openai.ChatCompletionMessage) bool {
 
 func (a *App) buildSystemContextMessages(sessionID string, cfg ConfigState, allSkills []SkillDefinition) []openai.ChatCompletionMessage {
 	messages := []openai.ChatCompletionMessage{}
-	systemPrompt := defaultSystemPrompt(allSkills, cfg.Workspace, cfg.CustomPrompt, cfg.GitBashPath)
+	systemPrompt := defaultSystemPrompt(allSkills, cfg.Workspace, cfg.ExtraRoots, cfg.CustomPrompt, cfg.GitBashPath)
 	if systemPrompt != "" {
 		messages = append(messages, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleSystem, Content: systemPrompt})
 	}
@@ -6307,7 +6324,7 @@ func chatToolsUncached() []openai.Tool {
 				"includeIgnored": map[string]any{"type": "boolean", "description": "Include heavy ignored directories such as .git, node_modules, dist, build. Default false."},
 			},
 		}),
-		functionTool("edit", "Validate and apply exact replacements across multiple workspace files in one call. Each oldText must occur exactly once in its file's version snapshot, and changes in a file cannot overlap. All files are validated before writing; each file is written atomically, with best-effort cross-file rollback on commit failure. Reuse the returned version for known follow-up edits; re-read after version or match errors.", map[string]any{
+		functionTool("edit", "Validate and apply exact replacements across multiple workspace files in one call. Each oldText must occur exactly once in its file's version snapshot, and changes in a file cannot overlap. All files are validated before writing; each file is written in one shot, with best-effort cross-file rollback on commit failure. Reuse the returned version for known follow-up edits; re-read after version or match errors. The current session may also allow writes to additional extra roots (see E_PATH_OUTSIDE error for the allowed list).", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"files": map[string]any{
@@ -6340,7 +6357,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"files"},
 		}),
-		functionTool("create_file", "Create a new UTF-8 text file inside the workspace. Parent directories are created automatically. Does not overwrite unless overwrite is true. Refuses symlink targets and non-text overwrites. Error codes: E_PATH_OUTSIDE, E_EXISTS, E_TARGET_IS_DIRECTORY, E_SYMLINK_PATH, E_TEXT_OVERWRITE.", map[string]any{
+		functionTool("create_file", "Create a new UTF-8 text file inside the workspace (or an additional session-level extra root). Parent directories are created automatically. Does not overwrite unless overwrite is true. Refuses symlink targets and non-text overwrites. Error codes: E_PATH_OUTSIDE, E_EXISTS, E_TARGET_IS_DIRECTORY, E_SYMLINK_PATH, E_TEXT_OVERWRITE.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"path":      map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*"},
@@ -6349,7 +6366,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"path", "content"},
 		}),
-		functionTool("delete_path", "Delete a file, symlink, or directory in the workspace. Directories require recursive=true. Refuses the workspace root, VCS metadata (.git, .svn, .hg), and OS-sensitive paths. Symlink parents are resolved for workspace safety; deleting a final symlink removes the link itself, not its target. Returns path, kind, and removed item counts. Error codes: E_PATH_OUTSIDE, E_PATH_NOT_FOUND, E_DIR_REQUIRES_RECURSIVE, E_DELETE_BLOCKED.", map[string]any{
+		functionTool("delete_path", "Delete a file, symlink, or directory in the workspace (or an additional session-level extra root). Directories require recursive=true. Refuses any allowed root, VCS metadata (.git, .svn, .hg), and OS-sensitive paths. Symlink parents are resolved for workspace safety; deleting a final symlink removes the link itself, not its target. Returns path, kind, and removed item counts. Error codes: E_PATH_OUTSIDE, E_PATH_NOT_FOUND, E_DIR_REQUIRES_RECURSIVE, E_DELETE_BLOCKED.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"path":      map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*"},
@@ -6357,7 +6374,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"path"},
 		}),
-		functionTool("run_command", "Run a shell command with cwd confined to the workspace. On Windows, bash (from Git for Windows) is used when available, falling back to PowerShell; on macOS/Linux, bash is used. Commands may inspect outside paths, redirect to null devices, and create new outside paths. Modifying/deleting existing outside paths, explicit deletion commands, unsafe cwd symlinks, and long-running services are refused. If E_PATH_OUTSIDE is returned, read the Chinese reason and detected target: do not retry unchanged; use a new/workspace target, or replace dynamic redirections with a literal verifiable path. Error codes: E_COMMAND_BLOCKED, E_PATH_OUTSIDE, E_CWD_INVALID, E_LONG_RUNNING_COMMAND.", map[string]any{
+		functionTool("run_command", "Run a shell command with cwd confined to the workspace. On Windows, bash (from Git for Windows) is used when available, falling back to PowerShell; on macOS/Linux, bash is used. Commands may inspect outside paths, redirect to null devices, and create new outside paths. Modifying/deleting existing outside paths, explicit deletion commands, unsafe cwd symlinks, and long-running services are refused. The current session may also allow writes inside additional extra roots (the E_PATH_OUTSIDE error lists all allowed roots). If E_PATH_OUTSIDE is returned, read the Chinese reason and detected target: do not retry unchanged; use a new/workspace/extra-root target, or replace dynamic redirections with a literal verifiable path. Error codes: E_COMMAND_BLOCKED, E_PATH_OUTSIDE, E_CWD_INVALID, E_LONG_RUNNING_COMMAND.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"command":        map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*"},
@@ -6494,7 +6511,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"target", "files"},
 		}),
-		functionTool("remote_create_file", "Create or overwrite a UTF-8 text file in a remote SSH workspace. Uses atomic write on the remote host.", map[string]any{
+		functionTool("remote_create_file", "Create or overwrite a UTF-8 text file in a remote SSH workspace. Uses single-shot write on the remote host.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"target":    map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*"},
@@ -6982,11 +6999,12 @@ func fileMutationTargets(cfg ConfigState, name, arguments string) []fileMutation
 }
 
 func localMutationTarget(cfg ConfigState, filePath string) (fileMutationTarget, bool) {
-	root, err := workspaceRoot(cfg)
+	roots, err := workspaceRoots(cfg)
 	if err != nil {
 		return fileMutationTarget{}, false
 	}
-	absPath, err := safeJoin(root, filePath)
+	root := roots[0]
+	absPath, err := safeJoin(roots, filePath)
 	if err != nil {
 		if filepath.IsAbs(filePath) {
 			absPath = filepath.Clean(filePath)
@@ -8730,15 +8748,15 @@ func (a *App) httpRequestToolWithConfig(ctx context.Context, cfg ConfigState, re
 		return HTTPRequestToolResult{}, err
 	}
 	if strings.TrimSpace(req.SaveTo) != "" {
-		root, err := workspaceRoot(cfg)
+		roots, err := workspaceRoots(cfg)
 		if err != nil {
 			return HTTPRequestToolResult{}, err
 		}
-		path, err := resolveWritableFilePath(root, req.SaveTo)
+		path, err := resolveWritableFilePath(roots, req.SaveTo)
 		if err != nil {
 			return HTTPRequestToolResult{}, err
 		}
-		if err := atomicWriteFile(path, fetched.Raw, 0o644); err != nil {
+		if err := safeWriteFile(path, fetched.Raw, 0o644); err != nil {
 			return HTTPRequestToolResult{}, err
 		}
 		fetched.Result.SavedPath = filepath.ToSlash(req.SaveTo)
@@ -10256,7 +10274,7 @@ func (a *App) remoteEditOne(ctx context.Context, rt remoteTarget, req FileTextEd
 		return EditResult{}, codedToolError("E_VERSION_MISMATCH", fmt.Errorf("remote file changed: expected version %s, current %s. Re-read before editing", req.Version, beforeVersion))
 	}
 	text, ending := normalizeText(file.Data)
-	result, replacements, err := applyAtomicTextChanges(text, req.Changes)
+	result, replacements, err := applyBatchTextChanges(text, req.Changes)
 	if err != nil {
 		return EditResult{}, err
 	}
@@ -11402,14 +11420,14 @@ func (a *App) editFilesWithConfig(cfg ConfigState, files []FileTextEdits) (Multi
 	if err := validateModelEditToolRequest(files); err != nil {
 		return MultiEditResult{}, err
 	}
-	root, err := workspaceRoot(cfg)
+	roots, err := workspaceRoots(cfg)
 	if err != nil {
 		return MultiEditResult{}, err
 	}
 	prepared := make([]preparedFileEdit, 0, len(files))
 	seenPaths := map[string]bool{}
 	for i, file := range files {
-		resolved, err := safeJoin(root, file.Path)
+		resolved, err := safeJoin(roots, file.Path)
 		if err != nil {
 			return MultiEditResult{}, fmt.Errorf("file %d (%s): %w", i+1, file.Path, err)
 		}
@@ -11430,7 +11448,7 @@ func (a *App) editFilesWithConfig(cfg ConfigState, files []FileTextEdits) (Multi
 			return MultiEditResult{}, codedToolError("E_VERSION_MISMATCH", fmt.Errorf("file %s expected version %s, current %s; re-read all affected files before retrying", file.Path, file.Version, beforeVersion))
 		}
 		text, ending := normalizeText(before)
-		applied, replacements, err := applyAtomicTextChanges(text, file.Changes)
+		applied, replacements, err := applyBatchTextChanges(text, file.Changes)
 		if err != nil {
 			return MultiEditResult{}, fmt.Errorf("file %d (%s): %w", i+1, file.Path, err)
 		}
@@ -11483,7 +11501,7 @@ func (a *App) editFilesWithConfig(cfg ConfigState, files []FileTextEdits) (Multi
 		var rollbackErrors []string
 		for i := len(committed) - 1; i >= 0; i-- {
 			item := prepared[committed[i]]
-			if err := atomicWriteFile(item.path, item.before, item.perm); err != nil {
+			if err := safeWriteFile(item.path, item.before, item.perm); err != nil {
 				rollbackErrors = append(rollbackErrors, item.display+": "+err.Error())
 			}
 		}
@@ -11502,7 +11520,7 @@ func (a *App) editFilesWithConfig(cfg ConfigState, files []FileTextEdits) (Multi
 			}
 			return MultiEditResult{}, codedToolError("E_VERSION_MISMATCH", errors.New(msg))
 		}
-		if err := atomicWriteFile(item.path, item.after, item.perm); err != nil {
+		if err := safeWriteFile(item.path, item.after, item.perm); err != nil {
 			rollbackErr := rollback()
 			msg := fmt.Sprintf("failed to commit %s: %v", item.display, err)
 			if rollbackErr != nil {
@@ -11533,11 +11551,11 @@ func (a *App) editWithConfig(cfg ConfigState, req EditRequest) (EditResult, erro
 	if err != nil {
 		return EditResult{}, err
 	}
-	root, err := workspaceRoot(cfg)
+	roots, err := workspaceRoots(cfg)
 	if err != nil {
 		return EditResult{}, err
 	}
-	path, err := safeJoin(root, req.Path)
+	path, err := safeJoin(roots, req.Path)
 	if err != nil {
 		return EditResult{}, err
 	}
@@ -11565,8 +11583,8 @@ func (a *App) editWithConfig(cfg ConfigState, req EditRequest) (EditResult, erro
 	switch plan.mode {
 	case "lines":
 		result, replacements, err = applyLineRangeReplacement(text, plan.startLine, plan.endLine, plan.newText)
-	case "atomic_strings":
-		result, replacements, err = applyAtomicTextChanges(text, plan.changes)
+	case "batch_strings":
+		result, replacements, err = applyBatchTextChanges(text, plan.changes)
 	default:
 		result, replacements, err = applyStringReplacements(text, plan.ops)
 	}
@@ -11578,7 +11596,7 @@ func (a *App) editWithConfig(cfg ConfigState, req EditRequest) (EditResult, erro
 	encoded := encodeLineEnding(updated, ending)
 	after := encoded
 	if text != updated {
-		if err := atomicWriteFile(path, encoded, modeOf(path)); err != nil {
+		if err := safeWriteFile(path, encoded, modeOf(path)); err != nil {
 			return EditResult{}, err
 		}
 		after, _, err = readTextFile(path)
@@ -11663,7 +11681,7 @@ func validateModelEditToolRequest(files []FileTextEdits) error {
 		if err := validateVersion(file.Version); err != nil {
 			return fmt.Errorf("file %d: %w", i+1, err)
 		}
-		if err := validateAtomicTextChanges(file.Changes); err != nil {
+		if err := validateBatchTextChanges(file.Changes); err != nil {
 			return fmt.Errorf("file %d: %w", i+1, err)
 		}
 		totalChanges += len(file.Changes)
@@ -11710,7 +11728,7 @@ func isValidVersion(value string) bool {
 	return true
 }
 
-func validateAtomicTextChanges(changes []TextChange) error {
+func validateBatchTextChanges(changes []TextChange) error {
 	if len(changes) == 0 {
 		return codedToolError("E_BAD_EDIT", errors.New("changes must contain at least one replacement"))
 	}
@@ -11734,7 +11752,7 @@ func normalizeEditRequest(req EditRequest) (editPlan, error) {
 	}
 	hasSingleEdit := req.OldString != "" || req.NewString != ""
 	hasLineEdit := req.StartLine != 0 || req.EndLine != 0 || req.NewText != nil
-	hasAtomicChanges := len(req.AtomicChanges) > 0
+	hasBatchChanges := len(req.BatchChanges) > 0
 	modes := 0
 	if hasSingleEdit {
 		modes++
@@ -11745,17 +11763,17 @@ func normalizeEditRequest(req EditRequest) (editPlan, error) {
 	if hasLineEdit {
 		modes++
 	}
-	if hasAtomicChanges {
+	if hasBatchChanges {
 		modes++
 	}
 	if modes > 1 {
 		return editPlan{}, errors.New("[E_BAD_EDIT] use exactly one edit form")
 	}
-	if hasAtomicChanges {
-		if err := validateAtomicTextChanges(req.AtomicChanges); err != nil {
+	if hasBatchChanges {
+		if err := validateBatchTextChanges(req.BatchChanges); err != nil {
 			return editPlan{}, err
 		}
-		return editPlan{mode: "atomic_strings", changes: append([]TextChange(nil), req.AtomicChanges...)}, nil
+		return editPlan{mode: "batch_strings", changes: append([]TextChange(nil), req.BatchChanges...)}, nil
 	}
 	if hasLineEdit {
 		if req.StartLine < 1 {
@@ -11915,8 +11933,8 @@ func applyStringReplacements(content string, ops []EditOperation) (*editResult, 
 	}, totalReplacements, nil
 }
 
-func applyAtomicTextChanges(content string, changes []TextChange) (*editResult, int, error) {
-	if err := validateAtomicTextChanges(changes); err != nil {
+func applyBatchTextChanges(content string, changes []TextChange) (*editResult, int, error) {
+	if err := validateBatchTextChanges(changes); err != nil {
 		return nil, 0, err
 	}
 	type locatedChange struct {
@@ -12048,18 +12066,18 @@ func (a *App) createFileWithConfig(cfg ConfigState, req CreateFileRequest) (Edit
 	if strings.TrimSpace(req.Path) == "" {
 		return EditResult{}, codedToolError("E_BAD_PATH", errors.New("create_file requires a non-empty path"))
 	}
-	root, err := workspaceRoot(cfg)
+	roots, err := workspaceRoots(cfg)
 	if err != nil {
 		return EditResult{}, err
 	}
-	path, err := resolveWritableFilePath(root, req.Path)
+	path, err := resolveWritableFilePath(roots, req.Path)
 	if err != nil {
 		return EditResult{}, err
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return EditResult{}, err
 	}
-	path, err = resolveWritableFilePath(root, req.Path)
+	path, err = resolveWritableFilePath(roots, req.Path)
 	if err != nil {
 		return EditResult{}, err
 	}
@@ -12090,11 +12108,11 @@ func (a *App) createFileWithConfig(cfg ConfigState, req CreateFileRequest) (Edit
 	content, ending := normalizeText([]byte(req.Content))
 	encoded := encodeLineEnding(content, ending)
 	if req.Overwrite {
-		if err := atomicWriteFileWithDir(path, encoded, perm, false); err != nil {
+		if err := safeWriteFileWithDir(path, encoded, perm, false); err != nil {
 			return EditResult{}, err
 		}
 	} else {
-		if err := atomicWriteNewFile(path, encoded, perm); err != nil {
+		if err := safeWriteNewFile(path, encoded, perm); err != nil {
 			return EditResult{}, err
 		}
 	}
@@ -12109,16 +12127,18 @@ func (a *App) deletePathWithConfig(cfg ConfigState, req DeletePathRequest) (Dele
 	if strings.TrimSpace(req.Path) == "" {
 		return DeleteResult{}, codedToolError("E_BAD_PATH", errors.New("delete_path requires a non-empty path"))
 	}
-	root, err := workspaceRoot(cfg)
+	roots, err := workspaceRoots(cfg)
 	if err != nil {
 		return DeleteResult{}, err
 	}
-	path, err := resolveDeletablePath(root, req.Path)
+	path, err := resolveDeletablePath(roots, req.Path)
 	if err != nil {
 		return DeleteResult{}, err
 	}
-	if samePath(path, root) {
-		return DeleteResult{}, codedToolError("E_DELETE_BLOCKED", errors.New("refusing to delete workspace root"))
+	for _, root := range roots {
+		if samePath(path, root) {
+			return DeleteResult{}, codedToolError("E_DELETE_BLOCKED", errors.New("refusing to delete workspace root"))
+		}
 	}
 
 	// Safety: block dangerous delete targets
@@ -12158,16 +12178,17 @@ func (a *App) runCommandWithConfig(parent context.Context, cfg ConfigState, req 
 	if looksLikeLongRunningService(req.Command) {
 		return CommandResult{}, longRunningCommandError(req.Command)
 	}
-	root, err := workspaceRoot(cfg)
+	roots, err := workspaceRoots(cfg)
 	if err != nil {
 		return CommandResult{}, err
 	}
-	if err := checkCommandSafety(req, root); err != nil {
+	root := roots[0]
+	if err := checkCommandSafety(req, roots); err != nil {
 		return CommandResult{}, err
 	}
 	cwd := root
 	if strings.TrimSpace(req.Cwd) != "" {
-		cwd, err = resolveCommandCwd(root, req.Cwd)
+		cwd, err = resolveCommandCwd(roots, req.Cwd)
 		if err != nil {
 			return CommandResult{}, err
 		}
@@ -12422,33 +12443,91 @@ func workspaceRoot(cfg ConfigState) (string, error) {
 	return filepath.Clean(abs), nil
 }
 
-func safeJoin(root, p string) (string, error) {
-	rootAbs, err := filepath.Abs(root)
+// workspaceRoots 返回主工作区 + 会话级 ExtraRoots 的去重列表。
+// 主工作区始终是 roots[0]，且必须存在；ExtraRoots 中不存在或非目录的条目被静默跳过。
+// 重复路径（按 OS 风格归一化后）只保留首次出现。
+func workspaceRoots(cfg ConfigState) ([]string, error) {
+	primary, err := workspaceRoot(cfg)
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	roots := make([]string, 0, 1+len(cfg.ExtraRoots))
+	markKey := func(clean string) string {
+		if goruntime.GOOS == "windows" {
+			return strings.ToLower(clean)
+		}
+		return clean
+	}
+	addRoot := func(path string) {
+		abs, err := filepath.Abs(strings.TrimSpace(path))
+		if err != nil {
+			return
+		}
+		clean := filepath.Clean(abs)
+		info, err := os.Stat(clean)
+		if err != nil {
+			return // 不存在的附加目录被跳过
+		}
+		if !info.IsDir() {
+			return
+		}
+		key := markKey(clean)
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		roots = append(roots, clean)
+	}
+	addRoot(primary)
+	for _, extra := range cfg.ExtraRoots {
+		if strings.TrimSpace(extra) == "" {
+			continue
+		}
+		addRoot(extra)
+	}
+	return roots, nil
+}
+
+// insideAnyRoot 判断 target 是否落在任一 root 内（不含 symlink 解析）。
+func insideAnyRoot(roots []string, target string) bool {
+	for _, root := range roots {
+		if insideRoot(root, target) {
+			return true
+		}
+	}
+	return false
+}
+
+func safeJoin(roots []string, p string) (string, error) {
+	if len(roots) == 0 {
+		return "", errors.New("workspace is required")
+	}
+	primaryAbs, err := filepath.Abs(roots[0])
 	if err != nil {
 		return "", err
 	}
 	var target string
 	if strings.TrimSpace(p) == "" || p == "." {
-		target = rootAbs
+		target = primaryAbs
 	} else if filepath.IsAbs(p) {
 		target = p
 	} else {
-		target = filepath.Join(rootAbs, filepath.Clean(p))
+		target = filepath.Join(primaryAbs, filepath.Clean(p))
 	}
 	abs, err := filepath.Abs(target)
 	if err != nil {
 		return "", err
 	}
-	rootClean := filepath.Clean(rootAbs)
 	absClean := filepath.Clean(abs)
-	if !insideRoot(rootClean, absClean) && !insideAllyAgentDir(absClean) {
+	if !insideAnyRoot(roots, absClean) && !insideAllyAgentDir(absClean) {
 		return "", fmt.Errorf("path is outside workspace or ~/.ally_agent: %s", p)
 	}
 	return absClean, nil
 }
 
-func resolveWritableFilePath(root, p string) (string, error) {
-	abs, err := safeJoin(root, p)
+func resolveWritableFilePath(roots []string, p string) (string, error) {
+	abs, err := safeJoin(roots, p)
 	if err != nil {
 		return "", codedToolError("E_PATH_OUTSIDE", err)
 	}
@@ -12461,14 +12540,14 @@ func resolveWritableFilePath(root, p string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if !insideWriteRoot(root, resolved) {
-		return "", codedToolError("E_PATH_OUTSIDE", fmt.Errorf("path resolves outside workspace or ~/.ally_agent: %s", p))
+	if !insideWriteRoot(roots, resolved) {
+		return "", codedToolError("E_PATH_OUTSIDE", fmt.Errorf("path resolves outside workspace or ~/.ally_agent: %s\n允许写入的根目录：%s", p, formatAllowedRoots(roots)))
 	}
 	return abs, nil
 }
 
-func resolveDeletablePath(root, p string) (string, error) {
-	abs, err := safeJoin(root, p)
+func resolveDeletablePath(roots []string, p string) (string, error) {
+	abs, err := safeJoin(roots, p)
 	if err != nil {
 		return "", codedToolError("E_PATH_OUTSIDE", err)
 	}
@@ -12487,14 +12566,14 @@ func resolveDeletablePath(root, p string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if !insideWriteRoot(root, resolved) {
-		return "", codedToolError("E_PATH_OUTSIDE", fmt.Errorf("path resolves outside workspace or ~/.ally_agent: %s", p))
+	if !insideWriteRoot(roots, resolved) {
+		return "", codedToolError("E_PATH_OUTSIDE", fmt.Errorf("path resolves outside workspace or ~/.ally_agent: %s\n允许写入的根目录：%s", p, formatAllowedRoots(roots)))
 	}
 	return abs, nil
 }
 
-func resolveCommandCwd(root, p string) (string, error) {
-	abs, err := safeJoin(root, p)
+func resolveCommandCwd(roots []string, p string) (string, error) {
+	abs, err := safeJoin(roots, p)
 	if err != nil {
 		return "", codedToolError("E_PATH_OUTSIDE", err)
 	}
@@ -12505,8 +12584,8 @@ func resolveCommandCwd(root, p string) (string, error) {
 		}
 		return "", err
 	}
-	if !insideWriteRoot(root, resolved) {
-		return "", codedToolError("E_PATH_OUTSIDE", fmt.Errorf("cwd resolves outside workspace or ~/.ally_agent: %s", p))
+	if !insideWriteRoot(roots, resolved) {
+		return "", codedToolError("E_PATH_OUTSIDE", fmt.Errorf("cwd resolves outside workspace or ~/.ally_agent: %s\n允许写入的根目录：%s", p, formatAllowedRoots(roots)))
 	}
 	info, err := os.Stat(resolved)
 	if err != nil {
@@ -12516,6 +12595,22 @@ func resolveCommandCwd(root, p string) (string, error) {
 		return "", codedToolError("E_CWD_INVALID", fmt.Errorf("cwd is not a directory: %s", p))
 	}
 	return filepath.Clean(resolved), nil
+}
+
+// formatAllowedRoots 把 roots 列表格式化为换行分隔的字符串，用于错误信息提示。
+func formatAllowedRoots(roots []string) string {
+	if len(roots) == 0 {
+		return "(无)"
+	}
+	parts := make([]string, 0, len(roots))
+	for i, root := range roots {
+		prefix := "  附加工作区"
+		if i == 0 {
+			prefix = "  主工作区"
+		}
+		parts = append(parts, prefix+" "+filepath.ToSlash(root))
+	}
+	return strings.Join(parts, "\n")
 }
 
 func evalExistingPrefix(target string) (string, error) {
@@ -12546,18 +12641,23 @@ func evalExistingPrefix(target string) (string, error) {
 	}
 }
 
-func insideWriteRoot(root, target string) bool {
-	rootAbs, err := filepath.Abs(root)
-	if err != nil {
-		return false
-	}
+// insideWriteRoot 判断 target（已解析）是否落在任一可写 root 内。
+// 对每个 root 都做 insideRoot 检查 + EvalSymlinks 解析；任一通过即放行。
+// ~/.ally_agent 始终作为兜底白名单。
+func insideWriteRoot(roots []string, target string) bool {
 	clean := filepath.Clean(target)
-	rootClean := filepath.Clean(rootAbs)
-	if insideRoot(rootClean, clean) {
-		return true
-	}
-	if resolvedRoot, err := filepath.EvalSymlinks(rootClean); err == nil && insideRoot(filepath.Clean(resolvedRoot), clean) {
-		return true
+	for _, root := range roots {
+		rootAbs, err := filepath.Abs(root)
+		if err != nil {
+			continue
+		}
+		rootClean := filepath.Clean(rootAbs)
+		if insideRoot(rootClean, clean) {
+			return true
+		}
+		if resolvedRoot, err := filepath.EvalSymlinks(rootClean); err == nil && insideRoot(filepath.Clean(resolvedRoot), clean) {
+			return true
+		}
 	}
 	return insideAllyAgentDir(clean)
 }
@@ -12595,7 +12695,8 @@ func resolveReadablePath(cfg ConfigState, p string) (string, error) {
 		}
 		return filepath.Clean(abs), nil
 	}
-	return safeJoin(root, p)
+	// 读取操作：相对路径仅解析到主工作区。额外根目录请用绝对路径访问。
+	return safeJoin([]string{root}, p)
 }
 
 func insideRoot(root, target string) bool {
@@ -12685,20 +12786,20 @@ func splitLines(text string) ([]string, bool) {
 	return lines, trailing
 }
 
-func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
-	return atomicWriteFileWithDir(path, data, perm, true)
+func safeWriteFile(path string, data []byte, perm os.FileMode) error {
+	return safeWriteFileWithDir(path, data, perm, true)
 }
 
-func atomicWriteFileWithDir(path string, data []byte, perm os.FileMode, mkdirs bool) error {
+func safeWriteFileWithDir(path string, data []byte, perm os.FileMode, mkdirs bool) error {
 	if mkdirs {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			return err
 		}
 	}
-	return atomicWritePreparedFile(path, data, perm)
+	return safeWritePreparedFile(path, data, perm)
 }
 
-func atomicWriteNewFile(path string, data []byte, perm os.FileMode) error {
+func safeWriteNewFile(path string, data []byte, perm os.FileMode) error {
 	tmpName, err := writeTempSibling(path, data, perm, false)
 	if err != nil {
 		return err
@@ -12713,7 +12814,7 @@ func atomicWriteNewFile(path string, data []byte, perm os.FileMode) error {
 	return nil
 }
 
-func atomicWritePreparedFile(path string, data []byte, perm os.FileMode) error {
+func safeWritePreparedFile(path string, data []byte, perm os.FileMode) error {
 	tmpName, err := writeTempSibling(path, data, perm, false)
 	if err != nil {
 		return err
@@ -13302,13 +13403,14 @@ var commandRiskPatterns = []struct {
 
 // checkCommandSafety inspects commands for high-risk patterns and routes
 // explicit deletion through delete_path, where workspace and OS guards apply.
-func checkCommandSafety(req CommandRequest, workspaceRoot string) error {
+// roots[0] 是主工作区（命令的默认 cwd），其余为会话级附加根目录。
+func checkCommandSafety(req CommandRequest, roots []string) error {
 	cmd := req.Command
 	if containsExplicitDeleteCommand(cmd) && !isAllowedDeleteContext(cmd) {
 		return codedToolError("E_COMMAND_BLOCKED", fmt.Errorf("安全围栏已拦截：run_command 不允许直接执行文件删除命令。\n原因：shell 删除命令可能绕过工作区边界、系统目录和 .git 保护。\n处理方式：请改用 delete_path 工具，由专用工具检查目标路径和递归范围。\n被拦截的命令：%s", cmd))
 	}
-	if risk := firstExistingOutsideMutationTarget(cmd, workspaceRoot); risk != nil {
-		return codedToolError("E_PATH_OUTSIDE", fmt.Errorf("安全围栏已拦截：命令可能修改工作区外的受保护目标。\n原因：%s。\n检测到的目标：%s\n允许的操作：读取工作区外路径、写入 /dev/null 等空设备、创建不存在的新路径。\n禁止的操作：覆盖、追加、移动、改权限或以其他方式修改已经存在的工作区外文件或目录。\n被拦截的命令：%s", risk.Reason, risk.Path, cmd))
+	if risk := firstExistingOutsideMutationTarget(cmd, roots); risk != nil {
+		return codedToolError("E_PATH_OUTSIDE", fmt.Errorf("安全围栏已拦截：命令可能修改工作区外的受保护目标。\n原因：%s。\n检测到的目标：%s\n允许的操作：读取工作区外路径、写入 /dev/null 等空设备、创建不存在的新路径。\n禁止的操作：覆盖、追加、移动、改权限或以其他方式修改已经存在的工作区外文件或目录。\n允许写入的根目录：\n%s\n被拦截的命令：%s", risk.Reason, risk.Path, formatAllowedRoots(roots), cmd))
 	}
 	for _, r := range commandRiskPatterns {
 		if r.re.MatchString(cmd) {
@@ -13345,19 +13447,23 @@ type outsideMutationRisk struct {
 	Reason string
 }
 
-func firstExistingOutsideMutationTarget(command, workspaceRoot string) *outsideMutationRisk {
+func firstExistingOutsideMutationTarget(command string, roots []string) *outsideMutationRisk {
+	if len(roots) == 0 {
+		return nil
+	}
+	primaryRoot := roots[0]
 	for _, target := range shellRedirectionTargets(command) {
 		if isShellNullDevice(target) {
 			continue
 		}
-		path, ok := resolveCommandLiteralPath(target, workspaceRoot)
+		path, ok := resolveCommandLiteralPath(target, primaryRoot)
 		if !ok {
 			return &outsideMutationRisk{
 				Path:   target,
 				Reason: "重定向目标包含变量、通配符或命令替换，执行前无法确认真实写入位置",
 			}
 		}
-		if insideRoot(workspaceRoot, path) || insideAllyAgentDir(path) {
+		if insideAnyRoot(roots, path) || insideAllyAgentDir(path) {
 			continue
 		}
 		if pathExists(path) {
@@ -13376,7 +13482,7 @@ func firstExistingOutsideMutationTarget(command, workspaceRoot string) *outsideM
 			continue
 		}
 		clean := filepath.Clean(candidate)
-		if insideRoot(workspaceRoot, clean) || insideAllyAgentDir(clean) {
+		if insideAnyRoot(roots, clean) || insideAllyAgentDir(clean) {
 			continue
 		}
 		if pathExists(clean) {
@@ -13926,7 +14032,7 @@ func (a *App) getContextBreakdown(sessionID string) ContextBreakdown {
 	a.mu.Unlock()
 
 	result := ContextBreakdown{}
-	for _, part := range buildSystemPromptParts(a.listCachedSkills(), cfg.Workspace, cfg.CustomPrompt, cfg.GitBashPath) {
+	for _, part := range buildSystemPromptParts(a.listCachedSkills(), cfg.Workspace, cfg.ExtraRoots, cfg.CustomPrompt, cfg.GitBashPath) {
 		tokens := estimateTokensFromText(part.content)
 		if tokens <= 0 {
 			continue

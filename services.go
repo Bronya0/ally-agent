@@ -69,16 +69,17 @@ func (a *App) startServiceWithConfig(cfg ConfigState, req StartServiceRequest) (
 	if strings.TrimSpace(req.Command) == "" {
 		return ServiceInfo{}, codedToolError("E_BAD_COMMAND", errors.New("command is required"))
 	}
-	root, err := workspaceRoot(cfg)
+	roots, err := workspaceRoots(cfg)
 	if err != nil {
 		return ServiceInfo{}, err
 	}
-	if err := checkCommandSafety(CommandRequest{Command: req.Command, Cwd: req.Cwd}, root); err != nil {
+	root := roots[0]
+	if err := checkCommandSafety(CommandRequest{Command: req.Command, Cwd: req.Cwd}, roots); err != nil {
 		return ServiceInfo{}, err
 	}
 	cwd := root
 	if strings.TrimSpace(req.Cwd) != "" {
-		cwd, err = resolveCommandCwd(root, req.Cwd)
+		cwd, err = resolveCommandCwd(roots, req.Cwd)
 		if err != nil {
 			return ServiceInfo{}, err
 		}
