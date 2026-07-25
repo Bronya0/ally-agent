@@ -3754,7 +3754,11 @@ async function switchToModel(index) {
   try {
     await SwitchModel(index);
     const loaded = await GetConfig();
+    // Keep both frontend config copies aligned. Settings and workspace changes
+    // save configDraft later; leaving it on the previous model would silently
+    // switch the backend back before the next message is sent.
     assignConfig(config, loaded);
+    assignConfig(configDraft, loaded);
     message.success(t('app.model.switched', { model: loaded.model }));
   } catch (err) {
     message.error(t('app.model.switchFailed', { error: err }));
