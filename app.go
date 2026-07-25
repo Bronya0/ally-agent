@@ -196,6 +196,8 @@ func (a *App) startup(ctx context.Context) {
 	_ = a.ensureInitialized()
 	_ = a.loadServiceHistory()
 	_ = a.startScheduledTaskManager()
+	// Clean up any Ally.exe.bak left from a previous self-update.
+	cleanupUpdateBackup()
 	go func() {
 		<-ctx.Done()
 		a.stopScheduledTaskManager()
@@ -4883,9 +4885,10 @@ func (a *App) effectiveConfigSafe() ConfigState {
 
 // CheckForUpdatesResult describes the outcome of a latest-release lookup.
 type CheckForUpdatesResult struct {
-	OK    bool   `json:"ok"`
-	Tag   string `json:"tag,omitempty"`
-	Error string `json:"error,omitempty"`
+	OK           bool   `json:"ok"`
+	Tag          string `json:"tag,omitempty"`
+	Error        string `json:"error,omitempty"`
+	CanAutoUpdate bool  `json:"canAutoUpdate,omitempty"`
 }
 
 const allyLatestReleaseAPI = "https://api.github.com/repos/Bronya0/ally-agent/releases/latest"
@@ -4926,7 +4929,7 @@ func (a *App) CheckForUpdates() CheckForUpdatesResult {
 	if tag == "" {
 		return CheckForUpdatesResult{Error: "missing tag_name in response"}
 	}
-	return CheckForUpdatesResult{OK: true, Tag: tag}
+	return CheckForUpdatesResult{OK: true, Tag: tag, CanAutoUpdate: updatePlatformSupported()}
 }
 
 func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg ConfigState) {

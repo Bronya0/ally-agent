@@ -50,9 +50,9 @@
         :class="['header-icon-button', 'repository-button', { 'update-available': updateAvailable }]"
         size="small"
         quaternary
-        :title="updateAvailable ? $t('header.update', { version: latestVersion }) : $t('header.github')"
+        :title="updateAvailable ? (updateAutoSupported ? $t('header.updateAuto', { version: latestVersion }) : $t('header.update', { version: latestVersion })) : $t('header.github')"
         :aria-label="updateAvailable ? $t('header.updateAria') : $t('header.githubAria')"
-        @click="$emit('openRepository')"
+        @click="onRepositoryClick"
       >
         <svg v-if="updateAvailable" class="header-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <circle cx="12" cy="12" r="9" />
@@ -104,6 +104,7 @@ defineProps({
   activeWorkspaceId: { type: String, required: true },
   grillModeActive: { type: Boolean, default: false },
   updateAvailable: { type: Boolean, default: false },
+  updateAutoSupported: { type: Boolean, default: false },
   latestVersion: { type: String, default: '' },
   isMaximised: { type: Boolean, default: false },
   historyOptions: { type: Array, default: () => [] },
@@ -115,11 +116,20 @@ const emit = defineEmits([
   'addWorkspace',
   'historySelect',
   'openRepository',
+  'startUpdate',
   'openSettings',
   'minimise',
   'toggleMaximise',
   'closeWindow',
 ]);
+
+function onRepositoryClick() {
+  if (updateAvailable && updateAutoSupported) {
+    emit('startUpdate');
+  } else {
+    emit('openRepository');
+  }
+}
 
 function toggleMaximise() {
   emit('toggleMaximise');

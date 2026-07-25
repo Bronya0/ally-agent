@@ -9,6 +9,7 @@
               :active-workspace-id="activeWorkspaceId"
               :grill-mode-active="!!activeSession?.grillMode"
               :update-available="updateAvailable"
+              :update-auto-supported="updateAutoSupported"
               :latest-version="latestReleaseVersion"
               :is-maximised="isMaximised"
               :history-options="historyOptions"
@@ -17,6 +18,7 @@
               @add-workspace="addWorkspaceTab"
               @history-select="onHistorySelect"
               @open-repository="openRepositoryPage"
+              @start-update="startUpdate"
               @open-settings="configVisible = true"
               @minimise="minimiseWindow"
               @toggle-maximise="toggleMaximiseWindow"
@@ -27,7 +29,7 @@
             <div class="main-area">
               <n-layout class="chat-layout" content-style="display: flex; flex-direction: column;">
                 <ChatMessages
-                  ref="chatMessagesRef"
+                  ref="conversationMessagesRef"
                   :messages="displayMessages"
                   :focused-id="focusedToolId"
                   :render-fn="renderMarkdown"
@@ -212,6 +214,46 @@
           />
           <RenderBoundary :label="$t('app.gitChanges')"><GitDiffModal v-model:show="gitDiffVisible" :git-status="gitStatus" :workspace="config.workspace" /></RenderBoundary>
 
+          <n-modal v-model:show="updateModalVisible" preset="card" :title="$t('app.update.title')" class="update-modal" :mask-closable="false" :close-on-esc="false" :show-close="!isUpdateBusy">
+            <div class="update-modal-body">
+              <template v-if="updateState === 'downloading' || updateState === 'extracting'">
+                <div class="update-status-text">{{ updateState === 'downloading' ? $t('app.update.downloading') : $t('app.update.extracting') }}</div>
+                <div class="update-progress-bar">
+                  <div class="update-progress-fill" :style="{ width: `${updateProgress.percent}%` }"></div>
+                </div>
+                <div class="update-progress-meta">
+                  <span>{{ updateProgress.percent }}%</span>
+                  <span v-if="updateState === 'downloading' && updateProgress.bytesTotal > 0">{{ formatBytes(updateProgress.bytesDownloaded) }} / {{ formatBytes(updateProgress.bytesTotal) }}</span>
+                </div>
+              </template>
+              <template v-else-if="updateState === 'ready'">
+                <div class="update-status-text">{{ $t('app.update.ready', { version: latestReleaseVersion }) }}</div>
+                <div class="update-ready-hint">{{ $t('app.update.readyHint') }}</div>
+                <div class="update-actions">
+                  <n-button size="small" secondary @click="closeUpdateModal">{{ $t('app.update.later') }}</n-button>
+                  <n-button size="small" type="primary" @click="applyAndRestart">{{ $t('app.update.restartNow') }}</n-button>
+                </div>
+              </template>
+              <template v-else-if="updateState === 'applying'">
+                <div class="update-status-text">{{ $t('app.update.applying') }}</div>
+                <div class="update-spinner"></div>
+                <div class="update-ready-hint">{{ $t('app.update.applyingHint') }}</div>
+              </template>
+              <template v-else-if="updateState === 'restarting'">
+                <div class="update-status-text">{{ $t('app.update.restarting') }}</div>
+                <div class="update-spinner"></div>
+              </template>
+              <template v-else-if="updateState === 'error'">
+                <div class="update-status-text error">{{ $t('app.update.failed') }}</div>
+                <div class="update-error-detail">{{ updateError }}</div>
+                <div class="update-actions">
+                  <n-button size="small" secondary @click="closeUpdateModal">{{ $t('common.close') }}</n-button>
+                  <n-button size="small" type="primary" @click="startUpdate">{{ $t('app.update.retry') }}</n-button>
+                </div>
+              </template>
+            </div>
+          </n-modal>
+
           <SplashScreen v-if="splashVisible" @done="splashVisible = false" />
         </n-message-provider>
       </n-notification-provider>
@@ -269,6 +311,9 @@ import {
   ReleaseSession,
   SubmitAskResponse,
   SearchWorkspacePaths,
+  DownloadUpdate,
+  ApplyUpdate,
+  RestartForUpdate,
 } from '../wailsjs/go/main/App';
 import { BrowserOpenURL, Environment, EventsOn, WindowMinimise, WindowMaximise, WindowUnmaximise, WindowIsMaximised, Quit } from '../wailsjs/runtime/runtime';
 import AllyWordmark from './components/AllyWordmark.vue';
@@ -311,7 +356,7 @@ onErrorCaptured((err, _instance, info) => {
   return false;
 });
 
-const chatMessagesRef = ref(null);
+const conversationMessagesRef = ref(null);
 const promptInputRef = ref(null);
 const promptComposing = ref(false);
 let promptCompositionEndedAt = 0;
@@ -1172,6 +1217,15 @@ const splashVisible = ref(true);
 const expandedArchiveSessions = ref(new Set());
 const updateAvailable = ref(false);
 const latestReleaseVersion = ref('');
+// Self-update state (Windows x64 only; other platforms keep the open-browser behavior).
+const updateAutoSupported = ref(false);
+const updateState = ref('idle'); // idle | downloading | extracting | ready | applying | restarting | error
+const updateProgress = ref({ stage: '', percent: 0, bytesDownloaded: 0, bytesTotal: 0, version: '' });
+const updateError = ref('');
+const updateModalVisible = ref(false);
+const isUpdateBusy = computed(() => {
+  return updateState.value === 'downloading' || updateState.value === 'extracting' || updateState.value === 'applying' || updateState.value === 'restarting';
+});
 
 const ALLY_REPOSITORY_URL = 'https://github.com/Bronya0/ally-agent';
 
@@ -1483,7 +1537,7 @@ function toggleArchiveMessages(sessionId) {
   else next.add(sessionId);
   expandedArchiveSessions.value = next;
   nextTick(() => {
-    chatMessagesRef.value?.scrollbarRef?.scrollTo({ top: 0 });
+    conversationMessagesRef.value?.scrollbarRef?.scrollTo({ top: 0 });
     cleanupDisconnectedMermaidNodes();
     observePendingMermaidDiagrams();
   });
@@ -2110,7 +2164,7 @@ function switchWorkspaceTab(id) {
   if (!tab) return;
   const linkedSession = ensureWorkspaceTabSession(tab);
   // Save current session's scroll anchor before switching
-  const prevAnchor = chatMessagesRef.value?.saveScrollPosition();
+  const prevAnchor = conversationMessagesRef.value?.saveScrollPosition();
   if (activeSessionId.value && prevAnchor != null) {
     sessionScrollAnchors[activeSessionId.value] = prevAnchor;
   }
@@ -2137,7 +2191,7 @@ function switchWorkspaceTab(id) {
     // Restore saved scroll anchor for this session, or stay at default
     const savedAnchor = sessionScrollAnchors[linkedSession.id];
     if (savedAnchor != null) {
-      nextTick(() => chatMessagesRef.value?.restoreScrollPosition(savedAnchor));
+      nextTick(() => conversationMessagesRef.value?.restoreScrollPosition(savedAnchor));
     }
   }
 }
@@ -2328,6 +2382,9 @@ function newSession(title) {
   // 新会话默认无附加工作区
   extraRoots.value = [];
   promptText.value = '';
+  // 新会话默认无 todo，避免上一会话 todo 残留
+  todos.value = [];
+  loadTodos(id);
   addWelcome(workspace);
   // Reset workspace token usage for new session
   const ws = workspace;
@@ -3346,6 +3403,37 @@ function bindRuntimeEvents() {
       msg.durationText = formatDurationShort(msg.durationMs);
     }
   });
+  // Self-update lifecycle events.
+  onRuntimeEvent('update:progress', (data) => {
+    if (!data) return;
+    updateProgress.value = {
+      stage: String(data.stage || ''),
+      percent: Number(data.percent || 0),
+      bytesDownloaded: Number(data.bytesDownloaded || 0),
+      bytesTotal: Number(data.bytesTotal || 0),
+      version: String(data.version || latestReleaseVersion.value || ''),
+    };
+    if (data.stage === 'download' && updateState.value === 'downloading') {
+      // keep state
+    } else if (data.stage === 'extract' && updateState.value === 'downloading') {
+      updateState.value = 'extracting';
+    } else if (data.stage === 'apply' && updateState.value === 'ready') {
+      updateState.value = 'applying';
+    }
+  });
+  onRuntimeEvent('update:ready', (data) => {
+    if (data?.version) latestReleaseVersion.value = data.version;
+    updateState.value = 'ready';
+    updateModalVisible.value = true;
+  });
+  onRuntimeEvent('update:applied', () => {
+    updateState.value = 'restarting';
+  });
+  onRuntimeEvent('update:error', (data) => {
+    updateState.value = 'error';
+    updateError.value = String(data?.error || t('app.update.errors.generic'));
+    updateModalVisible.value = true;
+  });
 }
 
 function pushMessage(role, content, extra = {}) {
@@ -3398,7 +3486,7 @@ function appendReasoningDelta(runId, content) {
 }
 
 function scrollMessagesToBottom(options = {}) {
-  nextTick(() => chatMessagesRef.value?.scrollToBottom(options));
+  nextTick(() => conversationMessagesRef.value?.scrollToBottom(options));
 }
 
 
@@ -6529,6 +6617,7 @@ async function checkForUpdates() {
   try {
     const result = await CheckForUpdates();
     if (!result?.ok) return;
+    updateAutoSupported.value = !!result.canAutoUpdate;
     const latest = String(result.tag || '').trim();
     if (!isNewerReleaseVersion(latest, buildVersion)) return;
     latestReleaseVersion.value = latest;
@@ -6540,6 +6629,69 @@ async function checkForUpdates() {
 
 function openRepositoryPage() {
   BrowserOpenURL(ALLY_REPOSITORY_URL);
+}
+
+// Start the self-update flow: download → extract → ready → apply → restart.
+// On non-Windows platforms the button falls back to openRepositoryPage, so
+// this is only reached when updateAutoSupported is true.
+async function startUpdate() {
+  const version = latestReleaseVersion.value;
+  if (!version) return;
+  updateState.value = 'downloading';
+  updateProgress.value = { stage: 'download', percent: 0, bytesDownloaded: 0, bytesTotal: 0, version };
+  updateError.value = '';
+  updateModalVisible.value = true;
+  try {
+    const result = await DownloadUpdate(version);
+    if (!result?.ok) {
+      updateState.value = 'error';
+      updateError.value = result?.error || t('app.update.errors.download');
+      return;
+    }
+    updateState.value = 'ready';
+  } catch (err) {
+    updateState.value = 'error';
+    updateError.value = String(err?.message || err || t('app.update.errors.download'));
+  }
+}
+
+async function applyAndRestart() {
+  const version = latestReleaseVersion.value;
+  if (!version) return;
+  updateState.value = 'applying';
+  updateError.value = '';
+  try {
+    const result = await ApplyUpdate(version);
+    if (!result?.ok) {
+      updateState.value = 'error';
+      updateError.value = result?.error || t('app.update.errors.apply');
+      return;
+    }
+    updateState.value = 'restarting';
+    // Give the user a brief moment to see the "restarting" state, then relaunch.
+    setTimeout(async () => {
+      try {
+        await RestartForUpdate();
+      } catch (_) {
+        // If restart fails, fall back to letting the user restart manually.
+        updateState.value = 'error';
+        updateError.value = t('app.update.errors.restart');
+      }
+    }, 600);
+  } catch (err) {
+    updateState.value = 'error';
+    updateError.value = String(err?.message || err || t('app.update.errors.apply'));
+  }
+}
+
+function closeUpdateModal() {
+  // Only allow closing when not in the middle of a critical operation.
+  const busy = updateState.value === 'downloading' || updateState.value === 'extracting' || updateState.value === 'applying' || updateState.value === 'restarting';
+  if (busy) return;
+  updateModalVisible.value = false;
+  if (updateState.value === 'error' || updateState.value === 'ready') {
+    updateState.value = 'idle';
+  }
 }
 
 async function applyPlatformClass() {
