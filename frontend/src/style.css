@@ -2308,11 +2308,16 @@ code, pre {
 }
 
 .rich-tool-card.command .tool-body.fixed-scroll {
-  max-height: 150px;
+  height: calc(1.5em * 6 + 6px);
+  max-height: calc(1.5em * 6 + 6px);
+  overflow-y: auto;
 }
 
 .rich-tool-card.command .tool-body {
   color: #8a8a8a;
+  height: calc(1.5em * 6 + 6px);
+  max-height: calc(1.5em * 6 + 6px);
+  overflow-y: auto;
 }
 
 .rich-tool-card.grep .tool-body,
@@ -2736,7 +2741,7 @@ code, pre {
 }
 
 .todo-panel-count {
-  margin-left: auto;
+  margin-left: 0;
   color: #8a8a8a;
   font-variant-numeric: tabular-nums;
 }
@@ -2746,6 +2751,7 @@ code, pre {
   width: 12px;
   height: 12px;
   position: relative;
+  margin-left: auto;
   color: #9ca3af;
   line-height: 1;
 }

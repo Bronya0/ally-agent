@@ -598,6 +598,8 @@ type toolExecutionMeta struct {
 	toolBatchID   string
 	toolCallIndex int
 	toolCallID    string
+	toolName      string
+	toolArgs      string
 }
 
 type toolExecutionMetaContextKey struct{}
@@ -828,7 +830,7 @@ type EditRequest struct {
 	EndLine        int             `json:"endLine,omitempty"`
 	NewText        *string         `json:"newText,omitempty"`
 	Edits          []EditOperation `json:"edits,omitempty"`
-	BatchChanges  []TextChange    `json:"-"`
+	BatchChanges   []TextChange    `json:"-"`
 }
 
 type EditOperation struct {
@@ -5197,7 +5199,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 				started := time.Now()
 				toolCtx := context.WithValue(ctx, toolExecutionMetaContextKey{}, toolExecutionMeta{
 					runID: runID, sessionID: sessionID, toolBatchID: toolBatchID,
-					toolCallIndex: idx, toolCallID: c.ID,
+					toolCallIndex: idx, toolCallID: c.ID, toolName: c.Function.Name, toolArgs: c.Function.Arguments,
 				})
 				r := a.executeTool(toolCtx, cfg, sessionID, c.Function.Name, []byte(c.Function.Arguments))
 				duration := time.Since(started).Milliseconds()
@@ -12220,7 +12222,49 @@ func (a *App) runCommandWithConfig(parent context.Context, cfg ConfigState, req 
 		return stopProcessTree(cmd.Process.Pid)
 	}
 	started := time.Now()
+	outputDone := make(chan struct{})
+	var outputWG sync.WaitGroup
+	if meta, ok := parent.Value(toolExecutionMetaContextKey{}).(toolExecutionMeta); ok && meta.runID != "" && meta.sessionID != "" {
+		outputWG.Add(1)
+		go func() {
+			defer outputWG.Done()
+			ticker := time.NewTicker(120 * time.Millisecond)
+			defer ticker.Stop()
+			lastOutput := ""
+			emit := func() {
+				output := buf.String()
+				if output == "" || output == lastOutput {
+					return
+				}
+				lastOutput = output
+				a.emit("tool:update", map[string]any{
+					"runId":         meta.runID,
+					"sessionId":     meta.sessionID,
+					"toolBatchId":   meta.toolBatchID,
+					"toolCallIndex": meta.toolCallIndex,
+					"toolCallId":    meta.toolCallID,
+					"name":          meta.toolName,
+					"args":          meta.toolArgs,
+					"output":        output,
+					"streaming":     true,
+				})
+			}
+			for {
+				select {
+				case <-ticker.C:
+					emit()
+				case <-outputDone:
+					emit()
+					return
+				case <-parent.Done():
+					return
+				}
+			}
+		}()
+	}
 	err = cmd.Run()
+	close(outputDone)
+	outputWG.Wait()
 	duration := time.Since(started).Milliseconds()
 	result := CommandResult{
 		Command:    req.Command,

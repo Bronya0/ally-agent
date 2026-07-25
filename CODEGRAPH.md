@@ -350,7 +350,8 @@ defaultSystemPrompt() → buildSystemPromptParts()
 
 - 工作区写操作限定在配置的工作区内 + `~/.ally_agent`
 - 工作区必须由用户明确选择；空工作区不会回退到进程当前目录
-- `run_command` 禁止修改/删除工作区外已有路径
+- `run_command` 前台执行时通过节流的 `tool:update` 推送累计 stdout/stderr；命令卡固定高度、可滚动并默认跟随最新行，最终 `tool:result` 仍携带完整受限输出
+- `run_command` / `background_process` 后端输出均有界，前者单次最多 128KB，后者每个活动进程滚动保留 512KB
 - `readTextFile` 通过 NUL 字节与 UTF-8 有效性检测拒绝二进制和非 UTF-8 文件
 - HTTP 工具有响应大小/超时/重定向限制
 - API Key 明文存储在 OS 用户配置目录，无加密

@@ -756,7 +756,7 @@ Example MCP config:
 | 事件 | 后端节流位置 | 前端缓冲位置 |
 |------|--------------|--------------|
 | `run:delta` / `run:reasoning` | `runStreamDeltaEmitter` (`app.go` runStreamDeltaThrottle=32ms / runStreamDeltaThreshold=512B)，流末 `flush()` 兜底；`run:image` 发送前先 flush | `queueStreamDelta` + `setTimeout(48ms) → requestAnimationFrame` (`App.vue`) |
-| `tool:update` | `toolCallProgressTracker.eventsWithForce` (`app.go` toolUpdateThrottle=200ms / toolUpdateThreshold=2048B)，超阈值且在窗口内早 continue 跳过 state 构造；`forceEvents()` 流末绕过节流 | `bufferToolUpdate` + `setTimeout(120ms) → requestAnimationFrame`，`toolUpdateBuffers` Map 按 `toolEventId` 去重只留最新帧 (`App.vue`)；`tool:result` / `tool:error` / `run:done` / `run:error` / `run:cancelled` 处理前显式 `flushToolUpdateBuffer()` |
+| `tool:update` | `toolCallProgressTracker.eventsWithForce` (`app.go` toolUpdateThrottle=200ms / toolUpdateThreshold=2048B)，超阈值且在窗口内早 continue 跳过 state 构造；`forceEvents()` 流末绕过节流。`run_command` 执行期间另以约 120ms 间隔发送累计 stdout/stderr，并在结束前强制发送最终快照 | `bufferToolUpdate` + `setTimeout(120ms) → requestAnimationFrame`，`toolUpdateBuffers` Map 按 `toolEventId` 去重只留最新帧 (`App.vue`)；命令卡固定高度并自动跟随输出末尾；`tool:result` / `tool:error` / `run:done` / `run:error` / `run:cancelled` 处理前显式 `flushToolUpdateBuffer()` |
 
 ### 生命周期事件（天然低频，无需节流）
 
@@ -797,7 +797,7 @@ lowercase + 冒号分隔，如 `run:delta`、`tool:result`、`mcp:status`、`sub
 
 ## Performance And Memory Notes (Ally-specific)
 
-- `tool:update` 事件在 `toolCallProgressTracker.eventsWithForce` (`app.go`) 中带 `toolUpdateThrottle = 200ms` + `toolUpdateThreshold = 2048` 字节节流。累计 `arguments` 超过阈值且仍在窗口内时早 continue，跳过 O(len(args)) 的 state 构造。`forceEvents()` 在流结束后绕过节流，保证最终状态送达。测试见 `TestToolCallProgressTrackerThrottlesLargeUpdates`。
+- `tool:update` 事件在 `toolCallProgressTracker.eventsWithForce` (`app.go`) 中带 `toolUpdateThrottle = 200ms` + `toolUpdateThreshold = 2048` 字节节流。累计 `arguments` 超过阈值且仍在窗口内时早 continue，跳过 O(len(args)) 的 state 构造。`forceEvents()` 在流结束后绕过节流，保证最终参数状态送达。`run_command` 执行时复用同一事件，以约 120ms 间隔发送有变化的累计 stdout/stderr，并在命令结束前发送最终输出快照；前端固定高度展示并跟随末尾。测试见 `TestToolCallProgressTrackerThrottlesLargeUpdates`。
 - 前端 `App.vue` 用 `toolUpdateBuffers` Map + `setTimeout(120ms) → requestAnimationFrame` 批量 flush `tool:update`，并在 `tool:result` / `tool:error` / `run:done` / `run:error` / `run:cancelled` 处理前显式 `flushToolUpdateBuffer()`。`streamBuffers` 走同样的 `queueStreamDelta` 模式处理 `run:delta`。
 - 单 session `localStorage` 预算 240KB，大 tool 预览 / edit 参数 / 附件 Base64 / Diff 在序列化前剥除或截断。
 - 前端 Mermaid SVG DOM 视口外卸载，16 条 / 2M 字符 LRU；`render_html` 流式期间不挂载 iframe，完成后再挂一个 sandboxed iframe。

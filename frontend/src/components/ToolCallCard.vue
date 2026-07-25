@@ -262,7 +262,7 @@ function lineCount(body) {
 }
 
 function isBodyPreview(msg) {
-  return !msg.expanded && lineCount(msg.body) > BODY_PREVIEW_LINES;
+  return msg.kind !== 'command' && !msg.expanded && lineCount(msg.body) > BODY_PREVIEW_LINES;
 }
 
 function isCreatePreview(msg) {
@@ -332,15 +332,15 @@ function isServiceReadResult(msg) {
 }
 
 watch(
-  () => [props.msg?.body, props.msg?.expanded, props.msg?.kind],
+  () => [props.msg?.body, props.msg?.expanded, props.msg?.kind, props.msg?.status],
   () => {
-    if (!isServiceReadResult(props.msg)) return;
+    const followsTail = isServiceReadResult(props.msg)
+      || (props.msg?.kind === 'command' && props.msg?.status === 'running');
+    if (!followsTail) return;
     nextTick(() => {
       const pre = bodyPreRef.value;
       if (!pre) return;
       pre.scrollTop = pre.scrollHeight;
-      // Retry once more on the next frame in case the <pre> is still laying
-      // out a large body (up to 8 KiB UI cap).
       requestAnimationFrame(() => {
         if (bodyPreRef.value) bodyPreRef.value.scrollTop = bodyPreRef.value.scrollHeight;
       });
@@ -359,7 +359,7 @@ function handleToggle(msg) {
 }
 
 function hasExpandableBody(msg) {
-  if (msg.kind === 'read') return false;
+  if (msg.kind === 'read' || msg.kind === 'command') return false;
   if (msg.kind === 'edit') return true;
   if (msg.kind === 'create') return lineCount(msg.codeContent) > BODY_PREVIEW_LINES;
   // calculate: body 只重复 title(expression) + chip(= result)，无需详情卡

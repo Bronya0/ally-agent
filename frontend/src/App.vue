@@ -2573,8 +2573,9 @@ function flushToolUpdateBuffer() {
   for (const data of entries) {
     const session = sessionByRunId(data.runId);
     if (!session) continue;
-    const title = makeToolTitle(data.name, data.args, data);
-    updateToolEvent(toolEventId(data), data.name, title, data.args || '', 'running', data, session);
+    const title = makeToolTitle(data.name, data.args || '', data);
+    const liveBody = data.output !== undefined ? String(data.output || '') : (data.args || '');
+    updateToolEvent(toolEventId(data), data.name, title, liveBody, 'running', data, session);
     if (session.id === activeSessionId.value) {
       lastActiveSessionId = session.id;
       lastActiveToolName = data.name || '';
@@ -4793,8 +4794,10 @@ function updateToolEvent(id, name, title, body, status = 'default', meta = {}, t
     toolCallId: meta.toolCallId || existing?.toolCallId || '',
     toolCallIndex: meta.toolCallIndex ?? existing?.toolCallIndex,
     name: name || 'tool',
-    title,
-    body: formatToolBody(name, displayToolBodyForStatus(name, body, status)),
+    title: title || existing?.title || '',
+    body: name === 'run_command' && meta.output !== undefined
+      ? stripAnsi(String(meta.output || ''))
+      : formatToolBody(name, displayToolBodyForStatus(name, body, status)),
     time: new Date().toLocaleTimeString(),
     durationMs: existing?.durationMs || Number(meta.durationMs || 0),
     durationText: existing?.durationText || formatDurationShort(meta.durationMs),
