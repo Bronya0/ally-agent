@@ -6426,22 +6426,11 @@ func fileMutationTargets(cfg ConfigState, name, arguments string) []fileMutation
 		if json.Unmarshal([]byte(arguments), &req) != nil {
 			return nil
 		}
-		result := make([]fileMutationTarget, 0, len(req.Files))
-		seen := make(map[string]struct{}, len(req.Files))
-		for _, file := range req.Files {
-			if target, ok := localMutationTarget(cfg, file.Path); ok {
-				// One local edit call merges repeated normalized paths before
-				// applying changes. Report each physical target only once here so
-				// the outer cross-call conflict guard does not reject that valid
-				// single-call edit before executeTool can merge it.
-				if _, exists := seen[target.key]; exists {
-					continue
-				}
-				seen[target.key] = struct{}{}
-				result = append(result, target)
-			}
+		plan, err := planLocalEditBatch(cfg, req.Files, localEditPlanForConflict)
+		if err != nil {
+			return nil
 		}
-		return result
+		return plan.Targets
 	}
 	if name == "remote_edit" {
 		var req RemoteEditRequest
@@ -6472,29 +6461,6 @@ func fileMutationTargets(cfg ConfigState, name, arguments string) []fileMutation
 		return nil
 	}
 	return []fileMutationTarget{target}
-}
-
-func localMutationTarget(cfg ConfigState, filePath string) (fileMutationTarget, bool) {
-	roots, err := workspaceRoots(cfg)
-	if err != nil {
-		return fileMutationTarget{}, false
-	}
-	root := roots[0]
-	absPath, err := safeJoin(roots, filePath)
-	if err != nil {
-		if filepath.IsAbs(filePath) {
-			absPath = filepath.Clean(filePath)
-		} else {
-			absPath = filepath.Join(root, filePath)
-		}
-	}
-	absPath, _ = filepath.Abs(absPath)
-	absPath = filepath.Clean(absPath)
-	keyPath := filepath.ToSlash(absPath)
-	if goruntime.GOOS == "windows" {
-		keyPath = strings.ToLower(keyPath)
-	}
-	return fileMutationTarget{"local:" + keyPath, filepath.ToSlash(filePath)}, true
 }
 
 // toolNameAliases maps deprecated tool names to their canonical names.
@@ -10893,54 +10859,14 @@ type preparedFileEdit struct {
 }
 
 func (a *App) editFilesWithConfig(cfg ConfigState, files []FileTextEdits) (MultiEditResult, error) {
-	if err := validateModelEditToolRequest(files); err != nil {
-		return MultiEditResult{}, err
-	}
-	roots, err := workspaceRoots(cfg)
+	plan, err := planLocalEditBatch(cfg, files, localEditPlanForExecution)
 	if err != nil {
 		return MultiEditResult{}, err
 	}
-
-	// Treat repeated references to the same physical file as one edit plan.
-	// Models may produce path aliases such as "a.go" and "./a.go" in one
-	// response; both entries describe changes against the same version snapshot,
-	// so merge their changes before matching or committing anything.
-	mergedFiles := make([]FileTextEdits, 0, len(files))
-	mergedByPath := make(map[string]int, len(files))
-	for i, file := range files {
-		resolved, err := safeJoin(roots, file.Path)
-		if err != nil {
-			return MultiEditResult{}, fmt.Errorf("file %d (%s): %w", i+1, file.Path, err)
-		}
-		key := filepath.Clean(resolved)
-		if goruntime.GOOS == "windows" {
-			key = strings.ToLower(key)
-		}
-		if existingIndex, ok := mergedByPath[key]; ok {
-			existing := &mergedFiles[existingIndex]
-			if !strings.EqualFold(existing.Version, file.Version) {
-				return MultiEditResult{}, codedToolError("E_VERSION_MISMATCH", fmt.Errorf("duplicate edit entries for %s use different versions (%s and %s); re-read the file and submit one version", file.Path, existing.Version, file.Version))
-			}
-			existing.Changes = append(existing.Changes, file.Changes...)
-			continue
-		}
-		mergedByPath[key] = len(mergedFiles)
-		mergedFiles = append(mergedFiles, FileTextEdits{
-			Path:    file.Path,
-			Version: file.Version,
-			Changes: append([]TextChange(nil), file.Changes...),
-		})
-	}
-	if err := validateModelEditToolRequest(mergedFiles); err != nil {
-		return MultiEditResult{}, err
-	}
-
-	prepared := make([]preparedFileEdit, 0, len(mergedFiles))
-	for i, file := range mergedFiles {
-		resolved, err := safeJoin(roots, file.Path)
-		if err != nil {
-			return MultiEditResult{}, fmt.Errorf("file %d (%s): %w", i+1, file.Path, err)
-		}
+	prepared := make([]preparedFileEdit, 0, len(plan.Files))
+	for i, filePlan := range plan.Files {
+		file := filePlan.Edit
+		resolved := filePlan.ResolvedPath
 		before, info, err := readTextFile(resolved)
 
 		if err != nil {
