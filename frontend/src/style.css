@@ -718,11 +718,13 @@ code, pre {
 }
 
 .composer-info .extra-roots-btn {
-  position: relative;
-  width: 20px;
+  width: auto;
+  min-width: 20px;
   height: 20px;
+  padding: 0 4px;
+  gap: 3px;
   border-radius: 5px;
-  font-size: 13px;
+  font-size: 12px;
   line-height: 1;
   color: #6a6a6a;
   flex-shrink: 0;
@@ -740,20 +742,17 @@ code, pre {
   color: #f5c890;
 }
 
+.composer-info .extra-roots-icon {
+  font-size: 14px;
+  line-height: 1;
+}
+
 .composer-info .extra-roots-count {
-  position: absolute;
-  top: -4px;
-  right: -4px;
-  min-width: 13px;
-  height: 13px;
-  padding: 0 3px;
-  border-radius: 7px;
-  background: var(--ally-accent, #e8a55c);
-  color: #1a1a1a;
-  font-size: 9px;
-  font-weight: 700;
-  line-height: 13px;
-  text-align: center;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  padding-top: 3px;
+  color: var(--ally-accent, #e8a55c);
   pointer-events: none;
 }
 
