@@ -88,6 +88,7 @@ type ScheduledTaskToolResult struct {
 
 type scheduledTaskManager struct {
 	app       *App
+	events    eventSink
 	cron      *cron.Cron
 	path      string
 	mu        sync.Mutex
@@ -111,6 +112,7 @@ func (a *App) startScheduledTaskManager() error {
 	}
 	manager := &scheduledTaskManager{
 		app:       a,
+		events:    appEventSink{app: a},
 		cron:      cron.New(cron.WithChain(cron.Recover(cron.DefaultLogger))),
 		path:      filepath.Join(filepath.Dir(a.configPath), "scheduled_tasks.json"),
 		tasks:     map[string]*ScheduledTask{},
@@ -585,8 +587,8 @@ func (m *scheduledTaskManager) finish(id, status, summary, errText string) {
 }
 
 func (m *scheduledTaskManager) emit(name string, payload map[string]any) {
-	if m.app != nil && m.app.ctx != nil && m.app.ctx.Err() == nil {
-		m.app.emit(name, payload)
+	if m.events != nil {
+		m.events.Emit(name, payload)
 	}
 }
 
