@@ -3,7 +3,6 @@
 package main
 
 import (
-	"os"
 	"os/exec"
 	"syscall"
 )
@@ -22,17 +21,5 @@ func hideCommandWindow(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		HideWindow:    true,
 		CreationFlags: 0x08000000, // CREATE_NO_WINDOW
-	}
-}
-
-// newDetachedProcessAttr returns an os.ProcAttr that launches the new Ally
-// process in its own process group, so it survives the parent exit. Used by
-// the self-update restart path.
-func newDetachedProcessAttr() *os.ProcAttr {
-	return &os.ProcAttr{
-		Sys: &syscall.SysProcAttr{
-			CreationFlags: 0x00000200, // CREATE_NEW_PROCESS_GROUP
-		},
-		Files: []*os.File{nil, nil, nil},
 	}
 }

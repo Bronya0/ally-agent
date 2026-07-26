@@ -205,6 +205,8 @@ jobs:
           mkdir -p dmg-root
           cp -R "$app" dmg-root/
           cp LICENSE THIRD_PARTY_NOTICES.md README.md dmg-root/
+          cp scripts/open-ally-macos.command "dmg-root/免签名启动Ally.command"
+          chmod +x "dmg-root/免签名启动Ally.command"
           ln -s /Applications dmg-root/Applications
           version="${{ github.event.release.tag_name || github.ref_name }}"
           hdiutil create -volname "${APP_NAME}" -srcfolder dmg-root -ov -format UDZO "${APP_NAME}-$version-macos-universal.dmg"

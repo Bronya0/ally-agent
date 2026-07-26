@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	goruntime "runtime"
 	"strings"
 	"time"
@@ -39,7 +40,19 @@ const (
 	exeBackupSuffix       = ".bak"
 	updateDownloadTimeout = 30 * time.Minute
 	updateHTTPTimeout     = 60 * time.Second
+	maxUpdateArchiveBytes = 512 << 20
+	maxUpdateZipEntries   = 4096
+	maxUpdateExtractBytes = 1 << 30
 )
+
+var updateTagPattern = regexp.MustCompile(`^v?[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$`)
+
+func validateUpdateTag(tag string) error {
+	if !updateTagPattern.MatchString(strings.TrimSpace(tag)) {
+		return fmt.Errorf("invalid release tag %q", tag)
+	}
+	return nil
+}
 
 // UpdateAssetInfo describes a single release asset matched for the current platform.
 type UpdateAssetInfo struct {
@@ -128,8 +141,8 @@ type githubAsset struct {
 // returns the tag (normalized) and its assets. Uses Ally's proxy-aware client.
 func (a *App) fetchReleaseByTag(tag string) (string, []githubAsset, error) {
 	tag = strings.TrimSpace(tag)
-	if tag == "" {
-		return "", nil, errors.New("tag is required")
+	if err := validateUpdateTag(tag); err != nil {
+		return "", nil, err
 	}
 	cfg := a.effectiveConfigSafe()
 	client := proxyHTTPClient(cfg, false, updateHTTPTimeout)
@@ -162,8 +175,8 @@ func (a *App) fetchReleaseByTag(tag string) (string, []githubAsset, error) {
 		return "", nil, err
 	}
 	normalized := strings.TrimSpace(parsed.TagName)
-	if normalized == "" {
-		return "", nil, errors.New("missing tag_name in release response")
+	if err := validateUpdateTag(normalized); err != nil {
+		return "", nil, fmt.Errorf("invalid release response: %w", err)
 	}
 	return normalized, parsed.Assets, nil
 }
@@ -215,6 +228,12 @@ func (a *App) downloadAsset(assetURL, destPath, version string, totalBytes int64
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("download status %d", resp.StatusCode)
 	}
+	if totalBytes > maxUpdateArchiveBytes {
+		return fmt.Errorf("update archive exceeds %d bytes", maxUpdateArchiveBytes)
+	}
+	if resp.ContentLength > maxUpdateArchiveBytes {
+		return fmt.Errorf("update response exceeds %d bytes", maxUpdateArchiveBytes)
+	}
 	if err := os.MkdirAll(filepath.Dir(destPath), 0o755); err != nil {
 		return err
 	}
@@ -251,17 +270,20 @@ func (a *App) downloadAsset(assetURL, destPath, version string, totalBytes int64
 			}
 		}
 		a.emit("update:progress", map[string]any{
-			"stage":            "download",
-			"version":          version,
-			"bytesDownloaded":  received,
-			"bytesTotal":       total,
-			"percent":          percent,
+			"stage":           "download",
+			"version":         version,
+			"bytesDownloaded": received,
+			"bytesTotal":      total,
+			"percent":         percent,
 		})
 	}
 	flushProgress(true)
 	for {
 		n, readErr := resp.Body.Read(buf)
 		if n > 0 {
+			if received > maxUpdateArchiveBytes-int64(n) {
+				return fmt.Errorf("update response exceeds %d bytes", maxUpdateArchiveBytes)
+			}
 			if _, werr := f.Write(buf[:n]); werr != nil {
 				return werr
 			}
@@ -299,7 +321,15 @@ func extractZip(zipPath, destDir string) error {
 	if err != nil {
 		return err
 	}
+	if len(r.File) > maxUpdateZipEntries {
+		return fmt.Errorf("zip contains too many entries: %d", len(r.File))
+	}
+	var extractedBytes uint64
 	for _, f := range r.File {
+		if f.UncompressedSize64 > maxUpdateExtractBytes || extractedBytes > maxUpdateExtractBytes-f.UncompressedSize64 {
+			return fmt.Errorf("zip expands beyond %d bytes", maxUpdateExtractBytes)
+		}
+		extractedBytes += f.UncompressedSize64
 		if err := extractZipEntry(f, absDest); err != nil {
 			return err
 		}
@@ -309,8 +339,20 @@ func extractZip(zipPath, destDir string) error {
 
 func extractZipEntry(f *zip.File, absDest string) error {
 	name := filepath.FromSlash(f.Name)
-	if strings.Contains(name, "..") {
-		return fmt.Errorf("zip entry contains parent reference: %s", f.Name)
+	if name == "." || filepath.IsAbs(name) || filepath.VolumeName(name) != "" {
+		return fmt.Errorf("zip entry has an absolute path: %s", f.Name)
+	}
+	for _, part := range strings.FieldsFunc(name, func(r rune) bool { return r == '/' || r == '\\' }) {
+		if part == ".." {
+			return fmt.Errorf("zip entry contains parent reference: %s", f.Name)
+		}
+	}
+	if f.FileInfo().Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("zip entry is a symlink: %s", f.Name)
+	}
+	name = filepath.Clean(name)
+	if name == ".." || strings.HasPrefix(name, ".."+string(os.PathSeparator)) {
+		return fmt.Errorf("zip entry escapes destination: %s", f.Name)
 	}
 	target := filepath.Join(absDest, name)
 	absTarget, err := filepath.Abs(target)
@@ -336,8 +378,53 @@ func extractZipEntry(f *zip.File, absDest string) error {
 		return err
 	}
 	defer out.Close()
-	_, err = io.Copy(out, rc)
-	return err
+	_, err = io.Copy(out, io.LimitReader(rc, maxUpdateExtractBytes+1))
+	if err != nil {
+		return err
+	}
+	if info, err := out.Stat(); err != nil {
+		return err
+	} else if info.Size() > int64(maxUpdateExtractBytes) {
+		return fmt.Errorf("zip entry exceeds extraction limit: %s", f.Name)
+	}
+	return nil
+}
+
+// validateStagedExecutable performs a lightweight PE sanity check before the
+// current installation is touched. It is not a signature check, but rejects
+// empty, non-regular, truncated, and obviously non-Windows payloads.
+func validateStagedExecutable(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() || info.Size() < 64 {
+		return errors.New("staged executable is not a valid regular PE file")
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	header := make([]byte, 64)
+	if _, err := io.ReadFull(f, header); err != nil {
+		return err
+	}
+	if header[0] != 'M' || header[1] != 'Z' {
+		return errors.New("staged executable is missing the MZ header")
+	}
+	peOffset := int64(uint32(header[0x3c]) | uint32(header[0x3d])<<8 | uint32(header[0x3e])<<16 | uint32(header[0x3f])<<24)
+	if peOffset < 64 || peOffset > info.Size()-4 {
+		return errors.New("staged executable has an invalid PE header offset")
+	}
+	signature := make([]byte, 4)
+	if _, err := f.ReadAt(signature, peOffset); err != nil {
+		return err
+	}
+	if string(signature) != "PE\x00\x00" {
+		return errors.New("staged executable is missing the PE signature")
+	}
+	return nil
 }
 
 // DownloadUpdate downloads the platform-matched ZIP for the given tag and
@@ -388,10 +475,10 @@ func (a *App) DownloadUpdate(tag string) UpdateDownloadResult {
 		"percent": 100,
 	})
 
-	// Verify the staged Ally.exe exists before declaring ready.
+	// Verify the staged Ally.exe before declaring ready.
 	stagedExe := filepath.Join(stagedDir, "Ally.exe")
-	if _, err := os.Stat(stagedExe); err != nil {
-		msg := fmt.Sprintf("staged executable missing: %v", err)
+	if err := validateStagedExecutable(stagedExe); err != nil {
+		msg := fmt.Sprintf("invalid staged executable: %v", err)
 		a.emit("update:error", map[string]any{"stage": "verify", "error": msg})
 		_ = os.RemoveAll(versionDir)
 		return UpdateDownloadResult{Error: msg}
@@ -523,13 +610,16 @@ func (a *App) ApplyUpdate(tag string) UpdateApplyResult {
 	if !updatePlatformSupported() {
 		return UpdateApplyResult{Error: "automatic update is only supported on windows x64"}
 	}
-	tag = strings.TrimSpace(tag)
-	if tag == "" {
-		return UpdateApplyResult{Error: "tag is required"}
+	if err := validateUpdateTag(tag); err != nil {
+		return UpdateApplyResult{Error: err.Error()}
 	}
 	stagedDir := updateStagedDir(tag)
 	if _, err := os.Stat(stagedDir); err != nil {
 		return UpdateApplyResult{Error: fmt.Sprintf("staged dir not found: %v", err)}
+	}
+	stagedExe := filepath.Join(stagedDir, "Ally.exe")
+	if err := validateStagedExecutable(stagedExe); err != nil {
+		return UpdateApplyResult{Error: fmt.Sprintf("invalid staged executable: %v", err)}
 	}
 	exeDir, err := allyExecutableDir()
 	if err != nil {
@@ -544,7 +634,7 @@ func (a *App) ApplyUpdate(tag string) UpdateApplyResult {
 	// Stop everything that could hold a handle on Ally.exe.
 	// MCP servers are independent subprocesses and do not hold the Ally.exe
 	// file handle; they are shut down later by the ctx.Done() path triggered
-	// by RestartForUpdate's wruntime.Quit. Keeping them alive here means a
+	// by QuitForUpdate's wruntime.Quit. Keeping them alive here means a
 	// rolled-back update leaves MCP fully functional.
 	if err := a.stopAllRuns(); err != nil {
 		a.emit("update:error", map[string]any{"stage": "apply", "error": err.Error()})
@@ -553,7 +643,6 @@ func (a *App) ApplyUpdate(tag string) UpdateApplyResult {
 	a.stopAllServices()
 
 	exeName := "Ally.exe"
-	stagedExe := filepath.Join(stagedDir, exeName)
 	currentExe := filepath.Join(exeDir, exeName)
 	backupExe := currentExe + exeBackupSuffix
 
@@ -592,11 +681,15 @@ func (a *App) ApplyUpdate(tag string) UpdateApplyResult {
 		return UpdateApplyResult{Error: msg}
 	}
 
-	// Replace supporting resource files. Failures here are best-effort: the
-	// new EXE is already in place, and resources being slightly stale is
-	// preferable to rolling back a successful EXE swap.
-	files, _ := stagedFileSet(stagedDir)
-	replaced := 0
+	// Replace supporting resource files. A partial resource update is not
+	// reported as successful: the executable may be replaced, but the user
+	// receives a clear error and can retry after the install is repaired.
+	files, err := stagedFileSet(stagedDir)
+	if err != nil {
+		msg := fmt.Sprintf("list staged resources: %v", err)
+		a.emit("update:error", map[string]any{"stage": "apply", "error": msg})
+		return UpdateApplyResult{Error: msg}
+	}
 	for _, rel := range files {
 		if rel == exeName {
 			continue // already handled
@@ -604,15 +697,10 @@ func (a *App) ApplyUpdate(tag string) UpdateApplyResult {
 		src := filepath.Join(stagedDir, rel)
 		dst := filepath.Join(exeDir, rel)
 		if err := copyFileAtomic(src, dst); err != nil {
-			// Log but continue; resource replacement is non-fatal.
-			a.emit("update:progress", map[string]any{
-				"stage":   "apply",
-				"version": tag,
-				"warning": fmt.Sprintf("resource %s: %v", rel, err),
-			})
-			continue
+			msg := fmt.Sprintf("replace resource %s: %v", rel, err)
+			a.emit("update:error", map[string]any{"stage": "apply", "error": msg})
+			return UpdateApplyResult{Error: msg}
 		}
-		replaced++
 	}
 
 	a.emit("update:progress", map[string]any{"stage": "apply", "version": tag, "percent": 100})
@@ -620,40 +708,25 @@ func (a *App) ApplyUpdate(tag string) UpdateApplyResult {
 	return UpdateApplyResult{OK: true}
 }
 
-// RestartForUpdate launches the new Ally.exe from the install directory and
-// asks the current process to quit. The new process inherits stdin/stdout/stderr
-// detached so it survives the parent exit.
-func (a *App) RestartForUpdate() error {
+// QuitForUpdate asks the current Ally process to quit so the user can manually
+// relaunch the newly applied binary. Spawning a detached replacement from the
+// old process is intentionally avoided: if the new EXE fails to start (PE
+// corruption, missing dependency, signature issue), the user is left with no
+// running Ally at all. A manual relaunch keeps the user in control and lets
+// them see any startup error directly.
+func (a *App) QuitForUpdate() error {
 	if !updatePlatformSupported() {
 		return errors.New("automatic update is only supported on windows x64")
 	}
-	exeDir, err := allyExecutableDir()
-	if err != nil {
-		return err
+	if a.ctx == nil {
+		return errors.New("app context not initialized")
 	}
-	exePath := filepath.Join(exeDir, "Ally.exe")
-	if _, err := os.Stat(exePath); err != nil {
-		return fmt.Errorf("new exe not found: %v", err)
-	}
-	// Detach the new process so it does not die when the current one exits.
-	attr := newDetachedProcessAttr()
-	if attr == nil {
-		// Fallback: rely on os.StartProcess defaults.
-		attr = &os.ProcAttr{}
-	}
-	proc, err := os.StartProcess(exePath, []string{exePath}, attr)
-	if err != nil {
-		return fmt.Errorf("start new exe: %v", err)
-	}
-	_ = proc.Release()
-	// Ask Wails to quit. The frontend will receive update:applied first.
-	if a.ctx != nil {
-		go func() {
-			// Small delay so the frontend can render the "restarting" state.
-			time.Sleep(500 * time.Millisecond)
-			wruntime.Quit(a.ctx)
-		}()
-	}
+	go func() {
+		// Small delay so the frontend can render the "closing" state before
+		// the window disappears.
+		time.Sleep(500 * time.Millisecond)
+		wruntime.Quit(a.ctx)
+	}()
 	return nil
 }
 

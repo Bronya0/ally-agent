@@ -2436,24 +2436,43 @@ code, pre {
 }
 
 .diff-row {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   align-items: stretch;
-  padding: 0 10px;
   min-height: 20px;
   content-visibility: auto;
   contain-intrinsic-size: 20px;
 }
 
-.diff-row.diff-add {
+.diff-side {
+  display: flex;
+  align-items: stretch;
+  min-width: 0;
+  padding: 0 10px;
+}
+
+.diff-side + .diff-side {
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.diff-row.diff-sep-row {
+  display: block;
+  padding: 1px 10px;
+  user-select: none;
+}
+
+.diff-row.diff-add .diff-side,
+.diff-side.diff-add {
   background: rgba(78, 200, 126, 0.10);
 }
 
-.diff-row.diff-del {
+.diff-row.diff-del .diff-side,
+.diff-side.diff-del {
   background: rgba(232, 84, 84, 0.10);
 }
 
-.diff-row.diff-ctx {
-  background: transparent;
+.diff-side.diff-empty {
+  background: rgba(255, 255, 255, 0.025);
 }
 
 .diff-gutter {
@@ -2501,11 +2520,6 @@ code, pre {
 
 .diff-ctx .diff-code {
   color: #bdbdbd;
-}
-
-.diff-sep-row {
-  padding: 1px 10px;
-  user-select: none;
 }
 
 .diff-separator {

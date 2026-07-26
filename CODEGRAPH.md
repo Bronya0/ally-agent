@@ -380,6 +380,36 @@ flowchart LR
 - Wails 启动、窗口、目录选择和系统文件管理器只允许放在 `desktop_host.go`；自更新退出例外保留在 `update.go`。
 - 文件 mutation 冲突检测与本地编辑执行共享 `planLocalEditBatch()`，避免两层契约漂移。
 
+### 修改入口与跨层变更顺序
+
+按功能变更进入唯一负责模块，不要在 `app.go` 中复制领域逻辑：
+
+| 变更内容 | 首选修改入口 | 必须联动检查 |
+|---|---|---|
+| Agent 编排、聊天循环、运行/会话状态 | `app.go` | `host_events.go`、运行事件测试 |
+| Wails 启动、窗口、目录选择、系统文件管理器 | `desktop_host.go` | Wails 生命周期、平台构建 |
+| UI/runtime 事件与宿主转发 | `host_events.go` | 事件名、payload、session/run 路由、终止事件 |
+| Provider 请求/响应适配 | `model_provider.go` | provider 流事件、工具调用、usage、错误处理 |
+| 内置工具 schema | `chatTools()`（当前位于 Agent 编排域） | 严格解码、执行分支、结果卡片、工具测试 |
+| 工具参数严格解码与执行分发 | `executeTool()`（当前位于 Agent 编排域） | 批次策略、结果 envelope、前端工具卡片 |
+| 本地 edit 路径/别名/重复项/版本归一化 | `file_edit_plan.go` | `tool_batch_policy.go`、`file_edit.go`、跨层测试 |
+| 文件编辑匹配、校验、原子提交、回滚 | `file_edit.go` | 共享编辑计划、版本和重叠保护 |
+| 批次屏障、写冲突、工具去重 | `tool_batch_policy.go` | 规范化计划、工具调用顺序、并发限制 |
+| 工具结果 envelope、错误码、模型侧压缩 | `tool_result.go` | 前端 `tool:result/tool:error`、provider 工具结果 |
+| 流式事件节流与 flush | `stream_events.go` | 前端缓冲、终端事件、流式回归测试 |
+| 命令删除/重定向/越界安全 | `command_safety.go` | Windows/MSYS 路径、命令安全测试 |
+| `read`、grep、提示词、技能、记忆、Git 等领域逻辑 | 对应 `tool_read.go`、`tool_grep.go`、`prompt_builder.go`、`skills.go`、`memory.go`、`git_tools.go` | 领域测试及模型上下文行为 |
+
+跨层工具或事件变更按以下顺序检查：
+
+```text
+schema → strict decoder → batch policy → executor → result envelope → provider/UI rendering → boundary test → docs
+```
+
+同一次本地 `edit` 调用中的重复文件项必须先进入 `planLocalEditBatch()`，再由批次冲突检查和执行层共同消费该计划；不同 mutation 工具调用指向同一规范化路径仍必须冲突。任何新增的归一化、去重或错误推断都应放在唯一规范化边界，禁止在上游策略或下游执行层重新实现。
+
+新增或移动模块时，优先保持同一 Go package 的机械拆分；只有依赖方向清晰、Wails 绑定影响已验证，并且有宿主无关测试覆盖后，才引入新的 package 边界。
+
 ---
 
 ## 安全机制

@@ -314,7 +314,7 @@ import {
   SearchWorkspacePaths,
   DownloadUpdate,
   ApplyUpdate,
-  RestartForUpdate,
+  QuitForUpdate,
   SkipUpdate,
 } from '../wailsjs/go/main/App';
 import { BrowserOpenURL, Environment, EventsOn, WindowMinimise, WindowMaximise, WindowUnmaximise, WindowIsMaximised, Quit } from '../wailsjs/runtime/runtime';
@@ -2602,7 +2602,12 @@ function finalizeReasoningTiming(msg) {
 // Buffer the latest tool:update event per tool call and flush on a timer so
 // the main thread is not blocked by parsing/re-rendering large streaming
 // argument payloads (e.g. create_file content) on every delta.
+function isHiddenSearchTool(name) {
+  return name === 'grep_files';
+}
+
 function bufferToolUpdate(data) {
+  if (isHiddenSearchTool(data?.name)) return;
   flushStreamBuffer(data.runId);
   const session = sessionByRunId(data.runId);
   if (!session) return;
@@ -2875,6 +2880,7 @@ function bindRuntimeEvents() {
     if (session.id === activeSessionId.value) scrollMessagesToBottom();
   });
   const applyToolProgressEvent = (data) => {
+    if (isHiddenSearchTool(data?.name)) return;
     flushStreamBuffer(data.runId);
     const session = sessionByRunId(data.runId);
     if (!session) return;
@@ -2926,6 +2932,7 @@ function bindRuntimeEvents() {
     scheduleSaveSessions();
   });
   onRuntimeEvent('tool:result', (data) => {
+    if (isHiddenSearchTool(data?.name)) return;
     flushStreamBuffer(data.runId);
     flushToolUpdateBuffer();
     const session = sessionByEvent(data);
@@ -3060,6 +3067,7 @@ function bindRuntimeEvents() {
     }
   });
   onRuntimeEvent('tool:error', (data) => {
+    if (isHiddenSearchTool(data?.name)) return;
     flushStreamBuffer(data.runId);
     flushToolUpdateBuffer();
     const session = sessionByEvent(data);
@@ -3331,6 +3339,7 @@ function bindRuntimeEvents() {
     }
   });
   onRuntimeEvent('sub:tool:start', (data) => {
+    if (isHiddenSearchTool(data?.name)) return;
     const r = subRuns.value.find(s => s.id === data.id);
     if (r) {
       r.toolCalls.push({ toolCallId: data.toolCallId, name: data.name, args: data.args, status: 'running', summary: '', durationMs: 0, durationText: '' });
@@ -3341,6 +3350,7 @@ function bindRuntimeEvents() {
     }
   });
   onRuntimeEvent('sub:tool:result', (data) => {
+    if (isHiddenSearchTool(data?.name)) return;
     const r = subRuns.value.find(s => s.id === data.id);
     if (r) {
       const tc = r.toolCalls.find(t => t.toolCallId === data.toolCallId);
@@ -3353,6 +3363,7 @@ function bindRuntimeEvents() {
     }
   });
   onRuntimeEvent('sub:tool:error', (data) => {
+    if (isHiddenSearchTool(data?.name)) return;
     const r = subRuns.value.find(s => s.id === data.id);
     if (r) {
       const tc = r.toolCalls.find(t => t.toolCallId === data.toolCallId);
@@ -6724,12 +6735,13 @@ async function applyAndRestart() {
       return;
     }
     updateState.value = 'restarting';
-    // Give the user a brief moment to see the "restarting" state, then relaunch.
+    // Give the user a brief moment to see the "closing" state, then quit.
+    // The user manually relaunches the new binary — no detached spawn here.
     setTimeout(async () => {
       try {
-        await RestartForUpdate();
+        await QuitForUpdate();
       } catch (_) {
-        // If restart fails, fall back to letting the user restart manually.
+        // If quit fails, fall back to letting the user close Ally manually.
         updateState.value = 'error';
         updateError.value = t('app.update.errors.restart');
       }

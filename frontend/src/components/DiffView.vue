@@ -12,20 +12,31 @@
       <pre v-if="rawFallbackText" class="diff-raw-fallback">{{ rawFallbackText }}</pre>
       <template v-else>
         <div
-          v-for="(line, li) in displayLines"
-          :key="li"
-          :class="['diff-row', ...lineClasses(line)]"
+          v-for="(row, ri) in displayRows"
+          :key="ri"
+          :class="['diff-row', { 'diff-sep-row': row.isSeparator }]"
         >
           <!-- Separator line -->
-          <template v-if="line.isSeparator">
-            <span class="diff-separator">{{ line.separatorText }}</span>
+          <template v-if="row.isSeparator">
+            <span class="diff-separator">{{ row.separatorText }}</span>
           </template>
 
-          <!-- Context / add / delete lines -->
+          <!-- Side-by-side old / new lines -->
           <template v-else>
-            <span class="diff-gutter">{{ padGutter(line.lineNum) }}</span>
-            <span class="diff-marker">{{ line.kind === 'add' ? '+' : line.kind === 'delete' ? '-' : ' ' }}</span>
-            <span class="diff-code">{{ line.code }}</span>
+            <div :class="['diff-side', ...lineClasses(row.left)]">
+              <template v-if="row.left">
+                <span class="diff-gutter">{{ padGutter(row.left.lineNum) }}</span>
+                <span class="diff-marker">{{ row.left.kind === 'delete' ? '-' : ' ' }}</span>
+                <span class="diff-code">{{ row.left.code }}</span>
+              </template>
+            </div>
+            <div :class="['diff-side', ...lineClasses(row.right)]">
+              <template v-if="row.right">
+                <span class="diff-gutter">{{ padGutter(row.right.lineNum) }}</span>
+                <span class="diff-marker">{{ row.right.kind === 'add' ? '+' : ' ' }}</span>
+                <span class="diff-code">{{ row.right.code }}</span>
+              </template>
+            </div>
           </template>
         </div>
       </template>
@@ -126,6 +137,39 @@ const displayLines = computed(() => {
   return localDiffLines.value
 })
 
+const displayRows = computed(() => {
+  const lines = displayLines.value
+  const rows = []
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    if (line.isSeparator) {
+      rows.push(line)
+      continue
+    }
+    if (line.kind === 'context') {
+      rows.push({ left: line, right: line })
+      continue
+    }
+
+    // Pair adjacent deleted and added blocks so replacements line up.
+    if (line.kind === 'delete') {
+      const deleted = []
+      while (i < lines.length && lines[i].kind === 'delete') deleted.push(lines[i++])
+      const added = []
+      while (i < lines.length && lines[i].kind === 'add') added.push(lines[i++])
+      i--
+      const count = Math.max(deleted.length, added.length)
+      for (let offset = 0; offset < count; offset++) {
+        rows.push({ left: deleted[offset] || null, right: added[offset] || null })
+      }
+      continue
+    }
+
+    rows.push({ left: null, right: line })
+  }
+  return rows
+})
+
 const rawFallbackText = computed(() => {
   if (displayLines.value.length > 0) return ''
   const text = String(props.diffText || '').trim()
@@ -159,7 +203,7 @@ const diffHeader = computed(() => {
 })
 
 function lineClasses(line) {
-  if (line.isSeparator) return ['diff-sep-row']
+  if (!line) return ['diff-empty']
   if (line.kind === 'add') return ['diff-add']
   if (line.kind === 'delete') return ['diff-del']
   return ['diff-ctx']

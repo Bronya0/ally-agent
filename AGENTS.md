@@ -741,6 +741,42 @@ Example MCP config:
 
 ---
 
+## Development And Refactoring Rules
+
+These rules are required for future changes. They exist to keep Agent behavior discoverable, prevent cross-layer contract drift, and preserve a future path to extracting the Agent core from Wails.
+
+### Module ownership and unique modification boundaries
+
+- Treat `app.go` as orchestration only: chat-loop control flow, run/session state, and coordination between domain modules belong there. New domain logic should move to the owning module instead of enlarging `app.go`.
+- Keep the Agent core host-neutral. Core/runtime files must not import Wails runtime packages or call `runtime.EventsEmit`, window APIs, dialogs, browser APIs, or OS desktop integration directly.
+- Put Wails lifecycle, window management, directory/file-manager integration, and other desktop behavior in `desktop_host.go`.
+- Publish UI/runtime events only through the `eventSink` boundary in `host_events.go`; preserve event names, payload shapes, session routing, and terminal-event rules when changing implementations.
+- Keep provider-specific request/response types behind `model_provider.go`; do not leak OpenAI, Responses, or Anthropic wire details into `app.go` or generic tool orchestration.
+- Keep each cross-layer contract at one source of truth: `chatTools()` for schemas, `executeTool()` for strict dispatch/decoding, `file_edit_plan.go` for local edit normalization, `tool_batch_policy.go` for batch barriers/conflicts, `file_edit.go` for edit execution, `tool_result.go` for result envelopes/compaction, and `stream_events.go` for stream throttling.
+- Do not independently parse, canonicalize, deduplicate, or infer the same request in multiple layers. If a lower layer produces a normalized plan, upstream policy checks and downstream execution must consume that plan.
+- Keep the project in one Go package unless a package boundary has a clear dependency direction and Wails binding impact has been verified. Mechanical same-package extraction is preferred before introducing new packages.
+
+### Cross-layer change procedure
+
+- Before changing a tool or event contract, trace the complete path: schema → strict decoder → batch policy → executor → result envelope → frontend event/card rendering → tests → `AGENTS.md`/`CODEGRAPH.md` when the architecture changes.
+- When a request contains nested mutations, normalize it once before conflict detection. Repeated entries inside one local `edit` call may merge into one physical target; separate mutation tool calls targeting the same normalized path must still conflict.
+- Add at least one end-to-end or boundary test that enters through the same layer as production. A unit test for `executeTool()` alone is insufficient when the scheduler or batch policy can reject the request first.
+- For changes that affect both core and host behavior, use a capture/no-op `eventSink` test so the Agent can be tested without Wails and the event payload contract remains explicit.
+- Do not fix a failing cross-layer test by weakening a valid safety assertion. First identify which layer owns the rule, then move the rule to the shared boundary or update the test to the intended contract.
+- Keep compatibility aliases and legacy backend APIs separate from model-facing schemas; do not expose a compatibility shape merely to avoid updating the canonical boundary.
+
+### Safety and verification requirements
+
+- Preserve optimistic concurrency for local and remote edits. `E_VERSION_MISMATCH` must not trigger an automatic reread, guessed rebase, or blind retry; the model must reread and regenerate changes when needed.
+- File mutations must validate the complete normalized batch before any write. Maintain single-snapshot matching, non-overlap checks, atomic commit, and best-effort rollback semantics.
+- Keep safety-sensitive fallbacks narrowly proven: unique indentation-only matching may rebase indentation, but never fuzzy-match code bodies or choose among multiple candidates.
+- Keep bounded output, concurrency caps, timeouts, cancellation, and redirect limits intact unless the change includes an explicit resource-safety rationale and regression tests.
+- For backend changes, run `gofmt`, `go test ./...`, `git diff --check`, and `wails build`. For pure frontend changes, run the narrowest relevant frontend check/build; use `wails build` when the Wails bridge or generated bindings are affected.
+- Inspect `git diff` and `git status` after formatting/builds. Do not include generated binaries, unrelated formatting changes, or line-ending-only changes in a functional commit.
+- Update `AGENTS.md` and `CODEGRAPH.md` in the same change when module responsibilities, public workflows, event flow, tool contracts, or major data flow changes.
+
+---
+
 ## Current Architectural Notes
 
 - `model_provider.go` is the provider boundary; avoid leaking provider-specific request shapes into Agent orchestration.
