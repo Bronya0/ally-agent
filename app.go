@@ -339,8 +339,24 @@ type ConfigState struct {
 	Models              []ModelConfig `json:"models,omitempty"`
 	DisabledSkills      []string      `json:"disabledSkills,omitempty"`
 	LLMRetries          int           `json:"llmRetries,omitempty"`
+	// AutoUpdate is a pointer so that an absent field in legacy config.json
+	// is treated as "default on" rather than "off". Only an explicit false
+	// disables automatic background downloads.
+	AutoUpdate          *bool         `json:"autoUpdate,omitempty"`
+	// SkippedUpdates records release tags the user chose to skip. They are
+	// excluded from automatic download until the user clears them.
+	SkippedUpdates      []string      `json:"skippedUpdates,omitempty"`
 	grillMode           bool
 	temperatureSet      bool
+}
+
+// autoUpdateEnabled returns true unless AutoUpdate was explicitly set to false.
+// Legacy config.json without the field defaults to enabled.
+func (c ConfigState) autoUpdateEnabled() bool {
+	if c.AutoUpdate != nil {
+		return *c.AutoUpdate
+	}
+	return true
 }
 
 type ToolDefinitionSummary struct {
@@ -4000,6 +4016,12 @@ func mergeConfig(base, overlay ConfigState) ConfigState {
 	if overlay.LLMRetries > 0 {
 		base.LLMRetries = overlay.LLMRetries
 	}
+	if overlay.AutoUpdate != nil {
+		base.AutoUpdate = overlay.AutoUpdate
+	}
+	if overlay.SkippedUpdates != nil {
+		base.SkippedUpdates = cloneStringSlice(overlay.SkippedUpdates)
+	}
 	if base.APIFormat == "" {
 		base.APIFormat = apiFormatOpenAIChat
 	}
@@ -4885,10 +4907,13 @@ func (a *App) effectiveConfigSafe() ConfigState {
 
 // CheckForUpdatesResult describes the outcome of a latest-release lookup.
 type CheckForUpdatesResult struct {
-	OK           bool   `json:"ok"`
-	Tag          string `json:"tag,omitempty"`
-	Error        string `json:"error,omitempty"`
-	CanAutoUpdate bool  `json:"canAutoUpdate,omitempty"`
+	OK                bool   `json:"ok"`
+	Tag               string `json:"tag,omitempty"`
+	Error             string `json:"error,omitempty"`
+	CanAutoUpdate     bool   `json:"canAutoUpdate,omitempty"`
+	AutoUpdateEnabled bool   `json:"autoUpdateEnabled,omitempty"`
+	Skipped           bool   `json:"skipped,omitempty"`
+	StagedVersion     string `json:"stagedVersion,omitempty"`
 }
 
 const allyLatestReleaseAPI = "https://api.github.com/repos/Bronya0/ally-agent/releases/latest"
@@ -4896,6 +4921,11 @@ const allyLatestReleaseAPI = "https://api.github.com/repos/Bronya0/ally-agent/re
 // CheckForUpdates queries GitHub for the latest Ally release through Ally's own
 // proxy-aware HTTP client. It uses a one-minute timeout and never panics; the
 // caller (frontend) treats any non-OK result as "no update detected".
+//
+// The result also reports whether automatic background download is enabled,
+// whether the latest tag was previously skipped, and the version currently
+// staged on disk (if any) so the frontend can decide whether to silently
+// download, prompt the user, or do nothing.
 func (a *App) CheckForUpdates() CheckForUpdatesResult {
 	cfg := a.effectiveConfigSafe()
 	client := proxyHTTPClient(cfg, false, 60*time.Second)
@@ -4929,7 +4959,22 @@ func (a *App) CheckForUpdates() CheckForUpdatesResult {
 	if tag == "" {
 		return CheckForUpdatesResult{Error: "missing tag_name in response"}
 	}
-	return CheckForUpdatesResult{OK: true, Tag: tag, CanAutoUpdate: updatePlatformSupported()}
+	result := CheckForUpdatesResult{
+		OK:                true,
+		Tag:               tag,
+		CanAutoUpdate:     updatePlatformSupported(),
+		AutoUpdateEnabled: cfg.autoUpdateEnabled(),
+	}
+	for _, skipped := range cfg.SkippedUpdates {
+		if skipped == tag {
+			result.Skipped = true
+			break
+		}
+	}
+	if staged := a.findStagedUpdate(); staged != "" {
+		result.StagedVersion = staged
+	}
+	return result
 }
 
 func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg ConfigState) {
