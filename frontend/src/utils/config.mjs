@@ -21,6 +21,11 @@ export function defaultConfig() {
     disabledSkills: [],
     models: [],
     llmRetries: 2,
+    // Auto-update defaults to on. Loaded config may store explicit false to
+    // opt out; legacy config without the field is treated as enabled by the
+    // backend (*bool pointer).
+    autoUpdate: true,
+    skippedUpdates: [],
   };
 }
 
@@ -32,6 +37,10 @@ export function assignConfig(target, source) {
   delete next.systemPrompt;
   next.reasoningTag = String(next.reasoningTag || '').trim() || 'reasoning_content';
   next.models = cloneModelConfigs(next.models);
+  // Backend stores autoUpdate as *bool (nil = default on). Normalize null /
+  // undefined back to true so the frontend always sees a real boolean.
+  next.autoUpdate = next.autoUpdate === false ? false : true;
+  if (!Array.isArray(next.skippedUpdates)) next.skippedUpdates = [];
   delete target.systemPrompt;
   Object.assign(target, next);
 }

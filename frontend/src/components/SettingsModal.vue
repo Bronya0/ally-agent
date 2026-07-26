@@ -89,6 +89,12 @@
               <span class="settings-field-hint">{{ $t('settings.llmRetriesHint') }}</span>
             </div>
           </n-form-item>
+          <n-form-item v-if="isWindows" :label="$t('settings.autoUpdate')">
+            <div class="settings-toggle-row">
+              <n-switch v-model:value="draft.autoUpdate" />
+              <span class="settings-toggle-hint">{{ $t('settings.autoUpdateHint') }}</span>
+            </div>
+          </n-form-item>
           <div class="settings-page-actions">
             <n-button type="primary" @click="onSave">{{ $t('common.save') }}</n-button>
           </div>

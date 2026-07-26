@@ -230,6 +230,7 @@
                 <div class="update-status-text">{{ $t('app.update.ready', { version: latestReleaseVersion }) }}</div>
                 <div class="update-ready-hint">{{ $t('app.update.readyHint') }}</div>
                 <div class="update-actions">
+                  <n-button size="small" tertiary @click="skipCurrentVersion">{{ $t('app.update.skip') }}</n-button>
                   <n-button size="small" secondary @click="closeUpdateModal">{{ $t('app.update.later') }}</n-button>
                   <n-button size="small" type="primary" @click="applyAndRestart">{{ $t('app.update.restartNow') }}</n-button>
                 </div>
@@ -314,6 +315,7 @@ import {
   DownloadUpdate,
   ApplyUpdate,
   RestartForUpdate,
+  SkipUpdate,
 } from '../wailsjs/go/main/App';
 import { BrowserOpenURL, Environment, EventsOn, WindowMinimise, WindowMaximise, WindowUnmaximise, WindowIsMaximised, Quit } from '../wailsjs/runtime/runtime';
 import AllyWordmark from './components/AllyWordmark.vue';
@@ -1223,6 +1225,10 @@ const updateState = ref('idle'); // idle | downloading | extracting | ready | ap
 const updateProgress = ref({ stage: '', percent: 0, bytesDownloaded: 0, bytesTotal: 0, version: '' });
 const updateError = ref('');
 const updateModalVisible = ref(false);
+// When true, download runs in background without a progress modal. Set by
+// automatic startup download; flipped to false once download succeeds so the
+// "ready to restart" modal can pop.
+const updateSilent = ref(false);
 const isUpdateBusy = computed(() => {
   return updateState.value === 'downloading' || updateState.value === 'extracting' || updateState.value === 'applying' || updateState.value === 'restarting';
 });
@@ -3424,6 +3430,8 @@ function bindRuntimeEvents() {
   onRuntimeEvent('update:ready', (data) => {
     if (data?.version) latestReleaseVersion.value = data.version;
     updateState.value = 'ready';
+    // Always show the "ready to restart" modal, even for silent downloads.
+    updateSilent.value = false;
     updateModalVisible.value = true;
   });
   onRuntimeEvent('update:applied', () => {
@@ -3432,7 +3440,14 @@ function bindRuntimeEvents() {
   onRuntimeEvent('update:error', (data) => {
     updateState.value = 'error';
     updateError.value = String(data?.error || t('app.update.errors.generic'));
-    updateModalVisible.value = true;
+    // Silent downloads that fail should not bother the user; they will retry
+    // on next startup or when the user clicks the update icon manually.
+    if (!updateSilent.value) {
+      updateModalVisible.value = true;
+    } else {
+      updateState.value = 'idle';
+      updateSilent.value = false;
+    }
   });
 }
 
@@ -6622,6 +6637,26 @@ async function checkForUpdates() {
     if (!isNewerReleaseVersion(latest, buildVersion)) return;
     latestReleaseVersion.value = latest;
     updateAvailable.value = true;
+
+    // Skipped versions never bother the user automatically. The green icon
+    // still appears so the user can manually trigger if they change their mind.
+    if (result.skipped) return;
+
+    // If this version is already staged, jump straight to "ready" so the
+    // user sees the restart prompt without re-downloading.
+    if (result.canAutoUpdate && result.stagedVersion === latest) {
+      updateState.value = 'ready';
+      updateModalVisible.value = true;
+      return;
+    }
+
+    // Auto-update path: platform supports it, user has not disabled it, and
+    // the version is not already downloaded. Run silent download in the
+    // background; the update:ready / update:error handlers decide whether
+    // to surface a modal.
+    if (result.canAutoUpdate && result.autoUpdateEnabled) {
+      await startUpdate(true);
+    }
   } catch (_) {
     // Update checks are best-effort and must never block startup.
   }
@@ -6634,24 +6669,45 @@ function openRepositoryPage() {
 // Start the self-update flow: download → extract → ready → apply → restart.
 // On non-Windows platforms the button falls back to openRepositoryPage, so
 // this is only reached when updateAutoSupported is true.
-async function startUpdate() {
+//
+// When `silent` is true (automatic background download), no progress modal is
+// shown and download failures are swallowed. The update:ready event will
+// still pop the "ready to restart" modal so the user is prompted to apply.
+async function startUpdate(silent = false) {
   const version = latestReleaseVersion.value;
   if (!version) return;
+  // Avoid double-downloading when the user clicks the icon while a silent
+  // background download is already running: just surface the progress modal.
+  if (updateState.value === 'downloading' || updateState.value === 'extracting') {
+    if (!silent) {
+      updateSilent.value = false;
+      updateModalVisible.value = true;
+    }
+    return;
+  }
+  updateSilent.value = silent;
   updateState.value = 'downloading';
   updateProgress.value = { stage: 'download', percent: 0, bytesDownloaded: 0, bytesTotal: 0, version };
   updateError.value = '';
-  updateModalVisible.value = true;
+  if (!silent) {
+    updateModalVisible.value = true;
+  }
   try {
     const result = await DownloadUpdate(version);
     if (!result?.ok) {
       updateState.value = 'error';
       updateError.value = result?.error || t('app.update.errors.download');
+      if (!silent) updateModalVisible.value = true;
       return;
     }
     updateState.value = 'ready';
+    // Always pop the modal on success, even for silent downloads.
+    updateSilent.value = false;
+    updateModalVisible.value = true;
   } catch (err) {
     updateState.value = 'error';
     updateError.value = String(err?.message || err || t('app.update.errors.download'));
+    if (!silent) updateModalVisible.value = true;
   }
 }
 
@@ -6692,6 +6748,23 @@ function closeUpdateModal() {
   if (updateState.value === 'error' || updateState.value === 'ready') {
     updateState.value = 'idle';
   }
+}
+
+// Mark the currently staged / latest version as skipped so it will not be
+// auto-downloaded or auto-prompted again. Clears the green update indicator
+// until a newer release appears. staged files for the skipped version are
+// deleted by the backend.
+async function skipCurrentVersion() {
+  const version = latestReleaseVersion.value;
+  if (!version) return;
+  try {
+    await SkipUpdate(version);
+  } catch (_) {
+    // Best-effort: even if persistence fails we still dismiss locally.
+  }
+  updateModalVisible.value = false;
+  updateState.value = 'idle';
+  updateAvailable.value = false;
 }
 
 async function applyPlatformClass() {

@@ -65,6 +65,21 @@ type UpdateApplyResult struct {
 	Error string `json:"error,omitempty"`
 }
 
+// StagedUpdateInfo describes an already-downloaded update on disk.
+type StagedUpdateInfo struct {
+	OK        bool   `json:"ok"`
+	Version   string `json:"version,omitempty"`
+	StagedDir string `json:"stagedDir,omitempty"`
+	Error     string `json:"error,omitempty"`
+}
+
+// SkipUpdateResult is returned by SkipUpdate.
+type SkipUpdateResult struct {
+	OK      bool   `json:"ok"`
+	Version string `json:"version,omitempty"`
+	Error   string `json:"error,omitempty"`
+}
+
 // updatePlatformSupported returns true only on windows/amd64.
 // Other platforms must never trigger an automatic download.
 func updatePlatformSupported() bool {
@@ -654,4 +669,114 @@ func cleanupUpdateBackup() {
 	}
 	backup := filepath.Join(exeDir, "Ally.exe"+exeBackupSuffix)
 	_ = os.Remove(backup)
+}
+
+// findStagedUpdate scans ~/.ally_agent/updates/<tag>/staged/ for any directory
+// whose staged Ally.exe still exists, and returns the most recently modified
+// tag. Returns empty string if none found.
+func (a *App) findStagedUpdate() string {
+	rootDir := updateBaseDir()
+	entries, err := os.ReadDir(rootDir)
+	if err != nil {
+		return ""
+	}
+	var bestTag string
+	var bestMod time.Time
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		tag := entry.Name()
+		stagedExe := filepath.Join(updateStagedDir(tag), "Ally.exe")
+		info, err := os.Stat(stagedExe)
+		if err != nil {
+			continue
+		}
+		if bestTag == "" || info.ModTime().After(bestMod) {
+			bestTag = tag
+			bestMod = info.ModTime()
+		}
+	}
+	return bestTag
+}
+
+// GetStagedUpdate returns info about the most recent staged update on disk,
+// if any. Used by the frontend to decide whether to show "restart to apply"
+// without re-downloading.
+func (a *App) GetStagedUpdate() StagedUpdateInfo {
+	tag := a.findStagedUpdate()
+	if tag == "" {
+		return StagedUpdateInfo{Error: "no staged update found"}
+	}
+	stagedDir := updateStagedDir(tag)
+	if _, err := os.Stat(filepath.Join(stagedDir, "Ally.exe")); err != nil {
+		return StagedUpdateInfo{Error: fmt.Sprintf("staged executable missing: %v", err)}
+	}
+	return StagedUpdateInfo{
+		OK:        true,
+		Version:   tag,
+		StagedDir: stagedDir,
+	}
+}
+
+// SkipUpdate marks a release tag as skipped. Future automatic download checks
+// will ignore this tag until the user clears the skip list. Any staged files
+// for the tag are removed so disk space is not held by a skipped version.
+func (a *App) SkipUpdate(version string) SkipUpdateResult {
+	version = strings.TrimSpace(version)
+	if version == "" {
+		return SkipUpdateResult{Error: "version is required"}
+	}
+	a.mu.Lock()
+	cfg := a.config
+	already := false
+	for _, s := range cfg.SkippedUpdates {
+		if s == version {
+			already = true
+			break
+		}
+	}
+	if !already {
+		cfg.SkippedUpdates = append(cfg.SkippedUpdates, version)
+		a.config = cfg
+	}
+	configPath := a.configPath
+	a.mu.Unlock()
+
+	if !already {
+		data, err := json.MarshalIndent(cfg, "", "  ")
+		if err != nil {
+			return SkipUpdateResult{Error: fmt.Sprintf("marshal config: %v", err)}
+		}
+		if err := os.WriteFile(configPath, data, 0o600); err != nil {
+			return SkipUpdateResult{Error: fmt.Sprintf("persist skip list: %v", err)}
+		}
+	}
+	// Remove staged files for the skipped version so disk space is released.
+	_ = os.RemoveAll(updateVersionDir(version))
+	return SkipUpdateResult{OK: true, Version: version}
+}
+
+// ClearSkippedUpdates empties the skipped-update list so automatic downloads
+// resume for previously skipped tags. Returns the number of cleared entries.
+func (a *App) ClearSkippedUpdates() int {
+	a.mu.Lock()
+	cfg := a.config
+	n := len(cfg.SkippedUpdates)
+	if n == 0 {
+		a.mu.Unlock()
+		return 0
+	}
+	cfg.SkippedUpdates = nil
+	a.config = cfg
+	configPath := a.configPath
+	a.mu.Unlock()
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return 0
+	}
+	if err := os.WriteFile(configPath, data, 0o600); err != nil {
+		return 0
+	}
+	return n
 }
