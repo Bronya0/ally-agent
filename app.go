@@ -38,7 +38,6 @@ import (
 	"github.com/andybalholm/brotli"
 	"github.com/klauspost/compress/zstd"
 	openai "github.com/sashabaranov/go-openai"
-	wruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 	"golang.org/x/net/html"
 	"golang.org/x/net/html/charset"
 	"golang.org/x/text/transform"
@@ -187,94 +186,6 @@ func NewApp() *App {
 		services:            map[string]*managedService{},
 		lastEstimatedTokens: map[string]WorkspaceTokenUsage{},
 	}
-}
-
-func (a *App) startup(ctx context.Context) {
-	a.ctx = ctx
-	a.events = wailsEventSink{ctx: ctx}
-	a.fitInitialWindowToScreen(ctx)
-	_ = a.ensureInitialized()
-	_ = a.loadServiceHistory()
-	_ = a.startScheduledTaskManager()
-	// Clean up any Ally.exe.bak left from a previous self-update.
-	cleanupUpdateBackup()
-	go func() {
-		<-ctx.Done()
-		a.stopScheduledTaskManager()
-		a.stopAllServices()
-	}()
-	go func() {
-		timer := time.NewTimer(2 * time.Second)
-		defer timer.Stop()
-		select {
-		case <-ctx.Done():
-			return
-		case <-timer.C:
-			a.emitRipgrepMissingIfNeeded()
-			a.emitGitBashMissingIfNeeded()
-		}
-	}()
-	// Initialize MCP manager
-	cfg, err := a.getConfig()
-	if err == nil {
-		root, _ := workspaceRoot(cfg)
-		if root != "" {
-			a.mcpManager = NewMcpManager(root, func(tools []McpDiscoveredTool) {
-				a.emitMcpStatus()
-			})
-			a.mcpManager.SetNetworkConfigProvider(func() ConfigState { return a.effectiveConfig(ConfigState{}) })
-			go func() {
-				if err := a.mcpManager.StartAll(ctx); err != nil {
-					// MCP start errors are non-fatal
-				}
-				a.emitMcpStatus()
-			}()
-			// Shutdown MCP when app context is cancelled
-			go func() {
-				<-ctx.Done()
-				if a.mcpManager != nil {
-					a.mcpManager.Shutdown()
-				}
-			}()
-		}
-	}
-}
-
-func (a *App) fitInitialWindowToScreen(ctx context.Context) {
-	screens, err := wruntime.ScreenGetAll(ctx)
-	if err != nil || len(screens) == 0 {
-		return
-	}
-	screen := screens[0]
-	for _, candidate := range screens {
-		if candidate.IsCurrent {
-			screen = candidate
-			break
-		}
-		if candidate.IsPrimary {
-			screen = candidate
-		}
-	}
-	screenWidth := screen.Size.Width
-	screenHeight := screen.Size.Height
-	if screenWidth <= 0 {
-		screenWidth = screen.Width
-	}
-	if screenHeight <= 0 {
-		screenHeight = screen.Height
-	}
-	if screenWidth <= 0 || screenHeight <= 0 {
-		return
-	}
-	maxWidth := int(float64(screenWidth) * 0.92)
-	maxHeight := int(float64(screenHeight) * 0.86)
-	runtimeMinWidth := minInt(minWindowWidth, maxWidth)
-	runtimeMinHeight := minInt(minWindowHeight, maxHeight)
-	width := clampInt(defaultWindowWidth, runtimeMinWidth, maxWidth)
-	height := clampInt(defaultWindowHeight, runtimeMinHeight, maxHeight)
-	wruntime.WindowSetMinSize(ctx, runtimeMinWidth, runtimeMinHeight)
-	wruntime.WindowSetSize(ctx, width, height)
-	wruntime.WindowCenter(ctx)
 }
 
 func clampInt(value, minValue, maxValue int) int {
@@ -1505,80 +1416,6 @@ func (a *App) TestModelConnection(model ModelConfig) error {
 		Content: "Reply only with OK.",
 	}}, 32)
 	return err
-}
-
-func (a *App) SelectWorkspace() (string, error) {
-	if err := a.ensureInitialized(); err != nil {
-		return "", err
-	}
-	current := a.config.Workspace
-	// If the saved workspace no longer exists, fall back to the user's home
-	// directory so the directory dialog can still open and the user can pick
-	// a valid workspace.
-	if info, err := os.Stat(current); err != nil || !info.IsDir() {
-		if homeDir, err := os.UserHomeDir(); err == nil {
-			current = homeDir
-		}
-	}
-	selected, err := wruntime.OpenDirectoryDialog(a.ctx, wruntime.OpenDialogOptions{
-		Title:            "选择 Agent 工作区",
-		DefaultDirectory: current,
-	})
-	if err != nil || selected == "" {
-		return selected, err
-	}
-	cfg := a.config
-	cfg.Workspace = selected
-	if err := a.SaveConfig(cfg); err != nil {
-		return "", err
-	}
-	return selected, nil
-}
-
-func (a *App) OpenWorkspaceInFileManager() error {
-	if err := a.ensureInitialized(); err != nil {
-		return err
-	}
-	a.mu.Lock()
-	cfg := a.config
-	a.mu.Unlock()
-	root, err := workspaceRoot(cfg)
-	if err != nil {
-		return err
-	}
-	return openPathInFileManager(root)
-}
-
-// OpenPathInFileManager opens a file or directory in the system file manager.
-// If path points to a file, the parent directory is opened instead.
-func (a *App) OpenPathInFileManager(path string) error {
-	if err := a.ensureInitialized(); err != nil {
-		return err
-	}
-	return openPathInFileManager(path)
-}
-
-func openPathInFileManager(path string) error {
-	if strings.TrimSpace(path) == "" {
-		return errors.New("path is required")
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		return err
-	}
-	if !info.IsDir() {
-		path = filepath.Dir(path)
-	}
-	var cmd *exec.Cmd
-	switch goruntime.GOOS {
-	case "windows":
-		cmd = exec.Command("explorer.exe", path)
-	case "darwin":
-		cmd = exec.Command("open", path)
-	default:
-		cmd = exec.Command("xdg-open", path)
-	}
-	return cmd.Start()
 }
 
 func (a *App) beginTaskbarRun() {
@@ -8913,13 +8750,6 @@ func isDangerousSearchRoot(absPath string) (bool, string) {
 	}
 
 	return false, ""
-}
-
-func (a *App) emit(name string, payload any) {
-	if a.events == nil {
-		return
-	}
-	a.events.Emit(name, payload)
 }
 
 // GetTodos returns the current todo list for a session.

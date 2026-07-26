@@ -51,15 +51,29 @@ Publishing the Release triggers `.github/workflows/build.yml`, which builds and 
 ## Repository Layout
 
 ```
-├── app.go                    # Main Wails-bound backend: config, chat loop, tools, sessions, skills, context accounting
-├── model_provider.go         # Model provider adapter layer: OpenAI Chat, OpenAI Responses, Anthropic Messages
-├── mcp.go                    # MCP manager: config loading, process lifecycle, tool discovery, tool dispatch
-├── scheduler.go              # Process-local scheduled Agent tasks powered by robfig/cron
-├── proxy.go                  # Unified proxy resolution, transports, subprocess environment, status/test APIs
-├── proxy_windows.go          # Windows WinINET fixed-proxy detection
-├── proxy_other.go            # Environment proxy fallback for non-Windows platforms
-├── edit_helpers.go           # Read range, changed-line, and diff helpers for text edits
-├── main.go                   # Wails app entry point, window options, app binding
+├── app.go                    # Agent 编排核心与共享状态；不得直接导入 Wails runtime
+├── desktop_host.go           # Wails 生命周期、窗口、目录选择、系统文件管理器适配
+├── host_events.go            # eventSink 边界与 Wails 事件适配器
+├── model_provider.go         # Provider 适配：OpenAI Chat / Responses / Anthropic
+├── tool_batch_policy.go      # 工具批次屏障、去重、文件 mutation 冲突策略
+├── file_edit_plan.go         # 本地 edit 唯一规范化计划：物理路径、别名合并、版本一致性
+├── file_edit.go              # 本地编辑匹配、验证、原子提交与回滚
+├── tool_result.go            # 工具结果 envelope、错误码、模型侧压缩
+├── stream_events.go          # LLM/tool 流式事件节流与 flush
+├── tool_read.go              # 批量 read 与逐文件错误
+├── tool_grep.go              # grep 工具和 ripgrep 发现
+├── command_safety.go         # shell 删除、重定向和工作区边界安全检查
+├── prompt_builder.go         # 系统提示词构建
+├── project_context.go        # 项目指令和工作区上下文
+├── skills.go                 # 技能发现、启停和加载
+├── memory.go                 # 全局记忆索引与读写
+├── git_tools.go              # Git 状态、Diff 与文件历史
+├── scheduler.go              # 进程内定时 Agent 任务
+├── services.go               # 后台进程管理
+├── mcp.go                    # MCP 生命周期、发现与调用
+├── proxy.go                  # 代理解析、传输层和连接测试
+├── edit_helpers.go           # 读范围、变更行和 Diff 辅助
+├── main.go                   # Wails 应用入口、窗口选项和 App 绑定
 ├── procattr_windows.go       # Windows process attributes for hidden shell windows
 ├── procattr_other.go         # Non-Windows process attribute shim
 ├── *_test.go                 # Go tests for provider, tools, MCP, prompt/config behavior
@@ -436,6 +450,8 @@ Range semantics for model-facing reads:
 
 The model-facing `edit` tool has one cross-file batch exact-replacement mode. Line-range and legacy exact-string helpers remain backend compatibility APIs and are not exposed to the model.
 
+`planLocalEditBatch()` in `file_edit_plan.go` is the **only** normalization boundary for local model-facing edits. Both `tool_batch_policy.go` conflict detection and `file_edit.go` execution must consume that plan; do not independently parse, canonicalize, or merge `edit.files` in either layer.
+
 Edit parameters:
 
 - `files` (1–20 items)
@@ -727,10 +743,10 @@ Example MCP config:
 
 ## Current Architectural Notes
 
-- `model_provider.go` is the provider boundary; avoid leaking provider-specific request shapes into `app.go`.
-- `app.go` is large by design today and owns most backend features; keep changes locally scoped unless deliberately splitting modules.
-- `chatTools()` is the source of truth for built-in LLM-facing tools.
-- `executeTool()` is the source of truth for built-in tool dispatch and JSON argument validation.
+- `model_provider.go` is the provider boundary; avoid leaking provider-specific request shapes into Agent orchestration.
+- `app.go` owns Agent orchestration and long-lived state, but must not import Wails runtime. Desktop lifecycle/dialog/window behavior belongs in `desktop_host.go`; all UI event publication goes through `eventSink` in `host_events.go`.
+- Modify each cross-layer contract at its unique boundary: edit normalization in `file_edit_plan.go`, tool-batch policy in `tool_batch_policy.go`, edit execution in `file_edit.go`, result envelopes/compaction in `tool_result.go`, and stream throttling in `stream_events.go`.
+- `chatTools()` is the source of truth for built-in LLM-facing schemas; `executeTool()` remains the dispatch and strict JSON decoding boundary.
 - The model-facing `background_process` tool supports four actions: `start` (returns immediately with the service id, no readiness wait), `stop` (terminate by id), `list` (metadata for all tracked services, no output tails), and `read` (bounded tail of one service's output, default 8 KiB, max 32 KiB). This lets agents run frontend/backend dev processes without blocking the agent loop and inspect their output on demand without overloading the model context. `StartService`, `StopService`, and `ListServices` remain available as Wails/backend APIs for the Task Center UI.
 - Background-process state contains active processes only. Records are removed after `cmd.Wait()` completes, and the backend rejects starts beyond the 8-process active limit.
 - The model-facing `wait` tool is for short, concrete asynchronous delays only. It is limited to 3600 seconds, disabled in grill mode, and displayed in the UI with a local countdown.
@@ -753,14 +769,14 @@ Example MCP config:
 
 ## Wails Event Emission Map
 
-后端通过 `App.emit()` (`app.go`) 派发到前端；前端在 `App.vue` 的 `bindRuntimeEvents()` 中通过 `EventsOn()` 统一注册，`runtimeEventOffs` 跟踪卸载。`model_provider.go` 和 `mcp.go` 不直接发 Wails 事件（前者走 in-process `onEvent` 回调，后者无 emit）。
+后端模块只调用 `App.emit()`；该方法与 `eventSink` 位于 `host_events.go`，Wails 适配器再调用 `runtime.EventsEmit`。Wails 启动、窗口和系统对话框位于 `desktop_host.go`。前端在 `App.vue` 的 `bindRuntimeEvents()` 中通过 `EventsOn()` 统一注册，`runtimeEventOffs` 跟踪卸载。Agent/runtime 模块不得直接调用 Wails 事件 API。
 
 ### 高频流（双层节流，仅这两条）
 
 | 事件 | 后端节流位置 | 前端缓冲位置 |
 |------|--------------|--------------|
-| `run:delta` / `run:reasoning` | `runStreamDeltaEmitter` (`app.go` runStreamDeltaThrottle=32ms / runStreamDeltaThreshold=512B)，流末 `flush()` 兜底；`run:image` 发送前先 flush | `queueStreamDelta` + `setTimeout(48ms) → requestAnimationFrame` (`App.vue`) |
-| `tool:update` | `toolCallProgressTracker.eventsWithForce` (`app.go` toolUpdateThrottle=200ms / toolUpdateThreshold=2048B)，超阈值且在窗口内早 continue 跳过 state 构造；`forceEvents()` 流末绕过节流。`run_command` 执行期间另以约 120ms 间隔发送累计 stdout/stderr，并在结束前强制发送最终快照 | `bufferToolUpdate` + `setTimeout(120ms) → requestAnimationFrame`，`toolUpdateBuffers` Map 按 `toolEventId` 去重只留最新帧 (`App.vue`)；命令卡固定高度并自动跟随输出末尾；`tool:result` / `tool:error` / `run:done` / `run:error` / `run:cancelled` 处理前显式 `flushToolUpdateBuffer()` |
+| `run:delta` / `run:reasoning` | `runStreamDeltaEmitter` (`stream_events.go`, 32ms / 512B)，流末 `flush()` 兜底；`run:image` 发送前先 flush | `queueStreamDelta` + `setTimeout(48ms) → requestAnimationFrame` (`App.vue`) |
+| `tool:update` | `toolCallProgressTracker.eventsWithForce` (`stream_events.go`, 200ms / 2048B)，超阈值且在窗口内早 continue；`forceEvents()` 流末绕过节流。`run_command` 约每 120ms 发布累计输出并在结束前强制最终快照 | `bufferToolUpdate` + `setTimeout(120ms) → requestAnimationFrame`；命令卡短输出按内容收缩，最多约六行后滚动，并自动跟随末尾 |
 
 ### 生命周期事件（天然低频，无需节流）
 

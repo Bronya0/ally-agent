@@ -35,3 +35,12 @@ func (s appEventSink) Emit(name string, payload any) {
 		s.app.emit(name, payload)
 	}
 }
+
+// emit is the sole event publication boundary used by Agent/runtime modules.
+// A host adapter may be absent in tests or future headless embeddings.
+func (a *App) emit(name string, payload any) {
+	if a.events == nil {
+		return
+	}
+	a.events.Emit(name, payload)
+}

@@ -7,18 +7,29 @@ Ally 是一个基于 Wails v2 的桌面 AI 编码助手。后端 Go 通过 Wails
 ## 目录结构
 
 ```
-├── app.go                    # 主 App 结构体：配置、聊天循环、工具、会话、技能、上下文统计
-├── main.go                   # Wails 入口点，窗口选项，App 绑定
-├── model_provider.go         # 模型提供者适配层：OpenAI Chat / OpenAI Responses / Anthropic Messages
-├── mcp.go                    # MCP 管理器：配置加载、进程生命周期、工具发现、工具分发
-├── scheduler.go              # 进程内定时任务管理器（基于 robfig/cron）
-├── services.go               # 后台进程管理（启动/停止/列表/输出读取）
-├── proxy.go                  # 统一代理解析、传输层、子进程环境、状态/测试 API
-├── proxy_windows.go          # Windows WinINET 固定代理检测
-├── proxy_other.go            # 非 Windows 环境变量代理回退
-├── edit_helpers.go           # 读范围、变更行、Diff 预览辅助函数
-├── procattr_windows.go       # Windows 隐藏窗口进程属性
-├── procattr_other.go         # 非 Windows 进程属性空实现
+├── app.go                    # Agent 编排核心与共享状态（无 Wails runtime 依赖）
+├── main.go                   # Wails 入口和 App 绑定
+├── desktop_host.go           # Wails 生命周期、窗口、目录选择、文件管理器
+├── host_events.go            # eventSink 与 Wails EventsEmit 适配
+├── model_provider.go         # Provider 适配层
+├── tool_batch_policy.go      # 工具批次屏障、去重和写冲突策略
+├── file_edit_plan.go         # 本地 edit 唯一规范化计划
+├── file_edit.go              # 编辑匹配、原子提交和回滚
+├── tool_result.go            # 工具结果、错误码和模型侧压缩
+├── stream_events.go          # 流式事件节流
+├── tool_read.go              # 批量 read
+├── tool_grep.go              # grep/ripgrep
+├── command_safety.go         # 命令安全边界
+├── prompt_builder.go         # 系统提示词
+├── project_context.go        # 项目指令与工作区上下文
+├── skills.go / memory.go     # 技能与全局记忆
+├── git_tools.go              # Git 状态和 Diff
+├── mcp.go                    # MCP 生命周期与调用
+├── scheduler.go              # 进程内定时任务
+├── services.go               # 后台进程管理
+├── proxy*.go                 # 代理解析和平台检测
+├── edit_helpers.go           # Diff/范围辅助
+├── procattr_*.go             # 平台进程属性
 ├── service_process_windows.go # Windows 进程树终止
 ├── service_process_other.go   # 非 Windows 进程终止空实现
 ├── taskbar_progress_windows.go # Windows 任务栏进度条
@@ -61,7 +72,8 @@ Ally 是一个基于 Wails v2 的桌面 AI 编码助手。后端 Go 通过 Wails
 
 ```mermaid
 flowchart TD
-    main[main.go: main] -->|wails.Run| startup[app.startup]
+    main[main.go: main] -->|wails.Run| startup[desktop_host.go: app.startup]
+    startup --> sink[注入 wailsEventSink]
     startup --> fitWin[fitInitialWindowToScreen: 适配窗口尺寸]
     fitWin --> initCfg[ensureInitialized: 加载配置]
     startup --> initCfg
@@ -141,7 +153,7 @@ ConfigState (~/.ally_agent/config.json)
 - **OpenAI Responses**: 使用 `openai-go` 库，系统消息转 `instructions`，工具结果转 `function_call_output`
 - **Anthropic Messages**: 使用 `anthropic-sdk-go`，系统消息分离，连续 tool result 合并为一个 user 消息
 
-### 3. 工具架构 (`app.go`)
+### 3. 工具架构（编排在 `app.go`，契约按领域拆分）
 
 内置工具在 `chatTools()` 中声明为 OpenAI function tools：
 
@@ -187,12 +199,14 @@ flowchart LR
 
 关键规则：
 - 非文件工具并发执行（信号量上限 4）
-- 文件工具（edit/create/delete）在 `fileOpsMu` 下串行
-- 本地 `edit` 会把同版本、解析到同一物理路径的重复文件项合并为一个原始快照编辑计划
+- 文件工具在 `fileOpsMu` 下按 `toolCallIndex` 串行
+- `planLocalEditBatch()` 是本地 `edit` 的唯一规范化入口；`tool_batch_policy.go` 和 `file_edit.go` 共享其 targets/files，不得重复解析路径与别名
+- 同版本且解析到同一物理路径的重复文件项合并为一个原始快照编辑计划
 - 批量 `read` 保留逐文件部分失败，并为已知错误返回 `errorCode`（不存在路径为 `E_PATH_NOT_FOUND`）
-- `edit` 的精确多匹配错误返回有界匹配行号；多行整行文本仅可在唯一候选时忽略前导缩进并安全重基新文本
-- 批量编辑忽略并警告 no-op change；全部为 no-op 时不写盘
-- 工具结果经过 `compactToolResultForModel()` 压缩后送入模型上下文
+- `edit` 多匹配返回有界行号；多行整行文本仅可在唯一候选时忽略前导缩进并安全重基
+- 批量编辑忽略并警告 no-op；全部为 no-op 时不写盘
+- `tool_result.go` 是结果 envelope、错误码和模型侧压缩的唯一边界
+- `stream_events.go` 集中 `run:delta` / `run:reasoning` / `tool:update` 节流
 
 ### 4. MCP 管理器 (`mcp.go`)
 
@@ -346,6 +360,25 @@ defaultSystemPrompt() → buildSystemPromptParts()
 | `maxScheduledTasks` | 100 | 定时任务上限 |
 | `workspaceMapDepth` | 3 | 工作区文件树扫描深度 |
 | `workspaceMapLimit` | 320 | 工作区文件树条目上限 |
+
+---
+
+## Agent 核心与宿主边界
+
+```mermaid
+flowchart LR
+    Core[app.go / Agent runtime] -->|eventSink.Emit| EventBoundary[host_events.go]
+    EventBoundary -->|Wails adapter| UI[Vue / Wails Events]
+    Desktop[desktop_host.go] -->|lifecycle, dialogs, window| Wails[Wails runtime]
+    Core --> EditPlan[file_edit_plan.go]
+    BatchPolicy[tool_batch_policy.go] --> EditPlan
+    EditExecutor[file_edit.go] --> EditPlan
+```
+
+- `app.go` 不导入 Wails runtime；未来抽离 Agent 时可替换 `eventSink` 和宿主生命周期。
+- 所有后端 UI 事件必须经过 `App.emit()`；Wails `EventsEmit` 只允许出现在 `host_events.go`。
+- Wails 启动、窗口、目录选择和系统文件管理器只允许放在 `desktop_host.go`；自更新退出例外保留在 `update.go`。
+- 文件 mutation 冲突检测与本地编辑执行共享 `planLocalEditBatch()`，避免两层契约漂移。
 
 ---
 
