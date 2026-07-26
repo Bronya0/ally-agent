@@ -63,7 +63,7 @@
 <script setup>
 import { computed, ref, shallowRef, watch } from 'vue';
 import DiffView from './DiffView.vue';
-import { CancelGitDiff, GetGitDiff } from '../../wailsjs/go/main/App';
+import { CancelGitDiff, GetGitDiff } from '../../wailsjs/go/app/App';
 import { t } from '../i18n.mjs';
 
 const props = defineProps({

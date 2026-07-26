@@ -443,7 +443,7 @@ import {
   ListTools, OpenPathInFileManager,
   TestModelConnection,
   DetectSystemProxy, TestProxy,
-} from '../../wailsjs/go/main/App';
+} from '../../wailsjs/go/app/App';
 
 const { message } = createDiscreteApi(['message'], {
   configProviderProps: { theme: darkTheme, locale: naiveLocale, dateLocale: naiveDateLocale },

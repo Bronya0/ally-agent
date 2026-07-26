@@ -316,7 +316,7 @@ import {
   ApplyUpdate,
   QuitForUpdate,
   SkipUpdate,
-} from '../wailsjs/go/main/App';
+} from '../wailsjs/go/app/App';
 import { BrowserOpenURL, Environment, EventsOn, WindowMinimise, WindowMaximise, WindowUnmaximise, WindowIsMaximised, Quit } from '../wailsjs/runtime/runtime';
 import AllyWordmark from './components/AllyWordmark.vue';
 import ComposerInfoBar from './components/ComposerInfoBar.vue';

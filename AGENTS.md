@@ -51,69 +51,32 @@ Publishing the Release triggers `.github/workflows/build.yml`, which builds and 
 ## Repository Layout
 
 ```
-├── app.go                    # Agent 编排核心与共享状态；不得直接导入 Wails runtime
-├── desktop_host.go           # Wails 生命周期、窗口、目录选择、系统文件管理器适配
-├── host_events.go            # eventSink 边界与 Wails 事件适配器
-├── model_provider.go         # Provider 适配：OpenAI Chat / Responses / Anthropic
-├── tool_batch_policy.go      # 工具批次屏障、去重、文件 mutation 冲突策略
-├── file_edit_plan.go         # 本地 edit 唯一规范化计划：物理路径、别名合并、版本一致性
-├── file_edit.go              # 本地编辑匹配、验证、原子提交与回滚
-├── tool_result.go            # 工具结果 envelope、错误码、模型侧压缩
-├── stream_events.go          # LLM/tool 流式事件节流与 flush
-├── tool_read.go              # 批量 read 与逐文件错误
-├── tool_grep.go              # grep 工具和 ripgrep 发现
-├── command_safety.go         # shell 删除、重定向和工作区边界安全检查
-├── prompt_builder.go         # 系统提示词构建
-├── project_context.go        # 项目指令和工作区上下文
-├── skills.go                 # 技能发现、启停和加载
-├── memory.go                 # 全局记忆索引与读写
-├── git_tools.go              # Git 状态、Diff 与文件历史
-├── scheduler.go              # 进程内定时 Agent 任务
-├── services.go               # 后台进程管理
-├── mcp.go                    # MCP 生命周期、发现与调用
-├── proxy.go                  # 代理解析、传输层和连接测试
-├── edit_helpers.go           # 读范围、变更行和 Diff 辅助
 ├── main.go                   # Wails 应用入口、窗口选项和 App 绑定
-├── procattr_windows.go       # Windows process attributes for hidden shell windows
-├── procattr_other.go         # Non-Windows process attribute shim
-├── *_test.go                 # Go tests for provider, tools, MCP, prompt/config behavior
-├── wails.json                # Wails project/build config
-├── frontend/
-│   ├── src/
-│   │   ├── App.vue           # Main Vue app: layout, settings, sessions, command handling, runtime events
-│   │   ├── style.css         # Global dark theme styles, settings, tool cards, chat, modals
-│   │   ├── app.css           # App entry CSS
-│   │   ├── main.js           # Vue mount
-│   │   ├── components/
-│   │   │   ├── AllyWordmark.vue
-│   │   │   ├── AskToolCard.vue
-│   │   │   ├── CodeView.vue
-│   │   │   ├── ComposerInfoBar.vue
-│   │   │   ├── ContextUsageInline.vue
-│   │   │   ├── DiffView.vue
-│   │   │   ├── GitDiffModal.vue
-│   │   │   ├── MessageAttachments.vue
-│   │   │   ├── ReadGroupCard.vue
-│   │   │   ├── RenderBoundary.vue
-│   │   │   ├── TaskCenterPanel.vue
-│   │   │   ├── SplashScreen.vue
-│   │   │   ├── SubagentInlineCard.vue
-│   │   │   ├── ToolCallCard.vue
-│   │   │   └── WelcomeMessage.vue
-│   │   ├── data/
-│   │   │   └── modelCatalog.json # Generated Ally-compatible provider/model quick-setup catalog
-│   │   └── utils/
-│   │       ├── ascii.js
-│   │       ├── config.mjs
-│   │       ├── diff.js
-│   │       └── toolPreview.mjs
-│   ├── wailsjs/              # Generated Wails JS/TS bindings
-│   ├── package.json
-│   └── vite.config.js
-├── scripts/
-│   └── generate-model-catalog.mjs # Regenerate frontend model presets from docs/model_api.json
-├── third_party/             # Third-party license files (ripgrep)
-└── build/                    # Build assets and platform metadata
+├── internal/
+│   ├── app/                  # Agent 编排、Wails API 适配和共享运行状态
+│   │   ├── app.go            # Chat loop、配置、会话和工具 dispatch
+│   │   ├── model_provider.go # OpenAI Chat / Responses / Anthropic 流式适配
+│   │   ├── desktop_host.go   # Wails 生命周期、窗口和系统对话框
+│   │   ├── host_events.go    # host-neutral eventSink 边界
+│   │   └── *_test.go         # 后端边界与领域测试
+│   ├── host/                 # Wails EventsEmit 宿主适配
+│   ├── provider/             # Provider 格式、Base URL 和 token 参数归一化
+│   ├── platform/process/     # 跨平台子进程窗口与进程树控制
+│   └── tools/
+│       ├── calculate/        # 纯数学计算工具
+│       ├── command/          # 命令安全解析：重定向/路径/风险模式匹配
+│       ├── edit/             # 编辑 Diff、变更范围等纯算法
+│       ├── git/              # git porcelain/unified-diff 解析纯算法
+│       ├── grep/             # ripgrep 封装与结果归一化纯算法
+│       ├── memory/           # 记忆 Markdown frontmatter 解析纯算法
+│       ├── read/             # 文本读取、版本令牌、原子写入与文档文本抽取
+│       ├── scheduler/        # 计划任务调度解析、校验与下次执行计算
+│       ├── service/          # 后台进程 rolling buffer 与长命令检测
+│       └── shared/           # 跨工具编码错误（errors）与内置工具 schema（builtins）
+├── frontend/                 # Vue 3 前端和生成的 Wails 绑定
+├── scripts/                  # 构建与打包脚本
+├── third_party/              # 第三方许可证文件
+└── build/                    # 构建资源和平台元数据
 ```
 
 ---
@@ -122,7 +85,7 @@ Publishing the Release triggers `.github/workflows/build.yml`, which builds and 
 
 Ally is a Wails v2 desktop AI coding agent.
 
-The backend is a Go application bound into the frontend through Wails. The frontend is a Vue 3 single-page desktop UI using Naive UI. The LLM-facing core is provider-neutral: the app stores conversation state as `go-openai`-style `ChatCompletionMessage` values, then adapts those messages to the selected provider format in `model_provider.go`.
+The backend is a Go application bound into the frontend through Wails. The frontend is a Vue 3 single-page desktop UI using Naive UI. The LLM-facing core is provider-neutral: `internal/app/model_provider.go` owns the provider wire adapters, while `internal/provider` owns provider-format and default-value normalization.
 
 Core runtime flow:
 
@@ -438,6 +401,7 @@ Document files:
 - `.docx`, `.pptx`, `.xlsx`, `.pdf`
 - return extracted text
 - are marked non-editable
+- extraction algorithms live in `internal/tools/read` (pure stdlib, no App coupling)
 
 Range semantics for model-facing reads:
 
@@ -450,7 +414,7 @@ Range semantics for model-facing reads:
 
 The model-facing `edit` tool has one cross-file batch exact-replacement mode. Line-range and legacy exact-string helpers remain backend compatibility APIs and are not exposed to the model.
 
-`planLocalEditBatch()` in `file_edit_plan.go` is the **only** normalization boundary for local model-facing edits. Both `tool_batch_policy.go` conflict detection and `file_edit.go` execution must consume that plan; do not independently parse, canonicalize, or merge `edit.files` in either layer.
+`planLocalEditBatch()` in `file_edit_plan.go` is the **only** normalization boundary for local model-facing edits. Both `batch_policy.go` conflict detection and `file_edit.go` execution must consume that plan; do not independently parse, canonicalize, or merge `edit.files` in either layer. Pure diff and changed-range algorithms live in `internal/tools/edit`; `internal/app/edit_bridge.go` is the compatibility boundary for app-owned edit execution.
 
 Edit parameters:
 
@@ -752,7 +716,7 @@ These rules are required for future changes. They exist to keep Agent behavior d
 - Put Wails lifecycle, window management, directory/file-manager integration, and other desktop behavior in `desktop_host.go`.
 - Publish UI/runtime events only through the `eventSink` boundary in `host_events.go`; preserve event names, payload shapes, session routing, and terminal-event rules when changing implementations.
 - Keep provider-specific request/response types behind `model_provider.go`; do not leak OpenAI, Responses, or Anthropic wire details into `app.go` or generic tool orchestration.
-- Keep each cross-layer contract at one source of truth: `chatTools()` for schemas, `executeTool()` for strict dispatch/decoding, `file_edit_plan.go` for local edit normalization, `tool_batch_policy.go` for batch barriers/conflicts, `file_edit.go` for edit execution, `tool_result.go` for result envelopes/compaction, and `stream_events.go` for stream throttling.
+- Keep each cross-layer contract at one source of truth: `chatTools()` for schemas, `executeTool()` for strict dispatch/decoding, `file_edit_plan.go` for local edit normalization, `batch_policy.go` for batch barriers/conflicts, `file_edit.go` for app-owned edit execution, `internal/tools/edit` for pure diff/range algorithms, `result.go` for result envelopes/compaction, and `stream_events.go` for stream throttling.
 - Do not independently parse, canonicalize, deduplicate, or infer the same request in multiple layers. If a lower layer produces a normalized plan, upstream policy checks and downstream execution must consume that plan.
 - Keep the project in one Go package unless a package boundary has a clear dependency direction and Wails binding impact has been verified. Mechanical same-package extraction is preferred before introducing new packages.
 
@@ -781,7 +745,7 @@ These rules are required for future changes. They exist to keep Agent behavior d
 
 - `model_provider.go` is the provider boundary; avoid leaking provider-specific request shapes into Agent orchestration.
 - `app.go` owns Agent orchestration and long-lived state, but must not import Wails runtime. Desktop lifecycle/dialog/window behavior belongs in `desktop_host.go`; all UI event publication goes through `eventSink` in `host_events.go`.
-- Modify each cross-layer contract at its unique boundary: edit normalization in `file_edit_plan.go`, tool-batch policy in `tool_batch_policy.go`, edit execution in `file_edit.go`, result envelopes/compaction in `tool_result.go`, and stream throttling in `stream_events.go`.
+- Modify each cross-layer contract at its unique boundary: edit normalization in `file_edit_plan.go`, pure edit algorithms in `internal/tools/edit`, tool-batch policy in `batch_policy.go`, app-owned edit execution in `file_edit.go`, result envelopes/compaction in `result.go`, and stream throttling in `stream_events.go`.
 - `chatTools()` is the source of truth for built-in LLM-facing schemas; `executeTool()` remains the dispatch and strict JSON decoding boundary.
 - The model-facing `background_process` tool supports four actions: `start` (returns immediately with the service id, no readiness wait), `stop` (terminate by id), `list` (metadata for all tracked services, no output tails), and `read` (bounded tail of one service's output, default 8 KiB, max 32 KiB). This lets agents run frontend/backend dev processes without blocking the agent loop and inspect their output on demand without overloading the model context. `StartService`, `StopService`, and `ListServices` remain available as Wails/backend APIs for the Task Center UI.
 - Background-process state contains active processes only. Records are removed after `cmd.Wait()` completes, and the backend rejects starts beyond the 8-process active limit.

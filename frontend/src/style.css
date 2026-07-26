@@ -2307,13 +2307,13 @@ code, pre {
 }
 
 .rich-tool-card.command .tool-body.fixed-scroll {
-  max-height: calc(1.5em * 6 + 6px);
+  max-height: calc(1.5em * 4 + 6px);
   overflow-y: auto;
 }
 
 .rich-tool-card.command .tool-body {
   color: #8a8a8a;
-  max-height: calc(1.5em * 6 + 6px);
+  max-height: calc(1.5em * 4 + 6px);
   overflow-y: auto;
 }
 

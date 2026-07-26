@@ -7,63 +7,31 @@ Ally 是一个基于 Wails v2 的桌面 AI 编码助手。后端 Go 通过 Wails
 ## 目录结构
 
 ```
-├── app.go                    # Agent 编排核心与共享状态（无 Wails runtime 依赖）
-├── main.go                   # Wails 入口和 App 绑定
-├── desktop_host.go           # Wails 生命周期、窗口、目录选择、文件管理器
-├── host_events.go            # eventSink 与 Wails EventsEmit 适配
-├── model_provider.go         # Provider 适配层
-├── tool_batch_policy.go      # 工具批次屏障、去重和写冲突策略
-├── file_edit_plan.go         # 本地 edit 唯一规范化计划
-├── file_edit.go              # 编辑匹配、原子提交和回滚
-├── tool_result.go            # 工具结果、错误码和模型侧压缩
-├── stream_events.go          # 流式事件节流
-├── tool_read.go              # 批量 read
-├── tool_grep.go              # grep/ripgrep
-├── command_safety.go         # 命令安全边界
-├── prompt_builder.go         # 系统提示词
-├── project_context.go        # 项目指令与工作区上下文
-├── skills.go / memory.go     # 技能与全局记忆
-├── git_tools.go              # Git 状态和 Diff
-├── mcp.go                    # MCP 生命周期与调用
-├── scheduler.go              # 进程内定时任务
-├── services.go               # 后台进程管理
-├── proxy*.go                 # 代理解析和平台检测
-├── edit_helpers.go           # Diff/范围辅助
-├── procattr_*.go             # 平台进程属性
-├── service_process_windows.go # Windows 进程树终止
-├── service_process_other.go   # 非 Windows 进程终止空实现
-├── taskbar_progress_windows.go # Windows 任务栏进度条
-├── taskbar_progress_other.go   # 非 Windows 进度条空实现
-│
-├── go.mod                    # Go 模块定义
-├── go.sum                    # Go 依赖校验
-├── wails.json                # Wails 项目配置
-├── AGENTS.md                 # 项目/用户级 Agent 指令
-├── README.md                 # 英文 README
-├── README_zh-CN.md           # 中文 README
-├── LICENSE                   # GPLv3 许可证
-├── *.go                      # Go 源文件与测试文件
-│
-├── frontend/
-│   ├── src/
-│   │   ├── App.vue           # 主 Vue 应用：布局、设置、会话、命令处理、运行时事件
-│   │   ├── main.js           # Vue 挂载入口
-│   │   ├── style.css         # 全局暗色主题样式
-│   │   ├── i18n.mjs          # 中英文国际化
-│   │   ├── app.css           # 应用入口 CSS
-│   │   ├── components/       # 24 个组件
-│   │   ├── data/             # 模型目录数据
-│   │   ├── assets/           # 静态资源
-│   │   └── utils/            # 工具函数
-│   └── package.json
-│
-├── scripts/
-│   └── generate-model-catalog.mjs # 生成前端模型预设目录
-├── docs/
-│   ├── model_api.json        # 已知模型 API 配置
-│   ├── img.jpg               # 欢迎页/文档配图
-│   └── welcome.jpeg          # 欢迎页图片
-└── third_party/ripgrep/       # 捆绑的 ripgrep 二进制许可
+├── main.go                    # Wails 入口和 App 绑定
+├── internal/
+│   ├── app/                   # Agent 编排、Wails API 适配和共享运行状态
+│   │   ├── app.go             # Chat loop、配置、会话和工具 dispatch
+│   │   ├── model_provider.go  # 三种 Provider 流式协议适配
+│   │   ├── desktop_host.go    # Wails 生命周期、窗口与系统对话框
+│   │   └── host_events.go     # host-neutral eventSink 边界
+│   ├── host/                  # Wails EventsEmit 适配
+│   ├── provider/              # Provider 格式和默认值归一化
+│   ├── platform/process/      # 跨平台进程控制
+│   └── tools/
+│       ├── calculate/         # 纯数学计算
+│       ├── command/           # 命令安全解析：重定向/路径/风险模式匹配
+│       ├── edit/              # 编辑 Diff 与变更范围纯算法
+│       ├── git/               # git porcelain/unified-diff 解析纯算法
+│       ├── grep/              # ripgrep 封装与结果归一化纯算法
+│       ├── memory/            # 记忆 Markdown frontmatter 解析纯算法
+│       ├── read/              # 文本读取、版本令牌、原子写入与文档文本抽取
+│       ├── scheduler/         # 计划任务调度解析、校验与下次执行计算
+│       ├── service/           # 后台进程 rolling buffer 与长命令检测
+│       └── shared/            # 跨工具编码错误（errors）与内置工具 schema（builtins）
+├── frontend/                  # Vue 3 前端和生成的 Wails 绑定
+├── scripts/                   # 构建与打包脚本
+├── docs/                      # 文档与模型目录源数据
+└── third_party/               # 第三方许可证文件
 ```
 
 ---
@@ -72,8 +40,8 @@ Ally 是一个基于 Wails v2 的桌面 AI 编码助手。后端 Go 通过 Wails
 
 ```mermaid
 flowchart TD
-    main[main.go: main] -->|wails.Run| startup[desktop_host.go: app.startup]
-    startup --> sink[注入 wailsEventSink]
+    main[main.go: main] -->|wails.Run| startup[internal/app/desktop_host.go: Startup]
+    startup --> sink[注入 internal/host.EventSink]
     startup --> fitWin[fitInitialWindowToScreen: 适配窗口尺寸]
     fitWin --> initCfg[ensureInitialized: 加载配置]
     startup --> initCfg
@@ -200,12 +168,13 @@ flowchart LR
 关键规则：
 - 非文件工具并发执行（信号量上限 4）
 - 文件工具在 `fileOpsMu` 下按 `toolCallIndex` 串行
-- `planLocalEditBatch()` 是本地 `edit` 的唯一规范化入口；`tool_batch_policy.go` 和 `file_edit.go` 共享其 targets/files，不得重复解析路径与别名
+- `planLocalEditBatch()` 是本地 `edit` 的唯一规范化入口；`batch_policy.go` 和 `file_edit.go` 共享其 targets/files，不得重复解析路径与别名
+- `internal/tools/edit` 持有纯 Diff/变更范围算法，`internal/app/edit_bridge.go` 仅提供编排层兼容适配
 - 同版本且解析到同一物理路径的重复文件项合并为一个原始快照编辑计划
 - 批量 `read` 保留逐文件部分失败，并为已知错误返回 `errorCode`（不存在路径为 `E_PATH_NOT_FOUND`）
 - `edit` 多匹配返回有界行号；多行整行文本仅可在唯一候选时忽略前导缩进并安全重基
 - 批量编辑忽略并警告 no-op；全部为 no-op 时不写盘
-- `tool_result.go` 是结果 envelope、错误码和模型侧压缩的唯一边界
+- `result.go` 是结果 envelope、错误码和模型侧压缩的唯一边界
 - `stream_events.go` 集中 `run:delta` / `run:reasoning` / `tool:update` 节流
 
 ### 4. MCP 管理器 (`mcp.go`)
@@ -371,8 +340,9 @@ flowchart LR
     EventBoundary -->|Wails adapter| UI[Vue / Wails Events]
     Desktop[desktop_host.go] -->|lifecycle, dialogs, window| Wails[Wails runtime]
     Core --> EditPlan[file_edit_plan.go]
-    BatchPolicy[tool_batch_policy.go] --> EditPlan
+    BatchPolicy[batch_policy.go] --> EditPlan
     EditExecutor[file_edit.go] --> EditPlan
+    EditExecutor --> EditAlgorithms[internal/tools/edit]
 ```
 
 - `app.go` 不导入 Wails runtime；未来抽离 Agent 时可替换 `eventSink` 和宿主生命周期。
@@ -390,15 +360,22 @@ flowchart LR
 | Wails 启动、窗口、目录选择、系统文件管理器 | `desktop_host.go` | Wails 生命周期、平台构建 |
 | UI/runtime 事件与宿主转发 | `host_events.go` | 事件名、payload、session/run 路由、终止事件 |
 | Provider 请求/响应适配 | `model_provider.go` | provider 流事件、工具调用、usage、错误处理 |
-| 内置工具 schema | `chatTools()`（当前位于 Agent 编排域） | 严格解码、执行分支、结果卡片、工具测试 |
+| 内置工具 schema | `internal/tools/shared/builtins.go` | 严格解码、执行分支、结果卡片、工具测试 |
 | 工具参数严格解码与执行分发 | `executeTool()`（当前位于 Agent 编排域） | 批次策略、结果 envelope、前端工具卡片 |
-| 本地 edit 路径/别名/重复项/版本归一化 | `file_edit_plan.go` | `tool_batch_policy.go`、`file_edit.go`、跨层测试 |
+| 编辑 Diff、变更范围纯算法 | `internal/tools/edit` | `edit_bridge.go`、`file_edit.go`、编辑回归测试 |
+| 本地 edit 路径/别名/重复项/版本归一化 | `file_edit_plan.go` | `batch_policy.go`、`file_edit.go`、跨层测试 |
 | 文件编辑匹配、校验、原子提交、回滚 | `file_edit.go` | 共享编辑计划、版本和重叠保护 |
-| 批次屏障、写冲突、工具去重 | `tool_batch_policy.go` | 规范化计划、工具调用顺序、并发限制 |
-| 工具结果 envelope、错误码、模型侧压缩 | `tool_result.go` | 前端 `tool:result/tool:error`、provider 工具结果 |
+| 批次屏障、写冲突、工具去重 | `batch_policy.go` | 规范化计划、工具调用顺序、并发限制 |
+| 工具结果 envelope、错误码、模型侧压缩 | `result.go` | 前端 `tool:result/tool:error`、provider 工具结果 |
 | 流式事件节流与 flush | `stream_events.go` | 前端缓冲、终端事件、流式回归测试 |
-| 命令删除/重定向/越界安全 | `command_safety.go` | Windows/MSYS 路径、命令安全测试 |
-| `read`、grep、提示词、技能、记忆、Git 等领域逻辑 | 对应 `tool_read.go`、`tool_grep.go`、`prompt_builder.go`、`skills.go`、`memory.go`、`git_tools.go` | 领域测试及模型上下文行为 |
+| 命令删除/重定向/越界安全 | `command_safety.go` + `internal/tools/command` | Windows/MSYS 路径、命令安全测试；纯解析在 command 包，App 编排（codedToolError、工作区边界）留在 command_safety.go |
+| git porcelain/unified-diff 解析纯算法 | `internal/tools/git` | `git_tools.go` 调用，diff/status 解析回归测试 |
+| 记忆 Markdown frontmatter 解析纯算法 | `internal/tools/memory` | `memory.go` 调用，frontmatter 解析回归测试 |
+| DOCX/PPTX/XLSX/PDF 文本抽取纯算法 | `internal/tools/read` | `read.go` 文档分支、抽取回归测试 |
+| ripgrep 封装与结果归一化 | `internal/tools/grep` | `grep.go` 调用、缺失检测、超时与错误归一化 |
+| 后台进程 rolling buffer 与长命令检测 | `internal/tools/service` | `services.go` 调用、输出快照、活动上限 |
+| 计划任务调度解析、校验与下次执行计算 | `internal/tools/scheduler` | `scheduler.go` 调用、cron/interval/once 校验、steps/timeout 归一化 |
+| `read`、grep、提示词、技能、记忆、Git 等领域逻辑 | 对应 `read.go`、`grep.go`、`prompt_builder.go`、`skills.go`、`memory.go`、`git_tools.go` | 领域测试及模型上下文行为 |
 
 跨层工具或事件变更按以下顺序检查：
 
