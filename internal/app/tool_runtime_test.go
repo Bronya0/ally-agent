@@ -1030,6 +1030,93 @@ func TestCommandSafetyAllowsGitLogPrettyFormatWithEmailBrackets(t *testing.T) {
 	}
 }
 
+func TestCommandSafetyAllowsRiskAndDeleteWordsAsData(t *testing.T) {
+	commands := []string{
+		`grep -R "rm" docs`,
+		`echo remove-item`,
+		`git log --grep=shutdown`,
+		`echo "reboot"`,
+		`rg mkfs docs`,
+		`dd if=input.bin bs=1 count=16`,
+		`chmod 064 file.txt`,
+	}
+	for _, command := range commands {
+		if err := checkCommandSafety(CommandRequest{Command: command}, []string{t.TempDir()}); err != nil {
+			t.Fatalf("normal command %q should be allowed: %v", command, err)
+		}
+	}
+}
+
+func TestCommandSafetyAllowsOutsideInputsWithWorkspaceOutputs(t *testing.T) {
+	workspace := t.TempDir()
+	outsideDir := t.TempDir()
+	source := filepath.Join(outsideDir, "source.txt")
+	archive := filepath.Join(outsideDir, "archive.zip")
+	if err := os.WriteFile(source, []byte("source\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(archive, []byte("archive\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	commands := []string{
+		fmt.Sprintf(`cp %q copied.txt`, filepath.ToSlash(source)),
+		fmt.Sprintf(`python -c "print(open(%q).read())"`, filepath.ToSlash(source)),
+		fmt.Sprintf(`unzip -l %q`, filepath.ToSlash(archive)),
+		fmt.Sprintf(`unzip %q -d .`, filepath.ToSlash(archive)),
+	}
+	for _, command := range commands {
+		if err := checkCommandSafety(CommandRequest{Command: command}, []string{workspace}); err != nil {
+			t.Fatalf("outside input with workspace output should be allowed for %q: %v", command, err)
+		}
+	}
+}
+
+func TestCommandSafetyBlocksActualAndNestedDangerousCommands(t *testing.T) {
+	commands := []string{
+		`rm generated.txt`,
+		`bash -c "rm generated.txt"`,
+		`echo generated.txt | xargs rm`,
+		`echo $(rm generated.txt)`,
+		`shutdown -h now`,
+		`dd if=image.iso of=/dev/sda`,
+		`chmod 000 secrets.txt`,
+	}
+	for _, command := range commands {
+		if code := toolErrorCode(checkCommandSafety(CommandRequest{Command: command}, []string{t.TempDir()})); code != "E_COMMAND_BLOCKED" {
+			t.Fatalf("dangerous command %q should be blocked, got code %q", command, code)
+		}
+	}
+}
+
+func TestCommandSafetyBlocksMixedManagedAndRawDeletion(t *testing.T) {
+	command := `git rm --cached tracked.txt; rm generated.txt`
+	if code := toolErrorCode(checkCommandSafety(CommandRequest{Command: command}, []string{t.TempDir()})); code != "E_COMMAND_BLOCKED" {
+		t.Fatalf("mixed managed and raw deletion should be blocked, got code %q", code)
+	}
+}
+
+func TestCommandSafetyChecksCopyDestinationNotOutsideSource(t *testing.T) {
+	workspace := t.TempDir()
+	outsideDir := t.TempDir()
+	source := filepath.Join(outsideDir, "source.txt")
+	destination := filepath.Join(outsideDir, "destination.txt")
+	for _, path := range []string{source, destination} {
+		if err := os.WriteFile(path, []byte("keep\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	allowed := fmt.Sprintf(`cp %q copied.txt`, filepath.ToSlash(source))
+	if err := checkCommandSafety(CommandRequest{Command: allowed}, []string{workspace}); err != nil {
+		t.Fatalf("outside copy source should be readable: %v", err)
+	}
+
+	blocked := fmt.Sprintf(`cp copied.txt %q`, filepath.ToSlash(destination))
+	if code := toolErrorCode(checkCommandSafety(CommandRequest{Command: blocked}, []string{workspace})); code != "E_PATH_OUTSIDE" {
+		t.Fatalf("existing outside copy destination should be blocked, got code %q", code)
+	}
+}
+
 func TestCommandSafetyAllowsCreatingNewOutsidePath(t *testing.T) {
 	workspace := t.TempDir()
 	outside := t.TempDir()

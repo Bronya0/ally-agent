@@ -368,7 +368,7 @@ flowchart LR
 | 批次屏障、写冲突、工具去重 | `batch_policy.go` | 规范化计划、工具调用顺序、并发限制 |
 | 工具结果 envelope、错误码、模型侧压缩 | `result.go` | 前端 `tool:result/tool:error`、provider 工具结果 |
 | 流式事件节流与 flush | `stream_events.go` | 前端缓冲、终端事件、流式回归测试 |
-| 命令删除/重定向/越界安全 | `command_safety.go` + `internal/tools/command` | Windows/MSYS 路径、命令安全测试；纯解析在 command 包，App 编排（codedToolError、工作区边界）留在 command_safety.go |
+| 命令删除/重定向/越界安全 | `internal/tools/command` + `tool_runtime.go` Section 2 | `internal/tools/command` 是轻量 shell 调用解析、嵌套命令识别、风险分类和写目标提取的唯一纯语义边界；`tool_runtime.go` 只负责工作区根、路径存在性、错误码和提示文本；联动检查 Windows/MSYS 路径及命令安全测试 |
 | git porcelain/unified-diff 解析纯算法 | `internal/tools/git` | `git_tools.go` 调用，diff/status 解析回归测试 |
 | 记忆 Markdown frontmatter 解析纯算法 | `internal/tools/memory` | `memory.go` 调用，frontmatter 解析回归测试 |
 | DOCX/PPTX/XLSX/PDF 文本抽取纯算法 | `internal/tools/read` | `read.go` 文档分支、抽取回归测试 |
@@ -392,6 +392,8 @@ schema → strict decoder → batch policy → executor → result envelope → 
 ## 安全机制
 
 - 工作区写操作限定在配置的工作区内 + `~/.ally_agent`
+- `run_command` 的安全分析先在 `internal/tools/command` 将复合 shell 文本解析为实际调用，递归检查 shell `-c`、命令替换、`eval`、`xargs`、`find -exec` 等嵌套执行，再按命令语义识别删除、高危参数和明确写入目标；引号内数据、搜索词和只读源路径不会被当成写操作。
+- `tool_runtime.go` Section 2 使用上述语义结果结合工作区根和目标存在性做最终决策：外部只读与创建不存在的新外部路径仍允许，已有外部写目标、无法解析的动态写目标和裸文件删除仍拒绝。
 - 工作区必须由用户明确选择；空工作区不会回退到进程当前目录
 - `run_command` 前台执行时通过节流的 `tool:update` 推送累计 stdout/stderr；命令卡固定高度、可滚动并默认跟随最新行，最终 `tool:result` 仍携带完整受限输出
 - `run_command` / `background_process` 后端输出均有界，前者单次最多 128KB，后者每个活动进程滚动保留 512KB

@@ -140,21 +140,24 @@ func firstExistingOutsideMutationTarget(commandLine string, roots []string) *out
 		}
 	}
 
-	if !command.MayModifyOutsidePath(commandLine) {
-		return nil
-	}
-	for _, candidate := range command.AbsolutePathCandidates(commandLine) {
-		if command.IsShellNullDevice(candidate) {
+	for _, target := range command.MutationPathTargets(commandLine) {
+		if command.IsShellNullDevice(target) {
 			continue
 		}
-		clean := filepath.Clean(candidate)
-		if insideAnyRoot(roots, clean) || insideAllyAgentDir(clean) {
-			continue
-		}
-		if command.PathExists(clean) {
+		path, ok := command.ResolveCommandLiteralPath(target, primaryRoot)
+		if !ok {
 			return &outsideMutationRisk{
-				Path:   filepath.ToSlash(clean),
-				Reason: "命令包含写入、移动、改权限或原地修改操作，并引用了已经存在的工作区外路径",
+				Path:   target,
+				Reason: "写入目标包含变量、通配符或命令替换，执行前无法确认真实写入位置",
+			}
+		}
+		if insideAnyRoot(roots, path) || insideAllyAgentDir(path) {
+			continue
+		}
+		if command.PathExists(path) {
+			return &outsideMutationRisk{
+				Path:   filepath.ToSlash(path),
+				Reason: "命令的写入目标已经存在于工作区外，继续执行可能修改其内容或元数据",
 			}
 		}
 	}
