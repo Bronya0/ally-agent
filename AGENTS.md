@@ -416,6 +416,7 @@ Text files:
 - must be UTF-8-ish text
 - reject binary/NUL content
 - return raw LF-normalized text that can be copied directly into `edit.changes[].oldText`
+- partial batch failures stay in the corresponding file result; `errorCode` is included when known, including `E_PATH_NOT_FOUND` for a missing path
 - include metadata: `startLine`, `endLine`, `nextStartLine`, `totalLines`, `truncated`, `version`, `lineEnding`; `version` is a 12-character lowercase Crockford Base32 prefix derived from SHA-256 content and is compared case-insensitively
 
 Document files:
@@ -446,13 +447,16 @@ Important edit contract:
 - Read the file first with `read`.
 - `version` is mandatory for model-facing local and remote edits. It is a short optimistic-concurrency token; a stale value fails with `E_VERSION_MISMATCH`, and malformed values fail with `E_BAD_VERSION`.
 - Successful edits return the new `version` per file. It may be reused directly for a follow-up edit when the exact current `oldText` is already known; re-read only when content is unknown, external modification is possible, or a version/match error occurs.
-- Every `oldText` is matched against the same original version snapshot and must occur exactly once.
-- Matches must not overlap. The backend locates all matches first, applies them from the end of the file backward, and writes once.
-- All files are validated before writes. Any invalid, missing, ambiguous, overlapping, or stale change fails the entire call without modifying any file.
+- Every non-no-op `oldText` is matched against the same original version snapshot and must occur exactly once. Ambiguous exact matches report bounded matching line numbers.
+- For a multi-line whole-line block only, exact-match failure may fall back to ignoring leading spaces/tabs on each line. The fallback succeeds only for one unique candidate and safely rebases `newText` to the file's actual base indentation; body text is never fuzzy-matched.
+- Changes whose normalized `oldText` and `newText` are identical are ignored and reported as warnings. An all-no-op local batch succeeds without writing the file.
+- Matches must not overlap. The backend locates all effective matches first, applies them from the end of the file backward, and writes once.
+- Repeated local `files` entries resolving to the same physical path and using the same version are merged into one original-snapshot edit plan; conflicting versions fail before writing.
+- All files are validated before writes. Any invalid, missing, ambiguous, overlapping, or stale effective change fails the entire call without modifying any file.
 - Empty `newText` deletes `oldText`; insertion replaces a unique anchor with the anchor plus inserted content.
 - Put all independent changes across affected files in one call to minimize model round trips. Each file is written once; a later commit failure triggers best-effort rollback of earlier writes.
 - `remote_edit` uses `{target, files}` and the same per-file `version`/`changes` contract as local edit.
-- Multiple file mutations targeting the same normalized local or remote path in one tool-call batch are all rejected with `E_WRITE_BATCH_CONFLICT`; no mutation for that path is executed.
+- Multiple separate file-mutation tool calls targeting the same normalized local or remote path in one tool-call batch are all rejected with `E_WRITE_BATCH_CONFLICT`; no mutation for that path is executed. Repeated entries within one local `edit` call are instead merged as described above.
 - Built-in file mutations execute in `toolCallIndex` order after non-file tools complete.
 - backend compatibility APIs may continue using SHA-256 and exact-string helpers internally
 

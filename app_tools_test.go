@@ -252,6 +252,31 @@ func containsString(values []string, want string) bool {
 	return false
 }
 
+func TestDetectWriteBatchConflictsAllowsRepeatedPathInsideOneLocalEdit(t *testing.T) {
+	cfg := ConfigState{Workspace: t.TempDir()}
+	calls := []openai.ToolCall{{Function: openai.FunctionCall{
+		Name:      "edit",
+		Arguments: `{"files":[{"path":"sample.txt"},{"path":"./sample.txt"}]}`,
+	}}}
+	if conflicts := detectWriteBatchConflicts(cfg, calls); len(conflicts) != 0 {
+		t.Fatalf("one local edit call should merge repeated paths, got %#v", conflicts)
+	}
+
+	calls = append(calls, openai.ToolCall{Function: openai.FunctionCall{
+		Name:      "delete_path",
+		Arguments: `{"path":"sample.txt"}`,
+	}})
+	conflicts := detectWriteBatchConflicts(cfg, calls)
+	if len(conflicts) != 2 {
+		t.Fatalf("a separate mutation call must still conflict with the merged edit target, got %#v", conflicts)
+	}
+	for _, index := range []int{0, 1} {
+		if toolErrorCode(conflicts[index]) != "E_WRITE_BATCH_CONFLICT" {
+			t.Fatalf("expected E_WRITE_BATCH_CONFLICT for call %d, got %v", index, conflicts[index])
+		}
+	}
+}
+
 func TestDetectWriteBatchConflictsNormalizesSamePath(t *testing.T) {
 	cfg := ConfigState{Workspace: t.TempDir()}
 	calls := []openai.ToolCall{

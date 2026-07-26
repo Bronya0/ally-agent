@@ -188,7 +188,10 @@ flowchart LR
 关键规则：
 - 非文件工具并发执行（信号量上限 4）
 - 文件工具（edit/create/delete）在 `fileOpsMu` 下串行
-- 同一路径的多次修改聚合成一次写入
+- 本地 `edit` 会把同版本、解析到同一物理路径的重复文件项合并为一个原始快照编辑计划
+- 批量 `read` 保留逐文件部分失败，并为已知错误返回 `errorCode`（不存在路径为 `E_PATH_NOT_FOUND`）
+- `edit` 的精确多匹配错误返回有界匹配行号；多行整行文本仅可在唯一候选时忽略前导缩进并安全重基新文本
+- 批量编辑忽略并警告 no-op change；全部为 no-op 时不写盘
 - 工具结果经过 `compactToolResultForModel()` 压缩后送入模型上下文
 
 ### 4. MCP 管理器 (`mcp.go`)

@@ -342,12 +342,12 @@ type ConfigState struct {
 	// AutoUpdate is a pointer so that an absent field in legacy config.json
 	// is treated as "default on" rather than "off". Only an explicit false
 	// disables automatic background downloads.
-	AutoUpdate          *bool         `json:"autoUpdate,omitempty"`
+	AutoUpdate *bool `json:"autoUpdate,omitempty"`
 	// SkippedUpdates records release tags the user chose to skip. They are
 	// excluded from automatic download until the user clears them.
-	SkippedUpdates      []string      `json:"skippedUpdates,omitempty"`
-	grillMode           bool
-	temperatureSet      bool
+	SkippedUpdates []string `json:"skippedUpdates,omitempty"`
+	grillMode      bool
+	temperatureSet bool
 }
 
 // autoUpdateEnabled returns true unless AutoUpdate was explicitly set to false.
@@ -878,6 +878,7 @@ type MultiEditResult struct {
 	Replacements int          `json:"-"`
 	AddedLines   int          `json:"addedLines"`
 	RemovedLines int          `json:"removedLines"`
+	Warnings     []string     `json:"warnings,omitempty"`
 	Summary      string       `json:"summary"`
 	Diff         string       `json:"diff,omitempty"`
 }
@@ -966,6 +967,7 @@ type BatchReadResultItem struct {
 	EmptyRange    bool     `json:"emptyRange,omitempty"`
 	Sheets        []string `json:"sheets,omitempty"`
 	Error         string   `json:"error,omitempty"`
+	ErrorCode     string   `json:"errorCode,omitempty"`
 }
 
 type BatchReadResult struct {
@@ -2474,10 +2476,20 @@ func (a *App) batchReadFilesWithConfig(cfg ConfigState, req BatchReadRequest) (*
 	return &BatchReadResult{Files: results}, nil
 }
 
+func batchReadErrorCode(err error) string {
+	if code := toolErrorCode(err); code != "" {
+		return code
+	}
+	if errors.Is(err, fs.ErrNotExist) {
+		return "E_PATH_NOT_FOUND"
+	}
+	return ""
+}
+
 func (a *App) batchReadOneWithConfig(cfg ConfigState, path string, req ReadFileRequest) BatchReadResultItem {
 	result, readErr := a.readFileWithConfig(cfg, req)
 	if readErr != nil {
-		return BatchReadResultItem{Path: path, Error: readErr.Error()}
+		return BatchReadResultItem{Path: path, Error: readErr.Error(), ErrorCode: batchReadErrorCode(readErr)}
 	}
 	content := result.RawContent
 	contentFormat := "raw"
@@ -3230,7 +3242,7 @@ func buildSystemPromptParts(allSkills []SkillDefinition, workspaceRoot string, e
 		"1. Before a file's first edit, use `read` to obtain exact content and `version`. After a successful edit, reuse its returned `version` when the next exact `oldText` is already known; re-read only when content is unknown, an external change is possible, or a version/match error occurs.\n" +
 		"2. Put all known changes across affected files in one `edit` call. Use exact, unique `oldText`; the schema defines the batch limits and replacement behavior.\n" +
 		"3. Never send multiple file-mutation tool calls for the same path in one model response. Do not use patch, unified diff, or git apply.\n" +
-		"4. **Critical**: within a single `edit` call, each file path may appear **at most once** in the `files` array — do not repeat the same path across multiple entries. Merge all changes for the same file into one `changes` array instead. Violating this causes the entire call to be rejected with `E_WRITE_BATCH_CONFLICT`.\n\n")
+		"4. Repeated normalized paths within one local `edit` call are merged when their versions match. Prefer one file entry with all changes, but repeated entries are accepted.\n\n")
 
 	b.WriteString("**Batch and parallelize aggressively** — this is the #1 way to reduce round-trips and save tokens:\n" +
 		"- If you need file contents, prefer one `read` call with all relevant paths instead of separate reads.\n" +
@@ -6381,7 +6393,7 @@ func chatToolsUncached() []openai.Tool {
 					"type":        "array",
 					"minItems":    1,
 					"maxItems":    20,
-					"description": "Files to edit in this call. Put all independent changes for the same file in one changes array (max 50). Each normalized path may appear once; total changes across all files must not exceed 200.",
+					"description": "Files to edit in this call. Put all independent changes for the same file in one changes array when possible (max 50). Repeated normalized paths with the same version are merged against one original snapshot; total changes across all files must not exceed 200.",
 					"items": map[string]any{
 						"type": "object",
 						"properties": map[string]any{
@@ -6394,8 +6406,8 @@ func chatToolsUncached() []openai.Tool {
 								"items": map[string]any{
 									"type": "object",
 									"properties": map[string]any{
-										"oldText": map[string]any{"type": "string", "minLength": 1, "description": "Exact unique current text known from read or a preceding successful edit."},
-										"newText": map[string]any{"type": "string", "description": "Replacement text. Empty string deletes oldText."},
+										"oldText": map[string]any{"type": "string", "minLength": 1, "description": "Exact unique current text known from read or a preceding successful edit. For multi-line code, a unique match with different leading indentation may be accepted; body text must still match exactly."},
+										"newText": map[string]any{"type": "string", "description": "Replacement text. Empty string deletes oldText. An identical oldText/newText pair is ignored as a no-op when other changes remain."},
 									},
 									"required": []string{"oldText", "newText"},
 								},
@@ -7010,8 +7022,17 @@ func fileMutationTargets(cfg ConfigState, name, arguments string) []fileMutation
 			return nil
 		}
 		result := make([]fileMutationTarget, 0, len(req.Files))
+		seen := make(map[string]struct{}, len(req.Files))
 		for _, file := range req.Files {
 			if target, ok := localMutationTarget(cfg, file.Path); ok {
+				// One local edit call merges repeated normalized paths before
+				// applying changes. Report each physical target only once here so
+				// the outer cross-call conflict guard does not reject that valid
+				// single-call edit before executeTool can merge it.
+				if _, exists := seen[target.key]; exists {
+					continue
+				}
+				seen[target.key] = struct{}{}
 				result = append(result, target)
 			}
 		}
@@ -8013,8 +8034,8 @@ Prefer dedicated tools over shell commands: grep_files for search, read for file
 - Put every independent replacement for the same file in one edit call. Each oldText must be non-empty, exact, unique in the original snapshot, and non-overlapping with other changes.
 - Empty newText deletes oldText. Insert by replacing a unique anchor with the anchor plus inserted content.
 - Do not use patch, unified diff, git apply, or patch-style edits.
-- Never send multiple file mutations for the same path in one tool batch; the backend rejects the entire conflicting path group.
-- Each file path may appear at most once in the files array of one edit call.
+- Never send multiple file-mutation tool calls for the same path in one tool batch; the backend rejects the entire conflicting path group.
+- Repeated normalized paths inside one local edit call are merged when their versions match; prefer one file entry with all changes when possible.
 
 # Coding Guidelines
 
@@ -11474,8 +11495,13 @@ func (a *App) editFilesWithConfig(cfg ConfigState, files []FileTextEdits) (Multi
 	if err != nil {
 		return MultiEditResult{}, err
 	}
-	prepared := make([]preparedFileEdit, 0, len(files))
-	seenPaths := map[string]bool{}
+
+	// Treat repeated references to the same physical file as one edit plan.
+	// Models may produce path aliases such as "a.go" and "./a.go" in one
+	// response; both entries describe changes against the same version snapshot,
+	// so merge their changes before matching or committing anything.
+	mergedFiles := make([]FileTextEdits, 0, len(files))
+	mergedByPath := make(map[string]int, len(files))
 	for i, file := range files {
 		resolved, err := safeJoin(roots, file.Path)
 		if err != nil {
@@ -11485,11 +11511,33 @@ func (a *App) editFilesWithConfig(cfg ConfigState, files []FileTextEdits) (Multi
 		if goruntime.GOOS == "windows" {
 			key = strings.ToLower(key)
 		}
-		if seenPaths[key] {
-			return MultiEditResult{}, codedToolError("E_DUPLICATE_EDIT_PATH", fmt.Errorf("path appears more than once in edit.files: %s", file.Path))
+		if existingIndex, ok := mergedByPath[key]; ok {
+			existing := &mergedFiles[existingIndex]
+			if !strings.EqualFold(existing.Version, file.Version) {
+				return MultiEditResult{}, codedToolError("E_VERSION_MISMATCH", fmt.Errorf("duplicate edit entries for %s use different versions (%s and %s); re-read the file and submit one version", file.Path, existing.Version, file.Version))
+			}
+			existing.Changes = append(existing.Changes, file.Changes...)
+			continue
 		}
-		seenPaths[key] = true
+		mergedByPath[key] = len(mergedFiles)
+		mergedFiles = append(mergedFiles, FileTextEdits{
+			Path:    file.Path,
+			Version: file.Version,
+			Changes: append([]TextChange(nil), file.Changes...),
+		})
+	}
+	if err := validateModelEditToolRequest(mergedFiles); err != nil {
+		return MultiEditResult{}, err
+	}
+
+	prepared := make([]preparedFileEdit, 0, len(mergedFiles))
+	for i, file := range mergedFiles {
+		resolved, err := safeJoin(roots, file.Path)
+		if err != nil {
+			return MultiEditResult{}, fmt.Errorf("file %d (%s): %w", i+1, file.Path, err)
+		}
 		before, info, err := readTextFile(resolved)
+
 		if err != nil {
 			return MultiEditResult{}, fmt.Errorf("file %d (%s): %w", i+1, file.Path, err)
 		}
@@ -11513,7 +11561,9 @@ func (a *App) editFilesWithConfig(cfg ConfigState, files []FileTextEdits) (Multi
 			added, removed = approximateLineDelta(beforeLines, afterLines)
 		}
 		classification := "edit"
-		if len(after) > len(before) {
+		if bytes.Equal(after, before) {
+			classification = "noop"
+		} else if len(after) > len(before) {
 			classification = "addition"
 		} else if len(after) < len(before) {
 			classification = "deletion"
@@ -11541,6 +11591,7 @@ func (a *App) editFilesWithConfig(cfg ConfigState, files []FileTextEdits) (Multi
 				Diff:              diff,
 				FirstChanged:      applied.firstChangedLine,
 				LastChanged:       applied.lastChangedLine,
+				Warnings:          applied.warnings,
 				Classification:    classification,
 				ChangedLinesBlock: buildLineNumberContextBlock(applied.content, applied.firstChangedLine, applied.lastChangedLine),
 			},
@@ -11561,6 +11612,9 @@ func (a *App) editFilesWithConfig(cfg ConfigState, files []FileTextEdits) (Multi
 		return nil
 	}
 	for i, item := range prepared {
+		if bytes.Equal(item.before, item.after) {
+			continue
+		}
 		current, _, err := readTextFile(item.path)
 		if err != nil || !strings.EqualFold(hashVersion(current), item.result.BeforeVersion) {
 			rollbackErr := rollback()
@@ -11587,11 +11641,17 @@ func (a *App) editFilesWithConfig(cfg ConfigState, files []FileTextEdits) (Multi
 		result.Replacements += item.result.Replacements
 		result.AddedLines += item.result.AddedLines
 		result.RemovedLines += item.result.RemovedLines
+		for _, warning := range item.result.Warnings {
+			result.Warnings = append(result.Warnings, item.display+": "+warning)
+		}
 		if item.result.Diff != "" {
 			diffs = append(diffs, "### "+item.display+"\n"+item.result.Diff)
 		}
 	}
 	result.Summary = fmt.Sprintf("updated %d file(s) with %d replacement(s)", result.FileCount, result.Replacements)
+	if result.Replacements == 0 {
+		result.Summary = fmt.Sprintf("no content changes needed in %d file(s)", result.FileCount)
+	}
 	result.Diff = strings.Join(diffs, "\n\n")
 	return result, nil
 }
@@ -11789,9 +11849,6 @@ func validateBatchTextChanges(changes []TextChange) error {
 		if change.OldText == "" {
 			return codedToolError("E_BAD_EDIT", fmt.Errorf("change %d oldText must be non-empty", i+1))
 		}
-		if normalizeEditString(change.OldText) == normalizeEditString(change.NewText) {
-			return codedToolError("E_NOOP", fmt.Errorf("change %d oldText and newText are identical", i+1))
-		}
 	}
 	return nil
 }
@@ -11983,6 +12040,163 @@ func applyStringReplacements(content string, ops []EditOperation) (*editResult, 
 	}, totalReplacements, nil
 }
 
+func exactMatchLineNumbers(content, needle string, limit int) []int {
+	if needle == "" || limit <= 0 {
+		return nil
+	}
+	lines := make([]int, 0, limit)
+	offset := 0
+	for len(lines) < limit {
+		rel := strings.Index(content[offset:], needle)
+		if rel < 0 {
+			break
+		}
+		start := offset + rel
+		lines = append(lines, 1+strings.Count(content[:start], "\n"))
+		offset = start + len(needle)
+	}
+	return lines
+}
+
+func formatMatchLines(lines []int, total int) string {
+	if len(lines) == 0 {
+		return ""
+	}
+	parts := make([]string, len(lines))
+	for i, line := range lines {
+		parts[i] = strconv.Itoa(line)
+	}
+	suffix := ""
+	if total > len(lines) {
+		suffix = fmt.Sprintf(", and %d more", total-len(lines))
+	}
+	return " at lines " + strings.Join(parts, ", ") + suffix
+}
+
+type indentationMatch struct {
+	start int
+	end   int
+	line  int
+}
+
+type textLineSpan struct {
+	start      int
+	end        int
+	hasNewline bool
+}
+
+func textLineSpans(content string) []textLineSpan {
+	if content == "" {
+		return nil
+	}
+	spans := make([]textLineSpan, 0, strings.Count(content, "\n")+1)
+	start := 0
+	for start < len(content) {
+		rel := strings.IndexByte(content[start:], '\n')
+		if rel < 0 {
+			spans = append(spans, textLineSpan{start: start, end: len(content)})
+			break
+		}
+		end := start + rel
+		spans = append(spans, textLineSpan{start: start, end: end, hasNewline: true})
+		start = end + 1
+	}
+	return spans
+}
+
+// indentationInsensitiveMatches is deliberately narrow: it only considers
+// multi-line, whole-line blocks and ignores spaces/tabs at the beginning of
+// each line. Line bodies, line count, and trailing-newline shape must still
+// match exactly. Callers must require exactly one result before editing.
+func indentationInsensitiveMatches(content, oldText string, limit int) []indentationMatch {
+	if limit <= 0 || !strings.Contains(oldText, "\n") {
+		return nil
+	}
+	oldTrailing := strings.HasSuffix(oldText, "\n")
+	oldLines := strings.Split(oldText, "\n")
+	if oldTrailing {
+		oldLines = oldLines[:len(oldLines)-1]
+	}
+	if len(oldLines) < 2 {
+		return nil
+	}
+	contentLines := textLineSpans(content)
+	if len(contentLines) < len(oldLines) {
+		return nil
+	}
+	matches := make([]indentationMatch, 0, min(limit, 4))
+	for first := 0; first+len(oldLines) <= len(contentLines) && len(matches) < limit; first++ {
+		matched := true
+		for j, oldLine := range oldLines {
+			span := contentLines[first+j]
+			candidate := content[span.start:span.end]
+			if strings.TrimLeft(candidate, " \t") != strings.TrimLeft(oldLine, " \t") {
+				matched = false
+				break
+			}
+		}
+		if !matched {
+			continue
+		}
+		last := contentLines[first+len(oldLines)-1]
+		if oldTrailing && !last.hasNewline {
+			continue
+		}
+		end := last.end
+		if oldTrailing {
+			end++
+		}
+		matches = append(matches, indentationMatch{start: contentLines[first].start, end: end, line: first + 1})
+	}
+	return matches
+}
+
+func leadingHorizontalWhitespace(line string) string {
+	return line[:len(line)-len(strings.TrimLeft(line, " \t"))]
+}
+
+func reindentReplacementForMatch(content, oldText, newText string, match indentationMatch) (string, bool) {
+	oldTrailing := strings.HasSuffix(oldText, "\n")
+	oldLines := strings.Split(oldText, "\n")
+	if oldTrailing {
+		oldLines = oldLines[:len(oldLines)-1]
+	}
+	newTrailing := strings.HasSuffix(newText, "\n")
+	newLines := strings.Split(newText, "\n")
+	if newTrailing {
+		newLines = newLines[:len(newLines)-1]
+	}
+	if oldTrailing != newTrailing || len(oldLines) == 0 || len(oldLines) != len(newLines) || match.start < 0 || match.end > len(content) {
+		return "", false
+	}
+	spans := textLineSpans(content)
+	firstLine := match.line - 1
+	if firstLine < 0 || firstLine+len(oldLines) > len(spans) {
+		return "", false
+	}
+	adjusted := make([]string, len(newLines))
+	for i, line := range newLines {
+		oldIndent := leadingHorizontalWhitespace(oldLines[i])
+		actualLine := content[spans[firstLine+i].start:spans[firstLine+i].end]
+		actualIndent := leadingHorizontalWhitespace(actualLine)
+		newIndent := leadingHorizontalWhitespace(line)
+		if !strings.HasPrefix(newIndent, oldIndent) {
+			return "", false
+		}
+		body := strings.TrimLeft(line, " \t")
+		if body == "" {
+			adjusted[i] = line
+			continue
+		}
+		adjusted[i] = actualIndent + newIndent[len(oldIndent):] + body
+	}
+	result := strings.Join(adjusted, "\n")
+	if newTrailing {
+		result += "\n"
+	}
+	return result, true
+}
+
 func applyBatchTextChanges(content string, changes []TextChange) (*editResult, int, error) {
 	if err := validateBatchTextChanges(changes); err != nil {
 		return nil, 0, err
@@ -11994,18 +12208,51 @@ func applyBatchTextChanges(content string, changes []TextChange) (*editResult, i
 		newText string
 	}
 	located := make([]locatedChange, 0, len(changes))
+	warnings := make([]string, 0, 2)
+	ignoredNoops := 0
 	for i, change := range changes {
 		oldText := normalizeEditString(change.OldText)
 		newText := normalizeEditString(change.NewText)
+		if oldText == newText {
+			ignoredNoops++
+			continue
+		}
 		count := strings.Count(content, oldText)
 		switch {
-		case count == 0:
-			return nil, 0, codedToolError("E_NO_MATCH", fmt.Errorf("change %d oldText was not found in the current file; re-read and copy exact raw content", i+1))
 		case count > 1:
-			return nil, 0, codedToolError("E_MULTI_MATCH", fmt.Errorf("change %d oldText occurs %d times; include more surrounding text to make it unique", i+1, count))
+			lines := exactMatchLineNumbers(content, oldText, 8)
+			return nil, 0, codedToolError("E_MULTI_MATCH", fmt.Errorf("change %d oldText occurs %d times%s; include more surrounding text to make it unique", i+1, count, formatMatchLines(lines, count)))
+		case count == 1:
+			start := strings.Index(content, oldText)
+			located = append(located, locatedChange{index: i, start: start, end: start + len(oldText), newText: newText})
+			continue
 		}
-		start := strings.Index(content, oldText)
-		located = append(located, locatedChange{index: i, start: start, end: start + len(oldText), newText: newText})
+
+		indentMatches := indentationInsensitiveMatches(content, oldText, 9)
+		switch len(indentMatches) {
+		case 0:
+			return nil, 0, codedToolError("E_NO_MATCH", fmt.Errorf("change %d oldText was not found in the current file; re-read and copy exact raw content", i+1))
+		case 1:
+			match := indentMatches[0]
+			adjustedNewText, ok := reindentReplacementForMatch(content, oldText, newText, match)
+			if !ok {
+				return nil, 0, codedToolError("E_NO_MATCH", fmt.Errorf("change %d matched only after indentation normalization, but newText could not be safely rebased to the file's actual indentation", i+1))
+			}
+			located = append(located, locatedChange{index: i, start: match.start, end: match.end, newText: adjustedNewText})
+			warnings = append(warnings, fmt.Sprintf("change %d matched uniquely after ignoring leading indentation; newText was rebased to the file's actual indentation", i+1))
+		default:
+			lines := make([]int, len(indentMatches))
+			for j, match := range indentMatches {
+				lines[j] = match.line
+			}
+			return nil, 0, codedToolError("E_MULTI_MATCH", fmt.Errorf("change %d oldText has multiple indentation-insensitive matches%s; include more surrounding text to make it unique", i+1, formatMatchLines(lines, len(indentMatches))))
+		}
+	}
+	if ignoredNoops > 0 {
+		warnings = append(warnings, fmt.Sprintf("ignored %d no-op change(s) whose oldText and newText were identical", ignoredNoops))
+	}
+	if len(located) == 0 {
+		return &editResult{content: content, warnings: warnings}, 0, nil
 	}
 	sort.Slice(located, func(i, j int) bool {
 		if located[i].start == located[j].start {
@@ -12031,7 +12278,8 @@ func applyBatchTextChanges(content string, changes []TextChange) (*editResult, i
 		content:          updated,
 		firstChangedLine: changedRange.firstChangedLine,
 		lastChangedLine:  changedRange.lastChangedLine,
-	}, len(changes), nil
+		warnings:         warnings,
+	}, len(located), nil
 }
 
 func buildLineNumberContextBlock(result string, firstLine, lastLine int) string {

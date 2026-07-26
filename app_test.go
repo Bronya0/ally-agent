@@ -970,6 +970,116 @@ func TestBatchReadKeepsSamePathWithDifferentEffectiveRanges(t *testing.T) {
 	}
 }
 
+func TestBatchReadReportsStructuredMissingPathError(t *testing.T) {
+	dir := t.TempDir()
+	app := NewApp()
+	result, err := app.batchReadFilesWithConfig(ConfigState{Workspace: dir}, BatchReadRequest{
+		Files: []BatchReadFileRequest{{Path: "missing.txt"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Files) != 1 {
+		t.Fatalf("expected one result, got %#v", result)
+	}
+	if result.Files[0].ErrorCode != "E_PATH_NOT_FOUND" {
+		t.Fatalf("expected E_PATH_NOT_FOUND, got %#v", result.Files[0])
+	}
+}
+
+func TestEditBatchIgnoresNoOpsWhenOtherChangesRemain(t *testing.T) {
+	content := "alpha\nbeta\n"
+	result, replacements, err := applyBatchTextChanges(content, []TextChange{
+		{OldText: "alpha", NewText: "alpha"},
+		{OldText: "beta", NewText: "BETA"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replacements != 1 || result.content != "alpha\nBETA\n" {
+		t.Fatalf("unexpected no-op filtering result: replacements=%d content=%q", replacements, result.content)
+	}
+	if len(result.warnings) != 1 || !strings.Contains(result.warnings[0], "no-op") {
+		t.Fatalf("expected no-op warning, got %#v", result.warnings)
+	}
+}
+
+func TestEditBatchAllNoOpsDoesNotWrite(t *testing.T) {
+	content := "alpha\n"
+	result, replacements, err := applyBatchTextChanges(content, []TextChange{{OldText: "alpha", NewText: "alpha"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replacements != 0 || result.content != content {
+		t.Fatalf("expected all-no-op batch to preserve content, got replacements=%d content=%q", replacements, result.content)
+	}
+	if len(result.warnings) != 1 || !strings.Contains(result.warnings[0], "no-op") {
+		t.Fatalf("expected all-no-op warning, got %#v", result.warnings)
+	}
+}
+
+func TestEditBatchReportsMatchingLinesForAmbiguousText(t *testing.T) {
+	_, _, err := applyBatchTextChanges("one\nfoo\ntwo\nfoo\n", []TextChange{{OldText: "foo", NewText: "bar"}})
+	if err == nil || !strings.Contains(err.Error(), "lines 2, 4") {
+		t.Fatalf("expected matching line numbers in multi-match error, got %v", err)
+	}
+}
+
+func TestEditBatchUsesUniqueIndentationMatchAndRebasesReplacement(t *testing.T) {
+	content := "func main() {\n\tif ok {\n\t\tvalue()\n\t}\n}\n"
+	result, replacements, err := applyBatchTextChanges(content, []TextChange{{
+		OldText: "  if ok {\n    value()\n  }",
+		NewText: "  if ok {\n    updated()\n  }",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "func main() {\n\tif ok {\n\t\tupdated()\n\t}\n}\n"
+	if replacements != 1 || result.content != want {
+		t.Fatalf("unexpected indentation-normalized edit: replacements=%d content=%q", replacements, result.content)
+	}
+	if len(result.warnings) != 1 || !strings.Contains(result.warnings[0], "rebased") {
+		t.Fatalf("expected indentation warning, got %#v", result.warnings)
+	}
+}
+
+func TestEditBatchRejectsAmbiguousIndentationMatches(t *testing.T) {
+	content := "func a() {\n\tif ok {\n\t\tvalue()\n\t}\n}\nfunc b() {\n\tif ok {\n\t\tvalue()\n\t}\n}\n"
+	_, _, err := applyBatchTextChanges(content, []TextChange{{
+		OldText: "  if ok {\n    value()\n  }",
+		NewText: "  if ok {\n    updated()\n  }",
+	}})
+	if err == nil || !strings.Contains(err.Error(), "multiple indentation-insensitive matches") {
+		t.Fatalf("expected ambiguous indentation match to fail, got %v", err)
+	}
+}
+
+func TestEditBatchRebasesTrailingNewlineBlock(t *testing.T) {
+	content := "func main() {\n\tif ok {\n\t\tvalue()\n\t}\n}\n"
+	result, replacements, err := applyBatchTextChanges(content, []TextChange{{
+		OldText: "  if ok {\n    value()\n  }\n",
+		NewText: "  if ok {\n    updated()\n  }\n",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "func main() {\n\tif ok {\n\t\tupdated()\n\t}\n}\n"
+	if replacements != 1 || result.content != want {
+		t.Fatalf("unexpected trailing-newline indentation edit: replacements=%d content=%q", replacements, result.content)
+	}
+}
+
+func TestEditBatchRejectsIndentationFallbackWhenNewlineShapeChanges(t *testing.T) {
+	content := "func main() {\n\tif ok {\n\t\tvalue()\n\t}\n}\n"
+	_, _, err := applyBatchTextChanges(content, []TextChange{{
+		OldText: "  if ok {\n    value()\n  }\n",
+		NewText: "  if ok {\n    updated()\n  }",
+	}})
+	if err == nil || !strings.Contains(err.Error(), "could not be safely rebased") {
+		t.Fatalf("expected newline-shape mismatch to fail safely, got %v", err)
+	}
+}
+
 func TestFileVersionIsStableCrockfordBase32(t *testing.T) {
 	version := hashVersion([]byte("ally"))
 	if version != "fx0t3f9mp005" {
@@ -1136,6 +1246,72 @@ func TestExecuteToolEditsMultipleFilesInOneCall(t *testing.T) {
 		if string(got) != want {
 			t.Fatalf("%s = %q, want %q", path, got, want)
 		}
+	}
+}
+
+func TestExecuteToolEditMergesRepeatedPathEntries(t *testing.T) {
+	dir := t.TempDir()
+	original := []byte("alpha\nbeta\ngamma\n")
+	if err := os.WriteFile(filepath.Join(dir, "sample.txt"), original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	version := hashVersion(original)
+	args := fmt.Sprintf(`{"files":[{"path":"sample.txt","version":%q,"changes":[{"oldText":"alpha","newText":"ALPHA"}]},{"path":"./sample.txt","version":%q,"changes":[{"oldText":"gamma","newText":"GAMMA"}]}]}`, version, version)
+	result := NewApp().executeTool(context.Background(), ConfigState{Workspace: dir}, "session-1", "edit", []byte(args))
+	if !result.OK {
+		t.Fatalf("expected repeated path entries to merge, got %#v", result)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "sample.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "ALPHA\nbeta\nGAMMA\n" {
+		t.Fatalf("unexpected merged edit content %q", string(got))
+	}
+	edited, ok := result.Data.(MultiEditResult)
+	if !ok || edited.FileCount != 1 || len(edited.Files) != 1 || edited.Replacements != 2 {
+		t.Fatalf("expected one merged file with two replacements, got %#v", result.Data)
+	}
+}
+
+func TestExecuteToolEditRejectsRepeatedPathEntriesWithDifferentVersions(t *testing.T) {
+	dir := t.TempDir()
+	original := []byte("alpha\nbeta\n")
+	if err := os.WriteFile(filepath.Join(dir, "sample.txt"), original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	args := fmt.Sprintf(`{"files":[{"path":"sample.txt","version":%q,"changes":[{"oldText":"alpha","newText":"ALPHA"}]},{"path":"./sample.txt","version":%q,"changes":[{"oldText":"beta","newText":"BETA"}]}]}`, hashVersion(original), "0123456789ab")
+	result := NewApp().executeTool(context.Background(), ConfigState{Workspace: dir}, "session-1", "edit", []byte(args))
+	if result.OK || result.ErrorCode != "E_VERSION_MISMATCH" {
+		t.Fatalf("expected inconsistent duplicate versions to fail with E_VERSION_MISMATCH, got %#v", result)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "sample.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(original) {
+		t.Fatalf("version conflict must leave file unchanged, got %q", got)
+	}
+}
+
+func TestExecuteToolEditMergesRepeatedPathEntriesBeforeMatching(t *testing.T) {
+	dir := t.TempDir()
+	original := []byte("foo foo\n")
+	if err := os.WriteFile(filepath.Join(dir, "sample.txt"), original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	version := hashVersion(original)
+	args := fmt.Sprintf(`{"files":[{"path":"sample.txt","version":%q,"changes":[{"oldText":"foo","newText":"one"}]},{"path":"./sample.txt","version":%q,"changes":[{"oldText":"foo","newText":"two"}]}]}`, version, version)
+	result := NewApp().executeTool(context.Background(), ConfigState{Workspace: dir}, "session-1", "edit", []byte(args))
+	if result.OK || result.ErrorCode != "E_MULTI_MATCH" {
+		t.Fatalf("expected merged changes to use one original snapshot and reject ambiguous oldText, got %#v", result)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "sample.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(original) {
+		t.Fatalf("ambiguous merged edit must leave file unchanged, got %q", got)
 	}
 }
 
