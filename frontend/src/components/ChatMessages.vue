@@ -524,22 +524,24 @@ defineExpose({ scrollbarRef, scrollToBottom, scrollToUserQuestion, saveScrollPos
 .message.user {
   display: flex;
   align-items: flex-start;
-  gap: 4px;
-  /* 与 .rich-tool-card 一致:把 16px 标识挂到左边界外 */
-  margin-left: -20px;
-  padding-left: 20px;
+  gap: 6px;
+  margin-right: -28px;
+  margin-left: -28px;
+  padding: 10px 28px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.07);
 }
 
 .user-rail {
   flex: none;
-  width: 16px;
-  margin-left: -20px;
-  text-align: center;
+  width: 12px;
   color: var(--ally-accent);
   font-family: var(--ally-ui-font);
   font-size: 15px;
   font-weight: 600;
   line-height: 1.7;
+  text-align: center;
   opacity: 0.85;
 }
 

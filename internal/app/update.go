@@ -144,7 +144,7 @@ func (a *App) fetchReleaseByTag(tag string) (string, []githubAsset, error) {
 	if err := validateUpdateTag(tag); err != nil {
 		return "", nil, err
 	}
-	cfg := a.effectiveConfigSafe()
+	cfg := updateNetworkConfig(a.effectiveConfigSafe())
 	client := proxyHTTPClient(cfg, false, updateHTTPTimeout)
 	ctx, cancel := context.WithTimeout(context.Background(), updateHTTPTimeout)
 	defer cancel()
@@ -210,7 +210,7 @@ func (a *App) ListUpdateAsset(tag string) UpdateAssetInfo {
 // downloadAsset streams an asset URL to destPath using the proxy-aware client.
 // Progress is emitted via the update:progress event approximately every 500ms.
 func (a *App) downloadAsset(assetURL, destPath, version string, totalBytes int64) error {
-	cfg := a.effectiveConfigSafe()
+	cfg := updateNetworkConfig(a.effectiveConfigSafe())
 	client := proxyHTTPClient(cfg, false, updateDownloadTimeout)
 	ctx, cancel := context.WithTimeout(context.Background(), updateDownloadTimeout)
 	defer cancel()
