@@ -527,7 +527,10 @@ defineExpose({ scrollbarRef, scrollToBottom, scrollToUserQuestion, saveScrollPos
   gap: 6px;
   margin-right: -28px;
   margin-left: -28px;
-  padding: 10px 0;
+  /* The row extends 28px into the message gutter. Keep the rail hanging left
+     while aligning the question text with the normal body line:
+     1px border + 9px padding + 12px rail + 6px gap = 28px. */
+  padding: 10px 10px 10px 9px;
   border: 1px solid rgba(255, 255, 255, 0.06);
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.07);
