@@ -1632,6 +1632,20 @@ func (a *App) effectiveConfigSafe() ConfigState {
 	return a.effectiveConfig(ConfigState{})
 }
 
+// updateNetworkConfig returns a proxy configuration used only by the
+// self-update flow. Updates always prefer the detected system proxy and fall
+// back to a direct connection when no usable system/environment proxy exists.
+// It intentionally does not mutate or reuse the user's configured proxy mode.
+func updateNetworkConfig(cfg ConfigState) ConfigState {
+	cfg.ProxyMode = proxyModeSystem
+	cfg.ProxyURL = ""
+	cfg.ProxyNoProxy = ""
+	if !resolveProxy(cfg).status.Enabled {
+		cfg.ProxyMode = proxyModeOff
+	}
+	return cfg
+}
+
 // CheckForUpdatesResult describes the outcome of a latest-release lookup.
 type CheckForUpdatesResult struct {
 	OK                bool   `json:"ok"`
@@ -1654,7 +1668,7 @@ const allyLatestReleaseAPI = "https://api.github.com/repos/Bronya0/ally-agent/re
 // staged on disk (if any) so the frontend can decide whether to silently
 // download, prompt the user, or do nothing.
 func (a *App) CheckForUpdates() CheckForUpdatesResult {
-	cfg := a.effectiveConfigSafe()
+	cfg := updateNetworkConfig(a.effectiveConfigSafe())
 	client := proxyHTTPClient(cfg, false, 60*time.Second)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -8403,9 +8417,10 @@ func (a *App) getContextBreakdown(sessionID string) ContextBreakdown {
 		result.Reasoning = live.Reasoning
 	} else {
 		// Fall back to history-based counting (missing tool calls + tool results)
-		a.mu.Lock()
-		hist := sanitizeHistoryMessages(a.histories[sessionID])
-		a.mu.Unlock()
+		// loadSessionHistoryCopy triggers lazy disk load when the session is not yet
+		// cached in this process (e.g. after switching sessions from localStorage),
+		// so context stats are accurate on session restore without waiting for StartChat.
+		hist := a.loadSessionHistoryCopy(sessionID)
 		for _, m := range hist {
 			tokens := estimateMessageBodyTokens(m)
 			switch m.Role {
