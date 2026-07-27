@@ -9,12 +9,30 @@
         </button>
         <div v-else-if="msg.role === 'user'" :class="['message', msg.role, { error: msg.error }]" data-user-question>
           <span class="user-rail" aria-hidden="true">›</span>
-          <div v-if="msg.skill" class="message-body user-text">
-            <span class="skill-chip">/{{ msg.skill.name }}</span>
-            <div v-if="msg.skill.args" class="skill-user-text markdown-body" v-html="renderFn(msg.skill.args, false)"></div>
+          <div class="user-message-content">
+            <div class="message-body user-text">
+              <span v-if="msg.skill" class="skill-chip">/{{ msg.skill.name }}</span>
+              <template v-if="userMessageText(msg)">
+                <div
+                  v-if="isLongUserMessage(msg) && !isUserMessageExpanded(msg)"
+                  :class="['user-text-preview', { 'skill-user-text': msg.skill }]"
+                >{{ userMessagePreview(msg) }}</div>
+                <div
+                  v-else
+                  :class="['markdown-body', { 'skill-user-text': msg.skill }]"
+                  v-html="renderFn(userMessageText(msg), false)"
+                ></div>
+                <button
+                  v-if="isLongUserMessage(msg)"
+                  class="user-text-toggle"
+                  type="button"
+                  :aria-expanded="isUserMessageExpanded(msg)"
+                  @click.stop="toggleUserMessage(msg)"
+                >{{ userMessageToggleLabel(msg) }}</button>
+              </template>
+            </div>
+            <RenderBoundary :label="$t('chat.attachment')"><MessageAttachments :attachments="msg.attachments || []" /></RenderBoundary>
           </div>
-          <div v-else class="message-body user-text markdown-body" v-html="renderFn(msg.content, false)"></div>
-          <RenderBoundary :label="$t('chat.attachment')"><MessageAttachments :attachments="msg.attachments || []" /></RenderBoundary>
         </div>
         <div v-else-if="msg.role !== 'tool_call'" :class="['message', msg.role, { error: msg.error, system: msg.system }]">
           <div v-if="msg.reasoningBody" class="reasoning-block">
@@ -92,7 +110,8 @@
 </template>
 
 <script setup>
-import { nextTick, onBeforeUnmount, ref } from 'vue';
+import { nextTick, onBeforeUnmount, reactive, ref } from 'vue';
+import { t } from '../i18n.mjs';
 import MessageAttachments from './MessageAttachments.vue';
 import WelcomeMessage from './WelcomeMessage.vue';
 import ToolCallCard from './ToolCallCard.vue';
@@ -110,6 +129,58 @@ defineProps({
   tools: { type: Array, default: () => [] },
   mcpServers: { type: Array, default: () => [] },
 });
+
+const expandedUserMessages = reactive(new WeakSet());
+const userMessageStatsCache = new WeakMap();
+const USER_MESSAGE_COLLAPSE_CHAR_LIMIT = 800;
+const USER_MESSAGE_COLLAPSE_LINE_LIMIT = 10;
+const USER_MESSAGE_PREVIEW_CHAR_LIMIT = 400;
+const USER_MESSAGE_PREVIEW_LINE_LIMIT = 6;
+
+function userMessageText(msg) {
+  return String(msg?.skill ? msg.skill.args || '' : msg?.content || '');
+}
+
+function userMessageStats(msg) {
+  const text = userMessageText(msg);
+  const cached = userMessageStatsCache.get(msg);
+  if (cached?.text === text) return cached;
+  const stats = {
+    text,
+    characters: text.length,
+    lines: text ? text.split(/\r\n|\r|\n/).length : 0,
+  };
+  userMessageStatsCache.set(msg, stats);
+  return stats;
+}
+
+function isLongUserMessage(msg) {
+  const stats = userMessageStats(msg);
+  return stats.characters > USER_MESSAGE_COLLAPSE_CHAR_LIMIT || stats.lines > USER_MESSAGE_COLLAPSE_LINE_LIMIT;
+}
+
+function isUserMessageExpanded(msg) {
+  return expandedUserMessages.has(msg);
+}
+
+function userMessagePreview(msg) {
+  const text = userMessageStats(msg).text.replace(/\r\n|\r/g, '\n');
+  const linePreview = text.split('\n').slice(0, USER_MESSAGE_PREVIEW_LINE_LIMIT).join('\n');
+  const preview = linePreview.slice(0, USER_MESSAGE_PREVIEW_CHAR_LIMIT).trimEnd();
+  return preview.length < text.length ? `${preview}\n…` : preview;
+}
+
+function toggleUserMessage(msg) {
+  if (expandedUserMessages.has(msg)) expandedUserMessages.delete(msg);
+  else expandedUserMessages.add(msg);
+}
+
+function userMessageToggleLabel(msg) {
+  const stats = userMessageStats(msg);
+  return isUserMessageExpanded(msg)
+    ? t('chat.userMessage.collapse')
+    : t('chat.userMessage.expand', { lines: stats.lines, characters: stats.characters });
+}
 
 // Stable v-for key for messages that lack an eventId (user / assistant /
 // archive / system). tool_call messages already carry a stable eventId, so we
@@ -396,6 +467,35 @@ defineExpose({ scrollbarRef, scrollToBottom, scrollToUserQuestion, saveScrollPos
 .message-archive-toggle:hover {
   color: #d4d4d4;
   background: rgba(255, 255, 255, 0.05);
+}
+
+.user-message-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.user-text-preview {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.user-text-toggle {
+  display: inline-flex;
+  margin-top: 5px;
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  color: color-mix(in srgb, var(--ally-accent-bright) 68%, #8a8a8a);
+  font-family: var(--ally-ui-font);
+  font-size: 12px;
+  line-height: 1.5;
+  cursor: pointer;
+  --wails-draggable: no-drag;
+}
+
+.user-text-toggle:hover {
+  color: var(--ally-accent-bright);
+  text-decoration: underline;
 }
 
 .user-text {
