@@ -527,7 +527,7 @@ defineExpose({ scrollbarRef, scrollToBottom, scrollToUserQuestion, saveScrollPos
   gap: 6px;
   margin-right: -28px;
   margin-left: -28px;
-  padding: 10px 28px;
+  padding: 10px 0;
   border: 1px solid rgba(255, 255, 255, 0.06);
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.07);
