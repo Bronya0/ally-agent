@@ -359,11 +359,11 @@ func buildSkillListingMeta(skills []SkillDefinition) string {
 }
 
 func buildMemoryIndexContext() string {
-	entries, hit := memoryIndexCache.lookup()
+	entries, hit := memoryIndexCache.Lookup(aGlobalApp.memoriesRuntime())
 	if !hit {
 		listed, err := listMemories()
 		if err == nil {
-			memoryIndexCache.store(listed)
+			memoryIndexCache.Store(listed, aGlobalApp.memoriesRuntime())
 		}
 		entries = listed
 	}

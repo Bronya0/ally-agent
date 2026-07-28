@@ -173,7 +173,7 @@ type App struct {
 }
 
 func NewApp() *App {
-	return &App{
+	a := &App{
 		runs:                map[string]context.CancelFunc{},
 		runSessions:         map[string]string{},
 		histories:           map[string][]openai.ChatCompletionMessage{},
@@ -192,6 +192,11 @@ func NewApp() *App {
 		services:            map[string]*managedService{},
 		lastEstimatedTokens: map[string]WorkspaceTokenUsage{},
 	}
+	// Expose the active App to package-level helpers that predate Runtime
+	// injection (listMemories, memoryIndexCache usage in prompt_builder).
+	// Only one App instance exists per process; there is no teardown.
+	aGlobalApp = a
+	return a
 }
 
 func clampInt(value, minValue, maxValue int) int {
@@ -882,49 +887,6 @@ type DocumentReadResult struct {
 	Truncated bool     `json:"truncated"`
 }
 
-type MemoryIndexEntry struct {
-	Path        string `json:"path"`
-	Description string `json:"description"`
-	SHA256      string `json:"sha256,omitempty"`
-	Size        int64  `json:"size,omitempty"`
-}
-
-type MemoryListResult struct {
-	Dir      string             `json:"dir"`
-	Memories []MemoryIndexEntry `json:"memories"`
-	Count    int                `json:"count"`
-}
-
-type MemoryReadRequest struct {
-	Path string `json:"path"`
-}
-
-type MemoryReadResult struct {
-	Path        string `json:"path"`
-	Description string `json:"description"`
-	Content     string `json:"content"`
-	SHA256      string `json:"sha256"`
-	Version     string `json:"version"`
-	Size        int64  `json:"size"`
-}
-
-type MemoryWriteRequest struct {
-	Path        string `json:"path"`
-	Description string `json:"description"`
-	Content     string `json:"content"`
-	Version     string `json:"version,omitempty"`
-}
-
-type MemoryWriteResult struct {
-	Path         string `json:"path"`
-	Description  string `json:"description"`
-	SHA256       string `json:"sha256"`
-	Version      string `json:"version"`
-	Size         int64  `json:"size"`
-	Created      bool   `json:"created"`
-	UpdatedIndex bool   `json:"updatedIndex"`
-}
-
 type TodoEntry struct {
 	Title  string `json:"title"`
 	Status string `json:"status"` // pending, in_progress, done
@@ -1120,8 +1082,17 @@ func appDataDir() string {
 	return ".ally_agent"
 }
 
-func memoriesDir() string {
+// MemoriesDir returns the absolute path to ~/.ally_agent/memories/.
+// Implements memory.Runtime so the memory tool can reach the memories
+// directory through the host-neutral interface without importing app.
+func (a *App) MemoriesDir() string {
 	return filepath.Join(appDataDir(), "memories")
+}
+
+// memoriesDir is a package-level convenience kept for the few call sites
+// that still use it instead of (*App).MemoriesDir().
+func memoriesDir() string {
+	return aGlobalApp.MemoriesDir()
 }
 
 func legacyConfigPath() string {
