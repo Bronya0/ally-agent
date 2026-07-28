@@ -12,6 +12,20 @@ import (
 var skillScanDirs = []string{
 	filepath.Join(".agents", "skills"),
 	filepath.Join(".kimi-code", "skills"),
+	// Agent Skills open standard / Claude Code convention. Scanned last so
+	// Ally-native .agents/skills and .kimi-code/skills win on name conflicts.
+	filepath.Join(".claude", "skills"),
+}
+
+// userSkillScanDirs lists user-level skill roots (under the home directory).
+// Ally-native path scanned first so it wins on name conflicts; the Claude
+// Code / Agent Skills convention is scanned as a fallback.
+var userSkillScanDirs = []struct {
+	path   string
+	source string
+}{
+	{filepath.Join(".agents", "skills"), "user"},
+	{filepath.Join(".claude", "skills"), "user"},
 }
 
 func (a *App) ListSkills() ([]SkillDefinition, error) {
@@ -25,9 +39,11 @@ func (a *App) ListSkills() ([]SkillDefinition, error) {
 	skills := []SkillDefinition{}
 	seen := map[string]bool{}
 
-	// User skills (~/.agents/skills/)
+	// User skills (~/.agents/skills/, ~/.claude/skills/)
 	if homeDir, err := os.UserHomeDir(); err == nil {
-		scanSkillDir(filepath.Join(homeDir, ".agents", "skills"), "user", &skills, seen)
+		for _, d := range userSkillScanDirs {
+			scanSkillDir(filepath.Join(homeDir, d.path), d.source, &skills, seen)
+		}
 	}
 	// Project skills (<workspace>/.agents/skills/)
 	if root != "" {
@@ -344,7 +360,9 @@ func (a *App) listSkillsUnlocked() ([]SkillDefinition, error) {
 	skills := []SkillDefinition{}
 	seen := map[string]bool{}
 	if homeDir, err := os.UserHomeDir(); err == nil {
-		scanSkillDir(filepath.Join(homeDir, ".agents", "skills"), "user", &skills, seen)
+		for _, d := range userSkillScanDirs {
+			scanSkillDir(filepath.Join(homeDir, d.path), d.source, &skills, seen)
+		}
 	}
 	for _, sub := range skillScanDirs {
 		scanSkillDir(filepath.Join(root, sub), "project", &skills, seen)
@@ -439,6 +457,13 @@ func parseSkillContent(path, text string) SkillDefinition {
 				}
 				if v := parseYAMLField(line, "type"); v != "" {
 					meta.Type = v
+				}
+				// whenToUse (Ally-native) and when_to_use (Agent Skills open
+				// standard / Claude Code) are both accepted. Ally-native
+				// spelling wins when both are present: whenToUse is checked
+				// unconditionally and overwrites any earlier when_to_use.
+				if v := parseYAMLField(line, "when_to_use"); v != "" && meta.WhenToUse == "" {
+					meta.WhenToUse = v
 				}
 				if v := parseYAMLField(line, "whenToUse"); v != "" {
 					meta.WhenToUse = v

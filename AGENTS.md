@@ -277,12 +277,11 @@ Skills are inspired by Kimi Code.
 
 `ListSkills()` scans:
 
-- user skills: `~/.agents/skills/`
-- project skills: `<workspace>/.agents/skills/`
-- project Kimi-style skills: `<workspace>/.kimi-code/skills/`
+- user skills: `~/.agents/skills/`, `~/.claude/skills/`
+- project skills: `<workspace>/.agents/skills/`, `<workspace>/.kimi-code/skills/`, `<workspace>/.claude/skills/`
 - built-in skills: embedded into the binary via `go:embed` under `internal/builtin_skills/skills/<name>/SKILL.md`
 
-Built-in skills ship with Ally, require no files on disk, and cannot be deleted by the user. User/project skills with the same name take precedence over built-in skills (scope precedence: project > user > extra > builtin, matching `buildSkillListingMeta`). Built-in skills are still subject to `disabledSkills` and can be turned off in Settings → Skills.
+The `.claude/skills/` paths follow the Agent Skills open standard (agentskills.io) and Claude Code convention, so skills dropped into those directories by other tools are discovered by Ally without changes. Ally-native paths (`.agents/skills`, `.kimi-code/skills`) are scanned first, so on a name conflict the Ally-native skill wins via the `seen`-map dedup; the Claude-convention path is a fallback. Scope precedence overall: project > user > extra > builtin, matching `buildSkillListingMeta`. Built-in skills ship with Ally, require no files on disk, cannot be deleted by the user, and are still subject to `disabledSkills` (can be turned off in Settings → Skills).
 
 Supported layouts:
 
@@ -295,9 +294,9 @@ Supported layouts:
 - `name`
 - `description`
 - `type`
-- `whenToUse`
+- `whenToUse` (Ally-native) or `when_to_use` (Agent Skills open standard / Claude Code) — both accepted, Ally-native spelling wins when both are present
 
-If no usable frontmatter is found, the filename or parent directory becomes the skill name.
+Other Agent Skills fields (`disable-model-invocation`, `user-invocable`, `allowed-tools`, `context`, `paths`, etc.) are ignored — they encode Claude Code-specific behaviors Ally does not implement. If no usable frontmatter is found, the filename or parent directory becomes the skill name.
 
 Built-in skill loading:
 
