@@ -12,7 +12,7 @@ A desktop AI coding assistant that works with your local projects. Ally helps yo
 
 Download packages for Windows, macOS, and Linux from the [Releases page](https://github.com/Bronya0/ally-agent/releases).
 
-![Ally screenshot](docs/img.jpg)
+![Ally screenshot](docs/img.gif)
 
 ## Features
 

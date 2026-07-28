@@ -12,7 +12,7 @@
 
 前往 [Releases 页面](https://github.com/Bronya0/ally-agent/releases)下载 Windows、macOS 或 Linux 安装包。
 
-![Ally 界面截图](docs/img.jpg)
+![Ally 界面截图](docs/img.gif)
 
 ## 主要功能
 
