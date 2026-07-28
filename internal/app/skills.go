@@ -35,8 +35,32 @@ func (a *App) ListSkills() ([]SkillDefinition, error) {
 			scanSkillDir(filepath.Join(root, sub), "project", &skills, seen)
 		}
 	}
+	// Built-in skills (embedded). Added last so user/project skills with the
+	// same name win via the seen-map dedup, matching buildSkillListingMeta's
+	// scope precedence (project > user > extra > builtin).
+	for _, b := range builtinSkillEntries() {
+		key := strings.ToLower(b.Name)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		skills = append(skills, b)
+	}
 
 	return skills, nil
+}
+
+// readSkillContent returns the full skill body, preferring embedded content
+// for built-in skills and falling back to disk reads for user/project skills.
+func readSkillContent(sk SkillDefinition) (string, error) {
+	if sk.embeddedContent != "" {
+		return sk.embeddedContent, nil
+	}
+	data, err := os.ReadFile(sk.Path)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
 }
 
 func (a *App) GetSkill(name string) (string, error) {
@@ -46,11 +70,7 @@ func (a *App) GetSkill(name string) (string, error) {
 	}
 	for _, sk := range skills {
 		if strings.EqualFold(sk.Name, name) {
-			content, err := os.ReadFile(sk.Path)
-			if err != nil {
-				return "", err
-			}
-			return string(content), nil
+			return readSkillContent(sk)
 		}
 	}
 	return "", fmt.Errorf("skill not found: %s", name)
@@ -63,14 +83,14 @@ func (a *App) ActivateSkill(name string) (string, error) {
 	}
 	for _, sk := range skills {
 		if strings.EqualFold(sk.Name, name) {
-			content, err := os.ReadFile(sk.Path)
+			content, err := readSkillContent(sk)
 			if err != nil {
 				return "", err
 			}
 			if err := a.enableSkill(sk.Name); err != nil {
 				return "", err
 			}
-			return renderSkillLoadedBlock(sk.Name, sk.Source, sk.Dir, "", string(content)), nil
+			return renderSkillLoadedBlock(sk.Name, sk.Source, sk.Dir, "", content), nil
 		}
 	}
 	return "", fmt.Errorf("skill not found: %s", name)
@@ -225,19 +245,15 @@ func (a *App) handleSkillToolCall(skillName, skillArgs string) (map[string]any, 
 	skills = a.enabledSkillsFrom(skills)
 	for _, sk := range skills {
 		if strings.EqualFold(sk.Name, skillName) {
-			info, err := os.Stat(sk.Path)
-			if err != nil {
-				return nil, fmt.Errorf("failed to stat skill: %w", err)
-			}
-			if info.Size() > maxReadFileBytes {
-				return nil, fmt.Errorf("skill file is too large: %d bytes (max %d)", info.Size(), maxReadFileBytes)
-			}
-			content, err := os.ReadFile(sk.Path)
+			content, err := readSkillContent(sk)
 			if err != nil {
 				return nil, fmt.Errorf("failed to read skill: %w", err)
 			}
+			if len(content) > maxReadFileBytes {
+				return nil, fmt.Errorf("skill file is too large: %d bytes (max %d)", len(content), maxReadFileBytes)
+			}
 
-			loadedContent := string(content)
+			loadedContent := content
 			if tree := buildSkillDirTree(sk.Dir, sk.Path); tree != "" {
 				loadedContent = loadedContent + "\n" + tree
 			}
@@ -333,6 +349,14 @@ func (a *App) listSkillsUnlocked() ([]SkillDefinition, error) {
 	for _, sub := range skillScanDirs {
 		scanSkillDir(filepath.Join(root, sub), "project", &skills, seen)
 	}
+	for _, b := range builtinSkillEntries() {
+		key := strings.ToLower(b.Name)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		skills = append(skills, b)
+	}
 	return skills, nil
 }
 
@@ -393,7 +417,13 @@ func parseSkillFile(path string) SkillDefinition {
 	if err != nil {
 		return SkillDefinition{}
 	}
-	text := string(data)
+	return parseSkillContent(path, string(data))
+}
+
+// parseSkillContent parses a skill's frontmatter and body from an in-memory
+// string. It shares the same rules as parseSkillFile without touching disk,
+// so built-in (embedded) skills reuse the same parsing path.
+func parseSkillContent(path, text string) SkillDefinition {
 	meta := SkillDefinition{Path: path}
 	// Try YAML frontmatter: ---\n...\n---
 	if strings.HasPrefix(text, "---") {

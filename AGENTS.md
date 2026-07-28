@@ -280,11 +280,15 @@ Skills are inspired by Kimi Code.
 - user skills: `~/.agents/skills/`
 - project skills: `<workspace>/.agents/skills/`
 - project Kimi-style skills: `<workspace>/.kimi-code/skills/`
+- built-in skills: embedded into the binary via `go:embed` under `internal/builtin_skills/skills/<name>/SKILL.md`
+
+Built-in skills ship with Ally, require no files on disk, and cannot be deleted by the user. User/project skills with the same name take precedence over built-in skills (scope precedence: project > user > extra > builtin, matching `buildSkillListingMeta`). Built-in skills are still subject to `disabledSkills` and can be turned off in Settings → Skills.
 
 Supported layouts:
 
 - directory skill: `skill-dir/SKILL.md`
 - standalone Markdown skill: `skill-name.md`
+- built-in skill: `internal/builtin_skills/skills/<name>/SKILL.md` (embedded, parsed via `parseSkillContent`)
 
 `parseSkillFile()` reads YAML frontmatter fields:
 
@@ -294,6 +298,16 @@ Supported layouts:
 - `whenToUse`
 
 If no usable frontmatter is found, the filename or parent directory becomes the skill name.
+
+Built-in skill loading:
+
+- `builtinSkillEntries()` in `internal/app/builtin_skills.go` walks the embedded `skills/` tree exposed by the leaf package `ally-dev/internal/builtin_skills` and returns `SkillDefinition` entries with `Source="builtin"` and `embeddedContent` populated.
+- `readSkillContent()` returns `embeddedContent` directly for built-in skills; user/project skills still go through `os.ReadFile`.
+- Adding a built-in skill only requires creating `internal/builtin_skills/skills/<name>/SKILL.md` with YAML frontmatter — no other change is needed.
+
+Currently shipped built-in skills:
+
+- `playwright-cli` — drives a real browser through the `playwright-cli` npm package via `run_command`. On first use it checks for `playwright-cli` on PATH, asks the user before running `npm install -g @playwright/cli@latest`. Browser selection prefers system-installed browsers to avoid extra downloads: `--browser=msedge` on Windows (system Edge), and on macOS/Linux it probes for system Chrome/Edge before falling back to `ask` + `playwright-cli install-browser` chromium. The skill deliberately defers command/parameter details to `playwright-cli --help` and only documents Ally-specific integration conventions and the install/browser-detection workflow.
 
 ### Enable/Disable
 

@@ -817,6 +817,10 @@ type SkillDefinition struct {
 	Dir         string `json:"dir"`
 	Type        string `json:"type"`
 	WhenToUse   string `json:"whenToUse"`
+	// embeddedContent holds the full skill body for built-in skills embedded
+	// into the binary via go:embed. When non-empty, readers must use it
+	// directly instead of os.ReadFile(Path). Not serialized to JSON.
+	embeddedContent string
 }
 
 type BatchReadRequest struct {

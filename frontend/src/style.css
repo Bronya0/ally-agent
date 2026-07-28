@@ -503,6 +503,8 @@ code, pre {
   font-size: 16px;
   font-weight: 600;
   line-height: 20px;
+  /* + 是位于数学轴的对称符号,不需要为普通文本字形设计的向下补偿 */
+  padding: 0;
 }
 
 /* ── Composer info footer ── */
@@ -745,6 +747,8 @@ code, pre {
 .composer-info .extra-roots-icon {
   font-size: 14px;
   line-height: 1;
+  /* ⊞ (U+229E) 在紧凑 line-box 下视觉中心偏下,向上微调 1px 与行内其他元素对齐 */
+  transform: translateY(-1px);
 }
 
 .composer-info .extra-roots-count {

@@ -1,0 +1,772 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - generic [ref=e4]:
+      - heading [level=1] [ref=e5]:
+        - link "网易云音乐" [ref=e6] [cursor=pointer]:
+          - /url: /#
+      - list [ref=e7]:
+        - listitem [ref=e8]:
+          - link [ref=e10] [cursor=pointer]:
+            - /url: /#
+            - emphasis [ref=e11]: 发现音乐
+            - subscript [ref=e12]
+        - listitem [ref=e13]:
+          - link [ref=e15] [cursor=pointer]:
+            - /url: /my/
+            - emphasis [ref=e16]: 我的音乐
+        - listitem [ref=e17]:
+          - link [ref=e19] [cursor=pointer]:
+            - /url: /friend
+            - emphasis [ref=e20]: 关注
+        - listitem [ref=e21]:
+          - link [ref=e23] [cursor=pointer]:
+            - /url: /store/product
+            - emphasis [ref=e24]: 商城
+        - listitem [ref=e25]:
+          - link [ref=e27] [cursor=pointer]:
+            - /url: /musician/artist
+            - emphasis [ref=e28]: 音乐人
+        - listitem [ref=e29]:
+          - link [ref=e31] [cursor=pointer]:
+            - /url: https://music.163.com/st/ad-song
+            - emphasis [ref=e32]: 云推歌
+        - listitem [ref=e33]:
+          - link [ref=e35] [cursor=pointer]:
+            - /url: /download
+            - emphasis [ref=e36]: 下载客户端
+      - link "登录" [ref=e38] [cursor=pointer]:
+        - /url: "#"
+      - link "创作者中心" [ref=e39] [cursor=pointer]:
+        - /url: /creatorcenter
+      - generic [ref=e40]:
+        - generic [ref=e42]:
+          - textbox [ref=e43]
+          - generic [ref=e44]: 音乐/视频/电台/用户
+        - paragraph [ref=e46]: 现在支持搜索MV啦~
+    - list [ref=e49]:
+      - listitem [ref=e50]:
+        - link [ref=e51] [cursor=pointer]:
+          - /url: /discover
+          - emphasis [ref=e52]: 推荐
+      - listitem [ref=e53]:
+        - link [ref=e54] [cursor=pointer]:
+          - /url: /discover/toplist
+          - emphasis [ref=e55]: 排行榜
+      - listitem [ref=e56]:
+        - link [ref=e57] [cursor=pointer]:
+          - /url: /discover/playlist
+          - emphasis [ref=e58]: 歌单
+      - listitem [ref=e60]:
+        - link [ref=e61] [cursor=pointer]:
+          - /url: /discover/djradio
+          - emphasis [ref=e62]: 播客
+      - listitem [ref=e63]:
+        - link [ref=e64] [cursor=pointer]:
+          - /url: /discover/artist
+          - emphasis [ref=e65]: 歌手
+      - listitem [ref=e66]:
+        - link [ref=e67] [cursor=pointer]:
+          - /url: /discover/album
+          - emphasis [ref=e68]: 新碟上架
+  - iframe [ref=e69]:
+    - generic [ref=f1e1]:
+      - generic [ref=f1e5]:
+        - generic [ref=f1e6]:
+          - link [ref=f1e8] [cursor=pointer]:
+            - /url: https://music.163.com/#/album?id=388196110
+          - link "<" [ref=f1e10] [cursor=pointer]:
+            - /url: javascript:void(0)
+          - link ">" [ref=f1e11] [cursor=pointer]:
+            - /url: javascript:void(0)
+          - generic [ref=f1e12]:
+            - link [ref=f1e13] [cursor=pointer]:
+              - /url: "#"
+            - link [ref=f1e14] [cursor=pointer]:
+              - /url: "#"
+            - link [ref=f1e15] [cursor=pointer]:
+              - /url: "#"
+            - link [ref=f1e16] [cursor=pointer]:
+              - /url: "#"
+            - link [ref=f1e17] [cursor=pointer]:
+              - /url: "#"
+            - link [ref=f1e18] [cursor=pointer]:
+              - /url: "#"
+            - link [ref=f1e19] [cursor=pointer]:
+              - /url: "#"
+        - link "下载客户端" [ref=f1e21] [cursor=pointer]:
+          - /url: /download
+      - generic [ref=f1e24]:
+        - generic [ref=f1e27]:
+          - generic [ref=f1e28]:
+            - generic [ref=f1e29]:
+              - link "热门推荐" [ref=f1e30] [cursor=pointer]:
+                - /url: /discover/playlist/
+              - generic [ref=f1e31]:
+                - link "华语" [ref=f1e32] [cursor=pointer]:
+                  - /url: /discover/playlist/?cat=%E5%8D%8E%E8%AF%AD
+                - text: "|"
+                - link "流行" [ref=f1e33] [cursor=pointer]:
+                  - /url: /discover/playlist/?cat=%E6%B5%81%E8%A1%8C
+                - text: "|"
+                - link "摇滚" [ref=f1e34] [cursor=pointer]:
+                  - /url: /discover/playlist/?cat=%E6%91%87%E6%BB%9A
+                - text: "|"
+                - link "民谣" [ref=f1e35] [cursor=pointer]:
+                  - /url: /discover/playlist/?cat=%E6%B0%91%E8%B0%A3
+                - text: "|"
+                - link "电子" [ref=f1e36] [cursor=pointer]:
+                  - /url: /discover/playlist/?cat=%E7%94%B5%E5%AD%90
+              - link "更多" [ref=f1e38] [cursor=pointer]:
+                - /url: /discover/playlist/
+            - list [ref=f1e40]:
+              - listitem [ref=f1e41]:
+                - generic [ref=f1e42]:
+                  - link "「欧美Live」惊艳现场版，嗨到停不下来!" [ref=f1e44] [cursor=pointer]:
+                    - /url: /playlist?id=123816281
+                  - generic [ref=f1e45]:
+                    - link "播放" [ref=f1e46] [cursor=pointer]:
+                      - /url: javascript:;
+                    - generic [ref=f1e48]: 3409万
+                - paragraph [ref=f1e49]:
+                  - link "「欧美Live」惊艳现场版，嗨到停不下来!" [ref=f1e50] [cursor=pointer]:
+                    - /url: /playlist?id=123816281
+              - listitem [ref=f1e51]:
+                - generic [ref=f1e52]:
+                  - link "这些充满『强烈画面感』的音乐" [ref=f1e55] [cursor=pointer]:
+                    - /url: /playlist?id=156934569
+                  - generic [ref=f1e56]:
+                    - link "播放" [ref=f1e57] [cursor=pointer]:
+                      - /url: javascript:;
+                    - generic [ref=f1e59]: 7395万
+                - paragraph [ref=f1e60]:
+                  - link "这些充满『强烈画面感』的音乐" [ref=f1e61] [cursor=pointer]:
+                    - /url: /playlist?id=156934569
+              - listitem [ref=f1e62]:
+                - generic [ref=f1e63]:
+                  - link "开口沉醉 · 慵懒迷幻的欧美女声" [ref=f1e65] [cursor=pointer]:
+                    - /url: /playlist?id=2116417781
+                  - generic [ref=f1e66]:
+                    - link "播放" [ref=f1e67] [cursor=pointer]:
+                      - /url: javascript:;
+                    - generic [ref=f1e69]: 3260万
+                - paragraph [ref=f1e70]:
+                  - link "开口沉醉 · 慵懒迷幻的欧美女声" [ref=f1e71] [cursor=pointer]:
+                    - /url: /playlist?id=2116417781
+              - listitem [ref=f1e72]:
+                - generic [ref=f1e73]:
+                  - link "Vol.008 对谈·方玲：结婚的前提是我开始学会肯定自己" [ref=f1e75] [cursor=pointer]:
+                    - /url: /dj?id=3725405322
+                  - generic [ref=f1e76]:
+                    - link "播放" [ref=f1e77] [cursor=pointer]:
+                      - /url: javascript:;
+                    - generic [ref=f1e79]: "452"
+                - paragraph [ref=f1e80]:
+                  - link "Vol.008 对谈·方玲：结婚的前提是我开始学会肯定自己" [ref=f1e81] [cursor=pointer]:
+                    - /url: /dj?id=3725405322
+              - listitem [ref=f1e83]:
+                - generic [ref=f1e84]:
+                  - link "电音王国 | 荷兰" [ref=f1e86] [cursor=pointer]:
+                    - /url: /playlist?id=308905952
+                  - generic [ref=f1e87]:
+                    - link "播放" [ref=f1e88] [cursor=pointer]:
+                      - /url: javascript:;
+                    - generic [ref=f1e90]: 2530万
+                - paragraph [ref=f1e91]:
+                  - link "电音王国 | 荷兰" [ref=f1e92] [cursor=pointer]:
+                    - /url: /playlist?id=308905952
+              - listitem [ref=f1e93]:
+                - generic [ref=f1e94]:
+                  - link "东野圭吾，夜想，曲终……" [ref=f1e96] [cursor=pointer]:
+                    - /url: /dj?id=3725678177
+                  - generic [ref=f1e97]:
+                    - link "播放" [ref=f1e98] [cursor=pointer]:
+                      - /url: javascript:;
+                    - generic [ref=f1e100]: "2321"
+                - paragraph [ref=f1e101]:
+                  - link "东野圭吾，夜想，曲终……" [ref=f1e102] [cursor=pointer]:
+                    - /url: /dj?id=3725678177
+              - listitem [ref=f1e104]:
+                - generic [ref=f1e105]:
+                  - link "曾经是否有被一句歌词打动过" [ref=f1e107] [cursor=pointer]:
+                    - /url: /playlist?id=374820366
+                  - generic [ref=f1e108]:
+                    - link "播放" [ref=f1e109] [cursor=pointer]:
+                      - /url: javascript:;
+                    - generic [ref=f1e111]: 2619万
+                - paragraph [ref=f1e112]:
+                  - link "曾经是否有被一句歌词打动过" [ref=f1e113] [cursor=pointer]:
+                    - /url: /playlist?id=374820366
+              - listitem [ref=f1e114]:
+                - generic [ref=f1e115]:
+                  - link "快乐儿歌《蓝精灵》" [ref=f1e117] [cursor=pointer]:
+                    - /url: /dj?id=2500370166
+                  - generic [ref=f1e118]:
+                    - link "播放" [ref=f1e119] [cursor=pointer]:
+                      - /url: javascript:;
+                    - generic [ref=f1e121]: 6248万
+                - paragraph [ref=f1e122]:
+                  - link "快乐儿歌《蓝精灵》" [ref=f1e123] [cursor=pointer]:
+                    - /url: /dj?id=2500370166
+          - generic [ref=f1e125]:
+            - generic [ref=f1e126]:
+              - link "新碟上架" [ref=f1e127] [cursor=pointer]:
+                - /url: /discover/album/
+              - link "更多" [ref=f1e129] [cursor=pointer]:
+                - /url: /discover/album/
+            - generic [ref=f1e132]:
+              - link [ref=f1e133] [cursor=pointer]:
+                - /url: "#"
+              - generic [ref=f1e134]:
+                - list [ref=f1e135]:
+                  - listitem [ref=f1e136]:
+                    - link "也" [ref=f1e139] [cursor=pointer]:
+                      - /url: /album?id=386844698
+                    - paragraph [ref=f1e140]:
+                      - link "也" [ref=f1e141] [cursor=pointer]:
+                        - /url: /album?id=386844698
+                    - paragraph [ref=f1e142]:
+                      - link "李佳隆" [ref=f1e143] [cursor=pointer]:
+                        - /url: /artist?id=12079219
+                  - listitem [ref=f1e144]:
+                    - link "回响" [ref=f1e147] [cursor=pointer]:
+                      - /url: /album?id=384808686
+                    - paragraph [ref=f1e148]:
+                      - link "回响" [ref=f1e149] [cursor=pointer]:
+                        - /url: /album?id=384808686
+                    - paragraph [ref=f1e150]:
+                      - link "h3R3" [ref=f1e151] [cursor=pointer]:
+                        - /url: /artist?id=12631485
+                  - listitem [ref=f1e152]:
+                    - link "珍宝 Starlight" [ref=f1e155] [cursor=pointer]:
+                      - /url: /album?id=382222653
+                    - paragraph [ref=f1e156]:
+                      - link "珍宝 Starlight" [ref=f1e157] [cursor=pointer]:
+                        - /url: /album?id=382222653
+                    - paragraph [ref=f1e158]:
+                      - link "王赫野" [ref=f1e159] [cursor=pointer]:
+                        - /url: /artist?id=47091532
+                  - listitem [ref=f1e160]:
+                    - link "M&M" [ref=f1e163] [cursor=pointer]:
+                      - /url: /album?id=386864455
+                    - paragraph [ref=f1e164]:
+                      - link "M&M" [ref=f1e165] [cursor=pointer]:
+                        - /url: /album?id=386864455
+                    - paragraph [ref=f1e166]:
+                      - link "邓典果DDG" [ref=f1e167] [cursor=pointer]:
+                        - /url: /artist?id=12965215
+                  - listitem [ref=f1e168]:
+                    - link "无效人生" [ref=f1e171] [cursor=pointer]:
+                      - /url: /album?id=388013064
+                    - paragraph [ref=f1e172]:
+                      - link "无效人生" [ref=f1e173] [cursor=pointer]:
+                        - /url: /album?id=388013064
+                    - paragraph [ref=f1e174]:
+                      - link "尧十三" [ref=f1e175] [cursor=pointer]:
+                        - /url: /artist?id=4903
+                - list [ref=f1e176]:
+                  - listitem [ref=f1e177]:
+                    - link "安泊猜想" [ref=f1e180] [cursor=pointer]:
+                      - /url: /album?id=381824526
+                    - paragraph [ref=f1e181]:
+                      - link "安泊猜想" [ref=f1e182] [cursor=pointer]:
+                        - /url: /album?id=381824526
+                    - paragraph [ref=f1e183]:
+                      - link "许嵩" [ref=f1e184] [cursor=pointer]:
+                        - /url: /artist?id=5771
+                  - listitem [ref=f1e185]:
+                    - link "生死未定" [ref=f1e188] [cursor=pointer]:
+                      - /url: /album?id=383360243
+                    - paragraph [ref=f1e189]:
+                      - link "生死未定" [ref=f1e190] [cursor=pointer]:
+                        - /url: /album?id=383360243
+                    - paragraph [ref=f1e191]:
+                      - link "胡彦斌" [ref=f1e192] [cursor=pointer]:
+                        - /url: /artist?id=3066
+                  - listitem [ref=f1e193]:
+                    - link "荒芜之境" [ref=f1e196] [cursor=pointer]:
+                      - /url: /album?id=379554167
+                    - paragraph [ref=f1e197]:
+                      - link "荒芜之境" [ref=f1e198] [cursor=pointer]:
+                        - /url: /album?id=379554167
+                    - paragraph [ref=f1e199]:
+                      - link "陈楚生" [ref=f1e200] [cursor=pointer]:
+                        - /url: /artist?id=2124
+                  - listitem [ref=f1e201]:
+                    - link "祈祷之海 (I, the Ocean)" [ref=f1e204] [cursor=pointer]:
+                      - /url: /album?id=382435940
+                    - paragraph [ref=f1e205]:
+                      - link "祈祷之海 (I, the Ocean)" [ref=f1e206] [cursor=pointer]:
+                        - /url: /album?id=382435940
+                    - paragraph [ref=f1e207]:
+                      - link "冯沁苑(买辣椒也用券)" [ref=f1e208] [cursor=pointer]:
+                        - /url: /artist?id=12085562
+                  - listitem [ref=f1e209]:
+                    - link "MODEL" [ref=f1e212] [cursor=pointer]:
+                      - /url: /album?id=381164186
+                    - paragraph [ref=f1e213]:
+                      - link "MODEL" [ref=f1e214] [cursor=pointer]:
+                        - /url: /album?id=381164186
+                    - paragraph [ref=f1e215]:
+                      - link "李大奔BENZO" [ref=f1e216] [cursor=pointer]:
+                        - /url: /artist?id=12277473
+                - list [ref=f1e217]:
+                  - listitem [ref=f1e218]:
+                    - link "也" [ref=f1e221] [cursor=pointer]:
+                      - /url: /album?id=386844698
+                    - paragraph [ref=f1e222]:
+                      - link "也" [ref=f1e223] [cursor=pointer]:
+                        - /url: /album?id=386844698
+                    - paragraph [ref=f1e224]:
+                      - link "李佳隆" [ref=f1e225] [cursor=pointer]:
+                        - /url: /artist?id=12079219
+                  - listitem [ref=f1e226]:
+                    - link "回响" [ref=f1e229] [cursor=pointer]:
+                      - /url: /album?id=384808686
+                    - paragraph [ref=f1e230]:
+                      - link "回响" [ref=f1e231] [cursor=pointer]:
+                        - /url: /album?id=384808686
+                    - paragraph [ref=f1e232]:
+                      - link "h3R3" [ref=f1e233] [cursor=pointer]:
+                        - /url: /artist?id=12631485
+                  - listitem [ref=f1e234]:
+                    - link "珍宝 Starlight" [ref=f1e237] [cursor=pointer]:
+                      - /url: /album?id=382222653
+                    - paragraph [ref=f1e238]:
+                      - link "珍宝 Starlight" [ref=f1e239] [cursor=pointer]:
+                        - /url: /album?id=382222653
+                    - paragraph [ref=f1e240]:
+                      - link "王赫野" [ref=f1e241] [cursor=pointer]:
+                        - /url: /artist?id=47091532
+                  - listitem [ref=f1e242]:
+                    - link "M&M" [ref=f1e245] [cursor=pointer]:
+                      - /url: /album?id=386864455
+                    - paragraph [ref=f1e246]:
+                      - link "M&M" [ref=f1e247] [cursor=pointer]:
+                        - /url: /album?id=386864455
+                    - paragraph [ref=f1e248]:
+                      - link "邓典果DDG" [ref=f1e249] [cursor=pointer]:
+                        - /url: /artist?id=12965215
+                  - listitem [ref=f1e250]:
+                    - link "无效人生" [ref=f1e253] [cursor=pointer]:
+                      - /url: /album?id=388013064
+                    - paragraph [ref=f1e254]:
+                      - link "无效人生" [ref=f1e255] [cursor=pointer]:
+                        - /url: /album?id=388013064
+                    - paragraph [ref=f1e256]:
+                      - link "尧十三" [ref=f1e257] [cursor=pointer]:
+                        - /url: /artist?id=4903
+                - list [ref=f1e258]:
+                  - listitem [ref=f1e259]:
+                    - link "安泊猜想" [ref=f1e262] [cursor=pointer]:
+                      - /url: /album?id=381824526
+                    - paragraph [ref=f1e263]:
+                      - link "安泊猜想" [ref=f1e264] [cursor=pointer]:
+                        - /url: /album?id=381824526
+                    - paragraph [ref=f1e265]:
+                      - link "许嵩" [ref=f1e266] [cursor=pointer]:
+                        - /url: /artist?id=5771
+                  - listitem [ref=f1e267]:
+                    - link "生死未定" [ref=f1e270] [cursor=pointer]:
+                      - /url: /album?id=383360243
+                    - paragraph [ref=f1e271]:
+                      - link "生死未定" [ref=f1e272] [cursor=pointer]:
+                        - /url: /album?id=383360243
+                    - paragraph [ref=f1e273]:
+                      - link "胡彦斌" [ref=f1e274] [cursor=pointer]:
+                        - /url: /artist?id=3066
+                  - listitem [ref=f1e275]:
+                    - link "荒芜之境" [ref=f1e278] [cursor=pointer]:
+                      - /url: /album?id=379554167
+                    - paragraph [ref=f1e279]:
+                      - link "荒芜之境" [ref=f1e280] [cursor=pointer]:
+                        - /url: /album?id=379554167
+                    - paragraph [ref=f1e281]:
+                      - link "陈楚生" [ref=f1e282] [cursor=pointer]:
+                        - /url: /artist?id=2124
+                  - listitem [ref=f1e283]:
+                    - link "祈祷之海 (I, the Ocean)" [ref=f1e286] [cursor=pointer]:
+                      - /url: /album?id=382435940
+                    - paragraph [ref=f1e287]:
+                      - link "祈祷之海 (I, the Ocean)" [ref=f1e288] [cursor=pointer]:
+                        - /url: /album?id=382435940
+                    - paragraph [ref=f1e289]:
+                      - link "冯沁苑(买辣椒也用券)" [ref=f1e290] [cursor=pointer]:
+                        - /url: /artist?id=12085562
+                  - listitem [ref=f1e291]:
+                    - link "MODEL" [ref=f1e294] [cursor=pointer]:
+                      - /url: /album?id=381164186
+                    - paragraph [ref=f1e295]:
+                      - link "MODEL" [ref=f1e296] [cursor=pointer]:
+                        - /url: /album?id=381164186
+                    - paragraph [ref=f1e297]:
+                      - link "李大奔BENZO" [ref=f1e298] [cursor=pointer]:
+                        - /url: /artist?id=12277473
+              - link [ref=f1e299] [cursor=pointer]:
+                - /url: "#"
+          - generic [ref=f1e300]:
+            - generic [ref=f1e301]:
+              - link "榜单" [ref=f1e302] [cursor=pointer]:
+                - /url: /discover/toplist
+              - link "更多" [ref=f1e304] [cursor=pointer]:
+                - /url: /discover/toplist
+            - generic [ref=f1e306]:
+              - generic [ref=f1e307]:
+                - term [ref=f1e308]:
+                  - link "飙升榜" [ref=f1e311] [cursor=pointer]:
+                    - /url: /discover/toplist?id=19723756
+                  - generic [ref=f1e312]:
+                    - link [ref=f1e313] [cursor=pointer]:
+                      - /url: /discover/toplist?id=19723756
+                      - heading "飙升榜" [level=3] [ref=f1e314]
+                    - generic:
+                      - link "播放" [ref=f1e315] [cursor=pointer]:
+                        - /url: javascript:;
+                      - link "收藏" [ref=f1e316] [cursor=pointer]:
+                        - /url: javascript:;
+                - definition [ref=f1e317]:
+                  - list [ref=f1e318]:
+                    - listitem [ref=f1e319]:
+                      - generic [ref=f1e320]: "1"
+                      - link "神选" [ref=f1e321] [cursor=pointer]:
+                        - /url: /song?id=3410245671
+                    - listitem [ref=f1e322]:
+                      - generic [ref=f1e323]: "2"
+                      - link "天生牙" [ref=f1e324] [cursor=pointer]:
+                        - /url: /song?id=3410220430
+                    - listitem [ref=f1e325]:
+                      - generic [ref=f1e326]: "3"
+                      - link "Lost" [ref=f1e327] [cursor=pointer]:
+                        - /url: /song?id=479979029
+                    - listitem [ref=f1e328]:
+                      - generic [ref=f1e329]: "4"
+                      - link "蜈蚣" [ref=f1e330] [cursor=pointer]:
+                        - /url: /song?id=3410240174
+                    - listitem [ref=f1e331]:
+                      - generic [ref=f1e332]: "5"
+                      - link "亲爱的" [ref=f1e333] [cursor=pointer]:
+                        - /url: /song?id=1919891734
+                    - listitem [ref=f1e334]:
+                      - generic [ref=f1e335]: "6"
+                      - link "泣" [ref=f1e336] [cursor=pointer]:
+                        - /url: /song?id=3410254170
+                    - listitem [ref=f1e337]:
+                      - generic [ref=f1e338]: "7"
+                      - link "缓缓" [ref=f1e339] [cursor=pointer]:
+                        - /url: /song?id=2624575315
+                    - listitem [ref=f1e340]:
+                      - generic [ref=f1e341]: "8"
+                      - link "Cousin" [ref=f1e342] [cursor=pointer]:
+                        - /url: /song?id=3410245484
+                    - listitem [ref=f1e343]:
+                      - generic [ref=f1e344]: "9"
+                      - link "飞蛾" [ref=f1e345] [cursor=pointer]:
+                        - /url: /song?id=3410243862
+                    - listitem [ref=f1e346]:
+                      - generic [ref=f1e347]: "10"
+                      - link "艾比还是哭了" [ref=f1e348] [cursor=pointer]:
+                        - /url: /song?id=3384013182
+                  - link "查看全部>" [ref=f1e350] [cursor=pointer]:
+                    - /url: /discover/toplist?id=19723756
+              - generic [ref=f1e351]:
+                - term [ref=f1e352]:
+                  - link "新歌榜" [ref=f1e355] [cursor=pointer]:
+                    - /url: /discover/toplist?id=3779629
+                  - generic [ref=f1e356]:
+                    - link [ref=f1e357] [cursor=pointer]:
+                      - /url: /discover/toplist?id=3779629
+                      - heading "新歌榜" [level=3] [ref=f1e358]
+                    - generic:
+                      - link "播放" [ref=f1e359] [cursor=pointer]:
+                        - /url: javascript:;
+                      - link "收藏" [ref=f1e360] [cursor=pointer]:
+                        - /url: javascript:;
+                - definition [ref=f1e361]:
+                  - list [ref=f1e362]:
+                    - listitem [ref=f1e363]:
+                      - generic [ref=f1e364]: "1"
+                      - link "甲乙丙丁 (你我怎么两清)" [ref=f1e365] [cursor=pointer]:
+                        - /url: /song?id=3399839173
+                    - listitem [ref=f1e366]:
+                      - generic [ref=f1e367]: "2"
+                      - link "神选" [ref=f1e368] [cursor=pointer]:
+                        - /url: /song?id=3410245671
+                    - listitem [ref=f1e369]:
+                      - generic [ref=f1e370]: "3"
+                      - link "天生牙" [ref=f1e371] [cursor=pointer]:
+                        - /url: /song?id=3410220430
+                    - listitem [ref=f1e372]:
+                      - generic [ref=f1e373]: "4"
+                      - link "周旋" [ref=f1e374] [cursor=pointer]:
+                        - /url: /song?id=3404238777
+                    - listitem [ref=f1e375]:
+                      - generic [ref=f1e376]: "5"
+                      - link "蜈蚣" [ref=f1e377] [cursor=pointer]:
+                        - /url: /song?id=3410240174
+                    - listitem [ref=f1e378]:
+                      - generic [ref=f1e379]: "6"
+                      - link "泣" [ref=f1e380] [cursor=pointer]:
+                        - /url: /song?id=3410254170
+                    - listitem [ref=f1e381]:
+                      - generic [ref=f1e382]: "7"
+                      - link "我和我的现金" [ref=f1e383] [cursor=pointer]:
+                        - /url: /song?id=3410228672
+                    - listitem [ref=f1e384]:
+                      - generic [ref=f1e385]: "8"
+                      - link "Cousin" [ref=f1e386] [cursor=pointer]:
+                        - /url: /song?id=3410245484
+                    - listitem [ref=f1e387]:
+                      - generic [ref=f1e388]: "9"
+                      - link "空心 (Live版)" [ref=f1e389] [cursor=pointer]:
+                        - /url: /song?id=3407803435
+                    - listitem [ref=f1e390]:
+                      - generic [ref=f1e391]: "10"
+                      - link "Peison Soul" [ref=f1e392] [cursor=pointer]:
+                        - /url: /song?id=3398898119
+                  - link "查看全部>" [ref=f1e394] [cursor=pointer]:
+                    - /url: /discover/toplist?id=3779629
+              - generic [ref=f1e395]:
+                - term [ref=f1e396]:
+                  - link "原创榜" [ref=f1e399] [cursor=pointer]:
+                    - /url: /discover/toplist?id=2884035
+                  - generic [ref=f1e400]:
+                    - link [ref=f1e401] [cursor=pointer]:
+                      - /url: /discover/toplist?id=2884035
+                      - heading "原创榜" [level=3] [ref=f1e402]
+                    - generic:
+                      - link "播放" [ref=f1e403] [cursor=pointer]:
+                        - /url: javascript:;
+                      - link "收藏" [ref=f1e404] [cursor=pointer]:
+                        - /url: javascript:;
+                - definition [ref=f1e405]:
+                  - list [ref=f1e406]:
+                    - listitem [ref=f1e407]:
+                      - generic [ref=f1e408]: "1"
+                      - link "文脉" [ref=f1e409] [cursor=pointer]:
+                        - /url: /song?id=3404824731
+                    - listitem [ref=f1e410]:
+                      - generic [ref=f1e411]: "2"
+                      - link "萤火" [ref=f1e412] [cursor=pointer]:
+                        - /url: /song?id=3402163617
+                    - listitem [ref=f1e413]:
+                      - generic [ref=f1e414]: "3"
+                      - link "Talk like me(像我这样说) (Live)" [ref=f1e415] [cursor=pointer]:
+                        - /url: /song?id=3407933090
+                    - listitem [ref=f1e416]:
+                      - generic [ref=f1e417]: "4"
+                      - link "嘿陈会计 (Live)" [ref=f1e418] [cursor=pointer]:
+                        - /url: /song?id=3407932370
+                    - listitem [ref=f1e419]:
+                      - generic [ref=f1e420]: "5"
+                      - link "毕业照" [ref=f1e421] [cursor=pointer]:
+                        - /url: /song?id=3407323768
+                    - listitem [ref=f1e422]:
+                      - generic [ref=f1e423]: "6"
+                      - link "问爱 (Live)" [ref=f1e424] [cursor=pointer]:
+                        - /url: /song?id=3407932555
+                    - listitem [ref=f1e425]:
+                      - generic [ref=f1e426]: "7"
+                      - link "也" [ref=f1e427] [cursor=pointer]:
+                        - /url: /song?id=3406222379
+                    - listitem [ref=f1e428]:
+                      - generic [ref=f1e429]: "8"
+                      - link "废柴" [ref=f1e430] [cursor=pointer]:
+                        - /url: /song?id=3406260106
+                    - listitem [ref=f1e431]:
+                      - generic [ref=f1e432]: "9"
+                      - link "旁观诗人" [ref=f1e433] [cursor=pointer]:
+                        - /url: /song?id=3406187771
+                    - listitem [ref=f1e434]:
+                      - generic [ref=f1e435]: "10"
+                      - link "伦敦雨季" [ref=f1e436] [cursor=pointer]:
+                        - /url: /song?id=3382228539
+                  - link "查看全部>" [ref=f1e438] [cursor=pointer]:
+                    - /url: /discover/toplist?id=2884035
+        - generic [ref=f1e439]:
+          - generic [ref=f1e443]:
+            - paragraph [ref=f1e444]: 登录网易云音乐，可以享受无限收藏的乐趣，并且无限同步到手机
+            - link "用户登录" [ref=f1e445] [cursor=pointer]:
+              - /url: "#"
+          - generic [ref=f1e446]:
+            - heading "入驻歌手 查看全部 >" [level=3] [ref=f1e447]:
+              - generic [ref=f1e448]: 入驻歌手
+              - link "查看全部 >" [ref=f1e449] [cursor=pointer]:
+                - /url: /discover/artist/signed/
+            - list [ref=f1e450]:
+              - listitem [ref=f1e451]:
+                - link [ref=f1e452] [cursor=pointer]:
+                  - /url: /user/home?id=29879272
+                  - generic [ref=f1e455]:
+                    - heading "张惠妹aMEI" [level=4] [ref=f1e456]
+                    - paragraph [ref=f1e458]: 台湾歌手张惠妹
+              - listitem [ref=f1e459]:
+                - link [ref=f1e460] [cursor=pointer]:
+                  - /url: /user/home?id=650120
+                  - generic [ref=f1e463]:
+                    - heading "吴莫愁Momo" [level=4] [ref=f1e464]
+                    - paragraph [ref=f1e466]: 《中国好声音》选手吴莫愁
+              - listitem [ref=f1e467]:
+                - link [ref=f1e468] [cursor=pointer]:
+                  - /url: /user/home?id=198554
+                  - generic [ref=f1e471]:
+                    - heading "孙楠" [level=4] [ref=f1e472]
+                    - paragraph [ref=f1e474]: 歌手孙楠 代表作《你快回来》《燃烧》
+              - listitem [ref=f1e475]:
+                - link [ref=f1e476] [cursor=pointer]:
+                  - /url: /user/home?id=2000268
+                  - generic [ref=f1e479]:
+                    - heading "麦田老狼" [level=4] [ref=f1e480]
+                    - paragraph [ref=f1e482]: 歌手，音乐人。代表作《同桌的你》等。
+              - listitem [ref=f1e483]:
+                - link [ref=f1e484] [cursor=pointer]:
+                  - /url: /user/home?id=39002
+                  - generic [ref=f1e487]:
+                    - heading "陈楚生" [level=4] [ref=f1e488]
+                    - paragraph [ref=f1e490]: 唱作歌手
+            - link "申请成为网易音乐人" [ref=f1e492] [cursor=pointer]:
+              - /url: /recruit
+          - generic [ref=f1e493]:
+            - heading "热门主播" [level=3] [ref=f1e494]
+            - list [ref=f1e495]:
+              - listitem [ref=f1e496]:
+                - link [ref=f1e497] [cursor=pointer]:
+                  - /url: /user/home?id=278438485
+                - generic [ref=f1e499]:
+                  - paragraph [ref=f1e500]:
+                    - link "陈立" [ref=f1e501] [cursor=pointer]:
+                      - /url: /user/home?id=278438485
+                  - paragraph [ref=f1e502]: 心理学家、美食家陈立教授
+              - listitem [ref=f1e503]:
+                - link [ref=f1e504] [cursor=pointer]:
+                  - /url: /user/home?id=559210341
+                - generic [ref=f1e506]:
+                  - paragraph [ref=f1e507]:
+                    - link "刘维-Julius" [ref=f1e508] [cursor=pointer]:
+                      - /url: /user/home?id=559210341
+                  - paragraph [ref=f1e509]: 歌手、播客节目《维维道来》主理人
+              - listitem [ref=f1e510]:
+                - link [ref=f1e511] [cursor=pointer]:
+                  - /url: /user/home?id=259292486
+                - generic [ref=f1e513]:
+                  - paragraph [ref=f1e514]:
+                    - link "莫非定律乐团" [ref=f1e515] [cursor=pointer]:
+                      - /url: /user/home?id=259292486
+                  - paragraph [ref=f1e516]: 男女双人全创作独立乐团
+              - listitem [ref=f1e517]:
+                - link [ref=f1e518] [cursor=pointer]:
+                  - /url: /user/home?id=1450418799
+                - generic [ref=f1e520]:
+                  - paragraph [ref=f1e521]:
+                    - link "碎嘴许美达" [ref=f1e522] [cursor=pointer]:
+                      - /url: /user/home?id=1450418799
+                  - paragraph [ref=f1e523]: 脱口秀网络红人
+              - listitem [ref=f1e524]:
+                - link [ref=f1e525] [cursor=pointer]:
+                  - /url: /user/home?id=2688170
+                - generic [ref=f1e527]:
+                  - paragraph [ref=f1e528]:
+                    - link "银临Rachel" [ref=f1e529] [cursor=pointer]:
+                      - /url: /user/home?id=2688170
+                  - paragraph
+      - generic [ref=f1e532]:
+        - list [ref=f1e533]:
+          - listitem [ref=f1e534]:
+            - link [ref=f1e535] [cursor=pointer]:
+              - /url: //music.163.com/st/web-sublicense/home
+            - generic [ref=f1e536]: 云村交易所
+          - listitem [ref=f1e537]:
+            - link [ref=f1e538] [cursor=pointer]:
+              - /url: https://xstudio.music.163.com
+            - generic [ref=f1e539]: X StudioAI歌手
+          - listitem [ref=f1e540]:
+            - link [ref=f1e541] [cursor=pointer]:
+              - /url: //music.163.com/st/userbasic#/auth
+            - generic [ref=f1e542]: 用户认证
+          - listitem [ref=f1e543]:
+            - link [ref=f1e544] [cursor=pointer]:
+              - /url: https://tianyin.music.163.com
+            - generic [ref=f1e545]: 天音AI写歌
+          - listitem [ref=f1e546]:
+            - link [ref=f1e547] [cursor=pointer]:
+              - /url: https://music.163.com/st/ad-song
+            - generic [ref=f1e548]: 云推歌
+          - listitem [ref=f1e549]:
+            - link [ref=f1e550] [cursor=pointer]:
+              - /url: //music.163.com/web/reward
+            - generic [ref=f1e551]: 赞赏
+        - generic [ref=f1e552]:
+          - paragraph [ref=f1e553]:
+            - link "服务条款" [ref=f1e554] [cursor=pointer]:
+              - /url: //st.music.163.com/official-terms/service
+            - text: "|"
+            - link "隐私政策" [ref=f1e555] [cursor=pointer]:
+              - /url: //st.music.163.com/official-terms/privacy
+            - text: "|"
+            - link "儿童隐私政策" [ref=f1e556] [cursor=pointer]:
+              - /url: //st.music.163.com/official-terms/children
+            - text: "|"
+            - link "版权投诉" [ref=f1e557] [cursor=pointer]:
+              - /url: //music.163.com/st/staticdeal/complaints.html
+            - text: "|"
+            - link "投资者关系" [ref=f1e558] [cursor=pointer]:
+              - /url: http://ir.music.163.com
+            - text: "|"
+            - link "广告合作" [ref=f1e559] [cursor=pointer]:
+              - /url: https://music.163.com/ui/resource
+            - text: "|"
+            - link "联系我们" [ref=f1e560] [cursor=pointer]:
+              - /url: //mp.music.163.com/600948c936c13f4d09752e73/contact-us-web/index.html?source=Music-Main-Station
+          - paragraph [ref=f1e561]:
+            - link "廉正举报" [ref=f1e562] [cursor=pointer]:
+              - /url: https://jubao.163.com
+            - text: "不良信息举报邮箱: 51jubao@service.netease.com"
+          - paragraph [ref=f1e563]:
+            - text: 互联网宗教信息服务许可证：浙（2022）0000120 增值电信业务经营许可证：浙B2-20150198
+            - link "粤B2-20090191-18 浙ICP备15006616号-4 工业和信息化部备案管理系统网站" [ref=f1e564] [cursor=pointer]:
+              - /url: https://beian.miit.gov.cn/#/Integrated/index
+          - paragraph [ref=f1e565]:
+            - text: 网易公司版权所有©1997-2026杭州乐读科技有限公司运营：
+            - link "浙网文[2024] 0900-042号" [ref=f1e566] [cursor=pointer]:
+              - /url: https://p6.music.126.net/obj/wonDlsKUwrLClGjCm8Kx/34942157981/2e30/30c1/ad1f/7be053a28e91dd8bafe49bdf6455cb2a.png
+            - link "浙公网安备 33010802013307号":
+              - /url: http://www.beian.gov.cn/portal/registerSystemInfo?recordcode=33010902002564
+            - link "算法服务公示信息":
+              - /url: https://y.music.163.com/m/at/661f2af6e36f7c50ead8994b
+      - paragraph
+      - iframe [ref=f1e568]:
+        
+  - generic [ref=e70]:
+    - link [ref=e72] [cursor=pointer]:
+      - /url: javascript:;
+    - generic "展开播放条" [ref=e74] [cursor=pointer]
+    - generic [ref=e75]:
+      - generic [ref=e76]:
+        - link "上一首" [ref=e77] [cursor=pointer]:
+          - /url: javascript:;
+        - link "播放/暂停" [ref=e78] [cursor=pointer]:
+          - /url: javascript:;
+        - link "下一首" [ref=e79] [cursor=pointer]:
+          - /url: javascript:;
+      - link [ref=e82] [cursor=pointer]:
+        - /url: javascript:;
+      - generic [ref=e88]:
+        - emphasis [ref=e89]: 00:00
+        - text: / 00:00
+      - generic [ref=e90]:
+        - link "画中画歌词" [ref=e91] [cursor=pointer]:
+          - /url: javascript:;
+        - link "收藏" [ref=e92] [cursor=pointer]:
+          - /url: javascript:;
+        - link "分享" [ref=e93] [cursor=pointer]:
+          - /url: javascript:;
+      - generic [ref=e94]:
+        - link [ref=e95] [cursor=pointer]:
+          - /url: javascript:;
+        - link "循环" [ref=e96] [cursor=pointer]:
+          - /url: javascript:;
+        - link "0" [ref=e98] [cursor=pointer]:
+          - /url: javascript:;
+        - link [ref=e99] [cursor=pointer]:
+          - /url: javascript:;
+  - iframe [ref=e100]:
+    
+  - paragraph
