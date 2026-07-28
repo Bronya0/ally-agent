@@ -53,44 +53,53 @@ Publishing the Release triggers `.github/workflows/build.yml`, which builds and 
 ```
 ├── main.go                   # Wails 应用入口、窗口选项和 App 绑定
 ├── internal/
-│   ├── app/                  # Agent 编排、Wails API 适配和共享运行状态
-│   │   ├── app.go            # Chat loop、配置、会话和工具 dispatch
-│   │   ├── model_provider.go # OpenAI Chat / Responses / Anthropic 流式适配
-│   │   ├── desktop_host.go   # Wails 生命周期、窗口和系统对话框
-│   │   ├── host_events.go    # host-neutral eventSink 边界
-│   │   ├── command_safety.go # checkCommandSafety 边界（消费 command 语义分析）
-│   │   ├── git_tools.go      # Git 编排（gitDiffMu、超时、取消）
-│   │   ├── grep.go           # grep 编排（workspace 解析、dependency 事件）
-│   │   ├── read.go           # read 编排（并行批量读取、有界预览）
-│   │   ├── file_edit.go      # 编辑执行（fileOpsMu、原子写入、回滚）
-│   │   ├── file_edit_plan.go # 编辑批次归一化唯一边界
-│   │   ├── batch_policy.go   # 工具批次冲突检测
-│   │   ├── scheduler.go      # 计划任务管理器
-│   │   ├── services.go       # 后台进程管理器
-│   │   ├── memory.go         # memory 工具薄包装（注入 Runtime）
-│   │   ├── module_bridges.go # 工具 DTO 别名与 provider 归一化
-│   │   └── *_test.go         # 后端边界与领域测试
+│   ├── app/                  # Agent 核心与编排（见下方文件命名约定）
 │   ├── builtin_skills/       # 内置 skill 嵌入资源（go:embed）
 │   ├── host/                 # Wails EventsEmit 宿主适配
 │   ├── provider/             # Provider 格式、Base URL 和 token 参数归一化
 │   ├── platform/process/     # 跨平台子进程窗口与进程树控制
-│   └── tools/
-│       ├── calculate/        # 纯数学计算工具
-│       ├── command/          # 命令安全解析：重定向/路径/风险模式匹配
-│       ├── edit/             # 编辑 Diff、变更范围等纯算法
-│       ├── git/              # git porcelain/unified-diff 解析纯算法
-│       ├── grep/             # ripgrep 封装与结果归一化纯算法
-│       ├── memory/           # 记忆 Markdown frontmatter 解析 + 编排（Runtime 注入）
-│       ├── pathutil/         # 工作区路径解析与安全检查（Runtime 注入）
-│       ├── read/             # 文本读取、版本令牌、原子写入与文档文本抽取
-│       ├── scheduler/        # 计划任务调度解析、校验与下次执行计算
-│       ├── service/          # 后台进程 rolling buffer 与长命令检测
-│       └── shared/           # 跨工具编码错误（errors）与内置工具 schema（builtins）
+│   └── tools/                # 工具纯算法层（无 *App / ConfigState 依赖）
 ├── frontend/                 # Vue 3 前端和生成的 Wails 绑定
 ├── scripts/                  # 构建与打包脚本
 ├── third_party/              # 第三方许可证文件
 └── build/                    # 构建资源和平台元数据
 ```
+
+### `internal/app/` 文件命名约定
+
+`internal/app/` 下的文件按层级前缀命名，前缀直接表明文件的职责归属：
+
+| 前缀 | 层级 | 职责 |
+|------|------|------|
+| 无 | 核心 | `app.go` 持有 chat loop、`*App` 长生命周期状态和 `executeTool()` dispatch |
+| `prov_` | Provider 适配 | OpenAI/Anthropic 流式适配、代理配置 |
+| `host_` | Host 桥接 | Wails 生命周期、窗口、对话框、eventSink 边界、子进程与任务栏控制 |
+| `orch_` | 工具编排 | 绑定 `internal/tools/` 纯算法到 `*App` 状态：路径解析、并行调度、互斥锁、原子写入、批次策略、安全边界 |
+| `infra_` | 工具基础设施 | 跨编排共享：结果信封与压缩、流式节流、DTO 别名与归一化 |
+| `biz_` | 业务模块 | 独立功能：skills 发现与加载、系统提示词构建、项目上下文、MCP 生命周期、版本检查 |
+
+约定：
+- `orch_<name>.go` 对应 `internal/tools/<name>/` 的纯算法，两者构成一个工具的完整实现。
+- 测试文件跟随被测文件：`<prefix>_<name>_test.go` 或跨编排的 `orch_test.go`。
+- 新增工具编排写 `orch_<name>.go`；新增 host 能力写 `host_<name>.go`；新增独立业务写 `biz_<name>.go`。
+
+### `internal/tools/` 纯算法层
+
+每个子目录是一个工具的纯算法实现，不依赖 `*App`、`ConfigState` 或任何 app 包符号：
+
+- `calculate/` — 纯数学计算
+- `command/` — 命令安全解析：重定向/路径/风险模式匹配
+- `edit/` — 编辑 Diff、变更范围
+- `git/` — git porcelain / unified-diff 解析
+- `grep/` — ripgrep 封装与结果归一化
+- `memory/` — 记忆 Markdown frontmatter 解析 + 编排（Runtime 注入）
+- `pathutil/` — 工作区路径解析与安全检查（Runtime 注入）
+- `read/` — 文本读取、版本令牌、原子写入、文档文本抽取
+- `scheduler/` — 计划任务调度解析、校验与下次执行计算
+- `service/` — 后台进程 rolling buffer 与长命令检测
+- `shared/` — 跨工具编码错误（`CodedError`）与内置工具 schema
+
+需要访问 `*App` 状态的编排逻辑放在 `internal/app/orch_*.go`，纯算法放在这里。
 
 ---
 
@@ -98,7 +107,7 @@ Publishing the Release triggers `.github/workflows/build.yml`, which builds and 
 
 Ally is a Wails v2 desktop AI coding agent.
 
-The backend is a Go application bound into the frontend through Wails. The frontend is a Vue 3 single-page desktop UI using Naive UI. The LLM-facing core is provider-neutral: `internal/app/model_provider.go` owns the provider wire adapters, while `internal/provider` owns provider-format and default-value normalization.
+The backend is a Go application bound into the frontend through Wails. The frontend is a Vue 3 single-page desktop UI using Naive UI. The LLM-facing core is provider-neutral: `internal/app/prov_model.go` owns the provider wire adapters, while `internal/provider` owns provider-format and default-value normalization.
 
 Core runtime flow:
 
@@ -161,7 +170,7 @@ Important config behavior:
 
 ## Model Provider Layer
 
-Provider adaptation lives in `model_provider.go`.
+Provider adaptation lives in `prov_model.go`.
 
 Supported API formats:
 
@@ -440,7 +449,7 @@ Range semantics for model-facing reads:
 
 The model-facing `edit` tool has one cross-file batch exact-replacement mode. Line-range and legacy exact-string helpers remain backend compatibility APIs and are not exposed to the model.
 
-`planLocalEditBatch()` in `file_edit_plan.go` is the **only** normalization boundary for local model-facing edits. Both `batch_policy.go` conflict detection and `file_edit.go` execution must consume that plan; do not independently parse, canonicalize, or merge `edit.files` in either layer. Pure diff and changed-range algorithms live in `internal/tools/edit`; `internal/app/edit_bridge.go` is the compatibility boundary for app-owned edit execution.
+`planLocalEditBatch()` in `orch_edit_plan.go` is the **only** normalization boundary for local model-facing edits. Both `orch_batch_policy.go` conflict detection and `orch_edit.go` execution must consume that plan; do not independently parse, canonicalize, or merge `edit.files` in either layer. Pure diff and changed-range algorithms live in `internal/tools/edit`; `orch_edit.go` is the app-owned execution boundary for local edits.
 
 Edit parameters:
 
@@ -700,7 +709,7 @@ Example MCP config:
 - Read-only local tools may inspect explicit absolute paths outside the workspace subject to safety checks.
 - `run_command` keeps cwd inside the workspace, permits outside reads, null-device redirection, and creation of new outside paths, but refuses commands that may modify/delete existing outside paths or perform explicit deletion.
 - Command safety uses lightweight shell-aware invocation parsing in `internal/tools/command`: quoted/search data is not treated as executable syntax, nested shell payloads and command substitutions are inspected, managed deletions are allowed only when every deletion in the compound command is managed, and source/destination-aware mutation analysis checks explicit write targets rather than every referenced path.
-- `checkCommandSafety()` in `command_safety.go` is the app-owned boundary for workspace roots, path existence, `E_COMMAND_BLOCKED` / `E_PATH_OUTSIDE`, and user-facing explanations; it must consume the command package's semantic analysis instead of adding independent full-string risk regexes.
+- `checkCommandSafety()` in `orch_command_safety.go` is the app-owned boundary for workspace roots, path existence, `E_COMMAND_BLOCKED` / `E_PATH_OUTSIDE`, and user-facing explanations; it must consume the command package's semantic analysis instead of adding independent full-string risk regexes.
 - The model-facing system prompt and `run_command` schema explain how to recover from `E_PATH_OUTSIDE`: read the Chinese reason/target, avoid unchanged retries, choose a new or workspace target, and replace dynamic redirections with literal paths.
 - Prefer `delete_path` / `remote_delete_path` over shell deletion.
 - `readTextFile` rejects binary files using NUL checks.
@@ -741,10 +750,10 @@ These rules are required for future changes. They exist to keep Agent behavior d
 
 - Treat `app.go` as orchestration only: chat-loop control flow, run/session state, and coordination between domain modules belong there. New domain logic should move to the owning module instead of enlarging `app.go`.
 - Keep the Agent core host-neutral. Core/runtime files must not import Wails runtime packages or call `runtime.EventsEmit`, window APIs, dialogs, browser APIs, or OS desktop integration directly.
-- Put Wails lifecycle, window management, directory/file-manager integration, and other desktop behavior in `desktop_host.go`.
+- Put Wails lifecycle, window management, directory/file-manager integration, and other desktop behavior in `host_desktop.go`.
 - Publish UI/runtime events only through the `eventSink` boundary in `host_events.go`; preserve event names, payload shapes, session routing, and terminal-event rules when changing implementations.
-- Keep provider-specific request/response types behind `model_provider.go`; do not leak OpenAI, Responses, or Anthropic wire details into `app.go` or generic tool orchestration.
-- Keep each cross-layer contract at one source of truth: `chatTools()` for schemas, `executeTool()` for strict dispatch/decoding, `file_edit_plan.go` for local edit normalization, `batch_policy.go` for batch barriers/conflicts, `file_edit.go` for app-owned edit execution, `internal/tools/edit` for pure diff/range algorithms, `internal/tools/pathutil` for workspace path resolution and safety checks, `result.go` for result envelopes/compaction, and `stream_events.go` for stream throttling.
+- Keep provider-specific request/response types behind `prov_model.go`; do not leak OpenAI, Responses, or Anthropic wire details into `app.go` or generic tool orchestration.
+- Keep each cross-layer contract at one source of truth: `chatTools()` for schemas, `executeTool()` for strict dispatch/decoding, `orch_edit_plan.go` for local edit normalization, `orch_batch_policy.go` for batch barriers/conflicts, `orch_edit.go` for app-owned edit execution, `internal/tools/edit` for pure diff/range algorithms, `internal/tools/pathutil` for workspace path resolution and safety checks, `infra_result.go` for result envelopes/compaction, and `infra_stream.go` for stream throttling.
 - Do not independently parse, canonicalize, deduplicate, or infer the same request in multiple layers. If a lower layer produces a normalized plan, upstream policy checks and downstream execution must consume that plan.
 - Workspace path resolution and boundary checks live in `internal/tools/pathutil`. The app package keeps only thin package-level wrappers (delegating to pathutil through a host-neutral `Runtime` interface) so existing call sites stay unchanged; do not re-implement `insideRoot`, `safeJoin`, `insideWriteRoot`, or `resolveReadablePath` in app or any other tool package.
 - Keep the project in one Go package unless a package boundary has a clear dependency direction and Wails binding impact has been verified. Mechanical same-package extraction is preferred before introducing new packages.
@@ -772,9 +781,9 @@ These rules are required for future changes. They exist to keep Agent behavior d
 
 ## Current Architectural Notes
 
-- `model_provider.go` is the provider boundary; avoid leaking provider-specific request shapes into Agent orchestration.
-- `app.go` owns Agent orchestration and long-lived state, but must not import Wails runtime. Desktop lifecycle/dialog/window behavior belongs in `desktop_host.go`; all UI event publication goes through `eventSink` in `host_events.go`.
-- Modify each cross-layer contract at its unique boundary: edit normalization in `file_edit_plan.go`, pure edit algorithms in `internal/tools/edit`, tool-batch policy in `batch_policy.go`, app-owned edit execution in `file_edit.go`, workspace path resolution in `internal/tools/pathutil`, result envelopes/compaction in `result.go`, and stream throttling in `stream_events.go`.
+- `prov_model.go` is the provider boundary; avoid leaking provider-specific request shapes into Agent orchestration.
+- `app.go` owns Agent orchestration and long-lived state, but must not import Wails runtime. Desktop lifecycle/dialog/window behavior belongs in `host_desktop.go`; all UI event publication goes through `eventSink` in `host_events.go`.
+- Modify each cross-layer contract at its unique boundary: edit normalization in `orch_edit_plan.go`, pure edit algorithms in `internal/tools/edit`, tool-batch policy in `orch_batch_policy.go`, app-owned edit execution in `orch_edit.go`, workspace path resolution in `internal/tools/pathutil`, result envelopes/compaction in `infra_result.go`, and stream throttling in `infra_stream.go`.
 - Tool implementations are split: pure algorithms live in `internal/tools/<name>/` (no `*App` receiver, no ConfigState dependency), while app-owned orchestration (workspace resolution, serialization guards, event sinks, lifecycle) stays in `internal/app/<name>.go` as thin wrappers that inject `*App` as the host-neutral `Runtime`. The app package keeps package-level lowercase wrappers (e.g. `safeJoin`, `workspaceRoot`, `insideRoot`) that delegate to pathutil so existing call sites stay unchanged; do not duplicate these helpers elsewhere.
 - `chatTools()` is the source of truth for built-in LLM-facing schemas; `executeTool()` remains the dispatch and strict JSON decoding boundary.
 - The model-facing `background_process` tool supports four actions: `start` (returns immediately with the service id, no readiness wait), `stop` (terminate by id), `list` (metadata for all tracked services, no output tails), and `read` (bounded tail of one service's output, default 8 KiB, max 32 KiB). This lets agents run frontend/backend dev processes without blocking the agent loop and inspect their output on demand without overloading the model context. `StartService`, `StopService`, and `ListServices` remain available as Wails/backend APIs for the Task Center UI.
@@ -799,14 +808,14 @@ These rules are required for future changes. They exist to keep Agent behavior d
 
 ## Wails Event Emission Map
 
-后端模块只调用 `App.emit()`；该方法与 `eventSink` 位于 `host_events.go`，Wails 适配器再调用 `runtime.EventsEmit`。Wails 启动、窗口和系统对话框位于 `desktop_host.go`。前端在 `App.vue` 的 `bindRuntimeEvents()` 中通过 `EventsOn()` 统一注册，`runtimeEventOffs` 跟踪卸载。Agent/runtime 模块不得直接调用 Wails 事件 API。
+后端模块只调用 `App.emit()`；该方法与 `eventSink` 位于 `host_events.go`，Wails 适配器再调用 `runtime.EventsEmit`。Wails 启动、窗口和系统对话框位于 `host_desktop.go`。前端在 `App.vue` 的 `bindRuntimeEvents()` 中通过 `EventsOn()` 统一注册，`runtimeEventOffs` 跟踪卸载。Agent/runtime 模块不得直接调用 Wails 事件 API。
 
 ### 高频流（双层节流，仅这两条）
 
 | 事件 | 后端节流位置 | 前端缓冲位置 |
 |------|--------------|--------------|
-| `run:delta` / `run:reasoning` | `runStreamDeltaEmitter` (`stream_events.go`, 32ms / 512B)，流末 `flush()` 兜底；`run:image` 发送前先 flush | `queueStreamDelta` + `setTimeout(48ms) → requestAnimationFrame` (`App.vue`) |
-| `tool:update` | `toolCallProgressTracker.eventsWithForce` (`stream_events.go`, 200ms / 2048B)，超阈值且在窗口内早 continue；`forceEvents()` 流末绕过节流。`run_command` 约每 120ms 发布累计输出并在结束前强制最终快照 | `bufferToolUpdate` + `setTimeout(120ms) → requestAnimationFrame`；命令卡短输出按内容收缩，最多约六行后滚动，并自动跟随末尾 |
+| `run:delta` / `run:reasoning` | `runStreamDeltaEmitter` (`infra_stream.go`, 32ms / 512B)，流末 `flush()` 兜底；`run:image` 发送前先 flush | `queueStreamDelta` + `setTimeout(48ms) → requestAnimationFrame` (`App.vue`) |
+| `tool:update` | `toolCallProgressTracker.eventsWithForce` (`infra_stream.go`, 200ms / 2048B)，超阈值且在窗口内早 continue；`forceEvents()` 流末绕过节流。`run_command` 约每 120ms 发布累计输出并在结束前强制最终快照 | `bufferToolUpdate` + `setTimeout(120ms) → requestAnimationFrame`；命令卡短输出按内容收缩，最多约六行后滚动，并自动跟随末尾 |
 
 ### 生命周期事件（天然低频，无需节流）
 
@@ -828,9 +837,9 @@ These rules are required for future changes. They exist to keep Agent behavior d
 
 **Dependencies/Config (`app.go`)**：`dependency:missing` / `config:warning` — 罕见，前端按 tool 去重
 
-**Services (`services.go`)**：`service:update` — 仅 `startServiceWithConfig` / `finalizeService` / `stopService` 三处，不随输出滚动触发
+**Services (`orch_services.go`)**：`service:update` — 仅 `startServiceWithConfig` / `finalizeService` / `stopService` 三处，不随输出滚动触发
 
-**Scheduled tasks (`scheduler.go`)**：`scheduled:update` / `scheduled:run_start` / `scheduled:run_done` / `scheduled:run_error` — 调度生命周期点
+**Scheduled tasks (`orch_scheduler.go`)**：`scheduled:update` / `scheduled:run_start` / `scheduled:run_done` / `scheduled:run_error` — 调度生命周期点
 
 ### 子代理 / 调度任务路径
 

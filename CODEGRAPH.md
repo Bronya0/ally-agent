@@ -9,30 +9,32 @@ Ally 是一个基于 Wails v2 的桌面 AI 编码助手。后端 Go 通过 Wails
 ```
 ├── main.go                    # Wails 入口和 App 绑定
 ├── internal/
-│   ├── app/                   # Agent 编排、Wails API 适配和共享运行状态
-│   │   ├── app.go             # Chat loop、配置、会话和工具 dispatch
-│   │   ├── model_provider.go  # 三种 Provider 流式协议适配
-│   │   ├── desktop_host.go    # Wails 生命周期、窗口与系统对话框
-│   │   └── host_events.go     # host-neutral eventSink 边界
+│   ├── app/                   # Agent 核心与编排（按层级前缀命名，见下方约定）
+│   ├── builtin_skills/        # 内置 skill 嵌入资源（go:embed）
 │   ├── host/                  # Wails EventsEmit 适配
 │   ├── provider/              # Provider 格式和默认值归一化
 │   ├── platform/process/      # 跨平台进程控制
-│   └── tools/
-│       ├── calculate/         # 纯数学计算
-│       ├── command/           # 命令安全解析：重定向/路径/风险模式匹配
-│       ├── edit/              # 编辑 Diff 与变更范围纯算法
-│       ├── git/               # git porcelain/unified-diff 解析纯算法
-│       ├── grep/              # ripgrep 封装与结果归一化纯算法
-│       ├── memory/            # 记忆 Markdown frontmatter 解析纯算法
-│       ├── read/              # 文本读取、版本令牌、原子写入与文档文本抽取
-│       ├── scheduler/         # 计划任务调度解析、校验与下次执行计算
-│       ├── service/           # 后台进程 rolling buffer 与长命令检测
-│       └── shared/            # 跨工具编码错误（errors）与内置工具 schema（builtins）
+│   └── tools/                 # 工具纯算法层（无 *App / ConfigState 依赖）
 ├── frontend/                  # Vue 3 前端和生成的 Wails 绑定
 ├── scripts/                   # 构建与打包脚本
 ├── docs/                      # 文档与模型目录源数据
 └── third_party/               # 第三方许可证文件
 ```
+
+### `internal/app/` 文件命名约定
+
+文件按层级前缀命名，前缀直接表明职责归属：
+
+| 前缀 | 层级 | 职责 |
+|------|------|------|
+| 无 | 核心 | `app.go` 持有 chat loop、`*App` 状态和 `executeTool()` dispatch |
+| `prov_` | Provider 适配 | OpenAI/Anthropic 流式适配、代理配置 |
+| `host_` | Host 桥接 | Wails 生命周期、窗口、对话框、eventSink、子进程与任务栏 |
+| `orch_` | 工具编排 | 绑定 `internal/tools/` 纯算法到 `*App` 状态 |
+| `infra_` | 工具基础设施 | 跨编排共享：结果信封、流式节流、DTO 归一化 |
+| `biz_` | 业务模块 | skills、prompt、mcp、update、project_context |
+
+`orch_<name>.go` 对应 `internal/tools/<name>/` 纯算法，两者构成一个工具的完整实现。
 
 ---
 
@@ -40,7 +42,7 @@ Ally 是一个基于 Wails v2 的桌面 AI 编码助手。后端 Go 通过 Wails
 
 ```mermaid
 flowchart TD
-    main[main.go: main] -->|wails.Run| startup[internal/app/desktop_host.go: Startup]
+    main[main.go: main] -->|wails.Run| startup[internal/app/host_desktop.go: Startup]
     startup --> sink[注入 internal/host.EventSink]
     startup --> fitWin[fitInitialWindowToScreen: 适配窗口尺寸]
     fitWin --> initCfg[ensureInitialized: 加载配置]
@@ -106,7 +108,7 @@ ConfigState (~/.ally_agent/config.json)
 - 配置保存到 `~/.ally_agent/config.json`
 - 前端通过 Wails 绑定 `GetConfig()` / `SaveConfig()` 读写
 
-### 2. 模型提供者层 (`model_provider.go`)
+### 2. 模型提供者层 (`prov_model.go`)
 
 支持的 API 格式：
 
@@ -168,14 +170,14 @@ flowchart LR
 关键规则：
 - 非文件工具并发执行（信号量上限 4）
 - 文件工具在 `fileOpsMu` 下按 `toolCallIndex` 串行
-- `planLocalEditBatch()` 是本地 `edit` 的唯一规范化入口；`batch_policy.go` 和 `file_edit.go` 共享其 targets/files，不得重复解析路径与别名
-- `internal/tools/edit` 持有纯 Diff/变更范围算法，`internal/app/edit_bridge.go` 仅提供编排层兼容适配
+- `planLocalEditBatch()` 是本地 `edit` 的唯一规范化入口；`orch_batch_policy.go` 和 `orch_edit.go` 共享其 targets/files，不得重复解析路径与别名
+- `internal/tools/edit` 持有纯 Diff/变更范围算法，`orch_edit.go` 是 app 层的编辑执行边界
 - 同版本且解析到同一物理路径的重复文件项合并为一个原始快照编辑计划
 - 批量 `read` 保留逐文件部分失败，并为已知错误返回 `errorCode`（不存在路径为 `E_PATH_NOT_FOUND`）
 - `edit` 多匹配返回有界行号；多行整行文本仅可在唯一候选时忽略前导缩进并安全重基
 - 批量编辑忽略并警告 no-op；全部为 no-op 时不写盘
-- `result.go` 是结果 envelope、错误码和模型侧压缩的唯一边界
-- `stream_events.go` 集中 `run:delta` / `run:reasoning` / `tool:update` 节流
+- `infra_result.go` 是结果 envelope、错误码和模型侧压缩的唯一边界
+- `infra_stream.go` 集中 `run:delta` / `run:reasoning` / `tool:update` 节流
 
 ### 4. MCP 管理器 (`mcp.go`)
 
@@ -196,14 +198,14 @@ flowchart TD
 - Stdio 传输继承归一化的代理环境变量
 - 保存代理设置变更后自动重连 MCP 服务器
 
-### 5. 后台服务 (`services.go`)
+### 5. 后台服务 (`orch_services.go`)
 
 - 最多 8 个并发活动进程
 - 每个进程 512KB 滚动输出缓冲
 - 服务停止或退出后立即移除记录，不持久化完成历史
 - model 可通过 `background_process` 工具（start/stop/list/read）管理
 
-### 6. 定时任务 (`scheduler.go`)
+### 6. 定时任务 (`orch_scheduler.go`)
 
 - 进程内存在，关闭 Ally 后清除
 - 支持 RFC3339 时间 / Go duration / cron 表达式
@@ -338,16 +340,16 @@ defaultSystemPrompt() → buildSystemPromptParts()
 flowchart LR
     Core[app.go / Agent runtime] -->|eventSink.Emit| EventBoundary[host_events.go]
     EventBoundary -->|Wails adapter| UI[Vue / Wails Events]
-    Desktop[desktop_host.go] -->|lifecycle, dialogs, window| Wails[Wails runtime]
-    Core --> EditPlan[file_edit_plan.go]
-    BatchPolicy[batch_policy.go] --> EditPlan
-    EditExecutor[file_edit.go] --> EditPlan
+    Desktop[host_desktop.go] -->|lifecycle, dialogs, window| Wails[Wails runtime]
+    Core --> EditPlan[orch_edit_plan.go]
+    BatchPolicy[orch_batch_policy.go] --> EditPlan
+    EditExecutor[orch_edit.go] --> EditPlan
     EditExecutor --> EditAlgorithms[internal/tools/edit]
 ```
 
 - `app.go` 不导入 Wails runtime；未来抽离 Agent 时可替换 `eventSink` 和宿主生命周期。
 - 所有后端 UI 事件必须经过 `App.emit()`；Wails `EventsEmit` 只允许出现在 `host_events.go`。
-- Wails 启动、窗口、目录选择和系统文件管理器只允许放在 `desktop_host.go`；自更新退出例外保留在 `update.go`。
+- Wails 启动、窗口、目录选择和系统文件管理器只允许放在 `host_desktop.go`；自更新退出例外保留在 `biz_update.go`。
 - 文件 mutation 冲突检测与本地编辑执行共享 `planLocalEditBatch()`，避免两层契约漂移。
 
 ### 修改入口与跨层变更顺序
@@ -357,25 +359,25 @@ flowchart LR
 | 变更内容 | 首选修改入口 | 必须联动检查 |
 |---|---|---|
 | Agent 编排、聊天循环、运行/会话状态 | `app.go` | `host_events.go`、运行事件测试 |
-| Wails 启动、窗口、目录选择、系统文件管理器 | `desktop_host.go` | Wails 生命周期、平台构建 |
+| Wails 启动、窗口、目录选择、系统文件管理器 | `host_desktop.go` | Wails 生命周期、平台构建 |
 | UI/runtime 事件与宿主转发 | `host_events.go` | 事件名、payload、session/run 路由、终止事件 |
-| Provider 请求/响应适配 | `model_provider.go` | provider 流事件、工具调用、usage、错误处理 |
+| Provider 请求/响应适配 | `prov_model.go` | provider 流事件、工具调用、usage、错误处理 |
 | 内置工具 schema | `internal/tools/shared/builtins.go` | 严格解码、执行分支、结果卡片、工具测试 |
 | 工具参数严格解码与执行分发 | `executeTool()`（当前位于 Agent 编排域） | 批次策略、结果 envelope、前端工具卡片 |
-| 编辑 Diff、变更范围纯算法 | `internal/tools/edit` | `edit_bridge.go`、`file_edit.go`、编辑回归测试 |
-| 本地 edit 路径/别名/重复项/版本归一化 | `file_edit_plan.go` | `batch_policy.go`、`file_edit.go`、跨层测试 |
-| 文件编辑匹配、校验、原子提交、回滚 | `file_edit.go` | 共享编辑计划、版本和重叠保护 |
-| 批次屏障、写冲突、工具去重 | `batch_policy.go` | 规范化计划、工具调用顺序、并发限制 |
-| 工具结果 envelope、错误码、模型侧压缩 | `result.go` | 前端 `tool:result/tool:error`、provider 工具结果 |
-| 流式事件节流与 flush | `stream_events.go` | 前端缓冲、终端事件、流式回归测试 |
-| 命令删除/重定向/越界安全 | `internal/tools/command` + `tool_runtime.go` Section 2 | `internal/tools/command` 是轻量 shell 调用解析、嵌套命令识别、风险分类和写目标提取的唯一纯语义边界；`tool_runtime.go` 只负责工作区根、路径存在性、错误码和提示文本；联动检查 Windows/MSYS 路径及命令安全测试 |
-| git porcelain/unified-diff 解析纯算法 | `internal/tools/git` | `git_tools.go` 调用，diff/status 解析回归测试 |
-| 记忆 Markdown frontmatter 解析纯算法 | `internal/tools/memory` | `memory.go` 调用，frontmatter 解析回归测试 |
-| DOCX/PPTX/XLSX/PDF 文本抽取纯算法 | `internal/tools/read` | `read.go` 文档分支、抽取回归测试 |
-| ripgrep 封装与结果归一化 | `internal/tools/grep` | `grep.go` 调用、缺失检测、超时与错误归一化 |
-| 后台进程 rolling buffer 与长命令检测 | `internal/tools/service` | `services.go` 调用、输出快照、活动上限 |
-| 计划任务调度解析、校验与下次执行计算 | `internal/tools/scheduler` | `scheduler.go` 调用、cron/interval/once 校验、steps/timeout 归一化 |
-| `read`、grep、提示词、技能、记忆、Git 等领域逻辑 | 对应 `read.go`、`grep.go`、`prompt_builder.go`、`skills.go`、`memory.go`、`git_tools.go` | 领域测试及模型上下文行为 |
+| 编辑 Diff、变更范围纯算法 | `internal/tools/edit` | `orch_edit.go`、编辑回归测试 |
+| 本地 edit 路径/别名/重复项/版本归一化 | `orch_edit_plan.go` | `orch_batch_policy.go`、`orch_edit.go`、跨层测试 |
+| 文件编辑匹配、校验、原子提交、回滚 | `orch_edit.go` | 共享编辑计划、版本和重叠保护 |
+| 批次屏障、写冲突、工具去重 | `orch_batch_policy.go` | 规范化计划、工具调用顺序、并发限制 |
+| 工具结果 envelope、错误码、模型侧压缩 | `infra_result.go` | 前端 `tool:result/tool:error`、provider 工具结果 |
+| 流式事件节流与 flush | `infra_stream.go` | 前端缓冲、终端事件、流式回归测试 |
+| 命令删除/重定向/越界安全 | `internal/tools/command` + `orch_command_safety.go` | `internal/tools/command` 是轻量 shell 调用解析、嵌套命令识别、风险分类和写目标提取的唯一纯语义边界；`orch_command_safety.go` 只负责工作区根、路径存在性、错误码和提示文本；联动检查 Windows/MSYS 路径及命令安全测试 |
+| git porcelain/unified-diff 解析纯算法 | `internal/tools/git` | `orch_git.go` 调用，diff/status 解析回归测试 |
+| 记忆 Markdown frontmatter 解析纯算法 | `internal/tools/memory` | `orch_memory.go` 调用，frontmatter 解析回归测试 |
+| DOCX/PPTX/XLSX/PDF 文本抽取纯算法 | `internal/tools/read` | `orch_read.go` 文档分支、抽取回归测试 |
+| ripgrep 封装与结果归一化 | `internal/tools/grep` | `orch_grep.go` 调用、缺失检测、超时与错误归一化 |
+| 后台进程 rolling buffer 与长命令检测 | `internal/tools/service` | `orch_services.go` 调用、输出快照、活动上限 |
+| 计划任务调度解析、校验与下次执行计算 | `internal/tools/scheduler` | `orch_scheduler.go` 调用、cron/interval/once 校验、steps/timeout 归一化 |
+| `read`、grep、提示词、技能、记忆、Git 等领域逻辑 | 对应 `orch_read.go`、`orch_grep.go`、`biz_prompt.go`、`biz_skills.go`、`orch_memory.go`、`orch_git.go` | 领域测试及模型上下文行为 |
 
 跨层工具或事件变更按以下顺序检查：
 
@@ -393,7 +395,7 @@ schema → strict decoder → batch policy → executor → result envelope → 
 
 - 工作区写操作限定在配置的工作区内 + `~/.ally_agent`
 - `run_command` 的安全分析先在 `internal/tools/command` 将复合 shell 文本解析为实际调用，递归检查 shell `-c`、命令替换、`eval`、`xargs`、`find -exec` 等嵌套执行，再按命令语义识别删除、高危参数和明确写入目标；引号内数据、搜索词和只读源路径不会被当成写操作。
-- `tool_runtime.go` Section 2 使用上述语义结果结合工作区根和目标存在性做最终决策：外部只读与创建不存在的新外部路径仍允许，已有外部写目标、无法解析的动态写目标和裸文件删除仍拒绝。
+- `orch_command_safety.go` 使用上述语义结果结合工作区根和目标存在性做最终决策：外部只读与创建不存在的新外部路径仍允许，已有外部写目标、无法解析的动态写目标和裸文件删除仍拒绝。
 - 工作区必须由用户明确选择；空工作区不会回退到进程当前目录
 - `run_command` 前台执行时通过节流的 `tool:update` 推送累计 stdout/stderr；命令卡固定高度、可滚动并默认跟随最新行，最终 `tool:result` 仍携带完整受限输出
 - `run_command` / `background_process` 后端输出均有界，前者单次最多 128KB，后者每个活动进程滚动保留 512KB
