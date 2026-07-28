@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"unicode/utf8"
@@ -285,4 +286,265 @@ func (a *App) readDocumentWithConfig(cfg ConfigState, req DocumentReadRequest) (
 		Sheets:    sheets,
 		Truncated: truncated,
 	}, nil
+}
+
+func (a *App) readFileWithConfig(cfg ConfigState, req ReadFileRequest) (ReadFileResult, error) {
+	if shouldExtractDocumentInRead(req.Path) {
+		return a.readDocumentAsReadFileWithConfig(cfg, req)
+	}
+	path, err := resolveReadPath(cfg, req.Path)
+	if err != nil {
+		return ReadFileResult{}, err
+	}
+	data, info, err := readTextFile(path)
+	if err != nil {
+		return ReadFileResult{}, err
+	}
+	text, ending := normalizeText(data)
+	preview, err := formatLineNumberReadPreviewRangeWithBudget(text, readRangeRequest{
+		StartLine:     req.StartLine,
+		EndLine:       req.EndLine,
+		LineCount:     req.LineCount,
+		ContextBefore: req.ContextBefore,
+		ContextAfter:  req.ContextAfter,
+	}, maxToolOutput)
+	if err != nil {
+		return ReadFileResult{}, err
+	}
+	return ReadFileResult{
+		Path:          displayPathForConfig(cfg, path),
+		Content:       preview.Content,
+		RawContent:    preview.RawContent,
+		Kind:          "text",
+		ContentFormat: "line_numbers",
+		Editable:      true,
+		StartLine:     preview.StartLine,
+		EndLine:       preview.EndLine,
+		NextStartLine: preview.NextStartLine,
+		TotalLines:    preview.TotalLines,
+		SHA256:        hashBytes(data),
+		Version:       hashVersion(data),
+		Size:          info.Size(),
+		LineEnding:    ending,
+		Truncated:     preview.Truncated,
+		RangeStatus:   preview.RangeStatus,
+		EmptyRange:    preview.EmptyRange,
+	}, nil
+}
+
+func shouldExtractDocumentInRead(path string) bool {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".docx", ".pptx", ".xlsx", ".pdf":
+		return true
+	default:
+		return false
+	}
+}
+
+func (a *App) readDocumentAsReadFileWithConfig(cfg ConfigState, req ReadFileRequest) (ReadFileResult, error) {
+	doc, err := a.readDocumentWithConfig(cfg, DocumentReadRequest{
+		Path:     req.Path,
+		Sheet:    req.Sheet,
+		MaxChars: req.MaxChars,
+	})
+	if err != nil {
+		return ReadFileResult{}, err
+	}
+	fullPath, err := resolveReadPath(cfg, req.Path)
+	if err != nil {
+		return ReadFileResult{}, err
+	}
+	info, err := os.Stat(fullPath)
+	if err != nil {
+		return ReadFileResult{}, err
+	}
+	sha, err := hashFileSHA256(fullPath)
+	if err != nil {
+		return ReadFileResult{}, err
+	}
+	version, err := versionFromSHA256Hex(sha)
+	if err != nil {
+		return ReadFileResult{}, err
+	}
+	totalLines := countPlainTextLines(doc.Text)
+	return ReadFileResult{
+		Path:          doc.Path,
+		Content:       doc.Text,
+		RawContent:    doc.Text,
+		Text:          doc.Text,
+		Kind:          "document",
+		ContentFormat: "plain",
+		Type:          doc.Type,
+		Editable:      false,
+		StartLine:     1,
+		EndLine:       totalLines,
+		TotalLines:    totalLines,
+		SHA256:        sha,
+		Version:       version,
+		Size:          info.Size(),
+		Truncated:     doc.Truncated,
+		RangeStatus:   "document",
+		Sheets:        doc.Sheets,
+	}, nil
+}
+
+func countPlainTextLines(text string) int {
+	if text == "" {
+		return 0
+	}
+	lines := strings.Count(text, "\n") + 1
+	if strings.HasSuffix(text, "\n") {
+		lines--
+	}
+	return lines
+}
+
+func formatLineNumberReadPreviewRangeWithBudget(content string, req readRangeRequest, budgetBytes int) (readPreviewResult, error) {
+	if req.LineCount > 0 && req.EndLine > 0 {
+		return readPreviewResult{}, errors.New("lineCount and endLine are mutually exclusive")
+	}
+	if req.ContextBefore < 0 || req.ContextAfter < 0 {
+		return readPreviewResult{}, errors.New("contextBefore/contextAfter must be non-negative")
+	}
+	if len(content) == 0 {
+		return readPreviewResult{
+			Content:     "File is empty. Use create_file with overwrite=true to write content.",
+			TotalLines:  0,
+			StartLine:   1,
+			EndLine:     0,
+			RangeStatus: "empty_file",
+			EmptyRange:  true,
+		}, nil
+	}
+
+	allLines, trailingNewline := splitLines(content)
+	total := len(allLines)
+
+	startLine := req.StartLine
+	if startLine <= 0 {
+		startLine = 1
+	}
+	if startLine > total {
+		return readPreviewResult{
+			Content:     fmt.Sprintf("startLine %d is beyond end of file (%d lines total).", startLine, total),
+			TotalLines:  total,
+			StartLine:   startLine,
+			EndLine:     0,
+			RangeStatus: "beyond_eof",
+			EmptyRange:  true,
+		}, nil
+	}
+
+	baseEnd := total
+	if req.EndLine > 0 {
+		if req.EndLine < startLine {
+			return readPreviewResult{}, fmt.Errorf("endLine %d is before startLine %d", req.EndLine, startLine)
+		}
+		baseEnd = req.EndLine
+	} else if req.LineCount > 0 {
+		baseEnd = startLine + req.LineCount - 1
+	} else if req.ContextBefore > 0 || req.ContextAfter > 0 {
+		baseEnd = startLine
+	}
+
+	start := startLine - req.ContextBefore
+	if start < 1 {
+		start = 1
+	}
+	end := baseEnd + req.ContextAfter
+	if end > total {
+		end = total
+	}
+	if end < start {
+		return readPreviewResult{
+			Content:     fmt.Sprintf("Requested range %d-%d is empty.", start, end),
+			TotalLines:  total,
+			StartLine:   start,
+			EndLine:     0,
+			RangeStatus: "empty_range",
+			EmptyRange:  true,
+		}, nil
+	}
+
+	rangeLimited := false
+	if end-start+1 > maxReadRangeLines {
+		end = start + maxReadRangeLines - 1
+		rangeLimited = true
+	}
+
+	width := len(strconv.Itoa(end))
+	var b strings.Builder
+	actualEnd := start - 1
+	budgetLimited := false
+	for lineNum := start; lineNum <= end; lineNum++ {
+		lineText := formatNumberedLine(lineNum, allLines[lineNum-1], width)
+		if b.Len() > 0 {
+			lineText = "\n" + lineText
+		}
+		if budgetBytes > 0 && b.Len()+len(lineText) > budgetBytes {
+			budgetLimited = true
+			break
+		}
+		b.WriteString(lineText)
+		actualEnd = lineNum
+	}
+	result := b.String()
+	rawContent := ""
+	partialFirstLine := false
+	if result == "" && budgetBytes > 0 {
+		lineText := formatNumberedLine(start, allLines[start-1], width)
+		if len(lineText) > budgetBytes {
+			cut := budgetBytes
+			for cut > 0 && !utf8.ValidString(lineText[:cut]) {
+				cut--
+			}
+			lineText = lineText[:cut]
+		}
+		result = lineText
+		actualEnd = start
+		budgetLimited = true
+		rawLine := allLines[start-1]
+		cut := budgetBytes
+		if cut > len(rawLine) {
+			cut = len(rawLine)
+		}
+		for cut > 0 && !utf8.ValidString(rawLine[:cut]) {
+			cut--
+		}
+		rawContent = rawLine[:cut]
+		partialFirstLine = cut < len(rawLine)
+	}
+	if !partialFirstLine && actualEnd >= start {
+		rawContent = strings.Join(allLines[start-1:actualEnd], "\n")
+		if actualEnd < total || (actualEnd == total && trailingNewline) {
+			rawContent += "\n"
+		}
+	}
+
+	nextStartLine := 0
+	requestedFullFile := req.EndLine == 0 && req.LineCount == 0 && req.ContextBefore == 0 && req.ContextAfter == 0
+	pagedRequest := req.LineCount > 0
+	if actualEnd < total && (budgetLimited || rangeLimited || pagedRequest || requestedFullFile) {
+		nextStartLine = actualEnd + 1
+		result += fmt.Sprintf("\n\n[Showing lines %d-%d of %d. Use startLine=%d to continue.]", start, actualEnd, total, nextStartLine)
+	}
+
+	status := "ok"
+	if budgetLimited || rangeLimited {
+		status = "truncated"
+	}
+	return readPreviewResult{
+		Content:       result,
+		RawContent:    rawContent,
+		TotalLines:    total,
+		StartLine:     start,
+		EndLine:       actualEnd,
+		NextStartLine: nextStartLine,
+		Truncated:     nextStartLine > 0 || budgetLimited || rangeLimited,
+		RangeStatus:   status,
+	}, nil
+}
+
+func formatNumberedLine(lineNum int, line string, width int) string {
+	return strconv.Itoa(lineNum) + ": " + line
 }
