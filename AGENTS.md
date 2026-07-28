@@ -58,7 +58,19 @@ Publishing the Release triggers `.github/workflows/build.yml`, which builds and 
 │   │   ├── model_provider.go # OpenAI Chat / Responses / Anthropic 流式适配
 │   │   ├── desktop_host.go   # Wails 生命周期、窗口和系统对话框
 │   │   ├── host_events.go    # host-neutral eventSink 边界
+│   │   ├── command_safety.go # checkCommandSafety 边界（消费 command 语义分析）
+│   │   ├── git_tools.go      # Git 编排（gitDiffMu、超时、取消）
+│   │   ├── grep.go           # grep 编排（workspace 解析、dependency 事件）
+│   │   ├── read.go           # read 编排（并行批量读取、有界预览）
+│   │   ├── file_edit.go      # 编辑执行（fileOpsMu、原子写入、回滚）
+│   │   ├── file_edit_plan.go # 编辑批次归一化唯一边界
+│   │   ├── batch_policy.go   # 工具批次冲突检测
+│   │   ├── scheduler.go      # 计划任务管理器
+│   │   ├── services.go       # 后台进程管理器
+│   │   ├── memory.go         # memory 工具薄包装（注入 Runtime）
+│   │   ├── module_bridges.go # 工具 DTO 别名与 provider 归一化
 │   │   └── *_test.go         # 后端边界与领域测试
+│   ├── builtin_skills/       # 内置 skill 嵌入资源（go:embed）
 │   ├── host/                 # Wails EventsEmit 宿主适配
 │   ├── provider/             # Provider 格式、Base URL 和 token 参数归一化
 │   ├── platform/process/     # 跨平台子进程窗口与进程树控制
@@ -68,7 +80,8 @@ Publishing the Release triggers `.github/workflows/build.yml`, which builds and 
 │       ├── edit/             # 编辑 Diff、变更范围等纯算法
 │       ├── git/              # git porcelain/unified-diff 解析纯算法
 │       ├── grep/             # ripgrep 封装与结果归一化纯算法
-│       ├── memory/           # 记忆 Markdown frontmatter 解析纯算法
+│       ├── memory/           # 记忆 Markdown frontmatter 解析 + 编排（Runtime 注入）
+│       ├── pathutil/         # 工作区路径解析与安全检查（Runtime 注入）
 │       ├── read/             # 文本读取、版本令牌、原子写入与文档文本抽取
 │       ├── scheduler/        # 计划任务调度解析、校验与下次执行计算
 │       ├── service/          # 后台进程 rolling buffer 与长命令检测
@@ -687,7 +700,7 @@ Example MCP config:
 - Read-only local tools may inspect explicit absolute paths outside the workspace subject to safety checks.
 - `run_command` keeps cwd inside the workspace, permits outside reads, null-device redirection, and creation of new outside paths, but refuses commands that may modify/delete existing outside paths or perform explicit deletion.
 - Command safety uses lightweight shell-aware invocation parsing in `internal/tools/command`: quoted/search data is not treated as executable syntax, nested shell payloads and command substitutions are inspected, managed deletions are allowed only when every deletion in the compound command is managed, and source/destination-aware mutation analysis checks explicit write targets rather than every referenced path.
-- `checkCommandSafety()` in `tool_runtime.go` is the app-owned boundary for workspace roots, path existence, `E_COMMAND_BLOCKED` / `E_PATH_OUTSIDE`, and user-facing explanations; it must consume the command package's semantic analysis instead of adding independent full-string risk regexes.
+- `checkCommandSafety()` in `command_safety.go` is the app-owned boundary for workspace roots, path existence, `E_COMMAND_BLOCKED` / `E_PATH_OUTSIDE`, and user-facing explanations; it must consume the command package's semantic analysis instead of adding independent full-string risk regexes.
 - The model-facing system prompt and `run_command` schema explain how to recover from `E_PATH_OUTSIDE`: read the Chinese reason/target, avoid unchanged retries, choose a new or workspace target, and replace dynamic redirections with literal paths.
 - Prefer `delete_path` / `remote_delete_path` over shell deletion.
 - `readTextFile` rejects binary files using NUL checks.
@@ -731,8 +744,9 @@ These rules are required for future changes. They exist to keep Agent behavior d
 - Put Wails lifecycle, window management, directory/file-manager integration, and other desktop behavior in `desktop_host.go`.
 - Publish UI/runtime events only through the `eventSink` boundary in `host_events.go`; preserve event names, payload shapes, session routing, and terminal-event rules when changing implementations.
 - Keep provider-specific request/response types behind `model_provider.go`; do not leak OpenAI, Responses, or Anthropic wire details into `app.go` or generic tool orchestration.
-- Keep each cross-layer contract at one source of truth: `chatTools()` for schemas, `executeTool()` for strict dispatch/decoding, `file_edit_plan.go` for local edit normalization, `batch_policy.go` for batch barriers/conflicts, `file_edit.go` for app-owned edit execution, `internal/tools/edit` for pure diff/range algorithms, `result.go` for result envelopes/compaction, and `stream_events.go` for stream throttling.
+- Keep each cross-layer contract at one source of truth: `chatTools()` for schemas, `executeTool()` for strict dispatch/decoding, `file_edit_plan.go` for local edit normalization, `batch_policy.go` for batch barriers/conflicts, `file_edit.go` for app-owned edit execution, `internal/tools/edit` for pure diff/range algorithms, `internal/tools/pathutil` for workspace path resolution and safety checks, `result.go` for result envelopes/compaction, and `stream_events.go` for stream throttling.
 - Do not independently parse, canonicalize, deduplicate, or infer the same request in multiple layers. If a lower layer produces a normalized plan, upstream policy checks and downstream execution must consume that plan.
+- Workspace path resolution and boundary checks live in `internal/tools/pathutil`. The app package keeps only thin package-level wrappers (delegating to pathutil through a host-neutral `Runtime` interface) so existing call sites stay unchanged; do not re-implement `insideRoot`, `safeJoin`, `insideWriteRoot`, or `resolveReadablePath` in app or any other tool package.
 - Keep the project in one Go package unless a package boundary has a clear dependency direction and Wails binding impact has been verified. Mechanical same-package extraction is preferred before introducing new packages.
 
 ### Cross-layer change procedure
@@ -760,7 +774,8 @@ These rules are required for future changes. They exist to keep Agent behavior d
 
 - `model_provider.go` is the provider boundary; avoid leaking provider-specific request shapes into Agent orchestration.
 - `app.go` owns Agent orchestration and long-lived state, but must not import Wails runtime. Desktop lifecycle/dialog/window behavior belongs in `desktop_host.go`; all UI event publication goes through `eventSink` in `host_events.go`.
-- Modify each cross-layer contract at its unique boundary: edit normalization in `file_edit_plan.go`, pure edit algorithms in `internal/tools/edit`, tool-batch policy in `batch_policy.go`, app-owned edit execution in `file_edit.go`, result envelopes/compaction in `result.go`, and stream throttling in `stream_events.go`.
+- Modify each cross-layer contract at its unique boundary: edit normalization in `file_edit_plan.go`, pure edit algorithms in `internal/tools/edit`, tool-batch policy in `batch_policy.go`, app-owned edit execution in `file_edit.go`, workspace path resolution in `internal/tools/pathutil`, result envelopes/compaction in `result.go`, and stream throttling in `stream_events.go`.
+- Tool implementations are split: pure algorithms live in `internal/tools/<name>/` (no `*App` receiver, no ConfigState dependency), while app-owned orchestration (workspace resolution, serialization guards, event sinks, lifecycle) stays in `internal/app/<name>.go` as thin wrappers that inject `*App` as the host-neutral `Runtime`. The app package keeps package-level lowercase wrappers (e.g. `safeJoin`, `workspaceRoot`, `insideRoot`) that delegate to pathutil so existing call sites stay unchanged; do not duplicate these helpers elsewhere.
 - `chatTools()` is the source of truth for built-in LLM-facing schemas; `executeTool()` remains the dispatch and strict JSON decoding boundary.
 - The model-facing `background_process` tool supports four actions: `start` (returns immediately with the service id, no readiness wait), `stop` (terminate by id), `list` (metadata for all tracked services, no output tails), and `read` (bounded tail of one service's output, default 8 KiB, max 32 KiB). This lets agents run frontend/backend dev processes without blocking the agent loop and inspect their output on demand without overloading the model context. `StartService`, `StopService`, and `ListServices` remain available as Wails/backend APIs for the Task Center UI.
 - Background-process state contains active processes only. Records are removed after `cmd.Wait()` completes, and the backend rejects starts beyond the 8-process active limit.

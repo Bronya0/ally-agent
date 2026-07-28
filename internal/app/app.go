@@ -38,6 +38,7 @@ import (
 	"ally-dev/internal/tools/command"
 	"ally-dev/internal/tools/edit"
 	"ally-dev/internal/tools/grep"
+	"ally-dev/internal/tools/pathutil"
 	"ally-dev/internal/tools/read"
 	toolshared "ally-dev/internal/tools/shared"
 
@@ -1081,6 +1082,22 @@ func appDataDir() string {
 	}
 	return ".ally_agent"
 }
+
+// AppDataDir returns the absolute path to ~/.ally_agent/. Implements
+// pathutil.Runtime so the path-safety helpers can reach the global config
+// directory through a host-neutral interface without importing app.
+func (a *App) AppDataDir() string { return appDataDir() }
+
+// appPathRuntime is a package-level pathutil.Runtime backed by appDataDir().
+// It lets the package-level path helper wrappers below delegate to pathutil
+// without each call site passing *App explicitly, and without depending on
+// aGlobalApp (which is nil before NewApp).
+type appPathRuntime struct{}
+
+func (appPathRuntime) AppDataDir() string { return appDataDir() }
+
+// pathRuntime is the pathutil.Runtime used by the package-level path helpers.
+var pathRuntime pathutil.Runtime = appPathRuntime{}
 
 // MemoriesDir returns the absolute path to ~/.ally_agent/memories/.
 // Implements memory.Runtime so the memory tool can reach the memories
@@ -7250,105 +7267,23 @@ func wrapPowerShellCommand(command string) string {
 }
 
 func workspaceRoot(cfg ConfigState) (string, error) {
-	root := strings.TrimSpace(cfg.Workspace)
-	if root == "" {
-		return "", errors.New("workspace is required")
-	}
-	abs, err := filepath.Abs(root)
-	if err != nil {
-		return "", err
-	}
-	info, err := os.Stat(abs)
-	if err != nil {
-		return "", err
-	}
-	if !info.IsDir() {
-		return "", fmt.Errorf("workspace is not a directory: %s", abs)
-	}
-	return filepath.Clean(abs), nil
+	return pathutil.RootFromConfig(cfg.Workspace)
 }
 
 // workspaceRoots 返回主工作区 + 会话级 ExtraRoots 的去重列表。
 // 主工作区始终是 roots[0]，且必须存在；ExtraRoots 中不存在或非目录的条目被静默跳过。
 // 重复路径（按 OS 风格归一化后）只保留首次出现。
 func workspaceRoots(cfg ConfigState) ([]string, error) {
-	primary, err := workspaceRoot(cfg)
-	if err != nil {
-		return nil, err
-	}
-	seen := map[string]bool{}
-	roots := make([]string, 0, 1+len(cfg.ExtraRoots))
-	markKey := func(clean string) string {
-		if goruntime.GOOS == "windows" {
-			return strings.ToLower(clean)
-		}
-		return clean
-	}
-	addRoot := func(path string) {
-		abs, err := filepath.Abs(strings.TrimSpace(path))
-		if err != nil {
-			return
-		}
-		clean := filepath.Clean(abs)
-		info, err := os.Stat(clean)
-		if err != nil {
-			return // 不存在的附加目录被跳过
-		}
-		if !info.IsDir() {
-			return
-		}
-		key := markKey(clean)
-		if seen[key] {
-			return
-		}
-		seen[key] = true
-		roots = append(roots, clean)
-	}
-	addRoot(primary)
-	for _, extra := range cfg.ExtraRoots {
-		if strings.TrimSpace(extra) == "" {
-			continue
-		}
-		addRoot(extra)
-	}
-	return roots, nil
+	return pathutil.RootsFromConfig(cfg.Workspace, cfg.ExtraRoots)
 }
 
 // insideAnyRoot 判断 target 是否落在任一 root 内（不含 symlink 解析）。
 func insideAnyRoot(roots []string, target string) bool {
-	for _, root := range roots {
-		if insideRoot(root, target) {
-			return true
-		}
-	}
-	return false
+	return pathutil.InsideAnyRoot(roots, target)
 }
 
 func safeJoin(roots []string, p string) (string, error) {
-	if len(roots) == 0 {
-		return "", errors.New("workspace is required")
-	}
-	primaryAbs, err := filepath.Abs(roots[0])
-	if err != nil {
-		return "", err
-	}
-	var target string
-	if strings.TrimSpace(p) == "" || p == "." {
-		target = primaryAbs
-	} else if filepath.IsAbs(p) {
-		target = p
-	} else {
-		target = filepath.Join(primaryAbs, filepath.Clean(p))
-	}
-	abs, err := filepath.Abs(target)
-	if err != nil {
-		return "", err
-	}
-	absClean := filepath.Clean(abs)
-	if !insideAnyRoot(roots, absClean) && !insideAllyAgentDir(absClean) {
-		return "", fmt.Errorf("path is outside workspace or ~/.ally_agent: %s", p)
-	}
-	return absClean, nil
+	return pathutil.SafeJoin(pathRuntime, roots, p)
 }
 
 func resolveWritableFilePath(roots []string, p string) (string, error) {
@@ -7424,18 +7359,7 @@ func resolveCommandCwd(roots []string, p string) (string, error) {
 
 // formatAllowedRoots 把 roots 列表格式化为换行分隔的字符串，用于错误信息提示。
 func formatAllowedRoots(roots []string) string {
-	if len(roots) == 0 {
-		return "(无)"
-	}
-	parts := make([]string, 0, len(roots))
-	for i, root := range roots {
-		prefix := "  附加工作区"
-		if i == 0 {
-			prefix = "  主工作区"
-		}
-		parts = append(parts, prefix+" "+filepath.ToSlash(root))
-	}
-	return strings.Join(parts, "\n")
+	return pathutil.FormatAllowedRoots(roots)
 }
 
 func evalExistingPrefix(target string) (string, error) {
@@ -7446,21 +7370,7 @@ func evalExistingPrefix(target string) (string, error) {
 // 对每个 root 都做 insideRoot 检查 + EvalSymlinks 解析；任一通过即放行。
 // ~/.ally_agent 始终作为兜底白名单。
 func insideWriteRoot(roots []string, target string) bool {
-	clean := filepath.Clean(target)
-	for _, root := range roots {
-		rootAbs, err := filepath.Abs(root)
-		if err != nil {
-			continue
-		}
-		rootClean := filepath.Clean(rootAbs)
-		if insideRoot(rootClean, clean) {
-			return true
-		}
-		if resolvedRoot, err := filepath.EvalSymlinks(rootClean); err == nil && insideRoot(filepath.Clean(resolvedRoot), clean) {
-			return true
-		}
-	}
-	return insideAllyAgentDir(clean)
+	return pathutil.InsideWriteRoot(pathRuntime, roots, target)
 }
 
 func requireExistingDirectory(path string, missingCode string) error {
@@ -7482,53 +7392,23 @@ func resolveReadPath(cfg ConfigState, p string) (string, error) {
 }
 
 func resolveReadablePath(cfg ConfigState, p string) (string, error) {
-	if strings.TrimSpace(p) == "" {
-		return "", errors.New("path is required")
-	}
 	root, err := workspaceRoot(cfg)
 	if err != nil {
 		return "", err
 	}
-	if filepath.IsAbs(p) {
-		abs, err := filepath.Abs(p)
-		if err != nil {
-			return "", err
-		}
-		return filepath.Clean(abs), nil
-	}
-	// 读取操作：相对路径仅解析到主工作区。额外根目录请用绝对路径访问。
-	return safeJoin([]string{root}, p)
+	return pathutil.ResolveReadable(pathRuntime, []string{root}, p)
 }
 
 func insideRoot(root, target string) bool {
-	if samePath(root, target) {
-		return true
-	}
-	root = filepath.Clean(root)
-	target = filepath.Clean(target)
-	if goruntime.GOOS == "windows" {
-		root = strings.ToLower(root)
-		target = strings.ToLower(target)
-	}
-	sep := string(os.PathSeparator)
-	return strings.HasPrefix(target, strings.TrimRight(root, sep)+sep)
+	return pathutil.InsideRoot(root, target)
 }
 
 func insideAllyAgentDir(target string) bool {
-	dir, err := filepath.Abs(appDataDir())
-	if err != nil {
-		return false
-	}
-	return insideRoot(filepath.Clean(dir), filepath.Clean(target))
+	return pathutil.InsideAllyAgentDir(pathRuntime, target)
 }
 
 func samePath(a, b string) bool {
-	a = filepath.Clean(a)
-	b = filepath.Clean(b)
-	if goruntime.GOOS == "windows" {
-		return strings.EqualFold(a, b)
-	}
-	return a == b
+	return pathutil.SamePath(a, b)
 }
 
 // File IO and content-hashing helpers live in internal/tools/read. These

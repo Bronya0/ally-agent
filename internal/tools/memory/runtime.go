@@ -16,19 +16,15 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"ally-dev/internal/tools/pathutil"
 	"ally-dev/internal/tools/read"
 	"ally-dev/internal/tools/shared"
 )
-
-// isWindows is a package-level constant so path comparison logic matches
-// the host OS without runtime calls scattered through the code.
-const isWindows = runtime.GOOS == "windows"
 
 // Runtime is the host capability surface the memory tool needs. App
 // satisfies this structurally; tests can supply a fake.
@@ -291,29 +287,8 @@ func Write(rt Runtime, req WriteRequest) (WriteResult, error) {
 	}, nil
 }
 
-// insideRoot reports whether target is lexically inside root, after
-// filepath.Clean. Windows paths are compared case-insensitively. This is a
-// pure function with no App dependency; it is co-located here because the
-// memory tool is its only consumer in this package.
+// insideRoot delegates to pathutil so the memory package does not maintain
+// its own copy of the lexical workspace-containment check.
 func insideRoot(root, target string) bool {
-	if samePath(root, target) {
-		return true
-	}
-	root = filepath.Clean(root)
-	target = filepath.Clean(target)
-	if isWindows {
-		root = strings.ToLower(root)
-		target = strings.ToLower(target)
-	}
-	sep := string(os.PathSeparator)
-	return strings.HasPrefix(target, strings.TrimRight(root, sep)+sep)
-}
-
-func samePath(a, b string) bool {
-	a = filepath.Clean(a)
-	b = filepath.Clean(b)
-	if isWindows {
-		return strings.EqualFold(a, b)
-	}
-	return a == b
+	return pathutil.InsideRoot(root, target)
 }
