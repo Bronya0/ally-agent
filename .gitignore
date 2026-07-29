@@ -10,15 +10,18 @@ frontend/node_modules/
 node_modules/
 frontend/package.json.md5
 
-# ── IDE & editors ──
-.idea/
-.vscode/
+# ── Dotfiles/dot-directories (except .github, .gitignore, .gitattributes) ──
+.*
+!.github/
+!.gitignore
+!.gitattributes
+
+# ── Editors ──
 *.swp
 *.swo
 *~
 
 # ── OS files ──
-.DS_Store
 Thumbs.db
 
 # ── Logs ──
@@ -30,5 +33,4 @@ Thumbs.db
 nul
 temp_demo/
 temp_test.txt
-.tmp/
 nul
