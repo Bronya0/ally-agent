@@ -275,7 +275,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"pattern"},
 		}),
-		functionTool("read", "Read 1–20 files. Always pass a top-level files array, even for one file. Do not pass top-level path, a string array, offset, or lineCount. UTF-8 text returns raw copyable content plus a 12-character version for edit. Omit startLine/endLine for the whole file; either or both define an inclusive 1-based range. Supported document formats (.docx, .pptx, .xlsx, .pdf) return non-editable extracted text; .xlsx optionally accepts a sheet name or 1-based index.", map[string]any{
+		functionTool("read", "Read 1–20 files. Always pass a top-level files array, even for one file. Do not pass top-level path, a string array, offset, or lineCount. Missing paths and directories are silently omitted from the returned files array; other per-file read failures remain visible. UTF-8 text returns raw copyable content plus a 12-character version for edit. Omit startLine/endLine for the whole file; either or both define an inclusive 1-based range. Supported document formats (.docx, .pptx, .xlsx, .pdf) return non-editable extracted text; .xlsx optionally accepts a sheet name or 1-based index.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"files": batchReadFilesSchema(),
@@ -448,7 +448,7 @@ func batchReadFilesSchema() map[string]any {
 			},
 			"required": []string{"path"},
 		},
-		"description": "Required array of file request objects. Example: [{\"path\":\"app.go\"}]. Each item must be an object with path; never use a string array.",
+		"description": "Required array of file request objects. Example: [{\"path\":\"app.go\"}]. Each item must be an object with path; never use a string array. Missing paths and directories are silently omitted from results.",
 	}
 }
 

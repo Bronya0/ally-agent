@@ -154,6 +154,7 @@ function historyMenuProps() {
 
 .app-header {
   height: 44px;
+  flex-shrink: 0;
   padding: 0 0 0 10px;
   display: flex;
   align-items: stretch;

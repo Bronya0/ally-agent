@@ -281,7 +281,8 @@ code, pre {
 
 .main-area {
   display: flex;
-  height: calc(100vh - 44px);
+  flex: 1;
+  min-height: 0;
   overflow: hidden;
 }
 

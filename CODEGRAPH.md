@@ -173,8 +173,8 @@ flowchart LR
 - `planLocalEditBatch()` 是本地 `edit` 的唯一规范化入口；`orch_batch_policy.go` 和 `orch_edit.go` 共享其 targets/files，不得重复解析路径与别名
 - `internal/tools/edit` 持有纯 Diff/变更范围算法，`orch_edit.go` 是 app 层的编辑执行边界
 - 同版本且解析到同一物理路径的重复文件项合并为一个原始快照编辑计划
-- 批量 `read` 保留逐文件部分失败，并为已知错误返回 `errorCode`（不存在路径为 `E_PATH_NOT_FOUND`）
-- `edit` 多匹配返回有界行号；多行整行文本仅可在唯一候选时忽略前导缩进并安全重基
+- 批量 `read` 静默省略不存在路径和目录目标（全部省略时成功返回空 `files`），其他逐文件失败仍返回已知 `errorCode`；纯文本范围预览使用有界内存线性扫描，不为百万行文件建立逐行切片，超长单行按 UTF-8/字节预算截断
+- `edit` 精确多匹配通过错误 envelope 的可选 `details` 返回最多 3 个原始候选片段、行范围与截断标记，详情 JSON 总计不超过 4 KiB；多行整行文本仅可在唯一候选时忽略前导缩进并安全重基，缩进扫描不建立全文件行索引
 - 批量编辑忽略并警告 no-op；全部为 no-op 时不写盘
 - `infra_result.go` 是结果 envelope、错误码和模型侧压缩的唯一边界
 - `infra_stream.go` 集中 `run:delta` / `run:reasoning` / `tool:update` 节流

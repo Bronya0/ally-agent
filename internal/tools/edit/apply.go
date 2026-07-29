@@ -1,11 +1,13 @@
 package edit
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	toolerrors "ally-dev/internal/tools/shared"
 )
@@ -14,6 +16,34 @@ import (
 type TextChange struct {
 	OldText string `json:"oldText"`
 	NewText string `json:"newText"`
+}
+
+const (
+	maxMatchDiagnosticCandidates   = 3
+	maxMatchDiagnosticPreviewBytes = 512
+	maxMatchDiagnosticTotalBytes   = 4 * 1024
+)
+
+// MatchCandidate is one bounded location hint for an ambiguous edit. Preview
+// is sampled around the match and never contains more than 512 UTF-8 bytes.
+type MatchCandidate struct {
+	Line                   int    `json:"line"`
+	StartLine              int    `json:"startLine"`
+	EndLine                int    `json:"endLine"`
+	Preview                string `json:"preview"`
+	PreviewTruncatedBefore bool   `json:"previewTruncatedBefore,omitempty"`
+	PreviewTruncatedAfter  bool   `json:"previewTruncatedAfter,omitempty"`
+}
+
+// MatchErrorDetails helps the model recover from an ambiguous exact edit
+// without returning the full file or guessing which occurrence to modify.
+type MatchErrorDetails struct {
+	ChangeIndex         int              `json:"changeIndex"`
+	MatchType           string           `json:"matchType"`
+	MatchCount          int              `json:"matchCount"`
+	Candidates          []MatchCandidate `json:"candidates"`
+	CandidatesTruncated bool             `json:"candidatesTruncated"`
+	Recovery            string           `json:"recovery"`
 }
 
 // EditOperation is a legacy single-string edit operation.
@@ -330,6 +360,151 @@ func FormatMatchLines(lines []int, total int) string {
 	return " at lines " + strings.Join(parts, ", ") + suffix
 }
 
+func exactMatchOffsets(content, needle string, limit int) []int {
+	if needle == "" || limit <= 0 {
+		return nil
+	}
+	offsets := make([]int, 0, minInt(limit, maxMatchDiagnosticCandidates))
+	from := 0
+	for len(offsets) < limit && from <= len(content)-len(needle) {
+		rel := strings.Index(content[from:], needle)
+		if rel < 0 {
+			break
+		}
+		start := from + rel
+		offsets = append(offsets, start)
+		from = start + len(needle)
+	}
+	return offsets
+}
+
+func utf8Window(content string, start, end, focusStart, focusEnd, limit int) (string, bool, bool) {
+	if start < 0 {
+		start = 0
+	}
+	if end > len(content) {
+		end = len(content)
+	}
+	if focusStart < start {
+		focusStart = start
+	}
+	if focusEnd < focusStart {
+		focusEnd = focusStart
+	}
+	if focusEnd > end {
+		focusEnd = end
+	}
+	if end <= start || limit <= 0 {
+		return "", start < focusStart, focusEnd < end
+	}
+	if end-start <= limit {
+		return content[start:end], false, false
+	}
+	windowStart := focusStart - (limit-(focusEnd-focusStart))/2
+	if focusEnd-focusStart >= limit {
+		windowStart = focusStart
+	}
+	if windowStart < start {
+		windowStart = start
+	}
+	if windowStart+limit > end {
+		windowStart = end - limit
+	}
+	windowEnd := windowStart + limit
+	for windowStart < windowEnd && windowStart < len(content) && !utf8.RuneStart(content[windowStart]) {
+		windowStart++
+	}
+	for windowEnd > windowStart && windowEnd < len(content) && !utf8.RuneStart(content[windowEnd]) {
+		windowEnd--
+	}
+	return content[windowStart:windowEnd], windowStart > start, windowEnd < end
+}
+
+func matchCandidate(content string, start, end int) MatchCandidate {
+	line := 1 + strings.Count(content[:start], "\n")
+	lineStart := strings.LastIndexByte(content[:start], '\n') + 1
+	previewStart := lineStart
+	if lineStart > 0 {
+		previewStart = strings.LastIndexByte(content[:lineStart-1], '\n') + 1
+	}
+	lineEnd := end
+	if rel := strings.IndexByte(content[lineEnd:], '\n'); rel >= 0 {
+		lineEnd += rel + 1
+		if rel = strings.IndexByte(content[lineEnd:], '\n'); rel >= 0 {
+			lineEnd += rel
+		} else {
+			lineEnd = len(content)
+		}
+	} else {
+		lineEnd = len(content)
+	}
+	startLine := line
+	if previewStart < lineStart {
+		startLine--
+	}
+	endLine := startLine + strings.Count(content[previewStart:lineEnd], "\n")
+	if lineEnd > previewStart && lineEnd <= len(content) && content[lineEnd-1] == '\n' {
+		endLine--
+	}
+	if endLine < startLine {
+		endLine = startLine
+	}
+	preview, truncatedBefore, truncatedAfter := utf8Window(content, previewStart, lineEnd, start, end, maxMatchDiagnosticPreviewBytes)
+	return MatchCandidate{
+		Line:                   line,
+		StartLine:              startLine,
+		EndLine:                endLine,
+		Preview:                preview,
+		PreviewTruncatedBefore: truncatedBefore,
+		PreviewTruncatedAfter:  truncatedAfter,
+	}
+}
+
+func boundMatchErrorDetails(details *MatchErrorDetails) {
+	if details == nil {
+		return
+	}
+	for {
+		raw, err := json.Marshal(details)
+		if err == nil && len(raw) <= maxMatchDiagnosticTotalBytes {
+			return
+		}
+		longest := -1
+		for i := range details.Candidates {
+			if longest < 0 || len(details.Candidates[i].Preview) > len(details.Candidates[longest].Preview) {
+				longest = i
+			}
+		}
+		if longest < 0 || len(details.Candidates[longest].Preview) == 0 {
+			return
+		}
+		candidate := &details.Candidates[longest]
+		newLimit := len(candidate.Preview) / 2
+		preview, before, after := utf8Window(candidate.Preview, 0, len(candidate.Preview), len(candidate.Preview)/2, len(candidate.Preview)/2, newLimit)
+		candidate.Preview = preview
+		candidate.PreviewTruncatedBefore = candidate.PreviewTruncatedBefore || before
+		candidate.PreviewTruncatedAfter = candidate.PreviewTruncatedAfter || after
+	}
+}
+
+func exactMatchErrorDetails(content, oldText string, changeIndex, count int) *MatchErrorDetails {
+	offsets := exactMatchOffsets(content, oldText, maxMatchDiagnosticCandidates)
+	candidates := make([]MatchCandidate, 0, len(offsets))
+	for _, offset := range offsets {
+		candidates = append(candidates, matchCandidate(content, offset, offset+len(oldText)))
+	}
+	details := &MatchErrorDetails{
+		ChangeIndex:         changeIndex,
+		MatchType:           "exact",
+		MatchCount:          count,
+		Candidates:          candidates,
+		CandidatesTruncated: count > len(candidates),
+		Recovery:            "Use a candidate preview or read only its startLine-endLine range, then retry with more exact surrounding text. Do not choose an occurrence by position alone.",
+	}
+	boundMatchErrorDetails(details)
+	return details
+}
+
 type indentationMatch struct {
 	start int
 	end   int
@@ -342,23 +517,14 @@ type textLineSpan struct {
 	hasNewline bool
 }
 
-func textLineSpans(content string) []textLineSpan {
-	if content == "" {
-		return nil
+func nextTextLineSpan(content string, start int) (textLineSpan, bool) {
+	if start < 0 || start >= len(content) {
+		return textLineSpan{}, false
 	}
-	spans := make([]textLineSpan, 0, strings.Count(content, "\n")+1)
-	start := 0
-	for start < len(content) {
-		rel := strings.IndexByte(content[start:], '\n')
-		if rel < 0 {
-			spans = append(spans, textLineSpan{start: start, end: len(content)})
-			break
-		}
-		end := start + rel
-		spans = append(spans, textLineSpan{start: start, end: end, hasNewline: true})
-		start = end + 1
+	if rel := strings.IndexByte(content[start:], '\n'); rel >= 0 {
+		return textLineSpan{start: start, end: start + rel, hasNewline: true}, true
 	}
-	return spans
+	return textLineSpan{start: start, end: len(content)}, true
 }
 
 // IndentationInsensitiveMatches is deliberately narrow: it only considers
@@ -377,33 +543,41 @@ func IndentationInsensitiveMatches(content, oldText string, limit int) []indenta
 	if len(oldLines) < 2 {
 		return nil
 	}
-	contentLines := textLineSpans(content)
-	if len(contentLines) < len(oldLines) {
-		return nil
-	}
 	matches := make([]indentationMatch, 0, minInt(limit, 4))
-	for first := 0; first+len(oldLines) <= len(contentLines) && len(matches) < limit; first++ {
+	firstOffset := 0
+	firstLine := 1
+	for firstOffset < len(content) && len(matches) < limit {
+		firstSpan, ok := nextTextLineSpan(content, firstOffset)
+		if !ok {
+			break
+		}
+		cursor := firstOffset
 		matched := true
-		for j, oldLine := range oldLines {
-			span := contentLines[first+j]
-			candidate := content[span.start:span.end]
-			if strings.TrimLeft(candidate, " \t") != strings.TrimLeft(oldLine, " \t") {
+		var last textLineSpan
+		for _, oldLine := range oldLines {
+			span, exists := nextTextLineSpan(content, cursor)
+			if !exists || strings.TrimLeft(content[span.start:span.end], " \t") != strings.TrimLeft(oldLine, " \t") {
 				matched = false
 				break
 			}
+			last = span
+			cursor = span.end
+			if span.hasNewline {
+				cursor++
+			}
 		}
-		if !matched {
-			continue
+		if matched && (!oldTrailing || last.hasNewline) {
+			end := last.end
+			if oldTrailing {
+				end++
+			}
+			matches = append(matches, indentationMatch{start: firstOffset, end: end, line: firstLine})
 		}
-		last := contentLines[first+len(oldLines)-1]
-		if oldTrailing && !last.hasNewline {
-			continue
+		firstOffset = firstSpan.end
+		if firstSpan.hasNewline {
+			firstOffset++
 		}
-		end := last.end
-		if oldTrailing {
-			end++
-		}
-		matches = append(matches, indentationMatch{start: contentLines[first].start, end: end, line: first + 1})
+		firstLine++
 	}
 	return matches
 }
@@ -429,15 +603,15 @@ func ReindentReplacementForMatch(content, oldText, newText string, match indenta
 	if oldTrailing != newTrailing || len(oldLines) == 0 || len(oldLines) != len(newLines) || match.start < 0 || match.end > len(content) {
 		return "", false
 	}
-	spans := textLineSpans(content)
-	firstLine := match.line - 1
-	if firstLine < 0 || firstLine+len(oldLines) > len(spans) {
-		return "", false
-	}
 	adjusted := make([]string, len(newLines))
+	cursor := match.start
 	for i, line := range newLines {
+		span, ok := nextTextLineSpan(content, cursor)
+		if !ok || span.end > match.end {
+			return "", false
+		}
 		oldIndent := leadingHorizontalWhitespace(oldLines[i])
-		actualLine := content[spans[firstLine+i].start:spans[firstLine+i].end]
+		actualLine := content[span.start:span.end]
 		actualIndent := leadingHorizontalWhitespace(actualLine)
 		newIndent := leadingHorizontalWhitespace(line)
 		if !strings.HasPrefix(newIndent, oldIndent) {
@@ -446,9 +620,16 @@ func ReindentReplacementForMatch(content, oldText, newText string, match indenta
 		body := strings.TrimLeft(line, " \t")
 		if body == "" {
 			adjusted[i] = line
-			continue
+		} else {
+			adjusted[i] = actualIndent + newIndent[len(oldIndent):] + body
 		}
-		adjusted[i] = actualIndent + newIndent[len(oldIndent):] + body
+		cursor = span.end
+		if span.hasNewline {
+			cursor++
+		}
+	}
+	if cursor != match.end {
+		return "", false
 	}
 	result := strings.Join(adjusted, "\n")
 	if newTrailing {
@@ -485,7 +666,8 @@ func ApplyBatchTextChanges(content string, changes []TextChange) (*Result, int, 
 		switch {
 		case count > 1:
 			lines := ExactMatchLineNumbers(content, oldText, 8)
-			return nil, 0, toolerrors.New("E_MULTI_MATCH", fmt.Errorf("change %d oldText occurs %d times%s; include more surrounding text to make it unique", i+1, count, FormatMatchLines(lines, count)))
+			details := exactMatchErrorDetails(content, oldText, i+1, count)
+			return nil, 0, toolerrors.NewWithDetails("E_MULTI_MATCH", fmt.Errorf("change %d oldText occurs %d times%s; inspect one bounded candidate and include more surrounding text to make it unique", i+1, count, FormatMatchLines(lines, count)), details)
 		case count == 1:
 			start := strings.Index(content, oldText)
 			located = append(located, locatedChange{index: i, start: start, end: start + len(oldText), newText: newText})

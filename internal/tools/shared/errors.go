@@ -12,8 +12,9 @@ import (
 
 // CodedError is a tool error paired with a stable code.
 type CodedError struct {
-	code string
-	err  error
+	code    string
+	err     error
+	details any
 }
 
 // New returns a CodedError wrapping err with the given code. Returns nil if
@@ -29,6 +30,16 @@ func New(code string, err error) error {
 // Newf is a convenience that formats an error message and wraps it with code.
 func Newf(code string, format string, args ...any) error {
 	return CodedError{code: code, err: fmt.Errorf(format, args...)}
+}
+
+// NewWithDetails returns a coded error with a bounded, JSON-serializable detail
+// payload. Tool implementations must keep details small because they are sent
+// to both the UI and the model context on failures.
+func NewWithDetails(code string, err error, details any) error {
+	if err == nil {
+		return nil
+	}
+	return CodedError{code: code, err: err, details: details}
 }
 
 // Error implements error.
@@ -49,6 +60,11 @@ func (e CodedError) ToolErrorCode() string {
 	return e.code
 }
 
+// ToolErrorDetails returns optional structured diagnostics for tool clients.
+func (e CodedError) ToolErrorDetails() any {
+	return e.details
+}
+
 // Code extracts the code from a CodedError chain. Returns "" if err is nil
 // or no CodedError is present.
 func Code(err error) string {
@@ -57,4 +73,13 @@ func Code(err error) string {
 		return coded.ToolErrorCode()
 	}
 	return ""
+}
+
+// Details extracts optional structured diagnostics from a coded error chain.
+func Details(err error) any {
+	var detailed interface{ ToolErrorDetails() any }
+	if errors.As(err, &detailed) {
+		return detailed.ToolErrorDetails()
+	}
+	return nil
 }

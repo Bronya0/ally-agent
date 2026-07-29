@@ -22,6 +22,8 @@ import (
 type modelUsage struct {
 	PromptTokens     int
 	CompletionTokens int
+	CacheHitTokens   int
+	CacheMissTokens  int
 }
 
 type modelStreamEvent struct {
@@ -272,7 +274,7 @@ func (a *App) streamOpenAIChat(ctx context.Context, cfg ConfigState, model strin
 			return nil, fmt.Errorf("decode chat stream event: %w", err)
 		}
 		if resp.Usage != nil {
-			usage = modelUsageFromLegacy(resp.Usage)
+			usage = modelUsageFromLegacy(resp.Usage, raw)
 		}
 		if len(resp.Choices) == 0 {
 			continue
@@ -1192,13 +1194,43 @@ func splitImageDataURL(value string) (string, string, bool) {
 	}
 }
 
-func modelUsageFromLegacy(usage *legacyopenai.Usage) *modelUsage {
+// modelUsageFromLegacy maps the OpenAI-compatible usage struct. DeepSeek returns
+// cache counters as top-level prompt_cache_{hit,miss}_tokens (not parsed by the
+// sashabaranov struct), so raw is re-scanned to recover them when present;
+// OpenAI/MiMo carry them nested under prompt_tokens_details.cached_tokens.
+func modelUsageFromLegacy(usage *legacyopenai.Usage, raw []byte) *modelUsage {
 	if usage == nil {
 		return nil
+	}
+	hit, miss := 0, 0
+	if usage.PromptTokensDetails != nil {
+		hit = usage.PromptTokensDetails.CachedTokens
+	}
+	// DeepSeek 顶层字段（sashabaranov 不解析，从原始 JSON 补取）
+	if len(raw) > 0 {
+		var ds struct {
+			Usage *struct {
+				PromptCacheHitTokens  int `json:"prompt_cache_hit_tokens"`
+				PromptCacheMissTokens int `json:"prompt_cache_miss_tokens"`
+			} `json:"usage"`
+		}
+		if json.Unmarshal(raw, &ds) == nil && ds.Usage != nil {
+			if ds.Usage.PromptCacheHitTokens > 0 {
+				hit = ds.Usage.PromptCacheHitTokens
+			}
+			if ds.Usage.PromptCacheMissTokens > 0 {
+				miss = ds.Usage.PromptCacheMissTokens
+			}
+		}
+	}
+	if miss == 0 && hit > 0 && usage.PromptTokens > hit {
+		miss = usage.PromptTokens - hit
 	}
 	return &modelUsage{
 		PromptTokens:     usage.PromptTokens,
 		CompletionTokens: usage.CompletionTokens,
+		CacheHitTokens:   hit,
+		CacheMissTokens:  miss,
 	}
 }
 
@@ -1206,9 +1238,17 @@ func modelUsageFromResponses(usage oaresp.ResponseUsage) *modelUsage {
 	if usage.InputTokens <= 0 && usage.OutputTokens <= 0 {
 		return nil
 	}
+	input := int(usage.InputTokens)
+	hit := int(usage.InputTokensDetails.CachedTokens)
+	miss := input - hit
+	if miss < 0 {
+		miss = 0
+	}
 	return &modelUsage{
-		PromptTokens:     int(usage.InputTokens),
+		PromptTokens:     input,
 		CompletionTokens: int(usage.OutputTokens),
+		CacheHitTokens:   hit,
+		CacheMissTokens:  miss,
 	}
 }
 
@@ -1218,7 +1258,12 @@ func modelUsageFromAnthropic(usage anthropic.Usage) *modelUsage {
 	if input <= 0 && output <= 0 {
 		return nil
 	}
-	return &modelUsage{PromptTokens: int(input), CompletionTokens: int(output)}
+	return &modelUsage{
+		PromptTokens:     int(input),
+		CompletionTokens: int(output),
+		CacheHitTokens:   int(usage.CacheReadInputTokens),
+		CacheMissTokens:  int(usage.InputTokens + usage.CacheCreationInputTokens),
+	}
 }
 
 func mergeAnthropicUsage(current *modelUsage, usage anthropic.MessageDeltaUsage) *modelUsage {

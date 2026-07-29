@@ -428,7 +428,7 @@ Text files:
 - must be UTF-8-ish text
 - reject binary/NUL content
 - return raw LF-normalized text that can be copied directly into `edit.changes[].oldText`
-- partial batch failures stay in the corresponding file result; `errorCode` is included when known, including `E_PATH_NOT_FOUND` for a missing path
+- missing paths and directory targets are silently omitted from the returned `files` array (an ignored-only batch succeeds with an empty array); other partial failures stay in the corresponding file result with `errorCode` when known
 - include metadata: `startLine`, `endLine`, `nextStartLine`, `totalLines`, `truncated`, `version`, `lineEnding`; `version` is a 12-character lowercase Crockford Base32 prefix derived from SHA-256 content and is compared case-insensitively
 
 Document files:
@@ -446,6 +446,7 @@ Range semantics for model-facing reads:
 - provide both for an inclusive range
 - `lineCount`, `contextBefore`, `contextAfter`, and `offset` are not model-facing parameters
 - hard output limits may still set `truncated` and `nextStartLine`; the model should request another explicit range only when the remaining content is actually needed
+- plain-text range previews count and locate lines with bounded-memory linear scans instead of materializing one string entry per file line, so tiny reads remain safe on million-line files and very long single lines stay UTF-8/budget bounded
 
 The model-facing `edit` tool has one cross-file batch exact-replacement mode. Line-range and legacy exact-string helpers remain backend compatibility APIs and are not exposed to the model.
 
@@ -462,7 +463,7 @@ Important edit contract:
 - Read the file first with `read`.
 - `version` is mandatory for model-facing local and remote edits. It is a short optimistic-concurrency token; a stale value fails with `E_VERSION_MISMATCH`, and malformed values fail with `E_BAD_VERSION`.
 - Successful edits return the new `version` per file. It may be reused directly for a follow-up edit when the exact current `oldText` is already known; re-read only when content is unknown, external modification is possible, or a version/match error occurs.
-- Every non-no-op `oldText` is matched against the same original version snapshot and must occur exactly once. Ambiguous exact matches report bounded matching line numbers.
+- Every non-no-op `oldText` is matched against the same original version snapshot and must occur exactly once. Ambiguous exact matches return optional structured `details` with at most three raw UTF-8 candidate previews, clipping flags, line ranges, and recovery guidance; the detail JSON is capped at 4 KiB so callers can issue a narrow `read` without receiving the full file.
 - For a multi-line whole-line block only, exact-match failure may fall back to ignoring leading spaces/tabs on each line. The fallback succeeds only for one unique candidate and safely rebases `newText` to the file's actual base indentation; body text is never fuzzy-matched.
 - Changes whose normalized `oldText` and `newText` are identical are ignored and reported as warnings. An all-no-op local batch succeeds without writing the file.
 - Matches must not overlap. The backend locates all effective matches first, applies them from the end of the file backward, and writes once.

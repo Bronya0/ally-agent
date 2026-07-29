@@ -159,7 +159,7 @@ func (a *App) batchReadFilesWithConfig(cfg ConfigState, req BatchReadRequest) (*
 		for i, p := range pending {
 			results[i] = a.batchReadOneWithConfig(cfg, p.path, p.req)
 		}
-		return &BatchReadResult{Files: results}, nil
+		return filteredBatchReadResult(results), nil
 	}
 	// Parallel path: cap concurrency to 4 (matches the non-file tool batch
 	// limit in runChat). 20 files / 4 concurrent ≈ 5 rounds; well below the
@@ -177,7 +177,26 @@ func (a *App) batchReadFilesWithConfig(cfg ConfigState, req BatchReadRequest) (*
 		}(i, p.path, p.req)
 	}
 	wg.Wait()
-	return &BatchReadResult{Files: results}, nil
+	return filteredBatchReadResult(results), nil
+}
+
+// filteredBatchReadResult silently drops paths that cannot represent readable
+// files. Models occasionally mix directories or stale/non-existent paths into
+// files[]. Keeping them out of the result also keeps those expected misses out
+// of the UI, while all meaningful read failures remain visible. Filtering is
+// done in place to avoid another result-sized allocation; the unused tail is
+// cleared so large successful contents are not retained through duplicate
+// slice slots.
+func filteredBatchReadResult(results []BatchReadResultItem) *BatchReadResult {
+	kept := results[:0]
+	for _, result := range results {
+		if result.ErrorCode == "E_PATH_NOT_FOUND" || result.ErrorCode == "E_IS_DIRECTORY" {
+			continue
+		}
+		kept = append(kept, result)
+	}
+	clear(results[len(kept):])
+	return &BatchReadResult{Files: kept}
 }
 
 func batchReadErrorCode(err error) string {
@@ -238,7 +257,7 @@ func (a *App) readDocumentWithConfig(cfg ConfigState, req DocumentReadRequest) (
 		return DocumentReadResult{}, err
 	}
 	if info.IsDir() {
-		return DocumentReadResult{}, errors.New("path is a directory")
+		return DocumentReadResult{}, codedToolError("E_IS_DIRECTORY", errors.New("path is a directory"))
 	}
 	maxChars := req.MaxChars
 	if maxChars <= 0 {
@@ -417,12 +436,19 @@ func formatLineNumberReadPreviewRangeWithBudget(content string, req readRangeReq
 		}, nil
 	}
 
-	allLines, trailingNewline := splitLines(content)
-	total := len(allLines)
+	// Count visible lines without strings.Split. A split would allocate one
+	// string header per line (about 16 MiB for one million short lines) even
+	// when the caller requests only a tiny range near EOF.
+	total := countPlainTextLines(content)
 
 	startLine := req.StartLine
 	if startLine <= 0 {
 		startLine = 1
+	}
+	if req.EndLine > 0 && req.EndLine < startLine {
+		// Models occasionally reverse an explicit range. Normalize it before
+		// the EOF check so 100..20 on a 50-line file safely becomes 20..50.
+		req.EndLine, startLine = startLine, req.EndLine
 	}
 	if startLine > total {
 		return readPreviewResult{
@@ -437,9 +463,6 @@ func formatLineNumberReadPreviewRangeWithBudget(content string, req readRangeReq
 
 	baseEnd := total
 	if req.EndLine > 0 {
-		if req.EndLine < startLine {
-			return readPreviewResult{}, fmt.Errorf("endLine %d is before startLine %d", req.EndLine, startLine)
-		}
 		baseEnd = req.EndLine
 	} else if req.LineCount > 0 {
 		baseEnd = startLine + req.LineCount - 1
@@ -472,53 +495,61 @@ func formatLineNumberReadPreviewRangeWithBudget(content string, req readRangeReq
 		rangeLimited = true
 	}
 
-	width := len(strconv.Itoa(end))
+	rangeStartOffset := lineStartOffset(content, start)
+	lineOffset := rangeStartOffset
+	completeRawEnd := rangeStartOffset
 	var b strings.Builder
+	if budgetBytes > 0 {
+		b.Grow(min(budgetBytes, len(content)-rangeStartOffset))
+	}
 	actualEnd := start - 1
 	budgetLimited := false
+	partialFirstLine := false
+	rawContent := ""
 	for lineNum := start; lineNum <= end; lineNum++ {
-		lineText := formatNumberedLine(lineNum, allLines[lineNum-1], width)
-		if b.Len() > 0 {
-			lineText = "\n" + lineText
+		lineEnd := len(content)
+		nextOffset := len(content)
+		if rel := strings.IndexByte(content[lineOffset:], '\n'); rel >= 0 {
+			lineEnd = lineOffset + rel
+			nextOffset = lineEnd + 1
 		}
-		if budgetBytes > 0 && b.Len()+len(lineText) > budgetBytes {
+		prefix := strconv.Itoa(lineNum) + ": "
+		separatorBytes := 0
+		if b.Len() > 0 {
+			separatorBytes = 1
+		}
+		needed := separatorBytes + len(prefix) + lineEnd - lineOffset
+		if budgetBytes > 0 && b.Len()+needed > budgetBytes {
 			budgetLimited = true
+			if b.Len() == 0 {
+				remaining := budgetBytes
+				if len(prefix) > remaining {
+					b.WriteString(prefix[:remaining])
+					remaining = 0
+				} else {
+					b.WriteString(prefix)
+					remaining -= len(prefix)
+				}
+				linePreview := utf8Prefix(content[lineOffset:lineEnd], remaining)
+				b.WriteString(linePreview)
+				rawContent = utf8Prefix(content[lineOffset:lineEnd], budgetBytes)
+				partialFirstLine = len(rawContent) < lineEnd-lineOffset
+				actualEnd = start
+			}
 			break
 		}
-		b.WriteString(lineText)
+		if separatorBytes != 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString(prefix)
+		b.WriteString(content[lineOffset:lineEnd])
 		actualEnd = lineNum
+		completeRawEnd = nextOffset
+		lineOffset = nextOffset
 	}
 	result := b.String()
-	rawContent := ""
-	partialFirstLine := false
-	if result == "" && budgetBytes > 0 {
-		lineText := formatNumberedLine(start, allLines[start-1], width)
-		if len(lineText) > budgetBytes {
-			cut := budgetBytes
-			for cut > 0 && !utf8.ValidString(lineText[:cut]) {
-				cut--
-			}
-			lineText = lineText[:cut]
-		}
-		result = lineText
-		actualEnd = start
-		budgetLimited = true
-		rawLine := allLines[start-1]
-		cut := budgetBytes
-		if cut > len(rawLine) {
-			cut = len(rawLine)
-		}
-		for cut > 0 && !utf8.ValidString(rawLine[:cut]) {
-			cut--
-		}
-		rawContent = rawLine[:cut]
-		partialFirstLine = cut < len(rawLine)
-	}
 	if !partialFirstLine && actualEnd >= start {
-		rawContent = strings.Join(allLines[start-1:actualEnd], "\n")
-		if actualEnd < total || (actualEnd == total && trailingNewline) {
-			rawContent += "\n"
-		}
+		rawContent = content[rangeStartOffset:completeRawEnd]
 	}
 
 	nextStartLine := 0
@@ -543,6 +574,38 @@ func formatLineNumberReadPreviewRangeWithBudget(content string, req readRangeReq
 		Truncated:     nextStartLine > 0 || budgetLimited || rangeLimited,
 		RangeStatus:   status,
 	}, nil
+}
+
+// lineStartOffset returns the byte offset of a visible 1-based line. Callers
+// validate lineNum against countPlainTextLines first. It performs one linear
+// scan and allocates no per-line metadata.
+func lineStartOffset(content string, lineNum int) int {
+	if lineNum <= 1 {
+		return 0
+	}
+	offset := 0
+	for current := 1; current < lineNum; current++ {
+		rel := strings.IndexByte(content[offset:], '\n')
+		if rel < 0 {
+			return len(content)
+		}
+		offset += rel + 1
+	}
+	return offset
+}
+
+func utf8Prefix(text string, maxBytes int) string {
+	if maxBytes <= 0 {
+		return ""
+	}
+	if len(text) <= maxBytes {
+		return text
+	}
+	cut := maxBytes
+	for cut > 0 && !utf8.ValidString(text[:cut]) {
+		cut--
+	}
+	return text[:cut]
 }
 
 func formatNumberedLine(lineNum int, line string, width int) string {

@@ -49,6 +49,17 @@
           <RenderBoundary :label="$t('chat.attachment')"><MessageAttachments :attachments="msg.attachments || []" /></RenderBoundary>
           <div v-if="msg.role === 'assistant' && msg.roundDurationText && !msg.streaming" class="message-duration">
             <span class="duration-text">{{ msg.roundDurationText }}</span>
+            <span
+              v-if="typeof msg.cacheRate === 'number'"
+              class="cache-rate"
+              :class="cacheRateClass(msg.cacheRate)"
+              :title="`cache hit ${msg.cacheHit} / miss ${msg.cacheMiss} (this run)`"
+            >cache {{ msg.cacheRate }}%</span>
+            <span
+              v-if="msg.runInputTokens > 0 || msg.runOutputTokens > 0"
+              class="run-tokens"
+              :title="`input ${msg.runInputTokens} / output ${msg.runOutputTokens} tokens (this run)`"
+            >↑{{ fmtTokens(msg.runInputTokens) }} ↓{{ fmtTokens(msg.runOutputTokens) }}</span>
             <button class="export-icon-btn" @click.stop="$emit('exportOneMsg', msg)" :title="$t('chat.export.responseTitle')" aria-label="export response">
               <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M8 2v9M4.5 7.5L8 11l3.5-3.5M2.5 13.5h11"/>
@@ -228,6 +239,18 @@ defineEmits([
   'exportAllMsgs',
   'submitAsk',
 ]);
+
+function cacheRateClass(rate) {
+  if (rate >= 80) return 'cache-high';
+  if (rate >= 40) return 'cache-mid';
+  return 'cache-low';
+}
+
+function fmtTokens(n) {
+  const v = Number(n || 0);
+  if (v >= 1000) return (v / 1000).toFixed(1) + 'k';
+  return String(v);
+}
 
 const scrollbarRef = ref(null);
 const messagesRootRef = ref(null);
@@ -615,6 +638,21 @@ defineExpose({ scrollbarRef, scrollToBottom, scrollToUserQuestion, saveScrollPos
 .duration-text {
   font-variant-numeric: tabular-nums;
 }
+
+.run-tokens {
+  font-variant-numeric: tabular-nums;
+}
+
+.cache-rate {
+  font-variant-numeric: tabular-nums;
+  padding: 0 5px;
+  border-radius: 3px;
+  font-size: 11px;
+  line-height: 16px;
+}
+.cache-rate.cache-high { color: #4ade80; }
+.cache-rate.cache-mid  { color: #fbbf24; }
+.cache-rate.cache-low  { color: #f87171; }
 
 .export-icon-btn {
   display: inline-flex;

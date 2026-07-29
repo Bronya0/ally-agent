@@ -14,6 +14,7 @@ type toolResult struct {
 	Data      any    `json:"data,omitempty"`
 	Error     string `json:"error,omitempty"`
 	ErrorCode string `json:"errorCode,omitempty"`
+	Details   any    `json:"details,omitempty"`
 }
 
 // codedToolError wraps err with a stable tool error code. It delegates to the
@@ -31,7 +32,7 @@ func toolErrorResult(err error) toolResult {
 	if err == nil {
 		return toolResult{OK: true}
 	}
-	return toolResult{OK: false, Error: err.Error(), ErrorCode: toolErrorCode(err)}
+	return toolResult{OK: false, Error: err.Error(), ErrorCode: toolErrorCode(err), Details: toolerrors.Details(err)}
 }
 
 // toolResultSummary returns a short human-readable summary for a tool result.

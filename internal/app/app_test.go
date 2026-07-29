@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	oaresp "github.com/openai/openai-go/responses"
 	openai "github.com/sashabaranov/go-openai"
 )
 
@@ -922,4 +923,20 @@ func TestAppEmitUsesHostEventSink(t *testing.T) {
 func TestAppEmitWithoutHostSinkIsNoop(t *testing.T) {
 	app := NewApp()
 	app.emit("run:delta", "ignored")
+}
+
+func TestModelUsageFromResponsesCountsUncachedInputAsMiss(t *testing.T) {
+	usage := modelUsageFromResponses(oaresp.ResponseUsage{
+		InputTokens:  120,
+		OutputTokens: 8,
+		InputTokensDetails: oaresp.ResponseUsageInputTokensDetails{
+			CachedTokens: 0,
+		},
+	})
+	if usage == nil {
+		t.Fatal("modelUsageFromResponses() returned nil")
+	}
+	if usage.CacheHitTokens != 0 || usage.CacheMissTokens != 120 {
+		t.Fatalf("cache usage = hit %d miss %d, want hit 0 miss 120", usage.CacheHitTokens, usage.CacheMissTokens)
+	}
 }

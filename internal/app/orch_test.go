@@ -15,6 +15,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"ally-dev/internal/tools/grep"
 	openai "github.com/sashabaranov/go-openai"
@@ -1425,20 +1426,126 @@ func TestBatchReadKeepsSamePathWithDifferentEffectiveRanges(t *testing.T) {
 	}
 }
 
-func TestBatchReadReportsStructuredMissingPathError(t *testing.T) {
+func TestReadPreviewHandlesMillionLineRangeWithoutExpandingAllLines(t *testing.T) {
+	const totalLines = 1_000_000
+	content := strings.Repeat("x\n", totalLines)
+
+	preview, err := formatLineNumberReadPreviewRangeWithBudget(content, readRangeRequest{
+		StartLine: totalLines - 1,
+		EndLine:   totalLines,
+	}, 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if preview.TotalLines != totalLines || preview.StartLine != totalLines-1 || preview.EndLine != totalLines {
+		t.Fatalf("unexpected million-line metadata: %#v", preview)
+	}
+	if preview.RawContent != "x\nx\n" {
+		t.Fatalf("unexpected million-line raw range: %q", preview.RawContent)
+	}
+	if preview.Truncated || preview.NextStartLine != 0 || preview.RangeStatus != "ok" {
+		t.Fatalf("explicit final range should be complete: %#v", preview)
+	}
+	if len(preview.Content) > 1024 {
+		t.Fatalf("preview exceeded byte budget: %d", len(preview.Content))
+	}
+}
+
+func TestReadPreviewNormalizesReversedRangeBeforeEOFCheck(t *testing.T) {
+	content := strings.Repeat("x\n", 50)
+
+	preview, err := formatLineNumberReadPreviewRangeWithBudget(content, readRangeRequest{StartLine: 100, EndLine: 20}, 4096)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if preview.StartLine != 20 || preview.EndLine != 50 || preview.EmptyRange {
+		t.Fatalf("expected reversed range to normalize and clamp to 20-50, got %#v", preview)
+	}
+
+	beyond, err := formatLineNumberReadPreviewRangeWithBudget(content, readRangeRequest{StartLine: 100, EndLine: 80}, 4096)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !beyond.EmptyRange || beyond.RangeStatus != "beyond_eof" || beyond.StartLine != 80 {
+		t.Fatalf("expected normalized start line 80 to remain beyond EOF, got %#v", beyond)
+	}
+}
+
+func TestReadPreviewBoundsVeryLongUnicodeLine(t *testing.T) {
+	content := strings.Repeat("界", 1_000_000)
+	const budget = 1024
+
+	preview, err := formatLineNumberReadPreviewRangeWithBudget(content, readRangeRequest{}, budget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if preview.TotalLines != 1 || preview.StartLine != 1 || preview.EndLine != 1 {
+		t.Fatalf("unexpected long-line metadata: %#v", preview)
+	}
+	if !preview.Truncated || preview.RangeStatus != "truncated" {
+		t.Fatalf("long line should report truncation: %#v", preview)
+	}
+	if len(preview.Content) > budget+128 || len(preview.RawContent) > budget {
+		t.Fatalf("long-line preview exceeded bounded output: numbered=%d raw=%d", len(preview.Content), len(preview.RawContent))
+	}
+	if !utf8.ValidString(preview.Content) || !utf8.ValidString(preview.RawContent) {
+		t.Fatal("long-line truncation split a UTF-8 sequence")
+	}
+}
+
+func TestBatchReadSilentlyFiltersMissingPathsAndDirectories(t *testing.T) {
 	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "valid.txt"), []byte("ok\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"folder", "document.pdf"} {
+		if err := os.Mkdir(filepath.Join(dir, name), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+
 	app := NewApp()
 	result, err := app.batchReadFilesWithConfig(ConfigState{Workspace: dir}, BatchReadRequest{
-		Files: []BatchReadFileRequest{{Path: "missing.txt"}},
+		Files: []BatchReadFileRequest{
+			{Path: "missing.txt"},
+			{Path: "folder"},
+			{Path: "document.pdf"}, // document-extension directories use the same filter
+			{Path: "valid.txt"},
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Files) != 1 {
-		t.Fatalf("expected one result, got %#v", result)
+	if len(result.Files) != 1 || result.Files[0].Path != "valid.txt" {
+		t.Fatalf("expected only the readable file, got %#v", result)
 	}
-	if result.Files[0].ErrorCode != "E_PATH_NOT_FOUND" {
-		t.Fatalf("expected E_PATH_NOT_FOUND, got %#v", result.Files[0])
+
+	empty, err := app.batchReadFilesWithConfig(ConfigState{Workspace: dir}, BatchReadRequest{
+		Files: []BatchReadFileRequest{{Path: "missing.txt"}, {Path: "folder"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(empty.Files) != 0 {
+		t.Fatalf("expected ignored-only batch to return no entries, got %#v", empty)
+	}
+}
+
+func TestBatchReadKeepsMeaningfulReadErrors(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "binary.dat"), []byte{'a', 0, 'b'}, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	app := NewApp()
+	result, err := app.batchReadFilesWithConfig(ConfigState{Workspace: dir}, BatchReadRequest{
+		Files: []BatchReadFileRequest{{Path: "missing.txt"}, {Path: "binary.dat"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Files) != 1 || result.Files[0].Path != "binary.dat" || result.Files[0].ErrorCode != "E_BINARY_FILE" {
+		t.Fatalf("expected meaningful read error to remain visible, got %#v", result)
 	}
 }
 
@@ -1722,6 +1829,24 @@ func TestExecuteToolEditRejectsMultipleMatches(t *testing.T) {
 	}`, hashVersion(original))))
 	if result.OK || !strings.Contains(result.Error, "[E_MULTI_MATCH]") {
 		t.Fatalf("expected edit multi-match failure, got %#v", result)
+	}
+
+	raw, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"details"`) || !strings.Contains(string(raw), `"matchCount":2`) {
+		t.Fatalf("expected structured match diagnostics in tool envelope, got %s", raw)
+	}
+	if len(raw) > 8*1024 {
+		t.Fatalf("edit error envelope exceeded bounded budget: %d bytes", len(raw))
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "sample.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(original) {
+		t.Fatalf("ambiguous edit must not modify the file, got %q", got)
 	}
 }
 

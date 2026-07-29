@@ -3,7 +3,7 @@
     <n-dialog-provider>
       <n-notification-provider>
         <n-message-provider>
-          <n-layout class="app-shell">
+          <n-layout class="app-shell" content-style="display: flex; flex-direction: column;">
             <AppHeader
               :workspace-tabs="workspaceTabsWithStatus"
               :active-workspace-id="activeWorkspaceId"
@@ -2568,8 +2568,8 @@ function flushStreamBuffer(runId) {
   const session = sessionByRunId(runId);
   if (!session) return;
   let last = session.messages[session.messages.length - 1];
-  if (!last || last.role !== 'assistant' || last.error || last.system || last.done) {
-    last = { role: 'assistant', content: '', reasoningBody: '', streaming: true };
+  if (!last || last.role !== 'assistant' || last.error || last.system || last.done || last.runId !== runId) {
+    last = { role: 'assistant', content: '', reasoningBody: '', streaming: true, runId };
     session.messages.push(last);
   }
   last.streaming = true;
@@ -2660,18 +2660,38 @@ function flushToolUpdateBuffer() {
   }
 }
 
-function setLastAssistantRoundDuration(session, durationMs) {
-  if (!session) return;
-  const text = formatDurationShort(durationMs);
-  if (!text) return;
+function assistantMessageForRun(session, runId) {
+  if (!session || !runId) return null;
   for (let i = session.messages.length - 1; i >= 0; i--) {
     const msg = session.messages[i];
-    if (msg.role === 'assistant') {
-      msg.roundDurationMs = Number(durationMs || 0);
-      msg.roundDurationText = text;
-      return;
-    }
+    if (msg.role === 'assistant' && msg.runId === runId) return msg;
   }
+  return null;
+}
+
+function setAssistantRoundDuration(session, runId, durationMs) {
+  const msg = assistantMessageForRun(session, runId);
+  if (!msg) return;
+  const text = formatDurationShort(durationMs);
+  if (!text) return;
+  msg.roundDurationMs = Number(durationMs || 0);
+  msg.roundDurationText = text;
+}
+
+function setAssistantCacheRate(session, runId, hit, miss, inputTokens, outputTokens) {
+  const msg = assistantMessageForRun(session, runId);
+  if (!msg) return;
+  const h = Number(hit || 0);
+  const m = Number(miss || 0);
+  const inp = Number(inputTokens || 0);
+  const out = Number(outputTokens || 0);
+  const rate = (h + m) > 0 ? Math.round((h / (h + m)) * 100) : null;
+  msg.cacheHit = h;
+  msg.cacheMiss = m;
+  if (rate === null) delete msg.cacheRate;
+  else msg.cacheRate = rate;
+  msg.runInputTokens = inp;
+  msg.runOutputTokens = out;
 }
 
 function getCompletionAudioContext() {
@@ -2838,8 +2858,8 @@ function bindRuntimeEvents() {
     const session = sessionByEvent(data);
     if (!session || !data?.dataUrl) return;
     let target = session.messages[session.messages.length - 1];
-    if (!target || target.role !== 'assistant' || target.done || target.error || target.system) {
-      target = { role: 'assistant', content: '', reasoningBody: '', streaming: true, attachments: [] };
+    if (!target || target.role !== 'assistant' || target.done || target.error || target.system || target.runId !== data.runId) {
+      target = { role: 'assistant', content: '', reasoningBody: '', streaming: true, attachments: [], runId: data.runId };
       session.messages.push(target);
     }
     target.streaming = true;
@@ -2947,6 +2967,15 @@ function bindRuntimeEvents() {
       existing.toolCallId = data.toolCallId || existing.toolCallId || '';
       if (data.toolCallIndex !== undefined && data.toolCallIndex !== null) existing.toolCallIndex = data.toolCallIndex;
       const resultData = parseToolResultData(data.result);
+      // The backend silently filters directory and stale/missing paths from a
+      // batch read. If every requested path was filtered, remove the transient
+      // running card as well so the UI shows neither an error nor an empty read.
+      if ((data.name === 'read' || data.name === 'batch_read') && Array.isArray(resultData.files) && resultData.files.length === 0) {
+        const messageIndex = session.messages.indexOf(existing);
+        if (messageIndex >= 0) session.messages.splice(messageIndex, 1);
+        scheduleSaveSessions();
+        return;
+      }
       if ((data.name === 'subagent' || data.name === 'agent_delegate') && existing.kind === 'subagent') {
         existing.subagentId = resultData.agentId || existing.subagentId || '';
         existing.status = resultData.status || 'completed';
@@ -3121,7 +3150,7 @@ function bindRuntimeEvents() {
     let i = session.messages.length - 1;
     while (i >= 0) {
       const msg = session.messages[i];
-      if (msg.role === 'assistant' && msg.streaming) {
+      if (msg.role === 'assistant' && msg.streaming && msg.runId === data.runId) {
         msg.streaming = false;
         msg.done = true;
         finalizeReasoningTiming(msg);
@@ -3135,7 +3164,8 @@ function bindRuntimeEvents() {
       }
       i--;
     }
-    setLastAssistantRoundDuration(session, data.durationMs);
+    setAssistantRoundDuration(session, data.runId, data.durationMs);
+    setAssistantCacheRate(session, data.runId, data.cacheHit, data.cacheMiss, data.inputTokens, data.outputTokens);
     session.runId = '';
     session.isRunning = false;
     if (session.id === activeSessionId.value) {
@@ -3154,10 +3184,10 @@ function bindRuntimeEvents() {
     }
     const session = sessionByTerminalEvent(data);
     if (!session) return;
-      let i = session.messages.length - 1;
+    let i = session.messages.length - 1;
     while (i >= 0) {
       const msg = session.messages[i];
-      if (msg.role === 'assistant' && msg.streaming) {
+      if (msg.role === 'assistant' && msg.streaming && msg.runId === data.runId) {
         msg.streaming = false;
         msg.done = true;
         finalizeReasoningTiming(msg);
@@ -3170,12 +3200,11 @@ function bindRuntimeEvents() {
     if (session.id === activeSessionId.value) {
       const err = data.error || 'unknown error';
       const cancelled = err === '已取消' || err === 'Cancelled' || String(err).toLowerCase().includes('context canceled');
-      session.messages.push({ role: 'assistant', content: cancelled ? t('app.run.cancelled') : t('app.run.failed', { error: err }), error: !cancelled, system: cancelled });
-      setLastAssistantRoundDuration(session, data.durationMs);
+      session.messages.push({ role: 'assistant', content: cancelled ? t('app.run.cancelled') : t('app.run.failed', { error: err }), error: !cancelled, system: cancelled, runId: data.runId });
       playCompletionSound(cancelled ? 'cancelled' : 'error');
-    } else {
-      setLastAssistantRoundDuration(session, data.durationMs);
     }
+    setAssistantRoundDuration(session, data.runId, data.durationMs);
+    setAssistantCacheRate(session, data.runId, data.cacheHit, data.cacheMiss, data.inputTokens, data.outputTokens);
     saveSessions();
     // Refresh token count after error: messages already grew with streamed
     // content, tool args, and the error footer — the context popover should
@@ -3191,10 +3220,10 @@ function bindRuntimeEvents() {
     }
     const session = sessionByTerminalEvent(data);
     if (!session) return;
-      let i = session.messages.length - 1;
+    let i = session.messages.length - 1;
     while (i >= 0) {
       const msg = session.messages[i];
-      if (msg.role === 'assistant' && msg.streaming) {
+      if (msg.role === 'assistant' && msg.streaming && msg.runId === data.runId) {
         msg.streaming = false;
         msg.done = true;
         finalizeReasoningTiming(msg);
@@ -3202,7 +3231,8 @@ function bindRuntimeEvents() {
       }
       i--;
     }
-    setLastAssistantRoundDuration(session, data.durationMs);
+    setAssistantRoundDuration(session, data.runId, data.durationMs);
+    setAssistantCacheRate(session, data.runId, data.cacheHit, data.cacheMiss, data.inputTokens, data.outputTokens);
     session.runId = '';
     session.isRunning = false;
     if (session.id === activeSessionId.value) {

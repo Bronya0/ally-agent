@@ -1709,6 +1709,12 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 	tools := a.buildToolsForConfig(cfg)
 	startTime := time.Now()
 	grillProtocolRetries := 0
+	// runCacheHit/Miss accumulate prompt-cache hit/miss tokens across every
+	// LLM request in this Run (a tool loop may issue many). The aggregate
+	// rate Σhit/Σ(hit+miss) is what the frontend shows on the final assistant
+	// message — a per-Run cache efficiency number, not a per-turn one.
+	var runCacheHit, runCacheMiss int
+	var runInputTokens, runOutputTokens int
 	emitRunEnd := func(event string, payload map[string]any) {
 		if payload == nil {
 			payload = map[string]any{}
@@ -1716,6 +1722,10 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 		payload["runId"] = runID
 		payload["sessionId"] = sessionID
 		payload["durationMs"] = time.Since(startTime).Milliseconds()
+		payload["cacheHit"] = runCacheHit
+		payload["cacheMiss"] = runCacheMiss
+		payload["inputTokens"] = runInputTokens
+		payload["outputTokens"] = runOutputTokens
 		a.emit(event, payload)
 	}
 
@@ -1840,6 +1850,12 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			reasoning := modelResp.Reasoning
 			toolCalls = modelResp.ToolCalls
 			a.recordWorkspaceTokenUsage(cfg.Workspace, modelResp.Usage, estimateRequestTokens(messages, tools), estimateCompletionTokens(content, reasoning, toolCalls))
+			if modelResp.Usage != nil {
+				runCacheHit += modelResp.Usage.CacheHitTokens
+				runCacheMiss += modelResp.Usage.CacheMissTokens
+				runInputTokens += modelResp.Usage.PromptTokens
+				runOutputTokens += modelResp.Usage.CompletionTokens
+			}
 			if stopErr := modelResponseStopError(cfg, modelResp); stopErr != nil {
 				if content != "" || reasoning != "" {
 					messages = append(messages, openai.ChatCompletionMessage{
