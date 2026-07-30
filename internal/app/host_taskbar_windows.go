@@ -14,6 +14,8 @@ const (
 	taskbarStateIndeterminate = 1
 	clsctxInprocServer        = 0x1
 	coinitApartmentThreaded   = 0x2
+	flashwTray                = 0x2
+	flashwTimerNoForeground   = 0xC
 )
 
 var (
@@ -25,12 +27,22 @@ var (
 	procCoUninitialize   = modOle32.NewProc("CoUninitialize")
 	procCoCreateInstance = modOle32.NewProc("CoCreateInstance")
 	procFindWindowW      = modUser32.NewProc("FindWindowW")
+	procGetForegroundWnd = modUser32.NewProc("GetForegroundWindow")
+	procFlashWindowEx    = modUser32.NewProc("FlashWindowEx")
 )
 
 var (
 	clsidTaskbarList = windows.GUID{Data1: 0x56fdf344, Data2: 0xfd6d, Data3: 0x11d0, Data4: [8]byte{0x95, 0x8a, 0x00, 0x60, 0x97, 0xc9, 0xa0, 0x90}}
 	iidTaskbarList3  = windows.GUID{Data1: 0xea1afb91, Data2: 0x9e28, Data3: 0x4b86, Data4: [8]byte{0x90, 0xe9, 0x9e, 0x9f, 0x8a, 0x5e, 0xeb, 0xfb}}
 )
+
+type flashWindowInfo struct {
+	Size    uint32
+	Window  uintptr
+	Flags   uint32
+	Count   uint32
+	Timeout uint32
+}
 
 type taskbarList3 struct {
 	lpVtbl *taskbarList3Vtbl
@@ -114,4 +126,22 @@ func setTaskbarRunningProgress() {
 
 func clearTaskbarProgress() {
 	setTaskbarProgressState(taskbarStateNoProgress)
+}
+
+func flashTaskbarWindowIfInactive() {
+	hwnd := findMainWindowHandle()
+	if hwnd == 0 {
+		return
+	}
+	foreground, _, _ := procGetForegroundWnd.Call()
+	if foreground == hwnd {
+		return
+	}
+
+	info := flashWindowInfo{
+		Window: hwnd,
+		Flags:  flashwTray | flashwTimerNoForeground,
+	}
+	info.Size = uint32(unsafe.Sizeof(info))
+	procFlashWindowEx.Call(uintptr(unsafe.Pointer(&info)))
 }

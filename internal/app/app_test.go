@@ -1,8 +1,12 @@
 package app
 
 import (
+	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -695,6 +699,21 @@ func TestSystemPromptExplainsRunCommandOutsidePathRecovery(t *testing.T) {
 	}
 }
 
+func TestSystemPromptDiscouragesRedundantReadsBeforeEdit(t *testing.T) {
+	prompt := defaultSystemPrompt(nil, "", nil, "", "")
+	for _, expected := range []string{
+		"assume workspace files are not concurrently edited by another person",
+		"do not re-read a file merely for reassurance",
+		"reuse its returned `version`",
+		"context compaction removed the reliable snapshot",
+		"formatter/generator/command or other external process may have changed the file",
+	} {
+		if !strings.Contains(prompt, expected) {
+			t.Fatalf("system prompt missing redundant-read guidance %q", expected)
+		}
+	}
+}
+
 func TestGoalProgressIsAppendedAfterStableHistory(t *testing.T) {
 	app := NewApp()
 	sessionID := "goal-cache-session"
@@ -789,6 +808,125 @@ func TestSaveHistoryPreservesToolCallsAndResults(t *testing.T) {
 	}
 	if got[2].Role != openai.ChatMessageRoleTool || got[2].ToolCallID != "call_1" || got[2].Content != toolResult {
 		t.Fatalf("expected raw tool result to be preserved, got %#v", got[2])
+	}
+}
+
+func TestAppendFrontendHistoryDeltaMatchesBudgetedBackendTail(t *testing.T) {
+	backend := []openai.ChatCompletionMessage{
+		{Role: openai.ChatMessageRoleUser, Content: "common question"},
+		{Role: openai.ChatMessageRoleAssistant, Content: "common answer"},
+	}
+	frontend := []ChatMessageInput{
+		{Role: openai.ChatMessageRoleUser, Content: "old question"},
+		{Role: openai.ChatMessageRoleAssistant, Content: "old answer"},
+		{Role: openai.ChatMessageRoleUser, Content: "common question"},
+		{Role: openai.ChatMessageRoleAssistant, Content: "common answer"},
+		{Role: openai.ChatMessageRoleUser, Content: "new question"},
+	}
+
+	got := appendFrontendHistoryDelta(cloneChatMessages(backend), backend, frontend)
+	if len(got) != 3 || got[2].Content != "new question" {
+		t.Fatalf("expected only frontend tail after overlap, got %#v", got)
+	}
+	if countMessageContent(got, "common question") != 1 || countMessageContent(got, "common answer") != 1 {
+		t.Fatalf("expected overlapping backend tail not to be duplicated, got %#v", got)
+	}
+}
+
+func TestAppendFrontendHistoryDeltaAfterCompactionUsesOnlyRequestTail(t *testing.T) {
+	backend := []openai.ChatCompletionMessage{
+		{Role: openai.ChatMessageRoleUser, Content: "[compacted summary]"},
+	}
+	frontend := []ChatMessageInput{
+		{Role: openai.ChatMessageRoleUser, Content: "old question"},
+		{Role: openai.ChatMessageRoleAssistant, Content: "old answer"},
+		{Role: openai.ChatMessageRoleUser, Content: "new question"},
+	}
+
+	got := appendFrontendHistoryDelta(cloneChatMessages(backend), backend, frontend)
+	if len(got) != 2 || got[0].Content != "[compacted summary]" || got[1].Content != "new question" {
+		t.Fatalf("expected compacted backend plus latest request tail, got %#v", got)
+	}
+}
+
+func TestSaveHistoryUsesGzipAndLoadsLegacyJSON(t *testing.T) {
+	app := NewApp()
+	app.historiesDir = t.TempDir()
+	sessionID := "compressed-history"
+	messages := []openai.ChatCompletionMessage{
+		{Role: openai.ChatMessageRoleUser, Content: strings.Repeat("compressible history ", 200)},
+		{Role: openai.ChatMessageRoleAssistant, Content: "done"},
+	}
+	app.saveHistory(sessionID, messages)
+	// A second save must replace the compressed file on Windows as well.
+	messages[1].Content = "done twice"
+	app.saveHistory(sessionID, messages)
+
+	paths := app.historyDiskPaths(sessionID)
+	compressed, err := os.Open(paths[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	zr, err := gzip.NewReader(compressed)
+	if err != nil {
+		_ = compressed.Close()
+		t.Fatal(err)
+	}
+	decoded, err := io.ReadAll(zr)
+	_ = zr.Close()
+	_ = compressed.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var roundTrip []openai.ChatCompletionMessage
+	if err := json.Unmarshal(decoded, &roundTrip); err != nil || len(roundTrip) != 2 || roundTrip[1].Content != "done twice" {
+		t.Fatalf("invalid compressed history: err=%v messages=%#v", err, roundTrip)
+	}
+	if _, err := os.Stat(paths[1]); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("legacy JSON should not remain after gzip save, stat err=%v", err)
+	}
+
+	legacyID := "legacy-history"
+	legacyPaths := app.historyDiskPaths(legacyID)
+	legacyData, _ := json.Marshal(messages)
+	if err := os.WriteFile(legacyPaths[1], legacyData, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	delete(app.histories, legacyID)
+	loaded := app.loadSessionHistoryCopy(legacyID)
+	if len(loaded) != 2 || loaded[1].Content != "done twice" {
+		t.Fatalf("expected legacy JSON compatibility, got %#v", loaded)
+	}
+}
+
+func TestTrimSavedHistoryUsesTokenBudgetAndKeepsToolTurnIntact(t *testing.T) {
+	messages := make([]openai.ChatCompletionMessage, 0, 100)
+	for turn := 0; turn < 25; turn++ {
+		callID := fmt.Sprintf("call_%d", turn)
+		messages = append(messages,
+			openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: fmt.Sprintf("question-%d %s", turn, strings.Repeat("x", 50000))},
+			openai.ChatCompletionMessage{Role: openai.ChatMessageRoleAssistant, ToolCalls: []openai.ToolCall{{ID: callID, Type: openai.ToolTypeFunction, Function: openai.FunctionCall{Name: "read", Arguments: `{"files":[{"path":"a"}]}`}}}},
+			openai.ChatCompletionMessage{Role: openai.ChatMessageRoleTool, ToolCallID: callID, Content: strings.Repeat("result ", 1000)},
+			openai.ChatCompletionMessage{Role: openai.ChatMessageRoleAssistant, Content: fmt.Sprintf("answer-%d", turn)},
+		)
+	}
+
+	got := trimSavedHistory(messages)
+	if len(got) >= len(messages) {
+		t.Fatalf("expected token budget to trim long history, got %d messages", len(got))
+	}
+	if got[0].Role != openai.ChatMessageRoleUser {
+		t.Fatalf("trimmed history must start at a user boundary, got %#v", got[0])
+	}
+	for index, message := range got {
+		if message.Role == openai.ChatMessageRoleTool {
+			if index == 0 || len(got[index-1].ToolCalls) == 0 {
+				t.Fatalf("orphan tool result at index %d: %#v", index, got)
+			}
+		}
+	}
+	if len(got) <= 40 {
+		t.Fatalf("history must no longer be fixed to 40 messages, got %d", len(got))
 	}
 }
 

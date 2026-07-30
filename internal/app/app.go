@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -74,6 +75,8 @@ const (
 	memoryIndexLimit                 = 200
 	maxAttachmentText                = 200 * 1024
 	maxAttachmentDataURL             = 8 * 1024 * 1024
+	maxSavedHistoryTokens            = 256 * 1024
+	maxSavedHistoryJSONBytes         = 8 * 1024 * 1024
 )
 
 // effectiveUserAgent returns the User-Agent string to send on outbound HTTP
@@ -144,6 +147,7 @@ type App struct {
 	// workspaceTokenUsage accumulates model-reported usage for this app run.
 	// Maps normalized workspace path → WorkspaceTokenUsage.
 	workspaceTokenUsage map[string]WorkspaceTokenUsage
+	taskbarMu           sync.Mutex
 	taskbarActiveRuns   int
 
 	servicesMu sync.Mutex
@@ -1364,9 +1368,26 @@ func (a *App) TestModelConnection(model ModelConfig) error {
 }
 
 func (a *App) beginTaskbarRun() {
+	a.taskbarMu.Lock()
+	defer a.taskbarMu.Unlock()
+
+	a.taskbarActiveRuns++
+	if a.taskbarActiveRuns == 1 {
+		setTaskbarRunningProgress()
+	}
 }
 
 func (a *App) endTaskbarRun() {
+	a.taskbarMu.Lock()
+	if a.taskbarActiveRuns > 0 {
+		a.taskbarActiveRuns--
+	}
+	if a.taskbarActiveRuns == 0 {
+		clearTaskbarProgress()
+	}
+	a.taskbarMu.Unlock()
+
+	flashTaskbarWindowIfInactive()
 }
 
 func (a *App) StartChat(req ChatRequest) (string, error) {
@@ -1455,9 +1476,10 @@ func (a *App) releaseSession(sessionID string, deleteHistory bool) error {
 	a.subRunsMu.Unlock()
 
 	if deleteHistory && a.historiesDir != "" {
-		diskPath := filepath.Join(a.historiesDir, url.PathEscape(sessionID)+".json")
-		if err := os.Remove(diskPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return err
+		for _, diskPath := range a.historyDiskPaths(sessionID) {
+			if err := os.Remove(diskPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return err
+			}
 		}
 	}
 	return nil
@@ -1573,9 +1595,7 @@ Rules:
 		}
 	}
 
-	a.mu.Lock()
-	a.histories[sessionID] = newHistory
-	a.mu.Unlock()
+	a.saveHistory(sessionID, newHistory)
 
 	tokensAfter := estimateTokensFromMessages(newHistory)
 
@@ -1699,6 +1719,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 	cfg.grillMode = req.GrillMode
 	a.beginTaskbarRun()
 	defer func() {
+		a.restoreSavedHistoryBreakdown(sessionID)
 		a.endTaskbarRun()
 		a.finishRun(runID)
 	}()
@@ -1740,7 +1761,6 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 		for step := 0; step < maxAgentSteps; step++ {
 			select {
 			case <-ctx.Done():
-				a.saveHistory(req.SessionID, messages)
 				emitRunEnd("run:error", map[string]any{"error": "已取消"})
 				return
 			default:
@@ -1841,7 +1861,6 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			})
 			streamDeltas.flush()
 			if err != nil {
-				a.saveHistory(req.SessionID, messages)
 				emitRunEnd("run:error", map[string]any{"error": err.Error()})
 				return
 			}
@@ -1864,7 +1883,6 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 						ReasoningContent: reasoning,
 					})
 				}
-				a.saveHistory(req.SessionID, messages)
 				emitRunEnd("run:error", map[string]any{"error": stopErr.Error(), "stopReason": modelResp.StopReason})
 				return
 			}
@@ -1884,7 +1902,6 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 						})
 						grillProtocolRetries++
 						if grillProtocolRetries >= 3 {
-							a.saveHistory(req.SessionID, messages)
 							emitRunEnd("run:error", map[string]any{"error": "Grill mode model did not follow the required ask protocol"})
 							return
 						}
@@ -2035,7 +2052,6 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			}
 		}
 
-		a.saveHistory(req.SessionID, messages)
 		if shouldAutoContinueGoal(req.GrillMode) {
 			if g := a.getActiveGoal(sessionID); g != nil && g.TurnsUsed < g.TurnBudget {
 				emitRunEnd("run:done", nil)
@@ -2353,23 +2369,39 @@ func appendFrontendHistoryDelta(messages []openai.ChatCompletionMessage, backend
 		front = append(front, frontendMessage{key: comparableMessageKey(role, m.Content), msg: m})
 	}
 
+	// Match the longest suffix of backend-visible history against any
+	// contiguous frontend range. This handles restart recovery where IndexedDB
+	// contains an older prefix but the backend retained only its budgeted tail.
 	lastMatchedFrontend := -1
-	backendAt := 0
-	for i, item := range front {
-		if item.key == "" {
-			continue
-		}
-		for backendAt < len(backendKeys) {
-			if backendKeys[backendAt] == item.key {
-				lastMatchedFrontend = i
-				backendAt++
+	maxOverlap := len(backendKeys)
+	if len(front) < maxOverlap {
+		maxOverlap = len(front)
+	}
+	for overlap := maxOverlap; overlap > 0 && lastMatchedFrontend < 0; overlap-- {
+		backendStart := len(backendKeys) - overlap
+		for frontStart := len(front) - overlap; frontStart >= 0; frontStart-- {
+			matched := true
+			for offset := 0; offset < overlap; offset++ {
+				if front[frontStart+offset].key == "" || front[frontStart+offset].key != backendKeys[backendStart+offset] {
+					matched = false
+					break
+				}
+			}
+			if matched {
+				lastMatchedFrontend = frontStart + overlap - 1
 				break
 			}
-			backendAt++
 		}
 	}
 
-	for _, item := range front[lastMatchedFrontend+1:] {
+	appendFrom := lastMatchedFrontend + 1
+	if lastMatchedFrontend < 0 && len(backendKeys) > 0 && len(front) > 0 {
+		// A backend compaction summary intentionally has no textual overlap with
+		// the still-expanded UI snapshot. In that case the backend remains the
+		// source of truth and only the request-tail message is new.
+		appendFrom = len(front) - 1
+	}
+	for _, item := range front[appendFrom:] {
 		role := strings.TrimSpace(item.msg.Role)
 		if role == openai.ChatMessageRoleUser && len(item.msg.Attachments) > 0 {
 			messages = appendUserMessageWithAttachments(messages, item.msg.Content, item.msg.Attachments)
@@ -2522,80 +2554,190 @@ func escapeAttribute(value string) string {
 	return replacer.Replace(value)
 }
 
+func (a *App) historyDiskPaths(sessionID string) []string {
+	safeName := url.PathEscape(sessionID)
+	return []string{
+		filepath.Join(a.historiesDir, safeName+".json.gz"),
+		filepath.Join(a.historiesDir, safeName+".json"),
+	}
+}
+
 func (a *App) saveHistory(sessionID string, messages []openai.ChatCompletionMessage) {
 	if sessionID == "" {
 		return
 	}
 	filtered := trimSavedHistory(sanitizeHistoryMessages(messages))
+	breakdown := computeLiveBreakdown(filtered)
 	a.mu.Lock()
 	a.histories[sessionID] = cloneChatMessages(filtered)
+	a.liveBreakdown[sessionID] = breakdown
 	a.mu.Unlock()
 
-	// Persist to disk
-	if a.historiesDir != "" {
-		safeName := url.PathEscape(sessionID)
-		diskPath := filepath.Join(a.historiesDir, safeName+".json")
-		if data, err := json.Marshal(filtered); err == nil {
-			if werr := os.WriteFile(diskPath, data, 0644); werr != nil {
-				log.Printf("saveHistory: failed to write %s: %v", diskPath, werr)
-			}
-		}
+	if a.historiesDir == "" {
+		return
 	}
+	paths := a.historyDiskPaths(sessionID)
+	if err := writeCompressedHistory(paths[0], filtered); err != nil {
+		log.Printf("saveHistory: failed to write %s: %v", paths[0], err)
+		return
+	}
+	if err := os.Remove(paths[1]); err != nil && !errors.Is(err, os.ErrNotExist) {
+		log.Printf("saveHistory: failed to remove legacy %s: %v", paths[1], err)
+	}
+}
+
+func (a *App) restoreSavedHistoryBreakdown(sessionID string) {
+	if sessionID == "" {
+		return
+	}
+	a.mu.Lock()
+	history := cloneChatMessages(a.histories[sessionID])
+	if history == nil {
+		history = cloneChatMessages(a.loadHistoryLocked(sessionID))
+	}
+	if len(history) == 0 {
+		delete(a.liveBreakdown, sessionID)
+	} else {
+		a.liveBreakdown[sessionID] = computeLiveBreakdown(history)
+	}
+	a.mu.Unlock()
+}
+
+func writeCompressedHistory(diskPath string, messages []openai.ChatCompletionMessage) error {
+	tmp, err := os.CreateTemp(filepath.Dir(diskPath), ".history-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	committed := false
+	defer func() {
+		if !committed {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	zw := gzip.NewWriter(tmp)
+	encodeErr := json.NewEncoder(zw).Encode(messages)
+	closeGzipErr := zw.Close()
+	closeFileErr := tmp.Close()
+	if encodeErr != nil {
+		return encodeErr
+	}
+	if closeGzipErr != nil {
+		return closeGzipErr
+	}
+	if closeFileErr != nil {
+		return closeFileErr
+	}
+	if err := os.Rename(tmpPath, diskPath); err != nil {
+		// Windows may reject replacing an existing destination. Move the old
+		// valid file aside, install the completed temp, and roll back on failure.
+		backupPath := diskPath + ".bak"
+		_ = os.Remove(backupPath)
+		if backupErr := os.Rename(diskPath, backupPath); backupErr != nil {
+			return err
+		}
+		if retryErr := os.Rename(tmpPath, diskPath); retryErr != nil {
+			_ = os.Rename(backupPath, diskPath)
+			return retryErr
+		}
+		_ = os.Remove(backupPath)
+	}
+	committed = true
+	return nil
 }
 
 func (a *App) loadHistoryLocked(sessionID string) []openai.ChatCompletionMessage {
 	if a.historiesDir == "" {
 		return nil
 	}
-	safeName := url.PathEscape(sessionID)
-	diskPath := filepath.Join(a.historiesDir, safeName+".json")
-	data, err := os.ReadFile(diskPath)
-	if err != nil {
-		return nil
-	}
+	paths := a.historyDiskPaths(sessionID)
 	var messages []openai.ChatCompletionMessage
-	if err := json.Unmarshal(data, &messages); err != nil {
+	loaded := false
+	for index, diskPath := range paths {
+		file, err := os.Open(diskPath)
+		if err != nil {
+			continue
+		}
+		var source io.Reader = file
+		var zr *gzip.Reader
+		if index == 0 {
+			zr, err = gzip.NewReader(file)
+			if err != nil {
+				_ = file.Close()
+				continue
+			}
+			source = zr
+		}
+		data, readErr := io.ReadAll(io.LimitReader(source, maxSavedHistoryJSONBytes+1))
+		if zr != nil {
+			_ = zr.Close()
+		}
+		_ = file.Close()
+		if readErr != nil || len(data) > maxSavedHistoryJSONBytes || json.Unmarshal(data, &messages) != nil {
+			continue
+		}
+		loaded = true
+		break
+	}
+	if !loaded {
 		return nil
 	}
 	messages = trimSavedHistory(sanitizeHistoryMessages(messages))
-	a.histories[sessionID] = messages
+	a.histories[sessionID] = cloneChatMessages(messages)
 	return messages
 }
 
-const maxSavedHistoryMessages = 40
+func historyMessageTokens(message openai.ChatCompletionMessage) int {
+	tokens := estimateMessageBodyTokens(message)
+	for _, call := range message.ToolCalls {
+		tokens += estimateTokensFromText(call.Function.Name)
+		tokens += estimateTokensFromText(call.Function.Arguments)
+	}
+	return tokens
+}
 
 func trimSavedHistory(messages []openai.ChatCompletionMessage) []openai.ChatCompletionMessage {
-	if len(messages) <= maxSavedHistoryMessages {
-		return messages
-	}
-	start := len(messages) - maxSavedHistoryMessages
-	for start < len(messages) && messages[start].Role == openai.ChatMessageRoleTool {
-		start++
-	}
-	if start < len(messages) {
-		return messages[start:]
-	}
-
-	// The tail is one oversized tool-result batch. Drop that incomplete batch
-	// and retain the preceding bounded conversation instead of saving orphans.
-	end := len(messages) - maxSavedHistoryMessages
-	for end > 0 && messages[end-1].Role == openai.ChatMessageRoleTool {
-		end--
-	}
-	if end > 0 && len(messages[end-1].ToolCalls) > 0 {
-		end--
-	}
-	if end <= 0 {
+	if len(messages) == 0 {
 		return nil
 	}
-	start = end - maxSavedHistoryMessages
-	if start < 0 {
-		start = 0
+	total := 0
+	for _, message := range messages {
+		total += historyMessageTokens(message)
 	}
-	for start < end && messages[start].Role == openai.ChatMessageRoleTool {
-		start++
+	if total <= maxSavedHistoryTokens {
+		return messages
 	}
-	return messages[start:end]
+
+	// Start only at a user message so an assistant tool call and all of its
+	// tool results remain an intact model-protocol sequence. If the newest turn
+	// alone exceeds the budget, keep it whole rather than creating orphans.
+	running := 0
+	start := len(messages)
+	lastUser := -1
+	for index := len(messages) - 1; index >= 0; index-- {
+		running += historyMessageTokens(messages[index])
+		if messages[index].Role != openai.ChatMessageRoleUser {
+			continue
+		}
+		lastUser = index
+		if running <= maxSavedHistoryTokens {
+			start = index
+			continue
+		}
+		break
+	}
+	if start == len(messages) {
+		if lastUser >= 0 {
+			start = lastUser
+		} else {
+			return messages
+		}
+	}
+	return messages[start:]
 }
 
 func sanitizeHistoryMessages(messages []openai.ChatCompletionMessage) []openai.ChatCompletionMessage {

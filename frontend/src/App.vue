@@ -15,6 +15,7 @@
               :history-options="historyOptions"
               @switch-workspace="switchWorkspaceTab"
               @close-workspace="closeWorkspaceTab"
+              @reorder-workspace="reorderWorkspaceTabs"
               @add-workspace="addWorkspaceTab"
               @history-select="onHistorySelect"
               @open-repository="openRepositoryPage"
@@ -277,6 +278,13 @@ import cssLang from 'highlight.js/lib/languages/css';
 import markdownLang from 'highlight.js/lib/languages/markdown';
 import 'highlight.js/styles/base16/darcula.css';
 import { highlightShellCommand, isShellLanguage, looksLikeShellCommand } from './utils/shellHighlight.mjs';
+import {
+  deleteSessionSnapshot,
+  flushSessionSnapshotWrites,
+  isSessionSnapshotStorageAvailable,
+  loadSessionSnapshots,
+  saveSessionSnapshot,
+} from './utils/sessionStore.mjs';
 import {
   CancelRun,
   CheckForUpdates,
@@ -2131,6 +2139,19 @@ function addWorkspaceTab() {
   });
 }
 
+function reorderWorkspaceTabs({ sourceId, targetId, after = false } = {}) {
+  const sourceIndex = workspaceTabs.value.findIndex((tab) => tab.id === sourceId);
+  if (sourceIndex === -1 || sourceId === targetId) return;
+
+  const [movedTab] = workspaceTabs.value.splice(sourceIndex, 1);
+  const targetIndex = workspaceTabs.value.findIndex((tab) => tab.id === targetId);
+  if (targetIndex === -1) {
+    workspaceTabs.value.splice(sourceIndex, 0, movedTab);
+    return;
+  }
+  workspaceTabs.value.splice(targetIndex + (after ? 1 : 0), 0, movedTab);
+}
+
 function closeWorkspaceTab(id) {
   if (workspaceTabs.value.length <= 1) return;
   const idx = workspaceTabs.value.findIndex((t) => t.id === id);
@@ -2469,6 +2490,7 @@ function deleteSession(index) {
   delete todoRevisionsBySession[deletedId];
   delete sessionPromptTexts[deletedId];
   delete sessionScrollAnchors[deletedId];
+  deleteSessionSnapshot(deletedId).catch(() => {});
   DeleteSession(deletedId).catch(() => {});
   const expanded = new Set(expandedArchiveSessions.value);
   expanded.delete(deletedId);
@@ -2504,7 +2526,7 @@ async function init() {
   loadPromptHistory(ws);
   refreshGitStatus();
 
-  loadSavedSessions();
+  await loadSavedSessions();
   loadMcpConfig();
 }
 
@@ -2531,7 +2553,41 @@ function sessionByTerminalEvent(data) {
 function markSessionRunning(session) {
   if (!session) return;
   if (!session.workspace && config.workspace) session.workspace = config.workspace;
+  for (let index = session.messages.length - 1; index >= 0; index--) {
+    const item = session.messages[index];
+    if (item?.role !== 'user') continue;
+    if (!item.runId && !item.transientTurn) item.pendingTurn = true;
+    break;
+  }
   session.isRunning = true;
+}
+
+function bindPendingTurnToRun(session, runId) {
+  if (!session || !runId) return;
+  for (const item of session.messages || []) {
+    if (!item?.pendingTurn) continue;
+    item.runId = runId;
+  }
+}
+
+function finishPersistableTurn(session, runId) {
+  if (!session || !runId) return;
+  for (const item of session.messages || []) {
+    if (item?.runId !== runId) continue;
+    item.pendingTurn = false;
+    item.transientTurn = false;
+  }
+}
+
+function markTransientTurn(session, runId = '') {
+  if (!session) return;
+  for (const item of session.messages || []) {
+    if (!item) continue;
+    if ((runId && item.runId === runId) || item.pendingTurn) {
+      item.pendingTurn = false;
+      item.transientTurn = true;
+    }
+  }
 }
 
 function queueStreamDelta(data, field) {
@@ -2785,6 +2841,7 @@ function bindRuntimeEvents() {
     if (session) {
       session.runId = data.runId;
       session.isRunning = true;
+      bindPendingTurnToRun(session, data.runId);
     }
   });
 
@@ -3166,12 +3223,13 @@ function bindRuntimeEvents() {
     }
     setAssistantRoundDuration(session, data.runId, data.durationMs);
     setAssistantCacheRate(session, data.runId, data.cacheHit, data.cacheMiss, data.inputTokens, data.outputTokens);
+    finishPersistableTurn(session, data.runId);
     session.runId = '';
     session.isRunning = false;
     if (session.id === activeSessionId.value) {
       playCompletionSound('done');
     }
-    saveSessions();
+    persistCompletedSession(session);
     refreshContextTokens(session.id);
     if (session.id === activeSessionId.value) refreshWorkspaceTokenUsage(config.workspace || '');
   });
@@ -3195,12 +3253,13 @@ function bindRuntimeEvents() {
       }
       i--;
     }
+    markTransientTurn(session, data.runId);
     session.runId = '';
     session.isRunning = false;
     if (session.id === activeSessionId.value) {
       const err = data.error || 'unknown error';
       const cancelled = err === '已取消' || err === 'Cancelled' || String(err).toLowerCase().includes('context canceled');
-      session.messages.push({ role: 'assistant', content: cancelled ? t('app.run.cancelled') : t('app.run.failed', { error: err }), error: !cancelled, system: cancelled, runId: data.runId });
+      session.messages.push({ role: 'assistant', content: cancelled ? t('app.run.cancelled') : t('app.run.failed', { error: err }), error: !cancelled, system: cancelled, runId: data.runId, transientTurn: true });
       playCompletionSound(cancelled ? 'cancelled' : 'error');
     }
     setAssistantRoundDuration(session, data.runId, data.durationMs);
@@ -3233,6 +3292,7 @@ function bindRuntimeEvents() {
     }
     setAssistantRoundDuration(session, data.runId, data.durationMs);
     setAssistantCacheRate(session, data.runId, data.cacheHit, data.cacheMiss, data.inputTokens, data.outputTokens);
+    markTransientTurn(session, data.runId);
     session.runId = '';
     session.isRunning = false;
     if (session.id === activeSessionId.value) {
@@ -3844,7 +3904,7 @@ function attachmentsForModel(attachments) {
 }
 
 function isModelHistoryMessage(msg) {
-  if (!msg || msg.system || msg.error || msg.welcome || msg.role === 'archive' || msg.role === 'tool_call') return false;
+  if (!msg || msg.system || msg.error || msg.welcome || msg.transientTurn || msg.role === 'archive' || msg.role === 'tool_call') return false;
   return msg.role === 'user' || msg.role === 'assistant';
 }
 
@@ -3891,7 +3951,10 @@ async function toggleMaximiseWindow() {
 }
 
 async function closeWindow() {
-  try { await Quit(); } catch (_) {}
+  try {
+    await flushSessionSnapshotWrites();
+    await Quit();
+  } catch (_) {}
 }
 
 async function switchToModel(index) {
@@ -4124,9 +4187,10 @@ async function sendPrompt() {
     markSessionRunning(session);
     await StartChat({ sessionId: session.id, message: sendText, messages: history, grillMode: !!session.grillMode, config: { ...config, extraRoots: session.extraRoots || [] } });
   } catch (err) {
+    markTransientTurn(session);
     session.runId = '';
     session.isRunning = false;
-    pushMessage('assistant', t('app.run.startFailed', { error: err }), { error: true });
+    pushMessage('assistant', t('app.run.startFailed', { error: err }), { error: true, transientTurn: true });
   }
 }
 
@@ -4575,9 +4639,10 @@ function handleCodeGraphCommand() {
   markSessionRunning(session);
   StartChat({ sessionId: session.id, message: CODEGRAPH_PROMPT, messages: history, grillMode: !!session.grillMode, config: { ...config, extraRoots: session.extraRoots || [] } })
     .catch((err) => {
+      markTransientTurn(session);
       session.runId = '';
       session.isRunning = false;
-      pushMessage('assistant', t('app.codegraph.failed', { error: err }), { error: true });
+      pushMessage('assistant', t('app.codegraph.failed', { error: err }), { error: true, transientTurn: true });
     });
 }
 
@@ -5175,60 +5240,70 @@ async function deleteScheduledTask(id) {
 // ── Session persistence ──
 
 const SESSIONS_STORAGE_KEY = 'ally_sessions';
-const MAX_STORED_SESSIONS = 20;
-const MAX_STORED_MESSAGES = 120;
-const MAX_STORED_CONVERSATION_MESSAGES = 160;
+const MAX_STORED_SESSIONS = 30;
 const MAX_MODEL_HISTORY_MESSAGES = 400;
 const MAX_RUNTIME_SESSIONS = 30;
 const MAX_RUNTIME_RENDERABLE_MESSAGES = 260;
 const MAX_STORED_MESSAGE_CHARS = 60000;
 const MAX_STORED_TOOL_BODY_CHARS = 20000;
-const MAX_STORED_SESSION_CHARS = 240000;
+let sessionPersistenceReady = isSessionSnapshotStorageAvailable();
 
-// saveSessions performs a synchronous localStorage write of all sessions.
-// It is intentionally NOT debounced here — callers use saveSessions() for
-// immediate durability (session switch, app exit, run:done/error) and
-// scheduleSaveSessions() for the debounced path (frequent in-run updates
-// like tool:result / ask:ready / sub:done where coalescing writes is safe).
-function saveSessions() {
-  // Cancel any pending debounced save — the caller has decided this write is
-  // urgent (session switch, run:done/error, app exit, etc.) and there is no
-  // point firing the trailing debounced write right after this one.
-  if (saveSessionsTimer) {
-    window.clearTimeout(saveSessionsTimer);
-    saveSessionsTimer = 0;
-  }
-  try {
-    trimRuntimeSessions();
-    const data = sessions.value.slice(0, MAX_STORED_SESSIONS).map(s => ({
-      id: s.id,
-      title: s.title,
-      workspace: inferSessionWorkspace(s) || (s.id === activeSessionId.value ? config.workspace || '' : ''),
-      extraRoots: Array.isArray(s.extraRoots) ? s.extraRoots : [],
-      messages: sanitizeStoredMessages(s.messages || []),
-      isRunning: s.isRunning || false,
-      grillMode: !!s.grillMode,
-      createdAt: s.createdAt || Date.now(),
-      updatedAt: s.updatedAt || s.createdAt || Date.now(),
-    })).filter(s => {
-      if (!Array.isArray(s.messages) || s.messages.length === 0) return false;
-      // Don't persist sessions that only contain a welcome message and no
-      // real conversation — these are freshly created empty sessions.
-      const hasRealMessage = s.messages.some(m => !m.welcome && !m.system);
-      return hasRealMessage;
-    });
-    localStorage.setItem(SESSIONS_STORAGE_KEY, JSON.stringify(data));
-  } catch (_) { /* quota exceeded */ }
+function sessionIndexEntry(session) {
+  return {
+    id: session.id,
+    title: session.title,
+    workspace: inferSessionWorkspace(session) || (session.id === activeSessionId.value ? config.workspace || '' : ''),
+    extraRoots: Array.isArray(session.extraRoots) ? [...session.extraRoots] : [],
+    grillMode: !!session.grillMode,
+    createdAt: session.createdAt || Date.now(),
+    updatedAt: session.updatedAt || session.createdAt || Date.now(),
+  };
 }
 
-// Debounced saveSessions: coalesces rapid-fire updates during an active run
-// (tool:result / ask:ready / sub:done / attachment preview generated) into
-// a single trailing write ~400ms after the last call. This avoids
-// re-serializing the full sessions array 5-10 times per second while the
-// agent streams tool calls back to back.
-//
-// Critical points (session switch, app exit, run:done/error/cancelled,
-// beforeunload) MUST call saveSessions() directly to guarantee durability.
+function hasPersistedConversation(session) {
+  return !!session?.hasPersistedSnapshot;
+}
+
+// localStorage is only a small synchronous index. Completed message snapshots
+// live in IndexedDB, one record per session, so long sessions do not compete
+// for the Web Storage quota.
+function saveSessions() {
+  if (!sessionPersistenceReady) return;
+  try {
+    trimRuntimeSessions();
+    const data = sessions.value
+      .filter(hasPersistedConversation)
+      .slice(0, MAX_STORED_SESSIONS)
+      .map(sessionIndexEntry);
+    localStorage.setItem(SESSIONS_STORAGE_KEY, JSON.stringify(data));
+  } catch (_) { /* storage unavailable */ }
+}
+
+function buildCompletedSessionSnapshot(session) {
+  const snapshot = {
+    ...sessionIndexEntry(session),
+    messages: sanitizeStoredMessages(session.messages || []),
+  };
+  // IndexedDB structured cloning rejects Vue Proxy objects. JSON round-trip is
+  // intentional here: snapshot fields are JSON data and already have Blob
+  // URLs, full image payloads, and transient edit arguments stripped above.
+  return JSON.parse(JSON.stringify(snapshot));
+}
+
+function persistCompletedSession(session) {
+  if (!sessionPersistenceReady || !session?.id || session.runId || session.isRunning) return Promise.resolve();
+  const snapshot = buildCompletedSessionSnapshot(session);
+  return saveSessionSnapshot(snapshot).then(() => {
+    session.hasPersistedSnapshot = true;
+    saveSessions();
+  }).catch(() => {
+    // Keep the previous completed snapshot. A failed persistence attempt must
+    // never replace it with a partial or running turn.
+  });
+}
+
+// Frequent in-run updates only refresh lightweight metadata. Message bodies
+// are intentionally not persisted until a complete run succeeds.
 const SAVE_SESSIONS_DEBOUNCE_MS = 400;
 let saveSessionsTimer = 0;
 function scheduleSaveSessions() {
@@ -5238,14 +5313,6 @@ function scheduleSaveSessions() {
     saveSessions();
   }, SAVE_SESSIONS_DEBOUNCE_MS);
 }
-function flushPendingSaveSessions() {
-  if (saveSessionsTimer) {
-    window.clearTimeout(saveSessionsTimer);
-    saveSessionsTimer = 0;
-    saveSessions();
-  }
-}
-
 function trimRuntimeSessions() {
   // A Tab must never point at an evicted/missing session. Repair legacy or
   // partially persisted state before calculating the protected set.
@@ -5296,20 +5363,11 @@ function trimRuntimeSessionMessages(session) {
 }
 
 function sanitizeStoredMessages(messages) {
-  const recentRenderable = messages.filter(isRenderableMessage).slice(-MAX_STORED_MESSAGES);
-  const recentConversation = messages.filter(isModelHistoryMessage).slice(-MAX_STORED_CONVERSATION_MESSAGES);
+  const completed = messages.filter((msg) => !msg?.transientTurn && !msg?.pendingTurn);
+  const recentRenderable = completed.filter(isRenderableMessage).slice(-MAX_RUNTIME_RENDERABLE_MESSAGES);
+  const recentConversation = completed.filter(isModelHistoryMessage).slice(-MAX_MODEL_HISTORY_MESSAGES);
   const keep = new Set([...recentRenderable, ...recentConversation]);
-  const candidates = messages.filter((msg) => keep.has(msg));
-  const stored = [];
-  let storedChars = 0;
-  for (let index = candidates.length - 1; index >= 0; index--) {
-    const next = sanitizeStoredMessage(candidates[index]);
-    const chars = estimateStoredMessageChars(next);
-    if (stored.length > 0 && storedChars + chars > MAX_STORED_SESSION_CHARS) continue;
-    stored.push(next);
-    storedChars += chars;
-  }
-  return stored.reverse();
+  return completed.filter((msg) => keep.has(msg)).map(sanitizeStoredMessage);
 }
 
 function sanitizeStoredMessage(msg) {
@@ -5345,60 +5403,70 @@ function truncateStoredText(value, limit, marker) {
   return `${value.slice(0, limit)}\n\n${marker}`;
 }
 
-function estimateStoredMessageChars(msg) {
-  let chars = 200;
-  if (msg?.skill) {
-    // Skill messages store full model content but only display the chip + args.
-    // Estimate by the visible portion plus a modest skill-name overhead.
-    chars += 64 + String(msg.skill.args || '').length;
-  } else {
-    for (const key of ['content', 'reasoningBody', 'body', 'codeContent', 'editDiff']) {
-      chars += String(msg?.[key] || '').length;
-    }
-  }
-  for (const entry of Array.isArray(msg?.editEntries) ? msg.editEntries : []) chars += String(entry?.diff || '').length + 100;
-  for (const att of Array.isArray(msg?.attachments) ? msg.attachments : []) {
-    chars += String(att?.previewUrl || '').length + String(att?.text || '').length + 200;
-  }
-  return chars;
-}
-
-function loadSavedSessions() {
+async function loadSavedSessions() {
+  let metadata = [];
   try {
     const raw = localStorage.getItem(SESSIONS_STORAGE_KEY);
-    if (!raw) return;
-    const saved = JSON.parse(raw);
-    if (!Array.isArray(saved)) return;
-    for (const s of saved) {
-      const existing = sessions.value.find(x => x.id === s.id);
-      if (!existing) {
-        // Reset streaming markers on restored messages: if the previous run
-        // was interrupted (window closed mid-stream, crash, etc.), messages
-        // may still carry streaming=true. On reload isRunning=false, so a
-        // dangling streaming flag would leave the UI showing a perpetual
-        // "generating..." spinner on that message. Mark them done so the UI
-        // reflects the actual persisted state.
-        const restoredMessages = (s.messages || []).map(m => ({
-          ...m,
-          streaming: false,
-          done: m.role === 'assistant' ? true : !!m.done,
-        }));
-        const restored = {
-          id: s.id,
-          title: s.title || t('app.sessions.history'),
-          workspace: s.workspace || '',
-          messages: restoredMessages,
-          runId: '',
-          isRunning: false,
-          grillMode: !!s.grillMode,
-          createdAt: s.createdAt || Date.now(),
-          updatedAt: s.updatedAt || s.createdAt || Date.now(),
-        };
-        if (!restored.workspace) restored.workspace = inferSessionWorkspace(restored);
-        sessions.value.push(restored);
-      }
+    const saved = raw ? JSON.parse(raw) : [];
+    if (Array.isArray(saved)) metadata = saved;
+  } catch (_) { /* ignore invalid legacy data */ }
+
+  let snapshots = [];
+  try {
+    snapshots = await loadSessionSnapshots();
+  } catch (_) {
+    sessionPersistenceReady = false;
+  }
+
+  const metadataByID = new Map(metadata.filter((item) => item?.id).map((item) => [item.id, item]));
+  const snapshotByID = new Map(snapshots.filter((item) => item?.id).map((item) => [item.id, item]));
+  const ids = [];
+  for (const item of metadata) if (item?.id && !ids.includes(item.id)) ids.push(item.id);
+  for (const item of snapshots) if (item?.id && !ids.includes(item.id)) ids.push(item.id);
+
+  const legacyMigrations = [];
+  for (const id of ids) {
+    const meta = metadataByID.get(id) || {};
+    const storedSnapshot = snapshotByID.get(id) || null;
+    const legacyMessages = Array.isArray(meta.messages) ? meta.messages : [];
+    const source = storedSnapshot || (legacyMessages.length > 0 ? { ...meta, messages: legacyMessages } : null);
+    if (!source) continue;
+
+    const existing = sessions.value.find((session) => session.id === id);
+    if (existing) continue;
+    const restoredMessages = (source.messages || []).map((item) => ({
+      ...item,
+      streaming: false,
+      done: item.role === 'assistant' ? true : !!item.done,
+    }));
+    const restored = {
+      id,
+      title: meta.title || source.title || t('app.sessions.history'),
+      workspace: meta.workspace || source.workspace || '',
+      extraRoots: Array.isArray(meta.extraRoots) ? [...meta.extraRoots] : (Array.isArray(source.extraRoots) ? [...source.extraRoots] : []),
+      messages: restoredMessages,
+      runId: '',
+      isRunning: false,
+      grillMode: !!(meta.grillMode ?? source.grillMode),
+      hasPersistedSnapshot: !!storedSnapshot,
+      createdAt: meta.createdAt || source.createdAt || Date.now(),
+      updatedAt: meta.updatedAt || source.updatedAt || meta.createdAt || source.createdAt || Date.now(),
+    };
+    if (!restored.workspace) restored.workspace = inferSessionWorkspace(restored);
+    sessions.value.push(restored);
+
+    if (sessionPersistenceReady && !storedSnapshot && legacyMessages.length > 0) {
+      legacyMigrations.push(saveSessionSnapshot(buildCompletedSessionSnapshot(restored)).then(() => {
+        restored.hasPersistedSnapshot = true;
+      }));
     }
-  } catch (_) { /* ignore */ }
+  }
+
+  if (legacyMigrations.length > 0) {
+    const results = await Promise.allSettled(legacyMigrations);
+    if (results.some((result) => result.status === 'rejected')) sessionPersistenceReady = false;
+  }
+  saveSessions();
 }
 
 function showSessionList() {
@@ -5446,9 +5514,10 @@ function handleInitCommand() {
   markSessionRunning(session);
   StartChat({ sessionId: session.id, message: text, messages: history, grillMode: !!session.grillMode, config: { ...config, extraRoots: session.extraRoots || [] } })
     .catch((err) => {
+      markTransientTurn(session);
       session.runId = '';
       session.isRunning = false;
-      pushMessage('assistant', t('app.init.failed', { error: err }), { error: true });
+      pushMessage('assistant', t('app.init.failed', { error: err }), { error: true, transientTurn: true });
     });
 }
 
@@ -5470,9 +5539,10 @@ function handleRememberCommand() {
   markSessionRunning(session);
   StartChat({ sessionId: session.id, message: '', messages: history, grillMode: !!session.grillMode, config: { ...config, extraRoots: session.extraRoots || [] } })
     .catch((err) => {
+      markTransientTurn(session);
       session.runId = '';
       session.isRunning = false;
-      pushMessage('assistant', t('app.note.failed', { error: err }), { error: true });
+      pushMessage('assistant', t('app.note.failed', { error: err }), { error: true, transientTurn: true });
     });
 }
 
@@ -5499,6 +5569,7 @@ async function handleCompactCommand() {
       },
     ];
 
+    persistCompletedSession(session);
     // Refresh context
     refreshContextTokens(session.id);
     scrollMessagesToBottom();
@@ -5594,6 +5665,7 @@ async function activateSkillByName(skillName, skillArgs = '', injectIntoChat = t
         if (config.apiKey) {
           markSessionRunning(session);
           await StartChat({ sessionId: session.id, message: '', messages: [{ role: 'user', content: modelContent }], grillMode: !!session.grillMode, config: { ...config, extraRoots: session.extraRoots || [] } }).catch(() => {
+            markTransientTurn(session);
             session.isRunning = false;
           });
         }
@@ -6823,9 +6895,8 @@ async function applyPlatformClass() {
 
 onMounted(async () => {
   applyPlatformClass();
-  // Flush any debounced session save before the window unloads to guarantee
-  // the last in-run updates hit localStorage before the Wails webview exits.
-  window.addEventListener('beforeunload', flushPendingSaveSessions);
+  // Do not snapshot on window close. Only wait for writes already queued by a
+  // successfully completed turn.
   window.addEventListener('keydown', handleGlobalKeydown, true);
   document.addEventListener('pointerdown', handleMermaidOutsidePointerDown, true);
   document.addEventListener('pointerdown', handleOverlayOutsidePointerDown, true);
@@ -6846,8 +6917,6 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
-  flushPendingSaveSessions();
-  window.removeEventListener('beforeunload', flushPendingSaveSessions);
   window.removeEventListener('keydown', handleGlobalKeydown, true);
   document.removeEventListener('pointerdown', handleMermaidOutsidePointerDown, true);
   document.removeEventListener('pointerdown', handleOverlayOutsidePointerDown, true);

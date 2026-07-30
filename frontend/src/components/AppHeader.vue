@@ -9,14 +9,19 @@
         <div
           v-for="tab in workspaceTabs"
           :key="tab.id"
-          :class="['workspace-tab', { active: tab.id === activeWorkspaceId, running: tab.isRunning }]"
+          :class="['workspace-tab', { active: tab.id === activeWorkspaceId, running: tab.isRunning, dragging: tab.id === draggedWorkspaceId }]"
+          :draggable="workspaceTabs.length > 1"
           @click="$emit('switchWorkspace', tab.id)"
+          @dragstart="onWorkspaceDragStart($event, tab.id)"
+          @dragover.prevent="onWorkspaceDragOver($event)"
+          @drop.prevent="onWorkspaceDrop($event, tab.id)"
+          @dragend="onWorkspaceDragEnd"
         >
           <span v-if="tab.isRunning" class="tab-running-dot" :aria-label="$t('header.running')"></span>
           <span class="tab-label">{{ tab.label }}</span>
           <button type="button" class="tab-close" :title="$t('header.close')" :aria-label="$t('header.close')" @click.stop="$emit('closeWorkspace', tab.id)">
-            <svg class="tab-close-icon" width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true">
-              <path d="M4.25 4.25l5.5 5.5M9.75 4.25l-5.5 5.5" />
+            <svg class="tab-close-icon" width="14" height="14" viewBox="0 0 14 14" fill="currentColor" aria-hidden="true">
+              <path d="M3.383 4.617 4.617 3.383 7 5.766l2.383-2.383 1.234 1.234L8.234 7l2.383 2.383-1.234 1.234L7 8.234l-2.383 2.383-1.234-1.234L5.766 7 3.383 4.617Z" />
             </svg>
           </button>
         </div>
@@ -86,8 +91,8 @@
         </svg>
       </button>
       <button class="window-control-btn close" @click="$emit('closeWindow')" :title="$t('header.close')" :aria-label="$t('header.close')">
-        <svg class="window-icon window-close-icon" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
-          <path d="M4.5 4.5l7 7M11.5 4.5l-7 7"/>
+        <svg class="window-icon window-close-icon" width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+          <path d="M3.864 5.136 5.136 3.864 8 6.727l2.864-2.863 1.272 1.272L9.273 8l2.863 2.864-1.272 1.272L8 9.273l-2.864 2.863-1.272-1.272L6.727 8 3.864 5.136Z"/>
         </svg>
       </button>
     </div>
@@ -95,7 +100,7 @@
 </template>
 
 <script setup>
-import { h } from 'vue';
+import { h, ref } from 'vue';
 import { NDropdown } from 'naive-ui';
 import AllyWordmark from './AllyWordmark.vue';
 
@@ -113,6 +118,7 @@ defineProps({
 const emit = defineEmits([
   'switchWorkspace',
   'closeWorkspace',
+  'reorderWorkspace',
   'addWorkspace',
   'historySelect',
   'openRepository',
@@ -122,6 +128,35 @@ const emit = defineEmits([
   'toggleMaximise',
   'closeWindow',
 ]);
+
+const draggedWorkspaceId = ref('');
+
+function onWorkspaceDragStart(event, id) {
+  draggedWorkspaceId.value = id;
+  event.dataTransfer.effectAllowed = 'move';
+  event.dataTransfer.setData('text/plain', id);
+}
+
+function onWorkspaceDragOver(event) {
+  if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+}
+
+function onWorkspaceDrop(event, targetId) {
+  const sourceId = draggedWorkspaceId.value || event.dataTransfer?.getData('text/plain');
+  if (sourceId && sourceId !== targetId) {
+    const rect = event.currentTarget.getBoundingClientRect();
+    emit('reorderWorkspace', {
+      sourceId,
+      targetId,
+      after: event.clientX > rect.left + rect.width / 2,
+    });
+  }
+  draggedWorkspaceId.value = '';
+}
+
+function onWorkspaceDragEnd() {
+  draggedWorkspaceId.value = '';
+}
 
 function onRepositoryClick() {
   if (updateAvailable && updateAutoSupported) {
@@ -323,7 +358,6 @@ body.platform-darwin .brand-wordmark {
 .window-close-icon {
   width: 16px;
   height: 16px;
-  stroke-width: 1.8;
   flex: none;
 }
 
@@ -350,7 +384,7 @@ body.platform-darwin .window-close-icon {
   padding: 0 7px 0 11px;
   height: 34px;
   border-radius: 8px;
-  cursor: pointer;
+  cursor: grab;
   color: var(--header-muted);
   font-size: 12px;
   line-height: 1;
@@ -362,6 +396,14 @@ body.platform-darwin .window-close-icon {
   max-width: 180px;
   border: 1px solid transparent;
   --wails-draggable: no-drag;
+}
+
+.workspace-tab:active {
+  cursor: grabbing;
+}
+
+.workspace-tab.dragging {
+  opacity: 0.45;
 }
 
 .workspace-tab:hover {

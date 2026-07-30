@@ -286,7 +286,7 @@ defaultSystemPrompt() → buildSystemPromptParts()
 
 - Vue 3 `<script setup>` + `ref()` / `reactive()`
 - 无 Vuex/Pinia
-- 会话和提示历史持久化到 `localStorage`
+- 会话索引和提示历史保存在 `localStorage`；成功完成轮次的 UI 消息快照按 session 独立保存在 IndexedDB
 
 ### 国际化
 
@@ -296,11 +296,13 @@ defaultSystemPrompt() → buildSystemPromptParts()
 
 ## 会话与上下文
 
-- 前端会话：`localStorage` 中的 UI 记录，最多保留 400 条消息 / 30 个未固定会话
+- 前端会话：`localStorage` 只存 ID/标题/工作区等索引，IndexedDB 的 `sessions` store 按 session 保存成功完成轮次的 UI 快照；失败、取消和流式未完成轮次不落盘
+- 关闭窗口不采集当前会话，只等待已由 `run:done` 或显式压缩成功排队的 IndexedDB 写入完成；旧 `localStorage` 消息可一次性迁移
 - 首次启动不默认绑定可执行文件或进程目录；用户首次发送普通任务时选择工作区，后端拒绝空工作区
-- 后端历史：`map[sessionID][]ChatCompletionMessage`，已保存会话最多 40 条
-- 上下文统计：`GetContextBreakdown()` 报告系统提示词/历史/当前会话/工具/工作区各部分
-- 自动压缩：当上下文接近限制时自动压缩历史消息
+- 后端历史：`map[sessionID][]ChatCompletionMessage`，磁盘使用 gzip JSON，并按约 256k token 预算从完整 user 边界裁剪，不再固定为 40 条
+- 前后端恢复对齐：匹配后端可见历史尾部与前端连续区间的最大重叠；后端压缩导致零重叠时仅追加最新请求
+- 上下文统计：`GetContextBreakdown()` 报告系统提示词/历史/当前会话/工具/工作区各部分；运行失败后回退到最后一次成功保存的真实模型历史
+- 自动压缩：当上下文接近限制时自动压缩历史消息，并同步保存压缩后的 gzip 历史
 
 ### 性能优化
 
@@ -310,7 +312,7 @@ defaultSystemPrompt() → buildSystemPromptParts()
 | Mermaid | 视口附近渲染，超出区域卸载，16项LRU恢复 |
 | diff | 精确LCS限于25万行矩阵上限，大替换用前缀/后缀回退 |
 | 媒体预览 | revocable Blob URL，Base64仅在需要模型输入时保留 |
-| localStorage | 单会话240KB预算，大tool预览在序列化前截断 |
+| 会话持久化 | localStorage 仅保存小型索引；IndexedDB 按会话保存完成轮次，大 tool 预览在快照前截断 |
 | 工具事件 | 后端200ms/2048B节流，前端120ms rAF批量 flush |
 
 ---
@@ -331,6 +333,8 @@ defaultSystemPrompt() → buildSystemPromptParts()
 | `maxScheduledTasks` | 100 | 定时任务上限 |
 | `workspaceMapDepth` | 3 | 工作区文件树扫描深度 |
 | `workspaceMapLimit` | 320 | 工作区文件树条目上限 |
+| `maxSavedHistoryTokens` | 256k | 后端持久化模型历史估算 token 预算 |
+| `maxSavedHistoryJSONBytes` | 8 MB | gzip 解压后的历史 JSON 读取上限 |
 
 ---
 

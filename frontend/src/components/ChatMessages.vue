@@ -52,7 +52,6 @@
             <span
               v-if="typeof msg.cacheRate === 'number'"
               class="cache-rate"
-              :class="cacheRateClass(msg.cacheRate)"
               :title="`cache hit ${msg.cacheHit} / miss ${msg.cacheMiss} (this run)`"
             >cache {{ msg.cacheRate }}%</span>
             <span
@@ -61,14 +60,14 @@
               :title="`input ${msg.runInputTokens} / output ${msg.runOutputTokens} tokens (this run)`"
             >↑{{ fmtTokens(msg.runInputTokens) }} ↓{{ fmtTokens(msg.runOutputTokens) }}</span>
             <button class="export-icon-btn" @click.stop="$emit('exportOneMsg', msg)" :title="$t('chat.export.responseTitle')" aria-label="export response">
-              <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M8 2v9M4.5 7.5L8 11l3.5-3.5M2.5 13.5h11"/>
+              <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M3 13c.8-4.8 3.6-8 9-9.5M8.5 2.5 12 3.5 11 7"/>
               </svg>
             </button>
             <button class="export-icon-btn" @click.stop="$emit('exportAllMsgs')" :title="$t('chat.export.sessionTitle')" aria-label="export session">
-              <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round">
-                <rect x="2.5" y="2" width="9" height="12" rx="1"/>
-                <path d="M5 5h4M5 7.5h4M5 10h2.5M11.5 5.5l2 2v6.5h-2"/>
+              <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M1.5 10.5C2 6.6 4.4 4.1 8.2 3M5.2 2.3l3.5.5-1 3.4"/>
+                <path d="M5.5 14c.5-3.9 2.9-6.4 6.7-7.5M9.2 5.8l3.5.5-1 3.4"/>
               </svg>
             </button>
           </div>
@@ -239,12 +238,6 @@ defineEmits([
   'exportAllMsgs',
   'submitAsk',
 ]);
-
-function cacheRateClass(rate) {
-  if (rate >= 80) return 'cache-high';
-  if (rate >= 40) return 'cache-mid';
-  return 'cache-low';
-}
 
 function fmtTokens(n) {
   const v = Number(n || 0);
@@ -650,9 +643,6 @@ defineExpose({ scrollbarRef, scrollToBottom, scrollToUserQuestion, saveScrollPos
   font-size: 11px;
   line-height: 16px;
 }
-.cache-rate.cache-high { color: #4ade80; }
-.cache-rate.cache-mid  { color: #fbbf24; }
-.cache-rate.cache-low  { color: #f87171; }
 
 .export-icon-btn {
   display: inline-flex;

@@ -5,3 +5,5 @@ package app
 func setTaskbarRunningProgress() {}
 
 func clearTaskbarProgress() {}
+
+func flashTaskbarWindowIfInactive() {}
