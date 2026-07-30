@@ -111,7 +111,7 @@ export function estimateMessageRenderChars(msg, options = {}) {
 }
 
 export function isRenderableMessage(msg) {
-  return !(msg?.role === 'tool_call' && (msg?.kind === 'run' || msg?.name === 'grep_files'));
+  return !(msg?.role === 'tool_call' && msg?.kind === 'run');
 }
 
 export function displaySourceMessages(session, expandedArchiveSessions, options = {}) {

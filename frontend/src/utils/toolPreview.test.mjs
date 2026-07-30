@@ -5,6 +5,7 @@ import {
   displaySourceMessages,
   estimateMessageRenderChars,
   formatHttpToolTitle,
+  isRenderableMessage,
 } from './toolPreview.mjs';
 
 test('collapsed create preview uses the latest generated lines', () => {
@@ -64,6 +65,11 @@ test('latest collapsed create card remains visible when message list is archived
   });
 
   assert.equal(display.at(-1).eventId, 'run-1:tool:0');
+});
+
+test('grep tool call remains renderable as a compact status card', () => {
+  assert.equal(isRenderableMessage({ role: 'tool_call', kind: 'grep', name: 'grep_files' }), true);
+  assert.equal(isRenderableMessage({ role: 'tool_call', kind: 'run', name: 'run' }), false);
 });
 
 test('trailing invisible run message does not hide the latest create card', () => {

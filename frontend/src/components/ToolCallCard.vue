@@ -62,7 +62,7 @@
       :max-lines="BODY_PREVIEW_LINES"
       preview-mode="tail"
     />
-    <pre v-else-if="msg.body && msg.status !== 'error' && msg.kind !== 'edit' && msg.kind !== 'read' && msg.kind !== 'calculate' && msg.kind !== 'scheduled' && (!['grep', 'list'].includes(msg.kind) || msg.expanded)" ref="bodyPreRef" :class="['tool-body', { 'fixed-scroll': isFixedKind(msg.kind), 'body-preview': isBodyPreview(msg), 'tail-default': isServiceReadResult(msg) }]">{{ toolBodyText(msg) }}</pre>
+    <pre v-else-if="msg.body && msg.status !== 'error' && msg.kind !== 'edit' && msg.kind !== 'read' && msg.kind !== 'calculate' && msg.kind !== 'scheduled' && msg.kind !== 'grep' && (msg.kind !== 'list' || msg.expanded)" ref="bodyPreRef" :class="['tool-body', { 'fixed-scroll': isFixedKind(msg.kind), 'body-preview': isBodyPreview(msg), 'tail-default': isServiceReadResult(msg) }]">{{ toolBodyText(msg) }}</pre>
     <div v-if="msg.status === 'error'" class="tool-error-block">
       <div v-if="msg.errorCode" class="tool-error-detail">
         <span>{{ errorDescription(msg) }}</span>
@@ -366,6 +366,8 @@ function hasExpandableBody(msg) {
   if (msg.kind === 'calculate') return false;
   // scheduled_task: 任务详情在 Task Center 面板查看，无需详情卡
   if (msg.kind === 'scheduled') return false;
-  return lineCount(msg.body) > BODY_PREVIEW_LINES || ['grep', 'list'].includes(String(msg.kind || ''));
+  // grep_files 永远只显示单行状态和命中统计，不加载匹配行详情。
+  if (msg.kind === 'grep') return false;
+  return lineCount(msg.body) > BODY_PREVIEW_LINES || msg.kind === 'list';
 }
 </script>

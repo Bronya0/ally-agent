@@ -2658,12 +2658,7 @@ function finalizeReasoningTiming(msg) {
 // Buffer the latest tool:update event per tool call and flush on a timer so
 // the main thread is not blocked by parsing/re-rendering large streaming
 // argument payloads (e.g. create_file content) on every delta.
-function isHiddenSearchTool(name) {
-  return name === 'grep_files';
-}
-
 function bufferToolUpdate(data) {
-  if (isHiddenSearchTool(data?.name)) return;
   flushStreamBuffer(data.runId);
   const session = sessionByRunId(data.runId);
   if (!session) return;
@@ -2957,7 +2952,6 @@ function bindRuntimeEvents() {
     if (session.id === activeSessionId.value) scrollMessagesToBottom();
   });
   const applyToolProgressEvent = (data) => {
-    if (isHiddenSearchTool(data?.name)) return;
     flushStreamBuffer(data.runId);
     const session = sessionByRunId(data.runId);
     if (!session) return;
@@ -3009,7 +3003,6 @@ function bindRuntimeEvents() {
     scheduleSaveSessions();
   });
   onRuntimeEvent('tool:result', (data) => {
-    if (isHiddenSearchTool(data?.name)) return;
     flushStreamBuffer(data.runId);
     flushToolUpdateBuffer();
     const session = sessionByEvent(data);
@@ -3153,7 +3146,6 @@ function bindRuntimeEvents() {
     }
   });
   onRuntimeEvent('tool:error', (data) => {
-    if (isHiddenSearchTool(data?.name)) return;
     flushStreamBuffer(data.runId);
     flushToolUpdateBuffer();
     const session = sessionByEvent(data);
@@ -3429,7 +3421,6 @@ function bindRuntimeEvents() {
     }
   });
   onRuntimeEvent('sub:tool:start', (data) => {
-    if (isHiddenSearchTool(data?.name)) return;
     const r = subRuns.value.find(s => s.id === data.id);
     if (r) {
       r.toolCalls.push({ toolCallId: data.toolCallId, name: data.name, args: data.args, status: 'running', summary: '', durationMs: 0, durationText: '' });
@@ -3440,7 +3431,6 @@ function bindRuntimeEvents() {
     }
   });
   onRuntimeEvent('sub:tool:result', (data) => {
-    if (isHiddenSearchTool(data?.name)) return;
     const r = subRuns.value.find(s => s.id === data.id);
     if (r) {
       const tc = r.toolCalls.find(t => t.toolCallId === data.toolCallId);
@@ -3453,7 +3443,6 @@ function bindRuntimeEvents() {
     }
   });
   onRuntimeEvent('sub:tool:error', (data) => {
-    if (isHiddenSearchTool(data?.name)) return;
     const r = subRuns.value.find(s => s.id === data.id);
     if (r) {
       const tc = r.toolCalls.find(t => t.toolCallId === data.toolCallId);
@@ -6169,28 +6158,10 @@ function formatToolBody(name, body) {
       return '';
     }
     if ((name === 'http_request' || name === 'web_fetch') && parsed.data) return '';
-    // grep result: show hits and matching lines
-    if (name === 'grep_files' && parsed.data && parsed.data.matches) {
-      const d = parsed.data;
-      let out = '';
-      if (d.occurrences) {
-        out = d.occurrences + ' hits';
-        if (d.count && d.count !== d.occurrences) out += ' in ' + d.count + ' matching lines';
-      } else {
-        out = d.count + ' matches';
-      }
-      if (d.files) out += ' in ' + d.files + ' files';
-      if (d.samplesTruncated || d.truncated) out += d.statsExact ? ' (sample truncated)' : ' (truncated)';
-      out += '\n';
-      const shown = d.matches.slice(0, 50);
-      for (const m of shown) {
-        out += m.path + ':' + m.lineNum + '  ' + m.content + '\n';
-      }
-      if (d.matches.length > 50) {
-        out += '... and ' + (d.matches.length - 50) + ' more';
-      }
-      return out.slice(0, 12000);
-    }
+    // grep results stay as a single non-expandable status line. The compact
+    // hit count is rendered by formatToolChip(); do not retain matching lines
+    // in the message body or build a hidden detail preview.
+    if (name === 'grep_files' && parsed.data) return '';
     // list_files result: show entries
     if ((name === 'list_files' || name === 'remote_list_files') && parsed.data && Array.isArray(parsed.data.entries)) {
       let out = parsed.data.count + ' items';
