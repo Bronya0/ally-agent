@@ -9,9 +9,9 @@ defineProps({
 </script>
 
 <style scoped>
-/* 斜向渐变:微暖灰起步,过渡到暖白,右下角橙色收口;避免第一个字母偏灰 */
+/* 使用加载动画中 Ally 文字的渐变色: 银白→暖金→浅灰蓝→银白 */
 .ally-wordmark {
-  background: linear-gradient(135deg, #b8a090 0%, #d0b890 40%, #e0c890 60%, #e09a5a 100%);
+  background: linear-gradient(120deg, #f8fafc 0%, #e0a458 36%, #d7dde8 68%, #f8fafc 100%);
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
