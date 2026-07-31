@@ -104,6 +104,19 @@
       <span class="scheduled-task-icon">▤</span>
       <span>{{ taskCenterCount }}</span>
     </button>
+    <button
+      type="button"
+      class="composer-icon-btn stats-btn"
+      :title="$t('stats.title')"
+      :aria-label="$t('stats.title')"
+      @click.stop="$emit('openTokenStats')"
+    >
+      <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+        <rect x="2" y="9" width="3" height="5" rx="0.6"/>
+        <rect x="6.5" y="5" width="3" height="9" rx="0.6"/>
+        <rect x="11" y="2" width="3" height="12" rx="0.6"/>
+      </svg>
+    </button>
     <template v-if="gitStatus.isRepo">
       <span class="info-sep">·</span>
       <span class="info-git" :title="$t('composer.git.open')" @click.stop="$emit('openGitDiff')">
@@ -269,7 +282,7 @@ const props = defineProps({
   fmtK: { type: Function, required: true },
 });
 
-const emit = defineEmits(['switchModel', 'openConfig', 'openGitDiff', 'openWorkspace', 'setRunMode', 'openTaskCenter', 'newSession', 'showSessions', 'addExtraRoot', 'removeExtraRoot']);
+const emit = defineEmits(['switchModel', 'openConfig', 'openGitDiff', 'openWorkspace', 'setRunMode', 'openTaskCenter', 'newSession', 'showSessions', 'addExtraRoot', 'removeExtraRoot', 'openTokenStats']);
 
 const contextPopoverVisible = ref(false);
 const currentModelLabel = computed(() => `${props.config.providerName || '-'} · ${props.config.model || '-'}`);

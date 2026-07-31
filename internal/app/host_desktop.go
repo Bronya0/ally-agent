@@ -43,6 +43,14 @@ func (a *App) Startup(ctx context.Context) {
 	_ = a.ensureInitialized()
 	_ = a.loadServiceHistory()
 	_ = a.startScheduledTaskManager()
+	// Load persisted token stats in the background and start the async flusher.
+	// Neither startup disk IO nor persistence can block normal chat handling.
+	if a.stats != nil {
+		go func() {
+			a.stats.load()
+			a.stats.run(ctx)
+		}()
+	}
 	// Clean up any Ally.exe.bak left from a previous self-update.
 	cleanupUpdateBackup()
 	go func() {

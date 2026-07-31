@@ -182,6 +182,7 @@
                   @open-workspace="openWorkspaceInFileManager"
                   @set-run-mode="setRunMode"
                   @open-task-center="openTaskCenter"
+                  @open-token-stats="tokenStatsVisible = true"
                   @new-session="createNewSession"
                   @show-sessions="showSessionList"
                   :get-session-messages="() => activeMessages"
@@ -212,6 +213,10 @@
             @refresh="refreshTaskCenter"
             @delete-task="deleteScheduledTask"
             @stop-service="stopManagedService"
+          />
+          <TokenStatsModal
+            :show="tokenStatsVisible"
+            @close="tokenStatsVisible = false"
           />
           <RenderBoundary :label="$t('app.gitChanges')"><GitDiffModal v-model:show="gitDiffVisible" :git-status="gitStatus" :workspace="config.workspace" /></RenderBoundary>
 
@@ -341,6 +346,7 @@ import FileMentionMenu from './components/FileMentionMenu.vue';
 import SettingsModal from './components/SettingsModal.vue';
 import ChatMessages from './components/ChatMessages.vue';
 import TaskCenterPanel from './components/TaskCenterPanel.vue';
+import TokenStatsModal from './components/TokenStatsModal.vue';
 import { assignConfig, defaultConfig } from './utils/config.mjs';
 import { buildVersion } from './utils/buildVersion.js';
 import { computeEditStats, formatEditStats } from './utils/diff.js';
@@ -1188,6 +1194,7 @@ const availableTools = ref([]);
 const scheduledTasks = ref([]);
 const services = ref([]);
 const taskCenterVisible = ref(false);
+const tokenStatsVisible = ref(false);
 const scheduledTasksLoading = ref(false);
 const servicesLoading = ref(false);
 const scheduledTaskDeletingIds = ref([]);

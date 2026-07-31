@@ -76,7 +76,7 @@ Publishing the Release triggers `.github/workflows/build.yml`, which builds and 
 | `host_` | Host 桥接 | Wails 生命周期、窗口、对话框、eventSink 边界、子进程与任务栏控制 |
 | `orch_` | 工具编排 | 绑定 `internal/tools/` 纯算法到 `*App` 状态：路径解析、并行调度、互斥锁、原子写入、批次策略、安全边界 |
 | `infra_` | 工具基础设施 | 跨编排共享：结果信封与压缩、流式节流、DTO 别名与归一化 |
-| `biz_` | 业务模块 | 独立功能：skills 发现与加载、系统提示词构建、项目上下文、MCP 生命周期、版本检查 |
+| `biz_` | 业务模块 | 独立功能：skills 发现与加载、系统提示词构建、项目上下文、MCP 生命周期、版本检查、异步 Token 统计 |
 
 约定：
 - `orch_<name>.go` 对应 `internal/tools/<name>/` 的纯算法，两者构成一个工具的完整实现。
@@ -146,6 +146,7 @@ Connected MCP tools are sorted by server, tool name, and function name before be
 - `fileOpsMu`: serializes local write/edit/delete operations
 - `gitDiffMu`: serializes/cancels git diff work
 - workspace token/context caches
+- `stats`: 有界非阻塞 Token 统计队列、按天持久化记录和异步刷新器
 
 `ConfigState` is stored in `~/.ally_agent/config.json` and includes:
 
@@ -542,6 +543,8 @@ Settings pages:
 
 The composer task-center button opens `TaskCenterPanel`, whose controlled tabs separate temporary scheduled tasks from managed background services. Cards show bounded previews; full scheduled output and service buffers open in a large scrollable modal. Active service buffers refresh while the modal is open.
 
+The composer statistics button opens `TokenStatsModal`, which queries `GetTokenStats()` on every open and renders dependency-free SVG charts for provider, model, source, workspace, daily/hourly usage, input/output volume, request/session/activity counts, and cache hit rate.
+
 Runtime events are registered through Wails `EventsOn()` and routed by `sessionId` and `runId`.
 
 Frontend-specific rendering:
@@ -609,6 +612,7 @@ Context accounting:
 - System prompt parts are shown separately in the context popover, including AGENTS.md/project instructions.
 - Global memory index is shown as its own system prompt part in the context popover.
 - Workspace token usage accumulates provider-reported usage when available, with estimates as fallback.
+- Historical token statistics retain 90 local days under `~/.ally_agent/stats/`; a bounded non-blocking queue keeps recording and persistence off the chat hot path, and `GetTokenStats()` aggregates provider/model/source/workspace/day/hour/cache/session dimensions from an in-memory snapshot.
 
 Long-render optimization:
 
@@ -826,6 +830,7 @@ These rules are required for future changes. They exist to keep Agent behavior d
 - `run:image` — 图片 delta
 - `tool:result` / `tool:error` — 每个工具调用 1 次 (`app.go`)
 - `tokens:update` — `recordWorkspaceTokenUsage` 每个 LLM step 1 次 (`app.go`)
+- `token stats`: 每个主 Agent / 子 Agent LLM step 投递一次，后台异步落盘到 `~/.ally_agent/stats/<date>.json`
 - `tokens:reset` — `ResetWorkspaceTokenUsage` (`app.go`)
 
 **Ask (`app.go`)**：`ask:ready` / `ask:closed` — 每次 ask 1 次

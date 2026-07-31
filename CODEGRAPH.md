@@ -32,7 +32,7 @@ Ally 是一个基于 Wails v2 的桌面 AI 编码助手。后端 Go 通过 Wails
 | `host_` | Host 桥接 | Wails 生命周期、窗口、对话框、eventSink、子进程与任务栏 |
 | `orch_` | 工具编排 | 绑定 `internal/tools/` 纯算法到 `*App` 状态 |
 | `infra_` | 工具基础设施 | 跨编排共享：结果信封、流式节流、DTO 归一化 |
-| `biz_` | 业务模块 | skills、prompt、mcp、update、project_context |
+| `biz_` | 业务模块 | skills、prompt、mcp、update、project_context、token_stats |
 
 `orch_<name>.go` 对应 `internal/tools/<name>/` 纯算法，两者构成一个工具的完整实现。
 
@@ -51,6 +51,8 @@ flowchart TD
     startup --> startSched[startScheduledTaskManager: 启动定时任务]
     startup --> checkDep[延迟检测 ripgrep / Git Bash]
     startup --> mcpInit[初始化 MCP Manager]
+    startup --> statsLoad[后台加载 Token 统计]
+    startup --> statsRun[启动异步统计刷新器]
     startup --> ctxDone[<-ctx.Done: 关闭时清理]
     ctxDone --> stopSched[停止定时任务]
     ctxDone --> stopServices[停止所有后台服务]
@@ -263,6 +265,7 @@ defaultSystemPrompt() → buildSystemPromptParts()
 | `ToolCallCard.vue` | 工具调用卡片渲染 |
 | `SubagentInlineCard.vue` | 子 Agent 进度行 |
 | `TaskCenterPanel.vue` | 任务中心面板（定时任务 + 后台服务） |
+| `TokenStatsModal.vue` | Token 统计面板（Provider/模型/来源/工作区/日期/时段/缓存） |
 | `CommandMenu.vue` | `/` 命令菜单 |
 | `FileMentionMenu.vue` | `@` 文件引用菜单 |
 | `SplashScreen.vue` | 启动欢迎屏 |
@@ -302,6 +305,7 @@ defaultSystemPrompt() → buildSystemPromptParts()
 - 后端历史：`map[sessionID][]ChatCompletionMessage`，磁盘使用 gzip JSON，并按约 256k token 预算从完整 user 边界裁剪，不再固定为 40 条
 - 前后端恢复对齐：匹配后端可见历史尾部与前端连续区间的最大重叠；后端压缩导致零重叠时仅追加最新请求
 - 上下文统计：`GetContextBreakdown()` 报告系统提示词/历史/当前会话/工具/工作区各部分；运行失败后回退到最后一次成功保存的真实模型历史
+- Token 统计：`GetTokenStats(rangeDays)` 按 Provider、模型、来源、工作区、日期、小时、会话数、活跃天数和缓存命中率聚合；通过有界非阻塞队列异步落盘到 `~/.ally_agent/stats/<date>.json`，不阻塞正常对话
 - 自动压缩：当上下文接近限制时自动压缩历史消息，并同步保存压缩后的 gzip 历史
 
 ### 性能优化
@@ -335,6 +339,9 @@ defaultSystemPrompt() → buildSystemPromptParts()
 | `workspaceMapLimit` | 320 | 工作区文件树条目上限 |
 | `maxSavedHistoryTokens` | 256k | 后端持久化模型历史估算 token 预算 |
 | `maxSavedHistoryJSONBytes` | 8 MB | gzip 解压后的历史 JSON 读取上限 |
+| `statsRetentionDays` | 90 | Token 统计保留天数 |
+| `statsQueueSize` | 2048 | Token 统计非阻塞队列容量 |
+| `statsMaxRecordsPerDay` | 100000 | 单日 Token 统计记录安全上限 |
 
 ---
 

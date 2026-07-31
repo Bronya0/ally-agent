@@ -159,6 +159,11 @@ type App struct {
 	// lastEstimatedTokens is retained for ResetWorkspaceTokenUsage cleanup;
 	// recordWorkspaceTokenUsage no longer uses fallback delta logic.
 	lastEstimatedTokens map[string]WorkspaceTokenUsage
+
+	// stats asynchronously records LLM token usage for the stats dashboard.
+	// Its bounded non-blocking queue keeps telemetry off the chat hot path;
+	// persistence runs on its own goroutine.
+	stats *statsRecorder
 }
 
 func NewApp() *App {
@@ -180,6 +185,7 @@ func NewApp() *App {
 		workspaceTokenUsage: map[string]WorkspaceTokenUsage{},
 		services:            map[string]*managedService{},
 		lastEstimatedTokens: map[string]WorkspaceTokenUsage{},
+		stats:               newStatsRecorder(),
 	}
 	// Expose the active App to package-level helpers that predate Runtime
 	// injection (listMemories, memoryIndexCache usage in prompt_builder).
@@ -1868,7 +1874,16 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			content := modelResp.Content
 			reasoning := modelResp.Reasoning
 			toolCalls = modelResp.ToolCalls
-			a.recordWorkspaceTokenUsage(cfg.Workspace, modelResp.Usage, estimateRequestTokens(messages, tools), estimateCompletionTokens(content, reasoning, toolCalls))
+			fallbackInput := 0
+			fallbackOutput := 0
+			if modelResp.Usage == nil || modelResp.Usage.PromptTokens <= 0 {
+				fallbackInput = estimateRequestTokens(messages, tools)
+			}
+			if modelResp.Usage == nil || modelResp.Usage.CompletionTokens <= 0 {
+				fallbackOutput = estimateCompletionTokens(content, reasoning, toolCalls)
+			}
+			a.recordWorkspaceTokenUsage(cfg.Workspace, modelResp.Usage, fallbackInput, fallbackOutput)
+			a.recordTokenStats(cfg.ProviderName, cfg.Model, cfg.Workspace, sessionID, "main", modelResp.Usage, fallbackInput, fallbackOutput)
 			if modelResp.Usage != nil {
 				runCacheHit += modelResp.Usage.CacheHitTokens
 				runCacheMiss += modelResp.Usage.CacheMissTokens
@@ -3748,6 +3763,24 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 			run.TotalTokens = run.InputTokens + run.OutputTokens
 			a.subRunsMu.Unlock()
 		}
+		fallbackInput := 0
+		fallbackOutput := 0
+		if modelResp.Usage == nil || modelResp.Usage.PromptTokens <= 0 {
+			fallbackInput = estimateRequestTokens(messages, tools)
+		}
+		if modelResp.Usage == nil || modelResp.Usage.CompletionTokens <= 0 {
+			fallbackOutput = estimateCompletionTokens(modelResp.Content, modelResp.Reasoning, modelResp.ToolCalls)
+		}
+		a.recordTokenStats(
+			cfg.ProviderName,
+			model,
+			cfg.Workspace,
+			sessionID,
+			"subagent",
+			modelResp.Usage,
+			fallbackInput,
+			fallbackOutput,
+		)
 
 		assistantMessage := openai.ChatCompletionMessage{
 			Role:      openai.ChatMessageRoleAssistant,
