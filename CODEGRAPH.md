@@ -53,7 +53,9 @@ flowchart TD
     startup --> mcpInit[初始化 MCP Manager]
     startup --> statsLoad[后台加载 Token 统计]
     startup --> statsRun[启动异步统计刷新器]
+    startup --> updateBackup[延迟清理更新备份]
     startup --> ctxDone[<-ctx.Done: 关闭时清理]
+    ctxDone --> stopStats[Shutdown 等待 Token 统计最终落盘]
     ctxDone --> stopSched[停止定时任务]
     ctxDone --> stopServices[停止所有后台服务]
     ctxDone --> mcpShutdown[MCP Manager.Shutdown]
@@ -305,7 +307,7 @@ defaultSystemPrompt() → buildSystemPromptParts()
 - 后端历史：`map[sessionID][]ChatCompletionMessage`，磁盘使用 gzip JSON，并按约 256k token 预算从完整 user 边界裁剪，不再固定为 40 条
 - 前后端恢复对齐：匹配后端可见历史尾部与前端连续区间的最大重叠；后端压缩导致零重叠时仅追加最新请求
 - 上下文统计：`GetContextBreakdown()` 报告系统提示词/历史/当前会话/工具/工作区各部分；运行失败后回退到最后一次成功保存的真实模型历史
-- Token 统计：`GetTokenStats(rangeDays)` 按 Provider、模型、来源、工作区、日期、小时、会话数、活跃天数和缓存命中率聚合；通过有界非阻塞队列异步落盘到 `~/.ally_agent/stats/<date>.json`，不阻塞正常对话
+- Token 统计：`GetTokenStats(rangeDays)` 按 Provider、模型、来源、工作区、日期、小时、会话数、活跃天数和缓存命中率聚合；通过有界非阻塞队列异步落盘到 `~/.ally_agent/stats/<date>.json`，启动读取限制文件大小、解码记录数和单条数值，关闭时由 `Shutdown` 等待最终 drain/flush
 - 自动压缩：当上下文接近限制时自动压缩历史消息，并同步保存压缩后的 gzip 历史
 
 ### 性能优化
@@ -341,7 +343,9 @@ defaultSystemPrompt() → buildSystemPromptParts()
 | `maxSavedHistoryJSONBytes` | 8 MB | gzip 解压后的历史 JSON 读取上限 |
 | `statsRetentionDays` | 90 | Token 统计保留天数 |
 | `statsQueueSize` | 2048 | Token 统计非阻塞队列容量 |
-| `statsMaxRecordsPerDay` | 100000 | 单日 Token 统计记录安全上限 |
+| `statsMaxRecordsPerDay` | 10000 | 单日 Token 统计内存保留上限（读取旧文件时保留最新记录） |
+| `statsMaxTotalRecords` | 20000 | 全部 Token 统计内存记录上限 |
+| `statsMaxDecodedPerDay` | 100000 | 单日 Token 统计文件最大解码记录数 |
 
 ---
 
@@ -360,7 +364,7 @@ flowchart LR
 
 - `app.go` 不导入 Wails runtime；未来抽离 Agent 时可替换 `eventSink` 和宿主生命周期。
 - 所有后端 UI 事件必须经过 `App.emit()`；Wails `EventsEmit` 只允许出现在 `host_events.go`。
-- Wails 启动、窗口、目录选择和系统文件管理器只允许放在 `host_desktop.go`；自更新退出例外保留在 `biz_update.go`。
+- Wails 启动、窗口、目录选择和系统文件管理器只允许放在 `host_desktop.go`；自更新退出例外保留在 `biz_update.go`，macOS 的无 shell 重启 helper 放在 `host_update_relaunch_darwin.go`。
 - 文件 mutation 冲突检测与本地编辑执行共享 `planLocalEditBatch()`，避免两层契约漂移。
 
 ### 修改入口与跨层变更顺序

@@ -1,9 +1,8 @@
 package main
 
-// Test edit by agent
-
 import (
 	"embed"
+	"os"
 
 	backend "ally-dev/internal/app"
 	"github.com/wailsapp/wails/v2"
@@ -16,6 +15,12 @@ import (
 var assets embed.FS
 
 func main() {
+	if handled, err := backend.RunUpdateRelaunchHelper(os.Args[1:]); handled {
+		if err != nil {
+			println("Update relaunch helper error:", err.Error())
+		}
+		return
+	}
 	app := backend.NewApp()
 
 	err := wails.Run(&options.App{
@@ -33,7 +38,8 @@ func main() {
 			Theme:           windows.Dark,
 			WindowClassName: backend.WindowsWindowClassName,
 		},
-		OnStartup: app.Startup,
+		OnStartup:  app.Startup,
+		OnShutdown: app.Shutdown,
 		Bind: []interface{}{
 			app,
 		},

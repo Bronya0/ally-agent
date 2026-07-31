@@ -46,13 +46,11 @@ func (a *App) Startup(ctx context.Context) {
 	// Load persisted token stats in the background and start the async flusher.
 	// Neither startup disk IO nor persistence can block normal chat handling.
 	if a.stats != nil {
-		go func() {
-			a.stats.load()
-			a.stats.run(ctx)
-		}()
+		a.stats.start(ctx)
 	}
-	// Clean up any Ally.exe.bak left from a previous self-update.
-	cleanupUpdateBackup()
+	// Windows backups can be removed immediately. macOS keeps the previous
+	// bundle until this process has remained alive past the startup grace period.
+	scheduleUpdateBackupCleanup(ctx)
 	go func() {
 		<-ctx.Done()
 		a.stopScheduledTaskManager()
@@ -91,6 +89,15 @@ func (a *App) Startup(ctx context.Context) {
 				}
 			}()
 		}
+	}
+}
+
+// Shutdown waits for telemetry's final queue drain and disk flush. Wails calls
+// this lifecycle hook before process teardown, so recently completed requests
+// are not lost when the window closes inside the periodic flush interval.
+func (a *App) Shutdown(_ context.Context) {
+	if a.stats != nil {
+		_ = a.stats.stop(statsShutdownTimeout)
 	}
 }
 

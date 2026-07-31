@@ -983,10 +983,13 @@ func (a *App) QuitForUpdate() error {
 	if a.ctx == nil {
 		return errors.New("app context not initialized")
 	}
-	var appDir string
 	if goruntime.GOOS == "darwin" {
-		if dir, err := macAppBundleDir(); err == nil {
-			appDir = dir
+		appDir, err := macAppBundleDir()
+		if err != nil {
+			return err
+		}
+		if err := startUpdateRelaunchHelper(appDir); err != nil {
+			return fmt.Errorf("start update relaunch helper: %w", err)
 		}
 	}
 	go func() {
@@ -995,21 +998,52 @@ func (a *App) QuitForUpdate() error {
 		time.Sleep(500 * time.Millisecond)
 		wruntime.Quit(a.ctx)
 	}()
-	if appDir != "" {
-		// Spawn a detached helper that waits for this process to exit, then
-		// opens the new bundle. A plain goroutine would be killed together
-		// with this process when wruntime.Quit exits the app.
-		waitAndOpen := fmt.Sprintf("while kill -0 %d 2>/dev/null; do sleep 0.5; done; open %q", os.Getpid(), appDir)
-		helper := exec.Command("/bin/sh", "-c", waitAndOpen)
-		if err := helper.Start(); err == nil {
-			_ = helper.Process.Release()
-		}
-	}
 	return nil
 }
 
+const macUpdateBackupCleanupDelay = 10 * time.Second
+
+// scheduleUpdateBackupCleanup retains the old macOS bundle until the new
+// process has survived its startup path. If startup crashes, the .bak bundle
+// remains available for manual recovery instead of being deleted immediately.
+func scheduleUpdateBackupCleanup(ctx context.Context) {
+	if !updatePlatformSupported() {
+		return
+	}
+	if goruntime.GOOS != "darwin" {
+		cleanupUpdateBackup()
+		return
+	}
+	appDir, err := macAppBundleDir()
+	if err != nil {
+		return
+	}
+	backupPath := appDir + appBackupSuffix
+	original, err := os.Stat(backupPath)
+	if err != nil {
+		return
+	}
+	go func() {
+		timer := time.NewTimer(macUpdateBackupCleanupDelay)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+			cleanupUpdateBackupIfUnchanged(backupPath, original)
+		}
+	}()
+}
+
+func cleanupUpdateBackupIfUnchanged(path string, original os.FileInfo) {
+	info, err := os.Stat(path)
+	if err != nil || !os.SameFile(original, info) {
+		return
+	}
+	_ = os.RemoveAll(path)
+}
+
 // cleanupUpdateBackup removes leftover backups from a previous self-update
-// (Ally.exe.bak on Windows, Ally.app.bak on macOS). Called during startup
 // once the new process has settled.
 func cleanupUpdateBackup() {
 	if !updatePlatformSupported() {

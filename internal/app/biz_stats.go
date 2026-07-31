@@ -3,6 +3,9 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -15,7 +18,7 @@ import (
 //
 // Design goals:
 //   - Recording is fire-and-forget: recordTokenStats uses a bounded,
-//     non-blocking queue and never takes a stats lock on the chat hot path.
+//     non-blocking queue and only a brief lifecycle lock on the chat hot path.
 //   - Persistence is done by a single background goroutine (started in
 //     Startup) that flushes dirty day files every few seconds and on exit.
 //   - Aggregation for GetTokenStats is computed on demand from an in-memory
@@ -24,12 +27,18 @@ import (
 //     90 days, and are pruned at load time.
 
 const (
-	statsSubDir           = "stats"
-	statsRetentionDays    = 90
-	statsFlushInterval    = 5 * time.Second
-	statsMaxRangeDays     = 90
-	statsQueueSize        = 2048
-	statsMaxRecordsPerDay = 100000
+	statsSubDir               = "stats"
+	statsRetentionDays        = 90
+	statsFlushInterval        = 5 * time.Second
+	statsMaxRangeDays         = 90
+	statsQueueSize            = 2048
+	statsMaxRecordsPerDay     = 10000
+	statsMaxTotalRecords      = 20000
+	statsMaxDecodedPerDay     = 100000
+	statsMaxFileBytes         = 64 << 20
+	statsMaxTokensPerRecord   = 1_000_000_000
+	statsMaxRequestsPerRecord = 1_000_000
+	statsShutdownTimeout      = 10 * time.Second
 )
 
 func statsDir() string { return filepath.Join(appDataDir(), statsSubDir) }
@@ -55,23 +64,38 @@ type statsRecord struct {
 // The bounded queue is deliberately lossy under extreme pressure: dropping a
 // telemetry sample is preferable to ever delaying a model response.
 type statsRecorder struct {
-	mu        sync.Mutex
-	days      map[string][]statsRecord // date ("2006-01-02") -> records
-	dirtyDays map[string]bool
-	queue     chan statsRecord
+	mu            sync.Mutex
+	lifecycleMu   sync.Mutex
+	lifecycleCond *sync.Cond
+	accepting     bool
+	active        int
+	days          map[string][]statsRecord // date ("2006-01-02") -> records
+	dirtyDays     map[string]bool
+	queue         chan statsRecord
+	startOnce     sync.Once
+	stopOnce      sync.Once
+	cancel        context.CancelFunc
+	done          chan struct{}
+	storageDir    string
 }
 
 func newStatsRecorder() *statsRecorder {
-	return &statsRecorder{
-		days:      map[string][]statsRecord{},
-		dirtyDays: map[string]bool{},
-		queue:     make(chan statsRecord, statsQueueSize),
+	s := &statsRecorder{
+		days:       map[string][]statsRecord{},
+		dirtyDays:  map[string]bool{},
+		queue:      make(chan statsRecord, statsQueueSize),
+		done:       make(chan struct{}),
+		storageDir: statsDir(),
 	}
+	s.lifecycleCond = sync.NewCond(&s.lifecycleMu)
+	s.accepting = true
+	return s
 }
 
-// record enqueues one usage event without taking a lock or performing IO. If
-// telemetry falls behind and the bounded queue is full, the sample is dropped
-// so statistics can never block normal chat processing.
+// record enqueues one usage event without performing IO. A brief lifecycle
+// lock prevents producers from racing the final shutdown drain. If telemetry
+// falls behind and the bounded queue is full, the sample is dropped so normal
+// chat processing never waits for the recorder.
 func (s *statsRecorder) record(r statsRecord) {
 	if r.Ts == 0 {
 		r.Ts = time.Now().UnixMilli()
@@ -88,6 +112,21 @@ func (s *statsRecorder) record(r statsRecord) {
 	if r.Requests <= 0 {
 		r.Requests = 1
 	}
+	s.lifecycleMu.Lock()
+	if !s.accepting {
+		s.lifecycleMu.Unlock()
+		return
+	}
+	s.active++
+	s.lifecycleMu.Unlock()
+	defer func() {
+		s.lifecycleMu.Lock()
+		s.active--
+		if s.active == 0 {
+			s.lifecycleCond.Broadcast()
+		}
+		s.lifecycleMu.Unlock()
+	}()
 	select {
 	case s.queue <- r:
 	default:
@@ -95,15 +134,95 @@ func (s *statsRecorder) record(r statsRecord) {
 }
 
 func (s *statsRecorder) appendRecord(r statsRecord) {
-	s.mu.Lock()
 	key := statsDateKey(r.Ts)
+	s.mu.Lock()
 	if len(s.days[key]) >= statsMaxRecordsPerDay {
-		s.mu.Unlock()
-		return
+		// Keep the newest samples because the active dashboard ranges are
+		// more useful than the oldest records from a saturated day.
+		s.days[key] = append(s.days[key][1:], r)
+	} else {
+		if totalStatsRecords(s.days) >= statsMaxTotalRecords {
+			if droppedDate := dropOldestStatsRecord(s.days); droppedDate != "" {
+				s.dirtyDays[droppedDate] = true
+			}
+		}
+		s.days[key] = append(s.days[key], r)
 	}
-	s.days[key] = append(s.days[key], r)
 	s.dirtyDays[key] = true
 	s.mu.Unlock()
+}
+
+func totalStatsRecords(days map[string][]statsRecord) int {
+	total := 0
+	for _, records := range days {
+		total += len(records)
+	}
+	return total
+}
+
+func dropOldestStatsRecord(days map[string][]statsRecord) string {
+	oldest := ""
+	for date, records := range days {
+		if len(records) > 0 && (oldest == "" || date < oldest) {
+			oldest = date
+		}
+	}
+	if oldest == "" {
+		return ""
+	}
+	if len(days[oldest]) == 1 {
+		delete(days, oldest)
+		return oldest
+	}
+	days[oldest] = days[oldest][1:]
+	return oldest
+}
+
+// start loads persisted data before entering the single recorder loop. The
+// lifecycle is owned here so shutdown can wait for the final queue drain and
+// flush instead of relying on process teardown timing.
+func (s *statsRecorder) start(parent context.Context) {
+	s.startOnce.Do(func() {
+		ctx, cancel := context.WithCancel(parent)
+		s.cancel = cancel
+		go func() {
+			defer close(s.done)
+			s.load()
+			s.run(ctx)
+		}()
+	})
+}
+
+func (s *statsRecorder) stop(timeout time.Duration) error {
+	started := false
+	s.startOnce.Do(func() {
+		// A recorder that was never started has nothing to flush.
+		close(s.done)
+	})
+	s.lifecycleMu.Lock()
+	s.accepting = false
+	for s.active > 0 {
+		s.lifecycleCond.Wait()
+	}
+	s.lifecycleMu.Unlock()
+	if s.cancel != nil {
+		started = true
+		s.stopOnce.Do(s.cancel)
+	}
+	if !started {
+		return nil
+	}
+	if timeout <= 0 {
+		timeout = statsShutdownTimeout
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-s.done:
+		return nil
+	case <-timer.C:
+		return errors.New("timed out flushing token statistics")
+	}
 }
 
 // run owns queue consumption, flushes dirty state periodically, and drains
@@ -169,7 +288,10 @@ func (s *statsRecorder) flush() {
 	s.dirtyDays = map[string]bool{}
 	s.mu.Unlock()
 
-	dir := statsDir()
+	dir := s.storageDir
+	if strings.TrimSpace(dir) == "" {
+		dir = statsDir()
+	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		s.markDirty(mapKeys(days)...)
 		return
@@ -234,44 +356,146 @@ func replaceStatsFile(tmp, dst string) error {
 	return nil
 }
 
+func recoverStatsBackups(dir string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json.bak") {
+			continue
+		}
+		dateStr := strings.TrimSuffix(entry.Name(), ".json.bak")
+		if _, err := time.ParseInLocation("2006-01-02", dateStr, time.Local); err != nil {
+			continue
+		}
+		backup := filepath.Join(dir, entry.Name())
+		if _, err := readStatsDayFile(backup, dateStr); err != nil {
+			continue
+		}
+		dst := filepath.Join(dir, dateStr+".json")
+		if _, err := readStatsDayFile(dst, dateStr); err == nil {
+			_ = os.Remove(backup)
+			continue
+		}
+		_ = os.Remove(dst)
+		_ = os.Rename(backup, dst)
+	}
+}
+
 // load reads persisted day files within the retention window into memory.
-// Called once at startup while memory is still empty.
+// Each file and decoded record count is bounded before it can affect process
+// memory. Called once at startup while memory is still empty.
 func (s *statsRecorder) load() {
-	entries, err := os.ReadDir(statsDir())
+	dir := s.storageDir
+	if strings.TrimSpace(dir) == "" {
+		dir = statsDir()
+	}
+	recoverStatsBackups(dir)
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return
 	}
 	now := time.Now()
 	midnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 	cutoff := midnight.AddDate(0, 0, -(statsRetentionDays - 1))
-	for _, e := range entries {
+	for i := len(entries) - 1; i >= 0; i-- {
+		e := entries[i]
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
 			continue
 		}
 		dateStr := strings.TrimSuffix(e.Name(), ".json")
 		day, err := time.ParseInLocation("2006-01-02", dateStr, time.Local)
-		if err != nil {
+		if err != nil || day.After(midnight) {
 			continue
 		}
+		path := filepath.Join(dir, e.Name())
 		if day.Before(cutoff) {
-			_ = os.Remove(filepath.Join(statsDir(), e.Name()))
+			_ = os.Remove(path)
 			continue
 		}
-		data, err := os.ReadFile(filepath.Join(statsDir(), e.Name()))
+		records, err := readStatsDayFile(path, dateStr)
 		if err != nil {
-			continue
-		}
-		var records []statsRecord
-		if err := json.Unmarshal(data, &records); err != nil {
 			continue
 		}
 		s.mu.Lock()
-		// Startup loading may overlap an early dashboard query. Preserve any
-		// fresh in-process samples already present for the same day.
+		// Startup loading may overlap an early dashboard query. Preserve fresh
+		// in-process samples while keeping both day and process caps intact.
 		existing := s.days[dateStr]
-		s.days[dateStr] = append(records, existing...)
+		available := minInt(statsMaxRecordsPerDay-len(existing), statsMaxTotalRecords-totalStatsRecords(s.days))
+		if available > 0 {
+			if len(records) > available {
+				records = records[len(records)-available:]
+			}
+			s.days[dateStr] = append(records, existing...)
+		}
 		s.mu.Unlock()
 	}
+}
+
+func readStatsDayFile(path, dateStr string) ([]statsRecord, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	if info, err := f.Stat(); err != nil {
+		return nil, err
+	} else if !info.Mode().IsRegular() || info.Size() > statsMaxFileBytes {
+		return nil, fmt.Errorf("stats file exceeds %d bytes", statsMaxFileBytes)
+	}
+
+	decoder := json.NewDecoder(io.LimitReader(f, statsMaxFileBytes+1))
+	token, err := decoder.Token()
+	if err != nil || token != json.Delim('[') {
+		return nil, errors.New("stats file must contain a JSON array")
+	}
+	records := make([]statsRecord, 0, minInt(statsMaxRecordsPerDay, 1024))
+	decoded := 0
+	next := 0
+	for decoder.More() {
+		var record statsRecord
+		if err := decoder.Decode(&record); err != nil {
+			return nil, err
+		}
+		decoded++
+		if decoded > statsMaxDecodedPerDay {
+			return nil, fmt.Errorf("stats file exceeds %d decoded records", statsMaxDecodedPerDay)
+		}
+		if !validLoadedStatsRecord(record, dateStr) {
+			continue
+		}
+		if len(records) < statsMaxRecordsPerDay {
+			records = append(records, record)
+			continue
+		}
+		records[next] = record
+		next = (next + 1) % statsMaxRecordsPerDay
+	}
+	if _, err := decoder.Token(); err != nil {
+		return nil, err
+	}
+	if decoder.Decode(&struct{}{}) != io.EOF {
+		return nil, errors.New("stats file contains trailing data")
+	}
+	if next > 0 {
+		ordered := make([]statsRecord, 0, len(records))
+		ordered = append(ordered, records[next:]...)
+		ordered = append(ordered, records[:next]...)
+		records = ordered
+	}
+	return records, nil
+}
+
+func validLoadedStatsRecord(record statsRecord, dateStr string) bool {
+	return record.Ts > 0 && statsDateKey(record.Ts) == dateStr &&
+		len(record.Provider) <= 128 && len(record.Model) <= 256 &&
+		len(record.Workspace) <= 1024 && len(record.SessionID) <= 256 && len(record.Source) <= 64 &&
+		record.InputTokens >= 0 && record.InputTokens <= statsMaxTokensPerRecord &&
+		record.OutputTokens >= 0 && record.OutputTokens <= statsMaxTokensPerRecord &&
+		record.CacheHitTokens >= 0 && record.CacheHitTokens <= statsMaxTokensPerRecord &&
+		record.CacheMissTokens >= 0 && record.CacheMissTokens <= statsMaxTokensPerRecord &&
+		record.Requests > 0 && record.Requests <= statsMaxRequestsPerRecord
 }
 
 // recordTokenStats is a fire-and-forget hook called after each LLM step
@@ -411,9 +635,19 @@ func (a *App) GetTokenStats(rangeDays int) TokenStatsResult {
 		result.ByDay = append(result.ByDay, TokenStatsDay{Date: d})
 	}
 
+	retentionCutoffStr := midnight.AddDate(0, 0, -(statsRetentionDays - 1)).Format("2006-01-02")
 	s.mu.Lock()
-	daysSnapshot := make(map[string][]statsRecord, len(s.days))
+	for date := range s.days {
+		if date < retentionCutoffStr {
+			delete(s.days, date)
+			delete(s.dirtyDays, date)
+		}
+	}
+	daysSnapshot := make(map[string][]statsRecord, rangeDays)
 	for date, records := range s.days {
+		if date < cutoffStr {
+			continue
+		}
 		daysSnapshot[date] = append([]statsRecord(nil), records...)
 	}
 	s.mu.Unlock()

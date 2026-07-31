@@ -138,7 +138,7 @@
                   <span class="legend-item"><i class="legend-dot input"></i>{{ $t('stats.input') }}</span>
                   <span class="legend-item"><i class="legend-dot output"></i>{{ $t('stats.output') }}</span>
                 </div>
-                <svg class="stats-chart" viewBox="0 0 720 240" role="img" aria-label="daily trend">
+                <svg class="stats-chart" viewBox="0 0 720 240" role="img" :aria-label="$t('stats.dailyTrend')">
                   <defs>
                     <linearGradient id="stats-area-fill" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="0%" stop-color="var(--ally-accent)" stop-opacity="0.32" />
@@ -161,7 +161,7 @@
 
             <n-tab-pane name="hour" :tab="$t('stats.tabHour')">
               <div class="stats-section">
-                <svg class="stats-chart" viewBox="0 0 720 200" role="img" aria-label="hourly distribution">
+                <svg class="stats-chart" viewBox="0 0 720 200" role="img" :aria-label="$t('stats.hourlyDistribution')">
                   <g v-for="(h, i) in hourBars" :key="i">
                     <rect
                       :x="h.x"
@@ -184,7 +184,7 @@
             <n-tab-pane name="cache" :tab="$t('stats.tabCache')">
               <div class="stats-section cache-section">
                 <div class="donut-wrap">
-                  <svg viewBox="0 0 180 180" width="180" height="180" role="img" aria-label="cache hit rate">
+                  <svg viewBox="0 0 180 180" width="180" height="180" role="img" :aria-label="$t('stats.cacheHitRate')">
                     <circle cx="90" cy="90" r="70" class="donut-track" />
                     <circle
                       cx="90" cy="90" r="70"
@@ -217,7 +217,7 @@
                     <span class="rank-index">{{ i + 1 }}</span>
                     <div class="rank-main">
                       <div class="rank-line">
-                        <span class="rank-name workspace" :title="w.name">{{ w.name || '(default)' }}</span>
+                        <span class="rank-name workspace" :title="w.name">{{ w.name || $t('stats.defaultWorkspace') }}</span>
                         <span class="rank-tokens">{{ fmtTokens(w.inputTokens + w.outputTokens) }}</span>
                       </div>
                       <div class="share-track">
@@ -265,22 +265,33 @@ const rangeOptions = [
   { label: '90 ' + t('stats.days'), value: 90 },
 ];
 
+let loadGeneration = 0;
+
 async function load() {
-  if (loading.value) return;
+  const generation = ++loadGeneration;
+  const requestedRange = rangeDays.value;
   loading.value = true;
   try {
-    stats.value = await GetTokenStats(rangeDays.value);
+    const result = await GetTokenStats(requestedRange);
+    if (generation !== loadGeneration) return;
+    stats.value = result;
   } catch (err) {
+    if (generation !== loadGeneration) return;
     stats.value = { ok: false, error: String(err?.message || err || t('stats.loadFailed')) };
   } finally {
-    loading.value = false;
+    if (generation === loadGeneration) loading.value = false;
   }
 }
 
 watch(
   () => props.show,
   (visible) => {
-    if (visible) load();
+    if (visible) {
+      load();
+    } else {
+      loadGeneration += 1;
+      loading.value = false;
+    }
   }
 );
 

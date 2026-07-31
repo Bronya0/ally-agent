@@ -146,7 +146,7 @@ Connected MCP tools are sorted by server, tool name, and function name before be
 - `fileOpsMu`: serializes local write/edit/delete operations
 - `gitDiffMu`: serializes/cancels git diff work
 - workspace token/context caches
-- `stats`: 有界非阻塞 Token 统计队列、按天持久化记录和异步刷新器
+- `stats`: 有界非阻塞 Token 统计队列、按天持久化记录和异步刷新器；启动加载文件和记录数有界，关闭时等待队列 drain/flush 完成
 
 `ConfigState` is stored in `~/.ally_agent/config.json` and includes:
 
@@ -612,7 +612,7 @@ Context accounting:
 - System prompt parts are shown separately in the context popover, including AGENTS.md/project instructions.
 - Global memory index is shown as its own system prompt part in the context popover.
 - Workspace token usage accumulates provider-reported usage when available, with estimates as fallback.
-- Historical token statistics retain 90 local days under `~/.ally_agent/stats/`; a bounded non-blocking queue keeps recording and persistence off the chat hot path, and `GetTokenStats()` aggregates provider/model/source/workspace/day/hour/cache/session dimensions from an in-memory snapshot.
+- Historical token statistics retain 90 local days under `~/.ally_agent/stats/`; a bounded non-blocking queue keeps recording and persistence off the chat hot path, startup loading enforces file/record/value limits, and shutdown waits for the final flush before Wails exits. `GetTokenStats()` aggregates provider/model/source/workspace/day/hour/cache/session dimensions from an in-memory snapshot.
 
 Long-render optimization:
 
@@ -807,6 +807,7 @@ These rules are required for future changes. They exist to keep Agent behavior d
 - Settings → MCP manages raw MCP JSON and reconnects servers.
 - Settings → Models owns provider presets and the current active provider/model. Known provider/model quick setup is generated from `docs/model_api.json` into a compact, lazily loaded frontend catalog; only Ally-compatible text-output models with tool calling are included, while custom configuration remains available. Model presets can be exported as unencrypted JSON (including API keys) and incrementally imported; normalized `providerName + model` is the identity, matching entries are replaced, and unrelated presets are retained.
 - The model editor's connection test sends one isolated minimal request using the unsaved form values; it does not mutate or persist the active configuration.
+- macOS self-update relaunches through a detached argv/pipe helper instead of shell interpolation and retains the previous `.app.bak` through a startup grace period.
 - The context popover should keep system prompt parts separate, especially AGENTS.md/project instructions.
 
 ---
