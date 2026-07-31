@@ -1227,7 +1227,7 @@ const splashVisible = ref(true);
 const expandedArchiveSessions = ref(new Set());
 const updateAvailable = ref(false);
 const latestReleaseVersion = ref('');
-// Self-update state (Windows x64 only; other platforms keep the open-browser behavior).
+// Self-update state (Windows x64 ZIP and macOS DMG; other platforms keep the open-browser behavior).
 const updateAutoSupported = ref(false);
 const updateState = ref('idle'); // idle | downloading | extracting | ready | applying | restarting | error
 const updateProgress = ref({ stage: '', percent: 0, bytesDownloaded: 0, bytesTotal: 0, version: '' });
@@ -6751,8 +6751,9 @@ function openRepositoryPage() {
 }
 
 // Start the self-update flow: download → extract → ready → apply → restart.
-// On non-Windows platforms the button falls back to openRepositoryPage, so
-// this is only reached when updateAutoSupported is true.
+// Supported on Windows x64 (ZIP) and macOS (DMG). On other platforms the
+// button falls back to openRepositoryPage, so this is only reached when
+// updateAutoSupported is true.
 //
 // When `silent` is true (automatic background download), no progress modal is
 // shown and download failures are swallowed. The update:ready event will
@@ -6809,7 +6810,8 @@ async function applyAndRestart() {
     }
     updateState.value = 'restarting';
     // Give the user a brief moment to see the "closing" state, then quit.
-    // The user manually relaunches the new binary — no detached spawn here.
+    // On Windows the user manually relaunches; on macOS the new bundle is
+    // opened automatically by the backend after this process exits.
     setTimeout(async () => {
       try {
         await QuitForUpdate();
