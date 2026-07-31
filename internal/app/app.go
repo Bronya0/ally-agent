@@ -1724,7 +1724,16 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 	sessionID := req.SessionID
 	cfg.grillMode = req.GrillMode
 	a.beginTaskbarRun()
+	// success marks a run that already persisted its history on the normal
+	// run:done path. Interrupted runs (ESC/cancel, provider errors, stop
+	// reasons, step limits) fall through to the deferred checkpoint save so
+	// work completed before the interruption survives into the next request.
+	success := false
+	var messages []openai.ChatCompletionMessage
 	defer func() {
+		if !success && len(sanitizeHistoryMessages(messages)) > 0 {
+			a.saveHistory(req.SessionID, messages)
+		}
 		a.restoreSavedHistoryBreakdown(sessionID)
 		a.endTaskbarRun()
 		a.finishRun(runID)
@@ -1732,7 +1741,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 
 	a.emit("run:start", map[string]any{"runId": runID, "sessionId": sessionID})
 
-	messages := a.buildMessages(req, cfg, a.listCachedSkills())
+	messages = a.buildMessages(req, cfg, a.listCachedSkills())
 	tools := a.buildToolsForConfig(cfg)
 	startTime := time.Now()
 	grillProtocolRetries := 0
@@ -1937,6 +1946,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 					messages = append(messages, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleAssistant, Content: content})
 				}
 				a.saveHistory(req.SessionID, messages)
+				success = true
 				emitRunEnd("run:done", map[string]any{"grillComplete": grillComplete})
 				// Goal mode: continue if active
 				if shouldAutoContinueGoal(req.GrillMode) {
