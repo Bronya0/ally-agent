@@ -896,12 +896,13 @@ func (a *App) applyWindowsUpdate(tag string) UpdateApplyResult {
 		return UpdateApplyResult{Error: msg}
 	}
 
-	// Replace supporting resource files. A partial resource update is not
-	// reported as successful: the executable may be replaced, but the user
-	// receives a clear error and can retry after the install is repaired.
+	// Replace supporting resource files. On any failure, roll back the EXE
+	// so the previous binary is restored and the .bak is not orphaned for
+	// the next startup to blindly delete.
 	files, err := stagedFileSet(stagedDir)
 	if err != nil {
 		msg := fmt.Sprintf("list staged resources: %v", err)
+		_ = os.Rename(backupExe, currentExe)
 		a.emit("update:error", map[string]any{"stage": "apply", "error": msg})
 		return UpdateApplyResult{Error: msg}
 	}
@@ -913,6 +914,9 @@ func (a *App) applyWindowsUpdate(tag string) UpdateApplyResult {
 		dst := filepath.Join(exeDir, rel)
 		if err := copyFileAtomic(src, dst); err != nil {
 			msg := fmt.Sprintf("replace resource %s: %v", rel, err)
+			if rbErr := os.Rename(backupExe, currentExe); rbErr != nil {
+				msg = fmt.Sprintf("%s; rollback exe also failed: %v; manual recovery required from %s", msg, rbErr, stagedDir)
+			}
 			a.emit("update:error", map[string]any{"stage": "apply", "error": msg})
 			return UpdateApplyResult{Error: msg}
 		}
