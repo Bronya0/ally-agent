@@ -7,6 +7,7 @@
     :style="settingsModalStyle"
     :bordered="true"
     @update:show="onClose"
+    @after-leave="emit('closed')"
   >
     <div class="settings-layout">
       <aside class="settings-nav" :aria-label="$t('settings.navigation')">
@@ -417,16 +418,16 @@
         >
           <n-select v-model:value="modelDraft.tokenParam" :options="tokenParamOptions" />
         </n-form-item-gi>
-        <n-form-item-gi :label="$t('settings.contextWindow')" :span="2">
-          <n-input-number v-model:value="modelDraft.contextWindow" :min="0" style="width: 100%" />
-        </n-form-item-gi>
         <n-form-item-gi :label="$t('settings.reasoningTag')" :span="2">
           <n-input
             v-model:value="modelDraft.reasoningTag"
             :placeholder="$t('settings.reasoningTagHint')"
           />
         </n-form-item-gi>
-        <n-form-item-gi :label="$t('settings.reasoningEffort')" :span="2">
+        <n-form-item-gi :label="$t('settings.contextWindow')">
+          <n-input-number v-model:value="modelDraft.contextWindow" :min="0" style="width: 100%" />
+        </n-form-item-gi>
+        <n-form-item-gi :label="$t('settings.reasoningEffort')">
           <n-select v-model:value="modelDraft.reasoningEffort" :options="reasoningEffortOptions" />
         </n-form-item-gi>
       </n-grid>
@@ -484,7 +485,7 @@ const props = defineProps({
   visible: Boolean,
   configDraft: { type: Object, required: true },
 });
-const emit = defineEmits(['close', 'save', 'skills-changed', 'mcp-saved']);
+const emit = defineEmits(['close', 'closed', 'save', 'skills-changed', 'mcp-saved']);
 
 // Deep-clone the config draft so changes don't mutate parent reactively until save
 const draft = reactive(cloneConfigDraft(props.configDraft));

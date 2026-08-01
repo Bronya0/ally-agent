@@ -199,6 +199,7 @@
             :visible="configVisible"
             :config-draft="configDraft"
             @close="configVisible = false"
+            @closed="focusPromptInput"
             @save="onSettingsSave"
             @skills-changed="onSkillsChanged"
             @mcp-saved="onMcpSaved"
@@ -6440,6 +6441,10 @@ function formatBytes(bytes) {
     i++;
   }
   return `${n.toFixed(i ? 1 : 0)} ${units[i]}`;
+}
+
+function focusPromptInput() {
+  promptInputRef.value?.focus();
 }
 
 watch(configVisible, (visible) => {
