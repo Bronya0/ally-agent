@@ -62,6 +62,25 @@ func TestGetTokenStatsAggregatesDimensions(t *testing.T) {
 	if len(result.ByDay) != 7 || len(result.ByHour) != 24 {
 		t.Fatalf("bucket lengths = days %d hours %d", len(result.ByDay), len(result.ByHour))
 	}
+	if len(result.ByModelDay) != 2 || len(result.ByProviderDay) != 2 || len(result.BySourceDay) != 3 || len(result.ByWorkspaceDay) != 2 {
+		t.Fatalf("day series lengths = model %d provider %d source %d workspace %d",
+			len(result.ByModelDay), len(result.ByProviderDay), len(result.BySourceDay), len(result.ByWorkspaceDay))
+	}
+	for _, series := range result.ByModelDay {
+		if len(series.InputTokens) != 7 || len(series.OutputTokens) != 7 {
+			t.Fatalf("model day series length = %d/%d for %s", len(series.InputTokens), len(series.OutputTokens), series.Name)
+		}
+		switch series.Name {
+		case "gpt-5":
+			if series.InputTokens[6] != 1500 || series.OutputTokens[6] != 300 {
+				t.Fatalf("gpt-5 day series = %#v", series)
+			}
+		case "claude":
+			if series.InputTokens[5] != 300 || series.OutputTokens[5] != 50 {
+				t.Fatalf("claude day series = %#v", series)
+			}
+		}
+	}
 
 	dayRequests := 0
 	for _, day := range result.ByDay {

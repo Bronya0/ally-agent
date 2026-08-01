@@ -184,7 +184,6 @@
                   @set-run-mode="setRunMode"
                   @change-reasoning-effort="changeReasoningEffort"
                   @open-task-center="openTaskCenter"
-                  @open-token-stats="tokenStatsVisible = true"
                   @new-session="createNewSession"
                   @show-sessions="showSessionList"
                   :get-session-messages="() => activeMessages"
@@ -203,6 +202,7 @@
             @save="onSettingsSave"
             @skills-changed="onSkillsChanged"
             @mcp-saved="onMcpSaved"
+            @open-token-stats="openTokenStatsFromSettings"
           />
           <TaskCenterPanel
             :show="taskCenterVisible"
@@ -218,6 +218,7 @@
             @stop-service="stopManagedService"
           />
           <TokenStatsModal
+            v-if="tokenStatsVisible"
             :show="tokenStatsVisible"
             @close="tokenStatsVisible = false"
           />
@@ -5003,6 +5004,11 @@ async function refreshTaskCenter() {
 async function openTaskCenter() {
   taskCenterVisible.value = true;
   await refreshTaskCenter();
+}
+
+function openTokenStatsFromSettings() {
+  configVisible.value = false;
+  tokenStatsVisible.value = true;
 }
 
 async function stopManagedService(id) {

@@ -31,6 +31,10 @@
           <span class="settings-nav-title">MCP</span>
           <span class="settings-nav-desc">{{ $t('settings.mcpDescription') }}</span>
         </button>
+        <button class="settings-nav-item" @click="emit('open-token-stats')">
+          <span class="settings-nav-title">{{ $t('settings.stats') }}</span>
+          <span class="settings-nav-desc">{{ $t('settings.statsDescription') }}</span>
+        </button>
         <button :class="['settings-nav-item', { active: page === 'about' }]" @click="page = 'about'">
           <span class="settings-nav-title">{{ $t('settings.about') }}</span>
           <span class="settings-nav-desc">{{ $t('settings.versionLicense') }}</span>
@@ -485,7 +489,7 @@ const props = defineProps({
   visible: Boolean,
   configDraft: { type: Object, required: true },
 });
-const emit = defineEmits(['close', 'closed', 'save', 'skills-changed', 'mcp-saved']);
+const emit = defineEmits(['close', 'closed', 'save', 'skills-changed', 'mcp-saved', 'open-token-stats']);
 
 // Deep-clone the config draft so changes don't mutate parent reactively until save
 const draft = reactive(cloneConfigDraft(props.configDraft));

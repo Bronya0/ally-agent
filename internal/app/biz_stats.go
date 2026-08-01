@@ -39,6 +39,7 @@ const (
 	statsMaxTokensPerRecord   = 1_000_000_000
 	statsMaxRequestsPerRecord = 1_000_000
 	statsShutdownTimeout      = 10 * time.Second
+	statsMaxDaySeries         = 12
 )
 
 func statsDir() string { return filepath.Join(appDataDir(), statsSubDir) }
@@ -550,6 +551,14 @@ type TokenStatsModel struct {
 	Share           float64 `json:"share"` // share of total tokens (0-1)
 }
 
+// TokenStatsDaySeries holds per-day token series for one named category entry
+// (model, provider, source, or workspace), aligned by index with ByDay.
+type TokenStatsDaySeries struct {
+	Name         string `json:"name"`
+	InputTokens  []int  `json:"inputTokens"`
+	OutputTokens []int  `json:"outputTokens"`
+}
+
 // TokenStatsDay aggregates usage for one calendar day.
 type TokenStatsDay struct {
 	Date            string `json:"date"`
@@ -572,25 +581,29 @@ type TokenStatsHour struct {
 
 // TokenStatsResult is the aggregated response for GetTokenStats.
 type TokenStatsResult struct {
-	OK                   bool              `json:"ok"`
-	Error                string            `json:"error,omitempty"`
-	RangeDays            int               `json:"rangeDays"`
-	FromTs               int64             `json:"fromTs"`
-	ToTs                 int64             `json:"toTs"`
-	TotalInputTokens     int               `json:"totalInputTokens"`
-	TotalOutputTokens    int               `json:"totalOutputTokens"`
-	TotalCacheHitTokens  int               `json:"totalCacheHitTokens"`
-	TotalCacheMissTokens int               `json:"totalCacheMissTokens"`
-	TotalRequests        int               `json:"totalRequests"`
-	UniqueSessions       int               `json:"uniqueSessions"`
-	ActiveDays           int               `json:"activeDays"`
-	CacheHitRate         float64           `json:"cacheHitRate"` // 0-1 over prompt tokens
-	ByProvider           []TokenStatsModel `json:"byProvider"`
-	ByModel              []TokenStatsModel `json:"byModel"`
-	ByWorkspace          []TokenStatsModel `json:"byWorkspace"`
-	BySource             []TokenStatsModel `json:"bySource"`
-	ByDay                []TokenStatsDay   `json:"byDay"`
-	ByHour               []TokenStatsHour  `json:"byHour"`
+	OK                   bool                  `json:"ok"`
+	Error                string                `json:"error,omitempty"`
+	RangeDays            int                   `json:"rangeDays"`
+	FromTs               int64                 `json:"fromTs"`
+	ToTs                 int64                 `json:"toTs"`
+	TotalInputTokens     int                   `json:"totalInputTokens"`
+	TotalOutputTokens    int                   `json:"totalOutputTokens"`
+	TotalCacheHitTokens  int                   `json:"totalCacheHitTokens"`
+	TotalCacheMissTokens int                   `json:"totalCacheMissTokens"`
+	TotalRequests        int                   `json:"totalRequests"`
+	UniqueSessions       int                   `json:"uniqueSessions"`
+	ActiveDays           int                   `json:"activeDays"`
+	CacheHitRate         float64               `json:"cacheHitRate"` // 0-1 over prompt tokens
+	ByProvider           []TokenStatsModel     `json:"byProvider"`
+	ByModel              []TokenStatsModel     `json:"byModel"`
+	ByWorkspace          []TokenStatsModel     `json:"byWorkspace"`
+	BySource             []TokenStatsModel     `json:"bySource"`
+	ByProviderDay        []TokenStatsDaySeries `json:"byProviderDay"`
+	ByModelDay           []TokenStatsDaySeries `json:"byModelDay"`
+	ByWorkspaceDay       []TokenStatsDaySeries `json:"byWorkspaceDay"`
+	BySourceDay          []TokenStatsDaySeries `json:"bySourceDay"`
+	ByDay                []TokenStatsDay       `json:"byDay"`
+	ByHour               []TokenStatsHour      `json:"byHour"`
 }
 
 // GetTokenStats aggregates recorded usage for the last rangeDays (1-90,
@@ -619,6 +632,10 @@ func (a *App) GetTokenStats(rangeDays int) TokenStatsResult {
 	modelIdx := map[string]int{}
 	wsIdx := map[string]int{}
 	sourceIdx := map[string]int{}
+	providerDay := map[string]*statsDaySeriesAccum{}
+	modelDay := map[string]*statsDaySeriesAccum{}
+	workspaceDay := map[string]*statsDaySeriesAccum{}
+	sourceDay := map[string]*statsDaySeriesAccum{}
 	sessions := map[string]struct{}{}
 	activeDates := map[string]struct{}{}
 	dayIdx := map[string]int{}
@@ -689,6 +706,10 @@ func (a *App) GetTokenStats(rangeDays int) TokenStatsResult {
 				d.CacheHitTokens += r.CacheHitTokens
 				d.CacheMissTokens += r.CacheMissTokens
 				d.Requests += r.Requests
+				accumulateDaySeries(providerDay, i, rangeDays, provider, r.InputTokens, r.OutputTokens)
+				accumulateDaySeries(modelDay, i, rangeDays, r.Model, r.InputTokens, r.OutputTokens)
+				accumulateDaySeries(workspaceDay, i, rangeDays, r.Workspace, r.InputTokens, r.OutputTokens)
+				accumulateDaySeries(sourceDay, i, rangeDays, source, r.InputTokens, r.OutputTokens)
 			}
 
 			h := time.UnixMilli(r.Ts).Hour()
@@ -701,6 +722,10 @@ func (a *App) GetTokenStats(rangeDays int) TokenStatsResult {
 		}
 	}
 	result.ByHour = hours
+	result.ByProviderDay = buildStatsDaySeries(providerDay)
+	result.ByModelDay = buildStatsDaySeries(modelDay)
+	result.ByWorkspaceDay = buildStatsDaySeries(workspaceDay)
+	result.BySourceDay = buildStatsDaySeries(sourceDay)
 	result.UniqueSessions = len(sessions)
 	result.ActiveDays = len(activeDates)
 
@@ -720,6 +745,56 @@ func (a *App) GetTokenStats(rangeDays int) TokenStatsResult {
 	sortStatsModels(result.ByWorkspace)
 	sortStatsModels(result.BySource)
 	return result
+}
+
+// statsDaySeriesAccum accumulates per-day token counts for one named category
+// entry (model, provider, source, or workspace), aligned by index with ByDay.
+type statsDaySeriesAccum struct {
+	name   string
+	input  []int
+	output []int
+}
+
+func accumulateDaySeries(series map[string]*statsDaySeriesAccum, dayIndex, rangeDays int, name string, input, output int) {
+	if name == "" {
+		name = "unknown"
+	}
+	acc, ok := series[name]
+	if !ok {
+		acc = &statsDaySeriesAccum{name: name, input: make([]int, rangeDays), output: make([]int, rangeDays)}
+		series[name] = acc
+	}
+	acc.input[dayIndex] += input
+	acc.output[dayIndex] += output
+}
+
+func buildStatsDaySeries(series map[string]*statsDaySeriesAccum) []TokenStatsDaySeries {
+	list := make([]*statsDaySeriesAccum, 0, len(series))
+	for _, acc := range series {
+		list = append(list, acc)
+	}
+	sort.Slice(list, func(i, j int) bool {
+		return daySeriesTotal(list[i]) > daySeriesTotal(list[j])
+	})
+	if len(list) > statsMaxDaySeries {
+		list = list[:statsMaxDaySeries]
+	}
+	result := make([]TokenStatsDaySeries, 0, len(list))
+	for _, acc := range list {
+		result = append(result, TokenStatsDaySeries{Name: acc.name, InputTokens: acc.input, OutputTokens: acc.output})
+	}
+	return result
+}
+
+func daySeriesTotal(acc *statsDaySeriesAccum) int {
+	total := 0
+	for _, v := range acc.input {
+		total += v
+	}
+	for _, v := range acc.output {
+		total += v
+	}
+	return total
 }
 
 func accumulateStatsModel(items *[]TokenStatsModel, index map[string]int, name string, r statsRecord) {

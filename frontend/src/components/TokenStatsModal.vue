@@ -63,72 +63,19 @@
           <n-tabs type="line" animated pane-wrapper-style="padding-top: 6px;">
             <n-tab-pane name="model" :tab="$t('stats.tabModel')">
               <div class="stats-section">
-                <div class="model-rows">
-                  <div v-for="(m, i) in stats.byModel" :key="m.name" class="rank-row">
-                    <span class="rank-index">{{ i + 1 }}</span>
-                    <div class="rank-main">
-                      <div class="rank-line">
-                        <span class="rank-name" :title="m.name">{{ m.name }}</span>
-                        <span class="rank-tokens">
-                          {{ fmtTokens(m.inputTokens + m.outputTokens) }}
-                          <em>{{ fmtTokens(m.inputTokens) }} / {{ fmtTokens(m.outputTokens) }}</em>
-                        </span>
-                      </div>
-                      <div class="share-track">
-                        <div class="share-fill" :style="{ width: (m.share * 100).toFixed(1) + '%' }"></div>
-                      </div>
-                      <div class="rank-meta">
-                        <span>{{ $t('stats.requests') }} {{ fmtNum(m.requests) }}</span>
-                        <span>{{ $t('stats.share') }} {{ (m.share * 100).toFixed(1) }}%</span>
-                        <span v-if="m.cacheHitTokens + m.cacheMissTokens > 0">
-                          {{ $t('stats.cacheHitRate') }} {{ cacheRate(m).toFixed(1) }}%
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
+                <TokenCategoryTrendChart :series="stats.byModelDay" :days="stats.byDay" kind="model" :ranks="stats.byModel" />
               </div>
             </n-tab-pane>
 
             <n-tab-pane name="provider" :tab="$t('stats.tabProvider')">
               <div class="stats-section">
-                <div class="model-rows">
-                  <div v-for="(item, i) in stats.byProvider" :key="item.name" class="rank-row">
-                    <span class="rank-index">{{ i + 1 }}</span>
-                    <div class="rank-main">
-                      <div class="rank-line">
-                        <span class="rank-name" :title="item.name">{{ item.name }}</span>
-                        <span class="rank-tokens">{{ fmtTokens(item.inputTokens + item.outputTokens) }}</span>
-                      </div>
-                      <div class="share-track"><div class="share-fill" :style="{ width: (item.share * 100).toFixed(1) + '%' }"></div></div>
-                      <div class="rank-meta">
-                        <span>{{ $t('stats.requests') }} {{ fmtNum(item.requests) }}</span>
-                        <span>{{ $t('stats.share') }} {{ (item.share * 100).toFixed(1) }}%</span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
+                <TokenCategoryTrendChart :series="stats.byProviderDay" :days="stats.byDay" kind="provider" :ranks="stats.byProvider" />
               </div>
             </n-tab-pane>
 
             <n-tab-pane name="source" :tab="$t('stats.tabSource')">
               <div class="stats-section">
-                <div class="model-rows">
-                  <div v-for="(item, i) in stats.bySource" :key="item.name" class="rank-row">
-                    <span class="rank-index">{{ i + 1 }}</span>
-                    <div class="rank-main">
-                      <div class="rank-line">
-                        <span class="rank-name">{{ sourceLabel(item.name) }}</span>
-                        <span class="rank-tokens">{{ fmtTokens(item.inputTokens + item.outputTokens) }}</span>
-                      </div>
-                      <div class="share-track"><div class="share-fill" :style="{ width: (item.share * 100).toFixed(1) + '%' }"></div></div>
-                      <div class="rank-meta">
-                        <span>{{ $t('stats.requests') }} {{ fmtNum(item.requests) }}</span>
-                        <span>{{ $t('stats.share') }} {{ (item.share * 100).toFixed(1) }}%</span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
+                <TokenCategoryTrendChart :series="stats.bySourceDay" :days="stats.byDay" kind="source" :ranks="stats.bySource" />
               </div>
             </n-tab-pane>
 
@@ -182,6 +129,19 @@
             </n-tab-pane>
 
             <n-tab-pane name="cache" :tab="$t('stats.tabCache')">
+              <div class="stats-section">
+                <div class="chart-title">{{ $t('stats.cacheDailyRate') }}</div>
+                <svg class="stats-chart" viewBox="0 0 720 200" role="img" :aria-label="$t('stats.cacheDailyRate')">
+                  <g v-for="g in cacheRateChart.grid" :key="g.y">
+                    <line :x1="padL" :x2="chartW - padR" :y1="g.y" :y2="g.y" class="chart-grid" />
+                    <text :x="padL + 4" :y="g.y - 5" class="chart-grid-label">{{ g.value.toFixed(0) }}%</text>
+                  </g>
+                  <polyline v-if="cacheRateChart.pts" :points="cacheRateChart.pts" fill="none" class="chart-line input" />
+                  <g v-for="(pt, i) in cacheRateChart.labelPoints" :key="i">
+                    <text :x="pt.x" :y="200 - 6" text-anchor="middle" class="chart-axis-label">{{ pt.label }}</text>
+                  </g>
+                </svg>
+              </div>
               <div class="stats-section cache-section">
                 <div class="donut-wrap">
                   <svg viewBox="0 0 180 180" width="180" height="180" role="img" :aria-label="$t('stats.cacheHitRate')">
@@ -212,24 +172,7 @@
 
             <n-tab-pane name="workspace" :tab="$t('stats.tabWorkspace')">
               <div class="stats-section">
-                <div class="model-rows">
-                  <div v-for="(w, i) in stats.byWorkspace" :key="w.name" class="rank-row">
-                    <span class="rank-index">{{ i + 1 }}</span>
-                    <div class="rank-main">
-                      <div class="rank-line">
-                        <span class="rank-name workspace" :title="w.name">{{ w.name || $t('stats.defaultWorkspace') }}</span>
-                        <span class="rank-tokens">{{ fmtTokens(w.inputTokens + w.outputTokens) }}</span>
-                      </div>
-                      <div class="share-track">
-                        <div class="share-fill" :style="{ width: (w.share * 100).toFixed(1) + '%' }"></div>
-                      </div>
-                      <div class="rank-meta">
-                        <span>{{ $t('stats.requests') }} {{ fmtNum(w.requests) }}</span>
-                        <span>{{ $t('stats.share') }} {{ (w.share * 100).toFixed(1) }}%</span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
+                <TokenCategoryTrendChart :series="stats.byWorkspaceDay" :days="stats.byDay" kind="workspace" :ranks="stats.byWorkspace" />
               </div>
             </n-tab-pane>
           </n-tabs>
@@ -250,6 +193,7 @@
 import { computed, ref, watch } from 'vue';
 import { GetTokenStats } from '../../wailsjs/go/app/App';
 import { t } from '../i18n.mjs';
+import TokenCategoryTrendChart from './TokenCategoryTrendChart.vue';
 
 const props = defineProps({
   show: { type: Boolean, default: false },
@@ -291,8 +235,10 @@ watch(
     } else {
       loadGeneration += 1;
       loading.value = false;
+      stats.value = null;
     }
-  }
+  },
+  { immediate: true }
 );
 
 function fmtTokens(n) {
@@ -308,15 +254,6 @@ function hourTooltip(i, h) {
 
 function fmtNum(n) {
   return Number(n || 0).toLocaleString();
-}
-function sourceLabel(source) {
-  const key = `stats.source.${source}`;
-  const translated = t(key);
-  return translated === key ? source : translated;
-}
-function cacheRate(item) {
-  const total = (item.cacheHitTokens || 0) + (item.cacheMissTokens || 0);
-  return total > 0 ? (item.cacheHitTokens / total) * 100 : 0;
 }
 
 const totalTokens = computed(() => (stats.value?.totalInputTokens || 0) + (stats.value?.totalOutputTokens || 0));
@@ -391,6 +328,28 @@ const hourTicks = computed(() => {
     .filter((tick) => tick.hour % 6 === 0);
 });
 
+// ── cache daily rate chart geometry ──
+const cacheRateChart = computed(() => {
+  const days = stats.value?.byDay || [];
+  const n = days.length;
+  const innerW = chartW - padL - padR;
+  const innerH = 200 - 12 - 28;
+  const x = (i) => (n <= 1 ? padL + innerW / 2 : padL + (i * innerW) / (n - 1));
+  const y = (rate) => 12 + innerH - rate * innerH;
+  const pts = [];
+  for (let i = 0; i < n; i++) {
+    const d = days[i];
+    const total = (d.cacheHitTokens || 0) + (d.cacheMissTokens || 0);
+    if (total > 0) pts.push(`${x(i).toFixed(1)},${y((d.cacheHitTokens || 0) / total).toFixed(1)}`);
+  }
+  const grid = [0, 0.25, 0.5, 0.75, 1].map((ratio) => ({ y: y(ratio), value: ratio * 100 }));
+  const step = Math.max(1, Math.floor(n / 6));
+  const labelPoints = days
+    .map((d, i) => ({ x: x(i), label: d.date ? d.date.slice(5) : '' }))
+    .filter((_, i) => i % step === 0 || i === n - 1);
+  return { pts: pts.join(' '), grid, labelPoints };
+});
+
 const donutCircumference = 2 * Math.PI * 70;
 </script>
 
@@ -407,15 +366,16 @@ const donutCircumference = 2 * Math.PI * 70;
 }
 .stats-overview {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 8px;
   margin-bottom: 16px;
 }
 .stat-card {
-  padding: 12px 14px;
+  padding: 10px 10px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 10px;
   background: rgba(255, 255, 255, 0.03);
+  min-width: 0;
 }
 .stat-label {
   color: #8f8f8f;
@@ -424,7 +384,7 @@ const donutCircumference = 2 * Math.PI * 70;
 .stat-value {
   margin-top: 4px;
   color: #f1f1f1;
-  font-size: 22px;
+  font-size: 18px;
   font-weight: 650;
   letter-spacing: 0.2px;
 }
@@ -436,6 +396,11 @@ const donutCircumference = 2 * Math.PI * 70;
 }
 .stats-section {
   padding: 6px 2px;
+}
+.chart-title {
+  margin: 2px 0 10px;
+  color: #9a9a9a;
+  font-size: 12px;
 }
 .chart-legend {
   display: flex;
@@ -499,6 +464,7 @@ const donutCircumference = 2 * Math.PI * 70;
   display: flex;
   align-items: center;
   gap: 28px;
+  margin-top: 14px;
   padding: 10px 6px;
 }
 .donut-track {
@@ -543,78 +509,6 @@ const donutCircumference = 2 * Math.PI * 70;
   color: #777;
   font-size: 11px;
   line-height: 1.6;
-}
-.model-rows {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-.rank-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-}
-.rank-index {
-  flex: 0 0 22px;
-  margin-top: 2px;
-  color: #707070;
-  font-size: 12px;
-  text-align: center;
-  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-}
-.rank-main {
-  flex: 1;
-  min-width: 0;
-}
-.rank-line {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-}
-.rank-name {
-  overflow: hidden;
-  color: #ececec;
-  font-size: 13px;
-  font-weight: 550;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.rank-name.workspace {
-  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: 12px;
-  font-weight: 450;
-}
-.rank-tokens {
-  flex-shrink: 0;
-  color: #d6d6d6;
-  font-size: 12px;
-  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-}
-.rank-tokens em {
-  margin-left: 6px;
-  color: #8a8a8a;
-  font-style: normal;
-  font-size: 11px;
-}
-.share-track {
-  height: 5px;
-  margin-top: 6px;
-  overflow: hidden;
-  border-radius: 3px;
-  background: rgba(255, 255, 255, 0.07);
-}
-.share-fill {
-  height: 100%;
-  border-radius: 3px;
-  background: linear-gradient(90deg, var(--ally-accent-dim), var(--ally-accent));
-}
-.rank-meta {
-  display: flex;
-  gap: 14px;
-  margin-top: 5px;
-  color: #777;
-  font-size: 11px;
 }
 .stats-empty {
   padding: 60px 0;
