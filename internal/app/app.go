@@ -2416,7 +2416,7 @@ func appendTodoStatusMessage(messages []openai.ChatCompletionMessage, todos []To
 	}
 	b.WriteString("\nIf you just finished work that completes a pending or in_progress item, ")
 	b.WriteString("call `todo_write` to flip its status to `done` before answering the user. ")
-	b.WriteString("Never end your turn with a dangling `in_progress` item that is actually finished.")
+	b.WriteString("Keep at most one item `in_progress` at a time, and never end your turn with a dangling `in_progress` item that is actually finished.")
 	b.WriteString("\n</ally-todos>")
 	out := make([]openai.ChatCompletionMessage, len(messages)+1)
 	copy(out, messages)

@@ -426,6 +426,7 @@ func (a *App) handleTodoList(sessionID string, req TodoListRequest) (any, error)
 		return nil, errors.New("no active session")
 	}
 
+	inProgress := 0
 	for _, todo := range req.Todos {
 		switch todo.Status {
 		case "pending", "in_progress", "done":
@@ -435,6 +436,12 @@ func (a *App) handleTodoList(sessionID string, req TodoListRequest) (any, error)
 		if strings.TrimSpace(todo.Title) == "" {
 			return nil, errors.New("todo title is required")
 		}
+		if todo.Status == "in_progress" {
+			inProgress++
+		}
+	}
+	if inProgress > 1 {
+		return nil, fmt.Errorf("at most one todo may be in_progress at a time (got %d): mark the current item done or pending before starting another", inProgress)
 	}
 
 	a.mu.Lock()

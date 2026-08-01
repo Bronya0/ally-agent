@@ -400,7 +400,7 @@ Built-in model-facing tools:
 | `remote_*` | SSH remote list/read/edit/create/delete/run commands |
 | `calculate` | Deterministic local math expression evaluator |
 | `ask` | Pause the visible main Agent session for one or more user questions |
-| `todo_write` | Session todo management |
+| `todo_write` | Session todo management; at most one `in_progress` item at a time, mark done before advancing |
 | `memory_read` | Read one full global memory Markdown file |
 | `memory_write` | Create/update one global memory Markdown file |
 | `subagent` | Spawn a sub-agent for a scoped task |

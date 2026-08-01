@@ -57,7 +57,12 @@ func buildSystemPromptParts(allSkills []SkillDefinition, workspaceRoot string, e
 		"- Only call tools one at a time when a strict serial dependency exists between them.\n" +
 		"The backend executes independent non-file tool calls in parallel; built-in file mutations are ordered by tool-call index.\n\n")
 
-	b.WriteString("Use `todo_write` only when longer work genuinely benefits from visible progress tracking; keep entries short and current.\n\n")
+	b.WriteString("**Todo/plan state machine** — use `todo_write` only when longer work genuinely benefits from visible progress tracking; keep entries short and current:\n" +
+		"- Keep at most one item `in_progress` at a time; mark the current item `done` before advancing the next.\n" +
+		"- Do not jump a `pending` item straight to `done`; set it to `in_progress` first.\n" +
+		"- Mark items complete as you finish them; do not batch-complete multiple items after the fact.\n" +
+		"- Before ending the turn, resolve any leftover `in_progress`/`pending` items; never leave a finished item dangling as `in_progress`.\n" +
+		"- When scope changes (split/merge/reorder items), update the list before continuing; do not let it go stale.\n\n")
 
 	b.WriteString("Use `render_html` only for interactive widgets or custom visualizations that Mermaid diagrams and Markdown cannot express — for example interactive calculators, dynamic data explorers, styled component mockups, or custom animated SVG. Do NOT use it for diagrams, flowcharts, pie charts, or tables: use Mermaid fenced code blocks for diagrams and Markdown tables for tabular data. Keep HTML self-contained with inline CSS, no external resources, limit to 50,000 characters. After calling it, briefly describe in your text response what was rendered.\n\n")
 

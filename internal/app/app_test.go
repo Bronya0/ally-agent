@@ -1063,6 +1063,40 @@ func TestAppEmitWithoutHostSinkIsNoop(t *testing.T) {
 	app.emit("run:delta", "ignored")
 }
 
+func TestHandleTodoListRejectsMultipleInProgress(t *testing.T) {
+	app := NewApp()
+	_, err := app.handleTodoList("session-1", TodoListRequest{
+		Todos: []TodoEntry{
+			{Title: "Inspect implementation", Status: "in_progress"},
+			{Title: "Run tests", Status: "in_progress"},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "at most one todo") {
+		t.Fatalf("handleTodoList() error = %v, want at-most-one in_progress rejection", err)
+	}
+}
+
+func TestHandleTodoListAllowsSingleInProgress(t *testing.T) {
+	app := NewApp()
+	res, err := app.handleTodoList("session-1", TodoListRequest{
+		Todos: []TodoEntry{
+			{Title: "Inspect implementation", Status: "in_progress"},
+			{Title: "Run tests", Status: "pending"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("handleTodoList() error = %v", err)
+	}
+	got, ok := res.(map[string]any)
+	if !ok {
+		t.Fatalf("handleTodoList() result type = %T, want map", res)
+	}
+	list, ok := got["todos"].([]TodoEntry)
+	if !ok || len(list) != 2 || list[0].Status != "in_progress" {
+		t.Fatalf("unexpected todos in result: %#v", got)
+	}
+}
+
 func TestModelUsageFromResponsesCountsUncachedInputAsMiss(t *testing.T) {
 	usage := modelUsageFromResponses(oaresp.ResponseUsage{
 		InputTokens:  120,
