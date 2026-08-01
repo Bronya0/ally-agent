@@ -100,7 +100,7 @@ sequenceDiagram
 
 ```
 ConfigState (~/.ally_agent/config.json)
-├── provider: providerName, apiFormat, baseUrl, apiKey, model
+├── provider: providerName, apiFormat, baseUrl, apiKey, apiKeys(有序多 key 池), model
 ├── runtime: workspace, temperature, maxTokens, contextWindow
 ├── network: proxyMode(off/system/manual), proxyUrl, proxyNoProxy
 ├── prompt: systemPrompt, customPrompt
@@ -108,7 +108,9 @@ ConfigState (~/.ally_agent/config.json)
 └── disabledSkills: 禁用技能列表
 ```
 
-- `mergeConfig()` 保留已有配置，零值/空值不做覆盖
+- `mergeConfig()` 保留已有配置，零值/空值不做覆盖；`apiKeys` 非空时整体替换，旧前端仅发 `apiKey` 时退化为单 key 池
+- `apiKey` 与 `apiKeys` 保持同步：池为准，`apiKey` 镜像首个条目；旧配置仅有 `apiKey` 时自动构造单 key 池
+- 多 key 请求采用严格优先级故障转移：始终优先第一个可用（不在冷却）key；认证/配额错误后该 key 进入 60s 进程内冷却，瞬时错误 10s，然后顺延到下一个；总尝试次数有上限（`maxMultiKeyAttempts`），多 key 模式下关闭适配器内退避重试避免次数组合爆炸；仅在尚未输出任何流事件时切换；冷却状态不持久化
 - 配置保存到 `~/.ally_agent/config.json`
 - 前端通过 Wails 绑定 `GetConfig()` / `SaveConfig()` 读写
 

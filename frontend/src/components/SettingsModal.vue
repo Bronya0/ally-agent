@@ -381,8 +381,32 @@
         <n-form-item-gi :label="normalizeApiFormat(modelDraft.apiFormat) === 'anthropic_messages' ? $t('settings.baseUrlNoV1') : 'Base URL'">
           <n-input v-model:value="modelDraft.baseUrl" :placeholder="apiFormatDefaultBaseUrl(modelDraft.apiFormat)" autocomplete="off" />
         </n-form-item-gi>
-        <n-form-item-gi label="API Key" :span="2">
-          <n-input v-model:value="modelDraft.apiKey" type="password" show-password-on="click" autocomplete="new-password" />
+        <n-form-item-gi :label="$t('settings.apiKeys')" :span="2">
+          <div class="api-key-list">
+            <div v-for="(key, ki) in modelDraft.apiKeys" :key="ki" class="api-key-row">
+              <span class="api-key-index">{{ ki + 1 }}</span>
+              <n-input
+                v-model:value="modelDraft.apiKeys[ki]"
+                type="password"
+                show-password-on="click"
+                autocomplete="new-password"
+                :placeholder="$t('settings.apiKeyPlaceholder')"
+              />
+              <n-button
+                quaternary
+                size="small"
+                :disabled="(modelDraft.apiKeys || []).length <= 1"
+                :title="$t('settings.apiKeyRemove')"
+                @click="removeModelApiKey(ki)"
+              >
+                ×
+              </n-button>
+            </div>
+            <n-button size="small" dashed class="api-key-add" @click="addModelApiKey">
+              + {{ $t('settings.apiKeyAdd') }}
+            </n-button>
+            <div class="api-key-hint">{{ $t('settings.apiKeysHint') }}</div>
+          </div>
         </n-form-item-gi>
         <n-form-item-gi label="Max Tokens">
           <n-input-number v-model:value="modelDraft.maxTokens" :min="0" style="width: 100%" />
@@ -427,7 +451,7 @@
 import { computed, reactive, ref, watch } from 'vue';
 import { createDiscreteApi, darkTheme } from 'naive-ui';
 import { naiveDateLocale, naiveLocale, t } from '../i18n.mjs';
-import { buildModelConfigExport, mergeModelConfigs, modelConfigIdentity, parseModelConfigImport } from '../utils/modelConfigIO.mjs';
+import { buildModelConfigExport, mergeModelConfigs, modelConfigIdentity, normalizeApiKeysArray, parseModelConfigImport } from '../utils/modelConfigIO.mjs';
 import {
   CUSTOM_PROVIDER_ID,
   applyCatalogPreset,
@@ -547,6 +571,13 @@ const isWindows = computed(() => {
 });
 
 function defaultModelDraft(source = {}) {
+  const keys = Array.isArray(source.apiKeys) && source.apiKeys.length
+    ? source.apiKeys
+    : source.apiKey
+      ? [source.apiKey]
+      : Array.isArray(draft?.apiKeys) && draft.apiKeys.length
+        ? draft.apiKeys
+        : draft?.apiKey ? [draft.apiKey] : [];
   return {
     providerName: draft?.providerName || 'OpenAI Compatible',
     apiFormat: normalizeApiFormat(draft?.apiFormat),
@@ -557,12 +588,30 @@ function defaultModelDraft(source = {}) {
     maxTokens: draft?.maxTokens || 128000,
     contextWindow: draft?.contextWindow || 1048576,
     ...source,
+    apiKeys: normalizeModelApiKeys(keys),
     reasoningTag: String(source.reasoningTag || draft?.reasoningTag || 'reasoning_content').trim() || 'reasoning_content',
     // "auto" and the legacy "max_tokens" both send max_tokens, so collapse the
     // explicit legacy value onto "auto" — otherwise the two-option select would
     // render blank for an imported config that stored "max_tokens".
     tokenParam: normalizeDraftTokenParam(source.tokenParam),
   };
+}
+
+// normalizeModelApiKeys 归一化 key 列表:去除空白、空项并按出现顺序去重。
+// 复用 modelConfigIO 的 normalizeApiKeysArray,与后端 normalizeAPIKeys 语义
+// 保持一致(单一归一化边界)。
+function normalizeModelApiKeys(keys) {
+  return normalizeApiKeysArray(keys || []);
+}
+
+function addModelApiKey() {
+  if (!Array.isArray(modelDraft.apiKeys)) modelDraft.apiKeys = [];
+  modelDraft.apiKeys.push('');
+}
+
+function removeModelApiKey(index) {
+  if (!Array.isArray(modelDraft.apiKeys) || modelDraft.apiKeys.length <= 1) return;
+  modelDraft.apiKeys.splice(index, 1);
 }
 
 // normalizeDraftTokenParam keeps only the two values the select exposes:
@@ -697,6 +746,7 @@ async function startAddModelDraft() {
     apiFormat: normalizeApiFormat(draft.apiFormat),
     baseUrl: draft.baseUrl || '',
     apiKey: draft.apiKey || '',
+    apiKeys: Array.isArray(draft.apiKeys) ? draft.apiKeys : [],
     model: draft.model || '',
     maxTokens: draft.maxTokens || 128000,
     contextWindow: draft.contextWindow || 1048576,
@@ -721,12 +771,12 @@ function cancelModelDraft() {
 async function testModelConnection() {
   if (testingModel.value) return;
   const model = (modelDraft.model || '').trim();
-  const apiKey = (modelDraft.apiKey || '').trim();
+  const apiKeys = normalizeModelApiKeys(modelDraft.apiKeys || []);
   if (!model) {
     message.warning(t('app.config.modelRequired'));
     return;
   }
-  if (!apiKey) {
+  if (!apiKeys.length) {
     message.warning(t('settings.apiKeyRequired'));
     return;
   }
@@ -736,7 +786,8 @@ async function testModelConnection() {
       providerName: normalizedProviderName(modelDraft.providerName),
       apiFormat: normalizeApiFormat(modelDraft.apiFormat),
       baseUrl: (modelDraft.baseUrl || '').trim(),
-      apiKey,
+      apiKey: apiKeys[0],
+      apiKeys,
       model,
       temperature: modelDraft.temperature ?? 0.2,
       maxTokens: modelDraft.maxTokens || 8192,
@@ -759,13 +810,19 @@ function commitModelDraft() {
     message.warning(t('app.config.modelRequired'));
     return;
   }
+  const apiKeys = normalizeModelApiKeys(modelDraft.apiKeys || []);
+  if (!apiKeys.length) {
+    message.warning(t('settings.apiKeyRequired'));
+    return;
+  }
   const providerName = normalizedProviderName(modelDraft.providerName);
   const apiFormat = normalizeApiFormat(modelDraft.apiFormat);
   const nextModel = {
     providerName,
     apiFormat,
     baseUrl: (modelDraft.baseUrl || '').trim(),
-    apiKey: modelDraft.apiKey || '',
+    apiKey: apiKeys[0] || '',
+    apiKeys,
     model,
     temperature: modelDraft.temperature ?? draft.temperature ?? 0.2,
     maxTokens: modelDraft.maxTokens || draft.maxTokens || 128000,
@@ -796,7 +853,8 @@ function applyModelToDraft(model) {
   draft.providerName = normalizedProviderName(model.providerName);
   draft.apiFormat = normalizeApiFormat(model.apiFormat);
   draft.baseUrl = model.baseUrl || '';
-  draft.apiKey = model.apiKey || '';
+  draft.apiKeys = normalizeModelApiKeys(model.apiKeys || (model.apiKey ? [model.apiKey] : []));
+  draft.apiKey = draft.apiKeys[0] || '';
   draft.model = model.model || '';
   draft.temperature = model.temperature ?? draft.temperature ?? 0.2;
   draft.maxTokens = model.maxTokens || draft.maxTokens || 128000;
@@ -916,7 +974,9 @@ function cloneConfigDraft(source) {
   next.models = Array.isArray(next.models) ? next.models.map((model) => ({
     ...model,
     reasoningTag: String(model?.reasoningTag || '').trim() || 'reasoning_content',
+    apiKeys: normalizeModelApiKeys(model?.apiKeys || (model?.apiKey ? [model.apiKey] : [])),
   })) : [];
+  next.apiKeys = normalizeModelApiKeys(next.apiKeys || (next.apiKey ? [next.apiKey] : []));
   return next;
 }
 
@@ -1653,6 +1713,43 @@ watch(() => props.visible, (visible) => {
   text-overflow: ellipsis;
   white-space: nowrap;
   max-width: 200px;
+}
+
+.api-key-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+
+.api-key-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+}
+
+.api-key-index {
+  flex-shrink: 0;
+  width: 18px;
+  color: #8a8a8a;
+  font-size: 12px;
+  text-align: center;
+  font-family: var(--ally-mono-font);
+}
+
+.api-key-row .n-input {
+  flex: 1;
+}
+
+.api-key-add {
+  align-self: flex-start;
+}
+
+.api-key-hint {
+  color: #8a8a8a;
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .model-form-modal {

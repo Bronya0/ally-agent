@@ -153,6 +153,9 @@ type App struct {
 	servicesMu sync.Mutex
 	services   map[string]*managedService
 
+	keyStateMu   sync.Mutex
+	keyCooldowns map[string]time.Time // endpoint\x00key → cooldown until
+
 	scheduledMu sync.Mutex
 	scheduled   *scheduledTaskManager
 
@@ -184,6 +187,7 @@ func NewApp() *App {
 		liveBreakdown:       map[string]ContextBreakdown{},
 		workspaceTokenUsage: map[string]WorkspaceTokenUsage{},
 		services:            map[string]*managedService{},
+		keyCooldowns:        map[string]time.Time{},
 		lastEstimatedTokens: map[string]WorkspaceTokenUsage{},
 		stats:               newStatsRecorder(),
 	}
@@ -216,15 +220,20 @@ func minInt(a, b int) int {
 
 // ConfigState stores provider, workspace and runtime settings.
 type ModelConfig struct {
-	ProviderName  string  `json:"providerName"`
-	APIFormat     string  `json:"apiFormat"`
-	BaseURL       string  `json:"baseUrl"`
-	APIKey        string  `json:"apiKey"`
-	Model         string  `json:"model"`
-	Temperature   float32 `json:"temperature"`
-	MaxTokens     int     `json:"maxTokens"`
-	ContextWindow int     `json:"contextWindow"`
-	ReasoningTag  string  `json:"reasoningTag,omitempty"`
+	ProviderName string `json:"providerName"`
+	APIFormat    string `json:"apiFormat"`
+	BaseURL      string `json:"baseUrl"`
+	APIKey       string `json:"apiKey"`
+	// APIKeys is the ordered API key pool for this model. The first key has
+	// the highest priority: it is used while it works; when it fails, the
+	// next key takes over. APIKey stays in sync with the first entry for
+	// backward compatibility with older configs and frontends.
+	APIKeys       []string `json:"apiKeys,omitempty"`
+	Model         string   `json:"model"`
+	Temperature   float32  `json:"temperature"`
+	MaxTokens     int      `json:"maxTokens"`
+	ContextWindow int      `json:"contextWindow"`
+	ReasoningTag  string   `json:"reasoningTag,omitempty"`
 	// TokenParam selects which token-limit field the OpenAI Chat adapter
 	// sends: "auto"/"max_tokens" -> max_tokens (broadest compatibility),
 	// "max_completion_tokens" -> max_completion_tokens (official OpenAI
@@ -234,10 +243,12 @@ type ModelConfig struct {
 }
 
 type ConfigState struct {
-	ProviderName        string        `json:"providerName"`
-	APIFormat           string        `json:"apiFormat"`
-	BaseURL             string        `json:"baseUrl"`
-	APIKey              string        `json:"apiKey"`
+	ProviderName string `json:"providerName"`
+	APIFormat    string `json:"apiFormat"`
+	BaseURL      string `json:"baseUrl"`
+	APIKey       string `json:"apiKey"`
+	// APIKeys is the ordered API key pool; see ModelConfig.APIKeys.
+	APIKeys             []string      `json:"apiKeys,omitempty"`
 	Model               string        `json:"model"`
 	Workspace           string        `json:"workspace"`
 	ExtraRoots          []string      `json:"extraRoots,omitempty"`
@@ -265,6 +276,10 @@ type ConfigState struct {
 	SkippedUpdates []string `json:"skippedUpdates,omitempty"`
 	grillMode      bool
 	temperatureSet bool
+	// noAdapterRetry 是进程内非序列化标记:多 key 模式下置 true,让适配器
+	// 内部关闭退避重试,由 streamModelResponse 的外层循环统一承担重试与
+	// 故障切换,避免 N 个 key × 适配器重试组合爆炸。
+	noAdapterRetry bool
 }
 
 // autoUpdateEnabled returns true unless AutoUpdate was explicitly set to false.
@@ -1154,9 +1169,17 @@ func mergeConfig(base, overlay ConfigState) ConfigState {
 	if overlay.BaseURL != "" {
 		base.BaseURL = overlay.BaseURL
 	}
-	if overlay.APIKey != "" {
-		base.APIKey = overlay.APIKey
+	if overlay.APIKeys != nil {
+		base.APIKeys = normalizeAPIKeys(overlay.APIKeys)
+		// 显式清空旧 apiKey,让 syncAPIKeyFields 重新同步:池非空时镜像
+		// 第一个条目,池为空时两者都为空(用户清空全部 key 的场景)。
+		base.APIKey = ""
+	} else if overlay.APIKey != "" {
+		// 旧前端只发 apiKey:整体替换 key 池为单 key,避免残留旧池。
+		base.APIKey = strings.TrimSpace(overlay.APIKey)
+		base.APIKeys = nil
 	}
+	syncAPIKeyFields(&base)
 	if overlay.Model != "" {
 		base.Model = overlay.Model
 	}
@@ -1223,6 +1246,7 @@ func mergeConfig(base, overlay ConfigState) ConfigState {
 	base.ReasoningTag = normalizeReasoningTag(base.ReasoningTag)
 	for i := range base.Models {
 		base.Models[i].ReasoningTag = normalizeReasoningTag(base.Models[i].ReasoningTag)
+		syncModelAPIKeyFields(&base.Models[i])
 	}
 	if goruntime.GOOS == "windows" {
 		if detected, _ := findWindowsBash(base.GitBashPath); detected != "" {
@@ -1238,6 +1262,65 @@ func normalizeReasoningTag(value string) string {
 		return defaultReasoningTag
 	}
 	return value
+}
+
+// normalizeAPIKeys 归一化 key 池:去除空白、空项并按出现顺序去重。
+func normalizeAPIKeys(keys []string) []string {
+	out := make([]string, 0, len(keys))
+	seen := make(map[string]bool, len(keys))
+	for _, k := range keys {
+		k = strings.TrimSpace(k)
+		if k == "" || seen[k] {
+			continue
+		}
+		seen[k] = true
+		out = append(out, k)
+	}
+	return out
+}
+
+// syncAPIKeyFields 保持 APIKey 与 APIKeys 的一致性:池非空时 APIKey 镜像
+// 第一个条目(最高优先级);池为空但旧 APIKey 存在时用旧值构造池;两者
+// 皆空时清空。
+func syncAPIKeyFields(cfg *ConfigState) {
+	if len(cfg.APIKeys) > 0 {
+		cfg.APIKeys = normalizeAPIKeys(cfg.APIKeys)
+		cfg.APIKey = cfg.APIKeys[0]
+		return
+	}
+	if k := strings.TrimSpace(cfg.APIKey); k != "" {
+		cfg.APIKeys = []string{k}
+		cfg.APIKey = k
+		return
+	}
+	cfg.APIKeys = nil
+}
+
+// syncModelAPIKeyFields 是 syncAPIKeyFields 的 ModelConfig 版本。
+func syncModelAPIKeyFields(m *ModelConfig) {
+	if len(m.APIKeys) > 0 {
+		m.APIKeys = normalizeAPIKeys(m.APIKeys)
+		m.APIKey = m.APIKeys[0]
+		return
+	}
+	if k := strings.TrimSpace(m.APIKey); k != "" {
+		m.APIKeys = []string{k}
+		m.APIKey = k
+		return
+	}
+	m.APIKeys = nil
+}
+
+// resolveKeyPool 返回配置生效的 key 池(按优先级从高到低)。无池时回退到
+// 旧 APIKey 字段构造单元素池,保证老配置兼容。
+func resolveKeyPool(cfg ConfigState) []string {
+	if len(cfg.APIKeys) > 0 {
+		return cfg.APIKeys
+	}
+	if k := strings.TrimSpace(cfg.APIKey); k != "" {
+		return []string{k}
+	}
+	return nil
 }
 
 func (a *App) GetConfig() (ConfigState, error) {
@@ -1343,6 +1426,7 @@ func (a *App) TestModelConnection(model ModelConfig) error {
 		APIFormat:     normalizeAPIFormat(model.APIFormat),
 		BaseURL:       strings.TrimSpace(model.BaseURL),
 		APIKey:        strings.TrimSpace(model.APIKey),
+		APIKeys:       cloneStringSlice(model.APIKeys),
 		Model:         strings.TrimSpace(model.Model),
 		Temperature:   model.Temperature,
 		MaxTokens:     32,
@@ -1357,7 +1441,7 @@ func (a *App) TestModelConnection(model ModelConfig) error {
 	if cfg.Model == "" {
 		return errors.New("model is required")
 	}
-	if cfg.APIKey == "" {
+	if len(resolveKeyPool(cfg)) == 0 {
 		return errors.New("API key is required")
 	}
 	ctx := context.Background()
@@ -1408,7 +1492,7 @@ func (a *App) StartChat(req ChatRequest) (string, error) {
 	if strings.TrimSpace(cfg.BaseURL) == "" {
 		cfg.BaseURL = defaultBaseURLForAPIFormat(cfg.APIFormat)
 	}
-	if strings.TrimSpace(cfg.APIKey) == "" {
+	if len(resolveKeyPool(cfg)) == 0 {
 		return "", errors.New("API key is required")
 	}
 	if strings.TrimSpace(cfg.Workspace) == "" {
@@ -1514,7 +1598,7 @@ func (a *App) compactSession(parent context.Context, sessionID, instruction stri
 	if strings.TrimSpace(cfg.Model) == "" {
 		return nil, errors.New("model is required")
 	}
-	if strings.TrimSpace(cfg.APIKey) == "" {
+	if len(resolveKeyPool(cfg)) == 0 {
 		return nil, errors.New("API key is required")
 	}
 
@@ -1855,6 +1939,8 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 						"maxAttempts": event.Retry.MaxAttempts,
 						"error":       event.Retry.Error,
 						"waitMs":      event.Retry.WaitMS,
+						"keyIndex":    event.Retry.KeyIndex,
+						"totalKeys":   event.Retry.TotalKeys,
 					})
 				}
 				if event.Image != nil && event.Image.DataURL != "" {
@@ -3730,7 +3816,13 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 		// (for Anthropic) pre-first-event errors; this outer wrapper also
 		// retries mid-stream and stop errors so a flaky provider doesn't
 		// abort the whole sub-agent task.
+		// 多 key 时内层 streamModelResponse 已用 maxMultiKeyAttempts 预算统一
+		// 承担重试与故障切换,这里归零避免两层预算重叠(外层再套一层只会
+		// 放大尝试次数;冷却会使后续轮次立即 break)。
 		maxRetries := effectiveLLMRetries(cfg)
+		if len(resolveKeyPool(cfg)) > 1 {
+			maxRetries = 0
+		}
 		var modelResp *modelStreamResult
 		var err error
 		for attempt := 0; ; attempt++ {
@@ -4763,6 +4855,7 @@ func (a *App) SwitchModel(index int) error {
 	a.config.APIFormat = normalizeAPIFormat(m.APIFormat)
 	a.config.BaseURL = m.BaseURL
 	a.config.APIKey = m.APIKey
+	a.config.APIKeys = cloneStringSlice(m.APIKeys)
 	a.config.Model = m.Model
 	a.config.Temperature = m.Temperature
 	a.config.MaxTokens = m.MaxTokens
@@ -4772,6 +4865,7 @@ func (a *App) SwitchModel(index int) error {
 	a.config.TokenParam = m.TokenParam
 	a.config.ReasoningTag = normalizeReasoningTag(m.ReasoningTag)
 	cfg := a.config
+	syncAPIKeyFields(&cfg)
 	a.mu.Unlock()
 	return a.saveConfig(cfg)
 }

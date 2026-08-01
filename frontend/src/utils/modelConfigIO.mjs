@@ -5,6 +5,7 @@ const MODEL_FIELDS = [
   'apiFormat',
   'baseUrl',
   'apiKey',
+  'apiKeys',
   'model',
   'temperature',
   'maxTokens',
@@ -50,6 +51,28 @@ function copyModelFields(model) {
   return result;
 }
 
+// normalizeApiKeys 归一化 key 池:去空白、空项并按出现顺序去重;没有数组时
+// 回退到旧的单 apiKey 字段,保证老版本导出文件兼容。
+function normalizeApiKeys(keys, fallbackKey) {
+  const out = [];
+  const seen = new Set();
+  const source = Array.isArray(keys) && keys.length ? keys : (fallbackKey ? [fallbackKey] : []);
+  for (const k of source) {
+    const v = String(k || '').trim();
+    if (v && !seen.has(v)) {
+      seen.add(v);
+      out.push(v);
+    }
+  }
+  return out;
+}
+
+// normalizeApiKeysArray 与 normalizeApiKeys 相同,但仅接受数组输入,供
+// assignConfig/cloneModelConfigs 统一去重语义(与后端 normalizeAPIKeys 一致)。
+export function normalizeApiKeysArray(keys) {
+  return normalizeApiKeys(keys, null);
+}
+
 function normalizeImportedModel(model) {
   if (!model || typeof model !== 'object' || Array.isArray(model)) {
     throw importError('MODEL_INVALID');
@@ -58,11 +81,13 @@ function normalizeImportedModel(model) {
   const modelId = normalizeModelId(model.model);
   if (!modelId) throw importError('MODEL_ID_REQUIRED');
 
+  const apiKeys = normalizeApiKeys(model.apiKeys, model.apiKey);
   const normalized = {
     providerName: normalizeProviderName(model.providerName),
     apiFormat: String(model.apiFormat || 'openai_chat').trim() || 'openai_chat',
     baseUrl: String(model.baseUrl || '').trim(),
-    apiKey: String(model.apiKey || ''),
+    apiKey: apiKeys[0] || '',
+    apiKeys,
     model: modelId,
     temperature: Number.isFinite(Number(model.temperature)) ? Number(model.temperature) : 0.2,
     maxTokens: Number.isFinite(Number(model.maxTokens)) && Number(model.maxTokens) > 0 ? Math.trunc(Number(model.maxTokens)) : 128000,

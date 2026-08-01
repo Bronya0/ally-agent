@@ -42,3 +42,23 @@ test('assignConfig drops legacy systemPrompt field', () => {
 
   assert.equal(Object.hasOwn(draft, 'systemPrompt'), false);
 });
+
+test('assignConfig keeps apiKeys pool on models and top level', () => {
+  const config = defaultConfig();
+  config.models = [{ model: 'saved-model', apiKey: 'k1', apiKeys: ['k1', 'k2'] }];
+  const draft = defaultConfig();
+
+  assignConfig(draft, config);
+
+  assert.deepEqual(draft.models[0].apiKeys, ['k1', 'k2']);
+  draft.models[0].apiKeys.push('k3');
+  assert.deepEqual(config.models[0].apiKeys, ['k1', 'k2']);
+});
+
+test('assignConfig falls back to apiKey when apiKeys absent', () => {
+  const draft = defaultConfig();
+
+  assignConfig(draft, { ...defaultConfig(), apiKey: 'legacy-key' });
+
+  assert.deepEqual(draft.apiKeys, ['legacy-key']);
+});

@@ -43,10 +43,13 @@ type modelImage struct {
 
 // modelRetryInfo 描述一次 LLM 请求重试,前端据此显示重试状态。
 type modelRetryInfo struct {
-	Attempt     int    // 第几次重试,从 1 开始
-	MaxAttempts int    // 最大重试次数(不含首次)
-	Error       string // 触发重试的错误信息
-	WaitMS      int    // 重试前等待毫秒数
+	Attempt     int // 第几次重试,从 1 开始
+	MaxAttempts int // 最大重试次数。单 key 路径=重试次数(不含首次);
+	// 多 key 路径=总尝试次数上限(含首次,即 maxMultiKeyAttempts)
+	Error     string // 触发重试的错误信息
+	WaitMS    int    // 重试前等待毫秒数
+	KeyIndex  int    // 失败/切换涉及的 key 序号(0 基),0 表示未知(单 key 或适配器内重试)
+	TotalKeys int    // key 池总数,0 表示未知
 }
 
 // shouldRetryLLMError 判断错误是否值得重试(429/5xx/瞬时网络错误)。
@@ -75,6 +78,41 @@ func shouldRetryLLMError(err error) bool {
 	return false
 }
 
+// isAuthKeyError 判断错误是否属于认证/配额类(key 本身失效),这类错误重试
+// 同一 key 无意义,应切换或直接失败。匹配覆盖常见变体:HTTP 状态码
+// (401/403)、OpenAI/Anthropic 错误码(invalid_api_key、insufficient_quota、
+// permission_error 等)以及常见文案(invalid api key、unauthorized、
+// forbidden、quota、credential 等)。
+func isAuthKeyError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	if strings.Contains(msg, "401") || strings.Contains(msg, "402") || strings.Contains(msg, "403") ||
+		strings.Contains(msg, "invalid api key") || strings.Contains(msg, "invalid_api_key") ||
+		strings.Contains(msg, "invalid-api-key") || strings.Contains(msg, "invalid key") ||
+		strings.Contains(msg, "api key") || strings.Contains(msg, "api_key") ||
+		strings.Contains(msg, "unauthorized") || strings.Contains(msg, "authentication failed") ||
+		strings.Contains(msg, "not authorized") || strings.Contains(msg, "permission denied") ||
+		strings.Contains(msg, "permission") || strings.Contains(msg, "forbidden") ||
+		strings.Contains(msg, "insufficient_quota") || strings.Contains(msg, "insufficient_balance") ||
+		strings.Contains(msg, "quota") || strings.Contains(msg, "payment required") ||
+		strings.Contains(msg, "access denied") || strings.Contains(msg, "credential") {
+		return true
+	}
+	return false
+}
+
+// shouldFailoverKey 判断错误是否值得切换到下一个 key。包含瞬时错误
+// (429/5xx/网络)以及认证/配额类错误(401/403/invalid api key/quota)——
+// 后者重试同一 key 无意义,但多 key 场景下应立即切换。
+func shouldFailoverKey(err error) bool {
+	return isAuthKeyError(err) || shouldRetryLLMError(err)
+}
+
 // llmRetryDelay 返回第 attempt 次重试(从 1 开始)前的退避时间。
 // 500ms / 1s / 2s / 4s...,上限 10s。
 func llmRetryDelay(attempt int) time.Duration {
@@ -87,6 +125,12 @@ func llmRetryDelay(attempt int) time.Duration {
 
 // emitLLMRetryEvent 通过 onEvent 通知调用方发生了一次重试。
 func emitLLMRetryEvent(onEvent func(modelStreamEvent), attempt, maxAttempts int, err error, wait time.Duration) {
+	emitLLMRetryEventForKey(onEvent, attempt, maxAttempts, err, wait, 0, 0)
+}
+
+// emitLLMRetryEventForKey 在重试事件中附加 key 序号与池大小,前端据此显示
+// 当前使用第几个 key。keyIndex 为 0 基;未知时传 0,0。
+func emitLLMRetryEventForKey(onEvent func(modelStreamEvent), attempt, maxAttempts int, err error, wait time.Duration, keyIndex, totalKeys int) {
 	if onEvent == nil || err == nil {
 		return
 	}
@@ -95,11 +139,18 @@ func emitLLMRetryEvent(onEvent func(modelStreamEvent), attempt, maxAttempts int,
 		MaxAttempts: maxAttempts,
 		Error:       err.Error(),
 		WaitMS:      int(wait.Milliseconds()),
+		KeyIndex:    keyIndex,
+		TotalKeys:   totalKeys,
 	}})
 }
 
-// effectiveLLMRetries 返回有效的最大重试次数。
+// effectiveLLMRetries 返回有效的最大重试次数。多 key 模式下 noAdapterRetry
+// 为 true,适配器内不做退避重试,由 streamModelResponse 的外层循环统一承担
+// 重试与故障切换,避免重试次数随 key 数翻倍。
 func effectiveLLMRetries(cfg ConfigState) int {
+	if cfg.noAdapterRetry {
+		return 0
+	}
 	if cfg.LLMRetries > 0 {
 		return cfg.LLMRetries
 	}
@@ -137,12 +188,91 @@ func (a *App) streamModelResponse(ctx context.Context, cfg ConfigState, model st
 	if strings.TrimSpace(model) == "" {
 		return nil, errors.New("model is required")
 	}
-	if strings.TrimSpace(cfg.APIKey) == "" {
-		return nil, errors.New("API key is required")
-	}
 	if cfg.MaxTokens <= 0 {
 		cfg.MaxTokens = defaultMaxTokensForAPIFormat(cfg.APIFormat)
 	}
+	keys := resolveKeyPool(cfg)
+	if len(keys) == 0 {
+		return nil, errors.New("API key is required")
+	}
+	// 单 key 快速路径:完全保持原有的适配器内重试行为。
+	if len(keys) == 1 {
+		return a.streamModelResponseWithKey(ctx, cfg, model, messages, tools, onEvent)
+	}
+	// 多 key:固定优先级故障转移 + 冷却。每次尝试从第一个可用(不在冷却)
+	// 的 key 开始;失败后按错误类别记录冷却(认证/配额 60s,瞬时 10s)并顺延
+	// 到下一个,直到成功或全部失败。总尝试次数有上限(maxMultiKeyAttempts),
+	// 且通过 noAdapterRetry 关闭适配器内退避重试,由本循环统一承担重试与
+	// 轮换,避免 N 个 key × 适配器重试组合爆炸。
+	// 已发射任何流事件(文本/推理/工具调用/图片)后禁止切换,避免重复输出
+	// ——与适配器内 mid-stream 不重试的既有约定一致。
+	maxAttempts := len(keys)
+	if maxAttempts > maxMultiKeyAttempts {
+		maxAttempts = maxMultiKeyAttempts
+	}
+	var lastErr error
+	emitted := false
+	wrappedOnEvent := func(e modelStreamEvent) {
+		if e.ContentDelta != "" || e.ReasoningDelta != "" || e.ToolCalls != nil || e.Image != nil {
+			emitted = true
+		}
+		if onEvent != nil {
+			onEvent(e)
+		}
+	}
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		idx := a.firstUsableKeyIndex(cfg, keys)
+		key := keys[idx]
+		if a.isKeyCoolingDown(cfg, key) {
+			// firstUsableKeyIndex 只在全部 key 冷却时返回冷却中的 key。
+			if lastErr == nil {
+				lastErr = fmt.Errorf("all API keys are cooling down, try again later")
+			}
+			break
+		}
+		callCfg := cfg
+		callCfg.APIKey = key
+		callCfg.noAdapterRetry = true // 外层循环统一处理重试与轮换
+		result, err := a.streamModelResponseWithKey(ctx, callCfg, model, messages, tools, wrappedOnEvent)
+		if err == nil {
+			return result, nil
+		}
+		lastErr = err
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if !emitted && shouldFailoverKey(err) {
+			cooldown := keyTransientCooldownDuration
+			wait := time.Duration(0)
+			if isAuthKeyError(err) {
+				cooldown = keyAuthCooldownDuration
+			} else if shouldRetryLLMError(err) {
+				// 瞬时错误(429/5xx/网络):切换前短暂退避,避免多个 key
+				// 同时打向同一故障端点,也避免连续 8 次尝试没有间隔。
+				// 最后一次尝试后没有下一次切换,不再白等退避。
+				if attempt+1 < maxAttempts {
+					wait = llmRetryDelay(attempt + 1)
+					select {
+					case <-time.After(wait):
+					case <-ctx.Done():
+						return nil, ctx.Err()
+					}
+				}
+			}
+			a.recordKeyFailure(cfg, key, cooldown)
+			// 无论是否还有备用 key 都发出事件(含最后一个 key 失败),前端显示
+			// "第 N 个 Key 失败",避免用户只看到泛化错误。
+			emitLLMRetryEventForKey(onEvent, attempt+1, maxAttempts, err, wait, idx, len(keys))
+			continue
+		}
+		return nil, err
+	}
+	return nil, lastErr
+}
+
+// streamModelResponseWithKey 按 apiFormat 分发到具体适配器,key 已由调用方
+// 写入 cfg.APIKey。
+func (a *App) streamModelResponseWithKey(ctx context.Context, cfg ConfigState, model string, messages []legacyopenai.ChatCompletionMessage, tools []legacyopenai.Tool, onEvent func(modelStreamEvent)) (*modelStreamResult, error) {
 	switch cfg.APIFormat {
 	case apiFormatOpenAIResponses:
 		return a.streamOpenAIResponses(ctx, cfg, model, messages, tools, onEvent)
@@ -151,6 +281,66 @@ func (a *App) streamModelResponse(ctx context.Context, cfg ConfigState, model st
 	default:
 		return a.streamOpenAIChat(ctx, cfg, model, messages, tools, onEvent)
 	}
+}
+
+// keyAuthCooldownDuration 是认证/配额类错误(401/403/invalid key/quota)后
+// 的冷却窗口:key 本身已失效,短时间重试无意义。
+const keyAuthCooldownDuration = 60 * time.Second
+
+// keyTransientCooldownDuration 是瞬时错误(429/5xx/网络)后的冷却窗口。比
+// 认证错误短,避免端点短暂故障时把整个 key 池冷却 60 秒(fail-fast 但快速自愈)。
+const keyTransientCooldownDuration = 10 * time.Second
+
+// maxMultiKeyAttempts 是单次请求在多 key 模式下最多尝试的总次数(含故障切换)。
+// 与 effectiveLLMRetries 解耦,防止 N 个 key × 适配器重试组合爆炸。
+const maxMultiKeyAttempts = 8
+
+// keyCooldownID 是冷却记录的键,按 endpoint+key 隔离。
+func keyCooldownID(cfg ConfigState, key string) string {
+	return baseURLForAPIFormat(cfg) + "\x00" + key
+}
+
+// firstUsableKeyIndex 返回 key 池中第一个不在冷却的 key 序号(从 0 开始,
+// 即最高优先级;冷却期内的低优先级 key 不会越过高优先级被选中)。
+// 全部冷却中返回 0,调用方循环会跳过所有冷却 key。
+func (a *App) firstUsableKeyIndex(cfg ConfigState, keys []string) int {
+	a.keyStateMu.Lock()
+	defer a.keyStateMu.Unlock()
+	for i, key := range keys {
+		id := keyCooldownID(cfg, key)
+		until, ok := a.keyCooldowns[id]
+		if !ok || time.Now().After(until) {
+			if ok {
+				delete(a.keyCooldowns, id)
+			}
+			return i
+		}
+	}
+	return 0
+}
+
+// isKeyCoolingDown 报告 key 是否处于冷却窗口;过期记录被惰性清理。
+func (a *App) isKeyCoolingDown(cfg ConfigState, key string) bool {
+	id := keyCooldownID(cfg, key)
+	a.keyStateMu.Lock()
+	defer a.keyStateMu.Unlock()
+	until, ok := a.keyCooldowns[id]
+	if !ok {
+		return false
+	}
+	if time.Now().Before(until) {
+		return true
+	}
+	delete(a.keyCooldowns, id)
+	return false
+}
+
+// recordKeyFailure 将 key 置入冷却窗口,窗口长度由错误类别决定(认证/配额
+// 60s,瞬时错误 10s)。
+func (a *App) recordKeyFailure(cfg ConfigState, key string, cooldown time.Duration) {
+	a.keyStateMu.Lock()
+	a.keyCooldowns[keyCooldownID(cfg, key)] = time.Now().Add(cooldown)
+	a.keyStateMu.Unlock()
 }
 
 func emitModelStreamEvent(onEvent func(modelStreamEvent), event modelStreamEvent) {

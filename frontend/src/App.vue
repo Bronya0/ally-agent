@@ -118,6 +118,7 @@
                 <div v-if="retryBanner" class="composer-retry-banner" :title="retryBanner.error">
                   <span class="composer-retry-icon" aria-hidden="true">↻</span>
                   <span class="composer-retry-text">{{ $t('app.run.retryBanner', { attempt: retryBanner.attempt, max: retryBanner.maxAttempts, error: retryBanner.error }) }}</span>
+                  <span v-if="retryBanner.totalKeys > 1" class="composer-retry-key">{{ $t('app.run.retryKey', { key: retryBanner.keyIndex + 1, total: retryBanner.totalKeys }) }}</span>
                 </div>
                 <div v-if="activeSessionRunning || activeGoal" class="composer-run-status">
                   <span v-if="activeSessionRunning" class="composer-run-status-dots">
@@ -1200,10 +1201,6 @@ const servicesLoading = ref(false);
 const scheduledTaskDeletingIds = ref([]);
 const serviceStoppingIds = ref([]);
 const subRuns = ref([]);
-const modelEditorVisible = ref(false);
-const modelEditorIndex = ref(-1);
-const modelDraft = reactive(defaultModelDraft());
-const activeProviderTab = ref('');
 const mcpConfigText = ref('');
 const mcpServers = ref([]);
 const mcpLoading = ref(false);
@@ -1249,46 +1246,6 @@ const isUpdateBusy = computed(() => {
 });
 
 const ALLY_REPOSITORY_URL = 'https://github.com/Bronya0/ally-agent';
-
-const apiFormatOptions = [
-  { label: 'OpenAI Chat Completions', value: 'openai_chat' },
-  { label: 'OpenAI Responses', value: 'openai_responses' },
-  { label: 'Anthropic Messages', value: 'anthropic_messages' },
-];
-
-function normalizeApiFormat(value) {
-  const v = String(value || '').trim().toLowerCase().replace(/[-\s]+/g, '_');
-  if (['openai_responses', 'responses', 'response'].includes(v)) return 'openai_responses';
-  if (['anthropic', 'anthropic_messages', 'claude', 'claude_messages', 'messages'].includes(v)) return 'anthropic_messages';
-  return 'openai_chat';
-}
-
-function apiFormatLabel(value) {
-  const format = normalizeApiFormat(value);
-  return apiFormatOptions.find((item) => item.value === format)?.label || 'OpenAI Chat Completions';
-}
-
-function apiFormatDefaultBaseUrl(value) {
-  switch (normalizeApiFormat(value)) {
-    case 'openai_responses':
-      return 'https://api.openai.com/v1';
-    case 'anthropic_messages':
-      return 'https://api.anthropic.com';
-    default:
-      return 'https://api.deepseek.com';
-  }
-}
-
-function modelPlaceholder(value) {
-  switch (normalizeApiFormat(value)) {
-    case 'openai_responses':
-      return 'gpt-4.1-mini';
-    case 'anthropic_messages':
-      return 'claude-sonnet-5';
-    default:
-      return 'deepseek-v4-flash';
-  }
-}
 
 
 const builtinCommands = [
@@ -2240,169 +2197,6 @@ function syncConfigToActiveTab() {
   if (session && config.workspace) session.workspace = config.workspace;
 }
 
-function defaultModelDraft(source = {}) {
-  return {
-    providerName: configDraft?.providerName || 'OpenAI Compatible',
-    apiFormat: normalizeApiFormat(configDraft?.apiFormat),
-    baseUrl: configDraft?.baseUrl || '',
-    apiKey: configDraft?.apiKey || '',
-    model: '',
-    temperature: configDraft?.temperature ?? 0.2,
-    maxTokens: configDraft?.maxTokens || 128000,
-    contextWindow: configDraft?.contextWindow || 1048576,
-    ...source,
-    reasoningTag: String(source.reasoningTag || configDraft?.reasoningTag || 'reasoning_content').trim() || 'reasoning_content',
-  };
-}
-
-function normalizedProviderName(value) {
-  return (value || '').trim() || 'OpenAI Compatible';
-}
-
-const providerTabs = computed(() => {
-  const groups = new Map();
-  (configDraft.models || []).forEach((model, index) => {
-    const provider = normalizedProviderName(model.providerName);
-    if (!groups.has(provider)) {
-      groups.set(provider, { name: provider, label: provider, models: [] });
-    }
-    groups.get(provider).models.push({ model, index });
-  });
-  return Array.from(groups.values());
-});
-
-function alignActiveProviderTab(preferred = '') {
-  const tabs = providerTabs.value;
-  if (!tabs.length) {
-    activeProviderTab.value = '';
-    return;
-  }
-  const names = new Set(tabs.map((tab) => tab.name));
-  const candidates = [
-    preferred,
-    activeProviderTab.value,
-    normalizedProviderName(configDraft.providerName),
-    tabs[0]?.name || '',
-  ];
-  activeProviderTab.value = candidates.find((name) => name && names.has(name)) || tabs[0].name;
-}
-
-function assignModelDraft(source = {}) {
-  Object.assign(modelDraft, defaultModelDraft({
-    ...source,
-    apiFormat: normalizeApiFormat(source.apiFormat || configDraft.apiFormat),
-  }));
-}
-
-function startAddModelDraft() {
-  modelEditorIndex.value = -1;
-  const provider = activeProviderTab.value || configDraft.providerName || 'OpenAI Compatible';
-  assignModelDraft({
-    providerName: provider,
-    apiFormat: normalizeApiFormat(configDraft.apiFormat),
-    baseUrl: configDraft.baseUrl || '',
-    apiKey: configDraft.apiKey || '',
-    maxTokens: configDraft.maxTokens || 128000,
-    contextWindow: configDraft.contextWindow || 1048576,
-  });
-  modelEditorVisible.value = true;
-}
-
-function editModelDraft(index) {
-  if (!configDraft.models || !configDraft.models[index]) return;
-  modelEditorIndex.value = index;
-  assignModelDraft(configDraft.models[index]);
-  modelEditorVisible.value = true;
-}
-
-function cancelModelDraft() {
-  modelEditorVisible.value = false;
-  modelEditorIndex.value = -1;
-}
-
-function commitModelDraft() {
-  if (!configDraft.models) configDraft.models = [];
-  const model = (modelDraft.model || '').trim();
-  if (!model) {
-    message.warning(t('app.config.modelRequired'));
-    return;
-  }
-  const providerName = normalizedProviderName(modelDraft.providerName);
-  const apiFormat = normalizeApiFormat(modelDraft.apiFormat);
-  const nextModel = {
-    providerName,
-    apiFormat,
-    baseUrl: (modelDraft.baseUrl || '').trim(),
-    apiKey: modelDraft.apiKey || '',
-    model,
-    temperature: modelDraft.temperature ?? configDraft.temperature ?? 0.2,
-    maxTokens: modelDraft.maxTokens || configDraft.maxTokens || 128000,
-    contextWindow: modelDraft.contextWindow || configDraft.contextWindow || 1048576,
-  };
-  const wasActive = modelEditorIndex.value >= 0 && isDraftModelActive(configDraft.models[modelEditorIndex.value]);
-  if (modelEditorIndex.value >= 0) {
-    configDraft.models.splice(modelEditorIndex.value, 1, nextModel);
-  } else {
-    configDraft.models.push(nextModel);
-  }
-  if (wasActive) {
-    applyModelToDraft(nextModel);
-  }
-  alignActiveProviderTab(providerName);
-  modelEditorVisible.value = false;
-}
-
-function applyModelToDraft(model) {
-  if (!model) return;
-  configDraft.providerName = normalizedProviderName(model.providerName);
-  configDraft.apiFormat = normalizeApiFormat(model.apiFormat);
-  configDraft.baseUrl = model.baseUrl || '';
-  configDraft.apiKey = model.apiKey || '';
-  configDraft.model = model.model || '';
-  configDraft.temperature = model.temperature ?? configDraft.temperature ?? 0.2;
-  configDraft.maxTokens = model.maxTokens || configDraft.maxTokens || 128000;
-  configDraft.contextWindow = model.contextWindow || configDraft.contextWindow || 1048576;
-  alignActiveProviderTab(normalizedProviderName(model.providerName));
-}
-
-function isDraftModelActive(model) {
-  if (!model) return false;
-  return normalizedProviderName(model.providerName) === normalizedProviderName(configDraft.providerName)
-    && normalizeApiFormat(model.apiFormat) === normalizeApiFormat(configDraft.apiFormat)
-    && (model.model || '') === (configDraft.model || '')
-    && (model.baseUrl || '') === (configDraft.baseUrl || '');
-}
-
-function removeModelDraft(index) {
-  if (!configDraft.models) return;
-  const removed = configDraft.models[index];
-  const removedProvider = normalizedProviderName(removed?.providerName);
-  configDraft.models.splice(index, 1);
-  if (modelEditorIndex.value === index) {
-    cancelModelDraft();
-  } else if (modelEditorIndex.value > index) {
-    modelEditorIndex.value -= 1;
-  }
-  const activeStillExists = providerTabs.value.some((tab) => tab.name === activeProviderTab.value);
-  alignActiveProviderTab(activeStillExists ? activeProviderTab.value : removedProvider);
-}
-
-watch(() => modelDraft.apiFormat, (next, previous) => {
-  if (!modelEditorVisible.value) return;
-  const nextFormat = normalizeApiFormat(next);
-  const previousDefault = apiFormatDefaultBaseUrl(previous);
-  const knownDefaults = new Set(apiFormatOptions.map((item) => apiFormatDefaultBaseUrl(item.value)));
-  const currentBase = (modelDraft.baseUrl || '').trim();
-  if (!currentBase || currentBase === previousDefault || knownDefaults.has(currentBase)) {
-    modelDraft.baseUrl = apiFormatDefaultBaseUrl(nextFormat);
-  }
-  if (nextFormat === 'anthropic_messages') {
-    if (!modelDraft.maxTokens || modelDraft.maxTokens > 64000) modelDraft.maxTokens = 8192;
-  } else if (normalizeApiFormat(previous) === 'anthropic_messages' && modelDraft.maxTokens === 8192) {
-    modelDraft.maxTokens = 128000;
-  }
-});
-
 function newSession(title) {
   saveSessions();
   const id = crypto.randomUUID ? crypto.randomUUID() : `s-${Date.now()}-${Math.random()}`;
@@ -2910,6 +2704,8 @@ function bindRuntimeEvents() {
       maxAttempts: Number(data.maxAttempts || 0),
       error: String(data.error || ''),
       waitMs: Number(data.waitMs || 0),
+      keyIndex: Number(data.keyIndex || 0),
+      totalKeys: Number(data.totalKeys || 0),
     };
   });
   onRuntimeEvent('run:image', (data) => {
@@ -4153,7 +3949,8 @@ async function sendPrompt() {
     refreshWorkspaceTokenUsage(workspace);
     await refreshGitStatus();
   }
-  if (!config.apiKey) {
+  const hasApiKey = !!(config.apiKey || (Array.isArray(config.apiKeys) && config.apiKeys.length));
+  if (!hasApiKey) {
     settingsPage.value = 'models';
     configVisible.value = true;
     message.warning(t('app.config.apiKeyRequired'));
@@ -5658,7 +5455,7 @@ async function activateSkillByName(skillName, skillArgs = '', injectIntoChat = t
           session.title = titleBase.length > 20 ? `${titleBase.slice(0, 20)}…` : titleBase;
         }
         scrollMessagesToBottom();
-        if (config.apiKey) {
+        if (config.apiKey || (Array.isArray(config.apiKeys) && config.apiKeys.length)) {
           markSessionRunning(session);
           await StartChat({ sessionId: session.id, message: '', messages: [{ role: 'user', content: modelContent }], grillMode: !!session.grillMode, config: { ...config, extraRoots: session.extraRoots || [] } }).catch(() => {
             markTransientTurn(session);
@@ -6626,18 +6423,8 @@ function formatBytes(bytes) {
 watch(configVisible, (visible) => {
   if (visible) {
     assignConfig(configDraft, config);
-    cancelModelDraft();
-    alignActiveProviderTab(normalizedProviderName(configDraft.providerName));
     refreshSkillState();
   }
-});
-
-watch(providerTabs, (tabs) => {
-  if (!tabs.length) {
-    activeProviderTab.value = '';
-    return;
-  }
-  alignActiveProviderTab();
 });
 
 
