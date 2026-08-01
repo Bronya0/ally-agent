@@ -10,8 +10,6 @@ This file is read by AI coding agents. Keep it current when the app architecture
 |---------|-------------|
 | `wails dev` | Run the desktop app in development mode with hot reload |
 | `wails build` | Build a distributable desktop binary (also the only verification command) |
-| `cd frontend && npm install` | Install frontend dependencies |
-| `wails generate module` | Regenerate Go-to-JS bindings after adding or changing exported Go methods |
 
 ## Git Convention
 
@@ -733,7 +731,7 @@ Example MCP config:
 
 ## Tests And Verification
 
-`wails build` is the only verification command. Run it when a change touches the Go backend; it compiles the backend, builds the Vue frontend, and produces the desktop binary. Pure frontend changes do not require verification.
+`wails build` is the only build and verification command. Run it when a change touches the Go backend or the Wails bridge; it compiles the backend, builds the Vue frontend, and produces the desktop binary. Pure frontend changes that do not affect bindings do not require verification.
 
 ---
 
@@ -745,7 +743,7 @@ Example MCP config:
 - CSS: one dark theme, semantic class names, no preprocessor.
 - Events: lowercase with colon separators, e.g. `run:delta`, `tool:result`, `mcp:status`.
 - JSON fields: camelCase for Go struct tags and user-facing tool parameters.
-- Wails bindings: regenerate after adding/changing exported Go methods.
+- Wails bindings: `wails build` regenerates bindings automatically; no manual binding step needed.
 - Avoid broad refactors while changing tool contracts or provider adapters.
 
 ---
@@ -781,7 +779,7 @@ These rules are required for future changes. They exist to keep Agent behavior d
 - File mutations must validate the complete normalized batch before any write. Maintain single-snapshot matching, non-overlap checks, atomic commit, and best-effort rollback semantics.
 - Keep safety-sensitive fallbacks narrowly proven: unique indentation-only matching may rebase indentation, but never fuzzy-match code bodies or choose among multiple candidates.
 - Keep bounded output, concurrency caps, timeouts, cancellation, and redirect limits intact unless the change includes an explicit resource-safety rationale and regression tests.
-- For backend changes, run `gofmt`, `go test ./...`, `git diff --check`, and `wails build`. For pure frontend changes, run the narrowest relevant frontend check/build; use `wails build` when the Wails bridge or generated bindings are affected.
+- For backend changes, run `wails build` and `git diff --check`. For pure frontend changes, `wails build` is only needed when the Wails bridge or generated bindings are affected.
 - Inspect `git diff` and `git status` after formatting/builds. Do not include generated binaries, unrelated formatting changes, or line-ending-only changes in a functional commit.
 - Update `AGENTS.md` and `CODEGRAPH.md` in the same change when module responsibilities, public workflows, event flow, tool contracts, or major data flow changes.
 
