@@ -245,15 +245,10 @@ const zh = {
   'commands.sessions': '查看和切换历史会话',
   'commands.init': '分析项目并生成 AGENTS.md',
   'commands.note': '保存长期记忆',
-  'commands.codegraph': '分析项目结构并生成 CODEGRAPH.md 代码图谱',
   'commands.compact': '压缩对话上下文，用摘要替换历史消息',
   'commands.title': '指令 {commands} · 技能 {skills}',
   'commands.empty': '无匹配指令',
   'welcome.skillsAvailable': '{count} 个可用，输入 /<skillname> 加载',
-
-  'app.codegraph.title': '/codegraph - 生成代码图谱',
-  'app.codegraph.failed': '生成代码图谱失败：{error}',
-  'app.codegraph.writing': '正在写入 CODEGRAPH.md...',
 
   'header.running': '运行中',
   'header.addWorkspace': '添加工作空间',
@@ -814,14 +809,9 @@ const enOverrides = {
   'commands.skills': 'Show available skills',
   'commands.sessions': 'Show and switch sessions',
   'commands.init': 'Analyze the project and generate AGENTS.md', 'commands.note': 'Save durable knowledge',
-  'commands.codegraph': 'Analyze project structure and generate CODEGRAPH.md code graph',
   'commands.compact': 'Replace conversation history with a compact summary',
   'commands.title': 'Commands {commands} · Skills {skills}', 'commands.empty': 'No matching commands',
   'welcome.skillsAvailable': '{count} available; enter /<skillname> to load one',
-
-  'app.codegraph.title': '/codegraph - Generate Code Graph',
-  'app.codegraph.failed': 'Code graph generation failed: {error}',
-  'app.codegraph.writing': 'Writing CODEGRAPH.md...',
 
   'header.running': 'Running', 'header.addWorkspace': 'Add workspace', 'header.workspaceHistory': 'Recent workspaces',
   'header.github': 'Open GitHub repository', 'header.githubAria': 'Open the Ally GitHub repository',
