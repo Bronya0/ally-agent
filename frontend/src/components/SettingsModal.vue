@@ -426,6 +426,9 @@
             :placeholder="$t('settings.reasoningTagHint')"
           />
         </n-form-item-gi>
+        <n-form-item-gi :label="$t('settings.reasoningEffort')" :span="2">
+          <n-select v-model:value="modelDraft.reasoningEffort" :options="reasoningEffortOptions" />
+        </n-form-item-gi>
       </n-grid>
       <n-alert v-if="selectedCatalogProvider" type="info" :show-icon="false" class="model-format-hint">
         <span>{{ $t('settings.providerPresetHint', { provider: selectedCatalogProvider.name }) }}</span>
@@ -450,8 +453,8 @@
 <script setup>
 import { computed, reactive, ref, watch } from 'vue';
 import { createDiscreteApi, darkTheme } from 'naive-ui';
-import { naiveDateLocale, naiveLocale, t } from '../i18n.mjs';
-import { buildModelConfigExport, mergeModelConfigs, modelConfigIdentity, normalizeApiKeysArray, parseModelConfigImport } from '../utils/modelConfigIO.mjs';
+import { naiveDateLocale, naiveLocale, reasoningEffortLabel, t } from '../i18n.mjs';
+import { buildModelConfigExport, mergeModelConfigs, modelConfigIdentity, normalizeApiKeysArray, normalizeReasoningEffort, parseModelConfigImport, reasoningEffortLevels } from '../utils/modelConfigIO.mjs';
 import {
   CUSTOM_PROVIDER_ID,
   applyCatalogPreset,
@@ -594,6 +597,7 @@ function defaultModelDraft(source = {}) {
     // explicit legacy value onto "auto" — otherwise the two-option select would
     // render blank for an imported config that stored "max_tokens".
     tokenParam: normalizeDraftTokenParam(source.tokenParam),
+    reasoningEffort: normalizeReasoningEffort(source.reasoningEffort),
   };
 }
 
@@ -621,6 +625,10 @@ function normalizeDraftTokenParam(value) {
   const v = String(value || '').trim().toLowerCase().replace(/[-\s]+/g, '_');
   return v === 'max_completion_tokens' ? 'max_completion_tokens' : 'auto';
 }
+
+const reasoningEffortOptions = computed(() =>
+  reasoningEffortLevels.map((level) => ({ label: reasoningEffortLabel(level), value: level }))
+);
 
 const modelDraft = reactive(defaultModelDraft());
 const catalogProviderOptions = computed(() => providerCatalogOptions(modelCatalog.value, t('settings.providerCustom')));
@@ -794,6 +802,7 @@ async function testModelConnection() {
       contextWindow: modelDraft.contextWindow || 1048576,
       reasoningTag: modelDraft.reasoningTag || 'reasoning_content',
       tokenParam: modelDraft.tokenParam || 'auto',
+      reasoningEffort: normalizeReasoningEffort(modelDraft.reasoningEffort),
     });
     message.success(t('settings.connectionSuccess'));
   } catch (err) {
@@ -829,6 +838,7 @@ function commitModelDraft() {
     contextWindow: modelDraft.contextWindow || draft.contextWindow || 1048576,
     reasoningTag: modelDraft.reasoningTag || 'reasoning_content',
     tokenParam: modelDraft.tokenParam || 'auto',
+    reasoningEffort: normalizeReasoningEffort(modelDraft.reasoningEffort),
   };
   const wasActive = modelEditorIndex.value >= 0 && isDraftModelActive(draft.models[modelEditorIndex.value]);
   if (modelEditorIndex.value >= 0) {
@@ -861,6 +871,7 @@ function applyModelToDraft(model) {
   draft.contextWindow = model.contextWindow || draft.contextWindow || 1048576;
   draft.reasoningTag = model.reasoningTag || 'reasoning_content';
   draft.tokenParam = model.tokenParam || 'auto';
+  draft.reasoningEffort = normalizeReasoningEffort(model.reasoningEffort);
   alignActiveProviderTab(normalizedProviderName(model.providerName));
   emit('save', { ...draft }, true);
 }

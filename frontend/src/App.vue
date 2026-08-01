@@ -182,6 +182,7 @@
                   @open-git-diff="openGitDiff"
                   @open-workspace="openWorkspaceInFileManager"
                   @set-run-mode="setRunMode"
+                  @change-reasoning-effort="changeReasoningEffort"
                   @open-task-center="openTaskCenter"
                   @open-token-stats="tokenStatsVisible = true"
                   @new-session="createNewSession"
@@ -349,11 +350,12 @@ import ChatMessages from './components/ChatMessages.vue';
 import TaskCenterPanel from './components/TaskCenterPanel.vue';
 import TokenStatsModal from './components/TokenStatsModal.vue';
 import { assignConfig, defaultConfig } from './utils/config.mjs';
+import { modelConfigIdentity } from './utils/modelConfigIO.mjs';
 import { buildVersion } from './utils/buildVersion.js';
 import { computeEditStats, formatEditStats } from './utils/diff.js';
 import { isNewerReleaseVersion } from './utils/versionCheck.mjs';
 import { findSessionWorkspaceTab, isEditableNavigationTarget, shouldAcceptRunTerminal } from './utils/sessionState.mjs';
-import { formatDateTime, naiveDateLocale, naiveLocale, t, welcomeGreeting as localizedWelcomeGreeting } from './i18n.mjs';
+import { formatDateTime, naiveDateLocale, naiveLocale, reasoningEffortLabel, t, welcomeGreeting as localizedWelcomeGreeting } from './i18n.mjs';
 import {
   DEFAULT_TOOL_PREVIEW_LINES,
   displaySourceMessages as buildDisplaySourceMessages,
@@ -5521,6 +5523,26 @@ async function setRunMode(mode) {
     message.success(t('app.run.modeChanged', { mode: String(mode || 'yolo').toUpperCase() }));
   } catch (err) {
     message.error(t('app.run.modeFailed', { error: err }));
+  }
+}
+
+async function changeReasoningEffort(level) {
+  const next = String(level || 'auto').toLowerCase();
+  config.reasoningEffort = next;
+  configDraft.reasoningEffort = next;
+  // Keep the active model preset in sync so the choice survives model
+  // switching (SwitchModel applies the preset's value to the top level).
+  const activeIdentity = modelConfigIdentity(config);
+  for (const list of [config.models, configDraft.models]) {
+    const preset = (list || []).find((m) => modelConfigIdentity(m) === activeIdentity);
+    if (preset) preset.reasoningEffort = next;
+  }
+  const label = reasoningEffortLabel(next);
+  try {
+    await SaveConfig({ ...config });
+    message.success(t('app.model.effortChanged', { level: label }));
+  } catch (err) {
+    message.error(t('app.model.effortFailed', { error: err }));
   }
 }
 

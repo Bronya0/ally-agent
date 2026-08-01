@@ -240,6 +240,14 @@ type ModelConfig struct {
 	// o-series / newer GPT models that reject the legacy field). Ignored by
 	// the Responses and Anthropic adapters.
 	TokenParam string `json:"tokenParam,omitempty"`
+	// ReasoningEffort selects the thinking-strength level sent to the
+	// provider: "" / "auto" sends nothing and keeps the provider default;
+	// otherwise "low"/"medium"/"high"/"xhigh"/"max" is mapped per adapter
+	// (OpenAI reasoning_effort / reasoning.effort with xhigh+max clamped to
+	// high; Anthropic output_config.effort without enabling thinking blocks).
+	// "auto" is the safe default because not every model accepts the
+	// parameter and value sets differ across providers.
+	ReasoningEffort string `json:"reasoningEffort,omitempty"`
 }
 
 type ConfigState struct {
@@ -264,6 +272,7 @@ type ConfigState struct {
 	ProxyNoProxy        string        `json:"proxyNoProxy,omitempty"`
 	UserAgent           string        `json:"userAgent,omitempty"`
 	ReasoningTag        string        `json:"reasoningTag,omitempty"`
+	ReasoningEffort     string        `json:"reasoningEffort,omitempty"`
 	Models              []ModelConfig `json:"models,omitempty"`
 	DisabledSkills      []string      `json:"disabledSkills,omitempty"`
 	LLMRetries          int           `json:"llmRetries,omitempty"`
@@ -1222,6 +1231,9 @@ func mergeConfig(base, overlay ConfigState) ConfigState {
 	if overlay.ReasoningTag != "" {
 		base.ReasoningTag = overlay.ReasoningTag
 	}
+	if overlay.ReasoningEffort != "" {
+		base.ReasoningEffort = overlay.ReasoningEffort
+	}
 	if strings.TrimSpace(overlay.UserAgent) != "" {
 		base.UserAgent = overlay.UserAgent
 	}
@@ -1244,8 +1256,10 @@ func mergeConfig(base, overlay ConfigState) ConfigState {
 		base.APIFormat = apiFormatOpenAIChat
 	}
 	base.ReasoningTag = normalizeReasoningTag(base.ReasoningTag)
+	base.ReasoningEffort = normalizeReasoningEffort(base.ReasoningEffort)
 	for i := range base.Models {
 		base.Models[i].ReasoningTag = normalizeReasoningTag(base.Models[i].ReasoningTag)
+		base.Models[i].ReasoningEffort = normalizeReasoningEffort(base.Models[i].ReasoningEffort)
 		syncModelAPIKeyFields(&base.Models[i])
 	}
 	if goruntime.GOOS == "windows" {
@@ -1384,6 +1398,7 @@ func (a *App) SaveConfig(req ConfigState) error {
 		}
 	}
 	a.config.ReasoningTag = normalizeReasoningTag(req.ReasoningTag)
+	a.config.ReasoningEffort = normalizeReasoningEffort(req.ReasoningEffort)
 	a.disabledSkills = normalizeSkillNameList(a.config.DisabledSkills)
 	a.config.DisabledSkills = cloneStringSlice(a.disabledSkills)
 	cfg := a.config
@@ -1422,21 +1437,22 @@ func (a *App) SaveConfig(req ConfigState) error {
 func (a *App) TestModelConnection(model ModelConfig) error {
 	networkCfg := a.effectiveConfig(ConfigState{})
 	cfg := ConfigState{
-		ProviderName:  model.ProviderName,
-		APIFormat:     normalizeAPIFormat(model.APIFormat),
-		BaseURL:       strings.TrimSpace(model.BaseURL),
-		APIKey:        strings.TrimSpace(model.APIKey),
-		APIKeys:       cloneStringSlice(model.APIKeys),
-		Model:         strings.TrimSpace(model.Model),
-		Temperature:   model.Temperature,
-		MaxTokens:     32,
-		ContextWindow: model.ContextWindow,
-		TokenParam:    normalizeTokenParam(model.TokenParam),
-		ReasoningTag:  normalizeReasoningTag(model.ReasoningTag),
-		ProxyMode:     networkCfg.ProxyMode,
-		ProxyURL:      networkCfg.ProxyURL,
-		ProxyNoProxy:  networkCfg.ProxyNoProxy,
-		UserAgent:     networkCfg.UserAgent,
+		ProviderName:    model.ProviderName,
+		APIFormat:       normalizeAPIFormat(model.APIFormat),
+		BaseURL:         strings.TrimSpace(model.BaseURL),
+		APIKey:          strings.TrimSpace(model.APIKey),
+		APIKeys:         cloneStringSlice(model.APIKeys),
+		Model:           strings.TrimSpace(model.Model),
+		Temperature:     model.Temperature,
+		MaxTokens:       32,
+		ContextWindow:   model.ContextWindow,
+		TokenParam:      normalizeTokenParam(model.TokenParam),
+		ReasoningTag:    normalizeReasoningTag(model.ReasoningTag),
+		ReasoningEffort: normalizeReasoningEffort(model.ReasoningEffort),
+		ProxyMode:       networkCfg.ProxyMode,
+		ProxyURL:        networkCfg.ProxyURL,
+		ProxyNoProxy:    networkCfg.ProxyNoProxy,
+		UserAgent:       networkCfg.UserAgent,
 	}
 	if cfg.Model == "" {
 		return errors.New("model is required")
@@ -4864,6 +4880,7 @@ func (a *App) SwitchModel(index int) error {
 	}
 	a.config.TokenParam = m.TokenParam
 	a.config.ReasoningTag = normalizeReasoningTag(m.ReasoningTag)
+	a.config.ReasoningEffort = normalizeReasoningEffort(m.ReasoningEffort)
 	cfg := a.config
 	syncAPIKeyFields(&cfg)
 	a.mu.Unlock()

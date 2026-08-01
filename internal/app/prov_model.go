@@ -389,6 +389,13 @@ func (a *App) streamOpenAIChat(ctx context.Context, cfg ConfigState, model strin
 	} else {
 		streamReq.MaxTokens = cfg.MaxTokens
 	}
+	// Thinking strength: only send reasoning_effort when the user explicitly
+	// picked a level. OpenAI endpoints accept only low/medium/high; xhigh and
+	// max are clamped to high rather than sent raw (unsupported values error
+	// out). "auto" (the default) sends nothing.
+	if effort := reasoningEffortForAdapter(apiFormatOpenAIChat, cfg.ReasoningEffort); effort != "" {
+		streamReq.ReasoningEffort = effort
+	}
 	if len(tools) > 0 {
 		streamReq.Tools = tools
 		// Do not set ToolChoice. The default is "auto" for OpenAI and all
@@ -584,6 +591,12 @@ func (a *App) streamOpenAIResponses(ctx context.Context, cfg ConfigState, model 
 		MaxOutputTokens:   oa.Int(int64(cfg.MaxTokens)),
 		ParallelToolCalls: oa.Bool(true),
 		Store:             oa.Bool(false),
+	}
+	// Thinking strength for the Responses API (reasoning.effort). The SDK
+	// enum only covers low/medium/high; xhigh/max are clamped to high for
+	// OpenAI-family endpoints.
+	if effort := reasoningEffortForAdapter(apiFormatOpenAIResponses, cfg.ReasoningEffort); effort != "" {
+		body.Reasoning = oa.ReasoningParam{Effort: oa.ReasoningEffort(effort)}
 	}
 	if strings.TrimSpace(instructions) != "" {
 		body.Instructions = oa.String(instructions)
@@ -872,6 +885,19 @@ func (a *App) streamAnthropicMessages(ctx context.Context, cfg ConfigState, mode
 	}
 	if baseURL == defaultAnthropicMessagesURL {
 		params.CacheControl = anthropic.CacheControlEphemeralParam{TTL: anthropic.CacheControlEphemeralTTLTTL5m}
+	}
+	// Thinking strength for Anthropic: only output_config.effort. Anthropic
+	// has no reasoning_effort parameter; effort is the equivalent control and
+	// is only sent when the user explicitly picked a level ("auto" keeps the
+	// provider default). Thinking itself is NOT enabled here: adaptive/enabled
+	// thinking would emit thinking blocks whose signatures must be replayed
+	// verbatim in the next tool turn, and buildAnthropicMessages cannot do
+	// that losslessly yet (see AGENTS.md). On models where adaptive thinking
+	// is already the default (Opus 4.6+/Sonnet 4.6+/Claude 5), effort alone
+	// tunes that existing thinking; on older models the parameter is either
+	// ignored or rejected, which the user opted into by picking a level.
+	if effort := reasoningEffortForAdapter(apiFormatAnthropicMessages, cfg.ReasoningEffort); effort != "" {
+		params.OutputConfig = anthropic.OutputConfigParam{Effort: anthropic.OutputConfigEffort(effort)}
 	}
 
 	maxRetries := effectiveLLMRetries(cfg)

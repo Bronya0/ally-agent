@@ -12,6 +12,7 @@ const MODEL_FIELDS = [
   'contextWindow',
   'reasoningTag',
   'tokenParam',
+  'reasoningEffort',
 ];
 
 function importError(code) {
@@ -38,6 +39,28 @@ export function normalizeTokenParam(value) {
   if (['max_tokens', 'max_token', 'tokens', 'legacy'].includes(v)) return 'max_tokens';
   return 'auto';
 }
+
+// normalizeReasoningEffort mirrors the Go backend normalizeReasoningEffort so
+// a value resolves identically regardless of which layer reads it. Recognized
+// aliases (case/dash/space/underscore variants, "default"/"off"/"unset")
+// collapse to the canonical level; anything else falls back to "auto".
+export function normalizeReasoningEffort(value) {
+  const v = String(value || '').trim().toLowerCase().replace(/[-_\s]+/g, '');
+  switch (v) {
+    case 'auto': case 'default': case 'unset': case 'off': case '':
+      return 'auto';
+    case 'low': return 'low';
+    case 'medium': case 'med': return 'medium';
+    case 'high': return 'high';
+    case 'xhigh': case 'extrahigh': case 'extremehigh': return 'xhigh';
+    case 'max': case 'maximum': case 'maximal': return 'max';
+    default: return 'auto';
+  }
+}
+
+// reasoningEffortLevels is the canonical ordered set of levels exposed in the
+// UI (auto = send nothing). Keep in sync with the backend constants.
+export const reasoningEffortLevels = ['auto', 'low', 'medium', 'high', 'xhigh', 'max'];
 
 export function modelConfigIdentity(model) {
   return `${normalizeProviderName(model?.providerName).toLocaleLowerCase('en-US')}\u0000${normalizeModelId(model?.model).toLocaleLowerCase('en-US')}`;
@@ -94,6 +117,7 @@ function normalizeImportedModel(model) {
     contextWindow: Number.isFinite(Number(model.contextWindow)) && Number(model.contextWindow) > 0 ? Math.trunc(Number(model.contextWindow)) : 1048576,
     reasoningTag: String(model.reasoningTag || 'reasoning_content').trim() || 'reasoning_content',
     tokenParam: normalizeTokenParam(model.tokenParam),
+    reasoningEffort: normalizeReasoningEffort(model.reasoningEffort),
   };
 
   return normalized;

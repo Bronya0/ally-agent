@@ -1,4 +1,4 @@
-import { normalizeApiKeysArray } from './modelConfigIO.mjs';
+import { normalizeApiKeysArray, normalizeReasoningEffort } from './modelConfigIO.mjs';
 
 export function defaultConfig() {
   return {
@@ -21,6 +21,7 @@ export function defaultConfig() {
     proxyNoProxy: '',
     userAgent: '',
     reasoningTag: 'reasoning_content',
+    reasoningEffort: 'auto',
     disabledSkills: [],
     models: [],
     llmRetries: 2,
@@ -39,6 +40,7 @@ export function assignConfig(target, source) {
   };
   delete next.systemPrompt;
   next.reasoningTag = String(next.reasoningTag || '').trim() || 'reasoning_content';
+  next.reasoningEffort = normalizeReasoningEffort(next.reasoningEffort);
   next.apiKeys = normalizeApiKeysArray(next.apiKeys).length
     ? normalizeApiKeysArray(next.apiKeys)
     : (next.apiKey ? [next.apiKey] : []);
@@ -51,11 +53,12 @@ export function assignConfig(target, source) {
   Object.assign(target, next);
 }
 
-export function cloneModelConfigs(models) {
+function cloneModelConfigs(models) {
   if (!Array.isArray(models)) return [];
   return models.map((model) => ({
     ...(model || {}),
     reasoningTag: String(model?.reasoningTag || '').trim() || 'reasoning_content',
+    reasoningEffort: normalizeReasoningEffort(model?.reasoningEffort),
     tokenParam: String(model?.tokenParam || '').trim() || 'auto',
     apiKeys: Array.isArray(model?.apiKeys) && model.apiKeys.length
       ? normalizeApiKeysArray(model.apiKeys)

@@ -25,7 +25,62 @@ const (
 	tokenParamAuto                = "auto"
 	tokenParamMaxTokens           = "max_tokens"
 	tokenParamMaxCompletionTokens = "max_completion_tokens"
+	reasoningEffortAuto           = "auto"
+	reasoningEffortLow            = "low"
+	reasoningEffortMedium         = "medium"
+	reasoningEffortHigh           = "high"
+	reasoningEffortXHigh          = "xhigh"
+	reasoningEffortMax            = "max"
 )
+
+// normalizeReasoningEffort accepts any supported spelling (with case, dash,
+// space or underscore separators) and returns the canonical lowercase level.
+// Unknown values fall back to "auto" so a stale or mistyped config never
+// injects an unsupported parameter into a request.
+func normalizeReasoningEffort(value string) string {
+	v := strings.ToLower(strings.TrimSpace(value))
+	v = strings.NewReplacer("-", "", "_", "", " ", "").Replace(v)
+	switch v {
+	case "auto", "default", "unset", "", "off":
+		return reasoningEffortAuto
+	case "low":
+		return reasoningEffortLow
+	case "medium", "med":
+		return reasoningEffortMedium
+	case "high":
+		return reasoningEffortHigh
+	case "xhigh", "extrahigh", "extremehigh":
+		return reasoningEffortXHigh
+	case "max", "maximum", "maximal":
+		return reasoningEffortMax
+	default:
+		return reasoningEffortAuto
+	}
+}
+
+// reasoningEffortForAdapter returns the effort level to send for a specific
+// API format, or "" when nothing should be sent (auto). OpenAI-family formats
+// only accept low/medium/high on their reasoning_effort / reasoning.effort
+// parameters — xhigh and max are Anthropic output_config.effort values and
+// would be rejected by OpenAI endpoints, so they are clamped to high.
+// Anthropic accepts all five levels.
+func reasoningEffortForAdapter(apiFormat, effort string) string {
+	effort = normalizeReasoningEffort(effort)
+	if effort == reasoningEffortAuto {
+		return ""
+	}
+	switch normalizeAPIFormat(apiFormat) {
+	case apiFormatOpenAIChat, apiFormatOpenAIResponses:
+		switch effort {
+		case reasoningEffortLow, reasoningEffortMedium, reasoningEffortHigh:
+			return effort
+		default:
+			return reasoningEffortHigh
+		}
+	default:
+		return effort
+	}
+}
 
 func normalizeTokenParam(value string) string {
 	v := strings.ToLower(strings.TrimSpace(value))

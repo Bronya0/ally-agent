@@ -591,6 +591,33 @@ code, pre {
   opacity: 0.7;
 }
 
+.composer-info .info-effort {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 2px 4px 0;
+  color: #9a9a9a;
+  border: 0;
+  background: transparent;
+  font-family: var(--ally-ui-font);
+  font-size: 11px;
+  line-height: 20px;
+  cursor: pointer;
+  flex-shrink: 0;
+  --wails-draggable: no-drag;
+}
+
+.composer-info .info-effort:hover {
+  color: #c6c6c6;
+}
+
+.composer-info .info-effort-caret {
+  color: currentColor;
+  font-size: 9px;
+  opacity: 0.7;
+}
+
 .composer-run-status {
   display: inline-flex;
   align-items: center;

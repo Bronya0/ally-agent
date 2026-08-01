@@ -43,6 +43,17 @@
     >
       <span class="info-model" style="cursor:pointer">{{ currentModelLabel }}</span>
     </n-dropdown>
+    <n-dropdown
+      trigger="click"
+      placement="top-start"
+      :options="reasoningEffortOptions"
+      @select="onReasoningEffortSelect"
+    >
+      <span class="info-effort" :title="$t('composer.effort.title')">
+        <span class="info-effort-label">{{ currentEffortLabel }}</span>
+        <span class="info-effort-caret">▾</span>
+      </span>
+    </n-dropdown>
     <span class="info-workspace">
       <button class="info-workspace-btn" type="button" :title="$t('composer.workspace.open')" @click.stop="$emit('openWorkspace')">
         {{ config.workspace || $t('composer.workspace.none') }}
@@ -194,7 +205,8 @@
 <script setup>
 import { computed, h, ref } from 'vue';
 import ContextUsageInline from './ContextUsageInline.vue';
-import { formatDateTime, t } from '../i18n.mjs';
+import { formatDateTime, reasoningEffortLabel, t } from '../i18n.mjs';
+import { modelConfigIdentity, reasoningEffortLevels } from '../utils/modelConfigIO.mjs';
 
 function formatMessageContent(msg) {
   if (!msg) return '';
@@ -282,7 +294,7 @@ const props = defineProps({
   fmtK: { type: Function, required: true },
 });
 
-const emit = defineEmits(['switchModel', 'openConfig', 'openGitDiff', 'openWorkspace', 'setRunMode', 'openTaskCenter', 'newSession', 'showSessions', 'addExtraRoot', 'removeExtraRoot', 'openTokenStats']);
+const emit = defineEmits(['switchModel', 'openConfig', 'openGitDiff', 'openWorkspace', 'setRunMode', 'changeReasoningEffort', 'openTaskCenter', 'newSession', 'showSessions', 'addExtraRoot', 'removeExtraRoot', 'openTokenStats']);
 
 const contextPopoverVisible = ref(false);
 const currentModelLabel = computed(() => `${props.config.providerName || '-'} · ${props.config.model || '-'}`);
@@ -333,6 +345,10 @@ const currentRunMode = computed(() => {
   return 'yolo';
 });
 const currentRunModeLabel = computed(() => currentRunMode.value.toUpperCase());
+const currentEffortLabel = computed(() => reasoningEffortLabel(props.config.reasoningEffort));
+const reasoningEffortOptions = computed(() =>
+  reasoningEffortLevels.map((level) => ({ label: reasoningEffortLabel(level), key: level }))
+);
 const runModeOptions = computed(() => [
   {
     label: 'YOLO',
@@ -417,13 +433,16 @@ function selectRunMode(key) {
   emit('setRunMode', key);
 }
 
+function onReasoningEffortSelect(key) {
+  emit('changeReasoningEffort', key);
+}
+
 function providerLabel(model) {
   return (model?.providerName || '').trim() || 'OpenAI Compatible';
 }
 
 function isActiveModel(model) {
-  return modelProviderKey(model) === modelProviderKey(props.config)
-    && String(model?.model || '').trim().toLocaleLowerCase() === String(props.config.model || '').trim().toLocaleLowerCase();
+  return modelConfigIdentity(model) === modelConfigIdentity(props.config);
 }
 
 </script>

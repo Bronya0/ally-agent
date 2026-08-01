@@ -150,7 +150,7 @@ Connected MCP tools are sorted by server, tool name, and function name before be
 
 `ConfigState` is stored in `~/.ally_agent/config.json` and includes:
 
-- provider fields: `providerName`, `apiFormat`, `baseUrl`, `apiKey`, `apiKeys` (ordered multi-key pool; first entry is highest priority), `model`
+- provider fields: `providerName`, `apiFormat`, `baseUrl`, `apiKey`, `apiKeys` (ordered multi-key pool; first entry is highest priority), `model`, `reasoningEffort`
 - runtime fields: `workspace`, `temperature`, `maxTokens`, `contextWindow`
 - network fields: `proxyMode` (`off`/`system`/`manual`), `proxyUrl`, `proxyNoProxy`
 - prompt fields: `systemPrompt`, `customPrompt`
@@ -166,6 +166,7 @@ Important config behavior:
 - Skill enable/disable operations update both memory and `config.json`.
 - Frontend `defaultConfig()` also includes `disabledSkills` so saving settings does not erase skill state.
 - `reasoningTag` defaults to `reasoning_content` in both backend and frontend model drafts.
+- `reasoningEffort` defaults to `auto` (send no thinking-strength parameter) in both backend and frontend model drafts; supported levels are `low`/`medium`/`high`/`xhigh`/`max`. `normalizeReasoningEffort()` collapses unknown/stale values back to `auto` so a bad config never injects an unsupported parameter. The OpenAI Chat adapter sends it as top-level `reasoning_effort`, the Responses adapter as `reasoning.effort`, and the Anthropic adapter as `output_config.effort` (without enabling thinking blocks). OpenAI-family adapters clamp `xhigh`/`max` to `high` via `reasoningEffortForAdapter()` because their `reasoning_effort`/`reasoning.effort` parameters only accept `low`/`medium`/`high`; Anthropic accepts all five levels.
 - On Windows, an auto-detected valid Git Bash path is returned in config so Settings can show the executable actually in use.
 - Proxy mode is explicit and fail-closed: `off` ignores inherited proxy variables, `system` detects Windows WinINET fixed proxy settings with environment fallback, and `manual` accepts HTTP/HTTPS/SOCKS5 URLs. PAC URLs are reported but not executed yet.
 
@@ -220,7 +221,7 @@ Supported API formats:
 - Tool result envelopes with `ok:false` are sent back as Anthropic `tool_result` blocks with `is_error:true`.
 - Anthropic Base URLs ending in `/v1` are normalized because the official SDK appends `/v1/messages`; non-positive Max Tokens default to 8192 for this format.
 - Requests sent to the official Anthropic base URL enable a top-level five-minute prompt-cache breakpoint; custom compatible endpoints do not receive this field.
-- Extended Thinking is not exposed as a configurable feature until thinking signatures and redacted-thinking blocks can be replayed losslessly across tool turns.
+- Thinking strength, when the user picks a level, is sent as `output_config.effort` (`low`/`medium`/`high`/`xhigh`/`max`); thinking blocks are deliberately not enabled (adaptive/enabled `thinking` would emit blocks whose signatures must be replayed verbatim in the next tool turn, and `buildAnthropicMessages` cannot do that losslessly yet). On models where adaptive thinking is already the default, effort alone tunes that existing thinking; on older models the parameter may be ignored or rejected, which the user opts into by picking a level.
 
 ---
 

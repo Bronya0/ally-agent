@@ -156,6 +156,8 @@ const zh = {
   'app.config.reloadFailed': '重新加载配置失败：{error}',
   'app.model.switched': '已切换到 {model}',
   'app.model.switchFailed': '切换模型失败：{error}',
+  'app.model.effortChanged': '思考强度已设为 {level}',
+  'app.model.effortFailed': '设置思考强度失败：{error}',
   'app.run.startFailed': '启动失败：{error}',
   'app.run.stopFailed': '终止失败：{error}',
   'app.run.cancelled': '已取消。',
@@ -303,6 +305,13 @@ const zh = {
 
   'composer.models.empty': '暂无已保存模型',
   'composer.models.manage': '管理模型',
+  'composer.effort.title': '思考强度（需模型支持，不支持的模型请保持“自动”）',
+  'composer.effort.auto': '自动',
+  'composer.effort.low': '低',
+  'composer.effort.medium': '中',
+  'composer.effort.high': '高',
+  'composer.effort.xhigh': '超高',
+  'composer.effort.max': '最大',
   'composer.workspace.open': '在资源管理器中打开工作区',
   'composer.workspace.none': '未选择工作区',
   'extraRoots.button.title': '会话级附加工作区',
@@ -507,6 +516,7 @@ const zh = {
   'settings.saveAppSettings': '保存应用设置',
   'settings.reasoningTag': '推理标签',
   'settings.reasoningTagHint': '默认 reasoning_content；可改为 sink/think 等以解析 <tag> 包裹的推理内容',
+  'settings.reasoningEffort': '思考强度',
   'settings.tokenParam': 'Token 参数',
   'settings.tokenParamDefault': '默认',
   'settings.aboutTitle': '关于 Ally',
@@ -520,7 +530,7 @@ const zh = {
   'settings.apiFormat': '接口格式',
   'settings.baseUrlNoV1': 'Base URL（无需 /v1）',
   'settings.contextWindow': '上下文窗口',
-  'settings.anthropicHint': '官方地址填写 https://api.anthropic.com，末尾无需添加 /v1。当前接入支持 Messages、图片和工具调用；尚未开放 Extended Thinking 配置。',
+  'settings.anthropicHint': '官方地址填写 https://api.anthropic.com，末尾无需添加 /v1。当前接入支持 Messages、图片和工具调用；思考强度通过 output_config.effort 控制（不强制开启 thinking 块，避免多轮工具调用缺少签名回放），旧式 budget_tokens 配置未开放。',
   'settings.testConnection': '测试连接',
   'settings.saveChanges': '保存修改',
   'settings.apiKeyRequired': '请填写 API Key',
@@ -744,6 +754,7 @@ const enOverrides = {
   'app.config.saved': 'Configuration saved', 'app.config.saveFailed': 'Failed to save: {error}',
   'app.config.reloaded': 'Configuration reloaded: {model}', 'app.config.reloadFailed': 'Failed to reload configuration: {error}',
   'app.model.switched': 'Switched to {model}', 'app.model.switchFailed': 'Failed to switch model: {error}',
+  'app.model.effortChanged': 'Thinking strength set to {level}', 'app.model.effortFailed': 'Failed to set thinking strength: {error}',
   'app.run.startFailed': 'Failed to start: {error}', 'app.run.stopFailed': 'Failed to stop: {error}',
   'app.run.cancelled': 'Cancelled.', 'app.run.failed': 'Run failed: {error}',
   'app.run.waitBeforeMode': 'Wait for the current task to finish before changing mode',
@@ -838,6 +849,13 @@ const enOverrides = {
   'ask.status.asking': 'Asking',
 
   'composer.models.empty': 'No saved models', 'composer.models.manage': 'Manage models',
+  'composer.effort.title': 'Thinking strength (requires model support; keep Auto if unsupported)',
+  'composer.effort.auto': 'Auto',
+  'composer.effort.low': 'Low',
+  'composer.effort.medium': 'Medium',
+  'composer.effort.high': 'High',
+  'composer.effort.xhigh': 'X-High',
+  'composer.effort.max': 'Max',
   'composer.workspace.open': 'Open workspace in file manager', 'composer.workspace.none': 'No workspace selected',
   'extraRoots.button.title': 'Session extra roots',
   'extraRoots.panel.title': 'Session extra roots',
@@ -958,6 +976,7 @@ const enOverrides = {
   'settings.mcpAddServer': '+ Add server', 'settings.mcpTransportStdio': 'stdio', 'settings.mcpTransportSse': 'sse',
   'settings.mcpTransportStreamableHttp': 'Streamable HTTP', 'settings.saveAppSettings': 'Save app settings',
   'settings.reasoningTag': 'Reasoning tag', 'settings.reasoningTagHint': 'Defaults to reasoning_content; use sink/think to parse <tag>-wrapped reasoning',
+  'settings.reasoningEffort': 'Thinking strength',
   'settings.tokenParam': 'Token parameter',
   'settings.tokenParamDefault': 'default',
   'settings.aboutTitle': 'About Ally', 'settings.aboutSubtitle': 'A free and open-source desktop AI coding assistant.',
@@ -967,7 +986,7 @@ const enOverrides = {
   'settings.sourceLicense': 'View source code and licenses', 'settings.modelEdit': 'Edit model',
   'settings.providerName': 'Provider name', 'settings.apiFormat': 'API format', 'settings.baseUrlNoV1': 'Base URL (without /v1)',
   'settings.contextWindow': 'Context window',
-  'settings.anthropicHint': 'Use https://api.anthropic.com for the official endpoint; do not append /v1. Messages, images, and tool calls are supported. Extended Thinking configuration is not available yet.',
+  'settings.anthropicHint': 'Use https://api.anthropic.com for the official endpoint; do not append /v1. Messages, images, and tool calls are supported. Thinking strength is sent as output_config.effort without enabling thinking blocks (signatures cannot be replayed across tool turns yet); legacy budget_tokens configuration is not exposed.',
   'settings.testConnection': 'Test connection', 'settings.saveChanges': 'Save changes',
   'settings.apiKeyRequired': 'Enter an API key', 'settings.connectionSuccess': 'Connection successful',
   'settings.apiKeys': 'API Keys', 'settings.apiKeyPlaceholder': 'sk-...',
@@ -1164,6 +1183,14 @@ export function t(key, params = {}) {
 
 export function hasTranslation(key) {
   return Object.prototype.hasOwnProperty.call(zh, key) && Object.prototype.hasOwnProperty.call(enOverrides, key);
+}
+
+// reasoningEffortLabel maps a thinking-strength level (auto/low/medium/high/
+// xhigh/max) to its localized UI label, falling back to the raw uppercase
+// level for unknown values.
+export function reasoningEffortLabel(level) {
+  const key = `composer.effort.${String(level || 'auto').toLowerCase()}`;
+  return hasTranslation(key) ? t(key) : String(level || 'auto').toUpperCase();
 }
 
 export function formatDateTime(value, options) {
