@@ -306,12 +306,6 @@ const zh = {
   'composer.models.empty': '暂无已保存模型',
   'composer.models.manage': '管理模型',
   'composer.effort.title': '思考强度（需模型支持，不支持的模型请保持“自动”）',
-  'composer.effort.auto': '自动',
-  'composer.effort.low': '低',
-  'composer.effort.medium': '中',
-  'composer.effort.high': '高',
-  'composer.effort.xhigh': '超高',
-  'composer.effort.max': '最大',
   'composer.workspace.open': '在资源管理器中打开工作区',
   'composer.workspace.none': '未选择工作区',
   'extraRoots.button.title': '会话级附加工作区',
@@ -850,12 +844,6 @@ const enOverrides = {
 
   'composer.models.empty': 'No saved models', 'composer.models.manage': 'Manage models',
   'composer.effort.title': 'Thinking strength (requires model support; keep Auto if unsupported)',
-  'composer.effort.auto': 'Auto',
-  'composer.effort.low': 'Low',
-  'composer.effort.medium': 'Medium',
-  'composer.effort.high': 'High',
-  'composer.effort.xhigh': 'X-High',
-  'composer.effort.max': 'Max',
   'composer.workspace.open': 'Open workspace in file manager', 'composer.workspace.none': 'No workspace selected',
   'extraRoots.button.title': 'Session extra roots',
   'extraRoots.panel.title': 'Session extra roots',
@@ -1185,12 +1173,13 @@ export function hasTranslation(key) {
   return Object.prototype.hasOwnProperty.call(zh, key) && Object.prototype.hasOwnProperty.call(enOverrides, key);
 }
 
-// reasoningEffortLabel maps a thinking-strength level (auto/low/medium/high/
-// xhigh/max) to its localized UI label, falling back to the raw uppercase
-// level for unknown values.
+// reasoningEffortLabel returns the raw thinking-strength parameter value
+// (auto/low/medium/high/xhigh/max) as the UI label. These levels are
+// provider parameter names and are intentionally not localized — what the
+// user picks is exactly what gets sent. Unknown values fall back to "auto".
 export function reasoningEffortLabel(level) {
-  const key = `composer.effort.${String(level || 'auto').toLowerCase()}`;
-  return hasTranslation(key) ? t(key) : String(level || 'auto').toUpperCase();
+  const v = String(level || 'auto').trim().toLowerCase();
+  return ['auto', 'low', 'medium', 'high', 'xhigh', 'max'].includes(v) ? v : 'auto';
 }
 
 export function formatDateTime(value, options) {
