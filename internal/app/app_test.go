@@ -1078,3 +1078,51 @@ func TestModelUsageFromResponsesCountsUncachedInputAsMiss(t *testing.T) {
 		t.Fatalf("cache usage = hit %d miss %d, want hit 0 miss 120", usage.CacheHitTokens, usage.CacheMissTokens)
 	}
 }
+
+func TestCleanAppliedUpdateDirsKeepsOnlyCurrentTag(t *testing.T) {
+	root := t.TempDir()
+
+	// Release-tag directories: current, older, and a pre-release tag.
+	for _, tag := range []string{"v1.4.0", "v1.3.0", "v1.2.0", "v1.3.0-rc1"} {
+		if err := os.MkdirAll(filepath.Join(root, tag), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Non-tag entries that must never be deleted: a subdirectory, a file.
+	if err := os.MkdirAll(filepath.Join(root, "mnt"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "v1.5.0.zip"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cleanAppliedUpdateDirs(root, "v1.4.0")
+
+	for _, tag := range []string{"v1.4.0", "mnt", "v1.5.0.zip"} {
+		if _, err := os.Stat(filepath.Join(root, tag)); err != nil {
+			t.Errorf("expected %q to remain, got err %v", tag, err)
+		}
+	}
+	for _, tag := range []string{"v1.3.0", "v1.2.0", "v1.3.0-rc1"} {
+		if _, err := os.Stat(filepath.Join(root, tag)); err == nil {
+			t.Errorf("expected stale tag directory %q to be removed", tag)
+		}
+	}
+}
+
+func TestCleanAppliedUpdateDirsRejectsPathTraversalNames(t *testing.T) {
+	root := t.TempDir()
+
+	// A hostile directory name that could escape the updates root if it were
+	// joined naively. The tag regex rejects it, so it must stay untouched.
+	hostile := ".."
+	if err := os.MkdirAll(filepath.Join(root, hostile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cleanAppliedUpdateDirs(root, "v1.4.0")
+
+	if _, err := os.Stat(filepath.Join(root, hostile)); err != nil {
+		t.Errorf("expected non-tag directory %q to remain, got err %v", hostile, err)
+	}
+}

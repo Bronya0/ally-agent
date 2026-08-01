@@ -1793,10 +1793,17 @@ func (a *App) CheckForUpdates() CheckForUpdatesResult {
 		return CheckForUpdatesResult{Error: err.Error()}
 	}
 	var parsed struct {
-		TagName string `json:"tag_name"`
+		TagName    string `json:"tag_name"`
+		Prerelease bool   `json:"prerelease"`
+		Draft      bool   `json:"draft"`
 	}
 	if err := json.Unmarshal(body, &parsed); err != nil {
 		return CheckForUpdatesResult{Error: err.Error()}
+	}
+	// Pre-release and draft releases must never be offered as automatic
+	// updates; the frontend treats a non-OK result as "no update detected".
+	if parsed.Prerelease || parsed.Draft {
+		return CheckForUpdatesResult{Error: "latest release is a pre-release or draft; ignored"}
 	}
 	tag := strings.TrimSpace(parsed.TagName)
 	if tag == "" {

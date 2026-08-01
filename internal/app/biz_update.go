@@ -195,8 +195,10 @@ func (a *App) fetchReleaseByTag(tag string) (string, []githubAsset, error) {
 		return "", nil, err
 	}
 	var parsed struct {
-		TagName string        `json:"tag_name"`
-		Assets  []githubAsset `json:"assets"`
+		TagName    string        `json:"tag_name"`
+		Prerelease bool          `json:"prerelease"`
+		Draft      bool          `json:"draft"`
+		Assets     []githubAsset `json:"assets"`
 	}
 	if err := json.Unmarshal(body, &parsed); err != nil {
 		return "", nil, err
@@ -204,6 +206,9 @@ func (a *App) fetchReleaseByTag(tag string) (string, []githubAsset, error) {
 	normalized := strings.TrimSpace(parsed.TagName)
 	if err := validateUpdateTag(normalized); err != nil {
 		return "", nil, fmt.Errorf("invalid release response: %w", err)
+	}
+	if parsed.Prerelease || parsed.Draft {
+		return "", nil, fmt.Errorf("release %s is a pre-release or draft; automatic download is not allowed", normalized)
 	}
 	return normalized, parsed.Assets, nil
 }
@@ -777,6 +782,31 @@ func stagedFileSet(stagedDir string) ([]string, error) {
 	return files, err
 }
 
+// cleanAppliedUpdateDirs removes stale staged update directories under
+// ~/.ally_agent/updates/ after a successful apply, keeping only the directory
+// of the just-applied tag. Only directory names that pass validateUpdateTag
+// are ever removed; the tag regex forbids path separators, so a corrupted or
+// malicious entry can never cause a deletion outside the updates root.
+func cleanAppliedUpdateDirs(rootDir, keepTag string) {
+	entries, err := os.ReadDir(rootDir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		tag := entry.Name()
+		if tag == keepTag {
+			continue
+		}
+		if err := validateUpdateTag(tag); err != nil {
+			continue // not a release-tag directory; leave it untouched
+		}
+		_ = os.RemoveAll(filepath.Join(rootDir, tag))
+	}
+}
+
 // ApplyUpdate stops all runs and services, then replaces the current
 // installation from the staged archive (Windows EXE/replace flow or macOS
 // bundle replace flow). On any failure it rolls back so the previous
@@ -888,6 +918,7 @@ func (a *App) applyWindowsUpdate(tag string) UpdateApplyResult {
 		}
 	}
 
+	cleanAppliedUpdateDirs(updateBaseDir(), tag)
 	a.emit("update:progress", map[string]any{"stage": "apply", "version": tag, "percent": 100})
 	a.emit("update:applied", map[string]any{"version": tag})
 	return UpdateApplyResult{OK: true}
@@ -964,6 +995,7 @@ func (a *App) applyMacUpdate(tag string) UpdateApplyResult {
 
 	removeQuarantineAttr(appDir)
 
+	cleanAppliedUpdateDirs(updateBaseDir(), tag)
 	a.emit("update:progress", map[string]any{"stage": "apply", "version": tag, "percent": 100})
 	a.emit("update:applied", map[string]any{"version": tag})
 	return UpdateApplyResult{OK: true}
