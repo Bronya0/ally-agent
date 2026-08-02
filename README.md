@@ -21,13 +21,19 @@ Download packages for Windows, macOS, and Linux from the [Releases page](https:/
 - Review bounded visual diffs, multi-file edits, command output, and detailed tool failure reasons directly in chat
 - Use OpenAI Chat Completions, OpenAI Responses, Anthropic Messages, and compatible model services
 - Capture provider reasoning fields or configurable reasoning tags such as `reasoning_content`, `think`, and `sink`
+- Configure per-workspace model selection so each project keeps its own model preference
+- Tune reasoning depth with configurable thinking strength (reasoningEffort) per model
+- Configure multiple API keys with automatic priority failover and cooldown recovery for high availability
 - Render sandboxed interactive HTML results in chat for small tools, previews, and widgets
 - Delegate substantial work to parallel sub-agents with live steps, tool activity, token usage, and inline final summaries
 - Connect MCP servers through stdio, SSE, or Streamable HTTP using either a form editor or raw JSON
-- Extend workflows with discoverable Skills and durable cross-project memory
+- Extend workflows with discoverable Skills and durable cross-project memory; built-in skills include `review`, `codegraph`, and `playwright-cli`
 - Manage multiple workspaces, chat sessions, todos, goal mode, and process-local scheduled tasks
 - Switch between execution, planning, and interview/grill modes
 - Run short shell commands and tracked background processes with a task-center log viewer; Windows automatically discovers Git Bash and falls back to PowerShell when necessary
+- Visualize token usage trends with an asynchronous token statistics dashboard
+- Personalize the chat with a custom background image and adjustable opacity
+- Auto-update on Windows and macOS (DMG replace flow), with staged directory rollback on failure
 - Optionally follow the Windows system proxy or use a manual HTTP/HTTPS/SOCKS5 proxy consistently across models, HTTP tools, MCP, commands, and background services
 - Use localized Chinese or English UI, startup warnings, settings, and tool status messages
 - Search code with bundled ripgrep—no separate installation required in release packages

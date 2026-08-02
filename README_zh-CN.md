@@ -21,13 +21,19 @@
 - 在聊天中直接查看可视化 Diff、多文件修改、命令输出和完整的工具失败原因
 - 支持 OpenAI Chat Completions、OpenAI Responses、Anthropic Messages 及兼容模型服务
 - 支持读取服务商推理字段，也可配置 `reasoning_content`、`think`、`sink` 等推理标签
+- 工作区级模型选择，每个项目可独立配置使用的模型
+- 可配置思考强度（reasoningEffort），按模型精细控制推理开销
+- 支持配置多个 API Key，自动优先级故障转移与冷却恢复，保障可用性
 - 支持在聊天中安全渲染沙箱 HTML，用于小工具、交互预览和组件展示
 - 可将复杂任务委派给并行子代理，实时查看步骤、工具活动、Token 用量和最终摘要
 - MCP 支持 stdio、SSE 和 Streamable HTTP，可使用表单或原始 JSON 配置
-- 使用可发现的 Skills 扩展工作流程，并通过全局记忆保存跨项目知识
+- 使用可发现的 Skills 扩展工作流程，并通过全局记忆保存跨项目知识；内置技能含 `review`、`codegraph`、`playwright-cli`
 - 管理多个工作区、聊天会话、Todo、目标模式和仅当前进程有效的定时任务
 - 支持执行、计划和访谈/Grill 模式
 - 支持短时命令和带任务中心日志查看的后台进程；Windows 会自动发现 Git Bash，必要时回退到 PowerShell
+- 异步 Token 统计仪表盘，可视化用量趋势
+- 自定义聊天背景图，可调节透明度
+- Windows 与 macOS 自动升级（macOS 走 DMG 替换流程），失败时暂存目录自动回滚
 - 可跟随 Windows 系统代理，或手动配置 HTTP/HTTPS/SOCKS5 代理，并统一应用到模型、HTTP 工具、MCP、命令和后台服务
 - 提供中文和英文界面，包括启动警告、设置与工具状态信息
 - 发行包已内置 ripgrep，无需单独安装即可搜索代码
