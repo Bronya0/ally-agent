@@ -1113,6 +1113,16 @@ func TestModelUsageFromResponsesCountsUncachedInputAsMiss(t *testing.T) {
 	}
 }
 
+func TestModelUsageFromResponsesEventReadsCachedInput(t *testing.T) {
+	usage := modelUsageFromResponsesEvent([]byte(`{"type":"response.completed","response":{"usage":{"input_tokens":1000,"input_tokens_details":{"cached_tokens":800},"output_tokens":8}}}`))
+	if usage == nil {
+		t.Fatal("modelUsageFromResponsesEvent() returned nil")
+	}
+	if usage.CacheHitTokens != 800 || usage.CacheMissTokens != 200 {
+		t.Fatalf("cache usage = hit %d miss %d, want hit 800 miss 200", usage.CacheHitTokens, usage.CacheMissTokens)
+	}
+}
+
 func TestCleanAppliedUpdateDirsKeepsOnlyCurrentTag(t *testing.T) {
 	root := t.TempDir()
 

@@ -662,7 +662,7 @@ func (a *App) streamOpenAIResponses(ctx context.Context, cfg ConfigState, model 
 	}
 
 	for stream.Next() {
-		event, err := stream.Event()
+		event, rawEvent, err := stream.Event()
 		if err != nil {
 			if isIncompleteStreamJSON(err) && len(toolCalls) == 0 && (assistant.Len() > 0 || reasoning.Len() > 0) {
 				break
@@ -715,6 +715,12 @@ func (a *App) streamOpenAIResponses(ctx context.Context, cfg ConfigState, model 
 		case "response.completed":
 			ev := event.AsResponseCompleted()
 			usage = modelUsageFromResponses(ev.Response.Usage)
+			// The openai-go Responses union decoder currently drops the nested
+			// response object when decoding a stream event. Read usage from the
+			// original event JSON so cached input tokens are not lost.
+			if rawUsage := modelUsageFromResponsesEvent(rawEvent); rawUsage != nil {
+				usage = rawUsage
+			}
 			finalOutputText = ev.Response.OutputText()
 			for _, item := range ev.Response.Output {
 				if item.Type == "image_generation_call" {
@@ -828,19 +834,19 @@ func (s *openAIResponsesSSEStream) Next() bool {
 	return s.decoder.Next()
 }
 
-func (s *openAIResponsesSSEStream) Event() (oaresp.ResponseStreamEventUnion, error) {
+func (s *openAIResponsesSSEStream) Event() (oaresp.ResponseStreamEventUnion, []byte, error) {
 	var event oaresp.ResponseStreamEventUnion
 	if s == nil || s.decoder == nil {
-		return event, io.EOF
+		return event, nil, io.EOF
 	}
 	raw := bytes.TrimSpace(s.decoder.Event().Data)
 	if len(raw) == 0 || bytes.Equal(raw, []byte("[DONE]")) {
-		return event, nil
+		return event, raw, nil
 	}
 	if err := json.Unmarshal(raw, &event); err != nil {
-		return event, err
+		return event, raw, err
 	}
-	return event, nil
+	return event, raw, nil
 }
 
 func (s *openAIResponsesSSEStream) Err() error {
@@ -1455,6 +1461,46 @@ func modelUsageFromResponses(usage oaresp.ResponseUsage) *modelUsage {
 	}
 	input := int(usage.InputTokens)
 	hit := int(usage.InputTokensDetails.CachedTokens)
+	miss := input - hit
+	if miss < 0 {
+		miss = 0
+	}
+	return &modelUsage{
+		PromptTokens:     input,
+		CompletionTokens: int(usage.OutputTokens),
+		CacheHitTokens:   hit,
+		CacheMissTokens:  miss,
+	}
+}
+
+// modelUsageFromResponsesEvent parses usage from the raw response.completed
+// event. This intentionally uses small local structs instead of the SDK's
+// response union because that union currently loses the nested response object
+// during stream-event decoding.
+func modelUsageFromResponsesEvent(raw []byte) *modelUsage {
+	var payload struct {
+		Response *struct {
+			Usage *struct {
+				InputTokens        int64 `json:"input_tokens"`
+				InputTokensDetails *struct {
+					CachedTokens int64 `json:"cached_tokens"`
+				} `json:"input_tokens_details"`
+				OutputTokens int64 `json:"output_tokens"`
+			} `json:"usage"`
+		} `json:"response"`
+	}
+	if len(raw) == 0 || json.Unmarshal(raw, &payload) != nil || payload.Response == nil || payload.Response.Usage == nil {
+		return nil
+	}
+	usage := payload.Response.Usage
+	input := int(usage.InputTokens)
+	hit := 0
+	if usage.InputTokensDetails != nil {
+		hit = int(usage.InputTokensDetails.CachedTokens)
+	}
+	if input <= 0 && usage.OutputTokens <= 0 {
+		return nil
+	}
 	miss := input - hit
 	if miss < 0 {
 		miss = 0
