@@ -28,7 +28,7 @@
 
             <!-- Main chat area -->
             <div class="main-area">
-              <n-layout class="chat-layout" :style="chatLayoutStyle" content-style="display: flex; flex-direction: column;">
+              <n-layout class="chat-layout" :content-style="chatLayoutContentStyle">
                 <ChatMessages
                   ref="conversationMessagesRef"
                   :messages="displayMessages"
@@ -3934,17 +3934,21 @@ function onMcpSaved() {
   loadMcpConfig();
 }
 
-// Inline style for .chat-layout when a custom background image is configured.
+// Inline style for .chat-layout's scroll container (n-layout content-style).
+// The background must be applied to the scroll container, not the n-layout
+// root, because naive-ui's n-layout gives its scroll container an opaque
+// --n-color that would otherwise cover any background-image set on the root.
 // Layered as: a flat dark overlay (rgba(26,26,26, 1-opacity)) on top of the
 // user image, both with background-attachment:fixed so the browser paints the
-// background once to the viewport instead of per-scroll-frame. background-color
-// (#1a1a1a, set in style.css) remains as the bottom fallback layer. When no
-// image is set, returns an empty object so the base dark color shows alone.
-const chatLayoutStyle = computed(() => {
+// background once to the viewport instead of per-scroll-frame. When no image
+// is set, only the flex layout is returned; the base dark --n-color shows.
+const chatLayoutContentStyle = computed(() => {
+  const base = { display: 'flex', flexDirection: 'column' };
   const url = backgroundImageUrl.value;
-  if (!url) return {};
+  if (!url) return base;
   const overlay = Math.max(0, Math.min(1, 1 - Number(config.backgroundOpacity) || 0));
   return {
+    ...base,
     backgroundImage: `linear-gradient(rgba(26,26,26,${overlay}), rgba(26,26,26,${overlay})), url("${url}")`,
     backgroundSize: 'cover, cover',
     backgroundPosition: 'center, center',

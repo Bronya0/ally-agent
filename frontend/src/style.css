@@ -412,7 +412,10 @@ code, pre {
 .composer {
   position: relative;
   padding: 10px 20px 8px;
-  background: #1a1a1a;
+  /* Transparent so the chat-layout background image shows through. The dark
+     overlay layer on top of the background image already keeps contrast for
+     readable text; a solid color here would mask the background again. */
+  background: transparent;
 }
 
 .composer .prompt-input {
