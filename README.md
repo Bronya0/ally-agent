@@ -4,6 +4,8 @@
 
 A desktop AI coding assistant that works with your local projects. Ally helps you understand code, edit files, search a workspace, manage tasks, and complete development work through conversation.
 
+⭐ If Ally helps you, please give it a Star on GitHub — it keeps the project going. Thanks!
+
 <p>
   <a href="https://github.com/Bronya0/ally-agent/releases">
     <img alt="Download Ally" src="https://img.shields.io/badge/Download-GitHub_Releases-2ea44f?style=for-the-badge&logo=github">

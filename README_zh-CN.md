@@ -4,6 +4,8 @@
 
 一个面向本地项目的桌面 AI 编程助手。Ally 可以通过对话帮助你理解代码、编辑文件、搜索项目、管理任务并完成开发工作。
 
+⭐ 如果 Ally 帮到了你，欢迎在 GitHub 点个 Star，这是对项目最大的支持，谢谢！
+
 <p>
   <a href="https://github.com/Bronya0/ally-agent/releases">
     <img alt="下载 Ally" src="https://img.shields.io/badge/下载_Ally-GitHub_Releases-2ea44f?style=for-the-badge&logo=github">
