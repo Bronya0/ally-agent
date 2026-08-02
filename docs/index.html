@@ -367,6 +367,7 @@
       <span class="badge">Windows · macOS · Linux</span>
       <span class="badge" data-i18n="badge.model">多模型服务商</span>
       <span class="badge">MCP</span>
+      <span class="badge" data-i18n="badge.auto">自动升级</span>
       <span class="badge" data-i18n="badge.cn">中英双语界面</span>
     </div>
   </header>
@@ -412,7 +413,7 @@
       <div class="card">
         <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg></div>
         <h3 data-i18n="f5.t">Skills 与记忆</h3>
-        <p data-i18n="f5.d">用可发现的 Skills 扩展工作流，通过全局记忆把跨项目的知识沉淀下来，下次自动可用。</p>
+        <p data-i18n="f5.d">用可发现的 Skills 扩展工作流，内置 review / codegraph / playwright-cli 技能，通过全局记忆沉淀跨项目知识。</p>
       </div>
       <div class="card">
         <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></div>
@@ -433,6 +434,21 @@
         <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></div>
         <h3 data-i18n="f9.t">统一代理支持</h3>
         <p data-i18n="f9.d">跟随系统代理或手动配置 HTTP/HTTPS/SOCKS5，一致应用到模型、MCP、命令和后台服务。</p>
+      </div>
+      <div class="card">
+        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="14" rx="2"/><circle cx="8" cy="13" r="1.5"/><circle cx="16" cy="13" r="1.5"/><path d="M10 13h4M6 18h12"/></svg></div>
+        <h3 data-i18n="f10.t">多 API Key 优先级队列</h3>
+        <p data-i18n="f10.d">配置多个 API Key，自动故障转移与冷却恢复，保障模型服务持续可用。</p>
+      </div>
+      <div class="card">
+        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 14l4-4 3 3 5-6"/></svg></div>
+        <h3 data-i18n="f11.t">Token 统计仪表盘</h3>
+        <p data-i18n="f11.d">异步采集每次对话的 Token 用量，仪表盘可视化趋势，用量开销一目了然。</p>
+      </div>
+      <div class="card">
+        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg></div>
+        <h3 data-i18n="f12.t">工作区级模型选择</h3>
+        <p data-i18n="f12.d">每个工作区可独立配置使用的模型与思考强度，不同项目互不干扰。</p>
       </div>
     </div>
   </section>
@@ -537,7 +553,7 @@
       "hero.title.a": "你的本地项目，", "hero.title.b": "交给 Ally 来对话",
       "hero.sub": "面向本地项目的桌面 AI 编程助手——理解代码、编辑文件、搜索工作区、管理任务，一场对话完成整个开发流程。",
       "hero.download": "下载 Ally",
-      "badge.os": "开源", "badge.model": "多模型服务商", "badge.cn": "中英双语界面",
+      "badge.os": "开源", "badge.model": "多模型服务商", "badge.cn": "中英双语界面", "badge.auto": "自动升级",
       "shot.main": "主界面", "shot.welcome": "欢迎页",
       "feat.kicker": "功能", "feat.title": "不只是聊天，是直接干活",
       "feat.lead": "Ally 在严格的工作区安全边界内读写你的项目，每一步操作都有可视化反馈。",
@@ -545,11 +561,14 @@
       "f2.t": "可视化 Diff", "f2.d": "每次修改都在聊天里直接呈现对比视图、命令输出和完整的失败原因，改动一目了然。",
       "f3.t": "内置 ripgrep 搜索", "f3.d": "发行包自带 ripgrep，无需安装任何东西，开箱即用地在整个工作区里极速搜索代码。",
       "f4.t": "并行子代理", "f4.d": "把繁重任务委派给并行子代理，实时查看步骤、工具活动和 Token 用量，收回内联的最终摘要。",
-      "f5.t": "Skills 与记忆", "f5.d": "用可发现的 Skills 扩展工作流，通过全局记忆把跨项目的知识沉淀下来，下次自动可用。",
+      "f5.t": "Skills 与记忆", "f5.d": "用可发现的 Skills 扩展工作流，内置 review / codegraph / playwright-cli 技能，通过全局记忆沉淀跨项目知识。",
       "f6.t": "后台进程与定时任务", "f6.d": "运行开发服务器等后台进程并在任务中心查看日志，还能创建进程级的定时任务自动执行工作。",
       "f7.t": "沙箱 HTML 渲染", "f7.d": "在聊天中安全渲染交互式 HTML 结果——小工具、数据预览、组件原型，即写即看。",
       "f8.t": "三种运行模式", "f8.d": "执行模式直接干活、计划模式只读规划、访谈模式先问清楚再动手——按任务自由选择。",
       "f9.t": "统一代理支持", "f9.d": "跟随系统代理或手动配置 HTTP/HTTPS/SOCKS5，一致应用到模型、MCP、命令和后台服务。",
+      "f10.t": "多 API Key 优先级队列", "f10.d": "配置多个 API Key，自动故障转移与冷却恢复，保障模型服务持续可用。",
+      "f11.t": "Token 统计仪表盘", "f11.d": "异步采集每次对话的 Token 用量，仪表盘可视化趋势，用量开销一目了然。",
+      "f12.t": "工作区级模型选择", "f12.d": "每个工作区可独立配置使用的模型与思考强度，不同项目互不干扰。",
       "models.kicker": "开放生态", "models.title": "接入你已有的模型与工具",
       "models.lead": "不被单一服务商绑定。三大 API 格式 + 兼容服务 + MCP 协议，模型和工具随你组合。",
       "models.compat": "兼容模型服务",
@@ -570,7 +589,7 @@
       "hero.title.a": "Your local projects,", "hero.title.b": "in conversation with Ally",
       "hero.sub": "A desktop AI coding assistant for local projects — understand code, edit files, search the workspace, and manage tasks through conversation.",
       "hero.download": "Download Ally",
-      "badge.os": "Open Source", "badge.model": "Multi-provider", "badge.cn": "CN & EN UI",
+      "badge.os": "Open Source", "badge.model": "Multi-provider", "badge.cn": "CN & EN UI", "badge.auto": "Auto-update",
       "shot.main": "Main UI", "shot.welcome": "Welcome",
       "feat.kicker": "Features", "feat.title": "Not just chat — real work",
       "feat.lead": "Ally reads and writes your project inside strict workspace boundaries, with visual feedback for every action.",
@@ -578,11 +597,14 @@
       "f2.t": "Visual diffs", "f2.d": "Every change shows up in chat as a diff view with command output and full failure reasons — nothing hidden.",
       "f3.t": "Bundled ripgrep", "f3.d": "Release packages ship ripgrep built in. Blazing-fast code search across the workspace, zero setup.",
       "f4.t": "Parallel sub-agents", "f4.d": "Delegate heavy work to parallel sub-agents with live steps, tool activity, token usage, and inline final summaries.",
-      "f5.t": "Skills & memory", "f5.d": "Extend workflows with discoverable Skills, and keep durable cross-project knowledge in global memory.",
+      "f5.t": "Skills & memory", "f5.d": "Extend workflows with discoverable Skills, with built-in review / codegraph / playwright-cli skills, and keep durable cross-project knowledge in global memory.",
       "f6.t": "Background processes & schedules", "f6.d": "Run dev servers as tracked background processes with a task-center log viewer, plus process-local scheduled tasks.",
       "f7.t": "Sandboxed HTML rendering", "f7.d": "Safely render interactive HTML results in chat — small tools, data previews, and component prototypes.",
       "f8.t": "Three run modes", "f8.d": "Execute mode gets things done, plan mode stays read-only, and interview mode asks before acting.",
       "f9.t": "Unified proxy support", "f9.d": "Follow the system proxy or set a manual HTTP/HTTPS/SOCKS5 proxy, applied consistently to models, MCP, commands, and services.",
+      "f10.t": "Multi-API-key failover", "f10.d": "Configure multiple API keys with automatic priority failover and cooldown recovery for high availability.",
+      "f11.t": "Token statistics dashboard", "f11.d": "Async token usage analytics with a trend visualization dashboard — costs and consumption at a glance.",
+      "f12.t": "Per-workspace model selection", "f12.d": "Each workspace keeps its own model and thinking-strength preference, so projects stay independent.",
       "models.kicker": "Open ecosystem", "models.title": "Bring your own models and tools",
       "models.lead": "No vendor lock-in. Three API formats, compatible services, and the MCP protocol — mix and match freely.",
       "models.compat": "Compatible services",
