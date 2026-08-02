@@ -113,7 +113,7 @@ ConfigState (~/.ally_agent/config.json)
 - 多 key 请求采用严格优先级故障转移：始终优先第一个可用（不在冷却）key；认证/配额错误后该 key 进入 60s 进程内冷却，瞬时错误 10s，然后顺延到下一个；总尝试次数有上限（`maxMultiKeyAttempts`），多 key 模式下关闭适配器内退避重试避免次数组合爆炸；仅在尚未输出任何流事件时切换；冷却状态不持久化
 - 配置保存到 `~/.ally_agent/config.json`
 - 前端通过 Wails 绑定 `GetConfig()` / `SaveConfig()` 读写
-- `reasoningEffort` 默认 `auto`（不发送思考强度参数）；OpenAI 系适配器仅接受 low/medium/high（xhigh/max 钳制为 high），Anthropic 发送 `output_config.effort` 且不启用 thinking 块
+- `reasoningEffort` 默认 `auto`（不发送思考强度参数）；用户选择的 low/medium/high/xhigh/max 会由各适配器原样发送到对应的 reasoning 参数，Anthropic 使用 `output_config.effort` 且不启用 thinking 块；不支持的值由 Provider 返回错误，不静默降级
 
 ### 2. 模型提供者层 (`prov_model.go`)
 

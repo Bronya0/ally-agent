@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -242,5 +243,40 @@ func TestStreamModelResponseSingleKeyNoFailover(t *testing.T) {
 	}
 	if retries != 0 {
 		t.Fatalf("retry events = %d, want 0 for single key", retries)
+	}
+}
+
+// TestStreamOpenAIChatPreservesMaxReasoningEffort verifies that the selected
+// max level reaches the OpenAI-compatible request body unchanged.
+func TestStreamOpenAIChatPreservesMaxReasoningEffort(t *testing.T) {
+	var request map[string]any
+	var decodeErr error
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		decodeErr = json.NewDecoder(r.Body).Decode(&request)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, sseChatChunk("ok"))
+		fmt.Fprint(w, sseDone)
+	}))
+	defer server.Close()
+
+	a := NewApp()
+	cfg := ConfigState{
+		APIFormat:       apiFormatOpenAIChat,
+		BaseURL:         server.URL,
+		APIKeys:         []string{"test-key"},
+		MaxTokens:       32,
+		ReasoningEffort: reasoningEffortMax,
+	}
+	_, err := a.streamModelResponse(context.Background(), cfg, "test-model",
+		[]openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleUser, Content: "hi"}}, nil, nil)
+	if err != nil {
+		t.Fatalf("streamModelResponse() error = %v", err)
+	}
+	if decodeErr != nil {
+		t.Fatalf("decode request body: %v", decodeErr)
+	}
+	if got, _ := request["reasoning_effort"].(string); got != reasoningEffortMax {
+		t.Fatalf("request reasoning_effort = %v, want %q", request["reasoning_effort"], reasoningEffortMax)
 	}
 }

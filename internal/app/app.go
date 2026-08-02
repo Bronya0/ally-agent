@@ -264,9 +264,9 @@ type ModelConfig struct {
 	TokenParam string `json:"tokenParam,omitempty"`
 	// ReasoningEffort selects the thinking-strength level sent to the
 	// provider: "" / "auto" sends nothing and keeps the provider default;
-	// otherwise "low"/"medium"/"high"/"xhigh"/"max" is mapped per adapter
-	// (OpenAI reasoning_effort / reasoning.effort with xhigh+max clamped to
-	// high; Anthropic output_config.effort without enabling thinking blocks).
+	// otherwise "low"/"medium"/"high"/"xhigh"/"max" is sent unchanged
+	// through the adapter (OpenAI reasoning_effort / reasoning.effort or
+	// Anthropic output_config.effort without enabling thinking blocks).
 	// "auto" is the safe default because not every model accepts the
 	// parameter and value sets differ across providers.
 	ReasoningEffort string `json:"reasoningEffort,omitempty"`

@@ -390,9 +390,8 @@ func (a *App) streamOpenAIChat(ctx context.Context, cfg ConfigState, model strin
 		streamReq.MaxTokens = cfg.MaxTokens
 	}
 	// Thinking strength: only send reasoning_effort when the user explicitly
-	// picked a level. OpenAI endpoints accept only low/medium/high; xhigh and
-	// max are clamped to high rather than sent raw (unsupported values error
-	// out). "auto" (the default) sends nothing.
+	// picked a level. The normalized selection is sent unchanged, including
+	// xhigh and max; "auto" (the default) sends nothing.
 	if effort := reasoningEffortForAdapter(apiFormatOpenAIChat, cfg.ReasoningEffort); effort != "" {
 		streamReq.ReasoningEffort = effort
 	}
@@ -593,8 +592,8 @@ func (a *App) streamOpenAIResponses(ctx context.Context, cfg ConfigState, model 
 		Store:             oa.Bool(false),
 	}
 	// Thinking strength for the Responses API (reasoning.effort). The SDK
-	// enum only covers low/medium/high; xhigh/max are clamped to high for
-	// OpenAI-family endpoints.
+	// type is string-backed, so the normalized selection is sent unchanged,
+	// including xhigh and max.
 	if effort := reasoningEffortForAdapter(apiFormatOpenAIResponses, cfg.ReasoningEffort); effort != "" {
 		body.Reasoning = oa.ReasoningParam{Effort: oa.ReasoningEffort(effort)}
 	}

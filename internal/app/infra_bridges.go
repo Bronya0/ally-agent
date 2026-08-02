@@ -58,28 +58,16 @@ func normalizeReasoningEffort(value string) string {
 	}
 }
 
-// reasoningEffortForAdapter returns the effort level to send for a specific
-// API format, or "" when nothing should be sent (auto). OpenAI-family formats
-// only accept low/medium/high on their reasoning_effort / reasoning.effort
-// parameters — xhigh and max are Anthropic output_config.effort values and
-// would be rejected by OpenAI endpoints, so they are clamped to high.
-// Anthropic accepts all five levels.
-func reasoningEffortForAdapter(apiFormat, effort string) string {
+// reasoningEffortForAdapter returns the normalized effort level to send for a
+// provider adapter, or "" when nothing should be sent (auto). The selected
+// supported level is preserved unchanged, including xhigh and max; the
+// provider is responsible for rejecting a level it does not support.
+func reasoningEffortForAdapter(_ string, effort string) string {
 	effort = normalizeReasoningEffort(effort)
 	if effort == reasoningEffortAuto {
 		return ""
 	}
-	switch normalizeAPIFormat(apiFormat) {
-	case apiFormatOpenAIChat, apiFormatOpenAIResponses:
-		switch effort {
-		case reasoningEffortLow, reasoningEffortMedium, reasoningEffortHigh:
-			return effort
-		default:
-			return reasoningEffortHigh
-		}
-	default:
-		return effort
-	}
+	return effort
 }
 
 func normalizeTokenParam(value string) string {
