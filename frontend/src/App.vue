@@ -354,7 +354,7 @@ import ChatMessages from './components/ChatMessages.vue';
 import TaskCenterPanel from './components/TaskCenterPanel.vue';
 import TokenStatsModal from './components/TokenStatsModal.vue';
 import { assignConfig, defaultConfig } from './utils/config.mjs';
-import { modelConfigIdentity } from './utils/modelConfigIO.mjs';
+import { modelConfigIdentity, normalizeApiKeysArray, normalizeReasoningEffort } from './utils/modelConfigIO.mjs';
 import { buildVersion } from './utils/buildVersion.js';
 import { computeEditStats, formatEditStats } from './utils/diff.js';
 import { isNewerReleaseVersion } from './utils/versionCheck.mjs';
@@ -1162,6 +1162,66 @@ const configDraft = reactive(defaultConfig());
 // rather than in config so the multi-MB data URL never round-trips through
 // SaveConfig — only the filename and opacity are persisted.
 const backgroundImageUrl = ref('');
+
+// Per-workspace model selection. Maps workspace path → model index in
+// config.models. Stored in localStorage (not backend config.json) so the
+// backend stays workspace-agnostic; StartChat's overlay already carries the
+// active model fields from the frontend config. A missing entry means
+// "use whatever the global config currently has".
+const modelByWorkspace = reactive({});
+const MODEL_BY_WS_KEY = 'ally_model_by_workspace';
+
+function loadModelByWorkspace() {
+  try {
+    const raw = localStorage.getItem(MODEL_BY_WS_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    for (const [k, v] of Object.entries(parsed)) {
+      modelByWorkspace[k] = v;
+    }
+  } catch (_) { /* ignore corrupt entries */ }
+}
+
+function saveModelByWorkspace() {
+  try {
+    localStorage.setItem(MODEL_BY_WS_KEY, JSON.stringify(modelByWorkspace));
+  } catch (_) { /* ignore quota errors */ }
+}
+
+// Apply a model preset (by index in config.models) to the local config /
+// configDraft without calling the backend SwitchModel. Used on workspace tab
+// switch so each tab restores its remembered model. Mirrors the field set
+// that backend SwitchModel copies from ModelConfig to the top-level config.
+function applyModelToConfig(index) {
+  const model = (config.models || [])[index];
+  if (!model) return;
+  for (const target of [config, configDraft]) {
+    target.providerName = model.providerName || target.providerName;
+    target.apiFormat = model.apiFormat || target.apiFormat;
+    target.baseUrl = model.baseUrl || target.baseUrl;
+    target.model = model.model || target.model;
+    target.temperature = model.temperature ?? target.temperature;
+    target.maxTokens = model.maxTokens ?? target.maxTokens;
+    if (model.contextWindow > 0) target.contextWindow = model.contextWindow;
+    target.tokenParam = model.tokenParam || target.tokenParam;
+    target.reasoningTag = String(model.reasoningTag || '').trim() || 'reasoning_content';
+    target.reasoningEffort = normalizeReasoningEffort(model.reasoningEffort);
+    const keys = normalizeApiKeysArray(
+      Array.isArray(model.apiKeys) && model.apiKeys.length
+        ? model.apiKeys
+        : (model.apiKey ? [model.apiKey] : [])
+    );
+    target.apiKeys = keys;
+    target.apiKey = keys[0] || '';
+  }
+}
+
+// Find the index in config.models matching the current top-level config.
+// Returns -1 when no match is found (e.g. model not in the saved list).
+function findCurrentModelIndex() {
+  const identity = modelConfigIdentity(config);
+  if (!identity) return -1;
+  return (config.models || []).findIndex((m) => modelConfigIdentity(m) === identity);
+}
 const sessions = ref([]);
 const activeSessionId = ref('');
 // 当前会话的 LLM 请求重试状态(null 表示无重试)。非持久化,切换会话或新一轮 delta 时清除。
@@ -2056,6 +2116,25 @@ function switchWorkspaceTab(id) {
   }
   loadPromptHistory(tab.path);
   refreshWorkspaceTokenUsage(tab.path);
+  // Restore the model remembered for this workspace (if any) before
+  // SaveConfig so the backend sync matches the tab's model. This is a
+  // local-only switch — SwitchModel is not called to avoid touching the
+  // global default for other tabs. The SaveConfig below persists it.
+  const rememberedIndex = tab.path ? modelByWorkspace[tab.path] : undefined;
+  if (typeof rememberedIndex === 'number' && rememberedIndex >= 0) {
+    const currentIndex = findCurrentModelIndex();
+    if (currentIndex !== rememberedIndex) {
+      applyModelToConfig(rememberedIndex);
+    }
+  } else if (tab.path) {
+    // First visit to this workspace: seed the map with the current model so
+    // future tab switches can restore it.
+    const idx = findCurrentModelIndex();
+    if (idx >= 0) {
+      modelByWorkspace[tab.path] = idx;
+      saveModelByWorkspace();
+    }
+  }
   SaveConfig({ ...config })
     .then(() => refreshGitStatus())
     .catch(() => { gitStatus.value = { isRepo: false }; });
@@ -2200,6 +2279,7 @@ async function init() {
   } catch (err) {
     message.error(t('app.config.readFailed', { error: err }));
   }
+  loadModelByWorkspace();
 
   // Init workspace tabs from config
   const ws = config.workspace || '';
@@ -2209,6 +2289,18 @@ async function init() {
   if (tab.sessionId) activeSessionId.value = tab.sessionId;
   if (ws) addToHistory(ws);
   loadPromptHistory(ws);
+  // Seed the initial workspace's model index if not yet remembered so that
+  // findCurrentModelIndex is the baseline and later switches are tracked.
+  if (ws && modelByWorkspace[ws] === undefined) {
+    const idx = findCurrentModelIndex();
+    if (idx >= 0) {
+      modelByWorkspace[ws] = idx;
+      saveModelByWorkspace();
+    }
+  } else if (ws && typeof modelByWorkspace[ws] === 'number') {
+    // Restore remembered model for this workspace on startup.
+    applyModelToConfig(modelByWorkspace[ws]);
+  }
   refreshGitStatus();
 
   await loadSavedSessions();
@@ -3643,6 +3735,12 @@ async function switchToModel(index) {
     // switch the backend back before the next message is sent.
     assignConfig(config, loaded);
     assignConfig(configDraft, loaded);
+    // Remember this model for the active workspace so switching tabs restores it.
+    const tab = workspaceTabs.value.find((t) => t.id === activeWorkspaceId.value);
+    if (tab?.path) {
+      modelByWorkspace[tab.path] = index;
+      saveModelByWorkspace();
+    }
     message.success(t('app.model.switched', { model: loaded.model }));
   } catch (err) {
     message.error(t('app.model.switchFailed', { error: err }));
