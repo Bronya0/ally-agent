@@ -168,6 +168,29 @@ func (a *App) SelectWorkspace() (string, error) {
 	return selected, nil
 }
 
+// SelectBackgroundImage opens a native file picker for image files, writes
+// the chosen bytes to ~/.ally_agent/background.<ext> via SaveBackgroundImage,
+// and returns the stored filename. Rejects oversized or non-image files at
+// the dialog boundary so the heavy save path never runs for invalid input.
+func (a *App) SelectBackgroundImage() (string, error) {
+	if err := a.ensureInitialized(); err != nil {
+		return "", err
+	}
+	selected, err := wruntime.OpenFileDialog(a.ctx, wruntime.OpenDialogOptions{
+		Title: "选择对话背景图",
+		Filters: []wruntime.FileFilter{
+			{DisplayName: "图片 (*.png *.jpg *.jpeg *.webp *.gif *.bmp)", Pattern: "*.png;*.jpg;*.jpeg;*.webp;*.gif;*.bmp"},
+		},
+	})
+	if err != nil {
+		return "", err
+	}
+	if selected == "" {
+		return "", nil // user cancelled
+	}
+	return a.saveBackgroundImageFromFile(selected)
+}
+
 func (a *App) OpenWorkspaceInFileManager() error {
 	if err := a.ensureInitialized(); err != nil {
 		return err

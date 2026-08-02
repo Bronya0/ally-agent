@@ -28,7 +28,7 @@
 
             <!-- Main chat area -->
             <div class="main-area">
-              <n-layout class="chat-layout" content-style="display: flex; flex-direction: column;">
+              <n-layout class="chat-layout" :style="chatLayoutStyle" content-style="display: flex; flex-direction: column;">
                 <ChatMessages
                   ref="conversationMessagesRef"
                   :messages="displayMessages"
@@ -203,6 +203,7 @@
             @skills-changed="onSkillsChanged"
             @mcp-saved="onMcpSaved"
             @open-token-stats="openTokenStatsFromSettings"
+            @background-changed="onBackgroundChanged"
           />
           <TaskCenterPanel
             :show="taskCenterVisible"
@@ -333,6 +334,7 @@ import {
   ApplyUpdate,
   QuitForUpdate,
   SkipUpdate,
+  GetBackgroundImageURL,
 } from '../wailsjs/go/app/App';
 import { BrowserOpenURL, Environment, EventsOn, WindowMinimise, WindowMaximise, WindowUnmaximise, WindowIsMaximised, Quit } from '../wailsjs/runtime/runtime';
 import AllyWordmark from './components/AllyWordmark.vue';
@@ -1155,6 +1157,11 @@ function mermaidDownloadName(source) {
 
 const config = reactive(defaultConfig());
 const configDraft = reactive(defaultConfig());
+// Custom chat background data URL (base64). Loaded once after config init and
+// refreshed whenever the user picks or clears an image in Settings. Kept here
+// rather than in config so the multi-MB data URL never round-trips through
+// SaveConfig — only the filename and opacity are persisted.
+const backgroundImageUrl = ref('');
 const sessions = ref([]);
 const activeSessionId = ref('');
 // 当前会话的 LLM 请求重试状态(null 表示无重试)。非持久化,切换会话或新一轮 delta 时清除。
@@ -2206,6 +2213,7 @@ async function init() {
 
   await loadSavedSessions();
   loadMcpConfig();
+  loadBackgroundImage();
 }
 
 function sessionByRunId(runId) {
@@ -3901,6 +3909,23 @@ async function onSettingsSave(draftData, silent = false) {
   }
 }
 
+// Fetch the stored background image as a data URL. Called once after config
+// init and again whenever the user picks or clears an image in Settings
+// (select/clear persist immediately on the backend, independent of Save).
+async function loadBackgroundImage() {
+  try {
+    const url = await GetBackgroundImageURL();
+    backgroundImageUrl.value = url || '';
+  } catch (_) {
+    // A failed read should not block startup; fall back to no background.
+    backgroundImageUrl.value = '';
+  }
+}
+
+function onBackgroundChanged() {
+  loadBackgroundImage();
+}
+
 function onSkillsChanged() {
   refreshSkillState();
 }
@@ -3908,6 +3933,25 @@ function onSkillsChanged() {
 function onMcpSaved() {
   loadMcpConfig();
 }
+
+// Inline style for .chat-layout when a custom background image is configured.
+// Layered as: a flat dark overlay (rgba(26,26,26, 1-opacity)) on top of the
+// user image, both with background-attachment:fixed so the browser paints the
+// background once to the viewport instead of per-scroll-frame. background-color
+// (#1a1a1a, set in style.css) remains as the bottom fallback layer. When no
+// image is set, returns an empty object so the base dark color shows alone.
+const chatLayoutStyle = computed(() => {
+  const url = backgroundImageUrl.value;
+  if (!url) return {};
+  const overlay = Math.max(0, Math.min(1, 1 - Number(config.backgroundOpacity) || 0));
+  return {
+    backgroundImage: `linear-gradient(rgba(26,26,26,${overlay}), rgba(26,26,26,${overlay})), url("${url}")`,
+    backgroundSize: 'cover, cover',
+    backgroundPosition: 'center, center',
+    backgroundAttachment: 'fixed, fixed',
+    backgroundRepeat: 'no-repeat, no-repeat',
+  };
+});
 
 
 const filteredCommands = computed(() => {

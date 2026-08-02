@@ -100,6 +100,45 @@
               <span class="settings-toggle-hint">{{ $t('settings.autoUpdateHint') }}</span>
             </div>
           </n-form-item>
+          <n-form-item :label="$t('settings.backgroundImage')">
+            <div class="settings-field-stack">
+              <div class="background-image-row">
+                <n-button
+                  size="small"
+                  :loading="backgroundSelecting"
+                  @click="selectBackground"
+                >{{ draft.backgroundImage ? $t('settings.backgroundImageReplace') : $t('settings.backgroundImageSelect') }}</n-button>
+                <n-button
+                  v-if="draft.backgroundImage"
+                  size="small"
+                  secondary
+                  :loading="backgroundClearing"
+                  @click="clearBackground"
+                >{{ $t('settings.backgroundImageClear') }}</n-button>
+                <span class="background-image-status">
+                  {{ draft.backgroundImage
+                      ? $t('settings.backgroundImageSet', { name: draft.backgroundImage })
+                      : $t('settings.backgroundImageNone') }}
+                </span>
+              </div>
+              <span class="settings-field-hint">{{ $t('settings.backgroundImageHint') }}</span>
+            </div>
+          </n-form-item>
+          <n-form-item :label="$t('settings.backgroundOpacity')">
+            <div class="settings-field-stack">
+              <div class="background-opacity-row">
+                <n-slider
+                  v-model:value="draft.backgroundOpacity"
+                  :min="0"
+                  :max="1"
+                  :step="0.05"
+                  :marks="backgroundOpacityMarks"
+                />
+                <span class="background-opacity-value">{{ Math.round((draft.backgroundOpacity || 0) * 100) }}%</span>
+              </div>
+              <span class="settings-field-hint">{{ $t('settings.backgroundOpacityHint') }}</span>
+            </div>
+          </n-form-item>
           <div class="settings-page-actions">
             <n-button type="primary" @click="onSave">{{ $t('common.save') }}</n-button>
           </div>
@@ -475,6 +514,7 @@ import {
   ListTools, OpenPathInFileManager,
   TestModelConnection,
   DetectSystemProxy, TestProxy,
+  SelectBackgroundImage, ClearBackgroundImage,
 } from '../../wailsjs/go/app/App';
 
 const { message } = createDiscreteApi(['message'], {
@@ -489,7 +529,7 @@ const props = defineProps({
   visible: Boolean,
   configDraft: { type: Object, required: true },
 });
-const emit = defineEmits(['close', 'closed', 'save', 'skills-changed', 'mcp-saved', 'open-token-stats']);
+const emit = defineEmits(['close', 'closed', 'save', 'skills-changed', 'mcp-saved', 'open-token-stats', 'background-changed']);
 
 // Deep-clone the config draft so changes don't mutate parent reactively until save
 const draft = reactive(cloneConfigDraft(props.configDraft));
@@ -524,6 +564,48 @@ const proxyModeOptions = computed(() => [
   { label: t('settings.proxySystem'), value: 'system' },
   { label: t('settings.proxyManual'), value: 'manual' },
 ]);
+
+// Background image picker state. Selecting/clearing persists immediately on
+// the backend (the file write cannot be deferred to Save), so these actions
+// also emit background-changed to let App.vue refresh the data URL live.
+const backgroundSelecting = ref(false);
+const backgroundClearing = ref(false);
+const backgroundOpacityMarks = {
+  0: '0%',
+  0.15: '15%',
+  0.5: '50%',
+  1: '100%',
+};
+
+async function selectBackground() {
+  backgroundSelecting.value = true;
+  try {
+    const filename = await SelectBackgroundImage();
+    if (filename) {
+      draft.backgroundImage = filename;
+      emit('background-changed');
+    }
+  } catch (err) {
+    message.error(t('settings.backgroundSelectFailed', { error: err }));
+  } finally {
+    backgroundSelecting.value = false;
+  }
+}
+
+async function clearBackground() {
+  backgroundClearing.value = true;
+  try {
+    await ClearBackgroundImage();
+    draft.backgroundImage = '';
+    draft.backgroundOpacity = 0.15;
+    emit('background-changed');
+    message.success(t('settings.backgroundCleared'));
+  } catch (err) {
+    message.error(t('settings.backgroundClearFailed', { error: err }));
+  } finally {
+    backgroundClearing.value = false;
+  }
+}
 
 async function detectProxy() {
   proxyDetecting.value = true;
@@ -1373,6 +1455,37 @@ watch(() => props.visible, (visible) => {
   color: #777;
   font-size: 11px;
   line-height: 1.45;
+}
+
+.background-image-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.background-image-status {
+  font-size: 12px;
+  color: #8a8a8a;
+}
+
+.background-opacity-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+}
+
+.background-opacity-row .n-slider {
+  flex: 1;
+  min-width: 0;
+}
+
+.background-opacity-value {
+  font-size: 12px;
+  color: #8a8a8a;
+  min-width: 36px;
+  text-align: right;
 }
 
 .model-import-input {

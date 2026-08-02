@@ -1,7 +1,11 @@
 package app
 
 import (
+	"encoding/base64"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -117,4 +121,191 @@ func buildCodeGraphPromptPart(workspace string) string {
 	b.WriteString(cg)
 	b.WriteString("\n</project-codegraph>\nEnd code graph.\n")
 	return b.String()
+}
+
+// saveBackgroundImageFromFile reads the user-selected file, validates size
+// and image type, writes it to ~/.ally_agent/background.<ext>, purges stale
+// variants, and persists the filename in ConfigState.BackgroundImage.
+// Returns the stored filename. Called by SelectBackgroundImage after the
+// dialog returns a path; separated so the heavy I/O lives in the
+// project-context module alongside other ~/.ally_agent file handling.
+func (a *App) saveBackgroundImageFromFile(srcPath string) (string, error) {
+	data, err := os.ReadFile(srcPath)
+	if err != nil {
+		return "", fmt.Errorf("read selected image failed: %w", err)
+	}
+	if len(data) == 0 {
+		return "", errors.New("selected image is empty")
+	}
+	if len(data) > backgroundImageMaxBytes {
+		return "", fmt.Errorf("image too large: %d bytes (max %d)", len(data), backgroundImageMaxBytes)
+	}
+	ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(srcPath), "."))
+	mime := imageExtToMIME(ext)
+	if mime == "" {
+		// Unknown extension: sniff from the first 512 bytes.
+		sniff := data
+		if len(sniff) > 512 {
+			sniff = sniff[:512]
+		}
+		mime = http.DetectContentType(sniff)
+		if !strings.HasPrefix(mime, "image/") {
+			return "", fmt.Errorf("selected file is not an image (detected %s)", mime)
+		}
+		ext = mimeToImageExt(mime)
+	}
+	filename := "background." + ext
+	dest := filepath.Join(appDataDir(), filename)
+	if err := os.WriteFile(dest, data, 0o600); err != nil {
+		return "", fmt.Errorf("write background image failed: %w", err)
+	}
+	// Remove any previously stored background with a different extension so
+	// the directory never accumulates stale variants.
+	purgeStaleBackgroundFiles(appDataDir(), filename)
+	a.mu.Lock()
+	a.config.BackgroundImage = filename
+	cfg := a.config
+	path := a.configPath
+	a.mu.Unlock()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return "", err
+	}
+	blob, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(path, blob, 0o600); err != nil {
+		return "", err
+	}
+	return filename, nil
+}
+
+// ClearBackgroundImage removes the stored background image file and clears
+// the ConfigState.BackgroundImage field. Safe to call when no image is set.
+func (a *App) ClearBackgroundImage() error {
+	if err := a.ensureInitialized(); err != nil {
+		return err
+	}
+	a.mu.Lock()
+	current := a.config.BackgroundImage
+	a.config.BackgroundImage = ""
+	cfg := a.config
+	path := a.configPath
+	a.mu.Unlock()
+	if current != "" {
+		_ = os.Remove(filepath.Join(appDataDir(), current))
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	blob, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, blob, 0o600)
+}
+
+// GetBackgroundImageURL returns the stored background image as a data URL
+// (data:image/<ext>;base64,...) suitable for use directly in CSS
+// background-image. Returns an empty string when no image is configured or
+// the file is missing. Bytes are read on demand so memory is only held
+// transiently; for the 12 MB cap this is a one-shot cost at app startup and
+// at settings save, not per-render.
+func (a *App) GetBackgroundImageURL() (string, error) {
+	if err := a.ensureInitialized(); err != nil {
+		return "", err
+	}
+	a.mu.Lock()
+	name := a.config.BackgroundImage
+	a.mu.Unlock()
+	if name == "" {
+		return "", nil
+	}
+	full := filepath.Join(appDataDir(), name)
+	data, err := os.ReadFile(full)
+	if err != nil {
+		// File missing after a manual delete: silently clear so the UI falls
+		// back to no background rather than showing a broken image.
+		if errors.Is(err, os.ErrNotExist) {
+			a.mu.Lock()
+			if a.config.BackgroundImage == name {
+				a.config.BackgroundImage = ""
+			}
+			a.mu.Unlock()
+			return "", nil
+		}
+		return "", err
+	}
+	mime := imageExtToMIME(strings.ToLower(strings.TrimPrefix(filepath.Ext(name), ".")))
+	if mime == "" {
+		sniff := data
+		if len(sniff) > 512 {
+			sniff = sniff[:512]
+		}
+		mime = http.DetectContentType(sniff)
+	}
+	return "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(data), nil
+}
+
+// purgeStaleBackgroundFiles removes any background.<ext> files in dir except
+// the one matching keepName. Called after a new image is written so only the
+// latest variant stays on disk.
+func purgeStaleBackgroundFiles(dir, keepName string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		n := e.Name()
+		if !strings.HasPrefix(n, "background.") {
+			continue
+		}
+		if n == keepName {
+			continue
+		}
+		_ = os.Remove(filepath.Join(dir, n))
+	}
+}
+
+// imageExtToMIME maps common image extensions to their MIME type. Returns
+// an empty string for unknown extensions so the caller can fall back to
+// content sniffing.
+func imageExtToMIME(ext string) string {
+	switch ext {
+	case "png":
+		return "image/png"
+	case "jpg", "jpeg":
+		return "image/jpeg"
+	case "webp":
+		return "image/webp"
+	case "gif":
+		return "image/gif"
+	case "bmp":
+		return "image/bmp"
+	default:
+		return ""
+	}
+}
+
+// mimeToImageExt maps a sniffed image MIME type back to a file extension
+// for storage. Falls back to "png" for unknown image subtypes since the
+// sniff is only used when the user-selected extension was unrecognized.
+func mimeToImageExt(mime string) string {
+	switch mime {
+	case "image/png":
+		return "png"
+	case "image/jpeg":
+		return "jpg"
+	case "image/webp":
+		return "webp"
+	case "image/gif":
+		return "gif"
+	case "image/bmp":
+		return "bmp"
+	default:
+		return "png"
+	}
 }

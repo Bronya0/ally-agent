@@ -290,7 +290,10 @@ code, pre {
   flex: 1;
   min-width: 0;
   height: 100%;
-  background: #1a1a1a !important;
+  /* Use background-color (not the shorthand) so an inline background-image
+     layer for the custom chat background is not reset. The dark base doubles
+     as the fallback when no custom background is configured. */
+  background-color: #1a1a1a !important;
 }
 
 

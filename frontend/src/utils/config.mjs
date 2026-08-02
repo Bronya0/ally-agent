@@ -30,6 +30,11 @@ export function defaultConfig() {
     // backend (*bool pointer).
     autoUpdate: true,
     skippedUpdates: [],
+    // Custom chat background. Backend stores BackgroundImage as a filename
+    // under ~/.ally_agent and BackgroundOpacity in [0, 1]. Frontend keeps a
+    // local data URL cache (not persisted here) plus the opacity slider value.
+    backgroundImage: '',
+    backgroundOpacity: 0.15,
   };
 }
 

@@ -77,6 +77,11 @@ const (
 	maxAttachmentDataURL             = 8 * 1024 * 1024
 	maxSavedHistoryTokens            = 256 * 1024
 	maxSavedHistoryJSONBytes         = 8 * 1024 * 1024
+	// Background image storage. Bytes are written to
+	// ~/.ally_agent/background.<ext> so config.json stays small; the
+	// filename is stored in ConfigState.BackgroundImage.
+	backgroundImageMaxBytes  = 12 * 1024 * 1024
+	defaultBackgroundOpacity = 0.15
 )
 
 // effectiveUserAgent returns the User-Agent string to send on outbound HTTP
@@ -88,6 +93,23 @@ func effectiveUserAgent(cfg ConfigState) string {
 		return ua
 	}
 	return defaultHTTPUA
+}
+
+// clampBackgroundOpacity normalizes the chat background opacity to [0, 1].
+// A zero value (the JSON default when the field is absent) is replaced with
+// the frontend default so legacy config without the field still shows a
+// faint background once an image is uploaded.
+func clampBackgroundOpacity(v float64) float64 {
+	if v <= 0 {
+		// Distinguish "field absent" (use default) from "user dragged to 0"
+		// would require a pointer; the slider's min is 0.05 in the UI, so a
+		// raw 0 here is treated as "not set" → default.
+		return defaultBackgroundOpacity
+	}
+	if v > 1 {
+		return 1
+	}
+	return v
 }
 
 var (
@@ -283,8 +305,17 @@ type ConfigState struct {
 	// SkippedUpdates records release tags the user chose to skip. They are
 	// excluded from automatic download until the user clears them.
 	SkippedUpdates []string `json:"skippedUpdates,omitempty"`
-	grillMode      bool
-	temperatureSet bool
+	// BackgroundImage is the filename of the user-uploaded chat background
+	// image stored under ~/.ally_agent/. Empty means no custom background.
+	// The actual bytes live on disk so config.json stays small; the frontend
+	// resolves it to a file:// URL via GetBackgroundImageURL.
+	BackgroundImage string `json:"backgroundImage,omitempty"`
+	// BackgroundOpacity controls how strongly the custom background image
+	// shows through the chat area. 0 = invisible, 1 = fully opaque. Clamped
+	// to [0, 1] on save; the frontend default is 0.15 (faint silhouette).
+	BackgroundOpacity float64 `json:"backgroundOpacity,omitempty"`
+	grillMode         bool
+	temperatureSet    bool
 	// noAdapterRetry 是进程内非序列化标记:多 key 模式下置 true,让适配器
 	// 内部关闭退避重试,由 streamModelResponse 的外层循环统一承担重试与
 	// 故障切换,避免 N 个 key × 适配器重试组合爆炸。
@@ -1052,6 +1083,7 @@ func defaultConfigState() ConfigState {
 		AllowPrivateNetwork: true,
 		ProxyMode:           proxyModeOff,
 		ReasoningTag:        defaultReasoningTag,
+		BackgroundOpacity:   defaultBackgroundOpacity,
 	}
 	if goruntime.GOOS == "windows" {
 		cfg.GitBashPath, _ = findWindowsBash("")
@@ -1252,6 +1284,20 @@ func mergeConfig(base, overlay ConfigState) ConfigState {
 	if overlay.SkippedUpdates != nil {
 		base.SkippedUpdates = cloneStringSlice(overlay.SkippedUpdates)
 	}
+	// Background image filename is stored verbatim (it is set by
+	// SaveBackgroundImage, not by SaveConfig overlay from the frontend).
+	// Opacity is normalized and clamped to [0, 1].
+	if strings.TrimSpace(overlay.BackgroundImage) != "" {
+		base.BackgroundImage = strings.TrimSpace(overlay.BackgroundImage)
+	}
+	// BackgroundOpacity: overlay wins whenever it is non-zero. A zero overlay
+	// means "frontend didn't include the field" (legacy/older build), so we
+	// keep whatever was already on base (which itself defaulted to 0.15 in
+	// defaultConfigState). This avoids accidentally resetting the user's
+	// chosen opacity when an older frontend round-trips a partial config.
+	if overlay.BackgroundOpacity != 0 {
+		base.BackgroundOpacity = clampBackgroundOpacity(overlay.BackgroundOpacity)
+	}
 	if base.APIFormat == "" {
 		base.APIFormat = apiFormatOpenAIChat
 	}
@@ -1399,6 +1445,14 @@ func (a *App) SaveConfig(req ConfigState) error {
 	}
 	a.config.ReasoningTag = normalizeReasoningTag(req.ReasoningTag)
 	a.config.ReasoningEffort = normalizeReasoningEffort(req.ReasoningEffort)
+	// Background opacity is editable from the frontend slider; persist it
+	// directly. The image filename is managed by SaveBackgroundImage — only
+	// adopt it from the SaveConfig overlay when the frontend echoes the
+	// already-stored value (no path mutation through this code path).
+	if strings.TrimSpace(req.BackgroundImage) != "" {
+		a.config.BackgroundImage = strings.TrimSpace(req.BackgroundImage)
+	}
+	a.config.BackgroundOpacity = clampBackgroundOpacity(req.BackgroundOpacity)
 	a.disabledSkills = normalizeSkillNameList(a.config.DisabledSkills)
 	a.config.DisabledSkills = cloneStringSlice(a.disabledSkills)
 	cfg := a.config
