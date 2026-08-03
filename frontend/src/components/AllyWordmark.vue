@@ -9,12 +9,18 @@ defineProps({
 </script>
 
 <style scoped>
-/* 使用加载动画中 Ally 文字的渐变色: 银白→暖金→浅灰蓝→银白 */
+/* 使用固定的银白→暖金→浅灰蓝→银白渐变，避免不同 WebView 的字体合成造成色带漂移。 */
 .ally-wordmark {
-  background: linear-gradient(120deg, #f8fafc 0%, #e0a458 36%, #d7dde8 68%, #f8fafc 100%);
+  background: var(--ally-wordmark-gradient);
+  background-repeat: no-repeat;
+  background-size: 100% 100%;
   -webkit-background-clip: text;
   background-clip: text;
+  color: transparent;
   -webkit-text-fill-color: transparent;
+  font-family: 'Inter', sans-serif;
+  font-weight: 700;
+  font-synthesis: none;
   letter-spacing: -0.5px;
 }
 </style>

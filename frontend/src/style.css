@@ -49,7 +49,7 @@
   --ally-accent-muted:  color-mix(in srgb, var(--ally-accent) 42%, #9a9a9a);
   --ally-accent-dim:    color-mix(in srgb, var(--ally-accent) 48%, #6f6f6f);
 
-  --ally-wordmark-gradient: linear-gradient(120deg, #f8fafc 0%, var(--ally-accent-bright) 34%, #b8f2d0 58%, #f8fafc 100%);
+  --ally-wordmark-gradient: linear-gradient(120deg, #f8fafc 0%, #e0a458 36%, #d7dde8 68%, #f8fafc 100%);
 
   /* Default (amber/warm) markdown palette. All warm hues — headings, bold,
      inline code differentiate by lightness gradient (gold → amber → brown)
@@ -1911,8 +1911,9 @@ code, pre {
 
 .ally-wordmark {
   display: inline-block;
-  font-family: Inter;
-  font-weight: 800;
+  font-family: 'Inter', sans-serif;
+  font-weight: 700;
+  font-synthesis: none;
   line-height: 1;
   white-space: nowrap;
 }

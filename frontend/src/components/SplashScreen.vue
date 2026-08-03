@@ -23,6 +23,12 @@ let resizeHandler = null;
 let finished = false;
 
 const duration = 2800;
+const WORDMARK_GRADIENT_STOPS = [
+  [0, '#f8fafc'],
+  [0.36, '#e0a458'],
+  [0.68, '#d7dde8'],
+  [1, '#f8fafc'],
+];
 
 function clamp(value, min = 0, max = 1) {
   return Math.min(max, Math.max(min, value));
@@ -226,20 +232,26 @@ function drawWordmark(ctx, width, height, progress, alpha) {
   const fontSize = Math.max(48, Math.min(102, width * 0.085));
   const x = width * 0.5;
   const y = height * 0.78;
+  const text = 'Ally';
   ctx.save();
   ctx.globalAlpha = alpha;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.font = `700 ${fontSize}px Inter, system-ui, sans-serif`;
-  const gradient = ctx.createLinearGradient(x - fontSize * 2, y, x + fontSize * 2, y);
-  gradient.addColorStop(0, '#f8fafc');
-  gradient.addColorStop(0.36, '#e0a458');
-  gradient.addColorStop(0.68, '#d7dde8');
-  gradient.addColorStop(1, '#f8fafc');
+  const textWidth = ctx.measureText(text).width;
+  const gradient = ctx.createLinearGradient(
+    x - textWidth * 0.5,
+    y - fontSize * 0.5,
+    x + textWidth * 0.5,
+    y + fontSize * 0.5,
+  );
+  for (const [offset, color] of WORDMARK_GRADIENT_STOPS) {
+    gradient.addColorStop(offset, color);
+  }
   ctx.fillStyle = gradient;
   ctx.shadowColor = 'rgba(224,164,88,0.2)';
   ctx.shadowBlur = 18;
-  ctx.fillText('Ally', x, y);
+  ctx.fillText(text, x, y);
 
   const scanX = x - fontSize * 1.6 + ((progress * 2.2) % 1) * fontSize * 3.2;
   ctx.globalCompositeOperation = 'lighter';
