@@ -285,7 +285,7 @@ func (a *App) streamModelResponseWithKey(ctx context.Context, cfg ConfigState, m
 
 // keyAuthCooldownDuration 是认证/配额类错误(401/403/invalid key/quota)后
 // 的冷却窗口:key 本身已失效,短时间重试无意义。
-const keyAuthCooldownDuration = 60 * time.Second
+const keyAuthCooldownDuration = 300 * time.Second
 
 // keyTransientCooldownDuration 是瞬时错误(429/5xx/网络)后的冷却窗口。比
 // 认证错误短,避免端点短暂故障时把整个 key 池冷却 60 秒(fail-fast 但快速自愈)。

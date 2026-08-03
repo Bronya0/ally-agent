@@ -12,7 +12,7 @@
         <code v-html="highlightCommand(msg)"></code>
         <span class="tool-command-paren">)</span>
       </span>
-      <span v-else-if="msg.title" class="tool-arg" :title="msg.title">({{ msg.title }})</span>
+      <span v-else-if="msg.title" :class="['tool-arg', { 'todo-next-step': msg.kind === 'todo' }]" :title="msg.title">({{ msg.title }})</span>
       <span v-if="msg.kind === 'edit' && (msg.editAdded || msg.editRemoved)" class="tool-chip edit-change-chip">
         <span class="tool-chip-dot">&middot;</span>
         <span v-if="msg.editAdded" class="edit-chip-added">+{{ msg.editAdded }}</span>
@@ -62,7 +62,7 @@
       :max-lines="BODY_PREVIEW_LINES"
       preview-mode="tail"
     />
-    <pre v-else-if="msg.body && msg.status !== 'error' && msg.kind !== 'edit' && msg.kind !== 'read' && msg.kind !== 'calculate' && msg.kind !== 'scheduled' && msg.kind !== 'grep' && (msg.kind !== 'list' || msg.expanded)" ref="bodyPreRef" :class="['tool-body', { 'fixed-scroll': isFixedKind(msg.kind), 'body-preview': isBodyPreview(msg), 'tail-default': isServiceReadResult(msg) }]">{{ toolBodyText(msg) }}</pre>
+    <pre v-else-if="msg.body && msg.status !== 'error' && msg.kind !== 'edit' && msg.kind !== 'read' && msg.kind !== 'calculate' && msg.kind !== 'scheduled' && msg.kind !== 'grep' && msg.kind !== 'todo' && (msg.kind !== 'list' || msg.expanded)" ref="bodyPreRef" :class="['tool-body', { 'fixed-scroll': isFixedKind(msg.kind), 'body-preview': isBodyPreview(msg), 'tail-default': isServiceReadResult(msg) }]">{{ toolBodyText(msg) }}</pre>
     <div v-if="msg.status === 'error'" class="tool-error-block">
       <div v-if="msg.errorCode" class="tool-error-detail">
         <span>{{ errorDescription(msg) }}</span>
@@ -359,7 +359,7 @@ function handleToggle(msg) {
 }
 
 function hasExpandableBody(msg) {
-  if (msg.kind === 'read' || msg.kind === 'command') return false;
+  if (msg.kind === 'read' || msg.kind === 'command' || msg.kind === 'todo') return false;
   if (msg.kind === 'edit') return true;
   if (msg.kind === 'create') return lineCount(msg.codeContent) > BODY_PREVIEW_LINES;
   // calculate: body 只重复 title(expression) + chip(= result)，无需详情卡

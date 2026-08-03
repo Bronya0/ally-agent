@@ -46,7 +46,7 @@
                   @submit-ask="submitAskResponse"
                 />
 
-              <!-- Fixed todo panel -->
+              <!-- Fixed todo panel; kept above the transient composer status row. -->
               <Transition name="todo-panel">
                 <div v-if="showTodoPanel" :class="['todo-panel', { collapsed: todoPanelCollapsed }]">
                   <button class="todo-panel-header" :title="todoPanelCollapsed ? $t('app.todo.expand') : $t('app.todo.collapse')" @click="todoPanelCollapsed = !todoPanelCollapsed">
@@ -121,11 +121,16 @@
                   <span v-if="retryBanner.totalKeys > 1" class="composer-retry-key">{{ $t('app.run.retryKey', { key: retryBanner.keyIndex + 1, total: retryBanner.totalKeys }) }}</span>
                 </div>
                 <div v-if="activeSessionRunning || activeGoal" class="composer-run-status">
-                  <span v-if="activeSessionRunning" class="composer-run-status-dots">
+                  <span v-if="activeSessionRunning" class="composer-run-status-dots" aria-hidden="true">
                     <span class="composer-run-status-dot"></span>
                     <span class="composer-run-status-dot"></span>
                     <span class="composer-run-status-dot"></span>
                   </span>
+                  <span
+                    v-if="activeSessionRunning && latestUserPromptSummary"
+                    class="composer-run-prompt"
+                    :title="latestUserPromptSummary"
+                  >{{ latestUserPromptSummary }}</span>
                   <span v-if="activeGoal" class="composer-goal-status" :title="activeGoal.objective || ''">
                     <span class="composer-goal-label">{{ $t('tools.kind.goal') }}</span>
                     <span class="composer-goal-objective">{{ activeGoal.objective }}</span>
@@ -1453,6 +1458,16 @@ const workspaceTabsWithStatus = computed(() => {
   return workspaceTabsWithStatusCache;
 });
 const activeMessages = computed(() => activeSession.value?.messages || []);
+const latestUserPromptSummary = computed(() => {
+  const message = [...activeMessages.value].reverse().find((item) => item?.role === 'user');
+  if (!message) return '';
+  const content = String(message.content || '').replace(/\s+/g, ' ').trim();
+  const attachments = Array.isArray(message.attachments) ? message.attachments : [];
+  if (!content) return attachmentDisplayLabel(attachments);
+  if (!attachments.length) return content;
+  const attachmentLabel = attachmentDisplayLabel(attachments);
+  return attachmentLabel && content !== attachmentLabel ? `${content} · ${attachmentLabel}` : content;
+});
 const activeSessionRunning = computed(() => !!activeSession.value?.isRunning);
 const scheduledTaskRunningCount = computed(() => scheduledTasks.value.filter((task) => task?.running).length);
 const serviceRunningCount = computed(() => services.value.filter((service) => ['starting', 'running'].includes(service?.status)).length);
@@ -2855,7 +2870,11 @@ function bindRuntimeEvents() {
         existing.askSubmitted = true;
         existing.askAnswers = Array.isArray(resultData.answers) ? resultData.answers : existing.askAnswers || [];
       }
-      if (!existing.title) existing.title = makeToolResultTitle(data.name, data.result, data);
+      if (data.name === 'todo_write' && Array.isArray(resultData.todos)) {
+        existing.title = formatTodoNextStep(resultData.todos);
+      } else if (!existing.title) {
+        existing.title = makeToolResultTitle(data.name, data.result, data);
+      }
       if ((data.name === 'create_file' || data.name === 'remote_create_file') && resultData.path) {
         existing.editFilePath = resultData.path;
         if (!existing.title) existing.title = resultData.target ? `${resultData.target} · ${resultData.path}` : resultData.path;
@@ -4565,33 +4584,17 @@ function normalizeTodoEntries(value) {
     }));
 }
 
-function formatTodoSummary(value) {
+function formatTodoNextStep(value) {
   const todos = normalizeTodoEntries(value);
-  if (todos.length === 0) return t('tools.todo.cleared');
-  const counts = todos.reduce((result, todo) => {
-    result[todo.status] += 1;
-    return result;
-  }, { pending: 0, in_progress: 0, done: 0 });
-  return t('tools.todo.summary', {
-    count: todos.length,
-    pending: counts.pending,
-    inProgress: counts.in_progress,
-    done: counts.done,
-  });
-}
-
-function formatTodoBody(value) {
-  const todos = normalizeTodoEntries(value);
-  if (todos.length === 0) return t('tools.todo.cleared');
-  const markers = { pending: '○', in_progress: '→', done: '✓' };
-  return todos
-    .map((todo) => `${markers[todo.status]} ${t(`tools.todo.status.${todo.status}`)} · ${todo.title}`)
-    .join('\n');
+  const next = todos.find((todo) => todo.status === 'in_progress')
+    || todos.find((todo) => todo.status === 'pending');
+  if (next) return next.title;
+  return todos.length > 0 ? t('tools.todo.status.done') : t('tools.todo.cleared');
 }
 
 function makeToolResultTitle(name, result, meta = {}) {
   const d = parseToolResultData(result);
-  if (name === 'todo_write' && Array.isArray(d.todos)) return formatTodoSummary(d.todos);
+  if (name === 'todo_write' && Array.isArray(d.todos)) return formatTodoNextStep(d.todos);
 	if ((name === 'edit' || name === 'remote_edit') && Array.isArray(d.files)) return d.files.length === 1 ? (d.files[0]?.path || '') : `${d.files.length} files`;
   const path = d.path || d.deleted || '';
   if (path && (name === 'create_file' || name === 'edit' || name === 'remote_edit' || name === 'remote_create_file' || name === 'delete_path' || name === 'remote_delete_path')) {
@@ -5650,7 +5653,7 @@ function makeToolTitle(name, args, meta = {}) {
   }
   const parsed = parseToolArgsBestEffort(args);
   if (name === 'todo_write') {
-    return Array.isArray(parsed.todos) ? formatTodoSummary(parsed.todos) : '';
+    return Array.isArray(parsed.todos) ? formatTodoNextStep(parsed.todos) : '';
   }
   if (name === 'run_command' || name === 'remote_run_command' || name === 'Bash') {
     const command = parsed.command || parsed.cmd || '';
@@ -5910,15 +5913,9 @@ function formatToolChip(name, result) {
 
 function formatToolBody(name, body) {
   const text = String(body || '');
-  if (isMcpToolName(name)) return '';
+  if (isMcpToolName(name) || name === 'todo_write') return '';
   try {
     const parsed = JSON.parse(text);
-    if (name === 'todo_write') {
-      const todos = Array.isArray(parsed?.data?.todos)
-        ? parsed.data.todos
-        : (Array.isArray(parsed?.todos) ? parsed.todos : null);
-      return todos ? formatTodoBody(todos) : '';
-    }
     if (name === 'wait' && parsed.data) return '';
     if (name === 'ask' && parsed.data) return '';
     // command result: show output + exit code (command shown in card title)

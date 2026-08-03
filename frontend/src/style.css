@@ -419,9 +419,22 @@ code, pre {
 }
 
 .composer .prompt-input {
+  --n-color: rgba(26, 26, 26, 0.5) !important;
+  --n-color-focus: rgba(26, 26, 26, 0.58) !important;
+  --n-color-hover: rgba(26, 26, 26, 0.54) !important;
   --n-border-hover: 1px solid rgba(212, 212, 212, 0.32) !important;
   --n-border-focus: 1px solid rgba(212, 212, 212, 0.32) !important;
   --n-box-shadow-focus: 0 0 0 2px rgba(212, 212, 212, 0.08) !important;
+  background: rgba(26, 26, 26, 0.5) !important;
+  border-radius: 8px;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.composer .prompt-input .n-input,
+.composer .prompt-input .n-input-wrapper,
+.composer .prompt-input .n-input__textarea {
+  background: transparent !important;
 }
 
 .hidden-file-input {
@@ -625,11 +638,14 @@ code, pre {
 }
 
 .composer-run-status {
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 10px;
+  min-width: 0;
+  max-width: 100%;
   min-height: 18px;
   margin: -2px 0 4px 2px;
+  overflow: hidden;
   color: #8a8a8a;
   font-size: 11px;
 }
@@ -688,6 +704,20 @@ code, pre {
 
 .composer-run-status-dot:nth-child(3) {
   animation-delay: 0.4s;
+}
+
+.composer-run-prompt {
+  min-width: 0;
+  max-width: min(68vw, 720px);
+  flex: 0 1 auto;
+  margin-left: auto;
+  overflow: hidden;
+  color: #777;
+  font-size: 11px;
+  line-height: 18px;
+  letter-spacing: 0.01em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .composer-goal-status {
@@ -2736,7 +2766,7 @@ code, pre {
 
 .todo-panel {
   border-top: 1px solid rgba(255, 255, 255, 0.08);
-  background: #1a1a1a;
+  background: rgba(26, 26, 26, 0.62);
   max-height: 160px;
   overflow: hidden;
   display: flex;

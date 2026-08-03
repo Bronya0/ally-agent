@@ -5,16 +5,22 @@
       <AllyWordmark class="brand-wordmark" />
     </div>
     <div class="header-tabs-area">
-      <div class="workspace-tabs">
+      <div
+        ref="workspaceTabsRef"
+        class="workspace-tabs"
+        @dragover.prevent="onWorkspaceTabsDragOver"
+        @drop.prevent="onWorkspaceTabsDrop"
+      >
         <div
           v-for="tab in workspaceTabs"
           :key="tab.id"
-          :class="['workspace-tab', { active: tab.id === activeWorkspaceId, running: tab.isRunning, dragging: tab.id === draggedWorkspaceId }]"
+          :class="['workspace-tab', { active: tab.id === activeWorkspaceId, running: tab.isRunning, dragging: tab.id === draggedWorkspaceId, 'drop-before': isDropBefore(tab.id), 'drop-after': isDropAfter(tab.id) }]"
+          :data-tab-id="tab.id"
           :draggable="workspaceTabs.length > 1"
           @click="$emit('switchWorkspace', tab.id)"
           @dragstart="onWorkspaceDragStart($event, tab.id)"
-          @dragover.prevent="onWorkspaceDragOver($event)"
-          @drop.prevent="onWorkspaceDrop($event, tab.id)"
+          @dragover.prevent.stop="onWorkspaceDragOver($event, tab.id)"
+          @drop.prevent.stop="onWorkspaceDrop($event, tab.id)"
           @dragend="onWorkspaceDragEnd"
         >
           <span v-if="tab.isRunning" class="tab-running-dot" :aria-label="$t('header.running')"></span>
@@ -129,16 +135,63 @@ const emit = defineEmits([
   'closeWindow',
 ]);
 
+const workspaceTabsRef = ref(null);
 const draggedWorkspaceId = ref('');
+const dragPreview = ref(null);
+
+function isDropBefore(id) {
+  return dragPreview.value?.targetId === id && !dragPreview.value.after;
+}
+
+function isDropAfter(id) {
+  return dragPreview.value?.targetId === id && dragPreview.value.after;
+}
+
+function setDragPreview(targetId, after) {
+  if (!targetId || targetId === draggedWorkspaceId.value) {
+    dragPreview.value = null;
+    return;
+  }
+  const current = dragPreview.value;
+  if (current?.targetId === targetId && current.after === after) return;
+  dragPreview.value = { targetId, after };
+}
 
 function onWorkspaceDragStart(event, id) {
   draggedWorkspaceId.value = id;
+  dragPreview.value = null;
   event.dataTransfer.effectAllowed = 'move';
   event.dataTransfer.setData('text/plain', id);
 }
 
-function onWorkspaceDragOver(event) {
+function onWorkspaceDragOver(event, targetId) {
   if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+  if (!draggedWorkspaceId.value || draggedWorkspaceId.value === targetId) {
+    dragPreview.value = null;
+    return;
+  }
+  const rect = event.currentTarget.getBoundingClientRect();
+  setDragPreview(targetId, event.clientX > rect.left + rect.width / 2);
+}
+
+function onWorkspaceTabsDragOver(event) {
+  if (event.target !== event.currentTarget) return;
+  if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+  const tabs = Array.from(workspaceTabsRef.value?.querySelectorAll('.workspace-tab') || []);
+  let target = null;
+  let after = false;
+  for (const tab of tabs) {
+    const rect = tab.getBoundingClientRect();
+    if (event.clientX < rect.left + rect.width / 2) {
+      target = tab;
+      break;
+    }
+  }
+  if (!target && tabs.length) {
+    target = tabs[tabs.length - 1];
+    after = true;
+  }
+  setDragPreview(target?.dataset.tabId || '', after);
 }
 
 function onWorkspaceDrop(event, targetId) {
@@ -152,10 +205,24 @@ function onWorkspaceDrop(event, targetId) {
     });
   }
   draggedWorkspaceId.value = '';
+  dragPreview.value = null;
+}
+
+function onWorkspaceTabsDrop(event) {
+  if (event.target !== event.currentTarget) return;
+  onWorkspaceTabsDragOver(event);
+  const sourceId = draggedWorkspaceId.value || event.dataTransfer?.getData('text/plain');
+  const preview = dragPreview.value;
+  if (sourceId && preview && sourceId !== preview.targetId) {
+    emit('reorderWorkspace', { sourceId, ...preview });
+  }
+  draggedWorkspaceId.value = '';
+  dragPreview.value = null;
 }
 
 function onWorkspaceDragEnd() {
   draggedWorkspaceId.value = '';
+  dragPreview.value = null;
 }
 
 function onOpenSettings(event) {
@@ -386,6 +453,7 @@ body.platform-darwin .window-close-icon {
 }
 
 .workspace-tab {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -398,12 +466,41 @@ body.platform-darwin .window-close-icon {
   line-height: 1;
   white-space: nowrap;
   user-select: none;
-  transition: background 0.12s, color 0.12s;
+  transition: margin-left 0.16s ease, margin-right 0.16s ease, background 0.12s, color 0.12s;
   flex-shrink: 0;
   min-width: 108px;
   max-width: 180px;
   border: 1px solid transparent;
   --wails-draggable: no-drag;
+}
+
+.workspace-tab.drop-before {
+  margin-left: 24px;
+}
+
+.workspace-tab.drop-after {
+  margin-right: 24px;
+}
+
+.workspace-tab.drop-before::before,
+.workspace-tab.drop-after::after {
+  content: '';
+  position: absolute;
+  top: 6px;
+  bottom: 6px;
+  width: 2px;
+  border-radius: 999px;
+  background: var(--ally-accent);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--ally-accent) 70%, transparent);
+  pointer-events: none;
+}
+
+.workspace-tab.drop-before::before {
+  left: -12px;
+}
+
+.workspace-tab.drop-after::after {
+  right: -12px;
 }
 
 .workspace-tab:active {
