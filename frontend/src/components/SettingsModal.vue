@@ -468,7 +468,23 @@
           />
         </n-form-item-gi>
         <n-form-item-gi :label="$t('settings.contextWindow')">
-          <n-input-number v-model:value="modelDraft.contextWindow" :min="0" style="width: 100%" />
+          <div class="context-window-field">
+            <n-input-number v-model:value="modelDraft.contextWindow" :min="0" style="width: 100%" />
+            <div class="context-window-presets" :aria-label="$t('settings.contextWindowPresets')">
+              <span class="context-window-presets-label">{{ $t('settings.contextWindowPresets') }}</span>
+              <n-button-group size="small">
+                <n-button
+                  v-for="preset in contextWindowQuickOptions"
+                  :key="preset.value"
+                  :type="modelDraft.contextWindow === preset.value ? 'primary' : 'default'"
+                  :aria-pressed="modelDraft.contextWindow === preset.value"
+                  @click="modelDraft.contextWindow = preset.value"
+                >
+                  {{ preset.label }}
+                </n-button>
+              </n-button-group>
+            </div>
+          </div>
         </n-form-item-gi>
         <n-form-item-gi :label="$t('settings.reasoningEffort')">
           <n-select v-model:value="modelDraft.reasoningEffort" :options="reasoningEffortOptions" />
@@ -734,6 +750,13 @@ const tokenParamOptions = computed(() => [
   { label: `max_tokens (${t('settings.tokenParamDefault')})`, value: 'auto' },
   { label: 'max_completion_tokens', value: 'max_completion_tokens' },
 ]);
+
+const contextWindowQuickOptions = [
+  { label: '256K', value: 256000 },
+  { label: '512K', value: 512000 },
+  { label: '1M', value: 1000000 },
+  { label: '1.5M', value: 1500000 },
+];
 
 function normalizeApiFormat(value) {
   const v = String(value || '').trim().toLowerCase().replace(/[-\s]+/g, '_');
@@ -1849,6 +1872,26 @@ watch(() => props.visible, (visible) => {
   flex-direction: column;
   gap: 6px;
   width: 100%;
+}
+
+.context-window-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+
+.context-window-presets {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.context-window-presets-label {
+  flex-shrink: 0;
+  color: #8a8a8a;
+  font-size: 12px;
 }
 
 .api-key-row {
