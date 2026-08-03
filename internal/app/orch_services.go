@@ -143,7 +143,7 @@ func (a *App) startServiceWithConfig(cfg ConfigState, req StartServiceRequest) (
 	shell := commandShell(req.Command, cfg.GitBashPath)
 	cmd := exec.CommandContext(ctx, shell.path, shell.args...)
 	cmd.Dir = cwd
-	cmd.Env = proxyEnvironment(cfg, os.Environ())
+	cmd.Env = commandEnvironment(cfg)
 	prepareServiceCommand(cmd)
 
 	buf := newRollingBuffer(serviceOutputLimit)

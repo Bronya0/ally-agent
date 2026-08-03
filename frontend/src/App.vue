@@ -1163,27 +1163,27 @@ const configDraft = reactive(defaultConfig());
 // SaveConfig — only the filename and opacity are persisted.
 const backgroundImageUrl = ref('');
 
-// Per-workspace model selection. Maps workspace path → model index in
-// config.models. Stored in localStorage (not backend config.json) so the
+// Per-tab model selection. Maps a runtime workspace Tab id to the selected
+// model identity. Stored in localStorage (not backend config.json) so the
 // backend stays workspace-agnostic; StartChat's overlay already carries the
-// active model fields from the frontend config. A missing entry means
-// "use whatever the global config currently has".
-const modelByWorkspace = reactive({});
-const MODEL_BY_WS_KEY = 'ally_model_by_workspace';
+// active model fields from the frontend config. The Tab id is intentional:
+// two Tabs pointing at the same workspace must not share a model selection.
+const modelByTab = reactive({});
+const MODEL_BY_TAB_KEY = 'ally_model_by_tab';
 
-function loadModelByWorkspace() {
+function loadModelByTab() {
   try {
-    const raw = localStorage.getItem(MODEL_BY_WS_KEY);
+    const raw = localStorage.getItem(MODEL_BY_TAB_KEY);
     const parsed = raw ? JSON.parse(raw) : {};
     for (const [k, v] of Object.entries(parsed)) {
-      modelByWorkspace[k] = v;
+      modelByTab[k] = v;
     }
   } catch (_) { /* ignore corrupt entries */ }
 }
 
-function saveModelByWorkspace() {
+function saveModelByTab() {
   try {
-    localStorage.setItem(MODEL_BY_WS_KEY, JSON.stringify(modelByWorkspace));
+    localStorage.setItem(MODEL_BY_TAB_KEY, JSON.stringify(modelByTab));
   } catch (_) { /* ignore quota errors */ }
 }
 
@@ -1222,6 +1222,34 @@ function findCurrentModelIndex() {
   if (!identity) return -1;
   return (config.models || []).findIndex((m) => modelConfigIdentity(m) === identity);
 }
+
+function findModelIndexForTab(tab) {
+  const remembered = modelByTab[tab?.id];
+  if (typeof remembered === 'string' && remembered) {
+    return (config.models || []).findIndex((model) => modelConfigIdentity(model) === remembered);
+  }
+  // Accept numeric values written by an intermediate development build, then
+  // normalize them to model identities the next time this Tab is changed.
+  if (Number.isInteger(remembered) && remembered >= 0 && remembered < (config.models || []).length) {
+    return remembered;
+  }
+  return -1;
+}
+
+function rememberModelForTab(tab, index = findCurrentModelIndex()) {
+  if (!tab || !Number.isInteger(index) || index < 0 || index >= (config.models || []).length) return;
+  const model = config.models[index];
+  const identity = modelConfigIdentity(model);
+  if (!identity || modelByTab[tab.id] === identity) return;
+  modelByTab[tab.id] = identity;
+  saveModelByTab();
+}
+
+function rememberActiveTabModel() {
+  const tab = workspaceTabs.value.find((item) => item.id === activeWorkspaceId.value);
+  rememberModelForTab(tab);
+}
+
 const sessions = ref([]);
 const activeSessionId = ref('');
 // 当前会话的 LLM 请求重试状态(null 表示无重试)。非持久化,切换会话或新一轮 delta 时清除。
@@ -2116,24 +2144,19 @@ function switchWorkspaceTab(id) {
   }
   loadPromptHistory(tab.path);
   refreshWorkspaceTokenUsage(tab.path);
-  // Restore the model remembered for this workspace (if any) before
-  // SaveConfig so the backend sync matches the tab's model. This is a
-  // local-only switch — SwitchModel is not called to avoid touching the
-  // global default for other tabs. The SaveConfig below persists it.
-  const rememberedIndex = tab.path ? modelByWorkspace[tab.path] : undefined;
-  if (typeof rememberedIndex === 'number' && rememberedIndex >= 0) {
+  // Restore the model remembered for this Tab before SaveConfig so the
+  // backend sync matches the Tab's model. This is a local-only switch —
+  // SwitchModel is not called to avoid touching another Tab's selection.
+  const rememberedIndex = findModelIndexForTab(tab);
+  if (rememberedIndex >= 0) {
     const currentIndex = findCurrentModelIndex();
     if (currentIndex !== rememberedIndex) {
       applyModelToConfig(rememberedIndex);
     }
-  } else if (tab.path) {
-    // First visit to this workspace: seed the map with the current model so
-    // future tab switches can restore it.
-    const idx = findCurrentModelIndex();
-    if (idx >= 0) {
-      modelByWorkspace[tab.path] = idx;
-      saveModelByWorkspace();
-    }
+  } else {
+    // First visit to this Tab: inherit the current model as its independent
+    // baseline. Later changes are stored under this Tab's id only.
+    rememberModelForTab(tab);
   }
   SaveConfig({ ...config })
     .then(() => refreshGitStatus())
@@ -2279,28 +2302,18 @@ async function init() {
   } catch (err) {
     message.error(t('app.config.readFailed', { error: err }));
   }
-  loadModelByWorkspace();
+  loadModelByTab();
 
-  // Init workspace tabs from config
+  // Init workspace tabs from config. Model state belongs to this Tab, not to
+  // its workspace path, so a second Tab can point to the same path safely.
   const ws = config.workspace || '';
   const tab = createWorkspaceTab(ws);
   workspaceTabs.value.push(tab);
   activeWorkspaceId.value = tab.id;
   if (tab.sessionId) activeSessionId.value = tab.sessionId;
+  rememberModelForTab(tab);
   if (ws) addToHistory(ws);
   loadPromptHistory(ws);
-  // Seed the initial workspace's model index if not yet remembered so that
-  // findCurrentModelIndex is the baseline and later switches are tracked.
-  if (ws && modelByWorkspace[ws] === undefined) {
-    const idx = findCurrentModelIndex();
-    if (idx >= 0) {
-      modelByWorkspace[ws] = idx;
-      saveModelByWorkspace();
-    }
-  } else if (ws && typeof modelByWorkspace[ws] === 'number') {
-    // Restore remembered model for this workspace on startup.
-    applyModelToConfig(modelByWorkspace[ws]);
-  }
   refreshGitStatus();
 
   await loadSavedSessions();
@@ -3735,12 +3748,10 @@ async function switchToModel(index) {
     // switch the backend back before the next message is sent.
     assignConfig(config, loaded);
     assignConfig(configDraft, loaded);
-    // Remember this model for the active workspace so switching tabs restores it.
-    const tab = workspaceTabs.value.find((t) => t.id === activeWorkspaceId.value);
-    if (tab?.path) {
-      modelByWorkspace[tab.path] = index;
-      saveModelByWorkspace();
-    }
+    // Remember this model for the active Tab so another Tab pointing at the
+    // same workspace keeps its own selection.
+    const tab = workspaceTabs.value.find((item) => item.id === activeWorkspaceId.value);
+    rememberModelForTab(tab);
     message.success(t('app.model.switched', { model: loaded.model }));
   } catch (err) {
     message.error(t('app.model.switchFailed', { error: err }));
@@ -4001,6 +4012,9 @@ async function onSettingsSave(draftData, silent = false) {
   try {
     await SaveConfig({ ...configDraft });
     syncConfigToActiveTab();
+    // Settings can change the active model without going through the composer
+    // dropdown, so keep the current Tab's selection in sync as well.
+    rememberActiveTabModel();
     if (!silent) message.success(t('app.config.saved'));
   } catch (err) {
     message.error(t('app.config.saveFailed', { error: err }));
@@ -4541,8 +4555,43 @@ function parseToolResultData(result) {
   }
 }
 
+function normalizeTodoEntries(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((todo) => todo && typeof todo === 'object' && String(todo.title || '').trim())
+    .map((todo) => ({
+      title: String(todo.title || '').trim(),
+      status: ['pending', 'in_progress', 'done'].includes(todo.status) ? todo.status : 'pending',
+    }));
+}
+
+function formatTodoSummary(value) {
+  const todos = normalizeTodoEntries(value);
+  if (todos.length === 0) return t('tools.todo.cleared');
+  const counts = todos.reduce((result, todo) => {
+    result[todo.status] += 1;
+    return result;
+  }, { pending: 0, in_progress: 0, done: 0 });
+  return t('tools.todo.summary', {
+    count: todos.length,
+    pending: counts.pending,
+    inProgress: counts.in_progress,
+    done: counts.done,
+  });
+}
+
+function formatTodoBody(value) {
+  const todos = normalizeTodoEntries(value);
+  if (todos.length === 0) return t('tools.todo.cleared');
+  const markers = { pending: '○', in_progress: '→', done: '✓' };
+  return todos
+    .map((todo) => `${markers[todo.status]} ${t(`tools.todo.status.${todo.status}`)} · ${todo.title}`)
+    .join('\n');
+}
+
 function makeToolResultTitle(name, result, meta = {}) {
   const d = parseToolResultData(result);
+  if (name === 'todo_write' && Array.isArray(d.todos)) return formatTodoSummary(d.todos);
 	if ((name === 'edit' || name === 'remote_edit') && Array.isArray(d.files)) return d.files.length === 1 ? (d.files[0]?.path || '') : `${d.files.length} files`;
   const path = d.path || d.deleted || '';
   if (path && (name === 'create_file' || name === 'edit' || name === 'remote_edit' || name === 'remote_create_file' || name === 'delete_path' || name === 'remote_delete_path')) {
@@ -5600,6 +5649,9 @@ function makeToolTitle(name, args, meta = {}) {
     return meta.mcpTool || fallbackMcpToolName(name);
   }
   const parsed = parseToolArgsBestEffort(args);
+  if (name === 'todo_write') {
+    return Array.isArray(parsed.todos) ? formatTodoSummary(parsed.todos) : '';
+  }
   if (name === 'run_command' || name === 'remote_run_command' || name === 'Bash') {
     const command = parsed.command || parsed.cmd || '';
     if (name === 'remote_run_command' && parsed.target) return `${parsed.target} · ${command}`;
@@ -5861,8 +5913,12 @@ function formatToolBody(name, body) {
   if (isMcpToolName(name)) return '';
   try {
     const parsed = JSON.parse(text);
-    // todo_write: keep tool cards compact; title/chip is enough.
-    if (name === 'todo_write' && parsed.data) return '';
+    if (name === 'todo_write') {
+      const todos = Array.isArray(parsed?.data?.todos)
+        ? parsed.data.todos
+        : (Array.isArray(parsed?.todos) ? parsed.todos : null);
+      return todos ? formatTodoBody(todos) : '';
+    }
     if (name === 'wait' && parsed.data) return '';
     if (name === 'ask' && parsed.data) return '';
     // command result: show output + exit code (command shown in card title)

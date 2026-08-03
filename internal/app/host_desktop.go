@@ -41,6 +41,9 @@ func (a *App) Startup(ctx context.Context) {
 	a.events = wailsEventSink{Context: ctx}
 	a.fitInitialWindowToScreen(ctx)
 	_ = a.ensureInitialized()
+	// Warm the one-time POSIX login-shell PATH probe without delaying the UI.
+	// run_command/background_process wait on the same sync.Once if needed.
+	go warmCommandEnvironment()
 	_ = a.loadServiceHistory()
 	_ = a.startScheduledTaskManager()
 	// Load persisted token stats in the background and start the async flusher.

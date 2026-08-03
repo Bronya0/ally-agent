@@ -73,7 +73,7 @@ Publishing the Release triggers `.github/workflows/build.yml`, which builds and 
 | `prov_` | Provider 适配 | OpenAI/Anthropic 流式适配、代理配置 |
 | `host_` | Host 桥接 | Wails 生命周期、窗口、对话框、eventSink 边界、子进程与任务栏控制 |
 | `orch_` | 工具编排 | 绑定 `internal/tools/` 纯算法到 `*App` 状态：路径解析、并行调度、互斥锁、原子写入、批次策略、安全边界 |
-| `infra_` | 工具基础设施 | 跨编排共享：结果信封与压缩、流式节流、DTO 别名与归一化 |
+| `infra_` | 工具基础设施 | 跨编排共享：命令环境、结果信封与压缩、流式节流、DTO 别名与归一化 |
 | `biz_` | 业务模块 | 独立功能：skills 发现与加载、系统提示词构建、项目上下文、MCP 生命周期、版本检查、异步 Token 统计 |
 
 约定：
@@ -723,9 +723,11 @@ Example MCP config:
 - `readTextFile` rejects binary files using NUL checks.
 - Release packages bundle ripgrep under the executable's `tools/` directory; development builds fall back to `rg` from `PATH`.
 - On Windows, `run_command` and `background_process` prefer **bash** from Git for Windows over PowerShell. Detection order: a validated `gitBashPath` setting (manual override) → Git for Windows common install paths → derive Git Bash from `git.exe` on `PATH` → a `bash.exe` on `PATH` only when it belongs to the same Git for Windows installation → fallback to PowerShell (`pwsh.exe` → `powershell.exe`). Arbitrary `bash.exe` launchers such as `C:\Windows\System32\bash.exe` (legacy WSL) are rejected because their Linux PATH and argument forwarding break Windows tool discovery and shell expansion. When Git Bash is not detected, startup warns the user to set `gitBashPath` in Settings. The system prompt dynamically reflects which shell is active so the model generates correct syntax. Linux/macOS always use `bash -c` and ignore `gitBashPath`.
+- On macOS/Linux, `infra_shell_env.go` probes the user's login shell once (`$SHELL -l -c /usr/bin/env`, with an OS-account shell fallback), appends only missing absolute `PATH` entries to the inherited environment, and shares that environment with `run_command` and `background_process`. Probe failures leave the original environment unchanged; other profile variables such as `GOPATH` and `NVM_DIR` are not imported.
 - When bash is active on Windows, safety checks detect both Windows-style (`C:\...`) and MSYS2-style (`/c/...`) absolute paths outside the workspace.
 - Tool output is capped by `maxToolOutput`.
 - HTTP tools use bounded response sizes, timeouts, redirect limits, and clear user agent defaults.
+- macOS/Linux command subprocesses use the one-time login-shell `PATH` enrichment from `internal/app/infra_shell_env.go`; actual commands remain non-interactive `bash -c` invocations.
 - API keys are stored in the OS user config directory without encryption.
 - MCP servers are spawned as subprocesses from user-controlled config.
 

@@ -31,6 +31,15 @@ const DefaultTimeout = 30
 // MaxTimeout is the upper bound on grep timeout in seconds.
 const MaxTimeout = 300
 
+const (
+	// maxGrepRecordBytes prevents one unusually long rg output record from
+	// forcing an unbounded allocation while parsing search results or counts.
+	maxGrepRecordBytes = 2 * 1024 * 1024
+	// maxGrepStdoutBytes bounds the amount of rg output consumed for samples.
+	// Exact counts are collected by the separate count pass.
+	maxGrepStdoutBytes = 10 * 1024 * 1024
+)
+
 // Request is the model-facing grep_files request shape.
 type Request struct {
 	Pattern        string `json:"pattern"`
@@ -312,19 +321,35 @@ func count(ctx context.Context, rgPath, root, searchRoot string, req Request, ma
 	}()
 
 	parseErr := error(nil)
-	scanner := bufio.NewScanner(stdout)
-	scanner.Buffer(make([]byte, 64*1024), 2*1024*1024)
-	for scanner.Scan() {
-		n, ok := parseCountLine(scanner.Text())
-		if !ok {
-			parseErr = fmt.Errorf("could not parse rg count output: %q", scanner.Text())
+	reader := bufio.NewReaderSize(stdout, 64*1024)
+	for {
+		line, recordTruncated, _, readErr := readGrepRecord(reader, maxGrepRecordBytes)
+		if len(line) == 0 && readErr == io.EOF {
 			break
 		}
-		total += n
-		files++
-	}
-	if err := scanner.Err(); err != nil && parseErr == nil && ctx.Err() == nil {
-		parseErr = err
+		if parseErr == nil {
+			switch {
+			case recordTruncated:
+				parseErr = fmt.Errorf("rg count output record exceeded %d bytes", maxGrepRecordBytes)
+			case len(line) > 0:
+				n, ok := parseCountLine(string(line))
+				if !ok {
+					parseErr = fmt.Errorf("could not parse rg count output: %q", string(line))
+				} else {
+					total += n
+					files++
+				}
+			}
+		}
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil {
+			if parseErr == nil && ctx.Err() == nil {
+				parseErr = readErr
+			}
+			break
+		}
 	}
 
 	waitErr := cmd.Wait()
@@ -405,40 +430,65 @@ func sampleMatches(ctx context.Context, rgPath, root, searchRoot string, req Req
 	sampleFiles := map[string]bool{}
 	truncated := false
 	parseErr := error(nil)
+	sampleLimitReached := false
+	outputCapped := false
+	stdoutBytes := 0
 
-	scanner := bufio.NewScanner(stdout)
-	scanner.Buffer(make([]byte, 64*1024), 2*1024*1024)
-	for scanner.Scan() {
+	reader := bufio.NewReaderSize(stdout, 64*1024)
+	for {
 		if ctx.Err() != nil {
 			break
 		}
-		event, ok, err := parseMatch(scanner.Bytes(), root)
-		if err != nil {
-			parseErr = err
+		recordLimit := maxGrepRecordBytes
+		if outputCapped || sampleLimitReached || parseErr != nil {
+			// Continue draining the pipe without retaining records once the
+			// result is already complete, capped, or known to be invalid.
+			recordLimit = 0
+		}
+		line, recordTruncated, bytesRead, readErr := readGrepRecord(reader, recordLimit)
+		if !outputCapped {
+			remainingOutput := maxGrepStdoutBytes - stdoutBytes
+			if bytesRead > remainingOutput {
+				outputCapped = true
+				truncated = true
+				stdoutBytes = maxGrepStdoutBytes
+			} else {
+				stdoutBytes += bytesRead
+			}
+		}
+		if recordTruncated {
+			truncated = true
+		}
+
+		if parseErr == nil && !outputCapped && !sampleLimitReached && !recordTruncated && len(line) > 0 {
+			event, ok, err := parseMatch(line, root)
+			if err != nil {
+				parseErr = err
+			} else if ok {
+				canIncludeFile := sampleFiles[event.Path] || len(sampleFiles) < maxFiles
+				canIncludeMatch := len(matches) < maxMatches
+				if canIncludeFile && canIncludeMatch {
+					sampleFiles[event.Path] = true
+					matches = append(matches, Match{
+						Path:    event.Path,
+						LineNum: event.LineNum,
+						Content: truncateLine(event.Content, 200),
+					})
+				} else {
+					sampleLimitReached = true
+					truncated = true
+				}
+			}
+		}
+		if readErr == io.EOF {
 			break
 		}
-		if !ok {
-			continue
+		if readErr != nil {
+			if parseErr == nil && ctx.Err() == nil {
+				parseErr = readErr
+			}
+			break
 		}
-		canIncludeFile := sampleFiles[event.Path] || len(sampleFiles) < maxFiles
-		canIncludeMatch := len(matches) < maxMatches
-		if canIncludeFile && canIncludeMatch {
-			sampleFiles[event.Path] = true
-			matches = append(matches, Match{
-				Path:    event.Path,
-				LineNum: event.LineNum,
-				Content: truncateLine(event.Content, 200),
-			})
-			continue
-		}
-		truncated = true
-		if cmd.Process != nil {
-			_ = cmd.Process.Kill()
-		}
-		break
-	}
-	if err := scanner.Err(); err != nil && parseErr == nil && ctx.Err() == nil && !truncated {
-		parseErr = err
 	}
 
 	waitErr := cmd.Wait()
@@ -446,10 +496,10 @@ func sampleMatches(ctx context.Context, rgPath, root, searchRoot string, req Req
 	if parseErr != nil {
 		return nil, false, parseErr
 	}
-	if ctx.Err() != nil && !truncated {
+	if ctx.Err() != nil {
 		return nil, false, ctx.Err()
 	}
-	if waitErr != nil && !truncated {
+	if waitErr != nil {
 		var exitErr *exec.ExitError
 		if errors.As(waitErr, &exitErr) {
 			if exitErr.ExitCode() != 1 {
@@ -465,6 +515,46 @@ func sampleMatches(ctx context.Context, rgPath, root, searchRoot string, req Req
 	}
 
 	return matches, truncated, nil
+}
+
+// readGrepRecord reads one newline-delimited rg record without using
+// bufio.Scanner's fixed token limit. It retains at most maxRecordBytes and
+// continues reading until the record boundary so callers can safely drain the
+// child process even when a source line is unusually large. A zero limit
+// discards the record while still draining it.
+func readGrepRecord(reader *bufio.Reader, maxRecordBytes int) (line []byte, recordTruncated bool, bytesRead int, err error) {
+	for {
+		chunk, readErr := reader.ReadSlice('\n')
+		bytesRead += len(chunk)
+
+		if maxRecordBytes <= 0 {
+			if len(chunk) > 0 {
+				recordTruncated = true
+			}
+		} else if !recordTruncated {
+			remainingRecord := maxRecordBytes - len(line)
+			switch {
+			case remainingRecord <= 0:
+				recordTruncated = true
+			case len(chunk) > remainingRecord:
+				line = append(line, chunk[:remainingRecord]...)
+				recordTruncated = true
+			default:
+				line = append(line, chunk...)
+			}
+		}
+
+		if readErr == bufio.ErrBufferFull {
+			continue
+		}
+		if readErr == io.EOF {
+			return line, recordTruncated, bytesRead, io.EOF
+		}
+		if readErr != nil {
+			return line, recordTruncated, bytesRead, readErr
+		}
+		return line, recordTruncated, bytesRead, nil
+	}
 }
 
 func failureError(stderr string) error {

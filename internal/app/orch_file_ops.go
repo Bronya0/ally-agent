@@ -163,7 +163,7 @@ func (a *App) runCommandWithConfig(parent context.Context, cfg ConfigState, req 
 	shell := commandShell(req.Command, cfg.GitBashPath)
 	cmd := exec.CommandContext(ctx, shell.path, shell.args...)
 	cmd.Dir = cwd
-	cmd.Env = proxyEnvironment(cfg, os.Environ())
+	cmd.Env = commandEnvironment(cfg)
 	buf := &limitedBuffer{limit: maxToolOutput}
 	cmd.Stdout = buf
 	cmd.Stderr = buf

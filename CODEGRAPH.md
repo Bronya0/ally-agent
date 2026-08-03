@@ -31,7 +31,7 @@ Ally 是一个基于 Wails v2 的桌面 AI 编码助手。后端 Go 通过 Wails
 | `prov_` | Provider 适配 | OpenAI/Anthropic 流式适配、代理配置 |
 | `host_` | Host 桥接 | Wails 生命周期、窗口、对话框、eventSink、子进程与任务栏 |
 | `orch_` | 工具编排 | 绑定 `internal/tools/` 纯算法到 `*App` 状态 |
-| `infra_` | 工具基础设施 | 跨编排共享：结果信封、流式节流、DTO 归一化 |
+| `infra_` | 工具基础设施 | 跨编排共享：命令环境、结果信封、流式节流、DTO 归一化 |
 | `biz_` | 业务模块 | skills、prompt、mcp、update、project_context、token_stats |
 
 `orch_<name>.go` 对应 `internal/tools/<name>/` 纯算法，两者构成一个工具的完整实现。
@@ -184,6 +184,7 @@ flowchart LR
 - `edit` 精确多匹配通过错误 envelope 的可选 `details` 返回最多 3 个原始候选片段、行范围与截断标记，详情 JSON 总计不超过 4 KiB；多行整行文本仅可在唯一候选时忽略前导缩进并安全重基，缩进扫描不建立全文件行索引
 - 批量编辑忽略并警告 no-op；全部为 no-op 时不写盘
 - `infra_result.go` 是结果 envelope、错误码和模型侧压缩的唯一边界
+- `infra_shell_env.go` 负责 POSIX login-shell PATH 探测与环境复用；只导入绝对 PATH 条目，不把完整 shell 配置注入命令进程
 - `infra_stream.go` 集中 `run:delta` / `run:reasoning` / `tool:update` 节流
 
 ### 4. MCP 管理器 (`mcp.go`)
@@ -417,6 +418,7 @@ schema → strict decoder → batch policy → executor → result envelope → 
 - 工作区必须由用户明确选择；空工作区不会回退到进程当前目录
 - `run_command` 前台执行时通过节流的 `tool:update` 推送累计 stdout/stderr；命令卡固定高度、可滚动并默认跟随最新行，最终 `tool:result` 仍携带完整受限输出
 - `run_command` / `background_process` 后端输出均有界，前者单次最多 128KB，后者每个活动进程滚动保留 512KB
+- macOS/Linux 在启动时异步执行一次 `$SHELL -l -c /usr/bin/env`，将 login-shell 中缺失的绝对 PATH 条目追加到共享命令环境；实际命令仍使用非交互 `bash -c`，失败时保留原环境
 - `readTextFile` 通过 NUL 字节与 UTF-8 有效性检测拒绝二进制和非 UTF-8 文件
 - HTTP 工具有响应大小/超时/重定向限制
 - API Key 明文存储在 OS 用户配置目录，无加密
