@@ -6506,6 +6506,11 @@ function handleGlobalKeydown(event) {
     return;
   }
   if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
+  if (event.key.toLowerCase() === 'w') {
+    event.preventDefault();
+    closeWorkspaceTab(activeWorkspaceId.value);
+    return;
+  }
   if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
   if (isEditableNavigationTarget(event.target)) {
     const isEmptyPrompt = event.target?.closest?.('[data-ally-prompt-input="true"]') && promptText.value.length === 0;
