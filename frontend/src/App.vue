@@ -5079,9 +5079,9 @@ async function deleteScheduledTask(id) {
 // ── Session persistence ──
 
 const SESSIONS_STORAGE_KEY = 'ally_sessions';
-const MAX_STORED_SESSIONS = 30;
+const MAX_STORED_SESSIONS = 200;
 const MAX_MODEL_HISTORY_MESSAGES = 400;
-const MAX_RUNTIME_SESSIONS = 30;
+const MAX_RUNTIME_SESSIONS = 200;
 const MAX_RUNTIME_RENDERABLE_MESSAGES = 260;
 const MAX_STORED_MESSAGE_CHARS = 60000;
 const MAX_STORED_TOOL_BODY_CHARS = 20000;

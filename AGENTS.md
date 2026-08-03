@@ -623,7 +623,7 @@ Long-render optimization:
 - Visual archiving does not mutate `session.messages`; completed sessions are separately pruned by the runtime retention limits below.
 - Backend context construction receives the retained conversation history, capped by `MAX_MODEL_HISTORY_MESSAGES`.
 - Normal rendering is bounded to 180 messages / 220k estimated characters; expanded archives are still bounded to 360 messages / 440k characters rather than mounting the full conversation.
-- Completed frontend sessions retain the latest 400 conversation messages and 260 renderable messages in memory, with at most 30 unpinned sessions. Running, active, and workspace-linked sessions are protected from session eviction.
+- Completed frontend sessions retain the latest 400 conversation messages and 260 renderable messages in memory, with at most 200 unpinned sessions. Running, active, and workspace-linked sessions are protected from session eviction.
 - Completed IndexedDB snapshots retain the same bounded 400 conversation / 260 renderable window used by runtime archiving; large tool previews, edit arguments, attachment payloads, and Diffs are stripped or individually truncated before structured cloning. Snapshot objects are converted to plain JSON data so Vue proxies never reach IndexedDB.
 - Media previews use revocable Blob URLs. Images render from a bounded thumbnail while the original Base64 payload is retained only when it is eligible for model input.
 - Diff rendering uses exact LCS only below a fixed matrix budget. Larger replacements use a linear-memory prefix/suffix fallback, and multi-file edit cards stay collapsed until explicitly expanded.
