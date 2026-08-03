@@ -133,7 +133,9 @@ type App struct {
 	runs           map[string]context.CancelFunc
 	runSessions    map[string]string
 	historiesDir   string
+	sessionsDir    string
 	histories      map[string][]openai.ChatCompletionMessage
+	sessionMu      sync.Mutex
 	initialized    bool
 	disabledSkills []string
 	mcpManager     *McpManager
@@ -1053,7 +1055,9 @@ func (a *App) ensureInitialized() error {
 	cfgDir := appDataDir()
 	a.configPath = filepath.Join(cfgDir, "config.json")
 	a.historiesDir = filepath.Join(cfgDir, "histories")
+	a.sessionsDir = filepath.Join(cfgDir, "sessions")
 	os.MkdirAll(a.historiesDir, 0755)
+	os.MkdirAll(a.sessionsDir, 0755)
 	os.MkdirAll(memoriesDir(), 0755)
 
 	a.config = defaultConfigState()
@@ -1640,6 +1644,11 @@ func (a *App) releaseSession(sessionID string, deleteHistory bool) error {
 			if err := os.Remove(diskPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 				return err
 			}
+		}
+	}
+	if deleteHistory {
+		if err := a.deleteSessionSnapshot(sessionID); err != nil {
+			return err
 		}
 	}
 	return nil

@@ -92,9 +92,9 @@
                     >
                       <span class="session-index">{{ index + 1 }}</span>
                       <div class="session-body">
-                        <span class="session-label">{{ s.title || $t('app.sessions.new') }}</span>
-                        <span v-if="firstSessionPromptSummary(s)" class="session-prompt-summary">
-                          {{ firstSessionPromptSummary(s) }}
+                        <span class="session-label">{{ sessionDisplayTitle(s) }}</span>
+                        <span v-if="sessionWorkspaceSummary(s) && sessionDisplayTitle(s) !== sessionWorkspaceSummary(s)" class="session-prompt-summary" :title="sessionWorkspacePath(s)">
+                          {{ $t('common.workspace') }}: {{ sessionWorkspaceSummary(s) }}
                         </span>
                         <span class="session-time">
                           {{ fmtTime(s.createdAt) }}
@@ -297,11 +297,8 @@ import markdownLang from 'highlight.js/lib/languages/markdown';
 import 'highlight.js/styles/base16/darcula.css';
 import { highlightShellCommand, isShellLanguage, looksLikeShellCommand } from './utils/shellHighlight.mjs';
 import {
-  deleteSessionSnapshot,
-  flushSessionSnapshotWrites,
-  isSessionSnapshotStorageAvailable,
+  clearSessionSnapshotStore,
   loadSessionSnapshots,
-  saveSessionSnapshot,
 } from './utils/sessionStore.mjs';
 import {
   CancelRun,
@@ -319,6 +316,10 @@ import {
   CompactSession,
   ListSkills,
   ListTools,
+  ListSessions,
+  LoadSession,
+  SaveSession,
+  SaveSessionIndex,
   OpenWorkspaceInFileManager,
   ActivateSkill,
   DeactivateSkill,
@@ -1484,7 +1485,7 @@ function latestPromptSummaryForSession(session, maxChars = Infinity) {
       : content;
     return promptSummaryText(combined, maxChars);
   }
-  return '';
+  return promptSummaryText(session?.latestPrompt || '', maxChars);
 }
 
 function firstPromptSummaryForSession(session) {
@@ -1499,11 +1500,31 @@ function firstPromptSummaryForSession(session) {
       ? `${content} · ${attachmentLabel}`
       : content;
   }
-  return '';
+  return promptSummaryText(session?.firstPrompt || '');
 }
 
 function firstSessionPromptSummary(session) {
   return promptSummaryText(firstPromptSummaryForSession(session), SESSION_PROMPT_SUMMARY_MAX_CHARS);
+}
+
+function sessionWorkspacePath(session) {
+  return inferSessionWorkspace(session) || String(session?.workspace || '').trim();
+}
+
+function sessionWorkspaceSummary(session) {
+  const path = sessionWorkspacePath(session);
+  return path ? workspaceLabel(path) : '';
+}
+
+function sessionDisplayTitle(session) {
+  const prompt = firstSessionPromptSummary(session);
+  if (prompt) return prompt;
+  const title = String(session?.title || '').trim();
+  const workspace = sessionWorkspaceSummary(session);
+  if (!title || title === workspace || title === sessionWorkspacePath(session) || title === 'Session' || title === '会话' || title === t('app.sessions.history')) {
+    return workspace || t('app.sessions.new');
+  }
+  return promptSummaryText(title, SESSION_PROMPT_SUMMARY_MAX_CHARS);
 }
 
 const latestUserPromptSummary = computed(() => latestPromptSummaryForSession(activeSession.value));
@@ -1727,8 +1748,21 @@ watch(activeSessionId, () => {
 
 function refreshContextTokens(sid) {
   if (!sid) return;
-  GetSessionContextTokens(sid).then(n => { contextTokens.value = n || 0; }).catch(() => {});
-  GetContextBreakdown(sid).then(b => { contextBreakdown.value = b; }).catch(() => {});
+  GetSessionContextTokens(sid).then(n => {
+    const value = n || 0;
+    const session = sessions.value.find((item) => item.id === sid);
+    if (session) {
+      session.contextTokens = value;
+      sessionTokensCache[sid] = value;
+      if (!session.isRunning && (session.hasSnapshot || session.messageCount > 0)) {
+        enqueueSessionWrite(() => SaveSessionIndex(sessionIndexEntry(session))).catch(() => {});
+      }
+    }
+    if (sid === activeSessionId.value) contextTokens.value = value;
+  }).catch(() => {});
+  GetContextBreakdown(sid).then(b => {
+    if (sid === activeSessionId.value) contextBreakdown.value = b;
+  }).catch(() => {});
 }
 
 function refreshWorkspaceTokenUsage(workspace = config.workspace || '') {
@@ -2063,6 +2097,42 @@ function applySessionWorkspace(session) {
   return true;
 }
 
+async function loadSessionMessages(session) {
+  if (!session || session.messagesLoaded) return session;
+  if (session.messagesLoading) return session.messagesLoading;
+  session.messagesLoading = (async () => {
+    try {
+      const snapshot = await LoadSession(session.id);
+      const messages = Array.isArray(snapshot?.messages) ? snapshot.messages : [];
+      session.title = snapshot.title || session.title;
+      session.firstPrompt = snapshot.firstPrompt || session.firstPrompt || '';
+      session.workspace = snapshot.workspace || session.workspace || '';
+      session.extraRoots = Array.isArray(snapshot.extraRoots) ? [...snapshot.extraRoots] : (session.extraRoots || []);
+      session.grillMode = !!(snapshot.grillMode ?? session.grillMode);
+      session.createdAt = snapshot.createdAt || session.createdAt || Date.now();
+      session.updatedAt = snapshot.updatedAt || session.updatedAt || session.createdAt;
+      session.contextTokens = Number(snapshot.contextTokens || session.contextTokens || 0);
+      session.messages = messages.map((item) => ({
+        ...item,
+        streaming: false,
+        done: item.role === 'assistant' ? true : !!item.done,
+      }));
+      session.messagesLoaded = true;
+      session.hasSnapshot = snapshot.hasSnapshot !== false;
+      if (messages.length === 0 && !session.hasSnapshot) {
+        session.messages.push(buildWelcomeMessage(session.workspace || ''));
+      }
+    } catch (err) {
+      message.error(t('app.sessions.loadFailed', { error: err }));
+    } finally {
+      session.messagesLoading = null;
+    }
+    return session;
+  })();
+  await session.messagesLoading;
+  return session;
+}
+
 function ensureWorkspaceTabSession(tab) {
   if (!tab) return null;
   const existing = tab.sessionId
@@ -2086,19 +2156,21 @@ function ensureWorkspaceTabSession(tab) {
   return replacement;
 }
 
-function activateSelectedSession(target) {
+async function activateSelectedSession(target) {
   if (!target) return false;
   const currentTab = workspaceTabs.value.find((tab) => tab.id === activeWorkspaceId.value) || null;
   const linkedTab = currentTab?.sessionId === target.id
     ? currentTab
     : findSessionWorkspaceTab(workspaceTabs.value, target.id);
   if (linkedTab && linkedTab.id !== activeWorkspaceId.value) {
-    switchWorkspaceTab(linkedTab.id);
+    await switchWorkspaceTab(linkedTab.id);
     return true;
   }
 
   activeSessionId.value = target.id;
   applySessionWorkspace(target);
+  await loadSessionMessages(target);
+  unloadInactiveSessionMessages();
   loadTodos(target.id);
   return true;
 }
@@ -2109,7 +2181,7 @@ function createWorkspaceTab(path) {
   // Create a linked session for this tab
   const sessionId = crypto.randomUUID ? crypto.randomUUID() : `s-${Date.now()}-${Math.random()}`;
   const now = Date.now();
-  const session = { id: sessionId, title: label, workspace: path || '', extraRoots: [], messages: [], runId: '', isRunning: false, grillMode: false, createdAt: now, updatedAt: now };
+  const session = { id: sessionId, title: label, workspace: path || '', extraRoots: [], messages: [], messagesLoaded: true, runId: '', isRunning: false, grillMode: false, createdAt: now, updatedAt: now };
   session.messages.push(buildWelcomeMessage(path || t('common.notSelected')));
   sessions.value.unshift(session);
   // Reset cumulative token usage for this workspace (new workspace = fresh counter)
@@ -2176,7 +2248,7 @@ function closeWorkspaceTab(id) {
 // to content-visibility placeholder-height drift on Tab switch.
 const sessionScrollAnchors = {};
 
-function switchWorkspaceTab(id) {
+async function switchWorkspaceTab(id) {
   const tab = workspaceTabs.value.find((t) => t.id === id);
   if (!tab) return;
   const linkedSession = ensureWorkspaceTabSession(tab);
@@ -2218,6 +2290,8 @@ function switchWorkspaceTab(id) {
   // Switch to linked session
   if (linkedSession) {
     activeSessionId.value = linkedSession.id;
+    await loadSessionMessages(linkedSession);
+    unloadInactiveSessionMessages();
     loadTodos(linkedSession.id);
     // Restore saved scroll anchor for this session, or stay at default
     const savedAnchor = sessionScrollAnchors[linkedSession.id];
@@ -2243,7 +2317,7 @@ function newSession(title) {
   const now = Date.now();
   const workspace = config.workspace || '';
   const sessionTitle = title || (workspace ? workspaceLabel(workspace) : t('app.sessions.new'));
-  const session = { id, title: sessionTitle, workspace, extraRoots: [], messages: [], runId: '', isRunning: false, grillMode: false, createdAt: now, updatedAt: now };
+  const session = { id, title: sessionTitle, workspace, extraRoots: [], messages: [], messagesLoaded: true, runId: '', isRunning: false, grillMode: false, createdAt: now, updatedAt: now };
   sessions.value.unshift(session);
   activeSessionId.value = id;
   bindSessionToActiveWorkspaceTab(session);
@@ -2270,12 +2344,12 @@ function isDefaultSessionTitle(title) {
     || value.startsWith('Session ');
 }
 
-function selectSession(index) {
+async function selectSession(index) {
   if (index < 0 || index >= sessions.value.length) return;
   const target = sessions.value[index];
   saveSessions();
-  activateSelectedSession(target);
-  promptText.value = '';
+  sessionsVisible.value = false;
+  await activateSelectedSession(target);
   sessionsVisible.value = false;
   subRuns.value = [];
   scrollMessagesToBottom();
@@ -2284,7 +2358,7 @@ function selectSession(index) {
 function createReplacementSession(title = t('app.sessions.new'), workspacePath = '') {
   const id = crypto.randomUUID ? crypto.randomUUID() : `s-${Date.now()}-${Math.random()}`;
   const now = Date.now();
-  const session = { id, title, workspace: workspacePath || '', extraRoots: [], messages: [], runId: '', isRunning: false, grillMode: false, createdAt: now, updatedAt: now };
+  const session = { id, title, workspace: workspacePath || '', extraRoots: [], messages: [], messagesLoaded: true, runId: '', isRunning: false, grillMode: false, createdAt: now, updatedAt: now };
   session.messages.push(buildWelcomeMessage(workspacePath || t('common.notSelected')));
   return session;
 }
@@ -2331,8 +2405,7 @@ function deleteSession(index) {
   delete todoRevisionsBySession[deletedId];
   delete sessionPromptTexts[deletedId];
   delete sessionScrollAnchors[deletedId];
-  deleteSessionSnapshot(deletedId).catch(() => {});
-  DeleteSession(deletedId).catch(() => {});
+  enqueueSessionWrite(() => DeleteSession(deletedId)).catch(() => {});
   const expanded = new Set(expandedArchiveSessions.value);
   expanded.delete(deletedId);
   expandedArchiveSessions.value = expanded;
@@ -3792,7 +3865,7 @@ async function toggleMaximiseWindow() {
 
 async function closeWindow() {
   try {
-    await flushSessionSnapshotWrites();
+    await flushSessionWrites();
     await Quit();
   } catch (_) {}
 }
@@ -4012,6 +4085,8 @@ async function sendPrompt() {
   if (config.workspace) session.workspace = config.workspace;
   const userMessage = { role: 'user', content: displayText, attachments, done: true };
   session.messages.push(userMessage);
+  session.updatedAt = Date.now();
+  session.messageCount = session.messages.filter((message) => message?.role === 'user' || message?.role === 'assistant').length;
   if (isDefaultSessionTitle(session.title)) {
     session.title = displayText.length > 20 ? `${displayText.slice(0, 20)}…` : displayText;
   }
@@ -5117,44 +5192,52 @@ async function deleteScheduledTask(id) {
 
 // ── Session persistence ──
 
-const SESSIONS_STORAGE_KEY = 'ally_sessions';
-const MAX_STORED_SESSIONS = 200;
 const MAX_MODEL_HISTORY_MESSAGES = 400;
 const MAX_RUNTIME_SESSIONS = 200;
 const MAX_RUNTIME_RENDERABLE_MESSAGES = 260;
 const MAX_STORED_MESSAGE_CHARS = 60000;
 const MAX_STORED_TOOL_BODY_CHARS = 20000;
-let sessionPersistenceReady = isSessionSnapshotStorageAvailable();
+let sessionWriteTail = Promise.resolve();
+
+function enqueueSessionWrite(operation) {
+  const result = sessionWriteTail.catch(() => {}).then(operation);
+  sessionWriteTail = result.catch(() => {});
+  return result;
+}
+
+function flushSessionWrites() {
+  return sessionWriteTail;
+}
 
 function sessionIndexEntry(session) {
+  const loaded = session?.messagesLoaded !== false;
+  const messages = loaded && Array.isArray(session?.messages) ? session.messages : [];
   return {
-    id: session.id,
-    title: session.title,
-    workspace: inferSessionWorkspace(session) || (session.id === activeSessionId.value ? config.workspace || '' : ''),
-    extraRoots: Array.isArray(session.extraRoots) ? [...session.extraRoots] : [],
-    grillMode: !!session.grillMode,
-    createdAt: session.createdAt || Date.now(),
-    updatedAt: session.updatedAt || session.createdAt || Date.now(),
+    id: session?.id || '',
+    title: session?.title || t('app.sessions.new'),
+    firstPrompt: firstSessionPromptSummary(session),
+    workspace: inferSessionWorkspace(session) || (session?.id === activeSessionId.value ? config.workspace || '' : ''),
+    extraRoots: Array.isArray(session?.extraRoots) ? [...session.extraRoots] : [],
+    grillMode: !!session?.grillMode,
+    createdAt: session?.createdAt || Date.now(),
+    updatedAt: session?.updatedAt || session?.createdAt || Date.now(),
+    messageCount: Number.isFinite(Number(session?.messageCount))
+      ? Number(session.messageCount)
+      : messages.filter((message) => message?.role === 'user' || message?.role === 'assistant').length,
+    contextTokens: Number(session?.contextTokens || sessionTokensCache[session?.id] || 0),
+    hasSnapshot: !!session?.hasSnapshot,
   };
 }
 
-function hasPersistedConversation(session) {
-  return !!session?.hasPersistedSnapshot;
-}
-
-// localStorage is only a small synchronous index. Completed message snapshots
-// live in IndexedDB, one record per session, so long sessions do not compete
-// for the Web Storage quota.
+// The session index and conversation snapshots live in the backend's local
+// files. This function only writes lightweight metadata; message bodies are
+// written by persistCompletedSession after a successful run.
 function saveSessions() {
-  if (!sessionPersistenceReady) return;
-  try {
-    trimRuntimeSessions();
-    const data = sessions.value
-      .filter(hasPersistedConversation)
-      .slice(0, MAX_STORED_SESSIONS)
-      .map(sessionIndexEntry);
-    localStorage.setItem(SESSIONS_STORAGE_KEY, JSON.stringify(data));
-  } catch (_) { /* storage unavailable */ }
+  trimRuntimeSessions();
+  const session = activeSession.value;
+  if (!session || session.runId || session.isRunning || !session.id || !session.hasSnapshot) return;
+  const entry = sessionIndexEntry(session);
+  enqueueSessionWrite(() => SaveSessionIndex(entry)).catch(() => {});
 }
 
 function buildCompletedSessionSnapshot(session) {
@@ -5162,21 +5245,19 @@ function buildCompletedSessionSnapshot(session) {
     ...sessionIndexEntry(session),
     messages: sanitizeStoredMessages(session.messages || []),
   };
-  // IndexedDB structured cloning rejects Vue Proxy objects. JSON round-trip is
-  // intentional here: snapshot fields are JSON data and already have Blob
-  // URLs, full image payloads, and transient edit arguments stripped above.
   return JSON.parse(JSON.stringify(snapshot));
 }
 
 function persistCompletedSession(session) {
-  if (!sessionPersistenceReady || !session?.id || session.runId || session.isRunning) return Promise.resolve();
+  if (!session?.id || session.runId || session.isRunning) return Promise.resolve();
   const snapshot = buildCompletedSessionSnapshot(session);
-  return saveSessionSnapshot(snapshot).then(() => {
-    session.hasPersistedSnapshot = true;
-    saveSessions();
+  return enqueueSessionWrite(() => SaveSession(snapshot)).then(() => {
+    session.hasSnapshot = true;
+    session.messagesLoaded = true;
+    session.messageCount = Number(snapshot.messageCount || 0);
+    session.contextTokens = Number(snapshot.contextTokens || 0);
   }).catch(() => {
-    // Keep the previous completed snapshot. A failed persistence attempt must
-    // never replace it with a partial or running turn.
+    // Keep the previous completed snapshot when a disk write fails.
   });
 }
 
@@ -5191,11 +5272,21 @@ function scheduleSaveSessions() {
     saveSessions();
   }, SAVE_SESSIONS_DEBOUNCE_MS);
 }
+function unloadInactiveSessionMessages() {
+  for (const session of sessions.value) {
+    if (!session || session.id === activeSessionId.value || sessionMayHaveBackgroundRun(session) || session.messagesLoaded === false) continue;
+    for (const message of session.messages || []) releaseMessageAttachments(message);
+    session.messages = [];
+    session.messagesLoaded = false;
+  }
+}
+
 function trimRuntimeSessions() {
   // A Tab must never point at an evicted/missing session. Repair legacy or
   // partially persisted state before calculating the protected set.
   for (const tab of workspaceTabs.value) ensureWorkspaceTabSession(tab);
   for (const session of sessions.value) trimRuntimeSessionMessages(session);
+  unloadInactiveSessionMessages();
   if (sessions.value.length <= MAX_RUNTIME_SESSIONS) return;
 
   const protectedIds = new Set([
@@ -5228,7 +5319,7 @@ function sessionMayHaveBackgroundRun(session) {
 }
 
 function trimRuntimeSessionMessages(session) {
-  if (!session || session.runId || session.isRunning) return;
+  if (!session || session.messagesLoaded === false || session.runId || session.isRunning) return;
   const messages = Array.isArray(session.messages) ? session.messages : [];
   const recentRenderable = messages.filter(isRenderableMessage).slice(-MAX_RUNTIME_RENDERABLE_MESSAGES);
   const recentConversation = messages.filter(isModelHistoryMessage).slice(-MAX_MODEL_HISTORY_MESSAGES);
@@ -5281,10 +5372,80 @@ function truncateStoredText(value, limit, marker) {
   return `${value.slice(0, limit)}\n\n${marker}`;
 }
 
-async function loadSavedSessions() {
+function sessionFromIndexEntry(entry) {
+  return {
+    id: entry.id,
+    title: entry.title || t('app.sessions.history'),
+    firstPrompt: entry.firstPrompt || '',
+    workspace: entry.workspace || '',
+    extraRoots: Array.isArray(entry.extraRoots) ? [...entry.extraRoots] : [],
+    messages: [],
+    messagesLoaded: false,
+    runId: '',
+    isRunning: false,
+    grillMode: !!entry.grillMode,
+    hasSnapshot: !!entry.hasSnapshot,
+    messageCount: Number(entry.messageCount || 0),
+    contextTokens: Number(entry.contextTokens || 0),
+    createdAt: Number(entry.createdAt || Date.now()),
+    updatedAt: Number(entry.updatedAt || entry.createdAt || Date.now()),
+  };
+}
+
+function applySessionIndexEntry(session, entry) {
+  if (!session || !entry) return session;
+  session.title = entry.title || session.title || t('app.sessions.history');
+  session.firstPrompt = entry.firstPrompt || session.firstPrompt || '';
+  session.workspace = entry.workspace || session.workspace || '';
+  session.extraRoots = Array.isArray(entry.extraRoots) ? [...entry.extraRoots] : (session.extraRoots || []);
+  session.grillMode = !!entry.grillMode;
+  session.hasSnapshot = !!entry.hasSnapshot;
+  session.messageCount = Number(entry.messageCount || 0);
+  session.contextTokens = Number(entry.contextTokens || 0);
+  session.createdAt = Number(entry.createdAt || session.createdAt || Date.now());
+  session.updatedAt = Number(entry.updatedAt || session.updatedAt || session.createdAt);
+  return session;
+}
+
+async function refreshSessionIndex() {
+  let entries;
+  try {
+    entries = await ListSessions();
+  } catch (err) {
+    return false;
+  }
+  const currentByID = new Map(sessions.value.map((session) => [session.id, session]));
+  const entryIDs = new Set();
+  const ordered = [];
+  for (const entry of Array.isArray(entries) ? entries : []) {
+    if (!entry?.id) continue;
+    entryIDs.add(entry.id);
+    const current = currentByID.get(entry.id);
+    if (current) {
+      applySessionIndexEntry(current, entry);
+      ordered.push(current);
+    } else {
+      ordered.push(sessionFromIndexEntry(entry));
+    }
+  }
+
+  const protectedIDs = new Set([
+    activeSessionId.value,
+    ...workspaceTabs.value.map((tab) => tab.sessionId || ''),
+    ...sessions.value.filter(sessionMayHaveBackgroundRun).map((session) => session.id),
+  ]);
+  for (const session of sessions.value) {
+    if (!entryIDs.has(session.id) && protectedIDs.has(session.id)) ordered.unshift(session);
+  }
+  sessions.value = ordered;
+  trimRuntimeSessions();
+  return true;
+}
+
+async function migrateLegacySessionStorage() {
   let metadata = [];
   try {
-    const raw = localStorage.getItem(SESSIONS_STORAGE_KEY);
+    const raw = localStorage.getItem('ally_sessions');
     const saved = raw ? JSON.parse(raw) : [];
     if (Array.isArray(saved)) metadata = saved;
   } catch (_) { /* ignore invalid legacy data */ }
@@ -5293,67 +5454,93 @@ async function loadSavedSessions() {
   try {
     snapshots = await loadSessionSnapshots();
   } catch (_) {
-    sessionPersistenceReady = false;
+    snapshots = [];
   }
+  if (metadata.length === 0 && snapshots.length === 0) return true;
 
-  const metadataByID = new Map(metadata.filter((item) => item?.id).map((item) => [item.id, item]));
-  const snapshotByID = new Map(snapshots.filter((item) => item?.id).map((item) => [item.id, item]));
-  const ids = [];
-  for (const item of metadata) if (item?.id && !ids.includes(item.id)) ids.push(item.id);
-  for (const item of snapshots) if (item?.id && !ids.includes(item.id)) ids.push(item.id);
+  let backendEntries;
+  try {
+    backendEntries = await ListSessions();
+  } catch (_) {
+    return false;
+  }
+  const backendByID = new Map((backendEntries || []).filter((entry) => entry?.id).map((entry) => [entry.id, entry]));
+  const metadataByID = new Map(metadata.filter((entry) => entry?.id).map((entry) => [entry.id, entry]));
+  const snapshotIDs = new Set();
+  let migrationFailed = false;
 
-  const legacyMigrations = [];
-  for (const id of ids) {
-    const meta = metadataByID.get(id) || {};
-    const storedSnapshot = snapshotByID.get(id) || null;
-    const legacyMessages = Array.isArray(meta.messages) ? meta.messages : [];
-    const source = storedSnapshot || (legacyMessages.length > 0 ? { ...meta, messages: legacyMessages } : null);
-    if (!source) continue;
-
-    const existing = sessions.value.find((session) => session.id === id);
-    if (existing) continue;
-    const restoredMessages = (source.messages || []).map((item) => ({
-      ...item,
-      streaming: false,
-      done: item.role === 'assistant' ? true : !!item.done,
-    }));
-    const restored = {
-      id,
+  for (const source of snapshots) {
+    if (!source?.id) continue;
+    snapshotIDs.add(source.id);
+    const existing = backendByID.get(source.id);
+    if (existing?.hasSnapshot) continue;
+    const meta = metadataByID.get(source.id) || {};
+    const payload = {
+      ...source,
+      id: source.id,
       title: meta.title || source.title || t('app.sessions.history'),
       workspace: meta.workspace || source.workspace || '',
-      extraRoots: Array.isArray(meta.extraRoots) ? [...meta.extraRoots] : (Array.isArray(source.extraRoots) ? [...source.extraRoots] : []),
-      messages: restoredMessages,
-      runId: '',
-      isRunning: false,
-      grillMode: !!(meta.grillMode ?? source.grillMode),
-      hasPersistedSnapshot: !!storedSnapshot,
-      createdAt: meta.createdAt || source.createdAt || Date.now(),
-      updatedAt: meta.updatedAt || source.updatedAt || meta.createdAt || source.createdAt || Date.now(),
+      extraRoots: Array.isArray(meta.extraRoots) ? meta.extraRoots : (source.extraRoots || []),
+      grillMode: meta.grillMode ?? source.grillMode,
+      createdAt: meta.createdAt || source.createdAt,
+      updatedAt: meta.updatedAt || source.updatedAt,
     };
-    if (!restored.workspace) restored.workspace = inferSessionWorkspace(restored);
-    sessions.value.push(restored);
-
-    if (sessionPersistenceReady && !storedSnapshot && legacyMessages.length > 0) {
-      legacyMigrations.push(saveSessionSnapshot(buildCompletedSessionSnapshot(restored)).then(() => {
-        restored.hasPersistedSnapshot = true;
-      }));
+    try {
+      await SaveSession(JSON.parse(JSON.stringify(payload)));
+    } catch (_) {
+      migrationFailed = true;
     }
   }
 
-  if (legacyMigrations.length > 0) {
-    const results = await Promise.allSettled(legacyMigrations);
-    if (results.some((result) => result.status === 'rejected')) sessionPersistenceReady = false;
+  for (const meta of metadata) {
+    if (!meta?.id || snapshotIDs.has(meta.id) || backendByID.has(meta.id)) continue;
+    const legacyMessages = Array.isArray(meta.messages) ? meta.messages : [];
+    const entry = {
+      id: meta.id,
+      title: meta.title || t('app.sessions.history'),
+      workspace: meta.workspace || '',
+      extraRoots: Array.isArray(meta.extraRoots) ? meta.extraRoots : [],
+      grillMode: !!meta.grillMode,
+      createdAt: meta.createdAt || Date.now(),
+      updatedAt: meta.updatedAt || meta.createdAt || Date.now(),
+      messageCount: Number(meta.messageCount || legacyMessages.filter((item) => item?.role === 'user' || item?.role === 'assistant').length),
+      contextTokens: Number(meta.contextTokens || 0),
+      hasSnapshot: false,
+    };
+    try {
+      await SaveSessionIndex(entry);
+    } catch (_) {
+      migrationFailed = true;
+    }
   }
+
+  if (migrationFailed) return false;
+  try {
+    localStorage.removeItem('ally_sessions');
+    await clearSessionSnapshotStore();
+  } catch (_) {
+    // The backend copy is already authoritative; cleanup is best-effort.
+  }
+  return true;
+}
+
+async function loadSavedSessions() {
+  await migrateLegacySessionStorage();
+  await refreshSessionIndex();
   saveSessions();
+}
+
+async function refreshSessionListData() {
+  await refreshSessionIndex();
+  await refreshSessionTokensList();
 }
 
 function showSessionList() {
   saveSessions();
-  promptText.value = '';
   sessionsVisible.value = true;
   sessionsSelectedIndex.value = 0;
   commandMenuVisible.value = false;
-  refreshSessionTokensList();
+  void refreshSessionListData();
   nextTick(() => promptInputRef.value?.focus());
 }
 
@@ -5366,8 +5553,7 @@ async function switchToSession(index) {
   const target = sessions.value[idx - 1];
   if (!target) return;
   saveSessions();
-  activateSelectedSession(target);
-  promptText.value = '';
+  await activateSelectedSession(target);
   scrollMessagesToBottom();
 }
 
@@ -6414,8 +6600,9 @@ function fmtTime(ts) {
 }
 
 function msgCount(s) {
-  if (!s.messages) return 0;
-  return s.messages.filter(m => m.role === 'user' || m.role === 'assistant').length;
+  if (Number.isFinite(Number(s?.messageCount))) return Number(s.messageCount);
+  if (!s?.messages) return 0;
+  return s.messages.filter((message) => message?.role === 'user' || message?.role === 'assistant').length;
 }
 
 // Real per-session token counts come from the backend (GetSessionContextTokens),
@@ -6426,23 +6613,33 @@ function msgCount(s) {
 // list is opened.
 const sessionTokensCache = reactive({});
 let sessionTokensRefreshing = false;
+
 async function refreshSessionTokensList() {
   if (sessionTokensRefreshing) return;
   sessionTokensRefreshing = true;
+  const targets = sessions.value.filter((session) => session?.id && !Number(session.contextTokens || sessionTokensCache[session.id] || 0));
   try {
-    await Promise.all(sessions.value.map(async (s) => {
+    await Promise.allSettled(targets.map(async (session) => {
       try {
-        const n = await GetSessionContextTokens(s.id);
-        sessionTokensCache[s.id] = n || 0;
-      } catch (_) { /* ignore single-session failure */ }
+        const value = Number(await GetSessionContextTokens(session.id)) || 0;
+        if (value <= 0) return;
+        session.contextTokens = value;
+        sessionTokensCache[session.id] = value;
+        if (session.hasSnapshot && !session.isRunning) {
+          enqueueSessionWrite(() => SaveSessionIndex(sessionIndexEntry(session))).catch(() => {});
+        }
+      } catch (_) {
+        // Keep the persisted value when one session cannot be recalculated.
+      }
     }));
   } finally {
     sessionTokensRefreshing = false;
   }
 }
+
 function ctxSize(s) {
-  const tokens = sessionTokensCache[s.id] || 0;
-  if (!tokens) return '—';
+  const tokens = Number(s?.contextTokens || sessionTokensCache[s?.id] || 0);
+  if (!Number.isFinite(tokens) || tokens < 0) return '—';
   if (tokens >= 1000) return (tokens / 1000).toFixed(1) + 'k';
   return String(tokens);
 }

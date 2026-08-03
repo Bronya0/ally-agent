@@ -131,7 +131,9 @@ Connected MCP tools are sorted by server, tool name, and function name before be
 - `configPath`: `~/.ally_agent/config.json`
 - `runs`: run ID to cancel function
 - `runSessions`: run ID to session ID, used to reject cleanup of active sessions
-- `histories`: backend session history by session ID
+- `histories`: backend model history by session ID
+- `sessionsDir`: local session index and per-session UI snapshots under `~/.ally_agent/sessions/`
+- `sessionMu`: serializes local session index/snapshot file operations
 - `pendingAsks`: blocking main-session questions waiting for frontend submission
 - `disabledSkills`: persisted list of skill names disabled by the user
 - `mcpManager`: active MCP manager
@@ -522,7 +524,7 @@ State management:
 - Vue 3 `<script setup>`
 - plain `ref()` / `reactive()`
 - no Vuex/Pinia
-- sessions and prompt history are persisted in `localStorage`
+- prompt history remains in `localStorage`; session index and completed UI snapshots are persisted by the backend in local files
 
 Major UI regions:
 
@@ -595,9 +597,9 @@ UI internationalization:
 
 ## Sessions, Context, And Token Accounting
 
-Frontend session metadata (ID, title, workspace, timestamps) is indexed in `localStorage`; completed UI message snapshots are stored per session in IndexedDB. Only successful `run:done` turns and explicit successful compaction update a snapshot. Failed, cancelled, or still-streaming turns remain process-local and are excluded from later model requests and snapshots. Closing the window does not create a snapshot; it only waits for writes already queued by completed turns. Legacy `localStorage` message arrays are migrated once when IndexedDB is available.
+The backend owns the session index at `~/.ally_agent/sessions/index.json` and stores each completed UI snapshot as a separate gzip JSON file under `~/.ally_agent/sessions/<escaped-session-id>.json.gz`. The frontend loads only index metadata at startup and imports one snapshot when the user selects a session; inactive session messages are released from frontend memory. Only successful `run:done` turns and explicit successful compaction update a snapshot. Failed, cancelled, or still-streaming turns remain process-local and are excluded from later model requests and snapshots. Closing the window waits for queued local-file writes. Legacy `localStorage`/IndexedDB session data is migrated once and then cleared.
 
-Backend histories are separate process-memory histories keyed by session ID and persisted as gzip-compressed JSON (`~/.ally_agent/histories/<escaped-session-id>.json.gz`). Loading remains compatible with legacy uncompressed `.json` files. On restart, backend history remains the model-context source of truth; frontend history contributes only a detected new tail. Alignment uses the longest overlap between the backend visible-history suffix and a contiguous frontend range, so an older IndexedDB prefix is not duplicated. When backend compaction intentionally removes textual overlap, only the latest frontend request item is appended. Saved histories are bounded by an estimated-token budget rather than a fixed message count and are trimmed only at user-message boundaries, preserving assistant tool-call/result protocol groups. Failed and cancelled runs do not replace the last completed backend history.
+Backend model histories are separate process-memory histories keyed by session ID and persisted as gzip-compressed JSON (`~/.ally_agent/histories/<escaped-session-id>.json.gz`). Loading remains compatible with legacy uncompressed `.json` files. On restart, backend history remains the model-context source of truth; frontend history contributes only a detected new tail. Alignment uses the longest overlap between the backend visible-history suffix and a contiguous frontend range, so an older frontend snapshot prefix is not duplicated. When backend compaction intentionally removes textual overlap, only the latest frontend request item is appended. Saved histories are bounded by an estimated-token budget rather than a fixed message count and are trimmed only at user-message boundaries, preserving assistant tool-call/result protocol groups. Failed and cancelled runs do not replace the last completed backend history.
 
 Backend session cleanup distinguishes `ReleaseSession`, which frees in-memory history/goal/todo/context state while preserving the persisted history file, from `DeleteSession`, which also removes both compressed and legacy history files. Frontend explicit deletion uses `DeleteSession`; runtime session eviction uses `ReleaseSession`.
 
@@ -624,7 +626,7 @@ Long-render optimization:
 - Backend context construction receives the retained conversation history, capped by `MAX_MODEL_HISTORY_MESSAGES`.
 - Normal rendering is bounded to 180 messages / 220k estimated characters; expanded archives are still bounded to 360 messages / 440k characters rather than mounting the full conversation.
 - Completed frontend sessions retain the latest 400 conversation messages and 260 renderable messages in memory, with at most 200 unpinned sessions. Running, active, and workspace-linked sessions are protected from session eviction.
-- Completed IndexedDB snapshots retain the same bounded 400 conversation / 260 renderable window used by runtime archiving; large tool previews, edit arguments, attachment payloads, and Diffs are stripped or individually truncated before structured cloning. Snapshot objects are converted to plain JSON data so Vue proxies never reach IndexedDB.
+- Backend UI snapshots retain the same bounded 400 conversation / 260 renderable window used by runtime archiving; large tool previews, edit arguments, attachment payloads, and Diffs are stripped or individually truncated before gzip JSON serialization. The frontend keeps only active, running, and workspace-linked session messages in memory.
 - Media previews use revocable Blob URLs. Images render from a bounded thumbnail while the original Base64 payload is retained only when it is eligible for model input.
 - Diff rendering uses exact LCS only below a fixed matrix budget. Larger replacements use a linear-memory prefix/suffix fallback, and multi-file edit cards stay collapsed until explicitly expanded.
 - Workspace history is normalized and deduplicated, retains the latest 30 paths, and is displayed in a fixed-height scrollable dropdown.

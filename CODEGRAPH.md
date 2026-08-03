@@ -295,7 +295,7 @@ defaultSystemPrompt() → buildSystemPromptParts()
 
 - Vue 3 `<script setup>` + `ref()` / `reactive()`
 - 无 Vuex/Pinia
-- 会话索引和提示历史保存在 `localStorage`；成功完成轮次的 UI 消息快照按 session 独立保存在 IndexedDB
+- 提示历史保存在 `localStorage`；会话索引和 UI 快照由后端写入 `~/.ally_agent/sessions/` 本地文件
 
 ### 国际化
 
@@ -305,8 +305,8 @@ defaultSystemPrompt() → buildSystemPromptParts()
 
 ## 会话与上下文
 
-- 前端会话：`localStorage` 只存 ID/标题/工作区等索引，IndexedDB 的 `sessions` store 按 session 保存成功完成轮次的 UI 快照；失败、取消和流式未完成轮次不落盘
-- 关闭窗口不采集当前会话，只等待已由 `run:done` 或显式压缩成功排队的 IndexedDB 写入完成；旧 `localStorage` 消息可一次性迁移
+- 前端会话：启动只从后端 `~/.ally_agent/sessions/index.json` 读取轻量索引；点击会话后通过 `LoadSession` 按需加载单个 gzip 快照，非活动会话消息从前端内存释放
+- 关闭窗口不采集当前会话，只等待 `SaveSession`/`SaveSessionIndex` 已排队的本地文件写入完成；旧 `localStorage`/IndexedDB 会话数据只做一次迁移并清理
 - 首次启动不默认绑定可执行文件或进程目录；用户首次发送普通任务时选择工作区，后端拒绝空工作区
 - 后端历史：`map[sessionID][]ChatCompletionMessage`，磁盘使用 gzip JSON，并按约 256k token 预算从完整 user 边界裁剪，不再固定为 40 条
 - 前后端恢复对齐：匹配后端可见历史尾部与前端连续区间的最大重叠；后端压缩导致零重叠时仅追加最新请求
@@ -322,7 +322,7 @@ defaultSystemPrompt() → buildSystemPromptParts()
 | Mermaid | 视口附近渲染，超出区域卸载，16项LRU恢复 |
 | diff | 精确LCS限于25万行矩阵上限，大替换用前缀/后缀回退 |
 | 媒体预览 | revocable Blob URL，Base64仅在需要模型输入时保留 |
-| 会话持久化 | localStorage 仅保存小型索引；IndexedDB 按会话保存完成轮次，大 tool 预览在快照前截断 |
+| 会话持久化 | 后端 `sessions/index.json` 保存索引、每会话 gzip JSON 保存 UI 快照；前端仅保留当前/运行中消息，大 tool 预览在写盘前截断 |
 | 工具事件 | 后端200ms/2048B节流，前端120ms rAF批量 flush |
 
 ---

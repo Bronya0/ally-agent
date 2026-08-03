@@ -77,20 +77,6 @@ export async function loadSessionSnapshots() {
   return Array.isArray(result) ? result : [];
 }
 
-export function saveSessionSnapshot(snapshot) {
-  if (!snapshot?.id) return Promise.reject(new Error('session snapshot id is required'));
-  return writes.enqueue(() => transactionRequest('readwrite', (store) => store.put(snapshot)));
-}
-
-export function deleteSessionSnapshot(sessionId) {
-  if (!sessionId) return Promise.resolve();
-  return writes.enqueue(() => transactionRequest('readwrite', (store) => store.delete(sessionId)));
-}
-
-export function flushSessionSnapshotWrites() {
-  return writes.flush();
-}
-
-export function isSessionSnapshotStorageAvailable() {
-  return indexedDBAvailable();
+export function clearSessionSnapshotStore() {
+  return writes.enqueue(() => transactionRequest('readwrite', (store) => store.clear()));
 }
