@@ -1430,6 +1430,17 @@ code, pre {
   line-height: 1.4;
 }
 
+.session-prompt-summary {
+  display: block;
+  margin-top: 2px;
+  color: #a1a1a1;
+  font-size: 11px;
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .session-body {
   display: flex;
   flex-direction: column;

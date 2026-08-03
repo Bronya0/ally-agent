@@ -93,6 +93,9 @@
                       <span class="session-index">{{ index + 1 }}</span>
                       <div class="session-body">
                         <span class="session-label">{{ s.title || $t('app.sessions.new') }}</span>
+                        <span v-if="firstSessionPromptSummary(s)" class="session-prompt-summary">
+                          {{ firstSessionPromptSummary(s) }}
+                        </span>
                         <span class="session-time">
                           {{ fmtTime(s.createdAt) }}
                           <template v-if="s.id === activeSessionId && s.isRunning"> ~ {{ $t('app.sessions.inProgress') }}</template>
@@ -1458,16 +1461,52 @@ const workspaceTabsWithStatus = computed(() => {
   return workspaceTabsWithStatusCache;
 });
 const activeMessages = computed(() => activeSession.value?.messages || []);
-const latestUserPromptSummary = computed(() => {
-  const message = [...activeMessages.value].reverse().find((item) => item?.role === 'user');
-  if (!message) return '';
-  const content = String(message.content || '').replace(/\s+/g, ' ').trim();
-  const attachments = Array.isArray(message.attachments) ? message.attachments : [];
-  if (!content) return attachmentDisplayLabel(attachments);
-  if (!attachments.length) return content;
-  const attachmentLabel = attachmentDisplayLabel(attachments);
-  return attachmentLabel && content !== attachmentLabel ? `${content} · ${attachmentLabel}` : content;
-});
+const SESSION_PROMPT_SUMMARY_MAX_CHARS = 96;
+
+function promptSummaryText(value, maxChars = Infinity) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  if (!Number.isFinite(maxChars) || text.length <= maxChars) return text;
+  const contentLimit = Math.max(1, maxChars - 1);
+  return `${text.slice(0, contentLimit).trimEnd()}…`;
+}
+
+function latestPromptSummaryForSession(session, maxChars = Infinity) {
+  const messages = Array.isArray(session?.messages) ? session.messages : [];
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index];
+    if (message?.role !== 'user') continue;
+    const content = String(message.content || '').replace(/\s+/g, ' ').trim();
+    const attachments = Array.isArray(message.attachments) ? message.attachments : [];
+    const attachmentLabel = attachmentDisplayLabel(attachments);
+    if (!content) return promptSummaryText(attachmentLabel, maxChars);
+    const combined = attachmentLabel && content !== attachmentLabel
+      ? `${content} · ${attachmentLabel}`
+      : content;
+    return promptSummaryText(combined, maxChars);
+  }
+  return '';
+}
+
+function firstPromptSummaryForSession(session) {
+  const messages = Array.isArray(session?.messages) ? session.messages : [];
+  for (const message of messages) {
+    if (message?.role !== 'user') continue;
+    const content = String(message.content || '').replace(/\s+/g, ' ').trim();
+    const attachments = Array.isArray(message.attachments) ? message.attachments : [];
+    const attachmentLabel = attachmentDisplayLabel(attachments);
+    if (!content) return promptSummaryText(attachmentLabel);
+    return attachmentLabel && content !== attachmentLabel
+      ? `${content} · ${attachmentLabel}`
+      : content;
+  }
+  return '';
+}
+
+function firstSessionPromptSummary(session) {
+  return promptSummaryText(firstPromptSummaryForSession(session), SESSION_PROMPT_SUMMARY_MAX_CHARS);
+}
+
+const latestUserPromptSummary = computed(() => latestPromptSummaryForSession(activeSession.value));
 const activeSessionRunning = computed(() => !!activeSession.value?.isRunning);
 const scheduledTaskRunningCount = computed(() => scheduledTasks.value.filter((task) => task?.running).length);
 const serviceRunningCount = computed(() => services.value.filter((service) => ['starting', 'running'].includes(service?.status)).length);
