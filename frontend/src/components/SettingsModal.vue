@@ -1335,7 +1335,8 @@ watch(() => props.visible, (visible) => {
 .settings-layout {
   display: flex;
   gap: 20px;
-  min-height: 340px;
+  height: 460px;
+  min-height: 460px;
 }
 
 .settings-nav {
@@ -1387,6 +1388,7 @@ watch(() => props.visible, (visible) => {
 .settings-content {
   flex: 1;
   min-width: 0;
+  height: 460px;
   max-height: 460px;
   overflow-y: auto;
 }
@@ -1950,6 +1952,8 @@ watch(() => props.visible, (visible) => {
   .settings-layout {
     flex-direction: column;
     gap: 14px;
+    height: auto;
+    min-height: 0;
   }
 
   .settings-nav {
@@ -1964,6 +1968,7 @@ watch(() => props.visible, (visible) => {
   }
 
   .settings-content {
+    height: min(460px, calc(100vh - 260px));
     max-height: min(460px, calc(100vh - 260px));
   }
 }
