@@ -238,8 +238,7 @@ Supported API formats:
 - streams model output and emits:
   - `run:start`
   - `run:llm_wait`
-  - `run:delta`
-  - `run:reasoning`
+  - `run:stream` (merged content + reasoning deltas)
   - tool events
   - `run:done` / `run:error`
 - tracks usage with provider-reported usage when available, otherwise estimates
@@ -749,7 +748,7 @@ Example MCP config:
 - Vue: Composition API with `<script setup>`.
 - Components: PascalCase file/component names.
 - CSS: one dark theme, semantic class names, no preprocessor.
-- Events: lowercase with colon separators, e.g. `run:delta`, `tool:result`, `mcp:status`.
+- Events: lowercase with colon separators, e.g. `run:stream`, `tool:result`, `mcp:status`.
 - JSON fields: camelCase for Go struct tags and user-facing tool parameters.
 - Wails bindings: `wails3 build` regenerates bindings automatically; no manual binding step needed.
 - Avoid broad refactors while changing tool contracts or provider adapters.
@@ -829,7 +828,7 @@ These rules are required for future changes. They exist to keep Agent behavior d
 
 | 事件 | 后端节流位置 | 前端缓冲位置 |
 |------|--------------|--------------|
-| `run:delta` / `run:reasoning` | `runStreamDeltaEmitter` (`infra_stream.go`, 32ms / 512B)，流末 `flush()` 兜底；`run:image` 发送前先 flush | `queueStreamDelta` + `setTimeout(48ms) → requestAnimationFrame` (`App.vue`) |
+| `run:stream` (content+reasoning 合并) | `runStreamDeltaEmitter` (`infra_stream.go`, 32ms / 512B)，流末 `flush()` 兜底；`run:image` 发送前先 flush | `queueStreamDelta` + `setTimeout(48ms) → requestAnimationFrame` (`App.vue`) |
 | `tool:update` | `toolCallProgressTracker.eventsWithForce` (`infra_stream.go`, 200ms / 2048B)，超阈值且在窗口内早 continue；`forceEvents()` 流末绕过节流。`run_command` 约每 120ms 发布累计输出并在结束前强制最终快照 | `bufferToolUpdate` + `setTimeout(120ms) → requestAnimationFrame`；命令卡短输出按内容收缩，最多约六行后滚动，并自动跟随末尾 |
 
 ### 生命周期事件（天然低频，无需节流）
@@ -859,21 +858,21 @@ These rules are required for future changes. They exist to keep Agent behavior d
 
 ### 子代理 / 调度任务路径
 
-`app.go` `executeDelegate` 调用 `streamModelResponse(ctx, cfg, model, messages, tools, nil)` —— **传入 `nil` onEvent**，子代理和调度任务不发任何 `run:delta` / `tool:update` 流式事件。只发 step 级事件：
+`app.go` `executeDelegate` 调用 `streamModelResponse(ctx, cfg, model, messages, tools, nil)` —— **传入 `nil` onEvent**，子代理和调度任务不发任何 `run:stream` / `tool:update` 流式事件。只发 step 级事件：
 - `sub:spawn` / `sub:done` / `sub:error` — 生命周期
 - `sub:tool:start` / `sub:tool:result` / `sub:tool:error` — 每工具调用 1 次
 - `sub:step` — 每 LLM step 1 次
 
 ### 事件命名约定
 
-lowercase + 冒号分隔，如 `run:delta`、`tool:result`、`mcp:status`、`sub:step`、`scheduled:update`、`service:update`、`todo:update`、`goal:update`、`ask:ready`、`tokens:update`、`dependency:missing`、`config:warning`。
+lowercase + 冒号分隔，如 `run:stream`、`tool:result`、`mcp:status`、`sub:step`、`scheduled:update`、`service:update`、`todo:update`、`goal:update`、`ask:ready`、`tokens:update`、`dependency:missing`、`config:warning`。
 
 ---
 
 ## Performance And Memory Notes (Ally-specific)
 
 - `tool:update` 事件在 `toolCallProgressTracker.eventsWithForce` (`app.go`) 中带 `toolUpdateThrottle = 200ms` + `toolUpdateThreshold = 2048` 字节节流。累计 `arguments` 超过阈值且仍在窗口内时早 continue，跳过 O(len(args)) 的 state 构造。`forceEvents()` 在流结束后绕过节流，保证最终参数状态送达。`run_command` 执行时复用同一事件，以约 120ms 间隔发送有变化的累计 stdout/stderr，并在命令结束前发送最终输出快照；前端固定高度展示并跟随末尾。测试见 `TestToolCallProgressTrackerThrottlesLargeUpdates`。
-- 前端 `App.vue` 用 `toolUpdateBuffers` Map + `setTimeout(120ms) → requestAnimationFrame` 批量 flush `tool:update`，并在 `tool:result` / `tool:error` / `run:done` / `run:error` / `run:cancelled` 处理前显式 `flushToolUpdateBuffer()`。`streamBuffers` 走同样的 `queueStreamDelta` 模式处理 `run:delta`。
+- 前端 `App.vue` 用 `toolUpdateBuffers` Map + `setTimeout(120ms) → requestAnimationFrame` 批量 flush `tool:update`，并在 `tool:result` / `tool:error` / `run:done` / `run:error` / `run:cancelled` 处理前显式 `flushToolUpdateBuffer()`。`streamBuffers` 走同样的 `queueStreamDelta` 模式处理 `run:stream`。
 - 单 session `localStorage` 预算 240KB，大 tool 预览 / edit 参数 / 附件 Base64 / Diff 在序列化前剥除或截断。
 - 前端 Mermaid SVG DOM 视口外卸载，16 条 / 2M 字符 LRU；`render_html` 流式期间不挂载 iframe，完成后再挂一个 sandboxed iframe。
 - `run_command` / `background_process` 后端 rolling buffer 512KB / 进程，最多 8 个活动进程；服务停止或退出后立即清理记录。

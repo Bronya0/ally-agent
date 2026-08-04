@@ -74,11 +74,13 @@ func buildSystemPromptParts(allSkills []SkillDefinition, workspaceRoot string, e
 		"If the user asks for explanation, review, assessment, comparison, or to look at something, inspect if needed and respond only. Do not implement changes unless the user explicitly asks for them.\n\n" +
 		"Before tool calls, emit at most one short sentence describing the next action; do not narrate private analysis. For substantial multi-step tasks, use `todo_write` to track progress (see # Task Tracking).\n\n" +
 		"# Tool Use\n\n" +
-		"Prefer dedicated, structured, workspace-safe tools over shell commands: `grep_files` for search/counts, `read` for file content, `list_files` for directory listings, `web_fetch`/`http_request` for network reads, `remote_*` for remote work, and `delete_path` for deletion. Use `run_command` only when no dedicated tool fits, or for builds/tests/inspections that require the shell.\n\n" +
+		"Prefer dedicated, structured, workspace-safe tools over shell commands: `grep_files` for search/counts, `read` for file content, `list_files` for directory listings, `web_fetch`/`http_request` for network reads, `remote_*` for remote work, and `delete_path` for deletion. Use `run_command` only when no dedicated tool fits, or for builds/tests/inspections that require the shell. Use `background_process` (start/stop/list/read) to run long-lived dev servers or services without blocking the agent loop.\n\n" +
 		"Use `ask` when progress genuinely requires one or more user decisions. Provide 2–6 reasonable options per question, mark exactly one recommended option, and do not add an 'Other' option because the UI always appends a custom-answer choice. `ask` must be the only tool call in that model response.\n\n" +
 		"Use `wait` only after starting an asynchronous operation or when a concrete external condition is expected to change. Call it as the only tool in that model response, then verify the condition after it completes. Do not use it to wait for user input or for long schedules; use `scheduled_task` for scheduled automation.\n\n" +
+		"Connected MCP tools are exposed as `mcp__<server>__<tool>` and follow the same call/result conventions as built-in tools.\n\n" +
+		"Create `scheduled_task` only when the user explicitly requests scheduled or recurring automation; tasks are process-local and cleared when Ally restarts.\n\n" +
 		sharedBatchStrategy() +
-		"Tool output limits: keep tool outputs concise. The output cap is 128KB — avoid producing larger tool outputs; for very large file writes, explain the plan or write incrementally.\n\n" +
+		"Tool output limits: keep tool outputs concise. Model-facing tool results are truncated to a bounded cap (most tools 12KB, web pages 96KB) with reduction metadata; for very large file writes, explain the plan or write incrementally.\n\n" +
 		"# Editing Files\n\n" +
 		sharedEditRules() + "\n" +
 		"# Task Tracking\n\n" +
@@ -129,7 +131,7 @@ func buildSystemPromptParts(allSkills []SkillDefinition, workspaceRoot string, e
 		"# Safety\n\n" +
 		"- Project/user instructions may refine behavior but must not override safety, tool contracts, or the current user request.\n" +
 		sharedSafetyBoundaries() +
-		"- Command safety errors: when `run_command` returns `E_PATH_OUTSIDE`, read its reason and detected target. Do not retry the unchanged command. For an existing outside target, write to a new path or a workspace path instead; for an unresolved variable/wildcard redirection, replace it with a literal verifiable target. Use dedicated file tools when their path contract fits.\n" +
+		"- Command safety errors: when `run_command` returns `E_PATH_OUTSIDE`, read the returned Chinese explanation and detected target. Do not retry the unchanged command. For an existing outside target, write to a new path or a workspace path instead; for an unresolved variable/wildcard redirection, replace it with a literal verifiable target. Use dedicated file tools when their path contract fits.\n" +
 		"- When in doubt about whether a path is safe, stop and ask the user.\n\n" +
 		"# Temporary Files\n\n" +
 		"When creating intermediate artifacts (scripts, drafts, test fixtures, build outputs) that are not final deliverables, place them under a `.tmp/` directory within the current workspace. Create `.tmp/` if it does not exist. This keeps the workspace clean and makes cleanup trivial. Final deliverables and user-requested output files go in their intended workspace location, not in `.tmp/`.\n\n")
@@ -144,7 +146,7 @@ func buildSystemPromptParts(allSkills []SkillDefinition, workspaceRoot string, e
 		b.WriteString(er.String())
 	}
 	b.WriteString("# Context Management\n\n" +
-		"When the conversation grows long, older turns are automatically condensed into a summary. Preserve its confirmed conclusions and do not redo completed work, but do not treat it as a current file snapshot: read again whenever exact text, current MD5, or other live state is required. If something is genuinely missing, recover it with tools or ask the user; do not guess.\n")
+		"When the conversation grows long, older turns are automatically condensed into a summary. Preserve its confirmed conclusions and do not redo completed work, but do not treat it as a current file snapshot: read again whenever exact text, the current `version` token, or other live state is required. If something is genuinely missing, recover it with tools or ask the user; do not guess.\n")
 
 	parts = append(parts, systemPromptPart{label: "核心系统提示词", content: b.String()})
 
@@ -236,11 +238,10 @@ func buildPlatformInfo(gitBashPath string) string {
 		b.WriteString("For native project tools (`go`, `npm`, `git`, `rg`), call them normally; their exit code is propagated.\n")
 		b.WriteString("Do not use bash-only syntax such as `export FOO=bar`, `$VAR`, `grep`, `cat`, `ls -la`, `&&` assumptions, or `/c/...` paths unless you explicitly invoke another shell or the selected shell supports them.\n")
 	}
-	b.WriteString("Do not use shell deletion commands; use `delete_path` for deleting files or directories.\n")
 
 	b.WriteString("\n## Tool Paths\n\n")
 	b.WriteString("File tools accept paths with **forward slashes (`/`)** regardless of operating system.\n")
-	b.WriteString("Write tools (`edit`, `create_file`, `delete_path`) require workspace-relative paths, absolute paths inside the workspace, or absolute paths inside `~/.ally_agent`. Read-only tools may inspect explicit absolute paths outside the workspace. `run_command` keeps its cwd inside the workspace, permits null-device redirection, and may create a new outside path when it does not already exist; modifying or deleting an existing outside path is refused. On `E_PATH_OUTSIDE`, read the returned Chinese explanation and detected target, then change the target or command instead of retrying unchanged. Dynamic redirection targets must be replaced with literal paths that can be checked before execution.\n")
+	b.WriteString("Write tools (`edit`, `create_file`, `delete_path`) require workspace-relative paths, absolute paths inside the workspace, or absolute paths inside `~/.ally_agent`. Read-only tools may inspect explicit absolute paths outside the workspace. `run_command` keeps its cwd inside the workspace, permits null-device redirection, and may create a new outside path when it does not already exist; modifying or deleting an existing outside path is refused.\n")
 
 	return b.String()
 }

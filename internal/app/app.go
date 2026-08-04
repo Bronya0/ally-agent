@@ -171,8 +171,8 @@ type App struct {
 	// gitStatusCache memoizes the last GetGitStatus result for a short TTL
 	// so that rapid consecutive calls (e.g. workspace switch + run:done)
 	// don't each spawn 2 git subprocesses. Keyed by workspace path.
-	gitStatusCacheMu  sync.Mutex
-	gitStatusCache    map[string]gitStatusCacheEntry
+	gitStatusCacheMu sync.Mutex
+	gitStatusCache   map[string]gitStatusCacheEntry
 
 	workspaceMapMu       sync.Mutex
 	workspaceMapCache    map[string]workspaceMapCacheEntry
@@ -1920,13 +1920,13 @@ var allyReleaseAtomTagRe = regexp.MustCompile(`/releases/tag/([^/?#]+)`)
 // atomFeed is a minimal subset of the GitHub releases Atom feed. Only the
 // fields used for version detection are decoded; <content> is skipped.
 type atomFeed struct {
-	XMLName xml.Name   `xml:"feed"`
+	XMLName xml.Name    `xml:"feed"`
 	Entries []atomEntry `xml:"entry"`
 }
 
 type atomEntry struct {
-	ID    string    `xml:"id"`
-	Title string    `xml:"title"`
+	ID    string     `xml:"id"`
+	Title string     `xml:"title"`
 	Links []atomLink `xml:"link"`
 }
 
@@ -2504,7 +2504,7 @@ Behavior:
 - Ask exactly one question at a time and wait for feedback before continuing. Do not ask multiple questions at once.
 - For each question, provide your recommended answer and a short rationale.
 - If a question can be answered by exploring the codebase, explore the codebase instead of asking.
-- This is a read-only interview mode. Do not edit files, run commands, make network requests, call MCP tools, delegate work, update todos/goals/memory, or start background processes.
+- This is a read-only interview mode. Do not edit files, run commands, make network requests, call MCP tools, delegate via subagent, update todos/goals/memory, or start background processes.
 - Do not implement changes while this mode is active. When the design is sufficiently resolved, use the completion marker and final summary; do not ask for a separate exit confirmation.
 </ally-session-mode>`,
 	}

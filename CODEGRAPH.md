@@ -80,7 +80,7 @@ sequenceDiagram
     B->>B: buildMessages() 构造请求上下文
     B->>B: buildToolsWithMcp() 合并静态+MCP工具
     B->>M: streamModelResponse()
-    M-->>F: run:delta / run:reasoning / tool调用
+    M-->>F: run:stream / tool调用
     alt 有工具调用
         M->>T: executeTool()
         T->>T: 非文件工具并发执行(sem=4)
@@ -187,7 +187,7 @@ flowchart LR
 - 批量编辑忽略并警告 no-op；全部为 no-op 时不写盘
 - `infra_result.go` 是结果 envelope、错误码和模型侧压缩的唯一边界
 - `infra_shell_env.go` 负责 POSIX login-shell PATH 探测与环境复用；只导入绝对 PATH 条目，不把完整 shell 配置注入命令进程
-- `infra_stream.go` 集中 `run:delta` / `run:reasoning` / `tool:update` 节流
+- `infra_stream.go` 集中 `run:stream` / `tool:update` 节流
 
 ### 4. MCP 管理器 (`mcp.go`)
 
