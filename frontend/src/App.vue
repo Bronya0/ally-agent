@@ -5274,7 +5274,12 @@ function scheduleSaveSessions() {
 }
 function unloadInactiveSessionMessages() {
   for (const session of sessions.value) {
-    if (!session || session.id === activeSessionId.value || sessionMayHaveBackgroundRun(session) || session.messagesLoaded === false) continue;
+    // Newly created sessions have no backend snapshot yet. Keep their welcome
+    // message in memory until they become active; otherwise saveSessions(),
+    // called before a workspace switch, unloads them and the subsequent
+    // LoadSession() incorrectly asks the backend to open a file that was never
+    // written.
+    if (!session || session.id === activeSessionId.value || !session.hasSnapshot || sessionMayHaveBackgroundRun(session) || session.messagesLoaded === false) continue;
     for (const message of session.messages || []) releaseMessageAttachments(message);
     session.messages = [];
     session.messagesLoaded = false;
