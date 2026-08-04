@@ -44,7 +44,7 @@ func chatToolsUncached() []openai.Tool {
 				"includeIgnored": map[string]any{"type": "boolean", "description": "Include heavy ignored directories such as .git, node_modules, dist, build. Default false."},
 			},
 		}),
-		functionTool("edit", "Validate and apply exact replacements across multiple workspace files in one call. Read returns numbered text; the numeric `N: ` prefixes are display-only and must never be copied into newText. For each change choose exactly one source: use `oldText` for a small, unique exact snippet, or use `lineRange` in inclusive `A-B` form for a larger whole-line replacement. Never pass both. Every lineRange in one file refers to the original line numbers from the read that produced `version`; do not adjust later ranges after earlier edits because Ally locates every source on the same snapshot and applies changes backwards. Each oldText must occur exactly once, source regions cannot overlap, and all files are validated before any write. Reuse the returned version only for a follow-up edit whose exact current source is known; otherwise re-read. Error codes: E_BAD_EDIT (malformed request, overlap, non-unique oldText, too many changes), E_VERSION_MISMATCH (file changed since read; re-read all affected files and retry with the new version), E_PATH_OUTSIDE.", map[string]any{
+		functionTool("edit", "Validate and apply exact replacements across multiple workspace files in one call. Read returns numbered text; the numeric `N: ` prefixes are display-only and must never be copied into newText. For each change choose exactly one source. Prefer `lineRange` in inclusive `A-B` form for whole-line replacements (default for multi-line blocks; no need to reproduce the original text). Use `oldText` only for an in-line edit inside one line, or when the target line is extremely long (e.g. minified JSON) and a line range is impractical. Never pass both. Every lineRange in one file refers to the original line numbers from the read that produced `version`; do not adjust later ranges after earlier edits because Ally locates every source on the same snapshot and applies changes backwards. Each oldText must occur exactly once, source regions cannot overlap, and all files are validated before any write. Reuse the returned version only for a follow-up edit whose exact current source is known; otherwise re-read. Error codes: E_BAD_EDIT (malformed request, overlap, non-unique oldText, too many changes), E_VERSION_MISMATCH (file changed since read; re-read all affected files and retry with the new version), E_PATH_OUTSIDE.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"files": map[string]any{
@@ -216,7 +216,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"target", "path"},
 		}),
-		functionTool("remote_edit", "Validate and apply replacements across multiple files under one remote SSH target. remote_read_file returns numbered text. In each change choose exactly one source: a small unique `oldText`, or an inclusive whole-line `lineRange` in `A-B` form; never both. All ranges use the original read version's line numbers and need no offset adjustment between changes.", map[string]any{
+		functionTool("remote_edit", "Validate and apply replacements across multiple files under one remote SSH target. remote_read_file returns numbered text. In each change choose exactly one source. Prefer an inclusive whole-line `lineRange` in `A-B` form for whole-line replacements; use a small unique `oldText` only for an in-line edit inside one line, or when the target line is extremely long (e.g. minified JSON); never both. All ranges use the original read version's line numbers and need no offset adjustment between changes.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"target": map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Explicit SSH target plus workspace root, e.g. my-dev:/srv/app."},
@@ -377,7 +377,7 @@ func chatToolsUncached() []openai.Tool {
 
 var builtinToolExamples = map[string]string{
 	"list_files":         `{"path":"frontend/src","maxDepth":2,"limit":200}`,
-	"edit":               `small exact change: {"files":[{"path":"app.go","version":"9k3m7x2p4t6w","changes":[{"oldText":"const oldName = \"ally\"","newText":"const newName = \"ally\""}]}]}; large whole-line change: {"files":[{"path":"app.go","version":"9k3m7x2p4t6w","changes":[{"lineRange":"40-72","newText":"func replacement() {\n}\n"}]}]}; multiple original-snapshot ranges (no offset adjustment): {"files":[{"path":"app.go","version":"9k3m7x2p4t6w","changes":[{"lineRange":"10-15","newText":"first replacement"},{"lineRange":"80-95","newText":"second replacement"}]}]}`,
+	"edit":               `preferred whole-line change: {"files":[{"path":"app.go","version":"9k3m7x2p4t6w","changes":[{"lineRange":"40-72","newText":"func replacement() {\n}\n"}]}]}; in-line edit (only when a line range is impractical): {"files":[{"path":"app.go","version":"9k3m7x2p4t6w","changes":[{"oldText":"const oldName = \"ally\"","newText":"const newName = \"ally\""}]}]}; multiple original-snapshot ranges (no offset adjustment): {"files":[{"path":"app.go","version":"9k3m7x2p4t6w","changes":[{"lineRange":"10-15","newText":"first replacement"},{"lineRange":"80-95","newText":"second replacement"}]}]}`,
 	"create_file":        `{"path":"notes/example.md","content":"# Example\n","overwrite":false}`,
 	"delete_path":        `{"path":"tmp/generated","recursive":true}`,
 	"run_command":        `{"command":"go test ./...","cwd":".","timeoutSeconds":120}`,
@@ -461,11 +461,11 @@ func editChangeSchema() map[string]any {
 		"properties": map[string]any{
 			"oldText": map[string]any{
 				"type": "string", "minLength": 1,
-				"description": "Small exact unique source snippet without read's numeric line prefixes. Choose this OR lineRange, never both.",
+				"description": "Small exact unique source snippet without read's numeric line prefixes. Use only for an in-line edit inside one line, or when the target line is extremely long (e.g. minified JSON). Choose this OR lineRange, never both.",
 			},
 			"lineRange": map[string]any{
 				"type": "string", "pattern": "^[1-9][0-9]*-[1-9][0-9]*$",
-				"description": "Inclusive original-snapshot whole-line range in A-B form, copied from read's displayed line numbers. Best for large replacements. Choose this OR oldText; all ranges in the file use the same read version, so never adjust for earlier changes.",
+				"description": "Inclusive original-snapshot whole-line range in A-B form, copied from read's displayed line numbers. Preferred source for whole-line replacements (default for multi-line blocks). Choose this OR oldText; all ranges in the file use the same read version, so never adjust for earlier changes.",
 			},
 			"newText": map[string]any{
 				"type":        "string",

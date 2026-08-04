@@ -1421,10 +1421,10 @@ func TestEditDescriptionIncludesSingleAndCrossFileMultiChangeExamples(t *testing
 		}
 	}
 	for _, expected := range []string{
-		"small exact change",
-		`"oldText":"const oldName = \"ally\""`,
-		"large whole-line change",
+		"preferred whole-line change",
 		`"lineRange":"40-72"`,
+		"in-line edit",
+		`"oldText":"const oldName = \"ally\""`,
 		"no offset adjustment",
 	} {
 		if !strings.Contains(description, expected) {
