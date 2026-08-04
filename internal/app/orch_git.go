@@ -17,28 +17,67 @@ import (
 	"ally-dev/internal/tools/git"
 )
 
+// gitStatusCacheTTL is how long a cached GetGitStatus result is served
+// without re-spawning git. Short enough that file edits made via the agent
+// are reflected promptly, long enough to collapse the init → watch → run:done
+// burst that would otherwise spawn 3×2 git processes in <1s.
+const gitStatusCacheTTL = 2 * time.Second
+
 func (a *App) GetGitStatus() GitStatus {
 	workspace, err := workspaceRoot(a.config)
 	if err != nil {
 		return GitStatus{IsRepo: false}
 	}
 
+	// Serve from cache if fresh. Keyed by the resolved workspace path so
+	// switching tabs to a different repo doesn't return stale counts.
+	a.gitStatusCacheMu.Lock()
+	if entry, ok := a.gitStatusCache[workspace]; ok && time.Since(entry.generatedAt) < gitStatusCacheTTL {
+		a.gitStatusCacheMu.Unlock()
+		return entry.status
+	}
+	a.gitStatusCacheMu.Unlock()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	root, err := gitRepoRoot(ctx, workspace)
+	// Merge the two rev-parse calls (toplevel + branch) into a single git
+	// process. Both are porcelain-free and return one line per arg, so we
+	// split on the first newline to separate root from branch.
+	revOut, _, err := runGitLimited(ctx, workspace, 64*1024, "rev-parse", "--show-toplevel", "--abbrev-ref", "HEAD")
 	if err != nil {
+		a.cacheGitStatus(workspace, GitStatus{IsRepo: false})
 		return GitStatus{IsRepo: false}
 	}
-
-	branchOut, _, err := runGitLimited(ctx, root, 16*1024, "rev-parse", "--abbrev-ref", "HEAD")
-	if err != nil {
+	revLines := strings.SplitN(strings.TrimRight(revOut, "\n"), "\n", 2)
+	if len(revLines) < 1 {
+		a.cacheGitStatus(workspace, GitStatus{IsRepo: false})
 		return GitStatus{IsRepo: false}
 	}
-	branch := strings.TrimSpace(string(branchOut))
+	root := strings.TrimSpace(revLines[0])
+	if root == "" {
+		a.cacheGitStatus(workspace, GitStatus{IsRepo: false})
+		return GitStatus{IsRepo: false}
+	}
+	abs, err := filepath.Abs(filepath.FromSlash(root))
+	if err != nil {
+		a.cacheGitStatus(workspace, GitStatus{IsRepo: false})
+		return GitStatus{IsRepo: false}
+	}
+	info, err := os.Stat(abs)
+	if err != nil || !info.IsDir() {
+		a.cacheGitStatus(workspace, GitStatus{IsRepo: false})
+		return GitStatus{IsRepo: false}
+	}
+	root = filepath.Clean(abs)
+	branch := ""
+	if len(revLines) >= 2 {
+		branch = strings.TrimSpace(revLines[1])
+	}
 
 	out, _, err := runGitLimited(ctx, root, 256*1024, "status", "--porcelain=v1", "-z")
 	if err != nil {
+		a.cacheGitStatus(workspace, GitStatus{IsRepo: false})
 		return GitStatus{IsRepo: false}
 	}
 	st := GitStatus{IsRepo: true, Branch: branch}
@@ -52,7 +91,14 @@ func (a *App) GetGitStatus() GitStatus {
 			st.Deleted++
 		}
 	}
+	a.cacheGitStatus(workspace, st)
 	return st
+}
+
+func (a *App) cacheGitStatus(workspace string, status GitStatus) {
+	a.gitStatusCacheMu.Lock()
+	a.gitStatusCache[workspace] = gitStatusCacheEntry{status: status, generatedAt: time.Now()}
+	a.gitStatusCacheMu.Unlock()
 }
 
 func (a *App) GetGitDiff() GitDiffResult {

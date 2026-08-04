@@ -100,6 +100,16 @@
               <span class="settings-toggle-hint">{{ $t('settings.autoUpdateHint') }}</span>
             </div>
           </n-form-item>
+          <n-form-item :label="$t('settings.checkUpdate')">
+            <div class="settings-toggle-row">
+              <n-button
+                size="small"
+                :loading="checkUpdateBusy"
+                @click="checkForUpdates"
+              >{{ checkUpdateBusy ? $t('settings.checkUpdateBusy') : $t('settings.checkUpdate') }}</n-button>
+              <span v-if="checkUpdateMessage" class="settings-field-hint">{{ checkUpdateMessage }}</span>
+            </div>
+          </n-form-item>
           <n-form-item :label="$t('settings.closeToTray')">
             <div class="settings-toggle-row">
               <n-switch v-model:value="draft.closeToTray" />
@@ -388,6 +398,14 @@
             <p>{{ $t('settings.licenseSource') }}</p>
             <n-button secondary @click="openSourceRepository">{{ $t('settings.sourceLicense') }}</n-button>
           </div>
+          <div class="about-update-check">
+            <n-button
+              size="small"
+              :loading="checkUpdateBusy"
+              @click="checkForUpdates"
+            >{{ checkUpdateBusy ? $t('settings.checkUpdateBusy') : $t('settings.checkUpdate') }}</n-button>
+            <span v-if="checkUpdateMessage" class="about-update-status">{{ checkUpdateMessage }}</span>
+          </div>
         </section>
       </n-form>
     </div>
@@ -557,6 +575,38 @@ function openSourceRepository() {
 const autostartEnabled = ref(false);
 const autostartBusy = ref(false);
 
+// Update check state for the About page button. The actual check is
+// delegated to the parent (App.vue) via the check-update emit so the result
+// also updates the top-right update icon and triggers auto-download if
+// needed. Parent reports back through the checkUpdateResult prop.
+const props = defineProps({
+  visible: Boolean,
+  configDraft: { type: Object, required: true },
+  // Optional result object reported by the parent after a check-update emit:
+  //   { state: 'idle' | 'busy' | 'latest' | 'found' | 'failed', version?: string }
+  checkUpdateResult: { type: Object, default: () => ({ state: 'idle' }) },
+});
+const emit = defineEmits(['close', 'closed', 'save', 'skills-changed', 'mcp-saved', 'open-token-stats', 'background-changed', 'check-update']);
+const checkUpdateBusy = ref(false);
+const checkUpdateMessage = ref('');
+let checkUpdateTimer = 0;
+
+watch(() => props.checkUpdateResult, (result) => {
+  if (!result) return;
+  checkUpdateBusy.value = result.state === 'busy';
+  if (result.state !== 'busy' && checkUpdateTimer) {
+    window.clearTimeout(checkUpdateTimer);
+    checkUpdateTimer = 0;
+  }
+  switch (result.state) {
+    case 'busy': checkUpdateMessage.value = ''; break;
+    case 'latest': checkUpdateMessage.value = t('settings.checkUpdateLatest'); break;
+    case 'found': checkUpdateMessage.value = t('settings.checkUpdateFound', { version: result.version || '' }); break;
+    case 'failed': checkUpdateMessage.value = t('settings.checkUpdateFailed'); break;
+    default: checkUpdateMessage.value = '';
+  }
+}, { immediate: true });
+
 async function refreshAutostart() {
   try {
     autostartEnabled.value = await GetAutostartEnabled();
@@ -575,11 +625,20 @@ async function toggleAutostart(value) {
   }
 }
 
-const props = defineProps({
-  visible: Boolean,
-  configDraft: { type: Object, required: true },
-});
-const emit = defineEmits(['close', 'closed', 'save', 'skills-changed', 'mcp-saved', 'open-token-stats', 'background-changed']);
+function checkForUpdates() {
+  if (checkUpdateBusy.value) return;
+  checkUpdateBusy.value = true;
+  emit('check-update');
+  // Safety net: if the parent doesn't report back within 15s (e.g. backend
+  // hung on a network request), stop spinning so the user isn't stuck.
+  if (checkUpdateTimer) window.clearTimeout(checkUpdateTimer);
+  checkUpdateTimer = window.setTimeout(() => {
+    if (checkUpdateBusy.value) {
+      checkUpdateBusy.value = false;
+      checkUpdateMessage.value = t('settings.checkUpdateFailed');
+    }
+  }, 15000);
+}
 
 // Deep-clone the config draft so changes don't mutate parent reactively until save
 const draft = reactive(cloneConfigDraft(props.configDraft));
@@ -1453,6 +1512,18 @@ watch(() => props.visible, (visible) => {
   color: rgba(255, 255, 255, 0.94);
   font-size: 15px;
   font-weight: 650;
+}
+
+.about-update-check {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.about-update-status {
+  color: rgba(255, 255, 255, 0.62);
+  font-size: 13px;
 }
 
 .model-format-hint {

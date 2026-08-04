@@ -688,6 +688,11 @@ func ApplyBatchTextChanges(content string, changes []TextChange) (*Result, int, 
 	located := make([]locatedChange, 0, len(changes))
 	warnings := make([]string, 0, 2)
 	ignoredNoops := 0
+	// Build the line index once for the whole batch. lineRange lookups below
+	// used to re-scan from byte 0 per call (O(N) each), so 50 line-range edits
+	// on a 10k-line file cost ~500k byte scans. With the index it's one O(N)
+	// scan plus O(1) lookups.
+	index := buildLineIndex(content)
 	for i, change := range changes {
 		newText := NormalizeEditString(change.NewText)
 		if strings.TrimSpace(change.LineRange) != "" {
@@ -695,7 +700,7 @@ func ApplyBatchTextChanges(content string, changes []TextChange) (*Result, int, 
 			if parseErr != nil {
 				return nil, 0, toolerrors.New("E_BAD_EDIT", fmt.Errorf("change %d: %w", i+1, parseErr))
 			}
-			start, end, rangeErr := lineRangeOffsets(content, startLine, endLine)
+			start, end, rangeErr := lineRangeOffsetsWithIndex(index, len(content), startLine, endLine)
 			if rangeErr != nil {
 				return nil, 0, toolerrors.New("E_RANGE_OOB", fmt.Errorf("change %d lineRange %q: %w; re-read and use numbered lines from the current version", i+1, change.LineRange, rangeErr))
 			}
@@ -779,6 +784,30 @@ func ApplyBatchTextChanges(content string, changes []TextChange) (*Result, int, 
 	}, len(located), nil
 }
 
+// lineRangeOffsetsWithIndex is the index-backed variant of lineRangeOffsets.
+// Bounds are validated against the cached line count; offsets are O(1) lookups
+// into the precomputed starts slice instead of O(N) re-scans of the content.
+// contentLen is the byte length of the snapshot the index was built from; we
+// don't store it in the index to keep the struct light.
+func lineRangeOffsetsWithIndex(index *lineIndex, contentLen int, startLine, endLine int) (int, int, error) {
+	total := index.total()
+	if total == 0 {
+		return 0, 0, errors.New("file has 0 lines")
+	}
+	if startLine < 1 || startLine > total {
+		return 0, 0, fmt.Errorf("start line %d is outside 1-%d", startLine, total)
+	}
+	if endLine < startLine || endLine > total {
+		return 0, 0, fmt.Errorf("end line %d is outside %d-%d", endLine, startLine, total)
+	}
+	start := index.offsetForLine(startLine)
+	end := contentLen
+	if endLine < total {
+		end = index.offsetForLine(endLine + 1)
+	}
+	return start, end, nil
+}
+
 // lineRangeOffsets locates an inclusive whole-line range in the immutable
 // original snapshot. For non-final ranges, end includes the selected range's
 // terminating newline so an empty newText performs whole-line deletion.
@@ -825,6 +854,79 @@ func byteOffsetForLine(content string, line int) int {
 		offset += rel + 1
 	}
 	return offset
+}
+
+// lineIndex caches the byte offset of every line start in a snapshot. Building
+// it is one O(N) scan over the content; afterwards offsetForLine and
+// lineAtOffset are O(1). ApplyBatchTextChanges uses it so that N line-range
+// edits on a large file cost O(N + edits) instead of O(N * edits), where the
+// previous per-call byteOffsetForLine re-scanned from byte 0 every time.
+type lineIndex struct {
+	// starts[i] is the byte offset of the start of line i+1. starts[0] is
+	// always 0 (line 1 starts at byte 0). The slice has length visibleLineCount.
+	starts []int
+}
+
+// buildLineIndex scans content once and records the byte offset of the start
+// of every visible line. The trailing newline of the last line is not a new
+// line start.
+func buildLineIndex(content string) *lineIndex {
+	total := visibleLineCount(content)
+	if total == 0 {
+		return &lineIndex{starts: nil}
+	}
+	starts := make([]int, total)
+	starts[0] = 0
+	line := 1
+	for i := 0; i < len(content); i++ {
+		if content[i] == '\n' {
+			line++
+			if line > total {
+				break
+			}
+			starts[line-1] = i + 1
+		}
+	}
+	return &lineIndex{starts: starts}
+}
+
+// offsetForLine returns the byte offset of the start of the given 1-based
+// line. line must be in [1, total]; callers should check bounds first.
+func (li *lineIndex) offsetForLine(line int) int {
+	if li == nil || line < 1 || line > len(li.starts) {
+		return 0
+	}
+	return li.starts[line-1]
+}
+
+// total returns the number of visible lines in the indexed snapshot.
+func (li *lineIndex) total() int {
+	if li == nil {
+		return 0
+	}
+	return len(li.starts)
+}
+
+// lineAtOffset returns the 1-based line number containing the given byte
+// offset. Uses binary search over line starts — O(log N).
+func (li *lineIndex) lineAtOffset(offset int) int {
+	if li == nil || len(li.starts) == 0 {
+		return 1
+	}
+	if offset <= 0 {
+		return 1
+	}
+	// Find the last line start <= offset. sort.Search returns the first index
+	// where starts[i] > offset, so the line number is that index (1-based
+	// line = index + 1 only when starts[index] <= offset; here we want the
+	// preceding index).
+	idx := sort.Search(len(li.starts), func(i int) bool {
+		return li.starts[i] > offset
+	})
+	if idx == 0 {
+		return 1
+	}
+	return idx
 }
 
 // lineRangeReplacement adds only the separator needed before an untouched

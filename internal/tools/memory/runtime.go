@@ -20,6 +20,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"ally-dev/internal/tools/pathutil"
 	"ally-dev/internal/tools/read"
@@ -150,8 +151,26 @@ func List(rt Runtime) (ListResult, error) {
 		if strings.ToLower(filepath.Ext(path)) != ".md" {
 			return nil
 		}
-		data, info, err := read.ReadTextFile(path)
+		// Reuse the DirEntry's own FileInfo instead of calling os.Stat
+		// again inside read.ReadTextFile. On a directory with many memory
+		// files this halves the stat syscalls.
+		info, err := d.Info()
 		if err != nil {
+			return nil
+		}
+		if info.Size() > read.MaxReadBytes {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+		// Fast binary/UTF-8 guards. bytes.IndexByte is vectorized on
+		// amd64/arm64 and beats the manual byte loop in read.hasNUL.
+		if bytes.IndexByte(data, 0) >= 0 {
+			return nil
+		}
+		if !utf8.Valid(data) {
 			return nil
 		}
 		desc, _ := ParseMarkdown(string(data))
@@ -222,12 +241,14 @@ func Read(rt Runtime, req ReadRequest) (ReadResult, error) {
 		return ReadResult{}, err
 	}
 	desc, body := ParseMarkdown(string(data))
+	// Hash once instead of HashBytes + HashVersion (two SHA-256 passes).
+	sha256Hex, version := read.HashBytesAndVersion(data)
 	return ReadResult{
 		Path:        filepath.ToSlash(path),
 		Description: desc,
 		Content:     body,
-		SHA256:      read.HashBytes(data),
-		Version:     read.HashVersion(data),
+		SHA256:      sha256Hex,
+		Version:     version,
 		Size:        info.Size(),
 	}, nil
 }
@@ -276,11 +297,13 @@ func Write(rt Runtime, req WriteRequest) (WriteResult, error) {
 		return WriteResult{}, err
 	}
 	IndexCache.Invalidate()
+	// Hash once instead of HashBytes + HashVersion (two SHA-256 passes).
+	sha256Hex, version := read.HashBytesAndVersion(data)
 	return WriteResult{
 		Path:         filepath.ToSlash(path),
 		Description:  strings.TrimSpace(req.Description),
-		SHA256:       read.HashBytes(data),
-		Version:      read.HashVersion(data),
+		SHA256:       sha256Hex,
+		Version:      version,
 		Size:         int64(len(data)),
 		Created:      created,
 		UpdatedIndex: !bytes.Equal(before, data),

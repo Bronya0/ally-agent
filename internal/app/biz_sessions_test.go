@@ -42,8 +42,14 @@ func TestSessionFilesUseIndexAndOnDemandSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read session index: %v", err)
 	}
-	if bytes.Contains(indexData, []byte("hello from disk")) {
+	// The index may store a short FirstPrompt preview (used by the session
+	// list UI), but must not contain the full conversation message bodies
+	// or assistant replies — those live only in the compressed snapshot.
+	if bytes.Contains(indexData, []byte(`"messages"`)) {
 		t.Fatal("session index must not contain conversation message bodies")
+	}
+	if bytes.Contains(indexData, []byte("answer")) {
+		t.Fatal("session index must not contain assistant reply bodies")
 	}
 
 	loaded, err := app.LoadSession(sessionID)

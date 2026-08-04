@@ -73,11 +73,13 @@ func (a *App) createFileWithConfig(cfg ConfigState, req CreateFileRequest) (Edit
 			return EditResult{}, err
 		}
 	}
-	after, _, err := readTextFile(path)
-	if err != nil {
-		return EditResult{}, err
-	}
-	return makeEditResult(req.Path, beforeHash, before, after, ending, 1, string(before), content), nil
+	// The after content is exactly what we just wrote (encoded). Re-reading
+	// the file would only repeat the IO and normalization work we already
+	// did; for overwrite paths the bytes on disk are byte-identical to
+	// encoded because safeWriteFileWithDir writes encoded verbatim, and for
+	// new files safeWriteNewFile does the same. Using encoded directly also
+	// avoids a second hash pass on the same content.
+	return makeEditResult(req.Path, beforeHash, before, encoded, ending, 1, string(before), content), nil
 }
 
 func (a *App) deletePathWithConfig(cfg ConfigState, req DeletePathRequest) (DeleteResult, error) {
@@ -185,14 +187,31 @@ func (a *App) runCommandWithConfig(parent context.Context, cfg ConfigState, req 
 			defer outputWG.Done()
 			ticker := time.NewTicker(120 * time.Millisecond)
 			defer ticker.Stop()
-			lastOutput := ""
+			// Track the last emitted length so we can skip the full String()
+			// copy when the buffer hasn't grown since the last tick. The
+			// previous code called buf.String() (which copies the entire
+			// buffered output under the lock) on every 120ms tick even when
+			// the command hadn't produced any new output — for a long-running
+			// build emitting one line per second, ~99% of ticks were no-ops
+			// that still held the write lock during a multi-MB copy.
+			lastLen := -1
 			emit := func() {
-				output := buf.String()
-				if output == "" || output == lastOutput {
+				curLen := buf.Len()
+				if curLen == 0 || curLen == lastLen {
 					return
 				}
-				lastOutput = output
-				a.emit("tool:update", map[string]any{
+				lastLen = curLen
+				// During streaming, emit only the tail of the buffer instead
+				// of the full content. A long build can fill the 128KB buffer;
+				// emitting the full content on every 120ms tick means ~1MB/s
+				// of JSON marshal + IPC transmission + frontend re-split, most
+				// of which the user cannot read at 8 FPS anyway. The complete
+				// output is delivered in the final CommandResult once the
+				// command exits. 16KB is enough to show the last ~100 lines
+				// of typical build output.
+				const streamingTailBytes = 16 * 1024
+				tail := buf.TailString(streamingTailBytes)
+				payload := map[string]any{
 					"runId":         meta.runID,
 					"sessionId":     meta.sessionID,
 					"toolBatchId":   meta.toolBatchID,
@@ -200,9 +219,14 @@ func (a *App) runCommandWithConfig(parent context.Context, cfg ConfigState, req 
 					"toolCallId":    meta.toolCallID,
 					"name":          meta.toolName,
 					"args":          meta.toolArgs,
-					"output":        output,
+					"output":        tail,
 					"streaming":     true,
-				})
+				}
+				if curLen > streamingTailBytes {
+					payload["outputTruncated"] = true
+					payload["outputTotalBytes"] = curLen
+				}
+				a.emit("tool:update", payload)
 			}
 			for {
 				select {
@@ -559,12 +583,24 @@ func isOSProtectedDeletePath(abs string) (bool, string) {
 		}
 		for _, protected := range []string{
 			`windows`,
+			`windows.old`,
 			`program files`,
 			`program files (x86)`,
 			`programdata`,
 			`recovery`,
 			`system volume information`,
 			`$recycle.bin`,
+			`perflogs`,
+			`documents and settings`,
+			`config.msi`,
+			`$windows.~bt`,
+			`$windows.~ws`,
+			`$winreagent`,
+			`$sysreset`,
+			`msocache`,
+			`inetpub`,
+			`intel`,
+			`amd`,
 		} {
 			if windowsPathHasTopLevelDir(abs, protected) {
 				return true, fmt.Sprintf("refusing to delete Windows protected path %q", abs)
@@ -574,6 +610,17 @@ func isOSProtectedDeletePath(abs string) (bool, string) {
 		if abs == "/" {
 			return true, `refusing to delete filesystem root "/"`
 		}
+		// /Users, /Volumes, /Network are parent roots whose descendants may
+		// legitimately contain user projects (e.g. /Users/tangs/projects,
+		// /Volumes/ExternalDrive/repos, /Network/servershare/code). Block
+		// only the directory itself; individual home roots are handled by
+		// the parent-dir check in isDangerousDeletePath, and mounted volume
+		// roots are safe to delete into as long as the workspace is confined.
+		for _, root := range []string{"/Users", "/Volumes", "/Network"} {
+			if abs == root {
+				return true, fmt.Sprintf("refusing to delete macOS top-level root %q", abs)
+			}
+		}
 		for _, protected := range []string{
 			"/Applications",
 			"/bin",
@@ -581,13 +628,12 @@ func isOSProtectedDeletePath(abs string) (bool, string) {
 			"/dev",
 			"/etc",
 			"/Library",
-			"/Network",
+			"/opt",
 			"/private",
 			"/sbin",
 			"/System",
 			"/usr",
 			"/var",
-			"/Volumes",
 		} {
 			if isPathOrDescendant(abs, protected) {
 				return true, fmt.Sprintf("refusing to delete macOS protected path %q", abs)
@@ -597,18 +643,33 @@ func isOSProtectedDeletePath(abs string) (bool, string) {
 		if abs == "/" {
 			return true, `refusing to delete filesystem root "/"`
 		}
+		// /home, /mnt, /media are parent roots whose descendants may
+		// legitimately contain user projects (e.g. /home/tangs/projects,
+		// /mnt/external/repos, /media/user/USB/code). Block only the
+		// directory itself; individual home roots are handled by the
+		// parent-dir check in isDangerousDeletePath.
+		for _, root := range []string{"/home", "/mnt", "/media"} {
+			if abs == root {
+				return true, fmt.Sprintf("refusing to delete Linux top-level root %q", abs)
+			}
+		}
 		for _, protected := range []string{
 			"/bin",
 			"/boot",
 			"/dev",
 			"/etc",
 			"/lib",
+			"/lib32",
 			"/lib64",
+			"/libx32",
+			"/lost+found",
 			"/opt",
 			"/proc",
 			"/root",
 			"/run",
 			"/sbin",
+			"/snap",
+			"/srv",
 			"/sys",
 			"/usr",
 			"/var",

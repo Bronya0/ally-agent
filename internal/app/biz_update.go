@@ -44,6 +44,11 @@ import (
 
 const (
 	allyReleasesAPI       = "https://api.github.com/repos/Bronya0/ally-agent/releases"
+	// allyReleasesAtom is the public Atom feed for releases. It does not go
+	// through the GitHub REST API and is therefore NOT subject to the 60/hour
+	// anonymous rate limit. Used for the periodic "is there a new version?"
+	// poll; the body is small and parsed with encoding/xml.
+	allyReleasesAtom      = "https://github.com/Bronya0/ally-agent/releases.atom"
 	updateSubDir          = "updates"
 	updateStagedDirName   = "staged"
 	updateZipFileName     = "download.zip"
@@ -125,6 +130,47 @@ func updateBaseDir() string {
 	return filepath.Join(appDataDir(), updateSubDir)
 }
 
+// updateReleaseCache persists the last known release tag so a transient
+// network/parse failure in CheckForUpdates can still return a useful result.
+// Only LastTag and LastChecked are written now; the legacy etag/lastModified
+// JSON fields are tolerated on read (ignored) for backward compatibility
+// with cache files written by older builds.
+type updateReleaseCache struct {
+	LastTag      string    `json:"lastTag,omitempty"`
+	LastChecked  time.Time `json:"lastChecked,omitempty"`
+}
+
+func updateCachePath() string {
+	return filepath.Join(appDataDir(), "update_cache.json")
+}
+
+func loadUpdateCache() updateReleaseCache {
+	var c updateReleaseCache
+	data, err := os.ReadFile(updateCachePath())
+	if err != nil {
+		return c
+	}
+	_ = json.Unmarshal(data, &c)
+	return c
+}
+
+func saveUpdateCache(c updateReleaseCache) {
+	data, err := json.MarshalIndent(c, "", "  ")
+	if err != nil {
+		return
+	}
+	_ = os.WriteFile(updateCachePath(), data, 0o644)
+}
+
+// applyGitHubAuthHeaders sets the Authorization header when a GitHub token is
+// configured. Reading public repo releases needs no scope, so any classic
+// token works. Token presence raises the rate limit from 60/hour to 5000/hour.
+func applyGitHubAuthHeaders(req *http.Request, token string) {
+	if strings.TrimSpace(token) != "" {
+		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(token))
+	}
+}
+
 func updateVersionDir(tag string) string {
 	return filepath.Join(updateBaseDir(), tag)
 }
@@ -180,6 +226,7 @@ func (a *App) fetchReleaseByTag(tag string) (string, []githubAsset, error) {
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("User-Agent", "ally-agent-update-check")
+	applyGitHubAuthHeaders(req, cfg.GitHubToken)
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", nil, err

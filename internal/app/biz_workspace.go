@@ -51,7 +51,15 @@ func (a *App) listFilesWithConfig(cfg ConfigState, req ListFilesRequest) (ListFi
 		limit = 200
 	}
 
-	entries := []FileEntry{}
+	// Pre-allocate up to limit capacity. The previous zero-capacity slice
+	// re-allocated ~log2(limit) times (1→2→4→...→limit), copying the entire
+	// backing array each time.
+	entries := make([]FileEntry, 0, limit)
+	// lowerPaths[i] holds strings.ToLower(entries[i].Path) so the sort
+	// comparator doesn't re-ToLower the same path on every comparison. The
+	// previous code called strings.ToLower twice per compare (O(N log N)
+	// total calls); now it's O(N) one-time work.
+	lowerPaths := make([]string, 0, limit)
 	truncated := false
 	err = filepath.WalkDir(start, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -81,34 +89,51 @@ func (a *App) listFilesWithConfig(cfg ConfigState, req ListFilesRequest) (ListFi
 		}
 		if len(entries) >= limit {
 			truncated = true
-			if d.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
+			// Stop walking entirely once we've collected enough entries.
+			// The previous code returned SkipDir for directories and nil
+			// for files, which meant WalkDir kept traversing the rest of
+			// the tree (potentially thousands of entries) just to throw
+			// every one away. fs.SkipAll aborts the walk immediately.
+			return fs.SkipAll
 		}
 		info, err := d.Info()
 		if err != nil {
 			return nil
 		}
+		displayPath := grep.DisplayPathForRoot(root, path)
 		entries = append(entries, FileEntry{
-			Path:    grep.DisplayPathForRoot(root, path),
+			Path:    displayPath,
 			Name:    name,
 			Dir:     d.IsDir(),
 			Size:    info.Size(),
 			ModTime: info.ModTime().Format(time.RFC3339),
 		})
+		lowerPaths = append(lowerPaths, strings.ToLower(displayPath))
 		return nil
 	})
 	if err != nil {
 		return ListFilesResult{}, err
 	}
-	sort.Slice(entries, func(i, j int) bool {
-		if entries[i].Dir != entries[j].Dir {
-			return entries[i].Dir
+	// Sort by precomputed lowerPaths. sort.Slice swaps entries in place but
+	// does NOT touch lowerPaths, so we sort an index permutation and then
+	// apply it to entries in a single pass — this keeps the entries↔lowerPaths
+	// alignment intact and avoids per-compare ToLower.
+	idx := make([]int, len(entries))
+	for i := range idx {
+		idx[i] = i
+	}
+	sort.SliceStable(idx, func(a, b int) bool {
+		ea, eb := entries[idx[a]], entries[idx[b]]
+		if ea.Dir != eb.Dir {
+			return ea.Dir
 		}
-		return strings.ToLower(entries[i].Path) < strings.ToLower(entries[j].Path)
+		return lowerPaths[idx[a]] < lowerPaths[idx[b]]
 	})
-	return ListFilesResult{Entries: entries, Count: len(entries), Truncated: truncated}, nil
+	sorted := make([]FileEntry, len(entries))
+	for i, j := range idx {
+		sorted[i] = entries[j]
+	}
+	return ListFilesResult{Entries: sorted, Count: len(sorted), Truncated: truncated}, nil
 }
 
 func (a *App) workspaceMapContext(cfg ConfigState) string {

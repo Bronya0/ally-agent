@@ -2,6 +2,7 @@ package edit
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -192,6 +193,99 @@ func TestParseLineRangeRejectsAmbiguousWriteTargets(t *testing.T) {
 	for _, value := range []string{"2", "3-2", "0-1", "x-y", "1-2-3"} {
 		if _, _, err := ParseLineRange(value); err == nil {
 			t.Fatalf("ParseLineRange(%q) unexpectedly succeeded", value)
+		}
+	}
+}
+
+func TestLineIndexMatchesByteOffsetForLine(t *testing.T) {
+	// Mix of trailing-newline and no-trailing-newline contents, plus a few
+	// edge sizes (0, 1, many lines). For every (content, line) pair the
+	// index-backed lookup must equal the legacy O(N) byteOffsetForLine.
+	cases := []string{
+		"",
+		"one",
+		"one\ntwo\nthree\n",
+		"one\ntwo\nthree",
+		strings.Repeat("line\n", 1000) + "tail",
+		strings.Repeat("line\n", 1000),
+	}
+	for _, content := range cases {
+		index := buildLineIndex(content)
+		total := visibleLineCount(content)
+		for line := 1; line <= total; line++ {
+			want := byteOffsetForLine(content, line)
+			got := index.offsetForLine(line)
+			if got != want {
+				t.Fatalf("content len=%d line=%d: index gave %d, byteOffsetForLine gave %d", len(content), line, got, want)
+			}
+		}
+		if index.total() != total {
+			t.Fatalf("index total %d != visibleLineCount %d", index.total(), total)
+		}
+	}
+}
+
+func TestLineIndexLineAtOffset(t *testing.T) {
+	content := "a\nbb\nccc\ndddd\n"
+	index := buildLineIndex(content)
+	// starts = [0, 2, 5, 9]; line 1 = bytes [0,1], line 2 = bytes [2,3,4], etc.
+	cases := []struct {
+		offset int
+		line   int
+	}{
+		{0, 1}, {1, 1}, // "a\n"
+		{2, 2}, {3, 2}, {4, 2}, // "bb\n"
+		{5, 3}, {6, 3}, {7, 3}, {8, 3}, // "ccc\n"
+		{9, 4}, {10, 4}, {11, 4}, {12, 4}, {13, 4}, // "dddd\n"
+	}
+	for _, c := range cases {
+		got := index.lineAtOffset(c.offset)
+		if got != c.line {
+			t.Fatalf("lineAtOffset(%d) = %d, want %d", c.offset, got, c.line)
+		}
+	}
+}
+
+func TestLineRangeOffsetsWithIndexMatchesLegacy(t *testing.T) {
+	content := "one\ntwo\nthree\nfour\nfive\nsix\n"
+	index := buildLineIndex(content)
+	for startLine := 1; startLine <= 6; startLine++ {
+		for endLine := startLine; endLine <= 6; endLine++ {
+			wantStart, wantEnd, wantErr := lineRangeOffsets(content, startLine, endLine)
+			gotStart, gotEnd, gotErr := lineRangeOffsetsWithIndex(index, len(content), startLine, endLine)
+			if (wantErr == nil) != (gotErr == nil) {
+				t.Fatalf("line %d-%d: error mismatch legacy=%v index=%v", startLine, endLine, wantErr, gotErr)
+			}
+			if wantErr != nil {
+				continue
+			}
+			if gotStart != wantStart || gotEnd != wantEnd {
+				t.Fatalf("line %d-%d: index [%d,%d) != legacy [%d,%d)", startLine, endLine, gotStart, gotEnd, wantStart, wantEnd)
+			}
+		}
+	}
+}
+
+// BenchmarkApplyBatchTextChangesLargeFileLineRanges measures the cost of many
+// line-range edits on a large file. Before the lineIndex cache, each
+// lineRangeOffsets call re-scanned from byte 0; with the cache it's one O(N)
+// scan plus O(1) per lookup.
+func BenchmarkApplyBatchTextChangesLargeFileLineRanges(b *testing.B) {
+	const lineCount = 10000
+	lines := make([]string, lineCount)
+	for i := range lines {
+		lines[i] = fmt.Sprintf("line %d", i+1)
+	}
+	content := strings.Join(lines, "\n") + "\n"
+	changes := make([]TextChange, 0, 50)
+	for i := 0; i < 50; i++ {
+		start := 100*i + 10
+		changes = append(changes, TextChange{LineRange: fmt.Sprintf("%d-%d", start, start), NewText: fmt.Sprintf("// patch %d", i+1)})
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, _, err := ApplyBatchTextChanges(content, changes); err != nil {
+			b.Fatal(err)
 		}
 	}
 }

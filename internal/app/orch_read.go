@@ -330,6 +330,9 @@ func (a *App) readFileWithConfig(cfg ConfigState, req ReadFileRequest) (ReadFile
 	if err != nil {
 		return ReadFileResult{}, err
 	}
+	// Hash once; the previous code called hashBytes + hashVersion separately,
+	// hashing the same data twice (10 MB file ≈ 20-30 ms per SHA-256 pass).
+	sha256Hex, version := hashBytesAndVersion(data)
 	return ReadFileResult{
 		Path:          displayPathForConfig(cfg, path),
 		Content:       preview.Content,
@@ -341,8 +344,8 @@ func (a *App) readFileWithConfig(cfg ConfigState, req ReadFileRequest) (ReadFile
 		EndLine:       preview.EndLine,
 		NextStartLine: preview.NextStartLine,
 		TotalLines:    preview.TotalLines,
-		SHA256:        hashBytes(data),
-		Version:       hashVersion(data),
+		SHA256:        sha256Hex,
+		Version:       version,
 		Size:          info.Size(),
 		LineEnding:    ending,
 		Truncated:     preview.Truncated,
@@ -513,22 +516,32 @@ func formatLineNumberReadPreviewRangeWithBudget(content string, req readRangeReq
 			lineEnd = lineOffset + rel
 			nextOffset = lineEnd + 1
 		}
-		prefix := strconv.Itoa(lineNum) + ": "
+		// Write the line-number prefix directly into the builder instead of
+		// allocating a temporary "N: " string per line. On a 100k-line preview
+		// this saves 100k small heap allocations.
+		var prefixBuf [12]byte
+		prefixStr := strconv.AppendInt(prefixBuf[:0], int64(lineNum), 10)
+		prefixLen := len(prefixStr) + 2 // "N" + ": "
 		separatorBytes := 0
 		if b.Len() > 0 {
 			separatorBytes = 1
 		}
-		needed := separatorBytes + len(prefix) + lineEnd - lineOffset
+		needed := separatorBytes + prefixLen + lineEnd - lineOffset
 		if budgetBytes > 0 && b.Len()+needed > budgetBytes {
 			budgetLimited = true
 			if b.Len() == 0 {
 				remaining := budgetBytes
-				if len(prefix) > remaining {
-					b.WriteString(prefix[:remaining])
+				if prefixLen > remaining {
+					b.Write(prefixStr[:min(len(prefixStr), remaining)])
+					remaining -= len(prefixStr)
+					if remaining > 0 {
+						b.WriteString(": "[:min(2, remaining)])
+					}
 					remaining = 0
 				} else {
-					b.WriteString(prefix)
-					remaining -= len(prefix)
+					b.Write(prefixStr)
+					b.WriteString(": ")
+					remaining -= prefixLen
 				}
 				linePreview := utf8Prefix(content[lineOffset:lineEnd], remaining)
 				b.WriteString(linePreview)
@@ -541,7 +554,8 @@ func formatLineNumberReadPreviewRangeWithBudget(content string, req readRangeReq
 		if separatorBytes != 0 {
 			b.WriteByte('\n')
 		}
-		b.WriteString(prefix)
+		b.Write(prefixStr)
+		b.WriteString(": ")
 		b.WriteString(content[lineOffset:lineEnd])
 		actualEnd = lineNum
 		completeRawEnd = nextOffset

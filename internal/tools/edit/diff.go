@@ -57,14 +57,18 @@ func ComputeChangedLineRange(original, result string) ChangedLineRange {
 		lastRes--
 	}
 
+	// strings.Count uses an optimized scan (Rabin-Karp / byte cancellation)
+	// that is measurably faster than a per-byte Go loop over large texts, and
+	// it avoids allocating a slice like strings.Split would. Counting newlines
+	// in the prefix is O(prefix) regardless, but the constant is much smaller.
 	indexToLine := func(charIdx int, text string) int {
-		line := 1
-		for i := 0; i < charIdx && i < len(text); i++ {
-			if text[i] == '\n' {
-				line++
-			}
+		if charIdx <= 0 {
+			return 1
 		}
-		return line
+		if charIdx > len(text) {
+			charIdx = len(text)
+		}
+		return strings.Count(text[:charIdx], "\n") + 1
 	}
 
 	firstChangedLine := indexToLine(firstDiff+1, result)

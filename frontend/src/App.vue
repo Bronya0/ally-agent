@@ -205,6 +205,7 @@
           <SettingsModal
             :visible="configVisible"
             :config-draft="configDraft"
+            :check-update-result="checkUpdateResult"
             @close="configVisible = false"
             @closed="focusPromptInput"
             @save="onSettingsSave"
@@ -212,6 +213,7 @@
             @mcp-saved="onMcpSaved"
             @open-token-stats="openTokenStatsFromSettings"
             @background-changed="onBackgroundChanged"
+            @check-update="onCheckUpdate"
           />
           <TaskCenterPanel
             :show="taskCenterVisible"
@@ -1317,8 +1319,15 @@ const streamBuffers = new Map();
 const runtimeEventOffs = [];
 const missingDependencyWarningsShown = new Set();
 let streamFlushScheduled = false;
-let streamFlushTimer = 0;
+let streamFlushRaf = 0;
 let runtimeEventsBound = false;
+// Periodic update check timer. Ally performs one best-effort check at
+// startup; this timer ensures a long-running session (e.g. always-on tray)
+// still discovers new releases every 2 hours without requiring a restart.
+// The Atom feed used for the check is not rate-limited, so a shorter interval
+// is safe.
+let updateCheckTimer = 0;
+const UPDATE_CHECK_INTERVAL_MS = 2 * 60 * 60 * 1000;
 // tool:update events carry the full accumulated arguments on every emit.
 // During large payload streams (e.g. create_file with thousands of lines)
 // processing each event synchronously blocks the main thread, freezes the
@@ -1350,6 +1359,10 @@ const updateModalVisible = ref(false);
 // automatic startup download; flipped to false once download succeeds so the
 // "ready to restart" modal can pop.
 const updateSilent = ref(false);
+// Result object reported to SettingsModal's About page so the manual
+// "Check for updates" button gets explicit latest/found/failed feedback.
+// State: 'idle' | 'busy' | 'latest' | 'found' | 'failed'.
+const checkUpdateResult = ref({ state: 'idle' });
 const isUpdateBusy = computed(() => {
   return updateState.value === 'downloading' || updateState.value === 'extracting' || updateState.value === 'applying' || updateState.value === 'restarting';
 });
@@ -1775,7 +1788,7 @@ function refreshWorkspaceTokenUsage(workspace = config.workspace || '') {
 
 watch(() => config.workspace, (workspace) => {
   refreshWorkspaceTokenUsage(workspace || '');
-  refreshGitStatus();
+  if (workspace) refreshGitStatus();
   closeFileMentionMenu();
 }, { immediate: true });
 
@@ -2456,7 +2469,9 @@ async function init() {
   rememberModelForTab(tab);
   if (ws) addToHistory(ws);
   loadPromptHistory(ws);
-  refreshGitStatus();
+  // refreshGitStatus is already triggered by the config.workspace watcher
+  // above when assignConfig updates the workspace from '' to the loaded path.
+  // Calling it here would duplicate the IPC + git spawn.
 
   await loadSavedSessions();
   loadMcpConfig();
@@ -2531,23 +2546,31 @@ function queueStreamDelta(data, field) {
     buffer = { runId, content: '', reasoning: '' };
     streamBuffers.set(runId, buffer);
   }
-  if (field === 'reasoning') buffer.reasoning += data.content || '';
-  else buffer.content += data.content || '';
+  if (field === 'reasoning') buffer.reasoning += data.reasoning || data.content || '';
+  else if (field === 'content') buffer.content += data.content || '';
+  // Merged run:stream payload carries both fields in one event; route each
+  // non-empty field into its own buffer slot so a single IPC feeds both the
+  // reasoning <pre> and the answer body.
+  else {
+    if (data.reasoning) buffer.reasoning += data.reasoning;
+    if (data.content) buffer.content += data.content;
+  }
   scheduleStreamFlush();
 }
 
 function scheduleStreamFlush() {
   if (streamFlushScheduled) return;
   streamFlushScheduled = true;
-  streamFlushTimer = window.setTimeout(() => {
-    window.requestAnimationFrame(() => {
-      streamFlushTimer = 0;
-      streamFlushScheduled = false;
-      for (const runId of [...streamBuffers.keys()]) {
-        flushStreamBuffer(runId);
-      }
-    });
-  }, 48);
+  // Wails dispatches events as synchronous JS calls, so the only throttle we
+  // need is the browser's frame boundary. Coalescing on rAF keeps latency at
+  // ~16ms instead of the previous 48ms setTimeout + rAF chain (~64ms).
+  streamFlushRaf = window.requestAnimationFrame(() => {
+    streamFlushRaf = 0;
+    streamFlushScheduled = false;
+    for (const runId of [...streamBuffers.keys()]) {
+      flushStreamBuffer(runId);
+    }
+  });
 }
 
 function flushStreamBuffer(runId) {
@@ -2562,6 +2585,7 @@ function flushStreamBuffer(runId) {
     session.messages.push(last);
   }
   last.streaming = true;
+  const hadContent = !!buffer.content;
   if (buffer.reasoning) {
     if (last.reasoningBody === undefined) last.reasoningBody = '';
     if (!last.reasoningStartedAt) last.reasoningStartedAt = Date.now();
@@ -2574,7 +2598,11 @@ function flushStreamBuffer(runId) {
     }
     last.content += buffer.content;
   }
-  if (session.id === activeSessionId.value) {
+  // Only auto-scroll when there is actual content output. Pure reasoning
+  // deltas do not grow the visible message body (the reasoning <pre> is
+  // height-capped and shows only a tail), so scrolling on every reasoning
+  // flush wastes a layout pass at 20 FPS.
+  if (hadContent && session.id === activeSessionId.value) {
     scrollMessagesToBottom();
   }
 }
@@ -2820,8 +2848,19 @@ function bindRuntimeEvents() {
     message.warning(data.message, { duration: 10000 });
   });
 
+  onRuntimeEvent('run:stream', (data) => {
+    // Merged event: payload may carry content, reasoning, or both. Routing
+    // both fields in one IPC halves event count vs separate run:delta +
+    // run:reasoning emissions.
+    if (retryBanner.value) {
+      const session = sessionByTerminalEvent(data);
+      if (session && session.id === activeSessionId.value) retryBanner.value = null;
+    }
+    queueStreamDelta(data);
+  });
+  // Legacy events kept for compatibility with older backend builds and with
+  // session replay paths that still emit them individually.
   onRuntimeEvent('run:delta', (data) => {
-    // 收到任何 delta 都意味着重试已恢复(或本次请求正常开始),清除重试横幅。
     if (retryBanner.value) {
       const session = sessionByTerminalEvent(data);
       if (session && session.id === activeSessionId.value) retryBanner.value = null;
@@ -6885,15 +6924,44 @@ function handleAudioUnlock() {
   primeCompletionAudio();
 }
 
-async function checkForUpdates() {
+// isDevBuild returns true for any build whose version is NOT a正式 release
+// tag (e.g. "v1.6.0"). Local dev builds use a timestamp ("v20260805-002211")
+// or the literal "dev" when ALLY_BUILD_VERSION is unset; neither should
+// trigger update checks, since they would always compare as "older" and
+// generate spurious update prompts / unnecessary GitHub requests.
+const RELEASE_VERSION_RE = /^v?\d+\.\d+\.\d+$/;
+function isDevBuild() {
+  return !RELEASE_VERSION_RE.test(String(buildVersion || '').trim());
+}
+
+// checkForUpdates queries the backend for the latest release and, when a
+// newer version exists, updates the top-right icon + optionally starts a
+// silent background download. The optional `manual` flag is set when the
+// user clicks "Check for updates" in Settings → About; in that mode the
+// function also reports a result object back to the SettingsModal so the
+// user sees explicit "latest" / "found" / "failed" feedback.
+async function checkForUpdates(manual = false) {
+  // Local dev builds (timestamp version) skip update checks entirely.
+  if (isDevBuild()) {
+    if (manual) checkUpdateResult.value = { state: 'latest' };
+    return;
+  }
+  if (manual) checkUpdateResult.value = { state: 'busy' };
   try {
     const result = await CheckForUpdates();
-    if (!result?.ok) return;
+    if (!result?.ok) {
+      if (manual) checkUpdateResult.value = { state: 'failed' };
+      return;
+    }
     updateAutoSupported.value = !!result.canAutoUpdate;
     const latest = String(result.tag || '').trim();
-    if (!isNewerReleaseVersion(latest, buildVersion)) return;
+    if (!isNewerReleaseVersion(latest, buildVersion)) {
+      if (manual) checkUpdateResult.value = { state: 'latest' };
+      return;
+    }
     latestReleaseVersion.value = latest;
     updateAvailable.value = true;
+    if (manual) checkUpdateResult.value = { state: 'found', version: latest };
 
     // Skipped versions never bother the user automatically. The green icon
     // still appears so the user can manually trigger if they change their mind.
@@ -6916,11 +6984,18 @@ async function checkForUpdates() {
     }
   } catch (_) {
     // Update checks are best-effort and must never block startup.
+    if (manual) checkUpdateResult.value = { state: 'failed' };
   }
 }
 
 function openRepositoryPage() {
   Browser.OpenURL(ALLY_REPOSITORY_URL);
+}
+
+// Manual "Check for updates" triggered from Settings → About. Delegates to
+// checkForUpdates(manual=true) so the result flows back to the SettingsModal.
+function onCheckUpdate() {
+  void checkForUpdates(true);
 }
 
 // Start the self-update flow: download → extract → ready → apply → restart.
@@ -7055,6 +7130,11 @@ onMounted(async () => {
   window.addEventListener('focus', refreshWindowMaximisedState);
   bindRuntimeEvents();
   void checkForUpdates();
+  // Schedule a periodic re-check so long-running sessions (tray mode) still
+  // discover new releases without requiring a restart. The first interval
+  // fires 2h after the startup check; manual checks from Settings → About
+  // do not reset this timer.
+  updateCheckTimer = window.setInterval(() => { void checkForUpdates(); }, UPDATE_CHECK_INTERVAL_MS);
   // Pre-load skills before init so welcome message has the count
   try { await refreshSkillState(); } catch (_) { /* ignore */ }
   await init();
@@ -7074,10 +7154,12 @@ onUnmounted(() => {
   window.removeEventListener('resize', refreshWindowMaximisedState);
   window.removeEventListener('focus', refreshWindowMaximisedState);
   cleanupRuntimeEvents();
-  if (streamFlushTimer) window.clearTimeout(streamFlushTimer);
-  streamFlushTimer = 0;
+  if (streamFlushRaf) window.cancelAnimationFrame(streamFlushRaf);
+  streamFlushRaf = 0;
   streamFlushScheduled = false;
   streamBuffers.clear();
+  if (updateCheckTimer) window.clearInterval(updateCheckTimer);
+  updateCheckTimer = 0;
   if (fileMentionTimer) window.clearTimeout(fileMentionTimer);
   fileMentionTimer = 0;
   if (toolUpdateFlushTimer) window.clearTimeout(toolUpdateFlushTimer);

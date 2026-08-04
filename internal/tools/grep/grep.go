@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	toolerrors "ally-dev/internal/tools/shared"
 )
@@ -435,14 +436,30 @@ func sampleMatches(ctx context.Context, rgPath, root, searchRoot string, req Req
 	stdoutBytes := 0
 
 	reader := bufio.NewReaderSize(stdout, 64*1024)
+	// killed marks that we intentionally terminated rg early. Once set, the
+	// following cmd.Wait() will observe a non-zero exit code that we must
+	// tolerate (it's not a real search failure).
+	killed := false
 	for {
 		if ctx.Err() != nil {
 			break
 		}
+		// Early-exit: once we have enough samples or hit the output cap, kill
+		// rg immediately instead of draining the rest of its stdout. On large
+		// repos with a high-frequency pattern, rg can emit hundreds of
+		// thousands of records after the limit — draining them all is pure
+		// waste (the counts were already collected in the prior count pass).
+		if (sampleLimitReached || outputCapped) && !killed {
+			if cmd.Process != nil {
+				_ = cmd.Process.Kill()
+			}
+			killed = true
+			break
+		}
 		recordLimit := maxGrepRecordBytes
-		if outputCapped || sampleLimitReached || parseErr != nil {
+		if parseErr != nil {
 			// Continue draining the pipe without retaining records once the
-			// result is already complete, capped, or known to be invalid.
+			// result is known to be invalid.
 			recordLimit = 0
 		}
 		line, recordTruncated, bytesRead, readErr := readGrepRecord(reader, recordLimit)
@@ -499,7 +516,7 @@ func sampleMatches(ctx context.Context, rgPath, root, searchRoot string, req Req
 	if ctx.Err() != nil {
 		return nil, false, ctx.Err()
 	}
-	if waitErr != nil {
+	if waitErr != nil && !killed {
 		var exitErr *exec.ExitError
 		if errors.As(waitErr, &exitErr) {
 			if exitErr.ExitCode() != 1 {
@@ -635,11 +652,20 @@ func excludedDirs() []string {
 	}
 }
 
+// truncateLine caps a match preview to maxLen bytes. The cut point is walked
+// back to the previous UTF-8 rune boundary so we never slice through a
+// multi-byte sequence — slicing at an arbitrary byte would produce invalid
+// UTF-8 that JSON-serializes to U+FFFD and renders as garbage in the UI for
+// CJK/emoji content.
 func truncateLine(line string, maxLen int) string {
-	if len(line) > maxLen {
-		return line[:maxLen] + "..."
+	if len(line) <= maxLen {
+		return line
 	}
-	return line
+	end := maxLen
+	for end > 0 && !utf8.RuneStart(line[end]) {
+		end--
+	}
+	return line[:end] + "..."
 }
 
 // limitedBuffer is a mutex-protected byte buffer that silently truncates

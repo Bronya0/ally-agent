@@ -27,10 +27,10 @@ func TestDefaultConfigStartsWithoutWorkspace(t *testing.T) {
 
 func TestDefaultConfigWindowSizeIsEmpty(t *testing.T) {
 	if got := defaultConfigState().WindowWidth; got != 0 {
-		t.Fatalf("default window width = %d, want 0 (first launch uses 61.8%% ratio)", got)
+		t.Fatalf("default window width = %d, want 0 (first launch uses options default)", got)
 	}
 	if got := defaultConfigState().WindowHeight; got != 0 {
-		t.Fatalf("default window height = %d, want 0 (first launch uses 61.8%% ratio)", got)
+		t.Fatalf("default window height = %d, want 0 (first launch uses options default)", got)
 	}
 }
 
@@ -43,12 +43,6 @@ func TestMergeConfigWindowSizeRequiresBothDimensions(t *testing.T) {
 	got = mergeConfig(base, ConfigState{WindowWidth: 300, WindowHeight: 400})
 	if got.WindowWidth != 300 || got.WindowHeight != 400 {
 		t.Fatalf("full window size overlay not applied: got %dx%d", got.WindowWidth, got.WindowHeight)
-	}
-}
-
-func TestInitialWindowRatioIsGoldenRatio(t *testing.T) {
-	if InitialWindowRatio != 0.618 {
-		t.Fatalf("InitialWindowRatio = %v, want 0.618", InitialWindowRatio)
 	}
 }
 
@@ -362,7 +356,7 @@ func TestRunStreamDeltaEmitterBatchesRapidDeltas(t *testing.T) {
 	if len(events) != 1 {
 		t.Fatalf("expected first delta to emit immediately and second to buffer, got %#v", events)
 	}
-	if events[0].name != "run:delta" || events[0].content != "你" {
+	if events[0].name != runStreamEvent || events[0].content != "你" {
 		t.Fatalf("unexpected first event: %#v", events[0])
 	}
 
@@ -370,7 +364,7 @@ func TestRunStreamDeltaEmitterBatchesRapidDeltas(t *testing.T) {
 	if len(events) != 2 {
 		t.Fatalf("expected flush to emit buffered delta, got %#v", events)
 	}
-	if events[1].name != "run:delta" || events[1].content != "好" {
+	if events[1].name != runStreamEvent || events[1].content != "好" {
 		t.Fatalf("unexpected flushed event: %#v", events[1])
 	}
 }
@@ -388,6 +382,53 @@ func TestRunStreamDeltaEmitterFlushesByThreshold(t *testing.T) {
 	}
 	if events[1] != strings.Repeat("b", runStreamDeltaThreshold) {
 		t.Fatalf("expected threshold flush content, got %q", events[1])
+	}
+}
+
+// TestRunStreamDeltaEmitterMergesReasoningAndContent verifies that a single
+// flush emits one run:stream event carrying both fields, halving IPC count
+// versus the previous run:reasoning + run:delta pair.
+func TestRunStreamDeltaEmitterMergesReasoningAndContent(t *testing.T) {
+	type captured struct {
+		name    string
+		reason  string
+		content string
+		hasBoth bool
+	}
+	var got []captured
+	emitter := newRunStreamDeltaEmitter("run-1", "session-1", func(name string, payload map[string]any) {
+		c := captured{name: name}
+		if v, ok := payload["reasoning"].(string); ok {
+			c.reason = v
+		}
+		if v, ok := payload["content"].(string); ok {
+			c.content = v
+		}
+		c.hasBoth = c.reason != "" && c.content != ""
+		got = append(got, c)
+	})
+
+	// First delta flushes immediately (lastEmit.IsZero). Subsequent deltas
+	// accumulate because they're under threshold and within the throttle window.
+	emitter.addContent("a")
+	emitter.addReasoning("think")
+	emitter.addContent("b")
+	emitter.flush()
+
+	if len(got) != 2 {
+		t.Fatalf("expected 2 events (first-byte then merged flush), got %d: %#v", len(got), got)
+	}
+	if got[0].content != "a" || got[0].reason != "" {
+		t.Fatalf("expected first event content-only, got %#v", got[0])
+	}
+	if !got[1].hasBoth {
+		t.Fatalf("expected final flush to merge reasoning+content in one event, got %#v", got[1])
+	}
+	if got[1].name != runStreamEvent {
+		t.Fatalf("expected merged event name %q, got %q", runStreamEvent, got[1].name)
+	}
+	if got[1].reason != "think" || got[1].content != "b" {
+		t.Fatalf("unexpected merged payload: %#v", got[1])
 	}
 }
 
@@ -752,6 +793,7 @@ func TestSystemPromptDiscouragesRedundantReadsBeforeEdit(t *testing.T) {
 		"reuse its returned `version`",
 		"context compaction removed the reliable snapshot",
 		"formatter/generator/command or other external process may have changed the file",
+		"Use startLine=C to continue",
 	} {
 		if !strings.Contains(prompt, expected) {
 			t.Fatalf("system prompt missing redundant-read guidance %q", expected)

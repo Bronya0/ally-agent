@@ -42,7 +42,7 @@
                 <span class="reasoning-tokens">{{ fmtK(Math.max(1, Math.round(String(msg.reasoningBody).length / 3))) }} tokens</span>
               </span>
             </div>
-            <pre v-if="msg.reasoningExpanded" class="reasoning-body">{{ msg.reasoningBody }}</pre>
+            <pre v-if="msg.reasoningExpanded" class="reasoning-body">{{ reasoningDisplayText(msg) }}</pre>
           </div>
           <RenderBoundary v-if="msg.welcome" :label="$t('chat.welcome')"><WelcomeMessage :welcome="msg.welcome" :tools="tools" :mcp-servers="mcpServers" /></RenderBoundary>
           <div v-else class="message-body markdown-body" v-html="renderFn(msg.content, msg.streaming)"></div>
@@ -149,6 +149,32 @@ const USER_MESSAGE_PREVIEW_LINE_LIMIT = 6;
 
 function userMessageText(msg) {
   return String(msg?.skill ? msg.skill.args || '' : msg?.content || '');
+}
+
+// During streaming, only render the tail of reasoning content to avoid
+// re-laying-out a huge <pre> block on every flush (20 FPS). Once streaming
+// ends, render the full text so the user can read/scroll the whole thought.
+const REASONING_STREAMING_TAIL_LINES = 40;
+const REASONING_STREAMING_TAIL_CHARS = 8000;
+
+function reasoningDisplayText(msg) {
+  const text = String(msg?.reasoningBody || '');
+  if (!text) return '';
+  // Full render when not streaming or when reasoning has ended.
+  if (!msg?.streaming || msg?.reasoningEndedAt) return text;
+  // Streaming: render only the tail to keep the <pre> layout cheap.
+  // Slice to the tail FIRST, then split — splitting a 1MB string would
+  // allocate a million-element array on every flush at 20 FPS.
+  const overCharLimit = text.length > REASONING_STREAMING_TAIL_CHARS;
+  const tail = overCharLimit ? text.slice(-REASONING_STREAMING_TAIL_CHARS) : text;
+  const lines = tail.split('\n');
+  if (lines.length > REASONING_STREAMING_TAIL_LINES) {
+    return (overCharLimit ? '…\n' : '') + lines.slice(-REASONING_STREAMING_TAIL_LINES).join('\n');
+  }
+  if (overCharLimit) {
+    return '…' + tail;
+  }
+  return text;
 }
 
 // Keep historical user/assistant subtrees out of the patch path while the

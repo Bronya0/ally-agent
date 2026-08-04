@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"io"
@@ -122,6 +123,14 @@ type workspaceMapCacheEntry struct {
 	generatedAt time.Time
 }
 
+// gitStatusCacheEntry caches a GitStatus result with a short TTL so that
+// rapid consecutive GetGitStatus calls (workspace switch + run:done) don't
+// each spawn 2 git subprocesses.
+type gitStatusCacheEntry struct {
+	status      GitStatus
+	generatedAt time.Time
+}
+
 // App is the Wails-bound application module.
 type App struct {
 	ctx    context.Context
@@ -158,6 +167,12 @@ type App struct {
 	gitDiffMu     sync.Mutex
 	gitDiffCancel context.CancelFunc
 	gitDiffRunID  int64
+
+	// gitStatusCache memoizes the last GetGitStatus result for a short TTL
+	// so that rapid consecutive calls (e.g. workspace switch + run:done)
+	// don't each spawn 2 git subprocesses. Keyed by workspace path.
+	gitStatusCacheMu  sync.Mutex
+	gitStatusCache    map[string]gitStatusCacheEntry
 
 	workspaceMapMu       sync.Mutex
 	workspaceMapCache    map[string]workspaceMapCacheEntry
@@ -215,6 +230,7 @@ func NewApp() *App {
 		workspaceMapCache:   map[string]workspaceMapCacheEntry{},
 		workspacePathCache:  map[string]*workspacePathIndex{},
 		workspacePathBuilds: map[string]chan struct{}{},
+		gitStatusCache:      map[string]gitStatusCacheEntry{},
 		httpLastHost:        map[string]time.Time{},
 		liveBreakdown:       map[string]ContextBreakdown{},
 		workspaceTokenUsage: map[string]WorkspaceTokenUsage{},
@@ -315,6 +331,11 @@ type ConfigState struct {
 	// SkippedUpdates records release tags the user chose to skip. They are
 	// excluded from automatic download until the user clears them.
 	SkippedUpdates []string `json:"skippedUpdates,omitempty"`
+	// GitHubToken is an optional personal access token used to raise the
+	// GitHub API rate limit from 60/hour (anonymous) to 5000/hour when
+	// checking for updates and downloading release assets. Reading public
+	// repo releases needs no scope, so a no-scope classic token works.
+	GitHubToken string `json:"githubToken,omitempty"`
 	// BackgroundImage is the filename of the user-uploaded chat background
 	// image stored under ~/.ally_agent/. Empty means no custom background.
 	// The actual bytes live on disk so config.json stays small; the frontend
@@ -1073,6 +1094,34 @@ func (b *limitedBuffer) String() string {
 	return b.buf.String()
 }
 
+// Len returns the current buffered length without copying. Callers that only
+// need to know whether the buffer grew (e.g. the run_command streaming ticker)
+// can use this instead of String(), which would allocate a full copy under the
+// lock on every 120ms tick — even when nothing changed.
+func (b *limitedBuffer) Len() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Len()
+}
+
+// TailString returns the last min(n, buf.Len()) bytes as a string. Used by the
+// run_command streaming ticker to avoid emitting the full buffer (up to 128KB)
+// on every 120ms tick — only the tail is sent during streaming, the complete
+// output is delivered in the final CommandResult. This cuts IPC payload ~8x
+// for long builds that fill the buffer.
+func (b *limitedBuffer) TailString(n int) string {
+	if n <= 0 {
+		return ""
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	p := b.buf.Bytes()
+	if len(p) <= n {
+		return string(p)
+	}
+	return string(p[len(p)-n:])
+}
+
 func (a *App) ensureInitialized() error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -1316,6 +1365,12 @@ func mergeConfig(base, overlay ConfigState) ConfigState {
 	if overlay.SkippedUpdates != nil {
 		base.SkippedUpdates = cloneStringSlice(overlay.SkippedUpdates)
 	}
+	// GitHubToken: overlay always wins (including empty, which clears the
+	// token). This is safe because the frontend draft is loaded from the
+	// current config, so a non-token session always sends "" — which is
+	// also the correct default. Legacy frontends that don't know this field
+	// also send "", which is correct because they never set a token.
+	base.GitHubToken = strings.TrimSpace(overlay.GitHubToken)
 	// Background image filename is stored verbatim (it is set by
 	// SaveBackgroundImage, not by SaveConfig overlay from the frontend).
 	// Opacity is normalized and clamped to [0, 1].
@@ -1857,11 +1912,64 @@ type CheckForUpdatesResult struct {
 	StagedVersion     string `json:"stagedVersion,omitempty"`
 }
 
-const allyLatestReleaseAPI = "https://api.github.com/repos/Bronya0/ally-agent/releases/latest"
+// allyReleaseAtomTagRe extracts the version tag from a release URL such as
+// "https://github.com/Bronya0/ally-agent/releases/tag/v1.6.0". Used as a
+// fallback when the <id> element does not end with the tag.
+var allyReleaseAtomTagRe = regexp.MustCompile(`/releases/tag/([^/?#]+)`)
 
-// CheckForUpdates queries GitHub for the latest Ally release through Ally's own
-// proxy-aware HTTP client. It uses a one-minute timeout and never panics; the
-// caller (frontend) treats any non-OK result as "no update detected".
+// atomFeed is a minimal subset of the GitHub releases Atom feed. Only the
+// fields used for version detection are decoded; <content> is skipped.
+type atomFeed struct {
+	XMLName xml.Name   `xml:"feed"`
+	Entries []atomEntry `xml:"entry"`
+}
+
+type atomEntry struct {
+	ID    string    `xml:"id"`
+	Title string    `xml:"title"`
+	Links []atomLink `xml:"link"`
+}
+
+type atomLink struct {
+	Rel  string `xml:"rel,attr"`
+	Href string `xml:"href,attr"`
+}
+
+// parseAtomLatestTag extracts the version tag of the first (newest) entry in
+// the Atom feed. It prefers the /releases/tag/<tag> segment from the
+// alternate link and falls back to the trailing path segment of <id>.
+func parseAtomLatestTag(body []byte) (string, error) {
+	var feed atomFeed
+	if err := xml.Unmarshal(body, &feed); err != nil {
+		return "", fmt.Errorf("parse atom feed: %w", err)
+	}
+	if len(feed.Entries) == 0 {
+		return "", errors.New("atom feed has no entries")
+	}
+	entry := feed.Entries[0]
+	for _, l := range entry.Links {
+		if l.Rel == "alternate" && l.Href != "" {
+			if m := allyReleaseAtomTagRe.FindStringSubmatch(l.Href); len(m) == 2 {
+				return strings.TrimSpace(m[1]), nil
+			}
+		}
+	}
+	// Fallback: <id>tag:github.com,2008:Repository/<id>/v1.6.0</id>
+	if id := strings.TrimSpace(entry.ID); id != "" {
+		if idx := strings.LastIndex(id, "/"); idx >= 0 && idx < len(id)-1 {
+			return id[idx+1:], nil
+		}
+	}
+	return "", errors.New("could not locate release tag in atom feed")
+}
+
+// CheckForUpdates fetches the public GitHub releases Atom feed (no API token,
+// no rate limit) and reports the newest release tag. It uses a one-minute
+// timeout and never panics; the caller (frontend) treats any non-OK result as
+// "no update detected".
+//
+// On a network/parse failure, the last known tag persisted in
+// ~/.ally_agent/update_cache.json is returned so the UI still works.
 //
 // The result also reports whether automatic background download is enabled,
 // whether the latest tag was previously skipped, and the version currently
@@ -1872,41 +1980,53 @@ func (a *App) CheckForUpdates() CheckForUpdatesResult {
 	client := proxyHTTPClient(cfg, false, 60*time.Second)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, allyLatestReleaseAPI, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, allyReleasesAtom, nil)
 	if err != nil {
-		return CheckForUpdatesResult{Error: err.Error()}
+		return a.fallbackUpdateResult(cfg, err.Error())
 	}
-	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("Accept", "application/atom+xml,application/xml,text/xml;q=0.9,*/*;q=0.8")
 	req.Header.Set("User-Agent", "ally-agent-update-check")
 	resp, err := client.Do(req)
 	if err != nil {
-		return CheckForUpdatesResult{Error: err.Error()}
+		return a.fallbackUpdateResult(cfg, err.Error())
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return CheckForUpdatesResult{Error: fmt.Sprintf("github api status %d", resp.StatusCode)}
+		return a.fallbackUpdateResult(cfg, fmt.Sprintf("atom feed status %d", resp.StatusCode))
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return CheckForUpdatesResult{Error: err.Error()}
+		return a.fallbackUpdateResult(cfg, err.Error())
 	}
-	var parsed struct {
-		TagName    string `json:"tag_name"`
-		Prerelease bool   `json:"prerelease"`
-		Draft      bool   `json:"draft"`
+	tag, err := parseAtomLatestTag(body)
+	if err != nil {
+		return a.fallbackUpdateResult(cfg, err.Error())
 	}
-	if err := json.Unmarshal(body, &parsed); err != nil {
-		return CheckForUpdatesResult{Error: err.Error()}
+	if err := validateUpdateTag(tag); err != nil {
+		return a.fallbackUpdateResult(cfg, err.Error())
 	}
-	// Pre-release and draft releases must never be offered as automatic
-	// updates; the frontend treats a non-OK result as "no update detected".
-	if parsed.Prerelease || parsed.Draft {
-		return CheckForUpdatesResult{Error: "latest release is a pre-release or draft; ignored"}
+	cache := loadUpdateCache()
+	cache.LastTag = tag
+	cache.LastChecked = time.Now()
+	saveUpdateCache(cache)
+	return a.buildUpdateResult(cfg, tag)
+}
+
+// fallbackUpdateResult returns the cached latest tag when available, so the
+// UI keeps working during a transient network/parse failure. If no cache is
+// available, it returns the original error.
+func (a *App) fallbackUpdateResult(cfg ConfigState, errMsg string) CheckForUpdatesResult {
+	cache := loadUpdateCache()
+	if tag := strings.TrimSpace(cache.LastTag); tag != "" {
+		return a.buildUpdateResult(cfg, tag)
 	}
-	tag := strings.TrimSpace(parsed.TagName)
-	if tag == "" {
-		return CheckForUpdatesResult{Error: "missing tag_name in response"}
-	}
+	return CheckForUpdatesResult{Error: errMsg}
+}
+
+// buildUpdateResult assembles a CheckForUpdatesResult from a known tag,
+// resolving skipped / staged state. Shared by the success, fallback, and
+// cached-tag paths so they produce identical result shapes.
+func (a *App) buildUpdateResult(cfg ConfigState, tag string) CheckForUpdatesResult {
 	result := CheckForUpdatesResult{
 		OK:                true,
 		Tag:               tag,
@@ -2148,7 +2268,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 					grillProtocolRetries = 0
 				}
 				if content != "" {
-					a.emit("run:delta", map[string]any{"runId": runID, "sessionId": sessionID, "content": content})
+					a.emit(runStreamEvent, map[string]any{"runId": runID, "sessionId": sessionID, "content": content})
 				}
 			}
 			if len(toolCalls) == 0 {
@@ -4774,6 +4894,13 @@ func hashBytes(data []byte) string {
 
 func hashVersion(data []byte) string {
 	return read.HashVersion(data)
+}
+
+// hashBytesAndVersion hashes data once and returns both the hex digest and the
+// version token. Replaces the previous hashBytes + hashVersion pair on the read
+// hot path, where a 10 MB file was being SHA-256'd twice per call.
+func hashBytesAndVersion(data []byte) (string, string) {
+	return read.HashBytesAndVersion(data)
 }
 
 func versionFromSHA256Hex(value string) (string, error) {

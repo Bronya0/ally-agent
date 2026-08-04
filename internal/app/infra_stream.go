@@ -1,6 +1,8 @@
 package app
 
 import (
+	"hash/fnv"
+	"strconv"
 	"strings"
 	"time"
 
@@ -24,6 +26,10 @@ type runStreamDeltaEmitter struct {
 const (
 	runStreamDeltaThrottle  = 32 * time.Millisecond
 	runStreamDeltaThreshold = 512
+	// runStreamEvent is the merged streaming event. Both reasoning and content
+	// deltas are flushed in a single IPC via shared payload fields, halving the
+	// event count compared to emitting run:reasoning and run:delta separately.
+	runStreamEvent = "run:stream"
 )
 
 func newRunStreamDeltaEmitter(runID, sessionID string, emit func(string, map[string]any)) *runStreamDeltaEmitter {
@@ -31,20 +37,22 @@ func newRunStreamDeltaEmitter(runID, sessionID string, emit func(string, map[str
 }
 
 func (e *runStreamDeltaEmitter) addContent(delta string) {
-	e.add("run:delta", &e.contentBuffer, delta)
-}
-
-func (e *runStreamDeltaEmitter) addReasoning(delta string) {
-	e.add("run:reasoning", &e.reasoningBuffer, delta)
-}
-
-func (e *runStreamDeltaEmitter) add(name string, buffer *strings.Builder, delta string) {
 	if e == nil || delta == "" {
 		return
 	}
-	buffer.WriteString(delta)
-	if e.shouldFlush(buffer.Len()) {
-		e.flushBuffer(name, buffer)
+	e.contentBuffer.WriteString(delta)
+	if e.shouldFlush(e.contentBuffer.Len()) {
+		e.flush()
+	}
+}
+
+func (e *runStreamDeltaEmitter) addReasoning(delta string) {
+	if e == nil || delta == "" {
+		return
+	}
+	e.reasoningBuffer.WriteString(delta)
+	if e.shouldFlush(e.reasoningBuffer.Len()) {
+		e.flush()
 	}
 }
 
@@ -58,22 +66,29 @@ func (e *runStreamDeltaEmitter) shouldFlush(bufferLen int) bool {
 	return time.Since(e.lastEmit) >= runStreamDeltaThrottle
 }
 
+// flush emits a single run:stream event carrying whichever of reasoning/content
+// has pending bytes. Merging here cuts IPC count in half for the common
+// thinking+answer streaming case.
 func (e *runStreamDeltaEmitter) flush() {
-	if e == nil {
+	if e == nil || e.emit == nil {
 		return
 	}
-	e.flushBuffer("run:reasoning", &e.reasoningBuffer)
-	e.flushBuffer("run:delta", &e.contentBuffer)
-}
-
-func (e *runStreamDeltaEmitter) flushBuffer(name string, buffer *strings.Builder) {
-	if e == nil || buffer == nil || buffer.Len() == 0 || e.emit == nil {
+	reasoning := e.reasoningBuffer.String()
+	content := e.contentBuffer.String()
+	if reasoning == "" && content == "" {
 		return
 	}
-	content := buffer.String()
-	buffer.Reset()
+	e.reasoningBuffer.Reset()
+	e.contentBuffer.Reset()
 	e.lastEmit = time.Now()
-	e.emit(name, map[string]any{"runId": e.runID, "sessionId": e.sessionID, "content": content})
+	payload := map[string]any{"runId": e.runID, "sessionId": e.sessionID}
+	if reasoning != "" {
+		payload["reasoning"] = reasoning
+	}
+	if content != "" {
+		payload["content"] = content
+	}
+	e.emit(runStreamEvent, payload)
 }
 
 // modelToolCallEventGate prevents provider adapters from cloning and
@@ -170,7 +185,11 @@ func (t *toolCallProgressTracker) eventsWithForce(runID, sessionID, batchID stri
 				continue
 			}
 		}
-		state := call.ID + "\x00" + string(call.Type) + "\x00" + call.Function.Name + "\x00" + call.Function.Arguments
+		// State key uses a FNV-1a hash of arguments + length, avoiding the
+		// previous O(len(args)) string concatenation + full-string compare on
+		// every delta. ID/Type/Name are short and stable, so they're inlined.
+		argsHash, argsLen := toolCallArgsHash(call.Function.Arguments)
+		state := call.ID + "\x00" + string(call.Type) + "\x00" + call.Function.Name + "\x00" + argsHash + "\x00" + strconv.Itoa(argsLen)
 		if t.lastState[idx] == state {
 			continue
 		}
@@ -197,4 +216,14 @@ func (t *toolCallProgressTracker) eventsWithForce(runID, sessionID, batchID stri
 		t.lastState[idx] = state
 	}
 	return events
+}
+
+// toolCallArgsHash returns a stable FNV-1a 64-bit hex digest and the byte
+// length of args. Used as a cheap identity for the streaming arguments so the
+// progress tracker avoids re-concatenating multi-KB argument strings on every
+// delta just to compare them.
+func toolCallArgsHash(args string) (string, int) {
+	h := fnv.New64a()
+	h.Write([]byte(args))
+	return strconv.FormatUint(h.Sum64(), 16), len(args)
 }

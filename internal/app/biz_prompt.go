@@ -40,7 +40,7 @@ func sharedEditRules() string {
 func sharedBatchStrategy() string {
 	return "**Batch and parallelize aggressively** — this is the #1 way to reduce round-trips and save tokens:\n" +
 		"- If you need file contents, prefer one `read` call with all relevant paths instead of separate reads.\n" +
-		"- For `read`, omit both range fields to read the whole file; use optional `startLine` and `endLine` only when you need a specific inclusive range. For files over ~500 lines, prefer reading relevant ranges first instead of the whole file.\n" +
+		"- For `read`, omit both range fields to read the whole file; use optional `startLine` and `endLine` only when you need a specific inclusive range. For files over ~500 lines, prefer reading relevant ranges first instead of the whole file. When a read is auto-truncated, the content ends with a `[Showing lines A-B of N. Use startLine=C to continue.]` marker — follow it to page through the rest rather than re-reading the whole file.\n" +
 		"- If you need to edit files, put all cross-file changes in one `edit` call.\n" +
 		"- If you need to search across files, send one `grep_files` instead of reading each file.\n" +
 		"- Batch independent reads and commands (no duplicates); use current version values for dependent edits.\n" +

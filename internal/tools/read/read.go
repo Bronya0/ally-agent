@@ -124,6 +124,16 @@ func HashVersion(data []byte) string {
 	return VersionFromSHA256(sum[:])
 }
 
+// HashBytesAndVersion computes SHA-256 once and returns both the lowercase hex
+// digest and the 12-character Crockford Base32 version token. Use this when a
+// caller needs both values for the same data — calling HashBytes + HashVersion
+// separately would hash the data twice, which is a measurable cost on the read
+// hot path (10 MB file ≈ 20-30 ms per SHA-256 pass).
+func HashBytesAndVersion(data []byte) (sha256Hex, version string) {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:]), VersionFromSHA256(sum[:])
+}
+
 // VersionFromSHA256 derives the 12-character Crockford Base32 version token
 // from a raw 32-byte SHA-256 digest. Callers that already have the digest
 // (e.g. they hex-decoded it from an external source) can use this instead of

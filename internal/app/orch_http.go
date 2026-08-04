@@ -595,13 +595,16 @@ func decodeHTTPText(data []byte, contentType string) string {
 	if len(data) == 0 {
 		return ""
 	}
+	// Fast path: the overwhelming majority of HTTP responses are already
+	// UTF-8 (JSON APIs, modern HTML). Skip the encoding detection and
+	// transform.Bytes allocation entirely for those cases.
+	if utf8.Valid(data) {
+		return string(data)
+	}
 	enc, _, _ := charset.DetermineEncoding(data, contentType)
 	decoded, _, err := transform.Bytes(enc.NewDecoder(), data)
 	if err == nil {
 		return string(decoded)
-	}
-	if utf8.Valid(data) {
-		return string(data)
 	}
 	return string(bytes.ToValidUTF8(data, []byte("\uFFFD")))
 }
@@ -691,8 +694,10 @@ func (a *App) waitHTTPRateLimit(ctx context.Context, target *url.URL) error {
 }
 
 func readLimited(r io.Reader, limit int) ([]byte, bool, error) {
-	var buf bytes.Buffer
-	_, err := io.Copy(&buf, io.LimitReader(r, int64(limit)+1))
+	// Pre-grow to the limit so we don't pay for 2-3 reallocations as the
+	// buffer climbs through 64K → 128K → 256K on typical HTML/JSON bodies.
+	buf := bytes.NewBuffer(make([]byte, 0, limit+1))
+	_, err := io.Copy(buf, io.LimitReader(r, int64(limit)+1))
 	if err != nil {
 		return nil, false, err
 	}
@@ -863,11 +868,17 @@ func htmlReadableText(data []byte, finalURL string) (string, string, []WebFetchL
 	var titleParts []string
 	var textParts []string
 	links := []WebFetchLink{}
+	// pendingLink tracks the <a> whose link text we are currently
+	// collecting. -1 means no link is pending. This merges the old
+	// fillLinkText second pass into the main walk so we only traverse
+	// the DOM once.
+	pendingLink := -1
 	var walk func(*html.Node, bool, bool)
 	walk = func(n *html.Node, hidden bool, inTitle bool) {
 		if n == nil {
 			return
 		}
+		savedPending := pendingLink
 		if n.Type == html.ElementNode {
 			name := strings.ToLower(n.Data)
 			switch name {
@@ -885,6 +896,7 @@ func htmlReadableText(data []byte, finalURL string) (string, string, []WebFetchL
 								u = baseURL.ResolveReference(u)
 							}
 							links = append(links, WebFetchLink{URL: u.String()})
+							pendingLink = len(links) - 1
 						}
 					}
 				}
@@ -898,17 +910,21 @@ func htmlReadableText(data []byte, finalURL string) (string, string, []WebFetchL
 				} else {
 					textParts = append(textParts, text)
 				}
+				if pendingLink >= 0 && pendingLink < len(links) && links[pendingLink].Text == "" {
+					links[pendingLink].Text = truncateRunes(normalizeWhitespace(text), 80)
+					pendingLink = -1
+				}
 			}
 		}
 		for child := n.FirstChild; child != nil; child = child.NextSibling {
 			walk(child, hidden, inTitle)
 		}
+		pendingLink = savedPending
 	}
 	walk(doc, false, false)
 
 	text := normalizeWhitespace(strings.Join(textParts, " "))
 	title := normalizeWhitespace(strings.Join(titleParts, " "))
-	fillLinkText(doc, links)
 	return title, text, links
 }
 
@@ -919,31 +935,6 @@ func htmlAttr(n *html.Node, key string) string {
 		}
 	}
 	return ""
-}
-
-func fillLinkText(doc *html.Node, links []WebFetchLink) {
-	idx := 0
-	var walk func(*html.Node, bool)
-	walk = func(n *html.Node, inLink bool) {
-		if n == nil || idx >= len(links) {
-			return
-		}
-		if n.Type == html.ElementNode && strings.EqualFold(n.Data, "a") {
-			inLink = true
-		}
-		if inLink && n.Type == html.TextNode {
-			text := normalizeWhitespace(n.Data)
-			if text != "" {
-				links[idx].Text = truncateRunes(text, 80)
-				idx++
-				inLink = false
-			}
-		}
-		for child := n.FirstChild; child != nil; child = child.NextSibling {
-			walk(child, inLink)
-		}
-	}
-	walk(doc, false)
 }
 
 func normalizeWhitespace(text string) string {
