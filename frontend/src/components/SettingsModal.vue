@@ -523,7 +523,7 @@ import {
   providerCatalogOptions,
   providerModelOptions,
 } from '../utils/modelProviderCatalog.mjs';
-import { BrowserOpenURL } from '../../wailsjs/runtime/runtime';
+import { Browser } from '@wailsio/runtime';
 import {
   GetMcpConfig, GetMcpServers, SaveMcpConfig, RestartMcpServers,
   ListSkills, ActivateSkill, DeactivateSkill, ClearSkills, GetActiveSkills,
@@ -531,14 +531,14 @@ import {
   TestModelConnection,
   DetectSystemProxy, TestProxy,
   SelectBackgroundImage, ClearBackgroundImage,
-} from '../../wailsjs/go/app/App';
+} from '../../bindings/ally-dev/internal/app/app';
 
 const { message } = createDiscreteApi(['message'], {
   configProviderProps: { theme: darkTheme, locale: naiveLocale, dateLocale: naiveDateLocale },
 });
 
 function openSourceRepository() {
-  BrowserOpenURL('https://github.com/Bronya0/ally-agent');
+  Browser.OpenURL('https://github.com/Bronya0/ally-agent');
 }
 
 const props = defineProps({
@@ -852,7 +852,7 @@ function selectCatalogModel(modelId) {
 }
 
 function openProviderDocumentation() {
-  if (selectedCatalogProvider.value?.doc) BrowserOpenURL(selectedCatalogProvider.value.doc);
+  if (selectedCatalogProvider.value?.doc) Browser.OpenURL(selectedCatalogProvider.value.doc);
 }
 
 async function startAddModelDraft() {

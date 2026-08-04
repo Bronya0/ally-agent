@@ -137,7 +137,7 @@
 
 <script setup>
 import { computed, nextTick, onUnmounted, ref, watch } from 'vue';
-import { GetServiceOutput } from '../../wailsjs/go/app/App';
+import { GetServiceOutput } from '../../bindings/ally-dev/internal/app/app';
 import { formatDateTime, t } from '../i18n.mjs';
 
 const props = defineProps({

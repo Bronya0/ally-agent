@@ -344,8 +344,8 @@ import {
   QuitForUpdate,
   SkipUpdate,
   GetBackgroundImageURL,
-} from '../wailsjs/go/app/App';
-import { BrowserOpenURL, Environment, EventsOn, WindowMinimise, WindowMaximise, WindowUnmaximise, WindowIsMaximised, Quit } from '../wailsjs/runtime/runtime';
+} from '../bindings/ally-dev/internal/app/app';
+import { Application, Browser, Events, Window } from '@wailsio/runtime';
 import AllyWordmark from './components/AllyWordmark.vue';
 import ComposerInfoBar from './components/ComposerInfoBar.vue';
 import MessageAttachments from './components/MessageAttachments.vue';
@@ -1098,7 +1098,7 @@ function handleMarkdownLinkClick(event) {
   event.preventDefault();
   event.stopPropagation();
   const href = rawHref.startsWith('//') ? `https:${rawHref}` : rawHref;
-  if (/^(?:https?:|mailto:)/i.test(href)) BrowserOpenURL(href);
+  if (/^(?:https?:|mailto:)/i.test(href)) Browser.OpenURL(href);
 }
 
 function fallbackCopy(text, onSuccess) {
@@ -2735,7 +2735,7 @@ function closeCompletionAudio() {
 }
 
 function onRuntimeEvent(eventName, handler) {
-  const off = EventsOn(eventName, handler);
+  const off = Events.On(eventName, handler);
   if (typeof off === 'function') runtimeEventOffs.push(off);
 }
 
@@ -3851,22 +3851,22 @@ function buildSessionMessagesForModel(session, latestOverride = null) {
 }
 
 async function minimiseWindow() {
-  try { await WindowMinimise(); } catch (_) {}
+  try { await Window.Minimise(); } catch (_) {}
 }
 
 async function refreshWindowMaximisedState() {
   try {
-    isMaximised.value = await WindowIsMaximised();
+    isMaximised.value = await Window.IsMaximised();
   } catch (_) { /* ignore runtime state read failures */ }
 }
 
 async function toggleMaximiseWindow() {
   try {
-    const maximised = await WindowIsMaximised();
+    const maximised = await Window.IsMaximised();
     if (maximised) {
-      await WindowUnmaximise();
+      await Window.Restore();
     } else {
-      await WindowMaximise();
+      await Window.Maximise();
     }
     await refreshWindowMaximisedState();
   } catch (_) {}
@@ -3875,7 +3875,7 @@ async function toggleMaximiseWindow() {
 async function closeWindow() {
   try {
     await flushSessionWrites();
-    await Quit();
+    await Application.Quit();
   } catch (_) {}
 }
 
@@ -6888,7 +6888,7 @@ async function checkForUpdates() {
 }
 
 function openRepositoryPage() {
-  BrowserOpenURL(ALLY_REPOSITORY_URL);
+  Browser.OpenURL(ALLY_REPOSITORY_URL);
 }
 
 // Start the self-update flow: download → extract → ready → apply → restart.
@@ -6995,14 +6995,14 @@ async function skipCurrentVersion() {
   updateAvailable.value = false;
 }
 
-async function applyPlatformClass() {
+function applyPlatformClass() {
+  // Wails v3's frontend runtime has no Environment() call; derive the platform
+  // from the WebView user agent, which reflects the host OS.
+  const ua = navigator.userAgent || '';
   let platform = '';
-  try {
-    const env = await Environment();
-    platform = env?.platform || '';
-  } catch (_) {
-    platform = /macintosh|mac os x/i.test(navigator.userAgent || '') ? 'darwin' : '';
-  }
+  if (/macintosh|mac os x/i.test(ua)) platform = 'darwin';
+  else if (/windows/i.test(ua)) platform = 'windows';
+  else if (/linux|crOS|android/i.test(ua)) platform = 'linux';
   if (!platform) return;
   document.body.classList.add(`platform-${platform}`);
 }

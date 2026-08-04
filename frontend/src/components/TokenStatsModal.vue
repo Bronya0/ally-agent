@@ -191,7 +191,7 @@
 
 <script setup>
 import { computed, ref, watch } from 'vue';
-import { GetTokenStats } from '../../wailsjs/go/app/App';
+import { GetTokenStats } from '../../bindings/ally-dev/internal/app/app';
 import { t } from '../i18n.mjs';
 import TokenCategoryTrendChart from './TokenCategoryTrendChart.vue';
 

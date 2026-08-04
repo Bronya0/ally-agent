@@ -5,19 +5,19 @@
 !include "FileFunc.nsh"
 
 !ifndef INFO_PROJECTNAME
-    !define INFO_PROJECTNAME "{{.Name}}"
+    !define INFO_PROJECTNAME "ally-ref"
 !endif
 !ifndef INFO_COMPANYNAME
-    !define INFO_COMPANYNAME "{{.Info.CompanyName}}"
+    !define INFO_COMPANYNAME "My Company"
 !endif
 !ifndef INFO_PRODUCTNAME
-    !define INFO_PRODUCTNAME "{{.Info.ProductName}}"
+    !define INFO_PRODUCTNAME "My Product"
 !endif
 !ifndef INFO_PRODUCTVERSION
-    !define INFO_PRODUCTVERSION "{{.Info.ProductVersion}}"
+    !define INFO_PRODUCTVERSION "0.1.0"
 !endif
 !ifndef INFO_COPYRIGHT
-    !define INFO_COPYRIGHT "{{.Info.Copyright}}"
+    !define INFO_COPYRIGHT "© 2026, My Company"
 !endif
 !ifndef PRODUCT_EXECUTABLE
     !define PRODUCT_EXECUTABLE "${INFO_PROJECTNAME}.exe"
@@ -27,8 +27,16 @@
 !endif
 !define UNINST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${UNINST_KEY_NAME}"
 
+!ifndef WAILS_INSTALL_SCOPE
+    !define WAILS_INSTALL_SCOPE "machine"
+!endif
+
 !ifndef REQUEST_EXECUTION_LEVEL
-    !define REQUEST_EXECUTION_LEVEL "admin"
+    !if "${WAILS_INSTALL_SCOPE}" == "user"
+        !define REQUEST_EXECUTION_LEVEL "user"
+    !else
+        !define REQUEST_EXECUTION_LEVEL "admin"
+    !endif
 !endif
 
 RequestExecutionLevel "${REQUEST_EXECUTION_LEVEL}"
@@ -115,23 +123,40 @@ RequestExecutionLevel "${REQUEST_EXECUTION_LEVEL}"
     WriteUninstaller "$INSTDIR\uninstall.exe"
 
     SetRegView 64
-    WriteRegStr HKLM "${UNINST_KEY}" "Publisher" "${INFO_COMPANYNAME}"
-    WriteRegStr HKLM "${UNINST_KEY}" "DisplayName" "${INFO_PRODUCTNAME}"
-    WriteRegStr HKLM "${UNINST_KEY}" "DisplayVersion" "${INFO_PRODUCTVERSION}"
-    WriteRegStr HKLM "${UNINST_KEY}" "DisplayIcon" "$INSTDIR\${PRODUCT_EXECUTABLE}"
-    WriteRegStr HKLM "${UNINST_KEY}" "UninstallString" "$\"$INSTDIR\uninstall.exe$\""
-    WriteRegStr HKLM "${UNINST_KEY}" "QuietUninstallString" "$\"$INSTDIR\uninstall.exe$\" /S"
+    !if "${WAILS_INSTALL_SCOPE}" == "user"
+        WriteRegStr HKCU "${UNINST_KEY}" "Publisher" "${INFO_COMPANYNAME}"
+        WriteRegStr HKCU "${UNINST_KEY}" "DisplayName" "${INFO_PRODUCTNAME}"
+        WriteRegStr HKCU "${UNINST_KEY}" "DisplayVersion" "${INFO_PRODUCTVERSION}"
+        WriteRegStr HKCU "${UNINST_KEY}" "DisplayIcon" "$INSTDIR\${PRODUCT_EXECUTABLE}"
+        WriteRegStr HKCU "${UNINST_KEY}" "UninstallString" "$\"$INSTDIR\uninstall.exe$\""
+        WriteRegStr HKCU "${UNINST_KEY}" "QuietUninstallString" "$\"$INSTDIR\uninstall.exe$\" /S"
 
-    ${GetSize} "$INSTDIR" "/S=0K" $0 $1 $2
-    IntFmt $0 "0x%08X" $0
-    WriteRegDWORD HKLM "${UNINST_KEY}" "EstimatedSize" "$0"
+        ${GetSize} "$INSTDIR" "/S=0K" $0 $1 $2
+        IntFmt $0 "0x%08X" $0
+        WriteRegDWORD HKCU "${UNINST_KEY}" "EstimatedSize" "$0"
+    !else
+        WriteRegStr HKLM "${UNINST_KEY}" "Publisher" "${INFO_COMPANYNAME}"
+        WriteRegStr HKLM "${UNINST_KEY}" "DisplayName" "${INFO_PRODUCTNAME}"
+        WriteRegStr HKLM "${UNINST_KEY}" "DisplayVersion" "${INFO_PRODUCTVERSION}"
+        WriteRegStr HKLM "${UNINST_KEY}" "DisplayIcon" "$INSTDIR\${PRODUCT_EXECUTABLE}"
+        WriteRegStr HKLM "${UNINST_KEY}" "UninstallString" "$\"$INSTDIR\uninstall.exe$\""
+        WriteRegStr HKLM "${UNINST_KEY}" "QuietUninstallString" "$\"$INSTDIR\uninstall.exe$\" /S"
+
+        ${GetSize} "$INSTDIR" "/S=0K" $0 $1 $2
+        IntFmt $0 "0x%08X" $0
+        WriteRegDWORD HKLM "${UNINST_KEY}" "EstimatedSize" "$0"
+    !endif
 !macroend
 
 !macro wails.deleteUninstaller
     Delete "$INSTDIR\uninstall.exe"
 
     SetRegView 64
-    DeleteRegKey HKLM "${UNINST_KEY}"
+    !if "${WAILS_INSTALL_SCOPE}" == "user"
+        DeleteRegKey HKCU "${UNINST_KEY}"
+    !else
+        DeleteRegKey HKLM "${UNINST_KEY}"
+    !endif
 !macroend
 
 !macro wails.setShellContext
@@ -163,17 +188,17 @@ RequestExecutionLevel "${REQUEST_EXECUTION_LEVEL}"
             Goto ok
         ${EndIf}
      ${EndIf}
-
+    
 	SetDetailsPrint both
     DetailPrint "${WAILS_INSTALL_WEBVIEW_DETAILPRINT}"
     SetDetailsPrint listonly
-
+    
     InitPluginsDir
     CreateDirectory "$pluginsdir\webview2bootstrapper"
     SetOutPath "$pluginsdir\webview2bootstrapper"
-    File "tmp\MicrosoftEdgeWebview2Setup.exe"
+    File "MicrosoftEdgeWebview2Setup.exe"
     ExecWait '"$pluginsdir\webview2bootstrapper\MicrosoftEdgeWebview2Setup.exe" /silent /install'
-
+    
     SetDetailsPrint both
     ok:
 !macroend
@@ -203,20 +228,12 @@ RequestExecutionLevel "${REQUEST_EXECUTION_LEVEL}"
 
 !macro wails.associateFiles
     ; Create file associations
-    {{range .Info.FileAssociations}}
-      !insertmacro APP_ASSOCIATE "{{.Ext}}" "{{.Name}}" "{{.Description}}" "$INSTDIR\{{.IconName}}.ico" "Open with ${INFO_PRODUCTNAME}" "$INSTDIR\${PRODUCT_EXECUTABLE} $\"%1$\""
-
-      File "..\{{.IconName}}.ico"
-    {{end}}
+    
 !macroend
 
 !macro wails.unassociateFiles
     ; Delete app associations
-    {{range .Info.FileAssociations}}
-      !insertmacro APP_UNASSOCIATE "{{.Ext}}" "{{.Name}}"
-
-      Delete "$INSTDIR\{{.IconName}}.ico"
-    {{end}}
+    
 !macroend
 
 !macro CUSTOM_PROTOCOL_ASSOCIATE PROTOCOL DESCRIPTION ICON COMMAND
@@ -235,15 +252,10 @@ RequestExecutionLevel "${REQUEST_EXECUTION_LEVEL}"
 
 !macro wails.associateCustomProtocols
     ; Create custom protocols associations
-    {{range .Info.Protocols}}
-      !insertmacro CUSTOM_PROTOCOL_ASSOCIATE "{{.Scheme}}" "{{.Description}}" "$INSTDIR\${PRODUCT_EXECUTABLE},0" "$INSTDIR\${PRODUCT_EXECUTABLE} $\"%1$\""
-
-    {{end}}
+    
 !macroend
 
 !macro wails.unassociateCustomProtocols
     ; Delete app custom protocol associations
-    {{range .Info.Protocols}}
-      !insertmacro CUSTOM_PROTOCOL_UNASSOCIATE "{{.Scheme}}"
-    {{end}}
+    
 !macroend

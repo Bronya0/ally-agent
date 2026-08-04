@@ -8,8 +8,8 @@ This file is read by AI coding agents. Keep it current when the app architecture
 
 | Command | Description |
 |---------|-------------|
-| `wails dev` | Run the desktop app in development mode with hot reload |
-| `wails build` | Build a distributable desktop binary (also the only verification command) |
+| `wails3 dev` | Run the desktop app in development mode with hot reload |
+| `wails3 build` | Build a distributable desktop binary (also the only verification command) |
 
 ## Git Convention
 
@@ -38,7 +38,7 @@ Git tags and GitHub Releases are the source of truth for Ally versions. Release 
    - Summarize user-visible changes from `git log <previous-tag>..HEAD`; do not claim changes that are not present in that range.
    - End the notes with `**Full Changelog**: https://github.com/Bronya0/ally-agent/compare/<previous-tag>...<new-tag>`.
 3. Verify the exact commit that will be released:
-   - `wails build -clean -trimpath`
+   - `wails3 build`
 4. Commit the release-related repository changes and push `main` to `origin`. Recheck that the worktree is clean and local `HEAD` equals `origin/main`.
 5. Publish a non-draft GitHub Release targeting `main`, with tag `<new-tag>`, title `Ally <new-tag>`, and the prepared notes. Authentication must come from GitHub CLI login or a `GITHUB_TOKEN` environment variable with repository contents write permission. Never place a token value in repository files, release notes, scripts, or copied command text.
 
@@ -49,15 +49,15 @@ Publishing the Release triggers `.github/workflows/build.yml`, which builds and 
 ## Repository Layout
 
 ```
-├── main.go                   # Wails 应用入口、窗口选项和 App 绑定
+├── main.go                   # Wails v3 应用入口、窗口选项和 App 绑定
 ├── internal/
 │   ├── app/                  # Agent 核心与编排（见下方文件命名约定）
 │   ├── builtin_skills/       # 内置 skill 嵌入资源（go:embed）
-│   ├── host/                 # Wails EventsEmit 宿主适配
+│   ├── host/                 # 宿主事件适配（eventSink → Wails v3）
 │   ├── provider/             # Provider 格式、Base URL 和 token 参数归一化
 │   ├── platform/process/     # 跨平台子进程窗口与进程树控制
 │   └── tools/                # 工具纯算法层（无 *App / ConfigState 依赖）
-├── frontend/                 # Vue 3 前端和生成的 Wails 绑定
+├── frontend/                 # Vue 3 前端和生成的 Wails bindings
 ├── scripts/                  # 构建与打包脚本
 ├── third_party/              # 第三方许可证文件
 └── build/                    # 构建资源和平台元数据
@@ -103,7 +103,7 @@ Publishing the Release triggers `.github/workflows/build.yml`, which builds and 
 
 ## High-Level Architecture
 
-Ally is a Wails v2 desktop AI coding agent.
+Ally is a Wails v3 desktop AI coding agent.
 
 The backend is a Go application bound into the frontend through Wails. The frontend is a Vue 3 single-page desktop UI using Naive UI. The LLM-facing core is provider-neutral: `internal/app/prov_model.go` owns the provider wire adapters, while `internal/provider` owns provider-format and default-value normalization.
 
@@ -550,13 +550,13 @@ The composer task-center button opens `TaskCenterPanel`, whose controlled tabs s
 
 The composer statistics button opens `TokenStatsModal`, which queries `GetTokenStats()` on every open and renders dependency-free SVG charts for provider, model, source, workspace, daily/hourly usage, input/output volume, request/session/activity counts, and cache hit rate.
 
-Runtime events are registered through Wails `EventsOn()` and routed by `sessionId` and `runId`.
+Runtime events are registered through Wails `Events.On()` and routed by `sessionId` and `runId`.
 
 Frontend-specific rendering:
 
 - MarkdownIt for Markdown
 - highlight.js with the Darcula theme and compact line counts for code blocks
-- Markdown HTTP(S)/mailto links are intercepted and opened through Wails `BrowserOpenURL` instead of navigating the embedded WebView
+- Markdown HTTP(S)/mailto links are intercepted and opened through Wails `Browser.OpenURL` instead of navigating the embedded WebView
 - bounded render cache for non-streaming Markdown
 - streaming messages bypass cache
 - Streaming text deltas are batched to roughly 20 FPS so the active Markdown tree is not reparsed and replaced every display frame.
@@ -737,7 +737,7 @@ Example MCP config:
 
 ## Tests And Verification
 
-`wails build` is the only build and verification command. Run it when a change touches the Go backend or the Wails bridge; it compiles the backend, builds the Vue frontend, and produces the desktop binary. Pure frontend changes that do not affect bindings do not require verification.
+`wails3 build` is the only build and verification command. Run it when a change touches the Go backend or the Wails bridge; it compiles the backend, builds the Vue frontend, and produces the desktop binary. Pure frontend changes that do not affect bindings do not require verification.
 
 ---
 
@@ -749,7 +749,7 @@ Example MCP config:
 - CSS: one dark theme, semantic class names, no preprocessor.
 - Events: lowercase with colon separators, e.g. `run:delta`, `tool:result`, `mcp:status`.
 - JSON fields: camelCase for Go struct tags and user-facing tool parameters.
-- Wails bindings: `wails build` regenerates bindings automatically; no manual binding step needed.
+- Wails bindings: `wails3 build` regenerates bindings automatically; no manual binding step needed.
 - Avoid broad refactors while changing tool contracts or provider adapters.
 
 ---
@@ -761,7 +761,7 @@ These rules are required for future changes. They exist to keep Agent behavior d
 ### Module ownership and unique modification boundaries
 
 - Treat `app.go` as orchestration only: chat-loop control flow, run/session state, and coordination between domain modules belong there. New domain logic should move to the owning module instead of enlarging `app.go`.
-- Keep the Agent core host-neutral. Core/runtime files must not import Wails runtime packages or call `runtime.EventsEmit`, window APIs, dialogs, browser APIs, or OS desktop integration directly.
+- Keep the Agent core host-neutral. Core/runtime files must not import Wails runtime packages or call window APIs, dialogs, browser APIs, or OS desktop integration directly.
 - Put Wails lifecycle, window management, directory/file-manager integration, and other desktop behavior in `host_desktop.go`.
 - Publish UI/runtime events only through the `eventSink` boundary in `host_events.go`; preserve event names, payload shapes, session routing, and terminal-event rules when changing implementations.
 - Keep provider-specific request/response types behind `prov_model.go`; do not leak OpenAI, Responses, or Anthropic wire details into `app.go` or generic tool orchestration.
@@ -785,7 +785,7 @@ These rules are required for future changes. They exist to keep Agent behavior d
 - File mutations must validate the complete normalized batch before any write. Maintain single-snapshot matching, non-overlap checks, atomic commit, and best-effort rollback semantics.
 - Keep safety-sensitive fallbacks narrowly proven: unique indentation-only matching may rebase indentation, but never fuzzy-match code bodies or choose among multiple candidates.
 - Keep bounded output, concurrency caps, timeouts, cancellation, and redirect limits intact unless the change includes an explicit resource-safety rationale and regression tests.
-- For backend changes, run `wails build` and `git diff --check`. For pure frontend changes, `wails build` is only needed when the Wails bridge or generated bindings are affected.
+- For backend changes, run `wails3 build` and `git diff --check`. For pure frontend changes, `wails3 build` is only needed when the Wails bridge or generated bindings are affected.
 - Inspect `git diff` and `git status` after formatting/builds. Do not include generated binaries, unrelated formatting changes, or line-ending-only changes in a functional commit.
 - Update `AGENTS.md` and `CODEGRAPH.md` in the same change when module responsibilities, public workflows, event flow, tool contracts, or major data flow changes.
 
@@ -821,7 +821,7 @@ These rules are required for future changes. They exist to keep Agent behavior d
 
 ## Wails Event Emission Map
 
-后端模块只调用 `App.emit()`；该方法与 `eventSink` 位于 `host_events.go`，Wails 适配器再调用 `runtime.EventsEmit`。Wails 启动、窗口和系统对话框位于 `host_desktop.go`。前端在 `App.vue` 的 `bindRuntimeEvents()` 中通过 `EventsOn()` 统一注册，`runtimeEventOffs` 跟踪卸载。Agent/runtime 模块不得直接调用 Wails 事件 API。
+后端模块只调用 `App.emit()`；该方法与 `eventSink` 位于 `host_events.go`，Wails v3 适配器（`wailsEventSink`）再调用 `app.Event.Emit`。Wails 启动、窗口和系统对话框位于 `host_desktop.go`。前端在 `App.vue` 的 `bindRuntimeEvents()` 中通过 `Events.On()` 统一注册，`runtimeEventOffs` 跟踪卸载。Agent/runtime 模块不得直接调用 Wails 事件 API。
 
 ### 高频流（双层节流，仅这两条）
 

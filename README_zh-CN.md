@@ -50,8 +50,10 @@
 ## 本地构建
 
 ```bash
-wails build
+wails3 build
 ```
+
+产物输出到 `bin/`。开发模式（热重载）：`wails3 dev`。
 
 ## 许可证
 

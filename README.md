@@ -50,8 +50,10 @@ Download packages for Windows, macOS, and Linux from the [Releases page](https:/
 ## Local build
 
 ```bash
-wails build
+wails3 build
 ```
+
+The binary is written to `bin/`. Development mode with hot reload: `wails3 dev`.
 
 ## License
 

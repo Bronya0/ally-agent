@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	wruntime "github.com/wailsapp/wails/v2/pkg/runtime"
+	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
 const (
@@ -21,25 +21,57 @@ const (
 	WindowsWindowClassName = "AllyMainWindow"
 )
 
-// wailsEventSink adapts the host-neutral eventSink contract to Wails runtime
-// events. It is the only type in package app that imports wruntime.
+// wailsAppHandle is the minimal Wails v3 host binding injected into App by
+// SetApp/SetWindow. Concrete Wails v3 types stay in this file (and its
+// platform siblings) so core Agent code never imports the Wails runtime.
+type wailsAppHandle struct {
+	app    *application.App
+	window *application.WebviewWindow
+}
+
+// SetApp injects the Wails v3 application handle into the Agent core. It must
+// be called before app.Run() so ServiceStartup can install the host event
+// sink. Wails desktop lifecycle stays in this file; the Agent core only sees
+// the host-neutral eventSink interface.
+func (a *App) SetApp(app *application.App) {
+	if a.wails == nil {
+		a.wails = &wailsAppHandle{}
+	}
+	a.wails.app = app
+}
+
+// SetWindow injects the main window handle. Used for initial window sizing
+// and desktop-only window operations.
+func (a *App) SetWindow(window *application.WebviewWindow) {
+	if a.wails == nil {
+		a.wails = &wailsAppHandle{}
+	}
+	a.wails.window = window
+}
+
+// wailsEventSink adapts the host-neutral eventSink contract to Wails v3
+// runtime events. It is the only type in package app that publishes events
+// through the Wails runtime.
 type wailsEventSink struct {
-	Context context.Context
+	app *application.App
 }
 
 func (s wailsEventSink) Emit(name string, payload any) {
-	if s.Context == nil || s.Context.Err() != nil {
+	if s.app == nil {
 		return
 	}
-	wruntime.EventsEmit(s.Context, name, payload)
+	s.app.Event.Emit(name, payload)
 }
 
-// Startup is the Wails lifecycle adapter. It installs the desktop event sink
-// and delegates long-lived Agent services to their host-neutral modules.
-func (a *App) Startup(ctx context.Context) {
+// ServiceStartup is the Wails v3 lifecycle adapter (registered through
+// application.NewService). It installs the desktop event sink and delegates
+// long-lived Agent services to their host-neutral modules.
+func (a *App) ServiceStartup(ctx context.Context, _ application.ServiceOptions) error {
 	a.ctx = ctx
-	a.events = wailsEventSink{Context: ctx}
-	a.fitInitialWindowToScreen(ctx)
+	if a.wails != nil {
+		a.events = wailsEventSink{app: a.wails.app}
+	}
+	a.fitInitialWindowToScreen()
 	_ = a.ensureInitialized()
 	// Warm the one-time POSIX login-shell PATH probe without delaying the UI.
 	// run_command/background_process wait on the same sync.Once if needed.
@@ -93,42 +125,47 @@ func (a *App) Startup(ctx context.Context) {
 			}()
 		}
 	}
+	return nil
 }
 
-// Shutdown waits for telemetry's final queue drain and disk flush. Wails calls
-// this lifecycle hook before process teardown, so recently completed requests
-// are not lost when the window closes inside the periodic flush interval.
-func (a *App) Shutdown(_ context.Context) {
+// ServiceShutdown waits for telemetry's final queue drain and disk flush.
+// Wails calls this lifecycle hook before process teardown, so recently
+// completed requests are not lost when the window closes inside the periodic
+// flush interval.
+func (a *App) ServiceShutdown() error {
 	if a.stats != nil {
 		_ = a.stats.stop(statsShutdownTimeout)
+	}
+	return nil
+}
+
+// quitApp asks the Wails application to quit. No-op when the desktop host is
+// absent (tests/headless). Used by the self-update flow.
+func (a *App) quitApp() {
+	if a.wails != nil && a.wails.app != nil {
+		a.wails.app.Quit()
 	}
 }
 
 // fitInitialWindowToScreen adapts the Wails desktop window to the active
 // display. Agent/runtime code does not depend on these host APIs.
-func (a *App) fitInitialWindowToScreen(ctx context.Context) {
-	screens, err := wruntime.ScreenGetAll(ctx)
-	if err != nil || len(screens) == 0 {
+func (a *App) fitInitialWindowToScreen() {
+	if a.wails == nil || a.wails.app == nil || a.wails.window == nil {
+		return
+	}
+	screens := a.wails.app.Screen.GetAll()
+	if len(screens) == 0 {
 		return
 	}
 	screen := screens[0]
 	for _, candidate := range screens {
-		if candidate.IsCurrent {
-			screen = candidate
-			break
-		}
 		if candidate.IsPrimary {
 			screen = candidate
+			break
 		}
 	}
 	screenWidth := screen.Size.Width
 	screenHeight := screen.Size.Height
-	if screenWidth <= 0 {
-		screenWidth = screen.Width
-	}
-	if screenHeight <= 0 {
-		screenHeight = screen.Height
-	}
 	if screenWidth <= 0 || screenHeight <= 0 {
 		return
 	}
@@ -138,9 +175,10 @@ func (a *App) fitInitialWindowToScreen(ctx context.Context) {
 	runtimeMinHeight := minInt(MinWindowHeight, maxHeight)
 	width := clampInt(DefaultWindowWidth, runtimeMinWidth, maxWidth)
 	height := clampInt(DefaultWindowHeight, runtimeMinHeight, maxHeight)
-	wruntime.WindowSetMinSize(ctx, runtimeMinWidth, runtimeMinHeight)
-	wruntime.WindowSetSize(ctx, width, height)
-	wruntime.WindowCenter(ctx)
+	window := a.wails.window
+	window.SetMinSize(runtimeMinWidth, runtimeMinHeight)
+	window.SetSize(width, height)
+	window.Center()
 }
 
 func (a *App) SelectWorkspace() (string, error) {
@@ -156,10 +194,15 @@ func (a *App) SelectWorkspace() (string, error) {
 			current = homeDir
 		}
 	}
-	selected, err := wruntime.OpenDirectoryDialog(a.ctx, wruntime.OpenDialogOptions{
-		Title:            "选择 Agent 工作区",
-		DefaultDirectory: current,
-	})
+	if a.wails == nil || a.wails.app == nil {
+		return "", errors.New("desktop host not initialized")
+	}
+	selected, err := a.wails.app.Dialog.OpenFile().
+		SetTitle("选择 Agent 工作区").
+		SetDirectory(current).
+		CanChooseDirectories(true).
+		CanChooseFiles(false).
+		PromptForSingleSelection()
 	if err != nil || selected == "" {
 		return selected, err
 	}
@@ -179,12 +222,15 @@ func (a *App) SelectBackgroundImage() (string, error) {
 	if err := a.ensureInitialized(); err != nil {
 		return "", err
 	}
-	selected, err := wruntime.OpenFileDialog(a.ctx, wruntime.OpenDialogOptions{
-		Title: "选择对话背景图",
-		Filters: []wruntime.FileFilter{
-			{DisplayName: "图片 (*.png *.jpg *.jpeg *.webp *.gif *.bmp)", Pattern: "*.png;*.jpg;*.jpeg;*.webp;*.gif;*.bmp"},
-		},
-	})
+	if a.wails == nil || a.wails.app == nil {
+		return "", errors.New("desktop host not initialized")
+	}
+	selected, err := a.wails.app.Dialog.OpenFile().
+		SetTitle("选择对话背景图").
+		AddFilter("图片 (*.png *.jpg *.jpeg *.webp *.gif *.bmp)", "*.png;*.jpg;*.jpeg;*.webp;*.gif;*.bmp").
+		CanChooseFiles(true).
+		CanChooseDirectories(false).
+		PromptForSingleSelection()
 	if err != nil {
 		return "", err
 	}

@@ -127,6 +127,11 @@ type App struct {
 	ctx    context.Context
 	events eventSink
 
+	// wails is the desktop host adapter injected by SetApp/SetWindow; nil in
+	// tests and headless embeddings. Concrete Wails v3 types live only in
+	// host_desktop.go so core Agent code never imports the Wails runtime.
+	wails *wailsAppHandle
+
 	mu             sync.Mutex
 	config         ConfigState
 	configPath     string

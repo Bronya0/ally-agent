@@ -5,10 +5,7 @@ import (
 	"os"
 
 	backend "ally-dev/internal/app"
-	"github.com/wailsapp/wails/v2"
-	"github.com/wailsapp/wails/v2/pkg/options"
-	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
-	windows "github.com/wailsapp/wails/v2/pkg/options/windows"
+	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
 //go:embed all:frontend/dist
@@ -23,29 +20,37 @@ func main() {
 	}
 	app := backend.NewApp()
 
-	err := wails.Run(&options.App{
-		Title:     "Ally",
-		Width:     backend.DefaultWindowWidth,
-		Height:    backend.DefaultWindowHeight,
-		MinWidth:  backend.MinWindowWidth,
-		MinHeight: backend.MinWindowHeight,
-		AssetServer: &assetserver.Options{
-			Assets: assets,
+	wailsApp := application.New(application.Options{
+		Name:        "Ally",
+		Description: "Ally — AI coding agent desktop",
+		Services:    []application.Service{application.NewService(app)},
+		Assets: application.AssetOptions{
+			Handler: application.AssetFileServerFS(assets),
 		},
-		Frameless:        true,
-		BackgroundColour: &options.RGBA{R: 12, G: 12, B: 12, A: 255},
-		Windows: &windows.Options{
-			Theme:           windows.Dark,
-			WindowClassName: backend.WindowsWindowClassName,
-		},
-		OnStartup:  app.Startup,
-		OnShutdown: app.Shutdown,
-		Bind: []interface{}{
-			app,
+		Windows: application.WindowsOptions{
+			WndClass: backend.WindowsWindowClassName,
 		},
 	})
 
-	if err != nil {
+	mainWindow := wailsApp.Window.NewWithOptions(application.WebviewWindowOptions{
+		Name:             "main",
+		Title:            "Ally",
+		Width:            backend.DefaultWindowWidth,
+		Height:           backend.DefaultWindowHeight,
+		MinWidth:         backend.MinWindowWidth,
+		MinHeight:        backend.MinWindowHeight,
+		Frameless:        true,
+		BackgroundColour: application.NewRGBA(12, 12, 12, 255),
+		Windows: application.WindowsWindow{
+			Theme: application.Dark,
+		},
+		URL: "/",
+	})
+
+	app.SetApp(wailsApp)
+	app.SetWindow(mainWindow)
+
+	if err := wailsApp.Run(); err != nil {
 		println("Error:", err.Error())
 	}
 }

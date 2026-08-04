@@ -1,15 +1,15 @@
 {
 	"fixed": {
-		"file_version": "{{.Info.ProductVersion}}"
+		"file_version": "0.0.0"
 	},
 	"info": {
 		"0000": {
-			"ProductVersion": "{{.Info.ProductVersion}}",
-			"CompanyName": "{{.Info.CompanyName}}",
-			"FileDescription": "{{.Info.ProductName}}",
-			"LegalCopyright": "{{.Info.Copyright}}",
-			"ProductName": "{{.Info.ProductName}}",
-			"Comments": "{{.Info.Comments}}"
+			"ProductVersion": "0.0.0",
+			"CompanyName": "Ally",
+			"FileDescription": "Ally — AI coding agent desktop",
+			"LegalCopyright": "© 2026, Ally Contributors",
+			"ProductName": "Ally",
+			"Comments": "Ally — AI coding agent desktop"
 		}
 	}
 }

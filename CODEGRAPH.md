@@ -1,21 +1,22 @@
 # Ally — Code Graph
 
-Ally 是一个基于 Wails v2 的桌面 AI 编码助手。后端 Go 通过 Wails 绑定暴露给前端 Vue 3 桌面应用。
+Ally 是一个基于 Wails v3 的桌面 AI 编码助手。后端 Go 通过 Wails 绑定暴露给前端 Vue 3 桌面应用。
 
 ---
 
 ## 目录结构
 
 ```
-├── main.go                    # Wails 入口和 App 绑定
+├── main.go                    # Wails v3 入口和 App 绑定
+├── Taskfile.yml               # wails3 构建任务入口
 ├── internal/
 │   ├── app/                   # Agent 核心与编排（按层级前缀命名，见下方约定）
 │   ├── builtin_skills/        # 内置 skill 嵌入资源（go:embed）
-│   ├── host/                  # Wails EventsEmit 适配
+│   ├── host/                  # 宿主事件适配（eventSink → Wails v3）
 │   ├── provider/              # Provider 格式和默认值归一化
 │   ├── platform/process/      # 跨平台进程控制
 │   └── tools/                 # 工具纯算法层（无 *App / ConfigState 依赖）
-├── frontend/                  # Vue 3 前端和生成的 Wails 绑定
+├── frontend/                  # Vue 3 前端、@wailsio/runtime 和生成的 bindings
 ├── scripts/                   # 构建与打包脚本
 ├── docs/                      # 文档与模型目录源数据
 └── third_party/               # 第三方许可证文件
@@ -42,7 +43,7 @@ Ally 是一个基于 Wails v2 的桌面 AI 编码助手。后端 Go 通过 Wails
 
 ```mermaid
 flowchart TD
-    main[main.go: main] -->|wails.Run| startup[internal/app/host_desktop.go: Startup]
+    main[main.go: main] -->|application.New + app.Run| startup[internal/app/host_desktop.go: ServiceStartup]
     startup --> sink[注入 internal/host.EventSink]
     startup --> fitWin[fitInitialWindowToScreen: 适配窗口尺寸]
     fitWin --> initCfg[ensureInitialized: 加载配置]
@@ -61,7 +62,7 @@ flowchart TD
     ctxDone --> mcpShutdown[MCP Manager.Shutdown]
 ```
 
-`main.go` 创建 `App` 实例并通过 `wails.Run()` 启动，绑定 `App` 上的所有导出方法供前端调用。
+`main.go` 创建 `App` 实例，通过 `application.New(Options{...})` 启动，将 `App` 注册为 Service 并创建主窗口，绑定 `App` 上的所有导出方法供前端调用。
 
 ---
 
@@ -359,7 +360,8 @@ defaultSystemPrompt() → buildSystemPromptParts()
 flowchart LR
     Core[app.go / Agent runtime] -->|eventSink.Emit| EventBoundary[host_events.go]
     EventBoundary -->|Wails adapter| UI[Vue / Wails Events]
-    Desktop[host_desktop.go] -->|lifecycle, dialogs, window| Wails[Wails runtime]
+    Desktop[host_desktop.go] -->|lifecycle, dialogs, window| Wails[Wails v3 application]
+    Core --> SetApp[App.SetApp/SetWindow 注入 wailsAppHandle]
     Core --> EditPlan[orch_edit_plan.go]
     BatchPolicy[orch_batch_policy.go] --> EditPlan
     EditExecutor[orch_edit.go] --> EditPlan
@@ -367,7 +369,7 @@ flowchart LR
 ```
 
 - `app.go` 不导入 Wails runtime；未来抽离 Agent 时可替换 `eventSink` 和宿主生命周期。
-- 所有后端 UI 事件必须经过 `App.emit()`；Wails `EventsEmit` 只允许出现在 `host_events.go`。
+- 所有后端 UI 事件必须经过 `App.emit()`；Wails `app.Event.Emit` 只允许出现在 `host_desktop.go` 的 `wailsEventSink`。
 - Wails 启动、窗口、目录选择和系统文件管理器只允许放在 `host_desktop.go`；自更新退出例外保留在 `biz_update.go`，macOS 的无 shell 重启 helper 放在 `host_update_relaunch_darwin.go`。
 - 文件 mutation 冲突检测与本地编辑执行共享 `planLocalEditBatch()`，避免两层契约漂移。
 

@@ -16,8 +16,6 @@ import (
 	goruntime "runtime"
 	"strings"
 	"time"
-
-	wruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 // Ally self-update module.
@@ -849,7 +847,7 @@ func (a *App) applyWindowsUpdate(tag string) UpdateApplyResult {
 	// Stop everything that could hold a handle on Ally.exe.
 	// MCP servers are independent subprocesses and do not hold the Ally.exe
 	// file handle; they are shut down later by the ctx.Done() path triggered
-	// by QuitForUpdate's wruntime.Quit. Keeping them alive here means a
+	// by QuitForUpdate's quitApp. Keeping them alive here means a
 	// rolled-back update leaves MCP fully functional.
 	if err := a.stopAllRuns(); err != nil {
 		a.emit("update:error", map[string]any{"stage": "apply", "error": err.Error()})
@@ -1032,7 +1030,7 @@ func (a *App) QuitForUpdate() error {
 		// Small delay so the frontend can render the "closing" state before
 		// the window disappears.
 		time.Sleep(500 * time.Millisecond)
-		wruntime.Quit(a.ctx)
+		a.quitApp()
 	}()
 	return nil
 }

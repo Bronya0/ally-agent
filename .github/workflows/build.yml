@@ -10,7 +10,7 @@ permissions:
 
 env:
   APP_NAME: Ally
-  WAILS_VERSION: v2.12.0
+  WAILS_VERSION: v3.0.0-beta.3
   RG_VERSION: 15.1.0
   ALLY_BUILD_VERSION: ${{ github.event.release.tag_name || github.ref_name }}
   NODE_OPTIONS: --max-old-space-size=4096
@@ -35,12 +35,12 @@ jobs:
 
       - name: Install Wails
         shell: pwsh
-        run: go install "github.com/wailsapp/wails/v2/cmd/wails@${{ env.WAILS_VERSION }}"
+        run: go install "github.com/wailsapp/wails/v3/cmd/wails3@${{ env.WAILS_VERSION }}"
 
       - name: Build
         shell: pwsh
         run: |
-          wails build -clean -trimpath -o "${{ env.APP_NAME }}.exe"
+          wails3 build
 
       - name: Bundle ripgrep and licenses
         shell: pwsh
@@ -59,7 +59,7 @@ jobs:
           if (-not $rg) { throw "rg.exe was not found in the ripgrep archive" }
 
           New-Item -ItemType Directory -Force dist/tools, dist/third_party/ripgrep | Out-Null
-          Copy-Item "build/bin/${{ env.APP_NAME }}.exe" dist/
+          Copy-Item "bin/${{ env.APP_NAME }}.exe" dist/
           Copy-Item $rg.FullName dist/tools/rg.exe
           Copy-Item LICENSE, THIRD_PARTY_NOTICES.md, README.md dist/
           Copy-Item third_party/ripgrep/* dist/third_party/ripgrep/
@@ -82,7 +82,7 @@ jobs:
 
   linux:
     name: Linux x64
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
@@ -100,14 +100,14 @@ jobs:
       - name: Install native dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential libgtk-3-dev libwebkit2gtk-4.0-dev
+          sudo apt-get install -y build-essential libgtk-4-dev libwebkitgtk-6.0-dev
 
       - name: Install Wails
-        run: go install "github.com/wailsapp/wails/v2/cmd/wails@${{ env.WAILS_VERSION }}"
+        run: go install "github.com/wailsapp/wails/v3/cmd/wails3@${{ env.WAILS_VERSION }}"
 
       - name: Build
         run: |
-          wails build -clean -trimpath -o "${{ env.APP_NAME }}"
+          wails3 build
 
       - name: Bundle ripgrep and licenses
         shell: bash
@@ -124,7 +124,7 @@ jobs:
           rg_path="$(find rg-dist -type f -name rg -print -quit)"
           test -n "$rg_path"
 
-          cp "build/bin/${APP_NAME}" dist/
+          cp "bin/${APP_NAME}" dist/
           cp "$rg_path" dist/tools/rg
           cp LICENSE THIRD_PARTY_NOTICES.md README.md dist/
           cp third_party/ripgrep/* dist/third_party/ripgrep/
@@ -166,11 +166,12 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
 
       - name: Install Wails
-        run: go install "github.com/wailsapp/wails/v2/cmd/wails@${{ env.WAILS_VERSION }}"
+        run: go install "github.com/wailsapp/wails/v3/cmd/wails3@${{ env.WAILS_VERSION }}"
 
       - name: Build
         run: |
-          wails build -clean -trimpath -platform darwin/universal -o "${{ env.APP_NAME }}"
+          wails3 task darwin:build:universal
+          wails3 task darwin:package:universal
 
       - name: Bundle universal ripgrep and licenses
         shell: bash
@@ -193,7 +194,7 @@ jobs:
           test -n "$arm_rg"
           test -n "$x64_rg"
 
-          app="build/bin/${APP_NAME}.app"
+          app="bin/${APP_NAME}.app"
           mkdir -p "$app/Contents/MacOS/tools" "$app/Contents/Resources/licenses/ripgrep"
           lipo -create "$arm_rg" "$x64_rg" -output "$app/Contents/MacOS/tools/rg"
           chmod +x "$app/Contents/MacOS/tools/rg"
