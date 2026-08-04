@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	goruntime "runtime"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -27,6 +28,10 @@ const (
 type wailsAppHandle struct {
 	app    *application.App
 	window *application.WebviewWindow
+	tray   *application.SystemTray
+	// quitForced marks an explicit app quit (tray exit, self-update) so the
+	// close-to-tray WindowClosing hook never intercepts a real quit.
+	quitForced atomic.Bool
 }
 
 // SetApp injects the Wails v3 application handle into the Agent core. It must
@@ -72,6 +77,8 @@ func (a *App) ServiceStartup(ctx context.Context, _ application.ServiceOptions) 
 		a.events = wailsEventSink{app: a.wails.app}
 	}
 	a.fitInitialWindowToScreen()
+	a.setupSystemTray()
+	a.setupCloseToTrayHook()
 	_ = a.ensureInitialized()
 	// Warm the one-time POSIX login-shell PATH probe without delaying the UI.
 	// run_command/background_process wait on the same sync.Once if needed.
@@ -140,11 +147,37 @@ func (a *App) ServiceShutdown() error {
 }
 
 // quitApp asks the Wails application to quit. No-op when the desktop host is
-// absent (tests/headless). Used by the self-update flow.
+// absent (tests/headless). Used by the self-update flow and tray exit.
 func (a *App) quitApp() {
 	if a.wails != nil && a.wails.app != nil {
+		a.wails.quitForced.Store(true)
 		a.wails.app.Quit()
 	}
+}
+
+// ShowMainWindow displays and focuses the main window. Used by the tray menu
+// and the second-instance activation callback.
+func (a *App) ShowMainWindow() {
+	a.showMainWindow()
+}
+
+// GetAutostartEnabled reports whether Ally is registered to launch at login.
+func (a *App) GetAutostartEnabled() (bool, error) {
+	if a.wails == nil || a.wails.app == nil {
+		return false, errors.New("desktop host not initialized")
+	}
+	return a.wails.app.Autostart.IsEnabled()
+}
+
+// SetAutostartEnabled registers or removes Ally from OS login startup.
+func (a *App) SetAutostartEnabled(enabled bool) error {
+	if a.wails == nil || a.wails.app == nil {
+		return errors.New("desktop host not initialized")
+	}
+	if enabled {
+		return a.wails.app.Autostart.Enable()
+	}
+	return a.wails.app.Autostart.Disable()
 }
 
 // fitInitialWindowToScreen adapts the Wails desktop window to the active

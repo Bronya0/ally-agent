@@ -100,6 +100,18 @@
               <span class="settings-toggle-hint">{{ $t('settings.autoUpdateHint') }}</span>
             </div>
           </n-form-item>
+          <n-form-item :label="$t('settings.closeToTray')">
+            <div class="settings-toggle-row">
+              <n-switch v-model:value="draft.closeToTray" />
+              <span class="settings-toggle-hint">{{ $t('settings.closeToTrayHint') }}</span>
+            </div>
+          </n-form-item>
+          <n-form-item :label="$t('settings.autostart')">
+            <div class="settings-toggle-row">
+              <n-switch :value="autostartEnabled" :loading="autostartBusy" @update:value="toggleAutostart" />
+              <span class="settings-toggle-hint">{{ $t('settings.autostartHint') }}</span>
+            </div>
+          </n-form-item>
           <n-form-item :label="$t('settings.backgroundImage')">
             <div class="settings-field-stack">
               <div class="background-image-row">
@@ -531,6 +543,7 @@ import {
   TestModelConnection,
   DetectSystemProxy, TestProxy,
   SelectBackgroundImage, ClearBackgroundImage,
+  GetAutostartEnabled, SetAutostartEnabled,
 } from '../../bindings/ally-dev/internal/app/app';
 
 const { message } = createDiscreteApi(['message'], {
@@ -539,6 +552,27 @@ const { message } = createDiscreteApi(['message'], {
 
 function openSourceRepository() {
   Browser.OpenURL('https://github.com/Bronya0/ally-agent');
+}
+
+const autostartEnabled = ref(false);
+const autostartBusy = ref(false);
+
+async function refreshAutostart() {
+  try {
+    autostartEnabled.value = await GetAutostartEnabled();
+  } catch (_) { /* best-effort; OS may not support it */ }
+}
+
+async function toggleAutostart(value) {
+  autostartBusy.value = true;
+  try {
+    await SetAutostartEnabled(Boolean(value));
+    autostartEnabled.value = Boolean(value);
+  } catch (err) {
+    message.error(t('settings.autostartFailed', { error: err }));
+  } finally {
+    autostartBusy.value = false;
+  }
 }
 
 const props = defineProps({
@@ -1322,6 +1356,7 @@ watch(() => props.visible, (visible) => {
     loadMcpConfig();
     refreshSkillState();
     if (draft.proxyMode === 'system') detectProxy();
+    refreshAutostart();
   }
 });
 </script>

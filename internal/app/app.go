@@ -196,6 +196,9 @@ type App struct {
 	// Its bounded non-blocking queue keeps telemetry off the chat hot path;
 	// persistence runs on its own goroutine.
 	stats *statsRecorder
+
+	trayIconMu sync.Mutex
+	trayIcon   []byte
 }
 
 func NewApp() *App {
@@ -321,6 +324,10 @@ type ConfigState struct {
 	// shows through the chat area. 0 = invisible, 1 = fully opaque. Clamped
 	// to [0, 1] on save; the frontend default is 0.15 (faint silhouette).
 	BackgroundOpacity float64 `json:"backgroundOpacity,omitempty"`
+	// CloseToTray is a pointer so an absent field in legacy config.json is
+	// treated as "default on" (closing the window hides to the system tray).
+	// Only an explicit false makes closing the window quit the app.
+	CloseToTray *bool `json:"closeToTray,omitempty"`
 	grillMode         bool
 	temperatureSet    bool
 	// noAdapterRetry 是进程内非序列化标记:多 key 模式下置 true,让适配器
@@ -334,6 +341,15 @@ type ConfigState struct {
 func (c ConfigState) autoUpdateEnabled() bool {
 	if c.AutoUpdate != nil {
 		return *c.AutoUpdate
+	}
+	return true
+}
+
+// closeToTrayEnabled returns true unless CloseToTray was explicitly set to
+// false. Legacy config without the field defaults to hide-to-tray.
+func (c ConfigState) closeToTrayEnabled() bool {
+	if c.CloseToTray != nil {
+		return *c.CloseToTray
 	}
 	return true
 }
@@ -1306,6 +1322,9 @@ func mergeConfig(base, overlay ConfigState) ConfigState {
 	// chosen opacity when an older frontend round-trips a partial config.
 	if overlay.BackgroundOpacity != 0 {
 		base.BackgroundOpacity = clampBackgroundOpacity(overlay.BackgroundOpacity)
+	}
+	if overlay.CloseToTray != nil {
+		base.CloseToTray = overlay.CloseToTray
 	}
 	if base.APIFormat == "" {
 		base.APIFormat = apiFormatOpenAIChat

@@ -30,6 +30,10 @@ export function defaultConfig() {
     // backend (*bool pointer).
     autoUpdate: true,
     skippedUpdates: [],
+    // Close-to-tray defaults on: closing the window hides to the system tray
+    // instead of quitting. Backend stores it as *bool; an explicit false
+    // means closing quits the app.
+    closeToTray: true,
     // Custom chat background. Backend stores BackgroundImage as a filename
     // under ~/.ally_agent and BackgroundOpacity in [0, 1]. Frontend keeps a
     // local data URL cache (not persisted here) plus the opacity slider value.
@@ -53,6 +57,7 @@ export function assignConfig(target, source) {
   // Backend stores autoUpdate as *bool (nil = default on). Normalize null /
   // undefined back to true so the frontend always sees a real boolean.
   next.autoUpdate = next.autoUpdate === false ? false : true;
+  next.closeToTray = next.closeToTray === false ? false : true;
   if (!Array.isArray(next.skippedUpdates)) next.skippedUpdates = [];
   delete target.systemPrompt;
   Object.assign(target, next);

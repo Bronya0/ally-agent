@@ -30,7 +30,7 @@ Ally 是一个基于 Wails v3 的桌面 AI 编码助手。后端 Go 通过 Wails
 |------|------|------|
 | 无 | 核心 | `app.go` 持有 chat loop、`*App` 状态和 `executeTool()` dispatch |
 | `prov_` | Provider 适配 | OpenAI/Anthropic 流式适配、代理配置 |
-| `host_` | Host 桥接 | Wails 生命周期、窗口、对话框、eventSink、子进程与任务栏 |
+| `host_` | Host 桥接 | Wails 生命周期、窗口、对话框、eventSink、系统托盘、子进程与任务栏 |
 | `orch_` | 工具编排 | 绑定 `internal/tools/` 纯算法到 `*App` 状态 |
 | `infra_` | 工具基础设施 | 跨编排共享：命令环境、结果信封、流式节流、DTO 归一化 |
 | `biz_` | 业务模块 | skills、prompt、mcp、update、project_context、token_stats |
@@ -370,7 +370,7 @@ flowchart LR
 
 - `app.go` 不导入 Wails runtime；未来抽离 Agent 时可替换 `eventSink` 和宿主生命周期。
 - 所有后端 UI 事件必须经过 `App.emit()`；Wails `app.Event.Emit` 只允许出现在 `host_desktop.go` 的 `wailsEventSink`。
-- Wails 启动、窗口、目录选择和系统文件管理器只允许放在 `host_desktop.go`；自更新退出例外保留在 `biz_update.go`，macOS 的无 shell 重启 helper 放在 `host_update_relaunch_darwin.go`。
+- Wails 启动、窗口、目录选择、系统托盘（`host_tray.go`）和系统文件管理器只允许放在 `host_desktop.go`/`host_tray.go`；自更新退出例外保留在 `biz_update.go`，macOS 的无 shell 重启 helper 放在 `host_update_relaunch_darwin.go`。
 - 文件 mutation 冲突检测与本地编辑执行共享 `planLocalEditBatch()`，避免两层契约漂移。
 
 ### 修改入口与跨层变更顺序
@@ -380,7 +380,7 @@ flowchart LR
 | 变更内容 | 首选修改入口 | 必须联动检查 |
 |---|---|---|
 | Agent 编排、聊天循环、运行/会话状态 | `app.go` | `host_events.go`、运行事件测试 |
-| Wails 启动、窗口、目录选择、系统文件管理器 | `host_desktop.go` | Wails 生命周期、平台构建 |
+| Wails 启动、窗口、目录选择、系统托盘、系统文件管理器 | `host_desktop.go` + `host_tray.go` | Wails 生命周期、平台构建 |
 | UI/runtime 事件与宿主转发 | `host_events.go` | 事件名、payload、session/run 路由、终止事件 |
 | Provider 请求/响应适配 | `prov_model.go` | provider 流事件、工具调用、usage、错误处理 |
 | 内置工具 schema | `internal/tools/shared/builtins.go` | 严格解码、执行分支、结果卡片、工具测试 |

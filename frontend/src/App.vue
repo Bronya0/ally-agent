@@ -3875,7 +3875,11 @@ async function toggleMaximiseWindow() {
 async function closeWindow() {
   try {
     await flushSessionWrites();
-    await Application.Quit();
+    if (config.closeToTray === false) {
+      await Application.Quit();
+    } else {
+      await Window.Hide();
+    }
   } catch (_) {}
 }
 

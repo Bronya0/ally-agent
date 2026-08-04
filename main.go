@@ -11,6 +11,9 @@ import (
 //go:embed all:frontend/dist
 var assets embed.FS
 
+//go:embed build/appicon.png
+var appIconPNG []byte
+
 func main() {
 	if handled, err := backend.RunUpdateRelaunchHelper(os.Args[1:]); handled {
 		if err != nil {
@@ -28,7 +31,16 @@ func main() {
 			Handler: application.AssetFileServerFS(assets),
 		},
 		Windows: application.WindowsOptions{
-			WndClass: backend.WindowsWindowClassName,
+			WndClass:        backend.WindowsWindowClassName,
+			UseVisualHosting: true,
+		},
+		SingleInstance: &application.SingleInstanceOptions{
+			UniqueID: "io.github.bronya0.ally",
+			OnSecondInstanceLaunch: func(data application.SecondInstanceData) {
+				// Second launch: focus the existing window instead of starting
+				// a second process that would fight over config/MCP/schedules.
+				app.ShowMainWindow()
+			},
 		},
 	})
 
@@ -49,6 +61,7 @@ func main() {
 
 	app.SetApp(wailsApp)
 	app.SetWindow(mainWindow)
+	app.SetTrayIcon(appIconPNG)
 
 	if err := wailsApp.Run(); err != nil {
 		println("Error:", err.Error())
