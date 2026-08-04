@@ -559,10 +559,10 @@ func (a *App) remoteReadFile(ctx context.Context, req RemoteReadFileRequest) (Re
 	}
 	return ReadFileResult{
 		Path:          file.Path,
-		Content:       preview.RawContent,
+		Content:       preview.Content,
 		RawContent:    preview.RawContent,
 		Kind:          "text",
-		ContentFormat: "raw",
+		ContentFormat: "line_numbers",
 		Editable:      true,
 		StartLine:     preview.StartLine,
 		EndLine:       preview.EndLine,

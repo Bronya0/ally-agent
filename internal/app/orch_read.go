@@ -214,8 +214,8 @@ func (a *App) batchReadOneWithConfig(cfg ConfigState, path string, req ReadFileR
 	if readErr != nil {
 		return BatchReadResultItem{Path: path, Error: readErr.Error(), ErrorCode: batchReadErrorCode(readErr)}
 	}
-	content := result.RawContent
-	contentFormat := "raw"
+	content := result.Content
+	contentFormat := result.ContentFormat
 	if result.Kind == "document" {
 		content = result.Content
 		contentFormat = "plain"

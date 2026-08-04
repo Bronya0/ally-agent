@@ -145,3 +145,53 @@ func TestIndentationInsensitiveMatchHandlesMillionLineFile(t *testing.T) {
 		t.Fatalf("expected indentation fallback warning, got %#v", result.Warnings)
 	}
 }
+
+func TestApplyBatchTextChangesLineRangesUseOriginalSnapshot(t *testing.T) {
+	content := "one\ntwo\nthree\nfour\nfive\nsix\n"
+	result, replacements, err := ApplyBatchTextChanges(content, []TextChange{
+		{LineRange: "2-2", NewText: "TWO\ninserted"},
+		{LineRange: "5-5", NewText: "FIVE"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replacements != 2 {
+		t.Fatalf("replacements = %d, want 2", replacements)
+	}
+	want := "one\nTWO\ninserted\nthree\nfour\nFIVE\nsix\n"
+	if result.Content != want {
+		t.Fatalf("line ranges must use original positions despite earlier expansion:\nwant %q\n got %q", want, result.Content)
+	}
+}
+
+func TestApplyBatchTextChangesRejectsMixedOrOverlappingSources(t *testing.T) {
+	for name, changes := range map[string][]TextChange{
+		"both sources": {{OldText: "two", LineRange: "2-2", NewText: "TWO"}},
+		"no source":    {{NewText: "TWO"}},
+		"overlap": {
+			{LineRange: "2-3", NewText: "replacement"},
+			{OldText: "three\n", NewText: "THREE\n"},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, _, err := ApplyBatchTextChanges("one\ntwo\nthree\nfour\n", changes)
+			if err == nil {
+				t.Fatal("expected invalid or overlapping batch to fail")
+			}
+			if name == "overlap" && toolerrors.Code(err) != "E_OVERLAPPING_CHANGES" {
+				t.Fatalf("overlap error code = %q, want E_OVERLAPPING_CHANGES; err=%v", toolerrors.Code(err), err)
+			}
+			if name != "overlap" && toolerrors.Code(err) != "E_BAD_EDIT" {
+				t.Fatalf("validation error code = %q, want E_BAD_EDIT; err=%v", toolerrors.Code(err), err)
+			}
+		})
+	}
+}
+
+func TestParseLineRangeRejectsAmbiguousWriteTargets(t *testing.T) {
+	for _, value := range []string{"2", "3-2", "0-1", "x-y", "1-2-3"} {
+		if _, _, err := ParseLineRange(value); err == nil {
+			t.Fatalf("ParseLineRange(%q) unexpectedly succeeded", value)
+		}
+	}
+}

@@ -44,7 +44,7 @@ func chatToolsUncached() []openai.Tool {
 				"includeIgnored": map[string]any{"type": "boolean", "description": "Include heavy ignored directories such as .git, node_modules, dist, build. Default false."},
 			},
 		}),
-		functionTool("edit", "Validate and apply exact replacements across multiple workspace files in one call. Each oldText must occur exactly once in its file's version snapshot, and changes in a file cannot overlap. All files are validated before writing; each file is written in one shot, with best-effort cross-file rollback on commit failure. Reuse the returned version for known follow-up edits; re-read after version or match errors. The current session may also allow writes to additional extra roots (see E_PATH_OUTSIDE error for the allowed list).", map[string]any{
+		functionTool("edit", "Validate and apply exact replacements across multiple workspace files in one call. Read returns numbered text; the numeric `N: ` prefixes are display-only and must never be copied into newText. For each change choose exactly one source: use `oldText` for a small, unique exact snippet, or use `lineRange` in inclusive `A-B` form for a larger whole-line replacement. Never pass both. Every lineRange in one file refers to the original line numbers from the read that produced `version`; do not adjust later ranges after earlier edits because Ally locates every source on the same snapshot and applies changes backwards. Each oldText must occur exactly once, source regions cannot overlap, and all files are validated before any write. Reuse the returned version only for a follow-up edit whose exact current source is known; otherwise re-read.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"files": map[string]any{
@@ -61,14 +61,7 @@ func chatToolsUncached() []openai.Tool {
 								"type":     "array",
 								"minItems": 1,
 								"maxItems": 50,
-								"items": map[string]any{
-									"type": "object",
-									"properties": map[string]any{
-										"oldText": map[string]any{"type": "string", "minLength": 1, "description": "Exact unique current text known from read or a preceding successful edit. For multi-line code, a unique match with different leading indentation may be accepted; body text must still match exactly."},
-										"newText": map[string]any{"type": "string", "description": "Replacement text. Empty string deletes oldText. An identical oldText/newText pair is ignored as a no-op when other changes remain."},
-									},
-									"required": []string{"oldText", "newText"},
-								},
+								"items":    editChangeSchema(),
 							},
 						},
 						"required": []string{"path", "version", "changes"},
@@ -223,7 +216,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"target", "path"},
 		}),
-		functionTool("remote_edit", "Validate and apply exact replacements across multiple files under one remote SSH target. Each file uses its current version and non-overlapping unique changes.", map[string]any{
+		functionTool("remote_edit", "Validate and apply replacements across multiple files under one remote SSH target. remote_read_file returns numbered text. In each change choose exactly one source: a small unique `oldText`, or an inclusive whole-line `lineRange` in `A-B` form; never both. All ranges use the original read version's line numbers and need no offset adjustment between changes.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"target": map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Explicit SSH target plus workspace root, e.g. my-dev:/srv/app."},
@@ -275,7 +268,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"pattern"},
 		}),
-		functionTool("read", "Read 1–20 files. Always pass a top-level files array, even for one file. Do not pass top-level path, a string array, offset, or lineCount. Missing paths and directories are silently omitted from the returned files array; other per-file read failures remain visible. UTF-8 text returns raw copyable content plus a 12-character version for edit. Omit startLine/endLine for the whole file; either or both define an inclusive 1-based range. Supported document formats (.docx, .pptx, .xlsx, .pdf) return non-editable extracted text; .xlsx optionally accepts a sheet name or 1-based index.", map[string]any{
+		functionTool("read", "Read 1–20 files. Always pass a top-level files array, even for one file. Do not pass top-level path, a string array, offset, or lineCount. Missing paths and directories are silently omitted from the returned files array; other per-file read failures remain visible. UTF-8 text content is prefixed with display-only 1-based `N: ` line numbers and includes a 12-character version for edit; do not copy the prefixes into edit text. Omit startLine/endLine for the whole file; either or both define an inclusive range. Supported document formats (.docx, .pptx, .xlsx, .pdf) return non-editable extracted text; .xlsx optionally accepts a sheet name or 1-based index.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"files": batchReadFilesSchema(),
@@ -384,7 +377,7 @@ func chatToolsUncached() []openai.Tool {
 
 var builtinToolExamples = map[string]string{
 	"list_files":         `{"path":"frontend/src","maxDepth":2,"limit":200}`,
-	"edit":               `single file with one change: {"files":[{"path":"app.go","version":"9k3m7x2p4t6w","changes":[{"oldText":"const oldName = \"ally\"","newText":"const newName = \"ally\""}]}]}; single file with multiple changes: {"files":[{"path":"app.go","version":"9k3m7x2p4t6w","changes":[{"oldText":"oldServerName","newText":"newServerName"},{"oldText":"oldServerPort","newText":"newServerPort"}]}]}; multiple files with multiple changes per file: {"files":[{"path":"app.go","version":"9k3m7x2p4t6w","changes":[{"oldText":"oldName","newText":"newName"},{"oldText":"oldPort","newText":"newPort"}]},{"path":"frontend/src/App.vue","version":"4v8n2c7m6q1x","changes":[{"oldText":"oldTitle","newText":"newTitle"},{"oldText":"oldSubtitle","newText":"newSubtitle"}]}]}`,
+	"edit":               `small exact change: {"files":[{"path":"app.go","version":"9k3m7x2p4t6w","changes":[{"oldText":"const oldName = \"ally\"","newText":"const newName = \"ally\""}]}]}; large whole-line change: {"files":[{"path":"app.go","version":"9k3m7x2p4t6w","changes":[{"lineRange":"40-72","newText":"func replacement() {\n}\n"}]}]}; multiple original-snapshot ranges (no offset adjustment): {"files":[{"path":"app.go","version":"9k3m7x2p4t6w","changes":[{"lineRange":"10-15","newText":"first replacement"},{"lineRange":"80-95","newText":"second replacement"}]}]}`,
 	"create_file":        `{"path":"notes/example.md","content":"# Example\n","overwrite":false}`,
 	"delete_path":        `{"path":"tmp/generated","recursive":true}`,
 	"run_command":        `{"command":"go test ./...","cwd":".","timeoutSeconds":120}`,
@@ -396,7 +389,7 @@ var builtinToolExamples = map[string]string{
 	"web_fetch":          `{"url":"https://example.com/docs","maxChars":60000}`,
 	"remote_list_files":  `{"target":"ubuntu@example.com:/srv/app","path":"src","maxDepth":2}`,
 	"remote_read_file":   `{"target":"ubuntu@example.com:/srv/app","path":"main.go","startLine":1,"endLine":200}`,
-	"remote_edit":        `{"target":"ubuntu@example.com:/srv/app","files":[{"path":"main.go","version":"9k3m7x2p4t6w","changes":[{"oldText":"old unique text","newText":"new text"}]}]}`,
+	"remote_edit":        `{"target":"ubuntu@example.com:/srv/app","files":[{"path":"main.go","version":"9k3m7x2p4t6w","changes":[{"lineRange":"12-30","newText":"func replacement() {\n}\n"}]}]}`,
 	"remote_create_file": `{"target":"ubuntu@example.com:/srv/app","path":"notes.txt","content":"hello\n","overwrite":false}`,
 	"remote_delete_path": `{"target":"ubuntu@example.com:/srv/app","path":"tmp/output","recursive":true}`,
 	"remote_run_command": `{"target":"ubuntu@example.com:/srv/app","command":"go test ./...","cwd":".","timeoutSeconds":120}`,
@@ -457,11 +450,34 @@ func editFilesSchema() map[string]any {
 		"type": "object", "properties": map[string]any{
 			"path":    map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*"},
 			"version": map[string]any{"type": "string", "pattern": "^[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{12}$"},
-			"changes": map[string]any{"type": "array", "minItems": 1, "maxItems": 50, "items": map[string]any{
-				"type": "object", "properties": map[string]any{"oldText": map[string]any{"type": "string", "minLength": 1}, "newText": map[string]any{"type": "string"}}, "required": []string{"oldText", "newText"},
-			}},
+			"changes": map[string]any{"type": "array", "minItems": 1, "maxItems": 50, "items": editChangeSchema()},
 		}, "required": []string{"path", "version", "changes"},
 	}}
+}
+
+func editChangeSchema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"oldText": map[string]any{
+				"type": "string", "minLength": 1,
+				"description": "Small exact unique source snippet without read's numeric line prefixes. Choose this OR lineRange, never both.",
+			},
+			"lineRange": map[string]any{
+				"type": "string", "pattern": "^[1-9][0-9]*-[1-9][0-9]*$",
+				"description": "Inclusive original-snapshot whole-line range in A-B form, copied from read's displayed line numbers. Best for large replacements. Choose this OR oldText; all ranges in the file use the same read version, so never adjust for earlier changes.",
+			},
+			"newText": map[string]any{
+				"type":        "string",
+				"description": "Replacement text without numeric line prefixes. Empty deletes the selected source. Do not include unchanged source text outside the selected oldText or lineRange.",
+			},
+		},
+		"required": []string{"newText"},
+		"oneOf": []any{
+			map[string]any{"required": []string{"oldText"}, "not": map[string]any{"required": []string{"lineRange"}}},
+			map[string]any{"required": []string{"lineRange"}, "not": map[string]any{"required": []string{"oldText"}}},
+		},
+	}
 }
 
 func jsonValueSchema(description string) map[string]any {

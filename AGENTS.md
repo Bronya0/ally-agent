@@ -253,7 +253,7 @@ Tool result channels:
 
 - Frontend receives full JSON via `tool:result` / `tool:error`.
 - Model context receives compacted JSON from `compactToolResultForModel()`.
-- `read` content is intentionally not compacted so exact raw snippets remain copyable into edit changes.
+- `read` content is intentionally not compacted so its displayed line numbers remain available for `edit.lineRange` selection.
 
 `saveHistory()`:
 
@@ -394,8 +394,8 @@ Built-in model-facing tools:
 | Tool | Purpose |
 |------|---------|
 | `list_files` | List files/directories with depth and limit controls |
-| `read` | Read one or many local files; text returns raw copyable content, documents return extracted text |
-| `edit` | Atomically apply one or many exact replacements to one local file |
+| `read` | Read one or many local files; text returns numbered line previews, documents return extracted text |
+| `edit` | Atomically apply exact-source or whole-line-range replacements to local files |
 | `create_file` | Create/overwrite text files |
 | `delete_path` | Delete files/directories |
 | `grep_files` | Regex search through bundled ripgrep, with PATH fallback in development |
@@ -435,7 +435,7 @@ Text files:
 
 - must be UTF-8-ish text
 - reject binary/NUL content
-- return raw LF-normalized text that can be copied directly into `edit.changes[].oldText`
+- return LF-normalized text with display-only 1-based `N: ` prefixes; omit those prefixes from `oldText`/`newText`, and use the displayed numbers in `lineRange`
 - missing paths and directory targets are silently omitted from the returned `files` array (an ignored-only batch succeeds with an empty array); other partial failures stay in the corresponding file result with `errorCode` when known
 - include metadata: `startLine`, `endLine`, `nextStartLine`, `totalLines`, `truncated`, `version`, `lineEnding`; `version` is a 12-character lowercase Crockford Base32 prefix derived from SHA-256 content and is compared case-insensitively
 
@@ -456,7 +456,7 @@ Range semantics for model-facing reads:
 - hard output limits may still set `truncated` and `nextStartLine`; the model should request another explicit range only when the remaining content is actually needed
 - plain-text range previews count and locate lines with bounded-memory linear scans instead of materializing one string entry per file line, so tiny reads remain safe on million-line files and very long single lines stay UTF-8/budget bounded
 
-The model-facing `edit` tool has one cross-file batch exact-replacement mode. Line-range and legacy exact-string helpers remain backend compatibility APIs and are not exposed to the model.
+The model-facing `edit` tool has one cross-file batch mode with two exclusive source forms: a small exact `oldText`, or an inclusive whole-line `lineRange` string in `A-B` form. Legacy top-level string and line helpers remain backend compatibility APIs and are not exposed to the model.
 
 `planLocalEditBatch()` in `orch_edit_plan.go` is the **only** normalization boundary for local model-facing edits. Both `orch_batch_policy.go` conflict detection and `orch_edit.go` execution must consume that plan; do not independently parse, canonicalize, or merge `edit.files` in either layer. Pure diff and changed-range algorithms live in `internal/tools/edit`; `orch_edit.go` is the app-owned execution boundary for local edits.
 
@@ -464,20 +464,20 @@ Edit parameters:
 
 - `files` (1–20 items)
 - each file contains `path`, required `version` from `read`, and 1–50 `changes`
-- each change contains non-empty `oldText` and `newText`; one call permits at most 200 total changes
+- each change contains `newText` plus exactly one source: non-empty `oldText` or `lineRange` in inclusive `A-B` form; one call permits at most 200 total changes
 
 Important edit contract:
 
 - Read the file first with `read`.
 - `version` is mandatory for model-facing local and remote edits. It is a short optimistic-concurrency token; a stale value fails with `E_VERSION_MISMATCH`, and malformed values fail with `E_BAD_VERSION`.
-- Successful edits return the new `version` per file. It may be reused directly for a follow-up edit when the exact current `oldText` is already known; re-read only when content is unknown, external modification is possible, or a version/match error occurs.
-- Every non-no-op `oldText` is matched against the same original version snapshot and must occur exactly once. Ambiguous exact matches return optional structured `details` with at most three raw UTF-8 candidate previews, clipping flags, line ranges, and recovery guidance; the detail JSON is capped at 4 KiB so callers can issue a narrow `read` without receiving the full file.
+- Successful edits return the new `version` per file. Reuse it only when the current source is known exactly; otherwise re-read numbered content before another `oldText` or `lineRange` edit.
+- Each change chooses exactly one source: `oldText` for a small unique unnumbered snippet, or `lineRange` in inclusive `A-B` form for a larger whole-line replacement. All ranges in a file use the original numbered read snapshot and need no offset adjustment for earlier changes. Every non-no-op `oldText` is matched against that same snapshot and must occur exactly once. Ambiguous exact matches return optional structured `details` with at most three raw UTF-8 candidate previews, clipping flags, line ranges, and recovery guidance; the detail JSON is capped at 4 KiB so callers can issue a narrow `read` without receiving the full file.
 - For a multi-line whole-line block only, exact-match failure may fall back to ignoring leading spaces/tabs on each line. The fallback succeeds only for one unique candidate and safely rebases `newText` to the file's actual base indentation; body text is never fuzzy-matched.
-- Changes whose normalized `oldText` and `newText` are identical are ignored and reported as warnings. An all-no-op local batch succeeds without writing the file.
-- Matches must not overlap. The backend locates all effective matches first, applies them from the end of the file backward, and writes once.
+- Exact changes whose normalized `oldText` and `newText` are identical are ignored and reported as warnings. An all-no-op local batch succeeds without writing the file.
+- Source regions must not overlap. The backend locates all exact snippets and line ranges on the original snapshot, applies them from the end of the file backward, and writes once.
 - Repeated local `files` entries resolving to the same physical path and using the same version are merged into one original-snapshot edit plan; conflicting versions fail before writing.
 - All files are validated before writes. Any invalid, missing, ambiguous, overlapping, or stale effective change fails the entire call without modifying any file.
-- Empty `newText` deletes `oldText`; insertion replaces a unique anchor with the anchor plus inserted content.
+- Empty `newText` deletes the selected source; exact-source insertion replaces a unique anchor with that anchor plus the inserted content.
 - Put all independent changes across affected files in one call to minimize model round trips. Each file is written once; a later commit failure triggers best-effort rollback of earlier writes.
 - `remote_edit` uses `{target, files}` and the same per-file `version`/`changes` contract as local edit.
 - Multiple separate file-mutation tool calls targeting the same normalized local or remote path in one tool-call batch are all rejected with `E_WRITE_BATCH_CONFLICT`; no mutation for that path is executed. Repeated entries within one local `edit` call are instead merged as described above.

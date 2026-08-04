@@ -239,11 +239,23 @@ func TestEditToolSchemaIsBatchChangesOnly(t *testing.T) {
 		t.Fatalf("edit changes item schema missing: %#v", changesSchema)
 	}
 	changeProperties, ok := items["properties"].(map[string]any)
-	if !ok || len(changeProperties) != 2 {
-		t.Fatalf("edit change should expose oldText/newText only: %#v", items)
+	if !ok {
+		t.Fatalf("edit change properties missing: %#v", items)
 	}
-	if !strings.Contains(editTool.Description, "single file with one change") {
-		t.Fatalf("edit tool description should include the minimal single-change example: %s", editTool.Description)
+	for _, field := range []string{"oldText", "lineRange", "newText"} {
+		if _, exists := changeProperties[field]; !exists {
+			t.Fatalf("edit change schema missing %s: %#v", field, items)
+		}
+	}
+	changeRequired, ok := items["required"].([]string)
+	if !ok || len(changeRequired) != 1 || changeRequired[0] != "newText" {
+		t.Fatalf("edit change must require only newText: %#v", items["required"])
+	}
+	if variants, ok := items["oneOf"].([]any); !ok || len(variants) != 2 {
+		t.Fatalf("edit change must require exactly one source form: %#v", items)
+	}
+	if !strings.Contains(editTool.Description, "lineRange") || !strings.Contains(editTool.Description, "do not adjust later ranges") {
+		t.Fatalf("edit tool description must explain line-range selection and offset handling: %s", editTool.Description)
 	}
 }
 
@@ -1409,11 +1421,11 @@ func TestEditDescriptionIncludesSingleAndCrossFileMultiChangeExamples(t *testing
 		}
 	}
 	for _, expected := range []string{
-		"single file with multiple changes",
+		"small exact change",
 		`"oldText":"const oldName = \"ally\""`,
-		"multiple files with multiple changes per file",
-		`"path":"frontend/src/App.vue"`,
-		`"oldText":"oldSubtitle"`,
+		"large whole-line change",
+		`"lineRange":"40-72"`,
+		"no offset adjustment",
 	} {
 		if !strings.Contains(description, expected) {
 			t.Fatalf("edit description missing example guidance %q: %s", expected, description)
@@ -1441,14 +1453,14 @@ func TestBatchReadKeepsSamePathWithDifferentEffectiveRanges(t *testing.T) {
 	if len(result.Files) != 2 {
 		t.Fatalf("expected both distinct read ranges, got %d result(s): %#v", len(result.Files), result.Files)
 	}
-	if result.Files[0].Content != "one\n" {
-		t.Fatalf("expected first read to contain only line 1, got:\n%s", result.Files[0].Content)
+	if result.Files[0].Content != "1: one" {
+		t.Fatalf("expected first read to contain numbered line 1, got:\n%s", result.Files[0].Content)
 	}
-	if result.Files[1].Content != "two\nthree\n" {
-		t.Fatalf("expected second read to contain line 2 through EOF, got:\n%s", result.Files[1].Content)
+	if result.Files[1].Content != "2: two\n3: three" {
+		t.Fatalf("expected second read to contain numbered lines through EOF, got:\n%s", result.Files[1].Content)
 	}
-	if result.Files[0].ContentFormat != "raw" || result.Files[0].Version != hashVersion([]byte("one\ntwo\nthree\n")) {
-		t.Fatalf("expected raw content with version metadata, got %#v", result.Files[0])
+	if result.Files[0].ContentFormat != "line_numbers" || result.Files[0].Version != hashVersion([]byte("one\ntwo\nthree\n")) {
+		t.Fatalf("expected numbered content with version metadata, got %#v", result.Files[0])
 	}
 }
 
@@ -1701,6 +1713,47 @@ func TestExecuteToolAppliesMultipleBatchTextChanges(t *testing.T) {
 	}
 	if string(got) != "ALPHA\nbeta\nGAMMA\n" {
 		t.Fatalf("unexpected file content: %q", string(got))
+	}
+}
+
+func TestExecuteToolAppliesOriginalSnapshotLineRangesWithoutOffsetDrift(t *testing.T) {
+	dir := t.TempDir()
+	original := []byte("one\ntwo\nthree\nfour\nfive\nsix\n")
+	if err := os.WriteFile(filepath.Join(dir, "sample.txt"), original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	args := fmt.Sprintf(`{"files":[{"path":"sample.txt","version":%q,"changes":[{"lineRange":"2-2","newText":"TWO\ninserted"},{"lineRange":"5-5","newText":"FIVE"}]}]}`, hashVersion(original))
+	result := NewApp().executeTool(context.Background(), ConfigState{Workspace: dir}, "session-1", "edit", []byte(args))
+	if !result.OK {
+		t.Fatalf("line-range edit failed: %#v", result)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "sample.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "one\nTWO\ninserted\nthree\nfour\nFIVE\nsix\n"
+	if string(got) != want {
+		t.Fatalf("later line range must retain original snapshot position:\nwant %q\n got %q", want, got)
+	}
+}
+
+func TestExecuteToolRejectsMixedEditSources(t *testing.T) {
+	dir := t.TempDir()
+	original := []byte("alpha\nbeta\n")
+	if err := os.WriteFile(filepath.Join(dir, "sample.txt"), original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	args := fmt.Sprintf(`{"files":[{"path":"sample.txt","version":%q,"changes":[{"oldText":"alpha","lineRange":"1-1","newText":"ALPHA"}]}]}`, hashVersion(original))
+	result := NewApp().executeTool(context.Background(), ConfigState{Workspace: dir}, "session-1", "edit", []byte(args))
+	if result.OK || result.ErrorCode != "E_BAD_EDIT" {
+		t.Fatalf("mixed sources must fail with E_BAD_EDIT, got %#v", result)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "sample.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(original) {
+		t.Fatalf("rejected mixed source edit changed file: %q", got)
 	}
 }
 

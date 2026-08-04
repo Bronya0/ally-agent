@@ -342,7 +342,7 @@ func toEditChanges(in []TextChange) []edit.TextChange {
 	}
 	out := make([]edit.TextChange, len(in))
 	for i, c := range in {
-		out[i] = edit.TextChange{OldText: c.OldText, NewText: c.NewText}
+		out[i] = edit.TextChange{OldText: c.OldText, LineRange: c.LineRange, NewText: c.NewText}
 	}
 	return out
 }
@@ -353,7 +353,7 @@ func fromEditChanges(in []edit.TextChange) []TextChange {
 	}
 	out := make([]TextChange, len(in))
 	for i, c := range in {
-		out[i] = TextChange{OldText: c.OldText, NewText: c.NewText}
+		out[i] = TextChange{OldText: c.OldText, LineRange: c.LineRange, NewText: c.NewText}
 	}
 	return out
 }

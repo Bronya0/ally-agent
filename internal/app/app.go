@@ -869,8 +869,9 @@ type FileTextEdits struct {
 }
 
 type TextChange struct {
-	OldText string `json:"oldText"`
-	NewText string `json:"newText"`
+	OldText   string `json:"oldText,omitempty"`
+	LineRange string `json:"lineRange,omitempty"`
+	NewText   string `json:"newText"`
 }
 
 type MultiEditResult struct {

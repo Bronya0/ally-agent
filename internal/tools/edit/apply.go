@@ -12,10 +12,12 @@ import (
 	toolerrors "ally-dev/internal/tools/shared"
 )
 
-// TextChange is one exact replacement applied by the edit engine.
+// TextChange is one replacement applied by the edit engine. Exactly one of
+// OldText or LineRange identifies the source snapshot region.
 type TextChange struct {
-	OldText string `json:"oldText"`
-	NewText string `json:"newText"`
+	OldText   string `json:"oldText,omitempty"`
+	LineRange string `json:"lineRange,omitempty"`
+	NewText   string `json:"newText"`
 }
 
 const (
@@ -112,8 +114,15 @@ func ValidateBatchTextChanges(changes []TextChange) error {
 		return toolerrors.New("E_BAD_EDIT", errors.New("changes supports at most 50 replacements"))
 	}
 	for i, change := range changes {
-		if change.OldText == "" {
-			return toolerrors.New("E_BAD_EDIT", fmt.Errorf("change %d oldText must be non-empty", i+1))
+		hasOldText := change.OldText != ""
+		hasLineRange := strings.TrimSpace(change.LineRange) != ""
+		if hasOldText == hasLineRange {
+			return toolerrors.New("E_BAD_EDIT", fmt.Errorf("change %d must use exactly one source: oldText for a small exact replacement, or lineRange for a larger whole-line replacement", i+1))
+		}
+		if hasLineRange {
+			if _, _, err := ParseLineRange(change.LineRange); err != nil {
+				return toolerrors.New("E_BAD_EDIT", fmt.Errorf("change %d: %w", i+1, err))
+			}
 		}
 	}
 	return nil
@@ -638,10 +647,34 @@ func ReindentReplacementForMatch(content, oldText, newText string, match indenta
 	return result, true
 }
 
-// ApplyBatchTextChanges applies a batched set of exact replacements to content.
-// Each oldText must occur exactly once (after optional indentation-insensitive
-// matching for multi-line whole-line blocks), changes must not overlap, and
-// the result must differ from content.
+// ParseLineRange parses an inclusive 1-based A-B range. Reversed and
+// shorthand forms are rejected rather than guessed because this is a write
+// target, not a display request.
+func ParseLineRange(value string) (int, int, error) {
+	value = strings.TrimSpace(value)
+	parts := strings.Split(value, "-")
+	if len(parts) != 2 {
+		return 0, 0, fmt.Errorf("invalid lineRange %q; use inclusive A-B form such as \"12-24\"", value)
+	}
+	start, err := strconv.Atoi(strings.TrimSpace(parts[0]))
+	if err != nil || start < 1 {
+		return 0, 0, fmt.Errorf("invalid lineRange %q; start line must be a positive integer", value)
+	}
+	end, err := strconv.Atoi(strings.TrimSpace(parts[1]))
+	if err != nil || end < 1 {
+		return 0, 0, fmt.Errorf("invalid lineRange %q; end line must be a positive integer", value)
+	}
+	if end < start {
+		return 0, 0, fmt.Errorf("invalid lineRange %q; end line must not precede start line", value)
+	}
+	return start, end, nil
+}
+
+// ApplyBatchTextChanges applies exact-string and whole-line replacements to
+// one immutable snapshot. Every source is located before any mutation, then
+// replacements are applied backwards. Thus all lineRange values always refer
+// to the line numbers returned by read for the supplied version; callers never
+// adjust later ranges for earlier insertions or deletions.
 func ApplyBatchTextChanges(content string, changes []TextChange) (*Result, int, error) {
 	if err := ValidateBatchTextChanges(changes); err != nil {
 		return nil, 0, err
@@ -656,8 +689,26 @@ func ApplyBatchTextChanges(content string, changes []TextChange) (*Result, int, 
 	warnings := make([]string, 0, 2)
 	ignoredNoops := 0
 	for i, change := range changes {
-		oldText := NormalizeEditString(change.OldText)
 		newText := NormalizeEditString(change.NewText)
+		if strings.TrimSpace(change.LineRange) != "" {
+			startLine, endLine, parseErr := ParseLineRange(change.LineRange)
+			if parseErr != nil {
+				return nil, 0, toolerrors.New("E_BAD_EDIT", fmt.Errorf("change %d: %w", i+1, parseErr))
+			}
+			start, end, rangeErr := lineRangeOffsets(content, startLine, endLine)
+			if rangeErr != nil {
+				return nil, 0, toolerrors.New("E_RANGE_OOB", fmt.Errorf("change %d lineRange %q: %w; re-read and use numbered lines from the current version", i+1, change.LineRange, rangeErr))
+			}
+			replacement := lineRangeReplacement(content, end, newText)
+			if content[start:end] == replacement {
+				ignoredNoops++
+				continue
+			}
+			located = append(located, locatedChange{index: i, start: start, end: end, newText: replacement})
+			continue
+		}
+
+		oldText := NormalizeEditString(change.OldText)
 		if oldText == newText {
 			ignoredNoops++
 			continue
@@ -677,7 +728,7 @@ func ApplyBatchTextChanges(content string, changes []TextChange) (*Result, int, 
 		indentMatches := IndentationInsensitiveMatches(content, oldText, 9)
 		switch len(indentMatches) {
 		case 0:
-			return nil, 0, toolerrors.New("E_NO_MATCH", fmt.Errorf("change %d oldText was not found in the current file; re-read and copy exact raw content", i+1))
+			return nil, 0, toolerrors.New("E_NO_MATCH", fmt.Errorf("change %d oldText was not found in the current file; re-read and copy exact source text without the displayed N: line prefixes", i+1))
 		case 1:
 			match := indentMatches[0]
 			adjustedNewText, ok := ReindentReplacementForMatch(content, oldText, newText, match)
@@ -726,6 +777,66 @@ func ApplyBatchTextChanges(content string, changes []TextChange) (*Result, int, 
 		LastChangedLine:  changedRange.LastChangedLine,
 		Warnings:         warnings,
 	}, len(located), nil
+}
+
+// lineRangeOffsets locates an inclusive whole-line range in the immutable
+// original snapshot. For non-final ranges, end includes the selected range's
+// terminating newline so an empty newText performs whole-line deletion.
+func lineRangeOffsets(content string, startLine, endLine int) (int, int, error) {
+	total := visibleLineCount(content)
+	if total == 0 {
+		return 0, 0, errors.New("file has 0 lines")
+	}
+	if startLine < 1 || startLine > total {
+		return 0, 0, fmt.Errorf("start line %d is outside 1-%d", startLine, total)
+	}
+	if endLine < startLine || endLine > total {
+		return 0, 0, fmt.Errorf("end line %d is outside %d-%d", endLine, startLine, total)
+	}
+	start := byteOffsetForLine(content, startLine)
+	end := len(content)
+	if endLine < total {
+		end = byteOffsetForLine(content, endLine+1)
+	}
+	return start, end, nil
+}
+
+func visibleLineCount(content string) int {
+	if content == "" {
+		return 0
+	}
+	count := strings.Count(content, "\n") + 1
+	if strings.HasSuffix(content, "\n") {
+		count--
+	}
+	return count
+}
+
+func byteOffsetForLine(content string, line int) int {
+	if line <= 1 {
+		return 0
+	}
+	offset := 0
+	for current := 1; current < line; current++ {
+		rel := strings.IndexByte(content[offset:], '\n')
+		if rel < 0 {
+			return len(content)
+		}
+		offset += rel + 1
+	}
+	return offset
+}
+
+// lineRangeReplacement adds only the separator needed before an untouched
+// following line. newText never contains read's numeric prefixes.
+func lineRangeReplacement(content string, end int, newText string) string {
+	if newText == "" || end == len(content) || strings.HasSuffix(newText, "\n") {
+		if end == len(content) && strings.HasSuffix(content, "\n") && newText != "" && !strings.HasSuffix(newText, "\n") {
+			return newText + "\n"
+		}
+		return newText
+	}
+	return newText + "\n"
 }
 
 // BuildLineNumberContextBlock returns a numbered-line preview of the changed
