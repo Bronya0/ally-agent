@@ -328,8 +328,14 @@ type ConfigState struct {
 	// treated as "default on" (closing the window hides to the system tray).
 	// Only an explicit false makes closing the window quit the app.
 	CloseToTray *bool `json:"closeToTray,omitempty"`
-	grillMode         bool
-	temperatureSet    bool
+	// WindowWidth / WindowHeight remember the user's manual window size.
+	// Zero means "no saved size yet": the window starts at a golden-ratio
+	// share of the primary screen (61.8% x 61.8%) and the size is saved
+	// after the first user-driven resize.
+	WindowWidth    int `json:"windowWidth,omitempty"`
+	WindowHeight   int `json:"windowHeight,omitempty"`
+	grillMode      bool
+	temperatureSet bool
 	// noAdapterRetry 是进程内非序列化标记:多 key 模式下置 true,让适配器
 	// 内部关闭退避重试,由 streamModelResponse 的外层循环统一承担重试与
 	// 故障切换,避免 N 个 key × 适配器重试组合爆炸。
@@ -1325,6 +1331,10 @@ func mergeConfig(base, overlay ConfigState) ConfigState {
 	}
 	if overlay.CloseToTray != nil {
 		base.CloseToTray = overlay.CloseToTray
+	}
+	if overlay.WindowWidth > 0 && overlay.WindowHeight > 0 {
+		base.WindowWidth = overlay.WindowWidth
+		base.WindowHeight = overlay.WindowHeight
 	}
 	if base.APIFormat == "" {
 		base.APIFormat = apiFormatOpenAIChat

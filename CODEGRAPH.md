@@ -103,6 +103,7 @@ sequenceDiagram
 ConfigState (~/.ally_agent/config.json)
 ├── provider: providerName, apiFormat, baseUrl, apiKey, apiKeys(有序多 key 池), model, reasoningEffort(思考强度, auto=不传)
 ├── runtime: workspace, temperature, maxTokens, contextWindow
+├── window: windowWidth, windowHeight(记忆用户手动调整的窗口尺寸;首次启动用主屏 61.8% 比例)
 ├── network: proxyMode(off/system/manual), proxyUrl, proxyNoProxy
 ├── prompt: systemPrompt, customPrompt
 ├── models: 模型预设列表

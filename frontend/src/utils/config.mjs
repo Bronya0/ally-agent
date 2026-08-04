@@ -39,6 +39,11 @@ export function defaultConfig() {
     // local data URL cache (not persisted here) plus the opacity slider value.
     backgroundImage: '',
     backgroundOpacity: 0.15,
+    // Remembered user window size (px). Zero means no manual resize yet;
+    // the window then opens at 61.8% of the primary screen. The backend
+    // saves these after the user drags the window edge.
+    windowWidth: 0,
+    windowHeight: 0,
   };
 }
 

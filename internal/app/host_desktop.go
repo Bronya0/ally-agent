@@ -12,13 +12,17 @@ import (
 	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
+	"github.com/wailsapp/wails/v3/pkg/events"
 )
 
 const (
-	DefaultWindowWidth     = 1180
-	DefaultWindowHeight    = 760
-	MinWindowWidth         = 860
-	MinWindowHeight        = 600
+	DefaultWindowWidth  = 1180
+	DefaultWindowHeight = 760
+	MinWindowWidth      = 860
+	MinWindowHeight     = 600
+	// InitialWindowRatio is the golden-ratio share of the primary screen used
+	// on first launch, before the user has resized the window manually.
+	InitialWindowRatio     = 0.618
 	WindowsWindowClassName = "AllyMainWindow"
 )
 
@@ -143,6 +147,9 @@ func (a *App) ServiceShutdown() error {
 	if a.stats != nil {
 		_ = a.stats.stop(statsShutdownTimeout)
 	}
+	// Persist the window size as a fallback for direct quits (tray Quit)
+	// where the WindowClosing event may never fire.
+	a.persistWindowSize()
 	return nil
 }
 
@@ -181,11 +188,19 @@ func (a *App) SetAutostartEnabled(enabled bool) error {
 }
 
 // fitInitialWindowToScreen adapts the Wails desktop window to the active
-// display. Agent/runtime code does not depend on these host APIs.
+// display. On first launch (no saved size) the window opens at a golden-ratio
+// share of the primary screen (61.8% x 61.8%); afterwards the user's last
+// manually resized size is restored. Agent/runtime code does not depend on
+// these host APIs.
 func (a *App) fitInitialWindowToScreen() {
 	if a.wails == nil || a.wails.app == nil || a.wails.window == nil {
 		return
 	}
+	cfg, err := a.getConfig()
+	if err != nil {
+		return
+	}
+	window := a.wails.window
 	screens := a.wails.app.Screen.GetAll()
 	if len(screens) == 0 {
 		return
@@ -204,14 +219,61 @@ func (a *App) fitInitialWindowToScreen() {
 	}
 	maxWidth := int(float64(screenWidth) * 0.92)
 	maxHeight := int(float64(screenHeight) * 0.86)
-	runtimeMinWidth := minInt(MinWindowWidth, maxWidth)
-	runtimeMinHeight := minInt(MinWindowHeight, maxHeight)
-	width := clampInt(DefaultWindowWidth, runtimeMinWidth, maxWidth)
-	height := clampInt(DefaultWindowHeight, runtimeMinHeight, maxHeight)
-	window := a.wails.window
-	window.SetMinSize(runtimeMinWidth, runtimeMinHeight)
+	// A saved user size wins and is clamped to the current screen; without
+	// one (first launch) the window opens at 61.8% of the primary screen.
+	var width, height int
+	if cfg.WindowWidth > 0 && cfg.WindowHeight > 0 {
+		width = clampInt(cfg.WindowWidth, minInt(MinWindowWidth, maxWidth), maxWidth)
+		height = clampInt(cfg.WindowHeight, minInt(MinWindowHeight, maxHeight), maxHeight)
+		window.SetMinSize(minInt(MinWindowWidth, maxWidth), minInt(MinWindowHeight, maxHeight))
+	} else {
+		width = int(float64(screenWidth) * InitialWindowRatio)
+		height = int(float64(screenHeight) * InitialWindowRatio)
+		runtimeMinWidth := minInt(MinWindowWidth, width)
+		runtimeMinHeight := minInt(MinWindowHeight, height)
+		window.SetMinSize(runtimeMinWidth, runtimeMinHeight)
+	}
 	window.SetSize(width, height)
 	window.Center()
+	// Save the user's manual resize afterwards; the listener only sees
+	// user-driven WindowDidResize events, never our SetSize above.
+	a.rememberWindowSize()
+}
+
+// rememberWindowSize persists the main window's size to config.json when the
+// window closes (close-to-tray hides it, keeping the last visible size), with
+// a ServiceShutdown fallback for direct quits. It is registered once from
+// fitInitialWindowToScreen. No write ever happens while the user is dragging,
+// so resize events cannot cause disk writes.
+func (a *App) rememberWindowSize() {
+	if a.wails == nil || a.wails.window == nil {
+		return
+	}
+	a.wails.window.OnWindowEvent(events.Common.WindowClosing, func(_ *application.WindowEvent) {
+		a.persistWindowSize()
+	})
+}
+
+// persistWindowSize writes the main window's current size to config.json when
+// it differs from the stored value. No-op when the window is gone or the size
+// is unknown.
+func (a *App) persistWindowSize() {
+	if a.wails == nil || a.wails.window == nil {
+		return
+	}
+	w, h := a.wails.window.Size()
+	if w <= 0 || h <= 0 {
+		return
+	}
+	a.mu.Lock()
+	cfg := a.config
+	a.mu.Unlock()
+	if cfg.WindowWidth == w && cfg.WindowHeight == h {
+		return
+	}
+	cfg.WindowWidth = w
+	cfg.WindowHeight = h
+	_ = a.saveConfig(cfg)
 }
 
 func (a *App) SelectWorkspace() (string, error) {

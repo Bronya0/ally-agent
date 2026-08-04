@@ -25,6 +25,33 @@ func TestDefaultConfigStartsWithoutWorkspace(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigWindowSizeIsEmpty(t *testing.T) {
+	if got := defaultConfigState().WindowWidth; got != 0 {
+		t.Fatalf("default window width = %d, want 0 (first launch uses 61.8%% ratio)", got)
+	}
+	if got := defaultConfigState().WindowHeight; got != 0 {
+		t.Fatalf("default window height = %d, want 0 (first launch uses 61.8%% ratio)", got)
+	}
+}
+
+func TestMergeConfigWindowSizeRequiresBothDimensions(t *testing.T) {
+	base := ConfigState{WindowWidth: 100, WindowHeight: 200}
+	got := mergeConfig(base, ConfigState{WindowWidth: 300})
+	if got.WindowWidth != 100 || got.WindowHeight != 200 {
+		t.Fatalf("partial window size overlay changed stored size: got %dx%d", got.WindowWidth, got.WindowHeight)
+	}
+	got = mergeConfig(base, ConfigState{WindowWidth: 300, WindowHeight: 400})
+	if got.WindowWidth != 300 || got.WindowHeight != 400 {
+		t.Fatalf("full window size overlay not applied: got %dx%d", got.WindowWidth, got.WindowHeight)
+	}
+}
+
+func TestInitialWindowRatioIsGoldenRatio(t *testing.T) {
+	if InitialWindowRatio != 0.618 {
+		t.Fatalf("InitialWindowRatio = %v, want 0.618", InitialWindowRatio)
+	}
+}
+
 func TestWorkspaceRootRequiresExplicitWorkspace(t *testing.T) {
 	if _, err := workspaceRoot(ConfigState{}); err == nil || !strings.Contains(err.Error(), "workspace is required") {
 		t.Fatalf("workspaceRoot(empty) error = %v, want workspace required", err)

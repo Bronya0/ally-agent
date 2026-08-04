@@ -152,6 +152,7 @@ Connected MCP tools are sorted by server, tool name, and function name before be
 
 - provider fields: `providerName`, `apiFormat`, `baseUrl`, `apiKey`, `apiKeys` (ordered multi-key pool; first entry is highest priority), `model`, `reasoningEffort`
 - runtime fields: `workspace`, `temperature`, `maxTokens`, `contextWindow`
+- window fields: `windowWidth`, `windowHeight` (last window size, restored on launch; zero means first launch opens at 61.8% of the primary screen and the size is persisted on window close / app shutdown)
 - tray fields: `closeToTray` (close window hides to system tray instead of quitting; legacy config without the field defaults to on)
 - network fields: `proxyMode` (`off`/`system`/`manual`), `proxyUrl`, `proxyNoProxy`
 - prompt fields: `systemPrompt`, `customPrompt`

@@ -380,6 +380,7 @@ import {
   commitToolEventMessage as commitToolEventById,
   findToolEventMessage as findToolEventById,
 } from './utils/toolEventState.mjs';
+import { unwrapWailsEvent } from './utils/wailsEvent.mjs';
 
 const GitDiffModal = defineAsyncComponent(() => import('./components/GitDiffModal.vue'));
 
@@ -2234,6 +2235,7 @@ function closeWorkspaceTab(id) {
       delete todosBySession[tab.sessionId];
       delete todoRevisionsBySession[tab.sessionId];
       delete sessionScrollAnchors[tab.sessionId];
+      revealOnSwitch.delete(tab.sessionId);
       ReleaseSession(tab.sessionId).catch(() => {});
     }
   }
@@ -2248,6 +2250,11 @@ function closeWorkspaceTab(id) {
 // visible message element. Unlike absolute scrollTop, anchors are immune
 // to content-visibility placeholder-height drift on Tab switch.
 const sessionScrollAnchors = {};
+
+// Sessions whose run finished while the user was on another Tab. When the
+// user switches back, scroll to the start of that finished reply instead of
+// restoring the old anchor.
+const revealOnSwitch = new Set();
 
 async function switchWorkspaceTab(id) {
   const tab = workspaceTabs.value.find((t) => t.id === id);
@@ -2294,10 +2301,16 @@ async function switchWorkspaceTab(id) {
     await loadSessionMessages(linkedSession);
     unloadInactiveSessionMessages();
     loadTodos(linkedSession.id);
-    // Restore saved scroll anchor for this session, or stay at default
-    const savedAnchor = sessionScrollAnchors[linkedSession.id];
-    if (savedAnchor != null) {
-      nextTick(() => conversationMessagesRef.value?.restoreScrollPosition(savedAnchor));
+    // Restore saved scroll anchor for this session, or stay at default.
+    // When the session's run finished while we were away, reveal the start
+    // of that finished reply instead (forced, so it wins over the anchor).
+    if (revealOnSwitch.delete(linkedSession.id)) {
+      nextTick(() => conversationMessagesRef.value?.scrollToLastReplyStart({ force: true }));
+    } else {
+      const savedAnchor = sessionScrollAnchors[linkedSession.id];
+      if (savedAnchor != null) {
+        nextTick(() => conversationMessagesRef.value?.restoreScrollPosition(savedAnchor));
+      }
     }
   }
 }
@@ -2406,6 +2419,7 @@ function deleteSession(index) {
   delete todoRevisionsBySession[deletedId];
   delete sessionPromptTexts[deletedId];
   delete sessionScrollAnchors[deletedId];
+  revealOnSwitch.delete(deletedId);
   enqueueSessionWrite(() => DeleteSession(deletedId)).catch(() => {});
   const expanded = new Set(expandedArchiveSessions.value);
   expanded.delete(deletedId);
@@ -2735,7 +2749,12 @@ function closeCompletionAudio() {
 }
 
 function onRuntimeEvent(eventName, handler) {
-  const off = Events.On(eventName, handler);
+  // Wails v3 delivers a WailsEvent wrapper ({ name, data, sender }), while
+  // application handlers consume the backend payload directly. Keep this
+  // boundary centralized so every runtime event follows the same contract.
+  const off = Events.On(eventName, (event) => {
+    handler(unwrapWailsEvent(event, eventName));
+  });
   if (typeof off === 'function') runtimeEventOffs.push(off);
 }
 
@@ -3153,6 +3172,14 @@ function bindRuntimeEvents() {
     session.isRunning = false;
     if (session.id === activeSessionId.value) {
       playCompletionSound('done');
+      // Reply finished: reveal the start of the final summary (right after
+      // the last tool call) so the user lands on the conclusion. Skipped
+      // when the user has scrolled away (autoFollow=false) to avoid pulling
+      // the viewport from under them.
+      nextTick(() => conversationMessagesRef.value?.scrollToLastReplyStart());
+    } else {
+      // Finished in a background session: reveal when the user switches back.
+      revealOnSwitch.add(session.id);
     }
     persistCompletedSession(session);
     refreshContextTokens(session.id);
@@ -5338,6 +5365,7 @@ function trimRuntimeSessions() {
     delete todoRevisionsBySession[session.id];
     delete sessionPromptTexts[session.id];
     delete sessionScrollAnchors[session.id];
+    revealOnSwitch.delete(session.id);
     ReleaseSession(session.id).catch(() => {});
     const expanded = new Set(expandedArchiveSessions.value);
     expanded.delete(session.id);
