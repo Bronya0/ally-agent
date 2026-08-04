@@ -263,19 +263,39 @@ func newProxyHTTPTransport(cfg ConfigState, allowPrivate bool) *http.Transport {
 		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: time.Second,
 	}
-	if normalizeProxyMode(cfg.ProxyMode) != proxyModeOff {
-		transport.DialContext = dialer.DialContext
-		return transport
-	}
-	transport.DialContext = guardedDialContext(dialer, allowPrivate)
+	// Apply the private-network guard on every dial path, including the
+	// NO_PROXY direct-connection path when a proxy is configured. Without
+	// this, hosts matched by NO_PROXY were dialed directly with a bare
+	// Dialer, bypassing the allowPrivateNetwork=false restriction (SSRF).
+	// The user-configured proxy server itself is always reachable.
+	transport.DialContext = guardedDialContext(dialer, allowPrivate, proxyHosts(cfg))
 	return transport
 }
 
-func guardedDialContext(dialer *net.Dialer, allowPrivate bool) func(context.Context, string, string) (net.Conn, error) {
+// proxyHosts returns the lowercase hostnames of the configured proxy servers
+// so the dial guard can always allow connections to them.
+func proxyHosts(cfg ConfigState) map[string]struct{} {
+	hosts := map[string]struct{}{}
+	resolved := resolveProxy(cfg)
+	if !resolved.status.Enabled || resolved.status.Error != "" {
+		return hosts
+	}
+	for _, raw := range []string{resolved.status.HTTPProxy, resolved.status.HTTPSProxy} {
+		if u, err := url.Parse(raw); err == nil && u.Hostname() != "" {
+			hosts[strings.ToLower(u.Hostname())] = struct{}{}
+		}
+	}
+	return hosts
+}
+
+func guardedDialContext(dialer *net.Dialer, allowPrivate bool, allowHosts map[string]struct{}) func(context.Context, string, string) (net.Conn, error) {
 	return func(ctx context.Context, network, address string) (net.Conn, error) {
 		host, port, err := net.SplitHostPort(address)
 		if err != nil {
 			return nil, err
+		}
+		if _, ok := allowHosts[strings.ToLower(host)]; ok {
+			return dialer.DialContext(ctx, network, address)
 		}
 		ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
 		if err != nil {

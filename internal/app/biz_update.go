@@ -941,9 +941,11 @@ func (a *App) applyWindowsUpdate(tag string) UpdateApplyResult {
 		return UpdateApplyResult{Error: msg}
 	}
 
-	// Replace supporting resource files. On any failure, roll back the EXE
-	// so the previous binary is restored and the .bak is not orphaned for
-	// the next startup to blindly delete.
+	// Replace supporting resource files with per-file backups so a mid-way
+	// failure can restore the entire previous installation, not just the
+	// EXE. Each existing file is copied to the rollback dir before being
+	// overwritten; on failure the already-replaced resources are restored in
+	// reverse order and then the EXE backup is renamed back.
 	files, err := stagedFileSet(stagedDir)
 	if err != nil {
 		msg := fmt.Sprintf("list staged resources: %v", err)
@@ -951,26 +953,70 @@ func (a *App) applyWindowsUpdate(tag string) UpdateApplyResult {
 		a.emit("update:error", map[string]any{"stage": "apply", "error": msg})
 		return UpdateApplyResult{Error: msg}
 	}
+	backupDir := filepath.Join(updateVersionDir(tag), "rollback")
+	replaced := make([]string, 0, len(files))
 	for _, rel := range files {
 		if rel == exeName {
 			continue // already handled
 		}
 		src := filepath.Join(stagedDir, rel)
 		dst := filepath.Join(exeDir, rel)
+		if _, err := os.Stat(dst); err == nil {
+			backupPath := filepath.Join(backupDir, rel)
+			if err := copyFileAtomic(dst, backupPath); err != nil {
+				msg := fmt.Sprintf("backup resource %s: %v", rel, err)
+				if rbErr := os.Rename(backupExe, currentExe); rbErr != nil {
+					msg = fmt.Sprintf("%s; rollback exe also failed: %v; manual recovery required from %s", msg, rbErr, stagedDir)
+				}
+				a.emit("update:error", map[string]any{"stage": "apply", "error": msg})
+				return UpdateApplyResult{Error: msg}
+			}
+		}
 		if err := copyFileAtomic(src, dst); err != nil {
 			msg := fmt.Sprintf("replace resource %s: %v", rel, err)
-			if rbErr := os.Rename(backupExe, currentExe); rbErr != nil {
-				msg = fmt.Sprintf("%s; rollback exe also failed: %v; manual recovery required from %s", msg, rbErr, stagedDir)
+			if rbMsg := rollbackReplacedResources(backupDir, exeDir, replaced, backupExe, currentExe); rbMsg != "" {
+				msg = fmt.Sprintf("%s; %s; manual recovery required from %s", msg, rbMsg, stagedDir)
 			}
 			a.emit("update:error", map[string]any{"stage": "apply", "error": msg})
 			return UpdateApplyResult{Error: msg}
 		}
+		replaced = append(replaced, rel)
 	}
+	// Success: drop the rollback backups.
+	_ = os.RemoveAll(backupDir)
 
 	cleanAppliedUpdateDirs(updateBaseDir(), tag)
 	a.emit("update:progress", map[string]any{"stage": "apply", "version": tag, "percent": 100})
 	a.emit("update:applied", map[string]any{"version": tag})
 	return UpdateApplyResult{OK: true}
+}
+
+// rollbackReplacedResources restores already-replaced resource files from
+// backupDir back into exeDir in reverse order (files that did not exist
+// before the update are removed), then restores the EXE backup. It returns
+// a "; "-joined summary of any rollback failures (empty on full success).
+func rollbackReplacedResources(backupDir, exeDir string, replaced []string, backupExe, currentExe string) string {
+	var msgs []string
+	for i := len(replaced) - 1; i >= 0; i-- {
+		rel := replaced[i]
+		src := filepath.Join(backupDir, rel)
+		dst := filepath.Join(exeDir, rel)
+		if _, err := os.Stat(src); err == nil {
+			if err := copyFileAtomic(src, dst); err != nil {
+				msgs = append(msgs, fmt.Sprintf("rollback resource %s: %v", rel, err))
+			}
+		} else if errors.Is(err, os.ErrNotExist) {
+			if err := os.Remove(dst); err != nil && !os.IsNotExist(err) {
+				msgs = append(msgs, fmt.Sprintf("rollback remove %s: %v", rel, err))
+			}
+		} else {
+			msgs = append(msgs, fmt.Sprintf("rollback stat %s: %v", rel, err))
+		}
+	}
+	if rbErr := os.Rename(backupExe, currentExe); rbErr != nil {
+		msgs = append(msgs, fmt.Sprintf("rollback exe: %v", rbErr))
+	}
+	return strings.Join(msgs, "; ")
 }
 
 // applyMacUpdate replaces the running .app bundle with the app inside the
