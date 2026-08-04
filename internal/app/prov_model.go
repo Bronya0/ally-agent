@@ -449,6 +449,9 @@ func (a *App) streamOpenAIChat(ctx context.Context, cfg ConfigState, model strin
 		reasoningState.closeTag = "</" + cfg.ReasoningTag + ">"
 	}
 	toolCalls := []legacyopenai.ToolCall{}
+	toolEventGate := newModelToolCallEventGate(func(event modelStreamEvent) {
+		emitModelStreamEvent(onEvent, event)
+	})
 	var usage *modelUsage
 	for {
 		raw, err := stream.RecvRaw()
@@ -547,7 +550,7 @@ func (a *App) streamOpenAIChat(ctx context.Context, cfg ConfigState, model strin
 		}
 		if len(delta.ToolCalls) > 0 {
 			mergeToolCallDeltas(&toolCalls, delta.ToolCalls)
-			emitModelStreamEvent(onEvent, modelStreamEvent{ToolCalls: cloneToolCalls(toolCalls)})
+			toolEventGate.emit(modelStreamEvent{ToolCalls: toolCalls})
 		}
 	}
 
@@ -640,6 +643,9 @@ func (a *App) streamOpenAIResponses(ctx context.Context, cfg ConfigState, model 
 	toolCalls := []legacyopenai.ToolCall{}
 	toolIndexByOutput := map[int64]int{}
 	toolIndexByItemID := map[string]int{}
+	toolEventGate := newModelToolCallEventGate(func(event modelStreamEvent) {
+		emitModelStreamEvent(onEvent, event)
+	})
 	var usage *modelUsage
 	finalOutputText := ""
 	var streamErr error
@@ -687,24 +693,24 @@ func (a *App) streamOpenAIResponses(ctx context.Context, cfg ConfigState, model 
 			if ev.Item.Type == "function_call" {
 				idx := ensureResponsesToolCall(&toolCalls, toolIndexByOutput, toolIndexByItemID, ev.OutputIndex, ev.Item.ID)
 				updateToolCallFromResponsesItem(&toolCalls[idx], ev.Item)
-				emitModelStreamEvent(onEvent, modelStreamEvent{ToolCalls: cloneToolCalls(toolCalls)})
+				toolEventGate.emit(modelStreamEvent{ToolCalls: toolCalls})
 			}
 		case "response.function_call_arguments.delta":
 			ev := event.AsResponseFunctionCallArgumentsDelta()
 			idx := ensureResponsesToolCall(&toolCalls, toolIndexByOutput, toolIndexByItemID, ev.OutputIndex, ev.ItemID)
 			toolCalls[idx].Function.Arguments += ev.Delta
-			emitModelStreamEvent(onEvent, modelStreamEvent{ToolCalls: cloneToolCalls(toolCalls)})
+			toolEventGate.emit(modelStreamEvent{ToolCalls: toolCalls})
 		case "response.function_call_arguments.done":
 			ev := event.AsResponseFunctionCallArgumentsDone()
 			idx := ensureResponsesToolCall(&toolCalls, toolIndexByOutput, toolIndexByItemID, ev.OutputIndex, ev.ItemID)
 			toolCalls[idx].Function.Arguments = ev.Arguments
-			emitModelStreamEvent(onEvent, modelStreamEvent{ToolCalls: cloneToolCalls(toolCalls)})
+			toolEventGate.emit(modelStreamEvent{ToolCalls: toolCalls})
 		case "response.output_item.done":
 			ev := event.AsResponseOutputItemDone()
 			if ev.Item.Type == "function_call" {
 				idx := ensureResponsesToolCall(&toolCalls, toolIndexByOutput, toolIndexByItemID, ev.OutputIndex, ev.Item.ID)
 				updateToolCallFromResponsesItem(&toolCalls[idx], ev.Item)
-				emitModelStreamEvent(onEvent, modelStreamEvent{ToolCalls: cloneToolCalls(toolCalls)})
+				toolEventGate.emit(modelStreamEvent{ToolCalls: toolCalls})
 			} else if ev.Item.Type == "image_generation_call" {
 				imageCall := ev.Item.AsImageGenerationCall()
 				emitImage(imageCall.ID, imageCall.Result, false)
@@ -910,6 +916,9 @@ func (a *App) streamAnthropicMessages(ctx context.Context, cfg ConfigState, mode
 	var reasoning strings.Builder
 	toolCalls := []legacyopenai.ToolCall{}
 	toolIndexByBlock := map[int64]int{}
+	toolEventGate := newModelToolCallEventGate(func(event modelStreamEvent) {
+		emitModelStreamEvent(onEvent, event)
+	})
 	var usage *modelUsage
 	var stopReason string
 	var stopSequence string
@@ -967,7 +976,7 @@ func (a *App) streamAnthropicMessages(ctx context.Context, cfg ConfigState, mode
 							Arguments: args,
 						},
 					})
-					emitModelStreamEvent(onEvent, modelStreamEvent{ToolCalls: cloneToolCalls(toolCalls)})
+					toolEventGate.emit(modelStreamEvent{ToolCalls: toolCalls})
 				}
 			case "content_block_delta":
 				ev := event.AsContentBlockDelta()
@@ -986,7 +995,7 @@ func (a *App) streamAnthropicMessages(ctx context.Context, cfg ConfigState, mode
 				case "input_json_delta":
 					if idx, ok := toolIndexByBlock[ev.Index]; ok {
 						toolCalls[idx].Function.Arguments += delta.PartialJSON
-						emitModelStreamEvent(onEvent, modelStreamEvent{ToolCalls: cloneToolCalls(toolCalls)})
+						toolEventGate.emit(modelStreamEvent{ToolCalls: toolCalls})
 					}
 				}
 			}

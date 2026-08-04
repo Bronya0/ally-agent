@@ -7,7 +7,7 @@
           <span>{{ msg.expanded ? $t('chat.archive.collapse') : $t('chat.archive.expand') }}</span>
           <span>{{ $t('chat.archive.summary', { count: msg.count, tokens: fmtK(msg.tokens) }) }}</span>
         </button>
-        <div v-else-if="msg.role === 'user'" :class="['message', msg.role, { error: msg.error }]" data-user-question>
+        <div v-else-if="msg.role === 'user'" v-memo="messageRenderMemo(msg)" :class="['message', msg.role, { error: msg.error }]" data-user-question>
           <span class="user-rail" aria-hidden="true">›</span>
           <div class="user-message-content">
             <div class="message-body user-text">
@@ -34,7 +34,7 @@
             <RenderBoundary :label="$t('chat.attachment')"><MessageAttachments :attachments="msg.attachments || []" /></RenderBoundary>
           </div>
         </div>
-        <div v-else-if="msg.role !== 'tool_call'" :class="['message', msg.role, { error: msg.error, system: msg.system }]">
+        <div v-else-if="msg.role !== 'tool_call'" v-memo="messageRenderMemo(msg)" :class="['message', msg.role, { error: msg.error, system: msg.system }]">
           <div v-if="msg.reasoningBody" class="reasoning-block">
             <div class="reasoning-header" @click.stop="msg.reasoningExpanded = !msg.reasoningExpanded">
               <span class="reasoning-label">
@@ -149,6 +149,39 @@ const USER_MESSAGE_PREVIEW_LINE_LIMIT = 6;
 
 function userMessageText(msg) {
   return String(msg?.skill ? msg.skill.args || '' : msg?.content || '');
+}
+
+// Keep historical user/assistant subtrees out of the patch path while the
+// active assistant message streams. Every value used by these two branches
+// that can change during a run is represented here, including user expansion
+// state and generated-image attachment updates.
+function messageRenderMemo(msg) {
+  const attachments = Array.isArray(msg?.attachments) ? msg.attachments : [];
+  const lastAttachment = attachments.length ? attachments[attachments.length - 1] : null;
+  return [
+    msg?.role,
+    msg?.content,
+    msg?.reasoningBody,
+    msg?.reasoningExpanded,
+    msg?.reasoningStartedAt,
+    msg?.reasoningEndedAt,
+    msg?.streaming,
+    msg?.done,
+    msg?.error,
+    msg?.system,
+    msg?.welcome,
+    msg?.roundDurationText,
+    msg?.cacheRate,
+    msg?.cacheHit,
+    msg?.cacheMiss,
+    msg?.runInputTokens,
+    msg?.runOutputTokens,
+    attachments.length,
+    lastAttachment?.previewUrl,
+    lastAttachment?.dataUrl,
+    lastAttachment?.partial,
+    msg?.role === 'user' ? isUserMessageExpanded(msg) : false,
+  ];
 }
 
 function userMessageStats(msg) {

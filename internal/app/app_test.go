@@ -419,6 +419,24 @@ func TestToolCallProgressTrackerEmitsStreamingUpdates(t *testing.T) {
 	}
 }
 
+func TestModelToolCallEventGateThrottlesLargeSnapshots(t *testing.T) {
+	var forwarded []modelStreamEvent
+	gate := newModelToolCallEventGate(func(event modelStreamEvent) {
+		forwarded = append(forwarded, event)
+	})
+	calls := []openai.ToolCall{{Function: openai.FunctionCall{Arguments: strings.Repeat("x", toolUpdateThreshold+1)}}}
+	gate.emit(modelStreamEvent{ToolCalls: calls})
+	gate.emit(modelStreamEvent{ToolCalls: calls})
+	if len(forwarded) != 1 {
+		t.Fatalf("expected rapid large tool snapshots to be throttled, got %d", len(forwarded))
+	}
+	gate.lastEmit = time.Now().Add(-toolUpdateThrottle)
+	gate.emit(modelStreamEvent{ToolCalls: calls})
+	if len(forwarded) != 2 {
+		t.Fatalf("expected snapshot after throttle window, got %d", len(forwarded))
+	}
+}
+
 // TestToolCallProgressTrackerThrottlesLargeUpdates verifies that large
 // streaming argument payloads (e.g. create_file with thousands of lines) are
 // throttled to avoid flooding the frontend with O(N^2) data, while small

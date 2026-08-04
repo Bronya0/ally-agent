@@ -1583,7 +1583,7 @@ let displayMessagesSig = '';
 function buildDisplayMessagesSignature(session, expanded) {
   const msgs = session?.messages;
   if (!msgs) return '';
-  const parts = [`len:${msgs.length}`, `exp:${expanded.has(session?.id) ? 1 : 0}`];
+  const parts = [`session:${session?.id || ''}`, `len:${msgs.length}`, `exp:${expanded.has(session?.id) ? 1 : 0}`];
   // Only structural fields — no content/body access, so we don't subscribe
   // to streaming content mutations.
   for (let i = 0; i < msgs.length; i++) {
@@ -1720,9 +1720,10 @@ async function openWorkspaceInFileManager() {
 }
 
 // Context computation — call backend for accurate full-payload token count.
-// Only react to session switches; in-run token refresh is handled by run:done /
-// run:error / run:cancelled / run:compacted handlers. A previous deep:true watch
-// on activeMessages fired on every streaming delta (40+ IPC/s) — wasteful.
+// React to session switches and tool completions; in-run token refresh is
+// handled by tool:result / tool:error / run:done / run:error / run:cancelled /
+// run:compacted handlers. A previous deep:true watch on activeMessages fired
+// on every streaming delta (40+ IPC/s) — wasteful.
 watch(activeSessionId, async () => {
   const sid = activeSessionId.value;
   if (!sid) { contextTokens.value = 0; contextBreakdown.value = null; return; }
@@ -2610,9 +2611,11 @@ function flushToolUpdateBuffer() {
   for (const data of entries) {
     const session = sessionByRunId(data.runId);
     if (!session) continue;
-    const title = makeToolTitle(data.name, data.args || '', data);
-    const liveBody = data.output !== undefined ? String(data.output || '') : (data.args || '');
-    updateToolEvent(toolEventId(data), data.name, title, liveBody, 'running', data, session);
+    const progressMeta = { ...data, suppressScroll: true };
+    const args = String(progressMeta.args || '');
+    const title = makeToolTitle(progressMeta.name, args, progressMeta);
+    const liveBody = progressMeta.output !== undefined ? String(progressMeta.output || '') : args;
+    updateToolEvent(toolEventId(progressMeta), progressMeta.name, title, liveBody, 'running', progressMeta, session);
     if (session.id === activeSessionId.value) {
       lastActiveSessionId = session.id;
       lastActiveToolName = data.name || '';
@@ -2927,6 +2930,10 @@ function bindRuntimeEvents() {
     flushToolUpdateBuffer();
     const session = sessionByEvent(data);
     if (!session) return;
+    // Tool results grow the live context (tool result messages get appended to
+    // the next model request). Refresh the footer counter so it tracks the
+    // agent loop while it works, not only after the run ends.
+    refreshContextTokens(session.id);
     const eventId = toolEventId(data);
     let existing = findToolEventMessage(session, data);
     if (!existing) existing = appendToolEventFallback(session, data, 'running');
@@ -3074,6 +3081,8 @@ function bindRuntimeEvents() {
     flushToolUpdateBuffer();
     const session = sessionByEvent(data);
     if (!session) return;
+    // Failed tool calls also become part of the context; keep the footer fresh.
+    refreshContextTokens(session.id);
     const eventId = toolEventId(data);
     let existing = findToolEventMessage(session, data);
     if (!existing) existing = appendToolEventFallback(session, data, 'error');
@@ -4762,6 +4771,23 @@ function parseToolArgsBestEffort(raw) {
   }
 }
 
+// Share one best-effort argument parse between the title and rich preview
+// builders for the same progress event. Output updates carry `output` plus
+// the original `args`; they must never parse the growing command output as
+// JSON tool arguments.
+function parseToolArgsForMeta(raw, meta = {}) {
+  const text = String(raw || '');
+  if (meta && meta.__parsedToolArgsRaw === text && meta.__parsedToolArgs) {
+    return meta.__parsedToolArgs;
+  }
+  const parsed = parseToolArgsBestEffort(text);
+  if (meta && typeof meta === 'object') {
+    meta.__parsedToolArgsRaw = text;
+    meta.__parsedToolArgs = parsed;
+  }
+  return parsed;
+}
+
 function readPartialJsonStringField(text, field) {
   const needle = `"${field}"`;
   let keyIndex = text.indexOf(needle);
@@ -4885,8 +4911,9 @@ function updateToolEvent(id, name, title, body, status = 'default', meta = {}, t
   let askQuestions = existing?.askQuestions || [];
   const expanded = existing ? existing.expanded : !isToolCollapsedByDefault(name);
 
-  const raw = String(body || '');
-  const parsed = parseToolArgsBestEffort(raw);
+  const isLiveOutput = meta && meta.output !== undefined;
+  const raw = isLiveOutput ? String(meta.args || existing?.toolArgs || '') : String(body || '');
+  const parsed = parseToolArgsForMeta(raw, meta);
   if (name === 'edit' || name === 'remote_edit') {
 	const files = (name === 'edit' || name === 'remote_edit') && Array.isArray(parsed.files) ? parsed.files : [parsed];
 	editFilePath = files.length === 1 ? (files[0]?.path || '') : `${files.length} files`;
@@ -4956,7 +4983,7 @@ function updateToolEvent(id, name, title, body, status = 'default', meta = {}, t
     toolCallIndex: meta.toolCallIndex ?? existing?.toolCallIndex,
     name: name || 'tool',
     title: title || existing?.title || '',
-    body: name === 'run_command' && meta.output !== undefined
+    body: (name === 'run_command' || name === 'remote_run_command') && meta.output !== undefined
       ? stripAnsi(String(meta.output || ''))
       : formatToolBody(name, displayToolBodyForStatus(name, body, status)),
     time: new Date().toLocaleTimeString(),
@@ -5031,7 +5058,7 @@ function updateToolEvent(id, name, title, body, status = 'default', meta = {}, t
   // same eventId, leaving Vue with duplicate keys and tool:result updating the
   // earliest (often still argument-less) card.
   commitToolEventById(session, eventId, existing, payload);
-  if (session.id === activeSessionId.value) scrollMessagesToBottom();
+  if (session.id === activeSessionId.value && !meta.suppressScroll) scrollMessagesToBottom();
 }
 
 function toggleToolExpand(msg) {
@@ -5881,7 +5908,7 @@ function makeToolTitle(name, args, meta = {}) {
   if (isMcpToolName(name)) {
     return meta.mcpTool || fallbackMcpToolName(name);
   }
-  const parsed = parseToolArgsBestEffort(args);
+  const parsed = parseToolArgsForMeta(args, meta);
   if (name === 'todo_write') {
     return Array.isArray(parsed.todos) ? formatTodoNextStep(parsed.todos) : '';
   }
@@ -6675,6 +6702,9 @@ function renderMarkdown(text, streaming = false) {
 
 function normalizeGeneratedImageMarkdown(text) {
   if (!text) return '';
+  // Most messages contain no standalone image URL. Avoid allocating a line
+  // array and joining it again on every streaming render in that common case.
+  if (!/(?:https?:\/\/\S+\.(?:png|jpe?g|gif|webp|bmp|svg)(?:[?#]\S*)?|data:image\/(?:png|jpe?g|gif|webp);base64,)/i.test(text)) return text;
   const imageUrlRe = /^(?:https?:\/\/\S+\.(?:png|jpe?g|gif|webp|bmp|svg)(?:[?#]\S*)?|data:image\/(?:png|jpe?g|gif|webp);base64,[A-Za-z0-9+/=]+)$/i;
   let inFence = false;
   return text.split('\n').map((line) => {

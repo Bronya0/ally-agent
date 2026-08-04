@@ -76,6 +76,41 @@ func (e *runStreamDeltaEmitter) flushBuffer(name string, buffer *strings.Builder
 	e.emit(name, map[string]any{"runId": e.runID, "sessionId": e.sessionID, "content": content})
 }
 
+// modelToolCallEventGate prevents provider adapters from cloning and
+// forwarding the full accumulated tool-call slice for every tiny argument
+// delta. The final complete arguments are still emitted by runChat through
+// forceEvents after the provider returns.
+type modelToolCallEventGate struct {
+	forward  func(modelStreamEvent)
+	started  bool
+	lastEmit time.Time
+}
+
+func newModelToolCallEventGate(forward func(modelStreamEvent)) *modelToolCallEventGate {
+	return &modelToolCallEventGate{forward: forward}
+}
+
+func (g *modelToolCallEventGate) emit(event modelStreamEvent) {
+	if g == nil || g.forward == nil {
+		return
+	}
+	if len(event.ToolCalls) > 0 {
+		maxArgs := 0
+		for _, call := range event.ToolCalls {
+			if len(call.Function.Arguments) > maxArgs {
+				maxArgs = len(call.Function.Arguments)
+			}
+		}
+		now := time.Now()
+		if g.started && maxArgs > toolUpdateThreshold && now.Sub(g.lastEmit) < toolUpdateThrottle {
+			return
+		}
+		g.started = true
+		g.lastEmit = now
+	}
+	g.forward(event)
+}
+
 type toolCallProgressTracker struct {
 	started   map[int]bool
 	lastState map[int]string

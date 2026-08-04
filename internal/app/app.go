@@ -1913,6 +1913,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 
 	messages = a.buildMessages(req, cfg, a.listCachedSkills())
 	tools := a.buildToolsForConfig(cfg)
+	breakdownAcc := newLiveBreakdownAccumulator(messages)
 	startTime := time.Now()
 	grillProtocolRetries := 0
 	// runCacheHit/Miss accumulate prompt-cache hit/miss tokens across every
@@ -1942,6 +1943,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			continuationPrompt := "Continue working on the goal. Check if the goal is complete. If so, call update_goal with status=complete. If blocked, call update_goal with status=blocked."
 			messages = append(messages, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: continuationPrompt})
 			tools = a.buildToolsForConfig(cfg)
+			breakdownAcc.reset(messages)
 		}
 		for step := 0; step < maxAgentSteps; step++ {
 			select {
@@ -1950,7 +1952,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 				return
 			default:
 			} // Update live breakdown for context display (includes all tool calls/results)
-			bd := computeLiveBreakdown(messages)
+			bd := breakdownAcc.update(messages)
 			bd.ToolSchemas = estimateToolSchemaTokens(tools)
 			finalizeContextBreakdownTotal(&bd)
 			a.mu.Lock()
@@ -1982,6 +1984,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 						}
 						messages = a.appendGoalProgressMessage(messages, sessionID)
 						messages = insertGrillModeInstruction(messages, req.GrillMode)
+						breakdownAcc.reset(messages)
 						if after, _ := result["tokensAfter"].(float64); after > 0 {
 							a.emit("run:compacted", map[string]any{"sessionId": sessionID, "tokensBefore": usedTokens, "tokensAfter": int(after)})
 						}
@@ -2123,7 +2126,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 				// Goal mode: continue if active
 				if shouldAutoContinueGoal(req.GrillMode) {
 					if g := a.getActiveGoal(sessionID); g != nil {
-						bd := computeLiveBreakdown(messages)
+						bd := breakdownAcc.update(messages)
 						bd.ToolSchemas = estimateToolSchemaTokens(tools)
 						finalizeContextBreakdownTotal(&bd)
 						g = a.recordGoalTurn(sessionID, bd.Total, time.Since(startTime))
@@ -2252,7 +2255,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 		if shouldAutoContinueGoal(req.GrillMode) {
 			if g := a.getActiveGoal(sessionID); g != nil && g.TurnsUsed < g.TurnBudget {
 				emitRunEnd("run:done", nil)
-				bd := computeLiveBreakdown(messages)
+				bd := breakdownAcc.update(messages)
 				bd.ToolSchemas = estimateToolSchemaTokens(tools)
 				finalizeContextBreakdownTotal(&bd)
 				if a.recordGoalTurn(sessionID, bd.Total, time.Since(startTime)) == nil {

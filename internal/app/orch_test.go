@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -580,6 +581,31 @@ func TestComputeLiveBreakdownSetsTotal(t *testing.T) {
 
 	if bd.Total <= 0 {
 		t.Fatalf("expected live breakdown total to be set, got %#v", bd)
+	}
+}
+
+func TestLiveBreakdownAccumulatorMatchesFullRecalculation(t *testing.T) {
+	messages := []openai.ChatCompletionMessage{
+		{Role: openai.ChatMessageRoleUser, Content: "hello"},
+		{Role: openai.ChatMessageRoleAssistant, Content: "hi"},
+	}
+	acc := newLiveBreakdownAccumulator(messages)
+	messages = append(messages,
+		openai.ChatCompletionMessage{Role: openai.ChatMessageRoleAssistant, ToolCalls: []openai.ToolCall{{Function: openai.FunctionCall{Name: "read", Arguments: `{"files":[{"path":"a.go"}]}`}}}},
+		openai.ChatCompletionMessage{Role: openai.ChatMessageRoleTool, Content: `{"ok":true}`},
+	)
+	got := acc.update(messages)
+	want := computeLiveBreakdown(messages)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("incremental breakdown = %#v, full breakdown = %#v", got, want)
+	}
+
+	rebuilt := []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleUser, Content: "rebuilt"}}
+	acc.reset(rebuilt)
+	got = acc.update(rebuilt)
+	want = computeLiveBreakdown(rebuilt)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("reset breakdown = %#v, full breakdown = %#v", got, want)
 	}
 }
 

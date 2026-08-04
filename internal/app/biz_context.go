@@ -393,27 +393,74 @@ func (a *App) getContextBreakdown(sessionID string) ContextBreakdown {
 	return result
 }
 
+// liveBreakdownAccumulator exploits the append-only shape of the runChat
+// message list. It scans only messages added since the previous step; callers
+// reset it after goal rebuilds or context compaction, where the slice is
+// replaced wholesale.
+type liveBreakdownAccumulator struct {
+	nextMessage int
+	breakdown   ContextBreakdown
+}
+
+func newLiveBreakdownAccumulator(messages []openai.ChatCompletionMessage) *liveBreakdownAccumulator {
+	acc := &liveBreakdownAccumulator{}
+	acc.update(messages)
+	return acc
+}
+
+func (acc *liveBreakdownAccumulator) reset(messages []openai.ChatCompletionMessage) {
+	if acc == nil {
+		return
+	}
+	acc.nextMessage = 0
+	acc.breakdown = ContextBreakdown{}
+	acc.update(messages)
+}
+
+func (acc *liveBreakdownAccumulator) update(messages []openai.ChatCompletionMessage) ContextBreakdown {
+	if acc == nil {
+		return computeLiveBreakdown(messages)
+	}
+	if acc.nextMessage > len(messages) {
+		acc.nextMessage = 0
+		acc.breakdown = ContextBreakdown{}
+	}
+	for _, message := range messages[acc.nextMessage:] {
+		addLiveBreakdownMessage(&acc.breakdown, message)
+	}
+	acc.nextMessage = len(messages)
+	finalizeContextBreakdownTotal(&acc.breakdown)
+	return acc.breakdown
+}
+
+func addLiveBreakdownMessage(result *ContextBreakdown, message openai.ChatCompletionMessage) {
+	if result == nil {
+		return
+	}
+	tokens := estimateMessageBodyTokens(message)
+	switch message.Role {
+	case "user":
+		result.UserMessages += tokens
+	case "assistant":
+		result.AssistantMsgs += tokens
+	case "tool":
+		result.ToolResults += tokens
+	}
+	for _, tc := range message.ToolCalls {
+		result.AssistantMsgs += estimateTokensFromText(tc.Function.Name) + estimateTokensFromText(tc.Function.Arguments)
+	}
+	if message.ReasoningContent != "" {
+		result.Reasoning += estimateTokensFromText(message.ReasoningContent)
+	}
+}
+
 // computeLiveBreakdown builds a ContextBreakdown from the actual live messages that will be sent to the API.
 // This includes tool call arguments (assistant msgs with ToolCalls) and tool result messages,
 // which are filtered out by saveHistory and thus missing from a.histories.
 func computeLiveBreakdown(msgs []openai.ChatCompletionMessage) ContextBreakdown {
 	result := ContextBreakdown{}
-	for _, m := range msgs {
-		tokens := estimateMessageBodyTokens(m)
-		switch m.Role {
-		case "user":
-			result.UserMessages += tokens
-		case "assistant":
-			result.AssistantMsgs += tokens
-		case "tool":
-			result.ToolResults += tokens
-		}
-		for _, tc := range m.ToolCalls {
-			result.AssistantMsgs += estimateTokensFromText(tc.Function.Name) + estimateTokensFromText(tc.Function.Arguments)
-		}
-		if m.ReasoningContent != "" {
-			result.Reasoning += estimateTokensFromText(m.ReasoningContent)
-		}
+	for _, message := range msgs {
+		addLiveBreakdownMessage(&result, message)
 	}
 	finalizeContextBreakdownTotal(&result)
 	return result
