@@ -117,10 +117,15 @@ func TestBuiltinSkillEntriesContainsReview(t *testing.T) {
 		t.Fatalf("expected Source=builtin, got %q", rv.Source)
 	}
 	if rv.embeddedContent == "" {
-		t.Fatal("expected embeddedContent to be populated for built-in skill")
+		t.Fatal("expected embeddedContent to be populated for review")
 	}
-	if !strings.Contains(rv.embeddedContent, "subagent") {
-		t.Fatalf("expected embedded content to mention subagent (Ally-native delegation)")
+	for _, required := range []string{"全自动", "不调用 `ask`", "当前对话", "## 结论", "## 需要处理的问题", "位置：", "影响：", "建议："} {
+		if !strings.Contains(rv.embeddedContent, required) {
+			t.Fatalf("expected review skill to contain %q", required)
+		}
+	}
+	if strings.Contains(rv.embeddedContent, "找不到就问用户") {
+		t.Fatal("review skill must not ask the user to identify a missing requirement")
 	}
 	if !strings.HasPrefix(rv.Path, "builtin://") {
 		t.Fatalf("expected Path to start with builtin://, got %q", rv.Path)
