@@ -297,6 +297,8 @@ defaultSystemPrompt() → buildSystemPromptParts()
 
 - Vue 3 `<script setup>` + `ref()` / `reactive()`
 - 无 Vuex/Pinia
+- Header 使用受控 Naive UI Tabs；Header 与聊天内容区共享 `activeWorkspaceId`，拖拽排序和快捷键切换都操作同一 `workspaceTabs`
+- 每个打开的工作区 Tab 常驻一个 `ChatMessages` + `n-tab-pane`，`display-directive="show"` 仅隐藏非活动面板，保留消息 DOM 和原生滚动位置
 - 提示历史保存在 `localStorage`；会话索引和 UI 快照由后端写入 `~/.ally_agent/sessions/` 本地文件
 
 ### 国际化
@@ -307,7 +309,7 @@ defaultSystemPrompt() → buildSystemPromptParts()
 
 ## 会话与上下文
 
-- 前端会话：启动只从后端 `~/.ally_agent/sessions/index.json` 读取轻量索引；点击会话后通过 `LoadSession` 按需加载单个 gzip 快照，非活动会话消息从前端内存释放
+- 前端会话：启动只从后端 `~/.ally_agent/sessions/index.json` 读取轻量索引；点击会话后通过 `LoadSession` 按需加载 gzip 快照。打开工作区 Tab 关联的会话保持在内存并常驻 DOM，未被任何打开 Tab 持有的非活动会话才可释放消息
 - 关闭窗口不采集当前会话，只等待 `SaveSession`/`SaveSessionIndex` 已排队的本地文件写入完成；旧 `localStorage`/IndexedDB 会话数据只做一次迁移并清理
 - 首次启动不默认绑定可执行文件或进程目录；用户首次发送普通任务时选择工作区，后端拒绝空工作区
 - 后端历史：`map[sessionID][]ChatCompletionMessage`，磁盘使用 gzip JSON，并按约 256k token 预算从完整 user 边界裁剪，不再固定为 40 条
@@ -320,11 +322,12 @@ defaultSystemPrompt() → buildSystemPromptParts()
 
 | 区域 | 策略 |
 |------|------|
-| 流渲染 | ~20 FPS 批量 delta，缓存已完成的非流式渲染块 |
+| Tab 切换 | Header/内容 Tabs 共用受控 `activeWorkspaceId`；每个打开 Tab 的 `ChatMessages` 常驻，`v-show` 保留滚动容器 |
+| 流渲染 | ~20 FPS 批量 delta，按会话缓存显示消息结构，缓存已完成的非流式渲染块 |
 | Mermaid | 视口附近渲染，超出区域卸载，16项LRU恢复 |
 | diff | 精确LCS限于25万行矩阵上限，大替换用前缀/后缀回退 |
 | 媒体预览 | revocable Blob URL，Base64仅在需要模型输入时保留 |
-| 会话持久化 | 后端 `sessions/index.json` 保存索引、每会话 gzip JSON 保存 UI 快照；前端仅保留当前/运行中消息，大 tool 预览在写盘前截断 |
+| 会话持久化 | 后端 `sessions/index.json` 保存索引、每会话 gzip JSON 保存 UI 快照；关闭 Tab 后对应会话恢复为按需加载，大 tool 预览在写盘前截断 |
 | 工具事件 | 后端200ms/2048B节流，前端120ms rAF批量 flush |
 
 ---

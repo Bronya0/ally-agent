@@ -7,30 +7,38 @@
     <div class="header-tabs-area">
       <div
         ref="workspaceTabsRef"
-        class="workspace-tabs"
+        class="workspace-tabs-host"
         @dragover.prevent="onWorkspaceTabsDragOver"
         @drop.prevent="onWorkspaceTabsDrop"
       >
-        <div
-          v-for="tab in workspaceTabs"
-          :key="tab.id"
-          :class="['workspace-tab', { active: tab.id === activeWorkspaceId, running: tab.isRunning, dragging: tab.id === draggedWorkspaceId, 'drop-before': isDropBefore(tab.id), 'drop-after': isDropAfter(tab.id) }]"
-          :data-tab-id="tab.id"
-          :draggable="workspaceTabs.length > 1"
-          @click="$emit('switchWorkspace', tab.id)"
-          @dragstart="onWorkspaceDragStart($event, tab.id)"
-          @dragover.prevent.stop="onWorkspaceDragOver($event, tab.id)"
-          @drop.prevent.stop="onWorkspaceDrop($event, tab.id)"
-          @dragend="onWorkspaceDragEnd"
+        <n-tabs
+          class="workspace-tabs"
+          type="bar"
+          size="small"
+          :value="activeWorkspaceId"
+          @update:value="onWorkspaceTabUpdate"
         >
-          <span v-if="tab.isRunning" class="tab-running-dot" :aria-label="$t('header.running')"></span>
-          <span class="tab-label">{{ tab.label }}</span>
-          <button type="button" class="tab-close" :title="$t('header.close')" :aria-label="$t('header.close')" @click.stop="$emit('closeWorkspace', tab.id)">
-            <svg class="tab-close-icon" width="14" height="14" viewBox="0 0 14 14" fill="currentColor" aria-hidden="true">
-              <path d="M3.383 4.617 4.617 3.383 7 5.766l2.383-2.383 1.234 1.234L8.234 7l2.383 2.383-1.234 1.234L7 8.234l-2.383 2.383-1.234-1.234L5.766 7 3.383 4.617Z" />
-            </svg>
-          </button>
-        </div>
+          <n-tab
+            v-for="tab in workspaceTabs"
+            :key="tab.id"
+            :name="tab.id"
+            :class="['workspace-tab', { active: tab.id === activeWorkspaceId, running: tab.isRunning, dragging: tab.id === draggedWorkspaceId, 'drop-before': isDropBefore(tab.id), 'drop-after': isDropAfter(tab.id) }]"
+            :data-tab-id="tab.id"
+            :draggable="workspaceTabs.length > 1"
+            @dragstart="onWorkspaceDragStart($event, tab.id)"
+            @dragover.prevent.stop="onWorkspaceDragOver($event, tab.id)"
+            @drop.prevent.stop="onWorkspaceDrop($event, tab.id)"
+            @dragend="onWorkspaceDragEnd"
+          >
+            <span v-if="tab.isRunning" class="tab-running-dot" :aria-label="$t('header.running')"></span>
+            <span class="tab-label">{{ tab.label }}</span>
+            <button type="button" class="tab-close" :title="$t('header.close')" :aria-label="$t('header.close')" @click.stop="$emit('closeWorkspace', tab.id)">
+              <svg class="tab-close-icon" width="14" height="14" viewBox="0 0 14 14" fill="currentColor" aria-hidden="true">
+                <path d="M3.383 4.617 4.617 3.383 7 5.766l2.383-2.383 1.234 1.234L8.234 7l2.383 2.383-1.234 1.234L7 8.234l-2.383 2.383-1.234-1.234L5.766 7 3.383 4.617Z" />
+              </svg>
+            </button>
+          </n-tab>
+        </n-tabs>
       </div>
       <div class="header-tabs-actions">
         <n-button class="header-icon-button tabs-action-button" size="small" quaternary @click="$emit('addWorkspace')" :title="$t('header.addWorkspace')" :aria-label="$t('header.addWorkspace')">
@@ -118,7 +126,7 @@ import { h, ref } from 'vue';
 import { NDropdown } from 'naive-ui';
 import AllyWordmark from './AllyWordmark.vue';
 
-defineProps({
+const props = defineProps({
   workspaceTabs: { type: Array, required: true },
   activeWorkspaceId: { type: String, required: true },
   grillModeActive: { type: Boolean, default: false },
@@ -166,6 +174,10 @@ function setDragPreview(targetId, after) {
   dragPreview.value = { targetId, after };
 }
 
+function onWorkspaceTabUpdate(id) {
+  if (id && id !== props.activeWorkspaceId) emit('switchWorkspace', id);
+}
+
 function onWorkspaceDragStart(event, id) {
   draggedWorkspaceId.value = id;
   dragPreview.value = null;
@@ -184,7 +196,6 @@ function onWorkspaceDragOver(event, targetId) {
 }
 
 function onWorkspaceTabsDragOver(event) {
-  if (event.target !== event.currentTarget) return;
   if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
   const tabs = Array.from(workspaceTabsRef.value?.querySelectorAll('.workspace-tab') || []);
   let target = null;
@@ -218,7 +229,6 @@ function onWorkspaceDrop(event, targetId) {
 }
 
 function onWorkspaceTabsDrop(event) {
-  if (event.target !== event.currentTarget) return;
   onWorkspaceTabsDragOver(event);
   const sourceId = draggedWorkspaceId.value || event.dataTransfer?.getData('text/plain');
   const preview = dragPreview.value;
@@ -251,7 +261,7 @@ function onOpenSettings(event) {
 }
 
 function onRepositoryClick() {
-  if (updateAvailable && updateAutoSupported) {
+  if (props.updateAvailable && props.updateAutoSupported) {
     emit('startUpdate');
   } else {
     emit('openRepository');
@@ -397,17 +407,61 @@ body.platform-darwin .brand-wordmark {
   overflow: hidden;
 }
 
-.workspace-tabs {
+.workspace-tabs-host {
   display: flex;
   align-items: center;
-  overflow-x: auto;
-  gap: 4px;
+  overflow: hidden;
   height: 100%;
   flex: 1;
   min-width: 0;
+  --wails-draggable: no-drag;
 }
 
-.workspace-tabs::-webkit-scrollbar {
+.workspace-tabs {
+  width: 100%;
+  min-width: 0;
+  height: 100%;
+  --n-tab-gap: 0 !important;
+  --n-tab-padding: 0 !important;
+  --n-bar-color: rgba(204, 120, 50, 0.62) !important;
+  --wails-draggable: no-drag;
+}
+
+.workspace-tabs :deep(.n-tabs-nav),
+.workspace-tabs :deep(.n-tabs-nav-scroll-wrapper),
+.workspace-tabs :deep(.v-x-scroll),
+.workspace-tabs :deep(.n-tabs-nav-scroll-content),
+.workspace-tabs :deep(.n-tabs-wrapper),
+.workspace-tabs :deep(.n-tabs-tab-wrapper) {
+  height: 100%;
+}
+
+.workspace-tabs :deep(.n-tabs-nav-scroll-content),
+.workspace-tabs :deep(.n-tabs-wrapper) {
+  align-items: stretch;
+}
+
+.workspace-tabs :deep(.n-tabs-tab-pad),
+.workspace-tabs :deep(.n-tabs-scroll-padding) {
+  width: 0 !important;
+}
+
+.workspace-tabs :deep(.n-tabs-bar) {
+  bottom: 0;
+  height: 1px;
+  border-radius: 1px 1px 0 0;
+  opacity: 0.72;
+}
+
+.workspace-tabs :deep(.workspace-tab .n-tabs-tab__label) {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+}
+
+.workspace-tabs :deep(.n-tabs-nav-scroll-wrapper)::-webkit-scrollbar {
   height: 0;
 }
 
@@ -469,14 +523,14 @@ body.platform-darwin .window-close-icon {
   color: #fff;
 }
 
-.workspace-tab {
+.workspace-tabs :deep(.workspace-tab) {
   position: relative;
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 0 7px 0 11px;
-  height: 34px;
-  border-radius: 8px;
+  padding: 0 7px 0 11px !important;
+  height: 100%;
+  border-radius: 0;
   cursor: grab;
   color: var(--header-muted);
   font-size: 12px;
@@ -487,20 +541,20 @@ body.platform-darwin .window-close-icon {
   flex-shrink: 0;
   min-width: 108px;
   max-width: 180px;
-  border: 1px solid transparent;
+  border: 0;
   --wails-draggable: no-drag;
 }
 
-.workspace-tab.drop-before {
+.workspace-tabs :deep(.workspace-tab.drop-before) {
   margin-left: 24px;
 }
 
-.workspace-tab.drop-after {
+.workspace-tabs :deep(.workspace-tab.drop-after) {
   margin-right: 24px;
 }
 
-.workspace-tab.drop-before::before,
-.workspace-tab.drop-after::after {
+.workspace-tabs :deep(.workspace-tab.drop-before::before),
+.workspace-tabs :deep(.workspace-tab.drop-after::after) {
   content: '';
   position: absolute;
   top: 6px;
@@ -512,47 +566,47 @@ body.platform-darwin .window-close-icon {
   pointer-events: none;
 }
 
-.workspace-tab.drop-before::before {
+.workspace-tabs :deep(.workspace-tab.drop-before::before) {
   left: -12px;
 }
 
-.workspace-tab.drop-after::after {
+.workspace-tabs :deep(.workspace-tab.drop-after::after) {
   right: -12px;
 }
 
-.workspace-tab:active {
+.workspace-tabs :deep(.workspace-tab:active) {
   cursor: grabbing;
 }
 
-.workspace-tab.dragging {
+.workspace-tabs :deep(.workspace-tab.dragging) {
   opacity: 0.45;
 }
 
-.workspace-tab:hover {
+.workspace-tabs :deep(.workspace-tab:hover) {
   background: var(--header-hover-bg);
   color: var(--header-text);
 }
 
-.workspace-tab.active {
+.workspace-tabs :deep(.workspace-tab.active) {
   color: var(--header-strong);
   background: var(--header-active-bg);
   border-color: transparent;
-  box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--ally-accent) 38%, transparent);
+  box-shadow: none;
 }
 
-.workspace-tab.running {
+.workspace-tabs :deep(.workspace-tab.running) {
   color: #d4d4d4;
 }
 
-.workspace-tab.running.active {
+.workspace-tabs :deep(.workspace-tab.running.active) {
   color: #f5f5f5;
 }
 
-.workspace-tab.running .tab-label {
+.workspace-tabs :deep(.workspace-tab.running .tab-label) {
   font-weight: 500;
 }
 
-.workspace-tab .tab-label {
+.workspace-tabs :deep(.workspace-tab .tab-label) {
   display: inline-flex;
   align-items: center;
   flex: 1;
@@ -571,7 +625,7 @@ body.platform-darwin .window-close-icon {
   flex: none;
 }
 
-.workspace-tab .tab-close {
+.workspace-tabs :deep(.workspace-tab .tab-close) {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -588,12 +642,12 @@ body.platform-darwin .window-close-icon {
   flex-shrink: 0;
 }
 
-.workspace-tab .tab-close:hover {
+.workspace-tabs :deep(.workspace-tab .tab-close:hover) {
   background: rgba(255, 255, 255, 0.12);
   color: #f5f5f5;
 }
 
-.workspace-tab.running .tab-close {
+.workspace-tabs :deep(.workspace-tab.running .tab-close) {
   color: rgba(216, 248, 231, 0.7);
 }
 

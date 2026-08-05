@@ -296,7 +296,26 @@ code, pre {
   background-color: #1a1a1a !important;
 }
 
+.workspace-content-tabs {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
 
+.workspace-content-tabs > .n-tabs-nav {
+  display: none;
+}
+
+.workspace-content-tabs > .workspace-chat-pane {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  height: 100%;
+}
 .render-boundary-error {
   display: inline-flex;
   align-items: center;
