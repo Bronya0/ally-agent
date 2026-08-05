@@ -163,7 +163,7 @@ Important config behavior:
 
 - `mergeConfig()` preserves existing config values when overlay fields are zero/empty. `apiKeys` is replaced as a whole when non-nil; a legacy `apiKey`-only overlay replaces the pool with a single key.
 - `apiKey` and `apiKeys` stay in sync: the pool is the source of truth and `apiKey` mirrors its first entry; a legacy config with only `apiKey` is loaded as a single-key pool.
-- Multi-key requests use strict priority failover: the first usable (not cooling down) key is always tried first; on auth/quota errors the key enters a 60s in-memory cooldown, on transient errors a 10s cooldown, then the next key is tried, up to a global attempt cap (`maxMultiKeyAttempts`) that replaces per-key adapter retries. Failover only happens before any stream output is emitted. Cooldown state is process-local and never persisted.
+- Multi-key requests use strict priority failover: the first usable (not cooling down) key is always tried first; on auth/quota errors the key enters a 30min in-memory cooldown, on transient errors a 10s cooldown, then the next key is tried, up to a global attempt cap (`maxMultiKeyAttempts`) that replaces per-key adapter retries. Failover only happens before any stream output is emitted. Cooldown state is process-local and never persisted.
 - `disabledSkills` is normalized and persisted.
 - Skill enable/disable operations update both memory and `config.json`.
 - Frontend `defaultConfig()` also includes `disabledSkills` so saving settings does not erase skill state.

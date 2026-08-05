@@ -112,7 +112,7 @@ ConfigState (~/.ally_agent/config.json)
 
 - `mergeConfig()` 保留已有配置，零值/空值不做覆盖；`apiKeys` 非空时整体替换，旧前端仅发 `apiKey` 时退化为单 key 池
 - `apiKey` 与 `apiKeys` 保持同步：池为准，`apiKey` 镜像首个条目；旧配置仅有 `apiKey` 时自动构造单 key 池
-- 多 key 请求采用严格优先级故障转移：始终优先第一个可用（不在冷却）key；认证/配额错误后该 key 进入 60s 进程内冷却，瞬时错误 10s，然后顺延到下一个；总尝试次数有上限（`maxMultiKeyAttempts`），多 key 模式下关闭适配器内退避重试避免次数组合爆炸；仅在尚未输出任何流事件时切换；冷却状态不持久化
+- 多 key 请求采用严格优先级故障转移：始终优先第一个可用（不在冷却）key；认证/配额错误后该 key 进入 30min 进程内冷却，瞬时错误 10s，然后顺延到下一个；总尝试次数有上限（`maxMultiKeyAttempts`），多 key 模式下关闭适配器内退避重试避免次数组合爆炸；仅在尚未输出任何流事件时切换；冷却状态不持久化
 - 配置保存到 `~/.ally_agent/config.json`
 - 前端通过 Wails 绑定 `GetConfig()` / `SaveConfig()` 读写
 - `reasoningEffort` 默认 `auto`（不发送思考强度参数）；用户选择的 low/medium/high/xhigh/max 会由各适配器原样发送到对应的 reasoning 参数，Anthropic 使用 `output_config.effort` 且不启用 thinking 块；不支持的值由 Provider 返回错误，不静默降级

@@ -200,7 +200,7 @@ func (a *App) streamModelResponse(ctx context.Context, cfg ConfigState, model st
 		return a.streamModelResponseWithKey(ctx, cfg, model, messages, tools, onEvent)
 	}
 	// 多 key:固定优先级故障转移 + 冷却。每次尝试从第一个可用(不在冷却)
-	// 的 key 开始;失败后按错误类别记录冷却(认证/配额 60s,瞬时 10s)并顺延
+	// 的 key 开始;失败后按错误类别记录冷却(认证/配额 30min,瞬时 10s)并顺延
 	// 到下一个,直到成功或全部失败。总尝试次数有上限(maxMultiKeyAttempts),
 	// 且通过 noAdapterRetry 关闭适配器内退避重试,由本循环统一承担重试与
 	// 轮换,避免 N 个 key × 适配器重试组合爆炸。
@@ -285,10 +285,10 @@ func (a *App) streamModelResponseWithKey(ctx context.Context, cfg ConfigState, m
 
 // keyAuthCooldownDuration 是认证/配额类错误(401/403/invalid key/quota)后
 // 的冷却窗口:key 本身已失效,短时间重试无意义。
-const keyAuthCooldownDuration = 300 * time.Second
+const keyAuthCooldownDuration = 30 * time.Minute
 
 // keyTransientCooldownDuration 是瞬时错误(429/5xx/网络)后的冷却窗口。比
-// 认证错误短,避免端点短暂故障时把整个 key 池冷却 60 秒(fail-fast 但快速自愈)。
+// 认证错误短,避免端点短暂故障时把整个 key 池冷却 30 分钟(fail-fast 但快速自愈)。
 const keyTransientCooldownDuration = 10 * time.Second
 
 // maxMultiKeyAttempts 是单次请求在多 key 模式下最多尝试的总次数(含故障切换)。
