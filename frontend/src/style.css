@@ -2075,6 +2075,11 @@ code, pre {
   contain-intrinsic-size: 42px;
 }
 
+/* Keep consecutive tool calls compact without changing tool-to-message spacing. */
+.rich-tool-card:has(+ .rich-tool-card) {
+  margin-bottom: 3px;
+}
+
 .rich-tool-card.non-interactive {
   cursor: default;
 }
