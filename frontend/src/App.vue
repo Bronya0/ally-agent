@@ -1378,6 +1378,7 @@ const builtinCommands = [
   { key: 'init', label: '/init', description: t('commands.init'), text: '', special: 'init' },
   { key: 'note', label: '/note', description: t('commands.note'), text: '', special: 'remember' },
   { key: 'compact', label: '/compact', description: t('commands.compact'), text: '', special: 'compact' },
+  { key: 'push', label: '/push', description: t('commands.push'), text: '', special: 'push' },
 ];
 
 // Dynamically includes skill commands
@@ -1428,6 +1429,16 @@ const REMEMBER_PROMPT = `Save durable project knowledge from this conversation.
 3. Use memory_read first if an existing memory from the global memory index may already cover this project.
 4. Save or update the knowledge with memory_write. Use an explicit stable path such as project-knowledge/<workspace-or-project-name>.md.
 5. Do not edit AGENTS.md for this command. Do not save speculation, one-off task status, transient bug-fix notes, or generic advice.`;
+
+const PUSH_PROMPT = `Push local git changes to the remote.
+
+Task requirements:
+1. Run git status and git diff to review what has changed.
+2. Stage all local changes (git add -A) and commit them with ONE concise sentence.
+3. Push the commit to the remote (git push).
+4. If there is nothing to commit, report that and skip the push.
+5. If the project or environment defines git conventions (e.g. in AGENTS.md), follow them for commit message style and author.
+6. Report the final result: commit message, hash, branch, and push status.`;
 
 const activeSession = computed(() => sessions.value.find((session) => session.id === activeSessionId.value));
 const GRILL_BLOCKED_TOOL_NAMES = new Set([
@@ -3194,12 +3205,8 @@ function bindRuntimeEvents() {
         msg.streaming = false;
         msg.done = true;
         finalizeReasoningTiming(msg);
-        // If the model only emitted reasoning content and no regular content,
-        // promote reasoning to main content so it shows in the body.
-        if (msg.reasoningBody && !msg.content) {
-          msg.content = msg.reasoningBody;
-          msg.reasoningBody = '';
-        }
+        // 思考内容始终保留在折叠的 thinking 区，不转正为正文：
+        // 对话正常结束（即使模型只输出了思考、没有正文）。
         break;
       }
       i--;
@@ -4127,7 +4134,7 @@ async function sendPrompt() {
       // Send as normal message
     } else if (slashContent) {
       // Check if it's a builtin command first
-      const builtinPrefixes = ['new','plan','goal','skills','clear','switch','sessions','reload','init','note','remember','compact'];
+      const builtinPrefixes = ['new','plan','goal','skills','clear','switch','sessions','reload','init','note','remember','compact','push'];
       const cmdName = slashContent.split(/\s+/)[0];
       const isBuiltin = builtinPrefixes.includes(cmdName);
       // Also check if any skill name matches
@@ -4647,6 +4654,12 @@ async function handleBuiltinCommand(command) {
   }
   if (command.special === 'compact') {
     await handleCompactCommand();
+    promptText.value = '';
+    commandMenuVisible.value = false;
+    return true;
+  }
+  if (command.special === 'push') {
+    handlePushCommand();
     promptText.value = '';
     commandMenuVisible.value = false;
     return true;
@@ -5710,6 +5723,31 @@ function handleRememberCommand() {
       session.runId = '';
       session.isRunning = false;
       pushMessage('assistant', t('app.note.failed', { error: err }), { error: true, transientTurn: true });
+    });
+}
+
+function handlePushCommand() {
+  const session = activeSession.value;
+  if (!session) return;
+  const history = session.messages
+    .filter(isModelHistoryMessage)
+    .map((msg) => ({ role: msg.role, content: msg.content }));
+  history.push({ role: 'user', content: PUSH_PROMPT });
+
+  session.messages.push({ role: 'user', content: t('app.push.visibleText'), done: true });
+  if (isDefaultSessionTitle(session.title)) {
+    session.title = t('app.push.title');
+  }
+  scrollMessagesToBottom();
+  saveSessions();
+
+  markSessionRunning(session);
+  StartChat({ sessionId: session.id, message: '', messages: history, grillMode: !!session.grillMode, config: { ...config, extraRoots: session.extraRoots || [] } })
+    .catch((err) => {
+      markTransientTurn(session);
+      session.runId = '';
+      session.isRunning = false;
+      pushMessage('assistant', t('app.push.failed', { error: err }), { error: true, transientTurn: true });
     });
 }
 

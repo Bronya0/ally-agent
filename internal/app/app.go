@@ -3437,7 +3437,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		dec := json.NewDecoder(bytes.NewReader(args))
 		dec.DisallowUnknownFields()
 		if err := dec.Decode(v); err != nil {
-			return err
+			return fmt.Errorf("工具参数 JSON 不完整（输出被截断或流中断），请重新生成完整参数后再试: %w", err)
 		}
 		var extra any
 		if err := dec.Decode(&extra); err != io.EOF {
