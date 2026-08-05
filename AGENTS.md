@@ -436,7 +436,7 @@ Text files:
 - reject binary/NUL content
 - return LF-normalized text with display-only 1-based `N: ` prefixes; omit those prefixes from `oldText`/`newText`, and use the displayed numbers in `lineRange`
 - missing paths and directory targets are silently omitted from the returned `files` array (an ignored-only batch succeeds with an empty array); other partial failures stay in the corresponding file result with `errorCode` when known
-- include metadata: `startLine`, `endLine`, `nextStartLine`, `totalLines`, `truncated`, `version`, `lineEnding`; `version` is a 12-character lowercase Crockford Base32 prefix derived from SHA-256 content and is compared case-insensitively
+- include metadata: `startLine`, `endLine`, `nextStartLine`, `totalLines`, `truncated`, `truncatedLines`, `truncatedLinesOmitted`, `version`, `lineEnding`; `version` is a 12-character lowercase Crockford Base32 prefix derived from SHA-256 content and is compared case-insensitively
 
 Document files:
 
@@ -448,12 +448,13 @@ Document files:
 Range semantics for model-facing reads:
 
 - omit both `startLine` and `endLine` to read the whole file
-- provide only `startLine` to read from that line through the end of the file
-- provide only `endLine` to read from line 1 through that inclusive line
-- provide both for an inclusive range
-- `lineCount`, `contextBefore`, `contextAfter`, and `offset` are not model-facing parameters
-- hard output limits may still set `truncated` and `nextStartLine`; the model should request another explicit range only when the remaining content is actually needed
-- plain-text range previews count and locate lines with bounded-memory linear scans instead of materializing one string entry per file line, so tiny reads remain safe on million-line files and very long single lines stay UTF-8/budget bounded
+- provide a positive `startLine` without `endLine` to read from that line through the end
+- provide only `endLine` to read lines 1 through that inclusive line
+- provide both positive values for an inclusive range
+- for text files, a negative `startLine` reads the last N lines; its absolute value is limited to 10000 and it must not be combined with `endLine`
+- each displayed text line is capped at 2000 Unicode characters; `truncatedLines` identifies lines shortened by that cap, and `truncatedLinesOmitted` indicates that the bounded line-number list omitted additional entries
+- `truncated` is set both when a hard output limit cut the range (then `nextStartLine` points at the rest) and when individual lines were shortened (then `truncatedLines` identifies them); the model should request another explicit range only when the remaining content is actually needed
+- plain-text range previews count and locate lines with bounded-memory linear scans instead of materializing one string entry per file line, so tiny reads remain safe on million-line files and tail reads use a bounded reverse scan; very long single lines stay UTF-8/budget bounded
 
 The model-facing `edit` tool has one cross-file batch mode with two exclusive source forms: `lineRange` (preferred) or a small exact `oldText`. Legacy top-level string and line helpers remain backend compatibility APIs and are not exposed to the model.
 
@@ -719,9 +720,9 @@ Example MCP config:
 - Workspace write operations are confined to the configured workspace, except `~/.ally_agent` is also allowed for Ally global config and memories.
 - Read-only local tools may inspect explicit absolute paths outside the workspace subject to safety checks.
 - `run_command` keeps cwd inside the workspace, permits outside reads, null-device redirection, and creation of new outside paths, but refuses commands that may modify/delete existing outside paths or perform explicit deletion.
-- Command safety uses lightweight shell-aware invocation parsing in `internal/tools/command`: quoted/search data is not treated as executable syntax, nested shell payloads and command substitutions are inspected, managed deletions are allowed only when every deletion in the compound command is managed, and source/destination-aware mutation analysis checks explicit write targets rather than every referenced path.
-- `checkCommandSafety()` in `orch_command_safety.go` is the app-owned boundary for workspace roots, path existence, `E_COMMAND_BLOCKED` / `E_PATH_OUTSIDE`, and user-facing explanations; it must consume the command package's semantic analysis instead of adding independent full-string risk regexes.
-- The model-facing system prompt and `run_command` schema explain how to recover from `E_PATH_OUTSIDE`: read the Chinese reason/target, avoid unchanged retries, choose a new or workspace target, and replace dynamic redirections with literal paths.
+- Command safety uses lightweight shell-aware invocation parsing in `internal/tools/command`: quoted/search data is not treated as executable syntax, nested shell payloads and command substitutions are inspected, managed deletions are allowed only when every deletion in the compound command is managed, and source/destination-aware mutation analysis checks explicit write targets rather than every referenced path. Heredoc bodies and here-strings are skipped as data (quoted delimiters are fully literal; unquoted bodies still have command substitutions inspected).
+- `checkCommandSafety()` in `orch_command_safety.go` is the app-owned boundary for workspace roots, path existence, `E_COMMAND_BLOCKED` / `E_PATH_OUTSIDE`, and user-facing explanations; it must consume the command package's semantic analysis instead of adding independent full-string risk regexes. Redirection/mutation targets that cannot be statically resolved (variables, globs, heredoc artifacts) are allowed through permissively; only literal existing outside paths are blocked.
+- The model-facing system prompt and `run_command` schema explain how to recover from `E_PATH_OUTSIDE`: read the Chinese reason/target, avoid unchanged retries, choose a new or workspace target, and replace literal outside targets with workspace paths.
 - Prefer `delete_path` / `remote_delete_path` over shell deletion.
 - `readTextFile` rejects binary files using NUL checks.
 - Release packages bundle ripgrep under the executable's `tools/` directory; development builds fall back to `rg` from `PATH`.

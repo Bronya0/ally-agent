@@ -472,26 +472,28 @@ type ReadFileRequest struct {
 }
 
 type ReadFileResult struct {
-	Path          string   `json:"path"`
-	Content       string   `json:"content"`
-	RawContent    string   `json:"-"`
-	Text          string   `json:"text,omitempty"`
-	Kind          string   `json:"kind,omitempty"`
-	ContentFormat string   `json:"contentFormat,omitempty"`
-	Type          string   `json:"type,omitempty"`
-	Editable      bool     `json:"editable"`
-	StartLine     int      `json:"startLine"`
-	EndLine       int      `json:"endLine"`
-	NextStartLine int      `json:"nextStartLine,omitempty"`
-	TotalLines    int      `json:"totalLines"`
-	SHA256        string   `json:"sha256"`
-	Version       string   `json:"version"`
-	Size          int64    `json:"size"`
-	LineEnding    string   `json:"lineEnding"`
-	Truncated     bool     `json:"truncated"`
-	RangeStatus   string   `json:"rangeStatus,omitempty"`
-	EmptyRange    bool     `json:"emptyRange,omitempty"`
-	Sheets        []string `json:"sheets,omitempty"`
+	Path                  string   `json:"path"`
+	Content               string   `json:"content"`
+	RawContent            string   `json:"-"`
+	Text                  string   `json:"text,omitempty"`
+	Kind                  string   `json:"kind,omitempty"`
+	ContentFormat         string   `json:"contentFormat,omitempty"`
+	Type                  string   `json:"type,omitempty"`
+	Editable              bool     `json:"editable"`
+	StartLine             int      `json:"startLine"`
+	EndLine               int      `json:"endLine"`
+	NextStartLine         int      `json:"nextStartLine,omitempty"`
+	TotalLines            int      `json:"totalLines"`
+	SHA256                string   `json:"sha256"`
+	Version               string   `json:"version"`
+	Size                  int64    `json:"size"`
+	LineEnding            string   `json:"lineEnding"`
+	Truncated             bool     `json:"truncated"`
+	TruncatedLines        []int    `json:"truncatedLines,omitempty"`
+	TruncatedLinesOmitted bool     `json:"truncatedLinesOmitted,omitempty"`
+	RangeStatus           string   `json:"rangeStatus,omitempty"`
+	EmptyRange            bool     `json:"emptyRange,omitempty"`
+	Sheets                []string `json:"sheets,omitempty"`
 }
 
 type ReplaceExactRequest struct {
@@ -948,26 +950,28 @@ type BatchReadFileRequest struct {
 }
 
 type BatchReadResultItem struct {
-	Path          string   `json:"path"`
-	Content       string   `json:"content"`
-	Text          string   `json:"text,omitempty"`
-	Kind          string   `json:"kind,omitempty"`
-	ContentFormat string   `json:"contentFormat,omitempty"`
-	Type          string   `json:"type,omitempty"`
-	Editable      bool     `json:"editable"`
-	StartLine     int      `json:"startLine"`
-	EndLine       int      `json:"endLine"`
-	NextStartLine int      `json:"nextStartLine,omitempty"`
-	Version       string   `json:"version"`
-	Size          int64    `json:"size"`
-	TotalLines    int      `json:"totalLines"`
-	LineEnding    string   `json:"lineEnding"`
-	Truncated     bool     `json:"truncated"`
-	RangeStatus   string   `json:"rangeStatus,omitempty"`
-	EmptyRange    bool     `json:"emptyRange,omitempty"`
-	Sheets        []string `json:"sheets,omitempty"`
-	Error         string   `json:"error,omitempty"`
-	ErrorCode     string   `json:"errorCode,omitempty"`
+	Path                  string   `json:"path"`
+	Content               string   `json:"content"`
+	Text                  string   `json:"text,omitempty"`
+	Kind                  string   `json:"kind,omitempty"`
+	ContentFormat         string   `json:"contentFormat,omitempty"`
+	Type                  string   `json:"type,omitempty"`
+	Editable              bool     `json:"editable"`
+	StartLine             int      `json:"startLine"`
+	EndLine               int      `json:"endLine"`
+	NextStartLine         int      `json:"nextStartLine,omitempty"`
+	Version               string   `json:"version"`
+	Size                  int64    `json:"size"`
+	TotalLines            int      `json:"totalLines"`
+	LineEnding            string   `json:"lineEnding"`
+	Truncated             bool     `json:"truncated"`
+	TruncatedLines        []int    `json:"truncatedLines,omitempty"`
+	TruncatedLinesOmitted bool     `json:"truncatedLinesOmitted,omitempty"`
+	RangeStatus           string   `json:"rangeStatus,omitempty"`
+	EmptyRange            bool     `json:"emptyRange,omitempty"`
+	Sheets                []string `json:"sheets,omitempty"`
+	Error                 string   `json:"error,omitempty"`
+	ErrorCode             string   `json:"errorCode,omitempty"`
 }
 
 type BatchReadResult struct {

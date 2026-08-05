@@ -1193,13 +1193,49 @@ func TestCommandSafetyBlocksModifyingExistingOutsidePath(t *testing.T) {
 	}
 }
 
-func TestCommandSafetyBlocksDynamicRedirectionTarget(t *testing.T) {
+func TestCommandSafetyAllowsDynamicRedirectionTarget(t *testing.T) {
+	// 动态目标（变量展开、通配符、heredoc 内容）无法静态解析：宽松策略下放行，
+	// 避免对合法复杂命令误判。字面外部已存在目标仍由其他用例覆盖拦截。
 	err := checkCommandSafety(CommandRequest{Command: `printf changed > "$HOME/existing.txt"`}, []string{t.TempDir()})
-	if toolErrorCode(err) != "E_PATH_OUTSIDE" {
-		t.Fatalf("dynamic redirection target should be blocked conservatively, got %v", err)
+	if err != nil {
+		t.Fatalf("dynamic redirection target should be allowed under permissive policy, got %v", err)
 	}
-	if !strings.Contains(err.Error(), "无法确认真实写入位置") || !strings.Contains(err.Error(), `$HOME/existing.txt`) {
-		t.Fatalf("dynamic redirection error should explain the uncertainty and target, got %v", err)
+}
+
+func TestCommandSafetyAllowsHeredocBodyContents(t *testing.T) {
+	// heredoc body 是 stdin 数据，其中的 > 重定向外观、rm 等词、$() 替换
+	// 在带引号 delimiter（<<'EOF'）下全部字面，不得触发拦截。
+	commands := []string{
+		"python - <<'EOF'\nif v > 1:\n    pass\nEOF\n",
+		"python - <<'EOF'\nrm -rf /tmp/x\nEOF\n",
+		"python - <<'EOF'\nprint('$(rm -rf /tmp/x)')\nEOF\n",
+		"python - <<EOF\nif v > 1:\n    pass\nEOF\n",
+	}
+	for _, command := range commands {
+		if err := checkCommandSafety(CommandRequest{Command: command}, []string{t.TempDir()}); err != nil {
+			t.Fatalf("heredoc body contents should be allowed for %q: %v", command, err)
+		}
+	}
+}
+
+func TestCommandSafetyBlocksCommandSubstitutionInsideUnquotedHeredoc(t *testing.T) {
+	// 无引号 heredoc 中 $(...) 会真实执行，命令替换内的删除命令仍须拦截。
+	command := "python - <<EOF\n$(rm generated.txt)\nEOF\n"
+	if code := toolErrorCode(checkCommandSafety(CommandRequest{Command: command}, []string{t.TempDir()})); code != "E_COMMAND_BLOCKED" {
+		t.Fatalf("command substitution inside unquoted heredoc should be blocked, got code %q", code)
+	}
+}
+
+func TestCommandSafetyStillBlocksLiteralOutsideTarget(t *testing.T) {
+	// 字面外部已存在目标仍是可靠检查，必须继续拦截。
+	workspace := t.TempDir()
+	target := filepath.Join(t.TempDir(), "existing.txt")
+	if err := os.WriteFile(target, []byte("keep\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := checkCommandSafety(CommandRequest{Command: fmt.Sprintf(`printf changed > %q`, filepath.ToSlash(target))}, []string{workspace})
+	if toolErrorCode(err) != "E_PATH_OUTSIDE" {
+		t.Fatalf("literal existing outside target should still be blocked, got %v", err)
 	}
 }
 
@@ -1394,7 +1430,7 @@ func TestBatchReadSchemaIncludesCanonicalExamples(t *testing.T) {
 			break
 		}
 	}
-	for _, expected := range []string{`{"files":[{"path":"app.go"}]}`, "Do not pass top-level path", "string array"} {
+	for _, expected := range []string{`{"files":[{"path":"app.go"}]}`, "Do not pass top-level path", "string array", "negative startLine", `"startLine":-200`} {
 		if !strings.Contains(description, expected) {
 			t.Fatalf("read description missing canonical guidance %q: %s", expected, description)
 		}
@@ -1528,6 +1564,100 @@ func TestReadPreviewBoundsVeryLongUnicodeLine(t *testing.T) {
 	}
 	if !utf8.ValidString(preview.Content) || !utf8.ValidString(preview.RawContent) {
 		t.Fatal("long-line truncation split a UTF-8 sequence")
+	}
+}
+
+func TestBatchReadSupportsNegativeTailRange(t *testing.T) {
+	dir := t.TempDir()
+	content := "one\ntwo\nthree\nfour\nfive"
+	if err := os.WriteFile(filepath.Join(dir, "sample.txt"), []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	app := NewApp()
+	result, err := app.batchReadFilesWithConfig(ConfigState{Workspace: dir}, BatchReadRequest{
+		Files: []BatchReadFileRequest{{Path: "sample.txt", StartLine: -2}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Files) != 1 {
+		t.Fatalf("expected one tail-read result, got %#v", result)
+	}
+	file := result.Files[0]
+	if file.Content != "4: four\n5: five" {
+		t.Fatalf("unexpected tail content:\n%s", file.Content)
+	}
+	if file.StartLine != 4 || file.EndLine != 5 || file.TotalLines != 5 || file.NextStartLine != 0 || file.Truncated {
+		t.Fatalf("unexpected tail metadata: %#v", file)
+	}
+}
+
+func TestLineStartOffsetFromTailMatchesForwardScan(t *testing.T) {
+	content := "one\ntwo\nthree\n\nfive\n"
+	total := countPlainTextLines(content)
+	for line := 1; line <= total; line++ {
+		forward := lineStartOffset(content, line)
+		backward := lineStartOffsetFromTail(content, total, line)
+		if forward != backward {
+			t.Fatalf("line %d: forward=%d tail=%d", line, forward, backward)
+		}
+	}
+}
+
+func TestReadPreviewTailClampsAndHandlesTrailingNewline(t *testing.T) {
+	content := "one\ntwo\nthree\n"
+	preview, err := formatLineNumberReadPreviewRangeWithBudget(content, readRangeRequest{StartLine: -10}, 4096)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if preview.StartLine != 1 || preview.EndLine != 3 || preview.Content != "1: one\n2: two\n3: three" {
+		t.Fatalf("tail beyond total should clamp to the whole file: %#v", preview)
+	}
+	if preview.Truncated || preview.NextStartLine != 0 {
+		t.Fatalf("clamped full-file tail should not be truncated: %#v", preview)
+	}
+}
+func TestReadPreviewRejectsInvalidNegativeTailRanges(t *testing.T) {
+	for _, req := range []readRangeRequest{
+		{StartLine: -1, EndLine: 1},
+		{StartLine: -1, LineCount: 1},
+		{StartLine: -maxReadRangeLines - 1},
+	} {
+		if _, err := formatLineNumberReadPreviewRangeWithBudget("one\ntwo\n", req, 4096); err == nil {
+			t.Fatalf("expected invalid negative tail request to fail: %#v", req)
+		}
+	}
+}
+
+func TestReadPreviewTruncatesLongLinesAndBoundsTruncatedLineMetadata(t *testing.T) {
+	longLine := strings.Repeat("界", maxReadLineChars+10)
+	preview, err := formatLineNumberReadPreviewRangeWithBudget(longLine+"\nend\n", readRangeRequest{StartLine: 1, EndLine: 1}, 16*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !preview.Truncated || preview.RangeStatus != "truncated" || len(preview.TruncatedLines) != 1 || preview.TruncatedLines[0] != 1 || preview.TruncatedLinesOmitted {
+		t.Fatalf("unexpected long-line truncation metadata: %#v", preview)
+	}
+	line := strings.TrimPrefix(preview.Content, "1: ")
+	if !strings.HasSuffix(line, "...") || utf8.RuneCountInString(line) != maxReadLineChars {
+		t.Fatalf("expected a %d-rune ellipsis preview, got %d runes", maxReadLineChars, utf8.RuneCountInString(line))
+	}
+	if !utf8.ValidString(preview.Content) || !utf8.ValidString(preview.RawContent) {
+		t.Fatal("long-line truncation split a UTF-8 sequence")
+	}
+	if !strings.HasSuffix(preview.RawContent, "\n") || utf8.RuneCountInString(strings.TrimSuffix(preview.RawContent, "\n")) != maxReadLineChars-3 {
+		t.Fatalf("raw long-line preview was not bounded to the source prefix: %d runes", utf8.RuneCountInString(strings.TrimSuffix(preview.RawContent, "\n")))
+	}
+
+	const metadataLines = maxReportedTruncatedLines + 10
+	content := strings.Repeat(strings.Repeat("x", maxReadLineChars+1)+"\n", metadataLines)
+	metadata, err := formatLineNumberReadPreviewRangeWithBudget(content, readRangeRequest{StartLine: 1, EndLine: metadataLines}, 2*1024*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(metadata.TruncatedLines) != maxReportedTruncatedLines || !metadata.TruncatedLinesOmitted || !metadata.Truncated {
+		t.Fatalf("expected bounded truncated-line metadata, got %d entries omitted=%v truncated=%v", len(metadata.TruncatedLines), metadata.TruncatedLinesOmitted, metadata.Truncated)
 	}
 }
 

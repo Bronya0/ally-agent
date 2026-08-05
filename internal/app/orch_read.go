@@ -17,6 +17,7 @@ import (
 	"unicode/utf8"
 
 	"ally-dev/internal/tools/read"
+	toolshared "ally-dev/internal/tools/shared"
 )
 
 // Read-range types shared between app.go's read preview helpers and the
@@ -33,21 +34,25 @@ type readRangeRequest struct {
 }
 
 const (
-	maxReadRangeLines          = 10000
+	maxReadRangeLines          = toolshared.MaxReadRangeLines
+	maxReadLineChars           = toolshared.MaxReadLineChars
 	changedLineMaxOutputLines  = 12
 	changedLineTextBudgetBytes = 50 * 1024
+	maxReportedTruncatedLines  = 256
 )
 
 type readPreviewResult struct {
-	Content       string
-	RawContent    string
-	TotalLines    int
-	StartLine     int
-	EndLine       int
-	NextStartLine int
-	Truncated     bool
-	RangeStatus   string
-	EmptyRange    bool
+	Content               string
+	RawContent            string
+	TotalLines            int
+	StartLine             int
+	EndLine               int
+	NextStartLine         int
+	Truncated             bool
+	TruncatedLines        []int
+	TruncatedLinesOmitted bool
+	RangeStatus           string
+	EmptyRange            bool
 }
 
 func (a *App) BatchReadFiles(req BatchReadRequest) (*BatchReadResult, error) {
@@ -221,24 +226,26 @@ func (a *App) batchReadOneWithConfig(cfg ConfigState, path string, req ReadFileR
 		contentFormat = "plain"
 	}
 	return BatchReadResultItem{
-		Path:          result.Path,
-		Content:       content,
-		Text:          result.Text,
-		Kind:          result.Kind,
-		ContentFormat: contentFormat,
-		Type:          result.Type,
-		Editable:      result.Editable,
-		StartLine:     result.StartLine,
-		EndLine:       result.EndLine,
-		NextStartLine: result.NextStartLine,
-		Version:       result.Version,
-		Size:          result.Size,
-		TotalLines:    result.TotalLines,
-		LineEnding:    result.LineEnding,
-		Truncated:     result.Truncated,
-		RangeStatus:   result.RangeStatus,
-		EmptyRange:    result.EmptyRange,
-		Sheets:        result.Sheets,
+		Path:                  result.Path,
+		Content:               content,
+		Text:                  result.Text,
+		Kind:                  result.Kind,
+		ContentFormat:         contentFormat,
+		Type:                  result.Type,
+		Editable:              result.Editable,
+		StartLine:             result.StartLine,
+		EndLine:               result.EndLine,
+		NextStartLine:         result.NextStartLine,
+		Version:               result.Version,
+		Size:                  result.Size,
+		TotalLines:            result.TotalLines,
+		LineEnding:            result.LineEnding,
+		Truncated:             result.Truncated,
+		TruncatedLines:        result.TruncatedLines,
+		TruncatedLinesOmitted: result.TruncatedLinesOmitted,
+		RangeStatus:           result.RangeStatus,
+		EmptyRange:            result.EmptyRange,
+		Sheets:                result.Sheets,
 	}
 }
 
@@ -334,23 +341,25 @@ func (a *App) readFileWithConfig(cfg ConfigState, req ReadFileRequest) (ReadFile
 	// hashing the same data twice (10 MB file ≈ 20-30 ms per SHA-256 pass).
 	sha256Hex, version := hashBytesAndVersion(data)
 	return ReadFileResult{
-		Path:          displayPathForConfig(cfg, path),
-		Content:       preview.Content,
-		RawContent:    preview.RawContent,
-		Kind:          "text",
-		ContentFormat: "line_numbers",
-		Editable:      true,
-		StartLine:     preview.StartLine,
-		EndLine:       preview.EndLine,
-		NextStartLine: preview.NextStartLine,
-		TotalLines:    preview.TotalLines,
-		SHA256:        sha256Hex,
-		Version:       version,
-		Size:          info.Size(),
-		LineEnding:    ending,
-		Truncated:     preview.Truncated,
-		RangeStatus:   preview.RangeStatus,
-		EmptyRange:    preview.EmptyRange,
+		Path:                  displayPathForConfig(cfg, path),
+		Content:               preview.Content,
+		RawContent:            preview.RawContent,
+		Kind:                  "text",
+		ContentFormat:         "line_numbers",
+		Editable:              true,
+		StartLine:             preview.StartLine,
+		EndLine:               preview.EndLine,
+		NextStartLine:         preview.NextStartLine,
+		TotalLines:            preview.TotalLines,
+		SHA256:                sha256Hex,
+		Version:               version,
+		Size:                  info.Size(),
+		LineEnding:            ending,
+		Truncated:             preview.Truncated,
+		TruncatedLines:        preview.TruncatedLines,
+		TruncatedLinesOmitted: preview.TruncatedLinesOmitted,
+		RangeStatus:           preview.RangeStatus,
+		EmptyRange:            preview.EmptyRange,
 	}, nil
 }
 
@@ -428,6 +437,17 @@ func formatLineNumberReadPreviewRangeWithBudget(content string, req readRangeReq
 	if req.ContextBefore < 0 || req.ContextAfter < 0 {
 		return readPreviewResult{}, errors.New("contextBefore/contextAfter must be non-negative")
 	}
+
+	tailRequest := req.StartLine < 0
+	if tailRequest {
+		if req.StartLine < -maxReadRangeLines {
+			return readPreviewResult{}, fmt.Errorf("negative startLine must be between -%d and -1", maxReadRangeLines)
+		}
+		if req.EndLine != 0 || req.LineCount != 0 || req.ContextBefore != 0 || req.ContextAfter != 0 {
+			return readPreviewResult{}, errors.New("negative startLine cannot be combined with endLine, lineCount, or context ranges")
+		}
+	}
+
 	if len(content) == 0 {
 		return readPreviewResult{
 			Content:     "File is empty. Use create_file with overwrite=true to write content.",
@@ -445,13 +465,21 @@ func formatLineNumberReadPreviewRangeWithBudget(content string, req readRangeReq
 	total := countPlainTextLines(content)
 
 	startLine := req.StartLine
-	if startLine <= 0 {
-		startLine = 1
-	}
-	if req.EndLine > 0 && req.EndLine < startLine {
-		// Models occasionally reverse an explicit range. Normalize it before
-		// the EOF check so 100..20 on a 50-line file safely becomes 20..50.
-		req.EndLine, startLine = startLine, req.EndLine
+	if tailRequest {
+		tailCount := -startLine
+		startLine = total - tailCount + 1
+		if startLine < 1 {
+			startLine = 1
+		}
+	} else {
+		if startLine <= 0 {
+			startLine = 1
+		}
+		if req.EndLine > 0 && req.EndLine < startLine {
+			// Models occasionally reverse an explicit range. Normalize it before
+			// the EOF check so 100..20 on a 50-line file safely becomes 20..50.
+			req.EndLine, startLine = startLine, req.EndLine
+		}
 	}
 	if startLine > total {
 		return readPreviewResult{
@@ -465,12 +493,15 @@ func formatLineNumberReadPreviewRangeWithBudget(content string, req readRangeReq
 	}
 
 	baseEnd := total
-	if req.EndLine > 0 {
-		baseEnd = req.EndLine
-	} else if req.LineCount > 0 {
-		baseEnd = startLine + req.LineCount - 1
-	} else if req.ContextBefore > 0 || req.ContextAfter > 0 {
-		baseEnd = startLine
+	if !tailRequest {
+		switch {
+		case req.EndLine > 0:
+			baseEnd = req.EndLine
+		case req.LineCount > 0:
+			baseEnd = startLine + req.LineCount - 1
+		case req.ContextBefore > 0 || req.ContextAfter > 0:
+			baseEnd = startLine
+		}
 	}
 
 	start := startLine - req.ContextBefore
@@ -498,17 +529,53 @@ func formatLineNumberReadPreviewRangeWithBudget(content string, req readRangeReq
 		rangeLimited = true
 	}
 
-	rangeStartOffset := lineStartOffset(content, start)
-	lineOffset := rangeStartOffset
-	completeRawEnd := rangeStartOffset
-	var b strings.Builder
-	if budgetBytes > 0 {
-		b.Grow(min(budgetBytes, len(content)-rangeStartOffset))
+	var rangeStartOffset int
+	if tailRequest {
+		rangeStartOffset = lineStartOffsetFromTail(content, total, start)
+	} else {
+		rangeStartOffset = lineStartOffset(content, start)
 	}
+	lineOffset := rangeStartOffset
+	var numbered strings.Builder
+	if budgetBytes > 0 {
+		numbered.Grow(min(budgetBytes, len(content)-rangeStartOffset))
+	}
+
+	rawBudget := budgetBytes
+	if rawBudget <= 0 {
+		rawBudget = maxToolOutput
+	}
+	var raw strings.Builder
+	raw.Grow(min(rawBudget, len(content)-rangeStartOffset))
+	rawBytes := 0
+	appendRaw := func(line string, newline bool) {
+		if rawBytes >= rawBudget {
+			return
+		}
+		remaining := rawBudget - rawBytes
+		if newline && len(line)+1 <= remaining {
+			raw.WriteString(line)
+			raw.WriteByte('\n')
+			rawBytes += len(line) + 1
+			return
+		}
+		prefix := utf8Prefix(line, remaining)
+		raw.WriteString(prefix)
+		rawBytes += len(prefix)
+	}
+
 	actualEnd := start - 1
 	budgetLimited := false
-	partialFirstLine := false
-	rawContent := ""
+	truncatedLines := make([]int, 0, 2)
+	truncatedLinesOmitted := false
+	recordTruncatedLine := func(lineNum int) {
+		if len(truncatedLines) < maxReportedTruncatedLines {
+			truncatedLines = append(truncatedLines, lineNum)
+		} else {
+			truncatedLinesOmitted = true
+		}
+	}
+
 	for lineNum := start; lineNum <= end; lineNum++ {
 		lineEnd := len(content)
 		nextOffset := len(content)
@@ -516,58 +583,66 @@ func formatLineNumberReadPreviewRangeWithBudget(content string, req readRangeReq
 			lineEnd = lineOffset + rel
 			nextOffset = lineEnd + 1
 		}
-		// Write the line-number prefix directly into the builder instead of
-		// allocating a temporary "N: " string per line. On a 100k-line preview
-		// this saves 100k small heap allocations.
+		lineContent := content[lineOffset:lineEnd]
+		renderedLine, rawLine, lineWasTruncated := truncateReadLine(lineContent, maxReadLineChars)
+
 		var prefixBuf [12]byte
 		prefixStr := strconv.AppendInt(prefixBuf[:0], int64(lineNum), 10)
 		prefixLen := len(prefixStr) + 2 // "N" + ": "
 		separatorBytes := 0
-		if b.Len() > 0 {
+		if numbered.Len() > 0 {
 			separatorBytes = 1
 		}
-		needed := separatorBytes + prefixLen + lineEnd - lineOffset
-		if budgetBytes > 0 && b.Len()+needed > budgetBytes {
+		needed := separatorBytes + prefixLen + len(renderedLine)
+		if budgetBytes > 0 && numbered.Len()+needed > budgetBytes {
 			budgetLimited = true
-			if b.Len() == 0 {
+			if numbered.Len() == 0 {
 				remaining := budgetBytes
-				if prefixLen > remaining {
-					b.Write(prefixStr[:min(len(prefixStr), remaining)])
+				if remaining >= len(prefixStr) {
+					numbered.Write(prefixStr)
 					remaining -= len(prefixStr)
-					if remaining > 0 {
-						b.WriteString(": "[:min(2, remaining)])
+					if remaining >= 2 {
+						numbered.WriteString(": ")
+						remaining -= 2
+					} else if remaining > 0 {
+						numbered.WriteByte(':')
+						remaining = 0
 					}
+				} else if remaining > 0 {
+					numbered.Write(prefixStr[:remaining])
 					remaining = 0
-				} else {
-					b.Write(prefixStr)
-					b.WriteString(": ")
-					remaining -= prefixLen
 				}
-				linePreview := utf8Prefix(content[lineOffset:lineEnd], remaining)
-				b.WriteString(linePreview)
-				rawContent = utf8Prefix(content[lineOffset:lineEnd], budgetBytes)
-				partialFirstLine = len(rawContent) < lineEnd-lineOffset
+				numbered.WriteString(utf8Prefix(renderedLine, remaining))
+				raw.Reset()
+				raw.WriteString(utf8Prefix(rawLine, rawBudget))
+				rawBytes = raw.Len()
 				actualEnd = start
+				if lineWasTruncated {
+					recordTruncatedLine(lineNum)
+				}
 			}
 			break
 		}
+
 		if separatorBytes != 0 {
-			b.WriteByte('\n')
+			numbered.WriteByte('\n')
 		}
-		b.Write(prefixStr)
-		b.WriteString(": ")
-		b.WriteString(content[lineOffset:lineEnd])
+		numbered.Write(prefixStr)
+		numbered.WriteString(": ")
+		numbered.WriteString(renderedLine)
+		appendRaw(rawLine, nextOffset > lineEnd)
 		actualEnd = lineNum
-		completeRawEnd = nextOffset
 		lineOffset = nextOffset
-	}
-	result := b.String()
-	if !partialFirstLine && actualEnd >= start {
-		rawContent = content[rangeStartOffset:completeRawEnd]
+		if lineWasTruncated {
+			recordTruncatedLine(lineNum)
+		}
 	}
 
+	result := numbered.String()
+	rawContent := raw.String()
+
 	nextStartLine := 0
-	requestedFullFile := req.EndLine == 0 && req.LineCount == 0 && req.ContextBefore == 0 && req.ContextAfter == 0
+	requestedFullFile := req.EndLine == 0 && req.LineCount == 0 && req.ContextBefore == 0 && req.ContextAfter == 0 && !tailRequest
 	pagedRequest := req.LineCount > 0
 	if actualEnd < total && (budgetLimited || rangeLimited || pagedRequest || requestedFullFile) {
 		nextStartLine = actualEnd + 1
@@ -575,19 +650,79 @@ func formatLineNumberReadPreviewRangeWithBudget(content string, req readRangeReq
 	}
 
 	status := "ok"
-	if budgetLimited || rangeLimited {
+	if budgetLimited || rangeLimited || len(truncatedLines) > 0 || truncatedLinesOmitted {
 		status = "truncated"
 	}
 	return readPreviewResult{
-		Content:       result,
-		RawContent:    rawContent,
-		TotalLines:    total,
-		StartLine:     start,
-		EndLine:       actualEnd,
-		NextStartLine: nextStartLine,
-		Truncated:     nextStartLine > 0 || budgetLimited || rangeLimited,
-		RangeStatus:   status,
+		Content:               result,
+		RawContent:            rawContent,
+		TotalLines:            total,
+		StartLine:             start,
+		EndLine:               actualEnd,
+		NextStartLine:         nextStartLine,
+		Truncated:             nextStartLine > 0 || budgetLimited || rangeLimited || len(truncatedLines) > 0 || truncatedLinesOmitted,
+		TruncatedLines:        truncatedLines,
+		TruncatedLinesOmitted: truncatedLinesOmitted,
+		RangeStatus:           status,
 	}, nil
+}
+
+// lineStartOffsetFromTail locates a visible line by scanning backwards. It
+// avoids materializing line indexes and makes negative startLine reads cheap for
+// files with many lines: one forward count plus one bounded-memory reverse scan.
+func lineStartOffsetFromTail(content string, totalLines, startLine int) int {
+	if startLine <= 1 {
+		return 0
+	}
+	needed := totalLines - startLine + 1
+	if needed <= 0 {
+		return len(content)
+	}
+	index := len(content) - 1
+	if index >= 0 && content[index] == '\n' {
+		index--
+	}
+	found := 0
+	for ; index >= 0; index-- {
+		if content[index] != '\n' {
+			continue
+		}
+		found++
+		if found == needed {
+			return index + 1
+		}
+	}
+	return 0
+}
+
+// truncateReadLine keeps a bounded, UTF-8-valid preview of a single line. The
+// scan stops as soon as the line exceeds the cap, so short lines pay only one
+// pass and very long lines do not allocate a proportional copy.
+func truncateReadLine(line string, maxChars int) (rendered, raw string, truncated bool) {
+	if maxChars <= 0 || line == "" {
+		return line, line, false
+	}
+	const marker = "..."
+	const markerChars = 3
+	keepChars := maxChars - markerChars
+	if keepChars <= 0 {
+		return marker, "", true
+	}
+	cutByte := -1
+	count := 0
+	for index := range line {
+		count++
+		if count == keepChars+1 {
+			cutByte = index
+		}
+		if count > maxChars {
+			if cutByte < 0 {
+				return marker, "", true
+			}
+			return line[:cutByte] + marker, line[:cutByte], true
+		}
+	}
+	return line, line, false
 }
 
 // lineStartOffset returns the byte offset of a visible 1-based line. Callers

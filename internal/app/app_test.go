@@ -778,7 +778,7 @@ func TestSystemPromptDefinesWaitSequencing(t *testing.T) {
 
 func TestSystemPromptExplainsRunCommandOutsidePathRecovery(t *testing.T) {
 	prompt := defaultSystemPrompt(nil, "", nil, "", "")
-	for _, expected := range []string{"`E_PATH_OUTSIDE`", "Do not retry the unchanged command", "literal verifiable target", "read the returned Chinese explanation"} {
+	for _, expected := range []string{"`E_PATH_OUTSIDE`", "Do not retry the unchanged command", "dynamic targets (variables, globs, heredoc content) are allowed", "read the returned Chinese explanation"} {
 		if !strings.Contains(prompt, expected) {
 			t.Fatalf("system prompt missing run_command recovery guidance %q", expected)
 		}

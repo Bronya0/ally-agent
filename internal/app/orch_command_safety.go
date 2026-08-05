@@ -49,10 +49,9 @@ func firstExistingOutsideMutationTarget(commandLine string, roots []string) *out
 		}
 		path, ok := command.ResolveCommandLiteralPath(target, primaryRoot)
 		if !ok {
-			return &outsideMutationRisk{
-				Path:   target,
-				Reason: "重定向目标包含变量、通配符或命令替换，执行前无法确认真实写入位置",
-			}
+			// 动态目标（变量/通配符/命令替换/heredoc 内容）无法静态解析：
+			// 宽松策略下放行，避免对合法复杂命令误判；字面外部已存在目标仍拦截。
+			continue
 		}
 		if insideAnyRoot(roots, path) || insideAllyAgentDir(path) {
 			continue
@@ -71,10 +70,9 @@ func firstExistingOutsideMutationTarget(commandLine string, roots []string) *out
 		}
 		path, ok := command.ResolveCommandLiteralPath(target, primaryRoot)
 		if !ok {
-			return &outsideMutationRisk{
-				Path:   target,
-				Reason: "写入目标包含变量、通配符或命令替换，执行前无法确认真实写入位置",
-			}
+			// 动态目标（变量/通配符/命令替换/heredoc 内容）无法静态解析：
+			// 宽松策略下放行，避免对合法复杂命令误判；字面外部已存在目标仍拦截。
+			continue
 		}
 		if insideAnyRoot(roots, path) || insideAllyAgentDir(path) {
 			continue

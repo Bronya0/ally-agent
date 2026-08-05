@@ -118,6 +118,19 @@ func ShellRedirectionTargets(command string) []string {
 			inSingle = true
 		case '"':
 			inDouble = true
+		case '<':
+			if i+1 < len(command) && command[i+1] == '<' {
+				if end, _, ok := scanHeredoc(command, i); ok {
+					i = end - 1
+					continue
+				}
+				if i+2 < len(command) && command[i+2] == '<' {
+					if end, ok := scanHereStringWord(command, i+3); ok {
+						i = end - 1
+						continue
+					}
+				}
+			}
 		case '>':
 			if i > 0 && command[i-1] == '<' {
 				continue

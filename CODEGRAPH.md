@@ -182,7 +182,7 @@ flowchart LR
 - `planLocalEditBatch()` 是本地 `edit` 的唯一规范化入口；`orch_batch_policy.go` 和 `orch_edit.go` 共享其 targets/files，不得重复解析路径与别名
 - `internal/tools/edit` 持有纯 Diff/变更范围算法，`orch_edit.go` 是 app 层的编辑执行边界
 - 同版本且解析到同一物理路径的重复文件项合并为一个原始快照编辑计划
-- 批量 `read` 静默省略不存在路径和目录目标（全部省略时成功返回空 `files`），其他逐文件失败仍返回已知 `errorCode`；纯文本返回带 `N: ` 显示前缀的行号预览，范围预览使用有界内存线性扫描，不为百万行文件建立逐行切片，超长单行按 UTF-8/字节预算截断
+- 批量 `read` 静默省略不存在路径和目录目标（全部省略时成功返回空 `files`），其他逐文件失败仍返回已知 `errorCode`；纯文本返回带 `N: ` 显示前缀的行号预览，正数范围和负数尾部读取都使用有界内存线性扫描，不为百万行文件建立逐行切片，单行按 2000 Unicode 字符和 UTF-8/字节预算截断，并通过 `truncatedLines`/`truncatedLinesOmitted` 报告被缩短的行号
 - `edit` 的每个 change 二选一使用来源：优先原始快照的 `lineRange: "A-B"`（整行替换的默认方式，多行块无需复刻原文），仅在行内小改或目标行超长（如压缩 JSON）时使用小型精确 `oldText`；所有源先在同一版本快照定位、检查重叠，再从后向前写入，因此前面增删不会漂移后续行号。精确多匹配通过错误 envelope 的可选 `details` 返回最多 3 个原始候选片段、行范围与截断标记，详情 JSON 总计不超过 4 KiB；多行整行文本仅可在唯一候选时忽略前导缩进并安全重基，缩进扫描不建立全文件行索引
 - 批量编辑忽略并警告 no-op；全部为 no-op 时不写盘
 - `infra_result.go` 是结果 envelope、错误码和模型侧压缩的唯一边界
@@ -416,8 +416,8 @@ schema → strict decoder → batch policy → executor → result envelope → 
 ## 安全机制
 
 - 工作区写操作限定在配置的工作区内 + `~/.ally_agent`
-- `run_command` 的安全分析先在 `internal/tools/command` 将复合 shell 文本解析为实际调用，递归检查 shell `-c`、命令替换、`eval`、`xargs`、`find -exec` 等嵌套执行，再按命令语义识别删除、高危参数和明确写入目标；引号内数据、搜索词和只读源路径不会被当成写操作。
-- `orch_command_safety.go` 使用上述语义结果结合工作区根和目标存在性做最终决策：外部只读与创建不存在的新外部路径仍允许，已有外部写目标、无法解析的动态写目标和裸文件删除仍拒绝。
+- `run_command` 的安全分析先在 `internal/tools/command` 将复合 shell 文本解析为实际调用，递归检查 shell `-c`、命令替换、`eval`、`xargs`、`find -exec` 等嵌套执行，再按命令语义识别删除、高危参数和明确写入目标；引号内数据、搜索词、heredoc 数据体和只读源路径不会被当成写操作。
+- `orch_command_safety.go` 使用上述语义结果结合工作区根和目标存在性做最终决策：外部只读、创建不存在的新外部路径以及无法静态解析的动态写目标（变量/通配符/heredoc 产物）均放行，字面已存在的外部写目标和裸文件删除仍拒绝。
 - 工作区必须由用户明确选择；空工作区不会回退到进程当前目录
 - `run_command` 前台执行时通过节流的 `tool:update` 推送累计 stdout/stderr；命令卡固定高度、可滚动并默认跟随最新行，最终 `tool:result` 仍携带完整受限输出
 - `run_command` / `background_process` 后端输出均有界，前者单次最多 128KB，后者每个活动进程滚动保留 512KB

@@ -8,8 +8,10 @@ import (
 )
 
 const (
-	maxWaitSeconds   = 3600
-	maxHTTPBodyBytes = 50 * 1024 * 1024
+	maxWaitSeconds    = 3600
+	maxHTTPBodyBytes  = 50 * 1024 * 1024
+	MaxReadRangeLines = 10000
+	MaxReadLineChars  = 2000
 )
 
 // chatToolsCache memoizes the built-in tool list. The schema is pure static
@@ -87,7 +89,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"path"},
 		}),
-		functionTool("run_command", "Run a shell command with cwd confined to the workspace. On Windows, bash (from Git for Windows) is used when available, falling back to PowerShell; on macOS/Linux, bash is used. Commands may inspect outside paths, redirect to null devices, and create new outside paths. Modifying/deleting existing outside paths, explicit deletion commands, unsafe cwd symlinks, and long-running services are refused. The current session may also allow writes inside additional extra roots (the E_PATH_OUTSIDE error lists all allowed roots). If E_PATH_OUTSIDE is returned, read the Chinese reason and detected target: do not retry unchanged; use a new/workspace/extra-root target, or replace dynamic redirections with a literal verifiable path. Error codes: E_COMMAND_BLOCKED, E_PATH_OUTSIDE, E_CWD_INVALID, E_LONG_RUNNING_COMMAND.", map[string]any{
+		functionTool("run_command", "Run a shell command with cwd confined to the workspace. On Windows, bash (from Git for Windows) is used when available, falling back to PowerShell; on macOS/Linux, bash is used. Commands may inspect outside paths, redirect to null devices, and create new outside paths. Modifying/deleting existing outside paths, explicit deletion commands, unsafe cwd symlinks, and long-running services are refused. The current session may also allow writes inside additional extra roots (the E_PATH_OUTSIDE error lists all allowed roots). If E_PATH_OUTSIDE is returned, read the Chinese reason and detected target: do not retry unchanged; use a new/workspace/extra-root target. Only literal existing outside write targets are blocked; dynamic targets (variables, globs, heredoc content) are allowed. Error codes: E_COMMAND_BLOCKED, E_PATH_OUTSIDE, E_CWD_INVALID, E_LONG_RUNNING_COMMAND.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"command":        map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*"},
@@ -206,13 +208,13 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"target"},
 		}),
-		functionTool("remote_read_file", "Read raw UTF-8 text from a remote SSH workspace. The returned content is directly copyable into remote_edit oldText, and its version is required by remote_edit. Omit startLine/endLine to read the whole file. With only startLine, read from that line to the end; with only endLine, read lines 1 through endLine; with both, read that inclusive range.", map[string]any{
+		functionTool("remote_read_file", "Read raw UTF-8 text from a remote SSH workspace. The returned content is directly copyable into remote_edit oldText, and its version is required by remote_edit. Omit startLine/endLine to read the whole file. With only startLine, read from that line through the end; with only endLine, read lines 1 through that inclusive range. Positive startLine values select an inclusive range; a negative startLine reads the last N lines (absolute value max 10000).", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"target":    map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Explicit SSH target plus workspace root, e.g. my-dev:/srv/app."},
 				"path":      map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Relative file path inside the remote workspace."},
-				"startLine": map[string]any{"type": "integer", "minimum": 1, "description": "Optional inclusive 1-based start line. Defaults to 1."},
-				"endLine":   map[string]any{"type": "integer", "minimum": 1, "description": "Optional inclusive 1-based end line. Defaults to the final line."},
+				"startLine": map[string]any{"type": "integer", "minimum": -MaxReadRangeLines, "description": "Optional inclusive 1-based start line. Positive values start from the beginning; negative values read the last N lines, with absolute value at most 10000."},
+				"endLine":   map[string]any{"type": "integer", "minimum": 1, "description": "Optional inclusive 1-based end line. Must be omitted when startLine is negative."},
 			},
 			"required": []string{"target", "path"},
 		}),
@@ -268,7 +270,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"pattern"},
 		}),
-		functionTool("read", "Read 1–20 files. Always pass a top-level files array, even for one file. Do not pass top-level path, a string array, offset, or lineCount. Missing paths and directories are silently omitted from the returned files array; other per-file read failures remain visible. UTF-8 text content is prefixed with display-only 1-based `N: ` line numbers and includes a 12-character version for edit; do not copy the prefixes into edit text. Omit startLine/endLine for the whole file; either or both define an inclusive range. Large files are auto-truncated and the content ends with a `[Showing lines A-B of N. Use startLine=C to continue.]` marker; follow it to page through the rest. Supported document formats (.docx, .pptx, .xlsx, .pdf) return non-editable extracted text; .xlsx optionally accepts a sheet name or 1-based index.", map[string]any{
+		functionTool("read", "Read 1–20 files. Always pass a top-level files array, even for one file. Do not pass top-level path, a string array, offset, or lineCount. Missing paths and directories are silently omitted from the returned files array; other per-file read failures remain visible. UTF-8 text content is prefixed with display-only 1-based `N: ` line numbers and includes a 12-character version for edit; do not copy the prefixes into edit text. Omit startLine/endLine for the whole file; either or both positive values define an inclusive range. For text files, a negative startLine reads the last N lines (absolute value max 10000) and must not be combined with endLine. Each displayed line is capped at 2000 Unicode characters for stable output; `truncatedLines` reports line numbers whose content was shortened. Large files are auto-truncated and the content ends with a `[Showing lines A-B of N. Use startLine=C to continue.]` marker; follow it to page through the rest. Supported document formats (.docx, .pptx, .xlsx, .pdf) return non-editable extracted text; .xlsx optionally accepts a sheet name or 1-based index.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"files": batchReadFilesSchema(),
@@ -394,7 +396,7 @@ var builtinToolExamples = map[string]string{
 	"remote_delete_path": `{"target":"ubuntu@example.com:/srv/app","path":"tmp/output","recursive":true}`,
 	"remote_run_command": `{"target":"ubuntu@example.com:/srv/app","command":"go test ./...","cwd":".","timeoutSeconds":120}`,
 	"grep_files":         `{"pattern":"TODO|FIXME","path":"frontend/src","glob":"*.vue","maxMatches":100}`,
-	"read":               `one file: {"files":[{"path":"app.go"}]}; multiple/range: {"files":[{"path":"app.go"},{"path":"services.go","startLine":1,"endLine":200}]}`,
+	"read":               `one file: {"files":[{"path":"app.go"}]}; range: {"files":[{"path":"services.go","startLine":1,"endLine":200}]}; tail: {"files":[{"path":"server.log","startLine":-200}]}`,
 	"memory_read":        `{"path":"coding-conventions.md"}`,
 	"memory_write":       `{"path":"coding-conventions.md","description":"Project coding conventions","content":"Use focused changes and run tests."}`,
 	"calculate":          `{"expression":"sqrt(144) + 2^3"}`,
@@ -434,8 +436,8 @@ func batchReadFilesSchema() map[string]any {
 			"type": "object",
 			"properties": map[string]any{
 				"path":      map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "File path to read."},
-				"startLine": map[string]any{"type": "integer", "minimum": 1, "description": "Optional inclusive 1-based start line. If omitted, reading starts at line 1."},
-				"endLine":   map[string]any{"type": "integer", "minimum": 1, "description": "Optional inclusive 1-based end line. If omitted, reading continues to the final line."},
+				"startLine": map[string]any{"type": "integer", "minimum": -MaxReadRangeLines, "description": "Optional inclusive 1-based start line. Positive values start from the beginning; negative values read the last N lines, with absolute value at most 10000. Omit endLine when using a negative value."},
+				"endLine":   map[string]any{"type": "integer", "minimum": 1, "description": "Optional inclusive 1-based end line. If omitted, reading continues to the final line; omit it when startLine is negative."},
 				"sheet":     map[string]any{"type": "string", "description": "Xlsx sheet name or 1-based sheet index for this file."},
 				"maxChars":  map[string]any{"type": "integer", "minimum": 1, "maximum": 200000, "description": "Maximum extracted characters for this file's document extraction."},
 			},

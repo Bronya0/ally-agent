@@ -115,6 +115,18 @@ func splitCommandSegments(commandLine string) [][]string {
 		case '\n', ';', '&', '|', '(', ')', '{', '}':
 			flushSegment()
 		case '<', '>':
+			if c == '<' {
+				if end, _, ok := scanHeredoc(commandLine, i); ok {
+					i = end - 1
+					continue
+				}
+				if i+2 < len(commandLine) && commandLine[i+1] == '<' && commandLine[i+2] == '<' {
+					if end, ok := scanHereStringWord(commandLine, i+3); ok {
+						i = end - 1
+						continue
+					}
+				}
+			}
 			if started && isDecimal(word.String()) {
 				word.Reset()
 				started = false
@@ -262,6 +274,14 @@ func commandSubstitutions(commandLine string) []string {
 				quote = '"'
 			}
 			continue
+		}
+		if c == '<' && i+1 < len(commandLine) && commandLine[i+1] == '<' {
+			// Quoted heredoc bodies are literal data: command substitutions inside
+			// them are never executed, so skip the whole body.
+			if end, quoted, ok := scanHeredoc(commandLine, i); ok && quoted {
+				i = end - 1
+				continue
+			}
 		}
 		if c == '`' {
 			end := i + 1
@@ -488,6 +508,14 @@ func stripQuotedContent(value string) string {
 	escaped := false
 	for i := 0; i < len(value); i++ {
 		c := value[i]
+		if c == '<' && i+1 < len(value) && value[i+1] == '<' {
+			// Quoted heredoc bodies are literal data; skip them so their
+			// contents are not misread as fork-bomb or other risky patterns.
+			if end, quoted, ok := scanHeredoc(value, i); ok && quoted {
+				i = end - 1
+				continue
+			}
+		}
 		if escaped {
 			escaped = false
 			if quote == 0 {
@@ -691,4 +719,106 @@ func optionValues(args []string, names ...string) []string {
 		}
 	}
 	return result
+	return result
+}
+
+// scanHeredoc recognizes a heredoc start at command[i] (`<<word`/`<<-word`)
+// and returns the index just past the body terminator line, plus whether the
+// delimiter is quoted (body fully literal). ok is false when the start is not
+// a heredoc or the terminator cannot be located.
+func scanHeredoc(command string, i int) (end int, quoted bool, ok bool) {
+	if i+1 >= len(command) || command[i+1] != '<' {
+		return 0, false, false
+	}
+	j := i + 2
+	stripTabs := false
+	if j < len(command) && command[j] == '-' {
+		stripTabs = true
+		j++
+	}
+	for j < len(command) && (command[j] == ' ' || command[j] == '\t') {
+		j++
+	}
+	var delim strings.Builder
+	if j < len(command) && (command[j] == '\'' || command[j] == '"') {
+		q := command[j]
+		quoted = true
+		j++
+		for j < len(command) && command[j] != q {
+			if command[j] == '\\' && q == '"' && j+1 < len(command) {
+				j++
+			}
+			delim.WriteByte(command[j])
+			j++
+		}
+		if j >= len(command) {
+			return 0, false, false
+		}
+		j++
+	} else {
+		for j < len(command) && command[j] != '\n' && command[j] != ' ' && command[j] != '\t' && command[j] != '\r' {
+			if command[j] == '\\' && !quoted {
+				quoted = true
+				j++
+				if j >= len(command) {
+					return 0, false, false
+				}
+				continue
+			}
+			delim.WriteByte(command[j])
+			j++
+		}
+	}
+	if delim.Len() == 0 {
+		return 0, false, false
+	}
+	word := delim.String()
+	lineStart := j
+	for lineStart < len(command) {
+		nl := strings.IndexByte(command[lineStart:], '\n')
+		if nl < 0 {
+			return 0, false, false
+		}
+		lineEnd := lineStart + nl
+		line := strings.TrimSuffix(command[lineStart:lineEnd], "\r")
+		if stripTabs {
+			line = strings.TrimLeft(line, "\t")
+		}
+		if line == word {
+			return lineEnd + 1, quoted, true
+		}
+		lineStart = lineEnd + 1
+	}
+	return 0, false, false
+}
+
+// scanHereStringWord returns the index just past the here-string word starting
+// at command[start] (right after `<<<`). Quoted words are skipped as a unit;
+// bare words end at whitespace, newline, or a command separator.
+func scanHereStringWord(command string, start int) (int, bool) {
+	j := start
+	for j < len(command) && (command[j] == ' ' || command[j] == '\t') {
+		j++
+	}
+	if j >= len(command) {
+		return 0, false
+	}
+	if command[j] == '\'' || command[j] == '"' {
+		q := command[j]
+		j++
+		for j < len(command) && command[j] != q {
+			if command[j] == '\\' && j+1 < len(command) {
+				j++
+			}
+			j++
+		}
+		if j < len(command) {
+			j++
+		}
+		return j, true
+	}
+	for j < len(command) && command[j] != '\n' && command[j] != ';' && command[j] != '&' && command[j] != '|' && command[j] != ' ' && command[j] != '\t' {
+		j++
+	}
+	return j, true
 }
