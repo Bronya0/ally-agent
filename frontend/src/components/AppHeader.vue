@@ -57,6 +57,14 @@
     </div>
     <div class="header-actions">
       <n-tag v-if="grillModeActive" class="header-grill-tag" size="small" round type="error" bordered>GRILL</n-tag>
+      <n-button class="header-icon-button" size="small" quaternary @click="$emit('openTokenStats')" :title="$t('header.tokenStats')" :aria-label="$t('header.tokenStats')">
+        <svg class="header-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+          <path d="M3 3v18h18" />
+          <path d="M7 14v4" />
+          <path d="M12 9v9" />
+          <path d="M17 5v13" />
+        </svg>
+      </n-button>
       <n-button
         :class="['header-icon-button', 'repository-button', { 'update-available': updateAvailable }]"
         size="small"
@@ -130,6 +138,7 @@ const emit = defineEmits([
   'openRepository',
   'startUpdate',
   'openSettings',
+  'openTokenStats',
   'minimise',
   'toggleMaximise',
   'closeWindow',

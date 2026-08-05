@@ -21,6 +21,7 @@
               @open-repository="openRepositoryPage"
               @start-update="startUpdate"
               @open-settings="configVisible = true"
+              @open-token-stats="tokenStatsVisible = true"
               @minimise="minimiseWindow"
               @toggle-maximise="toggleMaximiseWindow"
               @close-window="closeWindow"
@@ -211,7 +212,6 @@
             @save="onSettingsSave"
             @skills-changed="onSkillsChanged"
             @mcp-saved="onMcpSaved"
-            @open-token-stats="openTokenStatsFromSettings"
             @background-changed="onBackgroundChanged"
             @check-update="onCheckUpdate"
           />
@@ -5265,11 +5265,6 @@ async function refreshTaskCenter() {
 async function openTaskCenter() {
   taskCenterVisible.value = true;
   await refreshTaskCenter();
-}
-
-function openTokenStatsFromSettings() {
-  configVisible.value = false;
-  tokenStatsVisible.value = true;
 }
 
 async function stopManagedService(id) {

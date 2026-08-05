@@ -259,6 +259,7 @@ const zh = {
   'header.addWorkspace': '添加工作空间',
   'header.workspaceHistory': '历史工作空间',
   'header.github': '打开 GitHub 项目主页',
+  'header.tokenStats': 'Token 统计',
   'header.githubAria': '打开 Ally GitHub 项目主页',
   'header.update': '发现新版本 {version}，点击前往 GitHub',
   'header.updateAria': '发现新版本，前往 GitHub',
@@ -847,7 +848,7 @@ const enOverrides = {
   'welcome.skillsAvailable': '{count} available; enter /<skillname> to load one',
 
   'header.running': 'Running', 'header.addWorkspace': 'Add workspace', 'header.workspaceHistory': 'Recent workspaces',
-  'header.github': 'Open GitHub repository', 'header.githubAria': 'Open the Ally GitHub repository',
+  'header.github': 'Open GitHub repository', 'header.githubAria': 'Open the Ally GitHub repository', 'header.tokenStats': 'Token statistics',
   'header.update': 'Version {version} is available. Open GitHub', 'header.updateAria': 'New version available; open GitHub',
   'header.updateAuto': 'Version {version} is available. Click to update automatically',
   'header.settings': 'Settings', 'header.minimize': 'Minimize', 'header.restore': 'Restore',

@@ -31,10 +31,6 @@
           <span class="settings-nav-title">MCP</span>
           <span class="settings-nav-desc">{{ $t('settings.mcpDescription') }}</span>
         </button>
-        <button class="settings-nav-item" @click="emit('open-token-stats')">
-          <span class="settings-nav-title">{{ $t('settings.stats') }}</span>
-          <span class="settings-nav-desc">{{ $t('settings.statsDescription') }}</span>
-        </button>
         <button :class="['settings-nav-item', { active: page === 'about' }]" @click="page = 'about'">
           <span class="settings-nav-title">{{ $t('settings.about') }}</span>
           <span class="settings-nav-desc">{{ $t('settings.versionLicense') }}</span>
@@ -586,7 +582,7 @@ const props = defineProps({
   //   { state: 'idle' | 'busy' | 'latest' | 'found' | 'failed', version?: string }
   checkUpdateResult: { type: Object, default: () => ({ state: 'idle' }) },
 });
-const emit = defineEmits(['close', 'closed', 'save', 'skills-changed', 'mcp-saved', 'open-token-stats', 'background-changed', 'check-update']);
+const emit = defineEmits(['close', 'closed', 'save', 'skills-changed', 'mcp-saved', 'background-changed', 'check-update']);
 const checkUpdateBusy = ref(false);
 const checkUpdateMessage = ref('');
 let checkUpdateTimer = 0;
