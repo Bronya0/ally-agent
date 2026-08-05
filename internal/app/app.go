@@ -815,6 +815,8 @@ type GitStatus struct {
 	Added    int    `json:"added"`
 	Modified int    `json:"modified"`
 	Deleted  int    `json:"deleted"`
+	Ahead    int    `json:"ahead"`
+	Behind   int    `json:"behind"`
 	IsRepo   bool   `json:"isRepo"`
 	Branch   string `json:"branch"`
 }

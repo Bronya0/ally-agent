@@ -3,6 +3,8 @@
     <div class="git-diff-toolbar">
       <div class="git-diff-summary">
         <span class="git-diff-branch">{{ diffResult?.branch || gitStatus.branch || '-' }}</span>
+        <span v-if="gitStatus.ahead > 0" class="git-stat ahead" :title="$t('composer.git.ahead')">↑{{ gitStatus.ahead }}</span>
+        <span v-if="gitStatus.behind > 0" class="git-stat behind" :title="$t('composer.git.behind')">↓{{ gitStatus.behind }}</span>
         <span v-if="gitStatus.added > 0" class="git-stat added">+{{ gitStatus.added }}</span>
         <span v-if="gitStatus.modified > 0" class="git-stat modified">~{{ gitStatus.modified }}</span>
         <span v-if="gitStatus.deleted > 0" class="git-stat deleted">-{{ gitStatus.deleted }}</span>

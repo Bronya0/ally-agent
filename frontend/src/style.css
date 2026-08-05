@@ -1024,6 +1024,14 @@ code, pre {
   font-weight: 600;
 }
 
+.git-stat.ahead {
+  color: #4ea1ff;
+}
+
+.git-stat.behind {
+  color: #f59e0b;
+}
+
 .git-stat.added {
   color: #4ec87e;
 }
