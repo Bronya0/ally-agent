@@ -57,7 +57,7 @@
     </div>
     <div class="header-actions">
       <n-tag v-if="grillModeActive" class="header-grill-tag" size="small" round type="error" bordered>GRILL</n-tag>
-      <n-button class="header-icon-button" size="small" quaternary @click="$emit('openTokenStats')" :title="$t('header.tokenStats')" :aria-label="$t('header.tokenStats')">
+      <n-button class="header-icon-button" size="small" quaternary @click="onOpenTokenStats" :title="$t('header.tokenStats')" :aria-label="$t('header.tokenStats')">
         <svg class="header-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
           <path d="M3 3v18h18" />
           <path d="M7 14v4" />
@@ -232,6 +232,14 @@ function onWorkspaceTabsDrop(event) {
 function onWorkspaceDragEnd() {
   draggedWorkspaceId.value = '';
   dragPreview.value = null;
+}
+
+function onOpenTokenStats(event) {
+  // Blur immediately so the button doesn't retain :focus after the modal opens
+  // or after the modal is dismissed via mask click.
+  const el = event?.currentTarget;
+  if (el && typeof el.blur === 'function') el.blur();
+  emit('openTokenStats');
 }
 
 function onOpenSettings(event) {

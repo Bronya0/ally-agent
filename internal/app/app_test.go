@@ -785,6 +785,30 @@ func TestSystemPromptExplainsRunCommandOutsidePathRecovery(t *testing.T) {
 	}
 }
 
+func TestSystemPromptIncludesConsolidatedSafetyRules(t *testing.T) {
+	prompt := defaultSystemPrompt(nil, "", nil, "", "")
+	for _, expected := range []string{
+		"# Safety",
+		"Sensitive files",
+		"`~/.ssh/*`",
+		"`~/.ally_agent/config.json`",
+		"`.env`",
+		"explicit user confirmation",
+		"`E_PATH_OUTSIDE`",
+		"stop and ask the user",
+	} {
+		if !strings.Contains(prompt, expected) {
+			t.Fatalf("system prompt missing consolidated safety rule %q", expected)
+		}
+	}
+	sub := subagentSystemPrompt()
+	for _, expected := range []string{"# Safety", "Sensitive files", "explicit user confirmation", "`E_PATH_OUTSIDE`"} {
+		if !strings.Contains(sub, expected) {
+			t.Fatalf("sub-agent prompt missing consolidated safety rule %q", expected)
+		}
+	}
+}
+
 func TestSystemPromptDiscouragesRedundantReadsBeforeEdit(t *testing.T) {
 	prompt := defaultSystemPrompt(nil, "", nil, "", "")
 	for _, expected := range []string{

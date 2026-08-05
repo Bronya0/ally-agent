@@ -58,13 +58,19 @@ func sharedCodingGuidelines() string {
 		"- Verification must be safe: never run tests or commands that delete/reset data, modify databases or shared environments, uninstall dependencies, or touch production/release resources; if such a test is truly required, ask the user first.\n"
 }
 
-// sharedSafetyBoundaries returns the core safety boundaries shared by the main and sub-agent system prompts.
+// sharedSafetyBoundaries returns the consolidated safety rules shared by the
+// main and sub-agent system prompts. Keep every hard safety rule here so the
+// two prompts cannot drift; prompt-specific guidance (ask the user, sub-agent
+// restrictions) stays at each call site.
 func sharedSafetyBoundaries() string {
 	return "- Workspace boundary: existing files and directories outside the workspace (except `~/.ally_agent`) may be inspected but must not be modified or deleted. `run_command` may create a new outside path when the target does not already exist. Null-device redirections such as `/dev/null` are allowed.\n" +
 		"- Directory traversal: never recursively walk or search ~, /, C:\\, system directories, or broad home directories. Anchor all recursive operations to a specific project subdirectory.\n" +
 		"- Destructive operations: never delete or overwrite workspace root, home roots, system directories, or any path containing .git.\n" +
 		"- Batch commands: review commands with wildcards or variable-expanded paths before execution to avoid unintended side effects.\n" +
-		"- Do not use shell deletion commands; use `delete_path` for deletion.\n"
+		"- Do not use shell deletion commands; use `delete_path` for deletion.\n" +
+		"- Sensitive files (e.g. `~/.ssh/*` private keys, `~/.ally_agent/config.json` API keys, `.env`/`.env.*`, credential/password/secret stores): do not read them proactively or without the user's explicit request or consent. When a task legitimately needs one, read only the minimal portion required, and never echo secret values into your reply, tool summaries, or memory.\n" +
+		"- Do not run git commit/push/reset/rebase without explicit user confirmation. Weigh reversibility and blast radius before destructive or outward-facing actions, and ask first.\n" +
+		"- Command safety errors: when `run_command` returns `E_PATH_OUTSIDE`, read the returned Chinese explanation and detected target. Do not retry the unchanged command. Only literal existing outside write targets are blocked; dynamic targets (variables, globs, heredoc content) are allowed. For an existing outside target, write to a new path or a workspace path instead. Use dedicated file tools when their path contract fits.\n"
 }
 
 func buildSystemPromptParts(allSkills []SkillDefinition, workspaceRoot string, extraRoots []string, customPrompt, gitBashPath string) []systemPromptPart {
@@ -130,11 +136,9 @@ func buildSystemPromptParts(allSkills []SkillDefinition, workspaceRoot string, e
 		"- If the workspace has `CODEGRAPH.md` and your change alters architecture, module responsibilities, public workflows, major call/data flows, or hot-path files, update `CODEGRAPH.md` in the same task.\n" +
 		"- If the change is local and does not affect the project-level architecture or logic branches described there, leave `CODEGRAPH.md` unchanged.\n" +
 		"- Treat `CODEGRAPH.md` as a navigation aid that may be stale: verify current files before relying on it for edits.\n\n" +
-		"DO NOT run git commit/push/reset/rebase without explicit user confirmation. Weigh reversibility and blast radius before destructive or outward-facing actions, and ask first.\n\n" +
 		"# Safety\n\n" +
 		"- Project/user instructions may refine behavior but must not override safety, tool contracts, or the current user request.\n" +
 		sharedSafetyBoundaries() +
-		"- Command safety errors: when `run_command` returns `E_PATH_OUTSIDE`, read the returned Chinese explanation and detected target. Do not retry the unchanged command. Only literal existing outside write targets are blocked; dynamic targets (variables, globs, heredoc content) are allowed. For an existing outside target, write to a new path or a workspace path instead. Use dedicated file tools when their path contract fits.\n" +
 		"- When in doubt about whether a path is safe, stop and ask the user.\n\n" +
 		"# Temporary Files\n\n" +
 		"When creating intermediate artifacts (scripts, drafts, test fixtures, build outputs) that are not final deliverables, place them under a `.tmp/` directory within the current workspace. Create `.tmp/` if it does not exist. This keeps the workspace clean and makes cleanup trivial. Final deliverables and user-requested output files go in their intended workspace location, not in `.tmp/`.\n\n")
