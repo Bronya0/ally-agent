@@ -2776,16 +2776,17 @@ function queueStreamDelta(data, field) {
   if (!runId) return;
   let buffer = streamBuffers.get(runId);
   if (!buffer) {
-    buffer = { runId, content: '', reasoning: '' };
+    buffer = { runId, content: '', reasoningLen: 0 };
     streamBuffers.set(runId, buffer);
   }
-  if (field === 'reasoning') buffer.reasoning += data.reasoning || data.content || '';
+  if (field === 'reasoning') buffer.reasoningLen += Number(data.reasoningLen) || String(data.reasoning || data.content || '').length;
   else if (field === 'content') buffer.content += data.content || '';
   // Merged run:stream payload carries both fields in one event; route each
   // non-empty field into its own buffer slot so a single IPC feeds both the
-  // reasoning <pre> and the answer body.
+  // reasoning counter and the answer body.
   else {
-    if (data.reasoning) buffer.reasoning += data.reasoning;
+    if (data.reasoningLen) buffer.reasoningLen += Number(data.reasoningLen);
+    else if (data.reasoning) buffer.reasoningLen += String(data.reasoning).length;
     if (data.content) buffer.content += data.content;
   }
   scheduleStreamFlush();
@@ -2819,13 +2820,13 @@ function flushStreamBuffer(runId) {
   }
   last.streaming = true;
   const hadContent = !!buffer.content;
-  if (buffer.reasoning) {
+  if (buffer.reasoningLen > 0) {
     // Only track a running char count for the "Thinking · N tokens" indicator.
     // The reasoning body itself is never stored — it is too large to be useful
     // after session restore and bloats the snapshot files.
     if (last.reasoningChars === undefined) last.reasoningChars = 0;
     if (!last.reasoningStartedAt) last.reasoningStartedAt = Date.now();
-    last.reasoningChars += buffer.reasoning.length;
+    last.reasoningChars += buffer.reasoningLen;
   }
   if (buffer.content) {
     // First content delta marks the end of the thinking phase.

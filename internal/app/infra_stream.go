@@ -69,6 +69,11 @@ func (e *runStreamDeltaEmitter) shouldFlush(bufferLen int) bool {
 // flush emits a single run:stream event carrying whichever of reasoning/content
 // has pending bytes. Merging here cuts IPC count in half for the common
 // thinking+answer streaming case.
+//
+// Reasoning is sent as a character count only (reasoningLen), not the full
+// text: the frontend no longer displays or stores the reasoning body, so
+// transmitting 512+ bytes of thinking text per tick is pure IPC waste. Content
+// is still sent in full because it is rendered live.
 func (e *runStreamDeltaEmitter) flush() {
 	if e == nil || e.emit == nil {
 		return
@@ -83,7 +88,7 @@ func (e *runStreamDeltaEmitter) flush() {
 	e.lastEmit = time.Now()
 	payload := map[string]any{"runId": e.runID, "sessionId": e.sessionID}
 	if reasoning != "" {
-		payload["reasoning"] = reasoning
+		payload["reasoningLen"] = len(reasoning)
 	}
 	if content != "" {
 		payload["content"] = content

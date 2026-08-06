@@ -2744,14 +2744,14 @@ code, pre {
   min-height: 26px;
   color: #a9a9a9;
   font-size: 14px;
-  cursor: pointer;
+  cursor: default;
   border-radius: 4px;
   padding: 0;
   --wails-draggable: no-drag;
 }
 
 .reasoning-header:hover {
-  background: rgba(255, 255, 255, 0.04);
+  background: transparent;
 }
 
 .reasoning-label {

@@ -390,21 +390,21 @@ func TestRunStreamDeltaEmitterFlushesByThreshold(t *testing.T) {
 // versus the previous run:reasoning + run:delta pair.
 func TestRunStreamDeltaEmitterMergesReasoningAndContent(t *testing.T) {
 	type captured struct {
-		name    string
-		reason  string
-		content string
-		hasBoth bool
+		name      string
+		reasonLen int
+		content   string
+		hasBoth   bool
 	}
 	var got []captured
 	emitter := newRunStreamDeltaEmitter("run-1", "session-1", func(name string, payload map[string]any) {
 		c := captured{name: name}
-		if v, ok := payload["reasoning"].(string); ok {
-			c.reason = v
+		if v, ok := payload["reasoningLen"].(int); ok {
+			c.reasonLen = v
 		}
 		if v, ok := payload["content"].(string); ok {
 			c.content = v
 		}
-		c.hasBoth = c.reason != "" && c.content != ""
+		c.hasBoth = c.reasonLen > 0 && c.content != ""
 		got = append(got, c)
 	})
 
@@ -418,7 +418,7 @@ func TestRunStreamDeltaEmitterMergesReasoningAndContent(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("expected 2 events (first-byte then merged flush), got %d: %#v", len(got), got)
 	}
-	if got[0].content != "a" || got[0].reason != "" {
+	if got[0].content != "a" || got[0].reasonLen != 0 {
 		t.Fatalf("expected first event content-only, got %#v", got[0])
 	}
 	if !got[1].hasBoth {
@@ -427,7 +427,7 @@ func TestRunStreamDeltaEmitterMergesReasoningAndContent(t *testing.T) {
 	if got[1].name != runStreamEvent {
 		t.Fatalf("expected merged event name %q, got %q", runStreamEvent, got[1].name)
 	}
-	if got[1].reason != "think" || got[1].content != "b" {
+	if got[1].reasonLen != len("think") || got[1].content != "b" {
 		t.Fatalf("unexpected merged payload: %#v", got[1])
 	}
 }
