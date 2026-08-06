@@ -467,11 +467,11 @@ func editChangeSchema() map[string]any {
 			},
 			"lineRange": map[string]any{
 				"type": "string", "pattern": "^[1-9][0-9]*-[1-9][0-9]*$",
-				"description": "Inclusive original-snapshot whole-line range in A-B form, copied from read's displayed line numbers. Preferred source for whole-line replacements (default for multi-line blocks). Choose this OR oldText; all ranges in the file use the same read version, so never adjust for earlier changes.",
+				"description": "Inclusive original-snapshot whole-line range in A-B form, copied from read's displayed line numbers. Preferred source for whole-line replacements (default for multi-line blocks). The range replaces exactly those whole lines; lines outside it (e.g. a closing brace on the next line) stay untouched, so newText must not re-emit them. Choose this OR oldText; all ranges in the file use the same read version, so never adjust for earlier changes.",
 			},
 			"newText": map[string]any{
 				"type":        "string",
-				"description": "Replacement text without numeric line prefixes. Empty deletes the selected source. Do not include unchanged source text outside the selected oldText or lineRange.",
+				"description": "Replacement text without numeric line prefixes. Empty deletes the selected source. Do not include unchanged source text outside the selected oldText or lineRange. For lineRange, newText replaces the whole selected block exactly: a closing brace outside the range stays in the file (do not add it), while one inside the range must be included.",
 			},
 		},
 		"required": []string{"newText"},

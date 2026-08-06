@@ -1,30 +1,9 @@
 <template>
   <div ref="root" class="ally-avatar" role="img" :aria-label="$t('avatar.aria')">
     <svg class="ally-eye" viewBox="0 0 164 164" aria-hidden="true">
-      <defs>
-        <radialGradient id="ally-eye-iris" cx="50%" cy="50%" r="55%">
-          <stop offset="0" stop-color="#ffd896"/>
-          <stop offset="0.32" stop-color="#d49050"/>
-          <stop offset="0.7" stop-color="#6b3a18"/>
-          <stop offset="1" stop-color="#1a1208"/>
-        </radialGradient>
-        <radialGradient id="ally-eye-glow" cx="50%" cy="50%" r="54%">
-          <stop offset="0" stop-color="#e0a458" stop-opacity="0.34"/>
-          <stop offset="0.58" stop-color="#e0a458" stop-opacity="0.12"/>
-          <stop offset="1" stop-color="#e0a458" stop-opacity="0"/>
-        </radialGradient>
-        <linearGradient id="ally-vortex-grad" x1="0%" y1="0%" x2="0%" y2="100%">
-          <stop offset="0" stop-color="#fff3d6"/>
-          <stop offset="0.5" stop-color="#e0a458"/>
-          <stop offset="1" stop-color="#fff3d6"/>
-        </linearGradient>
-        <!-- Lens-shaped vertical pupil (cat/snake eye slit): pointed at top
-             and bottom, widest at the middle. -->
-        <path id="ally-pupil-shape" d="M82 34 Q 71 82 82 130 Q 93 82 82 34 Z"/>
-        <clipPath id="ally-eye-pupil-clip">
-          <use href="#ally-pupil-shape"/>
-        </clipPath>
-      </defs>
+      <!-- Paint servers (iris/glow/vortex gradients, pupil shape, clip path)
+           are defined once in a shared <defs> injected into <body> by this
+           component; every tab's eye references the same definitions. -->
 
       <ellipse cx="82" cy="88" rx="72" ry="62" fill="url(#ally-eye-glow)"/>
       <ellipse cx="82" cy="140" rx="42" ry="7" fill="#000" opacity="0.25"/>
@@ -61,6 +40,58 @@
 <script setup>
 import { ref, onMounted, onBeforeUnmount } from 'vue';
 
+// 所有实例共享一份 SVG paint server(<defs>):每个 workspace tab 的欢迎消息
+// 都常驻 DOM(v-show),逐实例复制渐变/clipPath 会重复创建节点。共享定义注入
+// 到 body 顶层(0 尺寸、absolute、不占布局、永远在渲染树里),避免藏在隐藏
+// 面板里的定义导致 paint server 引用失效 — 这正是之前第二个 tab 虹膜变黑
+// 的原因。引用计数管理生命周期:最后一个实例卸载时才移除。
+let sharedDefs = null;
+let sharedDefsRefs = 0;
+
+const DEFS_MARKUP =
+  '<defs>' +
+  '<radialGradient id="ally-eye-iris" cx="50%" cy="50%" r="55%">' +
+  '<stop offset="0" stop-color="#ffd896"/>' +
+  '<stop offset="0.32" stop-color="#d49050"/>' +
+  '<stop offset="0.7" stop-color="#6b3a18"/>' +
+  '<stop offset="1" stop-color="#1a1208"/>' +
+  '</radialGradient>' +
+  '<radialGradient id="ally-eye-glow" cx="50%" cy="50%" r="54%">' +
+  '<stop offset="0" stop-color="#e0a458" stop-opacity="0.34"/>' +
+  '<stop offset="0.58" stop-color="#e0a458" stop-opacity="0.12"/>' +
+  '<stop offset="1" stop-color="#e0a458" stop-opacity="0"/>' +
+  '</radialGradient>' +
+  '<linearGradient id="ally-vortex-grad" x1="0%" y1="0%" x2="0%" y2="100%">' +
+  '<stop offset="0" stop-color="#fff3d6"/>' +
+  '<stop offset="0.5" stop-color="#e0a458"/>' +
+  '<stop offset="1" stop-color="#fff3d6"/>' +
+  '</linearGradient>' +
+  '<path id="ally-pupil-shape" d="M82 34 Q 71 82 82 130 Q 93 82 82 34 Z"/>' +
+  '<clipPath id="ally-eye-pupil-clip"><use href="#ally-pupil-shape"/></clipPath>' +
+  '</defs>';
+
+function acquireSharedDefs() {
+  sharedDefsRefs++;
+  if (sharedDefs && document.body.contains(sharedDefs)) return;
+  sharedDefs = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  sharedDefs.setAttribute('width', '0');
+  sharedDefs.setAttribute('height', '0');
+  sharedDefs.setAttribute('aria-hidden', 'true');
+  sharedDefs.style.position = 'absolute';
+  sharedDefs.style.overflow = 'hidden';
+  sharedDefs.innerHTML = DEFS_MARKUP;
+  document.body.appendChild(sharedDefs);
+}
+
+function releaseSharedDefs() {
+  sharedDefsRefs--;
+  if (sharedDefsRefs <= 0 && sharedDefs) {
+    sharedDefs.remove();
+    sharedDefs = null;
+    sharedDefsRefs = 0;
+  }
+}
+
 // Pause all decorative animations when the avatar is offscreen or the window
 // is hidden. CSS transforms on infinite animations keep the compositor alive
 // even at 0% change, so this is the main lever for idle GPU usage.
@@ -74,6 +105,7 @@ function setPaused(paused) {
 }
 
 onMounted(() => {
+  acquireSharedDefs();
   if (typeof IntersectionObserver !== 'undefined' && root.value) {
     observer = new IntersectionObserver(
       (entries) => {
@@ -88,6 +120,7 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  releaseSharedDefs();
   if (observer) observer.disconnect();
   if (visibilityHandler) document.removeEventListener('visibilitychange', visibilityHandler);
 });

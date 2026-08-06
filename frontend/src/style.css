@@ -2410,9 +2410,6 @@ code, pre {
   overflow: auto;
 }
 
-.tool-body:hover {
-  overflow-y: auto;
-}
 
 .tool-body.fixed-scroll {
   max-height: 150px;
@@ -2420,13 +2417,13 @@ code, pre {
 
 .rich-tool-card.command .tool-body.fixed-scroll {
   max-height: calc(1.5em * 4 + 6px);
-  overflow-y: auto;
+  overflow-y: hidden;
 }
 
 .rich-tool-card.command .tool-body {
   color: #8a8a8a;
   max-height: calc(1.5em * 4 + 6px);
-  overflow-y: auto;
+  overflow-y: hidden;
 }
 
 .rich-tool-card.grep .tool-body,
@@ -2438,10 +2435,14 @@ code, pre {
   max-height: calc(1.5em * 6 + 6px);
 }
 
-/* Service read results auto-scroll to the bottom (latest output) on render,
-   so the <pre> must be scrollable by default — the generic .tool-body rule
-   uses overflow: hidden which would clip the scroll position. */
+/* Keep output clipped until the user clicks it. The component scrolls to the
+   newest lines programmatically, while this opt-in class enables manual scroll. */
 .tool-body.tail-default {
+  overflow-y: hidden;
+}
+
+.rich-tool-card .tool-body.scroll-enabled,
+.rich-tool-card.command .tool-body.scroll-enabled {
   overflow-y: auto;
 }
 

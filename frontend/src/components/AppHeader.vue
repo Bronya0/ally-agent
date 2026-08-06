@@ -310,7 +310,6 @@ function historyMenuProps() {
 .app-header button,
 .app-header input,
 .app-header textarea,
-.brand,
 .n-button,
 .n-input,
 .n-modal {
@@ -385,6 +384,7 @@ function historyMenuProps() {
   align-items: center;
   flex-shrink: 0;
   padding: 0 10px 0 2px;
+  --wails-draggable: drag;
 }
 
 .brand-wordmark {
@@ -414,7 +414,7 @@ body.platform-darwin .brand-wordmark {
   height: 100%;
   flex: 1;
   min-width: 0;
-  --wails-draggable: no-drag;
+  --wails-draggable: drag;
 }
 
 .workspace-tabs {
@@ -424,7 +424,7 @@ body.platform-darwin .brand-wordmark {
   --n-tab-gap: 0 !important;
   --n-tab-padding: 0 !important;
   --n-bar-color: rgba(204, 120, 50, 0.62) !important;
-  --wails-draggable: no-drag;
+  --wails-draggable: drag;
 }
 
 .workspace-tabs :deep(.n-tabs-nav),
@@ -446,11 +446,22 @@ body.platform-darwin .brand-wordmark {
   width: 0 !important;
 }
 
+/* 活跃 tab 指示：隐藏 naive-ui 的 bar（其 1px 半透明圆角在缩放屏上呈点状，
+   且定位时机不稳会偶发消失），改用 tab 自身底部 2px 实线，纯 CSS 实现。 */
 .workspace-tabs :deep(.n-tabs-bar) {
+  display: none;
+}
+
+.workspace-tabs :deep(.workspace-tab.active)::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
   bottom: 0;
-  height: 1px;
-  border-radius: 1px 1px 0 0;
-  opacity: 0.72;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--n-bar-color);
+  pointer-events: none;
 }
 
 .workspace-tabs :deep(.workspace-tab .n-tabs-tab__label) {
@@ -537,7 +548,7 @@ body.platform-darwin .window-close-icon {
   line-height: 1;
   white-space: nowrap;
   user-select: none;
-  transition: margin-left 0.16s ease, margin-right 0.16s ease, background 0.12s, color 0.12s;
+  transition: background 0.12s, color 0.12s;
   flex-shrink: 0;
   min-width: 108px;
   max-width: 180px;
@@ -546,32 +557,11 @@ body.platform-darwin .window-close-icon {
 }
 
 .workspace-tabs :deep(.workspace-tab.drop-before) {
-  margin-left: 24px;
+  box-shadow: inset 3px 0 0 var(--ally-accent) !important;
 }
 
 .workspace-tabs :deep(.workspace-tab.drop-after) {
-  margin-right: 24px;
-}
-
-.workspace-tabs :deep(.workspace-tab.drop-before::before),
-.workspace-tabs :deep(.workspace-tab.drop-after::after) {
-  content: '';
-  position: absolute;
-  top: 6px;
-  bottom: 6px;
-  width: 2px;
-  border-radius: 999px;
-  background: var(--ally-accent);
-  box-shadow: 0 0 8px color-mix(in srgb, var(--ally-accent) 70%, transparent);
-  pointer-events: none;
-}
-
-.workspace-tabs :deep(.workspace-tab.drop-before::before) {
-  left: -12px;
-}
-
-.workspace-tabs :deep(.workspace-tab.drop-after::after) {
-  right: -12px;
+  box-shadow: inset -3px 0 0 var(--ally-accent) !important;
 }
 
 .workspace-tabs :deep(.workspace-tab:active) {

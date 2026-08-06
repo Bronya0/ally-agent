@@ -257,8 +257,9 @@ defineEmits(['close']);
 
 const stats = ref(null);
 const loading = ref(false);
-const rangeDays = ref(30);
+const rangeDays = ref(1);
 const rangeOptions = [
+  { label: '1 ' + t('stats.days'), value: 1 },
   { label: '7 ' + t('stats.days'), value: 7 },
   { label: '30 ' + t('stats.days'), value: 30 },
   { label: '90 ' + t('stats.days'), value: 90 },
