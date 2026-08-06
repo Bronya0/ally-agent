@@ -92,7 +92,7 @@ export function estimateMessageRenderChars(msg, options = {}) {
   } else if (msg.content) {
     total += String(msg.content).length;
   }
-  if (msg.reasoningBody) total += String(msg.reasoningBody).length;
+  if (msg.reasoningChars) total += Number(msg.reasoningChars) || 0;
   if (msg.body) total += String(msg.body).length;
   if (msg.codeContent) {
     if (msg.role === 'tool_call' && msg.kind === 'create' && !msg.expanded) {

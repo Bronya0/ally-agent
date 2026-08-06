@@ -2814,15 +2814,18 @@ function flushStreamBuffer(runId) {
   if (!session) return;
   let last = session.messages[session.messages.length - 1];
   if (!last || last.role !== 'assistant' || last.error || last.system || last.done || last.runId !== runId) {
-    last = { role: 'assistant', content: '', reasoningBody: '', streaming: true, runId };
+    last = { role: 'assistant', content: '', reasoningChars: 0, streaming: true, runId };
     session.messages.push(last);
   }
   last.streaming = true;
   const hadContent = !!buffer.content;
   if (buffer.reasoning) {
-    if (last.reasoningBody === undefined) last.reasoningBody = '';
+    // Only track a running char count for the "Thinking · N tokens" indicator.
+    // The reasoning body itself is never stored — it is too large to be useful
+    // after session restore and bloats the snapshot files.
+    if (last.reasoningChars === undefined) last.reasoningChars = 0;
     if (!last.reasoningStartedAt) last.reasoningStartedAt = Date.now();
-    last.reasoningBody += buffer.reasoning;
+    last.reasoningChars += buffer.reasoning.length;
   }
   if (buffer.content) {
     // First content delta marks the end of the thinking phase.
@@ -2832,9 +2835,8 @@ function flushStreamBuffer(runId) {
     last.content += buffer.content;
   }
   // Only auto-scroll when there is actual content output. Pure reasoning
-  // deltas do not grow the visible message body (the reasoning <pre> is
-  // height-capped and shows only a tail), so scrolling on every reasoning
-  // flush wastes a layout pass at 20 FPS.
+  // deltas do not grow the visible message body, so scrolling on every
+  // reasoning flush wastes a layout pass.
   if (hadContent && session.id === activeSessionId.value) {
     scrollMessagesToBottom();
   }
@@ -3128,7 +3130,7 @@ function bindRuntimeEvents() {
     if (!session || !data?.dataUrl) return;
     let target = session.messages[session.messages.length - 1];
     if (!target || target.role !== 'assistant' || target.done || target.error || target.system || target.runId !== data.runId) {
-      target = { role: 'assistant', content: '', reasoningBody: '', streaming: true, attachments: [], runId: data.runId };
+      target = { role: 'assistant', content: '', reasoningChars: 0, streaming: true, attachments: [], runId: data.runId };
       session.messages.push(target);
     }
     target.streaming = true;
@@ -3776,7 +3778,7 @@ function appendAssistantDelta(content) {
   if (!session) return;
   let last = session.messages[session.messages.length - 1];
   if (!last || last.role !== 'assistant' || last.error || last.system || last.done) {
-    last = { role: 'assistant', content: '', reasoningBody: '', streaming: true };
+    last = { role: 'assistant', content: '', reasoningChars: 0, streaming: true };
     session.messages.push(last);
   }
   last.streaming = true;
@@ -3803,13 +3805,13 @@ function appendReasoningDelta(runId, content) {
   if (!session) return;
   let last = session.messages[session.messages.length - 1];
   if (!last || last.role !== 'assistant' || last.error || last.system || last.done) {
-    last = { role: 'assistant', content: '', reasoningBody: '', streaming: true };
+    last = { role: 'assistant', content: '', reasoningChars: 0, streaming: true };
     session.messages.push(last);
   }
   last.streaming = true;
-  if (last.reasoningBody === undefined) last.reasoningBody = '';
-  last.reasoningBody += content;
-  scrollMessagesToBottom();
+  if (last.reasoningChars === undefined) last.reasoningChars = 0;
+  if (!last.reasoningStartedAt) last.reasoningStartedAt = Date.now();
+  last.reasoningChars += content.length;
 }
 
 function setConversationMessagesRef(tabId, instance) {
@@ -5705,9 +5707,19 @@ function sanitizeStoredMessages(messages) {
 function sanitizeStoredMessage(msg) {
   const next = { ...msg };
   next.content = truncateStoredText(next.content, MAX_STORED_MESSAGE_CHARS, t('app.cache.contentTrimmed'));
-  next.reasoningBody = truncateStoredText(next.reasoningBody, MAX_STORED_MESSAGE_CHARS, t('app.cache.reasoningTrimmed'));
-  next.body = truncateStoredText(next.body, MAX_STORED_TOOL_BODY_CHARS, t('app.cache.toolTrimmed'));
-  next.codeContent = truncateStoredText(next.codeContent, MAX_STORED_TOOL_BODY_CHARS, t('app.cache.previewTrimmed'));
+  // Reasoning body is never persisted: it is too large for session snapshots
+  // and stale thoughts add no value after restore. Only the char count (used
+  // for the "Thinking · N tokens" indicator) is kept.
+  next.reasoningBody = '';
+  // Read tool results hold file contents that go stale quickly and bloat the
+  // snapshot; the model can re-read on demand after restore.
+  if (next.role === 'tool_call' && (next.name === 'read' || next.name === 'batch_read')) {
+    next.body = '';
+    next.codeContent = '';
+  } else {
+    next.body = truncateStoredText(next.body, MAX_STORED_TOOL_BODY_CHARS, t('app.cache.toolTrimmed'));
+    next.codeContent = truncateStoredText(next.codeContent, MAX_STORED_TOOL_BODY_CHARS, t('app.cache.previewTrimmed'));
+  }
   next.editDiff = truncateStoredText(next.editDiff, MAX_STORED_TOOL_BODY_CHARS, t('app.cache.diffTrimmed'));
   next.editOldString = '';
   next.editNewString = '';
