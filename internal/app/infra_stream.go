@@ -24,7 +24,7 @@ type runStreamDeltaEmitter struct {
 }
 
 const (
-	runStreamDeltaThrottle  = 32 * time.Millisecond
+	runStreamDeltaThrottle  = 100 * time.Millisecond
 	runStreamDeltaThreshold = 512
 	// runStreamEvent is the merged streaming event. Both reasoning and content
 	// deltas are flushed in a single IPC via shared payload fields, halving the
