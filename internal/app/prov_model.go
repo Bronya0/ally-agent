@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -586,38 +587,13 @@ func isIncompleteStreamJSON(err error) bool {
 }
 
 func (a *App) streamOpenAIResponses(ctx context.Context, cfg ConfigState, model string, messages []legacyopenai.ChatCompletionMessage, tools []legacyopenai.Tool, onEvent func(modelStreamEvent)) (*modelStreamResult, error) {
-	instructions, inputItems := buildOpenAIResponsesInput(messages)
-	body := oaresp.ResponseNewParams{
-		Model:             oaresp.ResponsesModel(model),
-		Input:             oaresp.ResponseNewParamsInputUnion{OfInputItemList: inputItems},
-		MaxOutputTokens:   oa.Int(int64(cfg.MaxTokens)),
-		ParallelToolCalls: oa.Bool(true),
-		Store:             oa.Bool(false),
-	}
-	// Thinking strength for the Responses API (reasoning.effort). The SDK
-	// type is string-backed, so the normalized selection is sent unchanged,
-	// including xhigh and max.
-	if effort := reasoningEffortForAdapter(apiFormatOpenAIResponses, cfg.ReasoningEffort); effort != "" {
-		body.Reasoning = oa.ReasoningParam{Effort: oa.ReasoningEffort(effort)}
-	}
-	if strings.TrimSpace(instructions) != "" {
-		body.Instructions = oa.String(instructions)
-	}
-	body.Tools = convertToolsToOpenAIResponses(tools)
-	if len(tools) > 0 && supportsOpenAIResponsesImageGeneration(cfg) {
-		body.Tools = append(body.Tools, oaresp.ToolUnionParam{
-			OfImageGeneration: &oaresp.ToolImageGenerationParam{OutputFormat: "png"},
-		})
-	}
-	if len(body.Tools) > 0 {
-		body.ToolChoice = oaresp.ResponseNewParamsToolChoiceUnion{OfToolChoiceMode: oa.Opt(oaresp.ToolChoiceOptionsAuto)}
-	}
+	body, explicitPromptCache := buildOpenAIResponsesRequest(cfg, model, messages, tools)
 
 	var stream *openAIResponsesSSEStream
 	var err error
 	maxRetries := effectiveLLMRetries(cfg)
 	for attempt := 0; attempt <= maxRetries; attempt++ {
-		stream, err = newOpenAIResponsesSSEStream(ctx, cfg, body)
+		stream, err = newOpenAIResponsesSSEStream(ctx, cfg, body, explicitPromptCache)
 		if err == nil || ctx.Err() != nil {
 			break
 		}
@@ -773,10 +749,84 @@ func (a *App) streamOpenAIResponses(ctx context.Context, cfg ConfigState, model 
 	}, nil
 }
 
+const openAIResponsesPromptCacheAnchorText = "<ally-prompt-cache-boundary/>"
+
+// openAIResponsesPromptCacheKey keeps cache routing session-local without
+// exposing the caller-provided session ID to the provider.
+func openAIResponsesPromptCacheKey(sessionID string) string {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(sessionID))
+	return fmt.Sprintf("ally:%x", sum[:16])
+}
+
+func buildOpenAIResponsesRequest(cfg ConfigState, model string, messages []legacyopenai.ChatCompletionMessage, tools []legacyopenai.Tool) (oaresp.ResponseNewParams, bool) {
+	instructions, inputItems := buildOpenAIResponsesInput(messages)
+	explicitPromptCache := supportsOpenAIResponsesGPT56PromptCaching(cfg, model)
+	if explicitPromptCache {
+		inputItems = appendOpenAIResponsesPromptCacheAnchor(inputItems)
+	}
+	body := oaresp.ResponseNewParams{
+		Model:             oaresp.ResponsesModel(model),
+		Input:             oaresp.ResponseNewParamsInputUnion{OfInputItemList: inputItems},
+		MaxOutputTokens:   oa.Int(int64(cfg.MaxTokens)),
+		ParallelToolCalls: oa.Bool(true),
+		Store:             oa.Bool(false),
+	}
+	// Thinking strength for the Responses API (reasoning.effort). The SDK
+	// type is string-backed, so the normalized selection is sent unchanged,
+	// including xhigh and max.
+	if effort := reasoningEffortForAdapter(apiFormatOpenAIResponses, cfg.ReasoningEffort); effort != "" {
+		body.Reasoning = oa.ReasoningParam{Effort: oa.ReasoningEffort(effort)}
+	}
+	if strings.TrimSpace(instructions) != "" {
+		body.Instructions = oa.String(instructions)
+	}
+	body.Tools = convertToolsToOpenAIResponses(tools)
+	if len(tools) > 0 && supportsOpenAIResponsesImageGeneration(cfg) {
+		body.Tools = append(body.Tools, oaresp.ToolUnionParam{
+			OfImageGeneration: &oaresp.ToolImageGenerationParam{OutputFormat: "png"},
+		})
+	}
+	if len(body.Tools) > 0 {
+		body.ToolChoice = oaresp.ResponseNewParamsToolChoiceUnion{OfToolChoiceMode: oa.Opt(oaresp.ToolChoiceOptionsAuto)}
+	}
+	if explicitPromptCache {
+		body.PromptCacheKey = oa.String(cfg.responsesPromptCacheKey)
+	}
+	return body, explicitPromptCache
+}
+
+func supportsOpenAIResponsesGPT56PromptCaching(cfg ConfigState, model string) bool {
+	if normalizeAPIFormat(cfg.APIFormat) != apiFormatOpenAIResponses || strings.TrimSpace(cfg.responsesPromptCacheKey) == "" || !isOfficialOpenAIResponsesEndpoint(cfg) {
+		return false
+	}
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(model)), "gpt-5.6")
+}
+
+func appendOpenAIResponsesPromptCacheAnchor(input oaresp.ResponseInputParam) oaresp.ResponseInputParam {
+	anchor := oaresp.ResponseInputItemParamOfMessage(
+		oaresp.ResponseInputMessageContentListParam{
+			oaresp.ResponseInputContentParamOfInputText(openAIResponsesPromptCacheAnchorText),
+		},
+		oaresp.EasyInputMessageRoleDeveloper,
+	)
+	out := make(oaresp.ResponseInputParam, len(input)+1)
+	out[0] = anchor
+	copy(out[1:], input)
+	return out
+}
+
 func supportsOpenAIResponsesImageGeneration(cfg ConfigState) bool {
 	if cfg.grillMode {
 		return false
 	}
+	return isOfficialOpenAIResponsesEndpoint(cfg)
+}
+
+func isOfficialOpenAIResponsesEndpoint(cfg ConfigState) bool {
 	base := strings.ToLower(strings.TrimRight(baseURLForAPIFormat(cfg), "/"))
 	return base == defaultOpenAIResponsesURL || strings.HasPrefix(base, defaultOpenAIResponsesURL+"/")
 }
@@ -785,7 +835,7 @@ type openAIResponsesSSEStream struct {
 	decoder ssestream.Decoder
 }
 
-func newOpenAIResponsesSSEStream(ctx context.Context, cfg ConfigState, body oaresp.ResponseNewParams) (*openAIResponsesSSEStream, error) {
+func newOpenAIResponsesSSEStream(ctx context.Context, cfg ConfigState, body oaresp.ResponseNewParams, explicitPromptCache bool) (*openAIResponsesSSEStream, error) {
 	payload, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
@@ -795,6 +845,11 @@ func newOpenAIResponsesSSEStream(ctx context.Context, cfg ConfigState, body oare
 		return nil, err
 	}
 	requestBody["stream"] = true
+	if explicitPromptCache {
+		if err := applyOpenAIResponsesPromptCacheOptions(requestBody); err != nil {
+			return nil, err
+		}
+	}
 	payload, err = json.Marshal(requestBody)
 	if err != nil {
 		return nil, err
@@ -831,6 +886,36 @@ func newOpenAIResponsesSSEStream(ctx context.Context, cfg ConfigState, body oare
 		return nil, errors.New("responses stream was empty")
 	}
 	return &openAIResponsesSSEStream{decoder: decoder}, nil
+}
+
+// The SDK version currently used by Ally exposes prompt_cache_key but not the
+// GPT-5.6 cache-breakpoint fields. Inject them only after serialization, and
+// only for the stable developer anchor added by buildOpenAIResponsesRequest.
+func applyOpenAIResponsesPromptCacheOptions(requestBody map[string]any) error {
+	items, ok := requestBody["input"].([]any)
+	if !ok {
+		return errors.New("responses prompt-cache anchor input was not serialized")
+	}
+	for _, rawItem := range items {
+		item, ok := rawItem.(map[string]any)
+		if !ok || item["role"] != string(oaresp.EasyInputMessageRoleDeveloper) {
+			continue
+		}
+		parts, ok := item["content"].([]any)
+		if !ok {
+			continue
+		}
+		for _, rawPart := range parts {
+			part, ok := rawPart.(map[string]any)
+			if !ok || part["type"] != "input_text" || part["text"] != openAIResponsesPromptCacheAnchorText {
+				continue
+			}
+			part["prompt_cache_breakpoint"] = map[string]string{"mode": "explicit"}
+			requestBody["prompt_cache_options"] = map[string]string{"mode": "explicit"}
+			return nil
+		}
+	}
+	return errors.New("responses prompt-cache anchor was not found")
 }
 
 func (s *openAIResponsesSSEStream) Next() bool {

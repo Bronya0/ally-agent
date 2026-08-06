@@ -209,6 +209,7 @@ Supported API formats:
 - Streams output text, reasoning summary text, function-call argument deltas, completion usage, failures, and incomplete responses.
 - On the official OpenAI Responses endpoint, exposes the native image-generation tool and streams generated images through `run:image`; custom compatible endpoints do not receive that provider-specific tool.
 - Tool definitions are converted with `ToolParamOfFunction(..., strict=false)` for provider compatibility.
+- Session-backed official OpenAI `gpt-5.6*` requests use a session-scoped hashed `prompt_cache_key`, a stable developer `input_text` cache anchor, and `prompt_cache_options.mode="explicit"`. These GPT-5.6-only fields are never sent to custom Responses-compatible endpoints or Chat Completions routes.
 
 ### Anthropic Messages
 
@@ -883,4 +884,3 @@ lowercase + 冒号分隔，如 `run:stream`、`tool:result`、`mcp:status`、`su
 - 媒体预览用 revocable Blob URL，session 驱逐时 `URL.revokeObjectURL`；原图 Base64 仅在需要 model 输入时保留。
 - `AppHeader` 容器 `--wails-draggable: drag`，内部所有按钮 / 输入 / 下拉必须 `no-drag`；`ComposerInfoBar` 所有交互 span/button `no-drag`，否则下拉/点击会被拖拽逻辑吞掉。
 - 后台 goroutine（chat run / MCP / scheduled task / service process）都派生自 `app.ctx`，窗口关闭后随 ctx 取消。
-

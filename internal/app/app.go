@@ -360,7 +360,8 @@ type ConfigState struct {
 	// noAdapterRetry 是进程内非序列化标记:多 key 模式下置 true,让适配器
 	// 内部关闭退避重试,由 streamModelResponse 的外层循环统一承担重试与
 	// 故障切换,避免 N 个 key × 适配器重试组合爆炸。
-	noAdapterRetry bool
+	noAdapterRetry          bool
+	responsesPromptCacheKey string // nonserialized, session-local OpenAI Responses cache route
 }
 
 // autoUpdateEnabled returns true unless AutoUpdate was explicitly set to false.
@@ -2054,6 +2055,7 @@ func (a *App) buildUpdateResult(cfg ConfigState, tag string) CheckForUpdatesResu
 func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg ConfigState) {
 	sessionID := req.SessionID
 	cfg.grillMode = req.GrillMode
+	cfg.responsesPromptCacheKey = openAIResponsesPromptCacheKey(sessionID)
 	a.beginTaskbarRun()
 	// success marks a run that already persisted its history on the normal
 	// run:done path. Interrupted runs (ESC/cancel, provider errors, stop
@@ -2580,11 +2582,11 @@ func (a *App) appendGoalProgressMessage(messages []openai.ChatCompletionMessage,
 // appendContextBudgetMessage returns a new slice with a context-budget item
 // appended to the request tail. It deliberately allocates a fresh slice so the
 // caller's `messages` is never mutated; the budget item must not be persisted
-// into saved history (it would bloat storage and break prefix-cache reuse).
+// into saved history (it would bloat storage and disrupt reusable prefixes).
 //
 // Placing the budget at the tail follows the same strategy as
-// <ally-goal-progress>: dynamic, low-priority content goes last so the stable
-// prefix (system + history) keeps benefiting from provider prompt caching.
+// <ally-goal-progress>: dynamic, low-priority content goes last. The official
+// GPT-5.6 Responses path places its explicit cache boundary before this tail.
 func appendContextBudgetMessage(messages []openai.ChatCompletionMessage, usedTokens, maxCtx int) []openai.ChatCompletionMessage {
 	if maxCtx <= 0 {
 		maxCtx = 1048576
@@ -3995,6 +3997,9 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 		model = req.Model
 	}
 	subID := newID()
+	// Keep concurrent sub-agents on independent cache routes. The key is
+	// process-local and is only consumed by the official GPT-5.6 Responses path.
+	cfg.responsesPromptCacheKey = openAIResponsesPromptCacheKey("subagent:" + subID)
 	desc := req.Description
 	if desc == "" {
 		desc = req.Task
