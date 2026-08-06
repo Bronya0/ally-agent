@@ -24,8 +24,12 @@ type runStreamDeltaEmitter struct {
 }
 
 const (
-	runStreamDeltaThrottle  = 100 * time.Millisecond
-	runStreamDeltaThreshold = 512
+	// runStreamDeltaThrottle bounds how often a merged run:stream event is
+	// emitted during streaming. Pure time-based: the first byte always flushes
+	// immediately, afterwards deltas accumulate until the throttle window
+	// elapses. 64ms ≈ 15 FPS, smooth enough for the typewriter indicator
+	// while keeping IPC rate low (Wails events are synchronous JS calls).
+	runStreamDeltaThrottle = 64 * time.Millisecond
 	// runStreamEvent is the merged streaming event. Both reasoning and content
 	// deltas are flushed in a single IPC via shared payload fields, halving the
 	// event count compared to emitting run:reasoning and run:delta separately.
@@ -60,7 +64,11 @@ func (e *runStreamDeltaEmitter) shouldFlush(bufferLen int) bool {
 	if e == nil || bufferLen == 0 {
 		return false
 	}
-	if e.lastEmit.IsZero() || bufferLen >= runStreamDeltaThreshold {
+	// First byte always flushes so the user sees the response start immediately.
+	// Afterwards, pure time-based throttling — no byte threshold, since the
+	// merged event is cheap (reasoning is just a length int) and 64ms gives a
+	// smooth enough typewriter effect without flooding Wails IPC.
+	if e.lastEmit.IsZero() {
 		return true
 	}
 	return time.Since(e.lastEmit) >= runStreamDeltaThrottle

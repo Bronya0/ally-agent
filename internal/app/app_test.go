@@ -369,22 +369,6 @@ func TestRunStreamDeltaEmitterBatchesRapidDeltas(t *testing.T) {
 	}
 }
 
-func TestRunStreamDeltaEmitterFlushesByThreshold(t *testing.T) {
-	events := []string{}
-	emitter := newRunStreamDeltaEmitter("run-1", "session-1", func(name string, payload map[string]any) {
-		events = append(events, payload["content"].(string))
-	})
-
-	emitter.addContent("a")
-	emitter.addContent(strings.Repeat("b", runStreamDeltaThreshold))
-	if len(events) != 2 {
-		t.Fatalf("expected threshold to flush buffered content, got %#v", events)
-	}
-	if events[1] != strings.Repeat("b", runStreamDeltaThreshold) {
-		t.Fatalf("expected threshold flush content, got %q", events[1])
-	}
-}
-
 // TestRunStreamDeltaEmitterMergesReasoningAndContent verifies that a single
 // flush emits one run:stream event carrying both fields, halving IPC count
 // versus the previous run:reasoning + run:delta pair.
