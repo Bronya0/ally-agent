@@ -61,7 +61,8 @@ func main() {
 
 	app.SetApp(wailsApp)
 	app.SetWindow(mainWindow)
-	app.SetTrayIcon(appIconPNG)
+	// Tray support is kept for a future release but is currently disabled.
+	// app.SetTrayIcon(appIconPNG)
 
 	if err := wailsApp.Run(); err != nil {
 		println("Error:", err.Error())

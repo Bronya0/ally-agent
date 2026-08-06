@@ -764,6 +764,7 @@ func openAIResponsesPromptCacheKey(sessionID string) string {
 
 func buildOpenAIResponsesRequest(cfg ConfigState, model string, messages []legacyopenai.ChatCompletionMessage, tools []legacyopenai.Tool) (oaresp.ResponseNewParams, bool) {
 	instructions, inputItems := buildOpenAIResponsesInput(messages)
+	cacheKey := strings.TrimSpace(cfg.responsesPromptCacheKey)
 	explicitPromptCache := supportsOpenAIResponsesGPT56PromptCaching(cfg, model)
 	if explicitPromptCache {
 		inputItems = appendOpenAIResponsesPromptCacheAnchor(inputItems)
@@ -793,8 +794,12 @@ func buildOpenAIResponsesRequest(cfg ConfigState, model string, messages []legac
 	if len(body.Tools) > 0 {
 		body.ToolChoice = oaresp.ResponseNewParamsToolChoiceUnion{OfToolChoiceMode: oa.Opt(oaresp.ToolChoiceOptionsAuto)}
 	}
-	if explicitPromptCache {
-		body.PromptCacheKey = oa.String(cfg.responsesPromptCacheKey)
+	// Codex sends the stable session key on every Responses request, including
+	// custom compatible endpoints. Only the explicit breakpoint/options below
+	// are restricted to the official GPT-5.6 route because older gateways may
+	// reject those newer fields.
+	if cacheKey != "" {
+		body.PromptCacheKey = oa.String(cacheKey)
 	}
 	return body, explicitPromptCache
 }
@@ -1550,21 +1555,109 @@ func modelUsageFromLegacy(usage *legacyopenai.Usage, raw []byte) *modelUsage {
 }
 
 func modelUsageFromResponses(usage oaresp.ResponseUsage) *modelUsage {
-	if usage.InputTokens <= 0 && usage.OutputTokens <= 0 {
+	return modelUsageFromResponseTokenCounts(
+		usage.InputTokens,
+		usage.OutputTokens,
+		usage.InputTokensDetails.CachedTokens,
+		0,
+	)
+}
+
+func modelUsageFromResponseTokenCounts(input, output, hit, miss int64) *modelUsage {
+	if input <= 0 && output <= 0 && hit <= 0 && miss <= 0 {
 		return nil
 	}
-	input := int(usage.InputTokens)
-	hit := int(usage.InputTokensDetails.CachedTokens)
-	miss := input - hit
+	if input < 0 {
+		input = 0
+	}
+	if output < 0 {
+		output = 0
+	}
+	if hit < 0 {
+		hit = 0
+	}
 	if miss < 0 {
 		miss = 0
 	}
-	return &modelUsage{
-		PromptTokens:     input,
-		CompletionTokens: int(usage.OutputTokens),
-		CacheHitTokens:   hit,
-		CacheMissTokens:  miss,
+	if input <= 0 {
+		input = hit + miss
 	}
+	if miss <= 0 && input > hit {
+		miss = input - hit
+	}
+	return &modelUsage{
+		PromptTokens:     int(input),
+		CompletionTokens: int(output),
+		CacheHitTokens:   int(hit),
+		CacheMissTokens:  int(miss),
+	}
+}
+
+type responsesUsageTokenDetails struct {
+	CachedTokens     int64 `json:"cached_tokens"`
+	CacheWriteTokens int64 `json:"cache_write_tokens"`
+}
+
+type responsesUsageWire struct {
+	InputTokens           int64                       `json:"input_tokens"`
+	PromptTokens          int64                       `json:"prompt_tokens"`
+	OutputTokens          int64                       `json:"output_tokens"`
+	CompletionTokens      int64                       `json:"completion_tokens"`
+	InputTokensDetails    *responsesUsageTokenDetails `json:"input_tokens_details"`
+	PromptTokensDetails   *responsesUsageTokenDetails `json:"prompt_tokens_details"`
+	CachedInputTokens     int64                       `json:"cached_input_tokens"`
+	CacheReadInputTokens  int64                       `json:"cache_read_input_tokens"`
+	CacheWriteInputTokens int64                       `json:"cache_write_input_tokens"`
+	PromptCacheHitTokens  int64                       `json:"prompt_cache_hit_tokens"`
+	PromptCacheMissTokens int64                       `json:"prompt_cache_miss_tokens"`
+	CachedTokens          int64                       `json:"cached_tokens"`
+}
+
+func modelUsageFromResponsesWire(usage *responsesUsageWire) *modelUsage {
+	if usage == nil {
+		return nil
+	}
+	input := usage.InputTokens
+	if input <= 0 {
+		input = usage.PromptTokens
+	}
+	output := usage.OutputTokens
+	if output <= 0 {
+		output = usage.CompletionTokens
+	}
+	hit := int64(0)
+	if usage.InputTokensDetails != nil {
+		hit = usage.InputTokensDetails.CachedTokens
+	}
+	if hit <= 0 && usage.PromptTokensDetails != nil {
+		hit = usage.PromptTokensDetails.CachedTokens
+	}
+	if hit <= 0 {
+		for _, candidate := range []int64{
+			usage.CachedInputTokens,
+			usage.CacheReadInputTokens,
+			usage.PromptCacheHitTokens,
+			usage.CachedTokens,
+		} {
+			if candidate > 0 {
+				hit = candidate
+				break
+			}
+		}
+	}
+	miss := usage.PromptCacheMissTokens
+	if input <= 0 && miss <= 0 {
+		if usage.InputTokensDetails != nil {
+			miss = usage.InputTokensDetails.CacheWriteTokens
+		}
+		if miss <= 0 && usage.PromptTokensDetails != nil {
+			miss = usage.PromptTokensDetails.CacheWriteTokens
+		}
+		if miss <= 0 {
+			miss = usage.CacheWriteInputTokens
+		}
+	}
+	return modelUsageFromResponseTokenCounts(input, output, hit, miss)
 }
 
 // modelUsageFromResponsesEvent parses usage from the raw response.completed
@@ -1574,37 +1667,21 @@ func modelUsageFromResponses(usage oaresp.ResponseUsage) *modelUsage {
 func modelUsageFromResponsesEvent(raw []byte) *modelUsage {
 	var payload struct {
 		Response *struct {
-			Usage *struct {
-				InputTokens        int64 `json:"input_tokens"`
-				InputTokensDetails *struct {
-					CachedTokens int64 `json:"cached_tokens"`
-				} `json:"input_tokens_details"`
-				OutputTokens int64 `json:"output_tokens"`
-			} `json:"usage"`
+			Usage *responsesUsageWire `json:"usage"`
 		} `json:"response"`
+		Usage *responsesUsageWire `json:"usage"`
 	}
-	if len(raw) == 0 || json.Unmarshal(raw, &payload) != nil || payload.Response == nil || payload.Response.Usage == nil {
+	if len(raw) == 0 || json.Unmarshal(raw, &payload) != nil {
 		return nil
 	}
-	usage := payload.Response.Usage
-	input := int(usage.InputTokens)
-	hit := 0
-	if usage.InputTokensDetails != nil {
-		hit = int(usage.InputTokensDetails.CachedTokens)
+	var usage *responsesUsageWire
+	if payload.Response != nil {
+		usage = payload.Response.Usage
 	}
-	if input <= 0 && usage.OutputTokens <= 0 {
-		return nil
+	if usage == nil {
+		usage = payload.Usage
 	}
-	miss := input - hit
-	if miss < 0 {
-		miss = 0
-	}
-	return &modelUsage{
-		PromptTokens:     input,
-		CompletionTokens: int(usage.OutputTokens),
-		CacheHitTokens:   hit,
-		CacheMissTokens:  miss,
-	}
+	return modelUsageFromResponsesWire(usage)
 }
 
 func modelUsageFromAnthropic(usage anthropic.Usage) *modelUsage {

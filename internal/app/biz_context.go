@@ -1,7 +1,9 @@
 package app
 
 import (
+	"crypto/sha256"
 	"encoding/json"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math"
@@ -9,9 +11,12 @@ import (
 	goruntime "runtime"
 	"strings"
 	"sync"
+	"time"
 
 	openai "github.com/sashabaranov/go-openai"
 )
+
+const contextStaticCacheTTL = 30 * time.Second
 
 // GetTodos returns the current todo list for a session.
 func (a *App) GetTodos(sessionID string) []TodoEntry {
@@ -311,18 +316,7 @@ func (a *App) getContextBreakdown(sessionID string) ContextBreakdown {
 	cfg := a.config
 	a.mu.Unlock()
 
-	result := ContextBreakdown{}
-	for _, part := range buildSystemPromptParts(a.listCachedSkills(), cfg.Workspace, cfg.ExtraRoots, cfg.CustomPrompt, cfg.GitBashPath) {
-		tokens := estimateTokensFromText(part.content)
-		if tokens <= 0 {
-			continue
-		}
-		result.SystemPrompt += tokens
-		result.SystemPromptParts = append(result.SystemPromptParts, ContextBreakdownPart{
-			Label:  part.label,
-			Tokens: tokens,
-		})
-	}
+	result := a.contextStaticBreakdown(cfg, a.listCachedSkills())
 
 	// Workspace map (appended as a separate system message in buildMessages)
 	if wm := a.workspaceMapContext(cfg); wm != "" {
@@ -388,9 +382,93 @@ func (a *App) getContextBreakdown(sessionID string) ContextBreakdown {
 		}
 	}
 
-	result.ToolSchemas = estimateToolSchemaTokens(a.buildToolsForConfig(cfg))
+	// ToolSchemas already comes from contextStaticBreakdown (which caches it
+	// and is invalidated by invalidateContextStaticCache on MCP/skill changes).
+	// Do NOT recompute here — that would defeat the cache on every popover refresh.
 	finalizeContextBreakdownTotal(&result)
 	return result
+}
+
+func (a *App) contextStaticBreakdown(cfg ConfigState, skills []SkillDefinition) ContextBreakdown {
+	version := a.contextStaticCacheVersion()
+	key := contextStaticCacheKey(cfg, skills, version)
+	a.contextStaticCacheMu.Lock()
+	if cached, ok := a.contextStaticCache[key]; ok && time.Since(cached.generatedAt) < contextStaticCacheTTL {
+		result := cloneContextBreakdown(cached.breakdown)
+		a.contextStaticCacheMu.Unlock()
+		return result
+	}
+	a.contextStaticCacheMu.Unlock()
+
+	result := ContextBreakdown{}
+	for _, part := range buildSystemPromptParts(skills, cfg.Workspace, cfg.ExtraRoots, cfg.CustomPrompt, cfg.GitBashPath) {
+		tokens := estimateTokensFromText(part.content)
+		if tokens <= 0 {
+			continue
+		}
+		result.SystemPrompt += tokens
+		result.SystemPromptParts = append(result.SystemPromptParts, ContextBreakdownPart{
+			Label:  part.label,
+			Tokens: tokens,
+		})
+	}
+	result.ToolSchemas = estimateToolSchemaTokens(a.buildToolsForConfig(cfg))
+
+	a.contextStaticCacheMu.Lock()
+	if a.contextStaticCache == nil {
+		a.contextStaticCache = map[string]contextStaticCacheEntry{}
+	}
+	if len(a.contextStaticCache) >= 64 {
+		a.contextStaticCache = map[string]contextStaticCacheEntry{}
+	}
+	a.contextStaticCache[key] = contextStaticCacheEntry{
+		breakdown:   cloneContextBreakdown(result),
+		generatedAt: time.Now(),
+	}
+	a.contextStaticCacheMu.Unlock()
+	return result
+}
+
+func cloneContextBreakdown(result ContextBreakdown) ContextBreakdown {
+	result.SystemPromptParts = append([]ContextBreakdownPart(nil), result.SystemPromptParts...)
+	return result
+}
+
+func contextStaticCacheKey(cfg ConfigState, skills []SkillDefinition, version uint64) string {
+	h := sha256.New()
+	write := func(value string) {
+		_, _ = h.Write([]byte(value))
+		_, _ = h.Write([]byte{0})
+	}
+	write(cfg.Workspace)
+	for _, root := range cfg.ExtraRoots {
+		write(root)
+	}
+	write(cfg.CustomPrompt)
+	write(cfg.GitBashPath)
+	write(fmt.Sprintf("%t", cfg.grillMode))
+	write(fmt.Sprintf("%d", version))
+	for _, skill := range skills {
+		write(skill.Name)
+		write(skill.Description)
+		write(skill.Source)
+		write(skill.Path)
+		write(skill.WhenToUse)
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+func (a *App) contextStaticCacheVersion() uint64 {
+	a.contextStaticCacheMu.Lock()
+	defer a.contextStaticCacheMu.Unlock()
+	return a.contextStaticVersion
+}
+
+func (a *App) invalidateContextStaticCache() {
+	a.contextStaticCacheMu.Lock()
+	a.contextStaticVersion++
+	a.contextStaticCache = map[string]contextStaticCacheEntry{}
+	a.contextStaticCacheMu.Unlock()
 }
 
 // liveBreakdownAccumulator exploits the append-only shape of the runChat

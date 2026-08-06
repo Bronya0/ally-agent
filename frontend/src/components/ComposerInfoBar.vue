@@ -126,7 +126,7 @@
         <span v-if="gitStatus.deleted > 0" class="git-stat deleted" :title="$t('composer.git.deleted')">-{{ gitStatus.deleted }}</span>
       </span>
     </template>
-    <n-popover v-if="contextBreakdown" :show="contextPopoverVisible" trigger="manual" placement="top" :show-arrow="false" @clickoutside="contextPopoverVisible = false">
+    <n-popover v-if="!footerStatsLoading && contextBreakdown" :show="contextPopoverVisible" trigger="manual" placement="top" :show-arrow="false" @clickoutside="contextPopoverVisible = false">
       <template #trigger>
         <span class="info-context" style="cursor:pointer" @click.stop="contextPopoverVisible = !contextPopoverVisible">
           <ContextUsageInline
@@ -180,7 +180,7 @@
         </div>
       </div>
     </n-popover>
-    <span v-else class="info-context">
+    <span v-else-if="!footerStatsLoading" class="info-context">
       <ContextUsageInline
         :context-percent="contextPercent"
         :context-used="contextUsed"
@@ -188,6 +188,7 @@
         :context-usage-style="contextUsageStyle"
       />
     </span>
+    <span v-else class="info-context info-context-loading" aria-hidden="true">...</span>
   </div>
 </template>
 
@@ -264,6 +265,7 @@ const props = defineProps({
   running: { type: Boolean, default: false },
   gitStatus: { type: Object, default: () => ({ isRepo: false }) },
   contextBreakdown: { type: Object, default: null },
+  footerStatsLoading: { type: Boolean, default: false },
   // Lazy getter for the session's messages array — only invoked when the user
   // actually triggers an export. Passing the full array as a prop forced Vue
   // to diff the entire array on every streaming delta / history mutation,

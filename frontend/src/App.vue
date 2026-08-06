@@ -187,7 +187,8 @@
                   :running="activeSessionRunning"
                   :config="config"
                   :git-status="gitStatus"
-                  :context-breakdown="contextBreakdown"
+                    :context-breakdown="contextBreakdown"
+                    :footer-stats-loading="footerStatsLoading"
                   :context-percent="contextPercent"
                   :context-used="contextUsed"
                   :context-max="contextMax"
@@ -1751,9 +1752,174 @@ const contextBreakdown = ref(null);
 const workspaceTokenUsage = ref({ inputTokens: 0, outputTokens: 0 });
 const gitStatus = ref({ isRepo: false });
 const gitDiffVisible = ref(false);
+const footerStatsLoading = ref(true);
+let footerStatsRequestVersion = 0;
+let contextRequestVersion = 0;
+let gitStatusRequestVersion = 0;
+let workspaceConfigSaveQueue = Promise.resolve();
+let workspaceSwitchVersion = 0;
+
+function emptyGitStatus() {
+  return { isRepo: false };
+}
+
+function emptyWorkspaceTokenUsage() {
+  return { inputTokens: 0, outputTokens: 0 };
+}
+
+function clearFooterStats() {
+  footerStatsRequestVersion += 1;
+  contextRequestVersion += 1;
+  footerStatsLoading.value = true;
+  gitStatus.value = emptyGitStatus();
+  workspaceTokenUsage.value = emptyWorkspaceTokenUsage();
+  contextTokens.value = 0;
+  contextBreakdown.value = null;
+}
+
+function isCurrentFooterTarget(tabId, sessionId, workspace) {
+  return (
+    tabId === activeWorkspaceId.value
+    && sessionId === activeSessionId.value
+    && String(workspace || '') === String(config.workspace || '')
+  );
+}
+
+// Per-tab snapshot of the footer stats so switching back to a recently visited
+// tab shows the last result instantly while a fresh fetch refreshes it in the
+// background. Keyed by tab id; each entry remembers the workspace it belongs to
+// so a tab whose workspace changed doesn't display another workspace's numbers.
+const footerStatsCache = new Map();
+const FOOTER_STATS_CACHE_LIMIT = 16;
+
+function captureFooterSnapshot(tabId, workspace) {
+  if (!tabId) return;
+  footerStatsCache.set(tabId, {
+    workspace: String(workspace || ''),
+    gitStatus: gitStatus.value,
+    workspaceTokenUsage: { ...workspaceTokenUsage.value },
+    contextTokens: contextTokens.value,
+    contextBreakdown: contextBreakdown.value,
+  });
+  if (footerStatsCache.size > FOOTER_STATS_CACHE_LIMIT) {
+    footerStatsCache.delete(footerStatsCache.keys().next().value);
+  }
+}
+
+function applyFooterSnapshot(tabId, workspace) {
+  const snap = footerStatsCache.get(tabId);
+  if (!snap || String(snap.workspace || '') !== String(workspace || '')) return false;
+  gitStatus.value = snap.gitStatus;
+  workspaceTokenUsage.value = { ...snap.workspaceTokenUsage };
+  contextTokens.value = snap.contextTokens;
+  contextBreakdown.value = snap.contextBreakdown;
+  return true;
+}
+
+// Show the cached snapshot for the target tab instantly when it matches the
+// workspace, otherwise fall back to the loading placeholder. The caller still
+// kicks off refreshFooterStats afterwards to refresh the numbers in the
+// background.
+function prepareFooterStatsForTarget(tabId, workspace) {
+  if (applyFooterSnapshot(tabId, workspace)) {
+    footerStatsLoading.value = false;
+  } else {
+    clearFooterStats();
+  }
+}
+
+function saveWorkspaceConfig(snapshot) {
+  const save = workspaceConfigSaveQueue
+    .catch(() => {})
+    .then(() => SaveConfig(snapshot));
+  workspaceConfigSaveQueue = save.catch(() => {});
+  return save;
+}
+
+async function refreshFooterStats({
+  tabId = activeWorkspaceId.value,
+  sessionId = activeSessionId.value,
+  workspace = config.workspace || '',
+} = {}) {
+  const requestedWorkspace = String(workspace || '');
+  const requestedSessionId = String(sessionId || '');
+  const requestVersion = ++footerStatsRequestVersion;
+  const requestedContextVersion = ++contextRequestVersion;
+
+  if (!requestedWorkspace || !requestedSessionId) {
+    if (
+      requestVersion === footerStatsRequestVersion
+      && requestedContextVersion === contextRequestVersion
+      && isCurrentFooterTarget(tabId, requestedSessionId, requestedWorkspace)
+    ) {
+      footerStatsLoading.value = false;
+    }
+    return;
+  }
+
+  // Only the breakdown is fetched: it already carries `total`, so a separate
+  // GetSessionContextTokens call would just recompute the same payload on the
+  // backend and double the IPC cost on every footer refresh.
+  const [gitResult, usageResult, breakdownResult] = await Promise.allSettled([
+    // SaveConfig has completed before this function is called, so this uses
+    // the backend's new active workspace.
+    GetGitStatus(),
+    GetWorkspaceTokenUsage(requestedWorkspace),
+    GetContextBreakdown(requestedSessionId),
+  ]);
+
+  if (
+    requestVersion !== footerStatsRequestVersion
+    || requestedContextVersion !== contextRequestVersion
+    || !isCurrentFooterTarget(tabId, requestedSessionId, requestedWorkspace)
+  ) return;
+
+  gitStatus.value = gitResult.status === 'fulfilled' ? (gitResult.value || emptyGitStatus()) : emptyGitStatus();
+  workspaceTokenUsage.value = usageResult.status === 'fulfilled'
+    ? (usageResult.value || emptyWorkspaceTokenUsage())
+    : emptyWorkspaceTokenUsage();
+
+  const breakdown = breakdownResult.status === 'fulfilled' ? (breakdownResult.value || null) : null;
+  const contextValue = Number(breakdown?.total) || 0;
+  contextTokens.value = contextValue;
+  contextBreakdown.value = breakdown;
+
+  const session = sessions.value.find((item) => item.id === requestedSessionId);
+  if (session) {
+    session.contextTokens = contextValue;
+    sessionTokensCache[requestedSessionId] = contextValue;
+    if (!session.isRunning && (session.hasSnapshot || session.messageCount > 0)) {
+      enqueueSessionWrite(() => SaveSessionIndex(sessionIndexEntry(session))).catch(() => {});
+    }
+  }
+  footerStatsLoading.value = false;
+  captureFooterSnapshot(tabId, requestedWorkspace);
+}
 
 async function refreshGitStatus() {
-  try { gitStatus.value = await GetGitStatus(); } catch (_) { gitStatus.value = { isRepo: false }; }
+  const tabId = activeWorkspaceId.value;
+  const sessionId = activeSessionId.value;
+  const workspace = String(config.workspace || '');
+  if (!workspace || footerStatsLoading.value) return;
+  const requestVersion = ++gitStatusRequestVersion;
+  try {
+    const status = await GetGitStatus();
+    if (
+      requestVersion !== gitStatusRequestVersion
+      || !isCurrentFooterTarget(tabId, sessionId, workspace)
+      || footerStatsLoading.value
+    ) return;
+    gitStatus.value = status || emptyGitStatus();
+    captureFooterSnapshot(tabId, workspace);
+  } catch (_) {
+    if (
+      requestVersion === gitStatusRequestVersion
+      && isCurrentFooterTarget(tabId, sessionId, workspace)
+      && !footerStatsLoading.value
+    ) {
+      gitStatus.value = emptyGitStatus();
+    }
+  }
 }
 
 function openGitDiff() {
@@ -1772,19 +1938,69 @@ async function openWorkspaceInFileManager() {
 // React to session switches and tool completions; in-run token refresh is
 // handled by tool:result / tool:error / run:done / run:error / run:cancelled /
 // run:compacted handlers. A previous deep:true watch on activeMessages fired
-// on every streaming delta (40+ IPC/s) — wasteful.
-watch(activeSessionId, async () => {
-  const sid = activeSessionId.value;
-  if (!sid) { contextTokens.value = 0; contextBreakdown.value = null; return; }
-  try {
-    const n = await GetSessionContextTokens(sid);
-    contextTokens.value = n || 0;
-  } catch (_) { /* ignore */ }
-  try {
-    const b = await GetContextBreakdown(sid);
-    contextBreakdown.value = b;
-  } catch (_) { /* ignore */ }
-}, { immediate: true });
+// on every streaming delta (40+ IPC/s) — wasteful. Only the active session is
+// refreshed because the backend calculates context data from its active config.
+let refreshContextTimer = null;
+let refreshContextInFlight = false;
+let refreshContextPendingSid = null;
+
+function refreshContextTokens(sid) {
+  if (!sid || sid !== activeSessionId.value) return;
+  // Debounce: collapse calls within 120ms into one request. Tool batches
+  // (4 tools → 4 tool:result events) arrive in quick succession; without
+  // this each event triggers a separate GetContextBreakdown IPC call.
+  if (refreshContextTimer) clearTimeout(refreshContextTimer);
+  refreshContextTimer = setTimeout(() => {
+    refreshContextTimer = null;
+    if (refreshContextInFlight || footerStatsLoading.value) {
+      // A request is already in flight — remember the sid and trigger a
+      // trailing refresh once it completes, so the latest context is shown.
+      refreshContextPendingSid = sid;
+      return;
+    }
+    doRefreshContextTokens(sid);
+  }, 120);
+}
+
+function doRefreshContextTokens(sid) {
+  if (!sid || sid !== activeSessionId.value || footerStatsLoading.value) return;
+  refreshContextInFlight = true;
+  const requestVersion = ++contextRequestVersion;
+  // The breakdown already carries `total`, so a separate GetSessionContextTokens
+  // call would duplicate the backend computation on every tool:result burst.
+  GetContextBreakdown(sid).then((breakdown) => {
+    refreshContextInFlight = false;
+    // If another refresh was requested while this one was in flight, trigger
+    // it now so the footer reflects the latest tool results.
+    const pendingSid = refreshContextPendingSid;
+    refreshContextPendingSid = null;
+    if (pendingSid && pendingSid === activeSessionId.value && !footerStatsLoading.value) {
+      refreshContextTokens(pendingSid);
+    }
+    if (
+      requestVersion !== contextRequestVersion
+      || sid !== activeSessionId.value
+      || footerStatsLoading.value
+    ) return;
+
+    const value = Number(breakdown?.total) || 0;
+    const session = sessions.value.find((item) => item.id === sid);
+    if (session) {
+      session.contextTokens = value;
+      sessionTokensCache[sid] = value;
+      if (!session.isRunning && (session.hasSnapshot || session.messageCount > 0)) {
+        enqueueSessionWrite(() => SaveSessionIndex(sessionIndexEntry(session))).catch(() => {});
+      }
+    }
+    contextTokens.value = value;
+    contextBreakdown.value = breakdown || null;
+    captureFooterSnapshot(activeWorkspaceId.value, config.workspace || '');
+  }).catch(() => { refreshContextInFlight = false; });
+}
+
+watch(activeSessionId, (sid) => {
+  if (sid && config.workspace && !footerStatsLoading.value) refreshContextTokens(sid);
+});
 
 watch(activeSessionId, () => {
   // 切换会话时清掉重试横幅:重试横幅只反映当前可见会话的瞬时状态。
@@ -1796,36 +2012,9 @@ watch(activeSessionId, () => {
   });
 });
 
-function refreshContextTokens(sid) {
-  if (!sid) return;
-  GetSessionContextTokens(sid).then(n => {
-    const value = n || 0;
-    const session = sessions.value.find((item) => item.id === sid);
-    if (session) {
-      session.contextTokens = value;
-      sessionTokensCache[sid] = value;
-      if (!session.isRunning && (session.hasSnapshot || session.messageCount > 0)) {
-        enqueueSessionWrite(() => SaveSessionIndex(sessionIndexEntry(session))).catch(() => {});
-      }
-    }
-    if (sid === activeSessionId.value) contextTokens.value = value;
-  }).catch(() => {});
-  GetContextBreakdown(sid).then(b => {
-    if (sid === activeSessionId.value) contextBreakdown.value = b;
-  }).catch(() => {});
-}
-
-function refreshWorkspaceTokenUsage(workspace = config.workspace || '') {
-  GetWorkspaceTokenUsage(workspace)
-    .then((usage) => { workspaceTokenUsage.value = usage || { inputTokens: 0, outputTokens: 0 }; })
-    .catch(() => { workspaceTokenUsage.value = { inputTokens: 0, outputTokens: 0 }; });
-}
-
-watch(() => config.workspace, (workspace) => {
-  refreshWorkspaceTokenUsage(workspace || '');
-  if (workspace) refreshGitStatus();
+watch(() => config.workspace, () => {
   closeFileMentionMenu();
-}, { immediate: true });
+});
 
 
 const contextUsed = computed(() => {
@@ -2111,7 +2300,7 @@ function bindSessionToActiveWorkspaceTab(session) {
   return tab;
 }
 
-function applySessionWorkspace(session) {
+async function applySessionWorkspace(session) {
   if (!session) return false;
   const workspace = inferSessionWorkspace(session);
   if (workspace) session.workspace = workspace;
@@ -2134,16 +2323,30 @@ function applySessionWorkspace(session) {
 
   // Session/Tab linkage is valid even before a workspace is selected. Only
   // workspace-dependent refreshes need to wait for a non-empty path.
-  if (!workspace) return true;
+  if (!workspace) {
+    clearFooterStats();
+    footerStatsLoading.value = false;
+    return true;
+  }
 
+  prepareFooterStatsForTarget(activeWorkspaceId.value, workspace);
   config.workspace = workspace;
   configDraft.workspace = workspace;
   addToHistory(workspace);
   loadPromptHistory(workspace);
-  refreshWorkspaceTokenUsage(workspace);
-  SaveConfig({ ...config })
-    .then(() => refreshGitStatus())
-    .catch(() => { gitStatus.value = { isRepo: false }; });
+  try {
+    await saveWorkspaceConfig({ ...config });
+    await refreshFooterStats({
+      tabId: activeWorkspaceId.value,
+      sessionId: session.id,
+      workspace,
+    });
+  } catch (err) {
+    if (isCurrentFooterTarget(activeWorkspaceId.value, session.id, workspace)) {
+      footerStatsLoading.value = false;
+      message.error(t('app.config.saveFailed', { error: err }));
+    }
+  }
   return true;
 }
 
@@ -2219,7 +2422,7 @@ async function activateSelectedSession(target) {
   }
 
   activeSessionId.value = target.id;
-  applySessionWorkspace(target);
+  await applySessionWorkspace(target);
   await loadSessionMessages(target);
   unloadInactiveSessionMessages();
   loadTodos(target.id);
@@ -2301,11 +2504,13 @@ function closeWorkspaceTab(id) {
 async function switchWorkspaceTab(id) {
   const tab = workspaceTabs.value.find((t) => t.id === id);
   if (!tab) return;
+  const switchVersion = ++workspaceSwitchVersion;
   const linkedSession = ensureWorkspaceTabSession(tab);
   saveSessions();
   activeWorkspaceId.value = id;
   config.workspace = tab.path;
   configDraft.workspace = tab.path;
+  prepareFooterStatsForTarget(id, tab.path);
   subRuns.value = [];
   // 切换 Tab 时恢复该 Tab 关联 session 的 extraRoots
   if (linkedSession && Array.isArray(linkedSession.extraRoots)) {
@@ -2314,7 +2519,6 @@ async function switchWorkspaceTab(id) {
     extraRoots.value = [];
   }
   loadPromptHistory(tab.path);
-  refreshWorkspaceTokenUsage(tab.path);
   // Restore the model remembered for this Tab before SaveConfig so the
   // backend sync matches the Tab's model. This is a local-only switch —
   // SwitchModel is not called to avoid touching another Tab's selection.
@@ -2329,16 +2533,30 @@ async function switchWorkspaceTab(id) {
     // baseline. Later changes are stored under this Tab's id only.
     rememberModelForTab(tab);
   }
-  SaveConfig({ ...config })
-    .then(() => refreshGitStatus())
-    .catch(() => { gitStatus.value = { isRepo: false }; });
+  try {
+    await saveWorkspaceConfig({ ...config });
+  } catch (err) {
+    if (workspaceSwitchVersion === switchVersion) {
+      footerStatsLoading.value = false;
+      message.error(t('app.config.saveFailed', { error: err }));
+    }
+    return;
+  }
+  if (workspaceSwitchVersion !== switchVersion || activeWorkspaceId.value !== id) return;
+
   // Switch to linked session
   if (linkedSession) {
     activeSessionId.value = linkedSession.id;
     await loadSessionMessages(linkedSession);
+    if (workspaceSwitchVersion !== switchVersion || activeWorkspaceId.value !== id) return;
     unloadInactiveSessionMessages();
     loadTodos(linkedSession.id);
   }
+  await refreshFooterStats({
+    tabId: id,
+    sessionId: linkedSession?.id || activeSessionId.value,
+    workspace: tab.path,
+  });
 }
 
 function syncConfigToActiveTab() {
@@ -2372,7 +2590,7 @@ function newSession(title) {
   const ws = workspace;
   if (ws) {
     ResetWorkspaceTokenUsage(ws);
-    workspaceTokenUsage.value = { inputTokens: 0, outputTokens: 0 };
+    workspaceTokenUsage.value = emptyWorkspaceTokenUsage();
   }
 }
 
@@ -2482,11 +2700,13 @@ async function init() {
   rememberModelForTab(tab);
   if (ws) addToHistory(ws);
   loadPromptHistory(ws);
-  // refreshGitStatus is already triggered by the config.workspace watcher
-  // above when assignConfig updates the workspace from '' to the loaded path.
-  // Calling it here would duplicate the IPC + git spawn.
 
   await loadSavedSessions();
+  await refreshFooterStats({
+    tabId: tab.id,
+    sessionId: tab.sessionId,
+    workspace: ws,
+  });
   loadMcpConfig();
   loadBackgroundImage();
 }
@@ -2822,7 +3042,10 @@ function bindRuntimeEvents() {
   });
 
   onRuntimeEvent('tokens:update', (data) => {
-    if ((data.workspace || '') !== (config.workspace || '')) return;
+    if (
+      footerStatsLoading.value
+      || String(data.workspace || '') !== String(config.workspace || '')
+    ) return;
     workspaceTokenUsage.value = {
       inputTokens: data.inputTokens || 0,
       outputTokens: data.outputTokens || 0,
@@ -3004,7 +3227,7 @@ function bindRuntimeEvents() {
     // Tool results grow the live context (tool result messages get appended to
     // the next model request). Refresh the footer counter so it tracks the
     // agent loop while it works, not only after the run ends.
-    refreshContextTokens(session.id);
+    if (session.id === activeSessionId.value) refreshContextTokens(session.id);
     const eventId = toolEventId(data);
     let existing = findToolEventMessage(session, data);
     if (!existing) existing = appendToolEventFallback(session, data, 'running');
@@ -3153,7 +3376,7 @@ function bindRuntimeEvents() {
     const session = sessionByEvent(data);
     if (!session) return;
     // Failed tool calls also become part of the context; keep the footer fresh.
-    refreshContextTokens(session.id);
+    if (session.id === activeSessionId.value) refreshContextTokens(session.id);
     const eventId = toolEventId(data);
     let existing = findToolEventMessage(session, data);
     if (!existing) existing = appendToolEventFallback(session, data, 'error');
@@ -3198,7 +3421,7 @@ function bindRuntimeEvents() {
     }
     const session = sessionByTerminalEvent(data);
     if (!session) return;
-  	  refreshGitStatus();
+    if (session.id === activeSessionId.value) refreshGitStatus();
     if (data.grillComplete) session.grillMode = false;
     let i = session.messages.length - 1;
     while (i >= 0) {
@@ -3222,8 +3445,7 @@ function bindRuntimeEvents() {
       playCompletionSound('done');
     }
     persistCompletedSession(session);
-    refreshContextTokens(session.id);
-    if (session.id === activeSessionId.value) refreshWorkspaceTokenUsage(config.workspace || '');
+    if (session.id === activeSessionId.value) refreshContextTokens(session.id);
   });
   onRuntimeEvent('run:error', (data) => {
     flushStreamBuffer(data.runId);
@@ -3260,7 +3482,7 @@ function bindRuntimeEvents() {
     // Refresh token count after error: messages already grew with streamed
     // content, tool args, and the error footer — the context popover should
     // reflect that immediately instead of waiting for the next session switch.
-    refreshContextTokens(session.id);
+    if (session.id === activeSessionId.value) refreshContextTokens(session.id);
   });
   onRuntimeEvent('run:cancelled', (data) => {
     flushStreamBuffer(data.runId);
@@ -3294,7 +3516,7 @@ function bindRuntimeEvents() {
     // Refresh token count after cancellation: streaming deltas and any tool
     // results added before cancellation are now part of the history and the
     // context popover should reflect the actual remaining budget.
-    refreshContextTokens(session.id);
+    if (session.id === activeSessionId.value) refreshContextTokens(session.id);
   });
   // Auto-compaction notification: backend emits run:compacted after an
   // automatic history compression. Surface it to the user so the sudden
@@ -3957,11 +4179,7 @@ async function toggleMaximiseWindow() {
 async function closeWindow() {
   try {
     await flushSessionWrites();
-    if (config.closeToTray === false) {
-      await Application.Quit();
-    } else {
-      await Window.Hide();
-    }
+    await Application.Quit();
   } catch (_) {}
 }
 
@@ -4166,8 +4384,19 @@ async function sendPrompt() {
     syncConfigToActiveTab();
     addToHistory(workspace);
     loadPromptHistory(workspace);
-    refreshWorkspaceTokenUsage(workspace);
-    await refreshGitStatus();
+    clearFooterStats();
+    try {
+      await saveWorkspaceConfig({ ...config });
+      await refreshFooterStats({
+        tabId: activeWorkspaceId.value,
+        sessionId: activeSessionId.value,
+        workspace,
+      });
+    } catch (err) {
+      footerStatsLoading.value = false;
+      message.error(t('app.config.saveFailed', { error: err }));
+      return;
+    }
   }
   const hasApiKey = !!(config.apiKey || (Array.isArray(config.apiKeys) && config.apiKeys.length));
   if (!hasApiKey) {
@@ -4235,16 +4464,29 @@ async function chooseWorkspace() {
 }
 
 async function onSettingsSave(draftData, silent = false) {
+  const previousWorkspace = String(config.workspace || '');
   assignConfig(config, draftData);
   assignConfig(configDraft, draftData);
+  const workspaceChanged = previousWorkspace !== String(config.workspace || '');
+  if (workspaceChanged) clearFooterStats();
   try {
-    await SaveConfig({ ...configDraft });
+    await saveWorkspaceConfig({ ...configDraft });
     syncConfigToActiveTab();
     // Settings can change the active model without going through the composer
     // dropdown, so keep the current Tab's selection in sync as well.
     rememberActiveTabModel();
+    if (workspaceChanged) {
+      await refreshFooterStats({
+        tabId: activeWorkspaceId.value,
+        sessionId: activeSessionId.value,
+        workspace: config.workspace || '',
+      });
+    } else {
+      refreshContextTokens(activeSessionId.value);
+    }
     if (!silent) message.success(t('app.config.saved'));
   } catch (err) {
+    if (workspaceChanged) footerStatsLoading.value = false;
     message.error(t('app.config.saveFailed', { error: err }));
   }
 }

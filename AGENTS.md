@@ -153,7 +153,7 @@ Connected MCP tools are sorted by server, tool name, and function name before be
 - provider fields: `providerName`, `apiFormat`, `baseUrl`, `apiKey`, `apiKeys` (ordered multi-key pool; first entry is highest priority), `model`, `reasoningEffort`
 - runtime fields: `workspace`, `temperature`, `maxTokens`, `contextWindow`
 - window fields: `windowWidth`, `windowHeight` (last window size, restored on launch; zero means first launch opens at 61.8% of the primary screen and the size is persisted on window close / app shutdown)
-- tray fields: `closeToTray` (close window hides to system tray instead of quitting; legacy config without the field defaults to on)
+- tray fields: `closeToTray` (retained for compatibility; system tray registration and the Settings toggle are disabled in the current release, so closing the window exits)
 - network fields: `proxyMode` (`off`/`system`/`manual`), `proxyUrl`, `proxyNoProxy`
 - prompt fields: `systemPrompt`, `customPrompt`
 - model presets: `models`
@@ -209,7 +209,7 @@ Supported API formats:
 - Streams output text, reasoning summary text, function-call argument deltas, completion usage, failures, and incomplete responses.
 - On the official OpenAI Responses endpoint, exposes the native image-generation tool and streams generated images through `run:image`; custom compatible endpoints do not receive that provider-specific tool.
 - Tool definitions are converted with `ToolParamOfFunction(..., strict=false)` for provider compatibility.
-- Session-backed official OpenAI `gpt-5.6*` requests use a session-scoped hashed `prompt_cache_key`, a stable developer `input_text` cache anchor, and `prompt_cache_options.mode="explicit"`. These GPT-5.6-only fields are never sent to custom Responses-compatible endpoints or Chat Completions routes.
+- Session-backed Responses requests use a session-scoped hashed `prompt_cache_key` for official and custom Responses-compatible endpoints. Official OpenAI `gpt-5.6*` requests additionally use a stable developer `input_text` cache anchor and `prompt_cache_options.mode="explicit"`; those GPT-5.6-specific fields are never sent to custom Responses-compatible endpoints or Chat Completions routes.
 
 ### Anthropic Messages
 
@@ -543,7 +543,7 @@ Major UI regions:
 
 Settings pages:
 
-- General: custom prompt, close-to-tray toggle (`closeToTray`, default on), launch-at-login switch (`GetAutostartEnabled`/`SetAutostartEnabled`)
+- General: custom prompt, launch-at-login switch (`GetAutostartEnabled`/`SetAutostartEnabled`); the retained close-to-tray setting is currently hidden
 - Models: provider/model presets and active model selection
 - Skills: enable/disable discovered skills; persisted through `disabledSkills`
 - MCP: raw MCP config editor and server status

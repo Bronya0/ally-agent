@@ -7,7 +7,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
+
+const skillListCacheTTL = 30 * time.Second
 
 var skillScanDirs = []string{
 	filepath.Join(".agents", "skills"),
@@ -36,6 +39,15 @@ func (a *App) ListSkills() ([]SkillDefinition, error) {
 	// If the configured workspace no longer exists, still scan user-level
 	// skills so the app remains usable and the user can add a new workspace.
 	root, _ := workspaceRoot(cfg)
+	cacheKey := skillListCacheKey(root)
+	a.skillCacheMu.Lock()
+	if cached, ok := a.skillCache[cacheKey]; ok && time.Since(cached.generatedAt) < skillListCacheTTL {
+		skills := cloneSkillDefinitions(cached.skills)
+		a.skillCacheMu.Unlock()
+		return skills, nil
+	}
+	a.skillCacheMu.Unlock()
+
 	skills := []SkillDefinition{}
 	seen := map[string]bool{}
 
@@ -63,7 +75,35 @@ func (a *App) ListSkills() ([]SkillDefinition, error) {
 		skills = append(skills, b)
 	}
 
+	a.skillCacheMu.Lock()
+	if a.skillCache == nil {
+		a.skillCache = map[string]skillListCacheEntry{}
+	}
+	if len(a.skillCache) >= 32 {
+		a.skillCache = map[string]skillListCacheEntry{}
+	}
+	a.skillCache[cacheKey] = skillListCacheEntry{
+		skills:      cloneSkillDefinitions(skills),
+		generatedAt: time.Now(),
+	}
+	a.skillCacheMu.Unlock()
 	return skills, nil
+}
+
+func skillListCacheKey(root string) string {
+	if strings.TrimSpace(root) == "" {
+		return "__no_workspace__"
+	}
+	return workspaceMapCacheKey(root)
+}
+
+func cloneSkillDefinitions(skills []SkillDefinition) []SkillDefinition {
+	if len(skills) == 0 {
+		return []SkillDefinition{}
+	}
+	cloned := make([]SkillDefinition, len(skills))
+	copy(cloned, skills)
+	return cloned
 }
 
 // readSkillContent returns the full skill body, preferring embedded content
@@ -187,6 +227,7 @@ func (a *App) setDisabledSkills(names []string) error {
 	cfg := a.config
 	path := a.configPath
 	a.mu.Unlock()
+	a.invalidateContextStaticCache()
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}

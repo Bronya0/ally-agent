@@ -106,12 +106,15 @@
               <span v-if="checkUpdateMessage" class="settings-field-hint">{{ checkUpdateMessage }}</span>
             </div>
           </n-form-item>
+          <!-- Close-to-tray is disabled for the current release; keep the
+               setting code for a future re-enable.
           <n-form-item :label="$t('settings.closeToTray')">
             <div class="settings-toggle-row">
               <n-switch v-model:value="draft.closeToTray" />
               <span class="settings-toggle-hint">{{ $t('settings.closeToTrayHint') }}</span>
             </div>
           </n-form-item>
+          -->
           <n-form-item :label="$t('settings.autostart')">
             <div class="settings-toggle-row">
               <n-switch :value="autostartEnabled" :loading="autostartBusy" @update:value="toggleAutostart" />

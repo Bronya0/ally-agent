@@ -39,7 +39,7 @@ func TestOpenAIResponsesGPT56PromptCacheRequest(t *testing.T) {
 	if err := applyOpenAIResponsesPromptCacheOptions(request); err != nil {
 		t.Fatalf("applyOpenAIResponsesPromptCacheOptions() error = %v", err)
 	}
-	options, ok := request["prompt_cache_options"].(map[string]any)
+	options, ok := request["prompt_cache_options"].(map[string]string)
 	if !ok || options["mode"] != "explicit" {
 		t.Fatalf("prompt_cache_options = %#v, want explicit mode", request["prompt_cache_options"])
 	}
@@ -48,27 +48,37 @@ func TestOpenAIResponsesGPT56PromptCacheRequest(t *testing.T) {
 	}
 }
 
-func TestOpenAIResponsesGPT56PromptCacheIsStrictlyGated(t *testing.T) {
+func TestOpenAIResponsesPromptCacheKeyFollowsCodexForCompatibleEndpoints(t *testing.T) {
 	cacheKey := openAIResponsesPromptCacheKey("session-1")
 	tests := []struct {
-		name  string
-		cfg   ConfigState
-		model string
+		name            string
+		cfg             ConfigState
+		model           string
+		wantKey         bool
+		wantExplicit    bool
+		wantCacheAnchor bool
 	}{
 		{
-			name:  "older official model",
-			cfg:   ConfigState{APIFormat: apiFormatOpenAIResponses, BaseURL: defaultOpenAIResponsesURL, responsesPromptCacheKey: cacheKey},
-			model: "gpt-5.5",
+			name:            "older official model",
+			cfg:             ConfigState{APIFormat: apiFormatOpenAIResponses, BaseURL: defaultOpenAIResponsesURL, responsesPromptCacheKey: cacheKey},
+			model:           "gpt-5.5",
+			wantKey:         true,
+			wantCacheAnchor: false,
 		},
 		{
-			name:  "custom compatible endpoint",
-			cfg:   ConfigState{APIFormat: apiFormatOpenAIResponses, BaseURL: "https://api.deepseek.com/v1", responsesPromptCacheKey: cacheKey},
-			model: "gpt-5.6",
+			name:            "custom compatible endpoint",
+			cfg:             ConfigState{APIFormat: apiFormatOpenAIResponses, BaseURL: "https://api.deepseek.com/v1", responsesPromptCacheKey: cacheKey},
+			model:           "gpt-5.6",
+			wantKey:         true,
+			wantCacheAnchor: false,
 		},
 		{
-			name:  "chat completions route",
-			cfg:   ConfigState{APIFormat: apiFormatOpenAIChat, BaseURL: defaultOpenAIResponsesURL, responsesPromptCacheKey: cacheKey},
-			model: "gpt-5.6",
+			name:            "official GPT-5.6",
+			cfg:             ConfigState{APIFormat: apiFormatOpenAIResponses, BaseURL: defaultOpenAIResponsesURL, responsesPromptCacheKey: cacheKey},
+			model:           "gpt-5.6",
+			wantKey:         true,
+			wantExplicit:    true,
+			wantCacheAnchor: true,
 		},
 		{
 			name:  "missing session key",
@@ -82,15 +92,59 @@ func TestOpenAIResponsesGPT56PromptCacheIsStrictlyGated(t *testing.T) {
 				Role:    legacyopenai.ChatMessageRoleUser,
 				Content: "hello",
 			}}, nil)
-			if explicitPromptCache {
-				t.Fatal("unexpected explicit prompt caching")
+			if explicitPromptCache != tt.wantExplicit {
+				t.Fatalf("explicit prompt caching = %v, want %v", explicitPromptCache, tt.wantExplicit)
 			}
-			payload, err := json.Marshal(body)
-			if err != nil {
-				t.Fatalf("json.Marshal() error = %v", err)
+			request := marshalResponsesRequest(t, body)
+			gotKey, hasKey := request["prompt_cache_key"].(string)
+			if hasKey != tt.wantKey || (tt.wantKey && gotKey != cacheKey) {
+				t.Fatalf("prompt_cache_key = %q (present=%v), want %q (present=%v)", gotKey, hasKey, cacheKey, tt.wantKey)
 			}
-			if strings.Contains(string(payload), "prompt_cache_key") || strings.Contains(string(payload), openAIResponsesPromptCacheAnchorText) {
-				t.Fatalf("non-GPT-5.6 Responses cache payload leaked into incompatible request: %s", payload)
+			if responsesRequestHasCacheAnchorText(request) != tt.wantCacheAnchor {
+				t.Fatalf("cache anchor present = %v, want %v: %#v", responsesRequestHasCacheAnchorText(request), tt.wantCacheAnchor, request["input"])
+			}
+			if _, ok := request["prompt_cache_options"]; ok {
+				t.Fatalf("prompt_cache_options must be injected only by the explicit GPT-5.6 stream path: %#v", request)
+			}
+		})
+	}
+}
+
+func TestModelUsageFromResponsesEventSupportsCompatibleCacheFields(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want modelUsage
+	}{
+		{
+			name: "standard responses usage",
+			raw:  `{"response":{"usage":{"input_tokens":1000,"input_tokens_details":{"cached_tokens":800},"output_tokens":8}}}`,
+			want: modelUsage{PromptTokens: 1000, CompletionTokens: 8, CacheHitTokens: 800, CacheMissTokens: 200},
+		},
+		{
+			name: "chat shaped usage from compatible gateway",
+			raw:  `{"response":{"usage":{"prompt_tokens":900,"prompt_tokens_details":{"cached_tokens":600},"completion_tokens":7}}}`,
+			want: modelUsage{PromptTokens: 900, CompletionTokens: 7, CacheHitTokens: 600, CacheMissTokens: 300},
+		},
+		{
+			name: "top level cache counters",
+			raw:  `{"response":{"usage":{"input_tokens":700,"prompt_cache_hit_tokens":500,"prompt_cache_miss_tokens":200,"output_tokens":6}}}`,
+			want: modelUsage{PromptTokens: 700, CompletionTokens: 6, CacheHitTokens: 500, CacheMissTokens: 200},
+		},
+		{
+			name: "usage at event root",
+			raw:  `{"usage":{"input_tokens":300,"cached_input_tokens":120,"output_tokens":4}}`,
+			want: modelUsage{PromptTokens: 300, CompletionTokens: 4, CacheHitTokens: 120, CacheMissTokens: 180},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := modelUsageFromResponsesEvent([]byte(tt.raw))
+			if got == nil {
+				t.Fatal("modelUsageFromResponsesEvent() returned nil")
+			}
+			if *got != tt.want {
+				t.Fatalf("usage = %#v, want %#v", *got, tt.want)
 			}
 		})
 	}
@@ -148,8 +202,27 @@ func responsesRequestHasCacheAnchor(request map[string]any) bool {
 		for _, rawPart := range parts {
 			part, _ := rawPart.(map[string]any)
 			if part["type"] == "input_text" && part["text"] == openAIResponsesPromptCacheAnchorText {
-				breakpoint, _ := part["prompt_cache_breakpoint"].(map[string]any)
-				return breakpoint["mode"] == "explicit"
+				switch breakpoint := part["prompt_cache_breakpoint"].(type) {
+				case map[string]string:
+					return breakpoint["mode"] == "explicit"
+				case map[string]any:
+					return breakpoint["mode"] == "explicit"
+				}
+			}
+		}
+	}
+	return false
+}
+
+func responsesRequestHasCacheAnchorText(request map[string]any) bool {
+	items, _ := request["input"].([]any)
+	for _, rawItem := range items {
+		item, _ := rawItem.(map[string]any)
+		parts, _ := item["content"].([]any)
+		for _, rawPart := range parts {
+			part, _ := rawPart.(map[string]any)
+			if part["type"] == "input_text" && part["text"] == openAIResponsesPromptCacheAnchorText {
+				return true
 			}
 		}
 	}

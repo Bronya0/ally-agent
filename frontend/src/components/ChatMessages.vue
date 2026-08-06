@@ -38,7 +38,7 @@
           <div v-if="msg.reasoningBody" class="reasoning-block">
             <div class="reasoning-header" @click.stop="msg.reasoningExpanded = !msg.reasoningExpanded">
               <span class="reasoning-label">
-                <span :class="['reasoning-title', { 'reasoning-title-thinking': !msg.reasoningEndedAt }]">{{ msg.reasoningEndedAt ? 'Thought' : 'Thinking' }}</span>
+                <span :class="['reasoning-title', { 'reasoning-title-thinking': !msg.reasoningEndedAt }]">{{ msg.reasoningEndedAt ? reasoningTitleText(msg) : 'Thinking' }}</span>
                 <span class="reasoning-tokens">{{ fmtK(Math.max(1, Math.round(String(msg.reasoningBody).length / 3))) }} tokens</span>
               </span>
             </div>
@@ -286,6 +286,13 @@ function reasoningDurationText(msg) {
   if (hours > 0) return `${hours}h${mins > 0 ? `${mins}m` : ''}`;
   if (mins > 0) return `${mins}m${rest > 0 ? `${rest}s` : ''}`;
   return `${secs}s`;
+}
+
+// Builds the "Thought for Xs" label shown once the thinking window closes.
+// Falls back to just "Thought" when timing wasn't captured.
+function reasoningTitleText(msg) {
+  const duration = reasoningDurationText(msg);
+  return duration ? `Thought for ${duration}` : 'Thought';
 }
 
 defineEmits([

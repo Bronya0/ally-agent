@@ -7,7 +7,8 @@
     <div class="header-tabs-area">
       <div
         ref="workspaceTabsRef"
-        class="workspace-tabs-host"
+        :class="['workspace-tabs-host', { 'drag-preview-active': hasDragShift }]"
+        :style="{ '--workspace-drag-offset': `${draggedTabWidth}px` }"
         @dragover.prevent="onWorkspaceTabsDragOver"
         @drop.prevent="onWorkspaceTabsDrop"
       >
@@ -22,7 +23,7 @@
             v-for="tab in workspaceTabs"
             :key="tab.id"
             :name="tab.id"
-            :class="['workspace-tab', { active: tab.id === activeWorkspaceId, running: tab.isRunning, dragging: tab.id === draggedWorkspaceId, 'drop-before': isDropBefore(tab.id), 'drop-after': isDropAfter(tab.id) }]"
+            :class="['workspace-tab', { active: tab.id === activeWorkspaceId, running: tab.isRunning, dragging: tab.id === draggedWorkspaceId }, dragShiftClass(tab.id)]"
             :data-tab-id="tab.id"
             :draggable="workspaceTabs.length > 1"
             @dragstart="onWorkspaceDragStart($event, tab.id)"
@@ -122,7 +123,7 @@
 </template>
 
 <script setup>
-import { h, ref } from 'vue';
+import { computed, h, ref } from 'vue';
 import { NDropdown } from 'naive-ui';
 import AllyWordmark from './AllyWordmark.vue';
 
@@ -155,18 +156,51 @@ const emit = defineEmits([
 const workspaceTabsRef = ref(null);
 const draggedWorkspaceId = ref('');
 const dragPreview = ref(null);
+const draggedTabWidth = ref(0);
 
-function isDropBefore(id) {
-  return dragPreview.value?.targetId === id && !dragPreview.value.after;
+// The dragged tab keeps its layout slot. The tabs between the source and the
+// drop position move into/out of that slot so the drop position becomes a
+// real, visible gap instead of a separate guide line.
+const dragShiftClassById = computed(() => {
+  const preview = dragPreview.value;
+  const tabs = props.workspaceTabs;
+  const sourceIndex = tabs.findIndex((tab) => tab.id === draggedWorkspaceId.value);
+  const targetIndex = tabs.findIndex((tab) => tab.id === preview?.targetId);
+  if (sourceIndex < 0 || targetIndex < 0 || sourceIndex === targetIndex) return new Map();
+
+  const movingRight = sourceIndex < targetIndex;
+  const first = movingRight
+    ? sourceIndex + 1
+    : targetIndex + (preview.after ? 1 : 0);
+  const last = movingRight
+    ? targetIndex - (preview.after ? 0 : 1)
+    : sourceIndex - 1;
+  const result = new Map();
+  for (let index = first; index <= last; index += 1) {
+    const id = tabs[index]?.id;
+    if (id) result.set(id, movingRight ? 'drag-shift-left' : 'drag-shift-right');
+  }
+  return result;
+});
+const hasDragShift = computed(() => dragShiftClassById.value.size > 0);
+
+function dragShiftClass(id) {
+  return dragShiftClassById.value.get(id) || '';
 }
 
-function isDropAfter(id) {
-  return dragPreview.value?.targetId === id && dragPreview.value.after;
+function clearDragPreview() {
+  dragPreview.value = null;
+}
+
+function resetDragState() {
+  draggedWorkspaceId.value = '';
+  clearDragPreview();
+  draggedTabWidth.value = 0;
 }
 
 function setDragPreview(targetId, after) {
   if (!targetId || targetId === draggedWorkspaceId.value) {
-    dragPreview.value = null;
+    clearDragPreview();
     return;
   }
   const current = dragPreview.value;
@@ -180,15 +214,19 @@ function onWorkspaceTabUpdate(id) {
 
 function onWorkspaceDragStart(event, id) {
   draggedWorkspaceId.value = id;
-  dragPreview.value = null;
-  event.dataTransfer.effectAllowed = 'move';
-  event.dataTransfer.setData('text/plain', id);
+  clearDragPreview();
+  const rect = event.currentTarget?.getBoundingClientRect?.();
+  if (rect?.width) draggedTabWidth.value = rect.width;
+  if (event.dataTransfer) {
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', id);
+  }
 }
 
 function onWorkspaceDragOver(event, targetId) {
   if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
   if (!draggedWorkspaceId.value || draggedWorkspaceId.value === targetId) {
-    dragPreview.value = null;
+    clearDragPreview();
     return;
   }
   const rect = event.currentTarget.getBoundingClientRect();
@@ -224,8 +262,7 @@ function onWorkspaceDrop(event, targetId) {
       after: event.clientX > rect.left + rect.width / 2,
     });
   }
-  draggedWorkspaceId.value = '';
-  dragPreview.value = null;
+  resetDragState();
 }
 
 function onWorkspaceTabsDrop(event) {
@@ -235,13 +272,11 @@ function onWorkspaceTabsDrop(event) {
   if (sourceId && preview && sourceId !== preview.targetId) {
     emit('reorderWorkspace', { sourceId, ...preview });
   }
-  draggedWorkspaceId.value = '';
-  dragPreview.value = null;
+  resetDragState();
 }
 
 function onWorkspaceDragEnd() {
-  draggedWorkspaceId.value = '';
-  dragPreview.value = null;
+  resetDragState();
 }
 
 function onOpenTokenStats(event) {
@@ -423,7 +458,7 @@ body.platform-darwin .brand-wordmark {
   height: 100%;
   --n-tab-gap: 0 !important;
   --n-tab-padding: 0 !important;
-  --n-bar-color: rgba(204, 120, 50, 0.62) !important;
+  --n-bar-color: var(--ally-accent-bright) !important;
   --wails-draggable: drag;
 }
 
@@ -548,7 +583,7 @@ body.platform-darwin .window-close-icon {
   line-height: 1;
   white-space: nowrap;
   user-select: none;
-  transition: background 0.12s, color 0.12s;
+  transition: transform 0.14s ease, background 0.12s, color 0.12s;
   flex-shrink: 0;
   min-width: 108px;
   max-width: 180px;
@@ -556,12 +591,17 @@ body.platform-darwin .window-close-icon {
   --wails-draggable: no-drag;
 }
 
-.workspace-tabs :deep(.workspace-tab.drop-before) {
-  box-shadow: inset 3px 0 0 var(--ally-accent) !important;
+.workspace-tabs :deep(.workspace-tab.drag-shift-left) {
+  transform: translateX(calc(0px - var(--workspace-drag-offset, 0px)));
 }
 
-.workspace-tabs :deep(.workspace-tab.drop-after) {
-  box-shadow: inset -3px 0 0 var(--ally-accent) !important;
+.workspace-tabs :deep(.workspace-tab.drag-shift-right) {
+  transform: translateX(var(--workspace-drag-offset, 0px));
+}
+
+.workspace-tabs-host.drag-preview-active .workspace-tabs :deep(.workspace-tab.dragging) {
+  visibility: hidden;
+  opacity: 0;
 }
 
 .workspace-tabs :deep(.workspace-tab:active) {

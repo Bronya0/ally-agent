@@ -25,97 +25,132 @@ import (
 const gitStatusCacheTTL = 2 * time.Second
 
 func (a *App) GetGitStatus() GitStatus {
-	workspace, err := workspaceRoot(a.config)
+	a.mu.Lock()
+	workspacePath := a.config.Workspace
+	a.mu.Unlock()
+	return a.getGitStatus(workspacePath)
+}
+
+func (a *App) getGitStatus(workspacePath string) GitStatus {
+	workspace, err := workspaceRoot(ConfigState{Workspace: workspacePath})
 	if err != nil {
 		return GitStatus{IsRepo: false}
 	}
 
-	// Serve from cache if fresh. Keyed by the resolved workspace path so
-	// switching tabs to a different repo doesn't return stale counts.
-	a.gitStatusCacheMu.Lock()
-	if entry, ok := a.gitStatusCache[workspace]; ok && time.Since(entry.generatedAt) < gitStatusCacheTTL {
+	for {
+		a.gitStatusCacheMu.Lock()
+		if entry, ok := a.gitStatusCache[workspace]; ok && time.Since(entry.generatedAt) < gitStatusCacheTTL {
+			a.gitStatusCacheMu.Unlock()
+			return entry.status
+		}
+		// Collapse concurrent cold-cache misses onto a single git spawn. The
+		// init → workspace watch → run:done burst can otherwise fire several
+		// GetGitStatus calls within milliseconds.
+		if ch, ok := a.gitStatusInFlight[workspace]; ok {
+			a.gitStatusCacheMu.Unlock()
+			<-ch
+			continue
+		}
+		ch := make(chan struct{})
+		a.gitStatusInFlight[workspace] = ch
 		a.gitStatusCacheMu.Unlock()
-		return entry.status
-	}
-	a.gitStatusCacheMu.Unlock()
 
+		status := computeGitStatus(workspace)
+		a.cacheGitStatus(workspace, status)
+
+		a.gitStatusCacheMu.Lock()
+		delete(a.gitStatusInFlight, workspace)
+		close(ch)
+		a.gitStatusCacheMu.Unlock()
+		return status
+	}
+}
+
+// computeGitStatus runs a single `git status --porcelain=v2 --branch -z` call,
+// which yields the branch name, ahead/behind counts, and per-file status in
+// one process. The previous implementation spawned three git processes
+// (rev-parse, status, rev-list) on every cache miss.
+func computeGitStatus(workspace string) GitStatus {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	out, _, err := runGitLimited(ctx, workspace, 256*1024, "status", "--porcelain=v2", "--branch", "-z")
+	if err != nil {
+		return GitStatus{IsRepo: false}
+	}
+	return parseGitStatusV2(out)
+}
 
-	// Merge the two rev-parse calls (toplevel + branch) into a single git
-	// process. Both are porcelain-free and return one line per arg, so we
-	// split on the first newline to separate root from branch.
-	revOut, _, err := runGitLimited(ctx, workspace, 64*1024, "rev-parse", "--show-toplevel", "--abbrev-ref", "HEAD")
-	if err != nil {
-		a.cacheGitStatus(workspace, GitStatus{IsRepo: false})
-		return GitStatus{IsRepo: false}
-	}
-	revLines := strings.SplitN(strings.TrimRight(revOut, "\n"), "\n", 2)
-	if len(revLines) < 1 {
-		a.cacheGitStatus(workspace, GitStatus{IsRepo: false})
-		return GitStatus{IsRepo: false}
-	}
-	root := strings.TrimSpace(revLines[0])
-	if root == "" {
-		a.cacheGitStatus(workspace, GitStatus{IsRepo: false})
-		return GitStatus{IsRepo: false}
-	}
-	abs, err := filepath.Abs(filepath.FromSlash(root))
-	if err != nil {
-		a.cacheGitStatus(workspace, GitStatus{IsRepo: false})
-		return GitStatus{IsRepo: false}
-	}
-	info, err := os.Stat(abs)
-	if err != nil || !info.IsDir() {
-		a.cacheGitStatus(workspace, GitStatus{IsRepo: false})
-		return GitStatus{IsRepo: false}
-	}
-	root = filepath.Clean(abs)
-	branch := ""
-	if len(revLines) >= 2 {
-		branch = strings.TrimSpace(revLines[1])
-	}
-
-	out, _, err := runGitLimited(ctx, root, 256*1024, "status", "--porcelain=v1", "-z")
-	if err != nil {
-		a.cacheGitStatus(workspace, GitStatus{IsRepo: false})
-		return GitStatus{IsRepo: false}
-	}
-	st := GitStatus{IsRepo: true, Branch: branch}
-	for _, entry := range git.ParseStatusZ(out) {
-		switch entry.Status {
-		case "modified", "renamed", "copied":
-			st.Modified++
-		case "added", "untracked":
+// parseGitStatusV2 parses `git status --porcelain=v2 --branch -z` output into a
+// GitStatus. It is pure string processing with no App state, so it can be unit
+// tested directly. With -z every record (including the `# branch.*` headers) is
+// NUL-terminated; renamed/copied entries store the original path as an extra
+// NUL-delimited field that must be skipped.
+func parseGitStatusV2(out string) GitStatus {
+	st := GitStatus{IsRepo: true}
+	tokens := strings.Split(out, "\x00")
+	for i := 0; i < len(tokens); i++ {
+		token := tokens[i]
+		if len(token) == 0 {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(token, "# branch.head "):
+			if branch := strings.TrimSpace(strings.TrimPrefix(token, "# branch.head ")); branch != "" {
+				st.Branch = branch
+			}
+		case strings.HasPrefix(token, "# branch.ab "):
+			for _, field := range strings.Fields(strings.TrimPrefix(token, "# branch.ab ")) {
+				if len(field) < 2 {
+					continue
+				}
+				n, err := strconv.Atoi(field[1:])
+				if err != nil {
+					continue
+				}
+				switch field[0] {
+				case '+':
+					st.Ahead = n
+				case '-':
+					st.Behind = n
+				}
+			}
+		case strings.HasPrefix(token, "# "):
+			// branch.oid / branch.upstream headers: not needed for the footer.
+		case strings.HasPrefix(token, "? "):
 			st.Added++
-		case "deleted":
-			st.Deleted++
+		case strings.HasPrefix(token, "! "):
+			// Ignored files are not surfaced in the footer counts.
+		case strings.HasPrefix(token, "1 "), strings.HasPrefix(token, "u "):
+			applyGitStatusV2XY(&st, token)
+		case strings.HasPrefix(token, "2 "):
+			applyGitStatusV2XY(&st, token)
+			// Skip the original path so it isn't mistaken for a new entry.
+			if i+1 < len(tokens) {
+				i++
+			}
 		}
 	}
-	st.Ahead, st.Behind = gitAheadBehind(ctx, root)
-	a.cacheGitStatus(workspace, st)
 	return st
 }
 
-// gitAheadBehind returns the number of local commits not on the upstream
-// branch (ahead) and upstream commits not pulled locally (behind). Missing
-// upstream, detached HEAD, or an unborn branch yield zero counts, so the UI
-// simply shows nothing for them.
-func gitAheadBehind(ctx context.Context, root string) (int, int) {
-	out, _, err := runGitLimited(ctx, root, 4096, "rev-list", "--left-right", "--count", "HEAD...@{upstream}")
-	if err != nil {
-		return 0, 0
+// applyGitStatusV2XY maps a porcelain v2 XY status pair (bytes 2 and 3 of a
+// "1 "/"2 "/"u " entry line) to footer counters, mirroring the priority of the
+// old v1 parser: added > deleted > renamed/copied > modified.
+func applyGitStatusV2XY(st *GitStatus, token string) {
+	if len(token) < 4 {
+		return
 	}
-	fields := strings.Fields(strings.TrimSpace(out))
-	if len(fields) != 2 {
-		return 0, 0
+	x, y := token[2], token[3]
+	switch {
+	case x == 'A' || y == 'A':
+		st.Added++
+	case x == 'D' || y == 'D':
+		st.Deleted++
+	case x == 'R' || y == 'R' || x == 'C' || y == 'C':
+		st.Modified++
+	case x == 'M' || y == 'M':
+		st.Modified++
 	}
-	ahead, err1 := strconv.Atoi(fields[0])
-	behind, err2 := strconv.Atoi(fields[1])
-	if err1 != nil || err2 != nil {
-		return 0, 0
-	}
-	return ahead, behind
 }
 
 func (a *App) cacheGitStatus(workspace string, status GitStatus) {

@@ -79,8 +79,10 @@ func (a *App) ServiceStartup(ctx context.Context, _ application.ServiceOptions) 
 	if a.wails != nil {
 		a.events = wailsEventSink{app: a.wails.app}
 	}
-	a.setupSystemTray()
-	a.setupCloseToTrayHook()
+	// System tray support is kept in host_tray.go but disabled for the
+	// current release. Do not intercept window close, so closing exits Ally.
+	// a.setupSystemTray()
+	// a.setupCloseToTrayHook()
 	_ = a.ensureInitialized()
 	// Warm the one-time POSIX login-shell PATH probe without delaying the UI.
 	// run_command/background_process wait on the same sync.Once if needed.
@@ -118,6 +120,7 @@ func (a *App) ServiceStartup(ctx context.Context, _ application.ServiceOptions) 
 		if root != "" {
 			a.mcpManager = NewMcpManager(root, func(tools []McpDiscoveredTool) {
 				a.emitMcpStatus()
+				a.invalidateContextStaticCache()
 			})
 			a.mcpManager.SetNetworkConfigProvider(func() ConfigState { return a.effectiveConfig(ConfigState{}) })
 			go func() {

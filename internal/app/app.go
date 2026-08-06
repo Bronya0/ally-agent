@@ -131,6 +131,16 @@ type gitStatusCacheEntry struct {
 	generatedAt time.Time
 }
 
+type contextStaticCacheEntry struct {
+	breakdown   ContextBreakdown
+	generatedAt time.Time
+}
+
+type skillListCacheEntry struct {
+	skills      []SkillDefinition
+	generatedAt time.Time
+}
+
 // App is the Wails-bound application module.
 type App struct {
 	ctx    context.Context
@@ -173,6 +183,14 @@ type App struct {
 	// don't each spawn 2 git subprocesses. Keyed by workspace path.
 	gitStatusCacheMu sync.Mutex
 	gitStatusCache   map[string]gitStatusCacheEntry
+	gitStatusInFlight map[string]chan struct{}
+
+	skillCacheMu sync.Mutex
+	skillCache   map[string]skillListCacheEntry
+
+	contextStaticCacheMu sync.Mutex
+	contextStaticCache   map[string]contextStaticCacheEntry
+	contextStaticVersion uint64
 
 	workspaceMapMu       sync.Mutex
 	workspaceMapCache    map[string]workspaceMapCacheEntry
@@ -231,6 +249,9 @@ func NewApp() *App {
 		workspacePathCache:  map[string]*workspacePathIndex{},
 		workspacePathBuilds: map[string]chan struct{}{},
 		gitStatusCache:      map[string]gitStatusCacheEntry{},
+		gitStatusInFlight:   map[string]chan struct{}{},
+		skillCache:          map[string]skillListCacheEntry{},
+		contextStaticCache:  map[string]contextStaticCacheEntry{},
 		httpLastHost:        map[string]time.Time{},
 		liveBreakdown:       map[string]ContextBreakdown{},
 		workspaceTokenUsage: map[string]WorkspaceTokenUsage{},
@@ -2585,8 +2606,8 @@ func (a *App) appendGoalProgressMessage(messages []openai.ChatCompletionMessage,
 // into saved history (it would bloat storage and disrupt reusable prefixes).
 //
 // Placing the budget at the tail follows the same strategy as
-// <ally-goal-progress>: dynamic, low-priority content goes last. The official
-// GPT-5.6 Responses path places its explicit cache boundary before this tail.
+// <ally-goal-progress>: dynamic, low-priority content goes last. The explicit
+// GPT-5.6 Responses cache boundary, when active, stays before this tail.
 func appendContextBudgetMessage(messages []openai.ChatCompletionMessage, usedTokens, maxCtx int) []openai.ChatCompletionMessage {
 	if maxCtx <= 0 {
 		maxCtx = 1048576
@@ -3417,6 +3438,7 @@ func (a *App) RestartMcpServers() error {
 	}
 	manager := NewMcpManager(root, func(tools []McpDiscoveredTool) {
 		a.emitMcpStatus()
+		a.invalidateContextStaticCache()
 	})
 	manager.SetNetworkConfigProvider(func() ConfigState { return a.effectiveConfig(ConfigState{}) })
 	a.mcpManager = manager
@@ -3998,7 +4020,8 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 	}
 	subID := newID()
 	// Keep concurrent sub-agents on independent cache routes. The key is
-	// process-local and is only consumed by the official GPT-5.6 Responses path.
+	// process-local and is consumed by the Responses adapter for every
+	// compatible endpoint.
 	cfg.responsesPromptCacheKey = openAIResponsesPromptCacheKey("subagent:" + subID)
 	desc := req.Description
 	if desc == "" {
