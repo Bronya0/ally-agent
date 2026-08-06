@@ -30,22 +30,37 @@
             <!-- Main chat area -->
             <div class="main-area">
               <n-layout class="chat-layout" :content-style="chatLayoutContentStyle">
-                <ChatMessages
-                  ref="conversationMessagesRef"
-                  :messages="displayMessages"
-                  :focused-id="focusedToolId"
-                  :render-fn="renderMarkdown"
-                  :fmt-k="fmtK"
-                  :tools="visibleAvailableTools"
-                  :mcp-servers="mcpServers"
-                  @toggle-archive="toggleArchiveMessages"
-                  @toggle-tool="toggleToolExpand"
-                  @focus-tool="focusTool"
-                  @clear-focus="clearFocus"
-                  @export-one-msg="exportOneMessage"
-                  @export-all-msgs="exportAllMessages"
-                  @submit-ask="submitAskResponse"
-                />
+                <n-tabs
+                  class="workspace-content-tabs"
+                  :value="activeWorkspaceId"
+                  type="bar"
+                  pane-class="workspace-chat-pane"
+                >
+                  <n-tab-pane
+                    v-for="tab in workspaceTabs"
+                    :key="tab.id"
+                    :name="tab.id"
+                    :tab="tab.label"
+                    display-directive="show"
+                  >
+                    <ChatMessages
+                      :ref="(instance) => setConversationMessagesRef(tab.id, instance)"
+                      :messages="displayMessagesForTab(tab)"
+                      :focused-id="focusedToolIdForSession(tab.sessionId)"
+                      :render-fn="renderMarkdown"
+                      :fmt-k="fmtK"
+                      :tools="visibleAvailableToolsForSession(sessionForWorkspaceTab(tab))"
+                      :mcp-servers="mcpServers"
+                      @toggle-archive="toggleArchiveMessages"
+                      @toggle-tool="toggleToolExpand"
+                      @focus-tool="(eventId) => focusTool(tab.sessionId, eventId)"
+                      @clear-focus="clearFocus(tab.sessionId)"
+                      @export-one-msg="exportOneMessage"
+                      @export-all-msgs="exportAllMessages(tab.sessionId)"
+                      @submit-ask="(msg, answers) => submitAskResponse(tab.sessionId, msg, answers)"
+                    />
+                  </n-tab-pane>
+                </n-tabs>
 
               <!-- Fixed todo panel; kept above the transient composer status row. -->
               <Transition name="todo-panel">
@@ -391,7 +406,7 @@ onErrorCaptured((err, _instance, info) => {
   return false;
 });
 
-const conversationMessagesRef = ref(null);
+const conversationMessagesRefs = new Map();
 const promptInputRef = ref(null);
 const promptComposing = ref(false);
 let promptCompositionEndedAt = 0;
@@ -1285,7 +1300,7 @@ const sessionsScrollRef = ref(null);
 const commandHistory = ref([]);
 const commandHistoryIndex = ref(-1);
 const configVisible = ref(false);
-const focusedToolId = ref('');
+const focusedToolIdsBySession = reactive({});
 const workspaceTabs = ref([]);
 const activeWorkspaceId = ref('');
 const extraRoots = ref([]);
@@ -1441,19 +1456,25 @@ Task requirements:
 6. Report the final result: commit message, hash, branch, and push status.`;
 
 const activeSession = computed(() => sessions.value.find((session) => session.id === activeSessionId.value));
+
+function sessionForWorkspaceTab(tab) {
+  if (!tab?.sessionId) return null;
+  return sessions.value.find((session) => session.id === tab.sessionId) || null;
+}
+
 const GRILL_BLOCKED_TOOL_NAMES = new Set([
   'edit', 'create_file', 'delete_path', 'run_command', 'background_process', 'wait',
   'http_request', 'web_fetch', 'remote_edit', 'remote_create_file',
   'remote_delete_path', 'remote_run_command', 'subagent', 'agent_delegate', 'memory_write',
   'todo_write', 'create_goal', 'update_goal', 'scheduled_task',
 ]);
-const visibleAvailableTools = computed(() => {
-  if (!activeSession.value?.grillMode) return availableTools.value;
+function visibleAvailableToolsForSession(session) {
+  if (!session?.grillMode) return availableTools.value;
   return availableTools.value.filter((tool) => {
     const name = String(tool?.name || '');
     return tool?.source !== 'mcp' && !name.startsWith('mcp__') && !GRILL_BLOCKED_TOOL_NAMES.has(name);
   });
-});
+}
 // Return a stable array reference when nothing actually changed so downstream
 // watchers (AppHeader) short-circuit. The previous version returned a fresh
 // array + fresh per-tab object literals on every recompute, even when every
@@ -1587,7 +1608,7 @@ function toggleArchiveMessages(sessionId) {
   else next.add(sessionId);
   expandedArchiveSessions.value = next;
   nextTick(() => {
-    conversationMessagesRef.value?.scrollbarRef?.scrollTo({ top: 0 });
+    conversationMessagesForSession(sessionId)?.scrollbarRef?.scrollTo({ top: 0 });
     cleanupDisconnectedMermaidNodes();
     observePendingMermaidDiagrams();
   });
@@ -1603,8 +1624,7 @@ function toggleArchiveMessages(sessionId) {
 // to the cached array when the shape hasn't changed — content-only mutations
 // still fire the computed, but it returns immediately without re-running the
 // O(n) merge or re-allocating the output array.
-let displayMessagesCache = null;
-let displayMessagesSig = '';
+const displayMessagesCacheBySession = new Map();
 function buildDisplayMessagesSignature(session, expanded) {
   const msgs = session?.messages;
   if (!msgs) return '';
@@ -1617,13 +1637,13 @@ function buildDisplayMessagesSignature(session, expanded) {
   }
   return parts.join('|');
 }
-const displayMessages = computed(() => {
-  const session = activeSession.value;
+function displayMessagesForSession(session) {
+  const sessionId = session?.id || '';
   const sig = buildDisplayMessagesSignature(session, expandedArchiveSessions.value);
-  if (sig === displayMessagesSig && displayMessagesCache) {
-    return displayMessagesCache;
+  const cached = displayMessagesCacheBySession.get(sessionId);
+  if (cached?.signature === sig) {
+    return cached.messages;
   }
-  displayMessagesSig = sig;
   const src = displaySourceMessages(session);
   const out = [];
   let i = 0;
@@ -1713,9 +1733,13 @@ group.readEntries.push({ title: be.title, chip: be.chip, lineCount: be.lineCount
       i++;
     }
   }
-  displayMessagesCache = out;
+  displayMessagesCacheBySession.set(sessionId, { signature: sig, messages: out });
   return out;
-});
+}
+
+function displayMessagesForTab(tab) {
+  return displayMessagesForSession(sessionForWorkspaceTab(tab));
+}
 
 const canSend = computed(() => {
   const s = activeSession.value;
@@ -2138,6 +2162,7 @@ async function loadSessionMessages(session) {
       session.createdAt = snapshot.createdAt || session.createdAt || Date.now();
       session.updatedAt = snapshot.updatedAt || session.updatedAt || session.createdAt;
       session.contextTokens = Number(snapshot.contextTokens || session.contextTokens || 0);
+      displayMessagesCacheBySession.delete(session.id);
       session.messages = messages.map((item) => ({
         ...item,
         streaming: false,
@@ -2246,6 +2271,7 @@ function closeWorkspaceTab(id) {
   if (idx === -1) return;
   const tab = workspaceTabs.value[idx];
   workspaceTabs.value.splice(idx, 1);
+  conversationMessagesRefs.delete(id);
   // Release the linked session's backend resources but keep it in the session
   // list so it remains accessible via /sessions. The session's workspace is
   // preserved via session.workspace / inferSessionWorkspace.
@@ -2258,8 +2284,8 @@ function closeWorkspaceTab(id) {
       delete sessionPromptTexts[tab.sessionId];
       delete todosBySession[tab.sessionId];
       delete todoRevisionsBySession[tab.sessionId];
-      delete sessionScrollAnchors[tab.sessionId];
-      revealOnSwitch.delete(tab.sessionId);
+      delete focusedToolIdsBySession[tab.sessionId];
+      displayMessagesCacheBySession.delete(tab.sessionId);
       ReleaseSession(tab.sessionId).catch(() => {});
     }
   }
@@ -2270,25 +2296,12 @@ function closeWorkspaceTab(id) {
   }
 }
 
-// Per-session scroll anchors: { index, offset } pointing to the topmost
-// visible message element. Unlike absolute scrollTop, anchors are immune
-// to content-visibility placeholder-height drift on Tab switch.
-const sessionScrollAnchors = {};
 
-// Sessions whose run finished while the user was on another Tab. When the
-// user switches back, scroll to the start of that finished reply instead of
-// restoring the old anchor.
-const revealOnSwitch = new Set();
 
 async function switchWorkspaceTab(id) {
   const tab = workspaceTabs.value.find((t) => t.id === id);
   if (!tab) return;
   const linkedSession = ensureWorkspaceTabSession(tab);
-  // Save current session's scroll anchor before switching
-  const prevAnchor = conversationMessagesRef.value?.saveScrollPosition();
-  if (activeSessionId.value && prevAnchor != null) {
-    sessionScrollAnchors[activeSessionId.value] = prevAnchor;
-  }
   saveSessions();
   activeWorkspaceId.value = id;
   config.workspace = tab.path;
@@ -2325,17 +2338,6 @@ async function switchWorkspaceTab(id) {
     await loadSessionMessages(linkedSession);
     unloadInactiveSessionMessages();
     loadTodos(linkedSession.id);
-    // Restore saved scroll anchor for this session, or stay at default.
-    // When the session's run finished while we were away, reveal the start
-    // of that finished reply instead (forced, so it wins over the anchor).
-    if (revealOnSwitch.delete(linkedSession.id)) {
-      nextTick(() => conversationMessagesRef.value?.scrollToLastReplyStart({ force: true }));
-    } else {
-      const savedAnchor = sessionScrollAnchors[linkedSession.id];
-      if (savedAnchor != null) {
-        nextTick(() => conversationMessagesRef.value?.restoreScrollPosition(savedAnchor));
-      }
-    }
   }
 }
 
@@ -2442,8 +2444,8 @@ function deleteSession(index) {
   delete todosBySession[deletedId];
   delete todoRevisionsBySession[deletedId];
   delete sessionPromptTexts[deletedId];
-  delete sessionScrollAnchors[deletedId];
-  revealOnSwitch.delete(deletedId);
+  delete focusedToolIdsBySession[deletedId];
+  displayMessagesCacheBySession.delete(deletedId);
   enqueueSessionWrite(() => DeleteSession(deletedId)).catch(() => {});
   const expanded = new Set(expandedArchiveSessions.value);
   expanded.delete(deletedId);
@@ -3218,14 +3220,6 @@ function bindRuntimeEvents() {
     session.isRunning = false;
     if (session.id === activeSessionId.value) {
       playCompletionSound('done');
-      // Reply finished: reveal the start of the final summary (right after
-      // the last tool call) so the user lands on the conclusion. Skipped
-      // when the user has scrolled away (autoFollow=false) to avoid pulling
-      // the viewport from under them.
-      nextTick(() => conversationMessagesRef.value?.scrollToLastReplyStart());
-    } else {
-      // Finished in a background session: reveal when the user switches back.
-      revealOnSwitch.add(session.id);
     }
     persistCompletedSession(session);
     refreshContextTokens(session.id);
@@ -3596,17 +3590,32 @@ function appendReasoningDelta(runId, content) {
   scrollMessagesToBottom();
 }
 
-function scrollMessagesToBottom(options = {}) {
-  nextTick(() => conversationMessagesRef.value?.scrollToBottom(options));
+function setConversationMessagesRef(tabId, instance) {
+  if (!tabId) return;
+  if (instance) conversationMessagesRefs.set(tabId, instance);
+  else conversationMessagesRefs.delete(tabId);
 }
 
-
-function focusTool(eventId) {
-  focusedToolId.value = eventId;
+function conversationMessagesForSession(sessionId) {
+  if (!sessionId) return null;
+  const tab = workspaceTabs.value.find((item) => item.sessionId === sessionId);
+  return tab ? conversationMessagesRefs.get(tab.id) || null : null;
 }
 
-function clearFocus() {
-  focusedToolId.value = '';
+function scrollMessagesToBottom(options = {}, sessionId = activeSessionId.value) {
+  nextTick(() => conversationMessagesForSession(sessionId)?.scrollToBottom(options));
+}
+
+function focusedToolIdForSession(sessionId) {
+  return focusedToolIdsBySession[sessionId] || '';
+}
+
+function focusTool(sessionId, eventId) {
+  if (sessionId) focusedToolIdsBySession[sessionId] = eventId;
+}
+
+function clearFocus(sessionId) {
+  if (sessionId) focusedToolIdsBySession[sessionId] = '';
 }
 
 function openAttachmentPicker() {
@@ -5148,13 +5157,13 @@ function toggleToolExpand(msg) {
   msg.expanded = !msg.expanded;
 }
 
-async function submitAskResponse(msg, answers) {
-  if (!msg?.askId || msg.askSubmitting || msg.askSubmitted) return;
+async function submitAskResponse(sessionId, msg, answers) {
+  if (!sessionId || !msg?.askId || msg.askSubmitting || msg.askSubmitted) return;
   msg.askSubmitting = true;
   try {
     await SubmitAskResponse({
       askId: msg.askId,
-      sessionId: activeSessionId.value,
+      sessionId,
       answers,
     });
     msg.askSubmitted = true;
@@ -5378,16 +5387,17 @@ function scheduleSaveSessions() {
   }, SAVE_SESSIONS_DEBOUNCE_MS);
 }
 function unloadInactiveSessionMessages() {
+  const openSessionIds = new Set(workspaceTabs.value.map((tab) => tab.sessionId).filter(Boolean));
   for (const session of sessions.value) {
-    // Newly created sessions have no backend snapshot yet. Keep their welcome
-    // message in memory until they become active; otherwise saveSessions(),
-    // called before a workspace switch, unloads them and the subsequent
-    // LoadSession() incorrectly asks the backend to open a file that was never
-    // written.
-    if (!session || session.id === activeSessionId.value || !session.hasSnapshot || sessionMayHaveBackgroundRun(session) || session.messagesLoaded === false) continue;
+    // Every open workspace Tab owns a mounted ChatMessages tree. Keep those
+    // sessions loaded so display-directive="show" can preserve the DOM and the
+    // browser's native scroll position while another Tab is active.
+    if (!session || openSessionIds.has(session.id) || !session.hasSnapshot || sessionMayHaveBackgroundRun(session) || session.messagesLoaded === false) continue;
     for (const message of session.messages || []) releaseMessageAttachments(message);
     session.messages = [];
     session.messagesLoaded = false;
+    delete focusedToolIdsBySession[session.id];
+    displayMessagesCacheBySession.delete(session.id);
   }
 }
 
@@ -5411,8 +5421,8 @@ function trimRuntimeSessions() {
     delete todosBySession[session.id];
     delete todoRevisionsBySession[session.id];
     delete sessionPromptTexts[session.id];
-    delete sessionScrollAnchors[session.id];
-    revealOnSwitch.delete(session.id);
+    delete focusedToolIdsBySession[session.id];
+    displayMessagesCacheBySession.delete(session.id);
     ReleaseSession(session.id).catch(() => {});
     const expanded = new Set(expandedArchiveSessions.value);
     expanded.delete(session.id);
@@ -6702,11 +6712,12 @@ function exportOneMessage(msg) {
   downloadMD(md, `ally-response.md`);
 }
 
-function exportAllMessages() {
-  const msgs = activeMessages.value;
-  if (!msgs || !msgs.length) return;
+function exportAllMessages(sessionId = activeSessionId.value) {
+  const session = sessions.value.find((item) => item.id === sessionId);
+  const msgs = session?.messages || [];
+  if (!msgs.length) return;
   const parts = [];
-  parts.push(`# ${activeSession.value?.title || t('app.export.sessionTitle')}\n`);
+  parts.push(`# ${session?.title || t('app.export.sessionTitle')}\n`);
   parts.push(`> ${t('app.export.time', { time: formatDateTime(new Date()) })}`);
   parts.push('');
   for (const msg of msgs) {

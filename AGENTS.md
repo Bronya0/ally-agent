@@ -530,8 +530,8 @@ State management:
 
 Major UI regions:
 
-- header with workspace tabs, history dropdown, plan indicator, settings, window controls
-- chat message area
+- header with controlled Naive UI workspace tabs, running indicators, drag ordering, history dropdown, plan indicator, settings, window controls
+- chat message area backed by one permanently mounted `ChatMessages` instance per open workspace Tab; content panes use `display-directive="show"` so switching only hides panes and preserves native DOM scroll state
 - command menu (`/`)
 - session switcher
 - todo panel
@@ -599,7 +599,7 @@ UI internationalization:
 
 ## Sessions, Context, And Token Accounting
 
-The backend owns the session index at `~/.ally_agent/sessions/index.json` and stores each completed UI snapshot as a separate gzip JSON file under `~/.ally_agent/sessions/<escaped-session-id>.json.gz`. The frontend loads only index metadata at startup and imports one snapshot when the user selects a session; inactive session messages are released from frontend memory. Only successful `run:done` turns and explicit successful compaction update a snapshot. Failed, cancelled, or still-streaming turns remain process-local and are excluded from later model requests and snapshots. Closing the window waits for queued local-file writes. Legacy `localStorage`/IndexedDB session data is migrated once and then cleared.
+The backend owns the session index at `~/.ally_agent/sessions/index.json` and stores each completed UI snapshot as a separate gzip JSON file under `~/.ally_agent/sessions/<escaped-session-id>.json.gz`. The frontend loads only index metadata at startup and imports snapshots on demand. Sessions owned by open workspace Tabs stay loaded because each Tab has a permanently mounted chat pane; sessions not owned by an open Tab are eligible for release from frontend memory. Only successful `run:done` turns and explicit successful compaction update a snapshot. Failed, cancelled, or still-streaming turns remain process-local and are excluded from later model requests and snapshots. Closing the window waits for queued local-file writes. Legacy `localStorage`/IndexedDB session data is migrated once and then cleared.
 
 Backend model histories are separate process-memory histories keyed by session ID and persisted as gzip-compressed JSON (`~/.ally_agent/histories/<escaped-session-id>.json.gz`). Loading remains compatible with legacy uncompressed `.json` files. On restart, backend history remains the model-context source of truth; frontend history contributes only a detected new tail. Alignment uses the longest overlap between the backend visible-history suffix and a contiguous frontend range, so an older frontend snapshot prefix is not duplicated. When backend compaction intentionally removes textual overlap, only the latest frontend request item is appended. Saved histories are bounded by an estimated-token budget rather than a fixed message count and are trimmed only at user-message boundaries, preserving assistant tool-call/result protocol groups. Failed and cancelled runs do not replace the last completed backend history.
 
@@ -608,6 +608,8 @@ Backend session cleanup distinguishes `ReleaseSession`, which frees in-memory hi
 Workspace/session invariants:
 
 - Every workspace Tab owns a valid `sessionId`; creating or selecting a session immediately updates that link, including sessions without a selected workspace.
+- Header and content Tabs share the controlled `activeWorkspaceId`; `Ctrl/Cmd+Left/Right` changes that value, while drag ordering mutates the same `workspaceTabs` array used by both surfaces.
+- Every open Tab keeps an independent `ChatMessages` component and scrollbar mounted under a Naive UI `n-tab-pane` with `display-directive="show"`; switching Tabs must not reintroduce synthetic scroll anchors or unload an open Tab's messages.
 - Selecting a session already owned by another Tab activates that Tab instead of silently rebinding a different Tab.
 - Runtime events with an explicit `sessionId` never fall back to the currently visible session. Terminal events are accepted only when their `runId` still matches the session's current run.
 - `Ctrl/Cmd+Left/Right` workspace navigation is disabled inside inputs, textareas, selects, and contenteditable elements.

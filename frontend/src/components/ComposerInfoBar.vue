@@ -119,6 +119,8 @@
       <span class="info-sep">·</span>
       <span class="info-git" :title="$t('composer.git.open')" @click.stop="$emit('openGitDiff')">
         <span class="info-git-branch">{{ gitStatus.branch }}</span>
+        <span v-if="gitStatus.ahead > 0" class="git-stat ahead" :title="$t('composer.git.ahead')">↑{{ gitStatus.ahead }}</span>
+        <span v-if="gitStatus.behind > 0" class="git-stat behind" :title="$t('composer.git.behind')">↓{{ gitStatus.behind }}</span>
         <span v-if="gitStatus.added > 0" class="git-stat added" :title="$t('composer.git.added')">+{{ gitStatus.added }}</span>
         <span v-if="gitStatus.modified > 0" class="git-stat modified" :title="$t('composer.git.modified')">~{{ gitStatus.modified }}</span>
         <span v-if="gitStatus.deleted > 0" class="git-stat deleted" :title="$t('composer.git.deleted')">-{{ gitStatus.deleted }}</span>

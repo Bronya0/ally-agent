@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -91,8 +92,30 @@ func (a *App) GetGitStatus() GitStatus {
 			st.Deleted++
 		}
 	}
+	st.Ahead, st.Behind = gitAheadBehind(ctx, root)
 	a.cacheGitStatus(workspace, st)
 	return st
+}
+
+// gitAheadBehind returns the number of local commits not on the upstream
+// branch (ahead) and upstream commits not pulled locally (behind). Missing
+// upstream, detached HEAD, or an unborn branch yield zero counts, so the UI
+// simply shows nothing for them.
+func gitAheadBehind(ctx context.Context, root string) (int, int) {
+	out, _, err := runGitLimited(ctx, root, 4096, "rev-list", "--left-right", "--count", "HEAD...@{upstream}")
+	if err != nil {
+		return 0, 0
+	}
+	fields := strings.Fields(strings.TrimSpace(out))
+	if len(fields) != 2 {
+		return 0, 0
+	}
+	ahead, err1 := strconv.Atoi(fields[0])
+	behind, err2 := strconv.Atoi(fields[1])
+	if err1 != nil || err2 != nil {
+		return 0, 0
+	}
+	return ahead, behind
 }
 
 func (a *App) cacheGitStatus(workspace string, status GitStatus) {
