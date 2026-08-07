@@ -98,6 +98,9 @@ type readPreviewResult struct {
 }
 
 func GenerateEditDiffPreview(oldContent, newContent string, maxBytes int) string {
+	if oldContent == newContent {
+		return ""
+	}
 	oldLines := contentLinesForDiff(oldContent)
 	newLines := contentLinesForDiff(newContent)
 	if len(oldLines) == 0 && len(newLines) == 0 {
