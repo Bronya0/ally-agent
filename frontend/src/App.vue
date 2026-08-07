@@ -3418,7 +3418,10 @@ function bindRuntimeEvents() {
     }
     const session = sessionByTerminalEvent(data);
     if (!session) return;
-    if (session.id === activeSessionId.value) refreshGitStatus();
+    // 会话结束可能修改了工作区文件。即使这个会话挂在后台 Tab 上，只要它
+    // 属于当前工作区，底部 Git 统计也应刷新（GetGitStatus 查询的是当前
+    // 工作区，与具体会话无关）。
+    if (String(session.workspace || '') === String(config.workspace || '')) refreshGitStatus();
     if (data.grillComplete) session.grillMode = false;
     let i = session.messages.length - 1;
     while (i >= 0) {
@@ -3480,6 +3483,8 @@ function bindRuntimeEvents() {
     // content, tool args, and the error footer — the context popover should
     // reflect that immediately instead of waiting for the next session switch.
     if (session.id === activeSessionId.value) refreshContextTokens(session.id);
+    // 后台 Tab 的会话出错结束前可能已修改工作区文件，Git 统计同样要刷新。
+    if (String(session.workspace || '') === String(config.workspace || '')) refreshGitStatus();
   });
   onRuntimeEvent('run:cancelled', (data) => {
     flushStreamBuffer(data.runId);
@@ -3514,6 +3519,8 @@ function bindRuntimeEvents() {
     // results added before cancellation are now part of the history and the
     // context popover should reflect the actual remaining budget.
     if (session.id === activeSessionId.value) refreshContextTokens(session.id);
+    // 后台 Tab 的会话被取消前可能已修改工作区文件，Git 统计同样要刷新。
+    if (String(session.workspace || '') === String(config.workspace || '')) refreshGitStatus();
   });
   // Auto-compaction notification: backend emits run:compacted after an
   // automatic history compression. Surface it to the user so the sudden
