@@ -115,6 +115,24 @@ func TestMultiMatchDiagnosticsStayBoundedAfterJSONEscaping(t *testing.T) {
 	}
 }
 
+func TestApplyBatchTextChangesReplaceAllExactMatches(t *testing.T) {
+	content := "foo foo\nfoo\n"
+	result, replacements, err := ApplyBatchTextChanges(content, []TextChange{{
+		OldText:    "foo",
+		NewText:    "bar",
+		ReplaceAll: true,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replacements != 3 {
+		t.Fatalf("replacements = %d, want 3", replacements)
+	}
+	if result.Content != "bar bar\nbar\n" {
+		t.Fatalf("unexpected replace-all result: %q", result.Content)
+	}
+}
+
 func TestIndentationInsensitiveReindentAdvancesAcrossBlankLines(t *testing.T) {
 	content := "    if ready {\n\n        run()\n    }\n"
 	oldText := "if ready {\n\n    run()\n}\n"
@@ -150,14 +168,17 @@ func TestIndentationInsensitiveMatchHandlesMillionLineFile(t *testing.T) {
 func TestApplyBatchTextChangesLineRangesUseOriginalSnapshot(t *testing.T) {
 	content := "one\ntwo\nthree\nfour\nfive\nsix\n"
 	result, replacements, err := ApplyBatchTextChanges(content, []TextChange{
-		{LineRange: "2-2", NewText: "TWO\ninserted"},
+		{LineRange: "2-2", NewText: "TWO\ninserted", ReplaceAll: true},
 		{LineRange: "5-5", NewText: "FIVE"},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if replacements != 2 {
-		t.Fatalf("replacements = %d, want 2", replacements)
+		t.Fatalf("replacements = %d, want 2; replace_all must be ignored for lineRange", replacements)
+	}
+	if len(result.Warnings) != 1 || !strings.Contains(result.Warnings[0], "ignored replace_all") {
+		t.Fatalf("expected replace_all warning for lineRange, got %#v", result.Warnings)
 	}
 	want := "one\nTWO\ninserted\nthree\nfour\nFIVE\nsix\n"
 	if result.Content != want {
@@ -287,5 +308,26 @@ func BenchmarkApplyBatchTextChangesLargeFileLineRanges(b *testing.B) {
 		if _, _, err := ApplyBatchTextChanges(content, changes); err != nil {
 			b.Fatal(err)
 		}
+	}
+}
+
+func TestApplyBatchTextChangesReplaceAllBeyondDiagnosticLimit(t *testing.T) {
+	// More occurrences than maxMatchDiagnosticCandidates: the replace-all path
+	// streams matches without retaining a per-occurrence slice, so a large
+	// match count must still replace every occurrence exactly.
+	content := strings.Repeat("foo\n", 20)
+	result, replacements, err := ApplyBatchTextChanges(content, []TextChange{{
+		OldText:    "foo",
+		NewText:    "bar",
+		ReplaceAll: true,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replacements != 20 {
+		t.Fatalf("replacements = %d, want 20", replacements)
+	}
+	if result.Content != strings.Repeat("bar\n", 20) {
+		t.Fatalf("unexpected replace-all content: %q", result.Content)
 	}
 }

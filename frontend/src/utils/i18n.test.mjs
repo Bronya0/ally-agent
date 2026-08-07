@@ -22,6 +22,19 @@ test('both locale tables contain representative UI entries', () => {
   assert.equal(hasTranslation('settings.title'), true);
   assert.equal(hasTranslation('app.composer.placeholder'), true);
   assert.equal(hasTranslation('tools.status.using'), true);
+  assert.equal(hasTranslation('app.push.prompt'), true);
+});
+
+test('/push uses a localized prompt that preserves the conversation language', () => {
+  const sourceRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
+  const appSource = readFileSync(join(sourceRoot, 'App.vue'), 'utf8');
+  const i18nSource = readFileSync(join(sourceRoot, 'i18n.mjs'), 'utf8');
+
+  assert.match(appSource, /history\.push\(\{ role: 'user', content: t\('app\.push\.prompt'\) \}\)/);
+  assert.doesNotMatch(appSource, /const PUSH_PROMPT =/);
+  assert.equal((i18nSource.match(/'app\.push\.prompt':/g) || []).length, 2);
+  assert.match(i18nSource, /保持当前会话已经使用的回复语言/);
+  assert.match(i18nSource, /Preserve the response language already used/);
 });
 
 test('every translation key used by the UI exists in both locale tables', () => {

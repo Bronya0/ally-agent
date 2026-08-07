@@ -40,7 +40,7 @@ func (a *App) editFilesWithConfig(cfg ConfigState, files []FileTextEdits) (Multi
 		if err != nil {
 			return MultiEditResult{}, fmt.Errorf("file %d (%s): %w", i+1, file.Path, err)
 		}
-		beforeVersion := hashVersion(before)
+		beforeHash, beforeVersion := hashBytesAndVersion(before)
 		if !strings.EqualFold(file.Version, beforeVersion) {
 			return MultiEditResult{}, codedToolError("E_VERSION_MISMATCH", fmt.Errorf("file %s expected version %s, current %s; re-read all affected files before retrying", file.Path, file.Version, beforeVersion))
 		}
@@ -50,14 +50,12 @@ func (a *App) editFilesWithConfig(cfg ConfigState, files []FileTextEdits) (Multi
 			return MultiEditResult{}, fmt.Errorf("file %d (%s): %w", i+1, file.Path, err)
 		}
 		after := encodeLineEnding(applied.Content, ending)
-		beforeLines, _ := splitLines(text)
-		afterLines, _ := splitLines(applied.Content)
 		diff := edit.GenerateEditDiffPreview(text, applied.Content, maxToolOutput)
 		added, removed := 0, 0
 		if diff != "" {
-			added, removed = edit.CountEditDiffStats(diff, beforeLines, afterLines)
+			added, removed = edit.CountEditDiffStats(diff)
 		} else {
-			added, removed = edit.ApproximateLineDelta(beforeLines, afterLines)
+			added, removed = edit.ApproximateLineDeltaContent(text, applied.Content)
 		}
 		classification := "edit"
 		if bytes.Equal(after, before) {
@@ -68,6 +66,7 @@ func (a *App) editFilesWithConfig(cfg ConfigState, files []FileTextEdits) (Multi
 			classification = "deletion"
 		}
 		display := filepath.ToSlash(file.Path)
+		afterHash, afterVersion := hashBytesAndVersion(after)
 		prepared = append(prepared, preparedFileEdit{
 			path:    resolved,
 			display: display,
@@ -76,10 +75,10 @@ func (a *App) editFilesWithConfig(cfg ConfigState, files []FileTextEdits) (Multi
 			perm:    info.Mode().Perm(),
 			result: EditResult{
 				Path:              display,
-				BeforeSHA256:      hashBytes(before),
-				AfterSHA256:       hashBytes(after),
+				BeforeSHA256:      beforeHash,
+				AfterSHA256:       afterHash,
 				BeforeVersion:     beforeVersion,
-				Version:           hashVersion(after),
+				Version:           afterVersion,
 				BeforeBytes:       len(before),
 				AfterBytes:        len(after),
 				Replacements:      replacements,
@@ -172,8 +171,7 @@ func (a *App) editWithConfig(cfg ConfigState, req EditRequest) (EditResult, erro
 	if err != nil {
 		return EditResult{}, err
 	}
-	beforeHash := hashBytes(data)
-	beforeVersion := hashVersion(data)
+	beforeHash, beforeVersion := hashBytesAndVersion(data)
 	if req.Version != "" {
 		if err := validateVersion(req.Version); err != nil {
 			return EditResult{}, err
@@ -214,15 +212,13 @@ func (a *App) editWithConfig(cfg ConfigState, req EditRequest) (EditResult, erro
 		}
 	}
 
-	beforeLines, _ := splitLines(text)
-	afterLines, _ := splitLines(updated)
 	diff := edit.GenerateEditDiffPreview(text, updated, maxToolOutput)
 	added := 0
 	removed := 0
 	if diff != "" {
-		added, removed = edit.CountEditDiffStats(diff, beforeLines, afterLines)
+		added, removed = edit.CountEditDiffStats(diff)
 	} else {
-		added, removed = edit.ApproximateLineDelta(beforeLines, afterLines)
+		added, removed = edit.ApproximateLineDeltaContent(text, updated)
 	}
 	if text == updated {
 		added, removed = 0, 0
@@ -239,13 +235,14 @@ func (a *App) editWithConfig(cfg ConfigState, req EditRequest) (EditResult, erro
 	}
 
 	changedBlock := edit.BuildLineNumberContextBlock(updated, result.FirstChangedLine, result.LastChangedLine, splitLines)
+	afterHash, afterVersion := hashBytesAndVersion(after)
 
 	return EditResult{
 		Path:              filepath.ToSlash(req.Path),
 		BeforeSHA256:      beforeHash,
-		AfterSHA256:       hashBytes(after),
+		AfterSHA256:       afterHash,
 		BeforeVersion:     beforeVersion,
-		Version:           hashVersion(after),
+		Version:           afterVersion,
 		BeforeBytes:       len(data),
 		AfterBytes:        len(after),
 		Replacements:      replacements,
@@ -342,7 +339,12 @@ func toEditChanges(in []TextChange) []edit.TextChange {
 	}
 	out := make([]edit.TextChange, len(in))
 	for i, c := range in {
-		out[i] = edit.TextChange{OldText: c.OldText, LineRange: c.LineRange, NewText: c.NewText}
+		out[i] = edit.TextChange{
+			OldText:    c.OldText,
+			LineRange:  c.LineRange,
+			NewText:    c.NewText,
+			ReplaceAll: c.ReplaceAll,
+		}
 	}
 	return out
 }
@@ -353,7 +355,7 @@ func fromEditChanges(in []edit.TextChange) []TextChange {
 	}
 	out := make([]TextChange, len(in))
 	for i, c := range in {
-		out[i] = TextChange{OldText: c.OldText, LineRange: c.LineRange, NewText: c.NewText}
+		out[i] = TextChange{OldText: c.OldText, LineRange: c.LineRange, NewText: c.NewText, ReplaceAll: c.ReplaceAll}
 	}
 	return out
 }

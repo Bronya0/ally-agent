@@ -236,6 +236,17 @@ const zh = {
   'app.push.visibleText': '/push 提交并推送',
   'app.push.title': '/push - 提交并推送',
   'app.push.failed': '推送失败：{error}',
+  'app.push.prompt': `提交本地 Git 变更并推送到远程。
+
+任务要求：
+1. 运行 git status 和 git diff，先审查变更。
+2. 暂存全部本地变更（git add -A），并用一句简洁的话创建提交。
+3. 将提交推送至远程（git push）。
+4. 如无变更可提交，请说明并跳过推送。
+5. 如果项目或环境定义了 Git 约定（例如 AGENTS.md），请遵循其中的提交信息格式和作者设置。
+6. 报告最终结果：提交信息、哈希、分支及推送状态。
+
+回复语言：保持当前会话已经使用的回复语言；不要因为此内部指令、Git 命令或 Git 输出的语言而切换语言。如果会话尚未形成回复语言，请使用当前界面语言。`,
   'app.cache.contentTrimmed': '[内容过长，已裁剪本地缓存]',
   'app.cache.reasoningTrimmed': '[思考内容过长，已裁剪本地缓存]',
   'app.cache.toolTrimmed': '[工具输出过长，已裁剪本地缓存]',
@@ -272,7 +283,7 @@ const zh = {
 
   'chat.archive.collapse': '收起早期消息',
   'chat.archive.expand': '展开早期消息',
-  'chat.archive.summary': '{count} 条 · 约 {tokens} tokens',
+  'chat.archive.summary': '包含 {count} 个早期卡片',
   'chat.userMessage.expand': '展开完整提问（{lines} 行，{characters} 字）',
   'chat.userMessage.collapse': '收起提问',
   'chat.attachment': '附件',
@@ -833,7 +844,21 @@ const enOverrides = {
   'app.skills.deactivateFailed': 'Failed to disable skill: {error}', 'app.skills.allDeactivated': 'All skills have been disabled.',
   'app.skills.deactivatedToast': 'Skills disabled', 'app.init.title': '/init - Project analysis',
   'app.init.failed': 'Initialization failed: {error}', 'app.note.visibleText': '/note Save durable knowledge',
-  'app.note.title': '/note - Save durable knowledge', 'app.note.failed': 'Failed to save project knowledge: {error}', 'app.push.visibleText': '/push Commit and push', 'app.push.title': '/push - Commit and push', 'app.push.failed': 'Push failed: {error}',
+  'app.note.title': '/note - Save durable knowledge', 'app.note.failed': 'Failed to save project knowledge: {error}',
+  'app.push.visibleText': '/push Commit and push',
+  'app.push.title': '/push - Commit and push',
+  'app.push.failed': 'Push failed: {error}',
+  'app.push.prompt': `Push local Git changes to the remote.
+
+Task requirements:
+1. Run git status and git diff to review what has changed.
+2. Stage all local changes (git add -A) and commit them with one concise sentence.
+3. Push the commit to the remote (git push).
+4. If there is nothing to commit, report that and skip the push.
+5. If the project or environment defines Git conventions (for example, in AGENTS.md), follow them for commit-message style and author settings.
+6. Report the final result: commit message, hash, branch, and push status.
+
+Response language: Preserve the response language already used in the current conversation. Do not switch languages because of this internal instruction, Git commands, or Git output. If the conversation has no established response language yet, use the current UI language.`,
   'app.cache.contentTrimmed': '[Content was trimmed in the local cache]',
   'app.cache.reasoningTrimmed': '[Reasoning was trimmed in the local cache]',
   'app.cache.toolTrimmed': '[Tool output was trimmed in the local cache]',
@@ -857,7 +882,7 @@ const enOverrides = {
   'header.maximize': 'Maximize', 'header.close': 'Close',
 
   'chat.archive.collapse': 'Collapse earlier messages', 'chat.archive.expand': 'Expand earlier messages',
-  'chat.archive.summary': '{count} messages · about {tokens} tokens',
+  'chat.archive.summary': 'Contains {count} earlier cards',
   'chat.userMessage.expand': 'Expand full question ({lines} lines, {characters} characters)',
   'chat.userMessage.collapse': 'Collapse question', 'chat.attachment': 'Attachments',
   'chat.welcome': 'Welcome message', 'chat.thinking': 'Thinking', 'chat.thought': 'Thought', 'chat.thinkingTokens': '{tokens} tokens',

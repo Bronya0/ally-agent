@@ -6,6 +6,8 @@ package app
 // result shape used by the chat loop.
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -53,6 +55,107 @@ type readPreviewResult struct {
 	TruncatedLinesOmitted bool
 	RangeStatus           string
 	EmptyRange            bool
+}
+
+// runReadCache avoids sending the same read payload to the model more than once
+// during a chat run. It is deliberately run-scoped: later user turns may need a
+// fresh version after external changes. A successful write or command clears it.
+type runReadCache struct {
+	mu        sync.Mutex
+	entries   map[string]runReadCacheEntry
+	totalSize int
+}
+
+type runReadCacheEntry struct {
+	result *BatchReadResult
+	size   int
+}
+
+const (
+	runReadCacheMaxEntries = 32
+	runReadCacheMaxBytes   = 8 * 1024 * 1024
+)
+
+func newRunReadCache() *runReadCache {
+	return &runReadCache{entries: make(map[string]runReadCacheEntry)}
+}
+
+func (c *runReadCache) read(a *App, cfg ConfigState, req BatchReadRequest) (*BatchReadResult, error) {
+	keyBytes, err := json.Marshal(req)
+	if err != nil {
+		return nil, err
+	}
+	key := string(keyBytes)
+	c.mu.Lock()
+	if previous, ok := c.entries[key]; ok {
+		c.mu.Unlock()
+		return reusedBatchReadResult(previous.result), nil
+	}
+	c.mu.Unlock()
+	// Read outside the lock: batch reads are already parallelized internally,
+	// and holding the cache mutex across disk I/O would serialize unrelated
+	// reads within the same run.
+	result, err := a.batchReadFilesWithConfig(cfg, req)
+	if err != nil {
+		return nil, err
+	}
+	// Only cache fully successful reads: a missing path can appear later in the
+	// same run, and a retryable read error should not be hidden.
+	for _, file := range result.Files {
+		if file.Error != "" {
+			return result, nil
+		}
+	}
+	c.store(key, result)
+	return result, nil
+}
+
+// store caches a fully successful read, evicting arbitrary entries until the
+// entry-count and byte budgets fit. The cache is a best-effort token saver, so
+// dropping entries under pressure is acceptable.
+func (c *runReadCache) store(key string, result *BatchReadResult) {
+	size := 0
+	for _, file := range result.Files {
+		size += len(file.Content) + len(file.Text)
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, ok := c.entries[key]; ok {
+		return
+	}
+	for (len(c.entries) >= runReadCacheMaxEntries || c.totalSize+size > runReadCacheMaxBytes) && len(c.entries) > 0 {
+		for k, e := range c.entries {
+			delete(c.entries, k)
+			c.totalSize -= e.size
+			break
+		}
+	}
+	c.entries[key] = runReadCacheEntry{result: result, size: size}
+	c.totalSize += size
+}
+
+func (c *runReadCache) invalidate() {
+	c.mu.Lock()
+	clear(c.entries)
+	c.totalSize = 0
+	c.mu.Unlock()
+}
+
+func invalidateRunReadCache(ctx context.Context) {
+	if cache, ok := ctx.Value(runReadCacheContextKey{}).(*runReadCache); ok {
+		cache.invalidate()
+	}
+}
+
+func reusedBatchReadResult(previous *BatchReadResult) *BatchReadResult {
+	files := make([]BatchReadResultItem, len(previous.Files))
+	for i, file := range previous.Files {
+		file.Content = ""
+		file.Text = ""
+		file.Reused = true
+		files[i] = file
+	}
+	return &BatchReadResult{Files: files}
 }
 
 func (a *App) BatchReadFiles(req BatchReadRequest) (*BatchReadResult, error) {

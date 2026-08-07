@@ -16,25 +16,14 @@ func ComputeChangedLineRange(original, result string) ChangedLineRange {
 		return ChangedLineRange{}
 	}
 
-	countVisibleLines := func(text string) int {
-		if len(text) == 0 {
-			return 0
-		}
-		lines := strings.Split(text, "\n")
-		if strings.HasSuffix(text, "\n") {
-			return len(lines) - 1
-		}
-		return len(lines)
-	}
-
 	if len(original) == 0 {
-		return ChangedLineRange{FirstChangedLine: 1, LastChangedLine: countVisibleLines(result)}
+		return ChangedLineRange{FirstChangedLine: 1, LastChangedLine: visibleLineCount(result)}
 	}
 
 	if strings.HasPrefix(result, original) && strings.HasSuffix(original, "\n") {
 		return ChangedLineRange{
-			FirstChangedLine: countVisibleLines(original) + 1,
-			LastChangedLine:  countVisibleLines(result),
+			FirstChangedLine: visibleLineCount(original) + 1,
+			LastChangedLine:  visibleLineCount(result),
 		}
 	}
 
@@ -116,7 +105,10 @@ func GenerateEditDiffPreview(oldContent, newContent string, maxBytes int) string
 	}
 
 	if len(oldLines)*len(newLines) <= editDiffLCSLineProductLimit {
-		return truncateDiffText(generateEditDiff(oldContent, newContent), maxBytes)
+		// Reuse the line slices already built above; splitting both contents
+		// again through generateEditDiff needlessly duplicates O(N) work.
+		diff := strings.Join(computePrefixedDiffLines(oldLines, newLines), "\n")
+		return truncateDiffText(diff, maxBytes)
 	}
 
 	diff := generateLocalizedEditDiff(oldLines, newLines)

@@ -586,8 +586,19 @@ func (a *App) handleTodoList(sessionID string, req TodoListRequest) (any, error)
 		}, nil
 	}
 
-	// Replace mode
+	// Replace mode. Any non-empty list with actionable work starts at its
+	// first pending item, so a newly created list immediately has a visible
+	// current step. This also repairs an update that finished the old step
+	// without selecting the next one.
 	updated := cloneTodos(req.Todos)
+	if inProgress == 0 {
+		for i := range updated {
+			if updated[i].Status == "pending" {
+				updated[i].Status = "in_progress"
+				break
+			}
+		}
+	}
 	a.todos[sid] = updated
 	a.todoRevisions[sid]++
 	revision := a.todoRevisions[sid]

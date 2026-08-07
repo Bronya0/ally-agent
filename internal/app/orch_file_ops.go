@@ -41,6 +41,7 @@ func (a *App) createFileWithConfig(cfg ConfigState, req CreateFileRequest) (Edit
 
 	before := []byte{}
 	beforeHash := ""
+	beforeVersion := ""
 	perm := os.FileMode(0o644)
 	if info, err := os.Lstat(path); err == nil {
 		if info.Mode()&os.ModeSymlink != 0 {
@@ -56,7 +57,7 @@ func (a *App) createFileWithConfig(cfg ConfigState, req CreateFileRequest) (Edit
 		if err != nil {
 			return EditResult{}, codedToolError("E_TEXT_OVERWRITE", fmt.Errorf("refusing to overwrite non-text or unreadable file %s: %w", req.Path, err))
 		}
-		beforeHash = hashBytes(before)
+		beforeHash, beforeVersion = hashBytesAndVersion(before)
 		perm = info.Mode().Perm()
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return EditResult{}, err
@@ -79,7 +80,7 @@ func (a *App) createFileWithConfig(cfg ConfigState, req CreateFileRequest) (Edit
 	// encoded because safeWriteFileWithDir writes encoded verbatim, and for
 	// new files safeWriteNewFile does the same. Using encoded directly also
 	// avoids a second hash pass on the same content.
-	return makeEditResult(req.Path, beforeHash, before, encoded, ending, 1, string(before), content), nil
+	return makeEditResult(req.Path, beforeHash, beforeVersion, before, encoded, ending, 1, string(before), content), nil
 }
 
 func (a *App) deletePathWithConfig(cfg ConfigState, req DeletePathRequest) (DeleteResult, error) {
@@ -498,7 +499,7 @@ func deleteTargetKind(info os.FileInfo) string {
 	return "other"
 }
 
-func makeEditResult(rel string, beforeHash string, before, after []byte, ending string, replacements int, beforeText, afterText string) EditResult {
+func makeEditResult(rel string, beforeHash, beforeVersion string, before, after []byte, ending string, replacements int, beforeText, afterText string) EditResult {
 	beforeLines, _ := splitLines(beforeText)
 	afterLines, _ := splitLines(afterText)
 	added := len(afterLines) - len(beforeLines)
@@ -507,12 +508,13 @@ func makeEditResult(rel string, beforeHash string, before, after []byte, ending 
 		removed = -added
 		added = 0
 	}
+	afterHash, afterVersion := hashBytesAndVersion(after)
 	return EditResult{
 		Path:          filepath.ToSlash(rel),
 		BeforeSHA256:  beforeHash,
-		AfterSHA256:   hashBytes(after),
-		BeforeVersion: hashVersion(before),
-		Version:       hashVersion(after),
+		AfterSHA256:   afterHash,
+		BeforeVersion: beforeVersion,
+		Version:       afterVersion,
 		BeforeBytes:   len(before),
 		AfterBytes:    len(after),
 		Replacements:  replacements,

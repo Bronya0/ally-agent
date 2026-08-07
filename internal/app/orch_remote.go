@@ -550,6 +550,7 @@ func (a *App) remoteReadFile(ctx context.Context, req RemoteReadFileRequest) (Re
 		return ReadFileResult{}, err
 	}
 	text, ending := normalizeText(file.Data)
+	sha256Hex, version := hashBytesAndVersion(file.Data)
 	preview, err := formatLineNumberReadPreviewRangeWithBudget(text, readRangeRequest{
 		StartLine: req.StartLine,
 		EndLine:   req.EndLine,
@@ -568,8 +569,8 @@ func (a *App) remoteReadFile(ctx context.Context, req RemoteReadFileRequest) (Re
 		EndLine:               preview.EndLine,
 		NextStartLine:         preview.NextStartLine,
 		TotalLines:            preview.TotalLines,
-		SHA256:                hashBytes(file.Data),
-		Version:               hashVersion(file.Data),
+		SHA256:                sha256Hex,
+		Version:               version,
 		Size:                  file.Size,
 		LineEnding:            ending,
 		Truncated:             preview.Truncated,
@@ -632,8 +633,7 @@ func (a *App) remoteEdit(ctx context.Context, req RemoteEditRequest) (MultiEditR
 }
 
 func (a *App) remoteEditOne(ctx context.Context, rt remoteTarget, req FileTextEdits, file remoteRawFile) (EditResult, error) {
-	beforeHash := hashBytes(file.Data)
-	beforeVersion := hashVersion(file.Data)
+	beforeHash, beforeVersion := hashBytesAndVersion(file.Data)
 	if !strings.EqualFold(req.Version, beforeVersion) {
 		return EditResult{}, codedToolError("E_VERSION_MISMATCH", fmt.Errorf("remote file changed: expected version %s, current %s. Re-read before editing", req.Version, beforeVersion))
 	}
@@ -643,20 +643,19 @@ func (a *App) remoteEditOne(ctx context.Context, rt remoteTarget, req FileTextEd
 		return EditResult{}, err
 	}
 	after := encodeLineEnding(result.Content, ending)
+	afterHash, afterVersion := hashBytesAndVersion(after)
 	if bytes.Equal(file.Data, after) {
 		return EditResult{}, codedToolError("E_NOOP", errors.New("edit produced no content changes"))
 	}
 	if err := a.remoteWriteRaw(ctx, rt, req.Path, after, true, true); err != nil {
 		return EditResult{}, err
 	}
-	beforeLines, _ := splitLines(text)
-	afterLines, _ := splitLines(result.Content)
 	diff := edit.GenerateEditDiffPreview(text, result.Content, maxToolOutput)
 	added, removed := 0, 0
 	if diff != "" {
-		added, removed = edit.CountEditDiffStats(diff, beforeLines, afterLines)
+		added, removed = edit.CountEditDiffStats(diff)
 	} else {
-		added, removed = edit.ApproximateLineDelta(beforeLines, afterLines)
+		added, removed = edit.ApproximateLineDeltaContent(text, result.Content)
 	}
 	classification := "edit"
 	if len(result.Content) > len(text) {
@@ -667,9 +666,9 @@ func (a *App) remoteEditOne(ctx context.Context, rt remoteTarget, req FileTextEd
 	return EditResult{
 		Path:              file.Path,
 		BeforeSHA256:      beforeHash,
-		AfterSHA256:       hashBytes(after),
+		AfterSHA256:       afterHash,
 		BeforeVersion:     beforeVersion,
-		Version:           hashVersion(after),
+		Version:           afterVersion,
 		BeforeBytes:       len(file.Data),
 		AfterBytes:        len(after),
 		Replacements:      replacements,
@@ -697,16 +696,17 @@ func (a *App) remoteCreateFile(ctx context.Context, req RemoteCreateFileRequest)
 	}
 	before := []byte{}
 	beforeHash := ""
+	beforeVersion := ""
 	if _, existing, readErr := a.remoteReadRaw(ctx, req.Target, cleanPath); readErr == nil {
 		before = existing.Data
-		beforeHash = hashBytes(existing.Data)
+		beforeHash, beforeVersion = hashBytesAndVersion(existing.Data)
 	}
 	content, ending := normalizeText([]byte(req.Content))
 	encoded := encodeLineEnding(content, ending)
 	if err := a.remoteWriteRaw(ctx, rt, cleanPath, encoded, req.Overwrite, true); err != nil {
 		return EditResult{}, err
 	}
-	return makeEditResult(cleanPath, beforeHash, before, encoded, ending, 1, string(before), content), nil
+	return makeEditResult(cleanPath, beforeHash, beforeVersion, before, encoded, ending, 1, string(before), content), nil
 }
 
 func (a *App) remoteDeletePath(ctx context.Context, req RemoteDeletePathRequest) (map[string]any, error) {

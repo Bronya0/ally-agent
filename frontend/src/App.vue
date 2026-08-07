@@ -65,13 +65,13 @@
               <!-- Fixed todo panel; kept above the transient composer status row. -->
               <Transition name="todo-panel">
                 <div v-if="showTodoPanel" :class="['todo-panel', { collapsed: todoPanelCollapsed }]">
-                  <button class="todo-panel-header" :title="todoPanelCollapsed ? $t('app.todo.expand') : $t('app.todo.collapse')" @click="todoPanelCollapsed = !todoPanelCollapsed">
+                  <button class="todo-panel-header" :title="todoPanelCollapsed ? $t('app.todo.expand') : $t('app.todo.collapse')" @click="toggleTodoPanel">
                     <span>Todo</span>
                     <span class="todo-panel-count">{{ activeTodoCount }}/{{ todos.length }}</span>
                     <span :class="['todo-panel-toggle', { expanded: !todoPanelCollapsed }]"></span>
                   </button>
-                  <div v-show="!todoPanelCollapsed" class="todo-panel-list">
-                    <div v-for="(item, idx) in todos" :key="idx" :class="['todo-item', item.status]">
+                  <div v-show="!todoPanelCollapsed" ref="todoPanelListRef" class="todo-panel-list">
+                    <div v-for="item in orderedTodoEntries" :key="item.key" :class="['todo-item', item.status]">
                       <span class="todo-status">{{ item.status === 'done' ? '✓' : item.status === 'in_progress' ? '●' : '○' }}</span>
                       <span class="todo-title">{{ item.title }}</span>
                     </div>
@@ -386,11 +386,10 @@ import { buildVersion } from './utils/buildVersion.js';
 import { computeEditStats, formatEditStats } from './utils/diff.js';
 import { isNewerReleaseVersion } from './utils/versionCheck.mjs';
 import { findSessionWorkspaceTab, isEditableNavigationTarget, shouldAcceptRunTerminal } from './utils/sessionState.mjs';
+import { orderTodoPanelEntries } from './utils/todoPanel.mjs';
 import { formatDateTime, naiveDateLocale, naiveLocale, reasoningEffortLabel, t, welcomeGreeting as localizedWelcomeGreeting } from './i18n.mjs';
 import {
-  DEFAULT_TOOL_PREVIEW_LINES,
   displaySourceMessages as buildDisplaySourceMessages,
-  estimateMessageRenderChars as estimateToolMessageRenderChars,
   formatHttpToolTitle,
   isRenderableMessage,
 } from './utils/toolPreview.mjs';
@@ -1313,6 +1312,7 @@ const todosBySession = reactive({});
 const goalsBySession = reactive({});
 const todoRevisionsBySession = reactive({});
 const todoPanelCollapsed = ref(false);
+const todoPanelListRef = ref(null);
 const isMaximised = ref(false);
 const availableSkills = ref([]);
 const activeSkillNames = ref([]);
@@ -1446,16 +1446,6 @@ const REMEMBER_PROMPT = `Save durable project knowledge from this conversation.
 4. Save or update the knowledge with memory_write. Use an explicit stable path such as project-knowledge/<workspace-or-project-name>.md.
 5. Do not edit AGENTS.md for this command. Do not save speculation, one-off task status, transient bug-fix notes, or generic advice.`;
 
-const PUSH_PROMPT = `Push local git changes to the remote.
-
-Task requirements:
-1. Run git status and git diff to review what has changed.
-2. Stage all local changes (git add -A) and commit them with ONE concise sentence.
-3. Push the commit to the remote (git push).
-4. If there is nothing to commit, report that and skip the push.
-5. If the project or environment defines git conventions (e.g. in AGENTS.md), follow them for commit message style and author.
-6. Report the final result: commit message, hash, branch, and push status.`;
-
 const activeSession = computed(() => sessions.value.find((session) => session.id === activeSessionId.value));
 
 function sessionForWorkspaceTab(tab) {
@@ -1581,24 +1571,32 @@ const serviceRunningCount = computed(() => services.value.filter((service) => ['
 const activeTodoCount = computed(() => todos.value.filter((item) => item?.status !== 'done').length);
 const activeGoal = computed(() => goalsBySession[activeSessionId.value] || null);
 const showTodoPanel = computed(() => todos.value.length > 0 && activeTodoCount.value > 0);
+const orderedTodoEntries = computed(() => orderTodoPanelEntries(todos.value));
+
+function scrollTodoPanelToFocus() {
+  if (todoPanelCollapsed.value) return;
+  nextTick(() => {
+    const list = todoPanelListRef.value;
+    if (list) list.scrollTop = 0;
+  });
+}
+
+function toggleTodoPanel() {
+  todoPanelCollapsed.value = !todoPanelCollapsed.value;
+  scrollTodoPanelToFocus();
+}
+
+watch(orderedTodoEntries, () => {
+  scrollTodoPanelToFocus();
+});
 
 const MAX_RENDER_MESSAGES = 180;
-const MAX_RENDER_CHARS = 220000;
 const MAX_EXPANDED_RENDER_MESSAGES = 360;
-const MAX_EXPANDED_RENDER_CHARS = 440000;
-const TOOL_PREVIEW_LINES = DEFAULT_TOOL_PREVIEW_LINES;
-
-function estimateMessageRenderChars(msg) {
-  return estimateToolMessageRenderChars(msg, { toolPreviewLines: TOOL_PREVIEW_LINES });
-}
 
 function displaySourceMessages(session) {
   return buildDisplaySourceMessages(session, expandedArchiveSessions.value, {
     maxMessages: MAX_RENDER_MESSAGES,
-    maxChars: MAX_RENDER_CHARS,
     expandedMaxMessages: MAX_EXPANDED_RENDER_MESSAGES,
-    expandedMaxChars: MAX_EXPANDED_RENDER_CHARS,
-    toolPreviewLines: TOOL_PREVIEW_LINES,
   });
 }
 
@@ -1617,14 +1615,10 @@ function toggleArchiveMessages(sessionId) {
 
 // Merge consecutive read tool cards into a single aggregated card.
 //
-// perf: estimateMessageRenderChars() in displaySourceMessages reads
-// msg.content/reasoningBody/body/etc., which subscribes displayMessages to
-// every streaming content mutation (20 FPS). The merge result itself only
-// depends on the message *list shape* (role/kind/status/length), not on
-// assistant content. So we compute a structural signature and short-circuit
-// to the cached array when the shape hasn't changed — content-only mutations
-// still fire the computed, but it returns immediately without re-running the
-// O(n) merge or re-allocating the output array.
+// perf: the display list and read-card merge depend only on message-list shape
+// and archive expansion state. A structural signature lets content-only
+// streaming updates reuse the cached array without re-running the O(n) merge
+// or re-allocating its output.
 const displayMessagesCacheBySession = new Map();
 function buildDisplayMessagesSignature(session, expanded) {
   const msgs = session?.messages;
@@ -5992,7 +5986,7 @@ function handlePushCommand() {
   const history = session.messages
     .filter(isModelHistoryMessage)
     .map((msg) => ({ role: msg.role, content: msg.content }));
-  history.push({ role: 'user', content: PUSH_PROMPT });
+  history.push({ role: 'user', content: t('app.push.prompt') });
 
   session.messages.push({ role: 'user', content: t('app.push.visibleText'), done: true });
   if (isDefaultSessionTitle(session.title)) {

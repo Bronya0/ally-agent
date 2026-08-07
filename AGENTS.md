@@ -437,7 +437,7 @@ Text files:
 - reject binary/NUL content
 - return LF-normalized text with display-only 1-based `N: ` prefixes; omit those prefixes from `oldText`/`newText`, and use the displayed numbers in `lineRange`
 - missing paths and directory targets are silently omitted from the returned `files` array (an ignored-only batch succeeds with an empty array); other partial failures stay in the corresponding file result with `errorCode` when known
-- include metadata: `startLine`, `endLine`, `nextStartLine`, `totalLines`, `truncated`, `truncatedLines`, `truncatedLinesOmitted`, `version`, `lineEnding`; `version` is a 12-character lowercase Crockford Base32 prefix derived from SHA-256 content and is compared case-insensitively
+- include metadata: `startLine`, `endLine`, `nextStartLine`, `totalLines`, `truncated`, `truncatedLines`, `truncatedLinesOmitted`, `version`, `lineEnding`; `version` is a 6-character lowercase Crockford Base32 prefix derived from SHA-256 content and is compared case-insensitively
 
 Document files:
 
@@ -457,7 +457,7 @@ Range semantics for model-facing reads:
 - `truncated` is set both when a hard output limit cut the range (then `nextStartLine` points at the rest) and when individual lines were shortened (then `truncatedLines` identifies them); the model should request another explicit range only when the remaining content is actually needed
 - plain-text range previews count and locate lines with bounded-memory linear scans instead of materializing one string entry per file line, so tiny reads remain safe on million-line files and tail reads use a bounded reverse scan; very long single lines stay UTF-8/budget bounded
 
-The model-facing `edit` tool has one cross-file batch mode with two exclusive source forms: `lineRange` (preferred) or a small exact `oldText`. Legacy top-level string and line helpers remain backend compatibility APIs and are not exposed to the model.
+The model-facing `edit` tool has one cross-file batch mode with two exclusive source forms: a small exact `oldText` (preferred) or `lineRange` for larger whole-line replacements. Legacy top-level string and line helpers remain backend compatibility APIs and are not exposed to the model.
 
 `planLocalEditBatch()` in `orch_edit_plan.go` is the **only** normalization boundary for local model-facing edits. Both `orch_batch_policy.go` conflict detection and `orch_edit.go` execution must consume that plan; do not independently parse, canonicalize, or merge `edit.files` in either layer. Pure diff and changed-range algorithms live in `internal/tools/edit`; `orch_edit.go` is the app-owned execution boundary for local edits.
 
@@ -465,14 +465,14 @@ Edit parameters:
 
 - `files` (1–20 items)
 - each file contains `path`, required `version` from `read`, and 1–50 `changes`
-- each change contains `newText` plus exactly one source: preferred `lineRange` in inclusive `A-B` form for whole-line replacements, or non-empty `oldText` only for an in-line edit inside one line / extremely long single line; one call permits at most 200 total changes
+- each change contains `newText` plus exactly one source: a small exact `oldText` copied from the `read` snapshot for precise replacements, or `lineRange` in inclusive `A-B` form only when replacing a larger whole-line block or when the exact source is impractical to reproduce; optional `replace_all` defaults to `false`, replaces every non-overlapping exact occurrence when used with `oldText`, and is ignored with `lineRange` while a warning is returned; one call permits at most 200 total changes
 
 Important edit contract:
 
 - Read the file first with `read`.
 - `version` is mandatory for model-facing local and remote edits. It is a short optimistic-concurrency token; a stale value fails with `E_VERSION_MISMATCH`, and malformed values fail with `E_BAD_VERSION`.
 - Successful edits return the new `version` per file. Reuse it only when the current source is known exactly; otherwise re-read numbered content before another `oldText` or `lineRange` edit.
-- Each change chooses exactly one source: prefer `lineRange` in inclusive `A-B` form for whole-line replacements (default for multi-line blocks; no need to reproduce the original text). Use `oldText` only for an in-line edit inside one line, or when the target line is extremely long (e.g. minified JSON) and a line range is impractical. All ranges in a file use the original numbered read snapshot and need no offset adjustment for earlier changes. Every non-no-op `oldText` is matched against that same snapshot and must occur exactly once. Ambiguous exact matches return optional structured `details` with at most three raw UTF-8 candidate previews, clipping flags, line ranges, and recovery guidance; the detail JSON is capped at 4 KiB so callers can issue a narrow `read` without receiving the full file.
+- Each change chooses exactly one source: prefer a small, unique, unnumbered `oldText` copied exactly from the original `read` snapshot for precise replacements, including focused multi-line snippets when enough surrounding context makes it unique. Use `lineRange` in inclusive `A-B` form only for larger whole-line replacements or when reproducing the exact source is impractical (for example, an extremely long single line). By default `oldText` must occur exactly once; optional `replace_all: true` replaces every non-overlapping exact occurrence in the original snapshot, while it is ignored with `lineRange` and reported as a warning. All ranges in a file use the original numbered read snapshot and need no offset adjustment for earlier changes. Ambiguous default exact matches return optional structured `details` with at most three raw UTF-8 candidate previews, clipping flags, line ranges, and recovery guidance; the detail JSON is capped at 4 KiB so callers can issue a narrow `read` without receiving the full file.
 - With `lineRange`, `newText` replaces exactly the selected whole lines; lines outside the range stay untouched, so never re-emit a closing brace or other code that sits outside the range — and if the brace is inside the range, `newText` must include it. The classic failure is selecting a function body without its closing `}` while `newText` still ends with `}`, which duplicates the brace.
 - For a multi-line whole-line block only, exact-match failure may fall back to ignoring leading spaces/tabs on each line. The fallback succeeds only for one unique candidate and safely rebases `newText` to the file's actual base indentation; body text is never fuzzy-matched.
 - Exact changes whose normalized `oldText` and `newText` are identical are ignored and reported as warnings. An all-no-op local batch succeeds without writing the file.
@@ -630,7 +630,7 @@ Long-render optimization:
 - Frontend may archive visible old messages for rendering performance.
 - Visual archiving does not mutate `session.messages`; completed sessions are separately pruned by the runtime retention limits below.
 - Backend context construction receives the retained conversation history, capped by `MAX_MODEL_HISTORY_MESSAGES`.
-- Normal rendering is bounded to 180 messages / 220k estimated characters; expanded archives are still bounded to 360 messages / 440k characters rather than mounting the full conversation.
+- Normal rendering is bounded to 180 displayable message/tool cards; expanded archives are still bounded to 360 cards rather than mounting the full conversation. The archive trigger uses card count only.
 - Completed frontend sessions retain the latest 400 conversation messages and 260 renderable messages in memory, with at most 200 unpinned sessions. Running, active, and workspace-linked sessions are protected from session eviction.
 - Backend UI snapshots retain the same bounded 400 conversation / 260 renderable window used by runtime archiving; large tool previews, edit arguments, attachment payloads, and Diffs are stripped or individually truncated before gzip JSON serialization. The frontend keeps only active, running, and workspace-linked session messages in memory.
 - Media previews use revocable Blob URLs. Images render from a bounded thumbnail while the original Base64 payload is retained only when it is eligible for model input.

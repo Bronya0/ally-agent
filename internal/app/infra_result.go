@@ -182,7 +182,7 @@ func compactToolResultForModel(name string, result toolResult, fullJSON string) 
 		for _, file := range r.Files {
 			files = append(files, map[string]any{"path": file.Path, "beforeVersion": file.BeforeVersion, "version": file.Version, "addedLines": file.AddedLines, "removedLines": file.RemovedLines, "firstChangedLine": file.FirstChanged, "lastChangedLine": file.LastChanged})
 		}
-		return marshalToolResultOrFallback(toolResult{OK: true, Data: map[string]any{"files": files, "fileCount": r.FileCount, "addedLines": r.AddedLines, "removedLines": r.RemovedLines, "summary": r.Summary, "postEditNote": "Reuse a version only when the current source is known exactly; otherwise re-read numbered text before another oldText or lineRange edit."}}, fullJSON)
+		return marshalToolResultOrFallback(toolResult{OK: true, Data: map[string]any{"files": files, "fileCount": r.FileCount, "addedLines": r.AddedLines, "removedLines": r.RemovedLines, "summary": r.Summary, "warnings": r.Warnings, "postEditNote": "Reuse a version only when the current source is known exactly; otherwise re-read numbered text before another oldText or lineRange edit."}}, fullJSON)
 	case "replace_exact", "replace_lines", "create_file":
 		var r EditResult
 		if !decodeToolData(result.Data, &r) {

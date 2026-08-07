@@ -116,7 +116,7 @@ func HashBytes(data []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// HashVersion returns the 12-character Crockford Base32 version token derived
+// HashVersion returns the 6-character Crockford Base32 version token derived
 // from the SHA-256 of data. Used as the optimistic-concurrency token for
 // model-facing read/edit operations.
 func HashVersion(data []byte) string {
@@ -125,7 +125,7 @@ func HashVersion(data []byte) string {
 }
 
 // HashBytesAndVersion computes SHA-256 once and returns both the lowercase hex
-// digest and the 12-character Crockford Base32 version token. Use this when a
+// digest and the 6-character Crockford Base32 version token. Use this when a
 // caller needs both values for the same data — calling HashBytes + HashVersion
 // separately would hash the data twice, which is a measurable cost on the read
 // hot path (10 MB file ≈ 20-30 ms per SHA-256 pass).
@@ -134,13 +134,13 @@ func HashBytesAndVersion(data []byte) (sha256Hex, version string) {
 	return hex.EncodeToString(sum[:]), VersionFromSHA256(sum[:])
 }
 
-// VersionFromSHA256 derives the 12-character Crockford Base32 version token
+// VersionFromSHA256 derives the 6-character Crockford Base32 version token
 // from a raw 32-byte SHA-256 digest. Callers that already have the digest
 // (e.g. they hex-decoded it from an external source) can use this instead of
 // recomputing HashVersion.
 func VersionFromSHA256(sum []byte) string {
 	const alphabet = "0123456789abcdefghjkmnpqrstvwxyz"
-	var out [12]byte
+	var out [6]byte
 	for i := range out {
 		bit := i * 5
 		byteIndex := bit / 8
@@ -155,7 +155,7 @@ func VersionFromSHA256(sum []byte) string {
 }
 
 // ValidateVersion returns a coded error if version is empty or not a valid
-// 12-character Crockford Base32 token. Error codes:
+// 6-character Crockford Base32 token. Error codes:
 //   - E_VERSION_REQUIRED: empty/whitespace version
 //   - E_BAD_VERSION: wrong length or non-Base32 characters
 func ValidateVersion(version string) error {
@@ -163,15 +163,15 @@ func ValidateVersion(version string) error {
 		return toolerrors.New("E_VERSION_REQUIRED", errors.New("version is required; read the file with read and pass its version"))
 	}
 	if !IsValidVersion(version) {
-		return toolerrors.New("E_BAD_VERSION", errors.New("version must be exactly 12 Crockford Base32 characters"))
+		return toolerrors.New("E_BAD_VERSION", errors.New("version must be exactly 6 Crockford Base32 characters"))
 	}
 	return nil
 }
 
-// IsValidVersion reports whether value is exactly 12 Crockford Base32
+// IsValidVersion reports whether value is exactly 6 Crockford Base32
 // characters (case-insensitive).
 func IsValidVersion(value string) bool {
-	if len(value) != 12 {
+	if len(value) != 6 {
 		return false
 	}
 	const alphabet = "0123456789abcdefghjkmnpqrstvwxyz"

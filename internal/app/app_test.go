@@ -760,6 +760,14 @@ func TestSystemPromptDefinesWaitSequencing(t *testing.T) {
 	}
 }
 
+func TestSystemPromptStartsTodoListsWithActiveItem(t *testing.T) {
+	prompt := defaultSystemPrompt(nil, "", nil, "", "")
+	const expected = "When starting a new non-empty task list, set its first actionable item to `in_progress`"
+	if !strings.Contains(prompt, expected) {
+		t.Fatalf("system prompt missing initial todo guidance %q", expected)
+	}
+}
+
 func TestSystemPromptExplainsRunCommandOutsidePathRecovery(t *testing.T) {
 	prompt := defaultSystemPrompt(nil, "", nil, "", "")
 	for _, expected := range []string{"`E_PATH_OUTSIDE`", "Do not retry the unchanged command", "dynamic targets (variables, globs, heredoc content) are allowed", "read the returned Chinese explanation"} {
@@ -805,6 +813,20 @@ func TestSystemPromptDiscouragesRedundantReadsBeforeEdit(t *testing.T) {
 	} {
 		if !strings.Contains(prompt, expected) {
 			t.Fatalf("system prompt missing redundant-read guidance %q", expected)
+		}
+	}
+}
+
+func TestSystemPromptPrefersExactStringEdits(t *testing.T) {
+	prompt := defaultSystemPrompt(nil, "", nil, "", "")
+	for _, expected := range []string{
+		"Prefer a small, unique, unnumbered `oldText`",
+		"By default, an effective `oldText` must occur exactly once",
+		"The optional boolean `replace_all` defaults to `false`",
+		"replace every non-overlapping exact occurrence",
+	} {
+		if !strings.Contains(prompt, expected) {
+			t.Fatalf("system prompt missing exact-string edit preference %q", expected)
 		}
 	}
 }
@@ -1189,6 +1211,37 @@ func TestHandleTodoListAllowsSingleInProgress(t *testing.T) {
 	list, ok := got["todos"].([]TodoEntry)
 	if !ok || len(list) != 2 || list[0].Status != "in_progress" {
 		t.Fatalf("unexpected todos in result: %#v", got)
+	}
+}
+
+func TestHandleTodoListStartsFirstPendingItem(t *testing.T) {
+	app := NewApp()
+	res, err := app.handleTodoList("session-1", TodoListRequest{
+		Todos: []TodoEntry{
+			{Title: "Inspect implementation", Status: "pending"},
+			{Title: "Run tests", Status: "pending"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("handleTodoList() error = %v", err)
+	}
+	got := res.(map[string]any)["todos"].([]TodoEntry)
+	if got[0].Status != "in_progress" || got[1].Status != "pending" {
+		t.Fatalf("expected first pending item to start, got %#v", got)
+	}
+}
+
+func TestHandleTodoListDoesNotRestartAllDoneList(t *testing.T) {
+	app := NewApp()
+	res, err := app.handleTodoList("session-1", TodoListRequest{
+		Todos: []TodoEntry{{Title: "Finished", Status: "done"}},
+	})
+	if err != nil {
+		t.Fatalf("handleTodoList() error = %v", err)
+	}
+	got := res.(map[string]any)["todos"].([]TodoEntry)
+	if got[0].Status != "done" {
+		t.Fatalf("completed todo was unexpectedly restarted: %#v", got)
 	}
 }
 

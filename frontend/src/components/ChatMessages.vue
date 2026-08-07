@@ -5,7 +5,7 @@
         <template v-for="(msg, index) in messages" :key="msgKey(msg)">
         <button v-if="msg.role === 'archive'" class="message-archive-toggle" @click.stop="$emit('toggleArchive', msg.sessionId)">
           <span>{{ msg.expanded ? $t('chat.archive.collapse') : $t('chat.archive.expand') }}</span>
-          <span>{{ $t('chat.archive.summary', { count: msg.count, tokens: fmtK(msg.tokens) }) }}</span>
+          <span>{{ $t('chat.archive.summary', { count: msg.count }) }}</span>
         </button>
         <div v-else-if="msg.role === 'user'" v-memo="messageRenderMemo(msg)" :class="['message', msg.role, { error: msg.error }]" data-user-question>
           <span class="user-rail" aria-hidden="true">›</span>

@@ -181,8 +181,8 @@ type App struct {
 	// gitStatusCache memoizes the last GetGitStatus result for a short TTL
 	// so that rapid consecutive calls (e.g. workspace switch + run:done)
 	// don't each spawn 2 git subprocesses. Keyed by workspace path.
-	gitStatusCacheMu sync.Mutex
-	gitStatusCache   map[string]gitStatusCacheEntry
+	gitStatusCacheMu  sync.Mutex
+	gitStatusCache    map[string]gitStatusCacheEntry
 	gitStatusInFlight map[string]chan struct{}
 
 	skillCacheMu sync.Mutex
@@ -667,6 +667,7 @@ type toolExecutionMeta struct {
 }
 
 type toolExecutionMetaContextKey struct{}
+type runReadCacheContextKey struct{}
 
 type ServiceInfo struct {
 	ID              string `json:"id"`
@@ -916,9 +917,10 @@ type FileTextEdits struct {
 }
 
 type TextChange struct {
-	OldText   string `json:"oldText,omitempty"`
-	LineRange string `json:"lineRange,omitempty"`
-	NewText   string `json:"newText"`
+	OldText    string `json:"oldText,omitempty"`
+	LineRange  string `json:"lineRange,omitempty"`
+	NewText    string `json:"newText"`
+	ReplaceAll bool   `json:"replace_all,omitempty"`
 }
 
 type MultiEditResult struct {
@@ -996,6 +998,7 @@ type BatchReadResultItem struct {
 	Sheets                []string `json:"sheets,omitempty"`
 	Error                 string   `json:"error,omitempty"`
 	ErrorCode             string   `json:"errorCode,omitempty"`
+	Reused                bool     `json:"reused,omitempty"`
 }
 
 type BatchReadResult struct {
@@ -2098,6 +2101,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 	messages = a.buildMessages(req, cfg, a.listCachedSkills())
 	tools := a.buildToolsForConfig(cfg)
 	breakdownAcc := newLiveBreakdownAccumulator(messages)
+	readCache := newRunReadCache()
 	startTime := time.Now()
 	grillProtocolRetries := 0
 	// runCacheHit/Miss accumulate prompt-cache hit/miss tokens across every
@@ -2383,6 +2387,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 					runID: runID, sessionID: sessionID, toolBatchID: toolBatchID,
 					toolCallIndex: idx, toolCallID: c.ID, toolName: c.Function.Name, toolArgs: c.Function.Arguments,
 				})
+				toolCtx = context.WithValue(toolCtx, runReadCacheContextKey{}, readCache)
 				r := a.executeTool(toolCtx, cfg, sessionID, c.Function.Name, []byte(c.Function.Arguments))
 				duration := time.Since(started).Milliseconds()
 				rj, _ := json.Marshal(r)
@@ -2600,10 +2605,20 @@ func (a *App) appendGoalProgressMessage(messages []openai.ChatCompletionMessage,
 	return append(messages, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: progress.String()})
 }
 
+// contextBudgetThresholdPct is the remaining-budget percentage below which the
+// context-budget item is injected. Above it the model sees no budget message at
+// all: with a ~1M-token window the numbers carry no decision information and
+// models occasionally echo the note back as noise. Only when the window is
+// actually getting tight does the hint matter (prefer grep over read, avoid
+// re-reading).
+const contextBudgetThresholdPct = 30
+
 // appendContextBudgetMessage returns a new slice with a context-budget item
-// appended to the request tail. It deliberately allocates a fresh slice so the
-// caller's `messages` is never mutated; the budget item must not be persisted
-// into saved history (it would bloat storage and disrupt reusable prefixes).
+// appended to the request tail, or the input slice unchanged when remaining
+// budget is above contextBudgetThresholdPct. It deliberately allocates a fresh
+// slice so the caller's `messages` is never mutated; the budget item must not
+// be persisted into saved history (it would bloat storage and disrupt reusable
+// prefixes).
 //
 // Placing the budget at the tail follows the same strategy as
 // <ally-goal-progress>: dynamic, low-priority content goes last. The explicit
@@ -2624,6 +2639,9 @@ func appendContextBudgetMessage(messages []openai.ChatCompletionMessage, usedTok
 		usedPct = usedTokens * 100 / maxCtx
 	}
 	remainingPct := 100 - usedPct
+	if remainingPct >= contextBudgetThresholdPct {
+		return messages
+	}
 	var b strings.Builder
 	b.WriteString("<ally-context-budget>\n")
 	fmt.Fprintf(&b, "Window: %d tokens\n", maxCtx)
@@ -3512,6 +3530,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 			a.fileOpsMu.Unlock()
 			if err == nil {
 				a.invalidateWorkspaceMapCache(cfg)
+				invalidateRunReadCache(ctx)
 			}
 		}
 	case "create_file":
@@ -3523,6 +3542,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 			a.fileOpsMu.Unlock()
 			if err == nil {
 				a.invalidateWorkspaceMapCache(cfg)
+				invalidateRunReadCache(ctx)
 			}
 		}
 	case "delete_path":
@@ -3534,13 +3554,18 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 			a.fileOpsMu.Unlock()
 			if err == nil {
 				a.invalidateWorkspaceMapCache(cfg)
+				invalidateRunReadCache(ctx)
 			}
 		}
 	case "run_command":
 		var req CommandRequest
 		err = decode(&req)
 		if err == nil {
+			// A command can modify files before returning an error, and can run
+			// concurrently with reads in one tool batch. Clear on both sides.
+			invalidateRunReadCache(ctx)
 			data, err = a.runCommandWithConfig(ctx, cfg, req)
+			invalidateRunReadCache(ctx)
 			if err == nil {
 				a.invalidateWorkspaceMapCache(cfg)
 			}
@@ -3649,7 +3674,11 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		var reqBR BatchReadRequest
 		err = decode(&reqBR)
 		if err == nil {
-			data, err = a.batchReadFilesWithConfig(cfg, reqBR)
+			if cache, ok := ctx.Value(runReadCacheContextKey{}).(*runReadCache); ok {
+				data, err = cache.read(a, cfg, reqBR)
+			} else {
+				data, err = a.batchReadFilesWithConfig(cfg, reqBR)
+			}
 		}
 	case "memory_read":
 		var req MemoryReadRequest

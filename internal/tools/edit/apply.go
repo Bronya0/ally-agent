@@ -13,11 +13,13 @@ import (
 )
 
 // TextChange is one replacement applied by the edit engine. Exactly one of
-// OldText or LineRange identifies the source snapshot region.
+// OldText or LineRange identifies the source snapshot region. ReplaceAll is
+// only valid with OldText and replaces every non-overlapping exact match.
 type TextChange struct {
-	OldText   string `json:"oldText,omitempty"`
-	LineRange string `json:"lineRange,omitempty"`
-	NewText   string `json:"newText"`
+	OldText    string `json:"oldText,omitempty"`
+	LineRange  string `json:"lineRange,omitempty"`
+	NewText    string `json:"newText"`
+	ReplaceAll bool   `json:"replace_all,omitempty"`
 }
 
 const (
@@ -333,22 +335,56 @@ func ApplyStringReplacements(content string, ops []EditOperation) (*Result, int,
 	}, totalReplacements, nil
 }
 
-// ExactMatchLineNumbers returns the 1-based line numbers where needle occurs
-// in content, up to limit matches.
-func ExactMatchLineNumbers(content, needle string, limit int) []int {
-	if needle == "" || limit <= 0 {
-		return nil
+// exactMatch records an exact match offset and its 1-based source line.
+type exactMatch struct {
+	offset int
+	line   int
+}
+
+// scanExactMatches performs one non-overlapping scan. matches is bounded when
+// limit is positive, while count always contains the exact total. The line
+// number is advanced incrementally so diagnostics do not repeatedly scan from
+// byte 0 for each candidate.
+func scanExactMatches(content, needle string, limit int) ([]exactMatch, int) {
+	if needle == "" {
+		return nil, 0
 	}
-	lines := make([]int, 0, limit)
-	offset := 0
-	for len(lines) < limit {
-		rel := strings.Index(content[offset:], needle)
+	capacity := maxMatchDiagnosticCandidates
+	if limit > 0 && limit < capacity {
+		capacity = limit
+	}
+	matches := make([]exactMatch, 0, capacity)
+	count := 0
+	from, line := 0, 1
+	for from <= len(content)-len(needle) {
+		rel := strings.Index(content[from:], needle)
 		if rel < 0 {
 			break
 		}
-		start := offset + rel
-		lines = append(lines, 1+strings.Count(content[:start], "\n"))
-		offset = start + len(needle)
+		start := from + rel
+		matchLine := line + strings.Count(content[from:start], "\n")
+		count++
+		if limit <= 0 || len(matches) < limit {
+			matches = append(matches, exactMatch{offset: start, line: matchLine})
+		}
+		from = start + len(needle)
+		line = matchLine + strings.Count(content[start:from], "\n")
+	}
+	return matches, count
+}
+
+func exactMatches(content, needle string, limit int) []exactMatch {
+	matches, _ := scanExactMatches(content, needle, limit)
+	return matches
+}
+
+// ExactMatchLineNumbers returns the 1-based line numbers where needle occurs
+// in content, up to limit matches.
+func ExactMatchLineNumbers(content, needle string, limit int) []int {
+	matches := exactMatches(content, needle, limit)
+	lines := make([]int, len(matches))
+	for i, match := range matches {
+		lines[i] = match.line
 	}
 	return lines
 }
@@ -369,22 +405,28 @@ func FormatMatchLines(lines []int, total int) string {
 	return " at lines " + strings.Join(parts, ", ") + suffix
 }
 
-func exactMatchOffsets(content, needle string, limit int) []int {
-	if needle == "" || limit <= 0 {
-		return nil
+func exactMatchDiagnosticsAtMatches(content, oldText string, changeIndex, count int, matches []exactMatch) ([]int, *MatchErrorDetails) {
+	lines := make([]int, len(matches))
+	candidates := make([]MatchCandidate, 0, len(matches))
+	for i, match := range matches {
+		lines[i] = match.line
+		candidates = append(candidates, matchCandidateAtLine(content, match.offset, match.offset+len(oldText), match.line))
 	}
-	offsets := make([]int, 0, minInt(limit, maxMatchDiagnosticCandidates))
-	from := 0
-	for len(offsets) < limit && from <= len(content)-len(needle) {
-		rel := strings.Index(content[from:], needle)
-		if rel < 0 {
-			break
-		}
-		start := from + rel
-		offsets = append(offsets, start)
-		from = start + len(needle)
+	details := &MatchErrorDetails{
+		ChangeIndex:         changeIndex,
+		MatchType:           "exact",
+		MatchCount:          count,
+		Candidates:          candidates,
+		CandidatesTruncated: count > len(candidates),
+		Recovery:            "Use a candidate preview or read only its startLine-endLine range, then retry with more exact surrounding text. Do not choose an occurrence by position alone.",
 	}
-	return offsets
+	boundMatchErrorDetails(details)
+	return lines, details
+}
+
+func exactMatchDiagnostics(content, oldText string, changeIndex, count int) ([]int, *MatchErrorDetails) {
+	matches, _ := scanExactMatches(content, oldText, maxMatchDiagnosticCandidates)
+	return exactMatchDiagnosticsAtMatches(content, oldText, changeIndex, count, matches)
 }
 
 func utf8Window(content string, start, end, focusStart, focusEnd, limit int) (string, bool, bool) {
@@ -431,6 +473,10 @@ func utf8Window(content string, start, end, focusStart, focusEnd, limit int) (st
 
 func matchCandidate(content string, start, end int) MatchCandidate {
 	line := 1 + strings.Count(content[:start], "\n")
+	return matchCandidateAtLine(content, start, end, line)
+}
+
+func matchCandidateAtLine(content string, start, end, line int) MatchCandidate {
 	lineStart := strings.LastIndexByte(content[:start], '\n') + 1
 	previewStart := lineStart
 	if lineStart > 0 {
@@ -497,20 +543,7 @@ func boundMatchErrorDetails(details *MatchErrorDetails) {
 }
 
 func exactMatchErrorDetails(content, oldText string, changeIndex, count int) *MatchErrorDetails {
-	offsets := exactMatchOffsets(content, oldText, maxMatchDiagnosticCandidates)
-	candidates := make([]MatchCandidate, 0, len(offsets))
-	for _, offset := range offsets {
-		candidates = append(candidates, matchCandidate(content, offset, offset+len(oldText)))
-	}
-	details := &MatchErrorDetails{
-		ChangeIndex:         changeIndex,
-		MatchType:           "exact",
-		MatchCount:          count,
-		Candidates:          candidates,
-		CandidatesTruncated: count > len(candidates),
-		Recovery:            "Use a candidate preview or read only its startLine-endLine range, then retry with more exact surrounding text. Do not choose an occurrence by position alone.",
-	}
-	boundMatchErrorDetails(details)
+	_, details := exactMatchDiagnostics(content, oldText, changeIndex, count)
 	return details
 }
 
@@ -688,14 +721,19 @@ func ApplyBatchTextChanges(content string, changes []TextChange) (*Result, int, 
 	located := make([]locatedChange, 0, len(changes))
 	warnings := make([]string, 0, 2)
 	ignoredNoops := 0
-	// Build the line index once for the whole batch. lineRange lookups below
-	// used to re-scan from byte 0 per call (O(N) each), so 50 line-range edits
-	// on a 10k-line file cost ~500k byte scans. With the index it's one O(N)
-	// scan plus O(1) lookups.
-	index := buildLineIndex(content)
+	// Exact-text edits do not need a line index. Build it lazily only when the
+	// batch actually contains a lineRange change, avoiding an O(N) scan and one
+	// offset slice allocation for the common exact-string path.
+	var index *lineIndex
 	for i, change := range changes {
 		newText := NormalizeEditString(change.NewText)
 		if strings.TrimSpace(change.LineRange) != "" {
+			if change.ReplaceAll {
+				warnings = append(warnings, fmt.Sprintf("change %d ignored replace_all because it only applies to oldText; lineRange was executed normally", i+1))
+			}
+			if index == nil {
+				index = buildLineIndex(content)
+			}
 			startLine, endLine, parseErr := ParseLineRange(change.LineRange)
 			if parseErr != nil {
 				return nil, 0, toolerrors.New("E_BAD_EDIT", fmt.Errorf("change %d: %w", i+1, parseErr))
@@ -718,16 +756,35 @@ func ApplyBatchTextChanges(content string, changes []TextChange) (*Result, int, 
 			ignoredNoops++
 			continue
 		}
-		count := strings.Count(content, oldText)
-		switch {
-		case count > 1:
-			lines := ExactMatchLineNumbers(content, oldText, 8)
-			details := exactMatchErrorDetails(content, oldText, i+1, count)
-			return nil, 0, toolerrors.NewWithDetails("E_MULTI_MATCH", fmt.Errorf("change %d oldText occurs %d times%s; inspect one bounded candidate and include more surrounding text to make it unique", i+1, count, FormatMatchLines(lines, count)), details)
-		case count == 1:
-			start := strings.Index(content, oldText)
-			located = append(located, locatedChange{index: i, start: start, end: start + len(oldText), newText: newText})
-			continue
+		if change.ReplaceAll {
+			// Stream replacements directly without retaining every match
+			// offset: a replace-all over a large file must not allocate a
+			// slice proportional to the match count.
+			count := 0
+			for from := 0; from <= len(content)-len(oldText); {
+				rel := strings.Index(content[from:], oldText)
+				if rel < 0 {
+					break
+				}
+				start := from + rel
+				located = append(located, locatedChange{index: i, start: start, end: start + len(oldText), newText: newText})
+				count++
+				from = start + len(oldText)
+			}
+			if count > 0 {
+				continue
+			}
+		} else {
+			matches, count := scanExactMatches(content, oldText, maxMatchDiagnosticCandidates)
+			if count > 1 {
+				lines, details := exactMatchDiagnosticsAtMatches(content, oldText, i+1, count, matches)
+				return nil, 0, toolerrors.NewWithDetails("E_MULTI_MATCH", fmt.Errorf("change %d oldText occurs %d times%s; inspect one bounded candidate and include more surrounding text to make it unique, or set replace_all=true to replace every exact occurrence", i+1, count, FormatMatchLines(lines, count)), details)
+			}
+			if count > 0 {
+				match := matches[0]
+				located = append(located, locatedChange{index: i, start: match.offset, end: match.offset + len(oldText), newText: newText})
+				continue
+			}
 		}
 
 		indentMatches := IndentationInsensitiveMatches(content, oldText, 9)
@@ -767,11 +824,23 @@ func ApplyBatchTextChanges(content string, changes []TextChange) (*Result, int, 
 			return nil, 0, toolerrors.New("E_OVERLAPPING_CHANGES", fmt.Errorf("changes %d and %d match overlapping source text; merge them into one replacement", located[i-1].index+1, located[i].index+1))
 		}
 	}
-	updated := content
-	for i := len(located) - 1; i >= 0; i-- {
-		change := located[i]
-		updated = updated[:change.start] + change.newText + updated[change.end:]
+	var builder strings.Builder
+	// Assemble the immutable snapshot once. Applying each replacement with
+	// updated[:start] + ... + updated[end:] repeatedly copied the full file and
+	// made a batch of M edits approach O(M*N) time and allocation volume.
+	outputLen := len(content)
+	for _, change := range located {
+		outputLen += len(change.newText) - (change.end - change.start)
 	}
+	builder.Grow(outputLen)
+	cursor := 0
+	for _, change := range located {
+		builder.WriteString(content[cursor:change.start])
+		builder.WriteString(change.newText)
+		cursor = change.end
+	}
+	builder.WriteString(content[cursor:])
+	updated := builder.String()
 	if updated == content {
 		return nil, 0, toolerrors.New("E_NOOP", errors.New("changes produced no content changes"))
 	}
@@ -941,42 +1010,11 @@ func lineRangeReplacement(content string, end int, newText string) string {
 	return newText + "\n"
 }
 
-// BuildLineNumberContextBlock returns a numbered-line preview of the changed
-// region around [firstLine, lastLine] in result. Used by edit results to give
-// the model a compact view of what changed.
+// BuildLineNumberContextBlock is kept as a compatibility wrapper. The bounded
+// implementation avoids splitting the entire result file just to show a few
+// changed lines; splitLines is intentionally ignored.
 func BuildLineNumberContextBlock(result string, firstLine, lastLine int, splitLines func(string) ([]string, bool)) string {
-	if firstLine <= 0 || lastLine <= 0 {
-		return ""
-	}
-	if splitLines == nil {
-		splitLines = defaultSplitLines
-	}
-	lines, _ := splitLines(result)
-	if len(lines) == 0 {
-		return ""
-	}
-	start := firstLine - 2
-	if start < 1 {
-		start = 1
-	}
-	end := lastLine + 2
-	if end > len(lines) {
-		end = len(lines)
-	}
-	if end < start || end-start+1 > changedLineMaxOutputLines {
-		return "Changed lines omitted; use read for follow-up edits."
-	}
-	width := len(strconv.Itoa(end))
-	var b strings.Builder
-	fmt.Fprintf(&b, "--- Changed lines %d-%d ---", start, end)
-	for lineNum := start; lineNum <= end; lineNum++ {
-		b.WriteString("\n")
-		b.WriteString(FormatNumberedLine(lineNum, lines[lineNum-1], width))
-	}
-	if b.Len() > changedLineTextBudgetBytes {
-		return "Changed lines omitted; use read for follow-up edits."
-	}
-	return b.String()
+	return BuildLineNumberContextBlockBounded(result, firstLine, lastLine)
 }
 
 // FormatNumberedLine returns "<lineNum>: <line>".
@@ -984,8 +1022,77 @@ func FormatNumberedLine(lineNum int, line string, width int) string {
 	return strconv.Itoa(lineNum) + ": " + line
 }
 
+// extractLineRange returns only the requested visible lines and the actual
+// ending line. It deliberately avoids strings.Split on the whole edited file;
+// changed-line previews are capped at a handful of lines.
+func extractLineRange(content string, startLine, endLine int) ([]string, int) {
+	if startLine < 1 || endLine < startLine {
+		return nil, 0
+	}
+	offset, line := 0, 1
+	for line < startLine {
+		rel := strings.IndexByte(content[offset:], '\n')
+		if rel < 0 {
+			return nil, 0
+		}
+		offset += rel + 1
+		line++
+	}
+	if offset >= len(content) {
+		return nil, 0
+	}
+	lines := make([]string, 0, minInt(endLine-startLine+1, changedLineMaxOutputLines))
+	actualEnd := startLine - 1
+	for line <= endLine && offset < len(content) {
+		rel := strings.IndexByte(content[offset:], '\n')
+		if rel < 0 {
+			lines = append(lines, content[offset:])
+			actualEnd = line
+			break
+		}
+		lineEnd := offset + rel
+		lines = append(lines, content[offset:lineEnd])
+		actualEnd = line
+		offset = lineEnd + 1
+		line++
+	}
+	return lines, actualEnd
+}
+
+// BuildLineNumberContextBlockBounded is the production preview path. It scans
+// only up to the changed region and never builds a slice for every file line.
+func BuildLineNumberContextBlockBounded(result string, firstLine, lastLine int) string {
+	if firstLine <= 0 || lastLine <= 0 {
+		return ""
+	}
+	start := firstLine - 2
+	if start < 1 {
+		start = 1
+	}
+	end := lastLine + 2
+	if end < start || end-start+1 > changedLineMaxOutputLines {
+		return "Changed lines omitted; use read for follow-up edits."
+	}
+	lines, actualEnd := extractLineRange(result, start, end)
+	if len(lines) == 0 || actualEnd < start {
+		return ""
+	}
+	end = actualEnd
+	width := len(strconv.Itoa(end))
+	var b strings.Builder
+	fmt.Fprintf(&b, "--- Changed lines %d-%d ---", start, end)
+	for i, line := range lines {
+		b.WriteString("\n")
+		b.WriteString(FormatNumberedLine(start+i, line, width))
+	}
+	if b.Len() > changedLineTextBudgetBytes {
+		return "Changed lines omitted; use read for follow-up edits."
+	}
+	return b.String()
+}
+
 // CountEditDiffStats tallies added/removed lines from a unified diff string.
-func CountEditDiffStats(diff string, beforeLines, afterLines []string) (int, int) {
+func CountEditDiffStats(diff string) (int, int) {
 	// The localized truncated-diff path emits an accurate span-total marker
 	// (computed via multiset difference) alongside the shown lines. It already
 	// reflects the true change size for the whole span, so return it directly
@@ -1024,11 +1131,21 @@ func CountEditDiffStats(diff string, beforeLines, afterLines []string) (int, int
 // ApproximateLineDelta is a fallback when no diff is available: it counts
 // the difference in line counts.
 func ApproximateLineDelta(beforeLines, afterLines []string) (int, int) {
-	if len(afterLines) > len(beforeLines) {
-		return len(afterLines) - len(beforeLines), 0
+	return approximateLineDeltaCounts(len(beforeLines), len(afterLines))
+}
+
+// ApproximateLineDeltaContent computes the fallback line delta without
+// materializing strings.Split slices for the entire file.
+func ApproximateLineDeltaContent(before, after string) (int, int) {
+	return approximateLineDeltaCounts(visibleLineCount(before), visibleLineCount(after))
+}
+
+func approximateLineDeltaCounts(beforeLines, afterLines int) (int, int) {
+	if afterLines > beforeLines {
+		return afterLines - beforeLines, 0
 	}
-	if len(beforeLines) > len(afterLines) {
-		return 0, len(beforeLines) - len(afterLines)
+	if beforeLines > afterLines {
+		return 0, beforeLines - afterLines
 	}
 	return 0, 0
 }

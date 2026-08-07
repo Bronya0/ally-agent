@@ -242,7 +242,7 @@ func TestEditToolSchemaIsBatchChangesOnly(t *testing.T) {
 	if !ok {
 		t.Fatalf("edit change properties missing: %#v", items)
 	}
-	for _, field := range []string{"oldText", "lineRange", "newText"} {
+	for _, field := range []string{"oldText", "lineRange", "replace_all", "newText"} {
 		if _, exists := changeProperties[field]; !exists {
 			t.Fatalf("edit change schema missing %s: %#v", field, items)
 		}
@@ -254,8 +254,11 @@ func TestEditToolSchemaIsBatchChangesOnly(t *testing.T) {
 	if variants, ok := items["oneOf"].([]any); !ok || len(variants) != 2 {
 		t.Fatalf("edit change must require exactly one source form: %#v", items)
 	}
-	if !strings.Contains(editTool.Description, "lineRange") || !strings.Contains(editTool.Description, "do not adjust later ranges") {
-		t.Fatalf("edit tool description must explain line-range selection and offset handling: %s", editTool.Description)
+	if !strings.Contains(editTool.Description, "Prefer a small exact unique `oldText`") ||
+		!strings.Contains(editTool.Description, "replace_all") ||
+		!strings.Contains(editTool.Description, "every non-overlapping exact occurrence") ||
+		!strings.Contains(editTool.Description, "lineRange") {
+		t.Fatalf("edit tool description must explain exact-source preference and replace-all behavior: %s", editTool.Description)
 	}
 }
 
@@ -875,6 +878,23 @@ func TestCompactToolResultForModelCompactsGrepMatches(t *testing.T) {
 	}
 }
 
+func TestCompactEditResultForModelPreservesWarnings(t *testing.T) {
+	result := toolResult{OK: true, Data: MultiEditResult{
+		FileCount:    1,
+		Replacements: 1,
+		Warnings:     []string{"change 1 ignored replace_all because it only applies to oldText; lineRange was executed normally"},
+		Files: []EditResult{{
+			Path:          "sample.txt",
+			BeforeVersion: "abcdef",
+			Version:       "ghjkmn",
+		}},
+	}}
+	compact := compactToolResultForModel("edit", result, "fallback")
+	if !strings.Contains(compact, `"warnings":["change 1 ignored replace_all`) {
+		t.Fatalf("expected compact edit result to retain warnings, got %s", compact)
+	}
+}
+
 func TestCreateFileCreatesParentAutomatically(t *testing.T) {
 	root := t.TempDir()
 	app := NewApp()
@@ -1457,15 +1477,69 @@ func TestEditDescriptionIncludesSingleAndCrossFileMultiChangeExamples(t *testing
 		}
 	}
 	for _, expected := range []string{
-		"preferred whole-line change",
+		"preferred exact-string change",
+		`"oldText":"const oldName = oldValue"`,
+		"larger whole-line change",
 		`"lineRange":"40-72"`,
-		"in-line edit",
-		`"oldText":"const oldName = \"ally\""`,
 		"no offset adjustment",
 	} {
 		if !strings.Contains(description, expected) {
 			t.Fatalf("edit description missing example guidance %q: %s", expected, description)
 		}
+	}
+}
+
+func TestRunReadCacheReturnsMetadataWithoutDuplicateContent(t *testing.T) {
+	dir := t.TempDir()
+	writeToolTestFile(t, dir, "sample.txt", "one\ntwo\n")
+	app := NewApp()
+	cache := newRunReadCache()
+	ctx := context.WithValue(context.Background(), runReadCacheContextKey{}, cache)
+	args := []byte(`{"files":[{"path":"sample.txt"}]}`)
+
+	first := app.executeTool(ctx, ConfigState{Workspace: dir}, "session-1", "read", args)
+	if !first.OK {
+		t.Fatalf("first read failed: %#v", first)
+	}
+	firstData := first.Data.(*BatchReadResult)
+	if len(firstData.Files) != 1 || firstData.Files[0].Content == "" || firstData.Files[0].Reused {
+		t.Fatalf("expected complete first read, got %#v", firstData)
+	}
+
+	second := app.executeTool(ctx, ConfigState{Workspace: dir}, "session-1", "read", args)
+	if !second.OK {
+		t.Fatalf("second read failed: %#v", second)
+	}
+	secondData := second.Data.(*BatchReadResult)
+	if len(secondData.Files) != 1 || !secondData.Files[0].Reused || secondData.Files[0].Content != "" || secondData.Files[0].Version == "" {
+		t.Fatalf("expected metadata-only reused read, got %#v", secondData)
+	}
+
+	invalidateRunReadCache(ctx)
+	third := app.executeTool(ctx, ConfigState{Workspace: dir}, "session-1", "read", args)
+	thirdData := third.Data.(*BatchReadResult)
+	if !third.OK || len(thirdData.Files) != 1 || thirdData.Files[0].Reused || thirdData.Files[0].Content == "" {
+		t.Fatalf("expected full read after invalidation, got %#v", third)
+	}
+}
+
+func TestRunReadCacheEvictsEntriesUnderPressure(t *testing.T) {
+	cache := newRunReadCache()
+	// Fill past the entry budget; every insertion is a distinct key.
+	for i := 0; i < runReadCacheMaxEntries+8; i++ {
+		cache.store(fmt.Sprintf("key-%d", i), &BatchReadResult{
+			Files: []BatchReadResultItem{{Path: fmt.Sprintf("f%d.txt", i), Content: "x", Version: "aaaaaa"}},
+		})
+	}
+	if got := len(cache.entries); got > runReadCacheMaxEntries {
+		t.Fatalf("cache entries = %d, want <= %d", got, runReadCacheMaxEntries)
+	}
+	// Re-storing an existing key must not grow the cache.
+	cache.store("key-0", &BatchReadResult{
+		Files: []BatchReadResultItem{{Path: "f0.txt", Content: "y", Version: "bbbbbb"}},
+	})
+	if got := len(cache.entries); got > runReadCacheMaxEntries {
+		t.Fatalf("cache entries after re-store = %d, want <= %d", got, runReadCacheMaxEntries)
 	}
 }
 
@@ -1943,7 +2017,7 @@ func TestExecuteToolEditRejectsRepeatedPathEntriesWithDifferentVersions(t *testi
 	if err := os.WriteFile(filepath.Join(dir, "sample.txt"), original, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	args := fmt.Sprintf(`{"files":[{"path":"sample.txt","version":%q,"changes":[{"oldText":"alpha","newText":"ALPHA"}]},{"path":"./sample.txt","version":%q,"changes":[{"oldText":"beta","newText":"BETA"}]}]}`, hashVersion(original), "0123456789ab")
+	args := fmt.Sprintf(`{"files":[{"path":"sample.txt","version":%q,"changes":[{"oldText":"alpha","newText":"ALPHA"}]},{"path":"./sample.txt","version":%q,"changes":[{"oldText":"beta","newText":"BETA"}]}]}`, hashVersion(original), "zzzzzz")
 	result := NewApp().executeTool(context.Background(), ConfigState{Workspace: dir}, "session-1", "edit", []byte(args))
 	if result.OK || result.ErrorCode != "E_VERSION_MISMATCH" {
 		t.Fatalf("expected inconsistent duplicate versions to fail with E_VERSION_MISMATCH, got %#v", result)
@@ -2056,6 +2130,32 @@ func TestExecuteToolEditRejectsMultipleMatches(t *testing.T) {
 	}
 	if string(got) != string(original) {
 		t.Fatalf("ambiguous edit must not modify the file, got %q", got)
+	}
+}
+
+func TestExecuteToolEditReplacesAllMatchesWhenRequested(t *testing.T) {
+	dir := t.TempDir()
+	original := []byte("foo foo\nfoo\n")
+	if err := os.WriteFile(filepath.Join(dir, "sample.txt"), original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	result := NewApp().executeTool(context.Background(), ConfigState{Workspace: dir}, "session-1", "edit", []byte(fmt.Sprintf(`{
+		"files": [{"path": "sample.txt", "version": %q,
+		"changes": [{"oldText": "foo", "newText": "bar", "replace_all": true}]}]
+	}`, hashVersion(original))))
+	if !result.OK {
+		t.Fatalf("replace_all edit failed: %#v", result)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "sample.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "bar bar\nbar\n" {
+		t.Fatalf("unexpected replace_all content: %q", got)
+	}
+	edited, ok := result.Data.(MultiEditResult)
+	if !ok || edited.Replacements != 3 {
+		t.Fatalf("expected three replacements, got %#v", result.Data)
 	}
 }
 

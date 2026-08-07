@@ -496,6 +496,7 @@ body.platform-darwin .brand-wordmark {
   height: 2px;
   border-radius: 1px;
   background: var(--n-bar-color);
+  opacity: 0.82;
   pointer-events: none;
 }
 
