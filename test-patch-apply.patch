@@ -1,0 +1,9 @@
+diff --git a/test-patch-apply.md b/test-patch-apply.md
+--- a/test-patch-apply.md
++++ b/test-patch-apply.md
+@@ -6,3 +6,3 @@
+ - 学习使用 Codex
+-- 学会编辑文件
+-- 完成测试
++- 学会用补丁编辑文件
++- 用 git apply 应用补丁

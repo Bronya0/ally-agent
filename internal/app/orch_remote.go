@@ -104,8 +104,7 @@ def op_list(root, payload):
         depth = 0 if str(rel_current) == "." else len(rel_current.parts)
         if depth >= max_depth:
             dirs[:] = []
-        dirs[:] = sorted([d for d in dirs if include_hidden or not d.startswith(".")])
-        dirs[:] = [d for d in dirs if include_hidden or not is_heavy_dir(d)]
+        dirs[:] = sorted([d for d in dirs if include_hidden or (not d.startswith(".") and not is_heavy_dir(d))])
         names = [(d, True) for d in dirs] + [(f, False) for f in sorted(files) if include_hidden or not f.startswith(".")]
         for name, is_dir in names:
             abs_path = current_path / name
@@ -222,6 +221,7 @@ def op_run(root, payload):
     sel = selectors.DefaultSelector()
     sel.register(proc.stdout, selectors.EVENT_READ)
     deadline = start + timeout
+    eof = False
     while True:
         if time.time() > deadline:
             timed_out = True
@@ -233,25 +233,56 @@ def op_run(root, payload):
             except Exception:
                 pass
             break
-        events = sel.select(timeout=0.1)
-        for key, _ in events:
-            chunk = key.fileobj.read1(8192) if hasattr(key.fileobj, "read1") else key.fileobj.read(8192)
-            if not chunk:
-                continue
-            remain = max_output - len(out)
-            if remain > 0:
-                out.extend(chunk[:remain])
-            if len(chunk) > remain:
-                truncated = True
+        if eof:
+            # stdout 已关闭但进程可能仍在运行（如守护进程关闭了 std fd）。
+            # 不能在此 break，否则 poll() 返回 None 会被 JSON 编码为 null，
+            # Go 侧 int 字段反序列化 null 得到 0，误报为成功退出。
+            # 短暂 sleep 后继续轮询 proc.poll()，直到进程退出或超时。
+            time.sleep(0.1)
+        else:
+            events = sel.select(timeout=0.1)
+            for key, _ in events:
+                chunk = key.fileobj.read1(8192) if hasattr(key.fileobj, "read1") else key.fileobj.read(8192)
+                if not chunk:
+                    eof = True
+                    break
+                remain = max_output - len(out)
+                if remain > 0:
+                    out.extend(chunk[:remain])
+                if len(chunk) > remain:
+                    truncated = True
         if proc.poll() is not None:
-            rest = proc.stdout.read() or b""
-            remain = max_output - len(out)
-            if remain > 0:
-                out.extend(rest[:remain])
-            if len(rest) > remain:
-                truncated = True
+            # 进程已退出；排空管道内剩余缓冲数据（最多等 0.5s，避免后台
+            # 子进程持有 stdout fd 时无限阻塞）。
+            drain_deadline = time.time() + 0.5
+            while not eof and time.time() < drain_deadline:
+                events = sel.select(timeout=0.1)
+                if not events:
+                    break
+                for key, _ in events:
+                    chunk = key.fileobj.read1(8192) if hasattr(key.fileobj, "read1") else key.fileobj.read(8192)
+                    if not chunk:
+                        eof = True
+                        break
+                    remain = max_output - len(out)
+                    if remain > 0:
+                        out.extend(chunk[:remain])
+                    if len(chunk) > remain:
+                        truncated = True
             break
+    sel.close()
+    try:
+        proc.wait(timeout=5)
+    except Exception:
+        pass
+    try:
+        proc.stdout.close()
+    except Exception:
+        pass
     exit_code = proc.poll()
+    if exit_code is None:
+        # 兜底：极端情况下进程仍未退出（如 D 状态不可中断），报告 -1 而非 0
+        exit_code = -1
     if timed_out:
         exit_code = -1
     duration = int((time.time() - start) * 1000)
@@ -401,7 +432,7 @@ func (a *App) invokeRemotePython(ctx context.Context, rt remoteTarget, payload m
 		return err
 	}
 	encoded := base64.RawURLEncoding.EncodeToString(raw)
-	args := []string{"-o", "BatchMode=yes", "-o", "ConnectTimeout=10"}
+	args := []string{"-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3"}
 	if rt.Port != "" {
 		args = append(args, "-p", rt.Port)
 	}
@@ -433,15 +464,13 @@ func (a *App) invokeRemotePython(ctx context.Context, rt remoteTarget, payload m
 		}
 		return fmt.Errorf("ssh %s failed: %s", rt.Host, msg)
 	}
-	line := ""
-	for _, candidate := range strings.Split(stdout.String(), "\n") {
-		if strings.HasPrefix(candidate, remotePythonMarker) {
-			line = strings.TrimPrefix(candidate, remotePythonMarker)
-		}
-	}
-	if line == "" {
+	markerBytes := []byte(remotePythonMarker)
+	stdoutBytes := stdout.Bytes()
+	idx := bytes.LastIndex(stdoutBytes, markerBytes)
+	if idx < 0 {
 		return fmt.Errorf("remote helper returned no JSON result; stderr: %s", strings.TrimSpace(stderr.String()))
 	}
+	line := strings.TrimRight(string(stdoutBytes[idx+len(markerBytes):]), "\r\n")
 	var resp remotePythonResponse
 	if err := json.Unmarshal([]byte(line), &resp); err != nil {
 		return fmt.Errorf("decode remote helper result: %w", err)
