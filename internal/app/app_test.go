@@ -688,7 +688,7 @@ func TestSystemPromptStartsTodoListsWithActiveItem(t *testing.T) {
 
 func TestSystemPromptExplainsRunCommandOutsidePathRecovery(t *testing.T) {
 	prompt := defaultSystemPrompt(nil, "", nil, "", "")
-	for _, expected := range []string{"`E_PATH_OUTSIDE`", "Do not retry the unchanged command", "dynamic targets (variables, globs, heredoc content) are allowed", "read the returned Chinese explanation"} {
+	for _, expected := range []string{"`E_PATH_OUTSIDE`", "Do not retry the unchanged command", "read the returned Chinese explanation"} {
 		if !strings.Contains(prompt, expected) {
 			t.Fatalf("system prompt missing run_command recovery guidance %q", expected)
 		}
@@ -735,16 +735,18 @@ func TestSystemPromptDiscouragesRedundantReadsBeforeEdit(t *testing.T) {
 	}
 }
 
-func TestSystemPromptPrefersExactStringEdits(t *testing.T) {
+func TestSystemPromptKeepsEditBehavioralRules(t *testing.T) {
 	prompt := defaultSystemPrompt(nil, "", nil, "", "")
 	for _, expected := range []string{
-		"Prefer a small, unique, unnumbered `oldText`",
-		"By default, an effective `oldText` must occur exactly once",
-		"The optional boolean `replace_all` defaults to `false`",
-		"replace every non-overlapping exact occurrence",
+		"must never be copied into edit text",
+		"do not re-read a file merely for reassurance",
+		"Batch edits by risk and size",
+		"one failed `oldText` match or stale `version` rejects the entire call",
+		"Never send multiple file-mutation tool calls for the same path",
+		"Do not use patch, unified diff, or git apply",
 	} {
 		if !strings.Contains(prompt, expected) {
-			t.Fatalf("system prompt missing exact-string edit preference %q", expected)
+			t.Fatalf("system prompt missing edit behavioral rule %q", expected)
 		}
 	}
 }
