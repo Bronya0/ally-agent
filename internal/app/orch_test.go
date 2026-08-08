@@ -349,43 +349,6 @@ func TestDetectToolBatchConflictsRequiresAskToRunAlone(t *testing.T) {
 	}
 }
 
-func TestGrillModeFiltersSideEffectToolSchemas(t *testing.T) {
-	app := NewApp()
-	tools := app.buildToolsForConfig(ConfigState{grillMode: true})
-	names := map[string]bool{}
-	for _, tool := range tools {
-		if tool.Function != nil {
-			names[tool.Function.Name] = true
-		}
-	}
-	for _, blocked := range []string{"edit", "create_file", "delete_path", "run_command", "background_process", "wait", "http_request", "web_fetch", "subagent", "memory_write", "todo_write", "create_goal", "update_goal"} {
-		if names[blocked] {
-			t.Fatalf("expected %s schema to be filtered in grill mode", blocked)
-		}
-	}
-	for _, allowed := range []string{"list_files", "read", "grep_files", "memory_read", "calculate", "ask", "get_goal", "skill"} {
-		if !names[allowed] {
-			t.Fatalf("expected %s schema to remain available in grill mode", allowed)
-		}
-	}
-}
-
-func TestGrillModeRejectsSideEffectToolExecution(t *testing.T) {
-	app := NewApp()
-	result := app.executeTool(context.Background(), ConfigState{grillMode: true}, "session-1", "run_command", []byte(`{"command":"go test ./..."}`))
-	if result.OK || !strings.Contains(result.Error, "disabled in grill mode") {
-		t.Fatalf("expected grill mode execution guard, got %#v", result)
-	}
-}
-
-func TestGrillModeRequiresOneAskQuestion(t *testing.T) {
-	app := NewApp()
-	result := app.executeTool(context.Background(), ConfigState{grillMode: true}, "session-1", "ask", []byte(`{"questions":[]}`))
-	if result.OK || result.ErrorCode != "E_GRILL_ASK_COUNT" {
-		t.Fatalf("expected grill ask count guard, got %#v", result)
-	}
-}
-
 func TestChatToolsExposeBackgroundProcessWithoutPollingTools(t *testing.T) {
 	blocked := map[string]bool{"start_service": true, "stop_service": true, "list_services": true}
 	foundBackgroundProcess := false

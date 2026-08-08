@@ -245,9 +245,9 @@ func estimateToolSchemaTokens(tools []openai.Tool) int {
 		return 0
 	}
 	// Split into builtin (non-mcp__) and mcp portions. The builtin portion
-	// uses the cache only when it is the full chatTools() set — grill mode
-	// filters out side-effectful builtin tools, so the filtered builtin slice
-	// must be re-marshaled to avoid over-counting the cached full-set tokens.
+	// uses the cache only when it is the full chatTools() set — a filtered
+	// builtin slice must be re-marshaled to avoid over-counting the cached
+	// full-set tokens.
 	cachedBuiltinCount := len(chatTools())
 	builtinCount := 0
 	hasMcp := false
@@ -263,7 +263,7 @@ func estimateToolSchemaTokens(tools []openai.Tool) int {
 		// Full builtin set — use the cached estimate.
 		total = builtinToolSchemaTokens()
 	} else if builtinCount > 0 {
-		// Filtered builtin subset (e.g. grill mode) — marshal directly.
+		// Filtered builtin subset — marshal directly.
 		builtinOnly := make([]openai.Tool, 0, builtinCount)
 		for _, t := range tools {
 			if t.Function != nil && !strings.HasPrefix(t.Function.Name, "mcp__") {
@@ -446,7 +446,6 @@ func contextStaticCacheKey(cfg ConfigState, skills []SkillDefinition, version ui
 	}
 	write(cfg.CustomPrompt)
 	write(cfg.GitBashPath)
-	write(fmt.Sprintf("%t", cfg.grillMode))
 	write(fmt.Sprintf("%d", version))
 	for _, skill := range skills {
 		write(skill.Name)

@@ -7,7 +7,6 @@
             <AppHeader
               :workspace-tabs="workspaceTabsWithStatus"
               :active-workspace-id="activeWorkspaceId"
-              :grill-mode-active="!!activeSession?.grillMode"
               :update-available="updateAvailable"
               :update-auto-supported="updateAutoSupported"
               :latest-version="latestReleaseVersion"
@@ -49,7 +48,7 @@
                       :focused-id="focusedToolIdForSession(tab.sessionId)"
                       :render-fn="renderMarkdown"
                       :fmt-k="fmtK"
-                      :tools="visibleAvailableToolsForSession(sessionForWorkspaceTab(tab))"
+                      :tools="availableTools"
                       :mcp-servers="mcpServers"
                       @toggle-archive="toggleArchiveMessages"
                       @toggle-tool="toggleToolExpand"
@@ -169,7 +168,7 @@
                     onKeyup: handlePromptKeyup,
                     'data-ally-prompt-input': 'true',
                   }"
-                  :autosize="{ minRows: 2, maxRows: 5 }"
+                  :autosize="{ minRows: 2, maxRows: 10 }"
                   :placeholder="$t('app.composer.placeholder')"
                   @keydown="handlePromptKeydown"
                   @input="handlePromptInput"
@@ -195,7 +194,6 @@
                   :context-usage-style="contextUsageStyle"
                   :workspace-input-tokens="workspaceInputTokens"
                   :workspace-output-tokens="workspaceOutputTokens"
-                  :grill-mode-active="!!activeSession?.grillMode"
                   :task-center-count="scheduledTasks.length + services.length"
                   :task-center-running-count="scheduledTaskRunningCount + serviceRunningCount"
                   :fmt-k="fmtK"
@@ -206,7 +204,6 @@
                   @open-config="configVisible = true"
                   @open-git-diff="openGitDiff"
                   @open-workspace="openWorkspaceInFileManager"
-                  @set-run-mode="setRunMode"
                   @change-reasoning-effort="changeReasoningEffort"
                   @open-task-center="openTaskCenter"
                   @new-session="createNewSession"
@@ -1452,20 +1449,6 @@ function sessionForWorkspaceTab(tab) {
   if (!tab?.sessionId) return null;
   return sessions.value.find((session) => session.id === tab.sessionId) || null;
 }
-
-const GRILL_BLOCKED_TOOL_NAMES = new Set([
-  'edit', 'create_file', 'delete_path', 'run_command', 'background_process', 'wait',
-  'http_request', 'web_fetch', 'remote_edit', 'remote_create_file',
-  'remote_delete_path', 'remote_run_command', 'subagent', 'agent_delegate', 'memory_write',
-  'todo_write', 'create_goal', 'update_goal', 'scheduled_task',
-]);
-function visibleAvailableToolsForSession(session) {
-  if (!session?.grillMode) return availableTools.value;
-  return availableTools.value.filter((tool) => {
-    const name = String(tool?.name || '');
-    return tool?.source !== 'mcp' && !name.startsWith('mcp__') && !GRILL_BLOCKED_TOOL_NAMES.has(name);
-  });
-}
 // Return a stable array reference when nothing actually changed so downstream
 // watchers (AppHeader) short-circuit. The previous version returned a fresh
 // array + fresh per-tab object literals on every recompute, even when every
@@ -2352,7 +2335,6 @@ async function loadSessionMessages(session) {
       session.firstPrompt = snapshot.firstPrompt || session.firstPrompt || '';
       session.workspace = snapshot.workspace || session.workspace || '';
       session.extraRoots = Array.isArray(snapshot.extraRoots) ? [...snapshot.extraRoots] : (session.extraRoots || []);
-      session.grillMode = !!(snapshot.grillMode ?? session.grillMode);
       session.createdAt = snapshot.createdAt || session.createdAt || Date.now();
       session.updatedAt = snapshot.updatedAt || session.updatedAt || session.createdAt;
       session.contextTokens = Number(snapshot.contextTokens || session.contextTokens || 0);
@@ -2426,7 +2408,7 @@ function createWorkspaceTab(path) {
   // Create a linked session for this tab
   const sessionId = crypto.randomUUID ? crypto.randomUUID() : `s-${Date.now()}-${Math.random()}`;
   const now = Date.now();
-  const session = { id: sessionId, title: label, workspace: path || '', extraRoots: [], messages: [], messagesLoaded: true, runId: '', isRunning: false, grillMode: false, createdAt: now, updatedAt: now };
+  const session = { id: sessionId, title: label, workspace: path || '', extraRoots: [], messages: [], messagesLoaded: true, runId: '', isRunning: false, createdAt: now, updatedAt: now };
   session.messages.push(buildWelcomeMessage(path || t('common.notSelected')));
   sessions.value.unshift(session);
   // Reset cumulative token usage for this workspace (new workspace = fresh counter)
@@ -2566,7 +2548,7 @@ function newSession(title) {
   const now = Date.now();
   const workspace = config.workspace || '';
   const sessionTitle = title || (workspace ? workspaceLabel(workspace) : t('app.sessions.new'));
-  const session = { id, title: sessionTitle, workspace, extraRoots: [], messages: [], messagesLoaded: true, runId: '', isRunning: false, grillMode: false, createdAt: now, updatedAt: now };
+  const session = { id, title: sessionTitle, workspace, extraRoots: [], messages: [], messagesLoaded: true, runId: '', isRunning: false, createdAt: now, updatedAt: now };
   sessions.value.unshift(session);
   activeSessionId.value = id;
   bindSessionToActiveWorkspaceTab(session);
@@ -2607,7 +2589,7 @@ async function selectSession(index) {
 function createReplacementSession(title = t('app.sessions.new'), workspacePath = '') {
   const id = crypto.randomUUID ? crypto.randomUUID() : `s-${Date.now()}-${Math.random()}`;
   const now = Date.now();
-  const session = { id, title, workspace: workspacePath || '', extraRoots: [], messages: [], messagesLoaded: true, runId: '', isRunning: false, grillMode: false, createdAt: now, updatedAt: now };
+  const session = { id, title, workspace: workspacePath || '', extraRoots: [], messages: [], messagesLoaded: true, runId: '', isRunning: false, createdAt: now, updatedAt: now };
   session.messages.push(buildWelcomeMessage(workspacePath || t('common.notSelected')));
   return session;
 }
@@ -3427,7 +3409,6 @@ function bindRuntimeEvents() {
     // 属于当前工作区，底部 Git 统计也应刷新（GetGitStatus 查询的是当前
     // 工作区，与具体会话无关）。
     if (String(session.workspace || '') === String(config.workspace || '')) refreshGitStatus();
-    if (data.grillComplete) session.grillMode = false;
     let i = session.messages.length - 1;
     while (i >= 0) {
       const msg = session.messages[i];
@@ -4416,7 +4397,7 @@ async function sendPrompt() {
       attachments: attachmentsForModel(attachments),
     });
     markSessionRunning(session);
-    await StartChat({ sessionId: session.id, message: sendText, messages: history, grillMode: !!session.grillMode, config: { ...config, extraRoots: session.extraRoots || [] } });
+    await StartChat({ sessionId: session.id, message: sendText, messages: history, config: { ...config, extraRoots: session.extraRoots || [] } });
   } catch (err) {
     markTransientTurn(session);
     session.runId = '';
@@ -5050,7 +5031,8 @@ function makeToolResultTitle(name, result, meta = {}) {
   if (name === 'web_fetch' || name === 'http_request') {
     return d.url || d.finalUrl || d.URL || d.FinalURL || '';
   }
-  if (meta.mcpTool) return meta.mcpTool;
+  // MCP 卡片的标题在 running 阶段已由 makeToolTitle 生成为参数摘要；
+  // result 阶段保持原样（返回空串不覆盖），避免重复显示 tool 名。
   return '';
 }
 
@@ -5561,7 +5543,6 @@ function sessionIndexEntry(session) {
     firstPrompt: firstSessionPromptSummary(session),
     workspace: inferSessionWorkspace(session) || (session?.id === activeSessionId.value ? config.workspace || '' : ''),
     extraRoots: Array.isArray(session?.extraRoots) ? [...session.extraRoots] : [],
-    grillMode: !!session?.grillMode,
     createdAt: session?.createdAt || Date.now(),
     updatedAt: session?.updatedAt || session?.createdAt || Date.now(),
     messageCount: Number.isFinite(Number(session?.messageCount))
@@ -5743,7 +5724,6 @@ function sessionFromIndexEntry(entry) {
     messagesLoaded: false,
     runId: '',
     isRunning: false,
-    grillMode: !!entry.grillMode,
     hasSnapshot: !!entry.hasSnapshot,
     messageCount: Number(entry.messageCount || 0),
     contextTokens: Number(entry.contextTokens || 0),
@@ -5758,7 +5738,6 @@ function applySessionIndexEntry(session, entry) {
   session.firstPrompt = entry.firstPrompt || session.firstPrompt || '';
   session.workspace = entry.workspace || session.workspace || '';
   session.extraRoots = Array.isArray(entry.extraRoots) ? [...entry.extraRoots] : (session.extraRoots || []);
-  session.grillMode = !!entry.grillMode;
   session.hasSnapshot = !!entry.hasSnapshot;
   session.messageCount = Number(entry.messageCount || 0);
   session.contextTokens = Number(entry.contextTokens || 0);
@@ -5841,7 +5820,6 @@ async function migrateLegacySessionStorage() {
       title: meta.title || source.title || t('app.sessions.history'),
       workspace: meta.workspace || source.workspace || '',
       extraRoots: Array.isArray(meta.extraRoots) ? meta.extraRoots : (source.extraRoots || []),
-      grillMode: meta.grillMode ?? source.grillMode,
       createdAt: meta.createdAt || source.createdAt,
       updatedAt: meta.updatedAt || source.updatedAt,
     };
@@ -5860,7 +5838,6 @@ async function migrateLegacySessionStorage() {
       title: meta.title || t('app.sessions.history'),
       workspace: meta.workspace || '',
       extraRoots: Array.isArray(meta.extraRoots) ? meta.extraRoots : [],
-      grillMode: !!meta.grillMode,
       createdAt: meta.createdAt || Date.now(),
       updatedAt: meta.updatedAt || meta.createdAt || Date.now(),
       messageCount: Number(meta.messageCount || legacyMessages.filter((item) => item?.role === 'user' || item?.role === 'assistant').length),
@@ -5936,7 +5913,7 @@ function handleInitCommand() {
 
   const text = INIT_PROMPT;
   markSessionRunning(session);
-  StartChat({ sessionId: session.id, message: text, messages: history, grillMode: !!session.grillMode, config: { ...config, extraRoots: session.extraRoots || [] } })
+  StartChat({ sessionId: session.id, message: text, messages: history, config: { ...config, extraRoots: session.extraRoots || [] } })
     .catch((err) => {
       markTransientTurn(session);
       session.runId = '';
@@ -5961,7 +5938,7 @@ function handleRememberCommand() {
   saveSessions();
 
   markSessionRunning(session);
-  StartChat({ sessionId: session.id, message: '', messages: history, grillMode: !!session.grillMode, config: { ...config, extraRoots: session.extraRoots || [] } })
+  StartChat({ sessionId: session.id, message: '', messages: history, config: { ...config, extraRoots: session.extraRoots || [] } })
     .catch((err) => {
       markTransientTurn(session);
       session.runId = '';
@@ -5986,7 +5963,7 @@ function handlePushCommand() {
   saveSessions();
 
   markSessionRunning(session);
-  StartChat({ sessionId: session.id, message: '', messages: history, grillMode: !!session.grillMode, config: { ...config, extraRoots: session.extraRoots || [] } })
+  StartChat({ sessionId: session.id, message: '', messages: history, config: { ...config, extraRoots: session.extraRoots || [] } })
     .catch((err) => {
       markTransientTurn(session);
       session.runId = '';
@@ -6113,7 +6090,7 @@ async function activateSkillByName(skillName, skillArgs = '', injectIntoChat = t
         scrollMessagesToBottom();
         if (config.apiKey || (Array.isArray(config.apiKeys) && config.apiKeys.length)) {
           markSessionRunning(session);
-          await StartChat({ sessionId: session.id, message: '', messages: [{ role: 'user', content: modelContent }], grillMode: !!session.grillMode, config: { ...config, extraRoots: session.extraRoots || [] } }).catch(() => {
+          await StartChat({ sessionId: session.id, message: '', messages: [{ role: 'user', content: modelContent }], config: { ...config, extraRoots: session.extraRoots || [] } }).catch(() => {
             markTransientTurn(session);
             session.isRunning = false;
           });
@@ -6154,29 +6131,6 @@ async function toggleSkillFromSettings(skill, active) {
     }
   } finally {
     skillToggleInFlight.value = '';
-  }
-}
-
-async function setRunMode(mode) {
-  const session = activeSession.value;
-  if (!session) return;
-  if (session.runId || session.isRunning) {
-    if (session.grillMode && mode === 'yolo' && session.runId) {
-      try { await CancelRun(session.runId); } catch (_) { /* run may already be closing */ }
-    } else {
-      message.warning(t('app.run.waitBeforeMode'));
-      return;
-    }
-  }
-  const nextGrill = mode === 'grill';
-  try {
-    session.grillMode = nextGrill;
-    session.updatedAt = Date.now();
-    saveSessions();
-    refreshContextTokens(activeSessionId.value);
-    message.success(t('app.run.modeChanged', { mode: String(mode || 'yolo').toUpperCase() }));
-  } catch (err) {
-    message.error(t('app.run.modeFailed', { error: err }));
   }
 }
 
@@ -6251,15 +6205,27 @@ function isMcpToolName(name) {
   return typeof name === 'string' && name.startsWith('mcp__');
 }
 
-function fallbackMcpToolName(name) {
-  if (!isMcpToolName(name)) return '';
-  const parts = String(name).split('__');
-  return parts.length >= 3 ? parts.slice(2).join('__') : '';
+function formatMcpArgsSummary(parsed) {
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return '';
+  const parts = [];
+  for (const [key, value] of Object.entries(parsed)) {
+    if (value === undefined || value === null) continue;
+    if (typeof value === 'string') {
+      const v = String(value).trim();
+      if (!v) continue;
+      parts.push(`${key}: ${v.length > 40 ? `${v.slice(0, 40)}…` : v}`);
+    } else if (typeof value === 'number' || typeof value === 'boolean') {
+      parts.push(`${key}: ${value}`);
+    }
+  }
+  return parts.slice(0, 2).join(' · ');
 }
 
 function makeToolTitle(name, args, meta = {}) {
   if (isMcpToolName(name)) {
-    return meta.mcpTool || fallbackMcpToolName(name);
+    // MCP 卡片名称位已显示 server/tool；括号里只放参数摘要，
+    // 无参数时返回空串，避免重复显示工具名。
+    return formatMcpArgsSummary(parseToolArgsForMeta(args, meta));
   }
   const parsed = parseToolArgsForMeta(args, meta);
   if (name === 'todo_write') {

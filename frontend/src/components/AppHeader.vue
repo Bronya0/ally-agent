@@ -65,7 +65,6 @@
       </div>
     </div>
     <div class="header-actions">
-      <n-tag v-if="grillModeActive" class="header-grill-tag" size="small" round type="error" bordered>GRILL</n-tag>
       <n-button class="header-icon-button" size="small" quaternary @click="onOpenTokenStats" :title="$t('header.tokenStats')" :aria-label="$t('header.tokenStats')">
         <svg class="header-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
           <path d="M3 3v18h18" />
@@ -130,7 +129,6 @@ import AllyWordmark from './AllyWordmark.vue';
 const props = defineProps({
   workspaceTabs: { type: Array, required: true },
   activeWorkspaceId: { type: String, required: true },
-  grillModeActive: { type: Boolean, default: false },
   updateAvailable: { type: Boolean, default: false },
   updateAutoSupported: { type: Boolean, default: false },
   latestVersion: { type: String, default: '' },
@@ -680,10 +678,6 @@ body.platform-darwin .window-close-icon {
 
 .workspace-tabs :deep(.workspace-tab.running .tab-close) {
   color: rgba(216, 248, 231, 0.7);
-}
-
-.header-grill-tag {
-  height: 22px;
 }
 
 </style>

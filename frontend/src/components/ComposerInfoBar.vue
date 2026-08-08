@@ -17,24 +17,6 @@
     <n-dropdown
       trigger="click"
       placement="top-start"
-      :options="runModeOptions"
-      :disabled="running && !grillModeActive"
-      @select="selectRunMode"
-    >
-      <button
-        type="button"
-        :class="['run-mode-chip', currentRunMode]"
-        :title="currentRunModeLabel"
-        :disabled="running && !grillModeActive"
-        @click.stop
-      >
-        <span>{{ currentRunModeLabel }}</span>
-        <span class="run-mode-caret">▾</span>
-      </button>
-    </n-dropdown>
-    <n-dropdown
-      trigger="click"
-      placement="top-start"
       scrollable
       :options="modelMenuOptions"
       :render-label="renderModelMenuLabel"
@@ -278,14 +260,13 @@ const props = defineProps({
   contextUsageStyle: { type: Object, default: () => ({}) },
   workspaceInputTokens: { type: String, default: '0' },
   workspaceOutputTokens: { type: String, default: '0' },
-  grillModeActive: { type: Boolean, default: false },
   taskCenterCount: { type: Number, default: 0 },
   taskCenterRunningCount: { type: Number, default: 0 },
   extraRoots: { type: Array, default: () => [] },
   fmtK: { type: Function, required: true },
 });
 
-const emit = defineEmits(['switchModel', 'openConfig', 'openGitDiff', 'openWorkspace', 'setRunMode', 'changeReasoningEffort', 'openTaskCenter', 'newSession', 'showSessions', 'addExtraRoot', 'removeExtraRoot']);
+const emit = defineEmits(['switchModel', 'openConfig', 'openGitDiff', 'openWorkspace', 'changeReasoningEffort', 'openTaskCenter', 'newSession', 'showSessions', 'addExtraRoot', 'removeExtraRoot']);
 
 const contextPopoverVisible = ref(false);
 const currentModelLabel = computed(() => `${props.config.providerName || '-'} · ${props.config.model || '-'}`);
@@ -331,27 +312,10 @@ const modelMenuOptions = computed(() => {
   options.push({ key: 'manage', label: t('composer.models.manage'), isManage: true });
   return options;
 });
-const currentRunMode = computed(() => {
-  if (props.grillModeActive) return 'grill';
-  return 'yolo';
-});
-const currentRunModeLabel = computed(() => currentRunMode.value.toUpperCase());
 const currentEffortLabel = computed(() => reasoningEffortLabel(props.config.reasoningEffort));
 const reasoningEffortOptions = computed(() =>
   reasoningEffortLevels.map((level) => ({ label: reasoningEffortLabel(level), key: level }))
 );
-const runModeOptions = computed(() => [
-  {
-    label: 'YOLO',
-    key: 'yolo',
-    disabled: currentRunMode.value === 'yolo',
-  },
-  {
-    label: 'GRILL',
-    key: 'grill',
-    disabled: currentRunMode.value === 'grill',
-  },
-]);
 const systemPromptParts = computed(() => (
   Array.isArray(props.contextBreakdown?.systemPromptParts)
     ? props.contextBreakdown.systemPromptParts.filter((part) => part && part.tokens > 0)
@@ -417,11 +381,6 @@ function modelMenuProps() {
     class: 'model-menu',
     style: { minWidth: '240px', maxHeight: 'min(420px, calc(100vh - 160px))' },
   };
-}
-
-function selectRunMode(key) {
-  if (key === currentRunMode.value) return;
-  emit('setRunMode', key);
 }
 
 function onReasoningEffortSelect(key) {

@@ -498,7 +498,7 @@ Goal mode:
 
 Interactive ask behavior:
 
-- `ask` is available to the visible main Agent session in YOLO and GRILL modes, but is excluded from sub-agents and scheduled tasks.
+- `ask` is available to the visible main Agent session, but is excluded from sub-agents and scheduled tasks.
 - The tool blocks until the frontend submits every question or the run is cancelled. Cancelling emits `ask:closed`, removes the pending request, and returns `E_ASK_CANCELLED`.
 
 ---

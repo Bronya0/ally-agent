@@ -32,7 +32,6 @@ type SessionIndexEntry struct {
 	FirstPrompt   string   `json:"firstPrompt,omitempty"`
 	Workspace     string   `json:"workspace"`
 	ExtraRoots    []string `json:"extraRoots,omitempty"`
-	GrillMode     bool     `json:"grillMode,omitempty"`
 	CreatedAt     int64    `json:"createdAt"`
 	UpdatedAt     int64    `json:"updatedAt"`
 	MessageCount  int      `json:"messageCount"`
@@ -50,7 +49,6 @@ type SessionSnapshot struct {
 	FirstPrompt   string           `json:"firstPrompt,omitempty"`
 	Workspace     string           `json:"workspace"`
 	ExtraRoots    []string         `json:"extraRoots,omitempty"`
-	GrillMode     bool             `json:"grillMode,omitempty"`
 	CreatedAt     int64            `json:"createdAt"`
 	UpdatedAt     int64            `json:"updatedAt"`
 	ContextTokens int              `json:"contextTokens,omitempty"`
@@ -198,7 +196,6 @@ func (a *App) LoadSession(sessionID string) (SessionSnapshot, error) {
 					Title:       entry.Title,
 					Workspace:   entry.Workspace,
 					ExtraRoots:  cloneStringSlice(entry.ExtraRoots),
-					GrillMode:   entry.GrillMode,
 					CreatedAt:   entry.CreatedAt,
 					UpdatedAt:   entry.UpdatedAt,
 					HasSnapshot: entry.HasSnapshot,
@@ -217,7 +214,6 @@ func (a *App) LoadSession(sessionID string) (SessionSnapshot, error) {
 			snapshot.Title = entry.Title
 			snapshot.Workspace = entry.Workspace
 			snapshot.ExtraRoots = cloneStringSlice(entry.ExtraRoots)
-			snapshot.GrillMode = entry.GrillMode
 			if entry.CreatedAt > 0 {
 				snapshot.CreatedAt = entry.CreatedAt
 			}
@@ -449,7 +445,6 @@ func normalizeSessionSnapshot(snapshot SessionSnapshot, fallbackID string) Sessi
 		FirstPrompt: snapshot.FirstPrompt,
 		Workspace:   snapshot.Workspace,
 		ExtraRoots:  snapshot.ExtraRoots,
-		GrillMode:   snapshot.GrillMode,
 		CreatedAt:   snapshot.CreatedAt,
 		UpdatedAt:   snapshot.UpdatedAt,
 	})
@@ -488,7 +483,6 @@ func sessionIndexEntryFromSnapshot(snapshot SessionSnapshot) SessionIndexEntry {
 		FirstPrompt:   firstPrompt,
 		Workspace:     snapshot.Workspace,
 		ExtraRoots:    snapshot.ExtraRoots,
-		GrillMode:     snapshot.GrillMode,
 		CreatedAt:     snapshot.CreatedAt,
 		UpdatedAt:     snapshot.UpdatedAt,
 		ContextTokens: snapshot.ContextTokens,

@@ -31,7 +31,6 @@
 - MCP 支持 stdio、SSE 和 Streamable HTTP，可使用表单或原始 JSON 配置
 - 使用可发现的 Skills 扩展工作流程，并通过全局记忆保存跨项目知识；内置技能含 `review`、`codegraph`、`playwright-cli`
 - 管理多个工作区、聊天会话、Todo、目标模式和仅当前进程有效的定时任务
-- 支持执行、计划和访谈/Grill 模式
 - 支持短时命令和带任务中心日志查看的后台进程；Windows 会自动发现 Git Bash，必要时回退到 PowerShell
 - 异步 Token 统计仪表盘，可视化用量趋势
 - 自定义聊天背景图，可调节透明度

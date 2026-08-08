@@ -825,9 +825,6 @@ func appendOpenAIResponsesPromptCacheAnchor(input oaresp.ResponseInputParam) oar
 }
 
 func supportsOpenAIResponsesImageGeneration(cfg ConfigState) bool {
-	if cfg.grillMode {
-		return false
-	}
 	return isOfficialOpenAIResponsesEndpoint(cfg)
 }
 

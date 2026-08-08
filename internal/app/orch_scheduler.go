@@ -519,7 +519,6 @@ func (m *scheduledTaskManager) run(task ScheduledTask) {
 
 	cfg := m.app.effectiveConfig(ConfigState{Workspace: task.Workspace})
 	cfg.Workspace = task.Workspace
-	cfg.grillMode = false
 
 	if err := m.app.acquireSubagentSlot(ctx); err != nil {
 		m.finish(task.ID, "failed", "", err.Error())

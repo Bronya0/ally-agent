@@ -578,57 +578,6 @@ code, pre {
   color: #525252;
 }
 
-.composer-info .run-mode-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 20px;
-  /* 光学居中:全大写文字无下伸,墨水偏上,向下补偿 1px */
-  padding: 2px 2px 0;
-  color: color-mix(in srgb, var(--ally-accent) 52%, #8a8a8a);
-  border: 0;
-  background: transparent;
-  font-family: var(--ally-ui-font);
-  font-size: 11px;
-  font-weight: 700;
-  line-height: 20px;
-  letter-spacing: 0.04em;
-  cursor: pointer;
-  flex-shrink: 0;
-  --wails-draggable: no-drag;
-}
-
-.composer-info .run-mode-chip:hover:not(:disabled) {
-  color: color-mix(in srgb, var(--ally-accent) 62%, #a3a3a3);
-}
-
-.composer-info .run-mode-chip.plan {
-  color: color-mix(in srgb, var(--ally-accent) 58%, #8f8f8f);
-}
-
-.composer-info .run-mode-chip.plan:hover:not(:disabled) {
-  color: color-mix(in srgb, var(--ally-accent) 68%, #a8a8a8);
-}
-
-.composer-info .run-mode-chip.grill {
-  color: color-mix(in srgb, var(--ally-accent) 48%, #9a8a8a);
-}
-
-.composer-info .run-mode-chip.grill:hover:not(:disabled) {
-  color: color-mix(in srgb, var(--ally-accent) 58%, #b0a0a0);
-}
-
-.composer-info .run-mode-chip:disabled {
-  cursor: not-allowed;
-  opacity: 0.55;
-}
-
-.composer-info .run-mode-caret {
-  color: currentColor;
-  font-size: 9px;
-  opacity: 0.7;
-}
-
 .composer-info .info-effort {
   display: inline-flex;
   align-items: center;
@@ -2555,44 +2504,31 @@ code, pre {
   max-height: none;
 }
 
+.diff-list {
+  min-width: 0;
+}
+
 .diff-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  display: flex;
   align-items: stretch;
   min-height: 20px;
+  padding: 0 10px;
   content-visibility: auto;
   contain-intrinsic-size: 20px;
 }
 
-.diff-side {
-  display: flex;
-  align-items: stretch;
-  min-width: 0;
-  padding: 0 10px;
-}
-
-.diff-side + .diff-side {
-  border-left: 1px solid rgba(255, 255, 255, 0.08);
-}
-
-.diff-row.diff-sep-row {
+.diff-sep-row {
   display: block;
   padding: 1px 10px;
   user-select: none;
 }
 
-.diff-row.diff-add .diff-side,
-.diff-side.diff-add {
+.diff-row.diff-add {
   background: rgba(78, 200, 126, 0.10);
 }
 
-.diff-row.diff-del .diff-side,
-.diff-side.diff-del {
+.diff-row.diff-del {
   background: rgba(232, 84, 84, 0.10);
-}
-
-.diff-side.diff-empty {
-  background: rgba(255, 255, 255, 0.025);
 }
 
 .diff-gutter {
@@ -2624,7 +2560,7 @@ code, pre {
 .diff-code {
   padding-left: 4px;
   white-space: pre-wrap;
-  word-break: break-all;
+  word-break: break-word;
   flex: 1;
   min-width: 0;
   font-family: var(--ally-mono-font);
