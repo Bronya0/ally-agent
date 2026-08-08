@@ -239,12 +239,13 @@ const zh = {
   'app.push.prompt': `提交本地 Git 变更并推送到远程。
 
 任务要求：
-1. 运行 git status 和 git diff，先审查变更。
-2. 暂存全部本地变更（git add -A），并用一句简洁的话创建提交。
-3. 将提交推送至远程（git push）。
-4. 如无变更可提交，请说明并跳过推送。
-5. 如果项目或环境定义了 Git 约定（例如 AGENTS.md），请遵循其中的提交信息格式和作者设置。
-6. 报告最终结果：提交信息、哈希、分支及推送状态。
+1. 运行 git status 和 git diff，先审查变更，并识别其中的临时测试文件（临时补丁、临时脚本、临时测试产物等）。
+2. 暂存本地变更（git add -A），但默认排除上述临时测试文件，不得提交它们；只有用户明确要求时才纳入提交。
+3. 用一句简洁的话创建提交。
+4. 将提交推送至远程（git push）。
+5. 如无变更可提交（或仅剩被排除的临时文件），请说明并跳过推送。
+6. 如果项目或环境定义了 Git 约定（例如 AGENTS.md），请遵循其中的提交信息格式和作者设置。
+7. 报告最终结果：提交信息、哈希、分支及推送状态。
 
 回复语言：保持当前会话已经使用的回复语言；不要因为此内部指令、Git 命令或 Git 输出的语言而切换语言。如果会话尚未形成回复语言，请使用当前界面语言。`,
   'app.cache.contentTrimmed': '[内容过长，已裁剪本地缓存]',
@@ -851,12 +852,13 @@ const enOverrides = {
   'app.push.prompt': `Push local Git changes to the remote.
 
 Task requirements:
-1. Run git status and git diff to review what has changed.
-2. Stage all local changes (git add -A) and commit them with one concise sentence.
-3. Push the commit to the remote (git push).
-4. If there is nothing to commit, report that and skip the push.
-5. If the project or environment defines Git conventions (for example, in AGENTS.md), follow them for commit-message style and author settings.
-6. Report the final result: commit message, hash, branch, and push status.
+1. Run git status and git diff to review what has changed, and identify temporary test files (throwaway patches, scripts, or test artifacts).
+2. Stage local changes (git add -A) but exclude those temporary test files by default; never commit them unless the user explicitly asks to include them.
+3. Commit them with one concise sentence.
+4. Push the commit to the remote (git push).
+5. If there is nothing to commit (or only excluded temporary files remain), report that and skip the push.
+6. If the project or environment defines Git conventions (for example, in AGENTS.md), follow them for commit-message style and author settings.
+7. Report the final result: commit message, hash, branch, and push status.
 
 Response language: Preserve the response language already used in the current conversation. Do not switch languages because of this internal instruction, Git commands, or Git output. If the conversation has no established response language yet, use the current UI language.`,
   'app.cache.contentTrimmed': '[Content was trimmed in the local cache]',
