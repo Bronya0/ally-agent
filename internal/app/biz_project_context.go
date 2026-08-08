@@ -18,8 +18,8 @@ type agentFile struct {
 }
 
 // loadAgentsMd loads and merges AGENTS.md files from user-level and workspace-level,
-// following kimi-code conventions: user-scope files first, then workspace-scope,
-// each annotated with <!-- From: path -->, deduplicated by absolute path.
+// user-scope files first, then workspace-scope, each annotated with
+// <!-- From: path -->, deduplicated by absolute path.
 // Fallback chain: AGENTS.md → CLAUDE.md → agents.md → claude.md.
 func loadAgentsMd(workspace string) string {
 	if workspace == "" {

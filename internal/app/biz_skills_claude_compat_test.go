@@ -56,7 +56,7 @@ func TestAllyNativeSkillWinsOverClaudeSkillOnNameConflict(t *testing.T) {
 
 	var skills []SkillDefinition
 	seen := map[string]bool{}
-	// Production order: .agents/skills first, then .kimi-code/skills, then .claude/skills
+	// Production order: .agents/skills first, then .claude/skills
 	for _, sub := range skillScanDirs {
 		scanSkillDir(filepath.Join(root, sub), "project", &skills, seen)
 	}

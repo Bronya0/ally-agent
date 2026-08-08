@@ -299,17 +299,15 @@ Global memory metadata:
 
 ## Skills Architecture
 
-Skills are inspired by Kimi Code.
-
 ### Discovery
 
 `ListSkills()` scans:
 
 - user skills: `~/.agents/skills/`, `~/.claude/skills/`
-- project skills: `<workspace>/.agents/skills/`, `<workspace>/.kimi-code/skills/`, `<workspace>/.claude/skills/`
+- project skills: `<workspace>/.agents/skills/`, `<workspace>/.claude/skills/`
 - built-in skills: embedded into the binary via `go:embed` under `internal/builtin_skills/skills/<name>/SKILL.md`
 
-The `.claude/skills/` paths follow the Agent Skills open standard (agentskills.io) and Claude Code convention, so skills dropped into those directories by other tools are discovered by Ally without changes. Ally-native paths (`.agents/skills`, `.kimi-code/skills`) are scanned first, so on a name conflict the Ally-native skill wins via the `seen`-map dedup; the Claude-convention path is a fallback. Scope precedence overall: project > user > extra > builtin, matching `buildSkillListingMeta`. Built-in skills ship with Ally, require no files on disk, cannot be deleted by the user, and are still subject to `disabledSkills` (can be turned off in Settings → Skills).
+The `.claude/skills/` paths follow the Agent Skills open standard (agentskills.io) and Claude Code convention, so skills dropped into those directories by other tools are discovered by Ally without changes. The Ally-native path (`.agents/skills`) is scanned first, so on a name conflict the Ally-native skill wins via the `seen`-map dedup; the Claude-convention path is a fallback. Scope precedence overall: project > user > extra > builtin, matching `buildSkillListingMeta`. Built-in skills ship with Ally, require no files on disk, cannot be deleted by the user, and are still subject to `disabledSkills` (can be turned off in Settings → Skills).
 
 Supported layouts:
 
@@ -344,7 +342,7 @@ Skill settings are controlled by `disabledSkills` in `ConfigState`.
 
 - Default state: all discovered skills are enabled.
 - `DeactivateSkill(name)`: adds the skill name to `disabledSkills` and writes config.
-- `ActivateSkill(name)`: removes the skill name from `disabledSkills`, reads the skill file, and returns a rendered `<kimi-skill-loaded>` block.
+- `ActivateSkill(name)`: removes the skill name from `disabledSkills`, reads the skill file, and returns a rendered `<skill-loaded>` block.
 - `ClearSkills()`: disables all currently discovered skills and writes config.
 - `GetActiveSkills()`: returns the currently enabled skill names.
 
@@ -364,9 +362,9 @@ Full skill content is loaded only when explicitly requested:
 The loaded content is wrapped as:
 
 ```xml
-<kimi-skill-loaded name="..." source="..." dir="..." args="...">
+<skill-loaded name="..." source="..." dir="..." args="...">
 ...
-</kimi-skill-loaded>
+</skill-loaded>
 ```
 
 Frontend behavior:
@@ -697,12 +695,6 @@ Legacy completed background-service history (cleaned on startup and no longer wr
 ```
 
 Service processes are stopped when Ally exits and are not auto-restarted. Terminal service records are removed immediately and are not retained across restarts.
-
-Legacy config fallback:
-
-```text
-%APPDATA%/KimiAgentLab/config.json
-```
 
 Example MCP config:
 

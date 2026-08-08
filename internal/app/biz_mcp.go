@@ -20,7 +20,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
-// McpServerConfig represents a single MCP server config (Claude Desktop / kimi-code format).
+// McpServerConfig represents a single MCP server config (Claude Desktop format).
 type McpServerConfig struct {
 	Command   string            `json:"command"`
 	Args      []string          `json:"args,omitempty"`

@@ -1,5 +1,5 @@
 /**
- * Diff utilities — LCS-based diff algorithm ported from kimi-code TUI.
+ * Diff utilities — LCS-based diff algorithm.
  *
  * computeDiffLines: computes diff lines using LCS DP
  * buildClusters: groups changed lines into clusters with context

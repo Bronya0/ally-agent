@@ -1209,13 +1209,6 @@ func resolveConfigLoadPath(configPath string) (string, error) {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return "", err
 	}
-	if oldPath := legacyConfigPath(); oldPath != "" {
-		if _, err := os.Stat(oldPath); err == nil {
-			return oldPath, nil
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return "", err
-		}
-	}
 	return "", os.ErrNotExist
 }
 
@@ -1272,14 +1265,6 @@ func (a *App) MemoriesDir() string {
 // that still use it instead of (*App).MemoriesDir().
 func memoriesDir() string {
 	return aGlobalApp.MemoriesDir()
-}
-
-func legacyConfigPath() string {
-	cfgDir, err := os.UserConfigDir()
-	if err != nil || strings.TrimSpace(cfgDir) == "" {
-		return ""
-	}
-	return filepath.Join(cfgDir, "KimiAgentLab", "config.json")
 }
 
 // ── Skills ───────────────────────────────────────────────
@@ -1868,7 +1853,7 @@ Rules:
 		return nil, errors.New("compaction returned empty summary")
 	}
 
-	// Prepend the handoff prefix (kimi-code style)
+	// Prepend the handoff prefix
 	prefix := "[This conversation has been compacted. The following is your own summary of the work so far — use it to continue. Verify any claims before relying on them.]\n\n"
 	fullSummary := prefix + summary
 

@@ -2,8 +2,8 @@ package app
 
 // Section: shared command environment
 // Enriches command subprocesses with PATH entries from the user's POSIX
-// login shell. This mirrors Kimi Code's one-time login-shell PATH probe while
-// keeping Ally's actual command shell and safety checks unchanged.
+// login shell. The probe runs once per process while keeping Ally's actual
+// command shell and safety checks unchanged.
 
 import (
 	"context"
@@ -222,8 +222,8 @@ func runLoginShellText(file string, args []string, timeout time.Duration) (strin
 	return buf.String(), nil
 }
 
-// accountLoginShell mirrors Kimi's fallback to the OS account database when
-// GUI/launchd does not provide SHELL. macOS normally uses zsh; dscl gives the
+// accountLoginShell falls back to the OS account database when GUI/launchd
+// does not provide SHELL. macOS normally uses zsh; dscl gives the
 // actual account setting when it differs. Linux reads the local passwd entry
 // and falls back to bash when no entry is available.
 func accountLoginShell() string {

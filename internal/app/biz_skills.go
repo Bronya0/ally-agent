@@ -14,9 +14,8 @@ const skillListCacheTTL = 30 * time.Second
 
 var skillScanDirs = []string{
 	filepath.Join(".agents", "skills"),
-	filepath.Join(".kimi-code", "skills"),
 	// Agent Skills open standard / Claude Code convention. Scanned last so
-	// Ally-native .agents/skills and .kimi-code/skills win on name conflicts.
+	// the Ally-native .agents/skills path wins on name conflicts.
 	filepath.Join(".claude", "skills"),
 }
 
@@ -361,10 +360,10 @@ func buildSkillDirTree(dir, loadedPath string) string {
 	return "<!-- skill dir tree (one level, use read to read any of these) -->\n" + strings.Join(lines, "\n")
 }
 
-// renderSkillLoadedBlock builds <kimi-skill-loaded name="..." source="..." dir="..." args="...">
+// renderSkillLoadedBlock builds <skill-loaded name="..." source="..." dir="..." args="...">
 func renderSkillLoadedBlock(skillName, source, dir, args, content string) string {
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("<kimi-skill-loaded name=\"%s\"", xmlEscape(skillName)))
+	b.WriteString(fmt.Sprintf("<skill-loaded name=\"%s\"", xmlEscape(skillName)))
 	if source != "" {
 		b.WriteString(fmt.Sprintf(" source=\"%s\"", xmlEscape(source)))
 	}
@@ -379,7 +378,7 @@ func renderSkillLoadedBlock(skillName, source, dir, args, content string) string
 	if !strings.HasSuffix(content, "\n") {
 		b.WriteString("\n")
 	}
-	b.WriteString("</kimi-skill-loaded>")
+	b.WriteString("</skill-loaded>")
 	return b.String()
 }
 

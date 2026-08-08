@@ -254,7 +254,7 @@ defaultSystemPrompt() → buildSystemPromptParts()
 
 ## 技能体系
 
-- 扫描路径：`~/.agents/skills/` / `<workspace>/.agents/skills/` / `<workspace>/.kimi-code/skills/`
+- 扫描路径：`~/.agents/skills/` / `<workspace>/.agents/skills/` / `<workspace>/.claude/skills/`
 - 默认全部启用，通过 `disabledSkills` 控制禁用
 - 完整技能内容只在 Model 调用 `skill` 工具或用户输入 `/<skillname>` 时加载
 
