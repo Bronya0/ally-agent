@@ -22,7 +22,7 @@ import (
 const remotePythonMarker = "ALLY_REMOTE_RESULT_JSON:"
 
 const remotePythonScript = `
-import base64, json, os, pathlib, re, selectors, shutil, signal, subprocess, sys, tempfile, time, traceback
+import base64, json, os, pathlib, re, selectors, shutil, signal, stat as stat_mod, subprocess, sys, tempfile, time
 from datetime import datetime, timezone
 
 MARKER = "ALLY_REMOTE_RESULT_JSON:"
@@ -98,22 +98,29 @@ def op_list(root, payload):
     include_hidden = bool(payload.get("includeHidden"))
     entries = []
     truncated = False
+    root_str = str(root)
+    start_str = str(start)
     for current, dirs, files in os.walk(start):
-        current_path = pathlib.Path(current)
-        rel_current = current_path.relative_to(start)
-        depth = 0 if str(rel_current) == "." else len(rel_current.parts)
+        # depth = 当前目录相对 start 的深度（用路径分隔符计数，避免 pathlib 开销）
+        if current == start_str:
+            depth = 0
+        else:
+            depth = current[len(start_str):].count(os.sep)
         if depth >= max_depth:
             dirs[:] = []
         dirs[:] = sorted([d for d in dirs if include_hidden or (not d.startswith(".") and not is_heavy_dir(d))])
         names = [(d, True) for d in dirs] + [(f, False) for f in sorted(files) if include_hidden or not f.startswith(".")]
         for name, is_dir in names:
-            abs_path = current_path / name
+            full = os.path.join(current, name)
             try:
-                st = abs_path.stat()
+                st = os.stat(full)
             except OSError:
                 continue
+            # 相对 root 的 posix 路径（字符串处理，避免 pathlib.Path 构造）
+            rel = os.path.relpath(full, root_str)
+            rel_posix = rel.replace(os.sep, "/")
             entries.append({
-                "path": as_posix_rel(root, abs_path),
+                "path": rel_posix,
                 "name": name,
                 "dir": is_dir,
                 "size": 0 if is_dir else st.st_size,
@@ -127,12 +134,13 @@ def op_list(root, payload):
 def op_read(root, payload):
     path = safe_join(root, payload.get("path", ""))
     max_bytes = int(payload.get("maxBytes") or 2097152)
-    if path.is_dir():
-        raise ValueError("path is a directory")
     st = path.stat()
+    if stat_mod.S_ISDIR(st.st_mode):
+        raise ValueError("path is a directory")
     if st.st_size > max_bytes:
         raise ValueError("file is too large: %d bytes" % st.st_size)
-    data = path.read_bytes()
+    with open(str(path), "rb") as f:
+        data = f.read()
     return {"path": as_posix_rel(root, path), "dataBase64": base64.b64encode(data).decode("ascii"), "size": len(data), "mode": st.st_mode & 0o777, "modTime": iso_mtime(st)}
 
 def op_write(root, payload):
@@ -140,12 +148,16 @@ def op_write(root, payload):
     mkdirs = bool(payload.get("mkdirs"))
     overwrite = bool(payload.get("overwrite"))
     original_mode = None
-    if path.exists() and path.is_dir():
-        raise ValueError("path is a directory")
-    if path.exists() and not overwrite:
-        raise FileExistsError("file already exists: " + payload.get("path", ""))
-    if path.exists():
-        original_mode = path.stat().st_mode & 0o7777
+    try:
+        existing_st = path.stat()
+    except FileNotFoundError:
+        existing_st = None
+    if existing_st is not None:
+        if stat_mod.S_ISDIR(existing_st.st_mode):
+            raise ValueError("path is a directory")
+        if not overwrite:
+            raise FileExistsError("file already exists: " + payload.get("path", ""))
+        original_mode = existing_st.st_mode & 0o7777
     parent = path.parent
     if mkdirs:
         parent.mkdir(parents=True, exist_ok=True)
@@ -237,8 +249,15 @@ def op_run(root, payload):
             # stdout 已关闭但进程可能仍在运行（如守护进程关闭了 std fd）。
             # 不能在此 break，否则 poll() 返回 None 会被 JSON 编码为 null，
             # Go 侧 int 字段反序列化 null 得到 0，误报为成功退出。
-            # 短暂 sleep 后继续轮询 proc.poll()，直到进程退出或超时。
-            time.sleep(0.1)
+            # 用 proc.wait 阻塞等待进程退出（OS 级通知，比 sleep 轮询高效），
+            # 至多等到 deadline；超时则回到循环顶部走 timed_out 分支。
+            remain = deadline - time.time()
+            if remain <= 0:
+                continue
+            try:
+                proc.wait(timeout=min(remain, 1.0))
+            except subprocess.TimeoutExpired:
+                pass
         else:
             events = sel.select(timeout=0.1)
             for key, _ in events:
@@ -464,16 +483,29 @@ func (a *App) invokeRemotePython(ctx context.Context, rt remoteTarget, payload m
 		}
 		return fmt.Errorf("ssh %s failed: %s", rt.Host, msg)
 	}
+	// 远程命令的输出会被原样嵌在 ok() 的 JSON output 字段里，如果命令
+	// 恰好输出了 marker 字符串，marker 会同时出现在 JSON 内部。因此不能
+	// 简单用 LastIndex 取最后一个匹配（会命中 JSON 内部），需要从后往前
+	// 逐个尝试：真正 ok() 的 JSON 必然合法，误命中的候选必然解析失败。
 	markerBytes := []byte(remotePythonMarker)
 	stdoutBytes := stdout.Bytes()
-	idx := bytes.LastIndex(stdoutBytes, markerBytes)
-	if idx < 0 {
-		return fmt.Errorf("remote helper returned no JSON result; stderr: %s", strings.TrimSpace(stderr.String()))
-	}
-	line := strings.TrimRight(string(stdoutBytes[idx+len(markerBytes):]), "\r\n")
 	var resp remotePythonResponse
-	if err := json.Unmarshal([]byte(line), &resp); err != nil {
-		return fmt.Errorf("decode remote helper result: %w", err)
+	decoded := false
+	searchFrom := len(stdoutBytes)
+	for {
+		idx := bytes.LastIndex(stdoutBytes[:searchFrom], markerBytes)
+		if idx < 0 {
+			break
+		}
+		candidate := strings.TrimRight(string(stdoutBytes[idx+len(markerBytes):]), "\r\n")
+		if err := json.Unmarshal([]byte(candidate), &resp); err == nil {
+			decoded = true
+			break
+		}
+		searchFrom = idx
+	}
+	if !decoded {
+		return fmt.Errorf("remote helper returned no JSON result; stderr: %s", strings.TrimSpace(stderr.String()))
 	}
 	if !resp.OK {
 		if resp.Error == "" {
