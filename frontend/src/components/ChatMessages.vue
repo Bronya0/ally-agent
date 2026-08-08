@@ -119,7 +119,7 @@
 </template>
 
 <script setup>
-import { onBeforeUnmount, reactive, ref } from 'vue';
+import { onBeforeUnmount, onMounted, reactive, ref } from 'vue';
 import { t } from '../i18n.mjs';
 import MessageAttachments from './MessageAttachments.vue';
 import WelcomeMessage from './WelcomeMessage.vue';
@@ -303,7 +303,29 @@ function scheduleRaf(fn) {
   return id;
 }
 
+let viewportResizeObserver = null;
+
+// 消息区底部一旦被布局挤压（todo 面板出现/展开、输入框自动增高、窗口
+// resize、Tab 从隐藏切回可见），可用高度变小，最新内容会被推到视口之下，
+// 看起来像被遮挡。这类变化不经过任何事件处理器，无法靠逐个补滚动覆盖；
+// 这里统一观察滚动视口的尺寸变化：只要用户仍处于自动跟随状态就重新贴底。
+function ensureViewportResizeObserver() {
+  const viewport = getScrollViewport();
+  if (!viewport || viewportResizeObserver) return;
+  viewportResizeObserver = new ResizeObserver(() => {
+    if (!autoFollow.value || showJumpToBottom.value) return;
+    scrollToBottom();
+  });
+  viewportResizeObserver.observe(viewport);
+}
+
+onMounted(() => {
+  ensureViewportResizeObserver();
+});
+
 onBeforeUnmount(() => {
+  viewportResizeObserver?.disconnect();
+  viewportResizeObserver = null;
   if (scrollRaf) cancelAnimationFrame(scrollRaf);
   for (const id of pendingRafs) cancelAnimationFrame(id);
   pendingRafs.clear();

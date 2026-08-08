@@ -2121,6 +2121,9 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 		for step := 0; step < maxAgentSteps; step++ {
 			select {
 			case <-ctx.Done():
+				// 记录用户主动取消标记，让下一轮模型能区分"用户中断"与
+				// provider 报错等其他原因导致的未完成回合。
+				messages = append(messages, cancelledTurnMarker())
 				emitRunEnd("run:error", map[string]any{"error": "已取消"})
 				return
 			default:
@@ -2224,6 +2227,13 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			})
 			streamDeltas.flush()
 			if err != nil {
+				// 流式输出期间 ESC:provider stream 因 ctx 取消返回 context.Canceled,
+				// 此处与 step 开头的 ctx.Done() 分支等价,同样写入取消标记后返回。
+				if errors.Is(err, context.Canceled) {
+					messages = append(messages, cancelledTurnMarker())
+					emitRunEnd("run:error", map[string]any{"error": "已取消"})
+					return
+				}
 				emitRunEnd("run:error", map[string]any{"error": err.Error()})
 				return
 			}
@@ -2549,6 +2559,17 @@ func isGrillControlMessage(m openai.ChatCompletionMessage) bool {
 
 func isGoalProgressMessage(m openai.ChatCompletionMessage) bool {
 	return m.Role == openai.ChatMessageRoleUser && strings.Contains(m.Content, "<ally-goal-progress>")
+}
+
+// cancelledTurnMarker returns the user-role control message recorded when the
+// user interrupts a run (ESC / stop). It is persisted into the saved history so
+// the next request can distinguish a user-cancelled turn from provider errors;
+// the XML tag marks it as machine-generated status rather than a user utterance.
+func cancelledTurnMarker() openai.ChatCompletionMessage {
+	return openai.ChatCompletionMessage{
+		Role:    openai.ChatMessageRoleUser,
+		Content: "<ally-cancelled>\n上一条提问已被用户取消\n</ally-cancelled>",
+	}
 }
 
 func (a *App) buildSystemContextMessages(sessionID string, cfg ConfigState, allSkills []SkillDefinition) []openai.ChatCompletionMessage {

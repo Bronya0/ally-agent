@@ -2,6 +2,8 @@
 
 This file is read by AI coding agents. Keep it current when the app architecture, tool contracts, prompt pipeline, or UI workflows change.
 
+> 本文件是**指导性文档**：记录"应该如何修改"的规范与边界。当前系统状态（目录结构、模块层级、调用流、数据流）以根目录 `CODEGRAPH.md` 和源码为准；本文件只保留规范类内容，状态描述一律指向 `CODEGRAPH.md` 或具体源文件，避免双源漂移。
+
 ---
 
 ## Build & Run Commands
@@ -22,8 +24,6 @@ git push origin main
 ```
 
 This uses `-c` to override the commit author per-command only, leaving the developer's global Git config unchanged.
-
----
 
 ## Release Process
 
@@ -125,52 +125,7 @@ Connected MCP tools are sorted by server, tool name, and function name before be
 
 ## Backend State
 
-`App` in `app.go` owns the long-lived process state:
-
-- `config`: active `ConfigState`
-- `configPath`: `~/.ally_agent/config.json`
-- `runs`: run ID to cancel function
-- `runSessions`: run ID to session ID, used to reject cleanup of active sessions
-- `histories`: backend model history by session ID
-- `sessionsDir`: local session index and per-session UI snapshots under `~/.ally_agent/sessions/`
-- `sessionMu`: serializes local session index/snapshot file operations
-- `pendingAsks`: blocking main-session questions waiting for frontend submission
-- `disabledSkills`: persisted list of skill names disabled by the user
-- `mcpManager`: active MCP manager
-- `goalStates`: active goal mode state by session
-- `todos`: session-local todo list
-- `todoRevisions`: monotonic todo update revisions emitted with `todo:update`
-- `subRuns`: sub-agent progress records
-- `services`: active background-service records; at most 8 run concurrently, each keeps a rolling 512 KiB buffer, and terminal records are removed immediately
-- `scheduled`: process-local scheduled-task manager; definitions and results are cleared whenever Ally closes or starts
-- `fileOpsMu`: serializes local write/edit/delete operations
-- `gitDiffMu`: serializes/cancels git diff work
-- workspace token/context caches
-- `stats`: 有界非阻塞 Token 统计队列、按天持久化记录和异步刷新器；启动加载文件和记录数有界，关闭时等待队列 drain/flush 完成
-
-`ConfigState` is stored in `~/.ally_agent/config.json` and includes:
-
-- provider fields: `providerName`, `apiFormat`, `baseUrl`, `apiKey`, `apiKeys` (ordered multi-key pool; first entry is highest priority), `model`, `reasoningEffort`
-- runtime fields: `workspace`, `temperature`, `maxTokens`, `contextWindow`
-- window fields: `windowWidth`, `windowHeight` (last window size, restored on launch; zero means first launch opens at 61.8% of the primary screen and the size is persisted on window close / app shutdown)
-- tray fields: `closeToTray` (retained for compatibility; system tray registration and the Settings toggle are disabled in the current release, so closing the window exits)
-- network fields: `proxyMode` (`off`/`system`/`manual`), `proxyUrl`, `proxyNoProxy`
-- prompt fields: `systemPrompt`, `customPrompt`
-- model presets: `models`
-- skill settings: `disabledSkills`
-
-Important config behavior:
-
-- `mergeConfig()` preserves existing config values when overlay fields are zero/empty. `apiKeys` is replaced as a whole when non-nil; a legacy `apiKey`-only overlay replaces the pool with a single key.
-- `apiKey` and `apiKeys` stay in sync: the pool is the source of truth and `apiKey` mirrors its first entry; a legacy config with only `apiKey` is loaded as a single-key pool.
-- Multi-key requests use strict priority failover: the first usable (not cooling down) key is always tried first; on auth/quota errors the key enters a 30min in-memory cooldown, on transient errors a 10s cooldown, then the next key is tried, up to a global attempt cap (`maxMultiKeyAttempts`) that replaces per-key adapter retries. Failover only happens before any stream output is emitted. Cooldown state is process-local and never persisted.
-- `disabledSkills` is normalized and persisted.
-- Skill enable/disable operations update both memory and `config.json`.
-- Frontend `defaultConfig()` also includes `disabledSkills` so saving settings does not erase skill state.
-- `reasoningTag` defaults to `reasoning_content` in both backend and frontend model drafts.
-- `reasoningEffort` defaults to `auto` (send no thinking-strength parameter) in both backend and frontend model drafts; supported levels are `low`/`medium`/`high`/`xhigh`/`max`. `normalizeReasoningEffort()` collapses unknown/stale values back to `auto` so a bad config never injects an unsupported parameter. The OpenAI Chat adapter sends it as top-level `reasoning_effort`, the Responses adapter as `reasoning.effort`, and the Anthropic adapter as `output_config.effort` (without enabling thinking blocks). A recognized selection is sent unchanged by every adapter, including `xhigh` and `max`; provider compatibility errors are surfaced instead of silently changing the user's choice.
-- On Windows, an auto-detected valid Git Bash path is returned in config so Settings can show the executable actually in use.
-- Proxy mode is explicit and fail-closed: `off` ignores inherited proxy variables, `system` detects Windows WinINET fixed proxy settings with environment fallback, and `manual` accepts HTTP/HTTPS/SOCKS5 URLs. PAC URLs are reported but not executed yet.
+`App` 长生命周期状态、`ConfigState` 字段定义、关键配置行为（`mergeConfig` 合并规则、多 key 优先级故障转移、代理 fail-closed、reasoningEffort 归一化）见 `CODEGRAPH.md`「核心数据流」与源码 `app.go` / `prov_model.go`。修改配置行为时以 `mergeConfig()` 与 `normalizeAPIFormat()` / `normalizeReasoningEffort()` 为唯一边界。
 
 ---
 
@@ -188,43 +143,7 @@ Supported API formats:
 
 `normalizeAPIFormat()` accepts common aliases such as `chat`, `responses`, `anthropic`, and `claude_messages`.
 
-### OpenAI Chat Completions
-
-- Uses `github.com/sashabaranov/go-openai`.
-- Sends `max_completion_tokens` by default.
-- Falls back to legacy `max_tokens` if a compatible provider rejects `max_completion_tokens`.
-- Sends `stream_options.include_usage=true`, and retries without `stream_options` if unsupported.
-- Merges streaming tool-call deltas with `mergeToolCallDeltas()`.
-- Reads `ReasoningContent` deltas when providers expose them.
-
-### OpenAI Responses
-
-- Uses `github.com/openai/openai-go/responses`.
-- Converts system messages to `instructions`.
-- Converts chat messages to `ResponseInputItemParam`.
-- Assistant tool calls are converted to `function_call` items with both:
-  - `call_id`: original tool-call ID
-  - `id`: stable `fc_<call_id>` item ID
-- Tool results are converted to `function_call_output` by `call_id`.
-- Streams output text, reasoning summary text, function-call argument deltas, completion usage, failures, and incomplete responses.
-- On the official OpenAI Responses endpoint, exposes the native image-generation tool and streams generated images through `run:image`; custom compatible endpoints do not receive that provider-specific tool.
-- Tool definitions are converted with `ToolParamOfFunction(..., strict=false)` for provider compatibility.
-- Session-backed Responses requests use a session-scoped hashed `prompt_cache_key` for official and custom Responses-compatible endpoints. Official OpenAI `gpt-5.6*` requests additionally use a stable developer `input_text` cache anchor and `prompt_cache_options.mode="explicit"`; those GPT-5.6-specific fields are never sent to custom Responses-compatible endpoints or Chat Completions routes.
-
-### Anthropic Messages
-
-- Uses `github.com/anthropics/anthropic-sdk-go`.
-- Converts system messages to `params.System`.
-- Converts user/assistant messages to Anthropic content blocks.
-- Assistant tool calls become `tool_use` blocks.
-- Consecutive tool-result messages become one user message with `tool_result` blocks.
-- Image attachments are accepted only as valid `data:image/...;base64,...` URLs.
-- Tool schemas are mapped to `ToolInputSchemaParam`; `properties` and `required` are first-class fields, while JSON Schema constraints such as `additionalProperties`, `anyOf`, and `not` are preserved through `ExtraFields`.
-- Stream `stop_reason` values are preserved. `max_tokens`, `refusal`, `pause_turn`, context-window overflow, and unknown reasons stop the run with an explicit error instead of being treated as normal completion.
-- Tool result envelopes with `ok:false` are sent back as Anthropic `tool_result` blocks with `is_error:true`.
-- Anthropic Base URLs ending in `/v1` are normalized because the official SDK appends `/v1/messages`; non-positive Max Tokens default to 8192 for this format.
-- Requests sent to the official Anthropic base URL enable a top-level five-minute prompt-cache breakpoint; custom compatible endpoints do not receive this field.
-- Thinking strength, when the user picks a level, is sent as `output_config.effort` (`low`/`medium`/`high`/`xhigh`/`max`); thinking blocks are deliberately not enabled (adaptive/enabled `thinking` would emit blocks whose signatures must be replayed verbatim in the next tool turn, and `buildAnthropicMessages` cannot do that losslessly yet). On models where adaptive thinking is already the default, effort alone tunes that existing thinking; on older models the parameter may be ignored or rejected, which the user opts into by picking a level.
+各适配器的请求/响应细节（token 参数、tool-call 合并、stop_reason 处理、prompt cache、thinking 参数）见 `prov_model.go` 内注释与 `prov_model_test.go`；修改时保持 `prov_model.go` 为唯一 provider 边界，不得把 provider 特有形状泄漏进 `app.go` 或工具编排层。
 
 ---
 
@@ -236,12 +155,7 @@ Supported API formats:
 
 - builds messages with `buildMessages()`
 - builds static + MCP tools with `buildToolsWithMcp()`
-- streams model output and emits:
-  - `run:start`
-  - `run:llm_wait`
-  - `run:stream` (merged content + reasoning deltas)
-  - tool events
-  - `run:done` / `run:error`
+- streams model output and emits: `run:start`, `run:llm_wait`, `run:stream` (merged content + reasoning deltas), tool events, `run:done` / `run:error`
 - tracks usage with provider-reported usage when available, otherwise estimates
 - executes non-file tool calls concurrently with a semaphore cap of 4
 - rejects mixed tool batches containing `wait`; a valid `wait` batch contains exactly one call
@@ -260,7 +174,9 @@ Tool result channels:
 - drops system messages
 - turns tool calls and tool results into concise assistant summaries
 - converts multi-content messages to text summaries for persistence
-- keeps only the last 40 saved messages
+- trims history by an estimated-token budget at user-message boundaries (see `trimSavedHistory()`), not a fixed message count
+
+中断/取消语义：ESC 或 Stop 取消时 `ctx` 被取消，`runChat` 通过 deferred 检查点保存已完成的工具调用/结果与当前提问（见 `cancelledTurnMarker()`），并在历史中追加 `<ally-cancelled>` user-role 控制标记，让下一轮模型能区分"用户手动中断"与 provider 报错。部分流式输出不保留。
 
 ---
 
@@ -282,18 +198,9 @@ AGENTS/CLAUDE loading:
 2. Workspace-level: `<workspace>/AGENTS.md`, `CLAUDE.md`, `agents.md`, `claude.md`
 3. Files are concatenated with `<!-- From: path -->` headers and deduplicated by absolute path.
 
-Skill metadata:
+Skill metadata: only enabled skills are listed; full skill Markdown is not injected by default; disabled skills are omitted from metadata and cannot be loaded through the `skill` tool.
 
-- Only enabled skills are listed in the system prompt.
-- Full skill Markdown is not injected by default.
-- Disabled skills are omitted from metadata and cannot be loaded through the `skill` tool.
-
-Global memory metadata:
-
-- `~/.ally_agent/memories/` is created on startup.
-- Markdown files under that directory with YAML frontmatter `description` are scanned into a separate "全局记忆索引" system prompt part.
-- The index contains only file paths and descriptions. Full memory content is loaded only through `memory_read`.
-- Durable cross-project knowledge should be created or updated through `memory_write`.
+Global memory metadata: `~/.ally_agent/memories/` is created on startup; files with YAML frontmatter `description` are scanned into a separate "全局记忆索引" system prompt part; the index contains only paths and descriptions, full content is loaded only through `memory_read`; durable cross-project knowledge should be created or updated through `memory_write`.
 
 ---
 
@@ -307,7 +214,7 @@ Global memory metadata:
 - project skills: `<workspace>/.agents/skills/`, `<workspace>/.claude/skills/`
 - built-in skills: embedded into the binary via `go:embed` under `internal/builtin_skills/skills/<name>/SKILL.md`
 
-The `.claude/skills/` paths follow the Agent Skills open standard (agentskills.io) and Claude Code convention, so skills dropped into those directories by other tools are discovered by Ally without changes. The Ally-native path (`.agents/skills`) is scanned first, so on a name conflict the Ally-native skill wins via the `seen`-map dedup; the Claude-convention path is a fallback. Scope precedence overall: project > user > extra > builtin, matching `buildSkillListingMeta`. Built-in skills ship with Ally, require no files on disk, cannot be deleted by the user, and are still subject to `disabledSkills` (can be turned off in Settings → Skills).
+The `.claude/skills/` paths follow the Agent Skills open standard (agentskills.io) and Claude Code convention, so skills dropped into those directories by other tools are discovered by Ally without changes. The Ally-native path (`.agents/skills`) is scanned first, so on a name conflict the Ally-native skill wins via the `seen`-map dedup; the Claude-convention path is a fallback. Scope precedence overall: project > user > extra > builtin, matching `buildSkillListingMeta`. Built-in skills ship with Ally, require no files on disk, cannot be deleted by the user, and are still subject to `disabledSkills`.
 
 Supported layouts:
 
@@ -317,24 +224,22 @@ Supported layouts:
 
 `parseSkillFile()` reads YAML frontmatter fields:
 
-- `name`
-- `description`
-- `type`
+- `name`, `description`, `type`
 - `whenToUse` (Ally-native) or `when_to_use` (Agent Skills open standard / Claude Code) — both accepted, Ally-native spelling wins when both are present
 
-Other Agent Skills fields (`disable-model-invocation`, `user-invocable`, `allowed-tools`, `context`, `paths`, etc.) are ignored — they encode Claude Code-specific behaviors Ally does not implement. If no usable frontmatter is found, the filename or parent directory becomes the skill name.
+Other Agent Skills fields (`disable-model-invocation`, `user-invocable`, `allowed-tools`, `context`, `paths`, etc.) are ignored. If no usable frontmatter is found, the filename or parent directory becomes the skill name.
 
 Built-in skill loading:
 
-- `builtinSkillEntries()` in `internal/app/builtin_skills.go` walks the embedded `skills/` tree exposed by the leaf package `ally-dev/internal/builtin_skills` and returns `SkillDefinition` entries with `Source="builtin"` and `embeddedContent` populated.
+- `builtinSkillEntries()` in `internal/app/builtin_skills.go` walks the embedded `skills/` tree and returns `SkillDefinition` entries with `Source="builtin"` and `embeddedContent` populated.
 - `readSkillContent()` returns `embeddedContent` directly for built-in skills; user/project skills still go through `os.ReadFile`.
 - Adding a built-in skill only requires creating `internal/builtin_skills/skills/<name>/SKILL.md` with YAML frontmatter — no other change is needed.
 
-Currently shipped built-in skills:
+Currently shipped built-in skills (details in each SKILL.md):
 
-- `playwright-cli` — drives a real browser through the `playwright-cli` npm package via `run_command`. On first use it checks for `playwright-cli` on PATH, asks the user before running `npm install -g @playwright/cli@latest`. Browser selection prefers system-installed browsers to avoid extra downloads: `--browser=msedge` on Windows (system Edge), and on macOS/Linux it probes for system Chrome/Edge before falling back to `ask` + `playwright-cli install-browser` chromium. The skill deliberately defers command/parameter details to `playwright-cli --help` and only documents Ally-specific integration conventions and the install/browser-detection workflow.
-- `review` — automatically reviews an explicitly named range, current workspace changes, or the latest relevant commit without asking the user to identify a requirement source. It derives expectations from the latest concrete request first, then uses task text, commit context, related docs, existing behavior, and tests as evidence. Large reviews may use parallel internal checks, but the final report is concise, plain Chinese with each real issue explained by its location, impact, and concrete fix; missing standalone requirements never pause the review.
-- `codegraph` — generates or incrementally updates `CODEGRAPH.md` at the workspace root as an LLM-optimized code graph for downstream AI coding agents. Detects language/build from root config files, walks the module tree with `list_files`, and writes six fixed H2 sections (`Language and Build`, `Module Hierarchy`, `Key Types / Interfaces`, `Call Flow / Data Flow`, `Inter-Module Dependencies`, `Hot Paths / Files to Focus`) using workspace-relative paths and semantic tags. When `CODEGRAPH.md` already exists it updates only changed sections in place via `edit` rather than regenerating from scratch; output is plain-text bullets/indented arrows (no Mermaid/tables), capped at 800 lines, and verified by read-back.
+- `playwright-cli` — drives a real browser through the `playwright-cli` npm package via `run_command`; defers command/parameter details to `playwright-cli --help`.
+- `review` — reviews a named range, current workspace changes, or the latest relevant commit; final report is concise plain Chinese with location/impact/fix per issue.
+- `codegraph` — generates or incrementally updates `CODEGRAPH.md` (six fixed H2 sections, plain-text bullets, capped at 800 lines, in-place section updates via `edit`).
 
 ### Enable/Disable
 
@@ -346,11 +251,7 @@ Skill settings are controlled by `disabledSkills` in `ConfigState`.
 - `ClearSkills()`: disables all currently discovered skills and writes config.
 - `GetActiveSkills()`: returns the currently enabled skill names.
 
-Disabled skills remain visible in Settings but:
-
-- are not injected into the system prompt metadata
-- are not available to the model through the `skill` tool
-- are marked off in the Settings → Skills page
+Disabled skills remain visible in Settings but are not injected into the system prompt metadata, are not available through the `skill` tool, and are marked off in Settings → Skills.
 
 ### Full Skill Loading
 
@@ -367,10 +268,7 @@ The loaded content is wrapped as:
 </skill-loaded>
 ```
 
-Frontend behavior:
-
-- Settings → Skills toggles enable/disable state only; turning a switch on does not inject full skill content into chat.
-- Slash command activation explicitly loads the full skill and starts a model turn with that loaded block.
+Settings → Skills toggles enable/disable only; slash-command activation loads the full skill and starts a model turn with that loaded block.
 
 ---
 
@@ -431,29 +329,21 @@ Accepted read forms:
 
 Text files:
 
-- must be UTF-8-ish text
-- reject binary/NUL content
+- must be UTF-8-ish text; reject binary/NUL content
 - return LF-normalized text with display-only 1-based `N: ` prefixes; omit those prefixes from `oldText`/`newText`, and use the displayed numbers in `lineRange`
 - missing paths and directory targets are silently omitted from the returned `files` array (an ignored-only batch succeeds with an empty array); other partial failures stay in the corresponding file result with `errorCode` when known
 - include metadata: `startLine`, `endLine`, `nextStartLine`, `totalLines`, `truncated`, `truncatedLines`, `truncatedLinesOmitted`, `version`, `lineEnding`; `version` is a 6-character lowercase Crockford Base32 prefix derived from SHA-256 content and is compared case-insensitively
 
-Document files:
-
-- `.docx`, `.pptx`, `.xlsx`, `.pdf`
-- return extracted text
-- are marked non-editable
-- extraction algorithms live in `internal/tools/read` (pure stdlib, no App coupling)
+Document files (`.docx`, `.pptx`, `.xlsx`, `.pdf`) return extracted text and are marked non-editable; extraction algorithms live in `internal/tools/read` (pure stdlib, no App coupling).
 
 Range semantics for model-facing reads:
 
 - omit both `startLine` and `endLine` to read the whole file
-- provide a positive `startLine` without `endLine` to read from that line through the end
-- provide only `endLine` to read lines 1 through that inclusive line
-- provide both positive values for an inclusive range
-- for text files, a negative `startLine` reads the last N lines; its absolute value is limited to 10000 and it must not be combined with `endLine`
-- each displayed text line is capped at 2000 Unicode characters; `truncatedLines` identifies lines shortened by that cap, and `truncatedLinesOmitted` indicates that the bounded line-number list omitted additional entries
-- `truncated` is set both when a hard output limit cut the range (then `nextStartLine` points at the rest) and when individual lines were shortened (then `truncatedLines` identifies them); the model should request another explicit range only when the remaining content is actually needed
-- plain-text range previews count and locate lines with bounded-memory linear scans instead of materializing one string entry per file line, so tiny reads remain safe on million-line files and tail reads use a bounded reverse scan; very long single lines stay UTF-8/budget bounded
+- positive `startLine` without `endLine` reads from that line through the end; only `endLine` reads lines 1 through that inclusive line; both positive values give an inclusive range
+- negative `startLine` reads the last N lines (absolute value limited to 10000) and must not be combined with `endLine`
+- each displayed text line is capped at 2000 Unicode characters; `truncatedLines` identifies lines shortened by that cap, and `truncatedLinesOmitted` indicates the bounded line-number list omitted additional entries
+- `truncated` is set both when a hard output limit cut the range (then `nextStartLine` points at the rest) and when individual lines were shortened; request another explicit range only when the remaining content is actually needed
+- plain-text range previews use bounded-memory linear scans (no per-line materialization), so tiny reads remain safe on million-line files; very long single lines stay UTF-8/budget bounded
 
 The model-facing `edit` tool has one cross-file batch mode with two exclusive source forms: a small exact `oldText` (preferred) or `lineRange` for larger whole-line replacements. Legacy top-level string and line helpers remain backend compatibility APIs and are not exposed to the model.
 
@@ -463,7 +353,7 @@ Edit parameters:
 
 - `files` (1–20 items)
 - each file contains `path`, required `version` from `read`, and 1–50 `changes`
-- each change contains `newText` plus exactly one source: a small exact `oldText` copied from the `read` snapshot for precise replacements, or `lineRange` in inclusive `A-B` form only when replacing a larger whole-line block or when the exact source is impractical to reproduce; optional `replace_all` defaults to `false`, replaces every non-overlapping exact occurrence when used with `oldText`, and is ignored with `lineRange` while a warning is returned; one call permits at most 200 total changes
+- each change contains `newText` plus exactly one source: a small exact `oldText` copied from the `read` snapshot, or `lineRange` in inclusive `A-B` form only when replacing a larger whole-line block or when reproducing the exact source is impractical; optional `replace_all` defaults to `false`, replaces every non-overlapping exact occurrence when used with `oldText`, and is ignored with `lineRange` while a warning is returned; one call permits at most 200 total changes
 
 Important edit contract:
 
@@ -471,7 +361,7 @@ Important edit contract:
 - `version` is mandatory for model-facing local and remote edits. It is a short optimistic-concurrency token; a stale value fails with `E_VERSION_MISMATCH`, and malformed values fail with `E_BAD_VERSION`.
 - Successful edits return the new `version` per file. Reuse it only when the current source is known exactly; otherwise re-read numbered content before another `oldText` or `lineRange` edit.
 - Each change chooses exactly one source: prefer a small, unique, unnumbered `oldText` copied exactly from the original `read` snapshot for precise replacements, including focused multi-line snippets when enough surrounding context makes it unique. Use `lineRange` in inclusive `A-B` form only for larger whole-line replacements or when reproducing the exact source is impractical (for example, an extremely long single line). By default `oldText` must occur exactly once; optional `replace_all: true` replaces every non-overlapping exact occurrence in the original snapshot, while it is ignored with `lineRange` and reported as a warning. All ranges in a file use the original numbered read snapshot and need no offset adjustment for earlier changes. Ambiguous default exact matches return optional structured `details` with at most three raw UTF-8 candidate previews, clipping flags, line ranges, and recovery guidance; the detail JSON is capped at 4 KiB so callers can issue a narrow `read` without receiving the full file.
-- With `lineRange`, `newText` replaces exactly the selected whole lines; lines outside the range stay untouched, so never re-emit a closing brace or other code that sits outside the range — and if the brace is inside the range, `newText` must include it. The classic failure is selecting a function body without its closing `}` while `newText` still ends with `}`, which duplicates the brace.
+- With `lineRange`, `newText` replaces exactly the selected whole lines; lines outside the range stay untouched, so never re-emit a closing brace or other code that sits outside the range — and if the brace is inside the range, `newText` must include it.
 - For a multi-line whole-line block only, exact-match failure may fall back to ignoring leading spaces/tabs on each line. The fallback succeeds only for one unique candidate and safely rebases `newText` to the file's actual base indentation; body text is never fuzzy-matched.
 - Exact changes whose normalized `oldText` and `newText` are identical are ignored and reported as warnings. An all-no-op local batch succeeds without writing the file.
 - Source regions must not overlap. The backend locates all exact snippets and line ranges on the original snapshot, applies them from the end of the file backward, and writes once.
@@ -482,7 +372,7 @@ Important edit contract:
 - `remote_edit` uses `{target, files}` and the same per-file `version`/`changes` contract as local edit.
 - Multiple separate file-mutation tool calls targeting the same normalized local or remote path in one tool-call batch are all rejected with `E_WRITE_BATCH_CONFLICT`; no mutation for that path is executed. Repeated entries within one local `edit` call are instead merged as described above.
 - Built-in file mutations execute in `toolCallIndex` order after non-file tools complete.
-- backend compatibility APIs may continue using SHA-256 and exact-string helpers internally
+- backend compatibility APIs may continue using SHA-256 and exact-string helpers internally.
 
 ---
 
@@ -498,11 +388,7 @@ Config path:
 ~/.ally_agent/mcp.json
 ```
 
-Settings page:
-
-- Settings → MCP edits raw JSON
-- Save reconnects all MCP servers
-- Server status is shown with connected/connecting/failed states
+Settings page: Settings → MCP edits raw JSON; Save reconnects all MCP servers; server status is shown with connected/connecting/failed states.
 
 Manager flow:
 
@@ -521,51 +407,33 @@ MCP status is emitted through `mcp:status`.
 
 The frontend is centered on `frontend/src/App.vue`.
 
-State management:
+State management: Vue 3 `<script setup>` with plain `ref()` / `reactive()`, no Vuex/Pinia. Prompt history stays in `localStorage`; session index and completed UI snapshots are persisted by the backend in local files.
 
-- Vue 3 `<script setup>`
-- plain `ref()` / `reactive()`
-- no Vuex/Pinia
-- prompt history remains in `localStorage`; session index and completed UI snapshots are persisted by the backend in local files
-
-Major UI regions:
-
-- header with controlled Naive UI workspace tabs, running indicators, drag ordering, history dropdown, plan indicator, settings, window controls
-- chat message area backed by one permanently mounted `ChatMessages` instance per open workspace Tab; content panes use `display-directive="show"` so switching only hides panes and preserves native DOM scroll state
-- command menu (`/`)
-- session switcher
-- todo panel
-- composer
-- `ComposerInfoBar`
-- settings modal
+Major UI regions: header (controlled Naive UI workspace tabs, running indicators, drag ordering, history dropdown, plan indicator, settings, window controls), chat message area (one permanently mounted `ChatMessages` instance per open workspace Tab; content panes use `display-directive="show"` so switching only hides panes and preserves native DOM scroll state), command menu (`/`), session switcher, todo panel, composer, `ComposerInfoBar`, settings modal.
 
 Settings pages:
 
-- General: custom prompt, launch-at-login switch (`GetAutostartEnabled`/`SetAutostartEnabled`); the retained close-to-tray setting is currently hidden
+- General: custom prompt, launch-at-login switch; the retained close-to-tray setting is currently hidden
 - Models: provider/model presets and active model selection
 - Skills: enable/disable discovered skills; persisted through `disabledSkills`
 - MCP: raw MCP config editor and server status
 - About: GPLv3 notice, warranty disclaimer, and source repository link
 - Network: proxy off/system/manual selection, fixed system-proxy detection, bypass list, redacted status, and a bounded connection test
 
-The composer task-center button opens `TaskCenterPanel`, whose controlled tabs separate temporary scheduled tasks from managed background services. Cards show bounded previews; full scheduled output and service buffers open in a large scrollable modal. Active service buffers refresh while the modal is open.
-
-The composer statistics button opens `TokenStatsModal`, which queries `GetTokenStats()` on every open and renders dependency-free SVG charts for provider, model, source, workspace, daily/hourly usage, input/output volume, request/session/activity counts, and cache hit rate.
+The composer task-center button opens `TaskCenterPanel` (controlled tabs separate temporary scheduled tasks from managed background services; bounded previews; full output/service buffers open in a large scrollable modal). The composer statistics button opens `TokenStatsModal`, which queries `GetTokenStats()` on every open and renders dependency-free SVG charts.
 
 Runtime events are registered through Wails `Events.On()` and routed by `sessionId` and `runId`.
 
 Frontend-specific rendering:
 
-- MarkdownIt for Markdown
-- highlight.js with the Darcula theme and compact line counts for code blocks
-- Markdown HTTP(S)/mailto links are intercepted and opened through Wails `Browser.OpenURL` instead of navigating the embedded WebView
-- bounded render cache for non-streaming Markdown
-- streaming messages bypass cache
-- Streaming text deltas are batched to roughly 20 FPS so the active Markdown tree is not reparsed and replaced every display frame.
-- Mermaid diagrams render sequentially during browser idle slots only when they approach the viewport. Rendered SVG DOM is unloaded again beyond the viewport retention margin and restored from a bounded 16-entry / 2M-character LRU when available; evicted diagrams rerender on demand. Drag and wheel transforms are coalesced to one animation-frame write, and GPU `will-change` promotion is held only briefly while transforming. Diagrams use a warm Darcula-derived base theme and remain click-activated viewports supporting cursor-centered wheel zoom, pointer dragging, and double-click reset. Escape or a pointer press outside the diagram clears its interaction focus before other Escape actions run.
+- MarkdownIt for Markdown; highlight.js with the Darcula theme and compact line counts for code blocks
+- Markdown HTTP(S)/mailto links are intercepted and opened through Wails `Browser.OpenURL`
+- bounded render cache for non-streaming Markdown; streaming messages bypass cache
+- Streaming text deltas are batched to roughly 20 FPS so the active Markdown tree is not reparsed and replaced every display frame
+- Mermaid diagrams render sequentially during browser idle slots only when they approach the viewport; rendered SVG DOM is unloaded beyond the viewport retention margin and restored from a bounded 16-entry / 2M-character LRU; drag/wheel transforms are coalesced to one animation-frame write, with brief GPU `will-change` promotion; diagrams use a warm Darcula-derived base theme with click-activated viewports (cursor-centered wheel zoom, pointer dragging, double-click reset); Escape or a pointer press outside clears interaction focus
 - `displaySourceMessages` inserts archive placeholders for large histories without mutating true session messages
 - tool card components render read groups, diffs, command output, MCP tools, and sub-agent progress
-- `render_html` keeps the iframe unmounted while arguments stream, then mounts one script-enabled, origin-isolated `srcdoc` iframe after completion. A `postMessage` bridge reports height while CSP blocks external resources.
+- `render_html` keeps the iframe unmounted while arguments stream, then mounts one script-enabled, origin-isolated `srcdoc` iframe after completion; a `postMessage` bridge reports height while CSP blocks external resources
 - `AskToolCard` renders one question per Tab, supports multiple selections and custom answers, and submits all answers together
 
 UI internationalization:
@@ -599,41 +467,15 @@ UI internationalization:
 
 ## Sessions, Context, And Token Accounting
 
-The backend owns the session index at `~/.ally_agent/sessions/index.json` and stores each completed UI snapshot as a separate gzip JSON file under `~/.ally_agent/sessions/<escaped-session-id>.json.gz`. The frontend loads only index metadata at startup and imports snapshots on demand. Sessions owned by open workspace Tabs stay loaded because each Tab has a permanently mounted chat pane; sessions not owned by an open Tab are eligible for release from frontend memory. Only successful `run:done` turns and explicit successful compaction update a snapshot. Failed, cancelled, or still-streaming turns remain process-local and are excluded from later model requests and snapshots. Closing the window waits for queued local-file writes. Legacy `localStorage`/IndexedDB session data is migrated once and then cleared.
+Backend 会话/历史/上下文核算的完整说明（索引与 gzip 快照、前后端历史对齐、`ReleaseSession` vs `DeleteSession`、Token 统计落盘、长渲染优化边界）见 `CODEGRAPH.md`「会话与上下文」与 `biz_sessions.go` / `biz_stats.go`。关键不变式：
 
-Backend model histories are separate process-memory histories keyed by session ID and persisted as gzip-compressed JSON (`~/.ally_agent/histories/<escaped-session-id>.json.gz`). Loading remains compatible with legacy uncompressed `.json` files. On restart, backend history remains the model-context source of truth; frontend history contributes only a detected new tail. Alignment uses the longest overlap between the backend visible-history suffix and a contiguous frontend range, so an older frontend snapshot prefix is not duplicated. When backend compaction intentionally removes textual overlap, only the latest frontend request item is appended. Saved histories are bounded by an estimated-token budget rather than a fixed message count and are trimmed only at user-message boundaries, preserving assistant tool-call/result protocol groups. Failed and cancelled runs do not replace the last completed backend history.
-
-Backend session cleanup distinguishes `ReleaseSession`, which frees in-memory history/goal/todo/context state while preserving the persisted history file, from `DeleteSession`, which also removes both compressed and legacy history files. Frontend explicit deletion uses `DeleteSession`; runtime session eviction uses `ReleaseSession`.
-
-Workspace/session invariants:
-
-- Every workspace Tab owns a valid `sessionId`; creating or selecting a session immediately updates that link, including sessions without a selected workspace.
-- Header and content Tabs share the controlled `activeWorkspaceId`; `Ctrl/Cmd+Left/Right` changes that value, while drag ordering mutates the same `workspaceTabs` array used by both surfaces.
-- Every open Tab keeps an independent `ChatMessages` component and scrollbar mounted under a Naive UI `n-tab-pane` with `display-directive="show"`; switching Tabs must not reintroduce synthetic scroll anchors or unload an open Tab's messages.
-- Selecting a session already owned by another Tab activates that Tab instead of silently rebinding a different Tab.
-- Runtime events with an explicit `sessionId` never fall back to the currently visible session. Terminal events are accepted only when their `runId` still matches the session's current run.
-- `Ctrl/Cmd+Left/Right` workspace navigation is disabled inside inputs, textareas, selects, and contenteditable elements.
-- `CancelRun` cancels the context immediately but retains `runs`/`runSessions` registration until `runChat` actually exits, so session release/deletion cannot race a cancelling run.
-
-Context accounting:
-
-- `GetContextBreakdown()` reports system prompt parts, history, current session, tools, and workspace context.
-- System prompt parts are shown separately in the context popover, including AGENTS.md/project instructions.
-- Global memory index is shown as its own system prompt part in the context popover.
-- Workspace token usage accumulates provider-reported usage when available, with estimates as fallback.
-- Historical token statistics retain 90 local days under `~/.ally_agent/stats/`; a bounded non-blocking queue keeps recording and persistence off the chat hot path, startup loading enforces file/record/value limits, and shutdown waits for the final flush before Wails exits. `GetTokenStats()` aggregates provider/model/source/workspace/day/hour/cache/session dimensions from an in-memory snapshot.
-
-Long-render optimization:
-
-- Frontend may archive visible old messages for rendering performance.
-- Visual archiving does not mutate `session.messages`; completed sessions are separately pruned by the runtime retention limits below.
-- Backend context construction receives the retained conversation history, capped by `MAX_MODEL_HISTORY_MESSAGES`.
-- Normal rendering is bounded to 180 displayable message/tool cards; expanded archives are still bounded to 360 cards rather than mounting the full conversation. The archive trigger uses card count only.
-- Completed frontend sessions retain the latest 400 conversation messages and 260 renderable messages in memory, with at most 200 unpinned sessions. Running, active, and workspace-linked sessions are protected from session eviction.
-- Backend UI snapshots retain the same bounded 400 conversation / 260 renderable window used by runtime archiving; large tool previews, edit arguments, attachment payloads, and Diffs are stripped or individually truncated before gzip JSON serialization. The frontend keeps only active, running, and workspace-linked session messages in memory.
-- Media previews use revocable Blob URLs. Images render from a bounded thumbnail while the original Base64 payload is retained only when it is eligible for model input.
-- Diff rendering uses exact LCS only below a fixed matrix budget. Larger replacements use a linear-memory prefix/suffix fallback, and multi-file edit cards stay collapsed until explicitly expanded.
-- Workspace history is normalized and deduplicated, retains the latest 30 paths, and is displayed in a fixed-height scrollable dropdown.
+- 每个工作区 Tab 持有有效 `sessionId`；创建或切换会话立即更新该链接。
+- Header 与内容区 Tabs 共享受控 `activeWorkspaceId`；`Ctrl/Cmd+Left/Right` 切换，拖拽排序操作同一 `workspaceTabs` 数组。
+- 每个打开的 Tab 常驻一个 `ChatMessages` + `n-tab-pane`（`display-directive="show"`）；切换不得卸载已打开 Tab 的消息或引入合成滚动锚点。
+- 选择已被其他 Tab 持有的会话时激活该 Tab，而不是静默重绑不同 Tab。
+- 带显式 `sessionId` 的运行时事件绝不回退到当前可见会话；终止事件仅在 `runId` 仍匹配该会话当前 run 时接受。
+- 输入框/文本域/下拉/可编辑元素内禁用 `Ctrl/Cmd+Left/Right` 工作区导航。
+- `CancelRun` 立即取消 context，但保留 `runs`/`runSessions` 注册直到 `runChat` 实际退出，避免会话释放/删除与取消中的 run 竞态。
 
 ---
 
@@ -645,12 +487,7 @@ Sub-agents receive connected MCP tools and share the manager's invalid-session r
 
 Completed sub-agent records release their cancel function, keep at most 100 tool events each, and are globally pruned to the latest 50 completed records. Running records are never pruned.
 
-Sub-agent UI:
-
-- backend emits `sub:*` events
-- `sub:spawn` includes the parent tool-call identity so the frontend upgrades the original `subagent` card in place
-- `tool:result` / `tool:error` finalize that same inline sub-agent card instead of appending raw JSON result cards
-- frontend displays a lightweight inline sub-agent progress row
+Sub-agent UI: backend emits `sub:*` events; `sub:spawn` includes the parent tool-call identity so the frontend upgrades the original `subagent` card in place; `tool:result` / `tool:error` finalize that same inline sub-agent card; frontend displays a lightweight inline sub-agent progress row.
 
 Goal mode:
 
@@ -725,9 +562,7 @@ Example MCP config:
 - On Windows, `run_command` and `background_process` prefer **bash** from Git for Windows over PowerShell. Detection order: a validated `gitBashPath` setting (manual override) → Git for Windows common install paths → derive Git Bash from `git.exe` on `PATH` → a `bash.exe` on `PATH` only when it belongs to the same Git for Windows installation → fallback to PowerShell (`pwsh.exe` → `powershell.exe`). Arbitrary `bash.exe` launchers such as `C:\Windows\System32\bash.exe` (legacy WSL) are rejected because their Linux PATH and argument forwarding break Windows tool discovery and shell expansion. When Git Bash is not detected, startup warns the user to set `gitBashPath` in Settings. The system prompt dynamically reflects which shell is active so the model generates correct syntax. Linux/macOS always use `bash -c` and ignore `gitBashPath`.
 - On macOS/Linux, `infra_shell_env.go` probes the user's login shell once (`$SHELL -l -c /usr/bin/env`, with an OS-account shell fallback), appends only missing absolute `PATH` entries to the inherited environment, and shares that environment with `run_command` and `background_process`. Probe failures leave the original environment unchanged; other profile variables such as `GOPATH` and `NVM_DIR` are not imported.
 - When bash is active on Windows, safety checks detect both Windows-style (`C:\...`) and MSYS2-style (`/c/...`) absolute paths outside the workspace.
-- Tool output is capped by `maxToolOutput`.
-- HTTP tools use bounded response sizes, timeouts, redirect limits, and clear user agent defaults.
-- macOS/Linux command subprocesses use the one-time login-shell `PATH` enrichment from `internal/app/infra_shell_env.go`; actual commands remain non-interactive `bash -c` invocations.
+- Tool output is capped by `maxToolOutput`; HTTP tools use bounded response sizes, timeouts, redirect limits, and clear user agent defaults.
 - API keys are stored in the OS user config directory without encryption.
 - MCP servers are spawned as subprocesses from user-controlled config.
 
@@ -789,34 +624,6 @@ These rules are required for future changes. They exist to keep Agent behavior d
 
 ---
 
-## Current Architectural Notes
-
-- `prov_model.go` is the provider boundary; avoid leaking provider-specific request shapes into Agent orchestration.
-- `app.go` owns Agent orchestration and long-lived state, but must not import Wails runtime. Desktop lifecycle/dialog/window behavior belongs in `host_desktop.go`; all UI event publication goes through `eventSink` in `host_events.go`.
-- Modify each cross-layer contract at its unique boundary: edit normalization in `orch_edit_plan.go`, pure edit algorithms in `internal/tools/edit`, tool-batch policy in `orch_batch_policy.go`, app-owned edit execution in `orch_edit.go`, workspace path resolution in `internal/tools/pathutil`, result envelopes/compaction in `infra_result.go`, and stream throttling in `infra_stream.go`.
-- Tool implementations are split: pure algorithms live in `internal/tools/<name>/` (no `*App` receiver, no ConfigState dependency), while app-owned orchestration (workspace resolution, serialization guards, event sinks, lifecycle) stays in `internal/app/<name>.go` as thin wrappers that inject `*App` as the host-neutral `Runtime`. The app package keeps package-level lowercase wrappers (e.g. `safeJoin`, `workspaceRoot`, `insideRoot`) that delegate to pathutil so existing call sites stay unchanged; do not duplicate these helpers elsewhere.
-- `chatTools()` is the source of truth for built-in LLM-facing schemas; `executeTool()` remains the dispatch and strict JSON decoding boundary.
-- The model-facing `background_process` tool supports four actions: `start` (returns immediately with the service id, no readiness wait), `stop` (terminate by id), `list` (metadata for all tracked services, no output tails), and `read` (bounded tail of one service's output, default 8 KiB, max 32 KiB). This lets agents run frontend/backend dev processes without blocking the agent loop and inspect their output on demand without overloading the model context. `StartService`, `StopService`, and `ListServices` remain available as Wails/backend APIs for the Task Center UI.
-- Background-process state contains active processes only. Records are removed after `cmd.Wait()` completes, and the backend rejects starts beyond the 8-process active limit.
-- The model-facing `wait` tool is for short, concrete asynchronous delays only. It is limited to 3600 seconds, disabled in grill mode, and displayed in the UI with a local countdown.
-- Grill mode is session-local and request-scoped through `ChatRequest.grillMode`. The backend enforces an `ask`-only interview protocol: plain-text questions are retried, while a marked no-questions-left summary ends the mode and returns the session to YOLO. Side-effectful and MCP tools remain filtered and execution-guarded. Users may switch from an active Grill ask back to YOLO, which cancels the pending run.
-- The composer footer owns a two-option run-mode switch: YOLO is the default execution mode and GRILL is the session-local interview mode. Its model picker groups presets by normalized provider, sorts providers and model IDs naturally, and opens with the active provider expanded while other groups remain collapsible.
-- `render_html` completion updates the original tool card with one sandboxed iframe rather than appending a second result card.
-- `web_fetch` keeps the default readable-page payload intact for model context. HTTP/web results use a larger dedicated model cap and include explicit reduction metadata only when that cap is exceeded.
-- The scheduled-task drawer is opened from `ComposerInfoBar`, displays full task state and latest output, and supports manual deletion/cancellation. Model-facing `scheduled_task.list` returns bounded metadata without stored output and must not be polled.
-- `compactToolResultForModel()` is the source of truth for model-side tool-result reduction.
-- `read` is the model-facing local read tool; `read_file` and the legacy `batch_read` alias may exist for backend compatibility but should not be exposed to the model as primary names.
-- Skills are default-enabled metadata only; disabled skills persist through `disabledSkills`.
-- Full skill Markdown is loaded only by explicit user slash command or enabled `skill` tool call.
-- Settings → Skills manages enable/disable state and does not inject full skill content.
-- Settings → MCP manages raw MCP JSON and reconnects servers.
-- Settings → Models owns provider presets and the current active provider/model. Known provider/model quick setup is generated from `docs/model_api.json` into a compact, lazily loaded frontend catalog; only Ally-compatible text-output models with tool calling are included, while custom configuration remains available. Model presets can be exported as unencrypted JSON (including API keys) and incrementally imported; normalized `providerName + model` is the identity, matching entries are replaced, and unrelated presets are retained.
-- The model editor's connection test sends one isolated minimal request using the unsaved form values; it does not mutate or persist the active configuration.
-- macOS self-update relaunches through a detached argv/pipe helper instead of shell interpolation and retains the previous `.app.bak` through a startup grace period.
-- The context popover should keep system prompt parts separate, especially AGENTS.md/project instructions.
-
----
-
 ## Wails Event Emission Map
 
 后端模块只调用 `App.emit()`；该方法与 `eventSink` 位于 `host_events.go`，Wails v3 适配器（`wailsEventSink`）再调用 `app.Event.Emit`。Wails 启动、窗口和系统对话框位于 `host_desktop.go`。前端在 `App.vue` 的 `bindRuntimeEvents()` 中通过 `Events.On()` 统一注册，`runtimeEventOffs` 跟踪卸载。Agent/runtime 模块不得直接调用 Wails 事件 API。
@@ -830,22 +637,15 @@ These rules are required for future changes. They exist to keep Agent behavior d
 
 ### 生命周期事件（天然低频，无需节流）
 
-**Chat loop (`app.go` `runChat`)**：
-- `run:start` / `run:llm_wait` / `run:done` / `run:error` — 每轮 1 次
-- `run:compact` / `run:compacted` — 压缩时
-- `run:image` — 图片 delta
-- `tool:result` / `tool:error` — 每个工具调用 1 次 (`app.go`)
-- `tokens:update` — `recordWorkspaceTokenUsage` 每个 LLM step 1 次 (`app.go`)
-- `token stats`: 每个主 Agent / 子 Agent LLM step 投递一次，后台异步落盘到 `~/.ally_agent/stats/<date>.json`
-- `tokens:reset` — `ResetWorkspaceTokenUsage` (`app.go`)
+**Chat loop (`app.go` `runChat`)**：`run:start` / `run:llm_wait` / `run:done` / `run:error`（每轮 1 次）、`run:compact` / `run:compacted`（压缩时）、`run:image`（图片 delta）、`tool:result` / `tool:error`（每工具调用 1 次）、`tokens:update`（每 LLM step 1 次）、`tokens:reset`（`ResetWorkspaceTokenUsage`）
 
 **Ask (`app.go`)**：`ask:ready` / `ask:closed` — 每次 ask 1 次
 
-**Goal (`app.go`)**：`goal:update` — `recordGoalTurn` / `updateGoal` 每轮 1 次
+**Goal (`app.go`)**：`goal:update` — 每轮 1 次
 
-**Todo (`app.go`)**：`todo:update` — `emitTodoUpdate` 写入时
+**Todo (`app.go`)**：`todo:update` — 写入时
 
-**MCP (`app.go`)**：`mcp:status` — 服务器状态变更时（一次发全部 server 状态）
+**MCP (`app.go`)**：`mcp:status` — 服务器状态变更时（一次发全部状态）
 
 **Dependencies/Config (`app.go`)**：`dependency:missing` / `config:warning` — 罕见，前端按 tool 去重
 
@@ -856,6 +656,7 @@ These rules are required for future changes. They exist to keep Agent behavior d
 ### 子代理 / 调度任务路径
 
 `app.go` `executeDelegate` 调用 `streamModelResponse(ctx, cfg, model, messages, tools, nil)` —— **传入 `nil` onEvent**，子代理和调度任务不发任何 `run:stream` / `tool:update` 流式事件。只发 step 级事件：
+
 - `sub:spawn` / `sub:done` / `sub:error` — 生命周期
 - `sub:tool:start` / `sub:tool:result` / `sub:tool:error` — 每工具调用 1 次
 - `sub:step` — 每 LLM step 1 次
@@ -868,8 +669,8 @@ lowercase + 冒号分隔，如 `run:stream`、`tool:result`、`mcp:status`、`su
 
 ## Performance And Memory Notes (Ally-specific)
 
-- `tool:update` 事件在 `toolCallProgressTracker.eventsWithForce` (`app.go`) 中带 `toolUpdateThrottle = 200ms` + `toolUpdateThreshold = 2048` 字节节流。累计 `arguments` 超过阈值且仍在窗口内时早 continue，跳过 O(len(args)) 的 state 构造。`forceEvents()` 在流结束后绕过节流，保证最终参数状态送达。`run_command` 执行时复用同一事件，以约 120ms 间隔发送有变化的累计 stdout/stderr，并在命令结束前发送最终输出快照；前端固定高度展示并跟随末尾。测试见 `TestToolCallProgressTrackerThrottlesLargeUpdates`。
-- 前端 `App.vue` 用 `toolUpdateBuffers` Map + `setTimeout(120ms) → requestAnimationFrame` 批量 flush `tool:update`，并在 `tool:result` / `tool:error` / `run:done` / `run:error` / `run:cancelled` 处理前显式 `flushToolUpdateBuffer()`。`streamBuffers` 走同样的 `queueStreamDelta` 模式处理 `run:stream`。
+- `tool:update` 事件在 `toolCallProgressTracker.eventsWithForce` 中带 `toolUpdateThrottle = 200ms` + `toolUpdateThreshold = 2048` 字节节流；`forceEvents()` 在流结束后绕过节流。`run_command` 执行时以约 120ms 间隔发送有变化的累计 stdout/stderr，并在命令结束前发送最终输出快照。测试见 `TestToolCallProgressTrackerThrottlesLargeUpdates`。
+- 前端 `App.vue` 用 `toolUpdateBuffers` Map + `setTimeout(120ms) → requestAnimationFrame` 批量 flush `tool:update`，并在终端事件处理前显式 `flushToolUpdateBuffer()`；`streamBuffers` 走同样的 `queueStreamDelta` 模式处理 `run:stream`。
 - 单 session `localStorage` 预算 240KB，大 tool 预览 / edit 参数 / 附件 Base64 / Diff 在序列化前剥除或截断。
 - 前端 Mermaid SVG DOM 视口外卸载，16 条 / 2M 字符 LRU；`render_html` 流式期间不挂载 iframe，完成后再挂一个 sandboxed iframe。
 - `run_command` / `background_process` 后端 rolling buffer 512KB / 进程，最多 8 个活动进程；服务停止或退出后立即清理记录。

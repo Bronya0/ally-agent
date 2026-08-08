@@ -2814,6 +2814,10 @@ function flushStreamBuffer(runId) {
   }
   last.streaming = true;
   const hadContent = !!buffer.content;
+  // The first reasoning delta inserts the "Thinking" label into the message
+  // list, so it is visible growth too. Later pure reasoning deltas only bump
+  // the token counter without changing layout height.
+  const reasoningStarts = buffer.reasoningLen > 0 && !last.reasoningStartedAt;
   if (buffer.reasoningLen > 0) {
     // Only track a running char count for the "Thinking · N tokens" indicator.
     // The reasoning body itself is never stored — it is too large to be useful
@@ -2829,10 +2833,10 @@ function flushStreamBuffer(runId) {
     }
     last.content += buffer.content;
   }
-  // Only auto-scroll when there is actual content output. Pure reasoning
-  // deltas do not grow the visible message body, so scrolling on every
-  // reasoning flush wastes a layout pass.
-  if (hadContent && session.id === activeSessionId.value) {
+  // Auto-scroll on visible growth: the first reasoning delta or a content
+  // delta. Pure reasoning deltas do not grow the visible message body, so
+  // scrolling on every reasoning flush wastes a layout pass.
+  if (session.id === activeSessionId.value && (hadContent || reasoningStarts)) {
     scrollMessagesToBottom();
   }
 }
@@ -3366,6 +3370,10 @@ function bindRuntimeEvents() {
         }
       } catch (_) { /* ignore */ }
     }
+    // 详情已写入卡片（status/body/diff 等）。flushToolUpdateBuffer 的
+    // alignToLastToolCard 只保证卡片头部可见，详情可能仍在折叠线下，
+    // 这里滚动到容器真实底部让最新结果完整露出。
+    if (session.id === activeSessionId.value) scrollMessagesToBottom();
   });
   onRuntimeEvent('tool:error', (data) => {
     flushStreamBuffer(data.runId);
@@ -3408,6 +3416,8 @@ function bindRuntimeEvents() {
       if (data.mcpTool) existing.mcpTool = data.mcpTool;
       existing.time = new Date().toLocaleTimeString();
     }
+    // 错误详情已写入卡片，滚动到可见区域。
+    if (session.id === activeSessionId.value) scrollMessagesToBottom();
   });
   onRuntimeEvent('run:done', (data) => {
     flushStreamBuffer(data.runId);
