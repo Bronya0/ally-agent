@@ -160,6 +160,15 @@
           <span>{{ $t('composer.context.output') }}</span>
           <span>{{ workspaceOutputTokens }}</span>
         </div>
+        <div class="context-breakdown-footer">
+          <button
+            type="button"
+            class="context-compact-btn"
+            :disabled="running"
+            :title="running ? $t('app.compact.wait') : $t('composer.context.compact')"
+            @click.stop="onCompactClick"
+          >{{ $t('composer.context.compact') }}</button>
+        </div>
       </div>
     </n-popover>
     <span v-else-if="!footerStatsLoading" class="info-context">
@@ -266,7 +275,7 @@ const props = defineProps({
   fmtK: { type: Function, required: true },
 });
 
-const emit = defineEmits(['switchModel', 'openConfig', 'openGitDiff', 'openWorkspace', 'changeReasoningEffort', 'openTaskCenter', 'newSession', 'showSessions', 'addExtraRoot', 'removeExtraRoot']);
+const emit = defineEmits(['switchModel', 'openConfig', 'openGitDiff', 'openWorkspace', 'changeReasoningEffort', 'openTaskCenter', 'newSession', 'showSessions', 'addExtraRoot', 'removeExtraRoot', 'compactContext']);
 
 const contextPopoverVisible = ref(false);
 const currentModelLabel = computed(() => `${props.config.providerName || '-'} · ${props.config.model || '-'}`);
@@ -385,6 +394,11 @@ function modelMenuProps() {
 
 function onReasoningEffortSelect(key) {
   emit('changeReasoningEffort', key);
+}
+
+function onCompactClick() {
+  contextPopoverVisible.value = false;
+  emit('compactContext');
 }
 
 function providerLabel(model) {

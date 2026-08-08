@@ -1226,6 +1226,36 @@ code, pre {
   color: #d4d4d4;
 }
 
+.context-breakdown-footer {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  display: flex;
+  justify-content: center;
+}
+
+.context-compact-btn {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 6px;
+  color: #a3a3a3;
+  font-size: 12px;
+  line-height: 1.6;
+  padding: 2px 14px;
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+.context-compact-btn:hover:not(:disabled) {
+  color: #ffffff;
+  border-color: rgba(255, 255, 255, 0.4);
+}
+
+.context-compact-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 /* ── Model menu popover ── */
 
 .model-menu .model-menu-group {

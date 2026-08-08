@@ -75,6 +75,17 @@
                 v-model:value="draft.userAgent"
                 :placeholder="$t('settings.userAgentPlaceholder')"
               />
+              <div class="user-agent-presets">
+                <span class="user-agent-presets-label">{{ $t('settings.userAgentPresets') }}</span>
+                <button
+                  v-for="ua in userAgentPresets"
+                  :key="ua"
+                  type="button"
+                  class="user-agent-preset-chip"
+                  :title="ua"
+                  @click="draft.userAgent = ua"
+                >{{ userAgentPresetLabel(ua) }}</button>
+              </div>
               <span class="settings-field-hint">{{ $t('settings.userAgentHint') }}</span>
             </div>
           </n-form-item>
@@ -85,9 +96,24 @@
                 :min="0"
                 :max="10"
                 :step="1"
-                style="width: 100%"
+                style="width: 140px"
               />
               <span class="settings-field-hint">{{ $t('settings.llmRetriesHint') }}</span>
+            </div>
+          </n-form-item>
+          <n-form-item :label="$t('settings.compactThreshold')">
+            <div class="settings-field-stack">
+              <n-input-number
+                v-model:value="draft.compactThreshold"
+                :min="0.2"
+                :max="0.95"
+                :step="0.05"
+                :precision="2"
+                :formatter="v => `${Math.round((Number(v) || 0) * 100)}%`"
+                :parser="s => Number(String(s).replace('%', '').trim()) / 100"
+                style="width: 140px"
+              />
+              <span class="settings-field-hint">{{ $t('settings.compactThresholdHint') }}</span>
             </div>
           </n-form-item>
           <n-form-item v-if="isWindows" :label="$t('settings.autoUpdate')">
@@ -147,16 +173,16 @@
           </n-form-item>
           <n-form-item :label="$t('settings.backgroundOpacity')">
             <div class="settings-field-stack">
-              <div class="background-opacity-row">
-                <n-slider
-                  v-model:value="draft.backgroundOpacity"
-                  :min="0"
-                  :max="1"
-                  :step="0.05"
-                  :marks="backgroundOpacityMarks"
-                />
-                <span class="background-opacity-value">{{ Math.round((draft.backgroundOpacity || 0) * 100) }}%</span>
-              </div>
+              <n-input-number
+                v-model:value="draft.backgroundOpacity"
+                :min="0"
+                :max="1"
+                :step="0.05"
+                :precision="2"
+                :formatter="v => `${Math.round((Number(v) || 0) * 100)}%`"
+                :parser="s => Number(String(s).replace('%', '').trim()) / 100"
+                style="width: 140px"
+              />
               <span class="settings-field-hint">{{ $t('settings.backgroundOpacityHint') }}</span>
             </div>
           </n-form-item>
@@ -393,6 +419,7 @@
           <div class="license-notice">
             <div class="license-notice-title">GNU General Public License v3.0 only</div>
             <p>{{ $t('settings.licenseFreedom') }}</p>
+            <p class="license-copyleft">{{ $t('settings.licenseCopyleft') }}</p>
             <p>{{ $t('settings.licenseWarranty') }}</p>
             <p>{{ $t('settings.licenseSource') }}</p>
             <n-button secondary @click="openSourceRepository">{{ $t('settings.sourceLicense') }}</n-button>
@@ -678,12 +705,18 @@ const proxyModeOptions = computed(() => [
 // also emit background-changed to let App.vue refresh the data URL live.
 const backgroundSelecting = ref(false);
 const backgroundClearing = ref(false);
-const backgroundOpacityMarks = {
-  0: '0%',
-  0.15: '15%',
-  0.5: '50%',
-  1: '100%',
-};
+
+// User-Agent presets: click a chip to fill the input above. Kept short for
+// the chip label; the full string is shown in the tooltip.
+const userAgentPresets = [
+  'codex_cli_rs/0.76.0 (Debian 13.0.0; x86_64) WindowsTerminal',
+  'claude-cli/2.1.161 (external, cli)',
+];
+function userAgentPresetLabel(ua) {
+  // Show the leading product token (everything before the first space or /).
+  const m = String(ua || '').match(/^([^\s/]+)/);
+  return m ? m[1] : ua;
+}
 
 async function selectBackground() {
   backgroundSelecting.value = true;
@@ -1513,6 +1546,17 @@ watch(() => props.visible, (visible) => {
   font-weight: 650;
 }
 
+.license-copyleft {
+  margin: 8px 0;
+  padding: 8px 12px;
+  border-left: 3px solid #d8a657;
+  background: rgba(216, 166, 87, 0.08);
+  border-radius: 0 4px 4px 0;
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
 .about-update-check {
   display: flex;
   align-items: center;
@@ -1587,6 +1631,34 @@ watch(() => props.visible, (visible) => {
   line-height: 1.45;
 }
 
+.user-agent-presets {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+.user-agent-presets-label {
+  color: #777;
+  font-size: 11px;
+}
+.user-agent-preset-chip {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+  color: #b0b0b0;
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.user-agent-preset-chip:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #e0e0e0;
+  border-color: rgba(255, 255, 255, 0.25);
+}
+
 .background-image-row {
   display: flex;
   align-items: center;
@@ -1597,25 +1669,6 @@ watch(() => props.visible, (visible) => {
 .background-image-status {
   font-size: 12px;
   color: #8a8a8a;
-}
-
-.background-opacity-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  width: 100%;
-}
-
-.background-opacity-row .n-slider {
-  flex: 1;
-  min-width: 0;
-}
-
-.background-opacity-value {
-  font-size: 12px;
-  color: #8a8a8a;
-  min-width: 36px;
-  text-align: right;
 }
 
 .model-import-input {

@@ -138,22 +138,32 @@
                   <span class="composer-retry-text">{{ $t('app.run.retryBanner', { attempt: retryBanner.attempt, max: retryBanner.maxAttempts, error: retryBanner.error }) }}</span>
                   <span v-if="retryBanner.totalKeys > 1" class="composer-retry-key">{{ $t('app.run.retryKey', { key: retryBanner.keyIndex + 1, total: retryBanner.totalKeys }) }}</span>
                 </div>
-                <div v-if="activeSessionRunning || activeGoal" class="composer-run-status">
-                  <span v-if="activeSessionRunning" class="composer-run-status-dots" aria-hidden="true">
-                    <span class="composer-run-status-dot"></span>
-                    <span class="composer-run-status-dot"></span>
-                    <span class="composer-run-status-dot"></span>
-                  </span>
-                  <span
-                    v-if="activeSessionRunning && latestUserPromptSummary"
-                    class="composer-run-prompt"
-                    :title="latestUserPromptSummary"
-                  >{{ latestUserPromptSummary }}</span>
-                  <span v-if="activeGoal" class="composer-goal-status" :title="activeGoal.objective || ''">
-                    <span class="composer-goal-label">{{ $t('tools.kind.goal') }}</span>
-                    <span class="composer-goal-objective">{{ activeGoal.objective }}</span>
-                    <span v-if="activeGoal.maxTurns" class="composer-goal-progress">{{ activeGoal.turnsUsed || 0 }}/{{ activeGoal.maxTurns }}</span>
-                  </span>
+                <div v-if="activeSessionRunning || activeGoal || compactLoadingActive" class="composer-run-status">
+                  <template v-if="compactLoadingActive">
+                    <span class="composer-run-status-dots" aria-hidden="true">
+                      <span class="composer-run-status-dot"></span>
+                      <span class="composer-run-status-dot"></span>
+                      <span class="composer-run-status-dot"></span>
+                    </span>
+                    <span class="composer-run-prompt">{{ $t('app.compact.compacting') }}</span>
+                  </template>
+                  <template v-else>
+                    <span v-if="activeSessionRunning" class="composer-run-status-dots" aria-hidden="true">
+                      <span class="composer-run-status-dot"></span>
+                      <span class="composer-run-status-dot"></span>
+                      <span class="composer-run-status-dot"></span>
+                    </span>
+                    <span
+                      v-if="activeSessionRunning && latestUserPromptSummary"
+                      class="composer-run-prompt"
+                      :title="latestUserPromptSummary"
+                    >{{ latestUserPromptSummary }}</span>
+                    <span v-if="activeGoal" class="composer-goal-status" :title="activeGoal.objective || ''">
+                      <span class="composer-goal-label">{{ $t('tools.kind.goal') }}</span>
+                      <span class="composer-goal-objective">{{ activeGoal.objective }}</span>
+                      <span v-if="activeGoal.maxTurns" class="composer-goal-progress">{{ activeGoal.turnsUsed || 0 }}/{{ activeGoal.maxTurns }}</span>
+                    </span>
+                  </template>
                 </div>
                 <n-input
                   ref="promptInputRef"
@@ -208,6 +218,7 @@
                   @open-task-center="openTaskCenter"
                   @new-session="createNewSession"
                   @show-sessions="showSessionList"
+                  @compact-context="handleCompactCommand"
                   :get-session-messages="() => activeMessages"
                   :session-title="activeSession?.title || ''"
                 />
@@ -3399,6 +3410,7 @@ function bindRuntimeEvents() {
   onRuntimeEvent('run:done', (data) => {
     flushStreamBuffer(data.runId);
     flushToolUpdateBuffer();
+    closeCompactLoading();
     if (retryBanner.value) {
       const session = sessionByTerminalEvent(data);
       if (session && session.id === activeSessionId.value) retryBanner.value = null;
@@ -3436,6 +3448,7 @@ function bindRuntimeEvents() {
   onRuntimeEvent('run:error', (data) => {
     flushStreamBuffer(data.runId);
     flushToolUpdateBuffer();
+    closeCompactLoading();
     if (retryBanner.value) {
       const session = sessionByTerminalEvent(data);
       if (session && session.id === activeSessionId.value) retryBanner.value = null;
@@ -3508,18 +3521,29 @@ function bindRuntimeEvents() {
     // 后台 Tab 的会话被取消前可能已修改工作区文件，Git 统计同样要刷新。
     if (String(session.workspace || '') === String(config.workspace || '')) refreshGitStatus();
   });
-  // Auto-compaction notification: backend emits run:compacted after an
-  // automatic history compression. Surface it to the user so the sudden
-  // drop in the footer token counter is no longer mysterious.
+  // Auto-compaction: backend emits run:compact before the blocking summary
+  // request and run:compacted after it. Show a loading spinner during the
+  // compaction, then surface the token delta so the sudden drop in the
+  // footer token counter is no longer mysterious.
+  onRuntimeEvent('run:compact', (data) => {
+    if (data?.sessionId && data.sessionId === activeSessionId.value && !compactLoadingActive.value) {
+      compactLoadingActive.value = true;
+    }
+  });
   onRuntimeEvent('run:compacted', (data) => {
+    closeCompactLoading();
     const sid = data?.sessionId || '';
     if (!sid) return;
+    if (data?.error) {
+      if (sid === activeSessionId.value) message.warning(t('app.compact.failed', { error: data.error }));
+      return;
+    }
     const before = Number(data?.tokensBefore || 0);
     const after = Number(data?.tokensAfter || 0);
-    if (after > 0 && before > after) {
-      message.info(t('app.compact.autoToast', { before: fmtK(before), after: fmtK(after) }));
-    }
     if (sid === activeSessionId.value) {
+      if (after > 0 && before > after) {
+        message.info(t('app.compact.autoToast', { before: fmtK(before), after: fmtK(after) }));
+      }
       refreshContextTokens(sid);
     }
   });
@@ -5972,16 +5996,26 @@ function handlePushCommand() {
     });
 }
 
+// Compaction loading uses the same dotted indicator as a running chat
+// (composer-run-status-dots) so manual /compact and auto-compaction feel
+// like a normal chat run instead of a Naive toast.
+const compactLoadingActive = ref(false);
+function closeCompactLoading() {
+  compactLoadingActive.value = false;
+}
+
 async function handleCompactCommand() {
   const session = activeSession.value;
   if (!session) return;
   if (session.runId) { message.warning(t('app.compact.wait')); return; }
 
-  pushMessage('system', t('app.compact.running'), { system: true });
+  closeCompactLoading();
+  compactLoadingActive.value = true;
   saveSessions();
 
   try {
     const result = await CompactSession(session.id, '');
+    closeCompactLoading();
     const tBefore = result.tokensBefore || 0;
     const tAfter = result.tokensAfter || 0;
     const saved = tBefore - tAfter > 0 ? t('app.compact.saved', { tokens: fmtK(tBefore - tAfter) }) : '';
@@ -5990,7 +6024,7 @@ async function handleCompactCommand() {
     session.messages = [
       {
         role: 'assistant',
-        content: t('app.compact.done', { saved, summary: result.summary || '', before: fmtK(tBefore), after: fmtK(tAfter) }),
+        content: t('app.compact.done', { saved, before: fmtK(tBefore), after: fmtK(tAfter) }),
         system: true,
       },
     ];
@@ -6001,6 +6035,7 @@ async function handleCompactCommand() {
     scrollMessagesToBottom();
     message.success(t('app.compact.success', { before: fmtK(tBefore), after: fmtK(tAfter) }));
   } catch (err) {
+    closeCompactLoading();
     pushMessage('assistant', t('app.compact.failed', { error: err?.message || err }), { error: true });
   }
 }

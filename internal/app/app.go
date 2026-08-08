@@ -52,7 +52,7 @@ const (
 	modelToolTailBytes               = 8 * 1024
 	maxModelGrepMatches              = 200
 	maxAgentSteps                    = 9999
-	defaultLLMRetries                = 2
+	defaultLLMRetries                = 6
 	defaultShellLimit                = 120
 	defaultHTTPTimeout               = 60
 	defaultGrepTimeout               = grep.DefaultTimeout
@@ -83,6 +83,11 @@ const (
 	// filename is stored in ConfigState.BackgroundImage.
 	backgroundImageMaxBytes  = 12 * 1024 * 1024
 	defaultBackgroundOpacity = 0.15
+	// defaultCompactThreshold is the auto-compaction trigger as a fraction of
+	// the context window (0.6 = 60%). Treated as "use default" when the
+	// stored value is zero, so legacy config.json without the field migrates
+	// to the new default transparently.
+	defaultCompactThreshold = 0.6
 )
 
 // effectiveUserAgent returns the User-Agent string to send on outbound HTTP
@@ -109,6 +114,24 @@ func clampBackgroundOpacity(v float64) float64 {
 	}
 	if v > 1 {
 		return 1
+	}
+	return v
+}
+
+// clampCompactThreshold normalizes the auto-compaction threshold. Zero (or
+// out-of-range values) fall back to the default so legacy config.json and
+// hand-edited junk both land on a sane value; otherwise the value is clamped
+// to [0.2, 0.95] so the loop neither thrashes nor waits until the model
+// hard-errors.
+func clampCompactThreshold(v float64) float64 {
+	if v <= 0 {
+		return defaultCompactThreshold
+	}
+	if v < 0.2 {
+		return 0.2
+	}
+	if v > 0.95 {
+		return 0.95
 	}
 	return v
 }
@@ -376,7 +399,12 @@ type ConfigState struct {
 	// after the first user-driven resize.
 	WindowWidth    int `json:"windowWidth,omitempty"`
 	WindowHeight   int `json:"windowHeight,omitempty"`
-	temperatureSet bool
+	// CompactThreshold is the context-usage fraction (0..1) at which the
+	// chat loop auto-compacts history. Zero means "use default" so legacy
+	// configs migrate transparently; the effective value is exposed via
+	// effectiveCompactThreshold().
+	CompactThreshold float64 `json:"compactThreshold,omitempty"`
+	temperatureSet   bool
 	// noAdapterRetry 是进程内非序列化标记:多 key 模式下置 true,让适配器
 	// 内部关闭退避重试,由 streamModelResponse 的外层循环统一承担重试与
 	// 故障切换,避免 N 个 key × 适配器重试组合爆炸。
@@ -1194,6 +1222,7 @@ func defaultConfigState() ConfigState {
 		ProxyMode:           proxyModeOff,
 		ReasoningTag:        defaultReasoningTag,
 		BackgroundOpacity:   defaultBackgroundOpacity,
+		CompactThreshold:    defaultCompactThreshold,
 	}
 	if goruntime.GOOS == "windows" {
 		cfg.GitBashPath, _ = findWindowsBash("")
@@ -1398,6 +1427,13 @@ func mergeConfig(base, overlay ConfigState) ConfigState {
 	// chosen opacity when an older frontend round-trips a partial config.
 	if overlay.BackgroundOpacity != 0 {
 		base.BackgroundOpacity = clampBackgroundOpacity(overlay.BackgroundOpacity)
+	}
+	// CompactThreshold: same pattern — zero overlay means "field absent",
+	// so base (which defaulted to defaultCompactThreshold) is preserved.
+	// Non-zero values are clamped to [0.2, 0.95] so a misconfigured value
+	// cannot starve the model of reply budget or trigger thrashing.
+	if overlay.CompactThreshold != 0 {
+		base.CompactThreshold = clampCompactThreshold(overlay.CompactThreshold)
 	}
 	if overlay.CloseToTray != nil {
 		base.CloseToTray = overlay.CloseToTray
@@ -1772,8 +1808,6 @@ func (a *App) compactSession(parent context.Context, sessionID, instruction stri
 	if err := a.ensureInitialized(); err != nil {
 		return nil, err
 	}
-	ctx, cancel := context.WithTimeout(parent, 3*time.Minute)
-	defer cancel()
 	cfg, err := a.getConfig()
 	if err != nil {
 		return nil, err
@@ -1788,6 +1822,21 @@ func (a *App) compactSession(parent context.Context, sessionID, instruction stri
 	a.mu.Lock()
 	history := sanitizeHistoryMessages(a.histories[sessionID])
 	a.mu.Unlock()
+
+	// Manual compaction keeps the final user message so a request with pending
+	// work survives into the next turn.
+	return a.compactHistory(parent, cfg, sessionID, instruction, history, true)
+}
+
+// compactHistory summarizes the given sanitized messages with the model and
+// replaces the session history with the summary. history is the caller's
+// snapshot of the conversation to compact (system/workspace/goal messages
+// excluded). keepLastUser preserves the final user message (e.g. a request
+// that still has pending work); callers that re-append the current request
+// themselves (auto-compaction) should pass false to avoid duplicating it.
+func (a *App) compactHistory(ctx context.Context, cfg ConfigState, sessionID, instruction string, history []openai.ChatCompletionMessage, keepLastUser bool) (map[string]any, error) {
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+	defer cancel()
 
 	if len(history) == 0 {
 		return nil, errors.New("no messages to compact")
@@ -1861,7 +1910,7 @@ Rules:
 	}
 
 	// Keep the very last user message if it still has pending work
-	if len(history) > 0 {
+	if keepLastUser && len(history) > 0 {
 		last := history[len(history)-1]
 		if last.Role == openai.ChatMessageRoleUser {
 			newHistory = append(newHistory, last)
@@ -1885,6 +1934,21 @@ func estimateTokensFromMessages(msgs []openai.ChatCompletionMessage) int {
 		total += utf8.RuneCountInString(m.Content)
 	}
 	return total / 3 // rough estimate: 3 chars ≈ 1 token
+}
+
+// intFromAny converts a JSON-decoded (float64) or native (int) numeric value
+// to int. Compaction results carry native ints for direct calls and float64
+// once they cross the Wails JSON boundary.
+func intFromAny(v any) int {
+	switch n := v.(type) {
+	case int:
+		return n
+	case int64:
+		return int(n)
+	case float64:
+		return int(n)
+	}
+	return 0
 }
 
 func (a *App) effectiveConfig(overlay ConfigState) ConfigState {
@@ -2105,11 +2169,11 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 		a.emit(event, payload)
 	}
 
+	continuationPrompt := "Continue working on the goal. Check if the goal is complete. If so, call update_goal with status=complete. If blocked, call update_goal with status=blocked."
 	for turn := 0; ; turn++ {
 		if turn > 0 {
 			// Goal continuation: rebuild messages with fresh goal context
 			messages = a.buildMessages(req, cfg, a.listCachedSkills())
-			continuationPrompt := "Continue working on the goal. Check if the goal is complete. If so, call update_goal with status=complete. If blocked, call update_goal with status=blocked."
 			messages = append(messages, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: continuationPrompt})
 			tools = a.buildToolsForConfig(cfg)
 			breakdownAcc.reset(messages)
@@ -2131,21 +2195,29 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			a.liveBreakdown[sessionID] = bd
 			a.mu.Unlock()
 
-			// Auto-compact: when context usage exceeds 80% of window, compact history.
-			// Threshold uses only usedTokens (not usedTokens + maxTokens) so it
-			// reflects actual context state instead of pre-reserving a fixed reply budget.
+			// Auto-compact: when context usage exceeds the configured threshold
+			// of the window, compact history. Threshold uses only usedTokens
+			// (not usedTokens + maxTokens) so it reflects actual context state
+			// instead of pre-reserving a fixed reply budget. The threshold is
+			// configurable via Settings → General (default 60%); legacy config
+			// without the field migrates to the default through mergeConfig.
 			usedTokens := bd.Total
 			maxCtx := cfg.ContextWindow
 			if maxCtx <= 0 {
 				maxCtx = 1048576
 			}
-			if usedTokens > int(float64(maxCtx)*0.80) {
-				a.mu.Lock()
-				h := sanitizeHistoryMessages(a.histories[sessionID])
-				a.mu.Unlock()
+			compactThreshold := clampCompactThreshold(cfg.CompactThreshold)
+			if usedTokens > int(float64(maxCtx)*compactThreshold) {
+				// Compact the in-run message list (system/workspace/goal markers are
+				// stripped by sanitize) so tool activity from this run is included in
+				// the summary instead of being lost when history is replaced.
+				h := sanitizeHistoryMessages(messages)
 				if len(h) > 2 {
 					a.emit("run:compact", map[string]any{"sessionId": sessionID, "tokensBefore": usedTokens})
-					if result, err := a.compactSession(ctx, sessionID, ""); err == nil {
+					// keepLastUser=false: the current request and goal continuation
+					// prompt are re-appended below, so carrying the trailing user
+					// message into the compacted history would duplicate it.
+					if result, err := a.compactHistory(ctx, cfg, sessionID, "", h, false); err == nil {
 						a.mu.Lock()
 						compacted := sanitizeHistoryMessages(a.histories[sessionID])
 						a.mu.Unlock()
@@ -2154,11 +2226,22 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 						if strings.TrimSpace(req.Message) != "" || len(req.Attachments) > 0 {
 							messages = appendUserMessageWithAttachments(messages, req.Message, req.Attachments)
 						}
+						if turn > 0 {
+							messages = append(messages, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: continuationPrompt})
+						}
 						messages = a.appendGoalProgressMessage(messages, sessionID)
 						breakdownAcc.reset(messages)
-						if after, _ := result["tokensAfter"].(float64); after > 0 {
-							a.emit("run:compacted", map[string]any{"sessionId": sessionID, "tokensBefore": usedTokens, "tokensAfter": int(after)})
+						payload := map[string]any{
+							"sessionId":    sessionID,
+							"tokensBefore": intFromAny(result["tokensBefore"]),
+							"tokensAfter":  intFromAny(result["tokensAfter"]),
 						}
+						if s, _ := result["summary"].(string); s != "" {
+							payload["summary"] = s
+						}
+						a.emit("run:compacted", payload)
+					} else {
+						a.emit("run:compacted", map[string]any{"sessionId": sessionID, "error": err.Error()})
 					}
 				}
 			}

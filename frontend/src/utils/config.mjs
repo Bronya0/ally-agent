@@ -24,7 +24,7 @@ export function defaultConfig() {
     reasoningEffort: 'auto',
     disabledSkills: [],
     models: [],
-    llmRetries: 2,
+    llmRetries: 6,
     // Auto-update defaults to on. Loaded config may store explicit false to
     // opt out; legacy config without the field is treated as enabled by the
     // backend (*bool pointer).
@@ -44,6 +44,10 @@ export function defaultConfig() {
     // saves these after the user drags the window edge.
     windowWidth: 0,
     windowHeight: 0,
+    // Auto-compaction threshold as a fraction of the context window
+    // (0.6 = 60%). Backend clamps to [0.1, 0.95]; zero (legacy config
+    // without the field) is replaced with the default in mergeConfig.
+    compactThreshold: 0.6,
   };
 }
 
@@ -63,6 +67,11 @@ export function assignConfig(target, source) {
   // undefined back to true so the frontend always sees a real boolean.
   next.autoUpdate = next.autoUpdate === false ? false : true;
   next.closeToTray = next.closeToTray === false ? false : true;
+  // compactThreshold: legacy configs without the field (or explicit 0) fall
+  // back to the default so the slider shows the effective value, not 0.
+  next.compactThreshold = Number(next.compactThreshold) > 0
+    ? Math.min(0.95, Math.max(0.2, Number(next.compactThreshold)))
+    : 0.6;
   if (!Array.isArray(next.skippedUpdates)) next.skippedUpdates = [];
   delete target.systemPrompt;
   Object.assign(target, next);

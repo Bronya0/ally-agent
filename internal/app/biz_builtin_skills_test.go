@@ -119,7 +119,7 @@ func TestBuiltinSkillEntriesContainsReview(t *testing.T) {
 	if rv.embeddedContent == "" {
 		t.Fatal("expected embeddedContent to be populated for review")
 	}
-	for _, required := range []string{"全自动", "不调用 `ask`", "当前对话", "## 结论", "## 需要处理的问题", "位置：", "影响：", "建议："} {
+	for _, required := range []string{"全自动", "不调用 `ask`", "当前对话", "## 总结（先说人话）", "## 要不要改", "## 需要处理的问题", "位置：", "风险大不大：", "好不好改：", "怎么改：", "说人话"} {
 		if !strings.Contains(rv.embeddedContent, required) {
 			t.Fatalf("expected review skill to contain %q", required)
 		}
