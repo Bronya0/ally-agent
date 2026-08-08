@@ -1662,7 +1662,6 @@ function displayMessagesForSession(session) {
             expanded: true,
             readEntries: m.batchEntries,
             readTotalLines: m.batchEntries.reduce((s, e) => s + (e.lineCount || 0), 0),
-            readTotalTokens: m.batchEntries.reduce((s, e) => s + (e.tokenCount || 0), 0),
             durationMs: m.durationMs || 0,
             durationText: m.durationText || '',
           });
@@ -1695,7 +1694,7 @@ function displayMessagesForSession(session) {
           for (const be of entry.batchEntries) {
             const entryStatus = be.status || entry.status;
             if (entryStatus === 'error') hasError = true;
-group.readEntries.push({ title: be.title, chip: be.chip, lineCount: be.lineCount || 0, totalLines: be.totalLines || be.lineCount || 0, startLine: be.startLine || 1, endLine: be.endLine || be.totalLines || 0, truncated: !!be.truncated, tokenCount: be.tokenCount || 0, body: '', status: entryStatus, expanded: false });
+group.readEntries.push({ title: be.title, chip: be.chip, lineCount: be.lineCount || 0, totalLines: be.totalLines || be.lineCount || 0, startLine: be.startLine || 1, endLine: be.endLine || be.totalLines || 0, truncated: !!be.truncated, body: '', status: entryStatus, expanded: false });
             totalLines += be.lineCount || 0;
           }
         } else {
@@ -1704,7 +1703,6 @@ group.readEntries.push({ title: be.title, chip: be.chip, lineCount: be.lineCount
             chip: entry.chip || '',
             lineCount: entry.readLineCount || 0,
             totalLines: entry.readTotalLines || 0,
-            tokenCount: entry.readTokenCount || 0,
             body: entry.body || '',
             status: entry.status,
             expanded: false,
@@ -1721,7 +1719,6 @@ group.readEntries.push({ title: be.title, chip: be.chip, lineCount: be.lineCount
       }
       group.status = hasError ? 'error' : (allDone ? 'success' : 'running');
       group.readTotalLines = totalLines;
-      group.readTotalTokens = group.readEntries.reduce((s, e) => s + (e.tokenCount || 0), 0);
       out.push(group);
     } else {
       out.push(m);
@@ -3303,7 +3300,6 @@ function bindRuntimeEvents() {
             const e = d.endLine || d.totalLines || 0;
             existing.readLineCount = e >= s ? e - s + 1 : 0;
             existing.readTotalLines = d.totalLines || e;
-            existing.readTokenCount = estimateTokenCount(d.content || d.output || '');
           }
         } catch (_) { /* ignore */ }
       }
@@ -3321,8 +3317,7 @@ function bindRuntimeEvents() {
                 totalLines: f.totalLines || 0,
                 truncated: !!f.truncated,
                 lineCount: (f.endLine && f.startLine) ? (f.endLine - f.startLine + 1) : (f.totalLines || 0),
-                chip: f.error ? `failed: ${f.error}` : formatReadRangeChip(f.startLine || 1, f.endLine || f.totalLines || 0, f.totalLines || 0, !!f.truncated, estimateTokenCount(f.content || f.output || '')),
-                tokenCount: estimateTokenCount(f.content || f.output || ''),
+                chip: f.error ? `failed: ${f.error}` : formatReadRangeChip(f.startLine || 1, f.endLine || f.totalLines || 0, f.totalLines || 0, !!f.truncated),
                 status: f.error ? 'error' : 'success',
               });
             }
@@ -4291,36 +4286,15 @@ function estimateTokens(text) {
   return String(tokens);
 }
 
-function estimateTokenCount(text) {
-  if (!text) return 0;
-  let ascii = 0, nonAscii = 0;
-  for (let i = 0; i < text.length; i++) {
-    if (text.charCodeAt(i) <= 127) ascii++;
-    else nonAscii++;
-  }
-  return Math.max(1, Math.ceil(ascii / 4) + nonAscii);
-}
-
-function formatTokenCount(tokens) {
-  const n = Number(tokens) || 0;
-  if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
-  if (n >= 1000) return (n / 1000).toFixed(1) + 'k';
-  return String(n);
-}
-
-function formatReadChip(lines, tokens = 0) {
+function formatReadChip(lines) {
   const lineCount = Number(lines) || 0;
-  const parts = [];
-  if (lineCount > 0) parts.push(lineCount + ' line' + (lineCount !== 1 ? 's' : ''));
-  if (tokens > 0) parts.push('~' + formatTokenCount(tokens) + 't');
-  return parts.length ? '\u00B7 ' + parts.join(' \u00B7 ') : '';
+  return lineCount > 0 ? '· ' + lineCount + ' line' + (lineCount !== 1 ? 's' : '') : '';
 }
 
-function formatReadRangeChip(startLine, endLine, totalLines, truncated, tokens = 0) {
+function formatReadRangeChip(startLine, endLine, totalLines, truncated) {
   const start = Number(startLine) || 1;
   const end = Number(endLine) || Number(totalLines) || 0;
   const total = Number(totalLines) || 0;
-  const tk = Number(tokens) || 0;
   const actualLines = total > 0 ? end - start + 1 : 0;
   if (actualLines <= 0) return '';
   const parts = [];
@@ -4331,7 +4305,6 @@ function formatReadRangeChip(startLine, endLine, totalLines, truncated, tokens =
   } else {
     parts.push(`${actualLines} line${actualLines !== 1 ? 's' : ''}`);
   }
-  if (tk > 0) parts.push(`~${formatTokenCount(tk)}t`);
   return parts.length ? `· ${parts.join(' · ')}` : '';
 }
 
@@ -6422,12 +6395,11 @@ function formatToolChip(name, result) {
       const endLine = d.endLine || d.totalLines || 0;
       const linesReturned = endLine - startLine + 1;
       if (linesReturned > 0) {
-        const tokenCount = estimateTokenCount(d.content || d.output || '');
         const isPartial = startLine > 1 || endLine < (d.totalLines || 0);
         if (isPartial && d.totalLines > linesReturned) {
-          return '\u00B7 lines ' + startLine + '-' + endLine + ' (of ' + d.totalLines + ')' + (tokenCount > 0 ? ' \u00B7 ~' + formatTokenCount(tokenCount) + 't' : '');
+          return '\u00B7 lines ' + startLine + '-' + endLine + ' (of ' + d.totalLines + ')';
         }
-        return formatReadChip(linesReturned, tokenCount);
+        return formatReadChip(linesReturned);
       }
     }
     // read (and legacy batch_read): list each file as separate line
@@ -6440,7 +6412,7 @@ function formatToolChip(name, result) {
         if (f.kind === 'document' || f.contentFormat === 'plain') {
           return path + ' \u00B7 ' + formatCharCount(String(f.text || f.content || '').length);
         }
-        return path + ' ' + formatReadChip(total, estimateTokenCount(f.content || f.output || ''));
+        return path + ' ' + formatReadChip(total);
       });
       return '\u00B7 ' + lines.join('  ');
     }

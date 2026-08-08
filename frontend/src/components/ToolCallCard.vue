@@ -12,7 +12,8 @@
         <code v-html="highlightCommand(msg)"></code>
         <span class="tool-command-paren">)</span>
       </span>
-      <span v-else-if="msg.title" :class="['tool-arg', { 'todo-next-step': msg.kind === 'todo' }]" :title="msg.title">({{ msg.title }})</span>
+      <span v-else-if="msg.kind === 'todo' && msg.title" class="tool-arg todo-next-step" :title="msg.title">({{ msg.title }})</span>
+      <span v-else-if="msg.title" class="tool-arg" :title="msg.title">({{ msg.title }})</span>
       <span v-if="msg.kind === 'edit' && (msg.editAdded || msg.editRemoved)" class="tool-chip edit-change-chip">
         <span class="tool-chip-dot">&middot;</span>
         <span v-if="msg.editAdded" class="edit-chip-added">+{{ msg.editAdded }}</span>

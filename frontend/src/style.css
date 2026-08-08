@@ -2221,6 +2221,13 @@ code, pre {
   min-width: 0;
 }
 
+/* Todo cards ("Next up (...)") — fixed green only for the next-step
+   title inside the card; the "Next up" verb keeps its default color.
+   Other tools keep their own colors untouched. */
+.todo-next-step {
+  color: #9fc3ec;
+}
+
 .rich-tool-card.delete .tool-arg {
   color: #e5e5e5;
 }

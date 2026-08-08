@@ -48,7 +48,7 @@ const TOOL_VERBS = {
   calculate: ['Calculating', 'Calculated', 'Calculation'],
   wait: ['Waiting', 'Waited', 'Wait'],
   ask: ['Asking', 'Asked', 'Ask'],
-  todo_write: ['Updating plan', 'Updated plan', 'Plan update'],
+  todo_write: ['Planning next', 'Next step', 'Next step'],
   // scheduled_task verb depends on the action (create/list/delete), resolved via
   // SCHEDULED_TASK_VERBS below; this entry is the fallback when the action is
   // unknown (e.g. an old card whose args weren't captured).
