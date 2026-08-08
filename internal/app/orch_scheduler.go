@@ -36,11 +36,10 @@ const (
 )
 
 type ScheduledTaskSchedule struct {
-	Type     string `json:"type"`
-	At       string `json:"at,omitempty"`
-	Every    string `json:"every,omitempty"`
-	Cron     string `json:"cron,omitempty"`
-	Timezone string `json:"timezone,omitempty"`
+	Type  string `json:"type"`
+	At    string `json:"at,omitempty"`
+	Every string `json:"every,omitempty"`
+	Cron  string `json:"cron,omitempty"`
 }
 
 type ScheduledTask struct {
@@ -70,7 +69,6 @@ type ScheduledTaskToolRequest struct {
 	Name        string `json:"name,omitempty"`
 	Instruction string `json:"instruction,omitempty"`
 	Schedule    string `json:"schedule,omitempty"`
-	Timezone    string `json:"timezone,omitempty"`
 }
 
 type ScheduledTaskToolView struct {
@@ -245,7 +243,7 @@ func (m *scheduledTaskManager) stop() {
 
 func (m *scheduledTaskManager) create(cfg ConfigState, req ScheduledTaskToolRequest) (*ScheduledTask, error) {
 	now := time.Now()
-	schedule, err := parseScheduledTaskSchedule(req.Schedule, req.Timezone)
+	schedule, err := parseScheduledTaskSchedule(req.Schedule)
 	if err != nil {
 		return nil, err
 	}
@@ -310,17 +308,16 @@ func (m *scheduledTaskManager) create(cfg ConfigState, req ScheduledTaskToolRequ
 
 // parseScheduledTaskSchedule delegates to the pure scheduler.ParseSchedule
 // and converts the tool-local Schedule back to the app-facing type.
-func parseScheduledTaskSchedule(value, timezone string) (ScheduledTaskSchedule, error) {
-	sched, err := scheduler.ParseSchedule(value, timezone)
+func parseScheduledTaskSchedule(value string) (ScheduledTaskSchedule, error) {
+	sched, err := scheduler.ParseSchedule(value)
 	if err != nil {
 		return ScheduledTaskSchedule{}, err
 	}
 	return ScheduledTaskSchedule{
-		Type:     sched.Type,
-		At:       sched.At,
-		Every:    sched.Every,
-		Cron:     sched.Cron,
-		Timezone: sched.Timezone,
+		Type:  sched.Type,
+		At:    sched.At,
+		Every: sched.Every,
+		Cron:  sched.Cron,
 	}, nil
 }
 
@@ -402,11 +399,7 @@ func (m *scheduledTaskManager) registerLocked(task *ScheduledTask, now time.Time
 		task.NextRunAt = schedule.Next(now).UnixMilli()
 		return nil
 	case "cron":
-		spec, err := scheduler.CronSpecWithTZ(task.Schedule.Cron, task.Schedule.Timezone)
-		if err != nil {
-			return err
-		}
-		schedule, err := scheduler.ParseCron(spec)
+		schedule, err := scheduler.ParseCron(task.Schedule.Cron)
 		if err != nil {
 			return codedToolError("E_SCHEDULED_TASK_CRON", fmt.Errorf("invalid cron expression: %w", err))
 		}
@@ -630,11 +623,10 @@ func normalizeScheduledTask(task *ScheduledTask, now time.Time) error {
 
 	// Normalize and validate the schedule via the pure scheduler package.
 	sched := scheduler.Schedule{
-		Type:     task.Schedule.Type,
-		At:       task.Schedule.At,
-		Every:    task.Schedule.Every,
-		Cron:     task.Schedule.Cron,
-		Timezone: task.Schedule.Timezone,
+		Type:  task.Schedule.Type,
+		At:    task.Schedule.At,
+		Every: task.Schedule.Every,
+		Cron:  task.Schedule.Cron,
 	}
 	scheduler.NormalizeSchedule(&sched)
 	if err := scheduler.ValidateSchedule(sched); err != nil {
@@ -646,7 +638,6 @@ func normalizeScheduledTask(task *ScheduledTask, now time.Time) error {
 	task.Schedule.At = sched.At
 	task.Schedule.Every = sched.Every
 	task.Schedule.Cron = sched.Cron
-	task.Schedule.Timezone = sched.Timezone
 
 	if task.CreatedAt == 0 {
 		task.CreatedAt = now.UnixMilli()

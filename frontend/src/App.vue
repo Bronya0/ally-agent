@@ -6709,7 +6709,7 @@ function formatScheduledTaskToolDetail(task = {}) {
 function formatScheduledToolSchedule(schedule = {}) {
   if (schedule.type === 'once') return `once at ${schedule.at || '-'}`;
   if (schedule.type === 'interval') return `every ${schedule.every || '-'}`;
-  if (schedule.type === 'cron') return `cron ${schedule.cron || '-'} (${schedule.timezone || 'local timezone'})`;
+  if (schedule.type === 'cron') return `cron ${schedule.cron || '-'}`;
   return '-';
 }
 

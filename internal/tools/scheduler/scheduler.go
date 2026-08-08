@@ -37,11 +37,10 @@ const (
 // schedule. It mirrors app.ScheduledTaskSchedule but lives here so the pure
 // parsing/validation logic has no app dependency.
 type Schedule struct {
-	Type     string `json:"type"`
-	At       string `json:"at,omitempty"`
-	Every    string `json:"every,omitempty"`
-	Cron     string `json:"cron,omitempty"`
-	Timezone string `json:"timezone,omitempty"`
+	Type  string `json:"type"`
+	At    string `json:"at,omitempty"`
+	Every string `json:"every,omitempty"`
+	Cron  string `json:"cron,omitempty"`
 }
 
 // ParseSchedule inspects value and decides which schedule type it represents:
@@ -49,23 +48,21 @@ type Schedule struct {
 //   - Go duration        -> "interval" (must be >= MinInterval)
 //   - anything else      -> "cron" (validated later)
 //
-// timezone is stored as-is; callers should trim it first if needed.
-func ParseSchedule(value, timezone string) (Schedule, error) {
+func ParseSchedule(value string) (Schedule, error) {
 	value = strings.TrimSpace(value)
-	timezone = strings.TrimSpace(timezone)
 	if value == "" {
 		return Schedule{}, toolerrors.New("E_SCHEDULED_TASK_SCHEDULE", errors.New("schedule is required"))
 	}
 	if _, err := time.Parse(time.RFC3339, value); err == nil {
-		return Schedule{Type: "once", At: value, Timezone: timezone}, nil
+		return Schedule{Type: "once", At: value}, nil
 	}
 	if duration, err := time.ParseDuration(value); err == nil {
 		if duration < MinInterval {
 			return Schedule{}, toolerrors.New("E_SCHEDULED_TASK_INTERVAL", fmt.Errorf("interval must be at least %s", MinInterval))
 		}
-		return Schedule{Type: "interval", Every: value, Timezone: timezone}, nil
+		return Schedule{Type: "interval", Every: value}, nil
 	}
-	return Schedule{Type: "cron", Cron: value, Timezone: timezone}, nil
+	return Schedule{Type: "cron", Cron: value}, nil
 }
 
 // NormalizeSchedule trims whitespace on every field and lowercases the type.
@@ -76,15 +73,13 @@ func NormalizeSchedule(s *Schedule) *Schedule {
 	s.At = strings.TrimSpace(s.At)
 	s.Every = strings.TrimSpace(s.Every)
 	s.Cron = strings.TrimSpace(s.Cron)
-	s.Timezone = strings.TrimSpace(s.Timezone)
 	return s
 }
 
 // ValidateSchedule checks that a normalized schedule is well-formed:
 //   - once:     At is a valid RFC3339 timestamp
 //   - interval: Every is a valid Go duration >= MinInterval
-//   - cron:     Cron is a valid cron expression (with optional CRON_TZ prefix)
-//   - timezone (if set) must be a loadable IANA location for cron schedules
+//   - cron:     Cron is a valid cron expression
 func ValidateSchedule(s Schedule) error {
 	switch s.Type {
 	case "once":
@@ -106,16 +101,7 @@ func ValidateSchedule(s Schedule) error {
 		if s.Cron == "" {
 			return toolerrors.New("E_SCHEDULED_TASK_CRON", errors.New("schedule.cron is required for cron"))
 		}
-		if s.Timezone != "" {
-			if _, err := time.LoadLocation(s.Timezone); err != nil {
-				return toolerrors.New("E_SCHEDULED_TASK_TIMEZONE", fmt.Errorf("invalid timezone: %w", err))
-			}
-		}
-		spec, err := CronSpecWithTZ(s.Cron, s.Timezone)
-		if err != nil {
-			return err
-		}
-		if _, err := cron.ParseStandard(spec); err != nil {
+		if _, err := cron.ParseStandard(s.Cron); err != nil {
 			return toolerrors.New("E_SCHEDULED_TASK_CRON", fmt.Errorf("invalid cron expression: %w", err))
 		}
 	default:
@@ -124,23 +110,7 @@ func ValidateSchedule(s Schedule) error {
 	return nil
 }
 
-// CronSpecWithTZ returns the cron spec prefixed with CRON_TZ=<timezone> when
-// timezone is non-empty, otherwise the spec unchanged. Returns an error if
-// timezone is non-empty but not a loadable IANA location.
-func CronSpecWithTZ(spec, timezone string) (string, error) {
-	spec = strings.TrimSpace(spec)
-	timezone = strings.TrimSpace(timezone)
-	if timezone == "" {
-		return spec, nil
-	}
-	if _, err := time.LoadLocation(timezone); err != nil {
-		return "", toolerrors.New("E_SCHEDULED_TASK_TIMEZONE", fmt.Errorf("invalid timezone: %w", err))
-	}
-	return "CRON_TZ=" + timezone + " " + spec, nil
-}
-
-// ParseCron parses spec (already CRON_TZ-prefixed if needed) into a cron
-// Schedule. Callers that need the next-run time use ParseCron + .Next(now).
+// ParseCron parses spec into a cron Schedule. Callers that need the next-run
 func ParseCron(spec string) (cron.Schedule, error) {
 	return cron.ParseStandard(spec)
 }
@@ -170,18 +140,9 @@ func NextRunAt(s Schedule, now time.Time) (time.Time, error) {
 		}
 		return now.Add(duration), nil
 	case "cron":
-		spec, err := CronSpecWithTZ(s.Cron, s.Timezone)
-		if err != nil {
-			return time.Time{}, err
-		}
-		schedule, err := cron.ParseStandard(spec)
+		schedule, err := cron.ParseStandard(s.Cron)
 		if err != nil {
 			return time.Time{}, toolerrors.New("E_SCHEDULED_TASK_CRON", fmt.Errorf("invalid cron expression: %w", err))
-		}
-		if s.Timezone != "" {
-			if loc, err := time.LoadLocation(s.Timezone); err == nil {
-				now = now.In(loc)
-			}
 		}
 		return schedule.Next(now), nil
 	default:

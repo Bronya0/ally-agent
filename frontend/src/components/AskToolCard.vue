@@ -210,7 +210,7 @@ function selectionKey(selection) {
 
 .ask-tabs {
   display: flex;
-  justify-content: center;
+  justify-content: flex-start;
   gap: 6px;
   min-width: 0;
 }

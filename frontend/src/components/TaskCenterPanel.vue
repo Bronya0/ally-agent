@@ -316,7 +316,7 @@ function serviceStatusType(service) {
 function scheduleLabel(schedule = {}) {
   if (schedule.type === 'once') return t('scheduled.once', { at: schedule.at || '-' });
   if (schedule.type === 'interval') return t('scheduled.interval', { interval: schedule.every || '-' });
-  if (schedule.type === 'cron') return t('scheduled.cron', { cron: schedule.cron || '-', timezone: schedule.timezone || t('common.localTimezone') });
+  if (schedule.type === 'cron') return t('scheduled.cron', { cron: schedule.cron || '-' });
   return '-';
 }
 

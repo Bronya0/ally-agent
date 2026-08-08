@@ -162,7 +162,6 @@ func chatToolsUncached() []openai.Tool {
 				"name":        map[string]any{"type": "string", "minLength": 1, "description": "Short task name required for create."},
 				"instruction": map[string]any{"type": "string", "minLength": 1, "description": "Self-contained instruction executed with fresh context on every run."},
 				"schedule":    map[string]any{"type": "string", "description": "RFC3339 time, Go duration such as 30m/2h, or standard five-field cron expression."},
-				"timezone":    map[string]any{"type": "string", "description": "IANA timezone for cron, such as Asia/Shanghai. Defaults to local timezone."},
 			},
 			"required": []string{"action"},
 			"oneOf": []any{
@@ -386,7 +385,7 @@ var builtinToolExamples = map[string]string{
 	"background_process": `start: {"action":"start","name":"frontend","command":"npm run dev","cwd":"frontend"}; stop: {"action":"stop","id":"svc_..."}; list: {"action":"list"}; read: {"action":"read","id":"svc_...","tailBytes":8192}`,
 	"wait":               `{"seconds":5,"reason":"Wait for the development server to become ready"}`,
 	"ask":                `{"questions":[{"id":"database","question":"Which database should we use?","options":[{"id":"sqlite","label":"SQLite","description":"Simple local storage.","recommended":true},{"id":"postgres","label":"PostgreSQL","description":"Production database.","recommended":false}]}]}`,
-	"scheduled_task":     `create: {"action":"create","name":"daily check","instruction":"Run tests and summarize failures.","schedule":"0 9 * * *","timezone":"Asia/Shanghai"}; list: {"action":"list"}; delete: {"action":"delete","id":"task_..."}`,
+	"scheduled_task":     `create: {"action":"create","name":"daily check","instruction":"Run tests and summarize failures.","schedule":"0 9 * * *"}; list: {"action":"list"}; delete: {"action":"delete","id":"task_..."}`,
 	"http_request":       `{"url":"https://api.example.com/items","method":"GET","query":{"limit":"10"},"timeoutSeconds":60}`,
 	"web_fetch":          `{"url":"https://example.com/docs","maxChars":60000}`,
 	"remote_list_files":  `{"target":"ubuntu@example.com:/srv/app","path":"src","maxDepth":2}`,
