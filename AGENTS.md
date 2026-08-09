@@ -11,7 +11,7 @@ This file is read by AI coding agents. Keep it current when the app architecture
 | Command | Description |
 |---------|-------------|
 | `wails3 dev` | Run the desktop app in development mode with hot reload |
-| `wails3 build` | Build a distributable desktop binary (also the only verification command) |
+| `wails3 build` | Build a distributable desktop binary (also the only verification command). On macOS this emits only the raw `bin/Ally` executable — the Dock/Finder icon lives in the `.app` bundle, so use `wails3 task darwin:package` (or `darwin:package:universal`) to produce `bin/Ally.app` with `Contents/Resources/icons.icns`; Windows embeds the icon into the `.exe` via the generated `.syso`, so `wails3 build` alone already carries the icon there |
 
 ## Git Convention
 

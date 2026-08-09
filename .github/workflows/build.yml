@@ -37,6 +37,25 @@ jobs:
         shell: pwsh
         run: go install "github.com/wailsapp/wails/v3/cmd/wails3@${{ env.WAILS_VERSION }}"
 
+      - name: Inject release version into exe metadata
+        shell: pwsh
+        run: |
+          $tag = "${{ github.event.release.tag_name || github.ref_name }}"
+          $base = (($tag -replace '^v', '') -split '[-+]')[0]
+          $parts = $base -split '\.'
+          if ($parts.Count -ge 3 -and $parts[0] -match '^\d+$' -and $parts[1] -match '^\d+$' -and $parts[2] -match '^\d+$') {
+            $product = "$($parts[0]).$($parts[1]).$($parts[2])"
+            $file = "$product.$($parts[3] ?? '0')"
+            $json = Get-Content build/windows/info.json -Raw | ConvertFrom-Json
+            $json.fixed.file_version = $file
+            $json.info.'0000'.ProductVersion = $product
+            $out = $json | ConvertTo-Json -Depth 10
+            [System.IO.File]::WriteAllText((Resolve-Path build/windows/info.json), $out, [System.Text.UTF8Encoding]::new($false))
+            Write-Host "Injected native version: product=$product file=$file"
+          } else {
+            Write-Host "Tag '$tag' is not a semantic release version; keeping 0.0.0"
+          }
+
       - name: Build
         shell: pwsh
         run: |
@@ -134,17 +153,17 @@ jobs:
           # Provide a .desktop entry and icon so the app appears with the correct
           # icon in desktop environments when the archive is unpacked.
           cat > "dist/${APP_NAME}.desktop" <<EOF
-[Desktop Entry]
-Version=1.0
-Name=${APP_NAME}
-Comment=Ally — AI coding agent desktop
-Exec=${APP_NAME}
-Terminal=false
-Type=Application
-Icon=${APP_NAME}
-Categories=Development;
-StartupWMClass=${APP_NAME}
-EOF
+          [Desktop Entry]
+          Version=1.0
+          Name=${APP_NAME}
+          Comment=Ally — AI coding agent desktop
+          Exec=${APP_NAME}
+          Terminal=false
+          Type=Application
+          Icon=${APP_NAME}
+          Categories=Development;
+          StartupWMClass=${APP_NAME}
+          EOF
           cp build/appicon.png "dist/${APP_NAME}.png"
 
           version="${{ github.event.release.tag_name || github.ref_name }}"
@@ -184,9 +203,25 @@ EOF
       - name: Install Wails
         run: go install "github.com/wailsapp/wails/v3/cmd/wails3@${{ env.WAILS_VERSION }}"
 
-      - name: Build
+      - name: Build universal binary
         run: |
           wails3 task darwin:build:universal
+
+      - name: Inject release version into macOS bundle metadata
+        run: |
+          tag="${{ github.event.release.tag_name || github.ref_name }}"
+          base="${tag#v}"
+          base="${base%%[-+]*}"
+          if [[ "$base" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $base" build/darwin/Info.plist
+            /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $base" build/darwin/Info.plist
+            echo "Injected native version: $base"
+          else
+            echo "Tag '$tag' is not a semantic release version; keeping 0.0.0"
+          fi
+
+      - name: Package universal .app
+        run: |
           wails3 task darwin:package:universal
 
       - name: Bundle universal ripgrep and licenses
