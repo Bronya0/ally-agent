@@ -819,8 +819,8 @@ function defaultModelDraft(source = {}) {
     apiKey: draft?.apiKey || '',
     model: '',
     temperature: draft?.temperature ?? 0.2,
-    maxTokens: draft?.maxTokens || 128000,
-    contextWindow: draft?.contextWindow || 1048576,
+    maxTokens: draft?.maxTokens || 384000,
+    contextWindow: draft?.contextWindow || 1000000,
     ...source,
     apiKeys: normalizeModelApiKeys(keys),
     reasoningTag: String(source.reasoningTag || draft?.reasoningTag || 'reasoning_content').trim() || 'reasoning_content',
@@ -828,7 +828,7 @@ function defaultModelDraft(source = {}) {
     // explicit legacy value onto "auto" — otherwise the two-option select would
     // render blank for an imported config that stored "max_tokens".
     tokenParam: normalizeDraftTokenParam(source.tokenParam),
-    reasoningEffort: normalizeReasoningEffort(source.reasoningEffort),
+    reasoningEffort: normalizeReasoningEffort(source.reasoningEffort || 'max'),
   };
 }
 
@@ -994,8 +994,8 @@ async function startAddModelDraft() {
     apiKey: draft.apiKey || '',
     apiKeys: Array.isArray(draft.apiKeys) ? draft.apiKeys : [],
     model: draft.model || '',
-    maxTokens: draft.maxTokens || 128000,
-    contextWindow: draft.contextWindow || 1048576,
+    maxTokens: draft.maxTokens || 384000,
+    contextWindow: draft.contextWindow || 1000000,
   });
   modelEditorVisible.value = true;
 }
@@ -1036,8 +1036,8 @@ async function testModelConnection() {
       apiKeys,
       model,
       temperature: modelDraft.temperature ?? 0.2,
-      maxTokens: modelDraft.maxTokens || 8192,
-      contextWindow: modelDraft.contextWindow || 1048576,
+      maxTokens: modelDraft.maxTokens || 384000,
+      contextWindow: modelDraft.contextWindow || 1000000,
       reasoningTag: modelDraft.reasoningTag || 'reasoning_content',
       tokenParam: modelDraft.tokenParam || 'auto',
       reasoningEffort: normalizeReasoningEffort(modelDraft.reasoningEffort),
@@ -1072,8 +1072,8 @@ function commitModelDraft() {
     apiKeys,
     model,
     temperature: modelDraft.temperature ?? draft.temperature ?? 0.2,
-    maxTokens: modelDraft.maxTokens || draft.maxTokens || 128000,
-    contextWindow: modelDraft.contextWindow || draft.contextWindow || 1048576,
+    maxTokens: modelDraft.maxTokens || draft.maxTokens || 384000,
+    contextWindow: modelDraft.contextWindow || draft.contextWindow || 1000000,
     reasoningTag: modelDraft.reasoningTag || 'reasoning_content',
     tokenParam: modelDraft.tokenParam || 'auto',
     reasoningEffort: normalizeReasoningEffort(modelDraft.reasoningEffort),
@@ -1105,8 +1105,8 @@ function applyModelToDraft(model) {
   draft.apiKey = draft.apiKeys[0] || '';
   draft.model = model.model || '';
   draft.temperature = model.temperature ?? draft.temperature ?? 0.2;
-  draft.maxTokens = model.maxTokens || draft.maxTokens || 128000;
-  draft.contextWindow = model.contextWindow || draft.contextWindow || 1048576;
+  draft.maxTokens = model.maxTokens || draft.maxTokens || 384000;
+  draft.contextWindow = model.contextWindow || draft.contextWindow || 1000000;
   draft.reasoningTag = model.reasoningTag || 'reasoning_content';
   draft.tokenParam = model.tokenParam || 'auto';
   draft.reasoningEffort = normalizeReasoningEffort(model.reasoningEffort);
@@ -1186,7 +1186,7 @@ watch(() => modelDraft.apiFormat, (next, previous) => {
   if (nextFormat === 'anthropic_messages') {
     if (!modelDraft.maxTokens || modelDraft.maxTokens > 64000) modelDraft.maxTokens = 8192;
   } else if (normalizeApiFormat(previous) === 'anthropic_messages' && modelDraft.maxTokens === 8192) {
-    modelDraft.maxTokens = 128000;
+    modelDraft.maxTokens = 384000;
   }
 });
 

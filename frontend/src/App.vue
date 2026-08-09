@@ -2020,7 +2020,7 @@ const contextUsed = computed(() => {
   if (n >= 1000) return (n / 1000).toFixed(1) + 'k';
   return String(n);
 });
-const contextWindow = computed(() => config.contextWindow || 128000);
+const contextWindow = computed(() => config.contextWindow || 1000000);
 const contextMax = computed(() => {
   const m = contextWindow.value;
   if (m >= 1000000) return (m / 1000000).toFixed(1) + 'M';

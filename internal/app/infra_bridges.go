@@ -138,7 +138,7 @@ func defaultMaxTokensForAPIFormat(format string) int {
 	if normalizeAPIFormat(format) == apiFormatAnthropicMessages {
 		return 8192
 	}
-	return 128000
+	return 384000
 }
 
 func calculateExpression(req CalculateRequest) (CalculateResult, error) {

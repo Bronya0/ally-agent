@@ -739,7 +739,7 @@ const contextBudgetThresholdPct = 30
 // GPT-5.6 Responses cache boundary, when active, stays before this tail.
 func appendContextBudgetMessage(messages []openai.ChatCompletionMessage, usedTokens, maxCtx int) []openai.ChatCompletionMessage {
 	if maxCtx <= 0 {
-		maxCtx = 1048576
+		maxCtx = 1000000
 	}
 	if usedTokens < 0 {
 		usedTokens = 0

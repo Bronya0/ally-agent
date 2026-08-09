@@ -1493,7 +1493,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			usedTokens := bd.Total
 			maxCtx := cfg.ContextWindow
 			if maxCtx <= 0 {
-				maxCtx = 1048576
+				maxCtx = 1000000
 			}
 			compactThreshold := clampCompactThreshold(cfg.CompactThreshold)
 			if usedTokens > int(float64(maxCtx)*compactThreshold) {
