@@ -32,13 +32,14 @@
           <span v-if="entry.removed" class="edit-chip-removed">-{{ entry.removed }}</span>
         </div>
         <div class="edit-file-content">
-          <DiffView v-if="entry.diff" :diff-text="entry.diff" :file-path="entry.path" :show-header="false" :collapsed="!msg.expanded" :added-count="entry.added || 0" :removed-count="entry.removed || 0" @toggle="handleToggle(msg)" />
-          <DiffView v-for="(change, ci) in entry.changes" v-else :key="ci" :old-text="change.oldText || ''" :new-text="change.newText || ''" :file-path="entry.path" :show-header="false" :collapsed="!msg.expanded" :is-incomplete="msg.status === 'running'" @toggle="handleToggle(msg)" />
+          <DiffView v-if="entry.diff" layout="split" :diff-text="entry.diff" :file-path="entry.path" :show-header="false" :collapsed="!msg.expanded" :added-count="entry.added || 0" :removed-count="entry.removed || 0" @toggle="handleToggle(msg)" />
+          <DiffView v-for="(change, ci) in entry.changes" v-else layout="split" :key="ci" :old-text="change.oldText || ''" :new-text="change.newText || ''" :file-path="entry.path" :show-header="false" :collapsed="!msg.expanded" :is-incomplete="msg.status === 'running'" @toggle="handleToggle(msg)" />
         </div>
       </div>
     </div>
     <DiffView
       v-else-if="msg.kind === 'edit' && hasEditPreview(msg)"
+      layout="split"
       :diff-text="editDiffText(msg)"
       :old-text="msg.editOldString"
       :new-text="msg.editNewString"
