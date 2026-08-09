@@ -511,21 +511,27 @@
         <n-form-item-gi label="Max Tokens">
           <n-input-number v-model:value="modelDraft.maxTokens" :min="0" style="width: 100%" />
         </n-form-item-gi>
+        <n-form-item-gi :label="$t('settings.reasoningTag')">
+          <n-input
+            v-model:value="modelDraft.reasoningTag"
+            :placeholder="$t('settings.reasoningTagHint')"
+          />
+        </n-form-item-gi>
         <n-form-item-gi
           v-if="normalizeApiFormat(modelDraft.apiFormat) === 'openai_chat'"
           :label="$t('settings.tokenParam')"
         >
           <n-select v-model:value="modelDraft.tokenParam" :options="tokenParamOptions" />
         </n-form-item-gi>
-        <n-form-item-gi :label="$t('settings.reasoningTag')" :span="2">
-          <n-input
-            v-model:value="modelDraft.reasoningTag"
-            :placeholder="$t('settings.reasoningTagHint')"
-          />
+        <n-form-item-gi
+          :label="$t('settings.reasoningEffort')"
+          :span="normalizeApiFormat(modelDraft.apiFormat) === 'openai_chat' ? 1 : 2"
+        >
+          <n-select v-model:value="modelDraft.reasoningEffort" :options="reasoningEffortOptions" />
         </n-form-item-gi>
-        <n-form-item-gi :label="$t('settings.contextWindow')">
+        <n-form-item-gi :label="$t('settings.contextWindow')" :span="2">
           <div class="context-window-field">
-            <n-input-number v-model:value="modelDraft.contextWindow" :min="0" style="width: 100%" />
+            <n-input-number v-model:value="modelDraft.contextWindow" :min="0" />
             <div class="context-window-presets" :aria-label="$t('settings.contextWindowPresets')">
               <span class="context-window-presets-label">{{ $t('settings.contextWindowPresets') }}</span>
               <n-button-group size="small">
@@ -541,9 +547,6 @@
               </n-button-group>
             </div>
           </div>
-        </n-form-item-gi>
-        <n-form-item-gi :label="$t('settings.reasoningEffort')">
-          <n-select v-model:value="modelDraft.reasoningEffort" :options="reasoningEffortOptions" />
         </n-form-item-gi>
       </n-grid>
       <n-alert v-if="selectedCatalogProvider" type="info" :show-icon="false" class="model-format-hint">
@@ -1176,13 +1179,10 @@ function exportModelConfigs() {
 
 watch(() => modelDraft.apiFormat, (next, previous) => {
   if (!modelEditorVisible.value) return;
+  // Switching the API format never rewrites Base URL: it is left to manual
+  // input (or filled by an explicit catalog provider preset). The per-format
+  // default is only shown as the input placeholder.
   const nextFormat = normalizeApiFormat(next);
-  const previousDefault = apiFormatDefaultBaseUrl(previous);
-  const knownDefaults = new Set(apiFormatOptions.map((item) => apiFormatDefaultBaseUrl(item.value)));
-  const currentBase = (modelDraft.baseUrl || '').trim();
-  if (!currentBase || currentBase === previousDefault || knownDefaults.has(currentBase)) {
-    modelDraft.baseUrl = apiFormatDefaultBaseUrl(nextFormat);
-  }
   if (nextFormat === 'anthropic_messages') {
     if (!modelDraft.maxTokens || modelDraft.maxTokens > 64000) modelDraft.maxTokens = 8192;
   } else if (normalizeApiFormat(previous) === 'anthropic_messages' && modelDraft.maxTokens === 8192) {
@@ -2036,9 +2036,14 @@ watch(() => props.visible, (visible) => {
 
 .context-window-field {
   display: flex;
-  flex-direction: column;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
   width: 100%;
+}
+
+.context-window-field .n-input-number {
+  flex: 1 1 140px;
 }
 
 .context-window-presets {
