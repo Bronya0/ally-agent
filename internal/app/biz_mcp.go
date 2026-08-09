@@ -18,6 +18,8 @@ import (
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/client/transport"
 	"github.com/mark3labs/mcp-go/mcp"
+
+	openai "github.com/sashabaranov/go-openai"
 )
 
 // McpServerConfig represents a single MCP server config (Claude Desktop format).
@@ -644,4 +646,200 @@ func (m *McpManager) notifyChange() {
 		return
 	}
 	m.listener(m.GetAllTools())
+}
+
+// ── MCP tool exposure and frontend bindings ──────────────────
+
+// buildToolsWithMcp combines static tools with dynamically discovered MCP tools.
+func (a *App) buildToolsWithMcp() []openai.Tool {
+	tools := chatTools()
+	if a.mcpManager == nil {
+		return tools
+	}
+	mcpTools := a.mcpManager.GetAllTools()
+	for _, dt := range mcpTools {
+		name := dt.FunctionName
+		if name == "" {
+			name = mcpToolFunctionName(dt.ServerName, dt.Name)
+		}
+		desc := strings.TrimSpace(dt.Description)
+		if desc == "" {
+			desc = fmt.Sprintf("MCP tool %s from %s", dt.Name, dt.ServerName)
+		} else {
+			desc = fmt.Sprintf("[%s] %s", dt.ServerName, desc)
+		}
+		params := dt.Schema
+		if params == nil {
+			params = map[string]any{"type": "object", "properties": map[string]any{}}
+		}
+		tools = append(tools, rawFunctionTool(name, desc, params))
+	}
+	return tools
+}
+
+func (a *App) buildToolsForConfig(cfg ConfigState) []openai.Tool {
+	return a.buildToolsWithMcp()
+}
+
+func (a *App) GetMcpServers() []map[string]any {
+	if a.mcpManager == nil {
+		return nil
+	}
+	return a.mcpManager.GetServerStatuses()
+}
+
+func (a *App) ListTools() []ToolDefinitionSummary {
+	tools := make([]ToolDefinitionSummary, 0, len(chatTools()))
+	for _, tool := range chatTools() {
+		if tool.Function == nil {
+			continue
+		}
+		tools = append(tools, ToolDefinitionSummary{
+			Name:        tool.Function.Name,
+			Description: strings.TrimSpace(tool.Function.Description),
+			Source:      "built-in",
+		})
+	}
+	if a.mcpManager != nil {
+		mcpTools := a.mcpManager.GetAllTools()
+		sort.Slice(mcpTools, func(i, j int) bool {
+			if mcpTools[i].ServerName == mcpTools[j].ServerName {
+				return mcpTools[i].Name < mcpTools[j].Name
+			}
+			return mcpTools[i].ServerName < mcpTools[j].ServerName
+		})
+		for _, tool := range mcpTools {
+			name := tool.FunctionName
+			if name == "" {
+				name = mcpToolFunctionName(tool.ServerName, tool.Name)
+			}
+			description := strings.TrimSpace(tool.Description)
+			if description == "" {
+				description = fmt.Sprintf("MCP tool %s from %s", tool.Name, tool.ServerName)
+			}
+			tools = append(tools, ToolDefinitionSummary{
+				Name:        name,
+				Description: description,
+				Source:      "mcp",
+				Server:      tool.ServerName,
+			})
+		}
+	}
+	return tools
+}
+
+func (a *App) emitMcpStatus() {
+	if a.ctx == nil || a.mcpManager == nil {
+		return
+	}
+	a.emit("mcp:status", map[string]any{"servers": a.mcpManager.GetServerStatuses()})
+}
+
+func (a *App) GetMcpConfig() (string, error) {
+	path := mcpUserConfigPath()
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return "{\n  \"mcpServers\": {}\n}", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+func (a *App) SaveMcpConfig(raw string) error {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		raw = "{\"mcpServers\":{}}"
+	}
+	var cfg McpServersConfig
+	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
+		return fmt.Errorf("invalid MCP JSON: %w", err)
+	}
+	if cfg.McpServers == nil {
+		cfg.McpServers = map[string]McpServerConfig{}
+	}
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	path := mcpUserConfigPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o600)
+}
+
+func (a *App) RestartMcpServers() error {
+	cfg, err := a.getConfig()
+	if err != nil {
+		return err
+	}
+	root, err := workspaceRoot(cfg)
+	if err != nil {
+		return err
+	}
+	if a.ctx == nil {
+		return errors.New("application context is not ready")
+	}
+	if a.mcpManager != nil {
+		a.mcpManager.Shutdown()
+	}
+	manager := NewMcpManager(root, func(tools []McpDiscoveredTool) {
+		a.emitMcpStatus()
+		a.invalidateContextStaticCache()
+	})
+	manager.SetNetworkConfigProvider(func() ConfigState { return a.effectiveConfig(ConfigState{}) })
+	a.mcpManager = manager
+	err = manager.StartAll(a.ctx)
+	a.emitMcpStatus()
+	return err
+}
+
+// ── MCP tool execution ───────────────────────────────────────
+
+func (a *App) executeMcpTool(ctx context.Context, serverName, toolName string, args map[string]any) (any, error) {
+	if a.mcpManager == nil {
+		return nil, fmt.Errorf("MCP not initialized")
+	}
+	result, err := a.mcpManager.CallTool(ctx, serverName, toolName, args)
+	if err != nil {
+		return nil, fmt.Errorf("MCP tool %s/%s failed: %w", serverName, toolName, err)
+	}
+	return map[string]any{"output": result}, nil
+}
+
+func (a *App) executeMcpFunctionTool(ctx context.Context, functionName string, args map[string]any) (any, error) {
+	if a.mcpManager == nil {
+		return nil, fmt.Errorf("MCP not initialized")
+	}
+	result, err := a.mcpManager.CallToolByFunctionName(ctx, functionName, args)
+	if err != nil {
+		return nil, fmt.Errorf("MCP tool %s failed: %w", functionName, err)
+	}
+	return map[string]any{"output": result}, nil
+}
+
+func (a *App) mcpToolEventMeta(functionName string) map[string]any {
+	if a.mcpManager == nil || !strings.HasPrefix(functionName, "mcp__") {
+		return nil
+	}
+	ref, ok := a.mcpManager.DescribeFunctionTool(functionName)
+	if !ok {
+		return nil
+	}
+	return map[string]any{
+		"mcpServer": ref.ServerName,
+		"mcpTool":   ref.ToolName,
+	}
+}
+
+func mergeToolEventMeta(event map[string]any, meta map[string]any) map[string]any {
+	if len(meta) == 0 {
+		return event
+	}
+	for key, value := range meta {
+		event[key] = value
+	}
+	return event
 }

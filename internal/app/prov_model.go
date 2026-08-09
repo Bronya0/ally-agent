@@ -1704,3 +1704,31 @@ func mergeAnthropicUsage(current *modelUsage, usage anthropic.MessageDeltaUsage)
 	}
 	return current
 }
+
+// mergeToolCallDeltas merges streaming tool-call deltas into the accumulated
+// tool call list, appending or extending by index. Shared by the OpenAI
+// streaming adapters; the tests in app_test.go exercise the same package.
+func mergeToolCallDeltas(toolCalls *[]legacyopenai.ToolCall, deltas []legacyopenai.ToolCall) {
+	for _, delta := range deltas {
+		idx := len(*toolCalls)
+		if delta.Index != nil {
+			idx = *delta.Index
+		}
+		for len(*toolCalls) <= idx {
+			*toolCalls = append(*toolCalls, legacyopenai.ToolCall{Type: legacyopenai.ToolTypeFunction})
+		}
+		current := &(*toolCalls)[idx]
+		if delta.ID != "" {
+			current.ID += delta.ID
+		}
+		if delta.Type != "" {
+			current.Type = delta.Type
+		}
+		if delta.Function.Name != "" {
+			current.Function.Name += delta.Function.Name
+		}
+		if delta.Function.Arguments != "" {
+			current.Function.Arguments += delta.Function.Arguments
+		}
+	}
+}

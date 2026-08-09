@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"regexp"
 	goruntime "runtime"
 	"sort"
 	"strings"
@@ -770,4 +771,139 @@ func detectWorkspaceKeyFiles(root string) []string {
 func fileOrDirExists(absPath string) bool {
 	_, err := os.Stat(absPath)
 	return err == nil
+}
+
+// ── Workspace map / gitignore helpers ────────────────────────
+
+func pathDepth(rel string) int {
+	rel = filepath.Clean(rel)
+	if rel == "." || rel == "" {
+		return 0
+	}
+	return strings.Count(rel, string(os.PathSeparator)) + 1
+}
+
+func isHeavyDir(name string) bool {
+	switch strings.ToLower(name) {
+	case ".git", "node_modules", "dist", "build", "target", ".next", ".nuxt", ".svelte-kit", "vendor", "__pycache__":
+		return true
+	default:
+		return false
+	}
+}
+
+func isWorkspaceMapHeavyDir(name string) bool {
+	if isHeavyDir(name) {
+		return true
+	}
+	switch strings.ToLower(name) {
+	case ".venv", "venv", ".cache", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".turbo", ".parcel-cache", ".vite", "coverage":
+		return true
+	default:
+		return false
+	}
+}
+
+func isWorkspaceMapSensitiveFile(name string, isDir bool) bool {
+	if isDir {
+		return false
+	}
+	lower := strings.ToLower(name)
+	if lower == ".env" || strings.HasPrefix(lower, ".env.") {
+		return !strings.Contains(lower, "example") && !strings.Contains(lower, "sample") && !strings.Contains(lower, "template")
+	}
+	return false
+}
+
+type gitignoreRule struct {
+	pattern  string
+	negated  bool
+	dirOnly  bool
+	anchored bool
+	hasSlash bool
+}
+
+func loadRootGitignoreRules(root string) []gitignoreRule {
+	data, err := os.ReadFile(filepath.Join(root, ".gitignore"))
+	if err != nil {
+		return nil
+	}
+	lines := strings.Split(string(data), "\n")
+	rules := make([]gitignoreRule, 0, len(lines))
+	for _, raw := range lines {
+		line := strings.TrimSpace(strings.TrimSuffix(raw, "\r"))
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		negated := false
+		if strings.HasPrefix(line, "!") {
+			negated = true
+			line = strings.TrimSpace(strings.TrimPrefix(line, "!"))
+		}
+		if line == "" {
+			continue
+		}
+
+		line = strings.ReplaceAll(line, `\#`, "#")
+		line = filepath.ToSlash(line)
+		dirOnly := strings.HasSuffix(line, "/")
+		line = strings.TrimRight(line, "/")
+		anchored := strings.HasPrefix(line, "/")
+		line = strings.TrimLeft(line, "/")
+		if line == "" || line == "." {
+			continue
+		}
+		rules = append(rules, gitignoreRule{
+			pattern:  line,
+			negated:  negated,
+			dirOnly:  dirOnly,
+			anchored: anchored,
+			hasSlash: strings.Contains(line, "/"),
+		})
+	}
+	return rules
+}
+
+func matchGitignoreRules(rules []gitignoreRule, relPath string, isDir bool) bool {
+	relPath = strings.Trim(filepath.ToSlash(relPath), "/")
+	ignored := false
+	for _, rule := range rules {
+		if matchGitignoreRule(rule, relPath, isDir) {
+			ignored = !rule.negated
+		}
+	}
+	return ignored
+}
+
+func matchGitignoreRule(rule gitignoreRule, relPath string, isDir bool) bool {
+	if relPath == "" {
+		return false
+	}
+	if rule.dirOnly && !isDir {
+		return false
+	}
+	if rule.anchored || rule.hasSlash {
+		return matchWorkspaceGlob(rule.pattern, relPath)
+	}
+	for _, part := range strings.Split(relPath, "/") {
+		if matchWorkspaceGlob(rule.pattern, part) {
+			return true
+		}
+	}
+	return false
+}
+
+func matchWorkspaceGlob(pattern, target string) bool {
+	if pattern == target {
+		return true
+	}
+	if strings.Contains(pattern, "**") {
+		re, err := regexp.Compile("^" + grep.GlobPatternToRegex(pattern) + "$")
+		if err == nil && re.MatchString(target) {
+			return true
+		}
+	}
+	matched, err := path.Match(pattern, target)
+	return err == nil && matched
 }

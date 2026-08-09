@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -818,4 +819,320 @@ func replaceSessionFile(source, destination string) error {
 	}
 	_ = os.Remove(backup)
 	return nil
+}
+
+// ── Saved history persistence ─────────────────────────────────
+
+func (a *App) historyDiskPaths(sessionID string) []string {
+	safeName := url.PathEscape(sessionID)
+	return []string{
+		filepath.Join(a.historiesDir, safeName+".json.gz"),
+		filepath.Join(a.historiesDir, safeName+".json"),
+	}
+}
+
+func (a *App) saveHistory(sessionID string, messages []openai.ChatCompletionMessage) {
+	if sessionID == "" {
+		return
+	}
+	filtered := trimSavedHistory(sanitizeHistoryMessages(messages))
+	breakdown := computeLiveBreakdown(filtered)
+	a.mu.Lock()
+	a.histories[sessionID] = cloneChatMessages(filtered)
+	a.liveBreakdown[sessionID] = breakdown
+	a.mu.Unlock()
+
+	if a.historiesDir == "" {
+		return
+	}
+	paths := a.historyDiskPaths(sessionID)
+	if err := writeCompressedHistory(paths[0], filtered); err != nil {
+		log.Printf("saveHistory: failed to write %s: %v", paths[0], err)
+		return
+	}
+	if err := os.Remove(paths[1]); err != nil && !errors.Is(err, os.ErrNotExist) {
+		log.Printf("saveHistory: failed to remove legacy %s: %v", paths[1], err)
+	}
+}
+
+func (a *App) restoreSavedHistoryBreakdown(sessionID string) {
+	if sessionID == "" {
+		return
+	}
+	a.mu.Lock()
+	history := cloneChatMessages(a.histories[sessionID])
+	if history == nil {
+		history = cloneChatMessages(a.loadHistoryLocked(sessionID))
+	}
+	if len(history) == 0 {
+		delete(a.liveBreakdown, sessionID)
+	} else {
+		a.liveBreakdown[sessionID] = computeLiveBreakdown(history)
+	}
+	a.mu.Unlock()
+}
+
+func writeCompressedHistory(diskPath string, messages []openai.ChatCompletionMessage) error {
+	tmp, err := os.CreateTemp(filepath.Dir(diskPath), ".history-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	committed := false
+	defer func() {
+		if !committed {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	zw := gzip.NewWriter(tmp)
+	encodeErr := json.NewEncoder(zw).Encode(messages)
+	closeGzipErr := zw.Close()
+	closeFileErr := tmp.Close()
+	if encodeErr != nil {
+		return encodeErr
+	}
+	if closeGzipErr != nil {
+		return closeGzipErr
+	}
+	if closeFileErr != nil {
+		return closeFileErr
+	}
+	if err := os.Rename(tmpPath, diskPath); err != nil {
+		// Windows may reject replacing an existing destination. Move the old
+		// valid file aside, install the completed temp, and roll back on failure.
+		backupPath := diskPath + ".bak"
+		_ = os.Remove(backupPath)
+		if backupErr := os.Rename(diskPath, backupPath); backupErr != nil {
+			return err
+		}
+		if retryErr := os.Rename(tmpPath, diskPath); retryErr != nil {
+			_ = os.Rename(backupPath, diskPath)
+			return retryErr
+		}
+		_ = os.Remove(backupPath)
+	}
+	committed = true
+	return nil
+}
+
+func (a *App) loadHistoryLocked(sessionID string) []openai.ChatCompletionMessage {
+	if a.historiesDir == "" {
+		return nil
+	}
+	paths := a.historyDiskPaths(sessionID)
+	var messages []openai.ChatCompletionMessage
+	loaded := false
+	for index, diskPath := range paths {
+		file, err := os.Open(diskPath)
+		if err != nil {
+			continue
+		}
+		var source io.Reader = file
+		var zr *gzip.Reader
+		if index == 0 {
+			zr, err = gzip.NewReader(file)
+			if err != nil {
+				_ = file.Close()
+				continue
+			}
+			source = zr
+		}
+		data, readErr := io.ReadAll(io.LimitReader(source, maxSavedHistoryJSONBytes+1))
+		if zr != nil {
+			_ = zr.Close()
+		}
+		_ = file.Close()
+		if readErr != nil || len(data) > maxSavedHistoryJSONBytes || json.Unmarshal(data, &messages) != nil {
+			continue
+		}
+		loaded = true
+		break
+	}
+	if !loaded {
+		return nil
+	}
+	messages = trimSavedHistory(sanitizeHistoryMessages(messages))
+	a.histories[sessionID] = cloneChatMessages(messages)
+	return messages
+}
+
+func historyMessageTokens(message openai.ChatCompletionMessage) int {
+	tokens := estimateMessageBodyTokens(message)
+	for _, call := range message.ToolCalls {
+		tokens += estimateTokensFromText(call.Function.Name)
+		tokens += estimateTokensFromText(call.Function.Arguments)
+	}
+	return tokens
+}
+
+func trimSavedHistory(messages []openai.ChatCompletionMessage) []openai.ChatCompletionMessage {
+	if len(messages) == 0 {
+		return nil
+	}
+	total := 0
+	for _, message := range messages {
+		total += historyMessageTokens(message)
+	}
+	if total <= maxSavedHistoryTokens {
+		return messages
+	}
+
+	// Start only at a user message so an assistant tool call and all of its
+	// tool results remain an intact model-protocol sequence. If the newest turn
+	// alone exceeds the budget, keep it whole rather than creating orphans.
+	running := 0
+	start := len(messages)
+	lastUser := -1
+	for index := len(messages) - 1; index >= 0; index-- {
+		running += historyMessageTokens(messages[index])
+		if messages[index].Role != openai.ChatMessageRoleUser {
+			continue
+		}
+		lastUser = index
+		if running <= maxSavedHistoryTokens {
+			start = index
+			continue
+		}
+		break
+	}
+	if start == len(messages) {
+		if lastUser >= 0 {
+			start = lastUser
+		} else {
+			return messages
+		}
+	}
+	return messages[start:]
+}
+
+func sanitizeHistoryMessages(messages []openai.ChatCompletionMessage) []openai.ChatCompletionMessage {
+	filtered := make([]openai.ChatCompletionMessage, 0, len(messages))
+	for _, original := range messages {
+		if original.Role == openai.ChatMessageRoleSystem || isGoalProgressMessage(original) {
+			continue
+		}
+		m := original
+		if len(m.MultiContent) > 0 {
+			m.Content = textFromMultiContent(m.MultiContent)
+			m.MultiContent = nil
+		}
+		if strings.TrimSpace(m.Content) == "" && len(m.ToolCalls) == 0 && m.Role != openai.ChatMessageRoleTool {
+			continue
+		}
+		m.ToolCalls = append([]openai.ToolCall(nil), m.ToolCalls...)
+		filtered = append(filtered, m)
+	}
+	return filtered
+}
+
+func textFromMultiContent(parts []openai.ChatMessagePart) string {
+	var b strings.Builder
+	imageCount := 0
+	for _, part := range parts {
+		switch part.Type {
+		case openai.ChatMessagePartTypeText:
+			if strings.TrimSpace(part.Text) != "" {
+				if b.Len() > 0 {
+					b.WriteString("\n")
+				}
+				b.WriteString(part.Text)
+			}
+		case openai.ChatMessagePartTypeImageURL:
+			imageCount++
+		}
+	}
+	if imageCount > 0 {
+		if b.Len() > 0 {
+			b.WriteString("\n\n")
+		}
+		fmt.Fprintf(&b, "[%d image attachment(s) omitted from saved history]", imageCount)
+	}
+	return b.String()
+}
+
+type savedToolActivity struct {
+	CallID  string
+	Name    string
+	Args    string
+	Status  string
+	Summary string
+}
+
+func formatSavedToolActivity(tools []savedToolActivity) string {
+	if len(tools) == 0 {
+		return ""
+	}
+	const maxSavedToolLines = 20
+	var b strings.Builder
+	b.WriteString("Tool activity from previous turn:\n")
+	limit := len(tools)
+	if limit > maxSavedToolLines {
+		limit = maxSavedToolLines
+	}
+	for i := 0; i < limit; i++ {
+		tool := tools[i]
+		status := strings.TrimSpace(tool.Status)
+		if status == "" {
+			status = "called"
+		}
+		b.WriteString("- ")
+		b.WriteString(tool.Name)
+		if args := compactSavedToolArgs(tool.Args); args != "" {
+			b.WriteString("(")
+			b.WriteString(args)
+			b.WriteString(")")
+		}
+		b.WriteString(": ")
+		b.WriteString(status)
+		if summary := strings.TrimSpace(tool.Summary); summary != "" {
+			b.WriteString(" - ")
+			b.WriteString(summary)
+		}
+		b.WriteString("\n")
+	}
+	if len(tools) > limit {
+		b.WriteString(fmt.Sprintf("- ... %d more tool calls omitted\n", len(tools)-limit))
+	}
+	return truncateRunes(strings.TrimRight(b.String(), "\n"), 4000)
+}
+
+func compactSavedToolArgs(args string) string {
+	args = strings.TrimSpace(args)
+	if args == "" {
+		return ""
+	}
+	var decoded any
+	if json.Unmarshal([]byte(args), &decoded) == nil {
+		if raw, err := json.Marshal(decoded); err == nil {
+			args = string(raw)
+		}
+	}
+	return truncateRunes(normalizeWhitespace(args), 240)
+}
+
+func summarizeSavedToolResult(name, content string) (string, string) {
+	var result toolResult
+	if err := json.Unmarshal([]byte(content), &result); err == nil {
+		if result.OK {
+			summary := toolResultSummary(name, &result)
+			if summary == "" {
+				summary = "ok"
+			}
+			return "success", summary
+		}
+		errText := strings.TrimSpace(result.Error)
+		if errText == "" {
+			errText = "error"
+		}
+		return "failed", truncateRunes(normalizeWhitespace(errText), 240)
+	}
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return "completed", ""
+	}
+	return "completed", truncateRunes(normalizeWhitespace(content), 240)
 }

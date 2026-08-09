@@ -17,6 +17,8 @@ import (
 	"time"
 
 	goruntime "runtime"
+
+	"ally-dev/internal/tools/pathutil"
 )
 
 func (a *App) createFileWithConfig(cfg ConfigState, req CreateFileRequest) (EditResult, error) {
@@ -784,4 +786,102 @@ func isDangerousSearchRoot(absPath string) (bool, string) {
 	}
 
 	return false, ""
+}
+
+// ── Workspace path resolution (thin pathutil wrappers) ───────
+
+func workspaceRoot(cfg ConfigState) (string, error) {
+	return pathutil.RootFromConfig(cfg.Workspace)
+}
+
+// workspaceRoots 返回主工作区 + 会话级 ExtraRoots 的去重列表。
+// 主工作区始终是 roots[0]，且必须存在；ExtraRoots 中不存在或非目录的条目被静默跳过。
+// 重复路径（按 OS 风格归一化后）只保留首次出现。
+func workspaceRoots(cfg ConfigState) ([]string, error) {
+	return pathutil.RootsFromConfig(cfg.Workspace, cfg.ExtraRoots)
+}
+
+// insideAnyRoot 判断 target 是否落在任一 root 内（不含 symlink 解析）。
+func insideAnyRoot(roots []string, target string) bool {
+	return pathutil.InsideAnyRoot(roots, target)
+}
+
+func safeJoin(roots []string, p string) (string, error) {
+	return pathutil.SafeJoin(pathRuntime, roots, p)
+}
+
+func resolveWritableFilePath(roots []string, p string) (string, error) {
+	abs, err := safeJoin(roots, p)
+	if err != nil {
+		return "", codedToolError("E_PATH_OUTSIDE", err)
+	}
+	if info, err := os.Lstat(abs); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		return "", codedToolError("E_SYMLINK_PATH", fmt.Errorf("refusing to write through symlink path: %s", p))
+	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return "", err
+	}
+	resolved, err := evalExistingPrefix(abs)
+	if err != nil {
+		return "", err
+	}
+	if !insideWriteRoot(roots, resolved) {
+		return "", codedToolError("E_PATH_OUTSIDE", fmt.Errorf("path resolves outside workspace or ~/.ally_agent: %s\n允许写入的根目录：%s", p, formatAllowedRoots(roots)))
+	}
+	return abs, nil
+}
+
+func resolveDeletablePath(roots []string, p string) (string, error) {
+	abs, err := safeJoin(roots, p)
+	if err != nil {
+		return "", codedToolError("E_PATH_OUTSIDE", err)
+	}
+	info, err := os.Lstat(abs)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", codedToolError("E_PATH_NOT_FOUND", err)
+		}
+		return "", err
+	}
+	checkPath := abs
+	if info.Mode()&os.ModeSymlink != 0 {
+		checkPath = filepath.Dir(abs)
+	}
+	resolved, err := evalExistingPrefix(checkPath)
+	if err != nil {
+		return "", err
+	}
+	if !insideWriteRoot(roots, resolved) {
+		return "", codedToolError("E_PATH_OUTSIDE", fmt.Errorf("path resolves outside workspace or ~/.ally_agent: %s\n允许写入的根目录：%s", p, formatAllowedRoots(roots)))
+	}
+	return abs, nil
+}
+
+func resolveCommandCwd(roots []string, p string) (string, error) {
+	abs, err := safeJoin(roots, p)
+	if err != nil {
+		return "", codedToolError("E_PATH_OUTSIDE", err)
+	}
+	resolved, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", codedToolError("E_CWD_INVALID", err)
+		}
+		return "", err
+	}
+	if !insideWriteRoot(roots, resolved) {
+		return "", codedToolError("E_PATH_OUTSIDE", fmt.Errorf("cwd resolves outside workspace or ~/.ally_agent: %s\n允许写入的根目录：%s", p, formatAllowedRoots(roots)))
+	}
+	info, err := os.Stat(resolved)
+	if err != nil {
+		return "", err
+	}
+	if !info.IsDir() {
+		return "", codedToolError("E_CWD_INVALID", fmt.Errorf("cwd is not a directory: %s", p))
+	}
+	return filepath.Clean(resolved), nil
+}
+
+// formatAllowedRoots 把 roots 列表格式化为换行分隔的字符串，用于错误信息提示。
+func formatAllowedRoots(roots []string) string {
+	return pathutil.FormatAllowedRoots(roots)
 }

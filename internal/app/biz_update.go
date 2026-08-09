@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"io"
@@ -43,7 +44,7 @@ import (
 // keeps the existing "open browser" behavior.
 
 const (
-	allyReleasesAPI       = "https://api.github.com/repos/Bronya0/ally-agent/releases"
+	allyReleasesAPI = "https://api.github.com/repos/Bronya0/ally-agent/releases"
 	// allyReleasesAtom is the public Atom feed for releases. It does not go
 	// through the GitHub REST API and is therefore NOT subject to the 60/hour
 	// anonymous rate limit. Used for the periodic "is there a new version?"
@@ -136,8 +137,8 @@ func updateBaseDir() string {
 // JSON fields are tolerated on read (ignored) for backward compatibility
 // with cache files written by older builds.
 type updateReleaseCache struct {
-	LastTag      string    `json:"lastTag,omitempty"`
-	LastChecked  time.Time `json:"lastChecked,omitempty"`
+	LastTag     string    `json:"lastTag,omitempty"`
+	LastChecked time.Time `json:"lastChecked,omitempty"`
 }
 
 func updateCachePath() string {
@@ -1313,4 +1314,150 @@ func (a *App) ClearSkippedUpdates() int {
 		return 0
 	}
 	return n
+}
+
+// ── Release check ────────────────────────────────────────────
+
+// CheckForUpdatesResult describes the outcome of a latest-release lookup.
+type CheckForUpdatesResult struct {
+	OK                bool   `json:"ok"`
+	Tag               string `json:"tag,omitempty"`
+	Error             string `json:"error,omitempty"`
+	CanAutoUpdate     bool   `json:"canAutoUpdate,omitempty"`
+	AutoUpdateEnabled bool   `json:"autoUpdateEnabled,omitempty"`
+	Skipped           bool   `json:"skipped,omitempty"`
+	StagedVersion     string `json:"stagedVersion,omitempty"`
+}
+
+// allyReleaseAtomTagRe extracts the version tag from a release URL such as
+// "https://github.com/Bronya0/ally-agent/releases/tag/v1.6.0". Used as a
+// fallback when the <id> element does not end with the tag.
+var allyReleaseAtomTagRe = regexp.MustCompile(`/releases/tag/([^/?#]+)`)
+
+// atomFeed is a minimal subset of the GitHub releases Atom feed. Only the
+// fields used for version detection are decoded; <content> is skipped.
+type atomFeed struct {
+	XMLName xml.Name    `xml:"feed"`
+	Entries []atomEntry `xml:"entry"`
+}
+
+type atomEntry struct {
+	ID    string     `xml:"id"`
+	Title string     `xml:"title"`
+	Links []atomLink `xml:"link"`
+}
+
+type atomLink struct {
+	Rel  string `xml:"rel,attr"`
+	Href string `xml:"href,attr"`
+}
+
+// parseAtomLatestTag extracts the version tag of the first (newest) entry in
+// the Atom feed. It prefers the /releases/tag/<tag> segment from the
+// alternate link and falls back to the trailing path segment of <id>.
+func parseAtomLatestTag(body []byte) (string, error) {
+	var feed atomFeed
+	if err := xml.Unmarshal(body, &feed); err != nil {
+		return "", fmt.Errorf("parse atom feed: %w", err)
+	}
+	if len(feed.Entries) == 0 {
+		return "", errors.New("atom feed has no entries")
+	}
+	entry := feed.Entries[0]
+	for _, l := range entry.Links {
+		if l.Rel == "alternate" && l.Href != "" {
+			if m := allyReleaseAtomTagRe.FindStringSubmatch(l.Href); len(m) == 2 {
+				return strings.TrimSpace(m[1]), nil
+			}
+		}
+	}
+	// Fallback: <id>tag:github.com,2008:Repository/<repo>/v1.6.0</id>
+	if id := strings.TrimSpace(entry.ID); id != "" {
+		if idx := strings.LastIndex(id, "/"); idx >= 0 && idx < len(id)-1 {
+			return id[idx+1:], nil
+		}
+	}
+	return "", errors.New("could not locate release tag in atom feed")
+}
+
+// CheckForUpdates fetches the public GitHub releases Atom feed (no API token,
+// no rate limit) and reports the newest release tag. It uses a one-minute
+// timeout and never panics; the caller (frontend) treats any non-OK result as
+// "no update detected".
+//
+// On a network/parse failure, the last known tag persisted in
+// ~/.ally_agent/update_cache.json is returned so the UI still works.
+//
+// The result also reports whether automatic background download is enabled,
+// whether the latest tag was previously skipped, and the version currently
+// staged on disk (if any) so the frontend can decide whether to silently
+// download, prompt the user, or do nothing.
+func (a *App) CheckForUpdates() CheckForUpdatesResult {
+	cfg := updateNetworkConfig(a.effectiveConfigSafe())
+	client := proxyHTTPClient(cfg, false, 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, allyReleasesAtom, nil)
+	if err != nil {
+		return a.fallbackUpdateResult(cfg, err.Error())
+	}
+	req.Header.Set("Accept", "application/atom+xml,application/xml,text/xml;q=0.9,*/*;q=0.8")
+	req.Header.Set("User-Agent", "ally-agent-update-check")
+	resp, err := client.Do(req)
+	if err != nil {
+		return a.fallbackUpdateResult(cfg, err.Error())
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return a.fallbackUpdateResult(cfg, fmt.Sprintf("atom feed status %d", resp.StatusCode))
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return a.fallbackUpdateResult(cfg, err.Error())
+	}
+	tag, err := parseAtomLatestTag(body)
+	if err != nil {
+		return a.fallbackUpdateResult(cfg, err.Error())
+	}
+	if err := validateUpdateTag(tag); err != nil {
+		return a.fallbackUpdateResult(cfg, err.Error())
+	}
+	cache := loadUpdateCache()
+	cache.LastTag = tag
+	cache.LastChecked = time.Now()
+	saveUpdateCache(cache)
+	return a.buildUpdateResult(cfg, tag)
+}
+
+// fallbackUpdateResult returns the cached latest tag when available, so the
+// UI keeps working during a transient network/parse failure. If no cache is
+// available, it returns the original error.
+func (a *App) fallbackUpdateResult(cfg ConfigState, errMsg string) CheckForUpdatesResult {
+	cache := loadUpdateCache()
+	if tag := strings.TrimSpace(cache.LastTag); tag != "" {
+		return a.buildUpdateResult(cfg, tag)
+	}
+	return CheckForUpdatesResult{Error: errMsg}
+}
+
+// buildUpdateResult assembles a CheckForUpdatesResult from a known tag,
+// resolving skipped / staged state. Shared by the success, fallback, and
+// cached-tag paths so they produce identical result shapes.
+func (a *App) buildUpdateResult(cfg ConfigState, tag string) CheckForUpdatesResult {
+	result := CheckForUpdatesResult{
+		OK:                true,
+		Tag:               tag,
+		CanAutoUpdate:     updatePlatformSupported(),
+		AutoUpdateEnabled: cfg.autoUpdateEnabled(),
+	}
+	for _, skipped := range cfg.SkippedUpdates {
+		if skipped == tag {
+			result.Skipped = true
+			break
+		}
+	}
+	if staged := a.findStagedUpdate(); staged != "" {
+		result.StagedVersion = staged
+	}
+	return result
 }

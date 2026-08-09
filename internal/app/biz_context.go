@@ -2,13 +2,14 @@ package app
 
 import (
 	"crypto/sha256"
-	"encoding/json"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
 	"path/filepath"
 	goruntime "runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -622,4 +623,449 @@ func cloneTodos(list []TodoEntry) []TodoEntry {
 	out := make([]TodoEntry, len(list))
 	copy(out, list)
 	return out
+}
+
+// ── Request message assembly ─────────────────────────────────
+
+func (a *App) buildMessages(req ChatRequest, cfg ConfigState, allSkills []SkillDefinition) []openai.ChatCompletionMessage {
+	messages := a.buildSystemContextMessages(req.SessionID, cfg, allSkills)
+
+	if len(req.Messages) > 0 {
+		history := a.loadSessionHistoryCopy(req.SessionID)
+		if len(history) > 0 {
+			messages = append(messages, history...)
+			messages = appendFrontendHistoryDelta(messages, history, req.Messages)
+		} else {
+			for _, m := range req.Messages {
+				role := strings.TrimSpace(m.Role)
+				if role != openai.ChatMessageRoleUser && role != openai.ChatMessageRoleAssistant {
+					continue
+				}
+				if strings.TrimSpace(m.Content) == "" && len(m.Attachments) == 0 {
+					continue
+				}
+				if role == openai.ChatMessageRoleUser && len(m.Attachments) > 0 {
+					messages = appendUserMessageWithAttachments(messages, m.Content, m.Attachments)
+				} else {
+					messages = append(messages, openai.ChatCompletionMessage{Role: role, Content: m.Content})
+				}
+			}
+		}
+		messages = a.appendGoalProgressMessage(messages, req.SessionID)
+		return messages
+	}
+
+	if req.SessionID != "" {
+		messages = append(messages, a.loadSessionHistoryCopy(req.SessionID)...)
+	}
+	if strings.TrimSpace(req.Message) != "" || len(req.Attachments) > 0 {
+		messages = appendUserMessageWithAttachments(messages, req.Message, req.Attachments)
+	}
+	messages = a.appendGoalProgressMessage(messages, req.SessionID)
+	return messages
+}
+
+func isGoalProgressMessage(m openai.ChatCompletionMessage) bool {
+	return m.Role == openai.ChatMessageRoleUser && strings.Contains(m.Content, "<ally-goal-progress>")
+}
+
+// cancelledTurnMarker returns the user-role control message recorded when the
+// user interrupts a run (ESC / stop). It is persisted into the saved history so
+// the next request can distinguish a user-cancelled turn from provider errors;
+// the XML tag marks it as machine-generated status rather than a user utterance.
+func cancelledTurnMarker() openai.ChatCompletionMessage {
+	return openai.ChatCompletionMessage{
+		Role:    openai.ChatMessageRoleUser,
+		Content: "<ally-cancelled>\n上一条提问已被用户取消\n</ally-cancelled>",
+	}
+}
+
+func (a *App) buildSystemContextMessages(sessionID string, cfg ConfigState, allSkills []SkillDefinition) []openai.ChatCompletionMessage {
+	messages := []openai.ChatCompletionMessage{}
+	systemPrompt := defaultSystemPrompt(allSkills, cfg.Workspace, cfg.ExtraRoots, cfg.CustomPrompt, cfg.GitBashPath)
+	if systemPrompt != "" {
+		messages = append(messages, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleSystem, Content: systemPrompt})
+	}
+	messages = a.appendWorkspaceMapMessage(messages, cfg)
+
+	// Inject active goal context
+	if goal := a.getActiveGoal(sessionID); goal != nil {
+		goalCtx := fmt.Sprintf("You are working under an active goal.\nObjective: %s", goal.Objective)
+		if goal.CompletionCriterion != "" {
+			goalCtx += "\nCompletion criterion: " + goal.CompletionCriterion
+		}
+		goalCtx += "\n\nBefore doing any goal work, check the objective. If complete or blocked, call update_goal. Otherwise, make focused progress. Call update_goal as soon as the goal is done."
+		messages = append(messages, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleSystem, Content: goalCtx})
+	}
+	return messages
+}
+
+func (a *App) appendGoalProgressMessage(messages []openai.ChatCompletionMessage, sessionID string) []openai.ChatCompletionMessage {
+	goal := a.getActiveGoal(sessionID)
+	if goal == nil {
+		return messages
+	}
+	var progress strings.Builder
+	progress.WriteString("<ally-goal-progress>\n")
+	progress.WriteString("Status: ")
+	progress.WriteString(goal.Status)
+	progress.WriteString("\nContinuation turns used: ")
+	progress.WriteString(strconv.Itoa(goal.TurnsUsed))
+	if goal.TurnBudget > 0 {
+		progress.WriteString("\nTurn budget: ")
+		progress.WriteString(strconv.Itoa(goal.TurnBudget))
+	}
+	progress.WriteString("\n</ally-goal-progress>")
+	return append(messages, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: progress.String()})
+}
+
+// contextBudgetThresholdPct is the remaining-budget percentage below which the
+// context-budget item is injected. Above it the model sees no budget message at
+// all: with a ~1M-token window the numbers carry no decision information and
+// models occasionally echo the note back as noise. Only when the window is
+// actually getting tight does the hint matter (prefer grep over read, avoid
+// re-reading).
+const contextBudgetThresholdPct = 30
+
+// appendContextBudgetMessage returns a new slice with a context-budget item
+// appended to the request tail, or the input slice unchanged when remaining
+// budget is above contextBudgetThresholdPct. It deliberately allocates a fresh
+// slice so the caller's `messages` is never mutated; the budget item must not
+// be persisted into saved history (it would bloat storage and disrupt reusable
+// prefixes).
+//
+// Placing the budget at the tail follows the same strategy as
+// <ally-goal-progress>: dynamic, low-priority content goes last. The explicit
+// GPT-5.6 Responses cache boundary, when active, stays before this tail.
+func appendContextBudgetMessage(messages []openai.ChatCompletionMessage, usedTokens, maxCtx int) []openai.ChatCompletionMessage {
+	if maxCtx <= 0 {
+		maxCtx = 1048576
+	}
+	if usedTokens < 0 {
+		usedTokens = 0
+	}
+	remaining := maxCtx - usedTokens
+	if remaining < 0 {
+		remaining = 0
+	}
+	usedPct := 0
+	if maxCtx > 0 {
+		usedPct = usedTokens * 100 / maxCtx
+	}
+	remainingPct := 100 - usedPct
+	if remainingPct >= contextBudgetThresholdPct {
+		return messages
+	}
+	var b strings.Builder
+	b.WriteString("<ally-context-budget>\n")
+	fmt.Fprintf(&b, "Window: %d tokens\n", maxCtx)
+	fmt.Fprintf(&b, "Used: %d tokens (%d%%)\n", usedTokens, usedPct)
+	fmt.Fprintf(&b, "Remaining: %d tokens (%d%%)\n", remaining, remainingPct)
+	b.WriteString("Note: large tool results (read, run_command output) consume budget quickly. ")
+	b.WriteString("When remaining is low, prefer grep/list_files over read, and avoid re-reading files already seen this turn.")
+	b.WriteString("\n</ally-context-budget>")
+	out := make([]openai.ChatCompletionMessage, len(messages)+1)
+	copy(out, messages)
+	out[len(messages)] = openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: b.String()}
+	return out
+}
+
+// appendTodoStatusMessage returns a new slice with a <ally-todos> item appended
+// to the request tail. The model sees the current todo list every turn — both
+// done and pending items — so it can decide when to call todo_write to update
+// statuses.
+//
+// Why every turn: models typically update todos as "before starting the next
+// item, mark the current done and the next in_progress". After the last item
+// there is no "next", so the model often answers the user directly without a
+// final todo_write. Injecting the current list every turn gives the model a
+// persistent visible reminder of which items are still pending/in_progress,
+// so it can notice "I have a dangling in_progress" and flip it.
+//
+// Like the context-budget message, this item is not persisted into saved
+// history — it is reconstructed fresh each turn from the live todo state.
+// If the list is empty, no item is appended (no todo list = no reminder
+// needed, and skipping keeps the request lean).
+func appendTodoStatusMessage(messages []openai.ChatCompletionMessage, todos []TodoEntry) []openai.ChatCompletionMessage {
+	if len(todos) == 0 {
+		return messages
+	}
+	var b strings.Builder
+	b.WriteString("<ally-todos>\n")
+	b.WriteString("Current todo list state (the user sees this same list in the UI):\n")
+	for i, t := range todos {
+		fmt.Fprintf(&b, "%d. [%s] %s\n", i+1, t.Status, t.Title)
+	}
+	b.WriteString("\nIf you just finished work that completes a pending or in_progress item, ")
+	b.WriteString("call `todo_write` to flip its status to `done` before answering the user. ")
+	b.WriteString("Keep at most one item `in_progress` at a time, and never end your turn with a dangling `in_progress` item that is actually finished.")
+	b.WriteString("\n</ally-todos>")
+	out := make([]openai.ChatCompletionMessage, len(messages)+1)
+	copy(out, messages)
+	out[len(messages)] = openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: b.String()}
+	return out
+}
+
+func (a *App) savedToolActivityContext(sessionID string, requestMessages []ChatMessageInput) []openai.ChatCompletionMessage {
+	if sessionID == "" {
+		return nil
+	}
+	requestContent := map[string]bool{}
+	for _, m := range requestMessages {
+		role := strings.TrimSpace(m.Role)
+		content := strings.TrimSpace(m.Content)
+		if role != "" && content != "" {
+			requestContent[role+"\x00"+content] = true
+		}
+	}
+
+	a.mu.Lock()
+	h := a.histories[sessionID]
+	if h == nil {
+		h = a.loadHistoryLocked(sessionID)
+	}
+	hCopy := append([]openai.ChatCompletionMessage(nil), h...)
+	a.mu.Unlock()
+
+	result := []openai.ChatCompletionMessage{}
+	seen := map[string]bool{}
+	for _, m := range hCopy {
+		content := strings.TrimSpace(m.Content)
+		if m.Role != openai.ChatMessageRoleAssistant || !strings.HasPrefix(content, "Tool activity from previous turn:") {
+			continue
+		}
+		key := m.Role + "\x00" + content
+		if requestContent[key] || seen[key] {
+			continue
+		}
+		seen[key] = true
+		result = append(result, openai.ChatCompletionMessage{
+			Role:    m.Role,
+			Content: content,
+		})
+	}
+	return result
+}
+
+func (a *App) loadSessionHistoryCopy(sessionID string) []openai.ChatCompletionMessage {
+	if sessionID == "" {
+		return nil
+	}
+	a.mu.Lock()
+	h := a.histories[sessionID]
+	if h == nil {
+		h = a.loadHistoryLocked(sessionID)
+	}
+	hCopy := cloneChatMessages(sanitizeHistoryMessages(h))
+	a.mu.Unlock()
+	return hCopy
+}
+
+func appendFrontendHistoryDelta(messages []openai.ChatCompletionMessage, backend []openai.ChatCompletionMessage, frontend []ChatMessageInput) []openai.ChatCompletionMessage {
+	backendKeys := make([]string, 0, len(backend))
+	for _, m := range backend {
+		if key := comparableMessageKey(m.Role, m.Content); key != "" {
+			backendKeys = append(backendKeys, key)
+		}
+	}
+
+	type frontendMessage struct {
+		key string
+		msg ChatMessageInput
+	}
+	front := make([]frontendMessage, 0, len(frontend))
+	for _, m := range frontend {
+		role := strings.TrimSpace(m.Role)
+		if role != openai.ChatMessageRoleUser && role != openai.ChatMessageRoleAssistant {
+			continue
+		}
+		if strings.TrimSpace(m.Content) == "" && len(m.Attachments) == 0 {
+			continue
+		}
+		front = append(front, frontendMessage{key: comparableMessageKey(role, m.Content), msg: m})
+	}
+
+	// Match the longest suffix of backend-visible history against any
+	// contiguous frontend range. This handles restart recovery where IndexedDB
+	// contains an older prefix but the backend retained only its budgeted tail.
+	lastMatchedFrontend := -1
+	maxOverlap := len(backendKeys)
+	if len(front) < maxOverlap {
+		maxOverlap = len(front)
+	}
+	for overlap := maxOverlap; overlap > 0 && lastMatchedFrontend < 0; overlap-- {
+		backendStart := len(backendKeys) - overlap
+		for frontStart := len(front) - overlap; frontStart >= 0; frontStart-- {
+			matched := true
+			for offset := 0; offset < overlap; offset++ {
+				if front[frontStart+offset].key == "" || front[frontStart+offset].key != backendKeys[backendStart+offset] {
+					matched = false
+					break
+				}
+			}
+			if matched {
+				lastMatchedFrontend = frontStart + overlap - 1
+				break
+			}
+		}
+	}
+
+	appendFrom := lastMatchedFrontend + 1
+	if lastMatchedFrontend < 0 && len(backendKeys) > 0 && len(front) > 0 {
+		// A backend compaction summary intentionally has no textual overlap with
+		// the still-expanded UI snapshot. In that case the backend remains the
+		// source of truth and only the request-tail message is new.
+		appendFrom = len(front) - 1
+	}
+	for _, item := range front[appendFrom:] {
+		role := strings.TrimSpace(item.msg.Role)
+		if role == openai.ChatMessageRoleUser && len(item.msg.Attachments) > 0 {
+			messages = appendUserMessageWithAttachments(messages, item.msg.Content, item.msg.Attachments)
+		} else {
+			messages = append(messages, openai.ChatCompletionMessage{Role: role, Content: item.msg.Content})
+		}
+	}
+	return messages
+}
+
+func comparableMessageKey(role, content string) string {
+	role = strings.TrimSpace(role)
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return ""
+	}
+	if role != openai.ChatMessageRoleUser && role != openai.ChatMessageRoleAssistant {
+		return ""
+	}
+	return role + "\x00" + content
+}
+
+func cloneChatMessages(messages []openai.ChatCompletionMessage) []openai.ChatCompletionMessage {
+	if len(messages) == 0 {
+		return nil
+	}
+	out := make([]openai.ChatCompletionMessage, len(messages))
+	copy(out, messages)
+	for i := range out {
+		out[i].ToolCalls = append([]openai.ToolCall(nil), messages[i].ToolCalls...)
+		out[i].MultiContent = append([]openai.ChatMessagePart(nil), messages[i].MultiContent...)
+	}
+	return out
+}
+
+func (a *App) appendWorkspaceMapMessage(messages []openai.ChatCompletionMessage, cfg ConfigState) []openai.ChatCompletionMessage {
+	if content := a.workspaceMapContext(cfg); content != "" {
+		messages = append(messages, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleSystem, Content: content})
+	}
+	return messages
+}
+
+func appendUserMessageWithAttachments(messages []openai.ChatCompletionMessage, text string, attachments []AttachmentInput) []openai.ChatCompletionMessage {
+	content := buildAttachmentTextContext(text, attachments)
+	parts := []openai.ChatMessagePart{}
+	if strings.TrimSpace(content) != "" {
+		parts = append(parts, openai.ChatMessagePart{Type: openai.ChatMessagePartTypeText, Text: content})
+	}
+	for _, att := range attachments {
+		if !isImageAttachment(att) || !validImageDataURL(att.DataURL) {
+			continue
+		}
+		if len(att.DataURL) > maxAttachmentDataURL {
+			continue
+		}
+		parts = append(parts, openai.ChatMessagePart{
+			Type: openai.ChatMessagePartTypeImageURL,
+			ImageURL: &openai.ChatMessageImageURL{
+				URL:    att.DataURL,
+				Detail: openai.ImageURLDetailAuto,
+			},
+		})
+	}
+	if len(parts) > 1 {
+		return append(messages, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, MultiContent: parts})
+	}
+	return append(messages, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: content})
+}
+
+func buildAttachmentTextContext(text string, attachments []AttachmentInput) string {
+	base := strings.TrimSpace(text)
+	if len(attachments) == 0 {
+		return base
+	}
+	var b strings.Builder
+	if base != "" {
+		b.WriteString(base)
+		b.WriteString("\n\n")
+	}
+	b.WriteString("Attached files:\n")
+	for i, att := range attachments {
+		name := strings.TrimSpace(att.Name)
+		if name == "" {
+			name = "unnamed"
+		}
+		kind := strings.TrimSpace(att.Kind)
+		if kind == "" {
+			kind = "file"
+		}
+		mimeType := strings.TrimSpace(att.Type)
+		if mimeType == "" {
+			mimeType = kind
+		}
+		state := "metadata only"
+		if isImageAttachment(att) && validImageDataURL(att.DataURL) && len(att.DataURL) <= maxAttachmentDataURL {
+			state = "sent as image input"
+		} else if strings.TrimSpace(att.Text) != "" {
+			state = "sent as text"
+		}
+		if att.Truncated {
+			state += ", truncated"
+		}
+		fmt.Fprintf(&b, "%d. %s (%s, %d bytes): %s", i+1, name, mimeType, att.Size, state)
+		if att.Error != "" {
+			fmt.Fprintf(&b, " (%s)", att.Error)
+		}
+		b.WriteString("\n")
+	}
+	for _, att := range attachments {
+		if strings.TrimSpace(att.Text) == "" {
+			continue
+		}
+		text := att.Text
+		truncated := att.Truncated
+		if len(text) > maxAttachmentText {
+			text = text[:maxAttachmentText]
+			truncated = true
+		}
+		b.WriteString("\n<attached_file name=\"")
+		b.WriteString(escapeAttribute(att.Name))
+		b.WriteString("\" mime=\"")
+		b.WriteString(escapeAttribute(att.Type))
+		b.WriteString("\">\n")
+		b.WriteString(text)
+		if truncated {
+			b.WriteString("\n[attachment text truncated]\n")
+		}
+		b.WriteString("\n</attached_file>\n")
+	}
+	return b.String()
+}
+
+func isImageAttachment(att AttachmentInput) bool {
+	kind := strings.ToLower(strings.TrimSpace(att.Kind))
+	mimeType := strings.ToLower(strings.TrimSpace(att.Type))
+	return kind == "image" || strings.HasPrefix(mimeType, "image/")
+}
+
+func validImageDataURL(value string) bool {
+	lower := strings.ToLower(strings.TrimSpace(value))
+	return strings.HasPrefix(lower, "data:image/png;base64,") ||
+		strings.HasPrefix(lower, "data:image/jpeg;base64,") ||
+		strings.HasPrefix(lower, "data:image/jpg;base64,") ||
+		strings.HasPrefix(lower, "data:image/webp;base64,") ||
+		strings.HasPrefix(lower, "data:image/gif;base64,")
+}
+
+func escapeAttribute(value string) string {
+	replacer := strings.NewReplacer("&", "&amp;", "\"", "&quot;", "<", "&lt;", ">", "&gt;")
+	return replacer.Replace(value)
 }
