@@ -7202,6 +7202,20 @@ function handleGlobalKeydown(event) {
     closeWorkspaceTab(activeWorkspaceId.value);
     return;
   }
+  if (event.key.toLowerCase() === 't') {
+    event.preventDefault();
+    // New workspace tab reusing the current tab's workspace path
+    const currentTab = workspaceTabs.value.find((tab) => tab.id === activeWorkspaceId.value);
+    const tab = createWorkspaceTab(currentTab?.path || '');
+    workspaceTabs.value.push(tab);
+    switchWorkspaceTab(tab.id);
+    return;
+  }
+  if (event.key.toLowerCase() === 'n') {
+    event.preventDefault();
+    createNewSession();
+    return;
+  }
   if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
   if (isEditableNavigationTarget(event.target)) {
     const isEmptyPrompt = event.target?.closest?.('[data-ally-prompt-input="true"]') && promptText.value.length === 0;
