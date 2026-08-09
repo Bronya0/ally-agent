@@ -332,9 +332,9 @@ func compactToolResultForModel(name string, result toolResult, fullJSON string) 
 		if !decodeToolData(result.Data, &r) {
 			return fullJSON
 		}
-		matches := r.Matches
+		fileHits := r.FileHits
 		data := map[string]any{
-			"matches":          matches,
+			"fileHits":         fileHits,
 			"count":            r.Count,
 			"occurrences":      r.Occurrences,
 			"files":            r.Files,
@@ -342,11 +342,28 @@ func compactToolResultForModel(name string, result toolResult, fullJSON string) 
 			"samplesTruncated": r.SamplesTruncated,
 			"statsExact":       r.StatsExact,
 		}
-		if len(matches) > maxModelGrepMatches {
-			data["matches"] = matches[:maxModelGrepMatches]
+		totalMatches := 0
+		for _, fh := range fileHits {
+			totalMatches += len(fh.Matches)
+		}
+		if totalMatches > maxModelGrepMatches {
+			capped := make([]GrepFileMatch, 0, len(fileHits))
+			remaining := maxModelGrepMatches
+			for _, fh := range fileHits {
+				n := len(fh.Matches)
+				if n > remaining {
+					n = remaining
+				}
+				capped = append(capped, GrepFileMatch{Path: fh.Path, Matches: fh.Matches[:n]})
+				remaining -= n
+				if remaining <= 0 {
+					break
+				}
+			}
+			data["fileHits"] = capped
 			data["matchesReduced"] = true
-			data["originalMatchCount"] = len(matches)
-			data["matchesOmitted"] = len(matches) - maxModelGrepMatches
+			data["originalMatchCount"] = totalMatches
+			data["matchesOmitted"] = totalMatches - maxModelGrepMatches
 			data["reductionNote"] = "grep_files matches shortened for model context; UI received the full result. Use a narrower pattern/path/glob or read specific files if more exact context is needed."
 		}
 		return marshalToolResultOrFallback(toolResult{OK: true, Data: data}, fullJSON)

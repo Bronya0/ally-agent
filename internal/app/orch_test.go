@@ -652,8 +652,8 @@ func TestGrepFilesSearchesHiddenDirectoryWhenItIsTheRoot(t *testing.T) {
 	if got.Count != 1 || got.Files != 1 {
 		t.Fatalf("expected one match in hidden search root, got %#v", got)
 	}
-	if got.Matches[0].Path != ".github/workflows/ci.yml" {
-		t.Fatalf("unexpected match path %q", got.Matches[0].Path)
+	if got.FileHits[0].Path != ".github/workflows/ci.yml" {
+		t.Fatalf("unexpected match path %q", got.FileHits[0].Path)
 	}
 }
 
@@ -674,8 +674,11 @@ func TestGrepFilesKeepsExactCountsWhenSamplesAreTruncatedByFileLimit(t *testing.
 	if got.Files != 2 || got.Count != 3 || got.Occurrences != 3 || !got.StatsExact {
 		t.Fatalf("expected exact counts despite sample truncation, got %#v", got)
 	}
-	if !got.SamplesTruncated || !got.Truncated || len(got.Matches) != 2 {
+	if !got.SamplesTruncated || !got.Truncated || len(got.FileHits) != 1 || len(got.FileHits[0].Matches) != 2 {
 		t.Fatalf("expected only the first file's sample matches and truncation, got %#v", got)
+	}
+	if got.FileHits[0].Path != "a.txt" {
+		t.Fatalf("unexpected sample file %q", got.FileHits[0].Path)
 	}
 }
 
@@ -719,7 +722,7 @@ func TestGrepFilesKeepsExactCountsWhenSamplesAreTruncatedByMatchLimit(t *testing
 	if got.Count != 5 || got.Occurrences != 5 || got.Files != 1 || !got.StatsExact {
 		t.Fatalf("expected exact counts despite match sample truncation, got %#v", got)
 	}
-	if !got.SamplesTruncated || !got.Truncated || len(got.Matches) != 3 {
+	if !got.SamplesTruncated || !got.Truncated || len(got.FileHits) != 1 || len(got.FileHits[0].Matches) != 3 {
 		t.Fatalf("expected three sample matches and truncation, got %#v", got)
 	}
 }
@@ -772,8 +775,8 @@ func TestGrepFilesAlwaysExcludesHeavyDirectories(t *testing.T) {
 	if got.Count != 1 || got.Occurrences != 1 || got.Files != 1 {
 		t.Fatalf("expected only source match outside heavy dirs, got %#v", got)
 	}
-	if got.Matches[0].Path != "src/main.go" {
-		t.Fatalf("unexpected match path %q", got.Matches[0].Path)
+	if got.FileHits[0].Path != "src/main.go" {
+		t.Fatalf("unexpected match path %q", got.FileHits[0].Path)
 	}
 }
 
@@ -785,14 +788,15 @@ func requireRipgrep(t *testing.T) {
 }
 
 func TestCompactToolResultForModelCompactsGrepMatches(t *testing.T) {
-	matches := make([]GrepMatch, maxModelGrepMatches+5)
-	for i := range matches {
-		matches[i] = GrepMatch{Path: "a.txt", LineNum: i + 1, Content: "needle"}
+	total := maxModelGrepMatches + 5
+	group := GrepFileMatch{Path: "a.txt", Matches: make([]GrepMatch, total)}
+	for i := range group.Matches {
+		group.Matches[i] = GrepMatch{LineNum: i + 1, Content: "needle"}
 	}
 	result := toolResult{OK: true, Data: GrepResult{
-		Matches:          matches,
-		Count:            len(matches),
-		Occurrences:      len(matches),
+		FileHits:         []GrepFileMatch{group},
+		Count:            total,
+		Occurrences:      total,
 		Files:            1,
 		SamplesTruncated: true,
 		StatsExact:       true,
@@ -807,7 +811,7 @@ func TestCompactToolResultForModelCompactsGrepMatches(t *testing.T) {
 	var decoded struct {
 		OK   bool `json:"ok"`
 		Data struct {
-			Matches            []GrepMatch `json:"matches"`
+			FileHits           []GrepFileMatch `json:"fileHits"`
 			Count              int         `json:"count"`
 			Occurrences        int         `json:"occurrences"`
 			Files              int         `json:"files"`
@@ -824,10 +828,14 @@ func TestCompactToolResultForModelCompactsGrepMatches(t *testing.T) {
 	if !decoded.OK {
 		t.Fatalf("expected ok compacted result, got %s", got)
 	}
-	if len(decoded.Data.Matches) != maxModelGrepMatches {
-		t.Fatalf("expected %d model matches, got %d", maxModelGrepMatches, len(decoded.Data.Matches))
+	totalModel := 0
+	for _, fh := range decoded.Data.FileHits {
+		totalModel += len(fh.Matches)
 	}
-	if decoded.Data.Count != len(matches) || decoded.Data.Occurrences != len(matches) || decoded.Data.Files != 1 {
+	if totalModel != maxModelGrepMatches {
+		t.Fatalf("expected %d model matches, got %d", maxModelGrepMatches, totalModel)
+	}
+	if decoded.Data.Count != total || decoded.Data.Occurrences != total || decoded.Data.Files != 1 {
 		t.Fatalf("expected grep stats to be preserved, got %#v", decoded.Data)
 	}
 	if !decoded.Data.StatsExact {
@@ -836,7 +844,7 @@ func TestCompactToolResultForModelCompactsGrepMatches(t *testing.T) {
 	if !decoded.Data.SamplesTruncated {
 		t.Fatalf("expected samplesTruncated marker to be preserved, got %#v", decoded.Data)
 	}
-	if !decoded.Data.MatchesReduced || decoded.Data.OriginalMatchCount != len(matches) || decoded.Data.MatchesOmitted != 5 {
+	if !decoded.Data.MatchesReduced || decoded.Data.OriginalMatchCount != total || decoded.Data.MatchesOmitted != 5 {
 		t.Fatalf("expected reduction metadata, got %#v", decoded.Data)
 	}
 }

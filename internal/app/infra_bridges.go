@@ -26,6 +26,7 @@ type CalculateResult = calculatetool.Result
 // bindings while the implementations live in internal/tools/grep.
 type GrepRequest = grep.Request
 type GrepMatch = grep.Match
+type GrepFileMatch = grep.FileMatch
 type GrepResult = grep.Result
 
 const (

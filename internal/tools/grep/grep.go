@@ -53,22 +53,28 @@ type Request struct {
 	TimeoutSeconds int    `json:"timeoutSeconds,omitempty"`
 }
 
-// Match is a single sample match returned by grep_files.
+// Match is a single sample match line within a file group.
 type Match struct {
-	Path    string `json:"path"`
 	LineNum int    `json:"lineNum"`
 	Content string `json:"content"`
 }
 
-// Result is the grep_files tool result.
+// FileMatch groups sample matches by file path so the path is emitted once.
+type FileMatch struct {
+	Path    string  `json:"path"`
+	Matches []Match `json:"matches"`
+}
+
+// Result is the grep_files tool result. FileHits groups sample matches by
+// file path; Count/Occurrences/Files are exact stats across all matches.
 type Result struct {
-	Matches          []Match `json:"matches"`
-	Count            int     `json:"count"`
-	Occurrences      int     `json:"occurrences"`
-	Files            int     `json:"files"`
-	Truncated        bool    `json:"truncated"`
-	SamplesTruncated bool    `json:"samplesTruncated"`
-	StatsExact       bool    `json:"statsExact"`
+	FileHits         []FileMatch `json:"fileHits"`
+	Count            int         `json:"count"`
+	Occurrences      int         `json:"occurrences"`
+	Files            int         `json:"files"`
+	Truncated        bool        `json:"truncated"`
+	SamplesTruncated bool        `json:"samplesTruncated"`
+	StatsExact       bool        `json:"statsExact"`
 }
 
 // Find locates the ripgrep binary. It checks the ALLY_RG_PATH env variable,
@@ -157,19 +163,19 @@ func Search(ctx context.Context, rgPath, root, searchRoot string, req Request) (
 		return nil, err
 	}
 	if lineCount == 0 {
-		return &Result{Matches: []Match{}, Count: 0, Occurrences: 0, Files: 0, Truncated: false, SamplesTruncated: false, StatsExact: true}, nil
+		return &Result{FileHits: []FileMatch{}, Count: 0, Occurrences: 0, Files: 0, Truncated: false, SamplesTruncated: false, StatsExact: true}, nil
 	}
 	occurrences, _, err := count(ctx, rgPath, root, searchRoot, req, maxDepth, true)
 	if err != nil {
 		return nil, err
 	}
-	matches, samplesTruncated, err := sampleMatches(ctx, rgPath, root, searchRoot, req, maxDepth, maxFiles, maxMatches)
+	fileHits, samplesTruncated, err := sampleMatches(ctx, rgPath, root, searchRoot, req, maxDepth, maxFiles, maxMatches)
 	if err != nil {
 		return nil, err
 	}
 
 	return &Result{
-		Matches:          matches,
+		FileHits:         fileHits,
 		Count:            lineCount,
 		Occurrences:      occurrences,
 		Files:            fileCount,
@@ -394,7 +400,7 @@ func parseCountLine(line string) (int, bool) {
 	return n, true
 }
 
-func sampleMatches(ctx context.Context, rgPath, root, searchRoot string, req Request, maxDepth, maxFiles, maxMatches int) ([]Match, bool, error) {
+func sampleMatches(ctx context.Context, rgPath, root, searchRoot string, req Request, maxDepth, maxFiles, maxMatches int) ([]FileMatch, bool, error) {
 	args := baseArgs(req, maxDepth)
 	args = append(args,
 		"--json",
@@ -427,8 +433,9 @@ func sampleMatches(ctx context.Context, rgPath, root, searchRoot string, req Req
 		_, _ = io.Copy(errBuf, stderr)
 	}()
 
-	matches := []Match{}
-	sampleFiles := map[string]bool{}
+	groups := []*sampleFile{}
+	groupByPath := map[string]*sampleFile{}
+	totalMatches := 0
 	truncated := false
 	parseErr := error(nil)
 	sampleLimitReached := false
@@ -482,15 +489,18 @@ func sampleMatches(ctx context.Context, rgPath, root, searchRoot string, req Req
 			if err != nil {
 				parseErr = err
 			} else if ok {
-				canIncludeFile := sampleFiles[event.Path] || len(sampleFiles) < maxFiles
-				canIncludeMatch := len(matches) < maxMatches
-				if canIncludeFile && canIncludeMatch {
-					sampleFiles[event.Path] = true
-					matches = append(matches, Match{
-						Path:    event.Path,
+				g := groupByPath[event.Path]
+				if g == nil && len(groups) < maxFiles {
+					g = &sampleFile{path: event.Path}
+					groupByPath[event.Path] = g
+					groups = append(groups, g)
+				}
+				if g != nil && totalMatches < maxMatches {
+					g.matches = append(g.matches, Match{
 						LineNum: event.LineNum,
 						Content: truncateLine(event.Content, 200),
 					})
+					totalMatches++
 				} else {
 					sampleLimitReached = true
 					truncated = true
@@ -531,7 +541,17 @@ func sampleMatches(ctx context.Context, rgPath, root, searchRoot string, req Req
 		}
 	}
 
-	return matches, truncated, nil
+	fileHits := make([]FileMatch, 0, len(groups))
+	for _, g := range groups {
+		fileHits = append(fileHits, FileMatch{Path: g.path, Matches: g.matches})
+	}
+	return fileHits, truncated, nil
+}
+
+// sampleFile accumulates matches for one file path during sample collection.
+type sampleFile struct {
+	path    string
+	matches []Match
 }
 
 // readGrepRecord reads one newline-delimited rg record without using
