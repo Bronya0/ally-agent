@@ -131,6 +131,22 @@ jobs:
           chmod +x "dist/${APP_NAME}" dist/tools/rg
           dist/tools/rg --version
 
+          # Provide a .desktop entry and icon so the app appears with the correct
+          # icon in desktop environments when the archive is unpacked.
+          cat > "dist/${APP_NAME}.desktop" <<EOF
+[Desktop Entry]
+Version=1.0
+Name=${APP_NAME}
+Comment=Ally — AI coding agent desktop
+Exec=${APP_NAME}
+Terminal=false
+Type=Application
+Icon=${APP_NAME}
+Categories=Development;
+StartupWMClass=${APP_NAME}
+EOF
+          cp build/appicon.png "dist/${APP_NAME}.png"
+
           version="${{ github.event.release.tag_name || github.ref_name }}"
           root_dir="${APP_NAME}-$version-linux-x64"
           # 打包时把顶层 dist 重命名为 root_dir，解压后所有文件归在统一目录下

@@ -26,6 +26,7 @@ func main() {
 	wailsApp := application.New(application.Options{
 		Name:        "Ally",
 		Description: "Ally — AI coding agent desktop",
+		Icon:        appIconPNG,
 		Services:    []application.Service{application.NewService(app)},
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(assets),

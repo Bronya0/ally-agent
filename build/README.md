@@ -9,7 +9,7 @@ The structure is:
 - `windows/` — Windows-specific files (manifest, icon, Taskfile)
 - `linux/` — Linux-specific files (Taskfile, nfpm, appimage)
 - `docker/` — Cross-compilation Docker assets
-- `appicon.png` / `appicon.icon` — Application icon sources
+- `appicon.png` — Application icon source (single source for `darwin/icons.icns` and `windows/icon.ico` via `wails3 generate icons`)
 - `config.yml` — Wails v3 project configuration (product info, dev mode)
 - `Taskfile.yml` — Shared wails3 build tasks (frontend build, bindings, icons)
 
