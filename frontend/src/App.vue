@@ -165,10 +165,18 @@
                     </span>
                   </template>
                 </div>
+                <!-- One input instance per workspace tab (keyed by session:tab) so each
+                     keeps its own Naive UI autosize mirror, cursor and scroll state. A
+                     single shared instance would collapse to minRows after tab switches:
+                     restoring a draft equal to the last typed value is skipped by the
+                     library's syncSource guard, leaving the mirror empty. -->
                 <n-input
-                  ref="promptInputRef"
+                  v-for="tab in workspaceTabs"
+                  v-show="tab.id === activeWorkspaceId"
+                  :key="`${tab.sessionId}:${tab.id}`"
+                  :ref="(el) => setPromptInputRef(tab.id, el)"
                   class="prompt-input"
-                  v-model:value="promptText"
+                  :value="tab.sessionId ? (sessionPromptTexts[tab.sessionId] || '') : ''"
                   type="textarea"
                   :input-props="{
                     onPaste: handlePromptPaste,
@@ -180,6 +188,7 @@
                   }"
                   :autosize="{ minRows: 2, maxRows: 10 }"
                   :placeholder="$t('app.composer.placeholder')"
+                  @update:value="(v) => { if (tab.sessionId) sessionPromptTexts[tab.sessionId] = v; }"
                   @keydown="handlePromptKeydown"
                   @input="handlePromptInput"
                 />
@@ -415,7 +424,11 @@ onErrorCaptured((err, _instance, info) => {
 });
 
 const conversationMessagesRefs = new Map();
-const promptInputRef = ref(null);
+const promptInputRefs = reactive({});
+function setPromptInputRef(tabId, el) {
+  if (el) promptInputRefs[tabId] = el;
+  else delete promptInputRefs[tabId];
+}
 const promptComposing = ref(false);
 let promptCompositionEndedAt = 0;
 let fileMentionTimer = 0;
@@ -4557,8 +4570,8 @@ function handlePromptInput() {
 }
 
 function getPromptTextarea() {
-  const root = promptInputRef.value?.$el || promptInputRef.value;
-  return root?.querySelector?.('textarea[data-ally-prompt-input="true"], textarea') || document.querySelector('textarea[data-ally-prompt-input="true"]');
+  const root = promptInputRefs[activeWorkspaceId]?.$el || promptInputRefs[activeWorkspaceId];
+  return root?.querySelector?.('textarea[data-ally-prompt-input="true"], textarea') || null;
 }
 
 function detectFileMention(text, caret) {
@@ -4868,7 +4881,7 @@ async function handleBuiltinCommand(command) {
   if (command.special === 'goal') {
     promptText.value = t('app.goal.prompt');
     commandMenuVisible.value = false;
-    nextTick(() => promptInputRef.value?.focus());
+    nextTick(() => focusPromptInput());
     return true;
   }
   if (command.special === 'skills') {
@@ -4920,7 +4933,7 @@ function completeCommand(index) {
     promptText.value = command.label;
   }
   commandMenuVisible.value = false;
-  nextTick(() => promptInputRef.value?.focus());
+  nextTick(() => focusPromptInput());
 }
 
 function toolEventId(data = {}) {
@@ -5902,7 +5915,7 @@ function showSessionList() {
   sessionsSelectedIndex.value = 0;
   commandMenuVisible.value = false;
   void refreshSessionListData();
-  nextTick(() => promptInputRef.value?.focus());
+  nextTick(() => focusPromptInput());
 }
 
 async function switchToSession(index) {
@@ -7113,7 +7126,7 @@ function formatBytes(bytes) {
 }
 
 function focusPromptInput() {
-  promptInputRef.value?.focus();
+  promptInputRefs[activeWorkspaceId]?.focus?.();
 }
 
 watch(configVisible, (visible) => {
