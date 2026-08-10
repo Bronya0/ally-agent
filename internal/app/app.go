@@ -26,7 +26,7 @@ const (
 	defaultModel                     = "deepseek-v4-flash"
 	defaultBaseURL                   = "https://api.deepseek.com"
 	defaultReasoningTag              = "reasoning_content"
-	maxReadFileBytes                 = 10 * 1024 * 1024
+	maxReadFileBytes                 = 32 * 1024 * 1024
 	maxToolOutput                    = 128 * 1024
 	maxFinishedSubagents             = 50
 	maxSubagentToolCalls             = 100

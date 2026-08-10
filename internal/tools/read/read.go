@@ -30,7 +30,7 @@ import (
 
 // MaxReadBytes caps how much a single ReadTextFile call will read. Mirrors the
 // historical app.maxReadFileBytes constant so callers can reference it by name.
-const MaxReadBytes = 10 * 1024 * 1024
+const MaxReadBytes = 32 * 1024 * 1024
 
 // ReadTextFile reads a UTF-8 text file at path, enforcing size and binary
 // guards. Returns the raw bytes, file info, and an error. Error codes:
@@ -612,8 +612,8 @@ func ExtractPDFTextBestEffort(filePath string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if len(data) > 8*1024*1024 {
-		data = data[:8*1024*1024]
+	if len(data) > 32*1024*1024 {
+		data = data[:32*1024*1024]
 	}
 	re := regexp.MustCompile(`\((?:\\.|[^\\)])*\)`)
 	matches := re.FindAll(data, 20000)
