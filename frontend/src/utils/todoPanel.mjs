@@ -14,33 +14,17 @@ function normalizeTodoEntries(todos) {
     });
 }
 
-// The panel is a task handoff view rather than a historical log: when work is
-// active, surface the most recently completed item, the current item, and then
-// pending work at the top. Remaining items stay available below the fold.
+// The panel reads from the most recently completed item down: completed work
+// (newest first), then the current item, then pending work, then anything
+// else. Completed items stay visible instead of sinking to the bottom.
 export function orderTodoPanelEntries(todos) {
   const entries = normalizeTodoEntries(todos);
+  const done = entries.filter((entry) => entry.status === 'done').reverse();
   const current = entries.find((entry) => entry.status === 'in_progress');
   const pending = entries.filter((entry) => entry.status === 'pending');
-  const done = entries.filter((entry) => entry.status === 'done');
+  const rest = entries.filter(
+    (entry) => entry.status !== 'done' && entry.status !== 'in_progress' && entry.status !== 'pending',
+  );
 
-  if (!current) {
-    return [...pending, ...done, ...entries.filter((entry) => entry.status !== 'pending' && entry.status !== 'done')];
-  }
-
-  const completedBeforeCurrent = entries
-    .filter((entry) => entry.sourceIndex < current.sourceIndex && entry.status === 'done');
-  const previousDone = completedBeforeCurrent[completedBeforeCurrent.length - 1] || done[done.length - 1];
-  const used = new Set();
-  const ordered = [];
-  const append = (entry) => {
-    if (!entry || used.has(entry.sourceIndex)) return;
-    used.add(entry.sourceIndex);
-    ordered.push(entry);
-  };
-
-  append(previousDone);
-  append(current);
-  for (const entry of pending) append(entry);
-  for (const entry of entries) append(entry);
-  return ordered;
+  return [...done, ...(current ? [current] : []), ...pending, ...rest];
 }

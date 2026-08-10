@@ -7,7 +7,7 @@ function compact(entries) {
   return entries.map(({ status, title }) => `${status}:${title}`);
 }
 
-test('todo panel puts the latest completed item before current and pending work', () => {
+test('completed items stay on top, newest first, before current and pending work', () => {
   const entries = orderTodoPanelEntries([
     { title: 'Inspect implementation', status: 'done' },
     { title: 'Update UI', status: 'done' },
@@ -18,10 +18,10 @@ test('todo panel puts the latest completed item before current and pending work'
 
   assert.deepEqual(compact(entries), [
     'done:Update UI',
+    'done:Inspect implementation',
     'in_progress:Verify behavior',
     'pending:Run build',
     'pending:Summarize results',
-    'done:Inspect implementation',
   ]);
 });
 
@@ -44,7 +44,7 @@ test('todo panel degrades gracefully when a list has no current item', () => {
   ]);
 
   assert.deepEqual(compact(entries), [
-    'pending:Not yet started',
     'done:Finished task',
+    'pending:Not yet started',
   ]);
 });
