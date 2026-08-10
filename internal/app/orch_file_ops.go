@@ -65,8 +65,8 @@ func (a *App) createFileWithConfig(cfg ConfigState, req CreateFileRequest) (Edit
 		return EditResult{}, err
 	}
 
-	content, ending := normalizeText([]byte(req.Content))
-	encoded := encodeLineEnding(content, ending)
+	content, ending, hadBOM := normalizeText([]byte(req.Content))
+	encoded := encodeText(content, ending, hadBOM)
 	if req.Overwrite {
 		if err := safeWriteFileWithDir(path, encoded, perm, false); err != nil {
 			return EditResult{}, err

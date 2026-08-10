@@ -429,7 +429,7 @@ func (a *App) readFileWithConfig(cfg ConfigState, req ReadFileRequest) (ReadFile
 	if err != nil {
 		return ReadFileResult{}, err
 	}
-	text, ending := normalizeText(data)
+	text, ending, _ := normalizeText(data)
 	preview, err := formatLineNumberReadPreviewRangeWithBudget(text, readRangeRequest{
 		StartLine:     req.StartLine,
 		EndLine:       req.EndLine,

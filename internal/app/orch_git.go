@@ -326,7 +326,7 @@ func synthesizeUntrackedDiffApp(root, rel string, limit int) (string, bool, bool
 		binary := strings.Contains(strings.ToLower(err.Error()), "binary")
 		return git.SynthesizeUntrackedDiff(rel, "", err, binary, limit)
 	}
-	text, _ := normalizeText(data)
+	text, _, _ := normalizeText(data)
 	return git.SynthesizeUntrackedDiff(rel, text, nil, false, limit)
 }
 

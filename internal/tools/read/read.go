@@ -71,17 +71,39 @@ func hasNUL(data []byte) bool {
 	return false
 }
 
-// NormalizeText normalizes CRLF/CR to LF and reports the original dominant
-// line ending ("LF" or "CRLF") so callers can preserve it on write.
-func NormalizeText(data []byte) (string, string) {
+// NormalizeText normalizes CRLF/CR to LF, strips a leading UTF-8 BOM, and
+// reports the original dominant line ending ("LF" or "CRLF") plus whether a
+// BOM was present so callers can preserve both on write.
+//
+// The BOM is stripped so read previews and edit matching never expose the
+// invisible U+FEFF prefix to the model (the model cannot copy it into
+// oldText). Writes must use EncodeText to restore it.
+func NormalizeText(data []byte) (string, string, bool) {
 	s := string(data)
 	ending := "LF"
 	if strings.Contains(s, "\r\n") {
 		ending = "CRLF"
 	}
+	hadBOM := false
+	if strings.HasPrefix(s, "\uFEFF") {
+		// TrimPrefix removes the full 3-byte UTF-8 sequence; byte slicing
+		// (s[1:]) would leave the trailing 0xBB 0xBF bytes behind.
+		s = strings.TrimPrefix(s, "\uFEFF")
+		hadBOM = true
+	}
 	s = strings.ReplaceAll(s, "\r\n", "\n")
 	s = strings.ReplaceAll(s, "\r", "\n")
-	return s, ending
+	return s, ending, hadBOM
+}
+
+// EncodeText re-encodes LF to the requested ending ("LF" or "CRLF") and
+// re-prepends the UTF-8 BOM when the original had one. Used when writing
+// edited or created files back to disk so round-trips preserve byte shape.
+func EncodeText(text, ending string, hadBOM bool) []byte {
+	if hadBOM {
+		text = "\uFEFF" + text
+	}
+	return EncodeLineEnding(text, ending)
 }
 
 // EncodeLineEnding re-encodes LF to the requested ending ("LF" or "CRLF"),

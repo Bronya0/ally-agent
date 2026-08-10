@@ -538,7 +538,7 @@ func decodeRemoteRawFile(data struct {
 	if !utf8.Valid(raw) {
 		return remoteRawFile{}, errors.New("file is not valid UTF-8")
 	}
-	_, ending := normalizeText(raw)
+	_, ending, _ := normalizeText(raw)
 	return remoteRawFile{Path: data.Path, Data: raw, Size: data.Size, Mode: data.Mode, ModTime: data.ModTime, LineEnding: ending}, nil
 }
 
@@ -610,7 +610,7 @@ func (a *App) remoteReadFile(ctx context.Context, req RemoteReadFileRequest) (Re
 	if err != nil {
 		return ReadFileResult{}, err
 	}
-	text, ending := normalizeText(file.Data)
+	text, ending, _ := normalizeText(file.Data)
 	sha256Hex, version := hashBytesAndVersion(file.Data)
 	preview, err := formatLineNumberReadPreviewRangeWithBudget(text, readRangeRequest{
 		StartLine: req.StartLine,
@@ -698,12 +698,12 @@ func (a *App) remoteEditOne(ctx context.Context, rt remoteTarget, req FileTextEd
 	if !strings.EqualFold(req.Version, beforeVersion) {
 		return EditResult{}, codedToolError("E_VERSION_MISMATCH", fmt.Errorf("remote file changed: expected version %s, current %s. Re-read before editing", req.Version, beforeVersion))
 	}
-	text, ending := normalizeText(file.Data)
+	text, ending, hadBOM := normalizeText(file.Data)
 	result, replacements, err := edit.ApplyBatchTextChanges(text, toEditChanges(req.Changes))
 	if err != nil {
 		return EditResult{}, err
 	}
-	after := encodeLineEnding(result.Content, ending)
+	after := encodeText(result.Content, ending, hadBOM)
 	afterHash, afterVersion := hashBytesAndVersion(after)
 	if bytes.Equal(file.Data, after) {
 		return EditResult{}, codedToolError("E_NOOP", errors.New("edit produced no content changes"))
@@ -762,8 +762,8 @@ func (a *App) remoteCreateFile(ctx context.Context, req RemoteCreateFileRequest)
 		before = existing.Data
 		beforeHash, beforeVersion = hashBytesAndVersion(existing.Data)
 	}
-	content, ending := normalizeText([]byte(req.Content))
-	encoded := encodeLineEnding(content, ending)
+	content, ending, hadBOM := normalizeText([]byte(req.Content))
+	encoded := encodeText(content, ending, hadBOM)
 	if err := a.remoteWriteRaw(ctx, rt, cleanPath, encoded, req.Overwrite, true); err != nil {
 		return EditResult{}, err
 	}

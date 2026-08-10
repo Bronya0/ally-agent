@@ -44,12 +44,12 @@ func (a *App) editFilesWithConfig(cfg ConfigState, files []FileTextEdits) (Multi
 		if !strings.EqualFold(file.Version, beforeVersion) {
 			return MultiEditResult{}, codedToolError("E_VERSION_MISMATCH", fmt.Errorf("file %s expected version %s, current %s; re-read all affected files before retrying", file.Path, file.Version, beforeVersion))
 		}
-		text, ending := normalizeText(before)
+		text, ending, hadBOM := normalizeText(before)
 		applied, replacements, err := edit.ApplyBatchTextChanges(text, toEditChanges(file.Changes))
 		if err != nil {
 			return MultiEditResult{}, fmt.Errorf("file %d (%s): %w", i+1, file.Path, err)
 		}
-		after := encodeLineEnding(applied.Content, ending)
+		after := encodeText(applied.Content, ending, hadBOM)
 		diff := edit.GenerateEditDiffPreview(text, applied.Content, maxToolOutput)
 		added, removed := 0, 0
 		if diff != "" {
@@ -183,7 +183,7 @@ func (a *App) editWithConfig(cfg ConfigState, req EditRequest) (EditResult, erro
 	if req.ExpectedSHA256 != "" && req.ExpectedSHA256 != beforeHash {
 		return EditResult{}, codedToolError("E_VERSION_MISMATCH", fmt.Errorf("expectedSha256 %s does not match current file hash %s. Re-read the file and retry with fresh text", req.ExpectedSHA256, beforeHash))
 	}
-	text, ending := normalizeText(data)
+	text, ending, hadBOM := normalizeText(data)
 
 	var result *edit.Result
 	replacements := 0
@@ -200,7 +200,7 @@ func (a *App) editWithConfig(cfg ConfigState, req EditRequest) (EditResult, erro
 	}
 
 	updated := result.Content
-	encoded := encodeLineEnding(updated, ending)
+	encoded := encodeText(updated, ending, hadBOM)
 	after := encoded
 	if text != updated {
 		if err := safeWriteFile(path, encoded, modeOf(path)); err != nil {

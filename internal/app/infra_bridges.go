@@ -269,8 +269,12 @@ func readTextFile(path string) ([]byte, os.FileInfo, error) {
 	return read.ReadTextFile(path)
 }
 
-func normalizeText(data []byte) (string, string) {
+func normalizeText(data []byte) (string, string, bool) {
 	return read.NormalizeText(data)
+}
+
+func encodeText(text, ending string, hadBOM bool) []byte {
+	return read.EncodeText(text, ending, hadBOM)
 }
 
 func encodeLineEnding(text, ending string) []byte {
