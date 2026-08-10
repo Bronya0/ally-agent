@@ -157,7 +157,7 @@ test('formatHttpToolTitle surfaces body/json/saveTo/timeout/maxBytes', () => {
   );
   assert.equal(
     formatHttpToolTitle({ url: 'https://api.example.com', maxBytes: 1024 }),
-    'https://api.example.com · ≤1024B',
+    'https://api.example.com · ≤1.0 KB',
   );
 });
 
@@ -171,7 +171,7 @@ test('formatHttpToolTitle combines multiple fields in a fixed order', () => {
       maxBytes: 512,
       saveTo: 'r.json',
     }),
-    'https://api.example.com · POST · json · → r.json · 10s · ≤512B',
+    'https://api.example.com · POST · json · → r.json · 10s · ≤512 B',
   );
 });
 

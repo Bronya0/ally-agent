@@ -6,6 +6,21 @@ export function normalizedLines(text) {
   return lines;
 }
 
+// formatBytes renders a byte count with a proper unit (B/KB/MB/GB), e.g.
+// 50000 -> "48.8 KB". Used by formatHttpToolTitle for the maxBytes limit chip.
+export function formatBytes(bytes) {
+  const n = Number(bytes);
+  if (!Number.isFinite(n) || n <= 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let i = 0;
+  let v = n;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i++;
+  }
+  return `${v.toFixed(i ? 1 : 0)} ${units[i]}`;
+}
+
 // formatHttpToolTitle renders the title shown on http_request / web_fetch tool
 // cards. It surfaces enough of the optional fields (method, timeout, body/json
 // presence) that two cards with the same URL but different actual arguments can
@@ -26,7 +41,7 @@ export function formatHttpToolTitle(parsed) {
     parts.push(`${parsed.timeoutSeconds}s`);
   }
   if (parsed.maxBytes && Number(parsed.maxBytes) !== 262144) {
-    parts.push(`≤${parsed.maxBytes}B`);
+    parts.push(`≤${formatBytes(Number(parsed.maxBytes))}`);
   }
   return parts.join(' · ');
 }
