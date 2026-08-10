@@ -2936,7 +2936,7 @@ function setAssistantCacheRate(session, runId, hit, miss, inputTokens, outputTok
   const m = Number(miss || 0);
   const inp = Number(inputTokens || 0);
   const out = Number(outputTokens || 0);
-  const rate = (h + m) > 0 ? Math.round((h / (h + m)) * 100) : null;
+  const rate = (h + m) > 0 ? Math.floor((h / (h + m)) * 100) : null;
   msg.cacheHit = h;
   msg.cacheMiss = m;
   if (rate === null) delete msg.cacheRate;
