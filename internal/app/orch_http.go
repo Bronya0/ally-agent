@@ -7,6 +7,7 @@ import (
 	"compress/gzip"
 	"compress/zlib"
 	"context"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -102,6 +103,7 @@ func (a *App) webFetchToolWithConfig(ctx context.Context, cfg ConfigState, req W
 		MaxBytes:        req.MaxBytes,
 		FollowRedirects: boolPtr(true),
 		RespectRobots:   respectRobots,
+		InsecureSkipVerify: req.InsecureSkipVerify,
 	}, true, allowPrivate)
 	if err != nil {
 		return WebFetchResult{}, err
@@ -231,7 +233,7 @@ func (a *App) doHTTPRequest(parent context.Context, cfg ConfigState, req HTTPReq
 	followRedirects := boolDefault(req.FollowRedirects, true)
 	client := &http.Client{
 		Timeout:   time.Duration(timeout) * time.Second,
-		Transport: httpTransport(cfg, allowPrivateNetwork),
+		Transport: httpTransport(cfg, allowPrivateNetwork, boolDefault(req.InsecureSkipVerify, false)),
 		CheckRedirect: func(next *http.Request, via []*http.Request) error {
 			if !followRedirects {
 				return http.ErrUseLastResponse
@@ -478,7 +480,15 @@ func validateHTTPURLAccessForConfig(target *url.URL, allowPrivate bool, cfg Conf
 	return nil
 }
 
-func httpTransport(cfg ConfigState, allowPrivate bool) *http.Transport {
+func httpTransport(cfg ConfigState, allowPrivate bool, insecure bool) *http.Transport {
+	if insecure {
+		// Insecure requests must not share the cached proxy transport: the
+		// shared instance keeps strict certificate verification for all other
+		// callers. Build a dedicated transport that skips verification.
+		transport := newProxyHTTPTransport(cfg, allowPrivate)
+		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+		return transport
+	}
 	return proxyHTTPTransport(cfg, allowPrivate)
 }
 
@@ -750,7 +760,7 @@ func (a *App) robotsAllows(ctx context.Context, cfg ConfigState, target *url.URL
 		return false, err
 	}
 	req.Header.Set("User-Agent", userAgent)
-	client := &http.Client{Timeout: 10 * time.Second, Transport: httpTransport(cfg, allowPrivate)}
+	client := &http.Client{Timeout: 10 * time.Second, Transport: httpTransport(cfg, allowPrivate, false)}
 	resp, err := client.Do(req)
 	if err != nil {
 		return true, nil
