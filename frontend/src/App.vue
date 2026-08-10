@@ -2554,6 +2554,8 @@ async function switchWorkspaceTab(id) {
     sessionId: linkedSession?.id || activeSessionId.value,
     workspace: tab.path,
   });
+  // 切换 Tab 后自动聚焦新 Tab 的输入框，避免手动点击才能输入
+  nextTick(() => focusPromptInput());
 }
 
 function syncConfigToActiveTab() {
