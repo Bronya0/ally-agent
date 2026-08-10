@@ -1543,6 +1543,10 @@ code, pre {
   border-radius: 999px;
 }
 
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
 /* ── Markdown rendering ── */
 
 .ascii-banner {
