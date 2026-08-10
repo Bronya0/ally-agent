@@ -649,7 +649,7 @@ func TestGrepFilesSearchesHiddenDirectoryWhenItIsTheRoot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Count != 1 || got.Files != 1 {
+	if got.MatchedLines != 1 || got.Files != 1 {
 		t.Fatalf("expected one match in hidden search root, got %#v", got)
 	}
 	if got.FileHits[0].Path != ".github/workflows/ci.yml" {
@@ -671,14 +671,25 @@ func TestGrepFilesKeepsExactCountsWhenSamplesAreTruncatedByFileLimit(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Files != 2 || got.Count != 3 || got.Occurrences != 3 || !got.StatsExact {
+	if got.Files != 2 || got.MatchedLines != 3 || got.Hits != 3 || !got.StatsExact {
 		t.Fatalf("expected exact counts despite sample truncation, got %#v", got)
 	}
-	if !got.SamplesTruncated || !got.Truncated || len(got.FileHits) != 1 || len(got.FileHits[0].Matches) != 2 {
-		t.Fatalf("expected only the first file's sample matches and truncation, got %#v", got)
+	// Without --sort the sampled file is whichever rg reaches first, so the
+	// contract is "samples are limited to one file", not a specific path.
+	if !got.SamplesTruncated || !got.Truncated || len(got.FileHits) != 1 {
+		t.Fatalf("expected single-file samples and truncation, got %#v", got)
 	}
-	if got.FileHits[0].Path != "a.txt" {
-		t.Fatalf("unexpected sample file %q", got.FileHits[0].Path)
+	hits := got.FileHits[0]
+	if hits.Path != "a.txt" && hits.Path != "b.txt" {
+		t.Fatalf("unexpected sample file %q", hits.Path)
+	}
+	if len(hits.Matches) == 0 || len(hits.Matches) > 2 {
+		t.Fatalf("expected at least one sample match from the single sampled file, got %#v", hits)
+	}
+	for _, m := range hits.Matches {
+		if !strings.HasPrefix(m.Content, "needle ") {
+			t.Fatalf("unexpected sample match content %q", m.Content)
+		}
 	}
 }
 
@@ -695,10 +706,10 @@ func TestGrepFilesReportsOccurrenceCount(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Count != 3 {
+	if got.MatchedLines != 3 {
 		t.Fatalf("expected three matching lines, got %#v", got)
 	}
-	if got.Occurrences != 4 {
+	if got.Hits != 4 {
 		t.Fatalf("expected four occurrences, got %#v", got)
 	}
 	if !got.StatsExact {
@@ -719,7 +730,7 @@ func TestGrepFilesKeepsExactCountsWhenSamplesAreTruncatedByMatchLimit(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Count != 5 || got.Occurrences != 5 || got.Files != 1 || !got.StatsExact {
+	if got.MatchedLines != 5 || got.Hits != 5 || got.Files != 1 || !got.StatsExact {
 		t.Fatalf("expected exact counts despite match sample truncation, got %#v", got)
 	}
 	if !got.SamplesTruncated || !got.Truncated || len(got.FileHits) != 1 || len(got.FileHits[0].Matches) != 3 {
@@ -741,7 +752,7 @@ func TestGrepFilesCanIncludeIgnoredFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if defaultResult.Count != 1 {
+	if defaultResult.MatchedLines != 1 {
 		t.Fatalf("expected ignored file to be skipped by default, got %#v", defaultResult)
 	}
 
@@ -752,7 +763,7 @@ func TestGrepFilesCanIncludeIgnoredFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if includeIgnored.Count != 2 {
+	if includeIgnored.MatchedLines != 2 {
 		t.Fatalf("expected ignored file to be included, got %#v", includeIgnored)
 	}
 }
@@ -772,7 +783,7 @@ func TestGrepFilesAlwaysExcludesHeavyDirectories(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Count != 1 || got.Occurrences != 1 || got.Files != 1 {
+	if got.MatchedLines != 1 || got.Hits != 1 || got.Files != 1 {
 		t.Fatalf("expected only source match outside heavy dirs, got %#v", got)
 	}
 	if got.FileHits[0].Path != "src/main.go" {
@@ -795,8 +806,8 @@ func TestCompactToolResultForModelCompactsGrepMatches(t *testing.T) {
 	}
 	result := toolResult{OK: true, Data: GrepResult{
 		FileHits:         []GrepFileMatch{group},
-		Count:            total,
-		Occurrences:      total,
+		MatchedLines:     total,
+		Hits:             total,
 		Files:            1,
 		SamplesTruncated: true,
 		StatsExact:       true,
@@ -812,14 +823,14 @@ func TestCompactToolResultForModelCompactsGrepMatches(t *testing.T) {
 		OK   bool `json:"ok"`
 		Data struct {
 			FileHits           []GrepFileMatch `json:"fileHits"`
-			Count              int         `json:"count"`
-			Occurrences        int         `json:"occurrences"`
-			Files              int         `json:"files"`
-			SamplesTruncated   bool        `json:"samplesTruncated"`
-			StatsExact         bool        `json:"statsExact"`
-			MatchesReduced     bool        `json:"matchesReduced"`
-			OriginalMatchCount int         `json:"originalMatchCount"`
-			MatchesOmitted     int         `json:"matchesOmitted"`
+			MatchedLines       int             `json:"matchedLines"`
+			Hits               int             `json:"hits"`
+			Files              int             `json:"files"`
+			SamplesTruncated   bool            `json:"samplesTruncated"`
+			StatsExact         bool            `json:"statsExact"`
+			MatchesReduced     bool            `json:"matchesReduced"`
+			OriginalMatchCount int             `json:"originalMatchCount"`
+			MatchesOmitted     int             `json:"matchesOmitted"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal([]byte(got), &decoded); err != nil {
@@ -828,6 +839,11 @@ func TestCompactToolResultForModelCompactsGrepMatches(t *testing.T) {
 	if !decoded.OK {
 		t.Fatalf("expected ok compacted result, got %s", got)
 	}
+	// statsExact is always true today; the model view must omit it instead of
+	// repeating an always-true field.
+	if strings.Contains(got, "statsExact") {
+		t.Fatalf("model view must omit always-true statsExact: %s", got)
+	}
 	totalModel := 0
 	for _, fh := range decoded.Data.FileHits {
 		totalModel += len(fh.Matches)
@@ -835,12 +851,11 @@ func TestCompactToolResultForModelCompactsGrepMatches(t *testing.T) {
 	if totalModel != maxModelGrepMatches {
 		t.Fatalf("expected %d model matches, got %d", maxModelGrepMatches, totalModel)
 	}
-	if decoded.Data.Count != total || decoded.Data.Occurrences != total || decoded.Data.Files != 1 {
+	if decoded.Data.MatchedLines != total || decoded.Data.Hits != total || decoded.Data.Files != 1 {
 		t.Fatalf("expected grep stats to be preserved, got %#v", decoded.Data)
 	}
-	if !decoded.Data.StatsExact {
-		t.Fatalf("expected exact stats marker to be preserved, got %#v", decoded.Data)
-	}
+	// statsExact is always true and intentionally omitted from the model view
+	// (asserted above via strings.Contains); the decoded zero value is fine.
 	if !decoded.Data.SamplesTruncated {
 		t.Fatalf("expected samplesTruncated marker to be preserved, got %#v", decoded.Data)
 	}
@@ -1954,6 +1969,69 @@ func TestExecuteToolEditsMultipleFilesInOneCall(t *testing.T) {
 		if string(got) != want {
 			t.Fatalf("%s = %q, want %q", path, got, want)
 		}
+	}
+}
+
+func TestExecuteToolEditRollsBackEarlierFilesWhenCommitFails(t *testing.T) {
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "sub")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	a, b := []byte("alpha\n"), []byte("beta\n")
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), a, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sub, "b.txt"), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Make b's commit write fail deterministically while reads keep
+	// succeeding, so the batch prepares both files, commits a.txt, then fails
+	// on b.txt and must roll a.txt back:
+	//   - Windows: the read-only attribute makes MoveFileEx refuse to replace
+	//     the destination (temp sibling + rename write path).
+	//   - POSIX: a read-only parent directory makes the temp sibling creation
+	//     or rename fail with EACCES.
+	if runtime.GOOS == "windows" {
+		if err := os.Chmod(filepath.Join(sub, "b.txt"), 0o444); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		if err := os.Chmod(sub, 0o555); err != nil {
+			t.Fatal(err)
+		}
+	}
+	defer func() {
+		if runtime.GOOS == "windows" {
+			_ = os.Chmod(filepath.Join(sub, "b.txt"), 0o600)
+		} else {
+			_ = os.Chmod(sub, 0o755)
+		}
+	}()
+
+	args := fmt.Sprintf(`{"files":[{"path":"a.txt","version":%q,"changes":[{"oldText":"alpha","newText":"ALPHA"}]},{"path":"sub/b.txt","version":%q,"changes":[{"oldText":"beta","newText":"BETA"}]}]}`, hashVersion(a), hashVersion(b))
+	result := NewApp().executeTool(context.Background(), ConfigState{Workspace: dir}, "session-1", "edit", []byte(args))
+	if result.OK {
+		t.Fatalf("expected commit of b.txt to fail, got success: %#v", result)
+	}
+	if result.ErrorCode != "E_EDIT_COMMIT" {
+		t.Fatalf("expected E_EDIT_COMMIT, got %q (%v)", result.ErrorCode, result.Error)
+	}
+
+	gotA, err := os.ReadFile(filepath.Join(dir, "a.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotA) != "alpha\n" {
+		t.Fatalf("a.txt must be rolled back to its original content after b.txt commit failed, got %q", string(gotA))
+	}
+	gotB, err := os.ReadFile(filepath.Join(sub, "b.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotB) != "beta\n" {
+		t.Fatalf("b.txt must remain unchanged, got %q", string(gotB))
 	}
 }
 

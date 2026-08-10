@@ -91,10 +91,10 @@ func toolResultSummary(name string, result *toolResult) string {
 		data, _ := json.Marshal(result.Data)
 		var r GrepResult
 		if json.Unmarshal(data, &r) == nil {
-			if r.Occurrences > 0 && r.Occurrences != r.Count {
-				return fmt.Sprintf("%d hits in %d matching lines", r.Occurrences, r.Count)
+			if r.Hits > 0 && r.Hits != r.MatchedLines {
+				return fmt.Sprintf("%d hits in %d matching lines", r.Hits, r.MatchedLines)
 			}
-			return fmt.Sprintf("%d matches", r.Count)
+			return fmt.Sprintf("%d matches", r.MatchedLines)
 		}
 	case "run_command", "remote_run_command":
 		data, _ := json.Marshal(result.Data)
@@ -368,12 +368,16 @@ func compactToolResultForModel(name string, result toolResult, fullJSON string) 
 		fileHits := r.FileHits
 		data := map[string]any{
 			"fileHits":         fileHits,
-			"count":            r.Count,
-			"occurrences":      r.Occurrences,
+			"matchedLines":     r.MatchedLines,
+			"hits":             r.Hits,
 			"files":            r.Files,
 			"truncated":        r.Truncated,
 			"samplesTruncated": r.SamplesTruncated,
-			"statsExact":       r.StatsExact,
+		}
+		// statsExact is always true today; only surface it when it changes so
+		// the model sees one less always-true boolean.
+		if !r.StatsExact {
+			data["statsExact"] = false
 		}
 		totalMatches := 0
 		for _, fh := range fileHits {
