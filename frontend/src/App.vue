@@ -6432,19 +6432,21 @@ function formatToolChip(name, result) {
       });
       return '\u00B7 ' + lines.join('  ');
     }
-    // grep_files: · N hits / lines
+    // grep_files: · N hits (in M lines) · F files
     if (name === 'grep_files' && parsed.data) {
-      const count = parsed.data.count || parsed.data.matches?.length || 0;
-      const occurrences = parsed.data.occurrences || 0;
-      const ms = parsed.data.durationMs || 0;
+      const d = parsed.data;
+      const hits = Number(d.hits || 0);
+      const lines = Number(d.matchedLines || 0);
+      const files = Number(d.files || 0);
       let chip = '';
-      if (occurrences > 0) {
-        chip = '\u00B7 ' + occurrences + ' hit' + (occurrences > 1 ? 's' : '');
-        if (count > 0 && count !== occurrences) chip += ' in ' + count + ' line' + (count > 1 ? 's' : '');
-      } else if (count > 0) {
-        chip = '\u00B7 ' + count + ' match' + (count > 1 ? 'es' : '');
+      if (hits > 0) {
+        chip = '\u00B7 ' + hits + ' hit' + (hits > 1 ? 's' : '');
+        if (lines > 0 && lines !== hits) chip += ' in ' + lines + ' line' + (lines > 1 ? 's' : '');
+      } else if (lines > 0) {
+        chip = '\u00B7 ' + lines + ' match' + (lines > 1 ? 'es' : '');
       }
-      if (ms > 0) chip += ' \u00B7 ' + formatDuration(ms);
+      if (files > 0) chip += ' \u00B7 ' + files + ' file' + (files > 1 ? 's' : '');
+      if (d.truncated) chip += ' \u00B7 truncated';
       return chip;
     }
     // Glob: · N files
