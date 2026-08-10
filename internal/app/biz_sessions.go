@@ -1012,7 +1012,10 @@ func trimSavedHistory(messages []openai.ChatCompletionMessage) []openai.ChatComp
 func sanitizeHistoryMessages(messages []openai.ChatCompletionMessage) []openai.ChatCompletionMessage {
 	filtered := make([]openai.ChatCompletionMessage, 0, len(messages))
 	for _, original := range messages {
-		if original.Role == openai.ChatMessageRoleSystem || isGoalProgressMessage(original) {
+		// Synthesized image-input messages are transient: drop them so saved
+		// history never carries "images were provided" text without the actual
+		// images (the base64 payloads are not persisted).
+		if isImageInjectionMessage(&original) || original.Role == openai.ChatMessageRoleSystem || isGoalProgressMessage(original) {
 			continue
 		}
 		m := original

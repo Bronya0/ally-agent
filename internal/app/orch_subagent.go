@@ -372,7 +372,9 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 		// Process outcomes in order. File tracking and the model-facing tool
 		// messages must stay ordered (filesRead/filesEdited are order-sensitive
 		// shared slices); the UI-facing status/emit already happened above in
-		// emitSubOutcome as each tool completed.
+		// emitSubOutcome as each tool completed. Strip the previous step's
+		// image-injection message first (single-turn image context).
+		messages = stripImageInjectionMessages(messages)
 		for _, o := range subOutcomes {
 			trackFileFromToolResult(o.name, o.args, &o.result, &filesRead, &filesEdited, seenFiles)
 			messages = append(messages, openai.ChatCompletionMessage{

@@ -80,6 +80,59 @@ func TestReadImageInjectionMessage(t *testing.T) {
 	}
 }
 
+func TestIsImageInjectionMessageAndStrip(t *testing.T) {
+	injected := readImageInjectionMessage([]readImageCandidate{
+		{Path: "a.png", DataURL: "data:image/png;base64,YWJj"},
+	})
+	if injected == nil || !isImageInjectionMessage(injected) {
+		t.Fatal("injection message must be recognized by marker")
+	}
+	// Ordinary user messages (including user images from attachments) are not
+	// mistaken for injection messages.
+	normal := &openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: "hello"}
+	if isImageInjectionMessage(normal) {
+		t.Fatal("plain user message must not be treated as injection")
+	}
+	withImage := &openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, MultiContent: []openai.ChatMessagePart{
+		{Type: openai.ChatMessagePartTypeText, Text: "look at this"},
+		{Type: openai.ChatMessagePartTypeImageURL, ImageURL: &openai.ChatMessageImageURL{URL: "data:image/png;base64,YWJj"}},
+	}}
+	if isImageInjectionMessage(withImage) {
+		t.Fatal("attachment-style image message must not be treated as injection")
+	}
+
+	messages := []openai.ChatCompletionMessage{
+		{Role: openai.ChatMessageRoleUser, Content: "first"},
+		*injected,
+		{Role: openai.ChatMessageRoleTool, ToolCallID: "call_1", Content: "{}"},
+	}
+	stripped := stripImageInjectionMessages(messages)
+	if len(stripped) != 2 || stripped[0].Content != "first" || stripped[1].ToolCallID != "call_1" {
+		t.Fatalf("strip removed the wrong messages: %#v", stripped)
+	}
+}
+
+func TestSanitizeHistoryDropsImageInjectionMessages(t *testing.T) {
+	injected := readImageInjectionMessage([]readImageCandidate{
+		{Path: "a.png", DataURL: "data:image/png;base64,YWJj"},
+	})
+	messages := []openai.ChatCompletionMessage{
+		{Role: openai.ChatMessageRoleSystem, Content: "sys"},
+		{Role: openai.ChatMessageRoleUser, Content: "hi"},
+		*injected,
+		{Role: openai.ChatMessageRoleAssistant, Content: "let me look"},
+	}
+	sanitized := sanitizeHistoryMessages(messages)
+	for _, m := range sanitized {
+		if isImageInjectionMessage(&m) {
+			t.Fatalf("injection message leaked into sanitized history: %#v", m)
+		}
+	}
+	if len(sanitized) != 2 || sanitized[0].Role != openai.ChatMessageRoleUser || sanitized[1].Role != openai.ChatMessageRoleAssistant {
+		t.Fatalf("unexpected sanitized history: %#v", sanitized)
+	}
+}
+
 func TestCollectReadImages(t *testing.T) {
 	okResult := toolResult{OK: true, Data: &BatchReadResult{Files: []BatchReadResultItem{
 		{Path: "a.png", DataURL: "data:image/png;base64,YWJj"},

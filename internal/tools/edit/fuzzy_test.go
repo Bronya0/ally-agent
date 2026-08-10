@@ -128,3 +128,49 @@ func TestApplyBatchTextChangesFuzzyMidLineKeepsLineTail(t *testing.T) {
 		t.Fatalf("mid-line fuzzy result = %q, want %q", result.Content, "value = 'new' && ready\n")
 	}
 }
+
+func TestApplyBatchTextChangesFuzzyPreservesUnmatchedCharsOnTouchedLines(t *testing.T) {
+	// Regression: the fuzzy fallback must rewrite only the matched region.
+	// Smart quotes on the same line but outside the match, and on the middle
+	// line of a cross-line match, must keep their original bytes.
+	cases := []struct {
+		name    string
+		content string
+		oldText string
+		newText string
+		want    string
+	}{
+		{
+			name:    "same line outside match",
+			content: "a\u2014b c \u2018d\u2019\n",
+			oldText: "a-b",
+			newText: "X",
+			want:    "X c \u2018d\u2019\n",
+		},
+		{
+			name:    "cross line middle line untouched",
+			content: "a\u2014b\nc \u2018d\u2019\ne\n",
+			oldText: "-b\nc",
+			newText: "X",
+			want:    "aX \u2018d\u2019\ne\n",
+		},
+		{
+			name:    "multi-line match trailing newline",
+			content: "a\u2014b\nc\n",
+			oldText: "a-b\nc\n",
+			newText: "X",
+			want:    "X",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			result, _, err := ApplyBatchTextChanges(c.content, []TextChange{{OldText: c.oldText, NewText: c.newText}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.Content != c.want {
+				t.Fatalf("fuzzy result:\nwant %q\n got %q", c.want, result.Content)
+			}
+		})
+	}
+}

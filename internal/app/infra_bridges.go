@@ -277,10 +277,6 @@ func encodeText(text, ending string, hadBOM bool) []byte {
 	return read.EncodeText(text, ending, hadBOM)
 }
 
-func encodeLineEnding(text, ending string) []byte {
-	return read.EncodeLineEnding(text, ending)
-}
-
 func splitLines(text string) ([]string, bool) {
 	return read.SplitLines(text)
 }

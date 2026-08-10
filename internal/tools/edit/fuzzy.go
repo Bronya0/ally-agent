@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"golang.org/x/text/unicode/norm"
 
@@ -16,9 +17,10 @@ import (
 // used only when an exact match fails. It is modeled on pi's edit-diff
 // normalization, tightened to Ally's safety rules:
 //
-//   - Normalization only locates the source; the matched lines are rewritten
-//     from the normalized block plus the model's newText, while every line
-//     outside the touched block keeps its original bytes.
+//   - Normalization only locates the source; only the matched region is
+//     rewritten (with the model's newText). Every byte outside the matched
+//     region — including other characters on the touched lines — keeps its
+//     original bytes.
 //   - A match is accepted only when it is unique in normalized space.
 //     Normalization maps different characters onto the same one, so ambiguity
 //     is more likely, not less — the uniqueness check errs on the safe side.
@@ -27,6 +29,8 @@ import (
 //     covers character-level differences: full-width/smart quotes, Unicode
 //     dashes, special spaces, NFKC compatibility forms, and trailing
 //     whitespace.
+//   - Inputs are expected to be LF-normalized (callers normalize CRLF before
+//     calling); the pure layer does not restore line endings.
 
 const (
 	smartSingleQuoteRunes = "\u2018\u2019\u201A\u201B" // ' ' ‚ ‛
@@ -76,8 +80,8 @@ type normalizedMatch struct {
 }
 
 // fuzzyLocateInNormalized finds the unique occurrence of oldText in the
-// normalized content and maps the touched line block back to the original
-// content. Returns:
+// normalized content and maps the replacement back to byte offsets in the
+// original content. Returns:
 //
 //	match, true, nil  — unique normalized match
 //	zero, false, nil  — no match in normalized space
@@ -97,31 +101,63 @@ func fuzzyLocateInNormalized(content, normContent, oldText, newText string, chan
 			"change %d oldText occurs more than once after Unicode normalization (quotes/dashes/spaces); include more surrounding text to make it unique", changeIndex))
 	}
 
-	// Map the match range to the touched line block. normContent and content
-	// have identical newline layout, so line numbers transfer directly.
-	normEnd := idx + len(normOld)
-	if normEnd > idx && normContent[normEnd-1] == '\n' {
-		normEnd-- // ends exactly at a line break: do not drag the next line in
+	// Replacement region in normalized space is the full normOld occurrence.
+	// normContent and content share the same newline layout, so line numbers
+	// transfer directly.
+	repStart, repEnd := idx, idx+len(normOld)
+	endsWithNewline := repEnd > repStart && normContent[repEnd-1] == '\n'
+	startLine := lineIndexOfOffset(normContent, repStart)
+	endLine := lineIndexOfOffset(normContent, repEnd)
+	if endsWithNewline {
+		// The trailing newline belongs to the line before it; the replacement
+		// consumes that line's terminating newline as well.
+		endLine = lineIndexOfOffset(normContent, repEnd-1)
 	}
-	startLine := lineIndexOfOffset(normContent, idx)
-	endLine := lineIndexOfOffset(normContent, normEnd)
 
-	normLineStart := lineStartOffset(normContent, startLine)
-	normLineEnd := lineEndOffsetInclusive(normContent, endLine)
-	if normLineStart > normLineEnd || normLineEnd > len(normContent) {
+	origBlockStart := lineStartOffset(content, startLine)
+	origBlockEnd := lineEndOffsetInclusive(content, endLine)
+	if origBlockStart > origBlockEnd || origBlockEnd > len(content) {
 		return normalizedMatch{}, false, nil
 	}
 
-	block := normContent[normLineStart:normLineEnd]
-	replaced := strings.Replace(block, normOld, newText, 1)
+	// Map the match boundaries back to original byte offsets inside their
+	// lines so that everything outside the match keeps its original bytes.
+	origStartInLine, startOK := mapNormOffsetInLine(
+		content[lineStartOffset(content, startLine):lineContentEnd(content, startLine)],
+		normContent[lineStartOffset(normContent, startLine):lineContentEnd(normContent, startLine)],
+		repStart-lineStartOffset(normContent, startLine),
+	)
+	origMatchStart := lineStartOffset(content, startLine) + origStartInLine
 
-	origStart := lineStartOffset(content, startLine)
-	origEnd := lineEndOffsetInclusive(content, endLine)
-	if origStart > origEnd || origEnd > len(content) {
-		return normalizedMatch{}, false, nil
+	var origMatchEnd int
+	endOK := true
+	if endsWithNewline {
+		// The replacement consumes the whole end line including its newline.
+		origMatchEnd = origBlockEnd
+	} else {
+		origEndInLine, ok := mapNormOffsetInLine(
+			content[lineStartOffset(content, endLine):lineContentEnd(content, endLine)],
+			normContent[lineStartOffset(normContent, endLine):lineContentEnd(normContent, endLine)],
+			repEnd-lineStartOffset(normContent, endLine),
+		)
+		endOK = ok
+		origMatchEnd = lineStartOffset(content, endLine) + origEndInLine
 	}
 
-	return normalizedMatch{start: origStart, end: origEnd, newText: replaced}, true, nil
+	if !startOK || !endOK || origMatchStart > origMatchEnd || origMatchEnd > origBlockEnd {
+		// The boundary cannot be mapped exactly (a rune's NFKC expansion or
+		// composition crosses the match boundary — extremely rare). Fall back
+		// to rewriting the whole touched block from the normalized content;
+		// the match is still unique, so the edit remains safe.
+		block := normContent[lineStartOffset(normContent, startLine):lineEndOffsetInclusive(normContent, endLine)]
+		replaced := strings.Replace(block, normOld, newText, 1)
+		return normalizedMatch{start: origBlockStart, end: origBlockEnd, newText: replaced}, true, nil
+	}
+
+	// Splice: original bytes before the match, the new text, then the
+	// original bytes after the match (including the end line's newline).
+	assembled := content[origBlockStart:origMatchStart] + newText + content[origMatchEnd:origBlockEnd]
+	return normalizedMatch{start: origBlockStart, end: origBlockEnd, newText: assembled}, true, nil
 }
 
 // lineIndexOfOffset returns the 0-based line number containing byte offset off.
@@ -163,4 +199,55 @@ func lineEndOffsetInclusive(text string, line int) int {
 		return start + rel + 1
 	}
 	return len(text)
+}
+
+// lineContentEnd returns the byte offset just past the content of the 0-based
+// line, excluding its terminating newline.
+func lineContentEnd(text string, line int) int {
+	end := lineEndOffsetInclusive(text, line)
+	if end > lineStartOffset(text, line) && text[end-1] == '\n' {
+		return end - 1
+	}
+	return end
+}
+
+// mapNormOffsetInLine maps a byte offset in the normalized form of one line
+// back to a byte offset in the original line. normLine must be
+// NormalizeForFuzzyMatch(origLine). Returns ok=false when the boundary cannot
+// be mapped exactly — for example when NFKC composition crosses the boundary
+// or a rune's expansion contains the boundary — so callers can fall back to
+// the whole-block rewrite.
+//
+// The mapping walks the original line rune by rune, accumulating the
+// normalized length of the prefix. Slicing only ever happens at rune
+// boundaries, so invalid UTF-8 prefixes (which would corrupt NFKC) never
+// occur. A whitespace rune contributes zero while it is the last rune of the
+// prefix, matching the per-line trailing-whitespace strip. The result is
+// verified against normLine before it is accepted.
+func mapNormOffsetInLine(origLine, normLine string, normOff int) (int, bool) {
+	if normOff <= 0 {
+		return 0, true
+	}
+	if normOff >= len(normLine) {
+		return len(origLine), true
+	}
+	normLen := 0
+	i := 0
+	for i < len(origLine) {
+		r, size := utf8.DecodeRuneInString(origLine[i:])
+		if !unicode.IsSpace(r) {
+			normLen += len(strings.Map(normalizeFuzzyRune, norm.NFKC.String(string(r))))
+		}
+		i += size
+		if normLen == normOff {
+			if NormalizeForFuzzyMatch(origLine[:i]) == normLine[:normOff] {
+				return i, true
+			}
+			return 0, false
+		}
+		if normLen > normOff {
+			return 0, false
+		}
+	}
+	return 0, false
 }

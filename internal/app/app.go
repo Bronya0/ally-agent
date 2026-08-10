@@ -62,10 +62,10 @@ const (
 	maxAttachmentText                = 200 * 1024
 	maxAttachmentDataURL             = 8 * 1024 * 1024
 	// maxReadImageBytes caps image files that the read tool will inline as a
-	// base64 data URL for multimodal model input. Base64 inflates by ~33%,
-	// and large images burn context tokens, so the cap is tighter than the
-	// attachment one.
-	maxReadImageBytes = 6 * 1024 * 1024
+	// base64 data URL for multimodal model input. Base64 inflates by ~33%, and
+	// Anthropic's per-image limit is 5MB of base64 data, so the raw cap is
+	// 3.5MB (~4.7MB base64) to stay safe across all providers.
+	maxReadImageBytes = 3 * 1024 * 1024
 	maxSavedHistoryTokens            = 256 * 1024
 	maxSavedHistoryJSONBytes         = 8 * 1024 * 1024
 	// Background image storage. Bytes are written to
@@ -741,6 +741,7 @@ type HTTPRequestToolRequest struct {
 	FollowRedirects     *bool             `json:"followRedirects,omitempty"`
 	RespectRobots       *bool             `json:"respectRobots,omitempty"`
 	AllowPrivateNetwork *bool             `json:"allowPrivateNetwork,omitempty"`
+	InsecureSkipVerify  *bool             `json:"insecureSkipVerify,omitempty"`
 }
 
 type HTTPRequestToolResult struct {
@@ -773,6 +774,7 @@ type WebFetchRequest struct {
 	MaxChars            int               `json:"maxChars,omitempty"`
 	RespectRobots       *bool             `json:"respectRobots,omitempty"`
 	AllowPrivateNetwork *bool             `json:"allowPrivateNetwork,omitempty"`
+	InsecureSkipVerify  *bool             `json:"insecureSkipVerify,omitempty"`
 }
 
 type WebFetchLink struct {
@@ -1768,6 +1770,9 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 
 			// Append tool results to the model message history in tool-call
 			// order. Emitting already happened per-tool as each finished.
+			// Strip the previous turn's image-injection message first so each
+			// tool batch carries only its own images (single-turn context).
+			messages = stripImageInjectionMessages(messages)
 			for _, o := range outcomes {
 				messages = append(messages, openai.ChatCompletionMessage{
 					Role:       openai.ChatMessageRoleTool,

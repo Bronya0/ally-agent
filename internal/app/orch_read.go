@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -116,11 +117,13 @@ func (c *runReadCache) read(a *App, cfg ConfigState, req BatchReadRequest) (*Bat
 
 // store caches a fully successful read, evicting arbitrary entries until the
 // entry-count and byte budgets fit. The cache is a best-effort token saver, so
-// dropping entries under pressure is acceptable.
+// dropping entries under pressure is acceptable. DataURL bytes are counted
+// toward the byte budget so a batch of large images cannot silently blow past
+// runReadCacheMaxBytes.
 func (c *runReadCache) store(key string, result *BatchReadResult) {
 	size := 0
 	for _, file := range result.Files {
-		size += len(file.Content) + len(file.Text)
+		size += len(file.Content) + len(file.Text) + len(file.DataURL)
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -459,6 +462,19 @@ func imageDataURL(mime string, data []byte) string {
 	return "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(data)
 }
 
+// injectableImageMime reports whether the MIME type can be sent as a
+// data:image URL to every supported provider (OpenAI Chat, Responses,
+// Anthropic). BMP is deliberately excluded: OpenAI Chat rejects image/bmp
+// with a 400, so a BMP read stays a metadata notice with no DataURL.
+func injectableImageMime(mime string) bool {
+	switch mime {
+	case "image/png", "image/jpeg", "image/gif", "image/webp":
+		return true
+	default:
+		return false
+	}
+}
+
 // readImageWithConfig reads an image file and returns a ReadFileResult whose
 // Kind is "image", Content is a short text notice, and DataURL carries the
 // base64 data URL for multimodal model input. Non-editable.
@@ -473,8 +489,14 @@ func (a *App) readImageWithConfig(cfg ConfigState, path string, req ReadFileRequ
 	}
 	name := filepath.Base(path)
 	notice := fmt.Sprintf("[Image: %s (%s, %d bytes)]", name, strings.ToUpper(strings.TrimPrefix(mime, "image/")), len(data))
-	if len(data) > maxReadImageBytes {
+	var dataURL string
+	switch {
+	case !injectableImageMime(mime):
+		notice += " (format not supported for image input)"
+	case len(data) > maxReadImageBytes:
 		notice += " (too large to send as image input)"
+	default:
+		dataURL = imageDataURL(mime, data)
 	}
 	return ReadFileResult{
 		Path:          displayPathForConfig(cfg, path),
@@ -487,8 +509,40 @@ func (a *App) readImageWithConfig(cfg ConfigState, path string, req ReadFileRequ
 		SHA256:        hashBytes(data),
 		Version:       hashVersion(data),
 		Size:          info.Size(),
-		DataURL:       imageDataURL(mime, data),
+		DataURL:       dataURL,
 	}, nil
+}
+
+// imageInjectionMarker prefixes the text lead of the synthesized image-input
+// message so the rest of the pipeline can recognize and strip it:
+//   - the main loop / sub-agent remove the previous turn's injection before
+//     appending the next one (images are single-turn context, not history);
+//   - sanitizeHistoryMessages drops the message entirely so saved history never
+//     contains "images were provided" text without the actual images.
+// The NUL prefix cannot appear in normal model/user text.
+const imageInjectionMarker = "\x00ally-image-input\x00"
+
+// isImageInjectionMessage reports whether m is a synthesized image-input
+// message created by readImageInjectionMessage.
+func isImageInjectionMessage(m *openai.ChatCompletionMessage) bool {
+	if m == nil || m.Role != openai.ChatMessageRoleUser || len(m.MultiContent) == 0 {
+		return false
+	}
+	first := m.MultiContent[0]
+	return first.Type == openai.ChatMessagePartTypeText && strings.HasPrefix(first.Text, imageInjectionMarker)
+}
+
+// stripImageInjectionMessages removes synthesized image-input messages from the
+// slice in place (order preserved).
+func stripImageInjectionMessages(messages []openai.ChatCompletionMessage) []openai.ChatCompletionMessage {
+	out := messages[:0]
+	for _, m := range messages {
+		if isImageInjectionMessage(&m) {
+			continue
+		}
+		out = append(out, m)
+	}
+	return out
 }
 
 // readImageInjectionMessage builds a user message that carries image files
@@ -498,7 +552,8 @@ func (a *App) readImageWithConfig(cfg ConfigState, path string, req ReadFileRequ
 // The message is appended right after the tool-result messages, so every
 // provider adapter sees the images in a user turn immediately following the
 // tool results (Anthropic merges it into the same user turn; OpenAI/Responses
-// accept a new user message).
+// accept a new user message). The text lead carries imageInjectionMarker so
+// the message is recognized as transient (see isImageInjectionMessage).
 func readImageInjectionMessage(results []readImageCandidate) *openai.ChatCompletionMessage {
 	var parts []openai.ChatMessagePart
 	var names []string
@@ -518,7 +573,7 @@ func readImageInjectionMessage(results []readImageCandidate) *openai.ChatComplet
 	if len(parts) == 0 {
 		return nil
 	}
-	lead := "The following image file(s) were read by the tool call(s) above and are provided as image input:\n" + strings.Join(names, "\n")
+	lead := imageInjectionMarker + "The following image file(s) were read by the tool call(s) above and are provided as image input:\n" + strings.Join(names, "\n")
 	parts = append([]openai.ChatMessagePart{{Type: openai.ChatMessagePartTypeText, Text: lead}}, parts...)
 	return &openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, MultiContent: parts}
 }
@@ -563,15 +618,24 @@ func (a *App) readFileWithConfig(cfg ConfigState, req ReadFileRequest) (ReadFile
 	}
 	// Detect images by content before the text read (which rejects binary).
 	// Only probe when the extension plausibly matches an image so non-image
-	// files keep the single-pass text path.
+	// files keep the single-pass text path. The probe reads only the first 12
+	// bytes (enough for every magic number below) so a large fake image (e.g.
+	// a 1GB text file named .png) costs one tiny read instead of a full read
+	// plus the text read.
 	ext := strings.ToLower(filepath.Ext(path))
 	switch ext {
 	case ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp":
-		probe, readErr := os.ReadFile(path)
-		if readErr != nil {
+		f, openErr := os.Open(path)
+		if openErr != nil {
+			return ReadFileResult{}, openErr
+		}
+		probe := make([]byte, 12)
+		n, readErr := f.Read(probe)
+		f.Close()
+		if readErr != nil && readErr != io.EOF {
 			return ReadFileResult{}, readErr
 		}
-		if mime := imageMimeFromHeader(probe); mime != "" {
+		if mime := imageMimeFromHeader(probe[:n]); mime != "" {
 			return a.readImageWithConfig(cfg, path, req, mime)
 		}
 		// Fall through: not actually an image, treat as text.
