@@ -721,6 +721,10 @@ func ApplyBatchTextChanges(content string, changes []TextChange) (*Result, int, 
 	located := make([]locatedChange, 0, len(changes))
 	warnings := make([]string, 0, 2)
 	ignoredNoops := 0
+	// Unicode-normalized snapshot for the fuzzy fallback, computed lazily and
+	// reused across changes (derived from the immutable content snapshot).
+	var normContent string
+	normComputed := false
 	// Exact-text edits do not need a line index. Build it lazily only when the
 	// batch actually contains a lineRange change, avoiding an O(N) scan and one
 	// offset slice allocation for the common exact-string path.
@@ -790,7 +794,29 @@ func ApplyBatchTextChanges(content string, changes []TextChange) (*Result, int, 
 		indentMatches := IndentationInsensitiveMatches(content, oldText, 9)
 		switch len(indentMatches) {
 		case 0:
-			return nil, 0, toolerrors.New("E_NO_MATCH", fmt.Errorf("change %d oldText was not found in the current file; re-read and copy exact source text without the displayed N: line prefixes", i+1))
+			// Unicode normalization fallback: exact and indentation-insensitive
+			// matching both failed. Normalize quotes/dashes/spaces and retry
+			// against the same immutable snapshot. Only a unique normalized
+			// match is accepted; ambiguity is reported instead of guessed.
+			// replace_all keeps its exact-match-only contract and skips this
+			// fallback (replacing "every normalized occurrence" is ambiguous).
+			if !change.ReplaceAll {
+				if !normComputed {
+					normContent = NormalizeForFuzzyMatch(content)
+					normComputed = true
+				}
+				match, found, fuzzyErr := fuzzyLocateInNormalized(content, normContent, oldText, newText, i+1)
+				if fuzzyErr != nil {
+					return nil, 0, fuzzyErr
+				}
+				if !found {
+					return nil, 0, toolerrors.New("E_NO_MATCH", fmt.Errorf("change %d oldText was not found in the current file; re-read and copy exact source text without the displayed N: line prefixes", i+1))
+				}
+				located = append(located, locatedChange{index: i, start: match.start, end: match.end, newText: match.newText})
+				warnings = append(warnings, fmt.Sprintf("change %d matched uniquely after Unicode normalization (quotes/dashes/spaces); the touched block was rewritten in normalized form", i+1))
+			} else {
+				return nil, 0, toolerrors.New("E_NO_MATCH", fmt.Errorf("change %d oldText was not found in the current file; re-read and copy exact source text without the displayed N: line prefixes", i+1))
+			}
 		case 1:
 			match := indentMatches[0]
 			adjustedNewText, ok := ReindentReplacementForMatch(content, oldText, newText, match)
