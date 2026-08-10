@@ -6,7 +6,9 @@ package app
 // result shape used by the chat loop.
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,6 +19,8 @@ import (
 	"strings"
 	"sync"
 	"unicode/utf8"
+
+	openai "github.com/sashabaranov/go-openai"
 
 	"ally-dev/internal/tools/read"
 	toolshared "ally-dev/internal/tools/shared"
@@ -152,6 +156,10 @@ func reusedBatchReadResult(previous *BatchReadResult) *BatchReadResult {
 	for i, file := range previous.Files {
 		file.Content = ""
 		file.Text = ""
+		// Images were already injected into the model context on the first
+		// read; clearing DataURL prevents a second injection for the same
+		// cached payload.
+		file.DataURL = ""
 		file.Reused = true
 		files[i] = file
 	}
@@ -349,6 +357,7 @@ func (a *App) batchReadOneWithConfig(cfg ConfigState, path string, req ReadFileR
 		RangeStatus:           result.RangeStatus,
 		EmptyRange:            result.EmptyRange,
 		Sheets:                result.Sheets,
+		DataURL:               result.DataURL,
 	}
 }
 
@@ -417,6 +426,133 @@ func (a *App) readDocumentWithConfig(cfg ConfigState, req DocumentReadRequest) (
 	}, nil
 }
 
+// imageMimeFromHeader detects a supported image type from magic bytes. It
+// returns "" when the data is not one of the supported image formats. The
+// read tool uses this instead of trusting the file extension so renamed or
+// extension-less image files still work.
+func imageMimeFromHeader(data []byte) string {
+	if len(data) >= 8 && bytes.Equal(data[:8], []byte("\x89PNG\r\n\x1a\n")) {
+		return "image/png"
+	}
+	if len(data) >= 3 && bytes.Equal(data[:3], []byte("\xFF\xD8\xFF")) {
+		return "image/jpeg"
+	}
+	if len(data) >= 6 && (bytes.Equal(data[:6], []byte("GIF87a")) || bytes.Equal(data[:6], []byte("GIF89a"))) {
+		return "image/gif"
+	}
+	if len(data) >= 12 && bytes.Equal(data[:4], []byte("RIFF")) && bytes.Equal(data[8:12], []byte("WEBP")) {
+		return "image/webp"
+	}
+	if len(data) >= 2 && bytes.Equal(data[:2], []byte("BM")) {
+		return "image/bmp"
+	}
+	return ""
+}
+
+// imageDataURL builds a data:image/<mime>;base64,... URL for the raw bytes.
+// The returned value is empty when the file exceeds maxReadImageBytes so
+// oversized images degrade to a text notice instead of blowing up context.
+func imageDataURL(mime string, data []byte) string {
+	if len(data) > maxReadImageBytes {
+		return ""
+	}
+	return "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(data)
+}
+
+// readImageWithConfig reads an image file and returns a ReadFileResult whose
+// Kind is "image", Content is a short text notice, and DataURL carries the
+// base64 data URL for multimodal model input. Non-editable.
+func (a *App) readImageWithConfig(cfg ConfigState, path string, req ReadFileRequest, mime string) (ReadFileResult, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ReadFileResult{}, err
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return ReadFileResult{}, err
+	}
+	name := filepath.Base(path)
+	notice := fmt.Sprintf("[Image: %s (%s, %d bytes)]", name, strings.ToUpper(strings.TrimPrefix(mime, "image/")), len(data))
+	if len(data) > maxReadImageBytes {
+		notice += " (too large to send as image input)"
+	}
+	return ReadFileResult{
+		Path:          displayPathForConfig(cfg, path),
+		Content:       notice,
+		Text:          notice,
+		Kind:          "image",
+		ContentFormat: "image",
+		Type:          strings.TrimPrefix(mime, "image/"),
+		Editable:      false,
+		SHA256:        hashBytes(data),
+		Version:       hashVersion(data),
+		Size:          info.Size(),
+		DataURL:       imageDataURL(mime, data),
+	}, nil
+}
+
+// readImageInjectionMessage builds a user message that carries image files
+// read by the preceding tool batch into multimodal model context. Returns nil
+// when the batch contains no readable image DataURLs.
+//
+// The message is appended right after the tool-result messages, so every
+// provider adapter sees the images in a user turn immediately following the
+// tool results (Anthropic merges it into the same user turn; OpenAI/Responses
+// accept a new user message).
+func readImageInjectionMessage(results []readImageCandidate) *openai.ChatCompletionMessage {
+	var parts []openai.ChatMessagePart
+	var names []string
+	for _, r := range results {
+		if r.DataURL == "" {
+			continue
+		}
+		names = append(names, r.Path)
+		parts = append(parts, openai.ChatMessagePart{
+			Type: openai.ChatMessagePartTypeImageURL,
+			ImageURL: &openai.ChatMessageImageURL{
+				URL:    r.DataURL,
+				Detail: openai.ImageURLDetailAuto,
+			},
+		})
+	}
+	if len(parts) == 0 {
+		return nil
+	}
+	lead := "The following image file(s) were read by the tool call(s) above and are provided as image input:\n" + strings.Join(names, "\n")
+	parts = append([]openai.ChatMessagePart{{Type: openai.ChatMessagePartTypeText, Text: lead}}, parts...)
+	return &openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, MultiContent: parts}
+}
+
+// readImageCandidate is one image file to inject into model context.
+type readImageCandidate struct {
+	Path    string
+	DataURL string
+}
+
+// collectReadImages extracts image DataURLs from a completed read tool result.
+// Non-read tools and read failures contribute nothing.
+func collectReadImages(name string, result *toolResult) []readImageCandidate {
+	if result == nil || !result.OK || result.Data == nil {
+		return nil
+	}
+	switch name {
+	case "read", "batch_read", "read_file":
+	default:
+		return nil
+	}
+	var r BatchReadResult
+	if !decodeToolData(result.Data, &r) {
+		return nil
+	}
+	var out []readImageCandidate
+	for _, f := range r.Files {
+		if f.DataURL != "" {
+			out = append(out, readImageCandidate{Path: f.Path, DataURL: f.DataURL})
+		}
+	}
+	return out
+}
+
 func (a *App) readFileWithConfig(cfg ConfigState, req ReadFileRequest) (ReadFileResult, error) {
 	if shouldExtractDocumentInRead(req.Path) {
 		return a.readDocumentAsReadFileWithConfig(cfg, req)
@@ -424,6 +560,21 @@ func (a *App) readFileWithConfig(cfg ConfigState, req ReadFileRequest) (ReadFile
 	path, err := resolveReadPath(cfg, req.Path)
 	if err != nil {
 		return ReadFileResult{}, err
+	}
+	// Detect images by content before the text read (which rejects binary).
+	// Only probe when the extension plausibly matches an image so non-image
+	// files keep the single-pass text path.
+	ext := strings.ToLower(filepath.Ext(path))
+	switch ext {
+	case ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp":
+		probe, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return ReadFileResult{}, readErr
+		}
+		if mime := imageMimeFromHeader(probe); mime != "" {
+			return a.readImageWithConfig(cfg, path, req, mime)
+		}
+		// Fall through: not actually an image, treat as text.
 	}
 	data, info, err := readTextFile(path)
 	if err != nil {

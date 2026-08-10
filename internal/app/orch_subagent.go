@@ -379,6 +379,15 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 				Role: openai.ChatMessageRoleTool, ToolCallID: o.callID, Content: o.modelJSON,
 			})
 		}
+		// Inject images read by this sub-agent tool batch into multimodal model
+		// context, same contract as the main loop.
+		var subReadImages []readImageCandidate
+		for _, o := range subOutcomes {
+			subReadImages = append(subReadImages, collectReadImages(o.name, &o.result)...)
+		}
+		if subImgMsg := readImageInjectionMessage(subReadImages); subImgMsg != nil {
+			messages = append(messages, *subImgMsg)
+		}
 		step++
 		a.subRunsMu.Lock()
 		run.Steps = step

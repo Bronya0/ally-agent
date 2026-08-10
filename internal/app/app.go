@@ -61,6 +61,11 @@ const (
 	memoryIndexLimit                 = 200
 	maxAttachmentText                = 200 * 1024
 	maxAttachmentDataURL             = 8 * 1024 * 1024
+	// maxReadImageBytes caps image files that the read tool will inline as a
+	// base64 data URL for multimodal model input. Base64 inflates by ~33%,
+	// and large images burn context tokens, so the cap is tighter than the
+	// attachment one.
+	maxReadImageBytes = 6 * 1024 * 1024
 	maxSavedHistoryTokens            = 256 * 1024
 	maxSavedHistoryJSONBytes         = 8 * 1024 * 1024
 	// Background image storage. Bytes are written to
@@ -527,6 +532,9 @@ type ReadFileResult struct {
 	RangeStatus           string   `json:"rangeStatus,omitempty"`
 	EmptyRange            bool     `json:"emptyRange,omitempty"`
 	Sheets                []string `json:"sheets,omitempty"`
+	// DataURL is set only for image files: a data:image/<mime>;base64,... URL
+	// used to inject the picture into multimodal model context.
+	DataURL string `json:"dataUrl,omitempty"`
 }
 
 type ReplaceExactRequest struct {
@@ -1010,6 +1018,9 @@ type BatchReadResultItem struct {
 	Error                 string   `json:"error,omitempty"`
 	ErrorCode             string   `json:"errorCode,omitempty"`
 	Reused                bool     `json:"reused,omitempty"`
+	// DataURL is set only for image files: a data:image/<mime>;base64,... URL
+	// used to inject the picture into multimodal model context.
+	DataURL string `json:"dataUrl,omitempty"`
 }
 
 type BatchReadResult struct {
@@ -1763,6 +1774,18 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 					ToolCallID: o.callID,
 					Content:    o.modelJSON,
 				})
+			}
+			// Inject image files read by this tool batch into multimodal model
+			// context (read of a .png/.jpg/... returns a base64 DataURL). The
+			// user message sits right after the tool results, which keeps the
+			// Anthropic tool-result/user pairing valid and gives all adapters a
+			// user turn to attach the images to.
+			var readImages []readImageCandidate
+			for _, o := range outcomes {
+				readImages = append(readImages, collectReadImages(o.name, &o.result)...)
+			}
+			if imgMsg := readImageInjectionMessage(readImages); imgMsg != nil {
+				messages = append(messages, *imgMsg)
 			}
 		}
 

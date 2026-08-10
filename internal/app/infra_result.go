@@ -173,6 +173,39 @@ func compactToolResultForModel(name string, result toolResult, fullJSON string) 
 		return fullJSON
 	}
 	switch name {
+	case "read", "batch_read", "read_file":
+		var r BatchReadResult
+		if !decodeToolData(result.Data, &r) {
+			return fullJSON
+		}
+		injected := false
+		files := make([]map[string]any, 0, len(r.Files))
+		for _, f := range r.Files {
+			item := map[string]any{
+				"path":        f.Path,
+				"kind":        f.Kind,
+				"content":     f.Content,
+				"startLine":   f.StartLine,
+				"endLine":     f.EndLine,
+				"totalLines":  f.TotalLines,
+				"version":     f.Version,
+				"lineEnding":  f.LineEnding,
+				"truncated":   f.Truncated,
+				"reused":      f.Reused,
+				"error":       f.Error,
+				"errorCode":   f.ErrorCode,
+			}
+			if f.DataURL != "" {
+				item["image"] = "sent as image input in the following user message"
+				injected = true
+			}
+			files = append(files, item)
+		}
+		data := map[string]any{"files": files}
+		if injected {
+			data["note"] = "Image file(s) were injected as actual image input in a following user message; the base64 payload is omitted here to save tokens."
+		}
+		return marshalToolResultOrFallback(toolResult{OK: true, Data: data}, fullJSON)
 	case "edit":
 		var r MultiEditResult
 		if !decodeToolData(result.Data, &r) {
