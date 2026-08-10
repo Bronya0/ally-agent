@@ -3,8 +3,8 @@
     <button
       type="button"
       class="composer-icon-btn composer-new-session-btn"
-      :title="$t('app.sessions.new')"
-      :aria-label="$t('app.sessions.new')"
+      :title="$t('app.sessions.newSession')"
+      :aria-label="$t('app.sessions.newSession')"
       @click.stop="$emit('newSession')"
     >+</button>
     <button

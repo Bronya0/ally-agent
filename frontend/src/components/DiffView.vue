@@ -1,5 +1,5 @@
 <template>
-  <div class="diff-view" :class="{ expanded: !collapsed }">
+  <div class="diff-view" :class="[{ expanded: !collapsed }, layout]">
     <!-- Header: stats + ... more -->
     <div v-if="showHeader && diffHeader" class="diff-header" :class="{ clickable: !collapsed }" @click="onToggle">
       <span v-if="diffHeader.added > 0" class="diff-stat-added">+{{ diffHeader.added }}</span>

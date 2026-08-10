@@ -58,6 +58,7 @@ const zh = {
   'app.todo.collapse': '折叠 Todo',
   'app.sessions.title': '会话 ({count})',
   'app.sessions.new': '会话',
+  'app.sessions.newSession': '新建会话 (Ctrl+N)',
   'app.sessions.inProgress': '进行中',
   'app.sessions.messages': '{count}条',
   'app.sessions.current': '当前',
@@ -720,7 +721,7 @@ const enOverrides = {
   'common.untitled': '(untitled)',
 
   'app.todo.expand': 'Expand Todo', 'app.todo.collapse': 'Collapse Todo',
-  'app.sessions.title': 'Sessions ({count})', 'app.sessions.new': 'Session', 'app.sessions.inProgress': 'Running',
+  'app.sessions.title': 'Sessions ({count})', 'app.sessions.new': 'Session', 'app.sessions.newSession': 'New Session (Ctrl+N)', 'app.sessions.inProgress': 'Running',
   'app.sessions.messages': '{count} msgs', 'app.sessions.current': 'Current', 'app.sessions.delete': 'Delete session',
   'app.sessions.runningDeleteBlocked': 'A running session cannot be deleted', 'app.sessions.invalidNumber': 'Invalid session number',
   'app.sessions.created': 'Session created', 'app.sessions.loadFailed': 'Failed to load session: {error}', 'app.sessions.history': 'Previous session',
