@@ -407,7 +407,7 @@ var builtinToolExamples = map[string]string{
 	"create_goal":        `{"objective":"Make all tests pass","completionCriterion":"go test ./... exits successfully","maxTurns":10}`,
 	"update_goal":        `{"status":"complete","reason":"All required tests pass."}`,
 	"get_goal":           `{}`,
-	"skill":              `{"skill":"review","args":"main"}`,
+	"skill":              `{"skill":"codegraph","args":"main"}`,
 }
 
 func functionTool(name, description string, parameters map[string]any) openai.Tool {

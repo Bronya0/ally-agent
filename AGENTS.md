@@ -238,7 +238,6 @@ Built-in skill loading:
 Currently shipped built-in skills (details in each SKILL.md):
 
 - `playwright-cli` — drives a real browser through the `playwright-cli` npm package via `run_command`; defers command/parameter details to `playwright-cli --help`.
-- `review` — reviews a named range, current workspace changes, or the latest relevant commit; final report is concise plain Chinese with location/impact/fix per issue.
 - `codegraph` — generates or incrementally updates `CODEGRAPH.md` (six fixed H2 sections, plain-text bullets, capped at 800 lines, in-place section updates via `edit`).
 
 ### Enable/Disable
@@ -460,6 +459,7 @@ UI internationalization:
 | `/skill:<name>` | Alternate explicit skill loading syntax |
 | `/note` | Save durable project knowledge |
 | `/remember` | Compatibility alias for `/note` |
+| `/lesson` | Review the conversation and update `.ally/lessons.md` with reusable pitfalls |
 | `/compact` | Compact the current session history |
 | `/reload` | Reload model config file |
 

@@ -3,11 +3,13 @@ package app
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"path"
 	"path/filepath"
 	goruntime "runtime"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -172,6 +174,13 @@ func buildSystemPromptParts(allSkills []SkillDefinition, workspaceRoot string, e
 	if workspaceRoot != "" {
 		if cg := buildCodeGraphPromptPart(workspaceRoot); cg != "" {
 			parts = append(parts, systemPromptPart{label: "项目代码图谱 Code Graph", content: cg})
+		}
+	}
+
+	// Inject project lessons (reusable pitfalls) as reference-only context.
+	if workspaceRoot != "" {
+		if lessons := projectLessonsPromptPart(workspaceRoot); lessons != "" {
+			parts = append(parts, systemPromptPart{label: "项目经验 Lessons", content: lessons})
 		}
 	}
 
@@ -381,6 +390,93 @@ func buildMemoryIndexContext() string {
 			desc = desc[:297] + "..."
 		}
 		fmt.Fprintf(&b, "- %s: %s\n", filepath.ToSlash(mem.Path), desc)
+	}
+	return b.String()
+}
+
+// projectLessonsMaxLines / projectLessonsMaxBytes bound the injected lesson
+// content: only the newest lines are injected, and the byte cap keeps the
+// prompt part cheap even when the file grows.
+const (
+	projectLessonsMaxLines = 30
+	projectLessonsMaxBytes = 8192
+)
+
+// projectLessonsCache memoizes the raw content of a workspace `.ally/lessons.md`
+// across chat steps, keyed by path + mtime, mirroring memoryIndexCache's
+// invalidation-by-mtime approach.
+var projectLessonsCache struct {
+	sync.Mutex
+	path    string
+	mtime   time.Time
+	content string
+}
+
+func readProjectLessonsCached(path string) string {
+	projectLessonsCache.Lock()
+	defer projectLessonsCache.Unlock()
+	info, err := os.Stat(path)
+	if err != nil {
+		if projectLessonsCache.path == path {
+			projectLessonsCache.path = ""
+			projectLessonsCache.mtime = time.Time{}
+			projectLessonsCache.content = ""
+		}
+		return ""
+	}
+	if projectLessonsCache.path == path && projectLessonsCache.mtime.Equal(info.ModTime()) {
+		return projectLessonsCache.content
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	projectLessonsCache.path = path
+	projectLessonsCache.mtime = info.ModTime()
+	projectLessonsCache.content = string(data)
+	return projectLessonsCache.content
+}
+
+// buildProjectLessonsContext reads and bounds the workspace lesson file. The
+// newest projectLessonsMaxLines are kept (newer lessons are more relevant),
+// then a byte cap keeps injection cheap. Returns "" when no file exists.
+func buildProjectLessonsContext(workspaceRoot string) string {
+	if workspaceRoot == "" {
+		return ""
+	}
+	content := readProjectLessonsCached(filepath.Join(workspaceRoot, ".ally", "lessons.md"))
+	if content == "" {
+		return ""
+	}
+	lines := strings.Split(content, "\n")
+	if len(lines) > projectLessonsMaxLines {
+		lines = lines[len(lines)-projectLessonsMaxLines:]
+		content = strings.Join(lines, "\n")
+	}
+	if len(content) > projectLessonsMaxBytes {
+		content = content[len(content)-projectLessonsMaxBytes:]
+		if idx := strings.IndexByte(content, '\n'); idx >= 0 {
+			content = content[idx+1:]
+		}
+	}
+	return content
+}
+
+// projectLessonsPromptPart builds the prompt segment shared by the main agent
+// and sub-agents: the write rules plus the recorded lessons, wrapped in a
+// reference-only tag so stale or adversarial file content cannot override
+// core rules.
+func projectLessonsPromptPart(workspaceRoot string) string {
+	var b strings.Builder
+	b.WriteString("\n\n# Project Lessons\n\n")
+	b.WriteString("`.ally/lessons.md` in the workspace root records reusable pitfalls (hidden framework behavior, project-specific conventions, environment traps), one line per lesson:\n\n")
+	b.WriteString("- [tag] symptom → root cause → fix @file-or-area\n\n")
+	b.WriteString("When you fix a pitfall that would recur in another file or task, update `.ally/lessons.md` with `edit`: read it first, update the matching line if the lesson already exists, otherwise append a line; create the file when missing. Only record pitfalls that would recur elsewhere; never record one-off compile errors, failed tests, plain coding mistakes, or tool errors. Lines may be stale — verify the code before relying on them.\n")
+	if lessons := buildProjectLessonsContext(workspaceRoot); lessons != "" {
+		b.WriteString("\nRecorded lessons:\n")
+		b.WriteString("<project-lessons priority=\"reference-only lower-than-core lower-than-project-instructions\">\n")
+		b.WriteString(lessons)
+		b.WriteString("\n</project-lessons>\n")
 	}
 	return b.String()
 }

@@ -515,6 +515,9 @@ func (a *App) buildSubagentEnv(cfg ConfigState) string {
 			b.WriteString(e.Path + tag + "\n")
 		}
 	}
+	if lessons := projectLessonsPromptPart(cfg.Workspace); lessons != "" {
+		b.WriteString(lessons)
+	}
 	return b.String()
 }
 

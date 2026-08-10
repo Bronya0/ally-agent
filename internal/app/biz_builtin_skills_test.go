@@ -97,44 +97,6 @@ func TestParseSkillContentFromMemory(t *testing.T) {
 	}
 }
 
-func TestBuiltinSkillEntriesContainsReview(t *testing.T) {
-	entries := builtinSkillEntries()
-	var rv *SkillDefinition
-	for i := range entries {
-		if entries[i].Name == "review" {
-			rv = &entries[i]
-			break
-		}
-	}
-	if rv == nil {
-		names := make([]string, 0, len(entries))
-		for _, e := range entries {
-			names = append(names, e.Name)
-		}
-		t.Fatalf("expected review in built-in skills, got %v", names)
-	}
-	if rv.Source != "builtin" {
-		t.Fatalf("expected Source=builtin, got %q", rv.Source)
-	}
-	if rv.embeddedContent == "" {
-		t.Fatal("expected embeddedContent to be populated for review")
-	}
-	for _, required := range []string{"全自动", "不调用 `ask`", "当前对话", "## 总结（先说人话）", "## 要不要改", "## 需要处理的问题", "位置：", "风险大不大：", "好不好改：", "怎么改：", "说人话"} {
-		if !strings.Contains(rv.embeddedContent, required) {
-			t.Fatalf("expected review skill to contain %q", required)
-		}
-	}
-	if strings.Contains(rv.embeddedContent, "找不到就问用户") {
-		t.Fatal("review skill must not ask the user to identify a missing requirement")
-	}
-	if !strings.HasPrefix(rv.Path, "builtin://") {
-		t.Fatalf("expected Path to start with builtin://, got %q", rv.Path)
-	}
-	if rv.WhenToUse == "" {
-		t.Fatal("expected WhenToUse to be populated from frontmatter")
-	}
-}
-
 func TestBuiltinSkillEntriesContainsCodeGraph(t *testing.T) {
 	entries := builtinSkillEntries()
 	var cg *SkillDefinition

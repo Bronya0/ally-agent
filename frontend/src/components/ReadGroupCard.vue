@@ -70,9 +70,8 @@ function entryChip(entry) {
   const lineCount = Number(entry.lineCount) || 0;
   const parts = [];
   if (lineCount > 0) {
-    if (startLine > 1 || endLine < totalLines) {
-      parts.push(t('tools.lineRange', { start: startLine, end: endLine }));
-      if (totalLines > 0) parts.push(t('tools.lineRangeTotal', { total: totalLines }));
+    if ((startLine > 1 || endLine < totalLines) && endLine >= startLine) {
+      parts.push(t('tools.lineRange', { count: lineCount, countSuffix: lineCount === 1 ? '' : 's', start: startLine, end: endLine }));
       if (entry.truncated) parts.push(`(${t('common.truncated')})`);
     } else {
       parts.push(t('tools.lineCount', { count: lineCount, countSuffix: lineCount === 1 ? '' : 's' }));

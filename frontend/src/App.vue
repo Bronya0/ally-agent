@@ -1414,6 +1414,7 @@ const builtinCommands = [
   { key: 'sessions', label: '/sessions', description: t('commands.sessions'), text: '', special: 'sessions' },
   { key: 'init', label: '/init', description: t('commands.init'), text: '', special: 'init' },
   { key: 'note', label: '/note', description: t('commands.note'), text: '', special: 'remember' },
+  { key: 'lesson', label: '/lesson', description: t('commands.lesson'), text: '', special: 'lesson' },
   { key: 'compact', label: '/compact', description: t('commands.compact'), text: '', special: 'compact' },
   { key: 'push', label: '/push', description: t('commands.push'), text: '', special: 'push' },
 ];
@@ -1466,6 +1467,15 @@ const REMEMBER_PROMPT = `Save durable project knowledge from this conversation.
 3. Use memory_read first if an existing memory from the global memory index may already cover this project.
 4. Save or update the knowledge with memory_write. Use an explicit stable path such as project-knowledge/<workspace-or-project-name>.md.
 5. Do not edit AGENTS.md for this command. Do not save speculation, one-off task status, transient bug-fix notes, or generic advice.`;
+
+const LESSON_PROMPT = `Review this conversation for reusable pitfalls: hidden framework behavior, project-specific conventions, or environment traps that would likely trip again in another file or task.
+
+Update .ally/lessons.md in the workspace root:
+1. Read the file first; if it does not exist, create it.
+2. Add one line per lesson in this format: - [tag] symptom → root cause → fix @file-or-area
+3. Update the matching line when the same lesson is already recorded; otherwise append a new line.
+4. Only record pitfalls that would recur elsewhere. Never record one-off compile errors, failed tests, plain coding mistakes, or tool errors.
+5. If nothing qualifies, say there is nothing to save and do not create the file.`;
 
 const activeSession = computed(() => sessions.value.find((session) => session.id === activeSessionId.value));
 
@@ -4319,8 +4329,7 @@ function formatReadRangeChip(startLine, endLine, totalLines, truncated) {
   if (actualLines <= 0) return '';
   const parts = [];
   if (start > 1 || end < total) {
-    parts.push(`lines ${start}-${end}`);
-    if (total > 0) parts.push(`(of ${total})`);
+    parts.push(`${actualLines} line${actualLines !== 1 ? 's' : ''} ${start}-${end}`);
     if (truncated) parts.push('(truncated)');
   } else {
     parts.push(`${actualLines} line${actualLines !== 1 ? 's' : ''}`);
@@ -4906,6 +4915,12 @@ async function handleBuiltinCommand(command) {
   }
   if (command.special === 'remember') {
     handleRememberCommand();
+    promptText.value = '';
+    commandMenuVisible.value = false;
+    return true;
+  }
+  if (command.special === 'lesson') {
+    handleLessonCommand();
     promptText.value = '';
     commandMenuVisible.value = false;
     return true;
@@ -5986,6 +6001,31 @@ function handleRememberCommand() {
     });
 }
 
+function handleLessonCommand() {
+  const session = activeSession.value;
+  if (!session) return;
+  const history = session.messages
+    .filter(isModelHistoryMessage)
+    .map((msg) => ({ role: msg.role, content: msg.content }));
+  history.push({ role: 'user', content: LESSON_PROMPT });
+
+  session.messages.push({ role: 'user', content: t('app.lesson.visibleText'), done: true });
+  if (isDefaultSessionTitle(session.title)) {
+    session.title = t('app.lesson.title');
+  }
+  scrollMessagesToBottom();
+  saveSessions();
+
+  markSessionRunning(session);
+  StartChat({ sessionId: session.id, message: '', messages: history, config: { ...config, extraRoots: session.extraRoots || [] } })
+    .catch((err) => {
+      markTransientTurn(session);
+      session.runId = '';
+      session.isRunning = false;
+      pushMessage('assistant', t('app.lesson.failed', { error: err }), { error: true, transientTurn: true });
+    });
+}
+
 function handlePushCommand() {
   const session = activeSession.value;
   if (!session) return;
@@ -6400,7 +6440,7 @@ function formatToolChip(name, result) {
   }
   try {
     const parsed = JSON.parse(text);
-    // read_file: · N lines 或 · lines M-N
+    // read_file: · N lines 或 · N lines M-N
     if ((name === 'read_file' || name === 'remote_read_file') && parsed.data) {
       const d = parsed.data;
       if (d.kind === 'document' || d.contentFormat === 'plain') {
@@ -6413,7 +6453,7 @@ function formatToolChip(name, result) {
       if (linesReturned > 0) {
         const isPartial = startLine > 1 || endLine < (d.totalLines || 0);
         if (isPartial && d.totalLines > linesReturned) {
-          return '\u00B7 lines ' + startLine + '-' + endLine + ' (of ' + d.totalLines + ')';
+          return '\u00B7 ' + linesReturned + ' line' + (linesReturned !== 1 ? 's' : '') + ' ' + startLine + '-' + endLine;
         }
         return formatReadChip(linesReturned);
       }
@@ -6582,7 +6622,8 @@ function formatToolBody(name, body) {
             const header = '### ' + (f.path || '') + '  (' + (f.type || 'document') + sheetInfo + (f.truncated ? ' [truncated]' : '') + ')';
             return header + '\n' + (f.text || f.content || '');
           }
-          const range = f.endLine ? (' lines ' + (f.startLine || 1) + '-' + f.endLine + ' of ' + (f.totalLines || '?')) : ((f.totalLines || '?') + ' lines');
+          const rangeCount = f.endLine ? (f.endLine - (f.startLine || 1) + 1) : 0;
+          const range = f.endLine ? (rangeCount + ' line' + (rangeCount !== 1 ? 's' : '') + ' ' + (f.startLine || 1) + '-' + f.endLine) : ((f.totalLines || '?') + ' lines');
           const suffix = f.truncated ? ' [truncated]' : '';
           const header = '### ' + (f.path || '') + '  (' + range + suffix + ')';
           const content = f.content || '';
