@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
+	"github.com/wailsapp/wails/v3/pkg/events"
 )
 
 const (
@@ -55,6 +56,31 @@ func (a *App) SetWindow(window *application.WebviewWindow) {
 		a.wails = &wailsAppHandle{}
 	}
 	a.wails.window = window
+	a.installWebviewZoomResync(window)
+}
+
+// installWebviewZoomResync guards against WebView2 restoring a stale zoom
+// state after the window leaves the minimised state (UI fonts render too
+// small). Wails only resyncs the WebView2 rasterization scale when the monitor
+// DPI actually changed across the minimise/restore (#5544/#5605); the
+// same-monitor restore path is a blind spot, so we re-assert zoom 1.0 after
+// the webview has fully resumed. The write is skipped when the zoom is already
+// correct, so normal restores are no-ops with no relayout flicker.
+func (a *App) installWebviewZoomResync(window *application.WebviewWindow) {
+	if goruntime.GOOS != "windows" || window == nil {
+		return
+	}
+	window.OnWindowEvent(events.Windows.WindowUnMinimise, func(*application.WindowEvent) {
+		// Wait until WebView2 has finished resuming; touching the controller
+		// too early can be fatal while its render/GPU process restarts
+		// (Wails #5605). SetZoom/GetZoom marshal to the main thread and are
+		// nil-safe after the window is destroyed.
+		time.AfterFunc(500*time.Millisecond, func() {
+			if current := window.GetZoom(); current != 1.0 {
+				window.SetZoom(1.0)
+			}
+		})
+	})
 }
 
 // wailsEventSink adapts the host-neutral eventSink contract to Wails v3
