@@ -426,8 +426,15 @@ onErrorCaptured((err, _instance, info) => {
 const conversationMessagesRefs = new Map();
 const promptInputRefs = reactive({});
 function setPromptInputRef(tabId, el) {
-  if (el) promptInputRefs[tabId] = el;
-  else delete promptInputRefs[tabId];
+  if (el) {
+    promptInputRefs[tabId] = el;
+  } else {
+    delete promptInputRefs[tabId];
+    // 输入框卸载（切换/新建会话时 v-for 重建）会丢失进行中的输入法组合事件，
+    // 不重置会让 promptComposing 残留为 true，导致之后按 Enter 一直只换行不发送。
+    promptComposing.value = false;
+    promptCompositionEndedAt = 0;
+  }
 }
 const promptComposing = ref(false);
 let promptCompositionEndedAt = 0;
@@ -4709,8 +4716,25 @@ function handlePromptCompositionEnd() {
 function handlePromptKeydown(event) {
   // macOS WebKit may emit Enter just after compositionend and report isComposing=false.
   // keyCode 229 and the short post-composition guard cover those event-order variants.
-  const justCommittedComposition = event.key === 'Enter' && performance.now() - promptCompositionEndedAt < 100;
-  if (promptComposing.value || event.isComposing || event.keyCode === 229 || justCommittedComposition) return;
+  if (event.key === 'Enter') {
+    if (promptComposing.value || event.isComposing) {
+      // 输入法组合中：Enter 由输入法消费为确认键，不拦截也不产生换行。
+      return;
+    }
+    if (event.keyCode === 229) {
+      // 组合已结束但 keyCode 仍残留 229 的幽灵 Enter：吞掉，防止多出一个换行。
+      event.preventDefault();
+      return;
+    }
+    if (performance.now() - promptCompositionEndedAt < 100) {
+      // 输入法确认后紧跟的幽灵 Enter（isComposing=false）：吞掉并 preventDefault，
+      // 既不误发送也不产生换行；时间戳清零实现只吞一次，紧接着的第二次 Enter
+      // 恢复正常发送。
+      event.preventDefault();
+      promptCompositionEndedAt = 0;
+      return;
+    }
+  }
 
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'c') {
     // Only intercept Ctrl+C as interrupt when there is no text selection to copy
