@@ -145,15 +145,15 @@ func (a *App) runCommandWithConfig(parent context.Context, cfg ConfigState, req 
 		return CommandResult{}, err
 	}
 	root := roots[0]
-	if err := checkCommandSafety(req, roots); err != nil {
-		return CommandResult{}, err
-	}
 	cwd := root
 	if strings.TrimSpace(req.Cwd) != "" {
 		cwd, err = resolveCommandCwd(roots, req.Cwd)
 		if err != nil {
 			return CommandResult{}, err
 		}
+	}
+	if err := checkCommandSafetyAtCwd(req, roots, cwd); err != nil {
+		return CommandResult{}, err
 	}
 	timeout := req.TimeoutSeconds
 	if timeout <= 0 {
@@ -263,17 +263,17 @@ func (a *App) runCommandWithConfig(parent context.Context, cfg ConfigState, req 
 	}
 	duration := time.Since(started).Milliseconds()
 	result := CommandResult{
-		Command:    req.Command,
-		Cwd:        filepath.ToSlash(cwd),
-		Shell:      shell.name,
-		ShellPath:  shell.path,
-		Output:     buf.String(),
-		ExitCode:   0,
-		TimedOut:   errors.Is(ctx.Err(), context.DeadlineExceeded),
-		Cancelled:  errors.Is(ctx.Err(), context.Canceled),
-		DurationMS: duration,
-		Truncated:       buf.truncated,
-		OutputFilePath:  outputFilePath,
+		Command:        req.Command,
+		Cwd:            filepath.ToSlash(cwd),
+		Shell:          shell.name,
+		ShellPath:      shell.path,
+		Output:         buf.String(),
+		ExitCode:       0,
+		TimedOut:       errors.Is(ctx.Err(), context.DeadlineExceeded),
+		Cancelled:      errors.Is(ctx.Err(), context.Canceled),
+		DurationMS:     duration,
+		Truncated:      buf.truncated,
+		OutputFilePath: outputFilePath,
 	}
 	if outputFilePath != "" {
 		result.Output += fmt.Sprintf("\n\n[输出已截断：仅保留前 %d KB。完整输出已保存到 %s，可用 read 工具读取该文件查看全部内容]", maxToolOutput/1024, outputFilePath)

@@ -393,6 +393,14 @@ func deletionKind(invocation Invocation) int {
 	switch invocation.Name {
 	case "rm", "unlink", "rmdir", "del", "erase", "rd", "remove-item", "ri":
 		return deletionRaw
+	case "find":
+		if findDeletes(invocation.Args) {
+			return deletionRaw
+		}
+	case "rsync":
+		if rsyncDeletes(invocation.Args) {
+			return deletionRaw
+		}
 	case "git":
 		if firstCommandArg(invocation.Args) == "rm" {
 			return deletionManaged
@@ -419,6 +427,24 @@ func deletionKind(invocation Invocation) int {
 		}
 	}
 	return deletionNone
+}
+
+func findDeletes(args []string) bool {
+	for _, arg := range args {
+		if strings.EqualFold(arg, "-delete") {
+			return true
+		}
+	}
+	return false
+}
+
+func rsyncDeletes(args []string) bool {
+	for _, arg := range args {
+		if strings.HasPrefix(strings.ToLower(arg), "--delete") {
+			return true
+		}
+	}
+	return false
 }
 
 func commandArgs(args []string) []string {

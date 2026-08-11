@@ -113,15 +113,15 @@ func (a *App) startServiceWithConfig(cfg ConfigState, req StartServiceRequest) (
 		return ServiceInfo{}, err
 	}
 	root := roots[0]
-	if err := checkCommandSafety(CommandRequest{Command: req.Command, Cwd: req.Cwd}, roots); err != nil {
-		return ServiceInfo{}, err
-	}
 	cwd := root
 	if strings.TrimSpace(req.Cwd) != "" {
 		cwd, err = resolveCommandCwd(roots, req.Cwd)
 		if err != nil {
 			return ServiceInfo{}, err
 		}
+	}
+	if err := checkCommandSafetyAtCwd(CommandRequest{Command: req.Command, Cwd: req.Cwd}, roots, cwd); err != nil {
+		return ServiceInfo{}, err
 	}
 	a.servicesMu.Lock()
 	activeCount := 0

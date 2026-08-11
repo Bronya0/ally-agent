@@ -27,6 +27,8 @@ func TestDeleteDetectionUsesCommandPositions(t *testing.T) {
 		`eval "rm generated.txt"`,
 		`echo $(rm generated.txt)`,
 		"echo `rm generated.txt`",
+		`find . -delete`,
+		`rsync --archive --delete source/ destination/`,
 	}
 	for _, commandLine := range blocked {
 		if !ContainsExplicitDeleteCommand(commandLine) {

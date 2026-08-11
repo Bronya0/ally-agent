@@ -1199,6 +1199,50 @@ func TestCommandSafetyBlocksModifyingExistingOutsidePath(t *testing.T) {
 	}
 }
 
+func TestCommandSafetyResolvesRelativeMutationFromCwd(t *testing.T) {
+	workspace := t.TempDir()
+	cwd := filepath.Join(workspace, "build")
+	if err := os.MkdirAll(cwd, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(t.TempDir(), "existing.txt")
+	if err := os.WriteFile(target, []byte("keep\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	relative, err := filepath.Rel(cwd, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := fmt.Sprintf(`touch %q`, filepath.ToSlash(relative))
+	if code := toolErrorCode(checkCommandSafety(CommandRequest{Command: command, Cwd: "build"}, []string{workspace})); code != "E_PATH_OUTSIDE" {
+		t.Fatalf("relative mutation must resolve from cwd and be blocked, got %q", code)
+	}
+}
+
+func TestCommandSafetyBlocksWorkspaceSymlinkMutation(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation requires privileges on many Windows environments")
+	}
+	workspace := t.TempDir()
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(workspace, "link")); err != nil {
+		t.Fatal(err)
+	}
+	existing := filepath.Join(outside, "existing.txt")
+	if err := os.WriteFile(existing, []byte("keep\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	commands := []string{
+		`touch link/existing.txt`,
+		`printf created > link/new.txt`,
+	}
+	for _, command := range commands {
+		if code := toolErrorCode(checkCommandSafety(CommandRequest{Command: command}, []string{workspace})); code != "E_PATH_OUTSIDE" {
+			t.Fatalf("workspace symlink mutation must be blocked for %q, got %q", command, code)
+		}
+	}
+}
+
 func TestCommandSafetyAllowsDynamicRedirectionTarget(t *testing.T) {
 	// 动态目标（变量展开、通配符、heredoc 内容）无法静态解析：宽松策略下放行，
 	// 避免对合法复杂命令误判。字面外部已存在目标仍由其他用例覆盖拦截。
