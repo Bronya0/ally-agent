@@ -4581,7 +4581,7 @@ function handlePromptInput() {
 }
 
 function getPromptTextarea() {
-  const root = promptInputRefs[activeWorkspaceId]?.$el || promptInputRefs[activeWorkspaceId];
+  const root = promptInputRefs[activeWorkspaceId.value]?.$el || promptInputRefs[activeWorkspaceId.value];
   return root?.querySelector?.('textarea[data-ally-prompt-input="true"], textarea') || null;
 }
 
@@ -7171,7 +7171,7 @@ function formatBytes(bytes) {
 }
 
 function focusPromptInput() {
-  promptInputRefs[activeWorkspaceId]?.focus?.();
+  promptInputRefs[activeWorkspaceId.value]?.focus?.();
 }
 
 watch(configVisible, (visible) => {
