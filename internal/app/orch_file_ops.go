@@ -170,8 +170,12 @@ func (a *App) runCommandWithConfig(parent context.Context, cfg ConfigState, req 
 	cmd.Dir = cwd
 	cmd.Env = commandEnvironment(cfg)
 	buf := &limitedBuffer{limit: maxToolOutput}
-	cmd.Stdout = buf
-	cmd.Stderr = buf
+	// 完整输出延迟落盘：仅在内存缓冲首次溢出时创建 .ally/tmp 下的 spill 文件，
+	// 把已缓冲前缀写入后继续边跑边写；未截断的小输出全程不碰磁盘。
+	tw := &teeWriter{primary: buf, spillDir: filepath.Join(root, ".ally", "tmp")}
+	buf.onTruncate = tw.startSpill
+	cmd.Stdout = tw
+	cmd.Stderr = tw
 	prepareServiceCommand(cmd)
 	// ESC 取消运行时，杀掉整棵进程树而不是只杀外壳 bash/powershell，
 	// 否则 npm/vite/devserver 等子进程会变成孤儿继续占用端口。
@@ -247,6 +251,16 @@ func (a *App) runCommandWithConfig(parent context.Context, cfg ConfigState, req 
 	err = cmd.Run()
 	close(outputDone)
 	outputWG.Wait()
+	outputFilePath := ""
+	if f := tw.spill; f != nil {
+		name := f.Name()
+		_ = f.Close()
+		if buf.truncated {
+			outputFilePath = name
+		} else {
+			_ = os.Remove(name)
+		}
+	}
 	duration := time.Since(started).Milliseconds()
 	result := CommandResult{
 		Command:    req.Command,
@@ -258,7 +272,11 @@ func (a *App) runCommandWithConfig(parent context.Context, cfg ConfigState, req 
 		TimedOut:   errors.Is(ctx.Err(), context.DeadlineExceeded),
 		Cancelled:  errors.Is(ctx.Err(), context.Canceled),
 		DurationMS: duration,
-		Truncated:  buf.truncated,
+		Truncated:       buf.truncated,
+		OutputFilePath:  outputFilePath,
+	}
+	if outputFilePath != "" {
+		result.Output += fmt.Sprintf("\n\n[输出已截断：仅保留前 %d KB。完整输出已保存到 %s，可用 read 工具读取该文件查看全部内容]", maxToolOutput/1024, outputFilePath)
 	}
 	if err != nil {
 		var exitErr *exec.ExitError
@@ -273,6 +291,71 @@ func (a *App) runCommandWithConfig(parent context.Context, cfg ConfigState, req 
 		return result, err
 	}
 	return result, nil
+}
+
+// teeWriter mirrors command output to primary and, once the buffer first
+// overflows, lazily spills the complete output to a file under spillDir so the
+// full content survives truncation. Write ordering matters: primary.Write may
+// trigger startSpill (under the buffer lock); reading w.spill afterwards is
+// ordered by that lock's acquire/release, so the same chunk is never missed or
+// duplicated in the file.
+type teeWriter struct {
+	primary  *limitedBuffer
+	spillDir string
+	spill    *os.File // nil until the first truncation
+}
+
+func (w *teeWriter) Write(p []byte) (int, error) {
+	n, err := w.primary.Write(p)
+	if w.spill != nil {
+		_, _ = w.spill.Write(p)
+	}
+	return n, err
+}
+
+// startSpill is invoked by limitedBuffer exactly once, on first overflow, with
+// the buffered prefix. It creates the spill file under spillDir and copies the
+// prefix into it; failures degrade gracefully to buffer-only capture.
+func (w *teeWriter) startSpill(prefix []byte) {
+	if w.spill != nil || w.spillDir == "" {
+		return
+	}
+	if err := os.MkdirAll(w.spillDir, 0o755); err != nil {
+		return
+	}
+	f, err := os.CreateTemp(w.spillDir, "ally-run-*.log")
+	if err != nil {
+		return
+	}
+	w.spill = f
+	_, _ = f.Write(prefix)
+}
+
+// cleanupCommandSpillFiles removes stale run_command full-output temp files
+// older than 24 hours. Called once at startup to avoid unbounded accumulation.
+func cleanupCommandSpillFiles(workspaceRoot string) {
+	if strings.TrimSpace(workspaceRoot) == "" {
+		return
+	}
+	abs, err := filepath.Abs(workspaceRoot)
+	if err != nil {
+		return
+	}
+	dir := filepath.Join(abs, ".ally", "tmp")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	cutoff := time.Now().Add(-24 * time.Hour)
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasPrefix(name, "ally-run-") || !strings.HasSuffix(name, ".log") {
+			continue
+		}
+		if info, err := entry.Info(); err == nil && info.ModTime().Before(cutoff) {
+			_ = os.Remove(filepath.Join(dir, name))
+		}
+	}
 }
 
 type shellInvocation struct {

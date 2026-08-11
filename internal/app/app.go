@@ -716,12 +716,13 @@ type ServiceOutputResult struct {
 }
 
 type CommandResult struct {
-	Command    string `json:"command"`
-	Cwd        string `json:"cwd"`
-	Shell      string `json:"shell"`
-	ShellPath  string `json:"shellPath"`
-	Output     string `json:"output"`
-	ExitCode   int    `json:"exitCode"`
+	Command        string `json:"command"`
+	Cwd            string `json:"cwd"`
+	Shell          string `json:"shell"`
+	ShellPath      string `json:"shellPath"`
+	Output         string `json:"output"`
+	OutputFilePath string `json:"outputFilePath,omitempty"`
+	ExitCode       int    `json:"exitCode"`
 	TimedOut   bool   `json:"timedOut"`
 	Cancelled  bool   `json:"cancelled"`
 	DurationMS int64  `json:"durationMs"`
@@ -1141,6 +1142,8 @@ func (a *App) ensureInitialized() error {
 	}
 	a.disabledSkills = normalizeSkillNameList(a.config.DisabledSkills)
 	a.config.DisabledSkills = cloneStringSlice(a.disabledSkills)
+	// run_command 截断落盘文件位于工作区 .ally/tmp，启动时清理过期文件
+	cleanupCommandSpillFiles(a.config.Workspace)
 	a.initialized = true
 	return nil
 }

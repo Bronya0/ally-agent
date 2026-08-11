@@ -155,6 +155,11 @@ type limitedBuffer struct {
 	buf       bytes.Buffer
 	limit     int
 	truncated bool
+	// onTruncate, when set, is invoked exactly once (under mu) on the first
+	// overflow with the content buffered so far. run_command uses it to
+	// lazily create a full-output spill file only when truncation happens.
+	onTruncate    func(prefix []byte)
+	truncatedOnce sync.Once
 }
 
 func (b *limitedBuffer) Write(p []byte) (int, error) {
@@ -166,15 +171,29 @@ func (b *limitedBuffer) Write(p []byte) (int, error) {
 	remaining := b.limit - b.buf.Len()
 	if remaining <= 0 {
 		b.truncated = true
+		b.noteTruncate()
 		return len(p), nil
 	}
 	if len(p) > remaining {
 		_, _ = b.buf.Write(p[:remaining])
 		b.truncated = true
+		b.noteTruncate()
 		return len(p), nil
 	}
 	_, _ = b.buf.Write(p)
 	return len(p), nil
+}
+
+// noteTruncate fires the onTruncate callback once on the first overflow. It
+// must be called with b.mu held; the callback receives the buffered prefix so
+// a spill sink can capture the complete output even though the buffer drops
+// the overflowing tail.
+func (b *limitedBuffer) noteTruncate() {
+	b.truncatedOnce.Do(func() {
+		if b.onTruncate != nil {
+			b.onTruncate(b.buf.Bytes())
+		}
+	})
 }
 
 func (b *limitedBuffer) String() string {

@@ -263,6 +263,10 @@ func compactToolResultForModel(name string, result toolResult, fullJSON string) 
 			data["originalOutputBytes"] = len(r.Output)
 			data["reductionNote"] = "Command output shortened for model context; UI received the full output."
 		}
+		if r.OutputFilePath != "" {
+			data["outputFilePath"] = r.OutputFilePath
+			data["outputNote"] = "完整输出已保存到该文件，可用 read 工具读取全部内容。"
+		}
 		return marshalToolResultOrFallback(toolResult{OK: true, Data: data}, fullJSON)
 	case "background_process":
 		// background_process now has four actions with distinct result
