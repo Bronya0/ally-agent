@@ -287,10 +287,10 @@ func (a *App) ListUpdateAsset(tag string) UpdateAssetInfo {
 
 // downloadAsset streams an asset URL to destPath using the proxy-aware client.
 // Progress is emitted via the update:progress event approximately every 500ms.
-func (a *App) downloadAsset(assetURL, destPath, version string, totalBytes int64) error {
+func (a *App) downloadAsset(ctx context.Context, assetURL, destPath, version string, totalBytes int64) error {
 	cfg := updateNetworkConfig(a.effectiveConfigSafe())
 	client := proxyHTTPClient(cfg, false, updateDownloadTimeout)
-	ctx, cancel := context.WithTimeout(context.Background(), updateDownloadTimeout)
+	ctx, cancel := context.WithTimeout(ctx, updateDownloadTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, assetURL, nil)
 	if err != nil {
@@ -648,6 +648,36 @@ func (a *App) DownloadUpdate(tag string) UpdateDownloadResult {
 	stagedDir := updateStagedDir(asset.Tag)
 	archivePath := updateAssetPath(asset.Tag)
 
+	// Register a cancel handle so CancelUpdate can abort this download.
+	dlCtx, dlCancel := context.WithCancel(context.Background())
+	a.updateMu.Lock()
+	a.updateCancel = dlCancel
+	cancelNow := a.updateCancelPending
+	a.updateCancelPending = false
+	a.updateMu.Unlock()
+	// A cancel request arrived while the asset URL was still being resolved;
+	// abort immediately instead of starting the download.
+	if cancelNow {
+		dlCancel()
+	}
+	defer func() {
+		dlCancel()
+		a.updateMu.Lock()
+		a.updateCancel = nil
+		a.updateMu.Unlock()
+	}()
+
+	// cancelled reports whether the user aborted the download; when so it
+	// cleans up the staged version dir and emits update:cancelled.
+	cancelled := func() bool {
+		if dlCtx.Err() == nil {
+			return false
+		}
+		_ = os.RemoveAll(versionDir)
+		a.emit("update:cancelled", map[string]any{"version": asset.Tag})
+		return true
+	}
+
 	// Clean any previous staged state for this version.
 	_ = os.RemoveAll(versionDir)
 	if err := os.MkdirAll(versionDir, 0o755); err != nil {
@@ -656,11 +686,17 @@ func (a *App) DownloadUpdate(tag string) UpdateDownloadResult {
 		return UpdateDownloadResult{Error: msg}
 	}
 
-	if err := a.downloadAsset(asset.URL, archivePath, asset.Tag, asset.Size); err != nil {
+	if err := a.downloadAsset(dlCtx, asset.URL, archivePath, asset.Tag, asset.Size); err != nil {
+		if cancelled() {
+			return UpdateDownloadResult{Error: "cancelled"}
+		}
 		msg := fmt.Sprintf("download: %v", err)
 		a.emit("update:error", map[string]any{"stage": "download", "error": msg})
 		_ = os.RemoveAll(versionDir)
 		return UpdateDownloadResult{Error: msg}
+	}
+	if cancelled() {
+		return UpdateDownloadResult{Error: "cancelled"}
 	}
 
 	if goruntime.GOOS == "darwin" {
@@ -671,6 +707,9 @@ func (a *App) DownloadUpdate(tag string) UpdateDownloadResult {
 			a.emit("update:error", map[string]any{"stage": "verify", "error": msg})
 			_ = os.RemoveAll(versionDir)
 			return UpdateDownloadResult{Error: msg}
+		}
+		if cancelled() {
+			return UpdateDownloadResult{Error: "cancelled"}
 		}
 		a.emit("update:ready", map[string]any{
 			"version":   asset.Tag,
@@ -708,6 +747,9 @@ func (a *App) DownloadUpdate(tag string) UpdateDownloadResult {
 		_ = os.RemoveAll(versionDir)
 		return UpdateDownloadResult{Error: msg}
 	}
+	if cancelled() {
+		return UpdateDownloadResult{Error: "cancelled"}
+	}
 
 	a.emit("update:ready", map[string]any{
 		"version":   asset.Tag,
@@ -718,6 +760,22 @@ func (a *App) DownloadUpdate(tag string) UpdateDownloadResult {
 		Version:   asset.Tag,
 		StagedDir: stagedDir,
 	}
+}
+
+// CancelUpdate aborts an in-progress DownloadUpdate. It returns true when a
+// download was active and got cancelled; the pending DownloadUpdate call then
+// finishes with Error "cancelled" and cleans up its staged files.
+func (a *App) CancelUpdate() bool {
+	a.updateMu.Lock()
+	defer a.updateMu.Unlock()
+	if a.updateCancel != nil {
+		a.updateCancel()
+		return true
+	}
+	// No download handle registered yet (e.g. still resolving the asset URL):
+	// record the request so DownloadUpdate aborts once it registers.
+	a.updateCancelPending = true
+	return true
 }
 
 // okOrError is a small helper to convert UpdateAssetInfo into an error when not OK.

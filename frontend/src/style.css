@@ -3039,6 +3039,11 @@ code, pre {
   color: var(--text-secondary, #9a9a92);
   font-variant-numeric: tabular-nums;
 }
+.update-version {
+  font-size: 13px;
+  color: var(--text-secondary, #9a9a92);
+  font-variant-numeric: tabular-nums;
+}
 .update-ready-hint {
   font-size: 13px;
   line-height: 1.55;
@@ -3062,6 +3067,32 @@ code, pre {
   overflow-y: auto;
   word-break: break-word;
   white-space: pre-wrap;
+}
+.update-github-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-secondary, #9a9a92);
+  margin-top: 2px;
+}
+.update-github-label {
+  flex-shrink: 0;
+}
+.update-github-link {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 12px;
+  color: #67d99b;
+  cursor: pointer;
+  text-decoration: underline;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.update-github-link:hover {
+  color: #4ade80;
 }
 .update-spinner {
   width: 28px;

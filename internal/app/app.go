@@ -191,6 +191,15 @@ type App struct {
 	gitDiffCancel context.CancelFunc
 	gitDiffRunID  int64
 
+	// updateMu guards the in-progress self-update download cancel handle so
+	// CancelUpdate can abort a running DownloadUpdate.
+	updateMu     sync.Mutex
+	updateCancel context.CancelFunc
+	// updateCancelPending records a cancel request that arrived before the
+	// download registered its handle, so DownloadUpdate aborts right after
+	// registering instead of proceeding with the download.
+	updateCancelPending bool
+
 	// gitStatusCache memoizes the last GetGitStatus result for a short TTL
 	// so that rapid consecutive calls (e.g. workspace switch + run:done)
 	// don't each spawn 2 git subprocesses. Keyed by workspace path.

@@ -272,12 +272,16 @@
             <div class="update-modal-body">
               <template v-if="updateState === 'downloading' || updateState === 'extracting'">
                 <div class="update-status-text">{{ updateState === 'downloading' ? $t('app.update.downloading') : $t('app.update.extracting') }}</div>
+                <div class="update-version">{{ $t('app.update.version', { version: latestReleaseVersion }) }}</div>
                 <div class="update-progress-bar">
                   <div class="update-progress-fill" :style="{ width: `${updateProgress.percent}%` }"></div>
                 </div>
                 <div class="update-progress-meta">
                   <span>{{ updateProgress.percent }}%</span>
                   <span v-if="updateState === 'downloading' && updateProgress.bytesTotal > 0">{{ formatBytes(updateProgress.bytesDownloaded) }} / {{ formatBytes(updateProgress.bytesTotal) }}</span>
+                </div>
+                <div class="update-actions">
+                  <n-button size="small" tertiary @click="cancelUpdate">{{ $t('app.update.cancel') }}</n-button>
                 </div>
               </template>
               <template v-else-if="updateState === 'ready'">
@@ -306,6 +310,10 @@
                   <n-button size="small" type="primary" @click="startUpdate">{{ $t('app.update.retry') }}</n-button>
                 </div>
               </template>
+              <div v-if="updateState === 'downloading' || updateState === 'extracting' || updateState === 'ready' || updateState === 'error'" class="update-github-row">
+                <span class="update-github-label">{{ $t('app.update.githubLabel') }}</span>
+                <button class="update-github-link" @click="openUpdateReleasesPage">{{ ALLY_RELEASES_URL }}</button>
+              </div>
             </div>
           </n-modal>
 
@@ -375,6 +383,7 @@ import {
   SubmitAskResponse,
   SearchWorkspacePaths,
   DownloadUpdate,
+  CancelUpdate,
   ApplyUpdate,
   QuitForUpdate,
   SkipUpdate,
@@ -1403,6 +1412,10 @@ const updateModalVisible = ref(false);
 // automatic startup download; flipped to false once download succeeds so the
 // "ready to restart" modal can pop.
 const updateSilent = ref(false);
+// Set when the user clicks "cancel update" so late update:ready / download
+// results are ignored instead of re-opening the modal (the backend may not
+// have registered its cancel handle yet when the click arrives).
+let updateCancelRequested = false;
 // Result object reported to SettingsModal's About page so the manual
 // "Check for updates" button gets explicit latest/found/failed feedback.
 // State: 'idle' | 'busy' | 'latest' | 'found' | 'failed'.
@@ -1412,6 +1425,7 @@ const isUpdateBusy = computed(() => {
 });
 
 const ALLY_REPOSITORY_URL = 'https://github.com/Bronya0/ally-agent';
+const ALLY_RELEASES_URL = 'https://github.com/Bronya0/ally-agent/releases';
 
 
 const builtinCommands = [
@@ -3786,6 +3800,13 @@ function bindRuntimeEvents() {
     }
   });
   onRuntimeEvent('update:ready', (data) => {
+    // Ignore a ready event that races with a user cancel request.
+    if (updateCancelRequested) {
+      updateCancelRequested = false;
+      updateState.value = 'idle';
+      updateModalVisible.value = false;
+      return;
+    }
     if (data?.version) latestReleaseVersion.value = data.version;
     updateState.value = 'ready';
     // Always show the "ready to restart" modal, even for silent downloads.
@@ -3806,6 +3827,10 @@ function bindRuntimeEvents() {
       updateState.value = 'idle';
       updateSilent.value = false;
     }
+  });
+  onRuntimeEvent('update:cancelled', () => {
+    updateState.value = 'idle';
+    updateModalVisible.value = false;
   });
 }
 
@@ -7386,6 +7411,7 @@ function onCheckUpdate() {
 // shown and download failures are swallowed. The update:ready event will
 // still pop the "ready to restart" modal so the user is prompted to apply.
 async function startUpdate(silent = false) {
+  updateCancelRequested = false;
   const version = latestReleaseVersion.value;
   if (!version) return;
   // Avoid double-downloading when the user clicks the icon while a silent
@@ -7406,7 +7432,22 @@ async function startUpdate(silent = false) {
   }
   try {
     const result = await DownloadUpdate(version);
+    // A cancel clicked while the backend was still resolving the asset URL
+    // leaves no 'cancelled' result; drop it so the ready modal never reopens.
+    if (updateCancelRequested) {
+      updateCancelRequested = false;
+      updateState.value = 'idle';
+      updateModalVisible.value = false;
+      return;
+    }
     if (!result?.ok) {
+      // A user-initiated cancel is not an error: cancelUpdate already reset
+      // the state and the backend cleaned up the staged files.
+      if (result?.error === 'cancelled') {
+        updateState.value = 'idle';
+        updateModalVisible.value = false;
+        return;
+      }
       updateState.value = 'error';
       updateError.value = result?.error || t('app.update.errors.download');
       if (!silent) updateModalVisible.value = true;
@@ -7421,6 +7462,23 @@ async function startUpdate(silent = false) {
     updateError.value = String(err?.message || err || t('app.update.errors.download'));
     if (!silent) updateModalVisible.value = true;
   }
+}
+
+// Cancel an in-progress update download and dismiss the modal. The backend
+// aborts the active DownloadUpdate and removes its staged files.
+async function cancelUpdate() {
+  updateCancelRequested = true;
+  try {
+    await CancelUpdate();
+  } catch (_) {
+    // Best-effort: even if the backend call fails we dismiss locally.
+  }
+  updateState.value = 'idle';
+  updateModalVisible.value = false;
+}
+
+function openUpdateReleasesPage() {
+  Browser.OpenURL(ALLY_RELEASES_URL);
 }
 
 async function applyAndRestart() {
