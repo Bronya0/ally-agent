@@ -33,14 +33,14 @@
       </g>
 
       <path d="M26 82c13 18 32 28 56 28s43-10 56-28" fill="none" stroke="#e0a458" stroke-width="2" opacity="0.32" stroke-linecap="round"/>
-
-      <!-- 主动搭话气泡：绝对定位浮层，不占文档流，布局零影响；
-           点击立即消失，3.4s 后自动消失（与 CSS 动画时长一致）。 -->
-      <div v-if="speech" class="ally-speech" role="status" @click.stop="dismissSpeech">
-        {{ speech }}
-        <span class="ally-speech-tail" aria-hidden="true"></span>
-      </div>
     </svg>
+
+    <!-- Keep the speech bubble outside SVG. HTML layout and CSS positioning are
+         not reliably applied to a div created inside the SVG namespace. -->
+    <div v-if="speech" class="ally-speech" role="status" @click.stop="dismissSpeech">
+      {{ speech }}
+      <span class="ally-speech-tail" aria-hidden="true"></span>
+    </div>
   </div>
 </template>
 
@@ -107,46 +107,27 @@ function releaseSharedDefs() {
 const root = ref(null);
 let observer = null;
 let visibilityHandler = null;
+let isIntersecting = true;
 
 // —— 主动搭话：眼睛被"看着"（视口内且窗口可见）时，每隔随机
-// 15~30 秒弹一句台词气泡。纯绝对定位浮层，不占文档流，布局零影响。
+// 8~15 秒弹一句台词气泡。纯绝对定位浮层，不占文档流，布局零影响。
 const speech = ref(null); // 当前台词，null = 不显示
 const active = ref(false); // 用户是否正看着本眼睛
 let speechTimer = null; // 气泡展示时长定时器
 let nextSpeechTimer = null; // 下一次搭话定时器
 
 const SPEECH_SHOW_MS = 3400; // 与 .ally-speech 的 CSS 动画时长一致
-const SPEECH_MIN_GAP_MS = 15000;
-const SPEECH_MAX_GAP_MS = 30000;
+const SPEECH_MIN_GAP_MS = 8000;
+const SPEECH_MAX_GAP_MS = 15000;
 
-let lastPick = null; // 上一条 (风格, 台词) 下标，避免连续两句完全重复
+// 纯随机：把全部风格台词合并成一个池子，直接随机抽一句，不做权重/去重。
+const ZH_SPEECH_POOL = EYE_STYLES.flatMap((style) => style.zh);
+const EN_SPEECH_POOL = EYE_STYLES.flatMap((style) => style.en);
 
-// 先按风格权重抽风格（气质稳定：傲娇/温柔/无赖是灵魂，爱慕/邪恶是点缀），
-// 再在风格内随机抽台词。
 function pickSpeechLine() {
-  const total = EYE_STYLES.reduce((sum, style) => sum + style.weight, 0);
-  let roll = Math.random() * total;
-  let styleIndex = EYE_STYLES.length - 1;
-  for (let i = 0; i < EYE_STYLES.length; i++) {
-    roll -= EYE_STYLES[i].weight;
-    if (roll <= 0) {
-      styleIndex = i;
-      break;
-    }
-  }
-  const style = EYE_STYLES[styleIndex];
-  const pool = isZh ? style.zh : style.en;
+  const pool = isZh ? ZH_SPEECH_POOL : EN_SPEECH_POOL;
   if (!pool || pool.length === 0) return null;
-  let lineIndex = Math.floor(Math.random() * pool.length);
-  for (
-    let attempt = 0;
-    attempt < 3 && lastPick && lastPick.styleIndex === styleIndex && lastPick.lineIndex === lineIndex;
-    attempt++
-  ) {
-    lineIndex = Math.floor(Math.random() * pool.length);
-  }
-  lastPick = { styleIndex, lineIndex };
-  return pool[lineIndex];
+  return pool[Math.floor(Math.random() * pool.length)];
 }
 
 function scheduleNextSpeech() {
@@ -200,13 +181,20 @@ onMounted(() => {
   if (typeof IntersectionObserver !== 'undefined' && root.value) {
     observer = new IntersectionObserver(
       (entries) => {
-        for (const entry of entries) setPaused(!entry.isIntersecting);
+        for (const entry of entries) {
+          isIntersecting = entry.isIntersecting;
+          setPaused(document.hidden || !isIntersecting);
+        }
       },
       { threshold: 0.01 }
     );
     observer.observe(root.value);
+  } else {
+    // Older WebViews have no IntersectionObserver; the avatar is mounted in
+    // the welcome panel, so assume it is visible and keep the feature usable.
+    setPaused(document.hidden);
   }
-  visibilityHandler = () => setPaused(document.hidden);
+  visibilityHandler = () => setPaused(document.hidden || !isIntersecting);
   document.addEventListener('visibilitychange', visibilityHandler);
 });
 
@@ -223,9 +211,10 @@ onBeforeUnmount(() => {
 /* 台词气泡：绝对定位浮层，不占文档流，任何布局都不受影响 */
 .ally-speech {
   position: absolute;
-  right: -16px;
-  top: 10px;
+  left: calc(100% - 4px);
+  top: 2px;
   z-index: 10;
+  width: max-content;
   max-width: 220px;
   padding: 8px 12px;
   border-radius: 10px;
@@ -243,7 +232,7 @@ onBeforeUnmount(() => {
 .ally-speech-tail {
   position: absolute;
   left: -6px;
-  top: 15px;
+  top: 23px;
   width: 10px;
   height: 10px;
   background: #27272c;
