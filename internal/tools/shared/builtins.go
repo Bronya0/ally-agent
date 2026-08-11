@@ -173,15 +173,15 @@ func chatToolsUncached() []openai.Tool {
 		functionTool("http_request", "Make a single HTTP/HTTPS request with custom method, headers, query, body or JSON. Use for APIs, webhooks, internal services, and precise protocol debugging. Safe defaults include a bounded response size, timeout, redirect limit, per-host rate limit, and clear User-Agent. Private/local network access follows the app's allowPrivateNetwork setting, which is enabled by default.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"method":         map[string]any{"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9!#$%&'*+.^_`|~-]*$", "description": "HTTP method token. Default GET; normalized to uppercase before sending."},
-				"url":            map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Absolute http:// or https:// URL."},
-				"headers":        map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}, "description": "Request headers. User-Agent defaults to AllyAgent unless provided."},
-				"query":          map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}, "description": "Query parameters merged into the URL."},
-				"body":           map[string]any{"type": "string", "description": "Raw request body. Mutually exclusive with json."},
-				"json":           jsonValueSchema("JSON value to encode as the request body. Sets Content-Type to application/json unless provided."),
-				"saveTo":         map[string]any{"type": "string", "description": "Optional workspace-relative download path. Parent directories are created automatically."},
-				"maxBytes":       map[string]any{"type": "integer", "minimum": 1, "maximum": maxHTTPBodyBytes, "description": "Maximum decoded response bytes. Default 262144; use saveTo for large downloads."},
-				"timeoutSeconds": map[string]any{"type": "integer", "minimum": 1, "maximum": 120, "description": "Request timeout. Default 60 seconds."},
+				"method":             map[string]any{"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9!#$%&'*+.^_`|~-]*$", "description": "HTTP method token. Default GET; normalized to uppercase before sending."},
+				"url":                map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Absolute http:// or https:// URL."},
+				"headers":            map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}, "description": "Request headers. User-Agent defaults to AllyAgent unless provided."},
+				"query":              map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}, "description": "Query parameters merged into the URL."},
+				"body":               map[string]any{"type": "string", "description": "Raw request body. Mutually exclusive with json."},
+				"json":               jsonValueSchema("JSON value to encode as the request body. Sets Content-Type to application/json unless provided."),
+				"saveTo":             map[string]any{"type": "string", "description": "Optional workspace-relative download path. Parent directories are created automatically."},
+				"maxBytes":           map[string]any{"type": "integer", "minimum": 1, "maximum": maxHTTPBodyBytes, "description": "Maximum decoded response bytes. Default 262144; use saveTo for large downloads."},
+				"timeoutSeconds":     map[string]any{"type": "integer", "minimum": 1, "maximum": 120, "description": "Request timeout. Default 60 seconds."},
 				"insecureSkipVerify": map[string]any{"type": "boolean", "description": "Skip TLS certificate verification. Default false. Use only for debugging or trusted internal services with self-signed certificates; enabling it weakens transport security."},
 			},
 			"required": []string{"url"},
@@ -190,10 +190,10 @@ func chatToolsUncached() []openai.Tool {
 		functionTool("web_fetch", "Fetch a web page and return readable text, title, and links. Use for ordinary page reading instead of curl. Safe defaults include a bounded size, timeout, redirect limit, per-host rate limit, and clear User-Agent. Private/local network access follows the app's allowPrivateNetwork setting, which is enabled by default. robots.txt is not checked unless explicitly requested.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"url":            map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Absolute http:// or https:// URL."},
-				"maxBytes":       map[string]any{"type": "integer", "minimum": 1, "maximum": maxHTTPBodyBytes, "description": "Maximum decoded source bytes read before text extraction. Default 2097152."},
-				"maxChars":       map[string]any{"type": "integer", "minimum": 1, "maximum": 200000, "description": "Maximum readable text characters. Default 60000, max 200000."},
-				"timeoutSeconds": map[string]any{"type": "integer", "minimum": 1, "maximum": 120, "description": "Request timeout. Default 60 seconds."},
+				"url":                map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Absolute http:// or https:// URL."},
+				"maxBytes":           map[string]any{"type": "integer", "minimum": 1, "maximum": maxHTTPBodyBytes, "description": "Maximum decoded source bytes read before text extraction. Default 2097152."},
+				"maxChars":           map[string]any{"type": "integer", "minimum": 1, "maximum": 200000, "description": "Maximum readable text characters. Default 60000, max 200000."},
+				"timeoutSeconds":     map[string]any{"type": "integer", "minimum": 1, "maximum": 120, "description": "Request timeout. Default 60 seconds."},
 				"insecureSkipVerify": map[string]any{"type": "boolean", "description": "Skip TLS certificate verification. Default false. Use only for debugging or trusted internal services with self-signed certificates; enabling it weakens transport security."},
 			},
 			"required": []string{"url"},
@@ -209,7 +209,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"target"},
 		}),
-		functionTool("remote_read_file", "Read raw UTF-8 text from a remote SSH workspace. The returned content is directly copyable into remote_edit oldText, and its version is required by remote_edit. Omit startLine/endLine to read the whole file. With only startLine, read from that line through the end; with only endLine, read lines 1 through that inclusive range. Positive startLine values select an inclusive range; a negative startLine reads the last N lines (absolute value max 10000).", map[string]any{
+		functionTool("remote_read_file", "Read raw text from a remote SSH workspace. UTF-8 is returned as-is; UTF-16 LE/BE (with or without a BOM) is transcoded to UTF-8 for reading. The returned content is directly copyable into remote_edit oldText, and its version is required by remote_edit. Omit startLine/endLine to read the whole file. With only startLine, read from that line through the end; with only endLine, read lines 1 through that inclusive range. Positive startLine values select an inclusive range; a negative startLine reads the last N lines (absolute value max 10000).", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"target":    map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Explicit SSH target plus workspace root, e.g. my-dev:/srv/app."},

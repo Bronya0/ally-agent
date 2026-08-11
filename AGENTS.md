@@ -328,7 +328,7 @@ Accepted read forms:
 
 Text files:
 
-- must be UTF-8-ish text; reject binary/NUL content
+- must be text: UTF-8 returned as-is; UTF-16 LE/BE (with or without a BOM) is transcoded to UTF-8 for reading; reject binary content (non-text UTF-16 and files with NUL bytes are still `E_BINARY_FILE`)
 - return LF-normalized text with display-only 1-based `N: ` prefixes; omit those prefixes from `oldText`/`newText`, and use the displayed numbers in `lineRange`
 - missing paths and directory targets are silently omitted from the returned `files` array (an ignored-only batch succeeds with an empty array); other partial failures stay in the corresponding file result with `errorCode` when known
 - include metadata: `startLine`, `endLine`, `nextStartLine`, `totalLines`, `truncated`, `truncatedLines`, `truncatedLinesOmitted`, `version`, `lineEnding`; `version` is a 6-character lowercase Crockford Base32 prefix derived from SHA-256 content and is compared case-insensitively
@@ -368,7 +368,7 @@ Important edit contract:
 - All files are validated before writes. Any invalid, missing, ambiguous, overlapping, or stale effective change fails the entire call without modifying any file.
 - Empty `newText` deletes the selected source; exact-source insertion replaces a unique anchor with that anchor plus the inserted content.
 - Put all independent changes across affected files in one call to minimize model round trips. Each file is written once; a later commit failure triggers best-effort rollback of earlier writes.
-- `remote_edit` uses `{target, files}` and the same per-file `version`/`changes` contract as local edit.
+- `remote_edit` uses `{target, files}` and the same per-file `version`/`changes` contract as local edit; remote reads share the local text-encoding boundary (`read.DecodeTextBytes`), so UTF-16 LE/BE files are read and edited remotely exactly like locally, with UTF-8 write-back.
 - Multiple separate file-mutation tool calls targeting the same normalized local or remote path in one tool-call batch are all rejected with `E_WRITE_BATCH_CONFLICT`; no mutation for that path is executed. Repeated entries within one local `edit` call are instead merged as described above.
 - Built-in file mutations execute in `toolCallIndex` order after non-file tools complete.
 - backend compatibility APIs may continue using SHA-256 and exact-string helpers internally.
@@ -557,7 +557,7 @@ Example MCP config:
 - `checkCommandSafety()` in `orch_command_safety.go` is the app-owned boundary for workspace roots, path existence, `E_COMMAND_BLOCKED` / `E_PATH_OUTSIDE`, and user-facing explanations; it must consume the command package's semantic analysis instead of adding independent full-string risk regexes. Redirection/mutation targets that cannot be statically resolved (variables, globs, heredoc artifacts) are allowed through permissively; only literal existing outside paths are blocked.
 - The `run_command` schema explains how to recover from `E_PATH_OUTSIDE`: read the Chinese reason/target, avoid unchanged retries, choose a new or workspace target, and replace literal outside targets with workspace paths. The model-facing system prompt keeps only the first two recovery steps (read the returned Chinese explanation and detected target; do not retry the unchanged command) and points to the schema for the rest.
 - Prefer `delete_path` / `remote_delete_path` over shell deletion.
-- `readTextFile` rejects binary files using NUL checks.
+- `readTextFile` rejects binary files using NUL checks, after transcoding UTF-16 LE/BE (with or without a BOM) to UTF-8; edited UTF-16 files are written back as UTF-8.
 - Release packages bundle ripgrep under the executable's `tools/` directory; development builds fall back to `rg` from `PATH`.
 - On Windows, `run_command` and `background_process` prefer **bash** from Git for Windows over PowerShell. Detection order: a validated `gitBashPath` setting (manual override) → Git for Windows common install paths → derive Git Bash from `git.exe` on `PATH` → a `bash.exe` on `PATH` only when it belongs to the same Git for Windows installation → fallback to PowerShell (`pwsh.exe` → `powershell.exe`). Arbitrary `bash.exe` launchers such as `C:\Windows\System32\bash.exe` (legacy WSL) are rejected because their Linux PATH and argument forwarding break Windows tool discovery and shell expansion. When Git Bash is not detected, startup warns the user to set `gitBashPath` in Settings. The system prompt dynamically reflects which shell is active so the model generates correct syntax. Linux/macOS always use `bash -c` and ignore `gitBashPath`.
 - On macOS, system proxy detection uses the built-in `/usr/sbin/scutil --proxy` command without cgo, with a bounded timeout; Ally parses fixed HTTP/HTTPS/SOCKS settings, bypass entries, and PAC metadata. Linux continues using proxy environment variables, and PAC-only configurations remain explicitly unsupported until PAC evaluation is implemented.

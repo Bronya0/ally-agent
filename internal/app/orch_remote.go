@@ -13,10 +13,10 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"ally-dev/internal/tools/command"
 	"ally-dev/internal/tools/edit"
+	"ally-dev/internal/tools/read"
 )
 
 const remotePythonMarker = "ALLY_REMOTE_RESULT_JSON:"
@@ -532,14 +532,16 @@ func decodeRemoteRawFile(data struct {
 	if err != nil {
 		return remoteRawFile{}, err
 	}
-	if bytes.Contains(raw, []byte{0}) {
-		return remoteRawFile{}, errors.New("binary file is not supported")
+	// The same transcode boundary as the local read pipeline: UTF-16 LE/BE
+	// (with or without a BOM) is accepted and converted to UTF-8, while real
+	// binary and malformed/non-text UTF-16 still fail. Version tokens and
+	// edit write-back are therefore based on the same bytes as local files.
+	decoded, err := read.DecodeTextBytes(raw)
+	if err != nil {
+		return remoteRawFile{}, err
 	}
-	if !utf8.Valid(raw) {
-		return remoteRawFile{}, errors.New("file is not valid UTF-8")
-	}
-	_, ending, _ := normalizeText(raw)
-	return remoteRawFile{Path: data.Path, Data: raw, Size: data.Size, Mode: data.Mode, ModTime: data.ModTime, LineEnding: ending}, nil
+	_, ending, _ := normalizeText(decoded)
+	return remoteRawFile{Path: data.Path, Data: decoded, Size: data.Size, Mode: data.Mode, ModTime: data.ModTime, LineEnding: ending}, nil
 }
 
 func (a *App) remoteReadRaw(ctx context.Context, target, relPath string) (remoteTarget, remoteRawFile, error) {

@@ -23,6 +23,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode/utf16"
 	"unicode/utf8"
 
 	toolerrors "ally-dev/internal/tools/shared"
@@ -32,11 +33,14 @@ import (
 // historical app.maxReadFileBytes constant so callers can reference it by name.
 const MaxReadBytes = 32 * 1024 * 1024
 
-// ReadTextFile reads a UTF-8 text file at path, enforcing size and binary
-// guards. Returns the raw bytes, file info, and an error. Error codes:
+// ReadTextFile reads a text file at path, enforcing size and binary guards.
+// UTF-8 is returned as-is; UTF-16 LE/BE (with or without a BOM) is transcoded
+// to UTF-8 so the caller always works with UTF-8 bytes. Returns the bytes,
+// file info, and an error. Error codes:
 //   - E_IS_DIRECTORY: path is a directory
 //   - E_FILE_TOO_LARGE: file exceeds MaxReadBytes
-//   - E_BINARY_FILE: file contains NUL bytes
+//   - E_BINARY_FILE: file contains NUL bytes, has a UTF-32 BOM, or is
+//     malformed/non-text UTF-16
 //   - E_NOT_UTF8: file is not valid UTF-8
 func ReadTextFile(path string) ([]byte, os.FileInfo, error) {
 	info, err := os.Stat(path)
@@ -53,11 +57,9 @@ func ReadTextFile(path string) ([]byte, os.FileInfo, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	if hasNUL(data) {
-		return nil, nil, toolerrors.New("E_BINARY_FILE", errors.New("binary file is not supported"))
-	}
-	if !utf8.Valid(data) {
-		return nil, nil, toolerrors.New("E_NOT_UTF8", errors.New("file is not valid UTF-8"))
+	data, err = DecodeTextBytes(data)
+	if err != nil {
+		return nil, nil, err
 	}
 	return data, info, nil
 }
@@ -69,6 +71,122 @@ func hasNUL(data []byte) bool {
 		}
 	}
 	return false
+}
+
+// DecodeTextBytes decodes raw file bytes into UTF-8 text bytes. UTF-16 LE/BE
+// input (with or without a BOM) is transcoded to UTF-8; UTF-8 input is
+// returned unchanged. It is the single text-encoding boundary shared by the
+// local and remote read pipelines, so both accept the same encodings and
+// reject the same binaries. Input without a recognizable BOM is probed by
+// NUL-byte parity: ASCII text in UTF-16 keeps NULs consistently on one side
+// of each 16-bit unit, while real binary data spreads them evenly. Error
+// codes:
+//   - E_BINARY_FILE: data contains NUL bytes, starts with a UTF-32 BOM, has
+//     odd UTF-16 byte length, or decodes to content that is not text-like
+//   - E_NOT_UTF8: data is not valid UTF-8 after decoding
+func DecodeTextBytes(data []byte) ([]byte, error) {
+	if len(data) >= 4 {
+		if data[0] == 0xFF && data[1] == 0xFE && data[2] == 0x00 && data[3] == 0x00 {
+			return nil, toolerrors.New("E_BINARY_FILE", errors.New("UTF-32 files are not supported"))
+		}
+		if data[0] == 0x00 && data[1] == 0x00 && data[2] == 0xFE && data[3] == 0xFF {
+			return nil, toolerrors.New("E_BINARY_FILE", errors.New("UTF-32 files are not supported"))
+		}
+	}
+	if len(data) >= 2 {
+		if data[0] == 0xFF && data[1] == 0xFE {
+			return decodeUTF16(data[2:], true)
+		}
+		if data[0] == 0xFE && data[1] == 0xFF {
+			return decodeUTF16(data[2:], false)
+		}
+	}
+	if le, be := probeUTF16(data); le || be {
+		return decodeUTF16(data, le)
+	}
+	if hasNUL(data) {
+		return nil, toolerrors.New("E_BINARY_FILE", errors.New("binary file is not supported"))
+	}
+	if !utf8.Valid(data) {
+		return nil, toolerrors.New("E_NOT_UTF8", errors.New("file is not valid UTF-8"))
+	}
+	return data, nil
+}
+
+// probeUTF16 reports whether data's NUL bytes are strongly biased toward one
+// side of each 16-bit unit, which indicates BOM-less UTF-16 text (LE when the
+// low byte is nonzero for ASCII, BE when the high byte is). A 4:1 skew
+// threshold keeps uniform binary NULs from being misread as UTF-16, and at
+// least two NUL bytes are required so a lone NUL in otherwise-UTF-8 content
+// is not silently re-paired into garbage.
+func probeUTF16(data []byte) (le, be bool) {
+	n := len(data) / 2 * 2
+	if n < 4 {
+		return false, false
+	}
+	even, odd := 0, 0
+	for i := 0; i < n; i += 2 {
+		if data[i] == 0 {
+			even++
+		}
+		if data[i+1] == 0 {
+			odd++
+		}
+	}
+	if even+odd < 2 {
+		return false, false
+	}
+	if odd > even*4 {
+		return true, false // UTF-16LE: ASCII occupies the low byte
+	}
+	if even > odd*4 {
+		return false, true // UTF-16BE: ASCII occupies the high byte
+	}
+	return false, false
+}
+
+// decodeUTF16 transcodes UTF-16 code units (already stripped of any BOM) to
+// UTF-8. Odd byte length is rejected (E_BINARY_FILE) instead of silently
+// dropping a byte. Unpaired surrogates decode as U+FFFD. The decoded result
+// must still look like text: binary whose 16-bit pairs happen to skew NULs
+// (e.g. PCM samples) otherwise slips past the post-decode NUL guard.
+func decodeUTF16(data []byte, littleEndian bool) ([]byte, error) {
+	if len(data)%2 != 0 {
+		return nil, toolerrors.New("E_BINARY_FILE", errors.New("malformed UTF-16: odd byte length"))
+	}
+	units := make([]uint16, len(data)/2)
+	for i := 0; i < len(data); i += 2 {
+		if littleEndian {
+			units[i/2] = uint16(data[i]) | uint16(data[i+1])<<8
+		} else {
+			units[i/2] = uint16(data[i])<<8 | uint16(data[i+1])
+		}
+	}
+	decoded := string(utf16.Decode(units))
+	if !plausibleText(decoded) {
+		return nil, toolerrors.New("E_BINARY_FILE", errors.New("decoded content is not text"))
+	}
+	return []byte(decoded), nil
+}
+
+// plausibleText reports whether s looks like text rather than binary: control
+// characters other than tab, LF, CR, and FF must stay at or below 10% of all
+// runes. This stops NUL-skewed or BOM-prefixed binary that decodes to control
+// bytes from passing the binary guard as garbage text. Content that decodes
+// to printable characters (e.g. 16-bit PCM sampled values) is inherently
+// indistinguishable from UTF-16 text and is accepted.
+func plausibleText(s string) bool {
+	controls := 0
+	for _, r := range s {
+		if r < 0x20 && r != '\t' && r != '\n' && r != '\r' && r != 0x0C {
+			controls++
+		}
+	}
+	if controls == 0 {
+		return true
+	}
+	total := utf8.RuneCountInString(s)
+	return total > 0 && controls*10 <= total
 }
 
 // NormalizeText normalizes CRLF/CR to LF, strips a leading UTF-8 BOM, and
