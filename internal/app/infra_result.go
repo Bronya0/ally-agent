@@ -181,19 +181,23 @@ func compactToolResultForModel(name string, result toolResult, fullJSON string) 
 		injected := false
 		files := make([]map[string]any, 0, len(r.Files))
 		for _, f := range r.Files {
+			content := f.Content
+			if f.Reused {
+				content = "[Content omitted: this exact path/range was already returned to you earlier in this turn. version is unchanged — safe to reuse for edit. If you need the content again, re-read this same range and it will be returned in full.]"
+			}
 			item := map[string]any{
-				"path":        f.Path,
-				"kind":        f.Kind,
-				"content":     f.Content,
-				"startLine":   f.StartLine,
-				"endLine":     f.EndLine,
-				"totalLines":  f.TotalLines,
-				"version":     f.Version,
-				"lineEnding":  f.LineEnding,
-				"truncated":   f.Truncated,
-				"reused":      f.Reused,
-				"error":       f.Error,
-				"errorCode":   f.ErrorCode,
+				"path":       f.Path,
+				"kind":       f.Kind,
+				"content":    content,
+				"startLine":  f.StartLine,
+				"endLine":    f.EndLine,
+				"totalLines": f.TotalLines,
+				"version":    f.Version,
+				"lineEnding": f.LineEnding,
+				"truncated":  f.Truncated,
+				"reused":     f.Reused,
+				"error":      f.Error,
+				"errorCode":  f.ErrorCode,
 			}
 			if f.DataURL != "" {
 				item["image"] = "sent as image input in the following user message"

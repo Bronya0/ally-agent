@@ -2077,6 +2077,12 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 			if err == nil {
 				defer a.releaseSubagentSlot()
 				subCtx, cancel := context.WithCancel(ctx)
+				// Sub-agents build a fresh model context and never saw the parent
+				// run's read content, so sharing the parent's read cache would
+				// hand them a "content already returned" receipt for content they
+				// never received. Give each sub-agent a fresh cache so dedup only
+				// applies within its own reads.
+				subCtx = context.WithValue(subCtx, runReadCacheContextKey{}, newRunReadCache())
 				defer cancel()
 				res, delegateErr := a.executeDelegate(subCtx, cfg, sessionID, adReq, cancel)
 				if delegateErr != nil {

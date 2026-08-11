@@ -1535,6 +1535,23 @@ func TestRunReadCacheReturnsMetadataWithoutDuplicateContent(t *testing.T) {
 	if len(firstData.Files) != 1 || firstData.Files[0].Content == "" || firstData.Files[0].Reused {
 		t.Fatalf("expected complete first read, got %#v", firstData)
 	}
+	// The stored cache entry itself must be content-free; store() strips the
+	// payload before caching, so the cache cannot hold file contents.
+	if len(cache.entries) != 1 {
+		t.Fatalf("cache entries after first read = %d, want 1", len(cache.entries))
+	}
+	for _, e := range cache.entries {
+		if e.result == nil || len(e.result.Files) != 1 {
+			t.Fatalf("unexpected cached entry: %#v", e.result)
+		}
+		f := e.result.Files[0]
+		if f.Content != "" || f.Text != "" || f.DataURL != "" {
+			t.Fatalf("cached entry holds file content: %#v", f)
+		}
+		if !f.Reused || f.Version == "" {
+			t.Fatalf("cached entry should be a receipt with version, got: %#v", f)
+		}
+	}
 
 	second := app.executeTool(ctx, ConfigState{Workspace: dir}, "session-1", "read", args)
 	if !second.OK {
@@ -1545,11 +1562,35 @@ func TestRunReadCacheReturnsMetadataWithoutDuplicateContent(t *testing.T) {
 		t.Fatalf("expected metadata-only reused read, got %#v", secondData)
 	}
 
-	invalidateRunReadCache(ctx)
+	// The model-facing compacted results must carry content on the first read
+	// and a human-readable explanation on the reuse, not an empty content field
+	// with a bare reused flag.
+	firstModel := compactToolResultForModel("read", first, "")
+	if !strings.Contains(firstModel, "one") || strings.Contains(firstModel, "Content omitted") {
+		t.Fatalf("expected first compact read to carry content, got: %s", firstModel)
+	}
+	secondModel := compactToolResultForModel("read", second, "")
+	if !strings.Contains(secondModel, "Content omitted") || !strings.Contains(secondModel, `"reused":true`) {
+		t.Fatalf("expected reused compact read to explain the omission, got: %s", secondModel)
+	}
+
+	// The receipt is one-shot: serving the hit removes the entry, so a third
+	// identical read (without any invalidation) re-reads the file and returns
+	// the full content again.
+	if len(cache.entries) != 0 {
+		t.Fatalf("cache entries after second read = %d, want 0 (receipt consumed)", len(cache.entries))
+	}
 	third := app.executeTool(ctx, ConfigState{Workspace: dir}, "session-1", "read", args)
 	thirdData := third.Data.(*BatchReadResult)
 	if !third.OK || len(thirdData.Files) != 1 || thirdData.Files[0].Reused || thirdData.Files[0].Content == "" {
-		t.Fatalf("expected full read after invalidation, got %#v", third)
+		t.Fatalf("expected full read after receipt consumption, got %#v", third)
+	}
+
+	invalidateRunReadCache(ctx)
+	fourth := app.executeTool(ctx, ConfigState{Workspace: dir}, "session-1", "read", args)
+	fourthData := fourth.Data.(*BatchReadResult)
+	if !fourth.OK || len(fourthData.Files) != 1 || fourthData.Files[0].Reused || fourthData.Files[0].Content == "" {
+		t.Fatalf("expected full read after invalidation, got %#v", fourth)
 	}
 }
 

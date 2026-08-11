@@ -66,20 +66,15 @@ type readPreviewResult struct {
 // during a chat run. It is deliberately run-scoped: later user turns may need a
 // fresh version after external changes. A successful write or command clears it.
 type runReadCache struct {
-	mu        sync.Mutex
-	entries   map[string]runReadCacheEntry
-	totalSize int
+	mu      sync.Mutex
+	entries map[string]runReadCacheEntry
 }
 
 type runReadCacheEntry struct {
 	result *BatchReadResult
-	size   int
 }
 
-const (
-	runReadCacheMaxEntries = 32
-	runReadCacheMaxBytes   = 8 * 1024 * 1024
-)
+const runReadCacheMaxEntries = 32
 
 func newRunReadCache() *runReadCache {
 	return &runReadCache{entries: make(map[string]runReadCacheEntry)}
@@ -93,6 +88,11 @@ func (c *runReadCache) read(a *App, cfg ConfigState, req BatchReadRequest) (*Bat
 	key := string(keyBytes)
 	c.mu.Lock()
 	if previous, ok := c.entries[key]; ok {
+		// One-shot receipt: the hit is served once, then the entry is removed
+		// so a later identical read re-reads the file and returns full content.
+		// A receipt is only meaningful while the model still holds the earlier
+		// content; if the model asks again, it needs the content again.
+		delete(c.entries, key)
 		c.mu.Unlock()
 		return reusedBatchReadResult(previous.result), nil
 	}
@@ -115,36 +115,32 @@ func (c *runReadCache) read(a *App, cfg ConfigState, req BatchReadRequest) (*Bat
 	return result, nil
 }
 
-// store caches a fully successful read, evicting arbitrary entries until the
-// entry-count and byte budgets fit. The cache is a best-effort token saver, so
-// dropping entries under pressure is acceptable. DataURL bytes are counted
-// toward the byte budget so a batch of large images cannot silently blow past
-// runReadCacheMaxBytes.
+// store caches a fully successful read as a content-free receipt so a repeated
+// identical read within one run is served once as a "content already returned"
+// receipt instead of duplicating the payload in model context. Each receipt is
+// one-shot: the next hit deletes it, so a third identical read returns the full
+// content again. Entries hold no file content (store() strips it before
+// caching), so the only budget is the entry count; evicting arbitrary entries
+// under pressure is acceptable because the cache is a best-effort token saver.
 func (c *runReadCache) store(key string, result *BatchReadResult) {
-	size := 0
-	for _, file := range result.Files {
-		size += len(file.Content) + len(file.Text) + len(file.DataURL)
-	}
+	stored := reusedBatchReadResult(result)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if _, ok := c.entries[key]; ok {
 		return
 	}
-	for (len(c.entries) >= runReadCacheMaxEntries || c.totalSize+size > runReadCacheMaxBytes) && len(c.entries) > 0 {
-		for k, e := range c.entries {
+	for len(c.entries) >= runReadCacheMaxEntries {
+		for k := range c.entries {
 			delete(c.entries, k)
-			c.totalSize -= e.size
 			break
 		}
 	}
-	c.entries[key] = runReadCacheEntry{result: result, size: size}
-	c.totalSize += size
+	c.entries[key] = runReadCacheEntry{result: stored}
 }
 
 func (c *runReadCache) invalidate() {
 	c.mu.Lock()
 	clear(c.entries)
-	c.totalSize = 0
 	c.mu.Unlock()
 }
 
