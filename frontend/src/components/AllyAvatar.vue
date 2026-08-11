@@ -47,7 +47,7 @@
 <script setup>
 import { ref, onMounted, onBeforeUnmount } from 'vue';
 import { isZh } from '../i18n.mjs';
-import { EYE_LINES } from '../data/eyeLines.mjs';
+import { EYE_STYLES } from '../data/eyeLines.mjs';
 
 // 所有实例共享一份 SVG paint server(<defs>):每个 workspace tab 的欢迎消息
 // 都常驻 DOM(v-show),逐实例复制渐变/clipPath 会重复创建节点。共享定义注入
@@ -109,24 +109,44 @@ let observer = null;
 let visibilityHandler = null;
 
 // —— 主动搭话：眼睛被"看着"（视口内且窗口可见）时，每隔随机
-// 40~90 秒弹一句台词气泡。纯绝对定位浮层，不占文档流，布局零影响。
+// 15~30 秒弹一句台词气泡。纯绝对定位浮层，不占文档流，布局零影响。
 const speech = ref(null); // 当前台词，null = 不显示
 const active = ref(false); // 用户是否正看着本眼睛
 let speechTimer = null; // 气泡展示时长定时器
 let nextSpeechTimer = null; // 下一次搭话定时器
-let lastLineIndex = -1; // 上一条台词下标，避免连续重复
 
 const SPEECH_SHOW_MS = 3400; // 与 .ally-speech 的 CSS 动画时长一致
 const SPEECH_MIN_GAP_MS = 15000;
 const SPEECH_MAX_GAP_MS = 30000;
 
+let lastPick = null; // 上一条 (风格, 台词) 下标，避免连续两句完全重复
+
+// 先按风格权重抽风格（气质稳定：傲娇/温柔/无赖是灵魂，爱慕/邪恶是点缀），
+// 再在风格内随机抽台词。
 function pickSpeechLine() {
-  const pool = isZh ? EYE_LINES.zh : EYE_LINES.en;
-  if (pool.length <= 1) return pool[0] || null;
-  let index = Math.floor(Math.random() * pool.length);
-  if (index === lastLineIndex) index = (index + 1) % pool.length;
-  lastLineIndex = index;
-  return pool[index];
+  const total = EYE_STYLES.reduce((sum, style) => sum + style.weight, 0);
+  let roll = Math.random() * total;
+  let styleIndex = EYE_STYLES.length - 1;
+  for (let i = 0; i < EYE_STYLES.length; i++) {
+    roll -= EYE_STYLES[i].weight;
+    if (roll <= 0) {
+      styleIndex = i;
+      break;
+    }
+  }
+  const style = EYE_STYLES[styleIndex];
+  const pool = isZh ? style.zh : style.en;
+  if (!pool || pool.length === 0) return null;
+  let lineIndex = Math.floor(Math.random() * pool.length);
+  for (
+    let attempt = 0;
+    attempt < 3 && lastPick && lastPick.styleIndex === styleIndex && lastPick.lineIndex === lineIndex;
+    attempt++
+  ) {
+    lineIndex = Math.floor(Math.random() * pool.length);
+  }
+  lastPick = { styleIndex, lineIndex };
+  return pool[lineIndex];
 }
 
 function scheduleNextSpeech() {
