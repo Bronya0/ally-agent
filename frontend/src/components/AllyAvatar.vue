@@ -110,15 +110,14 @@ let visibilityHandler = null;
 let isIntersecting = true;
 
 // —— 主动搭话：眼睛被"看着"（视口内且窗口可见）时，每隔随机
-// 8~15 秒弹一句台词气泡。纯绝对定位浮层，不占文档流，布局零影响。
+// 每 18 秒弹一句台词气泡。纯绝对定位浮层，不占文档流，布局零影响。
 const speech = ref(null); // 当前台词，null = 不显示
 const active = ref(false); // 用户是否正看着本眼睛
 let speechTimer = null; // 气泡展示时长定时器
 let nextSpeechTimer = null; // 下一次搭话定时器
 
 const SPEECH_SHOW_MS = 3400; // 与 .ally-speech 的 CSS 动画时长一致
-const SPEECH_MIN_GAP_MS = 8000;
-const SPEECH_MAX_GAP_MS = 15000;
+const SPEECH_GAP_MS = 18000; // 固定间隔：每 18 秒一句
 
 // 纯随机：把全部风格台词合并成一个池子，直接随机抽一句，不做权重/去重。
 const ZH_SPEECH_POOL = EYE_STYLES.flatMap((style) => style.zh);
@@ -134,7 +133,7 @@ function scheduleNextSpeech() {
   clearTimeout(nextSpeechTimer);
   nextSpeechTimer = null;
   if (!active.value || speech.value) return;
-  const gap = SPEECH_MIN_GAP_MS + Math.random() * (SPEECH_MAX_GAP_MS - SPEECH_MIN_GAP_MS);
+  const gap = SPEECH_GAP_MS;
   nextSpeechTimer = setTimeout(showSpeech, gap);
 }
 
