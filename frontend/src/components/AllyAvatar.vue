@@ -33,12 +33,21 @@
       </g>
 
       <path d="M26 82c13 18 32 28 56 28s43-10 56-28" fill="none" stroke="#e0a458" stroke-width="2" opacity="0.32" stroke-linecap="round"/>
+
+      <!-- 主动搭话气泡：绝对定位浮层，不占文档流，布局零影响；
+           点击立即消失，3.4s 后自动消失（与 CSS 动画时长一致）。 -->
+      <div v-if="speech" class="ally-speech" role="status" @click.stop="dismissSpeech">
+        {{ speech }}
+        <span class="ally-speech-tail" aria-hidden="true"></span>
+      </div>
     </svg>
   </div>
 </template>
 
 <script setup>
 import { ref, onMounted, onBeforeUnmount } from 'vue';
+import { isZh } from '../i18n.mjs';
+import { EYE_LINES } from '../data/eyeLines.mjs';
 
 // 所有实例共享一份 SVG paint server(<defs>):每个 workspace tab 的欢迎消息
 // 都常驻 DOM(v-show),逐实例复制渐变/clipPath 会重复创建节点。共享定义注入
@@ -99,9 +108,71 @@ const root = ref(null);
 let observer = null;
 let visibilityHandler = null;
 
+// —— 主动搭话：眼睛被"看着"（视口内且窗口可见）时，每隔随机
+// 40~90 秒弹一句台词气泡。纯绝对定位浮层，不占文档流，布局零影响。
+const speech = ref(null); // 当前台词，null = 不显示
+const active = ref(false); // 用户是否正看着本眼睛
+let speechTimer = null; // 气泡展示时长定时器
+let nextSpeechTimer = null; // 下一次搭话定时器
+let lastLineIndex = -1; // 上一条台词下标，避免连续重复
+
+const SPEECH_SHOW_MS = 3400; // 与 .ally-speech 的 CSS 动画时长一致
+const SPEECH_MIN_GAP_MS = 40000;
+const SPEECH_MAX_GAP_MS = 90000;
+
+function pickSpeechLine() {
+  const pool = isZh ? EYE_LINES.zh : EYE_LINES.en;
+  if (pool.length <= 1) return pool[0] || null;
+  let index = Math.floor(Math.random() * pool.length);
+  if (index === lastLineIndex) index = (index + 1) % pool.length;
+  lastLineIndex = index;
+  return pool[index];
+}
+
+function scheduleNextSpeech() {
+  clearTimeout(nextSpeechTimer);
+  nextSpeechTimer = null;
+  if (!active.value || speech.value) return;
+  const gap = SPEECH_MIN_GAP_MS + Math.random() * (SPEECH_MAX_GAP_MS - SPEECH_MIN_GAP_MS);
+  nextSpeechTimer = setTimeout(showSpeech, gap);
+}
+
+function showSpeech() {
+  nextSpeechTimer = null;
+  if (!active.value) return;
+  speech.value = pickSpeechLine();
+  root.value?.classList.add('ally-avatar--speaking');
+  speechTimer = setTimeout(hideSpeech, SPEECH_SHOW_MS);
+}
+
+function hideSpeech() {
+  speechTimer = null;
+  speech.value = null;
+  root.value?.classList.remove('ally-avatar--speaking');
+  scheduleNextSpeech();
+}
+
+function dismissSpeech() {
+  clearTimeout(speechTimer);
+  hideSpeech();
+}
+
 function setPaused(paused) {
   if (!root.value) return;
   root.value.classList.toggle('ally-avatar--paused', paused);
+  const nowActive = !paused;
+  if (nowActive === active.value) return;
+  active.value = nowActive;
+  if (nowActive) {
+    scheduleNextSpeech();
+  } else {
+    clearTimeout(nextSpeechTimer);
+    clearTimeout(speechTimer);
+    nextSpeechTimer = null;
+    speechTimer = null;
+    speech.value = null;
+    root.value.classList.remove('ally-avatar--speaking');
+  }
 }
 
 onMounted(() => {
@@ -123,10 +194,62 @@ onBeforeUnmount(() => {
   releaseSharedDefs();
   if (observer) observer.disconnect();
   if (visibilityHandler) document.removeEventListener('visibilitychange', visibilityHandler);
+  clearTimeout(speechTimer);
+  clearTimeout(nextSpeechTimer);
 });
 </script>
 
 <style scoped>
+/* 台词气泡：绝对定位浮层，不占文档流，任何布局都不受影响 */
+.ally-speech {
+  position: absolute;
+  right: -16px;
+  top: 10px;
+  z-index: 10;
+  max-width: 220px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: #27272c;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  color: #ececec;
+  font-size: 13px;
+  line-height: 1.55;
+  cursor: pointer;
+  user-select: none;
+  animation: ally-speech-pop 3.4s ease forwards;
+}
+
+.ally-speech-tail {
+  position: absolute;
+  left: -6px;
+  top: 15px;
+  width: 10px;
+  height: 10px;
+  background: #27272c;
+  border-left: 1px solid rgba(255, 255, 255, 0.09);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.09);
+  transform: rotate(45deg);
+}
+
+@keyframes ally-speech-pop {
+  0% { opacity: 0; transform: translateY(6px) scale(0.94); }
+  10% { opacity: 1; transform: translateY(0) scale(1); }
+  80% { opacity: 1; transform: translateY(0) scale(1); }
+  100% { opacity: 0; transform: translateY(-3px) scale(0.97); }
+}
+
+/* 说话时瞳孔微微放大，说完恢复眨眼 */
+.ally-avatar--speaking .ally-eye-pupil {
+  animation: ally-eye-speak 3.4s ease;
+}
+
+@keyframes ally-eye-speak {
+  0%, 100% { transform: scaleX(1.8); }
+  20% { transform: scaleX(2.15) scaleY(1.06); }
+  55% { transform: scaleX(1.9) scaleY(1.02); }
+}
+
 .ally-avatar {
   position: relative;
   width: 164px;
@@ -203,7 +326,12 @@ onBeforeUnmount(() => {
 @media (prefers-reduced-motion: reduce) {
   .ally-eye-vortex,
   .ally-eye-lightning,
-  .ally-eye-pupil {
+  .ally-eye-pupil,
+  .ally-avatar--speaking .ally-eye-pupil {
+    animation: none;
+  }
+
+  .ally-speech {
     animation: none;
   }
 }
