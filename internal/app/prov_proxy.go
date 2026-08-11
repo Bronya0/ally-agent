@@ -66,7 +66,7 @@ func normalizeProxyMode(value string) string {
 
 func (a *App) DetectSystemProxy() ProxyStatus {
 	status := detectPlatformProxy()
-	if !status.Enabled && status.PACURL == "" {
+	if !status.Enabled && status.PACURL == "" && !status.PACUnsupported {
 		status = detectEnvironmentProxy()
 	}
 	status.Mode = proxyModeSystem
@@ -126,12 +126,12 @@ func resolveProxy(cfg ConfigState) resolvedProxy {
 		status.NoProxy = cfg.ProxyNoProxy
 	case proxyModeSystem:
 		status = detectPlatformProxy()
-		if !status.Enabled && status.PACURL == "" {
+		if !status.Enabled && status.PACURL == "" && !status.PACUnsupported {
 			status = detectEnvironmentProxy()
 		}
 		status.Mode = mode
 		if !status.Enabled {
-			if status.PACURL != "" {
+			if status.PACURL != "" || status.PACUnsupported {
 				status.Error = "PAC/WPAD proxy detected but automatic PAC evaluation is not supported yet"
 			} else if status.Error == "" {
 				status.Error = "no fixed system proxy was detected"

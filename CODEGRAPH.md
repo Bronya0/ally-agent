@@ -12,7 +12,7 @@
 - [service] internal/app/ — Agent 核心编排（唯一后端包，也是 Wails 绑定面；按前缀分层：无前缀=核心、prov_=provider、host_=宿主桥接、orch_=工具编排、biz_=业务模块、infra_=工具基础设施）
   - app.go — 编排核心：`App` 长生命周期状态、`ConfigState`/`ChatRequest` 等 DTO、`runChat` 聊天循环、`executeTool` 分发、`StartChat`/`CancelRun`/会话生命周期、ask/wait、前端兼容绑定 [Lines: 2394]
   - prov_model.go — provider 流式适配：`streamOpenAIChat`/`streamOpenAIResponses`/`streamAnthropicMessages`、SSE 解析、重试与多 key 故障切换、`modelStreamEvent`/`modelStreamResult` [Lines: 1706]
-  - prov_proxy.go / prov_proxy_windows.go / prov_proxy_other.go — 代理感知 HTTP client、系统代理检测、transport 缓存失效
+  - prov_proxy.go / prov_proxy_windows.go / prov_proxy_darwin.go / prov_proxy_other.go / prov_proxy_scutil.go — 代理感知 HTTP client、系统代理检测、transport 缓存失效
   - host_desktop.go — Wails 生命周期、窗口创建、系统对话框、`wailsAppHandle` 注入
   - host_events.go — `eventSink` 事件边界（`App.emit` 唯一出口）
   - host_tray.go — 系统托盘
