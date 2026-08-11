@@ -117,8 +117,8 @@ let nextSpeechTimer = null; // 下一次搭话定时器
 let lastLineIndex = -1; // 上一条台词下标，避免连续重复
 
 const SPEECH_SHOW_MS = 3400; // 与 .ally-speech 的 CSS 动画时长一致
-const SPEECH_MIN_GAP_MS = 40000;
-const SPEECH_MAX_GAP_MS = 90000;
+const SPEECH_MIN_GAP_MS = 15000;
+const SPEECH_MAX_GAP_MS = 30000;
 
 function pickSpeechLine() {
   const pool = isZh ? EYE_LINES.zh : EYE_LINES.en;
