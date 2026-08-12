@@ -62,9 +62,20 @@ func (a *App) StopSubagent(subID string) error {
 
 // ── Sub-agent execution loop ─────────────────────────────────
 
+// Hard step cap for every delegate execution. Plain sub-agents enter the
+// loop with maxSteps=0 (previously unlimited); the shared scheduled-task
+// maximum now bounds them too, so a runaway delegate can never loop
+// forever. Scheduled tasks keep their own configured cap (<= this value).
+const maxDelegateSteps = maxScheduledTaskSteps
+
 func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID string, req AgentDelegateRequest, cancel context.CancelFunc) (*AgentDelegateResult, error) {
 	if strings.TrimSpace(req.Task) == "" {
 		return nil, errors.New("task is required")
+	}
+	// Enforce the hard cap: 0 (plain sub-agent) or any out-of-range value
+	// falls back to the shared maximum.
+	if req.maxSteps <= 0 || req.maxSteps > maxDelegateSteps {
+		req.maxSteps = maxDelegateSteps
 	}
 	model := cfg.Model
 	if req.Model != "" {
@@ -411,7 +422,7 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 	return &AgentDelegateResult{
 		AgentID: subID, Description: desc, Status: "timed_out",
 		Steps: step, FilesRead: filesRead, FilesEdited: filesEdited, Model: model,
-		Error: fmt.Sprintf("reached scheduled-task step limit (%d)", req.maxSteps),
+		Error: fmt.Sprintf("reached step limit (%d)", req.maxSteps),
 	}, nil
 }
 

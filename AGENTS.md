@@ -481,7 +481,7 @@ Backend 会话/历史/上下文核算的完整说明（索引与 gzip 快照、�
 
 ## Sub-Agents And Goal Mode
 
-`subagent` starts a child agent loop without an artificial step or wall-clock limit. Cancellation still follows the parent run or an explicit stop request.
+`subagent` starts a child agent loop bounded by a hard 1000-step cap (shared with the scheduled-task maximum); wall-clock is otherwise unlimited. Cancellation still follows the parent run or an explicit stop request.
 
 Sub-agents receive connected MCP tools and share the manager's invalid-session reconnect path. Interactive/nested tools such as `ask` and `subagent`, plus parent-owned goal/todo/scheduled/memory-write state, remain excluded.
 
