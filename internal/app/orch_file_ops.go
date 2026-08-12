@@ -612,6 +612,26 @@ func makeEditResult(rel string, beforeHash, beforeVersion string, before, after 
 
 // ── Safety guards for destructive / expensive operations ──
 
+// 删除保护清单（单一来源）：本地 isOSProtectedDeletePath 的 Linux/macOS
+// 分支与远程 Python helper 的 is_protected_delete_path 共用同一份数据，
+// 避免 Go/Python 双份清单漂移（远程注入 remoteDeleteProtected* 并集）。
+var (
+	protectedDeleteLinuxExactOnly  = []string{"/home", "/mnt", "/media"}
+	protectedDeleteLinuxTrees      = []string{"/bin", "/boot", "/dev", "/etc", "/lib", "/lib32", "/lib64", "/libx32", "/lost+found", "/opt", "/proc", "/root", "/run", "/sbin", "/snap", "/srv", "/sys", "/usr", "/var"}
+	protectedDeleteDarwinExactOnly = []string{"/Users", "/Volumes", "/Network"}
+	protectedDeleteDarwinTrees     = []string{"/Applications", "/bin", "/cores", "/dev", "/etc", "/Library", "/opt", "/private", "/sbin", "/System", "/usr", "/var"}
+)
+
+// remoteDeleteProtectedExactOnly / remoteDeleteProtectedTrees 是本地
+// Linux 与 macOS 保护清单的并集，注入远程 Python helper 使用。
+func remoteDeleteProtectedExactOnly() []string {
+	return append(append([]string(nil), protectedDeleteLinuxExactOnly...), protectedDeleteDarwinExactOnly...)
+}
+
+func remoteDeleteProtectedTrees() []string {
+	return append(append([]string(nil), protectedDeleteLinuxTrees...), protectedDeleteDarwinTrees...)
+}
+
 // isDangerousDeletePath returns (blocked, reason). Blocks paths that are
 // OS-protected locations, home roots, VCS metadata, or workspace root.
 func isDangerousDeletePath(absPath string) (bool, string) {
@@ -703,25 +723,12 @@ func isOSProtectedDeletePath(abs string) (bool, string) {
 		// only the directory itself; individual home roots are handled by
 		// the parent-dir check in isDangerousDeletePath, and mounted volume
 		// roots are safe to delete into as long as the workspace is confined.
-		for _, root := range []string{"/Users", "/Volumes", "/Network"} {
+		for _, root := range protectedDeleteDarwinExactOnly {
 			if abs == root {
 				return true, fmt.Sprintf("refusing to delete macOS top-level root %q", abs)
 			}
 		}
-		for _, protected := range []string{
-			"/Applications",
-			"/bin",
-			"/cores",
-			"/dev",
-			"/etc",
-			"/Library",
-			"/opt",
-			"/private",
-			"/sbin",
-			"/System",
-			"/usr",
-			"/var",
-		} {
+		for _, protected := range protectedDeleteDarwinTrees {
 			if isPathOrDescendant(abs, protected) {
 				return true, fmt.Sprintf("refusing to delete macOS protected path %q", abs)
 			}
@@ -735,32 +742,12 @@ func isOSProtectedDeletePath(abs string) (bool, string) {
 		// /mnt/external/repos, /media/user/USB/code). Block only the
 		// directory itself; individual home roots are handled by the
 		// parent-dir check in isDangerousDeletePath.
-		for _, root := range []string{"/home", "/mnt", "/media"} {
+		for _, root := range protectedDeleteLinuxExactOnly {
 			if abs == root {
 				return true, fmt.Sprintf("refusing to delete Linux top-level root %q", abs)
 			}
 		}
-		for _, protected := range []string{
-			"/bin",
-			"/boot",
-			"/dev",
-			"/etc",
-			"/lib",
-			"/lib32",
-			"/lib64",
-			"/libx32",
-			"/lost+found",
-			"/opt",
-			"/proc",
-			"/root",
-			"/run",
-			"/sbin",
-			"/snap",
-			"/srv",
-			"/sys",
-			"/usr",
-			"/var",
-		} {
+		for _, protected := range protectedDeleteLinuxTrees {
 			if isPathOrDescendant(abs, protected) {
 				return true, fmt.Sprintf("refusing to delete Linux protected path %q", abs)
 			}

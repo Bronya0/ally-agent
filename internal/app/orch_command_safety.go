@@ -64,20 +64,12 @@ func firstExistingOutsideMutationTarget(commandLine string, roots []string, work
 	if strings.TrimSpace(workingDir) == "" {
 		workingDir = roots[0]
 	}
-	for _, target := range command.ShellRedirectionTargets(commandLine) {
-		if command.IsShellNullDevice(target) {
-			continue
+	for _, target := range command.LiteralWriteTargets(commandLine) {
+		reason := "命令的写入目标已经存在于工作区外，继续执行可能修改其内容或元数据"
+		if target.Kind == command.WriteTargetRedirection {
+			reason = "重定向目标已经存在，继续执行可能覆盖或追加其内容"
 		}
-		if risk := inspectCommandMutationTarget(target, workingDir, roots, "重定向目标已经存在，继续执行可能覆盖或追加其内容"); risk != nil {
-			return risk
-		}
-	}
-
-	for _, target := range command.MutationPathTargets(commandLine) {
-		if command.IsShellNullDevice(target) {
-			continue
-		}
-		if risk := inspectCommandMutationTarget(target, workingDir, roots, "命令的写入目标已经存在于工作区外，继续执行可能修改其内容或元数据"); risk != nil {
+		if risk := inspectCommandMutationTarget(target.Path, workingDir, roots, reason); risk != nil {
 			return risk
 		}
 	}

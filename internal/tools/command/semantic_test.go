@@ -56,6 +56,37 @@ func TestAllowedDeleteContextRequiresEveryDeletionToBeManaged(t *testing.T) {
 	}
 }
 
+func TestDeleteDetectionUnwrapsCommonWrappers(t *testing.T) {
+	blocked := []string{
+		`timeout 5 rm generated.txt`,
+		`timeout -s KILL 5 rm -rf /tmp/x`,
+		`timeout -v 5 rm generated.txt`,
+		`timeout --verbose 5 rm generated.txt`,
+		`stdbuf -oL rm generated.txt`,
+		`stdbuf --output=L rm generated.txt`,
+		`setsid rm generated.txt`,
+		`ionice -c3 rm generated.txt`,
+	}
+	for _, commandLine := range blocked {
+		if !ContainsExplicitDeleteCommand(commandLine) {
+			t.Fatalf("expected wrapped deletion to be detected: %q", commandLine)
+		}
+	}
+	allowed := []string{
+		`timeout 5 echo rm`,
+		`timeout -v 5 echo rm`,
+		`stdbuf -oL echo rm`,
+		`setsid echo rm`,
+		`ionice -c3 echo rm`,
+		`timeout 5 git status`,
+	}
+	for _, commandLine := range allowed {
+		if ContainsExplicitDeleteCommand(commandLine) {
+			t.Fatalf("data must not be treated as a deletion command: %q", commandLine)
+		}
+	}
+}
+
 func TestRiskDetectionIgnoresArgumentsButBlocksActualCommands(t *testing.T) {
 	allowed := []string{
 		`git log --grep=shutdown`,
@@ -106,6 +137,25 @@ func TestMutationPathTargetsDistinguishInputsFromOutputs(t *testing.T) {
 	for _, test := range tests {
 		if got := MutationPathTargets(test.commandLine); !slices.Equal(got, test.want) {
 			t.Fatalf("MutationPathTargets(%q) = %#v, want %#v", test.commandLine, got, test.want)
+		}
+	}
+}
+
+func TestLiteralWriteTargets(t *testing.T) {
+	tests := []struct {
+		commandLine string
+		want        []WriteTarget
+	}{
+		{`echo hi > out.txt`, []WriteTarget{{"out.txt", WriteTargetRedirection}}},
+		{`cp /tmp/source.txt ./dest.txt`, []WriteTarget{{"./dest.txt", WriteTargetMutation}}},
+		{`echo hi > /dev/null`, nil},
+		{`echo hi > $VAR`, nil},
+		{`echo hi > /tmp/out.txt`, []WriteTarget{{"/tmp/out.txt", WriteTargetRedirection}}},
+		{`echo hi >> app.log 2>&1`, []WriteTarget{{"app.log", WriteTargetRedirection}}},
+	}
+	for _, test := range tests {
+		if got := LiteralWriteTargets(test.commandLine); !slices.Equal(got, test.want) {
+			t.Fatalf("LiteralWriteTargets(%q) = %#v, want %#v", test.commandLine, got, test.want)
 		}
 	}
 }

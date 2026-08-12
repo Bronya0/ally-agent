@@ -177,6 +177,29 @@ func invocationFromWords(words []string) (Invocation, bool) {
 			words = skipWrapperOptions(words[1:], nil)
 		case "nice":
 			words = skipWrapperOptions(words[1:], map[string]bool{"-n": true, "--adjustment": true})
+		case "timeout":
+			words = skipWrapperOptions(words[1:], map[string]bool{
+				"-s": true, "--signal": true, "-k": true, "--kill-after": true,
+			})
+			// timeout 的时长是第一个位置参数（如 5、5s、infinity），跳过它。
+			// 无时长时 timeout 自身报错不执行内部命令，因此跳一个位置参数
+			// 即使误跳也是无害方向（命令本就不会运行）。
+			if len(words) > 0 && !strings.HasPrefix(words[0], "-") {
+				words = words[1:]
+			}
+		case "stdbuf":
+			// 支持 -oL 粘连形式（本身以 - 开头，整词跳过）与 -o L 分离形式。
+			words = skipWrapperOptions(words[1:], map[string]bool{
+				"-i": true, "--input": true, "-o": true, "--output": true,
+				"-e": true, "--error": true,
+			})
+		case "setsid":
+			words = skipWrapperOptions(words[1:], nil)
+		case "ionice":
+			words = skipWrapperOptions(words[1:], map[string]bool{
+				"-c": true, "--class": true, "-n": true, "--classdata": true,
+				"-p": true, "--pid": true,
+			})
 		default:
 			if name == "" {
 				return Invocation{}, false
@@ -744,7 +767,6 @@ func optionValues(args []string, names ...string) []string {
 			}
 		}
 	}
-	return result
 	return result
 }
 

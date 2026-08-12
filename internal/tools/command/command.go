@@ -249,6 +249,49 @@ func ResolveCommandLiteralPath(value, workspaceRoot string) (string, bool) {
 	return filepath.Clean(value), true
 }
 
+// WriteTargetKind 标识写入目标的来源。
+type WriteTargetKind uint8
+
+const (
+	// WriteTargetRedirection 来自 shell 重定向（>、>>、>&）。
+	WriteTargetRedirection WriteTargetKind = iota
+	// WriteTargetMutation 来自会创建/修改文件的命令（cp、mv、tee 等）。
+	WriteTargetMutation
+)
+
+// WriteTarget 是命令中一个可静态解析的字面写入目标。
+type WriteTarget struct {
+	Path string
+	Kind WriteTargetKind
+}
+
+// LiteralWriteTargets 返回命令中可静态解析的字面写入目标（重定向 + 变更
+// 命令），按出现顺序排列；null 设备与动态目标（变量/glob/命令替换）被过滤。
+// workspaceRoot 参数不影响“是否可静态解析”的判定，传入空串即可；调用方
+// （本地/远程安全检查）各自对返回的目标做文件系统事实检查。
+func LiteralWriteTargets(commandLine string) []WriteTarget {
+	var targets []WriteTarget
+	for _, t := range ShellRedirectionTargets(commandLine) {
+		if IsShellNullDevice(t) {
+			continue
+		}
+		if _, ok := ResolveCommandLiteralPath(t, ""); !ok {
+			continue
+		}
+		targets = append(targets, WriteTarget{Path: t, Kind: WriteTargetRedirection})
+	}
+	for _, t := range MutationPathTargets(commandLine) {
+		if IsShellNullDevice(t) {
+			continue
+		}
+		if _, ok := ResolveCommandLiteralPath(t, ""); !ok {
+			continue
+		}
+		targets = append(targets, WriteTarget{Path: t, Kind: WriteTargetMutation})
+	}
+	return targets
+}
+
 // PathExists reports whether a path exists on disk (including symlinks whose
 // target is missing).
 func PathExists(path string) bool {

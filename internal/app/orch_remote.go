@@ -22,10 +22,19 @@ import (
 const remotePythonMarker = "ALLY_REMOTE_RESULT_JSON:"
 
 const remotePythonScript = `
-import base64, json, os, pathlib, re, selectors, shutil, signal, stat as stat_mod, subprocess, sys, tempfile, time
+import base64, json, os, pathlib, selectors, shutil, signal, stat as stat_mod, subprocess, sys, tempfile, time
 from datetime import datetime, timezone
 
 MARKER = "ALLY_REMOTE_RESULT_JSON:"
+
+# 受保护删除清单占位符：Go 侧在构建脚本时替换为 JSON 数组字面量。
+# 内容来自 internal/app 的 linux/darwin 分支并集（单一来源）。
+DELETE_EXACT_ONLY = __DELETE_EXACT_ONLY__
+DELETE_PROTECTED_TREES = __DELETE_PROTECTED_TREES__
+
+# payload 占位符：Go 侧每次调用时替换为真实 base64url 编码的 payload，
+# 整个脚本经 ssh stdin 发送，避免大 payload 塞进命令行参数。
+PAYLOAD_B64 = "__PAYLOAD_B64__"
 
 def fail(msg):
     print(MARKER + json.dumps({"ok": False, "error": str(msg)}, separators=(",", ":")))
@@ -35,9 +44,9 @@ def ok(data):
     print(MARKER + json.dumps({"ok": True, "data": data}, separators=(",", ":")))
     sys.exit(0)
 
-def decode_payload(arg):
-    padding = "=" * (-len(arg) % 4)
-    return json.loads(base64.urlsafe_b64decode((arg + padding).encode("ascii")).decode("utf-8"))
+def decode_payload():
+    padding = "=" * (-len(PAYLOAD_B64) % 4)
+    return json.loads(base64.urlsafe_b64decode((PAYLOAD_B64 + padding).encode("ascii")).decode("utf-8"))
 
 def as_posix_rel(root, path):
     return pathlib.Path(path).relative_to(root).as_posix()
@@ -65,12 +74,22 @@ def contains_vcs(path):
     return any(part in {".git", ".svn", ".hg"} for part in path.parts)
 
 def is_protected_delete_path(path):
-    p = str(path)
-    exact_only = ["/", "/home", "/Users", "/Volumes"]
+    # 与本地 isDangerousDeletePath 的 Linux/macOS 分支保持一致
+    # （远端只可能是 posix 系统）。统一转成 posix 形式再判断，
+    # 避免 Windows 本地测试时 pathlib 把 /etc 渲染成 \etc。
+    p = str(path).replace(os.sep, "/")
+    if p == "/":
+        return True
+    if p == os.path.expanduser("~").replace(os.sep, "/"):
+        return True
+    parent = os.path.dirname(p)
+    if parent in ("/home", "/Users"):
+        return True
+    exact_only = DELETE_EXACT_ONLY
     for item in exact_only:
         if p == item:
             return True
-    protected_trees = ["/etc", "/usr", "/bin", "/sbin", "/lib", "/lib64", "/boot", "/dev", "/proc", "/sys", "/root", "/System", "/Library", "/Applications"]
+    protected_trees = DELETE_PROTECTED_TREES
     for item in protected_trees:
         if p == item or p.startswith(item.rstrip("/") + "/"):
             return True
@@ -204,15 +223,47 @@ def op_delete(root, payload):
         path.unlink()
     return {"deleted": payload.get("path", "")}
 
-DELETE_RE = re.compile(r"(?i)(^|[\s;&|()])(?:rm|unlink|rmdir|del|erase|rd|remove-item|ri)\b")
+def check_write_targets(root, cwd, targets):
+    # 镜像本地 run_command 的 E_PATH_OUTSIDE 策略：Go 侧已把字面写入目标
+    # （重定向 + 变更命令）解析出来，这里只做远端文件系统事实检查。
+    # 动态目标（变量/glob/命令替换）在 Go 侧已被过滤，不会到达这里。
+    if not targets:
+        return
+    root_str = str(root)
+    cwd_str = str(cwd)
+    for t in targets:
+        if not t or t.startswith("&"):
+            continue
+        p = t
+        if not os.path.isabs(p):
+            p = os.path.join(cwd_str, p)
+        p = os.path.normpath(p)
+        if p == os.devnull:
+            continue
+        lexical = p
+        resolved = os.path.realpath(p)
+        try:
+            lex_inside = os.path.commonpath([root_str, lexical]) == root_str
+            res_inside = os.path.commonpath([root_str, resolved]) == root_str
+        except ValueError:
+            lex_inside = False
+            res_inside = False
+        if lex_inside and not res_inside:
+            # 词法在工作区内但解析后逃到工作区外（symlink 父目录）：
+            # 与本地 inspectCommandMutationTarget 一致，无条件拦截，
+            # 无论目标文件是否已存在。
+            raise ValueError("E_PATH_OUTSIDE: remote command write target escapes workspaceRoot via symlink: %s" % p)
+        if res_inside:
+            continue
+        if os.path.lexists(p):
+            raise ValueError("E_PATH_OUTSIDE: remote command write target is outside workspaceRoot: %s" % p)
 
 def op_run(root, payload):
     command = str(payload.get("command") or "")
     if not command.strip():
         raise ValueError("command is required")
-    if DELETE_RE.search(command):
-        raise ValueError("remote_run_command refuses explicit deletion commands; use remote_delete_path")
     cwd = safe_join(root, payload.get("cwd", ""))
+    check_write_targets(root, cwd, payload.get("targets") or [])
     if not cwd.is_dir():
         raise ValueError("cwd is not a directory")
     timeout = int(payload.get("timeoutSeconds") or 120)
@@ -309,7 +360,7 @@ def op_run(root, payload):
     return {"command": command, "cwd": str(cwd), "shell": shell, "shellPath": shell, "output": output, "exitCode": exit_code, "timedOut": timed_out, "durationMs": duration, "truncated": truncated}
 
 try:
-    payload = decode_payload(sys.argv[1])
+    payload = decode_payload()
     root = pathlib.Path(payload["workspaceRoot"]).expanduser().resolve(strict=True)
     if str(root) == "/":
         raise ValueError("workspaceRoot must not be filesystem root")
@@ -324,6 +375,14 @@ try:
         ok(op_delete(root, payload))
     elif op == "run":
         ok(op_run(root, payload))
+    elif op == "_check_write_targets":
+        # 测试专用内部 op：只做写目标越界检查，不执行命令。
+        # cwd 同样走 safe_join，保证与 op_run 的相对路径解析一致。
+        check_write_targets(root, safe_join(root, payload.get("cwd", "")), payload.get("targets") or [])
+        ok({"checked": True})
+    elif op == "_check_protected":
+        # 测试专用内部 op：直接暴露删除保护判定，便于本地单测。
+        ok({"protected": is_protected_delete_path(pathlib.Path(payload["path"]))})
     else:
         raise ValueError("unknown op: %s" % op)
 except Exception as exc:
@@ -445,24 +504,70 @@ func remotePayload(rt remoteTarget, op string, extra map[string]any) map[string]
 	return payload
 }
 
-func (a *App) invokeRemotePython(ctx context.Context, rt remoteTarget, payload map[string]any, timeout time.Duration, out any) error {
+// buildRemoteScript 把删除保护清单与 payload（base64url）注入 Python 脚本
+// 占位符，整个脚本经 ssh stdin 发送。先替换清单、最后替换 payload，
+// 避免编码后的 payload 恰好包含清单占位符文本时被二次替换。
+func buildRemoteScript(payload map[string]any) (string, error) {
+	exactOnly, err := json.Marshal(remoteDeleteProtectedExactOnly())
+	if err != nil {
+		return "", err
+	}
+	trees, err := json.Marshal(remoteDeleteProtectedTrees())
+	if err != nil {
+		return "", err
+	}
+	script := strings.Replace(remotePythonScript, "__DELETE_EXACT_ONLY__", string(exactOnly), 1)
+	script = strings.Replace(script, "__DELETE_PROTECTED_TREES__", string(trees), 1)
 	raw, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+	encoded := base64.RawURLEncoding.EncodeToString(raw)
+	return strings.Replace(script, "__PAYLOAD_B64__", encoded, 1), nil
+}
+
+// remoteHelperError 把 Python helper 的错误映射为 Go 侧错误。E_PATH_OUTSIDE
+// 前缀错误转成结构化错误码，供模型侧恢复提示使用。
+func remoteHelperError(resp remotePythonResponse) error {
+	if resp.Error == "" {
+		resp.Error = "remote helper failed"
+	}
+	if strings.HasPrefix(resp.Error, "E_PATH_OUTSIDE:") {
+		msg := strings.TrimSpace(strings.TrimPrefix(resp.Error, "E_PATH_OUTSIDE:"))
+		return codedToolError("E_PATH_OUTSIDE", errors.New(msg))
+	}
+	return errors.New(resp.Error)
+}
+
+// remoteWriteTargets 提取命令中可静态解析的字面写入目标（与本地
+// run_command 共用 command.LiteralWriteTargets 同一份提取逻辑），
+// 交给远端 Python helper 做文件系统事实检查。
+func remoteWriteTargets(commandLine string) []string {
+	all := command.LiteralWriteTargets(commandLine)
+	targets := make([]string, 0, len(all))
+	for _, t := range all {
+		targets = append(targets, t.Path)
+	}
+	return targets
+}
+
+func (a *App) invokeRemotePython(ctx context.Context, rt remoteTarget, payload map[string]any, timeout time.Duration, out any) error {
+	script, err := buildRemoteScript(payload)
 	if err != nil {
 		return err
 	}
-	encoded := base64.RawURLEncoding.EncodeToString(raw)
 	args := []string{"-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3"}
 	if rt.Port != "" {
 		args = append(args, "-p", rt.Port)
 	}
-	args = append(args, rt.Host, "python3", "-", encoded)
+	args = append(args, rt.Host, "python3", "-")
 	if timeout <= 0 {
 		timeout = 60 * time.Second
 	}
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(runCtx, "ssh", args...)
-	cmd.Stdin = strings.NewReader(remotePythonScript)
+	cmd.Stdin = strings.NewReader(script)
 	var stdout bytes.Buffer
 	var stderr limitedBuffer
 	stderr.limit = 64 * 1024
@@ -508,10 +613,7 @@ func (a *App) invokeRemotePython(ctx context.Context, rt remoteTarget, payload m
 		return fmt.Errorf("remote helper returned no JSON result; stderr: %s", strings.TrimSpace(stderr.String()))
 	}
 	if !resp.OK {
-		if resp.Error == "" {
-			resp.Error = "remote helper failed"
-		}
-		return errors.New(resp.Error)
+		return remoteHelperError(resp)
 	}
 	if out != nil {
 		if err := json.Unmarshal(resp.Data, out); err != nil {
@@ -832,6 +934,10 @@ func (a *App) remoteRunCommand(ctx context.Context, req RemoteRunCommandRequest)
 			return CommandResult{}, codedToolError("E_BAD_SHELL", fmt.Errorf("unsupported shell %q: only bash, sh, zsh are allowed", shell))
 		}
 	}
+	// 镜像本地 run_command 的 E_PATH_OUTSIDE 检查：只把"可静态解析的字面写
+	// 目标"传给远端做事实检查；动态目标（变量/glob/命令替换）与 null 设备
+	// 在本地同样放行，因此不传。
+	writeTargets := remoteWriteTargets(req.Command)
 	var result CommandResult
 	err = a.invokeRemotePython(ctx, rt, remotePayload(rt, "run", map[string]any{
 		"command":        req.Command,
@@ -839,6 +945,7 @@ func (a *App) remoteRunCommand(ctx context.Context, req RemoteRunCommandRequest)
 		"timeoutSeconds": timeout,
 		"shell":          req.Shell,
 		"maxOutput":      maxToolOutput,
+		"targets":        writeTargets,
 	}), time.Duration(timeout+20)*time.Second, &result)
 	return result, err
 }
