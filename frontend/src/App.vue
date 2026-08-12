@@ -1436,7 +1436,7 @@ const builtinCommands = [
   { key: 'init', label: '/init', description: t('commands.init'), text: '', special: 'init' },
   { key: 'note', label: '/note', description: t('commands.note'), text: '', special: 'remember' },
   { key: 'lesson', label: '/lesson', description: t('commands.lesson'), text: '', special: 'lesson' },
-  { key: 'review', label: '/review', description: t('commands.review'), text: '', special: 'review' },
+  { key: 'review', label: '/review', description: '', text: '', special: 'review' },
   { key: 'compact', label: '/compact', description: t('commands.compact'), text: '', special: 'compact' },
   { key: 'push', label: '/push', description: t('commands.push'), text: '', special: 'push' },
 ];
@@ -1499,19 +1499,25 @@ Update .ally/lessons.md in the workspace root:
 4. Only record pitfalls that would recur elsewhere. Never record one-off compile errors, failed tests, plain coding mistakes, or tool errors.
 5. If nothing qualifies, say there is nothing to save and do not create the file.`;
 
-// REVIEW_PROMPT instructs the model when the user runs /review. Every review
-// MUST delegate to parallel sub-agents so the review is isolated from the
-// implementation, then the main agent verifies evidence and consolidates.
+// REVIEW_PROMPT instructs the model when the user runs /review. Sub-agents
+// are used only when the change is complex enough to justify them; the main
+// agent verifies evidence and consolidates.
 const REVIEW_PROMPT = `Review the current uncommitted code changes in this workspace.
 
 Step 1 — Scope the change:
 Run git status and git diff --stat. Read the diff plus enough surrounding context to understand the intent.
 
-Step 2 — Delegate to sub-agents (mandatory):
-You MUST use the subagent tool for every review — never review directly. Spawn 2-3 parallel sub-agents, each with one focused lens:
+Step 2 — Review directly or delegate, based on the change's complexity:
+Judge the complexity from Step 1: number of files, total diff size, and whether it touches sensitive areas (auth/security, data handling, concurrency, network, destructive operations).
+
+- Simple change (1-2 small files, a few lines, cosmetic/config/docs/test-only): review it yourself in the main context — do NOT spawn sub-agents. Check the same things a correctness sub-agent would: trace the changed paths, verify error handling and edge cases.
+- Moderate change (one medium-sized file, or a few files with real logic): spawn ONE sub-agent with the correctness lens; handle security and architecture yourself. Use two only when the change touches sensitive areas.
+- Large or cross-module change (many files, or touching auth/security/data/concurrency/network): spawn 2-3 parallel sub-agents, one per lens:
   1. correctness — logic errors, edge cases, error handling, resource leaks, concurrency races
   2. security — injection, authn/authz, input validation, secrets & sensitive data exposure, plus the failure modes security-related changes introduce: e.g. a hardcoded secret moved into a database or vault must also work on a fresh install where that secret does not exist yet, must fail closed (never log the secret, never fall back to an insecure default), and must not silently break startup or existing deployments; also check missing env/config dependencies and whether the change weakens existing checks (removed validation, loosened permissions, disabled security gates)
-  3. architecture & maintainability — layering violations, duplication, dead code, missing or weakened tests (use this lens only for large or cross-module changes; small changes may skip it)
+  3. architecture & maintainability — layering violations, duplication, dead code, missing or weakened tests (skip this lens for anything but large or cross-module changes)
+
+Each sub-agent costs time and tokens: use the fewest that cover the risk, and never spawn one for a change you can fully review in the main context.
 Every sub-agent task must include all of the following:
   (a) the changed file paths only — never paste the full diff into the task; let each sub-agent run git status / git diff / git diff --stat itself to inspect the actual changes;
   (b) the full requirement — extract the user's complete requirement from the conversation history: the original request, acceptance criteria, business rules, and constraints (what inputs are invalid, what side effects are forbidden); pass that whole requirement to every sub-agent so it can judge whether the code meets it; if the history has no explicit requirement, state plainly that the requirement is unknown and have the sub-agent review against the code's apparent intent — never silently guess;
@@ -1525,7 +1531,7 @@ Step 3 — Verify and consolidate:
 Check the evidence for every reported issue yourself (file, line, trigger path) before accepting it. Drop findings you cannot confirm from the actual code, deduplicate across sub-agents keeping the strongest evidence per issue, and do not rubber-stamp sub-agent output.
 
 Final report — write it for a human, in the user's preferred language (match the language the user is using in the UI), easy to understand:
-- Present the issues as a Markdown table, one row per issue, with columns: 简述 (what it is), 风险 (risk), 工作量 (effort), 修复建议 (how to fix), 推荐修复 (recommendation: 强烈建议 / 建议 / 没必要). Keep each cell to one plain sentence.
+- Present the issues as a Markdown table, one row per issue, with columns: 等级 (P0/P1/P2), 问题与风险 (what it is and its risk), 修复建议 (how to fix), 工作量 (effort), 推荐修复 (recommendation: 强烈建议 / 建议 / 没必要). Keep each cell to one plain sentence.
 - Order rows by severity (P0 first). Above the table, add a two-to-three-line plain-language summary of the biggest risks in everyday words.
 - If nothing significant was found, say so plainly in one or two lines — no table needed.
 Do not modify any files — this is a review only.`;
@@ -6121,7 +6127,6 @@ function handleReviewCommand() {
     .map((msg) => ({ role: msg.role, content: msg.content }));
   history.push({ role: 'user', content: REVIEW_PROMPT });
 
-  session.messages.push({ role: 'user', content: t('app.review.visibleText'), done: true });
   if (isDefaultSessionTitle(session.title)) {
     session.title = t('app.review.title');
   }
