@@ -102,9 +102,16 @@ func (s wailsEventSink) Emit(name string, payload any) {
 // long-lived Agent services to their host-neutral modules.
 func (a *App) ServiceStartup(ctx context.Context, _ application.ServiceOptions) error {
 	a.ctx = ctx
+	fan := newFanoutEventSink()
 	if a.wails != nil {
-		a.events = wailsEventSink{app: a.wails.app}
+		fan.Add(wailsEventSink{app: a.wails.app})
 	}
+	// 网络事件出口（SSE/轮询/未来 WS）：默认关闭，由 ALLY_NETWORK_EVENTS 环境变量启用。
+	// 失败只记日志不阻断启动，绝不破坏桌面端功能。
+	if netSink := newNetworkEventSinkFromEnv(ctx); netSink != nil {
+		fan.Add(netSink)
+	}
+	a.events = fan
 	// System tray support is kept in host_tray.go but disabled for the
 	// current release. Do not intercept window close, so closing exits Ally.
 	// a.setupSystemTray()

@@ -14,7 +14,8 @@
   - prov_model.go — provider 流式适配：`streamOpenAIChat`/`streamOpenAIResponses`/`streamAnthropicMessages`、SSE 解析、重试与多 key 故障切换、`modelStreamEvent`/`modelStreamResult` [Lines: 1706]
   - prov_proxy.go / prov_proxy_windows.go / prov_proxy_darwin.go / prov_proxy_other.go / prov_proxy_scutil.go — 代理感知 HTTP client、系统代理检测、transport 缓存失效
   - host_desktop.go — Wails 生命周期、窗口创建、系统对话框、`wailsAppHandle` 注入
-  - host_events.go — `eventSink` 事件边界（`App.emit` 唯一出口）
+  - host_events.go — `eventSink` 事件边界（`App.emit` 唯一出口）、`fanoutEventSink` 广播
+  - host_network.go — 网络事件出口：SSE `/events`、轮询 `/poll`、环形缓冲、WS 预留（默认关闭，`ALLY_NETWORK_EVENTS=1` 启用）
   - host_tray.go — 系统托盘
   - host_taskbar_windows.go / host_taskbar_other.go — 任务栏进度与窗口闪烁
   - host_process_windows.go / host_process_other.go — 子进程窗口与进程树控制
@@ -84,7 +85,7 @@
 - [struct] SubagentRun — 子代理运行记录（状态、步数、工具事件、文件读写）
 - [struct] GoalState — goal 模式状态（objective、turn budget、进度）
 - [struct] TodoEntry — todo 列表条目
-- [interface] eventSink — Wails 事件边界（App.emit 唯一出口，测试可注入）
+- [interface] eventSink — 事件边界（App.emit 唯一出口，测试可注入；Wails/网络均实现该接口）
 - [interface] pathutil.Runtime — 路径工具的宿主抽象（AppDataDir 注入）
 - [struct] limitedBuffer — 并发安全限长字节缓冲（命令输出捕获）
 - [typedef] openai.Tool — LLM 工具 schema（OpenAI function 格式，全部内置工具）
@@ -101,7 +102,7 @@
   - [call] runChat → streamModelResponse() → streamOpenAIChat/Responses/AnthropicMessages [adapter]
     - [ext] stream* → proxyHTTPClient().Do(req) // SSE 流式请求
     - [event] stream* → onEvent(modelStreamEvent) // 内容/推理/工具增量回调
-  - [event] runChat → a.emit("run:stream" / "run:image" / "tool:result") // 经 eventSink → Wails → 前端
+  - [event] runChat → a.emit("run:stream" / "run:image" / "tool:result") // 经 eventSink → fanout → Wails/网络 → 前端
   - [call] runChat → executeTool() // 模型请求执行工具
     - [call] executeTool → orch_*.go / biz_*.go 编排 [service]
       - [ext] orch_read/orch_file_ops → internal/tools/* // 纯算法层

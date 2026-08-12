@@ -53,7 +53,7 @@ Publishing the Release triggers `.github/workflows/build.yml`, which builds and 
 ├── internal/
 │   ├── app/                  # Agent 核心与编排（见下方文件命名约定）
 │   ├── builtin_skills/       # 内置 skill 嵌入资源（go:embed）
-│   ├── host/                 # 宿主事件适配（eventSink → Wails v3）
+│   ├── host/                 # 宿主事件适配（eventSink → Wails v3 / 网络）
 │   ├── provider/             # Provider 格式、Base URL 和 token 参数归一化
 │   ├── platform/process/     # 跨平台子进程窗口与进程树控制
 │   └── tools/                # 工具纯算法层（无 *App / ConfigState 依赖）
@@ -71,7 +71,7 @@ Publishing the Release triggers `.github/workflows/build.yml`, which builds and 
 |------|------|------|
 | 无 | 核心 | `app.go` 持有 chat loop、`*App` 长生命周期状态和 `executeTool()` dispatch |
 | `prov_` | Provider 适配 | OpenAI/Anthropic 流式适配、代理配置 |
-| `host_` | Host 桥接 | Wails 生命周期、窗口、对话框、eventSink 边界、系统托盘、子进程与任务栏控制 |
+| `host_` | Host 桥接 | Wails 生命周期、窗口、对话框、eventSink 边界、网络事件出口（SSE/轮询/WS 预留）、系统托盘、子进程与任务栏控制 |
 | `orch_` | 工具编排 | 绑定 `internal/tools/` 纯算法到 `*App` 状态：路径解析、并行调度、互斥锁、原子写入、批次策略、安全边界 |
 | `infra_` | 工具基础设施 | 跨编排共享：命令环境、结果信封与压缩、流式节流、DTO 别名与归一化 |
 | `biz_` | 业务模块 | 独立功能：skills 发现与加载、系统提示词构建、项目上下文、MCP 生命周期、版本检查、异步 Token 统计 |
@@ -627,7 +627,7 @@ These rules are required for future changes. They exist to keep Agent behavior d
 
 ## Wails Event Emission Map
 
-后端模块只调用 `App.emit()`；该方法与 `eventSink` 位于 `host_events.go`，Wails v3 适配器（`wailsEventSink`）再调用 `app.Event.Emit`。Wails 启动、窗口和系统对话框位于 `host_desktop.go`。前端在 `App.vue` 的 `bindRuntimeEvents()` 中通过 `Events.On()` 统一注册，`runtimeEventOffs` 跟踪卸载。Agent/runtime 模块不得直接调用 Wails 事件 API。
+后端模块只调用 `App.emit()`；该方法与 `eventSink` 位于 `host_events.go`，默认 Wails v3 适配器（`wailsEventSink`）再调用 `app.Event.Emit`。另支持可选网络出口：`host_network.go` 的 `networkEventSink`（SSE `/events`、轮询 `/poll`、`/healthz`），由 `ALLY_NETWORK_EVENTS=1` 环境变量启用（默认关闭），与 Wails 通过 `fanoutEventSink` 串行广播（panic 隔离、互不影响）。Wails 启动、窗口和系统对话框位于 `host_desktop.go`。前端在 `App.vue` 的 `bindRuntimeEvents()` 中通过 `Events.On()` 统一注册，`runtimeEventOffs` 跟踪卸载。Agent/runtime 模块不得直接调用 Wails 事件 API。
 
 ### 高频流（双层节流，仅这两条）
 
