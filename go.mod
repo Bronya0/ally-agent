@@ -1,6 +1,6 @@
 module ally-dev
 
-go 1.25.5
+go 1.26.5
 
 require (
 	github.com/andybalholm/brotli v1.2.2
@@ -10,10 +10,10 @@ require (
 	github.com/openai/openai-go v1.12.0
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/sashabaranov/go-openai v1.41.2
-	github.com/wailsapp/wails/v3 v3.0.0-beta.3
-	golang.org/x/net v0.55.0
-	golang.org/x/sys v0.45.0
-	golang.org/x/text v0.37.0
+	github.com/wailsapp/wails/v3 v3.0.0-beta.7
+	golang.org/x/net v0.57.0
+	golang.org/x/sys v0.47.0
+	golang.org/x/text v0.41.0
 )
 
 require (
@@ -39,5 +39,5 @@ require (
 	github.com/tidwall/sjson v1.2.5 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	go.yaml.in/yaml/v4 v4.0.0-rc.2 // indirect
-	golang.org/x/sync v0.20.0 // indirect
+	golang.org/x/sync v0.22.0 // indirect
 )
