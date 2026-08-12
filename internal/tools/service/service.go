@@ -133,6 +133,17 @@ func LooksLikeLongRunningService(command string) bool {
 		"wails dev",
 		"vite preview",
 		"vite dev",
+		"-m http.server",
+		"streamlit run",
+		"ng serve",
+		"react-scripts start",
+		"vue-cli-service serve",
+		"mkdocs serve",
+		"hugo server",
+		"php artisan serve",
+		"jupyter notebook",
+		"jupyter lab",
+		"nodemon",
 	}
 	for _, pattern := range patterns {
 		if strings.Contains(cmd, pattern) {

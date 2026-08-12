@@ -114,17 +114,3 @@ func validateRemoteCommandSafety(cmd string) error {
 	}
 	return nil
 }
-
-func firstAbsolutePathOutsideWorkspace(commandLine string, workspaceRoot string) string {
-	root := filepath.Clean(workspaceRoot)
-	for _, candidate := range command.AbsolutePathCandidates(commandLine) {
-		if candidate == "" {
-			continue
-		}
-		clean := filepath.Clean(candidate)
-		if !insideRoot(root, clean) && !insideAllyAgentDir(clean) {
-			return filepath.ToSlash(clean)
-		}
-	}
-	return ""
-}
