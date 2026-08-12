@@ -1436,6 +1436,7 @@ const builtinCommands = [
   { key: 'init', label: '/init', description: t('commands.init'), text: '', special: 'init' },
   { key: 'note', label: '/note', description: t('commands.note'), text: '', special: 'remember' },
   { key: 'lesson', label: '/lesson', description: t('commands.lesson'), text: '', special: 'lesson' },
+  { key: 'review', label: '/review', description: t('commands.review'), text: '', special: 'review' },
   { key: 'compact', label: '/compact', description: t('commands.compact'), text: '', special: 'compact' },
   { key: 'push', label: '/push', description: t('commands.push'), text: '', special: 'push' },
 ];
@@ -1497,6 +1498,19 @@ Update .ally/lessons.md in the workspace root:
 3. Update the matching line when the same lesson is already recorded; otherwise append a new line.
 4. Only record pitfalls that would recur elsewhere. Never record one-off compile errors, failed tests, plain coding mistakes, or tool errors.
 5. If nothing qualifies, say there is nothing to save and do not create the file.`;
+
+// REVIEW_PROMPT is the default instruction sent to the model when the user
+// runs /review. It currently asks for a focused review of the workspace's
+// uncommitted changes; adjust the wording here whenever the desired review
+// behavior changes.
+const REVIEW_PROMPT = `Review the current uncommitted code changes in this workspace.
+
+Steps:
+1. Run git status and git diff (including git diff --stat) to see what changed.
+2. Read the changed files as needed to understand the context.
+3. Report concisely in Chinese, covering: logic errors, edge cases, security issues, and obvious improvements.
+
+Keep the review focused and actionable. Do not modify any files — this is a review only.`;
 
 const activeSession = computed(() => sessions.value.find((session) => session.id === activeSessionId.value));
 
@@ -4409,7 +4423,7 @@ async function sendPrompt() {
       // Send as normal message
     } else if (slashContent) {
       // Check if it's a builtin command first
-      const builtinPrefixes = ['new','plan','goal','skills','clear','switch','sessions','reload','init','note','remember','compact','push'];
+      const builtinPrefixes = ['new','plan','goal','skills','clear','switch','sessions','reload','init','note','remember','compact','push','review'];
       const cmdName = slashContent.split(/\s+/)[0];
       const isBuiltin = builtinPrefixes.includes(cmdName);
       // Also check if any skill name matches
@@ -4970,6 +4984,12 @@ async function handleBuiltinCommand(command) {
   }
   if (command.special === 'lesson') {
     handleLessonCommand();
+    promptText.value = '';
+    commandMenuVisible.value = false;
+    return true;
+  }
+  if (command.special === 'review') {
+    handleReviewCommand();
     promptText.value = '';
     commandMenuVisible.value = false;
     return true;
@@ -6072,6 +6092,31 @@ function handleLessonCommand() {
       session.runId = '';
       session.isRunning = false;
       pushMessage('assistant', t('app.lesson.failed', { error: err }), { error: true, transientTurn: true });
+    });
+}
+
+function handleReviewCommand() {
+  const session = activeSession.value;
+  if (!session) return;
+  const history = session.messages
+    .filter(isModelHistoryMessage)
+    .map((msg) => ({ role: msg.role, content: msg.content }));
+  history.push({ role: 'user', content: REVIEW_PROMPT });
+
+  session.messages.push({ role: 'user', content: t('app.review.visibleText'), done: true });
+  if (isDefaultSessionTitle(session.title)) {
+    session.title = t('app.review.title');
+  }
+  scrollMessagesToBottom();
+  saveSessions();
+
+  markSessionRunning(session);
+  StartChat({ sessionId: session.id, message: '', messages: history, config: { ...config, extraRoots: session.extraRoots || [] } })
+    .catch((err) => {
+      markTransientTurn(session);
+      session.runId = '';
+      session.isRunning = false;
+      pushMessage('assistant', t('app.review.failed', { error: err }), { error: true, transientTurn: true });
     });
 }
 
