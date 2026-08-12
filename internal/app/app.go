@@ -37,6 +37,12 @@ const (
 	modelToolTailBytes               = 8 * 1024
 	maxModelGrepMatches              = 200
 	maxAgentSteps                    = 9999
+	// goalAutoContinueEnabled controls whether runChat keeps automatically
+	// continuing turns while a goal is active. Goal mode is currently unused,
+	// so this is disabled to keep every chat run a single turn; the goal
+	// tooling and state remain intact and flipping this back to true restores
+	// the original auto-continuation behavior.
+	goalAutoContinueEnabled          = false
 	defaultLLMRetries                = 6
 	defaultShellLimit                = 120
 	defaultHTTPTimeout               = 60
@@ -1663,8 +1669,9 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 				a.saveHistory(req.SessionID, messages)
 				success = true
 				emitRunEnd("run:done", nil)
-				// Goal mode: continue if active
-				if g := a.getActiveGoal(sessionID); g != nil {
+				// Goal mode: continue if active. Auto-continuation is disabled via
+				// goalAutoContinueEnabled; goal state/tools remain intact.
+				if g := a.getActiveGoal(sessionID); goalAutoContinueEnabled && g != nil {
 					bd := breakdownAcc.update(messages)
 					bd.ToolSchemas = estimateToolSchemaTokens(tools)
 					finalizeContextBreakdownTotal(&bd)
@@ -1806,7 +1813,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			}
 		}
 
-		if g := a.getActiveGoal(sessionID); g != nil && g.TurnsUsed < g.TurnBudget {
+		if g := a.getActiveGoal(sessionID); goalAutoContinueEnabled && g != nil && g.TurnsUsed < g.TurnBudget {
 			emitRunEnd("run:done", nil)
 			bd := breakdownAcc.update(messages)
 			bd.ToolSchemas = estimateToolSchemaTokens(tools)
@@ -1823,7 +1830,27 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 
 // Static tool schemas live in internal/tools/shared. These wrappers keep the
 // orchestration and existing package-level tests independent from that layout.
-func chatTools() []openai.Tool { return toolshared.Builtins() }
+// chatTools returns the built-in tool schemas exposed to the model. Goal-mode
+// tools (create_goal/update_goal/get_goal) are filtered out: goal mode is
+// unused and its auto-continuation is disabled (goalAutoContinueEnabled), so
+// the model must not be able to start a goal session. Their implementations
+// (executeTool dispatch, state, events) remain intact for compatibility.
+func chatTools() []openai.Tool {
+	hidden := map[string]bool{
+		"create_goal": true,
+		"update_goal": true,
+		"get_goal":    true,
+	}
+	tools := toolshared.Builtins()
+	filtered := make([]openai.Tool, 0, len(tools))
+	for _, tool := range tools {
+		if tool.Function != nil && hidden[tool.Function.Name] {
+			continue
+		}
+		filtered = append(filtered, tool)
+	}
+	return filtered
+}
 func rawFunctionTool(name, description string, parameters map[string]any) openai.Tool {
 	return toolshared.RawFunction(name, description, parameters)
 }

@@ -306,7 +306,7 @@ Built-in model-facing tools:
 | `memory_write` | Create/update one global memory Markdown file |
 | `subagent` | Spawn a sub-agent for a scoped task |
 | `scheduled_task` | Create, list, or delete temporary isolated Agent tasks for the current Ally process |
-| `create_goal`, `update_goal`, `get_goal` | Goal mode lifecycle |
+| `create_goal`, `update_goal`, `get_goal` | Goal mode lifecycle (currently hidden from the model: `chatTools()` filters them out, goal mode is unused) |
 | `skill` | Load an enabled skill |
 
 MCP tools are named:
@@ -492,7 +492,7 @@ Sub-agent UI: backend emits `sub:*` events; `sub:spawn` includes the parent tool
 Goal mode:
 
 - `create_goal` stores an active goal with objective, optional completion criterion, and turn budget.
-- `runChat()` can continue turns automatically while the goal remains active.
+- `runChat()` can continue turns automatically while the goal remains active, but auto-continuation is currently disabled via the `goalAutoContinueEnabled` switch in `app.go` (goal mode is unused; flipping it back to `true` restores the original behavior). The goal tools and state remain intact.
 - `update_goal` marks the goal `complete`, `blocked`, or `paused`.
 - Stable goal objective/rules remain in the system context; dynamic status and turn counters are appended near the request tail as `<ally-goal-progress>` to preserve provider prefix-cache reuse.
 
