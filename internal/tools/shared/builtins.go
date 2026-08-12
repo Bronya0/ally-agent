@@ -246,7 +246,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"target", "path"},
 		}),
-		functionTool("remote_run_command", "Run a non-interactive shell command in a remote SSH workspace. Uses system ssh BatchMode=yes and remote python3. Cwd defaults to the target workspace. Explicit deletion commands (rm, unlink, rmdir, del, erase, rd, remove-item) are refused with E_COMMAND_BLOCKED; use remote_delete_path for deletion. Other error codes: E_PATH_OUTSIDE, E_CWD_INVALID, E_LONG_RUNNING_COMMAND.", map[string]any{
+		functionTool("remote_run_command", "Run a non-interactive shell command in a remote SSH workspace. Uses system ssh BatchMode=yes and remote python3. Cwd defaults to the target workspace. Explicit deletion commands (rm, unlink, rmdir, del, erase, rd, remove-item) are refused with E_COMMAND_BLOCKED; use remote_delete_path for deletion. Use `grep -rn 'pattern' src/` to search remote code. Other error codes: E_PATH_OUTSIDE, E_CWD_INVALID, E_LONG_RUNNING_COMMAND.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"target":         map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Explicit SSH target plus workspace root, e.g. my-dev:/srv/app."},
