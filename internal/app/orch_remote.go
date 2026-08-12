@@ -127,7 +127,8 @@ def op_list(root, payload):
             depth = current[len(start_str):].count(os.sep)
         if depth >= max_depth:
             dirs[:] = []
-        dirs[:] = sorted([d for d in dirs if include_hidden or (not d.startswith(".") and not is_heavy_dir(d))])
+        else:
+            dirs[:] = sorted([d for d in dirs if include_hidden or (not d.startswith(".") and not is_heavy_dir(d))])
         names = [(d, True) for d in dirs] + [(f, False) for f in sorted(files) if include_hidden or not f.startswith(".")]
         for name, is_dir in names:
             full = os.path.join(current, name)
@@ -167,24 +168,44 @@ def op_write(root, payload):
     mkdirs = bool(payload.get("mkdirs"))
     overwrite = bool(payload.get("overwrite"))
     original_mode = None
-    try:
-        existing_st = path.stat()
-    except FileNotFoundError:
-        existing_st = None
-    if existing_st is not None:
-        if stat_mod.S_ISDIR(existing_st.st_mode):
-            raise ValueError("path is a directory")
-        if not overwrite:
-            raise FileExistsError("file already exists: " + payload.get("path", ""))
-        original_mode = existing_st.st_mode & 0o7777
+    if overwrite:
+        try:
+            existing_st = path.stat()
+        except FileNotFoundError:
+            existing_st = None
+        if existing_st is not None:
+            if stat_mod.S_ISDIR(existing_st.st_mode):
+                raise ValueError("path is a directory")
+            original_mode = existing_st.st_mode & 0o7777
     parent = path.parent
     if mkdirs:
         parent.mkdir(parents=True, exist_ok=True)
     elif not parent.exists():
         raise FileNotFoundError(str(parent))
-    data = base64.b64decode(payload.get("dataBase64", ""))
-    fd, tmp = tempfile.mkstemp(prefix=".ally-write-", dir=str(parent))
+    probe_created = False
+    if not overwrite:
+        # O_EXCL 原子探测（须在 mkdirs 之后）：目标已存在时立即失败，
+        # 消除 stat→replace 窗口内的 TOCTOU 竞态；探测创建的空文件
+        # 随后被 os.replace 原子覆盖，替换失败时由 finally 清理。
+        try:
+            probe_fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except (FileExistsError, PermissionError, IsADirectoryError):
+            # POSIX 对已存在目标抛 EEXIST、对目录抛 EISDIR；Windows 对目录抛 EACCES。
+            try:
+                if path.is_dir():
+                    raise ValueError("path is a directory")
+            except OSError:
+                pass
+            raise FileExistsError("file already exists: " + payload.get("path", ""))
+        probe_created = True
+        os.close(probe_fd)
+    data = None
+    fd = -1
+    tmp = None
+    replaced = False
     try:
+        data = base64.b64decode(payload.get("dataBase64", ""))
+        fd, tmp = tempfile.mkstemp(prefix=".ally-write-", dir=str(parent))
         if original_mode is not None:
             os.fchmod(fd, original_mode)
         with os.fdopen(fd, "wb") as f:
@@ -193,17 +214,27 @@ def op_write(root, payload):
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp, path)
+        replaced = True
     finally:
         if fd >= 0:
             try:
                 os.close(fd)
             except OSError:
                 pass
-        try:
-            if os.path.exists(tmp):
-                os.unlink(tmp)
-        except OSError:
-            pass
+        if tmp is not None:
+            try:
+                if os.path.exists(tmp):
+                    os.unlink(tmp)
+            except OSError:
+                pass
+        if probe_created and not replaced and os.path.exists(path):
+            # 替换失败时移除探针占位文件，避免残留空文件。
+            # 仅本次调用创建的探针且 replace 尚未覆盖它时才可能走到这里；
+            # 并发写同一路径不受支持（overwrite=false 语义本身排他）。
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
     st = path.stat()
     return {"path": as_posix_rel(root, path), "size": st.st_size, "mode": st.st_mode & 0o7777, "modTime": iso_mtime(st)}
 
@@ -276,8 +307,10 @@ def op_run(root, payload):
         shell = "/bin/bash" if os.path.exists("/bin/bash") else "/bin/sh"
     max_output = int(payload.get("maxOutput") or 131072)
     start = time.time()
-    preexec = os.setsid if hasattr(os, "setsid") else None
-    proc = subprocess.Popen(command, shell=True, cwd=str(cwd), executable=shell, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, preexec_fn=preexec)
+    # start_new_session 与 preexec_fn=os.setsid 等价，但不会触发
+    # Python 3.12+ 对 preexec_fn 的弃用警告；远端只可能是 posix。
+    new_session = hasattr(os, "setsid")
+    proc = subprocess.Popen(command, shell=True, cwd=str(cwd), executable=shell, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=new_session)
     out = bytearray()
     truncated = False
     timed_out = False
@@ -289,7 +322,7 @@ def op_run(root, payload):
         if time.time() > deadline:
             timed_out = True
             try:
-                if preexec:
+                if new_session:
                     os.killpg(proc.pid, signal.SIGKILL)
                 else:
                     proc.kill()
