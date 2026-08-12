@@ -1499,18 +1499,36 @@ Update .ally/lessons.md in the workspace root:
 4. Only record pitfalls that would recur elsewhere. Never record one-off compile errors, failed tests, plain coding mistakes, or tool errors.
 5. If nothing qualifies, say there is nothing to save and do not create the file.`;
 
-// REVIEW_PROMPT is the default instruction sent to the model when the user
-// runs /review. It currently asks for a focused review of the workspace's
-// uncommitted changes; adjust the wording here whenever the desired review
-// behavior changes.
+// REVIEW_PROMPT instructs the model when the user runs /review. Every review
+// MUST delegate to parallel sub-agents so the review is isolated from the
+// implementation, then the main agent verifies evidence and consolidates.
 const REVIEW_PROMPT = `Review the current uncommitted code changes in this workspace.
 
-Steps:
-1. Run git status and git diff (including git diff --stat) to see what changed.
-2. Read the changed files as needed to understand the context.
-3. Report concisely in Chinese, covering: logic errors, edge cases, security issues, and obvious improvements.
+Step 1 — Scope the change:
+Run git status and git diff --stat. Read the diff plus enough surrounding context to understand the intent.
 
-Keep the review focused and actionable. Do not modify any files — this is a review only.`;
+Step 2 — Delegate to sub-agents (mandatory):
+You MUST use the subagent tool for every review — never review directly. Spawn 2-3 parallel sub-agents, each with one focused lens:
+  1. correctness — logic errors, edge cases, error handling, resource leaks, concurrency races
+  2. security — injection, authn/authz, input validation, secrets & sensitive data exposure, plus the failure modes security-related changes introduce: e.g. a hardcoded secret moved into a database or vault must also work on a fresh install where that secret does not exist yet, must fail closed (never log the secret, never fall back to an insecure default), and must not silently break startup or existing deployments; also check missing env/config dependencies and whether the change weakens existing checks (removed validation, loosened permissions, disabled security gates)
+  3. architecture & maintainability — layering violations, duplication, dead code, missing or weakened tests (use this lens only for large or cross-module changes; small changes may skip it)
+Every sub-agent task must include all of the following:
+  (a) the changed file paths only — never paste the full diff into the task; let each sub-agent run git status / git diff / git diff --stat itself to inspect the actual changes;
+  (b) the full requirement — extract the user's complete requirement from the conversation history: the original request, acceptance criteria, business rules, and constraints (what inputs are invalid, what side effects are forbidden); pass that whole requirement to every sub-agent so it can judge whether the code meets it; if the history has no explicit requirement, state plainly that the requirement is unknown and have the sub-agent review against the code's apparent intent — never silently guess;
+  (c) that sub-agent's single lens (only the lens it owns, nothing else);
+  (d) output requirements — output is for the main agent to verify, not for the user: be complete, terse, professional, zero filler — just findings, each with file:line, a concrete trigger path, and a P0/P1/P2 grade; no greetings, disclaimers, explanatory prose, or markdown decoration;
+  (e) constraints — read-only, review only this change and its direct impact (not the whole project), never modify files, and stay pragmatic: do not over-investigate or chase rabbit holes — once your lens is covered, stop and report (deep dives waste time and tokens);
+  (f) deployment reality — for any changed code that now depends on something new (database records, environment variables, external services, config), check whether that dependency exists in a fresh install and in an existing deployment; if it may be missing, the code must fail safely and clearly, not silently misbehave or fall back to insecure defaults
+Keep the sub-agents fully independent: never share one sub-agent's conclusions with another. They may read files and run read-only commands (git diff, grep, tests), but must NOT modify any files.
+
+Step 3 — Verify and consolidate:
+Check the evidence for every reported issue yourself (file, line, trigger path) before accepting it. Drop findings you cannot confirm from the actual code, deduplicate across sub-agents keeping the strongest evidence per issue, and do not rubber-stamp sub-agent output.
+
+Final report — write it for a human, in the user's preferred language (match the language the user is using in the UI), easy to understand:
+- Present the issues as a Markdown table, one row per issue, with columns: 简述 (what it is), 风险 (risk), 工作量 (effort), 修复建议 (how to fix), 推荐修复 (recommendation: 强烈建议 / 建议 / 没必要). Keep each cell to one plain sentence.
+- Order rows by severity (P0 first). Above the table, add a two-to-three-line plain-language summary of the biggest risks in everyday words.
+- If nothing significant was found, say so plainly in one or two lines — no table needed.
+Do not modify any files — this is a review only.`;
 
 const activeSession = computed(() => sessions.value.find((session) => session.id === activeSessionId.value));
 
