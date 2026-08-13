@@ -33,39 +33,16 @@
             </div>
           </div>
 
-          <!-- 2) 月度热力图（固定当月） -->
-          <div class="stats-section">
-            <div class="chart-title">{{ $t('stats.monthHeatmap') }}</div>
-            <div class="heatmap-host">
-              <div class="heatmap-weekdays">
-                <span v-for="w in 7" :key="w" class="heatmap-weekday">
-                  {{ weekdayLabels[(w - 1) % 7] }}
-                </span>
-              </div>
-              <div class="heatmap-cells">
-                <div
-                  v-for="(cell, i) in heatmapCells"
-                  :key="i"
-                  class="heatmap-cell"
-                  :class="{ dim: !cell.inMonth || cell.isFuture }"
-                  :style="{ background: cell.color }"
-                  :title="`${cell.date} · ${fmtTokens(cell.total)}`"
-                >
-                  <span class="heatmap-day">{{ cell.day }}</span>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <!-- 3) 按天 Token 用量柱状图（固定近30天） -->
-          <div class="stats-section">
+          <!-- 2) 按天 Token 用量柱状图（固定近30天） + 3) 月度热力图 并排一行 -->
+          <div class="stats-grid">
+          <div class="stats-section chart-card">
             <div class="chart-title">{{ $t('stats.dailyBars') }}</div>
             <div class="chart-legend">
               <span class="legend-item"><i class="legend-dot input"></i>{{ $t('stats.input') }}</span>
               <span class="legend-item"><i class="legend-dot output"></i>{{ $t('stats.output') }}</span>
             </div>
             <div class="chart-host">
-              <svg class="stats-chart" viewBox="0 0 720 200" role="img" :aria-label="$t('stats.dailyBars')">
+              <svg class="stats-chart" :viewBox="`0 0 ${chartW} 200`" role="img" :aria-label="$t('stats.dailyBars')">
                 <g v-for="g in barGrid" :key="g.y">
                   <line :x1="padL" :x2="720 - padR" :y1="g.y" :y2="g.y" class="chart-grid" />
                   <text :x="padL + 4" :y="g.y - 5" class="chart-grid-label">{{ fmtTokens(g.value) }}</text>
@@ -98,20 +75,31 @@
               </div>
             </div>
           </div>
-
-          <!-- 4) 工作区 周/月 饼图（只显示 path 最后一段） -->
-          <div class="stats-grid">
-            <div class="stats-section pie-section">
-              <div class="chart-title">{{ $t('stats.workspaceWeek') }}</div>
-              <TokenPieChart :items="stats.workspaceWeek" />
-            </div>
-            <div class="stats-section pie-section">
-              <div class="chart-title">{{ $t('stats.workspaceMonth') }}</div>
-              <TokenPieChart :items="stats.workspaceMonth" />
+          <div class="stats-section chart-card">
+            <div class="chart-title">{{ $t('stats.monthHeatmap') }}</div>
+            <div class="heatmap-host">
+              <div class="heatmap-weekdays">
+                <span v-for="w in 7" :key="w" class="heatmap-weekday">
+                  {{ weekdayLabels[(w - 1) % 7] }}
+                </span>
+              </div>
+              <div class="heatmap-cells">
+                <div
+                  v-for="(cell, i) in heatmapCells"
+                  :key="i"
+                  class="heatmap-cell"
+                  :class="{ dim: !cell.inMonth || cell.isFuture }"
+                  :style="{ background: cell.color }"
+                  :title="`${cell.date} · ${fmtTokens(cell.total)}`"
+                >
+                  <span class="heatmap-day">{{ cell.day }}</span>
+                </div>
+              </div>
             </div>
           </div>
+          </div>
 
-          <!-- 5) 模型 周/月 饼图（不考虑 provider） -->
+          <!-- 4) 模型 周/月 饼图（不考虑 provider） -->
           <div class="stats-grid">
             <div class="stats-section pie-section">
               <div class="chart-title">{{ $t('stats.modelWeek') }}</div>
@@ -120,6 +108,18 @@
             <div class="stats-section pie-section">
               <div class="chart-title">{{ $t('stats.modelMonth') }}</div>
               <TokenPieChart :items="stats.modelMonth" />
+            </div>
+          </div>
+
+          <!-- 5) 工作区 周/月 饼图（只显示 path 最后一段） -->
+          <div class="stats-grid">
+            <div class="stats-section pie-section">
+              <div class="chart-title">{{ $t('stats.workspaceWeek') }}</div>
+              <TokenPieChart :items="stats.workspaceWeek" />
+            </div>
+            <div class="stats-section pie-section">
+              <div class="chart-title">{{ $t('stats.workspaceMonth') }}</div>
+              <TokenPieChart :items="stats.workspaceMonth" />
             </div>
           </div>
         </template>
@@ -249,7 +249,7 @@ const heatmapCells = computed(() => {
 });
 
 // ── 按天柱状图（固定近30天，输入/输出堆叠）──
-const chartW = 720;
+const chartW = 460;
 const padL = 46;
 const padR = 10;
 const padT = 12;
@@ -366,7 +366,7 @@ function showBarTooltip(event, bar) {
   min-width: 0;
 }
 .stat-label {
-  color: #8f8f8f;
+  color: #b8b8b8;
   font-size: 11px;
 }
 .stat-value {
@@ -378,7 +378,7 @@ function showBarTooltip(event, bar) {
 }
 .stat-sub {
   margin-top: 4px;
-  color: #777;
+  color: #a3a3a3;
   font-size: 11px;
   line-height: 1.5;
 }
@@ -482,35 +482,36 @@ function showBarTooltip(event, bar) {
 /* ── 月度热力图 ── */
 .heatmap-host {
   display: flex;
-  gap: 8px;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
 }
 .heatmap-weekdays {
   display: grid;
-  grid-template-rows: repeat(7, 26px);
-  gap: 3px;
-  padding-top: 0;
+  grid-template-columns: repeat(7, 38px);
+  gap: 4px;
 }
 .heatmap-weekday {
   display: flex;
   align-items: center;
+  justify-content: center;
   color: #6f6f6f;
   font-size: 10px;
-  height: 26px;
+  height: 20px;
 }
 .heatmap-cells {
   display: grid;
-  grid-template-columns: repeat(6, 1fr);
-  grid-auto-flow: column;
-  grid-template-rows: repeat(7, 26px);
-  gap: 3px;
-  flex: 1;
+  grid-template-columns: repeat(7, 38px);
+  grid-auto-flow: row;
+  grid-template-rows: repeat(6, 38px);
+  gap: 4px;
 }
 .heatmap-cell {
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 4px;
-  font-size: 10px;
+  border-radius: 5px;
+  font-size: 11px;
   color: #a8a8a8;
   cursor: default;
 }
@@ -528,11 +529,13 @@ function showBarTooltip(event, bar) {
   gap: 12px;
   margin-bottom: 6px;
 }
-.pie-section {
+.pie-section,
+.chart-card {
   border: 1px solid rgba(255, 255, 255, 0.07);
   border-radius: 10px;
   padding: 12px;
   background: rgba(255, 255, 255, 0.02);
+  min-width: 0;
 }
 
 .stats-empty {
