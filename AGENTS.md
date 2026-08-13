@@ -71,7 +71,7 @@ Publishing the Release triggers `.github/workflows/build.yml`, which builds and 
 |------|------|------|
 | 无 | 核心 | `app.go` 持有 chat loop、`*App` 长生命周期状态和 `executeTool()` dispatch |
 | `prov_` | Provider 适配 | OpenAI/Anthropic 流式适配、代理配置 |
-| `host_` | Host 桥接 | Wails 生命周期、窗口、对话框、eventSink 边界、网络事件出口（SSE/轮询/WS 预留）、系统托盘、子进程与任务栏控制 |
+| `host_` | Host 桥接 | Wails 生命周期、窗口、对话框、eventSink 边界、网络事件出口（SSE/轮询/WS 预留）、系统托盘、子进程与任务栏控制、桌面通知（`host_notifications.go`，任务完成/出错/取消提示音） |
 | `orch_` | 工具编排 | 绑定 `internal/tools/` 纯算法到 `*App` 状态：路径解析、并行调度、互斥锁、原子写入、批次策略、安全边界 |
 | `infra_` | 工具基础设施 | 跨编排共享：命令环境、结果信封与压缩、流式节流、DTO 别名与归一化 |
 | `biz_` | 业务模块 | 独立功能：skills 发现与加载、系统提示词构建、项目上下文、MCP 生命周期、版本检查、异步 Token 统计 |

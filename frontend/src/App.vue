@@ -66,11 +66,12 @@
                 <div v-if="showTodoPanel" :class="['todo-panel', { collapsed: todoPanelCollapsed }]">
                   <button class="todo-panel-header" :title="todoPanelCollapsed ? $t('app.todo.expand') : $t('app.todo.collapse')" @click="toggleTodoPanel">
                     <span>Todo</span>
-                    <span class="todo-panel-count">{{ activeTodoCount }}/{{ todos.length }}</span>
+                    <span class="todo-panel-count">{{ currentTodoNumber }}/{{ todos.length }}</span>
                     <span :class="['todo-panel-toggle', { expanded: !todoPanelCollapsed }]"></span>
                   </button>
                   <div v-show="!todoPanelCollapsed" ref="todoPanelListRef" class="todo-panel-list">
                     <div v-for="item in orderedTodoEntries" :key="item.key" :class="['todo-item', item.status]">
+                      <span class="todo-number">{{ item.number }}.</span>
                       <span class="todo-status">{{ item.status === 'done' ? '✓' : item.status === 'in_progress' ? '●' : '○' }}</span>
                       <span class="todo-title">{{ item.title }}</span>
                     </div>
@@ -412,7 +413,7 @@ import { buildVersion } from './utils/buildVersion.js';
 import { computeEditStats, formatEditStats } from './utils/diff.js';
 import { isNewerReleaseVersion } from './utils/versionCheck.mjs';
 import { findSessionWorkspaceTab, isEditableNavigationTarget, shouldAcceptRunTerminal } from './utils/sessionState.mjs';
-import { orderTodoPanelEntries } from './utils/todoPanel.mjs';
+import { orderTodoPanelEntries, todoFocusScrollDelta } from './utils/todoPanel.mjs';
 import { formatDateTime, naiveDateLocale, naiveLocale, reasoningEffortLabel, t, welcomeGreeting as localizedWelcomeGreeting } from './i18n.mjs';
 import {
   displaySourceMessages as buildDisplaySourceMessages,
@@ -1389,8 +1390,6 @@ const UPDATE_CHECK_INTERVAL_MS = 2 * 60 * 60 * 1000;
 const toolUpdateBuffers = new Map();
 let toolUpdateFlushScheduled = false;
 let toolUpdateFlushTimer = 0;
-let completionAudioContext = null;
-let lastCompletionSoundAt = 0;
 const pendingAttachments = ref([]);
 const attachmentInputRef = ref(null);
 const MAX_ATTACHMENTS_PER_MESSAGE = 8;
@@ -1645,6 +1644,12 @@ const activeSessionRunning = computed(() => !!activeSession.value?.isRunning);
 const scheduledTaskRunningCount = computed(() => scheduledTasks.value.filter((task) => task?.running).length);
 const serviceRunningCount = computed(() => services.value.filter((service) => ['starting', 'running'].includes(service?.status)).length);
 const activeTodoCount = computed(() => todos.value.filter((item) => item?.status !== 'done').length);
+// 面板标题显示"执行到第几个"：当前 in_progress 项在计划里的原始序号；
+// 没有进行中项（例如刚开始列计划）时显示 0 表示还没开始执行。
+const currentTodoNumber = computed(() => {
+  const index = todos.value.findIndex((item) => item?.status === 'in_progress');
+  return index >= 0 ? index + 1 : 0;
+});
 const activeGoal = computed(() => goalsBySession[activeSessionId.value] || null);
 const showTodoPanel = computed(() => todos.value.length > 0 && activeTodoCount.value > 0);
 const orderedTodoEntries = computed(() => orderTodoPanelEntries(todos.value));
@@ -1653,7 +1658,16 @@ function scrollTodoPanelToFocus() {
   if (todoPanelCollapsed.value) return;
   nextTick(() => {
     const list = todoPanelListRef.value;
-    if (list) list.scrollTop = 0;
+    if (!list) return;
+    // 已完成项按最新优先排在列表前部，固定滚到顶部会把进行中任务挤出可视区。
+    // 改为把当前 in_progress 项滚动到列表中部；没有进行中项时才回到顶部。
+    const current = list.querySelector('.todo-item.in_progress');
+    if (current) {
+      const delta = todoFocusScrollDelta(list.getBoundingClientRect(), current.getBoundingClientRect());
+      list.scrollTop += delta;
+      return;
+    }
+    list.scrollTop = 0;
   });
 }
 
@@ -3016,74 +3030,6 @@ function setAssistantCacheRate(session, runId, hit, miss, inputTokens, outputTok
   msg.runOutputTokens = out;
 }
 
-function getCompletionAudioContext() {
-  if (typeof window === 'undefined') return null;
-  const AudioCtor = window.AudioContext || window.webkitAudioContext;
-  if (!AudioCtor) return null;
-  if (!completionAudioContext) {
-    completionAudioContext = new AudioCtor();
-  }
-  return completionAudioContext;
-}
-
-function primeCompletionAudio() {
-  const ctx = getCompletionAudioContext();
-  if (!ctx || ctx.state !== 'suspended') return;
-  ctx.resume().catch(() => {});
-}
-
-function scheduleCompletionTone(ctx, frequency, start, duration, peakGain = 0.045) {
-  const oscillator = ctx.createOscillator();
-  const gain = ctx.createGain();
-  oscillator.type = 'sine';
-  oscillator.frequency.setValueAtTime(frequency, start);
-  gain.gain.setValueAtTime(0.0001, start);
-  gain.gain.exponentialRampToValueAtTime(peakGain, start + 0.018);
-  gain.gain.exponentialRampToValueAtTime(0.0001, start + duration);
-  oscillator.connect(gain);
-  gain.connect(ctx.destination);
-  oscillator.start(start);
-  oscillator.stop(start + duration + 0.02);
-  oscillator.onended = () => {
-    oscillator.disconnect();
-    gain.disconnect();
-  };
-}
-
-function playCompletionSound(kind = 'done') {
-  const nowMs = Date.now();
-  if (nowMs - lastCompletionSoundAt < 700) return;
-  lastCompletionSoundAt = nowMs;
-
-  const ctx = getCompletionAudioContext();
-  if (!ctx) return;
-  const play = () => {
-    const start = ctx.currentTime + 0.02;
-    if (kind === 'done') {
-      scheduleCompletionTone(ctx, 523.25, start, 0.16, 0.038);
-      scheduleCompletionTone(ctx, 659.25, start + 0.105, 0.18, 0.034);
-    } else {
-      scheduleCompletionTone(ctx, 392.0, start, 0.14, 0.032);
-      scheduleCompletionTone(ctx, 329.63, start + 0.095, 0.16, 0.028);
-    }
-  };
-
-  if (ctx.state === 'suspended') {
-    ctx.resume().then(play).catch(() => {});
-    return;
-  }
-  play();
-}
-
-function closeCompletionAudio() {
-  if (!completionAudioContext) return;
-  const ctx = completionAudioContext;
-  completionAudioContext = null;
-  if (ctx.state !== 'closed') {
-    ctx.close().catch(() => {});
-  }
-}
-
 function onRuntimeEvent(eventName, handler) {
   // Wails v3 delivers a WailsEvent wrapper ({ name, data, sender }), while
   // application handlers consume the backend payload directly. Keep this
@@ -3523,9 +3469,6 @@ function bindRuntimeEvents() {
     finishPersistableTurn(session, data.runId);
     session.runId = '';
     session.isRunning = false;
-    if (session.id === activeSessionId.value) {
-      playCompletionSound('done');
-    }
     persistCompletedSession(session);
     if (session.id === activeSessionId.value) refreshContextTokens(session.id);
   });
@@ -3557,7 +3500,6 @@ function bindRuntimeEvents() {
       const err = data.error || 'unknown error';
       const cancelled = err === '已取消' || err === 'Cancelled' || String(err).toLowerCase().includes('context canceled');
       session.messages.push({ role: 'assistant', content: cancelled ? t('app.run.cancelled') : t('app.run.failed', { error: err }), error: !cancelled, system: cancelled, runId: data.runId, transientTurn: true });
-      playCompletionSound(cancelled ? 'cancelled' : 'error');
     }
     setAssistantRoundDuration(session, data.runId, data.durationMs);
     setAssistantCacheRate(session, data.runId, data.cacheHit, data.cacheMiss, data.inputTokens, data.outputTokens);
@@ -3594,9 +3536,6 @@ function bindRuntimeEvents() {
     markTransientTurn(session, data.runId);
     session.runId = '';
     session.isRunning = false;
-    if (session.id === activeSessionId.value) {
-      playCompletionSound('cancelled');
-    }
     saveSessions();
     // Refresh token count after cancellation: streaming deltas and any tool
     // results added before cancellation are now part of the history and the
@@ -4413,7 +4352,6 @@ async function sendPrompt() {
   const text = promptText.value.trim();
   const attachments = pendingAttachments.value.map(att => ({ ...att }));
   if ((!text && attachments.length === 0) || session.runId) return;
-  primeCompletionAudio();
 
   // Resolve command: display label in UI, send expanded text to backend
   const matchedCommand = text.startsWith('/')
@@ -6127,6 +6065,7 @@ function handleReviewCommand() {
     .map((msg) => ({ role: msg.role, content: msg.content }));
   history.push({ role: 'user', content: REVIEW_PROMPT });
 
+  session.messages.push({ role: 'user', content: t('app.review.visibleText'), done: true });
   if (isDefaultSessionTitle(session.title)) {
     session.title = t('app.review.title');
   }
@@ -7392,10 +7331,6 @@ function handleGlobalKeydown(event) {
   }
 }
 
-function handleAudioUnlock() {
-  primeCompletionAudio();
-}
-
 // isDevBuild returns true for any build whose version is NOT a正式 release
 // tag (e.g. "v1.6.0"). Local dev builds use a timestamp ("v20260805-002211")
 // or the literal "dev" when ALLY_BUILD_VERSION is unset; neither should
@@ -7629,8 +7564,6 @@ onMounted(async () => {
   document.addEventListener('click', handleMermaidToolbarClick, true);
   document.addEventListener('click', handleCodeCopyClick, true);
   document.addEventListener('click', handleMarkdownLinkClick, true);
-  window.addEventListener('pointerdown', handleAudioUnlock, { once: true, passive: true });
-  window.addEventListener('keydown', handleAudioUnlock, { once: true });
   window.addEventListener('resize', refreshWindowMaximisedState);
   window.addEventListener('focus', refreshWindowMaximisedState);
   bindRuntimeEvents();
@@ -7654,8 +7587,6 @@ onUnmounted(() => {
   document.removeEventListener('click', handleMermaidToolbarClick, true);
   document.removeEventListener('click', handleCodeCopyClick, true);
   document.removeEventListener('click', handleMarkdownLinkClick, true);
-  window.removeEventListener('pointerdown', handleAudioUnlock);
-  window.removeEventListener('keydown', handleAudioUnlock);
   window.removeEventListener('resize', refreshWindowMaximisedState);
   window.removeEventListener('focus', refreshWindowMaximisedState);
   cleanupRuntimeEvents();
@@ -7679,6 +7610,5 @@ onUnmounted(() => {
   mermaidSvgCacheChars = 0;
   for (const att of pendingAttachments.value) releaseAttachmentPreview(att);
   for (const session of sessions.value) releaseSessionAttachments(session);
-  closeCompletionAudio();
 });
 </script>

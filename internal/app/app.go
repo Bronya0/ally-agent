@@ -22,21 +22,21 @@ import (
 )
 
 const (
-	appName                          = "Ally"
-	defaultModel                     = "deepseek-v4-flash"
-	defaultBaseURL                   = "https://api.deepseek.com"
-	defaultReasoningTag              = "reasoning_content"
-	maxReadFileBytes                 = 32 * 1024 * 1024
-	maxToolOutput                    = 128 * 1024
-	maxFinishedSubagents             = 50
-	maxSubagentToolCalls             = 100
-	maxModelToolOutput               = 12 * 1024
-	maxModelWebOutput                = 96 * 1024
-	maxCodeGraphPromptBytes          = 96 * 1024
-	modelToolHeadBytes               = 4 * 1024
-	modelToolTailBytes               = 8 * 1024
-	maxModelGrepMatches              = 200
-	maxAgentSteps                    = 9999
+	appName                 = "Ally"
+	defaultModel            = "deepseek-v4-flash"
+	defaultBaseURL          = "https://api.deepseek.com"
+	defaultReasoningTag     = "reasoning_content"
+	maxReadFileBytes        = 32 * 1024 * 1024
+	maxToolOutput           = 128 * 1024
+	maxFinishedSubagents    = 50
+	maxSubagentToolCalls    = 100
+	maxModelToolOutput      = 12 * 1024
+	maxModelWebOutput       = 96 * 1024
+	maxCodeGraphPromptBytes = 96 * 1024
+	modelToolHeadBytes      = 4 * 1024
+	modelToolTailBytes      = 8 * 1024
+	maxModelGrepMatches     = 200
+	maxAgentSteps           = 9999
 	// goalAutoContinueEnabled controls whether runChat keeps automatically
 	// continuing turns while a goal is active. Goal mode is currently unused,
 	// so this is disabled to keep every chat run a single turn; the goal
@@ -71,9 +71,9 @@ const (
 	// base64 data URL for multimodal model input. Base64 inflates by ~33%, and
 	// Anthropic's per-image limit is 5MB of base64 data, so the raw cap is
 	// 3.5MB (~4.7MB base64) to stay safe across all providers.
-	maxReadImageBytes = 3 * 1024 * 1024
-	maxSavedHistoryTokens            = 256 * 1024
-	maxSavedHistoryJSONBytes         = 8 * 1024 * 1024
+	maxReadImageBytes        = 3 * 1024 * 1024
+	maxSavedHistoryTokens    = 256 * 1024
+	maxSavedHistoryJSONBytes = 8 * 1024 * 1024
 	// Background image storage. Bytes are written to
 	// ~/.ally_agent/background.<ext> so config.json stays small; the
 	// filename is stored in ConfigState.BackgroundImage.
@@ -169,6 +169,11 @@ type App struct {
 	// tests and headless embeddings. Concrete Wails v3 types live only in
 	// host_desktop.go so core Agent code never imports the Wails runtime.
 	wails *wailsAppHandle
+
+	// notifier is the desktop notifications service injected by SetNotifier
+	// (host_notifications.go); nil in tests and headless embeddings.
+	notifier               completionNotifier
+	lastCompletionNotifyAt time.Time
 
 	mu             sync.Mutex
 	config         ConfigState
@@ -738,10 +743,10 @@ type CommandResult struct {
 	Output         string `json:"output"`
 	OutputFilePath string `json:"outputFilePath,omitempty"`
 	ExitCode       int    `json:"exitCode"`
-	TimedOut   bool   `json:"timedOut"`
-	Cancelled  bool   `json:"cancelled"`
-	DurationMS int64  `json:"durationMs"`
-	Truncated  bool   `json:"truncated"`
+	TimedOut       bool   `json:"timedOut"`
+	Cancelled      bool   `json:"cancelled"`
+	DurationMS     int64  `json:"durationMs"`
+	Truncated      bool   `json:"truncated"`
 }
 
 type HTTPRequestToolRequest struct {
@@ -1475,7 +1480,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 	// message — a per-Run cache efficiency number, not a per-turn one.
 	var runCacheHit, runCacheMiss int
 	var runInputTokens, runOutputTokens int
-	emitRunEnd := func(event string, payload map[string]any) {
+	emitRunEnd := func(event string, kind string, payload map[string]any) {
 		if payload == nil {
 			payload = map[string]any{}
 		}
@@ -1487,6 +1492,10 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 		payload["inputTokens"] = runInputTokens
 		payload["outputTokens"] = runOutputTokens
 		a.emit(event, payload)
+		// 任务结束的系统提示音（done/error/cancelled），经桌面通知服务
+		// 播放。服务不可用（headless/测试/平台后端失败）时是静默 no-op。
+		// kind 由调用点显式给出，避免从用户可见文案反推状态。
+		a.notifyCompletion(kind, cfg.Workspace)
 	}
 
 	continuationPrompt := "Continue working on the goal. Check if the goal is complete. If so, call update_goal with status=complete. If blocked, call update_goal with status=blocked."
@@ -1504,7 +1513,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 				// 记录用户主动取消标记，让下一轮模型能区分"用户中断"与
 				// provider 报错等其他原因导致的未完成回合。
 				messages = append(messages, cancelledTurnMarker())
-				emitRunEnd("run:error", map[string]any{"error": "已取消"})
+				emitRunEnd("run:error", "cancelled", map[string]any{"error": "已取消"})
 				return
 			default:
 			} // Update live breakdown for context display (includes all tool calls/results)
@@ -1625,10 +1634,10 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 				// 此处与 step 开头的 ctx.Done() 分支等价,同样写入取消标记后返回。
 				if errors.Is(err, context.Canceled) {
 					messages = append(messages, cancelledTurnMarker())
-					emitRunEnd("run:error", map[string]any{"error": "已取消"})
+					emitRunEnd("run:error", "cancelled", map[string]any{"error": "已取消"})
 					return
 				}
-				emitRunEnd("run:error", map[string]any{"error": err.Error()})
+				emitRunEnd("run:error", "error", map[string]any{"error": err.Error()})
 				return
 			}
 
@@ -1644,7 +1653,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 				fallbackOutput = estimateCompletionTokens(content, reasoning, toolCalls)
 			}
 			a.recordWorkspaceTokenUsage(cfg.Workspace, modelResp.Usage, fallbackInput, fallbackOutput)
-			a.recordTokenStats(cfg.ProviderName, cfg.Model, cfg.Workspace, sessionID, "main", modelResp.Usage, fallbackInput, fallbackOutput)
+			a.recordTokenStats(cfg.Model, cfg.Workspace, modelResp.Usage, fallbackInput, fallbackOutput)
 			if modelResp.Usage != nil {
 				runCacheHit += modelResp.Usage.CacheHitTokens
 				runCacheMiss += modelResp.Usage.CacheMissTokens
@@ -1659,7 +1668,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 						ReasoningContent: reasoning,
 					})
 				}
-				emitRunEnd("run:error", map[string]any{"error": stopErr.Error(), "stopReason": modelResp.StopReason})
+				emitRunEnd("run:error", "error", map[string]any{"error": stopErr.Error(), "stopReason": modelResp.StopReason})
 				return
 			}
 			if len(toolCalls) == 0 {
@@ -1668,7 +1677,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 				}
 				a.saveHistory(req.SessionID, messages)
 				success = true
-				emitRunEnd("run:done", nil)
+				emitRunEnd("run:done", "done", nil)
 				// Goal mode: continue if active. Auto-continuation is disabled via
 				// goalAutoContinueEnabled; goal state/tools remain intact.
 				if g := a.getActiveGoal(sessionID); goalAutoContinueEnabled && g != nil {
@@ -1681,7 +1690,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 					}
 					if g.TurnBudget > 0 && g.TurnsUsed >= g.TurnBudget {
 						a.updateGoal(sessionID, "blocked", "turn budget reached")
-						emitRunEnd("run:error", map[string]any{"error": "goal turn budget reached"})
+						emitRunEnd("run:error", "error", map[string]any{"error": "goal turn budget reached"})
 						return
 					}
 					step = maxAgentSteps
@@ -1814,7 +1823,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 		}
 
 		if g := a.getActiveGoal(sessionID); goalAutoContinueEnabled && g != nil && g.TurnsUsed < g.TurnBudget {
-			emitRunEnd("run:done", nil)
+			emitRunEnd("run:done", "done", nil)
 			bd := breakdownAcc.update(messages)
 			bd.ToolSchemas = estimateToolSchemaTokens(tools)
 			finalizeContextBreakdownTotal(&bd)
@@ -1823,7 +1832,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			}
 			continue
 		}
-		emitRunEnd("run:error", map[string]any{"error": "达到最大 agent 步数，已停止"})
+		emitRunEnd("run:error", "error", map[string]any{"error": "达到最大 agent 步数，已停止"})
 		return
 	}
 }

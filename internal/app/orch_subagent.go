@@ -215,11 +215,8 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 			fallbackOutput = estimateCompletionTokens(modelResp.Content, modelResp.Reasoning, modelResp.ToolCalls)
 		}
 		a.recordTokenStats(
-			cfg.ProviderName,
 			model,
 			cfg.Workspace,
-			sessionID,
-			"subagent",
 			modelResp.Usage,
 			fallbackInput,
 			fallbackOutput,

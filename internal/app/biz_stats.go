@@ -30,7 +30,6 @@ const (
 	statsSubDir               = "stats"
 	statsRetentionDays        = 90
 	statsFlushInterval        = 5 * time.Second
-	statsMaxRangeDays         = 90
 	statsQueueSize            = 2048
 	statsMaxRecordsPerDay     = 10000
 	statsMaxTotalRecords      = 20000
@@ -39,7 +38,9 @@ const (
 	statsMaxTokensPerRecord   = 1_000_000_000
 	statsMaxRequestsPerRecord = 1_000_000
 	statsShutdownTimeout      = 10 * time.Second
-	statsMaxDaySeries         = 12
+	statsPieSliceLimit        = 10
+	statsDailyRangeDays       = 30
+	statsUnknownName          = "unknown"
 )
 
 func statsDir() string { return filepath.Join(appDataDir(), statsSubDir) }
@@ -48,11 +49,8 @@ func statsDateKey(ts int64) string { return time.UnixMilli(ts).Format("2006-01-0
 
 // statsRecord is a single LLM usage event.
 type statsRecord struct {
-	Provider        string `json:"provider,omitempty"`
 	Model           string `json:"model"`
 	Workspace       string `json:"workspace"`
-	SessionID       string `json:"sessionId"`
-	Source          string `json:"source,omitempty"`
 	Ts              int64  `json:"ts"`
 	InputTokens     int    `json:"inputTokens"`
 	OutputTokens    int    `json:"outputTokens"`
@@ -101,14 +99,11 @@ func (s *statsRecorder) record(r statsRecord) {
 	if r.Ts == 0 {
 		r.Ts = time.Now().UnixMilli()
 	}
-	if r.Provider == "" {
-		r.Provider = "unknown"
-	}
 	if r.Model == "" {
-		r.Model = "unknown"
+		r.Model = statsUnknownName
 	}
-	if r.Source == "" {
-		r.Source = "main"
+	if r.Workspace == "" {
+		r.Workspace = statsUnknownName
 	}
 	if r.Requests <= 0 {
 		r.Requests = 1
@@ -284,10 +279,19 @@ func (s *statsRecorder) flush() {
 	}
 	days := make(map[string][]statsRecord, len(s.dirtyDays))
 	for date := range s.dirtyDays {
-		days[date] = append([]statsRecord(nil), s.days[date]...)
+		records := s.days[date]
+		if len(records) == 0 {
+			// 整日记录已被逐出（dropOldestStatsRecord 删除了该日），
+			// 没有可落盘的数据：跳过，避免把 null 写进日文件。
+			continue
+		}
+		days[date] = append([]statsRecord(nil), records...)
 	}
 	s.dirtyDays = map[string]bool{}
 	s.mu.Unlock()
+	if len(days) == 0 {
+		return
+	}
 
 	dir := s.storageDir
 	if strings.TrimSpace(dir) == "" {
@@ -490,8 +494,7 @@ func readStatsDayFile(path, dateStr string) ([]statsRecord, error) {
 
 func validLoadedStatsRecord(record statsRecord, dateStr string) bool {
 	return record.Ts > 0 && statsDateKey(record.Ts) == dateStr &&
-		len(record.Provider) <= 128 && len(record.Model) <= 256 &&
-		len(record.Workspace) <= 1024 && len(record.SessionID) <= 256 && len(record.Source) <= 64 &&
+		len(record.Model) <= 256 && len(record.Workspace) <= 1024 &&
 		record.InputTokens >= 0 && record.InputTokens <= statsMaxTokensPerRecord &&
 		record.OutputTokens >= 0 && record.OutputTokens <= statsMaxTokensPerRecord &&
 		record.CacheHitTokens >= 0 && record.CacheHitTokens <= statsMaxTokensPerRecord &&
@@ -501,7 +504,7 @@ func validLoadedStatsRecord(record statsRecord, dateStr string) bool {
 
 // recordTokenStats is a fire-and-forget hook called after each LLM step
 // (main chat loop and sub-agents). It never blocks the caller.
-func (a *App) recordTokenStats(provider, model, workspace, sessionID, source string, usage *modelUsage, fallbackInput, fallbackOutput int) {
+func (a *App) recordTokenStats(model, workspace string, usage *modelUsage, fallbackInput, fallbackOutput int) {
 	if a.stats == nil {
 		return
 	}
@@ -522,15 +525,9 @@ func (a *App) recordTokenStats(provider, model, workspace, sessionID, source str
 	if input <= 0 && output <= 0 {
 		return
 	}
-	if strings.HasPrefix(sessionID, "scheduled:") {
-		source = "scheduled"
-	}
 	a.stats.record(statsRecord{
-		Provider:        provider,
 		Model:           model,
 		Workspace:       workspace,
-		SessionID:       sessionID,
-		Source:          source,
 		Ts:              time.Now().UnixMilli(),
 		InputTokens:     input,
 		OutputTokens:    output,
@@ -540,27 +537,27 @@ func (a *App) recordTokenStats(provider, model, workspace, sessionID, source str
 	})
 }
 
-// TokenStatsModel aggregates usage for one model or workspace.
-type TokenStatsModel struct {
-	Name            string  `json:"name"`
+// ── Dashboard aggregation ──
+//
+// GetTokenStats returns everything the Token Usage dashboard needs in one
+// call: a summary row (today / 7 days / month), a fixed 30-day daily bar
+// chart, a monthly heatmap, and workspace / model breakdowns for the current
+// week and month. Computed from a bounded in-memory snapshot, no disk IO.
+
+// TokenStatsSummary aggregates usage over one fixed range.
+type TokenStatsSummary struct {
+	TotalTokens     int     `json:"totalTokens"`
 	InputTokens     int     `json:"inputTokens"`
 	OutputTokens    int     `json:"outputTokens"`
 	CacheHitTokens  int     `json:"cacheHitTokens"`
 	CacheMissTokens int     `json:"cacheMissTokens"`
+	AvgPerRequest   int     `json:"avgPerRequest"`
+	CacheHitRate    float64 `json:"cacheHitRate"` // 0-1 over hit+miss prompt tokens
 	Requests        int     `json:"requests"`
-	Share           float64 `json:"share"` // share of total tokens (0-1)
 }
 
-// TokenStatsDaySeries holds per-day token series for one named category entry
-// (model, provider, source, or workspace), aligned by index with ByDay.
-type TokenStatsDaySeries struct {
-	Name         string `json:"name"`
-	InputTokens  []int  `json:"inputTokens"`
-	OutputTokens []int  `json:"outputTokens"`
-}
-
-// TokenStatsDay aggregates usage for one calendar day.
-type TokenStatsDay struct {
+// TokenDailyStat aggregates usage for one calendar day (zero-filled).
+type TokenDailyStat struct {
 	Date            string `json:"date"`
 	InputTokens     int    `json:"inputTokens"`
 	OutputTokens    int    `json:"outputTokens"`
@@ -569,50 +566,32 @@ type TokenStatsDay struct {
 	Requests        int    `json:"requests"`
 }
 
-// TokenStatsHour aggregates usage for one hour of the day (0-23).
-type TokenStatsHour struct {
-	Hour            int `json:"hour"`
-	InputTokens     int `json:"inputTokens"`
-	OutputTokens    int `json:"outputTokens"`
-	CacheHitTokens  int `json:"cacheHitTokens"`
-	CacheMissTokens int `json:"cacheMissTokens"`
-	Requests        int `json:"requests"`
+// TokenDimensionStat aggregates usage for one workspace or model.
+type TokenDimensionStat struct {
+	Name         string `json:"name"`               // display name (workspace basename or model)
+	FullName     string `json:"fullName,omitempty"` // original workspace path when shortened
+	InputTokens  int    `json:"inputTokens"`
+	OutputTokens int    `json:"outputTokens"`
+	Requests     int    `json:"requests"`
 }
 
 // TokenStatsResult is the aggregated response for GetTokenStats.
 type TokenStatsResult struct {
-	OK                   bool                  `json:"ok"`
-	Error                string                `json:"error,omitempty"`
-	RangeDays            int                   `json:"rangeDays"`
-	FromTs               int64                 `json:"fromTs"`
-	ToTs                 int64                 `json:"toTs"`
-	TotalInputTokens     int                   `json:"totalInputTokens"`
-	TotalOutputTokens    int                   `json:"totalOutputTokens"`
-	TotalCacheHitTokens  int                   `json:"totalCacheHitTokens"`
-	TotalCacheMissTokens int                   `json:"totalCacheMissTokens"`
-	TotalRequests        int                   `json:"totalRequests"`
-	UniqueSessions       int                   `json:"uniqueSessions"`
-	ActiveDays           int                   `json:"activeDays"`
-	CacheHitRate         float64               `json:"cacheHitRate"` // 0-1 over prompt tokens
-	ByProvider           []TokenStatsModel     `json:"byProvider"`
-	ByModel              []TokenStatsModel     `json:"byModel"`
-	ByWorkspace          []TokenStatsModel     `json:"byWorkspace"`
-	BySource             []TokenStatsModel     `json:"bySource"`
-	ByProviderDay        []TokenStatsDaySeries `json:"byProviderDay"`
-	ByModelDay           []TokenStatsDaySeries `json:"byModelDay"`
-	ByWorkspaceDay       []TokenStatsDaySeries `json:"byWorkspaceDay"`
-	BySourceDay          []TokenStatsDaySeries `json:"bySourceDay"`
-	ByDay                []TokenStatsDay       `json:"byDay"`
-	ByHour               []TokenStatsHour      `json:"byHour"`
+	OK             bool                 `json:"ok"`
+	Error          string               `json:"error,omitempty"`
+	SummaryToday   TokenStatsSummary    `json:"summaryToday"`
+	Summary7Days   TokenStatsSummary    `json:"summary7Days"`
+	SummaryMonth   TokenStatsSummary    `json:"summaryMonth"`
+	Daily          []TokenDailyStat     `json:"daily"` // fixed 30 days, oldest first
+	WorkspaceWeek  []TokenDimensionStat `json:"workspaceWeek"`
+	WorkspaceMonth []TokenDimensionStat `json:"workspaceMonth"`
+	ModelWeek      []TokenDimensionStat `json:"modelWeek"`
+	ModelMonth     []TokenDimensionStat `json:"modelMonth"`
 }
 
-// GetTokenStats aggregates recorded usage for the last rangeDays (1-90,
-// default 30). It is computed from in-memory state, so it is safe to call
-// while chats are running and does not perform disk IO.
-func (a *App) GetTokenStats(rangeDays int) TokenStatsResult {
-	if rangeDays <= 0 || rangeDays > statsMaxRangeDays {
-		rangeDays = 30
-	}
+// GetTokenStats aggregates recorded usage for the dashboard. It is computed
+// from in-memory state, so it is safe to call while chats are running.
+func (a *App) GetTokenStats() TokenStatsResult {
 	s := a.stats
 	if s == nil {
 		return TokenStatsResult{OK: false, Error: "stats not initialized"}
@@ -620,39 +599,15 @@ func (a *App) GetTokenStats(rangeDays int) TokenStatsResult {
 	// Include telemetry still waiting in the non-blocking queue. This work is
 	// initiated by the dashboard request, never by the chat hot path.
 	s.drainQueue()
+
 	now := time.Now()
-	midnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
-	cutoff := midnight.AddDate(0, 0, -(rangeDays - 1))
-	cutoffMs := cutoff.UnixMilli()
-	cutoffStr := cutoff.Format("2006-01-02")
-
-	result := TokenStatsResult{OK: true, RangeDays: rangeDays, FromTs: cutoffMs, ToTs: now.UnixMilli()}
-
-	providerIdx := map[string]int{}
-	modelIdx := map[string]int{}
-	wsIdx := map[string]int{}
-	sourceIdx := map[string]int{}
-	providerDay := map[string]*statsDaySeriesAccum{}
-	modelDay := map[string]*statsDaySeriesAccum{}
-	workspaceDay := map[string]*statsDaySeriesAccum{}
-	sourceDay := map[string]*statsDaySeriesAccum{}
-	sessions := map[string]struct{}{}
-	activeDates := map[string]struct{}{}
-	dayIdx := map[string]int{}
-	hours := make([]TokenStatsHour, 24)
-	for i := range hours {
-		hours[i].Hour = i
-	}
-
-	// Continuous day buckets (zero-filled) so the frontend can draw a clean
-	// series without gaps.
-	for i := 0; i < rangeDays; i++ {
-		d := cutoff.AddDate(0, 0, i).Format("2006-01-02")
-		dayIdx[d] = len(result.ByDay)
-		result.ByDay = append(result.ByDay, TokenStatsDay{Date: d})
-	}
-
+	midnight, monthStart, weekStart, dailyStart, snapshotStart := statsWindows(now)
+	nowMs := now.UnixMilli()
+	weekStartMs := weekStart.UnixMilli()
+	monthStartMs := monthStart.UnixMilli()
+	cutoffStr := snapshotStart.Format("2006-01-02")
 	retentionCutoffStr := midnight.AddDate(0, 0, -(statsRetentionDays - 1)).Format("2006-01-02")
+
 	s.mu.Lock()
 	for date := range s.days {
 		if date < retentionCutoffStr {
@@ -660,7 +615,7 @@ func (a *App) GetTokenStats(rangeDays int) TokenStatsResult {
 			delete(s.dirtyDays, date)
 		}
 	}
-	daysSnapshot := make(map[string][]statsRecord, rangeDays)
+	daysSnapshot := make(map[string][]statsRecord, len(s.days))
 	for date, records := range s.days {
 		if date < cutoffStr {
 			continue
@@ -668,167 +623,162 @@ func (a *App) GetTokenStats(rangeDays int) TokenStatsResult {
 		daysSnapshot[date] = append([]statsRecord(nil), records...)
 	}
 	s.mu.Unlock()
-	for date, records := range daysSnapshot {
-		if date < cutoffStr {
+
+	all := make([]statsRecord, 0, 4096)
+	for _, records := range daysSnapshot {
+		all = append(all, records...)
+	}
+
+	result := TokenStatsResult{OK: true}
+	result.SummaryToday = summarizeStatsRecords(statsRecordsInRange(all, midnight.UnixMilli(), nowMs))
+	result.Summary7Days = summarizeStatsRecords(statsRecordsInRange(all, midnight.AddDate(0, 0, -6).UnixMilli(), nowMs))
+	result.SummaryMonth = summarizeStatsRecords(statsRecordsInRange(all, monthStartMs, nowMs))
+	result.Daily = buildStatsDaily(statsRecordsInRange(all, dailyStart.UnixMilli(), nowMs), dailyStart, statsDailyRangeDays)
+	result.WorkspaceWeek = buildStatsDimension(statsRecordsInRange(all, weekStartMs, nowMs), workspaceKey, workspaceDisplayName)
+	result.WorkspaceMonth = buildStatsDimension(statsRecordsInRange(all, monthStartMs, nowMs), workspaceKey, workspaceDisplayName)
+	result.ModelWeek = buildStatsDimension(statsRecordsInRange(all, weekStartMs, nowMs), modelKey, nil)
+	result.ModelMonth = buildStatsDimension(statsRecordsInRange(all, monthStartMs, nowMs), modelKey, nil)
+	return result
+}
+
+func workspaceKey(r statsRecord) string { return r.Workspace }
+func modelKey(r statsRecord) string     { return r.Model }
+
+// statsWindows computes the dashboard time windows for a given "now".
+// Extracted so month/week boundary behavior is unit-testable with fixed dates.
+// The snapshot must cover the earlier of the daily bar window and the month
+// window: on a 31-day month's last day, day 1 falls before today-29 and would
+// otherwise be dropped from the monthly summary and month pies.
+func statsWindows(now time.Time) (midnight, monthStart, weekStart, dailyStart, snapshotStart time.Time) {
+	midnight = time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	monthStart = time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+	// 周一起始（与热力图一致）：Monday = 0 .. Sunday = 6。
+	weekStart = midnight.AddDate(0, 0, -int((midnight.Weekday()+6)%7))
+	dailyStart = midnight.AddDate(0, 0, -(statsDailyRangeDays - 1))
+	snapshotStart = dailyStart
+	if monthStart.Before(snapshotStart) {
+		snapshotStart = monthStart
+	}
+	return
+}
+
+// workspaceDisplayName keeps only the last path segment of a workspace path
+// (works across Windows backslashes and POSIX slashes).
+func workspaceDisplayName(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" || path == statsUnknownName {
+		return statsUnknownName
+	}
+	trimmed := strings.TrimRight(path, `/\`)
+	if idx := strings.LastIndexAny(trimmed, `/\`); idx >= 0 && idx < len(trimmed)-1 {
+		return trimmed[idx+1:]
+	}
+	if trimmed != "" {
+		return trimmed
+	}
+	return statsUnknownName
+}
+
+func statsRecordsInRange(records []statsRecord, fromMs, toMs int64) []statsRecord {
+	out := make([]statsRecord, 0, len(records))
+	for _, r := range records {
+		if r.Ts >= fromMs && r.Ts <= toMs {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+func summarizeStatsRecords(records []statsRecord) TokenStatsSummary {
+	var s TokenStatsSummary
+	for _, r := range records {
+		s.TotalTokens += r.InputTokens + r.OutputTokens
+		s.InputTokens += r.InputTokens
+		s.OutputTokens += r.OutputTokens
+		s.CacheHitTokens += r.CacheHitTokens
+		s.CacheMissTokens += r.CacheMissTokens
+		s.Requests += r.Requests
+	}
+	if s.Requests > 0 {
+		s.AvgPerRequest = s.TotalTokens / s.Requests
+	}
+	if hitMiss := s.CacheHitTokens + s.CacheMissTokens; hitMiss > 0 {
+		s.CacheHitRate = float64(s.CacheHitTokens) / float64(hitMiss)
+	}
+	return s
+}
+
+// buildStatsDaily zero-fills a continuous day range so the bar chart has no
+// gaps.
+func buildStatsDaily(records []statsRecord, start time.Time, days int) []TokenDailyStat {
+	daily := make([]TokenDailyStat, days)
+	index := make(map[string]int, days)
+	for i := 0; i < days; i++ {
+		d := start.AddDate(0, 0, i)
+		daily[i].Date = d.Format("2006-01-02")
+		index[daily[i].Date] = i
+	}
+	for _, r := range records {
+		i, ok := index[statsDateKey(r.Ts)]
+		if !ok {
 			continue
 		}
-		for _, r := range records {
-			if r.Ts < cutoffMs {
-				continue
-			}
-			result.TotalInputTokens += r.InputTokens
-			result.TotalOutputTokens += r.OutputTokens
-			result.TotalCacheHitTokens += r.CacheHitTokens
-			result.TotalCacheMissTokens += r.CacheMissTokens
-			result.TotalRequests += r.Requests
-			if r.SessionID != "" {
-				sessions[r.SessionID] = struct{}{}
-			}
-			activeDates[statsDateKey(r.Ts)] = struct{}{}
+		d := &daily[i]
+		d.InputTokens += r.InputTokens
+		d.OutputTokens += r.OutputTokens
+		d.CacheHitTokens += r.CacheHitTokens
+		d.CacheMissTokens += r.CacheMissTokens
+		d.Requests += r.Requests
+	}
+	return daily
+}
 
-			provider := r.Provider
-			if provider == "" {
-				provider = "unknown"
-			}
-			accumulateStatsModel(&result.ByProvider, providerIdx, provider, r)
-			accumulateStatsModel(&result.ByModel, modelIdx, r.Model, r)
-			accumulateStatsModel(&result.ByWorkspace, wsIdx, r.Workspace, r)
-			source := r.Source
-			if source == "" {
-				source = "main"
-			}
-			accumulateStatsModel(&result.BySource, sourceIdx, source, r)
-
-			if i, ok := dayIdx[statsDateKey(r.Ts)]; ok {
-				d := &result.ByDay[i]
-				d.InputTokens += r.InputTokens
-				d.OutputTokens += r.OutputTokens
-				d.CacheHitTokens += r.CacheHitTokens
-				d.CacheMissTokens += r.CacheMissTokens
-				d.Requests += r.Requests
-				accumulateDaySeries(providerDay, i, rangeDays, provider, r.InputTokens, r.OutputTokens)
-				accumulateDaySeries(modelDay, i, rangeDays, r.Model, r.InputTokens, r.OutputTokens)
-				accumulateDaySeries(workspaceDay, i, rangeDays, r.Workspace, r.InputTokens, r.OutputTokens)
-				accumulateDaySeries(sourceDay, i, rangeDays, source, r.InputTokens, r.OutputTokens)
-			}
-
-			h := time.UnixMilli(r.Ts).Hour()
-			hh := &hours[h]
-			hh.InputTokens += r.InputTokens
-			hh.OutputTokens += r.OutputTokens
-			hh.CacheHitTokens += r.CacheHitTokens
-			hh.CacheMissTokens += r.CacheMissTokens
-			hh.Requests += r.Requests
+// buildStatsDimension aggregates records by a key (workspace path or model)
+// and returns the top slices, sorted by total tokens descending. displayFn
+// may be nil (identity) — used for models where the key is already the name.
+func buildStatsDimension(records []statsRecord, keyFn func(statsRecord) string, displayFn func(string) string) []TokenDimensionStat {
+	index := map[string]int{}
+	items := make([]TokenDimensionStat, 0, 8)
+	for _, r := range records {
+		key := keyFn(r)
+		if key == "" {
+			key = statsUnknownName
+		}
+		name := key
+		if displayFn != nil {
+			name = displayFn(key)
+		}
+		i, ok := index[key]
+		if !ok {
+			index[key] = len(items)
+			items = append(items, TokenDimensionStat{
+				Name:         name,
+				FullName:     key,
+				InputTokens:  r.InputTokens,
+				OutputTokens: r.OutputTokens,
+				Requests:     r.Requests,
+			})
+			continue
+		}
+		it := &items[i]
+		it.InputTokens += r.InputTokens
+		it.OutputTokens += r.OutputTokens
+		it.Requests += r.Requests
+	}
+	for i := range items {
+		if items[i].FullName == items[i].Name {
+			items[i].FullName = ""
 		}
 	}
-	result.ByHour = hours
-	result.ByProviderDay = buildStatsDaySeries(providerDay)
-	result.ByModelDay = buildStatsDaySeries(modelDay)
-	result.ByWorkspaceDay = buildStatsDaySeries(workspaceDay)
-	result.BySourceDay = buildStatsDaySeries(sourceDay)
-	result.UniqueSessions = len(sessions)
-	result.ActiveDays = len(activeDates)
-
-	totalTokens := result.TotalInputTokens + result.TotalOutputTokens
-	if totalTokens > 0 {
-		setStatsShares(result.ByProvider, totalTokens)
-		setStatsShares(result.ByModel, totalTokens)
-		setStatsShares(result.ByWorkspace, totalTokens)
-		setStatsShares(result.BySource, totalTokens)
-	}
-	if hitMiss := result.TotalCacheHitTokens + result.TotalCacheMissTokens; hitMiss > 0 {
-		result.CacheHitRate = float64(result.TotalCacheHitTokens) / float64(hitMiss)
-	}
-
-	sortStatsModels(result.ByProvider)
-	sortStatsModels(result.ByModel)
-	sortStatsModels(result.ByWorkspace)
-	sortStatsModels(result.BySource)
-	return result
-}
-
-// statsDaySeriesAccum accumulates per-day token counts for one named category
-// entry (model, provider, source, or workspace), aligned by index with ByDay.
-type statsDaySeriesAccum struct {
-	name   string
-	input  []int
-	output []int
-}
-
-func accumulateDaySeries(series map[string]*statsDaySeriesAccum, dayIndex, rangeDays int, name string, input, output int) {
-	if name == "" {
-		name = "unknown"
-	}
-	acc, ok := series[name]
-	if !ok {
-		acc = &statsDaySeriesAccum{name: name, input: make([]int, rangeDays), output: make([]int, rangeDays)}
-		series[name] = acc
-	}
-	acc.input[dayIndex] += input
-	acc.output[dayIndex] += output
-}
-
-func buildStatsDaySeries(series map[string]*statsDaySeriesAccum) []TokenStatsDaySeries {
-	list := make([]*statsDaySeriesAccum, 0, len(series))
-	for _, acc := range series {
-		list = append(list, acc)
-	}
-	sort.Slice(list, func(i, j int) bool {
-		return daySeriesTotal(list[i]) > daySeriesTotal(list[j])
-	})
-	if len(list) > statsMaxDaySeries {
-		list = list[:statsMaxDaySeries]
-	}
-	result := make([]TokenStatsDaySeries, 0, len(list))
-	for _, acc := range list {
-		result = append(result, TokenStatsDaySeries{Name: acc.name, InputTokens: acc.input, OutputTokens: acc.output})
-	}
-	return result
-}
-
-func daySeriesTotal(acc *statsDaySeriesAccum) int {
-	total := 0
-	for _, v := range acc.input {
-		total += v
-	}
-	for _, v := range acc.output {
-		total += v
-	}
-	return total
-}
-
-func accumulateStatsModel(items *[]TokenStatsModel, index map[string]int, name string, r statsRecord) {
-	if name == "" {
-		name = "unknown"
-	}
-	if i, ok := index[name]; ok {
-		m := &(*items)[i]
-		m.InputTokens += r.InputTokens
-		m.OutputTokens += r.OutputTokens
-		m.CacheHitTokens += r.CacheHitTokens
-		m.CacheMissTokens += r.CacheMissTokens
-		m.Requests += r.Requests
-		return
-	}
-	index[name] = len(*items)
-	*items = append(*items, TokenStatsModel{
-		Name: name, InputTokens: r.InputTokens, OutputTokens: r.OutputTokens,
-		CacheHitTokens: r.CacheHitTokens, CacheMissTokens: r.CacheMissTokens, Requests: r.Requests,
-	})
-}
-
-func setStatsShares(items []TokenStatsModel, totalTokens int) {
-	for i := range items {
-		items[i].Share = float64(tokenTotal(items[i])) / float64(totalTokens)
-	}
-}
-
-func sortStatsModels(items []TokenStatsModel) {
 	sort.Slice(items, func(i, j int) bool {
-		return tokenTotal(items[i]) > tokenTotal(items[j])
+		return statsDimensionTotal(items[i]) > statsDimensionTotal(items[j])
 	})
+	if len(items) > statsPieSliceLimit {
+		items = items[:statsPieSliceLimit]
+	}
+	return items
 }
 
-func tokenTotal(m TokenStatsModel) int {
-	return m.InputTokens + m.OutputTokens
+func statsDimensionTotal(s TokenDimensionStat) int {
+	return s.InputTokens + s.OutputTokens
 }

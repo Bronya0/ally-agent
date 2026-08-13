@@ -2927,6 +2927,16 @@ code, pre {
   line-height: 1.5;
 }
 
+.todo-number {
+  flex-shrink: 0;
+  min-width: 22px;
+  text-align: right;
+  margin-right: 2px;
+  color: #737373;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
 .todo-status {
   flex-shrink: 0;
   width: 14px;

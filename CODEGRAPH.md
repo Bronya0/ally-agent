@@ -19,6 +19,7 @@
   - host_tray.go — 系统托盘
   - host_taskbar_windows.go / host_taskbar_other.go — 任务栏进度与窗口闪烁
   - host_process_windows.go / host_process_other.go — 子进程窗口与进程树控制
+  - host_notifications.go — 桌面通知服务注入（`SetNotifier`）与任务完成/出错/取消提示音 `notifyCompletion`（Windows 内置 toast 事件音，其他平台默认音）
   - host_update_relaunch_darwin.go / host_update_relaunch_other.go — 更新后重启辅助
   - biz_config.go — 配置域：`mergeConfig`、`SaveConfig`/`ReloadConfig`、key 池归一化、`effectiveConfig`、`pathRuntime`、`appDataDir` [Lines: 512]
   - biz_sessions.go — 会话索引/快照/历史持久化：gzip 历史读写、裁剪、会话文件原子替换 [Lines: 1138]

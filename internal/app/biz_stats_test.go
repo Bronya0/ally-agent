@@ -10,91 +10,104 @@ import (
 	"time"
 )
 
-func TestGetTokenStatsAggregatesDimensions(t *testing.T) {
+func TestGetTokenStatsAggregatesDashboard(t *testing.T) {
 	app := NewApp()
 	now := time.Now()
-	previousDay := now.AddDate(0, 0, -1)
 
 	records := []statsRecord{
 		{
-			Provider: "OpenAI", Model: "gpt-5", Workspace: "/workspace/a", SessionID: "session-a", Source: "main",
+			Model: "gpt-5", Workspace: "/workspace/a",
 			Ts: now.UnixMilli(), InputTokens: 1000, OutputTokens: 200, CacheHitTokens: 600, CacheMissTokens: 400, Requests: 1,
 		},
 		{
-			Provider: "OpenAI", Model: "gpt-5", Workspace: "/workspace/a", SessionID: "session-a", Source: "subagent",
-			Ts: now.UnixMilli(), InputTokens: 500, OutputTokens: 100, CacheHitTokens: 200, CacheMissTokens: 300, Requests: 1,
+			Model: "gpt-5", Workspace: "/workspace/a",
+			Ts: now.Add(-10 * time.Minute).UnixMilli(), InputTokens: 500, OutputTokens: 100, CacheHitTokens: 200, CacheMissTokens: 300, Requests: 1,
 		},
 		{
-			Provider: "Anthropic", Model: "claude", Workspace: "/workspace/b", SessionID: "scheduled:daily", Source: "scheduled",
-			Ts: previousDay.UnixMilli(), InputTokens: 300, OutputTokens: 50, CacheHitTokens: 0, CacheMissTokens: 300, Requests: 1,
+			Model: "claude", Workspace: "/workspace/b",
+			Ts: now.Add(-20 * time.Minute).UnixMilli(), InputTokens: 300, OutputTokens: 50, CacheHitTokens: 0, CacheMissTokens: 300, Requests: 1,
 		},
 	}
 	for _, record := range records {
 		app.stats.record(record)
 	}
 
-	result := app.GetTokenStats(7)
+	result := app.GetTokenStats()
 	if !result.OK {
 		t.Fatalf("GetTokenStats() error = %q", result.Error)
 	}
-	if result.TotalInputTokens != 1800 || result.TotalOutputTokens != 350 || result.TotalRequests != 3 {
-		t.Fatalf("totals = input %d output %d requests %d", result.TotalInputTokens, result.TotalOutputTokens, result.TotalRequests)
+	if result.SummaryToday.TotalTokens != 2150 || result.SummaryToday.Requests != 3 {
+		t.Fatalf("today summary = %#v", result.SummaryToday)
 	}
-	if result.UniqueSessions != 2 || result.ActiveDays != 2 {
-		t.Fatalf("unique sessions/active days = %d/%d, want 2/2", result.UniqueSessions, result.ActiveDays)
+	if result.Summary7Days.TotalTokens != 2150 || result.SummaryMonth.TotalTokens != 2150 {
+		t.Fatalf("week/month summary = %#v / %#v", result.Summary7Days, result.SummaryMonth)
+	}
+	if result.SummaryToday.InputTokens != 1800 || result.SummaryToday.OutputTokens != 350 {
+		t.Fatalf("today input/output = %d/%d", result.SummaryToday.InputTokens, result.SummaryToday.OutputTokens)
 	}
 	wantCacheRate := float64(800) / float64(1800)
-	if math.Abs(result.CacheHitRate-wantCacheRate) > 0.000001 {
-		t.Fatalf("cache hit rate = %f, want %f", result.CacheHitRate, wantCacheRate)
+	if math.Abs(result.SummaryToday.CacheHitRate-wantCacheRate) > 0.000001 {
+		t.Fatalf("today cache hit rate = %f, want %f", result.SummaryToday.CacheHitRate, wantCacheRate)
 	}
-	if len(result.ByProvider) != 2 || result.ByProvider[0].Name != "OpenAI" {
-		t.Fatalf("providers = %#v", result.ByProvider)
+	if result.SummaryToday.AvgPerRequest != 2150/3 {
+		t.Fatalf("avg per request = %d, want %d", result.SummaryToday.AvgPerRequest, 2150/3)
 	}
-	if len(result.ByModel) != 2 || result.ByModel[0].Name != "gpt-5" || result.ByModel[0].Requests != 2 {
-		t.Fatalf("models = %#v", result.ByModel)
+	if len(result.Daily) != statsDailyRangeDays {
+		t.Fatalf("daily length = %d, want %d", len(result.Daily), statsDailyRangeDays)
 	}
-	if len(result.ByWorkspace) != 2 || result.ByWorkspace[0].Name != "/workspace/a" {
-		t.Fatalf("workspaces = %#v", result.ByWorkspace)
+	last := result.Daily[len(result.Daily)-1]
+	if last.Date != now.Format("2006-01-02") || last.InputTokens != 1800 || last.OutputTokens != 350 || last.Requests != 3 {
+		t.Fatalf("last daily bucket = %#v", last)
 	}
-	if len(result.BySource) != 3 {
-		t.Fatalf("sources = %#v", result.BySource)
+	// Workspace names are shortened to the last path segment.
+	if len(result.WorkspaceWeek) != 2 || result.WorkspaceWeek[0].Name != "a" || result.WorkspaceWeek[0].FullName != "/workspace/a" {
+		t.Fatalf("workspace week = %#v", result.WorkspaceWeek)
 	}
-	if len(result.ByDay) != 7 || len(result.ByHour) != 24 {
-		t.Fatalf("bucket lengths = days %d hours %d", len(result.ByDay), len(result.ByHour))
+	if result.WorkspaceWeek[0].InputTokens != 1500 || result.WorkspaceWeek[0].OutputTokens != 300 {
+		t.Fatalf("workspace week totals = %#v", result.WorkspaceWeek[0])
 	}
-	if len(result.ByModelDay) != 2 || len(result.ByProviderDay) != 2 || len(result.BySourceDay) != 3 || len(result.ByWorkspaceDay) != 2 {
-		t.Fatalf("day series lengths = model %d provider %d source %d workspace %d",
-			len(result.ByModelDay), len(result.ByProviderDay), len(result.BySourceDay), len(result.ByWorkspaceDay))
+	if len(result.WorkspaceMonth) != 2 || result.WorkspaceMonth[1].Name != "b" {
+		t.Fatalf("workspace month = %#v", result.WorkspaceMonth)
 	}
-	for _, series := range result.ByModelDay {
-		if len(series.InputTokens) != 7 || len(series.OutputTokens) != 7 {
-			t.Fatalf("model day series length = %d/%d for %s", len(series.InputTokens), len(series.OutputTokens), series.Name)
-		}
-		switch series.Name {
-		case "gpt-5":
-			if series.InputTokens[6] != 1500 || series.OutputTokens[6] != 300 {
-				t.Fatalf("gpt-5 day series = %#v", series)
-			}
-		case "claude":
-			if series.InputTokens[5] != 300 || series.OutputTokens[5] != 50 {
-				t.Fatalf("claude day series = %#v", series)
-			}
-		}
+	if len(result.ModelWeek) != 2 || result.ModelWeek[0].Name != "gpt-5" || result.ModelWeek[0].Requests != 2 {
+		t.Fatalf("model week = %#v", result.ModelWeek)
 	}
+	if len(result.ModelMonth) != 2 || result.ModelMonth[1].Name != "claude" {
+		t.Fatalf("model month = %#v", result.ModelMonth)
+	}
+}
 
-	dayRequests := 0
-	for _, day := range result.ByDay {
-		dayRequests += day.Requests
+func TestBuildStatsDailyBucketsAcrossDays(t *testing.T) {
+	start := time.Date(2026, 1, 10, 0, 0, 0, 0, time.Local)
+	records := []statsRecord{
+		{Ts: start.AddDate(0, 0, 1).Add(3 * time.Hour).UnixMilli(), InputTokens: 100, OutputTokens: 10, Requests: 1},
+		{Ts: start.AddDate(0, 0, 1).Add(4 * time.Hour).UnixMilli(), InputTokens: 50, OutputTokens: 5, Requests: 1},
+		{Ts: start.AddDate(0, 0, 3).Add(2 * time.Hour).UnixMilli(), InputTokens: 20, OutputTokens: 2, Requests: 1},
 	}
-	if dayRequests != 3 {
-		t.Fatalf("daily requests = %d, want 3", dayRequests)
+	daily := buildStatsDaily(records, start, 7)
+	if len(daily) != 7 {
+		t.Fatalf("daily length = %d, want 7", len(daily))
 	}
-	hourRequests := 0
-	for _, hour := range result.ByHour {
-		hourRequests += hour.Requests
+	if daily[1].InputTokens != 150 || daily[1].OutputTokens != 15 || daily[1].Requests != 2 {
+		t.Fatalf("day 1 bucket = %#v", daily[1])
 	}
-	if hourRequests != 3 {
-		t.Fatalf("hourly requests = %d, want 3", hourRequests)
+	if daily[3].InputTokens != 20 || daily[3].OutputTokens != 2 {
+		t.Fatalf("day 3 bucket = %#v", daily[3])
+	}
+	if daily[0].Requests != 0 || daily[2].Requests != 0 {
+		t.Fatalf("zero-filled buckets expected: %#v / %#v", daily[0], daily[2])
+	}
+}
+
+func TestRecordTokenStatsUsesFallback(t *testing.T) {
+	app := NewApp()
+	app.recordTokenStats("model", "/workspace", nil, 120, 30)
+	result := app.GetTokenStats()
+	if result.SummaryToday.InputTokens != 120 || result.SummaryToday.OutputTokens != 30 {
+		t.Fatalf("fallback totals = %d/%d, want 120/30", result.SummaryToday.InputTokens, result.SummaryToday.OutputTokens)
+	}
+	if len(result.ModelWeek) != 1 || result.ModelWeek[0].Name != "model" {
+		t.Fatalf("model week = %#v, want model", result.ModelWeek)
 	}
 }
 
@@ -122,18 +135,6 @@ func TestStatsRecorderQueueNeverBlocksWhenFull(t *testing.T) {
 	}
 }
 
-func TestRecordTokenStatsUsesFallbackAndClassifiesScheduled(t *testing.T) {
-	app := NewApp()
-	app.recordTokenStats("provider", "model", "/workspace", "scheduled:task-1", "subagent", nil, 120, 30)
-	result := app.GetTokenStats(1)
-	if result.TotalInputTokens != 120 || result.TotalOutputTokens != 30 {
-		t.Fatalf("fallback totals = %d/%d, want 120/30", result.TotalInputTokens, result.TotalOutputTokens)
-	}
-	if len(result.BySource) != 1 || result.BySource[0].Name != "scheduled" {
-		t.Fatalf("sources = %#v, want scheduled", result.BySource)
-	}
-}
-
 func TestStatsRecorderStopFlushesPendingRecords(t *testing.T) {
 	dir := t.TempDir()
 	recorder := newStatsRecorder()
@@ -154,7 +155,6 @@ func TestStatsRecorderStopFlushesPendingRecords(t *testing.T) {
 		t.Fatalf("flushed records = %#v", records)
 	}
 }
-
 func TestReadStatsDayFileFiltersInvalidRecords(t *testing.T) {
 	dir := t.TempDir()
 	now := time.Now()
@@ -179,6 +179,122 @@ func TestReadStatsDayFileFiltersInvalidRecords(t *testing.T) {
 	}
 	if len(loaded) != 1 || loaded[0].Model != "valid" {
 		t.Fatalf("loaded records = %#v", loaded)
+	}
+}
+
+// TestReadStatsDayFileAcceptsLegacyFields verifies that day files written by
+// the previous schema (with Provider/SessionID/Source fields) still decode:
+// encoding/json ignores unknown fields, and the simplified record keeps only
+// the fields the dashboard needs.
+func TestReadStatsDayFileAcceptsLegacyFields(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Now()
+	date := statsDateKey(now.UnixMilli())
+	path := filepath.Join(dir, date+".json")
+	legacy := []map[string]any{
+		{
+			"provider": "OpenAI", "model": "gpt-5", "workspace": "/ws/a",
+			"sessionId": "s-1", "source": "main",
+			"ts": now.UnixMilli(), "inputTokens": 100, "outputTokens": 20,
+			"cacheHitTokens": 60, "cacheMissTokens": 40, "requests": 1,
+		},
+	}
+	data, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := readStatsDayFile(path, date)
+	if err != nil {
+		t.Fatalf("readStatsDayFile(legacy) error = %v", err)
+	}
+	if len(loaded) != 1 {
+		t.Fatalf("loaded legacy records = %#v", loaded)
+	}
+	record := loaded[0]
+	if record.Model != "gpt-5" || record.Workspace != "/ws/a" ||
+		record.InputTokens != 100 || record.OutputTokens != 20 ||
+		record.CacheHitTokens != 60 || record.CacheMissTokens != 40 || record.Requests != 1 {
+		t.Fatalf("legacy record fields = %#v", record)
+	}
+}
+
+func TestGetTokenStatsEmptyFreshInstall(t *testing.T) {
+	app := NewApp()
+	result := app.GetTokenStats()
+	if !result.OK {
+		t.Fatalf("GetTokenStats() error = %q", result.Error)
+	}
+	if result.SummaryToday.TotalTokens != 0 || result.SummaryMonth.TotalTokens != 0 ||
+		result.SummaryToday.Requests != 0 || len(result.Daily) != statsDailyRangeDays ||
+		len(result.WorkspaceWeek) != 0 || len(result.ModelWeek) != 0 {
+		t.Fatalf("empty result = %#v", result)
+	}
+}
+
+// TestStatsWindowsMonthStartCoverage simulates querying on the 31st of a
+// 31-day month: the monthly window starts Aug 1, earlier than the 30-day bar
+// window (Aug 2), and the snapshot must cover Aug 1 so monthly summary and
+// month pies include day 1.
+func TestStatsWindowsMonthStartCoverage(t *testing.T) {
+	query := time.Date(2026, 8, 31, 12, 0, 0, 0, time.Local)
+	midnight, monthStart, _, dailyStart, snapshotStart := statsWindows(query)
+	if midnight.Day() != 31 {
+		t.Fatalf("midnight = %v", midnight)
+	}
+	if monthStart.Format("2006-01-02") != "2026-08-01" {
+		t.Fatalf("monthStart = %v", monthStart)
+	}
+	if dailyStart.Format("2006-01-02") != "2026-08-02" {
+		t.Fatalf("dailyStart = %v, want 2026-08-02", dailyStart)
+	}
+	if snapshotStart.Format("2006-01-02") != "2026-08-01" {
+		t.Fatalf("snapshotStart = %v, want 2026-08-01 (must cover month start)", snapshotStart)
+	}
+}
+
+// TestStatsWindowsMondayStart verifies the week window starts on Monday,
+// matching the heatmap's Monday-first layout.
+func TestStatsWindowsMondayStart(t *testing.T) {
+	// 2026-08-17 is a Monday.
+	monday := time.Date(2026, 8, 17, 10, 0, 0, 0, time.Local)
+	_, _, weekStart, _, _ := statsWindows(monday)
+	if weekStart.Format("2006-01-02") != "2026-08-17" {
+		t.Fatalf("weekStart on Monday = %v, want 2026-08-17", weekStart)
+	}
+	// 2026-08-19 is a Wednesday: week start is still Monday the 17th.
+	wednesday := time.Date(2026, 8, 19, 10, 0, 0, 0, time.Local)
+	_, _, weekStart, _, _ = statsWindows(wednesday)
+	if weekStart.Format("2006-01-02") != "2026-08-17" {
+		t.Fatalf("weekStart on Wednesday = %v, want 2026-08-17", weekStart)
+	}
+	// 2026-08-23 is a Sunday: week start is the previous Monday (Aug 17).
+	sunday := time.Date(2026, 8, 23, 10, 0, 0, 0, time.Local)
+	_, _, weekStart, _, _ = statsWindows(sunday)
+	if weekStart.Format("2006-01-02") != "2026-08-17" {
+		t.Fatalf("weekStart on Sunday = %v, want 2026-08-17", weekStart)
+	}
+}
+
+func TestWorkspaceDisplayNameEdges(t *testing.T) {
+	cases := map[string]string{
+		"":               statsUnknownName,
+		"   ":            statsUnknownName,
+		statsUnknownName: statsUnknownName,
+		"/":              statsUnknownName,
+		"C:\\":           "C:",
+		"C:\\work\\proj": "proj",
+		"//server/share": "share",
+		"/home/u/proj/":  "proj",
+		"/a/b/c":         "c",
+		"proj":           "proj",
+	}
+	for input, want := range cases {
+		if got := workspaceDisplayName(input); got != want {
+			t.Errorf("workspaceDisplayName(%q) = %q, want %q", input, got, want)
+		}
 	}
 }
 

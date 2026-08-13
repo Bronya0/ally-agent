@@ -8,6 +8,7 @@ function normalizeTodoEntries(todos) {
       return {
         key: `${sourceIndex}:${status}:${title}`,
         sourceIndex,
+        number: sourceIndex + 1,
         status,
         title,
       };
@@ -27,4 +28,11 @@ export function orderTodoPanelEntries(todos) {
   );
 
   return [...done, ...(current ? [current] : []), ...pending, ...rest];
+}
+
+// Scroll delta that centers the current in_progress item inside the todo
+// panel list viewport. Positive means the item sits below the visible area
+// and the list needs to scroll down; negative scrolls back up.
+export function todoFocusScrollDelta(listRect, itemRect) {
+  return itemRect.top - listRect.top - (listRect.height - itemRect.height) / 2;
 }

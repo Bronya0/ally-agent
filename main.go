@@ -23,16 +23,25 @@ func main() {
 	}
 	app := backend.NewApp()
 
+	// 桌面通知服务：仅用于任务完成/出错/取消的系统提示音（带声音）。
+	// SafeNotificationsService 包装平台后端：启动失败（macOS 无
+	// bundle、Linux 无会话总线）时降级为静默，绝不阻断应用启动。
+	notifier := backend.NewSafeNotificationsService()
+	app.SetNotifier(notifier)
+
 	wailsApp := application.New(application.Options{
 		Name:        "Ally",
 		Description: "Ally — AI coding agent desktop",
 		Icon:        appIconPNG,
-		Services:    []application.Service{application.NewService(app)},
+		Services: []application.Service{
+			application.NewService(app),
+			application.NewService(notifier),
+		},
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(assets),
 		},
 		Windows: application.WindowsOptions{
-			WndClass:        backend.WindowsWindowClassName,
+			WndClass:         backend.WindowsWindowClassName,
 			UseVisualHosting: true,
 		},
 		SingleInstance: &application.SingleInstanceOptions{
