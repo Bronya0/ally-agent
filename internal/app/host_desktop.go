@@ -284,6 +284,48 @@ func (a *App) SelectBackgroundImage() (string, error) {
 	return a.saveBackgroundImageFromFile(selected)
 }
 
+// ExportTextFile opens a native save dialog and writes content to the chosen
+// path. suggestedFilename seeds the dialog; the user may change it. Returns
+// the saved path, or "" when the user cancels. WKWebView (macOS) ignores the
+// HTML5 <a download> attribute, so exports must go through this binding
+// instead of a frontend blob download to work on every platform.
+func (a *App) ExportTextFile(suggestedFilename, content, filterName, filterPattern string) (string, error) {
+	if err := a.ensureInitialized(); err != nil {
+		return "", err
+	}
+	if suggestedFilename == "" || content == "" {
+		return "", errors.New("filename and content are required")
+	}
+	if a.wails == nil || a.wails.app == nil {
+		return "", errors.New("desktop host not initialized")
+	}
+	dialogOpts := &application.SaveFileDialogOptions{
+		Title:    "导出文件",
+		Filename: suggestedFilename,
+	}
+	if filterName != "" && filterPattern != "" {
+		dialogOpts.Filters = []application.FileFilter{{DisplayName: filterName, Pattern: filterPattern}}
+	}
+	dialog := a.wails.app.Dialog.SaveFile()
+	dialog.SetOptions(dialogOpts)
+	selected, err := dialog.PromptForSingleSelection()
+	if err != nil || selected == "" {
+		return selected, err
+	}
+	// NSSavePanel appends the extension automatically, but the Windows
+	// IFileSaveDialog does not; mirror the suggested name's extension so the
+	// exported file always opens as expected.
+	if filepath.Ext(selected) == "" {
+		if ext := filepath.Ext(suggestedFilename); ext != "" {
+			selected += ext
+		}
+	}
+	if err := os.WriteFile(selected, []byte(content), 0o644); err != nil {
+		return "", err
+	}
+	return selected, nil
+}
+
 func (a *App) OpenWorkspaceInFileManager() error {
 	if err := a.ensureInitialized(); err != nil {
 		return err

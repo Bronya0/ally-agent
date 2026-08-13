@@ -353,6 +353,7 @@ import {
   clearSessionSnapshotStore,
   loadSessionSnapshots,
 } from './utils/sessionStore.mjs';
+import { saveTextFile } from './utils/download.mjs';
 import {
   CancelRun,
   CheckForUpdates,
@@ -7116,15 +7117,10 @@ function stripAnsi(text) {
 }
 
 function downloadMD(content, filename) {
-  const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+  // Native save dialog via the Wails binding: WKWebView (macOS) ignores
+  // <a download>, so the old blob-download approach silently did nothing
+  // there. Falls back to blob download when the binding is unavailable.
+  saveTextFile({ filename, content, filterName: 'Markdown (*.md)', filterPattern: '*.md' });
 }
 
 function exportMsgAsMD(msg) {

@@ -583,6 +583,7 @@ import { computed, reactive, ref, watch } from 'vue';
 import { createDiscreteApi, darkTheme } from 'naive-ui';
 import { naiveDateLocale, naiveLocale, reasoningEffortLabel, t } from '../i18n.mjs';
 import { buildModelConfigExport, mergeModelConfigs, modelConfigIdentity, normalizeApiKeysArray, normalizeReasoningEffort, parseModelConfigImport, reasoningEffortLevels } from '../utils/modelConfigIO.mjs';
+import { saveTextFile } from '../utils/download.mjs';
 import {
   CUSTOM_PROVIDER_ID,
   applyCatalogPreset,
@@ -1174,16 +1175,15 @@ async function importModelConfigs(event) {
 
 function exportModelConfigs() {
   const payload = buildModelConfigExport(draft.models);
-  const blob = new Blob([`${JSON.stringify(payload, null, 2)}\n`], { type: 'application/json;charset=utf-8' });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = `ally-models-${new Date().toISOString().slice(0, 10)}.json`;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  window.setTimeout(() => URL.revokeObjectURL(url), 0);
-  message.success(t('settings.modelExportSuccess', { count: payload.models.length }));
+  const content = `${JSON.stringify(payload, null, 2)}\n`;
+  saveTextFile({
+    filename: `ally-models-${new Date().toISOString().slice(0, 10)}.json`,
+    content,
+    filterName: 'JSON (*.json)',
+    filterPattern: '*.json',
+  }).then((result) => {
+    if (result.saved) message.success(t('settings.modelExportSuccess', { count: payload.models.length }));
+  });
 }
 
 watch(() => modelDraft.apiFormat, (next, previous) => {
