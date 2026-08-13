@@ -1,5 +1,5 @@
-# Auto-detect text files and normalize line endings
-* text=auto
+# Auto-detect text files and normalize line endings (LF everywhere)
+* text=auto eol=lf
 
 # Git files
 *.gitignore text
@@ -7,6 +7,8 @@
 
 # Go sources
 *.go text eol=lf
+*.mod text eol=lf
+*.sum text eol=lf
 
 # JavaScript / TypeScript
 *.js text eol=lf

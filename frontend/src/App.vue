@@ -357,6 +357,7 @@ import {
   SaveConfig,
   SelectWorkspace,
   StartChat,
+  InjectRunMessage,
   CompactSession,
   ListSkills,
   ListTools,
@@ -2895,8 +2896,20 @@ function flushStreamBuffer(runId) {
   streamBuffers.delete(runId);
   const session = sessionByRunId(runId);
   if (!session) return;
-  let last = session.messages[session.messages.length - 1];
-  if (!last || last.role !== 'assistant' || last.error || last.system || last.done || last.runId !== runId) {
+  // Reuse the last assistant message that is still streaming for this run.
+  // Scanning (not just peeking the tail) keeps an injected user message that
+  // sits after the in-flight assistant response from splitting the current
+  // response into a new message mid-stream; the split happens only when
+  // run:inject finalizes the previous response and the next one starts.
+  let last = null;
+  for (let i = session.messages.length - 1; i >= 0; i--) {
+    const m = session.messages[i];
+    if (m && m.role === 'assistant' && m.streaming && !m.error && !m.system && m.runId === runId) {
+      last = m;
+      break;
+    }
+  }
+  if (!last) {
     last = { role: 'assistant', content: '', reasoningChars: 0, streaming: true, runId };
     session.messages.push(last);
   }
@@ -3115,6 +3128,16 @@ function bindRuntimeEvents() {
     }
     queueStreamDelta(data);
   });
+  onRuntimeEvent('run:inject', (data) => {
+    // 封口前先 flush 流式缓冲:后端在流式结束后才发 run:inject,但剩余
+    // delta 可能还在前端的 rAF 缓冲里。直接封口会让这些内容在下一轮
+    // 新建消息,把回答劈开并粘到注入消息后面(与 run:done/run:error
+    // 的先 flush 再收尾顺序保持一致)。
+    flushStreamBuffer(data.runId);
+    const session = sessionByEvent(data);
+    if (!session) return;
+    finalizeStreamingMessageForRun(session, data.runId);
+  });
   // Legacy events kept for compatibility with older backend builds and with
   // session replay paths that still emit them individually.
   onRuntimeEvent('run:delta', (data) => {
@@ -3245,6 +3268,10 @@ function bindRuntimeEvents() {
     flushToolUpdateBuffer();
     const session = sessionByEvent(data);
     if (!session) return;
+    // 工具批次执行完成意味着当前 assistant 消息已经结束(模型在发起工具
+    // 调用后不会再输出正文)。封口它,使下一次流式回答新建消息,而不是
+    // 被 flushStreamBuffer 扫描复用、把工具卡片后生成的内容并进旧消息。
+    finalizeStreamingMessageForRun(session, data.runId);
     // Tool results grow the live context (tool result messages get appended to
     // the next model request). Refresh the footer counter so it tracks the
     // agent loop while it works, not only after the run ends.
@@ -4351,7 +4378,7 @@ async function sendPrompt() {
   if (!session) return;
   const text = promptText.value.trim();
   const attachments = pendingAttachments.value.map(att => ({ ...att }));
-  if ((!text && attachments.length === 0) || session.runId) return;
+  if (!text && attachments.length === 0) return;
 
   // Resolve command: display label in UI, send expanded text to backend
   const matchedCommand = text.startsWith('/')
@@ -4430,6 +4457,13 @@ async function sendPrompt() {
     return;
   }
   if (!session) return;
+  // 运行中发送:进入注入路径,消息排队等当前工具批次完成后加入模型上下文。
+  if (session.runId) {
+    await injectMessageToRun(session, sendText, displayText, attachments);
+    return;
+  }
+  // runId 缺失但仍在运行是异常中间态(启动失败/事件未达),禁止重复启动新 run。
+  if (session.isRunning) return;
   if (config.workspace) session.workspace = config.workspace;
   const userMessage = { role: 'user', content: displayText, attachments, done: true };
   session.messages.push(userMessage);
@@ -4459,6 +4493,49 @@ async function sendPrompt() {
     session.runId = '';
     session.isRunning = false;
     pushMessage('assistant', t('app.run.startFailed', { error: err }), { error: true, transientTurn: true });
+  }
+}
+
+// 运行中注入:把新消息排进当前 run 的队列,消息在下一个 agent step(当前工具
+// 批次完成后)进入模型上下文。失败时回滚本地插入的消息并提示重发。
+async function injectMessageToRun(session, sendText, displayText, attachments) {
+  if (attachments.length > 0) {
+    message.warning(t('app.run.injectAttachmentsUnsupported'));
+    return;
+  }
+  const runId = session.runId;
+  const userMessage = { role: 'user', content: displayText, attachments: [], done: true };
+  session.messages.push(userMessage);
+  session.updatedAt = Date.now();
+  session.messageCount = session.messages.filter((message) => message?.role === 'user' || message?.role === 'assistant').length;
+  if (isDefaultSessionTitle(session.title)) {
+    session.title = displayText.length > 20 ? `${displayText.slice(0, 20)}…` : displayText;
+  }
+  addPromptHistory(displayText);
+  commandHistoryIndex.value = -1;
+  promptText.value = '';
+  pendingAttachments.value = [];
+  commandMenuVisible.value = false;
+  scrollMessagesToBottom({ force: true });
+  try {
+    await InjectRunMessage(runId, sendText);
+  } catch (err) {
+    const idx = session.messages.indexOf(userMessage);
+    if (idx >= 0) session.messages.splice(idx, 1);
+    session.messageCount = session.messages.filter((message) => message?.role === 'user' || message?.role === 'assistant').length;
+    message.error(t('app.run.injectFailed', { error: err }));
+  }
+}
+
+function finalizeStreamingMessageForRun(session, runId) {
+  for (let i = session.messages.length - 1; i >= 0; i--) {
+    const msg = session.messages[i];
+    if (msg.role === 'assistant' && msg.streaming && msg.runId === runId) {
+      msg.streaming = false;
+      msg.done = true;
+      finalizeReasoningTiming(msg);
+      return;
+    }
   }
 }
 

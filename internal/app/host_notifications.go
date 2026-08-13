@@ -59,6 +59,16 @@ func (s *SafeNotificationsService) SendNotification(options notifications.Notifi
 	return s.inner.SendNotification(options)
 }
 
+// mainWindowMinimised reports whether the main window is currently
+// minimised. A missing window handle (headless embedding, tests) counts as
+// not minimised so completion notifications stay silent.
+func (a *App) mainWindowMinimised() bool {
+	if a.wails == nil || a.wails.window == nil {
+		return false
+	}
+	return a.wails.window.IsMinimised()
+}
+
 // SetNotifier injects the notifications service used for task completion
 // sounds. Must be called before app.Run().
 func (a *App) SetNotifier(n completionNotifier) {
@@ -81,7 +91,9 @@ var completionToastBodies = map[string]string{
 }
 
 // notifyCompletion sends a short sound-carrying system notification when a
-// chat run finishes. kind is "done", "error" or "cancelled". Non-Windows
+// chat run finishes, but only while the main window is minimised. When the
+// window is visible the run result is already on screen, so a toast would
+// only interrupt. kind is "done", "error" or "cancelled". Non-Windows
 // platforms use the platform default sound; Windows picks a distinct built-in
 // toast event sound per kind. The send itself is async so a slow platform
 // backend (Windows PowerShell fallback, unresponsive Linux daemon) never
@@ -95,6 +107,13 @@ func (a *App) notifyCompletion(kind, workspace string) {
 	}
 	a.lastCompletionNotifyAt = time.Now()
 	a.mu.Unlock()
+
+	// 仅当主窗口处于最小化状态时才发系统通知：窗口可见（含最大化）时
+	// 结果就在眼前，弹窗与提示音纯属打扰。窗口句柄缺失（headless
+	// 嵌入/测试）时按不可见对待，保持静默。
+	if !a.mainWindowMinimised() {
+		return
+	}
 
 	body := completionToastBodies[kind]
 	if body == "" {

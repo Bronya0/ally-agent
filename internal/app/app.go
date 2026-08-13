@@ -37,6 +37,11 @@ const (
 	modelToolTailBytes      = 8 * 1024
 	maxModelGrepMatches     = 200
 	maxAgentSteps           = 9999
+	// runInputBufferSize is the per-run capacity of the injected-message queue
+	// (InjectRunMessage). The buffered channel plus non-blocking drain keeps
+	// injection off the chat hot path; a full queue fails the call instead of
+	// blocking the frontend.
+	runInputBufferSize = 32
 	// goalAutoContinueEnabled controls whether runChat keeps automatically
 	// continuing turns while a goal is active. Goal mode is currently unused,
 	// so this is disabled to keep every chat run a single turn; the goal
@@ -180,6 +185,11 @@ type App struct {
 	configPath     string
 	runs           map[string]context.CancelFunc
 	runSessions    map[string]string
+	// runInputs queues user messages injected into a live run (runID → buffered
+	// channel). runChat drains it at the top of every agent step so injected
+	// messages enter the model context only after the current tool batch
+	// completes, and they are persisted with the rest of the run history.
+	runInputs      map[string]chan string
 	historiesDir   string
 	sessionsDir    string
 	histories      map[string][]openai.ChatCompletionMessage
@@ -271,6 +281,7 @@ func NewApp() *App {
 	a := &App{
 		runs:                map[string]context.CancelFunc{},
 		runSessions:         map[string]string{},
+		runInputs:           map[string]chan string{},
 		histories:           map[string][]openai.ChatCompletionMessage{},
 		goalStates:          map[string]*GoalState{},
 		todos:               map[string][]TodoEntry{},
@@ -1215,6 +1226,7 @@ func (a *App) StartChat(req ChatRequest) (string, error) {
 	a.mu.Lock()
 	a.runs[runID] = cancel
 	a.runSessions[runID] = req.SessionID
+	a.runInputs[runID] = make(chan string, runInputBufferSize)
 	a.mu.Unlock()
 
 	go a.runChat(ctx, runID, req, cfg)
@@ -1236,7 +1248,67 @@ func (a *App) finishRun(runID string) {
 	a.mu.Lock()
 	delete(a.runs, runID)
 	delete(a.runSessions, runID)
+	// The queue is dropped, not closed: closing a channel while a concurrent
+	// InjectRunMessage is sending would panic, and dropping the only reference
+	// lets the channel (plus any queued messages) be GC'd with the run.
+	delete(a.runInputs, runID)
 	a.mu.Unlock()
+}
+
+// InjectRunMessage queues a new user message into a live run. runChat injects
+// it at the next agent step boundary (after the current tool batch finishes),
+// so the model sees it on the following request. It returns an error when the
+// run no longer exists or the queue is full.
+func (a *App) InjectRunMessage(runID string, text string) error {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return errors.New("message is required")
+	}
+	a.mu.Lock()
+	ch := a.runInputs[runID]
+	a.mu.Unlock()
+	if ch == nil {
+		return errors.New("run not found or already finished")
+	}
+	select {
+	case ch <- text:
+		return nil
+	default:
+		return fmt.Errorf("run message queue is full (limit %d)", runInputBufferSize)
+	}
+}
+
+// drainPendingInputs non-blockingly takes every queued injected message for a
+// run, in arrival order.
+func (a *App) drainPendingInputs(runID string) []string {
+	a.mu.Lock()
+	ch := a.runInputs[runID]
+	a.mu.Unlock()
+	if ch == nil {
+		return nil
+	}
+	var out []string
+	for {
+		select {
+		case text := <-ch:
+			out = append(out, text)
+		default:
+			return out
+		}
+	}
+}
+
+// appendPendingRunInputs drains the run's injected-message queue and appends
+// each text as a user message. It reports whether anything was injected.
+func (a *App) appendPendingRunInputs(runID string, messages []openai.ChatCompletionMessage) ([]openai.ChatCompletionMessage, bool) {
+	texts := a.drainPendingInputs(runID)
+	if len(texts) == 0 {
+		return messages, false
+	}
+	for _, text := range texts {
+		messages = append(messages, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: text})
+	}
+	return messages, true
 }
 
 // ReleaseSession releases backend-only state while preserving persisted history.
@@ -1516,7 +1588,19 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 				emitRunEnd("run:error", "cancelled", map[string]any{"error": "已取消"})
 				return
 			default:
-			} // Update live breakdown for context display (includes all tool calls/results)
+			} // Inject user messages queued while this run was working: they wait
+			// for the current tool batch to complete and enter the context here,
+			// right before the next model request, so the model sees them in the
+			// following turn. They are persisted with the rest of the history.
+			var injected bool
+			messages, injected = a.appendPendingRunInputs(runID, messages)
+			if injected {
+				// Frontend boundary: the queued message has now entered the model
+				// context. The UI may close out the previous assistant message so
+				// the next response starts on a fresh one.
+				a.emit("run:inject", map[string]any{"runId": runID, "sessionId": sessionID})
+			}
+			// Update live breakdown for context display (includes all tool calls/results)
 			bd := breakdownAcc.update(messages)
 			bd.ToolSchemas = estimateToolSchemaTokens(tools)
 			finalizeContextBreakdownTotal(&bd)
@@ -1674,6 +1758,16 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			if len(toolCalls) == 0 {
 				if content != "" {
 					messages = append(messages, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleAssistant, Content: content})
+				}
+				// The model stopped calling tools, but the user may have just
+				// injected a message: take the queue once more and continue for
+				// another step so the model actually sees it, instead of ending
+				// the run with the injection still queued.
+				var injected bool
+				messages, injected = a.appendPendingRunInputs(runID, messages)
+				if injected {
+					a.emit("run:inject", map[string]any{"runId": runID, "sessionId": sessionID})
+					continue
 				}
 				a.saveHistory(req.SessionID, messages)
 				success = true

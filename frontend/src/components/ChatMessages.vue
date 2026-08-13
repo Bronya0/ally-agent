@@ -561,7 +561,7 @@ defineExpose({ scrollbarRef, scrollToBottom, scrollToUserQuestion });
   padding: 0;
   line-height: 1.7;
   color: #e5e5e5;
-  font-size: 15px;
+  font-size: 16px;
   background: transparent;
   border: none;
   overflow-wrap: anywhere;

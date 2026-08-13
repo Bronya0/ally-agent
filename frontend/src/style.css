@@ -351,6 +351,8 @@ code, pre {
   color: inherit;
   background: transparent;
   border: 0;
+  font-size: 14px;
+  line-height: 1.6;
 }
 
 .code-block {
