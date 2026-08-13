@@ -276,8 +276,11 @@ function isCreatePreview(msg) {
 function toolBodyText(msg) {
   const body = String(msg.body || '');
   if (isScrollableBody(msg) && !bodyScrollEnabled.value) {
-    const lines = normalizedLines(body);
-    return lines.slice(Math.max(0, lines.length - TOOL_OUTPUT_PREVIEW_LINES)).join('\n');
+    // Tail preview: skip blank lines so the collapsed rows always end with real
+    // output instead of the stray trailing newlines shell output commonly has
+    // (an all-blank tail would otherwise render as empty rows).
+    const tail = normalizedLines(body).filter((line) => line !== '');
+    return tail.slice(-TOOL_OUTPUT_PREVIEW_LINES).join('\n');
   }
   if (!isBodyPreview(msg)) return body;
   const lines = normalizedLines(body);
