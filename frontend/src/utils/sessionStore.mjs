@@ -1,3 +1,12 @@
+/*
+ * SPDX-License-Identifier: GPL-3.0-only
+ *
+ * Copyright (C) 2026 tangssst <tangssst@qq.com>
+ * GitHub: https://github.com/Bronya0/ally-agent
+ *
+ * This file is part of ally-agent, licensed under the GNU General
+ * Public License v3. See the LICENSE file for details.
+ */
 const DB_NAME = 'ally-session-store';
 const DB_VERSION = 2;
 const STORE_NAME = 'sessions';

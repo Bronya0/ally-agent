@@ -1962,7 +1962,6 @@ code, pre {
 .welcome-info-table th {
   width: 64px;
   color: #fafafa;
-  background: #202020;
   font-weight: 600;
 }
 
@@ -2163,14 +2162,14 @@ code, pre {
 
 .tool-verb {
   color: var(--ally-accent);
-  font-size: 14px;
+  font-size: 15px;
   flex-shrink: 0;
 }
 
 .tool-name {
   color: var(--md-strong);
   font-weight: 650;
-  font-size: 14px;
+  font-size: 15px;
   flex-shrink: 0;
 }
 
@@ -2178,7 +2177,7 @@ code, pre {
    text, not a blue tool name. */
 .tool-count {
   color: #a3a3a3;
-  font-size: 14px;
+  font-size: 15px;
   flex-shrink: 0;
 }
 
@@ -2199,7 +2198,7 @@ code, pre {
 .tool-arg {
   overflow: hidden;
   color: #737373;
-  font-size: 14px;
+  font-size: 15px;
   text-overflow: ellipsis;
   white-space: nowrap;
   flex-shrink: 1;
@@ -2223,7 +2222,7 @@ code, pre {
   min-width: 0;
   overflow: hidden;
   color: #8b949e;
-  font-size: 13px;
+  font-size: 14px;
   flex-shrink: 1;
 }
 
@@ -2235,7 +2234,7 @@ code, pre {
   white-space: nowrap;
   color: #d4d4d4;
   font-family: var(--ally-mono-font);
-  font-size: 12.5px;
+  font-size: 13.5px;
   line-height: 1.25;
 }
 
@@ -2361,7 +2360,7 @@ code, pre {
   color: #bdbdbd;
   background: transparent;
   font-family: var(--ally-ui-font);
-  font-size: 13px;
+  font-size: 14px;
   line-height: 1.5;
   max-height: 150px;
   overflow: hidden;
@@ -2758,7 +2757,7 @@ code, pre {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  min-height: 26px;
+  line-height: 1.4;
   color: #a9a9a9;
   font-size: 14px;
   cursor: default;

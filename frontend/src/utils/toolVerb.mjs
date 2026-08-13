@@ -1,3 +1,12 @@
+/*
+ * SPDX-License-Identifier: GPL-3.0-only
+ *
+ * Copyright (C) 2026 tangssst <tangssst@qq.com>
+ * GitHub: https://github.com/Bronya0/ally-agent
+ *
+ * This file is part of ally-agent, licensed under the GNU General
+ * Public License v3. See the LICENSE file for details.
+ */
 // Single source of truth for tool-card verbs, keyed by the REAL backend tool
 // name (the authoritative name list lives in App.vue `toolKind`). Values are
 // [inProgress, done] English tense forms; the status icon (✓ / ✗ / none) already

@@ -1,3 +1,10 @@
+// SPDX-License-Identifier: GPL-3.0-only
+//
+// Copyright (C) 2026 tangssst <tangssst@qq.com>
+// GitHub: https://github.com/Bronya0/ally-agent
+//
+// This file is part of ally-agent, licensed under the GNU General
+// Public License v3. See the LICENSE file for details.
 // Package shared holds cross-tool helpers that don't belong to any single
 // tool: the coded error envelope used across the tool layer, and the
 // built-in tool catalog (OpenAI function schemas + canonical examples).

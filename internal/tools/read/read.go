@@ -1,3 +1,10 @@
+// SPDX-License-Identifier: GPL-3.0-only
+//
+// Copyright (C) 2026 tangssst <tangssst@qq.com>
+// GitHub: https://github.com/Bronya0/ally-agent
+//
+// This file is part of ally-agent, licensed under the GNU General
+// Public License v3. See the LICENSE file for details.
 // Package read holds the read tool's pure helpers: bounded text reads, line
 // ending normalization, line splitting, SHA-256 / Crockford Base32 version
 // tokens, atomic file writes via temp-sibling rename, and document text

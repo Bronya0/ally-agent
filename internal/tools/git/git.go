@@ -1,3 +1,10 @@
+// SPDX-License-Identifier: GPL-3.0-only
+//
+// Copyright (C) 2026 tangssst <tangssst@qq.com>
+// GitHub: https://github.com/Bronya0/ally-agent
+//
+// This file is part of ally-agent, licensed under the GNU General
+// Public License v3. See the LICENSE file for details.
 // Package git holds pure parsing/analysis helpers for git porcelain and
 // unified-diff output. Nothing here may depend on App state, ConfigState, or
 // any *App receiver — callers feed in raw git output and receive structured
