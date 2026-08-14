@@ -6879,11 +6879,10 @@ function formatToolBody(name, body) {
       if (parsed.data.entries.length > 200) out += '... and ' + (parsed.data.entries.length - 200) + ' more';
       return out.slice(0, 12000);
     }
-    // Skill result: show loaded skill name, not the full JSON wrapper.
-    if ((name === 'skill' || name === 'Skill') && parsed.data) {
-      if (parsed.data.message) return parsed.data.message;
-      if (parsed.data.name) return 'Skill loaded: ' + parsed.data.name;
-    }
+    // Skill result: the card header already reads "Loaded skill (name)" and the
+    // user message carries the /skill chip, so the result body only repeats it.
+    // Keep the card as a single status line, like delete_path/http_request.
+    if ((name === 'skill' || name === 'Skill') && parsed.data) return '';
     if ((name === 'create_goal' || name === 'update_goal' || name === 'get_goal') && parsed.data) {
       return formatGoalToolResult(parsed.data);
     }

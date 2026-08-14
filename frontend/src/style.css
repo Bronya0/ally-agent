@@ -2330,6 +2330,10 @@ code, pre {
   color: #a8a8a8;
 }
 
+.rich-tool-card.skill .tool-arg {
+  color: #a8a8a8;
+}
+
 .edit-change-chip {
   display: inline-flex;
   align-items: center;
