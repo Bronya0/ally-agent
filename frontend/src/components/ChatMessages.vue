@@ -44,10 +44,13 @@ Public License v3. See the LICENSE file for details.
           </div>
         </div>
         <div v-else-if="msg.role !== 'tool_call'" v-memo="messageRenderMemo(msg)" :class="['message', msg.role, { error: msg.error, system: msg.system }]">
-          <div v-if="msg.reasoningChars > 0 || msg.reasoningStartedAt" class="reasoning-block">
+          <div
+            class="reasoning-block"
+            :class="{ 'reasoning-hidden': msg.reasoningEndedAt || !(msg.reasoningChars > 0 || msg.reasoningStartedAt) }"
+          >
             <div class="reasoning-header">
               <span class="reasoning-label">
-                <span :class="['reasoning-title', { 'reasoning-title-thinking': !msg.reasoningEndedAt }]">{{ msg.reasoningEndedAt ? reasoningTitleText(msg) : 'Thinking' }}</span>
+                <span class="reasoning-title reasoning-title-thinking">Thinking</span>
                 <span class="reasoning-tokens">{{ fmtK(Math.max(1, Math.round((msg.reasoningChars || 0) / 3))) }} tokens</span>
               </span>
             </div>
@@ -251,31 +254,6 @@ function msgKey(msg) {
   return key;
 }
 
-// Format the thinking-phase duration for the "Thought for Xs" label.
-// Returns '' when the thinking window hasn't closed yet or is invalid.
-// 自适应格式：<1s / Ns / Nm / Nm Ns / Nh Nm，与工具卡 durationText 一致。
-function reasoningDurationText(msg) {
-  const start = Number(msg?.reasoningStartedAt || 0);
-  const end = Number(msg?.reasoningEndedAt || 0);
-  if (!start || !end || end < start) return '';
-  const ms = end - start;
-  if (ms < 1000) return '1s';
-  const secs = Math.round(ms / 1000);
-  const hours = Math.floor(secs / 3600);
-  const mins = Math.floor((secs % 3600) / 60);
-  const rest = secs % 60;
-  if (hours > 0) return `${hours}h${mins > 0 ? `${mins}m` : ''}`;
-  if (mins > 0) return `${mins}m${rest > 0 ? `${rest}s` : ''}`;
-  return `${secs}s`;
-}
-
-// Builds the "Thought for Xs" label shown once the thinking window closes.
-// Falls back to just "Thought" when timing wasn't captured.
-function reasoningTitleText(msg) {
-  const duration = reasoningDurationText(msg);
-  return duration ? `Thought for ${duration}` : 'Thought';
-}
-
 defineEmits([
   'toggleArchive',
   'toggleTool',
@@ -458,6 +436,7 @@ defineExpose({ scrollbarRef, scrollToBottom, scrollToUserQuestion });
 }
 
 .message {
+  position: relative;
   margin-bottom: 10px;
 }
 

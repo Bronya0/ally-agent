@@ -29,3 +29,17 @@ test('small diffs retain exact edit statistics', () => {
   const stats = computeEditStats('a\nb\nc', 'a\nx\nc');
   assert.deepEqual(stats, { added: 1, removed: 1 });
 });
+
+test('large fallback folds long unchanged runs between scattered changes', () => {
+  const lines = Array.from({ length: 300 }, (_, i) => `line ${i}`);
+  const mod = [...lines];
+  mod[1] = 'changed a';
+  mod[298] = 'changed b';
+
+  const diff = computeDiffLines(lines.join('\n'), mod.join('\n'));
+
+  const folded = diff.filter((l) => l.kind === 'context' && l.code.includes('unchanged lines'));
+  assert.equal(folded.length, 1);
+  assert.equal(diff.filter((l) => l.kind === 'delete').length, 2);
+  assert.equal(diff.filter((l) => l.kind === 'add').length, 2);
+});

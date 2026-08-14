@@ -24,10 +24,13 @@ Public License v3. See the LICENSE file for details.
         <div
           v-for="(row, ri) in displayRows"
           :key="ri"
-          :class="['diff-row', { 'diff-sep-row': row.isSeparator }]"
+          :class="['diff-row', { 'diff-sep-row': row.isSeparator || isFoldRow(row) }]"
         >
           <template v-if="row.isSeparator">
             <span class="diff-separator">{{ row.separatorText }}</span>
+          </template>
+          <template v-else-if="isFoldRow(row)">
+            <span class="diff-separator">&nbsp;</span>
           </template>
           <template v-else>
             <div :class="['diff-side', ...lineClasses(row.left)]">
@@ -52,10 +55,13 @@ Public License v3. See the LICENSE file for details.
         <div
           v-for="(line, li) in displayLines"
           :key="li"
-          :class="['diff-row', line.isSeparator ? 'diff-sep-row' : '', ...lineClasses(line)]"
+          :class="['diff-row', line.isSeparator || isUnchangedFold(line) ? 'diff-sep-row' : '', ...lineClasses(line)]"
         >
           <template v-if="line.isSeparator">
             <span class="diff-separator">{{ line.separatorText }}</span>
+          </template>
+          <template v-else-if="isUnchangedFold(line)">
+            <span class="diff-separator">&nbsp;</span>
           </template>
           <template v-else>
             <span class="diff-gutter">{{ padGutter(line.lineNum) }}</span>
@@ -128,9 +134,19 @@ function parseDiffText(text) {
       result.push({ kind: 'delete', lineNum: oldLine, code: content })
       oldLine++
     } else if (marker === ' ') {
-      result.push({ kind: 'context', lineNum: newLine, code: content })
-      oldLine++
-      newLine++
+      // 折叠行 “… N unchanged lines …” 代表 N 行未变化，但输出只占一行。
+      // 行号必须跳过 N，否则后面所有行号都会连续错位（显示成 12345…）。
+      const fold = content.match(/^…\s*(\d+)\s+unchanged lines?\s*…$/)
+      if (fold) {
+        result.push({ kind: 'context', lineNum: newLine, code: content })
+        const n = Number(fold[1]) || 0
+        oldLine += n
+        newLine += n
+      } else {
+        result.push({ kind: 'context', lineNum: newLine, code: content })
+        oldLine++
+        newLine++
+      }
     } else {
       result.push({ kind: 'context', lineNum: newLine, code: line })
       oldLine++
@@ -161,6 +177,17 @@ const localDiffLines = computed(() => {
 const displayLines = computed(() => {
   return localDiffLines.value
 })
+
+// 后端折叠行（“ … N unchanged lines …”）识别：渲染时只显示一个无行号的
+// 省略号。数量信息仍由 parseDiffText 用于行号推进，这里仅负责显示简化。
+function isUnchangedFold(line) {
+  return Boolean(line && line.kind === 'context' && /^…\s*\d+\s+unchanged lines?\s*…$/.test(line.code))
+}
+
+// split 布局中折叠行是左右镜像的 context 行，检查左栏即可。
+function isFoldRow(row) {
+  return Boolean(row && !row.isSeparator && row.left && isUnchangedFold(row.left))
+}
 
 // Side-by-side rows: pair adjacent deleted/added blocks so replacements line
 // up. Context lines are mirrored to both sides. Only used by layout="split".

@@ -2567,6 +2567,7 @@ code, pre {
 .diff-sep-row {
   display: block;
   padding: 1px 10px;
+  text-align: center;
   user-select: none;
 }
 
@@ -2761,8 +2762,32 @@ code, pre {
 
 /* ── Reasoning / thinking block ── */
 
+/* Thinking 浮层：不占文档流，覆盖在正文起点上。思考时消息靠
+   .message:has() 占位规则保底高度；正文开始输出时浮层淡出，正文在
+   原位显露（被浮层背景遮住的部分逐渐露出），全程无位移、无塌缩。 */
 .reasoning-block {
-  margin: 0 0 10px;
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 2;
+  margin: 0;
+  opacity: 1;
+  visibility: visible;
+  transition: opacity 0.2s ease, visibility 0.2s ease;
+  /* 与页面背景一致，遮住下方刚输出的正文首行，淡出时正文原位显露 */
+  background: #1a1a1a;
+  pointer-events: none;
+}
+
+.reasoning-block.reasoning-hidden {
+  opacity: 0;
+  visibility: hidden;
+}
+
+/* 思考中：消息保留一行高度，浮层不溢出压到上一条消息 */
+.message:has(.reasoning-block:not(.reasoning-hidden)) {
+  min-height: 26px;
 }
 
 .reasoning-header {
@@ -2834,6 +2859,7 @@ code, pre {
 .reasoning-body:hover {
   overflow-y: auto;
 }
+
 
 /* ── Todo panel (fixed above composer) ── */
 

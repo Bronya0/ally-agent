@@ -99,37 +99,61 @@ export function computeDiffLines(oldText, newText, oldStart = 1, newStart = 1, i
 }
 
 function computeLargeDiffFallback(oldLines, newLines, oldStart, newStart, isIncomplete) {
-  const oldLength = oldLines.length;
-  const newLength = newLines.length;
-  let prefix = 0;
-  while (prefix < oldLength && prefix < newLength && oldLines[prefix] === newLines[prefix]) prefix++;
-
-  let suffix = 0;
-  while (
-    suffix < oldLength - prefix
-    && suffix < newLength - prefix
-    && oldLines[oldLength - suffix - 1] === newLines[newLength - suffix - 1]
-  ) {
-    suffix++;
-  }
-
+  // 相同行 run 超过该数量时折叠为一行省略号，避免多簇分散变更时把中间
+  // 大段未变化的行整体标成删除+添加（与后端 truncated diff 策略一致）。
+  const UNCHANGED_FOLD_THRESHOLD = 4;
   const result = [];
-  for (let i = 0; i < prefix; i++) {
-    result.push({ kind: 'context', lineNum: newStart + i, code: newLines[i] });
+  let i = 0;
+  let j = 0;
+  let runStartI = 0;
+  let inRun = false;
+  const flushRun = () => {
+    if (!inRun) return;
+    const n = i - runStartI;
+    if (n <= UNCHANGED_FOLD_THRESHOLD) {
+      const runNewStart = j - n;
+      for (let k = runStartI; k < i; k++) {
+        result.push({ kind: 'context', lineNum: newStart + runNewStart + (k - runStartI), code: oldLines[k] });
+      }
+    } else {
+      result.push({ kind: 'context', lineNum: newStart + runStartI, code: `… ${n} unchanged lines …` });
+    }
+    inRun = false;
+  };
+
+  while (i < oldLines.length && j < newLines.length) {
+    if (oldLines[i] === newLines[j]) {
+      if (!inRun) { runStartI = i; inRun = true; }
+      i++;
+      j++;
+      continue;
+    }
+    flushRun();
+    result.push({ kind: 'delete', lineNum: oldStart + i, code: oldLines[i] });
+    result.push({ kind: 'add', lineNum: newStart + j, code: newLines[j] });
+    i++;
+    j++;
   }
-  for (let i = prefix; i < oldLength - suffix; i++) {
+  flushRun();
+  // 插入/删除不对称时的剩余行。
+  for (; i < oldLines.length; i++) {
     result.push({ kind: 'delete', lineNum: oldStart + i, code: oldLines[i] });
   }
-  for (let i = prefix; i < newLength - suffix; i++) {
-    result.push({ kind: 'add', lineNum: newStart + i, code: newLines[i] });
-  }
-  for (let i = suffix; i > 0; i--) {
-    const newIndex = newLength - i;
-    result.push({ kind: 'context', lineNum: newStart + newIndex, code: newLines[newIndex] });
+  for (; j < newLines.length; j++) {
+    result.push({ kind: 'add', lineNum: newStart + j, code: newLines[j] });
   }
 
-  if (isIncomplete && suffix === 0 && newLength === prefix) {
-    return result.slice(0, prefix);
+  // 流式未完成（new 仍是 old 的前缀）时抑制尾部 delete。
+  if (isIncomplete && result.length > 0) {
+    let lastNonDelete = result.length - 1;
+    while (lastNonDelete >= 0 && result[lastNonDelete].kind === 'delete') {
+      lastNonDelete--;
+    }
+    if (lastNonDelete >= 0) {
+      result.length = lastNonDelete + 1;
+    } else {
+      result.length = 0;
+    }
   }
   return result;
 }
