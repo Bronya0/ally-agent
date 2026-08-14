@@ -148,7 +148,7 @@ Public License v3. See the LICENSE file for details.
                   <span class="composer-retry-text">{{ $t('app.run.retryBanner', { attempt: retryBanner.attempt, max: retryBanner.maxAttempts, error: retryBanner.error }) }}</span>
                   <span v-if="retryBanner.totalKeys > 1" class="composer-retry-key">{{ $t('app.run.retryKey', { key: retryBanner.keyIndex + 1, total: retryBanner.totalKeys }) }}</span>
                 </div>
-                <div v-if="activeSessionRunning || activeGoal || compactLoadingActive" class="composer-run-status">
+                <div v-if="activeSessionRunning || compactLoadingActive" class="composer-run-status">
                   <template v-if="compactLoadingActive">
                     <span class="composer-run-status-dots" aria-hidden="true">
                       <span class="composer-run-status-dot"></span>
@@ -168,11 +168,7 @@ Public License v3. See the LICENSE file for details.
                       class="composer-run-prompt"
                       :title="latestUserPromptSummary"
                     >{{ latestUserPromptSummary }}</span>
-                    <span v-if="activeGoal" class="composer-goal-status" :title="activeGoal.objective || ''">
-                      <span class="composer-goal-label">{{ $t('tools.kind.goal') }}</span>
-                      <span class="composer-goal-objective">{{ activeGoal.objective }}</span>
-                      <span v-if="activeGoal.maxTurns" class="composer-goal-progress">{{ activeGoal.turnsUsed || 0 }}/{{ activeGoal.maxTurns }}</span>
-                    </span>
+
                   </template>
                 </div>
                 <!-- One input instance per workspace tab (keyed by session:tab) so each
@@ -381,7 +377,6 @@ import {
   GetActiveSkills,
   SwitchModel,
   GetTodos,
-  GetGoal,
   GetMcpServers,
   GetMcpConfig,
   SaveMcpConfig,
@@ -1358,7 +1353,6 @@ const settingsPage = ref('general');
 const showSkillsPanel = ref(false);
 const todos = ref([]);
 const todosBySession = reactive({});
-const goalsBySession = reactive({});
 const todoRevisionsBySession = reactive({});
 const todoPanelCollapsed = ref(false);
 const todoPanelListRef = ref(null);
@@ -1440,7 +1434,6 @@ const ALLY_RELEASES_URL = 'https://github.com/Bronya0/ally-agent/releases';
 
 const builtinCommands = [
   { key: 'new', label: '/new', description: t('commands.new'), text: '', special: 'new' },
-  { key: 'goal', label: '/goal', description: t('commands.goal'), text: '', special: 'goal' },
   { key: 'skills', label: '/skills', description: t('commands.skills'), text: '', special: 'skills' },
   { key: 'sessions', label: '/sessions', description: t('commands.sessions'), text: '', special: 'sessions' },
   { key: 'init', label: '/init', description: t('commands.init'), text: '', special: 'init' },
@@ -1661,7 +1654,6 @@ const currentTodoNumber = computed(() => {
   const index = todos.value.findIndex((item) => item?.status === 'in_progress');
   return index >= 0 ? index + 1 : 0;
 });
-const activeGoal = computed(() => goalsBySession[activeSessionId.value] || null);
 const showTodoPanel = computed(() => todos.value.length > 0 && activeTodoCount.value > 0);
 const orderedTodoEntries = computed(() => orderTodoPanelEntries(todos.value));
 
@@ -2097,7 +2089,6 @@ watch(activeSessionId, (sid) => {
 watch(activeSessionId, () => {
   // 切换会话时清掉重试横幅:重试横幅只反映当前可见会话的瞬时状态。
   retryBanner.value = null;
-  loadGoal(activeSessionId.value);
   nextTick(() => {
     cleanupDisconnectedMermaidNodes();
     observePendingMermaidDiagrams();
@@ -3621,13 +3612,6 @@ function bindRuntimeEvents() {
       todos.value = nextTodos;
     }
   });
-  onRuntimeEvent('goal:update', (data) => {
-    const sid = data.sessionId || '';
-    if (!sid) return;
-    const goal = data.goal;
-    if (goal?.status === 'active') goalsBySession[sid] = goal;
-    else delete goalsBySession[sid];
-  });
   for (const eventName of ['scheduled:update', 'scheduled:run_start', 'scheduled:run_done', 'scheduled:run_error']) {
     onRuntimeEvent(eventName, (data) => applyScheduledTaskEvent(data));
   }
@@ -4423,7 +4407,7 @@ async function sendPrompt() {
       // Send as normal message
     } else if (slashContent) {
       // Check if it's a builtin command first
-      const builtinPrefixes = ['new','plan','goal','skills','clear','switch','sessions','reload','init','note','remember','compact','push','review'];
+      const builtinPrefixes = ['new','plan','skills','clear','switch','sessions','reload','init','note','remember','compact','push','review'];
       const cmdName = slashContent.split(/\s+/)[0];
       const isBuiltin = builtinPrefixes.includes(cmdName);
       // Also check if any skill name matches
@@ -5025,12 +5009,6 @@ async function handleBuiltinCommand(command) {
     commandMenuVisible.value = false;
     return true;
   }
-  if (command.special === 'goal') {
-    promptText.value = t('app.goal.prompt');
-    commandMenuVisible.value = false;
-    nextTick(() => focusPromptInput());
-    return true;
-  }
   if (command.special === 'skills') {
     await loadAndShowSkills();
     promptText.value = '';
@@ -5593,17 +5571,6 @@ async function loadTodos(sid) {
     todosBySession[sid] = nextTodos;
     if (sid === activeSessionId.value) todos.value = nextTodos;
   } catch (_) { todos.value = []; }
-}
-
-async function loadGoal(sid) {
-  if (!sid) return;
-  try {
-    const result = await GetGoal(sid);
-    if (result?.hasGoal && result?.status === 'active') goalsBySession[sid] = result;
-    else delete goalsBySession[sid];
-  } catch (_) {
-    delete goalsBySession[sid];
-  }
 }
 
 function sortScheduledTasks(tasks) {
@@ -6411,12 +6378,6 @@ async function changeReasoningEffort(level) {
   }
 }
 
-// Goal mode helpers
-function trackGoal(objective) {
-  pushMessage('user', `## Goal\n\n${objective}\n\n${t('app.goal.confirm')}`, { system: false });
-  scrollMessagesToBottom();
-}
-
 function normalizeToolStatus(status) {
   if (status === 'success' || status === 'error' || status === 'running') return status;
   if (status === 'info') return 'running';
@@ -6441,7 +6402,6 @@ function toolKind(name) {
   if (name === 'todo_write') return 'todo';
   if (name === 'scheduled_task') return 'scheduled';
   if (name === 'memory_read' || name === 'memory_write') return 'memory';
-  if (name === 'create_goal' || name === 'update_goal' || name === 'get_goal') return 'goal';
   if (name === 'subagent' || name === 'agent_delegate') return 'subagent';
   if (name === 'skill' || name === 'Skill') return 'skill';
   if (name === 'render_html') return 'render_html';
@@ -6883,9 +6843,6 @@ function formatToolBody(name, body) {
     // user message carries the /skill chip, so the result body only repeats it.
     // Keep the card as a single status line, like delete_path/http_request.
     if ((name === 'skill' || name === 'Skill') && parsed.data) return '';
-    if ((name === 'create_goal' || name === 'update_goal' || name === 'get_goal') && parsed.data) {
-      return formatGoalToolResult(parsed.data);
-    }
     // Never leak a raw tool-result JSON envelope into the UI. Tools without a
     // dedicated renderer still get a bounded, human-readable key/value view.
     if (parsed?.ok === false) return String(parsed.error || t('tools.status.failed'));
@@ -6897,22 +6854,6 @@ function formatToolBody(name, body) {
     if (trimmed.startsWith('{') || trimmed.startsWith('[')) return '';
     return trimmed.slice(0, 12000);
   }
-}
-
-function formatGoalToolResult(goal = {}) {
-  if (goal.hasGoal === false) return t('tools.goal.noActive');
-  const lines = [];
-  if (goal.objective) lines.push(`${t('tools.goal.objective')}：${goal.objective}`);
-  if (goal.status) lines.push(`${t('tools.goal.status')}：${t(`tools.goal.status.${goal.status}`)}`);
-  if (goal.completionCriterion) lines.push(`${t('tools.goal.criterion')}：${goal.completionCriterion}`);
-  const reason = goal.reason || goal.statusReason || '';
-  if (reason) lines.push(`${t('tools.goal.reason')}：${reason}`);
-  const turnsUsed = Number(goal.turnsUsed ?? 0);
-  const maxTurns = Number(goal.maxTurns ?? goal.turnBudget ?? 0);
-  if (turnsUsed > 0 || maxTurns > 0) {
-    lines.push(`${t('tools.goal.progress')}：${turnsUsed}${maxTurns > 0 ? ` / ${maxTurns}` : ''}`);
-  }
-  return lines.join('\n');
 }
 
 function formatGenericToolData(value) {

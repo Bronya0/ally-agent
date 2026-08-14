@@ -758,39 +758,6 @@ func TestSystemPromptKeepsEditBehavioralRules(t *testing.T) {
 	}
 }
 
-func TestGoalProgressIsAppendedAfterStableHistory(t *testing.T) {
-	app := NewApp()
-	sessionID := "goal-cache-session"
-	app.goalStates[goalSessionKey(sessionID)] = &GoalState{
-		GoalID:     "goal-1",
-		Objective:  "improve cache reuse",
-		Status:     "active",
-		TurnsUsed:  3,
-		TurnBudget: 12,
-	}
-
-	messages := app.buildMessages(ChatRequest{
-		SessionID: sessionID,
-		Messages:  []ChatMessageInput{{Role: openai.ChatMessageRoleUser, Content: "continue"}},
-	}, ConfigState{}, nil)
-	if len(messages) < 2 {
-		t.Fatalf("expected system, history, and goal progress messages: %#v", messages)
-	}
-	stable := joinMessageContents(app.buildSystemContextMessages(sessionID, ConfigState{}, nil))
-	if strings.Contains(stable, "Continuation turns used") || strings.Contains(stable, "Status: active") {
-		t.Fatalf("dynamic goal progress must not be in the stable system prefix: %s", stable)
-	}
-	last := messages[len(messages)-1]
-	if last.Role != openai.ChatMessageRoleUser || !strings.Contains(last.Content, "<ally-goal-progress>") || !strings.Contains(last.Content, "Continuation turns used: 3") {
-		t.Fatalf("goal progress should be appended at the request tail, got %#v", last)
-	}
-	sanitized := sanitizeHistoryMessages(messages)
-	for _, message := range sanitized {
-		if isGoalProgressMessage(message) {
-			t.Fatalf("goal progress must not persist in session history: %#v", sanitized)
-		}
-	}
-}
 
 func TestSubagentToolsExcludeInteractiveToolsAndIncludeMCP(t *testing.T) {
 	app := NewApp()

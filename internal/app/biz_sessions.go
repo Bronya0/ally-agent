@@ -1022,7 +1022,7 @@ func sanitizeHistoryMessages(messages []openai.ChatCompletionMessage) []openai.C
 		// Synthesized image-input messages are transient: drop them so saved
 		// history never carries "images were provided" text without the actual
 		// images (the base64 payloads are not persisted).
-		if isImageInjectionMessage(&original) || original.Role == openai.ChatMessageRoleSystem || isGoalProgressMessage(original) {
+		if isImageInjectionMessage(&original) || original.Role == openai.ChatMessageRoleSystem {
 			continue
 		}
 		m := original

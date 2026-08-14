@@ -49,12 +49,6 @@ const (
 	// injection off the chat hot path; a full queue fails the call instead of
 	// blocking the frontend.
 	runInputBufferSize = 32
-	// goalAutoContinueEnabled controls whether runChat keeps automatically
-	// continuing turns while a goal is active. Goal mode is currently unused,
-	// so this is disabled to keep every chat run a single turn; the goal
-	// tooling and state remain intact and flipping this back to true restores
-	// the original auto-continuation behavior.
-	goalAutoContinueEnabled          = false
 	defaultLLMRetries                = 6
 	defaultShellLimit                = 120
 	defaultHTTPTimeout               = 60
@@ -216,7 +210,6 @@ type App struct {
 	initialized    bool
 	disabledSkills []string
 	mcpManager     *McpManager
-	goalStates     map[string]*GoalState
 	todos          map[string][]TodoEntry // sessionID → todos
 	todoRevisions  map[string]int64
 	askMu          sync.Mutex
@@ -302,7 +295,6 @@ func NewApp() *App {
 		runSessions:         map[string]string{},
 		runInputs:           map[string]chan string{},
 		histories:           map[string][]openai.ChatCompletionMessage{},
-		goalStates:          map[string]*GoalState{},
 		todos:               map[string][]TodoEntry{},
 		todoRevisions:       map[string]int64{},
 		pendingAsks:         map[string]*pendingAsk{},
@@ -1146,19 +1138,6 @@ type TodoListRequest struct {
 	Todos []TodoEntry `json:"todos,omitempty"`
 }
 
-type GoalState struct {
-	GoalID              string `json:"goalId"`
-	Objective           string `json:"objective"`
-	CompletionCriterion string `json:"completionCriterion,omitempty"`
-	Status              string `json:"status"`
-	StatusReason        string `json:"statusReason,omitempty"`
-	TurnBudget          int    `json:"turnBudget,omitempty"`
-	TurnsUsed           int    `json:"turnsUsed"`
-	TokensUsed          int    `json:"tokensUsed"`
-	WallClockMs         int64  `json:"wallClockMs"`
-	CreatedAt           int64  `json:"createdAt"`
-}
-
 type AgentDelegateRequest struct {
 	Task         string `json:"task"`
 	Description  string `json:"description,omitempty"`
@@ -1396,7 +1375,6 @@ func (a *App) releaseSession(sessionID string, deleteHistory bool) error {
 		}
 	}
 	delete(a.histories, sessionID)
-	delete(a.goalStates, goalSessionKey(sessionID))
 	delete(a.todos, sessionID)
 	delete(a.todoRevisions, sessionID)
 	delete(a.liveBreakdown, sessionID)
@@ -1461,7 +1439,7 @@ func (a *App) compactSession(parent context.Context, sessionID, instruction stri
 
 // compactHistory summarizes the given sanitized messages with the model and
 // replaces the session history with the summary. history is the caller's
-// snapshot of the conversation to compact (system/workspace/goal messages
+// snapshot of the conversation to compact (system/workspace messages
 // excluded). keepLastUser preserves the final user message (e.g. a request
 // that still has pending work); callers that re-append the current request
 // themselves (auto-compaction) should pass false to avoid duplicating it.
@@ -1632,16 +1610,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 		a.notifyCompletion(kind, cfg.Workspace)
 	}
 
-	continuationPrompt := "Continue working on the goal. Check if the goal is complete. If so, call update_goal with status=complete. If blocked, call update_goal with status=blocked."
-	for turn := 0; ; turn++ {
-		if turn > 0 {
-			// Goal continuation: rebuild messages with fresh goal context
-			messages = a.buildMessages(req, cfg, a.listCachedSkills())
-			messages = append(messages, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: continuationPrompt})
-			tools = a.buildToolsForConfig(cfg)
-			breakdownAcc.reset(messages)
-		}
-		for step := 0; step < maxAgentSteps; step++ {
+	for step := 0; step < maxAgentSteps; step++ {
 			select {
 			case <-ctx.Done():
 				// 记录用户主动取消标记，让下一轮模型能区分"用户中断"与
@@ -1683,13 +1652,13 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			}
 			compactThreshold := clampCompactThreshold(cfg.CompactThreshold)
 			if usedTokens > int(float64(maxCtx)*compactThreshold) {
-				// Compact the in-run message list (system/workspace/goal markers are
+				// Compact the in-run message list (system/workspace markers are
 				// stripped by sanitize) so tool activity from this run is included in
 				// the summary instead of being lost when history is replaced.
 				h := sanitizeHistoryMessages(messages)
 				if len(h) > 2 {
 					a.emit("run:compact", map[string]any{"sessionId": sessionID, "tokensBefore": usedTokens})
-					// keepLastUser=false: the current request and goal continuation
+					// keepLastUser=false: the current request and any continuation
 					// prompt are re-appended below, so carrying the trailing user
 					// message into the compacted history would duplicate it.
 					if result, err := a.compactHistory(ctx, cfg, sessionID, "", h, false); err == nil {
@@ -1701,10 +1670,6 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 						if strings.TrimSpace(req.Message) != "" || len(req.Attachments) > 0 {
 							messages = appendUserMessageWithAttachments(messages, req.Message, req.Attachments)
 						}
-						if turn > 0 {
-							messages = append(messages, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: continuationPrompt})
-						}
-						messages = a.appendGoalProgressMessage(messages, sessionID)
 						breakdownAcc.reset(messages)
 						payload := map[string]any{
 							"sessionId":    sessionID,
@@ -1727,7 +1692,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 				a.emit(name, payload)
 			})
 			toolProgress := newToolCallProgressTracker()
-			toolBatchID := fmt.Sprintf("%d:%d", turn, step)
+			toolBatchID := fmt.Sprintf("%d", step)
 			// Inject context budget as the final request item so the model can
 			// self-regulate tool usage (e.g. prefer grep over read when
 			// near the limit). Built fresh per request from the live breakdown;
@@ -1834,24 +1799,6 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 				a.saveHistory(req.SessionID, messages)
 				success = true
 				emitRunEnd("run:done", "done", nil)
-				// Goal mode: continue if active. Auto-continuation is disabled via
-				// goalAutoContinueEnabled; goal state/tools remain intact.
-				if g := a.getActiveGoal(sessionID); goalAutoContinueEnabled && g != nil {
-					bd := breakdownAcc.update(messages)
-					bd.ToolSchemas = estimateToolSchemaTokens(tools)
-					finalizeContextBreakdownTotal(&bd)
-					g = a.recordGoalTurn(sessionID, bd.Total, time.Since(startTime))
-					if g == nil {
-						return
-					}
-					if g.TurnBudget > 0 && g.TurnsUsed >= g.TurnBudget {
-						a.updateGoal(sessionID, "blocked", "turn budget reached")
-						emitRunEnd("run:error", "error", map[string]any{"error": "goal turn budget reached"})
-						return
-					}
-					step = maxAgentSteps
-					break
-				}
 				return
 			}
 
@@ -1976,45 +1923,15 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			if imgMsg := readImageInjectionMessage(readImages); imgMsg != nil {
 				messages = append(messages, *imgMsg)
 			}
-		}
-
-		if g := a.getActiveGoal(sessionID); goalAutoContinueEnabled && g != nil && g.TurnsUsed < g.TurnBudget {
-			emitRunEnd("run:done", "done", nil)
-			bd := breakdownAcc.update(messages)
-			bd.ToolSchemas = estimateToolSchemaTokens(tools)
-			finalizeContextBreakdownTotal(&bd)
-			if a.recordGoalTurn(sessionID, bd.Total, time.Since(startTime)) == nil {
-				return
-			}
-			continue
-		}
-		emitRunEnd("run:error", "error", map[string]any{"error": "达到最大 agent 步数，已停止"})
-		return
 	}
+	emitRunEnd("run:error", "error", map[string]any{"error": "达到最大 agent 步数，已停止"})
+	return
 }
 
 // Static tool schemas live in internal/tools/shared. These wrappers keep the
 // orchestration and existing package-level tests independent from that layout.
-// chatTools returns the built-in tool schemas exposed to the model. Goal-mode
-// tools (create_goal/update_goal/get_goal) are filtered out: goal mode is
-// unused and its auto-continuation is disabled (goalAutoContinueEnabled), so
-// the model must not be able to start a goal session. Their implementations
-// (executeTool dispatch, state, events) remain intact for compatibility.
 func chatTools() []openai.Tool {
-	hidden := map[string]bool{
-		"create_goal": true,
-		"update_goal": true,
-		"get_goal":    true,
-	}
-	tools := toolshared.Builtins()
-	filtered := make([]openai.Tool, 0, len(tools))
-	for _, tool := range tools {
-		if tool.Function != nil && hidden[tool.Function.Name] {
-			continue
-		}
-		filtered = append(filtered, tool)
-	}
-	return filtered
+	return toolshared.Builtins()
 }
 func rawFunctionTool(name, description string, parameters map[string]any) openai.Tool {
 	return toolshared.RawFunction(name, description, parameters)
@@ -2289,31 +2206,6 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		err = decode(&tReq)
 		if err == nil {
 			data, err = a.handleTodoList(sessionID, tReq)
-		}
-	case "create_goal":
-		var cgReq struct {
-			Objective           string `json:"objective"`
-			CompletionCriterion string `json:"completionCriterion"`
-			MaxTurns            int    `json:"maxTurns"`
-		}
-		err = decode(&cgReq)
-		if err == nil {
-			data, err = a.createGoal(sessionID, cgReq.Objective, cgReq.CompletionCriterion, cgReq.MaxTurns)
-		}
-	case "update_goal":
-		var ugReq struct {
-			Status string `json:"status"`
-			Reason string `json:"reason,omitempty"`
-		}
-		err = decode(&ugReq)
-		if err == nil {
-			data, err = a.updateGoal(sessionID, ugReq.Status, ugReq.Reason)
-		}
-	case "get_goal":
-		var empty struct{}
-		err = decode(&empty)
-		if err == nil {
-			data = a.getGoalResult(sessionID)
 		}
 	case "skill":
 		var skReq struct {

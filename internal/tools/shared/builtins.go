@@ -353,27 +353,6 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"task"},
 		}),
-		functionTool("create_goal", "Create a tracked goal. The system will continue running turns until the goal is completed or blocked.", map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"objective":           map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "The objective to pursue. Must have a verifiable end state."},
-				"completionCriterion": map[string]any{"type": "string", "description": "How to verify the goal is complete. Optional."},
-				"maxTurns":            map[string]any{"type": "integer", "minimum": 1, "description": "Maximum turns allowed. Default 10."},
-			},
-			"required": []string{"objective"},
-		}),
-		functionTool("update_goal", "Update current goal status: complete, blocked, or paused.", map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"status": map[string]any{"type": "string", "enum": []any{"complete", "blocked", "paused"}, "description": "New goal status."},
-				"reason": map[string]any{"type": "string", "description": "Optional reason for the status change."},
-			},
-			"required": []string{"status"},
-		}),
-		functionTool("get_goal", "Get the current goal status, progress and budget. Returns null if no goal is set.", map[string]any{
-			"type":       "object",
-			"properties": map[string]any{},
-		}),
 		functionTool("skill", "Invoke a registered skill from the current skill listing. Use when the user wants to call a skill, or when you need instructions for a specific task covered by a skill.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -411,9 +390,6 @@ var builtinToolExamples = map[string]string{
 	"render_html":        `{"title":"Interactive counter","html":"<button id='counter'>0</button><script>const button=document.getElementById('counter');button.onclick=()=>button.textContent=String(Number(button.textContent)+1)</script>"}`,
 	"todo_write":         `update: {"todos":[{"title":"Inspect implementation","status":"in_progress"},{"title":"Run tests","status":"pending"}]}; read current: {}`,
 	"subagent":           `{"task":"Inspect the authentication module and report concrete security issues.","description":"Review authentication","cleanContext":false}`,
-	"create_goal":        `{"objective":"Make all tests pass","completionCriterion":"go test ./... exits successfully","maxTurns":10}`,
-	"update_goal":        `{"status":"complete","reason":"All required tests pass."}`,
-	"get_goal":           `{}`,
 	"skill":              `{"skill":"codegraph","args":"main"}`,
 }
 

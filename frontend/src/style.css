@@ -702,31 +702,6 @@ code, pre {
   white-space: nowrap;
 }
 
-.composer-goal-status {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  max-width: min(70vw, 720px);
-}
-
-.composer-goal-label {
-  color: var(--ally-accent);
-  flex: none;
-}
-
-.composer-goal-objective {
-  color: var(--ally-accent-muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.composer-goal-progress {
-  flex: none;
-  color: #9a8f7a;
-  font-variant-numeric: tabular-nums;
-}
 
 .composer-info .info-provider,
 .composer-info .info-model {

@@ -16,7 +16,6 @@ import (
 	"math"
 	"path/filepath"
 	goruntime "runtime"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -336,25 +335,6 @@ func (a *App) getContextBreakdown(sessionID string) ContextBreakdown {
 		})
 	}
 
-	// Active goal context (also injected as a system message)
-	if g := a.getActiveGoal(sessionID); g != nil {
-		var goalCtx string
-		budgetInfo := ""
-		if g.TurnBudget > 0 {
-			budgetInfo = fmt.Sprintf(" (turns %d/%d)", g.TurnsUsed, g.TurnBudget)
-		}
-		goalCtx = fmt.Sprintf("Active goal: %s | Status: %s | Turns: %d%s", g.Objective, g.Status, g.TurnsUsed, budgetInfo)
-		if g.CompletionCriterion != "" {
-			goalCtx += " | Completion: " + g.CompletionCriterion
-		}
-		tokens := estimateTokensFromText(goalCtx)
-		result.SystemPrompt += tokens
-		result.SystemPromptParts = append(result.SystemPromptParts, ContextBreakdownPart{
-			Label:  "目标上下文",
-			Tokens: tokens,
-		})
-	}
-
 	// Check if live breakdown is available (covers tool calls + tool results not in a.histories)
 	a.mu.Lock()
 	live, hasLive := a.liveBreakdown[sessionID]
@@ -480,8 +460,7 @@ func (a *App) invalidateContextStaticCache() {
 
 // liveBreakdownAccumulator exploits the append-only shape of the runChat
 // message list. It scans only messages added since the previous step; callers
-// reset it after goal rebuilds or context compaction, where the slice is
-// replaced wholesale.
+// reset it after context compaction, where the slice is replaced wholesale.
 type liveBreakdownAccumulator struct {
 	nextMessage int
 	breakdown   ContextBreakdown
@@ -658,7 +637,6 @@ func (a *App) buildMessages(req ChatRequest, cfg ConfigState, allSkills []SkillD
 				}
 			}
 		}
-		messages = a.appendGoalProgressMessage(messages, req.SessionID)
 		return messages
 	}
 
@@ -668,12 +646,7 @@ func (a *App) buildMessages(req ChatRequest, cfg ConfigState, allSkills []SkillD
 	if strings.TrimSpace(req.Message) != "" || len(req.Attachments) > 0 {
 		messages = appendUserMessageWithAttachments(messages, req.Message, req.Attachments)
 	}
-	messages = a.appendGoalProgressMessage(messages, req.SessionID)
 	return messages
-}
-
-func isGoalProgressMessage(m openai.ChatCompletionMessage) bool {
-	return m.Role == openai.ChatMessageRoleUser && strings.Contains(m.Content, "<ally-goal-progress>")
 }
 
 // cancelledTurnMarker returns the user-role control message recorded when the
@@ -694,36 +667,7 @@ func (a *App) buildSystemContextMessages(sessionID string, cfg ConfigState, allS
 		messages = append(messages, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleSystem, Content: systemPrompt})
 	}
 	messages = a.appendWorkspaceMapMessage(messages, cfg)
-
-	// Inject active goal context
-	if goal := a.getActiveGoal(sessionID); goal != nil {
-		goalCtx := fmt.Sprintf("You are working under an active goal.\nObjective: %s", goal.Objective)
-		if goal.CompletionCriterion != "" {
-			goalCtx += "\nCompletion criterion: " + goal.CompletionCriterion
-		}
-		goalCtx += "\n\nBefore doing any goal work, check the objective. If complete or blocked, call update_goal. Otherwise, make focused progress. Call update_goal as soon as the goal is done."
-		messages = append(messages, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleSystem, Content: goalCtx})
-	}
 	return messages
-}
-
-func (a *App) appendGoalProgressMessage(messages []openai.ChatCompletionMessage, sessionID string) []openai.ChatCompletionMessage {
-	goal := a.getActiveGoal(sessionID)
-	if goal == nil {
-		return messages
-	}
-	var progress strings.Builder
-	progress.WriteString("<ally-goal-progress>\n")
-	progress.WriteString("Status: ")
-	progress.WriteString(goal.Status)
-	progress.WriteString("\nContinuation turns used: ")
-	progress.WriteString(strconv.Itoa(goal.TurnsUsed))
-	if goal.TurnBudget > 0 {
-		progress.WriteString("\nTurn budget: ")
-		progress.WriteString(strconv.Itoa(goal.TurnBudget))
-	}
-	progress.WriteString("\n</ally-goal-progress>")
-	return append(messages, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: progress.String()})
 }
 
 // contextBudgetThresholdPct is the remaining-budget percentage below which the
@@ -741,9 +685,9 @@ const contextBudgetThresholdPct = 30
 // be persisted into saved history (it would bloat storage and disrupt reusable
 // prefixes).
 //
-// Placing the budget at the tail follows the same strategy as
-// <ally-goal-progress>: dynamic, low-priority content goes last. The explicit
-// GPT-5.6 Responses cache boundary, when active, stays before this tail.
+// Placing the budget at the tail follows the same strategy as other
+// dynamic, low-priority content: it goes last. The explicit GPT-5.6
+// Responses cache boundary, when active, stays before this tail.
 func appendContextBudgetMessage(messages []openai.ChatCompletionMessage, usedTokens, maxCtx int) []openai.ChatCompletionMessage {
 	if maxCtx <= 0 {
 		maxCtx = 1000000

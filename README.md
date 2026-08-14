@@ -30,7 +30,7 @@ Download packages for Windows, macOS, and Linux from the [Releases page](https:/
 - Delegate substantial work to parallel sub-agents with live steps, tool activity, token usage, and inline final summaries
 - Connect MCP servers through stdio, SSE, or Streamable HTTP using either a form editor or raw JSON
 - Extend workflows with discoverable Skills and durable cross-project memory; built-in skills include `codegraph` and `playwright-cli`
-- Manage multiple workspaces, chat sessions, todos, goal mode, and process-local scheduled tasks
+- Manage multiple workspaces, chat sessions, todos, and process-local scheduled tasks
 - Run short shell commands and tracked background processes with a task-center log viewer; Windows automatically discovers Git Bash and falls back to PowerShell when necessary
 - Visualize token usage trends with an asynchronous token statistics dashboard
 - Personalize the chat with a custom background image and adjustable opacity

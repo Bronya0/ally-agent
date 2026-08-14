@@ -94,7 +94,7 @@ const BUILTIN_TOOL_GROUPS = [
   {
     key: 'state',
     label: t('tools.group.state'),
-    names: ['todo_write', 'create_goal', 'update_goal', 'get_goal', 'scheduled_task'],
+    names: ['todo_write', 'scheduled_task'],
     description: t('tools.group.stateDescription'),
   },
   {

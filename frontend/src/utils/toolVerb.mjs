@@ -62,12 +62,9 @@ const TOOL_VERBS = {
   // SCHEDULED_TASK_VERBS below; this entry is the fallback when the action is
   // unknown (e.g. an old card whose args weren't captured).
   scheduled_task: ['Scheduling', 'Scheduled', 'Schedule'],
-  // memory / goal — noun embedded because the verb alone is ambiguous
+  // memory — noun embedded because the verb alone is ambiguous
   memory_read: ['Reading memory', 'Read memory', 'Memory read'],
   memory_write: ['Saving memory', 'Saved memory', 'Memory write'],
-  create_goal: ['Setting goal', 'Set goal', 'Goal'],
-  update_goal: ['Updating goal', 'Updated goal', 'Goal'],
-  get_goal: ['Reading goal', 'Read goal', 'Goal'],
   // agents / skills
   subagent: ['Delegating', 'Delegated', 'Sub-agent'],
   agent_delegate: ['Delegating', 'Delegated', 'Sub-agent'],

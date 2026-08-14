@@ -344,7 +344,6 @@ function contextPartLabel(label) {
     'AGENTS.md / 项目指令': 'composer.context.part.instructions',
     '自定义提示词': 'composer.context.part.custom',
     '工作区文件结构': 'composer.context.part.workspace',
-    '目标上下文': 'composer.context.part.goal',
   };
   return labels[label] ? t(labels[label]) : label;
 }

@@ -92,7 +92,9 @@ const (
 	// 即触发裁剪（minified JSON / 生成文件等单行超长场景），公共前后缀各
 	// 保留 inlineDiffContextRunes 个字符，变化区最多显示
 	// inlineDiffMiddleMaxRunes 个字符，保证渲染行始终有界。
-	longLineClipThreshold    = 200
+	// 512 字节覆盖普通代码行（长字符串字面量、注释、日志格式串），
+	// 只有真正超长的行（生成/minified 内容）才被裁剪。
+	longLineClipThreshold    = 512
 	inlineDiffContextRunes   = 40
 	inlineDiffMiddleMaxRunes = 160
 

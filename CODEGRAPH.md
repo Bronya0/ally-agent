@@ -43,7 +43,6 @@
   - orch_remote.go — SSH 远程工具编排
   - orch_services.go — 后台服务进程管理
   - orch_scheduler.go — 计划任务调度（cron/interval/once）
-  - orch_goal.go — goal 模式生命周期：`createGoal`/`updateGoal`/`recordGoalTurn` [Lines: 126]
   - orch_memory.go / orch_grep.go — 全局记忆与 grep 编排
   - infra_bridges.go — 类型别名（`CalculateRequest` 等）、`limitedBuffer`、路径/哈希薄包装 [Lines: 345]
   - infra_result.go — 工具结果信封 `toolResult`、模型压缩、摘要
@@ -75,7 +74,7 @@
 
 ## Key Types / Interfaces
 
-- [struct] App — 后端长生命周期状态：runs/histories/mcpManager/subRuns/goalStates/todos/缓存与互斥
+- [struct] App — 后端长生命周期状态：runs/histories/mcpManager/subRuns/todos/缓存与互斥
 - [config] ConfigState — 全部用户配置 + 会话级 overlay（key 池、代理、模型、技能开关、背景等）
 - [struct] ChatRequest — StartChat 请求：消息数组或单条消息 + 附件 + 配置 overlay
 - [struct] modelStreamResult / modelStreamEvent — provider 流式结果与逐事件回调（content/reasoning/toolCalls/usage）
@@ -84,7 +83,6 @@
 - [struct] scheduledTaskManager — 计划任务调度状态机（cron/interval/once、串行执行）
 - [struct] statsRecorder — 异步 Token 统计队列与落盘
 - [struct] SubagentRun — 子代理运行记录（状态、步数、工具事件、文件读写）
-- [struct] GoalState — goal 模式状态（objective、turn budget、进度）
 - [struct] TodoEntry — todo 列表条目
 - [interface] eventSink — 事件边界（App.emit 唯一出口，测试可注入；Wails/网络均实现该接口）
 - [interface] pathutil.Runtime — 路径工具的宿主抽象（AppDataDir 注入）
@@ -99,7 +97,7 @@
   - [init] NewApp → NewMcpManager() // MCP 管理器装配
     - [ext] McpManager.StartAll → mcp-go client // stdio/SSE/streamable-HTTP 连接
 - [call] frontend → app.StartChat(ChatRequest) → runChat() [service] // 用户发消息
-  - [call] runChat → buildMessages() [service] // 系统提示 + 历史 + 当前消息 + goal 进度
+  - [call] runChat → buildMessages() [service] // 系统提示 + 历史 + 当前消息
   - [call] runChat → streamModelResponse() → streamOpenAIChat/Responses/AnthropicMessages [adapter]
     - [ext] stream* → proxyHTTPClient().Do(req) // SSE 流式请求
     - [event] stream* → onEvent(modelStreamEvent) // 内容/推理/工具增量回调
@@ -126,7 +124,7 @@
 - internal/app → github.com/mark3labs/mcp-go // biz_mcp.go MCP 客户端
 - internal/app → github.com/robfig/cron // orch_scheduler.go
 - frontend/src → internal/app // Wails bindings（StartChat/SaveConfig/GetConfig + run:* 事件）
-- internal/app → internal/app // 同包跨文件调用（biz_context ↔ biz_sessions ↔ orch_goal 等，无包边界）
+- internal/app → internal/app // 同包跨文件调用（biz_context ↔ biz_sessions 等，无包边界）
 
 ## Hot Paths / Files to Focus
 

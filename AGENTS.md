@@ -111,7 +111,7 @@ Core runtime flow:
 
 1. Frontend calls `StartChat(ChatRequest)` through Wails.
 2. Backend creates a cancellable run and starts `runChat()`.
-3. `buildMessages()` constructs the request context: core system prompt, workspace map, goal context, persisted history, current user message, and attachments.
+3. `buildMessages()` constructs the request context: core system prompt, workspace map, persisted history, current user message, and attachments.
 4. `buildToolsWithMcp()` combines static built-in tools with connected MCP tools.
 5. `streamModelResponse()` dispatches to the configured provider adapter.
 6. Streaming deltas and tool-call updates are emitted to the frontend through runtime events.
@@ -306,7 +306,6 @@ Built-in model-facing tools:
 | `memory_write` | Create/update one global memory Markdown file |
 | `subagent` | Spawn a sub-agent for a scoped task |
 | `scheduled_task` | Create, list, or delete temporary isolated Agent tasks for the current Ally process |
-| `create_goal`, `update_goal`, `get_goal` | Goal mode lifecycle (currently hidden from the model: `chatTools()` filters them out, goal mode is unused) |
 | `skill` | Load an enabled skill |
 
 MCP tools are named:
@@ -452,7 +451,6 @@ UI internationalization:
 | `/new` | Create a new session |
 | `/sessions` | Show sessions; `/switch N` switches session |
 | `/init` | Explore project and generate AGENTS.md |
-| `/goal` | Start goal mode |
 | `/skills` | Show discovered skills and enabled/disabled status |
 | `/clearskills` | Disable all discovered skills |
 | `/<skillname>` | Explicitly load a skill |
@@ -479,22 +477,15 @@ Backend 会话/历史/上下文核算的完整说明（索引与 gzip 快照、�
 
 ---
 
-## Sub-Agents And Goal Mode
+## Sub-Agents
 
 `subagent` starts a child agent loop bounded by a hard 1000-step cap (shared with the scheduled-task maximum); wall-clock is otherwise unlimited. Cancellation still follows the parent run or an explicit stop request.
 
-Sub-agents receive connected MCP tools and share the manager's invalid-session reconnect path. Interactive/nested tools such as `ask` and `subagent`, plus parent-owned goal/todo/scheduled/memory-write state, remain excluded.
+Sub-agents receive connected MCP tools and share the manager's invalid-session reconnect path. Interactive/nested tools such as `ask` and `subagent`, plus parent-owned todo/scheduled/memory-write state, remain excluded.
 
 Completed sub-agent records release their cancel function, keep at most 100 tool events each, and are globally pruned to the latest 50 completed records. Running records are never pruned.
 
 Sub-agent UI: backend emits `sub:*` events; `sub:spawn` includes the parent tool-call identity so the frontend upgrades the original `subagent` card in place; `tool:result` / `tool:error` finalize that same inline sub-agent card; frontend displays a lightweight inline sub-agent progress row.
-
-Goal mode:
-
-- `create_goal` stores an active goal with objective, optional completion criterion, and turn budget.
-- `runChat()` can continue turns automatically while the goal remains active, but auto-continuation is currently disabled via the `goalAutoContinueEnabled` switch in `app.go` (goal mode is unused; flipping it back to `true` restores the original behavior). The goal tools and state remain intact.
-- `update_goal` marks the goal `complete`, `blocked`, or `paused`.
-- Stable goal objective/rules remain in the system context; dynamic status and turn counters are appended near the request tail as `<ally-goal-progress>` to preserve provider prefix-cache reuse.
 
 Interactive ask behavior:
 
@@ -642,8 +633,6 @@ These rules are required for future changes. They exist to keep Agent behavior d
 
 **Ask (`app.go`)**：`ask:ready` / `ask:closed` — 每次 ask 1 次
 
-**Goal (`app.go`)**：`goal:update` — 每轮 1 次
-
 **Todo (`app.go`)**：`todo:update` — 写入时
 
 **MCP (`app.go`)**：`mcp:status` — 服务器状态变更时（一次发全部状态）
@@ -664,7 +653,7 @@ These rules are required for future changes. They exist to keep Agent behavior d
 
 ### 事件命名约定
 
-lowercase + 冒号分隔，如 `run:stream`、`tool:result`、`mcp:status`、`sub:step`、`scheduled:update`、`service:update`、`todo:update`、`goal:update`、`ask:ready`、`tokens:update`、`dependency:missing`、`config:warning`。
+lowercase + 冒号分隔，如 `run:stream`、`tool:result`、`mcp:status`、`sub:step`、`scheduled:update`、`service:update`、`todo:update`、`ask:ready`、`tokens:update`、`dependency:missing`、`config:warning`。
 
 ---
 

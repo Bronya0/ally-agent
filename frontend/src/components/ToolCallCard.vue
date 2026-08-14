@@ -162,7 +162,6 @@ function toolKindLabel(kind) {
     other: t('tools.kind.tool'),
     todo: t('tools.kind.todo'),
     scheduled: t('tools.kind.scheduled'),
-    goal: t('tools.kind.goal'),
     memory: t('tools.kind.memory'),
     service: t('tools.kind.service'),
     wait: t('tools.kind.wait'),

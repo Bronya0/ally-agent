@@ -233,9 +233,6 @@ function toolArgsTitle(tc) {
     const todos = Array.isArray(parsed.todos) ? parsed.todos : [];
     return todos.length ? `${todos.length} items` : '';
   }
-  if (name === 'create_goal' || name === 'update_goal' || name === 'get_goal') {
-    return parsed.objective || parsed.status || '';
-  }
   return '';
 }
 

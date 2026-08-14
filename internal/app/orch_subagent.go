@@ -575,9 +575,6 @@ func (a *App) subagentTools(cfg ConfigState) []openai.Tool {
 	blocked := map[string]bool{
 		"subagent":       true,
 		"agent_delegate": true,
-		"create_goal":    true,
-		"update_goal":    true,
-		"get_goal":       true,
 		"todo_write":     true,
 		"skill":          true,
 		"memory_write":   true,
