@@ -18,9 +18,14 @@ import (
 
 func hideCommandWindow(cmd *exec.Cmd) {}
 
-func prepareServiceCommand(cmd *exec.Cmd) {
+func prepareServiceCommand(cmd *exec.Cmd) uintptr {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	return 0
 }
+
+func registerProcessJob(pid int, job uintptr) error { return nil }
+func unregisterProcessJob(pid int)                   {}
+func discardProcessJob(job uintptr)                  {}
 
 func stopProcessTree(pid int) error {
 	if pid <= 0 {

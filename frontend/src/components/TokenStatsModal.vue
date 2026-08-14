@@ -53,7 +53,7 @@ Public License v3. See the LICENSE file for details.
             <div class="chart-host">
               <svg class="stats-chart" :viewBox="`0 0 ${chartW} 200`" role="img" :aria-label="$t('stats.dailyBars')">
                 <g v-for="g in barGrid" :key="g.y">
-                  <line :x1="padL" :x2="720 - padR" :y1="g.y" :y2="g.y" class="chart-grid" />
+                  <line :x1="padL" :x2="chartW - padR" :y1="g.y" :y2="g.y" class="chart-grid" />
                   <text :x="padL + 4" :y="g.y - 5" class="chart-grid-label">{{ fmtTokens(g.value) }}</text>
                 </g>
                 <g v-for="(bar, i) in dailyBars" :key="i">

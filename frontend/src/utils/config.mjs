@@ -57,6 +57,17 @@ export function defaultConfig() {
     // (0.6 = 60%). Backend clamps to [0.1, 0.95]; zero (legacy config
     // without the field) is replaced with the default in mergeConfig.
     compactThreshold: 0.6,
+    // Message body / welcome greeting font size in px. Backend clamps to
+    // [12, 24] on save; zero (legacy config) is replaced by the default in
+    // assignConfig below.
+    messageFontSize: 15.5,
+    // Code content / tool card / secondary text / auxiliary text font sizes
+    // in px. Zero (legacy config) is replaced by the defaults in assignConfig
+    // below.
+    codeFontSize: 14,
+    toolFontSize: 15,
+    subFontSize: 13,
+    auxFontSize: 12,
   };
 }
 
@@ -81,6 +92,25 @@ export function assignConfig(target, source) {
   next.compactThreshold = Number(next.compactThreshold) > 0
     ? Math.min(0.95, Math.max(0.2, Number(next.compactThreshold)))
     : 0.6;
+  // messageFontSize: same fallback; clamp to the same readable range the
+  // backend enforces so the UI never shows an empty or absurd value.
+  next.messageFontSize = Number(next.messageFontSize) > 0
+    ? Math.min(24, Math.max(12, Number(next.messageFontSize)))
+    : 15.5;
+  // codeFontSize / toolFontSize / subFontSize / auxFontSize: same
+  // zero-means-default fallback, clamped to the backend's readable ranges.
+  next.codeFontSize = Number(next.codeFontSize) > 0
+    ? Math.min(24, Math.max(12, Number(next.codeFontSize)))
+    : 14;
+  next.toolFontSize = Number(next.toolFontSize) > 0
+    ? Math.min(24, Math.max(12, Number(next.toolFontSize)))
+    : 15;
+  next.subFontSize = Number(next.subFontSize) > 0
+    ? Math.min(18, Math.max(11, Number(next.subFontSize)))
+    : 13;
+  next.auxFontSize = Number(next.auxFontSize) > 0
+    ? Math.min(20, Math.max(10, Number(next.auxFontSize)))
+    : 12;
   if (!Array.isArray(next.skippedUpdates)) next.skippedUpdates = [];
   delete target.systemPrompt;
   Object.assign(target, next);

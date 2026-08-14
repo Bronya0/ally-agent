@@ -195,6 +195,79 @@ Public License v3. See the LICENSE file for details.
               <span class="settings-field-hint">{{ $t('settings.backgroundOpacityHint') }}</span>
             </div>
           </n-form-item>
+          <div class="font-size-grid">
+            <div class="font-size-field">
+              <span class="font-size-label">{{ $t('settings.messageFontSize') }}</span>
+              <n-input-number
+                v-model:value="draft.messageFontSize"
+                :min="12"
+                :max="24"
+                :step="0.5"
+                :precision="1"
+                :formatter="v => `${Number(v) || 15.5}px`"
+                :parser="s => Number(String(s).replace('px', '').trim())"
+                size="small"
+                :placeholder="'15.5'"
+              />
+            </div>
+            <div class="font-size-field">
+              <span class="font-size-label">{{ $t('settings.codeFontSize') }}</span>
+              <n-input-number
+                v-model:value="draft.codeFontSize"
+                :min="12"
+                :max="24"
+                :step="0.5"
+                :precision="1"
+                :formatter="v => `${Number(v) || 14}px`"
+                :parser="s => Number(String(s).replace('px', '').trim())"
+                size="small"
+                :placeholder="'14'"
+              />
+            </div>
+            <div class="font-size-field">
+              <span class="font-size-label">{{ $t('settings.toolFontSize') }}</span>
+              <n-input-number
+                v-model:value="draft.toolFontSize"
+                :min="12"
+                :max="24"
+                :step="0.5"
+                :precision="1"
+                :formatter="v => `${Number(v) || 15}px`"
+                :parser="s => Number(String(s).replace('px', '').trim())"
+                size="small"
+                :placeholder="'15'"
+              />
+            </div>
+            <div class="font-size-field">
+              <span class="font-size-label">{{ $t('settings.subFontSize') }}</span>
+              <n-input-number
+                v-model:value="draft.subFontSize"
+                :min="11"
+                :max="18"
+                :step="0.5"
+                :precision="1"
+                :formatter="v => `${Number(v) || 13}px`"
+                :parser="s => Number(String(s).replace('px', '').trim())"
+                size="small"
+                :placeholder="'13'"
+              />
+            </div>
+            <div class="font-size-field">
+              <span class="font-size-label">{{ $t('settings.auxFontSize') }}</span>
+              <n-input-number
+                v-model:value="draft.auxFontSize"
+                :min="10"
+                :max="20"
+                :step="0.5"
+                :precision="1"
+                :formatter="v => `${Number(v) || 12}px`"
+                :parser="s => Number(String(s).replace('px', '').trim())"
+                size="small"
+                :placeholder="'12'"
+              />
+            </div>
+          </div>
+          <div class="settings-field-hint">{{ $t('settings.fontSizeGridHint') }}</div>
           <div class="settings-page-actions">
             <n-button type="primary" @click="onSave">{{ $t('common.save') }}</n-button>
           </div>
@@ -1509,7 +1582,7 @@ watch(() => props.visible, (visible) => {
 
 .settings-nav-title {
   display: block;
-  font-size: 13px;
+  font-size: var(--ally-sub-font-size);
   font-weight: 600;
 }
 
@@ -1575,7 +1648,7 @@ watch(() => props.visible, (visible) => {
 
 .about-update-status {
   color: rgba(255, 255, 255, 0.62);
-  font-size: 13px;
+  font-size: var(--ally-sub-font-size);
 }
 
 .model-format-hint {
@@ -1631,6 +1704,33 @@ watch(() => props.visible, (visible) => {
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+
+.font-size-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 8px 12px;
+  width: 100%;
+  margin-bottom: 6px;
+}
+
+.font-size-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.font-size-label {
+  flex: none;
+  font-size: 12px;
+  color: #b5b5b5;
+  white-space: nowrap;
+}
+
+.font-size-field .n-input-number {
+  flex: 1;
+  min-width: 0;
 }
 
 .settings-field-hint,
@@ -1735,7 +1835,7 @@ watch(() => props.visible, (visible) => {
 
 .saved-model-empty {
   color: #737373;
-  font-size: 13px;
+  font-size: var(--ally-sub-font-size);
   padding: 28px 0;
   text-align: center;
 }
@@ -1772,7 +1872,7 @@ watch(() => props.visible, (visible) => {
 }
 
 .saved-model-name {
-  font-size: 13px;
+  font-size: var(--ally-sub-font-size);
   font-weight: 500;
   color: #f5f5f5;
 }
@@ -1830,7 +1930,7 @@ watch(() => props.visible, (visible) => {
 }
 
 .skill-name {
-  font-size: 13px;
+  font-size: var(--ally-sub-font-size);
   font-weight: 500;
   color: #f5f5f5;
 }
@@ -1890,7 +1990,7 @@ watch(() => props.visible, (visible) => {
 
 .mcp-config-editor {
   font-family: var(--ally-mono-font);
-  font-size: 13px;
+  font-size: var(--ally-sub-font-size);
   line-height: 1.5;
   margin-bottom: 4px;
 }
@@ -1974,7 +2074,7 @@ watch(() => props.visible, (visible) => {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 13px;
+  font-size: var(--ally-sub-font-size);
   padding: 6px 8px;
   background: rgba(255, 255, 255, 0.03);
   border-radius: 6px;

@@ -151,7 +151,7 @@ func (a *App) startServiceWithConfig(cfg ConfigState, req StartServiceRequest) (
 	cmd := exec.CommandContext(ctx, shell.path, shell.args...)
 	cmd.Dir = cwd
 	cmd.Env = commandEnvironment(cfg)
-	prepareServiceCommand(cmd)
+	job := prepareServiceCommand(cmd)
 
 	buf := newRollingBuffer(serviceOutputLimit)
 	stdout, err := cmd.StdoutPipe()
@@ -165,9 +165,12 @@ func (a *App) startServiceWithConfig(cfg ConfigState, req StartServiceRequest) (
 		return ServiceInfo{}, err
 	}
 	if err := cmd.Start(); err != nil {
+		discardProcessJob(job)
 		cancel()
 		return ServiceInfo{}, err
 	}
+	// Job Object 注册失败时忽略，停止服务时回退到 taskkill /T。
+	_ = registerProcessJob(cmd.Process.Pid, job)
 
 	service := &managedService{
 		info: ServiceInfo{
@@ -197,6 +200,8 @@ func (a *App) startServiceWithConfig(cfg ConfigState, req StartServiceRequest) (
 	go func() {
 		waitErr := cmd.Wait()
 		copyWG.Wait()
+		// 进程退出后关闭 job handle（KILL_ON_JOB_CLOSE 兜底清理残留）。
+		unregisterProcessJob(cmd.Process.Pid)
 		service.mu.Lock()
 		service.waitErr = waitErr
 		service.updateOutputInfoLocked()

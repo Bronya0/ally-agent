@@ -313,7 +313,7 @@ function selectionKey(selection) {
 
 .ask-option-label {
   color: #d4d4d4;
-  font-size: 13px;
+  font-size: var(--ally-sub-font-size);
   line-height: 1.4;
   overflow-wrap: anywhere;
 }
@@ -396,7 +396,7 @@ function selectionKey(selection) {
   padding: 7px 0;
   border-top: 1px solid rgba(255, 255, 255, 0.055);
   color: #d4d4d4;
-  font-size: 13px;
+  font-size: var(--ally-sub-font-size);
 }
 
 .ask-answer-check {

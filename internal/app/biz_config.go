@@ -41,6 +41,11 @@ func defaultConfigState() ConfigState {
 		ReasoningEffort:     reasoningEffortMax,
 		BackgroundOpacity:   defaultBackgroundOpacity,
 		CompactThreshold:    defaultCompactThreshold,
+		MessageFontSize:     defaultMessageFontSize,
+		CodeFontSize:        defaultCodeFontSize,
+		ToolFontSize:        defaultToolFontSize,
+		SubFontSize:         defaultSubFontSize,
+		AuxFontSize:         defaultAuxFontSize,
 	}
 	if goruntime.GOOS == "windows" {
 		cfg.GitBashPath, _ = findWindowsBash("")
@@ -252,6 +257,27 @@ func mergeConfig(base, overlay ConfigState) ConfigState {
 	// cannot starve the model of reply budget or trigger thrashing.
 	if overlay.CompactThreshold != 0 {
 		base.CompactThreshold = clampCompactThreshold(overlay.CompactThreshold)
+	}
+	// MessageFontSize: zero overlay means "field absent" (legacy / older
+	// build), so base is preserved; non-zero values are clamped to a
+	// readable range.
+	if overlay.MessageFontSize != 0 {
+		base.MessageFontSize = clampMessageFontSize(overlay.MessageFontSize)
+	}
+	// CodeFontSize / ToolFontSize / SubFontSize / AuxFontSize follow the
+	// same zero-means-absent pattern; non-zero values are clamped to readable
+	// ranges.
+	if overlay.CodeFontSize != 0 {
+		base.CodeFontSize = clampFontSize(overlay.CodeFontSize, defaultCodeFontSize, 12, 24)
+	}
+	if overlay.ToolFontSize != 0 {
+		base.ToolFontSize = clampFontSize(overlay.ToolFontSize, defaultToolFontSize, 12, 24)
+	}
+	if overlay.SubFontSize != 0 {
+		base.SubFontSize = clampFontSize(overlay.SubFontSize, defaultSubFontSize, 11, 18)
+	}
+	if overlay.AuxFontSize != 0 {
+		base.AuxFontSize = clampFontSize(overlay.AuxFontSize, defaultAuxFontSize, 10, 20)
 	}
 	if overlay.CloseToTray != nil {
 		base.CloseToTray = overlay.CloseToTray

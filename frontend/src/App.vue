@@ -2778,6 +2778,7 @@ async function init() {
     const loaded = await GetConfig();
     assignConfig(config, loaded);
     assignConfig(configDraft, loaded);
+    applyFontSizes(config);
   } catch (err) {
     message.error(t('app.config.readFailed', { error: err }));
   }
@@ -4578,6 +4579,7 @@ async function onSettingsSave(draftData, silent = false) {
   const previousWorkspace = String(config.workspace || '');
   assignConfig(config, draftData);
   assignConfig(configDraft, draftData);
+  applyFontSizes(config);
   const workspaceChanged = previousWorkspace !== String(config.workspace || '');
   if (workspaceChanged) clearFooterStats();
   try {
@@ -4600,6 +4602,28 @@ async function onSettingsSave(draftData, silent = false) {
     if (workspaceChanged) footerStatsLoading.value = false;
     message.error(t('app.config.saveFailed', { error: err }));
   }
+}
+
+// Apply the user-configured UI font sizes (px) as CSS variables on the
+// document root. The variables are consumed by .message-body, the welcome
+// greeting, code content, tool cards and secondary text, so changing them
+// takes effect immediately without a rebuild. Zero / invalid values remove
+// the variable so the CSS fallback (the default) is used.
+function applyFontSizes(cfg) {
+  const root = document.documentElement;
+  const set = (name, value, min, max, fallback) => {
+    const n = Number(value);
+    if (!Number.isFinite(n) || n <= 0) {
+      root.style.removeProperty(name);
+      return;
+    }
+    root.style.setProperty(name, `${Math.min(max, Math.max(min, n))}px`);
+  };
+  set('--ally-message-font-size', cfg?.messageFontSize, 12, 24, 15.5);
+  set('--ally-code-font-size', cfg?.codeFontSize, 12, 24, 14);
+  set('--ally-tool-font-size', cfg?.toolFontSize, 12, 24, 15);
+  set('--ally-sub-font-size', cfg?.subFontSize, 11, 18, 13);
+  set('--ally-aux-font-size', cfg?.auxFontSize, 10, 20, 12);
 }
 
 // Fetch the stored background image as a data URL. Called once after config

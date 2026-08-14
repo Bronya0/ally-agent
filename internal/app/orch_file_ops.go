@@ -183,7 +183,7 @@ func (a *App) runCommandWithConfig(parent context.Context, cfg ConfigState, req 
 	buf.onTruncate = tw.startSpill
 	cmd.Stdout = tw
 	cmd.Stderr = tw
-	prepareServiceCommand(cmd)
+	job := prepareServiceCommand(cmd)
 	// ESC 取消运行时，杀掉整棵进程树而不是只杀外壳 bash/powershell，
 	// 否则 npm/vite/devserver 等子进程会变成孤儿继续占用端口。
 	cmd.Cancel = func() error {
@@ -255,7 +255,18 @@ func (a *App) runCommandWithConfig(parent context.Context, cfg ConfigState, req 
 			}
 		}()
 	}
-	err = cmd.Run()
+	err = cmd.Start()
+	if err == nil {
+		// Job Object 注册失败（例如进程已被其他 job 接管）时忽略，
+		// 取消时回退到 taskkill /T。
+		_ = registerProcessJob(cmd.Process.Pid, job)
+		err = cmd.Wait()
+		// 进程退出后关闭 job handle；若取消时 TerminateJobObject 因
+		// 竞态失败导致仍有残留孙进程，KILL_ON_JOB_CLOSE 会兜底杀掉。
+		unregisterProcessJob(cmd.Process.Pid)
+	} else {
+		discardProcessJob(job)
+	}
 	close(outputDone)
 	outputWG.Wait()
 	outputFilePath := ""

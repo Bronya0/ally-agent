@@ -38,6 +38,18 @@
   --ally-ui-font: Inter;
   --ally-mono-font: Inter;
 
+  /* User-configurable UI font sizes (px). App.vue sets these live from the
+     saved config (Settings → General); these defaults keep rendering
+     identical when config is absent. */
+  --ally-message-font-size: 15.5px;
+  --ally-tool-font-size: 15px;
+  --ally-code-font-size: 14px;
+  --ally-sub-font-size: 13px;
+  --ally-aux-font-size: 12px;
+  /* Diff / code views stay one step smaller than body code (13px by
+     default) and follow the code size when the user changes it. */
+  --ally-diff-font-size: calc(var(--ally-code-font-size) - 1px);
+
   /* Accent color family. A theme only needs to set --ally-accent; every
      other shade is derived from it via color-mix (fully supported in the
      Chromium/Webview2 runtime), so adding a theme is a one-liner below. */
@@ -264,7 +276,7 @@ code, pre {
 
 .splash-line {
   color: var(--ally-accent-pale);
-  font-size: 13px;
+  font-size: var(--ally-sub-font-size);
   line-height: 1.5;
 }
 
@@ -351,7 +363,7 @@ code, pre {
   color: inherit;
   background: transparent;
   border: 0;
-  font-size: 14px;
+  font-size: var(--ally-code-font-size);
   line-height: 1.6;
 }
 
@@ -556,7 +568,7 @@ code, pre {
   gap: 6px;
   margin-top: 6px;
   padding-top: 6px;
-  font-size: 13px;
+  font-size: var(--ally-sub-font-size);
   color: #8a8a8a;
   overflow: hidden;
   white-space: nowrap;
@@ -638,7 +650,7 @@ code, pre {
 
 .composer-retry-icon {
   display: inline-block;
-  font-size: 13px;
+  font-size: var(--ally-sub-font-size);
   line-height: 1;
   animation: composer-retry-spin 1.4s linear infinite;
   flex-shrink: 0;
@@ -809,7 +821,7 @@ code, pre {
 }
 
 .extra-roots-title {
-  font-size: 13px;
+  font-size: var(--ally-sub-font-size);
   font-weight: 600;
   color: #e4e4e4;
 }
@@ -923,7 +935,7 @@ code, pre {
   align-items: center;
   gap: 6px;
   flex-shrink: 0;
-  font-size: 12px;
+  font-size: var(--ally-aux-font-size);
   margin-right: 14px;
   padding: 1px 4px;
   border-radius: 6px;
@@ -945,7 +957,7 @@ code, pre {
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.025);
-  font-size: 12px;
+  font-size: var(--ally-aux-font-size);
   cursor: pointer;
   flex-shrink: 0;
   --wails-draggable: no-drag;
@@ -981,7 +993,7 @@ code, pre {
   cursor: pointer;
   padding: 1px 5px;
   border-radius: 6px;
-  font-size: 12px;
+  font-size: var(--ally-aux-font-size);
   --wails-draggable: no-drag;
 }
 
@@ -1043,7 +1055,7 @@ code, pre {
   gap: 8px;
   min-width: 0;
   color: #a3a3a3;
-  font-size: 13px;
+  font-size: var(--ally-sub-font-size);
 }
 
 .git-diff-branch {
@@ -1065,7 +1077,7 @@ code, pre {
   background: rgba(255, 255, 255, 0.035);
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 8px;
-  font-size: 13px;
+  font-size: var(--ally-sub-font-size);
 }
 
 .git-diff-error {
@@ -1199,7 +1211,7 @@ code, pre {
 
 .context-breakdown {
   min-width: 220px;
-  font-size: 12px;
+  font-size: var(--ally-aux-font-size);
   line-height: 1.8;
   color: #a3a3a3;
   padding: 4px;
@@ -1277,7 +1289,7 @@ code, pre {
   flex: 1;
   overflow: hidden;
   color: #c8c8c8;
-  font-size: 12px;
+  font-size: var(--ally-aux-font-size);
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1326,12 +1338,12 @@ code, pre {
 
 .model-menu .model-menu-empty {
   color: #737373;
-  font-size: 12px;
+  font-size: var(--ally-aux-font-size);
 }
 
 .model-menu .model-menu-manage {
   color: #a0a0a0;
-  font-size: 12px;
+  font-size: var(--ally-aux-font-size);
   font-weight: 500;
 }
 
@@ -1431,7 +1443,7 @@ code, pre {
 
 .session-label {
   color: #fafafa;
-  font-size: 13px;
+  font-size: var(--ally-sub-font-size);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1526,7 +1538,7 @@ code, pre {
   white-space: pre-wrap;
   word-break: break-word;
   color: #a3a3a3;
-  font-size: 12px;
+  font-size: var(--ally-aux-font-size);
 }
 
 /* ── Scrollbar ── */
@@ -1565,7 +1577,7 @@ code, pre {
   padding: 0 !important;
   color: #d4d4d4 !important;
   font-family: var(--ally-mono-font) !important;
-  font-size: 13px;
+  font-size: var(--ally-sub-font-size);
   letter-spacing: 0;
 }
 
@@ -1949,7 +1961,7 @@ code, pre {
   width: 100%;
   border-collapse: collapse;
   color: #d4d4d4;
-  font-size: 13px;
+  font-size: var(--ally-sub-font-size);
 }
 
 .welcome-info-table th,
@@ -1978,7 +1990,7 @@ code, pre {
 .welcome-greeting {
   margin-top: 16px;
   color: #e5e5e5;
-  font-size: 14px;
+  font-size: var(--ally-message-font-size, 15.5px);
   line-height: 1.75;
 }
 
@@ -2162,14 +2174,14 @@ code, pre {
 
 .tool-verb {
   color: var(--ally-accent);
-  font-size: 15px;
+  font-size: var(--ally-tool-font-size);
   flex-shrink: 0;
 }
 
 .tool-name {
   color: var(--md-strong);
   font-weight: 650;
-  font-size: 15px;
+  font-size: var(--ally-tool-font-size);
   flex-shrink: 0;
 }
 
@@ -2177,7 +2189,7 @@ code, pre {
    text, not a blue tool name. */
 .tool-count {
   color: #a3a3a3;
-  font-size: 15px;
+  font-size: var(--ally-tool-font-size);
   flex-shrink: 0;
 }
 
@@ -2198,7 +2210,7 @@ code, pre {
 .tool-arg {
   overflow: hidden;
   color: #737373;
-  font-size: 15px;
+  font-size: var(--ally-tool-font-size);
   text-overflow: ellipsis;
   white-space: nowrap;
   flex-shrink: 1;
@@ -2222,7 +2234,7 @@ code, pre {
   min-width: 0;
   overflow: hidden;
   color: #8b949e;
-  font-size: 14px;
+  font-size: var(--ally-code-font-size);
   flex-shrink: 1;
 }
 
@@ -2234,7 +2246,7 @@ code, pre {
   white-space: nowrap;
   color: #d4d4d4;
   font-family: var(--ally-mono-font);
-  font-size: 13.5px;
+  font-size: var(--ally-code-font-size);
   line-height: 1.25;
 }
 
@@ -2303,7 +2315,7 @@ code, pre {
 
 .tool-chip {
   color: #737373;
-  font-size: 13px;
+  font-size: var(--ally-sub-font-size);
   flex-shrink: 0;
   white-space: nowrap;
 }
@@ -2340,14 +2352,14 @@ code, pre {
 
 .tool-line time {
   color: #5a5a5a;
-  font-size: 13px;
+  font-size: var(--ally-sub-font-size);
   flex-shrink: 0;
   margin-left: auto;
 }
 
 .tool-duration {
   color: #5a5a5a;
-  font-size: 13px;
+  font-size: var(--ally-sub-font-size);
   flex-shrink: 0;
   margin-left: 4px;
 }
@@ -2360,7 +2372,7 @@ code, pre {
   color: #bdbdbd;
   background: transparent;
   font-family: var(--ally-ui-font);
-  font-size: 14px;
+  font-size: var(--ally-code-font-size);
   line-height: 1.5;
   max-height: 150px;
   overflow: hidden;
@@ -2375,7 +2387,7 @@ code, pre {
   align-items: center;
   gap: 8px;
   color: #fca5a5;
-  font-size: 13px;
+  font-size: var(--ally-sub-font-size);
   padding: 2px 8px 2px 0;
   line-height: 1.4;
 }
@@ -2393,7 +2405,7 @@ code, pre {
   color: #fecaca;
   background: transparent;
   font-family: var(--ally-ui-font);
-  font-size: 12px;
+  font-size: var(--ally-aux-font-size);
   line-height: 1.5;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -2447,7 +2459,7 @@ code, pre {
   display: flex;
   align-items: baseline;
   gap: 6px;
-  font-size: 13px;
+  font-size: var(--ally-sub-font-size);
   line-height: 1.6;
 }
 
@@ -2479,7 +2491,7 @@ code, pre {
 
 .diff-view {
   font-family: var(--ally-mono-font);
-  font-size: 12.5px;
+  font-size: var(--ally-diff-font-size);
   line-height: 1.58;
 }
 
@@ -2488,7 +2500,7 @@ code, pre {
   align-items: center;
   gap: 6px;
   padding: 5px 10px;
-  font-size: 12px;
+  font-size: var(--ally-aux-font-size);
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
   user-select: none;
 }
@@ -2531,7 +2543,7 @@ code, pre {
   white-space: pre-wrap;
   word-break: break-word;
   font-family: var(--ally-mono-font);
-  font-size: 12.5px;
+  font-size: var(--ally-diff-font-size);
   line-height: 1.58;
 }
 
@@ -2684,7 +2696,7 @@ code, pre {
   color: #facc15;
   background: rgba(250, 204, 21, 0.08);
   border: 1px solid rgba(250, 204, 21, 0.18);
-  font-size: 12px;
+  font-size: var(--ally-aux-font-size);
   line-height: 1.45;
 }
 
@@ -2698,7 +2710,7 @@ code, pre {
   background: rgba(16, 185, 129, 0.07);
   border: 1px solid rgba(16, 185, 129, 0.16);
   font-family: var(--ally-mono-font);
-  font-size: 12.5px;
+  font-size: var(--ally-diff-font-size);
   line-height: 1.58;
 }
 
@@ -2706,7 +2718,7 @@ code, pre {
 
 .code-view {
   font-family: var(--ally-mono-font);
-  font-size: 12.5px;
+  font-size: var(--ally-diff-font-size);
   line-height: 1.58;
 }
 
@@ -2779,7 +2791,7 @@ code, pre {
 .reasoning-tokens {
   color: #777;
   font-variant-numeric: tabular-nums;
-  font-size: 13px;
+  font-size: var(--ally-sub-font-size);
 }
 
 .reasoning-title {
@@ -2812,7 +2824,7 @@ code, pre {
   color: #9a9a9a;
   background: rgba(255, 255, 255, 0.03);
   font-family: var(--ally-ui-font);
-  font-size: 13px;
+  font-size: var(--ally-sub-font-size);
   line-height: 1.5;
   max-height: 150px;
   overflow: hidden;
@@ -2924,7 +2936,7 @@ code, pre {
   align-items: center;
   gap: 6px;
   padding: 3px 14px;
-  font-size: 13px;
+  font-size: var(--ally-sub-font-size);
   line-height: 1.5;
 }
 
@@ -2934,7 +2946,7 @@ code, pre {
   text-align: right;
   margin-right: 2px;
   color: #737373;
-  font-size: 12px;
+  font-size: var(--ally-aux-font-size);
   font-variant-numeric: tabular-nums;
 }
 
@@ -2942,7 +2954,7 @@ code, pre {
   flex-shrink: 0;
   width: 14px;
   text-align: center;
-  font-size: 12px;
+  font-size: var(--ally-aux-font-size);
 }
 
 .todo-item.pending .todo-status {
@@ -3046,17 +3058,17 @@ code, pre {
 .update-progress-meta {
   display: flex;
   justify-content: space-between;
-  font-size: 12px;
+  font-size: var(--ally-aux-font-size);
   color: var(--text-secondary, #9a9a92);
   font-variant-numeric: tabular-nums;
 }
 .update-version {
-  font-size: 13px;
+  font-size: var(--ally-sub-font-size);
   color: var(--text-secondary, #9a9a92);
   font-variant-numeric: tabular-nums;
 }
 .update-ready-hint {
-  font-size: 13px;
+  font-size: var(--ally-sub-font-size);
   line-height: 1.55;
   color: var(--text-secondary, #9a9a92);
 }
@@ -3067,7 +3079,7 @@ code, pre {
   margin-top: 4px;
 }
 .update-error-detail {
-  font-size: 13px;
+  font-size: var(--ally-sub-font-size);
   line-height: 1.55;
   color: #e8a55c;
   background: rgba(232, 165, 92, 0.08);
@@ -3129,7 +3141,7 @@ code, pre {
   align-items: baseline;
   gap: 6px;
   min-width: 0;
-  font-size: 13px;
+  font-size: var(--ally-sub-font-size);
   line-height: 1.6;
 }
 
@@ -3194,7 +3206,7 @@ code, pre {
 
 .subagent-inline-duration {
   color: #5a5a5a;
-  font-size: 12px;
+  font-size: var(--ally-aux-font-size);
   flex-shrink: 0;
   margin-left: 4px;
 }
@@ -3202,13 +3214,13 @@ code, pre {
 .subagent-token-chip {
   color: var(--ally-accent-dim);
   font-variant-numeric: tabular-nums;
-  font-size: 12px;
+  font-size: var(--ally-aux-font-size);
 }
 
 .subagent-inline-result {
   padding: 2px 8px 4px 6px;
   color: #8a8a8a;
-  font-size: 12px;
+  font-size: var(--ally-aux-font-size);
   line-height: 1.5;
   overflow: hidden;
   text-overflow: ellipsis;

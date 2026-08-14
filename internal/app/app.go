@@ -96,6 +96,18 @@ const (
 	// stored value is zero, so legacy config.json without the field migrates
 	// to the new default transparently.
 	defaultCompactThreshold = 0.6
+	// defaultMessageFontSize is the default font size (px) for AI message
+	// bodies and the welcome greeting. Zero means "use default" so legacy
+	// config.json without the field migrates transparently.
+	defaultMessageFontSize = 15.5
+	// defaultCodeFontSize / defaultToolFontSize / defaultSubFontSize /
+	// defaultAuxFontSize are the default UI font sizes (px) for code content,
+	// tool cards, secondary text, and auxiliary text. Zero means "use default"
+	// for each (legacy config migrates transparently).
+	defaultCodeFontSize = 14
+	defaultToolFontSize = 15
+	defaultSubFontSize  = 13
+	defaultAuxFontSize  = 12
 )
 
 // effectiveUserAgent returns the User-Agent string to send on outbound HTTP
@@ -432,12 +444,55 @@ type ConfigState struct {
 	// configs migrate transparently; the effective value is exposed via
 	// effectiveCompactThreshold().
 	CompactThreshold float64 `json:"compactThreshold,omitempty"`
+	// MessageFontSize is the AI message body / welcome greeting font size in
+	// px. Zero means "use default" (15.5); the effective value is exposed via
+	// clampMessageFontSize and applied by the frontend as a CSS variable.
+	MessageFontSize float64 `json:"messageFontSize,omitempty"`
+	// CodeFontSize / ToolFontSize / SubFontSize / AuxFontSize are the UI
+	// font sizes (px) for code content, tool cards, secondary text, and
+	// auxiliary text. Zero means "use default"; the frontend applies them
+	// as CSS variables.
+	CodeFontSize float64 `json:"codeFontSize,omitempty"`
+	ToolFontSize float64 `json:"toolFontSize,omitempty"`
+	SubFontSize  float64 `json:"subFontSize,omitempty"`
+	AuxFontSize  float64 `json:"auxFontSize,omitempty"`
 	temperatureSet   bool
 	// noAdapterRetry 是进程内非序列化标记:多 key 模式下置 true,让适配器
 	// 内部关闭退避重试,由 streamModelResponse 的外层循环统一承担重试与
 	// 故障切换,避免 N 个 key × 适配器重试组合爆炸。
 	noAdapterRetry          bool
 	responsesPromptCacheKey string // nonserialized, session-local OpenAI Responses cache route
+}
+
+// clampMessageFontSize normalizes the message font size (px). Zero (field
+// absent in legacy config) falls back to the default; values outside the
+// readable range are clamped to [12, 24].
+func clampMessageFontSize(v float64) float64 {
+	if v <= 0 {
+		return defaultMessageFontSize
+	}
+	if v < 12 {
+		return 12
+	}
+	if v > 24 {
+		return 24
+	}
+	return v
+}
+
+// clampFontSize normalizes a UI font size (px): zero (field absent in legacy
+// config) falls back to def, then clamps to [min, max].
+func clampFontSize(v, def, min, max float64) float64 {
+	if v <= 0 {
+		return def
+	}
+	if v < min {
+		return min
+	}
+	if v > max {
+		return max
+	}
+	return v
 }
 
 // autoUpdateEnabled returns true unless AutoUpdate was explicitly set to false.

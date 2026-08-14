@@ -117,7 +117,7 @@ watch(() => props.selectedIndex, () => {
 .file-mention-icon {
   color: var(--ally-accent-bright);
   font-family: var(--ally-mono-font);
-  font-size: 13px;
+  font-size: var(--ally-sub-font-size);
 }
 
 .file-mention-path {
