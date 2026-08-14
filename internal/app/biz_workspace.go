@@ -188,8 +188,10 @@ func workspaceMapCacheKey(root string) string {
 }
 
 type workspaceMapEntry struct {
-	Path string
-	Dir  bool
+	Path      string
+	Dir       bool
+	Size      int64
+	MoreFiles int // >0 时渲染为 "+N more files" 折叠占位
 }
 
 type workspaceMapBuildResult struct {
@@ -199,6 +201,7 @@ type workspaceMapBuildResult struct {
 	SkippedIgnored int
 	SkippedHeavy   int
 	SkippedLimit   int
+	Source         string // "rg"（默认）或 "walkdir"（回退）
 }
 
 type workspacePathIndex struct {
@@ -618,6 +621,16 @@ func workspacePathIndexIgnoredDirs() []string {
 	return []string{".git", "node_modules", "dist", "build", "target", ".next", ".nuxt", ".svelte-kit", "vendor", "__pycache__"}
 }
 
+// workspaceMapIgnoredDirs 是 Workspace Map 的 rg 排除目录列表：除重目录外
+// 追加常见依赖/缓存目录，防止依赖库吃光 320 条配额。
+func workspaceMapIgnoredDirs() []string {
+	return []string{
+		".git", "node_modules", "dist", "build", "target", ".next", ".nuxt", ".svelte-kit", "vendor", "__pycache__",
+		".venv", "venv", ".cache", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".turbo", ".parcel-cache", ".vite", "coverage",
+		"site-packages", "bower_components", ".pnpm-store", "go/pkg/mod", "jars", "lib64", "packages/*/dist", "*.egg-info",
+	}
+}
+
 func buildWorkspaceMapContext(root string) string {
 	result := buildWorkspaceMap(root, workspaceMapDepth, workspaceMapLimit)
 	if len(result.Entries) == 0 {
@@ -626,9 +639,13 @@ func buildWorkspaceMapContext(root string) string {
 
 	var b strings.Builder
 	b.WriteString("# Workspace Map\n\n")
-	b.WriteString("This is a bounded hidden workspace map. It contains paths only, not file contents.\n")
+	b.WriteString("Bounded hidden workspace map: file paths with byte sizes; contents never included.\n")
+	b.WriteString("Each file shows its size (B/KB/MB); directories show no size. \"+N more files\" means that directory has N more entries beyond the per-directory budget.\n")
 	b.WriteString("Root: " + filepath.ToSlash(root) + "\n")
 	b.WriteString(fmt.Sprintf("Limits: depth=%d entries=%d truncated=%t\n", workspaceMapDepth, workspaceMapLimit, result.Truncated))
+	if result.Source != "" {
+		b.WriteString("Source: " + result.Source + "\n")
+	}
 
 	if stack := detectWorkspaceStack(root); len(stack) > 0 {
 		b.WriteString("Detected stack: " + strings.Join(stack, ", ") + "\n")
@@ -636,8 +653,16 @@ func buildWorkspaceMapContext(root string) string {
 	if keyFiles := detectWorkspaceKeyFiles(root); len(keyFiles) > 0 {
 		b.WriteString("Key files: " + strings.Join(keyFiles, ", ") + "\n")
 	}
-	if result.SkippedIgnored > 0 || result.SkippedHeavy > 0 || result.SkippedDepth > 0 || result.SkippedLimit > 0 {
-		b.WriteString(fmt.Sprintf("Skipped: ignored=%d heavy=%d depth=%d limit=%d\n", result.SkippedIgnored, result.SkippedHeavy, result.SkippedDepth, result.SkippedLimit))
+	// rg 路径下 ignored/heavy 由 rg 自行处理（.gitignore/.ignore/-g 黑名单/超大文件），
+	// 不计数，避免误导 AI 以为没有跳过任何文件。depth/limit 是消费端计数。
+	if result.Source == "walkdir" {
+		if result.SkippedIgnored > 0 || result.SkippedHeavy > 0 || result.SkippedDepth > 0 || result.SkippedLimit > 0 {
+			b.WriteString(fmt.Sprintf("Skipped: ignored=%d heavy=%d depth=%d limit=%d\n", result.SkippedIgnored, result.SkippedHeavy, result.SkippedDepth, result.SkippedLimit))
+		}
+	} else {
+		if result.SkippedDepth > 0 || result.SkippedLimit > 0 {
+			b.WriteString(fmt.Sprintf("Skipped: depth=%d limit=%d (ignored/heavy/excluded files are filtered by ripgrep, not counted here)\n", result.SkippedDepth, result.SkippedLimit))
+		}
 	}
 
 	b.WriteString("\nTree:\n")
@@ -650,13 +675,45 @@ func buildWorkspaceMapContext(root string) string {
 		}
 		b.WriteString(strings.Repeat("  ", depth))
 		b.WriteString("- ")
-		b.WriteString(name)
+		if entry.MoreFiles > 0 {
+			b.WriteString(fmt.Sprintf("+%d more files", entry.MoreFiles))
+		} else {
+			b.WriteString(name)
+			// 文件一律显示大小（0 字节显示 "0 B"），目录不显示。
+			if !entry.Dir {
+				b.WriteString("  " + formatMapFileSize(entry.Size))
+			}
+		}
 		b.WriteString("\n")
 	}
 	b.WriteString("\nUse read for file contents only when needed.\n")
 	return b.String()
 }
 
+// formatMapFileSize 把字节数格式化成紧凑可读形式（B/KB/MB），与前端
+// formatBytes 保持一致；非文件条目（目录/折叠行）不显示。
+func formatMapFileSize(bytes int64) string {
+	switch {
+	case bytes < 1024:
+		return fmt.Sprintf("%d B", bytes)
+	case bytes < 1024*1024:
+		return fmt.Sprintf("%.0f KB", float64(bytes)/1024)
+	default:
+		return fmt.Sprintf("%.1f MB", float64(bytes)/(1024*1024))
+	}
+}
+
+const (
+	workspaceMapDirBudget = 50
+	// workspaceMapScanTimeout 限制 rg 扫描时长：超时回退 WalkDir，避免
+	// 网络盘/病态文件系统让首次消息无限等待（rg 进程同步阻塞 buildMessages）。
+	workspaceMapScanTimeout = 10 * time.Second
+)
+
+// buildWorkspaceMap 优先用 ripgrep 生成 Workspace Map；rg 不可用或运行失败
+// （启动错误/非零退出/超时）时回退 WalkDir。两条路径应用相同的过滤语义
+// （.env 敏感文件、重目录、gitignore、深度）、每目录折叠预算与全局 320 条
+// 硬停，保证输出结构一致。
 func buildWorkspaceMap(root string, maxDepth, limit int) workspaceMapBuildResult {
 	if maxDepth <= 0 {
 		maxDepth = workspaceMapDepth
@@ -664,8 +721,225 @@ func buildWorkspaceMap(root string, maxDepth, limit int) workspaceMapBuildResult
 	if limit <= 0 {
 		limit = workspaceMapLimit
 	}
+	if result, ok := buildWorkspaceMapWithRg(root, maxDepth, limit); ok {
+		return result
+	}
+	return buildWorkspaceMapWalkDir(root, maxDepth, limit)
+}
+
+// buildWorkspaceMapWithRg 用 `rg --files` 扫描；rg 缺失/启动失败/非零退出/超时
+// 返回 ok=false 让调用方回退 WalkDir；硬停（全局 limit 满）是正常结束。
+func buildWorkspaceMapWithRg(root string, maxDepth, limit int) (workspaceMapBuildResult, bool) {
+	rgPath, err := grep.Find()
+	if err != nil {
+		return workspaceMapBuildResult{}, false
+	}
+	runCtx, cancel := context.WithTimeout(context.Background(), workspaceMapScanTimeout)
+	defer cancel()
+
+	// --sort path 保证确定性（rg 并行遍历默认顺序不定，决定哪些条目存活于
+	// 320 截断/折叠）。.env 敏感文件不在 rg 参数层排除：rg 的 -g 包含模式
+	// 会变成白名单（只输出匹配文件），所以交给消费端 isWorkspaceMapSensitiveFile
+	// 过滤，与 walkdir 回退路径语义完全一致（.env/.env.* 排除，模板保留）。
+	args := []string{"--files", "--hidden", "--no-require-git", "--sort", "path",
+		"--max-filesize", "1M",
+		"--iglob", "!.git", "--iglob", "!.git/**"}
+	for _, dir := range workspaceMapIgnoredDirs() {
+		args = append(args, "--iglob", "!"+dir+"/**", "--iglob", "!**/"+dir+"/**")
+	}
+	cmd := exec.CommandContext(runCtx, rgPath, args...)
+	cmd.Dir = root
+	hideCommandWindow(cmd)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return workspaceMapBuildResult{}, false
+	}
+	cmd.Stderr = &limitedBuffer{limit: 8 * 1024}
+	if err := cmd.Start(); err != nil {
+		return workspaceMapBuildResult{}, false
+	}
+
+	result := workspaceMapBuildResult{Entries: make([]workspaceMapEntry, 0, min(limit, 64)), Source: "rg"}
+	budget := newWorkspaceMapDirBudgets()
+	truncated := false
+	scanner := bufio.NewScanner(stdout)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		rel := strings.TrimSpace(scanner.Text())
+		if rel == "" {
+			continue
+		}
+		if !buildWorkspaceMapAdd(&result, budget, root, rel, maxDepth, limit) {
+			// 全局 limit 满：标记 truncated 并硬停（result.Truncated 必须设置，
+			// 否则渲染层显示 truncated=false 误导 AI）。
+			result.Truncated = true
+			result.SkippedLimit++
+			truncated = true
+			cancel() // 杀掉 rg
+			break
+		}
+	}
+	// 硬停（truncated）是正常结束；其余错误/超时统一回退 WalkDir，
+	// 避免把残缺 map 缓存 30 秒。
+	if !truncated && (runCtx.Err() != nil || scanner.Err() != nil || cmd.Wait() != nil) {
+		return workspaceMapBuildResult{}, false
+	}
+	sortWorkspaceMapEntries(&result)
+	return result, true
+}
+// workspaceMapDirBudgets 跟踪每个父目录已展开的直接子项数，用于每目录预算折叠。
+type workspaceMapDirBudgets struct {
+	counts map[string]int
+}
+
+func newWorkspaceMapDirBudgets() *workspaceMapDirBudgets {
+	return &workspaceMapDirBudgets{counts: map[string]int{}}
+}
+
+// parentDir 返回 rel 的直接父目录路径（不含叶子名），根的直接子项父目录为 ""。
+func parentDir(rel string) string {
+	idx := strings.LastIndex(rel, "/")
+	if idx < 0 {
+		return ""
+	}
+	return rel[:idx]
+}
+
+// buildWorkspaceMapAdd 处理单个 rg 输出的文件路径：先插入其所有父目录节点
+// （仅 maxDepth 内的目录，避免深层目录链吃光配额），文件本身超过 maxDepth
+// 时跳过；达到全局 limit 时返回 false 触发硬停。
+func buildWorkspaceMapAdd(result *workspaceMapBuildResult, budget *workspaceMapDirBudgets, root, rel string, maxDepth, limit int) bool {
+	rel = strings.Trim(strings.TrimSpace(filepath.ToSlash(rel)), "/")
+	if rel == "" || rel == "." {
+		return true
+	}
+	// 敏感文件过滤（.env/.env.*，保留 example/sample/template）：与 walkdir
+	// 回退路径共用 isWorkspaceMapSensitiveFile，保证两条路径语义一致。
+	if isWorkspaceMapSensitiveFile(path.Base(rel), false) {
+		result.SkippedIgnored++
+		return true
+	}
+	// 全局硬停前置：即使后续都是折叠递增（不新增条目），也必须停。
+	if len(result.Entries) >= limit {
+		return false
+	}
+
+	// 插入父目录节点：只插 maxDepth 内的目录（目录 depth ≤ maxDepth 保留，
+	// 更深目录不插入——其文件同样会被下面的深度过滤跳过）。
+	parts := strings.Split(rel, "/")
+	cur := ""
+	for i := 0; i < len(parts)-1; i++ {
+		if cur == "" {
+			cur = parts[i]
+		} else {
+			cur += "/" + parts[i]
+		}
+		if pathDepth(cur) > maxDepth {
+			break
+		}
+		if !workspaceMapEnsureDir(result, cur, limit) {
+			return false
+		}
+	}
+
+	// 文件深度过滤：超过 maxDepth 的文件不展开（目录节点已插入）
+	if pathDepth(rel) > maxDepth {
+		result.SkippedDepth++
+		return true
+	}
+	return workspaceMapAddFile(result, budget, root, rel, limit)
+}
+
+// workspaceMapEnsureDir 插入目录节点（若尚未插入）。目录本身不计入子项预算，
+// 只保证树结构完整；达到全局 limit 时返回 false。
+func workspaceMapEnsureDir(result *workspaceMapBuildResult, rel string, limit int) bool {
+	for _, e := range result.Entries {
+		if e.Dir && strings.EqualFold(e.Path, rel) {
+			return true
+		}
+	}
+	if len(result.Entries) >= limit {
+		return false
+	}
+	result.Entries = append(result.Entries, workspaceMapEntry{Path: rel, Dir: true})
+	return true
+}
+
+// workspaceMapAddFile 追加一个文件条目；同一父目录下已展开的直接子项数超过
+// workspaceMapDirBudget 后，后续直接子项合并为一个 "+N more files" 占位条目
+// （不 stat、不新增条目，但全局 limit 仍生效）。返回 false 表示全局已满。
+func workspaceMapAddFile(result *workspaceMapBuildResult, budget *workspaceMapDirBudgets, root, rel string, limit int) bool {
+	parent := parentDir(rel)
+	count := budget.counts[parent]
+	if count >= workspaceMapDirBudget {
+		// 折叠：即使不新增条目，全局配额也必须触发硬停。
+		if len(result.Entries) >= limit {
+			return false
+		}
+		// 占位条目按 MoreFiles 标记查找（真实文件即使叫 "+more" 也不会被劫持）。
+		for i := len(result.Entries) - 1; i >= 0; i-- {
+			e := result.Entries[i]
+			if e.MoreFiles > 0 && parentDir(e.Path) == parent {
+				result.Entries[i].MoreFiles++
+				budget.counts[parent]++
+				return true
+			}
+		}
+		placeholder := parent + "/+more"
+		if parent == "" {
+			placeholder = "+more"
+		}
+		result.Entries = append(result.Entries, workspaceMapEntry{Path: placeholder, Dir: false, MoreFiles: 1})
+		budget.counts[parent]++
+		return true
+	}
+	budget.counts[parent]++
+	if len(result.Entries) >= limit {
+		return false
+	}
+	// 只有真正追加真实条目才 stat（折叠路径不 stat，避免大目录 10 万次 lstat）。
+	size := int64(0)
+	if info, err := os.Stat(filepath.Join(root, filepath.FromSlash(rel))); err == nil {
+		size = info.Size()
+	}
+	result.Entries = append(result.Entries, workspaceMapEntry{Path: rel, Dir: false, Size: size})
+	return true
+}
+
+// workspaceMapSortKey 返回条目排序键。折叠占位条目（MoreFiles>0）用
+// "父目录/\uffff" 作为键：\uffff 是最大码位，保证它排在同目录所有真实
+// 条目之后（internal/app/+more 排在 internal/app/app.go 之后），但仍在
+// 目录范围内（排在 internal/tools/... 之前）。根级占位（Path="+more"）
+// 键为 "\uffff"，排在整个树末尾——根目录"还有 N 个文件"收尾是合理的。
+func workspaceMapSortKey(e workspaceMapEntry) string {
+	key := strings.ToLower(e.Path)
+	if e.MoreFiles > 0 {
+		parent := parentDir(key)
+		if parent == "" {
+			return "\uffff"
+		}
+		return parent + "/\uffff"
+	}
+	return key
+}
+
+func sortWorkspaceMapEntries(result *workspaceMapBuildResult) {
+	sort.Slice(result.Entries, func(i, j int) bool {
+		return workspaceMapSortKey(result.Entries[i]) < workspaceMapSortKey(result.Entries[j])
+	})
+}
+
+func buildWorkspaceMapWalkDir(root string, maxDepth, limit int) workspaceMapBuildResult {
+	if maxDepth <= 0 {
+		maxDepth = workspaceMapDepth
+	}
+	if limit <= 0 {
+		limit = workspaceMapLimit
+	}
 	rules := loadRootGitignoreRules(root)
-	result := workspaceMapBuildResult{Entries: make([]workspaceMapEntry, 0, min(limit, 64))}
+	result := workspaceMapBuildResult{Entries: make([]workspaceMapEntry, 0, min(limit, 64)), Source: "walkdir"}
+	budget := newWorkspaceMapDirBudgets()
+	truncated := false
 
 	_ = filepath.WalkDir(root, func(absPath string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -698,6 +972,12 @@ func buildWorkspaceMap(root string, maxDepth, limit int) workspaceMapBuildResult
 			return nil
 		}
 
+		if truncated {
+			return fs.SkipAll
+		}
+
+		// 深度：目录超过 maxDepth 整棵剪枝（与 rg 路径一致：目录节点只插
+		// maxDepth 内、更深文件不展开）。
 		depth := pathDepth(rel)
 		if depth > maxDepth {
 			result.SkippedDepth++
@@ -708,21 +988,31 @@ func buildWorkspaceMap(root string, maxDepth, limit int) workspaceMapBuildResult
 		}
 
 		if len(result.Entries) >= limit {
+			truncated = true
 			result.Truncated = true
 			result.SkippedLimit++
-			if d.IsDir() {
-				return filepath.SkipDir
+			return fs.SkipAll
+		}
+
+		if d.IsDir() {
+			if !workspaceMapEnsureDir(&result, relSlash, limit) {
+				truncated = true
+				result.Truncated = true
+				result.SkippedLimit++
+				return fs.SkipAll
 			}
 			return nil
 		}
-
-		result.Entries = append(result.Entries, workspaceMapEntry{Path: relSlash, Dir: d.IsDir()})
+		if !workspaceMapAddFile(&result, budget, root, relSlash, limit) {
+			truncated = true
+			result.Truncated = true
+			result.SkippedLimit++
+			return fs.SkipAll
+		}
 		return nil
 	})
 
-	sort.Slice(result.Entries, func(i, j int) bool {
-		return strings.ToLower(result.Entries[i].Path) < strings.ToLower(result.Entries[j].Path)
-	})
+	sortWorkspaceMapEntries(&result)
 	return result
 }
 
