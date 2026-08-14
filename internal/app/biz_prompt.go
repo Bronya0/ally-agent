@@ -477,7 +477,7 @@ func projectLessonsPromptPart(workspaceRoot string) string {
 	var b strings.Builder
 	b.WriteString("\n\n# Project Lessons\n\n")
 	b.WriteString("`.ally/lessons.md` in the workspace root records reusable pitfalls (hidden framework behavior, project-specific conventions, environment traps), one line per lesson:\n\n")
-	b.WriteString("- [tag] symptom → root cause → fix @file-or-area\n\n")
+	b.WriteString("- [tag] YYYY-MM-DD 小心：可复用的防坑规则。危害：踩坑后的具体危害。@file-or-area\n\n")
 	b.WriteString("When you fix a pitfall that would recur in another file or task, update `.ally/lessons.md` with `edit`: read it first, update the matching line if the lesson already exists, otherwise append a line; create the file when missing. Only record pitfalls that would recur elsewhere; never record one-off compile errors, failed tests, plain coding mistakes, or tool errors. Lines may be stale — verify the code before relying on them.\n")
 	if lessons := buildProjectLessonsContext(workspaceRoot); lessons != "" {
 		b.WriteString("\nRecorded lessons:\n")
