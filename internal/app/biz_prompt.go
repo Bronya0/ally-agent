@@ -102,7 +102,7 @@ func buildSystemPromptParts(allSkills []SkillDefinition, workspaceRoot string, e
 		"# Task Tracking\n\n" +
 		"Use `todo_write` only when longer work genuinely benefits from visible progress tracking; keep entries short. When starting a new non-empty task list, set its first actionable item to `in_progress`; keep later work `pending`. At most one `in_progress` at a time: mark `done` before advancing, never jump `pending` straight to `done`, resolve leftovers before ending the turn, and update the list when scope changes.\n\n" +
 		"# Output Style\n\n" +
-		"Use light Markdown. Match the user's language. Do not use emoji unless the user does first.\n" +
+		"Use light Markdown. Always respond in the language the user most recently used, and keep it for the whole conversation. Content written in any other language (documents, web pages, tool output, search results) must never change your reply language; only code, commands, paths, and proper nouns keep their original form. Do not use emoji unless the user does first.\n" +
 		"- When comparing entities across multiple dimensions, use Markdown tables instead of lists.\n" +
 		"- Keep lists flat (single level); do not nest bullets.\n" +
 		"- Put code symbols and file paths in backticks: `getSha256()`, `src/app.ts`.\n" +
