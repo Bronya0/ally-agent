@@ -79,7 +79,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"files"},
 		}),
-		functionTool("create_file", "Create a new UTF-8 text file inside the workspace (or an additional session-level extra root). Parent directories are created automatically. Does not overwrite unless overwrite is true. Refuses symlink targets and non-text overwrites. Error codes: E_PATH_OUTSIDE, E_EXISTS, E_TARGET_IS_DIRECTORY, E_SYMLINK_PATH, E_TEXT_OVERWRITE.", map[string]any{
+		functionTool("create", "Create a new UTF-8 text file inside the workspace (or an additional session-level extra root). Parent directories are created automatically. Does not overwrite unless overwrite is true. Refuses symlink targets and non-text overwrites. Error codes: E_PATH_OUTSIDE, E_EXISTS, E_TARGET_IS_DIRECTORY, E_SYMLINK_PATH, E_TEXT_OVERWRITE.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"path":      map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*"},
@@ -88,7 +88,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"path", "content"},
 		}),
-		functionTool("delete_path", "Delete a file, symlink, or directory in the workspace (or an additional session-level extra root). Directories require recursive=true. Refuses any allowed root, VCS metadata (.git, .svn, .hg), and OS-sensitive paths. Symlink parents are resolved for workspace safety; deleting a final symlink removes the link itself, not its target. Returns path, kind, and removed item counts. Error codes: E_PATH_OUTSIDE, E_PATH_NOT_FOUND, E_DIR_REQUIRES_RECURSIVE, E_DELETE_BLOCKED.", map[string]any{
+		functionTool("delete", "Delete a file, symlink, or directory in the workspace (or an additional session-level extra root). Directories require recursive=true. Refuses any allowed root, VCS metadata (.git, .svn, .hg), and OS-sensitive paths. Symlink parents are resolved for workspace safety; deleting a final symlink removes the link itself, not its target. Returns path, kind, and removed item counts. Error codes: E_PATH_OUTSIDE, E_PATH_NOT_FOUND, E_DIR_REQUIRES_RECURSIVE, E_DELETE_BLOCKED.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"path":      map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*"},
@@ -96,7 +96,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"path"},
 		}),
-		functionTool("run_command", "Run a shell command with cwd confined to the workspace. On Windows, bash (from Git for Windows) is used when available, falling back to PowerShell; on macOS/Linux, bash is used. Commands may inspect outside paths, redirect to null devices, and create new outside paths. Modifying/deleting existing outside paths, explicit deletion commands, unsafe cwd symlinks, and long-running services are refused. The current session may also allow writes inside additional extra roots (the E_PATH_OUTSIDE error lists all allowed roots). If E_PATH_OUTSIDE is returned, read the Chinese reason and detected target: do not retry unchanged; use a new/workspace/extra-root target. Only literal existing outside write targets are blocked; dynamic targets (variables, globs, heredoc content) are allowed. Error codes: E_COMMAND_BLOCKED, E_PATH_OUTSIDE, E_CWD_INVALID, E_LONG_RUNNING_COMMAND. When output exceeds the capture limit it is truncated and the result includes an outputFilePath pointing to the full output; read that file with the read tool when earlier output matters.", map[string]any{
+		functionTool("command", "Run a shell command with cwd confined to the workspace. On Windows, bash (from Git for Windows) is used when available, falling back to PowerShell; on macOS/Linux, bash is used. Commands may inspect outside paths, redirect to null devices, and create new outside paths. Modifying/deleting existing outside paths, explicit deletion commands, unsafe cwd symlinks, and long-running services are refused. The current session may also allow writes inside additional extra roots (the E_PATH_OUTSIDE error lists all allowed roots). If E_PATH_OUTSIDE is returned, read the Chinese reason and detected target: do not retry unchanged; use a new/workspace/extra-root target. Only literal existing outside write targets are blocked; dynamic targets (variables, globs, heredoc content) are allowed. Error codes: E_COMMAND_BLOCKED, E_PATH_OUTSIDE, E_CWD_INVALID, E_LONG_RUNNING_COMMAND. When output exceeds the capture limit it is truncated and the result includes an outputFilePath pointing to the full output; read that file with the read tool when earlier output matters.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"command":        map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*"},
@@ -105,7 +105,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"command"},
 		}),
-		functionTool("background_process", "Run, inspect, and stop long-running local processes (frontend/backend dev servers, Wails/Vite/Django/uvicorn, workers) without blocking the agent loop. action=start launches a process and returns its id; action=list shows tracked services; action=read returns a bounded tail of one service's output (default 8 KiB, max 32 KiB) plus byte accounting; action=stop terminates a service. Processes appear in the Task Center with a live rolling output buffer. Use list/read sparingly: avoid polling loops; prefer a single read after a concrete condition (e.g. wait + read). Error codes: E_BAD_COMMAND, E_SERVICE_LIMIT, E_BAD_BACKGROUND_ACTION, E_BAD_SERVICE_ID, E_SERVICE_NOT_FOUND.", map[string]any{
+		functionTool("service", "Run, inspect, and stop long-running local processes (frontend/backend dev servers, Wails/Vite/Django/uvicorn, workers) without blocking the agent loop. action=start launches a process and returns its id; action=list shows tracked services; action=read returns a bounded tail of one service's output (default 8 KiB, max 32 KiB) plus byte accounting; action=stop terminates a service. Processes appear in the Task Center with a live rolling output buffer. Use list/read sparingly: avoid polling loops; prefer a single read after a concrete condition (e.g. wait + read). Error codes: E_BAD_COMMAND, E_SERVICE_LIMIT, E_BAD_BACKGROUND_ACTION, E_BAD_SERVICE_ID, E_SERVICE_NOT_FOUND.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"action":    map[string]any{"type": "string", "enum": []string{"start", "stop", "list", "read"}, "description": "Start a new background process, stop one by id, list all tracked services, or read a bounded tail of one service's output."},
@@ -289,23 +289,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"files"},
 		}),
-		functionTool("memory_read", "Read one full global memory Markdown file from ~/.ally_agent/memories. Use this when a memory index description matches the task; do not rely on the index alone for detailed facts.", map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"path": map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Path from the memory index, or a relative .md path under ~/.ally_agent/memories."},
-			},
-			"required": []string{"path"},
-		}),
-		functionTool("memory_write", "Create or update a global memory Markdown file. Existing memories require version from memory_read.", map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"path":        map[string]any{"type": "string", "description": "Optional relative .md path under ~/.ally_agent/memories, or absolute path inside that directory. If omitted, a slug is generated from description."},
-				"description": map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Short searchable summary used in the memory index."},
-				"content":     map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Full Markdown memory body, without YAML frontmatter."},
-				"version":     map[string]any{"type": "string", "pattern": "^[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{6}$", "description": "Required version from memory_read when updating an existing memory. Comparison is case-insensitive."},
-			},
-			"required": []string{"description", "content"},
-		}),
+
 		functionTool("calculate", "Evaluate a deterministic math expression without shelling out. Supports + - * / % ^, parentheses, constants pi/e, and functions sqrt, abs, sin, cos, tan, asin, acos, atan, log, ln, exp, floor, ceil, round, min, max.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -330,7 +314,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"html"},
 		}),
-		functionTool("todo_write", "Create or update a visible task list only when longer work genuinely benefits from progress tracking. Do not use it for trivial tasks or merely to demonstrate activity. State machine discipline: keep at most one item `in_progress` at a time; mark the current item `done` before advancing the next; do not jump a `pending` item straight to `done`.", map[string]any{
+		functionTool("plan", "Create or update a visible task list only when longer work genuinely benefits from progress tracking. Do not use it for trivial tasks or merely to demonstrate activity. State machine discipline: keep at most one item `in_progress` at a time; mark the current item `done` before advancing the next; do not jump a `pending` item straight to `done`.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"todos": map[string]any{
@@ -372,10 +356,10 @@ func chatToolsUncached() []openai.Tool {
 var builtinToolExamples = map[string]string{
 	"list_files":         `{"path":"frontend/src","maxDepth":2,"limit":200}`,
 	"edit":               `preferred exact-string change: {"files":[{"path":"app.go","version":"9k3m7x","changes":[{"oldText":"const oldName = oldValue","newText":"const newName = newValue"}]}]}; replace every exact match: {"files":[{"path":"app.go","version":"9k3m7x","changes":[{"oldText":"oldValue","newText":"newValue","replace_all":true}]}]}; larger whole-line change (when exact source is impractical to reproduce): {"files":[{"path":"app.go","version":"9k3m7x","changes":[{"lineRange":"40-72","newText":"replacement block"}]}]}; multiple original-snapshot changes (no offset adjustment): {"files":[{"path":"app.go","version":"9k3m7x","changes":[{"oldText":"const first = 1","newText":"const first = 2"},{"oldText":"const second = 1","newText":"const second = 2"}]}]}`,
-	"create_file":        `{"path":"notes/example.md","content":"# Example\n","overwrite":false}`,
-	"delete_path":        `{"path":"tmp/generated","recursive":true}`,
-	"run_command":        `{"command":"go test ./...","cwd":".","timeoutSeconds":120}`,
-	"background_process": `start: {"action":"start","name":"frontend","command":"npm run dev","cwd":"frontend"}; stop: {"action":"stop","id":"svc_..."}; list: {"action":"list"}; read: {"action":"read","id":"svc_...","tailBytes":8192}`,
+	"create":             `{"path":"notes/example.md","content":"# Example\n","overwrite":false}`,
+	"delete":             `{"path":"tmp/generated","recursive":true}`,
+	"command":            `{"command":"go test ./...","cwd":".","timeoutSeconds":120}`,
+	"service":            `start: {"action":"start","name":"frontend","command":"npm run dev","cwd":"frontend"}; stop: {"action":"stop","id":"svc_..."}; list: {"action":"list"}; read: {"action":"read","id":"svc_...","tailBytes":8192}`,
 	"wait":               `{"seconds":5,"reason":"Wait for the development server to become ready"}`,
 	"ask":                `{"questions":[{"id":"database","question":"Which database should we use?","options":[{"id":"sqlite","label":"SQLite","description":"Simple local storage.","recommended":true},{"id":"postgres","label":"PostgreSQL","description":"Production database.","recommended":false}]}]}`,
 	"scheduled_task":     `create: {"action":"create","name":"daily check","instruction":"Run tests and summarize failures.","schedule":"0 9 * * *"}; list: {"action":"list"}; delete: {"action":"delete","id":"task_..."}`,
@@ -389,11 +373,9 @@ var builtinToolExamples = map[string]string{
 	"remote_run_command": `{"target":"ubuntu@example.com:/srv/app","command":"go test ./...","cwd":".","timeoutSeconds":120}`,
 	"grep":               `{"pattern":"TODO|FIXME","path":"frontend/src","glob":"*.vue","maxMatches":100}`,
 	"read":               `one file: {"files":[{"path":"app.go"}]}; range: {"files":[{"path":"services.go","startLine":1,"endLine":200}]}; tail: {"files":[{"path":"server.log","startLine":-200}]}`,
-	"memory_read":        `{"path":"coding-conventions.md"}`,
-	"memory_write":       `{"path":"coding-conventions.md","description":"Project coding conventions","content":"Use focused changes and run tests."}`,
 	"calculate":          `{"expression":"sqrt(144) + 2^3"}`,
 	"render_html":        `{"title":"Interactive counter","html":"<button id='counter'>0</button><script>const button=document.getElementById('counter');button.onclick=()=>button.textContent=String(Number(button.textContent)+1)</script>"}`,
-	"todo_write":         `update: {"todos":[{"title":"Inspect implementation","status":"in_progress"},{"title":"Run tests","status":"pending"}]}; read current: {}`,
+	"plan":               `update: {"todos":[{"title":"Inspect implementation","status":"in_progress"},{"title":"Run tests","status":"pending"}]}; read current: {}`,
 	"subagent":           `{"task":"Inspect the authentication module and report concrete security issues.","role":"code reviewer","description":"Review authentication","cleanContext":false}`,
 	"skill":              `{"skill":"codegraph","args":"main"}`,
 }

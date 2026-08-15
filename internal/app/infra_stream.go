@@ -154,7 +154,7 @@ type toolCallProgressTracker struct {
 
 // toolUpdateThrottle bounds how often a tool:update event is emitted for a
 // single tool call while streaming large argument payloads. Without this,
-// streaming a large create_file payload produces one event per delta, each
+// streaming a large create payload produces one event per delta, each
 // carrying the full accumulated arguments, which is O(N^2) in data transfer
 // and floods the frontend webview (causing frozen UI and multi-GB memory
 // growth). The final state is always emitted via forceEvents after the stream
@@ -196,7 +196,7 @@ func (t *toolCallProgressTracker) eventsWithForce(runID, sessionID, batchID stri
 		// Early throttle check for large argument payloads. Constructing the
 		// state string (which includes the full accumulated arguments) is
 		// O(len(args)), and comparing it is another O(len(args)). For a large
-		// create_file payload with thousands of deltas this wastes CPU even
+		// create payload with thousands of deltas this wastes CPU even
 		// when the event is going to be throttled. Skip the state work entirely
 		// when we're within the throttle window for an already-started tool.
 		started := t.started[idx]

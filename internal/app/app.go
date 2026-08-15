@@ -686,7 +686,7 @@ type BackgroundProcessRequest struct {
 	TailBytes int    `json:"tailBytes,omitempty"`
 }
 
-// ServiceReadRequest is the model-facing read payload for background_process.
+// ServiceReadRequest is the model-facing read payload for the service tool.
 type ServiceReadRequest struct {
 	ID        string `json:"id"`
 	TailBytes int    `json:"tailBytes,omitempty"`
@@ -1217,7 +1217,7 @@ func (a *App) ensureInitialized() error {
 	}
 	a.disabledSkills = normalizeSkillNameList(a.config.DisabledSkills)
 	a.config.DisabledSkills = cloneStringSlice(a.disabledSkills)
-	// run_command 截断落盘文件位于工作区 .ally/tmp，启动时清理过期文件
+	// command 截断落盘文件位于工作区 .ally/tmp，启动时清理过期文件
 	cleanupCommandSpillFiles(a.config.Workspace)
 	a.initialized = true
 	return nil
@@ -1704,7 +1704,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			requestMessages := appendContextBudgetMessage(messages, bd.Total, maxCtx)
 			// Inject the live todo list every turn so the model can see which
 			// items are still pending/in_progress and decide to flip them via
-			// todo_write before answering. Also not persisted into history —
+			// plan before answering. Also not persisted into history —
 			// reconstructed fresh each turn from the live todo state.
 			requestMessages = appendTodoStatusMessage(requestMessages, a.GetTodos(sessionID))
 			modelResp, err := a.streamModelResponse(ctx, cfg, cfg.Model, requestMessages, tools, func(event modelStreamEvent) {
@@ -2002,7 +2002,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 				invalidateRunReadCache(ctx)
 			}
 		}
-	case "create_file":
+	case "create":
 		var req CreateFileRequest
 		err = decode(&req)
 		if err == nil {
@@ -2014,7 +2014,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 				invalidateRunReadCache(ctx)
 			}
 		}
-	case "delete_path":
+	case "delete":
 		var req DeletePathRequest
 		err = decode(&req)
 		if err == nil {
@@ -2026,7 +2026,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 				invalidateRunReadCache(ctx)
 			}
 		}
-	case "run_command":
+	case "command":
 		var req CommandRequest
 		err = decode(&req)
 		if err == nil {
@@ -2039,7 +2039,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 				a.invalidateWorkspaceMapCache(cfg)
 			}
 		}
-	case "background_process":
+	case "service":
 		var req BackgroundProcessRequest
 		err = decode(&req)
 		if err == nil {
@@ -2145,20 +2145,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 				data, err = a.batchReadFilesWithConfig(cfg, reqBR)
 			}
 		}
-	case "memory_read":
-		var req MemoryReadRequest
-		err = decode(&req)
-		if err == nil {
-			data, err = a.memoryRead(req)
-		}
-	case "memory_write":
-		var req MemoryWriteRequest
-		err = decode(&req)
-		if err == nil {
-			a.fileOpsMu.Lock()
-			data, err = a.memoryWrite(req)
-			a.fileOpsMu.Unlock()
-		}
+
 	case "document_read":
 		var reqDoc DocumentReadRequest
 		err = decode(&reqDoc)
@@ -2211,7 +2198,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 				}
 			}
 		}
-	case "todo_write":
+	case "plan":
 		var tReq TodoListRequest
 		err = decode(&tReq)
 		if err == nil {

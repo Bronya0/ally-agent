@@ -469,7 +469,7 @@ func (a *App) SaveConfig(req ConfigState) error {
 		if info, err := os.Stat(cfg.GitBashPath); err != nil || info.IsDir() {
 			a.emit("config:warning", map[string]any{
 				"field":   "gitBashPath",
-				"message": "The configured Git Bash path does not exist or is a directory. run_command will fall back to auto-detection or PowerShell.",
+				"message": "The configured Git Bash path does not exist or is a directory. command will fall back to auto-detection or PowerShell.",
 			})
 		}
 	}

@@ -199,7 +199,7 @@ func TestRemoteHelperProtectedDeletePaths(t *testing.T) {
 }
 
 // TestRemoteHelperWriteTargetsOutsideRoot 验证 Python 侧写目标越界检查
-// 与本地 run_command 的 E_PATH_OUTSIDE 策略一致：已存在的越界目标拦截，
+// 与本地 command 的 E_PATH_OUTSIDE 策略一致：已存在的越界目标拦截，
 // 不存在的越界新路径、工作区内目标、/dev/null 与动态目标放行。
 func TestRemoteHelperWriteTargetsOutsideRoot(t *testing.T) {
 	py := pickRemoteHelperPython(t)

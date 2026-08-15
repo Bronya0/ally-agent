@@ -57,12 +57,13 @@ type ListResult struct {
 	Count    int          `json:"count"`
 }
 
-// ReadRequest is the model-facing memory_read request.
+// ReadRequest is the request payload used when the model reads a memory file
+// directly through the read tool (paths under ~/.ally_agent/memories).
 type ReadRequest struct {
 	Path string `json:"path"`
 }
 
-// ReadResult is the result of memory_read.
+// ReadResult is the result of reading a memory file.
 type ReadResult struct {
 	Path        string `json:"path"`
 	Description string `json:"description"`
@@ -72,7 +73,8 @@ type ReadResult struct {
 	Size        int64  `json:"size"`
 }
 
-// WriteRequest is the model-facing memory_write request.
+// WriteRequest is the request payload used when the model writes a memory
+// file directly through create/edit (paths under ~/.ally_agent/memories).
 type WriteRequest struct {
 	Path        string `json:"path"`
 	Description string `json:"description"`
@@ -80,7 +82,7 @@ type WriteRequest struct {
 	Version     string `json:"version,omitempty"`
 }
 
-// WriteResult is the result of memory_write.
+// WriteResult is the result of writing a memory file.
 type WriteResult struct {
 	Path         string `json:"path"`
 	Description  string `json:"description"`
@@ -236,7 +238,7 @@ func ResolvePath(rt Runtime, p string) (string, error) {
 	return abs, nil
 }
 
-// Read performs a memory_read: loads one memory file, parses frontmatter, and
+// Read loads one memory file, parses frontmatter, and
 // returns the description, body, hash, and version token.
 func Read(rt Runtime, req ReadRequest) (ReadResult, error) {
 	path, err := ResolvePath(rt, req.Path)
@@ -260,15 +262,15 @@ func Read(rt Runtime, req ReadRequest) (ReadResult, error) {
 	}, nil
 }
 
-// Write performs a memory_write: creates or updates one memory file with
+// Write creates or updates one memory file with
 // optimistic-concurrency version checking. On success the index cache is
 // invalidated so the next system prompt build rescans.
 func Write(rt Runtime, req WriteRequest) (WriteResult, error) {
 	if strings.TrimSpace(req.Description) == "" {
-		return WriteResult{}, errors.New("memory_write requires a non-empty description")
+		return WriteResult{}, errors.New("write requires a non-empty description")
 	}
 	if strings.TrimSpace(req.Content) == "" {
-		return WriteResult{}, errors.New("memory_write requires non-empty content")
+		return WriteResult{}, errors.New("write requires non-empty content")
 	}
 	pathValue := req.Path
 	if strings.TrimSpace(pathValue) == "" {
@@ -284,7 +286,7 @@ func Write(rt Runtime, req WriteRequest) (WriteResult, error) {
 		before = existing
 		created = false
 		if req.Version == "" {
-			return WriteResult{}, fmt.Errorf("memory already exists: %s; pass version from memory_read", filepath.ToSlash(path))
+			return WriteResult{}, fmt.Errorf("memory already exists: %s; pass version from a prior read", filepath.ToSlash(path))
 		}
 		if err := read.ValidateVersion(req.Version); err != nil {
 			return WriteResult{}, err

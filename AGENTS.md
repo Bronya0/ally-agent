@@ -200,7 +200,7 @@ AGENTS/CLAUDE loading:
 
 Skill metadata: only enabled skills are listed; full skill Markdown is not injected by default; disabled skills are omitted from metadata and cannot be loaded through the `skill` tool.
 
-Global memory metadata: `~/.ally_agent/memories/` is created on startup; files with YAML frontmatter `description` are scanned into a separate "全局记忆索引" system prompt part; the index contains only paths and descriptions, full content is loaded only through `memory_read`; durable cross-project knowledge should be created or updated through `memory_write`.
+Global memory metadata: `~/.ally_agent/memories/` is created on startup; files with YAML frontmatter `description` are scanned into a separate "全局记忆索引" system prompt part; the index contains only paths and descriptions, full content is loaded through the regular `read` tool (`~/.ally_agent` is a whitelisted write root, so `create`/`edit`/`delete` manage memory files directly).
 
 ---
 
@@ -237,7 +237,7 @@ Built-in skill loading:
 
 Currently shipped built-in skills (details in each SKILL.md):
 
-- `playwright-cli` — drives a real browser through the `playwright-cli` npm package via `run_command`; defers command/parameter details to `playwright-cli --help`.
+- `playwright-cli` — drives a real browser through the `playwright-cli` npm package via `command`; defers command/parameter details to `playwright-cli --help`.
 - `codegraph` — generates or incrementally updates `CODEGRAPH.md` (six fixed H2 sections, plain-text bullets, capped at 800 lines, in-place section updates via `edit`).
 
 ### Enable/Disable
@@ -291,19 +291,18 @@ Built-in model-facing tools:
 | `list_files` | List files/directories with depth and limit controls |
 | `read` | Read one or many local files; text returns numbered line previews, documents return extracted text |
 | `edit` | Atomically apply exact-source or whole-line-range replacements to local files |
-| `create_file` | Create/overwrite text files |
-| `delete_path` | Delete files/directories |
+| `create` | Create/overwrite text files |
+| `delete` | Delete files/directories |
 | `grep` | Regex search through bundled ripgrep, with PATH fallback in development; exact stats + per-file hotspot counts (`fileCounts`) + `offset`/`nextOffset` pagination (`offsetExhausted` marks an offset past the end) |
-| `run_command` | Shell command execution with safety checks |
+| `command` | Shell command execution with safety checks |
+| `service` | Run/inspect/stop long-lived local processes (dev servers, workers) |
 | `wait` | Pause the current agent run for a cancellable 1–3600 second delay |
 | `http_request` | Bounded HTTP/HTTPS API request |
 | `web_fetch` | Bounded webpage fetch and readable-text extraction |
 | `remote_*` | SSH remote list/read/edit/create/delete/run commands |
 | `calculate` | Deterministic local math expression evaluator |
 | `ask` | Pause the visible main Agent session for one or more user questions |
-| `todo_write` | Session todo management; at most one `in_progress` item at a time, mark done before advancing |
-| `memory_read` | Read one full global memory Markdown file |
-| `memory_write` | Create/update one global memory Markdown file |
+| `plan` | Session plan management; at most one `in_progress` item at a time, mark done before advancing |
 | `subagent` | Spawn a sub-agent for a scoped task (requires a `role` name, shown as the card label and injected into the sub-agent system prompt) |
 | `scheduled_task` | Create, list, or delete temporary isolated Agent tasks for the current Ally process |
 | `skill` | Load an enabled skill |
@@ -543,16 +542,16 @@ Example MCP config:
 
 - Workspace write operations are confined to the configured workspace, except `~/.ally_agent` is also allowed for Ally global config and memories.
 - Read-only local tools may inspect explicit absolute paths outside the workspace subject to safety checks.
-- `run_command` keeps cwd inside the workspace, permits outside reads, null-device redirection, and creation of new outside paths, but refuses commands that may modify/delete existing outside paths or perform explicit deletion.
+- `command` keeps cwd inside the workspace, permits outside reads, null-device redirection, and creation of new outside paths, but refuses commands that may modify/delete existing outside paths or perform explicit deletion.
 - Command safety uses lightweight shell-aware invocation parsing in `internal/tools/command`: quoted/search data is not treated as executable syntax, nested shell payloads and command substitutions are inspected, managed deletions are allowed only when every deletion in the compound command is managed, and source/destination-aware mutation analysis checks explicit write targets rather than every referenced path. Heredoc bodies and here-strings are skipped as data (quoted delimiters are fully literal; unquoted bodies still have command substitutions inspected).
 - `checkCommandSafety()` in `orch_command_safety.go` is the app-owned boundary for workspace roots, path existence, `E_COMMAND_BLOCKED` / `E_PATH_OUTSIDE`, and user-facing explanations; it must consume the command package's semantic analysis instead of adding independent full-string risk regexes. Redirection/mutation targets that cannot be statically resolved (variables, globs, heredoc artifacts) are allowed through permissively; only literal existing outside paths are blocked.
-- The `run_command` schema explains how to recover from `E_PATH_OUTSIDE`: read the Chinese reason/target, avoid unchanged retries, choose a new or workspace target, and replace literal outside targets with workspace paths. The model-facing system prompt keeps only the first two recovery steps (read the returned Chinese explanation and detected target; do not retry the unchanged command) and points to the schema for the rest.
-- Prefer `delete_path` / `remote_delete_path` over shell deletion.
+- The `command` schema explains how to recover from `E_PATH_OUTSIDE`: read the Chinese reason/target, avoid unchanged retries, choose a new or workspace target, and replace literal outside targets with workspace paths. The model-facing system prompt keeps only the first two recovery steps (read the returned Chinese explanation and detected target; do not retry the unchanged command) and points to the schema for the rest.
+- Prefer `delete` / `remote_delete_path` over shell deletion.
 - `readTextFile` rejects binary files using NUL checks, after transcoding UTF-16 LE/BE (with or without a BOM) to UTF-8; edited UTF-16 files are written back as UTF-8.
 - Release packages bundle ripgrep under the executable's `tools/` directory; development builds fall back to `rg` from `PATH`.
-- On Windows, `run_command` and `background_process` prefer **bash** from Git for Windows over PowerShell. Detection order: a validated `gitBashPath` setting (manual override) → Git for Windows common install paths → derive Git Bash from `git.exe` on `PATH` → a `bash.exe` on `PATH` only when it belongs to the same Git for Windows installation → fallback to PowerShell (`pwsh.exe` → `powershell.exe`). Arbitrary `bash.exe` launchers such as `C:\Windows\System32\bash.exe` (legacy WSL) are rejected because their Linux PATH and argument forwarding break Windows tool discovery and shell expansion. When Git Bash is not detected, startup warns the user to set `gitBashPath` in Settings. The system prompt dynamically reflects which shell is active so the model generates correct syntax. Linux/macOS always use `bash -c` and ignore `gitBashPath`.
+- On Windows, `command` and `service` prefer **bash** from Git for Windows over PowerShell. Detection order: a validated `gitBashPath` setting (manual override) → Git for Windows common install paths → derive Git Bash from `git.exe` on `PATH` → a `bash.exe` on `PATH` only when it belongs to the same Git for Windows installation → fallback to PowerShell (`pwsh.exe` → `powershell.exe`). Arbitrary `bash.exe` launchers such as `C:\Windows\System32\bash.exe` (legacy WSL) are rejected because their Linux PATH and argument forwarding break Windows tool discovery and shell expansion. When Git Bash is not detected, startup warns the user to set `gitBashPath` in Settings. The system prompt dynamically reflects which shell is active so the model generates correct syntax. Linux/macOS always use `bash -c` and ignore `gitBashPath`.
 - On macOS, system proxy detection uses the built-in `/usr/sbin/scutil --proxy` command without cgo, with a bounded timeout; Ally parses fixed HTTP/HTTPS/SOCKS settings, bypass entries, and PAC metadata. Linux continues using proxy environment variables, and PAC-only configurations remain explicitly unsupported until PAC evaluation is implemented.
-- On macOS/Linux, `infra_shell_env.go` probes the user's login shell once (`$SHELL -l -c /usr/bin/env`, with an OS-account shell fallback), appends only missing absolute `PATH` entries to the inherited environment, and shares that environment with `run_command` and `background_process`. Probe failures leave the original environment unchanged; other profile variables such as `GOPATH` and `NVM_DIR` are not imported.
+- On macOS/Linux, `infra_shell_env.go` probes the user's login shell once (`$SHELL -l -c /usr/bin/env`, with an OS-account shell fallback), appends only missing absolute `PATH` entries to the inherited environment, and shares that environment with `command` and `service`. Probe failures leave the original environment unchanged; other profile variables such as `GOPATH` and `NVM_DIR` are not imported.
 - When bash is active on Windows, safety checks detect both Windows-style (`C:\...`) and MSYS2-style (`/c/...`) absolute paths outside the workspace.
 - Tool output is capped by `maxToolOutput`; HTTP tools use bounded response sizes, timeouts, redirect limits, and clear user agent defaults.
 - API keys are stored in the OS user config directory without encryption.
@@ -625,7 +624,7 @@ These rules are required for future changes. They exist to keep Agent behavior d
 | 事件 | 后端节流位置 | 前端缓冲位置 |
 |------|--------------|--------------|
 | `run:stream` (content+reasoning 合并) | `runStreamDeltaEmitter` (`infra_stream.go`, 32ms / 512B)，流末 `flush()` 兜底；`run:image` 发送前先 flush | `queueStreamDelta` + `setTimeout(48ms) → requestAnimationFrame` (`App.vue`) |
-| `tool:update` | `toolCallProgressTracker.eventsWithForce` (`infra_stream.go`, 200ms / 2048B)，超阈值且在窗口内早 continue；`forceEvents()` 流末绕过节流。`run_command` 约每 120ms 发布累计输出并在结束前强制最终快照 | `bufferToolUpdate` + `setTimeout(120ms) → requestAnimationFrame`；命令卡短输出按内容收缩，最多约六行后滚动，并自动跟随末尾 |
+| `tool:update` | `toolCallProgressTracker.eventsWithForce` (`infra_stream.go`, 200ms / 2048B)，超阈值且在窗口内早 continue；`forceEvents()` 流末绕过节流。`command` 约每 120ms 发布累计输出并在结束前强制最终快照 | `bufferToolUpdate` + `setTimeout(120ms) → requestAnimationFrame`；命令卡短输出按内容收缩，最多约六行后滚动，并自动跟随末尾 |
 
 ### 生命周期事件（天然低频，无需节流）
 
@@ -633,7 +632,7 @@ These rules are required for future changes. They exist to keep Agent behavior d
 
 **Ask (`app.go`)**：`ask:ready` / `ask:closed` — 每次 ask 1 次
 
-**Todo (`app.go`)**：`todo:update` — 写入时
+**Plan (`app.go`)**：`plan:update` — 写入时
 
 **MCP (`app.go`)**：`mcp:status` — 服务器状态变更时（一次发全部状态）
 
@@ -653,17 +652,17 @@ These rules are required for future changes. They exist to keep Agent behavior d
 
 ### 事件命名约定
 
-lowercase + 冒号分隔，如 `run:stream`、`tool:result`、`mcp:status`、`sub:step`、`scheduled:update`、`service:update`、`todo:update`、`ask:ready`、`tokens:update`、`dependency:missing`、`config:warning`。
+lowercase + 冒号分隔，如 `run:stream`、`tool:result`、`mcp:status`、`sub:step`、`scheduled:update`、`service:update`、`plan:update`、`ask:ready`、`tokens:update`、`dependency:missing`、`config:warning`。
 
 ---
 
 ## Performance And Memory Notes (Ally-specific)
 
-- `tool:update` 事件在 `toolCallProgressTracker.eventsWithForce` 中带 `toolUpdateThrottle = 200ms` + `toolUpdateThreshold = 2048` 字节节流；`forceEvents()` 在流结束后绕过节流。`run_command` 执行时以约 120ms 间隔发送有变化的累计 stdout/stderr，并在命令结束前发送最终输出快照。测试见 `TestToolCallProgressTrackerThrottlesLargeUpdates`。
+- `tool:update` 事件在 `toolCallProgressTracker.eventsWithForce` 中带 `toolUpdateThrottle = 200ms` + `toolUpdateThreshold = 2048` 字节节流；`forceEvents()` 在流结束后绕过节流。`command` 执行时以约 120ms 间隔发送有变化的累计 stdout/stderr，并在命令结束前发送最终输出快照。测试见 `TestToolCallProgressTrackerThrottlesLargeUpdates`。
 - 前端 `App.vue` 用 `toolUpdateBuffers` Map + `setTimeout(120ms) → requestAnimationFrame` 批量 flush `tool:update`，并在终端事件处理前显式 `flushToolUpdateBuffer()`；`streamBuffers` 走同样的 `queueStreamDelta` 模式处理 `run:stream`。
 - 单 session `localStorage` 预算 240KB，大 tool 预览 / edit 参数 / 附件 Base64 / Diff 在序列化前剥除或截断。
 - 前端 Mermaid SVG DOM 视口外卸载，16 条 / 2M 字符 LRU；`render_html` 流式期间不挂载 iframe，完成后再挂一个 sandboxed iframe。
-- `run_command` / `background_process` 后端 rolling buffer 512KB / 进程，最多 8 个活动进程；服务停止或退出后立即清理记录。
+- `command` / `service` 后端 rolling buffer 512KB / 进程，最多 8 个活动进程；服务停止或退出后立即清理记录。
 - 媒体预览用 revocable Blob URL，session 驱逐时 `URL.revokeObjectURL`；原图 Base64 仅在需要 model 输入时保留。
 - `AppHeader` 容器 `--wails-draggable: drag`，内部所有按钮 / 输入 / 下拉必须 `no-drag`；`ComposerInfoBar` 所有交互 span/button `no-drag`，否则下拉/点击会被拖拽逻辑吞掉。
 - 后台 goroutine（chat run / MCP / scheduled task / service process）都派生自 `app.ctx`，窗口关闭后随 ctx 取消。

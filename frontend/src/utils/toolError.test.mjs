@@ -13,7 +13,7 @@ import { formatToolErrorBody } from './toolError.mjs';
 
 test('strips trailing blocked-command echo with fullwidth colon', () => {
   const body = [
-    '安全围栏已拦截：run_command 不允许直接执行文件删除命令。',
+    '安全围栏已拦截：command 不允许直接执行文件删除命令。',
     '原因：shell 删除命令可能绕过工作区边界。',
     '被拦截的命令：rm -rf /tmp/demo',
   ].join('\n');
@@ -21,7 +21,7 @@ test('strips trailing blocked-command echo with fullwidth colon', () => {
   assert.equal(
     formatToolErrorBody(body),
     [
-      '安全围栏已拦截：run_command 不允许直接执行文件删除命令。',
+      '安全围栏已拦截：command 不允许直接执行文件删除命令。',
       '原因：shell 删除命令可能绕过工作区边界。',
     ].join('\n'),
   );

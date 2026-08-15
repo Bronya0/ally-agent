@@ -111,7 +111,7 @@ func (a *App) emitGitBashMissingIfNeeded() {
 		"tool":       "bash",
 		"name":       "Git Bash",
 		"messageKey": "app.dependency.gitBashMissing",
-		"message":    "Git Bash was not found. run_command will fall back to PowerShell. Install Git for Windows, or set the Git Bash path in Settings → General → Git Bash Path.",
+		"message":    "Git Bash was not found. command will fall back to PowerShell. Install Git for Windows, or set the Git Bash path in Settings → General → Git Bash Path.",
 		"installStepKeys": []string{
 			"app.dependency.gitBashDownload",
 			"app.dependency.gitBashConfigure",

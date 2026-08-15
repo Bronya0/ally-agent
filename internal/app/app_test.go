@@ -433,7 +433,7 @@ func TestToolCallProgressTrackerEmitsStreamingUpdates(t *testing.T) {
 		ID:    "call_create",
 		Type:  openai.ToolTypeFunction,
 		Function: openai.FunctionCall{
-			Name:      "create_file",
+			Name:      "create",
 			Arguments: `{"path":"demo.txt","content":"alpha`,
 		},
 	}})
@@ -497,7 +497,7 @@ func TestModelToolCallEventGateThrottlesLargeSnapshots(t *testing.T) {
 }
 
 // TestToolCallProgressTrackerThrottlesLargeUpdates verifies that large
-// streaming argument payloads (e.g. create_file with thousands of lines) are
+// streaming argument payloads (e.g. create with thousands of lines) are
 // throttled to avoid flooding the frontend with O(N^2) data, while small
 // payloads pass through unchanged and forceEvents always emits the final state.
 func TestToolCallProgressTrackerThrottlesLargeUpdates(t *testing.T) {
@@ -513,7 +513,7 @@ func TestToolCallProgressTrackerThrottlesLargeUpdates(t *testing.T) {
 		ID:    "call_big",
 		Type:  openai.ToolTypeFunction,
 		Function: openai.FunctionCall{
-			Name:      "create_file",
+			Name:      "create",
 			Arguments: largePrefix + largeSuffix,
 		},
 	}})
@@ -697,7 +697,7 @@ func TestSystemPromptExplainsRunCommandOutsidePathRecovery(t *testing.T) {
 	prompt := defaultSystemPrompt(nil, "", nil, "", "")
 	for _, expected := range []string{"`E_PATH_OUTSIDE`", "Do not retry the unchanged command", "read the returned Chinese explanation"} {
 		if !strings.Contains(prompt, expected) {
-			t.Fatalf("system prompt missing run_command recovery guidance %q", expected)
+			t.Fatalf("system prompt missing command recovery guidance %q", expected)
 		}
 	}
 }
@@ -776,7 +776,7 @@ func TestSubagentToolsExcludeInteractiveToolsAndIncludeMCP(t *testing.T) {
 		if tool.Function == nil {
 			continue
 		}
-		if tool.Function.Name == "memory_write" || tool.Function.Name == "scheduled_task" || tool.Function.Name == "ask" || tool.Function.Name == "subagent" {
+		if tool.Function.Name == "scheduled_task" || tool.Function.Name == "ask" || tool.Function.Name == "subagent" {
 			t.Fatalf("sub-agent must not receive %s tool schema", tool.Function.Name)
 		}
 		if tool.Function.Name == "mcp__demo__lookup" {
@@ -1058,9 +1058,9 @@ func TestAppEmitUsesHostEventSink(t *testing.T) {
 	app.events = sink
 
 	payload := map[string]any{"sessionId": "session-1", "revision": int64(3)}
-	app.emit("todo:update", payload)
+	app.emit("plan:update", payload)
 
-	if sink.count != 1 || sink.name != "todo:update" {
+	if sink.count != 1 || sink.name != "plan:update" {
 		t.Fatalf("unexpected event forwarding: count=%d name=%q", sink.count, sink.name)
 	}
 	got, ok := sink.payload.(map[string]any)

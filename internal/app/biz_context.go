@@ -52,7 +52,7 @@ func (a *App) ClearTodos(sessionID string) {
 
 // emitTodoUpdate sends the current todo list to the frontend.
 func (a *App) emitTodoUpdate(sid string, todos []TodoEntry, revision int64) {
-	a.emit("todo:update", map[string]any{
+	a.emit("plan:update", map[string]any{
 		"sessionId": sid,
 		"todos":     cloneTodos(todos),
 		"revision":  revision,
@@ -530,7 +530,7 @@ func computeLiveBreakdown(msgs []openai.ChatCompletionMessage) ContextBreakdown 
 	return result
 }
 
-// handleTodoList implements the todo_write tool.
+// handleTodoList implements the plan tool.
 func (a *App) handleTodoList(sessionID string, req TodoListRequest) (any, error) {
 	sid := strings.TrimSpace(sessionID)
 	if sid == "" {
@@ -712,7 +712,7 @@ func appendContextBudgetMessage(messages []openai.ChatCompletionMessage, usedTok
 	fmt.Fprintf(&b, "Window: %d tokens\n", maxCtx)
 	fmt.Fprintf(&b, "Used: %d tokens (%d%%)\n", usedTokens, usedPct)
 	fmt.Fprintf(&b, "Remaining: %d tokens (%d%%)\n", remaining, remainingPct)
-	b.WriteString("Note: large tool results (read, run_command output) consume budget quickly. ")
+	b.WriteString("Note: large tool results (read, command output) consume budget quickly. ")
 	b.WriteString("When remaining is low, prefer grep/list_files over read, and avoid re-reading files already seen this turn.")
 	b.WriteString("\n</ally-context-budget>")
 	out := make([]openai.ChatCompletionMessage, len(messages)+1)
@@ -723,13 +723,13 @@ func appendContextBudgetMessage(messages []openai.ChatCompletionMessage, usedTok
 
 // appendTodoStatusMessage returns a new slice with a <ally-todos> item appended
 // to the request tail. The model sees the current todo list every turn — both
-// done and pending items — so it can decide when to call todo_write to update
+// done and pending items — so it can decide when to call plan to update
 // statuses.
 //
 // Why every turn: models typically update todos as "before starting the next
 // item, mark the current done and the next in_progress". After the last item
 // there is no "next", so the model often answers the user directly without a
-// final todo_write. Injecting the current list every turn gives the model a
+// final plan. Injecting the current list every turn gives the model a
 // persistent visible reminder of which items are still pending/in_progress,
 // so it can notice "I have a dangling in_progress" and flip it.
 //
@@ -748,7 +748,7 @@ func appendTodoStatusMessage(messages []openai.ChatCompletionMessage, todos []To
 		fmt.Fprintf(&b, "%d. [%s] %s\n", i+1, t.Status, t.Title)
 	}
 	b.WriteString("\nIf you just finished work that completes a pending or in_progress item, ")
-	b.WriteString("call `todo_write` to flip its status to `done` before answering the user. ")
+	b.WriteString("call `plan` to flip its status to `done` before answering the user. ")
 	b.WriteString("Keep at most one item `in_progress` at a time, and never end your turn with a dangling `in_progress` item that is actually finished.")
 	b.WriteString("\n</ally-todos>")
 	out := make([]openai.ChatCompletionMessage, len(messages)+1)

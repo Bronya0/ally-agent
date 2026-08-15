@@ -30,7 +30,7 @@ import (
 
 func (a *App) createFileWithConfig(cfg ConfigState, req CreateFileRequest) (EditResult, error) {
 	if strings.TrimSpace(req.Path) == "" {
-		return EditResult{}, codedToolError("E_BAD_PATH", errors.New("create_file requires a non-empty path"))
+		return EditResult{}, codedToolError("E_BAD_PATH", errors.New("create requires a non-empty path"))
 	}
 	roots, err := workspaceRoots(cfg)
 	if err != nil {
@@ -94,7 +94,7 @@ func (a *App) createFileWithConfig(cfg ConfigState, req CreateFileRequest) (Edit
 
 func (a *App) deletePathWithConfig(cfg ConfigState, req DeletePathRequest) (DeleteResult, error) {
 	if strings.TrimSpace(req.Path) == "" {
-		return DeleteResult{}, codedToolError("E_BAD_PATH", errors.New("delete_path requires a non-empty path"))
+		return DeleteResult{}, codedToolError("E_BAD_PATH", errors.New("delete requires a non-empty path"))
 	}
 	roots, err := workspaceRoots(cfg)
 	if err != nil {
@@ -349,7 +349,7 @@ func (w *teeWriter) startSpill(prefix []byte) {
 	_, _ = f.Write(prefix)
 }
 
-// cleanupCommandSpillFiles removes stale run_command full-output temp files
+// cleanupCommandSpillFiles removes stale command full-output temp files
 // older than 24 hours. Called once at startup to avoid unbounded accumulation.
 func cleanupCommandSpillFiles(workspaceRoot string) {
 	if strings.TrimSpace(workspaceRoot) == "" {

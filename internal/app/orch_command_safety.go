@@ -39,12 +39,12 @@ func checkCommandSafety(req CommandRequest, roots []string) error {
 }
 
 // checkCommandSafetyAtCwd inspects commands for high-risk patterns and routes
-// explicit deletion through delete_path, where workspace and OS guards apply.
+// explicit deletion through delete, where workspace and OS guards apply.
 // roots[0] 是主工作区（命令的默认 cwd），其余为会话级附加根目录。
 func checkCommandSafetyAtCwd(req CommandRequest, roots []string, workingDir string) error {
 	cmd := req.Command
 	if command.ContainsExplicitDeleteCommand(cmd) && !command.IsAllowedDeleteContext(cmd) {
-		return codedToolError("E_COMMAND_BLOCKED", fmt.Errorf("安全围栏已拦截：run_command 不允许直接执行文件删除命令。\n原因：shell 删除命令可能绕过工作区边界、系统目录和 .git 保护。\n处理方式：请改用 delete_path 工具，由专用工具检查目标路径和递归范围。\n被拦截的命令：%s", cmd))
+		return codedToolError("E_COMMAND_BLOCKED", fmt.Errorf("安全围栏已拦截：command 不允许直接执行文件删除命令。\n原因：shell 删除命令可能绕过工作区边界、系统目录和 .git 保护。\n处理方式：请改用 delete 工具，由专用工具检查目标路径和递归范围。\n被拦截的命令：%s", cmd))
 	}
 	if risk := firstExistingOutsideMutationTarget(cmd, roots, workingDir); risk != nil {
 		return codedToolError("E_PATH_OUTSIDE", fmt.Errorf("安全围栏已拦截：命令可能修改工作区外的受保护目标。\n原因：%s。\n检测到的目标：%s\n允许的操作：读取工作区外路径、写入 /dev/null 等空设备、创建不存在的新路径。\n禁止的操作：覆盖、追加、移动、改权限或以其他方式修改已经存在的工作区外文件或目录。\n允许写入的根目录：\n%s\n被拦截的命令：%s", risk.Reason, risk.Path, formatAllowedRoots(roots), cmd))

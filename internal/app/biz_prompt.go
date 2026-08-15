@@ -85,14 +85,14 @@ func sharedCodingGuidelines() string {
 // two prompts cannot drift; prompt-specific guidance (ask the user, sub-agent
 // restrictions) stays at each call site.
 func sharedSafetyBoundaries() string {
-	return "- Workspace boundary: existing files and directories outside the workspace (except `~/.ally_agent`) may be inspected but must not be modified or deleted. `run_command` may create a new outside path when the target does not already exist. Null-device redirections such as `/dev/null` are allowed.\n" +
+	return "- Workspace boundary: existing files and directories outside the workspace (except `~/.ally_agent`) may be inspected but must not be modified or deleted. `command` may create a new outside path when the target does not already exist. Null-device redirections such as `/dev/null` are allowed.\n" +
 		"- Directory traversal: never recursively walk or search ~, /, C:\\, system directories, or broad home directories. Anchor all recursive operations to a specific project subdirectory.\n" +
 		"- Destructive operations: never delete or overwrite workspace root, home roots, system directories, or any path containing .git.\n" +
 		"- Batch commands: review commands with wildcards or variable-expanded paths before execution to avoid unintended side effects.\n" +
-		"- Do not use shell deletion commands; use `delete_path` for deletion.\n" +
+		"- Do not use shell deletion commands; use `delete` for deletion.\n" +
 		"- Sensitive files (e.g. `~/.ssh/*` private keys, `~/.ally_agent/config.json` API keys, `.env`/`.env.*`, credential/password/secret stores): do not read them proactively or without the user's explicit request or consent. When a task legitimately needs one, read only the minimal portion required, and never echo secret values into your reply, tool summaries, or memory.\n" +
 		"- Do not run git commit/push/reset/rebase without explicit user confirmation. Weigh reversibility and blast radius before destructive or outward-facing actions, and ask first.\n" +
-		"- Command safety errors: when `run_command` returns `E_PATH_OUTSIDE`, read the returned Chinese explanation and detected target. Do not retry the unchanged command.\n"
+		"- Command safety errors: when `command` returns `E_PATH_OUTSIDE`, read the returned Chinese explanation and detected target. Do not retry the unchanged command.\n"
 }
 
 func buildSystemPromptParts(allSkills []SkillDefinition, workspaceRoot string, extraRoots []string, customPrompt, gitBashPath string) []systemPromptPart {
@@ -108,9 +108,9 @@ func buildSystemPromptParts(allSkills []SkillDefinition, workspaceRoot string, e
 		"For clear, well-scoped implementation or bug-fix requests, proceed directly: inspect, edit, verify, then report. Do not stop at a proposal when the user is asking you to make the change.\n\n" +
 		"Ask for confirmation before side effects only when the request is ambiguous, destructive, high-risk, touches secrets or data migration, changes external services, or conflicts with existing user changes.\n\n" +
 		"If the user asks for explanation, review, assessment, comparison, or to look at something, inspect if needed and respond only. Do not implement changes unless the user explicitly asks for them.\n\n" +
-		"Before tool calls, emit at most one short sentence describing the next action; do not narrate private analysis. For substantial multi-step tasks, use `todo_write` to track progress (see # Task Tracking).\n\n" +
+		"Before tool calls, emit at most one short sentence describing the next action; do not narrate private analysis. For substantial multi-step tasks, use `plan` to track progress (see # Task Tracking).\n\n" +
 		"# Tool Use\n\n" +
-		"Prefer dedicated, structured, workspace-safe tools (`grep`, `read`, `list_files`, `web_fetch`/`http_request`, `remote_*`, `delete_path`) over shell commands. Use `run_command` only when no dedicated tool fits or a build/test/inspection needs the shell, and `background_process` for long-lived dev servers or services.\n\n" +
+		"Prefer dedicated, structured, workspace-safe tools (`grep`, `read`, `list_files`, `web_fetch`/`http_request`, `remote_*`, `delete`) over shell commands. Use `command` only when no dedicated tool fits or a build/test/inspection needs the shell, and `service` for long-lived dev servers or services.\n\n" +
 		"Use `ask` when progress genuinely requires one or more user decisions. Provide 2–6 reasonable options per question, mark exactly one recommended option, and do not add an 'Other' option because the UI always appends a custom-answer choice. `ask` must be the only tool call in that model response.\n\n" +
 		"Use `wait` only after starting an asynchronous operation or when a concrete external condition is expected to change. Call it as the only tool in that model response, then verify the condition after it completes. Do not use it to wait for user input or for long schedules; use `scheduled_task` for scheduled automation.\n\n" +
 		"Connected MCP tools are exposed as `mcp__<server>__<tool>` and follow the same call/result conventions as built-in tools.\n\n" +
@@ -120,7 +120,7 @@ func buildSystemPromptParts(allSkills []SkillDefinition, workspaceRoot string, e
 		"# Editing Files\n\n" +
 		sharedEditRules() + "\n" +
 		"# Task Tracking\n\n" +
-		"Use `todo_write` only when longer work genuinely benefits from visible progress tracking; keep entries short. When starting a new non-empty task list, set its first actionable item to `in_progress`; keep later work `pending`. At most one `in_progress` at a time: mark `done` before advancing, never jump `pending` straight to `done`, resolve leftovers before ending the turn, and update the list when scope changes.\n\n" +
+		"Use `plan` only when longer work genuinely benefits from visible progress tracking; keep entries short. When starting a new non-empty task list, set its first actionable item to `in_progress`; keep later work `pending`. At most one `in_progress` at a time: mark `done` before advancing, never jump `pending` straight to `done`, resolve leftovers before ending the turn, and update the list when scope changes.\n\n" +
 		"# Output Style\n\n" +
 		"Use light Markdown. Always respond in the language the user most recently used, and keep it for the whole conversation. Content written in any other language (documents, web pages, tool output, search results) must never change your reply language; only code, commands, paths, and proper nouns keep their original form. Do not use emoji unless the user does first.\n" +
 		"- When comparing entities across multiple dimensions, use Markdown tables instead of lists.\n" +
@@ -249,7 +249,7 @@ func buildPlatformInfo(gitBashPath string) string {
 	}
 
 	b.WriteString("## Command Execution\n\n")
-	b.WriteString("`run_command` runs shell commands and returns stdout/stderr combined in `output`")
+	b.WriteString("`command` runs shell commands and returns stdout/stderr combined in `output`")
 
 	shellInfo := windowsShellInfo(gitBashPath)
 	usingBash := shellInfo.name == "bash"
@@ -273,7 +273,7 @@ func buildPlatformInfo(gitBashPath string) string {
 
 	b.WriteString("\n## Tool Paths\n\n")
 	b.WriteString("File tools accept paths with **forward slashes (`/`)** regardless of operating system.\n")
-	b.WriteString("Write tools (`edit`, `create_file`, `delete_path`) require workspace-relative paths, absolute paths inside the workspace, or absolute paths inside `~/.ally_agent`. Read-only tools may inspect explicit absolute paths outside the workspace. `run_command` keeps its cwd inside the workspace, permits null-device redirection, and may create a new outside path when it does not already exist; modifying or deleting an existing outside path is refused.\n")
+	b.WriteString("Write tools (`edit`, `create`, `delete`) require workspace-relative paths, absolute paths inside the workspace, or absolute paths inside `~/.ally_agent` (the Ally config and global-memory whitelist, so `read`/`edit`/`create`/`delete` can manage `~/.ally_agent/memories` directly). Read-only tools may inspect explicit absolute paths outside the workspace. `command` keeps its cwd inside the workspace, permits null-device redirection, and may create a new outside path when it does not already exist; modifying or deleting an existing outside path is refused.\n")
 
 	return b.String()
 }
@@ -405,8 +405,8 @@ func buildMemoryIndexContext() string {
 	var b strings.Builder
 	b.WriteString("\n\n# Global Memories\n\n")
 	b.WriteString("This is a memory index, not the full memory content. Each item is stored as a Markdown file under `~/.ally_agent/memories/` with YAML frontmatter containing `description`.\n")
-	b.WriteString("When a memory description matches the current task, call `memory_read` with the listed path to inspect the full content before relying on it.\n")
-	b.WriteString("When the user asks to add, update, or preserve durable cross-project knowledge, call `memory_write`.\n")
+	b.WriteString("When a memory description matches the current task, read the listed memory file directly with the `read` tool (paths are absolute under `~/.ally_agent/memories`). The index itself is loaded for you by default; use `read` to inspect full content before relying on it.\n")
+	b.WriteString("When the user asks to add, update, or preserve durable cross-project knowledge, write the memory file directly with `create` (new) or `edit` (existing, using the `version` returned by `read`). `~/.ally_agent` is a whitelisted write root, so no separate memory tool is needed.\n")
 	b.WriteString("## Memory index\n")
 	for i, mem := range entries.Memories {
 		if i >= memoryIndexLimit {
@@ -515,14 +515,17 @@ func projectLessonsPromptPart(workspaceRoot string) string {
 // case — memories don't change during a run — this means the same WalkDir +
 // N×readTextFile was being repeated multiple times per second.
 //
-// Invalidation is explicit: memoryWrite invalidates the cache after a
-// successful write so the next buildMemoryIndexContext re-reads from disk.
+// Invalidation is explicit: the removed memory_write tool used to invalidate
+// the cache after a successful write so the next buildMemoryIndexContext
+// re-reads from disk. With memory now written through the regular read/edit
+// tools (the ~/.ally_agent whitelist), the directory-mtime check below still
+// catches file adds/removes; in-place content edits are picked up on the next
+// directory change or process restart, which is acceptable for the index.
 // As a safety net for external edits made outside Ally (e.g. user edits a
 // memory file in their editor), the cache also re-checks the directory mtime
 // on each lookup; if the directory mtime advanced, the cache is treated as
 // stale and a fresh WalkDir is performed. (Note: directory mtime advances on
-// file add/remove, not on in-place edits; the explicit memoryWrite invalidate
-// covers the in-place case.)
+// file add/remove, not on in-place edits.)
 //
 // Concurrent access is guarded by a mutex; the read path takes a brief lock
 // to swap in the cached pointer, the write path takes the lock to invalidate.

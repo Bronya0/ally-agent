@@ -23,7 +23,7 @@ import (
 
 func isOrderedFileMutationTool(name string) bool {
 	switch name {
-	case "edit", "create_file", "delete_path", "remote_edit", "remote_create_file", "remote_delete_path":
+	case "edit", "create", "delete", "remote_edit", "remote_create_file", "remote_delete_path":
 		return true
 	default:
 		return false

@@ -501,7 +501,7 @@ func subagentSystemPrompt(role string) string {
 
 	return roleLine + "You are an Ally sub-agent. Complete the delegated task using available tools, then return a concise summary.\n\n" +
 		"# Tool Use\n\n" +
-		"Prefer dedicated tools over shell commands: `grep` for search, `read` for file content, `edit`/`create_file`/`delete_path` for file changes, `list_files` for directory listings.\n\n" +
+		"Prefer dedicated tools over shell commands: `grep` for search, `read` for file content, `edit`/`create`/`delete` for file changes, `list_files` for directory listings.\n\n" +
 		sharedBatchStrategy() +
 		"# Editing Files\n\n" +
 		sharedEditRules() + "\n" +
@@ -584,9 +584,8 @@ func (a *App) subagentTools(cfg ConfigState) []openai.Tool {
 	blocked := map[string]bool{
 		"subagent":       true,
 		"agent_delegate": true,
-		"todo_write":     true,
+		"plan":           true,
 		"skill":          true,
-		"memory_write":   true,
 		"scheduled_task": true,
 		"ask":            true,
 	}
@@ -638,7 +637,7 @@ func trackFileFromToolResult(name string, args string, result *toolResult, files
 				addPath(filesEdited, file.Path)
 			}
 		}
-	case "create_file", "replace_exact", "replace_lines":
+	case "create", "replace_exact", "replace_lines":
 		var req struct {
 			Path string `json:"path"`
 		}

@@ -262,7 +262,7 @@ def op_delete(root, payload):
     return {"deleted": payload.get("path", "")}
 
 def check_write_targets(root, cwd, targets):
-    # 镜像本地 run_command 的 E_PATH_OUTSIDE 策略：Go 侧已把字面写入目标
+    # 镜像本地 command 的 E_PATH_OUTSIDE 策略：Go 侧已把字面写入目标
     # （重定向 + 变更命令）解析出来，这里只做远端文件系统事实检查。
     # 动态目标（变量/glob/命令替换）在 Go 侧已被过滤，不会到达这里。
     if not targets:
@@ -580,7 +580,7 @@ func remoteHelperError(resp remotePythonResponse) error {
 }
 
 // remoteWriteTargets 提取命令中可静态解析的字面写入目标（与本地
-// run_command 共用 command.LiteralWriteTargets 同一份提取逻辑），
+// command 共用 command.LiteralWriteTargets 同一份提取逻辑），
 // 交给远端 Python helper 做文件系统事实检查。
 func remoteWriteTargets(commandLine string) []string {
 	all := command.LiteralWriteTargets(commandLine)
@@ -974,7 +974,7 @@ func (a *App) remoteRunCommand(ctx context.Context, req RemoteRunCommandRequest)
 			return CommandResult{}, codedToolError("E_BAD_SHELL", fmt.Errorf("unsupported shell %q: only bash, sh, zsh are allowed", shell))
 		}
 	}
-	// 镜像本地 run_command 的 E_PATH_OUTSIDE 检查：只把"可静态解析的字面写
+	// 镜像本地 command 的 E_PATH_OUTSIDE 检查：只把"可静态解析的字面写
 	// 目标"传给远端做事实检查；动态目标（变量/glob/命令替换）与 null 设备
 	// 在本地同样放行，因此不传。
 	writeTargets := remoteWriteTargets(req.Command)

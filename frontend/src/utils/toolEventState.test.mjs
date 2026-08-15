@@ -23,7 +23,7 @@ test('streaming updates keep one tool card and update its arguments', () => {
   commitToolEventMessage(session, eventId, existing, {
     role: 'tool_call',
     eventId,
-    name: 'run_command',
+    name: 'command',
     body: '',
   });
 
@@ -31,7 +31,7 @@ test('streaming updates keep one tool card and update its arguments', () => {
   commitToolEventMessage(session, eventId, existing, {
     role: 'tool_call',
     eventId,
-    name: 'run_command',
+    name: 'command',
     body: '{"command":"go test ./..."}',
   });
 

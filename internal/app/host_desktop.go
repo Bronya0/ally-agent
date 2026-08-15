@@ -125,7 +125,7 @@ func (a *App) ServiceStartup(ctx context.Context, _ application.ServiceOptions) 
 	// a.setupCloseToTrayHook()
 	_ = a.ensureInitialized()
 	// Warm the one-time POSIX login-shell PATH probe without delaying the UI.
-	// run_command/background_process wait on the same sync.Once if needed.
+	// command/service wait on the same sync.Once if needed.
 	go warmCommandEnvironment()
 	_ = a.loadServiceHistory()
 	_ = a.startScheduledTaskManager()

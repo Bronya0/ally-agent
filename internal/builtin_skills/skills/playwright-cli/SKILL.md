@@ -1,6 +1,6 @@
 ---
 name: playwright-cli
-description: 通过 playwright-cli 命令行操作浏览器（打开页面、点击、填表、截图、抓取无障碍快照等）。首次使用时按需引导全局安装 @playwright/cli，所有操作经 run_command 执行，无需 Ally 内置浏览器依赖。
+description: 通过 playwright-cli 命令行操作浏览器（打开页面、点击、填表、截图、抓取无障碍快照等）。首次使用时按需引导全局安装 @playwright/cli，所有操作经 command 执行，无需 Ally 内置浏览器依赖。
 type: browser-automation
 whenToUse: 用户要求操作浏览器、自动化网页交互、端到端测试、抓取需要 JS 渲染的页面内容、或对页面元素进行精确定位与点击时。
 ---
@@ -104,8 +104,8 @@ fi
 ## 4. Ally 集成注意事项（help 不会讲的部分）
 
 - **路径**：传给 playwright-cli 的文件路径用 forward slash。Windows 绝对路径在 Git Bash 里写成 `/c/Users/...` 或 `"C:/Users/..."`。
-- **cwd**：`run_command` 的 cwd 在 workspace 内；截图、state 等输出默认落 workspace，可用 `--filename=` 指定。
-- **超时**：浏览器操作较慢，`run_command` 的 `timeoutSeconds` 适当调大（如 60-120）。
+- **cwd**：`command` 的 cwd 在 workspace 内；截图、state 等输出默认落 workspace，可用 `--filename=` 指定。
+- **超时**：浏览器操作较慢，`command` 的 `timeoutSeconds` 适当调大（如 60-120）。
 - **资源清理**：任务结束用 `close` 或 `close-all` 释放浏览器进程，避免残留。
 - **不要**用 Ally 的 `read` 工具读 playwright-cli 生成的截图二进制文件；截图仅供用户查看或模型从命令输出文本判断。
 - **会话保持**：默认每次 `open` 是全新会话；保留登录态用 `--persistent` 或 `state-save`/`state-load`（具体参数以 `--help` 为准）。

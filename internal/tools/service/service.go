@@ -5,7 +5,7 @@
 //
 // This file is part of ally-agent, licensed under the GNU General
 // Public License v3. See the LICENSE file for details.
-// Package service holds pure helpers for the background_process tool: a
+// Package service holds pure helpers for the service tool: a
 // thread-safe rolling output buffer and a long-running-command classifier.
 //
 // Nothing here may depend on App state, ConfigState, or *App receivers.
@@ -115,7 +115,7 @@ func NormalizeCommand(command string) string {
 }
 
 // LooksLikeLongRunningService only blocks an explicit whitelist of known
-// dev-server commands. Anything else continues to the normal run_command
+// dev-server commands. Anything else continues to the normal command
 // safety checks/timeouts.
 func LooksLikeLongRunningService(command string) bool {
 	cmd := NormalizeCommand(command)
@@ -161,7 +161,7 @@ func LooksLikeLongRunningService(command string) bool {
 }
 
 // LongRunningCommandError wraps the command in an E_LONG_RUNNING_COMMAND error
-// directing the caller to use background_process with action=start.
+// directing the caller to use service with action=start.
 func LongRunningCommandError(command string) error {
-	return toolerrors.New("E_LONG_RUNNING_COMMAND", fmt.Errorf("this command looks like a long-running process; use background_process with action=start so it can run without blocking the agent.\n被拦截的命令: %s", command))
+	return toolerrors.New("E_LONG_RUNNING_COMMAND", fmt.Errorf("this command looks like a long-running process; use service with action=start so it can run without blocking the agent.\n被拦截的命令: %s", command))
 }

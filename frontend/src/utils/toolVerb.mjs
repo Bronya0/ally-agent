@@ -19,7 +19,7 @@
 // progress, so a "Delegating" verb adds nothing.
 //
 // Keyed by tool name rather than by `kind` on purpose: `kind` is too coarse
-// (memory_read vs memory_write collapse; web_fetch/http_request fall into
+// (web_fetch/http_request fall into
 // `other`), which previously produced "Used web_fetch" / mixed CN-EN labels.
 // Each entry is [inProgress, done, noun]. The noun is used for the error label
 // ("<noun> failed", e.g. "Delete failed") so a failed card still names what failed
@@ -38,16 +38,16 @@ const TOOL_VERBS = {
   replace_exact: ['Editing', 'Edited', 'Edit'],
   replace_lines: ['Editing', 'Edited', 'Edit'],
   remote_edit: ['Editing', 'Edited', 'Edit'],
-  create_file: ['Creating', 'Created', 'Create'],
+  create: ['Creating', 'Created', 'Create'],
   remote_create_file: ['Creating', 'Created', 'Create'],
-  delete_path: ['Deleting', 'Deleted', 'Delete'],
+  delete: ['Deleting', 'Deleted', 'Delete'],
   remote_delete_path: ['Deleting', 'Deleted', 'Delete'],
   // command / process
-  run_command: ['Running', 'Ran', 'Command'],
+  command: ['Running', 'Ran', 'Command'],
   remote_run_command: ['Running', 'Ran', 'Command'],
   Bash: ['Running', 'Ran', 'Command'],
   run: ['Running', 'Ran', 'Run'],
-  background_process: ['Starting service', 'Started service', 'Service'],
+  service: ['Starting service', 'Started service', 'Service'],
   start_service: ['Starting service', 'Started service', 'Service'],
   stop_service: ['Stopping service', 'Stopped service', 'Service'],
   list_services: ['Listing services', 'Listed services', 'Service'],
@@ -62,14 +62,12 @@ const TOOL_VERBS = {
   calculate: ['Calculating', 'Calculated', 'Calculation'],
   wait: ['Waiting', 'Waited', 'Wait'],
   ask: ['Asking', 'Asked', 'Ask'],
-  todo_write: ['Next step', 'Next step', 'Next step'],
+  plan: ['Next step', 'Next step', 'Next step'],
   // scheduled_task verb depends on the action (create/list/delete), resolved via
   // SCHEDULED_TASK_VERBS below; this entry is the fallback when the action is
   // unknown (e.g. an old card whose args weren't captured).
   scheduled_task: ['Scheduling', 'Scheduled', 'Schedule'],
-  // memory — noun embedded because the verb alone is ambiguous
-  memory_read: ['Reading memory', 'Read memory', 'Memory read'],
-  memory_write: ['Saving memory', 'Saved memory', 'Memory write'],
+  // memory — now managed through read/edit (no dedicated tool)
   // agents / skills
   subagent: ['Delegating', 'Delegated', 'Sub-agent'],
   agent_delegate: ['Delegating', 'Delegated', 'Sub-agent'],

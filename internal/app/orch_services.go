@@ -49,7 +49,7 @@ func normalizeServiceCommand(command string) string {
 }
 
 // looksLikeLongRunningService only blocks an explicit whitelist of known
-// dev-server commands. Anything else continues to the normal run_command
+// dev-server commands. Anything else continues to the normal command
 // safety checks/timeouts.
 func looksLikeLongRunningService(command string) bool {
 	return service.LooksLikeLongRunningService(command)
@@ -68,7 +68,7 @@ const (
 
 	// Tool-facing read defaults. The model can request up to
 	// maxServiceReadTailBytes of recent output per call; larger reads are
-	// clamped so a single background_process.read cannot dominate the model
+	// clamped so a single service read cannot dominate the model
 	// context window.
 	defaultServiceReadTailBytes = service.DefaultReadTail
 	maxServiceReadTailBytes     = service.MaxReadTail
@@ -224,7 +224,7 @@ func (a *App) startServiceWithConfig(cfg ConfigState, req StartServiceRequest) (
 	}()
 
 	// Return immediately. The process runs in the background; the model can
-	// poll status and output through background_process.list / read instead
+	// poll status and output through service.list / read instead
 	// of blocking the agent loop on a readiness wait.
 	return service.snapshot(), nil
 }
@@ -304,7 +304,7 @@ func (a *App) listServices() ServiceListResult {
 
 // ServiceListToolResult is the model-facing list payload. It intentionally
 // omits outputTail so listing 8 services cannot dominate the model context;
-// the model must call background_process.read on a specific id to inspect
+// the model must call service with action=read on a specific id to inspect
 // output.
 type ServiceListToolResult struct {
 	ActiveCount int              `json:"activeCount"`

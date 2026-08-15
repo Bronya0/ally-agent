@@ -164,7 +164,7 @@ type limitedBuffer struct {
 	limit     int
 	truncated bool
 	// onTruncate, when set, is invoked exactly once (under mu) on the first
-	// overflow with the content buffered so far. run_command uses it to
+	// overflow with the content buffered so far. command uses it to
 	// lazily create a full-output spill file only when truncation happens.
 	onTruncate    func(prefix []byte)
 	truncatedOnce sync.Once
@@ -211,7 +211,7 @@ func (b *limitedBuffer) String() string {
 }
 
 // Len returns the current buffered length without copying. Callers that only
-// need to know whether the buffer grew (e.g. the run_command streaming ticker)
+// need to know whether the buffer grew (e.g. the command streaming ticker)
 // can use this instead of String(), which would allocate a full copy under the
 // lock on every 120ms tick — even when nothing changed.
 func (b *limitedBuffer) Len() int {
@@ -221,7 +221,7 @@ func (b *limitedBuffer) Len() int {
 }
 
 // TailString returns the last min(n, buf.Len()) bytes as a string. Used by the
-// run_command streaming ticker to avoid emitting the full buffer (up to 128KB)
+// command streaming ticker to avoid emitting the full buffer (up to 128KB)
 // on every 120ms tick — only the tail is sent during streaming, the complete
 // output is delivered in the final CommandResult. This cuts IPC payload ~8x
 // for long builds that fill the buffer.

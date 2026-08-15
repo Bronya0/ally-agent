@@ -103,7 +103,7 @@ func toolResultSummary(name string, result *toolResult) string {
 			}
 			return fmt.Sprintf("%d matches", r.MatchedLines)
 		}
-	case "run_command", "remote_run_command":
+	case "command", "remote_run_command":
 		data, _ := json.Marshal(result.Data)
 		var r CommandResult
 		if json.Unmarshal(data, &r) == nil {
@@ -112,7 +112,7 @@ func toolResultSummary(name string, result *toolResult) string {
 			}
 			return fmt.Sprintf("exit %d (%dms)", r.ExitCode, r.DurationMS)
 		}
-	case "background_process":
+	case "service":
 		switch typed := result.Data.(type) {
 		case ServiceReadResult:
 			return fmt.Sprintf("read %d bytes (status %s)", typed.ReturnedBytes, typed.Status)
@@ -159,9 +159,9 @@ func toolResultSummary(name string, result *toolResult) string {
 		if json.Unmarshal(data, &r) == nil {
 			return fmt.Sprintf("%d entries", r.Count)
 		}
-	case "create_file", "remote_create_file":
+	case "create", "remote_create_file":
 		return "created"
-	case "delete_path":
+	case "delete":
 		var r DeleteResult
 		if decodeToolData(result.Data, &r) {
 			if r.Kind != "" {
@@ -227,7 +227,7 @@ func compactToolResultForModel(name string, result toolResult, fullJSON string) 
 			files = append(files, map[string]any{"path": file.Path, "beforeVersion": file.BeforeVersion, "version": file.Version, "addedLines": file.AddedLines, "removedLines": file.RemovedLines, "firstChangedLine": file.FirstChanged, "lastChangedLine": file.LastChanged})
 		}
 		return marshalToolResultOrFallback(toolResult{OK: true, Data: map[string]any{"files": files, "fileCount": r.FileCount, "addedLines": r.AddedLines, "removedLines": r.RemovedLines, "summary": r.Summary, "warnings": r.Warnings, "postEditNote": "Reuse a version only when the current source is known exactly; otherwise re-read numbered text before another oldText or lineRange edit."}}, fullJSON)
-	case "replace_exact", "replace_lines", "create_file":
+	case "replace_exact", "replace_lines", "create":
 		var r EditResult
 		if !decodeToolData(result.Data, &r) {
 			return fullJSON
@@ -252,7 +252,7 @@ func compactToolResultForModel(name string, result toolResult, fullJSON string) 
 			data["diffOmitted"] = "Full diff omitted from model context to reduce tokens; use read around firstChangedLine/lastChangedLine if exact post-edit content is needed."
 		}
 		return marshalToolResultOrFallback(toolResult{OK: true, Data: data}, fullJSON)
-	case "run_command", "remote_run_command":
+	case "command", "remote_run_command":
 		var r CommandResult
 		if !decodeToolData(result.Data, &r) {
 			return fullJSON
@@ -279,8 +279,8 @@ func compactToolResultForModel(name string, result toolResult, fullJSON string) 
 			data["outputNote"] = "完整输出已保存到该文件，可用 read 工具读取全部内容。"
 		}
 		return marshalToolResultOrFallback(toolResult{OK: true, Data: data}, fullJSON)
-	case "background_process":
-		// background_process now has four actions with distinct result
+	case "service":
+		// service now has four actions with distinct result
 		// types stored in result.Data: start/stop return ServiceInfo, list
 		// returns ServiceListToolResult, read returns ServiceReadResult.
 		// Discriminate by concrete type (not JSON reshaping, which would
@@ -359,7 +359,7 @@ func compactToolResultForModel(name string, result toolResult, fullJSON string) 
 			data["reductionNote"] = "Startup output shortened for model context; UI received the full output."
 		}
 		return marshalToolResultOrFallback(toolResult{OK: true, Data: data}, fullJSON)
-	case "delete_path":
+	case "delete":
 		var r DeleteResult
 		if !decodeToolData(result.Data, &r) {
 			return fullJSON

@@ -21,7 +21,7 @@ Public License v3. See the LICENSE file for details.
         <code v-html="highlightCommand(msg)"></code>
         <span class="tool-command-paren">)</span>
       </span>
-      <span v-else-if="msg.kind === 'todo' && msg.title" class="tool-arg todo-next-step" :title="msg.title">({{ msg.title }})</span>
+      <span v-else-if="msg.kind === 'plan' && msg.title" class="tool-arg plan-next-step" :title="msg.title">({{ msg.title }})</span>
       <span v-else-if="msg.title" class="tool-arg" :title="msg.title">({{ msg.title }})</span>
       <span v-if="msg.kind === 'edit' && (msg.editAdded || msg.editRemoved)" class="tool-chip edit-change-chip">
         <span class="tool-chip-dot">&middot;</span>
@@ -73,7 +73,7 @@ Public License v3. See the LICENSE file for details.
       :max-lines="BODY_PREVIEW_LINES"
       preview-mode="tail"
     />
-    <pre v-else-if="msg.body && msg.status !== 'error' && msg.kind !== 'edit' && msg.kind !== 'read' && msg.kind !== 'calculate' && msg.kind !== 'scheduled' && msg.kind !== 'grep' && msg.kind !== 'todo' && (msg.kind !== 'list' || msg.expanded)" ref="bodyPreRef" :class="['tool-body', { 'fixed-scroll': isFixedKind(msg.kind), 'body-preview': isBodyPreview(msg), 'tail-default': isServiceReadResult(msg), 'scroll-enabled': bodyScrollEnabled && isScrollableBody(msg) }]" @click.stop="handleBodyClick(msg)">{{ toolBodyText(msg) }}</pre>
+    <pre v-else-if="msg.body && msg.status !== 'error' && msg.kind !== 'edit' && msg.kind !== 'read' && msg.kind !== 'calculate' && msg.kind !== 'scheduled' && msg.kind !== 'grep' && msg.kind !== 'plan' && (msg.kind !== 'list' || msg.expanded)" ref="bodyPreRef" :class="['tool-body', { 'fixed-scroll': isFixedKind(msg.kind), 'body-preview': isBodyPreview(msg), 'tail-default': isServiceReadResult(msg), 'scroll-enabled': bodyScrollEnabled && isScrollableBody(msg) }]" @click.stop="handleBodyClick(msg)">{{ toolBodyText(msg) }}</pre>
     <div v-if="msg.status === 'error'" class="tool-error-block">
       <div v-if="msg.errorCode" class="tool-error-detail">
         <span>{{ errorDescription(msg) }}</span>
@@ -160,7 +160,7 @@ function toolKindLabel(kind) {
     grep: t('tools.kind.grep'),
     run: t('tools.kind.run'),
     other: t('tools.kind.tool'),
-    todo: t('tools.kind.todo'),
+    plan: t('tools.kind.plan'),
     scheduled: t('tools.kind.scheduled'),
     memory: t('tools.kind.memory'),
     service: t('tools.kind.service'),
@@ -240,7 +240,7 @@ function highlightCommand(msg) {
 function commandHighlightLanguage(msg, command) {
   const name = String(msg?.name || '');
   if (name === 'Bash') return 'bash';
-  if (name === 'run_command') return looksLikeExplicitBash(command) ? 'bash' : 'powershell';
+  if (name === 'command') return looksLikeExplicitBash(command) ? 'bash' : 'powershell';
   if (name === 'remote_run_command') return looksLikePowerShell(command) ? 'powershell' : 'bash';
   return looksLikePowerShell(command) ? 'powershell' : 'bash';
 }
@@ -325,7 +325,7 @@ function editDiffText(msg) {
 }
 
 function isNonInteractiveTool(msg) {
-  return ['create', 'edit', 'delete', 'grep', 'list', 'todo'].includes(String(msg?.kind || ''));
+  return ['create', 'edit', 'delete', 'grep', 'list', 'plan'].includes(String(msg?.kind || ''));
 }
 
 function isFocusDisabledTool(msg) {
@@ -399,7 +399,7 @@ function handleToggle(msg) {
 }
 
 function hasExpandableBody(msg) {
-  if (msg.kind === 'read' || msg.kind === 'command' || msg.kind === 'todo') return false;
+  if (msg.kind === 'read' || msg.kind === 'command' || msg.kind === 'plan') return false;
   if (msg.kind === 'edit') return true;
   if (msg.kind === 'create') return lineCount(msg.codeContent) > BODY_PREVIEW_LINES;
   // calculate: body 只重复 title(expression) + chip(= result)，无需详情卡

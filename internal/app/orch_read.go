@@ -771,7 +771,7 @@ func formatLineNumberReadPreviewRangeWithBudget(content string, req readRangeReq
 
 	if len(content) == 0 {
 		return readPreviewResult{
-			Content:     "File is empty. Use create_file with overwrite=true to write content.",
+			Content:     "File is empty. Use create with overwrite=true to write content.",
 			TotalLines:  0,
 			StartLine:   1,
 			EndLine:     0,

@@ -24,24 +24,16 @@ function normalizeTodoEntries(todos) {
     });
 }
 
-// The panel reads from the most recently completed item down: completed work
-// (newest first), then the current item, then pending work, then anything
-// else. Completed items stay visible instead of sinking to the bottom.
-export function orderTodoPanelEntries(todos) {
-  const entries = normalizeTodoEntries(todos);
-  const done = entries.filter((entry) => entry.status === 'done').reverse();
-  const current = entries.find((entry) => entry.status === 'in_progress');
-  const pending = entries.filter((entry) => entry.status === 'pending');
-  const rest = entries.filter(
-    (entry) => entry.status !== 'done' && entry.status !== 'in_progress' && entry.status !== 'pending',
-  );
-
-  return [...done, ...(current ? [current] : []), ...pending, ...rest];
+// The panel keeps the plan in its original creation order: items are listed
+// exactly as they were defined, so the displayed numbers always read 1, 2, 3…
+// from top to bottom. Completed items stay in place instead of moving.
+export function orderPlanPanelEntries(todos) {
+  return normalizeTodoEntries(todos);
 }
 
-// Scroll delta that centers the current in_progress item inside the todo
+// Scroll delta that centers the current in_progress item inside the plan
 // panel list viewport. Positive means the item sits below the visible area
 // and the list needs to scroll down; negative scrolls back up.
-export function todoFocusScrollDelta(listRect, itemRect) {
+export function planFocusScrollDelta(listRect, itemRect) {
   return itemRect.top - listRect.top - (listRect.height - itemRect.height) / 2;
 }

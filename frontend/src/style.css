@@ -2192,10 +2192,10 @@ code, pre {
   min-width: 0;
 }
 
-/* Todo cards ("Next up (...)") — fixed green only for the next-step
+/* Plan cards ("Next up (...)") — fixed green only for the next-step
    title inside the card; the "Next up" verb keeps its default color.
    Other tools keep their own colors untouched. */
-.todo-next-step {
+.plan-next-step {
   color: #9fc3ec;
 }
 
@@ -2840,9 +2840,9 @@ code, pre {
 }
 
 
-/* ── Todo panel (fixed above composer) ── */
+/* ── Plan panel (fixed above composer) ── */
 
-.todo-panel {
+.plan-panel {
   border-top: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(26, 26, 26, 0.62);
   max-height: 160px;
@@ -2851,30 +2851,30 @@ code, pre {
   flex-direction: column;
 }
 
-.todo-panel-enter-active,
-.todo-panel-leave-active {
+.plan-panel-enter-active,
+.plan-panel-leave-active {
   transition: max-height 0.18s ease, opacity 0.18s ease, transform 0.18s ease;
 }
 
-.todo-panel-enter-from,
-.todo-panel-leave-to {
+.plan-panel-enter-from,
+.plan-panel-leave-to {
   max-height: 0;
   opacity: 0;
   transform: translateY(4px);
 }
 
-.todo-panel-enter-to,
-.todo-panel-leave-from {
+.plan-panel-enter-to,
+.plan-panel-leave-from {
   max-height: 160px;
   opacity: 1;
   transform: translateY(0);
 }
 
-.todo-panel.collapsed {
+.plan-panel.collapsed {
   max-height: 30px;
 }
 
-.todo-panel-header {
+.plan-panel-header {
   display: flex;
   align-items: center;
   width: 100%;
@@ -2892,18 +2892,18 @@ code, pre {
   --wails-draggable: no-drag;
 }
 
-.todo-panel-header:hover {
+.plan-panel-header:hover {
   color: #d4d4d4;
   background: rgba(255, 255, 255, 0.03);
 }
 
-.todo-panel-count {
+.plan-panel-count {
   margin-left: 0;
   color: #8a8a8a;
   font-variant-numeric: tabular-nums;
 }
 
-.todo-panel-toggle {
+.plan-panel-toggle {
   display: inline-block;
   width: 12px;
   height: 12px;
@@ -2913,7 +2913,7 @@ code, pre {
   line-height: 1;
 }
 
-.todo-panel-toggle::before {
+.plan-panel-toggle::before {
   content: '';
   position: absolute;
   top: 50%;
@@ -2925,18 +2925,18 @@ code, pre {
   transform: translate(-35%, -50%) rotate(-45deg);
 }
 
-.todo-panel-toggle.expanded::before {
+.plan-panel-toggle.expanded::before {
   transform: translate(-50%, -65%) rotate(45deg);
 }
 
-.todo-panel-list {
+.plan-panel-list {
   min-height: 0;
   overflow-y: auto;
   padding: 4px 0;
   flex: 1;
 }
 
-.todo-item {
+.plan-item {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -2945,7 +2945,7 @@ code, pre {
   line-height: 1.5;
 }
 
-.todo-number {
+.plan-number {
   flex-shrink: 0;
   min-width: 22px;
   text-align: right;
@@ -2955,36 +2955,36 @@ code, pre {
   font-variant-numeric: tabular-nums;
 }
 
-.todo-status {
+.plan-status {
   flex-shrink: 0;
   width: 14px;
   text-align: center;
   font-size: var(--ally-aux-font-size);
 }
 
-.todo-item.pending .todo-status {
+.plan-item.pending .plan-status {
   color: #525252;
 }
 
-.todo-item.in_progress .todo-status {
+.plan-item.in_progress .plan-status {
   color: var(--ally-accent);
 }
 
-.todo-item.done {
+.plan-item.done {
   opacity: 0.9;
 }
 
-.todo-item.done .todo-status {
+.plan-item.done .plan-status {
   color: #9ca3af;
 }
 
-.todo-item.done .todo-title {
+.plan-item.done .plan-title {
   text-decoration: line-through;
   text-decoration-color: #737373;
   color: #a3a3a3;
 }
 
-.todo-title {
+.plan-title {
   color: #d4d4d4;
   overflow: hidden;
   text-overflow: ellipsis;

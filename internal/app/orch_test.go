@@ -289,7 +289,7 @@ func TestDetectWriteBatchConflictsAllowsRepeatedPathInsideOneLocalEdit(t *testin
 	}
 
 	calls = append(calls, openai.ToolCall{Function: openai.FunctionCall{
-		Name:      "delete_path",
+		Name:      "delete",
 		Arguments: `{"path":"sample.txt"}`,
 	}})
 	conflicts := detectWriteBatchConflicts(cfg, calls)
@@ -307,8 +307,8 @@ func TestDetectWriteBatchConflictsNormalizesSamePath(t *testing.T) {
 	cfg := ConfigState{Workspace: t.TempDir()}
 	calls := []openai.ToolCall{
 		{Function: openai.FunctionCall{Name: "edit", Arguments: `{"files":[{"path":"sample.txt"}]}`}},
-		{Function: openai.FunctionCall{Name: "delete_path", Arguments: `{"path":"./sample.txt"}`}},
-		{Function: openai.FunctionCall{Name: "create_file", Arguments: `{"path":"other.txt"}`}},
+		{Function: openai.FunctionCall{Name: "delete", Arguments: `{"path":"./sample.txt"}`}},
+		{Function: openai.FunctionCall{Name: "create", Arguments: `{"path":"other.txt"}`}},
 	}
 	conflicts := detectWriteBatchConflicts(cfg, calls)
 	if len(conflicts) != 2 {
@@ -366,18 +366,18 @@ func TestChatToolsExposeBackgroundProcessWithoutPollingTools(t *testing.T) {
 		if blocked[tool.Function.Name] {
 			t.Fatalf("managed service tool %s must not be exposed to the model", tool.Function.Name)
 		}
-		if tool.Function.Name == "background_process" {
+		if tool.Function.Name == "service" {
 			foundBackgroundProcess = true
 		}
 	}
 	if !foundBackgroundProcess {
-		t.Fatal("background_process must be exposed for non-blocking frontend/backend startup")
+		t.Fatal("service must be exposed for non-blocking frontend/backend startup")
 	}
 }
 
 func TestBackgroundProcessRejectsUnknownAction(t *testing.T) {
 	app := NewApp()
-	result := app.executeTool(context.Background(), ConfigState{Workspace: t.TempDir()}, "session-1", "background_process", []byte(`{"action":"status"}`))
+	result := app.executeTool(context.Background(), ConfigState{Workspace: t.TempDir()}, "session-1", "service", []byte(`{"action":"status"}`))
 	if result.OK || result.ErrorCode != "E_BAD_BACKGROUND_ACTION" {
 		t.Fatalf("expected unknown action to be rejected, got %#v", result)
 	}
@@ -392,7 +392,7 @@ func TestBackgroundProcessListReturnsMetadataOnly(t *testing.T) {
 	}
 	app.servicesMu.Unlock()
 
-	result := app.executeTool(context.Background(), ConfigState{Workspace: t.TempDir()}, "session-1", "background_process", []byte(`{"action":"list"}`))
+	result := app.executeTool(context.Background(), ConfigState{Workspace: t.TempDir()}, "session-1", "service", []byte(`{"action":"list"}`))
 	if !result.OK {
 		t.Fatalf("expected list to succeed, got %#v", result)
 	}
@@ -425,7 +425,7 @@ func TestBackgroundProcessReadReturnsBoundedOutput(t *testing.T) {
 	app.servicesMu.Unlock()
 
 	args := []byte(`{"action":"read","id":"svc_read_1","tailBytes":4}`)
-	result := app.executeTool(context.Background(), ConfigState{Workspace: t.TempDir()}, "session-1", "background_process", args)
+	result := app.executeTool(context.Background(), ConfigState{Workspace: t.TempDir()}, "session-1", "service", args)
 	if !result.OK {
 		t.Fatalf("expected read to succeed, got %#v", result)
 	}
@@ -441,7 +441,7 @@ func TestBackgroundProcessReadReturnsBoundedOutput(t *testing.T) {
 	}
 
 	// read on unknown id must return E_SERVICE_NOT_FOUND
-	bad := app.executeTool(context.Background(), ConfigState{Workspace: t.TempDir()}, "session-1", "background_process", []byte(`{"action":"read","id":"svc_missing"}`))
+	bad := app.executeTool(context.Background(), ConfigState{Workspace: t.TempDir()}, "session-1", "service", []byte(`{"action":"read","id":"svc_missing"}`))
 	if bad.OK || bad.ErrorCode != "E_SERVICE_NOT_FOUND" {
 		t.Fatalf("expected E_SERVICE_NOT_FOUND, got %#v", bad)
 	}
@@ -538,7 +538,7 @@ func TestCompactBackgroundProcessResultForModelReducesOutput(t *testing.T) {
 		Status:     "running",
 		OutputTail: fullOutput,
 	}}
-	compact := compactToolResultForModel("background_process", result, "fallback")
+	compact := compactToolResultForModel("service", result, "fallback")
 	if len(compact) >= len(fullOutput) {
 		t.Fatalf("expected background process output to be reduced: compact=%d full=%d", len(compact), len(fullOutput))
 	}
@@ -1103,9 +1103,9 @@ func TestRunCommandInvalidatesWorkspaceMapCache(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result := app.executeTool(context.Background(), cfg, "session-1", "run_command", args)
+	result := app.executeTool(context.Background(), cfg, "session-1", "command", args)
 	if !result.OK {
-		t.Fatalf("expected run_command to succeed, got %#v", result)
+		t.Fatalf("expected command to succeed, got %#v", result)
 	}
 	refreshed := app.workspaceMapContext(cfg)
 	mustContain(t, refreshed, "generated.txt")
@@ -1118,9 +1118,9 @@ func TestRunCommandRejectsLongRunningService(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result := app.executeTool(context.Background(), ConfigState{Workspace: root}, "session-1", "run_command", args)
+	result := app.executeTool(context.Background(), ConfigState{Workspace: root}, "session-1", "command", args)
 	if result.OK {
-		t.Fatalf("expected run_command to reject long-running service, got %#v", result)
+		t.Fatalf("expected command to reject long-running service, got %#v", result)
 	}
 	if result.ErrorCode != "E_LONG_RUNNING_COMMAND" {
 		t.Fatalf("expected E_LONG_RUNNING_COMMAND, got %#v", result)
@@ -1545,9 +1545,9 @@ func TestRunCommandRejectsCwdSymlinkOutsideWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result := app.executeTool(context.Background(), ConfigState{Workspace: root}, "session-1", "run_command", args)
+	result := app.executeTool(context.Background(), ConfigState{Workspace: root}, "session-1", "command", args)
 	if result.OK {
-		t.Fatalf("expected run_command to reject outside symlink cwd, got %#v", result)
+		t.Fatalf("expected command to reject outside symlink cwd, got %#v", result)
 	}
 	if result.ErrorCode != "E_PATH_OUTSIDE" {
 		t.Fatalf("expected E_PATH_OUTSIDE, got %#v", result)
@@ -2977,12 +2977,12 @@ func TestScheduledTaskToolsIncludeNormalCommandsAndExcludeScheduler(t *testing.T
 		if tool.Function.Name == "scheduled_task" {
 			t.Fatal("scheduled executions must not recursively manage scheduled tasks")
 		}
-		if tool.Function.Name == "run_command" {
+		if tool.Function.Name == "command" {
 			foundCommand = true
 		}
 	}
 	if !foundCommand {
-		t.Fatal("scheduled executions must receive run_command")
+		t.Fatal("scheduled executions must receive command")
 	}
 }
 

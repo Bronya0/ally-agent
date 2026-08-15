@@ -70,19 +70,19 @@ Public License v3. See the LICENSE file for details.
                   </n-tab-pane>
                 </n-tabs>
 
-              <!-- Fixed todo panel; kept above the transient composer status row. -->
-              <Transition name="todo-panel">
-                <div v-if="showTodoPanel" :class="['todo-panel', { collapsed: todoPanelCollapsed }]">
-                  <button class="todo-panel-header" :title="todoPanelCollapsed ? $t('app.todo.expand') : $t('app.todo.collapse')" @click="toggleTodoPanel">
-                    <span>Todo</span>
-                    <span class="todo-panel-count">{{ currentTodoNumber }}/{{ todos.length }}</span>
-                    <span :class="['todo-panel-toggle', { expanded: !todoPanelCollapsed }]"></span>
+              <!-- Fixed plan panel; kept above the transient composer status row. -->
+              <Transition name="plan-panel">
+                <div v-if="showPlanPanel" :class="['plan-panel', { collapsed: planPanelCollapsed }]">
+                  <button class="plan-panel-header" :title="planPanelCollapsed ? $t('app.plan.expand') : $t('app.plan.collapse')" @click="togglePlanPanel">
+                    <span>{{ $t('app.plan.title') }}</span>
+                    <span class="plan-panel-count">{{ currentPlanNumber }}/{{ todos.length }}</span>
+                    <span :class="['plan-panel-toggle', { expanded: !planPanelCollapsed }]"></span>
                   </button>
-                  <div v-show="!todoPanelCollapsed" ref="todoPanelListRef" class="todo-panel-list">
-                    <div v-for="item in orderedTodoEntries" :key="item.key" :class="['todo-item', item.status]">
-                      <span class="todo-number">{{ item.number }}.</span>
-                      <span class="todo-status">{{ item.status === 'done' ? '✓' : item.status === 'in_progress' ? '●' : '○' }}</span>
-                      <span class="todo-title">{{ item.title }}</span>
+                  <div v-show="!planPanelCollapsed" ref="planPanelListRef" class="plan-panel-list">
+                    <div v-for="item in orderedPlanEntries" :key="item.key" :class="['plan-item', item.status]">
+                      <span class="plan-status">{{ item.status === 'done' ? '✓' : item.status === 'in_progress' ? '●' : '○' }}</span>
+                      <span class="plan-number">{{ item.number }}.</span>
+                      <span class="plan-title">{{ item.title }}</span>
                     </div>
                   </div>
                 </div>
@@ -419,7 +419,7 @@ import { buildVersion } from './utils/buildVersion.js';
 import { computeEditStats, formatEditStats } from './utils/diff.js';
 import { isNewerReleaseVersion } from './utils/versionCheck.mjs';
 import { findSessionWorkspaceTab, isEditableNavigationTarget, shouldAcceptRunTerminal } from './utils/sessionState.mjs';
-import { orderTodoPanelEntries, todoFocusScrollDelta } from './utils/todoPanel.mjs';
+import { orderPlanPanelEntries, planFocusScrollDelta } from './utils/planPanel.mjs';
 import { formatDateTime, naiveDateLocale, naiveLocale, reasoningEffortLabel, t, welcomeGreeting as localizedWelcomeGreeting } from './i18n.mjs';
 import {
   displaySourceMessages as buildDisplaySourceMessages,
@@ -1354,8 +1354,8 @@ const showSkillsPanel = ref(false);
 const todos = ref([]);
 const todosBySession = reactive({});
 const todoRevisionsBySession = reactive({});
-const todoPanelCollapsed = ref(false);
-const todoPanelListRef = ref(null);
+const planPanelCollapsed = ref(false);
+const planPanelListRef = ref(null);
 const isMaximised = ref(false);
 const availableSkills = ref([]);
 const activeSkillNames = ref([]);
@@ -1388,7 +1388,7 @@ let runtimeEventsBound = false;
 let updateCheckTimer = 0;
 const UPDATE_CHECK_INTERVAL_MS = 2 * 60 * 60 * 1000;
 // tool:update events carry the full accumulated arguments on every emit.
-// During large payload streams (e.g. create_file with thousands of lines)
+// During large payload streams (e.g. create with thousands of lines)
 // processing each event synchronously blocks the main thread, freezes the
 // tool card, and balloons webview memory. Buffer the latest event per tool
 // call and flush on a timer so the UI repaints between updates.
@@ -1483,14 +1483,14 @@ Popular sections to include:
 - Testing instructions
 - Security considerations
 
-First, explore the codebase, then create or update AGENTS.md. If AGENTS.md exists, read it and update it with edit. If it does not exist, create it with create_file.`;
+First, explore the codebase, then create or update AGENTS.md. If AGENTS.md exists, read it and update it with edit. If it does not exist, create it with create.`;
 
 const REMEMBER_PROMPT = `Save durable project knowledge from this conversation.
 
 1. Extract only high-confidence, reusable facts: architecture decisions, conventions, hidden dependencies, gotchas, important file locations, and data flows.
 2. Each saved bullet must be concise and cite concrete file paths when relevant.
-3. Use memory_read first if an existing memory from the global memory index may already cover this project.
-4. Save or update the knowledge with memory_write. Use an explicit stable path such as project-knowledge/<workspace-or-project-name>.md.
+3. Use read first if an existing memory from the global memory index may already cover this project (paths are absolute under ~/.ally_agent/memories).
+4. Save or update the knowledge with create (new) or edit (existing, using the version from read). Use an explicit stable path such as ~/.ally_agent/memories/project-knowledge/<workspace-or-project-name>.md.
 5. Do not edit AGENTS.md for this command. Do not save speculation, one-off task status, transient bug-fix notes, or generic advice.`;
 
 const LESSON_PROMPT = `Review this conversation for reusable pitfalls: hidden framework behavior, project-specific conventions, or environment traps that would likely trip again in another file or task.
@@ -1650,23 +1650,23 @@ const serviceRunningCount = computed(() => services.value.filter((service) => ['
 const activeTodoCount = computed(() => todos.value.filter((item) => item?.status !== 'done').length);
 // 面板标题显示"执行到第几个"：当前 in_progress 项在计划里的原始序号；
 // 没有进行中项（例如刚开始列计划）时显示 0 表示还没开始执行。
-const currentTodoNumber = computed(() => {
+const currentPlanNumber = computed(() => {
   const index = todos.value.findIndex((item) => item?.status === 'in_progress');
   return index >= 0 ? index + 1 : 0;
 });
-const showTodoPanel = computed(() => todos.value.length > 0 && activeTodoCount.value > 0);
-const orderedTodoEntries = computed(() => orderTodoPanelEntries(todos.value));
+const showPlanPanel = computed(() => todos.value.length > 0 && activeTodoCount.value > 0);
+const orderedPlanEntries = computed(() => orderPlanPanelEntries(todos.value));
 
-function scrollTodoPanelToFocus() {
-  if (todoPanelCollapsed.value) return;
+function scrollPlanPanelToFocus() {
+  if (planPanelCollapsed.value) return;
   nextTick(() => {
-    const list = todoPanelListRef.value;
+    const list = planPanelListRef.value;
     if (!list) return;
-    // 已完成项按最新优先排在列表前部，固定滚到顶部会把进行中任务挤出可视区。
+    // 面板按原始顺序显示，固定滚到顶部会把进行中任务挤出可视区。
     // 改为把当前 in_progress 项滚动到列表中部；没有进行中项时才回到顶部。
-    const current = list.querySelector('.todo-item.in_progress');
+    const current = list.querySelector('.plan-item.in_progress');
     if (current) {
-      const delta = todoFocusScrollDelta(list.getBoundingClientRect(), current.getBoundingClientRect());
+      const delta = planFocusScrollDelta(list.getBoundingClientRect(), current.getBoundingClientRect());
       list.scrollTop += delta;
       return;
     }
@@ -1674,13 +1674,13 @@ function scrollTodoPanelToFocus() {
   });
 }
 
-function toggleTodoPanel() {
-  todoPanelCollapsed.value = !todoPanelCollapsed.value;
-  scrollTodoPanelToFocus();
+function togglePlanPanel() {
+  planPanelCollapsed.value = !planPanelCollapsed.value;
+  scrollPlanPanelToFocus();
 }
 
-watch(orderedTodoEntries, () => {
-  scrollTodoPanelToFocus();
+watch(orderedPlanEntries, () => {
+  scrollPlanPanelToFocus();
 });
 
 const MAX_RENDER_MESSAGES = 180;
@@ -2955,7 +2955,7 @@ function finalizeReasoningTiming(msg) {
 }
 // Buffer the latest tool:update event per tool call and flush on a timer so
 // the main thread is not blocked by parsing/re-rendering large streaming
-// argument payloads (e.g. create_file content) on every delta.
+// argument payloads (e.g. create content) on every delta.
 function bufferToolUpdate(data) {
   flushStreamBuffer(data.runId);
   const session = sessionByRunId(data.runId);
@@ -3227,7 +3227,7 @@ function bindRuntimeEvents() {
   // tool:start must create the card immediately so the user sees the tool
   // call appear. tool:update carries the growing accumulated arguments and is
   // throttled via bufferToolUpdate to avoid blocking the main thread when
-  // streaming large payloads (e.g. create_file with thousands of lines).
+  // streaming large payloads (e.g. create with thousands of lines).
   onRuntimeEvent('tool:start', applyToolProgressEvent);
   onRuntimeEvent('tool:update', bufferToolUpdate);
   onRuntimeEvent('ask:ready', (data) => {
@@ -3315,7 +3315,7 @@ function bindRuntimeEvents() {
       }
       existing.status = 'success';
       // ESC 终止的命令不应显示绿色 √
-      if (data.name === 'run_command' || data.name === 'remote_run_command') {
+      if (data.name === 'command' || data.name === 'remote_run_command') {
         try {
           const parsed = JSON.parse(data.result);
           if (parsed?.data?.cancelled) existing.status = 'error';
@@ -3334,12 +3334,12 @@ function bindRuntimeEvents() {
         existing.askSubmitted = true;
         existing.askAnswers = Array.isArray(resultData.answers) ? resultData.answers : existing.askAnswers || [];
       }
-      if (data.name === 'todo_write' && Array.isArray(resultData.todos)) {
+      if (data.name === 'plan' && Array.isArray(resultData.todos)) {
         existing.title = formatTodoNextStep(resultData.todos);
       } else if (!existing.title) {
         existing.title = makeToolResultTitle(data.name, data.result, data);
       }
-      if ((data.name === 'create_file' || data.name === 'remote_create_file') && resultData.path) {
+      if ((data.name === 'create' || data.name === 'remote_create_file') && resultData.path) {
         existing.editFilePath = resultData.path;
         if (!existing.title) existing.title = resultData.target ? `${resultData.target} · ${resultData.path}` : resultData.path;
       }
@@ -3600,7 +3600,7 @@ function bindRuntimeEvents() {
       refreshContextTokens(sid);
     }
   });
-  onRuntimeEvent('todo:update', (data) => {
+  onRuntimeEvent('plan:update', (data) => {
     const sid = data.sessionId || '';
     if (!sid) return;
     const revision = Number(data.revision || 0);
@@ -5192,19 +5192,16 @@ function formatTodoNextStep(value) {
   const next = todos.find((todo) => todo.status === 'in_progress')
     || todos.find((todo) => todo.status === 'pending');
   if (next) return next.title;
-  return todos.length > 0 ? t('tools.todo.status.done') : t('tools.todo.cleared');
+  return todos.length > 0 ? t('tools.plan.status.done') : t('tools.plan.cleared');
 }
 
 function makeToolResultTitle(name, result, meta = {}) {
   const d = parseToolResultData(result);
-  if (name === 'todo_write' && Array.isArray(d.todos)) return formatTodoNextStep(d.todos);
+  if (name === 'plan' && Array.isArray(d.todos)) return formatTodoNextStep(d.todos);
 	if ((name === 'edit' || name === 'remote_edit') && Array.isArray(d.files)) return d.files.length === 1 ? (d.files[0]?.path || '') : `${d.files.length} files`;
   const path = d.path || d.deleted || '';
-  if (path && (name === 'create_file' || name === 'edit' || name === 'remote_edit' || name === 'remote_create_file' || name === 'delete_path' || name === 'remote_delete_path')) {
+  if (path && (name === 'create' || name === 'edit' || name === 'remote_edit' || name === 'remote_create_file' || name === 'delete' || name === 'remote_delete_path')) {
     return d.target ? `${d.target} · ${path}` : path;
-  }
-  if (path && (name === 'memory_read' || name === 'memory_write')) {
-    return path;
   }
   if (name === 'web_fetch' || name === 'http_request') {
     return d.url || d.finalUrl || d.URL || d.FinalURL || '';
@@ -5439,7 +5436,7 @@ function updateToolEvent(id, name, title, body, status = 'default', meta = {}, t
   } else if (name === 'replace_lines') {
     codeContent = parsed.newText || '';
     editFilePath = parsed.path || '';
-  } else if (name === 'create_file' || name === 'remote_create_file') {
+  } else if (name === 'create' || name === 'remote_create_file') {
     codeContent = parsed.content || '';
     editFilePath = parsed.path || '';
     if (codeContent && normalizeToolStatus(status) === 'running') {
@@ -5464,7 +5461,7 @@ function updateToolEvent(id, name, title, body, status = 'default', meta = {}, t
     toolCallIndex: meta.toolCallIndex ?? existing?.toolCallIndex,
     name: name || 'tool',
     title: title || existing?.title || '',
-    body: (name === 'run_command' || name === 'remote_run_command') && meta.output !== undefined
+    body: (name === 'command' || name === 'remote_run_command') && meta.output !== undefined
       ? stripAnsi(String(meta.output || ''))
       : formatToolBody(name, displayToolBodyForStatus(name, body, status)),
     time: new Date().toLocaleTimeString(),
@@ -6392,10 +6389,10 @@ function normalizeToolStatus(status) {
 function toolKind(name) {
   if (isMcpToolName(name)) return 'mcp';
   if (name === 'edit' || name === 'replace_exact' || name === 'replace_lines' || name === 'remote_edit') return 'edit';
-  if (name === 'create_file' || name === 'remote_create_file') return 'create';
-  if (name === 'delete_path' || name === 'remote_delete_path') return 'delete';
-  if (name === 'run_command' || name === 'remote_run_command' || name === 'Bash') return 'command';
-  if (name === 'background_process' || name === 'start_service' || name === 'stop_service' || name === 'list_services') return 'service';
+  if (name === 'create' || name === 'remote_create_file') return 'create';
+  if (name === 'delete' || name === 'remote_delete_path') return 'delete';
+  if (name === 'command' || name === 'remote_run_command' || name === 'Bash') return 'command';
+  if (name === 'service' || name === 'start_service' || name === 'stop_service' || name === 'list_services') return 'service';
   if (name === 'wait') return 'wait';
   if (name === 'ask') return 'ask';
   if (name === 'calculate') return 'calculate';
@@ -6404,9 +6401,8 @@ function toolKind(name) {
   if (name === 'Glob') return 'glob';
   if (name === 'grep') return 'grep';
   if (name === 'run') return 'run';
-  if (name === 'todo_write') return 'todo';
+  if (name === 'plan') return 'plan';
   if (name === 'scheduled_task') return 'scheduled';
-  if (name === 'memory_read' || name === 'memory_write') return 'memory';
   if (name === 'subagent' || name === 'agent_delegate') return 'subagent';
   if (name === 'skill' || name === 'Skill') return 'skill';
   if (name === 'render_html') return 'render_html';
@@ -6450,15 +6446,15 @@ function makeToolTitle(name, args, meta = {}) {
     return formatMcpArgsSummary(parseToolArgsForMeta(args, meta));
   }
   const parsed = parseToolArgsForMeta(args, meta);
-  if (name === 'todo_write') {
+  if (name === 'plan') {
     return Array.isArray(parsed.todos) ? formatTodoNextStep(parsed.todos) : '';
   }
-  if (name === 'run_command' || name === 'remote_run_command' || name === 'Bash') {
+  if (name === 'command' || name === 'remote_run_command' || name === 'Bash') {
     const command = parsed.command || parsed.cmd || '';
     if (name === 'remote_run_command' && parsed.target) return `${parsed.target} · ${command}`;
     return command;
   }
-  if (name === 'background_process') {
+  if (name === 'service') {
     const action = String(parsed.action || '').trim();
     if (action === 'stop') return `stop · ${parsed.id || ''}`;
     if (action === 'list') return 'list';
@@ -6502,7 +6498,7 @@ function makeToolTitle(name, args, meta = {}) {
 	if ((name === 'edit' || name === 'remote_edit') && Array.isArray(parsed.files)) return parsed.files.length === 1 ? (parsed.files[0]?.path || '') : `${parsed.files.length} files`;
     return parsed.target ? `${parsed.target} · ${parsed.path || ''}` : (parsed.path || '');
   }
-  if (name === 'create_file' || name === 'delete_path' || name === 'remote_create_file' || name === 'remote_delete_path') {
+  if (name === 'create' || name === 'delete' || name === 'remote_create_file' || name === 'remote_delete_path') {
     return parsed.target ? `${parsed.target} · ${parsed.path || ''}` : (parsed.path || '');
   }
   if (name === 'read_file' || name === 'remote_read_file') {
@@ -6530,9 +6526,6 @@ function makeToolTitle(name, args, meta = {}) {
   }
   if (name === 'document_read') {
     return parsed.path || '';
-  }
-  if (name === 'memory_read' || name === 'memory_write') {
-    return parsed.path || parsed.description || '';
   }
   if (name === 'calculate') {
     return parsed.expression || '';
@@ -6635,13 +6628,6 @@ function formatToolChip(name, result) {
       const chars = String(parsed.data.text || '').length;
       if (chars > 0) return '\u00B7 ' + chars + ' chars' + (parsed.data.truncated ? ' truncated' : '');
     }
-    if (name === 'memory_read' && parsed.data) {
-      const chars = String(parsed.data.content || '').length;
-      if (chars > 0) return '\u00B7 ' + formatCharCount(chars);
-    }
-    if (name === 'memory_write' && parsed.data) {
-      return parsed.data.created ? '\u00B7 created' : '\u00B7 updated';
-    }
     if (name === 'calculate' && parsed.data) {
       return '= ' + (parsed.data.text || parsed.data.value);
     }
@@ -6651,8 +6637,8 @@ function formatToolChip(name, result) {
       const count = Number(parsed.data.count ?? parsed.data.tasks?.length ?? 0);
       return '\u00B7 ' + count + ' task' + (count === 1 ? '' : 's');
     }
-    if ((name === 'background_process' || name === 'start_service' || name === 'stop_service') && parsed.data) {
-      // background_process now returns distinct result shapes per action.
+    if ((name === 'service' || name === 'start_service' || name === 'stop_service') && parsed.data) {
+      // service now returns distinct result shapes per action.
       // Discriminate by structural fields (not action args, which the chip
       // helper does not receive) so list/read render sensible chips instead
       // of falling through to formatServiceChip with missing fields.
@@ -6684,15 +6670,15 @@ function formatToolChip(name, result) {
       if (d.removedLines > 0) parts.push('-' + d.removedLines);
       if (parts.length > 0) return '\u00B7 ' + parts.join(' ');
     }
-    // create_file: · N lines
-    if ((name === 'create_file' || name === 'remote_create_file') && parsed.data) {
+    // create: · N lines
+    if ((name === 'create' || name === 'remote_create_file') && parsed.data) {
       const lines = Number(parsed.data.addedLines ?? 0);
       const bytes = parsed.data.afterBytes || 0;
       const parts = [lines + ' line' + (lines !== 1 ? 's' : '')];
       if (bytes > 0) parts.push(formatBytes(bytes));
       return '\u00B7 ' + parts.join(' \u00B7 ');
     }
-    if ((name === 'delete_path' || name === 'remote_delete_path') && parsed.data) {
+    if ((name === 'delete' || name === 'remote_delete_path') && parsed.data) {
       if (parsed.data.deleted) return '\u00B7 deleted';
     }
     if ((name === 'http_request' || name === 'web_fetch') && parsed.data) {
@@ -6712,13 +6698,13 @@ function formatToolChip(name, result) {
 
 function formatToolBody(name, body) {
   const text = String(body || '');
-  if (isMcpToolName(name) || name === 'todo_write') return '';
+  if (isMcpToolName(name) || name === 'plan') return '';
   try {
     const parsed = JSON.parse(text);
     if (name === 'wait' && parsed.data) return '';
     if (name === 'ask' && parsed.data) return '';
     // command result: show output + exit code (command shown in card title)
-    if ((name === 'run_command' || name === 'remote_run_command' || name === 'Bash') && parsed.data) {
+    if ((name === 'command' || name === 'remote_run_command' || name === 'Bash') && parsed.data) {
       const d = parsed.data;
       let out = '';
       if (d.output) out += stripAnsi(d.output);
@@ -6770,15 +6756,6 @@ function formatToolBody(name, body) {
       const sheetInfo = d.sheets && d.sheets.length ? '\nsheets: ' + d.sheets.join(', ') : '';
       return `${d.path || ''} (${d.type || 'document'})${sheetInfo}\n\n${d.text || ''}${d.truncated ? '\n\n[truncated]' : ''}`;
     }
-    if (name === 'memory_read' && parsed.data) {
-      const d = parsed.data;
-      const header = `${d.path || ''}${d.description ? '\n' + d.description : ''}`;
-      return `${header}\n\n${d.content || ''}`;
-    }
-    if (name === 'memory_write' && parsed.data) {
-      const d = parsed.data;
-      return `${d.created ? 'Created' : 'Updated'} ${d.path || ''}\n${d.description || ''}`;
-    }
     if (name === 'calculate' && parsed.data) {
       return `${parsed.data.expression} = ${parsed.data.text || parsed.data.value}`;
     }
@@ -6789,7 +6766,7 @@ function formatToolBody(name, body) {
       if (!tasks.length) return 'No scheduled tasks.';
       return tasks.map(formatScheduledTaskToolDetail).join('\n\n---\n\n');
     }
-    if ((name === 'background_process' || name === 'start_service' || name === 'stop_service') && parsed.data) {
+    if ((name === 'service' || name === 'start_service' || name === 'stop_service') && parsed.data) {
       const d = parsed.data;
       // Discriminate by structural fields so list/read results render as
       // human-readable summaries instead of JSON dumps.
@@ -6816,7 +6793,7 @@ function formatToolBody(name, body) {
       if (parsed.removedLines > 0) parts.push('-' + parsed.removedLines);
       return (parsed.path || '') + '  ' + parts.join(' ');
     }
-    if ((name === 'create_file' || name === 'remote_create_file') && parsed.data) {
+    if ((name === 'create' || name === 'remote_create_file') && parsed.data) {
       const d = parsed.data;
       const lines = Number(d.addedLines ?? 0);
       const parts = [];
@@ -6825,7 +6802,7 @@ function formatToolBody(name, body) {
       if (d.afterBytes > 0) parts.push(formatBytes(d.afterBytes));
       return parts.join('  ');
     }
-    if ((name === 'delete_path' || name === 'remote_delete_path') && parsed.data) {
+    if ((name === 'delete' || name === 'remote_delete_path') && parsed.data) {
       return '';
     }
     if ((name === 'http_request' || name === 'web_fetch') && parsed.data) return '';
@@ -6846,7 +6823,7 @@ function formatToolBody(name, body) {
     }
     // Skill result: the card header already reads "Loaded skill (name)" and the
     // user message carries the /skill chip, so the result body only repeats it.
-    // Keep the card as a single status line, like delete_path/http_request.
+    // Keep the card as a single status line, like delete/http_request.
     if ((name === 'skill' || name === 'Skill') && parsed.data) return '';
     // Never leak a raw tool-result JSON envelope into the UI. Tools without a
     // dedicated renderer still get a bounded, human-readable key/value view.
@@ -6948,7 +6925,7 @@ function formatServiceInfo(service) {
   return lines.join('\n');
 }
 
-// formatServiceReadResult renders a background_process.read result. The
+// formatServiceReadResult renders a service read result. The
 // backend already clamps output to 32 KiB; here we further bound the body for
 // UI display so a 32 KiB read does not blow up the chat scroll. The full
 // output is still available in the Task Center log viewer.
@@ -6985,7 +6962,7 @@ function formatServiceReadResult(data) {
   return lines.join('\n');
 }
 
-// formatServiceListResult renders a background_process.list result. The
+// formatServiceListResult renders a service list result. The
 // backend omits output tails; we render one compact line per service so the
 // model/user can scan all services without context bloat.
 function formatServiceListResult(data) {

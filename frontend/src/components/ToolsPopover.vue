@@ -70,13 +70,13 @@ const BUILTIN_TOOL_GROUPS = [
   {
     key: 'write',
     label: t('tools.group.write'),
-    names: ['edit', 'create_file', 'delete_path'],
+    names: ['edit', 'create', 'delete'],
     description: t('tools.group.writeDescription'),
   },
   {
     key: 'command',
     label: t('tools.group.command'),
-    names: ['run_command', 'background_process'],
+    names: ['command', 'service'],
     description: t('tools.group.commandDescription'),
   },
   {
@@ -94,14 +94,8 @@ const BUILTIN_TOOL_GROUPS = [
   {
     key: 'state',
     label: t('tools.group.state'),
-    names: ['todo_write', 'scheduled_task'],
+    names: ['plan', 'scheduled_task'],
     description: t('tools.group.stateDescription'),
-  },
-  {
-    key: 'memory',
-    label: t('tools.group.memory'),
-    names: ['memory_read', 'memory_write'],
-    description: t('tools.group.memoryDescription'),
   },
   {
     key: 'agent',

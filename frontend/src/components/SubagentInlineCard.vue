@@ -171,19 +171,19 @@ function toolArgsTitle(tc) {
   const name = tc.name || '';
   const argsText = String(tc.args || '');
   // Re-parse only when args actually changed (new tool call, or streaming
-  // completion of a long arg payload like run_command).
+  // completion of a long arg payload like command).
   if (tc._argsCacheKey !== argsText) {
     tc._argsCacheKey = argsText;
     tc._argsCacheParsed = parseToolArgs(argsText);
   }
   const parsed = tc._argsCacheParsed;
 
-  if (name === 'run_command' || name === 'remote_run_command') {
+  if (name === 'command' || name === 'remote_run_command') {
     const cmd = parsed.command || parsed.cmd || '';
     if (name === 'remote_run_command' && parsed.target) return `${parsed.target} · ${cmd}`;
     return cmd;
   }
-  if (name === 'background_process') {
+  if (name === 'service') {
     if (parsed.action === 'stop') return `stop · ${parsed.id || ''}`;
     const parts = ['start'];
     if (parsed.name) parts.push(parsed.name);
@@ -202,7 +202,7 @@ function toolArgsTitle(tc) {
     if (Array.isArray(parsed.files)) return parsed.files.length === 1 ? (parsed.files[0]?.path || '') : `${parsed.files.length} files`;
     return parsed.target ? `${parsed.target} · ${parsed.path || ''}` : (parsed.path || '');
   }
-  if (name === 'create_file' || name === 'delete_path' || name === 'remote_create_file' || name === 'remote_delete_path') {
+  if (name === 'create' || name === 'delete' || name === 'remote_create_file' || name === 'remote_delete_path') {
     return parsed.target ? `${parsed.target} · ${parsed.path || ''}` : (parsed.path || '');
   }
   if (name === 'read' || name === 'batch_read' || name === 'read_file' || name === 'remote_read_file') {
@@ -223,9 +223,6 @@ function toolArgsTitle(tc) {
   if (name === 'http_request' || name === 'web_fetch') {
     return formatHttpToolTitle(parsed);
   }
-  if (name === 'memory_read' || name === 'memory_write') {
-    return parsed.path || parsed.description || '';
-  }
   if (name === 'calculate') {
     return parsed.expression || '';
   }
@@ -240,7 +237,7 @@ function toolArgsTitle(tc) {
   if (name === 'skill' || name === 'Skill') {
     return parsed.skill || '';
   }
-  if (name === 'todo_write') {
+  if (name === 'plan') {
     const todos = Array.isArray(parsed.todos) ? parsed.todos : [];
     return todos.length ? `${todos.length} items` : '';
   }
