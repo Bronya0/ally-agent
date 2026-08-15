@@ -11,8 +11,7 @@ Public License v3. See the LICENSE file for details.
   <div :class="['rich-tool-card', 'subagent-inline', msg.status]">
     <div class="tool-line">
       <span :class="['tool-status-icon', msg.status]">{{ statusIcon(msg.status) }}</span>
-      <span class="tool-verb">{{ subagentVerb(msg.status) }}</span>
-      <span class="tool-name">{{ $t('tools.kind.subagent') }}</span>
+      <span class="tool-name">{{ roleLabel }}</span>
       <span class="tool-arg" :title="msg.description">({{ msg.description }})</span>
       <span class="tool-chip">{{ $t('subagent.steps', { current: msg.steps }) }}</span>
       <span v-if="msg.toolCalls?.length" class="tool-chip">{{ $t('subagent.toolCount', { count: msg.toolCalls.length }) }}</span>
@@ -43,6 +42,10 @@ import { toolVerbLabel } from '../utils/toolVerb.mjs';
 const props = defineProps({
   msg: { type: Object, required: true },
 });
+
+// The card label is the sub-agent's dynamic role (e.g. "code reviewer"), with
+// the localized generic kind label as fallback for legacy/empty roles.
+const roleLabel = computed(() => props.msg?.role || t('tools.kind.subagent'));
 
 const now = ref(Date.now());
 let durationTimer = null;
@@ -123,10 +126,6 @@ function statusIcon(status) {
   if (status === 'running') return '●';
   if (status === 'success' || status === 'completed') return '✓';
   return '✗';
-}
-
-function subagentVerb(status) {
-  return toolVerbLabel('subagent', 'subagent', status);
 }
 
 function compactSummary(text) {

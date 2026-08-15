@@ -100,12 +100,14 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 			desc = desc[:37] + "..."
 		}
 	}
+	req.Role = strings.TrimSpace(req.Role)
 
 	run := &SubagentRun{
 		ID:          subID,
 		SessionID:   sessionID,
 		Description: desc,
 		Profile:     "coder",
+		Role:        req.Role,
 		Status:      "running",
 		StartTime:   time.Now().UnixMilli(),
 		cancel:      cancel,
@@ -114,7 +116,7 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 	a.subRuns[subID] = run
 	a.subRunsMu.Unlock()
 	defer a.finishSubagentRecord(subID)
-	spawnPayload := map[string]any{"id": subID, "sessionId": sessionID, "description": desc, "profile": "coder", "startTime": run.StartTime}
+	spawnPayload := map[string]any{"id": subID, "sessionId": sessionID, "description": desc, "profile": "coder", "role": req.Role, "startTime": run.StartTime}
 	if meta, ok := ctx.Value(toolExecutionMetaContextKey{}).(toolExecutionMeta); ok {
 		spawnPayload["runId"] = meta.runID
 		spawnPayload["toolBatchId"] = meta.toolBatchID
@@ -125,7 +127,7 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 
 	// Build messages for the sub-agent
 	messages := []openai.ChatCompletionMessage{
-		{Role: openai.ChatMessageRoleSystem, Content: subagentSystemPrompt()},
+		{Role: openai.ChatMessageRoleSystem, Content: subagentSystemPrompt(req.Role)},
 	}
 	if !req.CleanContext {
 		env := a.buildSubagentEnv(cfg)
@@ -155,7 +157,7 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 			run.Steps = step
 			a.subRunsMu.Unlock()
 			a.emit("sub:error", map[string]any{"id": subID, "sessionId": sessionID, "error": "cancelled", "durationMs": time.Now().UnixMilli() - run.StartTime})
-			return &AgentDelegateResult{AgentID: subID, Description: desc, Status: "failed", Steps: step, Error: "cancelled"}, ctx.Err()
+			return &AgentDelegateResult{AgentID: subID, Role: req.Role, Description: desc, Status: "failed", Steps: step, Error: "cancelled"}, ctx.Err()
 		default:
 		}
 
@@ -192,7 +194,7 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 					run.Steps = step
 					a.subRunsMu.Unlock()
 					a.emit("sub:error", map[string]any{"id": subID, "sessionId": sessionID, "error": "cancelled", "durationMs": time.Now().UnixMilli() - run.StartTime})
-					return &AgentDelegateResult{AgentID: subID, Description: desc, Status: "failed", Steps: step, Error: "cancelled", Model: model}, ctx.Err()
+					return &AgentDelegateResult{AgentID: subID, Role: req.Role, Description: desc, Status: "failed", Steps: step, Error: "cancelled", Model: model}, ctx.Err()
 				}
 				continue
 			}
@@ -202,7 +204,7 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 			run.Steps = step
 			a.subRunsMu.Unlock()
 			a.emit("sub:error", map[string]any{"id": subID, "sessionId": sessionID, "error": err.Error(), "durationMs": time.Now().UnixMilli() - run.StartTime})
-			return &AgentDelegateResult{AgentID: subID, Description: desc, Status: "failed", Steps: step, Error: err.Error(), Model: model}, err
+			return &AgentDelegateResult{AgentID: subID, Role: req.Role, Description: desc, Status: "failed", Steps: step, Error: err.Error(), Model: model}, err
 		}
 
 		// Accumulate token usage from the sub-agent's model response
@@ -252,7 +254,7 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 				"inputTokens": run.InputTokens, "outputTokens": run.OutputTokens, "totalTokens": run.TotalTokens,
 			})
 			return &AgentDelegateResult{
-				AgentID: subID, Description: desc, Status: "completed",
+				AgentID: subID, Role: req.Role, Description: desc, Status: "completed",
 				Steps: step, Summary: summary,
 				FilesRead: filesRead, FilesEdited: filesEdited, Model: model,
 			}, nil
@@ -424,7 +426,7 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 		"inputTokens": run.InputTokens, "outputTokens": run.OutputTokens, "totalTokens": run.TotalTokens,
 	})
 	return &AgentDelegateResult{
-		AgentID: subID, Description: desc, Status: "timed_out",
+		AgentID: subID, Role: req.Role, Description: desc, Status: "timed_out",
 		Steps: step, FilesRead: filesRead, FilesEdited: filesEdited, Model: model,
 		Error: fmt.Sprintf("reached step limit (%d)", req.maxSteps),
 	}, nil
@@ -470,8 +472,10 @@ func (a *App) releaseSubagentSlot() {
 	<-a.subSem
 }
 
-// subagentSystemPrompt returns the system prompt for sub-agents.
-func subagentSystemPrompt() string {
+// subagentSystemPrompt returns the system prompt for sub-agents. The optional
+// role (e.g. "researcher") is prepended as a Role line so the sub-agent
+// behaves in that capacity; an empty role keeps the prompt unchanged.
+func subagentSystemPrompt(role string) string {
 	osName := goruntime.GOOS
 	arch := goruntime.GOARCH
 	platformNote := "Platform: "
@@ -490,7 +494,12 @@ func subagentSystemPrompt() string {
 		platformNote += ". " + pythonLine
 	}
 
-	return "You are an Ally sub-agent. Complete the delegated task using available tools, then return a concise summary.\n\n" +
+	roleLine := ""
+	if r := strings.TrimSpace(role); r != "" {
+		roleLine = "Role: " + r + "\n\n"
+	}
+
+	return roleLine + "You are an Ally sub-agent. Complete the delegated task using available tools, then return a concise summary.\n\n" +
 		"# Tool Use\n\n" +
 		"Prefer dedicated tools over shell commands: `grep_files` for search, `read` for file content, `edit`/`create_file`/`delete_path` for file changes, `list_files` for directory listings.\n\n" +
 		sharedBatchStrategy() +

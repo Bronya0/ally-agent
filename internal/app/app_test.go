@@ -718,7 +718,7 @@ func TestSystemPromptIncludesConsolidatedSafetyRules(t *testing.T) {
 			t.Fatalf("system prompt missing consolidated safety rule %q", expected)
 		}
 	}
-	sub := subagentSystemPrompt()
+	sub := subagentSystemPrompt("")
 	for _, expected := range []string{"# Safety", "Sensitive files", "explicit user confirmation", "`E_PATH_OUTSIDE`"} {
 		if !strings.Contains(sub, expected) {
 			t.Fatalf("sub-agent prompt missing consolidated safety rule %q", expected)

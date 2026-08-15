@@ -1140,6 +1140,7 @@ type TodoListRequest struct {
 
 type AgentDelegateRequest struct {
 	Task         string `json:"task"`
+	Role         string `json:"role"`
 	Description  string `json:"description,omitempty"`
 	CleanContext bool   `json:"cleanContext,omitempty"`
 	Model        string `json:"model,omitempty"`
@@ -1149,6 +1150,7 @@ type AgentDelegateRequest struct {
 
 type AgentDelegateResult struct {
 	AgentID     string   `json:"agentId"`
+	Role        string   `json:"role"`
 	Description string   `json:"description"`
 	Status      string   `json:"status"`
 	Steps       int      `json:"steps"`
@@ -1165,6 +1167,7 @@ type SubagentRun struct {
 	SessionID    string             `json:"sessionId,omitempty"`
 	Description  string             `json:"description"`
 	Profile      string             `json:"profile"`
+	Role         string             `json:"role,omitempty"`
 	Status       string             `json:"status"` // running, completed, failed
 	Steps        int                `json:"steps"`
 	Summary      string             `json:"summary,omitempty"`
@@ -1946,7 +1949,14 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		dec := json.NewDecoder(bytes.NewReader(args))
 		dec.DisallowUnknownFields()
 		if err := dec.Decode(v); err != nil {
-			return fmt.Errorf("工具参数 JSON 不完整（输出被截断或流中断），请重新生成完整参数后再试: %w", err)
+			// edit 系列参数最容易因一次调用塞太多内容而超限截断；报错时给出
+			// 明确的重试策略：小改动合并进一次调用，大改动（整函数/整段）
+			// 拆成独立调用，连续行范围的大段删除/替换用 lineRange，避免同样的
+			// 截断反复发生。
+			if name == "edit" || name == "replace_exact" || name == "replace_lines" || name == "remote_edit" {
+				return fmt.Errorf("tool arguments JSON was truncated (output cut off or stream interrupted). Merge small changes into one edit call; split large changes (a whole function or section) into separate edit calls; use lineRange (inclusive A-B whole-line range) for large deletions or replacements of a contiguous line range: %w", err)
+			}
+			return fmt.Errorf("tool arguments JSON was truncated (output cut off or stream interrupted): %w", err)
 		}
 		var extra any
 		if err := dec.Decode(&extra); err != io.EOF {

@@ -304,7 +304,7 @@ Built-in model-facing tools:
 | `todo_write` | Session todo management; at most one `in_progress` item at a time, mark done before advancing |
 | `memory_read` | Read one full global memory Markdown file |
 | `memory_write` | Create/update one global memory Markdown file |
-| `subagent` | Spawn a sub-agent for a scoped task |
+| `subagent` | Spawn a sub-agent for a scoped task (requires a `role` name, shown as the card label and injected into the sub-agent system prompt) |
 | `scheduled_task` | Create, list, or delete temporary isolated Agent tasks for the current Ally process |
 | `skill` | Load an enabled skill |
 

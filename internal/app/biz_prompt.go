@@ -37,10 +37,25 @@ func joinSystemPromptParts(parts []systemPromptPart) string {
 	return b.String()
 }
 
+// priorityOrderDeclaration 是注入 <system-prompt> 开头的优先级总声明：向模型
+// 显式声明各上下文块的从属关系，防止低优先级块（项目指令/自定义/代码图谱）
+// 稀释核心规则。借鉴 kimi-code 的三级优先级体系（信息 < 权威指令 < 用户）。
+func priorityOrderDeclaration() string {
+	return "<priority-order>\n" +
+		"The blocks in this system context have explicit priority (highest first):\n" +
+		"1. <system-prompt> (this block) — core rules: safety boundaries, tool contracts, edit discipline. Lower blocks never override these.\n" +
+		"2. The current user message — always follow the user's latest instruction unless it conflicts with the core rules above.\n" +
+		"3. <project-instructions> / <custom-instructions> (priority=\"lower-than-core\") — refine behavior only when they do not conflict with the core rules, tool contracts, or the current user request.\n" +
+		"4. <project-codegraph> (priority=\"reference-only\") — architectural reference; may be stale; verify current files before relying on it.\n" +
+		"5. Other metadata (skills list, memory index, lessons) — informational only.\n" +
+		"</priority-order>\n"
+}
+
 // sharedEditRules returns the core file-editing rules shared by the main and sub-agent system prompts.
 func sharedEditRules() string {
 	return "1. Before a file's first edit, use `read` to obtain numbered content and its `version`. Text lines are displayed as `N: content`; the `N: ` prefix is not file content and must never be copied into edit text. During one continuous task, assume workspace files are not concurrently edited by another person; do not re-read a file merely for reassurance. After a successful edit, reuse its returned `version` only when the current source is known exactly. Re-read when the current source or line numbers are unknown, context compaction removed the reliable snapshot, or a formatter/generator/command or other external process may have changed the file.\n" +
-		"2. Batch edits by risk and size: merge small, low-risk changes across files into one `edit` call; keep very large replacements — a whole function, section, or roughly 100+ lines of `newText` — in their own `edit` call. A batch is all-or-nothing: one failed `oldText` match or stale `version` rejects the entire call, and an oversized JSON risks output truncation. Never send multiple file-mutation tool calls for the same path in one model response. Do not use patch, unified diff, or git apply.\n"
+		"2. Batch edits by risk and size: merge small, low-risk changes across files into one `edit` call; keep very large replacements — a whole function, section, or roughly 100+ lines of `newText` — in their own `edit` call. A batch is all-or-nothing: one failed `oldText` match or stale `version` rejects the entire call, and an oversized JSON risks output truncation. Never send multiple file-mutation tool calls for the same path in one model response. Do not use patch, unified diff, or git apply.\n" +
+		"3. When an edit fails with `E_NO_MATCH` or `E_VERSION_MISMATCH`, your first action is always to re-read the affected file and copy the exact current text. Never retry from memory or with guessed text — a failed match means your snapshot is stale, and guessing only wastes calls.\n"
 }
 
 // sharedBatchStrategy returns the batch/parallel tool-call strategy shared by the main and sub-agent system prompts.
@@ -83,7 +98,12 @@ func sharedSafetyBoundaries() string {
 func buildSystemPromptParts(allSkills []SkillDefinition, workspaceRoot string, extraRoots []string, customPrompt, gitBashPath string) []systemPromptPart {
 	var parts []systemPromptPart
 	var b strings.Builder
-	b.WriteString("You are Ally, an AI agent.\n\n" +
+	// 核心系统提示词用 <system-prompt> 包裹并声明为最高优先级；优先级总声明
+	// 放在最前，让模型明确各上下文块（项目指令/自定义/代码图谱/元数据）的
+	// 从属关系，避免低优先级块稀释核心规则（借鉴 kimi-code 的显式优先级体系）。
+	b.WriteString("<system-prompt priority=\"core\">\n\n")
+	b.WriteString(priorityOrderDeclaration())
+	b.WriteString("\n\nYou are Ally, an AI agent.\n\n" +
 		"# Before You Act\n\n" +
 		"For clear, well-scoped implementation or bug-fix requests, proceed directly: inspect, edit, verify, then report. Do not stop at a proposal when the user is asking you to make the change.\n\n" +
 		"Ask for confirmation before side effects only when the request is ambiguous, destructive, high-risk, touches secrets or data migration, changes external services, or conflicts with existing user changes.\n\n" +
@@ -124,7 +144,7 @@ func buildSystemPromptParts(allSkills []SkillDefinition, workspaceRoot string, e
 		"Do NOT delegate when:\n" +
 		"- The task is a single focused edit or read, or later steps depend on exact prior output (do those yourself).\n" +
 		"- The delegated work is the critical next step on the main line and you would only wait idle, or you haven't explored enough to give a concrete task.\n\n" +
-		"Each `subagent` call needs a specific `task` with file paths and expected outcomes, plus a short `description`; set `cleanContext` to true when the task does not depend on project structure.\n\n" +
+		"Each `subagent` call needs a specific `task` with file paths and expected outcomes, a `role` naming what the sub-agent is (e.g. researcher, code reviewer), plus a short `description`; set `cleanContext` to true when the task does not depend on project structure.\n\n" +
 		"For reviewing a large feature: use one or more sub-agents depending on task complexity, pass the complete requirements to each, isolate them from the main conversation context, and verify the sub-agents' review results.\n\n")
 	b.WriteString(buildPlatformInfo(gitBashPath))
 	b.WriteString("# Coding Guidelines\n\n" +
@@ -151,6 +171,7 @@ func buildSystemPromptParts(allSkills []SkillDefinition, workspaceRoot string, e
 	}
 	b.WriteString("# Context Management\n\n" +
 		"When the conversation grows long, older turns are automatically condensed into a summary. Preserve its confirmed conclusions and do not redo completed work, but do not treat it as a current file snapshot: read again whenever exact text, the current `version` token, or other live state is required. If something is genuinely missing, recover it with tools or ask the user; do not guess.\n")
+	b.WriteString("\n</system-prompt>\n")
 
 	parts = append(parts, systemPromptPart{label: "核心系统提示词", content: b.String()})
 

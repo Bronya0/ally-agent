@@ -176,6 +176,9 @@ function toolDisplayName(msg) {
     if (msg.mcpServer && msg.mcpTool) return `${msg.mcpServer}/${msg.mcpTool}`;
     return msg.mcpServer || msg.mcpTool || formatToolName(msg.name) || 'MCP';
   }
+  // Sub-agent cards that were not upgraded to the inline card still show the
+  // dynamic role name (e.g. "code reviewer") instead of the fixed kind label.
+  if (msg.kind === 'subagent' && msg.role) return msg.role;
   // When the verb already names the action (Edited/Read/Ran/...), don't repeat it
   // as the name; the target/file is shown in the (msg.title) arg span.
   if (hasNamedVerb(msg.name)) return '';

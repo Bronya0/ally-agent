@@ -347,11 +347,12 @@ func chatToolsUncached() []openai.Tool {
 			"type": "object",
 			"properties": map[string]any{
 				"task":         map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "The task for the child agent. Be specific — include file paths and expected outcomes."},
+				"role":         map[string]any{"type": "string", "minLength": 1, "maxLength": 80, "pattern": ".*\\S.*", "description": "The role of the sub-agent, e.g. \"researcher\", \"code reviewer\", \"tester\". Shown as the card label in the UI and injected into the sub-agent's system prompt."},
 				"description":  map[string]any{"type": "string", "description": "Short 3-5 word description for UI display."},
 				"cleanContext": map[string]any{"type": "boolean", "description": "If true, skip workspace environment injection. Use for tasks that do not depend on project structure (e.g. write a standalone algorithm). Default false."},
 				"model":        map[string]any{"type": "string", "description": "Optional model override. Default uses current model."},
 			},
-			"required": []string{"task"},
+			"required": []string{"task", "role"},
 		}),
 		functionTool("skill", "Invoke a registered skill from the current skill listing. Use when the user wants to call a skill, or when you need instructions for a specific task covered by a skill.", map[string]any{
 			"type": "object",
@@ -389,7 +390,7 @@ var builtinToolExamples = map[string]string{
 	"calculate":          `{"expression":"sqrt(144) + 2^3"}`,
 	"render_html":        `{"title":"Interactive counter","html":"<button id='counter'>0</button><script>const button=document.getElementById('counter');button.onclick=()=>button.textContent=String(Number(button.textContent)+1)</script>"}`,
 	"todo_write":         `update: {"todos":[{"title":"Inspect implementation","status":"in_progress"},{"title":"Run tests","status":"pending"}]}; read current: {}`,
-	"subagent":           `{"task":"Inspect the authentication module and report concrete security issues.","description":"Review authentication","cleanContext":false}`,
+	"subagent":           `{"task":"Inspect the authentication module and report concrete security issues.","role":"code reviewer","description":"Review authentication","cleanContext":false}`,
 	"skill":              `{"skill":"codegraph","args":"main"}`,
 }
 

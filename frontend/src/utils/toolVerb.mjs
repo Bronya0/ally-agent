@@ -13,6 +13,11 @@
 // conveys state, so the verb carries the action and no redundant kind label is
 // shown next to it. Kept in English regardless of UI locale by design.
 //
+// The inline subagent card (SubagentInlineCard.vue) is the exception: it shows
+// only the localized kind label ("子代理" / "Sub-agent") plus the status icon,
+// no verb — the card already names the delegated task and shows its own
+// progress, so a "Delegating" verb adds nothing.
+//
 // Keyed by tool name rather than by `kind` on purpose: `kind` is too coarse
 // (memory_read vs memory_write collapse; web_fetch/http_request fall into
 // `other`), which previously produced "Used web_fetch" / mixed CN-EN labels.
