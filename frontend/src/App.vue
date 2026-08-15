@@ -3299,7 +3299,7 @@ function bindRuntimeEvents() {
       }
       if ((data.name === 'subagent' || data.name === 'agent_delegate') && existing.kind === 'subagent') {
         existing.subagentId = resultData.agentId || existing.subagentId || '';
-        existing.role = resultData.role || existing.role || '';
+        existing.subagentRole = resultData.role || existing.subagentRole || '';
         existing.status = resultData.status || 'completed';
         existing.description = resultData.description || existing.description || '';
         existing.summary = resultData.summary || existing.summary || '';
@@ -3670,7 +3670,7 @@ function bindRuntimeEvents() {
         status: 'running',
         description: data.description || '',
         profile: data.profile || 'coder',
-        role: data.role || '',
+        subagentRole: data.role || '',
         steps: 0,
         summary: '',
         filesEdited: [],
@@ -5152,7 +5152,7 @@ function appendToolEventFallback(session, data = {}, status = 'running') {
       subagentId: '',
       description: title || '',
       profile: 'coder',
-      role: data.role || '',
+      subagentRole: data.role || '',
       steps: 0,
       summary: '',
       filesRead: [],
@@ -5504,7 +5504,7 @@ function updateToolEvent(id, name, title, body, status = 'default', meta = {}, t
       subagentId: existing?.subagentId || '',
       description: parsed.description || existing?.description || parsed.task || '',
       profile: existing?.profile || 'coder',
-      role: existing?.role || parsed.role || '',
+      subagentRole: existing?.subagentRole || parsed.role || '',
       steps: existing?.steps || 0,
       summary: existing?.summary || '',
       filesRead: existing?.filesRead || [],

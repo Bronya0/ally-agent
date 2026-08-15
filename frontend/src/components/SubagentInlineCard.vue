@@ -11,7 +11,13 @@ Public License v3. See the LICENSE file for details.
   <div :class="['rich-tool-card', 'subagent-inline', msg.status]">
     <div class="tool-line">
       <span :class="['tool-status-icon', msg.status]">{{ statusIcon(msg.status) }}</span>
-      <span class="tool-name">{{ roleLabel }}</span>
+      <span v-if="msg.subagentRole" class="tool-name">{{ msg.subagentRole }}</span>
+      <span v-else-if="rolePending" class="tool-name subagent-name-pending" aria-hidden="true">
+        <span class="subagent-name-dot"></span>
+        <span class="subagent-name-dot"></span>
+        <span class="subagent-name-dot"></span>
+      </span>
+      <span v-else class="tool-name">{{ fallbackLabel }}</span>
       <span class="tool-arg" :title="msg.description">({{ msg.description }})</span>
       <span class="tool-chip">{{ $t('subagent.steps', { current: msg.steps }) }}</span>
       <span v-if="msg.toolCalls?.length" class="tool-chip">{{ $t('subagent.toolCount', { count: msg.toolCalls.length }) }}</span>
@@ -43,9 +49,15 @@ const props = defineProps({
   msg: { type: Object, required: true },
 });
 
-// The card label is the sub-agent's dynamic role (e.g. "code reviewer"), with
-// the localized generic kind label as fallback for legacy/empty roles.
-const roleLabel = computed(() => props.msg?.role || t('tools.kind.subagent'));
+// The card label is the sub-agent's dynamic role (e.g. "code reviewer").
+// While the tool-call arguments are still streaming (before sub:spawn), the
+// role hasn't been parsed yet — show a muted dot placeholder instead of the
+// generic kind label, so the name doesn't flash 子代理 → role when the args
+// finish. Legacy/restored cards without a role fall back to the generic label.
+const fallbackLabel = computed(() => t('tools.kind.subagent'));
+const rolePending = computed(() =>
+  !props.msg?.subagentRole && props.msg?.status === 'running' && !props.msg?.subagentId
+);
 
 const now = ref(Date.now());
 let durationTimer = null;
@@ -256,3 +268,27 @@ function subToolVerb(tc) {
   return toolVerbLabel(name, kind, tc?.status, action);
 }
 </script>
+
+<style scoped>
+.subagent-name-pending {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.subagent-name-dot {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: #8a8a82;
+  animation: thinking-bounce 1.3s ease-in-out infinite;
+}
+
+.subagent-name-dot:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.subagent-name-dot:nth-child(3) {
+  animation-delay: 0.4s;
+}
+</style>

@@ -43,7 +43,7 @@ Public License v3. See the LICENSE file for details.
             <RenderBoundary :label="$t('chat.attachment')"><MessageAttachments :attachments="msg.attachments || []" /></RenderBoundary>
           </div>
         </div>
-        <div v-else-if="msg.role !== 'tool_call'" v-memo="messageRenderMemo(msg)" :class="['message', msg.role, { error: msg.error, system: msg.system }]">
+        <div v-else-if="msg.role !== 'tool_call' && msg.kind !== 'subagent'" v-memo="messageRenderMemo(msg)" :class="['message', msg.role, { error: msg.error, system: msg.system }]">
           <div
             class="reasoning-block"
             :class="{ 'reasoning-hidden': msg.reasoningEndedAt || !(msg.reasoningChars > 0 || msg.reasoningStartedAt) }"
