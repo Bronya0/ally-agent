@@ -71,15 +71,10 @@ Public License v3. See the LICENSE file for details.
               :title="`input ${msg.runInputTokens} / output ${msg.runOutputTokens} tokens (this run)`"
             >↑{{ fmtTokens(msg.runInputTokens) }} ↓{{ fmtTokens(msg.runOutputTokens) }}</span>
             <button class="export-icon-btn" @click.stop="$emit('exportOneMsg', msg)" :title="$t('chat.export.responseTitle')" aria-label="export response">
-              <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M3 13c.8-4.8 3.6-8 9-9.5M8.5 2.5 12 3.5 11 7"/>
-              </svg>
+              <ExportOutlined />
             </button>
             <button class="export-icon-btn" @click.stop="$emit('exportAllMsgs')" :title="$t('chat.export.sessionTitle')" aria-label="export session">
-              <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M1.5 10.5C2 6.6 4.4 4.1 8.2 3M5.2 2.3l3.5.5-1 3.4"/>
-                <path d="M5.5 14c.5-3.9 2.9-6.4 6.7-7.5M9.2 5.8l3.5.5-1 3.4"/>
-              </svg>
+              <ShareAltOutlined />
             </button>
           </div>
         </div>
@@ -121,10 +116,10 @@ Public License v3. See the LICENSE file for details.
     </n-scrollbar>
     <div v-if="showJumpToBottom" class="jump-controls">
       <button class="jump-circle-btn" :title="$t('composer.question.previous')" @click="scrollToUserQuestion('up')">
-        ↑
+        <ArrowUpOutlined />
       </button>
       <button class="jump-circle-btn" @click="jumpToBottom">
-        ↓
+        <ArrowDownOutlined />
       </button>
     </div>
   </div>
@@ -141,6 +136,10 @@ import ReadGroupCard from './ReadGroupCard.vue';
 import SubagentInlineCard from './SubagentInlineCard.vue';
 import HtmlRenderCard from './HtmlRenderCard.vue';
 import RenderBoundary from './RenderBoundary.vue';
+import ExportOutlined from '@vicons/antd/ExportOutlined';
+import ShareAltOutlined from '@vicons/antd/ShareAltOutlined';
+import ArrowUpOutlined from '@vicons/antd/ArrowUpOutlined';
+import ArrowDownOutlined from '@vicons/antd/ArrowDownOutlined';
 
 defineProps({
   messages: { type: Array, required: true },
@@ -396,6 +395,22 @@ function jumpToBottom() {
   scrollToBottom({ force: true });
 }
 
+// 供父级在 tool:result 等一次性大内容（如大 diff）注入后调用：
+// 先按当前跟随状态滚到底；若一帧后 diff 仍在展开（content-visibility
+// 占位导致 scrollHeight 分帧增长）而未真正贴底，则强制再滚一次补平。
+// 仅当用户仍处于自动跟随状态时才补滚，尊重手动滚动。
+function scrollToBottomIfStale() {
+  const viewport = getScrollViewport();
+  if (!viewport) return;
+  scrollToBottom();
+  scheduleRaf(() => {
+    if (!autoFollow.value || showJumpToBottom.value) return;
+    if (viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight > bottomThreshold) {
+      scrollToBottom({ force: true });
+    }
+  });
+}
+
 function scrollToUserQuestion(direction) {
   const root = messagesRootRef.value;
   if (!root) return;
@@ -414,7 +429,7 @@ function scrollToUserQuestion(direction) {
 }
 
 
-defineExpose({ scrollbarRef, scrollToBottom, scrollToUserQuestion });
+defineExpose({ scrollbarRef, scrollToBottom, scrollToUserQuestion, scrollToBottomIfStale });
 </script>
 
 <style scoped>
@@ -594,6 +609,12 @@ defineExpose({ scrollbarRef, scrollToBottom, scrollToUserQuestion });
   border-color: rgba(255, 255, 255, 0.2);
 }
 
+.jump-circle-btn svg {
+  display: block;
+  width: 14px;
+  height: 14px;
+}
+
 .message-duration {
   display: inline-flex;
   align-items: center;
@@ -642,5 +663,7 @@ defineExpose({ scrollbarRef, scrollToBottom, scrollToUserQuestion });
 
 .export-icon-btn svg {
   display: block;
+  width: 14px;
+  height: 14px;
 }
 </style>

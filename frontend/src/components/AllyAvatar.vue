@@ -10,26 +10,50 @@ Public License v3. See the LICENSE file for details.
 <template>
   <div ref="root" class="ally-avatar" role="img" :aria-label="$t('avatar.aria')">
     <svg class="ally-eye" viewBox="0 0 164 164" aria-hidden="true">
-      <!-- Paint servers (iris/glow/vortex gradients, pupil shape, clip path)
-           are defined once in a shared <defs> injected into <body> by this
-           component; every tab's eye references the same definitions. -->
+      <!-- 欢迎页多 Tab 共享同一组渐变（inlineDefs=false）；启动页内联独立渐变
+           （inlineDefs=true），避免两个 SVG 同时引用同一 paint server 触发
+           WebKit 渲染缓存串扰（启动动画期间欢迎页瞳孔出现淡黄色块）。
+           瞳孔 clipPath 始终本地唯一，WebKit 会在 transform 动画时丢跨根引用。 -->
+      <defs v-if="inlineDefs">
+        <radialGradient :id="irisId" cx="50%" cy="50%" r="55%">
+          <stop offset="0" stop-color="#ffd896"/>
+          <stop offset="0.32" stop-color="#d49050"/>
+          <stop offset="0.7" stop-color="#6b3a18"/>
+          <stop offset="1" stop-color="#1a1208"/>
+        </radialGradient>
+        <radialGradient :id="glowId" cx="50%" cy="50%" r="54%">
+          <stop offset="0" stop-color="#e0a458" stop-opacity="0.34"/>
+          <stop offset="0.58" stop-color="#e0a458" stop-opacity="0.12"/>
+          <stop offset="1" stop-color="#e0a458" stop-opacity="0"/>
+        </radialGradient>
+        <linearGradient :id="vortexId" x1="0%" y1="0%" x2="0%" y2="100%">
+          <stop offset="0" stop-color="#fff3d6"/>
+          <stop offset="0.5" stop-color="#e0a458"/>
+          <stop offset="1" stop-color="#fff3d6"/>
+        </linearGradient>
+      </defs>
+      <defs>
+        <clipPath :id="pupilClipId">
+          <path d="M82 34 Q 71 82 82 130 Q 93 82 82 34 Z"/>
+        </clipPath>
+      </defs>
 
-      <ellipse cx="82" cy="88" rx="72" ry="62" fill="url(#ally-eye-glow)"/>
+      <ellipse cx="82" cy="88" rx="72" ry="62" :fill="`url(#${glowId}) transparent`"/>
       <ellipse cx="82" cy="140" rx="42" ry="7" fill="#000" opacity="0.25"/>
       <path class="ally-eye-shell" d="M17 82c14-28 38-43 65-43s51 15 65 43c-14 28-38 43-65 43S31 110 17 82Z"/>
-      <ellipse cx="82" cy="82" rx="47" ry="47" fill="url(#ally-eye-iris)" stroke="#f2c078" stroke-width="2.2"/>
+      <ellipse cx="82" cy="82" rx="47" ry="47" :fill="`url(#${irisId}) #d49050`" stroke="#f2c078" stroke-width="2.2"/>
       <path d="M40 69c22-21 62-22 84 0" fill="none" stroke="#fff3d6" stroke-width="2" opacity="0.34" stroke-linecap="round"/>
 
       <g class="ally-eye-pupil">
-        <use href="#ally-pupil-shape" fill="#05070a"/>
-        <g clip-path="url(#ally-eye-pupil-clip)">
+        <path d="M82 34 Q 71 82 82 130 Q 93 82 82 34 Z" fill="#05070a"/>
+        <g :clip-path="`url(#${pupilClipId})`">
           <!-- Vortex: a vertical swirl made of two opposing S-curves plus
                concentric lens-shaped rings, rotating to read as a whirlpool. -->
           <g class="ally-eye-vortex">
             <path d="M82 54 Q 88 66 82 78 Q 76 90 82 102 Q 88 114 82 126"
-                  fill="none" stroke="url(#ally-vortex-grad)" stroke-width="1.6" stroke-linecap="round" opacity="0.9"/>
+                  fill="none" :stroke="`url(#${vortexId}) #e0a458`" stroke-width="1.6" stroke-linecap="round" opacity="0.9"/>
             <path d="M82 54 Q 76 66 82 78 Q 88 90 82 102 Q 76 114 82 126"
-                  fill="none" stroke="url(#ally-vortex-grad)" stroke-width="1.2" stroke-linecap="round" opacity="0.65"/>
+                  fill="none" :stroke="`url(#${vortexId}) #e0a458`" stroke-width="1.2" stroke-linecap="round" opacity="0.65"/>
             <ellipse cx="82" cy="82" rx="3.5" ry="24" fill="none" stroke="#fff3d6" stroke-width="0.9" opacity="0.55"/>
           </g>
           <g class="ally-eye-vortex ally-eye-vortex-slow">
@@ -54,15 +78,27 @@ Public License v3. See the LICENSE file for details.
 </template>
 
 <script setup>
-import { ref, onMounted, onBeforeUnmount } from 'vue';
+import { ref, onMounted, onBeforeUnmount, useId } from 'vue';
 import { isZh } from '../i18n.mjs';
 import { EYE_STYLES } from '../data/eyeLines.mjs';
 
-// 所有实例共享一份 SVG paint server(<defs>):每个 workspace tab 的欢迎消息
-// 都常驻 DOM(v-show),逐实例复制渐变/clipPath 会重复创建节点。共享定义注入
-// 到 body 顶层(0 尺寸、absolute、不占布局、永远在渲染树里),避免藏在隐藏
-// 面板里的定义导致 paint server 引用失效 — 这正是之前第二个 tab 虹膜变黑
-// 的原因。引用计数管理生命周期:最后一个实例卸载时才移除。
+const props = defineProps({
+  // 启动页单实例用内联渐变（唯一 ID，自带资源），与欢迎页共享渐变互不干扰；
+  // 欢迎页多 Tab 保持共享（默认 inlineDefs=false），不逐实例复制渐变节点。
+  inlineDefs: { type: Boolean, default: false },
+});
+
+const uid = useId().replace(/:/g, '-');
+const pupilClipId = `ally-eye-pupil-clip-${uid}`;
+const irisId = props.inlineDefs ? `ally-eye-iris-${uid}` : 'ally-eye-iris';
+const glowId = props.inlineDefs ? `ally-eye-glow-${uid}` : 'ally-eye-glow';
+const vortexId = props.inlineDefs ? `ally-vortex-grad-${uid}` : 'ally-vortex-grad';
+
+// 所有欢迎页实例共享一份 SVG paint server(<defs>):每个 workspace tab 的欢迎消息
+// 都常驻 DOM(v-show),逐实例复制渐变会重复创建节点。共享定义注入
+// 到 body 顶层并放到视口外。资源宿主保留 1x1 viewport，避免 WebKit 在启动
+// 动画结束后丢弃 0x0 SVG 的 paint server；各 url() 还带颜色 fallback，资源短暂
+// 失效时虹膜也不会变黑。引用计数管理生命周期:最后一个实例卸载时才移除。
 let sharedDefs = null;
 let sharedDefsRefs = 0;
 
@@ -84,18 +120,20 @@ const DEFS_MARKUP =
   '<stop offset="0.5" stop-color="#e0a458"/>' +
   '<stop offset="1" stop-color="#fff3d6"/>' +
   '</linearGradient>' +
-  '<path id="ally-pupil-shape" d="M82 34 Q 71 82 82 130 Q 93 82 82 34 Z"/>' +
-  '<clipPath id="ally-eye-pupil-clip"><use href="#ally-pupil-shape"/></clipPath>' +
   '</defs>';
 
 function acquireSharedDefs() {
   sharedDefsRefs++;
   if (sharedDefs && document.body.contains(sharedDefs)) return;
   sharedDefs = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  sharedDefs.setAttribute('width', '0');
-  sharedDefs.setAttribute('height', '0');
+  sharedDefs.setAttribute('width', '1');
+  sharedDefs.setAttribute('height', '1');
   sharedDefs.setAttribute('aria-hidden', 'true');
-  sharedDefs.style.position = 'absolute';
+  sharedDefs.setAttribute('focusable', 'false');
+  sharedDefs.style.position = 'fixed';
+  sharedDefs.style.left = '-2px';
+  sharedDefs.style.top = '-2px';
+  sharedDefs.style.pointerEvents = 'none';
   sharedDefs.style.overflow = 'hidden';
   sharedDefs.innerHTML = DEFS_MARKUP;
   document.body.appendChild(sharedDefs);
@@ -185,7 +223,7 @@ function setPaused(paused) {
 }
 
 onMounted(() => {
-  acquireSharedDefs();
+  if (!props.inlineDefs) acquireSharedDefs();
   if (typeof IntersectionObserver !== 'undefined' && root.value) {
     observer = new IntersectionObserver(
       (entries) => {
@@ -207,7 +245,7 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
-  releaseSharedDefs();
+  if (!props.inlineDefs) releaseSharedDefs();
   if (observer) observer.disconnect();
   if (visibilityHandler) document.removeEventListener('visibilitychange', visibilityHandler);
   clearTimeout(speechTimer);

@@ -43,18 +43,14 @@ Public License v3. See the LICENSE file for details.
             <span v-if="tab.isRunning" class="tab-running-dot" :aria-label="$t('header.running')"></span>
             <span class="tab-label">{{ tab.label }}</span>
             <button type="button" class="tab-close" :title="$t('header.close')" :aria-label="$t('header.close')" @click.stop="$emit('closeWorkspace', tab.id)">
-              <svg class="tab-close-icon" width="14" height="14" viewBox="0 0 14 14" fill="currentColor" aria-hidden="true">
-                <path d="M3.383 4.617 4.617 3.383 7 5.766l2.383-2.383 1.234 1.234L8.234 7l2.383 2.383-1.234 1.234L7 8.234l-2.383 2.383-1.234-1.234L5.766 7 3.383 4.617Z" />
-              </svg>
+              <CloseOutlined class="tab-close-icon" />
             </button>
           </n-tab>
         </n-tabs>
       </div>
       <div class="header-tabs-actions">
         <n-button class="header-icon-button tabs-action-button" size="small" quaternary @click="$emit('addWorkspace')" :title="$t('header.addWorkspace')" :aria-label="$t('header.addWorkspace')">
-          <svg class="header-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
-            <path d="M12 5v14M5 12h14" />
-          </svg>
+          <PlusOutlined class="header-icon" />
         </n-button>
         <n-dropdown
           trigger="click"
@@ -64,23 +60,14 @@ Public License v3. See the LICENSE file for details.
           @select="onHistorySelect"
         >
           <n-button class="header-icon-button tabs-action-button" size="small" quaternary :title="$t('header.workspaceHistory')" :aria-label="$t('header.workspaceHistory')">
-            <svg class="header-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M3 12a9 9 0 1 0 3-6.7" />
-              <path d="M3 4v5h5" />
-              <path d="M12 7v5l3 2" />
-            </svg>
+            <HistoryOutlined class="header-icon" />
           </n-button>
         </n-dropdown>
       </div>
     </div>
     <div class="header-actions">
       <n-button class="header-icon-button" size="small" quaternary @click="onOpenTokenStats" :title="$t('header.tokenStats')" :aria-label="$t('header.tokenStats')">
-        <svg class="header-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
-          <path d="M3 3v18h18" />
-          <path d="M7 14v4" />
-          <path d="M12 9v9" />
-          <path d="M17 5v13" />
-        </svg>
+        <BarChartOutlined class="header-icon" />
       </n-button>
       <n-button
         :class="['header-icon-button', 'repository-button', { 'update-available': updateAvailable }]"
@@ -90,41 +77,23 @@ Public License v3. See the LICENSE file for details.
         :aria-label="updateAvailable ? $t('header.updateAria') : $t('header.githubAria')"
         @click="onRepositoryClick"
       >
-        <svg v-if="updateAvailable" class="header-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <circle cx="12" cy="12" r="9" />
-          <path d="M12 16V8" />
-          <path d="m8.5 11.5 3.5-3.5 3.5 3.5" />
-        </svg>
-        <svg v-else class="header-icon github-icon" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-          <path d="M12 .7a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2.23c-3.22.7-3.9-1.37-3.9-1.37-.52-1.34-1.28-1.69-1.28-1.69-1.05-.72.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.71 1.26 3.37.96.1-.75.4-1.26.73-1.55-2.57-.29-5.27-1.29-5.27-5.68 0-1.26.45-2.28 1.19-3.09-.12-.29-.52-1.47.11-3.05 0 0 .97-.31 3.16 1.18a10.94 10.94 0 0 1 5.76 0c2.2-1.49 3.16-1.18 3.16-1.18.63 1.58.23 2.76.11 3.05.74.81 1.19 1.83 1.19 3.09 0 4.4-2.71 5.38-5.29 5.67.42.36.79 1.07.79 2.16v3.21c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .7Z" />
-        </svg>
+        <DownloadOutlined v-if="updateAvailable" class="header-icon" />
+        <GithubOutlined v-else class="header-icon github-icon" />
       </n-button>
       <n-button class="header-icon-button" size="small" quaternary @click="onOpenSettings" :title="$t('header.settings')" :aria-label="$t('header.settings')">
-        <svg class="header-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <circle cx="12" cy="12" r="3"/>
-          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
-        </svg>
+        <SettingOutlined class="header-icon" />
       </n-button>
     </div>
     <div class="window-controls">
       <button class="window-control-btn" @click="$emit('minimise')" :title="$t('header.minimize')" :aria-label="$t('header.minimize')">
-        <svg class="window-icon" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true">
-          <path d="M4 8h8" />
-        </svg>
+        <MinusOutlined class="window-icon" />
       </button>
       <button class="window-control-btn" @click="toggleMaximise" :title="isMaximised ? $t('header.restore') : $t('header.maximize')" :aria-label="isMaximised ? $t('header.restore') : $t('header.maximize')">
-        <svg v-if="isMaximised" class="window-icon" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.35" aria-hidden="true">
-          <rect x="5" y="2" width="9" height="9" rx="1"/>
-          <rect x="2" y="5" width="9" height="9" rx="1"/>
-        </svg>
-        <svg v-else class="window-icon" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.35" aria-hidden="true">
-          <rect x="3" y="3" width="10" height="10" rx="1.5"/>
-        </svg>
+        <SwitcherOutlined v-if="isMaximised" class="window-icon" />
+        <BorderOutlined v-else class="window-icon" />
       </button>
       <button class="window-control-btn close" @click="$emit('closeWindow')" :title="$t('header.close')" :aria-label="$t('header.close')">
-        <svg class="window-icon window-close-icon" width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-          <path d="M3.864 5.136 5.136 3.864 8 6.727l2.864-2.863 1.272 1.272L9.273 8l2.863 2.864-1.272 1.272L8 9.273l-2.864 2.863-1.272-1.272L6.727 8 3.864 5.136Z"/>
-        </svg>
+        <CloseOutlined class="window-icon window-close-icon" />
       </button>
     </div>
   </n-layout-header>
@@ -134,6 +103,16 @@ Public License v3. See the LICENSE file for details.
 import { computed, h, ref } from 'vue';
 import { NDropdown } from 'naive-ui';
 import AllyWordmark from './AllyWordmark.vue';
+import PlusOutlined from '@vicons/antd/PlusOutlined';
+import HistoryOutlined from '@vicons/antd/HistoryOutlined';
+import BarChartOutlined from '@vicons/antd/BarChartOutlined';
+import DownloadOutlined from '@vicons/antd/DownloadOutlined';
+import GithubOutlined from '@vicons/antd/GithubOutlined';
+import SettingOutlined from '@vicons/antd/SettingOutlined';
+import CloseOutlined from '@vicons/antd/CloseOutlined';
+import MinusOutlined from '@vicons/antd/MinusOutlined';
+import BorderOutlined from '@vicons/antd/BorderOutlined';
+import SwitcherOutlined from '@vicons/antd/SwitcherOutlined';
 
 const props = defineProps({
   workspaceTabs: { type: Array, required: true },
@@ -404,6 +383,13 @@ function historyMenuProps() {
 .tab-close-icon {
   display: block;
   flex: none;
+  width: 16px;
+  height: 16px;
+}
+
+.tab-close-icon {
+  width: 14px;
+  height: 14px;
 }
 
 .github-icon {
@@ -564,7 +550,6 @@ body.platform-darwin .brand-wordmark {
 body.platform-darwin .window-close-icon {
   width: 18px;
   height: 18px;
-  stroke-width: 2.3;
 }
 
 .window-control-btn:hover {

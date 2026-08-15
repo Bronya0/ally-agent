@@ -447,7 +447,9 @@ Public License v3. See the LICENSE file for details.
                   { label: $t('settings.mcpTransportStreamableHttp'), value: 'streamable-http' },
                 ]" size="small" class="mcp-transport-select" />
                 <n-switch v-model:value="srv.enabled" size="small" />
-                <n-button size="small" quaternary type="error" @click="removeMcpServer(idx)">✕</n-button>
+                <n-button size="small" quaternary type="error" @click="removeMcpServer(idx)">
+                  <template #icon><CloseOutlined /></template>
+                </n-button>
               </div>
               <!-- stdio fields -->
               <template v-if="srv.transport === 'stdio'">
@@ -581,11 +583,12 @@ Public License v3. See the LICENSE file for details.
                 :title="$t('settings.apiKeyRemove')"
                 @click="removeModelApiKey(ki)"
               >
-                ×
+                <template #icon><CloseOutlined /></template>
               </n-button>
             </div>
             <n-button size="small" dashed class="api-key-add" @click="addModelApiKey">
-              + {{ $t('settings.apiKeyAdd') }}
+              <template #icon><PlusOutlined /></template>
+              {{ $t('settings.apiKeyAdd') }}
             </n-button>
             <div class="api-key-hint">{{ $t('settings.apiKeysHint') }}</div>
           </div>
@@ -657,6 +660,8 @@ import { createDiscreteApi, darkTheme } from 'naive-ui';
 import { naiveDateLocale, naiveLocale, reasoningEffortLabel, t } from '../i18n.mjs';
 import { buildModelConfigExport, mergeModelConfigs, modelConfigIdentity, normalizeApiKeysArray, normalizeReasoningEffort, parseModelConfigImport, reasoningEffortLevels } from '../utils/modelConfigIO.mjs';
 import { saveTextFile } from '../utils/download.mjs';
+import CloseOutlined from '@vicons/antd/CloseOutlined';
+import PlusOutlined from '@vicons/antd/PlusOutlined';
 import {
   CUSTOM_PROVIDER_ID,
   applyCatalogPreset,

@@ -13,7 +13,7 @@ Public License v3. See the LICENSE file for details.
     <div class="splash-stage">
       <div class="splash-eye-wrap">
         <div class="splash-eye-glow"></div>
-        <AllyAvatar />
+        <AllyAvatar inline-defs />
       </div>
       <div class="splash-wordmark-row">
         <div class="splash-wordmark" aria-hidden="true">Ally</div>

@@ -138,13 +138,13 @@ Public License v3. See the LICENSE file for details.
                         @mousedown.stop.prevent
                         @click.stop="deleteSession(index)"
                       >
-                        ×
+                        <CloseOutlined />
                       </button>
                     </div>
                   </div>
                 </div>
                 <div v-if="retryBanner" class="composer-retry-banner" :title="retryBanner.error">
-                  <span class="composer-retry-icon" aria-hidden="true">↻</span>
+                  <ReloadOutlined class="composer-retry-icon" aria-hidden="true" />
                   <span class="composer-retry-text">{{ $t('app.run.retryBanner', { attempt: retryBanner.attempt, max: retryBanner.maxAttempts, error: retryBanner.error }) }}</span>
                   <span v-if="retryBanner.totalKeys > 1" class="composer-retry-key">{{ $t('app.run.retryKey', { key: retryBanner.keyIndex + 1, total: retryBanner.totalKeys }) }}</span>
                 </div>
@@ -203,7 +203,7 @@ Public License v3. See the LICENSE file for details.
                     <span class="pending-attachment-icon">{{ attachmentIcon(att) }}</span>
                     <span class="pending-attachment-name" :title="att.name">{{ att.name }}</span>
                     <span class="pending-attachment-size">{{ fmtBytes(att.size) }}</span>
-                    <button class="pending-attachment-remove" @click="removeAttachment(att.id)" :title="$t('app.attachment.remove')">×</button>
+                    <button class="pending-attachment-remove" @click="removeAttachment(att.id)" :title="$t('app.attachment.remove')"><CloseOutlined /></button>
                   </div>
                 </div>
                 <input ref="attachmentInputRef" type="file" multiple class="hidden-file-input" @change="handleAttachmentSelected" />
@@ -397,6 +397,8 @@ import {
   GetBackgroundImageURL,
 } from '../bindings/ally-dev/internal/app/app';
 import { Application, Browser, Events, Window } from '@wailsio/runtime';
+import CloseOutlined from '@vicons/antd/CloseOutlined';
+import ReloadOutlined from '@vicons/antd/ReloadOutlined';
 import AllyWordmark from './components/AllyWordmark.vue';
 import ComposerInfoBar from './components/ComposerInfoBar.vue';
 import MessageAttachments from './components/MessageAttachments.vue';
@@ -2277,7 +2279,7 @@ const historyOptions = computed(() => {
           class: 'hist-del',
           title: t('app.history.remove'),
           onClick: (e) => { e.stopPropagation(); removeFromHistory(path); },
-        }, '×'),
+        }, () => h(CloseOutlined)),
       ]),
       key: path,
     };
@@ -3420,8 +3422,9 @@ function bindRuntimeEvents() {
     }
     // 详情已写入卡片（status/body/diff 等）。flushToolUpdateBuffer 的
     // alignToLastToolCard 只保证卡片头部可见，详情可能仍在折叠线下，
-    // 这里滚动到容器真实底部让最新结果完整露出。
-    if (session.id === activeSessionId.value) scrollMessagesToBottom();
+    // 这里滚动到容器真实底部让最新结果完整露出。大 diff（Edit）渲染
+    // 跨帧展开，首帧可能未达真实底部，由组件内补一次复查滚底。
+    if (session.id === activeSessionId.value) scrollMessagesToBottomIfStale();
   });
   onRuntimeEvent('tool:error', (data) => {
     flushStreamBuffer(data.runId);
@@ -3899,6 +3902,12 @@ function conversationMessagesForSession(sessionId) {
 
 function scrollMessagesToBottom(options = {}, sessionId = activeSessionId.value) {
   nextTick(() => conversationMessagesForSession(sessionId)?.scrollToBottom(options));
+}
+
+// 大内容（如大 diff）一次性注入后的滚底 + 一帧复查：diff 跨帧展开时
+// 首帧可能未贴底，组件内会再补一次（仍尊重自动跟随状态）。
+function scrollMessagesToBottomIfStale(sessionId = activeSessionId.value) {
+  nextTick(() => conversationMessagesForSession(sessionId)?.scrollToBottomIfStale());
 }
 
 function focusedToolIdForSession(sessionId) {

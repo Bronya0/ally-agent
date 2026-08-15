@@ -535,6 +535,11 @@ code, pre {
   line-height: 1;
 }
 
+.pending-attachment-remove svg {
+  width: 14px;
+  height: 14px;
+}
+
 .pending-attachment-remove:hover,
 .composer-icon-btn:hover {
   color: #f5f5f5;
@@ -544,20 +549,20 @@ code, pre {
 .composer-icon-btn {
   width: 20px;
   height: 20px;
-  /* 光学居中:符号字形无下伸,墨水偏上,用不对称 padding 向下补偿 1px */
-  padding: 2px 0 0;
+  padding: 0;
   border-radius: 5px;
   flex-shrink: 0;
-  font-size: 14px;
-  line-height: 20px;
 }
 
-.composer-new-session-btn {
-  font-size: 16px;
-  font-weight: 600;
-  line-height: 20px;
-  /* + 是位于数学轴的对称符号,不需要为普通文本字形设计的向下补偿 */
-  padding: 0;
+.composer-icon-btn svg {
+  width: 14px;
+  height: 14px;
+  display: block;
+}
+
+.composer-new-session-btn svg {
+  width: 16px;
+  height: 16px;
 }
 
 /* ── Composer info footer ── */
@@ -650,7 +655,8 @@ code, pre {
 
 .composer-retry-icon {
   display: inline-block;
-  font-size: var(--ally-sub-font-size);
+  width: 14px;
+  height: 14px;
   line-height: 1;
   animation: composer-retry-spin 1.4s linear infinite;
   flex-shrink: 0;
@@ -747,8 +753,6 @@ code, pre {
   padding: 0 4px;
   gap: 3px;
   border-radius: 5px;
-  font-size: 12px;
-  line-height: 1;
   color: #6a6a6a;
   flex-shrink: 0;
 }
@@ -766,10 +770,7 @@ code, pre {
 }
 
 .composer-info .extra-roots-icon {
-  font-size: 14px;
-  line-height: 1;
-  /* ⊞ (U+229E) 在紧凑 line-box 下视觉中心偏下,向上微调 1px 与行内其他元素对齐 */
-  transform: translateY(-1px);
+  display: block;
 }
 
 .composer-info .extra-roots-count {
@@ -851,16 +852,23 @@ code, pre {
 
 .extra-roots-remove {
   flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 18px;
   height: 18px;
   border: 0;
   border-radius: 4px;
   background: transparent;
   color: #8a8a8a;
-  font-size: 14px;
-  line-height: 1;
   cursor: pointer;
   --wails-draggable: no-drag;
+}
+
+.extra-roots-remove svg {
+  width: 12px;
+  height: 12px;
+  display: block;
 }
 
 .extra-roots-remove:hover {
@@ -951,8 +959,9 @@ code, pre {
 }
 
 .composer-info .scheduled-task-icon {
-  font-size: 14px;
-  line-height: 1;
+  display: block;
+  width: 14px;
+  height: 14px;
 }
 
 .composer-info .info-export {
@@ -1352,6 +1361,10 @@ code, pre {
   cursor: pointer;
   transition: background 0.1s, color 0.1s;
 }
+.hist-del svg {
+  width: 14px;
+  height: 14px;
+}
 .hist-del:hover {
   background: rgba(255, 255, 255, 0.12);
   color: #f5f5f5;
@@ -1465,6 +1478,9 @@ code, pre {
 }
 
 .session-delete {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 22px;
   height: 22px;
   padding: 0;
@@ -1475,6 +1491,11 @@ code, pre {
   cursor: pointer;
   opacity: 0;
   --wails-draggable: no-drag;
+}
+
+.session-delete svg {
+  width: 14px;
+  height: 14px;
 }
 
 .session-item:hover .session-delete,

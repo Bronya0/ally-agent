@@ -15,14 +15,14 @@ Public License v3. See the LICENSE file for details.
       :title="$t('app.sessions.newSession')"
       :aria-label="$t('app.sessions.newSession')"
       @click.stop="$emit('newSession')"
-    >+</button>
+    ><PlusOutlined /></button>
     <button
       type="button"
       class="composer-icon-btn composer-sessions-btn"
       :title="$t('commands.sessions')"
       :aria-label="$t('commands.sessions')"
       @click.stop="$emit('showSessions')"
-    >☰</button>
+    ><MenuOutlined /></button>
     <n-dropdown
       trigger="click"
       placement="top-start"
@@ -66,7 +66,7 @@ Public License v3. See the LICENSE file for details.
             :aria-label="$t('extraRoots.button.title')"
             @click.stop
           >
-            <span class="extra-roots-icon">⊞</span>
+            <FolderAddOutlined class="extra-roots-icon" />
             <span v-if="extraRoots.length > 0" class="extra-roots-count">{{ extraRoots.length }}</span>
           </button>
         </template>
@@ -86,7 +86,7 @@ Public License v3. See the LICENSE file for details.
                 class="extra-roots-remove"
                 :title="$t('extraRoots.panel.remove')"
                 @click.stop="$emit('removeExtraRoot', root)"
-              >×</button>
+              ><CloseOutlined /></button>
             </li>
           </ul>
           <button
@@ -103,7 +103,7 @@ Public License v3. See the LICENSE file for details.
       :title="$t('composer.taskCenter.open')"
       @click.stop="$emit('openTaskCenter')"
     >
-      <span class="scheduled-task-icon">▤</span>
+      <AppstoreOutlined class="scheduled-task-icon" />
       <span>{{ taskCenterCount }}</span>
     </button>
     <template v-if="gitStatus.isRepo">
@@ -195,6 +195,11 @@ Public License v3. See the LICENSE file for details.
 <script setup>
 import { computed, h, ref } from 'vue';
 import ContextUsageInline from './ContextUsageInline.vue';
+import PlusOutlined from '@vicons/antd/PlusOutlined';
+import MenuOutlined from '@vicons/antd/MenuOutlined';
+import FolderAddOutlined from '@vicons/antd/FolderAddOutlined';
+import AppstoreOutlined from '@vicons/antd/AppstoreOutlined';
+import CloseOutlined from '@vicons/antd/CloseOutlined';
 import { formatDateTime, reasoningEffortLabel, t } from '../i18n.mjs';
 import { modelConfigIdentity, reasoningEffortLevels } from '../utils/modelConfigIO.mjs';
 import { saveTextFile } from '../utils/download.mjs';
