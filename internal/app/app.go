@@ -989,6 +989,13 @@ type EditResult struct {
 	Warnings          []string `json:"warnings,omitempty"`
 	Classification    string   `json:"classification,omitempty"`
 	ChangedLinesBlock string   `json:"changedLinesBlock,omitempty"`
+	// Created is set only by create: true when the file did not exist before,
+	// false when an existing file was overwritten. nil for non-create tools.
+	Created *bool `json:"created,omitempty"`
+	// CreatedDirs lists parent directories newly created by this call (outermost
+	// first, workspace-relative when inside the primary workspace), only when
+	// non-empty.
+	CreatedDirs []string `json:"createdDirs,omitempty"`
 }
 
 // EditRequest is the backend edit engine request. The model-facing edit tool

@@ -6597,7 +6597,7 @@ function formatToolChip(name, result) {
       });
       return '\u00B7 ' + lines.join('  ');
     }
-    // grep: · N hits (in M lines) · F files
+    // grep: · N hits in F files
     if (name === 'grep' && parsed.data) {
       const d = parsed.data;
       const hits = Number(d.hits || 0);
@@ -6605,12 +6605,10 @@ function formatToolChip(name, result) {
       const files = Number(d.files || 0);
       let chip = '';
       if (hits > 0) {
-        chip = '\u00B7 ' + hits + ' hit' + (hits > 1 ? 's' : '');
-        if (lines > 0 && lines !== hits) chip += ' in ' + lines + ' line' + (lines > 1 ? 's' : '');
+        chip = '\u00B7 ' + hits + ' hit' + (hits > 1 ? 's' : '') + ' in ' + files + ' file' + (files > 1 ? 's' : '');
       } else if (lines > 0) {
         chip = '\u00B7 ' + lines + ' match' + (lines > 1 ? 'es' : '');
       }
-      if (files > 0) chip += ' \u00B7 ' + files + ' file' + (files > 1 ? 's' : '');
       if (d.truncated) chip += ' \u00B7 truncated';
       return chip;
     }

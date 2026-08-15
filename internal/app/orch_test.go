@@ -997,6 +997,86 @@ func TestCreateFileCreatesParentAutomatically(t *testing.T) {
 	}
 }
 
+func TestCreateFileReportsCreatedAndCreatedDirs(t *testing.T) {
+	root := t.TempDir()
+	app := NewApp()
+	cfg := ConfigState{Workspace: root}
+
+	// New file with missing parents: created=true, dirs reported outermost first.
+	result, err := app.createFileWithConfig(cfg, CreateFileRequest{
+		Path:    "nested/a/b.txt",
+		Content: "hello\n",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Created == nil || !*result.Created {
+		t.Fatalf("expected created=true, got %v", result.Created)
+	}
+	want := []string{"nested", "nested/a"}
+	if !reflect.DeepEqual(result.CreatedDirs, want) {
+		t.Fatalf("expected createdDirs=%v, got %v", want, result.CreatedDirs)
+	}
+	if !strings.Contains(result.Summary, "created") {
+		t.Fatalf("expected created summary, got %q", result.Summary)
+	}
+
+	// Overwrite of an existing file: created=false, no createdDirs.
+	result, err = app.createFileWithConfig(cfg, CreateFileRequest{
+		Path:      "nested/a/b.txt",
+		Content:   "bye\n",
+		Overwrite: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Created == nil || *result.Created {
+		t.Fatalf("expected created=false, got %v", result.Created)
+	}
+	if len(result.CreatedDirs) != 0 {
+		t.Fatalf("expected no createdDirs on overwrite, got %v", result.CreatedDirs)
+	}
+
+	// Create into an existing directory: created=true but no createdDirs.
+	result, err = app.createFileWithConfig(cfg, CreateFileRequest{
+		Path:    "nested/a/c.txt",
+		Content: "hi\n",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Created == nil || !*result.Created {
+		t.Fatalf("expected created=true, got %v", result.Created)
+	}
+	if len(result.CreatedDirs) != 0 {
+		t.Fatalf("expected no createdDirs when parents exist, got %v", result.CreatedDirs)
+	}
+}
+
+// TestCreateCompactResultCarriesCreatedFields verifies the model-facing
+// compact result keeps the new create fields.
+func TestCreateCompactResultCarriesCreatedFields(t *testing.T) {
+	root := t.TempDir()
+	app := NewApp()
+
+	result, err := app.createFileWithConfig(ConfigState{Workspace: root}, CreateFileRequest{
+		Path:    "a/b.txt",
+		Content: "x\n",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr := toolResult{OK: true, Data: result}
+	full, _ := json.Marshal(tr)
+	compact := compactToolResultForModel("create", tr, string(full))
+	if !strings.Contains(compact, `"created":true`) {
+		t.Fatalf("expected compact create result to carry created=true, got %s", compact)
+	}
+	if !strings.Contains(compact, `"createdDirs":["a"]`) {
+		t.Fatalf("expected compact create result to carry createdDirs, got %s", compact)
+	}
+}
+
 func TestCreateFileRefusesNonTextOverwrite(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "binary.dat")

@@ -185,7 +185,15 @@ def op_write(root, payload):
                 raise ValueError("path is a directory")
             original_mode = existing_st.st_mode & 0o7777
     parent = path.parent
+    created_dirs = []
     if mkdirs:
+        # 统计实际缺失的父目录链（外层→内层，相对 root），供调用方展示；
+        # 必须在 mkdir 之前探测，mkdir 失败时整个 op 报错、列表无意义。
+        cur = parent
+        while not cur.exists():
+            created_dirs.append(as_posix_rel(root, cur))
+            cur = cur.parent
+        created_dirs.reverse()
         parent.mkdir(parents=True, exist_ok=True)
     elif not parent.exists():
         raise FileNotFoundError(str(parent))
@@ -243,7 +251,7 @@ def op_write(root, payload):
             except OSError:
                 pass
     st = path.stat()
-    return {"path": as_posix_rel(root, path), "size": st.st_size, "mode": st.st_mode & 0o7777, "modTime": iso_mtime(st)}
+    return {"path": as_posix_rel(root, path), "size": st.st_size, "mode": st.st_mode & 0o7777, "modTime": iso_mtime(st), "createdDirs": created_dirs}
 
 def op_delete(root, payload):
     path = safe_join(root, payload.get("path", ""))
@@ -713,17 +721,24 @@ func (a *App) remoteReadRaw(ctx context.Context, target, relPath string) (remote
 	return rt, file, nil
 }
 
-func (a *App) remoteWriteRaw(ctx context.Context, rt remoteTarget, relPath string, data []byte, overwrite, mkdirs bool) error {
+func (a *App) remoteWriteRaw(ctx context.Context, rt remoteTarget, relPath string, data []byte, overwrite, mkdirs bool) ([]string, error) {
 	cleanPath, err := validateRemoteRelativePath(relPath, false)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return a.invokeRemotePython(ctx, rt, remotePayload(rt, "write", map[string]any{
+	var outcome struct {
+		CreatedDirs []string `json:"createdDirs"`
+	}
+	err = a.invokeRemotePython(ctx, rt, remotePayload(rt, "write", map[string]any{
 		"path":       cleanPath,
 		"dataBase64": base64.StdEncoding.EncodeToString(data),
 		"overwrite":  overwrite,
 		"mkdirs":     mkdirs,
-	}), 60*time.Second, nil)
+	}), 60*time.Second, &outcome)
+	if err != nil {
+		return nil, err
+	}
+	return outcome.CreatedDirs, nil
 }
 
 func (a *App) remoteListFiles(ctx context.Context, req RemoteListFilesRequest) (ListFilesResult, error) {
@@ -805,7 +820,7 @@ func (a *App) remoteEdit(ctx context.Context, req RemoteEditRequest) (MultiEditR
 		rt, original, err := a.remoteReadRaw(ctx, req.Target, file.Path)
 		if err != nil {
 			for i := len(backups) - 1; i >= 0; i-- {
-				if rbErr := a.remoteWriteRaw(ctx, backups[i].rt, backups[i].path, backups[i].data, true, true); rbErr != nil {
+				if _, rbErr := a.remoteWriteRaw(ctx, backups[i].rt, backups[i].path, backups[i].data, true, true); rbErr != nil {
 					rollbackErrors = append(rollbackErrors, fmt.Sprintf("%s: %v", backups[i].path, rbErr))
 				}
 			}
@@ -817,7 +832,7 @@ func (a *App) remoteEdit(ctx context.Context, req RemoteEditRequest) (MultiEditR
 		edited, err := a.remoteEditOne(ctx, rt, file, original)
 		if err != nil {
 			for i := len(backups) - 1; i >= 0; i-- {
-				if rbErr := a.remoteWriteRaw(ctx, backups[i].rt, backups[i].path, backups[i].data, true, true); rbErr != nil {
+				if _, rbErr := a.remoteWriteRaw(ctx, backups[i].rt, backups[i].path, backups[i].data, true, true); rbErr != nil {
 					rollbackErrors = append(rollbackErrors, fmt.Sprintf("%s: %v", backups[i].path, rbErr))
 				}
 			}
@@ -852,7 +867,7 @@ func (a *App) remoteEditOne(ctx context.Context, rt remoteTarget, req FileTextEd
 	if bytes.Equal(file.Data, after) {
 		return EditResult{}, codedToolError("E_NOOP", errors.New("edit produced no content changes"))
 	}
-	if err := a.remoteWriteRaw(ctx, rt, req.Path, after, true, true); err != nil {
+	if _, err := a.remoteWriteRaw(ctx, rt, req.Path, after, true, true); err != nil {
 		return EditResult{}, err
 	}
 	diff := edit.GenerateEditDiffPreview(text, result.Content, maxToolOutput)
@@ -902,16 +917,28 @@ func (a *App) remoteCreateFile(ctx context.Context, req RemoteCreateFileRequest)
 	before := []byte{}
 	beforeHash := ""
 	beforeVersion := ""
+	exists := false
 	if _, existing, readErr := a.remoteReadRaw(ctx, req.Target, cleanPath); readErr == nil {
+		exists = true
 		before = existing.Data
 		beforeHash, beforeVersion = hashBytesAndVersion(existing.Data)
 	}
 	content, ending, hadBOM := normalizeText([]byte(req.Content))
 	encoded := encodeText(content, ending, hadBOM)
-	if err := a.remoteWriteRaw(ctx, rt, cleanPath, encoded, req.Overwrite, true); err != nil {
+	createdDirs, err := a.remoteWriteRaw(ctx, rt, cleanPath, encoded, req.Overwrite, true)
+	if err != nil {
 		return EditResult{}, err
 	}
-	return makeEditResult(cleanPath, beforeHash, beforeVersion, before, encoded, ending, 1, string(before), content), nil
+	result := makeEditResult(cleanPath, beforeHash, beforeVersion, before, encoded, ending, 1, string(before), content)
+	created := !exists
+	result.Created = &created
+	if len(createdDirs) > 0 {
+		result.CreatedDirs = createdDirs
+	}
+	if created {
+		result.Summary = fmt.Sprintf("%s created: %d bytes", filepath.ToSlash(req.Path), len(encoded))
+	}
+	return result, nil
 }
 
 func (a *App) remoteDeletePath(ctx context.Context, req RemoteDeletePathRequest) (map[string]any, error) {

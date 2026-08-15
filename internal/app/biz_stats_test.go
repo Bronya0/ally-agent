@@ -19,20 +19,30 @@ import (
 
 func TestGetTokenStatsAggregatesDashboard(t *testing.T) {
 	app := NewApp()
+	// 记录时间必须落在 [今天午夜, 现在] 内：午夜边界（00:00–00:20）运行时
+	// -10min/-20min 会跨到昨天，而未来时间戳会被 GetTokenStats 的时间窗
+	// （上限为真实 now）排除。clamp 到午夜开始处保证三条记录始终算入今日。
 	now := time.Now()
+	midnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	clamp := func(t time.Time) time.Time {
+		if t.Before(midnight) {
+			return midnight
+		}
+		return t
+	}
 
 	records := []statsRecord{
 		{
 			Model: "gpt-5", Workspace: "/workspace/a",
-			Ts: now.UnixMilli(), InputTokens: 1000, OutputTokens: 200, CacheHitTokens: 600, CacheMissTokens: 400, Requests: 1,
+			Ts: clamp(now).UnixMilli(), InputTokens: 1000, OutputTokens: 200, CacheHitTokens: 600, CacheMissTokens: 400, Requests: 1,
 		},
 		{
 			Model: "gpt-5", Workspace: "/workspace/a",
-			Ts: now.Add(-10 * time.Minute).UnixMilli(), InputTokens: 500, OutputTokens: 100, CacheHitTokens: 200, CacheMissTokens: 300, Requests: 1,
+			Ts: clamp(now.Add(-10 * time.Minute)).UnixMilli(), InputTokens: 500, OutputTokens: 100, CacheHitTokens: 200, CacheMissTokens: 300, Requests: 1,
 		},
 		{
 			Model: "claude", Workspace: "/workspace/b",
-			Ts: now.Add(-20 * time.Minute).UnixMilli(), InputTokens: 300, OutputTokens: 50, CacheHitTokens: 0, CacheMissTokens: 300, Requests: 1,
+			Ts: clamp(now.Add(-20 * time.Minute)).UnixMilli(), InputTokens: 300, OutputTokens: 50, CacheHitTokens: 0, CacheMissTokens: 300, Requests: 1,
 		},
 	}
 	for _, record := range records {

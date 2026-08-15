@@ -40,6 +40,10 @@ func (a *App) createFileWithConfig(cfg ConfigState, req CreateFileRequest) (Edit
 	if err != nil {
 		return EditResult{}, err
 	}
+	// Record which parent directories MkdirAll actually needs to create so the
+	// result can report them without a follow-up list_files. The walk must run
+	// before MkdirAll, while the missing ancestors still exist as such.
+	createdDirs := newlyCreatedDirs(filepath.Dir(path))
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return EditResult{}, err
 	}
@@ -52,7 +56,9 @@ func (a *App) createFileWithConfig(cfg ConfigState, req CreateFileRequest) (Edit
 	beforeHash := ""
 	beforeVersion := ""
 	perm := os.FileMode(0o644)
+	exists := false
 	if info, err := os.Lstat(path); err == nil {
+		exists = true
 		if info.Mode()&os.ModeSymlink != 0 {
 			return EditResult{}, codedToolError("E_SYMLINK_PATH", fmt.Errorf("refusing to overwrite symlink target: %s", req.Path))
 		}
@@ -89,7 +95,67 @@ func (a *App) createFileWithConfig(cfg ConfigState, req CreateFileRequest) (Edit
 	// encoded because safeWriteFileWithDir writes encoded verbatim, and for
 	// new files safeWriteNewFile does the same. Using encoded directly also
 	// avoids a second hash pass on the same content.
-	return makeEditResult(req.Path, beforeHash, beforeVersion, before, encoded, ending, 1, string(before), content), nil
+	result := makeEditResult(req.Path, beforeHash, beforeVersion, before, encoded, ending, 1, string(before), content)
+	created := !exists
+	result.Created = &created
+	if len(createdDirs) > 0 {
+		result.CreatedDirs = createdDirsToDisplay(roots, createdDirs)
+	}
+	if created {
+		result.Summary = fmt.Sprintf("%s created: %d bytes", filepath.ToSlash(req.Path), len(encoded))
+	}
+	return result, nil
+}
+
+// newlyCreatedDirs walks up from dir until it finds an existing ancestor and
+// returns the chain of directories that MkdirAll would create, ordered from the
+// outermost to the innermost. Returns nil when dir already exists.
+func newlyCreatedDirs(dir string) []string {
+	var missing []string
+	cur := filepath.Clean(dir)
+	for {
+		if _, err := os.Lstat(cur); err == nil {
+			break
+		}
+		missing = append(missing, cur)
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			break
+		}
+		cur = parent
+	}
+	for i, j := 0, len(missing)-1; i < j; i, j = i+1, j-1 {
+		missing[i], missing[j] = missing[j], missing[i]
+	}
+	return missing
+}
+
+// createdDirsToDisplay converts an absolute created-dir chain (outermost
+// first) to workspace-relative paths when it lies inside the primary workspace
+// (roots[0]), falling back to absolute slash paths for extra-root writes.
+func createdDirsToDisplay(roots []string, dirs []string) []string {
+	out := make([]string, len(dirs))
+	abs := func() {
+		for i, d := range dirs {
+			out[i] = filepath.ToSlash(d)
+		}
+	}
+	if len(roots) == 0 {
+		abs()
+		return out
+	}
+	if rel, err := filepath.Rel(roots[0], dirs[0]); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		abs()
+		return out
+	}
+	for i, d := range dirs {
+		if r, err := filepath.Rel(roots[0], d); err == nil {
+			out[i] = filepath.ToSlash(r)
+		} else {
+			out[i] = filepath.ToSlash(d)
+		}
+	}
+	return out
 }
 
 func (a *App) deletePathWithConfig(cfg ConfigState, req DeletePathRequest) (DeleteResult, error) {

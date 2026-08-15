@@ -265,6 +265,40 @@ func TestRemoteHelperWriteTargetsOutsideRoot(t *testing.T) {
 	})
 }
 
+// TestRemoteHelperWriteReportsCreatedDirs 验证 op_write 在 mkdirs 时返回
+// 实际缺失的父目录链（相对 root、外层→内层），父目录已存在时为空。
+func TestRemoteHelperWriteReportsCreatedDirs(t *testing.T) {
+	py := pickRemoteHelperPython(t)
+	root := t.TempDir()
+	payload := func(path string) map[string]any {
+		return map[string]any{
+			"op": "write", "workspaceRoot": root, "path": path,
+			"dataBase64": "", "overwrite": false, "mkdirs": true,
+		}
+	}
+	assertDirs := func(path string, want []string) {
+		t.Helper()
+		data, errStr := runRemoteHelperOp(t, py, payload(path))
+		if errStr != "" {
+			t.Fatalf("write %s: helper error: %s", path, errStr)
+		}
+		got, _ := data["createdDirs"].([]any)
+		if len(got) != len(want) {
+			t.Fatalf("write %s: createdDirs=%v, want %v", path, got, want)
+		}
+		for i, w := range want {
+			if got[i] != w {
+				t.Fatalf("write %s: createdDirs=%v, want %v", path, got, want)
+			}
+		}
+	}
+	// 父目录全部缺失：报告完整链，外层→内层。
+	assertDirs("a/b/c.txt", []string{"a", "a/b"})
+	// 父目录已存在：链为空。
+	assertDirs("a/b/d.txt", []string{})
+	assertDirs("a/e.txt", []string{})
+}
+
 // TestRemoteScriptTransportInvariants 锁定 payload 传输与删除拦截的关键不变量：
 // payload 走 stdin 占位符（不用 argv）、删除判定收敛到 Go 侧（Python 无正则）。
 func TestRemoteScriptTransportInvariants(t *testing.T) {

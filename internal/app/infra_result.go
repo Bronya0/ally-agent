@@ -248,6 +248,12 @@ func compactToolResultForModel(name string, result toolResult, fullJSON string) 
 			"classification":   r.Classification,
 			"postEditNote":     "Reuse version only when the current source is known exactly; otherwise re-read numbered text before another oldText or lineRange edit.",
 		}
+		if r.Created != nil {
+			data["created"] = *r.Created
+		}
+		if len(r.CreatedDirs) > 0 {
+			data["createdDirs"] = r.CreatedDirs
+		}
 		if r.Diff != "" {
 			data["diffOmitted"] = "Full diff omitted from model context to reduce tokens; use read around firstChangedLine/lastChangedLine if exact post-edit content is needed."
 		}
