@@ -406,7 +406,7 @@ function hasExpandableBody(msg) {
   if (msg.kind === 'calculate') return false;
   // scheduled_task: 任务详情在 Task Center 面板查看，无需详情卡
   if (msg.kind === 'scheduled') return false;
-  // grep_files 永远只显示单行状态和命中统计，不加载匹配行详情。
+  // grep 永远只显示单行状态和命中统计，不加载匹配行详情。
   if (msg.kind === 'grep') return false;
   return lineCount(msg.body) > BODY_PREVIEW_LINES || msg.kind === 'list';
 }

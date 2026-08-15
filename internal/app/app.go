@@ -2129,7 +2129,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		if err == nil {
 			data, err = a.remoteRunCommand(ctx, req)
 		}
-	case "grep_files":
+	case "grep":
 		var reqGF GrepRequest
 		err = decode(&reqGF)
 		if err == nil {

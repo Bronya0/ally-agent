@@ -34,6 +34,7 @@ type CalculateResult = calculatetool.Result
 type GrepRequest = grep.Request
 type GrepMatch = grep.Match
 type GrepFileMatch = grep.FileMatch
+type GrepFileCount = grep.FileCount
 type GrepResult = grep.Result
 
 const (

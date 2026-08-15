@@ -40,7 +40,7 @@ func (a *App) grepFilesWithConfig(ctx context.Context, cfg ConfigState, req Grep
 		return nil, codedToolError("E_GREP_WORKSPACE", err)
 	}
 	if strings.TrimSpace(req.Pattern) == "" {
-		return nil, codedToolError("E_GREP_BAD_PATTERN", errors.New("grep_files requires a non-empty pattern"))
+		return nil, codedToolError("E_GREP_BAD_PATTERN", errors.New("grep requires a non-empty pattern"))
 	}
 	searchRoot := root
 	if strings.TrimSpace(req.Path) != "" {
@@ -91,7 +91,7 @@ func (a *App) emitRipgrepMissingIfNeeded() {
 	a.emit("dependency:missing", map[string]any{
 		"tool":         "rg",
 		"name":         "ripgrep",
-		"message":      "grep_files requires ripgrep (`rg`), but it was not found. Install ripgrep and restart Ally.",
+		"message":      "grep requires ripgrep (`rg`), but it was not found. Install ripgrep and restart Ally.",
 		"installSteps": grep.InstallInstructions(),
 	})
 }

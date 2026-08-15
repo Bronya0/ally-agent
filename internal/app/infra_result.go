@@ -94,7 +94,7 @@ func toolResultSummary(name string, result *toolResult) string {
 			}
 			return strings.Join(parts, " ")
 		}
-	case "grep_files":
+	case "grep":
 		data, _ := json.Marshal(result.Data)
 		var r GrepResult
 		if json.Unmarshal(data, &r) == nil {
@@ -375,7 +375,7 @@ func compactToolResultForModel(name string, result toolResult, fullJSON string) 
 			"wasSymlink":   r.WasSymlink,
 		}
 		return marshalToolResultOrFallback(toolResult{OK: true, Data: data}, fullJSON)
-	case "grep_files":
+	case "grep":
 		var r GrepResult
 		if !decodeToolData(result.Data, &r) {
 			return fullJSON
@@ -383,16 +383,24 @@ func compactToolResultForModel(name string, result toolResult, fullJSON string) 
 		fileHits := r.FileHits
 		data := map[string]any{
 			"fileHits":         fileHits,
+			"fileCounts":       r.FileCounts,
 			"matchedLines":     r.MatchedLines,
 			"hits":             r.Hits,
 			"files":            r.Files,
 			"truncated":        r.Truncated,
 			"samplesTruncated": r.SamplesTruncated,
+			"nextOffset":       r.NextOffset,
 		}
 		// statsExact is always true today; only surface it when it changes so
 		// the model sees one less always-true boolean.
 		if !r.StatsExact {
 			data["statsExact"] = false
+		}
+		if r.FileCountsTruncated {
+			data["fileCountsTruncated"] = true
+		}
+		if r.OffsetExhausted {
+			data["offsetExhausted"] = true
 		}
 		totalMatches := 0
 		for _, fh := range fileHits {
@@ -406,7 +414,7 @@ func compactToolResultForModel(name string, result toolResult, fullJSON string) 
 				if n > remaining {
 					n = remaining
 				}
-				capped = append(capped, GrepFileMatch{Path: fh.Path, Matches: fh.Matches[:n]})
+				capped = append(capped, GrepFileMatch{Path: fh.Path, Matches: fh.Matches[:n], MatchCount: fh.MatchCount})
 				remaining -= n
 				if remaining <= 0 {
 					break
@@ -416,7 +424,7 @@ func compactToolResultForModel(name string, result toolResult, fullJSON string) 
 			data["matchesReduced"] = true
 			data["originalMatchCount"] = totalMatches
 			data["matchesOmitted"] = totalMatches - maxModelGrepMatches
-			data["reductionNote"] = "grep_files matches shortened for model context; UI received the full result. Use a narrower pattern/path/glob or read specific files if more exact context is needed."
+			data["reductionNote"] = "grep matches shortened for model context; UI received the full result. Use a narrower pattern/path/glob or read specific files if more exact context is needed."
 		}
 		return marshalToolResultOrFallback(toolResult{OK: true, Data: data}, fullJSON)
 	case "http_request":

@@ -213,7 +213,7 @@ function toolArgsTitle(tc) {
     const files = Array.isArray(parsed.files) ? parsed.files.map(f => f && f.path).filter(Boolean) : [];
     if (files.length > 0) return files.join(', ');
   }
-  if (name === 'grep_files') {
+  if (name === 'grep') {
     return parsed.pattern || '';
   }
   if (name === 'list_files' || name === 'remote_list_files') {

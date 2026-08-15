@@ -807,33 +807,38 @@ func requireRipgrep(t *testing.T) {
 
 func TestCompactToolResultForModelCompactsGrepMatches(t *testing.T) {
 	total := maxModelGrepMatches + 5
-	group := GrepFileMatch{Path: "a.txt", Matches: make([]GrepMatch, total)}
+	group := GrepFileMatch{Path: "a.txt", Matches: make([]GrepMatch, total), MatchCount: total + 10}
 	for i := range group.Matches {
 		group.Matches[i] = GrepMatch{LineNum: i + 1, Content: "needle"}
 	}
 	result := toolResult{OK: true, Data: GrepResult{
 		FileHits:         []GrepFileMatch{group},
+		FileCounts:       []GrepFileCount{{Path: "a.txt", Count: total + 10}},
 		MatchedLines:     total,
 		Hits:             total,
 		Files:            1,
+		Truncated:        true,
 		SamplesTruncated: true,
 		StatsExact:       true,
+		NextOffset:       total,
 	}}
 	raw, err := json.Marshal(result)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	got := compactToolResultForModel("grep_files", result, string(raw))
+	got := compactToolResultForModel("grep", result, string(raw))
 
 	var decoded struct {
 		OK   bool `json:"ok"`
 		Data struct {
 			FileHits           []GrepFileMatch `json:"fileHits"`
+			FileCounts         []GrepFileCount `json:"fileCounts"`
 			MatchedLines       int             `json:"matchedLines"`
 			Hits               int             `json:"hits"`
 			Files              int             `json:"files"`
 			SamplesTruncated   bool            `json:"samplesTruncated"`
+			NextOffset         int             `json:"nextOffset"`
 			StatsExact         bool            `json:"statsExact"`
 			MatchesReduced     bool            `json:"matchesReduced"`
 			OriginalMatchCount int             `json:"originalMatchCount"`
@@ -868,6 +873,87 @@ func TestCompactToolResultForModelCompactsGrepMatches(t *testing.T) {
 	}
 	if !decoded.Data.MatchesReduced || decoded.Data.OriginalMatchCount != total || decoded.Data.MatchesOmitted != 5 {
 		t.Fatalf("expected reduction metadata, got %#v", decoded.Data)
+	}
+	// matchCount, fileCounts and nextOffset must survive compaction so the
+	// model can rank hotspots and page through the rest.
+	if len(decoded.Data.FileHits) != 1 || decoded.Data.FileHits[0].MatchCount != total+10 {
+		t.Fatalf("expected exact matchCount to survive compaction, got %#v", decoded.Data.FileHits)
+	}
+	if len(decoded.Data.FileCounts) != 1 || decoded.Data.FileCounts[0].Path != "a.txt" || decoded.Data.FileCounts[0].Count != total+10 {
+		t.Fatalf("expected fileCounts to survive compaction, got %#v", decoded.Data.FileCounts)
+	}
+	if decoded.Data.NextOffset != total {
+		t.Fatalf("expected nextOffset to survive compaction, got %d", decoded.Data.NextOffset)
+	}
+}
+
+func TestGrepFilesReportsFileCountsAndOffsetEndToEnd(t *testing.T) {
+	requireRipgrep(t)
+	root := t.TempDir()
+	var b strings.Builder
+	for i := 0; i < 12; i++ {
+		fmt.Fprintf(&b, "line %d needle\n", i)
+	}
+	writeToolTestFile(t, root, "hot.txt", b.String())
+	writeToolTestFile(t, root, "cold.txt", "needle\n")
+
+	app := NewApp()
+	got, err := app.grepFilesWithConfig(context.Background(), ConfigState{Workspace: root}, GrepRequest{
+		Pattern:    "needle",
+		MaxMatches: 5,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.MatchedLines != 13 || got.Hits != 13 || got.Files != 2 {
+		t.Fatalf("expected exact stats, got %#v", got)
+	}
+	// Hotspot list: hot.txt(12) first, cold.txt(1) second.
+	if len(got.FileCounts) != 2 || got.FileCounts[0].Path != "hot.txt" || got.FileCounts[0].Count != 12 || got.FileCounts[1].Path != "cold.txt" || got.FileCounts[1].Count != 1 {
+		t.Fatalf("expected descending fileCounts, got %#v", got.FileCounts)
+	}
+	if !got.Truncated || got.NextOffset != 5 {
+		t.Fatalf("expected truncated page with NextOffset 5, got %#v", got)
+	}
+	// Sampled file must carry its exact full-file matchCount.
+	for _, fh := range got.FileHits {
+		if fh.Path == "hot.txt" && fh.MatchCount != 12 {
+			t.Fatalf("expected hot.txt matchCount 12, got %#v", fh)
+		}
+	}
+
+	// Page 2 via offset resumes past the first page.
+	page2, err := app.grepFilesWithConfig(context.Background(), ConfigState{Workspace: root}, GrepRequest{
+		Pattern:    "needle",
+		MaxMatches: 5,
+		Offset:     got.NextOffset,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page2.NextOffset != 10 {
+		t.Fatalf("expected page 2 NextOffset 10, got %d", page2.NextOffset)
+	}
+
+	// Case-sensitive search narrows results.
+	sensitive, err := app.grepFilesWithConfig(context.Background(), ConfigState{Workspace: root}, GrepRequest{
+		Pattern:       "Needle",
+		CaseSensitive: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sensitive.MatchedLines != 0 {
+		t.Fatalf("expected zero case-sensitive matches for Needle, got %#v", sensitive)
+	}
+	insensitive, err := app.grepFilesWithConfig(context.Background(), ConfigState{Workspace: root}, GrepRequest{
+		Pattern: "Needle",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if insensitive.MatchedLines != 13 {
+		t.Fatalf("expected case-insensitive matches for Needle, got %#v", insensitive)
 	}
 }
 

@@ -64,7 +64,7 @@ const BUILTIN_TOOL_GROUPS = [
   {
     key: 'search',
     label: t('tools.group.search'),
-    names: ['grep_files'],
+    names: ['grep'],
     description: t('tools.group.searchDescription'),
   },
   {

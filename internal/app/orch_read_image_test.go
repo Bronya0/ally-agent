@@ -150,8 +150,8 @@ func TestCollectReadImages(t *testing.T) {
 		t.Fatalf("unexpected collected images: %#v", got)
 	}
 	// Non-read tools never contribute images.
-	if got := collectReadImages("grep_files", &okResult); got != nil {
-		t.Fatalf("grep_files must not collect images: %#v", got)
+	if got := collectReadImages("grep", &okResult); got != nil {
+		t.Fatalf("grep must not collect images: %#v", got)
 	}
 	// Failed reads contribute nothing.
 	failed := toolResult{OK: false, Error: "boom"}

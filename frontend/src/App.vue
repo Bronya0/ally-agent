@@ -6402,7 +6402,7 @@ function toolKind(name) {
   if (name === 'list_files' || name === 'remote_list_files') return 'list';
   if (name === 'read' || name === 'read_file' || name === 'remote_read_file' || name === 'batch_read' || name === 'document_read') return 'read';
   if (name === 'Glob') return 'glob';
-  if (name === 'grep_files') return 'grep';
+  if (name === 'grep') return 'grep';
   if (name === 'run') return 'run';
   if (name === 'todo_write') return 'todo';
   if (name === 'scheduled_task') return 'scheduled';
@@ -6508,7 +6508,7 @@ function makeToolTitle(name, args, meta = {}) {
   if (name === 'read_file' || name === 'remote_read_file') {
     return parsed.target ? `${parsed.target} · ${parsed.path || ''}` : (parsed.path || '');
   }
-  if (name === 'grep_files') {
+  if (name === 'grep') {
     const pattern = parsed.pattern || '';
     const path = parsed.path || '';
     if (pattern && path) return `${pattern}, ${path}`;
@@ -6604,8 +6604,8 @@ function formatToolChip(name, result) {
       });
       return '\u00B7 ' + lines.join('  ');
     }
-    // grep_files: · N hits (in M lines) · F files
-    if (name === 'grep_files' && parsed.data) {
+    // grep: · N hits (in M lines) · F files
+    if (name === 'grep' && parsed.data) {
       const d = parsed.data;
       const hits = Number(d.hits || 0);
       const lines = Number(d.matchedLines || 0);
@@ -6832,7 +6832,7 @@ function formatToolBody(name, body) {
     // grep results stay as a single non-expandable status line. The compact
     // hit count is rendered by formatToolChip(); do not retain matching lines
     // in the message body or build a hidden detail preview.
-    if (name === 'grep_files' && parsed.data) return '';
+    if (name === 'grep' && parsed.data) return '';
     // list_files result: show entries
     if ((name === 'list_files' || name === 'remote_list_files') && parsed.data && Array.isArray(parsed.data.entries)) {
       let out = parsed.data.count + ' items';

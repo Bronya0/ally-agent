@@ -103,7 +103,7 @@ func TestSaveHistoryPreservesCompactToolActivityForLaterTurns(t *testing.T) {
 				ID:   "call_1",
 				Type: openai.ToolTypeFunction,
 				Function: openai.FunctionCall{
-					Name:      "grep_files",
+					Name:      "grep",
 					Arguments: `{"pattern":"ally","includeIgnored":true}`,
 				},
 			}},
@@ -120,7 +120,7 @@ func TestSaveHistoryPreservesCompactToolActivityForLaterTurns(t *testing.T) {
 				ID:   "call_2",
 				Type: openai.ToolTypeFunction,
 				Function: openai.FunctionCall{
-					Name:      "grep_files",
+					Name:      "grep",
 					Arguments: `{"pattern":"ally"}`,
 				},
 			}},
@@ -138,7 +138,7 @@ func TestSaveHistoryPreservesCompactToolActivityForLaterTurns(t *testing.T) {
 	foundToolCall := false
 	foundToolResult := false
 	for _, msg := range app.histories["s1"] {
-		if len(msg.ToolCalls) > 0 && msg.ToolCalls[0].Function.Name == "grep_files" {
+		if len(msg.ToolCalls) > 0 && msg.ToolCalls[0].Function.Name == "grep" {
 			foundToolCall = true
 		}
 		if msg.Role == openai.ChatMessageRoleTool && strings.Contains(msg.Content, `"count":46`) {
@@ -154,7 +154,7 @@ func TestSaveHistoryPreservesCompactToolActivityForLaterTurns(t *testing.T) {
 
 	next := app.buildMessages(ChatRequest{SessionID: "s1", Message: "为啥你grep了好几次"}, ConfigState{}, nil)
 	combined := joinMessageContents(next)
-	mustContain(t, combined, "grep_files")
+	mustContain(t, combined, "grep")
 	mustContain(t, combined, "unknown field")
 	mustContain(t, combined, `"count":46`)
 }

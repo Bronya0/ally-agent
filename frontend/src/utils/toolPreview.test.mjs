@@ -66,7 +66,7 @@ test('archives older cards when card count exceeds limit', () => {
 });
 
 test('grep tool call remains renderable as a compact status card', () => {
-  assert.equal(isRenderableMessage({ role: 'tool_call', kind: 'grep', name: 'grep_files' }), true);
+  assert.equal(isRenderableMessage({ role: 'tool_call', kind: 'grep', name: 'grep' }), true);
   assert.equal(isRenderableMessage({ role: 'tool_call', kind: 'run', name: 'run' }), false);
 });
 
