@@ -333,38 +333,51 @@ func (a *App) handleSkillToolCall(skillName, skillArgs string) (map[string]any, 
 	return nil, fmt.Errorf("skill %q is disabled or not found in the current skill listing", skillName)
 }
 
-// buildSkillDirTree returns a compact one-level listing of the skill directory
-// (excluding the already-loaded SKILL.md and hidden files) so the model can see
-// which additional files it may read under the skill's dir. Returns an empty
-// string when the dir is empty, missing, or contains no publishable entries.
+// buildSkillDirTree returns a compact listing of the skill directory (excluding
+// the already-loaded SKILL.md and hidden files) up to two levels deep, so the
+// model can see which additional files it may read under the skill's dir.
+// Returns an empty string when the dir is empty, missing, or contains no
+// publishable entries.
 func buildSkillDirTree(dir, loadedPath string) string {
 	if dir == "" {
 		return ""
 	}
-	entries, err := os.ReadDir(dir)
-	if err != nil {
+	loadedName := filepath.Base(loadedPath)
+	lines := skillDirTreeLines(dir, loadedName, "", 0)
+	if len(lines) == 0 {
 		return ""
 	}
-	loadedName := filepath.Base(loadedPath)
+	return "<!-- skill dir tree (up to two levels, use read to read any of these) -->\n" + strings.Join(lines, "\n")
+}
+
+// skillDirTreeLines appends a flat, indented listing of dir and, for directories,
+// one level of children — i.e. up to two levels total. Hidden files (names
+// starting with ".") are skipped at every level; the root SKILL.md whose body was
+// already injected is skipped only at the top level.
+func skillDirTreeLines(dir, rootLoadedName, indent string, depth int) []string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
 	var lines []string
 	for _, entry := range entries {
 		name := entry.Name()
 		if strings.HasPrefix(name, ".") {
 			continue
 		}
-		if strings.EqualFold(name, loadedName) {
+		if depth == 0 && strings.EqualFold(name, rootLoadedName) {
 			continue
 		}
 		if entry.IsDir() {
-			lines = append(lines, "- "+name+"/")
+			lines = append(lines, indent+"- "+name+"/")
+			if depth < 1 {
+				lines = append(lines, skillDirTreeLines(filepath.Join(dir, name), rootLoadedName, indent+"  ", depth+1)...)
+			}
 		} else {
-			lines = append(lines, "- "+name)
+			lines = append(lines, indent+"- "+name)
 		}
 	}
-	if len(lines) == 0 {
-		return ""
-	}
-	return "<!-- skill dir tree (one level, use read to read any of these) -->\n" + strings.Join(lines, "\n")
+	return lines
 }
 
 // renderSkillLoadedBlock builds <skill-loaded name="..." source="..." dir="..." args="...">
