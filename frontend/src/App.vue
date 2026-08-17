@@ -198,8 +198,8 @@ Public License v3. See the LICENSE file for details.
                   @keydown="handlePromptKeydown"
                   @input="handlePromptInput"
                 />
-                <div v-if="pendingAttachments.length" class="pending-attachments">
-                  <div v-for="att in pendingAttachments" :key="att.id" class="pending-attachment">
+                <div v-if="activePendingAttachments.length" class="pending-attachments">
+                  <div v-for="att in activePendingAttachments" :key="att.id" class="pending-attachment">
                     <span class="pending-attachment-icon">{{ attachmentIcon(att) }}</span>
                     <span class="pending-attachment-name" :title="att.name">{{ att.name }}</span>
                     <span class="pending-attachment-size">{{ fmtBytes(att.size) }}</span>
@@ -1397,7 +1397,30 @@ const UPDATE_CHECK_INTERVAL_MS = 2 * 60 * 60 * 1000;
 const toolUpdateBuffers = new Map();
 let toolUpdateFlushScheduled = false;
 let toolUpdateFlushTimer = 0;
-const pendingAttachments = ref([]);
+// Pending attachments are scoped per session (mirrors sessionPromptTexts) so a
+// file pasted or picked into one workspace's composer does not leak into another
+// workspace when you switch tabs without sending.
+const pendingAttachmentsBySession = reactive({});
+
+function pendingAttachmentsOf(sessionId) {
+  if (!sessionId) return [];
+  if (!pendingAttachmentsBySession[sessionId]) pendingAttachmentsBySession[sessionId] = [];
+  return pendingAttachmentsBySession[sessionId];
+}
+
+function clearPendingAttachments(sessionId) {
+  const arr = pendingAttachmentsBySession[sessionId];
+  if (!arr) return;
+  for (const att of arr) releaseAttachmentPreview(att);
+  pendingAttachmentsBySession[sessionId] = [];
+}
+
+function deletePendingAttachments(sessionId) {
+  clearPendingAttachments(sessionId);
+  delete pendingAttachmentsBySession[sessionId];
+}
+
+const activePendingAttachments = computed(() => pendingAttachmentsOf(activeSessionId.value));
 const attachmentInputRef = ref(null);
 const MAX_ATTACHMENTS_PER_MESSAGE = 8;
 const MAX_ATTACHMENT_PREVIEW_BYTES = 8 * 1024 * 1024;
@@ -1830,7 +1853,7 @@ function displayMessagesForTab(tab) {
 
 const canSend = computed(() => {
   const s = activeSession.value;
-  return (promptText.value.trim().length > 0 || pendingAttachments.value.length > 0) && !(s && (s.runId || s.isRunning));
+  return (promptText.value.trim().length > 0 || activePendingAttachments.value.length > 0) && !(s && (s.runId || s.isRunning));
 });
 
 const contextTokens = ref(0);
@@ -2569,6 +2592,7 @@ function closeWorkspaceTab(id) {
     if (!sessionMayHaveBackgroundRun(linkedSession)) {
       releaseSessionAttachments(linkedSession);
       delete sessionPromptTexts[tab.sessionId];
+      deletePendingAttachments(tab.sessionId);
       delete todosBySession[tab.sessionId];
       delete todoRevisionsBySession[tab.sessionId];
       delete focusedToolIdsBySession[tab.sessionId];
@@ -2592,6 +2616,11 @@ async function switchWorkspaceTab(id) {
   const linkedSession = ensureWorkspaceTabSession(tab);
   saveSessions();
   activeWorkspaceId.value = id;
+  // Reset transient composer state so it does not bleed into the switched-to
+  // workspace (a stale command menu or arrow-history cursor from the previous
+  // session would otherwise persist across the switch).
+  commandMenuVisible.value = false;
+  commandHistoryIndex.value = -1;
   config.workspace = tab.path;
   configDraft.workspace = tab.path;
   prepareFooterStatsForTarget(id, tab.path);
@@ -2748,6 +2777,7 @@ function deleteSession(index) {
   delete todosBySession[deletedId];
   delete todoRevisionsBySession[deletedId];
   delete sessionPromptTexts[deletedId];
+  deletePendingAttachments(deletedId);
   delete focusedToolIdsBySession[deletedId];
   displayMessagesCacheBySession.delete(deletedId);
   enqueueSessionWrite(() => DeleteSession(deletedId)).catch(() => {});
@@ -3940,13 +3970,14 @@ async function handlePromptPaste(event) {
 }
 
 async function addPendingAttachmentFiles(files) {
+  const arr = pendingAttachmentsOf(activeSessionId.value);
   for (const file of files) {
-    if (pendingAttachments.value.length >= MAX_ATTACHMENTS_PER_MESSAGE) {
+    if (arr.length >= MAX_ATTACHMENTS_PER_MESSAGE) {
       message.warning(t('app.attachment.limit', { count: MAX_ATTACHMENTS_PER_MESSAGE }));
       break;
     }
     const att = await fileToAttachment(file);
-    pendingAttachments.value.push(att);
+    arr.push(att);
   }
 }
 
@@ -3957,7 +3988,12 @@ function extractClipboardFiles(event) {
   const seen = new Set();
   const pushFile = (file) => {
     if (!file) return;
-    const key = `${file.name || ''}:${file.type || ''}:${file.size || 0}:${file.lastModified || 0}`;
+    // A pasted image usually shows up in BOTH data.items (getAsFile) and
+    // data.files, and the two representations have different lastModified
+    // values. Keying on lastModified let the same image slip past the dedup
+    // and appear as two identical attachments. Name+type+size is stable across
+    // both representations, so use that instead.
+    const key = `${file.name || ''}|${file.type || ''}|${file.size || 0}`;
     if (seen.has(key)) return;
     seen.add(key);
     files.push(withClipboardFallbackName(file));
@@ -4158,9 +4194,15 @@ function isTextAttachment(file) {
 }
 
 function removeAttachment(id) {
-  const removed = pendingAttachments.value.find(att => att.id === id);
-  releaseAttachmentPreview(removed);
-  pendingAttachments.value = pendingAttachments.value.filter(att => att.id !== id);
+  for (const sid of Object.keys(pendingAttachmentsBySession)) {
+    const arr = pendingAttachmentsBySession[sid];
+    const idx = arr.findIndex(att => att.id === id);
+    if (idx >= 0) {
+      releaseAttachmentPreview(arr[idx]);
+      arr.splice(idx, 1);
+      return;
+    }
+  }
 }
 
 function releaseAttachmentPreview(att) {
@@ -4384,7 +4426,7 @@ async function sendPrompt() {
   const session = activeSession.value;
   if (!session) return;
   const text = promptText.value.trim();
-  const attachments = pendingAttachments.value.map(att => ({ ...att }));
+  const attachments = (pendingAttachmentsBySession[session.id] || []).map(att => ({ ...att }));
   if (!text && attachments.length === 0) return;
 
   // Resolve command: display label in UI, send expanded text to backend
@@ -4483,7 +4525,7 @@ async function sendPrompt() {
   addPromptHistory(displayText);
   commandHistoryIndex.value = -1;
   promptText.value = '';
-  pendingAttachments.value = [];
+  clearPendingAttachments(session.id);
   commandMenuVisible.value = false;
   scrollMessagesToBottom({ force: true });
 
@@ -4521,7 +4563,7 @@ async function injectMessageToRun(session, sendText, displayText, attachments) {
   addPromptHistory(displayText);
   commandHistoryIndex.value = -1;
   promptText.value = '';
-  pendingAttachments.value = [];
+  clearPendingAttachments(session.id);
   commandMenuVisible.value = false;
   scrollMessagesToBottom({ force: true });
   try {
@@ -5805,6 +5847,7 @@ function trimRuntimeSessions() {
     delete todosBySession[session.id];
     delete todoRevisionsBySession[session.id];
     delete sessionPromptTexts[session.id];
+    deletePendingAttachments(session.id);
     delete focusedToolIdsBySession[session.id];
     displayMessagesCacheBySession.delete(session.id);
     ReleaseSession(session.id).catch(() => {});
@@ -7643,7 +7686,9 @@ onUnmounted(() => {
   mermaidObservedNodes.clear();
   mermaidSvgCache.clear();
   mermaidSvgCacheChars = 0;
-  for (const att of pendingAttachments.value) releaseAttachmentPreview(att);
+  for (const sid of Object.keys(pendingAttachmentsBySession)) {
+    for (const att of pendingAttachmentsBySession[sid]) releaseAttachmentPreview(att);
+  }
   for (const session of sessions.value) releaseSessionAttachments(session);
 });
 </script>

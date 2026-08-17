@@ -31,7 +31,7 @@ func defaultConfigState() ConfigState {
 		APIFormat:           apiFormatOpenAIChat,
 		BaseURL:             defaultBaseURL,
 		Model:               defaultModel,
-		Workspace:           "",
+		Workspace:           defaultWorkspaceDir(),
 		Temperature:         0.2,
 		MaxTokens:           384000,
 		ContextWindow:       1000000,

@@ -26,9 +26,13 @@ import (
 	openai "github.com/sashabaranov/go-openai"
 )
 
-func TestDefaultConfigStartsWithoutWorkspace(t *testing.T) {
-	if got := defaultConfigState().Workspace; got != "" {
-		t.Fatalf("default workspace = %q, want empty until the user selects one", got)
+func TestDefaultConfigWorkspaceDefaultsToDocuments(t *testing.T) {
+	got := defaultConfigState().Workspace
+	if got == "" {
+		t.Fatalf("default workspace = empty, want the user's Documents directory on first launch")
+	}
+	if !filepath.IsAbs(got) {
+		t.Fatalf("default workspace = %q, want an absolute path", got)
 	}
 }
 
@@ -757,7 +761,6 @@ func TestSystemPromptKeepsEditBehavioralRules(t *testing.T) {
 		}
 	}
 }
-
 
 func TestSubagentToolsExcludeInteractiveToolsAndIncludeMCP(t *testing.T) {
 	app := NewApp()
