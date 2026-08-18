@@ -78,7 +78,15 @@ func (a *App) mainWindowMinimised() bool {
 
 // SetNotifier injects the notifications service used for task completion
 // sounds. Must be called before app.Run().
-func (a *App) SetNotifier(n completionNotifier) {
+//
+// This is a package-level function rather than an (a *App) method on purpose:
+// the parameter is a non-empty interface, and Wails' binding generator would
+// reject any exported method on *App (which is registered as a service) that
+// takes one, since encoding/json cannot unmarshal into a concrete type it
+// cannot infer. Package-level functions are not scanned by the generator, so
+// keeping the injection here keeps the interface while leaving the generated
+// frontend bindings clean.
+func SetNotifier(a *App, n completionNotifier) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.notifier = n

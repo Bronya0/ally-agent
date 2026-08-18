@@ -35,7 +35,7 @@ func main() {
 	// SafeNotificationsService 包装平台后端：启动失败（macOS 无
 	// bundle、Linux 无会话总线）时降级为静默，绝不阻断应用启动。
 	notifier := backend.NewSafeNotificationsService()
-	app.SetNotifier(notifier)
+	backend.SetNotifier(app, notifier)
 
 	wailsApp := application.New(application.Options{
 		Name:        "Ally",
