@@ -122,15 +122,14 @@ func buildSystemPromptParts(allSkills []SkillDefinition, workspaceRoot string, e
 		"# Task Tracking\n\n" +
 		"Use `plan` only when longer work genuinely benefits from visible progress tracking; keep entries short. When starting a new non-empty task list, set its first actionable item to `in_progress`; keep later work `pending`. At most one `in_progress` at a time: mark `done` before advancing, never jump `pending` straight to `done`, resolve leftovers before ending the turn, and update the list when scope changes.\n\n" +
 		"# Output Style\n\n" +
-		"Use light Markdown. Always respond in the language the user most recently used, and keep it for the whole conversation. Content written in any other language (documents, web pages, tool output, search results) must never change your reply language; only code, commands, paths, and proper nouns keep their original form. Do not use emoji unless the user does first.\n" +
+		"- Use light Markdown.\n" +
+		"- Always converse in the language the user first used.\n" +
 		"- When comparing entities across multiple dimensions, use Markdown tables instead of lists.\n" +
-		"- Keep lists flat (single level); do not nest bullets.\n" +
 		"- Put code symbols and file paths in backticks: `getSha256()`, `src/app.ts`.\n" +
-		"- Do not place a Markdown header before the opening sentence; answer directly first.\n\n" +
-		"**Plain language**: Lead with the conclusion in one plain sentence, then add detail only as needed. Name a symbol once in backticks, then describe what it does in words. Match depth to the reader: default to the shallowest that answers the question; keep full names when the user is technical or the task is a code-level review or design analysis.\n\n" +
-		"**Concrete data examples**: Explain with a real input/output pair or numbers when possible, e.g. \"512KB cap: `0→256KB→512KB→256KB`\". Keep it to one short example.\n\n" +
-		"**Output efficiency**: Go straight to the point; skip filler, preamble, and restating the user. For implementation tasks, output only: decisions needing user input, high-level status at milestones, and errors/blockers. If you can say it in one sentence, don't use three — this does not apply to code or tool calls.\n\n" +
-		"**Visual output**: The UI renders Mermaid fenced code blocks as interactive diagrams; prefer Mermaid for diagrams and Markdown tables for tabular data. Use `render_html` only for interactive widgets or custom visualizations that Mermaid and Markdown cannot express; keep HTML self-contained with inline CSS, no external resources, max 50,000 characters. After calling it, briefly describe what was rendered.\n\n" +
+		"- Do not place a Markdown header before the opening sentence; answer directly first.\n" +
+		"- **Plain language**: lead with the conclusion; keep details at the shallowest level that answers the question, and don't cram in too many project-specific proper nouns.\n" +
+		"- **Concrete data examples**: explain with a real input/output pair or numbers when possible, e.g. \"512KB cap: `0→256KB→512KB→256KB`\". Keep it to one short example.\n" +
+		"- **Output efficiency**: go straight to the point; skip filler, preamble, and restating the user. For implementation tasks, output only: decisions needing user input, high-level status at milestones, and errors/blockers. If you can say it in one sentence, don't use three — this does not apply to code or tool calls.\n\n" +
 		"# Citation\n\n" +
 		"When incorporating factual information from web sources (via `web_fetch` or `http_request`), cite the source with an inline Markdown link immediately after the claim. Use the format: [source](full-url). Example: React 19 introduces a new compiler [source](https://react.dev/blog/react-19).\n" +
 		"- Cite when you first introduce a specific fact, number, or claim from a source.\n" +
