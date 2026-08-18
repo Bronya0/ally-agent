@@ -28,6 +28,10 @@ Public License v3. See the LICENSE file for details.
           <span class="settings-nav-title">{{ $t('settings.models') }}</span>
           <span class="settings-nav-desc">{{ $t('settings.providerKeys') }}</span>
         </button>
+        <button :class="['settings-nav-item', { active: page === 'advanced' }]" @click="page = 'advanced'">
+          <span class="settings-nav-title">{{ $t('settings.advanced') }}</span>
+          <span class="settings-nav-desc">{{ $t('settings.advancedDescription') }}</span>
+        </button>
         <button :class="['settings-nav-item', { active: page === 'network' }]" @click="page = 'network'">
           <span class="settings-nav-title">{{ $t('settings.network') }}</span>
           <span class="settings-nav-desc">{{ $t('settings.networkDescription') }}</span>
@@ -268,6 +272,28 @@ Public License v3. See the LICENSE file for details.
             </div>
           </div>
           <div class="settings-field-hint">{{ $t('settings.fontSizeGridHint') }}</div>
+          <div class="settings-page-actions">
+            <n-button type="primary" @click="onSave">{{ $t('common.save') }}</n-button>
+          </div>
+        </section>
+
+        <!-- Advanced -->
+        <section v-else-if="page === 'advanced'" class="settings-page">
+          <div class="config-section-header">
+            <div>
+              <div class="config-section-title">{{ $t('settings.advancedTitle') }}</div>
+              <div class="config-section-subtitle">{{ $t('settings.advancedSubtitle') }}</div>
+            </div>
+          </div>
+          <div class="validation-settings-list">
+            <div v-for="item in validationSettings" :key="item.key" class="validation-setting-row">
+              <div class="validation-setting-copy">
+                <div class="validation-setting-label">{{ item.label }}</div>
+                <div class="validation-setting-hint">{{ item.hint }}</div>
+              </div>
+              <n-switch v-model:value="draft[item.key]" />
+            </div>
+          </div>
           <div class="settings-page-actions">
             <n-button type="primary" @click="onSave">{{ $t('common.save') }}</n-button>
           </div>
@@ -757,6 +783,16 @@ function checkForUpdates() {
   }, 15000);
 }
 
+const validationSettingKeys = [
+  'autoValidationPython',
+  'autoValidationGo',
+  'autoValidationJavaScript',
+  'autoValidationTypeScript',
+  'autoValidationVue',
+  'autoValidationJava',
+  'autoValidationJson',
+];
+
 // Deep-clone the config draft so changes don't mutate parent reactively until save
 const draft = reactive(cloneConfigDraft(props.configDraft));
 
@@ -789,6 +825,15 @@ const proxyModeOptions = computed(() => [
   { label: t('settings.proxyOff'), value: 'off' },
   { label: t('settings.proxySystem'), value: 'system' },
   { label: t('settings.proxyManual'), value: 'manual' },
+]);
+const validationSettings = computed(() => [
+  { key: 'autoValidationPython', label: t('settings.validationPython'), hint: t('settings.validationPythonHint') },
+  { key: 'autoValidationGo', label: t('settings.validationGo'), hint: t('settings.validationGoHint') },
+  { key: 'autoValidationJavaScript', label: t('settings.validationJavaScript'), hint: t('settings.validationJavaScriptHint') },
+  { key: 'autoValidationTypeScript', label: t('settings.validationTypeScript'), hint: t('settings.validationTypeScriptHint') },
+  { key: 'autoValidationVue', label: t('settings.validationVue'), hint: t('settings.validationVueHint') },
+  { key: 'autoValidationJava', label: t('settings.validationJava'), hint: t('settings.validationJavaHint') },
+  { key: 'autoValidationJson', label: t('settings.validationJson'), hint: t('settings.validationJsonHint') },
 ]);
 
 // Background image picker state. Selecting/clearing persists immediately on
@@ -1310,6 +1355,9 @@ function cloneConfigDraft(source) {
     apiKeys: normalizeModelApiKeys(model?.apiKeys || (model?.apiKey ? [model.apiKey] : [])),
   })) : [];
   next.apiKeys = normalizeModelApiKeys(next.apiKeys || (next.apiKey ? [next.apiKey] : []));
+  for (const key of validationSettingKeys) {
+    next[key] = next[key] === false ? false : true;
+  }
   return next;
 }
 
@@ -1702,6 +1750,36 @@ watch(() => props.visible, (visible) => {
   font-size: 12px;
   color: #8a8a8a;
   line-height: 1.5;
+}
+
+.validation-settings-list {
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.validation-setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 2px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.validation-setting-copy {
+  min-width: 0;
+}
+
+.validation-setting-label {
+  color: #e5e5e5;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.validation-setting-hint {
+  margin-top: 3px;
+  color: #8a8a8a;
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .settings-field-stack {

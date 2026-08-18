@@ -225,6 +225,27 @@ func mergeConfig(base, overlay ConfigState) ConfigState {
 	if overlay.LLMRetries > 0 {
 		base.LLMRetries = overlay.LLMRetries
 	}
+	if overlay.AutoValidationPython != nil {
+		base.AutoValidationPython = overlay.AutoValidationPython
+	}
+	if overlay.AutoValidationGo != nil {
+		base.AutoValidationGo = overlay.AutoValidationGo
+	}
+	if overlay.AutoValidationJavaScript != nil {
+		base.AutoValidationJavaScript = overlay.AutoValidationJavaScript
+	}
+	if overlay.AutoValidationTypeScript != nil {
+		base.AutoValidationTypeScript = overlay.AutoValidationTypeScript
+	}
+	if overlay.AutoValidationVue != nil {
+		base.AutoValidationVue = overlay.AutoValidationVue
+	}
+	if overlay.AutoValidationJava != nil {
+		base.AutoValidationJava = overlay.AutoValidationJava
+	}
+	if overlay.AutoValidationJSON != nil {
+		base.AutoValidationJSON = overlay.AutoValidationJSON
+	}
 	if overlay.AutoUpdate != nil {
 		base.AutoUpdate = overlay.AutoUpdate
 	}

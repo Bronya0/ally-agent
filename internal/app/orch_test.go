@@ -1250,6 +1250,23 @@ func TestCreateAutoValidationPassesJSON(t *testing.T) {
 	}
 }
 
+func TestAutoValidationCanBeDisabledPerLanguage(t *testing.T) {
+	root := t.TempDir()
+	disabled := false
+	app := NewApp()
+	result := app.executeTool(context.Background(), ConfigState{
+		Workspace:          root,
+		AutoValidationJSON: &disabled,
+	}, "", "create", []byte(`{"path":"disabled.json","content":"{\"broken\":","overwrite":false}`))
+	if !result.OK {
+		t.Fatalf("create should succeed with validation disabled: %#v", result)
+	}
+	created, ok := result.Data.(EditResult)
+	if !ok || created.Validation != "" {
+		t.Fatalf("disabled JSON validation must not return a check result, got %#v", result.Data)
+	}
+}
+
 func TestAutoValidationCatchesPythonSyntax(t *testing.T) {
 	if _, _, ok := findPythonCommand(); !ok {
 		t.Skip("python is unavailable")

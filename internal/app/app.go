@@ -401,6 +401,15 @@ type ConfigState struct {
 	Models              []ModelConfig `json:"models,omitempty"`
 	DisabledSkills      []string      `json:"disabledSkills,omitempty"`
 	LLMRetries          int           `json:"llmRetries,omitempty"`
+	// AutoValidation* are nil for legacy configs (treated as enabled). An
+	// explicit false disables only that language's post-write check.
+	AutoValidationPython     *bool `json:"autoValidationPython,omitempty"`
+	AutoValidationGo         *bool `json:"autoValidationGo,omitempty"`
+	AutoValidationJavaScript *bool `json:"autoValidationJavaScript,omitempty"`
+	AutoValidationTypeScript *bool `json:"autoValidationTypeScript,omitempty"`
+	AutoValidationVue        *bool `json:"autoValidationVue,omitempty"`
+	AutoValidationJava       *bool `json:"autoValidationJava,omitempty"`
+	AutoValidationJSON       *bool `json:"autoValidationJson,omitempty"`
 	// AutoUpdate is a pointer so that an absent field in legacy config.json
 	// is treated as "default on" rather than "off". Only an explicit false
 	// disables automatic background downloads.

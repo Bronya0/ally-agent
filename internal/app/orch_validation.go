@@ -94,19 +94,33 @@ func (a *App) validateChangedFiles(ctx context.Context, cfg ConfigState, paths [
 	for _, file := range files {
 		switch file.ext {
 		case ".json":
-			jsonFiles = append(jsonFiles, file)
+			if validationEnabled(cfg.AutoValidationJSON) {
+				jsonFiles = append(jsonFiles, file)
+			}
 		case ".py":
-			pythonFiles = append(pythonFiles, file)
+			if validationEnabled(cfg.AutoValidationPython) {
+				pythonFiles = append(pythonFiles, file)
+			}
 		case ".js", ".jsx", ".mjs", ".cjs":
-			jsFiles = append(jsFiles, file)
+			if validationEnabled(cfg.AutoValidationJavaScript) {
+				jsFiles = append(jsFiles, file)
+			}
 		case ".go":
-			goFiles = append(goFiles, file)
+			if validationEnabled(cfg.AutoValidationGo) {
+				goFiles = append(goFiles, file)
+			}
 		case ".ts", ".tsx", ".d.ts":
-			tsFiles = append(tsFiles, file)
+			if validationEnabled(cfg.AutoValidationTypeScript) {
+				tsFiles = append(tsFiles, file)
+			}
 		case ".vue":
-			vueFiles = append(vueFiles, file)
+			if validationEnabled(cfg.AutoValidationVue) {
+				vueFiles = append(vueFiles, file)
+			}
 		case ".java":
-			javaFiles = append(javaFiles, file)
+			if validationEnabled(cfg.AutoValidationJava) {
+				javaFiles = append(javaFiles, file)
+			}
 		}
 	}
 
@@ -129,6 +143,10 @@ func (a *App) validateChangedFiles(ctx context.Context, cfg ConfigState, paths [
 		reports = append(reports, validateJavaFiles(checkCtx, javaFiles))
 	}
 	return formatValidationReports(reports)
+}
+
+func validationEnabled(flag *bool) bool {
+	return flag == nil || *flag
 }
 
 func collectValidationFiles(roots []string, paths []string) []validationFile {

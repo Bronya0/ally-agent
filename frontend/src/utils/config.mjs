@@ -34,6 +34,13 @@ export function defaultConfig() {
     disabledSkills: [],
     models: [],
     llmRetries: 6,
+    autoValidationPython: true,
+    autoValidationGo: true,
+    autoValidationJavaScript: true,
+    autoValidationTypeScript: true,
+    autoValidationVue: true,
+    autoValidationJava: true,
+    autoValidationJson: true,
     // Auto-update defaults to on. Loaded config may store explicit false to
     // opt out; legacy config without the field is treated as enabled by the
     // backend (*bool pointer).
@@ -87,6 +94,13 @@ export function assignConfig(target, source) {
   // undefined back to true so the frontend always sees a real boolean.
   next.autoUpdate = next.autoUpdate === false ? false : true;
   next.closeToTray = next.closeToTray === false ? false : true;
+  next.autoValidationPython = next.autoValidationPython === false ? false : true;
+  next.autoValidationGo = next.autoValidationGo === false ? false : true;
+  next.autoValidationJavaScript = next.autoValidationJavaScript === false ? false : true;
+  next.autoValidationTypeScript = next.autoValidationTypeScript === false ? false : true;
+  next.autoValidationVue = next.autoValidationVue === false ? false : true;
+  next.autoValidationJava = next.autoValidationJava === false ? false : true;
+  next.autoValidationJson = next.autoValidationJson === false ? false : true;
   // compactThreshold: legacy configs without the field (or explicit 0) fall
   // back to the default so the slider shows the effective value, not 0.
   next.compactThreshold = Number(next.compactThreshold) > 0
