@@ -721,7 +721,7 @@ func appendContextBudgetMessage(messages []openai.ChatCompletionMessage, usedTok
 	return out
 }
 
-// appendTodoStatusMessage returns a new slice with a <ally-todos> item appended
+// appendTodoStatusMessage returns a new slice with a <ally-plan> item appended
 // to the request tail. The model sees the current todo list every turn — both
 // done and pending items — so it can decide when to call plan to update
 // statuses.
@@ -742,7 +742,7 @@ func appendTodoStatusMessage(messages []openai.ChatCompletionMessage, todos []To
 		return messages
 	}
 	var b strings.Builder
-	b.WriteString("<ally-todos>\n")
+	b.WriteString("<ally-plan>\n")
 	b.WriteString("Current todo list state (the user sees this same list in the UI):\n")
 	for i, t := range todos {
 		fmt.Fprintf(&b, "%d. [%s] %s\n", i+1, t.Status, t.Title)
@@ -750,7 +750,7 @@ func appendTodoStatusMessage(messages []openai.ChatCompletionMessage, todos []To
 	b.WriteString("\nIf you just finished work that completes a pending or in_progress item, ")
 	b.WriteString("call `plan` to flip its status to `done` before answering the user. ")
 	b.WriteString("Keep at most one item `in_progress` at a time, and never end your turn with a dangling `in_progress` item that is actually finished.")
-	b.WriteString("\n</ally-todos>")
+	b.WriteString("\n</ally-plan>")
 	out := make([]openai.ChatCompletionMessage, len(messages)+1)
 	copy(out, messages)
 	out[len(messages)] = openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: b.String()}

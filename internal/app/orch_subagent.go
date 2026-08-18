@@ -503,9 +503,9 @@ func subagentSystemPrompt(role string) string {
 		"# Tool Use\n\n" +
 		"Prefer dedicated tools over shell commands: `grep` for search, `read` for file content, `edit`/`create`/`delete` for file changes, `list_files` for directory listings.\n\n" +
 		sharedBatchStrategy() +
-		"# Editing Files\n\n" +
-		sharedEditRules() + "\n" +
-		"# Coding Guidelines\n\n" +
+		"**Editing discipline**:\n" +
+		sharedEditRules() +
+		"\n# Coding Guidelines\n\n" +
 		sharedCodingGuidelines() + "\n" +
 		"# Safety\n\n" +
 		sharedSafetyBoundaries() +

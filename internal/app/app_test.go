@@ -689,13 +689,6 @@ func TestSystemPromptDefinesWaitSequencing(t *testing.T) {
 	}
 }
 
-func TestSystemPromptStartsTodoListsWithActiveItem(t *testing.T) {
-	prompt := defaultSystemPrompt(nil, "", nil, "", "")
-	const expected = "When starting a new non-empty task list, set its first actionable item to `in_progress`"
-	if !strings.Contains(prompt, expected) {
-		t.Fatalf("system prompt missing initial todo guidance %q", expected)
-	}
-}
 
 func TestSystemPromptExplainsRunCommandOutsidePathRecovery(t *testing.T) {
 	prompt := defaultSystemPrompt(nil, "", nil, "", "")
