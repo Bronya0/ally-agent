@@ -37,6 +37,7 @@
   - orch_read.go — 批量读取、文档抽取、行预览渲染、run 级读取缓存
   - orch_edit.go — 模型编辑执行（原子提交/回滚）
   - orch_edit_plan.go — 编辑批次归一化（`planLocalEditBatch` 唯一边界）
+  - orch_validation.go — edit/create 写入后的低成本语言校验（Python/Go/JS/TS/Vue/Java/JSON），以单个 `validation` 字符串回填模型
   - orch_batch_policy.go — 工具批次冲突/屏障策略（`detectToolBatchConflicts`、`isOrderedFileMutationTool`）
   - orch_command_safety.go — 命令安全边界（`checkCommandSafety`）
   - orch_git.go — git 状态/diff 工具编排

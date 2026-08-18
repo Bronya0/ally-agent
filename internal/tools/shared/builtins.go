@@ -53,7 +53,7 @@ func chatToolsUncached() []openai.Tool {
 				"includeIgnored": map[string]any{"type": "boolean", "description": "Include heavy ignored directories such as .git, node_modules, dist, build. Default false."},
 			},
 		}),
-		functionTool("edit", "Validate and apply exact replacements across multiple workspace files in one call. Each file requires the current 6-char `version` from read; a stale one fails with E_VERSION_MISMATCH (re-read all affected files and retry). Prefer a small exact unique `oldText` per change; `replace_all` replaces every non-overlapping exact occurrence; `lineRange` (A-B form) replaces larger whole-line blocks — choose oldText OR lineRange, never both. If exact matching fails, Ally auto-retries once normalizing invisible differences (trailing spaces, smart/Unicode quotes and dashes to ASCII); an ambiguous normalized match fails with E_MULTI_MATCH — add surrounding context rather than re-reading the whole file. All changes in a file share the original read version, so no offset adjustment between changes. Error codes: E_BAD_EDIT, E_VERSION_MISMATCH, E_PATH_OUTSIDE.", map[string]any{
+		functionTool("edit", "Validate and apply exact replacements across multiple workspace files in one call. Each file requires the current 6-char `version` from read; a stale one fails with E_VERSION_MISMATCH (re-read all affected files and retry). Prefer a small exact unique `oldText` per change; `replace_all` replaces every non-overlapping exact occurrence; `lineRange` (A-B form) replaces larger whole-line blocks — choose oldText OR lineRange, never both. If exact matching fails, Ally auto-retries once normalizing invisible differences (trailing spaces, smart/Unicode quotes and dashes to ASCII); an ambiguous normalized match fails with E_MULTI_MATCH — add surrounding context rather than re-reading the whole file. All changes in a file share the original read version, so no offset adjustment between changes. After writing, `validation` contains a concise automatic syntax/compile check; if it reports a failure, the file is already written and should be fixed with another edit. Error codes: E_BAD_EDIT, E_VERSION_MISMATCH, E_PATH_OUTSIDE.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"files": map[string]any{
@@ -79,7 +79,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"files"},
 		}),
-		functionTool("create", "Create a new UTF-8 text file inside the workspace (or an additional session-level extra root). Parent directories are created automatically. Does not overwrite unless overwrite is true. Refuses symlink targets and non-text overwrites. Error codes: E_PATH_OUTSIDE, E_EXISTS, E_TARGET_IS_DIRECTORY, E_SYMLINK_PATH, E_TEXT_OVERWRITE.", map[string]any{
+		functionTool("create", "Create a new UTF-8 text file inside the workspace (or an additional session-level extra root). Parent directories are created automatically. Does not overwrite unless overwrite is true. Refuses symlink targets and non-text overwrites. After writing, `validation` contains a concise automatic syntax/compile check; if it reports a failure, the file is already written and should be fixed with another edit. Error codes: E_PATH_OUTSIDE, E_EXISTS, E_TARGET_IS_DIRECTORY, E_SYMLINK_PATH, E_TEXT_OVERWRITE.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"path":      map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*"},

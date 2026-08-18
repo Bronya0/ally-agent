@@ -1077,6 +1077,42 @@ func TestCompactEditResultForModelPreservesWarnings(t *testing.T) {
 	}
 }
 
+func TestEditAutoValidationReturnsFailureWithoutUndoingWrite(t *testing.T) {
+	root := t.TempDir()
+	original := []byte("{\"ok\":true}\n")
+	writeToolTestFile(t, root, "config.json", string(original))
+	req := ModelEditToolRequest{Files: []FileTextEdits{{
+		Path:    "config.json",
+		Version: hashVersion(original),
+		Changes: []TextChange{{OldText: "true", NewText: ""}},
+	}}}
+	payload, err := json.Marshal(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := NewApp()
+	result := app.executeTool(context.Background(), ConfigState{Workspace: root}, "", "edit", payload)
+	if !result.OK {
+		t.Fatalf("edit should remain successful when validation fails: %#v", result)
+	}
+	edited, ok := result.Data.(MultiEditResult)
+	if !ok || !strings.Contains(edited.Validation, "自动校验失败（文件已写入）") {
+		t.Fatalf("expected edit validation failure string, got %#v", result.Data)
+	}
+	content, err := os.ReadFile(filepath.Join(root, "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "{\"ok\":}\n" {
+		t.Fatalf("validation failure must not roll back the edit, got %q", content)
+	}
+	full, _ := json.Marshal(result)
+	compact := compactToolResultForModel("edit", result, string(full))
+	if !strings.Contains(compact, `"validation":"自动校验失败（文件已写入）`) {
+		t.Fatalf("expected compact edit result to expose validation string, got %s", compact)
+	}
+}
+
 func TestCreateFileCreatesParentAutomatically(t *testing.T) {
 	root := t.TempDir()
 	app := NewApp()
@@ -1177,6 +1213,77 @@ func TestCreateCompactResultCarriesCreatedFields(t *testing.T) {
 	}
 	if !strings.Contains(compact, `"createdDirs":["a"]`) {
 		t.Fatalf("expected compact create result to carry createdDirs, got %s", compact)
+	}
+}
+
+func TestCreateAutoValidationIsAConciseModelString(t *testing.T) {
+	root := t.TempDir()
+	app := NewApp()
+	result := app.executeTool(context.Background(), ConfigState{Workspace: root}, "", "create", []byte(`{"path":"bad.json","content":"{\"broken\":","overwrite":false}`))
+	if !result.OK {
+		t.Fatalf("create should succeed even when post-write validation fails: %#v", result)
+	}
+	created, ok := result.Data.(EditResult)
+	if !ok {
+		t.Fatalf("unexpected create result type %T", result.Data)
+	}
+	if !strings.Contains(created.Validation, "自动校验失败（文件已写入）") || !strings.Contains(created.Validation, "bad.json") {
+		t.Fatalf("expected concise validation failure string, got %q", created.Validation)
+	}
+	full, _ := json.Marshal(result)
+	compact := compactToolResultForModel("create", result, string(full))
+	if !strings.Contains(compact, `"validation":"自动校验失败（文件已写入）`) {
+		t.Fatalf("expected compact result to expose validation string, got %s", compact)
+	}
+}
+
+func TestCreateAutoValidationPassesJSON(t *testing.T) {
+	root := t.TempDir()
+	app := NewApp()
+	result := app.executeTool(context.Background(), ConfigState{Workspace: root}, "", "create", []byte(`{"path":"good.json","content":"{\"ok\":true}","overwrite":false}`))
+	if !result.OK {
+		t.Fatalf("unexpected create error: %#v", result)
+	}
+	created, ok := result.Data.(EditResult)
+	if !ok || created.Validation != "自动校验通过：JSON 1 个文件" {
+		t.Fatalf("expected concise JSON validation success, got %#v", result.Data)
+	}
+}
+
+func TestAutoValidationCatchesPythonSyntax(t *testing.T) {
+	if _, _, ok := findPythonCommand(); !ok {
+		t.Skip("python is unavailable")
+	}
+	root := t.TempDir()
+	writeToolTestFile(t, root, "broken.py", "def broken(:\n    pass\n")
+	got := NewApp().validateChangedFiles(context.Background(), ConfigState{Workspace: root}, []string{"broken.py"})
+	if !strings.Contains(got, "自动校验失败") || !strings.Contains(got, "broken.py") {
+		t.Fatalf("expected Python syntax failure, got %q", got)
+	}
+}
+
+func TestAutoValidationCatchesJavaScriptSyntax(t *testing.T) {
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("node is unavailable")
+	}
+	root := t.TempDir()
+	writeToolTestFile(t, root, "broken.js", "const = 1;\n")
+	got := NewApp().validateChangedFiles(context.Background(), ConfigState{Workspace: root}, []string{"broken.js"})
+	if !strings.Contains(got, "自动校验失败") || !strings.Contains(got, "broken.js") {
+		t.Fatalf("expected JavaScript syntax failure, got %q", got)
+	}
+}
+
+func TestAutoValidationCatchesGoVetFailure(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go is unavailable")
+	}
+	root := t.TempDir()
+	writeToolTestFile(t, root, "go.mod", "module example.com/validation\n\ngo 1.23\n")
+	writeToolTestFile(t, root, "main.go", "package main\n\nfunc main() { missing() }\n")
+	got := NewApp().validateChangedFiles(context.Background(), ConfigState{Workspace: root}, []string{"main.go"})
+	if !strings.Contains(got, "自动校验失败") || !strings.Contains(got, "Go vet") {
+		t.Fatalf("expected Go vet failure, got %q", got)
 	}
 }
 

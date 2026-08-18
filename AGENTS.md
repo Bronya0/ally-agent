@@ -290,8 +290,8 @@ Built-in model-facing tools:
 |------|---------|
 | `list_files` | List files/directories with depth and limit controls |
 | `read` | Read one or many local files; text returns numbered line previews, documents return extracted text |
-| `edit` | Atomically apply exact-source or whole-line-range replacements to local files |
-| `create` | Create/overwrite text files |
+| `edit` | Atomically apply exact-source or whole-line-range replacements to local files; after writing, returns a concise `validation` string with low-cost language checks |
+| `create` | Create/overwrite text files; after writing, returns a concise `validation` string with low-cost language checks |
 | `delete` | Delete files/directories |
 | `grep` | Regex search through bundled ripgrep, with PATH fallback in development; exact stats + per-file hotspot counts (`fileCounts`) + `offset`/`nextOffset` pagination (`offsetExhausted` marks an offset past the end); workspace-wide skip policies are returned in `skipped`, while explicit paths bypass broad generated-directory and 10 MB exclusions |
 | `command` | Shell command execution with safety checks |

@@ -997,6 +997,10 @@ type EditResult struct {
 	// first, workspace-relative when inside the primary workspace), only when
 	// non-empty.
 	CreatedDirs []string `json:"createdDirs,omitempty"`
+	// Validation is a concise post-write syntax/compile check for the model.
+	// It is intentionally a string so the model can act on it without another
+	// nested result schema.
+	Validation string `json:"validation,omitempty"`
 }
 
 // EditRequest is the backend edit engine request. The model-facing edit tool
@@ -1047,6 +1051,7 @@ type MultiEditResult struct {
 	Warnings     []string     `json:"warnings,omitempty"`
 	Summary      string       `json:"summary"`
 	Diff         string       `json:"diff,omitempty"`
+	Validation   string       `json:"validation,omitempty"`
 }
 
 type editPlan struct {
@@ -2006,6 +2011,11 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 			data, err = a.editFilesWithConfig(cfg, req.Files)
 			a.fileOpsMu.Unlock()
 			if err == nil {
+				paths := make([]string, 0, len(req.Files))
+				for _, file := range req.Files {
+					paths = append(paths, file.Path)
+				}
+				data = attachValidation(data, a.validateChangedFiles(ctx, cfg, paths))
 				a.invalidateWorkspaceMapCache(cfg)
 				invalidateRunReadCache(ctx)
 			}
@@ -2018,6 +2028,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 			data, err = a.createFileWithConfig(cfg, req)
 			a.fileOpsMu.Unlock()
 			if err == nil {
+				data = attachValidation(data, a.validateChangedFiles(ctx, cfg, []string{req.Path}))
 				a.invalidateWorkspaceMapCache(cfg)
 				invalidateRunReadCache(ctx)
 			}
