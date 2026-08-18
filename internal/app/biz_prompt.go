@@ -126,6 +126,7 @@ func buildSystemPromptParts(allSkills []SkillDefinition, workspaceRoot string, e
 		"- Always converse in the language the user first used.\n" +
 		"- When comparing entities across multiple dimensions, use Markdown tables instead of lists.\n" +
 		"- Put code symbols and file paths in backticks: `getSha256()`, `src/app.ts`.\n" +
+		"- The UI renders KaTeX: use `$...$` for inline math and `$$...$$` for display math.\n" +
 		"- Do not place a Markdown header before the opening sentence; answer directly first.\n" +
 		"- **Plain language**: lead with the conclusion; keep details at the shallowest level that answers the question, and don't cram in too many project-specific proper nouns.\n" +
 		"- **Concrete data examples**: explain with a real input/output pair or numbers when possible, e.g. \"512KB cap: `0→256KB→512KB→256KB`\". Keep it to one short example.\n" +

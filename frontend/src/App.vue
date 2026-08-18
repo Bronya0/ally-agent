@@ -335,6 +335,11 @@ Public License v3. See the LICENSE file for details.
 import { computed, defineAsyncComponent, h, nextTick, onErrorCaptured, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import { createDiscreteApi, darkTheme } from 'naive-ui';
 import MarkdownIt from 'markdown-it';
+// @traptitech/markdown-it-katex 把 $...$ / $$...$$ 交给 katex 渲染。
+// katex 本体已作为 mermaid 的间接依赖存在于依赖树中，这里显式声明以避免
+// mermaid 升级时断链；插件本身极轻（~10KB）。
+import katexPlugin from '@traptitech/markdown-it-katex';
+import 'katex/dist/katex.min.css';
 import hljs from 'highlight.js/lib/core';
 import javascript from 'highlight.js/lib/languages/javascript';
 import typescript from 'highlight.js/lib/languages/typescript';
@@ -625,7 +630,7 @@ const markdown = new MarkdownIt({
   html: false,
   linkify: true,
   breaks: true,
-});
+}).use(katexPlugin);
 
 function renderHighlightedCodeBlock(code, highlighted, extraClass = '') {
   const rawLines = String(code || '').replace(/\r\n/g, '\n').split('\n');
