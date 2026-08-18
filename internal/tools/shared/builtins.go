@@ -350,6 +350,24 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"skill"},
 		}),
+		functionTool("suggest", "Suggest 1-4 follow-up actions as clickable chips below your last reply, ordered by relevance from most to least recommended. Each label is sent as-is as the user's next message when clicked. Call this only when the user might genuinely benefit from a concrete next step; if no useful follow-up exists, do not call it. Must be the only tool call in its batch. Error codes: E_BAD_SUGGEST, E_SUGGEST_BATCH_CONFLICT.", map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"items": map[string]any{
+					"type":        "array",
+					"minItems":    1,
+					"maxItems":    4,
+					"items": map[string]any{
+						"type":      "string",
+						"minLength": 1,
+						"maxLength": 80,
+						"pattern":   ".*\\S.*",
+					},
+					"description": "1-4 short chip texts, ordered by relevance (most recommended first). Each is sent as-is as the user's next message when clicked.",
+				},
+			},
+			"required": []string{"items"},
+		}),
 	}
 }
 
@@ -378,6 +396,7 @@ var builtinToolExamples = map[string]string{
 	"plan":               `update: {"todos":[{"title":"Inspect implementation","status":"in_progress"},{"title":"Run tests","status":"pending"}]}; read current: {}`,
 	"subagent":           `{"task":"Inspect the authentication module and report concrete security issues.","role":"code reviewer","description":"Review authentication","cleanContext":false}`,
 	"skill":              `{"skill":"codegraph","args":"main"}`,
+	"suggest":            `{"items":["Run go build to verify","Add unit tests"]}`,
 }
 
 func functionTool(name, description string, parameters map[string]any) openai.Tool {

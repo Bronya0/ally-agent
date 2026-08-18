@@ -66,6 +66,7 @@ Public License v3. See the LICENSE file for details.
                       @export-one-msg="exportOneMessage"
                       @export-all-msgs="exportAllMessages(tab.sessionId)"
                       @submit-ask="(msg, answers) => submitAskResponse(tab.sessionId, msg, answers)"
+                      @send-suggest="(label) => sendSuggest(tab.sessionId, label)"
                     />
                   </n-tab-pane>
                 </n-tabs>
@@ -1395,6 +1396,11 @@ const UPDATE_CHECK_INTERVAL_MS = 2 * 60 * 60 * 1000;
 // tool card, and balloons webview memory. Buffer the latest event per tool
 // call and flush on a timer so the UI repaints between updates.
 const toolUpdateBuffers = new Map();
+// Tools that never render as visible tool cards. Their tool:start / tool:update
+// / tool:error events are silently dropped; tool:result may still carry custom
+// UI-injection logic (e.g. suggest injects chips into the assistant message).
+const HIDDEN_TOOL_NAMES = new Set(['suggest']);
+const isHiddenTool = (name) => HIDDEN_TOOL_NAMES.has(name);
 let toolUpdateFlushScheduled = false;
 let toolUpdateFlushTimer = 0;
 // Pending attachments are scoped per session (mirrors sessionPromptTexts) so a
@@ -2989,6 +2995,7 @@ function finalizeReasoningTiming(msg) {
 // the main thread is not blocked by parsing/re-rendering large streaming
 // argument payloads (e.g. create content) on every delta.
 function bufferToolUpdate(data) {
+  if (isHiddenTool(data.name)) return;
   flushStreamBuffer(data.runId);
   const session = sessionByRunId(data.runId);
   if (!session) return;
@@ -3253,6 +3260,8 @@ function bindRuntimeEvents() {
     // 工具调用开始意味着本轮思考已结束，闭合思考时间窗口
     const last = session.messages[session.messages.length - 1];
     finalizeReasoningTiming(last);
+    // suggest 不渲染 running card，结果直接注入前一条 assistant 消息
+    if (isHiddenTool(data.name)) return;
       const title = makeToolTitle(data.name, data.args, data);
     updateToolEvent(toolEventId(data), data.name, title, data.args || '', 'running', data, session);
   };
@@ -3310,6 +3319,19 @@ function bindRuntimeEvents() {
     // the next model request). Refresh the footer counter so it tracks the
     // agent loop while it works, not only after the run ends.
     if (session.id === activeSessionId.value) refreshContextTokens(session.id);
+    // suggest: 不渲染为 tool card，直接把 items 注入前一条 assistant 消息
+    if (isHiddenTool(data.name)) {
+      const resultData = parseToolResultData(data.result);
+      const items = Array.isArray(resultData.items) ? resultData.items : [];
+      for (let i = session.messages.length - 1; i >= 0; i--) {
+        if (session.messages[i].role === 'assistant') {
+          session.messages[i].suggestions = items;
+          break;
+        }
+      }
+      scheduleSaveSessions();
+      return;
+    }
     const eventId = toolEventId(data);
     let existing = findToolEventMessage(session, data);
     if (!existing) existing = appendToolEventFallback(session, data, 'running');
@@ -3463,6 +3485,8 @@ function bindRuntimeEvents() {
     if (!session) return;
     // Failed tool calls also become part of the context; keep the footer fresh.
     if (session.id === activeSessionId.value) refreshContextTokens(session.id);
+    // suggest: 静默忽略错误，不渲染任何 card
+    if (isHiddenTool(data.name)) return;
     const eventId = toolEventId(data);
     let existing = findToolEventMessage(session, data);
     if (!existing) existing = appendToolEventFallback(session, data, 'error');
@@ -4420,6 +4444,17 @@ function formatReadRangeChip(startLine, endLine, totalLines, truncated) {
     parts.push(`${actualLines} line${actualLines !== 1 ? 's' : ''}`);
   }
   return parts.length ? `· ${parts.join(' · ')}` : '';
+}
+
+// suggest chip 点击：直接发送 label 作为新消息
+async function sendSuggest(sessionId, label) {
+  const tab = workspaceTabs.value.find(t => t.sessionId === sessionId);
+  if (tab && activeWorkspaceId.value !== tab.id) {
+    activeWorkspaceId.value = tab.id;
+  }
+  promptText.value = label;
+  await nextTick();
+  await sendPrompt();
 }
 
 async function sendPrompt() {

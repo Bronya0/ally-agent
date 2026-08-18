@@ -69,6 +69,7 @@ func detectToolBatchConflicts(cfg ConfigState, calls []openai.ToolCall) map[int]
 	}{
 		{name: "ask", code: "E_ASK_BATCH_CONFLICT"},
 		{name: "wait", code: "E_WAIT_BATCH_CONFLICT"},
+		{name: "suggest", code: "E_SUGGEST_BATCH_CONFLICT"},
 	}
 	for _, barrier := range barriers {
 		found := false

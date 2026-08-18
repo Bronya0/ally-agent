@@ -2082,6 +2082,18 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		if err == nil {
 			data, err = a.executeAsk(ctx, sessionID, req)
 		}
+	case "suggest":
+		var req struct {
+			Items []string `json:"items"`
+		}
+		err = decode(&req)
+		if err == nil {
+			if len(req.Items) == 0 {
+				err = codedToolError("E_BAD_SUGGEST", errors.New("items must contain at least 1 suggestion"))
+			} else {
+				data = map[string]any{"items": req.Items}
+			}
+		}
 	case "scheduled_task":
 		var req ScheduledTaskToolRequest
 		err = decode(&req)

@@ -75,6 +75,7 @@ func sharedBatchStrategy() string {
 func sharedCodingGuidelines() string {
 	return "- Understand relevant code before changing it; fix root causes with focused changes and update all affected call sites.\n" +
 		"- Do not weaken valid assertions merely to make tests pass; update tests when the intended behavior changes. Avoid unrelated cleanup and premature abstractions.\n" +
+		"- Follow high cohesion and low coupling: extract repeated branching logic or identity checks into a single named source and reference it everywhere, so adding or changing a condition only needs one edit — e.g. if several event handlers each skip a certain category of items, declare that category once in a shared lookup and call it from all handlers instead of hardcoding the same check at each site.\n" +
 		"- After edits, run the narrowest relevant build/test/lint command when feasible; if the user says not to test or build, skip it and report that you complied.\n" +
 		"- When the task is done, run the project's basic verification before reporting completion: format check, compile/build, lint, and the narrowest relevant tests (e.g. `gofmt`/`go vet`/`go build`/`go test`, `tsc --noEmit`/`eslint`, `ruff check`). At minimum confirm the code compiles and passes lint/format.\n" +
 		"- Verification must be safe: never run tests or commands that delete/reset data, modify databases or shared environments, uninstall dependencies, or touch production/release resources; if such a test is truly required, ask the user first.\n"
@@ -112,6 +113,7 @@ func buildSystemPromptParts(allSkills []SkillDefinition, workspaceRoot string, e
 		"# Tool Use\n\n" +
 		"- Prefer dedicated, structured, workspace-safe tools (`grep`, `read`, `list_files`, `web_fetch`/`http_request`, `remote_*`, `delete`) over shell commands. Use `command` only when no dedicated tool fits or a build/test/inspection needs the shell, and `service` for long-lived dev servers or services.\n" +
 		"- Use `ask` when progress genuinely requires one or more user decisions. Provide 2–6 reasonable options per question, mark exactly one recommended option, and do not add an 'Other' option because the UI always appends a custom-answer choice. `ask` must be the only tool call in that model response.\n" +
+		"- Use `suggest` only at the very end of your reply to offer 1–4 follow-up chips, ordered by relevance. Call it as the only tool in that model response and output no content after it. Skip it entirely when no genuinely useful next step exists.\n" +
 		"- Use `wait` only after starting an asynchronous operation or when a concrete external condition is expected to change. Call it as the only tool in that model response, then verify the condition after it completes. Do not use it to wait for user input or for long schedules; use `scheduled_task` for scheduled automation.\n" +
 		"- Connected MCP tools are exposed as `mcp__<server>__<tool>` and follow the same call/result conventions as built-in tools.\n" +
 		"- Create `scheduled_task` only when the user explicitly requests scheduled or recurring automation; tasks are process-local and cleared when Ally restarts.\n" +

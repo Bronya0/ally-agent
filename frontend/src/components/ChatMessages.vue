@@ -58,6 +58,9 @@ Public License v3. See the LICENSE file for details.
           <RenderBoundary v-if="msg.welcome" :label="$t('chat.welcome')"><WelcomeMessage :welcome="msg.welcome" :tools="tools" :mcp-servers="mcpServers" /></RenderBoundary>
           <div v-else class="message-body markdown-body" v-html="renderFn(msg.content, msg.streaming)"></div>
           <RenderBoundary :label="$t('chat.attachment')"><MessageAttachments :attachments="msg.attachments || []" /></RenderBoundary>
+          <div v-if="msg.role === 'assistant' && msg.suggestions?.length && !msg.streaming" class="suggest-row">
+            <button v-for="(label, i) in msg.suggestions" :key="i" class="suggest-chip" @click.stop="$emit('sendSuggest', label)">{{ label }}</button>
+          </div>
           <div v-if="msg.role === 'assistant' && msg.roundDurationText && !msg.streaming" class="message-duration">
             <span class="duration-text">{{ msg.roundDurationText }}</span>
             <span
@@ -613,6 +616,34 @@ defineExpose({ scrollbarRef, scrollToBottom, scrollToUserQuestion, scrollToBotto
   display: block;
   width: 14px;
   height: 14px;
+}
+
+.suggest-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+  margin-bottom: 4px;
+}
+
+.suggest-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  background: transparent;
+  color: #9a9a9a;
+  font-size: var(--ally-aux-font-size, 12px);
+  line-height: 1.4;
+  cursor: pointer;
+  transition: border-color 120ms ease, color 120ms ease;
+  user-select: none;
+}
+
+.suggest-chip:hover {
+  border-color: var(--ally-accent);
+  color: var(--ally-accent);
 }
 
 .message-duration {
