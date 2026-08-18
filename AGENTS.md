@@ -293,7 +293,7 @@ Built-in model-facing tools:
 | `edit` | Atomically apply exact-source or whole-line-range replacements to local files |
 | `create` | Create/overwrite text files |
 | `delete` | Delete files/directories |
-| `grep` | Regex search through bundled ripgrep, with PATH fallback in development; exact stats + per-file hotspot counts (`fileCounts`) + `offset`/`nextOffset` pagination (`offsetExhausted` marks an offset past the end) |
+| `grep` | Regex search through bundled ripgrep, with PATH fallback in development; exact stats + per-file hotspot counts (`fileCounts`) + `offset`/`nextOffset` pagination (`offsetExhausted` marks an offset past the end); workspace-wide skip policies are returned in `skipped`, while explicit paths bypass broad generated-directory and 10 MB exclusions |
 | `command` | Shell command execution with safety checks |
 | `service` | Run/inspect/stop long-lived local processes (dev servers, workers) |
 | `wait` | Pause the current agent run for a cancellable 1–3600 second delay |

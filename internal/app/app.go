@@ -43,6 +43,7 @@ const (
 	modelToolHeadBytes      = 4 * 1024
 	modelToolTailBytes      = 8 * 1024
 	maxModelGrepMatches     = 200
+	maxModelGrepContextLines = 400
 	maxAgentSteps           = 9999
 	// runInputBufferSize is the per-run capacity of the injected-message queue
 	// (InjectRunMessage). The buffered channel plus non-blocking drain keeps

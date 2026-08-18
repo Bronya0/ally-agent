@@ -796,6 +796,60 @@ func TestGrepFilesAlwaysExcludesHeavyDirectories(t *testing.T) {
 	if got.FileHits[0].Path != "src/main.go" {
 		t.Fatalf("unexpected match path %q", got.FileHits[0].Path)
 	}
+	if len(got.Skipped) == 0 {
+		t.Fatalf("workspace-wide grep must report its skip policy, got %#v", got)
+	}
+}
+
+func TestGrepFilesExplicitPathSearchesExcludedDirectories(t *testing.T) {
+	requireRipgrep(t)
+	root := t.TempDir()
+	writeToolTestFile(t, root, "vendor/pkg/source.go", "needle\n")
+
+	app := NewApp()
+	got, err := app.grepFilesWithConfig(context.Background(), ConfigState{Workspace: root}, GrepRequest{
+		Pattern: "needle",
+		Path:    "vendor",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.MatchedLines != 1 || got.Hits != 1 || got.Files != 1 {
+		t.Fatalf("explicit path must override broad-search exclusions, got %#v", got)
+	}
+	if len(got.FileHits) != 1 || got.FileHits[0].Path != "vendor/pkg/source.go" {
+		t.Fatalf("unexpected explicit-path result %#v", got.FileHits)
+	}
+	if len(got.Skipped) != 0 {
+		t.Fatalf("explicit path search must not report broad skip policies, got %#v", got.Skipped)
+	}
+}
+
+func TestGrepFilesExplicitPathSearchesLargeFiles(t *testing.T) {
+	requireRipgrep(t)
+	root := t.TempDir()
+	large := strings.Repeat("x", 11*1024*1024) + "\nneedle\n"
+	writeToolTestFile(t, root, "large.txt", large)
+
+	app := NewApp()
+	workspaceSearch, err := app.grepFilesWithConfig(context.Background(), ConfigState{Workspace: root}, GrepRequest{Pattern: "needle"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if workspaceSearch.MatchedLines != 0 {
+		t.Fatalf("workspace-wide search should keep the large-file guard, got %#v", workspaceSearch)
+	}
+
+	explicitSearch, err := app.grepFilesWithConfig(context.Background(), ConfigState{Workspace: root}, GrepRequest{
+		Pattern: "needle",
+		Path:    "large.txt",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if explicitSearch.MatchedLines != 1 || explicitSearch.Hits != 1 || explicitSearch.Files != 1 {
+		t.Fatalf("explicit path must search large files, got %#v", explicitSearch)
+	}
 }
 
 func requireRipgrep(t *testing.T) {
@@ -884,6 +938,55 @@ func TestCompactToolResultForModelCompactsGrepMatches(t *testing.T) {
 	}
 	if decoded.Data.NextOffset != total {
 		t.Fatalf("expected nextOffset to survive compaction, got %d", decoded.Data.NextOffset)
+	}
+}
+
+func TestCompactToolResultForModelPreservesRealMatchesWithLargeContext(t *testing.T) {
+	matches := make([]GrepMatch, 0, 503)
+	for i := 0; i < 500; i++ {
+		matches = append(matches, GrepMatch{LineNum: i + 1, Content: "context", Context: true})
+	}
+	for i := 0; i < 3; i++ {
+		matches = append(matches, GrepMatch{LineNum: 501 + i, Content: "needle"})
+	}
+	result := toolResult{OK: true, Data: GrepResult{
+		FileHits:     []GrepFileMatch{{Path: "a.txt", Matches: matches, MatchCount: 3}},
+		FileCounts:   []GrepFileCount{{Path: "a.txt", Count: 3}},
+		MatchedLines: 3,
+		Hits:         3,
+		Files:        1,
+		StatsExact:   true,
+	}}
+	raw, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	compact := compactToolResultForModel("grep", result, string(raw))
+	var decoded struct {
+		Data struct {
+			FileHits       []GrepFileMatch `json:"fileHits"`
+			MatchesOmitted int             `json:"matchesOmitted"`
+			ContextOmitted int             `json:"contextOmitted"`
+			MatchesReduced bool            `json:"matchesReduced"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(compact), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	actualMatches, contextLines := 0, 0
+	for _, match := range decoded.Data.FileHits[0].Matches {
+		if match.Context {
+			contextLines++
+		} else {
+			actualMatches++
+		}
+	}
+	if actualMatches != 3 {
+		t.Fatalf("model compaction must preserve all real matches, got %d from %#v", actualMatches, decoded.Data.FileHits)
+	}
+	if contextLines > maxModelGrepContextLines || decoded.Data.MatchesOmitted != 0 || decoded.Data.ContextOmitted != 100 || !decoded.Data.MatchesReduced {
+		t.Fatalf("expected bounded context reduction without dropping matches, got context=%d data=%#v", contextLines, decoded.Data)
 	}
 }
 

@@ -54,7 +54,7 @@
   - command/ — 命令安全解析（重定向/路径/风险模式）
   - edit/ — 编辑 Diff 与变更范围算法
   - git/ — git porcelain 与 unified-diff 解析
-  - grep/ — ripgrep 封装与结果归一化（精确统计、每文件热点计数 `fileCounts`、`offset` 翻页与 `offsetExhausted` 越界信号）
+  - grep/ — ripgrep 单次扫描与结果归一化（精确统计、Top-100 `fileCounts`、`offset` 翻页、`offsetExhausted` 越界信号与全仓库跳过策略）
   - memory/ — 记忆 Markdown frontmatter 解析
   - pathutil/ — 工作区路径解析与安全检查（Runtime 注入）
   - read/ — 文本读取、版本令牌、原子写入、文档文本抽取

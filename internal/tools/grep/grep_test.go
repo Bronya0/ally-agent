@@ -100,6 +100,34 @@ func TestSearchTruncatedByMatchLimitKeepsExactStats(t *testing.T) {
 	}
 }
 
+func TestSearchTruncatedPreservesPerFileOccurrenceCounts(t *testing.T) {
+	rg := requireRipgrep(t)
+	root := t.TempDir()
+	writeGrepTestFile(t, root, "hot.txt", "foo foo\nfoo foo\n")
+	writeGrepTestFile(t, root, "cold.txt", "foo\n")
+
+	result, err := Search(context.Background(), rg, root, root, Request{
+		Pattern:    "foo",
+		MaxMatches: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Hits != 5 || result.MatchedLines != 3 || result.Files != 2 {
+		t.Fatalf("unexpected exact stats: %#v", result)
+	}
+	counts := map[string]int{}
+	for _, item := range result.FileCounts {
+		counts[item.Path] = item.Count
+	}
+	if counts["hot.txt"] != 4 || counts["cold.txt"] != 1 {
+		t.Fatalf("truncated search must preserve occurrence counts, got %#v", result.FileCounts)
+	}
+	if len(result.FileHits) == 0 || result.FileHits[0].Path != "hot.txt" || result.FileHits[0].MatchCount != 4 {
+		t.Fatalf("sampled files must be ranked by occurrence count, got %#v", result.FileHits)
+	}
+}
+
 func TestSearchTruncatedByFileLimitKeepsExactStats(t *testing.T) {
 	rg := requireRipgrep(t)
 	root := t.TempDir()
@@ -210,11 +238,8 @@ func TestSearchMarksTruncatedMatchContent(t *testing.T) {
 }
 
 func TestSearchManyFilesFallbackKeepsExactStats(t *testing.T) {
-	// Regression: the fallback count pass parses the trailing --stats block,
-	// which comes AFTER one path:N line per matching file. Collecting the
-	// first 128 lines used to evict the stats block once >124 files matched,
-	// silently zeroing `files` or failing hard. The pass must stay correct
-	// regardless of how many files match.
+	// Regression: the single JSON pass must keep the trailing summary exact
+	// even when many files match and sampling stops after the first file.
 	rg := requireRipgrep(t)
 	root := t.TempDir()
 	const files = 130
@@ -224,7 +249,7 @@ func TestSearchManyFilesFallbackKeepsExactStats(t *testing.T) {
 
 	result, err := Search(context.Background(), rg, root, root, Request{
 		Pattern:    "needle",
-		MaxFiles:   1, // force the sample pass to truncate -> count fallback
+		MaxFiles:   1, // force sample truncation while the stream keeps draining
 		MaxMatches: 5,
 	})
 	if err != nil {
@@ -235,29 +260,6 @@ func TestSearchManyFilesFallbackKeepsExactStats(t *testing.T) {
 	}
 	if !result.Truncated || !result.SamplesTruncated || len(result.FileHits) != 1 {
 		t.Fatalf("expected truncated single-file samples, got %#v", result)
-	}
-}
-
-func TestParseStatsValue(t *testing.T) {
-	cases := []struct {
-		line   string
-		suffix string
-		want   int
-		ok     bool
-	}{
-		{"5 matches", " matches", 5, true},
-		{"5 matched lines", " matched lines", 5, true},
-		{"1 files contained matches", " files contained matches", 1, true},
-		{"  12 matches", " matches", 12, true},
-		{"path:5", " matches", 0, false},
-		{"", " matches", 0, false},
-		{"abc matches", " matches", 0, false},
-	}
-	for _, c := range cases {
-		got, ok := parseStatsValue(c.line, c.suffix)
-		if got != c.want || ok != c.ok {
-			t.Fatalf("parseStatsValue(%q, %q) = (%d, %v), want (%d, %v)", c.line, c.suffix, got, ok, c.want, c.ok)
-		}
 	}
 }
 
@@ -419,6 +421,21 @@ func TestSearchCaseSensitiveFlag(t *testing.T) {
 	}
 }
 
+func TestBaseArgsBoundsRipgrepResourcesAndHonorsExplicitPath(t *testing.T) {
+	workspaceArgs := strings.Join(baseArgs(Request{}, 20), " ")
+	if !strings.Contains(workspaceArgs, "--threads") {
+		t.Fatalf("workspace grep must cap ripgrep threads: %s", workspaceArgs)
+	}
+	if !strings.Contains(workspaceArgs, "--max-filesize 10M") || !strings.Contains(workspaceArgs, "!vendor/**") {
+		t.Fatalf("workspace grep must retain broad-search bounds: %s", workspaceArgs)
+	}
+
+	explicitArgs := strings.Join(baseArgs(Request{Path: "vendor"}, 20), " ")
+	if strings.Contains(explicitArgs, "--max-filesize") || strings.Contains(explicitArgs, "!vendor/**") {
+		t.Fatalf("explicit path must bypass broad exclusions: %s", explicitArgs)
+	}
+}
+
 func TestParseEndEvent(t *testing.T) {
 	root := t.TempDir()
 	abs := filepath.Join(root, "a.txt")
@@ -437,21 +454,6 @@ func TestParseEndEvent(t *testing.T) {
 	}
 	if _, _, ok := parseEndEvent([]byte(`not json`), root); ok {
 		t.Fatalf("invalid json must not parse as end event")
-	}
-}
-
-func TestParsePerFileCount(t *testing.T) {
-	root := t.TempDir()
-	abs := filepath.Join(root, "a.txt")
-	path, count, ok := parsePerFileCount(abs+":3", root)
-	if !ok || path != "a.txt" || count != 3 {
-		t.Fatalf("parsePerFileCount = (%q, %d, %v), want (a.txt, 3, true)", path, count, ok)
-	}
-	if _, _, ok := parsePerFileCount("4 matches", root); ok {
-		t.Fatalf("stats line must not parse as per-file count")
-	}
-	if _, _, ok := parsePerFileCount("", root); ok {
-		t.Fatalf("empty line must not parse as per-file count")
 	}
 }
 
