@@ -1419,10 +1419,10 @@ function pendingAttachmentsOf(sessionId) {
   return pendingAttachmentsBySession[sessionId];
 }
 
-function clearPendingAttachments(sessionId) {
+function clearPendingAttachments(sessionId, { revoke = true } = {}) {
   const arr = pendingAttachmentsBySession[sessionId];
   if (!arr) return;
-  for (const att of arr) releaseAttachmentPreview(att);
+  if (revoke) for (const att of arr) releaseAttachmentPreview(att);
   pendingAttachmentsBySession[sessionId] = [];
 }
 
@@ -4565,7 +4565,7 @@ async function sendPrompt() {
   addPromptHistory(displayText);
   commandHistoryIndex.value = -1;
   promptText.value = '';
-  clearPendingAttachments(session.id);
+  clearPendingAttachments(session.id, { revoke: false });
   commandMenuVisible.value = false;
   scrollMessagesToBottom({ force: true });
 

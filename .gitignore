@@ -11,6 +11,7 @@ frontend/dist/
 frontend/node_modules/
 node_modules/
 frontend/package.json.md5
+frontend/package-lock.json
 
 # ── Dotfiles/dot-directories (except .github, .gitignore, .gitattributes) ──
 .*
