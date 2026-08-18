@@ -3382,6 +3382,9 @@ function bindRuntimeEvents() {
       }
       existing.body = formatToolBody(data.name, data.result);
       existing.chip = formatToolChip(data.name, data.result);
+      if (['edit', 'replace_exact', 'replace_lines', 'remote_edit', 'create', 'remote_create_file'].includes(data.name)) {
+        existing.validation = typeof resultData.validation === 'string' ? resultData.validation : '';
+      }
       existing.durationMs = Number(data.durationMs || 0);
       existing.durationText = formatDurationShort(existing.durationMs);
       if (data.mcpServer) existing.mcpServer = data.mcpServer;

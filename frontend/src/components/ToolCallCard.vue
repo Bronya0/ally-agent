@@ -64,6 +64,12 @@ Public License v3. See the LICENSE file for details.
     <div v-if="msg.editWarnings && msg.editWarnings.length" class="edit-warning-list">
       <div v-for="(warning, wi) in msg.editWarnings" :key="wi" class="edit-warning">{{ warning }}</div>
     </div>
+    <div v-if="isValidationWarning(msg)" class="edit-warning-list validation-warning-list" role="status" aria-live="polite">
+      <div class="edit-warning validation-warning">
+        <span class="validation-warning-label">{{ $t('tools.validationWarning') }}</span>
+        {{ msg.validation }}
+      </div>
+    </div>
     <pre v-if="msg.expanded && msg.editChangedLinesBlock" class="edit-changed-lines-block">{{ msg.editChangedLinesBlock }}</pre>
     <CodeView
       v-else-if="msg.kind === 'create' && msg.status !== 'error'"
@@ -282,6 +288,11 @@ function isBodyPreview(msg) {
 
 function isCreatePreview(msg) {
   return !msg.expanded && lineCount(msg.codeContent) > BODY_PREVIEW_LINES;
+}
+
+function isValidationWarning(msg) {
+  const validation = String(msg?.validation || '');
+  return /自动校验失败|validation\s+(?:failed|error)/i.test(validation);
 }
 
 function toolBodyText(msg) {
