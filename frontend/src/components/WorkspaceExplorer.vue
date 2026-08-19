@@ -41,12 +41,13 @@
           :indent="16"
           :theme-overrides="treeThemeOverrides"
           :data="treeData"
+          :expanded-keys="expandedKeys"
           :selected-keys="selectedKeys"
           :node-props="nodeProps"
           expand-on-click
-          :render-prefix="renderPrefix"
+          :render-switcher-icon="renderSwitcherIcon"
           :render-label="renderLabel"
-          :on-load="loadTreeNode"
+          @update:expanded-keys="onExpandedKeysChange"
           @update:selected-keys="onSelect"
         />
         <div v-else class="workspace-explorer-empty">{{ $t('app.workspace.none') }}</div>
@@ -60,18 +61,18 @@
         <button type="button" class="workspace-explorer-close-content" :title="$t('common.close')" :aria-label="$t('common.close')" @click="closeContent"><CloseOutlined /></button>
         <div class="workspace-explorer-file-title" :title="activeFile?.path || ''">
           <span>{{ activeFile?.path || $t('app.filePreview.empty') }}</span>
-          <span v-if="dirty" class="workspace-explorer-dirty" :title="$t('app.workspaceExplorer.unsaved')">●</span>
+          <span v-if="dirty" class="workspace-explorer-dirty" :title="$t('app.workspaceExplorer.unsaved')"></span>
         </div>
         <div class="workspace-explorer-actions">
           <n-button
-            v-if="isMarkdown && activeFile && !isImageMode"
+            v-if="isMarkdown && activeFile && !isImageMode && !infoMode"
             size="tiny"
             :type="mdPreviewMode ? 'primary' : 'default'"
             ghost
             @click="toggleMdPreview"
           >{{ mdPreviewMode ? $t('app.workspaceExplorer.editSource') : $t('app.workspaceExplorer.preview') }}</n-button>
           <n-button
-            v-if="activeFile && !isImageMode && !mdPreviewMode"
+            v-if="activeFile && !isImageMode && !mdPreviewMode && !infoMode"
             size="tiny"
             type="primary"
             ghost
@@ -91,7 +92,17 @@
       <div v-show="isMarkdown && mdPreviewMode && !isImageMode" ref="mdPreviewRef" class="workspace-explorer-md-preview"></div>
 
       <!-- Ace editor (always in DOM, shown for text files when not in md preview) -->
-      <div v-show="showEditor && !isImageMode && !mdPreviewMode" ref="aceContainerRef" class="workspace-explorer-ace"></div>
+      <div v-show="showEditor && !isImageMode && !mdPreviewMode && !infoMode" ref="aceContainerRef" class="workspace-explorer-ace"></div>
+
+      <!-- 非预览型文件（如 exe 等二进制）：用树节点已有数据展示基本信息 -->
+      <div v-if="infoMode" class="workspace-explorer-file-info">
+        <div class="file-info-row"><span class="file-info-label">{{ $t('app.filePreview.name') }}</span><span class="file-info-value">{{ activeFile.info.label }}</span></div>
+        <div class="file-info-row"><span class="file-info-label">{{ $t('app.filePreview.type') }}</span><span class="file-info-value">{{ fileTypeLabel }}</span></div>
+        <div class="file-info-row" v-if="activeFile.info.size != null"><span class="file-info-label">{{ $t('app.filePreview.size') }}</span><span class="file-info-value">{{ formatSize(activeFile.info.size) }}</span></div>
+        <div class="file-info-row" v-if="activeFile.info.modTime"><span class="file-info-label">{{ $t('app.filePreview.modified') }}</span><span class="file-info-value">{{ activeFile.info.modTime }}</span></div>
+        <div class="file-info-row file-info-path"><span class="file-info-label">{{ $t('app.filePreview.path') }}</span><span class="file-info-value">{{ activeFile.info.path }}</span></div>
+        <div class="file-info-hint">{{ $t('app.filePreview.binaryHint') }}</div>
+      </div>
 
       <!-- Loading / error / empty states (only shown when no activeFile) -->
       <div v-show="loadingFile && !activeFile" class="workspace-explorer-editor-state"><n-spin size="small" /> {{ $t('app.filePreview.loading') }}</div>
@@ -114,11 +125,11 @@
 
 <script setup>
 import { computed, h, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { useDialog, useMessage } from 'naive-ui';
+import { NIcon, NInput, useDialog, useMessage } from 'naive-ui';
 import ace from 'ace-builds';
 import 'ace-builds/src-noconflict/ext-language_tools';
 import 'ace-builds/src-noconflict/ext-searchbox';
-import 'ace-builds/src-noconflict/theme-monokai';
+import 'ace-builds/src-noconflict/theme-tomorrow_night';
 import 'ace-builds/src-noconflict/mode-text';
 import 'ace-builds/src-noconflict/mode-javascript';
 import 'ace-builds/src-noconflict/mode-typescript';
@@ -137,10 +148,10 @@ import 'ace-builds/src-noconflict/mode-markdown';
 import 'ace-builds/src-noconflict/mode-rust';
 import 'ace-builds/src-noconflict/mode-ruby';
 import MarkdownIt from 'markdown-it';
-import { ListFiles, ReadWorkspaceFile, ReadWorkspaceImage, SaveWorkspaceFile, DeletePath, OpenPathInFileManager } from '../../bindings/ally-dev/internal/app/app';
+import { ListFiles, ReadWorkspaceFile, ReadWorkspaceImage, SaveWorkspaceFile, DeletePath, OpenWorkspacePathInFileManager, CreateFile } from '../../bindings/ally-dev/internal/app/app';
 import CloseOutlined from '@vicons/antd/CloseOutlined';
-import FileOutlined from '@vicons/antd/FileOutlined';
 import ReloadOutlined from '@vicons/antd/ReloadOutlined';
+import { RightOutlined } from '@vicons/antd';
 import { t } from '../i18n.mjs';
 
 const props = defineProps({
@@ -153,6 +164,7 @@ const dialog = useDialog();
 const message = useMessage();
 
 const treeData = ref([]);
+const expandedKeys = ref([]);
 const selectedKeys = ref([]);
 const loadingTree = ref(false);
 const loadingFile = ref(false);
@@ -185,7 +197,16 @@ let mdRenderer = null;
 // nodeWrapperPadding 默认 '3px 0'：每行 hover/聚焦高亮上下各缩进 3px，
 // 相邻行之间出现 6px 视觉缝隙（表现为"聚焦区域之间存在间距"）。
 // 这里归零，让 20px 行高的高亮区域完全相邻。
-const treeThemeOverrides = { nodeHeight: '20px', fontSize: '12px', nodeWrapperPadding: '0' };
+const treeThemeOverrides = {
+  nodeHeight: '20px',
+  fontSize: '12px',
+  nodeWrapperPadding: '0',
+  nodeColorHover: 'rgba(78, 161, 255, 0.08)',
+  nodeColorPressed: 'rgba(78, 161, 255, 0.14)',
+  nodeColorActive: 'rgba(78, 161, 255, 0.18)',
+  nodeTextColor: '#cbd3df',
+  nodeTextColorDisabled: '#697384',
+};
 
 const workspaceLabel = computed(() => {
   const value = String(props.workspace || '').replace(/[\\/]+$/, '');
@@ -209,6 +230,35 @@ const ACE_MODE_MAP = {
 };
 const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'ico']);
 const isImageFile = (path) => IMAGE_EXTS.has(extension(path));
+// 这些类型的文件无法在文本编辑器中查看/编辑，点击时改为展示基本信息（沿用树节点已有数据）
+const BINARY_EXTS = new Set([
+  'exe', 'dll', 'so', 'dylib', 'bin', 'dat', 'db', 'sqlite', 'sqlite3', 'mdb',
+  'zip', 'gz', 'tar', 'tgz', 'bz2', 'xz', '7z', 'rar', 'zst',
+  'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'odt', 'ods', 'odp',
+  'mp3', 'mp4', 'avi', 'mov', 'wmv', 'flv', 'mkv', 'webm', 'm4a', 'wav', 'ogg',
+  'woff', 'woff2', 'ttf', 'otf', 'eot', 'fon',
+  'o', 'a', 'lib', 'obj', 'class', 'jar', 'war', 'pyc', 'pyo', 'wasm',
+  'iso', 'img', 'dmg', 'deb', 'rpm', 'apk', 'msi', 'cab', 'vhd', 'vmdk',
+]);
+const isBinaryFile = (path) => BINARY_EXTS.has(extension(path));
+// 信息面板模式：当前打开的是二进制/不可预览文件，用树节点已有数据展示基本信息
+const infoMode = computed(() => Boolean(activeFile.value && activeFile.value.info));
+const fileTypeLabel = computed(() => {
+  const info = activeFile.value?.info;
+  if (!info) return '';
+  if (info.dir) return t('app.filePreview.folder');
+  const ext = extension(info.path);
+  return ext ? `${ext.toUpperCase()} ${t('app.filePreview.file')}` : t('app.filePreview.file');
+});
+function formatSize(bytes) {
+  if (bytes == null) return '';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let i = 0;
+  let n = Number(bytes);
+  if (!Number.isFinite(n) || n < 0) return '';
+  while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+  return `${n.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
+}
 const extension = (path) => {
   const name = String(path || '').split(/[\\/]/).pop() || '';
   const dot = name.lastIndexOf('.');
@@ -223,9 +273,9 @@ function initAceEditor() {
   if (aceEditor || !aceContainerRef.value) return;
   aceEditor = ace.edit(aceContainerRef.value, {
     mode: 'ace/mode/text',
-    theme: 'ace/theme/monokai',
-    fontSize: '13px',
-    fontFamily: "Inter, 'Segoe UI', 'Microsoft YaHei', 'PingFang SC', sans-serif",
+    theme: 'ace/theme/tomorrow_night',
+    fontSize: '15px',
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
     showPrintMargin: false,
     tabSize: 2,
     useSoftTabs: true,
@@ -235,6 +285,10 @@ function initAceEditor() {
     enableBasicAutocompletion: true,
     enableLiveAutocompletion: false,
     showFoldWidgets: false,
+    // 允许滚动到文件末尾之后再多滚半屏，光标可落在最后一行下方
+    scrollPastEnd: 0.5,
+    // 光标加粗，定位更显眼（之前你对光标定位很敏感）
+    cursorStyle: 'wide',
   });
   aceEditor.on('input', onAceInput);
   aceEditor.container.addEventListener('keydown', onEditorKeydown);
@@ -281,12 +335,20 @@ function toggleMdPreview() {
 }
 
 function makeNode(entry) {
+  const dir = Boolean(entry.Dir ?? entry.dir);
   return {
     key: entry.Path || entry.path || entry.Name || entry.name,
     label: entry.Name || entry.name,
     path: entry.Path || entry.path,
-    isLeaf: !(entry.Dir ?? entry.dir),
-    dir: Boolean(entry.Dir ?? entry.dir),
+    // 透传后端 FileEntry 的 size / modTime，供二进制文件的信息面板直接使用（无需二次请求）
+    size: entry.Size ?? entry.size,
+    modTime: entry.ModTime ?? entry.modTime,
+    // Keep a stable, already-loaded children container. The actual entries
+    // are filled after the tree has performed its normal expand rotation.
+    children: dir ? [] : undefined,
+    childrenLoaded: !dir,
+    isLeaf: !dir,
+    dir,
   };
 }
 
@@ -297,7 +359,9 @@ async function listDirectory(path = '') {
 
 async function loadRoot() {
   const requestID = ++requestSequence;
+  loadingTreeNodes.clear();
   selectedKeys.value = [];
+  expandedKeys.value = [];
   activeFile.value = null;
   clearEditor();
   if (!props.workspace) return;
@@ -313,13 +377,29 @@ async function loadRoot() {
   }
 }
 
-async function loadTreeNode(node) {
-  if (!node?.dir || Array.isArray(node.children)) return;
+const loadingTreeNodes = new Set();
+async function onExpandedKeysChange(keys, _options, meta) {
+  const node = meta?.node;
+  const shouldLoad = meta?.action === 'expand'
+    && node?.dir
+    && !node.childrenLoaded
+    && !loadingTreeNodes.has(node.key);
+  expandedKeys.value = Array.isArray(keys) ? keys : [];
+  if (!shouldLoad) return;
+  const requestID = requestSequence;
+  loadingTreeNodes.add(node.key);
   try {
-    node.children = await listDirectory(node.path);
+    const children = await listDirectory(node.path);
+    if (disposed || requestID !== requestSequence) return;
+    node.children = children;
+    node.childrenLoaded = true;
   } catch (err) {
+    if (disposed || requestID !== requestSequence) return;
     node.children = [];
+    node.childrenLoaded = true;
     message.error(t('app.workspaceExplorer.treeFailed', { error: errorText(err) }));
+  } finally {
+    loadingTreeNodes.delete(node.key);
   }
 }
 
@@ -333,13 +413,17 @@ async function refreshTree() {
   }
 }
 
-function renderPrefix({ option }) {
-  if (option?.dir) return null;
-  return h(FileOutlined);
+// 目录（非叶子节点）的展开/折叠箭头：RightOutlined 来自已依赖的 @vicons/antd，
+// Naive UI 会在展开时自动将其旋转 90°
+function renderSwitcherIcon() {
+  return h(NIcon, null, { default: () => h(RightOutlined) });
 }
 
 function renderLabel({ option }) {
-  return h('span', { class: 'workspace-explorer-node-label', title: option.path }, option.label);
+  return h('span', {
+    class: ['workspace-explorer-node-label', option?.dir ? 'is-directory' : 'is-file'],
+    title: option.path,
+  }, option.label);
 }
 
 function nodeProps({ option }) {
@@ -366,7 +450,16 @@ function onTreeAreaContextmenu(e) {
 
 const contextMenuOptions = computed(() => {
   if (!contextMenuNode.value) {
-    return [{ label: t('app.workspaceExplorer.openFolder'), key: 'openFolder' }];
+    return [
+      { label: t('app.workspaceExplorer.newFile'), key: 'newFile' },
+      { label: t('app.workspaceExplorer.openFolder'), key: 'openFolder' },
+    ];
+  }
+  if (contextMenuNode.value.dir) {
+    return [
+      { label: t('app.workspaceExplorer.openFolder'), key: 'openFolder' },
+      { label: t('common.delete'), key: 'delete' },
+    ];
   }
   return [
     {
@@ -379,13 +472,61 @@ const contextMenuOptions = computed(() => {
 function onContextMenuSelect(key) {
   contextMenuShow.value = false;
   if (key === 'delete') void confirmDeleteNode(contextMenuNode.value);
-  if (key === 'openFolder') void openWorkspaceFolder();
+  if (key === 'openFolder') void openWorkspaceFolder(contextMenuNode.value);
+  if (key === 'newFile') void openNewFileDialog();
 }
 
-async function openWorkspaceFolder() {
+// 在树空白区域右键「新建文本文件」：弹框输入带扩展名的完整文件名，
+// 在工作区根目录创建空文件，并直接插入顶层树节点（不刷新、不丢失展开状态）。
+function openNewFileDialog() {
+  const name = ref('');
+  dialog.create({
+    title: t('app.workspaceExplorer.newFile'),
+    content: () => h(NInput, {
+      value: name.value,
+      'onUpdate:value': (v) => { name.value = v; },
+      placeholder: t('app.workspaceExplorer.newFileNamePlaceholder'),
+      clearable: true,
+      autofocus: true,
+    }),
+    positiveText: t('common.create'),
+    negativeText: t('common.cancel'),
+    onPositiveClick: async () => {
+      const ok = await createFile(name.value);
+      return ok; // 返回 false 保持弹窗打开，方便改名重试
+    },
+  });
+}
+
+async function createFile(rawName) {
+  const name = String(rawName || '').trim();
+  if (!name) {
+    message.error(t('app.workspaceExplorer.newFileInvalid'));
+    return false;
+  }
+  // 仅允许单层文件名（含扩展名）；剥离任何路径分隔与相对段，防止越界写入
+  const base = name.split(/[\\/]/).pop();
+  if (!base || base === '.' || base === '..' || base.includes('..')) {
+    message.error(t('app.workspaceExplorer.newFileInvalid'));
+    return false;
+  }
+  try {
+    await CreateFile({ path: base, content: '', overwrite: false });
+    if (!treeData.value.some((n) => n.label === base)) {
+      treeData.value = [...treeData.value, makeNode({ Path: base, Name: base, Dir: false })];
+    }
+    message.success(t('app.workspaceExplorer.fileCreated', { name: base }));
+    return true;
+  } catch (err) {
+    message.error(t('app.workspaceExplorer.createFailed', { error: errorText(err) }));
+    return false;
+  }
+}
+
+async function openWorkspaceFolder(node = null) {
   if (!props.workspace) return;
   try {
-    await OpenPathInFileManager(props.workspace);
+    await OpenWorkspacePathInFileManager(String(node?.path || ''));
   } catch (err) {
     message.error(t('app.workspaceExplorer.openFolderFailed', { error: errorText(err) }));
   }
@@ -397,7 +538,7 @@ async function confirmDeleteNode(node) {
   // 树节点路径由后端 ListFiles 生成（工作区内相对路径）；
   // 前端只拦截明显的穿越/绝对路径异常，工作区边界由后端 DeletePath 严格校验
   const normalized = filePath.replace(/\\/g, '/');
-  if (normalized.includes('../') || normalized.startsWith('/') || /^[a-zA-Z]:/.test(normalized)) {
+  if (normalized === '..' || normalized.includes('../') || normalized.startsWith('/') || /^[a-zA-Z]:/.test(normalized)) {
     message.error(t('app.workspaceExplorer.deleteOutsideWorkspace'));
     return;
   }
@@ -453,6 +594,14 @@ async function openFile(node) {
       if (disposed || requestID !== requestSequence) return false;
       imageDataUrl.value = String(result?.data || '');
       activeFile.value = { path: node.path, image: true };
+      draftContent.value = '';
+      originalContent.value = '';
+      loadingFile.value = false;
+      return true;
+    }
+    if (isBinaryFile(node.path)) {
+      // 二进制/不可预览文件：不读取内容，直接用树节点已有数据展示基本信息
+      activeFile.value = { path: node.path, info: node };
       draftContent.value = '';
       originalContent.value = '';
       loadingFile.value = false;

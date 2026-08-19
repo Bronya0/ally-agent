@@ -340,6 +340,32 @@ func (a *App) OpenWorkspaceInFileManager() error {
 	return openPathInFileManager(root)
 }
 
+// OpenWorkspacePathInFileManager opens a workspace-relative file or directory
+// in the system file manager. An empty path opens the workspace root.
+func (a *App) OpenWorkspacePathInFileManager(path string) error {
+	if err := a.ensureInitialized(); err != nil {
+		return err
+	}
+	a.mu.Lock()
+	cfg := a.config
+	a.mu.Unlock()
+	root, err := workspaceRoot(cfg)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(path) == "" {
+		return openPathInFileManager(root)
+	}
+	target, err := resolveReadablePath(cfg, path)
+	if err != nil {
+		return err
+	}
+	if !insideRoot(root, target) {
+		return errors.New("path is outside workspace")
+	}
+	return openPathInFileManager(target)
+}
+
 // OpenPathInFileManager opens a file or directory in the system file manager.
 // If path points to a file, the parent directory is opened instead.
 func (a *App) OpenPathInFileManager(path string) error {

@@ -466,19 +466,59 @@ code, pre {
 .workspace-explorer-spin { flex: 1; min-height: 0; overflow: hidden; }
 .workspace-explorer-spin .n-spin-content { height: 100%; }
 .workspace-explorer-tree-view { height: 100%; padding: 0; overflow-x: auto; overflow-y: hidden; }
-.workspace-explorer-node-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-explorer-node-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: color 0.15s ease;
+}
+.workspace-explorer-node-label.is-directory { color: #d6b378; }
+.workspace-explorer-node-label.is-file { color: #c5cfdb; }
+.workspace-explorer-tree-view .n-tree-node-content:hover .workspace-explorer-node-label { color: #eef5ff; }
+.workspace-explorer-tree-view .n-tree-node--selected .workspace-explorer-node-label { color: #f5f9ff; }
+.workspace-explorer-node-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+}
+.workspace-explorer-node-icon.is-file { color: #78b7e8; }
+.workspace-explorer-tree-view .n-tree-node--selected .workspace-explorer-node-icon.is-file { color: #a9d8ff; }
 .workspace-explorer-empty,
 .workspace-explorer-editor-state { display: flex; align-items: center; justify-content: center; min-height: 100%; padding: 24px; color: #858b98; font-size: 13px; text-align: center; }
 .workspace-explorer-editor { display: flex; flex: 1; min-width: 0; min-height: 0; flex-direction: column; background: #1a1a1a; }
 .workspace-explorer-file-title { display: flex; align-items: center; gap: 7px; min-width: 0; flex: 1 1 auto; color: #d4d4d4; font-family: var(--ally-mono-font); font-size: 12px; }
 .workspace-explorer-file-title > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.workspace-explorer-dirty { flex: 0 0 auto; color: #f3b562; font-size: 15px; line-height: 1; }
+.workspace-explorer-dirty { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 50%; background: #f3b562; }
 .workspace-explorer-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
 .workspace-explorer-actions .n-switch .n-switch__rail { font-size: 11px; }
 .workspace-explorer-ace { flex: 1; min-height: 0; width: 100%; }
-.workspace-explorer-ace .ace_gutter-layer { font-family: 'Inter', 'Segoe UI', sans-serif !important; }
+.workspace-explorer-ace .ace_gutter-layer { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace !important; }
 .workspace-explorer-ace .ace_fold { display: none !important; }
-.workspace-explorer-ace .ace_gutter-cell { padding-left: 8px !important; }
+.workspace-explorer-ace .ace_gutter-cell { padding-left: 8px !important; color: #969896; }
+
+/* 编辑器滚动条（垂直 + 水平）是浏览器原生滚动条，在深色主题下默认极淡几乎看不见。
+   用原生滚动条伪元素自定义，提亮轨道与滑块并加宽。 */
+.workspace-explorer-ace .ace_scrollbar {
+  scrollbar-width: thick;
+  scrollbar-color: rgba(255, 255, 255, 0.5) rgba(255, 255, 255, 0.12);
+}
+.workspace-explorer-ace .ace_scrollbar::-webkit-scrollbar {
+  width: 16px;
+  height: 16px;
+}
+.workspace-explorer-ace .ace_scrollbar::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.12);
+}
+.workspace-explorer-ace .ace_scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.5);
+  border-radius: 6px;
+}
+.workspace-explorer-ace .ace_scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.7);
+}
 .workspace-explorer-md-preview {
   flex: 1;
   min-height: 0;
@@ -488,6 +528,39 @@ code, pre {
   line-height: 1.7;
   color: #d4d4d4;
   font-family: 'Inter', 'Segoe UI', 'Microsoft YaHei', 'PingFang SC', sans-serif;
+}
+.workspace-explorer-file-info {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 20px 24px;
+  color: #d4d4d4;
+  font-family: 'Inter', 'Segoe UI', 'Microsoft YaHei', 'PingFang SC', sans-serif;
+}
+.workspace-explorer-file-info .file-info-row {
+  display: flex;
+  gap: 12px;
+  padding: 9px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.workspace-explorer-file-info .file-info-label {
+  flex: 0 0 76px;
+  color: #8a8f98;
+}
+.workspace-explorer-file-info .file-info-value {
+  flex: 1;
+  word-break: break-all;
+}
+.workspace-explorer-file-info .file-info-path {
+  align-items: flex-start;
+}
+.workspace-explorer-file-info .file-info-hint {
+  margin-top: 16px;
+  color: #8a8f98;
+  font-size: 12px;
+  line-height: 1.6;
 }
 .workspace-explorer-md-preview h1,
 .workspace-explorer-md-preview h2,
@@ -529,8 +602,15 @@ code, pre {
 .workspace-explorer-tree-view .n-tree-node-content { min-height: 20px; font-size: 12px; display: flex; align-items: center; }
 .workspace-explorer-tree-view .n-tree-node-content__text { line-height: 20px; }
 .workspace-explorer-tree-view .n-tree-node-switcher { width: 14px; margin-right: 0; display: flex; align-items: center; justify-content: center; height: 20px; flex-shrink: 0; }
-.workspace-explorer-tree-view .n-tree-node-switcher .n-base-loading { display: none; }
-.workspace-explorer-tree-view .n-tree-node-switcher .n-tree-node-switcher__icon { display: flex; align-items: center; justify-content: center; font-size: 12px; transition: none; }
+.workspace-explorer-tree-view .n-tree-node-switcher .n-tree-node-switcher__icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  font-size: 12px;
+  transition: none;
+}
 .workspace-explorer-tree-view .n-tree-node-content__prefix { margin-right: 0; }
 .workspace-explorer-tree-view .n-tree-node-content__prefix svg { width: 12px; height: 12px; }
 .composer { position: relative; z-index: 40; }
@@ -773,6 +853,18 @@ code, pre {
 .composer-new-session-btn svg {
   width: 16px;
   height: 16px;
+}
+
+.composer-new-session-btn {
+  color: #18a058;
+}
+
+.composer-sessions-btn {
+  color: #e0a070;
+}
+
+.composer-explorer-btn {
+  color: #4ea1ff;
 }
 
 /* ── Composer info footer ── */
