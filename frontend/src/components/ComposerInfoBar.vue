@@ -23,6 +23,13 @@ Public License v3. See the LICENSE file for details.
       :aria-label="$t('commands.sessions')"
       @click.stop="$emit('showSessions')"
     ><MenuOutlined /></button>
+    <button
+      type="button"
+      :class="['composer-icon-btn', 'composer-explorer-btn', { active: explorerVisible }]"
+      :title="$t('app.workspaceExplorer.open')"
+      :aria-label="$t('app.workspaceExplorer.open')"
+      @click.stop="$emit('toggleExplorer')"
+    ><FolderOpenOutlined /></button>
     <n-dropdown
       trigger="click"
       placement="top-start"
@@ -197,6 +204,7 @@ import { computed, h, ref } from 'vue';
 import ContextUsageInline from './ContextUsageInline.vue';
 import PlusOutlined from '@vicons/antd/PlusOutlined';
 import MenuOutlined from '@vicons/antd/MenuOutlined';
+import FolderOpenOutlined from '@vicons/antd/FolderOpenOutlined';
 import FolderAddOutlined from '@vicons/antd/FolderAddOutlined';
 import AppstoreOutlined from '@vicons/antd/AppstoreOutlined';
 import CloseOutlined from '@vicons/antd/CloseOutlined';
@@ -282,10 +290,11 @@ const props = defineProps({
   taskCenterCount: { type: Number, default: 0 },
   taskCenterRunningCount: { type: Number, default: 0 },
   extraRoots: { type: Array, default: () => [] },
+  explorerVisible: { type: Boolean, default: false },
   fmtK: { type: Function, required: true },
 });
 
-const emit = defineEmits(['switchModel', 'openConfig', 'openGitDiff', 'openWorkspace', 'changeReasoningEffort', 'openTaskCenter', 'newSession', 'showSessions', 'addExtraRoot', 'removeExtraRoot', 'compactContext']);
+const emit = defineEmits(['switchModel', 'openConfig', 'openGitDiff', 'openWorkspace', 'changeReasoningEffort', 'openTaskCenter', 'newSession', 'showSessions', 'toggleExplorer', 'addExtraRoot', 'removeExtraRoot', 'compactContext']);
 
 const contextPopoverVisible = ref(false);
 const currentModelLabel = computed(() => `${props.config.providerName || '-'} · ${props.config.model || '-'}`);

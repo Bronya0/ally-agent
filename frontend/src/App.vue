@@ -36,7 +36,7 @@ Public License v3. See the LICENSE file for details.
             />
 
             <!-- Main chat area -->
-            <div class="main-area">
+            <div :class="['main-area', { 'explorer-pushed': explorerVisibleFor(activeWorkspaceId) }]" :style="explorerVisibleFor(activeWorkspaceId) ? { '--explorer-pad': (explorerTreeWidthFor(activeWorkspaceId) + 1) + 'px' } : null">
               <n-layout class="chat-layout" :content-style="chatLayoutContentStyle">
                 <n-tabs
                   class="workspace-content-tabs"
@@ -67,6 +67,15 @@ Public License v3. See the LICENSE file for details.
                       @export-all-msgs="exportAllMessages(tab.sessionId)"
                       @submit-ask="(msg, answers) => submitAskResponse(tab.sessionId, msg, answers)"
                       @send-suggest="(label) => sendSuggest(tab.sessionId, label)"
+                    />
+                    <WorkspaceExplorer
+                      v-if="explorerVisibleFor(tab.id)"
+                      :ref="(el) => setExplorerRef(tab.id, el)"
+                      :workspace="explorerWorkspaceFor(tab.id)"
+                      :active="tab.id === activeWorkspaceId"
+                      :initial-width="explorerTreeWidthFor(tab.id)"
+                      @close="closeExplorerForTab(tab.id)"
+                      @tree-width-change="(w) => onExplorerTreeWidthChange(tab.id, w)"
                     />
                   </n-tab-pane>
                 </n-tabs>
@@ -224,6 +233,7 @@ Public License v3. See the LICENSE file for details.
                   :task-center-running-count="scheduledTaskRunningCount + serviceRunningCount"
                   :fmt-k="fmtK"
                   :extra-roots="extraRoots"
+                  :explorer-visible="explorerVisibleFor(activeWorkspaceId)"
                   @add-extra-root="addExtraRoot"
                   @remove-extra-root="removeExtraRoot"
                   @switch-model="switchToModel"
@@ -232,6 +242,7 @@ Public License v3. See the LICENSE file for details.
                   @open-workspace="openWorkspaceInFileManager"
                   @change-reasoning-effort="changeReasoningEffort"
                   @open-task-center="openTaskCenter"
+                  @toggle-explorer="toggleWorkspaceExplorer"
                   @new-session="createNewSession"
                   @show-sessions="showSessionList"
                   @compact-context="handleCompactCommand"
@@ -441,6 +452,7 @@ import {
 import { unwrapWailsEvent } from './utils/wailsEvent.mjs';
 
 const GitDiffModal = defineAsyncComponent(() => import('./components/GitDiffModal.vue'));
+const WorkspaceExplorer = defineAsyncComponent(() => import('./components/WorkspaceExplorer.vue'));
 
 onErrorCaptured((err, _instance, info) => {
   console.error('[ui:error]', info, err);
@@ -1374,6 +1386,33 @@ const scheduledTasks = ref([]);
 const services = ref([]);
 const taskCenterVisible = ref(false);
 const tokenStatsVisible = ref(false);
+// Workspace explorer 状态按 Tab 独立保存：切换 Tab 时不会重置或取消任何
+// 每个 Tab 看到自己工作区的目录树。已经打开过的 Tab
+// 会保留一个常驻组件实例（v-show 切换），编辑草稿不因切 Tab 丢失。
+// 注意：必须用 reactive() 包装 Map，computed/v-for 才能追踪变化。
+const workspaceExplorerByTab = reactive(new Map());
+const explorerWorkspaceByTab = reactive(new Map());
+const explorerRefsByTab = reactive(new Map());
+function explorerVisibleFor(tabId) {
+  return workspaceExplorerByTab.get(tabId) || false;
+}
+function explorerWorkspaceFor(tabId) {
+  return explorerWorkspaceByTab.get(tabId) ?? config.workspace;
+}
+function setExplorerRef(tabId, el) {
+  if (el) explorerRefsByTab.set(tabId, el);
+  else explorerRefsByTab.delete(tabId);
+}
+function closeExplorerForTab(tabId) {
+  workspaceExplorerByTab.set(tabId, false);
+}
+const explorerTreeWidthByTab = reactive(new Map());
+function explorerTreeWidthFor(tabId) {
+  return explorerTreeWidthByTab.get(tabId) ?? 270;
+}
+function onExplorerTreeWidthChange(tabId, width) {
+  explorerTreeWidthByTab.set(tabId, width);
+}
 const scheduledTasksLoading = ref(false);
 const servicesLoading = ref(false);
 const scheduledTaskDeletingIds = ref([]);
@@ -2054,6 +2093,22 @@ async function openWorkspaceInFileManager() {
   }
 }
 
+function toggleWorkspaceExplorer() {
+  if (!config.workspace) {
+    message.info(t('app.workspace.required'));
+    return;
+  }
+  const tabId = activeWorkspaceId.value;
+  if (workspaceExplorerByTab.get(tabId)) {
+    const explorer = explorerRefsByTab.get(tabId);
+    if (explorer) explorer.requestClose();
+    else closeExplorerForTab(tabId);
+    return;
+  }
+  explorerWorkspaceByTab.set(tabId, config.workspace);
+  workspaceExplorerByTab.set(tabId, true);
+}
+
 // Context computation — call backend for accurate full-payload token count.
 // React to session switches and tool completions; in-run token refresh is
 // handled by tool:result / tool:error / run:done / run:error / run:cancelled /
@@ -2586,10 +2641,14 @@ function reorderWorkspaceTabs({ sourceId, targetId, after = false } = {}) {
   workspaceTabs.value.splice(targetIndex + (after ? 1 : 0), 0, movedTab);
 }
 
-function closeWorkspaceTab(id) {
+async function closeWorkspaceTab(id) {
   if (workspaceTabs.value.length <= 1) return;
   const idx = workspaceTabs.value.findIndex((t) => t.id === id);
   if (idx === -1) return;
+  // Explorer 状态随 Tab 一起释放（未保存草稿直接丢弃）。
+  workspaceExplorerByTab.delete(id);
+  explorerWorkspaceByTab.delete(id);
+  explorerRefsByTab.delete(id);
   const tab = workspaceTabs.value[idx];
   workspaceTabs.value.splice(idx, 1);
   conversationMessagesRefs.delete(id);
@@ -2623,6 +2682,7 @@ function closeWorkspaceTab(id) {
 async function switchWorkspaceTab(id) {
   const tab = workspaceTabs.value.find((t) => t.id === id);
   if (!tab) return;
+  if (!workspaceExplorerByTab.has(id)) workspaceExplorerByTab.set(id, false);
   const switchVersion = ++workspaceSwitchVersion;
   const linkedSession = ensureWorkspaceTabSession(tab);
   saveSessions();
@@ -2681,6 +2741,11 @@ async function switchWorkspaceTab(id) {
     sessionId: linkedSession?.id || activeSessionId.value,
     workspace: tab.path,
   });
+  // 切换 Tab 时如果目录树已打开且工作区变化，更新捕获的工作区；
+  // 组件内 watch(workspace) 会自动触发 loadRoot 重建
+  if (workspaceExplorerByTab.get(id) && explorerWorkspaceByTab.get(id) !== tab.path) {
+    explorerWorkspaceByTab.set(id, tab.path);
+  }
   // 切换 Tab 后自动聚焦新 Tab 的输入框，避免手动点击才能输入
   nextTick(() => focusPromptInput());
 }
@@ -7398,6 +7463,9 @@ function handleOverlayOutsidePointerDown(event) {
 }
 
 function handleGlobalKeydown(event) {
+  // 文件树打开时，ESC 交由 WorkspaceExplorer 自身处理（关闭文件树），
+  // 不触发停止运行等全局逻辑。
+  if (event.key === 'Escape' && explorerVisibleFor(activeWorkspaceId)) return;
   if (event.key === 'Escape' && deactivateMermaidInteraction()) {
     event.preventDefault();
     event.stopPropagation();

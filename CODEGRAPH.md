@@ -26,6 +26,7 @@
   - biz_context.go — 请求消息组装：`buildMessages`、系统上下文、todo 状态、附件上下文、上下文 Token 统计与缓存 [Lines: 1071]
   - biz_prompt.go — 系统提示词管线：`buildSystemPromptParts`、skill 元数据、全局记忆索引、AGENTS/CLAUDE 加载
   - biz_workspace.go — 工作区文件列表、workspace map、路径搜索索引、gitignore 规则解析 [Lines: 908]
+  - biz_workspace_editor.go — UI 文件浏览器专用的受限完整文本读写（2 MiB 上限、版本冲突校验、原子写入、与 Agent 文件操作共用锁）
   - biz_skills.go / biz_builtin_skills.go — skill 发现/加载/启停（目录、standalone md、内置嵌入）
   - biz_mcp.go — MCP 生命周期：`McpManager` 连接/重连/工具发现、前端绑定、MCP 工具执行 [Lines: 845]
   - biz_update.go — 自更新：发布检查（Atom feed）、下载、解压、应用、回滚、跳过列表 [Lines: 1462]
@@ -65,7 +66,7 @@
 - [infra] internal/builtin_skills/ — 内置 skill 嵌入资源（go:embed `skills/<name>/SKILL.md`）
 - [ui] frontend/src/ — Vue 3 单页桌面 UI（Naive UI）
   - App.vue — 唯一主组件：状态、Wails 事件路由、工作区 Tab、流式缓冲、Mermaid 渲染 [Lines: 296KB]
-  - components/ — AppHeader、ChatMessages、SettingsModal、ToolCallCard、SubagentInlineCard、TaskCenterPanel、TokenStatsModal 等 27 个组件
+  - components/ — AppHeader、ChatMessages、WorkspaceExplorer、SettingsModal、ToolCallCard、SubagentInlineCard、TaskCenterPanel、TokenStatsModal 等组件；WorkspaceExplorer 按需挂载，目录懒加载并在选择文件后覆盖内容区编辑/高亮预览
   - utils/ — sessionStore、toolPreview、diff、htmlRender、modelConfigIO、i18n 等纯函数模块（含 .test.mjs）
   - i18n.mjs — zh-CN / en-US 双语源
   - data/modelCatalog.json — 模型目录（400KB）
