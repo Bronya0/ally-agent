@@ -14,11 +14,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -74,6 +78,105 @@ func TestStartChatRequiresExplicitWorkspace(t *testing.T) {
 	}
 	if _, err := app.StartChat(ChatRequest{SessionID: "session-1"}); err == nil || !strings.Contains(err.Error(), "workspace is required") {
 		t.Fatalf("StartChat() error = %v, want workspace required", err)
+	}
+}
+
+// sseChatToolCallChunk 构造一个携带 tool_calls delta 的 OpenAI 兼容流式 chunk。
+func sseChatToolCallChunk(id, name, args string) string {
+	return fmt.Sprintf(`data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":%q,"type":"function","function":{"name":%q,"arguments":%q}}]},"finish_reason":null}]}`+"\n\n", id, name, args)
+}
+
+// sseChatFinishChunk 构造一个只携带 finish_reason 的收尾 chunk。
+func sseChatFinishChunk(reason string) string {
+	return fmt.Sprintf(`data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{},"finish_reason":%q}]}`+"\n\n", reason)
+}
+
+// runEventRecorder 记录事件序列并在 run 终止事件上通知，供异步 runChat 测试同步。
+type runEventRecorder struct {
+	mu     sync.Mutex
+	names  []string
+	end    string
+	endSet bool
+	done   chan struct{}
+}
+
+func (r *runEventRecorder) Emit(name string, _ any) {
+	r.mu.Lock()
+	r.names = append(r.names, name)
+	if (name == "run:done" || name == "run:error") && !r.endSet {
+		r.end, r.endSet = name, true
+	}
+	r.mu.Unlock()
+	if name == "run:done" || name == "run:error" {
+		select {
+		case r.done <- struct{}{}:
+		default:
+		}
+	}
+}
+
+// TestRunChatSuccessfulSuggestEndsRun 验证成功的唯一 suggest 调用直接结束
+// run：chips 渲染在上一条 assistant 消息下方，之后不得再有任何模型输出。
+// 伪造的 OpenAI 兼容服务对每个请求都返回 suggest 工具调用；若 chat loop
+// 违约在 suggest 之后又发起模型请求，请求数断言会失败。
+func TestRunChatSuccessfulSuggestEndsRun(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, sseChatChunk("Here is the answer."))
+		fmt.Fprint(w, sseChatToolCallChunk("call_suggest_1", "suggest", `{"items":["Run the tests"]}`))
+		fmt.Fprint(w, sseChatFinishChunk("tool_calls"))
+		fmt.Fprint(w, sseDone)
+	}))
+	defer server.Close()
+
+	app := NewApp()
+	app.initialized = true // 跳过 ensureInitialized 的磁盘初始化
+	app.stats = nil        // 跳过 token 统计落盘
+	recorder := &runEventRecorder{done: make(chan struct{}, 1)}
+	app.events = recorder
+
+	if _, err := app.StartChat(ChatRequest{
+		SessionID: "suggest-e2e",
+		Message:   "hi",
+		Config: ConfigState{
+			APIFormat: apiFormatOpenAIChat,
+			BaseURL:   server.URL,
+			APIKeys:   []string{"test-key"},
+			Model:     "test-model",
+			MaxTokens: 64,
+			Workspace: t.TempDir(),
+		},
+	}); err != nil {
+		t.Fatalf("StartChat() error = %v", err)
+	}
+
+	select {
+	case <-recorder.done:
+	case <-time.After(15 * time.Second):
+		t.Fatal("run did not finish in time")
+	}
+	if recorder.end != "run:done" {
+		t.Fatalf("run ended with %q, want run:done", recorder.end)
+	}
+	if got := requests.Load(); got != 1 {
+		t.Fatalf("model requests = %d, want 1 (a successful sole suggest must end the run)", got)
+	}
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	sawSuggestResult := false
+	for _, name := range recorder.names {
+		if name == "run:stream" && sawSuggestResult {
+			t.Fatal("run:stream emitted after the suggest tool result; the run must stop there")
+		}
+		if name == "tool:result" {
+			sawSuggestResult = true
+		}
+	}
+	if !sawSuggestResult {
+		t.Fatal("no tool:result event for the suggest call")
 	}
 }
 

@@ -15,6 +15,11 @@
           <span v-if="dirty" class="workspace-explorer-dirty" :title="$t('app.workspaceExplorer.unsaved')"></span>
         </div>
         <div class="workspace-explorer-actions">
+          <span
+            v-if="syntaxErrorText && isEditable && !mdPreviewMode"
+            class="workspace-explorer-syntax-error"
+            :title="syntaxErrorText"
+          >{{ syntaxErrorText }}</span>
           <n-button
             v-if="isMarkdown"
             size="tiny"
@@ -158,7 +163,8 @@ import 'ace-builds/src-noconflict/mode-markdown';
 import 'ace-builds/src-noconflict/mode-rust';
 import 'ace-builds/src-noconflict/mode-ruby';
 import MarkdownIt from 'markdown-it';
-import { ListFiles, ReadWorkspaceFile, ReadWorkspaceImage, SaveWorkspaceFile, DeletePath, OpenWorkspacePathInFileManager, CreateFile } from '../../bindings/ally-dev/internal/app/app';
+import { isEditableNavigationTarget } from '../utils/sessionState.mjs';
+import { ListFiles, ReadWorkspaceFile, ReadWorkspaceImage, SaveWorkspaceFile, DeletePath, OpenWorkspacePathInFileManager, CreateFile, CreateDirectory } from '../../bindings/ally-dev/internal/app/app';
 import CloseOutlined from '@vicons/antd/CloseOutlined';
 import ReloadOutlined from '@vicons/antd/ReloadOutlined';
 import { RightOutlined } from '@vicons/antd';
@@ -193,6 +199,7 @@ const treeWidth = ref(Math.max(150, Math.min(600, Number(props.initialWidth) || 
 const imageDataUrl = ref('');
 const htmlContent = ref('');
 const mdPreviewMode = ref(false);
+const syntaxIssue = ref(null);
 const contextMenuShow = ref(false);
 const contextMenuX = ref(0);
 const contextMenuY = ref(0);
@@ -243,6 +250,114 @@ const ACE_MODE_MAP = {
   xml: 'xml', sql: 'sql', c: 'c_cpp', cpp: 'c_cpp', h: 'c_cpp',
   md: 'markdown', markdown: 'markdown', rs: 'rust', rb: 'ruby',
 };
+
+// 语法校验（唯一判断来源）：扩展名 → 校验器。只收录浏览器端有可靠、
+// 不误报的轻量实现的格式：JSON 用内置 JSON.parse；YAML 用 js-yaml
+// （动态 import 懒加载，只有真的打开 yaml 文件才会拉取该 chunk）。
+// Python/Go 等代码语言没有可信的轻量浏览器校验器（ace 也没有这两种
+// 语言的 worker；可靠的校验需要 tree-sitter/LSP 级别的完整解析器，
+// 重且可能误报），故不启用。
+// 校验器返回 null（合法）或 { message, line? }。
+const SYNTAX_VALIDATORS = {
+  json: validateJSONSyntax,
+  yaml: validateYAMLSyntax,
+  yml: validateYAMLSyntax,
+};
+// 超过此字节数的文件跳过校验：解析会构建完整对象树，
+// 每次按键都全量解析大文件会带来可感知的内存/CPU 开销
+const SYNTAX_VALIDATE_MAX_BYTES = 1_000_000;
+
+let yamlLibPromise = null;
+function loadYamlLib() {
+  if (!yamlLibPromise) yamlLibPromise = import('js-yaml').then((m) => m.default || m);
+  return yamlLibPromise;
+}
+
+function validateJSONSyntax(text) {
+  if (!text.trim()) return null;
+  try {
+    JSON.parse(text);
+    return null;
+  } catch (err) {
+    // V8 的报错消息部分带 "position N"，部分新格式没有；能取到就换算行号
+    const m = /position (\d+)/.exec(String(err?.message || ''));
+    return {
+      message: String(err?.message || 'invalid JSON'),
+      line: m ? offsetToLine(text, Number(m[1])) : undefined,
+    };
+  }
+}
+
+async function validateYAMLSyntax(text) {
+  if (!text.trim()) return null;
+  const lib = await loadYamlLib();
+  try {
+    lib.load(text);
+    return null;
+  } catch (err) {
+    const mark = err?.mark;
+    return {
+      message: [err?.reason || err?.message].filter(Boolean).join(''),
+      line: Number.isInteger(mark?.line) ? mark.line + 1 : undefined,
+    };
+  }
+}
+
+function offsetToLine(text, offset) {
+  let line = 1;
+  const end = Math.min(offset, text.length);
+  for (let i = 0; i < end; i++) {
+    if (text.charCodeAt(i) === 10) line++;
+  }
+  return line;
+}
+
+const syntaxErrorText = computed(() => {
+  const issue = syntaxIssue.value;
+  if (!issue) return '';
+  return issue.line
+    ? t('app.workspaceExplorer.syntaxErrorAtLine', { lang: issue.lang, line: issue.line, message: issue.message })
+    : t('app.workspaceExplorer.syntaxError', { lang: issue.lang, message: issue.message });
+});
+
+// 输入时防抖 250ms 再校验，避免每次按键都全量解析；
+// seq 序号丢弃过期结果（快速输入或切换文件期间异步校验完成时）
+let syntaxValidateTimer = 0;
+let syntaxValidateSeq = 0;
+
+function scheduleSyntaxValidation() {
+  if (syntaxValidateTimer) clearTimeout(syntaxValidateTimer);
+  syntaxValidateTimer = setTimeout(() => {
+    syntaxValidateTimer = 0;
+    void applySyntaxValidation();
+  }, 250);
+}
+
+async function applySyntaxValidation() {
+  const seq = ++syntaxValidateSeq;
+  const path = activeFile.value?.path || '';
+  const validator = SYNTAX_VALIDATORS[extension(path)];
+  const text = draftContent.value;
+  if (!aceEditor || !validator || !text.trim() || text.length > SYNTAX_VALIDATE_MAX_BYTES) {
+    if (seq === syntaxValidateSeq) {
+      syntaxIssue.value = null;
+      aceEditor?.session.setAnnotations([]);
+    }
+    return;
+  }
+  const issue = await validator(text);
+  if (seq !== syntaxValidateSeq) return; // 期间又发生了输入/切换，结果作废
+  if (!issue) {
+    syntaxIssue.value = null;
+    aceEditor.session.setAnnotations([]);
+    return;
+  }
+  syntaxIssue.value = { lang: extension(path).toUpperCase(), message: issue.message, line: issue.line };
+  // 有行号时在对应行的 gutter 上标记错误图标；没有行号只显示头部状态文本
+  aceEditor.session.setAnnotations(issue.line
+    ? [{ row: issue.line - 1, type: 'error', text: issue.message }]
+    : []);
+}
 // 文件打开方式分类（唯一判断来源）。白名单只声明有专用渲染器的格式，
 // 其余全部走默认 text 路径：能否编辑由后端按内容统一判定，不在前端枚举二进制格式。
 //   image    → 只读图片预览
@@ -320,6 +435,10 @@ function initAceEditor() {
   });
   aceEditor.on('input', onAceInput);
   aceEditor.container.addEventListener('keydown', onEditorKeydown);
+  // 语法校验由 SYNTAX_VALIDATORS 自行实现，显式关闭 ace worker：
+  // 打包环境里 worker 文件不会被加载（这也是之前 json 不报错的原因），
+  // 关掉可以避免 ace 每次切换 mode 都去尝试拉取不存在的 worker
+  aceEditor.session.setUseWorker(false);
   aceResizeObserver = new ResizeObserver(() => { aceEditor?.resize(); });
   aceResizeObserver.observe(aceContainerRef.value);
 }
@@ -345,6 +464,8 @@ function updateAceContent() {
   aceEditor.clearSelection();
   aceEditor.session.setScrollTop(0);
   aceEditor.resize();
+  // 打开的文件本身可能就有语法错误，切文件后立即校验一次
+  void applySyntaxValidation();
 }
 
 function renderMarkdownPreview() {
@@ -486,6 +607,7 @@ const contextMenuOptions = computed(() => {
   if (!contextMenuNode.value) {
     return [
       { label: t('app.workspaceExplorer.newFile'), key: 'newFile' },
+      { label: t('app.workspaceExplorer.newFolder'), key: 'newFolder' },
       { label: t('app.workspaceExplorer.openFolder'), key: 'openFolder' },
     ];
   }
@@ -509,6 +631,7 @@ function onContextMenuSelect(key) {
   if (key === 'delete') void confirmDeleteNode(contextMenuNode.value);
   if (key === 'openFolder') void openWorkspaceFolder(contextMenuNode.value);
   if (key === 'newFile') void openNewFileDialog();
+  if (key === 'newFolder') void openNewFolderDialog();
   if (key === 'copyRelativePath') copyNodePath(contextMenuNode.value, false);
   if (key === 'copyFullPath') copyNodePath(contextMenuNode.value, true);
 }
@@ -566,25 +689,50 @@ function fallbackCopyText(text, onDone) {
   }
 }
 
-// 在树空白区域右键「新建文本文件」：弹框输入带扩展名的完整文件名，
-// 在工作区根目录创建空文件，并直接插入顶层树节点（不刷新、不丢失展开状态）。
-function openNewFileDialog() {
+// 通用「输入名称」弹窗：输入框内按 Enter 等价于点击确认按钮；
+// action(name) 成功返回 true 时关闭弹窗，失败/异常保持打开方便改名重试。
+// 统一由 submit 手动 destroy 关闭（onPositiveClick 恒返回 false），
+// 保证按钮点击与 Enter 走同一条提交路径，避免双重关闭。
+function promptNameDialog({ title, placeholder, action }) {
   const name = ref('');
-  dialog.create({
-    title: t('app.workspaceExplorer.newFile'),
+  let submitting = false;
+  const instance = dialog.create({
+    title,
     content: () => h(NInput, {
       value: name.value,
       'onUpdate:value': (v) => { name.value = v; },
-      placeholder: t('app.workspaceExplorer.newFileNamePlaceholder'),
+      placeholder,
       clearable: true,
       autofocus: true,
+      onKeydown: (e) => {
+        if (e.key !== 'Enter') return;
+        e.preventDefault();
+        void submit();
+      },
     }),
     positiveText: t('common.create'),
     negativeText: t('common.cancel'),
-    onPositiveClick: async () => {
-      const ok = await createFile(name.value);
-      return ok; // 返回 false 保持弹窗打开，方便改名重试
-    },
+    onPositiveClick: () => submit(),
+  });
+  async function submit() {
+    if (submitting) return false;
+    submitting = true;
+    try {
+      if (await action(name.value)) instance.destroy();
+    } finally {
+      submitting = false;
+    }
+    return false;
+  }
+}
+
+// 在树空白区域右键「新建文本文件」：弹框输入带扩展名的完整文件名，
+// 在工作区根目录创建空文件，并直接插入顶层树节点（不刷新、不丢失展开状态）。
+function openNewFileDialog() {
+  promptNameDialog({
+    title: t('app.workspaceExplorer.newFile'),
+    placeholder: t('app.workspaceExplorer.newFileNamePlaceholder'),
+    action: (name) => createFile(name),
   });
 }
 
@@ -609,6 +757,41 @@ async function createFile(rawName) {
     return true;
   } catch (err) {
     message.error(t('app.workspaceExplorer.createFailed', { error: errorText(err) }));
+    return false;
+  }
+}
+
+// 在树空白区域右键「新建文件夹」：弹框输入文件夹名，在工作区根目录创建，
+// 并直接插入顶层树节点（不刷新、不丢失展开状态）；展开时走既有懒加载。
+function openNewFolderDialog() {
+  promptNameDialog({
+    title: t('app.workspaceExplorer.newFolder'),
+    placeholder: t('app.workspaceExplorer.newFolderNamePlaceholder'),
+    action: (name) => createFolder(name),
+  });
+}
+
+async function createFolder(rawName) {
+  const name = String(rawName || '').trim();
+  if (!name) {
+    message.error(t('app.workspaceExplorer.newFolderInvalid'));
+    return false;
+  }
+  // 与新建文件一致：仅允许单层名称，剥离路径分隔与相对段，防止越界写入
+  const base = name.split(/[\\/]/).pop();
+  if (!base || base === '.' || base === '..' || base.includes('..')) {
+    message.error(t('app.workspaceExplorer.newFolderInvalid'));
+    return false;
+  }
+  try {
+    await CreateDirectory({ path: base });
+    if (!treeData.value.some((n) => n.label === base)) {
+      treeData.value = [...treeData.value, makeNode({ Path: base, Name: base, Dir: true })];
+    }
+    message.success(t('app.workspaceExplorer.folderCreated', { name: base }));
+    return true;
+  } catch (err) {
+    message.error(t('app.workspaceExplorer.folderCreateFailed', { error: errorText(err) }));
     return false;
   }
 }
@@ -761,6 +944,7 @@ function onAceInput() {
   if (!aceEditor) return;
   draftContent.value = aceEditor.getValue();
   fileError.value = '';
+  scheduleSyntaxValidation();
   if (mdPreviewMode.value) renderMarkdownPreview();
 }
 
@@ -874,10 +1058,16 @@ function clearEditor() {
   originalHash.value = '';
   version.value = '';
   fileError.value = '';
+  syntaxIssue.value = null;
+  if (syntaxValidateTimer) { clearTimeout(syntaxValidateTimer); syntaxValidateTimer = 0; }
+  syntaxValidateSeq++;
   imageDataUrl.value = '';
   htmlContent.value = '';
   mdPreviewMode.value = false;
-  if (aceEditor) aceEditor.setValue('', -1);
+  if (aceEditor) {
+    aceEditor.setValue('', -1);
+    aceEditor.session.setAnnotations([]);
+  }
   if (mdPreviewRef.value) mdPreviewRef.value.innerHTML = '';
 }
 
@@ -901,19 +1091,40 @@ onMounted(() => {
 });
 
 function onGlobalKeydown(event) {
-  // 多个 Tab 的 explorer 常驻挂载，仅当前激活 Tab 的实例响应 ESC
+  // 多个 Tab 的 explorer 常驻挂载，仅当前激活 Tab 的实例响应全局快捷键
   if (!props.active) return;
   if (event.key === 'Escape') {
     event.stopImmediatePropagation();
     if (activeFile.value) { void closeContent(); return; }
     void requestClose();
   }
+  // 选中目录/文件后按 Delete 直接触发删除确认（等价右键菜单删除）。
+  // 焦点在输入框/文本域/编辑器等可编辑元素时不触发，避免劫持正常删字。
+  // 实际删除仍需在确认弹窗中二次点击，误触发无破坏性。
+  if (event.key === 'Delete' && !isEditableNavigationTarget(event.target)) {
+    const node = findNodeByPath(selectedKeys.value[0]);
+    if (node) void confirmDeleteNode(node);
+  }
+}
+
+// 在当前树中按 path 递归查找节点（树为懒加载嵌套结构）
+function findNodeByPath(path, nodes = treeData.value) {
+  if (!path) return null;
+  for (const node of nodes) {
+    if (node.path === path) return node;
+    if (node.children?.length) {
+      const hit = findNodeByPath(path, node.children);
+      if (hit) return hit;
+    }
+  }
+  return null;
 }
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onGlobalKeydown, true);
   dragTeardown?.();
   dragTeardown = null;
+  if (syntaxValidateTimer) { clearTimeout(syntaxValidateTimer); syntaxValidateTimer = 0; }
   disposed = true;
   requestSequence += 1;
   resizeObserver?.disconnect();

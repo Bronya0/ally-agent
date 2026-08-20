@@ -658,6 +658,10 @@ type CreateFileRequest struct {
 	Overwrite bool   `json:"overwrite"`
 }
 
+type CreateDirectoryRequest struct {
+	Path string `json:"path"`
+}
+
 type DeletePathRequest struct {
 	Path      string `json:"path"`
 	Recursive bool   `json:"recursive"`
@@ -1955,6 +1959,24 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			if imgMsg := readImageInjectionMessage(readImages); imgMsg != nil {
 				messages = append(messages, *imgMsg)
 			}
+
+			// A successful sole `suggest` call ends the run: its chips render
+			// under the last assistant message, so issuing another model step
+			// would only invite trailing content after them. Failed or
+			// batch-conflicted suggest calls keep the loop running so the
+			// model can recover from the error.
+			if len(outcomes) == 1 && outcomes[0].name == "suggest" && outcomes[0].result.OK {
+				var injected bool
+				messages, injected = a.appendPendingRunInputs(runID, messages)
+				if injected {
+					a.emit("run:inject", map[string]any{"runId": runID, "sessionId": sessionID})
+					continue
+				}
+				a.saveHistory(req.SessionID, messages)
+				success = true
+				emitRunEnd("run:done", "done", nil)
+				return
+			}
 	}
 	emitRunEnd("run:error", "error", map[string]any{"error": "达到最大 agent 步数，已停止"})
 	return
@@ -2518,6 +2540,15 @@ func (a *App) CreateFile(req CreateFileRequest) (EditResult, error) {
 		a.invalidateWorkspaceMapCache(cfg)
 	}
 	return result, err
+}
+
+func (a *App) CreateDirectory(req CreateDirectoryRequest) error {
+	cfg := a.effectiveConfig(ConfigState{})
+	err := a.createDirectoryWithConfig(cfg, req)
+	if err == nil {
+		a.invalidateWorkspaceMapCache(cfg)
+	}
+	return err
 }
 
 func (a *App) DeletePath(req DeletePathRequest) error {

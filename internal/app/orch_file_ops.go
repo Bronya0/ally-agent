@@ -107,6 +107,32 @@ func (a *App) createFileWithConfig(cfg ConfigState, req CreateFileRequest) (Edit
 	return result, nil
 }
 
+// createDirectoryWithConfig creates a directory (with any missing parents)
+// inside the writable roots. The path boundary checks mirror createFileWithConfig:
+// safeJoin confines the target to a root, symlink components are rejected, and
+// an existing path at the target fails with E_EXISTS instead of being reused.
+func (a *App) createDirectoryWithConfig(cfg ConfigState, req CreateDirectoryRequest) error {
+	if strings.TrimSpace(req.Path) == "" {
+		return codedToolError("E_BAD_PATH", errors.New("create directory requires a non-empty path"))
+	}
+	roots, err := workspaceRoots(cfg)
+	if err != nil {
+		return err
+	}
+	path, err := resolveWritableFilePath(roots, req.Path)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Lstat(path); err == nil {
+		// resolveWritableFilePath already rejected symlink targets; anything
+		// else that exists collides with the new directory.
+		return codedToolError("E_EXISTS", fmt.Errorf("path already exists: %s", req.Path))
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return os.MkdirAll(path, 0o755)
+}
+
 // newlyCreatedDirs walks up from dir until it finds an existing ancestor and
 // returns the chain of directories that MkdirAll would create, ordered from the
 // outermost to the innermost. Returns nil when dir already exists.

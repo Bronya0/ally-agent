@@ -495,6 +495,17 @@ code, pre {
 .workspace-explorer-file-title > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .workspace-explorer-dirty { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 50%; background: #f3b562; }
 .workspace-explorer-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+/* 语法错误状态文本：克制的小号红字，超长省略，完整信息看 title */
+.workspace-explorer-syntax-error {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #ef4444;
+  font-size: 12px;
+}
 .workspace-explorer-actions .n-switch .n-switch__rail { font-size: 11px; }
 .workspace-explorer-ace { flex: 1; min-height: 0; width: 100%; }
 .workspace-explorer-ace .ace_gutter-layer { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace !important; }
@@ -505,7 +516,7 @@ code, pre {
    用原生滚动条伪元素自定义，提亮轨道与滑块并加宽。 */
 .workspace-explorer-ace .ace_scrollbar {
   scrollbar-width: thick;
-  scrollbar-color: rgba(255, 255, 255, 0.5) rgba(255, 255, 255, 0.12);
+  scrollbar-color: rgba(255, 255, 255, 0.25) rgba(255, 255, 255, 0.12);
 }
 .workspace-explorer-ace .ace_scrollbar::-webkit-scrollbar {
   width: 16px;
@@ -515,11 +526,11 @@ code, pre {
   background: rgba(255, 255, 255, 0.12);
 }
 .workspace-explorer-ace .ace_scrollbar::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.5);
+  background: rgba(255, 255, 255, 0.25);
   border-radius: 6px;
 }
 .workspace-explorer-ace .ace_scrollbar::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.7);
+  background: rgba(255, 255, 255, 0.4);
 }
 .workspace-explorer-md-preview {
   flex: 1;

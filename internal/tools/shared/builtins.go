@@ -350,7 +350,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"skill"},
 		}),
-		functionTool("suggest", "Suggest 1-4 follow-up actions as clickable chips below your last reply, ordered by relevance from most to least recommended. Each label is sent as-is as the user's next message when clicked. Call this only when the user might genuinely benefit from a concrete next step; if no useful follow-up exists, do not call it. Must be the only tool call in its batch. Error codes: E_BAD_SUGGEST, E_SUGGEST_BATCH_CONFLICT.", map[string]any{
+		functionTool("suggest", "Suggest 1-4 follow-up actions as clickable chips below your last reply, ordered by relevance from most to least recommended. Each label is sent as-is as the user's next message when clicked. Call this only when the user might genuinely benefit from a concrete next step; if no useful follow-up exists, do not call it. Must be the only tool call in its batch, and a successful call ends the turn — emit it only after your reply content is complete. Error codes: E_BAD_SUGGEST, E_SUGGEST_BATCH_CONFLICT.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"items": map[string]any{
