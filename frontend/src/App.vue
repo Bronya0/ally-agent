@@ -1413,8 +1413,18 @@ function closeExplorerForTab(tabId) {
   workspaceExplorerByTab.set(tabId, false);
 }
 const explorerTreeWidthByTab = reactive(new Map());
+// 文件树默认宽度 = 窗口宽度的 20%，clamp 到 240–360：下限保证文件名可读，
+// 上限防止大屏出现空走廊；首访懒计算一次并缓存，窗口 resize 不回跳已展示的宽度。
+// 手动拖拽（150–600）后按 tab 记忆，不再走此默认值。
+let explorerTreeWidthDefault = 0;
+function defaultExplorerTreeWidth() {
+  if (!explorerTreeWidthDefault) {
+    explorerTreeWidthDefault = Math.max(240, Math.min(360, Math.round(window.innerWidth * 0.2)));
+  }
+  return explorerTreeWidthDefault;
+}
 function explorerTreeWidthFor(tabId) {
-  return explorerTreeWidthByTab.get(tabId) ?? 270;
+  return explorerTreeWidthByTab.get(tabId) ?? defaultExplorerTreeWidth();
 }
 function onExplorerTreeWidthChange(tabId, width) {
   explorerTreeWidthByTab.set(tabId, width);

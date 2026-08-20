@@ -299,7 +299,7 @@ code, pre {
   position: relative;
 }
 .main-area.explorer-pushed > .chat-layout {
-  padding-left: var(--explorer-pad, 275px);
+  padding-right: var(--explorer-pad, 275px);
 }
 
 .chat-layout {
@@ -337,7 +337,7 @@ code, pre {
   position: absolute;
   top: 0;
   bottom: 0;
-  left: 0;
+  right: 0;
   z-index: 50;
   display: flex;
   min-width: 0;
@@ -348,7 +348,7 @@ code, pre {
 }
 
 .workspace-explorer.has-file {
-  right: 0;
+  left: 0;
   width: auto !important;
 }
 

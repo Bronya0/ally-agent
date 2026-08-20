@@ -7,55 +7,6 @@
  -->
 <template>
   <section :class="['workspace-explorer', { 'has-file': showEditor, 'tree-only': !showEditor }]" :style="{ width: showEditor ? null : (treeWidth + 1) + 'px' }" aria-label="Workspace explorer">
-    <aside class="workspace-explorer-tree" :style="{ flexBasis: treeWidth + 'px' }" @contextmenu.prevent="onTreeAreaContextmenu">
-      <div class="workspace-explorer-tree-header">
-        <span class="workspace-explorer-title">
-          <span class="workspace-explorer-title-text" :title="workspace">{{ workspaceLabel }}</span>
-        </span>
-        <div class="workspace-explorer-header-actions">
-          <button
-            type="button"
-            class="workspace-explorer-icon-btn"
-            :title="$t('common.refresh')"
-            :aria-label="$t('common.refresh')"
-            :disabled="loadingTree || !workspace"
-            @click="refreshTree"
-          ><ReloadOutlined /></button>
-          <button
-            type="button"
-            class="workspace-explorer-icon-btn"
-            :title="$t('common.close')"
-            :aria-label="$t('common.close')"
-            @click="requestClose"
-          ><CloseOutlined /></button>
-        </div>
-      </div>
-      <n-spin ref="treeContainerRef" :show="loadingTree" size="small" class="workspace-explorer-spin">
-        <n-tree
-          v-if="workspace"
-          class="workspace-explorer-tree-view"
-          block-line
-          selectable
-          virtual-scroll
-          :height="treeHeight"
-          :indent="16"
-          :theme-overrides="treeThemeOverrides"
-          :data="treeData"
-          :expanded-keys="expandedKeys"
-          :selected-keys="selectedKeys"
-          :node-props="nodeProps"
-          expand-on-click
-          :render-switcher-icon="renderSwitcherIcon"
-          :render-label="renderLabel"
-          @update:expanded-keys="onExpandedKeysChange"
-          @update:selected-keys="onSelect"
-        />
-        <div v-else class="workspace-explorer-empty">{{ $t('app.workspace.none') }}</div>
-      </n-spin>
-    </aside>
-
-    <div class="workspace-explorer-splitter" @mousedown.prevent="startDrag"></div>
-
     <main v-show="showEditor" class="workspace-explorer-editor">
       <header class="workspace-explorer-editor-header">
         <button type="button" class="workspace-explorer-close-content" :title="$t('common.close')" :aria-label="$t('common.close')" @click="closeContent"><CloseOutlined /></button>
@@ -119,6 +70,55 @@
       <div v-show="fileError && !activeFile" class="workspace-explorer-editor-state workspace-explorer-error">{{ fileError }}</div>
       <div v-show="!activeFile && !loadingFile && !fileError" class="workspace-explorer-editor-state">{{ $t('app.filePreview.empty') }}</div>
     </main>
+
+    <div class="workspace-explorer-splitter" @mousedown.prevent="startDrag"></div>
+
+    <aside class="workspace-explorer-tree" :style="{ flexBasis: treeWidth + 'px' }" @contextmenu.prevent="onTreeAreaContextmenu">
+      <div class="workspace-explorer-tree-header">
+        <span class="workspace-explorer-title">
+          <span class="workspace-explorer-title-text" :title="workspace">{{ workspaceLabel }}</span>
+        </span>
+        <div class="workspace-explorer-header-actions">
+          <button
+            type="button"
+            class="workspace-explorer-icon-btn"
+            :title="$t('common.refresh')"
+            :aria-label="$t('common.refresh')"
+            :disabled="loadingTree || !workspace"
+            @click="refreshTree"
+          ><ReloadOutlined /></button>
+          <button
+            type="button"
+            class="workspace-explorer-icon-btn"
+            :title="$t('common.close')"
+            :aria-label="$t('common.close')"
+            @click="requestClose"
+          ><CloseOutlined /></button>
+        </div>
+      </div>
+      <n-spin ref="treeContainerRef" :show="loadingTree" size="small" class="workspace-explorer-spin">
+        <n-tree
+          v-if="workspace"
+          class="workspace-explorer-tree-view"
+          block-line
+          selectable
+          virtual-scroll
+          :height="treeHeight"
+          :indent="16"
+          :theme-overrides="treeThemeOverrides"
+          :data="treeData"
+          :expanded-keys="expandedKeys"
+          :selected-keys="selectedKeys"
+          :node-props="nodeProps"
+          expand-on-click
+          :render-switcher-icon="renderSwitcherIcon"
+          :render-label="renderLabel"
+          @update:expanded-keys="onExpandedKeysChange"
+          @update:selected-keys="onSelect"
+        />
+        <div v-else class="workspace-explorer-empty">{{ $t('app.workspace.none') }}</div>
+      </n-spin>
+    </aside>
   </section>
 
   <n-dropdown
@@ -770,7 +770,8 @@ function startDrag(e) {
     emit('treeWidthChange', pendingWidth);
   };
   const onMove = (ev) => {
-    const delta = ev.clientX - startX;
+    // 树停靠右侧：向左拖（delta 为负）增加宽度，故与左锚布局相反取 startX - x
+    const delta = startX - ev.clientX;
     pendingWidth = Math.max(150, Math.min(600, startW + delta));
     if (!raf) raf = requestAnimationFrame(applyWidth);
   };

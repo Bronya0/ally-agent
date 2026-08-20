@@ -23,13 +23,6 @@ Public License v3. See the LICENSE file for details.
       :aria-label="$t('commands.sessions')"
       @click.stop="$emit('showSessions')"
     ><MenuOutlined /></button>
-    <button
-      type="button"
-      :class="['composer-icon-btn', 'composer-explorer-btn', { active: explorerVisible }]"
-      :title="$t('app.workspaceExplorer.open')"
-      :aria-label="$t('app.workspaceExplorer.open')"
-      @click.stop="$emit('toggleExplorer')"
-    ><FolderOpenOutlined /></button>
     <n-dropdown
       trigger="click"
       placement="top-start"
@@ -196,6 +189,14 @@ Public License v3. See the LICENSE file for details.
       />
     </span>
     <span v-else class="info-context info-context-loading" aria-hidden="true">...</span>
+    <!-- 文件树开关停靠信息栏最右（界面右下角），紧邻右侧树面板 -->
+    <button
+      type="button"
+      :class="['composer-icon-btn', 'composer-explorer-btn', { active: explorerVisible }]"
+      :title="$t('app.workspaceExplorer.open')"
+      :aria-label="$t('app.workspaceExplorer.open')"
+      @click.stop="$emit('toggleExplorer')"
+    ><FolderOpenOutlined /></button>
   </div>
 </template>
 
