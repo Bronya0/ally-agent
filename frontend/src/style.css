@@ -871,6 +871,13 @@ code, pre {
 
 .composer-explorer-btn {
   color: #4ea1ff;
+  width: 22px;
+  height: 22px;
+}
+
+.composer-explorer-btn svg {
+  width: 16px;
+  height: 16px;
 }
 
 /* ── Composer info footer ── */

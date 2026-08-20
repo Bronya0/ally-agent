@@ -652,8 +652,23 @@ async function confirmDeleteNode(node) {
   });
 }
 
-async function onSelect(keys, options) {
+async function onSelect(keys, options, meta) {
   if (navigationBusy) return;
+  // n-tree 单选默认 cancelable：再点一次已选中文件会以 action='unselect' 发出
+  // 空 keys/options，被点节点在 meta.node 上。若正是当前打开的文件 → 切换关闭编辑器
+  // （复用 closeContent：脏内容仍走未保存确认，取消则保持打开）
+  if (meta?.action === 'unselect') {
+    const clicked = meta.node;
+    if (clicked && !clicked.dir && clicked.path && clicked.path === activeFile.value?.path) {
+      navigationBusy = true;
+      try {
+        await closeContent();
+      } finally {
+        navigationBusy = false;
+      }
+    }
+    return;
+  }
   const node = options?.[0];
   if (!node) return;
   if (node.dir) {

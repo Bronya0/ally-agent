@@ -16,7 +16,7 @@ import (
 	"strings"
 )
 
-const workspaceEditorMaxBytes = 2 * 1024 * 1024
+const workspaceEditorMaxBytes = 16 * 1024 * 1024
 
 type WorkspaceFileContent struct {
 	Path       string `json:"path"`
