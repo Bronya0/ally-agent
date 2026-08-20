@@ -13,6 +13,8 @@ import (
 	"errors"
 	"os"
 	"testing"
+
+	openai "github.com/sashabaranov/go-openai"
 )
 
 func TestSessionFilesUseIndexAndOnDemandSnapshot(t *testing.T) {
@@ -105,6 +107,61 @@ func TestListSessionsRecoversSnapshotWhenIndexIsMissing(t *testing.T) {
 	}
 	if len(entries) != 1 || entries[0].ID != snapshot.ID || !entries[0].HasSnapshot {
 		t.Fatalf("snapshot was not recovered into index: %#v", entries)
+	}
+}
+
+func TestHistoryLoadRepairsTruncatedToolCallArguments(t *testing.T) {
+	app := NewApp()
+	app.initialized = true
+	app.sessionsDir = t.TempDir()
+	app.historiesDir = t.TempDir()
+	const sessionID = "poisoned"
+
+	// Simulate a history persisted by a build without the truncation repair:
+	// the provider stream was cut off mid-arguments, so the saved assistant
+	// tool call carries an invalid JSON string that makes providers with
+	// server-side arguments parsing reject every subsequent request.
+	poisoned := []openai.ChatCompletionMessage{
+		{Role: openai.ChatMessageRoleUser, Content: "fix AGENTS.md"},
+		{
+			Role: openai.ChatMessageRoleAssistant,
+			ToolCalls: []openai.ToolCall{{
+				ID:       "call_1",
+				Type:     openai.ToolTypeFunction,
+				Function: openai.FunctionCall{Name: "edit", Arguments: `{"files":[{"path":"AGENTS.md","changes":[{"oldText":"sandbox is`},
+			}},
+		},
+		{Role: openai.ChatMessageRoleTool, ToolCallID: "call_1", Content: `{"ok":false,"error":"tool arguments JSON was truncated"}`},
+	}
+	paths := app.historyDiskPaths(sessionID)
+	if err := writeCompressedHistory(paths[0], poisoned); err != nil {
+		t.Fatalf("writeCompressedHistory() error = %v", err)
+	}
+
+	loaded := app.loadSessionHistoryCopy(sessionID)
+	if len(loaded) != 3 {
+		t.Fatalf("expected 3 loaded messages, got %d: %#v", len(loaded), loaded)
+	}
+	repaired := loaded[1].ToolCalls[0].Function.Arguments
+	if repaired != truncatedToolCallArguments || !json.Valid([]byte(repaired)) {
+		t.Fatalf("truncated arguments were not repaired on load: %q", repaired)
+	}
+	if loaded[1].ToolCalls[0].ID != "call_1" {
+		t.Fatalf("tool call ID must survive the repair: %#v", loaded[1].ToolCalls[0])
+	}
+	if loaded[2].Role != openai.ChatMessageRoleTool || loaded[2].ToolCallID != "call_1" {
+		t.Fatalf("paired tool result must survive the repair: %#v", loaded[2])
+	}
+
+	// A save through the current build must persist the repaired arguments,
+	// so the on-disk copy stops carrying the poison.
+	app.saveHistory(sessionID, poisoned)
+	app.mu.Lock()
+	delete(app.histories, sessionID)
+	app.mu.Unlock()
+	reloaded := app.loadSessionHistoryCopy(sessionID)
+	if len(reloaded) != 3 || reloaded[1].ToolCalls[0].Function.Arguments != truncatedToolCallArguments {
+		t.Fatalf("saveHistory persisted truncated arguments: %#v", reloaded)
 	}
 }
 

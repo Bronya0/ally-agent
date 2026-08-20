@@ -1034,6 +1034,13 @@ func sanitizeHistoryMessages(messages []openai.ChatCompletionMessage) []openai.C
 			continue
 		}
 		m.ToolCalls = append([]openai.ToolCall(nil), m.ToolCalls...)
+		// Histories written before the truncation repair may still carry a
+		// tool call whose arguments were cut off mid-stream; providers that
+		// parse arguments server-side would keep rejecting every request for
+		// the session, so repair them on load as well.
+		for i := range m.ToolCalls {
+			m.ToolCalls[i].Function.Arguments = repairTruncatedToolCallArguments(m.ToolCalls[i].Function.Arguments)
+		}
 		filtered = append(filtered, m)
 	}
 	return filtered

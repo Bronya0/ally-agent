@@ -181,6 +181,7 @@ node scripts/generate-model-catalog.mjs
 - rejects mixed tool batches containing `wait`; a valid `wait` batch contains exactly one call
 - rejects same-path mutation groups, then executes remaining built-in file mutations in `toolCallIndex` order under `fileOpsMu`
 - appends compact model-facing tool results
+- replaces tool-call arguments that are not valid JSON (stream cut off mid-arguments) with the `truncatedToolCallArguments` marker in `normalizeToolCalls()`, and `sanitizeHistoryMessages()` applies the same repair when loading histories written before the fix — providers that parse `tool_calls` arguments server-side (DeepSeek among them) otherwise reject every request for the session with 400
 - loops until no tool calls remain
 
 Tool result channels:
@@ -460,6 +461,38 @@ UI internationalization:
 - The root Naive UI `NConfigProvider` and discrete APIs must receive the matching component locale and date locale.
 - New user-facing UI text must be added to both locale tables and referenced through `t()` / `$t()`; do not translate model output, file contents, command output, or raw tool results.
 - `AppHeader` always shows a GitHub repository button that opens the Ally project through the system browser. Startup performs one best-effort latest-release check; when a newer semantic version exists, that same button changes into the green update icon.
+
+---
+
+## WebView2 / Wails Frontend Constraints
+
+Ally runs inside Wails v3 WebView2 / WKWebView / WebKitGTK, not a normal browser tab. Violations reproduce as "works in dev, broken in packaged app". See also `.ally/lessons.md` [webview] 2026-08-20 and [css] 2026-08-17.
+
+### 1. Window drag region is decided at pointerdown
+
+- `.app-header` is `--wails-draggable: drag`. Every interactive element inside (buttons, inputs, dropdowns, `n-tabs-tab`, `ComposerInfoBar` spans) must be `no-drag`, otherwise clicks/dropdowns are swallowed as window drag.
+- When toggling drag/no-drag during a gesture (e.g. tab reorder), write `element.style.setProperty('--wails-draggable','no-drag')` synchronously and restore with `removeProperty`. Do not rely on reactive `:class` alone: it applies next frame, but WebView2 decides at pointerdown whether the gesture drags the window or the element.
+- Restore with `removeProperty`, not writing `drag` back, so CSS cascade takes over.
+
+### 2. Never use HTML5 Drag-and-Drop - use Pointer Events
+
+- WebView2/Wails does not reliably support `draggable` / `dragover` / `drop` / `DataTransfer` inside the page. Do not use native DnD for tab reorder, list reorder, file drop, etc.
+- Unified pattern: `@pointerdown` -> `setPointerCapture(pointerId)` -> `window` `pointermove`/`pointerup`/`pointercancel`. Call `preventDefault()` in `pointerdown` and `pointermove`, and add `touch-action: none` + `user-select: none` to the host while dragging.
+- Gate dragging behind a threshold (e.g. `hypot < 4px`). Once exceeded set `hasDragged` and show ghost/shift feedback immediately; do not wait for a drop target. On drop emit reorder, then suppress the synthetic click with `@click.capture` + `stopPropagation`.
+- Ghost must be `<Teleport to="body">` + `position: fixed` + `translateZ(0)` + `will-change` to avoid clipping by `overflow: hidden` and to promote to compositor. Original tab stays as a dashed placeholder; clear content is shown by the ghost, middle tabs shift with `translateX(var(--offset))`.
+
+### 3. Naive UI stacking pitfalls
+
+- `n-tabs` (`inheritAttrs: false` but manually merges `$attrs`) forwards `data-*` / `draggable` / `class` to `.n-tabs-tab`, but `tabClass`/internal styles can override custom selectors - use `:deep()` with sufficient specificity.
+- `n-tabs-bar` 1px rendering is unstable on HiDPI; Ally hides it (`display: none`) and renders the active underline via `::after` 2px solid. Keep this replacement when changing tab styles.
+- `n-dropdown` / `n-modal` leave focus on the trigger - blur the trigger synchronously in `open*` handlers, otherwise the button stays highlighted after close.
+
+### 4. General WebView2 frontend rules
+
+- Do not rely on browser extensions, `file://` drops, or `window.open` popups. `render_html` is a single sandboxed `srcdoc` iframe with CSP blocking external resources.
+- `pointerId` can be `undefined` for synthetic events - guard with `event.pointerId !== undefined && event.pointerId !== dragPointerId`.
+- Avoid synchronous layout thrashing in `pointermove`; heavy re-render already stays behind `setTimeout -> requestAnimationFrame` throttles for `run:stream` / `tool:update`.
+- `cursor: grab/grabbing` is hint only and never drives drag logic.
 
 ---
 

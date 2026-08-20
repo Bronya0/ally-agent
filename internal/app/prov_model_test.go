@@ -229,6 +229,32 @@ func TestApplyOpenAIResponsesPromptCacheOptionsRequiresAnchor(t *testing.T) {
 	}
 }
 
+func TestNormalizeToolCallsRepairsTruncatedArguments(t *testing.T) {
+	input := []legacyopenai.ToolCall{
+		// Stream cut off mid-arguments: the accumulated string is not JSON.
+		{ID: "a", Type: legacyopenai.ToolTypeFunction, Function: legacyopenai.FunctionCall{Name: "edit", Arguments: `{"files":[{"path":"AGENTS.md","changes":[{"oldText":"sandbox is`}},
+		{ID: "b", Function: legacyopenai.FunctionCall{Name: "list_files"}},
+		{ID: "c", Type: legacyopenai.ToolTypeFunction, Function: legacyopenai.FunctionCall{Name: "read", Arguments: `{"files":[]}`}},
+	}
+	out := normalizeToolCalls(input)
+
+	if out[0].Function.Arguments != truncatedToolCallArguments {
+		t.Fatalf("truncated arguments were not repaired: %q", out[0].Function.Arguments)
+	}
+	if !json.Valid([]byte(out[0].Function.Arguments)) {
+		t.Fatalf("repaired arguments must be valid JSON: %q", out[0].Function.Arguments)
+	}
+	if out[1].Function.Arguments != "{}" || out[1].Type != legacyopenai.ToolTypeFunction {
+		t.Fatalf("empty arguments/type normalization regressed: %#v", out[1])
+	}
+	if out[2].Function.Arguments != `{"files":[]}` {
+		t.Fatalf("valid arguments must pass through unchanged: %q", out[2].Function.Arguments)
+	}
+	if input[0].Function.Arguments == truncatedToolCallArguments {
+		t.Fatal("normalizeToolCalls must not mutate its input")
+	}
+}
+
 func marshalResponsesRequest(t *testing.T, body any) map[string]any {
 	t.Helper()
 	payload, err := json.Marshal(body)

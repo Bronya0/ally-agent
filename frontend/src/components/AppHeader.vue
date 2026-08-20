@@ -9,17 +9,16 @@ Public License v3. See the LICENSE file for details.
 -->
 <template>
   <!-- Unified header: brand + tabs + actions + meta -->
-  <n-layout-header bordered class="app-header">
+  <n-layout-header ref="headerRef" bordered class="app-header">
     <div class="brand">
       <AllyWordmark class="brand-wordmark" />
     </div>
     <div class="header-tabs-area">
       <div
         ref="workspaceTabsRef"
-        :class="['workspace-tabs-host', { 'drag-preview-active': hasDragShift }]"
+        :class="['workspace-tabs-host', { 'drag-preview-active': hasDragShift, dragging: !!draggedWorkspaceId, 'dragging-active': hasDragged }]"
         :style="{ '--workspace-drag-offset': `${draggedTabWidth}px` }"
-        @dragover.prevent="onWorkspaceTabsDragOver"
-        @drop.prevent="onWorkspaceTabsDrop"
+        @click.capture="onHostCaptureClick"
       >
         <n-tabs
           class="workspace-tabs"
@@ -32,13 +31,9 @@ Public License v3. See the LICENSE file for details.
             v-for="tab in workspaceTabs"
             :key="tab.id"
             :name="tab.id"
-            :class="['workspace-tab', { active: tab.id === activeWorkspaceId, running: tab.isRunning, dragging: tab.id === draggedWorkspaceId, 'drop-before': isDropBefore(tab.id), 'drop-after': isDropAfter(tab.id) }, dragShiftClass(tab.id)]"
+            :class="['workspace-tab', { active: tab.id === activeWorkspaceId, running: tab.isRunning, dragging: tab.id === draggedWorkspaceId }, dragShiftClass(tab.id)]"
             :data-tab-id="tab.id"
-            :draggable="workspaceTabs.length > 1"
-            @dragstart="onWorkspaceDragStart($event, tab.id)"
-            @dragover.prevent.stop="onWorkspaceDragOver($event, tab.id)"
-            @drop.prevent.stop="onWorkspaceDrop($event, tab.id)"
-            @dragend="onWorkspaceDragEnd"
+            @pointerdown="onWorkspacePointerDown($event, tab.id)"
           >
             <span v-if="tab.isRunning" class="tab-running-dot" :aria-label="$t('header.running')"></span>
             <span class="tab-label">{{ tab.label }}</span>
@@ -47,7 +42,11 @@ Public License v3. See the LICENSE file for details.
             </button>
           </n-tab>
         </n-tabs>
+        <div v-if="dropIndicatorStyle" class="workspace-drop-indicator" :style="dropIndicatorStyle"></div>
       </div>
+      <Teleport to="body">
+        <div v-if="dragGhostStyle" class="workspace-drag-ghost" :style="dragGhostStyle">{{ draggedTabLabel }}</div>
+      </Teleport>
       <div class="header-tabs-actions">
         <n-button class="header-icon-button tabs-action-button" size="small" quaternary @click="$emit('addWorkspace')" :title="$t('header.addWorkspace')" :aria-label="$t('header.addWorkspace')">
           <PlusOutlined class="header-icon" />
@@ -100,7 +99,7 @@ Public License v3. See the LICENSE file for details.
 </template>
 
 <script setup>
-import { computed, h, ref } from 'vue';
+import { computed, h, onBeforeUnmount, ref } from 'vue';
 import { NDropdown } from 'naive-ui';
 import AllyWordmark from './AllyWordmark.vue';
 import PlusOutlined from '@vicons/antd/PlusOutlined';
@@ -139,14 +138,61 @@ const emit = defineEmits([
   'closeWindow',
 ]);
 
+const headerRef = ref(null);
 const workspaceTabsRef = ref(null);
 const draggedWorkspaceId = ref('');
 const dragPreview = ref(null);
 const draggedTabWidth = ref(0);
+const dropIndicatorLeft = ref(null);
+const hasDragged = ref(false);
+const dragGhostPos = ref(null);
+const dragPointerId = ref(null);
+let dragStartX = 0;
+let dragStartY = 0;
+let suppressClick = false;
 
-// The dragged tab keeps its layout slot. The tabs between the source and the
-// drop position move into/out of that slot so the drop position becomes a
-// real, visible gap instead of a separate guide line.
+const dropIndicatorStyle = computed(() => {
+  if (!dragPreview.value || dropIndicatorLeft.value == null) return null;
+  return { left: `${dropIndicatorLeft.value}px` };
+});
+
+const draggedTabLabel = computed(() => {
+  const id = draggedWorkspaceId.value;
+  if (!id) return '';
+  return props.workspaceTabs.find((t) => t.id === id)?.label || id;
+});
+
+const dragGhostStyle = computed(() => {
+  if (!dragGhostPos.value || !draggedWorkspaceId.value || !hasDragged.value) return null;
+  return {
+    left: `${dragGhostPos.value.x + 12}px`,
+    top: `${dragGhostPos.value.y + 12}px`,
+  };
+});
+
+function updateDropIndicatorPosition(targetId, after) {
+  const host = workspaceTabsRef.value;
+  if (!host || !targetId) {
+    dropIndicatorLeft.value = null;
+    return;
+  }
+  const targetEl = host.querySelector(`.workspace-tab[data-tab-id="${targetId}"]`);
+  if (!targetEl) {
+    dropIndicatorLeft.value = null;
+    return;
+  }
+  const hostRect = host.getBoundingClientRect();
+  const rect = targetEl.getBoundingClientRect();
+  // 2px 竖线以选中目标边缘为基准居中（-1 偏移 = 半宽，避免再 translate 或被边缘裁剪）
+  const edge = after ? rect.right - hostRect.left : rect.left - hostRect.left;
+  let left = Math.round(edge - 1);
+  const maxLeft = Math.max(0, Math.round(hostRect.width - 2));
+  if (left < 0) left = 0;
+  if (left > maxLeft) left = maxLeft;
+  dropIndicatorLeft.value = left;
+}
+
+// 被拖 tab 保持在布局槽内；源与落点之间的 tab 平移出真实缝隙，落点即缝隙。
 const dragShiftClassById = computed(() => {
   const preview = dragPreview.value;
   const tabs = props.workspaceTabs;
@@ -170,110 +216,151 @@ const dragShiftClassById = computed(() => {
 });
 const hasDragShift = computed(() => dragShiftClassById.value.size > 0);
 
-// Drop indicator follows dragPreview directly (not hasDragShift): a drop next
-// to the source's own slot is a no-op reorder with no shift, but must still
-// show the line — e.g. dragging between exactly two tabs.
-function isDropBefore(id) {
-  return dragPreview.value?.targetId === id && !dragPreview.value.after;
-}
-
-function isDropAfter(id) {
-  return dragPreview.value?.targetId === id && dragPreview.value.after;
-}
-
 function dragShiftClass(id) {
   return dragShiftClassById.value.get(id) || '';
 }
 
 function clearDragPreview() {
   dragPreview.value = null;
+  dropIndicatorLeft.value = null;
 }
 
-function resetDragState() {
-  draggedWorkspaceId.value = '';
-  clearDragPreview();
-  draggedTabWidth.value = 0;
-}
-
-function setDragPreview(targetId, after) {
+function applyDragPreview(targetId, after) {
   if (!targetId || targetId === draggedWorkspaceId.value) {
     clearDragPreview();
     return;
   }
-  const current = dragPreview.value;
-  if (current?.targetId === targetId && current.after === after) return;
+  const cur = dragPreview.value;
+  if (cur?.targetId === targetId && cur.after === after) return;
   dragPreview.value = { targetId, after };
+  updateDropIndicatorPosition(targetId, after);
 }
+
+function headerDragEl() {
+  const h = headerRef.value;
+  if (!h) return null;
+  // naive-ui 的 n-layout-header 可能是组件实例，真实 DOM 在 $el 上
+  return h.$el || h;
+}
+function resetDragState() {
+  window.removeEventListener('pointermove', onWindowPointerMove);
+  window.removeEventListener('pointerup', onWindowPointerUp);
+  window.removeEventListener('pointercancel', onWindowPointerCancel);
+  // 同步恢复窗口拖动区：WebView2 在 pointerdown 时刻判定 --wails-draggable，
+  // 响应式 class 切换有下一帧延迟，必须直接写 style 才能让后续 move 不被当成窗口拖动
+  try { workspaceTabsRef.value?.style?.removeProperty('--wails-draggable'); } catch { /* ignore */ }
+  try { headerDragEl()?.style?.removeProperty('--wails-draggable'); } catch { /* ignore */ }
+  draggedWorkspaceId.value = '';
+  dragPointerId.value = null;
+  dragPreview.value = null;
+  dropIndicatorLeft.value = null;
+  dragGhostPos.value = null;
+  hasDragged.value = false;
+  draggedTabWidth.value = 0;
+}
+
+// 拖拽中途失焦（Alt+Tab 切走/弹窗抢占）或组件卸载时兜底清理：
+// 否则 window 级监听与 header 上的 no-drag 内联样式会永久残留，窗口将无法拖动。
+function onWindowBlur() {
+  resetDragState();
+}
+window.addEventListener('blur', onWindowBlur);
+onBeforeUnmount(() => {
+  window.removeEventListener('blur', onWindowBlur);
+  resetDragState();
+});
 
 function onWorkspaceTabUpdate(id) {
   if (id && id !== props.activeWorkspaceId) emit('switchWorkspace', id);
 }
 
-function onWorkspaceDragStart(event, id) {
-  draggedWorkspaceId.value = id;
-  clearDragPreview();
+// WebView2 对页面内部 HTML5 drag-and-drop（dragover/drop）支持不完整，
+// 因此 tab 排序用 Pointer Events 模拟：pointerdown 捕获 + window 级 move/up。
+function onWorkspacePointerDown(event, id) {
+  if (props.workspaceTabs.length <= 1 || event.button !== 0) return;
+  // 重入防护：已在拖拽中（多指/异常输入）忽略后续 pointerdown，避免重复挂 window 监听
+  if (draggedWorkspaceId.value) return;
+  const target = event.target;
+  if (target instanceof Element && target.closest('.tab-close')) return;
   const rect = event.currentTarget?.getBoundingClientRect?.();
   if (rect?.width) draggedTabWidth.value = rect.width;
-  if (event.dataTransfer) {
-    event.dataTransfer.effectAllowed = 'move';
-    event.dataTransfer.setData('text/plain', id);
-  }
+  else draggedTabWidth.value = 112;
+  draggedWorkspaceId.value = id;
+  dragPointerId.value = event.pointerId;
+  dragStartX = event.clientX;
+  dragStartY = event.clientY;
+  hasDragged.value = false;
+  clearDragPreview();
+  // WebView2 的 --wails-draggable 判定在 pointerdown 时机，响应式 class 要下一帧才生效，
+  // 必须同步把 host 与 header 切到 no-drag，否则后续 pointermove 会被当成窗口拖动，原 tab 看似“一动不动”
+  try { workspaceTabsRef.value?.style?.setProperty('--wails-draggable', 'no-drag'); } catch { /* ignore */ }
+  try { headerDragEl()?.style?.setProperty('--wails-draggable', 'no-drag'); } catch { /* ignore */ }
+  // 捕获指针：鼠标移出 tab/窗口也持续收到 move，不受 --wails-draggable 窗口拖动区影响
+  try { event.currentTarget?.setPointerCapture?.(event.pointerId); } catch { /* ignore */ }
+  window.addEventListener('pointermove', onWindowPointerMove);
+  window.addEventListener('pointerup', onWindowPointerUp);
+  window.addEventListener('pointercancel', onWindowPointerCancel);
+  event.preventDefault();
 }
 
-function onWorkspaceDragOver(event, targetId) {
-  if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
-  if (!draggedWorkspaceId.value || draggedWorkspaceId.value === targetId) {
+function computeDropTarget(clientX) {
+  const host = workspaceTabsRef.value;
+  if (!host || !draggedWorkspaceId.value) return null;
+  const tabs = Array.from(host.querySelectorAll('.workspace-tab') || []).filter(
+    (el) => el.dataset.tabId !== draggedWorkspaceId.value,
+  );
+  if (!tabs.length) return null;
+  for (const tab of tabs) {
+    const rect = tab.getBoundingClientRect();
+    if (clientX < rect.left + rect.width / 2) {
+      return { targetId: tab.dataset.tabId || '', after: false };
+    }
+  }
+  const last = tabs[tabs.length - 1];
+  return { targetId: last.dataset.tabId || '', after: true };
+}
+
+function onWindowPointerMove(event) {
+  if (event.pointerId !== undefined && event.pointerId !== dragPointerId.value) return;
+  // WebView2 窗口拖动会先于 JS 消费 move，必须 preventDefault 阻止默认拖动/选区
+  try { event.preventDefault(); } catch { /* ignore */ }
+  const dx = event.clientX - dragStartX;
+  const dy = event.clientY - dragStartY;
+  if (!hasDragged.value && Math.hypot(dx, dy) < 4) return;
+  hasDragged.value = true;
+  dragGhostPos.value = { x: event.clientX, y: event.clientY };
+  const drop = computeDropTarget(event.clientX);
+  if (!drop) {
     clearDragPreview();
     return;
   }
-  const rect = event.currentTarget.getBoundingClientRect();
-  setDragPreview(targetId, event.clientX > rect.left + rect.width / 2);
+  applyDragPreview(drop.targetId, drop.after);
 }
 
-function onWorkspaceTabsDragOver(event) {
-  if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
-  const tabs = Array.from(workspaceTabsRef.value?.querySelectorAll('.workspace-tab') || []);
-  let target = null;
-  let after = false;
-  for (const tab of tabs) {
-    const rect = tab.getBoundingClientRect();
-    if (event.clientX < rect.left + rect.width / 2) {
-      target = tab;
-      break;
+function onWindowPointerUp() {
+  const sourceId = draggedWorkspaceId.value;
+  const preview = dragPreview.value;
+  // 只要发生过实际拖拽位移就抑制随后的 click，避免拖回原位时误触发 tab 切换
+  if (hasDragged.value) {
+    suppressClick = true;
+    if (sourceId && preview && sourceId !== preview.targetId) {
+      emit('reorderWorkspace', { sourceId, ...preview });
     }
   }
-  if (!target && tabs.length) {
-    target = tabs[tabs.length - 1];
-    after = true;
-  }
-  setDragPreview(target?.dataset.tabId || '', after);
-}
-
-function onWorkspaceDrop(event, targetId) {
-  const sourceId = draggedWorkspaceId.value || event.dataTransfer?.getData('text/plain');
-  if (sourceId && sourceId !== targetId) {
-    const rect = event.currentTarget.getBoundingClientRect();
-    emit('reorderWorkspace', {
-      sourceId,
-      targetId,
-      after: event.clientX > rect.left + rect.width / 2,
-    });
-  }
   resetDragState();
 }
 
-function onWorkspaceTabsDrop(event) {
-  onWorkspaceTabsDragOver(event);
-  const sourceId = draggedWorkspaceId.value || event.dataTransfer?.getData('text/plain');
-  const preview = dragPreview.value;
-  if (sourceId && preview && sourceId !== preview.targetId) {
-    emit('reorderWorkspace', { sourceId, ...preview });
-  }
+function onWindowPointerCancel() {
+  // 系统取消拖拽（手势被抢占等）：只清理状态，不触发排序也不抑制 click
   resetDragState();
 }
 
-function onWorkspaceDragEnd() {
-  resetDragState();
+function onHostCaptureClick(event) {
+  if (suppressClick) {
+    suppressClick = false;
+    event.stopPropagation();
+    event.preventDefault();
+  }
 }
 
 function onOpenTokenStats(event) {
@@ -447,13 +534,57 @@ body.platform-darwin .brand-wordmark {
 }
 
 .workspace-tabs-host {
+  position: relative;
   display: flex;
   align-items: center;
-  overflow: hidden;
+  overflow: visible;
   height: 100%;
   flex: 1;
   min-width: 0;
   --wails-draggable: drag;
+}
+
+.workspace-tabs-host.dragging,
+.workspace-tabs-host.dragging .workspace-tabs,
+.workspace-tabs-host.dragging-active,
+.workspace-tabs-host.dragging-active .workspace-tabs {
+  --wails-draggable: no-drag;
+  touch-action: none;
+  user-select: none;
+}
+
+.workspace-drop-indicator {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  width: 2px;
+  background: var(--ally-accent-bright);
+  border-radius: 1px;
+  pointer-events: none;
+  z-index: 10;
+  box-shadow: 0 0 8px var(--ally-accent-bright), 0 0 2px rgba(0, 0, 0, 0.6);
+}
+
+.workspace-drag-ghost {
+  position: fixed;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 7px 12px;
+  border-radius: 8px;
+  background: #2e2e2e;
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.55);
+  pointer-events: none;
+  z-index: 99999;
+  opacity: 1;
+  will-change: left, top;
+  transform: translateZ(0);
 }
 
 .workspace-tabs {
@@ -603,26 +734,37 @@ body.platform-darwin .window-close-icon {
   transform: translateX(var(--workspace-drag-offset, 0px));
 }
 
+.workspace-tabs-host.dragging-active .workspace-tabs :deep(.workspace-tab.dragging) {
+  /* 有跟手位移后立即虚线占位：即使尚未产生缝隙（hasDragShift 之前）也必须有视觉反馈，否则原位看似“一动不动” */
+  background: rgba(255, 255, 255, 0.06) !important;
+  color: rgba(255, 255, 255, 0.45) !important;
+  border: 1px dashed rgba(255, 255, 255, 0.38) !important;
+  box-shadow: none !important;
+  pointer-events: none;
+  opacity: 0.62 !important;
+}
 .workspace-tabs-host.drag-preview-active .workspace-tabs :deep(.workspace-tab.dragging) {
-  visibility: hidden;
-  opacity: 0;
+  /* 有缝隙时再压淡文字，清晰内容由跟手卡片展示 */
+  visibility: visible !important;
+  opacity: 0.62 !important;
+  background: rgba(255, 255, 255, 0.06) !important;
+  color: rgba(255, 255, 255, 0.45) !important;
+  box-shadow: none !important;
+  border: 1px dashed rgba(255, 255, 255, 0.38) !important;
+  pointer-events: none;
 }
 
-/* 拖拽落点指示线：插入位置的高亮竖线（box-shadow inset，随平移的 tab 一起移动） */
-.workspace-tabs :deep(.workspace-tab.drop-before) {
-  box-shadow: inset 2px 0 0 var(--ally-accent-bright) !important;
-}
-
-.workspace-tabs :deep(.workspace-tab.drop-after) {
-  box-shadow: inset -2px 0 0 var(--ally-accent-bright) !important;
-}
-
+/* 拖拽落点指示线：独立悬浮竖线，随鼠标实时定位到目标 tab 边缘（2 tab 相邻时也可见） */
 .workspace-tabs :deep(.workspace-tab:active) {
   cursor: grabbing;
 }
 
 .workspace-tabs :deep(.workspace-tab.dragging) {
-  opacity: 0.45;
+  /* 未产生位移前（2 tab 相邻互换等）保持清晰可读 */
+  opacity: 1 !important;
+  z-index: 3;
+  touch-action: none;
+  user-select: none;
 }
 
 .workspace-tabs :deep(.workspace-tab:hover) {

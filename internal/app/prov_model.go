@@ -1541,6 +1541,24 @@ func updateToolCallFromResponsesItem(call *legacyopenai.ToolCall, item oaresp.Re
 	}
 }
 
+// truncatedToolCallArguments replaces streamed tool-call arguments that were
+// cut off before the stream completed, leaving invalid JSON. Some providers
+// parse tool_calls[].function.arguments server-side and reject the whole
+// request with 400 when the string is malformed, so a truncated prefix must
+// never be replayed to the provider or persisted into history. The failed
+// tool result already explains the truncation to the model.
+const truncatedToolCallArguments = `{"allyTruncatedArguments":true}`
+
+// repairTruncatedToolCallArguments returns args unchanged when they are valid
+// JSON and the truncation marker otherwise. Empty arguments are left to the
+// caller's empty-args policy.
+func repairTruncatedToolCallArguments(args string) string {
+	if args == "" || json.Valid([]byte(args)) {
+		return args
+	}
+	return truncatedToolCallArguments
+}
+
 func normalizeToolCalls(toolCalls []legacyopenai.ToolCall) []legacyopenai.ToolCall {
 	out := cloneToolCalls(toolCalls)
 	for i := range out {
@@ -1549,7 +1567,9 @@ func normalizeToolCalls(toolCalls []legacyopenai.ToolCall) []legacyopenai.ToolCa
 		}
 		if strings.TrimSpace(out[i].Function.Arguments) == "" {
 			out[i].Function.Arguments = "{}"
+			continue
 		}
+		out[i].Function.Arguments = repairTruncatedToolCallArguments(out[i].Function.Arguments)
 	}
 	return out
 }
