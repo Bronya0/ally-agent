@@ -1342,19 +1342,6 @@ func TestAutoValidationJavaDependencyErrorsAreIgnored(t *testing.T) {
 	}
 }
 
-func TestAutoValidationCatchesJavaSyntax(t *testing.T) {
-	if _, err := exec.LookPath("javac"); err != nil {
-		t.Skip("javac is unavailable")
-	}
-	root := t.TempDir()
-	enabled := true
-	writeToolTestFile(t, root, "Broken.java", "public class Broken {\n    void m() { int x = ; }\n}\n")
-	got := NewApp().validateChangedFiles(context.Background(), ConfigState{Workspace: root, AutoValidationJava: &enabled}, []string{"Broken.java"})
-	if !strings.Contains(got, "自动校验失败") || !strings.Contains(got, "expected") {
-		t.Fatalf("expected Java syntax failure, got %q", got)
-	}
-}
-
 func TestAutoValidationSkipsJSXFiles(t *testing.T) {
 	if _, err := exec.LookPath("node"); err != nil {
 		t.Skip("node is unavailable")

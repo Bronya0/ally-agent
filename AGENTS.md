@@ -182,6 +182,7 @@ node scripts/generate-model-catalog.mjs
 - rejects same-path mutation groups, then executes remaining built-in file mutations in `toolCallIndex` order under `fileOpsMu`
 - appends compact model-facing tool results
 - replaces tool-call arguments that are not valid JSON (stream cut off mid-arguments) with the `truncatedToolCallArguments` marker in `normalizeToolCalls()`, and `sanitizeHistoryMessages()` applies the same repair when loading histories written before the fix — providers that parse `tool_calls` arguments server-side (DeepSeek among them) otherwise reject every request for the session with 400
+- enforces the tool-call pairing invariant through `repairDanglingToolCalls()` inside `sanitizeHistoryMessages()`: every persisted assistant `tool_calls` entry must be answered by exactly one tool message carrying its ID. Unanswered (dangling) tool_calls are stripped with the assistant text kept, and orphan or duplicate tool messages are dropped — a run that panicked between appending the assistant tool_calls message and its tool results would otherwise poison the saved history with a 400-per-request session. `executeTool()` additionally converts panics into `E_TOOL_PANIC` tool errors (logging the stack) so a handler crash neither kills the desktop process nor unwinds `runChat` into the dangling state
 - loops until no tool calls remain
 
 Tool result channels:

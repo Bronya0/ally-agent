@@ -1043,7 +1043,84 @@ func sanitizeHistoryMessages(messages []openai.ChatCompletionMessage) []openai.C
 		}
 		filtered = append(filtered, m)
 	}
-	return filtered
+	return repairDanglingToolCalls(filtered)
+}
+
+// repairDanglingToolCalls enforces the tool-call pairing invariant: every
+// assistant tool_call must be followed by exactly one tool message carrying
+// its ID, and every tool message must answer a still-pending tool_call.
+// Histories written when a run panicked between appending the assistant
+// tool_calls message and appending its tool results (or by older builds that
+// hit the same window) otherwise poison the session permanently — providers
+// reject every request with 400 because the dangling tool_calls can never be
+// answered. Unanswered tool_calls are stripped (the assistant text is kept);
+// orphan and duplicate tool messages are dropped.
+func repairDanglingToolCalls(messages []openai.ChatCompletionMessage) []openai.ChatCompletionMessage {
+	out := make([]openai.ChatCompletionMessage, 0, len(messages))
+	// pending maps toolCallID -> index in out of the assistant message that
+	// declared it. An entry is removed once its tool result arrives.
+	pending := make(map[string]int)
+	// closeTurn strips every still-pending (never answered) tool_call from
+	// the assistant message that declared it. It runs whenever the current
+	// assistant turn ends: the next assistant/user message, or the end of the
+	// history.
+	closeTurn := func() {
+		if len(pending) == 0 {
+			return
+		}
+		dangling := make(map[string]bool, len(pending))
+		for id := range pending {
+			dangling[id] = true
+		}
+		byIndex := make(map[int]bool)
+		for _, idx := range pending {
+			byIndex[idx] = true
+		}
+		for idx := range byIndex {
+			kept := make([]openai.ToolCall, 0, len(out[idx].ToolCalls))
+			for _, call := range out[idx].ToolCalls {
+				if !dangling[call.ID] {
+					kept = append(kept, call)
+				}
+			}
+			updated := out[idx]
+			updated.ToolCalls = kept
+			out[idx] = updated
+		}
+		pending = make(map[string]int)
+	}
+	for _, m := range messages {
+		switch m.Role {
+		case openai.ChatMessageRoleAssistant:
+			closeTurn()
+			out = append(out, m)
+			for _, call := range m.ToolCalls {
+				pending[call.ID] = len(out) - 1
+			}
+		case openai.ChatMessageRoleTool:
+			if _, answered := pending[m.ToolCallID]; !answered {
+				// Orphan tool result (no pending call, or a duplicate result
+				// for an already-answered call) — providers reject these too.
+				continue
+			}
+			delete(pending, m.ToolCallID)
+			out = append(out, m)
+		default:
+			closeTurn()
+			out = append(out, m)
+		}
+	}
+	closeTurn()
+	// An assistant message whose tool_calls all dangled and whose text is
+	// empty carries no information; drop it entirely.
+	final := make([]openai.ChatCompletionMessage, 0, len(out))
+	for _, m := range out {
+		if m.Role == openai.ChatMessageRoleAssistant && len(m.ToolCalls) == 0 && strings.TrimSpace(m.Content) == "" {
+			continue
+		}
+		final = append(final, m)
+	}
+	return final
 }
 
 func textFromMultiContent(parts []openai.ChatMessagePart) string {

@@ -51,7 +51,10 @@ const TOOL_VERBS = {
   start_service: ['Starting service', 'Started service', 'Service'],
   stop_service: ['Stopping service', 'Stopped service', 'Service'],
   list_services: ['Listing services', 'Listed services', 'Service'],
-  // search
+  // search — grep keeps its literal tool name in every status and locale: the
+  // name IS the action, so all three forms (inProgress, done, error noun) are
+  // the same word and no translated kind label is shown anywhere.
+  grep: ['Grep', 'Grep', 'Grep'],
   Glob: ['Matching', 'Matched', 'Match'],
   // network
   web_fetch: ['Fetching', 'Fetched', 'Fetch'],

@@ -213,10 +213,14 @@ function toolArgsTitle(tc) {
     const files = Array.isArray(parsed.files) ? parsed.files.map(f => f && f.path).filter(Boolean) : [];
     if (files.length > 0) return files.join(', ');
   }
-  // grep keeps its literal tool name in every status and locale (no verb
-  // forms, no translated kind label), matching how the search tool is
-  // identified across the UI.
-  if (name === 'grep') return 'Grep';
+  // grep shows its real search target (pattern, path); the literal "Grep"
+  // label itself comes from the shared verb table via subToolVerb.
+  if (name === 'grep') {
+    const pattern = parsed.pattern || '';
+    const path = parsed.path || '';
+    if (pattern && path) return `${pattern}, ${path}`;
+    return pattern || path;
+  }
   if (name === 'list_files' || name === 'remote_list_files') {
     if (parsed.target) return `${parsed.target}${parsed.path ? ' · ' + parsed.path : ''}`;
     return parsed.path || parsed.pattern || '';

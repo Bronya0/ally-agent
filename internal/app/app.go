@@ -14,8 +14,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"sync"
 
@@ -1993,7 +1995,19 @@ func rawFunctionTool(name, description string, parameters map[string]any) openai
 }
 func normalizeToolName(name string) string { return toolshared.NormalizeName(name) }
 
-func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name string, args []byte) toolResult {
+func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name string, args []byte) (result toolResult) {
+	// Tool execution digests model-controlled JSON and is the single choke
+	// point for the main loop, sub-agents, and scheduled tasks. A panic in
+	// any handler would otherwise crash the whole desktop app — and in the
+	// ordered file-mutation phase it would unwind runChat and poison the
+	// deferred checkpoint save with dangling tool_calls. Convert panics into
+	// a normal tool error so the agent loop keeps running.
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("executeTool: tool %s panicked: %v\n%s", name, r, debug.Stack())
+			result = toolErrorResult(codedToolError("E_TOOL_PANIC", fmt.Errorf("tool %s crashed internally: %v", name, r)))
+		}
+	}()
 	decode := func(v any) error {
 		if len(bytes.TrimSpace(args)) == 0 {
 			return nil

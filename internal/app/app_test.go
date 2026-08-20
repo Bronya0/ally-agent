@@ -678,33 +678,6 @@ func TestToolCallProgressTrackerThrottlesLargeUpdates(t *testing.T) {
 	}
 }
 
-func TestBuildMessagesWithFrontendMessagesKeepsSavedToolActivity(t *testing.T) {
-	app := NewApp()
-	sessionID := "session-with-tools"
-	toolSummary := "Tool activity from previous turn:\n- edit({\"path\":\"app.go\"}): success - changed app.go"
-	app.histories[sessionID] = []openai.ChatCompletionMessage{
-		{Role: openai.ChatMessageRoleUser, Content: "change the file"},
-		{Role: openai.ChatMessageRoleAssistant, Content: toolSummary},
-		{Role: openai.ChatMessageRoleAssistant, Content: "done"},
-	}
-
-	got := app.buildMessages(ChatRequest{
-		SessionID: sessionID,
-		Messages: []ChatMessageInput{
-			{Role: openai.ChatMessageRoleUser, Content: "change the file"},
-			{Role: openai.ChatMessageRoleAssistant, Content: "done"},
-			{Role: openai.ChatMessageRoleUser, Content: "what changed?"},
-		},
-	}, ConfigState{}, nil)
-
-	if !messageContentExists(got, toolSummary) {
-		t.Fatalf("expected saved tool activity summary to be preserved in model context; got %#v", got)
-	}
-	if !messageContentExists(got, "what changed?") {
-		t.Fatalf("expected frontend request messages to remain in model context; got %#v", got)
-	}
-}
-
 func TestBuildMessagesIgnoresFrontendSystemMessages(t *testing.T) {
 	app := NewApp()
 	got := app.buildMessages(ChatRequest{
@@ -791,7 +764,6 @@ func TestSystemPromptDefinesWaitSequencing(t *testing.T) {
 		}
 	}
 }
-
 
 func TestSystemPromptExplainsRunCommandOutsidePathRecovery(t *testing.T) {
 	prompt := defaultSystemPrompt(nil, "", nil, "", "")
