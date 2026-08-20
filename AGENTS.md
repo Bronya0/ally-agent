@@ -145,6 +145,26 @@ Supported API formats:
 
 各适配器的请求/响应细节（token 参数、tool-call 合并、stop_reason 处理、prompt cache、thinking 参数）见 `prov_model.go` 内注释与 `prov_model_test.go`；修改时保持 `prov_model.go` 为唯一 provider 边界，不得把 provider 特有形状泄漏进 `app.go` 或工具编排层。
 
+### 模型预设目录（Model Catalog）
+
+“添加模型”弹窗的 provider/模型预设来自以下链路：
+
+```text
+https://models.dev/api.json  →  docs/model_api.json →（scripts/generate-model-catalog.mjs）→  frontend/src/data/modelCatalog.json
+```
+
+- `docs/model_api.json` 是 **models.dev（AI SDK 官方模型注册表）的静态快照**，约 192 个 provider，3-4 MB。格式即 models.dev 的 API 格式（provider 含 `npm`/`api`/`name`/`doc`/`models`；模型含 `tool_call`/`limit`/`modalities`/`reasoning_options` 等）。
+- `frontend/src/data/modelCatalog.json` 是**生成产物**，不要手改（下一轮生成会覆盖）；生成脚本只保留 `npm` 为 `@ai-sdk/openai-compatible` / `@ai-sdk/openai` / `@ai-sdk/anthropic` 的 provider，且模型须未废弃、支持工具调用、支持文本输出。
+- 前端在 `SettingsModal.vue` 的 `ensureModelCatalog()` 中懒加载 `modelCatalog.json`，仅用于填充 providerName/apiFormat/baseUrl/contextWindow/maxTokens/reasoningTag；API Key 仍需用户自填。
+- **更新方式**：下载最新源并重新生成：
+
+```bash
+curl -o docs/model_api.json https://models.dev/api.json
+node scripts/generate-model-catalog.mjs
+```
+
+> 注意：`models.dev` 在国内网络可能超时，需代理访问。
+
 ---
 
 ## Chat Loop
