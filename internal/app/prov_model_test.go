@@ -23,7 +23,7 @@ func TestMarkAnthropicPromptCacheBreakpointsSkipsTailInjections(t *testing.T) {
 			anthropic.NewUserMessage(anthropic.NewTextBlock("question")),
 			anthropic.NewAssistantMessage(anthropic.NewToolUseBlock("t1", map[string]any{"a": 1}, "grep")),
 			anthropic.NewUserMessage(anthropic.NewToolResultBlock("t1", `{"ok":true}`, false)),
-			anthropic.NewUserMessage(anthropic.NewTextBlock("<ally-plan>\n1. [in_progress] x\n</ally-plan>")),
+			anthropic.NewUserMessage(anthropic.NewTextBlock("<ally-context-budget>\nWindow: 1000 tokens\n</ally-context-budget>")),
 		},
 	}
 	markAnthropicPromptCacheBreakpoints(&params)
@@ -46,7 +46,7 @@ func TestMarkAnthropicPromptCacheBreakpointsSkipsTailInjections(t *testing.T) {
 		{Role: legacyopenai.ChatMessageRoleSystem, Content: "system"},
 		{Role: legacyopenai.ChatMessageRoleUser, Content: "question"},
 		{Role: legacyopenai.ChatMessageRoleTool, ToolCallID: "t1", Content: `{"ok":true}`},
-		{Role: legacyopenai.ChatMessageRoleUser, Content: "<ally-plan>\n1. [in_progress] x\n</ally-plan>"},
+		{Role: legacyopenai.ChatMessageRoleUser, Content: "<ally-context-budget>\nWindow: 1000 tokens\n</ally-context-budget>"},
 	})
 	if len(converted) != 3 {
 		t.Fatalf("expected 3 converted messages, got %d", len(converted))

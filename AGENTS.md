@@ -111,13 +111,13 @@ Core runtime flow:
 
 1. Frontend calls `StartChat(ChatRequest)` through Wails.
 2. Backend creates a cancellable run and starts `runChat()`.
-3. `buildMessages()` constructs the request context: core system prompt, workspace map, persisted history, current user message, and attachments. The workspace map is frozen per session at the first request (labeled as a snapshot; `list_files` returns live state) so the request prefix stays byte-stable and provider prompt caches survive across runs. Per-step tail injections (`<ally-plan>`; context-budget injection is disabled) are rebuilt each request and never persisted; the Anthropic adapter places its prompt-cache breakpoints before them so they cannot invalidate the cached prefix.
+3. `buildMessages()` constructs the request context: core system prompt, workspace map, persisted history, current user message, and attachments. The workspace map is frozen per session at the first request (labeled as a snapshot; `list_files` returns live state) so the request prefix stays byte-stable and provider prompt caches survive across runs. The context-budget tail injection is disabled (cache-first); if re-enabled it is rebuilt each request and never persisted, and the Anthropic adapter places its prompt-cache breakpoints before transient tail items so they cannot invalidate the cached prefix. The todo list is not injected per step: every `plan` tool call returns the full updated list in its model-facing tool result, which is persisted into history and stays visible across steps and turns.
 4. `buildToolsWithMcp()` combines static built-in tools with connected MCP tools.
 5. `streamModelResponse()` dispatches to the configured provider adapter.
 6. Streaming deltas and tool-call updates are emitted to the frontend through runtime events.
 7. Non-file tool calls run concurrently with a max concurrency of 4; built-in file mutations run afterward in `toolCallIndex` order. `wait` must be the only call in its tool batch.
 8. Tool results are appended to same-turn model context and the loop repeats until no tool calls remain or `maxAgentSteps` is reached.
-9. Saved session history excludes raw tool calls/results and stores compact tool activity summaries.
+9. Saved session history keeps tool calls and their model-facing tool results verbatim; system messages and image payloads are dropped (see `sanitizeHistoryMessages()`).
 
 Connected MCP tools are sorted by server, tool name, and function name before being exposed so request tool ordering remains deterministic across turns.
 
@@ -193,7 +193,7 @@ Tool result channels:
 `saveHistory()`:
 
 - drops system messages
-- turns tool calls and tool results into concise assistant summaries
+- keeps tool calls and their model-facing tool results verbatim
 - converts multi-content messages to text summaries for persistence
 - trims history by an estimated-token budget at user-message boundaries (see `trimSavedHistory()`), not a fixed message count
 
@@ -385,6 +385,7 @@ Important edit contract:
 - Source regions must not overlap. The backend locates all exact snippets and line ranges on the original snapshot, applies them from the end of the file backward, and writes once.
 - Repeated local `files` entries resolving to the same physical path and using the same version are merged into one original-snapshot edit plan; conflicting versions fail before writing.
 - All files are validated before writes. Any invalid, missing, ambiguous, overlapping, or stale effective change fails the entire call without modifying any file.
+- When the provider stream cuts off mid-arguments and the decoded JSON is truncated, `salvageEditRequest()` (in `orch_edit.go`, wired into `executeTool`'s edit case) recovers the fully transmitted files/changes prefix, drops the incomplete tail, and executes the recovered batch after full validation — recovery never lowers the edit contract. The result carries a Chinese salvage warning in `warnings` (rendered as a yellow row by the UI, surfaced to the model through the compacted result) telling the model how many changes applied and that the dropped remainder must be re-read and resent; only a truncation with nothing recoverable returns the hard truncation error.
 - Empty `newText` deletes the selected source; exact-source insertion replaces a unique anchor with that anchor plus the inserted content.
 - Put all independent changes across affected files in one call to minimize model round trips. Each file is written once; a later commit failure triggers best-effort rollback of earlier writes.
 - `remote_edit` uses `{target, files}` and the same per-file `version`/`changes` contract as local edit; remote reads share the local text-encoding boundary (`read.DecodeTextBytes`), so UTF-16 LE/BE files are read and edited remotely exactly like locally, with UTF-8 write-back.

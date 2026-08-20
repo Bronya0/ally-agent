@@ -1330,9 +1330,10 @@ func buildAnthropicMessages(messages []legacyopenai.ChatCompletionMessage) (stri
 // across runs while the header bytes stay stable) and one on the last content
 // block of the last non-transient message (caches the stable request prefix
 // so it grows incrementally across agent steps). Transient tail items such as
-// <ally-plan> / <ally-context-budget> are rebuilt every request and stay
-// outside the cached prefix, so they can appear, change, or vanish without
-// invalidating anything. Anthropic allows up to 4 breakpoints; 2 are used.
+// <ally-context-budget> (currently disabled; see the commented call in
+// runChat) are rebuilt every request and stay outside the cached prefix, so
+// they can appear, change, or vanish without invalidating anything.
+// Anthropic allows up to 4 breakpoints; 2 are used.
 func markAnthropicPromptCacheBreakpoints(params *anthropic.MessageNewParams) {
 	cc := anthropic.CacheControlEphemeralParam{TTL: anthropic.CacheControlEphemeralTTLTTL5m}
 	if len(params.System) > 0 {
@@ -1350,15 +1351,15 @@ func markAnthropicPromptCacheBreakpoints(params *anthropic.MessageNewParams) {
 }
 
 // anthropicMessageIsTransientInjection reports whether an outbound Anthropic
-// message is a per-step tail injection (todo status / context budget) that is
-// rebuilt fresh each request and never persisted into history. Such messages
-// must remain outside the cached prefix.
+// message is a per-step tail injection (context budget) that is rebuilt fresh
+// each request and never persisted into history. Such messages must remain
+// outside the cached prefix.
 func anthropicMessageIsTransientInjection(msg anthropic.MessageParam) bool {
 	if msg.Role != "user" || len(msg.Content) != 1 || msg.Content[0].OfText == nil {
 		return false
 	}
 	text := msg.Content[0].OfText.Text
-	return strings.HasPrefix(text, "<ally-plan>") || strings.HasPrefix(text, "<ally-context-budget>")
+	return strings.HasPrefix(text, "<ally-context-budget>")
 }
 
 func setAnthropicBlockCacheControl(block anthropic.ContentBlockParamUnion, cc anthropic.CacheControlEphemeralParam) {

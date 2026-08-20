@@ -14,6 +14,7 @@ package app
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -290,6 +291,154 @@ func validateModelEditToolRequest(files []FileTextEdits) error {
 		return codedToolError("E_BAD_EDIT", errors.New("edit supports at most 200 total changes per call"))
 	}
 	return nil
+}
+
+// salvageEditRequest recovers the complete prefix of edit tool arguments whose
+// JSON was cut off mid-stream (provider stream interrupted before the closing
+// brackets arrived). Complete files and complete changes decode exactly as
+// they would on a healthy stream; the truncated tail is dropped and counted.
+// The salvaged request still has to pass validateModelEditToolRequest and the
+// full edit contract before anything is written, so recovery never lowers the
+// validation bar. ok is true only when at least one complete change was
+// recovered.
+func salvageEditRequest(args []byte) (req ModelEditToolRequest, dropped int, ok bool) {
+	dec := json.NewDecoder(bytes.NewReader(args))
+	tok, err := dec.Token()
+	if err != nil || tok != json.Delim('{') {
+		return req, 0, false
+	}
+	for dec.More() {
+		key, err := dec.Token()
+		if err != nil {
+			break
+		}
+		name, _ := key.(string)
+		if name != "files" {
+			var skip json.RawMessage
+			if err := dec.Decode(&skip); err != nil {
+				break
+			}
+			continue
+		}
+		tok, err := dec.Token()
+		if err != nil || tok != json.Delim('[') {
+			return req, dropped, salvageChanges(req.Files) > 0
+		}
+		for dec.More() {
+			start := dec.InputOffset()
+			var file FileTextEdits
+			if err := dec.Decode(&file); err == nil {
+				req.Files = append(req.Files, file)
+				continue
+			}
+			// Truncated inside this file entry: recover its complete prefix
+			// (path, version, and every fully transmitted change).
+			if partial, partialDropped, usable := salvagePartialFileEdit(args[start:]); usable {
+				req.Files = append(req.Files, partial)
+				dropped += partialDropped
+			}
+			return req, dropped, salvageChanges(req.Files) > 0
+		}
+		// The files array closed; the stream may still be cut before the
+		// final '}' but every entry above is complete.
+		break
+	}
+	return req, dropped, salvageChanges(req.Files) > 0
+}
+
+// salvagePartialFileEdit recovers the complete fields of one file entry whose
+// JSON object was truncated mid-transmission. A change object that itself was
+// cut is incomplete and must be dropped — its oldText/newText pair cannot be
+// told apart from an intentional partial edit.
+func salvagePartialFileEdit(raw []byte) (file FileTextEdits, dropped int, ok bool) {
+	// The slice starts at the element boundary, which may include the ',' that
+	// separated it from the previous element.
+	raw = bytes.TrimLeft(raw, " \t\r\n")
+	raw = bytes.TrimPrefix(raw, []byte(","))
+	raw = bytes.TrimLeft(raw, " \t\r\n")
+
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	tok, err := dec.Token()
+	if err != nil || tok != json.Delim('{') {
+		return file, 0, false
+	}
+	for dec.More() {
+		key, err := dec.Token()
+		if err != nil {
+			break
+		}
+		name, _ := key.(string)
+		switch name {
+		case "path", "version":
+			value, err := dec.Token()
+			if err != nil {
+				return file, dropped, len(file.Changes) > 0
+			}
+			if s, isString := value.(string); isString {
+				if name == "path" {
+					file.Path = s
+				} else {
+					file.Version = s
+				}
+			}
+		case "changes":
+			tok, err := dec.Token()
+			if err != nil || tok != json.Delim('[') {
+				return file, dropped, len(file.Changes) > 0
+			}
+			for dec.More() {
+				var change TextChange
+				if err := dec.Decode(&change); err == nil {
+					file.Changes = append(file.Changes, change)
+					continue
+				}
+				dropped++
+				return file, dropped, len(file.Changes) > 0
+			}
+		default:
+			var skip json.RawMessage
+			if err := dec.Decode(&skip); err != nil {
+				return file, dropped, len(file.Changes) > 0
+			}
+		}
+	}
+	return file, dropped, len(file.Changes) > 0
+}
+
+func salvageChanges(files []FileTextEdits) int {
+	total := 0
+	for _, file := range files {
+		total += len(file.Changes)
+	}
+	return total
+}
+
+// editSalvageWarning is the brief note attached to a salvaged edit result so
+// both the UI (yellow warning row) and the model (compacted warnings field)
+// know the tail of the request was dropped and the remaining changes must be
+// re-read and resent.
+func editSalvageWarning(applied, dropped int) string {
+	if dropped > 0 {
+		return fmt.Sprintf("参数流被截断：已应用 %d 个完整改动，尾部 %d 个残缺改动已丢弃；请重新 read 后补发剩余改动", applied, dropped)
+	}
+	return fmt.Sprintf("参数流在末尾被截断，%d 个改动已全部完整恢复并应用", applied)
+}
+
+// attachEditSalvageWarning appends the salvage note to a successful edit
+// result without disturbing the existing warnings.
+func attachEditSalvageWarning(data any, applied, dropped int) any {
+	warning := editSalvageWarning(applied, dropped)
+	switch result := data.(type) {
+	case MultiEditResult:
+		result.Warnings = append(result.Warnings, warning)
+		return result
+	case *MultiEditResult:
+		if result != nil {
+			result.Warnings = append(result.Warnings, warning)
+		}
+		return result
+	}
+	return data
 }
 
 func validateVersion(version string) error {

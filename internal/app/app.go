@@ -1735,12 +1735,12 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			// cache breakpoint lands on the last block. Call kept commented
 			// for quick re-enable:
 			// requestMessages := appendContextBudgetMessage(messages, bd.Total, maxCtx)
+			// The todo list is NOT injected per step: every `plan` tool call
+			// already returns the full updated list in its model-facing tool
+			// result, which is persisted into history and stays visible across
+			// steps and turns. The system prompt carries the finish-your-plan
+			// discipline instead.
 			requestMessages := messages
-			// Inject the live todo list every turn so the model can see which
-			// items are still pending/in_progress and decide to flip them via
-			// plan before answering. Also not persisted into history —
-			// reconstructed fresh each turn from the live todo state.
-			requestMessages = appendTodoStatusMessage(requestMessages, a.GetTodos(sessionID))
 			modelResp, err := a.streamModelResponse(ctx, cfg, cfg.Model, requestMessages, tools, func(event modelStreamEvent) {
 				if event.ContentDelta != "" {
 					streamDeltas.addContent(event.ContentDelta)
@@ -2042,6 +2042,17 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 	case "edit":
 		var req ModelEditToolRequest
 		err = decode(&req)
+		salvagedDropped := -1
+		if err != nil && isIncompleteStreamJSON(err) {
+			// Stream cut off mid-arguments: apply the complete prefix instead
+			// of failing the whole call, and report the dropped tail through
+			// the result warnings so the model re-reads and resends the rest.
+			if candidate, dropped, usable := salvageEditRequest(args); usable && validateModelEditToolRequest(candidate.Files) == nil {
+				req = candidate
+				salvagedDropped = dropped
+				err = nil
+			}
+		}
 		if err == nil {
 			err = validateModelEditToolRequest(req.Files)
 		}
@@ -2055,6 +2066,9 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 					paths = append(paths, file.Path)
 				}
 				data = attachValidation(data, a.validateChangedFiles(ctx, cfg, paths))
+				if salvagedDropped >= 0 {
+					data = attachEditSalvageWarning(data, salvageChanges(req.Files), salvagedDropped)
+				}
 				a.invalidateWorkspaceMapCache(cfg)
 				invalidateRunReadCache(ctx)
 			}

@@ -3334,6 +3334,98 @@ func TestLocalEditPlanIsSharedByConflictDetectionAndExecution(t *testing.T) {
 	}
 }
 
+func TestSalvageEditRequestRecoversCompletePrefix(t *testing.T) {
+	// Cut inside the third change's newText: two complete changes survive,
+	// the truncated one is dropped and counted.
+	req, dropped, ok := salvageEditRequest([]byte(`{"files":[{"path":"a.txt","version":"000000000000","changes":[{"oldText":"alpha","newText":"ALPHA"},{"oldText":"beta","newText":"BETA"},{"oldText":"gamma","newText":"GAM`))
+	if !ok {
+		t.Fatal("expected salvage to recover the complete prefix")
+	}
+	if dropped != 1 {
+		t.Fatalf("expected 1 dropped change, got %d", dropped)
+	}
+	if len(req.Files) != 1 || req.Files[0].Path != "a.txt" || req.Files[0].Version != "000000000000" {
+		t.Fatalf("unexpected salvaged file: %#v", req.Files)
+	}
+	if len(req.Files[0].Changes) != 2 || req.Files[0].Changes[0].NewText != "ALPHA" || req.Files[0].Changes[1].NewText != "BETA" {
+		t.Fatalf("unexpected salvaged changes: %#v", req.Files[0].Changes)
+	}
+
+	// Cut inside a second file entry: the first file is complete, the second
+	// contributes its complete changes with the truncated tail dropped.
+	req, dropped, ok = salvageEditRequest([]byte(`{"files":[{"path":"a.txt","version":"v1","changes":[{"oldText":"x","newText":"y"}]},{"path":"b.txt","version":"v2","changes":[{"oldText":"1","newText":"2"},{"oldText":"3","newText":"4"},{"oldText":"5","newTe`))
+	if !ok {
+		t.Fatal("expected salvage to recover both files")
+	}
+	if len(req.Files) != 2 {
+		t.Fatalf("expected 2 salvaged files, got %d: %#v", len(req.Files), req.Files)
+	}
+	if req.Files[1].Path != "b.txt" || len(req.Files[1].Changes) != 2 || dropped != 1 {
+		t.Fatalf("unexpected partial file salvage: %#v dropped=%d", req.Files[1], dropped)
+	}
+
+	// Stream cut right after a complete change: nothing is lost.
+	req, dropped, ok = salvageEditRequest([]byte(`{"files":[{"path":"a.txt","version":"v1","changes":[{"oldText":"x","newText":"y"}]`))
+	if !ok || dropped != 0 || len(req.Files) != 1 || len(req.Files[0].Changes) != 1 {
+		t.Fatalf("expected trailing truncation to keep the complete change: %#v dropped=%d ok=%v", req, dropped, ok)
+	}
+
+	// Nothing usable was transmitted before the cut.
+	_, _, ok = salvageEditRequest([]byte(`{"files":[{"path":"a.txt","ver`))
+	if ok {
+		t.Fatal("salvage must not report usable output for a prefix without complete changes")
+	}
+
+	// Not truncated in the first place: a top-level non-object yields nothing.
+	if _, _, ok := salvageEditRequest([]byte(`[]`)); ok {
+		t.Fatal("non-object arguments must not salvage")
+	}
+}
+
+func TestExecuteToolEditSalvagesTruncatedArguments(t *testing.T) {
+	dir := t.TempDir()
+	original := []byte("alpha\nbeta\ngamma\n")
+	if err := os.WriteFile(filepath.Join(dir, "sample.txt"), original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	app := NewApp()
+	cfg := ConfigState{Workspace: dir}
+	version := strings.ToUpper(hashVersion(original))
+
+	// Stream cut inside the third change: the first two changes must be
+	// applied, the third dropped, and the result must carry the salvage
+	// warning instead of failing the call.
+	truncated := fmt.Sprintf(`{"files":[{"path":"sample.txt","version":%q,"changes":[{"oldText":"alpha","newText":"ALPHA"},{"oldText":"beta","newText":"BETA"},{"oldText":"gamma","newText":"GAM`, version)
+	result := app.executeTool(context.Background(), cfg, "session-1", "edit", []byte(truncated))
+	if !result.OK {
+		t.Fatalf("expected salvaged edit to succeed, got error %q", result.Error)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "sample.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "ALPHA\nBETA\ngamma\n" {
+		t.Fatalf("unexpected salvaged content: %q", string(got))
+	}
+	var multi MultiEditResult
+	data, _ := json.Marshal(result.Data)
+	if err := json.Unmarshal(data, &multi); err != nil {
+		t.Fatalf("decode MultiEditResult: %v", err)
+	}
+	if len(multi.Warnings) == 0 || !strings.Contains(multi.Warnings[len(multi.Warnings)-1], "截断") {
+		t.Fatalf("expected salvage warning in result warnings, got %#v", multi.Warnings)
+	}
+	if !strings.Contains(multi.Warnings[len(multi.Warnings)-1], "1 个残缺改动") {
+		t.Fatalf("salvage warning must report the dropped change count: %#v", multi.Warnings)
+	}
+
+	// Salvage that recovers nothing keeps the explicit truncation error.
+	result = app.executeTool(context.Background(), cfg, "session-1", "edit", []byte(`{"files":[{"path":"sample.txt","ver`))
+	if result.OK || !strings.Contains(result.Error, "truncated") {
+		t.Fatalf("expected truncation error when nothing is salvageable, got %#v", result)
+	}
+}
+
 // ─────────────────────── Scheduled tasks ───────────────────────
 
 func TestScheduledTaskCreateListDelete(t *testing.T) {
