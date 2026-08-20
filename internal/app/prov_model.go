@@ -90,7 +90,11 @@ func shouldRetryLLMError(err error) bool {
 // 同一 key 无意义,应切换或直接失败。匹配覆盖常见变体:HTTP 状态码
 // (401/403)、OpenAI/Anthropic 错误码(invalid_api_key、insufficient_quota、
 // permission_error 等)以及常见文案(invalid api key、unauthorized、
-// forbidden、quota、credential 等)。
+// forbidden、credential 等)。
+// 例外:429/限流类错误即使文案含 quota(阿里云 429 token-limit 的
+// "You exceeded your current quota" 与 OpenAI 计费文案同形,实为分钟级
+// 限流)也按瞬时错误处理,避免整个 key 池被 30 分钟冷却冻结;只有明确的
+// 计费类标记才视为 key 级故障。
 func isAuthKeyError(err error) bool {
 	if err == nil {
 		return false
@@ -99,15 +103,24 @@ func isAuthKeyError(err error) bool {
 		return false
 	}
 	msg := strings.ToLower(err.Error())
-	if strings.Contains(msg, "401") || strings.Contains(msg, "402") || strings.Contains(msg, "403") ||
+	// 明确的计费类错误(余额/配额耗尽,需人工处理)保持长冷却。
+	if strings.Contains(msg, "402") || strings.Contains(msg, "insufficient_quota") ||
+		strings.Contains(msg, "insufficient_balance") || strings.Contains(msg, "payment required") {
+		return true
+	}
+	// 429/限流按定义是"请求过频"而非 key 失效,按瞬时错误短冷却。
+	if strings.Contains(msg, "429") || strings.Contains(msg, "too many requests") ||
+		strings.Contains(msg, "rate limit") {
+		return false
+	}
+	if strings.Contains(msg, "401") || strings.Contains(msg, "403") ||
 		strings.Contains(msg, "invalid api key") || strings.Contains(msg, "invalid_api_key") ||
 		strings.Contains(msg, "invalid-api-key") || strings.Contains(msg, "invalid key") ||
 		strings.Contains(msg, "api key") || strings.Contains(msg, "api_key") ||
 		strings.Contains(msg, "unauthorized") || strings.Contains(msg, "authentication failed") ||
 		strings.Contains(msg, "not authorized") || strings.Contains(msg, "permission denied") ||
 		strings.Contains(msg, "permission") || strings.Contains(msg, "forbidden") ||
-		strings.Contains(msg, "insufficient_quota") || strings.Contains(msg, "insufficient_balance") ||
-		strings.Contains(msg, "quota") || strings.Contains(msg, "payment required") ||
+		strings.Contains(msg, "quota") ||
 		strings.Contains(msg, "access denied") || strings.Contains(msg, "credential") {
 		return true
 	}
@@ -228,15 +241,25 @@ func (a *App) streamModelResponse(ctx context.Context, cfg ConfigState, model st
 			onEvent(e)
 		}
 	}
+	probedAllCooling := false
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		idx := a.firstUsableKeyIndex(cfg, keys)
 		key := keys[idx]
 		if a.isKeyCoolingDown(cfg, key) {
 			// firstUsableKeyIndex 只在全部 key 冷却时返回冷却中的 key。
-			if lastErr == nil {
-				lastErr = fmt.Errorf("all API keys are cooling down, try again later")
+			// 冷却只是本地启发式,不能替代服务端裁决:仍用最早到期的 key
+			// 探测一次,避免错误分类(如把限流 429 误判为配额失效)把整个
+			// key 池冻结到冷却结束、只能重启恢复。仅探测一次,失败即返回
+			// 真实的服务端错误。
+			if probedAllCooling {
+				if lastErr == nil {
+					lastErr = fmt.Errorf("all API keys are cooling down, try again later")
+				}
+				break
 			}
-			break
+			probedAllCooling = true
+			idx = a.earliestCooldownKeyIndex(cfg, keys)
+			key = keys[idx]
 		}
 		callCfg := cfg
 		callCfg.APIKey = key
@@ -257,8 +280,9 @@ func (a *App) streamModelResponse(ctx context.Context, cfg ConfigState, model st
 			} else if shouldRetryLLMError(err) {
 				// 瞬时错误(429/5xx/网络):切换前短暂退避,避免多个 key
 				// 同时打向同一故障端点,也避免连续 8 次尝试没有间隔。
-				// 最后一次尝试后没有下一次切换,不再白等退避。
-				if attempt+1 < maxAttempts {
+				// 最后一次尝试后、以及全部冷却探测失败后(下一轮必然终止),
+				// 没有下一次切换,不再白等退避。
+				if attempt+1 < maxAttempts && !probedAllCooling {
 					wait = llmRetryDelay(attempt + 1)
 					select {
 					case <-time.After(wait):
@@ -343,12 +367,32 @@ func (a *App) isKeyCoolingDown(cfg ConfigState, key string) bool {
 	return false
 }
 
-// recordKeyFailure 将 key 置入冷却窗口,窗口长度由错误类别决定(认证/配额
-// 60s,瞬时错误 10s)。
+// recordKeyFailure 将 key 置入冷却窗口,窗口长度由错误类别决定(认证/计费
+// 30min,瞬时错误 10s)。
 func (a *App) recordKeyFailure(cfg ConfigState, key string, cooldown time.Duration) {
 	a.keyStateMu.Lock()
 	a.keyCooldowns[keyCooldownID(cfg, key)] = time.Now().Add(cooldown)
 	a.keyStateMu.Unlock()
+}
+
+// earliestCooldownKeyIndex 返回冷却到期最早的 key 序号。仅在全部 key 都在
+// 冷却时由多 key 循环调用,用于挑选"最接近恢复"的 key 做一次探测。
+func (a *App) earliestCooldownKeyIndex(cfg ConfigState, keys []string) int {
+	a.keyStateMu.Lock()
+	defer a.keyStateMu.Unlock()
+	best := 0
+	var bestUntil time.Time
+	for i, key := range keys {
+		until, ok := a.keyCooldowns[keyCooldownID(cfg, key)]
+		if !ok {
+			return i // 不在冷却的 key(防御性:正常不会走到这里)
+		}
+		if i == 0 || until.Before(bestUntil) {
+			bestUntil = until
+			best = i
+		}
+	}
+	return best
 }
 
 func emitModelStreamEvent(onEvent func(modelStreamEvent), event modelStreamEvent) {

@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	openai "github.com/sashabaranov/go-openai"
 )
@@ -160,6 +161,146 @@ func TestStreamModelResponseMultiKeySkipsCoolingKey(t *testing.T) {
 	defer mu.Unlock()
 	if len(order) != 1 || !strings.Contains(order[0], "k2") {
 		t.Fatalf("request order = %v, want only k2", order)
+	}
+}
+
+// TestStreamModelResponseAllCoolingProbesAndSucceeds 验证全部 key 冷却时
+// 不做无期限硬拒绝:仍用最早到期的 key 探测一次,服务端已恢复则请求成功
+// (回归:错误分类曾把限流 429 误判为配额失效,冷却 30 分钟内所有请求
+// 立刻失败,只能重启恢复)。
+func TestStreamModelResponseAllCoolingProbesAndSucceeds(t *testing.T) {
+	var mu sync.Mutex
+	order := []string{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth := r.Header.Get("Authorization")
+		mu.Lock()
+		order = append(order, auth)
+		mu.Unlock()
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, sseChatChunk("recovered"))
+		fmt.Fprint(w, sseDone)
+	}))
+	defer server.Close()
+
+	a := NewApp()
+	cfg := ConfigState{
+		APIFormat: apiFormatOpenAIChat,
+		BaseURL:   server.URL,
+		APIKeys:   []string{"k1", "k2"},
+		MaxTokens: 32,
+	}
+	a.recordKeyFailure(cfg, "k1", keyAuthCooldownDuration)
+	a.recordKeyFailure(cfg, "k2", keyAuthCooldownDuration)
+	result, err := a.streamModelResponse(context.Background(), cfg, "test-model",
+		[]openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleUser, Content: "hi"}}, nil, nil)
+	if err != nil {
+		t.Fatalf("streamModelResponse() error = %v, want probe to succeed", err)
+	}
+	if !strings.Contains(result.Content, "recovered") {
+		t.Fatalf("result content = %q, want to contain %q", result.Content, "recovered")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(order) != 1 {
+		t.Fatalf("request order = %v, want exactly one probe request", order)
+	}
+}
+
+// TestStreamModelResponseAllCoolingProbeReturnsRealError 验证全部 key 冷却且
+// 探测仍失败时,返回真实的服务端错误(而非泛化的 "all API keys are cooling
+// down"),且探测有界:每次调用只发一次请求。
+func TestStreamModelResponseAllCoolingProbeReturnsRealError(t *testing.T) {
+	var mu sync.Mutex
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		mu.Lock()
+		requests++
+		mu.Unlock()
+		http.Error(w, `{"error":{"message":"You exceeded your current quota, please check your plan and billing details.","code":"429"}}`, http.StatusTooManyRequests)
+	}))
+	defer server.Close()
+
+	a := NewApp()
+	cfg := ConfigState{
+		APIFormat: apiFormatOpenAIChat,
+		BaseURL:   server.URL,
+		APIKeys:   []string{"k1", "k2"},
+		MaxTokens: 32,
+	}
+	a.recordKeyFailure(cfg, "k1", keyAuthCooldownDuration)
+	a.recordKeyFailure(cfg, "k2", keyAuthCooldownDuration)
+	_, err := a.streamModelResponse(context.Background(), cfg, "test-model",
+		[]openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleUser, Content: "hi"}}, nil, nil)
+	if err == nil {
+		t.Fatal("expected error when probe still fails")
+	}
+	if strings.Contains(err.Error(), "cooling down") {
+		t.Fatalf("error = %v, want real server error instead of synthetic cooling-down message", err)
+	}
+	if !strings.Contains(err.Error(), "429") {
+		t.Fatalf("error = %v, want to contain real 429", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if requests != 1 {
+		t.Fatalf("requests = %d, want exactly one bounded probe", requests)
+	}
+}
+
+// TestStreamModelResponseRateLimitUsesTransientCooldown 验证阿里云式 429
+// 限流文案(含 quota)只触发短冷却:第一轮全部 key 失败后,冷却窗口内
+// 的下一次调用仍能通过探测拿到真实结果,而不是被 30 分钟冷却锁死。
+func TestStreamModelResponseRateLimitUsesTransientCooldown(t *testing.T) {
+	var mu sync.Mutex
+	order := []string{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth := r.Header.Get("Authorization")
+		mu.Lock()
+		order = append(order, auth)
+		mu.Unlock()
+		if len(order) == 1 {
+			http.Error(w, `{"error":{"message":"You exceeded your current quota, please check your plan and billing details. For details, see https://help.aliyun.com/zh/model-studio/error-code#token-limit"}}`, http.StatusTooManyRequests)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, sseChatChunk("ok"))
+		fmt.Fprint(w, sseDone)
+	}))
+	defer server.Close()
+
+	a := NewApp()
+	cfg := ConfigState{
+		APIFormat: apiFormatOpenAIChat,
+		BaseURL:   server.URL,
+		APIKeys:   []string{"k1", "k2"},
+		MaxTokens: 32,
+	}
+	// 第一轮:k1 429(限流)→ 短冷却并切换 k2 成功。
+	_, err := a.streamModelResponse(context.Background(), cfg, "test-model",
+		[]openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleUser, Content: "hi"}}, nil, nil)
+	if err != nil {
+		t.Fatalf("first streamModelResponse() error = %v", err)
+	}
+	if a.isKeyCoolingDown(cfg, "k1") {
+		a.keyStateMu.Lock()
+		remaining := time.Until(a.keyCooldowns[keyCooldownID(cfg, "k1")])
+		a.keyStateMu.Unlock()
+		if remaining > keyTransientCooldownDuration {
+			t.Fatalf("k1 cooldown remaining = %v, want <= transient %v (429 must not trigger 30min auth cooldown)", remaining, keyTransientCooldownDuration)
+		}
+	}
+	// 冷却窗口内再次调用:k1 仍被跳过,继续用 k2(不依赖探测)。
+	_, err = a.streamModelResponse(context.Background(), cfg, "test-model",
+		[]openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleUser, Content: "again"}}, nil, nil)
+	if err != nil {
+		t.Fatalf("second streamModelResponse() error = %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(order) != 3 || !strings.Contains(order[2], "k2") {
+		t.Fatalf("request order = %v, want third request on k2", order)
 	}
 }
 

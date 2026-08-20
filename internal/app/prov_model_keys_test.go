@@ -263,3 +263,39 @@ func TestEmitLLMRetryEventKeyFields(t *testing.T) {
 		t.Fatalf("retry error = %q, want to contain boom", got.Error)
 	}
 }
+
+// TestIsAuthKeyErrorRateLimitNotAuth 确保 429/限流类错误(即使文案含
+// quota,如阿里云 429 token-limit)不被误判为认证/计费类错误——否则多 key
+// 池会被 30 分钟冷却整体冻结,后续请求全部立刻失败,只能重启恢复。
+func TestIsAuthKeyErrorRateLimitNotAuth(t *testing.T) {
+	// 阿里云 429 token-limit:与 OpenAI 计费文案同形,实为分钟级限流。
+	aliyun429 := `error, status code: 429, status: 429 Too Many Requests, message: You exceeded your current quota, please check your plan and billing details. For details, see https://help.aliyun.com/zh/model-studio/error-code#token-limit`
+	if isAuthKeyError(errors.New(aliyun429)) {
+		t.Fatal("aliyun 429 token-limit should be transient, not auth")
+	}
+	if isAuthKeyError(errors.New("status: 429 Too Many Requests")) {
+		t.Fatal("plain 429 should be transient, not auth")
+	}
+	if isAuthKeyError(errors.New("rate limit exceeded")) {
+		t.Fatal("rate limit should be transient, not auth")
+	}
+	// 明确的计费类标记仍视为 key 级故障。
+	for _, billing := range []string{
+		"status code: 402, message: payment required",
+		"insufficient_quota",
+		"insufficient_balance",
+	} {
+		if !isAuthKeyError(errors.New(billing)) {
+			t.Fatalf("%q should be auth/billing", billing)
+		}
+	}
+	// 认证类错误不受影响。
+	for _, auth := range []string{
+		"status code: 401, message: invalid api key",
+		"status code: 403, message: forbidden",
+	} {
+		if !isAuthKeyError(errors.New(auth)) {
+			t.Fatalf("%q should be auth", auth)
+		}
+	}
+}
