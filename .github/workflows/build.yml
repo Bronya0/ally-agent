@@ -10,8 +10,8 @@ permissions:
 
 env:
   APP_NAME: Ally
-  WAILS_VERSION: v3.0.0-beta.7
-  RG_VERSION: 15.1.0
+  WAILS_VERSION: v3.0.0-beta.11
+  RG_VERSION: 15.2.0
   ALLY_BUILD_VERSION: ${{ github.event.release.tag_name || github.ref_name }}
   NODE_OPTIONS: --max-old-space-size=4096
 
@@ -20,16 +20,16 @@ jobs:
     name: Windows x64
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
           cache-dependency-path: frontend/package.json
 
@@ -87,13 +87,13 @@ jobs:
           $version = "${{ github.event.release.tag_name || github.ref_name }}"
           Compress-Archive -Path dist/* -DestinationPath "${{ env.APP_NAME }}-$version-windows-x64.zip"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: Ally-windows-x64
           path: Ally-*-windows-x64.zip
           if-no-files-found: error
 
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         if: github.event_name == 'release'
         with:
           files: Ally-*-windows-x64.zip
@@ -103,16 +103,16 @@ jobs:
     name: Linux x64
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
           cache-dependency-path: frontend/package.json
 
@@ -171,13 +171,13 @@ jobs:
           # 打包时把顶层 dist 重命名为 root_dir，解压后所有文件归在统一目录下
           tar -czf "${root_dir}.tar.gz" --transform "s,^dist,${root_dir}," dist
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: Ally-linux-x64
           path: Ally-*-linux-x64.tar.gz
           if-no-files-found: error
 
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         if: github.event_name == 'release'
         with:
           files: Ally-*-linux-x64.tar.gz
@@ -187,16 +187,16 @@ jobs:
     name: macOS universal
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
           cache-dependency-path: frontend/package.json
 
@@ -263,13 +263,13 @@ jobs:
           version="${{ github.event.release.tag_name || github.ref_name }}"
           hdiutil create -volname "${APP_NAME}" -srcfolder dmg-root -ov -format UDZO "${APP_NAME}-$version-macos-universal.dmg"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: Ally-macos-universal
           path: Ally-*-macos-universal.dmg
           if-no-files-found: error
 
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         if: github.event_name == 'release'
         with:
           files: Ally-*-macos-universal.dmg

@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 
 	openai "github.com/sashabaranov/go-openai"
@@ -139,29 +140,148 @@ func TestHistoryLoadRepairsTruncatedToolCallArguments(t *testing.T) {
 	}
 
 	loaded := app.loadSessionHistoryCopy(sessionID)
-	if len(loaded) != 3 {
-		t.Fatalf("expected 3 loaded messages, got %d: %#v", len(loaded), loaded)
+	// Truncated-arguments tool calls are now dropped entirely (along with
+	// their orphan tool result) so the session can continue without the
+	// provider rejecting every request.
+	if len(loaded) != 1 {
+		t.Fatalf("expected only the user message to survive, got %d: %#v", len(loaded), loaded)
 	}
-	repaired := loaded[1].ToolCalls[0].Function.Arguments
-	if repaired != truncatedToolCallArguments || !json.Valid([]byte(repaired)) {
-		t.Fatalf("truncated arguments were not repaired on load: %q", repaired)
+	if loaded[0].Role != openai.ChatMessageRoleUser || loaded[0].Content != "fix AGENTS.md" {
+		t.Fatalf("the user message must survive, got %#v", loaded[0])
 	}
-	if loaded[1].ToolCalls[0].ID != "call_1" {
-		t.Fatalf("tool call ID must survive the repair: %#v", loaded[1].ToolCalls[0])
+}
+
+func TestHistoryLoadCollapsesRepeatedToolCallNames(t *testing.T) {
+	app := NewApp()
+	app.initialized = true
+	app.sessionsDir = t.TempDir()
+	app.historiesDir = t.TempDir()
+	const sessionID = "relay-duplicate-name"
+
+	// Exactly what the relay-duplicate-name bug persisted: the merged name is
+	// "http_request" repeated 7 times, the tool result explains the unknown
+	// tool, and every later request for the session died with provider 400.
+	repeated := strings.Repeat("http_request", 7)
+	poisoned := []openai.ChatCompletionMessage{
+		{Role: openai.ChatMessageRoleUser, Content: "check the latest release"},
+		{
+			Role: openai.ChatMessageRoleAssistant,
+			ToolCalls: []openai.ToolCall{{
+				ID:   "call_dup",
+				Type: openai.ToolTypeFunction,
+				Function: openai.FunctionCall{
+					Name:      repeated,
+					Arguments: `{"url":"https://api.github.com/repos/example/repo/releases/latest"}`,
+				},
+			}},
+		},
+		{Role: openai.ChatMessageRoleTool, ToolCallID: "call_dup", Content: "unknown tool: " + repeated},
 	}
-	if loaded[2].Role != openai.ChatMessageRoleTool || loaded[2].ToolCallID != "call_1" {
-		t.Fatalf("paired tool result must survive the repair: %#v", loaded[2])
+	paths := app.historyDiskPaths(sessionID)
+	if err := writeCompressedHistory(paths[0], poisoned); err != nil {
+		t.Fatalf("writeCompressedHistory() error = %v", err)
 	}
 
-	// A save through the current build must persist the repaired arguments,
-	// so the on-disk copy stops carrying the poison.
-	app.saveHistory(sessionID, poisoned)
-	app.mu.Lock()
-	delete(app.histories, sessionID)
-	app.mu.Unlock()
-	reloaded := app.loadSessionHistoryCopy(sessionID)
-	if len(reloaded) != 3 || reloaded[1].ToolCalls[0].Function.Arguments != truncatedToolCallArguments {
-		t.Fatalf("saveHistory persisted truncated arguments: %#v", reloaded)
+	loaded := app.loadSessionHistoryCopy(sessionID)
+	if len(loaded) != 3 {
+		t.Fatalf("expected 3 messages, got %d: %#v", len(loaded), loaded)
+	}
+	calls := loaded[1].ToolCalls
+	if len(calls) != 1 || calls[0].Function.Name != "http_request" {
+		t.Fatalf("repeated tool name must collapse on load: %#v", calls)
+	}
+	if calls[0].ID != "call_dup" || loaded[2].ToolCallID != "call_dup" {
+		t.Fatalf("pairing must survive the collapse: %#v", loaded)
+	}
+}
+
+func TestHistoryLoadDropsUnknownToolCallNames(t *testing.T) {
+	app := NewApp()
+	app.initialized = true
+	app.sessionsDir = t.TempDir()
+	app.historiesDir = t.TempDir()
+	const sessionID = "concatenated-name"
+
+	// What the same-Index merge bug persisted: "read" + "list_files" was
+	// concatenated into "readlist_files", which is not a known tool.
+	poisoned := []openai.ChatCompletionMessage{
+		{Role: openai.ChatMessageRoleUser, Content: "go"},
+		{
+			Role: openai.ChatMessageRoleAssistant,
+			ToolCalls: []openai.ToolCall{{
+				ID:   "call_concat",
+				Type: openai.ToolTypeFunction,
+				Function: openai.FunctionCall{
+					Name:      "readlist_files",
+					Arguments: `{"files":[{"path":"a.txt"}]}`,
+				},
+			}},
+		},
+		{Role: openai.ChatMessageRoleTool, ToolCallID: "call_concat", Content: "unknown tool: readlist_files"},
+	}
+	paths := app.historyDiskPaths(sessionID)
+	if err := writeCompressedHistory(paths[0], poisoned); err != nil {
+		t.Fatalf("writeCompressedHistory() error = %v", err)
+	}
+
+	loaded := app.loadSessionHistoryCopy(sessionID)
+	// The unknown tool_call and its orphan tool result must both be gone.
+	for _, m := range loaded {
+		if m.Role == openai.ChatMessageRoleAssistant {
+			for _, call := range m.ToolCalls {
+				if call.Function.Name == "readlist_files" {
+					t.Fatalf("unknown tool name must be dropped on load: %#v", call)
+				}
+			}
+		}
+		if m.Role == openai.ChatMessageRoleTool && m.ToolCallID == "call_concat" {
+			t.Fatalf("orphan tool result for dropped call must be removed: %#v", m)
+		}
+	}
+}
+
+func TestHistoryLoadDropsTruncatedArgsMarker(t *testing.T) {
+	app := NewApp()
+	app.initialized = true
+	app.sessionsDir = t.TempDir()
+	app.historiesDir = t.TempDir()
+	const sessionID = "truncated-mcp"
+
+	// What a truncated MCP tool call persisted: normalizeToolCalls replaced
+	// the cut-off arguments with {"allyTruncatedArguments":true}, the MCP
+	// server returned an error, and the pair poisoned the session.
+	poisoned := []openai.ChatCompletionMessage{
+		{Role: openai.ChatMessageRoleUser, Content: "search the web"},
+		{
+			Role: openai.ChatMessageRoleAssistant,
+			ToolCalls: []openai.ToolCall{{
+				ID:   "call_trunc",
+				Type: openai.ToolTypeFunction,
+				Function: openai.FunctionCall{
+					Name:      "mcp__web__global_search",
+					Arguments: `{"allyTruncatedArguments":true}`,
+				},
+			}},
+		},
+		{Role: openai.ChatMessageRoleTool, ToolCallID: "call_trunc", Content: "MCP call failed: query参数必须提供"},
+	}
+	paths := app.historyDiskPaths(sessionID)
+	if err := writeCompressedHistory(paths[0], poisoned); err != nil {
+		t.Fatalf("writeCompressedHistory() error = %v", err)
+	}
+
+	loaded := app.loadSessionHistoryCopy(sessionID)
+	for _, m := range loaded {
+		if m.Role == openai.ChatMessageRoleAssistant {
+			for _, call := range m.ToolCalls {
+				if isTruncatedArgsMarker([]byte(call.Function.Arguments)) {
+					t.Fatalf("truncated-args marker must be dropped on load: %#v", call)
+				}
+			}
+		}
+		if m.Role == openai.ChatMessageRoleTool && m.ToolCallID == "call_trunc" {
+			t.Fatalf("orphan tool result for truncated call must be removed: %#v", m)
+		}
 	}
 }
 

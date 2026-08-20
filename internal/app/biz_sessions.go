@@ -1035,11 +1035,32 @@ func sanitizeHistoryMessages(messages []openai.ChatCompletionMessage) []openai.C
 		}
 		m.ToolCalls = append([]openai.ToolCall(nil), m.ToolCalls...)
 		// Histories written before the truncation repair may still carry a
-		// tool call whose arguments were cut off mid-stream; providers that
-		// parse arguments server-side would keep rejecting every request for
-		// the session, so repair them on load as well.
+		// tool call whose arguments were cut off mid-stream, or a function
+		// name repeated N times by a relay that re-sent the name in every
+		// streaming delta, or a name that is the concatenation of two
+		// different tool names produced by a relay that sent multiple
+		// tool_calls with the same Index; providers that parse tool_calls
+		// server-side would keep rejecting every request for the session,
+		// so repair them on load as well.
 		for i := range m.ToolCalls {
+			m.ToolCalls[i].Function.Name = collapseRepeatedName(m.ToolCalls[i].Function.Name)
 			m.ToolCalls[i].Function.Arguments = repairTruncatedToolCallArguments(m.ToolCalls[i].Function.Arguments)
+		}
+		// 丢弃拼接工具名的 tool_call 和截断参数标记的 tool_call：
+		// 两者都不会通过服务商校验，repairDanglingToolCalls 会自动清除
+		// 对应的孤儿 tool 结果消息。
+		if len(m.ToolCalls) > 0 {
+			kept := make([]openai.ToolCall, 0, len(m.ToolCalls))
+			for _, call := range m.ToolCalls {
+				if isConcatenatedKnownToolNames(call.Function.Name) {
+					continue
+				}
+				if isTruncatedArgsMarker([]byte(call.Function.Arguments)) {
+					continue
+				}
+				kept = append(kept, call)
+			}
+			m.ToolCalls = kept
 		}
 		filtered = append(filtered, m)
 	}

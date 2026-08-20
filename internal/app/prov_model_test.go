@@ -9,6 +9,7 @@ package app
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -252,6 +253,188 @@ func TestNormalizeToolCallsRepairsTruncatedArguments(t *testing.T) {
 	}
 	if input[0].Function.Arguments == truncatedToolCallArguments {
 		t.Fatal("normalizeToolCalls must not mutate its input")
+	}
+}
+
+func TestCollapseRepeatedName(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{strings.Repeat("http_request", 7), "http_request"}, // the observed relay artifact
+		{"readread", "read"},
+		{"askaskask", "ask"},
+		{"read", "read"},               // single fold, unchanged
+		{"list_files", "list_files"},   // never a whole-number repetition
+		{"mcp__fs__read_file", "mcp__fs__read_file"},
+		{"abab", "abab"},               // period < 3, left alone
+		{"edit_fileedit_fil", "edit_fileedit_fil"}, // not an exact repetition
+		{"", ""},
+	}
+	for _, c := range cases {
+		if got := collapseRepeatedName(c.in); got != c.want {
+			t.Fatalf("collapseRepeatedName(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestNormalizeToolCallsCollapsesRepeatedNames(t *testing.T) {
+	input := []legacyopenai.ToolCall{
+		{ID: "a", Type: legacyopenai.ToolTypeFunction, Function: legacyopenai.FunctionCall{Name: strings.Repeat("http_request", 7), Arguments: `{"url":"https://example.com"}`}},
+	}
+	out := normalizeToolCalls(input)
+	if out[0].Function.Name != "http_request" {
+		t.Fatalf("repeated name was not collapsed: %q", out[0].Function.Name)
+	}
+	if out[0].Function.Arguments != `{"url":"https://example.com"}` {
+		t.Fatalf("valid arguments must pass through: %q", out[0].Function.Arguments)
+	}
+}
+
+func TestMergeToolCallDeltasDedupesResentNames(t *testing.T) {
+	// The relay pattern from the field: every tool_calls delta carries the
+	// full function name (and id) again alongside each arguments chunk.
+	// Appending verbatim produced "http_request" x7 and an unknown-tool error.
+	var toolCalls []legacyopenai.ToolCall
+	index := 0
+	deltas := []legacyopenai.ToolCall{
+		{Index: &index, ID: "call_1", Type: legacyopenai.ToolTypeFunction, Function: legacyopenai.FunctionCall{Name: "http_request", Arguments: `{"ur`}},
+		{Index: &index, ID: "call_1", Function: legacyopenai.FunctionCall{Name: "http_request", Arguments: `l":"ht`}},
+		{Index: &index, ID: "call_1", Function: legacyopenai.FunctionCall{Name: "http_request", Arguments: `tps:`}},
+	}
+	for _, d := range deltas {
+		mergeToolCallDeltas(&toolCalls, []legacyopenai.ToolCall{d})
+	}
+	if len(toolCalls) != 1 {
+		t.Fatalf("expected one accumulated tool call, got %d", len(toolCalls))
+	}
+	if toolCalls[0].Function.Name != "http_request" {
+		t.Fatalf("re-sent names must dedupe to one, got %q", toolCalls[0].Function.Name)
+	}
+	if toolCalls[0].ID != "call_1" {
+		t.Fatalf("re-sent ids must dedupe to one, got %q", toolCalls[0].ID)
+	}
+	if toolCalls[0].Function.Arguments != `{"url":"ht`+`tps:` {
+		t.Fatalf("argument chunks must still concatenate, got %q", toolCalls[0].Function.Arguments)
+	}
+}
+
+func TestMergeToolCallDeltasAppendsProgressiveNameChunks(t *testing.T) {
+	// Standard-compliant progressive chunking (name split across deltas)
+	// must keep appending.
+	var toolCalls []legacyopenai.ToolCall
+	index := 0
+	mergeToolCallDeltas(&toolCalls, []legacyopenai.ToolCall{{Index: &index, ID: "call_1", Function: legacyopenai.FunctionCall{Name: "http_"}}})
+	mergeToolCallDeltas(&toolCalls, []legacyopenai.ToolCall{{Index: &index, Function: legacyopenai.FunctionCall{Name: "request"}}})
+	if toolCalls[0].Function.Name != "http_request" {
+		t.Fatalf("progressive name chunks must append, got %q", toolCalls[0].Function.Name)
+	}
+}
+
+func TestMergeToolCallDeltasSeparatesDifferentToolNames(t *testing.T) {
+	// The exact relay pattern that produced "readlist_files": two different
+	// tool calls sent with the same Index (or both without Index). Appending
+	// the second name to the first produced a garbage name that failed
+	// dispatch and poisoned the session.
+	var toolCalls []legacyopenai.ToolCall
+	index := 0
+	mergeToolCallDeltas(&toolCalls, []legacyopenai.ToolCall{
+		{Index: &index, ID: "call_a", Type: legacyopenai.ToolTypeFunction, Function: legacyopenai.FunctionCall{Name: "read", Arguments: `{"files":[{"path":"a.txt"}]}`}},
+	})
+	mergeToolCallDeltas(&toolCalls, []legacyopenai.ToolCall{
+		{Index: &index, ID: "call_b", Type: legacyopenai.ToolTypeFunction, Function: legacyopenai.FunctionCall{Name: "list_files", Arguments: `{}`}},
+	})
+	if len(toolCalls) != 2 {
+		t.Fatalf("expected 2 separate tool calls, got %d: %#v", len(toolCalls), toolCalls)
+	}
+	if toolCalls[0].Function.Name != "read" || toolCalls[0].ID != "call_a" {
+		t.Fatalf("first call must keep its name and id: %#v", toolCalls[0])
+	}
+	if toolCalls[1].Function.Name != "list_files" || toolCalls[1].ID != "call_b" {
+		t.Fatalf("second call must be separate: %#v", toolCalls[1])
+	}
+}
+
+func TestWrapProviderRequestError(t *testing.T) {
+	// The exact relay failure from the field: a 400 whose body has no
+	// message/error field — go-openai formats its nil Err as "%!s(<nil>)".
+	nilErrBody := []byte(`{"object":"error","model":"deepseek-v4-flash"}`)
+	raw := &legacyopenai.RequestError{
+		HTTPStatus:     "400 Bad Request",
+		HTTPStatusCode: 400,
+		Err:            nil,
+		Body:           nilErrBody,
+	}
+	wrapped := wrapProviderRequestError(raw)
+	msg := wrapped.Error()
+	if strings.Contains(msg, "%!s(<nil>)") {
+		t.Fatalf("nil-message artifact must be gone, got: %s", msg)
+	}
+	if !strings.Contains(msg, "status code: 400") || !strings.Contains(msg, `"model":"deepseek-v4-flash"`) {
+		t.Fatalf("status and body must survive the wrap, got: %s", msg)
+	}
+	// The original error must stay reachable for classification/unwrapping.
+	var reqErr *legacyopenai.RequestError
+	if !errors.As(wrapped, &reqErr) || reqErr.HTTPStatusCode != 400 {
+		t.Fatal("wrapped error must keep the RequestError in its chain")
+	}
+
+	// Body with a top-level message: the message is extracted for readability.
+	withMessage := &legacyopenai.RequestError{
+		HTTPStatus:     "429 Too Many Requests",
+		HTTPStatusCode: 429,
+		Body:           []byte(`{"message":"rate limited, retry later"}`),
+	}
+	msg = wrapProviderRequestError(withMessage).Error()
+	if !strings.Contains(msg, "rate limited, retry later") {
+		t.Fatalf("message must be extracted from body, got: %s", msg)
+	}
+	// 429 keyword must survive for retry classification.
+	if !shouldRetryLLMError(wrapProviderRequestError(withMessage)) {
+		t.Fatal("retry classification must still see the 429")
+	}
+
+	// Body with error.message (standard OpenAI shape): extracted too.
+	standard := &legacyopenai.RequestError{
+		HTTPStatus:     "401 Unauthorized",
+		HTTPStatusCode: 401,
+		Body:           []byte(`{"error":{"message":"invalid api key","type":"auth"}}`),
+	}
+	msg = wrapProviderRequestError(standard).Error()
+	if !strings.Contains(msg, "invalid api key") {
+		t.Fatalf("error.message must be extracted, got: %s", msg)
+	}
+
+	// Errors already carrying a message (Err != nil) pass through unchanged.
+	inner := errors.New("quota exceeded")
+	withErr := &legacyopenai.RequestError{
+		HTTPStatus:     "402 Payment Required",
+		HTTPStatusCode: 402,
+		Err:            inner,
+		Body:           []byte(`{"irrelevant":true}`),
+	}
+	if got := wrapProviderRequestError(withErr); got != withErr {
+		t.Fatalf("RequestError with non-nil Err must pass through, got %#v", got)
+	}
+
+	// Non-RequestError errors pass through untouched.
+	plain := errors.New("connection reset")
+	if got := wrapProviderRequestError(plain); got != plain {
+		t.Fatalf("plain errors must pass through, got %#v", got)
+	}
+	if got := wrapProviderRequestError(nil); got != nil {
+		t.Fatalf("nil must stay nil, got %#v", got)
+	}
+}
+
+func TestMergeToolCallDeltasSkipsDuplicatedArgumentChunks(t *testing.T) {
+	// A relay that duplicates the whole first delta re-sends the opening
+	// arguments chunk too; appending it verbatim corrupts the JSON.
+	var toolCalls []legacyopenai.ToolCall
+	index := 0
+	first := legacyopenai.ToolCall{Index: &index, ID: "call_1", Function: legacyopenai.FunctionCall{Name: "read", Arguments: `{"fi`}}
+	mergeToolCallDeltas(&toolCalls, []legacyopenai.ToolCall{first})
+	mergeToolCallDeltas(&toolCalls, []legacyopenai.ToolCall{first})
+	mergeToolCallDeltas(&toolCalls, []legacyopenai.ToolCall{{Index: &index, Function: legacyopenai.FunctionCall{Name: "read", Arguments: `les":[]}`}}})
+	if toolCalls[0].Function.Arguments != `{"files":[]}` {
+		t.Fatalf("duplicated argument chunks must be skipped, got %q", toolCalls[0].Function.Arguments)
 	}
 }
 

@@ -17,6 +17,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	anthropic "github.com/anthropics/anthropic-sdk-go"
@@ -218,7 +219,11 @@ func (a *App) streamModelResponse(ctx context.Context, cfg ConfigState, model st
 	}
 	// 单 key 快速路径:完全保持原有的适配器内重试行为。
 	if len(keys) == 1 {
-		return a.streamModelResponseWithKey(ctx, cfg, model, messages, tools, onEvent)
+		result, err := a.streamModelResponseWithKey(ctx, cfg, model, messages, tools, onEvent)
+		if err != nil {
+			err = wrapProviderRequestError(err)
+		}
+		return result, err
 	}
 	// 多 key:固定优先级故障转移 + 冷却。每次尝试从第一个可用(不在冷却)
 	// 的 key 开始;失败后按错误类别记录冷却(认证/配额 30min,瞬时 10s)并顺延
@@ -268,6 +273,7 @@ func (a *App) streamModelResponse(ctx context.Context, cfg ConfigState, model st
 		if err == nil {
 			return result, nil
 		}
+		err = wrapProviderRequestError(err)
 		lastErr = err
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
@@ -300,6 +306,70 @@ func (a *App) streamModelResponse(ctx context.Context, cfg ConfigState, model st
 		return nil, err
 	}
 	return nil, lastErr
+}
+
+// providerRequestError 重新格式化 go-openai 的 RequestError,消除库在错误体
+// 没有 message 字段时输出的 "%!s(<nil>)" 伪影(部分中转返回
+// {"object":"error",...} 之类没有 message 的错误体)。保留原始错误链,字符串
+// 形态与库保持一致("error, status code: ... 429 ..."),重试/切换分类
+// (shouldFailoverKey 等)基于这些关键字,不受包装影响。
+type providerRequestError struct {
+	inner error
+	msg   string
+}
+
+func (e *providerRequestError) Error() string { return e.msg }
+func (e *providerRequestError) Unwrap() error { return e.inner }
+
+// providerErrorMessageFromBody 尽力从错误响应体提取人类可读信息:顶层
+// message、error.message,或短非 JSON 体的原文预览。
+func providerErrorMessageFromBody(body []byte) string {
+	trimmed := strings.TrimSpace(string(body))
+	if trimmed == "" {
+		return ""
+	}
+	var top struct {
+		Message string          `json:"message"`
+		Error   json.RawMessage `json:"error"`
+	}
+	if json.Unmarshal(body, &top) == nil {
+		if top.Message != "" {
+			return top.Message
+		}
+		var inner struct {
+			Message string `json:"message"`
+		}
+		if top.Error != nil && json.Unmarshal(top.Error, &inner) == nil && inner.Message != "" {
+			return inner.Message
+		}
+		return ""
+	}
+	// 非 JSON 体:短则原文预览,长则截断。
+	if len(trimmed) <= 200 {
+		return trimmed
+	}
+	return trimmed[:200] + "..."
+}
+
+// wrapProviderRequestError 把 Err 为 nil 的 RequestError 重新包成可读消息;
+// 其他错误原样返回(nil 也原样返回)。
+func wrapProviderRequestError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var reqErr *legacyopenai.RequestError
+	if !errors.As(err, &reqErr) || reqErr.Err != nil {
+		return err
+	}
+	msg := providerErrorMessageFromBody(reqErr.Body)
+	if msg == "" {
+		msg = "(服务商未返回错误说明)"
+	}
+	return &providerRequestError{
+		inner: err,
+		msg: fmt.Sprintf("error, status code: %d, status: %s, message: %s, body: %s",
+			reqErr.HTTPStatusCode, reqErr.HTTPStatus, msg, string(reqErr.Body)),
+	}
 }
 
 // streamModelResponseWithKey 按 apiFormat 分发到具体适配器,key 已由调用方
@@ -1560,12 +1630,99 @@ func repairTruncatedToolCallArguments(args string) string {
 	return truncatedToolCallArguments
 }
 
+// collapseRepeatedName folds a name that is an exact whole repetition of a
+// shorter string (>= 2 folds of a >= 3-char unit) back to one fold — the
+// artifact a relay that re-sends the function name in every streaming delta
+// produced in histories written before mergeRepeatedStringDelta existed.
+// "http_request" repeated 7 times collapses back to "http_request"; real
+// tool names (snake_case verbs, mcp__server__tool) are never whole-number
+// repetitions, so the collapse cannot damage a legitimate name.
+func collapseRepeatedName(name string) string {
+	if len(name) < 6 {
+		return name
+	}
+	for period := 3; period <= len(name)/2; period++ {
+		if len(name)%period != 0 {
+			continue
+		}
+		if name == strings.Repeat(name[:period], len(name)/period) {
+			return name[:period]
+		}
+	}
+	return name
+}
+
+// knownBuiltinToolNames 缓存 chatTools() 里的内置工具名集合，用于历史加载
+// 时识别由流式合并 bug 产生的未知工具名（如 "readlist_files"）。MCP 工具
+// 名以 "mcp__" 开头，通过前缀检查识别，不需要在此集合中。
+var (
+	knownToolNamesOnce sync.Once
+	knownToolNamesSet  map[string]bool
+)
+
+func knownBuiltinToolNames() map[string]bool {
+	knownToolNamesOnce.Do(func() {
+		tools := chatTools()
+		knownToolNamesSet = make(map[string]bool, len(tools))
+		for _, tool := range tools {
+			if tool.Function != nil && tool.Function.Name != "" {
+				knownToolNamesSet[tool.Function.Name] = true
+			}
+		}
+	})
+	return knownToolNamesSet
+}
+
+// isKnownToolName 判断工具名是否是已知的内置工具或 MCP 工具。
+func isKnownToolName(name string) bool {
+	if strings.HasPrefix(name, "mcp__") {
+		return true
+	}
+	return knownBuiltinToolNames()[name]
+}
+
+// isConcatenatedKnownToolNames 检测一个名字是否是两个已知工具名的拼接
+// （如 "readlist_files" = "read" + "list_files"）。这种名字由服务商对多个
+// tool_calls 使用相同 Index 导致的流式合并 bug 产生，不会是真实工具名。
+func isConcatenatedKnownToolNames(name string) bool {
+	for i := 1; i < len(name); i++ {
+		if isKnownToolName(name[:i]) && isKnownToolName(name[i:]) {
+			return true
+		}
+	}
+	return false
+}
+
+// isTruncatedArgsMarker 检测 args 是否是 normalizeToolCalls 替换出的截断标记
+// {"allyTruncatedArguments":true}。这种 tool call 不应被执行，也不应保留
+// 在历史里——它会毒化会话。
+func isTruncatedArgsMarker(args []byte) bool {
+	var v struct {
+		AllyTruncatedArguments bool `json:"allyTruncatedArguments"`
+	}
+	return json.Unmarshal(args, &v) == nil && v.AllyTruncatedArguments
+}
+
+// isProvider400Error 判断错误是否是服务商返回的 400 Bad Request。这通常意味
+// 着上下文里有服务端校验无法通过的消息（截断参数、拼接工具名等），runChat
+// 会先尝试 sanitize 修复上下文再重试，而不是直接中断会话。
+func isProvider400Error(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "status code: 400") ||
+		strings.Contains(msg, "400 Bad Request") ||
+		strings.Contains(msg, "Expecting ',' delimiter")
+}
+
 func normalizeToolCalls(toolCalls []legacyopenai.ToolCall) []legacyopenai.ToolCall {
 	out := cloneToolCalls(toolCalls)
 	for i := range out {
 		if out[i].Type == "" {
 			out[i].Type = legacyopenai.ToolTypeFunction
 		}
+		out[i].Function.Name = collapseRepeatedName(out[i].Function.Name)
 		if strings.TrimSpace(out[i].Function.Arguments) == "" {
 			out[i].Function.Arguments = "{}"
 			continue
@@ -1832,6 +1989,28 @@ func mergeAnthropicUsage(current *modelUsage, usage anthropic.MessageDeltaUsage)
 	return current
 }
 
+// mergeRepeatedStringDelta merges one non-empty streamed id/name delta into
+// its accumulated value. The OpenAI spec sends id and function name once in
+// the first delta, but some relays re-send the full value in every delta;
+// appending those verbatim produced names like "http_requesthttp_request..."
+// that then failed dispatch with "unknown tool" and, once replayed, made
+// providers that validate tool_calls reject every later request with 400.
+// Exact re-sends are ignored, extended re-sends (delta starts with the
+// accumulated value) replace it, and anything else is treated as a
+// progressive chunk and appended.
+func mergeRepeatedStringDelta(current, delta string) string {
+	switch {
+	case current == "":
+		return delta
+	case delta == current:
+		return current
+	case strings.HasPrefix(delta, current):
+		return delta
+	default:
+		return current + delta
+	}
+}
+
 // mergeToolCallDeltas merges streaming tool-call deltas into the accumulated
 // tool call list, appending or extending by index. Shared by the OpenAI
 // streaming adapters; the tests in app_test.go exercise the same package.
@@ -1845,16 +2024,47 @@ func mergeToolCallDeltas(toolCalls *[]legacyopenai.ToolCall, deltas []legacyopen
 			*toolCalls = append(*toolCalls, legacyopenai.ToolCall{Type: legacyopenai.ToolTypeFunction})
 		}
 		current := &(*toolCalls)[idx]
+		// 不同工具名出现在同一个 Index:服务商可能对多个 tool_calls 使用了
+		// 相同的 Index（或都不带 Index），导致两个不同调用被合并。标准 OpenAI
+		// 规范里 name 只在首个 delta 出现一次，后续 delta name 为空。
+		// 判断方法：如果 current+delta 拼接后是已知工具名，说明是渐进式分片
+		// （如 "http_" + "request"），正常追加；如果拼接结果不是已知工具名但
+		// delta 本身是已知工具名（如 delta="list_files" 而 current="read"），
+		// 说明是不同工具调用被错误合并，追加新条目。
+		if delta.Function.Name != "" && current.Function.Name != "" &&
+			delta.Function.Name != current.Function.Name {
+			combined := current.Function.Name + delta.Function.Name
+			if !isKnownToolName(combined) && isKnownToolName(delta.Function.Name) {
+				*toolCalls = append(*toolCalls, legacyopenai.ToolCall{
+					Type: delta.Type,
+					ID:   delta.ID,
+					Function: legacyopenai.FunctionCall{
+						Name:      delta.Function.Name,
+						Arguments: delta.Function.Arguments,
+					},
+				})
+				if (*toolCalls)[len(*toolCalls)-1].Type == "" {
+					(*toolCalls)[len(*toolCalls)-1].Type = legacyopenai.ToolTypeFunction
+				}
+				continue
+			}
+		}
 		if delta.ID != "" {
-			current.ID += delta.ID
+			current.ID = mergeRepeatedStringDelta(current.ID, delta.ID)
 		}
 		if delta.Type != "" {
 			current.Type = delta.Type
 		}
 		if delta.Function.Name != "" {
-			current.Function.Name += delta.Function.Name
+			current.Function.Name = mergeRepeatedStringDelta(current.Function.Name, delta.Function.Name)
 		}
-		if delta.Function.Arguments != "" {
+		// Arguments are the one genuinely incremental field, but a relay that
+		// duplicates the whole first delta would double the opening arguments
+		// chunk too and corrupt the JSON; skip exact duplicates only — a
+		// prefix-based replace is NOT safe here because a legitimate
+		// continuation chunk can itself start with the accumulated prefix
+		// (nested JSON objects).
+		if delta.Function.Arguments != "" && delta.Function.Arguments != current.Function.Arguments {
 			current.Function.Arguments += delta.Function.Arguments
 		}
 	}

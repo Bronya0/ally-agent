@@ -142,6 +142,10 @@ type Result struct {
 	// the match stream: fileHits is empty even though Hits > 0. Reset
 	// offset to 0 to page from the beginning.
 	OffsetExhausted bool `json:"offsetExhausted,omitempty"`
+	// Warnings carries non-fatal issues encountered during search, such as
+	// individual files that rg could not open (Windows reserved names, etc.).
+	// Results are still returned; only the bad files were skipped.
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 // Find locates the ripgrep binary. It checks the ALLY_RG_PATH env variable,
@@ -238,7 +242,7 @@ type SearchStats struct {
 func Search(ctx context.Context, rgPath, root, searchRoot string, req Request) (*Result, error) {
 	maxDepth, maxFiles, maxMatches := limits(req)
 
-	fileHits, fileCounts, nextOffset, stats, truncated, offsetExhausted, err := sampleMatches(ctx, rgPath, root, searchRoot, req, maxDepth, maxFiles, maxMatches)
+	fileHits, fileCounts, nextOffset, stats, truncated, offsetExhausted, warnings, err := sampleMatches(ctx, rgPath, root, searchRoot, req, maxDepth, maxFiles, maxMatches)
 	if err != nil {
 		return nil, err
 	}
@@ -268,6 +272,7 @@ func Search(ctx context.Context, rgPath, root, searchRoot string, req Request) (
 		FileCountsTruncated: stats.FilesWithMatches > len(fileCounts),
 		OffsetExhausted:     offsetExhausted,
 		Skipped:             searchSkipNotices(req),
+		Warnings:            warnings,
 	}, nil
 }
 
@@ -369,6 +374,22 @@ var excludedGlobArgs = func() []string {
 	return args
 }()
 
+// windowsReservedGlobArgs excludes Windows reserved filenames that cause
+// "incorrect function" (os error 1) when rg tries to open them. Applied on
+// all platforms so cross-platform workspaces don't break.
+var windowsReservedGlobArgs = func() []string {
+	reserved := []string{"nul", "con", "prn", "aux"}
+	for i := 1; i <= 9; i++ {
+		reserved = append(reserved, fmt.Sprintf("com%d", i))
+		reserved = append(reserved, fmt.Sprintf("lpt%d", i))
+	}
+	var args []string
+	for _, name := range reserved {
+		args = append(args, "-g", "!"+name, "-g", "!**/"+name)
+	}
+	return args
+}()
+
 func baseArgs(req Request, maxDepth int) []string {
 	args := []string{
 		"--color=never",
@@ -394,6 +415,11 @@ func baseArgs(req Request, maxDepth int) []string {
 	if strings.TrimSpace(req.Path) == "" {
 		args = append(args, excludedGlobArgs...)
 	}
+	// Windows reserved filenames (nul, con, prn, aux, com1-9, lpt1-9) cause
+	// "incorrect function" (os error 1) when rg tries to open them. Exclude
+	// them via glob on all platforms so cross-platform workspaces with stray
+	// reserved-name files don't break the search.
+	args = append(args, windowsReservedGlobArgs...)
 	if strings.TrimSpace(req.Glob) != "" {
 		args = append(args, "-g", filepath.ToSlash(req.Glob))
 	}
@@ -450,7 +476,7 @@ func parseEndEvent(line []byte, root string) (path string, count int, ok bool) {
 	return DisplayPathForRoot(root, event.Data.Path.Text), event.Data.Stats.Matches, true
 }
 
-func sampleMatches(ctx context.Context, rgPath, root, searchRoot string, req Request, maxDepth, maxFiles, maxMatches int) ([]FileMatch, []FileCount, int, *SearchStats, bool, bool, error) {
+func sampleMatches(ctx context.Context, rgPath, root, searchRoot string, req Request, maxDepth, maxFiles, maxMatches int) ([]FileMatch, []FileCount, int, *SearchStats, bool, bool, []string, error) {
 	args := baseArgs(req, maxDepth)
 	args = append(args,
 		"--json",
@@ -472,14 +498,14 @@ func sampleMatches(ctx context.Context, rgPath, root, searchRoot string, req Req
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return nil, nil, 0, nil, false, false, err
+		return nil, nil, 0, nil, false, false, nil, err
 	}
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
-		return nil, nil, 0, nil, false, false, err
+		return nil, nil, 0, nil, false, false, nil, err
 	}
 	if err := cmd.Start(); err != nil {
-		return nil, nil, 0, nil, false, false, err
+		return nil, nil, 0, nil, false, false, nil, err
 	}
 
 	errBuf := &limitedBuffer{limit: 16 * 1024}
@@ -635,11 +661,12 @@ func sampleMatches(ctx context.Context, rgPath, root, searchRoot string, req Req
 	waitErr := cmd.Wait()
 	errWG.Wait()
 	if parseErr != nil {
-		return nil, nil, 0, nil, false, false, parseErr
+		return nil, nil, 0, nil, false, false, nil, parseErr
 	}
 	if ctx.Err() != nil {
-		return nil, nil, 0, nil, false, false, ctx.Err()
+		return nil, nil, 0, nil, false, false, nil, ctx.Err()
 	}
+	var warnings []string
 	if waitErr != nil {
 		var exitErr *exec.ExitError
 		if errors.As(waitErr, &exitErr) {
@@ -648,14 +675,23 @@ func sampleMatches(ctx context.Context, rgPath, root, searchRoot string, req Req
 				if msg == "" {
 					msg = waitErr.Error()
 				}
-				return nil, nil, 0, nil, false, false, failureError(msg)
+				// rg exited with an error (exit code 2) but may have already
+				// emitted valid results to stdout before hitting a bad file
+				// (e.g. Windows reserved filenames like nul/con/aux). If we
+				// have stats, return the partial results with a warning
+				// instead of discarding everything.
+				if stats != nil {
+					warnings = append(warnings, msg)
+				} else {
+					return nil, nil, 0, nil, false, false, nil, failureError(msg)
+				}
 			}
 		} else {
-			return nil, nil, 0, nil, false, false, waitErr
+			return nil, nil, 0, nil, false, false, nil, waitErr
 		}
 	}
 	if stats == nil {
-		return nil, nil, 0, nil, false, false, errors.New("ripgrep did not emit summary statistics")
+		return nil, nil, 0, nil, false, false, nil, errors.New("ripgrep did not emit summary statistics")
 	}
 
 	fileHits := make([]FileMatch, 0, len(groups))
@@ -674,7 +710,7 @@ func sampleMatches(ctx context.Context, rgPath, root, searchRoot string, req Req
 		}
 	}
 	offsetExhausted := req.Offset > 0 && stats.MatchedLines > 0 && req.Offset >= stats.MatchedLines && len(fileHits) == 0
-	return fileHits, fileCounts.Items(), nextOffset, stats, truncated, offsetExhausted, nil
+	return fileHits, fileCounts.Items(), nextOffset, stats, truncated, offsetExhausted, warnings, nil
 }
 
 // sampleFile accumulates matches for one file path during sample collection.

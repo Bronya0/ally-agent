@@ -1648,6 +1648,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 	}
 
 	for step := 0; step < maxAgentSteps; step++ {
+			sanitizedThisStep := false
 			select {
 			case <-ctx.Done():
 				// 记录用户主动取消标记，让下一轮模型能区分"用户中断"与
@@ -1786,6 +1787,25 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 					messages = append(messages, cancelledTurnMarker())
 					emitRunEnd("run:error", "cancelled", map[string]any{"error": "已取消"})
 					return
+				}
+				// provider 400 通常是上下文里有毒消息（截断参数、拼接工具名等）
+				// 触发的服务端校验失败。先尝试 sanitize 修复上下文再重试一次，
+				// 而不是直接中断会话——这样即使有未被拦截的坏消息漏网，会话也
+				// 能自愈而不是报废。
+				if isProvider400Error(err) && !sanitizedThisStep {
+					sanitizedThisStep = true
+					repaired := sanitizeHistoryMessages(messages)
+					if len(repaired) < len(messages) {
+						messages = repaired
+						a.emit("run:retry", map[string]any{
+							"runId":     runID,
+							"sessionId": sessionID,
+							"attempt":   1,
+							"maxAttempts": 1,
+							"reason":     "context sanitized after provider 400",
+						})
+						continue
+					}
 				}
 				emitRunEnd("run:error", "error", map[string]any{"error": err.Error()})
 				return
@@ -2036,6 +2056,15 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 	// rename. MCP tools (mcp__*) pass through unchanged because their
 	// sanitized names are already lowercase.
 	name = normalizeToolName(name)
+
+	// 截断参数的 tool call 一律不执行：normalizeToolCalls 把流式截断的
+	// arguments 替换成了 {"allyTruncatedArguments":true}。直接执行会让 MCP
+	// 工具收到垃圾参数并报错，错误结果进历史后可能毒化会话。直接返回
+	// 截断错误，让模型重新调用。
+	if isTruncatedArgsMarker(args) {
+		return toolErrorResult(codedToolError("E_TRUNCATED_ARGS",
+			fmt.Errorf("tool arguments were truncated during streaming; please re-send the call with complete parameters (merge small changes, split large edits into separate calls)")))
+	}
 
 	var data any
 	var err error
