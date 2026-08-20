@@ -23,6 +23,19 @@ import (
 	openai "github.com/sashabaranov/go-openai"
 )
 
+// contextStaticCacheHolder owns the ContextBreakdown memoization plus its
+// invalidation version counter. It lives in biz_context.go so the fields,
+// TTL, key derivation, read/write, and versioned invalidation are in one file.
+type contextStaticCacheHolder struct {
+	mu          sync.Mutex
+	cache       map[string]contextStaticCacheEntry
+	cacheVersion uint64
+}
+
+func newContextStaticCacheHolder() *contextStaticCacheHolder {
+	return &contextStaticCacheHolder{cache: map[string]contextStaticCacheEntry{}}
+}
+
 const contextStaticCacheTTL = 30 * time.Second
 
 // GetTodos returns the current todo list for a session.
@@ -378,15 +391,15 @@ func (a *App) getContextBreakdown(sessionID string) ContextBreakdown {
 }
 
 func (a *App) contextStaticBreakdown(cfg ConfigState, skills []SkillDefinition) ContextBreakdown {
-	version := a.contextStaticCacheVersion()
+	version := a.contextStaticCaches.version()
 	key := contextStaticCacheKey(cfg, skills, version)
-	a.contextStaticCacheMu.Lock()
-	if cached, ok := a.contextStaticCache[key]; ok && time.Since(cached.generatedAt) < contextStaticCacheTTL {
+	a.contextStaticCaches.mu.Lock()
+	if cached, ok := a.contextStaticCaches.cache[key]; ok && time.Since(cached.generatedAt) < contextStaticCacheTTL {
 		result := cloneContextBreakdown(cached.breakdown)
-		a.contextStaticCacheMu.Unlock()
+		a.contextStaticCaches.mu.Unlock()
 		return result
 	}
-	a.contextStaticCacheMu.Unlock()
+	a.contextStaticCaches.mu.Unlock()
 
 	result := ContextBreakdown{}
 	for _, part := range buildSystemPromptParts(skills, cfg.Workspace, cfg.ExtraRoots, cfg.CustomPrompt, cfg.GitBashPath) {
@@ -402,18 +415,15 @@ func (a *App) contextStaticBreakdown(cfg ConfigState, skills []SkillDefinition) 
 	}
 	result.ToolSchemas = estimateToolSchemaTokens(a.buildToolsForConfig(cfg))
 
-	a.contextStaticCacheMu.Lock()
-	if a.contextStaticCache == nil {
-		a.contextStaticCache = map[string]contextStaticCacheEntry{}
+	a.contextStaticCaches.mu.Lock()
+	if len(a.contextStaticCaches.cache) >= 64 {
+		a.contextStaticCaches.cache = map[string]contextStaticCacheEntry{}
 	}
-	if len(a.contextStaticCache) >= 64 {
-		a.contextStaticCache = map[string]contextStaticCacheEntry{}
-	}
-	a.contextStaticCache[key] = contextStaticCacheEntry{
+	a.contextStaticCaches.cache[key] = contextStaticCacheEntry{
 		breakdown:   cloneContextBreakdown(result),
 		generatedAt: time.Now(),
 	}
-	a.contextStaticCacheMu.Unlock()
+	a.contextStaticCaches.mu.Unlock()
 	return result
 }
 
@@ -445,17 +455,17 @@ func contextStaticCacheKey(cfg ConfigState, skills []SkillDefinition, version ui
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-func (a *App) contextStaticCacheVersion() uint64 {
-	a.contextStaticCacheMu.Lock()
-	defer a.contextStaticCacheMu.Unlock()
-	return a.contextStaticVersion
+func (h *contextStaticCacheHolder) version() uint64 {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.cacheVersion
 }
 
 func (a *App) invalidateContextStaticCache() {
-	a.contextStaticCacheMu.Lock()
-	a.contextStaticVersion++
-	a.contextStaticCache = map[string]contextStaticCacheEntry{}
-	a.contextStaticCacheMu.Unlock()
+	a.contextStaticCaches.mu.Lock()
+	a.contextStaticCaches.cacheVersion++
+	a.contextStaticCaches.cache = map[string]contextStaticCacheEntry{}
+	a.contextStaticCaches.mu.Unlock()
 }
 
 // liveBreakdownAccumulator exploits the append-only shape of the runChat

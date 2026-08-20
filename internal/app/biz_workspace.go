@@ -20,10 +20,33 @@ import (
 	goruntime "runtime"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"ally-dev/internal/tools/grep"
 )
+
+// workspaceCacheHolder owns all workspace-map / path-index memoization state
+// (map TTL caches, path index, in-flight rebuild dedup, global index version).
+// It lives in biz_workspace.go so that every cache's fields, TTL constants,
+// read/write logic, and invalidation stay in one file instead of spreading
+// across app.go's struct definition.
+type workspaceCacheHolder struct {
+	mapMu          sync.Mutex
+	mapCache       map[string]workspaceMapCacheEntry
+	pathMu         sync.Mutex
+	pathCache      map[string]*workspacePathIndex
+	pathBuilds     map[string]chan struct{}
+	pathVersion    int64
+}
+
+func newWorkspaceCacheHolder() *workspaceCacheHolder {
+	return &workspaceCacheHolder{
+		mapCache:   map[string]workspaceMapCacheEntry{},
+		pathCache:  map[string]*workspacePathIndex{},
+		pathBuilds: map[string]chan struct{}{},
+	}
+}
 
 func (a *App) listFilesWithConfig(cfg ConfigState, req ListFilesRequest) (ListFilesResult, error) {
 	root, err := workspaceRoot(cfg)
@@ -151,20 +174,20 @@ func (a *App) workspaceMapContext(cfg ConfigState) string {
 	}
 	key := workspaceMapCacheKey(root)
 
-	a.workspaceMapMu.Lock()
-	cached, ok := a.workspaceMapCache[key]
+	a.workspaceCaches.mapMu.Lock()
+	cached, ok := a.workspaceCaches.mapCache[key]
 	if ok && time.Since(cached.generatedAt) < workspaceMapTTL {
 		content := cached.content
-		a.workspaceMapMu.Unlock()
+		a.workspaceCaches.mapMu.Unlock()
 		return content
 	}
-	a.workspaceMapMu.Unlock()
+	a.workspaceCaches.mapMu.Unlock()
 
 	content := buildWorkspaceMapContext(root)
 
-	a.workspaceMapMu.Lock()
-	a.workspaceMapCache[key] = workspaceMapCacheEntry{content: content, generatedAt: time.Now()}
-	a.workspaceMapMu.Unlock()
+	a.workspaceCaches.mapMu.Lock()
+	a.workspaceCaches.mapCache[key] = workspaceMapCacheEntry{content: content, generatedAt: time.Now()}
+	a.workspaceCaches.mapMu.Unlock()
 	return content
 }
 
@@ -213,9 +236,9 @@ func (a *App) invalidateWorkspaceMapCache(cfg ConfigState) {
 		return
 	}
 	key := workspaceMapCacheKey(root)
-	a.workspaceMapMu.Lock()
-	delete(a.workspaceMapCache, key)
-	a.workspaceMapMu.Unlock()
+	a.workspaceCaches.mapMu.Lock()
+	delete(a.workspaceCaches.mapCache, key)
+	a.workspaceCaches.mapMu.Unlock()
 }
 
 func workspaceMapCacheKey(root string) string {
@@ -398,53 +421,53 @@ func workspacePathMatchScore(entry workspacePathIndexedEntry, query string) (int
 func (a *App) workspacePathIndex(root string, force bool) (*workspacePathIndex, error) {
 	key := workspaceMapCacheKey(root)
 	for {
-		a.workspacePathMu.Lock()
-		cached := a.workspacePathCache[key]
+		a.workspaceCaches.pathMu.Lock()
+		cached := a.workspaceCaches.pathCache[key]
 		if !force && cached != nil {
 			if time.Since(cached.GeneratedAt) >= workspacePathIndexRefreshTTL(cached) && !isBroadWorkspacePathRoot(root) {
-				if _, ok := a.workspacePathBuilds[key]; !ok {
+				if _, ok := a.workspaceCaches.pathBuilds[key]; !ok {
 					waitCh := make(chan struct{})
-					a.workspacePathBuilds[key] = waitCh
+					a.workspaceCaches.pathBuilds[key] = waitCh
 					go a.rebuildWorkspacePathIndex(root, key, waitCh)
 				}
 			}
-			a.workspacePathMu.Unlock()
+			a.workspaceCaches.pathMu.Unlock()
 			return cached, nil
 		}
-		if waitCh, ok := a.workspacePathBuilds[key]; ok {
-			a.workspacePathMu.Unlock()
+		if waitCh, ok := a.workspaceCaches.pathBuilds[key]; ok {
+			a.workspaceCaches.pathMu.Unlock()
 			<-waitCh
 			force = false
 			continue
 		}
 		waitCh := make(chan struct{})
-		a.workspacePathBuilds[key] = waitCh
-		a.workspacePathMu.Unlock()
+		a.workspaceCaches.pathBuilds[key] = waitCh
+		a.workspaceCaches.pathMu.Unlock()
 
 		index, err := a.buildWorkspacePathIndex(root)
 
-		a.workspacePathMu.Lock()
+		a.workspaceCaches.pathMu.Lock()
 		a.finishWorkspacePathIndexBuildLocked(key, index, err)
 		close(waitCh)
-		a.workspacePathMu.Unlock()
+		a.workspaceCaches.pathMu.Unlock()
 		return index, err
 	}
 }
 
 func (a *App) rebuildWorkspacePathIndex(root, key string, waitCh chan struct{}) {
 	index, err := a.buildWorkspacePathIndex(root)
-	a.workspacePathMu.Lock()
+	a.workspaceCaches.pathMu.Lock()
 	a.finishWorkspacePathIndexBuildLocked(key, index, err)
 	close(waitCh)
-	a.workspacePathMu.Unlock()
+	a.workspaceCaches.pathMu.Unlock()
 }
 
 func (a *App) finishWorkspacePathIndexBuildLocked(key string, index *workspacePathIndex, err error) {
-	delete(a.workspacePathBuilds, key)
+	delete(a.workspaceCaches.pathBuilds, key)
 	if err == nil && index != nil {
-		a.workspacePathVersion++
-		index.Version = a.workspacePathVersion
-		a.workspacePathCache[key] = index
+		a.workspaceCaches.pathVersion++
+		index.Version = a.workspaceCaches.pathVersion
+		a.workspaceCaches.pathCache[key] = index
 	}
 }
 

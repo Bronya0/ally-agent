@@ -257,7 +257,8 @@ const ACE_MODE_MAP = {
 // Python/Go 等代码语言没有可信的轻量浏览器校验器（ace 也没有这两种
 // 语言的 worker；可靠的校验需要 tree-sitter/LSP 级别的完整解析器，
 // 重且可能误报），故不启用。
-// 校验器返回 null（合法）或 { message, line? }。
+// 校验器返回 null（合法）或 { message, line? }；接收 (text, path)，
+// path 用于按文件名跳过合法的非严格格式（如 tsconfig 的 JSONC）。
 const SYNTAX_VALIDATORS = {
   json: validateJSONSyntax,
   yaml: validateYAMLSyntax,
@@ -273,8 +274,17 @@ function loadYamlLib() {
   return yamlLibPromise;
 }
 
-function validateJSONSyntax(text) {
+// tsconfig/jsconfig 是允许注释和尾逗号的 JSONC，严格 JSON 解析必然误报
+function isJSONCPath(path) {
+  const name = (String(path).split(/[\\/]/).pop() || '').toLowerCase();
+  return name.startsWith('tsconfig') || name.startsWith('jsconfig');
+}
+
+function validateJSONSyntax(text, path) {
   if (!text.trim()) return null;
+  if (isJSONCPath(path)) return null;
+  // 剥 BOM：带 BOM 的 JSON 文件合法，JSON.parse 却会报错
+  if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
   try {
     JSON.parse(text);
     return null;
@@ -292,7 +302,9 @@ async function validateYAMLSyntax(text) {
   if (!text.trim()) return null;
   const lib = await loadYamlLib();
   try {
-    lib.load(text);
+    // loadAll 支持 "---" 分隔的多文档（k8s manifest 等常见格式），
+    // 单文档的 load() 遇到多文档会误报
+    lib.loadAll(text);
     return null;
   } catch (err) {
     const mark = err?.mark;
@@ -345,7 +357,7 @@ async function applySyntaxValidation() {
     }
     return;
   }
-  const issue = await validator(text);
+  const issue = await validator(text, path);
   if (seq !== syntaxValidateSeq) return; // 期间又发生了输入/切换，结果作废
   if (!issue) {
     syntaxIssue.value = null;

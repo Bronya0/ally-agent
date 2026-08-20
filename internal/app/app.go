@@ -169,6 +169,7 @@ type gitStatusCacheEntry struct {
 	generatedAt time.Time
 }
 
+// contextStaticCacheEntry caches a ContextBreakdown keyed by config+skills+version.
 type contextStaticCacheEntry struct {
 	breakdown   ContextBreakdown
 	generatedAt time.Time
@@ -215,8 +216,10 @@ type App struct {
 	todoRevisions  map[string]int64
 	// sessionWorkspaceMaps freezes the workspace map bytes per session
 	// (sessionID → map text) so the request prefix stays byte-stable across
-	// runs and provider prompt caches survive; guarded by mu.
+	// runs and provider prompt caches survive; guarded by mu (declared in
+	// biz_workspace.go with the workspace cache fields).
 	sessionWorkspaceMaps map[string]string
+
 	askMu          sync.Mutex
 	pendingAsks    map[string]*pendingAsk
 
@@ -248,16 +251,15 @@ type App struct {
 	skillCacheMu sync.Mutex
 	skillCache   map[string]skillListCacheEntry
 
-	contextStaticCacheMu sync.Mutex
-	contextStaticCache   map[string]contextStaticCacheEntry
-	contextStaticVersion uint64
+	// workspaceCaches owns all workspace-map / path-index memoization state
+	// (TTL, version, in-flight rebuilds). The concrete type lives in
+	// biz_workspace.go next to the cache logic, so this struct stays slim.
+	workspaceCaches *workspaceCacheHolder
 
-	workspaceMapMu       sync.Mutex
-	workspaceMapCache    map[string]workspaceMapCacheEntry
-	workspacePathMu      sync.Mutex
-	workspacePathCache   map[string]*workspacePathIndex
-	workspacePathBuilds  map[string]chan struct{}
-	workspacePathVersion int64
+	// contextStaticCaches owns the ContextBreakdown memoization and its
+	// invalidation version. Concrete type lives in biz_context.go with the
+	// breakdown logic.
+	contextStaticCaches *contextStaticCacheHolder
 
 	httpRateMu   sync.Mutex
 	httpLastHost map[string]time.Time
@@ -305,13 +307,11 @@ func NewApp() *App {
 		pendingAsks:         map[string]*pendingAsk{},
 		subRuns:             map[string]*SubagentRun{},
 		subSem:              make(chan struct{}, 4),
-		workspaceMapCache:   map[string]workspaceMapCacheEntry{},
-		workspacePathCache:  map[string]*workspacePathIndex{},
-		workspacePathBuilds: map[string]chan struct{}{},
 		gitStatusCache:      map[string]gitStatusCacheEntry{},
 		gitStatusInFlight:   map[string]chan struct{}{},
 		skillCache:          map[string]skillListCacheEntry{},
-		contextStaticCache:  map[string]contextStaticCacheEntry{},
+		workspaceCaches:     newWorkspaceCacheHolder(),
+		contextStaticCaches: newContextStaticCacheHolder(),
 		httpLastHost:        map[string]time.Time{},
 		liveBreakdown:       map[string]ContextBreakdown{},
 		workspaceTokenUsage: map[string]WorkspaceTokenUsage{},
@@ -405,8 +405,9 @@ type ConfigState struct {
 	Models              []ModelConfig `json:"models,omitempty"`
 	DisabledSkills      []string      `json:"disabledSkills,omitempty"`
 	LLMRetries          int           `json:"llmRetries,omitempty"`
-	// AutoValidation* are nil for legacy configs (treated as enabled). An
-	// explicit false disables only that language's post-write check.
+	// AutoValidation* are nil for legacy configs (treated as disabled).
+	// Post-write checks only run for languages the user explicitly enabled
+	// in Settings.
 	AutoValidationPython     *bool `json:"autoValidationPython,omitempty"`
 	AutoValidationGo         *bool `json:"autoValidationGo,omitempty"`
 	AutoValidationJavaScript *bool `json:"autoValidationJavaScript,omitempty"`

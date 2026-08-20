@@ -1359,7 +1359,8 @@ function cloneConfigDraft(source) {
   })) : [];
   next.apiKeys = normalizeModelApiKeys(next.apiKeys || (next.apiKey ? [next.apiKey] : []));
   for (const key of validationSettingKeys) {
-    next[key] = next[key] === false ? false : true;
+    // Auto validation is opt-in: only an explicit true keeps a check enabled.
+    next[key] = next[key] === true;
   }
   return next;
 }

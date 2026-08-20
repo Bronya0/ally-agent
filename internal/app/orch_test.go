@@ -1091,7 +1091,8 @@ func TestEditAutoValidationReturnsFailureWithoutUndoingWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := NewApp()
-	result := app.executeTool(context.Background(), ConfigState{Workspace: root}, "", "edit", payload)
+	enabled := true
+	result := app.executeTool(context.Background(), ConfigState{Workspace: root, AutoValidationJSON: &enabled}, "", "edit", payload)
 	if !result.OK {
 		t.Fatalf("edit should remain successful when validation fails: %#v", result)
 	}
@@ -1219,7 +1220,8 @@ func TestCreateCompactResultCarriesCreatedFields(t *testing.T) {
 func TestCreateAutoValidationIsAConciseModelString(t *testing.T) {
 	root := t.TempDir()
 	app := NewApp()
-	result := app.executeTool(context.Background(), ConfigState{Workspace: root}, "", "create", []byte(`{"path":"bad.json","content":"{\"broken\":","overwrite":false}`))
+	enabled := true
+	result := app.executeTool(context.Background(), ConfigState{Workspace: root, AutoValidationJSON: &enabled}, "", "create", []byte(`{"path":"bad.json","content":"{\"broken\":","overwrite":false}`))
 	if !result.OK {
 		t.Fatalf("create should succeed even when post-write validation fails: %#v", result)
 	}
@@ -1240,7 +1242,8 @@ func TestCreateAutoValidationIsAConciseModelString(t *testing.T) {
 func TestCreateAutoValidationPassesJSON(t *testing.T) {
 	root := t.TempDir()
 	app := NewApp()
-	result := app.executeTool(context.Background(), ConfigState{Workspace: root}, "", "create", []byte(`{"path":"good.json","content":"{\"ok\":true}","overwrite":false}`))
+	enabled := true
+	result := app.executeTool(context.Background(), ConfigState{Workspace: root, AutoValidationJSON: &enabled}, "", "create", []byte(`{"path":"good.json","content":"{\"ok\":true}","overwrite":false}`))
 	if !result.OK {
 		t.Fatalf("unexpected create error: %#v", result)
 	}
@@ -1268,12 +1271,13 @@ func TestAutoValidationCanBeDisabledPerLanguage(t *testing.T) {
 }
 
 func TestAutoValidationCatchesPythonSyntax(t *testing.T) {
-	if _, _, ok := findPythonCommand(); !ok {
+	root := t.TempDir()
+	if _, _, ok := findPythonCommand(root); !ok {
 		t.Skip("python is unavailable")
 	}
-	root := t.TempDir()
+	enabled := true
 	writeToolTestFile(t, root, "broken.py", "def broken(:\n    pass\n")
-	got := NewApp().validateChangedFiles(context.Background(), ConfigState{Workspace: root}, []string{"broken.py"})
+	got := NewApp().validateChangedFiles(context.Background(), ConfigState{Workspace: root, AutoValidationPython: &enabled}, []string{"broken.py"})
 	if !strings.Contains(got, "自动校验失败") || !strings.Contains(got, "broken.py") {
 		t.Fatalf("expected Python syntax failure, got %q", got)
 	}
@@ -1284,8 +1288,9 @@ func TestAutoValidationCatchesJavaScriptSyntax(t *testing.T) {
 		t.Skip("node is unavailable")
 	}
 	root := t.TempDir()
+	enabled := true
 	writeToolTestFile(t, root, "broken.js", "const = 1;\n")
-	got := NewApp().validateChangedFiles(context.Background(), ConfigState{Workspace: root}, []string{"broken.js"})
+	got := NewApp().validateChangedFiles(context.Background(), ConfigState{Workspace: root, AutoValidationJavaScript: &enabled}, []string{"broken.js"})
 	if !strings.Contains(got, "自动校验失败") || !strings.Contains(got, "broken.js") {
 		t.Fatalf("expected JavaScript syntax failure, got %q", got)
 	}
@@ -1296,11 +1301,141 @@ func TestAutoValidationCatchesGoVetFailure(t *testing.T) {
 		t.Skip("go is unavailable")
 	}
 	root := t.TempDir()
+	enabled := true
 	writeToolTestFile(t, root, "go.mod", "module example.com/validation\n\ngo 1.23\n")
 	writeToolTestFile(t, root, "main.go", "package main\n\nfunc main() { missing() }\n")
-	got := NewApp().validateChangedFiles(context.Background(), ConfigState{Workspace: root}, []string{"main.go"})
+	got := NewApp().validateChangedFiles(context.Background(), ConfigState{Workspace: root, AutoValidationGo: &enabled}, []string{"main.go"})
 	if !strings.Contains(got, "自动校验失败") || !strings.Contains(got, "Go vet") {
 		t.Fatalf("expected Go vet failure, got %q", got)
+	}
+}
+
+func TestFilterJavaSyntaxErrorsKeepsOnlyParseErrors(t *testing.T) {
+	output := "Dep.java:3: error: cannot find symbol\n" +
+		"  symbol:   class Thing\n" +
+		"Dep.java:1: error: package non-existent.pkg does not exist\n" +
+		"Broken.java:5: error: ';' expected\n" +
+		"Broken.java:9: error: reached end of file while parsing\n" +
+		"2 errors\n" +
+		"Note: something\n"
+	got := filterJavaSyntaxErrors(output)
+	if !strings.Contains(got, "';' expected") || !strings.Contains(got, "reached end of file") {
+		t.Fatalf("expected syntax errors to be kept, got %q", got)
+	}
+	for _, dropped := range []string{"cannot find symbol", "does not exist", "errors", "Note:"} {
+		if strings.Contains(got, dropped) {
+			t.Fatalf("expected %q to be dropped, got %q", dropped, got)
+		}
+	}
+}
+
+func TestAutoValidationJavaDependencyErrorsAreIgnored(t *testing.T) {
+	if _, err := exec.LookPath("javac"); err != nil {
+		t.Skip("javac is unavailable")
+	}
+	root := t.TempDir()
+	enabled := true
+	writeToolTestFile(t, root, "Dep.java", "import non-existent.pkg.Thing;\n\npublic class Dep {\n    Thing t;\n}\n")
+	got := NewApp().validateChangedFiles(context.Background(), ConfigState{Workspace: root, AutoValidationJava: &enabled}, []string{"Dep.java"})
+	if strings.Contains(got, "自动校验失败") {
+		t.Fatalf("dependency-only javac errors must not fail validation, got %q", got)
+	}
+}
+
+func TestAutoValidationCatchesJavaSyntax(t *testing.T) {
+	if _, err := exec.LookPath("javac"); err != nil {
+		t.Skip("javac is unavailable")
+	}
+	root := t.TempDir()
+	enabled := true
+	writeToolTestFile(t, root, "Broken.java", "public class Broken {\n    void m() { int x = ; }\n}\n")
+	got := NewApp().validateChangedFiles(context.Background(), ConfigState{Workspace: root, AutoValidationJava: &enabled}, []string{"Broken.java"})
+	if !strings.Contains(got, "自动校验失败") || !strings.Contains(got, "expected") {
+		t.Fatalf("expected Java syntax failure, got %q", got)
+	}
+}
+
+func TestAutoValidationSkipsJSXFiles(t *testing.T) {
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("node is unavailable")
+	}
+	root := t.TempDir()
+	writeToolTestFile(t, root, "component.jsx", "export const App = () => <div />;\n")
+	got := NewApp().validateChangedFiles(context.Background(), ConfigState{Workspace: root}, []string{"component.jsx"})
+	if strings.Contains(got, "自动校验失败") {
+		t.Fatalf("jsx files must not be checked by node --check, got %q", got)
+	}
+}
+
+func TestAutoValidationSkipsJSONCFiles(t *testing.T) {
+	root := t.TempDir()
+	enabled := true
+	writeToolTestFile(t, root, "tsconfig.json", "{\n  // comments are legal JSONC\n  \"compilerOptions\": {}\n}\n")
+	got := NewApp().validateChangedFiles(context.Background(), ConfigState{Workspace: root, AutoValidationJSON: &enabled}, []string{"tsconfig.json"})
+	if strings.Contains(got, "自动校验失败") {
+		t.Fatalf("tsconfig.json must be skipped as JSONC, got %q", got)
+	}
+}
+
+func TestFilterGoVetOutputNormalizesPaths(t *testing.T) {
+	rel := map[string]struct{}{"internal/app/main.go": {}}
+	output := "# example.com/validation\n" +
+		"vet.exe: .\\internal\\app\\main.go:3:15: undefined: missing\n" +
+		"vet: ./internal/app/other.go:1:1: printf: bogus\n" +
+		"internal/app/main.go:9:2: unreachable code\n"
+	got := filterGoVetOutput(output, rel)
+	if !strings.Contains(got, "undefined: missing") || !strings.Contains(got, "unreachable code") {
+		t.Fatalf("expected changed-file diagnostics to be kept, got %q", got)
+	}
+	if strings.Contains(got, "other.go") || strings.Contains(got, "example.com") {
+		t.Fatalf("expected untouched-file diagnostics to be dropped, got %q", got)
+	}
+}
+
+func TestGoDependencyIssueDetectsModuleFailures(t *testing.T) {
+	for _, output := range []string{
+		"main.go:1:2: no required module provides package foo; to add it: go get foo",
+		"go: cannot find main module; ...",
+		"main.go:5:2: missing go.sum entry for module",
+	} {
+		if !goDependencyIssue(output) {
+			t.Fatalf("expected dependency issue for %q", output)
+		}
+	}
+	if goDependencyIssue("main.go:3:15: undefined: missing") {
+		t.Fatal("code error must not be classified as dependency issue")
+	}
+}
+
+func TestFilterTypeScriptSyntaxErrorsKeepsChangedFileSyntaxOnly(t *testing.T) {
+	dir := t.TempDir()
+	files := []validationFile{{abs: filepath.Join(dir, "src", "a.ts"), display: "src/a.ts", ext: ".ts"}}
+	output := "src/a.ts(12,5): error TS1005: ';' expected\n" +
+		"src/a.ts(30,1): error TS2322: Type 'string' is not assignable to type 'number'\n" +
+		"src/b.ts(8,9): error TS1005: Declaration or statement expected\n" +
+		"src/a.ts(3,1): error TS2307: Cannot find module './missing'\n"
+	got := filterTypeScriptSyntaxErrors(output, dir, files)
+	if !strings.Contains(got, "TS1005: ';' expected") {
+		t.Fatalf("expected changed-file syntax error to be kept, got %q", got)
+	}
+	for _, dropped := range []string{"TS2322", "src/b.ts", "TS2307"} {
+		if strings.Contains(got, dropped) {
+			t.Fatalf("expected %q to be dropped, got %q", dropped, got)
+		}
+	}
+}
+
+func TestValidationSkipReportMapsTimeoutAndCancel(t *testing.T) {
+	report, ok := validationSkipReport("Go vet", context.DeadlineExceeded)
+	if !ok || !report.skipped || report.passed {
+		t.Fatalf("expected timeout to be skipped, got %#v ok=%v", report, ok)
+	}
+	report, ok = validationSkipReport("Go vet", context.Canceled)
+	if !ok || !report.skipped {
+		t.Fatalf("expected cancel to be skipped, got %#v ok=%v", report, ok)
+	}
+	if _, ok := validationSkipReport("Go vet", errors.New("boom")); ok {
+		t.Fatal("plain errors must not be skipped")
 	}
 }
 
