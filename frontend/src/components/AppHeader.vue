@@ -32,7 +32,7 @@ Public License v3. See the LICENSE file for details.
             v-for="tab in workspaceTabs"
             :key="tab.id"
             :name="tab.id"
-            :class="['workspace-tab', { active: tab.id === activeWorkspaceId, running: tab.isRunning, dragging: tab.id === draggedWorkspaceId }, dragShiftClass(tab.id)]"
+            :class="['workspace-tab', { active: tab.id === activeWorkspaceId, running: tab.isRunning, dragging: tab.id === draggedWorkspaceId, 'drop-before': isDropBefore(tab.id), 'drop-after': isDropAfter(tab.id) }, dragShiftClass(tab.id)]"
             :data-tab-id="tab.id"
             :draggable="workspaceTabs.length > 1"
             @dragstart="onWorkspaceDragStart($event, tab.id)"
@@ -169,6 +169,17 @@ const dragShiftClassById = computed(() => {
   return result;
 });
 const hasDragShift = computed(() => dragShiftClassById.value.size > 0);
+
+// Drop indicator follows dragPreview directly (not hasDragShift): a drop next
+// to the source's own slot is a no-op reorder with no shift, but must still
+// show the line — e.g. dragging between exactly two tabs.
+function isDropBefore(id) {
+  return dragPreview.value?.targetId === id && !dragPreview.value.after;
+}
+
+function isDropAfter(id) {
+  return dragPreview.value?.targetId === id && dragPreview.value.after;
+}
 
 function dragShiftClass(id) {
   return dragShiftClassById.value.get(id) || '';
@@ -595,6 +606,15 @@ body.platform-darwin .window-close-icon {
 .workspace-tabs-host.drag-preview-active .workspace-tabs :deep(.workspace-tab.dragging) {
   visibility: hidden;
   opacity: 0;
+}
+
+/* 拖拽落点指示线：插入位置的高亮竖线（box-shadow inset，随平移的 tab 一起移动） */
+.workspace-tabs :deep(.workspace-tab.drop-before) {
+  box-shadow: inset 2px 0 0 var(--ally-accent-bright) !important;
+}
+
+.workspace-tabs :deep(.workspace-tab.drop-after) {
+  box-shadow: inset -2px 0 0 var(--ally-accent-bright) !important;
 }
 
 .workspace-tabs :deep(.workspace-tab:active) {

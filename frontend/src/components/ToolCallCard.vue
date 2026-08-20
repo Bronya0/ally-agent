@@ -188,6 +188,10 @@ function toolDisplayName(msg) {
   // When the verb already names the action (Edited/Read/Ran/...), don't repeat it
   // as the name; the target/file is shown in the (msg.title) arg span.
   if (hasNamedVerb(msg.name)) return '';
+  // grep keeps its literal tool name in every status and locale (no verb
+  // forms, no translated kind label), matching how the search tool is
+  // identified across the UI.
+  if (msg.kind === 'grep') return 'Grep';
   const kindLabel = toolKindLabel(msg.kind);
   if (kindLabel && msg.kind !== 'other') return kindLabel;
   return formatToolName(msg.name) || t('tools.kind.tool');

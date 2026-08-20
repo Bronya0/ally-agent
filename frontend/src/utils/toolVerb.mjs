@@ -52,7 +52,6 @@ const TOOL_VERBS = {
   stop_service: ['Stopping service', 'Stopped service', 'Service'],
   list_services: ['Listing services', 'Listed services', 'Service'],
   // search
-  grep: ['Searching', 'Searched', 'Search'],
   Glob: ['Matching', 'Matched', 'Match'],
   // network
   web_fetch: ['Fetching', 'Fetched', 'Fetch'],
