@@ -111,7 +111,7 @@ Core runtime flow:
 
 1. Frontend calls `StartChat(ChatRequest)` through Wails.
 2. Backend creates a cancellable run and starts `runChat()`.
-3. `buildMessages()` constructs the request context: core system prompt, workspace map, persisted history, current user message, and attachments.
+3. `buildMessages()` constructs the request context: core system prompt, workspace map, persisted history, current user message, and attachments. The workspace map is frozen per session at the first request (labeled as a snapshot; `list_files` returns live state) so the request prefix stays byte-stable and provider prompt caches survive across runs. Per-step tail injections (`<ally-plan>`; context-budget injection is disabled) are rebuilt each request and never persisted; the Anthropic adapter places its prompt-cache breakpoints before them so they cannot invalidate the cached prefix.
 4. `buildToolsWithMcp()` combines static built-in tools with connected MCP tools.
 5. `streamModelResponse()` dispatches to the configured provider adapter.
 6. Streaming deltas and tool-call updates are emitted to the frontend through runtime events.

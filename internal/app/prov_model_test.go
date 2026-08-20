@@ -12,8 +12,52 @@ import (
 	"strings"
 	"testing"
 
+	anthropic "github.com/anthropics/anthropic-sdk-go"
 	legacyopenai "github.com/sashabaranov/go-openai"
 )
+
+func TestMarkAnthropicPromptCacheBreakpointsSkipsTailInjections(t *testing.T) {
+	params := anthropic.MessageNewParams{
+		System: []anthropic.TextBlockParam{{Text: "system"}},
+		Messages: []anthropic.MessageParam{
+			anthropic.NewUserMessage(anthropic.NewTextBlock("question")),
+			anthropic.NewAssistantMessage(anthropic.NewToolUseBlock("t1", map[string]any{"a": 1}, "grep")),
+			anthropic.NewUserMessage(anthropic.NewToolResultBlock("t1", `{"ok":true}`, false)),
+			anthropic.NewUserMessage(anthropic.NewTextBlock("<ally-plan>\n1. [in_progress] x\n</ally-plan>")),
+		},
+	}
+	markAnthropicPromptCacheBreakpoints(&params)
+
+	if params.System[0].CacheControl.TTL == "" {
+		t.Fatalf("expected cache_control breakpoint on last system block")
+	}
+	toolResult := params.Messages[2].Content[len(params.Messages[2].Content)-1]
+	if toolResult.OfToolResult == nil || toolResult.OfToolResult.CacheControl.TTL == "" {
+		t.Fatalf("expected cache_control breakpoint on last block of last real message")
+	}
+	injection := params.Messages[3].Content[0]
+	if injection.OfText == nil || injection.OfText.CacheControl.TTL != "" {
+		t.Fatalf("transient tail injection must stay outside the cached prefix")
+	}
+
+	// The full conversion path must land the breakpoint the same way:
+	// buildAnthropicMessages merges tool results and keeps the injection last.
+	_, converted := buildAnthropicMessages([]legacyopenai.ChatCompletionMessage{
+		{Role: legacyopenai.ChatMessageRoleSystem, Content: "system"},
+		{Role: legacyopenai.ChatMessageRoleUser, Content: "question"},
+		{Role: legacyopenai.ChatMessageRoleTool, ToolCallID: "t1", Content: `{"ok":true}`},
+		{Role: legacyopenai.ChatMessageRoleUser, Content: "<ally-plan>\n1. [in_progress] x\n</ally-plan>"},
+	})
+	if len(converted) != 3 {
+		t.Fatalf("expected 3 converted messages, got %d", len(converted))
+	}
+	if !anthropicMessageIsTransientInjection(converted[2]) {
+		t.Fatalf("expected converted tail message to be detected as transient injection")
+	}
+	if anthropicMessageIsTransientInjection(converted[1]) {
+		t.Fatalf("tool-result message must not be detected as transient injection")
+	}
+}
 
 func TestOpenAIResponsesGPT56PromptCacheRequest(t *testing.T) {
 	cacheKey := openAIResponsesPromptCacheKey("session-1")

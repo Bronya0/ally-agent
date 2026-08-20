@@ -64,6 +64,37 @@ func TestWorkspaceMapCacheInvalidation(t *testing.T) {
 	mustContain(t, refreshed, "new-file.txt")
 }
 
+func TestSessionWorkspaceMapFrozenPerSession(t *testing.T) {
+	root := t.TempDir()
+	writeTestFile(t, root, "go.mod", "module example\n")
+
+	app := NewApp()
+	cfg := ConfigState{Workspace: root}
+	first := app.sessionWorkspaceMap("s-freeze", cfg)
+	mustContain(t, first, "go.mod")
+	mustContain(t, first, "Snapshot frozen")
+
+	writeTestFile(t, root, "new-file.txt", "hello\n")
+	// Same session: frozen snapshot, byte-identical even after invalidation.
+	app.invalidateWorkspaceMapCache(cfg)
+	if second := app.sessionWorkspaceMap("s-freeze", cfg); second != first {
+		t.Fatalf("expected frozen workspace map bytes within a session")
+	}
+
+	// Different session: fresh snapshot reflects the new file.
+	other := app.sessionWorkspaceMap("s-other", cfg)
+	mustContain(t, other, "new-file.txt")
+
+	// Session release must drop the frozen snapshot.
+	app.releaseSession("s-freeze", false)
+	app.mu.Lock()
+	_, frozen := app.sessionWorkspaceMaps["s-freeze"]
+	app.mu.Unlock()
+	if frozen {
+		t.Fatalf("expected frozen snapshot to be released with the session")
+	}
+}
+
 func TestBuildMessagesInjectsWorkspaceMapAsHiddenSystemContext(t *testing.T) {
 	root := t.TempDir()
 	writeTestFile(t, root, "go.mod", "module example\n")

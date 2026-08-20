@@ -213,6 +213,10 @@ type App struct {
 	mcpManager     *McpManager
 	todos          map[string][]TodoEntry // sessionID → todos
 	todoRevisions  map[string]int64
+	// sessionWorkspaceMaps freezes the workspace map bytes per session
+	// (sessionID → map text) so the request prefix stays byte-stable across
+	// runs and provider prompt caches survive; guarded by mu.
+	sessionWorkspaceMaps map[string]string
 	askMu          sync.Mutex
 	pendingAsks    map[string]*pendingAsk
 
@@ -1403,6 +1407,7 @@ func (a *App) releaseSession(sessionID string, deleteHistory bool) error {
 	delete(a.todos, sessionID)
 	delete(a.todoRevisions, sessionID)
 	delete(a.liveBreakdown, sessionID)
+	delete(a.sessionWorkspaceMaps, sessionID)
 	a.mu.Unlock()
 
 	a.subRunsMu.Lock()
@@ -1718,12 +1723,14 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			})
 			toolProgress := newToolCallProgressTracker()
 			toolBatchID := fmt.Sprintf("%d", step)
-			// Inject context budget as the final request item so the model can
-			// self-regulate tool usage (e.g. prefer grep over read when
-			// near the limit). Built fresh per request from the live breakdown;
-			// never appended to `messages`, so it is not persisted into history
-			// and does not break prefix-cache reuse of the preceding items.
-			requestMessages := appendContextBudgetMessage(messages, bd.Total, maxCtx)
+			// Context-budget tail injection is disabled (cache-first): the
+			// model does not need live budget numbers — auto-compact at
+			// CompactThreshold (default 60%) already bounds usage — and any
+			// per-step tail item risks prompt-cache churn on providers whose
+			// cache breakpoint lands on the last block. Call kept commented
+			// for quick re-enable:
+			// requestMessages := appendContextBudgetMessage(messages, bd.Total, maxCtx)
+			requestMessages := messages
 			// Inject the live todo list every turn so the model can see which
 			// items are still pending/in_progress and decide to flip them via
 			// plan before answering. Also not persisted into history —

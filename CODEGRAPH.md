@@ -25,7 +25,7 @@
   - biz_sessions.go — 会话索引/快照/历史持久化：gzip 历史读写、裁剪、会话文件原子替换 [Lines: 1138]
   - biz_context.go — 请求消息组装：`buildMessages`、系统上下文、todo 状态、附件上下文、上下文 Token 统计与缓存 [Lines: 1071]
   - biz_prompt.go — 系统提示词管线：`buildSystemPromptParts`、skill 元数据、全局记忆索引、AGENTS/CLAUDE 加载
-  - biz_workspace.go — 工作区文件列表、workspace map、路径搜索索引、gitignore 规则解析 [Lines: 908]
+  - biz_workspace.go — 工作区文件列表、workspace map（`sessionWorkspaceMap` 按会话冻结快照，保证跨 run 前缀字节稳定）、路径搜索索引、gitignore 规则解析 [Lines: 908]
   - biz_workspace_editor.go — UI 文件浏览器专用的受限完整文本读写（2 MiB 上限、版本冲突校验、原子写入、与 Agent 文件操作共用锁）
   - biz_skills.go / biz_builtin_skills.go — skill 发现/加载/启停（目录、standalone md、内置嵌入）
   - biz_mcp.go — MCP 生命周期：`McpManager` 连接/重连/工具发现、前端绑定、MCP 工具执行 [Lines: 845]

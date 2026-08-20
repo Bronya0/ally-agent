@@ -666,7 +666,7 @@ func (a *App) buildSystemContextMessages(sessionID string, cfg ConfigState, allS
 	if systemPrompt != "" {
 		messages = append(messages, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleSystem, Content: systemPrompt})
 	}
-	messages = a.appendWorkspaceMapMessage(messages, cfg)
+	messages = a.appendWorkspaceMapMessage(messages, sessionID, cfg)
 	return messages
 }
 
@@ -904,8 +904,8 @@ func cloneChatMessages(messages []openai.ChatCompletionMessage) []openai.ChatCom
 	return out
 }
 
-func (a *App) appendWorkspaceMapMessage(messages []openai.ChatCompletionMessage, cfg ConfigState) []openai.ChatCompletionMessage {
-	if content := a.workspaceMapContext(cfg); content != "" {
+func (a *App) appendWorkspaceMapMessage(messages []openai.ChatCompletionMessage, sessionID string, cfg ConfigState) []openai.ChatCompletionMessage {
+	if content := a.sessionWorkspaceMap(sessionID, cfg); content != "" {
 		messages = append(messages, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleSystem, Content: content})
 	}
 	return messages

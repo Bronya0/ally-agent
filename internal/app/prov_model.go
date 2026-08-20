@@ -989,7 +989,13 @@ func (a *App) streamAnthropicMessages(ctx context.Context, cfg ConfigState, mode
 		params.Tools = convertToolsToAnthropic(tools)
 	}
 	if baseURL == defaultAnthropicMessagesURL {
-		params.CacheControl = anthropic.CacheControlEphemeralParam{TTL: anthropic.CacheControlEphemeralTTLTTL5m}
+		// Prompt-cache breakpoints for the official endpoint: one on the last
+		// system block and one on the last content block of the last real
+		// message. This replaces the previous top-level params.CacheControl,
+		// whose breakpoint landed on the very last block — the per-step tail
+		// injection itself — so every step's cache entry diverged from the
+		// next request and incremental reuse never happened.
+		markAnthropicPromptCacheBreakpoints(&params)
 	}
 	// Thinking strength for Anthropic: only output_config.effort. Anthropic
 	// has no reasoning_effort parameter; effort is the equivalent control and
@@ -1273,6 +1279,55 @@ func buildAnthropicMessages(messages []legacyopenai.ChatCompletionMessage) (stri
 		}
 	}
 	return strings.Join(systemParts, "\n\n"), out
+}
+
+// markAnthropicPromptCacheBreakpoints places explicit prompt-cache
+// breakpoints: one on the last system block (caches tools+system, reusable
+// across runs while the header bytes stay stable) and one on the last content
+// block of the last non-transient message (caches the stable request prefix
+// so it grows incrementally across agent steps). Transient tail items such as
+// <ally-plan> / <ally-context-budget> are rebuilt every request and stay
+// outside the cached prefix, so they can appear, change, or vanish without
+// invalidating anything. Anthropic allows up to 4 breakpoints; 2 are used.
+func markAnthropicPromptCacheBreakpoints(params *anthropic.MessageNewParams) {
+	cc := anthropic.CacheControlEphemeralParam{TTL: anthropic.CacheControlEphemeralTTLTTL5m}
+	if len(params.System) > 0 {
+		params.System[len(params.System)-1].CacheControl = cc
+	}
+	for i := len(params.Messages) - 1; i >= 0; i-- {
+		if anthropicMessageIsTransientInjection(params.Messages[i]) {
+			continue
+		}
+		if len(params.Messages[i].Content) > 0 {
+			setAnthropicBlockCacheControl(params.Messages[i].Content[len(params.Messages[i].Content)-1], cc)
+		}
+		break
+	}
+}
+
+// anthropicMessageIsTransientInjection reports whether an outbound Anthropic
+// message is a per-step tail injection (todo status / context budget) that is
+// rebuilt fresh each request and never persisted into history. Such messages
+// must remain outside the cached prefix.
+func anthropicMessageIsTransientInjection(msg anthropic.MessageParam) bool {
+	if msg.Role != "user" || len(msg.Content) != 1 || msg.Content[0].OfText == nil {
+		return false
+	}
+	text := msg.Content[0].OfText.Text
+	return strings.HasPrefix(text, "<ally-plan>") || strings.HasPrefix(text, "<ally-context-budget>")
+}
+
+func setAnthropicBlockCacheControl(block anthropic.ContentBlockParamUnion, cc anthropic.CacheControlEphemeralParam) {
+	switch {
+	case block.OfText != nil:
+		block.OfText.CacheControl = cc
+	case block.OfToolResult != nil:
+		block.OfToolResult.CacheControl = cc
+	case block.OfToolUse != nil:
+		block.OfToolUse.CacheControl = cc
+	case block.OfImage != nil:
+		block.OfImage.CacheControl = cc
+	}
 }
 
 func anthropicToolResultIsError(content string) bool {

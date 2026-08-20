@@ -168,6 +168,45 @@ func (a *App) workspaceMapContext(cfg ConfigState) string {
 	return content
 }
 
+// workspaceMapSnapshotNote prefixes every session-frozen workspace map so the
+// model knows the structure is a point-in-time view, not live state.
+const workspaceMapSnapshotNote = "Snapshot frozen at this session's first request; not updated as files change during the session — use list_files for the current structure.\n\n"
+
+// sessionWorkspaceMap returns the workspace map text for a chat session,
+// frozen at the session's first request. Later runs in the same session reuse
+// the exact same bytes so the request prefix (system prompt + map + history)
+// stays byte-stable and provider prompt caches survive across runs —
+// rebuilding the map after edits (the previous behavior) changed the prefix
+// and killed the entire history cache on every follow-up run. The underlying
+// per-workspace cache still refreshes normally for other consumers; only the
+// prompt-side view is frozen. Requests without a session id fall back to the
+// live map.
+func (a *App) sessionWorkspaceMap(sessionID string, cfg ConfigState) string {
+	if strings.TrimSpace(sessionID) == "" {
+		return a.workspaceMapContext(cfg)
+	}
+	a.mu.Lock()
+	if content, ok := a.sessionWorkspaceMaps[sessionID]; ok {
+		a.mu.Unlock()
+		return content
+	}
+	a.mu.Unlock()
+
+	content := a.workspaceMapContext(cfg)
+	if content == "" {
+		return ""
+	}
+	content = workspaceMapSnapshotNote + content
+
+	a.mu.Lock()
+	if a.sessionWorkspaceMaps == nil {
+		a.sessionWorkspaceMaps = map[string]string{}
+	}
+	a.sessionWorkspaceMaps[sessionID] = content
+	a.mu.Unlock()
+	return content
+}
+
 func (a *App) invalidateWorkspaceMapCache(cfg ConfigState) {
 	root, err := workspaceRoot(cfg)
 	if err != nil {
