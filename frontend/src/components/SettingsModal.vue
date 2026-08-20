@@ -725,6 +725,9 @@ const autostartBusy = ref(false);
 const props = defineProps({
   visible: Boolean,
   configDraft: { type: Object, required: true },
+  // 打开设置时定位到的页面（general/models/advanced/network/skills/mcp/about），
+  // 由调用入口决定：管理模型入口传 models，头部设置入口传 general
+  initialPage: { type: String, default: 'general' },
   // Optional result object reported by the parent after a check-update emit:
   //   { state: 'idle' | 'busy' | 'latest' | 'found' | 'failed', version?: string }
   checkUpdateResult: { type: Object, default: () => ({ state: 'idle' }) },
@@ -1578,6 +1581,7 @@ function onSave() {
 // Sync MCP when modal opens
 watch(() => props.visible, (visible) => {
   if (visible) {
+    page.value = props.initialPage || 'general';
     syncDraftFromProps();
     loadMcpConfig();
     refreshSkillState();

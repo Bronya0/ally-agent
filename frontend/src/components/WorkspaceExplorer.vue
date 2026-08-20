@@ -65,14 +65,14 @@
         </div>
         <div class="workspace-explorer-actions">
           <n-button
-            v-if="isMarkdown && activeFile && !isImageMode && !infoMode"
+            v-if="isMarkdown"
             size="tiny"
             :type="mdPreviewMode ? 'primary' : 'default'"
             ghost
             @click="toggleMdPreview"
           >{{ mdPreviewMode ? $t('app.workspaceExplorer.editSource') : $t('app.workspaceExplorer.preview') }}</n-button>
           <n-button
-            v-if="activeFile && !isImageMode && !mdPreviewMode && !infoMode"
+            v-if="activeFile && isEditable && !mdPreviewMode"
             size="tiny"
             type="primary"
             ghost
@@ -88,11 +88,21 @@
         <img :src="imageDataUrl" :alt="activeFile?.path" class="workspace-explorer-image" />
       </div>
 
+      <!-- HTML preview (read-only, origin-isolated sandboxed iframe) -->
+      <div v-show="isHtmlMode" class="workspace-explorer-html-body">
+        <iframe
+          class="workspace-explorer-html-frame"
+          :srcdoc="htmlContent"
+          sandbox="allow-scripts allow-forms allow-popups allow-modals"
+          :title="activeFile?.path || 'HTML preview'"
+        ></iframe>
+      </div>
+
       <!-- Markdown rendered preview -->
-      <div v-show="isMarkdown && mdPreviewMode && !isImageMode" ref="mdPreviewRef" class="workspace-explorer-md-preview"></div>
+      <div v-show="isMarkdown && mdPreviewMode" ref="mdPreviewRef" class="workspace-explorer-md-preview"></div>
 
       <!-- Ace editor (always in DOM, shown for text files when not in md preview) -->
-      <div v-show="showEditor && !isImageMode && !mdPreviewMode && !infoMode" ref="aceContainerRef" class="workspace-explorer-ace"></div>
+      <div v-show="showEditor && isEditable && !mdPreviewMode" ref="aceContainerRef" class="workspace-explorer-ace"></div>
 
       <!-- 非预览型文件（如 exe 等二进制）：用树节点已有数据展示基本信息 -->
       <div v-if="infoMode" class="workspace-explorer-file-info">
@@ -181,6 +191,7 @@ const aceContainerRef = ref(null);
 const mdPreviewRef = ref(null);
 const treeWidth = ref(Math.max(150, Math.min(600, Number(props.initialWidth) || 270)));
 const imageDataUrl = ref('');
+const htmlContent = ref('');
 const mdPreviewMode = ref(false);
 const contextMenuShow = ref(false);
 const contextMenuX = ref(0);
@@ -189,6 +200,8 @@ const contextMenuNode = ref(null);
 let aceEditor = null;
 let resizeObserver = null;
 let aceResizeObserver = null;
+// splitter 拖拽的 document 监听解绑函数；拖拽结束或组件卸载时执行
+let dragTeardown = null;
 let requestSequence = 0;
 let disposed = false;
 let navigationBusy = false;
@@ -214,11 +227,13 @@ const workspaceLabel = computed(() => {
 });
 const dirty = computed(() => draftContent.value !== originalContent.value);
 const showEditor = computed(() => Boolean(activeFile.value || loadingFile.value || fileError.value));
-const isImageMode = computed(() => Boolean(activeFile.value && imageDataUrl.value));
-const isMarkdown = computed(() => {
-  if (!activeFile.value) return false;
-  const ext = extension(activeFile.value.path);
-  return ext === 'md' || ext === 'markdown';
+const isImageMode = computed(() => activeFile.value?.kind === 'image');
+const isHtmlMode = computed(() => activeFile.value?.kind === 'html');
+const isMarkdown = computed(() => activeFile.value?.kind === 'markdown');
+// 可编辑（text / markdown）；image、html 为只读预览，info 为信息面板
+const isEditable = computed(() => {
+  const kind = activeFile.value?.kind;
+  return kind === 'text' || kind === 'markdown';
 });
 
 const ACE_MODE_MAP = {
@@ -228,26 +243,31 @@ const ACE_MODE_MAP = {
   xml: 'xml', sql: 'sql', c: 'c_cpp', cpp: 'c_cpp', h: 'c_cpp',
   md: 'markdown', markdown: 'markdown', rs: 'rust', rb: 'ruby',
 };
+// 文件打开方式分类（唯一判断来源）。白名单只声明有专用渲染器的格式，
+// 其余全部走默认 text 路径：能否编辑由后端按内容统一判定，不在前端枚举二进制格式。
+//   image    → 只读图片预览
+//   html     → 只读 HTML 预览（沙箱 iframe）
+//   markdown → 文本编辑 + 渲染预览切换
+//   text     → 默认文本编辑；不可编辑时由后端错误码触发回退基本信息面板
 const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'ico']);
-const isImageFile = (path) => IMAGE_EXTS.has(extension(path));
-// 这些类型的文件无法在文本编辑器中查看/编辑，点击时改为展示基本信息（沿用树节点已有数据）
-const BINARY_EXTS = new Set([
-  'exe', 'dll', 'so', 'dylib', 'bin', 'dat', 'db', 'sqlite', 'sqlite3', 'mdb',
-  'zip', 'gz', 'tar', 'tgz', 'bz2', 'xz', '7z', 'rar', 'zst',
-  'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'odt', 'ods', 'odp',
-  'mp3', 'mp4', 'avi', 'mov', 'wmv', 'flv', 'mkv', 'webm', 'm4a', 'wav', 'ogg',
-  'woff', 'woff2', 'ttf', 'otf', 'eot', 'fon',
-  'o', 'a', 'lib', 'obj', 'class', 'jar', 'war', 'pyc', 'pyo', 'wasm',
-  'iso', 'img', 'dmg', 'deb', 'rpm', 'apk', 'msi', 'cab', 'vhd', 'vmdk',
-]);
-const isBinaryFile = (path) => BINARY_EXTS.has(extension(path));
-// 信息面板模式：当前打开的是二进制/不可预览文件，用树节点已有数据展示基本信息
+const HTML_EXTS = new Set(['html', 'htm']);
+const MARKDOWN_EXTS = new Set(['md', 'markdown']);
+
+function classifyFile(path) {
+  const ext = extension(path);
+  if (IMAGE_EXTS.has(ext)) return 'image';
+  if (HTML_EXTS.has(ext)) return 'html';
+  if (MARKDOWN_EXTS.has(ext)) return 'markdown';
+  return 'text';
+}
+
+// 信息面板模式：当前打开的是不可编辑/预览的文件，用树节点已有数据展示基本信息
 const infoMode = computed(() => Boolean(activeFile.value && activeFile.value.info));
 const fileTypeLabel = computed(() => {
   const info = activeFile.value?.info;
   if (!info) return '';
   if (info.dir) return t('app.filePreview.folder');
-  const ext = extension(info.path);
+  const ext = primaryExtension(info.path);
   return ext ? `${ext.toUpperCase()} ${t('app.filePreview.file')}` : t('app.filePreview.file');
 });
 function formatSize(bytes) {
@@ -264,6 +284,14 @@ const extension = (path) => {
   const dot = name.lastIndexOf('.');
   return dot > 0 ? name.slice(dot + 1).toLowerCase() : '';
 };
+// 主扩展名：文件名第一个点后的第一段（libcrypto.so.1.0.2 → so，notes.txt → txt），
+// 供信息面板展示文件类型，天然适配版本化文件名
+function primaryExtension(path) {
+  const name = String(path || '').split(/[\\/]/).pop() || '';
+  const dot = name.indexOf('.');
+  if (dot <= 0) return '';
+  return name.slice(dot + 1).split('.')[0].toLowerCase();
+}
 
 function aceModeForPath(path) {
   return ACE_MODE_MAP[extension(path)] || 'text';
@@ -420,8 +448,14 @@ function renderSwitcherIcon() {
 }
 
 function renderLabel({ option }) {
+  // 「.」开头的隐藏条目（.git、.idea 等）加 is-hidden 类，样式层统一压暗
+  const name = String(option?.label || '');
   return h('span', {
-    class: ['workspace-explorer-node-label', option?.dir ? 'is-directory' : 'is-file'],
+    class: [
+      'workspace-explorer-node-label',
+      option?.dir ? 'is-directory' : 'is-file',
+      name.startsWith('.') ? 'is-hidden' : '',
+    ],
     title: option.path,
   }, option.label);
 }
@@ -458,14 +492,15 @@ const contextMenuOptions = computed(() => {
   if (contextMenuNode.value.dir) {
     return [
       { label: t('app.workspaceExplorer.openFolder'), key: 'openFolder' },
+      { label: t('app.workspaceExplorer.copyRelativePath'), key: 'copyRelativePath' },
+      { label: t('app.workspaceExplorer.copyFullPath'), key: 'copyFullPath' },
       { label: t('common.delete'), key: 'delete' },
     ];
   }
   return [
-    {
-      label: t('common.delete'),
-      key: 'delete',
-    },
+    { label: t('app.workspaceExplorer.copyRelativePath'), key: 'copyRelativePath' },
+    { label: t('app.workspaceExplorer.copyFullPath'), key: 'copyFullPath' },
+    { label: t('common.delete'), key: 'delete' },
   ];
 });
 
@@ -474,6 +509,61 @@ function onContextMenuSelect(key) {
   if (key === 'delete') void confirmDeleteNode(contextMenuNode.value);
   if (key === 'openFolder') void openWorkspaceFolder(contextMenuNode.value);
   if (key === 'newFile') void openNewFileDialog();
+  if (key === 'copyRelativePath') copyNodePath(contextMenuNode.value, false);
+  if (key === 'copyFullPath') copyNodePath(contextMenuNode.value, true);
+}
+
+// 复制节点路径：树节点 path 即工作区内相对路径（后端统一 / 分隔）。
+// 完整路径按工作区根所属平台整体归一化分隔符：
+// Windows 盘符/UNC 根 → 全部 \；POSIX 根（macOS/Linux）→ 全部 /，
+// 避免「D:\...\wiki/文件.md」这类混合分隔符
+function copyNodePath(node, full) {
+  const relative = String(node?.path || '');
+  if (!relative) return;
+  const root = String(props.workspace || '').replace(/[\\/]+$/, '');
+  const text = full && root ? joinFullPath(root, relative) : relative;
+  copyTextToClipboard(text, () => message.success(t('app.copy.done')));
+}
+
+// 工作区根为 Windows 盘符（D:\ 或 D:/）或 UNC（\\server\share）时视为 Windows 风格
+function isWindowsStyleRoot(root) {
+  return /^[A-Za-z]:[\\/]/.test(root) || root.startsWith('\\\\');
+}
+
+function joinFullPath(root, relative) {
+  if (isWindowsStyleRoot(root)) {
+    // Windows：根与相对路径统一转为原生 \（后端相对路径固定 / 分隔，转换安全）
+    return root.replace(/\//g, '\\') + '\\' + relative.replace(/\//g, '\\');
+  }
+  // macOS/Linux：仅用 / 拼接；根中的字面 \（Linux 合法文件名字符）不被动
+  return root + '/' + relative;
+}
+
+// 优先 navigator.clipboard，失败时回退 execCommand（与 App.vue 的复制逻辑一致）
+function copyTextToClipboard(text, onDone) {
+  if (navigator.clipboard?.writeText) {
+    navigator.clipboard.writeText(text).then(onDone).catch(() => {
+      fallbackCopyText(text, onDone);
+    });
+  } else {
+    fallbackCopyText(text, onDone);
+  }
+}
+
+function fallbackCopyText(text, onDone) {
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    onDone();
+  } catch {
+    message.error(t('app.copy.failed'));
+  }
 }
 
 // 在树空白区域右键「新建文本文件」：弹框输入带扩展名的完整文件名，
@@ -579,38 +669,47 @@ async function onSelect(keys, options) {
   }
 }
 
+// 统一打开流程：classifyFile 决定打开方式，后端按内容判定可编辑性。
+// 任何 kind 读取时命中不可编辑错误码（二进制/非 UTF-8/超限）都回退基本信息面板，
+// 保证任何文件点击都有响应，前端无需感知具体文件格式
 async function openFile(node) {
   if (!node?.path || node.path === activeFile.value?.path) return true;
   const proceed = await confirmPendingChange();
   if (!proceed) return false;
   const requestID = ++requestSequence;
+  const kind = classifyFile(node.path);
   fileError.value = '';
   imageDataUrl.value = '';
+  htmlContent.value = '';
   mdPreviewMode.value = false;
+  // 清掉上一个文件的 Markdown 渲染残留，避免旧预览 DOM 驻留到下次预览
+  if (mdPreviewRef.value) mdPreviewRef.value.innerHTML = '';
   loadingFile.value = true;
   try {
-    if (isImageFile(node.path)) {
+    if (kind === 'image') {
       const result = await ReadWorkspaceImage(node.path);
       if (disposed || requestID !== requestSequence) return false;
       imageDataUrl.value = String(result?.data || '');
-      activeFile.value = { path: node.path, image: true };
+      activeFile.value = { path: node.path, kind };
       draftContent.value = '';
       originalContent.value = '';
       loadingFile.value = false;
       return true;
     }
-    if (isBinaryFile(node.path)) {
-      // 二进制/不可预览文件：不读取内容，直接用树节点已有数据展示基本信息
-      activeFile.value = { path: node.path, info: node };
-      draftContent.value = '';
-      originalContent.value = '';
-      loadingFile.value = false;
-      return true;
-    }
+    // html / markdown / text 均以文本读取，仅展示方式不同
     const result = await ReadWorkspaceFile(node.path);
     if (disposed || requestID !== requestSequence) return false;
+    if (kind === 'html') {
+      // HTML：内容送入沙箱 iframe 只读渲染，不进编辑器
+      htmlContent.value = String(result?.content || '');
+      activeFile.value = { path: node.path, kind };
+      draftContent.value = '';
+      originalContent.value = '';
+      loadingFile.value = false;
+      return true;
+    }
     const content = String(result?.content || '');
-    activeFile.value = { path: node.path };
+    activeFile.value = { path: node.path, kind };
     draftContent.value = content;
     originalContent.value = content;
     originalHash.value = result.sha256 || '';
@@ -622,11 +721,25 @@ async function openFile(node) {
     return true;
   } catch (err) {
     if (!disposed && requestID === requestSequence) {
+      if (isUnviewableFileError(err)) {
+        activeFile.value = { path: node.path, info: node };
+        draftContent.value = '';
+        originalContent.value = '';
+        loadingFile.value = false;
+        return true;
+      }
       fileError.value = t('app.filePreview.failed', { error: errorText(err) });
       loadingFile.value = false;
     }
     return false;
   }
+}
+
+// 后端判定无法作为文本编辑/预览的错误码（message 形如「[E_BINARY_FILE] ...」）
+const UNVIEWABLE_FILE_CODES = ['E_BINARY_FILE', 'E_NOT_UTF8', 'E_FILE_TOO_LARGE'];
+function isUnviewableFileError(err) {
+  const text = String(err?.message || err || '');
+  return UNVIEWABLE_FILE_CODES.some((code) => text.includes(code));
 }
 
 function onAceInput() {
@@ -666,9 +779,16 @@ function startDrag(e) {
     document.removeEventListener('mouseup', onUp);
     if (raf) cancelAnimationFrame(raf);
     applyWidth();
+    dragTeardown = null;
   };
   document.addEventListener('mousemove', onMove);
   document.addEventListener('mouseup', onUp);
+  // 拖拽期间组件被卸载时，mouseup 不再触发；记录解绑函数供 onBeforeUnmount 兜底
+  dragTeardown = () => {
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onUp);
+    if (raf) cancelAnimationFrame(raf);
+  };
 }
 
 async function saveFile() {
@@ -739,6 +859,7 @@ function clearEditor() {
   version.value = '';
   fileError.value = '';
   imageDataUrl.value = '';
+  htmlContent.value = '';
   mdPreviewMode.value = false;
   if (aceEditor) aceEditor.setValue('', -1);
   if (mdPreviewRef.value) mdPreviewRef.value.innerHTML = '';
@@ -775,6 +896,8 @@ function onGlobalKeydown(event) {
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onGlobalKeydown, true);
+  dragTeardown?.();
+  dragTeardown = null;
   disposed = true;
   requestSequence += 1;
   resizeObserver?.disconnect();

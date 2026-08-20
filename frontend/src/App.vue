@@ -28,7 +28,7 @@ Public License v3. See the LICENSE file for details.
               @history-select="onHistorySelect"
               @open-repository="openRepositoryPage"
               @start-update="startUpdate"
-              @open-settings="configVisible = true"
+              @open-settings="openSettings('general')"
               @open-token-stats="tokenStatsVisible = true"
               @minimise="minimiseWindow"
               @toggle-maximise="toggleMaximiseWindow"
@@ -237,7 +237,7 @@ Public License v3. See the LICENSE file for details.
                   @add-extra-root="addExtraRoot"
                   @remove-extra-root="removeExtraRoot"
                   @switch-model="switchToModel"
-                  @open-config="configVisible = true"
+                  @open-config="openSettings('models')"
                   @open-git-diff="openGitDiff"
                   @open-workspace="openWorkspaceInFileManager"
                   @change-reasoning-effort="changeReasoningEffort"
@@ -256,6 +256,7 @@ Public License v3. See the LICENSE file for details.
           </n-layout>
           <SettingsModal
             :visible="configVisible"
+            :initial-page="settingsPage"
             :config-draft="configDraft"
             :check-update-result="checkUpdateResult"
             @close="configVisible = false"
@@ -1370,6 +1371,11 @@ const activeWorkspaceId = ref('');
 const extraRoots = ref([]);
 const workspaceHistory = ref(loadWorkspaceHistory());
 const settingsPage = ref('general');
+// 打开设置弹窗并定位到指定页：设置齿轮进 general，管理模型等入口进 models
+function openSettings(page = 'general') {
+  settingsPage.value = page;
+  configVisible.value = true;
+}
 const showSkillsPanel = ref(false);
 const todos = ref([]);
 const todosBySession = reactive({});
@@ -2649,6 +2655,7 @@ async function closeWorkspaceTab(id) {
   workspaceExplorerByTab.delete(id);
   explorerWorkspaceByTab.delete(id);
   explorerRefsByTab.delete(id);
+  explorerTreeWidthByTab.delete(id);
   const tab = workspaceTabs.value[idx];
   workspaceTabs.value.splice(idx, 1);
   conversationMessagesRefs.delete(id);
@@ -4608,8 +4615,7 @@ async function sendPrompt() {
   }
   const hasApiKey = !!(config.apiKey || (Array.isArray(config.apiKeys) && config.apiKeys.length));
   if (!hasApiKey) {
-    settingsPage.value = 'models';
-    configVisible.value = true;
+    openSettings('models');
     message.warning(t('app.config.apiKeyRequired'));
     return;
   }
