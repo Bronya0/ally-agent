@@ -4092,6 +4092,14 @@ async function addPendingAttachmentFiles(files) {
       break;
     }
     const att = await fileToAttachment(file);
+    // 只有“能真正发给模型”的附件才有意义：图片有 dataUrl，文本有 text。
+    // 视频/音频/其他二进制 WebView2 拿不到真实路径，发出去也只有一个名字，
+    // 会造成“以为带过去了其实没带”的误会，直接拒绝并提示。
+    if (!att.dataUrl && !att.text) {
+      message.warning(t('app.attachment.unsupported'));
+      releaseAttachmentPreview(att);
+      continue;
+    }
     arr.push(att);
   }
 }
