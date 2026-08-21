@@ -41,6 +41,15 @@ Public License v3. See the LICENSE file for details.
               </template>
             </div>
             <RenderBoundary :label="$t('chat.attachment')"><MessageAttachments :attachments="msg.attachments || []" /></RenderBoundary>
+            <button
+              class="user-delete-btn"
+              type="button"
+              :title="$t('chat.userMessage.delete')"
+              :aria-label="$t('chat.userMessage.delete')"
+              @click.stop="$emit('deleteUserMessage', msg)"
+            >
+              <CloseOutlined />
+            </button>
           </div>
         </div>
         <div v-else-if="msg.role !== 'tool_call' && msg.kind !== 'subagent'" v-memo="messageRenderMemo(msg)" :class="['message', msg.role, { error: msg.error, system: msg.system }]">
@@ -148,6 +157,7 @@ import MessageOutlined from '@vicons/antd/MessageOutlined';
 import ShareAltOutlined from '@vicons/antd/ShareAltOutlined';
 import ArrowUpOutlined from '@vicons/antd/ArrowUpOutlined';
 import ArrowDownOutlined from '@vicons/antd/ArrowDownOutlined';
+import CloseOutlined from '@vicons/antd/CloseOutlined';
 
 defineProps({
   messages: { type: Array, required: true },
@@ -270,6 +280,7 @@ defineEmits([
   'exportAllMsgs',
   'plainSpeak',
   'submitAsk',
+  'deleteUserMessage',
 ]);
 
 function fmtTokens(n) {
@@ -561,6 +572,43 @@ defineExpose({ scrollbarRef, scrollToBottom, scrollToUserQuestion, scrollToBotto
   line-height: 1.7;
   text-align: center;
   opacity: 0.85;
+}
+
+/* Delete button on user questions: hidden until the row is hovered. */
+.user-delete-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 22px;
+  height: 22px;
+  margin: 2px 0 0 6px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: #8a8a8a;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease, color 0.12s ease, background 0.12s ease;
+  --wails-draggable: no-drag;
+}
+
+.message.user:hover .user-delete-btn,
+.user-delete-btn:focus-visible {
+  opacity: 1;
+}
+
+.user-delete-btn:hover {
+  color: #ff6b6b;
+  background: rgba(255, 107, 107, 0.12);
+}
+
+.user-delete-btn svg {
+  width: 13px;
+  height: 13px;
 }
 
 .thinking-badge {

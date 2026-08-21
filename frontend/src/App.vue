@@ -68,6 +68,7 @@ Public License v3. See the LICENSE file for details.
                       @plain-speak="() => sendPlainSpeak(tab.sessionId)"
                       @submit-ask="(msg, answers) => submitAskResponse(tab.sessionId, msg, answers)"
                       @send-suggest="(label) => sendSuggest(tab.sessionId, label)"
+                      @delete-user-message="(msg) => handleDeleteUserMessage(tab.sessionId, msg)"
                     />
                     <WorkspaceExplorer
                       v-if="explorerVisibleFor(tab.id)"
@@ -406,6 +407,7 @@ import {
   StopService,
   DeleteSession,
   ReleaseSession,
+  TruncateSessionHistory,
   SubmitAskResponse,
   SearchWorkspacePaths,
   DownloadUpdate,
@@ -525,7 +527,7 @@ const themeOverrides = {
   },
 };
 
-const { message } = createDiscreteApi(['message'], {
+const { message, dialog } = createDiscreteApi(['message', 'dialog'], {
   configProviderProps: {
     theme: darkTheme,
     themeOverrides,
@@ -2888,6 +2890,68 @@ function addWelcome(workspacePath = config.workspace || '') {
   if (!session) return;
   if (workspacePath) session.workspace = workspacePath;
   session.messages.push(buildWelcomeMessage(workspacePath || t('common.notSelected')));
+}
+
+// 用户主动纠错：鼠标 hover 到某条用户提问，点击 ✕ 删除该提问及之后的所有
+// 对话（前端 UI 快照 + 后端模型上下文历史），并重算上下文 token 统计。
+async function handleDeleteUserMessage(sessionId, msg) {
+  const session = sessions.value.find((item) => item.id === sessionId);
+  if (!session || !msg) return;
+  if (session.runId || session.isRunning) {
+    message.warning(t('app.sessions.runningDeleteBlocked'));
+    return;
+  }
+  const baseIdx = session.messages ? session.messages.indexOf(msg) : -1;
+  if (baseIdx < 0) return;
+
+  // 该提问是第几条 user 消息（0-based），后端用它定位历史里的同一条。
+  let userIndex = -1;
+  for (let i = 0; i <= baseIdx; i++) {
+    if (session.messages[i]?.role === 'user') userIndex += 1;
+  }
+  const userText = String(msg?.skill ? (msg.skill.args || '') : (msg?.content || '')).trim();
+
+  dialog.warning({
+    title: t('chat.userMessage.deleteConfirmTitle'),
+    content: t('chat.userMessage.deleteConfirmContent'),
+    positiveText: t('common.delete'),
+    negativeText: t('common.cancel'),
+    onPositiveClick: async () => {
+      try {
+        // 1. 截断底层消息数组（含该条及之后所有）
+        session.messages.splice(baseIdx);
+        session.updatedAt = Date.now();
+        session.messageCount = session.messages.filter(
+          (m) => m?.role === 'user' || m?.role === 'assistant'
+        ).length;
+        displayMessagesCacheBySession.delete(sessionId);
+
+        // 2. 持久化 UI 快照（截断后的消息）
+        await persistCompletedSession(session);
+
+        // 3. 同步截断后端模型上下文历史（内存 + 磁盘），并重算 breakdown
+        try {
+          await TruncateSessionHistory({
+            sessionId,
+            userMessageIndex: Math.max(0, userIndex),
+            expectedContent: userText,
+          });
+        } catch (err) {
+          // UI 已删，后端未同步；提示用户，避免静默不一致。
+          message.error(t('chat.userMessage.deleteBackendFailed', { error: String(err?.message || err || '') }));
+        }
+
+        // 4. 重算上下文 token 统计并刷新页脚
+        await refreshFooterStats({
+          sessionId,
+          workspace: session.workspace || config.workspace || '',
+        });
+        scrollMessagesToBottom({ force: true });
+      } catch (err) {
+        message.error(t('chat.userMessage.deleteFailed', { error: String(err?.message || err || '') }));
+      }
+    },
+  });
 }
 
 async function init() {
