@@ -41,16 +41,16 @@ Public License v3. See the LICENSE file for details.
               </template>
             </div>
             <RenderBoundary :label="$t('chat.attachment')"><MessageAttachments :attachments="msg.attachments || []" /></RenderBoundary>
-            <button
-              class="user-delete-btn"
-              type="button"
-              :title="$t('chat.userMessage.delete')"
-              :aria-label="$t('chat.userMessage.delete')"
-              @click.stop="$emit('deleteUserMessage', msg)"
-            >
-              <CloseOutlined />
-            </button>
           </div>
+          <button
+            class="user-delete-btn"
+            type="button"
+            :title="$t('chat.userMessage.delete')"
+            :aria-label="$t('chat.userMessage.delete')"
+            @click.stop="$emit('deleteUserMessage', msg)"
+          >
+            <CloseOutlined />
+          </button>
         </div>
         <div v-else-if="msg.role !== 'tool_call' && msg.kind !== 'subagent'" v-memo="messageRenderMemo(msg)" :class="['message', msg.role, { error: msg.error, system: msg.system }]">
           <div
@@ -574,15 +574,19 @@ defineExpose({ scrollbarRef, scrollToBottom, scrollToUserQuestion, scrollToBotto
   opacity: 0.85;
 }
 
-/* Delete button on user questions: hidden until the row is hovered. */
+/* Delete button on user questions: absolutely pinned to the row's top-right,
+   never participates in document flow (so it can never wrap to a second row),
+   and hidden until the row is hovered. */
 .user-delete-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  flex: none;
   width: 22px;
   height: 22px;
-  margin: 2px 0 0 6px;
+  margin: 0;
   padding: 0;
   border: none;
   border-radius: 4px;
@@ -594,6 +598,7 @@ defineExpose({ scrollbarRef, scrollToBottom, scrollToUserQuestion, scrollToBotto
   opacity: 0;
   transition: opacity 0.12s ease, color 0.12s ease, background 0.12s ease;
   --wails-draggable: no-drag;
+  z-index: 2;
 }
 
 .message.user:hover .user-delete-btn,
@@ -607,6 +612,7 @@ defineExpose({ scrollbarRef, scrollToBottom, scrollToUserQuestion, scrollToBotto
 }
 
 .user-delete-btn svg {
+  display: block;
   width: 13px;
   height: 13px;
 }
