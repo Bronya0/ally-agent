@@ -65,6 +65,7 @@ Public License v3. See the LICENSE file for details.
                       @clear-focus="clearFocus(tab.sessionId)"
                       @export-one-msg="exportOneMessage"
                       @export-all-msgs="exportAllMessages(tab.sessionId)"
+                      @plain-speak="() => sendPlainSpeak(tab.sessionId)"
                       @submit-ask="(msg, answers) => submitAskResponse(tab.sessionId, msg, answers)"
                       @send-suggest="(label) => sendSuggest(tab.sessionId, label)"
                     />
@@ -4157,7 +4158,21 @@ async function fileToAttachment(file) {
     text: '',
     truncated: false,
     error: '',
+    filePath: '',
   };
+
+  // 浏览器 File API 出于安全限制不暴露文件的真实绝对路径。
+  // Wails 的 <input type="file"> 同样不提供 path 属性。
+  // 这里记录工作区根 + 文件名作为提示路径，帮助模型用 read 工具定位文件。
+  // file.path 在 Electron 中存在，WebView2 中为 undefined，这里取值无副作用。
+  const rawPath = String(file.path || '').trim();
+  if (rawPath) {
+    base.filePath = rawPath;
+  } else if (config.workspace) {
+    base.filePath = `${String(config.workspace).replace(/[\\/]+$/, '')}/${file.name}`;
+  } else {
+    base.filePath = file.name;
+  }
 
   try {
     if (kind === 'image' && file.size <= MAX_ATTACHMENT_PREVIEW_BYTES) {
@@ -4364,6 +4379,7 @@ function attachmentsForModel(attachments) {
     text: att.text || '',
     truncated: !!att.truncated,
     error: att.error || '',
+    filePath: att.filePath || '',
   }));
 }
 
@@ -4545,6 +4561,11 @@ async function sendSuggest(sessionId, label) {
   promptText.value = label;
   await nextTick();
   await sendPrompt();
+}
+
+// "说人话" 按钮：发送一条国际化提示，让 AI 用通俗语言重新回答
+async function sendPlainSpeak(sessionId) {
+  await sendSuggest(sessionId, t('chat.plainSpeak.message'));
 }
 
 async function sendPrompt() {
@@ -7479,9 +7500,9 @@ function handleOverlayOutsidePointerDown(event) {
 }
 
 function handleGlobalKeydown(event) {
-  // 文件树打开时，ESC 交由 WorkspaceExplorer 自身处理（关闭文件树），
-  // 不触发停止运行等全局逻辑。
-  if (event.key === 'Escape' && explorerVisibleFor(activeWorkspaceId)) return;
+  // 资源树打开时：编辑器（预览面板）打开中则由 WorkspaceExplorer 内部
+  // 处理 ESC（关闭编辑器）；编辑器未打开时 ESC 继续冒泡中断运行等全局逻辑。
+  // 不再用 ESC 关闭资源树本身——避免中断对话后资源树被误关。
   if (event.key === 'Escape' && deactivateMermaidInteraction()) {
     event.preventDefault();
     event.stopPropagation();

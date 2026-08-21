@@ -8,6 +8,8 @@
 package app
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -2133,6 +2135,48 @@ func TestRunReadCacheEvictsEntriesUnderPressure(t *testing.T) {
 	})
 	if got := len(cache.entries); got > runReadCacheMaxEntries {
 		t.Fatalf("cache entries after re-store = %d, want <= %d", got, runReadCacheMaxEntries)
+	}
+}
+
+func TestBatchReadDedupsDocumentReadsWithDifferentLineRanges(t *testing.T) {
+	dir := t.TempDir()
+	// Minimal .docx: a zip with word/document.xml. Document reads ignore
+	// startLine/endLine entirely, so the same doc requested with different
+	// ranges must collapse to one read instead of extracting the full text N
+	// times (the 2202-line docx read three times in one batch).
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	w, err := zw.Create("word/document.xml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write([]byte("<w:document><w:body><w:p><w:r><w:t>doc line</w:t></w:r></w:p></w:body></w:document>")); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "spec.docx"), buf.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	app := NewApp()
+	cfg := ConfigState{Workspace: dir}
+
+	result, err := app.batchReadFilesWithConfig(cfg, BatchReadRequest{
+		Files: []BatchReadFileRequest{
+			{Path: "spec.docx"},
+			{Path: "spec.docx", StartLine: 1},
+			{Path: "spec.docx", StartLine: 1, EndLine: 2202},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Files) != 1 {
+		t.Fatalf("expected identical document reads to dedup to 1 result, got %d: %#v", len(result.Files), result.Files)
+	}
+	if result.Files[0].Kind != "document" || !strings.Contains(result.Files[0].Content, "doc line") {
+		t.Fatalf("expected document extraction result, got %#v", result.Files[0])
 	}
 }
 

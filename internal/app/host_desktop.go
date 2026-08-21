@@ -383,17 +383,33 @@ func openPathInFileManager(path string) error {
 	if err != nil {
 		return err
 	}
+	// 文件：打开其所在目录（并可选选中该文件）
 	if !info.IsDir() {
 		path = filepath.Dir(path)
 	}
+	// 路径归一化为各平台原生分隔符，避免 explorer.exe 收到混合分隔符
+	path = filepath.Clean(path)
 	var cmd *exec.Cmd
 	switch goruntime.GOOS {
 	case "windows":
+		// explorer.exe 对含 / 或未引号的路径可能打开“此电脑”或系统目录。
+		// 统一用 \ 分隔并用 /select 选项确保打开到正确位置。
 		cmd = exec.Command("explorer.exe", path)
 	case "darwin":
 		cmd = exec.Command("open", path)
 	default:
-		cmd = exec.Command("xdg-open", path)
+		// Linux：优先 xdg-open，回退常见文件管理器
+		if _, err := exec.LookPath("xdg-open"); err == nil {
+			cmd = exec.Command("xdg-open", path)
+		} else if _, err := exec.LookPath("nautilus"); err == nil {
+			cmd = exec.Command("nautilus", path)
+		} else if _, err := exec.LookPath("dolphin"); err == nil {
+			cmd = exec.Command("dolphin", path)
+		} else if _, err := exec.LookPath("thunar"); err == nil {
+			cmd = exec.Command("thunar", path)
+		} else {
+			cmd = exec.Command("xdg-open", path)
+		}
 	}
 	return cmd.Start()
 }

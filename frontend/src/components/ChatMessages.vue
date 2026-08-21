@@ -73,6 +73,10 @@ Public License v3. See the LICENSE file for details.
               class="run-tokens"
               :title="`input ${msg.runInputTokens} / output ${msg.runOutputTokens} tokens (this run)`"
             >↑{{ fmtTokens(msg.runInputTokens) }} ↓{{ fmtTokens(msg.runOutputTokens) }}</span>
+            <button class="export-icon-btn" @click.stop="$emit('plainSpeak')" :title="$t('chat.plainSpeak.title')" :aria-label="$t('chat.plainSpeak.title')"
+            >
+              <MessageOutlined />
+            </button>
             <button class="export-icon-btn" @click.stop="$emit('exportOneMsg', msg)" :title="$t('chat.export.responseTitle')" aria-label="export response">
               <ExportOutlined />
             </button>
@@ -140,6 +144,7 @@ import SubagentInlineCard from './SubagentInlineCard.vue';
 import HtmlRenderCard from './HtmlRenderCard.vue';
 import RenderBoundary from './RenderBoundary.vue';
 import ExportOutlined from '@vicons/antd/ExportOutlined';
+import MessageOutlined from '@vicons/antd/MessageOutlined';
 import ShareAltOutlined from '@vicons/antd/ShareAltOutlined';
 import ArrowUpOutlined from '@vicons/antd/ArrowUpOutlined';
 import ArrowDownOutlined from '@vicons/antd/ArrowDownOutlined';
@@ -263,6 +268,7 @@ defineEmits([
   'clearFocus',
   'exportOneMsg',
   'exportAllMsgs',
+  'plainSpeak',
   'submitAsk',
 ]);
 

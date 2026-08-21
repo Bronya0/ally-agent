@@ -20,13 +20,14 @@
             class="workspace-explorer-syntax-error"
             :title="syntaxErrorText"
           >{{ syntaxErrorText }}</span>
-          <n-button
-            v-if="isMarkdown"
-            size="tiny"
-            :type="mdPreviewMode ? 'primary' : 'default'"
-            ghost
-            @click="toggleMdPreview"
-          >{{ mdPreviewMode ? $t('app.workspaceExplorer.editSource') : $t('app.workspaceExplorer.preview') }}</n-button>
+          <div
+            v-if="isMarkdown || isHtmlMode"
+            class="workspace-explorer-preview-toggle"
+            :title="mdPreviewMode ? $t('app.workspaceExplorer.editSource') : $t('app.workspaceExplorer.preview')"
+          >
+            <span class="workspace-explorer-preview-toggle-label">{{ mdPreviewMode ? $t('app.workspaceExplorer.preview') : $t('app.workspaceExplorer.editSource') }}</span>
+            <n-switch size="small" :value="mdPreviewMode" @update:value="togglePreviewMode" />
+          </div>
           <n-button
             v-if="activeFile && isEditable && !mdPreviewMode"
             size="tiny"
@@ -44,8 +45,8 @@
         <img :src="imageDataUrl" :alt="activeFile?.path" class="workspace-explorer-image" />
       </div>
 
-      <!-- HTML preview (read-only, origin-isolated sandboxed iframe) -->
-      <div v-show="isHtmlMode" class="workspace-explorer-html-body">
+      <!-- HTML preview (origin-isolated sandboxed iframe; switch OFF to edit source) -->
+      <div v-show="isHtmlMode && mdPreviewMode" class="workspace-explorer-html-body">
         <iframe
           class="workspace-explorer-html-frame"
           :srcdoc="htmlContent"
@@ -140,7 +141,7 @@
 
 <script setup>
 import { computed, h, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { NIcon, NInput, useDialog, useMessage } from 'naive-ui';
+import { NIcon, NInput, NSwitch, useDialog, useMessage } from 'naive-ui';
 import ace from 'ace-builds';
 import 'ace-builds/src-noconflict/ext-language_tools';
 import 'ace-builds/src-noconflict/ext-searchbox';
@@ -164,7 +165,7 @@ import 'ace-builds/src-noconflict/mode-rust';
 import 'ace-builds/src-noconflict/mode-ruby';
 import MarkdownIt from 'markdown-it';
 import { isEditableNavigationTarget } from '../utils/sessionState.mjs';
-import { ListFiles, ReadWorkspaceFile, ReadWorkspaceImage, SaveWorkspaceFile, DeletePath, OpenWorkspacePathInFileManager, CreateFile, CreateDirectory } from '../../bindings/ally-dev/internal/app/app';
+import { ListFiles, ReadWorkspaceFile, ReadWorkspaceImage, SaveWorkspaceFile, DeletePath, OpenWorkspacePathInFileManager, CreateFile, CreateDirectory, MovePath } from '../../bindings/ally-dev/internal/app/app';
 import CloseOutlined from '@vicons/antd/CloseOutlined';
 import ReloadOutlined from '@vicons/antd/ReloadOutlined';
 import { RightOutlined } from '@vicons/antd';
@@ -237,10 +238,11 @@ const showEditor = computed(() => Boolean(activeFile.value || loadingFile.value 
 const isImageMode = computed(() => activeFile.value?.kind === 'image');
 const isHtmlMode = computed(() => activeFile.value?.kind === 'html');
 const isMarkdown = computed(() => activeFile.value?.kind === 'markdown');
-// 可编辑（text / markdown）；image、html 为只读预览，info 为信息面板
+// 可编辑（text / markdown / html）：html 与 markdown 一样支持编辑↔预览切换；
+// image 为只读预览，info 为信息面板
 const isEditable = computed(() => {
   const kind = activeFile.value?.kind;
-  return kind === 'text' || kind === 'markdown';
+  return kind === 'text' || kind === 'markdown' || kind === 'html';
 });
 
 const ACE_MODE_MAP = {
@@ -486,10 +488,15 @@ function renderMarkdownPreview() {
   mdPreviewRef.value.innerHTML = mdRenderer.render(content);
 }
 
-function toggleMdPreview() {
-  mdPreviewMode.value = !mdPreviewMode.value;
+function togglePreviewMode(value) {
+  mdPreviewMode.value = Boolean(value);
   if (mdPreviewMode.value) {
-    renderMarkdownPreview();
+    // HTML 预览渲染当前草稿内容；Markdown 走渲染器（onAceInput 中会增量刷新）
+    if (activeFile.value?.kind === 'html') {
+      htmlContent.value = draftContent.value || '';
+    } else {
+      renderMarkdownPreview();
+    }
   } else {
     nextTick(() => { aceEditor?.resize(); });
   }
@@ -574,6 +581,28 @@ async function refreshTree() {
   }
 }
 
+// 刷新指定目录的子节点：dirPath 为空时刷新根节点，否则查找该目录节点并重新加载其子节点。
+// 用于新建文件/文件夹后将新节点插入树中。
+async function refreshNode(dirPath = '') {
+  if (!dirPath) {
+    const nextTree = await listDirectory('');
+    treeData.value = nextTree;
+    return;
+  }
+  const node = findNodeByPath(dirPath);
+  if (!node) return;
+  if (!expandedKeys.value.includes(node.key)) {
+    expandedKeys.value = [...expandedKeys.value, node.key];
+  }
+  try {
+    const children = await listDirectory(node.path);
+    node.children = children;
+    node.childrenLoaded = true;
+  } catch (err) {
+    message.error(t('app.workspaceExplorer.treeFailed', { error: errorText(err) }));
+  }
+}
+
 // 目录（非叶子节点）的展开/折叠箭头：RightOutlined 来自已依赖的 @vicons/antd，
 // Naive UI 会在展开时自动将其旋转 90°
 function renderSwitcherIcon() {
@@ -595,6 +624,8 @@ function renderLabel({ option }) {
 
 function nodeProps({ option }) {
   return {
+    // 将 key 写入 DOM 属性，供拖拽时通过 elementFromPoint 查找目标节点
+    dataset: { key: option.key },
     onContextmenu(e) {
       e.preventDefault();
       // 阻止冒泡到树容器的空白区域菜单
@@ -604,7 +635,155 @@ function nodeProps({ option }) {
       contextMenuY.value = e.clientY;
       contextMenuShow.value = true;
     },
+    // 拖拽移动文件到目录：仅文件可拖，仅目录可放。
+    // WebView2/Wails 不支持 HTML5 Drag-and-Drop，用 Pointer Events 实现。
+    onPointerdown(e) {
+      if (option.dir) return; // 暂不实现拖拽目录
+      startFileDrag(e, option);
+    },
   };
+}
+
+// ── 拖拽移动文件到目录 ──
+// WebView2/Wails 不支持 HTML5 Drag-and-Drop，统一用 Pointer Events 实现。
+// 阈值判定（4px）后才进入拖拽，避免点击选择文件被误判为拖拽。
+let dragState = null;
+let dragGhost = null;
+
+function startFileDrag(e, node) {
+  if (e.button !== 0) return; // 仅左键
+  const startX = e.clientX;
+  const startY = e.clientY;
+  const pointerId = e.pointerId;
+  const ownerEl = e.currentTarget;
+  dragState = { node, startX, startY, pointerId, started: false, dropTarget: null };
+  try { ownerEl.setPointerCapture(pointerId); } catch (_) {}
+
+  const onMove = (ev) => {
+    if (!dragState) return;
+    if (ev.pointerId !== pointerId) return;
+    ev.preventDefault();
+    if (!dragState.started) {
+      const dx = ev.clientX - startX;
+      const dy = ev.clientY - startY;
+      if (Math.hypot(dx, dy) < 4) return;
+      dragState.started = true;
+      createDragGhost(node);
+      document.body.style.cursor = 'grabbing';
+    }
+    if (dragGhost) {
+      dragGhost.style.left = (ev.clientX + 8) + 'px';
+      dragGhost.style.top = (ev.clientY + 8) + 'px';
+    }
+    highlightDropTarget(ev);
+  };
+
+  const onUp = (ev) => {
+    document.removeEventListener('pointermove', onMove);
+    document.removeEventListener('pointerup', onUp);
+    document.removeEventListener('pointercancel', onUp);
+    try { ownerEl.releasePointerCapture(pointerId); } catch (_) {}
+    document.body.style.cursor = '';
+    if (dragState?.started) {
+      const targetNode = findDropTargetAt(ev.clientX, ev.clientY);
+      removeDragGhost();
+      clearDropHighlight();
+      if (targetNode && targetNode.path !== node.path && !isAncestorOf(targetNode, node)) {
+        void moveFileToDir(node, targetNode);
+      }
+    }
+    dragState = null;
+  };
+
+  document.addEventListener('pointermove', onMove);
+  document.addEventListener('pointerup', onUp);
+  document.addEventListener('pointercancel', onUp);
+}
+
+function createDragGhost(node) {
+  dragGhost = document.createElement('div');
+  dragGhost.className = 'workspace-explorer-drag-ghost';
+  dragGhost.textContent = node.label;
+  dragGhost.style.cssText = 'position:fixed;pointer-events:none;z-index:99999;' +
+    'background:rgba(78,161,255,0.92);color:#fff;padding:3px 8px;border-radius:4px;' +
+    'font-size:12px;max-width:240px;overflow:hidden;text-overflow:ellipsis;' +
+    'white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,0.4);transform:translateZ(0);will-change:transform;';
+  document.body.appendChild(dragGhost);
+}
+
+function removeDragGhost() {
+  if (dragGhost) { dragGhost.remove(); dragGhost = null; }
+}
+
+function findDropTargetAt(x, y) {
+  const el = document.elementFromPoint(x, y);
+  if (!el) return null;
+  const nodeEl = el.closest('.n-tree-node');
+  if (!nodeEl) return null;
+  const key = nodeEl.getAttribute('data-key');
+  if (!key) return null;
+  return findNodeByKey(key);
+}
+
+function findNodeByKey(key, nodes = treeData.value) {
+  for (const node of nodes) {
+    if (node.key === key) return node;
+    if (node.children?.length) {
+      const hit = findNodeByKey(key, node.children);
+      if (hit) return hit;
+    }
+  }
+  return null;
+}
+
+function isAncestorOf(ancestor, node) {
+  const parentPath = String(ancestor?.path || '').replace(/\/+$/, '');
+  const nodePath = String(node?.path || '');
+  if (!parentPath || !nodePath) return false;
+  return nodePath.startsWith(parentPath + '/') || nodePath === parentPath;
+}
+
+function highlightDropTarget(ev) {
+  clearDropHighlight();
+  const target = findDropTargetAt(ev.clientX, ev.clientY);
+  if (target && target.dir && !isAncestorOf(target, dragState.node)) {
+    dragState.dropTarget = target;
+    const el = findNodeElByKey(target.key);
+    if (el) el.classList.add('workspace-explorer-drop-target');
+  }
+}
+
+function clearDropHighlight() {
+  if (dragState?.dropTarget) {
+    const el = findNodeElByKey(dragState.dropTarget.key);
+    if (el) el.classList.remove('workspace-explorer-drop-target');
+    dragState.dropTarget = null;
+  }
+  document.querySelectorAll('.workspace-explorer-drop-target').forEach((el) => {
+    el.classList.remove('workspace-explorer-drop-target');
+  });
+}
+
+function findNodeElByKey(key) {
+  if (!key) return null;
+  return document.querySelector(`.n-tree-node[data-key="${CSS.escape(key)}"]`);
+}
+
+async function moveFileToDir(fileNode, dirNode) {
+  const fileName = String(fileNode.label || '').split(/[\\/]/).pop();
+  const destPath = `${String(dirNode.path || '').replace(/\/+$/, '')}/${fileName}`;
+  if (destPath === fileNode.path) return;
+  try {
+    await MovePath({ source: fileNode.path, destination: destPath, overwrite: false });
+    message.success(t('app.workspaceExplorer.moved', { name: fileName, dir: dirNode.label }));
+    // 刷新源和目标目录
+    await refreshNode(String(fileNode.path || '').split('/').slice(0, -1).join('/'));
+    await refreshNode(dirNode.path);
+    // 如果正在编辑被移动的文件，关闭编辑器
+    if (activeFile.value?.path === fileNode.path) clearEditor();
+  } catch (err) {
+    message.error(t('app.workspaceExplorer.moveFailed', { error: errorText(err) }));
+  }
 }
 
 // 树空白区域右键：节点级处理器已 stopPropagation，走到这里的必然是空白区域
@@ -625,6 +804,8 @@ const contextMenuOptions = computed(() => {
   }
   if (contextMenuNode.value.dir) {
     return [
+      { label: t('app.workspaceExplorer.newFile'), key: 'newFileInDir' },
+      { label: t('app.workspaceExplorer.newFolder'), key: 'newFolderInDir' },
       { label: t('app.workspaceExplorer.openFolder'), key: 'openFolder' },
       { label: t('app.workspaceExplorer.copyRelativePath'), key: 'copyRelativePath' },
       { label: t('app.workspaceExplorer.copyFullPath'), key: 'copyFullPath' },
@@ -632,6 +813,7 @@ const contextMenuOptions = computed(() => {
     ];
   }
   return [
+    { label: t('app.workspaceExplorer.openFolder'), key: 'openFolder' },
     { label: t('app.workspaceExplorer.copyRelativePath'), key: 'copyRelativePath' },
     { label: t('app.workspaceExplorer.copyFullPath'), key: 'copyFullPath' },
     { label: t('common.delete'), key: 'delete' },
@@ -643,7 +825,9 @@ function onContextMenuSelect(key) {
   if (key === 'delete') void confirmDeleteNode(contextMenuNode.value);
   if (key === 'openFolder') void openWorkspaceFolder(contextMenuNode.value);
   if (key === 'newFile') void openNewFileDialog();
+  if (key === 'newFileInDir') void openNewFileDialog(contextMenuNode.value);
   if (key === 'newFolder') void openNewFolderDialog();
+  if (key === 'newFolderInDir') void openNewFolderDialog(contextMenuNode.value);
   if (key === 'copyRelativePath') copyNodePath(contextMenuNode.value, false);
   if (key === 'copyFullPath') copyNodePath(contextMenuNode.value, true);
 }
@@ -738,17 +922,18 @@ function promptNameDialog({ title, placeholder, action }) {
   }
 }
 
-// 在树空白区域右键「新建文本文件」：弹框输入带扩展名的完整文件名，
-// 在工作区根目录创建空文件，并直接插入顶层树节点（不刷新、不丢失展开状态）。
-function openNewFileDialog() {
+// 右键「新建文本文件」：当传人 targetDir 时在该目录下创建，否则在工作区根创建。
+// 弹框输入带扩展名的完整文件名，创建空文件，并直接插入对应树节点。
+function openNewFileDialog(targetDir = null) {
+  const dirPath = targetDir?.path || '';
   promptNameDialog({
     title: t('app.workspaceExplorer.newFile'),
     placeholder: t('app.workspaceExplorer.newFileNamePlaceholder'),
-    action: (name) => createFile(name),
+    action: (name) => createFile(name, dirPath),
   });
 }
 
-async function createFile(rawName) {
+async function createFile(rawName, dirPath = '') {
   const name = String(rawName || '').trim();
   if (!name) {
     message.error(t('app.workspaceExplorer.newFileInvalid'));
@@ -760,11 +945,11 @@ async function createFile(rawName) {
     message.error(t('app.workspaceExplorer.newFileInvalid'));
     return false;
   }
+  const fullPath = dirPath ? `${dirPath.replace(/\/+$/, '')}/${base}` : base;
   try {
-    await CreateFile({ path: base, content: '', overwrite: false });
-    if (!treeData.value.some((n) => n.label === base)) {
-      treeData.value = [...treeData.value, makeNode({ Path: base, Name: base, Dir: false })];
-    }
+    await CreateFile({ path: fullPath, content: '', overwrite: false });
+    // 刷新树以显示新节点（目录内创建需要重新加载该目录的子节点）
+    await refreshNode(dirPath);
     message.success(t('app.workspaceExplorer.fileCreated', { name: base }));
     return true;
   } catch (err) {
@@ -773,17 +958,17 @@ async function createFile(rawName) {
   }
 }
 
-// 在树空白区域右键「新建文件夹」：弹框输入文件夹名，在工作区根目录创建，
-// 并直接插入顶层树节点（不刷新、不丢失展开状态）；展开时走既有懒加载。
-function openNewFolderDialog() {
+// 右键「新建文件夹」：当传人 targetDir 时在该目录下创建，否则在工作区根创建。
+function openNewFolderDialog(targetDir = null) {
+  const dirPath = targetDir?.path || '';
   promptNameDialog({
     title: t('app.workspaceExplorer.newFolder'),
     placeholder: t('app.workspaceExplorer.newFolderNamePlaceholder'),
-    action: (name) => createFolder(name),
+    action: (name) => createFolder(name, dirPath),
   });
 }
 
-async function createFolder(rawName) {
+async function createFolder(rawName, dirPath = '') {
   const name = String(rawName || '').trim();
   if (!name) {
     message.error(t('app.workspaceExplorer.newFolderInvalid'));
@@ -795,11 +980,10 @@ async function createFolder(rawName) {
     message.error(t('app.workspaceExplorer.newFolderInvalid'));
     return false;
   }
+  const fullPath = dirPath ? `${dirPath.replace(/\/+$/, '')}/${base}` : base;
   try {
-    await CreateDirectory({ path: base });
-    if (!treeData.value.some((n) => n.label === base)) {
-      treeData.value = [...treeData.value, makeNode({ Path: base, Name: base, Dir: true })];
-    }
+    await CreateDirectory({ path: fullPath });
+    await refreshNode(dirPath);
     message.success(t('app.workspaceExplorer.folderCreated', { name: base }));
     return true;
   } catch (err) {
@@ -910,12 +1094,18 @@ async function openFile(node) {
     const result = await ReadWorkspaceFile(node.path);
     if (disposed || requestID !== requestSequence) return false;
     if (kind === 'html') {
-      // HTML：内容送入沙箱 iframe 只读渲染，不进编辑器
-      htmlContent.value = String(result?.content || '');
+      // HTML：编辑 + 沙箱 iframe 预览切换（默认预览，开关切到编辑源码）
+      const content = String(result?.content || '');
+      htmlContent.value = content;
+      mdPreviewMode.value = true;
       activeFile.value = { path: node.path, kind };
-      draftContent.value = '';
-      originalContent.value = '';
+      draftContent.value = content;
+      originalContent.value = content;
+      version.value = result.version || '';
       loadingFile.value = false;
+      await nextTick();
+      if (!aceEditor) initAceEditor();
+      updateAceContent();
       return true;
     }
     const content = String(result?.content || '');
@@ -1011,6 +1201,8 @@ async function saveFile() {
     originalContent.value = draftContent.value;
     originalHash.value = result?.sha256 || originalHash.value;
     version.value = result?.version || version.value;
+    // HTML：保存后同步预览内容，下次切到预览时渲染最新内容
+    if (activeFile.value?.kind === 'html') htmlContent.value = draftContent.value;
     message.success(t('app.workspaceExplorer.saved'));
     return true;
   } catch (err) {
@@ -1106,9 +1298,15 @@ function onGlobalKeydown(event) {
   // 多个 Tab 的 explorer 常驻挂载，仅当前激活 Tab 的实例响应全局快捷键
   if (!props.active) return;
   if (event.key === 'Escape') {
-    event.stopImmediatePropagation();
-    if (activeFile.value) { void closeContent(); return; }
-    void requestClose();
+    // ESC 只关闭编辑器（预览面板），不再关闭资源树本身。
+    // 资源树的关闭交给标题栏的 × 按钮或工具栏切换。
+    // 未打开编辑器时让事件冒泡到 App.vue 的全局处理（中断运行等）。
+    if (activeFile.value) {
+      event.stopImmediatePropagation();
+      void closeContent();
+      return;
+    }
+    // 不再 requestClose()，让 ESC 冒泡到 App.vue 处理
   }
   // 选中目录/文件后按 Delete 直接触发删除确认（等价右键菜单删除）。
   // 焦点在输入框/文本域/编辑器等可编辑元素时不触发，避免劫持正常删字。

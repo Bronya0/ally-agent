@@ -425,6 +425,65 @@ func TestStreamOpenAIChatPreservesMaxReasoningEffort(t *testing.T) {
 		t.Fatalf("decode request body: %v", decodeErr)
 	}
 	if got, _ := request["reasoning_effort"].(string); got != reasoningEffortMax {
-		t.Fatalf("request reasoning_effort = %v, want %q", request["reasoning_effort"], reasoningEffortMax)
+			t.Fatalf("request reasoning_effort = %v, want %q", request["reasoning_effort"], reasoningEffortMax)
+		}
+}
+
+// TestAnthropicToolsSchemaTypeObject verifies every tool sent on the
+// anthropic_messages path serializes input_schema with a concrete
+// "type":"object" — a missing type makes gateways/proxies reject the whole
+// request with 400 "tools.N.custom.input_schema.type: Field required".
+func TestAnthropicToolsSchemaTypeObject(t *testing.T) {
+	tools := convertToolsToAnthropic(chatTools())
+	if len(tools) == 0 {
+		t.Fatal("chatTools() returned no tools")
+	}
+	raw, err := json.Marshal(tools)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded []map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	for i, tool := range decoded {
+		toolObj, ok := tool["tool"].(map[string]any)
+		if !ok {
+			toolObj = tool
+		}
+		schema, ok := toolObj["input_schema"].(map[string]any)
+		if !ok {
+			t.Fatalf("tool[%d] missing input_schema", i)
+		}
+		if typ, _ := schema["type"].(string); typ != "object" {
+			t.Fatalf("tool[%d] input_schema.type = %q, want object", i, typ)
+		}
+	}
+}
+
+// TestOpenAIChatToolsParametersTypeObject verifies the openai chat path keeps a
+// top-level "type":"object" on every tool's parameters, so proxies that
+// convert chat->anthropic do not reject the request the same way.
+func TestOpenAIChatToolsParametersTypeObject(t *testing.T) {
+	raw, err := json.Marshal(chatTools())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded []map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	for i, tool := range decoded {
+		fn, ok := tool["function"].(map[string]any)
+		if !ok {
+			t.Fatalf("tool[%d] missing function", i)
+		}
+		params, ok := fn["parameters"].(map[string]any)
+		if !ok {
+			t.Fatalf("tool[%d] missing parameters", i)
+		}
+		if typ, _ := params["type"].(string); typ != "object" {
+			t.Fatalf("tool[%d] parameters.type = %q, want object", i, typ)
+		}
 	}
 }

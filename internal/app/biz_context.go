@@ -908,6 +908,10 @@ func buildAttachmentTextContext(text string, attachments []AttachmentInput) stri
 		if att.Error != "" {
 			fmt.Fprintf(&b, " (%s)", att.Error)
 		}
+		// 附件的绝对路径（如果有）：模型可据此直接 read 文件
+		if fp := strings.TrimSpace(att.FilePath); fp != "" {
+			fmt.Fprintf(&b, " — path: %s", fp)
+		}
 		b.WriteString("\n")
 	}
 	for _, att := range attachments {

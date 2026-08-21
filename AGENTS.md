@@ -465,6 +465,16 @@ UI internationalization:
 - New user-facing UI text must be added to both locale tables and referenced through `t()` / `$t()`; do not translate model output, file contents, command output, or raw tool results.
 - `AppHeader` always shows a GitHub repository button that opens the Ally project through the system browser. Startup performs one best-effort latest-release check; when a newer semantic version exists, that same button changes into the green update icon.
 
+Tool card verb / "Used \<Name\>" troubleshooting:
+
+A tool card showing "Used \<Name\>" (or "Using \<Name\>" while running) instead of a real verb (Read / Edited / Ran / Grep / …) means `toolVerbLabel()` missed the `TOOL_VERBS` lookup and fell back to the `'Used'` / `'Using'` default. Every correctly registered tool shows its own verb, so a single tool regressing to "Used" is almost always a missing or mis-cased `TOOL_VERBS` key. Three files to check, in order:
+
+- `frontend/src/utils/toolVerb.mjs` — `TOOL_VERBS` maps the **raw backend tool name** (the model-facing function name) to `[inProgress, done, noun]`. A missing key here is the usual cause. `toolVerbLabel(name, kind, status)` returns the verb; `hasNamedVerb(name)` tells the card the verb already names the action. `KIND_VERBS` only covers `mcp` as a kind-level fallback; any other unknown name yields `'Used'` / `'Using'`.
+- `frontend/src/components/ToolCallCard.vue` — verb span = `toolVerb()`, name span = `toolDisplayName()`. When `hasNamedVerb(msg.name)` is false the name span falls back to `formatToolName(msg.name)`, which is exactly why a missing entry renders "Used Grep" rather than "Grep" (the verb defaults to "Used", the name defaults to the raw tool name).
+- `frontend/src/App.vue` — `toolKind(name)` derives `msg.kind`. The verb table is keyed by name (not kind) on purpose, so check the `TOOL_VERBS` key first; `toolKind` is rarely the culprit.
+
+`msg.name` is streamed straight from the backend (`tool:start` / `tool:update` payload `name` = `call.Function.Name`), with no case-folding anywhere in the pipeline. Casing is deliberate and must match the backend registration in `internal/tools/shared/builtins.go`: `Glob` is uppercase, `grep` is lowercase. Add a tool, rename one, or change its casing and forget the matching `TOOL_VERBS` key → the card reverts to "Used \<Name\>". (grep regressed exactly this way in `4dbbbdd`, where the verb entry was deleted leaving only a `toolDisplayName` special-case that fixed the name span but not the verb span; restored in `a08106e` by re-adding `grep: ['Grep','Grep','Grep']`.)
+
 ---
 
 ## WebView2 / Wails Frontend Constraints

@@ -61,7 +61,7 @@ type modelRetryInfo struct {
 	TotalKeys int    // key 池总数,0 表示未知
 }
 
-// shouldRetryLLMError 判断错误是否值得重试(429/5xx/瞬时网络错误)。
+// shouldRetryLLMError 判断错误是否值得重试(429/5xx/400/瞬时网络错误)。
 // context.Canceled / DeadlineExceeded 不重试。
 func shouldRetryLLMError(err error) bool {
 	if err == nil {
@@ -76,6 +76,14 @@ func shouldRetryLLMError(err error) bool {
 	}
 	if strings.Contains(msg, "status code: 5") || strings.Contains(msg, "500 ") || strings.Contains(msg, "502 ") || strings.Contains(msg, "503 ") || strings.Contains(msg, "504 ") ||
 		strings.Contains(msg, "bad gateway") || strings.Contains(msg, "service unavailable") || strings.Contains(msg, "gateway timeout") || strings.Contains(msg, "internal server error") {
+		return true
+	}
+	// 400(bad request / invalid request):部分中转站偶发返回 400(上下文长度
+	// 误报、参数序列化抖动等),按用户配置全部重试。"400 " 带空格避免误匹配
+	// 4000 之类的 token 数值。
+	if strings.Contains(msg, "400 ") || strings.Contains(msg, "status code: 400") ||
+		strings.Contains(msg, "bad request") || strings.Contains(msg, "invalid_request_error") ||
+		strings.Contains(msg, "invalid request") {
 		return true
 	}
 	if strings.Contains(msg, "timeout") || strings.Contains(msg, "timed out") ||
@@ -1536,7 +1544,12 @@ func schemaMap(value any) map[string]any {
 }
 
 func anthropicInputSchema(schema map[string]any) anthropic.ToolInputSchemaParam {
-	result := anthropic.ToolInputSchemaParam{}
+	result := anthropic.ToolInputSchemaParam{
+		// The Messages API requires input_schema.type = "object". The SDK field
+		// would otherwise serialize empty, which gateways reject with 400
+		// "tools.N.custom.input_schema.type: Field required".
+		Type: "object",
+	}
 	if props, ok := schema["properties"]; ok {
 		result.Properties = props
 	} else {

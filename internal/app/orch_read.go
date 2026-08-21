@@ -199,13 +199,23 @@ func (a *App) batchReadFilesWithConfig(cfg ConfigState, req BatchReadRequest) (*
 	// Deduplicate only truly identical effective read requests.
 	seen := map[batchReadKey]bool{}
 	readKey := func(path string, readReq ReadFileRequest) batchReadKey {
-		return batchReadKey{
+		key := batchReadKey{
 			Path:      filepath.ToSlash(filepath.Clean(path)),
 			StartLine: readReq.StartLine,
 			EndLine:   readReq.EndLine,
 			Sheet:     readReq.Sheet,
 			MaxChars:  readReq.MaxChars,
 		}
+		// Document reads (.docx/.pptx/.xlsx/.pdf) ignore startLine/endLine
+		// entirely: they always extract the full text. Zero the range in the
+		// dedup key so the same document requested with different (meaningless)
+		// line ranges collapses to one read instead of extracting the same
+		// payload N times into model context.
+		if shouldExtractDocumentInRead(path) {
+			key.StartLine = 0
+			key.EndLine = 0
+		}
+		return key
 	}
 	addIfNotSeen := func(key batchReadKey) bool {
 		if seen[key] {

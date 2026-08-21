@@ -545,6 +545,7 @@ type AttachmentInput struct {
 	Text      string `json:"text,omitempty"`
 	Truncated bool   `json:"truncated,omitempty"`
 	Error     string `json:"error,omitempty"`
+	FilePath  string `json:"filePath,omitempty"`
 }
 
 type ChatRequest struct {
@@ -668,6 +669,21 @@ type CreateDirectoryRequest struct {
 type DeletePathRequest struct {
 	Path      string `json:"path"`
 	Recursive bool   `json:"recursive"`
+}
+
+// MovePathRequest moves a file or directory from Source to Destination
+// within the workspace. Both paths are workspace-relative.
+type MovePathRequest struct {
+	Source      string `json:"source"`
+	Destination string `json:"destination"`
+	Overwrite   bool   `json:"overwrite"`
+}
+
+// MovePathResult reports the resolved absolute paths after a move.
+type MovePathResult struct {
+	Source      string `json:"source"`
+	Destination string `json:"destination"`
+	Moved       bool   `json:"moved"`
 }
 
 type DeleteResult struct {
@@ -2616,6 +2632,53 @@ func (a *App) DeletePath(req DeletePathRequest) error {
 		a.invalidateWorkspaceMapCache(cfg)
 	}
 	return err
+}
+
+// MovePath moves a file or directory from Source to Destination within the
+// workspace. Both paths are workspace-relative. It rejects symlink paths and
+// paths resolving outside the workspace. When Overwrite is false the
+// destination must not already exist; when true an existing file at the
+// destination is replaced (directories are not merged or replaced).
+func (a *App) MovePath(req MovePathRequest) (MovePathResult, error) {
+	if strings.TrimSpace(req.Source) == "" || strings.TrimSpace(req.Destination) == "" {
+		return MovePathResult{}, codedToolError("E_BAD_PATH", errors.New("move requires non-empty source and destination"))
+	}
+	cfg := a.effectiveConfig(ConfigState{})
+	a.fileOpsMu.Lock()
+	defer a.fileOpsMu.Unlock()
+	roots, err := workspaceRoots(cfg)
+	if err != nil {
+		return MovePathResult{}, err
+	}
+	srcAbs, err := resolveDeletablePath(roots, req.Source)
+	if err != nil {
+		return MovePathResult{}, err
+	}
+	dstAbs, err := resolveWritableFilePath(roots, req.Destination)
+	if err != nil {
+		return MovePathResult{}, err
+	}
+	if samePath(srcAbs, dstAbs) {
+		return MovePathResult{Source: srcAbs, Destination: dstAbs, Moved: false}, nil
+	}
+	if _, err := os.Lstat(dstAbs); err == nil {
+		if !req.Overwrite {
+			return MovePathResult{}, codedToolError("E_EXISTS", fmt.Errorf("destination already exists: %s", req.Destination))
+		}
+		if err := os.RemoveAll(dstAbs); err != nil {
+			return MovePathResult{}, err
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return MovePathResult{}, err
+	}
+	if err := os.MkdirAll(filepath.Dir(dstAbs), 0o755); err != nil {
+		return MovePathResult{}, err
+	}
+	if err := os.Rename(srcAbs, dstAbs); err != nil {
+		return MovePathResult{}, err
+	}
+	a.invalidateWorkspaceMapCache(cfg)
+	return MovePathResult{Source: srcAbs, Destination: dstAbs, Moved: true}, nil
 }
 
 func (a *App) RunCommand(req CommandRequest) (CommandResult, error) {
