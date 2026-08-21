@@ -2051,14 +2051,17 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		dec := json.NewDecoder(bytes.NewReader(args))
 		dec.DisallowUnknownFields()
 		if err := dec.Decode(v); err != nil {
-			// edit 系列参数最容易因一次调用塞太多内容而超限截断；报错时给出
-			// 明确的重试策略：小改动合并进一次调用，大改动（整函数/整段）
-			// 拆成独立调用，连续行范围的大段删除/替换用 lineRange，避免同样的
-			// 截断反复发生。
-			if name == "edit" || name == "replace_exact" || name == "replace_lines" || name == "remote_edit" {
-				return fmt.Errorf("tool arguments JSON was truncated (output cut off or stream interrupted). Merge small changes into one edit call; split large changes (a whole function or section) into separate edit calls; use lineRange (inclusive A-B whole-line range) for large deletions or replacements of a contiguous line range: %w", err)
+			// Only an unexpected end is evidence of a cut-off stream. Unknown
+			// fields, wrong types, and other complete-JSON schema errors used to
+			// be mislabeled as truncation, making small oldText/legacy oldString
+			// calls look as if they had exhausted max_tokens.
+			if isIncompleteStreamJSON(err) {
+				if name == "edit" || name == "replace_exact" || name == "replace_lines" || name == "remote_edit" {
+					return fmt.Errorf("tool arguments JSON was truncated (output cut off or stream interrupted). Merge small changes into one edit call; split large changes (a whole function or section) into separate edit calls; use lineRange (inclusive A-B whole-line range) for large deletions or replacements of a contiguous line range: %w", err)
+				}
+				return fmt.Errorf("tool arguments JSON was truncated (output cut off or stream interrupted): %w", err)
 			}
-			return fmt.Errorf("tool arguments JSON was truncated (output cut off or stream interrupted): %w", err)
+			return fmt.Errorf("invalid tool arguments JSON for %s: %w", name, err)
 		}
 		var extra any
 		if err := dec.Decode(&extra); err != io.EOF {

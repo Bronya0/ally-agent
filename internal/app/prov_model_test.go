@@ -230,7 +230,7 @@ func TestApplyOpenAIResponsesPromptCacheOptionsRequiresAnchor(t *testing.T) {
 	}
 }
 
-func TestNormalizeToolCallsRepairsTruncatedArguments(t *testing.T) {
+func TestNormalizeToolCallsPreservesLiveTruncatedEditForSalvage(t *testing.T) {
 	input := []legacyopenai.ToolCall{
 		// Stream cut off mid-arguments: the accumulated string is not JSON.
 		{ID: "a", Type: legacyopenai.ToolTypeFunction, Function: legacyopenai.FunctionCall{Name: "edit", Arguments: `{"files":[{"path":"AGENTS.md","changes":[{"oldText":"sandbox is`}},
@@ -239,11 +239,8 @@ func TestNormalizeToolCallsRepairsTruncatedArguments(t *testing.T) {
 	}
 	out := normalizeToolCalls(input)
 
-	if out[0].Function.Arguments != truncatedToolCallArguments {
-		t.Fatalf("truncated arguments were not repaired: %q", out[0].Function.Arguments)
-	}
-	if !json.Valid([]byte(out[0].Function.Arguments)) {
-		t.Fatalf("repaired arguments must be valid JSON: %q", out[0].Function.Arguments)
+	if out[0].Function.Arguments != input[0].Function.Arguments {
+		t.Fatalf("live truncated edit prefix must survive for salvage: %q", out[0].Function.Arguments)
 	}
 	if out[1].Function.Arguments != "{}" || out[1].Type != legacyopenai.ToolTypeFunction {
 		t.Fatalf("empty arguments/type normalization regressed: %#v", out[1])
@@ -261,10 +258,10 @@ func TestCollapseRepeatedName(t *testing.T) {
 		{strings.Repeat("http_request", 7), "http_request"}, // the observed relay artifact
 		{"readread", "read"},
 		{"askaskask", "ask"},
-		{"read", "read"},               // single fold, unchanged
-		{"list_files", "list_files"},   // never a whole-number repetition
+		{"read", "read"},             // single fold, unchanged
+		{"list_files", "list_files"}, // never a whole-number repetition
 		{"mcp__fs__read_file", "mcp__fs__read_file"},
-		{"abab", "abab"},               // period < 3, left alone
+		{"abab", "abab"},                           // period < 3, left alone
 		{"edit_fileedit_fil", "edit_fileedit_fil"}, // not an exact repetition
 		{"", ""},
 	}

@@ -178,7 +178,12 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 		for attempt := 0; ; attempt++ {
 			modelResp, err = a.streamModelResponse(ctx, cfg, model, messages, tools, nil)
 			if err == nil {
-				err = modelResponseStopError(cfg, modelResp)
+				if stopErr := modelResponseStopError(cfg, modelResp); stopErr != nil {
+					_, _, salvageable := prepareToolCallsForExecution(modelResp.ToolCalls)
+					if strings.TrimSpace(modelResp.StopReason) != "max_tokens" || !salvageable {
+						err = stopErr
+					}
+				}
 			}
 			if err == nil {
 				break
@@ -231,10 +236,11 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 			fallbackOutput,
 		)
 
+		preparedToolCalls, toolExecutionArgs, _ := prepareToolCallsForExecution(modelResp.ToolCalls)
 		assistantMessage := openai.ChatCompletionMessage{
 			Role:      openai.ChatMessageRoleAssistant,
 			Content:   modelResp.Content,
-			ToolCalls: modelResp.ToolCalls,
+			ToolCalls: preparedToolCalls,
 		}
 
 		if len(assistantMessage.ToolCalls) == 0 {
@@ -338,7 +344,11 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 
 		executeSubCall := func(idx int, c openai.ToolCall) {
 			started := time.Now()
-			r := a.executeTool(ctx, cfg, sessionID, c.Function.Name, []byte(c.Function.Arguments))
+			executionArgs := c.Function.Arguments
+			if idx < len(toolExecutionArgs) && toolExecutionArgs[idx] != "" {
+				executionArgs = toolExecutionArgs[idx]
+			}
+			r := a.executeTool(ctx, cfg, sessionID, c.Function.Name, []byte(executionArgs))
 			duration := time.Since(started).Milliseconds()
 			rj, _ := json.Marshal(r)
 			fullJSON := string(rj)

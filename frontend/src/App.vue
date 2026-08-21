@@ -2894,6 +2894,10 @@ function addWelcome(workspacePath = config.workspace || '') {
 
 // 用户主动纠错：鼠标 hover 到某条用户提问，点击 ✕ 删除该提问及之后的所有
 // 对话（前端 UI 快照 + 后端模型上下文历史），并重算上下文 token 统计。
+function hasImageAttachments(msg) {
+  return Array.isArray(msg?.attachments) && msg.attachments.some((att) => att?.kind === 'image');
+}
+
 async function handleDeleteUserMessage(sessionId, msg) {
   const session = sessions.value.find((item) => item.id === sessionId);
   if (!session || !msg) return;
@@ -2910,6 +2914,9 @@ async function handleDeleteUserMessage(sessionId, msg) {
     if (session.messages[i]?.role === 'user') userIndex += 1;
   }
   const userText = String(msg?.skill ? (msg.skill.args || '') : (msg?.content || '')).trim();
+  // 纯附件/图片消息没有文本：后端历史里该类消息 content 会被替换为
+  // "[N image attachment(s) omitted from saved history]"，用该子串匹配。
+  const expectedContent = userText || (hasImageAttachments(msg) ? 'image attachment(s) omitted' : '');
 
   dialog.warning({
     title: t('chat.userMessage.deleteConfirmTitle'),
@@ -2934,7 +2941,7 @@ async function handleDeleteUserMessage(sessionId, msg) {
           await TruncateSessionHistory({
             sessionId,
             userMessageIndex: Math.max(0, userIndex),
-            expectedContent: userText,
+            expectedContent,
           });
         } catch (err) {
           // UI 已删，后端未同步；提示用户，避免静默不一致。

@@ -3457,6 +3457,56 @@ func TestExecuteToolEditSalvagesTruncatedArguments(t *testing.T) {
 	}
 }
 
+func TestPrepareToolCallsForExecutionKeepsSalvageBytesAndSafeReplayJSON(t *testing.T) {
+	raw := `{"files":[{"path":"sample.txt","version":"abc123","changes":[{"oldText":"alpha","newText":"ALPHA"},{"oldText":"beta","newText":"BET`
+	prepared, executionArgs, salvaged := prepareToolCallsForExecution([]openai.ToolCall{{
+		ID: "call_1", Type: openai.ToolTypeFunction,
+		Function: openai.FunctionCall{Name: "edit", Arguments: raw},
+	}})
+	if len(prepared) != 1 || len(executionArgs) != 1 {
+		t.Fatalf("unexpected prepared result: %#v %#v", prepared, executionArgs)
+	}
+	if executionArgs[0] != raw {
+		t.Fatalf("execution must retain raw truncated bytes for salvage, got %q", executionArgs[0])
+	}
+	if !salvaged {
+		t.Fatal("expected the complete edit prefix to be marked salvageable")
+	}
+	if !json.Valid([]byte(prepared[0].Function.Arguments)) || isTruncatedArgsMarker([]byte(prepared[0].Function.Arguments)) {
+		t.Fatalf("provider replay must use recovered valid JSON, got %q", prepared[0].Function.Arguments)
+	}
+	var req ModelEditToolRequest
+	if err := json.Unmarshal([]byte(prepared[0].Function.Arguments), &req); err != nil || len(req.Files) != 1 || len(req.Files[0].Changes) != 1 {
+		t.Fatalf("unexpected recovered replay request: %#v err=%v", req, err)
+	}
+
+	prepared, executionArgs, salvaged = prepareToolCallsForExecution([]openai.ToolCall{{
+		Function: openai.FunctionCall{Name: "edit", Arguments: `{"files":[{"path":"sample.txt","ver`},
+	}})
+	if !isTruncatedArgsMarker([]byte(prepared[0].Function.Arguments)) || !isTruncatedArgsMarker([]byte(executionArgs[0])) {
+		t.Fatalf("unsalvageable calls must use the truncation marker on both paths: %#v %#v", prepared, executionArgs)
+	}
+	if salvaged {
+		t.Fatal("an edit prefix without a complete change must not bypass max_tokens")
+	}
+}
+
+func TestExecuteToolEditDoesNotMislabelSchemaErrorAsTruncation(t *testing.T) {
+	app := NewApp()
+	result := app.executeTool(context.Background(), ConfigState{Workspace: t.TempDir()}, "session-1", "edit", []byte(
+		`{"files":[{"path":"sample.txt","version":"abc123","changes":[{"oldString":"alpha","newString":"ALPHA"}]}]}`,
+	))
+	if result.OK {
+		t.Fatal("legacy unknown fields must fail the strict model-facing edit schema")
+	}
+	if strings.Contains(strings.ToLower(result.Error), "truncated") {
+		t.Fatalf("complete schema error must not be reported as truncation: %q", result.Error)
+	}
+	if !strings.Contains(result.Error, "unknown field") {
+		t.Fatalf("expected the real decoder error, got %q", result.Error)
+	}
+}
+
 // ─────────────────────── Scheduled tasks ───────────────────────
 
 func TestScheduledTaskCreateListDelete(t *testing.T) {

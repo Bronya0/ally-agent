@@ -1209,31 +1209,53 @@ func (a *App) TruncateSessionHistory(req TruncateSessionHistoryRequest) (int, er
 		return 0, errors.New("session has no saved history")
 	}
 
-	// Locate the target user turn: the (UserMessageIndex)-th user message.
+	// Locate the target user turn. Prefer content matching over the index
+	// because the frontend's session.messages may include locally injected
+	// user turns (e.g. /init, /note) that the backend history reorders or
+	// drops, so the user-turn ordinal is not a reliable locator. With content
+	// we find the LAST user turn containing it — that is the one the user is
+	// hovering (the most recent occurrence).
 	targetIndex := -1
-	userSeen := 0
 	expected := strings.TrimSpace(req.ExpectedContent)
 	expectedLen := len(expected)
-	for i, m := range messages {
-		if m.Role != openai.ChatMessageRoleUser {
-			continue
+	if expectedLen > 0 {
+		for i, m := range messages {
+			if m.Role != openai.ChatMessageRoleUser {
+				continue
+			}
+			content := strings.TrimSpace(textFromMessage(m))
+			if strings.Contains(content, expected) {
+				targetIndex = i
+			}
 		}
-		if userSeen != req.UserMessageIndex {
-			userSeen++
-			continue
+		if targetIndex < 0 {
+			return 0, fmt.Errorf("no user message contains expected content")
 		}
-		// If the frontend supplied text, sanity-check that this user turn
-		// plausibly contains it (handles attachment/image text concatenation).
-		content := strings.TrimSpace(textFromMessage(m))
-		if expectedLen > 0 && !strings.Contains(content, expected) {
-			return 0, fmt.Errorf("user message %d does not match expected content", req.UserMessageIndex)
+	} else {
+		// Fallback: locate by ordinal among user turns.
+		userSeen := 0
+		for i, m := range messages {
+			if m.Role != openai.ChatMessageRoleUser {
+				continue
+			}
+			if userSeen != req.UserMessageIndex {
+				userSeen++
+				continue
+			}
+			targetIndex = i
+			break
 		}
-		targetIndex = i
-		break
+		if targetIndex < 0 {
+			return 0, fmt.Errorf("user message index %d not found in history", req.UserMessageIndex)
+		}
 	}
-	if targetIndex < 0 {
-		return 0, fmt.Errorf("user message index %d not found in history", req.UserMessageIndex)
-	}
+
+	// If the located user turn is the first message in history, there is
+	// nothing before it to keep; treat that as "keep everything up to it".
+	// Otherwise keep everything strictly before the target user turn. If a
+	// tool-call assistant turn immediately precedes it, back up to the user
+	// turn that opened that round so the truncated prefix is an intact
+	// protocol sequence.
 
 	// Keep everything strictly before the target user turn. If a tool-call
 	// assistant turn immediately precedes it, back up to the user turn that

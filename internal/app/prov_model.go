@@ -1634,8 +1634,10 @@ func updateToolCallFromResponsesItem(call *legacyopenai.ToolCall, item oaresp.Re
 const truncatedToolCallArguments = `{"allyTruncatedArguments":true}`
 
 // repairTruncatedToolCallArguments returns args unchanged when they are valid
-// JSON and the truncation marker otherwise. Empty arguments are left to the
-// caller's empty-args policy.
+// JSON and the truncation marker otherwise. It is used for persisted history
+// repair and for non-salvageable calls; live edit calls keep their raw prefix
+// until prepareToolCallsForExecution can separate safe replay arguments from
+// the bytes passed to salvageEditRequest.
 func repairTruncatedToolCallArguments(args string) string {
 	if args == "" || json.Valid([]byte(args)) {
 		return args
@@ -1740,7 +1742,6 @@ func normalizeToolCalls(toolCalls []legacyopenai.ToolCall) []legacyopenai.ToolCa
 			out[i].Function.Arguments = "{}"
 			continue
 		}
-		out[i].Function.Arguments = repairTruncatedToolCallArguments(out[i].Function.Arguments)
 	}
 	return out
 }
@@ -1907,7 +1908,27 @@ type responsesUsageWire struct {
 	CachedTokens          int64                       `json:"cached_tokens"`
 }
 
-func modelUsageFromResponsesWire(usage *responsesUsageWire) *modelUsage {
+// modelUsageFromResponsesEvent parses usage from a Responses JSON payload:
+// either the response.completed event carrying a nested response object, or a
+// bare usage object. It intentionally uses small local structs instead of the
+// SDK's response union because that union currently loses the nested response
+// object during stream-event decoding. The wire struct carries fallback field
+// names so OpenAI-Responses-compatible relays (cached/cache_read/prompt_cache_*)
+// are all recognized.
+func modelUsageFromResponsesEvent(raw []byte) *modelUsage {
+	var payload struct {
+		Response *struct {
+			Usage *responsesUsageWire `json:"usage"`
+		} `json:"response"`
+		Usage *responsesUsageWire `json:"usage"`
+	}
+	if len(raw) == 0 || json.Unmarshal(raw, &payload) != nil {
+		return nil
+	}
+	usage := payload.Usage
+	if payload.Response != nil && payload.Response.Usage != nil {
+		usage = payload.Response.Usage
+	}
 	if usage == nil {
 		return nil
 	}
@@ -1952,30 +1973,6 @@ func modelUsageFromResponsesWire(usage *responsesUsageWire) *modelUsage {
 		}
 	}
 	return modelUsageFromResponseTokenCounts(input, output, hit, miss)
-}
-
-// modelUsageFromResponsesEvent parses usage from the raw response.completed
-// event. This intentionally uses small local structs instead of the SDK's
-// response union because that union currently loses the nested response object
-// during stream-event decoding.
-func modelUsageFromResponsesEvent(raw []byte) *modelUsage {
-	var payload struct {
-		Response *struct {
-			Usage *responsesUsageWire `json:"usage"`
-		} `json:"response"`
-		Usage *responsesUsageWire `json:"usage"`
-	}
-	if len(raw) == 0 || json.Unmarshal(raw, &payload) != nil {
-		return nil
-	}
-	var usage *responsesUsageWire
-	if payload.Response != nil {
-		usage = payload.Response.Usage
-	}
-	if usage == nil {
-		usage = payload.Usage
-	}
-	return modelUsageFromResponsesWire(usage)
 }
 
 func modelUsageFromAnthropic(usage anthropic.Usage) *modelUsage {

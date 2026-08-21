@@ -955,10 +955,10 @@ function defaultModelDraft(source = {}) {
     apiKey: draft?.apiKey || '',
     model: '',
     temperature: draft?.temperature ?? 0.2,
-    maxTokens: draft?.maxTokens || 384000,
-    contextWindow: draft?.contextWindow || 1000000,
     ...source,
     apiKeys: normalizeModelApiKeys(keys),
+    maxTokens: Number.isFinite(Number(source.maxTokens)) && Number(source.maxTokens) > 0 ? Number(source.maxTokens) : (draft?.maxTokens || 384000),
+    contextWindow: Number.isFinite(Number(source.contextWindow)) && Number(source.contextWindow) > 0 ? Number(source.contextWindow) : (draft?.contextWindow || 1000000),
     reasoningTag: String(source.reasoningTag || draft?.reasoningTag || 'reasoning_content').trim() || 'reasoning_content',
     // "auto" and the legacy "max_tokens" both send max_tokens, so collapse the
     // explicit legacy value onto "auto" — otherwise the two-option select would
@@ -1059,11 +1059,16 @@ const providerTabs = computed(() => {
   (draft.models || []).forEach((model, index) => {
     const provider = normalizedProviderName(model.providerName);
     if (!groups.has(provider)) {
-      groups.set(provider, { name: provider, label: provider, models: [] });
+      groups.set(provider, { name: provider, label: provider, models: [], hasActiveModel: false });
     }
-    groups.get(provider).models.push({ model, index });
+    const group = groups.get(provider);
+    group.models.push({ model, index });
+    if (isDraftModelActive(model)) group.hasActiveModel = true;
   });
-  return Array.from(groups.values());
+  return Array.from(groups.values()).sort((left, right) => {
+    if (left.hasActiveModel !== right.hasActiveModel) return left.hasActiveModel ? -1 : 1;
+    return 0;
+  });
 });
 
 function alignActiveProviderTab(preferred = '') {
@@ -1129,7 +1134,7 @@ async function startAddModelDraft() {
     baseUrl: draft.baseUrl || '',
     apiKey: draft.apiKey || '',
     apiKeys: Array.isArray(draft.apiKeys) ? draft.apiKeys : [],
-    model: draft.model || '',
+    model: '',
     maxTokens: draft.maxTokens || 384000,
     contextWindow: draft.contextWindow || 1000000,
   });
@@ -1241,8 +1246,8 @@ function applyModelToDraft(model) {
   draft.apiKey = draft.apiKeys[0] || '';
   draft.model = model.model || '';
   draft.temperature = model.temperature ?? draft.temperature ?? 0.2;
-  draft.maxTokens = model.maxTokens || draft.maxTokens || 384000;
-  draft.contextWindow = model.contextWindow || draft.contextWindow || 1000000;
+  draft.maxTokens = Number.isFinite(Number(model.maxTokens)) && Number(model.maxTokens) > 0 ? Number(model.maxTokens) : (draft.maxTokens || 384000);
+  draft.contextWindow = Number.isFinite(Number(model.contextWindow)) && Number(model.contextWindow) > 0 ? Number(model.contextWindow) : (draft.contextWindow || 1000000);
   draft.reasoningTag = model.reasoningTag || 'reasoning_content';
   draft.tokenParam = model.tokenParam || 'auto';
   draft.reasoningEffort = normalizeReasoningEffort(model.reasoningEffort);

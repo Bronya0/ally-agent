@@ -165,7 +165,7 @@ import 'ace-builds/src-noconflict/mode-rust';
 import 'ace-builds/src-noconflict/mode-ruby';
 import MarkdownIt from 'markdown-it';
 import { isEditableNavigationTarget } from '../utils/sessionState.mjs';
-import { ListFiles, ReadWorkspaceFile, ReadWorkspaceImage, SaveWorkspaceFile, DeletePath, OpenWorkspacePathInFileManager, CreateFile, CreateDirectory, MovePath } from '../../bindings/ally-dev/internal/app/app';
+import { ListFiles, ReadWorkspaceFile, ReadWorkspaceImage, SaveWorkspaceFile, DeletePath, OpenWorkspacePathInFileManager, CreateFile, CreateDirectory } from '../../bindings/ally-dev/internal/app/app';
 import CloseOutlined from '@vicons/antd/CloseOutlined';
 import ReloadOutlined from '@vicons/antd/ReloadOutlined';
 import { RightOutlined } from '@vicons/antd';
@@ -624,8 +624,6 @@ function renderLabel({ option }) {
 
 function nodeProps({ option }) {
   return {
-    // 将 key 写入 DOM 属性，供拖拽时通过 elementFromPoint 查找目标节点
-    dataset: { key: option.key },
     onContextmenu(e) {
       e.preventDefault();
       // 阻止冒泡到树容器的空白区域菜单
@@ -635,156 +633,9 @@ function nodeProps({ option }) {
       contextMenuY.value = e.clientY;
       contextMenuShow.value = true;
     },
-    // 拖拽移动文件到目录：仅文件可拖，仅目录可放。
-    // WebView2/Wails 不支持 HTML5 Drag-and-Drop，用 Pointer Events 实现。
-    onPointerdown(e) {
-      if (option.dir) return; // 暂不实现拖拽目录
-      startFileDrag(e, option);
-    },
   };
 }
 
-// ── 拖拽移动文件到目录 ──
-// WebView2/Wails 不支持 HTML5 Drag-and-Drop，统一用 Pointer Events 实现。
-// 阈值判定（4px）后才进入拖拽，避免点击选择文件被误判为拖拽。
-let dragState = null;
-let dragGhost = null;
-
-function startFileDrag(e, node) {
-  if (e.button !== 0) return; // 仅左键
-  const startX = e.clientX;
-  const startY = e.clientY;
-  const pointerId = e.pointerId;
-  const ownerEl = e.currentTarget;
-  dragState = { node, startX, startY, pointerId, started: false, dropTarget: null };
-  try { ownerEl.setPointerCapture(pointerId); } catch (_) {}
-
-  const onMove = (ev) => {
-    if (!dragState) return;
-    if (ev.pointerId !== pointerId) return;
-    ev.preventDefault();
-    if (!dragState.started) {
-      const dx = ev.clientX - startX;
-      const dy = ev.clientY - startY;
-      if (Math.hypot(dx, dy) < 4) return;
-      dragState.started = true;
-      createDragGhost(node);
-      document.body.style.cursor = 'grabbing';
-    }
-    if (dragGhost) {
-      dragGhost.style.left = (ev.clientX + 8) + 'px';
-      dragGhost.style.top = (ev.clientY + 8) + 'px';
-    }
-    highlightDropTarget(ev);
-  };
-
-  const onUp = (ev) => {
-    document.removeEventListener('pointermove', onMove);
-    document.removeEventListener('pointerup', onUp);
-    document.removeEventListener('pointercancel', onUp);
-    try { ownerEl.releasePointerCapture(pointerId); } catch (_) {}
-    document.body.style.cursor = '';
-    if (dragState?.started) {
-      const targetNode = findDropTargetAt(ev.clientX, ev.clientY);
-      removeDragGhost();
-      clearDropHighlight();
-      if (targetNode && targetNode.path !== node.path && !isAncestorOf(targetNode, node)) {
-        void moveFileToDir(node, targetNode);
-      }
-    }
-    dragState = null;
-  };
-
-  document.addEventListener('pointermove', onMove);
-  document.addEventListener('pointerup', onUp);
-  document.addEventListener('pointercancel', onUp);
-}
-
-function createDragGhost(node) {
-  dragGhost = document.createElement('div');
-  dragGhost.className = 'workspace-explorer-drag-ghost';
-  dragGhost.textContent = node.label;
-  dragGhost.style.cssText = 'position:fixed;pointer-events:none;z-index:99999;' +
-    'background:rgba(78,161,255,0.92);color:#fff;padding:3px 8px;border-radius:4px;' +
-    'font-size:12px;max-width:240px;overflow:hidden;text-overflow:ellipsis;' +
-    'white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,0.4);transform:translateZ(0);will-change:transform;';
-  document.body.appendChild(dragGhost);
-}
-
-function removeDragGhost() {
-  if (dragGhost) { dragGhost.remove(); dragGhost = null; }
-}
-
-function findDropTargetAt(x, y) {
-  const el = document.elementFromPoint(x, y);
-  if (!el) return null;
-  const nodeEl = el.closest('.n-tree-node');
-  if (!nodeEl) return null;
-  const key = nodeEl.getAttribute('data-key');
-  if (!key) return null;
-  return findNodeByKey(key);
-}
-
-function findNodeByKey(key, nodes = treeData.value) {
-  for (const node of nodes) {
-    if (node.key === key) return node;
-    if (node.children?.length) {
-      const hit = findNodeByKey(key, node.children);
-      if (hit) return hit;
-    }
-  }
-  return null;
-}
-
-function isAncestorOf(ancestor, node) {
-  const parentPath = String(ancestor?.path || '').replace(/\/+$/, '');
-  const nodePath = String(node?.path || '');
-  if (!parentPath || !nodePath) return false;
-  return nodePath.startsWith(parentPath + '/') || nodePath === parentPath;
-}
-
-function highlightDropTarget(ev) {
-  clearDropHighlight();
-  const target = findDropTargetAt(ev.clientX, ev.clientY);
-  if (target && target.dir && !isAncestorOf(target, dragState.node)) {
-    dragState.dropTarget = target;
-    const el = findNodeElByKey(target.key);
-    if (el) el.classList.add('workspace-explorer-drop-target');
-  }
-}
-
-function clearDropHighlight() {
-  if (dragState?.dropTarget) {
-    const el = findNodeElByKey(dragState.dropTarget.key);
-    if (el) el.classList.remove('workspace-explorer-drop-target');
-    dragState.dropTarget = null;
-  }
-  document.querySelectorAll('.workspace-explorer-drop-target').forEach((el) => {
-    el.classList.remove('workspace-explorer-drop-target');
-  });
-}
-
-function findNodeElByKey(key) {
-  if (!key) return null;
-  return document.querySelector(`.n-tree-node[data-key="${CSS.escape(key)}"]`);
-}
-
-async function moveFileToDir(fileNode, dirNode) {
-  const fileName = String(fileNode.label || '').split(/[\\/]/).pop();
-  const destPath = `${String(dirNode.path || '').replace(/\/+$/, '')}/${fileName}`;
-  if (destPath === fileNode.path) return;
-  try {
-    await MovePath({ source: fileNode.path, destination: destPath, overwrite: false });
-    message.success(t('app.workspaceExplorer.moved', { name: fileName, dir: dirNode.label }));
-    // 刷新源和目标目录
-    await refreshNode(String(fileNode.path || '').split('/').slice(0, -1).join('/'));
-    await refreshNode(dirNode.path);
-    // 如果正在编辑被移动的文件，关闭编辑器
-    if (activeFile.value?.path === fileNode.path) clearEditor();
-  } catch (err) {
-    message.error(t('app.workspaceExplorer.moveFailed', { error: errorText(err) }));
-  }
-}
 
 // 树空白区域右键：节点级处理器已 stopPropagation，走到这里的必然是空白区域
 function onTreeAreaContextmenu(e) {

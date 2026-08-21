@@ -23,6 +23,8 @@ import (
 
 	"ally-dev/internal/tools/edit"
 	"ally-dev/internal/tools/read"
+
+	openai "github.com/sashabaranov/go-openai"
 )
 
 type preparedFileEdit struct {
@@ -344,6 +346,42 @@ func salvageEditRequest(args []byte) (req ModelEditToolRequest, dropped int, ok 
 		break
 	}
 	return req, dropped, salvageChanges(req.Files) > 0
+}
+
+// prepareToolCallsForExecution separates the arguments persisted/replayed to
+// providers from the arguments used for this execution. A truncated edit keeps
+// its raw byte prefix for salvageEditRequest, while the assistant tool_call is
+// rewritten to the recovered valid JSON so the next model request cannot be
+// rejected for malformed arguments. Other invalid calls use the explicit
+// truncation marker on both paths.
+func prepareToolCallsForExecution(toolCalls []openai.ToolCall) ([]openai.ToolCall, []string, bool) {
+	prepared := cloneToolCalls(toolCalls)
+	executionArgs := make([]string, len(prepared))
+	salvaged := false
+	for i := range prepared {
+		raw := prepared[i].Function.Arguments
+		executionArgs[i] = raw
+		if strings.TrimSpace(raw) == "" {
+			prepared[i].Function.Arguments = "{}"
+			executionArgs[i] = "{}"
+			continue
+		}
+		if json.Valid([]byte(raw)) {
+			continue
+		}
+		if normalizeToolName(prepared[i].Function.Name) == "edit" {
+			if req, _, ok := salvageEditRequest([]byte(raw)); ok && validateModelEditToolRequest(req.Files) == nil {
+				if safe, err := json.Marshal(req); err == nil {
+					prepared[i].Function.Arguments = string(safe)
+					salvaged = true
+					continue
+				}
+			}
+		}
+		prepared[i].Function.Arguments = truncatedToolCallArguments
+		executionArgs[i] = truncatedToolCallArguments
+	}
+	return prepared, executionArgs, salvaged
 }
 
 // salvagePartialFileEdit recovers the complete fields of one file entry whose

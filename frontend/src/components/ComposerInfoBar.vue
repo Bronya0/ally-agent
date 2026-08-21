@@ -315,7 +315,10 @@ const modelGroups = computed(() => {
       ...group,
       models: group.models.sort((left, right) => compareModelLabels(left.model?.model, right.model?.model)),
     }))
-    .sort((left, right) => compareModelLabels(left.label, right.label));
+    .sort((left, right) => {
+      if (left.hasActiveModel !== right.hasActiveModel) return left.hasActiveModel ? -1 : 1;
+      return compareModelLabels(left.label, right.label);
+    });
 });
 const modelMenuOptions = computed(() => {
   const options = [];
