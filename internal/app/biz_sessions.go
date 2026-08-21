@@ -1168,3 +1168,97 @@ func textFromMultiContent(parts []openai.ChatMessagePart) string {
 	}
 	return b.String()
 }
+
+// TruncateSessionHistoryRequest identifies which user turn to keep as the last
+// one in the saved model history. The frontend sends the target user message's
+// content along with its 0-based index among user turns.
+type TruncateSessionHistoryRequest struct {
+	SessionID        string `json:"sessionId"`
+	UserMessageIndex int    `json:"userMessageIndex"`
+	ExpectedContent  string `json:"expectedContent"`
+}
+
+// TruncateSessionHistory cuts the saved model history (memory + disk) so the
+// target user turn (inclusive) and everything after it are dropped. UI snapshot
+// persistence is handled by the frontend via SaveSession; this method only
+// rewrites the model-side history that buildMessages() feeds to the provider.
+func (a *App) TruncateSessionHistory(req TruncateSessionHistoryRequest) (int, error) {
+	if err := a.ensureInitialized(); err != nil {
+		return 0, err
+	}
+	sessionID := strings.TrimSpace(req.SessionID)
+	if sessionID == "" {
+		return 0, errors.New("session id is required")
+	}
+	if req.UserMessageIndex < 0 {
+		return 0, errors.New("user message index must be non-negative")
+	}
+
+	// Load the complete history, preferring the in-memory run source and
+	// falling back to disk. loadHistoryLocked already holds a.mu internally;
+	// we snapshot the messages here so no lock is held while we inspect them.
+	a.mu.Lock()
+	var messages []openai.ChatCompletionMessage
+	if cached, ok := a.histories[sessionID]; ok && len(cached) > 0 {
+		messages = cloneChatMessages(cached)
+	} else {
+		messages = a.loadHistoryLocked(sessionID)
+	}
+	a.mu.Unlock()
+	if len(messages) == 0 {
+		return 0, errors.New("session has no saved history")
+	}
+
+	// Locate the target user turn: the (UserMessageIndex)-th user message.
+	targetIndex := -1
+	userSeen := 0
+	expected := strings.TrimSpace(req.ExpectedContent)
+	expectedLen := len(expected)
+	for i, m := range messages {
+		if m.Role != openai.ChatMessageRoleUser {
+			continue
+		}
+		if userSeen != req.UserMessageIndex {
+			userSeen++
+			continue
+		}
+		// If the frontend supplied text, sanity-check that this user turn
+		// plausibly contains it (handles attachment/image text concatenation).
+		content := strings.TrimSpace(textFromMessage(m))
+		if expectedLen > 0 && !strings.Contains(content, expected) {
+			return 0, fmt.Errorf("user message %d does not match expected content", req.UserMessageIndex)
+		}
+		targetIndex = i
+		break
+	}
+	if targetIndex < 0 {
+		return 0, fmt.Errorf("user message index %d not found in history", req.UserMessageIndex)
+	}
+
+	// Keep everything strictly before the target user turn. If a tool-call
+	// assistant turn immediately precedes it, back up to the user turn that
+	// opened that round so the truncated prefix is an intact protocol sequence.
+	cut := targetIndex
+	if cut > 0 && messages[cut-1].Role == openai.ChatMessageRoleTool {
+		for j := cut - 1; j >= 0; j-- {
+			if messages[j].Role == openai.ChatMessageRoleUser {
+				cut = j
+				break
+			}
+		}
+	}
+	truncated := messages[:cut]
+
+	a.saveHistory(sessionID, truncated)
+	return len(truncated), nil
+}
+
+// textFromMessage returns the model-facing text of a stored message, handling
+// multi-content form used by attachment-bearing messages.
+func textFromMessage(m openai.ChatCompletionMessage) string {
+	if len(m.MultiContent) > 0 {
+		return textFromMultiContent(m.MultiContent)
+	}
+	return m.Content
+}
+
