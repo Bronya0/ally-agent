@@ -1312,19 +1312,6 @@ function exportModelConfigs() {
   });
 }
 
-watch(() => modelDraft.apiFormat, (next, previous) => {
-  if (!modelEditorVisible.value) return;
-  // Switching the API format never rewrites Base URL: it is left to manual
-  // input (or filled by an explicit catalog provider preset). The per-format
-  // default is only shown as the input placeholder.
-  const nextFormat = normalizeApiFormat(next);
-  if (nextFormat === 'anthropic_messages') {
-    if (!modelDraft.maxTokens || modelDraft.maxTokens > 64000) modelDraft.maxTokens = 8192;
-  } else if (normalizeApiFormat(previous) === 'anthropic_messages' && modelDraft.maxTokens === 8192) {
-    modelDraft.maxTokens = 384000;
-  }
-});
-
 // MCP state
 const mcpConfigText = ref('');
 const mcpServers = ref([]);

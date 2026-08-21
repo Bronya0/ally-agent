@@ -144,7 +144,9 @@ func baseURLForAPIFormat(cfg ConfigState) string {
 
 func defaultMaxTokensForAPIFormat(format string) int {
 	if normalizeAPIFormat(format) == apiFormatAnthropicMessages {
-		return 8192
+		// Modern Claude models ship a 64K max output; the legacy 8192 default no
+		// longer matches any current catalog entry.
+		return 64000
 	}
 	return 384000
 }
