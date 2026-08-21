@@ -576,7 +576,9 @@ defineExpose({ scrollbarRef, scrollToBottom, scrollToUserQuestion, scrollToBotto
 
 /* Delete button on user questions: absolutely pinned to the row's top-right,
    never participates in document flow (so it can never wrap to a second row),
-   and hidden until the row is hovered. */
+   and hidden until the row is hovered. Centering mirrors the proven
+   workspace-explorer-icon-btn pattern: inline-flex + center, svg display:block
+   with a fixed size, no font-size/line-height that would disturb baseline. */
 .user-delete-btn {
   position: absolute;
   top: 8px;
@@ -588,12 +590,9 @@ defineExpose({ scrollbarRef, scrollToBottom, scrollToUserQuestion, scrollToBotto
   height: 22px;
   margin: 0;
   padding: 0;
-  border: none;
-  border-radius: 4px;
-  background: transparent;
+  border: 0;
   color: #8a8a8a;
-  font-size: 12px;
-  line-height: 1;
+  background: transparent;
   cursor: pointer;
   opacity: 0;
   transition: opacity 0.12s ease, color 0.12s ease, background 0.12s ease;
