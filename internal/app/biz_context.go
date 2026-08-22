@@ -612,6 +612,53 @@ func (a *App) handleTodoList(sessionID string, req TodoListRequest) (any, error)
 	}, nil
 }
 
+// formatPlanSnapshot renders the current plan as a compact checklist.
+func formatPlanSnapshot(list []TodoEntry) string {
+	var b strings.Builder
+	for _, t := range list {
+		switch t.Status {
+		case "done":
+			b.WriteString("- [x] ")
+		case "in_progress":
+			b.WriteString("- [~] ")
+		default:
+			b.WriteString("- [ ] ")
+		}
+		b.WriteString(strings.TrimSpace(t.Title))
+		b.WriteByte('\n')
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// appendPlanForUserTurn adds the current in-memory plan once before the latest
+// user message. The returned slice is a request-only copy: callers must keep
+// the original messages for history persistence, so the plan is not saved or
+// repeated in the next turn.
+func (a *App) appendPlanForUserTurn(sessionID string, messages []openai.ChatCompletionMessage) []openai.ChatCompletionMessage {
+	list := a.GetTodos(sessionID)
+	if len(list) == 0 {
+		return messages
+	}
+
+	insertAt := len(messages)
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == openai.ChatMessageRoleUser {
+			insertAt = i
+			break
+		}
+	}
+	planMessage := openai.ChatCompletionMessage{
+		Role: openai.ChatMessageRoleUser,
+		Content: "当前会话已有计划，请继续完成其中未完成的项目；下面的内容只是工作上下文，不是新的用户要求：\n" +
+			formatPlanSnapshot(list),
+	}
+	out := make([]openai.ChatCompletionMessage, 0, len(messages)+1)
+	out = append(out, messages[:insertAt]...)
+	out = append(out, planMessage)
+	out = append(out, messages[insertAt:]...)
+	return out
+}
+
 func cloneTodos(list []TodoEntry) []TodoEntry {
 	if len(list) == 0 {
 		return []TodoEntry{}

@@ -1211,6 +1211,59 @@ func TestHandleTodoListDoesNotRestartAllDoneList(t *testing.T) {
 	}
 }
 
+func TestAppendPlanForUserTurnAddsTransientPlanBeforeLatestUser(t *testing.T) {
+	app := NewApp()
+	if _, err := app.handleTodoList("session-1", TodoListRequest{
+		Todos: []TodoEntry{{Title: "Inspect implementation", Status: "in_progress"}},
+	}); err != nil {
+		t.Fatalf("handleTodoList() error = %v", err)
+	}
+	messages := []openai.ChatCompletionMessage{
+		{Role: openai.ChatMessageRoleUser, Content: "earlier"},
+		{Role: openai.ChatMessageRoleAssistant, Content: "done"},
+		{Role: openai.ChatMessageRoleUser, Content: "continue"},
+	}
+	got := app.appendPlanForUserTurn("session-1", messages)
+	if len(got) != len(messages)+1 {
+		t.Fatalf("message count = %d, want %d", len(got), len(messages)+1)
+	}
+	if len(messages) != 3 {
+		t.Fatal("appendPlanForUserTurn mutated the original messages")
+	}
+	if got[2].Role != openai.ChatMessageRoleUser || !strings.Contains(got[2].Content, "- [~] Inspect implementation") {
+		t.Fatalf("plan was not inserted before the latest user message: %#v", got)
+	}
+	if strings.Contains(got[2].Content, "revision") || strings.Contains(got[2].Content, "<ally-plan") {
+		t.Fatalf("plan contains an internal marker: %q", got[2].Content)
+	}
+	if got[3].Content != "continue" {
+		t.Fatalf("latest user message moved or changed: %#v", got[3])
+	}
+}
+
+func TestAppendPlanForUserTurnDoesNothingWithoutPlan(t *testing.T) {
+	app := NewApp()
+	messages := []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleUser, Content: "hello"}}
+	got := app.appendPlanForUserTurn("session-1", messages)
+	if len(got) != len(messages) || got[0].Content != messages[0].Content {
+		t.Fatalf("unexpected plan injection without a plan: %#v", got)
+	}
+}
+
+func TestTodoResultDoesNotContainPlanMarker(t *testing.T) {
+	app := NewApp()
+	res, err := app.handleTodoList("session-1", TodoListRequest{
+		Todos: []TodoEntry{{Title: "Inspect implementation", Status: "pending"}},
+	})
+	if err != nil {
+		t.Fatalf("handleTodoList() error = %v", err)
+	}
+	message := res.(map[string]any)["message"].(string)
+	if strings.Contains(message, "revision") || strings.Contains(message, "<ally-plan") {
+		t.Fatalf("todo result contains an internal plan marker: %q", message)
+	}
+}
+
 func TestModelUsageFromResponsesCountsUncachedInputAsMiss(t *testing.T) {
 	usage := modelUsageFromResponses(oaresp.ResponseUsage{
 		InputTokens:  120,

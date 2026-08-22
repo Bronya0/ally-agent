@@ -1667,6 +1667,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 		a.notifyCompletion(kind, cfg.Workspace)
 	}
 
+	planAttached := false
 	for step := 0; step < maxAgentSteps; step++ {
 		sanitizedThisStep := false
 		select {
@@ -1758,12 +1759,13 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 		// cache breakpoint lands on the last block. Call kept commented
 		// for quick re-enable:
 		// requestMessages := appendContextBudgetMessage(messages, bd.Total, maxCtx)
-		// The todo list is NOT injected per step: every `plan` tool call
-		// already returns the full updated list in its model-facing tool
-		// result, which is persisted into history and stays visible across
-		// steps and turns. The system prompt carries the finish-your-plan
-		// discipline instead.
+		// 当前用户会话只在第一次模型请求前附带一次计划；后续工具循环
+		// 不重复发送，且计划消息只存在于 requestMessages，不会写入历史。
 		requestMessages := messages
+		if !planAttached {
+			requestMessages = a.appendPlanForUserTurn(sessionID, messages)
+			planAttached = true
+		}
 		modelResp, err := a.streamModelResponse(ctx, cfg, cfg.Model, requestMessages, tools, func(event modelStreamEvent) {
 			if event.ContentDelta != "" {
 				streamDeltas.addContent(event.ContentDelta)
