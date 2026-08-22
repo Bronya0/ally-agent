@@ -21,7 +21,6 @@ Public License v3. See the LICENSE file for details.
     <div v-else-if="errorText" class="file-info-error">{{ errorText }}</div>
     <div v-else-if="info" class="file-info-body">
       <div class="file-info-head">
-        <span class="file-info-name" :title="info.name">{{ info.name }}</span>
         <span class="file-info-path" :title="info.path">{{ info.path }}</span>
       </div>
       <div v-for="section in sections" :key="section.title" class="file-info-section">
@@ -47,7 +46,7 @@ Public License v3. See the LICENSE file for details.
 <script setup>
 import { computed, ref, watch } from 'vue';
 import { useMessage } from 'naive-ui';
-import { GetWorkspaceFileInfo } from '../../bindings/ally-dev/internal/app/app';
+import { GetWorkspaceFileInfoAt } from '../../bindings/ally-dev/internal/app/app';
 import { buildFileInfoSections } from '../utils/fileInfo.mjs';
 import { t } from '../i18n.mjs';
 
@@ -67,8 +66,8 @@ const info = ref(null);
 const errorText = ref('');
 let loadSeq = 0;
 
-watch(() => [props.show, props.path], ([show]) => {
-  if (show && props.path) load();
+watch(() => [props.show, props.path, props.workspace], ([show]) => {
+  if (show && props.path && props.workspace) load();
 });
 
 async function load() {
@@ -77,7 +76,7 @@ async function load() {
   errorText.value = '';
   info.value = null;
   try {
-    const result = await GetWorkspaceFileInfo(props.path);
+    const result = await GetWorkspaceFileInfoAt({ workspace: props.workspace, path: props.path });
     if (seq !== loadSeq) return;
     info.value = result || null;
   } catch (err) {
@@ -132,7 +131,6 @@ function fallbackCopy(text) {
 <style scoped>
 .file-info-body { max-height: 62vh; overflow-y: auto; padding-right: 4px; }
 .file-info-head { display: flex; flex-direction: column; gap: 2px; margin-bottom: 10px; }
-.file-info-name { font-weight: 600; font-size: 14px; color: #e2e8f0; word-break: break-all; }
 .file-info-path { font-family: var(--ally-mono-font); font-size: 12px; color: #858b98; word-break: break-all; }
 .file-info-section { margin-bottom: 12px; }
 .file-info-section-title {

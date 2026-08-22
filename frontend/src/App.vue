@@ -36,7 +36,7 @@ Public License v3. See the LICENSE file for details.
             />
 
             <!-- Main chat area -->
-            <div :class="['main-area', { 'explorer-pushed': explorerVisibleFor(activeWorkspaceId) }]" :style="explorerVisibleFor(activeWorkspaceId) ? { '--explorer-pad': (explorerTreeWidthFor(activeWorkspaceId) + 1) + 'px' } : null">
+            <div class="main-area">
               <n-layout class="chat-layout" :content-style="chatLayoutContentStyle">
                 <n-tabs
                   class="workspace-content-tabs"
@@ -63,42 +63,46 @@ Public License v3. See the LICENSE file for details.
                       @toggle-tool="toggleToolExpand"
                       @focus-tool="(eventId) => focusTool(tab.sessionId, eventId)"
                       @clear-focus="clearFocus(tab.sessionId)"
-                      @export-one-msg="exportOneMessage"
-                      @export-all-msgs="exportAllMessages(tab.sessionId)"
-                      @plain-speak="() => sendPlainSpeak(tab.sessionId)"
+                      @export="(key, msg) => handleExportOption(tab.sessionId, key, msg)"
+                      @quick-message="(key) => sendQuickMessage(tab.sessionId, key)"
                       @submit-ask="(msg, answers) => submitAskResponse(tab.sessionId, msg, answers)"
                       @send-suggest="(label) => sendSuggest(tab.sessionId, label)"
                       @delete-user-message="(msg) => handleDeleteUserMessage(tab.sessionId, msg)"
                     />
-                    <WorkspaceExplorer
-                      v-if="explorerVisibleFor(tab.id)"
-                      :ref="(el) => setExplorerRef(tab.id, el)"
-                      :workspace="explorerWorkspaceFor(tab.id)"
-                      :active="tab.id === activeWorkspaceId"
-                      :initial-width="explorerTreeWidthFor(tab.id)"
-                      @close="closeExplorerForTab(tab.id)"
-                      @tree-width-change="(w) => onExplorerTreeWidthChange(tab.id, w)"
-                    />
+
+                    <!-- Plan state belongs to the session behind this workspace Tab. -->
+                    <Transition name="plan-panel">
+                      <div v-if="showPlanPanelFor(tab)" :class="['plan-panel', { collapsed: isPlanPanelCollapsed(tab) }]">
+                        <button
+                          class="plan-panel-header"
+                          :title="isPlanPanelCollapsed(tab) ? $t('app.plan.expand') : $t('app.plan.collapse')"
+                          @click="togglePlanPanel(tab)"
+                        >
+                          <span>{{ $t('app.plan.title') }}</span>
+                          <span class="plan-panel-count">{{ currentPlanNumberFor(tab) }}/{{ planEntriesForTab(tab).length }}</span>
+                          <span :class="['plan-panel-toggle', { expanded: !isPlanPanelCollapsed(tab) }]"></span>
+                        </button>
+                        <div
+                          v-show="!isPlanPanelCollapsed(tab)"
+                          :ref="(el) => setPlanPanelListRef(tab.id, el)"
+                          class="plan-panel-list"
+                        >
+                          <div
+                            v-for="item in orderedPlanEntriesFor(tab)"
+                            :key="item.key"
+                            :class="['plan-item', item.status]"
+                          >
+                            <span class="plan-status">{{ item.status === 'done' ? '✓' : item.status === 'in_progress' ? '●' : '○' }}</span>
+                            <span class="plan-number">{{ item.number }}.</span>
+                            <span class="plan-title">{{ item.title }}</span>
+                          </div>
+                        </div>
+                      </div>
+                    </Transition>
+
                   </n-tab-pane>
                 </n-tabs>
 
-              <!-- Fixed plan panel; kept above the transient composer status row. -->
-              <Transition name="plan-panel">
-                <div v-if="showPlanPanel" :class="['plan-panel', { collapsed: planPanelCollapsed }]">
-                  <button class="plan-panel-header" :title="planPanelCollapsed ? $t('app.plan.expand') : $t('app.plan.collapse')" @click="togglePlanPanel">
-                    <span>{{ $t('app.plan.title') }}</span>
-                    <span class="plan-panel-count">{{ currentPlanNumber }}/{{ todos.length }}</span>
-                    <span :class="['plan-panel-toggle', { expanded: !planPanelCollapsed }]"></span>
-                  </button>
-                  <div v-show="!planPanelCollapsed" ref="planPanelListRef" class="plan-panel-list">
-                    <div v-for="item in orderedPlanEntries" :key="item.key" :class="['plan-item', item.status]">
-                      <span class="plan-status">{{ item.status === 'done' ? '✓' : item.status === 'in_progress' ? '●' : '○' }}</span>
-                      <span class="plan-number">{{ item.number }}.</span>
-                      <span class="plan-title">{{ item.title }}</span>
-                    </div>
-                  </div>
-                </div>
-              </Transition>
 
               <div class="composer">
                 <CommandMenu
@@ -118,10 +122,10 @@ Public License v3. See the LICENSE file for details.
                   @select="applyFileMention"
                 />
                 <div v-if="sessionsVisible" class="sessions-menu">
-                  <div class="command-title">{{ $t('app.sessions.title', { count: sessions.length }) }}</div>
+                  <div class="command-title">{{ $t('app.sessions.title', { count: currentWorkspaceSessions.length }) }}</div>
                   <div ref="sessionsScrollRef" class="command-scroll">
                     <div
-                      v-for="(s, index) in sessions"
+                      v-for="(s, index) in currentWorkspaceSessions"
                       :key="s.id"
                       :class="['command-item', 'session-item', { active: index === sessionsSelectedIndex, current: s.id === activeSessionId }]"
                       role="button"
@@ -130,9 +134,6 @@ Public License v3. See the LICENSE file for details.
                       <span class="session-index">{{ index + 1 }}</span>
                       <div class="session-body">
                         <span class="session-label">{{ sessionDisplayTitle(s) }}</span>
-                        <span v-if="sessionWorkspaceSummary(s) && sessionDisplayTitle(s) !== sessionWorkspaceSummary(s)" class="session-prompt-summary" :title="sessionWorkspacePath(s)">
-                          {{ $t('common.workspace') }}: {{ sessionWorkspaceSummary(s) }}
-                        </span>
                         <span class="session-time">
                           {{ fmtTime(s.createdAt) }}
                           <template v-if="s.id === activeSessionId && s.isRunning"> ~ {{ $t('app.sessions.inProgress') }}</template>
@@ -253,6 +254,25 @@ Public License v3. See the LICENSE file for details.
                 />
               </div>
             </n-layout>
+
+            <!-- Keep explorers outside Naive UI's tab pane wrapper so the active
+                 tree is a normal right-hand flex column, not an overflow escape. -->
+            <template v-for="tab in workspaceTabs" :key="`explorer-${tab.id}`">
+              <div
+                v-if="explorerVisibleFor(tab.id)"
+                v-show="tab.id === activeWorkspaceId"
+                class="workspace-explorer-slot"
+              >
+                <WorkspaceExplorer
+                  :ref="(el) => setExplorerRef(tab.id, el)"
+                  :workspace="explorerWorkspaceFor(tab.id)"
+                  :active="tab.id === activeWorkspaceId"
+                  :initial-width="explorerTreeWidthFor(tab.id)"
+                  @close="closeExplorerForTab(tab.id)"
+                  @tree-width-change="(w) => onExplorerTreeWidthChange(tab.id, w)"
+                />
+              </div>
+            </template>
 
             </div>
           </n-layout>
@@ -1380,11 +1400,12 @@ function openSettings(page = 'general') {
   configVisible.value = true;
 }
 const showSkillsPanel = ref(false);
-const todos = ref([]);
 const todosBySession = reactive({});
 const todoRevisionsBySession = reactive({});
-const planPanelCollapsed = ref(false);
-const planPanelListRef = ref(null);
+// Plan UI state is per session/Tab so switching tabs never reuses another
+// session's collapsed state or list scroll position.
+const planPanelCollapsedBySession = reactive({});
+const planPanelListRefsByTab = reactive(new Map());
 const isMaximised = ref(false);
 const availableSkills = ref([]);
 const activeSkillNames = ref([]);
@@ -1399,21 +1420,69 @@ const tokenStatsVisible = ref(false);
 // 每个 Tab 看到自己工作区的目录树。已经打开过的 Tab
 // 会保留一个常驻组件实例（v-show 切换），编辑草稿不因切 Tab 丢失。
 // 注意：必须用 reactive() 包装 Map，computed/v-for 才能追踪变化。
+// 默认开启：新 Tab 首次访问时自动打开资源树（未手动关闭过的工作区视为默认 true）。
 const workspaceExplorerByTab = reactive(new Map());
 const explorerWorkspaceByTab = reactive(new Map());
 const explorerRefsByTab = reactive(new Map());
+// 资源树开关持久化：按工作区路径（归一化后）记录“用户手动关闭”的工作区，
+// 无记录 = 默认开启。存 localStorage 与 modelByTab 同模式；路径比 Tab id 稳定，
+// 重启后同一工作区能恢复关闭状态。两个 Tab 指向同一工作区时共享默认值。
+const explorerClosedWorkspaces = reactive({});
+const EXPLORER_CLOSED_KEY = 'ally_explorer_closed_workspaces';
+
+function loadExplorerClosedWorkspaces() {
+  try {
+    const raw = localStorage.getItem(EXPLORER_CLOSED_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    for (const [k, v] of Object.entries(parsed)) {
+      if (v) explorerClosedWorkspaces[k] = true;
+    }
+  } catch (_) { /* ignore corrupt entries */ }
+}
+
+function persistExplorerClosedWorkspaces() {
+  try {
+    localStorage.setItem(EXPLORER_CLOSED_KEY, JSON.stringify(explorerClosedWorkspaces));
+  } catch (_) { /* ignore quota errors */ }
+}
+
+function explorerDefaultForPath(path) {
+  // 未选工作区时不展示资源树（与 toggle 入口的工作区检查一致）。
+  const key = workspaceHistoryDedupeKey(path || '');
+  if (!key) return false;
+  return !explorerClosedWorkspaces[key];
+}
+
+function setExplorerClosedForPath(path, closed) {
+  const key = workspaceHistoryDedupeKey(path || '');
+  if (!key) return;
+  if (closed) explorerClosedWorkspaces[key] = true;
+  else if (explorerClosedWorkspaces[key]) delete explorerClosedWorkspaces[key];
+  persistExplorerClosedWorkspaces();
+}
+
+function explorerTabPath(tabId) {
+  const tab = workspaceTabs.value.find((t) => t.id === tabId);
+  return (tab && tab.path) || config.workspace || '';
+}
+
 function explorerVisibleFor(tabId) {
-  return workspaceExplorerByTab.get(tabId) || false;
+  const recorded = workspaceExplorerByTab.get(tabId);
+  if (recorded !== undefined) return recorded;
+  return explorerDefaultForPath(explorerTabPath(tabId));
 }
 function explorerWorkspaceFor(tabId) {
-  return explorerWorkspaceByTab.get(tabId) ?? config.workspace;
+  const tab = workspaceTabs.value.find((t) => t.id === tabId);
+  return explorerWorkspaceByTab.get(tabId) ?? (tab ? tab.path : config.workspace);
 }
 function setExplorerRef(tabId, el) {
   if (el) explorerRefsByTab.set(tabId, el);
   else explorerRefsByTab.delete(tabId);
 }
+
 function closeExplorerForTab(tabId) {
   workspaceExplorerByTab.set(tabId, false);
+  setExplorerClosedForPath(explorerTabPath(tabId), true);
 }
 const explorerTreeWidthByTab = reactive(new Map());
 // 文件树默认宽度 = 窗口宽度的 20%，clamp 到 240–360：下限保证文件名可读，
@@ -1732,29 +1801,72 @@ function sessionDisplayTitle(session) {
   const title = String(session?.title || '').trim();
   const workspace = sessionWorkspaceSummary(session);
   if (!title || title === workspace || title === sessionWorkspacePath(session) || title === 'Session' || title === '会话' || title === t('app.sessions.history')) {
-    return workspace || t('app.sessions.new');
+    return t('app.sessions.new');
   }
   return promptSummaryText(title, SESSION_PROMPT_SUMMARY_MAX_CHARS);
 }
+
+function currentWorkspacePath() {
+  const tab = workspaceTabs.value.find((item) => item.id === activeWorkspaceId.value);
+  return tab ? String(tab.path || '').trim() : String(config.workspace || '').trim();
+}
+
+// The session picker is scoped to the workspace currently shown by the active
+// Tab. Sessions from other workspaces remain persisted, but cannot be selected
+// or displayed from this list.
+const currentWorkspaceSessions = computed(() => {
+  const workspaceKey = workspaceHistoryDedupeKey(currentWorkspacePath());
+  return sessions.value.filter((session) => (
+    workspaceHistoryDedupeKey(sessionWorkspacePath(session)) === workspaceKey
+  ));
+});
 
 const latestUserPromptSummary = computed(() => latestPromptSummaryForSession(activeSession.value));
 const activeSessionRunning = computed(() => !!activeSession.value?.isRunning);
 const scheduledTaskRunningCount = computed(() => scheduledTasks.value.filter((task) => task?.running).length);
 const serviceRunningCount = computed(() => services.value.filter((service) => ['starting', 'running'].includes(service?.status)).length);
-const activeTodoCount = computed(() => todos.value.filter((item) => item?.status !== 'done').length);
-// 面板标题显示"执行到第几个"：当前 in_progress 项在计划里的原始序号；
-// 没有进行中项（例如刚开始列计划）时显示 0 表示还没开始执行。
-const currentPlanNumber = computed(() => {
-  const index = todos.value.findIndex((item) => item?.status === 'in_progress');
-  return index >= 0 ? index + 1 : 0;
-});
-const showPlanPanel = computed(() => todos.value.length > 0 && activeTodoCount.value > 0);
-const orderedPlanEntries = computed(() => orderPlanPanelEntries(todos.value));
+function todosForSession(sessionId) {
+  const entries = sessionId ? todosBySession[sessionId] : null;
+  return Array.isArray(entries) ? entries : [];
+}
 
-function scrollPlanPanelToFocus() {
-  if (planPanelCollapsed.value) return;
+function planEntriesForTab(tab) {
+  return todosForSession(tab?.sessionId);
+}
+
+function showPlanPanelFor(tab) {
+  const entries = planEntriesForTab(tab);
+  return entries.length > 0 && entries.some((item) => item?.status !== 'done');
+}
+
+function currentPlanNumberFor(tab) {
+  const index = planEntriesForTab(tab).findIndex((item) => item?.status === 'in_progress');
+  return index >= 0 ? index + 1 : 0;
+}
+
+function orderedPlanEntriesFor(tab) {
+  return orderPlanPanelEntries(planEntriesForTab(tab));
+}
+
+function isPlanPanelCollapsed(tab) {
+  const sessionId = String(tab?.sessionId || '');
+  return sessionId ? planPanelCollapsedBySession[sessionId] === true : false;
+}
+
+function setPlanPanelListRef(tabId, el) {
+  if (el) {
+    planPanelListRefsByTab.set(tabId, el);
+    scrollPlanPanelToFocus(tabId);
+  } else {
+    planPanelListRefsByTab.delete(tabId);
+  }
+}
+
+function scrollPlanPanelToFocus(tabId) {
+  const tab = workspaceTabs.value.find((item) => item.id === tabId);
+  if (!tab || tab.id !== activeWorkspaceId.value || isPlanPanelCollapsed(tab)) return;
   nextTick(() => {
-    const list = planPanelListRef.value;
+    const list = planPanelListRefsByTab.get(tabId);
     if (!list) return;
     // 面板按原始顺序显示，固定滚到顶部会把进行中任务挤出可视区。
     // 改为把当前 in_progress 项滚动到列表中部；没有进行中项时才回到顶部。
@@ -1768,14 +1880,18 @@ function scrollPlanPanelToFocus() {
   });
 }
 
-function togglePlanPanel() {
-  planPanelCollapsed.value = !planPanelCollapsed.value;
-  scrollPlanPanelToFocus();
+function scrollPlanPanelsForSession(sessionId) {
+  for (const tab of workspaceTabs.value) {
+    if (tab.sessionId === sessionId) scrollPlanPanelToFocus(tab.id);
+  }
 }
 
-watch(orderedPlanEntries, () => {
-  scrollPlanPanelToFocus();
-});
+function togglePlanPanel(tab) {
+  const sessionId = String(tab?.sessionId || '');
+  if (!sessionId) return;
+  planPanelCollapsedBySession[sessionId] = !isPlanPanelCollapsed(tab);
+  scrollPlanPanelToFocus(tab.id);
+}
 
 const MAX_RENDER_MESSAGES = 180;
 const MAX_EXPANDED_RENDER_MESSAGES = 360;
@@ -2118,14 +2234,16 @@ function toggleWorkspaceExplorer() {
     return;
   }
   const tabId = activeWorkspaceId.value;
-  if (workspaceExplorerByTab.get(tabId)) {
+  const workspace = explorerTabPath(tabId);
+  if (explorerVisibleFor(tabId)) {
     const explorer = explorerRefsByTab.get(tabId);
-    if (explorer) explorer.requestClose();
+    if (explorer) void explorer.requestClose();
     else closeExplorerForTab(tabId);
     return;
   }
-  explorerWorkspaceByTab.set(tabId, config.workspace);
+  explorerWorkspaceByTab.set(tabId, workspace);
   workspaceExplorerByTab.set(tabId, true);
+  setExplorerClosedForPath(workspace, false);
 }
 
 // Context computation — call backend for accurate full-payload token count.
@@ -2604,6 +2722,8 @@ function ensureWorkspaceTabSession(tab) {
 
 async function activateSelectedSession(target) {
   if (!target) return false;
+  const currentWorkspaceKey = workspaceHistoryDedupeKey(currentWorkspacePath());
+  if (workspaceHistoryDedupeKey(sessionWorkspacePath(target)) !== currentWorkspaceKey) return false;
   const currentTab = workspaceTabs.value.find((tab) => tab.id === activeWorkspaceId.value) || null;
   const linkedTab = currentTab?.sessionId === target.id
     ? currentTab
@@ -2664,12 +2784,15 @@ async function closeWorkspaceTab(id) {
   if (workspaceTabs.value.length <= 1) return;
   const idx = workspaceTabs.value.findIndex((t) => t.id === id);
   if (idx === -1) return;
-  // Explorer 状态随 Tab 一起释放（未保存草稿直接丢弃）。
+  // Explorer 内存状态随 Tab 一起释放（未保存草稿直接丢弃）；持久化按工作区路径
+  // 记录，与 Tab 生命周期无关，无需在此清理。
   workspaceExplorerByTab.delete(id);
   explorerWorkspaceByTab.delete(id);
   explorerRefsByTab.delete(id);
   explorerTreeWidthByTab.delete(id);
   const tab = workspaceTabs.value[idx];
+  if (tab?.sessionId) delete planPanelCollapsedBySession[tab.sessionId];
+  planPanelListRefsByTab.delete(id);
   workspaceTabs.value.splice(idx, 1);
   conversationMessagesRefs.delete(id);
   // Release the linked session's backend resources but keep it in the session
@@ -2702,7 +2825,7 @@ async function closeWorkspaceTab(id) {
 async function switchWorkspaceTab(id) {
   const tab = workspaceTabs.value.find((t) => t.id === id);
   if (!tab) return;
-  if (!workspaceExplorerByTab.has(id)) workspaceExplorerByTab.set(id, false);
+  if (!workspaceExplorerByTab.has(id)) workspaceExplorerByTab.set(id, explorerDefaultForPath(tab.path));
   const switchVersion = ++workspaceSwitchVersion;
   const linkedSession = ensureWorkspaceTabSession(tab);
   saveSessions();
@@ -2763,11 +2886,15 @@ async function switchWorkspaceTab(id) {
   });
   // 切换 Tab 时如果目录树已打开且工作区变化，更新捕获的工作区；
   // 组件内 watch(workspace) 会自动触发 loadRoot 重建
-  if (workspaceExplorerByTab.get(id) && explorerWorkspaceByTab.get(id) !== tab.path) {
+  // 默认开启：切换到从未访问过的 Tab 时同步其工作区，目录树首挂即有正确根目录
+  if (workspaceExplorerByTab.get(id) !== false && explorerWorkspaceByTab.get(id) !== tab.path) {
     explorerWorkspaceByTab.set(id, tab.path);
   }
   // 切换 Tab 后自动聚焦新 Tab 的输入框，避免手动点击才能输入
-  nextTick(() => focusPromptInput());
+  nextTick(() => {
+    focusPromptInput();
+    scrollPlanPanelToFocus(id);
+  });
 }
 
 function syncConfigToActiveTab() {
@@ -2793,8 +2920,6 @@ function newSession(title) {
   // 新会话默认无附加工作区
   extraRoots.value = [];
   promptText.value = '';
-  // 新会话默认无 todo，避免上一会话 todo 残留
-  todos.value = [];
   loadTodos(id);
   addWelcome(workspace);
   // Reset workspace token usage for new session
@@ -2814,8 +2939,9 @@ function isDefaultSessionTitle(title) {
 }
 
 async function selectSession(index) {
-  if (index < 0 || index >= sessions.value.length) return;
-  const target = sessions.value[index];
+  const visibleSessions = currentWorkspaceSessions.value;
+  if (index < 0 || index >= visibleSessions.length) return;
+  const target = visibleSessions[index];
   saveSessions();
   sessionsVisible.value = false;
   await activateSelectedSession(target);
@@ -2833,9 +2959,12 @@ function createReplacementSession(title = t('app.sessions.new'), workspacePath =
 }
 
 function deleteSession(index) {
-  if (index < 0 || index >= sessions.value.length) return;
-  const target = sessions.value[index];
+  const visibleSessions = currentWorkspaceSessions.value;
+  if (index < 0 || index >= visibleSessions.length) return;
+  const target = visibleSessions[index];
   if (!target) return;
+  const actualIndex = sessions.value.findIndex((session) => session.id === target.id);
+  if (actualIndex < 0) return;
   if (target.runId || target.isRunning) {
     message.warning(t('app.sessions.runningDeleteBlocked'));
     return;
@@ -2843,10 +2972,10 @@ function deleteSession(index) {
 
   const deletedId = target.id;
   const wasActive = deletedId === activeSessionId.value;
-  const fallback = sessions.value[index + 1] || sessions.value[index - 1] || null;
+  const fallback = visibleSessions[index + 1] || visibleSessions[index - 1] || null;
   const linkedTabs = workspaceTabs.value.filter((tab) => tab.sessionId === deletedId);
   releaseSessionAttachments(target);
-  sessions.value.splice(index, 1);
+  sessions.value.splice(actualIndex, 1);
 
   let replacement = null;
   if (linkedTabs.length > 0 || sessions.value.length === 0) {
@@ -2872,6 +3001,7 @@ function deleteSession(index) {
 
   delete todosBySession[deletedId];
   delete todoRevisionsBySession[deletedId];
+  delete planPanelCollapsedBySession[deletedId];
   delete sessionPromptTexts[deletedId];
   deletePendingAttachments(deletedId);
   delete focusedToolIdsBySession[deletedId];
@@ -2881,7 +3011,7 @@ function deleteSession(index) {
   expanded.delete(deletedId);
   expandedArchiveSessions.value = expanded;
 
-  sessionsSelectedIndex.value = Math.max(0, Math.min(index, sessions.value.length - 1));
+  sessionsSelectedIndex.value = Math.max(0, Math.min(index, currentWorkspaceSessions.value.length - 1));
   saveSessions();
 }
 
@@ -2971,6 +3101,7 @@ async function init() {
     message.error(t('app.config.readFailed', { error: err }));
   }
   loadModelByTab();
+  loadExplorerClosedWorkspaces();
 
   // Init workspace tabs from config. Model state belongs to this Tab, not to
   // its workspace path, so a second Tab can point to the same path safely.
@@ -3828,9 +3959,7 @@ function bindRuntimeEvents() {
     const nextTodos = Array.isArray(data.todos) ? data.todos : [];
     todosBySession[sid] = nextTodos;
     if (revision) todoRevisionsBySession[sid] = revision;
-    if (sid === activeSessionId.value) {
-      todos.value = nextTodos;
-    }
+    scrollPlanPanelsForSession(sid);
   });
   for (const eventName of ['scheduled:update', 'scheduled:run_start', 'scheduled:run_done', 'scheduled:run_error']) {
     onRuntimeEvent(eventName, (data) => applyScheduledTaskEvent(data));
@@ -4642,9 +4771,11 @@ async function sendSuggest(sessionId, label) {
   await sendPrompt();
 }
 
-// "说人话" 按钮：发送一条国际化提示，让 AI 用通俗语言重新回答
-async function sendPlainSpeak(sessionId) {
-  await sendSuggest(sessionId, t('chat.plainSpeak.message'));
+async function sendQuickMessage(sessionId, key) {
+  const message = key === 'continue'
+    ? t('chat.quickMessage.continueMessage')
+    : t('chat.plainSpeak.message');
+  await sendSuggest(sessionId, message);
 }
 
 async function sendPrompt() {
@@ -5207,7 +5338,7 @@ function handlePromptKeydown(event) {
     return;
   }
   if (sessionsVisible.value) {
-    const total = sessions.value.length;
+    const total = currentWorkspaceSessions.value.length;
     if (total === 0) return;
     if (event.key === 'ArrowDown') {
       event.preventDefault();
@@ -5843,16 +5974,18 @@ async function submitAskResponse(sessionId, msg, answers) {
 }
 
 async function loadTodos(sid) {
-  if (!sid) { todos.value = []; return; }
+  if (!sid) return;
   if (Array.isArray(todosBySession[sid])) {
-    todos.value = todosBySession[sid];
+    scrollPlanPanelsForSession(sid);
   }
   try {
     const list = await GetTodos(sid);
-    const nextTodos = list || [];
+    const nextTodos = Array.isArray(list) ? list : [];
     todosBySession[sid] = nextTodos;
-    if (sid === activeSessionId.value) todos.value = nextTodos;
-  } catch (_) { todos.value = []; }
+    scrollPlanPanelsForSession(sid);
+  } catch (_) {
+    // Keep an already cached plan visible if the refresh fails.
+  }
 }
 
 function sortScheduledTasks(tasks) {
@@ -6075,6 +6208,7 @@ function trimRuntimeSessions() {
     releaseSessionAttachments(session);
     delete todosBySession[session.id];
     delete todoRevisionsBySession[session.id];
+    delete planPanelCollapsedBySession[session.id];
     delete sessionPromptTexts[session.id];
     deletePendingAttachments(session.id);
     delete focusedToolIdsBySession[session.id];
@@ -6319,6 +6453,10 @@ async function refreshSessionListData() {
 }
 
 function showSessionList() {
+  if (sessionsVisible.value) {
+    sessionsVisible.value = false;
+    return;
+  }
   saveSessions();
   sessionsVisible.value = true;
   sessionsSelectedIndex.value = 0;
@@ -6329,11 +6467,12 @@ function showSessionList() {
 
 async function switchToSession(index) {
   const idx = parseInt(index);
-  if (isNaN(idx) || idx < 1 || idx > sessions.value.length) {
-    message.error('\u65e0\u6548\u7684\u4f1a\u8bdd\u7f16\u53f7');
+  const visibleSessions = currentWorkspaceSessions.value;
+  if (isNaN(idx) || idx < 1 || idx > visibleSessions.length) {
+    message.error('无效的会话编号');
     return;
   }
-  const target = sessions.value[idx - 1];
+  const target = visibleSessions[idx - 1];
   if (!target) return;
   saveSessions();
   await activateSelectedSession(target);
@@ -6677,7 +6816,7 @@ function toolKind(name) {
   if (name === 'wait') return 'wait';
   if (name === 'ask') return 'ask';
   if (name === 'calculate') return 'calculate';
-  if (name === 'list_files' || name === 'remote_list_files') return 'list';
+  if (name === 'list_files') return 'list';
   if (name === 'read' || name === 'read_file' || name === 'remote_read_file' || name === 'batch_read' || name === 'document_read') return 'read';
   if (name === 'Glob') return 'glob';
   if (name === 'grep') return 'grep';
@@ -6775,8 +6914,13 @@ function makeToolTitle(name, args, meta = {}) {
   if (name === 'list_services') {
     return 'tracked services';
   }
+  if (name === 'remote_edit' && Array.isArray(parsed.files)) {
+    const paths = parsed.files.map(file => file?.path).filter(Boolean);
+    const summary = paths.length === 1 ? paths[0] : `${paths.length} files`;
+    return parsed.target ? `${parsed.target} · ${summary}` : summary;
+  }
   if (name === 'edit' || name === 'remote_edit') {
-	if ((name === 'edit' || name === 'remote_edit') && Array.isArray(parsed.files)) return parsed.files.length === 1 ? (parsed.files[0]?.path || '') : `${parsed.files.length} files`;
+    if (Array.isArray(parsed.files)) return parsed.files.length === 1 ? (parsed.files[0]?.path || '') : `${parsed.files.length} files`;
     return parsed.target ? `${parsed.target} · ${parsed.path || ''}` : (parsed.path || '');
   }
   if (name === 'create' || name === 'delete' || name === 'remote_create_file' || name === 'remote_delete_path') {
@@ -6794,8 +6938,7 @@ function makeToolTitle(name, args, meta = {}) {
   if (name === 'Glob') {
     return parsed.pattern || '';
   }
-  if (name === 'list_files' || name === 'remote_list_files') {
-    if (parsed.target) return `${parsed.target}${parsed.path ? ' · ' + parsed.path : ''}`;
+  if (name === 'list_files') {
     return parsed.path || parsed.pattern || '';
   }
   if (name === 'read' || name === 'batch_read') {
@@ -6899,7 +7042,7 @@ function formatToolChip(name, result) {
       if (files > 0) return '\u00B7 ' + files + ' file' + (files > 1 ? 's' : '');
     }
     // list_files: · N items
-    if ((name === 'list_files' || name === 'remote_list_files') && parsed.data) {
+    if (name === 'list_files' && parsed.data) {
       const items = Array.isArray(parsed.data.entries) ? parsed.data.entries.length : (parsed.data.count || 0);
       if (items > 0) return '\u00B7 ' + items + ' item' + (items > 1 ? 's' : '');
     }
@@ -7090,7 +7233,7 @@ function formatToolBody(name, body) {
     // in the message body or build a hidden detail preview.
     if (name === 'grep' && parsed.data) return '';
     // list_files result: show entries
-    if ((name === 'list_files' || name === 'remote_list_files') && parsed.data && Array.isArray(parsed.data.entries)) {
+    if (name === 'list_files' && parsed.data && Array.isArray(parsed.data.entries)) {
       let out = parsed.data.count + ' items';
       if (parsed.data.truncated) out += ' (truncated)';
       out += '\n';
@@ -7372,6 +7515,14 @@ function exportOneMessage(msg) {
   downloadMD(md, `ally-response.md`);
 }
 
+function handleExportOption(sessionId, key, msg) {
+  if (key === 'response') {
+    exportOneMessage(msg);
+  } else if (key === 'session') {
+    exportAllMessages(sessionId);
+  }
+}
+
 function exportAllMessages(sessionId = activeSessionId.value) {
   const session = sessions.value.find((item) => item.id === sessionId);
   const msgs = session?.messages || [];
@@ -7424,7 +7575,7 @@ let sessionTokensRefreshing = false;
 async function refreshSessionTokensList() {
   if (sessionTokensRefreshing) return;
   sessionTokensRefreshing = true;
-  const targets = sessions.value.filter((session) => session?.id && !Number(session.contextTokens || sessionTokensCache[session.id] || 0));
+  const targets = currentWorkspaceSessions.value.filter((session) => session?.id && !Number(session.contextTokens || sessionTokensCache[session.id] || 0));
   try {
     await Promise.allSettled(targets.map(async (session) => {
       try {
@@ -7577,7 +7728,13 @@ function handleOverlayOutsidePointerDown(event) {
   if (!commandMenuVisible.value && !fileMentionVisible.value && !sessionsVisible.value) return;
   const target = event.target;
   if (!(target instanceof Element)) return;
-  if (target.closest('.command-menu, .file-mention-menu, .sessions-menu')) return;
+  if (target.closest('.sessions-menu')) return;
+  if (target.closest('.composer-sessions-btn')) {
+    if (fileMentionVisible.value) closeFileMentionMenu();
+    if (commandMenuVisible.value) commandMenuVisible.value = false;
+    return;
+  }
+  if (target.closest('.command-menu, .file-mention-menu')) return;
   if (sessionsVisible.value) sessionsVisible.value = false;
   if (fileMentionVisible.value) closeFileMentionMenu();
   if (commandMenuVisible.value) commandMenuVisible.value = false;

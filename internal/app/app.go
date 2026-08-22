@@ -31,27 +31,27 @@ import (
 )
 
 const (
-	appName                 = "Ally"
-	defaultModel            = "deepseek-v4-flash"
-	defaultBaseURL          = "https://api.deepseek.com"
-	defaultReasoningTag     = "reasoning_content"
-	maxReadFileBytes        = 32 * 1024 * 1024
-	maxToolOutput           = 128 * 1024
-	maxFinishedSubagents    = 50
-	maxSubagentToolCalls    = 100
-	maxModelToolOutput      = 12 * 1024
-	maxModelWebOutput       = 96 * 1024
-	maxCodeGraphPromptBytes = 96 * 1024
-	modelToolHeadBytes      = 4 * 1024
-	modelToolTailBytes      = 8 * 1024
-	maxModelGrepMatches     = 200
+	appName                  = "Ally"
+	defaultModel             = "deepseek-v4-flash"
+	defaultBaseURL           = "https://api.deepseek.com"
+	defaultReasoningTag      = "reasoning_content"
+	maxReadFileBytes         = 32 * 1024 * 1024
+	maxToolOutput            = 128 * 1024
+	maxFinishedSubagents     = 50
+	maxSubagentToolCalls     = 100
+	maxModelToolOutput       = 12 * 1024
+	maxModelWebOutput        = 96 * 1024
+	maxCodeGraphPromptBytes  = 96 * 1024
+	modelToolHeadBytes       = 4 * 1024
+	modelToolTailBytes       = 8 * 1024
+	maxModelGrepMatches      = 200
 	maxModelGrepContextLines = 400
-	maxAgentSteps           = 9999
+	maxAgentSteps            = 9999
 	// runInputBufferSize is the per-run capacity of the injected-message queue
 	// (InjectRunMessage). The buffered channel plus non-blocking drain keeps
 	// injection off the chat hot path; a full queue fails the call instead of
 	// blocking the frontend.
-	runInputBufferSize = 32
+	runInputBufferSize               = 32
 	defaultLLMRetries                = 6
 	defaultShellLimit                = 120
 	defaultHTTPTimeout               = 60
@@ -197,11 +197,11 @@ type App struct {
 	notifier               completionNotifier
 	lastCompletionNotifyAt time.Time
 
-	mu             sync.Mutex
-	config         ConfigState
-	configPath     string
-	runs           map[string]context.CancelFunc
-	runSessions    map[string]string
+	mu          sync.Mutex
+	config      ConfigState
+	configPath  string
+	runs        map[string]context.CancelFunc
+	runSessions map[string]string
 	// runInputs queues user messages injected into a live run (runID → buffered
 	// channel). runChat drains it at the top of every agent step so injected
 	// messages enter the model context only after the current tool batch
@@ -222,8 +222,8 @@ type App struct {
 	// biz_workspace.go with the workspace cache fields).
 	sessionWorkspaceMaps map[string]string
 
-	askMu          sync.Mutex
-	pendingAsks    map[string]*pendingAsk
+	askMu       sync.Mutex
+	pendingAsks map[string]*pendingAsk
 
 	subRuns   map[string]*SubagentRun // subId → run
 	subRunsMu sync.Mutex
@@ -461,11 +461,11 @@ type ConfigState struct {
 	// font sizes (px) for code content, tool cards, secondary text, and
 	// auxiliary text. Zero means "use default"; the frontend applies them
 	// as CSS variables.
-	CodeFontSize float64 `json:"codeFontSize,omitempty"`
-	ToolFontSize float64 `json:"toolFontSize,omitempty"`
-	SubFontSize  float64 `json:"subFontSize,omitempty"`
-	AuxFontSize  float64 `json:"auxFontSize,omitempty"`
-	temperatureSet   bool
+	CodeFontSize   float64 `json:"codeFontSize,omitempty"`
+	ToolFontSize   float64 `json:"toolFontSize,omitempty"`
+	SubFontSize    float64 `json:"subFontSize,omitempty"`
+	AuxFontSize    float64 `json:"auxFontSize,omitempty"`
+	temperatureSet bool
 	// noAdapterRetry 是进程内非序列化标记:多 key 模式下置 true,让适配器
 	// 内部关闭退避重试,由 streamModelResponse 的外层循环统一承担重试与
 	// 故障切换,避免 N 个 key × 适配器重试组合爆炸。
@@ -557,11 +557,20 @@ type ChatRequest struct {
 }
 
 type ListFilesRequest struct {
+	// Workspace is used by the UI explorer to pin the request to a Tab's
+	// workspace. Model-facing list_files calls leave it empty and use the
+	// active runtime configuration.
+	Workspace      string `json:"workspace,omitempty"`
 	Path           string `json:"path"`
 	MaxDepth       int    `json:"maxDepth"`
 	Limit          int    `json:"limit"`
 	IncludeHidden  bool   `json:"includeHidden"`
 	IncludeIgnored bool   `json:"includeIgnored"`
+}
+
+type WorkspacePathRequest struct {
+	Workspace string `json:"workspace"`
+	Path      string `json:"path"`
 }
 
 type FileEntry struct {
@@ -657,16 +666,19 @@ type ReplaceLinesRequest struct {
 }
 
 type CreateFileRequest struct {
+	Workspace string `json:"workspace,omitempty"`
 	Path      string `json:"path"`
 	Content   string `json:"content"`
 	Overwrite bool   `json:"overwrite"`
 }
 
 type CreateDirectoryRequest struct {
-	Path string `json:"path"`
+	Workspace string `json:"workspace,omitempty"`
+	Path      string `json:"path"`
 }
 
 type DeletePathRequest struct {
+	Workspace string `json:"workspace,omitempty"`
 	Path      string `json:"path"`
 	Recursive bool   `json:"recursive"`
 }
@@ -918,14 +930,6 @@ type WebFetchResult struct {
 	Truncated     bool           `json:"truncated"`
 	DurationMS    int64          `json:"durationMs"`
 	RobotsAllowed bool           `json:"robotsAllowed"`
-}
-
-type RemoteListFilesRequest struct {
-	Target        string `json:"target"`
-	Path          string `json:"path,omitempty"`
-	MaxDepth      int    `json:"maxDepth,omitempty"`
-	Limit         int    `json:"limit,omitempty"`
-	IncludeHidden bool   `json:"includeHidden,omitempty"`
 }
 
 type RemoteReadFileRequest struct {
@@ -1664,358 +1668,358 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 	}
 
 	for step := 0; step < maxAgentSteps; step++ {
-			sanitizedThisStep := false
-			select {
-			case <-ctx.Done():
-				// 记录用户主动取消标记，让下一轮模型能区分"用户中断"与
-				// provider 报错等其他原因导致的未完成回合。
+		sanitizedThisStep := false
+		select {
+		case <-ctx.Done():
+			// 记录用户主动取消标记，让下一轮模型能区分"用户中断"与
+			// provider 报错等其他原因导致的未完成回合。
+			messages = append(messages, cancelledTurnMarker())
+			emitRunEnd("run:error", "cancelled", map[string]any{"error": "已取消"})
+			return
+		default:
+		} // Inject user messages queued while this run was working: they wait
+		// for the current tool batch to complete and enter the context here,
+		// right before the next model request, so the model sees them in the
+		// following turn. They are persisted with the rest of the history.
+		var injected bool
+		messages, injected = a.appendPendingRunInputs(runID, messages)
+		if injected {
+			// Frontend boundary: the queued message has now entered the model
+			// context. The UI may close out the previous assistant message so
+			// the next response starts on a fresh one.
+			a.emit("run:inject", map[string]any{"runId": runID, "sessionId": sessionID})
+		}
+		// Update live breakdown for context display (includes all tool calls/results)
+		bd := breakdownAcc.update(messages)
+		bd.ToolSchemas = estimateToolSchemaTokens(tools)
+		finalizeContextBreakdownTotal(&bd)
+		a.mu.Lock()
+		a.liveBreakdown[sessionID] = bd
+		a.mu.Unlock()
+
+		// Auto-compact: when context usage exceeds the configured threshold
+		// of the window, compact history. Threshold uses only usedTokens
+		// (not usedTokens + maxTokens) so it reflects actual context state
+		// instead of pre-reserving a fixed reply budget. The threshold is
+		// configurable via Settings → General (default 60%); legacy config
+		// without the field migrates to the default through mergeConfig.
+		usedTokens := bd.Total
+		maxCtx := cfg.ContextWindow
+		if maxCtx <= 0 {
+			maxCtx = 1000000
+		}
+		compactThreshold := clampCompactThreshold(cfg.CompactThreshold)
+		if usedTokens > int(float64(maxCtx)*compactThreshold) {
+			// Compact the in-run message list (system/workspace markers are
+			// stripped by sanitize) so tool activity from this run is included in
+			// the summary instead of being lost when history is replaced.
+			h := sanitizeHistoryMessages(messages)
+			if len(h) > 2 {
+				a.emit("run:compact", map[string]any{"sessionId": sessionID, "tokensBefore": usedTokens})
+				// keepLastUser=false: the current request and any continuation
+				// prompt are re-appended below, so carrying the trailing user
+				// message into the compacted history would duplicate it.
+				if result, err := a.compactHistory(ctx, cfg, sessionID, "", h, false); err == nil {
+					a.mu.Lock()
+					compacted := sanitizeHistoryMessages(a.histories[sessionID])
+					a.mu.Unlock()
+					messages = a.buildSystemContextMessages(sessionID, cfg, a.listCachedSkills())
+					messages = append(messages, compacted...)
+					if strings.TrimSpace(req.Message) != "" || len(req.Attachments) > 0 {
+						messages = appendUserMessageWithAttachments(messages, req.Message, req.Attachments)
+					}
+					breakdownAcc.reset(messages)
+					payload := map[string]any{
+						"sessionId":    sessionID,
+						"tokensBefore": intFromAny(result["tokensBefore"]),
+						"tokensAfter":  intFromAny(result["tokensAfter"]),
+					}
+					if s, _ := result["summary"].(string); s != "" {
+						payload["summary"] = s
+					}
+					a.emit("run:compacted", payload)
+				} else {
+					a.emit("run:compacted", map[string]any{"sessionId": sessionID, "error": err.Error()})
+				}
+			}
+		}
+
+		a.emit("run:llm_wait", map[string]any{"runId": runID, "sessionId": sessionID})
+		toolCalls := []openai.ToolCall{}
+		streamDeltas := newRunStreamDeltaEmitter(runID, sessionID, func(name string, payload map[string]any) {
+			a.emit(name, payload)
+		})
+		toolProgress := newToolCallProgressTracker()
+		toolBatchID := fmt.Sprintf("%d", step)
+		// Context-budget tail injection is disabled (cache-first): the
+		// model does not need live budget numbers — auto-compact at
+		// CompactThreshold (default 60%) already bounds usage — and any
+		// per-step tail item risks prompt-cache churn on providers whose
+		// cache breakpoint lands on the last block. Call kept commented
+		// for quick re-enable:
+		// requestMessages := appendContextBudgetMessage(messages, bd.Total, maxCtx)
+		// The todo list is NOT injected per step: every `plan` tool call
+		// already returns the full updated list in its model-facing tool
+		// result, which is persisted into history and stays visible across
+		// steps and turns. The system prompt carries the finish-your-plan
+		// discipline instead.
+		requestMessages := messages
+		modelResp, err := a.streamModelResponse(ctx, cfg, cfg.Model, requestMessages, tools, func(event modelStreamEvent) {
+			if event.ContentDelta != "" {
+				streamDeltas.addContent(event.ContentDelta)
+			}
+			if event.ReasoningDelta != "" {
+				streamDeltas.addReasoning(event.ReasoningDelta)
+			}
+			if event.Retry != nil {
+				streamDeltas.flush()
+				a.emit("run:retry", map[string]any{
+					"runId":       runID,
+					"sessionId":   sessionID,
+					"attempt":     event.Retry.Attempt,
+					"maxAttempts": event.Retry.MaxAttempts,
+					"error":       event.Retry.Error,
+					"waitMs":      event.Retry.WaitMS,
+					"keyIndex":    event.Retry.KeyIndex,
+					"totalKeys":   event.Retry.TotalKeys,
+				})
+			}
+			if event.Image != nil && event.Image.DataURL != "" {
+				streamDeltas.flush()
+				a.emit("run:image", map[string]any{
+					"runId": runID, "sessionId": sessionID, "id": event.Image.ID,
+					"dataUrl": event.Image.DataURL, "mimeType": event.Image.MimeType, "partial": event.Image.Partial,
+				})
+			}
+			if event.ToolCalls != nil {
+				streamDeltas.flush()
+				toolCalls = cloneToolCalls(event.ToolCalls)
+				for _, toolEvent := range toolProgress.events(runID, sessionID, toolBatchID, toolCalls, a.mcpToolEventMeta) {
+					a.emit(toolEvent.Name, toolEvent.Payload)
+				}
+			}
+		})
+		streamDeltas.flush()
+		if err != nil {
+			// 流式输出期间 ESC:provider stream 因 ctx 取消返回 context.Canceled,
+			// 此处与 step 开头的 ctx.Done() 分支等价,同样写入取消标记后返回。
+			if errors.Is(err, context.Canceled) {
 				messages = append(messages, cancelledTurnMarker())
 				emitRunEnd("run:error", "cancelled", map[string]any{"error": "已取消"})
 				return
-			default:
-			} // Inject user messages queued while this run was working: they wait
-			// for the current tool batch to complete and enter the context here,
-			// right before the next model request, so the model sees them in the
-			// following turn. They are persisted with the rest of the history.
-			var injected bool
-			messages, injected = a.appendPendingRunInputs(runID, messages)
-			if injected {
-				// Frontend boundary: the queued message has now entered the model
-				// context. The UI may close out the previous assistant message so
-				// the next response starts on a fresh one.
-				a.emit("run:inject", map[string]any{"runId": runID, "sessionId": sessionID})
 			}
-			// Update live breakdown for context display (includes all tool calls/results)
-			bd := breakdownAcc.update(messages)
-			bd.ToolSchemas = estimateToolSchemaTokens(tools)
-			finalizeContextBreakdownTotal(&bd)
-			a.mu.Lock()
-			a.liveBreakdown[sessionID] = bd
-			a.mu.Unlock()
-
-			// Auto-compact: when context usage exceeds the configured threshold
-			// of the window, compact history. Threshold uses only usedTokens
-			// (not usedTokens + maxTokens) so it reflects actual context state
-			// instead of pre-reserving a fixed reply budget. The threshold is
-			// configurable via Settings → General (default 60%); legacy config
-			// without the field migrates to the default through mergeConfig.
-			usedTokens := bd.Total
-			maxCtx := cfg.ContextWindow
-			if maxCtx <= 0 {
-				maxCtx = 1000000
-			}
-			compactThreshold := clampCompactThreshold(cfg.CompactThreshold)
-			if usedTokens > int(float64(maxCtx)*compactThreshold) {
-				// Compact the in-run message list (system/workspace markers are
-				// stripped by sanitize) so tool activity from this run is included in
-				// the summary instead of being lost when history is replaced.
-				h := sanitizeHistoryMessages(messages)
-				if len(h) > 2 {
-					a.emit("run:compact", map[string]any{"sessionId": sessionID, "tokensBefore": usedTokens})
-					// keepLastUser=false: the current request and any continuation
-					// prompt are re-appended below, so carrying the trailing user
-					// message into the compacted history would duplicate it.
-					if result, err := a.compactHistory(ctx, cfg, sessionID, "", h, false); err == nil {
-						a.mu.Lock()
-						compacted := sanitizeHistoryMessages(a.histories[sessionID])
-						a.mu.Unlock()
-						messages = a.buildSystemContextMessages(sessionID, cfg, a.listCachedSkills())
-						messages = append(messages, compacted...)
-						if strings.TrimSpace(req.Message) != "" || len(req.Attachments) > 0 {
-							messages = appendUserMessageWithAttachments(messages, req.Message, req.Attachments)
-						}
-						breakdownAcc.reset(messages)
-						payload := map[string]any{
-							"sessionId":    sessionID,
-							"tokensBefore": intFromAny(result["tokensBefore"]),
-							"tokensAfter":  intFromAny(result["tokensAfter"]),
-						}
-						if s, _ := result["summary"].(string); s != "" {
-							payload["summary"] = s
-						}
-						a.emit("run:compacted", payload)
-					} else {
-						a.emit("run:compacted", map[string]any{"sessionId": sessionID, "error": err.Error()})
-					}
-				}
-			}
-
-			a.emit("run:llm_wait", map[string]any{"runId": runID, "sessionId": sessionID})
-			toolCalls := []openai.ToolCall{}
-			streamDeltas := newRunStreamDeltaEmitter(runID, sessionID, func(name string, payload map[string]any) {
-				a.emit(name, payload)
-			})
-			toolProgress := newToolCallProgressTracker()
-			toolBatchID := fmt.Sprintf("%d", step)
-			// Context-budget tail injection is disabled (cache-first): the
-			// model does not need live budget numbers — auto-compact at
-			// CompactThreshold (default 60%) already bounds usage — and any
-			// per-step tail item risks prompt-cache churn on providers whose
-			// cache breakpoint lands on the last block. Call kept commented
-			// for quick re-enable:
-			// requestMessages := appendContextBudgetMessage(messages, bd.Total, maxCtx)
-			// The todo list is NOT injected per step: every `plan` tool call
-			// already returns the full updated list in its model-facing tool
-			// result, which is persisted into history and stays visible across
-			// steps and turns. The system prompt carries the finish-your-plan
-			// discipline instead.
-			requestMessages := messages
-			modelResp, err := a.streamModelResponse(ctx, cfg, cfg.Model, requestMessages, tools, func(event modelStreamEvent) {
-				if event.ContentDelta != "" {
-					streamDeltas.addContent(event.ContentDelta)
-				}
-				if event.ReasoningDelta != "" {
-					streamDeltas.addReasoning(event.ReasoningDelta)
-				}
-				if event.Retry != nil {
-					streamDeltas.flush()
+			// provider 400 通常是上下文里有毒消息（截断参数、拼接工具名等）
+			// 触发的服务端校验失败。先尝试 sanitize 修复上下文再重试一次，
+			// 而不是直接中断会话——这样即使有未被拦截的坏消息漏网，会话也
+			// 能自愈而不是报废。
+			if isProvider400Error(err) && !sanitizedThisStep {
+				sanitizedThisStep = true
+				repaired := sanitizeHistoryMessages(messages)
+				if len(repaired) < len(messages) {
+					messages = repaired
 					a.emit("run:retry", map[string]any{
 						"runId":       runID,
 						"sessionId":   sessionID,
-						"attempt":     event.Retry.Attempt,
-						"maxAttempts": event.Retry.MaxAttempts,
-						"error":       event.Retry.Error,
-						"waitMs":      event.Retry.WaitMS,
-						"keyIndex":    event.Retry.KeyIndex,
-						"totalKeys":   event.Retry.TotalKeys,
+						"attempt":     1,
+						"maxAttempts": 1,
+						"reason":      "context sanitized after provider 400",
 					})
-				}
-				if event.Image != nil && event.Image.DataURL != "" {
-					streamDeltas.flush()
-					a.emit("run:image", map[string]any{
-						"runId": runID, "sessionId": sessionID, "id": event.Image.ID,
-						"dataUrl": event.Image.DataURL, "mimeType": event.Image.MimeType, "partial": event.Image.Partial,
-					})
-				}
-				if event.ToolCalls != nil {
-					streamDeltas.flush()
-					toolCalls = cloneToolCalls(event.ToolCalls)
-					for _, toolEvent := range toolProgress.events(runID, sessionID, toolBatchID, toolCalls, a.mcpToolEventMeta) {
-						a.emit(toolEvent.Name, toolEvent.Payload)
-					}
-				}
-			})
-			streamDeltas.flush()
-			if err != nil {
-				// 流式输出期间 ESC:provider stream 因 ctx 取消返回 context.Canceled,
-				// 此处与 step 开头的 ctx.Done() 分支等价,同样写入取消标记后返回。
-				if errors.Is(err, context.Canceled) {
-					messages = append(messages, cancelledTurnMarker())
-					emitRunEnd("run:error", "cancelled", map[string]any{"error": "已取消"})
-					return
-				}
-				// provider 400 通常是上下文里有毒消息（截断参数、拼接工具名等）
-				// 触发的服务端校验失败。先尝试 sanitize 修复上下文再重试一次，
-				// 而不是直接中断会话——这样即使有未被拦截的坏消息漏网，会话也
-				// 能自愈而不是报废。
-				if isProvider400Error(err) && !sanitizedThisStep {
-					sanitizedThisStep = true
-					repaired := sanitizeHistoryMessages(messages)
-					if len(repaired) < len(messages) {
-						messages = repaired
-						a.emit("run:retry", map[string]any{
-							"runId":     runID,
-							"sessionId": sessionID,
-							"attempt":   1,
-							"maxAttempts": 1,
-							"reason":     "context sanitized after provider 400",
-						})
-						continue
-					}
-				}
-				emitRunEnd("run:error", "error", map[string]any{"error": err.Error()})
-				return
-			}
-
-			content := modelResp.Content
-			reasoning := modelResp.Reasoning
-			toolCalls = modelResp.ToolCalls
-			fallbackInput := 0
-			fallbackOutput := 0
-			if modelResp.Usage == nil || modelResp.Usage.PromptTokens <= 0 {
-				fallbackInput = estimateRequestTokens(messages, tools)
-			}
-			if modelResp.Usage == nil || modelResp.Usage.CompletionTokens <= 0 {
-				fallbackOutput = estimateCompletionTokens(content, reasoning, toolCalls)
-			}
-			a.recordWorkspaceTokenUsage(cfg.Workspace, modelResp.Usage, fallbackInput, fallbackOutput)
-			a.recordTokenStats(cfg.Model, cfg.Workspace, modelResp.Usage, fallbackInput, fallbackOutput)
-			if modelResp.Usage != nil {
-				runCacheHit += modelResp.Usage.CacheHitTokens
-				runCacheMiss += modelResp.Usage.CacheMissTokens
-				runInputTokens += modelResp.Usage.PromptTokens
-				runOutputTokens += modelResp.Usage.CompletionTokens
-			}
-			if stopErr := modelResponseStopError(cfg, modelResp); stopErr != nil {
-				if content != "" || reasoning != "" {
-					messages = append(messages, openai.ChatCompletionMessage{
-						Role:             openai.ChatMessageRoleAssistant,
-						Content:          content,
-						ReasoningContent: reasoning,
-					})
-				}
-				emitRunEnd("run:error", "error", map[string]any{"error": stopErr.Error(), "stopReason": modelResp.StopReason})
-				return
-			}
-			if len(toolCalls) == 0 {
-				if content != "" {
-					messages = append(messages, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleAssistant, Content: content})
-				}
-				// The model stopped calling tools, but the user may have just
-				// injected a message: take the queue once more and continue for
-				// another step so the model actually sees it, instead of ending
-				// the run with the injection still queued.
-				var injected bool
-				messages, injected = a.appendPendingRunInputs(runID, messages)
-				if injected {
-					a.emit("run:inject", map[string]any{"runId": runID, "sessionId": sessionID})
 					continue
 				}
-				a.saveHistory(req.SessionID, messages)
-				success = true
-				emitRunEnd("run:done", "done", nil)
-				return
 			}
+			emitRunEnd("run:error", "error", map[string]any{"error": err.Error()})
+			return
+		}
 
-			for i := range toolCalls {
-				if toolCalls[i].ID == "" {
-					toolCalls[i].ID = fmt.Sprintf("call_%s_%d", runID, i)
-				}
-				if toolCalls[i].Type == "" {
-					toolCalls[i].Type = openai.ToolTypeFunction
-				}
-			}
-			for _, event := range toolProgress.forceEvents(runID, sessionID, toolBatchID, toolCalls, a.mcpToolEventMeta) {
-				a.emit(event.Name, event.Payload)
-			}
-			messages = append(messages, openai.ChatCompletionMessage{
-				Role:      openai.ChatMessageRoleAssistant,
-				Content:   content,
-				ToolCalls: toolCalls,
-			})
-
-			// Execute non-file tools in parallel. Built-in file mutations run
-			// afterward in tool-call order so writes are deterministic.
-			type toolOutcome struct {
-				index     int
-				callID    string
-				name      string
-				result    toolResult
-				json      string
-				modelJSON string
-				duration  int64
-			}
-
-			totalCalls := len(toolCalls)
-			toolSem := make(chan struct{}, 4)
-			outcomes := make([]toolOutcome, totalCalls)
-			toolConflicts := detectToolBatchConflicts(cfg, toolCalls)
-
-			// emitOutcome pushes a single tool's result/error to the frontend as
-			// soon as that tool finishes, instead of waiting for the whole batch.
-			// The Wails emit chain is concurrency-safe (notifyLock + windowthread
-			// serialization) and the frontend locates cards by
-			// runId:toolBatchId:toolCallIndex, so out-of-order emits land
-			// correctly. messages append stays ordered below.
-			emitOutcome := func(o toolOutcome) {
-				if o.result.OK {
-					a.emit("tool:result", mergeToolEventMeta(map[string]any{"runId": runID, "sessionId": sessionID, "toolBatchId": toolBatchID, "toolCallIndex": o.index, "toolCallId": o.callID, "name": o.name, "result": o.json, "durationMs": o.duration}, a.mcpToolEventMeta(o.name)))
-				} else {
-					a.emit("tool:error", mergeToolEventMeta(map[string]any{"runId": runID, "sessionId": sessionID, "toolBatchId": toolBatchID, "toolCallIndex": o.index, "toolCallId": o.callID, "name": o.name, "error": o.result.Error, "errorCode": o.result.ErrorCode, "durationMs": o.duration}, a.mcpToolEventMeta(o.name)))
-				}
-			}
-
-			executeCall := func(idx int, c openai.ToolCall) {
-				started := time.Now()
-				toolCtx := context.WithValue(ctx, toolExecutionMetaContextKey{}, toolExecutionMeta{
-					runID: runID, sessionID: sessionID, toolBatchID: toolBatchID,
-					toolCallIndex: idx, toolCallID: c.ID, toolName: c.Function.Name, toolArgs: c.Function.Arguments,
-				})
-				toolCtx = context.WithValue(toolCtx, runReadCacheContextKey{}, readCache)
-				r := a.executeTool(toolCtx, cfg, sessionID, c.Function.Name, []byte(c.Function.Arguments))
-				duration := time.Since(started).Milliseconds()
-				rj, _ := json.Marshal(r)
-				fullJSON := string(rj)
-				o := toolOutcome{index: idx, callID: c.ID, name: c.Function.Name, result: r, json: fullJSON, modelJSON: compactToolResultForModel(c.Function.Name, r, fullJSON), duration: duration}
-				outcomes[idx] = o
-				emitOutcome(o)
-			}
-			setConflictOutcome := func(idx int, c openai.ToolCall, conflictErr error) {
-				r := toolErrorResult(conflictErr)
-				rj, _ := json.Marshal(r)
-				fullJSON := string(rj)
-				o := toolOutcome{index: idx, callID: c.ID, name: c.Function.Name, result: r, json: fullJSON, modelJSON: fullJSON}
-				outcomes[idx] = o
-				emitOutcome(o)
-			}
-
-			var wg sync.WaitGroup
-			for i, call := range toolCalls {
-				if conflictErr, conflict := toolConflicts[i]; conflict {
-					setConflictOutcome(i, call, conflictErr)
-					continue
-				}
-				if isOrderedFileMutationTool(call.Function.Name) {
-					continue
-				}
-				wg.Add(1)
-				go func(idx int, c openai.ToolCall) {
-					defer wg.Done()
-					toolSem <- struct{}{}        // acquire
-					defer func() { <-toolSem }() // release
-					executeCall(idx, c)
-				}(i, call)
-			}
-			wg.Wait()
-			for i, call := range toolCalls {
-				if _, conflict := toolConflicts[i]; conflict || !isOrderedFileMutationTool(call.Function.Name) {
-					continue
-				}
-				executeCall(i, call)
-			}
-
-			// Append tool results to the model message history in tool-call
-			// order. Emitting already happened per-tool as each finished.
-			// Strip the previous turn's image-injection message first so each
-			// tool batch carries only its own images (single-turn context).
-			messages = stripImageInjectionMessages(messages)
-			for _, o := range outcomes {
+		content := modelResp.Content
+		reasoning := modelResp.Reasoning
+		toolCalls = modelResp.ToolCalls
+		fallbackInput := 0
+		fallbackOutput := 0
+		if modelResp.Usage == nil || modelResp.Usage.PromptTokens <= 0 {
+			fallbackInput = estimateRequestTokens(messages, tools)
+		}
+		if modelResp.Usage == nil || modelResp.Usage.CompletionTokens <= 0 {
+			fallbackOutput = estimateCompletionTokens(content, reasoning, toolCalls)
+		}
+		a.recordWorkspaceTokenUsage(cfg.Workspace, modelResp.Usage, fallbackInput, fallbackOutput)
+		a.recordTokenStats(cfg.Model, cfg.Workspace, modelResp.Usage, fallbackInput, fallbackOutput)
+		if modelResp.Usage != nil {
+			runCacheHit += modelResp.Usage.CacheHitTokens
+			runCacheMiss += modelResp.Usage.CacheMissTokens
+			runInputTokens += modelResp.Usage.PromptTokens
+			runOutputTokens += modelResp.Usage.CompletionTokens
+		}
+		if stopErr := modelResponseStopError(cfg, modelResp); stopErr != nil {
+			if content != "" || reasoning != "" {
 				messages = append(messages, openai.ChatCompletionMessage{
-					Role:       openai.ChatMessageRoleTool,
-					ToolCallID: o.callID,
-					Content:    o.modelJSON,
+					Role:             openai.ChatMessageRoleAssistant,
+					Content:          content,
+					ReasoningContent: reasoning,
 				})
 			}
-			// Inject image files read by this tool batch into multimodal model
-			// context (read of a .png/.jpg/... returns a base64 DataURL). The
-			// user message sits right after the tool results, which keeps the
-			// Anthropic tool-result/user pairing valid and gives all adapters a
-			// user turn to attach the images to.
-			var readImages []readImageCandidate
-			for _, o := range outcomes {
-				readImages = append(readImages, collectReadImages(o.name, &o.result)...)
+			emitRunEnd("run:error", "error", map[string]any{"error": stopErr.Error(), "stopReason": modelResp.StopReason})
+			return
+		}
+		if len(toolCalls) == 0 {
+			if content != "" {
+				messages = append(messages, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleAssistant, Content: content})
 			}
-			if imgMsg := readImageInjectionMessage(readImages); imgMsg != nil {
-				messages = append(messages, *imgMsg)
+			// The model stopped calling tools, but the user may have just
+			// injected a message: take the queue once more and continue for
+			// another step so the model actually sees it, instead of ending
+			// the run with the injection still queued.
+			var injected bool
+			messages, injected = a.appendPendingRunInputs(runID, messages)
+			if injected {
+				a.emit("run:inject", map[string]any{"runId": runID, "sessionId": sessionID})
+				continue
 			}
+			a.saveHistory(req.SessionID, messages)
+			success = true
+			emitRunEnd("run:done", "done", nil)
+			return
+		}
 
-			// A successful sole `suggest` call ends the run: its chips render
-			// under the last assistant message, so issuing another model step
-			// would only invite trailing content after them. Failed or
-			// batch-conflicted suggest calls keep the loop running so the
-			// model can recover from the error.
-			if len(outcomes) == 1 && outcomes[0].name == "suggest" && outcomes[0].result.OK {
-				var injected bool
-				messages, injected = a.appendPendingRunInputs(runID, messages)
-				if injected {
-					a.emit("run:inject", map[string]any{"runId": runID, "sessionId": sessionID})
-					continue
-				}
-				a.saveHistory(req.SessionID, messages)
-				success = true
-				emitRunEnd("run:done", "done", nil)
-				return
+		for i := range toolCalls {
+			if toolCalls[i].ID == "" {
+				toolCalls[i].ID = fmt.Sprintf("call_%s_%d", runID, i)
 			}
+			if toolCalls[i].Type == "" {
+				toolCalls[i].Type = openai.ToolTypeFunction
+			}
+		}
+		for _, event := range toolProgress.forceEvents(runID, sessionID, toolBatchID, toolCalls, a.mcpToolEventMeta) {
+			a.emit(event.Name, event.Payload)
+		}
+		messages = append(messages, openai.ChatCompletionMessage{
+			Role:      openai.ChatMessageRoleAssistant,
+			Content:   content,
+			ToolCalls: toolCalls,
+		})
+
+		// Execute non-file tools in parallel. Built-in file mutations run
+		// afterward in tool-call order so writes are deterministic.
+		type toolOutcome struct {
+			index     int
+			callID    string
+			name      string
+			result    toolResult
+			json      string
+			modelJSON string
+			duration  int64
+		}
+
+		totalCalls := len(toolCalls)
+		toolSem := make(chan struct{}, 4)
+		outcomes := make([]toolOutcome, totalCalls)
+		toolConflicts := detectToolBatchConflicts(cfg, toolCalls)
+
+		// emitOutcome pushes a single tool's result/error to the frontend as
+		// soon as that tool finishes, instead of waiting for the whole batch.
+		// The Wails emit chain is concurrency-safe (notifyLock + windowthread
+		// serialization) and the frontend locates cards by
+		// runId:toolBatchId:toolCallIndex, so out-of-order emits land
+		// correctly. messages append stays ordered below.
+		emitOutcome := func(o toolOutcome) {
+			if o.result.OK {
+				a.emit("tool:result", mergeToolEventMeta(map[string]any{"runId": runID, "sessionId": sessionID, "toolBatchId": toolBatchID, "toolCallIndex": o.index, "toolCallId": o.callID, "name": o.name, "result": o.json, "durationMs": o.duration}, a.mcpToolEventMeta(o.name)))
+			} else {
+				a.emit("tool:error", mergeToolEventMeta(map[string]any{"runId": runID, "sessionId": sessionID, "toolBatchId": toolBatchID, "toolCallIndex": o.index, "toolCallId": o.callID, "name": o.name, "error": o.result.Error, "errorCode": o.result.ErrorCode, "durationMs": o.duration}, a.mcpToolEventMeta(o.name)))
+			}
+		}
+
+		executeCall := func(idx int, c openai.ToolCall) {
+			started := time.Now()
+			toolCtx := context.WithValue(ctx, toolExecutionMetaContextKey{}, toolExecutionMeta{
+				runID: runID, sessionID: sessionID, toolBatchID: toolBatchID,
+				toolCallIndex: idx, toolCallID: c.ID, toolName: c.Function.Name, toolArgs: c.Function.Arguments,
+			})
+			toolCtx = context.WithValue(toolCtx, runReadCacheContextKey{}, readCache)
+			r := a.executeTool(toolCtx, cfg, sessionID, c.Function.Name, []byte(c.Function.Arguments))
+			duration := time.Since(started).Milliseconds()
+			rj, _ := json.Marshal(r)
+			fullJSON := string(rj)
+			o := toolOutcome{index: idx, callID: c.ID, name: c.Function.Name, result: r, json: fullJSON, modelJSON: compactToolResultForModel(c.Function.Name, r, fullJSON), duration: duration}
+			outcomes[idx] = o
+			emitOutcome(o)
+		}
+		setConflictOutcome := func(idx int, c openai.ToolCall, conflictErr error) {
+			r := toolErrorResult(conflictErr)
+			rj, _ := json.Marshal(r)
+			fullJSON := string(rj)
+			o := toolOutcome{index: idx, callID: c.ID, name: c.Function.Name, result: r, json: fullJSON, modelJSON: fullJSON}
+			outcomes[idx] = o
+			emitOutcome(o)
+		}
+
+		var wg sync.WaitGroup
+		for i, call := range toolCalls {
+			if conflictErr, conflict := toolConflicts[i]; conflict {
+				setConflictOutcome(i, call, conflictErr)
+				continue
+			}
+			if isOrderedFileMutationTool(call.Function.Name) {
+				continue
+			}
+			wg.Add(1)
+			go func(idx int, c openai.ToolCall) {
+				defer wg.Done()
+				toolSem <- struct{}{}        // acquire
+				defer func() { <-toolSem }() // release
+				executeCall(idx, c)
+			}(i, call)
+		}
+		wg.Wait()
+		for i, call := range toolCalls {
+			if _, conflict := toolConflicts[i]; conflict || !isOrderedFileMutationTool(call.Function.Name) {
+				continue
+			}
+			executeCall(i, call)
+		}
+
+		// Append tool results to the model message history in tool-call
+		// order. Emitting already happened per-tool as each finished.
+		// Strip the previous turn's image-injection message first so each
+		// tool batch carries only its own images (single-turn context).
+		messages = stripImageInjectionMessages(messages)
+		for _, o := range outcomes {
+			messages = append(messages, openai.ChatCompletionMessage{
+				Role:       openai.ChatMessageRoleTool,
+				ToolCallID: o.callID,
+				Content:    o.modelJSON,
+			})
+		}
+		// Inject image files read by this tool batch into multimodal model
+		// context (read of a .png/.jpg/... returns a base64 DataURL). The
+		// user message sits right after the tool results, which keeps the
+		// Anthropic tool-result/user pairing valid and gives all adapters a
+		// user turn to attach the images to.
+		var readImages []readImageCandidate
+		for _, o := range outcomes {
+			readImages = append(readImages, collectReadImages(o.name, &o.result)...)
+		}
+		if imgMsg := readImageInjectionMessage(readImages); imgMsg != nil {
+			messages = append(messages, *imgMsg)
+		}
+
+		// A successful sole `suggest` call ends the run: its chips render
+		// under the last assistant message, so issuing another model step
+		// would only invite trailing content after them. Failed or
+		// batch-conflicted suggest calls keep the loop running so the
+		// model can recover from the error.
+		if len(outcomes) == 1 && outcomes[0].name == "suggest" && outcomes[0].result.OK {
+			var injected bool
+			messages, injected = a.appendPendingRunInputs(runID, messages)
+			if injected {
+				a.emit("run:inject", map[string]any{"runId": runID, "sessionId": sessionID})
+				continue
+			}
+			a.saveHistory(req.SessionID, messages)
+			success = true
+			emitRunEnd("run:done", "done", nil)
+			return
+		}
 	}
 	emitRunEnd("run:error", "error", map[string]any{"error": "达到最大 agent 步数，已停止"})
 	return
@@ -2238,12 +2242,6 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		err = decode(&req)
 		if err == nil {
 			data, err = a.webFetchToolWithConfig(ctx, cfg, req)
-		}
-	case "remote_list_files":
-		var req RemoteListFilesRequest
-		err = decode(&req)
-		if err == nil {
-			data, err = a.remoteListFiles(ctx, req)
 		}
 	case "remote_read_file":
 		var req RemoteReadFileRequest
@@ -2573,7 +2571,11 @@ func (a *App) SubmitAskResponse(req AskSubmitRequest) error {
 }
 
 func (a *App) ListFiles(req ListFilesRequest) ([]FileEntry, error) {
-	result, err := a.listFilesWithConfig(a.effectiveConfig(ConfigState{}), req)
+	cfg, err := a.configForWorkspace(req.Workspace)
+	if err != nil {
+		return nil, err
+	}
+	result, err := a.listFilesWithConfig(cfg, req)
 	if err != nil {
 		return nil, err
 	}
@@ -2611,7 +2613,10 @@ func (a *App) ReplaceLines(req ReplaceLinesRequest) (EditResult, error) {
 }
 
 func (a *App) CreateFile(req CreateFileRequest) (EditResult, error) {
-	cfg := a.effectiveConfig(ConfigState{})
+	cfg, err := a.configForWorkspace(req.Workspace)
+	if err != nil {
+		return EditResult{}, err
+	}
 	result, err := a.createFileWithConfig(cfg, req)
 	if err == nil {
 		a.invalidateWorkspaceMapCache(cfg)
@@ -2620,8 +2625,11 @@ func (a *App) CreateFile(req CreateFileRequest) (EditResult, error) {
 }
 
 func (a *App) CreateDirectory(req CreateDirectoryRequest) error {
-	cfg := a.effectiveConfig(ConfigState{})
-	err := a.createDirectoryWithConfig(cfg, req)
+	cfg, err := a.configForWorkspace(req.Workspace)
+	if err != nil {
+		return err
+	}
+	err = a.createDirectoryWithConfig(cfg, req)
 	if err == nil {
 		a.invalidateWorkspaceMapCache(cfg)
 	}
@@ -2629,8 +2637,11 @@ func (a *App) CreateDirectory(req CreateDirectoryRequest) error {
 }
 
 func (a *App) DeletePath(req DeletePathRequest) error {
-	cfg := a.effectiveConfig(ConfigState{})
-	_, err := a.deletePathWithConfig(cfg, req)
+	cfg, err := a.configForWorkspace(req.Workspace)
+	if err != nil {
+		return err
+	}
+	_, err = a.deletePathWithConfig(cfg, req)
 	if err == nil {
 		a.invalidateWorkspaceMapCache(cfg)
 	}

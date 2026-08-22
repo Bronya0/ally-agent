@@ -17,6 +17,8 @@ import (
 )
 
 const workspaceEditorMaxBytes = 16 * 1024 * 1024
+const workspacePreviewMaxBytes = workspaceEditorMaxBytes
+const workspaceVideoMaxBytes = 512 * 1024 * 1024
 
 type WorkspaceFileContent struct {
 	Path       string `json:"path"`
@@ -28,9 +30,10 @@ type WorkspaceFileContent struct {
 }
 
 type SaveWorkspaceFileRequest struct {
-	Path    string `json:"path"`
-	Version string `json:"version"`
-	Content string `json:"content"`
+	Workspace string `json:"workspace,omitempty"`
+	Path      string `json:"path"`
+	Version   string `json:"version"`
+	Content   string `json:"content"`
 }
 
 type SaveWorkspaceFileResult struct {
@@ -44,7 +47,18 @@ type SaveWorkspaceFileResult struct {
 // user-facing workspace editor. It is deliberately separate from ReadFile,
 // whose bounded line-number preview is designed for model context.
 func (a *App) ReadWorkspaceFile(path string) (WorkspaceFileContent, error) {
-	cfg := a.effectiveConfig(ConfigState{})
+	return a.readWorkspaceFileAt("", path)
+}
+
+func (a *App) ReadWorkspaceFileAt(req WorkspacePathRequest) (WorkspaceFileContent, error) {
+	return a.readWorkspaceFileAt(req.Workspace, req.Path)
+}
+
+func (a *App) readWorkspaceFileAt(workspace, path string) (WorkspaceFileContent, error) {
+	cfg, err := a.configForWorkspace(workspace)
+	if err != nil {
+		return WorkspaceFileContent{}, err
+	}
 	resolved, err := resolveReadPath(cfg, path)
 	if err != nil {
 		return WorkspaceFileContent{}, err
@@ -82,6 +96,10 @@ func (a *App) ReadWorkspaceFile(path string) (WorkspaceFileContent, error) {
 // its optimistic-concurrency token. The shared file mutex keeps UI writes from
 // racing Agent file mutations in the same process.
 func (a *App) SaveWorkspaceFile(req SaveWorkspaceFileRequest) (SaveWorkspaceFileResult, error) {
+	return a.saveWorkspaceFileAt(req.Workspace, req)
+}
+
+func (a *App) saveWorkspaceFileAt(workspace string, req SaveWorkspaceFileRequest) (SaveWorkspaceFileResult, error) {
 	if strings.TrimSpace(req.Path) == "" {
 		return SaveWorkspaceFileResult{}, codedToolError("E_BAD_PATH", errors.New("path is required"))
 	}
@@ -92,7 +110,10 @@ func (a *App) SaveWorkspaceFile(req SaveWorkspaceFileRequest) (SaveWorkspaceFile
 		return SaveWorkspaceFileResult{}, codedToolError("E_FILE_TOO_LARGE", fmt.Errorf("content is larger than the %d MiB editor limit", workspaceEditorMaxBytes/(1024*1024)))
 	}
 
-	cfg := a.effectiveConfig(ConfigState{})
+	cfg, err := a.configForWorkspace(workspace)
+	if err != nil {
+		return SaveWorkspaceFileResult{}, err
+	}
 	a.fileOpsMu.Lock()
 	defer a.fileOpsMu.Unlock()
 
@@ -136,6 +157,15 @@ var imageExtensions = map[string]string{
 	".svg": "image/svg+xml", ".ico": "image/x-icon",
 }
 
+var videoExtensions = map[string]string{
+	".mp4": "video/mp4", ".webm": "video/webm", ".ogg": "video/ogg",
+	".ogv": "video/ogg", ".mov": "video/quicktime", ".m4v": "video/mp4",
+}
+
+var pdfExtensions = map[string]string{
+	".pdf": "application/pdf",
+}
+
 // IsWorkspaceImage reports whether the given path has an image extension.
 func (a *App) IsWorkspaceImage(path string) bool {
 	return imageExtMime(path) != ""
@@ -146,9 +176,42 @@ func imageExtMime(path string) string {
 	return imageExtensions[ext]
 }
 
+func videoExtMime(path string) string {
+	ext := strings.ToLower(filepath.Ext(path))
+	return videoExtensions[ext]
+}
+
+func pdfExtMime(path string) string {
+	ext := strings.ToLower(filepath.Ext(path))
+	return pdfExtensions[ext]
+}
+
 // ReadWorkspaceImage reads a binary image file and returns a data URL.
 func (a *App) ReadWorkspaceImage(path string) (WorkspaceImageContent, error) {
-	cfg := a.effectiveConfig(ConfigState{})
+	return a.readWorkspaceImageAt("", path)
+}
+
+func (a *App) ReadWorkspaceImageAt(req WorkspacePathRequest) (WorkspaceImageContent, error) {
+	return a.readWorkspaceImageAt(req.Workspace, req.Path)
+}
+
+func (a *App) ReadWorkspaceVideoAt(req WorkspacePathRequest) (WorkspaceImageContent, error) {
+	return a.readWorkspaceMediaAt(req.Workspace, req.Path, videoExtMime, workspaceVideoMaxBytes, "video preview")
+}
+
+func (a *App) ReadWorkspacePDFAt(req WorkspacePathRequest) (WorkspaceImageContent, error) {
+	return a.readWorkspaceMediaAt(req.Workspace, req.Path, pdfExtMime, workspacePreviewMaxBytes, "preview")
+}
+
+func (a *App) readWorkspaceImageAt(workspace, path string) (WorkspaceImageContent, error) {
+	return a.readWorkspaceMediaAt(workspace, path, imageExtMime, workspacePreviewMaxBytes, "preview")
+}
+
+func (a *App) readWorkspaceMediaAt(workspace, path string, mimeForPath func(string) string, maxBytes int64, limitName string) (WorkspaceImageContent, error) {
+	cfg, err := a.configForWorkspace(workspace)
+	if err != nil {
+		return WorkspaceImageContent{}, err
+	}
 	resolved, err := resolveReadPath(cfg, path)
 	if err != nil {
 		return WorkspaceImageContent{}, err
@@ -160,12 +223,12 @@ func (a *App) ReadWorkspaceImage(path string) (WorkspaceImageContent, error) {
 	if info.IsDir() {
 		return WorkspaceImageContent{}, codedToolError("E_BAD_PATH", fmt.Errorf("not a file: %s", path))
 	}
-	mime := imageExtMime(path)
+	mime := mimeForPath(path)
 	if mime == "" {
-		return WorkspaceImageContent{}, codedToolError("E_BAD_PATH", fmt.Errorf("not an image: %s", path))
+		return WorkspaceImageContent{}, codedToolError("E_BAD_PATH", fmt.Errorf("unsupported media file: %s", path))
 	}
-	if info.Size() > workspaceEditorMaxBytes {
-		return WorkspaceImageContent{}, codedToolError("E_FILE_TOO_LARGE", fmt.Errorf("file is larger than the %d MiB editor limit", workspaceEditorMaxBytes/(1024*1024)))
+	if info.Size() > maxBytes {
+		return WorkspaceImageContent{}, codedToolError("E_FILE_TOO_LARGE", fmt.Errorf("file is larger than the %d MiB %s limit", maxBytes/(1024*1024), limitName))
 	}
 	data, err := os.ReadFile(resolved)
 	if err != nil {

@@ -47,11 +47,8 @@ export function buildFileInfoSections(data) {
   result.push({
     title: t('app.fileInfo.sectionBasic'),
     rows: [
-      { label: t('app.fileInfo.name'), value: data.name },
       { label: t('app.fileInfo.path'), value: data.path, copyable: true },
       { label: t('app.fileInfo.absolutePath'), value: data.absolute, copyable: true },
-      { label: t('app.fileInfo.extension'), value: data.extension || '-' },
-      { label: t('app.fileInfo.type'), value: data.isDir ? t('app.filePreview.folder') : t('app.filePreview.file') },
       data.isDir
         ? { label: t('app.fileInfo.dirCount'), value: String(data.dirCount) }
         : { label: t('app.fileInfo.size'), value: formatSizeWithBytes(data.size), copyable: String(data.size) },
@@ -59,8 +56,6 @@ export function buildFileInfoSections(data) {
   });
   const timeRows = [
     { label: t('app.fileInfo.modTime'), value: formatTimeValue(data.modTime) },
-    { label: t('app.fileInfo.accessTime'), value: formatTimeValue(data.accessTime) },
-    { label: t('app.fileInfo.changeTime'), value: formatTimeValue(data.changeTime) },
     { label: t('app.fileInfo.birthTime'), value: formatTimeValue(data.birthTime) },
   ].filter((row) => row.value);
   if (timeRows.length) result.push({ title: t('app.fileInfo.sectionTimes'), rows: timeRows });
@@ -77,9 +72,7 @@ export function buildFileInfoSections(data) {
   if (!data.isDir) {
     const hashRows = [
       { label: 'MD5', value: data.md5, copyable: true },
-      { label: 'SHA-1', value: data.sha1, copyable: true },
       { label: 'SHA-256', value: data.sha256, copyable: true },
-      { label: 'SHA-512', value: data.sha512, copyable: true },
       { label: 'CRC32', value: data.crc32, copyable: true },
     ].filter((row) => row.value);
     if (hashRows.length) result.push({ title: t('app.fileInfo.sectionHashes'), rows: hashRows });

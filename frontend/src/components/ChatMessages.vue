@@ -82,16 +82,26 @@ Public License v3. See the LICENSE file for details.
               class="run-tokens"
               :title="`input ${msg.runInputTokens} / output ${msg.runOutputTokens} tokens (this run)`"
             >↑{{ fmtTokens(msg.runInputTokens) }} ↓{{ fmtTokens(msg.runOutputTokens) }}</span>
-            <button class="export-icon-btn" @click.stop="$emit('plainSpeak')" :title="$t('chat.plainSpeak.title')" :aria-label="$t('chat.plainSpeak.title')"
+            <n-dropdown
+              trigger="click"
+              placement="top-end"
+              :options="quickMessageOptions"
+              @select="(key) => $emit('quickMessage', key)"
             >
-              <MessageOutlined />
-            </button>
-            <button class="export-icon-btn" @click.stop="$emit('exportOneMsg', msg)" :title="$t('chat.export.responseTitle')" aria-label="export response">
-              <ExportOutlined />
-            </button>
-            <button class="export-icon-btn" @click.stop="$emit('exportAllMsgs')" :title="$t('chat.export.sessionTitle')" aria-label="export session">
-              <ShareAltOutlined />
-            </button>
+              <button class="export-icon-btn" :title="$t('chat.quickMessage.title')" :aria-label="$t('chat.quickMessage.title')" @click.stop>
+                <MessageOutlined />
+              </button>
+            </n-dropdown>
+            <n-dropdown
+              trigger="click"
+              placement="top-end"
+              :options="exportOptions"
+              @select="(key) => $emit('export', key, msg)"
+            >
+              <button class="export-icon-btn" :title="$t('chat.export.title')" :aria-label="$t('chat.export.title')" @click.stop>
+                <ExportOutlined />
+              </button>
+            </n-dropdown>
           </div>
         </div>
         <RenderBoundary v-else-if="msg.kind === 'ask'" :label="$t('chat.ask')">
@@ -154,7 +164,6 @@ import HtmlRenderCard from './HtmlRenderCard.vue';
 import RenderBoundary from './RenderBoundary.vue';
 import ExportOutlined from '@vicons/antd/ExportOutlined';
 import MessageOutlined from '@vicons/antd/MessageOutlined';
-import ShareAltOutlined from '@vicons/antd/ShareAltOutlined';
 import ArrowUpOutlined from '@vicons/antd/ArrowUpOutlined';
 import ArrowDownOutlined from '@vicons/antd/ArrowDownOutlined';
 import CloseOutlined from '@vicons/antd/CloseOutlined';
@@ -276,9 +285,8 @@ defineEmits([
   'toggleTool',
   'focusTool',
   'clearFocus',
-  'exportOneMsg',
-  'exportAllMsgs',
-  'plainSpeak',
+  'export',
+  'quickMessage',
   'submitAsk',
   'deleteUserMessage',
 ]);
@@ -290,6 +298,16 @@ function fmtTokens(n) {
   if (v >= 1e3) return (v / 1e3).toFixed(1) + 'k';
   return String(v);
 }
+
+const quickMessageOptions = computed(() => [
+  { label: t('chat.quickMessage.continue'), key: 'continue' },
+  { label: t('chat.quickMessage.plainSpeak'), key: 'plainSpeak' },
+]);
+
+const exportOptions = computed(() => [
+  { label: t('chat.export.response'), key: 'response' },
+  { label: t('chat.export.session'), key: 'session' },
+]);
 
 const scrollbarRef = ref(null);
 const messagesRootRef = ref(null);

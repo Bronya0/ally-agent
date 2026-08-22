@@ -45,6 +45,26 @@
         <img :src="imageDataUrl" :alt="activeFile?.path" class="workspace-explorer-image" />
       </div>
 
+      <!-- Native video preview; the backend returns a data URL. -->
+      <div v-show="isVideoMode" class="workspace-explorer-video-body">
+        <video
+          :src="videoDataUrl"
+          class="workspace-explorer-video"
+          controls
+          preload="metadata"
+          playsinline
+        ></video>
+      </div>
+
+      <!-- Read-only PDF preview using the WebView's built-in PDF viewer. -->
+      <div v-show="isPdfMode" class="workspace-explorer-pdf-body">
+        <iframe
+          :src="pdfDataUrl"
+          class="workspace-explorer-pdf-frame"
+          :title="activeFile?.path || 'PDF preview'"
+        ></iframe>
+      </div>
+
       <!-- HTML preview (origin-isolated sandboxed iframe; switch OFF to edit source) -->
       <div v-show="isHtmlMode && mdPreviewMode" class="workspace-explorer-html-body">
         <iframe
@@ -74,8 +94,6 @@
         </template>
         <!-- 后端信息加载失败时回退树节点已有数据，保证任何文件点击都有响应 -->
         <template v-else>
-          <div class="file-info-row"><span class="file-info-label">{{ $t('app.filePreview.name') }}</span><span class="file-info-value">{{ activeFile.info.label }}</span></div>
-          <div class="file-info-row"><span class="file-info-label">{{ $t('app.filePreview.type') }}</span><span class="file-info-value">{{ fileTypeLabel }}</span></div>
           <div class="file-info-row" v-if="activeFile.info.size != null"><span class="file-info-label">{{ $t('app.filePreview.size') }}</span><span class="file-info-value">{{ formatSize(activeFile.info.size) }}</span></div>
           <div class="file-info-row" v-if="activeFile.info.modTime"><span class="file-info-label">{{ $t('app.filePreview.modified') }}</span><span class="file-info-value">{{ activeFile.info.modTime }}</span></div>
           <div class="file-info-row file-info-path"><span class="file-info-label">{{ $t('app.filePreview.path') }}</span><span class="file-info-value">{{ activeFile.info.path }}</span></div>
@@ -253,7 +271,7 @@ import 'ace-builds/src-noconflict/mode-csv';
 import 'ace-builds/src-noconflict/mode-tsv';
 import MarkdownIt from 'markdown-it';
 import { isEditableNavigationTarget } from '../utils/sessionState.mjs';
-import { ListFiles, ReadWorkspaceFile, ReadWorkspaceImage, SaveWorkspaceFile, DeletePath, OpenWorkspacePathInFileManager, CreateFile, CreateDirectory, GetWorkspaceFileInfo } from '../../bindings/ally-dev/internal/app/app';
+import { ListFiles, ReadWorkspaceFileAt, ReadWorkspaceImageAt, ReadWorkspaceVideoAt, ReadWorkspacePDFAt, SaveWorkspaceFile, DeletePath, OpenWorkspacePathInFileManagerAt, CreateFile, CreateDirectory, GetWorkspaceFileInfoAt } from '../../bindings/ally-dev/internal/app/app';
 import FileInfoModal from './FileInfoModal.vue';
 import { buildFileInfoSections } from '../utils/fileInfo.mjs';
 import CloseOutlined from '@vicons/antd/CloseOutlined';
@@ -289,6 +307,8 @@ const aceContainerRef = ref(null);
 const mdPreviewRef = ref(null);
 const treeWidth = ref(Math.max(150, Math.min(600, Number(props.initialWidth) || 270)));
 const imageDataUrl = ref('');
+const videoDataUrl = ref('');
+const pdfDataUrl = ref('');
 const htmlContent = ref('');
 const mdPreviewMode = ref(false);
 const syntaxIssue = ref(null);
@@ -313,6 +333,10 @@ let aceResizeObserver = null;
 let dragTeardown = null;
 let requestSequence = 0;
 let disposed = false;
+// Every request carries its workspace explicitly; this epoch additionally
+// prevents an old request from mutating the tree after the component changes
+// roots while the request is in flight.
+let workspaceRequestVersion = 0;
 let navigationBusy = false;
 let confirmPromise = null;
 let mdRenderer = null;
@@ -337,6 +361,8 @@ const workspaceLabel = computed(() => {
 const dirty = computed(() => draftContent.value !== originalContent.value);
 const showEditor = computed(() => Boolean(activeFile.value || loadingFile.value || fileError.value));
 const isImageMode = computed(() => activeFile.value?.kind === 'image');
+const isVideoMode = computed(() => activeFile.value?.kind === 'video');
+const isPdfMode = computed(() => activeFile.value?.kind === 'pdf');
 const isHtmlMode = computed(() => activeFile.value?.kind === 'html');
 const isMarkdown = computed(() => activeFile.value?.kind === 'markdown');
 // 可编辑（text / markdown / html）：html 与 markdown 一样支持编辑↔预览切换；
@@ -492,16 +518,22 @@ async function applySyntaxValidation() {
 // 文件打开方式分类（唯一判断来源）。白名单只声明有专用渲染器的格式，
 // 其余全部走默认 text 路径：能否编辑由后端按内容统一判定，不在前端枚举二进制格式。
 //   image    → 只读图片预览
+//   video    → 原生视频播放器预览
+//   pdf      → 只读 PDF 预览
 //   html     → 只读 HTML 预览（沙箱 iframe）
 //   markdown → 文本编辑 + 渲染预览切换
 //   text     → 默认文本编辑；不可编辑时由后端错误码触发回退基本信息面板
 const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'ico']);
+const VIDEO_EXTS = new Set(['mp4', 'webm', 'ogg', 'ogv', 'mov', 'm4v']);
+const PDF_EXTS = new Set(['pdf']);
 const HTML_EXTS = new Set(['html', 'htm']);
 const MARKDOWN_EXTS = new Set(['md', 'markdown']);
 
 function classifyFile(path) {
   const ext = extension(path);
   if (IMAGE_EXTS.has(ext)) return 'image';
+  if (VIDEO_EXTS.has(ext)) return 'video';
+  if (PDF_EXTS.has(ext)) return 'pdf';
   if (HTML_EXTS.has(ext)) return 'html';
   if (MARKDOWN_EXTS.has(ext)) return 'markdown';
   return 'text';
@@ -511,27 +543,24 @@ function classifyFile(path) {
 const infoMode = computed(() => Boolean(activeFile.value && activeFile.value.info));
 
 // 内容区信息面板的完整数据：进入 infoMode 后异步加载 GetWorkspaceFileInfo，
-// 与属性弹框同源同布局（分区 → 行，含 hash / 完整路径 / 全部时间戳）。
+// 与属性弹框同源同布局（分区 → 行，展示统一保留的信息字段）。
 // 加载完成前或失败时回退树节点基础数据
 const infoDetail = ref(null);
 const infoSections = computed(() => buildFileInfoSections(infoDetail.value));
 
 async function loadInfoDetail(path) {
   const seq = ++requestSequence;
+  const workspace = String(props.workspace || '');
+  const workspaceVersion = workspaceRequestVersion;
   try {
-    const result = await GetWorkspaceFileInfo(path);
-    if (!disposed && seq === requestSequence) infoDetail.value = result || null;
+    const result = await GetWorkspaceFileInfoAt({ workspace, path });
+    if (!disposed && seq === requestSequence && workspaceVersion === workspaceRequestVersion) {
+      infoDetail.value = result || null;
+    }
   } catch {
     // 静默失败：保持树节点基础数据展示
   }
 }
-const fileTypeLabel = computed(() => {
-  const info = activeFile.value?.info;
-  if (!info) return '';
-  if (info.dir) return t('app.filePreview.folder');
-  const ext = primaryExtension(info.path);
-  return ext ? `${ext.toUpperCase()} ${t('app.filePreview.file')}` : t('app.filePreview.file');
-});
 function formatSize(bytes) {
   if (bytes == null) return '';
   const units = ['B', 'KB', 'MB', 'GB', 'TB'];
@@ -546,15 +575,6 @@ const extension = (path) => {
   const dot = name.lastIndexOf('.');
   return dot > 0 ? name.slice(dot + 1).toLowerCase() : '';
 };
-// 主扩展名：文件名第一个点后的第一段（libcrypto.so.1.0.2 → so，notes.txt → txt），
-// 供信息面板展示文件类型，天然适配版本化文件名
-function primaryExtension(path) {
-  const name = String(path || '').split(/[\\/]/).pop() || '';
-  const dot = name.indexOf('.');
-  if (dot <= 0) return '';
-  return name.slice(dot + 1).split('.')[0].toLowerCase();
-}
-
 function aceModeForPath(path) {
   return ACE_MODE_MAP[extension(path)] || 'text';
 }
@@ -654,28 +674,37 @@ function makeNode(entry) {
   };
 }
 
-async function listDirectory(path = '') {
-  const entries = await ListFiles({ path, maxDepth: 1, limit: 1000, includeHidden: true, includeIgnored: false });
+async function listDirectory(path = '', workspace = props.workspace) {
+  const entries = await ListFiles({ workspace, path, maxDepth: 1, limit: 1000, includeHidden: true, includeIgnored: false });
   return (Array.isArray(entries) ? entries : []).map(makeNode);
 }
 
 async function loadRoot() {
   const requestID = ++requestSequence;
+  const workspace = String(props.workspace || '');
+  const workspaceVersion = ++workspaceRequestVersion;
   loadingTreeNodes.clear();
   selectedKeys.value = [];
   expandedKeys.value = [];
   activeFile.value = null;
   clearEditor();
-  if (!props.workspace) return;
+  if (!workspace) {
+    loadingTree.value = false;
+    return;
+  }
   loadingTree.value = true;
   try {
-    const nextTree = await listDirectory('');
-    if (disposed || requestID !== requestSequence) return;
+    const nextTree = await listDirectory('', workspace);
+    if (disposed || requestID !== requestSequence || workspaceVersion !== workspaceRequestVersion) return;
     treeData.value = nextTree;
   } catch (err) {
-    if (!disposed && requestID === requestSequence) message.error(t('app.workspaceExplorer.treeFailed', { error: errorText(err) }));
+    if (!disposed && requestID === requestSequence && workspaceVersion === workspaceRequestVersion) {
+      message.error(t('app.workspaceExplorer.treeFailed', { error: errorText(err) }));
+    }
   } finally {
-    if (!disposed && requestID === requestSequence) loadingTree.value = false;
+    if (!disposed && requestID === requestSequence && workspaceVersion === workspaceRequestVersion) {
+      loadingTree.value = false;
+    }
   }
 }
 
@@ -689,14 +718,16 @@ async function onExpandedKeysChange(keys, _options, meta) {
   expandedKeys.value = Array.isArray(keys) ? keys : [];
   if (!shouldLoad) return;
   const requestID = requestSequence;
+  const workspace = String(props.workspace || '');
+  const workspaceVersion = workspaceRequestVersion;
   loadingTreeNodes.add(node.key);
   try {
-    const children = await listDirectory(node.path);
-    if (disposed || requestID !== requestSequence) return;
+    const children = await listDirectory(node.path, workspace);
+    if (disposed || requestID !== requestSequence || workspaceVersion !== workspaceRequestVersion) return;
     node.children = children;
     node.childrenLoaded = true;
   } catch (err) {
-    if (disposed || requestID !== requestSequence) return;
+    if (disposed || requestID !== requestSequence || workspaceVersion !== workspaceRequestVersion) return;
     node.children = [];
     node.childrenLoaded = true;
     message.error(t('app.workspaceExplorer.treeFailed', { error: errorText(err) }));
@@ -717,23 +748,28 @@ async function refreshTree() {
 
 // 刷新指定目录的子节点：dirPath 为空时刷新根节点，否则查找该目录节点并重新加载其子节点。
 // 用于新建文件/文件夹后将新节点插入树中。
-async function refreshNode(dirPath = '') {
+async function refreshNode(dirPath = '', workspace = props.workspace) {
+  const requestVersion = workspaceRequestVersion;
   if (!dirPath) {
-    const nextTree = await listDirectory('');
+    const nextTree = await listDirectory('', workspace);
+    if (disposed || requestVersion !== workspaceRequestVersion || workspace !== props.workspace) return;
     treeData.value = nextTree;
     return;
   }
   const node = findNodeByPath(dirPath);
-  if (!node) return;
+  if (!node || workspace !== props.workspace) return;
   if (!expandedKeys.value.includes(node.key)) {
     expandedKeys.value = [...expandedKeys.value, node.key];
   }
   try {
-    const children = await listDirectory(node.path);
+    const children = await listDirectory(node.path, workspace);
+    if (disposed || requestVersion !== workspaceRequestVersion || workspace !== props.workspace) return;
     node.children = children;
     node.childrenLoaded = true;
   } catch (err) {
-    message.error(t('app.workspaceExplorer.treeFailed', { error: errorText(err) }));
+    if (workspace === props.workspace) {
+      message.error(t('app.workspaceExplorer.treeFailed', { error: errorText(err) }));
+    }
   }
 }
 
@@ -977,6 +1013,12 @@ const helpRows = computed(() => [
   { key: 'delete', keys: 'Delete', desc: t('app.workspaceExplorer.helpDelete') },
   { key: 'save', keys: `${helpMod}+S`, desc: t('app.workspaceExplorer.helpSave') },
   { key: 'esc', keys: 'Esc', desc: t('app.workspaceExplorer.helpCloseEditor') },
+  { key: 'support-image', keys: t('app.workspaceExplorer.helpSupportImageKey'), desc: t('app.workspaceExplorer.helpSupportImage') },
+  { key: 'support-video', keys: t('app.workspaceExplorer.helpSupportVideoKey'), desc: t('app.workspaceExplorer.helpSupportVideo') },
+  { key: 'support-pdf', keys: t('app.workspaceExplorer.helpSupportPdfKey'), desc: t('app.workspaceExplorer.helpSupportPdf') },
+  { key: 'support-html', keys: t('app.workspaceExplorer.helpSupportHtmlKey'), desc: t('app.workspaceExplorer.helpSupportHtml') },
+  { key: 'support-markdown', keys: t('app.workspaceExplorer.helpSupportMarkdownKey'), desc: t('app.workspaceExplorer.helpSupportMarkdown') },
+  { key: 'support-text', keys: t('app.workspaceExplorer.helpSupportTextKey'), desc: t('app.workspaceExplorer.helpSupportText') },
 ]);
 
 // 工作区根为 Windows 盘符（D:\ 或 D:/）或 UNC（\\server\share）时视为 Windows 风格
@@ -1082,9 +1124,10 @@ async function createFile(rawName, dirPath = '') {
   }
   const fullPath = dirPath ? `${dirPath.replace(/\/+$/, '')}/${base}` : base;
   try {
-    await CreateFile({ path: fullPath, content: '', overwrite: false });
+    const workspace = String(props.workspace || '');
+    await CreateFile({ workspace, path: fullPath, content: '', overwrite: false });
     // 刷新树以显示新节点（目录内创建需要重新加载该目录的子节点）
-    await refreshNode(dirPath);
+    await refreshNode(dirPath, workspace);
     message.success(t('app.workspaceExplorer.fileCreated', { name: base }));
     return true;
   } catch (err) {
@@ -1117,8 +1160,9 @@ async function createFolder(rawName, dirPath = '') {
   }
   const fullPath = dirPath ? `${dirPath.replace(/\/+$/, '')}/${base}` : base;
   try {
-    await CreateDirectory({ path: fullPath });
-    await refreshNode(dirPath);
+    const workspace = String(props.workspace || '');
+    await CreateDirectory({ workspace, path: fullPath });
+    await refreshNode(dirPath, workspace);
     message.success(t('app.workspaceExplorer.folderCreated', { name: base }));
     return true;
   } catch (err) {
@@ -1130,7 +1174,7 @@ async function createFolder(rawName, dirPath = '') {
 async function openWorkspaceFolder(node = null) {
   if (!props.workspace) return;
   try {
-    await OpenWorkspacePathInFileManager(String(node?.path || ''));
+    await OpenWorkspacePathInFileManagerAt({ workspace: props.workspace, path: String(node?.path || '') });
   } catch (err) {
     message.error(t('app.workspaceExplorer.openFolderFailed', { error: errorText(err) }));
   }
@@ -1155,7 +1199,8 @@ async function confirmDeleteNode(node) {
     negativeText: t('common.cancel'),
     onPositiveClick: async () => {
       try {
-        await DeletePath({ path: filePath, recursive: node.dir });
+        const workspace = String(props.workspace || '');
+        await DeletePath({ workspace, path: filePath, recursive: node.dir });
         message.success(t('app.workspaceExplorer.deleted'));
         if (activeFile.value?.path === filePath) clearEditor();
         await refreshTree();
@@ -1221,6 +1266,8 @@ async function openFile(node) {
   const kind = classifyFile(node.path);
   fileError.value = '';
   imageDataUrl.value = '';
+  videoDataUrl.value = '';
+  pdfDataUrl.value = '';
   htmlContent.value = '';
   mdPreviewMode.value = false;
   infoDetail.value = null;
@@ -1228,10 +1275,16 @@ async function openFile(node) {
   if (mdPreviewRef.value) mdPreviewRef.value.innerHTML = '';
   loadingFile.value = true;
   try {
-    if (kind === 'image') {
-      const result = await ReadWorkspaceImage(node.path);
+    if (kind === 'image' || kind === 'video' || kind === 'pdf') {
+      const result = kind === 'video'
+        ? await ReadWorkspaceVideoAt({ workspace: props.workspace, path: node.path })
+        : kind === 'pdf'
+          ? await ReadWorkspacePDFAt({ workspace: props.workspace, path: node.path })
+          : await ReadWorkspaceImageAt({ workspace: props.workspace, path: node.path });
       if (disposed || requestID !== requestSequence) return false;
-      imageDataUrl.value = String(result?.data || '');
+      if (kind === 'video') videoDataUrl.value = String(result?.data || '');
+      else if (kind === 'pdf') pdfDataUrl.value = String(result?.data || '');
+      else imageDataUrl.value = String(result?.data || '');
       activeFile.value = { path: node.path, kind };
       draftContent.value = '';
       originalContent.value = '';
@@ -1239,7 +1292,7 @@ async function openFile(node) {
       return true;
     }
     // html / markdown / text 均以文本读取，仅展示方式不同
-    const result = await ReadWorkspaceFile(node.path);
+    const result = await ReadWorkspaceFileAt({ workspace: props.workspace, path: node.path });
     if (disposed || requestID !== requestSequence) return false;
     if (kind === 'html') {
       // HTML：编辑 + 沙箱 iframe 预览切换（默认预览，开关切到编辑源码）
@@ -1347,7 +1400,12 @@ async function saveFile() {
   if (!activeFile.value || !dirty.value || saving.value) return true;
   saving.value = true;
   try {
-    const result = await SaveWorkspaceFile({ path: activeFile.value.path, version: version.value, content: draftContent.value });
+    const result = await SaveWorkspaceFile({
+      workspace: props.workspace,
+      path: activeFile.value.path,
+      version: version.value,
+      content: draftContent.value,
+    });
     originalContent.value = draftContent.value;
     originalHash.value = result?.sha256 || originalHash.value;
     version.value = result?.version || version.value;
@@ -1417,6 +1475,8 @@ function clearEditor() {
   if (syntaxValidateTimer) { clearTimeout(syntaxValidateTimer); syntaxValidateTimer = 0; }
   syntaxValidateSeq++;
   imageDataUrl.value = '';
+  videoDataUrl.value = '';
+  pdfDataUrl.value = '';
   htmlContent.value = '';
   mdPreviewMode.value = false;
   if (aceEditor) {
@@ -1430,7 +1490,11 @@ function errorText(err) {
   return String(err?.message || err || t('common.failed'));
 }
 
-watch(() => props.workspace, () => { void loadRoot(); }, { immediate: true });
+watch(() => props.workspace, () => {
+  // loadRoot increments the workspace epoch before issuing any request. This
+  // invalidates in-flight operations from the previous Tab/root.
+  void loadRoot();
+}, { immediate: true });
 
 onMounted(() => {
   const element = treeContainerRef.value?.$el || treeContainerRef.value;

@@ -343,12 +343,21 @@ func (a *App) OpenWorkspaceInFileManager() error {
 // OpenWorkspacePathInFileManager opens a workspace-relative file or directory
 // in the system file manager. An empty path opens the workspace root.
 func (a *App) OpenWorkspacePathInFileManager(path string) error {
+	return a.openWorkspacePathInFileManagerAt("", path)
+}
+
+func (a *App) OpenWorkspacePathInFileManagerAt(req WorkspacePathRequest) error {
+	return a.openWorkspacePathInFileManagerAt(req.Workspace, req.Path)
+}
+
+func (a *App) openWorkspacePathInFileManagerAt(workspace, path string) error {
 	if err := a.ensureInitialized(); err != nil {
 		return err
 	}
-	a.mu.Lock()
-	cfg := a.config
-	a.mu.Unlock()
+	cfg, err := a.configForWorkspace(workspace)
+	if err != nil {
+		return err
+	}
 	root, err := workspaceRoot(cfg)
 	if err != nil {
 		return err

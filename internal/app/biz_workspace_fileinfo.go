@@ -54,7 +54,18 @@ type WorkspaceFileInfo struct {
 // streamed through every hash in a single pass; directories are summarized
 // with a bounded recursive walk.
 func (a *App) GetWorkspaceFileInfo(path string) (WorkspaceFileInfo, error) {
-	cfg := a.effectiveConfig(ConfigState{})
+	return a.getWorkspaceFileInfoAt("", path)
+}
+
+func (a *App) GetWorkspaceFileInfoAt(req WorkspacePathRequest) (WorkspaceFileInfo, error) {
+	return a.getWorkspaceFileInfoAt(req.Workspace, req.Path)
+}
+
+func (a *App) getWorkspaceFileInfoAt(workspace, path string) (WorkspaceFileInfo, error) {
+	cfg, err := a.configForWorkspace(workspace)
+	if err != nil {
+		return WorkspaceFileInfo{}, err
+	}
 	resolved, err := resolveReadPath(cfg, path)
 	if err != nil {
 		return WorkspaceFileInfo{}, err

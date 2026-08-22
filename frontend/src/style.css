@@ -294,17 +294,16 @@ code, pre {
 .main-area {
   display: flex;
   flex: 1;
+  min-width: 0;
   min-height: 0;
   overflow: hidden;
   position: relative;
 }
-.main-area.explorer-pushed > .chat-layout {
-  padding-right: var(--explorer-pad, 275px);
-}
 
 .chat-layout {
-  flex: 1;
+  flex: 1 1 auto;
   min-width: 0;
+  min-height: 0;
   height: 100%;
   /* Use background-color (not the shorthand) so an inline background-image
      layer for the custom chat background is not reset. The dark base doubles
@@ -331,15 +330,27 @@ code, pre {
   min-height: 0;
   min-width: 0;
   height: 100%;
+  position: relative;
 }
 
-.workspace-explorer {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  right: 0;
-  z-index: 50;
+/* Each Tab owns one stable slot. The slot, rather than an async component
+   root, controls visibility so inactive explorers cannot remain in layout. */
+.workspace-explorer-slot {
   display: flex;
+  flex: 0 0 auto;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* Tree-only mode is a regular right-hand flex item. Editor mode intentionally
+   becomes a full main-area surface so its editor can use the whole left side. */
+.workspace-explorer {
+  position: relative;
+  display: flex;
+  flex: 0 0 auto;
+  width: auto;
+  height: 100%;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
@@ -348,8 +359,15 @@ code, pre {
 }
 
 .workspace-explorer.has-file {
-  left: 0;
-  width: auto !important;
+  /* In editor mode the explorer is an in-flow full-workspace surface.  The
+     tree stays on the right and the editor flexes into all remaining space;
+     unlike the old negative-offset approach, it never escapes a parent. */
+  position: absolute;
+  inset: 0;
+  z-index: 50;
+  width: auto;
+  max-width: none;
+  flex: none;
 }
 
 .workspace-explorer-tree {
@@ -686,6 +704,10 @@ code, pre {
 
 .workspace-explorer-image-body { flex: 1; min-height: 0; overflow: auto; display: flex; align-items: center; justify-content: center; padding: 16px; background: #1a1a1a; }
 .workspace-explorer-image { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 4px; }
+.workspace-explorer-video-body { flex: 1; min-height: 0; overflow: auto; display: flex; align-items: center; justify-content: center; padding: 16px; background: #1a1a1a; }
+.workspace-explorer-video { display: block; width: 100%; max-height: 100%; border-radius: 4px; background: #000; }
+.workspace-explorer-pdf-body { flex: 1; min-height: 0; display: flex; background: #2a2a2a; }
+.workspace-explorer-pdf-frame { flex: 1; width: 100%; height: 100%; min-height: 0; border: none; background: #fff; }
 
 /* HTML 预览：iframe 铺满编辑区，自身滚动；白色背景贴合浏览器默认渲染 */
 .workspace-explorer-html-body { flex: 1; min-height: 0; display: flex; background: #fff; }
@@ -3048,6 +3070,9 @@ code, pre {
   border: 1px solid rgba(250, 204, 21, 0.18);
   font-size: var(--ally-aux-font-size);
   line-height: 1.45;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: clip;
 }
 
 .edit-changed-lines-block {
@@ -3211,7 +3236,7 @@ code, pre {
 }
 
 
-/* ── Plan panel (fixed above composer) ── */
+/* ── Plan panel (per workspace Tab, above its composer) ── */
 
 .plan-panel {
   border-top: 1px solid rgba(255, 255, 255, 0.08);

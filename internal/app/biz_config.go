@@ -545,6 +545,31 @@ func (a *App) effectiveConfig(overlay ConfigState) ConfigState {
 	return mergeConfig(base, overlay)
 }
 
+// configForWorkspace returns a request-scoped config whose primary workspace is
+// explicitly pinned by the caller. UI workspace explorers use this boundary so
+// a request cannot accidentally resolve a relative path against another Tab's
+// active workspace. An empty workspace preserves the legacy active-config
+// behavior used by model-facing tools and compatibility bindings.
+func (a *App) configForWorkspace(workspace string) (ConfigState, error) {
+	if err := a.ensureInitialized(); err != nil {
+		return ConfigState{}, err
+	}
+	cfg := a.effectiveConfig(ConfigState{})
+	workspace = strings.TrimSpace(workspace)
+	if workspace == "" {
+		return cfg, nil
+	}
+	root, err := pathutil.RootFromConfig(workspace)
+	if err != nil {
+		return ConfigState{}, err
+	}
+	cfg.Workspace = root
+	// An explicitly pinned explorer request is confined to this workspace;
+	// session-level extra roots must not change its path boundary.
+	cfg.ExtraRoots = nil
+	return cfg, nil
+}
+
 func (a *App) effectiveConfigSafe() ConfigState {
 	if err := a.ensureInitialized(); err != nil {
 		return defaultConfigState()

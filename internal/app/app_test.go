@@ -798,6 +798,7 @@ func TestSystemPromptIncludesConsolidatedSafetyRules(t *testing.T) {
 	}
 }
 
+
 func TestSystemPromptDiscouragesRedundantReadsBeforeEdit(t *testing.T) {
 	prompt := defaultSystemPrompt(nil, "", nil, "", "")
 	for _, expected := range []string{
