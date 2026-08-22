@@ -10,7 +10,7 @@ Public License v3. See the LICENSE file for details.
 <template>
   <div :class="['rich-tool-card', 'read', msg.status, { expanded: msg.expanded, 'non-interactive': true }]">
     <div class="tool-line">
-      <span :class="['tool-status-icon', msg.status]">{{ toolIcon(msg) }}</span>
+      <ToolStatusIcon :status="msg.status" />
       <span class="tool-verb">{{ readVerb }}</span>
       <!-- 单文件：直接显示文件名和 chip 在一行；多文件：显示 "N files" -->
       <template v-if="isSingleFile">
@@ -89,10 +89,4 @@ function entryChip(entry) {
   return parts.length ? `· ${parts.join(' · ')}` : '';
 }
 
-function toolIcon(msg) {
-  if (msg.status === 'running') return '●';
-  if (msg.status === 'success' || msg.status === 'completed') return '✓';
-  if (msg.status === 'error' || msg.status === 'failed') return '✗';
-  return '○';
-}
 </script>

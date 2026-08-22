@@ -13,7 +13,7 @@ Public License v3. See the LICENSE file for details.
       :class="['tool-line', { clickable: hasExpandableBody(msg) }]"
       @click.stop="hasExpandableBody(msg) && handleToggle(msg)"
     >
-      <span :class="['tool-status-icon', msg.status]">{{ toolIcon(msg) }}</span>
+      <ToolStatusIcon :status="msg.status" />
       <span class="tool-verb">{{ toolVerb(msg) }}</span>
       <span class="tool-name">{{ toolDisplayName(msg) }}</span>
       <span v-if="msg.title && msg.kind === 'command'" class="tool-command" :title="msg.title">
@@ -33,7 +33,7 @@ Public License v3. See the LICENSE file for details.
       <span v-if="msg.durationText" class="tool-duration">{{ msg.durationText }}</span>
     </div>
 
-    <div v-if="msg.kind === 'edit' && msg.editEntries?.length" class="edit-file-groups">
+    <div v-if="msg.kind === 'edit' && msg.status !== 'error' && msg.editEntries?.length" class="edit-file-groups">
       <div v-for="(entry, ei) in msg.editEntries" :key="entry.path || ei" class="edit-file-group">
         <div class="edit-file-header">
         <span class="edit-file-name">{{ entry.path || $t('tools.file', { index: ei + 1 }) }}</span>
@@ -99,6 +99,7 @@ import { highlightShellCommand } from '../utils/shellHighlight.mjs';
 import { formatToolErrorBody } from '../utils/toolError.mjs';
 import { toolVerbLabel, hasNamedVerb } from '../utils/toolVerb.mjs';
 import { t } from '../i18n.mjs';
+import ToolStatusIcon from './ToolStatusIcon.vue';
 
 const BODY_PREVIEW_LINES = 6;
 const TOOL_OUTPUT_PREVIEW_LINES = 4;
@@ -198,13 +199,6 @@ function formatToolName(name) {
   if (!raw || raw === 'tool') return '';
   return raw;
 }
-
-function toolIcon(msg) {
-  if (msg.status === 'error') return '✗';
-  if (msg.status === 'success') return '✓';
-  return '';
-}
-
 function toolVerb(msg) {
   return toolVerbLabel(msg.name, msg.kind, msg.status, msg.scheduledAction);
 }
@@ -327,7 +321,13 @@ function errorDescription(msg) {
   return translated !== key ? translated : t('tools.error.unknown');
 }
 
+// 已有本地化错误描述时不重复展示原始（多为英文的）错误文本；
+// 完整错误仍通过工具结果返回给模型。
 function errorReasonText(msg) {
+  if (msg?.errorCode) {
+    const key = `tools.error.${msg.errorCode}`;
+    if (t(key) !== key) return '';
+  }
   return formatToolErrorBody(msg?.body);
 }
 

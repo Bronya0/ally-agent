@@ -10,7 +10,7 @@ Public License v3. See the LICENSE file for details.
 <template>
   <div :class="['rich-tool-card', 'render_html', msg.status]">
     <div class="tool-line">
-      <span :class="['tool-status-icon', msg.status]">{{ statusIcon }}</span>
+      <ToolStatusIcon :status="msg.status" />
       <span class="tool-verb">{{ statusLabel }}</span>
       <span v-if="msg.title" class="tool-arg" :title="msg.title">({{ msg.title }})</span>
     </div>
@@ -35,6 +35,7 @@ Public License v3. See the LICENSE file for details.
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { toolVerbLabel } from '../utils/toolVerb.mjs';
 import { buildHtmlRenderDocument, normalizeHtmlFrameHeight } from '../utils/htmlRender.mjs';
+import ToolStatusIcon from './ToolStatusIcon.vue';
 
 const props = defineProps({
   msg: { type: Object, required: true },
@@ -44,7 +45,6 @@ const frameRef = ref(null);
 const frameHeight = ref(200);
 const frameToken = `ally-html-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
-const statusIcon = computed(() => props.msg.status === 'success' ? '✓' : props.msg.status === 'error' ? '✗' : '');
 const statusLabel = computed(() => toolVerbLabel('render_html', 'render_html', props.msg.status));
 
 const normalizedLines = computed(() => {

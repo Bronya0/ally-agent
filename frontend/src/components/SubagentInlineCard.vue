@@ -10,7 +10,7 @@ Public License v3. See the LICENSE file for details.
 <template>
   <div :class="['rich-tool-card', 'subagent-inline', msg.status]">
     <div class="tool-line">
-      <span :class="['tool-status-icon', msg.status]">{{ statusIcon(msg.status) }}</span>
+      <ToolStatusIcon :status="msg.status" />
       <span v-if="msg.subagentRole" class="tool-name">{{ msg.subagentRole }}</span>
       <span v-else-if="rolePending" class="tool-name subagent-name-pending" aria-hidden="true">
         <span class="subagent-name-dot"></span>
@@ -19,15 +19,14 @@ Public License v3. See the LICENSE file for details.
       </span>
       <span v-else class="tool-name">{{ fallbackLabel }}</span>
       <span class="tool-arg" :title="msg.description">({{ msg.description }})</span>
-      <span class="tool-chip">{{ $t('subagent.steps', { current: msg.steps }) }}</span>
-      <span v-if="msg.toolCalls?.length" class="tool-chip">{{ $t('subagent.toolCount', { count: msg.toolCalls.length }) }}</span>
+      <span v-if="msg.maxSteps" class="tool-chip">{{ $t('subagent.budget', { current: msg.steps, limit: msg.maxSteps }) }}{{ msg.toolCalls?.length ? ' ' + $t('subagent.toolCount', { count: msg.toolCalls.length }) : '' }}</span>
       <span v-if="msg.totalTokens > 0" class="tool-chip subagent-token-chip" :title="tokenTooltip">{{ tokenChip }}</span>
       <span v-if="displayDuration" class="tool-duration">{{ displayDuration }}</span>
     </div>
     <div v-if="recentTools.length" class="subagent-inline-body">
       <div v-for="(tc, ti) in recentTools" :key="tc.toolCallId || ti" :class="['subagent-inline-entry', tc.status]">
         <span class="subagent-inline-tree">{{ ti === recentTools.length - 1 ? '└─' : '├─' }}</span>
-        <span :class="['subagent-inline-icon', tc.status]">{{ statusIcon(tc.status) }}</span>
+        <ToolStatusIcon :status="tc.status" />
         <span class="subagent-inline-name">{{ subToolVerb(tc) }}</span>
         <span v-if="toolArgsTitle(tc)" class="subagent-inline-args" :title="toolArgsTitle(tc)">({{ toolArgsTitle(tc) }})</span>
         <span v-if="tc.summary" class="subagent-inline-summary">{{ compactSummary(tc.summary) }}</span>
@@ -44,6 +43,7 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { t } from '../i18n.mjs';
 import { formatHttpToolTitle } from '../utils/toolPreview.mjs';
 import { toolVerbLabel } from '../utils/toolVerb.mjs';
+import ToolStatusIcon from './ToolStatusIcon.vue';
 
 const props = defineProps({
   msg: { type: Object, required: true },
@@ -133,12 +133,6 @@ const tokenTooltip = computed(() => {
   const total = props.msg?.totalTokens || 0;
   return `Input: ${input} · Output: ${output} · Total: ${total}`;
 });
-
-function statusIcon(status) {
-  if (status === 'running') return '●';
-  if (status === 'success' || status === 'completed') return '✓';
-  return '✗';
-}
 
 function compactSummary(text) {
   const s = String(text || '').replace(/\s+/g, ' ').trim();

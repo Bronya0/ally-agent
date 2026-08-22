@@ -61,13 +61,25 @@
       <!-- Ace editor (always in DOM, shown for text files when not in md preview) -->
       <div v-show="showEditor && isEditable && !mdPreviewMode" ref="aceContainerRef" class="workspace-explorer-ace"></div>
 
-      <!-- 非预览型文件（如 exe 等二进制）：用树节点已有数据展示基本信息 -->
+      <!-- 非预览型文件（如 exe 等二进制）：完整文件信息，与属性弹框同源同布局 -->
       <div v-if="infoMode" class="workspace-explorer-file-info">
-        <div class="file-info-row"><span class="file-info-label">{{ $t('app.filePreview.name') }}</span><span class="file-info-value">{{ activeFile.info.label }}</span></div>
-        <div class="file-info-row"><span class="file-info-label">{{ $t('app.filePreview.type') }}</span><span class="file-info-value">{{ fileTypeLabel }}</span></div>
-        <div class="file-info-row" v-if="activeFile.info.size != null"><span class="file-info-label">{{ $t('app.filePreview.size') }}</span><span class="file-info-value">{{ formatSize(activeFile.info.size) }}</span></div>
-        <div class="file-info-row" v-if="activeFile.info.modTime"><span class="file-info-label">{{ $t('app.filePreview.modified') }}</span><span class="file-info-value">{{ activeFile.info.modTime }}</span></div>
-        <div class="file-info-row file-info-path"><span class="file-info-label">{{ $t('app.filePreview.path') }}</span><span class="file-info-value">{{ activeFile.info.path }}</span></div>
+        <template v-if="infoDetail">
+          <div v-for="section in infoSections" :key="section.title" class="file-info-section">
+            <div class="file-info-section-title">{{ section.title }}</div>
+            <div class="file-info-row" v-for="row in section.rows" :key="row.label">
+              <span class="file-info-label">{{ row.label }}</span>
+              <span class="file-info-value" :title="row.value">{{ row.value }}</span>
+            </div>
+          </div>
+        </template>
+        <!-- 后端信息加载失败时回退树节点已有数据，保证任何文件点击都有响应 -->
+        <template v-else>
+          <div class="file-info-row"><span class="file-info-label">{{ $t('app.filePreview.name') }}</span><span class="file-info-value">{{ activeFile.info.label }}</span></div>
+          <div class="file-info-row"><span class="file-info-label">{{ $t('app.filePreview.type') }}</span><span class="file-info-value">{{ fileTypeLabel }}</span></div>
+          <div class="file-info-row" v-if="activeFile.info.size != null"><span class="file-info-label">{{ $t('app.filePreview.size') }}</span><span class="file-info-value">{{ formatSize(activeFile.info.size) }}</span></div>
+          <div class="file-info-row" v-if="activeFile.info.modTime"><span class="file-info-label">{{ $t('app.filePreview.modified') }}</span><span class="file-info-value">{{ activeFile.info.modTime }}</span></div>
+          <div class="file-info-row file-info-path"><span class="file-info-label">{{ $t('app.filePreview.path') }}</span><span class="file-info-value">{{ activeFile.info.path }}</span></div>
+        </template>
         <div class="file-info-hint">{{ $t('app.filePreview.binaryHint') }}</div>
       </div>
 
@@ -79,7 +91,7 @@
 
     <div class="workspace-explorer-splitter" @mousedown.prevent="startDrag"></div>
 
-    <aside class="workspace-explorer-tree" :style="{ flexBasis: treeWidth + 'px' }" @contextmenu.prevent="onTreeAreaContextmenu">
+    <aside class="workspace-explorer-tree" :style="{ flexBasis: treeWidth + 'px' }" @contextmenu.prevent="onTreeAreaContextmenu" @keydown="onTreeKeydown" @click="onTreeAreaClick">
       <div class="workspace-explorer-tree-header">
         <span class="workspace-explorer-title">
           <span class="workspace-explorer-title-text" :title="workspace">{{ workspaceLabel }}</span>
@@ -108,6 +120,7 @@
           class="workspace-explorer-tree-view"
           block-line
           selectable
+          multiple
           virtual-scroll
           :height="treeHeight"
           :indent="16"
@@ -124,6 +137,24 @@
         />
         <div v-else class="workspace-explorer-empty">{{ $t('app.workspace.none') }}</div>
       </n-spin>
+      <div class="workspace-explorer-footer">
+        <n-tooltip trigger="hover" placement="right-start" :style="{ maxWidth: '360px' }">
+          <template #trigger>
+            <button
+              type="button"
+              class="workspace-explorer-icon-btn workspace-explorer-help-btn"
+              :aria-label="$t('app.workspaceExplorer.helpTitle')"
+            ><QuestionCircleOutlined /></button>
+          </template>
+          <div class="workspace-explorer-help-body">
+            <div class="workspace-explorer-help-title">{{ $t('app.workspaceExplorer.helpTitle') }}</div>
+            <div v-for="row in helpRows" :key="row.key" class="workspace-explorer-help-row">
+              <span class="workspace-explorer-help-keys">{{ row.keys }}</span>
+              <span class="workspace-explorer-help-desc">{{ row.desc }}</span>
+            </div>
+          </div>
+        </n-tooltip>
+      </div>
     </aside>
   </section>
 
@@ -137,11 +168,17 @@
     @select="onContextMenuSelect"
     @clickoutside="contextMenuShow = false"
   />
+
+  <FileInfoModal
+    v-model:show="fileInfoShow"
+    :path="fileInfoPath"
+    :workspace="workspace"
+  />
 </template>
 
 <script setup>
 import { computed, h, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { NIcon, NInput, NSwitch, useDialog, useMessage } from 'naive-ui';
+import { NIcon, NInput, NSwitch, NTooltip, useDialog, useMessage } from 'naive-ui';
 import ace from 'ace-builds';
 import 'ace-builds/src-noconflict/ext-language_tools';
 import 'ace-builds/src-noconflict/ext-searchbox';
@@ -150,6 +187,7 @@ import 'ace-builds/src-noconflict/mode-text';
 import 'ace-builds/src-noconflict/mode-javascript';
 import 'ace-builds/src-noconflict/mode-typescript';
 import 'ace-builds/src-noconflict/mode-json';
+import 'ace-builds/src-noconflict/mode-json5';
 import 'ace-builds/src-noconflict/mode-python';
 import 'ace-builds/src-noconflict/mode-golang';
 import 'ace-builds/src-noconflict/mode-java';
@@ -163,10 +201,63 @@ import 'ace-builds/src-noconflict/mode-c_cpp';
 import 'ace-builds/src-noconflict/mode-markdown';
 import 'ace-builds/src-noconflict/mode-rust';
 import 'ace-builds/src-noconflict/mode-ruby';
+import 'ace-builds/src-noconflict/mode-vue';
+import 'ace-builds/src-noconflict/mode-astro';
+import 'ace-builds/src-noconflict/mode-csharp';
+import 'ace-builds/src-noconflict/mode-kotlin';
+import 'ace-builds/src-noconflict/mode-swift';
+import 'ace-builds/src-noconflict/mode-dart';
+import 'ace-builds/src-noconflict/mode-php';
+import 'ace-builds/src-noconflict/mode-lua';
+import 'ace-builds/src-noconflict/mode-perl';
+import 'ace-builds/src-noconflict/mode-r';
+import 'ace-builds/src-noconflict/mode-scala';
+import 'ace-builds/src-noconflict/mode-objectivec';
+import 'ace-builds/src-noconflict/mode-clojure';
+import 'ace-builds/src-noconflict/mode-haskell';
+import 'ace-builds/src-noconflict/mode-erlang';
+import 'ace-builds/src-noconflict/mode-elixir';
+import 'ace-builds/src-noconflict/mode-dockerfile';
+import 'ace-builds/src-noconflict/mode-makefile';
+import 'ace-builds/src-noconflict/mode-toml';
+import 'ace-builds/src-noconflict/mode-ini';
+import 'ace-builds/src-noconflict/mode-batchfile';
+import 'ace-builds/src-noconflict/mode-powershell';
+import 'ace-builds/src-noconflict/mode-nginx';
+import 'ace-builds/src-noconflict/mode-apache_conf';
+import 'ace-builds/src-noconflict/mode-less';
+import 'ace-builds/src-noconflict/mode-scss';
+import 'ace-builds/src-noconflict/mode-sass';
+import 'ace-builds/src-noconflict/mode-stylus';
+import 'ace-builds/src-noconflict/mode-graphqlschema';
+import 'ace-builds/src-noconflict/mode-protobuf';
+import 'ace-builds/src-noconflict/mode-nix';
+import 'ace-builds/src-noconflict/mode-zig';
+import 'ace-builds/src-noconflict/mode-nim';
+import 'ace-builds/src-noconflict/mode-crystal';
+import 'ace-builds/src-noconflict/mode-fortran';
+import 'ace-builds/src-noconflict/mode-pascal';
+import 'ace-builds/src-noconflict/mode-assembly_x86';
+import 'ace-builds/src-noconflict/mode-verilog';
+import 'ace-builds/src-noconflict/mode-vhdl';
+import 'ace-builds/src-noconflict/mode-matlab';
+import 'ace-builds/src-noconflict/mode-julia';
+import 'ace-builds/src-noconflict/mode-diff';
+import 'ace-builds/src-noconflict/mode-gitignore';
+import 'ace-builds/src-noconflict/mode-elm';
+import 'ace-builds/src-noconflict/mode-glsl';
+import 'ace-builds/src-noconflict/mode-prisma';
+import 'ace-builds/src-noconflict/mode-latex';
+import 'ace-builds/src-noconflict/mode-rst';
+import 'ace-builds/src-noconflict/mode-csv';
+import 'ace-builds/src-noconflict/mode-tsv';
 import MarkdownIt from 'markdown-it';
 import { isEditableNavigationTarget } from '../utils/sessionState.mjs';
-import { ListFiles, ReadWorkspaceFile, ReadWorkspaceImage, SaveWorkspaceFile, DeletePath, OpenWorkspacePathInFileManager, CreateFile, CreateDirectory } from '../../bindings/ally-dev/internal/app/app';
+import { ListFiles, ReadWorkspaceFile, ReadWorkspaceImage, SaveWorkspaceFile, DeletePath, OpenWorkspacePathInFileManager, CreateFile, CreateDirectory, GetWorkspaceFileInfo } from '../../bindings/ally-dev/internal/app/app';
+import FileInfoModal from './FileInfoModal.vue';
+import { buildFileInfoSections } from '../utils/fileInfo.mjs';
 import CloseOutlined from '@vicons/antd/CloseOutlined';
+import QuestionCircleOutlined from '@vicons/antd/QuestionCircleOutlined';
 import ReloadOutlined from '@vicons/antd/ReloadOutlined';
 import { RightOutlined } from '@vicons/antd';
 import { t } from '../i18n.mjs';
@@ -205,6 +296,16 @@ const contextMenuShow = ref(false);
 const contextMenuX = ref(0);
 const contextMenuY = ref(0);
 const contextMenuNode = ref(null);
+// 文件信息弹框：openFileInfo 设为目标路径，FileInfoModal 自行加载
+const fileInfoShow = ref(false);
+const fileInfoPath = ref('');
+
+function openFileInfo(node) {
+  const path = String(node?.path || '');
+  if (!path) return;
+  fileInfoPath.value = path;
+  fileInfoShow.value = true;
+}
 let aceEditor = null;
 let resizeObserver = null;
 let aceResizeObserver = null;
@@ -246,11 +347,27 @@ const isEditable = computed(() => {
 });
 
 const ACE_MODE_MAP = {
-  ts: 'typescript', tsx: 'typescript', js: 'javascript', jsx: 'javascript',
-  py: 'python', go: 'golang', java: 'java', sh: 'sh', bash: 'sh',
-  json: 'json', yaml: 'yaml', yml: 'yaml', css: 'css', html: 'html',
-  xml: 'xml', sql: 'sql', c: 'c_cpp', cpp: 'c_cpp', h: 'c_cpp',
+  ts: 'typescript', tsx: 'typescript', js: 'javascript', jsx: 'javascript', mjs: 'javascript', cjs: 'javascript',
+  py: 'python', pyw: 'python', go: 'golang', java: 'java', sh: 'sh', bash: 'sh', zsh: 'sh', fish: 'sh',
+  json: 'json', json5: 'json5', yaml: 'yaml', yml: 'yaml', css: 'css', html: 'html', htm: 'html',
+  xml: 'xml', xsl: 'xml', sql: 'sql', c: 'c_cpp', cpp: 'c_cpp', cc: 'c_cpp', cxx: 'c_cpp', h: 'c_cpp', hpp: 'c_cpp', hh: 'c_cpp',
   md: 'markdown', markdown: 'markdown', rs: 'rust', rb: 'ruby',
+  vue: 'vue', svelte: 'html', astro: 'astro',
+  cs: 'csharp', kt: 'kotlin', kts: 'kotlin', swift: 'swift', dart: 'dart', php: 'php',
+  lua: 'lua', pl: 'perl', pm: 'perl', r: 'r', scala: 'scala', sbt: 'scala', m: 'objectivec',
+  clj: 'clojure', cljs: 'clojure', edn: 'clojure', hs: 'haskell', erl: 'erlang', hrl: 'erlang', ex: 'elixir', exs: 'elixir',
+  dockerfile: 'dockerfile', mk: 'makefile', toml: 'toml', ini: 'ini', cfg: 'ini', conf: 'ini',
+  bat: 'batchfile', cmd: 'batchfile', ps1: 'powershell', psm1: 'powershell',
+  nginx: 'nginx', conf_nginx: 'nginx', htaccess: 'apache_conf',
+  less: 'less', scss: 'scss', sass: 'sass', styl: 'stylus',
+  graphql: 'graphqlschema', gql: 'graphqlschema', proto: 'protobuf',
+  nix: 'nix', zig: 'zig', nim: 'nim', cr: 'crystal',
+  f: 'fortran', f90: 'fortran', f95: 'fortran', pas: 'pascal',
+  s: 'assembly_x86', asm: 'assembly_x86', v: 'verilog', vhdl: 'vhdl', sv: 'verilog',
+  matlab: 'matlab', jl: 'julia',
+  diff: 'diff', patch: 'diff', gitignore: 'gitignore',
+  elm: 'elm', glsl: 'glsl', frag: 'glsl', vert: 'glsl',
+  prisma: 'prisma', tex: 'latex', rst: 'rst', csv: 'csv', tsv: 'tsv',
 };
 
 // 语法校验（唯一判断来源）：扩展名 → 校验器。只收录浏览器端有可靠、
@@ -392,6 +509,22 @@ function classifyFile(path) {
 
 // 信息面板模式：当前打开的是不可编辑/预览的文件，用树节点已有数据展示基本信息
 const infoMode = computed(() => Boolean(activeFile.value && activeFile.value.info));
+
+// 内容区信息面板的完整数据：进入 infoMode 后异步加载 GetWorkspaceFileInfo，
+// 与属性弹框同源同布局（分区 → 行，含 hash / 完整路径 / 全部时间戳）。
+// 加载完成前或失败时回退树节点基础数据
+const infoDetail = ref(null);
+const infoSections = computed(() => buildFileInfoSections(infoDetail.value));
+
+async function loadInfoDetail(path) {
+  const seq = ++requestSequence;
+  try {
+    const result = await GetWorkspaceFileInfo(path);
+    if (!disposed && seq === requestSequence) infoDetail.value = result || null;
+  } catch {
+    // 静默失败：保持树节点基础数据展示
+  }
+}
 const fileTypeLabel = computed(() => {
   const info = activeFile.value?.info;
   if (!info) return '';
@@ -624,6 +757,30 @@ function renderLabel({ option }) {
 
 function nodeProps({ option }) {
   return {
+    // 捕获阶段接管节点点击：n-tree 的 multiple 没有原生 Shift 范围选择，
+    // 普通单击语义也是「加选」。这里统一接管（stopPropagation 让 naive 内部
+    // 的 selection / expand-on-click 不再响应），三种点击分别处理：
+    //   普通点击          → 单选并打开文件 / 展开目录（复刻原单选行为）
+    //   Ctrl/Cmd+点击 → toggle 加选（供 Ctrl+C 批量复制）
+    //   Shift+点击      → 从锚点到当前节点的范围选择（按可见顺序）
+    // 不 preventDefault：保留浏览器默认的点击聚焦，焦点留在节点上，
+    // 树容器上的 Ctrl/Cmd+C 键盘监听才能生效。
+    // document 级监听（dropdown clickoutside 等）在 capture 链上先于此触发，不受影响。
+    onClickCapture(e) {
+      if (e.button !== 0) return;
+      if (e.shiftKey && !e.ctrlKey && !e.metaKey) {
+        e.stopPropagation();
+        selectRangeTo(option);
+        return;
+      }
+      if (e.ctrlKey || e.metaKey) {
+        e.stopPropagation();
+        toggleNodeSelection(option);
+        return;
+      }
+      e.stopPropagation();
+      void handlePlainNodeClick(option);
+    },
     onContextmenu(e) {
       e.preventDefault();
       // 阻止冒泡到树容器的空白区域菜单
@@ -637,12 +794,102 @@ function nodeProps({ option }) {
 }
 
 
+// 范围选择锚点：普通点击 / Ctrl 加选时更新，Shift 点击时使用
+let anchorPath = '';
+
+// 展开状态下当前可见节点的顺序（仅进入已展开目录，懒加载子树自然包含）
+function flattenVisibleNodes(nodes = treeData.value, out = []) {
+  for (const node of nodes) {
+    out.push(node);
+    if (node.dir && node.children?.length && expandedKeys.value.includes(node.key)) {
+      flattenVisibleNodes(node.children, out);
+    }
+  }
+  return out;
+}
+
+// Shift+点击：选中锚点到目标节点之间的所有可见节点（含两端）。
+// 锚点不存在（首次点击/已不可见）时退化为单选并重设锚点
+function selectRangeTo(node) {
+  const target = node?.path;
+  if (!target) return;
+  if (!anchorPath || anchorPath === target) {
+    anchorPath = target;
+    selectedKeys.value = [target];
+    return;
+  }
+  const visible = flattenVisibleNodes();
+  const anchorIdx = visible.findIndex((n) => n.path === anchorPath);
+  const targetIdx = visible.findIndex((n) => n.path === target);
+  if (anchorIdx < 0 || targetIdx < 0) {
+    anchorPath = target;
+    selectedKeys.value = [target];
+    return;
+  }
+  const [from, to] = anchorIdx < targetIdx ? [anchorIdx, targetIdx] : [targetIdx, anchorIdx];
+  selectedKeys.value = visible.slice(from, to + 1).map((n) => n.path);
+}
+
+// Ctrl/Cmd+点击：切换单个节点的选中状态（不打开文件、不展开目录）
+function toggleNodeSelection(node) {
+  if (!node?.path) return;
+  anchorPath = node.path;
+  const idx = selectedKeys.value.indexOf(node.path);
+  selectedKeys.value = idx >= 0
+    ? selectedKeys.value.filter((k) => k !== node.path)
+    : [...selectedKeys.value, node.path];
+}
+
+// 普通单击（无修饰键）：复刻原单选行为——目录展开/折叠并选中；
+// 文件单选并打开；再点一次当前打开的文件则关闭（脏内容仍走未保存确认）
+async function handlePlainNodeClick(node) {
+  if (!node?.path || navigationBusy) return;
+  anchorPath = node.path;
+  if (node.dir) {
+    const expanded = expandedKeys.value.includes(node.key);
+    const next = expanded
+      ? expandedKeys.value.filter((k) => k !== node.key)
+      : [...expandedKeys.value, node.key];
+    // 复用展开变更处理（含懒加载子节点），action 与真实展开/折叠对齐
+    void onExpandedKeysChange(next, [], { action: expanded ? 'collapse' : 'expand', node });
+    selectedKeys.value = [node.path];
+    return;
+  }
+  if (node.path === activeFile.value?.path) {
+    navigationBusy = true;
+    try {
+      await closeContent();
+    } finally {
+      navigationBusy = false;
+    }
+    return;
+  }
+  navigationBusy = true;
+  try {
+    const opened = await openFile(node);
+    selectedKeys.value = opened ? [node.path] : (activeFile.value?.path ? [activeFile.value.path] : []);
+  } finally {
+    navigationBusy = false;
+  }
+}
+
 // 树空白区域右键：节点级处理器已 stopPropagation，走到这里的必然是空白区域
 function onTreeAreaContextmenu(e) {
   contextMenuNode.value = null;
   contextMenuX.value = e.clientX;
   contextMenuY.value = e.clientY;
   contextMenuShow.value = true;
+}
+
+// 点击树空白区域：清除选中（含多选集合）与范围选择锚点，
+// 但不关闭已打开的文件（与主流文件浏览器一致）。
+// 节点点击已被 nodeProps 的 onClickCapture stopPropagation，
+// 冒泡到这里的不含节点点击
+function onTreeAreaClick(e) {
+  if (e.button !== 0) return;
+  if (e.defaultPrevented) return;
+  selectedKeys.value = [];
+  anchorPath = '';
 }
 
 const contextMenuOptions = computed(() => {
@@ -660,6 +907,7 @@ const contextMenuOptions = computed(() => {
       { label: t('app.workspaceExplorer.openFolder'), key: 'openFolder' },
       { label: t('app.workspaceExplorer.copyRelativePath'), key: 'copyRelativePath' },
       { label: t('app.workspaceExplorer.copyFullPath'), key: 'copyFullPath' },
+      { label: t('app.workspaceExplorer.fileInfo'), key: 'fileInfo' },
       { label: t('common.delete'), key: 'delete' },
     ];
   }
@@ -667,6 +915,7 @@ const contextMenuOptions = computed(() => {
     { label: t('app.workspaceExplorer.openFolder'), key: 'openFolder' },
     { label: t('app.workspaceExplorer.copyRelativePath'), key: 'copyRelativePath' },
     { label: t('app.workspaceExplorer.copyFullPath'), key: 'copyFullPath' },
+    { label: t('app.workspaceExplorer.fileInfo'), key: 'fileInfo' },
     { label: t('common.delete'), key: 'delete' },
   ];
 });
@@ -681,6 +930,7 @@ function onContextMenuSelect(key) {
   if (key === 'newFolderInDir') void openNewFolderDialog(contextMenuNode.value);
   if (key === 'copyRelativePath') copyNodePath(contextMenuNode.value, false);
   if (key === 'copyFullPath') copyNodePath(contextMenuNode.value, true);
+  if (key === 'fileInfo') openFileInfo(contextMenuNode.value);
 }
 
 // 复制节点路径：树节点 path 即工作区内相对路径（后端统一 / 分隔）。
@@ -688,12 +938,45 @@ function onContextMenuSelect(key) {
 // Windows 盘符/UNC 根 → 全部 \；POSIX 根（macOS/Linux）→ 全部 /，
 // 避免「D:\...\wiki/文件.md」这类混合分隔符
 function copyNodePath(node, full) {
-  const relative = String(node?.path || '');
-  if (!relative) return;
+  copyNodePaths([String(node?.path || '')], full);
+}
+
+// 批量复制路径（快捷键与右键菜单共用）：多个路径用换行符分割。
+// 相对路径直接用树节点 path；完整路径按工作区根平台归一化分隔符拼接
+function copyNodePaths(relatives, full) {
+  const list = (Array.isArray(relatives) ? relatives : []).map((p) => String(p || '')).filter(Boolean);
+  if (!list.length) return;
   const root = String(props.workspace || '').replace(/[\\/]+$/, '');
-  const text = full && root ? joinFullPath(root, relative) : relative;
+  const text = full && root
+    ? list.map((p) => joinFullPath(root, p)).join('\n')
+    : list.join('\n');
   copyTextToClipboard(text, () => message.success(t('app.copy.done')));
 }
+
+// 资源树内 Ctrl/Cmd+C：复制选中节点相对路径（多选时换行分割）；
+// Ctrl/Cmd+Shift+C：复制完整路径。绑定在树容器上，焦点在树内才触发，
+// 不会劫持聊天区 / ace 编辑器 / 输入框的正常复制
+function onTreeKeydown(event) {
+  if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
+  if (String(event.key || '').toLowerCase() !== 'c') return;
+  const paths = (selectedKeys.value || []).map((p) => String(p || '')).filter(Boolean);
+  if (!paths.length) return;
+  event.preventDefault();
+  copyNodePaths(paths, event.shiftKey);
+}
+
+// 帮助弹层内容：与 onTreeKeydown / onGlobalKeydown / 右键菜单实际行为一一对应，
+// 改快捷键时同步更新这里；Cmd/Mac 按平台显示
+const isMacPlatform = typeof navigator !== 'undefined' && /mac/i.test(navigator.platform || navigator.userAgent || '');
+const helpMod = isMacPlatform ? 'Cmd' : 'Ctrl';
+const helpRows = computed(() => [
+  { key: 'copy-rel', keys: `${helpMod}+C`, desc: t('app.workspaceExplorer.helpCopyRelative') },
+  { key: 'copy-abs', keys: `${helpMod}+Shift+C`, desc: t('app.workspaceExplorer.helpCopyFull') },
+  { key: 'multi', keys: `${helpMod}+Click / Shift+Click`, desc: t('app.workspaceExplorer.helpMultiSelect') },
+  { key: 'delete', keys: 'Delete', desc: t('app.workspaceExplorer.helpDelete') },
+  { key: 'save', keys: `${helpMod}+S`, desc: t('app.workspaceExplorer.helpSave') },
+  { key: 'esc', keys: 'Esc', desc: t('app.workspaceExplorer.helpCloseEditor') },
+]);
 
 // 工作区根为 Windows 盘符（D:\ 或 D:/）或 UNC（\\server\share）时视为 Windows 风格
 function isWindowsStyleRoot(root) {
@@ -883,13 +1166,19 @@ async function confirmDeleteNode(node) {
 }
 
 async function onSelect(keys, options, meta) {
+  // 节点点击已在 nodeProps 的 onClickCapture 接管，这里只兜底 n-tree
+  // 自身的选中更新（键盘导航等）
   if (navigationBusy) return;
-  // n-tree 单选默认 cancelable：再点一次已选中文件会以 action='unselect' 发出
-  // 空 keys/options，被点节点在 meta.node 上。若正是当前打开的文件 → 切换关闭编辑器
+  // n-tree 默认 cancelable：再点一次已选中节点会以 action='unselect' 发出
+  // 空 keys/options，被点节点在 meta.node 上。
+  // 取消后仍有其他选中（多选模式）：仅更新选中集合，不关闭编辑器；
+  // 取消后选中为空且正是当前打开的文件 → 切换关闭编辑器
   // （复用 closeContent：脏内容仍走未保存确认，取消则保持打开）
   if (meta?.action === 'unselect') {
     const clicked = meta.node;
-    if (clicked && !clicked.dir && clicked.path && clicked.path === activeFile.value?.path) {
+    const restKeys = Array.isArray(keys) ? keys : [];
+    if (restKeys.length) selectedKeys.value = restKeys;
+    if (clicked && !clicked.dir && clicked.path && clicked.path === activeFile.value?.path && !restKeys.length) {
       navigationBusy = true;
       try {
         await closeContent();
@@ -897,6 +1186,12 @@ async function onSelect(keys, options, meta) {
         navigationBusy = false;
       }
     }
+    return;
+  }
+  // 多选（Ctrl/Cmd/Shift 加点选中多个）：只更新选中集合，供
+  // Ctrl/Cmd+C 批量复制路径，不逐个打开文件
+  if (Array.isArray(keys) && keys.length > 1) {
+    selectedKeys.value = keys;
     return;
   }
   const node = options?.[0];
@@ -927,6 +1222,7 @@ async function openFile(node) {
   imageDataUrl.value = '';
   htmlContent.value = '';
   mdPreviewMode.value = false;
+  infoDetail.value = null;
   // 清掉上一个文件的 Markdown 渲染残留，避免旧预览 DOM 驻留到下次预览
   if (mdPreviewRef.value) mdPreviewRef.value.innerHTML = '';
   loadingFile.value = true;
@@ -977,6 +1273,8 @@ async function openFile(node) {
         draftContent.value = '';
         originalContent.value = '';
         loadingFile.value = false;
+        // 进入信息面板模式：加载完整文件信息（hash 等），与属性弹框对齐
+        void loadInfoDetail(node.path);
         return true;
       }
       fileError.value = t('app.filePreview.failed', { error: errorText(err) });
@@ -1114,6 +1412,7 @@ function clearEditor() {
   version.value = '';
   fileError.value = '';
   syntaxIssue.value = null;
+  infoDetail.value = null;
   if (syntaxValidateTimer) { clearTimeout(syntaxValidateTimer); syntaxValidateTimer = 0; }
   syntaxValidateSeq++;
   imageDataUrl.value = '';

@@ -10,7 +10,7 @@ Public License v3. See the LICENSE file for details.
 <template>
   <div :class="['rich-tool-card', 'ask', msg.status]">
     <div class="tool-line ask-tool-line">
-      <span :class="['tool-status-icon', msg.status]">{{ statusIcon }}</span>
+      <ToolStatusIcon :status="msg.status" />
       <span class="tool-verb">{{ statusVerb }}</span>
       <span class="tool-name">Ask</span>
       <span class="tool-chip">{{ $t('ask.questionCount', { count: questions.length }) }}</span>
@@ -45,7 +45,7 @@ Public License v3. See the LICENSE file for details.
 
         <div v-if="msg.askSubmitted || msg.status === 'success'" class="ask-answer-summary">
           <div v-for="selection in submittedSelections(activeQuestion)" :key="selectionKey(selection)" class="ask-answer-line">
-            <span class="ask-answer-check">✓</span>
+            <span class="ask-answer-check"><CheckOutlined /></span>
             <span>{{ selection.label }}</span>
             <span v-if="selection.recommended" class="ask-recommended">{{ $t('ask.recommended') }}</span>
           </div>
@@ -104,6 +104,8 @@ Public License v3. See the LICENSE file for details.
 <script setup>
 import { computed, reactive, ref, watch } from 'vue';
 import { t } from '../i18n.mjs';
+import ToolStatusIcon from './ToolStatusIcon.vue';
+import CheckOutlined from '@vicons/antd/CheckOutlined';
 
 const props = defineProps({
   msg: { type: Object, required: true },
@@ -159,12 +161,6 @@ const canSubmit = computed(() => questions.value.length > 0 && questions.value.e
   if (state.customSelected && !state.customText.trim()) return false;
   return state.selectedOptionIds.length > 0 || state.customSelected;
 }));
-
-const statusIcon = computed(() => {
-  if (props.msg.status === 'success') return '✓';
-  if (props.msg.status === 'error') return '✗';
-  return '';
-});
 
 const statusVerb = computed(() => {
   if (props.msg.status === 'success') return t('ask.status.answered');

@@ -465,6 +465,22 @@ code, pre {
 
 .workspace-explorer-spin { flex: 1; min-height: 0; overflow: hidden; }
 .workspace-explorer-spin .n-spin-content { height: 100%; }
+
+/* 左下角帮助按钮：贴树底部、悬浮显示快捷键说明 */
+.workspace-explorer-footer {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  padding: 2px 6px 4px 6px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+.workspace-explorer-help-btn { opacity: 0.55; }
+.workspace-explorer-help-btn:hover { opacity: 1; }
+.workspace-explorer-help-body { font-size: 12px; line-height: 1.5; max-width: 340px; }
+.workspace-explorer-help-title { font-weight: 600; margin-bottom: 6px; }
+.workspace-explorer-help-row { display: flex; align-items: baseline; gap: 10px; margin-top: 3px; }
+.workspace-explorer-help-keys { flex: 0 0 auto; min-width: 132px; font-family: var(--ally-mono-font); color: #a9d8ff; white-space: nowrap; }
+.workspace-explorer-help-desc { flex: 1 1 auto; min-width: 0; color: rgba(255, 255, 255, 0.75); }
 .workspace-explorer-tree-view { height: 100%; padding: 0; overflow-x: auto; overflow-y: hidden; }
 .workspace-explorer-node-label {
   overflow: hidden;
@@ -592,6 +608,26 @@ code, pre {
   color: #8a8f98;
   font-size: 12px;
   line-height: 1.6;
+}
+/* 内容区信息面板的分区标题（与属性弹框的分区布局一致） */
+.workspace-explorer-file-info .file-info-section { margin-bottom: 14px; }
+.workspace-explorer-file-info .file-info-section-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #6f7887;
+  margin-bottom: 2px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+.workspace-explorer-file-info .file-info-section .file-info-label {
+  flex: 0 0 108px;
+  font-size: 12px;
+  padding-top: 1px;
+}
+.workspace-explorer-file-info .file-info-section .file-info-value {
+  font-family: var(--ally-mono-font);
+  font-size: 12px;
 }
 .workspace-explorer-md-preview h1,
 .workspace-explorer-md-preview h2,
@@ -1679,7 +1715,7 @@ code, pre {
 
 .hist-label {
   display: inline-flex;
-  align-items: baseline;
+  align-items: center;
   gap: 4px;
 }
 
@@ -2475,39 +2511,6 @@ code, pre {
   background: rgba(255, 255, 255, 0.04);
 }
 
-.tool-status-icon {
-  flex-shrink: 0;
-  width: 16px;
-  text-align: center;
-  font-size: 14px;
-}
-
-.tool-status-icon.running {
-  color: transparent;
-  position: relative;
-}
-
-.tool-status-icon.running::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  margin: auto;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #9ca3af;
-  animation: pulse-gray 1.1s ease-in-out infinite;
-}
-
-.tool-status-icon.success,
-.tool-status-icon.completed {
-  color: #22c55e;
-}
-
-.tool-status-icon.error,
-.tool-status-icon.failed {
-  color: #ef4444;
-}
 
 @keyframes pulse-gray {
   0%, 100% { opacity: 0.35; }
@@ -3121,8 +3124,9 @@ code, pre {
   opacity: 1;
   visibility: visible;
   transition: opacity 0.2s ease, visibility 0.2s ease;
-  /* 与页面背景一致，遮住下方刚输出的正文首行，淡出时正文原位显露 */
-  background: #1a1a1a;
+  /* 与页面背景一致，遮住下方刚输出的正文首行，淡出时正文原位显露；
+     装了背景图时由 App.vue 注入 --reasoning-curtain: transparent 关闭遮罩 */
+  background: var(--reasoning-curtain, #1a1a1a);
   pointer-events: none;
 }
 
@@ -3510,7 +3514,7 @@ code, pre {
 
 .subagent-inline-entry {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 6px;
   min-width: 0;
   font-size: var(--ally-sub-font-size);
@@ -3521,32 +3525,6 @@ code, pre {
   color: #5a5a5a;
   flex-shrink: 0;
 }
-
-.subagent-inline-icon {
-  width: 14px;
-  text-align: center;
-  flex-shrink: 0;
-}
-
-.subagent-inline-entry.running .subagent-inline-icon {
-  position: relative;
-  height: 14px;
-  color: transparent;
-}
-
-.subagent-inline-entry.running .subagent-inline-icon::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  width: 6px;
-  height: 6px;
-  margin: auto;
-  border-radius: 50%;
-  background: #9ca3af;
-  animation: pulse-gray 1.1s ease-in-out infinite;
-}
-.subagent-inline-entry.success .subagent-inline-icon { color: #22c55e; }
-.subagent-inline-entry.error .subagent-inline-icon { color: #ef4444; }
 
 .subagent-inline-name {
   color: #e5e5e5;

@@ -4928,6 +4928,10 @@ const chatLayoutContentStyle = computed(() => {
   const overlay = Math.max(0, Math.min(1, 1 - Number(config.backgroundOpacity) || 0));
   return {
     ...base,
+    // With a custom background image the opaque reasoning curtain would show
+    // as a solid band, so disable it via the variable consumed by
+    // .reasoning-block in style.css (falls back to #1a1a1a otherwise).
+    '--reasoning-curtain': 'transparent',
     backgroundImage: `linear-gradient(rgba(26,26,26,${overlay}), rgba(26,26,26,${overlay})), url("${url}")`,
     backgroundSize: 'cover, cover',
     backgroundPosition: 'center, center',
@@ -5778,6 +5782,7 @@ function updateToolEvent(id, name, title, body, status = 'default', meta = {}, t
       profile: existing?.profile || 'coder',
       subagentRole: existing?.subagentRole || parsed.role || '',
       steps: existing?.steps || 0,
+      maxSteps: existing?.maxSteps || parsed.maxSteps || 0,
       summary: existing?.summary || '',
       filesRead: existing?.filesRead || [],
       filesEdited: existing?.filesEdited || [],
