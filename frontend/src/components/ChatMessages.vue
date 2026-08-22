@@ -90,21 +90,21 @@ Public License v3. See the LICENSE file for details.
             <n-dropdown
               trigger="click"
               placement="top-end"
-              :options="quickMessageOptions"
-              @select="(key) => $emit('quickMessage', key)"
-            >
-              <button class="export-icon-btn" :title="$t('chat.quickMessage.title')" :aria-label="$t('chat.quickMessage.title')" @click.stop>
-                <MessageOutlined />
-              </button>
-            </n-dropdown>
-            <n-dropdown
-              trigger="click"
-              placement="top-end"
               :options="exportOptions"
               @select="(key) => $emit('export', key, msg)"
             >
               <button class="export-icon-btn" :title="$t('chat.export.title')" :aria-label="$t('chat.export.title')" @click.stop>
                 <ExportOutlined />
+              </button>
+            </n-dropdown>
+            <n-dropdown
+              trigger="click"
+              placement="top-end"
+              :options="quickMessageOptions"
+              @select="(key) => $emit('quickMessage', key)"
+            >
+              <button class="export-icon-btn" :title="$t('chat.quickMessage.title')" :aria-label="$t('chat.quickMessage.title')" @click.stop>
+                <MessageOutlined />
               </button>
             </n-dropdown>
           </div>
@@ -143,6 +143,7 @@ Public License v3. See the LICENSE file for details.
         <div v-if="messages.length === 0" class="empty-chat">
           <n-empty :description="$t('chat.empty')" />
         </div>
+        <div ref="bottomAnchorRef" class="messages-bottom-anchor" aria-hidden="true"></div>
       </div>
     </n-scrollbar>
     <div v-if="showJumpToBottom" class="jump-controls">
@@ -157,7 +158,7 @@ Public License v3. See the LICENSE file for details.
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
 import { t } from '../i18n.mjs';
 import MessageAttachments from './MessageAttachments.vue';
 import WelcomeMessage from './WelcomeMessage.vue';
@@ -328,6 +329,7 @@ const exportOptions = computed(() => [
 
 const scrollbarRef = ref(null);
 const messagesRootRef = ref(null);
+const bottomAnchorRef = ref(null);
 const showJumpToBottom = ref(false);
 const autoFollow = ref(true);
 const bottomThreshold = 96;
@@ -339,6 +341,7 @@ let scrollRaf = 0;
 // 用户停止操作（空闲）就自动恢复贴底——自愈兜底，任何原因都不会永久卡死。
 let userIntentUntil = 0;        // 手势窗口：该时间戳前的 scroll 事件视为用户驱动
 let idleResumeTimer = 0;
+let restoreRequestId = 0;
 const userIntentWindow = 250;   // 手势后 250ms 内的 scroll 事件按用户处理
 const idleResumeDelay = 8000;   // 停止操作 8s 后自动恢复自动滚动
 // Track pending animation frames so unmounting a closed workspace Tab cannot
@@ -378,6 +381,7 @@ const isRunActive = computed(() => Array.isArray(props.messages) && props.messag
 // 记录一次真实用户手势，并重置空闲恢复计时器。计时器只被用户手势刷新，
 // 程序化滚动不参与，因此不会被流式期间的自动滚动污染。
 function markUserIntent() {
+  restoreRequestId += 1;
   userIntentUntil = Date.now() + userIntentWindow;
   armIdleResume();
 }
@@ -526,6 +530,29 @@ function jumpToBottom() {
   scrollToBottom({ force: true });
 }
 
+// 会话恢复专用：先滚到底，再在 Vue 更新和浏览器布局完成后补两帧。
+// 不依赖内容观察器，也不受之前会话的 autoFollow 状态影响。
+async function restoreToBottom() {
+  autoFollow.value = true;
+  showJumpToBottom.value = false;
+  clearIdleResume();
+  const requestId = ++restoreRequestId;
+  await nextTick();
+  const apply = () => {
+    if (requestId !== restoreRequestId) return;
+    const viewport = getScrollViewport();
+    if (!viewport) return;
+    scrollbarRef.value?.scrollTo({ top: 999999999 });
+    viewport.scrollTop = viewport.scrollHeight;
+    bottomAnchorRef.value?.scrollIntoView({ block: 'end', behavior: 'auto' });
+  };
+  apply();
+  scheduleRaf(() => {
+    apply();
+    scheduleRaf(apply);
+  });
+}
+
 // 供父级在 tool:result 等一次性大内容（如大 diff）注入后调用：
 // 先按当前跟随状态滚到底；若一帧后 diff 仍在展开（content-visibility
 // 占位导致 scrollHeight 分帧增长）而未真正贴底，则强制再滚一次补平。
@@ -560,7 +587,7 @@ function scrollToUserQuestion(direction) {
 }
 
 
-defineExpose({ scrollbarRef, scrollToBottom, scrollToUserQuestion, scrollToBottomIfStale });
+defineExpose({ scrollbarRef, scrollToBottom, scrollToUserQuestion, scrollToBottomIfStale, restoreToBottom });
 </script>
 
 <style scoped>

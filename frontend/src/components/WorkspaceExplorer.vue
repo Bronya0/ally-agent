@@ -329,6 +329,7 @@ function openFileInfo(node) {
 let aceEditor = null;
 let resizeObserver = null;
 let aceResizeObserver = null;
+let aceScrollHideTimer = 0;
 // splitter 拖拽的 document 监听解绑函数；拖拽结束或组件卸载时执行
 let dragTeardown = null;
 let requestSequence = 0;
@@ -350,7 +351,7 @@ const treeThemeOverrides = {
   nodeColorHover: 'rgba(78, 161, 255, 0.08)',
   nodeColorPressed: 'rgba(78, 161, 255, 0.14)',
   nodeColorActive: 'rgba(78, 161, 255, 0.18)',
-  nodeTextColor: '#cbd3df',
+  nodeTextColor: '#c5cfdb',
   nodeTextColorDisabled: '#697384',
 };
 
@@ -579,6 +580,17 @@ function aceModeForPath(path) {
   return ACE_MODE_MAP[extension(path)] || 'text';
 }
 
+function onAceScroll() {
+  const container = aceContainerRef.value;
+  if (!container) return;
+  container.classList.add('is-scrolling');
+  if (aceScrollHideTimer) window.clearTimeout(aceScrollHideTimer);
+  aceScrollHideTimer = window.setTimeout(() => {
+    aceScrollHideTimer = 0;
+    container.classList.remove('is-scrolling');
+  }, 700);
+}
+
 function initAceEditor() {
   if (aceEditor || !aceContainerRef.value) return;
   aceEditor = ace.edit(aceContainerRef.value, {
@@ -623,6 +635,8 @@ function initAceEditor() {
     cursorStyle: 'wide',
   });
   aceEditor.on('input', onAceInput);
+  aceEditor.session.on('changeScrollTop', onAceScroll);
+  aceEditor.session.on('changeScrollLeft', onAceScroll);
   aceEditor.container.addEventListener('keydown', onEditorKeydown);
   // 语法校验由 SYNTAX_VALIDATORS 自行实现，显式关闭 ace worker：
   // 打包环境里 worker 文件不会被加载（这也是之前 json 不报错的原因），
@@ -633,9 +647,16 @@ function initAceEditor() {
 }
 
 function destroyAceEditor() {
+  if (aceScrollHideTimer) {
+    window.clearTimeout(aceScrollHideTimer);
+    aceScrollHideTimer = 0;
+  }
+  aceContainerRef.value?.classList.remove('is-scrolling');
   if (aceResizeObserver) { aceResizeObserver.disconnect(); aceResizeObserver = null; }
   if (aceEditor) {
     aceEditor.off('input', onAceInput);
+    aceEditor.session.off('changeScrollTop', onAceScroll);
+    aceEditor.session.off('changeScrollLeft', onAceScroll);
     aceEditor.container.removeEventListener('keydown', onEditorKeydown);
     aceEditor.destroy();
     aceEditor = null;
@@ -943,11 +964,15 @@ function onTreeAreaContextmenu(e) {
 // 但不关闭已打开的文件（与主流文件浏览器一致）。
 // 节点点击已被 nodeProps 的 onClickCapture stopPropagation，
 // 冒泡到这里的不含节点点击
+function clearTreeSelection() {
+  selectedKeys.value = [];
+  anchorPath = '';
+}
+
 function onTreeAreaClick(e) {
   if (e.button !== 0) return;
   if (e.defaultPrevented) return;
-  selectedKeys.value = [];
-  anchorPath = '';
+  clearTreeSelection();
 }
 
 const contextMenuOptions = computed(() => {
@@ -1581,5 +1606,5 @@ onBeforeUnmount(() => {
   treeData.value = [];
 });
 
-defineExpose({ requestClose, loadRoot });
+defineExpose({ requestClose, loadRoot, clearTreeSelection });
 </script>

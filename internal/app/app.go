@@ -1745,97 +1745,113 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			}
 		}
 
-		a.emit("run:llm_wait", map[string]any{"runId": runID, "sessionId": sessionID})
-		toolCalls := []openai.ToolCall{}
-		streamDeltas := newRunStreamDeltaEmitter(runID, sessionID, func(name string, payload map[string]any) {
-			a.emit(name, payload)
-		})
-		toolProgress := newToolCallProgressTracker()
-		toolBatchID := fmt.Sprintf("%d", step)
-		// Context-budget tail injection is disabled (cache-first): the
-		// model does not need live budget numbers — auto-compact at
-		// CompactThreshold (default 60%) already bounds usage — and any
-		// per-step tail item risks prompt-cache churn on providers whose
-		// cache breakpoint lands on the last block. Call kept commented
-		// for quick re-enable:
-		// requestMessages := appendContextBudgetMessage(messages, bd.Total, maxCtx)
-		// 当前用户会话只在第一次模型请求前附带一次计划；后续工具循环
-		// 不重复发送，且计划消息只存在于 requestMessages，不会写入历史。
+		// 当前用户会话只在第一次模型请求前附带一次计划。
+		requestIncludesPlan := !planAttached
 		requestMessages := messages
-		if !planAttached {
+		if requestIncludesPlan {
 			requestMessages = a.appendPlanForUserTurn(sessionID, messages)
 			planAttached = true
 		}
-		modelResp, err := a.streamModelResponse(ctx, cfg, cfg.Model, requestMessages, tools, func(event modelStreamEvent) {
-			if event.ContentDelta != "" {
-				streamDeltas.addContent(event.ContentDelta)
-			}
-			if event.ReasoningDelta != "" {
-				streamDeltas.addReasoning(event.ReasoningDelta)
-			}
-			if event.Retry != nil {
-				streamDeltas.flush()
-				a.emit("run:retry", map[string]any{
-					"runId":       runID,
-					"sessionId":   sessionID,
-					"attempt":     event.Retry.Attempt,
-					"maxAttempts": event.Retry.MaxAttempts,
-					"error":       event.Retry.Error,
-					"waitMs":      event.Retry.WaitMS,
-					"keyIndex":    event.Retry.KeyIndex,
-					"totalKeys":   event.Retry.TotalKeys,
-				})
-			}
-			if event.Image != nil && event.Image.DataURL != "" {
-				streamDeltas.flush()
-				a.emit("run:image", map[string]any{
-					"runId": runID, "sessionId": sessionID, "id": event.Image.ID,
-					"dataUrl": event.Image.DataURL, "mimeType": event.Image.MimeType, "partial": event.Image.Partial,
-				})
-			}
-			if event.ToolCalls != nil {
-				streamDeltas.flush()
-				toolCalls = cloneToolCalls(event.ToolCalls)
-				for _, toolEvent := range toolProgress.events(runID, sessionID, toolBatchID, toolCalls, a.mcpToolEventMeta) {
-					a.emit(toolEvent.Name, toolEvent.Payload)
+
+		a.emit("run:llm_wait", map[string]any{"runId": runID, "sessionId": sessionID})
+		toolCalls := []openai.ToolCall{}
+		var modelResp *modelStreamResult
+		var toolProgress *toolCallProgressTracker
+		var toolBatchID string
+		var err error
+		const maxTurnRetries = 3
+		for turnAttempt := 0; ; turnAttempt++ {
+			toolCalls = []openai.ToolCall{}
+			toolBatchID = fmt.Sprintf("%d", step)
+			streamDeltas := newRunStreamDeltaEmitter(runID, sessionID, func(name string, payload map[string]any) {
+				a.emit(name, payload)
+			})
+			toolProgress = newToolCallProgressTracker()
+			modelResp, err = a.streamModelResponse(ctx, cfg, cfg.Model, requestMessages, tools, func(event modelStreamEvent) {
+				if event.ContentDelta != "" {
+					streamDeltas.addContent(event.ContentDelta)
 				}
+				if event.ReasoningDelta != "" {
+					streamDeltas.addReasoning(event.ReasoningDelta)
+				}
+				if event.Retry != nil {
+					streamDeltas.flush()
+					a.emit("run:retry", map[string]any{
+						"runId": runID, "sessionId": sessionID,
+						"attempt":     event.Retry.Attempt,
+						"maxAttempts": event.Retry.MaxAttempts,
+						"error":       event.Retry.Error,
+						"waitMs":      event.Retry.WaitMS,
+						"keyIndex":    event.Retry.KeyIndex,
+						"totalKeys":   event.Retry.TotalKeys,
+					})
+				}
+				if event.Image != nil && event.Image.DataURL != "" {
+					streamDeltas.flush()
+					a.emit("run:image", map[string]any{
+						"runId": runID, "sessionId": sessionID, "id": event.Image.ID,
+						"dataUrl": event.Image.DataURL, "mimeType": event.Image.MimeType, "partial": event.Image.Partial,
+					})
+				}
+				if event.ToolCalls != nil {
+					streamDeltas.flush()
+					toolCalls = cloneToolCalls(event.ToolCalls)
+					for _, toolEvent := range toolProgress.events(runID, sessionID, toolBatchID, toolCalls, a.mcpToolEventMeta) {
+						a.emit(toolEvent.Name, toolEvent.Payload)
+					}
+				}
+			})
+			streamDeltas.flush()
+			if err == nil {
+				break
 			}
-		})
-		streamDeltas.flush()
-		if err != nil {
-			// 流式输出期间 ESC:provider stream 因 ctx 取消返回 context.Canceled,
-			// 此处与 step 开头的 ctx.Done() 分支等价,同样写入取消标记后返回。
 			if errors.Is(err, context.Canceled) {
 				messages = append(messages, cancelledTurnMarker())
 				emitRunEnd("run:error", "cancelled", map[string]any{"error": "已取消"})
 				return
 			}
-			// provider 400 通常是上下文里有毒消息（截断参数、拼接工具名等）
-			// 触发的服务端校验失败。先尝试 sanitize 修复上下文再重试一次，
-			// 而不是直接中断会话——这样即使有未被拦截的坏消息漏网，会话也
-			// 能自愈而不是报废。
 			if isProvider400Error(err) && !sanitizedThisStep {
 				sanitizedThisStep = true
 				repaired := sanitizeHistoryMessages(messages)
 				if len(repaired) < len(messages) {
 					messages = repaired
-					a.emit("run:retry", map[string]any{
-						"runId":       runID,
-						"sessionId":   sessionID,
-						"attempt":     1,
-						"maxAttempts": 1,
-						"reason":      "context sanitized after provider 400",
-					})
+					// requestMessages is a request-only snapshot (it may contain
+					// the transient plan message). Rebuild it after sanitizing so
+					// the retry cannot send the poisoned pre-repair context again.
+					requestMessages = messages
+					if requestIncludesPlan {
+						requestMessages = a.appendPlanForUserTurn(sessionID, messages)
+					}
+					a.emit("run:retry", map[string]any{"runId": runID, "sessionId": sessionID, "attempt": 1, "maxAttempts": 1, "reason": "context sanitized after provider 400"})
 					continue
 				}
 			}
-			emitRunEnd("run:error", "error", map[string]any{"error": err.Error()})
-			return
+			if turnAttempt >= maxTurnRetries || !shouldRetryLLMError(err) {
+				emitRunEnd("run:error", "error", map[string]any{"error": err.Error()})
+				return
+			}
+			wait := llmRetryDelay(turnAttempt + 1)
+			a.emit("run:retry", map[string]any{
+				"runId": runID, "sessionId": sessionID, "attempt": turnAttempt + 1,
+				"maxAttempts": maxTurnRetries, "error": err.Error(), "waitMs": wait,
+				"reason": "stream_interrupted", "discardCurrentResponse": true,
+			})
+			select {
+			case <-time.After(wait):
+			case <-ctx.Done():
+				messages = append(messages, cancelledTurnMarker())
+				emitRunEnd("run:error", "cancelled", map[string]any{"error": "已取消"})
+				return
+			}
 		}
 
 		content := modelResp.Content
 		reasoning := modelResp.Reasoning
-		toolCalls = modelResp.ToolCalls
+		// Keep the provider-facing history valid even when a streamed tool call
+		// ended mid-JSON. Edit calls may retain their raw prefix only for the
+		// local salvage path; all other execution uses the safe representation.
+		var toolExecutionArgs []string
+		toolCalls, toolExecutionArgs, _ = prepareToolCallsForExecution(modelResp.ToolCalls)
 		fallbackInput := 0
 		fallbackOutput := 0
 		if modelResp.Usage == nil || modelResp.Usage.PromptTokens <= 0 {
@@ -1933,12 +1949,16 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 
 		executeCall := func(idx int, c openai.ToolCall) {
 			started := time.Now()
+			executionArgs := c.Function.Arguments
+			if idx < len(toolExecutionArgs) && toolExecutionArgs[idx] != "" {
+				executionArgs = toolExecutionArgs[idx]
+			}
 			toolCtx := context.WithValue(ctx, toolExecutionMetaContextKey{}, toolExecutionMeta{
 				runID: runID, sessionID: sessionID, toolBatchID: toolBatchID,
 				toolCallIndex: idx, toolCallID: c.ID, toolName: c.Function.Name, toolArgs: c.Function.Arguments,
 			})
 			toolCtx = context.WithValue(toolCtx, runReadCacheContextKey{}, readCache)
-			r := a.executeTool(toolCtx, cfg, sessionID, c.Function.Name, []byte(c.Function.Arguments))
+			r := a.executeTool(toolCtx, cfg, sessionID, c.Function.Name, []byte(executionArgs))
 			duration := time.Since(started).Milliseconds()
 			rj, _ := json.Marshal(r)
 			fullJSON := string(rj)

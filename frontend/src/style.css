@@ -439,7 +439,7 @@ code, pre {
   gap: 6px;
   min-width: 0;
   overflow: hidden;
-  color: #aeb4c1;
+  color: #9ca4b1;
   font-size: 12px;
   font-weight: 600;
 }
@@ -507,21 +507,11 @@ code, pre {
   transition: color 0.15s ease, opacity 0.15s ease;
 }
 .workspace-explorer-node-label.is-directory { color: #d6b378; }
-.workspace-explorer-node-label.is-file { color: #c5cfdb; }
+.workspace-explorer-node-label.is-file { color: #9ca4b1; }
 /* 隐藏条目（. 开头）整体压暗，不改变原色相：目录仍是暗金、文件仍是暗灰 */
 .workspace-explorer-node-label.is-hidden { opacity: 0.55; }
 /* hover 保留背景高亮（见 treeThemeOverrides），文字颜色不变 */
 .workspace-explorer-tree-view .n-tree-node--selected .workspace-explorer-node-label { color: #f5f9ff; }
-.workspace-explorer-node-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 14px;
-  height: 14px;
-  flex: 0 0 14px;
-}
-.workspace-explorer-node-icon.is-file { color: #78b7e8; }
-.workspace-explorer-tree-view .n-tree-node--selected .workspace-explorer-node-icon.is-file { color: #a9d8ff; }
 .workspace-explorer-empty,
 .workspace-explorer-editor-state { display: flex; align-items: center; justify-content: center; min-height: 100%; padding: 24px; color: #858b98; font-size: 13px; text-align: center; }
 .workspace-explorer-editor { display: flex; flex: 1; min-width: 0; min-height: 0; flex-direction: column; background: #1a1a1a; }
@@ -564,18 +554,25 @@ code, pre {
 .workspace-explorer-ace .ace_fold { display: none !important; }
 .workspace-explorer-ace .ace_gutter-cell { padding-left: 8px !important; color: #969896; }
 
-/* 编辑器滚动条（垂直 + 水平）是浏览器原生滚动条，在深色主题下默认极淡几乎看不见。
-   用原生滚动条伪元素自定义，提亮轨道与滑块并加宽。 */
+/* 编辑器滚动条默认隐藏，滚动期间短暂显示，避免占据视觉焦点。 */
 .workspace-explorer-ace .ace_scrollbar {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.16s ease;
   scrollbar-width: thick;
-  scrollbar-color: rgba(255, 255, 255, 0.25) rgba(255, 255, 255, 0.12);
+  scrollbar-color: rgba(255, 255, 255, 0.25) transparent;
+}
+.workspace-explorer-ace:hover .ace_scrollbar,
+.workspace-explorer-ace.is-scrolling .ace_scrollbar {
+  opacity: 1;
+  pointer-events: auto;
 }
 .workspace-explorer-ace .ace_scrollbar::-webkit-scrollbar {
   width: 16px;
   height: 16px;
 }
 .workspace-explorer-ace .ace_scrollbar::-webkit-scrollbar-track {
-  background: rgba(255, 255, 255, 0.12);
+  background: transparent;
 }
 .workspace-explorer-ace .ace_scrollbar::-webkit-scrollbar-thumb {
   background: rgba(255, 255, 255, 0.25);
@@ -1805,11 +1802,12 @@ code, pre {
 
 .session-item {
   display: grid;
-  grid-template-columns: 24px 1fr auto auto auto 24px;
+  grid-template-columns: 26px minmax(0, 1fr) auto auto 24px;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   width: 100%;
-  padding: 8px 12px;
+  min-height: 42px;
+  padding: 7px 12px;
   color: #d4d4d4;
   text-align: left;
   border: 0;
@@ -1827,15 +1825,18 @@ code, pre {
 }
 
 .session-index {
-  color: #737373;
-  font-size: 11px;
+  color: #68716e;
+  font-size: 12px;
   text-align: center;
   font-family: var(--ally-mono-font);
 }
 
 .session-label {
-  color: #fafafa;
-  font-size: var(--ally-sub-font-size);
+  flex: 1 1 auto;
+  min-width: 0;
+  color: #aeb7b3;
+  font-size: 13px;
+  font-weight: 500;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1855,25 +1856,44 @@ code, pre {
 
 .session-body {
   display: flex;
-  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+
+.session-details {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 10px;
   min-width: 0;
 }
 
 .session-time {
-  color: #737373;
-  font-size: 10px;
-  line-height: 1.3;
+  color: #a18f62;
+  font-size: 11px;
+  font-weight: 550;
+  line-height: 1.2;
+  white-space: nowrap;
 }
 
 .session-meta {
-  color: #737373;
+  padding-left: 10px;
+  border-left: 1px solid rgba(255, 255, 255, 0.1);
+  color: #7d8985;
   font-size: 11px;
+  font-weight: 450;
   white-space: nowrap;
 }
 
 .session-current {
-  color: var(--ally-accent);
-  font-size: 11px;
+  padding: 2px 6px;
+  border: 1px solid color-mix(in srgb, var(--ally-accent) 35%, transparent);
+  border-radius: 4px;
+  color: color-mix(in srgb, var(--ally-accent) 70%, #6f7774);
+  font-size: 10px;
+  font-weight: 500;
+  white-space: nowrap;
 }
 
 .session-running {

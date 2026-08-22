@@ -36,7 +36,7 @@ Public License v3. See the LICENSE file for details.
             />
 
             <!-- Main chat area -->
-            <div class="main-area">
+            <div class="main-area" @pointerdown.capture="clearActiveExplorerTreeSelection">
               <n-layout class="chat-layout" :content-style="chatLayoutContentStyle">
                 <n-tabs
                   class="workspace-content-tabs"
@@ -133,14 +133,12 @@ Public License v3. See the LICENSE file for details.
                     >
                       <span class="session-index">{{ index + 1 }}</span>
                       <div class="session-body">
+                        <div class="session-details">
+                          <span class="session-time">{{ fmtTime(s.updatedAt || s.createdAt) }}</span>
+                          <span class="session-meta">{{ $t('app.sessions.messages', { count: msgCount(s) }) }}</span>
+                        </div>
                         <span class="session-label">{{ sessionDisplayTitle(s) }}</span>
-                        <span class="session-time">
-                          {{ fmtTime(s.createdAt) }}
-                          <template v-if="s.id === activeSessionId && s.isRunning"> ~ {{ $t('app.sessions.inProgress') }}</template>
-                          <template v-else-if="s.updatedAt && s.updatedAt !== s.createdAt"> ~ {{ fmtTime(s.updatedAt) }}</template>
-                        </span>
                       </div>
-                      <span class="session-meta">{{ $t('app.sessions.messages', { count: msgCount(s) }) }} · {{ ctxSize(s) }}t</span>
                       <span v-if="s.id === activeSessionId" class="session-current">{{ $t('app.sessions.current') }}</span>
                       <span v-if="s.isRunning" class="session-running">●</span>
                       <button
@@ -395,7 +393,6 @@ import {
   CheckForUpdates,
   GetConfig,
   GetContextBreakdown,
-  GetSessionContextTokens,
   GetWorkspaceTokenUsage,
   ResetWorkspaceTokenUsage,
   GetSubagents,
@@ -1480,6 +1477,11 @@ function setExplorerRef(tabId, el) {
   else explorerRefsByTab.delete(tabId);
 }
 
+function clearActiveExplorerTreeSelection(event) {
+  if (event?.target?.closest?.('.workspace-explorer')) return;
+  explorerRefsByTab.get(activeWorkspaceId.value)?.clearTreeSelection?.();
+}
+
 function closeExplorerForTab(tabId) {
   workspaceExplorerByTab.set(tabId, false);
   setExplorerClosedForPath(explorerTabPath(tabId), true);
@@ -2180,11 +2182,6 @@ async function refreshFooterStats({
 
   const session = sessions.value.find((item) => item.id === requestedSessionId);
   if (session) {
-    session.contextTokens = contextValue;
-    sessionTokensCache[requestedSessionId] = contextValue;
-    if (!session.isRunning && (session.hasSnapshot || session.messageCount > 0)) {
-      enqueueSessionWrite(() => SaveSessionIndex(sessionIndexEntry(session))).catch(() => {});
-    }
   }
   footerStatsLoading.value = false;
   captureFooterSnapshot(tabId, requestedWorkspace);
@@ -2298,11 +2295,6 @@ function doRefreshContextTokens(sid) {
     const value = Number(breakdown?.total) || 0;
     const session = sessions.value.find((item) => item.id === sid);
     if (session) {
-      session.contextTokens = value;
-      sessionTokensCache[sid] = value;
-      if (!session.isRunning && (session.hasSnapshot || session.messageCount > 0)) {
-        enqueueSessionWrite(() => SaveSessionIndex(sessionIndexEntry(session))).catch(() => {});
-      }
     }
     contextTokens.value = value;
     contextBreakdown.value = breakdown || null;
@@ -2674,7 +2666,6 @@ async function loadSessionMessages(session) {
       session.extraRoots = Array.isArray(snapshot.extraRoots) ? [...snapshot.extraRoots] : (session.extraRoots || []);
       session.createdAt = snapshot.createdAt || session.createdAt || Date.now();
       session.updatedAt = snapshot.updatedAt || session.updatedAt || session.createdAt;
-      session.contextTokens = Number(snapshot.contextTokens || session.contextTokens || 0);
       displayMessagesCacheBySession.delete(session.id);
       session.messages = messages.map((item) => ({
         ...item,
@@ -2738,6 +2729,7 @@ async function activateSelectedSession(target) {
   await loadSessionMessages(target);
   unloadInactiveSessionMessages();
   loadTodos(target.id);
+  restoreMessagesToBottom(target.id);
   return true;
 }
 
@@ -2878,6 +2870,7 @@ async function switchWorkspaceTab(id) {
     if (workspaceSwitchVersion !== switchVersion || activeWorkspaceId.value !== id) return;
     unloadInactiveSessionMessages();
     loadTodos(linkedSession.id);
+    restoreMessagesToBottom(linkedSession.id);
   }
   await refreshFooterStats({
     tabId: id,
@@ -2947,7 +2940,6 @@ async function selectSession(index) {
   await activateSelectedSession(target);
   sessionsVisible.value = false;
   subRuns.value = [];
-  scrollMessagesToBottom();
 }
 
 function createReplacementSession(title = t('app.sessions.new'), workspacePath = '') {
@@ -3181,6 +3173,21 @@ function markTransientTurn(session, runId = '') {
       item.pendingTurn = false;
       item.transientTurn = true;
     }
+  }
+}
+
+function discardInterruptedResponse(session, runId) {
+  if (!session || !runId) return;
+  for (let i = session.messages.length - 1; i >= 0; i--) {
+    const msg = session.messages[i];
+    if (msg?.role === 'assistant' && msg.runId === runId && msg.streaming) {
+      session.messages.splice(i, 1);
+      break;
+    }
+  }
+  streamBuffers.delete(runId);
+  for (const key of [...toolUpdateBuffers.keys()]) {
+    if (String(key).startsWith(`${runId}:`)) toolUpdateBuffers.delete(key);
   }
 }
 
@@ -3487,7 +3494,11 @@ function bindRuntimeEvents() {
   });
   onRuntimeEvent('run:retry', (data) => {
     const session = sessionByTerminalEvent(data);
-    if (!session || session.id !== activeSessionId.value) return;
+    if (!session) return;
+    // Discard interrupted output for background tabs too. Otherwise the next
+    // attempt appends to the failed partial response when the tab is revisited.
+    if (data.discardCurrentResponse) discardInterruptedResponse(session, data.runId);
+    if (session.id !== activeSessionId.value) return;
     retryBanner.value = {
       attempt: Number(data.attempt || 0),
       maxAttempts: Number(data.maxAttempts || 0),
@@ -4247,6 +4258,11 @@ function conversationMessagesForSession(sessionId) {
 
 function scrollMessagesToBottom(options = {}, sessionId = activeSessionId.value) {
   nextTick(() => conversationMessagesForSession(sessionId)?.scrollToBottom(options));
+}
+
+// 会话恢复：由消息组件在 DOM 更新后执行立即滚底和两帧补滚。
+function restoreMessagesToBottom(sessionId = activeSessionId.value) {
+  nextTick(() => conversationMessagesForSession(sessionId)?.restoreToBottom());
 }
 
 // 大内容（如大 diff）一次性注入后的滚底 + 一帧复查：diff 跨帧展开时
@@ -6126,7 +6142,6 @@ function sessionIndexEntry(session) {
     messageCount: Number.isFinite(Number(session?.messageCount))
       ? Number(session.messageCount)
       : messages.filter((message) => message?.role === 'user' || message?.role === 'assistant').length,
-    contextTokens: Number(session?.contextTokens || sessionTokensCache[session?.id] || 0),
     hasSnapshot: !!session?.hasSnapshot,
   };
 }
@@ -6157,7 +6172,6 @@ function persistCompletedSession(session) {
     session.hasSnapshot = true;
     session.messagesLoaded = true;
     session.messageCount = Number(snapshot.messageCount || 0);
-    session.contextTokens = Number(snapshot.contextTokens || 0);
   }).catch(() => {
     // Keep the previous completed snapshot when a disk write fails.
   });
@@ -6306,7 +6320,6 @@ function sessionFromIndexEntry(entry) {
     isRunning: false,
     hasSnapshot: !!entry.hasSnapshot,
     messageCount: Number(entry.messageCount || 0),
-    contextTokens: Number(entry.contextTokens || 0),
     createdAt: Number(entry.createdAt || Date.now()),
     updatedAt: Number(entry.updatedAt || entry.createdAt || Date.now()),
   };
@@ -6320,7 +6333,6 @@ function applySessionIndexEntry(session, entry) {
   session.extraRoots = Array.isArray(entry.extraRoots) ? [...entry.extraRoots] : (session.extraRoots || []);
   session.hasSnapshot = !!entry.hasSnapshot;
   session.messageCount = Number(entry.messageCount || 0);
-  session.contextTokens = Number(entry.contextTokens || 0);
   session.createdAt = Number(entry.createdAt || session.createdAt || Date.now());
   session.updatedAt = Number(entry.updatedAt || session.updatedAt || session.createdAt);
   return session;
@@ -6421,7 +6433,6 @@ async function migrateLegacySessionStorage() {
       createdAt: meta.createdAt || Date.now(),
       updatedAt: meta.updatedAt || meta.createdAt || Date.now(),
       messageCount: Number(meta.messageCount || legacyMessages.filter((item) => item?.role === 'user' || item?.role === 'assistant').length),
-      contextTokens: Number(meta.contextTokens || 0),
       hasSnapshot: false,
     };
     try {
@@ -6449,7 +6460,7 @@ async function loadSavedSessions() {
 
 async function refreshSessionListData() {
   await refreshSessionIndex();
-  await refreshSessionTokensList();
+
 }
 
 function showSessionList() {
@@ -6476,7 +6487,6 @@ async function switchToSession(index) {
   if (!target) return;
   saveSessions();
   await activateSelectedSession(target);
-  scrollMessagesToBottom();
 }
 
 
@@ -7563,44 +7573,6 @@ function msgCount(s) {
   return s.messages.filter((message) => message?.role === 'user' || message?.role === 'assistant').length;
 }
 
-// Real per-session token counts come from the backend (GetSessionContextTokens),
-// which accounts for tool calls, tool results, reasoning — the bulk of the
-// actual context payload. The previous chars/4 estimate only counted
-// message.content text and missed everything else, so it was always severely
-// understated. We cache the numbers per session id and refresh them when the
-// list is opened.
-const sessionTokensCache = reactive({});
-let sessionTokensRefreshing = false;
-
-async function refreshSessionTokensList() {
-  if (sessionTokensRefreshing) return;
-  sessionTokensRefreshing = true;
-  const targets = currentWorkspaceSessions.value.filter((session) => session?.id && !Number(session.contextTokens || sessionTokensCache[session.id] || 0));
-  try {
-    await Promise.allSettled(targets.map(async (session) => {
-      try {
-        const value = Number(await GetSessionContextTokens(session.id)) || 0;
-        if (value <= 0) return;
-        session.contextTokens = value;
-        sessionTokensCache[session.id] = value;
-        if (session.hasSnapshot && !session.isRunning) {
-          enqueueSessionWrite(() => SaveSessionIndex(sessionIndexEntry(session))).catch(() => {});
-        }
-      } catch (_) {
-        // Keep the persisted value when one session cannot be recalculated.
-      }
-    }));
-  } finally {
-    sessionTokensRefreshing = false;
-  }
-}
-
-function ctxSize(s) {
-  const tokens = Number(s?.contextTokens || sessionTokensCache[s?.id] || 0);
-  if (!Number.isFinite(tokens) || tokens < 0) return '—';
-  if (tokens >= 1000) return (tokens / 1000).toFixed(1) + 'k';
-  return String(tokens);
-}
 
 const markdownRenderCache = new Map();
 const MARKDOWN_RENDER_CACHE_LIMIT = 100;

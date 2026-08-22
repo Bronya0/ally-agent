@@ -89,7 +89,15 @@ func shouldRetryLLMError(err error) bool {
 	if strings.Contains(msg, "timeout") || strings.Contains(msg, "timed out") ||
 		strings.Contains(msg, "eof") || strings.Contains(msg, "connection reset") ||
 		strings.Contains(msg, "broken pipe") || strings.Contains(msg, "no such host") ||
-		strings.Contains(msg, "connection refused") || strings.Contains(msg, "temporarily unavailable") {
+		strings.Contains(msg, "connection refused") || strings.Contains(msg, "temporarily unavailable") ||
+		strings.Contains(msg, "connection lost") || strings.Contains(msg, "other side closed") ||
+		strings.Contains(msg, "fetch failed") || strings.Contains(msg, "upstream connect") ||
+		strings.Contains(msg, "reset before headers") || strings.Contains(msg, "socket hang up") ||
+		strings.Contains(msg, "socket connection was closed") || strings.Contains(msg, "stream interrupted") ||
+		strings.Contains(msg, "stream ended without") || strings.Contains(msg, "terminal event") ||
+		strings.Contains(msg, "finish_reason") || strings.Contains(msg, "terminated") ||
+		strings.Contains(msg, "protocol error") || strings.Contains(msg, "unexpected end of stream") ||
+		strings.Contains(msg, "unexpected end of json input") || strings.Contains(msg, "unexpected eof") {
 		return true
 	}
 	return false
@@ -583,9 +591,13 @@ func (a *App) streamOpenAIChat(ctx context.Context, cfg ConfigState, model strin
 		emitModelStreamEvent(onEvent, event)
 	})
 	var usage *modelUsage
+	gotFinishReason := false
 	for {
 		raw, err := stream.RecvRaw()
 		if errors.Is(err, io.EOF) {
+			if !gotFinishReason && assistant.Len() == 0 && reasoning.Len() == 0 && len(toolCalls) == 0 {
+				return nil, errors.New("stream ended without finish_reason")
+			}
 			break
 		}
 		if err != nil {
@@ -597,9 +609,6 @@ func (a *App) streamOpenAIChat(ctx context.Context, cfg ConfigState, model strin
 		}
 		var resp legacyopenai.ChatCompletionStreamResponse
 		if err := json.Unmarshal(raw, &resp); err != nil {
-			if isIncompleteChatStreamJSON(err) && len(toolCalls) == 0 && (assistant.Len() > 0 || reasoning.Len() > 0) {
-				break
-			}
 			return nil, fmt.Errorf("decode chat stream event: %w", err)
 		}
 		if resp.Usage != nil {
@@ -609,6 +618,9 @@ func (a *App) streamOpenAIChat(ctx context.Context, cfg ConfigState, model strin
 			continue
 		}
 		delta := resp.Choices[0].Delta
+		if resp.Choices[0].FinishReason != "" {
+			gotFinishReason = true
+		}
 		if reasoningState.tag != "" {
 			// Parse content-level reasoning tags embedded in delta.Content
 			// (e.g. <sink>...</sink> or any configured <tag>...</tag>).
@@ -754,6 +766,7 @@ func (a *App) streamOpenAIResponses(ctx context.Context, cfg ConfigState, model 
 	var usage *modelUsage
 	finalOutputText := ""
 	var streamErr error
+	gotTerminalEvent := false
 	images := []modelImage{}
 	imageIndexes := map[string]int{}
 	emitImage := func(id, b64 string, partial bool) {
@@ -824,6 +837,7 @@ func (a *App) streamOpenAIResponses(ctx context.Context, cfg ConfigState, model 
 			ev := event.AsResponseImageGenerationCallPartialImage()
 			emitImage(ev.ItemID, ev.PartialImageB64, true)
 		case "response.completed":
+			gotTerminalEvent = true
 			ev := event.AsResponseCompleted()
 			usage = modelUsageFromResponses(ev.Response.Usage)
 			// The openai-go Responses union decoder currently drops the nested
@@ -833,6 +847,22 @@ func (a *App) streamOpenAIResponses(ctx context.Context, cfg ConfigState, model 
 				usage = rawUsage
 			}
 			finalOutputText = ev.Response.OutputText()
+			// Some compatible Responses gateways omit output_text.delta and only
+			// include the final text in response.completed. Forward the missing
+			// suffix so the frontend does not end on a blank assistant message.
+			if finalOutputText != "" {
+				seen := assistant.String()
+				missing := ""
+				if seen == "" {
+					missing = finalOutputText
+				} else if strings.HasPrefix(finalOutputText, seen) {
+					missing = finalOutputText[len(seen):]
+				}
+				if missing != "" {
+					assistant.WriteString(missing)
+					emitModelStreamEvent(onEvent, modelStreamEvent{ContentDelta: missing})
+				}
+			}
 			for _, item := range ev.Response.Output {
 				if item.Type == "image_generation_call" {
 					imageCall := item.AsImageGenerationCall()
@@ -861,6 +891,12 @@ func (a *App) streamOpenAIResponses(ctx context.Context, cfg ConfigState, model 
 	}
 	if err := stream.Err(); err != nil {
 		return nil, err
+	}
+	if streamErr != nil {
+		return nil, streamErr
+	}
+	if !gotTerminalEvent {
+		return nil, errors.New("stream ended without terminal event")
 	}
 	if streamErr != nil {
 		return nil, streamErr
@@ -1224,11 +1260,14 @@ func (a *App) streamAnthropicMessages(ctx context.Context, cfg ConfigState, mode
 		}
 		streamErr := stream.Err()
 		stream.Close()
-		if streamErr == nil {
+		if streamErr == nil && strings.TrimSpace(stopReason) != "" {
 			break
 		}
-		// 已经 emit 过事件的内容不可重试(会重复输出),直接返回错误。
-		// 仅在尚未开始流输出时重试。
+		if streamErr == nil {
+			streamErr = errors.New("stream ended without terminal event")
+		}
+		// 适配器保留原有的 pre-first-event retry；已经产生内容的中断
+		// 交给上层 runChat 做整轮重试，避免把半截输出拼进下一次请求。
 		if !gotAnyEvent && ctx.Err() == nil && attempt < maxRetries && shouldRetryLLMError(streamErr) {
 			wait := llmRetryDelay(attempt + 1)
 			emitLLMRetryEvent(onEvent, attempt+1, maxRetries, streamErr, wait)
