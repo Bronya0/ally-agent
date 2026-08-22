@@ -67,7 +67,7 @@ Public License v3. See the LICENSE file for details.
     <div v-if="isValidationWarning(msg)" class="edit-warning-list validation-warning-list" role="status" aria-live="polite">
       <div class="edit-warning validation-warning" :title="msg.validation">
         <span class="validation-warning-label">{{ $t('tools.validationWarning') }}</span>
-        {{ validationWarningLine(msg) }}
+        {{ msg.validation }}
       </div>
     </div>
     <pre v-if="msg.expanded && msg.editChangedLinesBlock" class="edit-changed-lines-block">{{ msg.editChangedLinesBlock }}</pre>
@@ -287,13 +287,6 @@ function isCreatePreview(msg) {
 function isValidationWarning(msg) {
   const validation = String(msg?.validation || '');
   return /自动校验失败|validation\s+(?:failed|error)/i.test(validation);
-}
-
-// Keep the visible warning short; the full detail stays available through
-// the hover title on the warning row.
-function validationWarningLine(msg) {
-  const validation = String(msg?.validation || '');
-  return validation.length > 60 ? validation.slice(0, 60) + '…' : validation;
 }
 
 function toolBodyText(msg) {

@@ -88,7 +88,7 @@ const BUILTIN_TOOL_GROUPS = [
   {
     key: 'remote',
     label: t('tools.group.remote'),
-    names: ['remote_list_files', 'remote_read_file', 'remote_edit', 'remote_create_file', 'remote_delete_path', 'remote_run_command'],
+    names: ['remote_read_file', 'remote_edit', 'remote_create_file', 'remote_delete_path', 'remote_run_command'],
     description: t('tools.group.remoteDescription'),
   },
   {

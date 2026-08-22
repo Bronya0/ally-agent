@@ -192,6 +192,11 @@ function toolArgsTitle(tc) {
     if (questions.length === 1) return questions[0]?.question || '';
     return questions.length ? t('app.ask.questions', { count: questions.length }) : '';
   }
+  if (name === 'remote_edit' && Array.isArray(parsed.files)) {
+    const paths = parsed.files.map(file => file?.path).filter(Boolean);
+    const summary = paths.length === 1 ? paths[0] : `${paths.length} files`;
+    return parsed.target ? `${parsed.target} · ${summary}` : summary;
+  }
   if (name === 'edit' || name === 'remote_edit') {
     if (Array.isArray(parsed.files)) return parsed.files.length === 1 ? (parsed.files[0]?.path || '') : `${parsed.files.length} files`;
     return parsed.target ? `${parsed.target} · ${parsed.path || ''}` : (parsed.path || '');
@@ -215,8 +220,7 @@ function toolArgsTitle(tc) {
     if (pattern && path) return `${pattern}, ${path}`;
     return pattern || path;
   }
-  if (name === 'list_files' || name === 'remote_list_files') {
-    if (parsed.target) return `${parsed.target}${parsed.path ? ' · ' + parsed.path : ''}`;
+  if (name === 'list_files') {
     return parsed.path || parsed.pattern || '';
   }
   if (name === 'http_request' || name === 'web_fetch') {
