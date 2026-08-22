@@ -142,7 +142,7 @@ Public License v3. See the LICENSE file for details.
 </template>
 
 <script setup>
-import { onBeforeUnmount, onMounted, reactive, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
 import { t } from '../i18n.mjs';
 import MessageAttachments from './MessageAttachments.vue';
 import WelcomeMessage from './WelcomeMessage.vue';
@@ -159,7 +159,7 @@ import ArrowUpOutlined from '@vicons/antd/ArrowUpOutlined';
 import ArrowDownOutlined from '@vicons/antd/ArrowDownOutlined';
 import CloseOutlined from '@vicons/antd/CloseOutlined';
 
-defineProps({
+const props = defineProps({
   messages: { type: Array, required: true },
   focusedId: { type: String, default: '' },
   renderFn: { type: Function, required: true },
@@ -297,6 +297,15 @@ const showJumpToBottom = ref(false);
 const autoFollow = ref(true);
 const bottomThreshold = 96;
 let scrollRaf = 0;
+// autoFollow 只由"真实用户意图"驱动，绝不根据滚动位置来关闭。程序化滚动
+// （流式增长、大 diff 跨帧展开、alignToLastToolCard 停在卡头、resize 补滚）
+// 触发的 scroll 事件与用户滚动无法区分，所以裸 scroll 事件永远不会关掉跟随；
+// 只有 wheel / touch / 键盘 / 拖动滚动条这类真实手势才暂停跟随。暂停后一旦
+// 用户停止操作（空闲）就自动恢复贴底——自愈兜底，任何原因都不会永久卡死。
+let userIntentUntil = 0;        // 手势窗口：该时间戳前的 scroll 事件视为用户驱动
+let idleResumeTimer = 0;
+const userIntentWindow = 250;   // 手势后 250ms 内的 scroll 事件按用户处理
+const idleResumeDelay = 8000;   // 停止操作 8s 后自动恢复自动滚动
 // Track pending animation frames so unmounting a closed workspace Tab cannot
 // leave callbacks targeting a disposed scrollbar.
 const pendingRafs = new Set();
@@ -310,6 +319,7 @@ function scheduleRaf(fn) {
 }
 
 let viewportResizeObserver = null;
+let userIntentTarget = null;
 
 // 消息区底部一旦被布局挤压（plan 面板出现/展开、输入框自动增高、窗口
 // resize、Tab 从隐藏切回可见），可用高度变小，最新内容会被推到视口之下，
@@ -319,14 +329,69 @@ function ensureViewportResizeObserver() {
   const viewport = getScrollViewport();
   if (!viewport || viewportResizeObserver) return;
   viewportResizeObserver = new ResizeObserver(() => {
-    if (!autoFollow.value || showJumpToBottom.value) return;
+    if (!autoFollow.value) return;
     scrollToBottom();
   });
   viewportResizeObserver.observe(viewport);
 }
 
+// A run is active while any message is still streaming. Once the run ends the
+// user may scroll up to read freely — nothing should yank them back to the
+// bottom. All auto-resume / auto-follow behavior is gated on this.
+const isRunActive = computed(() => Array.isArray(props.messages) && props.messages.some((m) => m?.streaming));
+
+// 记录一次真实用户手势，并重置空闲恢复计时器。计时器只被用户手势刷新，
+// 程序化滚动不参与，因此不会被流式期间的自动滚动污染。
+function markUserIntent() {
+  userIntentUntil = Date.now() + userIntentWindow;
+  armIdleResume();
+}
+
+function armIdleResume() {
+  // 对话已结束时不再安排"空闲自动贴底"：用户从上往下看不该被拉回底部。
+  if (!isRunActive.value) {
+    clearIdleResume();
+    return;
+  }
+  if (idleResumeTimer) clearTimeout(idleResumeTimer);
+  idleResumeTimer = window.setTimeout(() => {
+    idleResumeTimer = 0;
+    if (!isRunActive.value) return;
+    autoFollow.value = true;
+    showJumpToBottom.value = false;
+    scrollToBottom({ force: true });
+  }, idleResumeDelay);
+}
+
+function clearIdleResume() {
+  if (idleResumeTimer) {
+    clearTimeout(idleResumeTimer);
+    idleResumeTimer = 0;
+  }
+}
+
+function onUserKey(e) {
+  if (['PageUp', 'PageDown', 'ArrowUp', 'ArrowDown', 'Home', 'End', ' '].includes(e.key)) {
+    markUserIntent();
+  }
+}
+
+// 拖动 naive-ui 滚动条 rail/thumb 不触发 wheel/touch，这里单独识别。
+function onShellPointerDown(e) {
+  if (e.target?.closest?.('.n-scrollbar-rail')) markUserIntent();
+}
+
 onMounted(() => {
   ensureViewportResizeObserver();
+  const viewport = getScrollViewport();
+  if (viewport) {
+    viewport.addEventListener('wheel', markUserIntent, { passive: true });
+    viewport.addEventListener('touchmove', markUserIntent, { passive: true });
+    viewport.addEventListener('keydown', onUserKey);
+    const shell = viewport.closest('.messages-scroll-shell') || viewport.parentElement;
+    shell?.addEventListener('pointerdown', onShellPointerDown, true);
+    userIntentTarget = { viewport, shell };
+  }
 });
 
 onBeforeUnmount(() => {
@@ -335,6 +400,14 @@ onBeforeUnmount(() => {
   if (scrollRaf) cancelAnimationFrame(scrollRaf);
   for (const id of pendingRafs) cancelAnimationFrame(id);
   pendingRafs.clear();
+  clearIdleResume();
+  if (userIntentTarget) {
+    userIntentTarget.viewport?.removeEventListener('wheel', markUserIntent);
+    userIntentTarget.viewport?.removeEventListener('touchmove', markUserIntent);
+    userIntentTarget.viewport?.removeEventListener('keydown', onUserKey);
+    userIntentTarget.shell?.removeEventListener('pointerdown', onShellPointerDown, true);
+    userIntentTarget = null;
+  }
 });
 
 function getScrollViewport() {
@@ -349,14 +422,16 @@ function isNearBottom() {
   return viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight <= bottomThreshold;
 }
 
-function updateAutoFollow() {
+function handleScroll() {
+  // 只在处于用户手势窗口内时才根据位置重算跟随状态；窗口之外的 scroll 事件
+  // 一律视为程序化滚动，完全不改变 autoFollow，从原理上杜绝"程序滚动误关
+  // 自动跟随"这类中断。
+  if (Date.now() > userIntentUntil) return;
   const nearBottom = isNearBottom();
   autoFollow.value = nearBottom;
   showJumpToBottom.value = !nearBottom;
-}
-
-function handleScroll() {
-  updateAutoFollow();
+  if (nearBottom) clearIdleResume();
+  else armIdleResume();
 }
 
 function scrollToBottom(options = {}) {
@@ -412,6 +487,7 @@ function scrollToBottom(options = {}) {
 function jumpToBottom() {
   autoFollow.value = true;
   showJumpToBottom.value = false;
+  clearIdleResume();
   scrollToBottom({ force: true });
 }
 
@@ -424,7 +500,7 @@ function scrollToBottomIfStale() {
   if (!viewport) return;
   scrollToBottom();
   scheduleRaf(() => {
-    if (!autoFollow.value || showJumpToBottom.value) return;
+    if (!autoFollow.value) return;
     if (viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight > bottomThreshold) {
       scrollToBottom({ force: true });
     }
