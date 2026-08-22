@@ -573,7 +573,8 @@ function initAceEditor() {
   });
   aceEditor.setOptions({
     enableBasicAutocompletion: true,
-    enableLiveAutocompletion: false,
+    // 实时补全（打字自动弹出 basic 补全）；worker 保持关闭，无额外内存驻留
+    enableLiveAutocompletion: true,
     showFoldWidgets: false,
     // 允许滚动到文件末尾之后再多滚半屏，光标可落在最后一行下方
     scrollPastEnd: 0.5,
