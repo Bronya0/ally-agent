@@ -69,21 +69,31 @@ func (a *App) StopSubagent(subID string) error {
 
 // ── Sub-agent execution loop ─────────────────────────────────
 
-// Hard step cap for every delegate execution. Plain sub-agents enter the
-// loop with maxSteps=0 (previously unlimited); the shared scheduled-task
-// maximum now bounds them too, so a runaway delegate can never loop
-// forever. Scheduled tasks keep their own configured cap (<= this value).
+// Hard step cap for every delegate execution. Scheduled tasks keep their own
+// configured cap (<= this value); plain sub-agents must supply maxSteps and are
+// clamped into [1, maxDelegateSteps], so a runaway delegate can never loop
+// forever.
 const maxDelegateSteps = maxScheduledTaskSteps
+
+// defaultSubagentSteps bounds a sub-agent when the model omits or sends an
+// invalid maxSteps. Kept modest so a missing budget cannot silently burn
+// tokens up to the hard maximum.
+const defaultSubagentSteps = 25
 
 func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID string, req AgentDelegateRequest, cancel context.CancelFunc) (*AgentDelegateResult, error) {
 	if strings.TrimSpace(req.Task) == "" {
 		return nil, errors.New("task is required")
 	}
-	// Enforce the hard cap: 0 (plain sub-agent) or any out-of-range value
-	// falls back to the shared maximum.
-	if req.maxSteps <= 0 || req.maxSteps > maxDelegateSteps {
-		req.maxSteps = maxDelegateSteps
+	// The model must supply maxSteps; clamp into a safe range. A missing or
+	// invalid value falls back to a modest default rather than the hard maximum
+	// so a runaway delegate cannot silently burn tokens.
+	if req.MaxSteps <= 0 {
+		req.MaxSteps = defaultSubagentSteps
 	}
+	if req.MaxSteps > maxDelegateSteps {
+		req.MaxSteps = maxDelegateSteps
+	}
+	budget := req.MaxSteps
 	model := cfg.Model
 	if req.Model != "" {
 		model = req.Model
@@ -137,6 +147,7 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 		}
 	}
 	messages = append(messages, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: "## Task\n" + req.Task})
+	messages = append(messages, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: subagentBudgetStartNotice(budget)})
 
 	// Run sub-agent loop synchronously (the caller is already in a goroutine for parallel)
 	tools := req.tools
@@ -148,7 +159,7 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 	var filesEdited []string
 	seenFiles := map[string]bool{}
 	step := 0
-	for req.maxSteps <= 0 || step < req.maxSteps {
+	for step < budget {
 		select {
 		case <-ctx.Done():
 			a.subRunsMu.Lock()
@@ -159,6 +170,12 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 			a.emit("sub:error", map[string]any{"id": subID, "sessionId": sessionID, "error": "cancelled", "durationMs": time.Now().UnixMilli() - run.StartTime})
 			return &AgentDelegateResult{AgentID: subID, Role: req.Role, Description: desc, Status: "failed", Steps: step, Error: "cancelled"}, ctx.Err()
 		default:
+		}
+
+		// Warn the sub-agent as its tool-call budget runs low so it can wrap up
+		// and produce a report before the hard limit.
+		if notice := subagentBudgetLowNotice(budget-step, budget); notice != "" {
+			messages = append(messages, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: notice})
 		}
 
 		// Retry transient LLM errors (429/5xx/network) at the sub-agent loop
@@ -424,22 +441,69 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 		a.emit("sub:step", map[string]any{"id": subID, "sessionId": sessionID, "step": step, "inputTokens": run.InputTokens, "outputTokens": run.OutputTokens, "totalTokens": run.TotalTokens})
 	}
 
+	// Budget exhausted without the sub-agent finishing on its own. Give it one
+	// final tool-free turn so the parent always receives a usable report instead
+	// of an empty timeout.
+	summary, finalErr := a.forceSubagentFinalReport(ctx, cfg, model, messages, run)
+	status := "completed"
+	errMsg := ""
+	if finalErr != nil {
+		status = "timed_out"
+		errMsg = fmt.Sprintf("reached step limit (%d): %v", budget, finalErr)
+	}
 	a.subRunsMu.Lock()
-	run.Status = "timed_out"
+	run.Status = status
+	run.Summary = summary
+	run.Error = errMsg
 	run.Steps = step
 	run.FilesRead = filesRead
 	run.FilesEdited = filesEdited
 	a.subRunsMu.Unlock()
 	a.emit("sub:done", map[string]any{
-		"id": subID, "sessionId": sessionID, "status": "timed_out", "steps": step,
-		"filesRead": filesRead, "filesEdited": filesEdited, "durationMs": time.Now().UnixMilli() - run.StartTime,
+		"id": subID, "sessionId": sessionID, "status": status, "steps": step,
+		"summary": summary, "filesRead": filesRead, "filesEdited": filesEdited, "durationMs": time.Now().UnixMilli() - run.StartTime,
 		"inputTokens": run.InputTokens, "outputTokens": run.OutputTokens, "totalTokens": run.TotalTokens,
 	})
 	return &AgentDelegateResult{
-		AgentID: subID, Role: req.Role, Description: desc, Status: "timed_out",
-		Steps: step, FilesRead: filesRead, FilesEdited: filesEdited, Model: model,
-		Error: fmt.Sprintf("reached step limit (%d)", req.maxSteps),
+		AgentID: subID, Role: req.Role, Description: desc, Status: status,
+		Steps: step, Summary: summary, FilesRead: filesRead, FilesEdited: filesEdited, Model: model,
+		Error: errMsg,
 	}, nil
+}
+
+// forceSubagentFinalReport runs one final, tool-free model turn after the budget
+// is exhausted so the parent always receives a summary. Passing no tools makes
+// it impossible to emit tool calls, forcing a text report.
+func (a *App) forceSubagentFinalReport(ctx context.Context, cfg ConfigState, model string, messages []openai.ChatCompletionMessage, run *SubagentRun) (string, error) {
+	messages = append(messages, openai.ChatCompletionMessage{
+		Role:    openai.ChatMessageRoleUser,
+		Content: "[BUDGET EXHAUSTED] You have 0 tool-call rounds remaining. Do NOT call any tools. Immediately write your final report: what you accomplished, what still remains, which files changed, and any verification results.",
+	})
+	resp, err := a.streamModelResponse(ctx, cfg, model, messages, nil, nil)
+	if err != nil {
+		return "", err
+	}
+	if resp.Usage != nil {
+		a.subRunsMu.Lock()
+		run.InputTokens += resp.Usage.PromptTokens
+		run.OutputTokens += resp.Usage.CompletionTokens
+		run.TotalTokens = run.InputTokens + run.OutputTokens
+		a.subRunsMu.Unlock()
+	}
+	return strings.TrimSpace(resp.Content), nil
+}
+
+// subagentBudgetStartNotice announces the tool-call budget at task start.
+func subagentBudgetStartNotice(budget int) string {
+	return fmt.Sprintf("## Tool Budget\nYou have a hard budget of %d tool-call rounds (each LLM turn that calls tools uses one). Plan for it: gather only what the task needs, batch tool calls, and finish with a report before the budget runs out. You will be warned when only a few rounds remain, and on the final turn you must output the report with no tool calls.", budget)
+}
+
+// subagentBudgetLowNotice returns a warning when 1-3 rounds remain, else "".
+func subagentBudgetLowNotice(remaining, budget int) string {
+	if remaining < 1 || remaining > 3 {
+		return ""
+	}
+	return fmt.Sprintf("[BUDGET WARNING] Only %d of %d tool-call rounds remain. Make only essential tool calls now and prepare your final report.", remaining, budget)
 }
 
 func (a *App) finishSubagentRecord(subID string) {

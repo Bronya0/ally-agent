@@ -529,7 +529,7 @@ func (m *scheduledTaskManager) run(task ScheduledTask) {
 		Task:         "You are executing a temporary scheduled task in isolated fresh context. It exists only for the current Ally process. Do not create, list, or delete scheduled tasks. Complete the instruction and finish with a concise report for the user.\n\n" + task.Instruction,
 		Description:  "Scheduled: " + task.Name,
 		CleanContext: false,
-		maxSteps:     task.MaxSteps,
+		MaxSteps:     task.MaxSteps,
 		tools:        m.app.scheduledTaskTools(cfg),
 	}, cancel)
 	m.app.releaseSubagentSlot()

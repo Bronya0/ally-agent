@@ -1193,8 +1193,8 @@ type AgentDelegateRequest struct {
 	Description  string `json:"description,omitempty"`
 	CleanContext bool   `json:"cleanContext,omitempty"`
 	Model        string `json:"model,omitempty"`
+	MaxSteps     int    `json:"maxSteps,omitempty"`
 	tools        []openai.Tool
-	maxSteps     int
 }
 
 type AgentDelegateResult struct {

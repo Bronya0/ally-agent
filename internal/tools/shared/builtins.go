@@ -19,6 +19,9 @@ const (
 	maxHTTPBodyBytes  = 50 * 1024 * 1024
 	MaxReadRangeLines = 10000
 	MaxReadLineChars  = 2000
+	// maxDelegateStepBudget bounds the subagent maxSteps parameter. Kept in
+	// sync with the app-side hard cap (scheduler.MaxSteps).
+	maxDelegateStepBudget = 1000
 )
 
 // chatToolsCache memoizes the built-in tool list. The schema is pure static
@@ -53,14 +56,14 @@ func chatToolsUncached() []openai.Tool {
 				"includeIgnored": map[string]any{"type": "boolean", "description": "Include heavy ignored directories such as .git, node_modules, dist, build. Default false."},
 			},
 		}),
-		functionTool("edit", "Validate and apply exact replacements across multiple workspace files in one call. Each file requires the current 6-char `version` from read; a stale one fails with E_VERSION_MISMATCH (re-read all affected files and retry). Prefer a small exact unique `oldText` per change; `replace_all` replaces every non-overlapping exact occurrence; `lineRange` (A-B form) replaces larger whole-line blocks — choose oldText OR lineRange, never both. If exact matching fails, Ally auto-retries once normalizing invisible differences (trailing spaces, smart/Unicode quotes and dashes to ASCII); an ambiguous normalized match fails with E_MULTI_MATCH — add surrounding context rather than re-reading the whole file. All changes in a file share the original read version, so no offset adjustment between changes. After writing, `validation` contains a concise automatic syntax/compile check; if it reports a failure, the file is already written and should be fixed with another edit. Error codes: E_BAD_EDIT, E_VERSION_MISMATCH, E_PATH_OUTSIDE.", map[string]any{
+		functionTool("edit", "Validate and apply exact replacements across multiple workspace files in one call. Each file requires the current 6-char `version` from read; a stale one fails with E_VERSION_MISMATCH — re-read affected files and retry. Prefer a small exact unique `oldText` per change; `replace_all` replaces every non-overlapping exact occurrence; `lineRange` (A-B form) replaces larger whole-line blocks. If exact matching fails, Ally retries once normalizing invisible differences (trailing spaces, smart/Unicode quotes and dashes); an ambiguous match fails with E_MULTI_MATCH — add surrounding context. All changes in a file share the original read version, so no offset adjustment between changes. After writing, `validation` contains a concise syntax/compile check — the file is already written; fix it with another edit. Error codes: E_BAD_EDIT, E_VERSION_MISMATCH, E_PATH_OUTSIDE.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"files": map[string]any{
 					"type":        "array",
 					"minItems":    1,
 					"maxItems":    20,
-					"description": "Files to edit in this call. Put all independent changes for the same file in one changes array when possible (max 50). Repeated normalized paths with the same version are merged against one original snapshot; total changes across all files must not exceed 200.",
+					"description": "Files to edit in this call (1-20). Put all independent changes for the same file in one changes array when possible (max 50); repeated normalized paths with the same version merge; total changes across all files must not exceed 200.",
 					"items": map[string]any{
 						"type": "object",
 						"properties": map[string]any{
@@ -96,7 +99,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"path"},
 		}),
-		functionTool("command", "Run a shell command with cwd confined to the workspace. On Windows the shell is Git Bash (bash) when available, otherwise PowerShell; on macOS/Linux, bash. Commands may inspect outside paths, redirect to null devices, and create new outside paths; modifying or deleting existing outside paths, explicit deletion commands, unsafe cwd symlinks, and long-running services are refused. The session may also allow writes inside extra roots (the E_PATH_OUTSIDE error lists all allowed roots) — on E_PATH_OUTSIDE, read the returned reason and switch target rather than retrying unchanged. When output exceeds the capture limit it is truncated and an `outputFilePath` points to the full output; read it if earlier output matters.", map[string]any{
+		functionTool("command", "Run a shell command with cwd confined to the workspace. On Windows the shell is Git Bash when available, otherwise PowerShell; on macOS/Linux, bash. Commands may inspect outside paths, redirect to null devices, and create new outside paths; modifying/deleting existing outside paths, explicit deletion commands, unsafe cwd symlinks, and long-running services are refused. On E_PATH_OUTSIDE, read the returned reason and switch target rather than retrying unchanged. When output exceeds the capture limit it is truncated and `outputFilePath` points to the full output.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"command":        map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*"},
@@ -105,7 +108,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"command"},
 		}),
-		functionTool("service", "Run, inspect, and stop long-running local processes (frontend/backend dev servers, Wails/Vite/Django/uvicorn, workers) without blocking the agent loop. action=start launches a process and returns its id; action=list shows tracked services; action=read returns a bounded tail of one service's output (default 8 KiB, max 32 KiB) plus byte accounting; action=stop terminates a service. Processes appear in the Task Center with a live rolling output buffer. Use list/read sparingly: avoid polling loops; prefer a single read after a concrete condition (e.g. wait + read). Error codes: E_BAD_COMMAND, E_SERVICE_LIMIT, E_BAD_BACKGROUND_ACTION, E_BAD_SERVICE_ID, E_SERVICE_NOT_FOUND.", map[string]any{
+		functionTool("service", "Run, inspect, and stop long-running local processes (dev servers, workers) without blocking the agent loop. action=start launches a process and returns its id; list shows tracked services; read returns a bounded output tail (default 8 KiB, max 32 KiB); stop terminates one. Use list/read sparingly (no polling loops); prefer a single read after a concrete condition (e.g. wait + read). Error codes: E_BAD_COMMAND, E_SERVICE_LIMIT, E_BAD_BACKGROUND_ACTION, E_BAD_SERVICE_ID, E_SERVICE_NOT_FOUND.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"action":    map[string]any{"type": "string", "enum": []string{"start", "stop", "list", "read"}, "description": "Start a new background process, stop one by id, list all tracked services, or read a bounded tail of one service's output."},
@@ -131,7 +134,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"seconds", "reason"},
 		}),
-		functionTool("ask", "Pause the current visible agent run and ask the user decision questions. Every question must provide concise, reasonable options with unique ids, labels, useful descriptions, and exactly one recommended option. The UI supports selecting multiple answers and automatically appends a final custom-answer choice, so do not include an Other/Custom option yourself. Call ask as the only tool in the model response. Error codes: E_BAD_ASK, E_ASK_CANCELLED, E_ASK_BATCH_CONFLICT.", map[string]any{
+		functionTool("ask", "Pause the current visible agent run and ask the user decision questions. Every question needs concise options with unique ids, labels, useful descriptions, and exactly one recommended option. The UI supports multiple selections and appends a custom-answer choice, so do not add an Other/Custom option. Call ask as the only tool in the model response. Error codes: E_BAD_ASK, E_ASK_CANCELLED, E_ASK_BATCH_CONFLICT.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"questions": map[string]any{
@@ -161,7 +164,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"questions"},
 		}),
-		functionTool("scheduled_task", "Create, list, or delete temporary scheduled Agent tasks for the current Ally process. Create tasks only when the user explicitly requests scheduled or recurring automation. Scheduled executions receive the normal workspace tool set, including commands, file operations, network tools, MCP, and delegation; only scheduled_task itself is withheld to prevent recursive task creation. Tasks use isolated fresh context on every execution and are cleared whenever Ally closes or starts. Use action=list only when the user asks to inspect tasks or an id is needed; never poll it. Future task results are shown in the Task Center UI and are not injected into the current conversation.", map[string]any{
+		functionTool("scheduled_task", "Create, list, or delete temporary scheduled Agent tasks for the current Ally process. Create only when the user explicitly requests scheduled or recurring automation. Scheduled runs get the normal tool set (commands, file ops, network, MCP, delegation) except scheduled_task itself. Tasks use fresh isolated context each run and are cleared when Ally restarts. Use action=list only when asked or an id is needed; never poll. Results appear in the Task Center UI, not the current conversation.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"action":      map[string]any{"type": "string", "enum": []string{"create", "list", "delete"}, "description": "Create, list, or delete a scheduled task."},
@@ -189,7 +192,7 @@ func chatToolsUncached() []openai.Tool {
 				"saveTo":             map[string]any{"type": "string", "description": "Optional workspace-relative download path. Parent directories are created automatically."},
 				"maxBytes":           map[string]any{"type": "integer", "minimum": 1, "maximum": maxHTTPBodyBytes, "description": "Maximum decoded response bytes. Default 262144; use saveTo for large downloads."},
 				"timeoutSeconds":     map[string]any{"type": "integer", "minimum": 1, "maximum": 120, "description": "Request timeout. Default 60 seconds."},
-				"insecureSkipVerify": map[string]any{"type": "boolean", "description": "Skip TLS certificate verification. Default false. Use only for debugging or trusted internal services with self-signed certificates; enabling it weakens transport security."},
+				"insecureSkipVerify": map[string]any{"type": "boolean", "description": "Skip TLS verification. Default false; only for debugging or trusted self-signed services."},
 			},
 			"required": []string{"url"},
 			"not":      map[string]any{"required": []string{"body", "json"}},
@@ -201,11 +204,11 @@ func chatToolsUncached() []openai.Tool {
 				"maxBytes":           map[string]any{"type": "integer", "minimum": 1, "maximum": maxHTTPBodyBytes, "description": "Maximum decoded source bytes read before text extraction. Default 2097152."},
 				"maxChars":           map[string]any{"type": "integer", "minimum": 1, "maximum": 200000, "description": "Maximum readable text characters. Default 60000, max 200000."},
 				"timeoutSeconds":     map[string]any{"type": "integer", "minimum": 1, "maximum": 120, "description": "Request timeout. Default 60 seconds."},
-				"insecureSkipVerify": map[string]any{"type": "boolean", "description": "Skip TLS certificate verification. Default false. Use only for debugging or trusted internal services with self-signed certificates; enabling it weakens transport security."},
+				"insecureSkipVerify": map[string]any{"type": "boolean", "description": "Skip TLS verification. Default false; only for debugging or trusted self-signed services."},
 			},
 			"required": []string{"url"},
 		}),
-		functionTool("remote_list_files", "List files on a remote SSH workspace. Target is explicit: host:/absolute/workspace or ssh://user@host:port/absolute/workspace. To inspect /home, use target host:/home with empty path; do not use host:/ for broad root listing. Uses system ssh with BatchMode=yes and remote python3.", map[string]any{
+		functionTool("remote_list_files", "List files on a remote SSH workspace (same contract as list_files). Target is host:/absolute/workspace or ssh://user@host:port/absolute/workspace; to inspect /home use target host:/home with empty path — host:/ root listing is refused. Uses system ssh with BatchMode=yes and remote python3.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"target":        map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Explicit SSH target plus workspace root, e.g. my-dev:/srv/app or ubuntu@10.0.1.20:/home/ubuntu/project."},
@@ -216,25 +219,25 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"target"},
 		}),
-		functionTool("remote_read_file", "Read raw text from a remote SSH workspace. UTF-8 is returned as-is; UTF-16 LE/BE (with or without a BOM) is transcoded to UTF-8 for reading. The returned content is directly copyable into remote_edit oldText, and its version is required by remote_edit. Omit startLine/endLine to read the whole file. With only startLine, read from that line through the end; with only endLine, read lines 1 through that inclusive range. Positive startLine values select an inclusive range; a negative startLine reads the last N lines (absolute value max 10000).", map[string]any{
+		functionTool("remote_read_file", "Read a text file on a remote SSH workspace (same contract as read: line-numbered preview + 6-char version for remote_edit; UTF-16 LE/BE transcoded; no document extraction). Omit startLine/endLine for the whole file; positive startLine without endLine reads to EOF; only endLine reads lines 1..endLine; negative startLine reads the last N lines (max 10000), not with endLine.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"target":    map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Explicit SSH target plus workspace root, e.g. my-dev:/srv/app."},
 				"path":      map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Relative file path inside the remote workspace."},
-				"startLine": map[string]any{"type": "integer", "minimum": -MaxReadRangeLines, "description": "Optional inclusive 1-based start line. Positive values start from the beginning; negative values read the last N lines, with absolute value at most 10000."},
-				"endLine":   map[string]any{"type": "integer", "minimum": 1, "description": "Optional inclusive 1-based end line. Must be omitted when startLine is negative."},
+				"startLine": map[string]any{"type": "integer", "minimum": -MaxReadRangeLines, "description": "Optional 1-based start line; negative reads last N lines (max 10000)."},
+				"endLine":   map[string]any{"type": "integer", "minimum": 1, "description": "Optional inclusive end line; omit when startLine is negative."},
 			},
 			"required": []string{"target", "path"},
 		}),
-		functionTool("remote_edit", "Validate and apply replacements across multiple files under one remote SSH target. Each file requires the `version` from remote_read_file. In each change choose exactly one source: a small exact `oldText` copied from remote_read_file (preferred, with enough surrounding context to be unique), or an inclusive whole-line `lineRange` in `A-B` form for larger blocks. `replace_all` (default false) replaces every non-overlapping exact occurrence; valid only with oldText, ignored with lineRange. All ranges use the original read version's line numbers, so no offset adjustment between changes.", map[string]any{
+		functionTool("remote_edit", "Validate and apply replacements across multiple files on one remote SSH target. Same contract as edit: each file requires the current 6-char version from remote_read_file; E_VERSION_MISMATCH means re-read before editing. Per change choose exactly one source: a small exact unique oldText copied from remote_read_file (preferred) or an inclusive whole-line lineRange in A-B form for larger blocks; replace_all works only with oldText; newText is required.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"target": map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Explicit SSH target plus workspace root, e.g. my-dev:/srv/app."},
-				"files":  editFilesSchema(),
+				"files":  remoteEditFilesSchema(),
 			},
 			"required": []string{"target", "files"},
 		}),
-		functionTool("remote_create_file", "Create or overwrite a UTF-8 text file in a remote SSH workspace. Uses single-shot write on the remote host.", map[string]any{
+		functionTool("remote_create_file", "Create or overwrite a UTF-8 text file in a remote SSH workspace (same contract as create); single-shot write.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"target":    map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*"},
@@ -244,7 +247,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"target", "path", "content"},
 		}),
-		functionTool("remote_delete_path", "Delete a file or directory in a remote SSH workspace. Refuses workspace root, .git, and OS-sensitive paths. Prefer this over remote_run_command deletion.", map[string]any{
+		functionTool("remote_delete_path", "Delete a file or directory in a remote SSH workspace (same contract as delete; refuses root, .git, OS-sensitive paths). Prefer this over remote_run_command deletion.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"target":    map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*"},
@@ -253,7 +256,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"target", "path"},
 		}),
-		functionTool("remote_run_command", "Run a non-interactive shell command in a remote SSH workspace. Uses system ssh BatchMode=yes and remote python3. Cwd defaults to the target workspace. Explicit deletion commands (rm, unlink, rmdir, del, erase, rd, remove-item) are refused with E_COMMAND_BLOCKED; use remote_delete_path for deletion. Use `grep -rn 'pattern' src/` to search remote code. Other error codes: E_PATH_OUTSIDE, E_CWD_INVALID, E_LONG_RUNNING_COMMAND.", map[string]any{
+		functionTool("remote_run_command", "Run a non-interactive shell command on a remote SSH workspace (same contract as command; explicit deletion commands are refused — use remote_delete_path). Cwd defaults to the workspace root. Search remote code with grep -rn 'pattern' src/. Error codes: E_PATH_OUTSIDE, E_CWD_INVALID, E_LONG_RUNNING_COMMAND.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"target":         map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Explicit SSH target plus workspace root, e.g. my-dev:/srv/app."},
@@ -264,25 +267,25 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"target", "command"},
 		}),
-		functionTool("grep", "Search UTF-8 file contents with ripgrep (`rg`); returns exact match counts plus sample match lines grouped by file, sorted by relevance. Leaving `path` empty searches the whole workspace in one call with exact stats — do not repeat the search directory by directory. Workspace-wide searches report their skip policy in `skipped` (ignored files, heavy generated directories, and files over 10 MB); an explicit `path` search intentionally bypasses those broad exclusions. Case-insensitive by default; use `caseSensitive: true` or prefix the pattern with `(?-i)` for exact-case. `glob`: no slash matches the basename (`*.go`), with slash matches a relative path (`frontend/src/*.vue`). `contextBefore`/`contextAfter` (0-50) add surrounding context lines, often avoiding a separate `read`; model compaction budgets real matches and context lines separately. On sample truncation, page with the returned `nextOffset` as `offset`; count/occurrence/file stats stay exact. Re-read a file before using a sampled line as edit source text, since long lines may be truncated. Workspace-relative paths resolve under the workspace; explicit absolute paths allowed for read-only search.", map[string]any{
+		functionTool("grep", "Search UTF-8 file contents with ripgrep: returns exact match counts plus sample match lines grouped by file, sorted by relevance. Leaving `path` empty searches the whole workspace in one call with exact stats — do not repeat the search directory by directory. Workspace-wide searches report their skip policy in `skipped` (ignored files, heavy generated directories, files over 10 MB); an explicit `path` search intentionally bypasses those broad exclusions. Case-insensitive by default; use `caseSensitive: true` or prefix `(?-i)` for exact-case. `glob`: no slash matches the basename (`*.go`), with slash matches a relative path (`frontend/src/*.vue`). `contextBefore`/`contextAfter` (0-50) add surrounding context lines; context never counts toward stats or offsets. On sample truncation, page with the returned `nextOffset` as `offset`; all stats stay exact; `offsetExhausted: true` means the offset skipped past the end, so reset to 0. Re-read a file before using a sampled line as edit source, since long lines may be truncated.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"pattern":        map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "ripgrep regex pattern to search for."},
-				"path":           map[string]any{"type": "string", "description": "Optional workspace-relative subdirectory, or explicit absolute path for read-only search. Empty means workspace root."},
-				"glob":           map[string]any{"type": "string", "description": "Optional glob filter. No slash means match basename (e.g. *.go); slash means match relative path."},
-				"maxFiles":       map[string]any{"type": "integer", "minimum": 1, "maximum": 1000, "description": "Maximum matching files to include in returned match samples. Default 50. Exact count/occurrence/file stats still scan all matches."},
-				"maxMatches":     map[string]any{"type": "integer", "minimum": 1, "maximum": 5000, "description": "Maximum matching lines to include in returned match samples. Default maxFiles*10, max 5000. Exact count/occurrence/file stats still scan all matches."},
+				"path":           map[string]any{"type": "string", "description": "Optional subdirectory, or explicit absolute path for read-only search. Empty means workspace root."},
+				"glob":           map[string]any{"type": "string", "description": "Optional glob filter. No slash = basename (e.g. *.go); slash = relative path."},
+				"maxFiles":       map[string]any{"type": "integer", "minimum": 1, "maximum": 1000, "description": "Maximum matching files in samples. Default 50. Exact stats still scan all matches."},
+				"maxMatches":     map[string]any{"type": "integer", "minimum": 1, "maximum": 5000, "description": "Maximum sample lines. Default maxFiles*10, max 5000. Exact stats still scan all matches."},
 				"maxDepth":       map[string]any{"type": "integer", "minimum": 1, "maximum": 100, "description": "Maximum directory depth. Default 20, max 100."},
-				"timeoutSeconds": map[string]any{"type": "integer", "minimum": 1, "maximum": 120, "description": "Overall grep timeout across exact stats and sample collection. Default 30, max 120."},
+				"timeoutSeconds": map[string]any{"type": "integer", "minimum": 1, "maximum": 120, "description": "Overall grep timeout across stats and samples. Default 30, max 120."},
 				"includeIgnored": map[string]any{"type": "boolean", "description": "Include files ignored by .gitignore/.ignore. Default false."},
 				"caseSensitive":  map[string]any{"type": "boolean", "description": "Match case exactly. Default false (case-insensitive)."},
-				"offset":         map[string]any{"type": "integer", "minimum": 0, "description": "Skip the first N matching lines before collecting samples. Pass the previous result's nextOffset to page through large result sets; a result with offsetExhausted: true means the offset skipped past the end, so reset it to 0. Default 0."},
-				"contextBefore":  map[string]any{"type": "integer", "minimum": 0, "maximum": 50, "description": "Include N context lines before each match (rg -B). Context lines are marked `context: true` and never count toward stats or offsets. Default 0."},
-				"contextAfter":   map[string]any{"type": "integer", "minimum": 0, "maximum": 50, "description": "Include N context lines after each match (rg -A). Context lines are marked `context: true` and never count toward stats or offsets. Default 0."},
+				"offset":         map[string]any{"type": "integer", "minimum": 0, "description": "Skip the first N matching lines before collecting samples. Pass the previous nextOffset to page. A result with offsetExhausted: true means the offset skipped past the end, so reset to 0. Default 0."},
+				"contextBefore":  map[string]any{"type": "integer", "minimum": 0, "maximum": 50, "description": "N context lines before each match (rg -B), marked `context: true`, never counted in stats or offsets. Default 0."},
+				"contextAfter":   map[string]any{"type": "integer", "minimum": 0, "maximum": 50, "description": "N context lines after each match (rg -A), marked `context: true`, never counted in stats or offsets. Default 0."},
 			},
 			"required": []string{"pattern"},
 		}),
-		functionTool("read", "Read 1-20 files via a top-level `files` array (even for one file). Do not pass top-level path/paths fields, and never use a string array; every `files` item must be an object with `path`. Missing paths and directories are silently omitted; other per-file failures remain visible. UTF-8 text is prefixed with display-only 1-based `N: ` line numbers and a 6-char `version` for edit — do not copy the line prefixes into edit text. Omit startLine/endLine for the whole file; positive values define an inclusive range; a negative startLine reads the last N lines (max 10000) and must not combine with endLine. Large files are auto-truncated and end with a `[Showing lines A-B of N. Use startLine=C to continue.]` marker — follow it to page. Document formats (.docx, .pptx, .xlsx, .pdf) return non-editable extracted text; .xlsx accepts a sheet name or 1-based index.", map[string]any{
+		functionTool("read", "Read 1-20 files via a top-level `files` array (even for one file). Never use a top-level path/paths field or a string array; every item is an object with `path`. Missing paths and directories are silently omitted; other per-file failures stay visible. UTF-8 text is prefixed with display-only 1-based `N: ` line numbers and a 6-char `version` for edit — do not copy the prefixes into edit text. Omit startLine/endLine for the whole file; positive values give an inclusive range; a negative startLine reads the last N lines (max 10000) and must not combine with endLine. Large files auto-truncate with a `[Showing lines A-B of N. Use startLine=C to continue.]` marker — follow it to page. Documents (.docx/.pptx/.xlsx/.pdf) return non-editable extracted text; .xlsx accepts a sheet name or 1-based index.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"files": batchReadFilesSchema(),
@@ -297,7 +300,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"expression"},
 		}),
-		functionTool("render_html", "Render a self-contained HTML snippet inline in the chat UI. Use ONLY for interactive widgets or custom visualizations that Mermaid and Markdown cannot express — interactive calculators, dynamic data explorers, styled mockups, custom animated SVG. Do NOT use for diagrams, flowcharts, pie charts, or tables (use Mermaid fenced blocks and Markdown tables instead). Rendered in a sandboxed iframe with a dark theme. Maximum 50,000 characters. No external resources. Return a short text summary in your response explaining what was rendered.", map[string]any{
+		functionTool("render_html", "Render a self-contained HTML snippet inline in the chat UI. Use ONLY for interactive widgets or custom visualizations Mermaid and Markdown cannot express (calculators, data explorers, styled mockups, animated SVG). Do NOT use for diagrams, flowcharts, pie charts, or tables (use Mermaid and Markdown tables). Rendered in a sandboxed dark-theme iframe. Max 50,000 characters. No external resources.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"html": map[string]any{
@@ -331,16 +334,17 @@ func chatToolsUncached() []openai.Tool {
 				},
 			},
 		}),
-		functionTool("subagent", "Delegate a task to a child agent with its own tool loop (no step or wall-clock limit). The child can use built-in and MCP tools but cannot ask the user or delegate nested agents; only its final summary is returned. See the Delegation section in the system prompt for when to use this tool.", map[string]any{
+		functionTool("subagent", "Delegate a task to a child agent with its own tool loop. The child uses built-in and MCP tools but cannot ask the user or nest sub-agents; only its final summary is returned. You must set `maxSteps` (the child's tool-call-round budget) based on task difficulty.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"task":         map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "The task for the child agent. Be specific — include file paths and expected outcomes."},
 				"role":         map[string]any{"type": "string", "minLength": 1, "maxLength": 80, "pattern": ".*\\S.*", "description": "The role of the sub-agent, e.g. \"researcher\", \"code reviewer\", \"tester\". Shown as the card label in the UI and injected into the sub-agent's system prompt."},
+				"maxSteps":     map[string]any{"type": "integer", "minimum": 1, "maximum": maxDelegateStepBudget, "description": "Required tool-call-round budget, chosen by task difficulty: small lookups ~5-10, normal tasks ~15-30, large multi-file work ~40-80. The child is warned as it runs low and must output a report on the final round."},
 				"description":  map[string]any{"type": "string", "description": "Short 3-5 word description for UI display."},
 				"cleanContext": map[string]any{"type": "boolean", "description": "If true, skip workspace environment injection. Use for tasks that do not depend on project structure (e.g. write a standalone algorithm). Default false."},
 				"model":        map[string]any{"type": "string", "description": "Optional model override. Default uses current model."},
 			},
-			"required": []string{"task", "role"},
+			"required": []string{"task", "role", "maxSteps"},
 		}),
 		functionTool("skill", "Invoke a registered skill from the current skill listing. Use when the user wants to call a skill, or when you need instructions for a specific task covered by a skill.", map[string]any{
 			"type": "object",
@@ -373,7 +377,7 @@ func chatToolsUncached() []openai.Tool {
 
 var builtinToolExamples = map[string]string{
 	"list_files":         `{"path":"frontend/src","maxDepth":2,"limit":200}`,
-	"edit":               `preferred exact-string change: {"files":[{"path":"app.go","version":"9k3m7x","changes":[{"oldText":"const oldName = oldValue","newText":"const newName = newValue"}]}]}; replace every exact match: {"files":[{"path":"app.go","version":"9k3m7x","changes":[{"oldText":"oldValue","newText":"newValue","replace_all":true}]}]}; larger whole-line change (when exact source is impractical to reproduce): {"files":[{"path":"app.go","version":"9k3m7x","changes":[{"lineRange":"40-72","newText":"replacement block"}]}]}; multiple original-snapshot changes (no offset adjustment): {"files":[{"path":"app.go","version":"9k3m7x","changes":[{"oldText":"const first = 1","newText":"const first = 2"},{"oldText":"const second = 1","newText":"const second = 2"}]}]}`,
+	"edit":               `{"files":[{"path":"app.go","version":"9k3m7x","changes":[{"oldText":"const oldName = oldValue","newText":"const newName = newValue"}]}]}; lineRange: {"files":[{"path":"app.go","version":"9k3m7x","changes":[{"lineRange":"40-72","newText":"replacement block"}]}]}`,
 	"create":             `{"path":"notes/example.md","content":"# Example\n","overwrite":false}`,
 	"delete":             `{"path":"tmp/generated","recursive":true}`,
 	"command":            `{"command":"go test ./...","cwd":".","timeoutSeconds":120}`,
@@ -383,18 +387,18 @@ var builtinToolExamples = map[string]string{
 	"scheduled_task":     `create: {"action":"create","name":"daily check","instruction":"Run tests and summarize failures.","schedule":"0 9 * * *"}; list: {"action":"list"}; delete: {"action":"delete","id":"task_..."}`,
 	"http_request":       `{"url":"https://api.example.com/items","method":"GET","query":{"limit":"10"},"timeoutSeconds":60}`,
 	"web_fetch":          `{"url":"https://example.com/docs","maxChars":60000}`,
-	"remote_list_files":  `{"target":"ubuntu@example.com:/srv/app","path":"src","maxDepth":2}`,
-	"remote_read_file":   `{"target":"ubuntu@example.com:/srv/app","path":"main.go","startLine":1,"endLine":200}`,
-	"remote_edit":        `{"target":"ubuntu@example.com:/srv/app","files":[{"path":"main.go","version":"9k3m7x","changes":[{"oldText":"func oldName() {}","newText":"func newName() {}","replace_all":true}]}]}`,
-	"remote_create_file": `{"target":"ubuntu@example.com:/srv/app","path":"notes.txt","content":"hello\n","overwrite":false}`,
-	"remote_delete_path": `{"target":"ubuntu@example.com:/srv/app","path":"tmp/output","recursive":true}`,
-	"remote_run_command": `{"target":"ubuntu@example.com:/srv/app","command":"go test ./...","cwd":".","timeoutSeconds":120}`,
+	"remote_list_files":  `{"target":"my-dev:/srv/app","path":"src"}`,
+	"remote_read_file":   `{"target":"my-dev:/srv/app","path":"main.go"}`,
+	"remote_edit":        `{"target":"my-dev:/srv/app","files":[{"path":"main.go","version":"9k3m7x","changes":[{"oldText":"func old() {}","newText":"func new() {}"}]}]}`,
+	"remote_create_file": `{"target":"my-dev:/srv/app","path":"notes.txt","content":"hello"}`,
+	"remote_delete_path": `{"target":"my-dev:/srv/app","path":"tmp/output","recursive":true}`,
+	"remote_run_command": `{"target":"my-dev:/srv/app","command":"go test ./..."}`,
 	"grep":               `{"pattern":"TODO|FIXME","path":"frontend/src","glob":"*.vue","maxMatches":100}`,
 	"read":               `one file: {"files":[{"path":"app.go"}]}; range: {"files":[{"path":"services.go","startLine":1,"endLine":200}]}; tail: {"files":[{"path":"server.log","startLine":-200}]}`,
 	"calculate":          `{"expression":"sqrt(144) + 2^3"}`,
 	"render_html":        `{"title":"Interactive counter","html":"<button id='counter'>0</button><script>const button=document.getElementById('counter');button.onclick=()=>button.textContent=String(Number(button.textContent)+1)</script>"}`,
 	"plan":               `update: {"todos":[{"title":"Inspect implementation","status":"in_progress"},{"title":"Run tests","status":"pending"}]}; read current: {}`,
-	"subagent":           `{"task":"Inspect the authentication module and report concrete security issues.","role":"code reviewer","description":"Review authentication","cleanContext":false}`,
+	"subagent":           `{"task":"Inspect the authentication module and report concrete security issues.","role":"code reviewer","maxSteps":20,"description":"Review authentication"}`,
 	"skill":              `{"skill":"codegraph","args":"main"}`,
 	"suggest":            `{"items":["Run go build to verify","Add unit tests"]}`,
 }
@@ -426,8 +430,8 @@ func batchReadFilesSchema() map[string]any {
 			"type": "object",
 			"properties": map[string]any{
 				"path":      map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "File path to read."},
-				"startLine": map[string]any{"type": "integer", "minimum": -MaxReadRangeLines, "description": "Optional inclusive 1-based start line. Positive values start from the beginning; negative values read the last N lines, with absolute value at most 10000. Omit endLine when using a negative value."},
-				"endLine":   map[string]any{"type": "integer", "minimum": 1, "description": "Optional inclusive 1-based end line. If omitted, reading continues to the final line; omit it when startLine is negative."},
+				"startLine": map[string]any{"type": "integer", "minimum": -MaxReadRangeLines, "description": "Optional 1-based start line. Positive reads from that line; negative reads the last N lines (max 10000) and must omit endLine."},
+				"endLine":   map[string]any{"type": "integer", "minimum": 1, "description": "Optional inclusive end line; omit to read through EOF, and omit when startLine is negative."},
 				"sheet":     map[string]any{"type": "string", "description": "Xlsx sheet name or 1-based sheet index for this file."},
 				"maxChars":  map[string]any{"type": "integer", "minimum": 1, "maximum": 200000, "description": "Maximum extracted characters for document extraction (.docx/.pptx/.xlsx/.pdf) only; for text files use startLine/endLine to bound the read."},
 			},
@@ -453,20 +457,50 @@ func editChangeSchema() map[string]any {
 		"properties": map[string]any{
 			"oldText": map[string]any{
 				"type": "string", "minLength": 1,
-				"description": "Small exact unique source snippet without read's numeric line prefixes. Preferred source for precise replacements, including focused multi-line snippets when enough surrounding context makes it unique. Copy it exactly from the read result. Choose this OR lineRange, never both.",
+				"description": "Small exact unique source snippet copied exactly from the read result, without `N: ` prefixes; preferred over lineRange.",
 			},
 			"replace_all": map[string]any{
 				"type":        "boolean",
-				"description": "Optional; defaults to false. With oldText, true replaces every non-overlapping exact occurrence in the original snapshot. With lineRange, it is ignored and reported as a warning.",
+				"description": "Optional; defaults to false. With oldText, true replaces every non-overlapping exact occurrence in the original snapshot; with lineRange it is ignored.",
 			},
 			"lineRange": map[string]any{
 				"type": "string", "pattern": "^[1-9][0-9]*-[1-9][0-9]*$",
-				"description": "Inclusive original-snapshot whole-line range in A-B form, copied from read's displayed line numbers. Use as a fallback for larger whole-line replacements or when reproducing the exact source is impractical (for example, an extremely long single line). The range replaces exactly those whole lines; lines outside it (e.g. a closing brace on the next line) stay untouched, so newText must not re-emit them. Choose this OR oldText; replace_all is ignored and reported as a warning with lineRange; all ranges in the file use the same read version, so never adjust for earlier changes.",
+				"description": "Inclusive whole-line A-B range from read's displayed line numbers, for larger blocks; replaces exactly those lines — a closing brace inside the range must be included, one outside stays untouched. All ranges use the original read version, so never adjust for earlier changes.",
 			},
 			"newText": map[string]any{
 				"type":        "string",
-				"description": "Replacement text without numeric line prefixes. Empty deletes the selected source. Do not include unchanged source text outside the selected oldText or lineRange. For lineRange, newText replaces the whole selected block exactly: a closing brace outside the range stays in the file (do not add it), while one inside the range must be included.",
+				"description": "Replacement text without line prefixes. Empty deletes the selected source.",
 			},
+		},
+		"required": []string{"newText"},
+		"oneOf": []any{
+			map[string]any{"required": []string{"oldText"}, "not": map[string]any{"required": []string{"lineRange"}}},
+			map[string]any{"required": []string{"lineRange"}, "not": map[string]any{"required": []string{"oldText"}}},
+		},
+	}
+}
+
+// remoteEditFilesSchema / remoteEditChangeSchema 与本地 edit 的结构完全一致
+// （键名、pattern、oneOf 与 DTO 解码对齐），仅描述精简：完整规则见本地
+// edit 工具描述——两者每轮同场发送，远程描述只需指向它。
+func remoteEditFilesSchema() map[string]any {
+	return map[string]any{"type": "array", "minItems": 1, "maxItems": 20, "items": map[string]any{
+		"type": "object", "properties": map[string]any{
+			"path":    map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*"},
+			"version": map[string]any{"type": "string", "pattern": "^[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{6}$", "description": "Required 6-char version from remote_read_file."},
+			"changes": map[string]any{"type": "array", "minItems": 1, "maxItems": 50, "items": remoteEditChangeSchema()},
+		}, "required": []string{"path", "version", "changes"},
+	}}
+}
+
+func remoteEditChangeSchema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"oldText":     map[string]any{"type": "string", "minLength": 1},
+			"replace_all": map[string]any{"type": "boolean"},
+			"lineRange":   map[string]any{"type": "string", "pattern": "^[1-9][0-9]*-[1-9][0-9]*$"},
+			"newText":     map[string]any{"type": "string"},
 		},
 		"required": []string{"newText"},
 		"oneOf": []any{

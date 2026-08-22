@@ -54,7 +54,7 @@ func priorityOrderDeclaration() string {
 // sharedEditRules returns the core file-editing rules shared by the main and sub-agent system prompts.
 func sharedEditRules() string {
 	return "1. Before a file's first edit, use `read` to obtain numbered content and its `version`. Text lines are displayed as `N: content`; the `N: ` prefix is not file content and must never be copied into edit text. During one continuous task, assume workspace files are not concurrently edited by another person; do not re-read a file merely for reassurance. After a successful edit, reuse its returned `version` only when the current source is known exactly. Re-read when the current source or line numbers are unknown, context compaction removed the reliable snapshot, or a formatter/generator/command or other external process may have changed the file.\n" +
-		"2. Batch edits by risk and size: merge small, low-risk changes across files into one `edit` call; keep very large replacements — a whole function, section, or roughly 100+ lines of `newText` — in their own `edit` call. A batch is all-or-nothing: one failed `oldText` match or stale `version` rejects the entire call, and an oversized JSON risks output truncation. Never send multiple file-mutation tool calls for the same path in one model response. Do not use patch, unified diff, or git apply.\n" +
+		"2. Batch edits by risk and size: put all independent changes for the affected files into a single `edit` call so the task finishes in one round; merge small, low-risk changes across files, but keep very large replacements — a whole function, section, or roughly 100+ lines of `newText` — in their own `edit` call. A batch is all-or-nothing: one failed `oldText` match or stale `version` rejects the entire call, and an oversized JSON risks output truncation. Never send multiple file-mutation tool calls for the same path in one model response. Do not use patch, unified diff, or git apply.\n" +
 		"3. When an edit fails with `E_NO_MATCH` or `E_VERSION_MISMATCH`, your first action is always to re-read the affected file and copy the exact current text. Never retry from memory or with guessed text — a failed match means your snapshot is stale, and guessing only wastes calls.\n"
 }
 
@@ -68,6 +68,7 @@ func sharedBatchStrategy() string {
 		"- Prefer one `grep` to finish a search in a single call: leaving `path` unset searches the whole project root, so avoid repeating the search over different directories — fewer `grep` calls means fewer round-trips and higher efficiency.\n" +
 		"- Batch independent reads and commands (no duplicates); use current version values for dependent edits. Reuse read content already returned in the current run instead of reading the same path and range again, unless a successful write/command or an external process may have changed it.\n" +
 		"- Only call tools one at a time when a strict serial dependency exists between them.\n" +
+		"- Stop investigating once you have enough to act: gather what the task needs, then proceed. Do not chase tangential files, read beyond the relevant scope, or re-verify facts already established in this run — over-investigation wastes rounds and tokens.\n" +
 		"The backend executes independent non-file tool calls in parallel; built-in file mutations are ordered by tool-call index.\n\n"
 }
 
@@ -140,7 +141,7 @@ func buildSystemPromptParts(allSkills []SkillDefinition, workspaceRoot string, e
 		"Do NOT delegate when:\n" +
 		"- The task is a single focused edit or read, or later steps depend on exact prior output (do those yourself).\n" +
 		"- The delegated work is the critical next step on the main line and you would only wait idle, or you haven't explored enough to give a concrete task.\n\n" +
-		"- Each `subagent` call needs a specific `task` with file paths and expected outcomes, a `role` naming what the sub-agent is (e.g. researcher, code reviewer), plus a short `description`; set `cleanContext` to true when the task does not depend on project structure.\n" +
+		"- Each `subagent` call needs a specific `task` with file paths and expected outcomes, a `role` naming what the sub-agent is (e.g. researcher, code reviewer), a `maxSteps` tool-call-round budget sized to the task (small lookups ~5-10, normal tasks ~15-30, large multi-file work ~40-80), plus a short `description`; set `cleanContext` to true when the task does not depend on project structure.\n" +
 		"- For reviewing a large feature: use one or more sub-agents depending on task complexity, pass the complete requirements to each, isolate them from the main conversation context, and verify the sub-agents' review results.\n\n")
 	b.WriteString(buildPlatformInfo(gitBashPath))
 	b.WriteString("# Coding Guidelines\n\n" +

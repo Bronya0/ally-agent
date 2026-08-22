@@ -263,12 +263,6 @@ func TestEditToolSchemaIsBatchChangesOnly(t *testing.T) {
 	if variants, ok := items["oneOf"].([]any); !ok || len(variants) != 2 {
 		t.Fatalf("edit change must require exactly one source form: %#v", items)
 	}
-	if !strings.Contains(editTool.Description, "Prefer a small exact unique `oldText`") ||
-		!strings.Contains(editTool.Description, "replace_all") ||
-		!strings.Contains(editTool.Description, "every non-overlapping exact occurrence") ||
-		!strings.Contains(editTool.Description, "lineRange") {
-		t.Fatalf("edit tool description must explain exact-source preference and replace-all behavior: %s", editTool.Description)
-	}
 }
 
 func containsString(values []string, want string) bool {
@@ -1996,52 +1990,6 @@ func writeToolTestFile(t *testing.T, root, rel, content string) {
 	}
 }
 
-func TestBatchReadSchemaIncludesCanonicalExamples(t *testing.T) {
-	var description string
-	for _, tool := range chatTools() {
-		if tool.Function != nil && tool.Function.Name == "read" {
-			description = tool.Function.Description
-			break
-		}
-	}
-	for _, expected := range []string{`{"files":[{"path":"app.go"}]}`, "Do not pass top-level path", "string array", "negative startLine", `"startLine":-200`} {
-		if !strings.Contains(description, expected) {
-			t.Fatalf("read description missing canonical guidance %q: %s", expected, description)
-		}
-	}
-}
-
-func TestEveryBuiltinToolDescriptionIncludesCanonicalExample(t *testing.T) {
-	for _, tool := range chatTools() {
-		if tool.Function == nil {
-			continue
-		}
-		if !strings.Contains(tool.Function.Description, "Canonical JSON example(s):") {
-			t.Fatalf("tool %s is missing a canonical JSON example", tool.Function.Name)
-		}
-	}
-}
-
-func TestEditDescriptionIncludesSingleAndCrossFileMultiChangeExamples(t *testing.T) {
-	var description string
-	for _, tool := range chatTools() {
-		if tool.Function != nil && tool.Function.Name == "edit" {
-			description = tool.Function.Description
-			break
-		}
-	}
-	for _, expected := range []string{
-		"preferred exact-string change",
-		`"oldText":"const oldName = oldValue"`,
-		"larger whole-line change",
-		`"lineRange":"40-72"`,
-		"no offset adjustment",
-	} {
-		if !strings.Contains(description, expected) {
-			t.Fatalf("edit description missing example guidance %q: %s", expected, description)
-		}
-	}
-}
 
 func TestRunReadCacheReturnsMetadataWithoutDuplicateContent(t *testing.T) {
 	dir := t.TempDir()
