@@ -1656,12 +1656,17 @@ func collapseRepeatedName(name string) string {
 	if len(name) < 6 {
 		return name
 	}
+	// 只折叠“重复单元本身是已知工具名”的名字：中继重复发送产生的人工制品
+	// （如 "http_request" x7）的重复单元必然是已知工具名，而一个恰好呈整周期
+	// 重复形态的未知 MCP 工具名（其重复单元不在已知集合里）不会被误折。
+	// 折出的单元若未知则原样返回，宁可放过不可误伤。
 	for period := 3; period <= len(name)/2; period++ {
 		if len(name)%period != 0 {
 			continue
 		}
-		if name == strings.Repeat(name[:period], len(name)/period) {
-			return name[:period]
+		unit := name[:period]
+		if name == strings.Repeat(unit, len(name)/period) && isKnownToolName(unit) {
+			return unit
 		}
 	}
 	return name
@@ -1721,9 +1726,24 @@ func isTruncatedArgsMarker(args []byte) bool {
 // isProvider400Error 判断错误是否是服务商返回的 400 Bad Request。这通常意味
 // 着上下文里有服务端校验无法通过的消息（截断参数、拼接工具名等），runChat
 // 会先尝试 sanitize 修复上下文再重试，而不是直接中断会话。
+// 优先用类型化状态码判断（go-openai RequestError / openai-go 和
+// anthropic-sdk 的 apierror.Error 都会被包装保留在错误链里）；字符串匹配只作
+// 为最终兜底，覆盖中继把状态码丢掉、仅在错误文本里转述 400 的情况。
 func isProvider400Error(err error) bool {
 	if err == nil {
 		return false
+	}
+	var legacyReqErr *legacyopenai.RequestError
+	if errors.As(err, &legacyReqErr) && legacyReqErr.HTTPStatusCode == http.StatusBadRequest {
+		return true
+	}
+	var oaErr *oa.Error
+	if errors.As(err, &oaErr) && oaErr.StatusCode == http.StatusBadRequest {
+		return true
+	}
+	var anthropicErr *anthropic.Error
+	if errors.As(err, &anthropicErr) && anthropicErr.StatusCode == http.StatusBadRequest {
+		return true
 	}
 	msg := err.Error()
 	return strings.Contains(msg, "status code: 400") ||
@@ -2037,14 +2057,24 @@ func mergeToolCallDeltas(toolCalls *[]legacyopenai.ToolCall, deltas []legacyopen
 		// 不同工具名出现在同一个 Index:服务商可能对多个 tool_calls 使用了
 		// 相同的 Index（或都不带 Index），导致两个不同调用被合并。标准 OpenAI
 		// 规范里 name 只在首个 delta 出现一次，后续 delta name 为空。
-		// 判断方法：如果 current+delta 拼接后是已知工具名，说明是渐进式分片
-		// （如 "http_" + "request"），正常追加；如果拼接结果不是已知工具名但
-		// delta 本身是已知工具名（如 delta="list_files" 而 current="read"），
-		// 说明是不同工具调用被错误合并，追加新条目。
+		// 判断方法（按证据强度）：
+		//  1. 两个非空且不同的 ID —— 无论工具名是否已知。两个 MCP 工具名拼接后
+		//     仍带 mcp__ 前缀，会被前缀检查误判为“已知名”，只有 ID 能区分。
+		//     标准流式不会在同一调用的后续 delta 里携带不同的 ID。
+		//  2. 拼接后是已知工具名，说明是渐进式分片（如 "http_" + "request"），
+		//     正常追加；如果拼接结果不是已知工具名但 delta 本身是已知工具名
+		//     （如 delta="list_files" 而 current="read"），说明是不同工具调用
+		//     被错误合并，追加新条目。
 		if delta.Function.Name != "" && current.Function.Name != "" &&
 			delta.Function.Name != current.Function.Name {
-			combined := current.Function.Name + delta.Function.Name
-			if !isKnownToolName(combined) && isKnownToolName(delta.Function.Name) {
+			distinctCall := false
+			if delta.ID != "" && current.ID != "" && delta.ID != current.ID {
+				distinctCall = true
+			} else {
+				combined := current.Function.Name + delta.Function.Name
+				distinctCall = !isKnownToolName(combined) && isKnownToolName(delta.Function.Name)
+			}
+			if distinctCall {
 				*toolCalls = append(*toolCalls, legacyopenai.ToolCall{
 					Type: delta.Type,
 					ID:   delta.ID,

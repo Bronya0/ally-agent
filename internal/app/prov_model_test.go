@@ -10,10 +10,14 @@ package app
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
 	anthropic "github.com/anthropics/anthropic-sdk-go"
+	oa "github.com/openai/openai-go"
 	legacyopenai "github.com/sashabaranov/go-openai"
 )
 
@@ -264,6 +268,12 @@ func TestCollapseRepeatedName(t *testing.T) {
 		{"abab", "abab"},                           // period < 3, left alone
 		{"edit_fileedit_fil", "edit_fileedit_fil"}, // not an exact repetition
 		{"", ""},
+		// 未知工具名即使恰好是整周期重复也不折叠：重复单元不在已知集合里，
+		// 宁可放过不可误伤（真实的 MCP 工具名不会被改成一半）。mcp__ 前缀的
+		// 名字除外：前缀检查让任意 mcp__ 单元算“已知”，这里只能靠单元本身
+		// 出现在已知工具里才折叠，未知单元不折。
+		{"xyzxyzxyz", "xyzxyzxyz"},
+		{"readwebweb", "readwebweb"}, // "web" 重复但单元不是已知工具名
 	}
 	for _, c := range cases {
 		if got := collapseRepeatedName(c.in); got != c.want {
@@ -282,6 +292,36 @@ func TestNormalizeToolCallsCollapsesRepeatedNames(t *testing.T) {
 	}
 	if out[0].Function.Arguments != `{"url":"https://example.com"}` {
 		t.Fatalf("valid arguments must pass through: %q", out[0].Function.Arguments)
+	}
+}
+
+func TestIsProvider400ErrorUsesTypedStatusCodes(t *testing.T) {
+	// 类型化判断优先：各 SDK 的错误类型（含被 providerRequestError 包装后的
+	// 错误链）直接读状态码，不再依赖错误文本恰含 "400" 子串。
+	legacy400 := &legacyopenai.RequestError{HTTPStatusCode: http.StatusBadRequest, Err: fmt.Errorf("bad request")}
+	if !isProvider400Error(wrapProviderRequestError(legacy400)) {
+		t.Fatal("go-openai RequestError with HTTPStatusCode 400 must be detected")
+	}
+	legacy500 := &legacyopenai.RequestError{HTTPStatusCode: http.StatusInternalServerError, Err: fmt.Errorf("server error")}
+	if isProvider400Error(wrapProviderRequestError(legacy500)) {
+		t.Fatal("500 must not be treated as a 400")
+	}
+	// 错误文本里恰好引用 "400 Bad Request" 但状态码不是 400，不应触发 sanitize 重试。
+	// （Response/Request 是 SDK Error() 解引用的必填字段，生产路径必有值。）
+	oa500 := &oa.Error{StatusCode: http.StatusInternalServerError, Message: "upstream returned 400 Bad Request for a nested call", Request: httptest.NewRequest(http.MethodGet, "https://api.example.com", nil), Response: &http.Response{StatusCode: http.StatusInternalServerError}}
+	if isProvider400Error(oa500) {
+		t.Fatal("500 with a 400-mentioning message must not be treated as a 400")
+	}
+	anthropic400 := &anthropic.Error{StatusCode: http.StatusBadRequest}
+	if !isProvider400Error(anthropic400) {
+		t.Fatal("anthropic Error with StatusCode 400 must be detected")
+	}
+	// 中继丢掉状态码、仅在文本里转述 400：字符串兜底仍生效。
+	if !isProvider400Error(errors.New("relay says: status code: 400")) {
+		t.Fatal("string fallback for status code: 400 must still work")
+	}
+	if isProvider400Error(errors.New("totally unrelated failure")) {
+		t.Fatal("unrelated errors must not match")
 	}
 }
 
@@ -310,6 +350,29 @@ func TestMergeToolCallDeltasDedupesResentNames(t *testing.T) {
 	}
 	if toolCalls[0].Function.Arguments != `{"url":"ht`+`tps:` {
 		t.Fatalf("argument chunks must still concatenate, got %q", toolCalls[0].Function.Arguments)
+	}
+}
+
+func TestMergeToolCallDeltasSeparatesSameIndexDifferentIDs(t *testing.T) {
+	// 同一 Index、两个不同 ID 但工具名都不在已知集合（两个不同的 MCP 工具）：
+	// 拼接名恰好仍带 mcp__ 前缀，旧启发式会误判为“渐进式分片”而把两个调用
+	// 的参数拼在一起；不同的非空 ID 是两个调用的直接证据，必须拆分。
+	var toolCalls []legacyopenai.ToolCall
+	index := 0
+	mergeToolCallDeltas(&toolCalls, []legacyopenai.ToolCall{
+		{Index: &index, ID: "call_m1", Type: legacyopenai.ToolTypeFunction, Function: legacyopenai.FunctionCall{Name: "mcp__fs__read_file", Arguments: `{"path":"a"`}},
+	})
+	mergeToolCallDeltas(&toolCalls, []legacyopenai.ToolCall{
+		{Index: &index, ID: "call_m2", Type: legacyopenai.ToolTypeFunction, Function: legacyopenai.FunctionCall{Name: "mcp__fs__write_file", Arguments: `{"path":"b"}`}},
+	})
+	if len(toolCalls) != 2 {
+		t.Fatalf("expected 2 separate tool calls, got %d: %#v", len(toolCalls), toolCalls)
+	}
+	if toolCalls[0].Function.Name != "mcp__fs__read_file" || toolCalls[0].Function.Arguments != `{"path":"a"` {
+		t.Fatalf("first call must keep its name and args: %#v", toolCalls[0])
+	}
+	if toolCalls[1].Function.Name != "mcp__fs__write_file" || toolCalls[1].ID != "call_m2" {
+		t.Fatalf("second call must be appended with its own id: %#v", toolCalls[1])
 	}
 }
 
