@@ -587,10 +587,31 @@ function initAceEditor() {
     fontSize: '15px',
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
     showPrintMargin: false,
+    fixedWidthGutter: true,
     tabSize: 2,
     useSoftTabs: true,
     wrap: false,
   });
+  // Ace 默认按当前可见行号计算 gutter 宽度，滚到第 100 行时会突然从
+  // 两位扩成三位。固定 gutter 的同时保留更长文件的自动扩展，初始至少
+  // 预留三位数字，避免编辑区在滚动时横向跳动。
+  aceEditor.session.gutterRenderer = {
+    getText(session, row) {
+      const firstLineNumber = Number(session.getOption?.('firstLineNumber') || 1);
+      return String(row + firstLineNumber);
+    },
+    getWidth(session, lastLineNumber, config) {
+      const firstLineNumber = Number(session.getOption?.('firstLineNumber') || 1);
+      const lastFileLine = session.getLength() + firstLineNumber - 1;
+      const widestLineNumber = Math.max(
+        Number(lastLineNumber) || 0,
+        config.lastRow + firstLineNumber,
+        lastFileLine,
+      );
+      return Math.max(3, String(widestLineNumber).length) * config.characterWidth;
+    },
+  };
+  aceEditor.resize();
   aceEditor.setOptions({
     enableBasicAutocompletion: true,
     // 实时补全（打字自动弹出 basic 补全）；worker 保持关闭，无额外内存驻留

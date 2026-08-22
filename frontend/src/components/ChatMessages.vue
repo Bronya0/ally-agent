@@ -82,6 +82,11 @@ Public License v3. See the LICENSE file for details.
               class="run-tokens"
               :title="`input ${msg.runInputTokens} / output ${msg.runOutputTokens} tokens (this run)`"
             >↑{{ fmtTokens(msg.runInputTokens) }} ↓{{ fmtTokens(msg.runOutputTokens) }}</span>
+            <span
+              v-if="tokenSpeed(msg)"
+              class="run-tokens"
+              :title="`${fmtTokens(msg.runOutputTokens)} output tokens / ${(msg.roundDurationMs / 1000).toFixed(1)}s (whole run)`"
+            >{{ tokenSpeed(msg) }} token/s</span>
             <n-dropdown
               trigger="click"
               placement="top-end"
@@ -207,6 +212,7 @@ function messageRenderMemo(msg) {
     msg?.system,
     msg?.welcome,
     msg?.roundDurationText,
+    msg?.roundDurationMs,
     msg?.cacheRate,
     msg?.cacheHit,
     msg?.cacheMiss,
@@ -297,6 +303,17 @@ function fmtTokens(n) {
   if (v >= 1e6) return (v / 1e6).toFixed(2) + 'M';
   if (v >= 1e3) return (v / 1e3).toFixed(1) + 'k';
   return String(v);
+}
+
+// Aggregate output speed over the whole run (all LLM steps + tool time),
+// matching how roundDurationMs / runOutputTokens are accumulated on the
+// backend. Returns '' while either value is missing.
+function tokenSpeed(msg) {
+  const ms = Number(msg?.roundDurationMs || 0);
+  const out = Number(msg?.runOutputTokens || 0);
+  if (ms <= 0 || out <= 0) return '';
+  const speed = out / (ms / 1000);
+  return String(Math.round(speed));
 }
 
 const quickMessageOptions = computed(() => [
