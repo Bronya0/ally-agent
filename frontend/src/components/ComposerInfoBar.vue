@@ -211,6 +211,7 @@ import AppstoreOutlined from '@vicons/antd/AppstoreOutlined';
 import CloseOutlined from '@vicons/antd/CloseOutlined';
 import { formatDateTime, reasoningEffortLabel, t } from '../i18n.mjs';
 import { modelConfigIdentity, reasoningEffortLevels } from '../utils/modelConfigIO.mjs';
+import { getModelUsage, recordModelUsage } from '../utils/modelUsage.mjs';
 import { saveTextFile } from '../utils/download.mjs';
 
 function formatMessageContent(msg) {
@@ -298,8 +299,12 @@ const props = defineProps({
 const emit = defineEmits(['switchModel', 'openConfig', 'openGitDiff', 'openWorkspace', 'changeReasoningEffort', 'openTaskCenter', 'newSession', 'showSessions', 'toggleExplorer', 'addExtraRoot', 'removeExtraRoot', 'compactContext']);
 
 const contextPopoverVisible = ref(false);
+// Reactive snapshot of the persisted `{ groupKey: count }` usage map. Bumped in
+// onModelMenuSelect so the group ordering re-sorts right after a switch.
+const modelUsage = ref(getModelUsage());
 const currentModelLabel = computed(() => `${props.config.providerName || '-'} · ${props.config.model || '-'}`);
 const modelGroups = computed(() => {
+  const usage = modelUsage.value;
   const groups = new Map();
   (props.config.models || []).forEach((model, index) => {
     const label = providerLabel(model);
@@ -313,10 +318,13 @@ const modelGroups = computed(() => {
   return [...groups.values()]
     .map((group) => ({
       ...group,
+      useCount: Number(usage[group.key]) || 0,
       models: group.models.sort((left, right) => compareModelLabels(left.model?.model, right.model?.model)),
     }))
     .sort((left, right) => {
-      if (left.hasActiveModel !== right.hasActiveModel) return left.hasActiveModel ? -1 : 1;
+      // Most-used group first; ties (including all-zero for fresh users) keep
+      // the previous stable alphabetical order.
+      if (left.useCount !== right.useCount) return right.useCount - left.useCount;
       return compareModelLabels(left.label, right.label);
     });
 });
@@ -384,7 +392,10 @@ function onModelMenuSelect(key) {
   }
   if (typeof key === 'string' && key.startsWith('model:')) {
     const index = parseInt(key.slice(6), 10);
-    if (!Number.isNaN(index)) emit('switchModel', index);
+    if (!Number.isNaN(index)) {
+      recordModelSwitch(index);
+      emit('switchModel', index);
+    }
   }
 }
 
@@ -421,6 +432,17 @@ function onReasoningEffortSelect(key) {
 function onCompactClick() {
   contextPopoverVisible.value = false;
   emit('compactContext');
+}
+
+// recordModelSwitch bumps the usage count for the selected model's provider
+// group, pruning keys for providers no longer present in the config, then
+// refreshes the reactive snapshot so modelGroups re-sorts.
+function recordModelSwitch(index) {
+  const model = (props.config.models || [])[index];
+  if (!model) return;
+  const validKeys = (props.config.models || []).map((m) => modelProviderKey(m));
+  recordModelUsage(modelProviderKey(model), validKeys);
+  modelUsage.value = getModelUsage();
 }
 
 function providerLabel(model) {
