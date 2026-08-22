@@ -46,6 +46,33 @@ func TestBuildWorkspaceMapContextRespectsIgnoresAndDetectsStack(t *testing.T) {
 	mustNotContain(t, ctx, "secret.txt")
 }
 
+func TestRootGitignoreMatcherSupportsRecursiveNegatedAndAnchoredRules(t *testing.T) {
+	root := t.TempDir()
+	writeTestFile(t, root, ".gitignore", "**/cache/\n*.log\n!important.log\n/only-root.txt\n")
+	matcher := loadRootGitignoreRules(root)
+
+	cases := []struct {
+		path    string
+		isDir   bool
+		ignored bool
+	}{
+		{"cache", true, true},
+		{"nested/cache", true, true},
+		{"nested/cache/file.txt", false, true},
+		{"build.log", false, true},
+		{"nested/build.log", false, true},
+		{"important.log", false, false},
+		{"nested/important.log", false, false},
+		{"only-root.txt", false, true},
+		{"nested/only-root.txt", false, false},
+	}
+	for _, tc := range cases {
+		if got := matchGitignoreRules(matcher, tc.path, tc.isDir); got != tc.ignored {
+			t.Fatalf("matchGitignoreRules(%q, isDir=%v) = %v, want %v", tc.path, tc.isDir, got, tc.ignored)
+		}
+	}
+}
+
 func TestWorkspaceMapCacheInvalidation(t *testing.T) {
 	root := t.TempDir()
 	writeTestFile(t, root, "go.mod", "module example\n")

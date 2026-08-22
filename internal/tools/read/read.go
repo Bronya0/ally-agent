@@ -26,12 +26,13 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"unicode/utf16"
 	"unicode/utf8"
+
+	"github.com/ledongthuc/pdf"
 
 	toolerrors "ally-dev/internal/tools/shared"
 )
@@ -729,35 +730,86 @@ func readWorksheetRows(f *zip.File, shared []string) ([][]string, error) {
 	return rows, nil
 }
 
-// ExtractPDFTextBestEffort performs a best-effort plain-text extraction from a
-// PDF file. It only handles plain-text PDFs; scanned or compressed PDFs may
-// need OCR and will return an error.
-func ExtractPDFTextBestEffort(filePath string) (string, error) {
-	data, err := os.ReadFile(filePath)
+const maxPDFTextBytes = 8 * 1024 * 1024
+
+// ExtractPDFTextBestEffort extracts text from a PDF through a real PDF parser.
+// The input file is bounded before parsing and the extracted text is bounded
+// while pages are processed so compressed streams cannot expand without limit.
+// Scanned PDFs still require OCR and return an error when no text is found.
+func ExtractPDFTextBestEffort(filePath string) (text string, err error) {
+	info, err := os.Stat(filePath)
 	if err != nil {
 		return "", err
 	}
-	if len(data) > 32*1024*1024 {
-		data = data[:32*1024*1024]
+	if info.IsDir() {
+		return "", errors.New("path is a directory")
 	}
-	re := regexp.MustCompile(`\((?:\\.|[^\\)])*\)`)
-	matches := re.FindAll(data, 20000)
-	var parts []string
-	for _, m := range matches {
-		if len(m) < 2 {
+	if info.Size() > MaxReadBytes {
+		return "", toolerrors.Newf("E_FILE_TOO_LARGE", "file is too large: %d bytes", info.Size())
+	}
+
+	file, err := os.Open(filePath)
+	if err != nil {
+		return "", err
+	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			text = ""
+			err = fmt.Errorf("PDF parser failed: %v", recovered)
+		}
+		if closeErr := file.Close(); err == nil && closeErr != nil {
+			err = closeErr
+		}
+	}()
+
+	reader, err := pdf.NewReader(file, info.Size())
+	if err != nil {
+		return "", err
+	}
+
+	var b strings.Builder
+	for pageNumber := 1; pageNumber <= reader.NumPage(); pageNumber++ {
+		page := reader.Page(pageNumber)
+		if page.V.IsNull() || page.V.Key("Contents").Kind() == pdf.Null {
 			continue
 		}
-		s := string(m[1 : len(m)-1])
-		s = strings.NewReplacer(`\(`, "(", `\)`, ")", `\\`, `\`, `\n`, "\n", `\r`, "\n", `\t`, "\t").Replace(s)
-		s = strings.TrimSpace(s)
-		if s != "" {
-			parts = append(parts, s)
+		pageText, pageErr := page.GetPlainText(nil)
+		if pageErr != nil {
+			return "", pageErr
 		}
+		if pageText == "" {
+			continue
+		}
+		remaining := maxPDFTextBytes - b.Len()
+		if remaining <= 0 {
+			return "", errors.New("PDF text exceeds extraction limit")
+		}
+		if len(pageText) > remaining {
+			b.WriteString(truncateUTF8Prefix(pageText, remaining))
+			return CompactDocumentText(b.String()), nil
+		}
+		b.WriteString(pageText)
 	}
-	if len(parts) == 0 {
-		return "", errors.New("no readable PDF text found; scanned or compressed PDFs may need OCR")
+
+	text = CompactDocumentText(b.String())
+	if text == "" {
+		return "", errors.New("no readable PDF text found; scanned PDFs may need OCR")
 	}
-	return CompactDocumentText(strings.Join(parts, " ")), nil
+	return text, nil
+}
+
+func truncateUTF8Prefix(text string, maxBytes int) string {
+	if maxBytes <= 0 {
+		return ""
+	}
+	if len(text) <= maxBytes {
+		return text
+	}
+	end := maxBytes
+	for end > 0 && !utf8.RuneStart(text[end]) {
+		end--
+	}
+	return text[:end]
 }
 
 // CompactDocumentText collapses runs of whitespace within each line and drops

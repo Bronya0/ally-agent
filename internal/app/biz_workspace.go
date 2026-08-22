@@ -16,7 +16,6 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
-	"regexp"
 	goruntime "runtime"
 	"sort"
 	"strings"
@@ -24,6 +23,8 @@ import (
 	"time"
 
 	"ally-dev/internal/tools/grep"
+
+	gitignore "github.com/go-git/go-git/v5/plumbing/format/gitignore"
 )
 
 // workspaceCacheHolder owns all workspace-map / path-index memoization state
@@ -32,12 +33,12 @@ import (
 // read/write logic, and invalidation stay in one file instead of spreading
 // across app.go's struct definition.
 type workspaceCacheHolder struct {
-	mapMu          sync.Mutex
-	mapCache       map[string]workspaceMapCacheEntry
-	pathMu         sync.Mutex
-	pathCache      map[string]*workspacePathIndex
-	pathBuilds     map[string]chan struct{}
-	pathVersion    int64
+	mapMu       sync.Mutex
+	mapCache    map[string]workspaceMapCacheEntry
+	pathMu      sync.Mutex
+	pathCache   map[string]*workspacePathIndex
+	pathBuilds  map[string]chan struct{}
+	pathVersion int64
 }
 
 func newWorkspaceCacheHolder() *workspaceCacheHolder {
@@ -849,6 +850,7 @@ func buildWorkspaceMapWithRg(root string, maxDepth, limit int) (workspaceMapBuil
 	sortWorkspaceMapEntries(&result)
 	return result, true
 }
+
 // workspaceMapDirBudgets 跟踪每个父目录已展开的直接子项数，用于每目录预算折叠。
 type workspaceMapDirBudgets struct {
 	counts map[string]int
@@ -1174,95 +1176,36 @@ func isWorkspaceMapSensitiveFile(name string, isDir bool) bool {
 	return false
 }
 
-type gitignoreRule struct {
-	pattern  string
-	negated  bool
-	dirOnly  bool
-	anchored bool
-	hasSlash bool
-}
-
-func loadRootGitignoreRules(root string) []gitignoreRule {
+func loadRootGitignoreRules(root string) gitignore.Matcher {
 	data, err := os.ReadFile(filepath.Join(root, ".gitignore"))
 	if err != nil {
 		return nil
 	}
 	lines := strings.Split(string(data), "\n")
-	rules := make([]gitignoreRule, 0, len(lines))
+	patterns := make([]gitignore.Pattern, 0, len(lines))
 	for _, raw := range lines {
-		line := strings.TrimSpace(strings.TrimSuffix(raw, "\r"))
-		if line == "" || strings.HasPrefix(line, "#") {
+		line := strings.TrimSuffix(raw, "\r")
+		if strings.TrimSpace(line) == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-
-		negated := false
-		if strings.HasPrefix(line, "!") {
-			negated = true
-			line = strings.TrimSpace(strings.TrimPrefix(line, "!"))
-		}
-		if line == "" {
-			continue
-		}
-
+		// Keep escaped comment markers literal while letting the library handle
+		// negation, directory rules, globs, and **.
 		line = strings.ReplaceAll(line, `\#`, "#")
-		line = filepath.ToSlash(line)
-		dirOnly := strings.HasSuffix(line, "/")
-		line = strings.TrimRight(line, "/")
-		anchored := strings.HasPrefix(line, "/")
-		line = strings.TrimLeft(line, "/")
-		if line == "" || line == "." {
-			continue
-		}
-		rules = append(rules, gitignoreRule{
-			pattern:  line,
-			negated:  negated,
-			dirOnly:  dirOnly,
-			anchored: anchored,
-			hasSlash: strings.Contains(line, "/"),
-		})
+		patterns = append(patterns, gitignore.ParsePattern(line, nil))
 	}
-	return rules
+	if len(patterns) == 0 {
+		return nil
+	}
+	return gitignore.NewMatcher(patterns)
 }
 
-func matchGitignoreRules(rules []gitignoreRule, relPath string, isDir bool) bool {
+func matchGitignoreRules(matcher gitignore.Matcher, relPath string, isDir bool) bool {
+	if matcher == nil {
+		return false
+	}
 	relPath = strings.Trim(filepath.ToSlash(relPath), "/")
-	ignored := false
-	for _, rule := range rules {
-		if matchGitignoreRule(rule, relPath, isDir) {
-			ignored = !rule.negated
-		}
-	}
-	return ignored
-}
-
-func matchGitignoreRule(rule gitignoreRule, relPath string, isDir bool) bool {
 	if relPath == "" {
 		return false
 	}
-	if rule.dirOnly && !isDir {
-		return false
-	}
-	if rule.anchored || rule.hasSlash {
-		return matchWorkspaceGlob(rule.pattern, relPath)
-	}
-	for _, part := range strings.Split(relPath, "/") {
-		if matchWorkspaceGlob(rule.pattern, part) {
-			return true
-		}
-	}
-	return false
-}
-
-func matchWorkspaceGlob(pattern, target string) bool {
-	if pattern == target {
-		return true
-	}
-	if strings.Contains(pattern, "**") {
-		re, err := regexp.Compile("^" + grep.GlobPatternToRegex(pattern) + "$")
-		if err == nil && re.MatchString(target) {
-			return true
-		}
-	}
-	matched, err := path.Match(pattern, target)
-	return err == nil && matched
+	return matcher.Match(strings.Split(relPath, "/"), isDir)
 }

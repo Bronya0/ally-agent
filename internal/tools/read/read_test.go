@@ -8,12 +8,85 @@
 package read
 
 import (
+	"bytes"
+	"compress/zlib"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"unicode/utf16"
 )
+
+func TestExtractPDFTextBestEffortReadsCompressedText(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "compressed.pdf")
+	content := "BT /F1 12 Tf 72 720 Td (Compressed PDF text) Tj ET"
+	compressed := new(bytes.Buffer)
+	writer := zlib.NewWriter(compressed)
+	if _, err := writer.Write([]byte(content)); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	var document bytes.Buffer
+	document.WriteString("%PDF-1.4\n%\xE2\xE3\xCF\xD3\n")
+	offsets := make([]int, 6)
+	writeObject := func(number int, body []byte) {
+		offsets[number] = document.Len()
+		fmt.Fprintf(&document, "%d 0 obj\n", number)
+		document.Write(body)
+		document.WriteString("\nendobj\n")
+	}
+	writeObject(1, []byte("<< /Type /Catalog /Pages 2 0 R >>"))
+	writeObject(2, []byte("<< /Type /Pages /Kids [3 0 R] /Count 1 >>"))
+	writeObject(3, []byte("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>"))
+	writeObject(4, []byte("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"))
+	stream := fmt.Sprintf("<< /Length %d /Filter /FlateDecode >>\nstream\n", compressed.Len())
+	streamBytes := append([]byte(stream), compressed.Bytes()...)
+	streamBytes = append(streamBytes, []byte("\nendstream")...)
+	writeObject(5, streamBytes)
+
+	xrefOffset := document.Len()
+	document.WriteString("xref\n0 6\n0000000000 65535 f \n")
+	for number := 1; number < len(offsets); number++ {
+		fmt.Fprintf(&document, "%010d 00000 n \n", offsets[number])
+	}
+	fmt.Fprintf(&document, "trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n", xrefOffset)
+	if err := os.WriteFile(path, document.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := ExtractPDFTextBestEffort(path)
+	if err != nil {
+		t.Fatalf("ExtractPDFTextBestEffort() error: %v", err)
+	}
+	if !strings.Contains(got, "Compressed PDF text") {
+		t.Fatalf("ExtractPDFTextBestEffort() = %q, want compressed text", got)
+	}
+}
+
+func TestExtractPDFTextBestEffortRejectsOversizedFiles(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "oversized.pdf")
+	file, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Truncate(MaxReadBytes + 1); err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = ExtractPDFTextBestEffort(path)
+	if err == nil || !strings.Contains(err.Error(), "E_FILE_TOO_LARGE") {
+		t.Fatalf("ExtractPDFTextBestEffort() error = %v, want E_FILE_TOO_LARGE", err)
+	}
+}
 
 func TestVersionTokenUsesSixCrockfordBase32Characters(t *testing.T) {
 	version := HashVersion([]byte("versioned content"))

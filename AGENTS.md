@@ -86,13 +86,13 @@ Publishing the Release triggers `.github/workflows/build.yml`, which builds and 
 每个子目录是一个工具的纯算法实现，不依赖 `*App`、`ConfigState` 或任何 app 包符号：
 
 - `calculate/` — 纯数学计算
-- `command/` — 命令安全解析：重定向/路径/风险模式匹配
+- `command/` — 命令安全解析：以 `mvdan.cc/sh/v3` Bash AST 为主，兼容 PowerShell/cmd、路径与风险语义
 - `edit/` — 编辑 Diff、变更范围
 - `git/` — git porcelain / unified-diff 解析
 - `grep/` — ripgrep 封装与结果归一化
 - `memory/` — 记忆 Markdown frontmatter 解析 + 编排（Runtime 注入）
 - `pathutil/` — 工作区路径解析与安全检查（Runtime 注入）
-- `read/` — 文本读取、版本令牌、原子写入、文档文本抽取
+- `read/` — 文本读取、版本令牌、原子写入、文档文本抽取（PDF 使用 `github.com/ledongthuc/pdf`）
 - `scheduler/` — 计划任务调度解析、校验与下次执行计算
 - `service/` — 后台进程 rolling buffer 与长命令检测
 - `shared/` — 跨工具编码错误（`CodedError`）与内置工具 schema
@@ -322,7 +322,7 @@ Built-in model-facing tools:
 | `wait` | Pause the current agent run for a cancellable 1–3600 second delay |
 | `http_request` | Bounded HTTP/HTTPS API request |
 | `web_fetch` | Bounded webpage fetch and readable-text extraction |
-| `remote_*` | SSH remote list/read/edit/create/delete/run commands |
+| `remote_*` | SSH remote read/edit/create/delete/run commands; use `remote_run_command` for directory discovery |
 | `calculate` | Deterministic local math expression evaluator |
 | `ask` | Pause the visible main Agent session for one or more user questions |
 | `plan` | Session plan management; at most one `in_progress` item at a time, mark done before advancing |
@@ -354,7 +354,7 @@ Text files:
 - missing paths and directory targets are silently omitted from the returned `files` array (an ignored-only batch succeeds with an empty array); other partial failures stay in the corresponding file result with `errorCode` when known
 - include metadata: `startLine`, `endLine`, `nextStartLine`, `totalLines`, `truncated`, `truncatedLines`, `truncatedLinesOmitted`, `version`, `lineEnding`; `version` is a 6-character lowercase Crockford Base32 prefix derived from SHA-256 content and is compared case-insensitively
 
-Document files (`.docx`, `.pptx`, `.xlsx`, `.pdf`) return extracted text and are marked non-editable; extraction algorithms live in `internal/tools/read` (pure stdlib, no App coupling).
+Document files (`.docx`, `.pptx`, `.xlsx`, `.pdf`) return extracted text and are marked non-editable; extraction lives in `internal/tools/read` with no App coupling. OOXML uses the standard library, while PDF structure/text parsing uses `github.com/ledongthuc/pdf`.
 
 Range semantics for model-facing reads:
 
@@ -430,7 +430,7 @@ The frontend is centered on `frontend/src/App.vue`.
 
 State management: Vue 3 `<script setup>` with plain `ref()` / `reactive()`, no Vuex/Pinia. Prompt history stays in `localStorage`; session index and completed UI snapshots are persisted by the backend in local files.
 
-Major UI regions: header (controlled Naive UI workspace tabs, running indicators, drag ordering, history dropdown, plan indicator, settings, window controls), chat message area (one permanently mounted `ChatMessages` instance per open workspace Tab; content panes use `display-directive="show"` so switching only hides panes and preserves native DOM scroll state), command menu (`/`), session switcher, todo panel, composer, `ComposerInfoBar`, settings modal.
+Major UI regions: header (controlled Naive UI workspace tabs, running indicators, drag ordering, history dropdown, plan indicator, settings, window controls), chat message area (one permanently mounted `ChatMessages` instance per open workspace Tab; content panes use `display-directive="show"` so switching only hides panes and preserves native DOM scroll state), per-Tab plan panel and workspace explorer/editor, command menu (`/`), session switcher, composer, `ComposerInfoBar`, settings modal.
 
 Settings pages:
 
@@ -534,8 +534,8 @@ Backend 会话/历史/上下文核算的完整说明（索引与 gzip 快照、�
 
 - 每个工作区 Tab 持有有效 `sessionId`；创建或切换会话立即更新该链接。
 - Header 与内容区 Tabs 共享受控 `activeWorkspaceId`；`Ctrl/Cmd+Left/Right` 切换，拖拽排序操作同一 `workspaceTabs` 数组。
-- 每个打开的 Tab 常驻一个 `ChatMessages` + `n-tab-pane`（`display-directive="show"`）；切换不得卸载已打开 Tab 的消息或引入合成滚动锚点。
-- 选择已被其他 Tab 持有的会话时激活该 Tab，而不是静默重绑不同 Tab。
+- 每个打开的 Tab 常驻一个 `ChatMessages` + `n-tab-pane`（`display-directive="show"`）；该 pane 同时拥有会话计划面板和 `WorkspaceExplorer` 树/编辑器实例，切换不得共享计划/编辑器状态、卸载已打开 Tab 的消息或引入合成滚动锚点。
+- 会话列表只显示当前工作区的会话；选择历史会话不会切换到其他工作区或静默重绑到别的 Tab。
 - 带显式 `sessionId` 的运行时事件绝不回退到当前可见会话；终止事件仅在 `runId` 仍匹配该会话当前 run 时接受。
 - 输入框/文本域/下拉/可编辑元素内禁用 `Ctrl/Cmd+Left/Right` 工作区导航。
 - `CancelRun` 立即取消 context，但保留 `runs`/`runSessions` 注册直到 `runChat` 实际退出，避免会话释放/删除与取消中的 run 竞态。
@@ -609,8 +609,8 @@ Example MCP config:
 - Workspace write operations are confined to the configured workspace, except `~/.ally_agent` is also allowed for Ally global config and memories.
 - Read-only local tools may inspect explicit absolute paths outside the workspace subject to safety checks.
 - `command` keeps cwd inside the workspace, permits outside reads, null-device redirection, and creation of new outside paths, but refuses commands that may modify/delete existing outside paths or perform explicit deletion.
-- Command safety uses lightweight shell-aware invocation parsing in `internal/tools/command`: quoted/search data is not treated as executable syntax, nested shell payloads and command substitutions are inspected, managed deletions are allowed only when every deletion in the compound command is managed, and source/destination-aware mutation analysis checks explicit write targets rather than every referenced path. Heredoc bodies and here-strings are skipped as data (quoted delimiters are fully literal; unquoted bodies still have command substitutions inspected).
-- `checkCommandSafety()` in `orch_command_safety.go` is the app-owned boundary for workspace roots, path existence, `E_COMMAND_BLOCKED` / `E_PATH_OUTSIDE`, and user-facing explanations; it must consume the command package's semantic analysis instead of adding independent full-string risk regexes. Redirection/mutation targets that cannot be statically resolved (variables, globs, heredoc artifacts) are allowed through permissively; only literal existing outside paths are blocked.
+- Command safety uses `mvdan.cc/sh/v3`'s Bash AST in `internal/tools/command` for shell invocations, nested commands, command substitutions, heredocs, and redirections; a narrow legacy scanner remains only for parser-rejected/incomplete foreign-shell fragments. Quoted/search data is not treated as executable syntax, managed deletions are allowed only when every deletion in the compound command is managed, and source/destination-aware mutation analysis checks explicit write targets rather than every referenced path. Heredoc bodies and here-strings are skipped as data (quoted delimiters are fully literal; unquoted bodies still have command substitutions inspected).
+- `checkCommandSafety()` in `orch_command_safety.go` is the app-owned boundary for workspace roots, path existence, `E_COMMAND_BLOCKED` / `E_PATH_OUTSIDE`, and user-facing explanations; it must consume the command package's AST-backed semantic analysis instead of adding independent full-string risk regexes. Redirection/mutation targets that cannot be statically resolved (variables, globs, heredoc artifacts) are allowed through permissively; only literal existing outside paths are blocked.
 - The `command` schema explains how to recover from `E_PATH_OUTSIDE`: read the Chinese reason/target, avoid unchanged retries, choose a new or workspace target, and replace literal outside targets with workspace paths. The model-facing system prompt keeps only the first two recovery steps (read the returned Chinese explanation and detected target; do not retry the unchanged command) and points to the schema for the rest.
 - Prefer `delete` / `remote_delete_path` over shell deletion.
 - `readTextFile` rejects binary files using NUL checks, after transcoding UTF-16 LE/BE (with or without a BOM) to UTF-8; edited UTF-16 files are written back as UTF-8.
