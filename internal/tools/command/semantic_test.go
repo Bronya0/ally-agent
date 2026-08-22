@@ -166,3 +166,20 @@ func TestLiteralWriteTargets(t *testing.T) {
 		}
 	}
 }
+
+func TestShellASTDecodesQuotedWindowsPathsAndSkipsFileDescriptorRedirection(t *testing.T) {
+	invocations := Invocations(`cp "C:\Users\me\source.txt" "C:\Users\me\dest.txt"`)
+	if len(invocations) != 1 {
+		t.Fatalf("Invocations() returned %d calls, want 1: %#v", len(invocations), invocations)
+	}
+	wantArgs := []string{`C:\Users\me\source.txt`, `C:\Users\me\dest.txt`}
+	if !slices.Equal(invocations[0].Args, wantArgs) {
+		t.Fatalf("Invocations() args = %#v, want %#v", invocations[0].Args, wantArgs)
+	}
+
+	targets := ShellRedirectionTargets(`printf x > "C:\Temp\out.txt" 2>&1`)
+	wantTargets := []string{`C:\Temp\out.txt`}
+	if !slices.Equal(targets, wantTargets) {
+		t.Fatalf("ShellRedirectionTargets() = %#v, want %#v", targets, wantTargets)
+	}
+}

@@ -92,6 +92,13 @@ func MatchRiskPattern(command string) *RiskPattern {
 // the null device are returned as-is; callers filter them with
 // IsShellNullDevice.
 func ShellRedirectionTargets(command string) []string {
+	if targets, ok := astShellRedirectionTargets(command); ok {
+		return targets
+	}
+	return shellRedirectionTargetsLegacy(command)
+}
+
+func shellRedirectionTargetsLegacy(command string) []string {
 	targets := []string{}
 	inSingle := false
 	inDouble := false

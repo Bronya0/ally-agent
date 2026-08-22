@@ -31,7 +31,7 @@ var forkBombRE = regexp.MustCompile(`(?i):\s*\(\s*\)\s*\{[^}]*:\s*\|\s*:\s*&[^}]
 // command separators, quotes, common wrappers, and nested shell scripts. It is
 // not an executor and intentionally does not expand variables.
 func Invocations(commandLine string) []Invocation {
-	return invocations(commandLine, 0)
+	return astInvocations(commandLine)
 }
 
 func invocations(commandLine string, depth int) []Invocation {
