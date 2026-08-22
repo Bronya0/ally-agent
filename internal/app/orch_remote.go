@@ -74,8 +74,6 @@ def safe_join(root, rel):
         raise ValueError("remote path is outside workspaceRoot")
     return target
 
-def is_heavy_dir(name):
-    return name.lower() in {".git", "node_modules", "dist", "build", "target", ".next", ".nuxt", ".svelte-kit", "vendor", "__pycache__"}
 
 def contains_vcs(path):
     return any(part in {".git", ".svn", ".hg"} for part in path.parts)
@@ -105,58 +103,6 @@ def is_protected_delete_path(path):
 def iso_mtime(st):
     return datetime.fromtimestamp(st.st_mtime, timezone.utc).isoformat()
 
-def op_list(root, payload):
-    start = safe_join(root, payload.get("path", ""))
-    if not start.exists():
-        raise FileNotFoundError(str(start))
-    if not start.is_dir():
-        raise ValueError("path is not a directory")
-    max_depth = int(payload.get("maxDepth") or 3)
-    if max_depth < 0:
-        max_depth = 0
-    if max_depth > 20:
-        max_depth = 20
-    limit = int(payload.get("limit") or 200)
-    if limit < 1:
-        limit = 1
-    if limit > 1000:
-        limit = 1000
-    include_hidden = bool(payload.get("includeHidden"))
-    entries = []
-    truncated = False
-    root_str = str(root)
-    start_str = str(start)
-    for current, dirs, files in os.walk(start):
-        # depth = 当前目录相对 start 的深度（用路径分隔符计数，避免 pathlib 开销）
-        if current == start_str:
-            depth = 0
-        else:
-            depth = current[len(start_str):].count(os.sep)
-        if depth >= max_depth:
-            dirs[:] = []
-        else:
-            dirs[:] = sorted([d for d in dirs if include_hidden or (not d.startswith(".") and not is_heavy_dir(d))])
-        names = [(d, True) for d in dirs] + [(f, False) for f in sorted(files) if include_hidden or not f.startswith(".")]
-        for name, is_dir in names:
-            full = os.path.join(current, name)
-            try:
-                st = os.stat(full)
-            except OSError:
-                continue
-            # 相对 root 的 posix 路径（字符串处理，避免 pathlib.Path 构造）
-            rel = os.path.relpath(full, root_str)
-            rel_posix = rel.replace(os.sep, "/")
-            entries.append({
-                "path": rel_posix,
-                "name": name,
-                "dir": is_dir,
-                "size": 0 if is_dir else st.st_size,
-                "modTime": iso_mtime(st),
-            })
-            if len(entries) >= limit:
-                truncated = True
-                return {"entries": entries, "count": len(entries), "truncated": truncated}
-    return {"entries": entries, "count": len(entries), "truncated": truncated}
 
 def op_read(root, payload):
     path = safe_join(root, payload.get("path", ""))
@@ -413,9 +359,7 @@ try:
     if str(root) == "/":
         raise ValueError("workspaceRoot must not be filesystem root")
     op = payload.get("op")
-    if op == "list":
-        ok(op_list(root, payload))
-    elif op == "read":
+    if op == "read":
         ok(op_read(root, payload))
     elif op == "write":
         ok(op_write(root, payload))
@@ -444,10 +388,6 @@ type remotePythonResponse struct {
 }
 
 func parseRemoteTarget(raw string) (remoteTarget, error) {
-	return parseRemoteTargetWithOptions(raw, false)
-}
-
-func parseRemoteTargetWithOptions(raw string, allowRoot bool) (remoteTarget, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return remoteTarget{}, errors.New("target is required")
@@ -465,7 +405,7 @@ func parseRemoteTargetWithOptions(raw string, allowRoot bool) (remoteTarget, err
 			host = u.User.String() + "@" + host
 		}
 		root := path.Clean(u.Path)
-		if root == "." || !strings.HasPrefix(root, "/") || (!allowRoot && root == "/") {
+		if root == "." || !strings.HasPrefix(root, "/") || root == "/" {
 			return remoteTarget{}, errors.New("remote workspaceRoot must be an absolute non-root path")
 		}
 		return remoteTarget{Raw: raw, Host: host, Port: u.Port(), WorkspaceRoot: root}, nil
@@ -480,36 +420,10 @@ func parseRemoteTargetWithOptions(raw string, allowRoot bool) (remoteTarget, err
 		return remoteTarget{}, errors.New("target host is required")
 	}
 	root = path.Clean(filepath.ToSlash(root))
-	if root == "." || !strings.HasPrefix(root, "/") || (!allowRoot && root == "/") {
+	if root == "." || !strings.HasPrefix(root, "/") || root == "/" {
 		return remoteTarget{}, errors.New("remote workspaceRoot must be an absolute non-root path")
 	}
 	return remoteTarget{Raw: raw, Host: host, WorkspaceRoot: root}, nil
-}
-
-func normalizeRemoteListTarget(rawTarget, rawPath string) (remoteTarget, string, error) {
-	rt, err := parseRemoteTargetWithOptions(rawTarget, true)
-	if err != nil {
-		return remoteTarget{}, "", err
-	}
-	if rt.WorkspaceRoot != "/" {
-		cleanPath, err := validateRemoteRelativePath(rawPath, true)
-		return rt, cleanPath, err
-	}
-	p := strings.TrimSpace(filepath.ToSlash(rawPath))
-	if p == "" || p == "." || p == "/" {
-		return remoteTarget{}, "", errors.New("remote workspaceRoot '/' is not allowed for broad listing; use target like host:/home or host:/srv/app")
-	}
-	if strings.ContainsRune(p, 0) {
-		return remoteTarget{}, "", errors.New("path contains NUL byte")
-	}
-	p = strings.TrimPrefix(p, "/")
-	for _, part := range strings.Split(p, "/") {
-		if part == ".." {
-			return remoteTarget{}, "", errors.New("path must not contain '..'")
-		}
-	}
-	rt.WorkspaceRoot = "/" + path.Clean(p)
-	return rt, ".", nil
 }
 
 func validateRemoteRelativePath(p string, allowRoot bool) (string, error) {
@@ -739,29 +653,6 @@ func (a *App) remoteWriteRaw(ctx context.Context, rt remoteTarget, relPath strin
 		return nil, err
 	}
 	return outcome.CreatedDirs, nil
-}
-
-func (a *App) remoteListFiles(ctx context.Context, req RemoteListFilesRequest) (ListFilesResult, error) {
-	rt, cleanPath, err := normalizeRemoteListTarget(req.Target, req.Path)
-	if err != nil {
-		return ListFilesResult{}, err
-	}
-	maxDepth := req.MaxDepth
-	if maxDepth <= 0 {
-		maxDepth = 3
-	}
-	limit := req.Limit
-	if limit <= 0 {
-		limit = 200
-	}
-	var result ListFilesResult
-	err = a.invokeRemotePython(ctx, rt, remotePayload(rt, "list", map[string]any{
-		"path":          cleanPath,
-		"maxDepth":      maxDepth,
-		"limit":         limit,
-		"includeHidden": req.IncludeHidden,
-	}), 60*time.Second, &result)
-	return result, err
 }
 
 func (a *App) remoteReadFile(ctx context.Context, req RemoteReadFileRequest) (ReadFileResult, error) {

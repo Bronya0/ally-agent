@@ -1990,7 +1990,6 @@ func writeToolTestFile(t *testing.T, root, rel, content string) {
 	}
 }
 
-
 func TestRunReadCacheReturnsMetadataWithoutDuplicateContent(t *testing.T) {
 	dir := t.TempDir()
 	writeToolTestFile(t, dir, "sample.txt", "one\ntwo\n")

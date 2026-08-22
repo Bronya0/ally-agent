@@ -46,13 +46,16 @@ func TestRemoteScriptTransportInvariants(t *testing.T) {
 	}
 }
 
-// TestBuildRemoteScriptInjectsListsAndPayload 验证 buildRemoteScript 把删除
+// TestBuildRemoteScriptInjectsProtectionAndPayload 验证 buildRemoteScript 把删除
 // 清单与 payload 占位符全部替换，且产物能用真实解释器跑通。
-func TestBuildRemoteScriptInjectsListsAndPayload(t *testing.T) {
+func TestBuildRemoteScriptInjectsProtectionAndPayload(t *testing.T) {
 	py := pickRemoteHelperPython(t)
+	root := t.TempDir()
 	script, err := buildRemoteScript(map[string]any{
-		"op":            "list",
-		"workspaceRoot": t.TempDir(),
+		"op":            "_check_write_targets",
+		"workspaceRoot": root,
+		"cwd":           ".",
+		"targets":       []string{},
 	})
 	if err != nil {
 		t.Fatalf("buildRemoteScript: %v", err)

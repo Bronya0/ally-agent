@@ -208,17 +208,6 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"url"},
 		}),
-		functionTool("remote_list_files", "List files on a remote SSH workspace (same contract as list_files). Target is host:/absolute/workspace or ssh://user@host:port/absolute/workspace; to inspect /home use target host:/home with empty path — host:/ root listing is refused. Uses system ssh with BatchMode=yes and remote python3.", map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"target":        map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Explicit SSH target plus workspace root, e.g. my-dev:/srv/app or ubuntu@10.0.1.20:/home/ubuntu/project."},
-				"path":          map[string]any{"type": "string", "description": "Relative directory path inside the remote workspace. Empty means workspace root."},
-				"maxDepth":      map[string]any{"type": "integer", "minimum": 1, "maximum": 20, "description": "Maximum recursion depth. Default 3, max 20."},
-				"limit":         map[string]any{"type": "integer", "minimum": 1, "maximum": 1000, "description": "Maximum entries returned. Default 200, max 1000."},
-				"includeHidden": map[string]any{"type": "boolean", "description": "Include dotfiles and dot-directories. Default false."},
-			},
-			"required": []string{"target"},
-		}),
 		functionTool("remote_read_file", "Read a text file on a remote SSH workspace (same contract as read: line-numbered preview + 6-char version for remote_edit; UTF-16 LE/BE transcoded; no document extraction). Omit startLine/endLine for the whole file; positive startLine without endLine reads to EOF; only endLine reads lines 1..endLine; negative startLine reads the last N lines (max 10000), not with endLine.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -256,7 +245,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"target", "path"},
 		}),
-		functionTool("remote_run_command", "Run a non-interactive shell command on a remote SSH workspace (same contract as command; explicit deletion commands are refused — use remote_delete_path). Cwd defaults to the workspace root. Search remote code with grep -rn 'pattern' src/. Error codes: E_PATH_OUTSIDE, E_CWD_INVALID, E_LONG_RUNNING_COMMAND.", map[string]any{
+		functionTool("remote_run_command", "Run a non-interactive shell command on a remote SSH workspace (same contract as command; explicit deletion commands are refused — use remote_delete_path). Cwd defaults to the workspace root. Use find, ls, or other shell commands for remote directory discovery. Search remote code with grep -rn 'pattern' src/. Error codes: E_PATH_OUTSIDE, E_CWD_INVALID, E_LONG_RUNNING_COMMAND.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"target":         map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Explicit SSH target plus workspace root, e.g. my-dev:/srv/app."},
@@ -358,9 +347,9 @@ func chatToolsUncached() []openai.Tool {
 			"type": "object",
 			"properties": map[string]any{
 				"items": map[string]any{
-					"type":        "array",
-					"minItems":    1,
-					"maxItems":    4,
+					"type":     "array",
+					"minItems": 1,
+					"maxItems": 4,
 					"items": map[string]any{
 						"type":      "string",
 						"minLength": 1,
@@ -387,7 +376,6 @@ var builtinToolExamples = map[string]string{
 	"scheduled_task":     `create: {"action":"create","name":"daily check","instruction":"Run tests and summarize failures.","schedule":"0 9 * * *"}; list: {"action":"list"}; delete: {"action":"delete","id":"task_..."}`,
 	"http_request":       `{"url":"https://api.example.com/items","method":"GET","query":{"limit":"10"},"timeoutSeconds":60}`,
 	"web_fetch":          `{"url":"https://example.com/docs","maxChars":60000}`,
-	"remote_list_files":  `{"target":"my-dev:/srv/app","path":"src"}`,
 	"remote_read_file":   `{"target":"my-dev:/srv/app","path":"main.go"}`,
 	"remote_edit":        `{"target":"my-dev:/srv/app","files":[{"path":"main.go","version":"9k3m7x","changes":[{"oldText":"func old() {}","newText":"func new() {}"}]}]}`,
 	"remote_create_file": `{"target":"my-dev:/srv/app","path":"notes.txt","content":"hello"}`,

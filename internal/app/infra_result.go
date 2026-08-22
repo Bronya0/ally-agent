@@ -153,7 +153,7 @@ func toolResultSummary(name string, result *toolResult) string {
 			}
 			return fmt.Sprintf("%d scheduled tasks", r.Count)
 		}
-	case "list_files", "remote_list_files":
+	case "list_files":
 		data, _ := json.Marshal(result.Data)
 		var r ListFilesResult
 		if json.Unmarshal(data, &r) == nil {
