@@ -331,6 +331,9 @@ function tokenSpeed(msg) {
 const quickMessageOptions = computed(() => [
   { label: t('chat.quickMessage.continue'), key: 'continue' },
   { label: t('chat.quickMessage.plainSpeak'), key: 'plainSpeak' },
+  { label: t('chat.quickMessage.push'), key: 'push' },
+  { label: t('chat.quickMessage.review'), key: 'review' },
+  { label: t('chat.quickMessage.lesson'), key: 'lesson' },
 ]);
 
 const exportOptions = computed(() => [

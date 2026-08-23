@@ -4770,7 +4770,13 @@ async function sendSuggest(sessionId, label) {
 async function sendQuickMessage(sessionId, key) {
   const message = key === 'continue'
     ? t('chat.quickMessage.continueMessage')
-    : t('chat.plainSpeak.message');
+    : key === 'push'
+      ? t('app.push.prompt')
+      : key === 'review'
+        ? REVIEW_PROMPT
+        : key === 'lesson'
+          ? LESSON_PROMPT
+          : t('chat.plainSpeak.message');
   await sendSuggest(sessionId, message);
 }
 
