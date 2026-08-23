@@ -271,6 +271,7 @@ import 'ace-builds/src-noconflict/mode-csv';
 import 'ace-builds/src-noconflict/mode-tsv';
 import MarkdownIt from 'markdown-it';
 import { isEditableNavigationTarget } from '../utils/sessionState.mjs';
+import { resolveMarkdownImagePath } from '../utils/markdownPreview.mjs';
 import { ListFiles, ReadWorkspaceFileAt, ReadWorkspaceImageAt, ReadWorkspaceVideoAt, ReadWorkspacePDFAt, SaveWorkspaceFile, DeletePath, OpenWorkspacePathInFileManagerAt, CreateFile, CreateDirectory, GetWorkspaceFileInfoAt } from '../../bindings/ally-dev/internal/app/app';
 import FileInfoModal from './FileInfoModal.vue';
 import { buildFileInfoSections } from '../utils/fileInfo.mjs';
@@ -341,6 +342,14 @@ let workspaceRequestVersion = 0;
 let navigationBusy = false;
 let confirmPromise = null;
 let mdRenderer = null;
+// Markdown previews are rendered synchronously, but local image bytes come
+// from the workspace bridge. Keep the async hydration bounded and discard
+// results from an older render when the user keeps editing or changes files.
+let markdownImageRenderSeq = 0;
+const markdownImageCache = new Map();
+const markdownImageLoads = new Map();
+const MARKDOWN_IMAGE_CACHE_LIMIT = 8;
+const MARKDOWN_IMAGE_CACHE_ITEM_MAX_CHARS = 2 * 1024 * 1024;
 // nodeWrapperPadding 默认 '3px 0'：每行 hover/聚焦高亮上下各缩进 3px，
 // 相邻行之间出现 6px 视觉缝隙（表现为"聚焦区域之间存在间距"）。
 // 这里归零，让 20px 行高的高亮区域完全相邻。
@@ -678,10 +687,74 @@ function updateAceContent() {
   void applySyntaxValidation();
 }
 
+async function loadMarkdownImage(key, path) {
+  const cached = markdownImageCache.get(key);
+  if (cached) {
+    markdownImageCache.delete(key);
+    markdownImageCache.set(key, cached);
+    return cached;
+  }
+  let pending = markdownImageLoads.get(key);
+  if (!pending) {
+    pending = ReadWorkspaceImageAt({ workspace: props.workspace, path })
+      .then((result) => {
+        const data = String(result?.data || '');
+        if (!data) throw new Error('image data is empty');
+        if (data.length <= MARKDOWN_IMAGE_CACHE_ITEM_MAX_CHARS) {
+          markdownImageCache.delete(key);
+          markdownImageCache.set(key, data);
+          while (markdownImageCache.size > MARKDOWN_IMAGE_CACHE_LIMIT) {
+            markdownImageCache.delete(markdownImageCache.keys().next().value);
+          }
+        }
+        return data;
+      })
+      .finally(() => markdownImageLoads.delete(key));
+    markdownImageLoads.set(key, pending);
+  }
+  return pending;
+}
+
+async function hydrateMarkdownImages(renderSeq, images, markdownPath) {
+  let next = 0;
+  const worker = async () => {
+    while (next < images.length) {
+      const item = images[next++];
+      const path = resolveMarkdownImagePath(markdownPath, item.source);
+      if (!path) continue;
+      const key = `${String(props.workspace || '')}\u0000${path}`;
+      try {
+        const data = await loadMarkdownImage(key, path);
+        if (renderSeq !== markdownImageRenderSeq || !mdPreviewRef.value?.contains(item.image)) continue;
+        item.image.src = data;
+        item.image.classList.remove('workspace-explorer-md-image-loading');
+        item.image.removeAttribute('data-md-source');
+      } catch {
+        if (renderSeq !== markdownImageRenderSeq || !mdPreviewRef.value?.contains(item.image)) continue;
+        item.image.classList.remove('workspace-explorer-md-image-loading');
+        item.image.classList.add('workspace-explorer-md-image-error');
+        item.image.title = t('app.filePreview.failed', { error: path });
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(2, images.length) }, () => worker()));
+}
+
 function renderMarkdownPreview() {
   if (!mdPreviewRef.value || !mdRenderer) return;
   const content = draftContent.value || '';
   mdPreviewRef.value.innerHTML = mdRenderer.render(content);
+  const renderSeq = ++markdownImageRenderSeq;
+  const markdownPath = activeFile.value?.path || '';
+  const images = Array.from(mdPreviewRef.value.querySelectorAll('img[src]'))
+    .map((image) => ({ image, source: image.getAttribute('src') || '' }))
+    .filter(({ source }) => resolveMarkdownImagePath(markdownPath, source));
+  for (const { image, source } of images) {
+    image.setAttribute('data-md-source', source);
+    image.removeAttribute('src');
+    image.classList.add('workspace-explorer-md-image-loading');
+  }
+  if (images.length) void hydrateMarkdownImages(renderSeq, images, markdownPath);
 }
 
 function togglePreviewMode(value) {
@@ -1510,6 +1583,7 @@ async function closeContent() {
 }
 
 function clearEditor() {
+  markdownImageRenderSeq++;
   activeFile.value = null;
   draftContent.value = '';
   originalContent.value = '';
@@ -1592,6 +1666,9 @@ function findNodeByPath(path, nodes = treeData.value) {
 }
 
 onBeforeUnmount(() => {
+  markdownImageRenderSeq++;
+  markdownImageCache.clear();
+  markdownImageLoads.clear();
   window.removeEventListener('keydown', onGlobalKeydown, true);
   dragTeardown?.();
   dragTeardown = null;

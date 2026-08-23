@@ -667,6 +667,15 @@ code, pre {
 .workspace-explorer-md-preview a { color: #8fd3ff; text-decoration: none; }
 .workspace-explorer-md-preview a:hover { text-decoration: underline; }
 .workspace-explorer-md-preview img { max-width: 100%; border-radius: 4px; }
+.workspace-explorer-md-preview img.workspace-explorer-md-image-loading,
+.workspace-explorer-md-preview img.workspace-explorer-md-image-error {
+  display: block;
+  width: min(240px, 100%);
+  min-height: 48px;
+  border: 1px dashed rgba(255,255,255,0.16);
+  background: rgba(255,255,255,0.035);
+}
+.workspace-explorer-md-preview img.workspace-explorer-md-image-error { border-color: rgba(229,154,154,0.45); }
 .workspace-explorer-error { color: #e59a9a; }
 .composer-explorer-btn.active { color: #8fd3ff; background: rgba(143, 211, 255, 0.12); }
 .composer-icon-btn:focus, .composer-icon-btn:focus-visible { outline: none; }
