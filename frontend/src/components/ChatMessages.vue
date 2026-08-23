@@ -97,6 +97,15 @@ Public License v3. See the LICENSE file for details.
                 <ExportOutlined />
               </button>
             </n-dropdown>
+            <button
+              v-if="msg === lastAnswerMessage"
+              class="export-icon-btn"
+              :title="$t('chat.copySummary.title')"
+              :aria-label="$t('chat.copySummary.title')"
+              @click.stop="copyFinalSummary"
+            >
+              <CopyOutlined />
+            </button>
             <n-dropdown
               trigger="click"
               placement="top-end"
@@ -173,6 +182,8 @@ import MessageOutlined from '@vicons/antd/MessageOutlined';
 import ArrowUpOutlined from '@vicons/antd/ArrowUpOutlined';
 import ArrowDownOutlined from '@vicons/antd/ArrowDownOutlined';
 import CloseOutlined from '@vicons/antd/CloseOutlined';
+import CopyOutlined from '@vicons/antd/CopyOutlined';
+import { useMessage } from 'naive-ui';
 
 const props = defineProps({
   messages: { type: Array, required: true },
@@ -326,6 +337,52 @@ const exportOptions = computed(() => [
   { label: t('chat.export.response'), key: 'response' },
   { label: t('chat.export.session'), key: 'session' },
 ]);
+
+// 会话底部复制按钮：复制「最后一次工具调用之后」的总结（最后一条
+// assistant 消息的 markdown 正文）。每条 assistant 消息 = 一个 run 步骤，
+// tool:result 时封口，因此最后一条有正文的 assistant 消息就是最终总结。
+const lastAnswerMessage = computed(() => {
+  const msgs = props.messages || [];
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const m = msgs[i];
+    if (m?.role === 'assistant' && !m.welcome && String(m.content || '').trim()) return m;
+  }
+  return null;
+});
+
+function fallbackCopyText(text, onDone, onError) {
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    onDone();
+  } catch {
+    onError();
+  }
+}
+
+function copyFinalSummary() {
+  const msg = lastAnswerMessage.value;
+  const text = msg ? String(msg.content || '') : '';
+  if (!text.trim()) {
+    message.warning(t('chat.copySummary.empty'));
+    return;
+  }
+  const done = () => message.success(t('chat.copySummary.done'));
+  const failed = () => message.error(t('chat.copySummary.failed'));
+  if (navigator.clipboard?.writeText) {
+    navigator.clipboard.writeText(text).then(done).catch(() => fallbackCopyText(text, done, failed));
+  } else {
+    fallbackCopyText(text, done, failed);
+  }
+}
+
+const message = useMessage();
 
 const scrollbarRef = ref(null);
 const messagesRootRef = ref(null);
