@@ -4,6 +4,14 @@
       <aside class="game-sidebar">
         <div class="game-section-title">联机</div>
         <div class="game-hint">本机 IP：{{ localIPs.join('、') || '未发现内网 IPv4' }}</div>
+        <n-select
+          v-model:value="selectedHostIP"
+          size="small"
+          :options="hostIPOptions"
+          :disabled="!localIPs.length"
+          placeholder="选择给队友连接的本机 IP"
+        />
+        <div v-if="localIPs.length > 1" class="game-hint">请选择与队友处于同一内网的地址，避免使用 VPN 或虚拟网卡地址。</div>
         <div class="game-hint">房主点击“启动房间”后，把生成的整行邀请信息发给队友；队友完整粘贴到这里再点击“加入房间”。</div>
         <n-input v-model:value="invite" size="small" placeholder="例如：ALLY-GAME-1|192.168.1.8|39877|..." :disabled="connected" />
         <div class="game-actions">
@@ -11,6 +19,7 @@
           <n-button size="small" :loading="working" :disabled="connected || !invite" @click="join">加入房间</n-button>
         </div>
         <div v-if="serverInfo.running" class="game-invite">
+          <div>服务端口：{{ serverInfo.port }}</div>
           <div>房间邀请信息（整行复制给队友）</div>
           <code>{{ inviteText }}</code>
           <n-button size="tiny" secondary @click="copyInvite">复制邀请信息</n-button>
@@ -65,10 +74,12 @@ import { buildInvite, GameConnection, parseInvite } from './connection.mjs';
 const props = defineProps({ show: { type: Boolean, default: false } });
 const emit = defineEmits(['close']);
 const message = useMessage();
+const GAME_SERVER_PORT = 51873;
 const invite = ref('');
 const localIPs = ref([]);
 const working = ref(false);
 const errorText = ref('');
+const selectedHostIP = ref('');
 const selectedGame = ref('gomoku');
 const connection = ref(null);
 const peerId = ref('');
@@ -82,7 +93,8 @@ const serverInfo = ref({ running: false, addresses: [] });
 const gameOptions = Object.entries(GAME_META).map(([value, item]) => ({ value, label: item.label }));
 const connected = computed(() => !!connection.value && !!peerId.value);
 const isHost = computed(() => peerId.value && peerId.value === hostId.value);
-const inviteText = computed(() => serverInfo.value.running && serverInfo.value.addresses?.[0] ? buildInvite({ host: serverInfo.value.addresses[0], port: serverInfo.value.port, roomId: serverInfo.value.roomId, secret: serverInfo.value.secret }) : '');
+const hostIPOptions = computed(() => localIPs.value.map((ip) => ({ label: ip, value: ip })));
+const inviteText = computed(() => serverInfo.value.running && selectedHostIP.value ? buildInvite({ host: selectedHostIP.value, port: serverInfo.value.port, roomId: serverInfo.value.roomId, secret: serverInfo.value.secret }) : '');
 const playerIndex = computed(() => state.value?.players?.indexOf(peerId.value) ?? -1);
 const gridStyle = computed(() => ({ '--board-size': state.value?.size || 15 }));
 const flatXiangqi = computed(() => state.value?.board?.flat() || []);
@@ -90,7 +102,13 @@ const myHand = computed(() => state.value?.hands?.[playerIndex.value] || []);
 const turnText = computed(() => state.value?.winner != null ? `玩家 ${state.value.winner + 1} 获胜` : state.value?.turn === playerIndex.value ? '轮到你' : '等待对手');
 const doudizhuStatus = computed(() => state.value?.phase === 'deal' ? (isHost.value ? '房主可以发牌' : '等待房主发牌') : state.value?.phase === 'bid' ? '叫地主阶段' : turnText.value);
 
-onMounted(async () => { try { const info = await GetNetworkInfo(); localIPs.value = info.addresses || []; } catch {} });
+onMounted(async () => {
+  try {
+    const info = await GetNetworkInfo();
+    localIPs.value = info.addresses || [];
+    if (localIPs.value.length === 1) selectedHostIP.value = localIPs.value[0];
+  } catch {}
+});
 onUnmounted(() => { connection.value?.close(); if (serverInfo.value.running) StopServer().catch(() => {}); });
 
 function hide() { emit('close'); }
@@ -124,8 +142,21 @@ function leaveRoom() {
 }
 async function host() {
   working.value = true; errorText.value = '';
-  try { serverInfo.value = await StartServer({ port: 0 }); if (!serverInfo.value.addresses?.length) throw new Error('未找到可用的内网 IPv4'); await connect({ host: serverInfo.value.addresses[0], port: serverInfo.value.port, roomId: serverInfo.value.roomId, secret: serverInfo.value.secret }); }
-  catch (err) { errorText.value = err?.message || '启动失败'; }
+  let started = false;
+  try {
+    if (!selectedHostIP.value) throw new Error('请先选择给队友连接的本机 IP');
+    serverInfo.value = await StartServer({ port: GAME_SERVER_PORT, address: selectedHostIP.value });
+    started = true;
+    if (!serverInfo.value.addresses?.includes(selectedHostIP.value)) throw new Error('所选本机 IP 已不可用，请重新选择');
+    await connect({ host: selectedHostIP.value, port: serverInfo.value.port, roomId: serverInfo.value.roomId, secret: serverInfo.value.secret });
+  }
+  catch (err) {
+    if (started) {
+      await StopServer().catch(() => {});
+      resetRoomState();
+    }
+    errorText.value = err?.message || '启动失败';
+  }
   finally { working.value = false; }
 }
 async function join() { working.value = true; errorText.value = ''; try { await connect(parseInvite(invite.value)); } catch (err) { errorText.value = err?.message || '加入失败'; } finally { working.value = false; } }

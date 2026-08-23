@@ -43,7 +43,8 @@ type Service struct {
 }
 
 type StartRequest struct {
-	Port int `json:"port"`
+	Port    int    `json:"port"`
+	Address string `json:"address"`
 }
 
 type ServerInfo struct {
@@ -92,6 +93,13 @@ func (s *Service) StartServer(req StartRequest) (ServerInfo, error) {
 	if port != 0 && port < 1024 {
 		return ServerInfo{}, errors.New("port must be 0 or between 1024 and 65535")
 	}
+	bindAddress := strings.TrimSpace(req.Address)
+	if bindAddress == "" {
+		return ServerInfo{}, errors.New("bind address is required")
+	}
+	if !isLocalPrivateIPv4(bindAddress) {
+		return ServerInfo{}, errors.New("bind address must be a local private IPv4 address")
+	}
 
 	secret, err := randomToken(32)
 	if err != nil {
@@ -126,7 +134,7 @@ func (s *Service) StartServer(req StartRequest) (ServerInfo, error) {
 		IdleTimeout:       idleTimeout,
 		MaxHeaderBytes:    8 * 1024,
 	}
-	ln, err := net.Listen("tcp4", net.JoinHostPort("0.0.0.0", strconv.Itoa(port)))
+	ln, err := net.Listen("tcp4", net.JoinHostPort(bindAddress, strconv.Itoa(port)))
 	if err != nil {
 		cancel()
 		s.mu.Unlock()
@@ -250,6 +258,15 @@ func localIPv4Addresses() []string {
 		}
 	}
 	return out
+}
+
+func isLocalPrivateIPv4(address string) bool {
+	for _, local := range localIPv4Addresses() {
+		if local == address {
+			return true
+		}
+	}
+	return false
 }
 
 func isPrivateIPv4(ip net.IP) bool {
