@@ -56,14 +56,14 @@ func chatToolsUncached() []openai.Tool {
 				"includeIgnored": map[string]any{"type": "boolean", "description": "Include heavy ignored directories such as .git, node_modules, dist, build. Default false."},
 			},
 		}),
-		functionTool("edit", "Validate and apply exact replacements across multiple workspace files in one call. Each file requires the current 6-char `version` from read; a stale one fails with E_VERSION_MISMATCH — re-read affected files and retry. Prefer a small exact unique `oldText` per change; `replace_all` replaces every non-overlapping exact occurrence; `lineRange` (A-B form) replaces larger whole-line blocks. If exact matching fails, Ally retries once normalizing invisible differences (trailing spaces, smart/Unicode quotes and dashes); an ambiguous match fails with E_MULTI_MATCH — add surrounding context. All changes in a file share the original read version, so no offset adjustment between changes. After writing, `validation` contains a concise syntax/compile check — the file is already written; fix it with another edit. Error codes: E_BAD_EDIT, E_VERSION_MISMATCH, E_PATH_OUTSIDE.", map[string]any{
+		functionTool("edit", "Validate and apply exact replacements across multiple workspace files in one call. Each file requires the current 6-char `version` from read; a stale one fails with E_VERSION_MISMATCH — re-read affected files and retry. IMPORTANT: `path` and `version` are required per-file fields — they must be written inside each `files` item, never at the top level of the call, and never omitted; a file object missing either one fails the whole call. Prefer a small exact unique `oldText` per change; `replace_all` replaces every non-overlapping exact occurrence; `lineRange` (A-B form) replaces larger whole-line blocks. If exact matching fails, Ally retries once normalizing invisible differences (trailing spaces, smart/Unicode quotes and dashes); an ambiguous match fails with E_MULTI_MATCH — add surrounding context. All changes in a file share the original read version, so no offset adjustment between changes. After writing, `validation` contains a concise syntax/compile check — the file is already written; fix it with another edit. Error codes: E_BAD_EDIT, E_VERSION_MISMATCH, E_PATH_OUTSIDE.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"files": map[string]any{
 					"type":        "array",
 					"minItems":    1,
 					"maxItems":    20,
-					"description": "Files to edit in this call (1-20). Put all independent changes for the same file in one changes array when possible (max 50); repeated normalized paths with the same version merge; total changes across all files must not exceed 200.",
+					"description": "Files to edit in this call (1-20): an array of file objects, each carrying its own `path`, `version`, and `changes` — `path`/`version` are per-file required fields and must never be hoisted to the top level of the call. Put all independent changes for the same file in one changes array when possible (max 50); repeated normalized paths with the same version merge; total changes across all files must not exceed 200.",
 					"items": map[string]any{
 						"type": "object",
 						"properties": map[string]any{
