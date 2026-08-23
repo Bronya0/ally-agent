@@ -426,11 +426,11 @@ code, pre {
   padding: 0;
   border: 0;
   border-radius: 4px;
-  color: #a7acb8;
+  color: #8d8d8d;
   background: transparent;
   cursor: pointer;
 }
-.workspace-explorer-close-content:hover { color: #fff; background: rgba(255, 255, 255, 0.08); }
+.workspace-explorer-close-content:hover { color: #f2f2f2; background: rgba(255, 255, 255, 0.07); }
 .workspace-explorer-close-content svg { width: 13px; height: 13px; }
 
 .workspace-explorer-title {
@@ -439,7 +439,7 @@ code, pre {
   gap: 6px;
   min-width: 0;
   overflow: hidden;
-  color: #9ca4b1;
+  color: #8d8d8d;
   font-size: 12px;
   font-weight: 600;
 }
@@ -459,12 +459,12 @@ code, pre {
   height: 22px;
   padding: 0;
   border: 0;
-  color: #a7acb8;
+  color: #8d8d8d;
   background: transparent;
   cursor: pointer;
 }
 
-.workspace-explorer-icon-btn:hover:not(:disabled) { color: #fff; background: rgba(255, 255, 255, 0.08); }
+.workspace-explorer-icon-btn:hover:not(:disabled) { color: #f2f2f2; background: rgba(255, 255, 255, 0.07); }
 .workspace-explorer-icon-btn:disabled { opacity: 0.45; cursor: default; }
 
 .workspace-explorer-header-actions {
@@ -1767,7 +1767,7 @@ code, pre {
   border-radius: 4px;
   font-size: 14px;
   line-height: 1;
-  color: #6b6b6b;
+  color: #a8a8a8;
   cursor: pointer;
   transition: background 0.1s, color 0.1s;
 }
@@ -2338,6 +2338,40 @@ code, pre {
 .workspace-history-menu {
   width: min(680px, calc(100vw - 24px));
   max-height: min(360px, calc(100vh - 72px));
+}
+
+/* 固定在弹框顶部的“添加工作空间”：sticky 容器 + 原生 naive-ui n-button */
+.workspace-history-menu .add-workspace-option {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--n-color);
+  padding: 4px 0;
+  cursor: default;
+}
+
+/* 容器本身不响应 hover/focus，交互全部交给内部 n-button */
+.workspace-history-menu .add-workspace-option:hover,
+.workspace-history-menu .add-workspace-option:focus,
+.workspace-history-menu .add-workspace-option:focus-visible {
+  background: var(--n-color);
+  outline: none;
+}
+
+.workspace-history-menu .add-workspace-option .n-button {
+  margin: 0 8px;
+}
+
+.workspace-history-menu .add-label {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+}
+
+.workspace-history-menu .add-icon {
+  font-size: 14px;
 }
 
 .markdown-body img {

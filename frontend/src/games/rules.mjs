@@ -103,10 +103,13 @@ function applyXiangqi(state, player, action) {
   if (!xiangqiMoveOK(b, fx, fy, tx, ty, p)) throw new Error('不符合棋子走法');
   const next = clone(state); next.board[ty][tx] = p; next.board[fy][fx] = ''; next.turn = 1 - player; next.seq++;
   if (isInCheck(next.board, player === 0)) throw new Error('不能送将或让将帅照面');
-  if (!next.board.flat().includes(player === 0 ? 'bK' : 'rK') || !hasLegalXiangqiMove(next.board, player !== 0)) next.winner = player;
+  const opponent = 1 - player;
+  if (!next.board.flat().includes(opponent === 0 ? 'bK' : 'rK')) next.winner = player;
+  else if (!hasLegalXiangqiMove(next.board, player !== 0)) next.winner = isInCheck(next.board, player !== 0) ? player : -1;
   return next;
 }
 function xiangqiMoveOK(b, fx, fy, tx, ty, p) {
+  if (fx === tx && fy === ty) return false;
   const dx = tx - fx, dy = ty - fy, ax = Math.abs(dx), ay = Math.abs(dy), red = isRed(p);
   const count = () => { let n = 0, x = fx + Math.sign(dx), y = fy + Math.sign(dy); while (x !== tx || y !== ty) { if (b[y][x]) n++; x += Math.sign(dx); y += Math.sign(dy); } return n; };
   const type = p[1];
@@ -133,7 +136,7 @@ function applyDoudizhu(state, player, action) {
   if (state.phase !== 'play' || player !== state.turn) throw new Error('还没轮到你');
   if (action.type === 'pass') { if (!state.last) throw new Error('第一手不能过'); next.passes++; next.turn = (player + 1) % 3; if (next.passes >= 2) { next.last = null; next.passes = 0; } next.seq++; return next; }
   if (action.type !== 'play' || !Array.isArray(action.cards) || !validCards(action.cards, state.hands[player]) || !beats(action.cards, state.last?.cards)) throw new Error('出牌不合法');
-  next.hands[player] = removeCards(state.hands[player], action.cards); next.last = { player, cards: action.cards.slice() }; next.passes = 0; next.turn = (player + 1) % 3; next.seq++; if (!next.hands[player].length) next.winner = player === state.landlord ? player : 1; return next;
+  next.hands[player] = removeCards(state.hands[player], action.cards); next.last = { player, cards: action.cards.slice() }; next.passes = 0; next.turn = (player + 1) % 3; next.seq++; if (!next.hands[player].length) next.winner = player; return next;
 }
 function validCards(cards, hand) { const copy = hand.slice(); for (const c of cards) { const i = copy.indexOf(c); if (i < 0) return false; copy.splice(i, 1); } return cards.length > 0 && isCombo(cards); }
 function removeCards(hand, cards) { const out = hand.slice(); for (const c of cards) out.splice(out.indexOf(c), 1); return out; }

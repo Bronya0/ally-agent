@@ -1,5 +1,12 @@
 <template>
-  <n-modal :show="show" preset="card" title="协作休息区" class="game-modal" :mask-closable="false" @close="hide">
+  <n-modal
+    :show="show"
+    preset="card"
+    title="协作休息区"
+    class="game-modal"
+    @update:show="(value) => !value && hide()"
+    @close="hide"
+  >
     <div class="game-layout">
       <aside class="game-sidebar">
         <div class="game-section-title">联机</div>
@@ -48,7 +55,7 @@
         </template>
         <template v-else-if="state.game === 'xiangqi'">
           <div class="xiangqi-board">
-            <button v-for="(piece, index) in flatXiangqi" :key="index" :class="['xiangqi-cell', { 'is-red': piece?.[0] === 'r' }]" @click="moveXiangqi(index)">{{ xiangqiPieceLabel(piece) }}</button>
+            <button v-for="(piece, index) in flatXiangqi" :key="index" :class="['xiangqi-cell', { 'is-red': piece?.[0] === 'r', 'is-selected': !!selectedPiece && selectedPiece.x === index % 9 && selectedPiece.y === Math.floor(index / 9) }]" @click="moveXiangqi(index)">{{ xiangqiPieceLabel(piece) }}</button>
           </div>
           <div class="game-status">{{ turnText }}</div>
         </template>
@@ -100,7 +107,7 @@ const playerIndex = computed(() => state.value?.players?.indexOf(peerId.value) ?
 const gridStyle = computed(() => ({ '--board-size': state.value?.size || 15 }));
 const flatXiangqi = computed(() => state.value?.board?.flat() || []);
 const myHand = computed(() => state.value?.hands?.[playerIndex.value] || []);
-const turnText = computed(() => state.value?.winner != null ? `玩家 ${state.value.winner + 1} 获胜` : state.value?.turn === playerIndex.value ? '轮到你' : '等待对手');
+const turnText = computed(() => state.value?.winner === -1 ? '和棋（困毙）' : state.value?.winner != null ? `玩家 ${state.value.winner + 1} 获胜` : state.value?.turn === playerIndex.value ? '轮到你' : '等待对手');
 const doudizhuStatus = computed(() => state.value?.phase === 'deal' ? (isHost.value ? '房主可以发牌' : '等待房主发牌') : state.value?.phase === 'bid' ? '叫地主阶段' : turnText.value);
 
 onMounted(async () => {
@@ -173,7 +180,20 @@ function stateFor(viewerID) { const copy = JSON.parse(JSON.stringify(state.value
 async function syncState(to = '') { if (!isHost.value || !connection.value) return; const targets = to ? peers.value.filter((p) => p.id === to) : peers.value; await Promise.all(targets.filter((p) => p.id !== peerId.value).map((p) => connection.value.send('sync', stateFor(p.id), p.id))); }
 async function handleMessage(msg) { if (msg.type === 'sync') { if (msg.from !== hostId.value || isHost.value || !msg.data?.game) return; state.value = msg.data; selectedCards.value = []; return; } if (msg.type === 'action' && isHost.value) { try { const index = state.value?.players?.indexOf(msg.from) ?? -1; if (index < 0) return; state.value = applyAction(state.value, index, msg.data); await syncState(); } catch {} } }
 function place(index) { const size = state.value.size; act({ type: 'place', x: index % size, y: Math.floor(index / size) }); }
-function moveXiangqi(index) { const x = index % 9, y = Math.floor(index / 9); if (!selectedPiece.value) { if (state.value.board[y][x]) selectedPiece.value = { x, y }; return; } const from = selectedPiece.value; selectedPiece.value = null; act({ type: 'move', fromX: from.x, fromY: from.y, toX: x, toY: y }); }
+function moveXiangqi(index) {
+  if (!state.value || state.value.winner != null) return;
+  const x = index % 9, y = Math.floor(index / 9), piece = state.value.board[y][x];
+  const mine = playerIndex.value === 0 ? 'r' : 'b';
+  if (!selectedPiece.value) {
+    if (state.value.turn === playerIndex.value && piece && piece[0] === mine) selectedPiece.value = { x, y };
+    return;
+  }
+  const from = selectedPiece.value;
+  if (from.x === x && from.y === y) { selectedPiece.value = null; return; }
+  if (piece && piece[0] === mine) { selectedPiece.value = { x, y }; return; }
+  selectedPiece.value = null;
+  act({ type: 'move', fromX: from.x, fromY: from.y, toX: x, toY: y });
+}
 function toggleCard(index) { const at = selectedCards.value.indexOf(index); if (at >= 0) selectedCards.value.splice(at, 1); else selectedCards.value.push(index); }
 function playCards() { act({ type: 'play', cards: selectedCards.value.map((i) => myHand.value[i]) }); selectedCards.value = []; }
 function bid(value) { act({ type: 'bid', value }); }
@@ -198,7 +218,7 @@ async function copyInvite() { try { await navigator.clipboard.writeText(inviteTe
 .board-cell { border: 0; background: #252525; padding: 0; display: grid; place-items: center; cursor: pointer; }
 .stone { width: 78%; aspect-ratio: 1; border-radius: 50%; box-shadow: 0 1px 3px #0008; }.stone.black { background: #1c1c1c; box-shadow: 0 0 0 1px rgba(255,255,255,.3), 0 1px 3px #000a; }.stone.white { background: #fff; box-shadow: 0 0 0 1px #0004, 0 1px 3px #000a; }
 .xiangqi-board { display: grid; grid-template-columns: repeat(9, 1fr); grid-template-rows: repeat(10, 1fr); width: min(520px, 75vw); aspect-ratio: 9 / 10; background: #252525; padding: 2px; gap: 1px; }
-.xiangqi-cell { border: 1px solid #3d3d3d; background: transparent; color: #e8dcc0; font-size: clamp(13px, 3.6vw, 26px); cursor: pointer; }.xiangqi-cell.is-red { color: #e5695c; }
+.xiangqi-cell { border: 1px solid #3d3d3d; background: transparent; color: #e8dcc0; font-size: clamp(13px, 3.6vw, 26px); cursor: pointer; }.xiangqi-cell.is-red { color: #e5695c; }.xiangqi-cell.is-selected { outline: 2px solid #18a058; outline-offset: -2px; background: rgba(24, 160, 88, 0.16); }
 .poker-table { width: 100%; display: grid; gap: 20px; }.cards-row { display: flex; flex-wrap: wrap; justify-content: center; gap: 5px; }.playing-card { min-width: 34px; height: 52px; background: #f5f5f5; color: #222; border: 1px solid #aaa; border-radius: 3px; cursor: pointer; }.playing-card.selected { transform: translateY(-8px); border-color: #18a058; }
 @media (max-width: 680px) { .game-layout { grid-template-columns: 1fr; }.game-sidebar { border-right: 0; border-bottom: 1px solid #2b2b2b; padding: 0 0 12px; } }
 </style>

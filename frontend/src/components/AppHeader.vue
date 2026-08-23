@@ -48,9 +48,6 @@ Public License v3. See the LICENSE file for details.
         <div v-if="dragGhostStyle" class="workspace-drag-ghost" :style="dragGhostStyle">{{ draggedTabLabel }}</div>
       </Teleport>
       <div class="header-tabs-actions">
-        <n-button class="header-icon-button tabs-action-button" size="small" quaternary @click="$emit('addWorkspace')" :title="$t('header.addWorkspace')" :aria-label="$t('header.addWorkspace')">
-          <PlusOutlined class="header-icon" />
-        </n-button>
         <n-dropdown
           trigger="click"
           scrollable
@@ -58,7 +55,7 @@ Public License v3. See the LICENSE file for details.
           :menu-props="historyMenuProps"
           @select="onHistorySelect"
         >
-          <n-button class="header-icon-button tabs-action-button" size="small" quaternary :title="$t('header.workspaceHistory')" :aria-label="$t('header.workspaceHistory')">
+          <n-button class="header-icon-button tabs-action-button history-action-button" size="small" quaternary :title="$t('header.workspaceHistory')" :aria-label="$t('header.workspaceHistory')">
             <HistoryOutlined class="header-icon" />
           </n-button>
         </n-dropdown>
@@ -105,7 +102,6 @@ Public License v3. See the LICENSE file for details.
 import { computed, h, onBeforeUnmount, ref } from 'vue';
 import { NDropdown } from 'naive-ui';
 import AllyWordmark from './AllyWordmark.vue';
-import PlusOutlined from '@vicons/antd/PlusOutlined';
 import HistoryOutlined from '@vicons/antd/HistoryOutlined';
 import BarChartOutlined from '@vicons/antd/BarChartOutlined';
 import AppstoreOutlined from '@vicons/antd/AppstoreOutlined';
@@ -397,6 +393,10 @@ function toggleMaximise() {
 }
 
 function onHistorySelect(key) {
+  if (key === '__add__') {
+    emit('addWorkspace');
+    return;
+  }
   if (key && key !== '__empty__') {
     emit('historySelect', key);
   }
@@ -508,6 +508,16 @@ function historyMenuProps() {
 .repository-button.update-available:hover {
   color: #9af0bd !important;
   background: rgba(74, 222, 128, 0.18) !important;
+}
+
+/* 历史工作空间按钮：琥珀色图标与其他 header 图标区分（参考底部会话按钮 #e0a070） */
+.history-action-button {
+  color: #e0a070 !important;
+}
+
+.history-action-button:hover,
+.history-action-button:focus-visible {
+  color: #f0b887 !important;
 }
 
 .brand {
@@ -825,7 +835,7 @@ body.platform-darwin .window-close-icon {
   border: 0;
   border-radius: 4px;
   background: transparent;
-  color: #737373;
+  color: #a8a8a8;
   cursor: pointer;
   transition: background 0.12s, color 0.12s;
   margin-left: auto;

@@ -367,7 +367,7 @@ Public License v3. See the LICENSE file for details.
 
 <script setup>
 import { computed, defineAsyncComponent, h, nextTick, onErrorCaptured, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
-import { createDiscreteApi, darkTheme } from 'naive-ui';
+import { NButton, createDiscreteApi, darkTheme } from 'naive-ui';
 import MarkdownIt from 'markdown-it';
 // @traptitech/markdown-it-katex 把 $...$ / $$...$$ 交给 katex 渲染。
 // katex 本体已作为 mermaid 的间接依赖存在于依赖树中，这里显式声明以避免
@@ -437,6 +437,7 @@ import {
 } from '../bindings/ally-dev/internal/app/app';
 import { Application, Browser, Events, Window } from '@wailsio/runtime';
 import CloseOutlined from '@vicons/antd/CloseOutlined';
+import PlusOutlined from '@vicons/antd/PlusOutlined';
 import ReloadOutlined from '@vicons/antd/ReloadOutlined';
 import AllyWordmark from './components/AllyWordmark.vue';
 import ComposerInfoBar from './components/ComposerInfoBar.vue';
@@ -2386,7 +2387,7 @@ function workspaceHistoryDedupeKey(path) {
   return isWindowsPath ? value.toLowerCase() : value;
 }
 
-function dedupeWorkspaceHistory(paths, limit = 30) {
+function dedupeWorkspaceHistory(paths, limit = 50) {
   const source = Array.isArray(paths) ? paths : [];
   const seen = new Set();
   const result = [];
@@ -2487,23 +2488,63 @@ function addPromptHistory(text) {
 }
 
 const historyOptions = computed(() => {
-  const recent = [...workspaceHistory.value].reverse().slice(0, 30);
-  if (recent.length === 0) return [{ label: t('app.history.empty'), disabled: true, key: '__empty__' }];
-  return recent.map((path) => {
-    const label = path.split(/[/\\]/).filter(Boolean).pop() || path;
-    return {
-      label: () => h('span', { class: 'hist-label' }, [
-        h('span', { class: 'hist-name' }, label),
-        h('span', { class: 'hist-path' }, `  —  ${path}`),
-        h('span', {
-          class: 'hist-del',
-          title: t('app.history.remove'),
-          onClick: (e) => { e.stopPropagation(); removeFromHistory(path); },
-        }, () => h(CloseOutlined)),
-      ]),
-      key: path,
-    };
-  });
+  const recent = [...workspaceHistory.value].reverse().slice(0, 50);
+  return [
+  {
+    key: '__add__',
+    props: {
+      class: 'add-workspace-option',
+    },
+    label: () =>
+      h(
+        NButton,
+        {
+          size: 'small',
+          type: 'primary',
+          ghost: true,
+          block: true,
+        },
+        {
+          default: () => [
+            h('span', { class: 'add-label' }, [
+              h(PlusOutlined, { class: 'add-icon' }),
+              t('header.addWorkspace'),
+            ]),
+          ],
+        },
+      ),
+  },
+  ...(recent.length === 0
+    ? [{ label: t('app.history.empty'), disabled: true, key: '__empty__' }]
+    : recent.map((path) => {
+        const label = path.split(/[/\\]/).filter(Boolean).pop() || path;
+        return {
+          label: () =>
+            h('span', { class: 'hist-label' }, [
+              h('span', { class: 'hist-name' }, label),
+              h('span', { class: 'hist-path' }, `  —  ${path}`),
+              h('span', {
+                class: 'hist-del',
+                role: 'button',
+                tabindex: 0,
+                title: t('app.history.remove'),
+                'aria-label': t('app.history.remove'),
+                onClick: (e) => {
+                  e.stopPropagation();
+                  removeFromHistory(path);
+                },
+                onKeydown: (e) => {
+                  if (e.key !== 'Enter' && e.key !== ' ') return;
+                  e.preventDefault();
+                  e.stopPropagation();
+                  removeFromHistory(path);
+                },
+              }, h(CloseOutlined)),
+            ]),
+          key: path,
+        };
+      })),
+  ];
 });
 
 function onHistorySelect(key) {

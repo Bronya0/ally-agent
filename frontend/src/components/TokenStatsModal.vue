@@ -13,7 +13,6 @@ Public License v3. See the LICENSE file for details.
     preset="card"
     :title="$t('stats.title')"
     :style="{ width: 'min(1020px, calc(100vw - 48px))' }"
-    :mask-closable="false"
     @update:show="(value) => !value && $emit('close')"
   >
     <template #header-extra>
