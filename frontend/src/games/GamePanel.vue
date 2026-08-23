@@ -47,7 +47,7 @@
         </template>
         <template v-else-if="state.game === 'xiangqi'">
           <div class="xiangqi-board">
-            <button v-for="(piece, index) in flatXiangqi" :key="index" class="xiangqi-cell" @click="moveXiangqi(index)">{{ xiangqiPieceLabel(piece) }}</button>
+            <button v-for="(piece, index) in flatXiangqi" :key="index" :class="['xiangqi-cell', { 'is-red': piece?.[0] === 'r' }]" @click="moveXiangqi(index)">{{ xiangqiPieceLabel(piece) }}</button>
           </div>
           <div class="game-status">{{ turnText }}</div>
         </template>
@@ -193,11 +193,11 @@ async function copyInvite() { try { await navigator.clipboard.writeText(inviteTe
 .game-error { color: #e88989; font-size: 12px; }
 .game-board-wrap { display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 16px; min-width: 0; }
 .game-empty { color: #777; font-size: 13px; }
-.board-grid { display: grid; grid-template-columns: repeat(var(--board-size), 1fr); grid-template-rows: repeat(var(--board-size), 1fr); width: min(520px, 70vw); aspect-ratio: 1; background: #4d3822; border: 4px solid #d8b26a; padding: 1px; gap: 1px; }
-.board-cell { border: 0; background: #d8b26a; padding: 0; display: grid; place-items: center; cursor: pointer; }
-.stone { width: 78%; aspect-ratio: 1; border-radius: 50%; box-shadow: 0 1px 3px #0008; }.stone.black { background: #1c1c1c; box-shadow: 0 0 0 1px rgba(255,255,255,.18), 0 1px 3px #0008; }.stone.white { background: #fff; box-shadow: 0 0 0 1px #0004, 0 1px 3px #0008; }
-.xiangqi-board { display: grid; grid-template-columns: repeat(9, 1fr); grid-template-rows: repeat(10, 1fr); width: min(520px, 75vw); aspect-ratio: 9 / 10; background: #c29a62; padding: 6px; gap: 1px; }
-.xiangqi-cell { border: 1px solid #5c4326; background: transparent; color: #351f10; font-size: clamp(13px, 3.6vw, 26px); cursor: pointer; }
+.board-grid { display: grid; grid-template-columns: repeat(var(--board-size), 1fr); grid-template-rows: repeat(var(--board-size), 1fr); width: min(520px, 70vw); aspect-ratio: 1; background: #141414; border: 1px solid #333; padding: 1px; gap: 1px; }
+.board-cell { border: 0; background: #252525; padding: 0; display: grid; place-items: center; cursor: pointer; }
+.stone { width: 78%; aspect-ratio: 1; border-radius: 50%; box-shadow: 0 1px 3px #0008; }.stone.black { background: #1c1c1c; box-shadow: 0 0 0 1px rgba(255,255,255,.3), 0 1px 3px #000a; }.stone.white { background: #fff; box-shadow: 0 0 0 1px #0004, 0 1px 3px #000a; }
+.xiangqi-board { display: grid; grid-template-columns: repeat(9, 1fr); grid-template-rows: repeat(10, 1fr); width: min(520px, 75vw); aspect-ratio: 9 / 10; background: #252525; padding: 2px; gap: 1px; }
+.xiangqi-cell { border: 1px solid #3d3d3d; background: transparent; color: #e8dcc0; font-size: clamp(13px, 3.6vw, 26px); cursor: pointer; }.xiangqi-cell.is-red { color: #e5695c; }
 .poker-table { width: 100%; display: grid; gap: 20px; }.cards-row { display: flex; flex-wrap: wrap; justify-content: center; gap: 5px; }.playing-card { min-width: 34px; height: 52px; background: #f5f5f5; color: #222; border: 1px solid #aaa; border-radius: 3px; cursor: pointer; }.playing-card.selected { transform: translateY(-8px); border-color: #18a058; }
 @media (max-width: 680px) { .game-layout { grid-template-columns: 1fr; }.game-sidebar { border-right: 0; border-bottom: 1px solid #2b2b2b; padding: 0 0 12px; } }
 </style>
