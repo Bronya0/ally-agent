@@ -115,8 +115,8 @@ Core runtime flow:
 4. `buildToolsWithMcp()` combines static built-in tools with connected MCP tools.
 5. `streamModelResponse()` dispatches to the configured provider adapter.
 6. Streaming deltas and tool-call updates are emitted to the frontend through runtime events.
-7. Non-file tool calls run concurrently with a max concurrency of 4; built-in file mutations run afterward in `toolCallIndex` order. `wait` must be the only call in its tool batch.
-8. Tool results are appended to same-turn model context and the loop repeats until no tool calls remain or `maxAgentSteps` is reached.
+7. Non-file tool calls run concurrently with a max concurrency of 4; built-in file mutations run afterward in `toolCallIndex` order. `wait`, `ask`, and `suggest` must each be the only call in their tool batch (see batch policy).
+8. Tool results are appended to same-turn model context and the loop repeats until no tool calls remain or `maxAgentSteps` (9999) is reached; a single successful `suggest` call also ends the run.
 9. Saved session history keeps tool calls and their model-facing tool results verbatim; system messages and image payloads are dropped (see `sanitizeHistoryMessages()`).
 
 Connected MCP tools are sorted by server, tool name, and function name before being exposed so request tool ordering remains deterministic across turns.
@@ -199,7 +199,16 @@ Tool result channels:
 - converts multi-content messages to text summaries for persistence
 - trims history by an estimated-token budget at user-message boundaries (see `trimSavedHistory()`), not a fixed message count
 
-中断/取消语义：ESC 或 Stop 取消时 `ctx` 被取消，`runChat` 通过 deferred 检查点保存已完成的工具调用/结果与当前提问（见 `cancelledTurnMarker()`），并在历史中追加 `<ally-cancelled>` user-role 控制标记，让下一轮模型能区分"用户手动中断"与 provider 报错。部分流式输出不保留。
+Turn-level retry and interruption（`runChat` 每个 LLM step 的循环）:
+
+- 每个 step 最多重试 3 次（`maxTurnRetries`）；遇到 `shouldRetryLLMError()` 判定的可重试错误（超时/断流/5xx/常见网络中断串）且未达上限时，按 `llmRetryDelay()`（500ms×2^n，上限 10s）退避后整轮重发，并发射 `run:retry` 事件（payload 含 `attempt/maxAttempts/error/waitMs/reason:"stream_interrupted"/discardCurrentResponse:true`）。
+- provider 返回 400 且本 step 未 sanitize 过：`sanitizeHistoryMessages(messages)` 修复上下文（若缩短则重建 requestMessages，含重新附加 plan），发 `run:retry {reason:"context sanitized after provider 400"}` 后 continue（不占重试次数）。
+- 重试等待期间 ctx 被取消：追加 `cancelledTurnMarker()` 并以 `run:error`(kind=cancelled) 返回。
+- provider 适配器内还有一层 pre-first-event 重试（`shouldRetryLLMError` + `emitLLMRetryEvent`，多 key 时被关闭），其 `run:retry` 事件带 `keyIndex/totalKeys`。
+- `run:inject` 事件在排队用户消息进入上下文时发射（run 工作期间用户发消息，当前工具批完成后注入，下一模型请求可见）。
+- 图片生成（`run:image`）通过图片注入 user 消息进入模型上下文，仅存活单轮。
+
+中断/取消语义：ESC 或 Stop 取消时 `ctx` 被取消，`runChat` 通过 deferred 检查点保存已完成的工具调用/结果与当前提问（见 `cancelledTurnMarker()`），并在历史中追加 `<ally-cancelled>` user-role 控制标记，让下一轮模型能区分"用户手动中断"与 provider 报错。流式中断（`stream_interrupted`）整轮重试时会丢弃当前回合的流式输出（前端 `discardInterruptedResponse`）；400-sanitize 修复路径保留已流出的 assistant 文本。
 
 ---
 
@@ -304,8 +313,8 @@ Key rules:
 - `executeTool()` decodes JSON with `DisallowUnknownFields()` so typoed parameters fail loudly.
 - MCP tools are appended dynamically and keep their upstream schemas.
 - Plan mode blocks side-effectful tools and MCP tools.
-- `wait` requires `seconds` and a short user-visible `reason`, is cancellable through the active run context, and must be the only tool call in its batch.
-- Tool results use `{ok, data, error}`.
+- `wait` requires `seconds` and a short user-visible `reason`, is cancellable through the active run context, and must be the only tool call in its batch (`ask` and `suggest` have the same single-call barrier).
+- Tool results use `{ok, data, error, errorCode, details}`.
 
 Built-in model-facing tools:
 
@@ -329,6 +338,8 @@ Built-in model-facing tools:
 | `subagent` | Spawn a sub-agent for a scoped task (requires a `role` name, shown as the card label and injected into the sub-agent system prompt) |
 | `scheduled_task` | Create, list, or delete temporary isolated Agent tasks for the current Ally process |
 | `skill` | Load an enabled skill |
+| `render_html` | Render a self-contained HTML snippet inline in the chat UI as a sandboxed srcdoc iframe (max 50k chars); mounted only after the tool completes so arguments can stream first |
+| `suggest` | Suggest 1–4 click-to-send follow-up chips; hidden tool (no running card), must be the only call in its batch, a single successful call ends the run |
 
 MCP tools are named:
 
@@ -473,7 +484,7 @@ A tool card showing "Used \<Name\>" (or "Using \<Name\>" while running) instead 
 - `frontend/src/components/ToolCallCard.vue` — verb span = `toolVerb()`, name span = `toolDisplayName()`. When `hasNamedVerb(msg.name)` is false the name span falls back to `formatToolName(msg.name)`, which is exactly why a missing entry renders "Used Grep" rather than "Grep" (the verb defaults to "Used", the name defaults to the raw tool name).
 - `frontend/src/App.vue` — `toolKind(name)` derives `msg.kind`. The verb table is keyed by name (not kind) on purpose, so check the `TOOL_VERBS` key first; `toolKind` is rarely the culprit.
 
-`msg.name` is streamed straight from the backend (`tool:start` / `tool:update` payload `name` = `call.Function.Name`), with no case-folding anywhere in the pipeline. Casing is deliberate and must match the backend registration in `internal/tools/shared/builtins.go`: `Glob` is uppercase, `grep` is lowercase. Add a tool, rename one, or change its casing and forget the matching `TOOL_VERBS` key → the card reverts to "Used \<Name\>". (grep regressed exactly this way in `4dbbbdd`, where the verb entry was deleted leaving only a `toolDisplayName` special-case that fixed the name span but not the verb span; restored in `a08106e` by re-adding `grep: ['Grep','Grep','Grep']`.)
+`msg.name` is streamed straight from the backend (`tool:start` / `tool:update` payload `name` = `call.Function.Name`), with no case-folding anywhere in the pipeline. Casing is deliberate and must match the backend registration in `internal/tools/shared/builtins.go` (currently all built-in tool names are lowercase, e.g. `grep`; `Glob` was removed). Add a tool, rename one, or change its casing and forget the matching `TOOL_VERBS` key → the card reverts to "Used \<Name\>". (grep regressed exactly this way in `4dbbbdd`, where the verb entry was deleted leaving only a `toolDisplayName` special-case that fixed the name span but not the verb span; restored in `a08106e` by re-adding `grep: ['Grep','Grep','Grep']`.)
 
 ---
 
@@ -534,7 +545,7 @@ Backend 会话/历史/上下文核算的完整说明（索引与 gzip 快照、�
 
 - 每个工作区 Tab 持有有效 `sessionId`；创建或切换会话立即更新该链接。
 - Header 与内容区 Tabs 共享受控 `activeWorkspaceId`；`Ctrl/Cmd+Left/Right` 切换，拖拽排序操作同一 `workspaceTabs` 数组。
-- 每个打开的 Tab 常驻一个 `ChatMessages` + `n-tab-pane`（`display-directive="show"`）；该 pane 同时拥有会话计划面板和 `WorkspaceExplorer` 树/编辑器实例，切换不得共享计划/编辑器状态、卸载已打开 Tab 的消息或引入合成滚动锚点。
+- 每个打开的 Tab 常驻一个 `ChatMessages` + `n-tab-pane`（`display-directive="show"`）；该 pane 拥有会话计划面板；`WorkspaceExplorer` 树/编辑器挂在 n-tabs **外层**（每个 Tab 一个常驻实例 + `v-show`，编辑草稿不因切 Tab 丢失）。切换不得共享计划/编辑器状态、卸载已打开 Tab 的消息或引入合成滚动锚点。
 - 会话列表只显示当前工作区的会话；选择历史会话不会切换到其他工作区或静默重绑到别的 Tab。
 - 带显式 `sessionId` 的运行时事件绝不回退到当前可见会话；终止事件仅在 `runId` 仍匹配该会话当前 run 时接受。
 - 输入框/文本域/下拉/可编辑元素内禁用 `Ctrl/Cmd+Left/Right` 工作区导航。
@@ -546,7 +557,7 @@ Backend 会话/历史/上下文核算的完整说明（索引与 gzip 快照、�
 
 `subagent` starts a child agent loop bounded by a hard 1000-step cap (shared with the scheduled-task maximum); wall-clock is otherwise unlimited. Cancellation still follows the parent run or an explicit stop request.
 
-Sub-agents receive connected MCP tools and share the manager's invalid-session reconnect path. Interactive/nested tools such as `ask` and `subagent`, plus parent-owned todo/scheduled/memory-write state, remain excluded.
+Sub-agents receive connected MCP tools and share the manager's invalid-session reconnect path. Interactive/nested tools such as `ask` and `subagent` (`agent_delegate` alias), plus `plan`, `skill`, `scheduled_task`, remain excluded (`subagentTools`). The default step budget is 25 (`defaultSubagentSteps`, range 1–1000); when a sub-agent exhausts its budget it is forced into a final report-only turn (`forceSubagentFinalReport`, status `timed_out`).
 
 Completed sub-agent records release their cancel function, keep at most 100 tool events each, and are globally pruned to the latest 50 completed records. Running records are never pruned.
 
@@ -616,7 +627,7 @@ Example MCP config:
 - `readTextFile` rejects binary files using NUL checks, after transcoding UTF-16 LE/BE (with or without a BOM) to UTF-8; edited UTF-16 files are written back as UTF-8.
 - Release packages bundle ripgrep under the executable's `tools/` directory; development builds fall back to `rg` from `PATH`.
 - On Windows, `command` and `service` prefer **bash** from Git for Windows over PowerShell. Detection order: a validated `gitBashPath` setting (manual override) → Git for Windows common install paths → derive Git Bash from `git.exe` on `PATH` → a `bash.exe` on `PATH` only when it belongs to the same Git for Windows installation → fallback to PowerShell (`pwsh.exe` → `powershell.exe`). Arbitrary `bash.exe` launchers such as `C:\Windows\System32\bash.exe` (legacy WSL) are rejected because their Linux PATH and argument forwarding break Windows tool discovery and shell expansion. When Git Bash is not detected, startup warns the user to set `gitBashPath` in Settings. The system prompt dynamically reflects which shell is active so the model generates correct syntax. Linux/macOS always use `bash -c` and ignore `gitBashPath`.
-- On macOS, system proxy detection uses the built-in `/usr/sbin/scutil --proxy` command without cgo, with a bounded timeout; Ally parses fixed HTTP/HTTPS/SOCKS settings, bypass entries, and PAC metadata. Linux continues using proxy environment variables, and PAC-only configurations remain explicitly unsupported until PAC evaluation is implemented.
+- On macOS, system proxy detection uses the built-in `/usr/sbin/scutil --proxy` command without cgo, with a bounded timeout; Ally parses fixed HTTP/HTTPS/SOCKS settings, bypass entries, and PAC metadata. Linux continues using proxy environment variables, and PAC-only configurations remain explicitly unsupported until PAC evaluation is implemented. Proxy fail-closed means `proxyForConfig()` returns an error (request fails) when proxy resolution errors out or system proxy is not enabled — never silently bypasses to direct. All outbound dials go through `guardedDialContext`, which rejects private IPs when `allowPrivateNetwork` is off (SSRF guard, applies to NO_PROXY direct paths too); the proxy host itself is always allowed.
 - On macOS/Linux, `infra_shell_env.go` probes the user's login shell once (`$SHELL -l -c /usr/bin/env`, with an OS-account shell fallback), appends only missing absolute `PATH` entries to the inherited environment, and shares that environment with `command` and `service`. Probe failures leave the original environment unchanged; other profile variables such as `GOPATH` and `NVM_DIR` are not imported.
 - When bash is active on Windows, safety checks detect both Windows-style (`C:\...`) and MSYS2-style (`/c/...`) absolute paths outside the workspace.
 - Tool output is capped by `maxToolOutput`; HTTP tools use bounded response sizes, timeouts, redirect limits, and clear user agent defaults.
@@ -689,12 +700,12 @@ These rules are required for future changes. They exist to keep Agent behavior d
 
 | 事件 | 后端节流位置 | 前端缓冲位置 |
 |------|--------------|--------------|
-| `run:stream` (content+reasoning 合并) | `runStreamDeltaEmitter` (`infra_stream.go`, 32ms / 512B)，流末 `flush()` 兜底；`run:image` 发送前先 flush | `queueStreamDelta` + `setTimeout(48ms) → requestAnimationFrame` (`App.vue`) |
+| `run:stream` (content+reasoning 合并；reasoning 只发字符数 `reasoningLen`，不发正文) | `runStreamDeltaEmitter` (`infra_stream.go`, **64ms 纯时间节流，无字节阈值**)，流末 `flush()` 兜底；`run:image` 发送前先 flush | `queueStreamDelta` + **纯 `requestAnimationFrame` 合帧（~16ms）** (`App.vue`；48ms setTimeout 链已废弃) |
 | `tool:update` | `toolCallProgressTracker.eventsWithForce` (`infra_stream.go`, 200ms / 2048B)，超阈值且在窗口内早 continue；`forceEvents()` 流末绕过节流。`command` 约每 120ms 发布累计输出并在结束前强制最终快照 | `bufferToolUpdate` + `setTimeout(120ms) → requestAnimationFrame`；命令卡短输出按内容收缩，最多约六行后滚动，并自动跟随末尾 |
 
 ### 生命周期事件（天然低频，无需节流）
 
-**Chat loop (`app.go` `runChat`)**：`run:start` / `run:llm_wait` / `run:done` / `run:error`（每轮 1 次）、`run:compact` / `run:compacted`（压缩时）、`run:image`（图片 delta）、`tool:result` / `tool:error`（每工具调用 1 次）、`tokens:update`（每 LLM step 1 次）、`tokens:reset`（`ResetWorkspaceTokenUsage`）
+**Chat loop (`app.go` `runChat`)**：`run:start` / `run:llm_wait` / `run:done` / `run:error`（每轮 1 次）、`run:retry`（重试时，含 adapter 内 key 切换与 turn-level 重试）、`run:inject`（排队消息进上下文）、`run:compact` / `run:compacted`（压缩时）、`run:image`（图片 delta）、`tool:result` / `tool:error`（每工具调用 1 次）、`tokens:update`（每 LLM step 1 次，**provider 无 usage 时静默跳过**）、`tokens:reset`（`ResetWorkspaceTokenUsage`）
 
 **Ask (`app.go`)**：`ask:ready` / `ask:closed` — 每次 ask 1 次
 
@@ -703,6 +714,8 @@ These rules are required for future changes. They exist to keep Agent behavior d
 **MCP (`app.go`)**：`mcp:status` — 服务器状态变更时（一次发全部状态）
 
 **Dependencies/Config (`app.go`)**：`dependency:missing` / `config:warning` — 罕见，前端按 tool 去重
+
+**更新 (`biz_update.go`)**：`update:progress` / `update:ready` / `update:applied` / `update:error` / `update:cancelled` — 自更新生命周期点
 
 **Services (`orch_services.go`)**：`service:update` — 仅 `startServiceWithConfig` / `finalizeService` / `stopService` 三处，不随输出滚动触发
 
@@ -725,7 +738,7 @@ lowercase + 冒号分隔，如 `run:stream`、`tool:result`、`mcp:status`、`su
 ## Performance And Memory Notes (Ally-specific)
 
 - `tool:update` 事件在 `toolCallProgressTracker.eventsWithForce` 中带 `toolUpdateThrottle = 200ms` + `toolUpdateThreshold = 2048` 字节节流；`forceEvents()` 在流结束后绕过节流。`command` 执行时以约 120ms 间隔发送有变化的累计 stdout/stderr，并在命令结束前发送最终输出快照。测试见 `TestToolCallProgressTrackerThrottlesLargeUpdates`。
-- 前端 `App.vue` 用 `toolUpdateBuffers` Map + `setTimeout(120ms) → requestAnimationFrame` 批量 flush `tool:update`，并在终端事件处理前显式 `flushToolUpdateBuffer()`；`streamBuffers` 走同样的 `queueStreamDelta` 模式处理 `run:stream`。
+- 前端 `App.vue` 用 `toolUpdateBuffers` Map + `setTimeout(120ms) → requestAnimationFrame` 批量 flush `tool:update`，并在终端事件处理前显式 `flushToolUpdateBuffer()`；`streamBuffers` 走 `queueStreamDelta` + 纯 rAF 合帧处理 `run:stream`（48ms setTimeout 链已废弃）。
 - 单 session `localStorage` 预算 240KB，大 tool 预览 / edit 参数 / 附件 Base64 / Diff 在序列化前剥除或截断。
 - 前端 Mermaid SVG DOM 视口外卸载，16 条 / 2M 字符 LRU；`render_html` 流式期间不挂载 iframe，完成后再挂一个 sandboxed iframe。
 - `command` / `service` 后端 rolling buffer 512KB / 进程，最多 8 个活动进程；服务停止或退出后立即清理记录。

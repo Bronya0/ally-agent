@@ -6214,6 +6214,17 @@ function sanitizeStoredMessage(msg) {
   next.editDiff = truncateStoredText(next.editDiff, MAX_STORED_TOOL_BODY_CHARS, t('app.cache.diffTrimmed'));
   next.editOldString = '';
   next.editNewString = '';
+  // Sub-agent inline tool rows: keep only a bounded tail so long sub-agent
+  // sessions do not bloat the persisted snapshot. args are the largest field
+  // and go stale fast (they mirror the truncated preview shown live).
+  if (Array.isArray(next.toolCalls)) {
+    const KEEP = 50;
+    next.toolCalls = next.toolCalls.slice(-KEEP).map((tc) => ({
+      ...tc,
+      args: truncateStoredText(tc?.args, 4096, t('app.cache.toolTrimmed')),
+      summary: truncateStoredText(tc?.summary, 2048, t('app.cache.toolTrimmed')),
+    }));
+  }
   if (Array.isArray(next.editEntries)) {
     next.editEntries = next.editEntries.map((entry) => ({
       ...entry,

@@ -10,23 +10,23 @@
 
 - [entry] main.go — Wails v3 应用入口；`NewApp()` 装配、嵌入 `frontend/dist` 资源、更新重启 helper、窗口选项
 - [service] internal/app/ — Agent 核心编排（唯一后端包，也是 Wails 绑定面；按前缀分层：无前缀=核心、prov_=provider、host_=宿主桥接、orch_=工具编排、biz_=业务模块、infra_=工具基础设施）
-  - app.go — 编排核心：`App` 长生命周期状态、`ConfigState`/`ChatRequest` 等 DTO、`runChat` 聊天循环、`executeTool` 分发、`StartChat`/`CancelRun`/会话生命周期、ask/wait、前端兼容绑定 [Lines: 2394]
-  - prov_model.go — provider 流式适配：`streamOpenAIChat`/`streamOpenAIResponses`/`streamAnthropicMessages`、SSE 解析、重试与多 key 故障切换、`modelStreamEvent`/`modelStreamResult` [Lines: 1706]
+  - app.go — 编排核心：`App` 长生命周期状态、`ConfigState`/`ChatRequest` 等 DTO、`runChat` 聊天循环（含 turn-level 重试 `maxTurnRetries=3`）、`executeTool` 分发、`StartChat`/`CancelRun`/会话生命周期、ask/wait/suggest、前端兼容绑定 [Lines: 2403]
+  - prov_model.go — provider 流式适配：`streamOpenAIChat`/`streamOpenAIResponses`/`streamAnthropicMessages`、SSE 解析、终止事件校验（gotFinishReason/gotTerminalEvent）、重试与多 key 故障切换（冷却 30min/10s、探测一次）、`modelStreamEvent`/`modelStreamResult` [Lines: 2150]
   - prov_proxy.go / prov_proxy_windows.go / prov_proxy_darwin.go / prov_proxy_other.go / prov_proxy_scutil.go — 代理感知 HTTP client、系统代理检测、transport 缓存失效
   - host_desktop.go — Wails 生命周期、窗口创建、系统对话框、`wailsAppHandle` 注入
   - host_events.go — `eventSink` 事件边界（`App.emit` 唯一出口）、`fanoutEventSink` 广播
   - host_network.go — 网络事件出口：SSE `/events`、轮询 `/poll`、环形缓冲、WS 预留（默认关闭，`ALLY_NETWORK_EVENTS=1` 启用）
-  - host_tray.go — 系统托盘
+  - host_tray.go — 系统托盘（代码完整但当前发布禁用：`main.go`/`host_desktop.go` 中调用被注释；`closeToTrayEnabled` 配置保留）
   - host_taskbar_windows.go / host_taskbar_other.go — 任务栏进度与窗口闪烁
   - host_process_windows.go / host_process_other.go — 子进程窗口与进程树控制
-  - host_notifications.go — 桌面通知服务注入（`SetNotifier`）与任务完成/出错/取消提示音 `notifyCompletion`（Windows 内置 toast 事件音，其他平台默认音）
+  - host_notifications.go — 桌面通知服务注入（`SetNotifier`）与任务完成/出错/取消提示音 `notifyCompletion`（Windows 内置 toast 事件音，其他平台默认音；仅窗口最小化时发送，700ms 冷却）
   - host_update_relaunch_darwin.go / host_update_relaunch_other.go — 更新后重启辅助
   - biz_config.go — 配置域：`mergeConfig`、`SaveConfig`/`ReloadConfig`、key 池归一化、`effectiveConfig`、`pathRuntime`、`appDataDir` [Lines: 512]
-  - biz_sessions.go — 会话索引/快照/历史持久化：gzip 历史读写、裁剪、会话文件原子替换 [Lines: 1138]
+  - biz_sessions.go — 会话索引/快照/历史持久化：gzip 历史读写、裁剪、会话文件原子替换；磁盘为三类并行文件（`sessions/index.json` + `sessions/<id>.json.gz` 快照 + `histories/<id>.json.gz`） [Lines: 1286]
   - biz_context.go — 请求消息组装：`buildMessages`、系统上下文、todo 状态、附件上下文、上下文 Token 统计与缓存 [Lines: 1071]
   - biz_prompt.go — 系统提示词管线：`buildSystemPromptParts`、skill 元数据、全局记忆索引、AGENTS/CLAUDE 加载
   - biz_workspace.go — 工作区文件列表、workspace map（`sessionWorkspaceMap` 按会话冻结快照，保证跨 run 前缀字节稳定）、路径搜索索引、基于 `go-git` gitignore 子包的根规则匹配 [Lines: 908]
-  - biz_workspace_editor.go — UI 文件浏览器专用的受限完整文本读写（2 MiB 上限、版本冲突校验、原子写入、与 Agent 文件操作共用锁）
+  - biz_workspace_editor.go — UI 文件浏览器专用的受限完整文本读写（16 MiB 上限、版本冲突校验、原子写入、与 Agent 文件操作共用锁）
   - biz_skills.go / biz_builtin_skills.go — skill 发现/加载/启停（目录、standalone md、内置嵌入）
   - biz_mcp.go — MCP 生命周期：`McpManager` 连接/重连/工具发现、前端绑定、MCP 工具执行 [Lines: 845]
   - biz_update.go — 自更新：发布检查（Atom feed）、下载、解压、应用、回滚、跳过列表 [Lines: 1462]
@@ -65,8 +65,8 @@
   - shared/ — `CodedError` 与内置工具 schema（`Builtins()`）
 - [infra] internal/builtin_skills/ — 内置 skill 嵌入资源（go:embed `skills/<name>/SKILL.md`）
 - [ui] frontend/src/ — Vue 3 单页桌面 UI（Naive UI）
-  - App.vue — 唯一主组件：状态、Wails 事件路由、工作区 Tab、当前工作区历史会话筛选、流式缓冲、Mermaid 渲染 [Lines: 296KB]
-  - components/ — AppHeader、ChatMessages、WorkspaceExplorer、SettingsModal、ToolCallCard、SubagentInlineCard、TaskCenterPanel、TokenStatsModal 等组件；App.vue 将计划面板和 WorkspaceExplorer 树/编辑器挂在各自 `n-tab-pane` 内，WorkspaceExplorer 按需挂载，目录懒加载并在选择文件后覆盖内容区编辑/高亮预览
+  - App.vue — 唯一主组件：状态、Wails 事件路由、工作区 Tab、当前工作区历史会话筛选、流式缓冲、Mermaid 渲染 [Lines: 318KB]
+  - components/ — AppHeader、ChatMessages、WorkspaceExplorer、SettingsModal、ToolCallCard、SubagentInlineCard、TaskCenterPanel、TokenStatsModal 等组件；App.vue 将计划面板挂在各自 `n-tab-pane` 内，WorkspaceExplorer 树/编辑器挂在 n-tabs **外层**（每个 Tab 一个常驻实例 + `v-show`），目录懒加载并在选择文件后覆盖内容区编辑/高亮预览
   - utils/ — sessionStore、toolPreview、diff、htmlRender、modelConfigIO、i18n 等纯函数模块（含 .test.mjs）
   - i18n.mjs — zh-CN / en-US 双语源
   - data/modelCatalog.json — 模型目录（400KB）
@@ -96,7 +96,7 @@
 
 - [init] main() → backend.NewApp() // Wails 应用装配，注册 App 服务
   - [init] NewApp → ensureInitialized() // 加载 ~/.ally_agent/config.json，建 histories/sessions/memories 目录
-  - [init] NewApp → NewMcpManager() // MCP 管理器装配
+  - [init] ServiceStartup → NewMcpManager() // MCP 管理器装配（host_desktop.go，依赖 workspaceRoot 非空；`NewApp()` 自身不创建）
     - [ext] McpManager.StartAll → mcp-go client // stdio/SSE/streamable-HTTP 连接
 - [call] frontend → app.StartChat(ChatRequest) → runChat() [service] // 用户发消息
   - [call] runChat → buildMessages() [service] // 系统提示 + 历史 + 当前消息
@@ -133,11 +133,11 @@
 
 ## Hot Paths / Files to Focus
 
-- [***] internal/app/app.go — 聊天循环与工具分发核心（重构后 2394 行，AGENTS.md 规定保留编排域）
-- [***] frontend/src/App.vue — 前端唯一主组件（296KB），事件路由与全部 UI 状态
-- [**] internal/app/prov_model.go — provider 适配与流式解析（1706 行，SSE 容错热点）
-- [**] internal/app/biz_sessions.go — 会话/历史持久化（1138 行，gzip 读写 + 裁剪）
-- [**] internal/app/biz_context.go — 消息组装与上下文统计（1071 行）
+- [***] internal/app/app.go — 聊天循环与工具分发核心（重构后 2403 行，AGENTS.md 规定保留编排域）
+- [***] frontend/src/App.vue — 前端唯一主组件（318KB），事件路由与全部 UI 状态
+- [**] internal/app/prov_model.go — provider 适配与流式解析（2150 行，SSE 容错热点）
+- [**] internal/app/biz_sessions.go — 会话/历史持久化（1286 行，gzip 读写 + 裁剪）
+- [**] internal/app/biz_context.go — 消息组装与上下文统计（1006 行）
 - [**] internal/app/orch_subagent.go — 子代理执行循环（614 行）
 - [*] internal/app/orch_edit.go / orch_file_ops.go — 文件变更与命令安全边界
 - [*] internal/app/biz_prompt.go — 系统提示词管线（skill/记忆/AGENTS 注入）
