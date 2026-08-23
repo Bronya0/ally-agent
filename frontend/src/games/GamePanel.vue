@@ -13,6 +13,7 @@
         />
         <div v-if="localIPs.length > 1" class="game-hint">请选择与队友处于同一内网的地址，避免使用 VPN 或虚拟网卡地址。</div>
         <div class="game-hint">房主点击“启动房间”后，把生成的整行邀请信息发给队友；队友完整粘贴到这里再点击“加入房间”。</div>
+        <div class="game-hint">服务监听 TCP 端口 {{ GAME_SERVER_PORT }}；若队友始终连不上，请在系统防火墙中放行该端口。</div>
         <n-input v-model:value="invite" size="small" placeholder="例如：ALLY-GAME-1|192.168.1.8|39877|..." :disabled="connected" />
         <div class="game-actions">
           <n-button size="small" type="primary" :loading="working" :disabled="connected" @click="host">启动房间</n-button>
