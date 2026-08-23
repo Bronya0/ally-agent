@@ -31,13 +31,13 @@
         <div v-if="errorText" class="game-error">{{ errorText }}</div>
         <div class="game-section-title">游戏</div>
         <n-select v-model:value="selectedGame" :options="gameOptions" size="small" :disabled="!!state" />
-        <n-button v-if="state && selectedGame === 'doudizhu' && state.phase === 'deal' && isHost" size="small" block @click="act({ type: 'start' })">发牌</n-button>
-        <n-button v-if="state && selectedGame === 'go'" size="small" block @click="act({ type: 'pass' })">停一手</n-button>
+        <n-button v-if="state && state.game === 'doudizhu' && state.phase === 'deal' && isHost" size="small" block @click="act({ type: 'start' })">发牌</n-button>
+        <n-button v-if="state && state.game === 'go'" size="small" block :disabled="playerIndex !== state.turn" @click="act({ type: 'pass' })">停一手</n-button>
         <n-button v-if="state && isHost" size="small" block secondary @click="resetGame">重新开始</n-button>
       </aside>
       <main class="game-board-wrap">
-        <div v-if="!state" class="game-empty">启动或加入房间后选择一个游戏</div>
-        <template v-else-if="selectedGame === 'gomoku' || selectedGame === 'go'">
+        <div v-if="!state" class="game-empty">{{ connected ? '等待玩家加入（需要 ' + GAME_META[selectedGame].min + ' 人开局）…' : '启动或加入房间后选择一个游戏' }}</div>
+        <template v-else-if="state.game === 'gomoku' || state.game === 'go'">
           <div class="board-grid" :style="gridStyle">
             <button v-for="(cell, index) in state.board" :key="index" class="board-cell" @click="place(index)">
               <span v-if="cell" :class="['stone', cell === 1 ? 'black' : 'white']"></span>
@@ -45,7 +45,7 @@
           </div>
           <div class="game-status">{{ turnText }}</div>
         </template>
-        <template v-else-if="selectedGame === 'xiangqi'">
+        <template v-else-if="state.game === 'xiangqi'">
           <div class="xiangqi-board">
             <button v-for="(piece, index) in flatXiangqi" :key="index" class="xiangqi-cell" @click="moveXiangqi(index)">{{ xiangqiPieceLabel(piece) }}</button>
           </div>
@@ -55,8 +55,8 @@
           <div class="poker-table">
             <div class="game-status">{{ doudizhuStatus }}</div>
             <div class="cards-row"><button v-for="(card, index) in myHand" :key="`${card}-${index}`" :class="['playing-card', { selected: selectedCards.includes(index) }]" @click="toggleCard(index)">{{ cardLabel(card) }}</button></div>
-            <div v-if="state.phase === 'bid'" class="game-actions"><n-button size="small" type="primary" @click="bid(1)">叫地主</n-button><n-button size="small" @click="bid(0)">不叫</n-button></div>
-            <div v-else-if="state.phase === 'play'" class="game-actions"><n-button size="small" type="primary" @click="playCards">出牌</n-button><n-button size="small" @click="act({ type: 'pass' })">不要</n-button></div>
+            <div v-if="state.phase === 'bid'" class="game-actions"><n-button size="small" type="primary" :disabled="playerIndex !== state.turn" @click="bid(1)">叫地主</n-button><n-button size="small" :disabled="playerIndex !== state.turn" @click="bid(0)">不叫</n-button></div>
+            <div v-else-if="state.phase === 'play'" class="game-actions"><n-button size="small" type="primary" :disabled="playerIndex !== state.turn" @click="playCards">出牌</n-button><n-button size="small" :disabled="playerIndex !== state.turn" @click="act({ type: 'pass' })">不要</n-button></div>
           </div>
         </template>
       </main>
@@ -167,10 +167,10 @@ async function connect(info) {
 function orderedPlayerIDs() { return [hostId.value, ...peers.value.map((p) => p.id).filter((id) => id !== hostId.value)].slice(0, GAME_META[selectedGame.value].max); }
 function ensureState() { if (isHost.value && state.value) { syncState(); return; } if (isHost.value && !state.value && peers.value.length >= GAME_META[selectedGame.value].min) { state.value = createState(selectedGame.value, orderedPlayerIDs()); syncState(); } }
 function resetGame() { if (!isHost.value) return; state.value = createState(selectedGame.value, orderedPlayerIDs()); syncState(); }
-async function act(action) { try { if (playerIndex.value < 0) throw new Error('当前为观战状态'); if (isHost.value) { state.value = applyAction(state.value, playerIndex.value, action); await syncState(); } else { await connection.value.send('action', action, hostId.value); } } catch (err) { message.error(err?.message || '操作不合法'); } }
+async function act(action) { if (playerIndex.value < 0) { message.info('当前为观战状态'); return; } try { if (isHost.value) { state.value = applyAction(state.value, playerIndex.value, action); await syncState(); } else { await connection.value.send('action', action, hostId.value); } } catch (err) { message.error(err?.message || '操作不合法'); } }
 function stateFor(viewerID) { const copy = JSON.parse(JSON.stringify(state.value)); if (copy.game === 'doudizhu' && Array.isArray(copy.hands)) { const viewer = copy.players.indexOf(viewerID); copy.hands = copy.hands.map((hand, index) => index === viewer ? hand : Array(hand.length).fill(null)); } return copy; }
 async function syncState(to = '') { if (!isHost.value || !connection.value) return; const targets = to ? peers.value.filter((p) => p.id === to) : peers.value; await Promise.all(targets.filter((p) => p.id !== peerId.value).map((p) => connection.value.send('sync', stateFor(p.id), p.id))); }
-async function handleMessage(msg) { if (msg.type === 'sync') { if (msg.from !== hostId.value || isHost.value || !msg.data?.game) return; state.value = msg.data; selectedGame.value = msg.data.game; selectedCards.value = []; return; } if (msg.type === 'action' && isHost.value) { try { const index = state.value?.players?.indexOf(msg.from) ?? -1; if (index < 0) return; state.value = applyAction(state.value, index, msg.data); await syncState(); } catch {} } }
+async function handleMessage(msg) { if (msg.type === 'sync') { if (msg.from !== hostId.value || isHost.value || !msg.data?.game) return; state.value = msg.data; selectedCards.value = []; return; } if (msg.type === 'action' && isHost.value) { try { const index = state.value?.players?.indexOf(msg.from) ?? -1; if (index < 0) return; state.value = applyAction(state.value, index, msg.data); await syncState(); } catch {} } }
 function place(index) { const size = state.value.size; act({ type: 'place', x: index % size, y: Math.floor(index / size) }); }
 function moveXiangqi(index) { const x = index % 9, y = Math.floor(index / 9); if (!selectedPiece.value) { if (state.value.board[y][x]) selectedPiece.value = { x, y }; return; } const from = selectedPiece.value; selectedPiece.value = null; act({ type: 'move', fromX: from.x, fromY: from.y, toX: x, toY: y }); }
 function toggleCard(index) { const at = selectedCards.value.indexOf(index); if (at >= 0) selectedCards.value.splice(at, 1); else selectedCards.value.push(index); }
@@ -193,11 +193,11 @@ async function copyInvite() { try { await navigator.clipboard.writeText(inviteTe
 .game-error { color: #e88989; font-size: 12px; }
 .game-board-wrap { display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 16px; min-width: 0; }
 .game-empty { color: #777; font-size: 13px; }
-.board-grid { display: grid; grid-template-columns: repeat(var(--board-size), minmax(16px, 1fr)); width: min(520px, 70vw); aspect-ratio: 1; background: #bca16a; padding: 8px; gap: 1px; }
-.board-cell { border: 0; background: rgba(255,255,255,.08); padding: 0; display: grid; place-items: center; cursor: pointer; }
-.stone { width: 78%; aspect-ratio: 1; border-radius: 50%; box-shadow: 0 1px 3px #0008; }.stone.black { background: #1c1c1c; }.stone.white { background: #eee; }
-.xiangqi-board { display: grid; grid-template-columns: repeat(9, minmax(26px, 1fr)); width: min(520px, 75vw); aspect-ratio: 9 / 10; background: #c29a62; padding: 6px; gap: 1px; }
-.xiangqi-cell { border: 1px solid #805c35; background: transparent; color: #351f10; font-size: clamp(16px, 3vw, 28px); cursor: pointer; }
+.board-grid { display: grid; grid-template-columns: repeat(var(--board-size), 1fr); grid-template-rows: repeat(var(--board-size), 1fr); width: min(520px, 70vw); aspect-ratio: 1; background: #4d3822; border: 4px solid #d8b26a; padding: 1px; gap: 1px; }
+.board-cell { border: 0; background: #d8b26a; padding: 0; display: grid; place-items: center; cursor: pointer; }
+.stone { width: 78%; aspect-ratio: 1; border-radius: 50%; box-shadow: 0 1px 3px #0008; }.stone.black { background: #1c1c1c; box-shadow: 0 0 0 1px rgba(255,255,255,.18), 0 1px 3px #0008; }.stone.white { background: #fff; box-shadow: 0 0 0 1px #0004, 0 1px 3px #0008; }
+.xiangqi-board { display: grid; grid-template-columns: repeat(9, 1fr); grid-template-rows: repeat(10, 1fr); width: min(520px, 75vw); aspect-ratio: 9 / 10; background: #c29a62; padding: 6px; gap: 1px; }
+.xiangqi-cell { border: 1px solid #5c4326; background: transparent; color: #351f10; font-size: clamp(13px, 3.6vw, 26px); cursor: pointer; }
 .poker-table { width: 100%; display: grid; gap: 20px; }.cards-row { display: flex; flex-wrap: wrap; justify-content: center; gap: 5px; }.playing-card { min-width: 34px; height: 52px; background: #f5f5f5; color: #222; border: 1px solid #aaa; border-radius: 3px; cursor: pointer; }.playing-card.selected { transform: translateY(-8px); border-color: #18a058; }
 @media (max-width: 680px) { .game-layout { grid-template-columns: 1fr; }.game-sidebar { border-right: 0; border-bottom: 1px solid #2b2b2b; padding: 0 0 12px; } }
 </style>

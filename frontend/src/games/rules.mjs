@@ -128,7 +128,7 @@ function hasLegalXiangqiMove(board, red) { for (let fy = 0; fy < 10; fy++) for (
 function makeDeck() { const out = []; for (let v = 3; v <= 15; v++) for (let n = 0; n < 4; n++) out.push(v); out.push(16, 17); for (let i = out.length - 1; i > 0; i--) { const random = crypto.getRandomValues(new Uint32Array(1))[0]; const j = random % (i + 1); [out[i], out[j]] = [out[j], out[i]]; } return out; }
 function applyDoudizhu(state, player, action) {
   const next = clone(state);
-  if (state.phase === 'deal') { if (player !== 0 || action.type !== 'start') throw new Error('等待房主发牌'); const deck = makeDeck(); next.hands = [deck.slice(0, 17), deck.slice(17, 34), deck.slice(34, 51)]; next.bottom = deck.slice(51); next.landlord = -1; next.phase = 'bid'; next.turn = 0; next.seq++; return next; }
+  if (state.phase === 'deal') { if (player !== 0 || action.type !== 'start') throw new Error('等待房主发牌'); const deck = makeDeck(); next.hands = [deck.slice(0, 17), deck.slice(17, 34), deck.slice(34, 51)]; next.bottom = deck.slice(51); next.landlord = -1; next.last = null; next.passes = 0; next.phase = 'bid'; next.turn = 0; next.seq++; return next; }
   if (state.phase === 'bid') { if (player !== state.turn || action.type !== 'bid' || ![0, 1].includes(action.value)) throw new Error('叫地主操作无效'); next.turn = (player + 1) % 3; if (action.value) { next.landlord = player; next.hands[player].push(...next.bottom); next.phase = 'play'; next.turn = player; } else if (next.turn === 0) { next.landlord = 0; next.hands[0].push(...next.bottom); next.phase = 'play'; next.turn = 0; } next.seq++; return next; }
   if (state.phase !== 'play' || player !== state.turn) throw new Error('还没轮到你');
   if (action.type === 'pass') { if (!state.last) throw new Error('第一手不能过'); next.passes++; next.turn = (player + 1) % 3; if (next.passes >= 2) { next.last = null; next.passes = 0; } next.seq++; return next; }
@@ -164,7 +164,9 @@ function rank(cards) {
       if (!consecutive(sequence)) continue;
       const remain = new Map(map); sequence.forEach((v) => remain.set(v, remain.get(v) - 3));
       const leftovers = [...remain.values()].filter(Boolean);
-      if ((wing === 'none' && leftovers.length === 0) || (wing === 'single' && leftovers.reduce((a, b) => a + b, 0) === triples) || (wing === 'pair' && leftovers.length === triples && leftovers.every((n) => n === 2))) return result(`plane_${wing}`, sequence.at(-1));
+      if (wing === 'single' && leftovers.length === triples && leftovers.every((n) => n === 1)) return result('plane_single', sequence.at(-1));
+      if (wing === 'none' && leftovers.length === 0) return result('plane', sequence.at(-1));
+      if (wing === 'pair' && leftovers.length === triples && leftovers.every((n) => n === 2)) return result('plane_pair', sequence.at(-1));
     }
   }
   if (sorted.length === 6 && valuesWith(4).length === 1) return result('four_two_single', valuesWith(4)[0]);
