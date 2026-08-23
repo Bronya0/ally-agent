@@ -35,6 +35,8 @@ type modelUsage struct {
 	CacheMissTokens  int
 }
 
+var errEmptyModelResponse = errors.New("empty model response")
+
 type modelStreamEvent struct {
 	ContentDelta   string
 	ReasoningDelta string
@@ -66,6 +68,9 @@ type modelRetryInfo struct {
 func shouldRetryLLMError(err error) bool {
 	if err == nil {
 		return false
+	}
+	if errors.Is(err, errEmptyModelResponse) {
+		return true
 	}
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false
@@ -101,6 +106,16 @@ func shouldRetryLLMError(err error) bool {
 		return true
 	}
 	return false
+}
+
+func emptyModelResponseError(result *modelStreamResult) error {
+	if result == nil {
+		return errEmptyModelResponse
+	}
+	if strings.TrimSpace(result.Content) == "" && len(result.ToolCalls) == 0 && len(result.Images) == 0 {
+		return errEmptyModelResponse
+	}
+	return nil
 }
 
 // isAuthKeyError 判断错误是否属于认证/配额类(key 本身失效),这类错误重试
@@ -592,6 +607,7 @@ func (a *App) streamOpenAIChat(ctx context.Context, cfg ConfigState, model strin
 	})
 	var usage *modelUsage
 	gotFinishReason := false
+	stopReason := ""
 	for {
 		raw, err := stream.RecvRaw()
 		if errors.Is(err, io.EOF) {
@@ -620,6 +636,7 @@ func (a *App) streamOpenAIChat(ctx context.Context, cfg ConfigState, model strin
 		delta := resp.Choices[0].Delta
 		if resp.Choices[0].FinishReason != "" {
 			gotFinishReason = true
+			stopReason = string(resp.Choices[0].FinishReason)
 		}
 		if reasoningState.tag != "" {
 			// Parse content-level reasoning tags embedded in delta.Content
@@ -708,10 +725,11 @@ func (a *App) streamOpenAIChat(ctx context.Context, cfg ConfigState, model strin
 	}
 
 	return &modelStreamResult{
-		Content:   assistant.String(),
-		Reasoning: reasoning.String(),
-		ToolCalls: normalizeToolCalls(toolCalls),
-		Usage:     usage,
+		Content:    assistant.String(),
+		Reasoning:  reasoning.String(),
+		ToolCalls:  normalizeToolCalls(toolCalls),
+		Usage:      usage,
+		StopReason: stopReason,
 	}, nil
 }
 
@@ -1313,7 +1331,22 @@ func anthropicStopReasonError(reason string) error {
 }
 
 func modelResponseStopError(cfg ConfigState, result *modelStreamResult) error {
-	if result == nil || normalizeAPIFormat(cfg.APIFormat) != apiFormatAnthropicMessages {
+	if result == nil {
+		return nil
+	}
+	if normalizeAPIFormat(cfg.APIFormat) == apiFormatOpenAIChat {
+		switch strings.TrimSpace(result.StopReason) {
+		case "", "stop", "tool_calls", "function_call":
+			return nil
+		case "length":
+			return errors.New("OpenAI-compatible response reached the Max Tokens limit; increase Max Tokens or shorten the conversation")
+		case "content_filter":
+			return errors.New("OpenAI-compatible response was stopped by the content filter")
+		default:
+			return fmt.Errorf("OpenAI-compatible response stopped with unsupported reason %q", result.StopReason)
+		}
+	}
+	if normalizeAPIFormat(cfg.APIFormat) != apiFormatAnthropicMessages {
 		return nil
 	}
 	return anthropicStopReasonError(result.StopReason)

@@ -1802,6 +1802,12 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 				}
 			})
 			streamDeltas.flush()
+			// Provider-declared terminal failures (for example finish_reason=length)
+			// are reported below with their usage intact. Only a nominally valid
+			// response with no visible output enters the transient retry path.
+			if err == nil && modelResponseStopError(cfg, modelResp) == nil {
+				err = emptyModelResponseError(modelResp)
+			}
 			if err == nil {
 				break
 			}

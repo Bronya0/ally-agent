@@ -3782,6 +3782,10 @@ function bindRuntimeEvents() {
     flushToolUpdateBuffer();
     const session = sessionByEvent(data);
     if (!session) return;
+    // A failed tool still terminates the assistant's tool-call response. Keep
+    // the failed path identical to tool:result so the next model response gets
+    // its own assistant message and run-level metadata stays at the bottom.
+    finalizeStreamingMessageForRun(session, data.runId);
     // Failed tool calls also become part of the context; keep the footer fresh.
     if (session.id === activeSessionId.value) refreshContextTokens(session.id);
     // suggest: 静默忽略错误，不渲染任何 card

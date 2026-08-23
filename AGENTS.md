@@ -211,7 +211,8 @@ Tool result channels:
 
 Turn-level retry and interruption（`runChat` 每个 LLM step 的循环）:
 
-- 每个 step 最多重试 3 次（`maxTurnRetries`）；遇到 `shouldRetryLLMError()` 判定的可重试错误（超时/断流/5xx/常见网络中断串）且未达上限时，按 `llmRetryDelay()`（500ms×2^n，上限 10s）退避后整轮重发，并发射 `run:retry` 事件（payload 含 `attempt/maxAttempts/error/waitMs/reason:"stream_interrupted"/discardCurrentResponse:true`）。
+- 每个 step 最多重试 3 次（`maxTurnRetries`）；遇到 `shouldRetryLLMError()` 判定的可重试错误（超时/断流/5xx/常见网络中断串/空模型响应）且未达上限时，按 `llmRetryDelay()`（500ms×2^n，上限 10s）退避后整轮重发，并发射 `run:retry` 事件（payload 含 `attempt/maxAttempts/error/waitMs/reason:"stream_interrupted"/discardCurrentResponse:true`）。
+- OpenAI-compatible Chat 的 `finish_reason` 会保留在 `modelStreamResult.StopReason`；`length` 和 `content_filter` 不会被当作正常完成，而是以明确错误结束。一个没有正文、工具调用或图片的空响应也不会直接 `run:done`，而会进入上述 step 重试。
 - provider 返回 400 且本 step 未 sanitize 过：`sanitizeHistoryMessages(messages)` 修复上下文（若缩短则重建 requestMessages，含重新附加 plan），发 `run:retry {reason:"context sanitized after provider 400"}` 后 continue（不占重试次数）。
 - 重试等待期间 ctx 被取消：追加 `cancelledTurnMarker()` 并以 `run:error`(kind=cancelled) 返回。
 - provider 适配器内还有一层 pre-first-event 重试（`shouldRetryLLMError` + `emitLLMRetryEvent`，多 key 时被关闭），其 `run:retry` 事件带 `keyIndex/totalKeys`。

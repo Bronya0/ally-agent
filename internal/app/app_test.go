@@ -91,6 +91,14 @@ func sseChatFinishChunk(reason string) string {
 	return fmt.Sprintf(`data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{},"finish_reason":%q}]}`+"\n\n", reason)
 }
 
+func sseResponsesEvent(payload string) string {
+	return "data: " + payload + "\n\n"
+}
+
+func sseAnthropicEvent(event, payload string) string {
+	return "event: " + event + "\n" + "data: " + payload + "\n\n"
+}
+
 // runEventRecorder 记录事件序列并在 run 终止事件上通知，供异步 runChat 测试同步。
 type runEventRecorder struct {
 	mu     sync.Mutex
@@ -177,6 +185,206 @@ func TestRunChatSuccessfulSuggestEndsRun(t *testing.T) {
 	}
 	if !sawSuggestResult {
 		t.Fatal("no tool:result event for the suggest call")
+	}
+}
+
+// TestRunChatRetriesEmptyResponseAfterToolError verifies that an otherwise
+// successful but empty model response cannot silently finish the run after a
+// failed tool call. The empty step is transient: the loop retries it and the
+// next visible assistant response reaches the user.
+func TestRunChatRetriesEmptyResponseAfterToolError(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		request := requests.Add(1)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		switch request {
+		case 1:
+			fmt.Fprint(w, sseChatToolCallChunk("call_missing_1", "definitely_missing_tool", `{}`))
+			fmt.Fprint(w, sseChatFinishChunk("tool_calls"))
+		case 2:
+			fmt.Fprint(w, sseChatFinishChunk("stop"))
+		default:
+			fmt.Fprint(w, sseChatChunk("Recovered after the empty response."))
+			fmt.Fprint(w, sseChatFinishChunk("stop"))
+		}
+		fmt.Fprint(w, sseDone)
+	}))
+	defer server.Close()
+
+	app := NewApp()
+	app.initialized = true
+	app.stats = nil
+	recorder := &runEventRecorder{done: make(chan struct{}, 1)}
+	app.events = recorder
+
+	if _, err := app.StartChat(ChatRequest{
+		SessionID: "empty-after-tool-error-e2e",
+		Message:   "exercise a tool",
+		Config: ConfigState{
+			APIFormat: apiFormatOpenAIChat,
+			BaseURL:   server.URL,
+			APIKeys:   []string{"test-key"},
+			Model:     "test-model",
+			MaxTokens: 64,
+			Workspace: t.TempDir(),
+		},
+	}); err != nil {
+		t.Fatalf("StartChat() error = %v", err)
+	}
+
+	select {
+	case <-recorder.done:
+	case <-time.After(15 * time.Second):
+		t.Fatal("run did not finish in time")
+	}
+	if recorder.end != "run:done" {
+		t.Fatalf("run ended with %q, want run:done", recorder.end)
+	}
+	if got := requests.Load(); got != 3 {
+		t.Fatalf("model requests = %d, want 3 (tool call, empty retry, visible recovery)", got)
+	}
+}
+
+func TestRunChatRetriesEmptyOpenAIResponsesResponse(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		request := requests.Add(1)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		if request > 1 {
+			fmt.Fprint(w, sseResponsesEvent(`{"type":"response.output_text.delta","delta":"Recovered Responses output.","item_id":"msg_1","output_index":0,"content_index":0,"sequence_number":1}`))
+		}
+		fmt.Fprint(w, sseResponsesEvent(`{"type":"response.completed","response":{"id":"resp_1","object":"response","created_at":1,"status":"completed","model":"test-model","output":[],"parallel_tool_calls":true,"tools":[]}}`))
+	}))
+	defer server.Close()
+
+	app := NewApp()
+	app.initialized = true
+	app.stats = nil
+	recorder := &runEventRecorder{done: make(chan struct{}, 1)}
+	app.events = recorder
+
+	if _, err := app.StartChat(ChatRequest{
+		SessionID: "empty-openai-responses-e2e",
+		Message:   "reply visibly",
+		Config: ConfigState{
+			APIFormat: apiFormatOpenAIResponses,
+			BaseURL:   server.URL,
+			APIKeys:   []string{"test-key"},
+			Model:     "test-model",
+			MaxTokens: 64,
+			Workspace: t.TempDir(),
+		},
+	}); err != nil {
+		t.Fatalf("StartChat() error = %v", err)
+	}
+
+	select {
+	case <-recorder.done:
+	case <-time.After(15 * time.Second):
+		t.Fatal("run did not finish in time")
+	}
+	if recorder.end != "run:done" {
+		t.Fatalf("run ended with %q, want run:done", recorder.end)
+	}
+	if got := requests.Load(); got != 2 {
+		t.Fatalf("model requests = %d, want 2 (empty response then visible retry)", got)
+	}
+}
+
+func TestRunChatRetriesEmptyAnthropicResponse(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		request := requests.Add(1)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, sseAnthropicEvent("message_start", `{"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","content":[],"model":"test-model","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":1,"output_tokens":0}}}`))
+		if request > 1 {
+			fmt.Fprint(w, sseAnthropicEvent("content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`))
+			fmt.Fprint(w, sseAnthropicEvent("content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Recovered Anthropic output."}}`))
+			fmt.Fprint(w, sseAnthropicEvent("content_block_stop", `{"type":"content_block_stop","index":0}`))
+		}
+		fmt.Fprint(w, sseAnthropicEvent("message_delta", `{"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":1}}`))
+		fmt.Fprint(w, sseAnthropicEvent("message_stop", `{"type":"message_stop"}`))
+	}))
+	defer server.Close()
+
+	app := NewApp()
+	app.initialized = true
+	app.stats = nil
+	recorder := &runEventRecorder{done: make(chan struct{}, 1)}
+	app.events = recorder
+
+	if _, err := app.StartChat(ChatRequest{
+		SessionID: "empty-anthropic-e2e",
+		Message:   "reply visibly",
+		Config: ConfigState{
+			APIFormat: apiFormatAnthropicMessages,
+			BaseURL:   server.URL,
+			APIKeys:   []string{"test-key"},
+			Model:     "test-model",
+			MaxTokens: 64,
+			Workspace: t.TempDir(),
+		},
+	}); err != nil {
+		t.Fatalf("StartChat() error = %v", err)
+	}
+
+	select {
+	case <-recorder.done:
+	case <-time.After(15 * time.Second):
+		t.Fatal("run did not finish in time")
+	}
+	if recorder.end != "run:done" {
+		t.Fatalf("run ended with %q, want run:done", recorder.end)
+	}
+	if got := requests.Load(); got != 2 {
+		t.Fatalf("model requests = %d, want 2 (empty response then visible retry)", got)
+	}
+}
+
+// TestRunChatRejectsOpenAIChatLengthStop verifies that a truncated compatible
+// Chat Completions response is surfaced as an error instead of being persisted
+// and presented as a normally completed answer.
+func TestRunChatRejectsOpenAIChatLengthStop(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, sseChatChunk("This answer is incomplete"))
+		fmt.Fprint(w, sseChatFinishChunk("length"))
+		fmt.Fprint(w, sseDone)
+	}))
+	defer server.Close()
+
+	app := NewApp()
+	app.initialized = true
+	app.stats = nil
+	recorder := &runEventRecorder{done: make(chan struct{}, 1)}
+	app.events = recorder
+
+	if _, err := app.StartChat(ChatRequest{
+		SessionID: "openai-chat-length-e2e",
+		Message:   "write a complete answer",
+		Config: ConfigState{
+			APIFormat: apiFormatOpenAIChat,
+			BaseURL:   server.URL,
+			APIKeys:   []string{"test-key"},
+			Model:     "test-model",
+			MaxTokens: 64,
+			Workspace: t.TempDir(),
+		},
+	}); err != nil {
+		t.Fatalf("StartChat() error = %v", err)
+	}
+
+	select {
+	case <-recorder.done:
+	case <-time.After(15 * time.Second):
+		t.Fatal("run did not finish in time")
+	}
+	if recorder.end != "run:error" {
+		t.Fatalf("run ended with %q, want run:error for finish_reason=length", recorder.end)
 	}
 }
 
@@ -797,7 +1005,6 @@ func TestSystemPromptIncludesConsolidatedSafetyRules(t *testing.T) {
 		}
 	}
 }
-
 
 func TestSystemPromptDiscouragesRedundantReadsBeforeEdit(t *testing.T) {
 	prompt := defaultSystemPrompt(nil, "", nil, "", "")
