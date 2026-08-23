@@ -823,10 +823,9 @@ const zh = {
   'subagent.running': '运行中',
   'subagent.completed': '已完成',
   'subagent.failed': '失败',
-  'subagent.budget': '{current}/{limit}',
+  'subagent.budget': '{current}/{limit} 步',
   'subagent.using': '调用中',
   'subagent.used': '已调用',
-  'subagent.toolCount': '{count} 次工具调用',
 };
 
 const enOverrides = {
@@ -1362,9 +1361,8 @@ Response language: Preserve the response language already used in the current co
   'welcome.gitBash': 'Bash',
   'subagent.running': 'Running', 'subagent.completed': 'Completed',
   'subagent.failed': 'Failed',
-  'subagent.budget': '{current}/{limit}',
+  'subagent.budget': '{current}/{limit} steps',
   'subagent.using': 'Using', 'subagent.used': 'Used',
-  'subagent.toolCount': '{count} tool calls',
 };
 
 const en = { ...zh, ...enOverrides };

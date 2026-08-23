@@ -19,7 +19,7 @@ Public License v3. See the LICENSE file for details.
       </span>
       <span v-else class="tool-name">{{ fallbackLabel }}</span>
       <span class="tool-arg" :title="msg.description">({{ msg.description }})</span>
-      <span v-if="msg.maxSteps" class="tool-chip">{{ $t('subagent.budget', { current: msg.steps, limit: msg.maxSteps }) }}{{ msg.toolCalls?.length ? ' ' + $t('subagent.toolCount', { count: msg.toolCalls.length }) : '' }}</span>
+      <span v-if="msg.maxSteps" class="tool-chip">{{ $t('subagent.budget', { current: msg.steps, limit: msg.maxSteps }) }}</span>
       <span v-if="msg.totalTokens > 0" class="tool-chip subagent-token-chip" :title="tokenTooltip">{{ tokenChip }}</span>
       <span v-if="displayDuration" class="tool-duration">{{ displayDuration }}</span>
     </div>

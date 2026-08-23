@@ -395,7 +395,6 @@ import {
   GetContextBreakdown,
   GetWorkspaceTokenUsage,
   ResetWorkspaceTokenUsage,
-  GetSubagents,
   GetGitStatus,
   SaveConfig,
   SelectWorkspace,
@@ -1507,7 +1506,6 @@ const scheduledTasksLoading = ref(false);
 const servicesLoading = ref(false);
 const scheduledTaskDeletingIds = ref([]);
 const serviceStoppingIds = ref([]);
-const subRuns = ref([]);
 const mcpConfigText = ref('');
 const mcpServers = ref([]);
 const mcpLoading = ref(false);
@@ -2830,7 +2828,6 @@ async function switchWorkspaceTab(id) {
   config.workspace = tab.path;
   configDraft.workspace = tab.path;
   prepareFooterStatsForTarget(id, tab.path);
-  subRuns.value = [];
   // 切换 Tab 时恢复该 Tab 关联 session 的 extraRoots
   if (linkedSession && Array.isArray(linkedSession.extraRoots)) {
     extraRoots.value = [...linkedSession.extraRoots];
@@ -2939,7 +2936,6 @@ async function selectSession(index) {
   sessionsVisible.value = false;
   await activateSelectedSession(target);
   sessionsVisible.value = false;
-  subRuns.value = [];
 }
 
 function createReplacementSession(title = t('app.sessions.new'), workspacePath = '') {
@@ -2986,7 +2982,6 @@ function deleteSession(index) {
     const nextSession = sessions.value.find((item) => item.id === replacementId);
     applySessionWorkspace(nextSession);
     promptText.value = '';
-    subRuns.value = [];
     loadTodos(replacementId);
     scrollMessagesToBottom();
   }
@@ -3987,29 +3982,6 @@ function bindRuntimeEvents() {
 
   onRuntimeEvent('sub:spawn', (data) => {
     const session = sessionByEvent(data);
-    const isActiveSession = session && session.id === activeSessionId.value;
-    // Sidebar tracking
-    if (isActiveSession && !subRuns.value.some((item) => item.id === data.id)) {
-      subRuns.value.push({
-        id: data.id,
-        description: data.description || '',
-        profile: data.profile || 'coder',
-        role: data.role || '',
-        status: 'running',
-        steps: 0,
-        summary: '',
-        filesRead: [],
-        filesEdited: [],
-        error: '',
-        toolCalls: [],
-        startTime: Number(data.startTime || Date.now()),
-        durationMs: 0,
-        durationText: '',
-        inputTokens: 0,
-        outputTokens: 0,
-        totalTokens: 0,
-      });
-    }
     // Upgrade the original subagent card in place. Keeping the parent
     // tool identity lets the eventual tool:result/tool:error update this same
     // card instead of appending a second raw JSON result card.
@@ -4048,13 +4020,6 @@ function bindRuntimeEvents() {
     }
   });
   onRuntimeEvent('sub:step', (data) => {
-    const r = subRuns.value.find(s => s.id === data.id);
-    if (r) {
-      r.steps = data.step || 0;
-      r.inputTokens = data.inputTokens || 0;
-      r.outputTokens = data.outputTokens || 0;
-      r.totalTokens = data.totalTokens || 0;
-    }
     const msg = findSubagentMsg(data.id, data.sessionId || '');
     if (msg) {
       msg.steps = data.step || 0;
@@ -4064,21 +4029,12 @@ function bindRuntimeEvents() {
     }
   });
   onRuntimeEvent('sub:tool:start', (data) => {
-    const r = subRuns.value.find(s => s.id === data.id);
-    if (r) {
-      r.toolCalls.push({ toolCallId: data.toolCallId, name: data.name, args: data.args, status: 'running', summary: '', durationMs: 0, durationText: '' });
-    }
     const msg = findSubagentMsg(data.id, data.sessionId || '');
     if (msg) {
       msg.toolCalls.push({ toolCallId: data.toolCallId, name: data.name, args: data.args, status: 'running', summary: '', durationMs: 0, durationText: '' });
     }
   });
   onRuntimeEvent('sub:tool:result', (data) => {
-    const r = subRuns.value.find(s => s.id === data.id);
-    if (r) {
-      const tc = r.toolCalls.find(t => t.toolCallId === data.toolCallId);
-      if (tc) { tc.status = 'success'; tc.summary = data.summary || ''; tc.durationMs = Number(data.durationMs || 0); tc.durationText = formatDurationShort(tc.durationMs); }
-    }
     const msg = findSubagentMsg(data.id, data.sessionId || '');
     if (msg) {
       const tc = msg.toolCalls.find(t => t.toolCallId === data.toolCallId);
@@ -4086,11 +4042,6 @@ function bindRuntimeEvents() {
     }
   });
   onRuntimeEvent('sub:tool:error', (data) => {
-    const r = subRuns.value.find(s => s.id === data.id);
-    if (r) {
-      const tc = r.toolCalls.find(t => t.toolCallId === data.toolCallId);
-      if (tc) { tc.status = 'error'; tc.summary = data.error || ''; tc.durationMs = Number(data.durationMs || 0); tc.durationText = formatDurationShort(tc.durationMs); }
-    }
     const msg = findSubagentMsg(data.id, data.sessionId || '');
     if (msg) {
       const tc = msg.toolCalls.find(t => t.toolCallId === data.toolCallId);
@@ -4098,19 +4049,6 @@ function bindRuntimeEvents() {
     }
   });
   onRuntimeEvent('sub:done', (data) => {
-    const r = subRuns.value.find(s => s.id === data.id);
-    if (r) {
-      r.status = data.status || 'completed';
-      r.summary = data.summary || '';
-      r.filesRead = data.filesRead || [];
-      r.filesEdited = data.filesEdited || [];
-      r.steps = data.steps || r.steps;
-      r.durationMs = Number(data.durationMs || 0);
-      r.durationText = formatDurationShort(r.durationMs);
-      r.inputTokens = data.inputTokens || 0;
-      r.outputTokens = data.outputTokens || 0;
-      r.totalTokens = data.totalTokens || 0;
-    }
     const msg = findSubagentMsg(data.id, data.sessionId || '');
     if (msg) {
       msg.status = data.status || 'completed';
@@ -4126,13 +4064,6 @@ function bindRuntimeEvents() {
     }
   });
   onRuntimeEvent('sub:error', (data) => {
-    const r = subRuns.value.find(s => s.id === data.id);
-    if (r) {
-      r.status = 'failed';
-      r.error = data.error || '';
-      r.durationMs = Number(data.durationMs || 0);
-      r.durationText = formatDurationShort(r.durationMs);
-    }
     const msg = findSubagentMsg(data.id, data.sessionId || '');
     if (msg) {
       msg.status = 'failed';
