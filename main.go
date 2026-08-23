@@ -13,6 +13,7 @@ import (
 	"os"
 
 	backend "ally-dev/internal/app"
+	"ally-dev/internal/game"
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
@@ -30,6 +31,7 @@ func main() {
 		return
 	}
 	app := backend.NewApp()
+	gameService := game.NewService()
 
 	// 桌面通知服务：仅用于任务完成/出错/取消的系统提示音（带声音）。
 	// SafeNotificationsService 包装平台后端：启动失败（macOS 无
@@ -43,6 +45,7 @@ func main() {
 		Icon:        appIconPNG,
 		Services: []application.Service{
 			application.NewService(app),
+			application.NewService(gameService),
 			application.NewService(notifier),
 		},
 		Assets: application.AssetOptions{

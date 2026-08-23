@@ -30,6 +30,7 @@ Public License v3. See the LICENSE file for details.
               @start-update="startUpdate"
               @open-settings="openSettings('general')"
               @open-token-stats="tokenStatsVisible = true"
+              @open-games="gamesVisible = true"
               @minimise="minimiseWindow"
               @toggle-maximise="toggleMaximiseWindow"
               @close-window="closeWindow"
@@ -305,6 +306,7 @@ Public License v3. See the LICENSE file for details.
             :show="tokenStatsVisible"
             @close="tokenStatsVisible = false"
           />
+          <GamePanel :show="gamesVisible" @close="gamesVisible = false" />
           <RenderBoundary :label="$t('app.gitChanges')"><GitDiffModal v-model:show="gitDiffVisible" :git-status="gitStatus" :workspace="config.workspace" /></RenderBoundary>
 
           <n-modal v-model:show="updateModalVisible" preset="card" :title="$t('app.update.title')" class="update-modal" :mask-closable="false" :close-on-esc="false" :show-close="!isUpdateBusy">
@@ -452,6 +454,7 @@ import SettingsModal from './components/SettingsModal.vue';
 import ChatMessages from './components/ChatMessages.vue';
 import TaskCenterPanel from './components/TaskCenterPanel.vue';
 import TokenStatsModal from './components/TokenStatsModal.vue';
+import GamePanel from './games/GamePanel.vue';
 import { assignConfig, defaultConfig } from './utils/config.mjs';
 import { modelConfigIdentity, normalizeApiKeysArray, normalizeReasoningEffort } from './utils/modelConfigIO.mjs';
 import { buildVersion } from './utils/buildVersion.js';
@@ -473,6 +476,7 @@ import { unwrapWailsEvent } from './utils/wailsEvent.mjs';
 
 const GitDiffModal = defineAsyncComponent(() => import('./components/GitDiffModal.vue'));
 const WorkspaceExplorer = defineAsyncComponent(() => import('./components/WorkspaceExplorer.vue'));
+const gamesVisible = ref(false);
 
 onErrorCaptured((err, _instance, info) => {
   console.error('[ui:error]', info, err);

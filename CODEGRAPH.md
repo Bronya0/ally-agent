@@ -64,10 +64,12 @@
   - service/ — 后台进程 rolling buffer 与长命令检测
   - shared/ — `CodedError` 与内置工具 schema（`Builtins()`）
 - [infra] internal/builtin_skills/ — 内置 skill 嵌入资源（go:embed `skills/<name>/SKILL.md`）
+- [service] internal/game/ — 与 Agent 隔离的局域网休息区服务；受限 WebSocket 房间中继、本机私有 IPv4 查询、房间 token 和连接生命周期，不包含游戏规则
 - [ui] frontend/src/ — Vue 3 单页桌面 UI（Naive UI）
   - App.vue — 唯一主组件：状态、Wails 事件路由、工作区 Tab、当前工作区历史会话筛选、流式缓冲、Mermaid 渲染 [Lines: 318KB]
   - components/ — AppHeader、ChatMessages、WorkspaceExplorer、SettingsModal、ToolCallCard、SubagentInlineCard、TaskCenterPanel、TokenStatsModal 等组件；App.vue 将计划面板挂在各自 `n-tab-pane` 内，WorkspaceExplorer 树/编辑器挂在 n-tabs **外层**（每个 Tab 一个常驻实例 + `v-show`），目录懒加载并在选择文件后覆盖内容区编辑/高亮预览
   - utils/ — sessionStore、toolPreview、diff、htmlRender、modelConfigIO、i18n 等纯函数模块（含 .test.mjs）
+  - games/ — 独立 H5 游戏面板、AES-GCM 联机协议和五子棋/围棋/象棋/斗地主规则；通过 `internal/game` 的最小 Wails 绑定启动房间或获取本机 IP
   - i18n.mjs — zh-CN / en-US 双语源
   - data/modelCatalog.json — 模型目录（400KB）
 - [config] frontend/vite.config.js / Taskfile.yml — 构建配置

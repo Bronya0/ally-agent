@@ -68,6 +68,9 @@ Public License v3. See the LICENSE file for details.
       <n-button class="header-icon-button" size="small" quaternary @click="onOpenTokenStats" :title="$t('header.tokenStats')" :aria-label="$t('header.tokenStats')">
         <BarChartOutlined class="header-icon" />
       </n-button>
+      <n-button class="header-icon-button" size="small" quaternary @click="$emit('openGames')" :title="$t('header.games')" :aria-label="$t('header.games')">
+        <AppstoreOutlined class="header-icon" />
+      </n-button>
       <n-button
         :class="['header-icon-button', 'repository-button', { 'update-available': updateAvailable }]"
         size="small"
@@ -105,6 +108,7 @@ import AllyWordmark from './AllyWordmark.vue';
 import PlusOutlined from '@vicons/antd/PlusOutlined';
 import HistoryOutlined from '@vicons/antd/HistoryOutlined';
 import BarChartOutlined from '@vicons/antd/BarChartOutlined';
+import AppstoreOutlined from '@vicons/antd/AppstoreOutlined';
 import DownloadOutlined from '@vicons/antd/DownloadOutlined';
 import GithubOutlined from '@vicons/antd/GithubOutlined';
 import SettingOutlined from '@vicons/antd/SettingOutlined';
@@ -133,6 +137,7 @@ const emit = defineEmits([
   'startUpdate',
   'openSettings',
   'openTokenStats',
+  'openGames',
   'minimise',
   'toggleMaximise',
   'closeWindow',

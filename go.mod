@@ -5,6 +5,7 @@ go 1.27.0
 require (
 	github.com/andybalholm/brotli v1.2.2
 	github.com/anthropics/anthropic-sdk-go v1.56.0
+	github.com/coder/websocket v1.8.14
 	github.com/go-git/go-git/v5 v5.19.2
 	github.com/klauspost/compress v1.19.0
 	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728
@@ -25,7 +26,6 @@ require (
 	github.com/adrg/xdg v0.5.3 // indirect
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
 	github.com/buger/jsonparser v1.1.2 // indirect
-	github.com/coder/websocket v1.8.14 // indirect
 	github.com/go-git/gcfg v1.5.1-0.20230307220236-3a3c6141e376 // indirect
 	github.com/go-git/go-billy/v5 v5.9.0 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect

@@ -62,6 +62,7 @@ Publishing the Release triggers `.github/workflows/build.yml`, which builds and 
 ├── main.go                   # Wails v3 应用入口、窗口选项和 App 绑定
 ├── internal/
 │   ├── app/                  # Agent 核心与编排（见下方文件命名约定）
+│   ├── game/                 # 与 Agent 隔离的局域网游戏 WS 服务与房间生命周期
 │   ├── builtin_skills/       # 内置 skill 嵌入资源（go:embed）
 │   ├── host/                 # 宿主事件适配（eventSink → Wails v3 / 网络）
 │   ├── provider/             # Provider 格式、Base URL 和 token 参数归一化
