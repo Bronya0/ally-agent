@@ -25,6 +25,16 @@ git push origin main
 
 This uses `-c` to override the commit author per-command only, leaving the developer's global Git config unchanged.
 
+### Committing partial file changes from the agent shell
+
+When splitting one file's diff across multiple commits (e.g. `i18n.mjs` containing strings for two features), do NOT drive `git add -p` through piped stdin — the agent shell is non-interactive and the piped answers are swallowed, leaving the index in a partial state. Instead, pre-split hunks with a patch file and apply them straight to the index:
+
+1. `git diff -- <file> > full.patch`, then split hunks with a small Python script (or keep/drop whole hunks; no offset fixing needed when dropping tail hunks).
+2. `git apply --cached --check split.patch` to validate, then `git apply --cached split.patch` to stage. The workspace file already contains the full change, so the patch applies to the index (HEAD state), never to the working tree — omitting `--cached` fails with `patch does not apply`.
+3. Commit, then repeat for the next feature's hunks, and `git add` whole files that belong to a single feature.
+
+Shell gotcha: in this environment the `command` tool's heredoc layer eats backslash escapes, so a Python script containing a backslash character literal (e.g. a line-ending check written as an escape sequence) arrives with an unterminated string and raises `SyntaxError`. Prefer backslash-free formulations (e.g. test `line[0]` against `+` or a space, or use `chr(92)`), or write the script to a file first and run `python file` so the script body is never passed through a heredoc.
+
 ## Release Process
 
 Git tags and GitHub Releases are the source of truth for Ally versions. Release tags use `vMAJOR.MINOR.PATCH`; `.github/workflows/build.yml` injects the published tag through `ALLY_BUILD_VERSION`. Do not treat `frontend/package.json`'s `0.0.0` as the app release version and do not change it only for a release.
