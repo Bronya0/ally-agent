@@ -488,7 +488,6 @@ func compactToolResultForModel(name string, result toolResult, fullJSON string) 
 			"truncated":     r.Truncated,
 			"durationMs":    r.DurationMS,
 			"redirects":     r.Redirects,
-			"robotsAllowed": r.RobotsAllowed,
 		}
 		if r.JSON != nil && r.JSONPreview == "" {
 			data["json"] = r.JSON
@@ -509,18 +508,17 @@ func compactToolResultForModel(name string, result toolResult, fullJSON string) 
 		}
 		text, reduced := compactTextForModel(r.Text, maxModelWebOutput)
 		data := map[string]any{
-			"url":           r.URL,
-			"finalUrl":      r.FinalURL,
-			"status":        r.Status,
-			"statusText":    r.StatusText,
-			"title":         r.Title,
-			"text":          text,
-			"contentType":   r.ContentType,
-			"links":         r.Links,
-			"bytesRead":     r.BytesRead,
-			"truncated":     r.Truncated,
-			"durationMs":    r.DurationMS,
-			"robotsAllowed": r.RobotsAllowed,
+			"url":         r.URL,
+			"finalUrl":    r.FinalURL,
+			"status":      r.Status,
+			"statusText":  r.StatusText,
+			"title":       r.Title,
+			"text":        text,
+			"contentType": r.ContentType,
+			"links":       r.Links,
+			"bytesRead":   r.BytesRead,
+			"truncated":   r.Truncated,
+			"durationMs":  r.DurationMS,
 		}
 		if reduced {
 			data["textReduced"] = true

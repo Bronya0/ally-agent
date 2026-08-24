@@ -872,7 +872,6 @@ type HTTPRequestToolRequest struct {
 	TimeoutSeconds      int               `json:"timeoutSeconds,omitempty"`
 	MaxBytes            int               `json:"maxBytes,omitempty"`
 	FollowRedirects     *bool             `json:"followRedirects,omitempty"`
-	RespectRobots       *bool             `json:"respectRobots,omitempty"`
 	AllowPrivateNetwork *bool             `json:"allowPrivateNetwork,omitempty"`
 	InsecureSkipVerify  *bool             `json:"insecureSkipVerify,omitempty"`
 }
@@ -895,7 +894,6 @@ type HTTPRequestToolResult struct {
 	Truncated     bool              `json:"truncated"`
 	DurationMS    int64             `json:"durationMs"`
 	Redirects     []string          `json:"redirects,omitempty"`
-	RobotsAllowed bool              `json:"robotsAllowed,omitempty"`
 	SavedPath     string            `json:"savedPath,omitempty"`
 }
 
@@ -906,7 +904,6 @@ type WebFetchRequest struct {
 	TimeoutSeconds      int               `json:"timeoutSeconds,omitempty"`
 	MaxBytes            int               `json:"maxBytes,omitempty"`
 	MaxChars            int               `json:"maxChars,omitempty"`
-	RespectRobots       *bool             `json:"respectRobots,omitempty"`
 	AllowPrivateNetwork *bool             `json:"allowPrivateNetwork,omitempty"`
 	InsecureSkipVerify  *bool             `json:"insecureSkipVerify,omitempty"`
 }
@@ -917,18 +914,17 @@ type WebFetchLink struct {
 }
 
 type WebFetchResult struct {
-	URL           string         `json:"url"`
-	FinalURL      string         `json:"finalUrl"`
-	Status        int            `json:"status"`
-	StatusText    string         `json:"statusText"`
-	Title         string         `json:"title,omitempty"`
-	Text          string         `json:"text"`
-	ContentType   string         `json:"contentType"`
-	Links         []WebFetchLink `json:"links,omitempty"`
-	BytesRead     int            `json:"bytesRead"`
-	Truncated     bool           `json:"truncated"`
-	DurationMS    int64          `json:"durationMs"`
-	RobotsAllowed bool           `json:"robotsAllowed"`
+	URL         string         `json:"url"`
+	FinalURL    string         `json:"finalUrl"`
+	Status      int            `json:"status"`
+	StatusText  string         `json:"statusText"`
+	Title       string         `json:"title,omitempty"`
+	Text        string         `json:"text"`
+	ContentType string         `json:"contentType"`
+	Links       []WebFetchLink `json:"links,omitempty"`
+	BytesRead   int            `json:"bytesRead"`
+	Truncated   bool           `json:"truncated"`
+	DurationMS  int64          `json:"durationMs"`
 }
 
 type RemoteReadFileRequest struct {

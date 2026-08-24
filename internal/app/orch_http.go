@@ -25,12 +25,9 @@ import (
 	"net/http"
 	"net/url"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 	"unicode/utf8"
-
-	"ally-dev/internal/tools/grep"
 
 	"codeberg.org/readeck/go-readability/v2"
 
@@ -102,11 +99,6 @@ func (a *App) webFetchToolWithConfig(ctx context.Context, cfg ConfigState, req W
 	if req.MaxBytes <= 0 {
 		req.MaxBytes = defaultWebFetchBody
 	}
-	respectRobots := req.RespectRobots
-	if respectRobots == nil {
-		v := false
-		respectRobots = &v
-	}
 	allowPrivate := cfg.AllowPrivateNetwork
 	if req.AllowPrivateNetwork != nil {
 		allowPrivate = *req.AllowPrivateNetwork
@@ -118,7 +110,6 @@ func (a *App) webFetchToolWithConfig(ctx context.Context, cfg ConfigState, req W
 		TimeoutSeconds:     req.TimeoutSeconds,
 		MaxBytes:           req.MaxBytes,
 		FollowRedirects:    boolPtr(true),
-		RespectRobots:      respectRobots,
 		InsecureSkipVerify: req.InsecureSkipVerify,
 	}, true, allowPrivate)
 	if err != nil {
@@ -164,18 +155,17 @@ func (a *App) webFetchToolWithConfig(ctx context.Context, cfg ConfigState, req W
 	}
 
 	return WebFetchResult{
-		URL:           fetched.Result.URL,
-		FinalURL:      fetched.Result.FinalURL,
-		Status:        fetched.Result.Status,
-		StatusText:    fetched.Result.StatusText,
-		Title:         title,
-		Text:          text,
-		ContentType:   contentType,
-		Links:         links,
-		BytesRead:     fetched.Result.BytesRead,
-		Truncated:     truncated,
-		DurationMS:    fetched.Result.DurationMS,
-		RobotsAllowed: fetched.Result.RobotsAllowed,
+		URL:         fetched.Result.URL,
+		FinalURL:    fetched.Result.FinalURL,
+		Status:      fetched.Result.Status,
+		StatusText:  fetched.Result.StatusText,
+		Title:       title,
+		Text:        text,
+		ContentType: contentType,
+		Links:       links,
+		BytesRead:   fetched.Result.BytesRead,
+		Truncated:   truncated,
+		DurationMS:  fetched.Result.DurationMS,
 	}, nil
 }
 
@@ -228,16 +218,6 @@ func (a *App) doHTTPRequest(parent context.Context, cfg ConfigState, req HTTPReq
 	}
 	if headerValue(headers, "Accept-Encoding") == "" {
 		headers["Accept-Encoding"] = "gzip, deflate, br, zstd"
-	}
-
-	if boolDefault(req.RespectRobots, false) && (method == http.MethodGet || method == http.MethodHead) {
-		allowed, err := a.robotsAllows(parent, cfg, target, ua, allowPrivateNetwork)
-		if err != nil {
-			return httpFetchResult{}, err
-		}
-		if !allowed {
-			return httpFetchResult{}, fmt.Errorf("blocked by robots.txt for %s", target.String())
-		}
 	}
 
 	var body io.Reader
@@ -336,18 +316,17 @@ func (a *App) doHTTPRequest(parent context.Context, cfg ConfigState, req HTTPReq
 	}
 
 	result := HTTPRequestToolResult{
-		Method:        method,
-		URL:           target.String(),
-		FinalURL:      resp.Request.URL.String(),
-		Status:        resp.StatusCode,
-		StatusText:    resp.Status,
-		Headers:       flattenHTTPHeaders(resp.Header),
-		ContentType:   mediaType,
-		BytesRead:     len(raw),
-		Truncated:     truncated,
-		DurationMS:    duration,
-		Redirects:     redirects,
-		RobotsAllowed: boolDefault(req.RespectRobots, false),
+		Method:      method,
+		URL:         target.String(),
+		FinalURL:    resp.Request.URL.String(),
+		Status:      resp.StatusCode,
+		StatusText:  resp.Status,
+		Headers:     flattenHTTPHeaders(resp.Header),
+		ContentType: mediaType,
+		BytesRead:   len(raw),
+		Truncated:   truncated,
+		DurationMS:  duration,
+		Redirects:   redirects,
 	}
 	if contentEncoding != "" {
 		result.Headers["Ally-Decoded-Content-Encoding"] = contentEncoding
@@ -772,132 +751,6 @@ func isTextResponse(mediaType string, data []byte) bool {
 func isHTMLContentType(contentType string) bool {
 	contentType = strings.ToLower(contentType)
 	return contentType == "text/html" || contentType == "application/xhtml+xml" || strings.Contains(contentType, "html")
-}
-
-func (a *App) robotsAllows(ctx context.Context, cfg ConfigState, target *url.URL, userAgent string, allowPrivate bool) (bool, error) {
-	robotsURL := *target
-	robotsURL.Path = "/robots.txt"
-	robotsURL.RawPath = ""
-	robotsURL.RawQuery = ""
-	robotsURL.Fragment = ""
-	if err := validateHTTPURLAccessForConfig(&robotsURL, allowPrivate, cfg); err != nil {
-		return false, err
-	}
-	if err := a.waitHTTPRateLimit(ctx, &robotsURL); err != nil {
-		return false, err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, robotsURL.String(), nil)
-	if err != nil {
-		return false, err
-	}
-	req.Header.Set("User-Agent", userAgent)
-	client := &http.Client{Timeout: 10 * time.Second, Transport: httpTransport(cfg, allowPrivate, false)}
-	resp, err := client.Do(req)
-	if err != nil {
-		return true, nil
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusNotFound {
-		return true, nil
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return true, nil
-	}
-	data, _, err := readLimited(resp.Body, 64*1024)
-	if err != nil {
-		return true, nil
-	}
-	return robotsPathAllowed(string(data), target.EscapedPath(), userAgent), nil
-}
-
-func robotsPathAllowed(robotsText, escapedPath, userAgent string) bool {
-	if escapedPath == "" {
-		escapedPath = "/"
-	}
-	type rule struct {
-		allow   bool
-		pattern string
-	}
-	applies := false
-	currentAgents := []string{}
-	rules := []rule{}
-	flush := func() {
-		if len(currentAgents) == 0 {
-			return
-		}
-		matches := false
-		ua := strings.ToLower(userAgent)
-		for _, agent := range currentAgents {
-			agent = strings.ToLower(strings.TrimSpace(agent))
-			if agent == "*" || (agent != "" && strings.Contains(ua, agent)) {
-				matches = true
-				break
-			}
-		}
-		if matches {
-			applies = true
-		}
-	}
-
-	lines := strings.Split(robotsText, "\n")
-	for _, raw := range lines {
-		line := strings.TrimSpace(strings.SplitN(raw, "#", 2)[0])
-		if line == "" {
-			if applies {
-				break
-			}
-			currentAgents = nil
-			continue
-		}
-		parts := strings.SplitN(line, ":", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		key := strings.ToLower(strings.TrimSpace(parts[0]))
-		value := strings.TrimSpace(parts[1])
-		switch key {
-		case "user-agent":
-			if len(rules) > 0 && !applies {
-				currentAgents = nil
-			}
-			currentAgents = append(currentAgents, value)
-		case "allow", "disallow":
-			flush()
-			if applies {
-				rules = append(rules, rule{allow: key == "allow", pattern: value})
-			}
-		}
-	}
-	flush()
-
-	bestLen := -1
-	bestAllow := true
-	for _, r := range rules {
-		if r.pattern == "" {
-			continue
-		}
-		if robotsPatternMatches(r.pattern, escapedPath) && len(r.pattern) > bestLen {
-			bestLen = len(r.pattern)
-			bestAllow = r.allow
-		}
-	}
-	return bestAllow
-}
-
-func robotsPatternMatches(pattern, escapedPath string) bool {
-	pattern = strings.TrimSpace(pattern)
-	if pattern == "" {
-		return false
-	}
-	if strings.HasSuffix(pattern, "$") {
-		prefix := strings.TrimSuffix(pattern, "$")
-		return escapedPath == prefix
-	}
-	if strings.Contains(pattern, "*") {
-		re, err := regexp.Compile("^" + grep.GlobPatternToRegex(pattern))
-		return err == nil && re.MatchString(escapedPath)
-	}
-	return strings.HasPrefix(escapedPath, pattern)
 }
 
 // htmlExtractContent parses the page with Readability (the Readability.js
