@@ -2912,7 +2912,10 @@ async function switchWorkspaceTab(id) {
     if (workspaceSwitchVersion !== switchVersion || activeWorkspaceId.value !== id) return;
     unloadInactiveSessionMessages();
     loadTodos(linkedSession.id);
-    restoreMessagesToBottom(linkedSession.id);
+    // Do NOT restore to bottom on tab switch - each ChatMessages instance
+    // stays mounted (display-directive="show") so the browser naturally
+    // preserves its scroll position when hidden/shown.
+    // restoreMessagesToBottom is only for new session loads (activateSelectedSession).
   }
   await refreshFooterStats({
     tabId: id,
@@ -4881,7 +4884,7 @@ async function sendPrompt() {
   // Save to workspace-scoped prompt history
   addPromptHistory(displayText);
   commandHistoryIndex.value = -1;
-  promptText.value = '';
+  clearPromptDraft(session.id);
   clearPendingAttachments(session.id, { revoke: false });
   commandMenuVisible.value = false;
   scrollMessagesToBottom({ force: true });
@@ -4919,7 +4922,7 @@ async function injectMessageToRun(session, sendText, displayText, attachments) {
   }
   addPromptHistory(displayText);
   commandHistoryIndex.value = -1;
-  promptText.value = '';
+  clearPromptDraft(session.id);
   clearPendingAttachments(session.id);
   commandMenuVisible.value = false;
   scrollMessagesToBottom({ force: true });
@@ -5098,9 +5101,28 @@ function handlePromptInput() {
   }
 }
 
-function getPromptTextarea() {
-  const root = promptInputRefs[activeWorkspaceId.value]?.$el || promptInputRefs[activeWorkspaceId.value];
+function getPromptTextarea(tabId = activeWorkspaceId.value) {
+  const root = promptInputRefs[tabId]?.$el || promptInputRefs[tabId];
   return root?.querySelector?.('textarea[data-ally-prompt-input="true"], textarea') || null;
+}
+
+// Keep Naive UI's textarea autosize mirror in sync when a prompt is cleared by
+// sending. The value is controlled by Vue, but the component deliberately
+// skips some controlled-value watcher updates after a native input event via
+// its internal syncSource guard. Replaying the normal input path after Vue has
+// rendered the reactive clear updates both the textarea and its hidden mirror,
+// so a long draft cannot leave the composer at maxRows.
+function clearPromptDraft(sessionId, tabId = activeWorkspaceId.value) {
+  if (!sessionId) return;
+  sessionPromptTexts[sessionId] = '';
+  nextTick(() => {
+    // Do not overwrite a new draft typed before this cleanup callback runs.
+    if (sessionPromptTexts[sessionId] !== '') return;
+    const textarea = getPromptTextarea(tabId);
+    if (!textarea) return;
+    textarea.value = '';
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+  });
 }
 
 function detectFileMention(text, caret) {
@@ -5518,7 +5540,7 @@ function appendToolEventFallback(session, data = {}, status = 'running') {
   if (!session) return null;
   const eventId = toolEventId(data);
   const title = makeToolResultTitle(data.name, data.result, data) || makeToolTitle(data.name, data.args || '', data);
-  const scheduledAction = data.name === 'scheduled_task'
+  const scheduledAction = isActionKeyedToolName(data.name)
     ? (parseToolArgsBestEffort(data.args || '').action || '')
     : '';
   const payload = {
@@ -5906,9 +5928,9 @@ function updateToolEvent(id, name, title, body, status = 'default', meta = {}, t
     askSubmitting: existing?.askSubmitting || false,
     askSubmitted: existing?.askSubmitted || false,
     askAnswers: existing?.askAnswers || [],
-    // scheduled_task's card verb depends on the action; capture it (args may be
+    // scheduled_task / service card verbs depend on the action; capture it (args may be
     // absent on an early tool:start, so fall back to the existing value).
-    scheduledAction: name === 'scheduled_task' ? (parsed.action || existing?.scheduledAction || '') : (existing?.scheduledAction || ''),
+    scheduledAction: isActionKeyedToolName(name) ? (parsed.action || existing?.scheduledAction || '') : (existing?.scheduledAction || ''),
     ...((name === 'subagent' || name === 'agent_delegate') ? {
       subagentId: existing?.subagentId || '',
       description: parsed.description || existing?.description || parsed.task || '',
@@ -6864,6 +6886,11 @@ function formatMcpArgsSummary(parsed) {
     }
   }
   return parts.slice(0, 2).join(' · ');
+}
+
+// Tools whose card verb is keyed by the parsed args.action (see toolVerb.mjs).
+function isActionKeyedToolName(name) {
+  return name === 'scheduled_task' || name === 'service';
 }
 
 function makeToolTitle(name, args, meta = {}) {

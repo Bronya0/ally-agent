@@ -46,6 +46,9 @@ const TOOL_VERBS = {
   remote_run_command: ['Remote Running', 'Remote Ran', 'Remote Command'],
   Bash: ['Running', 'Ran', 'Command'],
   run: ['Running', 'Ran', 'Run'],
+  // service is one backend tool multiplexing start/stop/list/read; this entry
+  // is the fallback when the action is unknown (e.g. an old card whose args
+  // weren't captured). Action-keyed forms live in SERVICE_VERBS below.
   service: ['Starting service', 'Started service', 'Service'],
   start_service: ['Starting service', 'Started service', 'Service'],
   stop_service: ['Stopping service', 'Stopped service', 'Service'],
@@ -86,6 +89,16 @@ const SCHEDULED_TASK_VERBS = {
   list: ['Listing Scheduled Tasks', 'Listed Scheduled Tasks', 'Scheduled task list'],
 };
 
+// service multiplexes start/stop/list/read through args.action like
+// scheduled_task; key by action so a stop call reads "Stopped service" instead of
+// always "Started service". [inProgress, done, noun].
+const SERVICE_VERBS = {
+  start: ['Starting service', 'Started service', 'Service start'],
+  stop: ['Stopping service', 'Stopped service', 'Service stop'],
+  list: ['Listing services', 'Listed services', 'Service list'],
+  read: ['Reading service output', 'Read service output', 'Service read'],
+};
+
 // Fallback verbs by kind, for names not in the table above (e.g. MCP tools whose
 // name is `mcp__server__tool`, or genuinely unknown tools bucketed as `other`).
 const KIND_VERBS = {
@@ -102,14 +115,15 @@ function isError(status) {
 
 // Returns the verb to show for a tool call. `name` is the raw backend tool name,
 // `kind` the derived kind (used only as a fallback), `status` the call status.
-// `action` disambiguates multi-action tools (currently scheduled_task); pass the
-// parsed args.action when available, omit otherwise.
+// `action` disambiguates multi-action tools (currently scheduled_task and
+// service); pass the parsed args.action when available, omit otherwise.
 // On error the label names the action ("Delete failed") rather than a bare "Failed".
 export function toolVerbLabel(name, kind, status, action) {
   let forms = TOOL_VERBS[name] || KIND_VERBS[kind] || null;
-  if (name === 'scheduled_task') {
+  if (name === 'scheduled_task' || name === 'service') {
     const key = String(action || '').trim().toLowerCase();
-    forms = SCHEDULED_TASK_VERBS[key] || forms;
+    const table = name === 'scheduled_task' ? SCHEDULED_TASK_VERBS : SERVICE_VERBS;
+    forms = table[key] || forms;
   }
   if (isError(status)) return forms ? `${forms[2]} failed` : 'Failed';
   if (forms) return isDone(status) ? forms[1] : forms[0];
