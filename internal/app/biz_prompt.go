@@ -53,10 +53,26 @@ func priorityOrderDeclaration() string {
 
 // sharedEditRules returns the core file-editing rules shared by the main and sub-agent system prompts.
 func sharedEditRules() string {
-	return "1. Before a file's first edit, use `read` to obtain numbered content and its `version`. Text lines are displayed as `N: content`; the `N: ` prefix is not file content and must never be copied into edit text. During one continuous task, assume workspace files are not concurrently edited by another person; do not re-read a file merely for reassurance. After a successful edit, reuse its returned `version` only when the current source is known exactly. Re-read when the current source or line numbers are unknown, context compaction removed the reliable snapshot, or a formatter/generator/command or other external process may have changed the file.\n" +
-		"2. `path` and `version` are REQUIRED fields inside each `files` item — they sit inside the file object, never at the top level of the call, and must never be omitted; a file object missing either one fails the entire call.\n" +
-		"3. Batch edits by risk and size: put all independent changes for the affected files into a single `edit` call so the task finishes in one round; merge small, low-risk changes across files, but keep very large replacements — a whole function, section, or roughly 100+ lines of `newText` — in their own `edit` call. A batch is all-or-nothing: one failed `oldText` match or stale `version` rejects the entire call, and an oversized JSON risks output truncation. Never send multiple file-mutation tool calls for the same path in one model response. Do not use patch, unified diff, or git apply.\n" +
-		"4. When an edit fails with `E_NO_MATCH` or `E_VERSION_MISMATCH`, your first action is always to re-read the affected file and copy the exact current text. Never retry from memory or with guessed text — a failed match means your snapshot is stale, and guessing only wastes calls.\n"
+	return "1. Before a file's first edit, use `read` to obtain numbered content and its `version`:\n" +
+		"   - Text lines are displayed as `N: content`; the `N: ` prefix is not file content and must never be copied into edit text.\n" +
+		"   - During one continuous task, assume workspace files are not concurrently edited by another person; do not re-read a file merely for reassurance.\n" +
+		"   - After a successful edit, reuse its returned `version` only when the current source is known exactly.\n" +
+		"   - Re-read when the current source or line numbers are unknown, context compaction removed the reliable snapshot, or a formatter/generator/command or other external process may have changed the file.\n" +
+		"2. Keep the model-facing `edit` request shape as follows:\n" +
+		"   - The top-level `files` value must be a JSON array (`[...]`), never a quoted string.\n" +
+		"   - Each `files` item must be an object containing its own `path`, `version`, and `changes`; `path` and `version` never go at the top level of the call.\n" +
+		"   - Each file's `changes` value must be a JSON array (`[...]`), never a quoted string.\n" +
+		"   - Missing required fields fail the entire call.\n" +
+		"3. Batch edits by risk and size:\n" +
+		"   - Put all independent changes for the affected files into a single `edit` call; merge small, low-risk changes across files.\n" +
+		"   - Keep very large replacements — a whole function, section, or roughly 100+ lines of `newText` — in their own `edit` call.\n" +
+		"   - A batch is all-or-nothing: one failed `oldText` match or stale `version` rejects the entire call, and an oversized JSON risks output truncation.\n" +
+		"   - Never send multiple file-mutation tool calls for the same path in one model response.\n" +
+		"   - Do not use patch, unified diff, or git apply.\n" +
+		"4. When an edit fails with `E_NO_MATCH` or `E_VERSION_MISMATCH`:\n" +
+		"   - The first action is always to re-read the affected file.\n" +
+		"   - Copy the exact current text from that fresh read.\n" +
+		"   - Never retry from memory or with guessed text; a failed match means the snapshot is stale.\n"
 }
 
 // sharedBatchStrategy returns the batch/parallel tool-call strategy shared by the main and sub-agent system prompts.
@@ -269,8 +285,13 @@ func buildPlatformInfo(gitBashPath string) string {
 	}
 
 	b.WriteString("\n## Tool Paths\n\n")
-	b.WriteString("File tools accept paths with **forward slashes (`/`)** regardless of operating system.\n")
-	b.WriteString("Write tools (`edit`, `create`, `delete`) require workspace-relative paths, absolute paths inside the workspace, or absolute paths inside `~/.ally_agent` (the Ally config and global-memory whitelist, so `read`/`edit`/`create`/`delete` can manage `~/.ally_agent/memories` directly). Read-only tools may inspect explicit absolute paths outside the workspace. `command` keeps its cwd inside the workspace, permits null-device redirection, and may create a new outside path when it does not already exist; modifying or deleting an existing outside path is refused.\n")
+	b.WriteString("- File tools accept paths with **forward slashes (`/`)** regardless of operating system.\n")
+	b.WriteString("- Write tools (`edit`, `create`, `delete`) require:\n" +
+		"  - workspace-relative paths;\n" +
+		"  - absolute paths inside the workspace; or\n" +
+		"  - absolute paths inside `~/.ally_agent` (the Ally config and global-memory whitelist, so `read`/`edit`/`create`/`delete` can manage `~/.ally_agent/memories` directly).\n")
+	b.WriteString("- Read-only tools may inspect explicit absolute paths outside the workspace.\n")
+	b.WriteString("- `command` keeps its cwd inside the workspace, permits null-device redirection, and may create a new outside path when it does not already exist; modifying or deleting an existing outside path is refused.\n")
 
 	return b.String()
 }

@@ -2500,14 +2500,15 @@ const historyOptions = computed(() => {
         NButton,
         {
           size: 'small',
-          type: 'primary',
-          ghost: true,
+          type: 'default',
           block: true,
+          style: { color: '#e0a070', textAlign: 'left', justifyContent: 'flex-start', border: 'none', background: 'transparent' },
         },
         {
           default: () => [
-            h('span', { class: 'add-label' }, [
-              h(PlusOutlined, { class: 'add-icon' }),
+            h('span', { class: 'add-label', style: { justifyContent: 'flex-start', width: '100%', display: 'flex', alignItems: 'center', gap: '6px' } }, [
+              h('span', '+'),
+              h(PlusOutlined, { class: 'add-icon', style: { fontSize: '12px' } }),
               t('header.addWorkspace'),
             ]),
           ],

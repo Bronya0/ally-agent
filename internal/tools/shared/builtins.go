@@ -56,14 +56,23 @@ func chatToolsUncached() []openai.Tool {
 				"includeIgnored": map[string]any{"type": "boolean", "description": "Include heavy ignored directories such as .git, node_modules, dist, build. Default false."},
 			},
 		}),
-		functionTool("edit", "Validate and apply exact replacements across multiple workspace files in one call. Each file requires the current 6-char `version` from read; a stale one fails with E_VERSION_MISMATCH — re-read affected files and retry. IMPORTANT: `path` and `version` are required per-file fields — they must be written inside each `files` item, never at the top level of the call, and never omitted; a file object missing either one fails the whole call. Prefer a small exact unique `oldText` per change; `replace_all` replaces every non-overlapping exact occurrence; `lineRange` (A-B form) replaces larger whole-line blocks. If exact matching fails, Ally retries once normalizing invisible differences (trailing spaces, smart/Unicode quotes and dashes); an ambiguous match fails with E_MULTI_MATCH — add surrounding context. All changes in a file share the original read version, so no offset adjustment between changes. After writing, `validation` contains a concise syntax/compile check — the file is already written; fix it with another edit. Error codes: E_BAD_EDIT, E_VERSION_MISMATCH, E_PATH_OUTSIDE.", map[string]any{
+		functionTool("edit", "Validate and apply exact replacements across multiple workspace files in one call.\n"+
+			"- Read each affected file first; every file requires the current 6-character `version` from `read`. A stale version fails with `E_VERSION_MISMATCH`; re-read affected files and retry.\n"+
+			"- The top-level `files` value must be a JSON array (`[...]`), never a quoted string.\n"+
+			"- Each `files` item must be an object containing its own `path`, `version`, and `changes`; `path` and `version` never go at the top level, and missing required fields fail the whole call.\n"+
+			"- Each file's `changes` value must be a JSON array (`[...]`), never a quoted string.\n"+
+			"- Prefer a small exact unique `oldText` per change; `replace_all` replaces every non-overlapping exact occurrence; `lineRange` (A-B form) replaces larger whole-line blocks.\n"+
+			"- If exact matching fails, Ally retries once after normalizing invisible differences such as trailing spaces and smart/Unicode quotes and dashes. An ambiguous match fails with `E_MULTI_MATCH`; add surrounding context.\n"+
+			"- All changes in a file share the original read version, so no offset adjustment is needed between changes.\n"+
+			"- After writing, `validation` contains a concise syntax/compile check. The file is already written if validation fails; fix the reported issue with another edit.\n"+
+			"- Error codes include `E_BAD_EDIT`, `E_VERSION_MISMATCH`, and `E_PATH_OUTSIDE`.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"files": map[string]any{
 					"type":        "array",
 					"minItems":    1,
 					"maxItems":    20,
-					"description": "Files to edit in this call (1-20): an array of file objects, each carrying its own `path`, `version`, and `changes` — `path`/`version` are per-file required fields and must never be hoisted to the top level of the call. Put all independent changes for the same file in one changes array when possible (max 50); repeated normalized paths with the same version merge; total changes across all files must not exceed 200.",
+					"description": "Files to edit in this call (1-20):\n- `files` is an array of file objects, never a quoted string.\n- Each item carries its own `path`, `version`, and `changes`; `path` and `version` must not be hoisted to the top level.\n- Put all independent changes for the same file in one `changes` array when possible (max 50); repeated normalized paths with the same version merge; total changes across all files must not exceed 200.",
 					"items": map[string]any{
 						"type": "object",
 						"properties": map[string]any{
@@ -218,7 +227,13 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"target", "path"},
 		}),
-		functionTool("remote_edit", "Validate and apply replacements across multiple files on one remote SSH target. Same contract as edit: each file requires the current 6-char version from remote_read_file; E_VERSION_MISMATCH means re-read before editing. Per change choose exactly one source: a small exact unique oldText copied from remote_read_file (preferred) or an inclusive whole-line lineRange in A-B form for larger blocks; replace_all works only with oldText; newText is required.", map[string]any{
+		functionTool("remote_edit", "Validate and apply replacements across multiple files on one remote SSH target.\n"+
+			"- Each file requires the current 6-character version from `remote_read_file`; `E_VERSION_MISMATCH` means re-read before editing.\n"+
+			"- The `files` value must be a JSON array of file objects, never a quoted string.\n"+
+			"- Each `files` item carries its own `path`, `version`, and `changes`; each item's `changes` value must be a JSON array (`[...]`), never a quoted string.\n"+
+			"- Each change chooses exactly one source: a small exact unique `oldText` copied from `remote_read_file` (preferred), or an inclusive whole-line `lineRange` in A-B form for larger blocks.\n"+
+			"- `replace_all` works only with `oldText`.\n"+
+			"- `newText` is required.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"target": map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Explicit SSH target plus workspace root, e.g. my-dev:/srv/app."},

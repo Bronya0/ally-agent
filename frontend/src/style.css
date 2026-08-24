@@ -2340,7 +2340,7 @@ code, pre {
   max-height: min(360px, calc(100vh - 72px));
 }
 
-/* 固定在弹框顶部的“添加工作空间”：sticky 容器 + 原生 naive-ui n-button */
+/* 固定在弹框顶部的添加工作空间：左对齐、无边框、琥珀色文本按钮 */
 .workspace-history-menu .add-workspace-option {
   position: sticky;
   top: 0;
@@ -2359,19 +2359,31 @@ code, pre {
 }
 
 .workspace-history-menu .add-workspace-option .n-button {
-  margin: 0 8px;
+  margin: 0;
+  padding: 6px 8px;
+  color: #e0a070 !important;
+  border: none !important;
+  background: transparent !important;
+  text-align: left !important;
+  justify-content: flex-start !important;
+}
+
+.workspace-history-menu .add-workspace-option .n-button:hover,
+.workspace-history-menu .add-workspace-option .n-button:focus-visible {
+  background: rgba(224, 160, 112, 0.1) !important;
+  color: #f0b887 !important;
 }
 
 .workspace-history-menu .add-label {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   gap: 6px;
   width: 100%;
 }
 
 .workspace-history-menu .add-icon {
-  font-size: 14px;
+  font-size: 12px;
 }
 
 .markdown-body img {
