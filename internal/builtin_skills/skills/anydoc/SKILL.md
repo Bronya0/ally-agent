@@ -2,7 +2,7 @@
 name: anydoc
 description: 通过 anydoc CLI（npx @firecrawl/anydoc）把 doc/docx/docm/ppt/pps/pot/pptx/pptm/ppsx/ppsm/xls/xlsx/xlsm/xlsb/odt/ods/odp/rtf/epub/csv/pdf 转 Markdown，保留表格、标题、脚注、备注等结构，公式转 LaTeX。无需安装，本地转换。
 type: document-conversion
-whenToUse: 用户要求把办公文档转换为 Markdown，或需要保留表格/标题树/脚注/公式等结构的文档内容提取、内置 read 的扁平文本抽取不够用时。注意：仅简单查阅 .docx/.pptx/.xlsx/.pdf 内容时优先直接用内置 read 工具，不要为普通阅读请求加载本 skill 增加转换开销。
+whenToUse: 用户要求把办公文档转换为 Markdown，或需要读取 .docx/.pptx/.xlsx/.pdf 等办公/PDF 文档内容时使用（Ally 的 read 工具不支持这些格式，会返回 E_DOCUMENT_UNSUPPORTED 并指向本 skill）。
 ---
 
 # AnyDoc Skill
@@ -19,7 +19,7 @@ npx -y @firecrawl/anydoc slides.pptx -o slides.md # 写入文件
 npx -y @firecrawl/anydoc - --format csv < d.csv   # 从 stdin 读
 ```
 
-`-y` 让 npx 跳过交互确认（命令在非交互 shell 里跑，缺了会卡住）。首次运行有下载延迟属正常，不要误判为失败重试。若用户环境没有 Node 20+，如实报告版本要求，由用户决定是否升级；用户拒绝时不转换，仅对 `.docx/.pptx/.xlsx/.pdf` 可回退 Ally 内置 `read` 工具的简单文本抽取（丢表格结构，仅保底）。
+`-y` 让 npx 跳过交互确认（命令在非交互 shell 里跑，缺了会卡住）。首次运行有下载延迟属正常，不要误判为失败重试。若用户环境没有 Node 20+，如实告知版本要求；用户不愿安装 Node 时不要就此作罢，可自行评估改用系统已有的运行时（如 Python 及其文档库）完成转换。
 
 ## 2. 支持格式与能力
 
@@ -41,7 +41,7 @@ npx -y @firecrawl/anydoc - --format csv < d.csv   # 从 stdin 读
 - **格式检测看内容不看扩展名**：默认不传 `--format`，让内容检测生效（扩展名标错的文件通常也能转对）。仅当检测无法工作时显式传入：stdin 读入的 CSV（无内容签名、无扩展名可依）；文件缺失或标错扩展名且转换报错时，补 `--format <规范名>` 重试一次。
 - **大文件**：优先 `-o out.md` 落盘到 workspace，再用 `read` 工具分段读取，不要把全部输出流进上下文。
 - **网络输入**：可用管道 `curl -s <url> | npx -y @firecrawl/anydoc -` 直接转换远端文档；大 PDF 同样建议落盘再转。
-- **与内置 read 的关系**：Ally 的 `read` 工具本身能读 `.docx/.pptx/.xlsx/.pdf`，但只做扁平文本抽取（表格结构丢失）。需要结构保真时才走本 skill。
+- **与内置 read 的关系**：Ally 的 `read` 工具只支持纯文本和图片，不解析办公/PDF 文档——`read` 遇到这类文件会返回 `E_DOCUMENT_UNSUPPORTED` 并指向本 skill。读文档 = 先用本 skill 转 `.md` 落盘，再 `read` 转换产物。
 - **代码集成**：若要在用户项目的代码里使用（而非本 skill 的命令行调用），官方建议优先用库而不是 shell 调用：npm `@firecrawl/anydoc`、PyPI `firecrawl-anydoc`、crates.io `anydoc`，三端 API 一致（`toMarkdown` / `to_markdown`）。
 - **单向转换**：anydoc 只做文档 → Markdown，不支持反向生成 docx 等。
 
@@ -50,5 +50,5 @@ npx -y @firecrawl/anydoc - --format csv < d.csv   # 从 stdin 读
 - npx 卡住/首次慢 → 检查 Node 版本 ≥ 20；首次下载属正常，不要静默重试。
 - `unsupported`（纯图片/扫描 PDF）→ 属预期边界，官方方案是托管 OCR（Firecrawl Parse API），开源替代可选 MinerU 等，不要重试。
 - `encrypted` → 加密文档无法处理，请用户提供解密版本。
-- 结果为空/`malformed` → 确认文件未损坏；必要时回退内置 `read` 保底。
+- 结果为空/`malformed` → 确认文件未损坏；转换确实无内容时向用户说明，不要回退其他工具硬读。
 - 其他参数错误 → 先 `npx -y @firecrawl/anydoc --help` 查准确用法，不要硬猜。

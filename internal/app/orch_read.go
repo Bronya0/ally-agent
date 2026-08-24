@@ -30,7 +30,6 @@ import (
 
 	openai "github.com/sashabaranov/go-openai"
 
-	"ally-dev/internal/tools/read"
 	toolshared "ally-dev/internal/tools/shared"
 )
 
@@ -192,30 +191,16 @@ func (a *App) batchReadFilesWithConfig(cfg ConfigState, req BatchReadRequest) (*
 		Path      string
 		StartLine int
 		EndLine   int
-		Sheet     string
-		MaxChars  int
 	}
 
 	// Deduplicate only truly identical effective read requests.
 	seen := map[batchReadKey]bool{}
 	readKey := func(path string, readReq ReadFileRequest) batchReadKey {
-		key := batchReadKey{
+		return batchReadKey{
 			Path:      filepath.ToSlash(filepath.Clean(path)),
 			StartLine: readReq.StartLine,
 			EndLine:   readReq.EndLine,
-			Sheet:     readReq.Sheet,
-			MaxChars:  readReq.MaxChars,
 		}
-		// Document reads (.docx/.pptx/.xlsx/.pdf) ignore startLine/endLine
-		// entirely: they always extract the full text. Zero the range in the
-		// dedup key so the same document requested with different (meaningless)
-		// line ranges collapses to one read instead of extracting the same
-		// payload N times into model context.
-		if shouldExtractDocumentInRead(path) {
-			key.StartLine = 0
-			key.EndLine = 0
-		}
-		return key
 	}
 	addIfNotSeen := func(key batchReadKey) bool {
 		if seen[key] {
@@ -241,8 +226,6 @@ func (a *App) batchReadFilesWithConfig(cfg ConfigState, req BatchReadRequest) (*
 			Path:      req.Path,
 			StartLine: req.StartLine,
 			EndLine:   req.EndLine,
-			Sheet:     req.Sheet,
-			MaxChars:  req.MaxChars,
 		}
 		if addIfNotSeen(readKey(req.Path, fileReq)) {
 			pending = append(pending, pendingRead{path: req.Path, req: fileReq})
@@ -253,8 +236,6 @@ func (a *App) batchReadFilesWithConfig(cfg ConfigState, req BatchReadRequest) (*
 			Path:      p,
 			StartLine: req.StartLine,
 			EndLine:   req.EndLine,
-			Sheet:     req.Sheet,
-			MaxChars:  req.MaxChars,
 		}
 		if addIfNotSeen(readKey(p, fileReq)) {
 			pending = append(pending, pendingRead{path: p, req: fileReq})
@@ -265,20 +246,12 @@ func (a *App) batchReadFilesWithConfig(cfg ConfigState, req BatchReadRequest) (*
 			Path:      file.Path,
 			StartLine: file.StartLine,
 			EndLine:   file.EndLine,
-			Sheet:     file.Sheet,
-			MaxChars:  file.MaxChars,
 		}
 		if fileReq.StartLine == 0 {
 			fileReq.StartLine = req.StartLine
 		}
 		if fileReq.EndLine == 0 {
 			fileReq.EndLine = req.EndLine
-		}
-		if fileReq.Sheet == "" {
-			fileReq.Sheet = req.Sheet
-		}
-		if fileReq.MaxChars == 0 {
-			fileReq.MaxChars = req.MaxChars
 		}
 		if addIfNotSeen(readKey(file.Path, fileReq)) {
 			pending = append(pending, pendingRead{path: file.Path, req: fileReq})
@@ -348,10 +321,6 @@ func (a *App) batchReadOneWithConfig(cfg ConfigState, path string, req ReadFileR
 	}
 	content := result.Content
 	contentFormat := result.ContentFormat
-	if result.Kind == "document" {
-		content = result.Content
-		contentFormat = "plain"
-	}
 	return BatchReadResultItem{
 		Path:                  result.Path,
 		Content:               content,
@@ -372,74 +341,8 @@ func (a *App) batchReadOneWithConfig(cfg ConfigState, path string, req ReadFileR
 		TruncatedLinesOmitted: result.TruncatedLinesOmitted,
 		RangeStatus:           result.RangeStatus,
 		EmptyRange:            result.EmptyRange,
-		Sheets:                result.Sheets,
 		DataURL:               result.DataURL,
 	}
-}
-
-// ── Document Read ────────────────────────────────────────
-
-func (a *App) readDocumentWithConfig(cfg ConfigState, req DocumentReadRequest) (DocumentReadResult, error) {
-	if strings.TrimSpace(req.Path) == "" {
-		return DocumentReadResult{}, errors.New("path is required")
-	}
-	fullPath, err := resolveReadPath(cfg, req.Path)
-	if err != nil {
-		return DocumentReadResult{}, err
-	}
-	info, err := os.Stat(fullPath)
-	if err != nil {
-		return DocumentReadResult{}, err
-	}
-	if info.IsDir() {
-		return DocumentReadResult{}, codedToolError("E_IS_DIRECTORY", errors.New("path is a directory"))
-	}
-	maxChars := req.MaxChars
-	if maxChars <= 0 {
-		maxChars = 60000
-	}
-	if maxChars > 200000 {
-		maxChars = 200000
-	}
-	ext := strings.ToLower(filepath.Ext(fullPath))
-	var text string
-	var sheets []string
-	switch ext {
-	case ".docx":
-		text, err = read.ExtractDocxText(fullPath)
-	case ".pptx":
-		text, err = read.ExtractPptxText(fullPath)
-	case ".xlsx":
-		text, sheets, err = read.ExtractXlsxText(fullPath, req.Sheet)
-	case ".pdf":
-		text, err = read.ExtractPDFTextBestEffort(fullPath)
-	case ".txt", ".md", ".json", ".csv", ".log":
-		data, readErr := os.ReadFile(fullPath)
-		if readErr != nil {
-			err = readErr
-		} else if !utf8.Valid(data) {
-			err = errors.New("file is not valid UTF-8")
-		} else {
-			text = string(data)
-		}
-	default:
-		return DocumentReadResult{}, fmt.Errorf("unsupported document type: %s", ext)
-	}
-	if err != nil {
-		return DocumentReadResult{}, err
-	}
-	truncated := false
-	if len(text) > maxChars {
-		text = text[:maxChars]
-		truncated = true
-	}
-	return DocumentReadResult{
-		Path:      displayPathForConfig(cfg, fullPath),
-		Type:      strings.TrimPrefix(ext, "."),
-		Text:      text,
-		Sheets:    sheets,
-		Truncated: truncated,
-	}, nil
 }
 
 // imageMimeFromHeader detects a supported image type from magic bytes. It
@@ -532,6 +435,7 @@ func (a *App) readImageWithConfig(cfg ConfigState, path string, req ReadFileRequ
 //     appending the next one (images are single-turn context, not history);
 //   - sanitizeHistoryMessages drops the message entirely so saved history never
 //     contains "images were provided" text without the actual images.
+//
 // The NUL prefix cannot appear in normal model/user text.
 const imageInjectionMarker = "\x00ally-image-input\x00"
 
@@ -622,9 +526,6 @@ func collectReadImages(name string, result *toolResult) []readImageCandidate {
 }
 
 func (a *App) readFileWithConfig(cfg ConfigState, req ReadFileRequest) (ReadFileResult, error) {
-	if shouldExtractDocumentInRead(req.Path) {
-		return a.readDocumentAsReadFileWithConfig(cfg, req)
-	}
 	path, err := resolveReadPath(cfg, req.Path)
 	if err != nil {
 		return ReadFileResult{}, err
@@ -652,6 +553,14 @@ func (a *App) readFileWithConfig(cfg ConfigState, req ReadFileRequest) (ReadFile
 			return a.readImageWithConfig(cfg, path, req, mime)
 		}
 		// Fall through: not actually an image, treat as text.
+	}
+	// Office/PDF documents are deliberately not parsed by the read tool. Fail
+	// fast with a coded, actionable error so the model converts the file to
+	// Markdown with the anydoc skill and reads the converted output instead of
+	// receiving a generic E_BINARY_FILE failure.
+	if documentExtensionInRead(path) {
+		return ReadFileResult{}, codedToolError("E_DOCUMENT_UNSUPPORTED",
+			fmt.Errorf("%s is an office/PDF document; read only supports plain text files. Convert it to Markdown first: load the anydoc skill (e.g. npx -y @firecrawl/anydoc %s -o converted.md), then read converted.md", filepath.Base(path), filepath.Base(path)))
 	}
 	data, info, err := readTextFile(path)
 	if err != nil {
@@ -694,60 +603,17 @@ func (a *App) readFileWithConfig(cfg ConfigState, req ReadFileRequest) (ReadFile
 	}, nil
 }
 
-func shouldExtractDocumentInRead(path string) bool {
+// documentExtensionInRead reports whether path looks like an office/PDF
+// document the read tool deliberately does not parse. Reading one returns a
+// coded E_DOCUMENT_UNSUPPORTED error pointing at the anydoc skill instead of a
+// generic binary-file failure.
+func documentExtensionInRead(path string) bool {
 	switch strings.ToLower(filepath.Ext(path)) {
 	case ".docx", ".pptx", ".xlsx", ".pdf":
 		return true
 	default:
 		return false
 	}
-}
-
-func (a *App) readDocumentAsReadFileWithConfig(cfg ConfigState, req ReadFileRequest) (ReadFileResult, error) {
-	doc, err := a.readDocumentWithConfig(cfg, DocumentReadRequest{
-		Path:     req.Path,
-		Sheet:    req.Sheet,
-		MaxChars: req.MaxChars,
-	})
-	if err != nil {
-		return ReadFileResult{}, err
-	}
-	fullPath, err := resolveReadPath(cfg, req.Path)
-	if err != nil {
-		return ReadFileResult{}, err
-	}
-	info, err := os.Stat(fullPath)
-	if err != nil {
-		return ReadFileResult{}, err
-	}
-	sha, err := hashFileSHA256(fullPath)
-	if err != nil {
-		return ReadFileResult{}, err
-	}
-	version, err := versionFromSHA256Hex(sha)
-	if err != nil {
-		return ReadFileResult{}, err
-	}
-	totalLines := countPlainTextLines(doc.Text)
-	return ReadFileResult{
-		Path:          doc.Path,
-		Content:       doc.Text,
-		RawContent:    doc.Text,
-		Text:          doc.Text,
-		Kind:          "document",
-		ContentFormat: "plain",
-		Type:          doc.Type,
-		Editable:      false,
-		StartLine:     1,
-		EndLine:       totalLines,
-		TotalLines:    totalLines,
-		SHA256:        sha,
-		Version:       version,
-		Size:          info.Size(),
-		Truncated:     doc.Truncated,
-		RangeStatus:   "document",
-		Sheets:        doc.Sheets,
-	}, nil
 }
 
 func countPlainTextLines(text string) int {

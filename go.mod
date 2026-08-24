@@ -8,7 +8,6 @@ require (
 	github.com/coder/websocket v1.8.14
 	github.com/go-git/go-git/v5 v5.19.2
 	github.com/klauspost/compress v1.19.0
-	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728
 	github.com/mark3labs/mcp-go v0.55.1
 	github.com/openai/openai-go v1.12.0
 	github.com/robfig/cron/v3 v3.0.1

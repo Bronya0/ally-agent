@@ -14,7 +14,6 @@ ripgrep is distributed under either the MIT License or the Unlicense. Copies of 
 
 - `mvdan.cc/sh/v3 v3.13.1` — BSD-3-Clause; Bash shell AST parsing used by `internal/tools/command`.
 - `github.com/go-git/go-git/v5 v5.19.2` — Apache-2.0; the `plumbing/format/gitignore` matcher is used for root `.gitignore` rules.
-- `github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728` — BSD-3-Clause; PDF structure and text extraction used by `internal/tools/read`.
 
 Their license texts and copyright notices are retained in the Go module distributions recorded by `go.mod` and `go.sum`.
 

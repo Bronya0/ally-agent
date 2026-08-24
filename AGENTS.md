@@ -103,7 +103,7 @@ Publishing the Release triggers `.github/workflows/build.yml`, which builds and 
 - `grep/` — ripgrep 封装与结果归一化
 - `memory/` — 记忆 Markdown frontmatter 解析 + 编排（Runtime 注入）
 - `pathutil/` — 工作区路径解析与安全检查（Runtime 注入）
-- `read/` — 文本读取、版本令牌、原子写入、文档文本抽取（PDF 使用 `github.com/ledongthuc/pdf`）
+- `read/` — 文本读取、版本令牌、原子写入（不解析办公/PDF 文档）
 - `scheduler/` — 计划任务调度解析、校验与下次执行计算
 - `service/` — 后台进程 rolling buffer 与长命令检测
 - `shared/` — 跨工具编码错误（`CodedError`）与内置工具 schema
@@ -333,7 +333,7 @@ Built-in model-facing tools:
 | Tool | Purpose |
 |------|---------|
 | `list_files` | List files/directories with depth and limit controls |
-| `read` | Read one or many local files; text returns numbered line previews, documents return extracted text |
+| `read` | Read one or many local files; text returns numbered line previews; only plain text and images are supported |
 | `edit` | Atomically apply exact-source or whole-line-range replacements to local files; after writing, returns a concise `validation` string with low-cost language checks |
 | `create` | Create/overwrite text files; after writing, returns a concise `validation` string with low-cost language checks |
 | `delete` | Delete files/directories |
@@ -367,7 +367,7 @@ mcp__<serverName>__<toolName>
 
 Accepted read forms:
 
-- Model-facing calls use only `files`: an array of one or more `{path, startLine?, endLine?, sheet?}` requests.
+- Model-facing calls use only `files`: an array of one or more `{path, startLine?, endLine?}` requests.
 - Backend compatibility fields may still accept the older `path`, `paths`, and shared-range forms, but they are not exposed in the tool schema.
 
 Text files:
@@ -377,7 +377,7 @@ Text files:
 - missing paths and directory targets are silently omitted from the returned `files` array (an ignored-only batch succeeds with an empty array); other partial failures stay in the corresponding file result with `errorCode` when known
 - include metadata: `startLine`, `endLine`, `nextStartLine`, `totalLines`, `truncated`, `truncatedLines`, `truncatedLinesOmitted`, `version`, `lineEnding`; `version` is a 6-character lowercase Crockford Base32 prefix derived from SHA-256 content and is compared case-insensitively
 
-Document files (`.docx`, `.pptx`, `.xlsx`, `.pdf`) return extracted text and are marked non-editable; extraction lives in `internal/tools/read` with no App coupling. OOXML uses the standard library, while PDF structure/text parsing uses `github.com/ledongthuc/pdf`.
+Office/PDF documents (`.docx`, `.pptx`, `.xlsx`, `.pdf`, etc.) are deliberately not parsed: read rejects them with a coded `E_DOCUMENT_UNSUPPORTED` error that points at the anydoc skill, whose conversion produces the Markdown the model then reads. Images keep their DataURL injection path.
 
 Range semantics for model-facing reads:
 

@@ -289,7 +289,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"pattern"},
 		}),
-		functionTool("read", "Read 1-20 files via a top-level `files` array (even for one file). Never use a top-level path/paths field or a string array; every item is an object with `path`. Missing paths and directories are silently omitted; other per-file failures stay visible. UTF-8 text is prefixed with display-only 1-based `N: ` line numbers and a 6-char `version` for edit — do not copy the prefixes into edit text. Omit startLine/endLine for the whole file; positive values give an inclusive range; a negative startLine reads the last N lines (max 10000) and must not combine with endLine. Large files auto-truncate with a `[Showing lines A-B of N. Use startLine=C to continue.]` marker — follow it to page. Documents (.docx/.pptx/.xlsx/.pdf) return non-editable extracted text; .xlsx accepts a sheet name or 1-based index.", map[string]any{
+		functionTool("read", "Read 1-20 files via a top-level `files` array (even for one file). Never use a top-level path/paths field or a string array; every item is an object with `path`. Missing paths and directories are silently omitted; other per-file failures stay visible. UTF-8 text is prefixed with display-only 1-based `N: ` line numbers and a 6-char `version` for edit — do not copy the prefixes into edit text. Omit startLine/endLine for the whole file; positive values give an inclusive range; a negative startLine reads the last N lines (max 10000) and must not combine with endLine. Large files auto-truncate with a `[Showing lines A-B of N. Use startLine=C to continue.]` marker — follow it to page. Only plain text files are supported: office/PDF documents (.docx/.pptx/.xlsx/.pdf, etc.) return E_DOCUMENT_UNSUPPORTED — convert them to Markdown with the anydoc skill first (e.g. npx -y @firecrawl/anydoc file.docx -o file.md), then read the converted .md. Images (.png/.jpg/.gif/.webp) are injected as visual input.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"files": batchReadFilesSchema(),
@@ -435,8 +435,6 @@ func batchReadFilesSchema() map[string]any {
 				"path":      map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "File path to read."},
 				"startLine": map[string]any{"type": "integer", "minimum": -MaxReadRangeLines, "description": "Optional 1-based start line. Positive reads from that line; negative reads the last N lines (max 10000) and must omit endLine."},
 				"endLine":   map[string]any{"type": "integer", "minimum": 1, "description": "Optional inclusive end line; omit to read through EOF, and omit when startLine is negative."},
-				"sheet":     map[string]any{"type": "string", "description": "Xlsx sheet name or 1-based sheet index for this file."},
-				"maxChars":  map[string]any{"type": "integer", "minimum": 1, "maximum": 200000, "description": "Maximum extracted characters for document extraction (.docx/.pptx/.xlsx/.pdf) only; for text files use startLine/endLine to bound the read."},
 			},
 			"required": []string{"path"},
 		},

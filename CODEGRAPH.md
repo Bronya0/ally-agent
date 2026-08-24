@@ -35,7 +35,7 @@
   - orch_subagent.go — 子代理执行循环：`executeDelegate`、提示词构建、事件发射、记录清理 [Lines: 614]
   - orch_file_ops.go — create/delete/run-command 编排、shell 检测（Git Bash 发现）、危险路径保护、路径安全解析 [Lines: 886]
   - orch_http.go — HTTP/Web fetch 工具、每主机限速、结果清洗（`truncateRunes`/`normalizeWhitespace`）
-  - orch_read.go — 批量读取、文档抽取、行预览渲染、run 级读取缓存
+  - orch_read.go — 批量读取、行预览渲染、run 级读取缓存（办公/PDF 文档拒绝并指路 anydoc skill）
   - orch_edit.go — 模型编辑执行（原子提交/回滚）
   - orch_edit_plan.go — 编辑批次归一化（`planLocalEditBatch` 唯一边界）
   - orch_validation.go — edit/create 写入后的低成本语言校验（Python/Go/JS/TS/Vue/Java/JSON），以单个 `validation` 字符串回填模型
@@ -59,7 +59,7 @@
   - grep/ — ripgrep 单次扫描与结果归一化（精确统计、Top-100 `fileCounts`、`offset` 翻页、`offsetExhausted` 越界信号与全仓库跳过策略）
   - memory/ — 记忆 Markdown frontmatter 解析
   - pathutil/ — 工作区路径解析与安全检查（Runtime 注入）
-  - read/ — 文本读取、版本令牌、原子写入、OOXML 文本与基于 `ledongthuc/pdf` 的 PDF 抽取
+  - read/ — 文本读取、版本令牌、原子写入（不解析办公/PDF 文档，文档走 anydoc skill 转 Markdown）
   - scheduler/ — 计划任务调度解析与下次执行计算
   - service/ — 后台进程 rolling buffer 与长命令检测
   - shared/ — `CodedError` 与内置工具 schema（`Builtins()`）
@@ -123,7 +123,6 @@
 - main.go → internal/app // Wails 服务绑定与嵌入资源
 - internal/app → internal/tools/* // 编排层调用纯算法（read/grep/edit/command/pathutil/shared 等）
 - internal/tools/command → mvdan.cc/sh/v3 // Bash AST 解析
-- internal/tools/read → github.com/ledongthuc/pdf // PDF 结构与文本解析
 - internal/app → github.com/go-git/go-git/v5/plumbing/format/gitignore // 根 .gitignore 匹配
 - internal/app → internal/builtin_skills // go:embed 内置 skill 内容
 - internal/app → github.com/wailsapp/wails/v3 // host_*.go 宿主桥接（仅这些文件）

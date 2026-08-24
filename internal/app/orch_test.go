@@ -8,8 +8,6 @@
 package app
 
 import (
-	"archive/zip"
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -2085,26 +2083,17 @@ func TestRunReadCacheEvictsEntriesUnderPressure(t *testing.T) {
 	}
 }
 
-func TestBatchReadDedupsDocumentReadsWithDifferentLineRanges(t *testing.T) {
+// TestReadRejectsOfficeDocumentsWithAnydocGuidance covers the deliberate
+// removal of built-in document extraction: office/PDF files must fail with the
+// coded E_DOCUMENT_UNSUPPORTED error that points at the anydoc skill instead
+// of being parsed (or failing as a generic binary file).
+func TestReadRejectsOfficeDocumentsWithAnydocGuidance(t *testing.T) {
 	dir := t.TempDir()
-	// Minimal .docx: a zip with word/document.xml. Document reads ignore
-	// startLine/endLine entirely, so the same doc requested with different
-	// ranges must collapse to one read instead of extracting the full text N
-	// times (the 2202-line docx read three times in one batch).
-	var buf bytes.Buffer
-	zw := zip.NewWriter(&buf)
-	w, err := zw.Create("word/document.xml")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := w.Write([]byte("<w:document><w:body><w:p><w:r><w:t>doc line</w:t></w:r></w:p></w:body></w:document>")); err != nil {
-		t.Fatal(err)
-	}
-	if err := zw.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "spec.docx"), buf.Bytes(), 0o600); err != nil {
-		t.Fatal(err)
+	// Content is irrelevant; the extension decides the rejection.
+	for _, name := range []string{"spec.docx", "deck.pptx", "book.xlsx", "scan.pdf"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("PK\x03\x04-not-really-parsed"), 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
 	app := NewApp()
 	cfg := ConfigState{Workspace: dir}
@@ -2112,18 +2101,24 @@ func TestBatchReadDedupsDocumentReadsWithDifferentLineRanges(t *testing.T) {
 	result, err := app.batchReadFilesWithConfig(cfg, BatchReadRequest{
 		Files: []BatchReadFileRequest{
 			{Path: "spec.docx"},
-			{Path: "spec.docx", StartLine: 1},
-			{Path: "spec.docx", StartLine: 1, EndLine: 2202},
+			{Path: "deck.pptx"},
+			{Path: "book.xlsx"},
+			{Path: "scan.pdf"},
 		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Files) != 1 {
-		t.Fatalf("expected identical document reads to dedup to 1 result, got %d: %#v", len(result.Files), result.Files)
+	if len(result.Files) != 4 {
+		t.Fatalf("expected 4 per-file errors, got %#v", result.Files)
 	}
-	if result.Files[0].Kind != "document" || !strings.Contains(result.Files[0].Content, "doc line") {
-		t.Fatalf("expected document extraction result, got %#v", result.Files[0])
+	for _, f := range result.Files {
+		if f.ErrorCode != "E_DOCUMENT_UNSUPPORTED" {
+			t.Fatalf("%s: expected E_DOCUMENT_UNSUPPORTED, got %#v", f.Path, f)
+		}
+		if !strings.Contains(f.Error, "anydoc") {
+			t.Fatalf("%s: error must mention anydoc, got %q", f.Path, f.Error)
+		}
 	}
 }
 
@@ -2324,7 +2319,7 @@ func TestBatchReadSilentlyFiltersMissingPathsAndDirectories(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "valid.txt"), []byte("ok\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"folder", "document.pdf"} {
+	for _, name := range []string{"folder"} {
 		if err := os.Mkdir(filepath.Join(dir, name), 0o700); err != nil {
 			t.Fatal(err)
 		}
@@ -2335,7 +2330,6 @@ func TestBatchReadSilentlyFiltersMissingPathsAndDirectories(t *testing.T) {
 		Files: []BatchReadFileRequest{
 			{Path: "missing.txt"},
 			{Path: "folder"},
-			{Path: "document.pdf"}, // document-extension directories use the same filter
 			{Path: "valid.txt"},
 		},
 	})

@@ -617,8 +617,6 @@ type ReadFileRequest struct {
 	LineCount     int    `json:"lineCount"`
 	ContextBefore int    `json:"contextBefore,omitempty"`
 	ContextAfter  int    `json:"contextAfter,omitempty"`
-	Sheet         string `json:"sheet,omitempty"`
-	MaxChars      int    `json:"maxChars,omitempty"`
 }
 
 type ReadFileResult struct {
@@ -1123,42 +1121,37 @@ type BatchReadRequest struct {
 	Files     []BatchReadFileRequest `json:"files,omitempty"`
 	StartLine int                    `json:"startLine,omitempty"`
 	EndLine   int                    `json:"endLine,omitempty"`
-	Sheet     string                 `json:"sheet,omitempty"`
-	MaxChars  int                    `json:"maxChars,omitempty"`
 }
 
 type BatchReadFileRequest struct {
 	Path      string `json:"path"`
 	StartLine int    `json:"startLine,omitempty"`
 	EndLine   int    `json:"endLine,omitempty"`
-	Sheet     string `json:"sheet,omitempty"`
-	MaxChars  int    `json:"maxChars,omitempty"`
 }
 
 type BatchReadResultItem struct {
-	Path                  string   `json:"path"`
-	Content               string   `json:"content"`
-	Text                  string   `json:"text,omitempty"`
-	Kind                  string   `json:"kind,omitempty"`
-	ContentFormat         string   `json:"contentFormat,omitempty"`
-	Type                  string   `json:"type,omitempty"`
-	Editable              bool     `json:"editable"`
-	StartLine             int      `json:"startLine"`
-	EndLine               int      `json:"endLine"`
-	NextStartLine         int      `json:"nextStartLine,omitempty"`
-	Version               string   `json:"version"`
-	Size                  int64    `json:"size"`
-	TotalLines            int      `json:"totalLines"`
-	LineEnding            string   `json:"lineEnding"`
-	Truncated             bool     `json:"truncated"`
-	TruncatedLines        []int    `json:"truncatedLines,omitempty"`
-	TruncatedLinesOmitted bool     `json:"truncatedLinesOmitted,omitempty"`
-	RangeStatus           string   `json:"rangeStatus,omitempty"`
-	EmptyRange            bool     `json:"emptyRange,omitempty"`
-	Sheets                []string `json:"sheets,omitempty"`
-	Error                 string   `json:"error,omitempty"`
-	ErrorCode             string   `json:"errorCode,omitempty"`
-	Reused                bool     `json:"reused,omitempty"`
+	Path                  string `json:"path"`
+	Content               string `json:"content"`
+	Text                  string `json:"text,omitempty"`
+	Kind                  string `json:"kind,omitempty"`
+	ContentFormat         string `json:"contentFormat,omitempty"`
+	Type                  string `json:"type,omitempty"`
+	Editable              bool   `json:"editable"`
+	StartLine             int    `json:"startLine"`
+	EndLine               int    `json:"endLine"`
+	NextStartLine         int    `json:"nextStartLine,omitempty"`
+	Version               string `json:"version"`
+	Size                  int64  `json:"size"`
+	TotalLines            int    `json:"totalLines"`
+	LineEnding            string `json:"lineEnding"`
+	Truncated             bool   `json:"truncated"`
+	TruncatedLines        []int  `json:"truncatedLines,omitempty"`
+	TruncatedLinesOmitted bool   `json:"truncatedLinesOmitted,omitempty"`
+	RangeStatus           string `json:"rangeStatus,omitempty"`
+	EmptyRange            bool   `json:"emptyRange,omitempty"`
+	Error                 string `json:"error,omitempty"`
+	ErrorCode             string `json:"errorCode,omitempty"`
+	Reused                bool   `json:"reused,omitempty"`
 	// DataURL is set only for image files: a data:image/<mime>;base64,... URL
 	// used to inject the picture into multimodal model context.
 	DataURL string `json:"dataUrl,omitempty"`
@@ -1169,17 +1162,11 @@ type BatchReadResult struct {
 }
 
 type DocumentReadRequest struct {
-	Path     string `json:"path"`
-	Sheet    string `json:"sheet,omitempty"`
-	MaxChars int    `json:"maxChars,omitempty"`
+	Path string `json:"path"`
 }
 
 type DocumentReadResult struct {
-	Path      string   `json:"path"`
-	Type      string   `json:"type"`
-	Text      string   `json:"text"`
-	Sheets    []string `json:"sheets,omitempty"`
-	Truncated bool     `json:"truncated"`
+	Path string `json:"path"`
 }
 
 type TodoEntry struct {
@@ -2318,12 +2305,9 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 			}
 		}
 
-	case "document_read":
-		var reqDoc DocumentReadRequest
-		err = decode(&reqDoc)
-		if err == nil {
-			data, err = a.readDocumentWithConfig(cfg, reqDoc)
-		}
+	case "document_read": // legacy name; documents now require the anydoc skill
+		err = codedToolError("E_DOCUMENT_UNSUPPORTED",
+			errors.New("document_read was removed; office/PDF documents are no longer read directly. Convert to Markdown with the anydoc skill first, then use read on the converted .md file"))
 	case "calculate":
 		var reqCalc CalculateRequest
 		err = decode(&reqCalc)
