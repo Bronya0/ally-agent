@@ -206,10 +206,11 @@ func chatToolsUncached() []openai.Tool {
 			"required": []string{"url"},
 			"not":      map[string]any{"required": []string{"body", "json"}},
 		}),
-		functionTool("web_fetch", "Fetch a web page and return readable text, title, and links. Use for ordinary page reading instead of curl. Safe defaults include a bounded size, timeout, redirect limit, per-host rate limit, and clear User-Agent. Private/local network access follows the app's allowPrivateNetwork setting, which is enabled by default. robots.txt is not checked unless explicitly requested.", map[string]any{
+		functionTool("web_fetch", "Fetch a web page and return readable text, title, and links. Use for ordinary page reading instead of curl. Pass format:\"raw\" to get a bounded decoded page source without extraction, e.g. when readable mode fails or you need the original markup. Safe defaults include a bounded size, timeout, redirect limit, per-host rate limit, and clear User-Agent. Private/local network access follows the app's allowPrivateNetwork setting, which is enabled by default. robots.txt is not checked unless explicitly requested.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"url":                map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Absolute http:// or https:// URL."},
+				"format":             map[string]any{"type": "string", "enum": []string{"readable", "raw"}, "description": "Output mode. readable (default): Readability-extracted main-content text. raw: bounded page source without extraction (still capped by maxBytes/maxChars), not byte-exact; use when readable fails (E_WEB_FETCH_EXTRACT) or source markup matters."},
 				"maxBytes":           map[string]any{"type": "integer", "minimum": 1, "maximum": maxHTTPBodyBytes, "description": "Maximum decoded source bytes read before text extraction. Default 2097152."},
 				"maxChars":           map[string]any{"type": "integer", "minimum": 1, "maximum": 200000, "description": "Maximum readable text characters. Default 60000, max 200000."},
 				"timeoutSeconds":     map[string]any{"type": "integer", "minimum": 1, "maximum": 120, "description": "Request timeout. Default 60 seconds."},

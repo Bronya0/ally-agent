@@ -901,6 +901,7 @@ type HTTPRequestToolResult struct {
 
 type WebFetchRequest struct {
 	URL                 string            `json:"url"`
+	Format              string            `json:"format,omitempty"`
 	Headers             map[string]string `json:"headers,omitempty"`
 	TimeoutSeconds      int               `json:"timeoutSeconds,omitempty"`
 	MaxBytes            int               `json:"maxBytes,omitempty"`

@@ -32,6 +32,8 @@ import (
 
 	"ally-dev/internal/tools/grep"
 
+	"codeberg.org/readeck/go-readability/v2"
+
 	"github.com/andybalholm/brotli"
 	"github.com/klauspost/compress/zstd"
 	"golang.org/x/net/html"
@@ -90,6 +92,13 @@ func (a *App) webFetchToolWithConfig(ctx context.Context, cfg ConfigState, req W
 	if maxChars > 200000 {
 		maxChars = 200000
 	}
+	format := strings.ToLower(strings.TrimSpace(req.Format))
+	if format == "" {
+		format = webFetchFormatReadable
+	}
+	if format != webFetchFormatReadable && format != webFetchFormatRaw {
+		return WebFetchResult{}, codedToolError("E_HTTP_BAD_FORMAT", fmt.Errorf("invalid format %q; use \"readable\" or \"raw\"", req.Format))
+	}
 	if req.MaxBytes <= 0 {
 		req.MaxBytes = defaultWebFetchBody
 	}
@@ -103,13 +112,13 @@ func (a *App) webFetchToolWithConfig(ctx context.Context, cfg ConfigState, req W
 		allowPrivate = *req.AllowPrivateNetwork
 	}
 	fetched, err := a.doHTTPRequest(ctx, cfg, HTTPRequestToolRequest{
-		Method:          "GET",
-		URL:             req.URL,
-		Headers:         mergeStringMaps(map[string]string{"Accept": "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.5"}, req.Headers),
-		TimeoutSeconds:  req.TimeoutSeconds,
-		MaxBytes:        req.MaxBytes,
-		FollowRedirects: boolPtr(true),
-		RespectRobots:   respectRobots,
+		Method:             "GET",
+		URL:                req.URL,
+		Headers:            mergeStringMaps(map[string]string{"Accept": "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.5"}, req.Headers),
+		TimeoutSeconds:     req.TimeoutSeconds,
+		MaxBytes:           req.MaxBytes,
+		FollowRedirects:    boolPtr(true),
+		RespectRobots:      respectRobots,
 		InsecureSkipVerify: req.InsecureSkipVerify,
 	}, true, allowPrivate)
 	if err != nil {
@@ -117,22 +126,37 @@ func (a *App) webFetchToolWithConfig(ctx context.Context, cfg ConfigState, req W
 	}
 
 	contentType := fetched.Result.ContentType
+	htmlData := fetched.Raw
+	if fetched.Result.BodyEncoding == "text" {
+		htmlData = []byte(fetched.Result.Body)
+	}
+
 	title := ""
 	text := ""
 	links := []WebFetchLink{}
-	if isHTMLContentType(contentType) {
-		htmlData := fetched.Raw
-		if fetched.Result.BodyEncoding == "text" {
-			htmlData = []byte(fetched.Result.Body)
+	switch {
+	case format == webFetchFormatRaw:
+		if fetched.Result.BodyEncoding != "text" {
+			return WebFetchResult{}, codedToolError("E_WEB_FETCH_NOT_TEXT", fmt.Errorf("web_fetch expected readable text/html, got %q", contentType))
 		}
-		title, text, links = htmlReadableText(htmlData, fetched.Result.FinalURL)
-	} else if fetched.Result.BodyEncoding == "text" {
 		text = fetched.Result.Body
-	} else {
+	case isHTMLContentType(contentType):
+		var extractErr error
+		title, text, links, extractErr = htmlExtractContent(htmlData, fetched.Result.FinalURL)
+		if extractErr != nil {
+			return WebFetchResult{}, codedToolError("E_WEB_FETCH_EXTRACT", fmt.Errorf("no readable article found on this page (%w); retry with \"format\":\"raw\" for the page source, or use http_request", extractErr))
+		}
+	case fetched.Result.BodyEncoding == "text":
+		text = fetched.Result.Body
+	default:
 		return WebFetchResult{}, codedToolError("E_WEB_FETCH_NOT_TEXT", fmt.Errorf("web_fetch expected readable text/html, got %q", contentType))
 	}
 
-	text = normalizeWhitespace(text)
+	if format == webFetchFormatRaw && isHTMLContentType(contentType) {
+		baseURL, _ := url.Parse(fetched.Result.FinalURL)
+		title, links = collectHTMLTitleAndLinks(htmlData, baseURL)
+	}
+
 	truncated := fetched.Result.Truncated
 	if len([]rune(text)) > maxChars {
 		text = truncateRunes(text, maxChars)
@@ -876,37 +900,58 @@ func robotsPatternMatches(pattern, escapedPath string) bool {
 	return strings.HasPrefix(escapedPath, pattern)
 }
 
-func htmlReadableText(data []byte, finalURL string) (string, string, []WebFetchLink) {
+// htmlExtractContent parses the page with Readability (the Readability.js
+// algorithm) and returns the main-content title and plain text, keeping
+// paragraph breaks and pre-formatted blocks intact. Links (up to maxWebFetchLinks
+// entries with anchor text) are still collected from the raw document because
+// Readability does not emit them.
+func htmlExtractContent(data []byte, finalURL string) (string, string, []WebFetchLink, error) {
+	baseURL, _ := url.Parse(finalURL)
+	article, err := readability.FromReader(bytes.NewReader(data), baseURL)
+	if err != nil {
+		return "", "", nil, err
+	}
+	var sb strings.Builder
+	if err := article.RenderText(&sb); err != nil {
+		return "", "", nil, err
+	}
+	docTitle, links := collectHTMLTitleAndLinks(data, baseURL)
+	title := strings.TrimSpace(article.Title())
+	if title == "" {
+		title = docTitle
+	}
+	return title, strings.TrimSpace(sb.String()), links, nil
+}
+
+const (
+	maxWebFetchLinks       = 80
+	webFetchFormatReadable = "readable"
+	webFetchFormatRaw      = "raw"
+)
+
+// collectHTMLTitleAndLinks walks the raw document once and returns the
+// <title> text plus up to maxWebFetchLinks absolute links with anchor text.
+func collectHTMLTitleAndLinks(data []byte, baseURL *url.URL) (string, []WebFetchLink) {
 	doc, err := html.Parse(bytes.NewReader(data))
 	if err != nil {
-		return "", string(data), nil
+		return "", nil
 	}
-	baseURL, _ := url.Parse(finalURL)
-	var titleParts []string
-	var textParts []string
+	titleParts := []string{}
 	links := []WebFetchLink{}
 	// pendingLink tracks the <a> whose link text we are currently
-	// collecting. -1 means no link is pending. This merges the old
-	// fillLinkText second pass into the main walk so we only traverse
-	// the DOM once.
+	// collecting. -1 means no link is pending.
 	pendingLink := -1
-	var walk func(*html.Node, bool, bool)
-	walk = func(n *html.Node, hidden bool, inTitle bool) {
+	var walk func(*html.Node, bool)
+	walk = func(n *html.Node, inTitle bool) {
 		if n == nil {
 			return
 		}
-		savedPending := pendingLink
 		if n.Type == html.ElementNode {
-			name := strings.ToLower(n.Data)
-			switch name {
-			case "script", "style", "noscript", "svg", "canvas", "template":
-				hidden = true
+			switch strings.ToLower(n.Data) {
 			case "title":
 				inTitle = true
-			case "br", "p", "div", "section", "article", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6":
-				textParts = append(textParts, "\n")
 			case "a":
-				if len(links) < 80 {
+				if len(links) < maxWebFetchLinks {
 					if href := htmlAttr(n, "href"); href != "" {
 						if u, err := url.Parse(strings.TrimSpace(href)); err == nil {
 							if baseURL != nil {
@@ -919,30 +964,22 @@ func htmlReadableText(data []byte, finalURL string) (string, string, []WebFetchL
 				}
 			}
 		}
-		if n.Type == html.TextNode && !hidden {
-			text := strings.TrimSpace(n.Data)
-			if text != "" {
+		if n.Type == html.TextNode {
+			if text := strings.TrimSpace(n.Data); text != "" {
 				if inTitle {
 					titleParts = append(titleParts, text)
-				} else {
-					textParts = append(textParts, text)
-				}
-				if pendingLink >= 0 && pendingLink < len(links) && links[pendingLink].Text == "" {
+				} else if pendingLink >= 0 && pendingLink < len(links) && links[pendingLink].Text == "" {
 					links[pendingLink].Text = truncateRunes(normalizeWhitespace(text), 80)
 					pendingLink = -1
 				}
 			}
 		}
 		for child := n.FirstChild; child != nil; child = child.NextSibling {
-			walk(child, hidden, inTitle)
+			walk(child, inTitle)
 		}
-		pendingLink = savedPending
 	}
-	walk(doc, false, false)
-
-	text := normalizeWhitespace(strings.Join(textParts, " "))
-	title := normalizeWhitespace(strings.Join(titleParts, " "))
-	return title, text, links
+	walk(doc, false)
+	return normalizeWhitespace(strings.Join(titleParts, " ")), links
 }
 
 func htmlAttr(n *html.Node, key string) string {
