@@ -16,6 +16,8 @@ import (
 	"encoding/json"
 	"regexp"
 	"strings"
+
+	"ally-dev/internal/tools/shared"
 )
 
 // ParseMarkdown splits a memory Markdown file into (description, body).
@@ -85,28 +87,9 @@ func DefaultPath(description string) string {
 }
 
 // parseYAMLField reads a single `field: value` line from YAML frontmatter.
-// It is a minimal, dependency-free implementation covering Ally's memory and
-// skill frontmatter usage; full YAML parsing is intentionally avoided.
+// It is a minimal implementation covering Ally's memory and skill frontmatter
+// usage; full YAML parsing is intentionally avoided. The canonical copy lives
+// in internal/tools/shared; memory keeps a thin alias for its callers.
 func parseYAMLField(line, field string) string {
-	prefix := field + ":"
-	prefixAlt := field + " :"
-	if strings.HasPrefix(line, prefix) || strings.HasPrefix(line, prefixAlt) {
-		idx := strings.Index(line, ":")
-		if idx < 0 {
-			idx = strings.Index(line, ": ")
-		}
-		if idx < 0 {
-			return ""
-		}
-		v := strings.TrimSpace(line[idx+1:])
-		if strings.HasPrefix(v, `"`) {
-			var decoded string
-			if err := json.Unmarshal([]byte(v), &decoded); err == nil {
-				return decoded
-			}
-		}
-		v = strings.Trim(v, `"'`)
-		return v
-	}
-	return ""
+	return shared.ParseFrontmatterField(line, field)
 }

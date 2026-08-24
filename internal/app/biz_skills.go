@@ -15,6 +15,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"ally-dev/internal/tools/shared"
 )
 
 const skillListCacheTTL = 30 * time.Second
@@ -551,28 +553,11 @@ func parseSkillContent(path, text string) SkillDefinition {
 	return meta
 }
 
+// ── Skill frontmatter parsing ───────────────────────────────
+// parseYAMLField delegates to the single shared implementation in
+// internal/tools/shared (also used by the memory frontmatter parser).
 func parseYAMLField(line, field string) string {
-	prefix := field + ":"
-	prefixAlt := field + " :"
-	if strings.HasPrefix(line, prefix) || strings.HasPrefix(line, prefixAlt) {
-		idx := strings.Index(line, ":")
-		if idx < 0 {
-			idx = strings.Index(line, ": ")
-		}
-		if idx < 0 {
-			return ""
-		}
-		v := strings.TrimSpace(line[idx+1:])
-		if strings.HasPrefix(v, `"`) {
-			var decoded string
-			if err := json.Unmarshal([]byte(v), &decoded); err == nil {
-				return decoded
-			}
-		}
-		v = strings.Trim(v, `"'`)
-		return v
-	}
-	return ""
+	return shared.ParseFrontmatterField(line, field)
 }
 
 // ── Grep ─────────────────────────────────────────────────

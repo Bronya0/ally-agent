@@ -8,6 +8,7 @@
 package shared
 
 import (
+	"encoding/json"
 	"strings"
 	"sync"
 
@@ -590,4 +591,32 @@ func NormalizeName(name string) string {
 		return canonical
 	}
 	return name
+}
+
+// ParseFrontmatterField reads a single `field: value` line from YAML
+// frontmatter. It is the single shared implementation for Ally's minimal
+// frontmatter needs (skill metadata and memory descriptions); full YAML
+// parsing is intentionally avoided.
+func ParseFrontmatterField(line, field string) string {
+	prefix := field + ":"
+	prefixAlt := field + " :"
+	if strings.HasPrefix(line, prefix) || strings.HasPrefix(line, prefixAlt) {
+		idx := strings.Index(line, ":")
+		if idx < 0 {
+			idx = strings.Index(line, ": ")
+		}
+		if idx < 0 {
+			return ""
+		}
+		v := strings.TrimSpace(line[idx+1:])
+		if strings.HasPrefix(v, `"`) {
+			var decoded string
+			if err := json.Unmarshal([]byte(v), &decoded); err == nil {
+				return decoded
+			}
+		}
+		v = strings.Trim(v, `"'`)
+		return v
+	}
+	return ""
 }
