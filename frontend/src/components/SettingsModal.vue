@@ -418,12 +418,13 @@ Public License v3. See the LICENSE file for details.
           <div class="skill-settings-list">
             <div v-if="skillsLoading && !availableSkills.length" class="saved-model-empty">{{ $t('settings.skillsLoading') }}</div>
             <div v-else-if="!availableSkills.length" class="saved-model-empty">{{ $t('settings.skillsEmpty') }}</div>
-            <div v-for="sk in availableSkills" :key="`${sk.source || 'skill'}:${sk.name}`" :class="['skill-settings-item', { active: isSkillActive(sk.name) }]">
+            <div v-for="sk in sortedSkills" :key="`${sk.source || 'skill'}:${sk.name}`" :class="['skill-settings-item', { active: isSkillActive(sk.name), builtin: sk.source === 'builtin' }]">
               <div class="skill-settings-main">
                 <div class="skill-title-row">
                   <span class="skill-name">{{ sk.name }}</span>
                   <span :class="['skill-badge', sk.source || 'unknown']">{{ sk.source || 'unknown' }}</span>
                   <span v-if="isSkillActive(sk.name)" class="skill-badge loaded">{{ $t('common.enabled') }}</span>
+                  <span v-if="sk.source === 'builtin'" class="skill-badge builtin-locked">{{ $t('settings.builtinAlwaysOn') }}</span>
                 </div>
                 <div class="skill-description">{{ sk.description || sk.whenToUse || $t('common.noDescription') }}</div>
                 <div
@@ -434,7 +435,7 @@ Public License v3. See the LICENSE file for details.
               </div>
               <n-switch
                 :value="isSkillActive(sk.name)"
-                :disabled="skillsLoading || skillToggleInFlight === sk.name"
+                :disabled="skillsLoading || skillToggleInFlight === sk.name || sk.source === 'builtin'"
                 @update:value="(value) => toggleSkillFromSettings(sk, value)"
               />
             </div>
@@ -1507,6 +1508,17 @@ function isSkillActive(name) {
   return activeSkillNames.value.some((item) => normalizeSkillName(item) === target);
 }
 
+// Sort skills: built-in skills first (always enabled), then others alphabetically
+const sortedSkills = computed(() => {
+  return [...availableSkills.value].sort((a, b) => {
+    const aBuiltin = a.source === 'builtin';
+    const bBuiltin = b.source === 'builtin';
+    if (aBuiltin && !bBuiltin) return -1;
+    if (!aBuiltin && bBuiltin) return 1;
+    return String(a.name).localeCompare(b.name);
+  });
+});
+
 async function handleOpenSkillPath(sk) {
   const path = sk?.path || sk?.dir;
   if (!path) return;
@@ -2040,6 +2052,24 @@ watch(() => props.visible, (visible) => {
 .skill-badge.loaded {
   background: #3a4a2a;
   color: #b8d4a0;
+}
+
+.skill-badge.builtin-locked {
+  background: #3a3a3a;
+  color: #a0a0a0;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.skill-settings-item.builtin {
+  opacity: 0.85;
+}
+
+.skill-settings-item.builtin .skill-name {
+  color: #d0d0d0;
+}
+
+.skill-settings-item.builtin .skill-description {
+  color: #8a8a8a;
 }
 
 .skill-description {
