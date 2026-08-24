@@ -1144,9 +1144,12 @@ func pathDepth(rel string) int {
 	return strings.Count(rel, string(os.PathSeparator)) + 1
 }
 
+// 名单刻意保持极小：仅保留真正无意义的缓存目录。
+// 依赖/构建产物目录（.git/dist/build/node_modules 等）已按需求放开——
+// 文件浏览器与 list_files 都是逐层懒加载列表，整棵跳过没有必要。
 func isHeavyDir(name string) bool {
 	switch strings.ToLower(name) {
-	case ".git", "node_modules", "dist", "build", "target", ".next", ".nuxt", ".svelte-kit", "vendor", "__pycache__":
+	case "__pycache__":
 		return true
 	default:
 		return false

@@ -401,9 +401,7 @@ func openPathInFileManager(path string) error {
 	var cmd *exec.Cmd
 	switch goruntime.GOOS {
 	case "windows":
-		// explorer.exe 对含 / 或未引号的路径可能打开“此电脑”或系统目录。
-		// 统一用 \ 分隔并用 /select 选项确保打开到正确位置。
-		cmd = exec.Command("explorer.exe", path)
+		cmd = explorerCommand(path)
 	case "darwin":
 		cmd = exec.Command("open", path)
 	default:
