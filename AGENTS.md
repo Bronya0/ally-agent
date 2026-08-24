@@ -322,11 +322,11 @@ Built-in tools are declared in `chatTools()` as OpenAI function tools.
 Key rules:
 
 - Built-in schemas use strict object schemas with `additionalProperties: false`.
-- `executeTool()` decodes JSON with `DisallowUnknownFields()` so typoed parameters fail loudly.
+- `executeTool()` decodes JSON leniently at the top level: unknown argument keys do not fail the call; they are collected and returned as a warning on the successful result envelope. Missing/invalid required parameters still fail loudly through per-tool validation.
 - MCP tools are appended dynamically and keep their upstream schemas.
 - Plan mode blocks side-effectful tools and MCP tools.
 - `wait` requires `seconds` and a short user-visible `reason`, is cancellable through the active run context, and must be the only tool call in its batch (`ask` and `suggest` have the same single-call barrier).
-- Tool results use `{ok, data, error, errorCode, details}`.
+- Tool results use `{ok, data, error, errorCode, details, warnings}`; `warnings` carries non-fatal notices (ignored unknown arguments) on success and is never set on errors.
 
 Built-in model-facing tools:
 
@@ -678,14 +678,14 @@ These rules are required for future changes. They exist to keep Agent behavior d
 - Put Wails lifecycle, window management, directory/file-manager integration, and other desktop behavior in `host_desktop.go`.
 - Publish UI/runtime events only through the `eventSink` boundary in `host_events.go`; preserve event names, payload shapes, session routing, and terminal-event rules when changing implementations.
 - Keep provider-specific request/response types behind `prov_model.go`; do not leak OpenAI, Responses, or Anthropic wire details into `app.go` or generic tool orchestration.
-- Keep each cross-layer contract at one source of truth: `chatTools()` for schemas, `executeTool()` for strict dispatch/decoding, `orch_edit_plan.go` for local edit normalization, `orch_batch_policy.go` for batch barriers/conflicts, `orch_edit.go` for app-owned edit execution, `internal/tools/edit` for pure diff/range algorithms, `internal/tools/pathutil` for workspace path resolution and safety checks, `infra_result.go` for result envelopes/compaction, and `infra_stream.go` for stream throttling.
+- Keep each cross-layer contract at one source of truth: `chatTools()` for schemas, `executeTool()` for dispatch/decoding (top-level lenient decode with unknown-argument warnings), `orch_edit_plan.go` for local edit normalization, `orch_batch_policy.go` for batch barriers/conflicts, `orch_edit.go` for app-owned edit execution, `internal/tools/edit` for pure diff/range algorithms, `internal/tools/pathutil` for workspace path resolution and safety checks, `infra_result.go` for result envelopes/compaction, and `infra_stream.go` for stream throttling.
 - Do not independently parse, canonicalize, deduplicate, or infer the same request in multiple layers. If a lower layer produces a normalized plan, upstream policy checks and downstream execution must consume that plan.
 - Workspace path resolution and boundary checks live in `internal/tools/pathutil`. The app package keeps only thin package-level wrappers (delegating to pathutil through a host-neutral `Runtime` interface) so existing call sites stay unchanged; do not re-implement `insideRoot`, `safeJoin`, `insideWriteRoot`, or `resolveReadablePath` in app or any other tool package.
 - Keep the project in one Go package unless a package boundary has a clear dependency direction and Wails binding impact has been verified. Mechanical same-package extraction is preferred before introducing new packages.
 
 ### Cross-layer change procedure
 
-- Before changing a tool or event contract, trace the complete path: schema → strict decoder → batch policy → executor → result envelope → frontend event/card rendering → tests → `AGENTS.md`/`CODEGRAPH.md` when the architecture changes.
+- Before changing a tool or event contract, trace the complete path: schema → lenient decoder (unknown keys → envelope warning) → batch policy → executor → result envelope → frontend event/card rendering → tests → `AGENTS.md`/`CODEGRAPH.md` when the architecture changes.
 - When a request contains nested mutations, normalize it once before conflict detection. Repeated entries inside one local `edit` call may merge into one physical target; separate mutation tool calls targeting the same normalized path must still conflict.
 - Add at least one end-to-end or boundary test that enters through the same layer as production. A unit test for `executeTool()` alone is insufficient when the scheduler or batch policy can reject the request first.
 - For changes that affect both core and host behavior, use a capture/no-op `eventSink` test so the Agent can be tested without Wails and the event payload contract remains explicit.

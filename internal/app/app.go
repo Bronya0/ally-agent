@@ -13,10 +13,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime/debug"
 	"strings"
 	"sync"
@@ -2060,30 +2060,42 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 			result = toolErrorResult(codedToolError("E_TOOL_PANIC", fmt.Errorf("tool %s crashed internally: %v", name, r)))
 		}
 	}()
-	decode := func(v any) error {
+	// decodeJSON unmarshals args into v, allowing unknown fields but collecting
+	// them as warnings. Returns (error, extraFields) where extraFields are the
+	// JSON keys not present in the target struct's JSON tags.
+	decodeJSON := func(v any) (error, []string) {
 		if len(bytes.TrimSpace(args)) == 0 {
-			return nil
+			return nil, nil
 		}
-		dec := json.NewDecoder(bytes.NewReader(args))
-		dec.DisallowUnknownFields()
-		if err := dec.Decode(v); err != nil {
+		// First, collect all valid JSON field names from the target struct.
+		validFields := collectValidJSONFields(v)
+		// Parse the raw JSON to a map to detect extra keys.
+		var rawMap map[string]json.RawMessage
+		if err := json.Unmarshal(args, &rawMap); err != nil {
 			// Only an unexpected end is evidence of a cut-off stream. Unknown
 			// fields, wrong types, and other complete-JSON schema errors used to
 			// be mislabeled as truncation, making small oldText/legacy oldString
 			// calls look as if they had exhausted max_tokens.
 			if isIncompleteStreamJSON(err) {
 				if name == "edit" || name == "replace_exact" || name == "replace_lines" || name == "remote_edit" {
-					return fmt.Errorf("tool arguments JSON was truncated (output cut off or stream interrupted). Merge small changes into one edit call; split large changes (a whole function or section) into separate edit calls; use lineRange (inclusive A-B whole-line range) for large deletions or replacements of a contiguous line range: %w", err)
+					return fmt.Errorf("tool arguments JSON was truncated (output cut off or stream interrupted). Merge small changes into one edit call; split large changes (a whole function or section) into separate edit calls; use lineRange (inclusive A-B whole-line range) for large deletions or replacements of a contiguous line range: %w", err), nil
 				}
-				return fmt.Errorf("tool arguments JSON was truncated (output cut off or stream interrupted): %w", err)
+				return fmt.Errorf("tool arguments JSON was truncated (output cut off or stream interrupted): %w", err), nil
 			}
-			return fmt.Errorf("invalid tool arguments JSON for %s: %w", name, err)
+			return fmt.Errorf("invalid tool arguments JSON for %s: %w", name, err), nil
 		}
-		var extra any
-		if err := dec.Decode(&extra); err != io.EOF {
-			return errors.New("invalid JSON: trailing data")
+		// Now unmarshal into the actual target (allows unknown fields).
+		if err := json.Unmarshal(args, v); err != nil {
+			return fmt.Errorf("invalid tool arguments JSON for %s: %w", name, err), nil
 		}
-		return nil
+		// Collect extra keys.
+		extraFields := make([]string, 0, len(rawMap))
+		for k := range rawMap {
+			if _, ok := validFields[k]; !ok {
+				extraFields = append(extraFields, k)
+			}
+		}
+		return nil, extraFields
 	}
 
 	// Normalize once at the boundary: lower-case for case-insensitivity and
@@ -2103,23 +2115,27 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 
 	var data any
 	var err error
+	// Lenient decode: unknown argument keys are collected across the switch
+	// and reported once on the successful result envelope instead of failing
+	// the whole call. Missing/invalid required parameters still fail loudly.
+	var extraFields []string
 
 	switch name {
 	case "list_files":
 		var req ListFilesRequest
-		err = decode(&req)
+		err, extraFields = decodeJSON(&req)
 		if err == nil {
 			data, err = a.listFilesWithConfig(cfg, req)
 		}
 	case "read_file":
 		var req ReadFileRequest
-		err = decode(&req)
+		err, extraFields = decodeJSON(&req)
 		if err == nil {
 			data, err = a.readFileWithConfig(cfg, req)
 		}
 	case "edit":
 		var req ModelEditToolRequest
-		err = decode(&req)
+		err, extraFields = decodeJSON(&req)
 		salvagedDropped := -1
 		if err != nil && isIncompleteStreamJSON(err) {
 			// Stream cut off mid-arguments: apply the complete prefix instead
@@ -2153,7 +2169,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		}
 	case "create":
 		var req CreateFileRequest
-		err = decode(&req)
+		err, extraFields = decodeJSON(&req)
 		if err == nil {
 			a.fileOpsMu.Lock()
 			data, err = a.createFileWithConfig(cfg, req)
@@ -2166,7 +2182,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		}
 	case "delete":
 		var req DeletePathRequest
-		err = decode(&req)
+		err, extraFields = decodeJSON(&req)
 		if err == nil {
 			a.fileOpsMu.Lock()
 			data, err = a.deletePathWithConfig(cfg, req)
@@ -2178,7 +2194,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		}
 	case "command":
 		var req CommandRequest
-		err = decode(&req)
+		err, extraFields = decodeJSON(&req)
 		if err == nil {
 			// A command can modify files before returning an error, and can run
 			// concurrently with reads in one tool batch. Clear on both sides.
@@ -2191,7 +2207,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		}
 	case "service":
 		var req BackgroundProcessRequest
-		err = decode(&req)
+		err, extraFields = decodeJSON(&req)
 		if err == nil {
 			switch strings.ToLower(strings.TrimSpace(req.Action)) {
 			case "start":
@@ -2215,13 +2231,13 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		}
 	case "wait":
 		var req WaitRequest
-		err = decode(&req)
+		err, extraFields = decodeJSON(&req)
 		if err == nil {
 			data, err = waitWithContext(ctx, req)
 		}
 	case "ask":
 		var req AskRequest
-		err = decode(&req)
+		err, extraFields = decodeJSON(&req)
 		if err == nil {
 			data, err = a.executeAsk(ctx, sessionID, req)
 		}
@@ -2229,7 +2245,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		var req struct {
 			Items []string `json:"items"`
 		}
-		err = decode(&req)
+		err, extraFields = decodeJSON(&req)
 		if err == nil {
 			if len(req.Items) == 0 {
 				err = codedToolError("E_BAD_SUGGEST", errors.New("items must contain at least 1 suggestion"))
@@ -2239,61 +2255,61 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		}
 	case "scheduled_task":
 		var req ScheduledTaskToolRequest
-		err = decode(&req)
+		err, extraFields = decodeJSON(&req)
 		if err == nil {
 			data, err = a.executeScheduledTaskTool(cfg, req)
 		}
 	case "http_request":
 		var req HTTPRequestToolRequest
-		err = decode(&req)
+		err, extraFields = decodeJSON(&req)
 		if err == nil {
 			data, err = a.httpRequestToolWithConfig(ctx, cfg, req)
 		}
 	case "web_fetch":
 		var req WebFetchRequest
-		err = decode(&req)
+		err, extraFields = decodeJSON(&req)
 		if err == nil {
 			data, err = a.webFetchToolWithConfig(ctx, cfg, req)
 		}
 	case "remote_read_file":
 		var req RemoteReadFileRequest
-		err = decode(&req)
+		err, extraFields = decodeJSON(&req)
 		if err == nil {
 			data, err = a.remoteReadFile(ctx, req)
 		}
 	case "remote_edit":
 		var req RemoteEditRequest
-		err = decode(&req)
+		err, extraFields = decodeJSON(&req)
 		if err == nil {
 			data, err = a.remoteEdit(ctx, req)
 		}
 	case "remote_create_file":
 		var req RemoteCreateFileRequest
-		err = decode(&req)
+		err, extraFields = decodeJSON(&req)
 		if err == nil {
 			data, err = a.remoteCreateFile(ctx, req)
 		}
 	case "remote_delete_path":
 		var req RemoteDeletePathRequest
-		err = decode(&req)
+		err, extraFields = decodeJSON(&req)
 		if err == nil {
 			data, err = a.remoteDeletePath(ctx, req)
 		}
 	case "remote_run_command":
 		var req RemoteRunCommandRequest
-		err = decode(&req)
+		err, extraFields = decodeJSON(&req)
 		if err == nil {
 			data, err = a.remoteRunCommand(ctx, req)
 		}
 	case "grep":
 		var reqGF GrepRequest
-		err = decode(&reqGF)
+		err, extraFields = decodeJSON(&reqGF)
 		if err == nil {
 			data, err = a.grepFilesWithConfig(ctx, cfg, reqGF)
 		}
 	case "read":
 		var reqBR BatchReadRequest
-		err = decode(&reqBR)
+		err, extraFields = decodeJSON(&reqBR)
 		if err == nil {
 			if cache, ok := ctx.Value(runReadCacheContextKey{}).(*runReadCache); ok {
 				data, err = cache.read(a, cfg, reqBR)
@@ -2307,7 +2323,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 			errors.New("document_read was removed; office/PDF documents are no longer read directly. Convert to Markdown with the anydoc skill first, then use read on the converted .md file"))
 	case "calculate":
 		var reqCalc CalculateRequest
-		err = decode(&reqCalc)
+		err, extraFields = decodeJSON(&reqCalc)
 		if err == nil {
 			data, err = calculateExpression(reqCalc)
 		}
@@ -2316,7 +2332,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 			HTML  string `json:"html"`
 			Title string `json:"title"`
 		}
-		err = decode(&req)
+		err, extraFields = decodeJSON(&req)
 		if err == nil {
 			if len(req.HTML) > 50000 {
 				err = errors.New("HTML content exceeds 50,000 character limit")
@@ -2330,7 +2346,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		}
 	case "subagent", "agent_delegate":
 		var adReq AgentDelegateRequest
-		err = decode(&adReq)
+		err, extraFields = decodeJSON(&adReq)
 		if err == nil {
 			err = a.acquireSubagentSlot(ctx)
 			if err == nil {
@@ -2353,7 +2369,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		}
 	case "plan":
 		var tReq TodoListRequest
-		err = decode(&tReq)
+		err, extraFields = decodeJSON(&tReq)
 		if err == nil {
 			data, err = a.handleTodoList(sessionID, tReq)
 		}
@@ -2362,7 +2378,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 			Skill string `json:"skill"`
 			Args  string `json:"args,omitempty"`
 		}
-		err = decode(&skReq)
+		err, extraFields = decodeJSON(&skReq)
 		if err == nil {
 			data, err = a.handleSkillToolCall(skReq.Skill, skReq.Args)
 		}
@@ -2387,7 +2403,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 	if err != nil {
 		return toolErrorResult(err)
 	}
-	return toolResult{OK: true, Data: data}
+	return toolResult{OK: true, Data: data, Warnings: extraFieldWarnings(extraFields)}
 }
 
 func waitWithContext(ctx context.Context, req WaitRequest) (WaitResult, error) {
@@ -2737,6 +2753,54 @@ func (a *App) SwitchModel(index int) error {
 	syncAPIKeyFields(&cfg)
 	a.mu.Unlock()
 	return a.saveConfig(cfg)
+}
+
+// collectValidJSONFields returns a set of valid JSON field names from the
+// target struct's JSON tags. It traverses the struct recursively to handle
+// embedded structs and pointers. The input v must be a pointer to a struct.
+func collectValidJSONFields(v any) map[string]struct{} {
+	result := make(map[string]struct{})
+	val := reflect.ValueOf(v)
+	if val.Kind() == reflect.Ptr {
+		val = val.Elem()
+	}
+	if val.Kind() != reflect.Struct {
+		return result
+	}
+	typ := val.Type()
+	for i := 0; i < val.NumField(); i++ {
+		field := typ.Field(i)
+		if field.PkgPath != "" && !field.Anonymous { // unexported, skip
+			continue
+		}
+		tag := field.Tag.Get("json")
+		if tag == "" || tag == "-" {
+			continue
+		}
+		// json tag format: "name,omitempty" or just "name"
+		name := strings.Split(tag, ",")[0]
+		if name != "" {
+			result[name] = struct{}{}
+		}
+		// Handle embedded structs recursively
+		if field.Anonymous {
+			var embeddedVal reflect.Value
+			if val.Field(i).Kind() == reflect.Ptr {
+				if val.Field(i).IsNil() {
+					continue
+				}
+				embeddedVal = val.Field(i).Elem()
+			} else {
+				embeddedVal = val.Field(i)
+			}
+			if embeddedVal.Kind() == reflect.Struct {
+				for k := range collectValidJSONFields(embeddedVal.Addr().Interface()) {
+					result[k] = struct{}{}
+				}
+			}
+		}
+	}
+	return result
 }
 
 // Sub-agent frontend bindings (GetSubagents, cloneSubagentRun, StopSubagent)

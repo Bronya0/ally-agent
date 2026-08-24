@@ -2457,7 +2457,7 @@ func TestExecuteToolRejectsLegacyStringEditFields(t *testing.T) {
 			{"oldString": "gamma", "newString": "GAMMA"}
 		]}]
 	}`))
-	if result.OK || !strings.Contains(result.Error, "unknown field \"edits\"") {
+	if result.OK || !strings.Contains(result.Error, "E_BAD_VERSION") {
 		t.Fatalf("expected model-facing edit tool to reject legacy edits array, got %#v", result)
 	}
 	got, err := os.ReadFile(filepath.Join(dir, "sample.txt"))
@@ -2466,6 +2466,66 @@ func TestExecuteToolRejectsLegacyStringEditFields(t *testing.T) {
 	}
 	if string(got) != string(original) {
 		t.Fatalf("expected rejected edit to leave file unchanged, got %q", string(got))
+	}
+}
+
+func TestExecuteToolUnknownArgumentsWarnInsteadOfFailing(t *testing.T) {
+	dir := t.TempDir()
+	original := []byte("alpha\nbeta\ngamma\n")
+	if err := os.WriteFile(filepath.Join(dir, "sample.txt"), original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	app := NewApp()
+	cfg := ConfigState{Workspace: dir}
+
+	// Unknown top-level keys are tolerated with an envelope warning while the
+	// known arguments still execute normally.
+	result := app.executeTool(context.Background(), cfg, "session-1", "list_files", []byte(`{"path":".","recursiveTypo":true}`))
+	if !result.OK {
+		t.Fatalf("unknown arguments must not fail the call, got %#v", result)
+	}
+	if len(result.Warnings) != 1 || !strings.Contains(result.Warnings[0], "recursiveTypo") {
+		t.Fatalf("expected a warning naming the ignored key, got %#v", result.Warnings)
+	}
+
+	// The warning must survive model-context compaction for tools with a
+	// rebuilt compact payload (edit), not only on the full envelope.
+	readResult := app.executeTool(context.Background(), cfg, "session-1", "read", []byte(`{"files":[{"path":"sample.txt"}]}`))
+	if !readResult.OK {
+		t.Fatalf("read failed: %#v", readResult)
+	}
+	type fileEntry struct {
+		Version string `json:"version"`
+	}
+	var batch struct {
+		Files []fileEntry `json:"files"`
+	}
+	raw, _ := json.Marshal(readResult.Data)
+	if err := json.Unmarshal(raw, &batch); err != nil || len(batch.Files) != 1 {
+		t.Fatalf("unexpected read result: %s err=%v", raw, err)
+	}
+	ver := batch.Files[0].Version
+	// Unknown keys are only detected at the top level of the arguments
+	// object; nested unknown keys fall through to parameter validation.
+	editArgs := fmt.Sprintf(`{"noteTypo":"x","files":[{"path":"sample.txt","version":"%s","changes":[{"oldText":"alpha","newText":"ALPHA"}]}]}`, ver)
+	fullJSON, _ := json.Marshal(app.executeTool(context.Background(), cfg, "session-1", "edit", []byte(editArgs)))
+	var envelope toolResult
+	if err := json.Unmarshal(fullJSON, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if len(envelope.Warnings) == 0 {
+		t.Fatalf("expected unknown-argument warning on edit envelope, got %s", fullJSON)
+	}
+	compact := compactToolResultForModel("edit", envelope, string(fullJSON))
+	if !strings.Contains(compact, "noteTypo") {
+		t.Fatalf("compact model payload dropped the unknown-argument warning: %s", compact)
+	}
+
+	// Missing required parameters still fail loudly — tolerance never applies
+	// to schema-required fields.
+	missing := app.executeTool(context.Background(), cfg, "session-1", "wait", []byte(`{"seconds":1,"whyTypo":"x"}`))
+	if missing.OK || missing.ErrorCode != "E_BAD_WAIT" {
+		t.Fatalf("missing required reason must still fail, got %#v", missing)
 	}
 }
 
@@ -3438,13 +3498,16 @@ func TestExecuteToolEditDoesNotMislabelSchemaErrorAsTruncation(t *testing.T) {
 		`{"files":[{"path":"sample.txt","version":"abc123","changes":[{"oldString":"alpha","newString":"ALPHA"}]}]}`,
 	))
 	if result.OK {
-		t.Fatal("legacy unknown fields must fail the strict model-facing edit schema")
+		t.Fatal("legacy unknown change fields must fail the model-facing edit schema")
 	}
 	if strings.Contains(strings.ToLower(result.Error), "truncated") {
 		t.Fatalf("complete schema error must not be reported as truncation: %q", result.Error)
 	}
-	if !strings.Contains(result.Error, "unknown field") {
-		t.Fatalf("expected the real decoder error, got %q", result.Error)
+	// Unknown keys inside a change are now tolerated with a warning, but the
+	// change itself still fails validation: neither oldText nor lineRange was
+	// provided, which must surface as the real E_BAD_EDIT error.
+	if !strings.Contains(result.Error, "E_BAD_EDIT") {
+		t.Fatalf("expected the real validation error, got %q", result.Error)
 	}
 }
 

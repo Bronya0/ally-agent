@@ -82,7 +82,7 @@
 - [config] ConfigState — 全部用户配置 + 会话级 overlay（key 池、代理、模型、技能开关、背景等）
 - [struct] ChatRequest — StartChat 请求：消息数组或单条消息 + 附件 + 配置 overlay
 - [struct] modelStreamResult / modelStreamEvent — provider 流式结果与逐事件回调（content/reasoning/toolCalls/usage）
-- [struct] toolResult — 工具结果信封 `{ok, data, error, errorCode, details}`
+- [struct] toolResult — 工具结果信封 `{ok, data, error, errorCode, details, warnings}`；`warnings` 仅在成功结果上携带非致命提示（如被忽略的未知参数）
 - [struct] McpManager — MCP 服务器连接/重连/工具发现/函数名映射
 - [struct] scheduledTaskManager — 计划任务调度状态机（cron/interval/once、串行执行）
 - [struct] statsRecorder — 异步 Token 统计队列与落盘

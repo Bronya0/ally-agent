@@ -22,6 +22,9 @@ type toolResult struct {
 	Error     string `json:"error,omitempty"`
 	ErrorCode string `json:"errorCode,omitempty"`
 	Details   any    `json:"details,omitempty"`
+	// Warnings carries non-fatal notices (e.g. ignored unknown tool
+	// arguments) on successful results; error results never set it.
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 // codedToolError wraps err with a stable tool error code. It delegates to the
@@ -40,6 +43,15 @@ func toolErrorResult(err error) toolResult {
 		return toolResult{OK: true}
 	}
 	return toolResult{OK: false, Error: err.Error(), ErrorCode: toolErrorCode(err), Details: toolerrors.Details(err)}
+}
+
+// extraFieldWarnings renders the ignored-unknown-argument notice for the
+// result envelope. Returns nil when every argument matched the tool schema.
+func extraFieldWarnings(extraFields []string) []string {
+	if len(extraFields) == 0 {
+		return nil
+	}
+	return []string{fmt.Sprintf("以下参数不被该工具支持，已忽略：%s", strings.Join(extraFields, ", "))}
 }
 
 // toolResultSummary returns a short human-readable summary for a tool result.
@@ -175,10 +187,51 @@ func toolResultSummary(name string, result *toolResult) string {
 	return ""
 }
 
+// compactToolResultForModel returns the model-facing JSON for a tool result.
+// Per-tool compaction runs first; the envelope warnings (unknown-argument
+// notices and salvage/validation notes) are then re-injected so they survive
+// even when a tool's compact payload drops the top-level envelope fields.
 func compactToolResultForModel(name string, result toolResult, fullJSON string) string {
 	if !result.OK || result.Data == nil {
 		return fullJSON
 	}
+	compact := compactToolDataForModel(name, result, fullJSON)
+	if len(result.Warnings) > 0 {
+		compact = injectEnvelopeWarnings(compact, result.Warnings)
+	}
+	return compact
+}
+
+// injectEnvelopeWarnings parses a model-facing tool-result JSON and adds the
+// envelope warnings under data.warnings, merging with any warnings the tool
+// already produced. Falls back to appending a plain-text note when parsing
+// fails, so the notice always reaches the model.
+func injectEnvelopeWarnings(compactJSON string, warnings []string) string {
+	var decoded struct {
+		OK   bool `json:"ok"`
+		Data struct {
+			Warnings []string `json:"warnings"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(compactJSON), &decoded); err != nil || !decoded.OK {
+		return compactJSON + "\nwarnings: " + strings.Join(warnings, " | ")
+	}
+	merged := append(decoded.Data.Warnings, warnings...)
+	var generic map[string]any
+	if err := json.Unmarshal([]byte(compactJSON), &generic); err != nil {
+		return compactJSON + "\nwarnings: " + strings.Join(warnings, " | ")
+	}
+	if dataMap, ok := generic["data"].(map[string]any); ok {
+		dataMap["warnings"] = merged
+	}
+	raw, err := json.Marshal(generic)
+	if err != nil {
+		return compactJSON + "\nwarnings: " + strings.Join(warnings, " | ")
+	}
+	return string(raw)
+}
+
+func compactToolDataForModel(name string, result toolResult, fullJSON string) string {
 	switch name {
 	case "read", "batch_read", "read_file":
 		var r BatchReadResult
