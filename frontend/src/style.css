@@ -2368,10 +2368,24 @@ code, pre {
   justify-content: flex-start !important;
 }
 
+/* 边框与 focus 白圈都画在 n-button__border / __state-border 覆盖层上，直接隐藏 */
+.workspace-history-menu .add-workspace-option .n-button .n-button__border,
+.workspace-history-menu .add-workspace-option .n-button .n-button__state-border {
+  display: none !important;
+}
+
+/* 按钮自身 hover/focus 背景与下拉选项 pending 背景都关掉，交互反馈只留一层 */
 .workspace-history-menu .add-workspace-option .n-button:hover,
-.workspace-history-menu .add-workspace-option .n-button:focus-visible {
-  background: rgba(224, 160, 112, 0.1) !important;
-  color: #f0b887 !important;
+.workspace-history-menu .add-workspace-option .n-button:focus-visible,
+.workspace-history-menu .add-workspace-option.n-dropdown-option-body--pending::before,
+.workspace-history-menu .add-workspace-option.n-dropdown-option-body--pending:hover::before {
+  background: transparent !important;
+  background-color: transparent !important;
+}
+
+/* 统一反馈：悬停/键盘聚焦时整行淡琥珀底 */
+.workspace-history-menu .add-workspace-option.n-dropdown-option-body--pending .add-label {
+  color: #f0b887;
 }
 
 .workspace-history-menu .add-label {
