@@ -271,17 +271,26 @@ function normalizedLines(text) {
   return lines;
 }
 
-function lineCount(body) {
-  if (!body) return 0;
-  return normalizedLines(body).length;
+// tool:update 每 ~120ms 强制重渲一次，模板里反复调用 lineCount /
+// toolBodyText 会对流式增长中的 body 全量切行。这里按消息对象做 WeakMap
+// 记忆化：文本与展开状态不变时直接复用上次的行数。
+const lineCountMemo = new WeakMap();
+function lineCount(msg, text) {
+  if (!text) return 0;
+  let memo = lineCountMemo.get(msg);
+  if (!memo || memo.text !== text) {
+    memo = { text, count: normalizedLines(text).length };
+    lineCountMemo.set(msg, memo);
+  }
+  return memo.count;
 }
 
 function isBodyPreview(msg) {
-  return msg.kind !== 'command' && !msg.expanded && lineCount(msg.body) > BODY_PREVIEW_LINES;
+  return msg.kind !== 'command' && !msg.expanded && lineCount(msg, msg.body) > BODY_PREVIEW_LINES;
 }
 
 function isCreatePreview(msg) {
-  return !msg.expanded && lineCount(msg.codeContent) > BODY_PREVIEW_LINES;
+  return !msg.expanded && lineCount(msg, msg.codeContent) > BODY_PREVIEW_LINES;
 }
 
 function isValidationWarning(msg) {
@@ -289,8 +298,29 @@ function isValidationWarning(msg) {
   return /自动校验失败|validation\s+(?:failed|error)/i.test(validation);
 }
 
+// 切行结果记忆化：键为 body 文本 + 展开/滚动状态 + 工具状态。命令输出
+// 流式刷新时只有 body 真正变化的那一帧才重新 split，其余渲染直接复用。
+const bodyTextMemo = new WeakMap();
+
 function toolBodyText(msg) {
   const body = String(msg.body || '');
+  let memo = bodyTextMemo.get(msg);
+  if (!memo || memo.body !== body || memo.expanded !== !!msg.expanded
+    || memo.scrollEnabled !== bodyScrollEnabled.value || memo.status !== (msg.status || '')) {
+    memo = {
+      body,
+      expanded: !!msg.expanded,
+      scrollEnabled: bodyScrollEnabled.value,
+      status: msg.status || '',
+      text: '',
+    };
+    memo.text = computeToolBodyText(msg, body);
+    bodyTextMemo.set(msg, memo);
+  }
+  return memo.text;
+}
+
+function computeToolBodyText(msg, body) {
   if (isScrollableBody(msg) && !bodyScrollEnabled.value) {
     // Tail preview: skip blank lines so the collapsed rows always end with real
     // output instead of the stray trailing newlines shell output commonly has
@@ -412,13 +442,13 @@ function handleToggle(msg) {
 function hasExpandableBody(msg) {
   if (msg.kind === 'read' || msg.kind === 'command' || msg.kind === 'plan') return false;
   if (msg.kind === 'edit') return true;
-  if (msg.kind === 'create') return lineCount(msg.codeContent) > BODY_PREVIEW_LINES;
+  if (msg.kind === 'create') return lineCount(msg, msg.codeContent) > BODY_PREVIEW_LINES;
   // calculate: body 只重复 title(expression) + chip(= result)，无需详情卡
   if (msg.kind === 'calculate') return false;
   // scheduled_task: 任务详情在 Task Center 面板查看，无需详情卡
   if (msg.kind === 'scheduled') return false;
   // grep 永远只显示单行状态和命中统计，不加载匹配行详情。
   if (msg.kind === 'grep') return false;
-  return lineCount(msg.body) > BODY_PREVIEW_LINES || msg.kind === 'list';
+  return lineCount(msg, msg.body) > BODY_PREVIEW_LINES || msg.kind === 'list';
 }
 </script>

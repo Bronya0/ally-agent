@@ -202,73 +202,6 @@ import 'ace-builds/src-noconflict/ext-language_tools';
 import 'ace-builds/src-noconflict/ext-searchbox';
 import 'ace-builds/src-noconflict/theme-tomorrow_night';
 import 'ace-builds/src-noconflict/mode-text';
-import 'ace-builds/src-noconflict/mode-javascript';
-import 'ace-builds/src-noconflict/mode-typescript';
-import 'ace-builds/src-noconflict/mode-json';
-import 'ace-builds/src-noconflict/mode-json5';
-import 'ace-builds/src-noconflict/mode-python';
-import 'ace-builds/src-noconflict/mode-golang';
-import 'ace-builds/src-noconflict/mode-java';
-import 'ace-builds/src-noconflict/mode-sh';
-import 'ace-builds/src-noconflict/mode-yaml';
-import 'ace-builds/src-noconflict/mode-css';
-import 'ace-builds/src-noconflict/mode-html';
-import 'ace-builds/src-noconflict/mode-xml';
-import 'ace-builds/src-noconflict/mode-sql';
-import 'ace-builds/src-noconflict/mode-c_cpp';
-import 'ace-builds/src-noconflict/mode-markdown';
-import 'ace-builds/src-noconflict/mode-rust';
-import 'ace-builds/src-noconflict/mode-ruby';
-import 'ace-builds/src-noconflict/mode-vue';
-import 'ace-builds/src-noconflict/mode-astro';
-import 'ace-builds/src-noconflict/mode-csharp';
-import 'ace-builds/src-noconflict/mode-kotlin';
-import 'ace-builds/src-noconflict/mode-swift';
-import 'ace-builds/src-noconflict/mode-dart';
-import 'ace-builds/src-noconflict/mode-php';
-import 'ace-builds/src-noconflict/mode-lua';
-import 'ace-builds/src-noconflict/mode-perl';
-import 'ace-builds/src-noconflict/mode-r';
-import 'ace-builds/src-noconflict/mode-scala';
-import 'ace-builds/src-noconflict/mode-objectivec';
-import 'ace-builds/src-noconflict/mode-clojure';
-import 'ace-builds/src-noconflict/mode-haskell';
-import 'ace-builds/src-noconflict/mode-erlang';
-import 'ace-builds/src-noconflict/mode-elixir';
-import 'ace-builds/src-noconflict/mode-dockerfile';
-import 'ace-builds/src-noconflict/mode-makefile';
-import 'ace-builds/src-noconflict/mode-toml';
-import 'ace-builds/src-noconflict/mode-ini';
-import 'ace-builds/src-noconflict/mode-batchfile';
-import 'ace-builds/src-noconflict/mode-powershell';
-import 'ace-builds/src-noconflict/mode-nginx';
-import 'ace-builds/src-noconflict/mode-apache_conf';
-import 'ace-builds/src-noconflict/mode-less';
-import 'ace-builds/src-noconflict/mode-scss';
-import 'ace-builds/src-noconflict/mode-sass';
-import 'ace-builds/src-noconflict/mode-stylus';
-import 'ace-builds/src-noconflict/mode-graphqlschema';
-import 'ace-builds/src-noconflict/mode-protobuf';
-import 'ace-builds/src-noconflict/mode-nix';
-import 'ace-builds/src-noconflict/mode-zig';
-import 'ace-builds/src-noconflict/mode-nim';
-import 'ace-builds/src-noconflict/mode-crystal';
-import 'ace-builds/src-noconflict/mode-fortran';
-import 'ace-builds/src-noconflict/mode-pascal';
-import 'ace-builds/src-noconflict/mode-assembly_x86';
-import 'ace-builds/src-noconflict/mode-verilog';
-import 'ace-builds/src-noconflict/mode-vhdl';
-import 'ace-builds/src-noconflict/mode-matlab';
-import 'ace-builds/src-noconflict/mode-julia';
-import 'ace-builds/src-noconflict/mode-diff';
-import 'ace-builds/src-noconflict/mode-gitignore';
-import 'ace-builds/src-noconflict/mode-elm';
-import 'ace-builds/src-noconflict/mode-glsl';
-import 'ace-builds/src-noconflict/mode-prisma';
-import 'ace-builds/src-noconflict/mode-latex';
-import 'ace-builds/src-noconflict/mode-rst';
-import 'ace-builds/src-noconflict/mode-csv';
-import 'ace-builds/src-noconflict/mode-tsv';
 import MarkdownIt from 'markdown-it';
 import { isEditableNavigationTarget } from '../utils/sessionState.mjs';
 import { resolveMarkdownImagePath } from '../utils/markdownPreview.mjs';
@@ -405,6 +338,97 @@ const ACE_MODE_MAP = {
   elm: 'elm', glsl: 'glsl', frag: 'glsl', vert: 'glsl',
   prisma: 'prisma', tex: 'latex', rst: 'rst', csv: 'csv', tsv: 'tsv',
 };
+
+// 语言模式按需加载：ace 各语言 tokenizer 体积很大（此前全部静态引入使本组件
+// chunk 超过 2MB 并常驻内存），而实际用到的语言完全由打开文件的扩展名决定。
+// 因此除 text 外全部改为首次遇到对应扩展名时动态加载并注册，之后走常驻路径。
+const ACE_MODE_LOADERS = {
+  typescript: () => import('ace-builds/src-noconflict/mode-typescript'),
+  javascript: () => import('ace-builds/src-noconflict/mode-javascript'),
+  python: () => import('ace-builds/src-noconflict/mode-python'),
+  golang: () => import('ace-builds/src-noconflict/mode-golang'),
+  java: () => import('ace-builds/src-noconflict/mode-java'),
+  sh: () => import('ace-builds/src-noconflict/mode-sh'),
+  json: () => import('ace-builds/src-noconflict/mode-json'),
+  json5: () => import('ace-builds/src-noconflict/mode-json5'),
+  yaml: () => import('ace-builds/src-noconflict/mode-yaml'),
+  css: () => import('ace-builds/src-noconflict/mode-css'),
+  html: () => import('ace-builds/src-noconflict/mode-html'),
+  xml: () => import('ace-builds/src-noconflict/mode-xml'),
+  sql: () => import('ace-builds/src-noconflict/mode-sql'),
+  c_cpp: () => import('ace-builds/src-noconflict/mode-c_cpp'),
+  markdown: () => import('ace-builds/src-noconflict/mode-markdown'),
+  rust: () => import('ace-builds/src-noconflict/mode-rust'),
+  ruby: () => import('ace-builds/src-noconflict/mode-ruby'),
+  vue: () => import('ace-builds/src-noconflict/mode-vue'),
+  astro: () => import('ace-builds/src-noconflict/mode-astro'),
+  csharp: () => import('ace-builds/src-noconflict/mode-csharp'),
+  kotlin: () => import('ace-builds/src-noconflict/mode-kotlin'),
+  swift: () => import('ace-builds/src-noconflict/mode-swift'),
+  dart: () => import('ace-builds/src-noconflict/mode-dart'),
+  php: () => import('ace-builds/src-noconflict/mode-php'),
+  lua: () => import('ace-builds/src-noconflict/mode-lua'),
+  perl: () => import('ace-builds/src-noconflict/mode-perl'),
+  r: () => import('ace-builds/src-noconflict/mode-r'),
+  scala: () => import('ace-builds/src-noconflict/mode-scala'),
+  objectivec: () => import('ace-builds/src-noconflict/mode-objectivec'),
+  clojure: () => import('ace-builds/src-noconflict/mode-clojure'),
+  haskell: () => import('ace-builds/src-noconflict/mode-haskell'),
+  erlang: () => import('ace-builds/src-noconflict/mode-erlang'),
+  elixir: () => import('ace-builds/src-noconflict/mode-elixir'),
+  dockerfile: () => import('ace-builds/src-noconflict/mode-dockerfile'),
+  makefile: () => import('ace-builds/src-noconflict/mode-makefile'),
+  toml: () => import('ace-builds/src-noconflict/mode-toml'),
+  ini: () => import('ace-builds/src-noconflict/mode-ini'),
+  batchfile: () => import('ace-builds/src-noconflict/mode-batchfile'),
+  powershell: () => import('ace-builds/src-noconflict/mode-powershell'),
+  nginx: () => import('ace-builds/src-noconflict/mode-nginx'),
+  apache_conf: () => import('ace-builds/src-noconflict/mode-apache_conf'),
+  less: () => import('ace-builds/src-noconflict/mode-less'),
+  scss: () => import('ace-builds/src-noconflict/mode-scss'),
+  sass: () => import('ace-builds/src-noconflict/mode-sass'),
+  stylus: () => import('ace-builds/src-noconflict/mode-stylus'),
+  graphqlschema: () => import('ace-builds/src-noconflict/mode-graphqlschema'),
+  protobuf: () => import('ace-builds/src-noconflict/mode-protobuf'),
+  nix: () => import('ace-builds/src-noconflict/mode-nix'),
+  zig: () => import('ace-builds/src-noconflict/mode-zig'),
+  nim: () => import('ace-builds/src-noconflict/mode-nim'),
+  crystal: () => import('ace-builds/src-noconflict/mode-crystal'),
+  fortran: () => import('ace-builds/src-noconflict/mode-fortran'),
+  pascal: () => import('ace-builds/src-noconflict/mode-pascal'),
+  assembly_x86: () => import('ace-builds/src-noconflict/mode-assembly_x86'),
+  verilog: () => import('ace-builds/src-noconflict/mode-verilog'),
+  vhdl: () => import('ace-builds/src-noconflict/mode-vhdl'),
+  matlab: () => import('ace-builds/src-noconflict/mode-matlab'),
+  julia: () => import('ace-builds/src-noconflict/mode-julia'),
+  diff: () => import('ace-builds/src-noconflict/mode-diff'),
+  gitignore: () => import('ace-builds/src-noconflict/mode-gitignore'),
+  elm: () => import('ace-builds/src-noconflict/mode-elm'),
+  glsl: () => import('ace-builds/src-noconflict/mode-glsl'),
+  prisma: () => import('ace-builds/src-noconflict/mode-prisma'),
+  latex: () => import('ace-builds/src-noconflict/mode-latex'),
+  rst: () => import('ace-builds/src-noconflict/mode-rst'),
+  csv: () => import('ace-builds/src-noconflict/mode-csv'),
+  tsv: () => import('ace-builds/src-noconflict/mode-tsv'),
+};
+
+// 已通过动态 import 注册的语言集合（text 随编辑器初始化静态引入）
+const loadedAceModes = new Set(['text']);
+const aceModePending = new Map();
+
+function ensureAceMode(mode) {
+  if (loadedAceModes.has(mode)) return Promise.resolve();
+  const loader = ACE_MODE_LOADERS[mode];
+  if (!loader) return Promise.resolve();
+  let pending = aceModePending.get(mode);
+  if (!pending) {
+    pending = Promise.resolve().then(loader).then(() => { loadedAceModes.add(mode); });
+    aceModePending.set(mode, pending);
+    // 加载失败时移除缓存条目，下次打开同类型文件可重试
+    pending.catch(() => aceModePending.delete(mode));
+  }
+  return pending;
+}
 
 // 语法校验（唯一判断来源）：扩展名 → 校验器。只收录浏览器端有可靠、
 // 不误报的轻量实现的格式：JSON 用内置 JSON.parse；YAML 用 js-yaml
@@ -676,7 +700,7 @@ function updateAceContent() {
   if (!aceEditor) return;
   const path = activeFile.value?.path || '';
   const mode = aceModeForPath(path);
-  aceEditor.session.setMode(`ace/mode/${mode}`);
+  applyAceMode(path, mode);
   aceEditor.setValue(draftContent.value || '', -1);
   // 重置撤销栈：setValue 不清空历史，否则 Ctrl+Z 可能撤回到上一个文件的内容
   aceEditor.session.getUndoManager().reset();
@@ -685,6 +709,25 @@ function updateAceContent() {
   aceEditor.resize();
   // 打开的文件本身可能就有语法错误，切文件后立即校验一次
   void applySyntaxValidation();
+}
+
+// 只有确认已注册的 mode 才直接 setMode；未注册的先用 text 展示，等对应
+// 语言 chunk 加载完成后再补一次 setMode（仅当用户仍停留在同一文件时）。
+// 绝不对未注册的 mode 名调用 setMode——ace 对未注册模块的解析行为不可靠。
+function applyAceMode(path, mode) {
+  if (!aceEditor) return;
+  if (mode === 'text' || loadedAceModes.has(mode) || !ACE_MODE_LOADERS[mode]) {
+    aceEditor.session.setMode(`ace/mode/${mode}`);
+    return;
+  }
+  aceEditor.session.setMode('ace/mode/text');
+  void ensureAceMode(mode)
+    .then(() => {
+      if (aceEditor && activeFile.value?.path === path) {
+        aceEditor.session.setMode(`ace/mode/${mode}`);
+      }
+    })
+    .catch(() => { /* 加载失败时保持 text 展示；ensureAceMode 内已清理重试标记 */ });
 }
 
 async function loadMarkdownImage(key, path) {

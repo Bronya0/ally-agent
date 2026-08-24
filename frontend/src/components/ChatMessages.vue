@@ -65,7 +65,7 @@ Public License v3. See the LICENSE file for details.
             </div>
           </div>
           <RenderBoundary v-if="msg.welcome" :label="$t('chat.welcome')"><WelcomeMessage :welcome="msg.welcome" :tools="tools" :mcp-servers="mcpServers" /></RenderBoundary>
-          <div v-else class="message-body markdown-body" v-html="renderFn(msg.content, msg.streaming)"></div>
+          <StreamingMarkdownBody v-else :msg="msg" :render-fn="renderFn" />
           <RenderBoundary :label="$t('chat.attachment')"><MessageAttachments :attachments="msg.attachments || []" /></RenderBoundary>
           <div v-if="msg.role === 'assistant' && msg.suggestions?.length && !msg.streaming" class="suggest-row">
             <button v-for="(label, i) in msg.suggestions" :key="i" class="suggest-chip" @click.stop="$emit('sendSuggest', label)">{{ label }}</button>
@@ -167,7 +167,7 @@ Public License v3. See the LICENSE file for details.
 </template>
 
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, toRaw } from 'vue';
 import { t } from '../i18n.mjs';
 import MessageAttachments from './MessageAttachments.vue';
 import WelcomeMessage from './WelcomeMessage.vue';
@@ -176,6 +176,7 @@ import AskToolCard from './AskToolCard.vue';
 import ReadGroupCard from './ReadGroupCard.vue';
 import SubagentInlineCard from './SubagentInlineCard.vue';
 import HtmlRenderCard from './HtmlRenderCard.vue';
+import StreamingMarkdownBody from './StreamingMarkdownBody.vue';
 import RenderBoundary from './RenderBoundary.vue';
 import ExportOutlined from '@vicons/antd/ExportOutlined';
 import MessageOutlined from '@vicons/antd/MessageOutlined';
@@ -207,14 +208,16 @@ function userMessageText(msg) {
 
 // Keep historical user/assistant subtrees out of the patch path while the
 // active assistant message streams. Every value used by these two branches
-// that can change during a run is represented here, including user expansion
-// state and generated-image attachment updates.
+// that can change during a run is represented here.
+// 注意：这里刻意不读 msg.content——memo 数组在父组件渲染作用域内求值，
+// 一旦读取内容就会让整个列表的渲染 effect 订阅流式增量。活跃消息的正文
+// 由 StreamingMarkdownBody 子组件独立渲染；已完成消息的内容不再变化，
+// 流式结束时 streaming 标志翻转即触发最后一帧补丁。
 function messageRenderMemo(msg) {
   const attachments = Array.isArray(msg?.attachments) ? msg.attachments : [];
   const lastAttachment = attachments.length ? attachments[attachments.length - 1] : null;
   return [
     msg?.role,
-    msg?.content,
     msg?.reasoningChars,
     msg?.reasoningStartedAt,
     msg?.reasoningEndedAt,
@@ -230,6 +233,7 @@ function messageRenderMemo(msg) {
     msg?.cacheMiss,
     msg?.runInputTokens,
     msg?.runOutputTokens,
+    msg?.suggestions?.length || 0,
     attachments.length,
     lastAttachment?.previewUrl,
     lastAttachment?.dataUrl,
@@ -348,7 +352,10 @@ const lastAnswerMessage = computed(() => {
   const msgs = props.messages || [];
   for (let i = msgs.length - 1; i >= 0; i--) {
     const m = msgs[i];
-    if (m?.role === 'assistant' && !m.welcome && String(m.content || '').trim()) return m;
+    // 不读代理上的 content：那会让本 computed 订阅所有 assistant 消息内容，
+    // 流式增量把整个列表渲染拖下水。toRaw 绕过代理读原始对象，不建立依赖。
+    // 中间步骤的 assistant 消息可能没有正文（只有 tool_calls），必须跳过。
+    if (m?.role === 'assistant' && !m.welcome && String(toRaw(m)?.content || '').trim()) return m;
   }
   return null;
 });

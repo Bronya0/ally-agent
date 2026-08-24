@@ -699,15 +699,60 @@ markdown.renderer.rules.fence = (tokens, idx, options, env, self) => {
     return `<pre class="ascii-banner"><code>${markdown.utils.escapeHtml(token.content)}</code></pre>\n`;
   }
   try {
-    const highlightLang = isShellLanguage(lang) ? 'bash' : lang;
-    const highlighted = highlightLang && hljs.getLanguage(highlightLang)
-      ? hljs.highlight(token.content, { language: highlightLang }).value
-      : hljs.highlightAuto(token.content).value;
+    const highlighted = highlightFence(lang, token.content);
+    if (highlighted === null) {
+      return `${renderHighlightedCodeBlock(token.content, markdown.utils.escapeHtml(token.content), '')}\n`;
+    }
     return `${renderHighlightedCodeBlock(token.content, highlighted, isShellLanguage(lang) ? 'shell-code' : '')}\n`;
   } catch (_) {
     return `${renderHighlightedCodeBlock(token.content, markdown.utils.escapeHtml(token.content), '')}\n`;
   }
 };
+
+// fence 高亮缓存：流式渲染每次 flush 都会对累积全文重新 Markdown 解析，
+// 已闭合的历史 fence 若每帧重新 tokenize，高亮成本随输出长度平方增长。
+// 流式与非流式渲染都读写缓存：已闭合 fence 的内容稳定，第二帧起命中；
+// 流式中活跃增长块的 key 每帧不同，只会多占一条位置，由 LRU 上限挤出。
+// 另外流式渲染中未标注语言的 fence 跳过 highlightAuto——它要尝试数十种
+// 语法、是单帧最贵的一步，流结束后最终渲染会自动恢复高亮。
+const fenceHighlightCache = new Map();
+const FENCE_HIGHLIGHT_CACHE_LIMIT = 64;
+// 超长代码块的高亮 HTML 可达数百 KB，设源码长度上限防止缓存长期占用过多内存
+const FENCE_HIGHLIGHT_CACHE_MAX_CHARS = 8000;
+
+function highlightFence(lang, content) {
+  const highlightLang = isShellLanguage(lang) ? 'bash' : lang;
+  const knownLang = Boolean(highlightLang && hljs.getLanguage(highlightLang));
+  if (!knownLang && markdownRenderStreaming) return null;
+  // 流式 flush 与最终渲染都读写缓存：流式期间已闭合 fence 的内容稳定，
+  // 第二帧起命中的正是上一帧的结果；活跃增长块每帧 key 不同，只会多占
+  // 一条缓存位置，不会污染其他条目的命中。
+  const cacheable = content.length <= FENCE_HIGHLIGHT_CACHE_MAX_CHARS;
+  const cacheKey = cacheable ? `${highlightLang || ''}\u0000${content}` : '';
+  if (cacheable) {
+    const cached = fenceHighlightCache.get(cacheKey);
+    if (cached !== undefined) {
+      fenceHighlightCache.delete(cacheKey);
+      fenceHighlightCache.set(cacheKey, cached);
+      return cached;
+    }
+  }
+  let highlighted;
+  try {
+    highlighted = knownLang
+      ? hljs.highlight(content, { language: highlightLang }).value
+      : hljs.highlightAuto(content).value;
+  } catch (_) {
+    return null;
+  }
+  if (cacheable) {
+    fenceHighlightCache.set(cacheKey, highlighted);
+    if (fenceHighlightCache.size > FENCE_HIGHLIGHT_CACHE_LIMIT) {
+      fenceHighlightCache.delete(fenceHighlightCache.keys().next().value);
+    }
+  }
+  return highlighted;
+}
 
 function scheduleMermaidRender() {
   if (typeof window === 'undefined' || typeof document === 'undefined') return;
@@ -8062,6 +8107,8 @@ onUnmounted(() => {
   updateCheckTimer = 0;
   if (fileMentionTimer) window.clearTimeout(fileMentionTimer);
   fileMentionTimer = 0;
+  if (saveSessionsTimer) window.clearTimeout(saveSessionsTimer);
+  saveSessionsTimer = 0;
   if (toolUpdateFlushTimer) window.clearTimeout(toolUpdateFlushTimer);
   toolUpdateFlushTimer = 0;
   toolUpdateFlushScheduled = false;
