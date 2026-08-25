@@ -1305,6 +1305,19 @@ func (a *App) StartChat(req ChatRequest) (string, error) {
 	runID := newID()
 	ctx, cancel := context.WithCancel(context.Background())
 	a.mu.Lock()
+	// 同一会话同时只允许一个活跃 run：并发 run 会交叉执行 saveHistory，
+	// 破坏模型上下文的消息顺序。前端在运行中的追问已走 InjectRunMessage
+	// 注入路径，不会触发本守卫；这是对其它事件下游（如网络端 sink）的
+	// 纵深防御，与 releaseSession 的活跃 run 检查保持对称。
+	if req.SessionID != "" {
+		for _, activeSessionID := range a.runSessions {
+			if activeSessionID == req.SessionID {
+				a.mu.Unlock()
+				cancel()
+				return "", errors.New("session already has an active run")
+			}
+		}
+	}
 	a.runs[runID] = cancel
 	a.runSessions[runID] = req.SessionID
 	a.runInputs[runID] = make(chan string, runInputBufferSize)
