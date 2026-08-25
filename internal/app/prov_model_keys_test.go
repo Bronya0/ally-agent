@@ -279,6 +279,15 @@ func TestIsAuthKeyErrorRateLimitNotAuth(t *testing.T) {
 	if isAuthKeyError(errors.New("rate limit exceeded")) {
 		t.Fatal("rate limit should be transient, not auth")
 	}
+	// 中转限流文案变体:不含 429/状态码,也不能被误判为认证/计费错误。
+	for _, variant := range []string{
+		"responses request failed: Rate exceeded.",
+		"rate_limit exceeded, please slow down",
+	} {
+		if isAuthKeyError(errors.New(variant)) {
+			t.Fatalf("%q should be transient, not auth", variant)
+		}
+	}
 	// 明确的计费类标记仍视为 key 级故障。
 	for _, billing := range []string{
 		"status code: 402, message: payment required",
@@ -297,5 +306,44 @@ func TestIsAuthKeyErrorRateLimitNotAuth(t *testing.T) {
 		if !isAuthKeyError(errors.New(auth)) {
 			t.Fatalf("%q should be auth", auth)
 		}
+	}
+}
+
+// TestShouldRetryLLMErrorDefaultRetry 验证反转后的重试策略:未知/新式中转
+// 文案默认重试(此前白名单漏配会直接中断整个会话),只有确定性失败
+// (取消、认证/计费、上下文超长、模型不存在)不重试。
+func TestShouldRetryLLMErrorDefaultRetry(t *testing.T) {
+	// 真实踩坑案例:中转限流/过载文案不在任何旧白名单关键词里。
+	retryable := []string{
+		"responses request failed: Rate exceeded.",                       // 状态码被中转吃掉的限流
+		"responses request failed: 429 Too Many Requests: Rate exceeded.", // 修复后带状态码的限流
+		"error, Service temporarily overloaded",                          // Anthropic 529 过载
+		"error, status code: 529, message: overloaded_error",
+		"upstream weird relay error: something odd happened",             // 未知文案默认重试
+		"error, status code: 503, message: service unavailable",
+	}
+	for _, msg := range retryable {
+		if !shouldRetryLLMError(errors.New(msg)) {
+			t.Fatalf("%q should be retryable", msg)
+		}
+	}
+	fatal := []string{
+		"context deadline exceeded",
+		"error, status code: 401, message: invalid api key",
+		"error, status code: 402, message: insufficient quota",
+		"error, status code: 400, message: This model's maximum context length is 128000 tokens. However, you requested 200000 tokens",
+		"error, status code: 404, message: The model 'gpt-x' does not exist",
+		"error, status code: 404, message: model not found",
+	}
+	for _, msg := range fatal {
+		if shouldRetryLLMError(errors.New(msg)) {
+			t.Fatalf("%q should not be retryable", msg)
+		}
+	}
+	if !shouldRetryLLMError(errEmptyModelResponse) {
+		t.Fatal("empty model response should be retryable")
+	}
+	if shouldRetryLLMError(context.Canceled) {
+		t.Fatal("context.Canceled should not be retryable")
 	}
 }

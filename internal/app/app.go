@@ -1756,19 +1756,26 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 		var toolProgress *toolCallProgressTracker
 		var toolBatchID string
 		var err error
-		const maxTurnRetries = 3
+		// 轮次重试预算统一取自"LLM 请求重试次数"设置(单一来源):流式输出
+		// 中断(已产出内容,适配器/多 key 循环不敢重试防重复输出)或空响应
+		// 时整轮重来。pre-stream 失败已在 streamModelResponse 内部用同一
+		// 预算重试过,这里不再叠加,避免 (N+1)×(N+1) 组合爆炸。
+		maxTurnRetries := effectiveLLMRetries(cfg)
 		for turnAttempt := 0; ; turnAttempt++ {
 			toolCalls = []openai.ToolCall{}
 			toolBatchID = fmt.Sprintf("%d", step)
+			emittedEvents := false
 			streamDeltas := newRunStreamDeltaEmitter(runID, sessionID, func(name string, payload map[string]any) {
 				a.emit(name, payload)
 			})
 			toolProgress = newToolCallProgressTracker()
 			modelResp, err = a.streamModelResponse(ctx, cfg, cfg.Model, requestMessages, tools, func(event modelStreamEvent) {
 				if event.ContentDelta != "" {
+					emittedEvents = true
 					streamDeltas.addContent(event.ContentDelta)
 				}
 				if event.ReasoningDelta != "" {
+					emittedEvents = true
 					streamDeltas.addReasoning(event.ReasoningDelta)
 				}
 				if event.Retry != nil {
@@ -1784,6 +1791,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 					})
 				}
 				if event.Image != nil && event.Image.DataURL != "" {
+					emittedEvents = true
 					streamDeltas.flush()
 					a.emit("run:image", map[string]any{
 						"runId": runID, "sessionId": sessionID, "id": event.Image.ID,
@@ -1791,6 +1799,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 					})
 				}
 				if event.ToolCalls != nil {
+					emittedEvents = true
 					streamDeltas.flush()
 					toolCalls = cloneToolCalls(event.ToolCalls)
 					for _, toolEvent := range toolProgress.events(runID, sessionID, toolBatchID, toolCalls, a.mcpToolEventMeta) {
@@ -1829,7 +1838,12 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 					continue
 				}
 			}
-			if turnAttempt >= maxTurnRetries || !shouldRetryLLMError(err) {
+			// 轮次重试只接管内层无法重试的场景:流中断(已发射事件,内层重试会
+			// 造成重复输出)或空响应(errEmptyModelResponse,内层重试逻辑不覆盖)。
+			// pre-stream 失败已在 streamModelResponse 内部按同一预算退避重试过,
+			// 这里直接失败,避免同一请求被两层循环重复重试。
+			if turnAttempt >= maxTurnRetries || !shouldRetryLLMError(err) ||
+				!(emittedEvents || errors.Is(err, errEmptyModelResponse)) {
 				emitRunEnd("run:error", "error", map[string]any{"error": err.Error()})
 				return
 			}

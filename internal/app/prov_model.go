@@ -55,16 +55,23 @@ type modelImage struct {
 // modelRetryInfo 描述一次 LLM 请求重试,前端据此显示重试状态。
 type modelRetryInfo struct {
 	Attempt     int // 第几次重试,从 1 开始
-	MaxAttempts int // 最大重试次数。单 key 路径=重试次数(不含首次);
-	// 多 key 路径=总尝试次数上限(含首次,即 maxMultiKeyAttempts)
+	MaxAttempts int // 最大重试次数(不含首次)。所有路径统一取自"LLM 请求
+	// 重试次数"设置(effectiveLLMRetries):单 key 适配器内退避重试、
+	// 多 key 故障转移、runChat 流中断整轮重试共用同一预算。
 	Error     string // 触发重试的错误信息
 	WaitMS    int    // 重试前等待毫秒数
 	KeyIndex  int    // 失败/切换涉及的 key 序号(0 基),0 表示未知(单 key 或适配器内重试)
 	TotalKeys int    // key 池总数,0 表示未知
 }
 
-// shouldRetryLLMError 判断错误是否值得重试(429/5xx/400/瞬时网络错误)。
-// context.Canceled / DeadlineExceeded 不重试。
+// shouldRetryLLMError 判断错误是否值得重试。
+// 策略是"默认重试 + 明确排除确定性失败"(反转自旧版关键词白名单):中转/
+// 服务商的瞬时错误文案千奇百怪("Rate exceeded"、"Service temporarily
+// overloaded"、...),白名单每遇到一个新文案就漏一个、直接中断整个会话;
+// 反转后分类错误的代价只是多等几次有上限的退避,漏掉重试的代价是 run
+// 直接失败。上下文超长、模型不存在这类确定性失败重试必然同样失败,
+// 仍按不可重试处理;mid-stream 已产出内容的中断不走本函数(各适配器有
+// gotAnyEvent/emitted 守卫,由 runChat 做整轮重试)。
 func shouldRetryLLMError(err error) bool {
 	if err == nil {
 		return false
@@ -75,37 +82,35 @@ func shouldRetryLLMError(err error) bool {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false
 	}
+	// 认证/计费类(key 本身失效或欠费):重试同一 key 无意义。多 key 路径
+	// 由 shouldFailoverKey 直接切换。限流类文案在 isAuthKeyError 里已被
+	// 豁免为非认证错误,会落到下面的默认重试。
+	if isAuthKeyError(err) {
+		return false
+	}
 	msg := strings.ToLower(err.Error())
-	if strings.Contains(msg, "429") || strings.Contains(msg, "too many requests") || strings.Contains(msg, "rate limit") {
-		return true
+	// 取消/超时的文本形态(中转或 SDK 把 context 错误转成纯字符串、丢失
+	// 错误链)同样不可重试:请求已被上游放弃,重试只会浪费时间。
+	if strings.Contains(msg, "context deadline exceeded") || strings.Contains(msg, "context canceled") ||
+		strings.Contains(msg, "context was canceled") {
+		return false
 	}
-	if strings.Contains(msg, "status code: 5") || strings.Contains(msg, "500 ") || strings.Contains(msg, "502 ") || strings.Contains(msg, "503 ") || strings.Contains(msg, "504 ") ||
-		strings.Contains(msg, "bad gateway") || strings.Contains(msg, "service unavailable") || strings.Contains(msg, "gateway timeout") || strings.Contains(msg, "internal server error") {
-		return true
+	// 上下文超长:确定性失败,重试必然同样失败。
+	if strings.Contains(msg, "context length") || strings.Contains(msg, "context_length") ||
+		strings.Contains(msg, "maximum context") || strings.Contains(msg, "context window") ||
+		strings.Contains(msg, "prompt is too long") || strings.Contains(msg, "input length") ||
+		strings.Contains(msg, "too many input tokens") || strings.Contains(msg, "maximum_prompt_size") ||
+		strings.Contains(msg, "request too large") {
+		return false
 	}
-	// 400(bad request / invalid request):部分中转站偶发返回 400(上下文长度
-	// 误报、参数序列化抖动等),按用户配置全部重试。"400 " 带空格避免误匹配
-	// 4000 之类的 token 数值。
-	if strings.Contains(msg, "400 ") || strings.Contains(msg, "status code: 400") ||
-		strings.Contains(msg, "bad request") || strings.Contains(msg, "invalid_request_error") ||
-		strings.Contains(msg, "invalid request") {
-		return true
+	// 模型不存在/接口路径错误:确定性失败。"404 " 带空格避免误匹配 token 数。
+	if strings.Contains(msg, "model not found") || strings.Contains(msg, "no such model") ||
+		strings.Contains(msg, "does not exist") || strings.Contains(msg, "not_found") ||
+		strings.Contains(msg, "status code: 404") || strings.Contains(msg, "404 not found") {
+		return false
 	}
-	if strings.Contains(msg, "timeout") || strings.Contains(msg, "timed out") ||
-		strings.Contains(msg, "eof") || strings.Contains(msg, "connection reset") ||
-		strings.Contains(msg, "broken pipe") || strings.Contains(msg, "no such host") ||
-		strings.Contains(msg, "connection refused") || strings.Contains(msg, "temporarily unavailable") ||
-		strings.Contains(msg, "connection lost") || strings.Contains(msg, "other side closed") ||
-		strings.Contains(msg, "fetch failed") || strings.Contains(msg, "upstream connect") ||
-		strings.Contains(msg, "reset before headers") || strings.Contains(msg, "socket hang up") ||
-		strings.Contains(msg, "socket connection was closed") || strings.Contains(msg, "stream interrupted") ||
-		strings.Contains(msg, "stream ended without") || strings.Contains(msg, "terminal event") ||
-		strings.Contains(msg, "finish_reason") || strings.Contains(msg, "terminated") ||
-		strings.Contains(msg, "protocol error") || strings.Contains(msg, "unexpected end of stream") ||
-		strings.Contains(msg, "unexpected end of json input") || strings.Contains(msg, "unexpected eof") {
-		return true
-	}
-	return false
+	// 其余一律按瞬时错误重试:429/5xx/网络抖动/中转自定义文案/未知错误。
+	return true
 }
 
 func emptyModelResponseError(result *modelStreamResult) error {
@@ -141,8 +146,11 @@ func isAuthKeyError(err error) bool {
 		return true
 	}
 	// 429/限流按定义是"请求过频"而非 key 失效,按瞬时错误短冷却。
+	// 变体文案与 shouldRetryLLMError 保持一致,防止 "Rate exceeded" 类
+	// 限流错误被下面的 quota 关键词误判为计费失效、触发 30 分钟长冷却。
 	if strings.Contains(msg, "429") || strings.Contains(msg, "too many requests") ||
-		strings.Contains(msg, "rate limit") {
+		strings.Contains(msg, "rate limit") ||
+		strings.Contains(msg, "rate exceeded") || strings.Contains(msg, "rate_limit") {
 		return false
 	}
 	if strings.Contains(msg, "401") || strings.Contains(msg, "403") ||
@@ -258,15 +266,14 @@ func (a *App) streamModelResponse(ctx context.Context, cfg ConfigState, model st
 	}
 	// 多 key:固定优先级故障转移 + 冷却。每次尝试从第一个可用(不在冷却)
 	// 的 key 开始;失败后按错误类别记录冷却(认证/配额 30min,瞬时 10s)并顺延
-	// 到下一个,直到成功或全部失败。总尝试次数有上限(maxMultiKeyAttempts),
-	// 且通过 noAdapterRetry 关闭适配器内退避重试,由本循环统一承担重试与
-	// 轮换,避免 N 个 key × 适配器重试组合爆炸。
+	// 到下一个,直到成功或全部失败。重试预算统一由"LLM 请求重试次数"设置
+	// 决定(单一来源):总重试次数上限 = effectiveLLMRetries(cfg),不再按
+	// key 池大小截断,且通过 noAdapterRetry 关闭适配器内退避重试,由本循环
+	// 统一承担重试与轮换,避免 N 个 key × 适配器重试组合爆炸。
 	// 已发射任何流事件(文本/推理/工具调用/图片)后禁止切换,避免重复输出
 	// ——与适配器内 mid-stream 不重试的既有约定一致。
-	maxAttempts := len(keys)
-	if maxAttempts > maxMultiKeyAttempts {
-		maxAttempts = maxMultiKeyAttempts
-	}
+	llmRetries := effectiveLLMRetries(cfg) // 此处 cfg 未设置 noAdapterRetry,返回用户设置/默认值
+	startedAllCooling := a.isKeyCoolingDown(cfg, keys[a.firstUsableKeyIndex(cfg, keys)])
 	var lastErr error
 	emitted := false
 	wrappedOnEvent := func(e modelStreamEvent) {
@@ -277,25 +284,45 @@ func (a *App) streamModelResponse(ctx context.Context, cfg ConfigState, model st
 			onEvent(e)
 		}
 	}
+	retries := 0
 	probedAllCooling := false
-	for attempt := 0; attempt < maxAttempts; attempt++ {
+	// 防御性迭代上限:正常路径请求次数 ≤ 首次 + N 次重试 + 1 次探测;
+	// 余量容纳并发调用延长冷却导致的少量纯等待轮次,杜绝无限循环。
+	maxIterations := llmRetries + 2*len(keys) + 2
+	for iter := 0; iter < maxIterations; iter++ {
 		idx := a.firstUsableKeyIndex(cfg, keys)
 		key := keys[idx]
+		isProbe := false
 		if a.isKeyCoolingDown(cfg, key) {
 			// firstUsableKeyIndex 只在全部 key 冷却时返回冷却中的 key。
 			// 冷却只是本地启发式,不能替代服务端裁决:仍用最早到期的 key
 			// 探测一次,避免错误分类(如把限流 429 误判为配额失效)把整个
-			// key 池冻结到冷却结束、只能重启恢复。仅探测一次,失败即返回
-			// 真实的服务端错误。
-			if probedAllCooling {
-				if lastErr == nil {
-					lastErr = fmt.Errorf("all API keys are cooling down, try again later")
+			// key 池冻结到冷却结束、只能重启恢复。
+			if !probedAllCooling {
+				probedAllCooling = true
+				isProbe = true
+				idx = a.earliestCooldownKeyIndex(cfg, keys)
+				key = keys[idx]
+			} else if !startedAllCooling {
+				// 本次调用内 key 已全部失败进入冷却:等待最早到期的瞬时
+				// 冷却(≤10s)过去后继续用满重试预算——限流类错误通常等待
+				// 即可恢复。长冷却(认证/配额 30min)重试同样失败,不等待。
+				wait, ok := a.earliestCooldownWait(cfg, keys)
+				if !ok || wait > keyTransientCooldownDuration {
+					break
 				}
+				select {
+				case <-time.After(wait):
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				}
+				idx = a.firstUsableKeyIndex(cfg, keys) // 冷却到期的 key 已可用
+				key = keys[idx]
+			} else {
+				// 起始即全部冷却(上次调用留下的冷却记录):只做一次有界
+				// 探测,失败立即返回真实的服务端错误,不把用户困在等待里。
 				break
 			}
-			probedAllCooling = true
-			idx = a.earliestCooldownKeyIndex(cfg, keys)
-			key = keys[idx]
 		}
 		callCfg := cfg
 		callCfg.APIKey = key
@@ -309,32 +336,41 @@ func (a *App) streamModelResponse(ctx context.Context, cfg ConfigState, model st
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		if !emitted && shouldFailoverKey(err) {
-			cooldown := keyTransientCooldownDuration
-			wait := time.Duration(0)
-			if isAuthKeyError(err) {
-				cooldown = keyAuthCooldownDuration
-			} else if shouldRetryLLMError(err) {
-				// 瞬时错误(429/5xx/网络):切换前短暂退避,避免多个 key
-				// 同时打向同一故障端点,也避免连续 8 次尝试没有间隔。
-				// 最后一次尝试后、以及全部冷却探测失败后(下一轮必然终止),
-				// 没有下一次切换,不再白等退避。
-				if attempt+1 < maxAttempts && !probedAllCooling {
-					wait = llmRetryDelay(attempt + 1)
-					select {
-					case <-time.After(wait):
-					case <-ctx.Done():
-						return nil, ctx.Err()
-					}
-				}
-			}
-			a.recordKeyFailure(cfg, key, cooldown)
-			// 无论是否还有备用 key 都发出事件(含最后一个 key 失败),前端显示
-			// "第 N 个 Key 失败",避免用户只看到泛化错误。
-			emitLLMRetryEventForKey(onEvent, attempt+1, maxAttempts, err, wait, idx, len(keys))
+		if !(!emitted && shouldFailoverKey(err)) {
+			return nil, err
+		}
+		cooldown := keyTransientCooldownDuration
+		if isAuthKeyError(err) {
+			cooldown = keyAuthCooldownDuration
+		}
+		a.recordKeyFailure(cfg, key, cooldown)
+		if isProbe {
+			// 探测失败不算用户设置语义内的重试,不发重试事件;是否继续
+			// 由下一轮的冷却分支决定(等待冷却或终止)。
 			continue
 		}
-		return nil, err
+		if retries >= llmRetries {
+			// 预算用尽:最后的失败不再发"重试"事件,失败由 run:error
+			// 呈现——与单 key 适配器路径的语义一致。
+			break
+		}
+		retries++
+		wait := time.Duration(0)
+		if !probedAllCooling {
+			// 瞬时错误(429/5xx/网络):切换前短暂退避,避免多个 key 同时
+			// 打向同一故障端点。全部冷却后的等待由上面的冷却分支承担,
+			// 不再叠加退避。
+			wait = llmRetryDelay(retries)
+			select {
+			case <-time.After(wait):
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+		emitLLMRetryEventForKey(onEvent, retries, llmRetries, err, wait, idx, len(keys))
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("all API keys are cooling down, try again later")
 	}
 	return nil, lastErr
 }
@@ -424,10 +460,6 @@ const keyAuthCooldownDuration = 30 * time.Minute
 // 认证错误短,避免端点短暂故障时把整个 key 池冷却 30 分钟(fail-fast 但快速自愈)。
 const keyTransientCooldownDuration = 10 * time.Second
 
-// maxMultiKeyAttempts 是单次请求在多 key 模式下最多尝试的总次数(含故障切换)。
-// 与 effectiveLLMRetries 解耦,防止 N 个 key × 适配器重试组合爆炸。
-const maxMultiKeyAttempts = 8
-
 // keyCooldownID 是冷却记录的键,按 endpoint+key 隔离。
 func keyCooldownID(cfg ConfigState, key string) string {
 	return baseURLForAPIFormat(cfg) + "\x00" + key
@@ -494,6 +526,31 @@ func (a *App) earliestCooldownKeyIndex(cfg ConfigState, keys []string) int {
 		}
 	}
 	return best
+}
+
+// earliestCooldownWait 返回最早到期的冷却剩余等待时间,以及是否存在冷却
+// 记录。仅在全部 key 都在冷却时由多 key 循环调用,用于决定等待重试或
+// 终止(长冷却如认证 30min 不值得等待)。
+func (a *App) earliestCooldownWait(cfg ConfigState, keys []string) (time.Duration, bool) {
+	a.keyStateMu.Lock()
+	defer a.keyStateMu.Unlock()
+	best := time.Duration(0)
+	found := false
+	for _, key := range keys {
+		until, ok := a.keyCooldowns[keyCooldownID(cfg, key)]
+		if !ok {
+			continue
+		}
+		remaining := time.Until(until)
+		if remaining < 0 {
+			remaining = 0
+		}
+		if !found || remaining < best {
+			best = remaining
+			found = true
+		}
+	}
+	return best, found
 }
 
 func emitModelStreamEvent(onEvent func(modelStreamEvent), event modelStreamEvent) {
@@ -1060,8 +1117,14 @@ func newOpenAIResponsesSSEStream(ctx context.Context, cfg ConfigState, body oare
 		defer resp.Body.Close()
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxToolOutput))
 		msg := strings.TrimSpace(string(raw))
+		// 错误信息必须携带状态码(resp.Status 形如 "429 Too Many Requests"):
+		// 重试/切换分类(shouldRetryLLMError 等)基于 "429"/"too many requests"
+		// 等关键词做字符串匹配。部分中转返回体只有 "Rate exceeded." 之类的
+		// 文案、不含状态码,丢弃状态码会让限流错误绕过所有重试机制直接失败。
 		if msg == "" {
 			msg = resp.Status
+		} else {
+			msg = resp.Status + ": " + msg
 		}
 		return nil, fmt.Errorf("responses request failed: %s", msg)
 	}
