@@ -208,6 +208,7 @@ import { resolveMarkdownImagePath } from '../utils/markdownPreview.mjs';
 import { ListFiles, ReadWorkspaceFileAt, ReadWorkspaceImageAt, ReadWorkspaceVideoAt, ReadWorkspacePDFAt, SaveWorkspaceFile, DeletePath, OpenWorkspacePathInFileManagerAt, CreateFile, CreateDirectory, GetWorkspaceFileInfoAt } from '../../bindings/ally-dev/internal/app/app';
 import FileInfoModal from './FileInfoModal.vue';
 import { buildFileInfoSections } from '../utils/fileInfo.mjs';
+import { copyText } from '../utils/clipboard.mjs';
 import CloseOutlined from '@vicons/antd/CloseOutlined';
 import QuestionCircleOutlined from '@vicons/antd/QuestionCircleOutlined';
 import ReloadOutlined from '@vicons/antd/ReloadOutlined';
@@ -1197,31 +1198,12 @@ function joinFullPath(root, relative) {
   return root + '/' + relative;
 }
 
-// 优先 navigator.clipboard，失败时回退 execCommand（与 App.vue 的复制逻辑一致）
+// 统一走 utils/clipboard.mjs（优先 navigator.clipboard，失败回退 execCommand）
 function copyTextToClipboard(text, onDone) {
-  if (navigator.clipboard?.writeText) {
-    navigator.clipboard.writeText(text).then(onDone).catch(() => {
-      fallbackCopyText(text, onDone);
-    });
-  } else {
-    fallbackCopyText(text, onDone);
-  }
-}
-
-function fallbackCopyText(text, onDone) {
-  try {
-    const ta = document.createElement('textarea');
-    ta.value = text;
-    ta.style.position = 'fixed';
-    ta.style.opacity = '0';
-    document.body.appendChild(ta);
-    ta.select();
-    document.execCommand('copy');
-    document.body.removeChild(ta);
-    onDone();
-  } catch {
-    message.error(t('app.copy.failed'));
-  }
+  copyText(text).then((ok) => {
+    if (ok) onDone();
+    else message.error(t('app.copy.failed'));
+  });
 }
 
 // 通用「输入名称」弹窗：输入框内按 Enter 等价于点击确认按钮；

@@ -390,6 +390,7 @@ import {
   loadSessionSnapshots,
 } from './utils/sessionStore.mjs';
 import { saveTextFile } from './utils/download.mjs';
+import { copyText } from './utils/clipboard.mjs';
 import {
   CancelRun,
   CheckForUpdates,
@@ -1233,13 +1234,10 @@ function handleCodeCopyClick(event) {
     }, 1500);
   };
 
-  if (navigator.clipboard?.writeText) {
-    navigator.clipboard.writeText(code).then(showCopied).catch(() => {
-      fallbackCopy(code, showCopied);
-    });
-  } else {
-    fallbackCopy(code, showCopied);
-  }
+  copyText(code).then((ok) => {
+    if (ok) showCopied();
+    else message.error(t('app.copy.failed'));
+  });
 }
 
 function handleMarkdownLinkClick(event) {
@@ -1251,22 +1249,6 @@ function handleMarkdownLinkClick(event) {
   event.stopPropagation();
   const href = rawHref.startsWith('//') ? `https:${rawHref}` : rawHref;
   if (/^(?:https?:|mailto:)/i.test(href)) Browser.OpenURL(href);
-}
-
-function fallbackCopy(text, onSuccess) {
-  try {
-    const ta = document.createElement('textarea');
-    ta.value = text;
-    ta.style.position = 'fixed';
-    ta.style.opacity = '0';
-    document.body.appendChild(ta);
-    ta.select();
-    document.execCommand('copy');
-    document.body.removeChild(ta);
-    onSuccess();
-  } catch (_) {
-    message.error(t('app.copy.failed'));
-  }
 }
 
 function downloadMermaidSvg(node) {

@@ -48,6 +48,7 @@ import { computed, ref, watch } from 'vue';
 import { useMessage } from 'naive-ui';
 import { GetWorkspaceFileInfoAt } from '../../bindings/ally-dev/internal/app/app';
 import { buildFileInfoSections } from '../utils/fileInfo.mjs';
+import { copyText } from '../utils/clipboard.mjs';
 import { t } from '../i18n.mjs';
 
 const props = defineProps({
@@ -101,30 +102,10 @@ const sections = computed(() => buildFileInfoSections(info.value));
 function copyValue(value) {
   const text = String(value || '');
   if (!text) return;
-  if (navigator.clipboard?.writeText) {
-    navigator.clipboard.writeText(text).then(
-      () => message.success(t('app.copy.done')),
-      () => fallbackCopy(text),
-    );
-  } else {
-    fallbackCopy(text);
-  }
-}
-
-function fallbackCopy(text) {
-  try {
-    const ta = document.createElement('textarea');
-    ta.value = text;
-    ta.style.position = 'fixed';
-    ta.style.opacity = '0';
-    document.body.appendChild(ta);
-    ta.select();
-    document.execCommand('copy');
-    document.body.removeChild(ta);
-    message.success(t('app.copy.done'));
-  } catch {
-    message.error(t('app.copy.failed'));
-  }
+  copyText(text).then((ok) => {
+    if (ok) message.success(t('app.copy.done'));
+    else message.error(t('app.copy.failed'));
+  });
 }
 </script>
 

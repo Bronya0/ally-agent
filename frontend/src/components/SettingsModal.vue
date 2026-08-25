@@ -465,7 +465,7 @@ Public License v3. See the LICENSE file for details.
           <div class="mcp-save-scope">{{ $t('settings.mcpSaveScope') }}</div>
           <!-- Form mode -->
           <div v-if="mcpEditMode === 'form'" class="mcp-form-mode">
-            <div v-for="(srv, idx) in mcpFormServers" :key="idx" class="mcp-server-card">
+            <div v-for="(srv, idx) in mcpFormServers" :key="srv._key" class="mcp-server-card">
               <div class="mcp-server-card-header">
                 <n-input v-model:value="srv.name" :placeholder="$t('settings.mcpServerName')" size="small" class="mcp-server-name-input" />
                 <n-select v-model:value="srv.transport" :options="[
@@ -682,7 +682,7 @@ Public License v3. See the LICENSE file for details.
 </template>
 
 <script setup>
-import { computed, reactive, ref, watch } from 'vue';
+import { computed, onUnmounted, reactive, ref, watch } from 'vue';
 import { createDiscreteApi, darkTheme } from 'naive-ui';
 import { naiveDateLocale, naiveLocale, reasoningEffortLabel, t } from '../i18n.mjs';
 import { buildModelConfigExport, mergeModelConfigs, modelConfigIdentity, normalizeApiKeysArray, normalizeReasoningEffort, parseModelConfigImport, reasoningEffortLevels } from '../utils/modelConfigIO.mjs';
@@ -786,6 +786,11 @@ function checkForUpdates() {
     }
   }, 15000);
 }
+
+onUnmounted(() => {
+  if (checkUpdateTimer) window.clearTimeout(checkUpdateTimer);
+  checkUpdateTimer = 0;
+});
 
 const validationSettingKeys = [
   'autoValidationPython',
@@ -1324,6 +1329,13 @@ const mcpServers = ref([]);
 const mcpLoading = ref(false);
 const mcpEditMode = ref('form'); // 'form' or 'json'
 const mcpFormServers = ref([]); // array of {name, command, args, env, transport, url, headers, enabled}
+// 稳定 key 生成器：卡片支持删除/新增，索引 key 会让 Vue 就地复用 DOM，
+// n-switch/n-select 等内部状态可能错位到相邻卡片上
+let mcpServerKeyCounter = 0;
+function nextMcpServerKey() {
+  mcpServerKeyCounter += 1;
+  return `mcp-srv-${mcpServerKeyCounter}`;
+}
 
 const mcpConfigParseResult = computed(() => {
   const raw = mcpConfigText.value || '';
@@ -1423,6 +1435,7 @@ function syncJsonToForm() {
     const parsed = JSON.parse(mcpConfigText.value || '{}');
     const servers = parsed.mcpServers || {};
     mcpFormServers.value = Object.entries(servers).map(([name, cfg]) => ({
+      _key: nextMcpServerKey(),
       name,
       command: cfg.command || '',
       args: (cfg.args || []).join('\n'),
@@ -1478,6 +1491,7 @@ function normalizeMcpTransport(cfg = {}) {
 
 function addMcpServer() {
   mcpFormServers.value.push({
+    _key: nextMcpServerKey(),
     name: '',
     command: '',
     args: '',

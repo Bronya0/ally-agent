@@ -169,6 +169,7 @@ Public License v3. See the LICENSE file for details.
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, toRaw } from 'vue';
 import { t } from '../i18n.mjs';
+import { copyText } from '../utils/clipboard.mjs';
 import MessageAttachments from './MessageAttachments.vue';
 import WelcomeMessage from './WelcomeMessage.vue';
 import ToolCallCard from './ToolCallCard.vue';
@@ -372,22 +373,6 @@ const lastAnswerMessage = computed(() => {
   return null;
 });
 
-function fallbackCopyText(text, onDone, onError) {
-  try {
-    const ta = document.createElement('textarea');
-    ta.value = text;
-    ta.style.position = 'fixed';
-    ta.style.opacity = '0';
-    document.body.appendChild(ta);
-    ta.select();
-    document.execCommand('copy');
-    document.body.removeChild(ta);
-    onDone();
-  } catch {
-    onError();
-  }
-}
-
 function copyFinalSummary() {
   const msg = lastAnswerMessage.value;
   const text = msg ? String(msg.content || '') : '';
@@ -395,13 +380,10 @@ function copyFinalSummary() {
     message.warning(t('chat.copySummary.empty'));
     return;
   }
-  const done = () => message.success(t('chat.copySummary.done'));
-  const failed = () => message.error(t('chat.copySummary.failed'));
-  if (navigator.clipboard?.writeText) {
-    navigator.clipboard.writeText(text).then(done).catch(() => fallbackCopyText(text, done, failed));
-  } else {
-    fallbackCopyText(text, done, failed);
-  }
+  copyText(text).then((ok) => {
+    if (ok) message.success(t('chat.copySummary.done'));
+    else message.error(t('chat.copySummary.failed'));
+  });
 }
 
 const message = useMessage();
