@@ -11,12 +11,12 @@ Public License v3. See the LICENSE file for details.
   <div class="messages-scroll-shell">
     <n-scrollbar ref="scrollbarRef" class="messages-scroll" @scroll="handleScroll">
       <div ref="messagesRootRef" class="messages" @click="$emit('clearFocus')">
-        <template v-for="(msg, index) in messages" :key="msgKey(msg)">
+        <template v-for="(msg, index) in messages" :key="msgKey(msg)" v-memo="messageRenderMemo(msg)">
         <button v-if="msg.role === 'archive'" class="message-archive-toggle" @click.stop="$emit('toggleArchive', msg.sessionId)">
           <span>{{ msg.expanded ? $t('chat.archive.collapse') : $t('chat.archive.expand') }}</span>
           <span>{{ $t('chat.archive.summary', { count: msg.count }) }}</span>
         </button>
-        <div v-else-if="msg.role === 'user'" v-memo="messageRenderMemo(msg)" :class="['message', msg.role, { error: msg.error }]" data-user-question>
+        <div v-else-if="msg.role === 'user'" :class="['message', msg.role, { error: msg.error }]" data-user-question>
           <span class="user-rail" aria-hidden="true">›</span>
           <div class="user-message-content">
             <div class="message-body user-text">
@@ -52,7 +52,7 @@ Public License v3. See the LICENSE file for details.
             <CloseOutlined />
           </button>
         </div>
-        <div v-else-if="msg.role !== 'tool_call' && msg.kind !== 'subagent'" v-memo="messageRenderMemo(msg)" :class="['message', msg.role, { error: msg.error, system: msg.system }]">
+        <div v-else-if="msg.role !== 'tool_call' && msg.kind !== 'subagent'" :class="['message', msg.role, { error: msg.error, system: msg.system }]">
           <div
             class="reasoning-block"
             :class="{ 'reasoning-hidden': msg.reasoningEndedAt || !(msg.reasoningChars > 0 || msg.reasoningStartedAt) }"
@@ -206,9 +206,14 @@ function userMessageText(msg) {
   return String(msg?.skill ? msg.skill.args || '' : msg?.content || '');
 }
 
-// Keep historical user/assistant subtrees out of the patch path while the
-// active assistant message streams. Every value used by these two branches
-// that can change during a run is represented here.
+// Keep historical message subtrees out of the patch path while the active
+// assistant message streams. v-memo 必须挂在 v-for 的 <template> 上：只有这
+// 种写法 Vue 才会生成逐条目缓存（renderList 按 :key 校验后复用）。若把
+// v-memo 放在 v-for 内部的分支元素上，会编译成 withMemo 共享单个缓存槽，
+// 后续所有 memo 值相同的消息（如纯文本用户消息）都会复用第一条消息缓存
+// 的 vnode，界面永远显示第一条的内容。Every value read by the template
+// branches (all kinds, not just user/assistant) that can change between
+// renders is represented here.
 // 注意：这里刻意不读 msg.content——memo 数组在父组件渲染作用域内求值，
 // 一旦读取内容就会让整个列表的渲染 effect 订阅流式增量。活跃消息的正文
 // 由 StreamingMarkdownBody 子组件独立渲染；已完成消息的内容不再变化，
@@ -218,6 +223,13 @@ function messageRenderMemo(msg) {
   const lastAttachment = attachments.length ? attachments[attachments.length - 1] : null;
   return [
     msg?.role,
+    msg?.kind,
+    msg?.skill?.name || '',
+    msg?.eventId,
+    msg?.expanded,
+    msg?.count,
+    msg === lastAnswerMessage.value,
+    props.focusedId ? props.focusedId === msg?.eventId : false,
     msg?.reasoningChars,
     msg?.reasoningStartedAt,
     msg?.reasoningEndedAt,
