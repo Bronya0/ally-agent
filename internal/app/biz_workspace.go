@@ -68,10 +68,19 @@ func (a *App) listFilesWithConfig(cfg ConfigState, req ListFilesRequest) (ListFi
 	if !info.IsDir() {
 		return ListFilesResult{}, codedToolError("E_BAD_PATH", fmt.Errorf("not a directory: %s", req.Path))
 	}
-	if !insideRoot(root, start) {
+	inRoot := insideRoot(root, start)
+	if !inRoot {
 		if blocked, reason := isDangerousSearchRoot(start); blocked {
 			return ListFilesResult{}, codedToolError("E_SEARCH_ROOT_BLOCKED", fmt.Errorf("%s\n\nThis listing has been blocked for safety. Specify a narrower project subdirectory or explicit file path.", reason))
 		}
+	}
+	// includeIgnored=false skips gitignored paths (workspace .gitignore rules)
+	// plus a small hardcoded fallback list (see isHeavyDir). Gitignore rules
+	// only apply inside the workspace; out-of-root listings use the hardcoded
+	// list alone. Mirrors how Trae's LS hides node_modules/.git automatically.
+	var ignoreMatcher gitignore.Matcher
+	if !req.IncludeIgnored && inRoot {
+		ignoreMatcher = loadRootGitignoreRules(root)
 	}
 
 	maxDepth := req.MaxDepth
@@ -109,6 +118,15 @@ func (a *App) listFilesWithConfig(cfg ConfigState, req ListFilesRequest) (ListFi
 		}
 		if !req.IncludeIgnored && d.IsDir() && isHeavyDir(name) {
 			return filepath.SkipDir
+		}
+		if ignoreMatcher != nil {
+			relToRoot, _ := filepath.Rel(root, path)
+			if matchGitignoreRules(ignoreMatcher, relToRoot, d.IsDir()) {
+				if d.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
 		}
 
 		rel, _ := filepath.Rel(start, path)
@@ -1144,12 +1162,12 @@ func pathDepth(rel string) int {
 	return strings.Count(rel, string(os.PathSeparator)) + 1
 }
 
-// 名单刻意保持极小：仅保留真正无意义的缓存目录。
-// 依赖/构建产物目录（.git/dist/build/node_modules 等）已按需求放开——
-// 文件浏览器与 list_files 都是逐层懒加载列表，整棵跳过没有必要。
+// 名单刻意保持极小：只兜底「任何项目都不该让模型看到」的目录。
+// 其余忽略语义交给工作区 .gitignore（见 listFilesWithConfig），
+// 与 Trae LS 的行为一致。文件浏览器通过 includeIgnored=true 保留全部内容。
 func isHeavyDir(name string) bool {
 	switch strings.ToLower(name) {
-	case "__pycache__":
+	case "__pycache__", "node_modules":
 		return true
 	default:
 		return false

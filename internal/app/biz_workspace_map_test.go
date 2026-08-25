@@ -82,6 +82,63 @@ func TestWorkspaceMapExcludesSensitiveEnv(t *testing.T) {
 	}
 }
 
+// TestListFilesSkipsIgnoredByDefault 验证模型侧默认行为（includeIgnored=false）：
+// node_modules（硬编码兜底）与 .gitignore 命中路径被整棵跳过，正常源码保留；
+// includeIgnored=true（文件浏览器语义）时全部可见。
+func TestListFilesSkipsIgnoredByDefault(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte("dist/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, dir := range []string{"src", "node_modules/pkg", "dist"} {
+		if err := os.MkdirAll(filepath.Join(root, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, f := range []string{"src/main.js", "node_modules/pkg/index.js", "dist/bundle.js"} {
+		if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(f)), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	app := NewApp()
+	cfg := ConfigState{Workspace: root}
+
+	defaults, err := app.listFilesWithConfig(cfg, ListFilesRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var paths []string
+	for _, e := range defaults.Entries {
+		paths = append(paths, e.Path)
+	}
+	joined := strings.Join(paths, "\n")
+	if strings.Contains(joined, "node_modules") {
+		t.Fatalf("node_modules must be skipped by default, got:\n%s", joined)
+	}
+	if strings.Contains(joined, "dist") {
+		t.Fatalf("gitignored dist must be skipped by default, got:\n%s", joined)
+	}
+	if !strings.Contains(joined, "src") || !strings.Contains(joined, "main.js") {
+		t.Fatalf("src must be visible by default, got:\n%s", joined)
+	}
+
+	all, err := app.listFilesWithConfig(cfg, ListFilesRequest{IncludeIgnored: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined = ""
+	for _, e := range all.Entries {
+		joined += e.Path + "\n"
+	}
+	if !strings.Contains(joined, "node_modules") || !strings.Contains(joined, "index.js") {
+		t.Fatalf("includeIgnored=true must keep node_modules (explorer semantics), got:\n%s", joined)
+	}
+	if !strings.Contains(joined, "dist") || !strings.Contains(joined, "bundle.js") {
+		t.Fatalf("includeIgnored=true must keep gitignored dist (explorer semantics), got:\n%s", joined)
+	}
+}
+
 // TestWorkspaceMapZeroByteFileShowsSize 验证 0 字节文件也显示大小（"0 B"）。
 func TestWorkspaceMapZeroByteFileShowsSize(t *testing.T) {
 	root := t.TempDir()

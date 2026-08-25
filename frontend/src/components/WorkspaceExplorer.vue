@@ -834,7 +834,9 @@ function makeNode(entry) {
 }
 
 async function listDirectory(path = '', workspace = props.workspace) {
-  const entries = await ListFiles({ workspace, path, maxDepth: 1, limit: 1000, includeHidden: true, includeIgnored: false });
+  // includeIgnored: true — 资源树是逐层懒加载，需要展示 node_modules 等全部内容；
+  // 模型侧 list_files 默认 false（跳过 gitignore/node_modules）。
+  const entries = await ListFiles({ workspace, path, maxDepth: 1, limit: 1000, includeHidden: true, includeIgnored: true });
   return (Array.isArray(entries) ? entries : []).map(makeNode);
 }
 

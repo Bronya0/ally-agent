@@ -54,7 +54,7 @@ func chatToolsUncached() []openai.Tool {
 				"maxDepth":       map[string]any{"type": "integer", "minimum": 1, "maximum": 50, "description": "Maximum recursion depth. Default 3, max 50."},
 				"limit":          map[string]any{"type": "integer", "minimum": 1, "maximum": 1000, "description": "Maximum entries returned. Default 200, max 1000. Check truncated."},
 				"includeHidden":  map[string]any{"type": "boolean", "description": "Include dotfiles and dot-directories. Default false."},
-				"includeIgnored": map[string]any{"type": "boolean", "description": "Include heavy ignored directories such as .git, node_modules, dist, build. Default false."},
+				"includeIgnored": map[string]any{"type": "boolean", "description": "Include gitignored paths and dependency directories such as node_modules, __pycache__. Default false."},
 			},
 		}),
 		functionTool("edit", "Validate and apply exact replacements across multiple workspace files in one call.\n"+
