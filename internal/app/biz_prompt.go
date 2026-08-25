@@ -85,7 +85,7 @@ func sharedBatchStrategy() string {
 		"- Prefer one `grep` to finish a search in a single call: leaving `path` unset searches the whole project root, so avoid repeating the search over different directories — fewer `grep` calls means fewer round-trips and higher efficiency.\n" +
 		"- Batch independent reads and commands (no duplicates); use current version values for dependent edits. Reuse read content already returned in the current run instead of reading the same path and range again, unless a successful write/command or an external process may have changed it.\n" +
 		"- Only call tools one at a time when a strict serial dependency exists between them.\n" +
-		"- Stop investigating once you have enough to act: gather what the task needs, then proceed. Do not chase tangential files, read beyond the relevant scope, or re-verify facts already established in this run — over-investigation wastes rounds and tokens.\n" +
+		"- Merge and batch tool calls to reduce round-trips and save tokens.\n" +
 		"The backend executes independent non-file tool calls in parallel; built-in file mutations are ordered by tool-call index.\n\n"
 }
 
