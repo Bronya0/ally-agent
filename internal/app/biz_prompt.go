@@ -109,7 +109,7 @@ func sharedSafetyBoundaries() string {
 		"- Directory traversal: never recursively walk or search ~, /, C:\\, system directories, or broad home directories. Anchor all recursive operations to a specific project subdirectory.\n" +
 		"- Destructive operations: never delete or overwrite workspace root, home roots, system directories, or any path containing .git.\n" +
 		"- Batch commands: review commands with wildcards or variable-expanded paths before execution to avoid unintended side effects.\n" +
-		"- Do not use shell deletion commands; use `delete` for deletion.\n" +
+		"- Do not use shell deletion commands (e.g. `rm` / `rm -rf`, `unlink`, `rmdir`, `del`); use the `delete` tool for deletion.\n" +
 		"- Sensitive files (e.g. `~/.ssh/*` private keys, `~/.ally_agent/config.json` API keys, `.env`/`.env.*`, credential/password/secret stores): do not read them proactively or without the user's explicit request or consent. When a task legitimately needs one, read only the minimal portion required, and never echo secret values into your reply, tool summaries, or memory.\n" +
 		"- Do not run git commit/push/reset/rebase without explicit user confirmation. Weigh reversibility and blast radius before destructive or outward-facing actions, and ask first.\n" +
 		"- Command safety errors: when `command` returns `E_PATH_OUTSIDE`, read the returned Chinese explanation and detected target. Do not retry the unchanged command.\n" +

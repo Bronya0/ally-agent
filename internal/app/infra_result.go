@@ -45,15 +45,6 @@ func toolErrorResult(err error) toolResult {
 	return toolResult{OK: false, Error: err.Error(), ErrorCode: toolErrorCode(err), Details: toolerrors.Details(err)}
 }
 
-// extraFieldWarnings renders the ignored-unknown-argument notice for the
-// result envelope. Returns nil when every argument matched the tool schema.
-func extraFieldWarnings(extraFields []string) []string {
-	if len(extraFields) == 0 {
-		return nil
-	}
-	return []string{fmt.Sprintf("以下参数不被该工具支持，已忽略：%s", strings.Join(extraFields, ", "))}
-}
-
 // toolResultSummary returns a short human-readable summary for a tool result.
 func toolResultSummary(name string, result *toolResult) string {
 	if result == nil || result.Data == nil {

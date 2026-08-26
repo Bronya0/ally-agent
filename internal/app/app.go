@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -2088,8 +2089,10 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		}
 	}()
 	// decodeJSON unmarshals args into v, allowing unknown fields but collecting
-	// them as warnings. Returns (error, extraFields) where extraFields are the
-	// JSON keys not present in the target struct's JSON tags.
+	// them as warnings. Returns (error, warnings) where warnings are finished
+	// model-facing notices: ignored unknown argument keys plus auto-repair
+	// notes when the model emitted JSON-encoded strings where arrays/objects
+	// belong (e.g. {"files":"[{...}]"}).
 	decodeJSON := func(v any) (error, []string) {
 		if len(bytes.TrimSpace(args)) == 0 {
 			return nil, nil
@@ -2111,18 +2114,46 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 			}
 			return fmt.Errorf("invalid tool arguments JSON for %s: %w", name, err), nil
 		}
-		// Now unmarshal into the actual target (allows unknown fields).
-		if err := json.Unmarshal(args, v); err != nil {
-			return fmt.Errorf("invalid tool arguments JSON for %s: %w", name, err), nil
+		// Unmarshal into the actual target (allows unknown fields). Type errors
+		// trigger one repair round per offending field path: double-encoded
+		// string fields are decoded in place, so a recoverable formatting slip
+		// does not waste a model round trip.
+		var repairedFields []string
+		cur := args
+		for round := 0; ; round++ {
+			err := json.Unmarshal(cur, v)
+			if err == nil {
+				break
+			}
+			var typeErr *json.UnmarshalTypeError
+			if !errors.As(err, &typeErr) || round >= maxToolArgRepairRounds {
+				return fmt.Errorf("invalid tool arguments JSON for %s: %w", name, err), nil
+			}
+			fixed, ok := repairToolArgJSON(cur, typeErr)
+			if !ok {
+				return fmt.Errorf("invalid tool arguments JSON for %s: %w", name, err), nil
+			}
+			cur = fixed
+			repairedFields = append(repairedFields, typeErr.Field)
 		}
-		// Collect extra keys.
+		var warnings []string
+		if len(repairedFields) > 0 {
+			warnings = append(warnings, fmt.Sprintf(
+				"参数 %s 的格式有误（应为 JSON 数组/对象，却收到了带引号的字符串），已自动修复并照常执行；后续调用请直接传 JSON 数组或对象，不要序列化成字符串。",
+				strings.Join(repairedFields, ", ")))
+		}
+		// Collect extra keys. Repair only rewrites values, never keys, so the
+		// original rawMap stays authoritative here.
 		extraFields := make([]string, 0, len(rawMap))
 		for k := range rawMap {
 			if _, ok := validFields[k]; !ok {
 				extraFields = append(extraFields, k)
 			}
 		}
-		return nil, extraFields
+		if len(extraFields) > 0 {
+			warnings = append(warnings, fmt.Sprintf("以下参数不被该工具支持，已忽略：%s", strings.Join(extraFields, ", ")))
+		}
+		return nil, warnings
 	}
 
 	// Normalize once at the boundary: lower-case for case-insensitivity and
@@ -2142,27 +2173,28 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 
 	var data any
 	var err error
-	// Lenient decode: unknown argument keys are collected across the switch
-	// and reported once on the successful result envelope instead of failing
-	// the whole call. Missing/invalid required parameters still fail loudly.
-	var extraFields []string
+	// Lenient decode: unknown argument keys and auto-repaired argument values
+	// are collected across the switch and reported once on the successful
+	// result envelope instead of failing the whole call. Missing/invalid
+	// required parameters still fail loudly.
+	var argWarnings []string
 
 	switch name {
 	case "list_files":
 		var req ListFilesRequest
-		err, extraFields = decodeJSON(&req)
+		err, argWarnings = decodeJSON(&req)
 		if err == nil {
 			data, err = a.listFilesWithConfig(cfg, req)
 		}
 	case "read_file":
 		var req ReadFileRequest
-		err, extraFields = decodeJSON(&req)
+		err, argWarnings = decodeJSON(&req)
 		if err == nil {
 			data, err = a.readFileWithConfig(cfg, req)
 		}
 	case "edit":
 		var req ModelEditToolRequest
-		err, extraFields = decodeJSON(&req)
+		err, argWarnings = decodeJSON(&req)
 		salvagedDropped := -1
 		if err != nil && isIncompleteStreamJSON(err) {
 			// Stream cut off mid-arguments: apply the complete prefix instead
@@ -2196,7 +2228,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		}
 	case "create":
 		var req CreateFileRequest
-		err, extraFields = decodeJSON(&req)
+		err, argWarnings = decodeJSON(&req)
 		if err == nil {
 			a.fileOpsMu.Lock()
 			data, err = a.createFileWithConfig(cfg, req)
@@ -2209,7 +2241,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		}
 	case "delete":
 		var req DeletePathRequest
-		err, extraFields = decodeJSON(&req)
+		err, argWarnings = decodeJSON(&req)
 		if err == nil {
 			a.fileOpsMu.Lock()
 			data, err = a.deletePathWithConfig(cfg, req)
@@ -2221,7 +2253,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		}
 	case "command":
 		var req CommandRequest
-		err, extraFields = decodeJSON(&req)
+		err, argWarnings = decodeJSON(&req)
 		if err == nil {
 			// A command can modify files before returning an error, and can run
 			// concurrently with reads in one tool batch. Clear on both sides.
@@ -2234,7 +2266,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		}
 	case "service":
 		var req BackgroundProcessRequest
-		err, extraFields = decodeJSON(&req)
+		err, argWarnings = decodeJSON(&req)
 		if err == nil {
 			switch strings.ToLower(strings.TrimSpace(req.Action)) {
 			case "start":
@@ -2258,13 +2290,13 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		}
 	case "wait":
 		var req WaitRequest
-		err, extraFields = decodeJSON(&req)
+		err, argWarnings = decodeJSON(&req)
 		if err == nil {
 			data, err = waitWithContext(ctx, req)
 		}
 	case "ask":
 		var req AskRequest
-		err, extraFields = decodeJSON(&req)
+		err, argWarnings = decodeJSON(&req)
 		if err == nil {
 			data, err = a.executeAsk(ctx, sessionID, req)
 		}
@@ -2272,7 +2304,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		var req struct {
 			Items []string `json:"items"`
 		}
-		err, extraFields = decodeJSON(&req)
+		err, argWarnings = decodeJSON(&req)
 		if err == nil {
 			if len(req.Items) == 0 {
 				err = codedToolError("E_BAD_SUGGEST", errors.New("items must contain at least 1 suggestion"))
@@ -2282,61 +2314,61 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		}
 	case "scheduled_task":
 		var req ScheduledTaskToolRequest
-		err, extraFields = decodeJSON(&req)
+		err, argWarnings = decodeJSON(&req)
 		if err == nil {
 			data, err = a.executeScheduledTaskTool(cfg, req)
 		}
 	case "http_request":
 		var req HTTPRequestToolRequest
-		err, extraFields = decodeJSON(&req)
+		err, argWarnings = decodeJSON(&req)
 		if err == nil {
 			data, err = a.httpRequestToolWithConfig(ctx, cfg, req)
 		}
 	case "web_fetch":
 		var req WebFetchRequest
-		err, extraFields = decodeJSON(&req)
+		err, argWarnings = decodeJSON(&req)
 		if err == nil {
 			data, err = a.webFetchToolWithConfig(ctx, cfg, req)
 		}
 	case "remote_read_file":
 		var req RemoteReadFileRequest
-		err, extraFields = decodeJSON(&req)
+		err, argWarnings = decodeJSON(&req)
 		if err == nil {
 			data, err = a.remoteReadFile(ctx, req)
 		}
 	case "remote_edit":
 		var req RemoteEditRequest
-		err, extraFields = decodeJSON(&req)
+		err, argWarnings = decodeJSON(&req)
 		if err == nil {
 			data, err = a.remoteEdit(ctx, req)
 		}
 	case "remote_create_file":
 		var req RemoteCreateFileRequest
-		err, extraFields = decodeJSON(&req)
+		err, argWarnings = decodeJSON(&req)
 		if err == nil {
 			data, err = a.remoteCreateFile(ctx, req)
 		}
 	case "remote_delete_path":
 		var req RemoteDeletePathRequest
-		err, extraFields = decodeJSON(&req)
+		err, argWarnings = decodeJSON(&req)
 		if err == nil {
 			data, err = a.remoteDeletePath(ctx, req)
 		}
 	case "remote_run_command":
 		var req RemoteRunCommandRequest
-		err, extraFields = decodeJSON(&req)
+		err, argWarnings = decodeJSON(&req)
 		if err == nil {
 			data, err = a.remoteRunCommand(ctx, req)
 		}
 	case "grep":
 		var reqGF GrepRequest
-		err, extraFields = decodeJSON(&reqGF)
+		err, argWarnings = decodeJSON(&reqGF)
 		if err == nil {
 			data, err = a.grepFilesWithConfig(ctx, cfg, reqGF)
 		}
 	case "read":
 		var reqBR BatchReadRequest
-		err, extraFields = decodeJSON(&reqBR)
+		err, argWarnings = decodeJSON(&reqBR)
 		if err == nil {
 			if cache, ok := ctx.Value(runReadCacheContextKey{}).(*runReadCache); ok {
 				data, err = cache.read(a, cfg, reqBR)
@@ -2350,7 +2382,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 			errors.New("document_read was removed; office/PDF documents are no longer read directly. Convert to Markdown with the anydoc skill first, then use read on the converted .md file"))
 	case "calculate":
 		var reqCalc CalculateRequest
-		err, extraFields = decodeJSON(&reqCalc)
+		err, argWarnings = decodeJSON(&reqCalc)
 		if err == nil {
 			data, err = calculateExpression(reqCalc)
 		}
@@ -2359,7 +2391,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 			HTML  string `json:"html"`
 			Title string `json:"title"`
 		}
-		err, extraFields = decodeJSON(&req)
+		err, argWarnings = decodeJSON(&req)
 		if err == nil {
 			if len(req.HTML) > 50000 {
 				err = errors.New("HTML content exceeds 50,000 character limit")
@@ -2373,7 +2405,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		}
 	case "subagent", "agent_delegate":
 		var adReq AgentDelegateRequest
-		err, extraFields = decodeJSON(&adReq)
+		err, argWarnings = decodeJSON(&adReq)
 		if err == nil {
 			err = a.acquireSubagentSlot(ctx)
 			if err == nil {
@@ -2396,7 +2428,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		}
 	case "plan":
 		var tReq TodoListRequest
-		err, extraFields = decodeJSON(&tReq)
+		err, argWarnings = decodeJSON(&tReq)
 		if err == nil {
 			data, err = a.handleTodoList(sessionID, tReq)
 		}
@@ -2405,7 +2437,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 			Skill string `json:"skill"`
 			Args  string `json:"args,omitempty"`
 		}
-		err, extraFields = decodeJSON(&skReq)
+		err, argWarnings = decodeJSON(&skReq)
 		if err == nil {
 			data, err = a.handleSkillToolCall(skReq.Skill, skReq.Args)
 		}
@@ -2430,7 +2462,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 	if err != nil {
 		return toolErrorResult(err)
 	}
-	return toolResult{OK: true, Data: data, Warnings: extraFieldWarnings(extraFields)}
+	return toolResult{OK: true, Data: data, Warnings: argWarnings}
 }
 
 func waitWithContext(ctx context.Context, req WaitRequest) (WaitResult, error) {
@@ -2828,6 +2860,131 @@ func collectValidJSONFields(v any) map[string]struct{} {
 		}
 	}
 	return result
+}
+
+// maxToolArgRepairRounds bounds the auto-repair loop for model-emitted tool
+// arguments. Each round repairs one reported field path; chained mistakes
+// (e.g. "files" emitted as a string whose items also encode "changes" as a
+// string) need one round per layer.
+const maxToolArgRepairRounds = 4
+
+// repairToolArgJSON fixes common model JSON mistakes in tool arguments,
+// guided by the *json.UnmarshalTypeError field path: a field expected to be
+// a JSON array/object was emitted as a quoted JSON string, or a single
+// object was emitted where an array is expected. Only values named by the
+// type error are rewritten, so legitimate string arguments are never touched.
+func repairToolArgJSON(args []byte, typeErr *json.UnmarshalTypeError) ([]byte, bool) {
+	if typeErr == nil || typeErr.Field == "" {
+		return nil, false
+	}
+	// encoding/json reports array indices as numeric path segments
+	// ("files.0.changes"). Drop them: the same encoding mistake usually
+	// repeats across array items, so the repair applies to every element.
+	var path []string
+	for _, seg := range strings.Split(typeErr.Field, ".") {
+		if seg == "" {
+			return nil, false
+		}
+		if _, err := strconv.Atoi(seg); err == nil {
+			continue
+		}
+		path = append(path, seg)
+	}
+	if len(path) == 0 {
+		return nil, false
+	}
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(args, &root); err != nil {
+		return nil, false
+	}
+	wantSlice := typeErr.Type != nil && typeErr.Type.Kind() == reflect.Slice
+	if !repairJSONFieldAtPath(root, path, wantSlice) {
+		return nil, false
+	}
+	out, err := json.Marshal(root)
+	if err != nil {
+		return nil, false
+	}
+	return out, true
+}
+
+// repairJSONFieldAtPath walks the dotted field path through nested objects
+// and arrays of objects (the same field name applies to every element) and
+// repairs the leaf value. Reports whether anything changed.
+func repairJSONFieldAtPath(obj map[string]json.RawMessage, path []string, wantSlice bool) bool {
+	raw, ok := obj[path[0]]
+	if !ok {
+		return false
+	}
+	if len(path) == 1 {
+		fixed, changed := repairJSONLeaf(raw, wantSlice)
+		if changed {
+			obj[path[0]] = fixed
+		}
+		return changed
+	}
+	// Nested object: descend one segment.
+	var nested map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &nested); err == nil {
+		if repairJSONFieldAtPath(nested, path[1:], wantSlice) {
+			if out, err := json.Marshal(nested); err == nil {
+				obj[path[0]] = out
+				return true
+			}
+		}
+		return false
+	}
+	// Array of objects: the remaining path applies to every element.
+	var arr []json.RawMessage
+	if err := json.Unmarshal(raw, &arr); err != nil {
+		return false
+	}
+	changed := false
+	for i, el := range arr {
+		var item map[string]json.RawMessage
+		if json.Unmarshal(el, &item) != nil {
+			continue
+		}
+		if repairJSONFieldAtPath(item, path[1:], wantSlice) {
+			if out, err := json.Marshal(item); err == nil {
+				arr[i] = out
+				changed = true
+			}
+		}
+	}
+	if changed {
+		if out, err := json.Marshal(arr); err == nil {
+			obj[path[0]] = out
+			return true
+		}
+	}
+	return false
+}
+
+// repairJSONLeaf rewrites one value: a quoted string whose content is itself
+// valid JSON array/object text becomes the decoded value (wrapped in an
+// array when a slice is expected), and a bare object becomes a one-element
+// array when a slice is expected.
+func repairJSONLeaf(raw json.RawMessage, wantSlice bool) (json.RawMessage, bool) {
+	trim := bytes.TrimSpace(raw)
+	var s string
+	if err := json.Unmarshal(trim, &s); err == nil {
+		inner := strings.TrimSpace(s)
+		if !strings.HasPrefix(inner, "[") && !strings.HasPrefix(inner, "{") {
+			return raw, false
+		}
+		if !json.Valid([]byte(inner)) {
+			return raw, false
+		}
+		if wantSlice && strings.HasPrefix(inner, "{") {
+			inner = "[" + inner + "]"
+		}
+		return json.RawMessage(inner), true
+	}
+	if wantSlice && bytes.HasPrefix(trim, []byte("{")) {
+		return append(append([]byte("["), trim...), ']'), true
+	}
+	return raw, false
 }
 
 // Sub-agent frontend bindings (GetSubagents, cloneSubagentRun, StopSubagent)
