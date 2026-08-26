@@ -170,6 +170,7 @@ Public License v3. See the LICENSE file for details.
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, toRaw } from 'vue';
 import { t } from '../i18n.mjs';
 import { copyText } from '../utils/clipboard.mjs';
+import { toolCardRenderSignature } from '../utils/toolCardSignature.mjs';
 import MessageAttachments from './MessageAttachments.vue';
 import WelcomeMessage from './WelcomeMessage.vue';
 import ToolCallCard from './ToolCallCard.vue';
@@ -253,6 +254,10 @@ function messageRenderMemo(msg) {
     lastAttachment?.dataUrl,
     lastAttachment?.partial,
     msg?.role === 'user' ? isUserMessageExpanded(msg) : false,
+    // Tool-card safety net: any field that can change how a tool card renders
+    // (status above all) is folded into one signature so a missed memo field
+    // no longer freezes the card. See utils/toolCardSignature.mjs.
+    toolCardRenderSignature(msg),
   ];
 }
 
