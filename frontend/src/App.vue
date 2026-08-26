@@ -385,6 +385,7 @@ import cssLang from 'highlight.js/lib/languages/css';
 import markdownLang from 'highlight.js/lib/languages/markdown';
 import 'highlight.js/styles/base16/darcula.css';
 import { highlightShellCommand, isShellLanguage, looksLikeShellCommand } from './utils/shellHighlight.mjs';
+import { formatReadRangeChip } from './utils/toolFormat.mjs';
 import {
   clearSessionSnapshotStore,
   loadSessionSnapshots,
@@ -473,6 +474,10 @@ import {
 import {
   commitToolEventMessage as commitToolEventById,
   findToolEventMessage as findToolEventById,
+  findToolEventByData,
+  normalizeToolStatus,
+  setToolStatus,
+  toolEventId,
 } from './utils/toolEventState.mjs';
 import { unwrapWailsEvent } from './utils/wailsEvent.mjs';
 
@@ -3646,7 +3651,7 @@ function bindRuntimeEvents() {
   onRuntimeEvent('ask:ready', (data) => {
     const session = sessionByEvent(data);
     if (!session) return;
-    let existing = findToolEventMessage(session, { ...data, name: 'ask' });
+    let existing = findToolEventByData(session, { ...data, name: 'ask' });
     if (!existing) {
       existing = appendToolEventFallback(session, {
         ...data,
@@ -3673,11 +3678,198 @@ function bindRuntimeEvents() {
     if (existing) {
       existing.askReady = false;
       existing.askSubmitting = false;
-      existing.status = 'error';
+      setToolStatus(existing, 'error');
       existing.body = t('app.ask.cancelled');
     }
     scheduleSaveSessions();
   });
+  // ---- tool:result adapters ------------------------------------------------
+  // Each tool's result post-processing is a small named function, keyed by
+  // tool name in toolResultAdapters below. Splitting the former 180-line
+  // if-chain into named adapters means editing one tool's rendering cannot
+  // silently break another, and each adapter can be read in isolation.
+
+  function applyToolResultCommon(existing, data, resultData) {
+    setToolStatus(existing, 'success');
+    // ESC 终止的命令不应显示绿色 √
+    if (data.name === 'command' || data.name === 'remote_run_command') {
+      try {
+        const parsed = JSON.parse(data.result);
+        if (parsed?.data?.cancelled) setToolStatus(existing, 'error');
+      } catch (_) { /* ignore */ }
+    }
+    existing.body = formatToolBody(data.name, data.result);
+    existing.chip = formatToolChip(data.name, data.result);
+    existing.durationMs = Number(data.durationMs || 0);
+    existing.durationText = formatDurationShort(existing.durationMs);
+    if (data.mcpServer) existing.mcpServer = data.mcpServer;
+    if (data.mcpTool) existing.mcpTool = data.mcpTool;
+    existing.time = new Date().toLocaleTimeString();
+  }
+
+  function applyDefaultToolResultTitle(existing, data, resultData) {
+    if (!existing.title) existing.title = makeToolResultTitle(data.name, data.result, data);
+  }
+
+  function applyEditValidation(existing, data, resultData) {
+    existing.validation = typeof resultData.validation === 'string' ? resultData.validation : '';
+  }
+
+  function applyAskResult(existing, data, resultData) {
+    existing.askReady = false;
+    existing.askSubmitting = false;
+    existing.askSubmitted = true;
+    existing.askAnswers = Array.isArray(resultData.answers) ? resultData.answers : existing.askAnswers || [];
+  }
+
+  function applyPlanTitle(existing, data, resultData) {
+    if (Array.isArray(resultData.todos)) existing.title = formatTodoNextStep(resultData.todos);
+  }
+
+  function applyCreatePath(existing, data, resultData) {
+    if (resultData.path) {
+      existing.editFilePath = resultData.path;
+      if (!existing.title) existing.title = resultData.target ? `${resultData.target} · ${resultData.path}` : resultData.path;
+    }
+  }
+
+  function applyReadFileMeta(existing, data, resultData) {
+    try {
+      const rp = JSON.parse(data.result);
+      if (rp.data) {
+        const d = rp.data;
+        const s = d.startLine || 1;
+        const e = d.endLine || d.totalLines || 0;
+        existing.readLineCount = e >= s ? e - s + 1 : 0;
+        existing.readTotalLines = d.totalLines || e;
+        // read_file returns a single ReadFileResult with path at top level;
+        // batch-shaped results (read/batch_read) carry it in files[0].path.
+        // The running-stage title comes from streaming args and may never
+        // resolve if the path field arrives truncated or tool:update is
+        // skipped (then tool:result falls back to makeToolResultTitle,
+        // which returns '' for read_file). Fall back to the result path so
+        // the read-group entry shows a real name instead of "(未命名)".
+        const resultPath = d.path || (Array.isArray(d.files) && d.files[0]?.path) || '';
+        if (resultPath && !existing.title) existing.title = resultPath;
+      }
+    } catch (_) { /* ignore */ }
+  }
+
+  function applyReadBatchEntries(existing, data, resultData) {
+    try {
+      const rp = JSON.parse(data.result);
+      if (rp.data && rp.data.files) {
+        const entries = [];
+        for (const f of rp.data.files) {
+          entries.push({
+            title: f.path || '',
+            startLine: f.startLine || 1,
+            endLine: f.endLine || f.totalLines || 0,
+            totalLines: f.totalLines || 0,
+            truncated: !!f.truncated,
+            lineCount: (f.endLine && f.startLine) ? (f.endLine - f.startLine + 1) : (f.totalLines || 0),
+            chip: f.error ? `failed: ${f.error}` : formatReadRangeChip(f.startLine || 1, f.endLine || f.totalLines || 0, f.totalLines || 0, !!f.truncated),
+            status: f.error ? 'error' : 'success',
+          });
+        }
+        existing.batchEntries = entries;
+      }
+    } catch (e) { /* ignore */ }
+  }
+
+  function applyEditDiff(existing, data, resultData) {
+    try {
+      const resultParsed = JSON.parse(data.result);
+      const editData = resultParsed.data || resultParsed;
+      const editedFiles = Array.isArray(editData.files) ? editData.files : [];
+      if (editedFiles.length) {
+        existing.editEntries = editedFiles.map((file, index) => ({
+          ...(existing.editEntries?.[index] || {}), path: file.path || existing.editEntries?.[index]?.path || '',
+          changes: file.diff ? [] : (existing.editEntries?.[index]?.changes || []), diff: file.diff || '',
+          added: file.addedLines || 0, removed: file.removedLines || 0,
+        }));
+      }
+      const combinedDiff = editedFiles.map((file) => file?.diff || '').filter(Boolean).join('\n');
+      if (editedFiles.length) {
+        existing.editDiff = '';
+        existing.editOldString = '';
+        existing.editNewString = '';
+        existing.body = '';
+      } else if (editData.diff || combinedDiff) {
+        existing.editDiff = editData.diff || combinedDiff;
+      }
+      if (editData.addedLines !== undefined || editData.removedLines !== undefined) {
+        existing.editAdded = editData.addedLines || 0;
+        existing.editRemoved = editData.removedLines || 0;
+        const parts = [];
+        if (existing.editAdded > 0) parts.push('+' + existing.editAdded);
+        if (existing.editRemoved > 0) parts.push('-' + existing.editRemoved);
+        existing.editStats = parts.join(' ');
+      }
+      if (editData.path) existing.editFilePath = editData.path;
+      else if (editedFiles.length === 1) existing.editFilePath = editedFiles[0]?.path || '';
+      else if (editedFiles.length > 1) existing.editFilePath = `${editedFiles.length} files`;
+      if (editData.warnings) existing.editWarnings = editData.warnings;
+      if (editData.changedLinesBlock) existing.editChangedLinesBlock = editData.changedLinesBlock;
+    } catch (_) { /* ignore */ }
+  }
+
+  const toolResultAdapters = {
+    'edit': [applyEditValidation, applyEditDiff],
+    'replace_exact': [applyEditValidation, applyEditDiff],
+    'replace_lines': [applyEditValidation, applyEditDiff],
+    'remote_edit': [applyEditValidation, applyEditDiff],
+    'create': [applyCreatePath],
+    'remote_create_file': [applyCreatePath],
+    'ask': [applyAskResult],
+    'plan': [applyPlanTitle],
+    'read_file': [applyReadFileMeta],
+    'remote_read_file': [applyReadFileMeta],
+    'read': [applyReadBatchEntries],
+    'batch_read': [applyReadBatchEntries],
+  };
+
+  function applySubagentResult(existing, data, resultData) {
+    existing.subagentId = resultData.agentId || existing.subagentId || '';
+    existing.subagentRole = resultData.role || existing.subagentRole || '';
+    setToolStatus(existing, resultData.status || 'success');
+    existing.description = resultData.description || existing.description || '';
+    existing.summary = resultData.summary || existing.summary || '';
+    existing.filesRead = resultData.filesRead || existing.filesRead || [];
+    existing.filesEdited = resultData.filesEdited || existing.filesEdited || [];
+    existing.steps = resultData.steps || existing.steps || 0;
+    existing.error = resultData.error || '';
+    existing.durationMs = Number(data.durationMs || existing.durationMs || 0);
+    existing.durationText = formatDurationShort(existing.durationMs);
+    existing.time = new Date().toLocaleTimeString();
+  }
+
+  function applySubagentError(existing, data) {
+    setToolStatus(existing, 'failed');
+    existing.error = data.error || '';
+    existing.body = '';
+    existing.errorCode = data.errorCode || '';
+    existing.durationMs = Number(data.durationMs || existing.durationMs || 0);
+    existing.durationText = formatDurationShort(existing.durationMs);
+    existing.time = new Date().toLocaleTimeString();
+  }
+
+  function applyToolErrorCommon(existing, data) {
+    setToolStatus(existing, 'error');
+    existing.body = data.error || '';
+    existing.errorCode = data.errorCode || '';
+    if (data.name === 'ask') {
+      existing.askReady = false;
+      existing.askSubmitting = false;
+      if (existing.errorCode === 'E_ASK_CANCELLED') existing.body = t('app.ask.cancelled');
+    }
+    existing.durationMs = Number(data.durationMs || 0);
+    existing.durationText = formatDurationShort(existing.durationMs);
+    if (data.mcpServer) existing.mcpServer = data.mcpServer;
+    if (data.mcpTool) existing.mcpTool = data.mcpTool;
+    existing.time = new Date().toLocaleTimeString();
+  }
+
   onRuntimeEvent('tool:result', (data) => {
     flushStreamBuffer(data.runId);
     flushToolUpdateBuffer();
@@ -3705,7 +3897,7 @@ function bindRuntimeEvents() {
       return;
     }
     const eventId = toolEventId(data);
-    let existing = findToolEventMessage(session, data);
+    let existing = findToolEventByData(session, data);
     if (!existing) existing = appendToolEventFallback(session, data, 'running');
     if (existing) {
       existing.eventId = eventId;
@@ -3724,137 +3916,17 @@ function bindRuntimeEvents() {
         return;
       }
       if ((data.name === 'subagent' || data.name === 'agent_delegate') && existing.kind === 'subagent') {
-        existing.subagentId = resultData.agentId || existing.subagentId || '';
-        existing.subagentRole = resultData.role || existing.subagentRole || '';
-        existing.status = resultData.status || 'completed';
-        existing.description = resultData.description || existing.description || '';
-        existing.summary = resultData.summary || existing.summary || '';
-        existing.filesRead = resultData.filesRead || existing.filesRead || [];
-        existing.filesEdited = resultData.filesEdited || existing.filesEdited || [];
-        existing.steps = resultData.steps || existing.steps || 0;
-        existing.error = resultData.error || '';
-        existing.durationMs = Number(data.durationMs || existing.durationMs || 0);
-        existing.durationText = formatDurationShort(existing.durationMs);
-        existing.time = new Date().toLocaleTimeString();
+        applySubagentResult(existing, data, resultData);
         scheduleSaveSessions();
         return;
       }
-      existing.status = 'success';
-      // ESC 终止的命令不应显示绿色 √
-      if (data.name === 'command' || data.name === 'remote_run_command') {
-        try {
-          const parsed = JSON.parse(data.result);
-          if (parsed?.data?.cancelled) existing.status = 'error';
-        } catch (_) { /* ignore */ }
-      }
-      existing.body = formatToolBody(data.name, data.result);
-      existing.chip = formatToolChip(data.name, data.result);
-      if (['edit', 'replace_exact', 'replace_lines', 'remote_edit', 'create', 'remote_create_file'].includes(data.name)) {
-        existing.validation = typeof resultData.validation === 'string' ? resultData.validation : '';
-      }
-      existing.durationMs = Number(data.durationMs || 0);
-      existing.durationText = formatDurationShort(existing.durationMs);
-      if (data.mcpServer) existing.mcpServer = data.mcpServer;
-      if (data.mcpTool) existing.mcpTool = data.mcpTool;
-      existing.time = new Date().toLocaleTimeString();
-      if (data.name === 'ask') {
-        existing.askReady = false;
-        existing.askSubmitting = false;
-        existing.askSubmitted = true;
-        existing.askAnswers = Array.isArray(resultData.answers) ? resultData.answers : existing.askAnswers || [];
-      }
-      if (data.name === 'plan' && Array.isArray(resultData.todos)) {
-        existing.title = formatTodoNextStep(resultData.todos);
-      } else if (!existing.title) {
-        existing.title = makeToolResultTitle(data.name, data.result, data);
-      }
-      if ((data.name === 'create' || data.name === 'remote_create_file') && resultData.path) {
-        existing.editFilePath = resultData.path;
-        if (!existing.title) existing.title = resultData.target ? `${resultData.target} · ${resultData.path}` : resultData.path;
-      }
-      // Store line count for read tools (used in aggregation)
-      if (data.name === 'read_file' || data.name === 'remote_read_file') {
-        try {
-          const rp = JSON.parse(data.result);
-          if (rp.data) {
-            const d = rp.data;
-            const s = d.startLine || 1;
-            const e = d.endLine || d.totalLines || 0;
-            existing.readLineCount = e >= s ? e - s + 1 : 0;
-            existing.readTotalLines = d.totalLines || e;
-            // read_file returns a single ReadFileResult with path at top level;
-            // batch-shaped results (read/batch_read) carry it in files[0].path.
-            // The running-stage title comes from streaming args and may never
-            // resolve if the path field arrives truncated or tool:update is
-            // skipped (then tool:result falls back to makeToolResultTitle,
-            // which returns '' for read_file). Fall back to the result path so
-            // the read-group entry shows a real name instead of "(未命名)".
-            const resultPath = d.path || (Array.isArray(d.files) && d.files[0]?.path) || '';
-            if (resultPath && !existing.title) existing.title = resultPath;
-          }
-        } catch (_) { /* ignore */ }
-      }
-      // Store file entries for read (and legacy batch_read) (used in tree display)
-      if (data.name === 'read' || data.name === 'batch_read') {
-        try {
-          const rp = JSON.parse(data.result);
-          if (rp.data && rp.data.files) {
-            const entries = [];
-            for (const f of rp.data.files) {
-              entries.push({
-                title: f.path || '',
-                startLine: f.startLine || 1,
-                endLine: f.endLine || f.totalLines || 0,
-                totalLines: f.totalLines || 0,
-                truncated: !!f.truncated,
-                lineCount: (f.endLine && f.startLine) ? (f.endLine - f.startLine + 1) : (f.totalLines || 0),
-                chip: f.error ? `failed: ${f.error}` : formatReadRangeChip(f.startLine || 1, f.endLine || f.totalLines || 0, f.totalLines || 0, !!f.truncated),
-                status: f.error ? 'error' : 'success',
-              });
-            }
-            existing.batchEntries = entries;
-          }
-        } catch (e) { /* ignore */ }
-      }
-    }
-    if (['edit', 'replace_exact', 'replace_lines', 'remote_edit'].includes(data.name)) {
-      try {
-        const resultParsed = JSON.parse(data.result);
-        const resultData = resultParsed.data || resultParsed;
-        const msg = session.messages.find(m => m.role === 'tool_call' && m.eventId === eventId);
-        if (msg) {
-		  const editedFiles = Array.isArray(resultData.files) ? resultData.files : [];
-		  if (editedFiles.length) {
-			msg.editEntries = editedFiles.map((file, index) => ({
-			  ...(msg.editEntries?.[index] || {}), path: file.path || msg.editEntries?.[index]?.path || '',
-			  changes: file.diff ? [] : (msg.editEntries?.[index]?.changes || []), diff: file.diff || '',
-			  added: file.addedLines || 0, removed: file.removedLines || 0,
-			}));
-		  }
-		  const combinedDiff = editedFiles.map((file) => file?.diff || '').filter(Boolean).join('\n');
-		  if (editedFiles.length) {
-			msg.editDiff = '';
-			msg.editOldString = '';
-			msg.editNewString = '';
-			msg.body = '';
-		  } else if (resultData.diff || combinedDiff) {
-			msg.editDiff = resultData.diff || combinedDiff;
-		  }
-          if (resultData.addedLines !== undefined || resultData.removedLines !== undefined) {
-            msg.editAdded = resultData.addedLines || 0;
-            msg.editRemoved = resultData.removedLines || 0;
-            const parts = [];
-            if (msg.editAdded > 0) parts.push('+' + msg.editAdded);
-            if (msg.editRemoved > 0) parts.push('-' + msg.editRemoved);
-            msg.editStats = parts.join(' ');
-          }
-		  if (resultData.path) msg.editFilePath = resultData.path;
-		  else if (editedFiles.length === 1) msg.editFilePath = editedFiles[0]?.path || '';
-		  else if (editedFiles.length > 1) msg.editFilePath = `${editedFiles.length} files`;
-          if (resultData.warnings) msg.editWarnings = resultData.warnings;
-          if (resultData.changedLinesBlock) msg.editChangedLinesBlock = resultData.changedLinesBlock;
-        }
-      } catch (_) { /* ignore */ }
+      // Common fields for every successful tool card, then per-tool adapters
+      // dispatched by name (see toolResultAdapters above). Splitting the
+      // former 180-line if-chain into named adapters means editing one tool's
+      // rendering cannot silently break another.
+      applyToolResultCommon(existing, data, resultData);
+      for (const applyAdapter of toolResultAdapters[data.name] || []) applyAdapter(existing, data, resultData);
+      applyDefaultToolResultTitle(existing, data, resultData);
     }
     // 详情已写入卡片（status/body/diff 等）。flushToolUpdateBuffer 的
     // alignToLastToolCard 只保证卡片头部可见，详情可能仍在折叠线下，
@@ -3876,7 +3948,7 @@ function bindRuntimeEvents() {
     // suggest: 静默忽略错误，不渲染任何 card
     if (isHiddenTool(data.name)) return;
     const eventId = toolEventId(data);
-    let existing = findToolEventMessage(session, data);
+    let existing = findToolEventByData(session, data);
     if (!existing) existing = appendToolEventFallback(session, data, 'error');
     if (existing) {
       existing.eventId = eventId;
@@ -3885,29 +3957,11 @@ function bindRuntimeEvents() {
       existing.toolCallId = data.toolCallId || existing.toolCallId || '';
       if (data.toolCallIndex !== undefined && data.toolCallIndex !== null) existing.toolCallIndex = data.toolCallIndex;
       if ((data.name === 'subagent' || data.name === 'agent_delegate') && existing.kind === 'subagent') {
-        existing.status = 'failed';
-        existing.error = data.error || '';
-        existing.body = '';
-        existing.errorCode = data.errorCode || '';
-        existing.durationMs = Number(data.durationMs || existing.durationMs || 0);
-        existing.durationText = formatDurationShort(existing.durationMs);
-        existing.time = new Date().toLocaleTimeString();
+        applySubagentError(existing, data);
         scheduleSaveSessions();
         return;
       }
-      existing.status = 'error';
-      existing.body = data.error || '';
-      existing.errorCode = data.errorCode || '';
-      if (data.name === 'ask') {
-        existing.askReady = false;
-        existing.askSubmitting = false;
-        if (existing.errorCode === 'E_ASK_CANCELLED') existing.body = t('app.ask.cancelled');
-      }
-      existing.durationMs = Number(data.durationMs || 0);
-      existing.durationText = formatDurationShort(existing.durationMs);
-      if (data.mcpServer) existing.mcpServer = data.mcpServer;
-      if (data.mcpTool) existing.mcpTool = data.mcpTool;
-      existing.time = new Date().toLocaleTimeString();
+      applyToolErrorCommon(existing, data);
     }
     // 错误详情已写入卡片，滚动到可见区域。
     if (session.id === activeSessionId.value) scrollMessagesToBottom();
@@ -4075,8 +4129,8 @@ function bindRuntimeEvents() {
     // tool identity lets the eventual tool:result/tool:error update this same
     // card instead of appending a second raw JSON result card.
     if (session) {
-      const existing = findToolEventMessage(session, { ...data, name: 'subagent' }) ||
-        findToolEventMessage(session, { ...data, name: 'agent_delegate' });
+      const existing = findToolEventByData(session, { ...data, name: 'subagent' }) ||
+        findToolEventByData(session, { ...data, name: 'agent_delegate' });
       const payload = {
         role: 'tool_call',
         kind: 'subagent',
@@ -4127,20 +4181,20 @@ function bindRuntimeEvents() {
     const msg = findSubagentMsg(data.id, data.sessionId || '');
     if (msg) {
       const tc = msg.toolCalls.find(t => t.toolCallId === data.toolCallId);
-      if (tc) { tc.status = 'success'; tc.summary = data.summary || ''; tc.durationMs = Number(data.durationMs || 0); tc.durationText = formatDurationShort(tc.durationMs); }
+      if (tc) { setToolStatus(tc, 'success'); tc.summary = data.summary || ''; tc.durationMs = Number(data.durationMs || 0); tc.durationText = formatDurationShort(tc.durationMs); }
     }
   });
   onRuntimeEvent('sub:tool:error', (data) => {
     const msg = findSubagentMsg(data.id, data.sessionId || '');
     if (msg) {
       const tc = msg.toolCalls.find(t => t.toolCallId === data.toolCallId);
-      if (tc) { tc.status = 'error'; tc.summary = data.error || ''; tc.durationMs = Number(data.durationMs || 0); tc.durationText = formatDurationShort(tc.durationMs); }
+      if (tc) { setToolStatus(tc, 'error'); tc.summary = data.error || ''; tc.durationMs = Number(data.durationMs || 0); tc.durationText = formatDurationShort(tc.durationMs); }
     }
   });
   onRuntimeEvent('sub:done', (data) => {
     const msg = findSubagentMsg(data.id, data.sessionId || '');
     if (msg) {
-      msg.status = data.status || 'completed';
+      setToolStatus(msg, data.status || 'success');
       msg.summary = data.summary || '';
       msg.filesEdited = data.filesEdited || [];
       msg.steps = data.steps || msg.steps;
@@ -4155,7 +4209,7 @@ function bindRuntimeEvents() {
   onRuntimeEvent('sub:error', (data) => {
     const msg = findSubagentMsg(data.id, data.sessionId || '');
     if (msg) {
-      msg.status = 'failed';
+      setToolStatus(msg, 'failed');
       msg.error = data.error || '';
       msg.time = new Date().toLocaleTimeString();
       msg.durationMs = Number(data.durationMs || 0);
@@ -4778,22 +4832,6 @@ function estimateTokens(text) {
 function formatReadChip(lines) {
   const lineCount = Number(lines) || 0;
   return lineCount > 0 ? '· ' + lineCount + ' line' + (lineCount !== 1 ? 's' : '') : '';
-}
-
-function formatReadRangeChip(startLine, endLine, totalLines, truncated) {
-  const start = Number(startLine) || 1;
-  const end = Number(endLine) || Number(totalLines) || 0;
-  const total = Number(totalLines) || 0;
-  const actualLines = total > 0 ? end - start + 1 : 0;
-  if (actualLines <= 0) return '';
-  const parts = [];
-  if (start > 1 || end < total) {
-    parts.push(`${actualLines} line${actualLines !== 1 ? 's' : ''} ${start}-${end}`);
-    if (truncated) parts.push('(truncated)');
-  } else {
-    parts.push(`${actualLines} line${actualLines !== 1 ? 's' : ''}`);
-  }
-  return parts.length ? `· ${parts.join(' · ')}` : '';
 }
 
 // suggest chip 点击：直接发送 label 作为新消息
@@ -5551,37 +5589,6 @@ function completeCommand(index) {
   }
   commandMenuVisible.value = false;
   nextTick(() => focusPromptInput());
-}
-
-function toolEventId(data = {}) {
-  if (data.runId && data.toolBatchId && data.toolCallIndex !== undefined && data.toolCallIndex !== null) {
-    return `${data.runId}:tool:${data.toolBatchId}:${data.toolCallIndex}`;
-  }
-  if (data.runId && data.toolCallIndex !== undefined && data.toolCallIndex !== null) {
-    return `${data.runId}:tool:${data.toolCallIndex}`;
-  }
-  return data.toolCallId || `${data.name || 'tool'}-${Date.now()}`;
-}
-
-function findToolEventMessage(session, data = {}) {
-  if (!session) return null;
-  const eventId = toolEventId(data);
-  const toolCallId = data.toolCallId || '';
-  const toolBatchId = data.toolBatchId || '';
-  const hasIndex = data.runId && data.toolCallIndex !== undefined && data.toolCallIndex !== null;
-  return session.messages.find((item) => {
-    if (item.role !== 'tool_call') return false;
-    if (item.eventId === eventId) return true;
-    if (toolCallId && (item.eventId === toolCallId || item.toolCallId === toolCallId)) return true;
-    if (!hasIndex || item.runId !== data.runId || Number(item.toolCallIndex) !== Number(data.toolCallIndex)) return false;
-    // toolBatchId (the agent-loop step) disambiguates same-index calls across
-    // steps of one run. Require equality whenever either side carries a batch
-    // id so a result from step N never matches a same-index card from step
-    // N-1; when neither carries one (both ''), the runId+index match above
-    // already uniquely identifies the call.
-    if (toolBatchId || item.toolBatchId) return item.toolBatchId === toolBatchId;
-    return true;
-  }) || null;
 }
 
 function appendToolEventFallback(session, data = {}, status = 'running') {
@@ -6875,12 +6882,6 @@ async function changeReasoningEffort(level) {
   } catch (err) {
     message.error(t('app.model.effortFailed', { error: err }));
   }
-}
-
-function normalizeToolStatus(status) {
-  if (status === 'success' || status === 'error' || status === 'running') return status;
-  if (status === 'info') return 'running';
-  return 'default';
 }
 
 function toolKind(name) {
