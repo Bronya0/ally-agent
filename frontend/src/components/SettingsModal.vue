@@ -1121,8 +1121,12 @@ function selectCatalogProvider(providerId) {
 }
 
 function selectCatalogModel(modelId) {
+  const value = String(modelId || '').trim();
+  // Values not found in the catalog (typed via the tag select) are still valid
+  // custom model names — keep them and only skip the preset metadata.
+  if (value) modelDraft.model = value;
   const provider = selectedCatalogProvider.value;
-  const model = findCatalogModel(provider, modelId);
+  const model = findCatalogModel(provider, value);
   if (provider && model) Object.assign(modelDraft, applyCatalogPreset(provider, model, modelDraft));
 }
 
