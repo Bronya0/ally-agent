@@ -901,69 +901,9 @@ async function refreshTree() {
   if (navigationBusy) return;
   navigationBusy = true;
   try {
-    await reloadTreePreservingState();
+    if (await confirmPendingChange()) await loadRoot();
   } finally {
     navigationBusy = false;
-  }
-}
-
-// 整树刷新但保留展开/选中状态（与 loadRoot 的工作区切换重置语义不同）：
-// 重新加载根目录后，按原展开集合自顶向下递归重载各展开目录的子节点；
-// 已不存在的目录从展开集合剔除，选中集合同步过滤，不影响已打开的编辑器内容。
-async function reloadTreePreservingState() {
-  const requestID = ++requestSequence;
-  const workspace = String(props.workspace || '');
-  const workspaceVersion = workspaceRequestVersion;
-  if (!workspace) return;
-  const expanded = new Set(expandedKeys.value);
-  loadingTree.value = true;
-  try {
-    const nextTree = await listDirectory('', workspace);
-    if (disposed || requestID !== requestSequence || workspaceVersion !== workspaceRequestVersion) return;
-    treeData.value = nextTree;
-    await reloadExpandedChildren(nextTree, expanded, workspace, requestID, workspaceVersion);
-    if (disposed || requestID !== requestSequence || workspaceVersion !== workspaceRequestVersion) return;
-    const existing = new Set();
-    collectNodeKeys(nextTree, existing);
-    expandedKeys.value = [...expanded].filter((k) => existing.has(k));
-    selectedKeys.value = selectedKeys.value.filter((k) => existing.has(k));
-  } catch (err) {
-    if (!disposed && requestID === requestSequence && workspaceVersion === workspaceRequestVersion) {
-      message.error(t('app.workspaceExplorer.treeFailed', { error: errorText(err) }));
-    }
-  } finally {
-    if (!disposed && requestID === requestSequence && workspaceVersion === workspaceRequestVersion) {
-      loadingTree.value = false;
-    }
-  }
-}
-
-// 自顶向下递归重载展开目录的子节点（复用 loadingTreeNodes 防止与懒加载并发重入）
-async function reloadExpandedChildren(nodes, expanded, workspace, requestID, workspaceVersion) {
-  for (const node of nodes) {
-    if (!node.dir || !expanded.has(node.key)) continue;
-    loadingTreeNodes.add(node.key);
-    try {
-      const children = await listDirectory(node.path, workspace);
-      if (disposed || requestID !== requestSequence || workspaceVersion !== workspaceRequestVersion) return;
-      node.children = children;
-      node.childrenLoaded = true;
-      await reloadExpandedChildren(children, expanded, workspace, requestID, workspaceVersion);
-    } catch (err) {
-      if (disposed || requestID !== requestSequence || workspaceVersion !== workspaceRequestVersion) return;
-      node.children = [];
-      node.childrenLoaded = true;
-      message.error(t('app.workspaceExplorer.treeFailed', { error: errorText(err) }));
-    } finally {
-      loadingTreeNodes.delete(node.key);
-    }
-  }
-}
-
-function collectNodeKeys(nodes, out) {
-  for (const node of nodes) {
-    out.add(node.key);
-    if (node.children?.length) collectNodeKeys(node.children, out);
   }
 }
 

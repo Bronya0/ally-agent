@@ -3782,6 +3782,15 @@ function bindRuntimeEvents() {
             const e = d.endLine || d.totalLines || 0;
             existing.readLineCount = e >= s ? e - s + 1 : 0;
             existing.readTotalLines = d.totalLines || e;
+            // read_file returns a single ReadFileResult with path at top level;
+            // batch-shaped results (read/batch_read) carry it in files[0].path.
+            // The running-stage title comes from streaming args and may never
+            // resolve if the path field arrives truncated or tool:update is
+            // skipped (then tool:result falls back to makeToolResultTitle,
+            // which returns '' for read_file). Fall back to the result path so
+            // the read-group entry shows a real name instead of "(未命名)".
+            const resultPath = d.path || (Array.isArray(d.files) && d.files[0]?.path) || '';
+            if (resultPath && !existing.title) existing.title = resultPath;
           }
         } catch (_) { /* ignore */ }
       }
@@ -4799,15 +4808,21 @@ async function sendSuggest(sessionId, label) {
 }
 
 async function sendQuickMessage(sessionId, key) {
+  if (key === 'push') {
+    const tab = workspaceTabs.value.find(t => t.sessionId === sessionId);
+    if (tab && activeWorkspaceId.value !== tab.id) {
+      activeWorkspaceId.value = tab.id;
+    }
+    await handlePushCommand();
+    return;
+  }
   const message = key === 'continue'
     ? t('chat.quickMessage.continueMessage')
-    : key === 'push'
-      ? t('app.push.prompt')
-      : key === 'review'
-        ? REVIEW_PROMPT
-        : key === 'lesson'
-          ? LESSON_PROMPT
-          : t('chat.plainSpeak.message');
+    : key === 'review'
+      ? REVIEW_PROMPT
+      : key === 'lesson'
+        ? LESSON_PROMPT
+        : t('chat.plainSpeak.message');
   await sendSuggest(sessionId, message);
 }
 
@@ -5559,6 +5574,11 @@ function findToolEventMessage(session, data = {}) {
     if (item.eventId === eventId) return true;
     if (toolCallId && (item.eventId === toolCallId || item.toolCallId === toolCallId)) return true;
     if (!hasIndex || item.runId !== data.runId || Number(item.toolCallIndex) !== Number(data.toolCallIndex)) return false;
+    // toolBatchId (the agent-loop step) disambiguates same-index calls across
+    // steps of one run. Require equality whenever either side carries a batch
+    // id so a result from step N never matches a same-index card from step
+    // N-1; when neither carries one (both ''), the runId+index match above
+    // already uniquely identifies the call.
     if (toolBatchId || item.toolBatchId) return item.toolBatchId === toolBatchId;
     return true;
   }) || null;

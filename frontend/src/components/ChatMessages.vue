@@ -236,6 +236,7 @@ function messageRenderMemo(msg) {
     msg?.reasoningEndedAt,
     msg?.streaming,
     msg?.done,
+    msg?.status,
     msg?.error,
     msg?.system,
     msg?.welcome,

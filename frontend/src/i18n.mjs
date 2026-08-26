@@ -330,8 +330,8 @@ const zh = {
   'app.review.title': '/review - 代码审查',
   'app.review.visibleText': '/review 审查当前未提交的代码改动',
   'app.review.failed': '代码审查失败：{error}',
-  'app.push.visibleText': '/push 提交并推送',
-  'app.push.title': '/push - 提交并推送',
+  'app.push.visibleText': '提交并推送',
+  'app.push.title': '提交并推送',
   'app.push.failed': '推送失败：{error}',
   'app.push.prompt': `提交本地 Git 变更并推送到远程。
 
@@ -359,7 +359,7 @@ const zh = {
   'commands.note': '保存长期记忆',
   'commands.lesson': '总结对话中容易再踩的坑并更新 .ally/lessons.md',
   'commands.compact': '压缩对话上下文，用摘要替换历史消息',
-  'commands.push': '提交本地变更并推送到远程',
+  'commands.push': '提交并推送',
   'commands.title': '指令 {commands} · 技能 {skills}',
   'commands.empty': '无匹配指令',
   'welcome.skillsAvailable': '{count} 个可用，输入 /<skillname> 加载',
@@ -1056,8 +1056,8 @@ const enOverrides = {
   'app.review.title': '/review - Code review',
   'app.review.visibleText': '/review Review uncommitted code changes',
   'app.review.failed': 'Failed to review code: {error}',
-  'app.push.visibleText': '/push Commit and push',
-  'app.push.title': '/push - Commit and push',
+  'app.push.visibleText': 'Commit and push',
+  'app.push.title': 'Commit and push',
   'app.push.failed': 'Push failed: {error}',
   'app.push.prompt': `Push local Git changes to the remote.
 
@@ -1083,7 +1083,7 @@ Response language: Preserve the response language already used in the current co
   'commands.sessions': 'Show and switch sessions',
   'commands.init': 'Analyze the project and generate AGENTS.md', 'commands.note': 'Save durable knowledge',
   'commands.lesson': 'Summarize recurring pitfalls from this conversation into .ally/lessons.md',
-  'commands.compact': 'Replace conversation history with a compact summary', 'commands.push': 'Commit local changes and push to remote',
+  'commands.compact': 'Replace conversation history with a compact summary', 'commands.push': 'Commit and push',
   'commands.title': 'Commands {commands} · Skills {skills}', 'commands.empty': 'No matching commands',
   'welcome.skillsAvailable': '{count} available; enter /<skillname> to load one',
 
@@ -1109,7 +1109,7 @@ Response language: Preserve the response language already used in the current co
   'chat.quickMessage.title': 'Quick messages',
   'chat.quickMessage.continue': 'Continue',
   'chat.quickMessage.plainSpeak': 'Speak plainly',
-  'chat.quickMessage.push': 'push',
+  'chat.quickMessage.push': 'Commit and push',
   'chat.quickMessage.review': 'review',
   'chat.quickMessage.lesson': 'lesson',
   'chat.quickMessage.continueMessage': 'Continue',
