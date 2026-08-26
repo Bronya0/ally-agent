@@ -110,6 +110,16 @@ func (a *App) listFilesWithConfig(cfg ConfigState, req ListFilesRequest) (ListFi
 			return nil
 		}
 		name := d.Name()
+		// VCS internals are always pruned for model-facing listings even
+		// when the model opts into hidden/ignored paths — .git noise easily
+		// dominates the entry limit. The UI explorer (ModelFacing=false)
+		// still shows them.
+		if req.ModelFacing && isVCSDirName(name) {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
 		if !req.IncludeHidden && strings.HasPrefix(name, ".") {
 			if d.IsDir() {
 				return filepath.SkipDir
@@ -1168,6 +1178,18 @@ func pathDepth(rel string) int {
 func isHeavyDir(name string) bool {
 	switch strings.ToLower(name) {
 	case "__pycache__", "node_modules":
+		return true
+	default:
+		return false
+	}
+}
+
+// isVCSDirName centralizes VCS-internal directory names. They are never
+// useful in model-facing list_files output and are pruned unconditionally
+// there (see listFilesWithConfig), while the UI explorer keeps them visible.
+func isVCSDirName(name string) bool {
+	switch name {
+	case ".git", ".svn", ".hg":
 		return true
 	default:
 		return false

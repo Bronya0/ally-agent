@@ -139,6 +139,53 @@ func TestListFilesSkipsIgnoredByDefault(t *testing.T) {
 	}
 }
 
+// TestListFilesModelFacingAlwaysPrunesVCSDirs 验证模型侧调用即使显式传
+// includeHidden+includeIgnored 也永远剪掉 .git（对模型纯噪声且挤占条目
+// 限额），而 UI 文件浏览器（ModelFacing=false）仍能看到 .git。
+func TestListFilesModelFacingAlwaysPrunesVCSDirs(t *testing.T) {
+	root := t.TempDir()
+	for _, dir := range []string{".git/hooks", ".git/objects", "src"} {
+		if err := os.MkdirAll(filepath.Join(root, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, f := range []string{".git/config", "src/main.js"} {
+		if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(f)), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	app := NewApp()
+	cfg := ConfigState{Workspace: root}
+
+	modelView, err := app.listFilesWithConfig(cfg, ListFilesRequest{IncludeHidden: true, IncludeIgnored: true, ModelFacing: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var joined string
+	for _, e := range modelView.Entries {
+		joined += e.Path + "\n"
+	}
+	if strings.Contains(joined, ".git") {
+		t.Fatalf("model-facing listing must prune .git even with includeHidden/includeIgnored, got:\n%s", joined)
+	}
+	if !strings.Contains(joined, "src") || !strings.Contains(joined, "main.js") {
+		t.Fatalf("regular files must stay visible, got:\n%s", joined)
+	}
+
+	explorerView, err := app.listFilesWithConfig(cfg, ListFilesRequest{IncludeHidden: true, IncludeIgnored: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined = ""
+	for _, e := range explorerView.Entries {
+		joined += e.Path + "\n"
+	}
+	if !strings.Contains(joined, ".git") {
+		t.Fatalf("explorer semantics must keep .git visible, got:\n%s", joined)
+	}
+}
+
 // TestWorkspaceMapZeroByteFileShowsSize 验证 0 字节文件也显示大小（"0 B"）。
 func TestWorkspaceMapZeroByteFileShowsSize(t *testing.T) {
 	root := t.TempDir()

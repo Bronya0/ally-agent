@@ -53,8 +53,8 @@ func chatToolsUncached() []openai.Tool {
 				"path":           map[string]any{"type": "string", "description": "Workspace-relative directory path, or explicit absolute path for read-only listing. Empty means workspace root."},
 				"maxDepth":       map[string]any{"type": "integer", "minimum": 1, "maximum": 50, "description": "Maximum recursion depth. Default 3, max 50."},
 				"limit":          map[string]any{"type": "integer", "minimum": 1, "maximum": 1000, "description": "Maximum entries returned. Default 200, max 1000. Check truncated."},
-				"includeHidden":  map[string]any{"type": "boolean", "description": "Include dotfiles and dot-directories. Default false."},
-				"includeIgnored": map[string]any{"type": "boolean", "description": "Include gitignored paths and dependency directories such as node_modules, __pycache__. Default false."},
+				"includeHidden":  map[string]any{"type": "boolean", "description": "Include dotfiles and dot-directories; VCS internals like .git are always excluded. Default false."},
+				"includeIgnored": map[string]any{"type": "boolean", "description": "Include gitignored paths and dependency directories such as node_modules, __pycache__; VCS internals like .git are always excluded. Default false."},
 			},
 		}),
 		functionTool("edit", "Validate and apply exact replacements across multiple workspace files in one call.\n"+

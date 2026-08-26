@@ -964,6 +964,60 @@ func TestSubagentInstructionContextIncludesProjectAndCustomInstructions(t *testi
 	}
 }
 
+func TestLoadAgentsMdAppendsFirstLevelSubdirsAfterRoot(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte("Root rule: focused commits.\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, dir := range []string{"frontend", "backend", ".hidden"} {
+		if err := os.MkdirAll(filepath.Join(root, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(root, "frontend", "AGENTS.md"), []byte("Frontend rule: keep components small.\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".hidden", "AGENTS.md"), []byte("Hidden rule: must not load.\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got := loadAgentsMd(root)
+
+	rootIdx := strings.Index(got, "Root rule: focused commits.")
+	subIdx := strings.Index(got, "Frontend rule: keep components small.")
+	if rootIdx < 0 || subIdx < 0 {
+		t.Fatalf("expected root and subdirectory AGENTS.md content, got %q", got)
+	}
+	if rootIdx > subIdx {
+		t.Fatalf("root AGENTS.md must be placed before subdirectory files, got %q", got)
+	}
+	if !strings.Contains(got, "### AGENTS.md under directory `frontend/`") {
+		t.Fatalf("expected directory label isolating frontend rules, got %q", got)
+	}
+	if strings.Contains(got, "Hidden rule") {
+		t.Fatalf("dot-directory AGENTS.md must be skipped, got %q", got)
+	}
+}
+
+func TestLoadAgentsMdLoadsSubdirsWhenRootMissing(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "api"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "api", "AGENTS.md"), []byte("API rule: version all endpoints.\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got := loadAgentsMd(root)
+
+	if !strings.Contains(got, "API rule: version all endpoints.") {
+		t.Fatalf("expected subdirectory AGENTS.md without a root file, got %q", got)
+	}
+	if !strings.Contains(got, "### AGENTS.md under directory `api/`") {
+		t.Fatalf("expected directory label, got %q", got)
+	}
+}
+
 func TestSystemPromptDefinesWaitSequencing(t *testing.T) {
 	prompt := defaultSystemPrompt(nil, "", nil, "", "")
 	for _, expected := range []string{"Use `wait` only", "only tool in that model response", "verify the condition after it completes"} {

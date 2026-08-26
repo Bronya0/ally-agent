@@ -567,6 +567,12 @@ type ListFilesRequest struct {
 	Limit          int    `json:"limit"`
 	IncludeHidden  bool   `json:"includeHidden"`
 	IncludeIgnored bool   `json:"includeIgnored"`
+	// ModelFacing marks requests originating from the model's list_files
+	// tool call; the UI explorer leaves it false. Model-facing listings
+	// always skip VCS internals (.git/.svn/.hg) even when includeHidden or
+	// includeIgnored are set — they are pure noise for the model. json:"-"
+	// keeps the model from forging it via extra JSON fields.
+	ModelFacing bool `json:"-"`
 }
 
 type WorkspacePathRequest struct {
@@ -2184,6 +2190,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		var req ListFilesRequest
 		err, argWarnings = decodeJSON(&req)
 		if err == nil {
+			req.ModelFacing = true
 			data, err = a.listFilesWithConfig(cfg, req)
 		}
 	case "read_file":

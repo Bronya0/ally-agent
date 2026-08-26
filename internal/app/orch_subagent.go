@@ -602,7 +602,7 @@ func (a *App) buildSubagentEnv(cfg ConfigState) string {
 	var b strings.Builder
 	b.WriteString("Workspace: " + cfg.Workspace + "\n")
 
-	entries, err := a.listFilesWithConfig(cfg, ListFilesRequest{MaxDepth: 2, Limit: 60})
+	entries, err := a.listFilesWithConfig(cfg, ListFilesRequest{MaxDepth: 2, Limit: 60, ModelFacing: true})
 	if err == nil && len(entries.Entries) > 0 {
 		b.WriteString("\n## Project files\n")
 		for _, e := range entries.Entries {

@@ -947,13 +947,21 @@ const isWindows = computed(() => {
 });
 
 function defaultModelDraft(source = {}) {
-  const keys = Array.isArray(source.apiKeys) && source.apiKeys.length
-    ? source.apiKeys
-    : source.apiKey
-      ? [source.apiKey]
-      : Array.isArray(draft?.apiKeys) && draft.apiKeys.length
-        ? draft.apiKeys
-        : draft?.apiKey ? [draft.apiKey] : [];
+  // When the source explicitly carries key fields (even empty), respect them:
+  // "add new model" passes blank keys and must not inherit the current
+  // draft's credentials. Only a source without key fields at all falls back
+  // to the draft keys.
+  const sourceHasKeyField = 'apiKeys' in source || 'apiKey' in source;
+  const rawKeys = sourceHasKeyField
+    ? (Array.isArray(source.apiKeys) && source.apiKeys.length
+      ? source.apiKeys
+      : source.apiKey
+        ? [source.apiKey]
+        : [])
+    : (Array.isArray(draft?.apiKeys) && draft.apiKeys.length
+      ? draft.apiKeys
+      : draft?.apiKey ? [draft.apiKey] : []);
+  const normalizedKeys = normalizeModelApiKeys(rawKeys);
   return {
     providerName: draft?.providerName || 'OpenAI Compatible',
     apiFormat: normalizeApiFormat(draft?.apiFormat),
@@ -962,7 +970,9 @@ function defaultModelDraft(source = {}) {
     model: '',
     temperature: draft?.temperature ?? 0.2,
     ...source,
-    apiKeys: normalizeModelApiKeys(keys),
+    // Keep at least one (possibly empty) row so the form always shows a key
+    // input; empty strings are stripped again on save/test.
+    apiKeys: normalizedKeys.length ? normalizedKeys : [''],
     maxTokens: Number.isFinite(Number(source.maxTokens)) && Number(source.maxTokens) > 0 ? Number(source.maxTokens) : (draft?.maxTokens || 384000),
     contextWindow: Number.isFinite(Number(source.contextWindow)) && Number(source.contextWindow) > 0 ? Number(source.contextWindow) : (draft?.contextWindow || 1000000),
     reasoningTag: String(source.reasoningTag || draft?.reasoningTag || 'reasoning_content').trim() || 'reasoning_content',
@@ -1138,12 +1148,15 @@ async function startAddModelDraft() {
   modelEditorIndex.value = -1;
   await ensureModelCatalog();
   const provider = activeProviderTab.value || draft.providerName || 'OpenAI Compatible';
+  // New model: start with a blank key list. Pre-filling keys from the current
+  // draft silently copies credentials into configs that often need a
+  // different key.
   assignModelDraft({
     providerName: provider,
     apiFormat: normalizeApiFormat(draft.apiFormat),
     baseUrl: draft.baseUrl || '',
-    apiKey: draft.apiKey || '',
-    apiKeys: Array.isArray(draft.apiKeys) ? draft.apiKeys : [],
+    apiKey: '',
+    apiKeys: [],
     model: '',
     maxTokens: draft.maxTokens || 384000,
     contextWindow: draft.contextWindow || 1000000,

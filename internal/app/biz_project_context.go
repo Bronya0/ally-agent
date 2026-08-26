@@ -22,12 +22,17 @@ import (
 type agentFile struct {
 	path    string
 	content string
+	// header 是子目录级文件的显式分节标题（如 "### AGENTS.md under
+	// directory `frontend/`"），用于隔离各目录的规则；用户级/根级文件为空。
+	header string
 }
 
 // loadAgentsMd loads and merges AGENTS.md files from user-level and workspace-level,
 // user-scope files first, then workspace-scope, each annotated with
 // <!-- From: path -->, deduplicated by absolute path.
-// Fallback chain: AGENTS.md → CLAUDE.md → agents.md → claude.md.
+// Fallback chain: AGENTS.md → CLAUDE.md → agents.md → claude.md（根目录内
+// 逐个探测，前一个不存在才找下一个，只取第一个命中的文件）。
+// 根目录文件之后按序拼接一级子目录的 AGENTS.md，每份带目录标题隔离。
 func loadAgentsMd(workspace string) string {
 	if workspace == "" {
 		return ""
@@ -36,7 +41,7 @@ func loadAgentsMd(workspace string) string {
 	var files []agentFile
 	seen := map[string]bool{}
 
-	collect := func(path, content string) bool {
+	collect := func(path, content, header string) bool {
 		if content == "" {
 			return false
 		}
@@ -49,7 +54,7 @@ func loadAgentsMd(workspace string) string {
 			return false
 		}
 		seen[key] = true
-		files = append(files, agentFile{path: abs, content: content})
+		files = append(files, agentFile{path: abs, content: content, header: header})
 		return true
 	}
 
@@ -58,7 +63,7 @@ func loadAgentsMd(workspace string) string {
 		if err != nil {
 			return false
 		}
-		return collect(path, string(data))
+		return collect(path, string(data), "")
 	}
 
 	// ── User-level: ~/.agents/AGENTS.md (fallback agents.md) ──
@@ -78,6 +83,25 @@ func loadAgentsMd(workspace string) string {
 		}
 	}
 
+	// ── First-level subdirectories: append each <subdir>/AGENTS.md after the
+	// root file. Detection is direct path construction — one ReadDir plus one
+	// open per subdirectory; a missing file fails fast and is skipped. Only
+	// plain directories are probed (dot-dirs and symlinks are skipped), and
+	// each hit is labeled with its directory so module rules stay isolated.
+	if entries, err := os.ReadDir(workspace); err == nil {
+		for _, entry := range entries {
+			if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
+				continue
+			}
+			path := filepath.Join(workspace, entry.Name(), "AGENTS.md")
+			data, err := os.ReadFile(path)
+			if err != nil {
+				continue
+			}
+			collect(path, string(data), fmt.Sprintf("### AGENTS.md under directory `%s/`\n\n", entry.Name()))
+		}
+	}
+
 	if len(files) == 0 {
 		return ""
 	}
@@ -88,6 +112,7 @@ func loadAgentsMd(workspace string) string {
 			b.WriteString("\n\n")
 		}
 		b.WriteString(fmt.Sprintf("<!-- From: %s -->\n", filepath.ToSlash(f.path)))
+		b.WriteString(f.header)
 		b.WriteString(f.content)
 	}
 	return b.String()
