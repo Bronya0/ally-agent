@@ -615,32 +615,39 @@ func (a *App) streamOpenAIChat(ctx context.Context, cfg ConfigState, model strin
 		// ParallelToolCalls is also intentionally omitted for the same reason.
 	}
 
-	var stream *legacyopenai.ChatCompletionStream
-	var err error
 	maxRetries := effectiveLLMRetries(cfg)
-	for attempt := 0; attempt <= maxRetries; attempt++ {
-		stream, err = client.CreateChatCompletionStream(ctx, streamReq)
-		if err != nil && strings.Contains(strings.ToLower(err.Error()), "stream_options") {
-			streamReq.StreamOptions = nil
-			stream, err = client.CreateChatCompletionStream(ctx, streamReq)
+	result, emitted, err := a.openAIChatStreamAttempt(ctx, cfg, client, streamReq, onEvent)
+	// 只重试"尚未产出任何输出"的失败:建流失败,或消费阶段在产出内容前
+	// 失败(中转常以 HTTP 200 建流,再以流内 {"error":...} 事件返回 529
+	// overloaded 之类瞬时错误,错误信息只有文案、不带状态码)。此时重试
+	// 无重复输出风险;已产出内容的中断交给上层 runChat 做整轮重试。
+	for attempt := 1; err != nil && !emitted && ctx.Err() == nil && attempt <= maxRetries && shouldRetryLLMError(err); attempt++ {
+		wait := llmRetryDelay(attempt)
+		emitLLMRetryEvent(onEvent, attempt, maxRetries, err, wait)
+		select {
+		case <-time.After(wait):
+		case <-ctx.Done():
+			return nil, ctx.Err()
 		}
-		if err == nil || ctx.Err() != nil {
-			break
-		}
-		if attempt < maxRetries && shouldRetryLLMError(err) {
-			wait := llmRetryDelay(attempt + 1)
-			emitLLMRetryEvent(onEvent, attempt+1, maxRetries, err, wait)
-			select {
-			case <-time.After(wait):
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			}
-			continue
-		}
-		break
+		result, emitted, err = a.openAIChatStreamAttempt(ctx, cfg, client, streamReq, onEvent)
 	}
 	if err != nil {
 		return nil, err
+	}
+	return result, nil
+}
+
+// openAIChatStreamAttempt 执行一次完整的 OpenAI Chat 建流与消费。第二个
+// 返回值报告本次尝试是否已产出输出(assistant/reasoning/toolCalls 任一非空),
+// 调用方据此判定适配器内重试是否安全(无输出则重试不会造成重复)。
+func (a *App) openAIChatStreamAttempt(ctx context.Context, cfg ConfigState, client *legacyopenai.Client, streamReq legacyopenai.ChatCompletionRequest, onEvent func(modelStreamEvent)) (*modelStreamResult, bool, error) {
+	stream, err := client.CreateChatCompletionStream(ctx, streamReq)
+	if err != nil && strings.Contains(strings.ToLower(err.Error()), "stream_options") {
+		streamReq.StreamOptions = nil
+		stream, err = client.CreateChatCompletionStream(ctx, streamReq)
+	}
+	if err != nil {
+		return nil, false, err
 	}
 	defer stream.Close()
 
@@ -665,16 +672,21 @@ func (a *App) streamOpenAIChat(ctx context.Context, cfg ConfigState, model strin
 	var usage *modelUsage
 	gotFinishReason := false
 	stopReason := ""
+	hasOutput := func() bool {
+		return assistant.Len() > 0 || reasoning.Len() > 0 || len(toolCalls) > 0
+	}
 	for {
 		raw, err := stream.RecvRaw()
 		if errors.Is(err, io.EOF) {
 			if !gotFinishReason && assistant.Len() == 0 && reasoning.Len() == 0 && len(toolCalls) == 0 {
-				return nil, errors.New("stream ended without finish_reason")
+				return nil, false, errors.New("stream ended without finish_reason")
 			}
 			break
 		}
 		if err != nil {
-			return nil, err
+			// 流内错误事件(如中转的 529 overloaded):错误信息只有文案、
+			// 不带状态码。是否重试由调用方按"是否已产出输出"统一判定。
+			return nil, hasOutput(), err
 		}
 		raw = bytes.TrimSpace(raw)
 		if len(raw) == 0 {
@@ -682,7 +694,7 @@ func (a *App) streamOpenAIChat(ctx context.Context, cfg ConfigState, model strin
 		}
 		var resp legacyopenai.ChatCompletionStreamResponse
 		if err := json.Unmarshal(raw, &resp); err != nil {
-			return nil, fmt.Errorf("decode chat stream event: %w", err)
+			return nil, hasOutput(), fmt.Errorf("decode chat stream event: %w", err)
 		}
 		if resp.Usage != nil {
 			usage = modelUsageFromLegacy(resp.Usage, raw)
@@ -787,7 +799,7 @@ func (a *App) streamOpenAIChat(ctx context.Context, cfg ConfigState, model strin
 		ToolCalls:  normalizeToolCalls(toolCalls),
 		Usage:      usage,
 		StopReason: stopReason,
-	}, nil
+	}, hasOutput(), nil
 }
 
 func isIncompleteChatStreamJSON(err error) bool {
@@ -805,28 +817,34 @@ func isIncompleteStreamJSON(err error) bool {
 func (a *App) streamOpenAIResponses(ctx context.Context, cfg ConfigState, model string, messages []legacyopenai.ChatCompletionMessage, tools []legacyopenai.Tool, onEvent func(modelStreamEvent)) (*modelStreamResult, error) {
 	body, explicitPromptCache := buildOpenAIResponsesRequest(cfg, model, messages, tools)
 
-	var stream *openAIResponsesSSEStream
-	var err error
 	maxRetries := effectiveLLMRetries(cfg)
-	for attempt := 0; attempt <= maxRetries; attempt++ {
-		stream, err = newOpenAIResponsesSSEStream(ctx, cfg, body, explicitPromptCache)
-		if err == nil || ctx.Err() != nil {
-			break
+	result, emitted, err := a.openAIResponsesStreamAttempt(ctx, cfg, body, explicitPromptCache, onEvent)
+	// 只重试"尚未产出任何输出"的失败:建流失败,或消费阶段在产出内容前
+	// 失败(流内 error/response.failed 事件等)。此时重试无重复输出风险;
+	// 已产出内容的中断交给上层 runChat 做整轮重试。
+	for attempt := 1; err != nil && !emitted && ctx.Err() == nil && attempt <= maxRetries && shouldRetryLLMError(err); attempt++ {
+		wait := llmRetryDelay(attempt)
+		emitLLMRetryEvent(onEvent, attempt, maxRetries, err, wait)
+		select {
+		case <-time.After(wait):
+		case <-ctx.Done():
+			return nil, ctx.Err()
 		}
-		if attempt < maxRetries && shouldRetryLLMError(err) {
-			wait := llmRetryDelay(attempt + 1)
-			emitLLMRetryEvent(onEvent, attempt+1, maxRetries, err, wait)
-			select {
-			case <-time.After(wait):
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			}
-			continue
-		}
-		break
+		result, emitted, err = a.openAIResponsesStreamAttempt(ctx, cfg, body, explicitPromptCache, onEvent)
 	}
 	if err != nil {
 		return nil, err
+	}
+	return result, nil
+}
+
+// openAIResponsesStreamAttempt 执行一次完整的 Responses 建流与消费。第二个
+// 返回值报告本次尝试是否已产出输出(文本/推理/工具调用/图片任一非空),
+// 调用方据此判定适配器内重试是否安全(无输出则重试不会造成重复)。
+func (a *App) openAIResponsesStreamAttempt(ctx context.Context, cfg ConfigState, body oaresp.ResponseNewParams, explicitPromptCache bool, onEvent func(modelStreamEvent)) (*modelStreamResult, bool, error) {
+	stream, err := newOpenAIResponsesSSEStream(ctx, cfg, body, explicitPromptCache)
+	if err != nil {
+		return nil, false, err
 	}
 	defer stream.Close()
 
@@ -859,6 +877,9 @@ func (a *App) streamOpenAIResponses(ctx context.Context, cfg ConfigState, model 
 		}
 		emitModelStreamEvent(onEvent, modelStreamEvent{Image: &img})
 	}
+	hasOutput := func() bool {
+		return assistant.Len() > 0 || reasoning.Len() > 0 || len(toolCalls) > 0 || len(images) > 0
+	}
 
 	for stream.Next() {
 		event, rawEvent, err := stream.Event()
@@ -866,7 +887,7 @@ func (a *App) streamOpenAIResponses(ctx context.Context, cfg ConfigState, model 
 			if isIncompleteStreamJSON(err) && len(toolCalls) == 0 && (assistant.Len() > 0 || reasoning.Len() > 0) {
 				break
 			}
-			return nil, fmt.Errorf("decode responses stream event: %w", err)
+			return nil, hasOutput(), fmt.Errorf("decode responses stream event: %w", err)
 		}
 		switch event.Type {
 		case "response.output_text.delta":
@@ -965,16 +986,13 @@ func (a *App) streamOpenAIResponses(ctx context.Context, cfg ConfigState, model 
 		}
 	}
 	if err := stream.Err(); err != nil {
-		return nil, err
+		return nil, hasOutput(), err
 	}
 	if streamErr != nil {
-		return nil, streamErr
+		return nil, hasOutput(), streamErr
 	}
 	if !gotTerminalEvent {
-		return nil, errors.New("stream ended without terminal event")
-	}
-	if streamErr != nil {
-		return nil, streamErr
+		return nil, hasOutput(), errors.New("stream ended without terminal event")
 	}
 	content := assistant.String()
 	if content == "" && finalOutputText != "" {
@@ -986,7 +1004,7 @@ func (a *App) streamOpenAIResponses(ctx context.Context, cfg ConfigState, model 
 		ToolCalls: normalizeToolCalls(toolCalls),
 		Images:    images,
 		Usage:     usage,
-	}, nil
+	}, hasOutput(), nil
 }
 
 const openAIResponsesPromptCacheAnchorText = "<ally-prompt-cache-boundary/>"
@@ -1271,9 +1289,7 @@ func (a *App) streamAnthropicMessages(ctx context.Context, cfg ConfigState, mode
 		stopReason = ""
 		stopSequence = ""
 		stream := client.Messages.NewStreaming(ctx, params)
-		gotAnyEvent := false
 		for stream.Next() {
-			gotAnyEvent = true
 			event := stream.Current()
 			switch event.Type {
 			case "message_start":
@@ -1347,9 +1363,12 @@ func (a *App) streamAnthropicMessages(ctx context.Context, cfg ConfigState, mode
 		if streamErr == nil {
 			streamErr = errors.New("stream ended without terminal event")
 		}
-		// 适配器保留原有的 pre-first-event retry；已经产生内容的中断
-		// 交给上层 runChat 做整轮重试，避免把半截输出拼进下一次请求。
-		if !gotAnyEvent && ctx.Err() == nil && attempt < maxRetries && shouldRetryLLMError(streamErr) {
+		// 适配器只重试"尚未产出任何输出"的失败(与 streamOpenAIChat /
+		// streamOpenAIResponses 的重试守卫一致):无输出则重试不会造成
+		// 重复;已经产生内容的中断交给上层 runChat 做整轮重试,避免把
+		// 半截输出拼进下一次请求。
+		if assistant.Len() == 0 && reasoning.Len() == 0 && len(toolCalls) == 0 &&
+			ctx.Err() == nil && attempt < maxRetries && shouldRetryLLMError(streamErr) {
 			wait := llmRetryDelay(attempt + 1)
 			emitLLMRetryEvent(onEvent, attempt+1, maxRetries, streamErr, wait)
 			select {
