@@ -39,8 +39,10 @@ npx -y @firecrawl/anydoc - --format csv < d.csv   # 从 stdin 读
 
 - **路径**：传给 anydoc 的文件路径用 forward slash。Windows 绝对路径在 Git Bash 里写成 `/c/Users/...` 或 `"C:/Users/..."`；workspace 相对路径直接用。
 - **格式检测看内容不看扩展名**：默认不传 `--format`，让内容检测生效（扩展名标错的文件通常也能转对）。仅当检测无法工作时显式传入：stdin 读入的 CSV（无内容签名、无扩展名可依）；文件缺失或标错扩展名且转换报错时，补 `--format <规范名>` 重试一次。
-- **大文件**：优先 `-o out.md` 落盘到 workspace，再用 `read` 工具分段读取，不要把全部输出流进上下文。
-- **网络输入**：可用管道 `curl -s <url> | npx -y @firecrawl/anydoc -` 直接转换远端文档；大 PDF 同样建议落盘再转。
+- **默认输出文件（本地文档）**：用户未指定正式输出路径、仅需转换后供 Ally 阅读时，输出到源文件同目录，文件名使用 `.<源文件名去掉最终扩展名>_ally_convert.md`。例如 `docs/report.v2.pdf` 转为 `docs/.report.v2_ally_convert.md`；只去掉最后一个扩展名。该文件是 Ally 生成的阅读缓存，不视为正式交付物。
+- **避免覆盖**：如果同目录已有同名转换文件，默认不要覆盖，先告知用户或改用明确的新输出路径；只有用户明确要求重新转换并允许覆盖时才覆盖。
+- **大文件**：优先使用上述同目录转换文件（或用户指定的 `-o` 路径）落盘，再用 `read` 工具分段读取，不要把全部输出流进上下文。
+- **网络输入**：可用管道 `curl -s <url> | npx -y @firecrawl/anydoc -` 直接转换远端文档；网络输入没有源文件同目录时，使用用户指定的 `-o` 路径，或按临时文件规则保存到 workspace 的 `.tmp/anydoc/`。
 - **与内置 read 的关系**：Ally 的 `read` 工具只支持纯文本和图片，不解析办公/PDF 文档——`read` 遇到这类文件会返回 `E_DOCUMENT_UNSUPPORTED` 并指向本 skill。读文档 = 先用本 skill 转 `.md` 落盘，再 `read` 转换产物。
 - **代码集成**：若要在用户项目的代码里使用（而非本 skill 的命令行调用），官方建议优先用库而不是 shell 调用：npm `@firecrawl/anydoc`、PyPI `firecrawl-anydoc`、crates.io `anydoc`，三端 API 一致（`toMarkdown` / `to_markdown`）。
 - **单向转换**：anydoc 只做文档 → Markdown，不支持反向生成 docx 等。
