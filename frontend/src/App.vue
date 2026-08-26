@@ -3696,7 +3696,9 @@ function bindRuntimeEvents() {
       try {
         const parsed = JSON.parse(data.result);
         if (parsed?.data?.cancelled) setToolStatus(existing, 'error');
-      } catch (_) { /* ignore */ }
+      } catch (e) {
+        console.error('[tool:result] failed to parse command cancel state', data?.name, data?.toolCallId, e);
+      }
     }
     existing.body = formatToolBody(data.name, data.result);
     existing.chip = formatToolChip(data.name, data.result);
@@ -3752,7 +3754,9 @@ function bindRuntimeEvents() {
         const resultPath = d.path || (Array.isArray(d.files) && d.files[0]?.path) || '';
         if (resultPath && !existing.title) existing.title = resultPath;
       }
-    } catch (_) { /* ignore */ }
+    } catch (e) {
+      console.error('[tool:result] failed to parse read_file meta', data?.name, data?.toolCallId, e);
+    }
   }
 
   function applyReadBatchEntries(existing, data, resultData) {
@@ -3774,7 +3778,9 @@ function bindRuntimeEvents() {
         }
         existing.batchEntries = entries;
       }
-    } catch (e) { /* ignore */ }
+    } catch (e) {
+      console.error('[tool:result] failed to parse batch read entries', data?.name, data?.toolCallId, e);
+    }
   }
 
   function applyEditDiff(existing, data, resultData) {
@@ -3811,7 +3817,9 @@ function bindRuntimeEvents() {
       else if (editedFiles.length > 1) existing.editFilePath = `${editedFiles.length} files`;
       if (editData.warnings) existing.editWarnings = editData.warnings;
       if (editData.changedLinesBlock) existing.editChangedLinesBlock = editData.changedLinesBlock;
-    } catch (_) { /* ignore */ }
+    } catch (e) {
+      console.error('[tool:result] failed to parse edit diff', data?.name, data?.toolCallId, e);
+    }
   }
 
   const toolResultAdapters = {
