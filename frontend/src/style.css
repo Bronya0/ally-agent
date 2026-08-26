@@ -2991,8 +2991,8 @@ code, pre {
 }
 
 .diff-body-scroll {
-  max-height: 360px;
-  overflow-y: auto;
+  /* No internal scroll: collapsed view relies on line-count truncation (DEFAULT_MAX_LINES),
+     expanded view flows into the page's own scrolling. */
 }
 
 .diff-raw-fallback {
@@ -3005,10 +3005,6 @@ code, pre {
   font-family: var(--ally-mono-font);
   font-size: var(--ally-diff-font-size);
   line-height: 1.58;
-}
-
-.diff-view.expanded .diff-body-scroll {
-  max-height: none;
 }
 
 .diff-list {
