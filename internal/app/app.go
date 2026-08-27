@@ -1258,7 +1258,7 @@ func (a *App) ensureInitialized() error {
 	}
 	a.disabledSkills = normalizeSkillNameList(a.config.DisabledSkills)
 	a.config.DisabledSkills = cloneStringSlice(a.disabledSkills)
-	// command 截断落盘文件位于工作区 .ally/tmp，启动时清理过期文件
+	// command 截断落盘文件位于工作区 .tmp，启动时清理过期文件（含旧 .ally/tmp 遗留）
 	cleanupCommandSpillFiles(a.config.Workspace)
 	a.initialized = true
 	return nil

@@ -269,9 +269,9 @@ func (a *App) runCommandWithConfig(parent context.Context, cfg ConfigState, req 
 	cmd.Dir = cwd
 	cmd.Env = commandEnvironment(cfg)
 	buf := &limitedBuffer{limit: maxToolOutput}
-	// 完整输出延迟落盘：仅在内存缓冲首次溢出时创建 .ally/tmp 下的 spill 文件，
+	// 完整输出延迟落盘：仅在内存缓冲首次溢出时创建工作区 .tmp 下的 spill 文件，
 	// 把已缓冲前缀写入后继续边跑边写；未截断的小输出全程不碰磁盘。
-	tw := &teeWriter{primary: buf, spillDir: filepath.Join(root, ".ally", "tmp")}
+	tw := &teeWriter{primary: buf, spillDir: filepath.Join(root, ".tmp")}
 	buf.onTruncate = tw.startSpill
 	cmd.Stdout = tw
 	cmd.Stderr = tw
@@ -442,7 +442,8 @@ func (w *teeWriter) startSpill(prefix []byte) {
 }
 
 // cleanupCommandSpillFiles removes stale command full-output temp files
-// older than 24 hours. Called once at startup to avoid unbounded accumulation.
+// older than 24 hours from the workspace .tmp directory (and the legacy
+// .ally/tmp location), once at startup, to avoid unbounded accumulation.
 func cleanupCommandSpillFiles(workspaceRoot string) {
 	if strings.TrimSpace(workspaceRoot) == "" {
 		return
@@ -451,19 +452,26 @@ func cleanupCommandSpillFiles(workspaceRoot string) {
 	if err != nil {
 		return
 	}
-	dir := filepath.Join(abs, ".ally", "tmp")
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return
+	dirs := []string{
+		filepath.Join(abs, ".tmp"),
+		// Legacy location used before the switch to workspace .tmp; sweep
+		// leftovers so they do not linger forever.
+		filepath.Join(abs, ".ally", "tmp"),
 	}
 	cutoff := time.Now().Add(-24 * time.Hour)
-	for _, entry := range entries {
-		name := entry.Name()
-		if !strings.HasPrefix(name, "ally-run-") || !strings.HasSuffix(name, ".log") {
+	for _, dir := range dirs {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
 			continue
 		}
-		if info, err := entry.Info(); err == nil && info.ModTime().Before(cutoff) {
-			_ = os.Remove(filepath.Join(dir, name))
+		for _, entry := range entries {
+			name := entry.Name()
+			if !strings.HasPrefix(name, "ally-run-") || !strings.HasSuffix(name, ".log") {
+				continue
+			}
+			if info, err := entry.Info(); err == nil && info.ModTime().Before(cutoff) {
+				_ = os.Remove(filepath.Join(dir, name))
+			}
 		}
 	}
 }
