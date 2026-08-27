@@ -586,9 +586,23 @@ Public License v3. See the LICENSE file for details.
         <n-form-item-gi :label="$t('settings.apiFormat')">
           <n-select v-model:value="modelDraft.apiFormat" :options="apiFormatOptions" />
         </n-form-item-gi>
-        <n-form-item-gi v-if="!selectedCatalogProvider" label="Model">
-          <n-input v-model:value="modelDraft.model" :placeholder="modelPlaceholder(modelDraft.apiFormat)" />
-        </n-form-item-gi>
+        <cn-form-item-gi v-if="!selectedCatalogProvider" label="Model">
+          <n-input-group>
+            <n-input v-model:value="modelDraft.model" :placeholder="modelPlaceholder(modelDraft.apiFormat)" />
+            <n-button secondary :loading="modelListLoading" @click="fetchRemoteModels">
+              {{ $t('settings.fetchModels') }}
+            </n-button>
+          </n-input-group>
+          <n-select
+            v-if="remoteModelOptions.length"
+            class="remote-model-select"
+            :value="null"
+            :options="remoteModelOptions"
+            filterable
+            :placeholder="$t('settings.fetchModelsPick')"
+            @update:value="(v) => { modelDraft.model = v; }"
+          />
+        </cn-form-item-gi>
         <n-form-item-gi :label="normalizeApiFormat(modelDraft.apiFormat) === 'anthropic_messages' ? $t('settings.baseUrlNoV1') : 'Base URL'">
           <n-input v-model:value="modelDraft.baseUrl" :placeholder="apiFormatDefaultBaseUrl(modelDraft.apiFormat)" autocomplete="off" />
         </n-form-item-gi>
@@ -702,7 +716,7 @@ import {
   GetMcpConfig, GetMcpServers, SaveMcpConfig, RestartMcpServers,
   ListSkills, ActivateSkill, DeactivateSkill, ClearSkills, GetActiveSkills,
   ListTools, OpenPathInFileManager,
-  TestModelConnection,
+  TestModelConnection, FetchModelList,
   DetectSystemProxy, TestProxy,
   SelectBackgroundImage, ClearBackgroundImage,
   GetAutostartEnabled, SetAutostartEnabled,
@@ -1108,6 +1122,28 @@ async function ensureModelCatalog() {
     message.error(t('settings.providerCatalogLoadFailed', { error: err }));
   } finally {
     modelCatalogLoading.value = false;
+  }
+}
+
+const remoteModels = ref([]);
+const modelListLoading = ref(false);
+const remoteModelOptions = computed(() => remoteModels.value.map((name) => ({ label: name, value: name })));
+
+async function fetchRemoteModels() {
+  if (modelListLoading.value) return;
+  const baseUrl = (modelDraft.baseUrl || '').trim() || apiFormatDefaultBaseUrl(modelDraft.apiFormat);
+  const apiKeys = normalizeModelApiKeys(modelDraft.apiKeys || []);
+  modelListLoading.value = true;
+  try {
+    remoteModels.value = await FetchModelList(baseUrl, apiKeys[0] || '');
+    if (!remoteModels.value.length) {
+      message.warning(t('settings.fetchModelsEmpty'));
+    }
+  } catch (err) {
+    remoteModels.value = [];
+    message.error(t('settings.fetchModelsFailed', { error: String(err && err.message ? err.message : err) }));
+  } finally {
+    modelListLoading.value = false;
   }
 }
 
@@ -2337,6 +2373,11 @@ watch(() => props.visible, (visible) => {
   color: #8a8a8a;
   font-size: 12px;
   line-height: 1.5;
+}
+
+.remote-model-select {
+  width: 100%;
+  margin-top: 6px;
 }
 
 .model-form-modal {
