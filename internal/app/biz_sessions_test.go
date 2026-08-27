@@ -11,9 +11,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	openai "github.com/sashabaranov/go-openai"
 )
@@ -442,6 +444,123 @@ func TestHistoryLoadRepairsDanglingToolCalls(t *testing.T) {
 				t.Fatalf("loaded history still carries dangling tool call %s", call.ID)
 			}
 		}
+	}
+}
+
+func TestSessionIndexUnreadableDegradesToEmpty(t *testing.T) {
+	app := NewApp()
+	app.initialized = true
+	app.sessionsDir = t.TempDir()
+	app.historiesDir = t.TempDir()
+
+	snapshot := SessionSnapshot{
+		ID:        "snapshot-survivor",
+		Title:     "Recovered from disk",
+		Workspace: "/tmp/workspace",
+		CreatedAt: 100,
+		UpdatedAt: 200,
+		Messages: []map[string]any{
+			{"role": "user", "content": "hello"},
+		},
+	}
+	if err := app.SaveSession(snapshot); err != nil {
+		t.Fatalf("SaveSession() error = %v", err)
+	}
+
+	// Simulate an unreadable index (legacy oversized file, truncated write,
+	// manual corruption). ListSessions must degrade to the empty-index path
+	// instead of failing every session operation.
+	if err := os.WriteFile(app.sessionIndexPath(), []byte("not json at all"), 0o600); err != nil {
+		t.Fatalf("write index: %v", err)
+	}
+
+	entries, err := app.ListSessions()
+	if err != nil {
+		t.Fatalf("ListSessions() must not fail on an unreadable index: %v", err)
+	}
+	found := false
+	for _, entry := range entries {
+		if entry.ID == "snapshot-survivor" && entry.HasSnapshot {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("session snapshot on disk must be rediscovered after index loss: %#v", entries)
+	}
+	// The next index write replaces the corrupted file with a healthy one.
+	if _, err := app.ListSessions(); err != nil {
+		t.Fatalf("second ListSessions() error = %v", err)
+	}
+	reloaded, err := app.readSessionIndexLocked()
+	if err != nil {
+		t.Fatalf("read rebuilt index: %v", err)
+	}
+	if len(reloaded) == 0 {
+		t.Fatal("rebuilt index must contain rediscovered entries")
+	}
+}
+
+func TestSessionIndexWritePrunesOldestEntries(t *testing.T) {
+	app := NewApp()
+	app.initialized = true
+	app.sessionsDir = t.TempDir()
+	app.historiesDir = t.TempDir()
+
+	base := time.Now().Add(-time.Hour).UnixMilli()
+	for i := 0; i <= maxSessionIndexEntries; i++ {
+		entry := SessionIndexEntry{
+			ID:        fmt.Sprintf("s-%04d", i),
+			Title:     fmt.Sprintf("Session %d", i),
+			Workspace: "/tmp/workspace",
+			CreatedAt: base + int64(i)*1000,
+			UpdatedAt: base + int64(i)*1000,
+		}
+		if err := app.SaveSessionIndex(entry); err != nil {
+			t.Fatalf("SaveSessionIndex(%d) error = %v", i, err)
+		}
+	}
+
+	entries, err := app.readSessionIndexLocked()
+	if err != nil {
+		t.Fatalf("read index: %v", err)
+	}
+	if len(entries) != maxSessionIndexEntries {
+		t.Fatalf("index size after pruning = %d, want %d", len(entries), maxSessionIndexEntries)
+	}
+	// entries are sorted newest-first: everything except the oldest (s-0000)
+	// must survive.
+	ids := make(map[string]bool, len(entries))
+	for _, entry := range entries {
+		ids[entry.ID] = true
+	}
+	if ids["s-0000"] {
+		t.Fatal("oldest entry should have been evicted first")
+	}
+	if !ids[fmt.Sprintf("s-%04d", maxSessionIndexEntries)] {
+		t.Fatal("newest entry must survive eviction")
+	}
+}
+
+func TestNormalizeSessionIndexEntryClampsFirstPrompt(t *testing.T) {
+	longPrompt := strings.Repeat("很长的提问字符", 200) // > maxSessionIndexFirstPromptChars runes
+	entry := normalizeSessionIndexEntry(SessionIndexEntry{
+		ID:          "prompt-clamp",
+		Title:       "Prompt clamp",
+		FirstPrompt: longPrompt,
+	})
+	if got := []rune(entry.FirstPrompt); len(got) > maxSessionIndexFirstPromptChars {
+		t.Fatalf("FirstPrompt length = %d, want <= %d", len(got), maxSessionIndexFirstPromptChars)
+	}
+	if !strings.HasSuffix(entry.FirstPrompt, "\u2026") {
+		t.Fatalf("clamped FirstPrompt must end with an ellipsis: %q", entry.FirstPrompt[len(entry.FirstPrompt)-3:])
+	}
+	// Long multi-line input collapses to single-spaced single line.
+	messy := normalizeSessionIndexEntry(SessionIndexEntry{
+		ID:          "prompt-messy",
+		FirstPrompt: "hello \n\n world \t tab",
+	}).FirstPrompt
+	if messy != "hello world tab" {
+		t.Fatalf("whitespace-collapsed FirstPrompt = %q", messy)
 	}
 }
 

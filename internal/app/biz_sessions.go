@@ -25,9 +25,19 @@ import (
 )
 
 const (
-	maxSessionIndexJSONBytes    = 2 * 1024 * 1024
+	// maxSessionIndexEntries bounds how many entries sessions/index.json
+	// keeps. Index writes never fail on volume; the oldest entries (lowest
+	// UpdatedAt) are evicted instead. Evicted snapshots and histories stay
+	// on disk and are rediscovered by ListSessions(), so eviction costs at
+	// most repeated re-discovery work, never conversation data.
+	maxSessionIndexEntries = 2000
+
 	maxSessionSnapshotJSONBytes = 16 * 1024 * 1024
 	maxSessionIndexTitleChars   = 160
+	// SessionIndexEntry.FirstPrompt is a short list preview, not
+	// conversation content. Clamp it wherever an entry is normalized so a
+	// giant first prompt cannot bloat the index across rewrites.
+	maxSessionIndexFirstPromptChars = 160
 )
 
 // SessionIndexEntry is the small, frontend-facing metadata record stored in
@@ -350,15 +360,17 @@ func (a *App) readSessionIndexLocked() ([]SessionIndexEntry, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(data) > maxSessionIndexJSONBytes {
-		return nil, fmt.Errorf("session index exceeds %d bytes", maxSessionIndexJSONBytes)
-	}
 	var entries []SessionIndexEntry
 	if len(strings.TrimSpace(string(data))) == 0 {
 		return []SessionIndexEntry{}, nil
 	}
 	if err := json.Unmarshal(data, &entries); err != nil {
-		return nil, err
+		// An unreadable index (truncated write, manual edit) must never fail
+		// every session operation. Degrade to empty: ListSessions() rescans
+		// snapshots and histories from disk and the next index write replaces
+		// this file with a healthy one.
+		log.Printf("session index %s unreadable (%v); rebuilding from disk", path, err)
+		return []SessionIndexEntry{}, nil
 	}
 	return normalizeSessionIndexEntries(entries), nil
 }
@@ -369,6 +381,7 @@ func (a *App) writeSessionIndexLocked(entries []SessionIndexEntry) error {
 		return nil
 	}
 	entries = normalizeSessionIndexEntries(entries)
+	entries = pruneSessionIndexEntries(entries)
 	data, err := json.MarshalIndent(entries, "", "  ")
 	if err != nil {
 		return err
@@ -404,11 +417,7 @@ func normalizeSessionIndexEntries(entries []SessionIndexEntry) []SessionIndexEnt
 func normalizeSessionIndexEntry(entry SessionIndexEntry) SessionIndexEntry {
 	entry.ID = strings.TrimSpace(entry.ID)
 	entry.Title = normalizeSessionIndexTitle(entry.Title)
-	if strings.TrimSpace(entry.FirstPrompt) != "" {
-		entry.FirstPrompt = normalizeSessionIndexTitle(entry.FirstPrompt)
-	} else {
-		entry.FirstPrompt = ""
-	}
+	entry.FirstPrompt = normalizeSessionIndexPreview(entry.FirstPrompt)
 	entry.Workspace = strings.TrimSpace(entry.Workspace)
 	entry.ExtraRoots = cloneStringSlice(entry.ExtraRoots)
 	now := time.Now().UnixMilli()
@@ -425,6 +434,18 @@ func normalizeSessionIndexEntry(entry SessionIndexEntry) SessionIndexEntry {
 		entry.ContextTokens = 0
 	}
 	return entry
+}
+
+// normalizeSessionIndexPreview collapses whitespace and clamps an index
+// preview (FirstPrompt) to its own budget. Unlike titles, an absent preview
+// stays empty instead of falling back to a placeholder.
+func normalizeSessionIndexPreview(preview string) string {
+	preview = strings.Join(strings.Fields(preview), " ")
+	runes := []rune(preview)
+	if len(runes) > maxSessionIndexFirstPromptChars {
+		return string(runes[:maxSessionIndexFirstPromptChars-1]) + "\u2026"
+	}
+	return preview
 }
 
 func normalizeSessionIndexTitle(title string) string {
@@ -478,6 +499,24 @@ func replaceSessionIndexEntry(entries []SessionIndexEntry, replacement SessionIn
 	}
 	result = append(result, replacement)
 	return normalizeSessionIndexEntries(result)
+}
+
+// pruneSessionIndexEntries keeps the index volume-bounded by evicting the
+// oldest entries (lowest UpdatedAt) once the count exceeds
+// maxSessionIndexEntries. Only metadata rows are removed: the corresponding
+// snapshot/history files stay on disk and ListSessions() re-derives entries
+// for them on demand, so eviction is always recoverable.
+func pruneSessionIndexEntries(entries []SessionIndexEntry) []SessionIndexEntry {
+	if len(entries) <= maxSessionIndexEntries {
+		return entries
+	}
+	sort.SliceStable(entries, func(i, j int) bool {
+		if entries[i].UpdatedAt != entries[j].UpdatedAt {
+			return entries[i].UpdatedAt > entries[j].UpdatedAt
+		}
+		return entries[i].CreatedAt > entries[j].CreatedAt
+	})
+	return entries[:maxSessionIndexEntries]
 }
 
 func sessionIndexEntryFromSnapshot(snapshot SessionSnapshot) SessionIndexEntry {
@@ -1283,4 +1322,3 @@ func textFromMessage(m openai.ChatCompletionMessage) string {
 	}
 	return m.Content
 }
-

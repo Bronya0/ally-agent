@@ -22,7 +22,7 @@
   - host_notifications.go — 桌面通知服务注入（`SetNotifier`）与任务完成/出错/取消提示音 `notifyCompletion`（Windows 内置 toast 事件音，其他平台默认音；仅窗口最小化时发送，700ms 冷却）
   - host_update_relaunch_darwin.go / host_update_relaunch_other.go — 更新后重启辅助
   - biz_config.go — 配置域：`mergeConfig`、`SaveConfig`/`ReloadConfig`、key 池归一化、`effectiveConfig`、`pathRuntime`、`appDataDir` [Lines: 512]
-  - biz_sessions.go — 会话索引/快照/历史持久化：gzip 历史读写、裁剪、会话文件原子替换；磁盘为三类并行文件（`sessions/index.json` + `sessions/<id>.json.gz` 快照 + `histories/<id>.json.gz`） [Lines: 1286]
+  - biz_sessions.go — 会话索引/快照/历史持久化：gzip 历史读写、裁剪、会话文件原子替换；磁盘为三类并行文件（`sessions/index.json` + `sessions/<id>.json.gz` 快照 + `histories/<id>.json.gz`）；索引写不因体量失败：读端解析失败降级为空并从磁盘重建，条目超 `maxSessionIndexEntries` (2000) 时按最旧淘汰，FirstPrompt 归一化时截断到 160 字符 [Lines: 1323]
   - biz_context.go — 请求消息组装：`buildMessages`、系统上下文、todo 状态、附件上下文、上下文 Token 统计与缓存 [Lines: 1071]
   - biz_prompt.go — 系统提示词管线：`buildSystemPromptParts`、skill 元数据、全局记忆索引、AGENTS/CLAUDE 加载
   - biz_workspace.go — 工作区文件列表、workspace map（`sessionWorkspaceMap` 按会话冻结快照，保证跨 run 前缀字节稳定）、路径搜索索引、基于 `go-git` gitignore 子包的根规则匹配 [Lines: 908]
