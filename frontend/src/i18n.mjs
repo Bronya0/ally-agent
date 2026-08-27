@@ -483,6 +483,7 @@ const zh = {
 
   'render.failed': '{label} 渲染失败',
   'avatar.aria': '带旋涡和闪电的 Ally 竖瞳',
+  'avatar.sakuraToggle': '点击眼球：唤醒/收回 一阵吹飞樱花与青草的风',
   'splash.loading': '正在点亮工作区，整理上下文和工具链。',
 
   'scheduled.title': '定时任务',
@@ -1157,6 +1158,7 @@ Response language: Preserve the response language already used in the current co
   'git.title': 'Git changes', 'git.loading': 'Loading diff...', 'git.empty': 'No Git changes.',
   'git.noText': 'No text diff.', 'git.selectFile': 'Select a file to view its diff.', 'git.loadFailed': 'Failed to load Git diff',
   'render.failed': '{label} failed to render', 'avatar.aria': 'Ally vertical eye with a vortex and lightning',
+  'avatar.sakuraToggle': 'Click the eye: summon or dismiss a breeze of sakura petals and grass',
   'splash.loading': 'Lighting up the workspace and preparing context and tools.',
 
   'scheduled.title': 'Scheduled tasks', 'scheduled.total': '{count} tasks', 'scheduled.runningCount': '{count} running',

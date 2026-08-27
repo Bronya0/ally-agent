@@ -8,7 +8,8 @@ This file is part of ally-agent, licensed under the GNU General
 Public License v3. See the LICENSE file for details.
 -->
 <template>
-  <div ref="root" class="ally-avatar" role="img" :aria-label="$t('avatar.aria')">
+  <div ref="root" class="ally-avatar" role="img" :aria-label="$t('avatar.aria')"
+       :title="$t('avatar.sakuraToggle')" @click="toggleSakura">
     <svg class="ally-eye" viewBox="0 0 164 164" aria-hidden="true">
       <!-- 欢迎页多 Tab 共享同一组渐变（inlineDefs=false）；启动页内联独立渐变
            （inlineDefs=true），避免两个 SVG 同时引用同一 paint server 触发
@@ -68,6 +69,10 @@ Public License v3. See the LICENSE file for details.
       <path d="M26 82c13 18 32 28 56 28s43-10 56-28" fill="none" stroke="#e0a458" stroke-width="2" opacity="0.32" stroke-linecap="round"/>
     </svg>
 
+    <!-- 樱花青草风特效层挂在 body 顶层，切 Tab 不中断；
+         启动页实例(inlineDefs)不挂载，避免和欢迎页形成双份全屏层 -->
+    <SakuraBreeze v-if="!inlineDefs" :open="sakuraActive" />
+
     <!-- Keep the speech bubble outside SVG. HTML layout and CSS positioning are
          not reliably applied to a div created inside the SVG namespace. -->
     <div v-if="speech" class="ally-speech" role="status" @click.stop="dismissSpeech">
@@ -81,6 +86,7 @@ Public License v3. See the LICENSE file for details.
 import { ref, onMounted, onBeforeUnmount, useId } from 'vue';
 import { isZh } from '../i18n.mjs';
 import { EYE_STYLES } from '../data/eyeLines.mjs';
+import { useSakuraBreeze } from '../composables/sakuraBreeze.mjs';
 
 const props = defineProps({
   // 启动页单实例用内联渐变（唯一 ID，自带资源），与欢迎页共享渐变互不干扰；
@@ -162,6 +168,11 @@ const speech = ref(null); // 当前台词，null = 不显示
 const active = ref(false); // 用户是否正看着本眼睛
 let speechTimer = null; // 气泡展示时长定时器
 let nextSpeechTimer = null; // 下一次搭话定时器
+
+// —— 樱花青草风特效：全局单例开关（composables/sakuraBreeze.mjs 持有共享状态）。
+// 唯一特效层挂在 App 根部、body 顶层全屏播放：切工作区 Tab 不中断，
+// 任意 Tab 的眼球点击的是同一份开关，A Tab 开启后 B Tab 再点即关。
+const { toggleSakura } = useSakuraBreeze();
 
 const SPEECH_SHOW_MS = 3400; // 与 .ally-speech 的 CSS 动画时长一致
 const SPEECH_GAP_MS = 18000; // 固定间隔：每 18 秒一句
@@ -309,6 +320,7 @@ onBeforeUnmount(() => {
   position: relative;
   width: 164px;
   height: 164px;
+  cursor: pointer;
 }
 
 .ally-eye {

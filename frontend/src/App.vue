@@ -358,6 +358,9 @@ Public License v3. See the LICENSE file for details.
             </div>
           </n-modal>
 
+          <!-- 樱花青草风特效层：全局唯一实例，body 顶层播放，切 Tab 不中断 -->
+          <SakuraBreeze :open="sakuraOn" />
+
           <SplashScreen v-if="splashVisible" @done="splashVisible = false" />
         </n-message-provider>
       </n-notification-provider>
@@ -447,6 +450,7 @@ import MessageAttachments from './components/MessageAttachments.vue';
 import ReadGroupCard from './components/ReadGroupCard.vue';
 import RenderBoundary from './components/RenderBoundary.vue';
 import SplashScreen from './components/SplashScreen.vue';
+import SakuraBreeze from './components/SakuraBreeze.vue';
 import SubagentInlineCard from './components/SubagentInlineCard.vue';
 import WelcomeMessage from './components/WelcomeMessage.vue';
 import ToolCallCard from './components/ToolCallCard.vue';
@@ -459,6 +463,10 @@ import TaskCenterPanel from './components/TaskCenterPanel.vue';
 import TokenStatsModal from './components/TokenStatsModal.vue';
 import GamePanel from './games/GamePanel.vue';
 import { assignConfig, defaultConfig } from './utils/config.mjs';
+import { useSakuraBreeze } from './composables/sakuraBreeze.mjs';
+
+// 樱花青草风特效的全局开关；唯一特效层实例见模板根部
+const { sakuraOn } = useSakuraBreeze();
 import { modelConfigIdentity, normalizeApiKeysArray, normalizeReasoningEffort } from './utils/modelConfigIO.mjs';
 import { buildVersion } from './utils/buildVersion.js';
 import { computeEditStats, formatEditStats } from './utils/diff.js';
