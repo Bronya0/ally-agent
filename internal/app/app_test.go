@@ -491,17 +491,6 @@ func TestMergeConfigClearsModelsWhenEmptyListProvided(t *testing.T) {
 	}
 }
 
-func TestMergeConfigAcceptsExplicitZeroTemperature(t *testing.T) {
-	base := ConfigState{Temperature: 0.7}
-	overlay := ConfigState{Temperature: 0, temperatureSet: true}
-
-	got := mergeConfig(base, overlay)
-
-	if got.Temperature != 0 {
-		t.Fatalf("expected explicit zero temperature, got %v", got.Temperature)
-	}
-}
-
 func TestParsePythonVersion(t *testing.T) {
 	tests := []struct {
 		name string

@@ -362,7 +362,6 @@ type ModelConfig struct {
 	// backward compatibility with older configs and frontends.
 	APIKeys       []string `json:"apiKeys,omitempty"`
 	Model         string   `json:"model"`
-	Temperature   float32  `json:"temperature"`
 	MaxTokens     int      `json:"maxTokens"`
 	ContextWindow int      `json:"contextWindow"`
 	ReasoningTag  string   `json:"reasoningTag,omitempty"`
@@ -392,7 +391,6 @@ type ConfigState struct {
 	Model               string        `json:"model"`
 	Workspace           string        `json:"workspace"`
 	ExtraRoots          []string      `json:"extraRoots,omitempty"`
-	Temperature         float32       `json:"temperature"`
 	MaxTokens           int           `json:"maxTokens"`
 	ContextWindow       int           `json:"contextWindow"`
 	TokenParam          string        `json:"tokenParam,omitempty"`
@@ -466,7 +464,6 @@ type ConfigState struct {
 	ToolFontSize   float64 `json:"toolFontSize,omitempty"`
 	SubFontSize    float64 `json:"subFontSize,omitempty"`
 	AuxFontSize    float64 `json:"auxFontSize,omitempty"`
-	temperatureSet bool
 	// noAdapterRetry 是进程内非序列化标记:多 key 模式下置 true,让适配器
 	// 内部关闭退避重试,由 streamModelResponse 的外层循环统一承担重试与
 	// 故障切换,避免 N 个 key × 适配器重试组合爆炸。
@@ -2807,7 +2804,6 @@ func (a *App) SwitchModel(index int) error {
 	a.config.APIKey = m.APIKey
 	a.config.APIKeys = cloneStringSlice(m.APIKeys)
 	a.config.Model = m.Model
-	a.config.Temperature = m.Temperature
 	a.config.MaxTokens = m.MaxTokens
 	if m.ContextWindow > 0 {
 		a.config.ContextWindow = m.ContextWindow

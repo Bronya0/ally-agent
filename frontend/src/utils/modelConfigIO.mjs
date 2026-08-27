@@ -122,7 +122,7 @@ function normalizeImportedModel(model) {
     apiKeys,
     model: modelId,
     temperature: Number.isFinite(Number(model.temperature)) ? Number(model.temperature) : 0.2,
-    maxTokens: Number.isFinite(Number(model.maxTokens)) && Number(model.maxTokens) > 0 ? Math.trunc(Number(model.maxTokens)) : 384000,
+    maxTokens: Number.isFinite(Number(model.maxTokens)) && Number(model.maxTokens) > 0 ? Math.trunc(Number(model.maxTokens)) : 131072,
     contextWindow: Number.isFinite(Number(model.contextWindow)) && Number(model.contextWindow) > 0 ? Math.trunc(Number(model.contextWindow)) : 1000000,
     reasoningTag: String(model.reasoningTag || 'reasoning_content').trim() || 'reasoning_content',
     tokenParam: normalizeTokenParam(model.tokenParam),

@@ -206,7 +206,7 @@ func (t *userAgentTransport) RoundTrip(req *http.Request) (*http.Response, error
 // so consecutive LLM requests reuse the same HTTP/2 connection pool instead
 // of paying a fresh TLS handshake (100-500ms) on every request. The key is
 // derived only from the proxy-related config fields, so changes to unrelated
-// ConfigState fields (model, temperature, etc.) do not invalidate the cache.
+// ConfigState fields (model, etc.) do not invalidate the cache.
 //
 // The cache has small, bounded cardinality: at most 3 modes × 2 allowPrivate
 // = 6 entries per process, so it never grows unboundedly across a session.

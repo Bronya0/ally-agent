@@ -143,12 +143,10 @@ func baseURLForAPIFormat(cfg ConfigState) string {
 }
 
 func defaultMaxTokensForAPIFormat(format string) int {
-	if normalizeAPIFormat(format) == apiFormatAnthropicMessages {
-		// Modern Claude models ship a 64K max output; the legacy 8192 default no
-		// longer matches any current catalog entry.
-		return 64000
-	}
-	return 384000
+	// Unified fallback for every API format: one number, no per-format
+	// branching. 131072 (128K) covers current catalog entries; relay
+	// endpoints typically clamp server-side.
+	return 131072
 }
 
 func calculateExpression(req CalculateRequest) (CalculateResult, error) {

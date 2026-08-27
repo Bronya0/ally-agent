@@ -52,7 +52,7 @@ export function applyCatalogPreset(provider, model, current = {}) {
     apiFormat: String(provider.apiFormat || 'openai_chat').trim(),
     baseUrl: String(provider.baseUrl || '').trim(),
     model: String(model.id || '').trim(),
-    maxTokens: Number(model.maxTokens) || Number(current.maxTokens) || 384000,
+    maxTokens: Number(model.maxTokens) || Number(current.maxTokens) || 131072,
     contextWindow: Number(model.contextWindow) || Number(current.contextWindow) || 1000000,
     reasoningTag: String(model.reasoningTag || current.reasoningTag || 'reasoning_content').trim() || 'reasoning_content',
   };

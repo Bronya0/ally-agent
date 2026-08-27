@@ -32,8 +32,7 @@ func defaultConfigState() ConfigState {
 		BaseURL:             defaultBaseURL,
 		Model:               defaultModel,
 		Workspace:           defaultWorkspaceDir(),
-		Temperature:         0.2,
-		MaxTokens:           384000,
+		MaxTokens:           131072,
 		ContextWindow:       1000000,
 		AllowPrivateNetwork: true,
 		ProxyMode:           proxyModeOff,
@@ -70,10 +69,6 @@ func readConfigFile(path string) (ConfigState, error) {
 	var loaded ConfigState
 	if err := json.Unmarshal(data, &loaded); err != nil {
 		return ConfigState{}, err
-	}
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(data, &fields); err == nil {
-		_, loaded.temperatureSet = fields["temperature"]
 	}
 	return loaded, nil
 }
@@ -179,9 +174,6 @@ func mergeConfig(base, overlay ConfigState) ConfigState {
 	// 每次 StartChat 时通过 effectiveConfig 透传到 cfg）。
 	if overlay.ExtraRoots != nil {
 		base.ExtraRoots = cloneStringSlice(overlay.ExtraRoots)
-	}
-	if overlay.temperatureSet || overlay.Temperature != 0 {
-		base.Temperature = overlay.Temperature
 	}
 	if overlay.MaxTokens != 0 {
 		base.MaxTokens = overlay.MaxTokens
@@ -439,7 +431,6 @@ func (a *App) SaveConfig(req ConfigState) error {
 		strings.TrimSpace(a.config.ProxyURL) != strings.TrimSpace(req.ProxyURL) ||
 		strings.TrimSpace(a.config.ProxyNoProxy) != strings.TrimSpace(req.ProxyNoProxy)
 	a.config = mergeConfig(a.config, req)
-	a.config.Temperature = req.Temperature
 	a.config.CustomPrompt = req.CustomPrompt
 	a.config.AllowPrivateNetwork = req.AllowPrivateNetwork
 	a.config.GitBashPath = req.GitBashPath
@@ -506,7 +497,6 @@ func (a *App) TestModelConnection(model ModelConfig) error {
 		APIKey:          strings.TrimSpace(model.APIKey),
 		APIKeys:         cloneStringSlice(model.APIKeys),
 		Model:           strings.TrimSpace(model.Model),
-		Temperature:     model.Temperature,
 		MaxTokens:       32,
 		ContextWindow:   model.ContextWindow,
 		TokenParam:      normalizeTokenParam(model.TokenParam),

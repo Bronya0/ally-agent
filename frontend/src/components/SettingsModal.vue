@@ -973,7 +973,7 @@ function defaultModelDraft(source = {}) {
     // Keep at least one (possibly empty) row so the form always shows a key
     // input; empty strings are stripped again on save/test.
     apiKeys: normalizedKeys.length ? normalizedKeys : [''],
-    maxTokens: Number.isFinite(Number(source.maxTokens)) && Number(source.maxTokens) > 0 ? Number(source.maxTokens) : (draft?.maxTokens || 384000),
+    maxTokens: Number.isFinite(Number(source.maxTokens)) && Number(source.maxTokens) > 0 ? Number(source.maxTokens) : (draft?.maxTokens || 131072),
     contextWindow: Number.isFinite(Number(source.contextWindow)) && Number(source.contextWindow) > 0 ? Number(source.contextWindow) : (draft?.contextWindow || 1000000),
     reasoningTag: String(source.reasoningTag || draft?.reasoningTag || 'reasoning_content').trim() || 'reasoning_content',
     // "auto" and the legacy "max_tokens" both send max_tokens, so collapse the
@@ -1158,7 +1158,7 @@ async function startAddModelDraft() {
     apiKey: '',
     apiKeys: [],
     model: '',
-    maxTokens: draft.maxTokens || 384000,
+    maxTokens: draft.maxTokens || 131072,
     contextWindow: draft.contextWindow || 1000000,
   });
   modelEditorVisible.value = true;
@@ -1200,7 +1200,7 @@ async function testModelConnection() {
       apiKeys,
       model,
       temperature: modelDraft.temperature ?? 0.2,
-      maxTokens: modelDraft.maxTokens || 384000,
+      maxTokens: modelDraft.maxTokens || 131072,
       contextWindow: modelDraft.contextWindow || 1000000,
       reasoningTag: modelDraft.reasoningTag || 'reasoning_content',
       tokenParam: modelDraft.tokenParam || 'auto',
@@ -1236,7 +1236,7 @@ function commitModelDraft() {
     apiKeys,
     model,
     temperature: modelDraft.temperature ?? draft.temperature ?? 0.2,
-    maxTokens: modelDraft.maxTokens || draft.maxTokens || 384000,
+    maxTokens: modelDraft.maxTokens || draft.maxTokens || 131072,
     contextWindow: modelDraft.contextWindow || draft.contextWindow || 1000000,
     reasoningTag: modelDraft.reasoningTag || 'reasoning_content',
     tokenParam: modelDraft.tokenParam || 'auto',
@@ -1269,7 +1269,7 @@ function applyModelToDraft(model) {
   draft.apiKey = draft.apiKeys[0] || '';
   draft.model = model.model || '';
   draft.temperature = model.temperature ?? draft.temperature ?? 0.2;
-  draft.maxTokens = Number.isFinite(Number(model.maxTokens)) && Number(model.maxTokens) > 0 ? Number(model.maxTokens) : (draft.maxTokens || 384000);
+  draft.maxTokens = Number.isFinite(Number(model.maxTokens)) && Number(model.maxTokens) > 0 ? Number(model.maxTokens) : (draft.maxTokens || 131072);
   draft.contextWindow = Number.isFinite(Number(model.contextWindow)) && Number(model.contextWindow) > 0 ? Number(model.contextWindow) : (draft.contextWindow || 1000000);
   draft.reasoningTag = model.reasoningTag || 'reasoning_content';
   draft.tokenParam = model.tokenParam || 'auto';

@@ -19,7 +19,7 @@ export function defaultConfig() {
     model: 'deepseek-v4-flash',
     workspace: '',
     temperature: 0.2,
-    maxTokens: 384000,
+    maxTokens: 131072,
     contextWindow: 1000000,
     tokenParam: 'auto',
     customPrompt: '',
