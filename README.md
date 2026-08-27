@@ -22,22 +22,27 @@ Download packages for Windows, macOS, and Linux from the [Releases page](https:/
 
 - Work with local projects through natural-language conversations, attachments, and persistent sessions
 - Read, search, create, edit, and safely delete files with workspace boundaries and optimistic concurrency checks
+- Read, edit, create, delete, and run commands on remote SSH workspaces, reusing your existing `ssh` login
 - Review bounded visual diffs, multi-file edits, command output, and detailed tool failure reasons directly in chat
 - Use OpenAI Chat Completions, OpenAI Responses, Anthropic Messages, and compatible model services
 - Capture provider reasoning fields or configurable reasoning tags such as `reasoning_content`, `think`, and `sink`
 - Configure per-workspace model selection so each project keeps its own model preference
 - Tune reasoning depth with configurable thinking strength (reasoningEffort) per model
 - Configure multiple API keys with automatic priority failover and cooldown recovery for high availability
+- Speed up model setup with a bundled provider/model preset catalog that pre-fills API format, base URL, and context window
 - Render sandboxed interactive HTML results in chat for small tools, previews, and widgets
+- Render Mermaid diagrams inline with wheel zoom, drag panning, and double-click reset, plus KaTeX math and highlighted code blocks
+- Attach images for vision-capable models and preview model-generated images in chat
 - Delegate substantial work to parallel sub-agents with live steps, tool activity, token usage, and inline final summaries
 - Connect MCP servers through stdio, SSE, or Streamable HTTP using either a form editor or raw JSON
-- Extend workflows with discoverable Skills and durable cross-project memory; built-in skills include `codegraph` and `playwright-cli`
-- Manage multiple workspaces, chat sessions, todos, and process-local scheduled tasks
+- Extend workflows with discoverable Skills and durable cross-project memory; built-in skills include `codegraph`, `playwright-cli`, and `anydoc` (Office/PDF to Markdown)
+- Manage multiple workspaces, chat sessions, todos, and process-local scheduled tasks, with a built-in workspace explorer and file editor
 - Run short shell commands and tracked background processes with a task-center log viewer; Windows automatically discovers Git Bash and falls back to PowerShell when necessary
+- Fetch web pages and call HTTP APIs with bounded response sizes, timeouts, redirect limits, and per-host rate limits
 - Visualize token usage trends with an asynchronous token statistics dashboard
 - Personalize the chat with a custom background image and adjustable opacity
 - Auto-update on Windows and macOS (DMG replace flow), with staged directory rollback on failure
-- Optionally follow the Windows system proxy or use a manual HTTP/HTTPS/SOCKS5 proxy consistently across models, HTTP tools, MCP, commands, and background services
+- Follow the Windows or macOS system proxy, or set a manual HTTP/HTTPS/SOCKS5 proxy applied consistently across models, HTTP tools, MCP, commands, and background services
 - Use localized Chinese or English UI, startup warnings, settings, and tool status messages
 - Search code with bundled ripgrep—no separate installation required in release packages
 
