@@ -586,23 +586,31 @@ Public License v3. See the LICENSE file for details.
         <n-form-item-gi :label="$t('settings.apiFormat')">
           <n-select v-model:value="modelDraft.apiFormat" :options="apiFormatOptions" />
         </n-form-item-gi>
-        <cn-form-item-gi v-if="!selectedCatalogProvider" label="Model">
-          <n-input-group>
-            <n-input v-model:value="modelDraft.model" :placeholder="modelPlaceholder(modelDraft.apiFormat)" />
-            <n-button secondary :loading="modelListLoading" @click="fetchRemoteModels">
-              {{ $t('settings.fetchModels') }}
-            </n-button>
-          </n-input-group>
+        <n-form-item-gi v-if="!selectedCatalogProvider" label="Model">
           <n-select
-            v-if="remoteModelOptions.length"
-            class="remote-model-select"
-            :value="null"
+            v-model:value="modelDraft.model"
+            class="model-input-select"
             :options="remoteModelOptions"
             filterable
-            :placeholder="$t('settings.fetchModelsPick')"
-            @update:value="(v) => { modelDraft.model = v; }"
-          />
-        </cn-form-item-gi>
+            tag
+            :placeholder="modelPlaceholder(modelDraft.apiFormat)"
+            :loading="modelListLoading"
+            @update:value="onModelDraftSelected"
+          >
+            <template #action>
+              <n-button
+                size="tiny"
+                block
+                secondary
+                :loading="modelListLoading"
+                @click="fetchRemoteModels"
+              >
+                <template #icon><CloudDownloadOutlined /></template>
+                {{ modelListLoading ? $t('settings.fetchingModels') : $t('settings.fetchModels') }}
+              </n-button>
+            </template>
+          </n-select>
+        </n-form-item-gi>
         <n-form-item-gi :label="normalizeApiFormat(modelDraft.apiFormat) === 'anthropic_messages' ? $t('settings.baseUrlNoV1') : 'Base URL'">
           <n-input v-model:value="modelDraft.baseUrl" :placeholder="apiFormatDefaultBaseUrl(modelDraft.apiFormat)" autocomplete="off" />
         </n-form-item-gi>
@@ -703,6 +711,7 @@ import { buildModelConfigExport, mergeModelConfigs, modelConfigIdentity, normali
 import { saveTextFile } from '../utils/download.mjs';
 import CloseOutlined from '@vicons/antd/CloseOutlined';
 import PlusOutlined from '@vicons/antd/PlusOutlined';
+import CloudDownloadOutlined from '@vicons/antd/CloudDownloadOutlined';
 import {
   CUSTOM_PROVIDER_ID,
   applyCatalogPreset,
@@ -1129,6 +1138,10 @@ const remoteModels = ref([]);
 const modelListLoading = ref(false);
 const remoteModelOptions = computed(() => remoteModels.value.map((name) => ({ label: name, value: name })));
 
+function onModelDraftSelected(value) {
+  modelDraft.model = typeof value === 'string' ? value : (value == null ? modelDraft.model : String(value));
+}
+
 async function fetchRemoteModels() {
   if (modelListLoading.value) return;
   const baseUrl = (modelDraft.baseUrl || '').trim() || apiFormatDefaultBaseUrl(modelDraft.apiFormat);
@@ -1212,6 +1225,8 @@ function cancelModelDraft() {
   modelEditorVisible.value = false;
   modelEditorIndex.value = -1;
   selectedCatalogProviderId.value = CUSTOM_PROVIDER_ID;
+  remoteModels.value = [];
+  modelListLoading.value = false;
 }
 
 async function testModelConnection() {
@@ -2375,9 +2390,8 @@ watch(() => props.visible, (visible) => {
   line-height: 1.5;
 }
 
-.remote-model-select {
+.model-input-select {
   width: 100%;
-  margin-top: 6px;
 }
 
 .model-form-modal {
