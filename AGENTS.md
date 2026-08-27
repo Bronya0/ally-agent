@@ -282,7 +282,7 @@ Built-in skill loading:
 Currently shipped built-in skills (details in each SKILL.md):
 
 - `playwright-cli` — drives a real browser through the `playwright-cli` npm package via `command`; defers command/parameter details to `playwright-cli --help`.
-- `codegraph` — generates or incrementally updates `CODEGRAPH.md` (six fixed H2 sections, plain-text bullets, capped at 800 lines, in-place section updates via `edit`).
+- `codegraph` — generates or incrementally updates `CODEGRAPH.md` as a per-file feature index (feature→file lookup table, one line per file with key symbols, parallel subagent analysis for large projects, capped at 800 lines, in-place incremental updates via `edit`).
 
 ### Enable/Disable
 

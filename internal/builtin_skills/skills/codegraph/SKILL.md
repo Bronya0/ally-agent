@@ -1,149 +1,88 @@
 ---
 name: codegraph
-description: 生成或更新工作区根目录的 CODEGRAPH.md 代码图谱，供 AI 编码代理快速理解项目架构、模块职责、依赖与调用流。
+description: 生成或更新工作区根目录的 CODEGRAPH.md 文件级功能速查图谱，供 AI 编码代理快速定位"某个功能在哪个文件"。
 type: code-graph
 whenToUse: 用户要求生成项目代码图谱、刷新 CODEGRAPH.md，或在重大架构变更后更新架构导航文件时。
 ---
 
 # Code Graph Skill
 
-生成或更新工作区根目录的 `CODEGRAPH.md`。该文件**不是给人读的**，而是给后续的 AI 编码代理在改代码前快速理解架构、模块职责、依赖与调用流的可机读导航图。优化目标是 token 效率与语义清晰度，而不是排版美观。
+生成或更新工作区根目录的 `CODEGRAPH.md`。该文件**不是给人读的**，而是给后续 AI 编码代理在改代码前快速定位"某个功能在哪个文件"的可机读导航图。核心形态：**一行一文件的功能索引**（一句话功能 + 关键符号），按目录/前缀分组，外加一张"功能 → 文件"反查表。
 
 ## 1. 决策逻辑（先做这一步）
 
 读取工作区根目录的 `CODEGRAPH.md`：
 
-- **不存在** → 从零生成。
-- **已存在** → 读现有文件，与当前代码对比（新增文件、删除文件、结构变化），**就地增量更新**：只改实际变动的章节，保留其余内容。不要整体重写，不要从零再生成一次。
+- **不存在**，或用户要求**重新生成/清空重写** → 走第 2 节完整流程从零生成。
+- **已存在且只是架构小改** → **就地增量更新**：只改实际变动的行（新增/删除文件、符号改名、职责变化），用 `edit` 修改对应分组，不要整体重写。
 
-## 2. 探测流程
+## 2. 生成流程（重写时，四步）
 
-1. **语言/工具链探测**：读根目录配置文件（`go.mod`、`package.json`、`Cargo.toml`、`pyproject.toml`、`pom.xml`、`*.csproj`、`mix.exs`、`rebar.config`、`build.gradle`、`CMakeLists.txt`、`Makefile` 等）确定技术栈。多语言项目逐一列出。
-2. **模块树绘制**：用 `list_files` 走目录。按目录与 import/包路径把相关文件归到模块。
-3. **关键文件精读**：每个模块只读**入口点、核心类型、公共 API、行数最高的几个文件**。提取 struct/class/interface/trait 定义、函数/方法签名、import/use/require 关系。不要逐行读实现。
-4. **关系图构建**：谁 import 谁？哪个模块依赖哪个？从入口点出发的主调用链是什么？
-5. **写入**：用 `create`（新建）或 `edit`（更新已存在文件）。
+### 第 1 步：完整文件清单
+
+一次 `list_files`（maxDepth 6~8、limit 1000）拿全项目文件树。从中排除非代码文件（图片/字体/license/纯文档），得到"代码文件全集"。这份清单是后面覆盖核对的基准。
+
+### 第 2 步：并行子代理分析
+
+代码文件 >50 个时，用 `subagent` 按目录/技术栈切分，**在一条消息里并行派出多个子代理**，每个带明确的文件清单。任务模板要点：
+
+- 角色按方向命名（如"后端代码分析员"、"前端代码分析员"）；`maxSteps` 按目录体量 15~40。
+- 开头声明：只分析，绝不修改任何文件。
+- 分析方法（写进任务）：
+  - Go：`grep` 模式 `^func |^type ` 逐文件枚举顶层符号判断职责；需要导出名时补一轮 `^func [A-Z]`。
+  - JS/TS：`grep` 模式 `export ` 枚举导出；Vue 组件看 props/emits 与模板主要区块。
+  - 大文件（>50KB）只读文件头注释、常量区与关键片段，不通读。
+  - 测试文件不细读，从 Test 函数名概括测试目标。
+- 输出统一格式（便于直接拼装）：
+  - 实现：`- 文件名 — 一句话功能（15~40字）；关键: 符号1, 符号2`
+  - 测试：`- 文件名 — 测试 <目标> 的 <内容概括>`
+- 要求按指定分组标题输出。
+
+≤50 个代码文件的小项目可不用子代理，自己按上述方法直接分析。
+
+### 第 3 步：写入
+
+`create`（overwrite）一次写入整个文件。把各子代理输出按目录归位、统一措辞风格，并补齐子代理遗漏的文件。格式见第 3 节。
+
+### 第 4 步：覆盖核对
+
+对照第 1 步的"代码文件全集"逐个核对：每个代码文件都能在 CODEGRAPH.md 找到对应行（琐碎测试文件允许合并一行）。缺了补上，删掉指向已不存在文件的行。
 
 ## 3. 输出格式（严格规范）
 
-`CODEGRAPH.md` 必须严格按以下结构。文件以单个 H1 `# Code Graph: <project-name>` 开头，`<project-name>` 是工作区根目录的 basename（不是 package name）。所有路径**必须是工作区相对路径**。文件以一个空行结尾。全文不超过 800 行。
+H1 `# Code Graph: <project-name> — 文件级功能速查`（`<project-name>` = 工作区根目录 basename）。所有路径**工作区相对**。全文 ≤800 行，以空行结尾。结构顺序：
 
-下面六个 H2 章节按顺序出现：
+1. **开头 blockquote**（3~4 行）：用途（快速定位"某个功能在哪个文件"）、维护约定（增删文件或重大架构变更后同步更新、保持精炼）、项目特有约定（如平台后缀 `_windows`/`_darwin` 文件的含义）。按项目实际写。
+2. **`## 功能 → 文件速查表`**：两列 Markdown 表格，左列"想找什么"（用用户会问的功能措辞），右列去哪里（文件 + 核心函数）。挑 10~25 个最常找的功能点。这是使用频率最高的部分，优先保证准确。
+3. **`## 核心调用流（简要）`**：一段话讲主链路（入口 → 核心循环 → 分发点 → 持久化），函数名反引号 + 括号标注来源文件。只写主干，不展开分支。
+4. **按目录分组的 H2 章节**：每个目录/前缀群一个 H2，标题带一句话定位（如 `## internal/app/ — orch_ 前缀（工具编排）`）。组内一行一文件；测试文件放组尾，用 `测试:` 行，琐碎的可合并。
+5. **`## 构建与脚本`**（收尾）：构建任务、CI、生成脚本一行一个。
 
-### `## Language and Build`
+行格式规则：
 
-每个主要语言/框架一行，bullet 列表：
-
-```
-- language: <name> (<version or toolchain if detected>)
-```
-
-例：
-- `language: Go 1.22 (go.mod)`
-- `language: TypeScript / Node 20 (package.json + vite)`
-
-### `## Module Hierarchy`
-
-层级 bullet 列表。每个目录/模块节点带一个语义 tag 和一行职责说明，下面列出文件及其贡献。
-
-格式：
-```
-- [<tag>] <relative-path>/ — <one-line purpose>
-  - <filename> — <what it contains, key types/functions>
-  - <filename> [Lines: N] — <if large, mention why>
-```
-
-每个节点选**最贴切的一个** tag：
-
-| tag | 含义 |
-|-----|------|
-| `[entry]` | 程序入口、main、bootstrap、app shell |
-| `[handler]` | HTTP/事件 handler、路由、controller、presenter |
-| `[model]` | 数据模型、entity、schema、struct、DTO |
-| `[adapter]` | 外部集成、provider 封装、client、driver |
-| `[service]` | 业务逻辑、use case、workflow、orchestration |
-| `[infra]` | 基础设施、config、storage、networking、platform |
-| `[util]` | 共享工具、helper、常量、类型 |
-| `[test]` | 测试套件、mock、fixture、集成测试 |
-| `[ui]` | UI 组件、页面、screen、view、template |
-| `[config]` | 配置、环境、常量 |
-| `[data]` | 数据访问、repository、DAO、migration、query |
-| `[proto]` | protobuf / IDL / schema 定义 |
-| `[build]` | 构建脚本、CI/CD、Docker、tooling |
-
-### `## Key Types / Interfaces`
-
-每个模块列出架构上最重要的类型，一行一个，格式：
-```
-[<kind>] <name> — <responsibility>
-```
-
-`<kind>` 可选：`struct`、`class`、`interface`、`trait`、`enum`、`config`、`typedef`、`type`、`protocol`、`record`。
-
-**只列跨文件出现或对架构中心的类型**，跳过内部 helper 和琐碎 wrapper。
-
-### `## Call Flow / Data Flow`
-
-主执行路径。缩进箭头标注，缩进随调用深度递增。格式：
-```
-- [<action>] <source> → <target>  // <semantic meaning>
-```
-
-action 前缀：
-- `[call]` 函数/方法直接调用
-- `[data]` 数据流（返回值、channel、stream、props、events）
-- `[ext]` 外部系统调用（DB、API、文件系统、网络）
-- `[event]` 事件发射、回调、订阅、hook
-- `[init]` 初始化 / bootstrap 时
-
-调用目标是已知模块/层时，后缀 `[<module-tag>]`。
-
-例：
-```
-- [call] main() → StartChat  // entry point
-  - [call] StartChat → buildMessages()    [service]
-  - [call] StartChat → buildToolsWithMcp()  [infra]
-    - [ext] buildToolsWithMcp() → mcp.ListTools()  // MCP server discovery
-```
-
-### `## Inter-Module Dependencies`
-
-模块间依赖边。格式：
-```
-<relative-path> → <relative-path>  // <nature of dependency>
-```
-
-### `## Hot Paths / Files to Focus`
-
-架构上关键、频繁变动或体量很大的文件：
-- `[***] <path> — <reason>` 关键/中心/极大
-- `[**] <path> — <reason>` 重要
-- `[*] <path> — <reason>` 值得注意
+- 一行一文件，功能描述 15~40 字，写"做什么"不写"怎么实现"。
+- `关键: ` 后只放 2~4 个最重要的导出符号，不复制签名、不写函数体。
+- 平台分叉的琐碎文件（空实现/单函数）可一行概括多个；重要平台文件单独列。
+- 生成产物标注"（勿手改）"并写明来源链路。
+- 不输出 Mermaid/ASCII 图；功能速查表是唯一的表格。
 
 ## 4. 约束
 
-- **不要**输出 Mermaid、ASCII 图、表格或任何视觉格式——纯文本 bullet 与缩进。
-- **不要**记录内部 helper、private 实现、测试 mock 细节。
-- **不要**复制函数体或长签名，只保留名字与一句话职责。
-- 全文不超过 800 行。
-- 所有路径必须工作区相对；绝对路径会污染跨机器复用。
-- 若项目 >500 个源文件，**只聚焦 3-5 个架构最重要的模块**，并明说"其他模块存在但已省略"。
-- 单文件扁平模块用一句话说明，不要硬塞层级。
-- 大项目优先模块级粒度，避免文件级膨胀。
-- 增量更新时，保留 H1 的 `<project-name>` 除非工作区目录改名。
-- `create`/`edit` 完成后用 `read` 回读校验。
+- 全文 ≤800 行。>500 文件的项目优先用归并行（平台分叉、测试合并）压缩行数，但每个文件仍须可检索。
+- 语言跟随用户/项目主语言。
+- 增量更新时保留既有行文风格与 H1，不要顺手重排无关内容。
+- `create`/`edit` 完成后 `read` 回读校验。
 
 ## 5. 校验
 
-写完后 `read` 回读 `CODEGRAPH.md`，确认：
+回读 `CODEGRAPH.md` 确认：
 
-1. 至少 15 行有效内容。
-2. 以 H1 `# Code Graph: <name>` 开头。
-3. 包含 `## Language and Build`、`## Module Hierarchy`，以及其余 H2 中的至少两个。
-4. 最后一行是空行。
+1. H1 开头，含 `## 功能 → 文件速查表` 与 `## 核心调用流` 章节。
+2. 对照文件清单抽查 10 个代码文件，均能找到对应行，无明显遗漏。
+3. 最后一行是空行。
 
-任一项不满足，诊断并修复。若项目过小装不下完整图谱，直接说明"项目较小"并列出文件与角色。
+任一项不满足，诊断并修复。项目很小时（<15 个代码文件）可精简反查表，但一行一文件的索引保留。
 
 ## 6. 入口动作
 
-从 `list_files` 走项目根 + 读根目录配置文件开始。
+从 `list_files` 项目根开始拿完整清单。重写时以当前代码为准，不要先抄旧 CODEGRAPH.md 正文。

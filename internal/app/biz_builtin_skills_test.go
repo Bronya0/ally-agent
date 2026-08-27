@@ -129,8 +129,8 @@ func TestBuiltinSkillEntriesContainsCodeGraph(t *testing.T) {
 	if !strings.Contains(cg.embeddedContent, "CODEGRAPH.md") {
 		t.Fatalf("expected embedded content to reference CODEGRAPH.md")
 	}
-	if !strings.Contains(cg.embeddedContent, "Module Hierarchy") {
-		t.Fatalf("expected embedded content to specify the Module Hierarchy section")
+	if !strings.Contains(cg.embeddedContent, "速查表") {
+		t.Fatalf("expected embedded content to specify the feature-lookup table section")
 	}
 	if !strings.HasPrefix(cg.Path, "builtin://") {
 		t.Fatalf("expected Path to start with builtin://, got %q", cg.Path)
