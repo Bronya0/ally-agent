@@ -362,8 +362,12 @@ func (a *App) runCommandWithConfig(parent context.Context, cfg ConfigState, req 
 	close(outputDone)
 	outputWG.Wait()
 	outputFilePath := ""
+	var outputFileSize int64
 	if f := tw.spill; f != nil {
 		name := f.Name()
+		if info, statErr := f.Stat(); statErr == nil {
+			outputFileSize = info.Size()
+		}
 		_ = f.Close()
 		if buf.truncated {
 			outputFilePath = name
@@ -384,9 +388,10 @@ func (a *App) runCommandWithConfig(parent context.Context, cfg ConfigState, req 
 		DurationMS:     duration,
 		Truncated:      buf.truncated,
 		OutputFilePath: outputFilePath,
+		OutputFileBytes: outputFileSize,
 	}
 	if outputFilePath != "" {
-		result.Output += fmt.Sprintf("\n\n[输出已截断：仅保留前 %d KB。完整输出已保存到 %s，可用 read 工具读取该文件查看全部内容]", maxToolOutput/1024, outputFilePath)
+		result.Output += fmt.Sprintf("\n\n[输出已截断：仅保留前 %d KB。完整输出已保存到 %s（共 %s），可用 read 工具读取该文件查看全部内容；大文件建议分段或按需检索，避免整读]", maxToolOutput/1024, outputFilePath, formatMapFileSize(outputFileSize))
 	}
 	if err != nil {
 		var exitErr *exec.ExitError

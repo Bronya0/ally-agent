@@ -333,6 +333,9 @@ func compactToolDataForModel(name string, result toolResult, fullJSON string) st
 		}
 		if r.OutputFilePath != "" {
 			data["outputFilePath"] = r.OutputFilePath
+			if r.OutputFileBytes > 0 {
+				data["outputFileBytes"] = r.OutputFileBytes
+			}
 			data["outputNote"] = "完整输出已保存到该文件，可用 read 工具读取全部内容。"
 		}
 		return marshalToolResultOrFallback(toolResult{OK: true, Data: data}, fullJSON)

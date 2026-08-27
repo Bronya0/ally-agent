@@ -858,6 +858,9 @@ type CommandResult struct {
 	ShellPath      string `json:"shellPath"`
 	Output         string `json:"output"`
 	OutputFilePath string `json:"outputFilePath,omitempty"`
+	// OutputFileBytes 是截断落盘文件的字节体积，让模型在读全量前能
+	// 自行判断是否分段读取。仅 OutputFilePath 非空时有意义。
+	OutputFileBytes int64 `json:"outputFileBytes,omitempty"`
 	ExitCode       int    `json:"exitCode"`
 	TimedOut       bool   `json:"timedOut"`
 	Cancelled      bool   `json:"cancelled"`
