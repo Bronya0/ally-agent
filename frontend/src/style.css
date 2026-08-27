@@ -2569,8 +2569,12 @@ code, pre {
   word-break: break-word;
 }
 
-/* ── Rich tool cards (compact) ── */
+/* ── Rich tool cards ── */
 
+/* One uniform vertical rhythm for every rich-tool-card, independent of tool
+   kind or whether several calls were batched: the card itself always carries
+   a 6px bottom gap, and a 6px gap is pulled up from any directly preceding
+   message block, so batched and single calls are spaced identically. */
 .rich-tool-card {
   border: none;
   background: transparent;
@@ -2581,15 +2585,14 @@ code, pre {
      implied by content-visibility:auto does not clip it. */
   margin-left: -20px;
   padding-left: 20px;
-  margin-bottom: 10px;
+  margin-bottom: 6px;
   border-radius: 4px;
   content-visibility: auto;
   contain-intrinsic-size: 42px;
 }
 
-/* Keep consecutive tool calls compact without changing tool-to-message spacing. */
-.rich-tool-card:has(+ .rich-tool-card) {
-  margin-bottom: 3px;
+.messages .message:has(+ .rich-tool-card) {
+  margin-bottom: 6px;
 }
 
 .rich-tool-card.non-interactive {
