@@ -4687,12 +4687,8 @@ async function sendPrompt() {
       return;
     }
   }
-  const hasApiKey = !!(config.apiKey || (Array.isArray(config.apiKeys) && config.apiKeys.length));
-  if (!hasApiKey) {
-    openSettings('models');
-    message.warning(t('app.config.apiKeyRequired'));
-    return;
-  }
+  // API Key 可选：本地推理服务（如 Ollama/LM Studio 中转）无需鉴权；后端在 key
+  // 为空时不会发送 Authorization 头，空 key 配置直接放行，错误由请求本身回报。
   if (!session) return;
   // 运行中发送:进入注入路径,消息排队等当前工具批次完成后加入模型上下文。
   if (session.runId) {

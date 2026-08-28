@@ -333,11 +333,6 @@ Public License v3. See the LICENSE file for details.
               {{ proxyStatus.error || $t('settings.proxyPacUnsupported') }}
             </n-alert>
           </div>
-          <n-alert v-if="proxyTestResult" :type="proxyTestResult.ok ? 'success' : 'error'" :show-icon="false" class="proxy-test-result">
-            {{ proxyTestResult.ok
-              ? $t('settings.proxyTestSuccess', { status: proxyTestResult.statusCode, duration: proxyTestResult.durationMs, proxy: proxyTestResult.proxy || $t('settings.proxyDirect') })
-              : $t('settings.proxyTestFailed', { error: proxyTestResult.error || '-' }) }}
-          </n-alert>
         </section>
 
         <!-- Models -->
@@ -643,12 +638,24 @@ Public License v3. See the LICENSE file for details.
           </div>
         </n-form-item-gi>
         <n-form-item-gi label="Max Tokens">
-          <n-input-number v-model:value="modelDraft.maxTokens" :min="0" style="width: 100%" />
+          <n-select
+            :value="modelDraft.maxTokens"
+            :options="maxTokensOptions"
+            class="model-input-select"
+            filterable
+            tag
+            @update:value="onMaxTokensSelected"
+          />
         </n-form-item-gi>
         <n-form-item-gi :label="$t('settings.reasoningTag')">
-          <n-input
-            v-model:value="modelDraft.reasoningTag"
+          <n-select
+            :value="modelDraft.reasoningTag"
+            :options="reasoningTagOptions"
+            class="model-input-select"
+            filterable
+            tag
             :placeholder="$t('settings.reasoningTagHint')"
+            @update:value="onReasoningTagSelected"
           />
         </n-form-item-gi>
         <n-form-item-gi
@@ -664,23 +671,14 @@ Public License v3. See the LICENSE file for details.
           <n-select v-model:value="modelDraft.reasoningEffort" :options="reasoningEffortOptions" />
         </n-form-item-gi>
         <n-form-item-gi :label="$t('settings.contextWindow')" :span="2">
-          <div class="context-window-field">
-            <n-input-number v-model:value="modelDraft.contextWindow" :min="0" />
-            <div class="context-window-presets" :aria-label="$t('settings.contextWindowPresets')">
-              <span class="context-window-presets-label">{{ $t('settings.contextWindowPresets') }}</span>
-              <n-button-group size="small">
-                <n-button
-                  v-for="preset in contextWindowQuickOptions"
-                  :key="preset.value"
-                  :type="modelDraft.contextWindow === preset.value ? 'primary' : 'default'"
-                  :aria-pressed="modelDraft.contextWindow === preset.value"
-                  @click="modelDraft.contextWindow = preset.value"
-                >
-                  {{ preset.label }}
-                </n-button>
-              </n-button-group>
-            </div>
-          </div>
+          <n-select
+            :value="modelDraft.contextWindow"
+            :options="contextWindowOptions"
+            class="model-input-select"
+            filterable
+            tag
+            @update:value="onContextWindowSelected"
+          />
         </n-form-item-gi>
       </n-grid>
       <n-alert v-if="selectedCatalogProvider" type="info" :show-icon="false" class="model-format-hint">
@@ -852,7 +850,6 @@ const testingModel = ref(false);
 const proxyDetecting = ref(false);
 const proxyTesting = ref(false);
 const proxyStatus = ref(null);
-const proxyTestResult = ref(null);
 const proxyModeOptions = computed(() => [
   { label: t('settings.proxyOff'), value: 'off' },
   { label: t('settings.proxySystem'), value: 'system' },
@@ -929,16 +926,16 @@ async function detectProxy() {
 
 async function testProxy() {
   proxyTesting.value = true;
-  proxyTestResult.value = null;
   try {
-    proxyTestResult.value = await TestProxy({
+    const result = await TestProxy({
       mode: draft.proxyMode,
       url: draft.proxyUrl || '',
       noProxy: draft.proxyNoProxy || '',
       targetUrl: draft.baseUrl || '',
     });
+    message.success(t('settings.proxyTestSuccess', { status: result.statusCode, duration: result.durationMs, proxy: result.proxy || t('settings.proxyDirect') }));
   } catch (err) {
-    proxyTestResult.value = { ok: false, error: String(err) };
+    message.error(t('settings.proxyTestFailed', { error: String(err) }));
   } finally {
     proxyTesting.value = false;
   }
@@ -1054,12 +1051,47 @@ const tokenParamOptions = computed(() => [
   { label: 'max_completion_tokens', value: 'max_completion_tokens' },
 ]);
 
-const contextWindowQuickOptions = [
-  { label: '256K', value: 256000 },
-  { label: '512K', value: 512000 },
-  { label: '1M', value: 1000000 },
-  { label: '1.5M', value: 1500000 },
+// Max Tokens / 上下文窗口下拉预设：label 用易读的 8K/64K 形式，value 始终是
+// 具体数字；自定义输入走 tag 模式并转回数字（onNumericTagSelect）。
+const maxTokensOptions = [
+  { label: '8K', value: 8192 },
+  { label: '16K', value: 16384 },
+  { label: '32K', value: 32768 },
+  { label: '64K', value: 65536 },
+  { label: '128K', value: 131072 },
+  { label: '384K', value: 393216 },
 ];
+
+const contextWindowOptions = [
+  { label: '64K', value: 65536 },
+  { label: '128K', value: 131072 },
+  { label: '256K', value: 262144 },
+  { label: '512K', value: 524288 },
+  { label: '1M', value: 1048576 },
+  { label: '1.5M', value: 1572864 },
+];
+
+const reasoningTagOptions = ['reasoning_content', 'reasoning', 'think', 'thinking', 'thought', 'reason']
+  .map((tag) => ({ label: tag, value: tag }));
+
+// tag 模式下自定义输入是字符串；转成正整数，非法输入保持原值。
+function normalizeNumericTagSelect(value, fallback) {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  const num = Number(String(value ?? '').trim());
+  return Number.isFinite(num) && num > 0 ? num : fallback;
+}
+
+function onMaxTokensSelected(value) {
+  modelDraft.maxTokens = normalizeNumericTagSelect(value, modelDraft.maxTokens);
+}
+
+function onContextWindowSelected(value) {
+  modelDraft.contextWindow = normalizeNumericTagSelect(value, modelDraft.contextWindow);
+}
+
+function onReasoningTagSelected(value) {
+  modelDraft.reasoningTag = String(value ?? '').trim() || 'reasoning_content';
+}
 
 function normalizeApiFormat(value) {
   const v = String(value || '').trim().toLowerCase().replace(/[-\s]+/g, '_');
@@ -1237,17 +1269,13 @@ async function testModelConnection() {
     message.warning(t('app.config.modelRequired'));
     return;
   }
-  if (!apiKeys.length) {
-    message.warning(t('settings.apiKeyRequired'));
-    return;
-  }
   testingModel.value = true;
   try {
     await TestModelConnection({
       providerName: normalizedProviderName(modelDraft.providerName),
       apiFormat: normalizeApiFormat(modelDraft.apiFormat),
       baseUrl: (modelDraft.baseUrl || '').trim(),
-      apiKey: apiKeys[0],
+      apiKey: apiKeys[0] || '',
       apiKeys,
       model,
       temperature: modelDraft.temperature ?? 0.2,
@@ -1273,10 +1301,6 @@ function commitModelDraft() {
     return;
   }
   const apiKeys = normalizeModelApiKeys(modelDraft.apiKeys || []);
-  if (!apiKeys.length) {
-    message.warning(t('settings.apiKeyRequired'));
-    return;
-  }
   const providerName = normalizedProviderName(modelDraft.providerName);
   const apiFormat = normalizeApiFormat(modelDraft.apiFormat);
   const nextModel = {
@@ -1810,7 +1834,6 @@ watch(() => props.visible, (visible) => {
 .proxy-status-card > div { display: grid; grid-template-columns: 90px minmax(0,1fr); gap: 10px; font-size: 12px; }
 .proxy-status-card span { color: #777; }
 .proxy-status-card strong { overflow-wrap: anywhere; color: #d0d0d0; font-family: var(--ally-mono-font); font-weight: 500; }
-.proxy-test-result { margin-top: 12px; }
 
 .config-section-header {
   display: flex;
@@ -2333,31 +2356,6 @@ watch(() => props.visible, (visible) => {
   flex-direction: column;
   gap: 6px;
   width: 100%;
-}
-
-.context-window-field {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-}
-
-.context-window-field .n-input-number {
-  flex: 1 1 140px;
-}
-
-.context-window-presets {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.context-window-presets-label {
-  flex-shrink: 0;
-  color: #8a8a8a;
-  font-size: 12px;
 }
 
 .api-key-row {
