@@ -1051,24 +1051,25 @@ const tokenParamOptions = computed(() => [
   { label: 'max_completion_tokens', value: 'max_completion_tokens' },
 ]);
 
-// Max Tokens / 上下文窗口下拉预设：label 用易读的 8K/64K 形式，value 始终是
-// 具体数字；自定义输入走 tag 模式并转回数字（onNumericTagSelect）。
+// Max Tokens / 上下文窗口下拉预设：label 与 value 一致，全部使用具体数字
+// （K=1000、M=1000000 的十进制换算，不做 K/M 缩写也不取 2 的幂）；
+// 自定义输入走 tag 模式并转回数字（onNumericTagSelect）。
 const maxTokensOptions = [
-  { label: '8K', value: 8192 },
-  { label: '16K', value: 16384 },
-  { label: '32K', value: 32768 },
-  { label: '64K', value: 65536 },
-  { label: '128K', value: 131072 },
-  { label: '384K', value: 393216 },
+  { label: '8000', value: 8000 },
+  { label: '16000', value: 16000 },
+  { label: '32000', value: 32000 },
+  { label: '64000', value: 64000 },
+  { label: '128000', value: 128000 },
+  { label: '384000', value: 384000 },
 ];
 
 const contextWindowOptions = [
-  { label: '64K', value: 65536 },
-  { label: '128K', value: 131072 },
-  { label: '256K', value: 262144 },
-  { label: '512K', value: 524288 },
-  { label: '1M', value: 1048576 },
-  { label: '1.5M', value: 1572864 },
+  { label: '64000', value: 64000 },
+  { label: '128000', value: 128000 },
+  { label: '256000', value: 256000 },
+  { label: '512000', value: 512000 },
+  { label: '1000000', value: 1000000 },
+  { label: '1500000', value: 1500000 },
 ];
 
 const reasoningTagOptions = ['reasoning_content', 'reasoning', 'think', 'thinking', 'thought', 'reason']
