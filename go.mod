@@ -5,16 +5,16 @@ go 1.27.0
 require (
 	codeberg.org/readeck/go-readability/v2 v2.1.2
 	github.com/andybalholm/brotli v1.2.2
-	github.com/anthropics/anthropic-sdk-go v1.56.0
+	github.com/anthropics/anthropic-sdk-go v1.68.0
 	github.com/coder/websocket v1.8.14
 	github.com/go-git/go-git/v5 v5.19.2
 	github.com/klauspost/compress v1.19.0
 	github.com/mark3labs/mcp-go v0.55.1
 	github.com/openai/openai-go v1.12.0
 	github.com/robfig/cron/v3 v3.0.1
-	github.com/sashabaranov/go-openai v1.41.2
+	github.com/sashabaranov/go-openai v1.42.0
 	github.com/sergi/go-diff v1.4.0
-	github.com/wailsapp/wails/v3 v3.0.0-beta.11
+	github.com/wailsapp/wails/v3 v3.0.0-beta.15
 	golang.org/x/net v0.57.0
 	golang.org/x/sys v0.47.0
 	golang.org/x/text v0.41.0
