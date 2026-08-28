@@ -631,7 +631,7 @@ Public License v3. See the LICENSE file for details.
             <div class="api-key-hint">{{ $t('settings.apiKeysHint') }}</div>
           </div>
         </n-form-item-gi>
-        <n-form-item-gi label="Max Tokens">
+        <n-form-item-gi label="Max Tokens" :span="1">
           <n-select
             :value="modelDraft.maxTokens"
             :options="maxTokensOptions"
@@ -641,7 +641,7 @@ Public License v3. See the LICENSE file for details.
             @update:value="onMaxTokensSelected"
           />
         </n-form-item-gi>
-        <n-form-item-gi :label="$t('settings.reasoningTag')">
+        <n-form-item-gi :label="$t('settings.reasoningTag')" :span="1">
           <n-select
             :value="modelDraft.reasoningTag"
             :options="reasoningTagOptions"
@@ -655,16 +655,14 @@ Public License v3. See the LICENSE file for details.
         <n-form-item-gi
           v-if="normalizeApiFormat(modelDraft.apiFormat) === 'openai_chat'"
           :label="$t('settings.tokenParam')"
+          :span="2"
         >
           <n-select v-model:value="modelDraft.tokenParam" :options="tokenParamOptions" />
         </n-form-item-gi>
-        <n-form-item-gi
-          :label="$t('settings.reasoningEffort')"
-          :span="normalizeApiFormat(modelDraft.apiFormat) === 'openai_chat' ? 1 : 2"
-        >
+        <n-form-item-gi :label="$t('settings.reasoningEffort')" :span="1">
           <n-select v-model:value="modelDraft.reasoningEffort" :options="reasoningEffortOptions" />
         </n-form-item-gi>
-        <n-form-item-gi :label="$t('settings.contextWindow')" :span="2">
+        <n-form-item-gi :label="$t('settings.contextWindow')" :span="1">
           <n-select
             :value="modelDraft.contextWindow"
             :options="contextWindowOptions"
