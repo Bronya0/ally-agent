@@ -145,3 +145,40 @@ func TestBuildSkillDirTreeEmptyForMissingDir(t *testing.T) {
 		t.Fatalf("expected empty tree for missing dir, got %q", tree)
 	}
 }
+
+// TestParseSkillContentToleratesBOMAndDelimiterInValue 验证两个健壮性场景：
+// UTF-8 BOM 开头的 SKILL.md（Windows 编辑器常见）仍能解析 frontmatter；
+// 值中包含 "---" 不再提前截断 frontmatter（按整行定界符匹配）。
+func TestParseSkillContentToleratesBOMAndDelimiterInValue(t *testing.T) {
+	text := "\ufeff---\nname: bom-skill\ndescription: uses --- separators\n---\nBody."
+	meta := parseSkillContent(filepath.Join("x", "SKILL.md"), text)
+	if meta.Name != "bom-skill" {
+		t.Fatalf("BOM must not break frontmatter parsing, got name %q", meta.Name)
+	}
+	if !strings.Contains(meta.Description, "separators") {
+		t.Fatalf("value containing --- must survive, got description %q", meta.Description)
+	}
+}
+
+// TestScanSkillDirDedupsCaseInsensitively 验证大小写变体的同名 skill 只保留
+// 先扫描到的那个，避免列表出现仅大小写不同的重复项。
+func TestScanSkillDirDedupsCaseInsensitively(t *testing.T) {
+	root := t.TempDir()
+	for _, dir := range []string{"a", "b"} {
+		if err := os.MkdirAll(filepath.Join(root, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeTestFile(t, root, "a/SKILL.md", "---\nname: Foo\ndescription: first\n---\nbody")
+	writeTestFile(t, root, "b/SKILL.md", "---\nname: foo\ndescription: second\n---\nbody")
+
+	skills := []SkillDefinition{}
+	seen := map[string]bool{}
+	scanSkillDir(root, "project", &skills, seen)
+	if len(skills) != 1 {
+		t.Fatalf("case-differing duplicate names must dedup to one skill, got %d: %+v", len(skills), skills)
+	}
+	if skills[0].Description != "first" {
+		t.Fatalf("first scanned skill must win, got description %q", skills[0].Description)
+	}
+}

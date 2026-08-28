@@ -47,6 +47,8 @@ const (
 	// AssignProcessToJobObject 所需的进程访问权限。
 	processSetQuota  = 0x0100
 	processTerminate = 0x0001
+	// isProcessAlive 探测用的最小查询权限。
+	processQueryLimitedInformation = 0x0400
 )
 
 func hideCommandWindow(cmd *exec.Cmd) {
@@ -167,6 +169,20 @@ func gracefulStopProcessTree(pid int) error {
 
 // stopProcessTree 强杀整棵进程树：优先 Job Object（内核级归属，父链断裂也
 // 能杀光），失败回退 taskkill /T /F。
+// isProcessAlive 探测进程是否仍在运行，供 MCP job 守护轮询使用。不触碰
+// transport 持有的 exec.Cmd 字段，避免与其 Wait 竞争。
+func isProcessAlive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	h, _, _ := procOpenProcess.Call(processQueryLimitedInformation, 0, uintptr(pid))
+	if h == 0 {
+		return false
+	}
+	procCloseHandle.Call(h)
+	return true
+}
+
 func stopProcessTree(pid int) error {
 	if pid <= 0 {
 		return fmt.Errorf("invalid pid: %d", pid)

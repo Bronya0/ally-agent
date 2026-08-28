@@ -163,6 +163,9 @@ func (a *App) ServiceStartup(ctx context.Context, _ application.ServiceOptions) 
 				a.invalidateContextStaticCache()
 			})
 			a.mcpManager.SetNetworkConfigProvider(func() ConfigState { return a.effectiveConfig(ConfigState{}) })
+			a.mcpManager.SetWarningHandler(func(message string) {
+				a.emit("config:warning", map[string]any{"field": "mcp", "message": message})
+			})
 			go func() {
 				if err := a.mcpManager.StartAll(ctx); err != nil {
 					// MCP start errors are non-fatal.

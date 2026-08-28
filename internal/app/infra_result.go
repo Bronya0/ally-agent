@@ -223,6 +223,11 @@ func injectEnvelopeWarnings(compactJSON string, warnings []string) string {
 }
 
 func compactToolDataForModel(name string, result toolResult, fullJSON string) string {
+	// MCP tool output is third-party text with no producer-side cap; clamp it
+	// to the built-in bound so one runaway server cannot flood model context.
+	if strings.HasPrefix(name, "mcp__") {
+		return compactMcpOutputForModel(result, fullJSON)
+	}
 	switch name {
 	case "read", "batch_read", "read_file":
 		var r BatchReadResult
@@ -576,6 +581,27 @@ func compactToolDataForModel(name string, result toolResult, fullJSON string) st
 	default:
 		return fullJSON
 	}
+}
+
+// compactMcpOutputForModel clamps unbounded MCP text output to the same cap
+// as built-in text tools, keeping head+tail and flagging the truncation so
+// the model knows to narrow the call instead of treating the text as whole.
+func compactMcpOutputForModel(result toolResult, fullJSON string) string {
+	var r struct {
+		Output string `json:"output"`
+	}
+	if !decodeToolData(result.Data, &r) {
+		return fullJSON
+	}
+	capped, reduced := compactTextForModel(r.Output, maxModelToolOutput)
+	if !reduced {
+		return fullJSON
+	}
+	return marshalToolResultOrFallback(toolResult{OK: true, Data: map[string]any{
+		"output":          capped,
+		"outputTruncated": true,
+		"truncationNote":  "Output exceeded the model-context safety cap and was truncated (head+tail kept). Narrow the tool arguments or paginate via the server if it supports it.",
+	}}, fullJSON)
 }
 
 func decodeToolData(data any, target any) bool {

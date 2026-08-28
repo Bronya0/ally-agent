@@ -8,6 +8,7 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -69,7 +70,7 @@ func TestNormalizedMcpTransport(t *testing.T) {
 	}
 }
 
-func TestLoadConfigsSkipsDisabledServers(t *testing.T) {
+func TestLoadConfigsKeepsDisabledServersAndWarnsOnBrokenJSON(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
@@ -85,11 +86,48 @@ func TestLoadConfigsSkipsDisabledServers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := configs["disabled"]; ok {
-		t.Fatal("disabled MCP server should not be loaded")
+	// Disabled servers must stay in the load result so the status list can
+	// show configured-but-off entries.
+	if _, ok := configs["disabled"]; !ok {
+		t.Fatal("disabled MCP server must stay visible in LoadConfigs")
 	}
 	if _, ok := configs["enabled"]; !ok {
 		t.Fatal("enabled MCP server should be loaded")
+	}
+
+	// A broken mcp.json must surface a warning instead of silently unloading
+	// every server.
+	writeTestFile(t, home, ".ally_agent/mcp.json", `{ broken json`)
+	var warnings []string
+	manager.SetWarningHandler(func(message string) { warnings = append(warnings, message) })
+	if _, err := manager.LoadConfigs(); err != nil {
+		t.Fatal(err)
+	}
+	if len(warnings) == 0 {
+		t.Fatal("broken mcp.json must produce a warning")
+	}
+}
+
+func TestStartAllRegistersDisabledServersWithoutConnecting(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	writeTestFile(t, home, ".ally_agent/mcp.json", `{
+  "mcpServers": {
+    "off": { "enabled": false, "url": "https://example.com/off" }
+  }
+}`)
+
+	manager := NewMcpManager(t.TempDir(), nil)
+	if err := manager.StartAll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	statuses := manager.GetServerStatuses()
+	if len(statuses) != 1 {
+		t.Fatalf("expected exactly one server status, got %+v", statuses)
+	}
+	if statuses[0]["status"] != "disabled" {
+		t.Fatalf("disabled server must be registered as disabled, got %+v", statuses[0])
 	}
 }
 

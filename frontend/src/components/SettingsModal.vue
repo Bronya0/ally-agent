@@ -2316,6 +2316,10 @@ watch(() => props.visible, (visible) => {
   background: #f4a4a4;
 }
 
+.mcp-dot.disabled {
+  background: #5a5f6a;
+}
+
 @keyframes mcp-pulse {
   0%, 100% { opacity: 0.4; }
   50% { opacity: 1; }

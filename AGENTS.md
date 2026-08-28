@@ -432,7 +432,7 @@ Config path:
 ~/.ally_agent/mcp.json
 ```
 
-Settings page: Settings → MCP edits raw JSON; Save reconnects all MCP servers; server status is shown with connected/connecting/failed states.
+Settings page: Settings → MCP edits raw JSON; Save reconnects all MCP servers; server status is shown with connected/connecting/failed/disabled states (disabled = configured with `enabled:false`, never connected). A broken `mcp.json` surfaces a `config:warning` instead of silently unloading servers; MCP tool results are clamped to the same model-context cap as built-in tools.
 
 Manager flow:
 

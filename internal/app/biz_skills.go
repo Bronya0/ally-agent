@@ -450,8 +450,12 @@ func scanSkillDir(dir string, source string, skills *[]SkillDefinition, seen map
 			skillPath := filepath.Join(dir, entry.Name(), "SKILL.md")
 			if _, err := os.Stat(skillPath); err == nil {
 				meta := parseSkillFile(skillPath)
-				if meta.Name != "" && !seen[meta.Name] {
-					seen[meta.Name] = true
+				// Dedup keys are lowercased so a case-variant duplicate
+				// ("Foo" vs "foo") cannot slip past and then shadow the
+				// EqualFold lookups consumers rely on. Builtins dedup with
+				// the same rule.
+				if key := strings.ToLower(meta.Name); meta.Name != "" && !seen[key] {
+					seen[key] = true
 					meta.Source = source
 					meta.Dir = filepath.Join(dir, entry.Name())
 					*skills = append(*skills, meta)
@@ -460,8 +464,8 @@ func scanSkillDir(dir string, source string, skills *[]SkillDefinition, seen map
 		} else if strings.EqualFold(filepath.Ext(entry.Name()), ".md") {
 			skillPath := filepath.Join(dir, entry.Name())
 			meta := parseSkillFile(skillPath)
-			if meta.Name != "" && !seen[meta.Name] {
-				seen[meta.Name] = true
+			if key := strings.ToLower(meta.Name); meta.Name != "" && !seen[key] {
+				seen[key] = true
 				meta.Source = source
 				meta.Dir = dir
 				*skills = append(*skills, meta)
@@ -505,35 +509,31 @@ func parseSkillFile(path string) SkillDefinition {
 // so built-in (embedded) skills reuse the same parsing path.
 func parseSkillContent(path, text string) SkillDefinition {
 	meta := SkillDefinition{Path: path}
-	// Try YAML frontmatter: ---\n...\n---
-	if strings.HasPrefix(text, "---") {
-		if end := strings.Index(text[3:], "---"); end >= 0 {
-			front := text[3 : 3+end]
-			for _, line := range strings.Split(front, "\n") {
-				line = strings.TrimSpace(line)
-				if v := parseYAMLField(line, "name"); v != "" {
-					meta.Name = v
-				}
-				if v := parseYAMLField(line, "description"); v != "" {
-					meta.Description = v
-				}
-				if v := parseYAMLField(line, "type"); v != "" {
-					meta.Type = v
-				}
-				// whenToUse (Ally-native) and when_to_use (Agent Skills open
-				// standard / Claude Code) are both accepted. Ally-native
-				// spelling wins when both are present: whenToUse is checked
-				// unconditionally and overwrites any earlier when_to_use.
-				if v := parseYAMLField(line, "when_to_use"); v != "" && meta.WhenToUse == "" {
-					meta.WhenToUse = v
-				}
-				if v := parseYAMLField(line, "whenToUse"); v != "" {
-					meta.WhenToUse = v
-				}
+	if front, ok := splitSkillFrontmatter(text); ok {
+		for _, line := range strings.Split(front, "\n") {
+			line = strings.TrimSpace(line)
+			if v := parseYAMLField(line, "name"); v != "" {
+				meta.Name = v
 			}
-			if meta.Name != "" {
-				return meta
+			if v := parseYAMLField(line, "description"); v != "" {
+				meta.Description = v
 			}
+			if v := parseYAMLField(line, "type"); v != "" {
+				meta.Type = v
+			}
+			// whenToUse (Ally-native) and when_to_use (Agent Skills open
+			// standard / Claude Code) are both accepted. Ally-native
+			// spelling wins when both are present: whenToUse is checked
+			// unconditionally and overwrites any earlier when_to_use.
+			if v := parseYAMLField(line, "when_to_use"); v != "" && meta.WhenToUse == "" {
+				meta.WhenToUse = v
+			}
+			if v := parseYAMLField(line, "whenToUse"); v != "" {
+				meta.WhenToUse = v
+			}
+		}
+		if meta.Name != "" {
+			return meta
 		}
 	}
 	// Fallback: use filename (without .md extension)
@@ -551,6 +551,41 @@ func parseSkillContent(path, text string) SkillDefinition {
 	}
 	meta.Description = fmt.Sprintf("Skill loaded from %s", path)
 	return meta
+}
+
+// splitSkillFrontmatter extracts YAML frontmatter between a standalone opening
+// "---" line and the next standalone "---" line. A UTF-8 BOM (common on
+// Windows editors) is tolerated, and values containing "---" no longer
+// truncate the block: only a whole delimiter line terminates the frontmatter,
+// where the previous substring search cut at the first "---" anywhere.
+func splitSkillFrontmatter(text string) (string, bool) {
+	text = strings.TrimPrefix(text, "\ufeff")
+	if !strings.HasPrefix(text, "---") {
+		return "", false
+	}
+	rest := text[3:]
+	nl := strings.IndexByte(rest, '\n')
+	if nl < 0 {
+		return "", false
+	}
+	if strings.TrimSpace(rest[:nl]) != "" {
+		return "", false
+	}
+	var lines []string
+	remaining := rest[nl+1:]
+	for remaining != "" {
+		line := remaining
+		if i := strings.IndexByte(remaining, '\n'); i >= 0 {
+			line, remaining = remaining[:i], remaining[i+1:]
+		} else {
+			remaining = ""
+		}
+		if strings.TrimSpace(line) == "---" {
+			return strings.Join(lines, "\n"), true
+		}
+		lines = append(lines, line)
+	}
+	return "", false
 }
 
 // ── Skill frontmatter parsing ───────────────────────────────

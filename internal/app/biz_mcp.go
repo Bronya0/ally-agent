@@ -63,12 +63,30 @@ type McpClientHandle struct {
 
 type McpManager struct {
 	mu            sync.RWMutex
-	reconnectMu   sync.Mutex
+	reconnectLocks sync.Map // serverName -> *sync.Mutex，per-server 重连互斥
 	clients       map[string]*McpClientHandle
 	toolLookup    map[string]mcpToolRef
 	workDir       string
 	listener      func(tools []McpDiscoveredTool)
+	warnHandler   func(message string)
 	networkConfig func() ConfigState
+}
+
+// SetWarningHandler wires the config:warning sink so a broken mcp.json is
+// reported instead of silently unloading every server.
+func (m *McpManager) SetWarningHandler(handler func(message string)) {
+	m.mu.Lock()
+	m.warnHandler = handler
+	m.mu.Unlock()
+}
+
+func (m *McpManager) warnf(format string, args ...any) {
+	m.mu.RLock()
+	handler := m.warnHandler
+	m.mu.RUnlock()
+	if handler != nil {
+		handler(fmt.Sprintf(format, args...))
+	}
 }
 
 func (m *McpManager) SetNetworkConfigProvider(provider func() ConfigState) {
@@ -118,12 +136,15 @@ func (m *McpManager) LoadConfigs() (map[string]McpServerConfig, error) {
 		}
 		var cfg McpServersConfig
 		if err := json.Unmarshal(data, &cfg); err != nil {
+			// 手改 mcp.json 写坏时不能无声吞掉，否则所有服务器"消失"而
+			// 用户只看到一片空白。走 config:warning 提示。
+			m.warnf("mcp.json parse failed; all MCP servers are unloaded: %v", err)
 			continue
 		}
+		// Disabled servers stay in the result so StartAll registers a
+		// "disabled" handle and the status list shows configured-but-off
+		// entries instead of silently hiding them.
 		for name, srv := range cfg.McpServers {
-			if srv.Enabled != nil && !*srv.Enabled {
-				continue
-			}
 			merged[name] = srv
 		}
 	}
@@ -141,8 +162,15 @@ func (m *McpManager) StartAll(ctx context.Context) error {
 
 	var wg sync.WaitGroup
 	for name, cfg := range configs {
-		wg.Add(1)
 		name, cfg := name, cfg
+		if cfg.Enabled != nil && !*cfg.Enabled {
+			m.mu.Lock()
+			m.clients[name] = &McpClientHandle{ServerName: name, Config: cfg, Status: "disabled"}
+			m.mu.Unlock()
+			m.notifyChange()
+			continue
+		}
+		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			m.connectOne(ctx, name, cfg)
@@ -203,10 +231,15 @@ func (m *McpManager) initializeMcpClient(ctx context.Context, name string, cfg M
 		return nil, nil, fmt.Errorf("init failed: %w", err)
 	}
 
-	toolsResult, err := mcpClient.ListTools(ctx, mcp.ListToolsRequest{})
+	// ListTools carries the same bounded timeout as Initialize: a server that
+	// completes the handshake but then hangs must not pin connectOne in
+	// "connecting" forever.
+	toolsCtx, toolsCancel := context.WithTimeout(ctx, 30*time.Second)
+	defer toolsCancel()
+	toolsResult, err := mcpClient.ListTools(toolsCtx, mcp.ListToolsRequest{})
 	if err != nil {
 		mcpClient.Close()
-		return nil, nil, fmt.Errorf("list tools failed: %w", err)
+		return nil, nil, fmt.Errorf("list tools failed (timed out or refused after 30s): %w", err)
 	}
 
 	var discovered []McpDiscoveredTool
@@ -246,13 +279,16 @@ func (m *McpManager) newMcpClient(ctx context.Context, cfg McpServerConfig) (*cl
 		// NewStdioMCPClient spawns the subprocess with its own exec.Cmd and
 		// does not set SysProcAttr — on Windows this would flash a console
 		// window for every stdio MCP server (npx / python / node …) on every
-		// reconnect. Use WithCommandFunc to take ownership of Cmd creation
-		// and apply hideCommandWindow().
+		// reconnect. Use WithCommandFunc to take ownership of Cmd creation,
+		// apply hideCommandWindow(), and join the process into a
+		// KILL_ON_JOB_CLOSE Job Object so grandchildren do not outlive the
+		// client (same orphan protection as the service tool).
 		mcpClient, err = client.NewStdioMCPClientWithOptions(cfg.Command, env, cfg.Args,
 			transport.WithCommandFunc(func(ctx context.Context, command string, cmdEnv []string, args []string) (*exec.Cmd, error) {
 				cmd := exec.CommandContext(ctx, command, args...)
 				cmd.Env = cmdEnv
 				hideCommandWindow(cmd)
+				watchMcpProcessJob(cmd, prepareServiceCommand(cmd))
 				return cmd, nil
 			}),
 		)
@@ -289,6 +325,42 @@ func (m *McpManager) newMcpClient(ctx context.Context, cfg McpServerConfig) (*cl
 		return nil, fmt.Errorf("%s start failed: %w", transportName, err)
 	}
 	return mcpClient, nil
+}
+
+// watchMcpProcessJob gives stdio MCP subprocess trees the same orphan
+// protection as the service tool. The transport owns Start/Wait, so the job
+// is registered once the process handle appears (Windows Job Object with
+// KILL_ON_JOB_CLOSE; no-op elsewhere) and unregistered after the root process
+// dies — closing the handle then also kills any surviving grandchildren.
+// Polling reads cmd.Process once after Start and never touches
+// cmd.ProcessState, avoiding races with the transport's Wait.
+func watchMcpProcessJob(cmd *exec.Cmd, job uintptr) {
+	if job == 0 {
+		return
+	}
+	go func() {
+		var pid int
+		for i := 0; i < 100; i++ {
+			if p := cmd.Process; p != nil {
+				pid = p.Pid
+				break
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+		if pid == 0 {
+			discardProcessJob(job)
+			return
+		}
+		_ = registerProcessJob(pid, job)
+		ticker := time.NewTicker(500 * time.Millisecond)
+		defer ticker.Stop()
+		for range ticker.C {
+			if !isProcessAlive(pid) {
+				unregisterProcessJob(pid)
+				return
+			}
+		}
+	}()
 }
 
 // toolSchemaToMap converts an MCP input schema to provider-safe JSON Schema.
@@ -438,8 +510,12 @@ func (m *McpManager) callToolOnce(ctx context.Context, serverName, toolName stri
 }
 
 func (m *McpManager) reconnectServer(ctx context.Context, serverName string, failedClient *client.Client) error {
-	m.reconnectMu.Lock()
-	defer m.reconnectMu.Unlock()
+	// Per-server lock: one server's slow reconnect (up to the 30s handshake
+	// timeout) must not serialize reconnects of unrelated servers.
+	lock, _ := m.reconnectLocks.LoadOrStore(serverName, &sync.Mutex{})
+	mutex := lock.(*sync.Mutex)
+	mutex.Lock()
+	defer mutex.Unlock()
 
 	m.mu.Lock()
 	handle, ok := m.clients[serverName]
@@ -797,6 +873,9 @@ func (a *App) RestartMcpServers() error {
 		a.invalidateContextStaticCache()
 	})
 	manager.SetNetworkConfigProvider(func() ConfigState { return a.effectiveConfig(ConfigState{}) })
+	manager.SetWarningHandler(func(message string) {
+		a.emit("config:warning", map[string]any{"field": "mcp", "message": message})
+	})
 	a.mcpManager = manager
 	err = manager.StartAll(a.ctx)
 	a.emitMcpStatus()

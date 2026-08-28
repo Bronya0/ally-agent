@@ -3741,3 +3741,44 @@ func TestServiceReadErrors(t *testing.T) {
 		t.Fatalf("expected E_SERVICE_NOT_FOUND for unknown id, got %v", err)
 	}
 }
+
+// TestCompactToolResultForModelCapsMcpOutput 验证 mcp__ 工具输出与内置工具
+// 一样有模型侧上限：超限输出被 head+tail 截断并带 outputTruncated 标记，
+// 小输出原样通过。
+func TestCompactToolResultForModelCapsMcpOutput(t *testing.T) {
+	big := strings.Repeat("x", maxModelToolOutput*2)
+	result := toolResult{OK: true, Data: map[string]any{"output": big}}
+	fullJSON, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	compact := compactToolDataForModel("mcp__srv__tool", result, string(fullJSON))
+	if len(compact) >= len(big) {
+		t.Fatalf("MCP output must be capped: compact=%d raw=%d", len(compact), len(big))
+	}
+	var decoded struct {
+		OK   bool `json:"ok"`
+		Data struct {
+			Output          string `json:"output"`
+			OutputTruncated bool   `json:"outputTruncated"`
+			TruncationNote  string `json:"truncationNote"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(compact), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if !decoded.OK || !decoded.Data.OutputTruncated || decoded.Data.TruncationNote == "" {
+		t.Fatalf("expected truncation flag and note, got %+v", decoded)
+	}
+	// compactTextForModel keeps head+tail within the cap plus a fixed
+	// omission marker, so allow a small overhead over the limit.
+	if n := utf8.RuneCountInString(decoded.Data.Output); n > maxModelToolOutput+200 {
+		t.Fatalf("capped output must stay near %d runes, got %d", maxModelToolOutput, n)
+	}
+
+	small := toolResult{OK: true, Data: map[string]any{"output": "tiny"}}
+	unchanged := compactToolDataForModel("mcp__srv__tool", small, `{"ok":true,"data":{"output":"tiny"}}`)
+	if unchanged != `{"ok":true,"data":{"output":"tiny"}}` {
+		t.Fatalf("small MCP output must pass through unchanged, got %s", unchanged)
+	}
+}
