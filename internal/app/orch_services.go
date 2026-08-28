@@ -72,6 +72,13 @@ const (
 	// context window.
 	defaultServiceReadTailBytes = service.DefaultReadTail
 	maxServiceReadTailBytes     = service.MaxReadTail
+
+	// Unified three-platform stop semantics: best-effort graceful
+	// termination, a bounded grace wait, then a force kill of the whole
+	// process tree with a short confirm wait.
+	defaultServiceStopGraceSeconds = 3
+	maxServiceStopGraceSeconds     = 30
+	serviceForceKillConfirmWait    = 2 * time.Second
 )
 
 type managedService struct {
@@ -257,22 +264,44 @@ func (a *App) stopService(req StopServiceRequest) (ServiceInfo, error) {
 	alreadyDone := service.info.Status == "stopped" || service.info.Status == "exited"
 	service.mu.Unlock()
 	if !alreadyDone {
-		if err := stopProcessTree(pid); err != nil {
-			service.cancel()
-			service.mu.Lock()
-			service.info.Error = err.Error()
-			service.mu.Unlock()
+		graceSeconds := req.GraceSeconds
+		if graceSeconds <= 0 {
+			graceSeconds = defaultServiceStopGraceSeconds
 		}
+		if graceSeconds > maxServiceStopGraceSeconds {
+			graceSeconds = maxServiceStopGraceSeconds
+		}
+		// 统一停止语义：先尽力优雅终止（POSIX=进程组 SIGTERM，Windows=对
+		// 有窗口进程投递 WM_CLOSE），挂 waitDone 等待；超时强杀进程树。
+		// 优雅阶段信号投递失败不致命（进程可能已自行退出），照常等待。
+		_ = gracefulStopProcessTree(pid)
+		forced := false
+		var forceErr error
 		select {
 		case <-service.waitDone:
-		case <-time.After(5 * time.Second):
-			service.cancel()
+		case <-time.After(time.Duration(graceSeconds) * time.Second):
+			forced = true
+			if err := stopProcessTree(pid); err != nil {
+				forceErr = err
+				service.cancel()
+			}
+			select {
+			case <-service.waitDone:
+			case <-time.After(serviceForceKillConfirmWait):
+			}
 		}
 		service.mu.Lock()
 		service.info.Status = "stopped"
 		service.info.StoppedAt = time.Now().Unix()
+		switch {
+		case forceErr != nil:
+			service.info.Error = fmt.Sprintf("force stop failed after %ds graceful wait: %v", graceSeconds, forceErr)
+		case forced:
+			service.info.Error = fmt.Sprintf("graceful stop timed out after %ds; process tree force killed", graceSeconds)
+		}
 		service.updateOutputInfoLocked()
 		service.mu.Unlock()
+		service.cancel()
 	}
 	info := service.snapshot()
 	a.removeService(id, service)
@@ -422,10 +451,19 @@ func (a *App) readServiceOutput(req ServiceReadRequest) (ServiceReadResult, erro
 	}, nil
 }
 
+// stopAllServices 并发停止所有服务：每个服务最坏需要 grace+confirm 约 5s，
+// 串行会在应用退出时把这个时长乘以服务数。
 func (a *App) stopAllServices() {
-	for _, service := range a.listServices().Services {
-		_, _ = a.stopService(StopServiceRequest{ID: service.ID})
+	services := a.listServices().Services
+	var wg sync.WaitGroup
+	for _, info := range services {
+		wg.Add(1)
+		go func(id string) {
+			defer wg.Done()
+			_, _ = a.stopService(StopServiceRequest{ID: id})
+		}(info.ID)
 	}
+	wg.Wait()
 }
 
 func (s *managedService) snapshot() ServiceInfo {

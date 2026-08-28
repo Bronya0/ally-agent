@@ -130,7 +130,7 @@
 - orch_grep.go — grep 编排：ripgrep 封装绑定工作区解析与安全检查、rg/git-bash 缺失事件；关键: GrepFiles, grepFilesWithConfig
 - orch_http.go — http_request/web_fetch 编排：重定向敏感头剥离、压缩体解码、每主机限速、Readability 正文抽取、URL 访问校验；关键: httpRequestToolWithConfig, webFetchToolWithConfig, htmlExtractContent
 - orch_remote.go — SSH 远程工具编排：向远程 stdin 注入内嵌 Python helper 完成远程读/写/编辑/删除/命令；关键: invokeRemotePython, remoteReadFile, remoteEdit, buildRemoteScript
-- orch_services.go — 后台服务编排：512KB rolling buffer 输出、进程树控制、有界 tail、service:update 事件（仅生命周期三处）；关键: StartService, finalizeService, readServiceOutput
+- orch_services.go — 后台服务编排：512KB rolling buffer 输出、进程树控制（统一三平台停止语义：优雅终止 → graceSeconds 宽限默认 3s → 强杀进程树并在 error 上报升级）、有界 tail、service:update 事件（仅生命周期三处）；关键: StartService, stopService, finalizeService, readServiceOutput
 - orch_scheduler.go — 计划任务调度管理：cron/interval/once 解析校验、全局串行执行、scheduled:* 事件；关键: scheduledTaskManager, executeScheduledTaskTool, safeTrigger
 - orch_subagent.go — 子代理执行循环：步数预算（默认 25，上限 1000）、耗尽强制汇报轮、独立系统提示与工具排除集（无 ask/subagent/plan/skill/scheduled_task）；关键: executeDelegate, subagentSystemPrompt, subagentTools, forceSubagentFinalReport
 - orch_memory.go — 全局记忆工具薄封装（注入 memory.Runtime，逻辑在 internal/tools/memory）；关键: memoriesRuntime, listMemories

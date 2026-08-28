@@ -339,7 +339,7 @@ Built-in model-facing tools:
 | `delete` | Delete files/directories |
 | `grep` | Regex search through bundled ripgrep, with PATH fallback in development; exact stats + per-file hotspot counts (`fileCounts`) + `offset`/`nextOffset` pagination (`offsetExhausted` marks an offset past the end); workspace-wide skip policies are returned in `skipped`, while explicit paths bypass broad generated-directory and 10 MB exclusions |
 | `command` | Shell command execution with safety checks |
-| `service` | Run/inspect/stop long-lived local processes (dev servers, workers) |
+| `service` | Run/inspect/stop long-lived local processes (dev servers, workers); unified three-platform stop = best-effort graceful termination, bounded grace wait (`graceSeconds`, default 3, max 30), then force kill of the whole process tree — escalation and kill failures are reported in the result `error` field |
 | `wait` | Pause the current agent run for a cancellable 1–3600 second delay |
 | `http_request` | Bounded HTTP/HTTPS API request |
 | `web_fetch` | Bounded webpage fetch and readable-text extraction |

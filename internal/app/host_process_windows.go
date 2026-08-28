@@ -150,6 +150,23 @@ func discardProcessJob(job uintptr) {
 	}
 }
 
+// gracefulStopProcessTree 尽力触发目标树的优雅退出：taskkill 不带 /F 只对
+// 有窗口的进程投递 WM_CLOSE；无窗口控制台进程（dev server 常态）会立即失败
+// 返回，属预期行为——宽限等待随后照常进行，超时由 stopProcessTree 强杀。
+// 不用 GenerateConsoleCtrlEvent：它要求调用方 AttachConsole 到子进程的
+// 控制台且 msys 层信号转发不可靠，误配时可能波及 Ally 自身。
+func gracefulStopProcessTree(pid int) error {
+	if pid <= 0 {
+		return fmt.Errorf("invalid pid: %d", pid)
+	}
+	cmd := exec.Command("taskkill.exe", "/PID", fmt.Sprintf("%d", pid), "/T")
+	hideCommandWindow(cmd)
+	_, _ = cmd.CombinedOutput()
+	return nil
+}
+
+// stopProcessTree 强杀整棵进程树：优先 Job Object（内核级归属，父链断裂也
+// 能杀光），失败回退 taskkill /T /F。
 func stopProcessTree(pid int) error {
 	if pid <= 0 {
 		return fmt.Errorf("invalid pid: %d", pid)

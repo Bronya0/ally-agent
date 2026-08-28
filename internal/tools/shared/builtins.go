@@ -118,16 +118,17 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"command"},
 		}),
-		functionTool("service", "Run, inspect, and stop long-running local processes (dev servers, workers) without blocking the agent loop. action=start launches a process and returns its id; list shows tracked services; read returns a bounded output tail (default 8 KiB, max 32 KiB); stop terminates one. Use list/read sparingly (no polling loops); prefer a single read after a concrete condition (e.g. wait + read). Error codes: E_BAD_COMMAND, E_SERVICE_LIMIT, E_BAD_BACKGROUND_ACTION, E_BAD_SERVICE_ID, E_SERVICE_NOT_FOUND.", map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"action":    map[string]any{"type": "string", "enum": []string{"start", "stop", "list", "read"}, "description": "Start a new background process, stop one by id, list all tracked services, or read a bounded tail of one service's output."},
-				"name":      map[string]any{"type": "string", "description": "Optional label such as frontend or backend. Used only with action=start."},
-				"command":   map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Long-running command. Required with action=start."},
-				"cwd":       map[string]any{"type": "string", "description": "Workspace-relative working directory. Empty means workspace root. Used only with action=start."},
-				"id":        map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Service id returned by action=start. Required with action=stop and action=read."},
-				"tailBytes": map[string]any{"type": "integer", "minimum": 1, "maximum": 32768, "description": "Maximum bytes of output to return with action=read. Default 8192, max 32768. Ignored by other actions."},
-			},
+			functionTool("service", "Run, inspect, and stop long-running local processes (dev servers, workers) without blocking the agent loop. action=start launches a process and returns its id; list shows tracked services; read returns a bounded output tail (default 8 KiB, max 32 KiB); stop first tries graceful termination for a grace window (default 3s), then force kills the whole process tree and reports which happened in the result error field. Use list/read sparingly (no polling loops); prefer a single read after a concrete condition (e.g. wait + read). Error codes: E_BAD_COMMAND, E_SERVICE_LIMIT, E_BAD_BACKGROUND_ACTION, E_BAD_SERVICE_ID, E_SERVICE_NOT_FOUND.", map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"action":       map[string]any{"type": "string", "enum": []string{"start", "stop", "list", "read"}, "description": "Start a new background process, stop one by id, list all tracked services, or read a bounded tail of one service's output."},
+					"name":         map[string]any{"type": "string", "description": "Optional label such as frontend or backend. Used only with action=start."},
+					"command":      map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Long-running command. Required with action=start."},
+					"cwd":          map[string]any{"type": "string", "description": "Workspace-relative working directory. Empty means workspace root. Used only with action=start."},
+					"id":           map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Service id returned by action=start. Required with action=stop and action=read."},
+					"tailBytes":    map[string]any{"type": "integer", "minimum": 1, "maximum": 32768, "description": "Maximum bytes of output to return with action=read. Default 8192, max 32768. Ignored by other actions."},
+					"graceSeconds": map[string]any{"type": "integer", "minimum": 1, "maximum": 30, "description": "Grace period in seconds to wait for graceful termination after action=stop before force killing the process tree. Default 3, max 30; raise it for services that flush state on shutdown (e.g. databases). Ignored by other actions."},
+				},
 			"required": []string{"action"},
 			"oneOf": []any{
 				map[string]any{"properties": map[string]any{"action": map[string]any{"const": "start"}}, "required": []string{"command"}},

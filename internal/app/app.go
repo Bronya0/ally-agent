@@ -726,15 +726,19 @@ type StartServiceRequest struct {
 
 type StopServiceRequest struct {
 	ID string `json:"id"`
+	// GraceSeconds bounds the graceful-termination wait before the process
+	// tree is force killed. <=0 uses the default; values above the cap clamp.
+	GraceSeconds int `json:"graceSeconds,omitempty"`
 }
 
 type BackgroundProcessRequest struct {
-	Action    string `json:"action"`
-	Name      string `json:"name,omitempty"`
-	Command   string `json:"command,omitempty"`
-	Cwd       string `json:"cwd,omitempty"`
-	ID        string `json:"id,omitempty"`
-	TailBytes int    `json:"tailBytes,omitempty"`
+	Action       string `json:"action"`
+	Name         string `json:"name,omitempty"`
+	Command      string `json:"command,omitempty"`
+	Cwd          string `json:"cwd,omitempty"`
+	ID           string `json:"id,omitempty"`
+	TailBytes    int    `json:"tailBytes,omitempty"`
+	GraceSeconds int    `json:"graceSeconds,omitempty"`
 }
 
 // ServiceReadRequest is the model-facing read payload for the service tool.
@@ -2283,7 +2287,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 					Cwd:     req.Cwd,
 				})
 			case "stop":
-				data, err = a.stopService(StopServiceRequest{ID: req.ID})
+				data, err = a.stopService(StopServiceRequest{ID: req.ID, GraceSeconds: req.GraceSeconds})
 			case "list":
 				data = a.listServicesForTool()
 			case "read":
