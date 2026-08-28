@@ -80,8 +80,8 @@ onMounted(start);
   position: absolute;
   inset: 0;
   background-image:
-    linear-gradient(rgba(154, 163, 175, 0.07) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(154, 163, 175, 0.07) 1px, transparent 1px);
+    linear-gradient(rgba(154, 163, 175, 0.16) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(154, 163, 175, 0.16) 1px, transparent 1px);
   background-size: clamp(28px, 5.5vh, 56px) clamp(28px, 5.5vh, 56px);
   animation: splash-grid-drift 3.2s linear infinite;
 }
@@ -167,18 +167,16 @@ onMounted(start);
   animation: splash-version-in 0.6s ease 0.85s forwards;
 }
 
+/* 入场只做单调放大（0.78 → 1），不做 1.04 过冲回落——过冲会让眼球
+   在定格前先变大再缩小一下。缓动曲线 y≤1 本身无过冲。 */
 @keyframes splash-eye-in {
   0% {
     opacity: 0;
     transform: scale(0.78) translateY(16px);
   }
-  60% {
-    opacity: 1;
-    transform: scale(1.04) translateY(0);
-  }
   100% {
     opacity: 1;
-    transform: scale(1);
+    transform: scale(1) translateY(0);
   }
 }
 
