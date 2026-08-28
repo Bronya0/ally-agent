@@ -84,21 +84,15 @@ Public License v3. See the LICENSE file for details.
           </n-form-item>
           <n-form-item :label="$t('settings.userAgent')">
             <div class="settings-field-stack">
-              <n-input
-                v-model:value="draft.userAgent"
+              <n-select
+                :value="draft.userAgent || ''"
+                :options="userAgentOptions"
+                filterable
+                tag
                 :placeholder="$t('settings.userAgentPlaceholder')"
+                :render-label="renderUserAgentOptionLabel"
+                @update:value="onUserAgentSelected"
               />
-              <div class="user-agent-presets">
-                <span class="user-agent-presets-label">{{ $t('settings.userAgentPresets') }}</span>
-                <button
-                  v-for="ua in userAgentPresets"
-                  :key="ua"
-                  type="button"
-                  class="user-agent-preset-chip"
-                  :title="ua"
-                  @click="draft.userAgent = ua"
-                >{{ userAgentPresetLabel(ua) }}</button>
-              </div>
               <span class="settings-field-hint">{{ $t('settings.userAgentHint') }}</span>
             </div>
           </n-form-item>
@@ -702,7 +696,7 @@ Public License v3. See the LICENSE file for details.
 </template>
 
 <script setup>
-import { computed, onUnmounted, reactive, ref, watch } from 'vue';
+import { computed, h, onUnmounted, reactive, ref, watch } from 'vue';
 import { createDiscreteApi, darkTheme } from 'naive-ui';
 import { naiveDateLocale, naiveLocale, reasoningEffortLabel, t } from '../i18n.mjs';
 import { buildModelConfigExport, mergeModelConfigs, modelConfigIdentity, normalizeApiKeysArray, normalizeReasoningEffort, parseModelConfigImport, reasoningEffortLevels } from '../utils/modelConfigIO.mjs';
@@ -871,16 +865,25 @@ const validationSettings = computed(() => [
 const backgroundSelecting = ref(false);
 const backgroundClearing = ref(false);
 
-// User-Agent presets: click a chip to fill the input above. Kept short for
-// the chip label; the full string is shown in the tooltip.
-const userAgentPresets = [
-  'codex_cli_rs/0.76.0 (Debian 13.0.0; x86_64) WindowsTerminal',
-  'claude-cli/2.1.161 (external, cli)',
+// User-Agent 下拉预设：label 用工具名，value 是从各工具源码核实的真实 UA
+// 字符串（opencode: session/llm/request.ts `opencode/${version}`；
+// pi: utils/pi-user-agent.ts `pi (${platform} ${release}; ${arch})`，无版本号）。
+// 空字符串 = 后台默认 AllyAgent；tag 模式允许自定义输入。
+const userAgentOptions = [
+  { label: t('settings.userAgentDefaultLabel'), value: '' },
+  { label: 'Codex CLI', value: 'codex_cli_rs/0.76.0 (Debian 13.0.0; x86_64) WindowsTerminal' },
+  { label: 'Claude Code', value: 'claude-cli/2.1.161 (external, cli)' },
+  { label: 'OpenCode', value: 'opencode/1.18.25' },
+  { label: 'Pi', value: 'pi (win32 10.0.26100; x64)' },
 ];
-function userAgentPresetLabel(ua) {
-  // Show the leading product token (everything before the first space or /).
-  const m = String(ua || '').match(/^([^\s/]+)/);
-  return m ? m[1] : ua;
+
+function renderUserAgentOptionLabel(option) {
+  const ua = String(option.value || '');
+  return h('span', { class: 'user-agent-option', title: ua || undefined }, option.label);
+}
+
+function onUserAgentSelected(value) {
+  draft.userAgent = String(value ?? '').trim();
 }
 
 async function selectBackground() {
@@ -1938,32 +1941,8 @@ watch(() => props.visible, (visible) => {
   line-height: 1.45;
 }
 
-.user-agent-presets {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 4px;
-}
-.user-agent-presets-label {
-  color: #777;
-  font-size: 11px;
-}
-.user-agent-preset-chip {
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  background: rgba(255, 255, 255, 0.04);
-  color: #b0b0b0;
-  border-radius: 4px;
-  padding: 2px 8px;
-  font-size: 11px;
+.user-agent-option {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s, border-color 0.15s;
-}
-.user-agent-preset-chip:hover {
-  background: rgba(255, 255, 255, 0.1);
-  color: #e0e0e0;
-  border-color: rgba(255, 255, 255, 0.25);
 }
 
 .background-image-row {
