@@ -824,10 +824,11 @@ function makeNode(entry) {
     // 透传后端 FileEntry 的 size / modTime，供二进制文件的信息面板直接使用（无需二次请求）
     size: entry.Size ?? entry.size,
     modTime: entry.ModTime ?? entry.modTime,
-    // Keep a stable, already-loaded children container. The actual entries
-    // are filled after the tree has performed its normal expand rotation.
+    // 符号链接条目：后端 WalkDir 不跟随链接，这里只做如实标注（→ 后缀），
+    // 仍按叶子渲染，不提供展开。
+    symlink: Boolean(entry.Symlink ?? entry.symlink),
+    // 目录先挂一个稳定的空 children 容器，真实条目在展开时填充。
     children: dir ? [] : undefined,
-    childrenLoaded: !dir,
     isLeaf: !dir,
     dir,
   };
@@ -836,8 +837,22 @@ function makeNode(entry) {
 async function listDirectory(path = '', workspace = props.workspace) {
   // includeIgnored: true — 资源树是逐层懒加载，需要展示 node_modules 等全部内容；
   // 模型侧 list_files 默认 false（跳过 gitignore/node_modules）。
-  const entries = await ListFiles({ workspace, path, maxDepth: 1, limit: 1000, includeHidden: true, includeIgnored: true });
-  return (Array.isArray(entries) ? entries : []).map(makeNode);
+  const result = await ListFiles({ workspace, path, maxDepth: 1, limit: 1000, includeHidden: true, includeIgnored: true });
+  const entries = Array.isArray(result?.entries) ? result.entries : [];
+  const nodes = entries.map(makeNode);
+  // 目录超限时后端静默截断；追加一个不可交互的占位行如实提示，
+  // 避免"看起来完整实则缺条目"。
+  if (result?.truncated) {
+    nodes.push({
+      key: `${path || '__root__'}::truncated`,
+      label: t('app.workspaceExplorer.truncatedHint', { count: result.count ?? nodes.length }),
+      path: '',
+      dir: false,
+      isLeaf: true,
+      placeholder: true,
+    });
+  }
+  return nodes;
 }
 
 async function loadRoot() {
@@ -870,11 +885,30 @@ async function loadRoot() {
 }
 
 const loadingTreeNodes = new Set();
+
+// 把新拉取的子节点按 key 合并回 node.children：key 相同的条目保留原对象
+// （保住其已加载的子树内容与展开状态，避免整体换对象后"已展开子目录瞬间
+// 变空且不再触发展开事件"的错乱），仅刷新 size/modTime/symlink 等元数据；
+// 新增条目用新对象，消失条目自然丢弃。条目类型变化（文件↔目录）时放弃旧
+// 对象，让新对象按正确形状重建。
+function mergeChildNodes(node, nextNodes) {
+  const prevByKey = new Map((node.children || []).map((c) => [c.key, c]));
+  node.children = nextNodes.map((n) => {
+    const old = prevByKey.get(n.key);
+    if (!old || old.dir !== n.dir) return n;
+    prevByKey.delete(n.key);
+    const { children: _replaced, ...rest } = n;
+    return Object.assign(old, rest);
+  });
+}
+
 async function onExpandedKeysChange(keys, _options, meta) {
   const node = meta?.node;
+  // 每次展开都重新拉取目录内容：Agent/外部对工作区的改动在"折叠再展开"后
+  // 即可看到最新状态；loadingTreeNodes 只用于去重并发的重复请求。
+  // 返回结果经 mergeChildNodes 合并，不清空折叠期间保留的旧数据。
   const shouldLoad = meta?.action === 'expand'
     && node?.dir
-    && !node.childrenLoaded
     && !loadingTreeNodes.has(node.key);
   expandedKeys.value = Array.isArray(keys) ? keys : [];
   if (!shouldLoad) return;
@@ -885,12 +919,10 @@ async function onExpandedKeysChange(keys, _options, meta) {
   try {
     const children = await listDirectory(node.path, workspace);
     if (disposed || requestID !== requestSequence || workspaceVersion !== workspaceRequestVersion) return;
-    node.children = children;
-    node.childrenLoaded = true;
+    mergeChildNodes(node, children);
   } catch (err) {
     if (disposed || requestID !== requestSequence || workspaceVersion !== workspaceRequestVersion) return;
-    node.children = [];
-    node.childrenLoaded = true;
+    // 拉取失败保留旧内容（可能是过期数据但好过清空），仅提示错误。
     message.error(t('app.workspaceExplorer.treeFailed', { error: errorText(err) }));
   } finally {
     loadingTreeNodes.delete(node.key);
@@ -925,8 +957,7 @@ async function refreshNode(dirPath = '', workspace = props.workspace) {
   try {
     const children = await listDirectory(node.path, workspace);
     if (disposed || requestVersion !== workspaceRequestVersion || workspace !== props.workspace) return;
-    node.children = children;
-    node.childrenLoaded = true;
+    mergeChildNodes(node, children);
   } catch (err) {
     if (workspace === props.workspace) {
       message.error(t('app.workspaceExplorer.treeFailed', { error: errorText(err) }));
@@ -941,16 +972,29 @@ function renderSwitcherIcon() {
 }
 
 function renderLabel({ option }) {
+  // 截断占位行：灰斜体，无交互语义
+  if (option?.placeholder) {
+    return h('span', {
+      class: 'workspace-explorer-node-label is-placeholder',
+      title: t('app.workspaceExplorer.truncatedTitle'),
+    }, option.label);
+  }
   // 「.」开头的隐藏条目（.git、.idea 等）加 is-hidden 类，样式层统一压暗
   const name = String(option?.label || '');
+  const children = [name];
+  if (option?.symlink) {
+    children.push(h('span', { class: 'is-symlink-arrow' }, ' →'));
+  }
   return h('span', {
     class: [
       'workspace-explorer-node-label',
       option?.dir ? 'is-directory' : 'is-file',
       name.startsWith('.') ? 'is-hidden' : '',
     ],
-    title: option.path,
-  }, option.label);
+    title: option?.symlink
+      ? t('app.workspaceExplorer.symlinkHint', { path: option.path })
+      : option.path,
+  }, children);
 }
 
 function nodeProps({ option }) {
@@ -983,6 +1027,7 @@ function nodeProps({ option }) {
       e.preventDefault();
       // 阻止冒泡到树容器的空白区域菜单
       e.stopPropagation();
+      if (option?.placeholder) return;
       contextMenuNode.value = option;
       contextMenuX.value = e.clientX;
       contextMenuY.value = e.clientY;
@@ -1025,7 +1070,8 @@ function selectRangeTo(node) {
     return;
   }
   const [from, to] = anchorIdx < targetIdx ? [anchorIdx, targetIdx] : [targetIdx, anchorIdx];
-  selectedKeys.value = visible.slice(from, to + 1).map((n) => n.path);
+  // filter(Boolean)：截断占位行没有 path，不参与范围选中
+  selectedKeys.value = visible.slice(from, to + 1).map((n) => n.path).filter(Boolean);
 }
 
 // Ctrl/Cmd+点击：切换单个节点的选中状态（不打开文件、不展开目录）

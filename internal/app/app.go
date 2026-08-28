@@ -583,6 +583,9 @@ type FileEntry struct {
 	Dir     bool   `json:"dir"`
 	Size    int64  `json:"size"`
 	ModTime string `json:"modTime"`
+	// Symlink marks symlink entries. WalkDir never follows links, so these
+	// render as leaves; the UI uses the flag to label them honestly.
+	Symlink bool `json:"symlink,omitempty"`
 }
 
 type ListFilesResult struct {
@@ -2665,16 +2668,12 @@ func (a *App) SubmitAskResponse(req AskSubmitRequest) error {
 	}
 }
 
-func (a *App) ListFiles(req ListFilesRequest) ([]FileEntry, error) {
+func (a *App) ListFiles(req ListFilesRequest) (ListFilesResult, error) {
 	cfg, err := a.configForWorkspace(req.Workspace)
 	if err != nil {
-		return nil, err
+		return ListFilesResult{}, err
 	}
-	result, err := a.listFilesWithConfig(cfg, req)
-	if err != nil {
-		return nil, err
-	}
-	return result.Entries, nil
+	return a.listFilesWithConfig(cfg, req)
 }
 
 func (a *App) SearchWorkspacePaths(req WorkspacePathSearchRequest) (WorkspacePathSearchResult, error) {
@@ -2712,6 +2711,10 @@ func (a *App) CreateFile(req CreateFileRequest) (EditResult, error) {
 	if err != nil {
 		return EditResult{}, err
 	}
+	// UI 直调的写操作与模型侧文件变更共用 fileOpsMu 串行化（对齐 executeTool
+	// 与 MovePath），避免用户与 Agent 同时写同一路径时丢失更新。
+	a.fileOpsMu.Lock()
+	defer a.fileOpsMu.Unlock()
 	result, err := a.createFileWithConfig(cfg, req)
 	if err == nil {
 		a.invalidateWorkspaceMapCache(cfg)
@@ -2724,6 +2727,8 @@ func (a *App) CreateDirectory(req CreateDirectoryRequest) error {
 	if err != nil {
 		return err
 	}
+	a.fileOpsMu.Lock()
+	defer a.fileOpsMu.Unlock()
 	err = a.createDirectoryWithConfig(cfg, req)
 	if err == nil {
 		a.invalidateWorkspaceMapCache(cfg)
@@ -2736,6 +2741,8 @@ func (a *App) DeletePath(req DeletePathRequest) error {
 	if err != nil {
 		return err
 	}
+	a.fileOpsMu.Lock()
+	defer a.fileOpsMu.Unlock()
 	_, err = a.deletePathWithConfig(cfg, req)
 	if err == nil {
 		a.invalidateWorkspaceMapCache(cfg)

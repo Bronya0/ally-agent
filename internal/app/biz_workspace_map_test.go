@@ -10,6 +10,7 @@ package app
 import (
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
 	"testing"
 )
@@ -261,5 +262,74 @@ func TestFormatMapFileSize(t *testing.T) {
 		if got := formatMapFileSize(c.in); got != c.want {
 			t.Errorf("formatMapFileSize(%d) = %q, want %q", c.in, got, c.want)
 		}
+	}
+}
+
+// TestListFilesLimitClampsToMax 验证 limit 超上限时按封顶（1000）处理，
+// 而不是重置回默认值 200：请求 5000 条时应拿到目录里的全部 300 个条目。
+func TestListFilesLimitClampsToMax(t *testing.T) {
+	root := t.TempDir()
+	for i := 0; i < 300; i++ {
+		name := filepath.Join(root, "f"+strings.Repeat("x", i/100)+"_"+strings.Repeat("y", i%100)+".txt")
+		if err := os.WriteFile(name, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	app := NewApp()
+	cfg := ConfigState{Workspace: root}
+	result, err := app.listFilesWithConfig(cfg, ListFilesRequest{Limit: 5000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Entries) != 300 {
+		t.Fatalf("limit=5000 must clamp to 1000 and return all 300 entries, got %d", len(result.Entries))
+	}
+	if result.Truncated {
+		t.Fatalf("300 entries under the 1000 cap must not be marked truncated")
+	}
+}
+
+// TestListFilesMarksSymlinks 验证符号链接条目带 Symlink 标记且不展开为
+// 目录（WalkDir 不跟随链接）。Windows 上创建符号链接需要特权，跳过。
+func TestListFilesMarksSymlinks(t *testing.T) {
+	if goruntime.GOOS == "windows" {
+		t.Skip("creating symlinks on Windows requires elevated privileges")
+	}
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "real"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "real", "a.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(root, "real"), filepath.Join(root, "link-dir")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(root, "real", "a.txt"), filepath.Join(root, "link-file")); err != nil {
+		t.Fatal(err)
+	}
+	app := NewApp()
+	cfg := ConfigState{Workspace: root}
+	result, err := app.listFilesWithConfig(cfg, ListFilesRequest{MaxDepth: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]FileEntry{}
+	for _, e := range result.Entries {
+		seen[e.Name] = e
+	}
+	linkDir, ok := seen["link-dir"]
+	if !ok {
+		t.Fatalf("link-dir must be listed, got %+v", result.Entries)
+	}
+	if !linkDir.Symlink || linkDir.Dir {
+		t.Fatalf("link-dir must be Symlink=true Dir=false, got %+v", linkDir)
+	}
+	linkFile, ok := seen["link-file"]
+	if !ok {
+		t.Fatalf("link-file must be listed, got %+v", result.Entries)
+	}
+	if !linkFile.Symlink {
+		t.Fatalf("link-file must be Symlink=true, got %+v", linkFile)
 	}
 }

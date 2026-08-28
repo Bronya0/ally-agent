@@ -510,6 +510,10 @@ code, pre {
 .workspace-explorer-node-label.is-file { color: #9ca4b1; }
 /* 隐藏条目（. 开头）整体压暗，不改变原色相：目录仍是暗金、文件仍是暗灰 */
 .workspace-explorer-node-label.is-hidden { opacity: 0.55; }
+/* 符号链接条目的箭头后缀（WalkDir 不跟随链接，仅如实标注） */
+.workspace-explorer-node-label .is-symlink-arrow { margin-left: 2px; color: #8f96a3; }
+/* 目录超限截断的占位行：灰斜体，无交互语义 */
+.workspace-explorer-node-label.is-placeholder { color: #707070; font-style: italic; }
 /* hover 保留背景高亮（见 treeThemeOverrides），文字颜色不变 */
 .workspace-explorer-tree-view .n-tree-node--selected .workspace-explorer-node-label { color: #f5f9ff; }
 .workspace-explorer-empty,

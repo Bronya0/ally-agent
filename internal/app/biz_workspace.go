@@ -88,8 +88,13 @@ func (a *App) listFilesWithConfig(cfg ConfigState, req ListFilesRequest) (ListFi
 		maxDepth = 3
 	}
 	limit := req.Limit
-	if limit <= 0 || limit > 1000 {
+	if limit <= 0 {
 		limit = 200
+	}
+	// 超上限按封顶处理而不是重置回默认值：请求 5000 条应得到 1000 条
+	// （允许范围内的最大值），而不是比合法请求拿得更少。
+	if limit > 1000 {
+		limit = 1000
 	}
 
 	// Pre-allocate up to limit capacity. The previous zero-capacity slice
@@ -167,6 +172,7 @@ func (a *App) listFilesWithConfig(cfg ConfigState, req ListFilesRequest) (ListFi
 			Dir:     d.IsDir(),
 			Size:    info.Size(),
 			ModTime: info.ModTime().Format(time.RFC3339),
+			Symlink: d.Type()&fs.ModeSymlink != 0,
 		})
 		lowerPaths = append(lowerPaths, strings.ToLower(displayPath))
 		return nil
