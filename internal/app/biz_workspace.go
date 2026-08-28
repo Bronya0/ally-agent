@@ -175,6 +175,15 @@ func (a *App) listFilesWithConfig(cfg ConfigState, req ListFilesRequest) (ListFi
 			Symlink: d.Type()&fs.ModeSymlink != 0,
 		})
 		lowerPaths = append(lowerPaths, strings.ToLower(displayPath))
+		// Prune descent one level earlier than "depth > maxDepth": WalkDir
+		// eagerly ReadDirs a subdirectory before visiting any child, so
+		// waiting until a depth-exceeding grandchild made a maxDepth=1
+		// listing (explorer expand) fully enumerate every first-level
+		// subdirectory (node_modules included) just to discard it. The entry
+		// itself is still reported; only its subtree is skipped.
+		if d.IsDir() && depth >= maxDepth {
+			return filepath.SkipDir
+		}
 		return nil
 	})
 	if err != nil {
