@@ -291,7 +291,7 @@ Skill settings are controlled by `disabledSkills` in `ConfigState`.
 - Default state: all discovered skills are enabled.
 - `DeactivateSkill(name)`: adds the skill name to `disabledSkills` and writes config.
 - `ActivateSkill(name)`: removes the skill name from `disabledSkills`, reads the skill file, and returns a rendered `<skill-loaded>` block.
-- `ClearSkills()`: disables all currently discovered skills and writes config.
+- `ClearSkills()`: disables all currently discovered non-builtin skills and writes config. Built-in skills are always-on (the Settings UI locks their toggles), so the sweep must not disable them; replacing the list also re-enables builtin entries left behind by older configs.
 - `GetActiveSkills()`: returns the currently enabled skill names.
 
 Disabled skills remain visible in Settings but are not injected into the system prompt metadata, are not available through the `skill` tool, and are marked off in Settings → Skills.
@@ -541,7 +541,7 @@ Ally runs inside Wails v3 WebView2 / WKWebView / WebKitGTK, not a normal browser
 | `/sessions` | Show sessions; `/switch N` switches session |
 | `/init` | Explore project and generate AGENTS.md |
 | `/skills` | Show discovered skills and enabled/disabled status |
-| `/clearskills` | Disable all discovered skills |
+| `/clearskills` | Disable all discovered non-builtin skills |
 | `/<skillname>` | Explicitly load a skill |
 | `/skill:<name>` | Alternate explicit skill loading syntax |
 | `/note` | Save durable project knowledge |

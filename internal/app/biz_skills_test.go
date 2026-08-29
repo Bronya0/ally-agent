@@ -182,3 +182,45 @@ func TestScanSkillDirDedupsCaseInsensitively(t *testing.T) {
 		t.Fatalf("first scanned skill must win, got description %q", skills[0].Description)
 	}
 }
+
+func TestClearSkillsKeepsBuiltinSkillsEnabled(t *testing.T) {
+	dir := t.TempDir()
+	workspace := filepath.Join(dir, "workspace")
+	writeSkillTestFile(t, filepath.Join(workspace, ".agents", "skills", "my-skill"), "SKILL.md", "---\nname: my-skill\ndescription: project skill\n---\nbody")
+
+	app := NewApp()
+	app.initialized = true
+	app.configPath = filepath.Join(dir, "config.json")
+	app.config = ConfigState{Workspace: workspace}
+
+	// Simulate a config written by an older build: the bulk sweep disabled
+	// built-in skills too, and the UI offers no way to re-enable them.
+	builtin := builtinSkillEntries()
+	if len(builtin) == 0 {
+		t.Fatal("expected embedded built-in skills")
+	}
+	stale := make([]string, 0, len(builtin)+1)
+	for _, b := range builtin {
+		stale = append(stale, b.Name)
+	}
+	stale = append(stale, "my-skill")
+	if err := app.setDisabledSkills(stale); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := app.ClearSkills(); err != nil {
+		t.Fatal(err)
+	}
+	app.mu.Lock()
+	disabled := cloneStringSlice(app.disabledSkills)
+	app.mu.Unlock()
+
+	for _, b := range builtin {
+		if skillNameInList(disabled, b.Name) {
+			t.Fatalf("built-in skill %s must not be disabled by ClearSkills", b.Name)
+		}
+	}
+	if !skillNameInList(disabled, "my-skill") {
+		t.Fatalf("non-builtin skill must stay disabled, got %v", disabled)
+	}
+}

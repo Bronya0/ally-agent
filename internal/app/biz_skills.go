@@ -160,10 +160,17 @@ func (a *App) ActivateSkill(name string) (string, error) {
 	return "", fmt.Errorf("skill not found: %s", name)
 }
 
+// ClearSkills disables every discovered non-builtin skill. Built-in skills
+// are always-on in the UI (their toggles are locked), so the bulk sweep must
+// not touch them; replacing the disabled list also drops builtin entries left
+// behind by older builds, re-enabling anything the old bug swept in.
 func (a *App) ClearSkills() error {
 	skills, _ := a.ListSkills()
 	disabled := make([]string, 0, len(skills))
 	for _, sk := range skills {
+		if sk.Source == "builtin" {
+			continue
+		}
 		disabled = append(disabled, sk.Name)
 	}
 	return a.setDisabledSkills(disabled)

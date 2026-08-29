@@ -401,7 +401,7 @@ Public License v3. See the LICENSE file for details.
             </div>
             <n-space>
               <n-button size="small" secondary :loading="skillsLoading" @click="refreshSkillState">{{ $t('common.refresh') }}</n-button>
-              <n-button size="small" secondary :disabled="!activeSkillNames.length || skillsLoading" @click="clearLoadedSkills(false)">{{ $t('settings.skillsDisableAll') }}</n-button>
+              <n-button size="small" secondary :disabled="!toggleableActiveSkillCount || skillsLoading" @click="clearLoadedSkills(false)">{{ $t('settings.skillsDisableAll') }}</n-button>
             </n-space>
           </div>
           <div class="skill-settings-list">
@@ -1625,6 +1625,12 @@ const sortedSkills = computed(() => {
     if (!aBuiltin && bBuiltin) return 1;
     return String(a.name).localeCompare(b.name);
   });
+});
+
+// Built-in skills are always on and excluded from the bulk sweep, so the
+// disable-all button only cares about active non-builtin skills.
+const toggleableActiveSkillCount = computed(() => {
+  return availableSkills.value.filter((sk) => sk.source !== 'builtin' && isSkillActive(sk.name)).length;
 });
 
 async function handleOpenSkillPath(sk) {
