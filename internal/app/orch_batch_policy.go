@@ -46,13 +46,13 @@ func detectWriteBatchConflicts(cfg ConfigState, calls []openai.ToolCall) map[int
 	}
 	conflicts := map[int]error{}
 	for _, refs := range groups {
-		if len(refs) < 2 {
-			continue
-		}
-		display := refs[0].display
-		err := codedToolError("E_WRITE_BATCH_CONFLICT", fmt.Errorf("multiple file mutations in the same tool batch target %s; no mutation for this path was executed. Send one write, wait for its result, then re-read before the next write", display))
-		for _, ref := range refs {
-			conflicts[ref.index] = err
+		// Refs are appended in tool-call index order, so refs[0] is the
+		// earliest mutation for this path. It executes; later same-path calls
+		// are skipped and reported, mirroring E_DUPLICATE_TOOL_CALL: the model
+		// sees which call won and re-sends the skipped change in a later
+		// response once it knows the path's new state.
+		for _, ref := range refs[1:] {
+			conflicts[ref.index] = codedToolError("E_WRITE_BATCH_CONFLICT", fmt.Errorf("another file mutation for %s appears earlier in this tool batch; only the first one executes. This call was skipped — wait for that mutation's result, then re-read the file (or reuse its returned version) and re-send this change in a later response if it is still needed", refs[0].display))
 		}
 	}
 	return conflicts
@@ -120,6 +120,17 @@ func detectToolBatchConflicts(cfg ConfigState, calls []openai.ToolCall) map[int]
 	return conflicts
 }
 
+// conflictSkippedCallIndexes returns the tool-call indexes that the batch
+// conflict policy rejects before execution; planning passes must not let
+// those calls own validation units they will never run.
+func conflictSkippedCallIndexes(conflicts map[int]error) map[int]bool {
+	skip := make(map[int]bool, len(conflicts))
+	for idx := range conflicts {
+		skip[idx] = true
+	}
+	return skip
+}
+
 // normalizeToolArgsForDedup returns a canonical form of a tool-call arguments
 // JSON string used only for deduplication. It parses the JSON and reserializes
 // it with sorted keys and no extra whitespace, so that field-order differences
@@ -173,11 +184,13 @@ type fileMutationTarget struct{ key, display string }
 
 func fileMutationTargets(cfg ConfigState, name, arguments string) []fileMutationTarget {
 	if name == "edit" {
-		var req ModelEditToolRequest
+		// The flat model-facing request carries exactly one file; conflict
+		// detection and execution share the same plan boundary.
+		var req FileTextEdits
 		if json.Unmarshal([]byte(arguments), &req) != nil {
 			return nil
 		}
-		plan, err := planLocalEditBatch(cfg, req.Files, localEditPlanForConflict)
+		plan, err := planLocalEditBatch(cfg, []FileTextEdits{req}, localEditPlanForConflict)
 		if err != nil {
 			return nil
 		}

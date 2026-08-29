@@ -1074,10 +1074,6 @@ type EditOperation struct {
 	ReplaceAll bool   `json:"replaceAll,omitempty"`
 }
 
-type ModelEditToolRequest struct {
-	Files []FileTextEdits `json:"files"`
-}
-
 type FileTextEdits struct {
 	Path    string       `json:"path"`
 	Version string       `json:"version"`
@@ -1978,7 +1974,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			}
 		}
 
-		executeCall := func(idx int, c openai.ToolCall) {
+		executeCall := func(idx int, c openai.ToolCall, plannedValidationPaths []string, hasValidationPlan bool) {
 			started := time.Now()
 			executionArgs := c.Function.Arguments
 			if idx < len(toolExecutionArgs) && toolExecutionArgs[idx] != "" {
@@ -1989,6 +1985,9 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 				toolCallIndex: idx, toolCallID: c.ID, toolName: c.Function.Name, toolArgs: c.Function.Arguments,
 			})
 			toolCtx = context.WithValue(toolCtx, runReadCacheContextKey{}, readCache)
+			if hasValidationPlan {
+				toolCtx = context.WithValue(toolCtx, batchValidationPathsContextKey{}, plannedValidationPaths)
+			}
 			r := a.executeTool(toolCtx, cfg, sessionID, c.Function.Name, []byte(executionArgs))
 			duration := time.Since(started).Milliseconds()
 			rj, _ := json.Marshal(r)
@@ -2020,15 +2019,21 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 				defer wg.Done()
 				toolSem <- struct{}{}        // acquire
 				defer func() { <-toolSem }() // release
-				executeCall(idx, c)
+				executeCall(idx, c, nil, false)
 			}(i, call)
 		}
 		wg.Wait()
+		// Spread validation work over the batch: directory-level checks (go
+		// vet per package, tsc/vue-tsc per project) run once per unit on the
+		// last mutation call touching it instead of once per edit call.
+		validationRoots, _ := workspaceRoots(cfg)
+		validationPlan := planBatchValidation(validationRoots, toolCalls, conflictSkippedCallIndexes(toolConflicts))
 		for i, call := range toolCalls {
 			if _, conflict := toolConflicts[i]; conflict || !isOrderedFileMutationTool(call.Function.Name) {
 				continue
 			}
-			executeCall(i, call)
+			planned, hasPlan := validationPlan[i]
+			executeCall(i, call, planned, hasPlan)
 		}
 
 		// Append tool results to the model message history in tool-call
@@ -2207,34 +2212,41 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 			data, err = a.readFileWithConfig(cfg, req)
 		}
 	case "edit":
-		var req ModelEditToolRequest
+		// The model-facing request is the flat FileTextEdits itself: exactly
+		// one file per call, path/version/changes at the top level. Multi-file
+		// changes are parallel edit calls in one model response.
+		var req FileTextEdits
 		err, argWarnings = decodeJSON(&req)
+		editFiles := []FileTextEdits{req}
 		salvagedDropped := -1
 		if err != nil && isIncompleteStreamJSON(err) {
 			// Stream cut off mid-arguments: apply the complete prefix instead
 			// of failing the whole call, and report the dropped tail through
 			// the result warnings so the model re-reads and resends the rest.
-			if candidate, dropped, usable := salvageEditRequest(args); usable && validateModelEditToolRequest(candidate.Files) == nil {
-				req = candidate
-				salvagedDropped = dropped
-				err = nil
+			if candidate, dropped, usable := salvageEditRequest(args); usable {
+				salvaged := []FileTextEdits{candidate}
+				if validateModelEditToolRequest(salvaged) == nil {
+					editFiles = salvaged
+					salvagedDropped = dropped
+					err = nil
+				}
 			}
 		}
 		if err == nil {
-			err = validateModelEditToolRequest(req.Files)
+			err = validateModelEditToolRequest(editFiles)
 		}
 		if err == nil {
 			a.fileOpsMu.Lock()
-			data, err = a.editFilesWithConfig(cfg, req.Files)
+			data, err = a.editFilesWithConfig(cfg, editFiles)
 			a.fileOpsMu.Unlock()
 			if err == nil {
-				paths := make([]string, 0, len(req.Files))
-				for _, file := range req.Files {
+				paths := make([]string, 0, len(editFiles))
+				for _, file := range editFiles {
 					paths = append(paths, file.Path)
 				}
-				data = attachValidation(data, a.validateChangedFiles(ctx, cfg, paths))
+				data = attachValidation(data, a.validateChangedFilesForCall(ctx, cfg, paths))
 				if salvagedDropped >= 0 {
-					data = attachEditSalvageWarning(data, salvageChanges(req.Files), salvagedDropped)
+					data = attachEditSalvageWarning(data, salvageChanges(editFiles), salvagedDropped)
 				}
 				a.invalidateWorkspaceMapCache(cfg)
 				invalidateRunReadCache(ctx)
@@ -2248,7 +2260,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 			data, err = a.createFileWithConfig(cfg, req)
 			a.fileOpsMu.Unlock()
 			if err == nil {
-				data = attachValidation(data, a.validateChangedFiles(ctx, cfg, []string{req.Path}))
+				data = attachValidation(data, a.validateChangedFilesForCall(ctx, cfg, []string{req.Path}))
 				a.invalidateWorkspaceMapCache(cfg)
 				invalidateRunReadCache(ctx)
 			}

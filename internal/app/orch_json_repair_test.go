@@ -51,18 +51,18 @@ func TestRepairToolArgJSONTopLevelStringEncodedArray(t *testing.T) {
 }
 
 func TestRepairToolArgJSONNestedStringEncodedChanges(t *testing.T) {
-	args := []byte(`{"files":[{"path":"app.go","version":"9k3m7x","changes":"[{\"oldText\":\"a\",\"newText\":\"b\"}]"}]}`)
-	typeErr := unmarshalTypeErrorFor(t, args, &ModelEditToolRequest{})
+	args := []byte(`{"path":"app.go","version":"9k3m7x","changes":"[{\"oldText\":\"a\",\"newText\":\"b\"}]"}`)
+	typeErr := unmarshalTypeErrorFor(t, args, &FileTextEdits{})
 
 	fixed, ok := repairToolArgJSON(args, typeErr)
 	if !ok {
 		t.Fatalf("expected repair to succeed, field path was %q", typeErr.Field)
 	}
-	var req ModelEditToolRequest
+	var req FileTextEdits
 	if err := json.Unmarshal(fixed, &req); err != nil {
 		t.Fatalf("repaired JSON still invalid: %v\n%s", err, fixed)
 	}
-	if len(req.Files) != 1 || len(req.Files[0].Changes) != 1 || req.Files[0].Changes[0].OldText != "a" {
+	if len(req.Changes) != 1 || req.Changes[0].OldText != "a" {
 		t.Fatalf("unexpected repaired request: %#v", req)
 	}
 }
@@ -117,38 +117,6 @@ func TestExecuteToolReadRepairsStringEncodedFiles(t *testing.T) {
 	}
 }
 
-func TestExecuteToolEditRepairsStringEncodedFiles(t *testing.T) {
-	app := NewApp()
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "sample.txt"), []byte("alpha\nbeta\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	cfg := ConfigState{Workspace: dir}
-
-	readRes := app.executeTool(context.Background(), cfg, "s-1", "read", []byte(`{"files":[{"path":"sample.txt"}]}`))
-	if !readRes.OK {
-		t.Fatalf("read failed: %v", readRes.Error)
-	}
-	version := readRes.Data.(*BatchReadResult).Files[0].Version
-
-	// The whole files array arrives double-encoded as a string.
-	editArgs := []byte(`{"files":"[{\"path\":\"sample.txt\",\"version\":\"` + version + `\",\"changes\":[{\"oldText\":\"alpha\",\"newText\":\"ALPHA\"}]}]"}`)
-	res := app.executeTool(context.Background(), cfg, "s-1", "edit", editArgs)
-	if !res.OK {
-		t.Fatalf("edit failed: %v", res.Error)
-	}
-	if len(res.Warnings) == 0 || !strings.Contains(res.Warnings[0], "files") {
-		t.Fatalf("expected a repair warning mentioning files, got %v", res.Warnings)
-	}
-	got, err := os.ReadFile(filepath.Join(dir, "sample.txt"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(got) != "ALPHA\nbeta\n" {
-		t.Fatalf("unexpected file content after edit: %q", got)
-	}
-}
-
 func TestExecuteToolEditRepairsNestedStringEncodedChanges(t *testing.T) {
 	app := NewApp()
 	dir := t.TempDir()
@@ -163,8 +131,8 @@ func TestExecuteToolEditRepairsNestedStringEncodedChanges(t *testing.T) {
 	}
 	version := readRes.Data.(*BatchReadResult).Files[0].Version
 
-	// files is a proper array, but each item's changes is double-encoded.
-	editArgs := []byte(`{"files":[{"path":"sample.txt","version":"` + version + `","changes":"[{\"oldText\":\"beta\",\"newText\":\"BETA\"}]"}]}`)
+	// `changes` arrives double-encoded as a string in the flat request.
+	editArgs := []byte(`{"path":"sample.txt","version":"` + version + `","changes":"[{\"oldText\":\"beta\",\"newText\":\"BETA\"}]"}`)
 	res := app.executeTool(context.Background(), cfg, "s-1", "edit", editArgs)
 	if !res.OK {
 		t.Fatalf("edit failed: %v", res.Error)

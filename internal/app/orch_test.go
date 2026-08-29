@@ -158,10 +158,10 @@ func TestEditToolSchemaIsBatchChangesOnly(t *testing.T) {
 	if !ok {
 		t.Fatalf("edit schema properties missing: %#v", params)
 	}
-	if len(properties) != 1 || properties["files"] == nil {
-		t.Fatalf("edit should expose only files: %#v", properties)
+	if len(properties) != 3 || properties["path"] == nil || properties["version"] == nil || properties["changes"] == nil {
+		t.Fatalf("edit should expose exactly the flat path/version/changes fields: %#v", properties)
 	}
-	for _, legacy := range []string{"oldString", "newString", "replaceAll", "edits", "startLine", "endLine", "newText"} {
+	for _, legacy := range []string{"files", "oldString", "newString", "replaceAll", "edits", "startLine", "endLine", "newText"} {
 		if _, exists := properties[legacy]; exists {
 			t.Fatalf("edit schema still exposes legacy field %s", legacy)
 		}
@@ -170,7 +170,7 @@ func TestEditToolSchemaIsBatchChangesOnly(t *testing.T) {
 	if !ok {
 		t.Fatalf("unexpected edit required type %T", params["required"])
 	}
-	wantRequired := map[string]bool{"files": true}
+	wantRequired := map[string]bool{"path": true, "version": true, "changes": true}
 	if len(required) != len(wantRequired) {
 		t.Fatalf("unexpected required fields: %#v", required)
 	}
@@ -227,17 +227,10 @@ func TestEditToolSchemaIsBatchChangesOnly(t *testing.T) {
 			t.Fatal("replace_text should not be exposed; edit is the only local edit tool")
 		}
 	}
-	filesSchema := properties["files"].(map[string]any)
-	fileItems := filesSchema["items"].(map[string]any)
-	fileProperties := fileItems["properties"].(map[string]any)
-	if fileProperties["version"] == nil || fileProperties["expectedMd5"] != nil {
-		t.Fatalf("edit file schema must expose version and reject expectedMd5: %#v", fileProperties)
+	if properties["version"] == nil || properties["expectedMd5"] != nil {
+		t.Fatalf("edit schema must expose version and reject expectedMd5: %#v", properties)
 	}
-	fileRequired := fileItems["required"].([]string)
-	if !containsString(fileRequired, "version") {
-		t.Fatalf("edit file schema must require version: %#v", fileRequired)
-	}
-	changesSchema, ok := fileProperties["changes"].(map[string]any)
+	changesSchema, ok := properties["changes"].(map[string]any)
 	if !ok {
 		t.Fatalf("edit changes schema missing: %#v", properties["changes"])
 	}
@@ -272,46 +265,76 @@ func containsString(values []string, want string) bool {
 	return false
 }
 
-func TestDetectWriteBatchConflictsAllowsRepeatedPathInsideOneLocalEdit(t *testing.T) {
+func TestDetectWriteBatchConflictsBetweenSeparateMutationCalls(t *testing.T) {
 	cfg := ConfigState{Workspace: t.TempDir()}
+	// One flat edit call alone never conflicts with itself; repeated paths
+	// inside one internal plan are merged by planLocalEditBatch instead.
 	calls := []openai.ToolCall{{Function: openai.FunctionCall{
 		Name:      "edit",
-		Arguments: `{"files":[{"path":"sample.txt"},{"path":"./sample.txt"}]}`,
+		Arguments: `{"path":"sample.txt","version":"abc123","changes":[{"oldText":"a","newText":"b"}]}`,
 	}}}
 	if conflicts := detectWriteBatchConflicts(cfg, calls); len(conflicts) != 0 {
-		t.Fatalf("one local edit call should merge repeated paths, got %#v", conflicts)
+		t.Fatalf("one local edit call should not conflict with itself, got %#v", conflicts)
 	}
 
+	// A later same-path mutation is skipped; the first call in tool-call index
+	// order still executes.
 	calls = append(calls, openai.ToolCall{Function: openai.FunctionCall{
 		Name:      "delete",
 		Arguments: `{"path":"sample.txt"}`,
 	}})
 	conflicts := detectWriteBatchConflicts(cfg, calls)
-	if len(conflicts) != 2 {
-		t.Fatalf("a separate mutation call must still conflict with the merged edit target, got %#v", conflicts)
+	if len(conflicts) != 1 {
+		t.Fatalf("only the later same-path call must be skipped, got %#v", conflicts)
 	}
-	for _, index := range []int{0, 1} {
-		if toolErrorCode(conflicts[index]) != "E_WRITE_BATCH_CONFLICT" {
-			t.Fatalf("expected E_WRITE_BATCH_CONFLICT for call %d, got %v", index, conflicts[index])
-		}
+	if _, exists := conflicts[0]; exists {
+		t.Fatalf("the first mutation for a path must execute: %#v", conflicts)
+	}
+	if toolErrorCode(conflicts[1]) != "E_WRITE_BATCH_CONFLICT" {
+		t.Fatalf("expected E_WRITE_BATCH_CONFLICT for call 1, got %v", conflicts[1])
+	}
+}
+
+func TestDetectWriteBatchConflictsSkipsLaterSamePathCalls(t *testing.T) {
+	cfg := ConfigState{Workspace: t.TempDir()}
+	// Two edit calls to one file in one batch: the first executes, the second
+	// is skipped with guidance to re-send after seeing the first result.
+	calls := []openai.ToolCall{
+		{Function: openai.FunctionCall{Name: "edit", Arguments: `{"path":"sample.txt","version":"abc123","changes":[{"oldText":"a","newText":"b"}]}`}},
+		{Function: openai.FunctionCall{Name: "edit", Arguments: `{"path":"./sample.txt","version":"abc123","changes":[{"oldText":"c","newText":"d"}]}`}},
+	}
+	conflicts := detectWriteBatchConflicts(cfg, calls)
+	if len(conflicts) != 1 {
+		t.Fatalf("expected only the later edit call to be skipped, got %#v", conflicts)
+	}
+	if _, exists := conflicts[0]; exists {
+		t.Fatalf("the first edit must execute: %#v", conflicts)
+	}
+	err := conflicts[1].Error()
+	if !strings.Contains(err, "skipped") || !strings.Contains(err, "re-send") {
+		t.Fatalf("skipped call should teach re-sending after the first result, got %v", err)
+	}
+	if toolErrorCode(conflicts[1]) != "E_WRITE_BATCH_CONFLICT" {
+		t.Fatalf("expected E_WRITE_BATCH_CONFLICT for the second call, got %v", conflicts[1])
 	}
 }
 
 func TestDetectWriteBatchConflictsNormalizesSamePath(t *testing.T) {
 	cfg := ConfigState{Workspace: t.TempDir()}
 	calls := []openai.ToolCall{
-		{Function: openai.FunctionCall{Name: "edit", Arguments: `{"files":[{"path":"sample.txt"}]}`}},
+		{Function: openai.FunctionCall{Name: "edit", Arguments: `{"path":"sample.txt","version":"abc123","changes":[{"oldText":"a","newText":"b"}]}`}},
 		{Function: openai.FunctionCall{Name: "delete", Arguments: `{"path":"./sample.txt"}`}},
 		{Function: openai.FunctionCall{Name: "create", Arguments: `{"path":"other.txt"}`}},
 	}
 	conflicts := detectWriteBatchConflicts(cfg, calls)
-	if len(conflicts) != 2 {
-		t.Fatalf("expected two conflicting calls, got %#v", conflicts)
+	if len(conflicts) != 1 {
+		t.Fatalf("expected only the later same-path call to be skipped, got %#v", conflicts)
 	}
-	for _, index := range []int{0, 1} {
-		if toolErrorCode(conflicts[index]) != "E_WRITE_BATCH_CONFLICT" {
-			t.Fatalf("expected E_WRITE_BATCH_CONFLICT for call %d, got %v", index, conflicts[index])
-		}
+	if _, exists := conflicts[0]; exists {
+		t.Fatalf("the first mutation must execute: %#v", conflicts)
+	}
+	if toolErrorCode(conflicts[1]) != "E_WRITE_BATCH_CONFLICT" {
+		t.Fatalf("expected E_WRITE_BATCH_CONFLICT for call 1, got %v", conflicts[1])
 	}
 	if _, exists := conflicts[2]; exists {
 		t.Fatalf("different path should not conflict: %#v", conflicts)
@@ -1071,15 +1094,138 @@ func TestCompactEditResultForModelPreservesWarnings(t *testing.T) {
 	}
 }
 
+func TestPlanBatchValidationMergesSharedUnits(t *testing.T) {
+	root := t.TempDir()
+	cfg := ConfigState{Workspace: root}
+	writeToolTestFile(t, root, "pkg/a.go", "package pkg\n")
+	writeToolTestFile(t, root, "pkg/b.go", "package pkg\n")
+	writeToolTestFile(t, root, "web/x.vue", "<template><div/></template>\n")
+	writeToolTestFile(t, root, "data/cfg.json", "{}\n")
+	calls := []openai.ToolCall{
+		{Function: openai.FunctionCall{Name: "edit", Arguments: `{"path":"pkg/a.go","version":"abc123","changes":[{"oldText":"a","newText":"b"}]}`}},
+		{Function: openai.FunctionCall{Name: "read", Arguments: `{"files":[{"path":"pkg/a.go"}]}`}},
+		{Function: openai.FunctionCall{Name: "edit", Arguments: `{"path":"pkg/b.go","version":"abc123","changes":[{"oldText":"a","newText":"b"}]}`}},
+		{Function: openai.FunctionCall{Name: "create", Arguments: `{"path":"data/cfg.json","content":"{}"}`}},
+		{Function: openai.FunctionCall{Name: "edit", Arguments: `{"path":"web/x.vue","version":"abc123","changes":[{"oldText":"div","newText":"span"}]}`}},
+	}
+	roots, err := workspaceRoots(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := planBatchValidation(roots, calls, nil)
+	if plan == nil {
+		t.Fatal("expected a validation plan")
+	}
+	// The go package is one unit: call 0 defers to call 2, the last call
+	// touching the package, which validates both files with complete filters.
+	if got := plan[0]; len(got) != 0 {
+		t.Fatalf("call 0 should defer its package to the later edit, got %v", got)
+	}
+	if got := plan[2]; len(got) != 2 || got[0] != "pkg/a.go" || got[1] != "pkg/b.go" {
+		t.Fatalf("call 2 should validate both package files, got %v", got)
+	}
+	// Per-file units stay with their own call.
+	if got := plan[3]; len(got) != 1 || got[0] != "data/cfg.json" {
+		t.Fatalf("create keeps its own file, got %v", got)
+	}
+	if got := plan[4]; len(got) != 1 || got[0] != "web/x.vue" {
+		t.Fatalf("vue file stays with its own call, got %v", got)
+	}
+	if _, exists := plan[1]; exists {
+		t.Fatalf("non-mutation calls get no plan entry: %v", plan[1])
+	}
+
+	// A batch without edit/create calls yields no plan at all.
+	if plan := planBatchValidation(roots, calls[1:2], nil); plan != nil {
+		t.Fatalf("expected no plan without edit/create calls, got %v", plan)
+	}
+
+	// Conflict-skipped calls never execute, so they must neither own a unit
+	// nor contribute paths to it: the executed earlier edit keeps its
+	// validation instead of deferring to a call that will not run.
+	plan = planBatchValidation(roots, []openai.ToolCall{
+		{Function: openai.FunctionCall{Name: "edit", Arguments: `{"path":"pkg/a.go","version":"abc123","changes":[{"oldText":"a","newText":"b"}]}`}},
+		{Function: openai.FunctionCall{Name: "edit", Arguments: `{"path":"pkg/b.go","version":"abc123","changes":[{"oldText":"a","newText":"b"}]}`}},
+		{Function: openai.FunctionCall{Name: "edit", Arguments: `{"path":"pkg/c.go","version":"abc123","changes":[{"oldText":"a","newText":"b"}]}`}},
+	}, map[int]bool{2: true})
+	if got := plan[0]; len(got) != 0 {
+		t.Fatalf("call 0 should defer its package to the later executing edit, got %v", got)
+	}
+	if got := plan[1]; len(got) != 2 || got[0] != "pkg/a.go" || got[1] != "pkg/b.go" {
+		t.Fatalf("call 1 validates the package's executed files only, got %v", got)
+	}
+	for _, entry := range plan {
+		for _, path := range entry {
+			if path == "pkg/c.go" {
+				t.Fatalf("conflict-skipped call's path must not be validated: %v", plan)
+			}
+		}
+	}
+	if _, exists := plan[2]; exists {
+		t.Fatalf("conflict-skipped call must get no plan entry: %v", plan[2])
+	}
+}
+
+func TestExecuteToolEditValidationFollowsBatchPlan(t *testing.T) {
+	root := t.TempDir()
+	original := []byte("{\"ok\":true}\n")
+	writeToolTestFile(t, root, "config.json", string(original))
+	app := NewApp()
+	enabled := true
+	cfg := ConfigState{Workspace: root, AutoValidationJSON: &enabled}
+	args, err := json.Marshal(FileTextEdits{
+		Path:    "config.json",
+		Version: hashVersion(original),
+		Changes: []TextChange{{OldText: "true", NewText: ""}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// An empty planned set means this call's paths were absorbed by a later
+	// call in the same batch: no validation runs here.
+	emptyCtx := context.WithValue(context.Background(), batchValidationPathsContextKey{}, []string{})
+	result := app.executeTool(emptyCtx, cfg, "s-1", "edit", args)
+	if !result.OK {
+		t.Fatalf("edit failed: %v", result.Error)
+	}
+	if edited, ok := result.Data.(MultiEditResult); !ok || edited.Validation != "" {
+		t.Fatalf("expected deferred validation to be empty, got %#v", result.Data)
+	}
+
+	// With a planned set, the call validates exactly those paths (own or
+	// absorbed from earlier same-unit calls).
+	writeToolTestFile(t, root, "config.json", string(original))
+	plannedCtx := context.WithValue(context.Background(), batchValidationPathsContextKey{}, []string{"config.json"})
+	result = app.executeTool(plannedCtx, cfg, "s-1", "edit", args)
+	if !result.OK {
+		t.Fatalf("edit failed: %v", result.Error)
+	}
+	edited, ok := result.Data.(MultiEditResult)
+	if !ok || edited.Validation == "" {
+		t.Fatalf("expected validation report on the planned paths, got %#v", result.Data)
+	}
+
+	// Without a plan in ctx the call keeps the plain per-call behavior.
+	writeToolTestFile(t, root, "config.json", string(original))
+	result = app.executeTool(context.Background(), cfg, "s-1", "edit", args)
+	if !result.OK {
+		t.Fatalf("edit failed: %v", result.Error)
+	}
+	if edited, ok := result.Data.(MultiEditResult); !ok || edited.Validation == "" {
+		t.Fatalf("expected unchanged per-call validation without a plan, got %#v", result.Data)
+	}
+}
+
 func TestEditAutoValidationReturnsFailureWithoutUndoingWrite(t *testing.T) {
 	root := t.TempDir()
 	original := []byte("{\"ok\":true}\n")
 	writeToolTestFile(t, root, "config.json", string(original))
-	req := ModelEditToolRequest{Files: []FileTextEdits{{
+	req := FileTextEdits{
 		Path:    "config.json",
 		Version: hashVersion(original),
 		Changes: []TextChange{{OldText: "true", NewText: ""}},
-	}}}
+	}
 	payload, err := json.Marshal(req)
 	if err != nil {
 		t.Fatal(err)
@@ -2450,13 +2596,11 @@ func TestExecuteToolRejectsLegacyStringEditFields(t *testing.T) {
 	app := NewApp()
 	cfg := ConfigState{Workspace: dir}
 
-	result := app.executeTool(context.Background(), cfg, "session-1", "edit", []byte(`{
-		"files": [{"path": "sample.txt", "version": "000000000000",
+	result := app.executeTool(context.Background(), cfg, "session-1", "edit", []byte(`{"path": "sample.txt", "version": "000000000000",
 		"edits": [
 			{"oldString": "alpha", "newString": "ALPHA"},
 			{"oldString": "gamma", "newString": "GAMMA"}
-		]}]
-	}`))
+		]}`))
 	if result.OK || !strings.Contains(result.Error, "E_BAD_VERSION") {
 		t.Fatalf("expected model-facing edit tool to reject legacy edits array, got %#v", result)
 	}
@@ -2507,7 +2651,7 @@ func TestExecuteToolUnknownArgumentsWarnInsteadOfFailing(t *testing.T) {
 	ver := batch.Files[0].Version
 	// Unknown keys are only detected at the top level of the arguments
 	// object; nested unknown keys fall through to parameter validation.
-	editArgs := fmt.Sprintf(`{"noteTypo":"x","files":[{"path":"sample.txt","version":"%s","changes":[{"oldText":"alpha","newText":"ALPHA"}]}]}`, ver)
+	editArgs := fmt.Sprintf(`{"noteTypo":"x","path":"sample.txt","version":"%s","changes":[{"oldText":"alpha","newText":"ALPHA"}]}`, ver)
 	fullJSON, _ := json.Marshal(app.executeTool(context.Background(), cfg, "session-1", "edit", []byte(editArgs)))
 	var envelope toolResult
 	if err := json.Unmarshal(fullJSON, &envelope); err != nil {
@@ -2538,14 +2682,12 @@ func TestExecuteToolAppliesMultipleBatchTextChanges(t *testing.T) {
 	app := NewApp()
 	cfg := ConfigState{Workspace: dir}
 
-	result := app.executeTool(context.Background(), cfg, "session-1", "edit", []byte(fmt.Sprintf(`{
-		"files": [{"path": "sample.txt",
+	result := app.executeTool(context.Background(), cfg, "session-1", "edit", []byte(fmt.Sprintf(`{"path": "sample.txt",
 		"version": %q,
 		"changes": [
 			{"oldText": "alpha", "newText": "ALPHA"},
 			{"oldText": "gamma", "newText": "GAMMA"}
-		]}]
-	}`, strings.ToUpper(hashVersion(original)))))
+		]}`, strings.ToUpper(hashVersion(original)))))
 	if !result.OK {
 		t.Fatalf("expected batch edit to succeed, got error %q", result.Error)
 	}
@@ -2564,7 +2706,7 @@ func TestExecuteToolAppliesOriginalSnapshotLineRangesWithoutOffsetDrift(t *testi
 	if err := os.WriteFile(filepath.Join(dir, "sample.txt"), original, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	args := fmt.Sprintf(`{"files":[{"path":"sample.txt","version":%q,"changes":[{"lineRange":"2-2","newText":"TWO\ninserted"},{"lineRange":"5-5","newText":"FIVE"}]}]}`, hashVersion(original))
+	args := fmt.Sprintf(`{"path":"sample.txt","version":%q,"changes":[{"lineRange":"2-2","newText":"TWO\ninserted"},{"lineRange":"5-5","newText":"FIVE"}]}`, hashVersion(original))
 	result := NewApp().executeTool(context.Background(), ConfigState{Workspace: dir}, "session-1", "edit", []byte(args))
 	if !result.OK {
 		t.Fatalf("line-range edit failed: %#v", result)
@@ -2585,7 +2727,7 @@ func TestExecuteToolRejectsMixedEditSources(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "sample.txt"), original, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	args := fmt.Sprintf(`{"files":[{"path":"sample.txt","version":%q,"changes":[{"oldText":"alpha","lineRange":"1-1","newText":"ALPHA"}]}]}`, hashVersion(original))
+	args := fmt.Sprintf(`{"path":"sample.txt","version":%q,"changes":[{"oldText":"alpha","lineRange":"1-1","newText":"ALPHA"}]}`, hashVersion(original))
 	result := NewApp().executeTool(context.Background(), ConfigState{Workspace: dir}, "session-1", "edit", []byte(args))
 	if result.OK || result.ErrorCode != "E_BAD_EDIT" {
 		t.Fatalf("mixed sources must fail with E_BAD_EDIT, got %#v", result)
@@ -2599,7 +2741,7 @@ func TestExecuteToolRejectsMixedEditSources(t *testing.T) {
 	}
 }
 
-func TestExecuteToolEditsMultipleFilesInOneCall(t *testing.T) {
+func TestExecuteToolEditsParallelCallsPerFile(t *testing.T) {
 	dir := t.TempDir()
 	a, b := []byte("alpha\n"), []byte("beta\n")
 	if err := os.WriteFile(filepath.Join(dir, "a.txt"), a, 0o600); err != nil {
@@ -2608,10 +2750,17 @@ func TestExecuteToolEditsMultipleFilesInOneCall(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "b.txt"), b, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	args := fmt.Sprintf(`{"files":[{"path":"a.txt","version":%q,"changes":[{"oldText":"alpha","newText":"ALPHA"}]},{"path":"b.txt","version":%q,"changes":[{"oldText":"beta","newText":"BETA"}]}]}`, hashVersion(a), hashVersion(b))
-	result := NewApp().executeTool(context.Background(), ConfigState{Workspace: dir}, "session-1", "edit", []byte(args))
-	if !result.OK {
-		t.Fatalf("cross-file edit failed: %#v", result)
+	// One flat edit call per file, sent as parallel tool calls in one batch.
+	calls := []openai.ToolCall{
+		{Function: openai.FunctionCall{Name: "edit", Arguments: fmt.Sprintf(`{"path":"a.txt","version":%q,"changes":[{"oldText":"alpha","newText":"ALPHA"}]}`, hashVersion(a))}},
+		{Function: openai.FunctionCall{Name: "edit", Arguments: fmt.Sprintf(`{"path":"b.txt","version":%q,"changes":[{"oldText":"beta","newText":"BETA"}]}`, hashVersion(b))}},
+	}
+	app := NewApp()
+	for i, call := range calls {
+		result := app.executeTool(context.Background(), ConfigState{Workspace: dir}, "session-1", "edit", []byte(call.Function.Arguments))
+		if !result.OK {
+			t.Fatalf("parallel edit call %d failed: %#v", i, result)
+		}
 	}
 	for path, want := range map[string]string{"a.txt": "ALPHA\n", "b.txt": "BETA\n"} {
 		got, err := os.ReadFile(filepath.Join(dir, path))
@@ -2620,6 +2769,33 @@ func TestExecuteToolEditsMultipleFilesInOneCall(t *testing.T) {
 		}
 		if string(got) != want {
 			t.Fatalf("%s = %q, want %q", path, got, want)
+		}
+	}
+}
+
+func TestExecuteToolRejectsMultiFileEditCall(t *testing.T) {
+	dir := t.TempDir()
+	a, b := []byte("alpha\n"), []byte("beta\n")
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), a, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "b.txt"), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// The legacy nested multi-file form must fail without touching either
+	// file; multi-file changes go through parallel edit calls instead.
+	args := fmt.Sprintf(`{"files":[{"path":"a.txt","version":%q,"changes":[{"oldText":"alpha","newText":"ALPHA"}]},{"path":"b.txt","version":%q,"changes":[{"oldText":"beta","newText":"BETA"}]}]}`, hashVersion(a), hashVersion(b))
+	result := NewApp().executeTool(context.Background(), ConfigState{Workspace: dir}, "session-1", "edit", []byte(args))
+	if result.OK || result.ErrorCode != "E_BAD_EDIT" {
+		t.Fatalf("expected multi-file edit call to fail with E_BAD_EDIT, got %#v", result)
+	}
+	for path, want := range map[string]string{"a.txt": "alpha\n", "b.txt": "beta\n"} {
+		got, err := os.ReadFile(filepath.Join(dir, path))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != want {
+			t.Fatalf("rejected multi-file edit changed %s: %q, want %q", path, got, want)
 		}
 	}
 }
@@ -2662,13 +2838,22 @@ func TestExecuteToolEditRollsBackEarlierFilesWhenCommitFails(t *testing.T) {
 		}
 	}()
 
-	args := fmt.Sprintf(`{"files":[{"path":"a.txt","version":%q,"changes":[{"oldText":"alpha","newText":"ALPHA"}]},{"path":"sub/b.txt","version":%q,"changes":[{"oldText":"beta","newText":"BETA"}]}]}`, hashVersion(a), hashVersion(b))
-	result := NewApp().executeTool(context.Background(), ConfigState{Workspace: dir}, "session-1", "edit", []byte(args))
-	if result.OK {
-		t.Fatalf("expected commit of b.txt to fail, got success: %#v", result)
+	// The executor still plans the file list as a whole, so a commit failure
+	// on the second file must roll the first file's committed write back.
+	// Model-facing calls always carry one file, so this enters through the
+	// executor directly with a multi-file plan.
+	app := NewApp()
+	cfg := ConfigState{Workspace: dir}
+	files := []FileTextEdits{
+		{Path: "a.txt", Version: hashVersion(a), Changes: []TextChange{{OldText: "alpha", NewText: "ALPHA"}}},
+		{Path: "sub/b.txt", Version: hashVersion(b), Changes: []TextChange{{OldText: "beta", NewText: "BETA"}}},
 	}
-	if result.ErrorCode != "E_EDIT_COMMIT" {
-		t.Fatalf("expected E_EDIT_COMMIT, got %q (%v)", result.ErrorCode, result.Error)
+	_, err := app.editFilesWithConfig(cfg, files)
+	if err == nil {
+		t.Fatal("expected commit of b.txt to fail")
+	}
+	if toolErrorCode(err) != "E_EDIT_COMMIT" {
+		t.Fatalf("expected E_EDIT_COMMIT, got %v", err)
 	}
 
 	gotA, err := os.ReadFile(filepath.Join(dir, "a.txt"))
@@ -2687,28 +2872,39 @@ func TestExecuteToolEditRollsBackEarlierFilesWhenCommitFails(t *testing.T) {
 	}
 }
 
-func TestExecuteToolEditMergesRepeatedPathEntries(t *testing.T) {
+func TestExecuteToolEditRejectsLegacyNestedFilesForm(t *testing.T) {
 	dir := t.TempDir()
 	original := []byte("alpha\nbeta\ngamma\n")
 	if err := os.WriteFile(filepath.Join(dir, "sample.txt"), original, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	version := hashVersion(original)
-	args := fmt.Sprintf(`{"files":[{"path":"sample.txt","version":%q,"changes":[{"oldText":"alpha","newText":"ALPHA"}]},{"path":"./sample.txt","version":%q,"changes":[{"oldText":"gamma","newText":"GAMMA"}]}]}`, version, version)
-	result := NewApp().executeTool(context.Background(), ConfigState{Workspace: dir}, "session-1", "edit", []byte(args))
-	if !result.OK {
-		t.Fatalf("expected repeated path entries to merge, got %#v", result)
+	app := NewApp()
+	cfg := ConfigState{Workspace: dir}
+
+	// The flat single-file shape is the only accepted form; nested
+	// {"files":[...]} arguments from before the schema change fail without
+	// touching the file — there is no compatibility backdoor.
+	args := fmt.Sprintf(`{"files":[{"path":"sample.txt","version":%q,"changes":[{"oldText":"alpha","newText":"ALPHA"}]}]}`, version)
+	result := app.executeTool(context.Background(), cfg, "session-1", "edit", []byte(args))
+	if result.OK || result.ErrorCode != "E_BAD_EDIT" {
+		t.Fatalf("expected legacy nested files form to fail with E_BAD_EDIT, got %#v", result)
 	}
+
+	// A double-encoded files array is likewise rejected, not repaired into
+	// an edit.
+	stringEncoded := fmt.Sprintf(`{"files":"[{\"path\":\"sample.txt\",\"version\":\"%s\",\"changes\":[{\"oldText\":\"alpha\",\"newText\":\"ALPHA\"}]}]"}`, version)
+	result = app.executeTool(context.Background(), cfg, "session-1", "edit", []byte(stringEncoded))
+	if result.OK || result.ErrorCode != "E_BAD_EDIT" {
+		t.Fatalf("expected string-encoded legacy files form to fail with E_BAD_EDIT, got %#v", result)
+	}
+
 	got, err := os.ReadFile(filepath.Join(dir, "sample.txt"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(got) != "ALPHA\nbeta\nGAMMA\n" {
-		t.Fatalf("unexpected merged edit content %q", string(got))
-	}
-	edited, ok := result.Data.(MultiEditResult)
-	if !ok || edited.FileCount != 1 || len(edited.Files) != 1 || edited.Replacements != 2 {
-		t.Fatalf("expected one merged file with two replacements, got %#v", result.Data)
+	if string(got) != string(original) {
+		t.Fatalf("rejected legacy edit must leave file unchanged, got %q", string(got))
 	}
 }
 
@@ -2718,38 +2914,19 @@ func TestExecuteToolEditRejectsRepeatedPathEntriesWithDifferentVersions(t *testi
 	if err := os.WriteFile(filepath.Join(dir, "sample.txt"), original, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// Multiple entries in one call never execute, regardless of whether the
+	// versions agree: one call edits exactly one file.
 	args := fmt.Sprintf(`{"files":[{"path":"sample.txt","version":%q,"changes":[{"oldText":"alpha","newText":"ALPHA"}]},{"path":"./sample.txt","version":%q,"changes":[{"oldText":"beta","newText":"BETA"}]}]}`, hashVersion(original), "zzzzzz")
 	result := NewApp().executeTool(context.Background(), ConfigState{Workspace: dir}, "session-1", "edit", []byte(args))
-	if result.OK || result.ErrorCode != "E_VERSION_MISMATCH" {
-		t.Fatalf("expected inconsistent duplicate versions to fail with E_VERSION_MISMATCH, got %#v", result)
+	if result.OK || result.ErrorCode != "E_BAD_EDIT" {
+		t.Fatalf("expected multi-entry legacy call to fail with E_BAD_EDIT, got %#v", result)
 	}
 	got, err := os.ReadFile(filepath.Join(dir, "sample.txt"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(got) != string(original) {
-		t.Fatalf("version conflict must leave file unchanged, got %q", got)
-	}
-}
-
-func TestExecuteToolEditMergesRepeatedPathEntriesBeforeMatching(t *testing.T) {
-	dir := t.TempDir()
-	original := []byte("foo foo\n")
-	if err := os.WriteFile(filepath.Join(dir, "sample.txt"), original, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	version := hashVersion(original)
-	args := fmt.Sprintf(`{"files":[{"path":"sample.txt","version":%q,"changes":[{"oldText":"foo","newText":"one"}]},{"path":"./sample.txt","version":%q,"changes":[{"oldText":"foo","newText":"two"}]}]}`, version, version)
-	result := NewApp().executeTool(context.Background(), ConfigState{Workspace: dir}, "session-1", "edit", []byte(args))
-	if result.OK || result.ErrorCode != "E_MULTI_MATCH" {
-		t.Fatalf("expected merged changes to use one original snapshot and reject ambiguous oldText, got %#v", result)
-	}
-	got, err := os.ReadFile(filepath.Join(dir, "sample.txt"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(got) != string(original) {
-		t.Fatalf("ambiguous merged edit must leave file unchanged, got %q", got)
+		t.Fatalf("rejected multi-entry call must leave file unchanged, got %q", got)
 	}
 }
 
@@ -2760,9 +2937,7 @@ func TestExecuteToolRequiresVersionForEdit(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := NewApp()
-	result := app.executeTool(context.Background(), ConfigState{Workspace: dir}, "session-1", "edit", []byte(`{
-		"files": [{"path": "sample.txt", "changes": [{"oldText": "beta", "newText": "BETA"}]}]
-	}`))
+	result := app.executeTool(context.Background(), ConfigState{Workspace: dir}, "session-1", "edit", []byte(`{"path": "sample.txt", "changes": [{"oldText": "beta", "newText": "BETA"}]}`))
 	if result.OK || result.ErrorCode != "E_VERSION_REQUIRED" {
 		t.Fatalf("expected E_VERSION_REQUIRED, got %#v", result)
 	}
@@ -2782,11 +2957,9 @@ func TestExecuteToolEditHandlesUniqueSingleLineSubstring(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := NewApp()
-	result := app.executeTool(context.Background(), ConfigState{Workspace: dir}, "session-1", "edit", []byte(fmt.Sprintf(`{
-		"files": [{"path": "config.json",
+	result := app.executeTool(context.Background(), ConfigState{Workspace: dir}, "session-1", "edit", []byte(fmt.Sprintf(`{"path": "config.json",
 		"version": %q,
-		"changes": [{"oldText": "false", "newText": "true"}]}]
-	}`, hashVersion(original))))
+		"changes": [{"oldText": "false", "newText": "true"}]}`, hashVersion(original))))
 	if !result.OK {
 		t.Fatalf("expected edit to succeed, got %#v", result)
 	}
@@ -2806,11 +2979,9 @@ func TestExecuteToolEditRejectsMultipleMatches(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := NewApp()
-	result := app.executeTool(context.Background(), ConfigState{Workspace: dir}, "session-1", "edit", []byte(fmt.Sprintf(`{
-		"files": [{"path": "sample.txt",
+	result := app.executeTool(context.Background(), ConfigState{Workspace: dir}, "session-1", "edit", []byte(fmt.Sprintf(`{"path": "sample.txt",
 		"version": %q,
-		"changes": [{"oldText": "foo", "newText": "bar"}]}]
-	}`, hashVersion(original))))
+		"changes": [{"oldText": "foo", "newText": "bar"}]}`, hashVersion(original))))
 	if result.OK || !strings.Contains(result.Error, "[E_MULTI_MATCH]") {
 		t.Fatalf("expected edit multi-match failure, got %#v", result)
 	}
@@ -2840,10 +3011,8 @@ func TestExecuteToolEditReplacesAllMatchesWhenRequested(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "sample.txt"), original, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	result := NewApp().executeTool(context.Background(), ConfigState{Workspace: dir}, "session-1", "edit", []byte(fmt.Sprintf(`{
-		"files": [{"path": "sample.txt", "version": %q,
-		"changes": [{"oldText": "foo", "newText": "bar", "replace_all": true}]}]
-	}`, hashVersion(original))))
+	result := NewApp().executeTool(context.Background(), ConfigState{Workspace: dir}, "session-1", "edit", []byte(fmt.Sprintf(`{"path": "sample.txt", "version": %q,
+		"changes": [{"oldText": "foo", "newText": "bar", "replace_all": true}]}`, hashVersion(original))))
 	if !result.OK {
 		t.Fatalf("replace_all edit failed: %#v", result)
 	}
@@ -2867,14 +3036,12 @@ func TestExecuteToolEditRejectsOverlappingChangesInBatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := NewApp()
-	result := app.executeTool(context.Background(), ConfigState{Workspace: dir}, "session-1", "edit", []byte(fmt.Sprintf(`{
-		"files": [{"path": "sample.txt",
+	result := app.executeTool(context.Background(), ConfigState{Workspace: dir}, "session-1", "edit", []byte(fmt.Sprintf(`{"path": "sample.txt",
 		"version": %q,
 		"changes": [
 			{"oldText": "abc", "newText": "ABC"},
 			{"oldText": "bc", "newText": "BC"}
-		]}]
-	}`, hashVersion(original))))
+		]}`, hashVersion(original))))
 	if result.OK || result.ErrorCode != "E_OVERLAPPING_CHANGES" {
 		t.Fatalf("expected overlap failure, got %#v", result)
 	}
@@ -3340,7 +3507,9 @@ func TestLocalEditPlanIsSharedByConflictDetectionAndExecution(t *testing.T) {
 		t.Fatalf("expected one merged physical target and two changes, got %#v", plan)
 	}
 
-	args, err := json.Marshal(ModelEditToolRequest{Files: files})
+	// Model-facing calls are flat and single-file. The executor and the
+	// conflict detector must still agree on the same plan boundary.
+	args, err := json.Marshal(FileTextEdits{Path: "sample.txt", Version: version, Changes: []TextChange{{OldText: "alpha", NewText: "ALPHA"}, {OldText: "beta", NewText: "BETA"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3369,41 +3538,28 @@ func TestLocalEditPlanIsSharedByConflictDetectionAndExecution(t *testing.T) {
 func TestSalvageEditRequestRecoversCompletePrefix(t *testing.T) {
 	// Cut inside the third change's newText: two complete changes survive,
 	// the truncated one is dropped and counted.
-	req, dropped, ok := salvageEditRequest([]byte(`{"files":[{"path":"a.txt","version":"000000000000","changes":[{"oldText":"alpha","newText":"ALPHA"},{"oldText":"beta","newText":"BETA"},{"oldText":"gamma","newText":"GAM`))
+	file, dropped, ok := salvageEditRequest([]byte(`{"path":"a.txt","version":"000000000000","changes":[{"oldText":"alpha","newText":"ALPHA"},{"oldText":"beta","newText":"BETA"},{"oldText":"gamma","newText":"GAM`))
 	if !ok {
 		t.Fatal("expected salvage to recover the complete prefix")
 	}
 	if dropped != 1 {
 		t.Fatalf("expected 1 dropped change, got %d", dropped)
 	}
-	if len(req.Files) != 1 || req.Files[0].Path != "a.txt" || req.Files[0].Version != "000000000000" {
-		t.Fatalf("unexpected salvaged file: %#v", req.Files)
+	if file.Path != "a.txt" || file.Version != "000000000000" {
+		t.Fatalf("unexpected salvaged file: %#v", file)
 	}
-	if len(req.Files[0].Changes) != 2 || req.Files[0].Changes[0].NewText != "ALPHA" || req.Files[0].Changes[1].NewText != "BETA" {
-		t.Fatalf("unexpected salvaged changes: %#v", req.Files[0].Changes)
-	}
-
-	// Cut inside a second file entry: the first file is complete, the second
-	// contributes its complete changes with the truncated tail dropped.
-	req, dropped, ok = salvageEditRequest([]byte(`{"files":[{"path":"a.txt","version":"v1","changes":[{"oldText":"x","newText":"y"}]},{"path":"b.txt","version":"v2","changes":[{"oldText":"1","newText":"2"},{"oldText":"3","newText":"4"},{"oldText":"5","newTe`))
-	if !ok {
-		t.Fatal("expected salvage to recover both files")
-	}
-	if len(req.Files) != 2 {
-		t.Fatalf("expected 2 salvaged files, got %d: %#v", len(req.Files), req.Files)
-	}
-	if req.Files[1].Path != "b.txt" || len(req.Files[1].Changes) != 2 || dropped != 1 {
-		t.Fatalf("unexpected partial file salvage: %#v dropped=%d", req.Files[1], dropped)
+	if len(file.Changes) != 2 || file.Changes[0].NewText != "ALPHA" || file.Changes[1].NewText != "BETA" {
+		t.Fatalf("unexpected salvaged changes: %#v", file.Changes)
 	}
 
 	// Stream cut right after a complete change: nothing is lost.
-	req, dropped, ok = salvageEditRequest([]byte(`{"files":[{"path":"a.txt","version":"v1","changes":[{"oldText":"x","newText":"y"}]`))
-	if !ok || dropped != 0 || len(req.Files) != 1 || len(req.Files[0].Changes) != 1 {
-		t.Fatalf("expected trailing truncation to keep the complete change: %#v dropped=%d ok=%v", req, dropped, ok)
+	file, dropped, ok = salvageEditRequest([]byte(`{"path":"a.txt","version":"v1","changes":[{"oldText":"x","newText":"y"}]`))
+	if !ok || dropped != 0 || len(file.Changes) != 1 {
+		t.Fatalf("expected trailing truncation to keep the complete change: %#v dropped=%d ok=%v", file, dropped, ok)
 	}
 
 	// Nothing usable was transmitted before the cut.
-	_, _, ok = salvageEditRequest([]byte(`{"files":[{"path":"a.txt","ver`))
+	_, _, ok = salvageEditRequest([]byte(`{"path":"a.txt","ver`))
 	if ok {
 		t.Fatal("salvage must not report usable output for a prefix without complete changes")
 	}
@@ -3427,7 +3583,7 @@ func TestExecuteToolEditSalvagesTruncatedArguments(t *testing.T) {
 	// Stream cut inside the third change: the first two changes must be
 	// applied, the third dropped, and the result must carry the salvage
 	// warning instead of failing the call.
-	truncated := fmt.Sprintf(`{"files":[{"path":"sample.txt","version":%q,"changes":[{"oldText":"alpha","newText":"ALPHA"},{"oldText":"beta","newText":"BETA"},{"oldText":"gamma","newText":"GAM`, version)
+	truncated := fmt.Sprintf(`{"path":"sample.txt","version":%q,"changes":[{"oldText":"alpha","newText":"ALPHA"},{"oldText":"beta","newText":"BETA"},{"oldText":"gamma","newText":"GAM`, version)
 	result := app.executeTool(context.Background(), cfg, "session-1", "edit", []byte(truncated))
 	if !result.OK {
 		t.Fatalf("expected salvaged edit to succeed, got error %q", result.Error)
@@ -3452,14 +3608,14 @@ func TestExecuteToolEditSalvagesTruncatedArguments(t *testing.T) {
 	}
 
 	// Salvage that recovers nothing keeps the explicit truncation error.
-	result = app.executeTool(context.Background(), cfg, "session-1", "edit", []byte(`{"files":[{"path":"sample.txt","ver`))
+	result = app.executeTool(context.Background(), cfg, "session-1", "edit", []byte(`{"path":"sample.txt","ver`))
 	if result.OK || !strings.Contains(result.Error, "truncated") {
 		t.Fatalf("expected truncation error when nothing is salvageable, got %#v", result)
 	}
 }
 
 func TestPrepareToolCallsForExecutionKeepsSalvageBytesAndSafeReplayJSON(t *testing.T) {
-	raw := `{"files":[{"path":"sample.txt","version":"abc123","changes":[{"oldText":"alpha","newText":"ALPHA"},{"oldText":"beta","newText":"BET`
+	raw := `{"path":"sample.txt","version":"abc123","changes":[{"oldText":"alpha","newText":"ALPHA"},{"oldText":"beta","newText":"BET`
 	prepared, executionArgs, salvaged := prepareToolCallsForExecution([]openai.ToolCall{{
 		ID: "call_1", Type: openai.ToolTypeFunction,
 		Function: openai.FunctionCall{Name: "edit", Arguments: raw},
@@ -3476,13 +3632,13 @@ func TestPrepareToolCallsForExecutionKeepsSalvageBytesAndSafeReplayJSON(t *testi
 	if !json.Valid([]byte(prepared[0].Function.Arguments)) || isTruncatedArgsMarker([]byte(prepared[0].Function.Arguments)) {
 		t.Fatalf("provider replay must use recovered valid JSON, got %q", prepared[0].Function.Arguments)
 	}
-	var req ModelEditToolRequest
-	if err := json.Unmarshal([]byte(prepared[0].Function.Arguments), &req); err != nil || len(req.Files) != 1 || len(req.Files[0].Changes) != 1 {
+	var req FileTextEdits
+	if err := json.Unmarshal([]byte(prepared[0].Function.Arguments), &req); err != nil || req.Path != "sample.txt" || len(req.Changes) != 1 {
 		t.Fatalf("unexpected recovered replay request: %#v err=%v", req, err)
 	}
 
 	prepared, executionArgs, salvaged = prepareToolCallsForExecution([]openai.ToolCall{{
-		Function: openai.FunctionCall{Name: "edit", Arguments: `{"files":[{"path":"sample.txt","ver`},
+		Function: openai.FunctionCall{Name: "edit", Arguments: `{"path":"sample.txt","ver`},
 	}})
 	if !isTruncatedArgsMarker([]byte(prepared[0].Function.Arguments)) || !isTruncatedArgsMarker([]byte(executionArgs[0])) {
 		t.Fatalf("unsalvageable calls must use the truncation marker on both paths: %#v %#v", prepared, executionArgs)
@@ -3495,7 +3651,7 @@ func TestPrepareToolCallsForExecutionKeepsSalvageBytesAndSafeReplayJSON(t *testi
 func TestExecuteToolEditDoesNotMislabelSchemaErrorAsTruncation(t *testing.T) {
 	app := NewApp()
 	result := app.executeTool(context.Background(), ConfigState{Workspace: t.TempDir()}, "session-1", "edit", []byte(
-		`{"files":[{"path":"sample.txt","version":"abc123","changes":[{"oldString":"alpha","newString":"ALPHA"}]}]}`,
+		`{"path":"sample.txt","version":"abc123","changes":[{"oldString":"alpha","newString":"ALPHA"}]}`,
 	))
 	if result.OK {
 		t.Fatal("legacy unknown change fields must fail the model-facing edit schema")

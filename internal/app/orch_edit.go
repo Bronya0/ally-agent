@@ -271,10 +271,10 @@ func (a *App) editWithConfig(cfg ConfigState, req EditRequest) (EditResult, erro
 
 func validateModelEditToolRequest(files []FileTextEdits) error {
 	if len(files) == 0 {
-		return codedToolError("E_BAD_EDIT", errors.New("files must contain at least one file edit"))
+		return codedToolError("E_BAD_EDIT", errors.New("edit requires top-level path, version, and changes (exactly one file per call)"))
 	}
 	if len(files) > 20 {
-		return codedToolError("E_BAD_EDIT", errors.New("files supports at most 20 files per call"))
+		return codedToolError("E_BAD_EDIT", errors.New("edit supports at most 20 files per call"))
 	}
 	totalChanges := 0
 	for i, file := range files {
@@ -297,104 +297,16 @@ func validateModelEditToolRequest(files []FileTextEdits) error {
 
 // salvageEditRequest recovers the complete prefix of edit tool arguments whose
 // JSON was cut off mid-stream (provider stream interrupted before the closing
-// brackets arrived). Complete files and complete changes decode exactly as
-// they would on a healthy stream; the truncated tail is dropped and counted.
+// brackets arrived). The flat model-facing request {path, version, changes} is
+// recovered field by field: complete changes decode exactly as they would on a
+// healthy stream, while the truncated tail is dropped and counted. A change
+// object that itself was cut is incomplete and must be dropped — its
+// oldText/newText pair cannot be told apart from an intentional partial edit.
 // The salvaged request still has to pass validateModelEditToolRequest and the
 // full edit contract before anything is written, so recovery never lowers the
 // validation bar. ok is true only when at least one complete change was
 // recovered.
-func salvageEditRequest(args []byte) (req ModelEditToolRequest, dropped int, ok bool) {
-	dec := json.NewDecoder(bytes.NewReader(args))
-	tok, err := dec.Token()
-	if err != nil || tok != json.Delim('{') {
-		return req, 0, false
-	}
-	for dec.More() {
-		key, err := dec.Token()
-		if err != nil {
-			break
-		}
-		name, _ := key.(string)
-		if name != "files" {
-			var skip json.RawMessage
-			if err := dec.Decode(&skip); err != nil {
-				break
-			}
-			continue
-		}
-		tok, err := dec.Token()
-		if err != nil || tok != json.Delim('[') {
-			return req, dropped, salvageChanges(req.Files) > 0
-		}
-		for dec.More() {
-			start := dec.InputOffset()
-			var file FileTextEdits
-			if err := dec.Decode(&file); err == nil {
-				req.Files = append(req.Files, file)
-				continue
-			}
-			// Truncated inside this file entry: recover its complete prefix
-			// (path, version, and every fully transmitted change).
-			if partial, partialDropped, usable := salvagePartialFileEdit(args[start:]); usable {
-				req.Files = append(req.Files, partial)
-				dropped += partialDropped
-			}
-			return req, dropped, salvageChanges(req.Files) > 0
-		}
-		// The files array closed; the stream may still be cut before the
-		// final '}' but every entry above is complete.
-		break
-	}
-	return req, dropped, salvageChanges(req.Files) > 0
-}
-
-// prepareToolCallsForExecution separates the arguments persisted/replayed to
-// providers from the arguments used for this execution. A truncated edit keeps
-// its raw byte prefix for salvageEditRequest, while the assistant tool_call is
-// rewritten to the recovered valid JSON so the next model request cannot be
-// rejected for malformed arguments. Other invalid calls use the explicit
-// truncation marker on both paths.
-func prepareToolCallsForExecution(toolCalls []openai.ToolCall) ([]openai.ToolCall, []string, bool) {
-	prepared := cloneToolCalls(toolCalls)
-	executionArgs := make([]string, len(prepared))
-	salvaged := false
-	for i := range prepared {
-		raw := prepared[i].Function.Arguments
-		executionArgs[i] = raw
-		if strings.TrimSpace(raw) == "" {
-			prepared[i].Function.Arguments = "{}"
-			executionArgs[i] = "{}"
-			continue
-		}
-		if json.Valid([]byte(raw)) {
-			continue
-		}
-		if normalizeToolName(prepared[i].Function.Name) == "edit" {
-			if req, _, ok := salvageEditRequest([]byte(raw)); ok && validateModelEditToolRequest(req.Files) == nil {
-				if safe, err := json.Marshal(req); err == nil {
-					prepared[i].Function.Arguments = string(safe)
-					salvaged = true
-					continue
-				}
-			}
-		}
-		prepared[i].Function.Arguments = truncatedToolCallArguments
-		executionArgs[i] = truncatedToolCallArguments
-	}
-	return prepared, executionArgs, salvaged
-}
-
-// salvagePartialFileEdit recovers the complete fields of one file entry whose
-// JSON object was truncated mid-transmission. A change object that itself was
-// cut is incomplete and must be dropped — its oldText/newText pair cannot be
-// told apart from an intentional partial edit.
-func salvagePartialFileEdit(raw []byte) (file FileTextEdits, dropped int, ok bool) {
-	// The slice starts at the element boundary, which may include the ',' that
-	// separated it from the previous element.
-	raw = bytes.TrimLeft(raw, " \t\r\n")
-	raw = bytes.TrimPrefix(raw, []byte(","))
-	raw = bytes.TrimLeft(raw, " \t\r\n")
-
+func salvageEditRequest(raw []byte) (file FileTextEdits, dropped int, ok bool) {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	tok, err := dec.Token()
 	if err != nil || tok != json.Delim('{') {
@@ -441,6 +353,46 @@ func salvagePartialFileEdit(raw []byte) (file FileTextEdits, dropped int, ok boo
 		}
 	}
 	return file, dropped, len(file.Changes) > 0
+}
+
+// prepareToolCallsForExecution separates the arguments persisted/replayed to
+// providers from the arguments used for this execution. A truncated edit keeps
+// its raw byte prefix for salvageEditRequest, while the assistant tool_call is
+// rewritten to the recovered valid JSON so the next model request cannot be
+// rejected for malformed arguments. Other invalid calls use the explicit
+// truncation marker on both paths.
+func prepareToolCallsForExecution(toolCalls []openai.ToolCall) ([]openai.ToolCall, []string, bool) {
+	prepared := cloneToolCalls(toolCalls)
+	executionArgs := make([]string, len(prepared))
+	salvaged := false
+	for i := range prepared {
+		raw := prepared[i].Function.Arguments
+		executionArgs[i] = raw
+		if strings.TrimSpace(raw) == "" {
+			prepared[i].Function.Arguments = "{}"
+			executionArgs[i] = "{}"
+			continue
+		}
+		if json.Valid([]byte(raw)) {
+			continue
+		}
+		if normalizeToolName(prepared[i].Function.Name) == "edit" {
+			// The salvaged flat request is persisted back as the canonical
+			// single-file form so the next model request carries valid
+			// arguments and the history teaches the flat shape.
+			if file, _, ok := salvageEditRequest([]byte(raw)); ok {
+				salvagedFiles := []FileTextEdits{file}
+				if safe, err := json.Marshal(file); err == nil && validateModelEditToolRequest(salvagedFiles) == nil {
+					prepared[i].Function.Arguments = string(safe)
+					salvaged = true
+					continue
+				}
+			}
+		}
+		prepared[i].Function.Arguments = truncatedToolCallArguments
+		executionArgs[i] = truncatedToolCallArguments
+	}
+	return prepared, executionArgs, salvaged
 }
 
 func salvageChanges(files []FileTextEdits) int {

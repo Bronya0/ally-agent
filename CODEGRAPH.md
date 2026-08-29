@@ -122,9 +122,9 @@
 - orch_file_ops.go — create/delete/run-command 编排：路径安全解析、Git Bash 检测（findWindowsBash）、危险删除路径守卫；关键: createFileWithConfig, deletePathWithConfig, runCommandWithConfig, isDangerousDeletePath
 - orch_read.go — 批量读取编排：并行读取、有界行预览（2000 字符/行）、run 级读取缓存、图片 DataURL 注入、办公/PDF 文档拒绝（指路 anydoc）；关键: BatchReadFiles, runReadCache, readImageWithConfig
 - orch_edit_plan.go — 本地编辑批次**唯一归一化边界**（planLocalEditBatch）：合并同路径、冲突检测、执行器与批次策略共用该计划；关键: planLocalEditBatch
-- orch_edit.go — 本地 edit 执行：原子提交/回滚、版本校验、流截断参数抢救（salvageEditRequest）；关键: editFilesWithConfig, salvageEditRequest
-- orch_batch_policy.go — 工具批次冲突/屏障策略：同路径写互斥（E_WRITE_BATCH_CONFLICT）、wait/ask/suggest 单调用屏障；关键: detectToolBatchConflicts, detectWriteBatchConflicts
-- orch_validation.go — edit/create 写入后低成本语言校验（Python/Go/JS/TS/Vue/Java/JSON），单个 validation 字符串回填模型；关键: attachValidation, validateChangedFiles
+- orch_edit.go — 本地 edit 执行：模型侧扁平单文件请求（顶层 path/version/changes，一次一文件，多文件靠并行 edit call，旧版嵌套 files 格式一律 E_BAD_EDIT 拒绝）、原子提交/回滚、版本校验、流截断参数抢救（salvageEditRequest）；关键: editFilesWithConfig, salvageEditRequest
+- orch_batch_policy.go — 工具批次冲突/屏障策略：同路径写去重（首个按 toolCallIndex 执行，其余 E_WRITE_BATCH_CONFLICT 拒绝待补发）、wait/ask/suggest 单调用屏障；关键: detectToolBatchConflicts, detectWriteBatchConflicts
+- orch_validation.go — edit/create 写入后低成本语言校验（Python/Go/JS/TS/Vue/Java/JSON），单个 validation 字符串回填模型；批次级校验去重：同批 edit/create 按校验单元（Go 包目录 / tsconfig 项目 / 单文件）合并到最后一个触碰调用来跑（planBatchValidation）；关键: attachValidation, validateChangedFiles, planBatchValidation
 - orch_command_safety.go — 命令安全边界：绑定 command AST 语义分析到工作区根与路径存在性，产出 E_COMMAND_BLOCKED/E_PATH_OUTSIDE；关键: checkCommandSafety, validateRemoteCommandSafety
 - orch_git.go — git status/diff 编排：porcelain V2 解析、TTL 缓存、diff 序列化与取消；关键: getGitStatus, parseGitStatusV2, GetGitDiff, CancelGitDiff
 - orch_grep.go — grep 编排：ripgrep 封装绑定工作区解析与安全检查、rg/git-bash 缺失事件；关键: GrepFiles, grepFilesWithConfig
@@ -201,7 +201,7 @@
 - ComposerInfoBar.vue — 输入区信息条：模型分组下拉（按使用频次排序）、reasoning effort、git 徽标、上下文明细+compact、任务中心/文件树开关、会话导出；关键: modelGroups, exportFullSession
 - SettingsModal.vue — 设置中心（General/Models/Skills/MCP/Network/About）：模型增删改+目录预设懒加载+连通测试+导入导出、MCP JSON/表单双向同步、代理检测与测试；关键: ensureModelCatalog, syncFormToJson, testModelConnection
 - WorkspaceExplorer.vue — 工作区侧栏文件树+编辑器：目录懒加载、多选+右键菜单、Ace 编辑器（语法校验、MD 图片加载、预览切换）、拖拽调宽；关键: openFile, saveFile, initAceEditor, onContextMenuSelect
-- ToolCallCard.vue — 通用工具调用卡：动宾动词标签、edit 多文件 split diff、create 代码预览、命令高亮、错误码本地化、validation 警告条；关键: toolVerb, highlightCommand
+- ToolCallCard.vue — 通用工具调用卡：动宾动词标签、edit 分组 split diff（兼容历史多文件批次结果）、create 代码预览、命令高亮、错误码本地化、validation 警告条；关键: toolVerb, highlightCommand
 - AskToolCard.vue — ask 工具卡：多问题 Tab、多选+自定义回答、一次性提交；关键: answerState, submitAnswers
 - SubagentInlineCard.vue — 子代理内联进度卡：步数/令牌/时长、最近 8 条子工具行；关键: recentTools
 - TaskCenterPanel.vue — 任务中心：调度任务/后台服务双 Tab、buffer 预览、服务日志弹窗（1.5s 轮询）；关键: openServiceLog, refreshServiceLog

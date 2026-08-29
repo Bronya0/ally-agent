@@ -359,13 +359,17 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 			}
 		}
 
-		executeSubCall := func(idx int, c openai.ToolCall) {
+		executeSubCall := func(idx int, c openai.ToolCall, plannedValidationPaths []string, hasValidationPlan bool) {
 			started := time.Now()
 			executionArgs := c.Function.Arguments
 			if idx < len(toolExecutionArgs) && toolExecutionArgs[idx] != "" {
 				executionArgs = toolExecutionArgs[idx]
 			}
-			r := a.executeTool(ctx, cfg, sessionID, c.Function.Name, []byte(executionArgs))
+			callCtx := ctx
+			if hasValidationPlan {
+				callCtx = context.WithValue(callCtx, batchValidationPathsContextKey{}, plannedValidationPaths)
+			}
+			r := a.executeTool(callCtx, cfg, sessionID, c.Function.Name, []byte(executionArgs))
 			duration := time.Since(started).Milliseconds()
 			rj, _ := json.Marshal(r)
 			fullJSON := string(rj)
@@ -402,15 +406,18 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 				defer subWg.Done()
 				subToolSem <- struct{}{}
 				defer func() { <-subToolSem }()
-				executeSubCall(idx, c)
+				executeSubCall(idx, c, nil, false)
 			}(i, call)
 		}
 		subWg.Wait()
+		validationRoots, _ := workspaceRoots(cfg)
+		validationPlan := planBatchValidation(validationRoots, assistantMessage.ToolCalls, conflictSkippedCallIndexes(toolConflicts))
 		for i, call := range assistantMessage.ToolCalls {
 			if _, conflict := toolConflicts[i]; conflict || !isOrderedFileMutationTool(call.Function.Name) {
 				continue
 			}
-			executeSubCall(i, call)
+			planned, hasPlan := validationPlan[i]
+			executeSubCall(i, call, planned, hasPlan)
 		}
 
 		// Process outcomes in order. File tracking and the model-facing tool
@@ -705,11 +712,9 @@ func trackFileFromToolResult(name string, args string, result *toolResult, files
 			}
 		}
 	case "edit":
-		var req ModelEditToolRequest
-		if json.Unmarshal([]byte(args), &req) == nil {
-			for _, file := range req.Files {
-				addPath(filesEdited, file.Path)
-			}
+		var req FileTextEdits
+		if json.Unmarshal([]byte(args), &req) == nil && req.Path != "" {
+			addPath(filesEdited, req.Path)
 		}
 	case "create", "replace_exact", "replace_lines":
 		var req struct {

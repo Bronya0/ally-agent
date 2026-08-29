@@ -59,14 +59,14 @@ func sharedEditRules() string {
 		"   - After a successful edit, reuse its returned `version` only when the current source is known exactly.\n" +
 		"   - Re-read when the current source or line numbers are unknown, context compaction removed the reliable snapshot, or a formatter/generator/command or other external process may have changed the file.\n" +
 		"2. Keep the model-facing `edit` request shape as follows:\n" +
-		"   - The top-level `files` value must be a JSON array (`[...]`), never a quoted string.\n" +
-		"   - Each `files` item must be an object containing its own `path`, `version`, and `changes`; `path` and `version` never go at the top level of the call.\n" +
-		"   - Each file's `changes` value must be a JSON array (`[...]`), never a quoted string.\n" +
+		"   - One `edit` call edits exactly ONE file: `path`, `version`, and `changes` sit at the top level of the call arguments.\n" +
+		"   - `changes` must be a JSON array (`[...]`), never a quoted string.\n" +
 		"   - Missing required fields fail the entire call.\n" +
 		"3. Batch edits by risk and size:\n" +
-		"   - Put all independent changes for the affected files into a single `edit` call; merge small, low-risk changes across files.\n" +
+		"   - To change several files, send multiple parallel `edit` calls in the same response — one call per file, each carrying its own `version`.\n" +
+		"   - Put all independent changes for the same file into that file's single `edit` call.\n" +
 		"   - Keep very large replacements — a whole function, section, or roughly 100+ lines of `newText` — in their own `edit` call.\n" +
-		"   - A batch is all-or-nothing: one failed `oldText` match or stale `version` rejects the entire call, and an oversized JSON risks output truncation.\n" +
+		"   - One edit call is all-or-nothing for its file: one failed `oldText` match or stale `version` rejects the entire call, and an oversized JSON risks output truncation.\n" +
 		"   - Never send multiple file-mutation tool calls for the same path in one model response.\n" +
 		"   - Do not use patch, unified diff, or git apply.\n" +
 		"4. When an edit fails with `E_NO_MATCH` or `E_VERSION_MISMATCH`:\n" +
@@ -80,7 +80,7 @@ func sharedBatchStrategy() string {
 	return "**Batch and parallelize aggressively** — this is the #1 way to reduce round-trips and save tokens:\n" +
 		"- If you need file contents, prefer one `read` call with all relevant paths instead of separate reads.\n" +
 		"- For `read`, prefer relevant ranges over the whole file when a file is over ~500 lines; when a read is auto-truncated, follow the `[Showing lines A-B of N. Use startLine=C to continue.]` marker instead of re-reading the whole file.\n" +
-		"- If you need to edit files, merge small changes into one `edit` call; make large changes in their own separate `edit` tool call so overly long outputs are not truncated. When `edit`/`create` returns a `validation` string (optional, enabled per language by the user), a failure means the file is already written, so fix the reported issue directly instead of repeating the same write.\n" +
+		"- `edit` changes one file per call: put all small changes for the same file into that file's single `edit` call, edit several files by sending parallel `edit` calls in the same response, and give very large changes their own separate `edit` call so overly long outputs are not truncated. When `edit`/`create` returns a `validation` string (optional, enabled per language by the user), a failure means the file is already written, so fix the reported issue directly instead of repeating the same write.\n" +
 		"- If you need to search across files, send one `grep` instead of reading each file; use `fileCounts` (exact per-file hit counts, sorted by count) to spot hotspot files, and when samples are truncated, pass `nextOffset` back as `offset` to page through the rest instead of re-searching. `fileHits` is sorted by `matchCount` descending — start reading from the first entry. When you need surrounding context to decide relevance, request `contextBefore`/`contextAfter` in the same call to avoid a separate `read`. Before concluding that content does not exist, check `skipped`; search an explicit `path` when generated directories or files over 10 MB are relevant.\n" +
 		"- Prefer one `grep` to finish a search in a single call: leaving `path` unset searches the whole project root, so avoid repeating the search over different directories — fewer `grep` calls means fewer round-trips and higher efficiency.\n" +
 		"- Batch independent reads and commands (no duplicates); use current version values for dependent edits. Reuse read content already returned in the current run instead of reading the same path and range again, unless a successful write/command or an external process may have changed it.\n" +

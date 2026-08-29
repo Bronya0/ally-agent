@@ -57,40 +57,28 @@ func chatToolsUncached() []openai.Tool {
 				"includeIgnored": map[string]any{"type": "boolean", "description": "Include gitignored paths and dependency directories such as node_modules, __pycache__; VCS internals like .git are always excluded. Default false."},
 			},
 		}),
-		functionTool("edit", "Validate and apply exact replacements across multiple workspace files in one call.\n"+
-			"- Read each affected file first; every file requires the current 6-character `version` from `read`. A stale version fails with `E_VERSION_MISMATCH`; re-read affected files and retry.\n"+
-			"- The top-level `files` value must be a JSON array (`[...]`), never a quoted string.\n"+
-			"- Each `files` item must be an object containing its own `path`, `version`, and `changes`; `path` and `version` never go at the top level, and missing required fields fail the whole call.\n"+
-			"- Each file's `changes` value must be a JSON array (`[...]`), never a quoted string.\n"+
+		functionTool("edit", "Validate and apply exact replacements to one workspace file per call.\n"+
+			"- Edit exactly ONE file per call: `path`, `version`, and `changes` sit at the top level of the arguments. To change several files, send multiple parallel edit calls in the same response, one per file; never send two edit calls for the same file in one response.\n"+
+			"- Read the file first; `version` is the required current 6-character version token from `read` or the file's preceding successful edit. A stale version fails with `E_VERSION_MISMATCH`; re-read the file and retry.\n"+
+			"- `changes` must be a JSON array (`[...]`), never a quoted string; missing required fields fail the whole call.\n"+
 			"- Prefer a small exact unique `oldText` per change; `replace_all` replaces every non-overlapping exact occurrence; `lineRange` (A-B form) replaces larger whole-line blocks.\n"+
 			"- If exact matching fails, Ally retries once after normalizing invisible differences such as trailing spaces and smart/Unicode quotes and dashes. An ambiguous match fails with `E_MULTI_MATCH`; add surrounding context.\n"+
-			"- All changes in a file share the original read version, so no offset adjustment is needed between changes.\n"+
+			"- All changes match against the same original read snapshot, so no offset adjustment is needed between changes.\n"+
 			"- After writing, `validation` contains a concise syntax/compile check. The file is already written if validation fails; fix the reported issue with another edit.\n"+
 			"- Error codes include `E_BAD_EDIT`, `E_VERSION_MISMATCH`, and `E_PATH_OUTSIDE`.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"files": map[string]any{
+				"path":    map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Workspace-relative path of the single file to edit in this call."},
+				"version": map[string]any{"type": "string", "pattern": "^[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{6}$", "description": "Required 6-character current version from read or the preceding successful edit of this file. Comparison is case-insensitive."},
+				"changes": map[string]any{
 					"type":        "array",
 					"minItems":    1,
-					"maxItems":    20,
-					"description": "Files to edit in this call (1-20):\n- `files` is an array of file objects, never a quoted string.\n- Each item carries its own `path`, `version`, and `changes`; `path` and `version` must not be hoisted to the top level.\n- Put all independent changes for the same file in one `changes` array when possible (max 50); repeated normalized paths with the same version merge; total changes across all files must not exceed 200.",
-					"items": map[string]any{
-						"type": "object",
-						"properties": map[string]any{
-							"path":    map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*"},
-							"version": map[string]any{"type": "string", "pattern": "^[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{6}$", "description": "Required 6-character current version from read or the preceding successful edit. Comparison is case-insensitive."},
-							"changes": map[string]any{
-								"type":     "array",
-								"minItems": 1,
-								"maxItems": 50,
-								"items":    editChangeSchema(),
-							},
-						},
-						"required": []string{"path", "version", "changes"},
-					},
+					"maxItems":    50,
+					"description": "All changes for this one file (max 50). Every change matches against the same original read snapshot; overlapping source regions fail the whole call.",
+					"items":       editChangeSchema(),
 				},
 			},
-			"required": []string{"files"},
+			"required": []string{"path", "version", "changes"},
 		}),
 		functionTool("create", "Create a new UTF-8 text file inside the workspace (or an additional session-level extra root). Parent directories are created automatically. Does not overwrite unless overwrite is true. Refuses symlink targets and non-text overwrites. After writing, `validation` contains a concise automatic syntax/compile check; if it reports a failure, the file is already written and should be fixed with another edit. Error codes: E_PATH_OUTSIDE, E_EXISTS, E_TARGET_IS_DIRECTORY, E_SYMLINK_PATH, E_TEXT_OVERWRITE.", map[string]any{
 			"type": "object",
@@ -384,7 +372,7 @@ func chatToolsUncached() []openai.Tool {
 
 var builtinToolExamples = map[string]string{
 	"list_files":         `{"path":"frontend/src","maxDepth":2,"limit":200}`,
-	"edit":               `{"files":[{"path":"app.go","version":"9k3m7x","changes":[{"oldText":"const oldName = oldValue","newText":"const newName = newValue"}]}]}; lineRange: {"files":[{"path":"app.go","version":"9k3m7x","changes":[{"lineRange":"40-72","newText":"replacement block"}]}]}`,
+	"edit":               `{"path":"app.go","version":"9k3m7x","changes":[{"oldText":"const oldName = oldValue","newText":"const newName = newValue"}]}; lineRange: {"path":"app.go","version":"9k3m7x","changes":[{"lineRange":"40-72","newText":"replacement block"}]}`,
 	"create":             `{"path":"notes/example.md","content":"# Example\n","overwrite":false}`,
 	"delete":             `{"path":"tmp/generated","recursive":true}`,
 	"command":            `{"command":"go test ./...","cwd":".","timeoutSeconds":120}`,

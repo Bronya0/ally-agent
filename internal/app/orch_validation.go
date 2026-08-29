@@ -19,6 +19,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	openai "github.com/sashabaranov/go-openai"
 )
 
 const (
@@ -151,6 +153,116 @@ func (a *App) validateChangedFiles(ctx context.Context, cfg ConfigState, paths [
 // means the language check is disabled until the user opts in per language.
 func validationEnabled(flag *bool) bool {
 	return flag != nil && *flag
+}
+
+// batchValidationPathsContextKey carries the display paths one tool call must
+// validate, as planned by planBatchValidation for its tool batch.
+type batchValidationPathsContextKey struct{}
+
+// validateChangedFilesForCall validates one tool call's changed files under
+// the tool batch's validation plan. Directory-level checks (go vet per
+// package, tsc/vue-tsc per tsconfig project) would otherwise run once per
+// edit call, so the plan defers a unit to the last batch call touching it and
+// hands that call the expanded path set; a call whose paths were all absorbed
+// by a later call validates nothing. Without a plan in ctx (sub-agent steps
+// before wiring, direct calls) it behaves exactly like validateChangedFiles
+// on the given paths.
+func (a *App) validateChangedFilesForCall(ctx context.Context, cfg ConfigState, paths []string) string {
+	if planned, ok := ctx.Value(batchValidationPathsContextKey{}).([]string); ok {
+		paths = planned
+	}
+	return a.validateChangedFiles(ctx, cfg, paths)
+}
+
+// planBatchValidation spreads the local edit/create calls of one tool batch
+// over validation units so each unit is checked exactly once per batch: the
+// last call in tool-call index order that touches a unit validates it with
+// every path sharing that unit, keeping the per-validator output filters
+// complete. Units are a Go package directory, a tsconfig project, or a single
+// file for per-file checks; later same-path calls cannot execute because the
+// write-conflict policy skips them, so conflicted call indexes must be passed
+// in skip and never own a unit. The returned map holds the display paths per
+// call index — an empty slice means the call validates nothing because all
+// its paths were absorbed by a later executing call. Calls that are not local
+// edit/create, or whose arguments fail to parse, get no entry and keep the
+// plain per-call behavior.
+func planBatchValidation(roots []string, calls []openai.ToolCall, skip map[int]bool) map[int][]string {
+	if len(roots) == 0 {
+		return nil
+	}
+	root := roots[0]
+	type unit struct {
+		owner int
+		paths []string
+	}
+	units := map[string]*unit{}
+	parsed := map[int][]string{}
+	for i, call := range calls {
+		if skip[i] {
+			continue
+		}
+		paths := localMutationPathsForValidation(call)
+		if len(paths) == 0 {
+			continue
+		}
+		parsed[i] = paths
+		for _, p := range paths {
+			abs, err := safeJoin(roots, p)
+			if err != nil {
+				continue
+			}
+			abs = filepath.Clean(abs)
+			key := "file:" + strings.ToLower(abs)
+			switch strings.ToLower(filepath.Ext(abs)) {
+			case ".go":
+				key = "go:" + strings.ToLower(filepath.Dir(abs))
+			case ".ts", ".tsx", ".d.ts", ".vue":
+				key = "ts:" + nearestFile(filepath.Dir(abs), root, "tsconfig.json")
+			}
+			u := units[key]
+			if u == nil {
+				u = &unit{}
+				units[key] = u
+			}
+			u.owner = i
+			u.paths = append(u.paths, p)
+		}
+	}
+	if len(parsed) == 0 {
+		return nil
+	}
+	plan := make(map[int][]string, len(parsed))
+	for i := range parsed {
+		plan[i] = []string{}
+	}
+	for _, u := range units {
+		plan[u.owner] = append(plan[u.owner], u.paths...)
+	}
+	return plan
+}
+
+// localMutationPathsForValidation extracts the workspace display paths one
+// tool call would write for validation planning. Only local edit and create
+// run model-facing validation today; unparseable or truncated arguments
+// yield no paths so the call falls back to plain per-call validation.
+func localMutationPathsForValidation(call openai.ToolCall) []string {
+	switch normalizeToolName(call.Function.Name) {
+	case "edit":
+		var req FileTextEdits
+		if json.Unmarshal([]byte(call.Function.Arguments), &req) != nil || strings.TrimSpace(req.Path) == "" {
+			return nil
+		}
+		return []string{req.Path}
+	case "create":
+		var req struct {
+			Path string `json:"path"`
+		}
+		if json.Unmarshal([]byte(call.Function.Arguments), &req) != nil || strings.TrimSpace(req.Path) == "" {
+			return nil
+		}
+		return []string{req.Path}
+	}
+	return nil
 }
 
 func collectValidationFiles(roots []string, paths []string) []validationFile {
