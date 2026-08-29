@@ -726,7 +726,7 @@ import {
 import { Browser, Events } from '@wailsio/runtime';
 import { unwrapWailsEvent } from '../utils/wailsEvent.mjs';
 import {
-  GetMcpConfig, GetMcpServers, SaveMcpConfig, RestartMcpServers,
+  GetMcpConfig, GetMcpServers, SaveMcpConfig, ReconcileMcpServers,
   ListSkills, ActivateSkill, DeactivateSkill, ClearSkills, GetActiveSkills,
   ListTools, OpenPathInFileManager,
   TestModelConnection, FetchModelList,
@@ -1514,7 +1514,9 @@ async function saveMcpConfigText() {
       return;
     }
     await SaveMcpConfig(mcpConfigText.value);
-    await RestartMcpServers();
+    // Incremental reconcile: only added/removed/changed servers reconnect;
+    // untouched servers keep their live connections.
+    await ReconcileMcpServers();
     mcpLastAppliedJson.value = mcpConfigText.value;
     mcpServers.value = await GetMcpServers() || [];
     message.success(t('app.mcp.saved'));

@@ -433,7 +433,7 @@ Config path:
 ~/.ally_agent/mcp.json
 ```
 
-Settings page: Settings → MCP edits raw JSON; Save reconnects all MCP servers; server status is shown with connected/connecting/failed/disabled states (disabled = configured with `enabled:false`, never connected). A broken `mcp.json` surfaces a `config:warning` instead of silently unloading servers; MCP tool results are clamped to the same model-context cap as built-in tools.
+Settings page: Settings → MCP edits the server list or the raw JSON; applying the config reconciles instead of restarting everything (`ReconcileMcpServers`): only added, removed, or changed servers are (re)connected, unchanged servers keep their live connections and tool registrations. Server status is shown with connected/connecting/failed/disabled states (disabled = configured with `enabled:false`, never connected). A broken `mcp.json` surfaces a `config:warning` instead of silently unloading servers; MCP tool results are clamped to the same model-context cap as built-in tools. Saving changed proxy settings still restarts every MCP server (`RestartMcpServers`) so the new transport reaches all of them.
 
 Manager flow:
 

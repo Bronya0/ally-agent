@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -70,6 +71,9 @@ type McpManager struct {
 	listener      func(tools []McpDiscoveredTool)
 	warnHandler   func(message string)
 	networkConfig func() ConfigState
+	// configPaths overrides mcpJsonPaths when set; hermetic tests point it at
+	// a temp file so reconcile tests never touch the real user config.
+	configPaths []string
 }
 
 // SetWarningHandler wires the config:warning sink so a broken mcp.json is
@@ -129,7 +133,11 @@ func mcpUserConfigPath() string {
 
 func (m *McpManager) LoadConfigs() (map[string]McpServerConfig, error) {
 	merged := make(map[string]McpServerConfig)
-	for _, path := range mcpJsonPaths(m.workDir) {
+	paths := m.configPaths
+	if len(paths) == 0 {
+		paths = mcpJsonPaths(m.workDir)
+	}
+	for _, path := range paths {
 		data, err := os.ReadFile(path)
 		if err != nil {
 			continue
@@ -178,6 +186,82 @@ func (m *McpManager) StartAll(ctx context.Context) error {
 	}
 	wg.Wait()
 	return nil
+}
+
+func mcpServerConfigEqual(a, b McpServerConfig) bool {
+	// Normalize the omitted-vs-explicit enabled flag: both mean enabled, and a
+	// cosmetic JSON rewrite must not tear down a live connection.
+	if a.Enabled == nil {
+		enabled := true
+		a.Enabled = &enabled
+	}
+	if b.Enabled == nil {
+		enabled := true
+		b.Enabled = &enabled
+	}
+	return reflect.DeepEqual(a, b)
+}
+
+// ReconcileConfigs converges the running servers onto the persisted config
+// without touching servers whose configuration is unchanged: removed servers
+// are disconnected, added or changed servers reconnect, unchanged servers
+// keep their live connections and tool registrations. Returns how many
+// servers changed connection state.
+func (m *McpManager) ReconcileConfigs(ctx context.Context) (int, error) {
+	configs, err := m.LoadConfigs()
+	if err != nil {
+		return 0, err
+	}
+	touched := map[string]bool{}
+
+	m.mu.Lock()
+	var stale []string
+	for name, handle := range m.clients {
+		cfg, ok := configs[name]
+		if !ok || !mcpServerConfigEqual(handle.Config, cfg) {
+			stale = append(stale, name)
+		}
+	}
+	for _, name := range stale {
+		if handle := m.clients[name]; handle != nil && handle.Client != nil {
+			handle.Client.Close()
+		}
+		delete(m.clients, name)
+		m.replaceToolLookupLocked(name, nil)
+		touched[name] = true
+	}
+	m.mu.Unlock()
+	if len(stale) > 0 {
+		m.notifyChange()
+	}
+
+	// (Re)connect everything missing or changed, mirroring StartAll: disabled
+	// configs register a disabled handle instead of a connection attempt.
+	var wg sync.WaitGroup
+	for name, cfg := range configs {
+		name, cfg := name, cfg
+		m.mu.RLock()
+		_, live := m.clients[name]
+		m.mu.RUnlock()
+		if live {
+			continue
+		}
+		touched[name] = true
+		if cfg.Enabled != nil && !*cfg.Enabled {
+			m.mu.Lock()
+			m.clients[name] = &McpClientHandle{ServerName: name, Config: cfg, Status: "disabled"}
+			m.mu.Unlock()
+			m.notifyChange()
+			continue
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			m.connectOne(ctx, name, cfg)
+		}()
+	}
+	wg.Wait()
+	return len(touched), nil
 }
 
 func (m *McpManager) connectOne(ctx context.Context, name string, cfg McpServerConfig) {
@@ -879,6 +963,28 @@ func (a *App) RestartMcpServers() error {
 	a.mcpManager = manager
 	err = manager.StartAll(a.ctx)
 	a.emitMcpStatus()
+	return err
+}
+
+// ReconcileMcpServers converges the running servers onto the saved config:
+// only added, removed, or changed servers are (re)connected, while unchanged
+// servers keep their live connections. Used by the MCP settings page so
+// toggling or editing one server does not restart every other one.
+func (a *App) ReconcileMcpServers() error {
+	if _, err := a.getConfig(); err != nil {
+		return err
+	}
+	if a.ctx == nil {
+		return errors.New("application context is not ready")
+	}
+	if a.mcpManager == nil {
+		return a.RestartMcpServers()
+	}
+	changed, err := a.mcpManager.ReconcileConfigs(a.ctx)
+	a.emitMcpStatus()
+	if err == nil && changed > 0 {
+		a.invalidateContextStaticCache()
+	}
 	return err
 }
 

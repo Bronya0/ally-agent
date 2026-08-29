@@ -10,6 +10,8 @@ package app
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -207,5 +209,91 @@ func TestIsMcpInvalidSessionError(t *testing.T) {
 				t.Fatalf("isMcpInvalidSessionError() = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestMcpManagerReconcileKeepsUnchangedServers(t *testing.T) {
+	enabled := true
+	disabled := false
+	configFile := filepath.Join(t.TempDir(), "mcp.json")
+	write := func(content string) {
+		t.Helper()
+		if err := os.WriteFile(configFile, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(`{"mcpServers":{
+		"a":{"command":"x","enabled":true},
+		"b":{"command":"y","enabled":false}
+	}}`)
+	manager := NewMcpManager(t.TempDir(), func(tools []McpDiscoveredTool) {})
+	manager.configPaths = []string{configFile}
+	// Simulated running state: a connected with the same config, b disabled
+	// with the same config, and a leftover server "old" whose config entry is
+	// gone. Handles carry no real clients so nothing external is touched.
+	manager.clients["a"] = &McpClientHandle{ServerName: "a", Config: McpServerConfig{Command: "x", Enabled: &enabled}, Status: "connected"}
+	bHandle := &McpClientHandle{ServerName: "b", Config: McpServerConfig{Command: "y", Enabled: &disabled}, Status: "disabled"}
+	manager.clients["b"] = bHandle
+	manager.clients["old"] = &McpClientHandle{ServerName: "old", Status: "connected"}
+	manager.replaceToolLookupLocked("old", []McpDiscoveredTool{{ServerName: "old", Name: "tool", FunctionName: "mcp__old__tool"}})
+
+	changed, err := manager.ReconcileConfigs(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed != 1 {
+		t.Fatalf("only the removed server should change state, got %d", changed)
+	}
+	if _, exists := manager.clients["old"]; exists {
+		t.Fatal("removed server must be disconnected")
+	}
+	if _, exists := manager.toolLookup["mcp__old__tool"]; exists {
+		t.Fatal("removed server's tool lookup must be dropped")
+	}
+	if manager.clients["b"] != bHandle {
+		t.Fatal("unchanged server must keep its handle without teardown")
+	}
+	if manager.clients["a"] == nil || manager.clients["a"].Status != "connected" {
+		t.Fatalf("unchanged server must keep its live handle, got %#v", manager.clients["a"])
+	}
+
+	// Change a to disabled and add c (disabled): both register disabled
+	// handles without any connection attempt; b stays untouched.
+	write(`{"mcpServers":{
+		"a":{"command":"x","enabled":false},
+		"b":{"command":"y","enabled":false},
+		"c":{"command":"z","enabled":false}
+	}}`)
+	changed, err = manager.ReconcileConfigs(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed != 2 {
+		t.Fatalf("a (changed) and c (added) should change state, got %d", changed)
+	}
+	if manager.clients["a"] == nil || manager.clients["a"].Status != "disabled" {
+		t.Fatalf("changed server should re-register as disabled, got %#v", manager.clients["a"])
+	}
+	if manager.clients["b"] != bHandle {
+		t.Fatal("untouched server must keep its handle across reconciles")
+	}
+	if manager.clients["c"] == nil || manager.clients["c"].Status != "disabled" {
+		t.Fatalf("added disabled server should register a disabled handle, got %#v", manager.clients["c"])
+	}
+}
+
+func TestMcpServerConfigEqualNormalizesEnabledFlag(t *testing.T) {
+	enabled := true
+	a := McpServerConfig{Command: "x"}
+	b := McpServerConfig{Command: "x", Enabled: &enabled}
+	if !mcpServerConfigEqual(a, b) {
+		t.Fatal("omitted enabled must equal explicit enabled:true")
+	}
+	off := false
+	if mcpServerConfigEqual(a, McpServerConfig{Command: "x", Enabled: &off}) {
+		t.Fatal("omitted enabled must differ from explicit enabled:false")
+	}
+	if mcpServerConfigEqual(McpServerConfig{Command: "x"}, McpServerConfig{Command: "y"}) {
+		t.Fatal("different commands must not be equal")
 	}
 }
