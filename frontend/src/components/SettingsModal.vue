@@ -448,7 +448,7 @@ Public License v3. See the LICENSE file for details.
             </div>
             <div class="mcp-toolbar-actions">
               <n-button size="small" secondary :loading="mcpLoading" @click="loadMcpConfig">{{ $t('common.refresh') }}</n-button>
-              <n-button size="small" type="primary" :loading="mcpLoading" :disabled="!mcpSaveEnabled" @click="saveMcpConfig">{{ $t('settings.mcpApplyReconnect') }}</n-button>
+              <n-button v-if="mcpEditMode === 'json'" size="small" type="primary" :loading="mcpLoading" :disabled="!mcpConfigValid" @click="saveMcpConfigText">{{ $t('settings.mcpApplyReconnect') }}</n-button>
             </div>
           </div>
           <div class="mcp-save-scope">{{ $t('settings.mcpSaveScope') }}</div>
@@ -458,18 +458,12 @@ Public License v3. See the LICENSE file for details.
             <div v-for="(srv, idx) in mcpFormServers" :key="srv._key" :class="['mcp-server-row', { expanded: srv._editing }]">
               <div class="mcp-row-main">
                 <span :class="['mcp-dot', mcpStatusFor(srv).status]"></span>
-                <div v-if="!srv._editing" class="mcp-row-info">
-                  <div class="mcp-row-title">
-                    <span class="mcp-name">{{ srv.name?.trim() || $t('settings.mcpUnnamedServer') }}</span>
-                    <span class="mcp-badge">{{ $t(transportLabel(srv.transport)) }}</span>
-                    <span v-if="srv.enabled === false" class="mcp-badge off">{{ $t('settings.mcpStatusDisabled') }}</span>
-                    <span v-if="mcpStatusFor(srv).toolCount" class="mcp-tools">{{ $t('tools.count', { count: mcpStatusFor(srv).toolCount }) }}</span>
-                  </div>
-                  <div class="mcp-row-summary" :title="mcpSummaryFor(srv)">{{ mcpSummaryFor(srv) }}</div>
-                </div>
-                <span v-else class="mcp-name">{{ $t('settings.mcpEditServer') }}</span>
+                <span class="mcp-name">{{ srv.name?.trim() || $t('settings.mcpUnnamedServer') }}</span>
+                <span class="mcp-badge">{{ $t(transportLabel(srv.transport)) }}</span>
+                <span v-if="srv.enabled === false" class="mcp-badge off">{{ $t('settings.mcpStatusDisabled') }}</span>
+                <span v-if="mcpStatusFor(srv).toolCount" class="mcp-tools">{{ $t('tools.count', { count: mcpStatusFor(srv).toolCount }) }}</span>
                 <span :class="['mcp-status-text', mcpStatusFor(srv).status]" :title="mcpStatusFor(srv).error || ''">{{ $t(mcpStatusLabel(mcpStatusFor(srv).status)) }}</span>
-                <n-switch v-model:value="srv.enabled" size="small" />
+                <n-switch :value="srv.enabled" size="small" @update:value="(value) => toggleMcpEnabled(srv, value)" />
                 <n-button size="tiny" quaternary @click="toggleMcpEdit(idx)">{{ srv._editing ? $t('settings.mcpCollapse') : $t('common.edit') }}</n-button>
                 <n-button size="tiny" quaternary type="error" @click="removeMcpServer(idx)">{{ $t('common.delete') }}</n-button>
               </div>
@@ -1441,6 +1435,7 @@ function exportModelConfigs() {
 
 // MCP state
 const mcpConfigText = ref('');
+const mcpLastAppliedJson = ref('');
 const mcpServers = ref([]);
 const mcpLoading = ref(false);
 const mcpEditMode = ref('form'); // 'form' or 'json'
@@ -1468,7 +1463,6 @@ const mcpConfigParseResult = computed(() => {
 });
 const mcpConfigValid = computed(() => mcpConfigParseResult.value.valid);
 const mcpConfigValidationText = computed(() => mcpConfigParseResult.value.text);
-const mcpSaveEnabled = computed(() => mcpEditMode.value === 'form' || mcpConfigValid.value);
 
 function cloneConfigDraft(source) {
   const next = JSON.parse(JSON.stringify(source || {}));
@@ -1500,6 +1494,7 @@ async function loadMcpConfig() {
   mcpLoading.value = true;
   try {
     mcpConfigText.value = await GetMcpConfig();
+    mcpLastAppliedJson.value = mcpConfigText.value;
     syncJsonToForm();
     mcpServers.value = await GetMcpServers() || [];
   } catch (err) {
@@ -1518,6 +1513,7 @@ async function saveMcpConfigText() {
     }
     await SaveMcpConfig(mcpConfigText.value);
     await RestartMcpServers();
+    mcpLastAppliedJson.value = mcpConfigText.value;
     mcpServers.value = await GetMcpServers() || [];
     message.success(t('app.mcp.saved'));
     emit('mcp-saved');
@@ -1528,11 +1524,16 @@ async function saveMcpConfigText() {
   }
 }
 
-async function saveMcpConfig() {
-  if (mcpEditMode.value === 'form') {
-    syncFormToJson();
-  }
-  await saveMcpConfigText();
+// Auto-apply: switch toggles, row edits committed via collapse, and deletions
+// save and reconnect without an explicit apply button. Triggers are
+// serialized so overlapping restarts cannot race, and a no-op change (the
+// serialized config equals what is already applied) skips the reconnect.
+let mcpApplyChain = Promise.resolve();
+
+function autoApplyMcpConfig() {
+  syncFormToJson();
+  if (mcpConfigText.value === mcpLastAppliedJson.value) return;
+  mcpApplyChain = mcpApplyChain.then(() => saveMcpConfigText()).catch(() => {});
 }
 
 function switchMcpMode(mode) {
@@ -1623,11 +1624,20 @@ function addMcpServer() {
 
 function removeMcpServer(index) {
   mcpFormServers.value.splice(index, 1);
+  autoApplyMcpConfig();
 }
 
 function toggleMcpEdit(index) {
   const srv = mcpFormServers.value[index];
-  if (srv) srv._editing = !srv._editing;
+  if (!srv) return;
+  srv._editing = !srv._editing;
+  // Collapsing a row commits its fields: the collapse acts as "done editing".
+  if (!srv._editing) autoApplyMcpConfig();
+}
+
+function toggleMcpEnabled(srv, value) {
+  srv.enabled = value;
+  autoApplyMcpConfig();
 }
 
 // Status of one form row, merged from the live server status list by name.
@@ -1658,15 +1668,6 @@ function transportLabel(transport) {
   if (transport === 'sse') return 'settings.mcpTransportSse';
   if (transport === 'streamable-http') return 'settings.mcpTransportStreamableHttp';
   return 'settings.mcpTransportStdio';
-}
-
-function mcpSummaryFor(srv) {
-  if (srv.transport === 'stdio') {
-    const args = String(srv.args || '').split('\n').map((a) => a.trim()).filter(Boolean).join(' ');
-    const command = String(srv.command || '').trim();
-    return [command, args].filter(Boolean).join(' ') || t('settings.mcpNoSummary');
-  }
-  return String(srv.url || '').trim() || t('settings.mcpNoSummary');
 }
 
 // Skills state
@@ -2321,22 +2322,6 @@ watch(() => props.visible, (visible) => {
   min-width: 0;
 }
 
-.mcp-row-info {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.mcp-row-title {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-  min-width: 0;
-}
-
 .mcp-badge {
   font-size: 11px;
   line-height: 1;
@@ -2352,17 +2337,9 @@ watch(() => props.visible, (visible) => {
   color: #f0c060;
 }
 
-.mcp-row-summary {
-  font-size: 12px;
-  color: #7d828c;
-  font-family: var(--ally-mono-font);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
 .mcp-status-text {
   flex: none;
+  margin-left: auto;
   font-size: 12px;
   color: #8a8a8a;
 }
@@ -2572,10 +2549,6 @@ watch(() => props.visible, (visible) => {
   .mcp-toolbar-actions,
   .mcp-server-name-input,
   .mcp-transport-select {
-    width: 100%;
-  }
-
-  .mcp-row-info {
     width: 100%;
   }
 
