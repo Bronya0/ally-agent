@@ -452,32 +452,48 @@ Public License v3. See the LICENSE file for details.
             </div>
           </div>
           <div class="mcp-save-scope">{{ $t('settings.mcpSaveScope') }}</div>
-          <!-- Form mode -->
+          <!-- Form mode: unified server list with live status per row -->
           <div v-if="mcpEditMode === 'form'" class="mcp-form-mode">
-            <div v-for="(srv, idx) in mcpFormServers" :key="srv._key" class="mcp-server-card">
-              <div class="mcp-server-card-header">
-                <n-input v-model:value="srv.name" :placeholder="$t('settings.mcpServerName')" size="small" class="mcp-server-name-input" />
-                <n-select v-model:value="srv.transport" :options="[
-                  { label: $t('settings.mcpTransportStdio'), value: 'stdio' },
-                  { label: $t('settings.mcpTransportSse'), value: 'sse' },
-                  { label: $t('settings.mcpTransportStreamableHttp'), value: 'streamable-http' },
-                ]" size="small" class="mcp-transport-select" />
+            <div v-if="!mcpFormServers.length" class="saved-model-empty">{{ $t('settings.mcpEmpty') }}</div>
+            <div v-for="(srv, idx) in mcpFormServers" :key="srv._key" :class="['mcp-server-row', { expanded: srv._editing }]">
+              <div class="mcp-row-main">
+                <span :class="['mcp-dot', mcpStatusFor(srv).status]"></span>
+                <div v-if="!srv._editing" class="mcp-row-info">
+                  <div class="mcp-row-title">
+                    <span class="mcp-name">{{ srv.name?.trim() || $t('settings.mcpUnnamedServer') }}</span>
+                    <span class="mcp-badge">{{ $t(transportLabel(srv.transport)) }}</span>
+                    <span v-if="srv.enabled === false" class="mcp-badge off">{{ $t('settings.mcpStatusDisabled') }}</span>
+                    <span v-if="mcpStatusFor(srv).toolCount" class="mcp-tools">{{ $t('tools.count', { count: mcpStatusFor(srv).toolCount }) }}</span>
+                  </div>
+                  <div class="mcp-row-summary" :title="mcpSummaryFor(srv)">{{ mcpSummaryFor(srv) }}</div>
+                </div>
+                <span v-else class="mcp-name">{{ $t('settings.mcpEditServer') }}</span>
+                <span :class="['mcp-status-text', mcpStatusFor(srv).status]" :title="mcpStatusFor(srv).error || ''">{{ $t(mcpStatusLabel(mcpStatusFor(srv).status)) }}</span>
                 <n-switch v-model:value="srv.enabled" size="small" />
-                <n-button size="small" quaternary type="error" @click="removeMcpServer(idx)">
-                  <template #icon><CloseOutlined /></template>
-                </n-button>
+                <n-button size="tiny" quaternary @click="toggleMcpEdit(idx)">{{ srv._editing ? $t('settings.mcpCollapse') : $t('common.edit') }}</n-button>
+                <n-button size="tiny" quaternary type="error" @click="removeMcpServer(idx)">{{ $t('common.delete') }}</n-button>
               </div>
-              <!-- stdio fields -->
-              <template v-if="srv.transport === 'stdio'">
-                <n-input v-model:value="srv.command" :placeholder="$t('settings.mcpCommand')" size="small" />
-                <n-input v-model:value="srv.args" type="textarea" :rows="2" :placeholder="$t('settings.mcpArgs')" size="small" spellcheck="false" />
-                <n-input v-model:value="srv.env" type="textarea" :rows="2" :placeholder="$t('settings.mcpEnv')" size="small" spellcheck="false" />
-              </template>
-              <!-- HTTP fields -->
-              <template v-else>
-                <n-input v-model:value="srv.url" :placeholder="$t('settings.mcpUrl')" size="small" />
-                <n-input v-model:value="srv.headers" type="textarea" :rows="2" :placeholder="$t('settings.mcpHeaders')" size="small" spellcheck="false" />
-              </template>
+              <div v-if="srv._editing" class="mcp-row-editor">
+                <div class="mcp-editor-line">
+                  <n-input v-model:value="srv.name" :placeholder="$t('settings.mcpServerName')" size="small" class="mcp-server-name-input" />
+                  <n-select v-model:value="srv.transport" :options="[
+                    { label: $t('settings.mcpTransportStdio'), value: 'stdio' },
+                    { label: $t('settings.mcpTransportSse'), value: 'sse' },
+                    { label: $t('settings.mcpTransportStreamableHttp'), value: 'streamable-http' },
+                  ]" size="small" class="mcp-transport-select" />
+                </div>
+                <template v-if="srv.transport === 'stdio'">
+                  <n-input v-model:value="srv.command" :placeholder="$t('settings.mcpCommand')" size="small" />
+                  <n-input v-model:value="srv.args" type="textarea" :rows="2" :placeholder="$t('settings.mcpArgs')" size="small" spellcheck="false" />
+                  <n-input v-model:value="srv.env" type="textarea" :rows="2" :placeholder="$t('settings.mcpEnv')" size="small" spellcheck="false" />
+                </template>
+                <template v-else>
+                  <n-input v-model:value="srv.url" :placeholder="$t('settings.mcpUrl')" size="small" />
+                  <n-input v-model:value="srv.headers" type="textarea" :rows="2" :placeholder="$t('settings.mcpHeaders')" size="small" spellcheck="false" />
+                </template>
+                <div v-if="mcpStatusFor(srv).error" class="mcp-row-error">{{ mcpStatusFor(srv).error }}</div>
+              </div>
+              <div v-else-if="mcpStatusFor(srv).error" class="mcp-row-error" :title="mcpStatusFor(srv).error">{{ mcpStatusFor(srv).error }}</div>
             </div>
             <n-button size="small" dashed block @click="addMcpServer">{{ $t('settings.mcpAddServer') }}</n-button>
           </div>
@@ -495,7 +511,8 @@ Public License v3. See the LICENSE file for details.
           <div v-if="mcpEditMode === 'json'" :class="['mcp-json-check', mcpConfigValid ? 'valid' : 'invalid']">
             {{ mcpConfigValidationText }}
           </div>
-          <div class="mcp-status-list">
+          <div v-if="mcpEditMode === 'json'" class="mcp-status-list">
+            <div class="mcp-status-title">{{ $t('settings.mcpStatusTitle') }}</div>
             <div v-if="!mcpServers.length" class="saved-model-empty">{{ $t('settings.mcpEmpty') }}</div>
             <div v-for="srv in mcpServers" :key="srv.name" class="mcp-status-item">
               <span :class="['mcp-dot', srv.status]"></span>
@@ -710,7 +727,8 @@ import {
   providerCatalogOptions,
   providerModelOptions,
 } from '../utils/modelProviderCatalog.mjs';
-import { Browser } from '@wailsio/runtime';
+import { Browser, Events } from '@wailsio/runtime';
+import { unwrapWailsEvent } from '../utils/wailsEvent.mjs';
 import {
   GetMcpConfig, GetMcpServers, SaveMcpConfig, RestartMcpServers,
   ListSkills, ActivateSkill, DeactivateSkill, ClearSkills, GetActiveSkills,
@@ -803,6 +821,10 @@ function checkForUpdates() {
 onUnmounted(() => {
   if (checkUpdateTimer) window.clearTimeout(checkUpdateTimer);
   checkUpdateTimer = 0;
+  if (mcpStatusOff) {
+    mcpStatusOff();
+    mcpStatusOff = null;
+  }
 });
 
 const validationSettingKeys = [
@@ -1530,6 +1552,7 @@ function syncJsonToForm() {
     const servers = parsed.mcpServers || {};
     mcpFormServers.value = Object.entries(servers).map(([name, cfg]) => ({
       _key: nextMcpServerKey(),
+      _editing: false,
       name,
       command: cfg.command || '',
       args: (cfg.args || []).join('\n'),
@@ -1586,6 +1609,7 @@ function normalizeMcpTransport(cfg = {}) {
 function addMcpServer() {
   mcpFormServers.value.push({
     _key: nextMcpServerKey(),
+    _editing: true,
     name: '',
     command: '',
     args: '',
@@ -1599,6 +1623,50 @@ function addMcpServer() {
 
 function removeMcpServer(index) {
   mcpFormServers.value.splice(index, 1);
+}
+
+function toggleMcpEdit(index) {
+  const srv = mcpFormServers.value[index];
+  if (srv) srv._editing = !srv._editing;
+}
+
+// Status of one form row, merged from the live server status list by name.
+// The local enabled switch wins over the persisted status: a row switched off
+// but not yet saved shows as disabled instead of its stale connection state.
+function mcpStatusFor(srv) {
+  const key = String(srv?.name || '').trim().toLowerCase();
+  const found = key
+    ? (mcpServers.value || []).find((item) => String(item?.name || '').trim().toLowerCase() === key)
+    : null;
+  if (srv?.enabled === false) {
+    return { ...(found || {}), status: 'disabled' };
+  }
+  return found || { status: '', toolCount: 0, error: '' };
+}
+
+function mcpStatusLabel(status) {
+  switch (status) {
+    case 'connected': return 'settings.mcpStatusConnected';
+    case 'connecting': return 'settings.mcpStatusConnecting';
+    case 'failed': return 'settings.mcpStatusFailed';
+    case 'disabled': return 'settings.mcpStatusDisabled';
+    default: return 'settings.mcpStatusNone';
+  }
+}
+
+function transportLabel(transport) {
+  if (transport === 'sse') return 'settings.mcpTransportSse';
+  if (transport === 'streamable-http') return 'settings.mcpTransportStreamableHttp';
+  return 'settings.mcpTransportStdio';
+}
+
+function mcpSummaryFor(srv) {
+  if (srv.transport === 'stdio') {
+    const args = String(srv.args || '').split('\n').map((a) => a.trim()).filter(Boolean).join(' ');
+    const command = String(srv.command || '').trim();
+    return [command, args].filter(Boolean).join(' ') || t('settings.mcpNoSummary');
+  }
+  return String(srv.url || '').trim() || t('settings.mcpNoSummary');
 }
 
 // Skills state
@@ -1698,6 +1766,10 @@ function onSave() {
 }
 
 // Sync MCP when modal opens
+// Live MCP connection status while the modal is open; statuses pushed by the
+// backend land in the same list the form rows merge from.
+let mcpStatusOff = null;
+
 watch(() => props.visible, (visible) => {
   if (visible) {
     page.value = props.initialPage || 'general';
@@ -1706,6 +1778,15 @@ watch(() => props.visible, (visible) => {
     refreshSkillState();
     if (draft.proxyMode === 'system') detectProxy();
     refreshAutostart();
+    if (!mcpStatusOff) {
+      mcpStatusOff = Events.On('mcp:status', (event) => {
+        const data = unwrapWailsEvent(event, 'mcp:status');
+        mcpServers.value = data?.servers || [];
+      });
+    }
+  } else if (mcpStatusOff) {
+    mcpStatusOff();
+    mcpStatusOff = null;
   }
 });
 </script>
@@ -2219,17 +2300,106 @@ watch(() => props.visible, (visible) => {
   margin-bottom: 12px;
 }
 
-.mcp-server-card {
+.mcp-server-row {
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 8px;
-  padding: 12px;
+  padding: 8px 10px;
   display: flex;
   flex-direction: column;
   gap: 8px;
   background: rgba(255, 255, 255, 0.02);
 }
 
-.mcp-server-card-header {
+.mcp-server-row.expanded {
+  border-color: rgba(255, 255, 255, 0.16);
+}
+
+.mcp-row-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.mcp-row-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.mcp-row-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.mcp-badge {
+  font-size: 11px;
+  line-height: 1;
+  padding: 3px 6px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.06);
+  color: #9aa0aa;
+  flex: none;
+}
+
+.mcp-badge.off {
+  background: rgba(245, 166, 35, 0.14);
+  color: #f0c060;
+}
+
+.mcp-row-summary {
+  font-size: 12px;
+  color: #7d828c;
+  font-family: var(--ally-mono-font);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mcp-status-text {
+  flex: none;
+  font-size: 12px;
+  color: #8a8a8a;
+}
+
+.mcp-status-text.connected {
+  color: #8fd4b4;
+}
+
+.mcp-status-text.connecting {
+  color: #f0d080;
+}
+
+.mcp-status-text.failed {
+  color: #f4a4a4;
+}
+
+.mcp-status-text.disabled {
+  color: #5a5f6a;
+}
+
+.mcp-row-error {
+  font-size: 12px;
+  color: #f4a4a4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mcp-row-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 4px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.mcp-editor-line {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -2245,8 +2415,10 @@ watch(() => props.visible, (visible) => {
   flex: none;
 }
 
-.mcp-server-card-header > :last-child {
-  margin-left: auto;
+.mcp-status-title {
+  font-size: 12px;
+  color: #7d828c;
+  margin-bottom: 2px;
 }
 
 .mcp-json-check {
@@ -2392,7 +2564,7 @@ watch(() => props.visible, (visible) => {
   }
 
   .mcp-toolbar,
-  .mcp-server-card-header {
+  .mcp-row-main {
     align-items: stretch;
     flex-direction: column;
   }
@@ -2400,6 +2572,10 @@ watch(() => props.visible, (visible) => {
   .mcp-toolbar-actions,
   .mcp-server-name-input,
   .mcp-transport-select {
+    width: 100%;
+  }
+
+  .mcp-row-info {
     width: 100%;
   }
 
