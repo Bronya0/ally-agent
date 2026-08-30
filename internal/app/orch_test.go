@@ -3535,51 +3535,7 @@ func TestLocalEditPlanIsSharedByConflictDetectionAndExecution(t *testing.T) {
 	}
 }
 
-func TestSalvageEditRequestRecoversCompletePrefix(t *testing.T) {
-	// Cut inside the third change's newText: two complete changes survive,
-	// the truncated one is dropped and counted.
-	file, _, dropped, ok := salvageEditRequest([]byte(`{"path":"a.txt","version":"000000000000","changes":[{"oldText":"alpha","newText":"ALPHA"},{"oldText":"beta","newText":"BETA"},{"oldText":"gamma","newText":"GAM`))
-	if !ok {
-		t.Fatal("expected salvage to recover the complete prefix")
-	}
-	if dropped != 1 {
-		t.Fatalf("expected 1 dropped change, got %d", dropped)
-	}
-	if file.Path != "a.txt" || file.Version != "000000000000" {
-		t.Fatalf("unexpected salvaged file: %#v", file)
-	}
-	if len(file.Changes) != 2 || file.Changes[0].NewText != "ALPHA" || file.Changes[1].NewText != "BETA" {
-		t.Fatalf("unexpected salvaged changes: %#v", file.Changes)
-	}
-
-	// Stream cut right after a complete change: nothing is lost.
-	file, _, dropped, ok = salvageEditRequest([]byte(`{"path":"a.txt","version":"v1","changes":[{"oldText":"x","newText":"y"}]`))
-	if !ok || dropped != 0 || len(file.Changes) != 1 {
-		t.Fatalf("expected trailing truncation to keep the complete change: %#v dropped=%d ok=%v", file, dropped, ok)
-	}
-
-	// A remote_edit prefix recovers the target alongside the flat file fields.
-	file, target, dropped, ok := salvageEditRequest([]byte(`{"target":"my-dev:/srv/app","path":"main.go","version":"v1","changes":[{"oldText":"a","newText":"b"}]`))
-	if !ok || dropped != 0 || len(file.Changes) != 1 {
-		t.Fatalf("expected remote prefix to keep the complete change: %#v dropped=%d ok=%v", file, dropped, ok)
-	}
-	if target != "my-dev:/srv/app" || file.Path != "main.go" || file.Version != "v1" {
-		t.Fatalf("unexpected salvaged remote fields: target=%q file=%#v", target, file)
-	}
-
-	// Nothing usable was transmitted before the cut.
-	_, _, _, ok = salvageEditRequest([]byte(`{"path":"a.txt","ver`))
-	if ok {
-		t.Fatal("salvage must not report usable output for a prefix without complete changes")
-	}
-
-	// Not truncated in the first place: a top-level non-object yields nothing.
-	if _, _, _, ok := salvageEditRequest([]byte(`[]`)); ok {
-		t.Fatal("non-object arguments must not salvage")
-	}
-}
-
-func TestExecuteToolEditSalvagesTruncatedArguments(t *testing.T) {
+func TestExecuteToolEditRejectsTruncatedArguments(t *testing.T) {
 	dir := t.TempDir()
 	original := []byte("alpha\nbeta\ngamma\n")
 	if err := os.WriteFile(filepath.Join(dir, "sample.txt"), original, 0o600); err != nil {
@@ -3589,92 +3545,51 @@ func TestExecuteToolEditSalvagesTruncatedArguments(t *testing.T) {
 	cfg := ConfigState{Workspace: dir}
 	version := strings.ToUpper(hashVersion(original))
 
-	// Stream cut inside the third change: the first two changes must be
-	// applied, the third dropped, and the result must carry the salvage
-	// warning instead of failing the call.
-	truncated := fmt.Sprintf(`{"path":"sample.txt","version":%q,"changes":[{"oldText":"alpha","newText":"ALPHA"},{"oldText":"beta","newText":"BETA"},{"oldText":"gamma","newText":"GAM`, version)
+	// Stream cut inside a change: the call fails with the explicit truncation
+	// error and nothing is written. The model resends the complete call.
+	truncated := fmt.Sprintf(`{"path":"sample.txt","version":%q,"changes":[{"oldText":"alpha","newText":"ALPHA"},{"oldText":"beta","newText":"BET`, version)
 	result := app.executeTool(context.Background(), cfg, "session-1", "edit", []byte(truncated))
-	if !result.OK {
-		t.Fatalf("expected salvaged edit to succeed, got error %q", result.Error)
+	if result.OK || !strings.Contains(strings.ToLower(result.Error), "truncated") {
+		t.Fatalf("expected truncation error without salvage, got %#v", result)
 	}
 	got, err := os.ReadFile(filepath.Join(dir, "sample.txt"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(got) != "ALPHA\nBETA\ngamma\n" {
-		t.Fatalf("unexpected salvaged content: %q", string(got))
-	}
-	var multi MultiEditResult
-	data, _ := json.Marshal(result.Data)
-	if err := json.Unmarshal(data, &multi); err != nil {
-		t.Fatalf("decode MultiEditResult: %v", err)
-	}
-	if len(multi.Warnings) == 0 || !strings.Contains(multi.Warnings[len(multi.Warnings)-1], "截断") {
-		t.Fatalf("expected salvage warning in result warnings, got %#v", multi.Warnings)
-	}
-	if !strings.Contains(multi.Warnings[len(multi.Warnings)-1], "1 个残缺改动") {
-		t.Fatalf("salvage warning must report the dropped change count: %#v", multi.Warnings)
+	if string(got) != string(original) {
+		t.Fatalf("truncated edit must not write the file, got %q", string(got))
 	}
 
-	// Salvage that recovers nothing keeps the explicit truncation error.
-	result = app.executeTool(context.Background(), cfg, "session-1", "edit", []byte(`{"path":"sample.txt","ver`))
-	if result.OK || !strings.Contains(result.Error, "truncated") {
-		t.Fatalf("expected truncation error when nothing is salvageable, got %#v", result)
+	// The marker that prepareToolCallsForExecution substitutes for truncated
+	// JSON fails with E_TRUNCATED_ARGS before any decoding is attempted.
+	result = app.executeTool(context.Background(), cfg, "session-1", "edit", []byte(truncatedToolCallArguments))
+	if result.OK || result.ErrorCode != "E_TRUNCATED_ARGS" {
+		t.Fatalf("expected E_TRUNCATED_ARGS for the truncation marker, got %#v", result)
 	}
 }
 
-func TestPrepareToolCallsForExecutionKeepsSalvageBytesAndSafeReplayJSON(t *testing.T) {
-	raw := `{"path":"sample.txt","version":"abc123","changes":[{"oldText":"alpha","newText":"ALPHA"},{"oldText":"beta","newText":"BET`
-	prepared, executionArgs, salvaged := prepareToolCallsForExecution([]openai.ToolCall{{
-		ID: "call_1", Type: openai.ToolTypeFunction,
-		Function: openai.FunctionCall{Name: "edit", Arguments: raw},
-	}})
-	if len(prepared) != 1 || len(executionArgs) != 1 {
+func TestPrepareToolCallsForExecutionRewritesInvalidJSONToMarker(t *testing.T) {
+	valid := `{"path":"sample.txt","version":"abc123","changes":[{"oldText":"alpha","newText":"ALPHA"}]}`
+	prepared, executionArgs := prepareToolCallsForExecution([]openai.ToolCall{
+		{ID: "call_1", Type: openai.ToolTypeFunction, Function: openai.FunctionCall{Name: "edit", Arguments: valid}},
+		{ID: "call_2", Type: openai.ToolTypeFunction, Function: openai.FunctionCall{Name: "list_files"}},
+		{ID: "call_3", Type: openai.ToolTypeFunction, Function: openai.FunctionCall{Name: "edit", Arguments: `{"path":"sample.txt","ver`}},
+		{ID: "call_4", Type: openai.ToolTypeFunction, Function: openai.FunctionCall{Name: "read", Arguments: "   "}},
+	})
+	if len(prepared) != 4 || len(executionArgs) != 4 {
 		t.Fatalf("unexpected prepared result: %#v %#v", prepared, executionArgs)
 	}
-	if executionArgs[0] != raw {
-		t.Fatalf("execution must retain raw truncated bytes for salvage, got %q", executionArgs[0])
+	if prepared[0].Function.Arguments != valid || executionArgs[0] != valid {
+		t.Fatalf("valid arguments must pass through unchanged: %q %q", prepared[0].Function.Arguments, executionArgs[0])
 	}
-	if !salvaged {
-		t.Fatal("expected the complete edit prefix to be marked salvageable")
+	if prepared[1].Function.Arguments != "{}" || executionArgs[1] != "{}" {
+		t.Fatalf("empty arguments must normalize to {}: %q %q", prepared[1].Function.Arguments, executionArgs[1])
 	}
-	if !json.Valid([]byte(prepared[0].Function.Arguments)) || isTruncatedArgsMarker([]byte(prepared[0].Function.Arguments)) {
-		t.Fatalf("provider replay must use recovered valid JSON, got %q", prepared[0].Function.Arguments)
+	if !isTruncatedArgsMarker([]byte(prepared[2].Function.Arguments)) || !isTruncatedArgsMarker([]byte(executionArgs[2])) {
+		t.Fatalf("truncated arguments must use the marker on both paths: %q %q", prepared[2].Function.Arguments, executionArgs[2])
 	}
-	var req FileTextEdits
-	if err := json.Unmarshal([]byte(prepared[0].Function.Arguments), &req); err != nil || req.Path != "sample.txt" || len(req.Changes) != 1 {
-		t.Fatalf("unexpected recovered replay request: %#v err=%v", req, err)
-	}
-
-	prepared, executionArgs, salvaged = prepareToolCallsForExecution([]openai.ToolCall{{
-		Function: openai.FunctionCall{Name: "edit", Arguments: `{"path":"sample.txt","ver`},
-	}})
-	if !isTruncatedArgsMarker([]byte(prepared[0].Function.Arguments)) || !isTruncatedArgsMarker([]byte(executionArgs[0])) {
-		t.Fatalf("unsalvageable calls must use the truncation marker on both paths: %#v %#v", prepared, executionArgs)
-	}
-	if salvaged {
-		t.Fatal("an edit prefix without a complete change must not bypass max_tokens")
-	}
-
-	// remote_edit truncations replay the recovered flat remote request with
-	// the captured target intact.
-	rawRemote := `{"target":"my-dev:/srv/app","path":"main.go","version":"abc123","changes":[{"oldText":"alpha","newText":"ALPHA"},{"oldText":"beta","newText":"BET`
-	prepared, executionArgs, salvaged = prepareToolCallsForExecution([]openai.ToolCall{{
-		ID: "call_2", Type: openai.ToolTypeFunction,
-		Function: openai.FunctionCall{Name: "remote_edit", Arguments: rawRemote},
-	}})
-	if executionArgs[0] != rawRemote {
-		t.Fatalf("execution must retain raw truncated bytes for salvage, got %q", executionArgs[0])
-	}
-	if !salvaged {
-		t.Fatal("expected the complete remote_edit prefix to be marked salvageable")
-	}
-	if !json.Valid([]byte(prepared[0].Function.Arguments)) || isTruncatedArgsMarker([]byte(prepared[0].Function.Arguments)) {
-		t.Fatalf("provider replay must use recovered valid JSON, got %q", prepared[0].Function.Arguments)
-	}
-	var remoteReq RemoteEditRequest
-	if err := json.Unmarshal([]byte(prepared[0].Function.Arguments), &remoteReq); err != nil || remoteReq.Target != "my-dev:/srv/app" || remoteReq.Path != "main.go" || len(remoteReq.Changes) != 1 {
-		t.Fatalf("unexpected recovered remote replay request: %#v err=%v", remoteReq, err)
+	if prepared[3].Function.Arguments != "{}" || executionArgs[3] != "{}" {
+		t.Fatalf("whitespace-only arguments must normalize to {}: %q %q", prepared[3].Function.Arguments, executionArgs[3])
 	}
 }
 

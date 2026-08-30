@@ -234,7 +234,7 @@ func TestApplyOpenAIResponsesPromptCacheOptionsRequiresAnchor(t *testing.T) {
 	}
 }
 
-func TestNormalizeToolCallsPreservesLiveTruncatedEditForSalvage(t *testing.T) {
+func TestNormalizeToolCallsPreservesRawArgumentsForExecutionRewrite(t *testing.T) {
 	input := []legacyopenai.ToolCall{
 		// Stream cut off mid-arguments: the accumulated string is not JSON.
 		{ID: "a", Type: legacyopenai.ToolTypeFunction, Function: legacyopenai.FunctionCall{Name: "edit", Arguments: `{"files":[{"path":"AGENTS.md","changes":[{"oldText":"sandbox is`}},
@@ -244,7 +244,7 @@ func TestNormalizeToolCallsPreservesLiveTruncatedEditForSalvage(t *testing.T) {
 	out := normalizeToolCalls(input)
 
 	if out[0].Function.Arguments != input[0].Function.Arguments {
-		t.Fatalf("live truncated edit prefix must survive for salvage: %q", out[0].Function.Arguments)
+		t.Fatalf("raw truncated arguments must pass through; rewriting is prepareToolCallsForExecution's job: %q", out[0].Function.Arguments)
 	}
 	if out[1].Function.Arguments != "{}" || out[1].Type != legacyopenai.ToolTypeFunction {
 		t.Fatalf("empty arguments/type normalization regressed: %#v", out[1])

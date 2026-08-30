@@ -1885,10 +1885,10 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 		content := modelResp.Content
 		reasoning := modelResp.Reasoning
 		// Keep the provider-facing history valid even when a streamed tool call
-		// ended mid-JSON. Edit calls may retain their raw prefix only for the
-		// local salvage path; all other execution uses the safe representation.
+		// ended mid-JSON: truncated arguments are rewritten to the explicit
+		// truncation marker for both replay and execution.
 		var toolExecutionArgs []string
-		toolCalls, toolExecutionArgs, _ = prepareToolCallsForExecution(modelResp.ToolCalls)
+		toolCalls, toolExecutionArgs = prepareToolCallsForExecution(modelResp.ToolCalls)
 		fallbackInput := 0
 		fallbackOutput := 0
 		if modelResp.Usage == nil || modelResp.Usage.PromptTokens <= 0 {
@@ -2224,40 +2224,21 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 	case "edit":
 		// The model-facing request is the flat FileTextEdits itself: exactly
 		// one file per call, path/version/changes at the top level. Multi-file
-		// changes are parallel edit calls in one model response.
+		// changes are parallel edit calls in one model response. Truncated
+		// arguments never reach this case: prepareToolCallsForExecution has
+		// already rewritten them to the truncation marker, which fails above
+		// with E_TRUNCATED_ARGS and the model resends the complete call.
 		var req FileTextEdits
 		err, argWarnings = decodeJSON(&req)
-		editFiles := []FileTextEdits{req}
-		salvagedDropped := -1
-		if err != nil && isIncompleteStreamJSON(err) {
-			// Stream cut off mid-arguments: apply the complete prefix instead
-			// of failing the whole call, and report the dropped tail through
-			// the result warnings so the model re-reads and resends the rest.
-			if candidate, _, dropped, usable := salvageEditRequest(args); usable {
-				salvaged := []FileTextEdits{candidate}
-				if validateModelEditToolRequest(salvaged) == nil {
-					editFiles = salvaged
-					salvagedDropped = dropped
-					err = nil
-				}
-			}
-		}
 		if err == nil {
-			err = validateModelEditToolRequest(editFiles)
+			err = validateModelEditToolRequest([]FileTextEdits{req})
 		}
 		if err == nil {
 			a.fileOpsMu.Lock()
-			data, err = a.editFilesWithConfig(cfg, editFiles)
+			data, err = a.editFilesWithConfig(cfg, []FileTextEdits{req})
 			a.fileOpsMu.Unlock()
 			if err == nil {
-				paths := make([]string, 0, len(editFiles))
-				for _, file := range editFiles {
-					paths = append(paths, file.Path)
-				}
-				data = attachValidation(data, a.validateChangedFilesForCall(ctx, cfg, paths))
-				if salvagedDropped >= 0 {
-					data = attachEditSalvageWarning(data, salvageChanges(editFiles), salvagedDropped)
-				}
+				data = attachValidation(data, a.validateChangedFilesForCall(ctx, cfg, []string{req.Path}))
 				a.invalidateWorkspaceMapCache(cfg)
 				invalidateRunReadCache(ctx)
 			}
@@ -2374,29 +2355,15 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		}
 	case "remote_edit":
 		// Flat single-file request: target + the same path/version/changes as
-		// local edit. Truncated arguments recover the complete prefix exactly
-		// like edit, then still pass the full edit contract.
+		// local edit. Truncated arguments are rejected upstream the same way
+		// as edit (E_TRUNCATED_ARGS marker), so only complete JSON lands here.
 		var req RemoteEditRequest
 		err, argWarnings = decodeJSON(&req)
-		salvagedDropped := -1
-		if err != nil && isIncompleteStreamJSON(err) {
-			if file, target, dropped, usable := salvageEditRequest(args); usable {
-				salvaged := RemoteEditRequest{Target: target, Path: file.Path, Version: file.Version, Changes: file.Changes}
-				if validateModelEditToolRequest([]FileTextEdits{salvaged.file()}) == nil {
-					req = salvaged
-					salvagedDropped = dropped
-					err = nil
-				}
-			}
-		}
 		if err == nil {
 			err = validateModelEditToolRequest([]FileTextEdits{req.file()})
 		}
 		if err == nil {
 			data, err = a.remoteEdit(ctx, req)
-			if err == nil && salvagedDropped >= 0 {
-				data = attachEditSalvageWarning(data, len(req.Changes), salvagedDropped)
-			}
 		}
 	case "remote_create_file":
 		var req RemoteCreateFileRequest

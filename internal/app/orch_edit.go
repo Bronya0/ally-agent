@@ -295,156 +295,27 @@ func validateModelEditToolRequest(files []FileTextEdits) error {
 	return nil
 }
 
-// salvageEditRequest recovers the complete prefix of flat edit tool arguments
-// whose JSON was cut off mid-stream (provider stream interrupted before the
-// closing brackets arrived). The flat model-facing request {path, version,
-// changes} is recovered field by field; a "target" key (remote_edit) is
-// captured alongside. Complete changes decode exactly as they would on a
-// healthy stream, while the truncated tail is dropped and counted. A change
-// object that itself was cut is incomplete and must be dropped — its
-// oldText/newText pair cannot be told apart from an intentional partial edit.
-// The salvaged request still has to pass validateModelEditToolRequest and the
-// full edit contract before anything is written, so recovery never lowers the
-// validation bar. ok is true only when at least one complete change was
-// recovered.
-func salvageEditRequest(raw []byte) (file FileTextEdits, target string, dropped int, ok bool) {
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	tok, err := dec.Token()
-	if err != nil || tok != json.Delim('{') {
-		return file, "", 0, false
-	}
-	for dec.More() {
-		key, err := dec.Token()
-		if err != nil {
-			break
-		}
-		name, _ := key.(string)
-		switch name {
-		case "target", "path", "version":
-			value, err := dec.Token()
-			if err != nil {
-				return file, target, dropped, len(file.Changes) > 0
-			}
-			if s, isString := value.(string); isString {
-				switch name {
-				case "target":
-					target = s
-				case "path":
-					file.Path = s
-				default:
-					file.Version = s
-				}
-			}
-		case "changes":
-			tok, err := dec.Token()
-			if err != nil || tok != json.Delim('[') {
-				return file, target, dropped, len(file.Changes) > 0
-			}
-			for dec.More() {
-				var change TextChange
-				if err := dec.Decode(&change); err == nil {
-					file.Changes = append(file.Changes, change)
-					continue
-				}
-				dropped++
-				return file, target, dropped, len(file.Changes) > 0
-			}
-		default:
-			var skip json.RawMessage
-			if err := dec.Decode(&skip); err != nil {
-				return file, target, dropped, len(file.Changes) > 0
-			}
-		}
-	}
-	return file, target, dropped, len(file.Changes) > 0
-}
-
 // prepareToolCallsForExecution separates the arguments persisted/replayed to
-// providers from the arguments used for this execution. A truncated edit or
-// remote_edit keeps its raw byte prefix for salvageEditRequest, while the
-// assistant tool_call is rewritten to the recovered valid JSON so the next
-// model request cannot be rejected for malformed arguments. Other invalid
-// calls use the explicit truncation marker on both paths.
-func prepareToolCallsForExecution(toolCalls []openai.ToolCall) ([]openai.ToolCall, []string, bool) {
+// providers from the arguments used for this execution. Stream-truncated
+// arguments are replaced with the explicit truncation marker on both paths:
+// providers that parse tool_calls arguments server-side reject malformed
+// JSON with a 400, and the executor turns the marker into E_TRUNCATED_ARGS so
+// the model resends the complete call.
+func prepareToolCallsForExecution(toolCalls []openai.ToolCall) ([]openai.ToolCall, []string) {
 	prepared := cloneToolCalls(toolCalls)
 	executionArgs := make([]string, len(prepared))
-	salvaged := false
 	for i := range prepared {
 		raw := prepared[i].Function.Arguments
-		executionArgs[i] = raw
 		if strings.TrimSpace(raw) == "" {
-			prepared[i].Function.Arguments = "{}"
-			executionArgs[i] = "{}"
-			continue
+			raw = "{}"
 		}
-		if json.Valid([]byte(raw)) {
-			continue
+		if !json.Valid([]byte(raw)) {
+			raw = truncatedToolCallArguments
 		}
-		switch normalizeToolName(prepared[i].Function.Name) {
-		case "edit":
-			// The salvaged flat request is persisted back as the canonical
-			// single-file form so the next model request carries valid
-			// arguments and the history teaches the flat shape.
-			if file, _, _, ok := salvageEditRequest([]byte(raw)); ok {
-				salvagedFiles := []FileTextEdits{file}
-				if safe, err := json.Marshal(file); err == nil && validateModelEditToolRequest(salvagedFiles) == nil {
-					prepared[i].Function.Arguments = string(safe)
-					salvaged = true
-					continue
-				}
-			}
-		case "remote_edit":
-			// Same recovery for the flat remote request; the replay JSON keeps
-			// the captured target so the history teaches the full flat shape.
-			if file, target, _, ok := salvageEditRequest([]byte(raw)); ok {
-				salvagedReq := RemoteEditRequest{Target: target, Path: file.Path, Version: file.Version, Changes: file.Changes}
-				if safe, err := json.Marshal(salvagedReq); err == nil && validateModelEditToolRequest([]FileTextEdits{file}) == nil {
-					prepared[i].Function.Arguments = string(safe)
-					salvaged = true
-					continue
-				}
-			}
-		}
-		prepared[i].Function.Arguments = truncatedToolCallArguments
-		executionArgs[i] = truncatedToolCallArguments
+		prepared[i].Function.Arguments = raw
+		executionArgs[i] = raw
 	}
-	return prepared, executionArgs, salvaged
-}
-
-func salvageChanges(files []FileTextEdits) int {
-	total := 0
-	for _, file := range files {
-		total += len(file.Changes)
-	}
-	return total
-}
-
-// editSalvageWarning is the brief note attached to a salvaged edit result so
-// both the UI (yellow warning row) and the model (compacted warnings field)
-// know the tail of the request was dropped and the remaining changes must be
-// re-read and resent.
-func editSalvageWarning(applied, dropped int) string {
-	if dropped > 0 {
-		return fmt.Sprintf("参数流被截断：已应用 %d 个完整改动，尾部 %d 个残缺改动已丢弃；请重新 read 后补发剩余改动", applied, dropped)
-	}
-	return fmt.Sprintf("参数流在末尾被截断，%d 个改动已全部完整恢复并应用", applied)
-}
-
-// attachEditSalvageWarning appends the salvage note to a successful edit
-// result without disturbing the existing warnings.
-func attachEditSalvageWarning(data any, applied, dropped int) any {
-	warning := editSalvageWarning(applied, dropped)
-	switch result := data.(type) {
-	case MultiEditResult:
-		result.Warnings = append(result.Warnings, warning)
-		return result
-	case *MultiEditResult:
-		if result != nil {
-			result.Warnings = append(result.Warnings, warning)
-		}
-		return result
-	}
-	return data
+	return prepared, executionArgs
 }
 
 func validateVersion(version string) error {

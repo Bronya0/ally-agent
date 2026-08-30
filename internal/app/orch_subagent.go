@@ -196,10 +196,7 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 			modelResp, err = a.streamModelResponse(ctx, cfg, model, messages, tools, nil)
 			if err == nil {
 				if stopErr := modelResponseStopError(cfg, modelResp); stopErr != nil {
-					_, _, salvageable := prepareToolCallsForExecution(modelResp.ToolCalls)
-					if strings.TrimSpace(modelResp.StopReason) != "max_tokens" || !salvageable {
-						err = stopErr
-					}
+					err = stopErr
 				}
 			}
 			if err == nil {
@@ -253,7 +250,7 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 			fallbackOutput,
 		)
 
-		preparedToolCalls, toolExecutionArgs, _ := prepareToolCallsForExecution(modelResp.ToolCalls)
+		preparedToolCalls, toolExecutionArgs := prepareToolCallsForExecution(modelResp.ToolCalls)
 		assistantMessage := openai.ChatCompletionMessage{
 			Role:      openai.ChatMessageRoleAssistant,
 			Content:   modelResp.Content,

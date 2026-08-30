@@ -1788,10 +1788,9 @@ func updateToolCallFromResponsesItem(call *legacyopenai.ToolCall, item oaresp.Re
 const truncatedToolCallArguments = `{"allyTruncatedArguments":true}`
 
 // repairTruncatedToolCallArguments returns args unchanged when they are valid
-// JSON and the truncation marker otherwise. It is used for persisted history
-// repair and for non-salvageable calls; live edit calls keep their raw prefix
-// until prepareToolCallsForExecution can separate safe replay arguments from
-// the bytes passed to salvageEditRequest.
+// JSON and the truncation marker otherwise. It repairs persisted history at
+// load time; live streamed arguments are rewritten the same way by
+// prepareToolCallsForExecution before execution.
 func repairTruncatedToolCallArguments(args string) string {
 	if args == "" || json.Valid([]byte(args)) {
 		return args

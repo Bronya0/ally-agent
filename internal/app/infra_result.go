@@ -180,7 +180,7 @@ func toolResultSummary(name string, result *toolResult) string {
 
 // compactToolResultForModel returns the model-facing JSON for a tool result.
 // Per-tool compaction runs first; the envelope warnings (unknown-argument
-// notices and salvage/validation notes) are then re-injected so they survive
+// notices and validation notes) are then re-injected so they survive
 // even when a tool's compact payload drops the top-level envelope fields.
 func compactToolResultForModel(name string, result toolResult, fullJSON string) string {
 	if !result.OK || result.Data == nil {
