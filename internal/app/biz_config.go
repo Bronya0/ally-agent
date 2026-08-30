@@ -12,9 +12,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	goruntime "runtime"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -473,7 +475,18 @@ func (a *App) SaveConfig(req ConfigState) error {
 		// Drop cached Transports immediately so idle connections through the
 		// old proxy are released instead of lingering up to IdleConnTimeout.
 		invalidateProxyTransportCache()
-		go func() { _ = a.RestartMcpServers() }()
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("RestartMcpServers after proxy change panicked: %v\n%s", r, debug.Stack())
+					a.emit("config:warning", map[string]any{
+						"field":   "mcp",
+						"message": fmt.Sprintf("MCP servers failed to restart after proxy change: %v", r),
+					})
+				}
+			}()
+			_ = a.RestartMcpServers()
+		}()
 	}
 
 	// Validate gitBashPath on Windows: if set but invalid, warn the user.

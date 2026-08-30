@@ -1649,21 +1649,6 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 	// work completed before the interruption survives into the next request.
 	success := false
 	var messages []openai.ChatCompletionMessage
-	defer func() {
-		if !success && len(sanitizeHistoryMessages(messages)) > 0 {
-			a.saveHistory(req.SessionID, messages)
-		}
-		a.restoreSavedHistoryBreakdown(sessionID)
-		a.endTaskbarRun()
-		a.finishRun(runID)
-	}()
-
-	a.emit("run:start", map[string]any{"runId": runID, "sessionId": sessionID})
-
-	messages = a.buildMessages(req, cfg, a.listCachedSkills())
-	tools := a.buildToolsForConfig(cfg)
-	breakdownAcc := newLiveBreakdownAccumulator(messages)
-	readCache := newRunReadCache()
 	startTime := time.Now()
 	// runCacheHit/Miss accumulate prompt-cache hit/miss tokens across every
 	// LLM request in this Run (a tool loop may issue many). The aggregate
@@ -1688,6 +1673,31 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 		// kind 由调用点显式给出，避免从用户可见文案反推状态。
 		a.notifyCompletion(kind, cfg.Workspace)
 	}
+	defer func() {
+		if !success && len(sanitizeHistoryMessages(messages)) > 0 {
+			a.saveHistory(req.SessionID, messages)
+		}
+		a.restoreSavedHistoryBreakdown(sessionID)
+		a.endTaskbarRun()
+		a.finishRun(runID)
+	}()
+	// Panic 兜底：runChat 在独立 goroutine 里运行，逃逸的 panic 会直接击穿
+	// 整个桌面进程。这里把它转换成常规 run:error 结束路径。注册在上面的清理
+	// defer 之后（LIFO 先执行），panic 在进入清理前就被拦下，部分历史检查点
+	// 照常落盘、run 注册照常释放。
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("runChat: run %s panicked: %v\n%s", runID, r, debug.Stack())
+			emitRunEnd("run:error", "error", map[string]any{"error": fmt.Sprintf("agent 内部错误: %v", r)})
+		}
+	}()
+
+	a.emit("run:start", map[string]any{"runId": runID, "sessionId": sessionID})
+
+	messages = a.buildMessages(req, cfg, a.listCachedSkills())
+	tools := a.buildToolsForConfig(cfg)
+	breakdownAcc := newLiveBreakdownAccumulator(messages)
+	readCache := newRunReadCache()
 
 	planAttached := false
 	for step := 0; step < maxAgentSteps; step++ {
