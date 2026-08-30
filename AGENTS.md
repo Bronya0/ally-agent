@@ -460,7 +460,7 @@ MCP status is emitted through `mcp:status`.
 ```
 
 - Binds `127.0.0.1` only; every `/api/v1/*` request requires `Authorization: Bearer <token>` (constant-time compare). No CORS headers in v1.
-- The enabled switch is runtime-only state: the service always starts off at launch and is toggled from Settings → API; port and token persist. Empty token on save/start auto-generates a 32-hex token. Changing settings while running restarts the listener.
+- The enabled switch is runtime-only state: the service always starts off at launch and is toggled from Settings → API; port and token persist. Both must be configured before the switch enables (saving an empty token auto-generates a 32-hex one). Port/token edits save on blur; changing settings while running restarts the listener.
 - The listener stops when the run context `a.ctx` is cancelled (app-shutdown watcher) and on process exit.
 - Wails bindings: `GetApiServiceState`, `SaveApiSettings`, `SetApiServiceEnabled`; the Settings → API page renders state, port, token, and the endpoint list.
 
@@ -473,16 +473,29 @@ Endpoints (v1; all JSON envelopes `{ok, data}` / `{ok, error}`):
 | `POST /api/v1/sessions` | Create a session (`{title?, workspace?}`, defaults from active config) |
 | `GET /api/v1/sessions/{id}` | Session status: running, queued messages, active model |
 | `GET /api/v1/sessions/{id}/result` | Latest completed assistant message (`status: running/done`) |
+| `GET /api/v1/sessions/{id}/messages` | Full UI message snapshot of the session |
+| `GET /api/v1/sessions/{id}/todos` | Session plan (todo list) |
 | `POST /api/v1/sessions/{id}/messages` | Send a message: idle → `StartChat` new turn; running → `InjectRunMessage` queue (same auto-detection as the UI) |
 | `POST /api/v1/sessions/{id}/cancel` | Cancel the session's active run (same path as ESC → `CancelRun`) |
+| `POST /api/v1/sessions/{id}/compact` | Compact session history (`{instruction?}`); synchronous, waits for the LLM summary |
+| `DELETE /api/v1/sessions/{id}` | Delete session + persisted history (409 while a run is active; idempotent) |
 | `GET /api/v1/models` | Configured models (API keys redacted) + active model; sessions have no per-session model state — they follow the global active model |
 | `POST /api/v1/models` | Create (`index` absent) or update (`index` present) a `ModelConfig` entry |
 | `POST /api/v1/models/activate` | Switch the global active model (`SwitchModel`) |
 | `GET /api/v1/mcp` | MCP server statuses + raw `mcp.json` text |
 | `PUT /api/v1/mcp/config` | Replace the MCP config (`{config: "<raw json>"}`) and reconcile (incremental reconnect) |
 | `GET /api/v1/skills` | Skill list with enabled flags |
+| `GET /api/v1/skills/{name}` | Full skill content |
 | `POST /api/v1/skills/{name}/enable` | Enable a skill |
 | `POST /api/v1/skills/{name}/disable` | Disable a skill |
+| `GET /api/v1/tools` | Built-in + MCP tool inventory (`ListTools`) |
+| `GET /api/v1/subagents` | Sub-agent runs with status/progress |
+| `GET /api/v1/workspace` | Current workspace + extra roots (redacted) |
+| `GET /api/v1/services` | Background service list |
+| `GET /api/v1/services/{id}/output` | Service output buffer (`ServiceOutputResult`) |
+| `POST /api/v1/services/{id}/stop` | Stop a service (`{graceSeconds?}`) |
+| `GET /api/v1/tasks` | Temporary scheduled task list |
+| `DELETE /api/v1/tasks/{id}` | Delete a scheduled task |
 
 ---
 

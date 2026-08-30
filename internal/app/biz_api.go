@@ -293,8 +293,12 @@ func (a *App) apiMux() *http.ServeMux {
 	mux.HandleFunc("POST /api/v1/sessions", a.apiHandleCreateSession)
 	mux.HandleFunc("GET /api/v1/sessions/{id}", a.apiHandleSessionStatus)
 	mux.HandleFunc("GET /api/v1/sessions/{id}/result", a.apiHandleSessionResult)
+	mux.HandleFunc("GET /api/v1/sessions/{id}/messages", a.apiHandleSessionMessages)
+	mux.HandleFunc("GET /api/v1/sessions/{id}/todos", a.apiHandleSessionTodos)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/messages", a.apiHandleSendMessage)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/cancel", a.apiHandleCancelSession)
+	mux.HandleFunc("POST /api/v1/sessions/{id}/compact", a.apiHandleCompactSession)
+	mux.HandleFunc("DELETE /api/v1/sessions/{id}", a.apiHandleDeleteSession)
 
 	mux.HandleFunc("GET /api/v1/models", a.apiHandleListModels)
 	mux.HandleFunc("POST /api/v1/models", a.apiHandleSaveModel)
@@ -304,8 +308,20 @@ func (a *App) apiMux() *http.ServeMux {
 	mux.HandleFunc("PUT /api/v1/mcp/config", a.apiHandlePutMcpConfig)
 
 	mux.HandleFunc("GET /api/v1/skills", a.apiHandleListSkills)
+	mux.HandleFunc("GET /api/v1/skills/{name}", a.apiHandleGetSkill)
 	mux.HandleFunc("POST /api/v1/skills/{name}/enable", a.apiHandleEnableSkill)
 	mux.HandleFunc("POST /api/v1/skills/{name}/disable", a.apiHandleDisableSkill)
+
+	mux.HandleFunc("GET /api/v1/tools", a.apiHandleListTools)
+	mux.HandleFunc("GET /api/v1/subagents", a.apiHandleListSubagents)
+	mux.HandleFunc("GET /api/v1/workspace", a.apiHandleGetWorkspace)
+
+	mux.HandleFunc("GET /api/v1/services", a.apiHandleListServices)
+	mux.HandleFunc("GET /api/v1/services/{id}/output", a.apiHandleServiceOutput)
+	mux.HandleFunc("POST /api/v1/services/{id}/stop", a.apiHandleStopService)
+
+	mux.HandleFunc("GET /api/v1/tasks", a.apiHandleListTasks)
+	mux.HandleFunc("DELETE /api/v1/tasks/{id}", a.apiHandleDeleteTask)
 
 	return mux
 }
@@ -783,4 +799,169 @@ func (a *App) apiHandleDisableSkill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	apiWriteOK(w, map[string]any{"name": skill.Name, "enabled": false})
+}
+
+func (a *App) apiHandleGetSkill(w http.ResponseWriter, r *http.Request) {
+	skill, ok := a.apiFindSkill(w, r.PathValue("name"))
+	if !ok {
+		return
+	}
+	content, err := a.GetSkill(skill.Name)
+	if err != nil {
+		apiWriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	apiWriteOK(w, map[string]any{
+		"name":        skill.Name,
+		"description": skill.Description,
+		"source":      skill.Source,
+		"content":     content,
+	})
+}
+
+// ── 会话扩展：完整消息、待办、压缩、删除 ──
+
+// apiHandleSessionMessages 返回会话完整 UI 快照（含工具卡等展示字段），
+// 供外部工具取全量上下文。
+func (a *App) apiHandleSessionMessages(w http.ResponseWriter, r *http.Request) {
+	snapshot, err := a.LoadSession(r.PathValue("id"))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			apiWriteError(w, http.StatusNotFound, "session not found")
+			return
+		}
+		apiWriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	apiWriteOK(w, map[string]any{
+		"id":            snapshot.ID,
+		"title":         snapshot.Title,
+		"workspace":     snapshot.Workspace,
+		"createdAt":     snapshot.CreatedAt,
+		"updatedAt":     snapshot.UpdatedAt,
+		"contextTokens": snapshot.ContextTokens,
+		"messages":      snapshot.Messages,
+	})
+}
+
+func (a *App) apiHandleSessionTodos(w http.ResponseWriter, r *http.Request) {
+	apiWriteOK(w, map[string]any{"todos": a.GetTodos(r.PathValue("id"))})
+}
+
+// apiHandleCompactSession 压缩会话历史（同步调用：等 LLM 总结完成才返回）。
+func (a *App) apiHandleCompactSession(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Instruction string `json:"instruction"`
+	}
+	if err := apiDecodeOptionalBody(r, &body); err != nil {
+		apiWriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	result, err := a.CompactSession(r.PathValue("id"), body.Instruction)
+	if err != nil {
+		apiWriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	apiWriteOK(w, result)
+}
+
+func (a *App) apiHandleDeleteSession(w http.ResponseWriter, r *http.Request) {
+	if err := a.DeleteSession(r.PathValue("id")); err != nil {
+		if strings.Contains(err.Error(), "session is still running") {
+			apiWriteError(w, http.StatusConflict, err.Error())
+			return
+		}
+		apiWriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	apiWriteOK(w, map[string]any{"deleted": true})
+}
+
+// ── 工具清单 / 子代理 / 工作区 ──
+
+func (a *App) apiHandleListTools(w http.ResponseWriter, r *http.Request) {
+	tools := a.ListTools()
+	if tools == nil {
+		tools = []ToolDefinitionSummary{}
+	}
+	apiWriteOK(w, map[string]any{"tools": tools, "count": len(tools)})
+}
+
+func (a *App) apiHandleListSubagents(w http.ResponseWriter, r *http.Request) {
+	runs := a.GetSubagents()
+	if runs == nil {
+		runs = []*SubagentRun{}
+	}
+	apiWriteOK(w, map[string]any{"subagents": runs, "count": len(runs)})
+}
+
+// apiHandleGetWorkspace 返回当前工作区配置（脱敏：不含任何 key）。
+func (a *App) apiHandleGetWorkspace(w http.ResponseWriter, r *http.Request) {
+	cfg, err := a.getConfig()
+	if err != nil {
+		apiWriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	apiWriteOK(w, map[string]any{
+		"workspace":  cfg.Workspace,
+		"extraRoots": cfg.ExtraRoots,
+	})
+}
+
+// ── 后台服务 / 计划任务 ──
+
+func (a *App) apiHandleListServices(w http.ResponseWriter, r *http.Request) {
+	apiWriteOK(w, a.ListServices())
+}
+
+func (a *App) apiHandleServiceOutput(w http.ResponseWriter, r *http.Request) {
+	output, err := a.GetServiceOutput(r.PathValue("id"))
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			apiWriteError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		apiWriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	apiWriteOK(w, output)
+}
+
+func (a *App) apiHandleStopService(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		GraceSeconds int `json:"graceSeconds"`
+	}
+	if err := apiDecodeOptionalBody(r, &body); err != nil {
+		apiWriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	info, err := a.StopService(StopServiceRequest{
+		ID:           r.PathValue("id"),
+		GraceSeconds: body.GraceSeconds,
+	})
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			apiWriteError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		apiWriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	apiWriteOK(w, info)
+}
+
+func (a *App) apiHandleListTasks(w http.ResponseWriter, r *http.Request) {
+	tasks := a.ListScheduledTasks()
+	if tasks == nil {
+		tasks = []ScheduledTask{}
+	}
+	apiWriteOK(w, map[string]any{"tasks": tasks, "count": len(tasks)})
+}
+
+func (a *App) apiHandleDeleteTask(w http.ResponseWriter, r *http.Request) {
+	if err := a.DeleteScheduledTask(r.PathValue("id")); err != nil {
+		apiWriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	apiWriteOK(w, map[string]any{"deleted": true})
 }

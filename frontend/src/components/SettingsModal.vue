@@ -22,35 +22,27 @@ Public License v3. See the LICENSE file for details.
       <aside class="settings-nav" :aria-label="$t('settings.navigation')">
         <button :class="['settings-nav-item', { active: page === 'general' }]" @click="page = 'general'">
           <span class="settings-nav-title">{{ $t('settings.general') }}</span>
-          <span class="settings-nav-desc">{{ $t('settings.prompt') }}</span>
         </button>
         <button :class="['settings-nav-item', { active: page === 'models' }]" @click="page = 'models'">
           <span class="settings-nav-title">{{ $t('settings.models') }}</span>
-          <span class="settings-nav-desc">{{ $t('settings.providerKeys') }}</span>
         </button>
         <button :class="['settings-nav-item', { active: page === 'advanced' }]" @click="page = 'advanced'">
           <span class="settings-nav-title">{{ $t('settings.advanced') }}</span>
-          <span class="settings-nav-desc">{{ $t('settings.advancedDescription') }}</span>
         </button>
         <button :class="['settings-nav-item', { active: page === 'network' }]" @click="page = 'network'">
           <span class="settings-nav-title">{{ $t('settings.network') }}</span>
-          <span class="settings-nav-desc">{{ $t('settings.networkDescription') }}</span>
         </button>
         <button :class="['settings-nav-item', { active: page === 'skills' }]" @click="page = 'skills'">
           <span class="settings-nav-title">Skills</span>
-          <span class="settings-nav-desc">{{ $t('settings.skillsDescription') }}</span>
         </button>
         <button :class="['settings-nav-item', { active: page === 'mcp' }]" @click="page = 'mcp'">
           <span class="settings-nav-title">MCP</span>
-          <span class="settings-nav-desc">{{ $t('settings.mcpDescription') }}</span>
         </button>
         <button :class="['settings-nav-item', { active: page === 'api' }]" @click="page = 'api'">
           <span class="settings-nav-title">API</span>
-          <span class="settings-nav-desc">{{ $t('settings.apiDescription') }}</span>
         </button>
         <button :class="['settings-nav-item', { active: page === 'about' }]" @click="page = 'about'">
           <span class="settings-nav-title">{{ $t('settings.about') }}</span>
-          <span class="settings-nav-desc">{{ $t('settings.versionLicense') }}</span>
         </button>
       </aside>
 
@@ -535,29 +527,14 @@ Public License v3. See the LICENSE file for details.
             <n-button size="small" secondary :loading="apiLoading" @click="loadApiState">{{ $t('common.refresh') }}</n-button>
           </div>
 
-          <n-form-item :label="$t('settings.apiEnable')">
-            <div class="api-enable-row">
-              <n-switch :value="!!apiState?.enabled" :disabled="apiBusy" @update:value="toggleApiService" />
-              <span v-if="apiState?.enabled" class="api-base-url on">{{ apiState.baseUrl }}</span>
-              <span v-else class="api-base-url off">{{ $t('settings.apiOffHint') }}</span>
-            </div>
-          </n-form-item>
-
-          <n-form-item :label="$t('settings.apiPort')">
-            <div class="api-token-row">
-              <n-input-number v-model:value="apiPortDraft" :min="1024" :max="65535" :show-button="false" class="api-port-input" :placeholder="$t('settings.apiPortPlaceholder')" />
-              <n-button size="small" type="primary" :loading="apiBusy" @click="saveApiSettings">{{ $t('common.save') }}</n-button>
-            </div>
-          </n-form-item>
-
-          <n-form-item :label="$t('settings.apiToken')">
-            <div class="api-token-row">
-              <n-input :value="apiState?.token || ''" readonly class="api-token-input" />
-              <n-button size="small" secondary @click="copyApiToken">{{ $t('common.copy') }}</n-button>
-              <n-button size="small" secondary :loading="apiBusy" @click="regenerateApiToken">{{ $t('settings.apiRegenerate') }}</n-button>
-            </div>
-          </n-form-item>
-          <div class="api-hint">{{ $t('settings.apiTokenHint') }}</div>
+          <div class="api-config-row">
+            <n-switch :value="!!apiState?.enabled" :disabled="apiToggleDisabled || apiBusy" @update:value="toggleApiService" />
+            <n-input-number v-model:value="apiPortDraft" :min="1024" :max="65535" :show-button="false" class="api-port-input" @blur="saveApiConfig" />
+            <n-input v-model:value="apiTokenDraft" class="api-token-input" :placeholder="$t('settings.apiTokenPlaceholder')" @blur="saveApiConfig" />
+            <n-button size="small" secondary @click="copyApiToken">{{ $t('common.copy') }}</n-button>
+            <n-button size="small" secondary :loading="apiBusy" @click="regenerateApiToken">{{ $t('settings.apiRegenerate') }}</n-button>
+          </div>
+          <div class="api-hint">{{ $t('settings.apiConfigHint') }}</div>
           <div class="api-hint">{{ $t('settings.apiStartupHint') }}</div>
 
           <div class="api-endpoints">
@@ -1828,6 +1805,7 @@ const apiState = ref(null);
 const apiLoading = ref(false);
 const apiBusy = ref(false);
 const apiPortDraft = ref(null);
+const apiTokenDraft = ref('');
 
 const apiEndpoints = [
   { method: 'GET', path: '/api/v1/health', key: 'settings.apiEpHealth' },
@@ -1835,23 +1813,48 @@ const apiEndpoints = [
   { method: 'POST', path: '/api/v1/sessions', key: 'settings.apiEpSessionsCreate' },
   { method: 'GET', path: '/api/v1/sessions/{id}', key: 'settings.apiEpSessionStatus' },
   { method: 'GET', path: '/api/v1/sessions/{id}/result', key: 'settings.apiEpSessionResult' },
+  { method: 'GET', path: '/api/v1/sessions/{id}/messages', key: 'settings.apiEpSessionMessages' },
+  { method: 'GET', path: '/api/v1/sessions/{id}/todos', key: 'settings.apiEpSessionTodos' },
   { method: 'POST', path: '/api/v1/sessions/{id}/messages', key: 'settings.apiEpSessionSend' },
   { method: 'POST', path: '/api/v1/sessions/{id}/cancel', key: 'settings.apiEpSessionCancel' },
+  { method: 'POST', path: '/api/v1/sessions/{id}/compact', key: 'settings.apiEpSessionCompact' },
+  { method: 'DELETE', path: '/api/v1/sessions/{id}', key: 'settings.apiEpSessionDelete' },
   { method: 'GET', path: '/api/v1/models', key: 'settings.apiEpModelsList' },
   { method: 'POST', path: '/api/v1/models', key: 'settings.apiEpModelsSave' },
   { method: 'POST', path: '/api/v1/models/activate', key: 'settings.apiEpModelsActivate' },
   { method: 'GET', path: '/api/v1/mcp', key: 'settings.apiEpMcpGet' },
   { method: 'PUT', path: '/api/v1/mcp/config', key: 'settings.apiEpMcpPut' },
   { method: 'GET', path: '/api/v1/skills', key: 'settings.apiEpSkillsList' },
+  { method: 'GET', path: '/api/v1/skills/{name}', key: 'settings.apiEpSkillGet' },
   { method: 'POST', path: '/api/v1/skills/{name}/enable', key: 'settings.apiEpSkillEnable' },
   { method: 'POST', path: '/api/v1/skills/{name}/disable', key: 'settings.apiEpSkillDisable' },
+  { method: 'GET', path: '/api/v1/tools', key: 'settings.apiEpTools' },
+  { method: 'GET', path: '/api/v1/subagents', key: 'settings.apiEpSubagents' },
+  { method: 'GET', path: '/api/v1/workspace', key: 'settings.apiEpWorkspace' },
+  { method: 'GET', path: '/api/v1/services', key: 'settings.apiEpServices' },
+  { method: 'GET', path: '/api/v1/services/{id}/output', key: 'settings.apiEpServiceOutput' },
+  { method: 'POST', path: '/api/v1/services/{id}/stop', key: 'settings.apiEpServiceStop' },
+  { method: 'GET', path: '/api/v1/tasks', key: 'settings.apiEpTasks' },
+  { method: 'DELETE', path: '/api/v1/tasks/{id}', key: 'settings.apiEpTaskDelete' },
 ];
+
+// 都配置了才能启动：端口有效且 token 非空。
+const apiToggleDisabled = computed(() => {
+  const port = Number(apiPortDraft.value);
+  if (!Number.isInteger(port) || port < 1024 || port > 65535) return true;
+  return !String(apiTokenDraft.value || '').trim();
+});
+
+function syncApiDrafts(state) {
+  apiState.value = state;
+  apiPortDraft.value = state?.port ?? null;
+  apiTokenDraft.value = state?.token || '';
+}
 
 async function loadApiState() {
   apiLoading.value = true;
   try {
-    apiState.value = await GetApiServiceState();
-    apiPortDraft.value = apiState.value?.port ?? null;
+    syncApiDrafts(await GetApiServiceState());
   } catch (err) {
     message.error(t('settings.apiLoadFailed', { error: err }));
   } finally {
@@ -1860,6 +1863,10 @@ async function loadApiState() {
 }
 
 async function toggleApiService(enabled) {
+  if (enabled && apiToggleDisabled.value) {
+    message.warning(t('settings.apiStartupHint'));
+    return;
+  }
   apiBusy.value = true;
   try {
     apiState.value = await SetApiServiceEnabled(enabled);
@@ -1872,16 +1879,18 @@ async function toggleApiService(enabled) {
   }
 }
 
-// 保存端口/token：token 传空值时后端自动生成新 token；服务运行中会用新
-// 设置重启监听。
-async function saveApiSettings(tokenOverride) {
+// 失焦自动保存端口/token：token 传空值时后端自动生成新 token；服务运行中
+// 会用新设置重启监听。成功时静默（同步回填规范化后的值），失败才提示。
+async function saveApiConfig() {
+  const port = Number(apiPortDraft.value);
+  if (!Number.isInteger(port) || port < 1024 || port > 65535) {
+    apiPortDraft.value = apiState.value?.port ?? null;
+    message.warning(t('settings.apiPortInvalid'));
+    return;
+  }
   apiBusy.value = true;
   try {
-    const port = Number(apiPortDraft.value) || 0;
-    const token = tokenOverride !== undefined ? tokenOverride : (apiState.value?.token || '');
-    apiState.value = await SaveApiSettings({ port, token });
-    apiPortDraft.value = apiState.value?.port ?? null;
-    message.success(t('settings.apiSaved'));
+    syncApiDrafts(await SaveApiSettings({ port, token: String(apiTokenDraft.value || '').trim() }));
   } catch (err) {
     message.error(t('settings.apiToggleFailed', { error: err }));
   } finally {
@@ -1890,7 +1899,16 @@ async function saveApiSettings(tokenOverride) {
 }
 
 async function regenerateApiToken() {
-  await saveApiSettings('');
+  await saveApiConfig();
+  apiBusy.value = true;
+  try {
+    syncApiDrafts(await SaveApiSettings({ port: Number(apiPortDraft.value) || 0, token: '' }));
+    message.success(t('settings.apiRegenerated'));
+  } catch (err) {
+    message.error(t('settings.apiToggleFailed', { error: err }));
+  } finally {
+    apiBusy.value = false;
+  }
 }
 
 async function copyApiToken() {
@@ -1981,13 +1999,6 @@ watch(() => props.visible, (visible) => {
   display: block;
   font-size: var(--ally-sub-font-size);
   font-weight: 600;
-}
-
-.settings-nav-desc {
-  display: block;
-  font-size: 11px;
-  color: #737373;
-  margin-top: 1px;
 }
 
 .settings-content {
@@ -2634,46 +2645,32 @@ watch(() => props.visible, (visible) => {
   max-width: 200px;
 }
 
-.api-enable-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-}
-
-.api-base-url {
-  font-size: 12px;
-  font-family: var(--font-mono, monospace);
-}
-
-.api-base-url.on {
-  color: #7ec97e;
-}
-
-.api-base-url.off {
-  color: var(--text-tertiary, #888);
-}
-
-.api-token-row {
+.api-config-row {
   display: flex;
   align-items: center;
   gap: 8px;
   width: 100%;
 }
 
+.api-config-row .n-switch {
+  flex-shrink: 0;
+}
+
 .api-token-input {
   flex: 1;
-  font-family: var(--font-mono, monospace);
+  min-width: 160px;
+  font-family: var(--ally-mono-font);
 }
 
 .api-port-input {
-  width: 160px;
+  width: 120px;
+  flex-shrink: 0;
 }
 
 .api-hint {
   font-size: 11px;
   color: var(--text-tertiary, #888);
-  margin: 2px 0 8px;
+  margin: 4px 0 2px;
   line-height: 1.5;
 }
 
@@ -2699,15 +2696,14 @@ watch(() => props.visible, (visible) => {
 
 .api-method {
   flex-shrink: 0;
-  width: 52px;
+  width: 56px;
   justify-content: center;
-  font-family: var(--font-mono, monospace);
 }
 
 .api-path {
   flex-shrink: 0;
   color: #9ecbff;
-  font-family: var(--font-mono, monospace);
+  font-family: var(--ally-mono-font);
   font-size: 11.5px;
 }
 

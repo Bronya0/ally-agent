@@ -371,6 +371,116 @@ func TestApiMcpEndpoints(t *testing.T) {
 	}
 }
 
+func TestApiSessionMessagesTodosAndDelete(t *testing.T) {
+	handler, app, token := newApiTestHandler(t)
+
+	rec, payload := apiRequest(t, handler, "POST", "/api/v1/sessions", token, `{"title":"s"}`)
+	sessionID := apiRequireOK(t, rec, payload)["id"].(string)
+
+	// 完整消息快照：索引会话（无历史文件）返回空消息数组。
+	rec, payload = apiRequest(t, handler, "GET", "/api/v1/sessions/"+sessionID+"/messages", token, "")
+	data := apiRequireOK(t, rec, payload)
+	if _, ok := data["messages"].([]any); !ok {
+		t.Fatalf("expected messages array: %s", rec.Body.String())
+	}
+
+	// 待办列表：空数组。
+	rec, payload = apiRequest(t, handler, "GET", "/api/v1/sessions/"+sessionID+"/todos", token, "")
+	data = apiRequireOK(t, rec, payload)
+	if _, ok := data["todos"].([]any); !ok {
+		t.Fatalf("expected todos array: %s", rec.Body.String())
+	}
+
+	// 运行中的会话不允许删除（与 releaseSession 的活跃 run 检查一致）。
+	registerApiRun(t, app, "run-1", sessionID)
+	rec, payload = apiRequest(t, handler, "DELETE", "/api/v1/sessions/"+sessionID, token, "")
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("deleting running session: expected 409, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// run 结束后可以删除；列表里消失；重复删除幂等成功。
+	app.mu.Lock()
+	delete(app.runs, "run-1")
+	delete(app.runSessions, "run-1")
+	delete(app.runInputs, "run-1")
+	app.mu.Unlock()
+	rec, payload = apiRequest(t, handler, "DELETE", "/api/v1/sessions/"+sessionID, token, "")
+	data = apiRequireOK(t, rec, payload)
+	if data["deleted"] != true {
+		t.Fatalf("expected deleted=true: %s", rec.Body.String())
+	}
+	rec, payload = apiRequest(t, handler, "GET", "/api/v1/sessions", token, "")
+	data = apiRequireOK(t, rec, payload)
+	if int(data["count"].(float64)) != 0 {
+		t.Fatalf("expected empty list after delete: %s", rec.Body.String())
+	}
+	rec, _ = apiRequest(t, handler, "DELETE", "/api/v1/sessions/"+sessionID, token, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("repeated delete should stay idempotent, got %d", rec.Code)
+	}
+}
+
+func TestApiToolsSubagentsWorkspace(t *testing.T) {
+	handler, _, token := newApiTestHandler(t)
+
+	rec, payload := apiRequest(t, handler, "GET", "/api/v1/tools", token, "")
+	data := apiRequireOK(t, rec, payload)
+	tools := data["tools"].([]any)
+	if len(tools) == 0 {
+		t.Fatalf("expected built-in tools, got none: %s", rec.Body.String())
+	}
+	first := tools[0].(map[string]any)
+	if first["name"] == "" || first["source"] == "" {
+		t.Fatalf("unexpected tool summary: %v", first)
+	}
+
+	rec, payload = apiRequest(t, handler, "GET", "/api/v1/subagents", token, "")
+	data = apiRequireOK(t, rec, payload)
+	if _, ok := data["subagents"].([]any); !ok {
+		t.Fatalf("expected subagents array: %s", rec.Body.String())
+	}
+
+	rec, payload = apiRequest(t, handler, "GET", "/api/v1/workspace", token, "")
+	data = apiRequireOK(t, rec, payload)
+	if _, ok := data["workspace"].(string); !ok {
+		t.Fatalf("expected workspace string: %s", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "apiKey") {
+		t.Fatalf("workspace view must not contain key fields: %s", rec.Body.String())
+	}
+}
+
+func TestApiServiceAndTaskEndpoints(t *testing.T) {
+	handler, _, token := newApiTestHandler(t)
+
+	rec, payload := apiRequest(t, handler, "GET", "/api/v1/services", token, "")
+	data := apiRequireOK(t, rec, payload)
+	if _, ok := data["services"].([]any); !ok {
+		t.Fatalf("expected services array: %s", rec.Body.String())
+	}
+
+	rec, payload = apiRequest(t, handler, "GET", "/api/v1/services/no-such/output", token, "")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("unknown service output: expected 404, got %d", rec.Code)
+	}
+
+	rec, payload = apiRequest(t, handler, "POST", "/api/v1/services/no-such/stop", token, "")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("unknown service stop: expected 404, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	rec, payload = apiRequest(t, handler, "GET", "/api/v1/tasks", token, "")
+	data = apiRequireOK(t, rec, payload)
+	if _, ok := data["tasks"].([]any); !ok {
+		t.Fatalf("expected tasks array: %s", rec.Body.String())
+	}
+
+	rec, _ = apiRequest(t, handler, "DELETE", "/api/v1/tasks/no-such", token, "")
+	if rec.Code == http.StatusNotImplemented {
+		t.Fatalf("delete task should not be a placeholder, got %d", rec.Code)
+	}
+}
+
 func TestApiSettingsPersistenceAndListenerLifecycle(t *testing.T) {
 	app := newApiTestApp(t)
 

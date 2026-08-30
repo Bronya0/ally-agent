@@ -96,7 +96,7 @@
 - biz_builtin_skills.go — 枚举 go:embed 内置 skill 资源为 SkillDefinition（embeddedContent 免磁盘 IO）；关键: builtinSkillEntries
 - biz_mcp.go — MCP 生命周期与工具桥接：加载 mcp.json、stdio/SSE/Streamable-HTTP 连接、schema 归一化、`mcp__<server>__<tool>` 函数名映射、失效会话重连；关键: McpManager, StartAll, CallToolByFunctionName, buildToolsWithMcp
 - biz_modellist.go — 调 OpenAI 标准 GET /models 返回模型 ID 列表（走代理、15s 超时、8MB 上限）；关键: FetchModelList
-- biz_api.go — 对外本地 HTTP API 服务（v1）：~/.ally_agent/api.json 持久化端口/token、仅绑定 127.0.0.1、Bearer 常量时间鉴权、每次启动默认关闭（开关是运行时态，随 a.ctx 取消自动停止）、15 个端点薄封装既有绑定（会话列表/创建/状态/结果/发消息/取消、模型列表脱敏/新建更新/激活、MCP 查询/更新应用、skill 列表/启停）；关键: startApiListener, stopApiListener, apiAuthMiddleware, apiMux, GetApiServiceState, SaveApiSettings, SetApiServiceEnabled
+- biz_api.go — 对外本地 HTTP API 服务（v1）：~/.ally_agent/api.json 持久化端口/token、仅绑定 127.0.0.1、Bearer 常量时间鉴权、每次启动默认关闭（开关是运行时态，随 a.ctx 取消自动停止）、28 个端点薄封装既有绑定（会话列表/创建/状态/结果/消息快照/待办/发消息/取消/压缩/删除、模型列表脱敏/新建更新/激活、MCP 查询/更新应用、skill 列表/内容/启停、工具清单/子代理/工作区、后台服务列表/输出/停止、计划任务列表/删除）；关键: startApiListener, stopApiListener, apiAuthMiddleware, apiMux, GetApiServiceState, SaveApiSettings, SetApiServiceEnabled
 - biz_stats.go — 异步 Token 统计：有界非阻塞队列、按天落盘 `stats/<date>.json`（90 天保留、备份恢复）、聚合查询；关键: statsRecorder, recordTokenStats, GetTokenStats
 - biz_update.go — 应用自更新：Atom 发布检查、平台资产下载、暂存校验、Windows/macOS 原子应用与回滚、跳过版本；关键: CheckForUpdates, DownloadUpdate, ApplyUpdate, rollbackReplacedResources
 - biz_workspacedir_windows.go — Windows 默认工作区（SHGetKnownFolderPath Documents，尊重 OneDrive 重定向）
