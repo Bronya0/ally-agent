@@ -742,11 +742,13 @@ func (a *App) remoteEditOne(ctx context.Context, rt remoteTarget, req FileTextEd
 	}
 	after := encodeText(result.Content, ending, hadBOM)
 	afterHash, afterVersion := hashBytesAndVersion(after)
-	if bytes.Equal(file.Data, after) {
-		return EditResult{}, codedToolError("E_NOOP", errors.New("edit produced no content changes"))
-	}
-	if _, err := a.remoteWriteRaw(ctx, rt, req.Path, after, true, true); err != nil {
-		return EditResult{}, err
+	// An all-no-op batch (every change ignored as identical) succeeds without
+	// writing, mirroring the local edit contract instead of failing E_NOOP.
+	noop := bytes.Equal(file.Data, after)
+	if !noop {
+		if _, err := a.remoteWriteRaw(ctx, rt, req.Path, after, true, true); err != nil {
+			return EditResult{}, err
+		}
 	}
 	diff := edit.GenerateEditDiffPreview(text, result.Content, maxToolOutput)
 	added, removed := 0, 0
@@ -756,9 +758,11 @@ func (a *App) remoteEditOne(ctx context.Context, rt remoteTarget, req FileTextEd
 		added, removed = edit.ApproximateLineDeltaContent(text, result.Content)
 	}
 	classification := "edit"
-	if len(result.Content) > len(text) {
+	if noop {
+		classification = "noop"
+	} else if len(after) > len(file.Data) {
 		classification = "addition"
-	} else if len(result.Content) < len(text) {
+	} else if len(after) < len(file.Data) {
 		classification = "deletion"
 	}
 	return EditResult{

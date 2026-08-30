@@ -406,7 +406,7 @@ Important edit contract:
 - Successful edits return the new `version` per file. Reuse it only when the current source is known exactly; otherwise re-read numbered content before another `oldText` or `lineRange` edit.
 - With `lineRange`, `newText` replaces exactly the selected whole lines; lines outside the range stay untouched, so never re-emit a closing brace or other code that sits outside the range — and if the brace is inside the range, `newText` must include it.
 - For a multi-line whole-line block only, exact-match failure may fall back to ignoring leading spaces/tabs on each line. The fallback succeeds only for one unique candidate and safely rebases `newText` to the file's actual base indentation; body text is never fuzzy-matched.
-- Exact changes whose normalized `oldText` and `newText` are identical are ignored and reported as warnings. An all-no-op local batch succeeds without writing the file.
+- Exact changes whose normalized `oldText` and `newText` are identical are ignored and reported as warnings. An all-no-op edit batch (local or remote) succeeds without writing the file.
 - Source regions must not overlap. The backend locates all exact snippets and line ranges on the original snapshot, applies them from the end of the file backward, and writes once.
 - Repeated entries resolving to the same physical path inside one internal edit plan are merged into one original-snapshot edit plan; conflicting versions fail before writing. Model-facing flat calls carry exactly one file, so the merge is only exercised by internal callers and tests.
 - All files are validated before writes. Any invalid, missing, ambiguous, overlapping, or stale effective change fails the entire call without modifying any file.
