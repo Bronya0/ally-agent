@@ -692,54 +692,41 @@ func (a *App) remoteReadFile(ctx context.Context, req RemoteReadFileRequest) (Re
 	}, nil
 }
 
+// remoteEdit applies the flat single-file remote edit contract. The result is
+// the same MultiEditResult shape local edit returns, with exactly one file.
+// A single-file call needs no backup/rollback: remoteEditOne validates the
+// version, applies the whole batch in memory, and writes once, so the file is
+// either fully updated or untouched.
 func (a *App) remoteEdit(ctx context.Context, req RemoteEditRequest) (MultiEditResult, error) {
 	if strings.TrimSpace(req.Target) == "" {
 		return MultiEditResult{}, errors.New("target is required")
 	}
-	if err := validateModelEditToolRequest(req.Files); err != nil {
+	file := req.file()
+	if err := validateModelEditToolRequest([]FileTextEdits{file}); err != nil {
 		return MultiEditResult{}, err
 	}
-	result := MultiEditResult{Files: make([]EditResult, 0, len(req.Files))}
-	type remoteBackup struct {
-		rt   remoteTarget
-		path string
-		data []byte
+	rt, original, err := a.remoteReadRaw(ctx, req.Target, file.Path)
+	if err != nil {
+		return MultiEditResult{}, err
 	}
-	backups := make([]remoteBackup, 0, len(req.Files))
-	var rollbackErrors []string
-	for _, file := range req.Files {
-		rt, original, err := a.remoteReadRaw(ctx, req.Target, file.Path)
-		if err != nil {
-			for i := len(backups) - 1; i >= 0; i-- {
-				if _, rbErr := a.remoteWriteRaw(ctx, backups[i].rt, backups[i].path, backups[i].data, true, true); rbErr != nil {
-					rollbackErrors = append(rollbackErrors, fmt.Sprintf("%s: %v", backups[i].path, rbErr))
-				}
-			}
-			if len(rollbackErrors) > 0 {
-				err = fmt.Errorf("%w (rollback failures: %s)", err, strings.Join(rollbackErrors, "; "))
-			}
-			return MultiEditResult{}, err
-		}
-		edited, err := a.remoteEditOne(ctx, rt, file, original)
-		if err != nil {
-			for i := len(backups) - 1; i >= 0; i-- {
-				if _, rbErr := a.remoteWriteRaw(ctx, backups[i].rt, backups[i].path, backups[i].data, true, true); rbErr != nil {
-					rollbackErrors = append(rollbackErrors, fmt.Sprintf("%s: %v", backups[i].path, rbErr))
-				}
-			}
-			if len(rollbackErrors) > 0 {
-				err = fmt.Errorf("%w (rollback failures: %s)", err, strings.Join(rollbackErrors, "; "))
-			}
-			return MultiEditResult{}, err
-		}
-		backups = append(backups, remoteBackup{rt: rt, path: file.Path, data: original.Data})
-		result.Files = append(result.Files, edited)
-		result.Replacements += edited.Replacements
-		result.AddedLines += edited.AddedLines
-		result.RemovedLines += edited.RemovedLines
+	edited, err := a.remoteEditOne(ctx, rt, file, original)
+	if err != nil {
+		return MultiEditResult{}, err
 	}
-	result.FileCount = len(result.Files)
-	result.Summary = fmt.Sprintf("Edited %d remote files", result.FileCount)
+	result := MultiEditResult{Files: []EditResult{edited}, FileCount: 1}
+	result.Replacements = edited.Replacements
+	result.AddedLines = edited.AddedLines
+	result.RemovedLines = edited.RemovedLines
+	for _, warning := range edited.Warnings {
+		result.Warnings = append(result.Warnings, edited.Path+": "+warning)
+	}
+	result.Summary = fmt.Sprintf("updated %d file(s) with %d replacement(s)", result.FileCount, result.Replacements)
+	if result.Replacements == 0 {
+		result.Summary = fmt.Sprintf("no content changes needed in %d file(s)", result.FileCount)
+	}
+	if edited.Diff != "" {
+		result.Diff = "### " + edited.Path + "\n" + edited.Diff
+	}
 	return result, nil
 }
 

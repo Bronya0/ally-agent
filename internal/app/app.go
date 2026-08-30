@@ -948,9 +948,19 @@ type RemoteReadFileRequest struct {
 	EndLine   int    `json:"endLine,omitempty"`
 }
 
+// RemoteEditRequest is the flat model-facing remote_edit request: exactly one
+// file per call, path/version/changes at the top level under the SSH target —
+// the same shape local edit uses, prefixed with `target`. Multi-file changes
+// are parallel remote_edit calls in one model response.
 type RemoteEditRequest struct {
-	Target string          `json:"target"`
-	Files  []FileTextEdits `json:"files"`
+	Target  string       `json:"target"`
+	Path    string       `json:"path"`
+	Version string       `json:"version"`
+	Changes []TextChange `json:"changes"`
+}
+
+func (req RemoteEditRequest) file() FileTextEdits {
+	return FileTextEdits{Path: req.Path, Version: req.Version, Changes: req.Changes}
 }
 
 type RemoteCreateFileRequest struct {
@@ -2223,7 +2233,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 			// Stream cut off mid-arguments: apply the complete prefix instead
 			// of failing the whole call, and report the dropped tail through
 			// the result warnings so the model re-reads and resends the rest.
-			if candidate, dropped, usable := salvageEditRequest(args); usable {
+			if candidate, _, dropped, usable := salvageEditRequest(args); usable {
 				salvaged := []FileTextEdits{candidate}
 				if validateModelEditToolRequest(salvaged) == nil {
 					editFiles = salvaged
@@ -2363,10 +2373,30 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 			data, err = a.remoteReadFile(ctx, req)
 		}
 	case "remote_edit":
+		// Flat single-file request: target + the same path/version/changes as
+		// local edit. Truncated arguments recover the complete prefix exactly
+		// like edit, then still pass the full edit contract.
 		var req RemoteEditRequest
 		err, argWarnings = decodeJSON(&req)
+		salvagedDropped := -1
+		if err != nil && isIncompleteStreamJSON(err) {
+			if file, target, dropped, usable := salvageEditRequest(args); usable {
+				salvaged := RemoteEditRequest{Target: target, Path: file.Path, Version: file.Version, Changes: file.Changes}
+				if validateModelEditToolRequest([]FileTextEdits{salvaged.file()}) == nil {
+					req = salvaged
+					salvagedDropped = dropped
+					err = nil
+				}
+			}
+		}
+		if err == nil {
+			err = validateModelEditToolRequest([]FileTextEdits{req.file()})
+		}
 		if err == nil {
 			data, err = a.remoteEdit(ctx, req)
+			if err == nil && salvagedDropped >= 0 {
+				data = attachEditSalvageWarning(data, len(req.Changes), salvagedDropped)
+			}
 		}
 	case "remote_create_file":
 		var req RemoteCreateFileRequest

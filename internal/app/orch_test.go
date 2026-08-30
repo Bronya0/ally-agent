@@ -198,12 +198,12 @@ func TestEditToolSchemaIsBatchChangesOnly(t *testing.T) {
 	if !ok {
 		t.Fatalf("remote_edit schema properties missing: %#v", remoteParams)
 	}
-	for _, name := range []string{"target", "files"} {
+	for _, name := range []string{"target", "path", "version", "changes"} {
 		if _, exists := remoteProperties[name]; !exists {
 			t.Fatalf("remote_edit schema missing %s", name)
 		}
 	}
-	for _, legacy := range []string{"oldString", "newString", "replaceAll", "edits", "startLine", "endLine", "newText"} {
+	for _, legacy := range []string{"files", "oldString", "newString", "replaceAll", "edits", "startLine", "endLine", "newText"} {
 		if _, exists := remoteProperties[legacy]; exists {
 			t.Fatalf("remote_edit schema still exposes legacy field %s", legacy)
 		}
@@ -212,7 +212,7 @@ func TestEditToolSchemaIsBatchChangesOnly(t *testing.T) {
 	if !ok {
 		t.Fatalf("unexpected remote_edit required type %T", remoteParams["required"])
 	}
-	wantRemoteRequired := map[string]bool{"target": true, "files": true}
+	wantRemoteRequired := map[string]bool{"target": true, "path": true, "version": true, "changes": true}
 	if len(remoteRequired) != len(wantRemoteRequired) {
 		t.Fatalf("unexpected remote_edit required fields: %#v", remoteRequired)
 	}
@@ -3538,7 +3538,7 @@ func TestLocalEditPlanIsSharedByConflictDetectionAndExecution(t *testing.T) {
 func TestSalvageEditRequestRecoversCompletePrefix(t *testing.T) {
 	// Cut inside the third change's newText: two complete changes survive,
 	// the truncated one is dropped and counted.
-	file, dropped, ok := salvageEditRequest([]byte(`{"path":"a.txt","version":"000000000000","changes":[{"oldText":"alpha","newText":"ALPHA"},{"oldText":"beta","newText":"BETA"},{"oldText":"gamma","newText":"GAM`))
+	file, _, dropped, ok := salvageEditRequest([]byte(`{"path":"a.txt","version":"000000000000","changes":[{"oldText":"alpha","newText":"ALPHA"},{"oldText":"beta","newText":"BETA"},{"oldText":"gamma","newText":"GAM`))
 	if !ok {
 		t.Fatal("expected salvage to recover the complete prefix")
 	}
@@ -3553,19 +3553,28 @@ func TestSalvageEditRequestRecoversCompletePrefix(t *testing.T) {
 	}
 
 	// Stream cut right after a complete change: nothing is lost.
-	file, dropped, ok = salvageEditRequest([]byte(`{"path":"a.txt","version":"v1","changes":[{"oldText":"x","newText":"y"}]`))
+	file, _, dropped, ok = salvageEditRequest([]byte(`{"path":"a.txt","version":"v1","changes":[{"oldText":"x","newText":"y"}]`))
 	if !ok || dropped != 0 || len(file.Changes) != 1 {
 		t.Fatalf("expected trailing truncation to keep the complete change: %#v dropped=%d ok=%v", file, dropped, ok)
 	}
 
+	// A remote_edit prefix recovers the target alongside the flat file fields.
+	file, target, dropped, ok := salvageEditRequest([]byte(`{"target":"my-dev:/srv/app","path":"main.go","version":"v1","changes":[{"oldText":"a","newText":"b"}]`))
+	if !ok || dropped != 0 || len(file.Changes) != 1 {
+		t.Fatalf("expected remote prefix to keep the complete change: %#v dropped=%d ok=%v", file, dropped, ok)
+	}
+	if target != "my-dev:/srv/app" || file.Path != "main.go" || file.Version != "v1" {
+		t.Fatalf("unexpected salvaged remote fields: target=%q file=%#v", target, file)
+	}
+
 	// Nothing usable was transmitted before the cut.
-	_, _, ok = salvageEditRequest([]byte(`{"path":"a.txt","ver`))
+	_, _, _, ok = salvageEditRequest([]byte(`{"path":"a.txt","ver`))
 	if ok {
 		t.Fatal("salvage must not report usable output for a prefix without complete changes")
 	}
 
 	// Not truncated in the first place: a top-level non-object yields nothing.
-	if _, _, ok := salvageEditRequest([]byte(`[]`)); ok {
+	if _, _, _, ok := salvageEditRequest([]byte(`[]`)); ok {
 		t.Fatal("non-object arguments must not salvage")
 	}
 }
@@ -3645,6 +3654,27 @@ func TestPrepareToolCallsForExecutionKeepsSalvageBytesAndSafeReplayJSON(t *testi
 	}
 	if salvaged {
 		t.Fatal("an edit prefix without a complete change must not bypass max_tokens")
+	}
+
+	// remote_edit truncations replay the recovered flat remote request with
+	// the captured target intact.
+	rawRemote := `{"target":"my-dev:/srv/app","path":"main.go","version":"abc123","changes":[{"oldText":"alpha","newText":"ALPHA"},{"oldText":"beta","newText":"BET`
+	prepared, executionArgs, salvaged = prepareToolCallsForExecution([]openai.ToolCall{{
+		ID: "call_2", Type: openai.ToolTypeFunction,
+		Function: openai.FunctionCall{Name: "remote_edit", Arguments: rawRemote},
+	}})
+	if executionArgs[0] != rawRemote {
+		t.Fatalf("execution must retain raw truncated bytes for salvage, got %q", executionArgs[0])
+	}
+	if !salvaged {
+		t.Fatal("expected the complete remote_edit prefix to be marked salvageable")
+	}
+	if !json.Valid([]byte(prepared[0].Function.Arguments)) || isTruncatedArgsMarker([]byte(prepared[0].Function.Arguments)) {
+		t.Fatalf("provider replay must use recovered valid JSON, got %q", prepared[0].Function.Arguments)
+	}
+	var remoteReq RemoteEditRequest
+	if err := json.Unmarshal([]byte(prepared[0].Function.Arguments), &remoteReq); err != nil || remoteReq.Target != "my-dev:/srv/app" || remoteReq.Path != "main.go" || len(remoteReq.Changes) != 1 {
+		t.Fatalf("unexpected recovered remote replay request: %#v err=%v", remoteReq, err)
 	}
 }
 

@@ -79,12 +79,12 @@ func toolResultSummary(name string, result *toolResult) string {
 			}
 			return fmt.Sprintf("%d files", len(r.Files))
 		}
-	case "edit":
+	case "edit", "remote_edit":
 		var r MultiEditResult
 		if decodeToolData(result.Data, &r) {
 			return fmt.Sprintf("%d files · +%d -%d", r.FileCount, r.AddedLines, r.RemovedLines)
 		}
-	case "replace_exact", "replace_lines", "remote_edit":
+	case "replace_exact", "replace_lines":
 		data, _ := json.Marshal(result.Data)
 		var r EditResult
 		if json.Unmarshal(data, &r) == nil {
@@ -266,7 +266,7 @@ func compactToolDataForModel(name string, result toolResult, fullJSON string) st
 			data["note"] = "Image file(s) were injected as actual image input in a following user message; the base64 payload is omitted here to save tokens."
 		}
 		return marshalToolResultOrFallback(toolResult{OK: true, Data: data}, fullJSON)
-	case "edit":
+	case "edit", "remote_edit":
 		var r MultiEditResult
 		if !decodeToolData(result.Data, &r) {
 			return fullJSON

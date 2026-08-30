@@ -218,19 +218,20 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"target", "path"},
 		}),
-		functionTool("remote_edit", "Validate and apply replacements across multiple files on one remote SSH target.\n"+
-			"- Each file requires the current 6-character version from `remote_read_file`; `E_VERSION_MISMATCH` means re-read before editing.\n"+
-			"- The `files` value must be a JSON array of file objects, never a quoted string.\n"+
-			"- Each `files` item carries its own `path`, `version`, and `changes`; each item's `changes` value must be a JSON array (`[...]`), never a quoted string.\n"+
+		functionTool("remote_edit", "Validate and apply exact replacements to ONE file per call in a remote SSH workspace (same flat contract as edit; to change several files, send parallel remote_edit calls in one response).\n"+
+			"- `target` selects the SSH target plus workspace root, e.g. my-dev:/srv/app; `path` is relative to that root.\n"+
+			"- Requires the current 6-character `version` from `remote_read_file`; `E_VERSION_MISMATCH` means re-read before editing.\n"+
+			"- `changes` must be a JSON array (`[...]`), never a quoted string.\n"+
 			"- Each change chooses exactly one source: a small exact unique `oldText` copied from `remote_read_file` (preferred), or an inclusive whole-line `lineRange` in A-B form for larger blocks.\n"+
-			"- `replace_all` works only with `oldText`.\n"+
-			"- `newText` is required.", map[string]any{
+			"- `replace_all` works only with `oldText`. `newText` is required.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"target": map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Explicit SSH target plus workspace root, e.g. my-dev:/srv/app."},
-				"files":  remoteEditFilesSchema(),
+				"target":  map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Explicit SSH target plus workspace root, e.g. my-dev:/srv/app."},
+				"path":    map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Relative path of the single file to edit in this call."},
+				"version": map[string]any{"type": "string", "pattern": "^[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{6}$", "description": "Required 6-char current version from remote_read_file."},
+				"changes": remoteEditChangesSchema(),
 			},
-			"required": []string{"target", "files"},
+			"required": []string{"target", "path", "version", "changes"},
 		}),
 		functionTool("remote_create_file", "Create or overwrite a UTF-8 text file in a remote SSH workspace (same contract as create); single-shot write.", map[string]any{
 			"type": "object",
@@ -383,7 +384,7 @@ var builtinToolExamples = map[string]string{
 	"http_request":       `{"url":"https://api.example.com/items","method":"GET","query":{"limit":"10"},"timeoutSeconds":60}`,
 	"web_fetch":          `{"url":"https://example.com/docs","maxChars":60000}`,
 	"remote_read_file":   `{"target":"my-dev:/srv/app","path":"main.go"}`,
-	"remote_edit":        `{"target":"my-dev:/srv/app","files":[{"path":"main.go","version":"9k3m7x","changes":[{"oldText":"func old() {}","newText":"func new() {}"}]}]}`,
+	"remote_edit":        `{"target":"my-dev:/srv/app","path":"main.go","version":"9k3m7x","changes":[{"oldText":"func old() {}","newText":"func new() {}"}]}`,
 	"remote_create_file": `{"target":"my-dev:/srv/app","path":"notes.txt","content":"hello"}`,
 	"remote_delete_path": `{"target":"my-dev:/srv/app","path":"tmp/output","recursive":true}`,
 	"remote_run_command": `{"target":"my-dev:/srv/app","command":"go test ./..."}`,
@@ -472,17 +473,11 @@ func editChangeSchema() map[string]any {
 	}
 }
 
-// remoteEditFilesSchema / remoteEditChangeSchema 与本地 edit 的结构完全一致
-// （键名、pattern、oneOf 与 DTO 解码对齐），仅描述精简：完整规则见本地
-// edit 工具描述——两者每轮同场发送，远程描述只需指向它。
-func remoteEditFilesSchema() map[string]any {
-	return map[string]any{"type": "array", "minItems": 1, "maxItems": 20, "items": map[string]any{
-		"type": "object", "properties": map[string]any{
-			"path":    map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*"},
-			"version": map[string]any{"type": "string", "pattern": "^[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{6}$", "description": "Required 6-char version from remote_read_file."},
-			"changes": map[string]any{"type": "array", "minItems": 1, "maxItems": 50, "items": remoteEditChangeSchema()},
-		}, "required": []string{"path", "version", "changes"},
-	}}
+// remoteEditChangesSchema / remoteEditChangeSchema 与本地 edit 的 change 结构
+// 完全一致（键名、pattern、oneOf 与 DTO 解码对齐），仅描述精简：完整规则见
+// 本地 edit 工具描述——两者每轮同场发送，远程描述只需指向它。
+func remoteEditChangesSchema() map[string]any {
+	return map[string]any{"type": "array", "minItems": 1, "maxItems": 50, "items": remoteEditChangeSchema()}
 }
 
 func remoteEditChangeSchema() map[string]any {

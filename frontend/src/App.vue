@@ -6740,11 +6740,6 @@ function makeToolTitle(name, args, meta = {}) {
   if (name === 'list_services') {
     return 'tracked services';
   }
-  if (name === 'remote_edit' && Array.isArray(parsed.files)) {
-    const paths = parsed.files.map(file => file?.path).filter(Boolean);
-    const summary = paths.length === 1 ? paths[0] : `${paths.length} files`;
-    return parsed.target ? `${parsed.target} · ${summary}` : summary;
-  }
   if (name === 'edit' || name === 'remote_edit') {
     if (Array.isArray(parsed.files)) return parsed.files.length === 1 ? (parsed.files[0]?.path || '') : `${parsed.files.length} files`;
     return parsed.target ? `${parsed.target} · ${parsed.path || ''}` : (parsed.path || '');

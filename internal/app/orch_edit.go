@@ -295,10 +295,11 @@ func validateModelEditToolRequest(files []FileTextEdits) error {
 	return nil
 }
 
-// salvageEditRequest recovers the complete prefix of edit tool arguments whose
-// JSON was cut off mid-stream (provider stream interrupted before the closing
-// brackets arrived). The flat model-facing request {path, version, changes} is
-// recovered field by field: complete changes decode exactly as they would on a
+// salvageEditRequest recovers the complete prefix of flat edit tool arguments
+// whose JSON was cut off mid-stream (provider stream interrupted before the
+// closing brackets arrived). The flat model-facing request {path, version,
+// changes} is recovered field by field; a "target" key (remote_edit) is
+// captured alongside. Complete changes decode exactly as they would on a
 // healthy stream, while the truncated tail is dropped and counted. A change
 // object that itself was cut is incomplete and must be dropped — its
 // oldText/newText pair cannot be told apart from an intentional partial edit.
@@ -306,11 +307,11 @@ func validateModelEditToolRequest(files []FileTextEdits) error {
 // full edit contract before anything is written, so recovery never lowers the
 // validation bar. ok is true only when at least one complete change was
 // recovered.
-func salvageEditRequest(raw []byte) (file FileTextEdits, dropped int, ok bool) {
+func salvageEditRequest(raw []byte) (file FileTextEdits, target string, dropped int, ok bool) {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	tok, err := dec.Token()
 	if err != nil || tok != json.Delim('{') {
-		return file, 0, false
+		return file, "", 0, false
 	}
 	for dec.More() {
 		key, err := dec.Token()
@@ -319,22 +320,25 @@ func salvageEditRequest(raw []byte) (file FileTextEdits, dropped int, ok bool) {
 		}
 		name, _ := key.(string)
 		switch name {
-		case "path", "version":
+		case "target", "path", "version":
 			value, err := dec.Token()
 			if err != nil {
-				return file, dropped, len(file.Changes) > 0
+				return file, target, dropped, len(file.Changes) > 0
 			}
 			if s, isString := value.(string); isString {
-				if name == "path" {
+				switch name {
+				case "target":
+					target = s
+				case "path":
 					file.Path = s
-				} else {
+				default:
 					file.Version = s
 				}
 			}
 		case "changes":
 			tok, err := dec.Token()
 			if err != nil || tok != json.Delim('[') {
-				return file, dropped, len(file.Changes) > 0
+				return file, target, dropped, len(file.Changes) > 0
 			}
 			for dec.More() {
 				var change TextChange
@@ -343,24 +347,24 @@ func salvageEditRequest(raw []byte) (file FileTextEdits, dropped int, ok bool) {
 					continue
 				}
 				dropped++
-				return file, dropped, len(file.Changes) > 0
+				return file, target, dropped, len(file.Changes) > 0
 			}
 		default:
 			var skip json.RawMessage
 			if err := dec.Decode(&skip); err != nil {
-				return file, dropped, len(file.Changes) > 0
+				return file, target, dropped, len(file.Changes) > 0
 			}
 		}
 	}
-	return file, dropped, len(file.Changes) > 0
+	return file, target, dropped, len(file.Changes) > 0
 }
 
 // prepareToolCallsForExecution separates the arguments persisted/replayed to
-// providers from the arguments used for this execution. A truncated edit keeps
-// its raw byte prefix for salvageEditRequest, while the assistant tool_call is
-// rewritten to the recovered valid JSON so the next model request cannot be
-// rejected for malformed arguments. Other invalid calls use the explicit
-// truncation marker on both paths.
+// providers from the arguments used for this execution. A truncated edit or
+// remote_edit keeps its raw byte prefix for salvageEditRequest, while the
+// assistant tool_call is rewritten to the recovered valid JSON so the next
+// model request cannot be rejected for malformed arguments. Other invalid
+// calls use the explicit truncation marker on both paths.
 func prepareToolCallsForExecution(toolCalls []openai.ToolCall) ([]openai.ToolCall, []string, bool) {
 	prepared := cloneToolCalls(toolCalls)
 	executionArgs := make([]string, len(prepared))
@@ -376,13 +380,25 @@ func prepareToolCallsForExecution(toolCalls []openai.ToolCall) ([]openai.ToolCal
 		if json.Valid([]byte(raw)) {
 			continue
 		}
-		if normalizeToolName(prepared[i].Function.Name) == "edit" {
+		switch normalizeToolName(prepared[i].Function.Name) {
+		case "edit":
 			// The salvaged flat request is persisted back as the canonical
 			// single-file form so the next model request carries valid
 			// arguments and the history teaches the flat shape.
-			if file, _, ok := salvageEditRequest([]byte(raw)); ok {
+			if file, _, _, ok := salvageEditRequest([]byte(raw)); ok {
 				salvagedFiles := []FileTextEdits{file}
 				if safe, err := json.Marshal(file); err == nil && validateModelEditToolRequest(salvagedFiles) == nil {
+					prepared[i].Function.Arguments = string(safe)
+					salvaged = true
+					continue
+				}
+			}
+		case "remote_edit":
+			// Same recovery for the flat remote request; the replay JSON keeps
+			// the captured target so the history teaches the full flat shape.
+			if file, target, _, ok := salvageEditRequest([]byte(raw)); ok {
+				salvagedReq := RemoteEditRequest{Target: target, Path: file.Path, Version: file.Version, Changes: file.Changes}
+				if safe, err := json.Marshal(salvagedReq); err == nil && validateModelEditToolRequest([]FileTextEdits{file}) == nil {
 					prepared[i].Function.Arguments = string(safe)
 					salvaged = true
 					continue

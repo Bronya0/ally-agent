@@ -196,18 +196,8 @@ func fileMutationTargets(cfg ConfigState, name, arguments string) []fileMutation
 		}
 		return plan.Targets
 	}
-	if name == "remote_edit" {
-		var req RemoteEditRequest
-		if json.Unmarshal([]byte(arguments), &req) != nil {
-			return nil
-		}
-		result := make([]fileMutationTarget, 0, len(req.Files))
-		for _, file := range req.Files {
-			cleanPath := path.Clean(strings.ReplaceAll(strings.TrimSpace(file.Path), "\\", "/"))
-			result = append(result, fileMutationTarget{"remote:" + strings.TrimSpace(req.Target) + ":" + cleanPath, strings.TrimSpace(req.Target) + " · " + cleanPath})
-		}
-		return result
-	}
+	// remote_edit is flat and single-file now; the generic remote_* fallback
+	// below reads its top-level target/path pair.
 	var args struct {
 		Target string `json:"target"`
 		Path   string `json:"path"`
