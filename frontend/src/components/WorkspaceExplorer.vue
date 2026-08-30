@@ -205,6 +205,7 @@ import 'ace-builds/src-noconflict/mode-text';
 import MarkdownIt from 'markdown-it';
 import { isEditableNavigationTarget } from '../utils/sessionState.mjs';
 import { resolveMarkdownImagePath } from '../utils/markdownPreview.mjs';
+import { mermaidFenceSpec, normalizeMermaidSource, loadMermaid, escapeHtmlText } from '../utils/mermaidShared.mjs';
 import { ListFiles, ReadWorkspaceFileAt, ReadWorkspaceImageAt, ReadWorkspaceVideoAt, ReadWorkspacePDFAt, SaveWorkspaceFile, DeletePath, OpenWorkspacePathInFileManagerAt, CreateFile, CreateDirectory, GetWorkspaceFileInfoAt } from '../../bindings/ally-dev/internal/app/app';
 import FileInfoModal from './FileInfoModal.vue';
 import { buildFileInfoSections } from '../utils/fileInfo.mjs';
@@ -282,6 +283,11 @@ let mdRenderer = null;
 let markdownImageRenderSeq = 0;
 const markdownImageCache = new Map();
 const markdownImageLoads = new Map();
+// Mermaid SVG 按源码缓存：预览每次输入后整树重建（无防抖），
+// 缓存让已渲染过的图表零开销回填，内容未变时不再调 mermaid.render。
+const mermaidPreviewSvgCache = new Map();
+const MERMAID_PREVIEW_SVG_CACHE_MAX = 24;
+let mermaidPreviewIdSeq = 0;
 const MARKDOWN_IMAGE_CACHE_LIMIT = 8;
 const MARKDOWN_IMAGE_CACHE_ITEM_MAX_CHARS = 2 * 1024 * 1024;
 // nodeWrapperPadding 默认 '3px 0'：每行 hover/聚焦高亮上下各缩进 3px，
@@ -789,6 +795,7 @@ function renderMarkdownPreview() {
   const content = draftContent.value || '';
   mdPreviewRef.value.innerHTML = mdRenderer.render(content);
   const renderSeq = ++markdownImageRenderSeq;
+  void renderPreviewMermaids(renderSeq);
   const markdownPath = activeFile.value?.path || '';
   const images = Array.from(mdPreviewRef.value.querySelectorAll('img[src]'))
     .map((image) => ({ image, source: image.getAttribute('src') || '' }))
@@ -799,6 +806,71 @@ function renderMarkdownPreview() {
     image.classList.add('workspace-explorer-md-image-loading');
   }
   if (images.length) void hydrateMarkdownImages(renderSeq, images, markdownPath);
+}
+
+function cacheMermaidPreviewSvg(encodedSource, svg) {
+  if (mermaidPreviewSvgCache.size >= MERMAID_PREVIEW_SVG_CACHE_MAX) {
+    mermaidPreviewSvgCache.delete(mermaidPreviewSvgCache.keys().next().value);
+  }
+  mermaidPreviewSvgCache.set(encodedSource, svg);
+}
+
+function renderPreviewMermaids(renderSeq) {
+  const container = mdPreviewRef.value;
+  if (!container) return;
+  const nodes = container.querySelectorAll('.markdown-mermaid[data-mermaid-source]');
+  for (const node of nodes) {
+    const encodedSource = node.dataset.mermaidSource || '';
+    if (!encodedSource || node.dataset.mermaidState) continue;
+    const cached = mermaidPreviewSvgCache.get(encodedSource);
+    if (cached !== undefined) {
+      const output = node.querySelector('.markdown-mermaid-output');
+      if (output) output.innerHTML = cached;
+      node.classList.add('rendered');
+      node.dataset.mermaidState = 'done';
+      continue;
+    }
+    node.dataset.mermaidState = 'pending';
+    void renderPreviewMermaidNode(node, renderSeq, encodedSource);
+  }
+}
+
+async function renderPreviewMermaidNode(node, renderSeq, encodedSource) {
+  let mermaid;
+  try {
+    mermaid = await loadMermaid();
+  } catch (err) {
+    markPreviewMermaidError(node, renderSeq, t('app.mermaid.loadFailed', { error: err?.message || err || 'unknown error' }));
+    return;
+  }
+  try {
+    const source = decodeURIComponent(encodedSource);
+    const output = node.querySelector('.markdown-mermaid-output');
+    if (!source || !output) throw new Error('empty diagram');
+    const id = `explorer-mermaid-${Date.now()}-${++mermaidPreviewIdSeq}`;
+    const result = await mermaid.render(id, source);
+    if (renderSeq !== markdownImageRenderSeq || !node.isConnected) return;
+    const svg = result.svg || '';
+    cacheMermaidPreviewSvg(encodedSource, svg);
+    output.innerHTML = svg;
+    node.classList.add('rendered');
+    node.dataset.mermaidState = 'done';
+  } catch (err) {
+    markPreviewMermaidError(node, renderSeq, err?.message || String(err || t('app.mermaid.renderFailed')));
+  }
+}
+
+function markPreviewMermaidError(node, renderSeq, message) {
+  if (renderSeq !== markdownImageRenderSeq || !node?.isConnected) return;
+  node.dataset.mermaidState = 'error';
+  node.classList.add('error');
+  let error = node.querySelector('.markdown-mermaid-error');
+  if (!error) {
+    error = document.createElement('div');
+    error.className = 'markdown-mermaid-error';
+    node.prepend(error);
+  }
+  error.textContent = message || t('app.mermaid.renderFailed');
 }
 
 function togglePreviewMode(value) {
@@ -1704,6 +1776,21 @@ onMounted(() => {
   }
   window.addEventListener('keydown', onGlobalKeydown, true);
   mdRenderer = new MarkdownIt({ html: false, linkify: true, typographer: true });
+  // Mermaid 围栏 → 占位容器（与聊天消息同构），SVG 由 renderPreviewMermaids 异步填充。
+  const defaultFenceRenderer = mdRenderer.renderer.rules.fence;
+  mdRenderer.renderer.rules.fence = (tokens, idx, options, env, self) => {
+    const token = tokens[idx];
+    const spec = mermaidFenceSpec(token.info);
+    const source = spec ? normalizeMermaidSource(token.content, spec) : '';
+    if (!spec || !source) return defaultFenceRenderer(tokens, idx, options, env, self);
+    const encoded = encodeURIComponent(source);
+    return [
+      `<div class="markdown-mermaid" data-mermaid-source="${escapeHtmlText(encoded)}">`,
+      '<div class="markdown-mermaid-output"></div>',
+      `<pre class="markdown-mermaid-fallback"><code>${escapeHtmlText(source)}</code></pre>`,
+      '</div>',
+    ].join('');
+  };
 });
 
 function onGlobalKeydown(event) {
@@ -1746,6 +1833,7 @@ onBeforeUnmount(() => {
   markdownImageRenderSeq++;
   markdownImageCache.clear();
   markdownImageLoads.clear();
+  mermaidPreviewSvgCache.clear();
   window.removeEventListener('keydown', onGlobalKeydown, true);
   dragTeardown?.();
   dragTeardown = null;

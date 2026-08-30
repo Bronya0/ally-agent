@@ -394,6 +394,7 @@ import {
   loadSessionSnapshots,
 } from './utils/sessionStore.mjs';
 import { saveTextFile } from './utils/download.mjs';
+import { mermaidFenceSpec, normalizeMermaidSource, loadMermaid } from './utils/mermaidShared.mjs';
 import { copyText } from './utils/clipboard.mjs';
 import {
   CancelRun,
@@ -587,38 +588,8 @@ hljs.registerLanguage('css', cssLang);
 hljs.registerLanguage('markdown', markdownLang);
 hljs.registerLanguage('md', markdownLang);
 
-const MERMAID_FENCE_DIRECTIVES = new Map([
-  ['mermaid', ''],
-  ['mmd', ''],
-  ['flowchart', 'flowchart TD'],
-  ['graph', 'graph TD'],
-  ['sequencediagram', 'sequenceDiagram'],
-  ['sequence', 'sequenceDiagram'],
-  ['classdiagram', 'classDiagram'],
-  ['statediagram', 'stateDiagram'],
-  ['statediagram-v2', 'stateDiagram-v2'],
-  ['erdiagram', 'erDiagram'],
-  ['journey', 'journey'],
-  ['gantt', 'gantt'],
-  ['pie', 'pie'],
-  ['gitgraph', 'gitGraph'],
-  ['mindmap', 'mindmap'],
-  ['timeline', 'timeline'],
-  ['quadrantchart', 'quadrantChart'],
-  ['requirementdiagram', 'requirementDiagram'],
-  ['c4diagram', 'c4Diagram'],
-  ['sankey-beta', 'sankey-beta'],
-  ['xychart-beta', 'xychart-beta'],
-  ['block-beta', 'block-beta'],
-  ['architecture-beta', 'architecture-beta'],
-  ['packet-beta', 'packet-beta'],
-]);
-
-const MERMAID_SOURCE_START_RE = /^(?:---[\s\S]*?---\s*)?(?:flowchart|graph|sequenceDiagram|classDiagram|stateDiagram(?:-v2)?|erDiagram|journey|gantt|pie|gitGraph|mindmap|timeline|quadrantChart|requirementDiagram|c4Diagram|sankey-beta|xychart-beta|block-beta|architecture-beta|packet-beta)\b/i;
 
 let markdownRenderStreaming = false;
-let mermaidModulePromise = null;
-let mermaidInitialized = false;
 let mermaidRenderScheduled = false;
 let mermaidRenderSequence = 0;
 let mermaidObserver = null;
@@ -629,29 +600,6 @@ const MERMAID_CACHE_MAX_ENTRIES = 16;
 const MERMAID_CACHE_MAX_CHARS = 2_000_000;
 let mermaidSvgCacheChars = 0;
 let mermaidCacheSequence = 0;
-
-function mermaidFenceSpec(lang) {
-  const raw = String(lang || '').trim();
-  if (!raw) return null;
-  const first = raw.split(/\s+/)[0].toLowerCase();
-  if (!MERMAID_FENCE_DIRECTIVES.has(first)) return null;
-  return {
-    raw,
-    first,
-    directive: MERMAID_FENCE_DIRECTIVES.get(first),
-  };
-}
-
-function normalizeMermaidSource(code, spec) {
-  const source = String(code || '').trim();
-  if (!source || !spec?.directive) return source;
-  if (MERMAID_SOURCE_START_RE.test(source)) return source;
-  if (spec.first === 'flowchart' || spec.first === 'graph') {
-    const directive = /\s/.test(spec.raw) ? spec.raw : spec.directive;
-    return `${directive}\n${source}`;
-  }
-  return `${spec.directive}\n${source}`;
-}
 
 function renderMermaidFence(code, spec) {
   const source = normalizeMermaidSource(code, spec);
@@ -861,74 +809,9 @@ function waitForMermaidRenderSlot() {
   });
 }
 
-async function loadMermaidModule() {
-  if (!mermaidModulePromise) {
-    mermaidModulePromise = import('mermaid').then((mod) => {
-      const mermaid = mod.default || mod;
-      if (!mermaidInitialized) {
-        mermaid.initialize({
-          startOnLoad: false,
-          securityLevel: 'strict',
-          theme: 'base',
-          darkMode: true,
-          htmlLabels: false,
-          flowchart: {
-            curve: 'linear',
-            useMaxWidth: true,
-            nodeSpacing: 36,
-            rankSpacing: 48,
-          },
-          sequence: {
-            useMaxWidth: true,
-            wrap: true,
-            diagramMarginX: 24,
-            diagramMarginY: 18,
-            actorMargin: 48,
-          },
-          themeVariables: {
-            darkMode: true,
-            background: '#2b2b2b',
-            mainBkg: '#323232',
-            secondBkg: '#383838',
-            primaryColor: '#323232',
-            primaryTextColor: '#a9b7c6',
-            primaryBorderColor: '#cc7832',
-            secondaryColor: '#353535',
-            secondaryTextColor: '#a9b7c6',
-            secondaryBorderColor: '#6897bb',
-            tertiaryColor: '#303330',
-            tertiaryTextColor: '#a9b7c6',
-            tertiaryBorderColor: '#6a8759',
-            lineColor: '#808080',
-            textColor: '#a9b7c6',
-            nodeTextColor: '#a9b7c6',
-            noteBkgColor: '#3b352b',
-            noteTextColor: '#d7ba7d',
-            noteBorderColor: '#bbb529',
-            actorBkg: '#323232',
-            actorBorder: '#6897bb',
-            actorTextColor: '#a9b7c6',
-            actorLineColor: '#666666',
-            signalColor: '#a9b7c6',
-            signalTextColor: '#a9b7c6',
-            labelBoxBkgColor: '#323232',
-            labelBoxBorderColor: '#6a8759',
-            labelTextColor: '#a9b7c6',
-            loopTextColor: '#d7ba7d',
-            activationBorderColor: '#cc7832',
-            activationBkgColor: '#3b332b',
-            sequenceNumberColor: '#2b2b2b',
-            fontFamily: 'Inter, "Microsoft YaHei", sans-serif',
-            fontSize: '14px',
-          },
-          themeCSS: '.node rect,.node polygon,.node circle,.node ellipse{stroke-width:1.4px}.edgePath .path,.flowchart-link{stroke-width:1.5px}.nodeLabel,.label text{font-weight:500}.cluster rect{fill:#2f2f2f!important;stroke:#5d5d5d!important}',
-        });
-        mermaidInitialized = true;
-      }
-      return mermaid;
-    });
-  }
-  return mermaidModulePromise;
+function loadMermaidModule() {
+  // 初始化配置已抽到 utils/mermaidShared.mjs，与编辑器 Markdown 预览共享。
+  return loadMermaid();
 }
 
 async function renderMermaidDiagram(node) {

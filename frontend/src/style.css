@@ -2269,6 +2269,55 @@ code, pre {
   line-height: 1.5;
 }
 
+/* 编辑器 Markdown 预览里的 Mermaid：复用聊天的视觉语言（无工具栏与缩放交互），
+   预览容器不是 .markdown-body，需要单独覆盖。 */
+.workspace-explorer-md-preview .markdown-mermaid {
+  position: relative;
+  width: 100%;
+  margin: 0.85em 0;
+  padding: 12px;
+  overflow: hidden;
+  border: 1px solid rgba(204, 120, 50, 0.2);
+  border-radius: 10px;
+  background: #292929;
+}
+
+.workspace-explorer-md-preview .markdown-mermaid-output {
+  display: none;
+  position: relative;
+  width: 100%;
+  min-height: 60px;
+  overflow: hidden;
+  border-radius: 6px;
+  background: #2b2b2b;
+}
+
+.workspace-explorer-md-preview .markdown-mermaid.rendered .markdown-mermaid-output {
+  display: block;
+}
+
+.workspace-explorer-md-preview .markdown-mermaid-output svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+}
+
+.workspace-explorer-md-preview .markdown-mermaid-fallback {
+  margin: 0;
+}
+
+.workspace-explorer-md-preview .markdown-mermaid.rendered .markdown-mermaid-fallback {
+  display: none;
+}
+
+.workspace-explorer-md-preview .markdown-mermaid-error {
+  margin-bottom: 10px;
+  color: #f2b8b8;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .markdown-body :not(pre) > code {
   color: var(--md-code);
   border: 0;
