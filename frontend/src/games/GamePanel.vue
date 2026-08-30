@@ -1,12 +1,11 @@
 <template>
-  <n-modal
-    :show="show"
-    preset="card"
-    title="协作休息区"
-    class="game-modal"
-    @update:show="(value) => !value && hide()"
-    @close="hide"
-  >
+  <!-- Inline games page: rendered inside the main-area container
+       (App.vue mode === 'games') instead of a modal card. -->
+  <div v-if="show" class="games-inline-panel">
+    <header class="games-inline-header">
+      <span class="games-inline-title">协作休息区</span>
+    </header>
+    <div class="games-inline-body">
     <div class="game-layout">
       <aside class="game-sidebar">
         <div class="game-section-title">联机</div>
@@ -69,7 +68,8 @@
         </template>
       </main>
     </div>
-  </n-modal>
+    </div>
+  </div>
 </template>
 
 <script setup>
@@ -80,7 +80,7 @@ import { applyAction, createState, GAME_META, xiangqiPieceLabel } from './rules.
 import { buildInvite, GameConnection, parseInvite } from './connection.mjs';
 
 const props = defineProps({ show: { type: Boolean, default: false } });
-const emit = defineEmits(['close']);
+defineEmits(['close']);
 const message = useMessage();
 const GAME_SERVER_PORT = 51873;
 const invite = ref('');
@@ -119,7 +119,6 @@ onMounted(async () => {
 });
 onUnmounted(() => { connection.value?.close(); if (serverInfo.value.running) StopServer().catch(() => {}); });
 
-function hide() { emit('close'); }
 function resetRoomState() {
   connection.value = null;
   peerId.value = '';
@@ -202,8 +201,44 @@ async function copyInvite() { try { await navigator.clipboard.writeText(inviteTe
 </script>
 
 <style scoped>
-.game-modal { width: min(900px, 94vw); }
-.game-layout { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 18px; min-height: 500px; }
+/* Inline games page: fills the main-area container instead of a modal card. */
+.games-inline-panel {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  background: #1a1a1a;
+  overflow: hidden;
+}
+
+.games-inline-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 22px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  flex-shrink: 0;
+}
+
+.games-inline-title {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: #f2f2f2;
+}
+
+.games-inline-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  padding: 16px 22px 20px;
+  overflow: auto;
+}
+
+.game-layout { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 18px; flex: 1; min-height: 0; }
 .game-sidebar { display: flex; flex-direction: column; gap: 9px; border-right: 1px solid #2b2b2b; padding-right: 14px; }
 .game-section-title { color: #ddd; font-size: 12px; font-weight: 600; margin-top: 4px; }
 .game-hint, .game-connected, .game-status { color: #999; font-size: 12px; line-height: 1.5; }

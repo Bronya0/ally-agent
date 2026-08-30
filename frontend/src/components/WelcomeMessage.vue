@@ -8,8 +8,10 @@ This file is part of ally-agent, licensed under the GNU General
 Public License v3. See the LICENSE file for details.
 -->
 <template>
-  <div class="message-body welcome-body">
-    <div class="welcome-top-row">
+  <div class="message-body welcome-body" :class="{ 'welcome-kb': welcome.kb }">
+    <!-- Knowledge-base welcome keeps a single plain line: the KB page's
+         identity header (kb-hero) already carries avatar-level branding. -->
+    <div v-if="!welcome.kb" class="welcome-top-row">
       <div class="welcome-brand-block">
         <AllyAvatar />
         <div class="build-version welcome-build-version">{{ buildVersion }}</div>

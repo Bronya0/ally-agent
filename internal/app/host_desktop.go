@@ -261,6 +261,37 @@ func (a *App) SelectWorkspace() (string, error) {
 	return selected, nil
 }
 
+// SelectKnowledgeBaseRoot opens a native directory picker for the knowledge
+// base root and returns the chosen path without persisting it — the settings
+// draft (and the KB empty-state card) own the save flow, so the picked path
+// round-trips through the normal SaveConfig boundary.
+func (a *App) SelectKnowledgeBaseRoot() (string, error) {
+	if err := a.ensureInitialized(); err != nil {
+		return "", err
+	}
+	a.mu.Lock()
+	current := a.config.KBRoot
+	a.mu.Unlock()
+	if info, err := os.Stat(current); err != nil || !info.IsDir() {
+		if homeDir, err := os.UserHomeDir(); err == nil {
+			current = homeDir
+		}
+	}
+	if a.wails == nil || a.wails.app == nil {
+		return "", errors.New("desktop host not initialized")
+	}
+	selected, err := a.wails.app.Dialog.OpenFile().
+		SetTitle("选择知识库目录").
+		SetDirectory(current).
+		CanChooseDirectories(true).
+		CanChooseFiles(false).
+		PromptForSingleSelection()
+	if err != nil {
+		return "", err
+	}
+	return selected, nil
+}
+
 // SelectBackgroundImage opens a native file picker for image files, writes
 // the chosen bytes to ~/.ally_agent/background.<ext> via SaveBackgroundImage,
 // and returns the stored filename. Rejects oversized or non-image files at

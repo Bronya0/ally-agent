@@ -18,6 +18,9 @@ export function defaultConfig() {
     apiKeys: [],
     model: 'deepseek-v4-flash',
     workspace: '',
+    // Knowledge-base root directory. A session whose workspace resolves to
+    // this path runs in KB mode (KB system prompt + read-only sources/).
+    kbRoot: '',
     temperature: 0.2,
     maxTokens: 131072,
     contextWindow: 1000000,

@@ -254,6 +254,11 @@ func (a *App) runCommandWithConfig(parent context.Context, cfg ConfigState, req 
 	if err := checkCommandSafetyAtCwd(req, roots, cwd); err != nil {
 		return CommandResult{}, err
 	}
+	// Knowledge-base runs additionally block literal write targets under the
+	// read-only sources/ subtree (deny roots ride in on parent ctx).
+	if err := checkKBDenyTargets(req.Command, cwd, kbDenyRoots(parent)); err != nil {
+		return CommandResult{}, err
+	}
 	timeout := req.TimeoutSeconds
 	if timeout <= 0 {
 		timeout = defaultShellLimit

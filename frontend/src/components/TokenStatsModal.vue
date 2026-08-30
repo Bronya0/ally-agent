@@ -8,16 +8,14 @@ This file is part of ally-agent, licensed under the GNU General
 Public License v3. See the LICENSE file for details.
 -->
 <template>
-  <n-modal
-    :show="show"
-    preset="card"
-    :title="$t('stats.title')"
-    :style="{ width: 'min(1020px, calc(100vw - 48px))' }"
-    @update:show="(value) => !value && $emit('close')"
-  >
-    <template #header-extra>
+  <!-- Inline stats page: rendered inside the main-area container
+       (App.vue mode === 'stats' via v-show) instead of a modal dialog.
+       Always mounted so the loaded stats survive mode switches. -->
+  <div class="stats-inline-panel">
+    <header class="stats-inline-header">
+      <span class="stats-inline-title">{{ $t('stats.title') }}</span>
       <n-button size="small" quaternary :loading="loading" @click="load">{{ $t('common.refresh') }}</n-button>
-    </template>
+    </header>
 
     <div class="stats-body">
       <n-spin :show="loading">
@@ -140,7 +138,7 @@ Public License v3. See the LICENSE file for details.
         <n-empty v-else-if="stats && stats.error" :description="stats.error" class="stats-empty" />
       </n-spin>
     </div>
-  </n-modal>
+  </div>
 </template>
 
 <script setup>
@@ -175,18 +173,15 @@ async function load() {
   }
 }
 
+// The page stays mounted (parent v-show): stats persist across mode
+// switches, and every entry triggers an in-place refresh (the generation
+// guard discards stale responses). No clearing on hide — that would blank
+// the page the user just left.
 watch(
   () => props.show,
   (visible) => {
-    if (visible) {
-      load();
-    } else {
-      loadGeneration += 1;
-      loading.value = false;
-      stats.value = null;
-    }
+    if (visible) load();
   },
-  { immediate: true }
 );
 
 // ── 统计表：今日 / 近7日 / 本月 ──
@@ -354,11 +349,40 @@ function showBarTooltip(event, bar) {
 </script>
 
 <style scoped>
+/* Inline stats page: fills the main-area container instead of a modal card. */
+.stats-inline-panel {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  background: #1a1a1a;
+  overflow: hidden;
+}
+
+.stats-inline-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 22px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  flex-shrink: 0;
+}
+
+.stats-inline-title {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: #f2f2f2;
+}
+
 .stats-body {
-  min-height: 260px;
-  max-height: min(76vh, 760px);
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
-  padding-right: 2px;
+  padding: 16px 22px 24px;
 }
 .stats-overview {
   display: grid;

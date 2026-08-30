@@ -8,18 +8,17 @@ This file is part of ally-agent, licensed under the GNU General
 Public License v3. See the LICENSE file for details.
 -->
 <template>
-  <n-modal
-    :show="visible"
-    preset="card"
-    :title="$t('settings.title')"
-    class="config-modal"
-    :style="settingsModalStyle"
-    :bordered="true"
-    @update:show="onClose"
-    @after-leave="emit('closed')"
-  >
-    <div class="settings-layout">
-      <aside class="settings-nav" :aria-label="$t('settings.navigation')">
+  <!-- Inline settings panel: shown directly inside the main-area container
+       (App.vue mode === 'settings' via v-show) instead of a modal dialog.
+       Always mounted so in-page state survives mode switches. Only the model
+       editor sub-modal below stays a dialog. -->
+  <div class="config-inline-panel">
+    <header class="config-inline-header">
+      <span class="config-inline-title">{{ $t('settings.title') }}</span>
+    </header>
+    <n-layout has-sider class="config-inline-body">
+      <n-layout-sider bordered :width="150" :native-scrollbar="false" content-style="padding: 14px 10px;">
+        <aside class="settings-nav" :aria-label="$t('settings.navigation')">
         <button :class="['settings-nav-item', { active: page === 'general' }]" @click="page = 'general'">
           <span class="settings-nav-title">{{ $t('settings.general') }}</span>
         </button>
@@ -45,8 +44,9 @@ Public License v3. See the LICENSE file for details.
           <span class="settings-nav-title">{{ $t('settings.about') }}</span>
         </button>
       </aside>
-
-      <n-form class="settings-content" label-placement="top">
+      </n-layout-sider>
+      <n-layout-content :native-scrollbar="false" content-style="padding: 16px 24px 28px;" class="config-inline-content">
+        <n-form class="settings-content" label-placement="top">
         <!-- General -->
         <section v-if="page === 'general'" class="settings-page">
           <div class="config-section-header">
@@ -67,6 +67,27 @@ Public License v3. See the LICENSE file for details.
             <div class="settings-toggle-row">
               <n-switch v-model:value="draft.allowPrivateNetwork" />
               <span class="settings-toggle-hint">{{ $t('settings.allowPrivateNetworkHint') }}</span>
+            </div>
+          </n-form-item>
+          <n-form-item :label="$t('settings.kbRoot')">
+            <div class="settings-field-stack">
+              <div class="background-image-row">
+                <n-button
+                  size="small"
+                  :loading="kbRootSelecting"
+                  @click="selectKBRoot"
+                >{{ $t('settings.kbRootSelect') }}</n-button>
+                <n-button
+                  v-if="draft.kbRoot"
+                  size="small"
+                  secondary
+                  @click="clearKBRoot"
+                >{{ $t('settings.kbRootClear') }}</n-button>
+                <span class="background-image-status">
+                  {{ draft.kbRoot || $t('settings.kbRootNone') }}
+                </span>
+              </div>
+              <span class="settings-field-hint">{{ $t('settings.kbRootHint') }}</span>
             </div>
           </n-form-item>
           <n-form-item v-if="isWindows" :label="$t('settings.gitBashPath')">
@@ -577,8 +598,9 @@ Public License v3. See the LICENSE file for details.
           </div>
         </section>
       </n-form>
-    </div>
-  </n-modal>
+      </n-layout-content>
+    </n-layout>
+  </div>
 
   <!-- Model editor sub-modal -->
   <n-modal
@@ -762,6 +784,7 @@ import {
   TestModelConnection, FetchModelList,
   DetectSystemProxy, TestProxy,
   SelectBackgroundImage, ClearBackgroundImage,
+  SelectKnowledgeBaseRoot,
   GetAutostartEnabled, SetAutostartEnabled,
   GetApiServiceState, SaveApiSettings, SetApiServiceEnabled,
 } from '../../bindings/ally-dev/internal/app/app';
@@ -791,7 +814,7 @@ const props = defineProps({
   //   { state: 'idle' | 'busy' | 'latest' | 'found' | 'failed', version?: string }
   checkUpdateResult: { type: Object, default: () => ({ state: 'idle' }) },
 });
-const emit = defineEmits(['close', 'closed', 'save', 'skills-changed', 'mcp-saved', 'background-changed', 'check-update']);
+const emit = defineEmits(['close', 'save', 'skills-changed', 'mcp-saved', 'background-changed', 'check-update']);
 const checkUpdateBusy = ref(false);
 const checkUpdateMessage = ref('');
 let checkUpdateTimer = 0;
@@ -870,17 +893,12 @@ const draft = reactive(cloneConfigDraft(props.configDraft));
 // Accent theme is a pure front-end preference (localStorage), independent of the
 // backend config draft. Applied live on selection.
 
-const settingsModalStyle = {
-  width: 'min(820px, calc(100vw - 48px))',
-  maxWidth: 'calc(100vw - 48px)',
-};
-
 const modelFormModalStyle = {
   width: 'min(580px, calc(100vw - 48px))',
   maxWidth: 'calc(100vw - 48px)',
 };
 
-const page = ref('general');
+const page = ref(props.initialPage || 'general');
 const modelEditorVisible = ref(false);
 const modelEditorIndex = ref(-1);
 const modelCatalog = ref({ providers: [] });
@@ -946,6 +964,29 @@ async function selectBackground() {
   } finally {
     backgroundSelecting.value = false;
   }
+}
+
+// Knowledge-base root: pick a directory into the draft; the value persists
+// through the modal's normal save flow. Clearing just empties the draft
+// field — the effective save happens on 保存.
+const kbRootSelecting = ref(false);
+
+async function selectKBRoot() {
+  kbRootSelecting.value = true;
+  try {
+    const selected = await SelectKnowledgeBaseRoot();
+    if (selected) {
+      draft.kbRoot = selected;
+    }
+  } catch (err) {
+    message.error(t('settings.kbRootSelectFailed', { error: err }));
+  } finally {
+    kbRootSelecting.value = false;
+  }
+}
+
+function clearKBRoot() {
+  draft.kbRoot = '';
 }
 
 async function clearBackground() {
@@ -1936,44 +1977,76 @@ function openApiDocs() {
 // backend land in the same list the form rows merge from.
 let mcpStatusOff = null;
 
+// The panel stays mounted (parent v-show) so in-page state — active tab,
+// scroll position, unsaved draft edits — survives switching sider modes.
+// Entry points that ask for a specific page (openSettings('models')) still
+// jump there via the initialPage prop; the draft is synced once on first
+// open, afterwards unsaved edits persist until the user hits 保存.
+let draftSynced = false;
+
+watch(() => props.initialPage, (value) => {
+  page.value = value || 'general';
+});
+
 watch(() => props.visible, (visible) => {
-  if (visible) {
-    page.value = props.initialPage || 'general';
+  if (!visible) return;
+  if (!draftSynced) {
     syncDraftFromProps();
-    loadMcpConfig();
-    refreshSkillState();
-    loadApiState();
-    if (draft.proxyMode === 'system') detectProxy();
-    refreshAutostart();
-    if (!mcpStatusOff) {
-      mcpStatusOff = Events.On('mcp:status', (event) => {
-        const data = unwrapWailsEvent(event, 'mcp:status');
-        mcpServers.value = data?.servers || [];
-      });
-    }
-  } else if (mcpStatusOff) {
-    mcpStatusOff();
-    mcpStatusOff = null;
+    draftSynced = true;
+  }
+  loadMcpConfig();
+  refreshSkillState();
+  loadApiState();
+  if (draft.proxyMode === 'system') detectProxy();
+  refreshAutostart();
+  if (!mcpStatusOff) {
+    mcpStatusOff = Events.On('mcp:status', (event) => {
+      const data = unwrapWailsEvent(event, 'mcp:status');
+      mcpServers.value = data?.servers || [];
+    });
   }
 });
 </script>
 
 <style scoped>
-.config-modal {
-  width: 820px;
-  max-width: calc(100vw - 48px);
+/* Inline settings panel: fills the main-area container instead of a modal
+   card. The inner layout stretches to the available height and the content
+   column scrolls. */
+.config-inline-panel {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  background: #1a1a1a;
+  overflow: hidden;
 }
 
-.settings-layout {
+.config-inline-header {
   display: flex;
-  gap: 20px;
-  height: 460px;
-  min-height: 460px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 22px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  flex-shrink: 0;
+}
+
+.config-inline-title {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: #f2f2f2;
+}
+
+.config-inline-body {
+  flex: 1;
+  min-height: 0;
 }
 
 .settings-nav {
-  width: 120px;
-  flex-shrink: 0;
+  width: 100%;
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -2011,11 +2084,7 @@ watch(() => props.visible, (visible) => {
 }
 
 .settings-content {
-  flex: 1;
   min-width: 0;
-  height: 460px;
-  max-height: 460px;
-  overflow-y: auto;
 }
 
 .settings-page {
@@ -2024,7 +2093,7 @@ watch(() => props.visible, (visible) => {
 
 .settings-page-actions {
   display: flex;
-  justify-content: flex-end;
+  justify-content: flex-start;
   margin-top: 16px;
   gap: 8px;
 }
@@ -2797,29 +2866,6 @@ watch(() => props.visible, (visible) => {
   .mcp-row-side {
     width: 100%;
     justify-content: flex-end;
-  }
-
-  .settings-layout {
-    flex-direction: column;
-    gap: 14px;
-    height: auto;
-    min-height: 0;
-  }
-
-  .settings-nav {
-    width: 100%;
-    flex-direction: row;
-    overflow-x: auto;
-    padding-bottom: 2px;
-  }
-
-  .settings-nav-item {
-    min-width: 92px;
-  }
-
-  .settings-content {
-    height: min(460px, calc(100vh - 260px));
-    max-height: min(460px, calc(100vh - 260px));
   }
 }
 </style>

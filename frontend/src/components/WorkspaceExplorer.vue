@@ -112,7 +112,7 @@
     <aside class="workspace-explorer-tree" :style="{ flexBasis: treeWidth + 'px' }" @contextmenu.prevent="onTreeAreaContextmenu" @keydown="onTreeKeydown" @click="onTreeAreaClick">
       <div class="workspace-explorer-tree-header">
         <span class="workspace-explorer-title">
-          <span class="workspace-explorer-title-text" :title="workspace">{{ workspaceLabel }}</span>
+          <span class="workspace-explorer-title-text" :title="workspace">{{ treeTitle }}</span>
         </span>
         <div class="workspace-explorer-header-actions">
           <button
@@ -154,6 +154,10 @@
           @update:selected-keys="onSelect"
         />
         <div v-else class="workspace-explorer-empty">{{ $t('app.workspace.none') }}</div>
+        <div
+          v-if="workspace && !loadingTree && treeData.length === 0"
+          class="workspace-explorer-empty-hint"
+        >{{ props.emptyHint || $t('app.workspaceExplorer.emptyDir') }}</div>
       </n-spin>
       <div class="workspace-explorer-footer">
         <n-tooltip trigger="hover" placement="right-start" :style="{ maxWidth: '360px' }">
@@ -220,6 +224,11 @@ const props = defineProps({
   workspace: { type: String, default: '' },
   active: { type: Boolean, default: false },
   initialWidth: { type: Number, default: 270 },
+  // Knowledge-base mode: hide dotfiles (.DS_Store & co), override the tree
+  // header title, and show a dedicated hint when the directory is empty.
+  hideHidden: { type: Boolean, default: false },
+  titleText: { type: String, default: '' },
+  emptyHint: { type: String, default: '' },
 });
 const emit = defineEmits(['close', 'treeWidthChange']);
 const dialog = useDialog();
@@ -308,6 +317,7 @@ const workspaceLabel = computed(() => {
   const value = String(props.workspace || '').replace(/[\\/]+$/, '');
   return value.split(/[\\/]/).filter(Boolean).pop() || value || t('app.workspace.none');
 });
+const treeTitle = computed(() => props.titleText || workspaceLabel.value);
 const dirty = computed(() => draftContent.value !== originalContent.value);
 const showEditor = computed(() => Boolean(activeFile.value || loadingFile.value || fileError.value));
 const isImageMode = computed(() => activeFile.value?.kind === 'image');
@@ -909,7 +919,7 @@ function makeNode(entry) {
 async function listDirectory(path = '', workspace = props.workspace) {
   // includeIgnored: true — 资源树是逐层懒加载，需要展示 node_modules 等全部内容；
   // 模型侧 list_files 默认 false（跳过 gitignore/node_modules）。
-  const result = await ListFiles({ workspace, path, maxDepth: 1, limit: 1000, includeHidden: true, includeIgnored: true });
+  const result = await ListFiles({ workspace, path, maxDepth: 1, limit: 1000, includeHidden: !props.hideHidden, includeIgnored: true });
   const entries = Array.isArray(result?.entries) ? result.entries : [];
   const nodes = entries.map(makeNode);
   // 目录超限时后端静默截断；追加一个不可交互的占位行如实提示，

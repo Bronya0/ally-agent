@@ -62,12 +62,6 @@ Public License v3. See the LICENSE file for details.
       </div>
     </div>
     <div class="header-actions">
-      <n-button class="header-icon-button" size="small" quaternary @click="onOpenTokenStats" :title="$t('header.tokenStats')" :aria-label="$t('header.tokenStats')">
-        <BarChartOutlined class="header-icon" />
-      </n-button>
-      <n-button class="header-icon-button" size="small" quaternary @click="$emit('openGames')" :title="$t('header.games')" :aria-label="$t('header.games')">
-        <AppstoreOutlined class="header-icon" />
-      </n-button>
       <n-button
         :class="['header-icon-button', 'repository-button', { 'update-available': updateAvailable }]"
         size="small"
@@ -78,9 +72,6 @@ Public License v3. See the LICENSE file for details.
       >
         <DownloadOutlined v-if="updateAvailable" class="header-icon" />
         <GithubOutlined v-else class="header-icon github-icon" />
-      </n-button>
-      <n-button class="header-icon-button" size="small" quaternary @click="onOpenSettings" :title="$t('header.settings')" :aria-label="$t('header.settings')">
-        <SettingOutlined class="header-icon" />
       </n-button>
     </div>
     <div class="window-controls">
@@ -103,11 +94,8 @@ import { computed, h, onBeforeUnmount, ref } from 'vue';
 import { NDropdown } from 'naive-ui';
 import AllyWordmark from './AllyWordmark.vue';
 import HistoryOutlined from '@vicons/antd/HistoryOutlined';
-import BarChartOutlined from '@vicons/antd/BarChartOutlined';
-import AppstoreOutlined from '@vicons/antd/AppstoreOutlined';
 import DownloadOutlined from '@vicons/antd/DownloadOutlined';
 import GithubOutlined from '@vicons/antd/GithubOutlined';
-import SettingOutlined from '@vicons/antd/SettingOutlined';
 import CloseOutlined from '@vicons/antd/CloseOutlined';
 import MinusOutlined from '@vicons/antd/MinusOutlined';
 import BorderOutlined from '@vicons/antd/BorderOutlined';
@@ -131,9 +119,6 @@ const emit = defineEmits([
   'historySelect',
   'openRepository',
   'startUpdate',
-  'openSettings',
-  'openTokenStats',
-  'openGames',
   'minimise',
   'toggleMaximise',
   'closeWindow',
@@ -362,22 +347,6 @@ function onHostCaptureClick(event) {
     event.stopPropagation();
     event.preventDefault();
   }
-}
-
-function onOpenTokenStats(event) {
-  // Blur immediately so the button doesn't retain :focus after the modal opens
-  // or after the modal is dismissed via mask click.
-  const el = event?.currentTarget;
-  if (el && typeof el.blur === 'function') el.blur();
-  emit('openTokenStats');
-}
-
-function onOpenSettings(event) {
-  // Blur immediately so the button doesn't retain :focus after the modal opens
-  // or after the modal is dismissed via mask click.
-  const el = event?.currentTarget;
-  if (el && typeof el.blur === 'function') el.blur();
-  emit('openSettings');
 }
 
 function onRepositoryClick() {

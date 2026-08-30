@@ -402,7 +402,7 @@ func (a *App) contextStaticBreakdown(cfg ConfigState, skills []SkillDefinition) 
 	a.contextStaticCaches.mu.Unlock()
 
 	result := ContextBreakdown{}
-	for _, part := range buildSystemPromptParts(skills, cfg.Workspace, cfg.ExtraRoots, cfg.CustomPrompt, cfg.GitBashPath) {
+	for _, part := range buildSystemPromptParts(skills, cfg.Workspace, cfg.ExtraRoots, cfg.CustomPrompt, cfg.GitBashPath, cfg.KBRoot) {
 		tokens := estimateTokensFromText(part.content)
 		if tokens <= 0 {
 			continue
@@ -719,7 +719,7 @@ func cancelledTurnMarker() openai.ChatCompletionMessage {
 
 func (a *App) buildSystemContextMessages(sessionID string, cfg ConfigState, allSkills []SkillDefinition) []openai.ChatCompletionMessage {
 	messages := []openai.ChatCompletionMessage{}
-	systemPrompt := defaultSystemPrompt(allSkills, cfg.Workspace, cfg.ExtraRoots, cfg.CustomPrompt, cfg.GitBashPath)
+	systemPrompt := defaultSystemPrompt(allSkills, cfg.Workspace, cfg.ExtraRoots, cfg.CustomPrompt, cfg.GitBashPath, cfg.KBRoot)
 	if systemPrompt != "" {
 		messages = append(messages, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleSystem, Content: systemPrompt})
 	}

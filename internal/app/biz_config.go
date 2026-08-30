@@ -171,6 +171,9 @@ func mergeConfig(base, overlay ConfigState) ConfigState {
 	if overlay.Workspace != "" {
 		base.Workspace = overlay.Workspace
 	}
+	if overlay.KBRoot != "" {
+		base.KBRoot = overlay.KBRoot
+	}
 	// ExtraRoots 是会话级配置：overlay 非-nil 时整体替换（包括空切片表示"无附加"）。
 	// 不写入 ~/.ally_agent/config.json，因为 a.config.ExtraRoots 始终为 nil（仅在
 	// 每次 StartChat 时通过 effectiveConfig 透传到 cfg）。
@@ -434,6 +437,8 @@ func (a *App) SaveConfig(req ConfigState) error {
 		strings.TrimSpace(a.config.ProxyNoProxy) != strings.TrimSpace(req.ProxyNoProxy)
 	a.config = mergeConfig(a.config, req)
 	a.config.CustomPrompt = req.CustomPrompt
+	// KBRoot 直接采用请求值（含清空），前端 draft 由 GetConfig 加载、整份回传。
+	a.config.KBRoot = strings.TrimSpace(req.KBRoot)
 	a.config.AllowPrivateNetwork = req.AllowPrivateNetwork
 	a.config.GitBashPath = req.GitBashPath
 	a.config.ProxyMode = normalizeProxyMode(req.ProxyMode)

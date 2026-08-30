@@ -14,31 +14,29 @@ Public License v3. See the LICENSE file for details.
         <n-message-provider>
           <n-layout class="app-shell" content-style="display: flex; flex-direction: column;">
             <AppHeader
-              :workspace-tabs="workspaceTabsWithStatus"
+              :workspace-tabs="chatTabsWithStatus"
               :active-workspace-id="activeWorkspaceId"
               :update-available="updateAvailable"
               :update-auto-supported="updateAutoSupported"
               :latest-version="latestReleaseVersion"
               :is-maximised="isMaximised"
               :history-options="historyOptions"
-              @switch-workspace="switchWorkspaceTab"
+              @switch-workspace="onHeaderSwitchWorkspace"
               @close-workspace="closeWorkspaceTab"
               @reorder-workspace="reorderWorkspaceTabs"
-              @add-workspace="addWorkspaceTab"
-              @history-select="onHistorySelect"
+              @add-workspace="onHeaderAddWorkspace"
+              @history-select="onHeaderHistorySelect"
               @open-repository="openRepositoryPage"
               @start-update="startUpdate"
-              @open-settings="openSettings('general')"
-              @open-token-stats="tokenStatsVisible = true"
-              @open-games="gamesVisible = true"
               @minimise="minimiseWindow"
               @toggle-maximise="toggleMaximiseWindow"
               @close-window="closeWindow"
             />
 
-            <!-- Main chat area -->
+            <!-- Main area: mode rail + (chat workbench | KB guidance card) -->
             <div class="main-area" @pointerdown.capture="clearActiveExplorerTreeSelection">
-              <n-layout class="chat-layout" :content-style="chatLayoutContentStyle">
+              <ModeSider :mode="mode" :kb-running="kbSessionRunning" @switch="switchMode" />
+              <n-layout v-show="!kbEmptyActive && !settingsActive && !statsActive && !gamesActive" class="chat-layout" :content-style="chatLayoutContentStyle">
                 <n-tabs
                   class="workspace-content-tabs"
                   :value="activeWorkspaceId"
@@ -52,6 +50,20 @@ Public License v3. See the LICENSE file for details.
                     :tab="tab.label"
                     display-directive="show"
                   >
+                    <!-- Knowledge-base identity header: plain title row, only
+                         the hidden KB tab carries it. -->
+                    <div v-if="isKbTab(tab)" class="kb-hero">
+                      <div class="kb-hero-text">
+                        <h1 class="kb-hero-title">{{ $t('kb.hero.title') }}</h1>
+                        <p class="kb-hero-subtitle">{{ $t('kb.hero.subtitle') }}</p>
+                      </div>
+                      <div class="kb-hero-path" :title="tab.path">
+                        <FolderOpenOutlined class="kb-hero-path-icon" />
+                        <span class="kb-hero-path-text">{{ tab.path }}</span>
+                      </div>
+                    </div>
+                    <!-- No banner: KB maintenance actions live in the action
+                         bar above the composer. -->
                     <ChatMessages
                       :ref="(instance) => setConversationMessagesRef(tab.id, instance)"
                       :messages="displayMessagesForTab(tab)"
@@ -106,6 +118,39 @@ Public License v3. See the LICENSE file for details.
 
 
               <div class="composer">
+                <!-- KB maintenance actions: a row of one-click prompts above
+                     the composer, ordered by workflow (build → feed → tidy).
+                     Before initialization the KB is forced through init:
+                     input is disabled and only the init button shows. -->
+                <div v-if="activeTabIsKb" class="kb-action-bar">
+                  <n-button
+                    v-if="kbIndexMissing"
+                    size="tiny"
+                    type="primary"
+                    secondary
+                    :disabled="kbSessionRunning"
+                    :title="$t('kb.action.initTip')"
+                    @click="runKbAction('kb.init.prompt')"
+                  >{{ $t('kb.action.init') }}</n-button>
+                  <template v-if="!kbIndexMissing">
+                    <n-button
+                      size="tiny"
+                      secondary
+                      :disabled="kbSessionRunning"
+                      :title="$t('kb.action.ingestTip')"
+                      @click="runKbAction('kb.prompt.ingest')"
+                    >{{ $t('kb.action.ingest') }}</n-button>
+                    <n-button
+                      size="tiny"
+                      secondary
+                      :disabled="kbSessionRunning"
+                      :title="$t('kb.action.auditTip')"
+                      @click="runKbAction('kb.prompt.audit')"
+                    >{{ $t('kb.action.audit') }}</n-button>
+                  </template>
+                  <span v-if="kbIndexMissing" class="kb-action-bar-hint">{{ $t('kb.action.needInit') }}</span>
+                  <span v-else-if="kbSessionRunning" class="kb-action-bar-hint">{{ $t('kb.action.running') }}</span>
+                </div>
                 <CommandMenu
                   :visible="commandMenuVisible"
                   :commands="filteredCommands"
@@ -205,7 +250,10 @@ Public License v3. See the LICENSE file for details.
                     'data-ally-prompt-input': 'true',
                   }"
                   :autosize="{ minRows: 2, maxRows: 10 }"
-                  :placeholder="$t('app.composer.placeholder')"
+                  :disabled="isKbTab(tab) && kbIndexMissing"
+                  :placeholder="isKbTab(tab)
+                    ? (kbIndexMissing ? $t('kb.composer.uninitPlaceholder') : $t('kb.composer.placeholder'))
+                    : $t('app.composer.placeholder')"
                   @update:value="(v) => { if (tab.sessionId) sessionPromptTexts[tab.sessionId] = v; }"
                   @keydown="handlePromptKeydown"
                   @input="handlePromptInput"
@@ -258,7 +306,7 @@ Public License v3. See the LICENSE file for details.
                  tree is a normal right-hand flex column, not an overflow escape. -->
             <template v-for="tab in workspaceTabs" :key="`explorer-${tab.id}`">
               <div
-                v-if="explorerVisibleFor(tab.id)"
+                v-if="explorerVisibleFor(tab.id) && !kbEmptyActive && !settingsActive && !statsActive && !gamesActive"
                 v-show="tab.id === activeWorkspaceId"
                 class="workspace-explorer-slot"
               >
@@ -267,27 +315,59 @@ Public License v3. See the LICENSE file for details.
                   :workspace="explorerWorkspaceFor(tab.id)"
                   :active="tab.id === activeWorkspaceId"
                   :initial-width="explorerTreeWidthFor(tab.id)"
+                  :hide-hidden="isKbTab(tab)"
+                  :title-text="isKbTab(tab) ? $t('kb.tabLabel') : ''"
+                  :empty-hint="isKbTab(tab) ? $t('kb.explorer.emptyHint') : ''"
                   @close="closeExplorerForTab(tab.id)"
                   @tree-width-change="(w) => onExplorerTreeWidthChange(tab.id, w)"
                 />
               </div>
             </template>
 
+            <!-- KB mode with no configured root: guidance card replaces the
+                 chat workbench (which is v-show hidden for this state). -->
+            <div v-if="kbEmptyActive" class="kb-empty-state">
+              <div class="kb-empty-card">
+                <div class="kb-empty-title">{{ $t('kb.empty.title') }}</div>
+                <p class="kb-empty-desc">{{ $t('kb.empty.desc') }}</p>
+                <n-button type="primary" :loading="kbPicking" @click="pickKbRootFromEmptyState">
+                  {{ $t('kb.empty.pick') }}
+                </n-button>
+              </div>
+            </div>
+
+            <!-- Settings page: the modal was replaced by this inline container
+                 on the right of the mode sider. v-show keeps in-page state
+                 (tab, scroll, unsaved draft edits) across mode switches. -->
+            <div v-show="settingsActive" class="settings-page-container">
+              <SettingsModal
+                :visible="settingsActive"
+                :initial-page="settingsPage"
+                :config-draft="configDraft"
+                :check-update-result="checkUpdateResult"
+                @close="closeSettings"
+                @save="onSettingsSave"
+                @skills-changed="onSkillsChanged"
+                @mcp-saved="onMcpSaved"
+                @background-changed="onBackgroundChanged"
+                @check-update="onCheckUpdate"
+              />
+            </div>
+
+            <!-- Token stats page: v-show keeps loaded stats across switches. -->
+            <div v-show="statsActive" class="settings-page-container">
+              <TokenStatsModal :show="statsActive" @close="closeStats" />
+            </div>
+
+            <!-- Games page (协作休息区): v-show keeps the component mounted so
+                 an active room/connection survives switching to other modes
+                 (unmounting would stop the server and close the room). -->
+            <div v-show="gamesActive" class="settings-page-container">
+              <GamePanel :show="gamesActive" @close="closeGames" />
+            </div>
+
             </div>
           </n-layout>
-          <SettingsModal
-            :visible="configVisible"
-            :initial-page="settingsPage"
-            :config-draft="configDraft"
-            :check-update-result="checkUpdateResult"
-            @close="configVisible = false"
-            @closed="focusPromptInput"
-            @save="onSettingsSave"
-            @skills-changed="onSkillsChanged"
-            @mcp-saved="onMcpSaved"
-            @background-changed="onBackgroundChanged"
-            @check-update="onCheckUpdate"
-          />
           <TaskCenterPanel
             :show="taskCenterVisible"
             :tasks="scheduledTasks"
@@ -301,12 +381,6 @@ Public License v3. See the LICENSE file for details.
             @delete-task="deleteScheduledTask"
             @stop-service="stopManagedService"
           />
-          <TokenStatsModal
-            v-if="tokenStatsVisible"
-            :show="tokenStatsVisible"
-            @close="tokenStatsVisible = false"
-          />
-          <GamePanel :show="gamesVisible" @close="gamesVisible = false" />
           <RenderBoundary :label="$t('app.gitChanges')"><GitDiffModal v-model:show="gitDiffVisible" :git-status="gitStatus" :workspace="config.workspace" /></RenderBoundary>
 
           <n-modal v-model:show="updateModalVisible" preset="card" :title="$t('app.update.title')" class="update-modal" :mask-closable="false" :close-on-esc="false" :show-close="!isUpdateBusy">
@@ -402,10 +476,12 @@ import {
   GetConfig,
   GetContextBreakdown,
   GetWorkspaceTokenUsage,
+  ListFiles,
   ResetWorkspaceTokenUsage,
   GetGitStatus,
   SaveConfig,
   SelectWorkspace,
+  SelectKnowledgeBaseRoot,
   StartChat,
   InjectRunMessage,
   CompactSession,
@@ -445,6 +521,7 @@ import { Application, Browser, Events, Window } from '@wailsio/runtime';
 import CloseOutlined from '@vicons/antd/CloseOutlined';
 import PlusOutlined from '@vicons/antd/PlusOutlined';
 import ReloadOutlined from '@vicons/antd/ReloadOutlined';
+import FolderOpenOutlined from '@vicons/antd/FolderOpenOutlined';
 import AllyWordmark from './components/AllyWordmark.vue';
 import ComposerInfoBar from './components/ComposerInfoBar.vue';
 import MessageAttachments from './components/MessageAttachments.vue';
@@ -456,6 +533,7 @@ import SubagentInlineCard from './components/SubagentInlineCard.vue';
 import WelcomeMessage from './components/WelcomeMessage.vue';
 import ToolCallCard from './components/ToolCallCard.vue';
 import AppHeader from './components/AppHeader.vue';
+import ModeSider from './components/ModeSider.vue';
 import CommandMenu from './components/CommandMenu.vue';
 import FileMentionMenu from './components/FileMentionMenu.vue';
 import SettingsModal from './components/SettingsModal.vue';
@@ -493,8 +571,6 @@ import { unwrapWailsEvent } from './utils/wailsEvent.mjs';
 
 const GitDiffModal = defineAsyncComponent(() => import('./components/GitDiffModal.vue'));
 const WorkspaceExplorer = defineAsyncComponent(() => import('./components/WorkspaceExplorer.vue'));
-const gamesVisible = ref(false);
-
 onErrorCaptured((err, _instance, info) => {
   console.error('[ui:error]', info, err);
   return false;
@@ -1312,18 +1388,22 @@ const sessionsSelectedIndex = ref(0);
 const sessionsScrollRef = ref(null);
 const commandHistory = ref([]);
 const commandHistoryIndex = ref(-1);
-const configVisible = ref(false);
-const focusedToolIdsBySession = reactive({});
-const workspaceTabs = ref([]);
+const settingsPage = ref('general');
+// Settings & token stats render inline in the main area (mode === 'settings'
+// / 'stats'); configVisible is derived so existing watchers/guards keep
+// working. preOverlayMode is the mode to return to when either page closes.
+const preOverlayMode = ref('chat');
+const configVisible = computed(() => mode.value === 'settings');
+
+function openSettings(page = 'general') {
+  settingsPage.value = page;
+  if (mode.value !== 'settings') preOverlayMode.value = mode.value;
+  mode.value = 'settings';
+}
+const focusedToolIdsBySession = reactive({});const workspaceTabs = ref([]);
 const activeWorkspaceId = ref('');
 const extraRoots = ref([]);
 const workspaceHistory = ref(loadWorkspaceHistory());
-const settingsPage = ref('general');
-// 打开设置弹窗并定位到指定页：设置齿轮进 general，管理模型等入口进 models
-function openSettings(page = 'general') {
-  settingsPage.value = page;
-  configVisible.value = true;
-}
 const showSkillsPanel = ref(false);
 const todosBySession = reactive({});
 const todoRevisionsBySession = reactive({});
@@ -1340,7 +1420,6 @@ const availableTools = ref([]);
 const scheduledTasks = ref([]);
 const services = ref([]);
 const taskCenterVisible = ref(false);
-const tokenStatsVisible = ref(false);
 // Workspace explorer 状态按 Tab 独立保存：切换 Tab 时不会重置或取消任何
 // 每个 Tab 看到自己工作区的目录树。已经打开过的 Tab
 // 会保留一个常驻组件实例（v-show 切换），编辑草稿不因切 Tab 丢失。
@@ -1749,6 +1828,218 @@ const currentWorkspaceSessions = computed(() => {
     workspaceHistoryDedupeKey(sessionWorkspacePath(session)) === workspaceKey
   ));
 });
+
+// ── Knowledge base mode ──
+// The KB is a hidden workspace tab (kind:'kb') that never appears in the
+// header tab list. Mode switching only repoints activeWorkspaceId, so every
+// per-tab chat mechanism (ChatMessages instance, composer input, session
+// menu, plan panel, explorer, footer stats) is reused as-is, and state
+// isolation comes from the same per-session keying that separates chat tabs.
+const mode = ref('chat'); // 'chat' | 'kb'
+const lastChatWorkspaceId = ref(null);
+
+function isKbTab(tab) {
+  return tab?.kind === 'kb';
+}
+
+// True when a workspace path IS the configured KB root. Used to shape the
+// welcome message and KB-specific behavior at build time.
+function isKnowledgeBasePath(path) {
+  const value = String(path || '').trim();
+  if (!value || !config.kbRoot) return false;
+  return workspaceHistoryDedupeKey(value) === workspaceHistoryDedupeKey(config.kbRoot);
+}
+
+function kbTab() {
+  return workspaceTabs.value.find((tab) => isKbTab(tab)) || null;
+}
+
+const chatTabsWithStatus = computed(() => workspaceTabsWithStatus.value.filter((tab) => !isKbTab(tab)));
+
+// Settings page state (rendered inline in the main area, see configVisible).
+const settingsActive = computed(() => mode.value === 'settings');
+// Token-stats page state (inline sibling of the settings page).
+const statsActive = computed(() => mode.value === 'stats');
+// Games page state (协作休息区, inline sibling of the settings page).
+const gamesActive = computed(() => mode.value === 'games');
+
+function closeSettings() {
+  if (!settingsActive.value) return;
+  switchMode(['chat', 'kb'].includes(preOverlayMode.value) ? preOverlayMode.value : 'chat');
+  nextTick(() => focusPromptInput());
+}
+
+function closeStats() {
+  if (!statsActive.value) return;
+  switchMode(['chat', 'kb', 'settings'].includes(preOverlayMode.value) ? preOverlayMode.value : 'chat');
+  nextTick(() => focusPromptInput());
+}
+
+function closeGames() {
+  if (!gamesActive.value) return;
+  switchMode(['chat', 'kb', 'settings', 'stats'].includes(preOverlayMode.value) ? preOverlayMode.value : 'chat');
+  nextTick(() => focusPromptInput());
+}
+
+// KB mode with nothing to show yet: no configured root (or the tab could not
+// be created). The chat workbench is hidden and the guidance card takes over.
+const kbEmptyActive = computed(() => mode.value === 'kb' && !kbTab());
+
+const kbSessionRunning = computed(() => {
+  const tab = kbTab();
+  const session = tab ? sessions.value.find((item) => item.id === tab.sessionId) : null;
+  return !!(session?.isRunning || session?.runId);
+});
+
+// Index-file presence in the KB root. Checked on KB entry and re-checked when
+// a KB run finishes (initialization creates index.md), driving the
+// "initialize knowledge base" banner.
+const kbIndexMissing = ref(false);
+
+async function refreshKbIndexState() {
+  const root = String(config.kbRoot || '');
+  if (!root || !kbTab()) {
+    kbIndexMissing.value = false;
+    return;
+  }
+  try {
+    const listing = await ListFiles({ workspace: root, path: '', maxDepth: 1, limit: 500 });
+    const entries = Array.isArray(listing?.entries) ? listing.entries : [];
+    const names = entries.map((entry) => String(entry?.name || '').toLowerCase());
+    kbIndexMissing.value = !names.includes('index.md');
+  } catch (err) {
+    // Unreadable root: never nag with the banner; the model surfaces the
+    // actual error if it cannot work there either.
+    kbIndexMissing.value = false;
+  }
+}
+
+watch(kbSessionRunning, (running) => {
+  if (!running) refreshKbIndexState();
+});
+
+// True when the active workspace tab is the hidden KB tab: gates the KB
+// action bar above the composer.
+const activeTabIsKb = computed(() => (
+  isKbTab(workspaceTabs.value.find((tab) => tab.id === activeWorkspaceId.value))
+));
+
+// Canned KB actions on the toolbar above the composer: drop the prompt into
+// the KB composer and send it through the normal sendPrompt path (streaming,
+// tool cards, plan all work unchanged). Queuing is intentionally not offered
+// while a KB run is live — the buttons disable instead.
+function runKbAction(promptKey) {
+  const session = activeSession.value;
+  if (!session || session.isRunning) return;
+  promptText.value = t(promptKey);
+  sendPrompt();
+}
+
+function ensureKbTab() {
+  if (!config.kbRoot) return null;
+  let tab = kbTab();
+  if (tab) {
+    if (workspaceHistoryDedupeKey(tab.path) === workspaceHistoryDedupeKey(config.kbRoot)) {
+      return tab;
+    }
+    // KB root changed in Settings: drop the stale tab and rebuild.
+    closeWorkspaceTab(tab.id);
+    tab = kbTab();
+    if (tab) {
+      // Close was refused (the KB tab is the only one left): repoint it to
+      // the new root with a fresh linked session instead.
+      tab.path = config.kbRoot;
+      tab.label = t('kb.tabLabel');
+      const session = createReplacementSession(t('kb.tabLabel'), config.kbRoot);
+      sessions.value.unshift(session);
+      tab.sessionId = session.id;
+      if (activeWorkspaceId.value === tab.id) activeSessionId.value = session.id;
+      return tab;
+    }
+  }
+  tab = createWorkspaceTab(config.kbRoot);
+  tab.kind = 'kb';
+  tab.label = t('kb.tabLabel');
+  workspaceTabs.value.push(tab);
+  return tab;
+}
+
+async function switchMode(next) {
+  if (next === mode.value) return;
+  if (next === 'settings' || next === 'stats' || next === 'games') {
+    if (mode.value !== 'settings' && mode.value !== 'stats' && mode.value !== 'games') {
+      preOverlayMode.value = mode.value;
+    }
+    mode.value = next;
+    return;
+  }
+  if (mode.value === 'settings' || mode.value === 'stats' || mode.value === 'games') {
+    // Sider jump straight from an overlay page to chat/kb.
+    mode.value = next;
+  }
+  if (next === 'kb') {
+    mode.value = 'kb';
+    const tab = ensureKbTab();
+    if (tab && activeWorkspaceId.value !== tab.id) {
+      await switchWorkspaceTab(tab.id);
+    }
+    refreshKbIndexState();
+    return;
+  }
+  mode.value = 'chat';
+  const chatTabs = workspaceTabs.value.filter((tab) => !isKbTab(tab));
+  const target = chatTabs.find((tab) => tab.id === lastChatWorkspaceId.value)
+    || chatTabs[chatTabs.length - 1];
+  if (target) {
+    if (activeWorkspaceId.value !== target.id) await switchWorkspaceTab(target.id);
+    return;
+  }
+  // No chat tab remains: rebuild one from the persisted chat workspace
+  // without a dialog, so a cancelled dialog cannot strand chat mode on the
+  // KB tab.
+  const tab = createWorkspaceTab(config.workspace || '');
+  workspaceTabs.value.push(tab);
+  await switchWorkspaceTab(tab.id);
+}
+
+const kbPicking = ref(false);
+
+// Empty-state entry: pick a KB root, persist it, and build the KB tab in
+// place so the guidance card hands over to the chat workbench directly.
+async function pickKbRootFromEmptyState() {
+  kbPicking.value = true;
+  try {
+    const selected = await SelectKnowledgeBaseRoot();
+    if (!selected) return;
+    config.kbRoot = selected;
+    configDraft.kbRoot = selected;
+    await saveWorkspaceConfig({ ...config });
+    const tab = ensureKbTab();
+    if (tab) await switchWorkspaceTab(tab.id);
+    refreshKbIndexState();
+  } catch (err) {
+    message.error(t('kb.empty.pickFailed', { error: err }));
+  } finally {
+    kbPicking.value = false;
+  }
+}
+
+// Header interactions (tab click / new tab / workspace history) are
+// chat-only by construction, so they always hand control back to chat mode.
+function onHeaderSwitchWorkspace(id) {
+  mode.value = 'chat';
+  switchWorkspaceTab(id);
+}
+
+function onHeaderAddWorkspace() {
+  mode.value = 'chat';
+  addWorkspaceTab();
+}
+
+function onHeaderHistorySelect(key) {
+  mode.value = 'chat';
+  onHistorySelect(key);
+}
 
 const latestUserPromptSummary = computed(() => latestPromptSummaryForSession(activeSession.value));
 const activeSessionRunning = computed(() => !!activeSession.value?.isRunning);
@@ -2484,6 +2775,23 @@ function welcomeGreeting() {
 }
 
 function buildWelcomeMessage(workspacePath = '') {
+  // Knowledge-base sessions skip the avatar / info table / greeting chrome:
+  // the KB page has its own identity header (kb-hero), so the welcome stays
+  // a single plain line.
+  if (isKnowledgeBasePath(workspacePath)) {
+    const welcome = {
+      title: t('kb.hero.title'),
+      rows: [],
+      greeting: t('kb.welcome.greeting'),
+      kb: true,
+    };
+    return {
+      role: 'assistant',
+      content: t('kb.welcome.greeting'),
+      system: true,
+      welcome,
+    };
+  }
   const skillCount = availableSkills.value.length;
   const rows = [];
   if (workspacePath !== null) {
@@ -2585,7 +2893,8 @@ async function applySessionWorkspace(session) {
   }
 
   const tab = bindSessionToActiveWorkspaceTab(session);
-  if (tab) {
+  const tabIsKb = isKbTab(tab);
+  if (tab && !tabIsKb) {
     if (workspace) {
       tab.path = workspace;
       tab.label = workspaceLabel(workspace);
@@ -2601,12 +2910,16 @@ async function applySessionWorkspace(session) {
   }
 
   prepareFooterStatsForTarget(activeWorkspaceId.value, workspace);
-  config.workspace = workspace;
-  configDraft.workspace = workspace;
-  addToHistory(workspace);
+  // KB sessions never claim the persisted chat workspace or the workspace
+  // history list: they live entirely under the configured KB root.
+  if (!tabIsKb) {
+    config.workspace = workspace;
+    configDraft.workspace = workspace;
+    addToHistory(workspace);
+  }
   loadPromptHistory(workspace);
   try {
-    await saveWorkspaceConfig({ ...config });
+    if (!tabIsKb) await saveWorkspaceConfig({ ...config });
     await refreshFooterStats({
       tabId: activeWorkspaceId.value,
       sessionId: session.id,
@@ -2775,8 +3088,15 @@ async function closeWorkspaceTab(id) {
   }
   saveSessions();
   if (activeWorkspaceId.value === id) {
-    const newIdx = Math.min(idx, workspaceTabs.value.length - 1);
-    switchWorkspaceTab(workspaceTabs.value[newIdx].id);
+    const remaining = workspaceTabs.value;
+    // Prefer handing control back to a chat tab; only fall back to the KB
+    // tab (flipping mode with it) when no chat tab remains.
+    const fallback = remaining.find((tab) => !isKbTab(tab))
+      || remaining[Math.min(idx, remaining.length - 1)];
+    if (fallback) {
+      if (isKbTab(fallback)) mode.value = 'kb';
+      switchWorkspaceTab(fallback.id);
+    }
   }
 }
 
@@ -2785,18 +3105,25 @@ async function closeWorkspaceTab(id) {
 async function switchWorkspaceTab(id) {
   const tab = workspaceTabs.value.find((t) => t.id === id);
   if (!tab) return;
+  const tabIsKb = isKbTab(tab);
   if (!workspaceExplorerByTab.has(id)) workspaceExplorerByTab.set(id, explorerDefaultForPath(tab.path));
   const switchVersion = ++workspaceSwitchVersion;
   const linkedSession = ensureWorkspaceTabSession(tab);
   saveSessions();
   activeWorkspaceId.value = id;
+  if (!tabIsKb) lastChatWorkspaceId.value = id;
   // Reset transient composer state so it does not bleed into the switched-to
   // workspace (a stale command menu or arrow-history cursor from the previous
   // session would otherwise persist across the switch).
   commandMenuVisible.value = false;
   commandHistoryIndex.value = -1;
-  config.workspace = tab.path;
-  configDraft.workspace = tab.path;
+  // The hidden KB tab never owns the persisted chat workspace: config.json's
+  // workspace must keep pointing at the last chat workspace so a restart
+  // restores chat mode, and the workspace history stays chat-only.
+  if (!tabIsKb) {
+    config.workspace = tab.path;
+    configDraft.workspace = tab.path;
+  }
   prepareFooterStatsForTarget(id, tab.path);
   // 切换 Tab 时恢复该 Tab 关联 session 的 extraRoots
   if (linkedSession && Array.isArray(linkedSession.extraRoots)) {
@@ -2820,7 +3147,7 @@ async function switchWorkspaceTab(id) {
     rememberModelForTab(tab);
   }
   try {
-    await saveWorkspaceConfig({ ...config });
+    if (!tabIsKb) await saveWorkspaceConfig({ ...config });
   } catch (err) {
     if (workspaceSwitchVersion === switchVersion) {
       footerStatsLoading.value = false;
@@ -2862,19 +3189,21 @@ async function switchWorkspaceTab(id) {
 
 function syncConfigToActiveTab() {
   const tab = workspaceTabs.value.find((t) => t.id === activeWorkspaceId.value);
-  if (tab && config.workspace !== tab.path) {
+  // The hidden KB tab does not mirror the persisted chat workspace.
+  if (tab && !isKbTab(tab) && config.workspace !== tab.path) {
     tab.path = config.workspace || '';
     tab.label = workspaceLabel(tab.path);
   }
   const session = activeSession.value;
-  if (session && config.workspace) session.workspace = config.workspace;
+  if (session && config.workspace && !isKbTab(tab)) session.workspace = config.workspace;
 }
 
 function newSession(title) {
   saveSessions();
   const id = crypto.randomUUID ? crypto.randomUUID() : `s-${Date.now()}-${Math.random()}`;
   const now = Date.now();
-  const workspace = config.workspace || '';
+  const activeTab = workspaceTabs.value.find((item) => item.id === activeWorkspaceId.value) || null;
+  const workspace = (isKbTab(activeTab) ? activeTab.path : config.workspace) || '';
   const sessionTitle = title || (workspace ? workspaceLabel(workspace) : t('app.sessions.new'));
   const session = { id, title: sessionTitle, workspace, extraRoots: [], messages: [], messagesLoaded: true, runId: '', isRunning: false, createdAt: now, updatedAt: now };
   sessions.value.unshift(session);
@@ -4497,9 +4826,22 @@ async function sendQuickMessage(sessionId, key) {
 async function sendPrompt() {
   const session = activeSession.value;
   if (!session) return;
+  // An uninitialized knowledge base is forced through initialization: block
+  // every send path (the input is disabled; this also covers quick messages
+  // and suggestion chips, which bypass the composer input).
+  const activeTabForSend = workspaceTabs.value.find((item) => item.id === activeWorkspaceId.value) || null;
+  if (isKbTab(activeTabForSend) && kbIndexMissing.value) {
+    message.warning(t('kb.action.needInit'));
+    return;
+  }
   const text = promptText.value.trim();
   const attachments = (pendingAttachmentsBySession[session.id] || []).map(att => ({ ...att }));
   if (!text && attachments.length === 0) return;
+
+  // The workspace this prompt runs against: the hidden KB tab pins its own
+  // root, every other session follows the persisted chat workspace.
+  const activeTab = workspaceTabs.value.find((item) => item.id === activeWorkspaceId.value) || null;
+  const sessionWorkspace = (isKbTab(activeTab) ? activeTab.path : config.workspace) || '';
 
   // Resolve command: display label in UI, send expanded text to backend
   const matchedCommand = text.startsWith('/')
@@ -4547,7 +4889,7 @@ async function sendPrompt() {
     }
   }
 
-  if (!config.workspace) {
+  if (!sessionWorkspace) {
     const workspace = await chooseWorkspace();
     if (!workspace) {
       message.warning(t('app.workspace.required'));
@@ -4580,7 +4922,7 @@ async function sendPrompt() {
   }
   // runId 缺失但仍在运行是异常中间态(启动失败/事件未达),禁止重复启动新 run。
   if (session.isRunning) return;
-  if (config.workspace) session.workspace = config.workspace;
+  if (sessionWorkspace) session.workspace = sessionWorkspace;
   const userMessage = { role: 'user', content: displayText, attachments, done: true };
   session.messages.push(userMessage);
   session.updatedAt = Date.now();
@@ -4603,7 +4945,7 @@ async function sendPrompt() {
       attachments: attachmentsForModel(attachments),
     });
     markSessionRunning(session);
-    await StartChat({ sessionId: session.id, message: sendText, messages: history, config: { ...config, extraRoots: session.extraRoots || [] } });
+    await StartChat({ sessionId: session.id, message: sendText, messages: history, config: { ...config, extraRoots: session.extraRoots || [], workspace: sessionWorkspace || config.workspace } });
   } catch (err) {
     markTransientTurn(session);
     session.runId = '';
@@ -4682,6 +5024,7 @@ async function chooseWorkspace() {
 
 async function onSettingsSave(draftData, silent = false) {
   const previousWorkspace = String(config.workspace || '');
+  const previousKbRoot = String(config.kbRoot || '');
   assignConfig(config, draftData);
   assignConfig(configDraft, draftData);
   applyFontSizes(config);
@@ -4690,6 +5033,17 @@ async function onSettingsSave(draftData, silent = false) {
   try {
     await saveWorkspaceConfig({ ...configDraft });
     syncConfigToActiveTab();
+    // A changed KB root invalidates the hidden KB tab: rebuild it (or drop
+    // it when cleared) so the KB mode follows the newly configured root.
+    if (previousKbRoot !== String(config.kbRoot || '')) {
+      if (kbTab()) {
+        closeWorkspaceTab(kbTab().id);
+      }
+      if (mode.value === 'kb') {
+        const fresh = ensureKbTab();
+        if (fresh) await switchWorkspaceTab(fresh.id);
+      }
+    }
     // Settings can change the active model without going through the composer
     // dropdown, so keep the current Tab's selection in sync as well.
     rememberActiveTabModel();
@@ -7370,7 +7724,8 @@ watch(sessionsSelectedIndex, () => {
 });
 
 function switchWorkspaceByOffset(offset) {
-  const tabs = workspaceTabs.value;
+  // Header tabs are chat tabs only; the hidden KB tab is skipped.
+  const tabs = workspaceTabs.value.filter((tab) => !isKbTab(tab));
   if (tabs.length <= 1) return;
   const current = tabs.findIndex((tab) => tab.id === activeWorkspaceId.value);
   if (current === -1) return;
@@ -7420,7 +7775,16 @@ function handleGlobalKeydown(event) {
     event.stopPropagation();
     return;
   }
-  if (event.key === 'Escape' && (configVisible.value || taskCenterVisible.value || gitDiffVisible.value)) {
+  if (event.key === 'Escape' && (settingsActive.value || statsActive.value || gamesActive.value)) {
+    // Settings / token stats / games are inline pages now: ESC navigates back.
+    event.preventDefault();
+    event.stopPropagation();
+    if (gamesActive.value) closeGames();
+    else if (statsActive.value) closeStats();
+    else closeSettings();
+    return;
+  }
+  if (event.key === 'Escape' && (taskCenterVisible.value || gitDiffVisible.value)) {
     // Let Naive UI modals handle their own ESC (nested stack); do not stop the run.
     return;
   }
@@ -7431,18 +7795,22 @@ function handleGlobalKeydown(event) {
     return;
   }
   if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
+  const activeTabForKeydown = workspaceTabs.value.find((tab) => tab.id === activeWorkspaceId.value) || null;
   if (event.key.toLowerCase() === 'w') {
     event.preventDefault();
-    closeWorkspaceTab(activeWorkspaceId.value);
+    // The KB tab has no header close button; Ctrl+W must not close it either.
+    if (!isKbTab(activeTabForKeydown)) closeWorkspaceTab(activeWorkspaceId.value);
     return;
   }
   if (event.key.toLowerCase() === 't') {
     event.preventDefault();
-    // New workspace tab reusing the current tab's workspace path
-    const currentTab = workspaceTabs.value.find((tab) => tab.id === activeWorkspaceId.value);
-    const tab = createWorkspaceTab(currentTab?.path || '');
+    // New workspace tab reusing the current tab's workspace path (the KB
+    // tab never seeds a new chat tab with the KB root).
+    const basePath = isKbTab(activeTabForKeydown) ? config.workspace : activeTabForKeydown?.path;
+    const tab = createWorkspaceTab(basePath || '');
     workspaceTabs.value.push(tab);
     switchWorkspaceTab(tab.id);
+    mode.value = 'chat';
     return;
   }
   if (event.key.toLowerCase() === 'n') {

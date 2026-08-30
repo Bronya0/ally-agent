@@ -29,6 +29,7 @@
 | 工具卡动词 "Used X" 问题 | `frontend/src/utils/toolVerb.mjs`（TOOL_VERBS 表） |
 | 子代理 | `internal/app/orch_subagent.go` + `SubagentInlineCard.vue` |
 | 计划任务 / 后台服务 | `orch_scheduler.go` / `orch_services.go` + `TaskCenterPanel.vue` |
+| 知识库模式（KB 提示词 / sources/ 只读） | `internal/app/orch_kb.go` + `ModeSider.vue` + `App.vue`（`kind:'kb'` 隐藏 tab） |
 | 游戏休息区 | `internal/game/service.go` + `frontend/src/games/` |
 
 ## 核心调用流（简要）
@@ -86,7 +87,7 @@
 
 - biz_config.go — 配置域：默认值、mergeConfig 覆盖合并、key 池归一化与故障转移配置、代理网络配置、模型连通测试；关键: mergeConfig, SaveConfig, effectiveConfig, TestModelConnection, normalizeAPIKeys
 - biz_context.go — 请求消息组装与上下文核算：buildMessages（系统提示+历史+当前消息+附件）、plan/todo 状态机、ContextBreakdown token 估算与静态缓存；关键: buildMessages, handleTodoList, getContextBreakdown, appendUserMessageWithAttachments
-- biz_prompt.go — 系统提示词管线：buildSystemPromptParts、优先级声明、共享编辑规则、skill 元数据、全局记忆索引、项目 lessons（.ally/lessons.md）上下文；关键: buildSystemPromptParts, buildSkillListingMeta, buildMemoryIndexContext, sharedEditRules
+- biz_prompt.go — 系统提示词管线：buildSystemPromptParts、优先级声明、共享编辑规则、skill 元数据、全局记忆索引、项目 lessons（.ally/lessons.md）上下文、知识库模式契约段（workspace==KBRoot 时注入）；关键: buildSystemPromptParts, buildSkillListingMeta, buildMemoryIndexContext, sharedEditRules, knowledgeBasePromptPart
 - biz_project_context.go — AGENTS/CLAUDE 项目指令加载（用户级+工作区级，去重拼接）、CODEGRAPH.md 提示片段、聊天背景图文件管理；关键: loadAgentsMd, loadCodeGraph, buildCodeGraphPromptPart
 - biz_sessions.go — 会话持久化三类文件（`sessions/index.json` + 会话快照 gz + `histories/<id>.json.gz`）：原子写、索引降级重建与最旧淘汰、历史裁剪（token 预算）、sanitize 修复（dangling tool_calls / 截断 JSON / 重复函数名）；关键: ListSessions, saveHistory, sanitizeHistoryMessages, repairDanglingToolCalls, trimSavedHistory, TruncateSessionHistory
 - biz_workspace.go — 工作区文件列表与 workspace map：list_files、按会话冻结 map（前缀字节稳定保 prompt cache）、路径搜索索引（rg/walk 双路径+TTL 缓存）、根 .gitignore 匹配；关键: listFilesWithConfig, sessionWorkspaceMap, searchWorkspacePaths
@@ -137,8 +138,10 @@
 - orch_scheduler.go — 计划任务调度管理：cron/interval/once 解析校验、全局串行执行、scheduled:* 事件；关键: scheduledTaskManager, executeScheduledTaskTool, safeTrigger
 - orch_subagent.go — 子代理执行循环：步数预算（默认 25，上限 1000）、耗尽强制汇报轮、独立系统提示与工具排除集（无 ask/subagent/plan/skill/scheduled_task）；关键: executeDelegate, subagentSystemPrompt, subagentTools, forceSubagentFinalReport
 - orch_memory.go — 全局记忆工具薄封装（注入 memory.Runtime，逻辑在 internal/tools/memory）；关键: memoriesRuntime, listMemories
+- orch_kb.go — 知识库运行策略：KB 模式判定（SamePath(workspace, KBRoot)）、runChat 把 sources/ deny roots 挂上 run ctx（子代理经 ctx 继承）、executeTool 对 edit/create/delete/http_request saveTo 与 command 字面写目标做 sources/ 只读拦截（E_KB_SOURCES_READONLY）；关键: isKnowledgeBaseWorkspace, kbDenyRootsForConfig, kbDenyCheckPaths, checkKBDenyTargets
 测试:
 - orch_test.go — 测试跨编排集成：批次冲突/去重、命令安全、edit 全契约、read 预览、grep 统计、服务与调度任务（百余用例）
+- orch_kb_test.go — 测试 KB 模式判定、deny roots 组合、经 executeTool 的 create/edit/delete/command 拦截与放行、KBRoot 配置合并/清空、KB 提示词条件注入
 - orch_bom_test.go — 测试 BOM 端到端保留与 stale version 拒绝
 - orch_json_repair_test.go — 测试工具参数 JSON 修复经 executeTool 生效
 - orch_read_image_test.go — 测试图片读取 MIME/DataURL/历史清洗
@@ -185,7 +188,7 @@
 ## frontend/src/ — 入口与全局
 
 - main.js — Vue 应用入口：createApp、注册 $t、initTheme 后挂载
-- App.vue — **前端唯一主组件**（~7900 行）：全局状态（无 Pinia）、Wails 事件路由（bindRuntimeEvents 按 sessionId/runId 分发）、工作区 Tab 管理、`run:stream` rAF 合帧缓冲、tool:update 120ms 缓冲、Markdown/Mermaid 渲染与 LRU 缓存、/命令系统、附件、会话持久化、任务中心、版本更新、全局快捷键；关键: bindRuntimeEvents, queueStreamDelta/flushStreamBuffer, addWorkspaceTab/closeWorkspaceTab, markdownRenderCache
+- App.vue — **前端唯一主组件**（~7900 行）：全局状态（无 Pinia）、Wails 事件路由（bindRuntimeEvents 按 sessionId/runId 分发）、工作区 Tab 管理、知识库模式（`kind:'kb'` 隐藏 workspace tab + ModeSider 切换，sendPrompt/switchWorkspaceTab/键盘守卫均 KB 感知，config.workspace 永远只存聊天工作区）、`run:stream` rAF 合帧缓冲、tool:update 120ms 缓冲、Markdown/Mermaid 渲染与 LRU 缓存、/命令系统、附件、会话持久化、任务中心、版本更新、全局快捷键；关键: bindRuntimeEvents, queueStreamDelta/flushStreamBuffer, addWorkspaceTab/closeWorkspaceTab, ensureKbTab/switchMode, markdownRenderCache
 - i18n.mjs — zh-CN/en-US 双语翻译源与语言工具（唯一 UI 文案来源）；关键: LOCALE_ZH_CN/LOCALE_EN_US, detectLocale, t, naiveLocale
 - style.css — 全局主样式（~3700 行）：字体、CSS 变量（字号/主题 accent 色系）
 - app.css — Wails 模板遗留样式，未被引用（残留）
@@ -200,6 +203,7 @@
 ## frontend/src/components/（31 个 Vue 组件）
 
 - AppHeader.vue — 顶部标题栏：工作区 Tab 拖拽排序（Pointer Events 模拟，非原生 DnD）、历史下拉、更新按钮、窗口控制；`--wails-draggable` 拖拽区；关键: onWorkspacePointerDown
+- ModeSider.vue — 左侧模式窄条：对话 / 知识库两个图标按钮（KB 运行中小圆点指示），切换即改 activeWorkspaceId 指向；关键: switch emit
 - ChatMessages.vue — 聊天消息列表：v-memo 渲染缓存、autoFollow 自动滚动（程序化滚动落点匹配防误关）、跳底按钮、长消息折叠；关键: handleScroll, messageRenderMemo
 - ComposerInfoBar.vue — 输入区信息条：模型分组下拉（按使用频次排序）、reasoning effort、git 徽标、上下文明细+compact、任务中心/文件树开关、会话导出；关键: modelGroups, exportFullSession
 - SettingsModal.vue — 设置中心（General/Models/Skills/MCP/Network/About）：模型增删改+目录预设懒加载+连通测试+导入导出、MCP JSON/表单双向同步、代理检测与测试；关键: ensureModelCatalog, syncFormToJson, testModelConnection

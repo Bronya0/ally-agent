@@ -509,7 +509,7 @@ Major UI regions: header (controlled Naive UI workspace tabs, running indicators
 
 Settings pages:
 
-- General: custom prompt, launch-at-login switch; the retained close-to-tray setting is currently hidden
+- General: custom prompt, knowledge-base root directory picker (`SelectKnowledgeBaseRoot` binding), launch-at-login switch; the retained close-to-tray setting is currently hidden
 - Models: provider/model presets and active model selection
 - Skills: enable/disable discovered skills; persisted through `disabledSkills`
 - MCP: raw MCP config editor and server status
@@ -520,6 +520,13 @@ Settings pages:
 The composer task-center button opens `TaskCenterPanel` (controlled tabs separate temporary scheduled tasks from managed background services; bounded previews; full output/service buffers open in a large scrollable modal). The composer statistics button opens `TokenStatsModal`, which queries `GetTokenStats()` on every open and renders dependency-free SVG charts.
 
 Runtime events are registered through Wails `Events.On()` and routed by `sessionId` and `runId`.
+
+Knowledge-base (KB) mode: a left `ModeSider` rail switches between chat and the knowledge base. The KB is a **hidden workspace tab** (`kind:'kb'`, path = the user-configured `kbRoot` in `ConfigState`) that never appears in the header tab list; switching modes only repoints `activeWorkspaceId`, so every per-tab chat mechanism (ChatMessages instance, composer input, session menu, plan panel, explorer, footer stats) is reused as-is and chat/KB state isolation comes from the same per-session keying that separates chat tabs. Invariants to keep when touching workspace-tab code:
+
+- `config.workspace` (persisted to config.json) always holds the last **chat** workspace: KB tab switches skip the `config.workspace` write, `saveWorkspaceConfig`, and workspace-history entries, so a restart always restores chat mode.
+- Header tab list, tab drag/close/new, and `Ctrl/Cmd+Left/Right` operate on chat tabs only (`chatTabsWithStatus` filters out `kind:'kb'`); `Ctrl+W` never closes the KB tab; `Ctrl/Cmd+T` never seeds a chat tab with the KB root.
+- `sendPrompt` pins a KB tab's `StartChat` config overlay workspace to the tab path, so a KB run's tool sandbox and system prompt (backend KB mode detection: `SamePath(cfg.Workspace, cfg.KBRoot)`) follow the KB root while the persisted chat workspace stays untouched.
+- With no `kbRoot` configured, KB mode shows a guidance card (`kb-empty-state`) instead of the chat workbench; picking a directory there persists `kbRoot` and builds the KB tab in place.
 
 Frontend-specific rendering:
 
@@ -689,6 +696,7 @@ Example MCP config:
 ## Security And Safety
 
 - Workspace write operations are confined to the configured workspace, except `~/.ally_agent` is also allowed for Ally global config and memories.
+- Knowledge-base runs (workspace resolving to the configured `kbRoot`) enforce a read-only `sources/` subtree for model tools: `edit`/`create`/`delete`/`http_request` saveTo and `command` literal write targets under the KB root's `sources/` are rejected with `E_KB_SOURCES_READONLY` (`orch_kb.go` deny roots ride on the run context and are inherited by sub-agents). UI-initiated file operations do not carry the run context and stay unaffected. The `knowledgeBasePromptPart` in `biz_prompt.go` documents the same boundary to the model; the executor guarantees it.
 - Read-only local tools may inspect explicit absolute paths outside the workspace subject to safety checks.
 - `command` keeps cwd inside the workspace, permits outside reads, null-device redirection, and creation of new outside paths, but refuses commands that may modify/delete existing outside paths or perform explicit deletion.
 - Command safety uses `mvdan.cc/sh/v3`'s Bash AST in `internal/tools/command` for shell invocations, nested commands, command substitutions, heredocs, and redirections; a narrow legacy scanner remains only for parser-rejected/incomplete foreign-shell fragments. Quoted/search data is not treated as executable syntax, managed deletions are allowed only when every deletion in the compound command is managed, and source/destination-aware mutation analysis checks explicit write targets rather than every referenced path. Heredoc bodies and here-strings are skipped as data (quoted delimiters are fully literal; unquoted bodies still have command substitutions inspected).

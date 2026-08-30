@@ -391,6 +391,11 @@ type ConfigState struct {
 	Model               string        `json:"model"`
 	Workspace           string        `json:"workspace"`
 	ExtraRoots          []string      `json:"extraRoots,omitempty"`
+	// KBRoot is the user-configured knowledge-base root directory. When a run
+	// resolves its workspace to this path (SamePath), the session runs in
+	// knowledge-base mode: the KB system-prompt part is injected and the
+	// sources/ subdirectory becomes read-only for model tools.
+	KBRoot string `json:"kbRoot,omitempty"`
 	MaxTokens           int           `json:"maxTokens"`
 	ContextWindow       int           `json:"contextWindow"`
 	TokenParam          string        `json:"tokenParam,omitempty"`
@@ -1642,6 +1647,9 @@ func intFromAny(v any) int {
 func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg ConfigState) {
 	sessionID := req.SessionID
 	cfg.responsesPromptCacheKey = openAIResponsesPromptCacheKey(sessionID)
+	// Knowledge-base runs mark their sources/ subtree read-only for every
+	// tool call in this run; sub-agents inherit the policy via ctx.
+	ctx = withKBDenyRoots(ctx, kbDenyRootsForConfig(cfg))
 	a.beginTaskbarRun()
 	// success marks a run that already persisted its history on the normal
 	// run:done path. Interrupted runs (ESC/cancel, provider errors, stop
@@ -2249,6 +2257,9 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 			err = validateModelEditToolRequest([]FileTextEdits{req})
 		}
 		if err == nil {
+			err = kbDenyCheckPaths(ctx, cfg, req.Path)
+		}
+		if err == nil {
 			a.fileOpsMu.Lock()
 			data, err = a.editFilesWithConfig(cfg, []FileTextEdits{req})
 			a.fileOpsMu.Unlock()
@@ -2262,6 +2273,9 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		var req CreateFileRequest
 		err, argWarnings = decodeJSON(&req)
 		if err == nil {
+			err = kbDenyCheckPaths(ctx, cfg, req.Path)
+		}
+		if err == nil {
 			a.fileOpsMu.Lock()
 			data, err = a.createFileWithConfig(cfg, req)
 			a.fileOpsMu.Unlock()
@@ -2274,6 +2288,9 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 	case "delete":
 		var req DeletePathRequest
 		err, argWarnings = decodeJSON(&req)
+		if err == nil {
+			err = kbDenyCheckPaths(ctx, cfg, req.Path)
+		}
 		if err == nil {
 			a.fileOpsMu.Lock()
 			data, err = a.deletePathWithConfig(cfg, req)
@@ -2302,11 +2319,13 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		if err == nil {
 			switch strings.ToLower(strings.TrimSpace(req.Action)) {
 			case "start":
-				data, err = a.startServiceWithConfig(cfg, StartServiceRequest{
-					Name:    req.Name,
-					Command: req.Command,
-					Cwd:     req.Cwd,
-				})
+				if err = kbDenyCheckCommand(ctx, cfg, req.Command); err == nil {
+					data, err = a.startServiceWithConfig(cfg, StartServiceRequest{
+						Name:    req.Name,
+						Command: req.Command,
+						Cwd:     req.Cwd,
+					})
+				}
 			case "stop":
 				data, err = a.stopService(StopServiceRequest{ID: req.ID, GraceSeconds: req.GraceSeconds})
 			case "list":
@@ -2353,6 +2372,9 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 	case "http_request":
 		var req HTTPRequestToolRequest
 		err, argWarnings = decodeJSON(&req)
+		if err == nil {
+			err = kbDenyCheckPaths(ctx, cfg, req.SaveTo)
+		}
 		if err == nil {
 			data, err = a.httpRequestToolWithConfig(ctx, cfg, req)
 		}

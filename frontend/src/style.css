@@ -343,6 +343,232 @@ code, pre {
   min-height: 0;
 }
 
+/* Left mode rail (ES-King aside pattern): a permanently collapsed vertical
+   n-menu — icon-only items with native hover tooltip. The blank rail area is
+   window-draggable (header convention); only the menu itself is no-drag.
+   Background stays transparent so the rail matches the app surface instead
+   of a darker strip. */
+.mode-sider {
+  --wails-draggable: drag;
+  display: flex;
+  flex: 0 0 auto;
+  width: 56px;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+  padding-top: 8px;
+  /* Same surface as the app header so the rail reads as part of the chrome. */
+  background: #202020;
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+.mode-sider .n-menu {
+  --wails-draggable: no-drag;
+}
+
+/* Selected mode follows the theme accent (the neutral primary is barely
+   visible on two items). -active-hover matters: hovering the already
+   selected item uses that combined state, which otherwise falls back to the
+   whitish primary — the "click turns white, leaves accent" artifact. */
+.mode-sider .n-menu .n-menu-item-content--selected {
+  --n-item-text-color: var(--ally-accent-bright);
+  --n-item-text-color-active: var(--ally-accent-bright);
+  --n-item-text-color-hover: var(--ally-accent-bright);
+  --n-item-text-color-pressed: var(--ally-accent-bright);
+  --n-item-text-color-active-hover: var(--ally-accent-bright);
+  --n-item-icon-color: var(--ally-accent-bright);
+  --n-item-icon-color-active: var(--ally-accent-bright);
+  --n-item-icon-color-hover: var(--ally-accent-bright);
+  --n-item-icon-color-pressed: var(--ally-accent-bright);
+  --n-item-icon-color-active-hover: var(--ally-accent-bright);
+  --n-item-color-active: color-mix(in srgb, var(--ally-accent) 14%, transparent);
+  --n-item-color-hover: color-mix(in srgb, var(--ally-accent) 10%, transparent);
+  --n-item-color-active-hover: color-mix(in srgb, var(--ally-accent) 14%, transparent);
+  --n-item-color-pressed: color-mix(in srgb, var(--ally-accent) 16%, transparent);
+}
+
+/* Fixed square wrapper: n-menu's flex icon slot could squeeze the glyph
+   non-uniformly; an explicit box keeps the icon undistorted. */
+.mode-sider-icon-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 21px;
+  height: 21px;
+  flex: none;
+}
+
+.mode-sider-icon-wrap .n-icon,
+.mode-sider-icon-wrap .n-icon svg {
+  width: 21px;
+  height: 21px;
+  max-width: none;
+  max-height: none;
+}
+
+.mode-sider-running-dot {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #7ec97e;
+  box-shadow: 0 0 6px rgba(126, 201, 126, 0.8);
+}
+
+/* Empty-tree hint (KB mode / empty directories): a quiet centered note
+   instead of an unexplained blank area. */
+.workspace-explorer-empty-hint {
+  padding: 18px 14px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: #7a7a7a;
+  text-align: center;
+}
+
+/* Settings page: inline container on the right of the mode sider, replacing
+   the old modal dialog. */
+.settings-page-container {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  background: #1a1a1a;
+}
+
+/* KB identity header: plain, tidy title row rendered only inside the hidden
+   KB tab's pane — no background band, no decorative icon. */
+.kb-hero {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 16px 22px 13px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.kb-hero-text {
+  min-width: 0;
+}
+
+.kb-hero-title {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+  color: #f2f2f2;
+  line-height: 1.3;
+}
+
+.kb-hero-subtitle {
+  margin: 4px 0 0;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: #9a9a9a;
+  max-width: 680px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.kb-hero-path {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: 0 0 auto;
+  max-width: 300px;
+  padding: 6px 11px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  color: #8f8f8f;
+  font-size: 12px;
+}
+
+.kb-hero-path-icon {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 auto;
+}
+
+.kb-hero-path-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* KB maintenance action bar: a row of one-click prompts above the composer,
+   visible only while the hidden KB tab is active. Ordered by workflow:
+   init (only when index.md is missing) → ingest sources → tidy index. */
+.kb-action-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 0 6px;
+}
+
+.kb-action-bar-hint {
+  font-size: 11.5px;
+  color: #7a7a7a;
+}
+
+/* Knowledge-base welcome: a single plain line under the hero — the avatar,
+   build version, and info table are chat-only chrome. */
+.welcome-body.welcome-kb {
+  padding: 0;
+}
+
+.welcome-kb .welcome-greeting {
+  margin: 0;
+  color: #8f8f8f;
+  font-size: 13px;
+}
+
+/* KB mode guidance card: fills the main area when no KB root is configured
+   (the chat workbench is v-show hidden in this state). */
+.kb-empty-state {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  align-items: center;
+  justify-content: center;
+  background: #1a1a1a;
+}
+
+.kb-empty-card {
+  max-width: 480px;
+  padding: 34px 38px;
+  text-align: center;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--ally-accent) 7%, #202020),
+    #1d1d1d 70%
+  );
+}
+
+.kb-empty-title {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: #f0f0f0;
+  margin-bottom: 12px;
+}
+
+.kb-empty-desc {
+  font-size: 13px;
+  line-height: 1.75;
+  color: #9a9a9a;
+  margin: 0 0 20px;
+}
+
 /* Tree-only mode is a regular right-hand flex item. Editor mode intentionally
    becomes a full main-area surface so its editor can use the whole left side. */
 .workspace-explorer {

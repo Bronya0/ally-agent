@@ -1008,7 +1008,7 @@ func TestLoadAgentsMdLoadsSubdirsWhenRootMissing(t *testing.T) {
 }
 
 func TestSystemPromptDefinesWaitSequencing(t *testing.T) {
-	prompt := defaultSystemPrompt(nil, "", nil, "", "")
+	prompt := defaultSystemPrompt(nil, "", nil, "", "", "")
 	for _, expected := range []string{"Use `wait` only", "only tool in that model response", "verify the condition after it completes"} {
 		if !strings.Contains(prompt, expected) {
 			t.Fatalf("system prompt missing wait guidance %q", expected)
@@ -1017,7 +1017,7 @@ func TestSystemPromptDefinesWaitSequencing(t *testing.T) {
 }
 
 func TestSystemPromptExplainsRunCommandOutsidePathRecovery(t *testing.T) {
-	prompt := defaultSystemPrompt(nil, "", nil, "", "")
+	prompt := defaultSystemPrompt(nil, "", nil, "", "", "")
 	for _, expected := range []string{"`E_PATH_OUTSIDE`", "Do not retry the unchanged command", "read the returned Chinese explanation"} {
 		if !strings.Contains(prompt, expected) {
 			t.Fatalf("system prompt missing command recovery guidance %q", expected)
@@ -1026,7 +1026,7 @@ func TestSystemPromptExplainsRunCommandOutsidePathRecovery(t *testing.T) {
 }
 
 func TestSystemPromptIncludesConsolidatedSafetyRules(t *testing.T) {
-	prompt := defaultSystemPrompt(nil, "", nil, "", "")
+	prompt := defaultSystemPrompt(nil, "", nil, "", "", "")
 	for _, expected := range []string{
 		"# Safety",
 		"Sensitive files",
@@ -1050,7 +1050,7 @@ func TestSystemPromptIncludesConsolidatedSafetyRules(t *testing.T) {
 }
 
 func TestSystemPromptDiscouragesRedundantReadsBeforeEdit(t *testing.T) {
-	prompt := defaultSystemPrompt(nil, "", nil, "", "")
+	prompt := defaultSystemPrompt(nil, "", nil, "", "", "")
 	for _, expected := range []string{
 		"assume workspace files are not concurrently edited by another person",
 		"do not re-read a file merely for reassurance",
@@ -1066,7 +1066,7 @@ func TestSystemPromptDiscouragesRedundantReadsBeforeEdit(t *testing.T) {
 }
 
 func TestSystemPromptKeepsEditBehavioralRules(t *testing.T) {
-	prompt := defaultSystemPrompt(nil, "", nil, "", "")
+	prompt := defaultSystemPrompt(nil, "", nil, "", "", "")
 	for _, expected := range []string{
 		"must never be copied into edit text",
 		"do not re-read a file merely for reassurance",
