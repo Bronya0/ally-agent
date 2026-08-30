@@ -525,7 +525,7 @@ Public License v3. See the LICENSE file for details.
               <div class="config-section-subtitle">{{ $t('settings.apiSubtitle') }}</div>
             </div>
             <div class="api-header-actions">
-              <n-button size="small" secondary @click="openApiDocs">{{ $t('settings.apiDocsButton') }}</n-button>
+              <n-button size="small" secondary type="success" @click="openApiDocs">{{ $t('settings.apiDocsButton') }}</n-button>
               <n-button size="small" secondary :loading="apiLoading" @click="loadApiState">{{ $t('common.refresh') }}</n-button>
             </div>
           </div>
