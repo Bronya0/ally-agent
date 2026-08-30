@@ -524,7 +524,10 @@ Public License v3. See the LICENSE file for details.
               <div class="config-section-title">{{ $t('settings.apiTitle') }}</div>
               <div class="config-section-subtitle">{{ $t('settings.apiSubtitle') }}</div>
             </div>
-            <n-button size="small" secondary :loading="apiLoading" @click="loadApiState">{{ $t('common.refresh') }}</n-button>
+            <div class="api-header-actions">
+              <n-button size="small" secondary @click="openApiDocs">{{ $t('settings.apiDocsButton') }}</n-button>
+              <n-button size="small" secondary :loading="apiLoading" @click="loadApiState">{{ $t('common.refresh') }}</n-button>
+            </div>
           </div>
 
           <div class="api-config-row">
@@ -536,6 +539,7 @@ Public License v3. See the LICENSE file for details.
           </div>
           <div class="api-hint">{{ $t('settings.apiConfigHint') }}</div>
           <div class="api-hint">{{ $t('settings.apiStartupHint') }}</div>
+          <div class="api-hint">{{ $t('settings.apiAuthHint', { url: apiState?.baseUrl || 'http://127.0.0.1:47821' }) }}</div>
 
           <div class="api-endpoints">
             <div class="api-endpoints-title">{{ $t('settings.apiEndpointsTitle') }}</div>
@@ -1922,6 +1926,11 @@ async function copyApiToken() {
   }
 }
 
+// 完整参数文档随仓库发布：docs/api.md。
+function openApiDocs() {
+  Browser.OpenURL('https://github.com/Bronya0/ally-agent/blob/main/docs/api.md');
+}
+
 // Sync MCP when modal opens
 // Live MCP connection status while the modal is open; statuses pushed by the
 // backend land in the same list the form rows merge from.
@@ -2643,6 +2652,12 @@ watch(() => props.visible, (visible) => {
   text-overflow: ellipsis;
   white-space: nowrap;
   max-width: 200px;
+}
+
+.api-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .api-config-row {

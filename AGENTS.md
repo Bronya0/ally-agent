@@ -462,7 +462,7 @@ MCP status is emitted through `mcp:status`.
 - Binds `127.0.0.1` only; every `/api/v1/*` request requires `Authorization: Bearer <token>` (constant-time compare). No CORS headers in v1.
 - The enabled switch is runtime-only state: the service always starts off at launch and is toggled from Settings → API; port and token persist. Both must be configured before the switch enables (saving an empty token auto-generates a 32-hex one). Port/token edits save on blur; changing settings while running restarts the listener.
 - The listener stops when the run context `a.ctx` is cancelled (app-shutdown watcher) and on process exit.
-- Wails bindings: `GetApiServiceState`, `SaveApiSettings`, `SetApiServiceEnabled`; the Settings → API page renders state, port, token, and the endpoint list.
+- Wails bindings: `GetApiServiceState`, `SaveApiSettings`, `SetApiServiceEnabled`; the Settings → API page renders state, port, token, the auth example, and the endpoint list, and links to the full parameter documentation in `docs/api.md`.
 
 Endpoints (v1; all JSON envelopes `{ok, data}` / `{ok, error}`):
 
