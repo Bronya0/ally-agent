@@ -316,7 +316,7 @@ func (a *App) runCommandWithConfig(parent context.Context, cfg ConfigState, req 
 				// command exits. 16KB is enough to show the last ~100 lines
 				// of typical build output.
 				const streamingTailBytes = 16 * 1024
-				tail := buf.TailString(streamingTailBytes)
+				tail := decodeConsoleOutput(buf.TailString(streamingTailBytes))
 				payload := map[string]any{
 					"runId":         meta.runID,
 					"sessionId":     meta.sessionID,
@@ -365,29 +365,33 @@ func (a *App) runCommandWithConfig(parent context.Context, cfg ConfigState, req 
 	var outputFileSize int64
 	if f := tw.spill; f != nil {
 		name := f.Name()
-		if info, statErr := f.Stat(); statErr == nil {
-			outputFileSize = info.Size()
-		}
 		_ = f.Close()
 		if buf.truncated {
+			// On codepage-936 systems the full output is commonly GBK while
+			// the model-facing cap keeps UTF-8 in memory; rewrite the spill
+			// as UTF-8 so `read` can open it, then stat the final size.
 			outputFilePath = name
+			transcodeSpillFileForRead(name)
+			if info, statErr := os.Stat(name); statErr == nil {
+				outputFileSize = info.Size()
+			}
 		} else {
 			_ = os.Remove(name)
 		}
 	}
 	duration := time.Since(started).Milliseconds()
 	result := CommandResult{
-		Command:        req.Command,
-		Cwd:            filepath.ToSlash(cwd),
-		Shell:          shell.name,
-		ShellPath:      shell.path,
-		Output:         buf.String(),
-		ExitCode:       0,
-		TimedOut:       errors.Is(ctx.Err(), context.DeadlineExceeded),
-		Cancelled:      errors.Is(ctx.Err(), context.Canceled),
-		DurationMS:     duration,
-		Truncated:      buf.truncated,
-		OutputFilePath: outputFilePath,
+		Command:         req.Command,
+		Cwd:             filepath.ToSlash(cwd),
+		Shell:           shell.name,
+		ShellPath:       shell.path,
+		Output:          decodeConsoleOutput(buf.String()),
+		ExitCode:        0,
+		TimedOut:        errors.Is(ctx.Err(), context.DeadlineExceeded),
+		Cancelled:       errors.Is(ctx.Err(), context.Canceled),
+		DurationMS:      duration,
+		Truncated:       buf.truncated,
+		OutputFilePath:  outputFilePath,
 		OutputFileBytes: outputFileSize,
 	}
 	if outputFilePath != "" {

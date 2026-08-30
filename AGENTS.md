@@ -644,6 +644,7 @@ Example MCP config:
 - On macOS/Linux, `infra_shell_env.go` probes the user's login shell once (`$SHELL -l -c /usr/bin/env`, with an OS-account shell fallback), appends only missing absolute `PATH` entries to the inherited environment, and shares that environment with `command` and `service`. Probe failures leave the original environment unchanged; other profile variables such as `GOPATH` and `NVM_DIR` are not imported.
 - When bash is active on Windows, safety checks detect both Windows-style (`C:\...`) and MSYS2-style (`/c/...`) absolute paths outside the workspace.
 - Tool output is capped by `maxToolOutput`; HTTP tools use bounded response sizes, timeouts, redirect limits, and clear user agent defaults.
+- Command output is decoded to UTF-8 at the consumption boundary (`decodeConsoleOutput` in `infra_output_encoding.go`): valid UTF-8 passes through byte-identically, non-UTF-8 output is transcoded as GB18030 — repairing native Windows tools and locale-encoded runtimes that emit GBK through Git Bash pipes on stock codepage-936 zh-CN systems. The lazy full-output spill file is validated in a streaming pass (`fileIsUTF8`, chunked with a partial-sequence carry) and rewritten in place when invalid, so `read` can open it. A stream mixing UTF-8 Chinese with GBK Chinese sections decodes as one GB18030 payload; single-encoding output — the common case — is handled exactly.
 - API keys are stored in the OS user config directory without encryption.
 - MCP servers are spawned as subprocesses from user-controlled config.
 
