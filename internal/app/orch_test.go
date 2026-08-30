@@ -1094,6 +1094,117 @@ func TestCompactEditResultForModelPreservesWarnings(t *testing.T) {
 	}
 }
 
+func TestCompactListFilesResultForModelUsesPathList(t *testing.T) {
+	result := toolResult{OK: true, Data: ListFilesResult{
+		Entries: []FileEntry{
+			{Path: "frontend", Name: "frontend", Dir: true, Size: 0, ModTime: "2026-08-30T10:00:00+08:00"},
+			{Path: "frontend/src/App.vue", Name: "App.vue", Size: 185432, ModTime: "2026-08-30T10:00:00+08:00"},
+			{Path: "link", Name: "link", Symlink: true},
+		},
+		Count: 3,
+	}}
+	compact := compactToolResultForModel("list_files", result, "fallback")
+	if !strings.Contains(compact, `"entries":"frontend/\nfrontend/src/App.vue\nlink"`) {
+		t.Fatalf("expected a newline-joined path list with dir slashes, got %s", compact)
+	}
+	// Per-entry metadata must not leak into the model copy.
+	for _, noisy := range []string{"modTime", "185432", `"symlink"`, `"name"`} {
+		if strings.Contains(compact, noisy) {
+			t.Fatalf("compact list_files result must drop %s, got %s", noisy, compact)
+		}
+	}
+	if !strings.Contains(compact, `"count":3`) || strings.Contains(compact, `"truncated":true`) {
+		t.Fatalf("count/truncated summary mismatch: %s", compact)
+	}
+
+	// The per-directory overflow placeholder renders as the workspace map's
+	// "+N more files" line instead of a fake path.
+	overflow := toolResult{OK: true, Data: ListFilesResult{
+		Entries: []FileEntry{
+			{Path: "data", Name: "data", Dir: true},
+			{Path: "data/a.csv", Name: "a.csv"},
+			{Path: "data/+more", Name: "+more", MoreFiles: 9950},
+		},
+		Count: 3,
+	}}
+	compact = compactToolResultForModel("list_files", overflow, "fallback")
+	if !strings.Contains(compact, `data/a.csv\n+9950 more files`) {
+		t.Fatalf("expected the +N more files line, got %s", compact)
+	}
+	if strings.Contains(compact, "+more") {
+		t.Fatalf("the +more path marker must not leak into the model copy, got %s", compact)
+	}
+
+	empty := compactToolResultForModel("list_files", toolResult{OK: true, Data: ListFilesResult{}}, "fallback")
+	if !strings.Contains(empty, "includeHidden") {
+		t.Fatalf("empty listing must carry a widening note, got %s", empty)
+	}
+	truncated := compactToolResultForModel("list_files", toolResult{OK: true, Data: ListFilesResult{Count: 200, Truncated: true}}, "fallback")
+	if !strings.Contains(truncated, "narrow path") {
+		t.Fatalf("truncated listing must carry a narrowing note, got %s", truncated)
+	}
+}
+
+func TestListFilesDirBudgetCollapsesModelListingsOnly(t *testing.T) {
+	root := t.TempDir()
+	// One directory with more direct files than the budget, plus a sibling
+	// directory that must stay fully visible.
+	for i := 0; i < listFilesDirBudget+20; i++ {
+		writeToolTestFile(t, root, filepath.Join("data", fmt.Sprintf("f%03d.csv", i)), "x\n")
+	}
+	writeToolTestFile(t, root, filepath.Join("src", "main.go"), "package main\n")
+	writeToolTestFile(t, root, filepath.Join("src", "util.go"), "package main\n")
+
+	// Model-facing: data contributes exactly the budget's worth of real
+	// files plus one placeholder covering the remaining 20; src is complete.
+	result, err := NewApp().listFilesWithConfig(ConfigState{Workspace: root}, ListFilesRequest{ModelFacing: true, MaxDepth: 3, Limit: 1000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var dataFiles, srcFiles int
+	var placeholder *FileEntry
+	for i := range result.Entries {
+		e := result.Entries[i]
+		switch {
+		case e.Dir:
+		case e.Name == "main.go" || e.Name == "util.go":
+			srcFiles++
+		case strings.HasPrefix(e.Path, "data/"):
+			if e.MoreFiles > 0 {
+				placeholder = &result.Entries[i]
+			} else {
+				dataFiles++
+			}
+		}
+	}
+	if dataFiles != listFilesDirBudget || srcFiles != 2 {
+		t.Fatalf("budget breakdown wrong: dataFiles=%d srcFiles=%d", dataFiles, srcFiles)
+	}
+	if placeholder == nil || placeholder.MoreFiles != 20 || placeholder.Path != "data/+more" {
+		t.Fatalf("expected a data/+more placeholder with +20, got %#v", placeholder)
+	}
+	// The global limit must not have been consumed by data's overflow: src
+	// files are present and the result is not flagged truncated.
+	if result.Truncated {
+		t.Fatal("per-directory collapse must not set the global truncated flag")
+	}
+
+	// The UI explorer (ModelFacing=false) keeps every real file.
+	uiResult, err := NewApp().ListFiles(ListFilesRequest{Workspace: root, MaxDepth: 3, Limit: 1000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	uiDataFiles := 0
+	for _, e := range uiResult.Entries {
+		if !e.Dir && strings.HasPrefix(e.Path, "data/") {
+			uiDataFiles++
+		}
+	}
+	if uiDataFiles != listFilesDirBudget+20 {
+		t.Fatalf("UI listing must keep all real files, got %d", uiDataFiles)
+	}
+}
+
 func TestPlanBatchValidationMergesSharedUnits(t *testing.T) {
 	root := t.TempDir()
 	cfg := ConfigState{Workspace: root}

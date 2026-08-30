@@ -266,6 +266,39 @@ func compactToolDataForModel(name string, result toolResult, fullJSON string) st
 			data["note"] = "Image file(s) were injected as actual image input in a following user message; the base64 payload is omitted here to save tokens."
 		}
 		return marshalToolResultOrFallback(toolResult{OK: true, Data: data}, fullJSON)
+	case "list_files":
+		// The UI explorer consumes the full FileEntry structs (name/size/
+		// modTime/symlink); the model only needs the tree shape. A
+		// newline-joined path list with a trailing slash for directories cuts
+		// a typical 200-entry listing to roughly a quarter of the tokens —
+		// name duplicates the path suffix and modTime is RFC3339 noise.
+		var r ListFilesResult
+		if !decodeToolData(result.Data, &r) {
+			return fullJSON
+		}
+		var b strings.Builder
+		b.Grow(24 * len(r.Entries))
+		for _, entry := range r.Entries {
+			if entry.MoreFiles > 0 {
+				// Per-directory overflow placeholder: same wording as the
+				// workspace map legend.
+				fmt.Fprintf(&b, "+%d more files\n", entry.MoreFiles)
+				continue
+			}
+			b.WriteString(entry.Path)
+			if entry.Dir {
+				b.WriteByte('/')
+			}
+			b.WriteByte('\n')
+		}
+		data := map[string]any{"entries": strings.TrimRight(b.String(), "\n"), "count": r.Count, "truncated": r.Truncated}
+		switch {
+		case r.Count == 0:
+			data["note"] = "Empty listing: the directory is empty or everything was filtered as hidden/ignored. Use includeHidden/includeIgnored to widen it."
+		case r.Truncated:
+			data["note"] = "Entry limit reached; narrow path or raise limit to see the rest."
+		}
+		return marshalToolResultOrFallback(toolResult{OK: true, Data: data}, fullJSON)
 	case "edit", "remote_edit":
 		var r MultiEditResult
 		if !decodeToolData(result.Data, &r) {

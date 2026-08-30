@@ -202,6 +202,7 @@ Tool result channels:
 - Frontend receives full JSON via `tool:result` / `tool:error`.
 - Model context receives compacted JSON from `compactToolResultForModel()`.
 - `read` content is intentionally not compacted so its displayed line numbers remain available for `edit.lineRange` selection.
+- `list_files` model results collapse to a newline-joined path list (directories carry a trailing slash); the UI explorer keeps full `FileEntry` structs via the `ListFiles` binding. Model-facing listings also cap each directory's direct file children at `listFilesDirBudget` (50, mirroring the workspace map): the remainder collapses into one `+N more files` placeholder entry (`FileEntry.MoreFiles`, `parent/+more` path marker) that does not consume the global entry limit, so one huge directory cannot starve the rest of the listing. Collapsed files keep the walk running so the `+N` count is accurate.
 
 `saveHistory()`:
 

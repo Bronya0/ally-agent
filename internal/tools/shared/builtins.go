@@ -47,7 +47,7 @@ func Builtins() []openai.Tool {
 
 func chatToolsUncached() []openai.Tool {
 	return []openai.Tool{
-		functionTool("list_files", "List files and directories. Workspace-relative paths are resolved under the workspace; explicit absolute paths are allowed for read-only inspection subject to safety checks. Returns {entries,count,truncated}.", map[string]any{
+		functionTool("list_files", "List files and directories. Workspace-relative paths are resolved under the workspace; explicit absolute paths are allowed for read-only inspection subject to safety checks. Returns {entries,count,truncated}: entries is a newline-joined path list where directories carry a trailing slash. A directory with more direct files than the per-directory budget collapses its remainder into one '+N more files' line — list that directory by path (empty path lists the workspace root) to enumerate it fully.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"path":           map[string]any{"type": "string", "description": "Workspace-relative directory path, or explicit absolute path for read-only listing. Empty means workspace root."},

@@ -586,6 +586,11 @@ type FileEntry struct {
 	// Symlink marks symlink entries. WalkDir never follows links, so these
 	// render as leaves; the UI uses the flag to label them honestly.
 	Symlink bool `json:"symlink,omitempty"`
+	// MoreFiles marks the per-directory overflow placeholder of model-facing
+	// listings (mirroring the workspace map): the entry renders as "+N more
+	// files" and its Path is a non-resolvable "parent/+more" marker. Only
+	// set when ModelFacing is true; the UI explorer never sees it.
+	MoreFiles int `json:"moreFiles,omitempty"`
 }
 
 type ListFilesResult struct {

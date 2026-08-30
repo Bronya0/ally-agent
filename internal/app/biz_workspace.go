@@ -106,6 +106,19 @@ func (a *App) listFilesWithConfig(cfg ConfigState, req ListFilesRequest) (ListFi
 	// previous code called strings.ToLower twice per compare (O(N log N)
 	// total calls); now it's O(N) one-time work.
 	lowerPaths := make([]string, 0, limit)
+	// Model-facing listings cap each directory's direct file children
+	// (listFilesDirBudget, mirroring the workspace map's per-directory
+	// budget): one 10k-file directory must not consume the global entry
+	// limit and hide every other directory. Over-budget files collapse into
+	// a single "+N more files" placeholder per directory — no stat, no
+	// entry growth — while the walk continues so the count stays accurate.
+	// The UI explorer (ModelFacing=false) keeps full listings.
+	var dirBudgets map[string]int
+	var dirPlaceholders map[string]int // budget key → index into entries
+	if req.ModelFacing {
+		dirBudgets = map[string]int{}
+		dirPlaceholders = map[string]int{}
+	}
 	truncated := false
 	err = filepath.WalkDir(start, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -151,6 +164,37 @@ func (a *App) listFilesWithConfig(cfg ConfigState, req ListFilesRequest) (ListFi
 				return filepath.SkipDir
 			}
 			return nil
+		}
+		if dirBudgets != nil && !d.IsDir() {
+			budgetKey := filepath.Dir(rel)
+			if dirBudgets[budgetKey] >= listFilesDirBudget {
+				// Collapse into the directory's placeholder, creating it on
+				// the first overflow. Collapsed files never consume the
+				// global entry limit, so the walk keeps going and the "+N"
+				// count reflects every remaining file in that directory.
+				if idx, ok := dirPlaceholders[budgetKey]; ok {
+					entries[idx].MoreFiles++
+					return nil
+				}
+				displayPath := grep.DisplayPathForRoot(root, path)
+				// parent = display dir; empty means the workspace root. (The
+				// WalkDir callback parameter shadows the path package here.)
+				parent := ""
+				if i := strings.LastIndex(displayPath, "/"); i >= 0 {
+					parent = displayPath[:i]
+				}
+				placeholder := "+more"
+				sortKey := "\uffff"
+				if parent != "" {
+					placeholder = parent + "/+more"
+					sortKey = strings.ToLower(parent) + "/\uffff"
+				}
+				dirPlaceholders[budgetKey] = len(entries)
+				entries = append(entries, FileEntry{Path: placeholder, Name: "+more", MoreFiles: 1})
+				lowerPaths = append(lowerPaths, sortKey)
+				return nil
+			}
+			dirBudgets[budgetKey]++
 		}
 		if len(entries) >= limit {
 			truncated = true
@@ -811,6 +855,11 @@ func formatMapFileSize(bytes int64) string {
 
 const (
 	workspaceMapDirBudget = 50
+	// listFilesDirBudget caps each directory's direct file children in
+	// model-facing list_files results; the remainder collapses into one
+	// "+N more files" placeholder like the workspace map. Dirs never count
+	// against it, so the tree structure stays fully visible.
+	listFilesDirBudget = 50
 	// workspaceMapScanTimeout 限制 rg 扫描时长：超时回退 WalkDir，避免
 	// 网络盘/病态文件系统让首次消息无限等待（rg 进程同步阻塞 buildMessages）。
 	workspaceMapScanTimeout = 10 * time.Second
