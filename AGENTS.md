@@ -449,6 +449,43 @@ MCP status is emitted through `mcp:status`.
 
 ---
 
+## Local HTTP API Service
+
+`internal/app/biz_api.go` owns the whole outbound API service (settings persistence, listener lifecycle, auth, routing, handlers) in one file; it only consumes existing `*App` bindings and does not touch `App` fields or the Wails lifecycle.
+
+- Settings live in a dedicated file, NOT in `ConfigState`:
+
+```text
+~/.ally_agent/api.json   // {"port": 47821, "token": "<32-hex>"}
+```
+
+- Binds `127.0.0.1` only; every `/api/v1/*` request requires `Authorization: Bearer <token>` (constant-time compare). No CORS headers in v1.
+- The enabled switch is runtime-only state: the service always starts off at launch and is toggled from Settings → API; port and token persist. Empty token on save/start auto-generates a 32-hex token. Changing settings while running restarts the listener.
+- The listener stops when the run context `a.ctx` is cancelled (app-shutdown watcher) and on process exit.
+- Wails bindings: `GetApiServiceState`, `SaveApiSettings`, `SetApiServiceEnabled`; the Settings → API page renders state, port, token, and the endpoint list.
+
+Endpoints (v1; all JSON envelopes `{ok, data}` / `{ok, error}`):
+
+| Endpoint | Purpose |
+|----------|---------|
+| `GET /api/v1/health` | Health check |
+| `GET /api/v1/sessions` | List sessions (`?workspace=` filter, running flag per entry) |
+| `POST /api/v1/sessions` | Create a session (`{title?, workspace?}`, defaults from active config) |
+| `GET /api/v1/sessions/{id}` | Session status: running, queued messages, active model |
+| `GET /api/v1/sessions/{id}/result` | Latest completed assistant message (`status: running/done`) |
+| `POST /api/v1/sessions/{id}/messages` | Send a message: idle → `StartChat` new turn; running → `InjectRunMessage` queue (same auto-detection as the UI) |
+| `POST /api/v1/sessions/{id}/cancel` | Cancel the session's active run (same path as ESC → `CancelRun`) |
+| `GET /api/v1/models` | Configured models (API keys redacted) + active model; sessions have no per-session model state — they follow the global active model |
+| `POST /api/v1/models` | Create (`index` absent) or update (`index` present) a `ModelConfig` entry |
+| `POST /api/v1/models/activate` | Switch the global active model (`SwitchModel`) |
+| `GET /api/v1/mcp` | MCP server statuses + raw `mcp.json` text |
+| `PUT /api/v1/mcp/config` | Replace the MCP config (`{config: "<raw json>"}`) and reconcile (incremental reconnect) |
+| `GET /api/v1/skills` | Skill list with enabled flags |
+| `POST /api/v1/skills/{name}/enable` | Enable a skill |
+| `POST /api/v1/skills/{name}/disable` | Disable a skill |
+
+---
+
 ## Frontend Architecture
 
 The frontend is centered on `frontend/src/App.vue`.
@@ -463,6 +500,7 @@ Settings pages:
 - Models: provider/model presets and active model selection
 - Skills: enable/disable discovered skills; persisted through `disabledSkills`
 - MCP: raw MCP config editor and server status
+- API: local HTTP API service (toggle, port, token, endpoint list); independent of the whole-config save flow
 - About: GPLv3 notice, warranty disclaimer, and source repository link
 - Network: proxy off/system/manual selection, fixed system-proxy detection, bypass list, redacted status, and a bounded connection test
 
@@ -596,6 +634,12 @@ MCP config:
 
 ```text
 ~/.ally_agent/mcp.json
+```
+
+Local API service settings (port + token; the enabled switch is runtime-only):
+
+```text
+~/.ally_agent/api.json
 ```
 
 Legacy scheduled-task file (deleted on startup and no longer written):

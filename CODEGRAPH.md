@@ -20,6 +20,7 @@
 | 系统提示词组装 | `internal/app/biz_prompt.go` |
 | 配置合并 / key 池 | `internal/app/biz_config.go` |
 | MCP 生命周期 | `internal/app/biz_mcp.go` |
+| 对外本地 API 服务 | `internal/app/biz_api.go` |
 | 应用自更新 | `internal/app/biz_update.go` |
 | Token 统计 | `internal/app/biz_stats.go` + `TokenStatsModal.vue` |
 | 工作区文件列表 / workspace map | `internal/app/biz_workspace.go` |
@@ -95,6 +96,7 @@
 - biz_builtin_skills.go — 枚举 go:embed 内置 skill 资源为 SkillDefinition（embeddedContent 免磁盘 IO）；关键: builtinSkillEntries
 - biz_mcp.go — MCP 生命周期与工具桥接：加载 mcp.json、stdio/SSE/Streamable-HTTP 连接、schema 归一化、`mcp__<server>__<tool>` 函数名映射、失效会话重连；关键: McpManager, StartAll, CallToolByFunctionName, buildToolsWithMcp
 - biz_modellist.go — 调 OpenAI 标准 GET /models 返回模型 ID 列表（走代理、15s 超时、8MB 上限）；关键: FetchModelList
+- biz_api.go — 对外本地 HTTP API 服务（v1）：~/.ally_agent/api.json 持久化端口/token、仅绑定 127.0.0.1、Bearer 常量时间鉴权、每次启动默认关闭（开关是运行时态，随 a.ctx 取消自动停止）、15 个端点薄封装既有绑定（会话列表/创建/状态/结果/发消息/取消、模型列表脱敏/新建更新/激活、MCP 查询/更新应用、skill 列表/启停）；关键: startApiListener, stopApiListener, apiAuthMiddleware, apiMux, GetApiServiceState, SaveApiSettings, SetApiServiceEnabled
 - biz_stats.go — 异步 Token 统计：有界非阻塞队列、按天落盘 `stats/<date>.json`（90 天保留、备份恢复）、聚合查询；关键: statsRecorder, recordTokenStats, GetTokenStats
 - biz_update.go — 应用自更新：Atom 发布检查、平台资产下载、暂存校验、Windows/macOS 原子应用与回滚、跳过版本；关键: CheckForUpdates, DownloadUpdate, ApplyUpdate, rollbackReplacedResources
 - biz_workspacedir_windows.go — Windows 默认工作区（SHGetKnownFolderPath Documents，尊重 OneDrive 重定向）
@@ -114,6 +116,7 @@
 - biz_skills_test.go / biz_skills_claude_compat_test.go — 测试 skill 解析/扫描/.claude 兼容
 - biz_builtin_skills_test.go — 测试内置 skill 枚举
 - biz_mcp_test.go — 测试 MCP schema 归一化/函数名/排序/invalid session
+- biz_api_test.go — 测试 API 鉴权（401/常量 token）、会话创建/列表/状态/排队注入/取消、模型脱敏与新建更新、真实 listener 生命周期
 - biz_stats_test.go — 测试 token 统计聚合/落盘/备份/淘汰（16 例）
 - biz_update_atom_test.go / biz_update_rollback_test.go — 测试 Atom 解析与回滚
 

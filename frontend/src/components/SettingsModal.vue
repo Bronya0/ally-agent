@@ -44,6 +44,10 @@ Public License v3. See the LICENSE file for details.
           <span class="settings-nav-title">MCP</span>
           <span class="settings-nav-desc">{{ $t('settings.mcpDescription') }}</span>
         </button>
+        <button :class="['settings-nav-item', { active: page === 'api' }]" @click="page = 'api'">
+          <span class="settings-nav-title">API</span>
+          <span class="settings-nav-desc">{{ $t('settings.apiDescription') }}</span>
+        </button>
         <button :class="['settings-nav-item', { active: page === 'about' }]" @click="page = 'about'">
           <span class="settings-nav-title">{{ $t('settings.about') }}</span>
           <span class="settings-nav-desc">{{ $t('settings.versionLicense') }}</span>
@@ -521,6 +525,51 @@ Public License v3. See the LICENSE file for details.
           </div>
         </section>
 
+        <!-- API -->
+        <section v-else-if="page === 'api'" class="settings-page">
+          <div class="config-section-header">
+            <div>
+              <div class="config-section-title">{{ $t('settings.apiTitle') }}</div>
+              <div class="config-section-subtitle">{{ $t('settings.apiSubtitle') }}</div>
+            </div>
+            <n-button size="small" secondary :loading="apiLoading" @click="loadApiState">{{ $t('common.refresh') }}</n-button>
+          </div>
+
+          <n-form-item :label="$t('settings.apiEnable')">
+            <div class="api-enable-row">
+              <n-switch :value="!!apiState?.enabled" :disabled="apiBusy" @update:value="toggleApiService" />
+              <span v-if="apiState?.enabled" class="api-base-url on">{{ apiState.baseUrl }}</span>
+              <span v-else class="api-base-url off">{{ $t('settings.apiOffHint') }}</span>
+            </div>
+          </n-form-item>
+
+          <n-form-item :label="$t('settings.apiPort')">
+            <div class="api-token-row">
+              <n-input-number v-model:value="apiPortDraft" :min="1024" :max="65535" :show-button="false" class="api-port-input" :placeholder="$t('settings.apiPortPlaceholder')" />
+              <n-button size="small" type="primary" :loading="apiBusy" @click="saveApiSettings">{{ $t('common.save') }}</n-button>
+            </div>
+          </n-form-item>
+
+          <n-form-item :label="$t('settings.apiToken')">
+            <div class="api-token-row">
+              <n-input :value="apiState?.token || ''" readonly class="api-token-input" />
+              <n-button size="small" secondary @click="copyApiToken">{{ $t('common.copy') }}</n-button>
+              <n-button size="small" secondary :loading="apiBusy" @click="regenerateApiToken">{{ $t('settings.apiRegenerate') }}</n-button>
+            </div>
+          </n-form-item>
+          <div class="api-hint">{{ $t('settings.apiTokenHint') }}</div>
+          <div class="api-hint">{{ $t('settings.apiStartupHint') }}</div>
+
+          <div class="api-endpoints">
+            <div class="api-endpoints-title">{{ $t('settings.apiEndpointsTitle') }}</div>
+            <div v-for="ep in apiEndpoints" :key="ep.path" class="api-endpoint-row">
+              <n-tag size="small" :type="ep.method === 'GET' ? 'info' : (ep.method === 'PUT' ? 'warning' : 'success')" class="api-method">{{ ep.method }}</n-tag>
+              <code class="api-path">{{ ep.path }}</code>
+              <span class="api-desc">{{ $t(ep.key) }}</span>
+            </div>
+          </div>
+        </section>
+
         <!-- About -->
         <section v-else-if="page === 'about'" class="settings-page">
           <div class="config-section-header">
@@ -733,6 +782,7 @@ import {
   DetectSystemProxy, TestProxy,
   SelectBackgroundImage, ClearBackgroundImage,
   GetAutostartEnabled, SetAutostartEnabled,
+  GetApiServiceState, SaveApiSettings, SetApiServiceEnabled,
 } from '../../bindings/ally-dev/internal/app/app';
 
 const { message } = createDiscreteApi(['message'], {
@@ -753,7 +803,7 @@ const autostartBusy = ref(false);
 const props = defineProps({
   visible: Boolean,
   configDraft: { type: Object, required: true },
-  // 打开设置时定位到的页面（general/models/advanced/network/skills/mcp/about），
+  // 打开设置时定位到的页面（general/models/advanced/network/skills/mcp/api/about），
   // 由调用入口决定：管理模型入口传 models，头部设置入口传 general
   initialPage: { type: String, default: 'general' },
   // Optional result object reported by the parent after a check-update emit:
@@ -1770,6 +1820,90 @@ function onSave() {
   emit('save', { ...draft });
 }
 
+// ── API 服务页 ──
+// 端口与 token 是独立于 ConfigState 的持久化设置（~/.ally_agent/api.json），
+// 服务开关是运行时状态：每次启动默认关闭，需手动开启。
+
+const apiState = ref(null);
+const apiLoading = ref(false);
+const apiBusy = ref(false);
+const apiPortDraft = ref(null);
+
+const apiEndpoints = [
+  { method: 'GET', path: '/api/v1/health', key: 'settings.apiEpHealth' },
+  { method: 'GET', path: '/api/v1/sessions', key: 'settings.apiEpSessionsList' },
+  { method: 'POST', path: '/api/v1/sessions', key: 'settings.apiEpSessionsCreate' },
+  { method: 'GET', path: '/api/v1/sessions/{id}', key: 'settings.apiEpSessionStatus' },
+  { method: 'GET', path: '/api/v1/sessions/{id}/result', key: 'settings.apiEpSessionResult' },
+  { method: 'POST', path: '/api/v1/sessions/{id}/messages', key: 'settings.apiEpSessionSend' },
+  { method: 'POST', path: '/api/v1/sessions/{id}/cancel', key: 'settings.apiEpSessionCancel' },
+  { method: 'GET', path: '/api/v1/models', key: 'settings.apiEpModelsList' },
+  { method: 'POST', path: '/api/v1/models', key: 'settings.apiEpModelsSave' },
+  { method: 'POST', path: '/api/v1/models/activate', key: 'settings.apiEpModelsActivate' },
+  { method: 'GET', path: '/api/v1/mcp', key: 'settings.apiEpMcpGet' },
+  { method: 'PUT', path: '/api/v1/mcp/config', key: 'settings.apiEpMcpPut' },
+  { method: 'GET', path: '/api/v1/skills', key: 'settings.apiEpSkillsList' },
+  { method: 'POST', path: '/api/v1/skills/{name}/enable', key: 'settings.apiEpSkillEnable' },
+  { method: 'POST', path: '/api/v1/skills/{name}/disable', key: 'settings.apiEpSkillDisable' },
+];
+
+async function loadApiState() {
+  apiLoading.value = true;
+  try {
+    apiState.value = await GetApiServiceState();
+    apiPortDraft.value = apiState.value?.port ?? null;
+  } catch (err) {
+    message.error(t('settings.apiLoadFailed', { error: err }));
+  } finally {
+    apiLoading.value = false;
+  }
+}
+
+async function toggleApiService(enabled) {
+  apiBusy.value = true;
+  try {
+    apiState.value = await SetApiServiceEnabled(enabled);
+    apiPortDraft.value = apiState.value?.port ?? null;
+    message.success(t(enabled ? 'settings.apiStarted' : 'settings.apiStopped'));
+  } catch (err) {
+    message.error(t('settings.apiToggleFailed', { error: err }));
+  } finally {
+    apiBusy.value = false;
+  }
+}
+
+// 保存端口/token：token 传空值时后端自动生成新 token；服务运行中会用新
+// 设置重启监听。
+async function saveApiSettings(tokenOverride) {
+  apiBusy.value = true;
+  try {
+    const port = Number(apiPortDraft.value) || 0;
+    const token = tokenOverride !== undefined ? tokenOverride : (apiState.value?.token || '');
+    apiState.value = await SaveApiSettings({ port, token });
+    apiPortDraft.value = apiState.value?.port ?? null;
+    message.success(t('settings.apiSaved'));
+  } catch (err) {
+    message.error(t('settings.apiToggleFailed', { error: err }));
+  } finally {
+    apiBusy.value = false;
+  }
+}
+
+async function regenerateApiToken() {
+  await saveApiSettings('');
+}
+
+async function copyApiToken() {
+  const token = apiState.value?.token || '';
+  if (!token) return;
+  try {
+    await navigator.clipboard.writeText(token);
+    message.success(t('app.copy.done'));
+  } catch {
+    message.error(t('app.copy.failed'));
+  }
+}
+
 // Sync MCP when modal opens
 // Live MCP connection status while the modal is open; statuses pushed by the
 // backend land in the same list the form rows merge from.
@@ -1781,6 +1915,7 @@ watch(() => props.visible, (visible) => {
     syncDraftFromProps();
     loadMcpConfig();
     refreshSkillState();
+    loadApiState();
     if (draft.proxyMode === 'system') detectProxy();
     refreshAutostart();
     if (!mcpStatusOff) {
@@ -2498,6 +2633,91 @@ watch(() => props.visible, (visible) => {
   white-space: nowrap;
   max-width: 200px;
 }
+
+.api-enable-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+}
+
+.api-base-url {
+  font-size: 12px;
+  font-family: var(--font-mono, monospace);
+}
+
+.api-base-url.on {
+  color: #7ec97e;
+}
+
+.api-base-url.off {
+  color: var(--text-tertiary, #888);
+}
+
+.api-token-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.api-token-input {
+  flex: 1;
+  font-family: var(--font-mono, monospace);
+}
+
+.api-port-input {
+  width: 160px;
+}
+
+.api-hint {
+  font-size: 11px;
+  color: var(--text-tertiary, #888);
+  margin: 2px 0 8px;
+  line-height: 1.5;
+}
+
+.api-endpoints {
+  margin-top: 14px;
+  border-top: 1px solid var(--border-color, #333);
+  padding-top: 10px;
+}
+
+.api-endpoints-title {
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.api-endpoint-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: 12px;
+}
+
+.api-method {
+  flex-shrink: 0;
+  width: 52px;
+  justify-content: center;
+  font-family: var(--font-mono, monospace);
+}
+
+.api-path {
+  flex-shrink: 0;
+  color: #9ecbff;
+  font-family: var(--font-mono, monospace);
+  font-size: 11.5px;
+}
+
+.api-desc {
+  color: var(--text-tertiary, #888);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 
 .api-key-list {
   display: flex;
