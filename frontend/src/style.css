@@ -3711,3 +3711,4 @@ code, pre {
 .edit-file-header { width: 100%; display: flex; align-items: center; gap: 6px; padding: 3px 0; color: var(--text-color-2); text-align: left; }
 .edit-file-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); }
 .edit-file-content { margin-left: 14px; }
+.edit-file-content.no-header { margin-left: 0; }

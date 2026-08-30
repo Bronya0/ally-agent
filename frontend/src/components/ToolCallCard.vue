@@ -35,12 +35,12 @@ Public License v3. See the LICENSE file for details.
 
     <div v-if="msg.kind === 'edit' && msg.status !== 'error' && msg.editEntries?.length" class="edit-file-groups">
       <div v-for="(entry, ei) in msg.editEntries" :key="entry.path || ei" class="edit-file-group">
-        <div class="edit-file-header">
-        <span class="edit-file-name">{{ entry.path || $t('tools.file', { index: ei + 1 }) }}</span>
+        <div v-if="msg.editEntries.length > 1" class="edit-file-header">
+          <span class="edit-file-name">{{ entry.path || $t('tools.file', { index: ei + 1 }) }}</span>
           <span v-if="entry.added" class="edit-chip-added">+{{ entry.added }}</span>
           <span v-if="entry.removed" class="edit-chip-removed">-{{ entry.removed }}</span>
         </div>
-        <div class="edit-file-content">
+        <div class="edit-file-content" :class="{ 'no-header': msg.editEntries.length <= 1 }">
           <DiffView v-if="entry.diff" layout="split" :diff-text="entry.diff" :file-path="entry.path" :show-header="false" :collapsed="!msg.expanded" :added-count="entry.added || 0" :removed-count="entry.removed || 0" @toggle="handleToggle(msg)" />
           <DiffView v-for="(change, ci) in entry.changes" v-else layout="split" :key="ci" :old-text="change.oldText || ''" :new-text="change.newText || ''" :file-path="entry.path" :show-header="false" :collapsed="!msg.expanded" :is-incomplete="msg.status === 'running'" @toggle="handleToggle(msg)" />
         </div>
