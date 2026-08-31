@@ -97,15 +97,15 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"path"},
 		}),
-		functionTool("command", "Run a shell command with cwd confined to the workspace. On Windows the shell is Git Bash when available, otherwise PowerShell; on macOS/Linux, bash. Commands may inspect outside paths, redirect to null devices, and create new outside paths; modifying/deleting existing outside paths, explicit deletion commands, unsafe cwd symlinks, and long-running services are refused. On E_PATH_OUTSIDE, read the returned reason and switch target rather than retrying unchanged. Output size: by default the model-facing output is trimmed to the last 3 lines plus a signal line with exitCode and total line count — enough for build/install/test success checks. Pass fullOutput:true when the output IS the answer (git status/diff/log, ls, cat, grep, wc) or when diagnosing a failure from verbose logs. exitCode is always a field, and when the output was trimmed its full content is saved to outputFilePath (readable via read), so never re-run a side-effecting command just to see more output. When output exceeds the capture limit it is truncated and `outputFilePath` points to the full output.", map[string]any{
+		functionTool("command", "Run a shell command with cwd confined to the workspace. On Windows the shell is Git Bash when available, otherwise PowerShell; on macOS/Linux, bash. Commands may inspect outside paths, redirect to null devices, and create new outside paths; modifying/deleting existing outside paths, explicit deletion commands, unsafe cwd symlinks, and long-running services are refused. On E_PATH_OUTSIDE, read the returned reason and switch target rather than retrying unchanged. Output size: fullOutput:false (default) returns only the last 3 lines plus a signal line with exitCode and total line count; fullOutput:true returns the complete output. Rule of thumb: will you read the output itself as the answer (git status/diff/log, ls, cat, grep, failure diagnosis)? true. Only checking success/failure (build, install, test)? false. exitCode is always a field, and when the output was trimmed its full content is saved to outputFilePath (readable via read), so never re-run a side-effecting command just to see more output. When output exceeds the capture limit it is truncated and `outputFilePath` points to the full output.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"command":        map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*"},
 				"cwd":            map[string]any{"type": "string", "description": "Relative working directory. Empty means workspace root."},
 				"timeoutSeconds": map[string]any{"type": "integer", "minimum": 1, "maximum": 600, "description": "Default 120, max 600."},
-				"fullOutput":     map[string]any{"type": "boolean", "description": "Return the complete output inline instead of the default last-3-lines tail. Use when the output is the answer (git status/diff/log, ls, cat, grep) or for failure diagnosis; omit for build/install/test success checks where the tail and exitCode suffice."},
+				"fullOutput":     map[string]any{"type": "boolean", "description": "Rule of thumb: true if you will read the output itself as the answer (git status/diff/log, ls, cat, grep, failure diagnosis); false if you only check success/failure (build, install, test) — the last 3 lines plus exitCode suffice."},
 			},
-			"required": []string{"command"},
+			"required": []string{"command", "fullOutput"},
 		}),
 		functionTool("service", "Run, inspect, and stop long-running local processes (dev servers, workers) without blocking the agent loop. action=start launches a process and returns its id; list shows tracked services; read returns a bounded output tail (default 8 KiB, max 32 KiB); stop first tries graceful termination for a grace window (default 3s), then force kills the whole process tree and reports which happened in the result error field. Use list/read sparingly (no polling loops); prefer a single read after a concrete condition (e.g. wait + read). Error codes: E_BAD_COMMAND, E_SERVICE_LIMIT, E_BAD_BACKGROUND_ACTION, E_BAD_SERVICE_ID, E_SERVICE_NOT_FOUND.", map[string]any{
 			"type": "object",
@@ -253,7 +253,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"target", "path"},
 		}),
-		functionTool("remote_run_command", "Run a non-interactive shell command on a remote SSH workspace (same contract as command, including fullOutput for complete output instead of the last-3-lines tail; explicit deletion commands are refused — use remote_delete_path). Cwd defaults to the workspace root. Use find, ls, or other shell commands for remote directory discovery. Search remote code with grep -rn 'pattern' src/. Error codes: E_PATH_OUTSIDE, E_CWD_INVALID, E_LONG_RUNNING_COMMAND.", map[string]any{
+		functionTool("remote_run_command", "Run a non-interactive shell command on a remote SSH workspace (same contract as command, including the required fullOutput decision: true if you will read the output itself as the answer, false if you only check success/failure; explicit deletion commands are refused — use remote_delete_path). Cwd defaults to the workspace root. Use find, ls, or other shell commands for remote directory discovery. Search remote code with grep -rn 'pattern' src/. Error codes: E_PATH_OUTSIDE, E_CWD_INVALID, E_LONG_RUNNING_COMMAND.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"target":         map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Explicit SSH target plus workspace root, e.g. my-dev:/srv/app."},
@@ -261,9 +261,9 @@ func chatToolsUncached() []openai.Tool {
 				"cwd":            map[string]any{"type": "string", "description": "Relative working directory inside the remote workspace. Empty means workspace root."},
 				"timeoutSeconds": map[string]any{"type": "integer", "minimum": 1, "maximum": 600, "description": "Default 120, max 600."},
 				"shell":          map[string]any{"type": "string", "description": "Remote shell executable. Default /bin/bash if available, otherwise /bin/sh."},
-				"fullOutput":     map[string]any{"type": "boolean", "description": "Return the complete output inline instead of the default last-3-lines tail."},
+				"fullOutput":     map[string]any{"type": "boolean", "description": "Rule of thumb: true if you will read the output itself as the answer (git status/diff/log, ls, find, cat, grep, failure diagnosis); false if you only check success/failure — the last 3 lines plus exitCode suffice."},
 			},
-			"required": []string{"target", "command"},
+			"required": []string{"target", "command", "fullOutput"},
 		}),
 		functionTool("grep", "Search UTF-8 file contents with ripgrep. By default outputMode is `lines`, which returns one entry per matching line grouped by file (path + 1-based line number, no line text) — compact and flat so broad searches stay small, and the model jumps straight to a location with the read tool. Set outputMode to `count_matches` for exact per-file occurrence counts. Leaving `path` empty searches the whole workspace in one call with exact stats — do not repeat the search directory by directory. Workspace-wide searches report their skip policy in `skipped` (ignored files, heavy generated directories, files over 10 MB); an explicit `path` search intentionally bypasses those broad exclusions. Case-insensitive by default; use `caseSensitive: true` or prefix `(?-i)` for exact-case. `glob`: no slash matches the basename (`*.go`), with slash matches a relative path (`frontend/src/*.vue`). On result pagination, pass `nextOffset` back as `offset`; all stats stay exact; `offsetExhausted: true` means the offset skipped past the end, so reset to 0.", map[string]any{
 			"type": "object",
@@ -377,7 +377,7 @@ var builtinToolExamples = map[string]string{
 	"edit":               `{"path":"app.go","version":"9k3m7x","changes":[{"oldText":"const oldName = oldValue","newText":"const newName = newValue"}]}; lineRange: {"path":"app.go","version":"9k3m7x","changes":[{"lineRange":"40-72","newText":"replacement block"}]}`,
 	"create":             `{"path":"notes/example.md","content":"# Example\n","overwrite":false}`,
 	"delete":             `{"path":"tmp/generated","recursive":true}`,
-	"command":            `{"command":"go test ./...","cwd":".","timeoutSeconds":120}`,
+	"command":            `{"command":"go test ./...","cwd":".","timeoutSeconds":120,"fullOutput":false}; output is the answer: {"command":"git status --short","fullOutput":true}`,
 	"service":            `start: {"action":"start","name":"frontend","command":"npm run dev","cwd":"frontend"}; stop: {"action":"stop","id":"svc_..."}; list: {"action":"list"}; read: {"action":"read","id":"svc_...","tailBytes":8192}`,
 	"wait":               `{"seconds":5,"reason":"Wait for the development server to become ready"}`,
 	"ask":                `{"questions":[{"id":"database","question":"Which database should we use?","options":[{"id":"sqlite","label":"SQLite","description":"Simple local storage.","recommended":true},{"id":"postgres","label":"PostgreSQL","description":"Production database.","recommended":false}]}]}`,
@@ -388,7 +388,7 @@ var builtinToolExamples = map[string]string{
 	"remote_edit":        `{"target":"my-dev:/srv/app","path":"main.go","version":"9k3m7x","changes":[{"oldText":"func old() {}","newText":"func new() {}"}]}`,
 	"remote_create_file": `{"target":"my-dev:/srv/app","path":"notes.txt","content":"hello"}`,
 	"remote_delete_path": `{"target":"my-dev:/srv/app","path":"tmp/output","recursive":true}`,
-	"remote_run_command": `{"target":"my-dev:/srv/app","command":"go test ./..."}`,
+	"remote_run_command": `{"target":"my-dev:/srv/app","command":"go test ./...","fullOutput":false}`,
 	"grep":               `{"pattern":"TODO|FIXME","path":"frontend/src","glob":"*.vue","maxMatches":100}`,
 	"read":               `one file: {"files":[{"path":"app.go"}]}; range: {"files":[{"path":"services.go","startLine":1,"endLine":200}]}; tail: {"files":[{"path":"server.log","startLine":-200}]}`,
 	"calculate":          `{"expression":"sqrt(144) + 2^3"}`,
