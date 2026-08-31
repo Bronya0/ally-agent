@@ -352,11 +352,11 @@ code, pre {
   --wails-draggable: drag;
   display: flex;
   flex: 0 0 auto;
-  width: 56px;
+  width: 44px;
   height: 100%;
   min-height: 0;
   flex-direction: column;
-  padding-top: 8px;
+  padding-top: 6px;
   /* Same surface as the app header so the rail reads as part of the chrome. */
   background: #202020;
   border-right: 1px solid rgba(255, 255, 255, 0.08);
@@ -383,37 +383,56 @@ code, pre {
   --n-item-icon-color-pressed: var(--ally-accent-bright);
   --n-item-icon-color-active-hover: var(--ally-accent-bright);
   --n-item-color-active: color-mix(in srgb, var(--ally-accent) 14%, transparent);
+  --n-item-color-active-collapsed: color-mix(in srgb, var(--ally-accent) 14%, transparent);
   --n-item-color-hover: color-mix(in srgb, var(--ally-accent) 10%, transparent);
   --n-item-color-active-hover: color-mix(in srgb, var(--ally-accent) 14%, transparent);
   --n-item-color-pressed: color-mix(in srgb, var(--ally-accent) 16%, transparent);
 }
 
+/* Hover and selected both render as a centered SQUARE badge behind the icon
+   (overriding Naive UI's default full-width rail strip), so the rail reads as
+   a row of square icon buttons instead of a tall narrow bar. The collapsed
+   selected background reads --n-item-color-active-collapsed, so that variable
+   is set above to keep the accent consistent. */
+.mode-sider .n-menu .n-menu-item-content::before,
+.mode-sider .n-menu .n-menu-item-content--selected::before {
+  left: 50%;
+  top: 50%;
+  right: auto;
+  bottom: auto;
+  width: 34px;
+  height: 34px;
+  transform: translate(-50%, -50%);
+  border-radius: 6px;
+}
+
 /* Fixed square wrapper: n-menu's flex icon slot could squeeze the glyph
-   non-uniformly; an explicit box keeps the icon undistorted. */
+   non-uniformly; an explicit box keeps the icon undistorted. Sized to match
+   the 44px rail (same 16px glyph scale as the header icon buttons). */
 .mode-sider-icon-wrap {
   position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 21px;
-  height: 21px;
+  width: 17px;
+  height: 17px;
   flex: none;
 }
 
 .mode-sider-icon-wrap .n-icon,
 .mode-sider-icon-wrap .n-icon svg {
-  width: 21px;
-  height: 21px;
+  width: 17px;
+  height: 17px;
   max-width: none;
   max-height: none;
 }
 
 .mode-sider-running-dot {
   position: absolute;
-  top: 0;
+  top: -1px;
   right: -3px;
-  width: 7px;
-  height: 7px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   background: #7ec97e;
   box-shadow: 0 0 6px rgba(126, 201, 126, 0.8);

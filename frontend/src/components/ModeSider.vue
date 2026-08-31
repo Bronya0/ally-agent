@@ -16,8 +16,8 @@ Public License v3. See the LICENSE file for details.
       :value="mode"
       mode="vertical"
       :collapsed="true"
-      :collapsed-width="56"
-      :collapsed-icon-size="21"
+      :collapsed-width="44"
+      :collapsed-icon-size="17"
       :options="modeOptions"
       @update:value="onSelect"
     />
