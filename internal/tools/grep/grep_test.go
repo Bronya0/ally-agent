@@ -41,35 +41,73 @@ func writeGrepTestFile(t *testing.T, root, rel, content string) {
 	}
 }
 
+// lineSet collects the line numbers of one path from a lines-mode result.
+func lineSet(hits []LineFileMatch, path string) map[int]bool {
+	for _, h := range hits {
+		if h.Path == path {
+			set := map[int]bool{}
+			for _, n := range h.Lines {
+				set[n] = true
+			}
+			return set
+		}
+	}
+	return nil
+}
+
+func TestSearchDefaultReturnsLineNumbersOnly(t *testing.T) {
+	rg := requireRipgrep(t)
+	root := t.TempDir()
+	writeGrepTestFile(t, root, "a.txt", "foo\n")
+	writeGrepTestFile(t, root, "b.txt", "foo\nfoo\n")
+
+	result, err := Search(context.Background(), rg, root, root, Request{Pattern: "foo"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Mode != OutputModeLines || len(result.LineHits) != 2 {
+		t.Fatalf("default lines mode must group line numbers by file, got %#v", result)
+	}
+	if set := lineSet(result.LineHits, "a.txt"); len(set) != 1 || !set[1] {
+		t.Fatalf("a.txt must report line 1, got %#v", result.LineHits)
+	}
+	if set := lineSet(result.LineHits, "b.txt"); len(set) != 2 || !set[1] || !set[2] {
+		t.Fatalf("b.txt must report lines 1 and 2, got %#v", result.LineHits)
+	}
+	if result.MatchedLines != 3 || result.Hits != 3 || result.Files != 2 || !result.StatsExact {
+		t.Fatalf("lines mode must preserve exact stats, got %#v", result)
+	}
+}
+
 func TestSearchExactStatsSinglePass(t *testing.T) {
 	rg := requireRipgrep(t)
 	root := t.TempDir()
 	writeGrepTestFile(t, root, "a.txt", "foo\nfoo bar\nx foo\nplain\n")
 	writeGrepTestFile(t, root, "b.txt", "foo\n")
 
-	result, err := Search(context.Background(), rg, root, root, Request{Pattern: "foo"})
+	result, err := Search(context.Background(), rg, root, root, Request{Pattern: "foo", OutputMode: OutputModeLines})
 	if err != nil {
 		t.Fatal(err)
 	}
-	// a.txt: 3 matching lines / 3 matches; b.txt: 1/1.
+	// a.txt: 3 matching lines; b.txt: 1.
 	if result.MatchedLines != 4 || result.Hits != 4 || result.Files != 2 {
 		t.Fatalf("unexpected stats: %#v", result)
 	}
-	if result.Truncated || result.SamplesTruncated || !result.StatsExact {
+	if result.Truncated || !result.StatsExact {
 		t.Fatalf("small search must not be truncated: %#v", result)
 	}
-	if len(result.FileHits) != 2 {
-		t.Fatalf("expected samples from both files, got %#v", result.FileHits)
+	if len(result.LineHits) != 2 {
+		t.Fatalf("expected line groups from both files, got %#v", result.LineHits)
 	}
-	totalSamples := 0
-	for _, fh := range result.FileHits {
-		totalSamples += len(fh.Matches)
-		if fh.Path != "a.txt" && fh.Path != "b.txt" {
-			t.Fatalf("unexpected sample path %q", fh.Path)
+	total := 0
+	for _, h := range result.LineHits {
+		total += len(h.Lines)
+		if h.Path != "a.txt" && h.Path != "b.txt" {
+			t.Fatalf("unexpected group path %q", h.Path)
 		}
 	}
-	if totalSamples != 4 {
-		t.Fatalf("expected 4 sample matches, got %d", totalSamples)
+	if total != 4 {
+		t.Fatalf("expected 4 line entries, got %d", total)
 	}
 }
 
@@ -84,19 +122,20 @@ func TestSearchTruncatedByMatchLimitKeepsExactStats(t *testing.T) {
 
 	result, err := Search(context.Background(), rg, root, root, Request{
 		Pattern:    "needle",
+		OutputMode: OutputModeLines,
 		MaxMatches: 50,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !result.Truncated || !result.SamplesTruncated {
-		t.Fatalf("expected sample truncation, got %#v", result)
+	if !result.Truncated {
+		t.Fatalf("expected truncation, got %#v", result)
 	}
 	if result.MatchedLines != 200 || result.Hits != 200 || result.Files != 1 || !result.StatsExact {
 		t.Fatalf("truncated search must still report exact stats, got %#v", result)
 	}
-	if len(result.FileHits) != 1 || len(result.FileHits[0].Matches) != 50 {
-		t.Fatalf("expected 50 bounded sample matches, got %#v", result.FileHits)
+	if len(result.LineHits) != 1 || len(result.LineHits[0].Lines) != 50 {
+		t.Fatalf("expected 50 bounded line numbers, got %#v", result.LineHits)
 	}
 }
 
@@ -108,7 +147,7 @@ func TestSearchTruncatedPreservesPerFileOccurrenceCounts(t *testing.T) {
 
 	result, err := Search(context.Background(), rg, root, root, Request{
 		Pattern:    "foo",
-		MaxMatches: 1,
+		OutputMode: OutputModeCountMatches,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -121,10 +160,11 @@ func TestSearchTruncatedPreservesPerFileOccurrenceCounts(t *testing.T) {
 		counts[item.Path] = item.Count
 	}
 	if counts["hot.txt"] != 4 || counts["cold.txt"] != 1 {
-		t.Fatalf("truncated search must preserve occurrence counts, got %#v", result.FileCounts)
+		t.Fatalf("per-file occurrence counts must be exact, got %#v", result.FileCounts)
 	}
-	if len(result.FileHits) == 0 || result.FileHits[0].Path != "hot.txt" || result.FileHits[0].MatchCount != 4 {
-		t.Fatalf("sampled files must be ranked by occurrence count, got %#v", result.FileHits)
+	// count_matches carries no line numbers.
+	if len(result.LineHits) != 0 {
+		t.Fatalf("count mode must not return line groups, got %#v", result.LineHits)
 	}
 }
 
@@ -141,20 +181,21 @@ func TestSearchTruncatedByFileLimitKeepsExactStats(t *testing.T) {
 	}
 
 	result, err := Search(context.Background(), rg, root, root, Request{
-		Pattern:  "needle",
-		MaxFiles: 1,
+		Pattern:    "needle",
+		OutputMode: OutputModeLines,
+		MaxFiles:   1,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !result.Truncated || !result.SamplesTruncated {
+	if !result.Truncated {
 		t.Fatalf("expected file-limit truncation, got %#v", result)
 	}
 	if result.MatchedLines != 50 || result.Hits != 50 || result.Files != 5 || !result.StatsExact {
 		t.Fatalf("file-truncated search must still report exact stats, got %#v", result)
 	}
-	if len(result.FileHits) != 1 || len(result.FileHits[0].Matches) != 10 {
-		t.Fatalf("expected one file's full sample, got %#v", result.FileHits)
+	if len(result.LineHits) != 1 || len(result.LineHits[0].Lines) != 10 {
+		t.Fatalf("expected one file's full line group, got %#v", result.LineHits)
 	}
 }
 
@@ -170,7 +211,7 @@ func TestSearchNoMatch(t *testing.T) {
 	if result.MatchedLines != 0 || result.Hits != 0 || result.Files != 0 {
 		t.Fatalf("expected zero stats, got %#v", result)
 	}
-	if result.Truncated || result.SamplesTruncated || len(result.FileHits) != 0 {
+	if result.Truncated || len(result.LineHits) != 0 {
 		t.Fatalf("expected clean empty result, got %#v", result)
 	}
 }
@@ -184,7 +225,7 @@ func TestSearchIncludeIgnored(t *testing.T) {
 	writeGrepTestFile(t, root, "kept.txt", "needle\n")
 	writeGrepTestFile(t, root, "ignored.txt", "needle\n")
 
-	defaultResult, err := Search(context.Background(), rg, root, root, Request{Pattern: "needle"})
+	defaultResult, err := Search(context.Background(), rg, root, root, Request{Pattern: "needle", OutputMode: OutputModeLines})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,39 +242,23 @@ func TestSearchIncludeIgnored(t *testing.T) {
 	}
 }
 
-func TestSearchMarksTruncatedMatchContent(t *testing.T) {
+func TestSearchReturnsLineNumbersForLongLines(t *testing.T) {
 	rg := requireRipgrep(t)
 	root := t.TempDir()
 	long := strings.Repeat("界", 300) + " needle"
 	writeGrepTestFile(t, root, "long.txt", long+"\nshort needle\n")
 
-	result, err := Search(context.Background(), rg, root, root, Request{Pattern: "needle"})
+	result, err := Search(context.Background(), rg, root, root, Request{Pattern: "needle", OutputMode: OutputModeLines})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.FileHits) != 1 {
-		t.Fatalf("expected one file, got %#v", result.FileHits)
+	if len(result.LineHits) != 1 {
+		t.Fatalf("expected one file, got %#v", result.LineHits)
 	}
-	byLine := map[int]Match{}
-	for _, m := range result.FileHits[0].Matches {
-		byLine[m.LineNum] = m
-	}
-	longMatch, ok := byLine[1]
-	if !ok {
-		t.Fatalf("expected line 1 match, got %#v", byLine)
-	}
-	if !longMatch.ContentTruncated {
-		t.Fatalf("long line must be marked contentTruncated, got %#v", longMatch)
-	}
-	if len(longMatch.Content) > maxMatchPreviewBytes+len("...") || !strings.HasSuffix(longMatch.Content, "...") {
-		t.Fatalf("truncated content must stay bounded and end with ..., got %d bytes %q", len(longMatch.Content), longMatch.Content)
-	}
-	shortMatch, ok := byLine[2]
-	if !ok {
-		t.Fatalf("expected line 2 match, got %#v", byLine)
-	}
-	if shortMatch.ContentTruncated || shortMatch.Content != "short needle" {
-		t.Fatalf("short line must not be marked truncated, got %#v", shortMatch)
+	// Line text is never returned; only the 1-based line numbers survive,
+	// regardless of how long the matching line is.
+	if set := lineSet(result.LineHits, "long.txt"); len(set) != 2 || !set[1] || !set[2] {
+		t.Fatalf("expected line numbers 1 and 2, got %#v", result.LineHits)
 	}
 }
 
@@ -249,6 +274,7 @@ func TestSearchManyFilesFallbackKeepsExactStats(t *testing.T) {
 
 	result, err := Search(context.Background(), rg, root, root, Request{
 		Pattern:    "needle",
+		OutputMode: OutputModeLines,
 		MaxFiles:   1, // force sample truncation while the stream keeps draining
 		MaxMatches: 5,
 	})
@@ -258,7 +284,7 @@ func TestSearchManyFilesFallbackKeepsExactStats(t *testing.T) {
 	if result.MatchedLines != files || result.Hits != files || result.Files != files || !result.StatsExact {
 		t.Fatalf("fallback stats must stay exact for %d files, got %#v", files, result)
 	}
-	if !result.Truncated || !result.SamplesTruncated || len(result.FileHits) != 1 {
+	if !result.Truncated || len(result.LineHits) != 1 {
 		t.Fatalf("expected truncated single-file samples, got %#v", result)
 	}
 }
@@ -272,32 +298,27 @@ func TestParseSummaryStatsIgnoresNonSummaryEvents(t *testing.T) {
 	}
 }
 
-func TestSearchReportsPerFileMatchCount(t *testing.T) {
+func TestSearchCountMatchesReturnsOnlyFileCounts(t *testing.T) {
 	rg := requireRipgrep(t)
 	root := t.TempDir()
-	writeGrepTestFile(t, root, "a.txt", "foo foo\nfoo\n")
-	writeGrepTestFile(t, root, "b.txt", "foo\n")
+	writeGrepTestFile(t, root, "a.txt", "foo foo\n")
+	writeGrepTestFile(t, root, "b.txt", "foo\nfoo\nfoo\n")
 
-	result, err := Search(context.Background(), rg, root, root, Request{Pattern: "foo"})
+	result, err := Search(context.Background(), rg, root, root, Request{
+		Pattern:    "foo",
+		OutputMode: OutputModeCountMatches,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	byPath := map[string]int{}
-	for _, fh := range result.FileHits {
-		byPath[fh.Path] = fh.MatchCount
+	if result.Mode != OutputModeCountMatches || len(result.LineHits) != 0 {
+		t.Fatalf("count mode must not return line groups, got %#v", result)
 	}
-	if byPath["a.txt"] != 3 {
-		t.Fatalf("a.txt matchCount = %d, want 3", byPath["a.txt"])
+	if len(result.FileCounts) != 2 || result.FileCounts[0].Path != "b.txt" || result.FileCounts[0].Count != 3 || result.FileCounts[1].Path != "a.txt" || result.FileCounts[1].Count != 2 {
+		t.Fatalf("expected exact per-file counts, got %#v", result.FileCounts)
 	}
-	if byPath["b.txt"] != 1 {
-		t.Fatalf("b.txt matchCount = %d, want 1", byPath["b.txt"])
-	}
-	// matchCount is exact even though samples are capped at one line per
-	// file in the common case.
-	for _, fh := range result.FileHits {
-		if len(fh.Matches) < 1 || fh.MatchCount < len(fh.Matches) {
-			t.Fatalf("matchCount must be >= sampled lines, got %#v", fh)
-		}
+	if result.MatchedLines != 4 || result.Hits != 5 || result.Files != 2 || !result.StatsExact {
+		t.Fatalf("count mode must preserve exact totals, got %#v", result)
 	}
 }
 
@@ -308,7 +329,7 @@ func TestSearchFileCountsSortedDescending(t *testing.T) {
 	writeGrepTestFile(t, root, "many.txt", "foo foo foo\n")
 	writeGrepTestFile(t, root, "mid.txt", "foo foo\n")
 
-	result, err := Search(context.Background(), rg, root, root, Request{Pattern: "foo"})
+	result, err := Search(context.Background(), rg, root, root, Request{Pattern: "foo", OutputMode: OutputModeCountMatches})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -324,12 +345,9 @@ func TestSearchFileCountsSortedDescending(t *testing.T) {
 	if result.FileCounts[2].Path != "few.txt" || result.FileCounts[2].Count != 1 {
 		t.Fatalf("expected few.txt(1) last, got %#v", result.FileCounts[2])
 	}
-	if result.FileCountsTruncated {
-		t.Fatalf("3 files must not be truncated, got %#v", result)
-	}
 }
 
-func TestSearchOffsetPagesThroughMatches(t *testing.T) {
+func TestSearchOffsetPagesThroughLines(t *testing.T) {
 	rg := requireRipgrep(t)
 	root := t.TempDir()
 	var b strings.Builder
@@ -340,6 +358,7 @@ func TestSearchOffsetPagesThroughMatches(t *testing.T) {
 
 	first, err := Search(context.Background(), rg, root, root, Request{
 		Pattern:    "needle",
+		OutputMode: OutputModeLines,
 		MaxMatches: 5,
 	})
 	if err != nil {
@@ -351,15 +370,16 @@ func TestSearchOffsetPagesThroughMatches(t *testing.T) {
 	if first.MatchedLines != 20 || first.Hits != 20 || first.Files != 1 {
 		t.Fatalf("first page must still report exact stats, got %#v", first)
 	}
-	if len(first.FileHits) != 1 || len(first.FileHits[0].Matches) != 5 {
-		t.Fatalf("expected 5 sample matches on page 1, got %#v", first.FileHits)
+	if len(first.LineHits) != 1 || len(first.LineHits[0].Lines) != 5 {
+		t.Fatalf("expected 5 line numbers on page 1, got %#v", first.LineHits)
 	}
-	if first.FileHits[0].MatchCount != 20 {
-		t.Fatalf("matchCount must be the full-file exact count, got %d", first.FileHits[0].MatchCount)
+	if set := lineSet(first.LineHits, "big.txt"); !set[1] || !set[5] || set[6] {
+		t.Fatalf("page 1 must contain lines 1-5, got %#v", first.LineHits)
 	}
 
 	second, err := Search(context.Background(), rg, root, root, Request{
 		Pattern:    "needle",
+		OutputMode: OutputModeLines,
 		MaxMatches: 5,
 		Offset:     first.NextOffset,
 	})
@@ -369,22 +389,16 @@ func TestSearchOffsetPagesThroughMatches(t *testing.T) {
 	if second.NextOffset != 10 {
 		t.Fatalf("expected NextOffset 10 on page 2, got %d", second.NextOffset)
 	}
-	if len(second.FileHits) != 1 || len(second.FileHits[0].Matches) != 5 {
-		t.Fatalf("expected 5 sample matches on page 2, got %#v", second.FileHits)
+	if len(second.LineHits) != 1 || len(second.LineHits[0].Lines) != 5 {
+		t.Fatalf("expected 5 line numbers on page 2, got %#v", second.LineHits)
 	}
-	// Page 2 must show lines 6-10 (1-based), distinct from page 1.
-	lineNums := map[int]bool{}
-	for _, m := range second.FileHits[0].Matches {
-		lineNums[m.LineNum] = true
-	}
-	for want := 6; want <= 10; want++ {
-		if !lineNums[want] {
-			t.Fatalf("page 2 must contain line %d, got %#v", want, lineNums)
-		}
+	if set := lineSet(second.LineHits, "big.txt"); !set[6] || !set[10] || set[11] {
+		t.Fatalf("page 2 must contain lines 6-10, got %#v", second.LineHits)
 	}
 
 	last, err := Search(context.Background(), rg, root, root, Request{
 		Pattern:    "needle",
+		OutputMode: OutputModeLines,
 		MaxMatches: 5,
 		Offset:     15,
 	})
@@ -394,8 +408,11 @@ func TestSearchOffsetPagesThroughMatches(t *testing.T) {
 	if last.NextOffset != 0 || last.Truncated || last.OffsetExhausted {
 		t.Fatalf("page at offset 15 must reach the end without truncation or exhaustion, got %#v", last)
 	}
-	if len(last.FileHits) != 1 || len(last.FileHits[0].Matches) != 5 {
-		t.Fatalf("expected 5 remaining sample matches, got %#v", last.FileHits)
+	if len(last.LineHits) != 1 || len(last.LineHits[0].Lines) != 5 {
+		t.Fatalf("expected 5 remaining line numbers, got %#v", last.LineHits)
+	}
+	if set := lineSet(last.LineHits, "big.txt"); !set[16] || !set[20] {
+		t.Fatalf("last page must contain lines 16-20, got %#v", last.LineHits)
 	}
 }
 
@@ -404,7 +421,7 @@ func TestSearchCaseSensitiveFlag(t *testing.T) {
 	root := t.TempDir()
 	writeGrepTestFile(t, root, "a.txt", "Foo\nfoo\n")
 
-	insensitive, err := Search(context.Background(), rg, root, root, Request{Pattern: "foo"})
+	insensitive, err := Search(context.Background(), rg, root, root, Request{Pattern: "foo", OutputMode: OutputModeLines})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -412,7 +429,7 @@ func TestSearchCaseSensitiveFlag(t *testing.T) {
 		t.Fatalf("default must be case-insensitive, got %#v", insensitive)
 	}
 
-	sensitive, err := Search(context.Background(), rg, root, root, Request{Pattern: "foo", CaseSensitive: true})
+	sensitive, err := Search(context.Background(), rg, root, root, Request{Pattern: "foo", OutputMode: OutputModeLines, CaseSensitive: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -457,113 +474,36 @@ func TestParseEndEvent(t *testing.T) {
 	}
 }
 
-func TestSearchFileHitsSortedByMatchCount(t *testing.T) {
+func TestSearchLinesGroupedByFileStable(t *testing.T) {
 	rg := requireRipgrep(t)
 	root := t.TempDir()
-	// Deliberately create files so rg's traversal order is NOT count order:
-	// a.txt (1 hit, alphabetically first) vs z.txt (3 hits).
 	writeGrepTestFile(t, root, "a.txt", "foo\n")
-	writeGrepTestFile(t, root, "m.txt", "foo foo\n")
-	writeGrepTestFile(t, root, "z.txt", "foo foo foo\n")
+	writeGrepTestFile(t, root, "m.txt", "foo\nfoo\n")
+	writeGrepTestFile(t, root, "z.txt", "foo\nfoo\nfoo\n")
 
-	result, err := Search(context.Background(), rg, root, root, Request{Pattern: "foo"})
+	result, err := Search(context.Background(), rg, root, root, Request{Pattern: "foo", OutputMode: OutputModeLines})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.FileHits) != 3 {
-		t.Fatalf("expected 3 file groups, got %#v", result.FileHits)
+	if len(result.LineHits) != 3 {
+		t.Fatalf("expected 3 file groups, got %#v", result.LineHits)
 	}
-	// Most-relevant file (most hits) must be listed first so the model reads
-	// it first without extra calls.
-	if result.FileHits[0].Path != "z.txt" || result.FileHits[0].MatchCount != 3 {
-		t.Fatalf("expected z.txt (3 hits) first, got %#v", result.FileHits[0])
+	// Line numbers are exact per file; order is rg's traversal order.
+	if set := lineSet(result.LineHits, "a.txt"); len(set) != 1 || !set[1] {
+		t.Fatalf("a.txt expected line 1, got %#v", result.LineHits)
 	}
-	if result.FileHits[1].Path != "m.txt" || result.FileHits[1].MatchCount != 2 {
-		t.Fatalf("expected m.txt (2 hits) second, got %#v", result.FileHits[1])
+	if set := lineSet(result.LineHits, "m.txt"); len(set) != 2 || !set[1] || !set[2] {
+		t.Fatalf("m.txt expected lines 1 and 2, got %#v", result.LineHits)
 	}
-	if result.FileHits[2].Path != "a.txt" || result.FileHits[2].MatchCount != 1 {
-		t.Fatalf("expected a.txt (1 hit) last, got %#v", result.FileHits[2])
-	}
-}
-
-func TestSearchContextLines(t *testing.T) {
-	rg := requireRipgrep(t)
-	root := t.TempDir()
-	writeGrepTestFile(t, root, "a.txt", "before-2\nbefore-1\nneedle\nafter-1\nafter-2\n")
-
-	result, err := Search(context.Background(), rg, root, root, Request{
-		Pattern:       "needle",
-		ContextBefore: 1,
-		ContextAfter:  1,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(result.FileHits) != 1 {
-		t.Fatalf("expected one file, got %#v", result.FileHits)
-	}
-	matches := result.FileHits[0].Matches
-	// 1 before-context + 1 match + 1 after-context = 3 lines.
-	if len(matches) != 3 {
-		t.Fatalf("expected 3 sample lines (1 ctx + 1 match + 1 ctx), got %#v", matches)
-	}
-	if matches[0].LineNum != 2 || !matches[0].Context || matches[0].Content != "before-1" {
-		t.Fatalf("expected before-context line 2, got %#v", matches[0])
-	}
-	if matches[1].LineNum != 3 || matches[1].Context || matches[1].Content != "needle" {
-		t.Fatalf("expected match line 3 without context flag, got %#v", matches[1])
-	}
-	if matches[2].LineNum != 4 || !matches[2].Context || matches[2].Content != "after-1" {
-		t.Fatalf("expected after-context line 4, got %#v", matches[2])
-	}
-	// Context lines must NOT inflate stats or per-file counts.
-	if result.MatchedLines != 1 || result.Hits != 1 || result.Files != 1 {
-		t.Fatalf("stats must count only real matches, got %#v", result)
-	}
-	if result.FileHits[0].MatchCount != 1 {
-		t.Fatalf("matchCount must count only real matches, got %d", result.FileHits[0].MatchCount)
+	if set := lineSet(result.LineHits, "z.txt"); len(set) != 3 || !set[1] || !set[2] || !set[3] {
+		t.Fatalf("z.txt expected lines 1-3, got %#v", result.LineHits)
 	}
 }
 
-func TestSearchContextLinesDoNotAffectPagination(t *testing.T) {
-	rg := requireRipgrep(t)
-	root := t.TempDir()
-	writeGrepTestFile(t, root, "a.txt", "x1\nneedle\nx2\nneedle\nx3\nneedle\nx4\n")
-
-	result, err := Search(context.Background(), rg, root, root, Request{
-		Pattern:       "needle",
-		MaxMatches:    2,
-		ContextBefore: 1,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	// 3 real matches, cap 2 -> truncated with nextOffset 2.
-	if !result.Truncated || result.NextOffset != 2 {
-		t.Fatalf("expected truncated page with NextOffset 2, got %#v", result)
-	}
-	if result.MatchedLines != 3 || result.Hits != 3 {
-		t.Fatalf("stats must be exact with context lines present, got %#v", result)
-	}
-	// Each sampled match carries its before-context line.
-	for _, fh := range result.FileHits {
-		ctxLines := 0
-		for _, m := range fh.Matches {
-			if m.Context {
-				ctxLines++
-			}
-		}
-		if ctxLines != 2 {
-			t.Fatalf("expected 2 context lines across 2 sampled matches, got %#v", fh.Matches)
-		}
-	}
-}
-
-func TestSearchEmptyGroupSerializesAsArray(t *testing.T) {
-	// Regression: when the sample quota is hit, the file group created for
-	// the next file holds no samples. Its Matches slice must serialize as
-	// [] (never null) so the model cannot misread "matches: null" as a
-	// broken entry.
+func TestSearchEmptyFileGroupSerializesAsArray(t *testing.T) {
+	// Regression: when the line budget is hit, the next file's group holds no
+	// line numbers. Its Lines slice must serialize as [] (never null) so the
+	// model cannot misread "lines": null as a broken entry.
 	rg := requireRipgrep(t)
 	root := t.TempDir()
 	writeGrepTestFile(t, root, "a.txt", "needle\n")
@@ -571,37 +511,59 @@ func TestSearchEmptyGroupSerializesAsArray(t *testing.T) {
 
 	result, err := Search(context.Background(), rg, root, root, Request{
 		Pattern:    "needle",
+		OutputMode: OutputModeLines,
 		MaxMatches: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.FileHits) != 2 {
-		t.Fatalf("expected 2 file groups (one empty), got %#v", result.FileHits)
+	if len(result.LineHits) != 2 {
+		t.Fatalf("expected 2 file groups (one empty), got %#v", result.LineHits)
 	}
-	// rg traversal order is not guaranteed; assert the shape instead:
-	// exactly one group sampled its match, the other is an empty group.
-	emptyGroups, sampledGroups := 0, 0
-	for _, fh := range result.FileHits {
-		switch len(fh.Matches) {
+	sampled, empty := 0, 0
+	for _, h := range result.LineHits {
+		switch len(h.Lines) {
 		case 0:
-			emptyGroups++
+			empty++
 		case 1:
-			sampledGroups++
+			sampled++
 		}
 	}
-	if emptyGroups != 1 || sampledGroups != 1 {
-		t.Fatalf("expected [1 sample, empty group] across 2 files, got %#v", result.FileHits)
+	if empty != 1 || sampled != 1 {
+		t.Fatalf("expected [1 sample, empty group] across 2 files, got %#v", result.LineHits)
 	}
 	raw, err := json.Marshal(result)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bytes.Contains(raw, []byte(`"matches":null`)) {
-		t.Fatalf("empty sample group must serialize as [], got %s", raw)
+	if bytes.Contains(raw, []byte(`"lines":null`)) {
+		t.Fatalf("empty line group must serialize as [], got %s", raw)
 	}
 	if !result.Truncated || result.NextOffset != 1 {
 		t.Fatalf("expected truncated page with NextOffset 1, got %#v", result)
+	}
+}
+
+func TestSearchCountMatchesPagesByFile(t *testing.T) {
+	rg := requireRipgrep(t)
+	root := t.TempDir()
+	for i := 0; i < 5; i++ {
+		writeGrepTestFile(t, root, fmt.Sprintf("f%d.txt", i), "needle\n")
+	}
+
+	first, err := Search(context.Background(), rg, root, root, Request{Pattern: "needle", OutputMode: OutputModeCountMatches, MaxFiles: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first.FileCounts) != 2 || first.NextOffset != 2 || !first.Truncated {
+		t.Fatalf("expected first two file-count entries, got %#v", first)
+	}
+	second, err := Search(context.Background(), rg, root, root, Request{Pattern: "needle", OutputMode: OutputModeCountMatches, MaxFiles: 2, Offset: first.NextOffset})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(second.FileCounts) != 2 || second.NextOffset != 4 || second.OffsetExhausted {
+		t.Fatalf("expected second file-count page, got %#v", second)
 	}
 }
 
@@ -615,8 +577,9 @@ func TestSearchOffsetExhausted(t *testing.T) {
 	writeGrepTestFile(t, root, "big.txt", b.String())
 
 	result, err := Search(context.Background(), rg, root, root, Request{
-		Pattern: "needle",
-		Offset:  99999,
+		Pattern:    "needle",
+		OutputMode: OutputModeLines,
+		Offset:     99999,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -624,8 +587,8 @@ func TestSearchOffsetExhausted(t *testing.T) {
 	if !result.OffsetExhausted {
 		t.Fatalf("offset past the end must set OffsetExhausted, got %#v", result)
 	}
-	if len(result.FileHits) != 0 {
-		t.Fatalf("no samples may be returned at an exhausted offset, got %#v", result.FileHits)
+	if len(result.LineHits) != 0 {
+		t.Fatalf("no line groups may be returned at an exhausted offset, got %#v", result.LineHits)
 	}
 	if result.MatchedLines != 10 || result.Hits != 10 || result.Files != 1 {
 		t.Fatalf("stats must stay exact at an exhausted offset, got %#v", result)
@@ -637,6 +600,7 @@ func TestSearchOffsetExhausted(t *testing.T) {
 	// An in-range offset must not set the flag.
 	ok, err := Search(context.Background(), rg, root, root, Request{
 		Pattern:    "needle",
+		OutputMode: OutputModeLines,
 		Offset:     5,
 		MaxMatches: 5,
 	})
@@ -645,5 +609,27 @@ func TestSearchOffsetExhausted(t *testing.T) {
 	}
 	if ok.OffsetExhausted {
 		t.Fatalf("in-range offset must not set OffsetExhausted, got %#v", ok)
+	}
+}
+
+func TestSearchLegacyAliasCollapsesToLines(t *testing.T) {
+	rg := requireRipgrep(t)
+	root := t.TempDir()
+	writeGrepTestFile(t, root, "a.txt", "needle\n")
+	writeGrepTestFile(t, root, "b.txt", "needle\n")
+
+	// The legacy files_with_matches / content aliases must collapse to the
+	// flat lines mode rather than re-introducing path-only or line-text shapes.
+	for _, mode := range []string{"", "files_with_matches", "content"} {
+		result, err := Search(context.Background(), rg, root, root, Request{Pattern: "needle", OutputMode: mode})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Mode != OutputModeLines {
+			t.Fatalf("alias %q must collapse to lines, got mode %q", mode, result.Mode)
+		}
+		if len(result.LineHits) != 2 {
+			t.Fatalf("alias %q must return line groups, got %#v", mode, result.LineHits)
+		}
 	}
 }

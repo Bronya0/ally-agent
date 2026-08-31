@@ -32,22 +32,23 @@ import (
 )
 
 const (
-	appName                  = "Ally"
-	defaultModel             = "deepseek-v4-flash"
-	defaultBaseURL           = "https://api.deepseek.com"
-	defaultReasoningTag      = "reasoning_content"
-	maxReadFileBytes         = 32 * 1024 * 1024
-	maxToolOutput            = 128 * 1024
-	maxFinishedSubagents     = 50
-	maxSubagentToolCalls     = 100
-	maxModelToolOutput       = 12 * 1024
-	maxModelWebOutput        = 96 * 1024
-	maxCodeGraphPromptBytes  = 96 * 1024
-	modelToolHeadBytes       = 4 * 1024
-	modelToolTailBytes       = 8 * 1024
-	maxModelGrepMatches      = 200
-	maxModelGrepContextLines = 400
-	maxAgentSteps            = 9999
+	appName                 = "Ally"
+	defaultModel            = "deepseek-v4-flash"
+	defaultBaseURL          = "https://api.deepseek.com"
+	defaultReasoningTag     = "reasoning_content"
+	maxReadFileBytes        = 32 * 1024 * 1024
+	maxToolOutput           = 128 * 1024
+	maxFinishedSubagents    = 50
+	maxSubagentToolCalls    = 100
+	maxModelToolOutput      = 12 * 1024
+	maxModelWebOutput       = 96 * 1024
+	maxCodeGraphPromptBytes = 96 * 1024
+	modelToolHeadBytes      = 4 * 1024
+	modelToolTailBytes      = 8 * 1024
+	maxModelGrepMatches     = 200
+	maxModelGrepSampleLines = 250
+	maxModelGrepFileCounts  = 20
+	maxAgentSteps           = 9999
 	// runInputBufferSize is the per-run capacity of the injected-message queue
 	// (InjectRunMessage). The buffered channel plus non-blocking drain keeps
 	// injection off the chat hot path; a full queue fails the call instead of

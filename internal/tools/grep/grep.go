@@ -29,7 +29,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"unicode/utf8"
 
 	toolerrors "ally-dev/internal/tools/shared"
 )
@@ -49,23 +48,45 @@ const (
 	// The stream still drains after this cap so exact summary statistics remain
 	// available without a second traversal.
 	maxGrepStdoutBytes = 10 * 1024 * 1024
-	// maxMatchPreviewBytes caps each sample line content shown to the model.
-	maxMatchPreviewBytes = 200
 	// maxGrepFileCountEntries caps the per-file hotspot list (fileCounts)
 	// returned to the model, sorted by count descending.
 	maxGrepFileCountEntries = 100
 	// maxGrepThreads keeps interactive searches responsive without allowing
 	// ripgrep to occupy every logical CPU on large workspaces.
 	maxGrepThreads = 4
-	// maxContextPending bounds the per-file before-context buffer (rg -B
-	// lines arrive before the first match of a file). The schema caps
-	// contextBefore at 50, so this is a generous secondary guard.
-	maxContextPending = 200
 )
+
+const (
+	// OutputModeLines is the default grep output: one entry per matching
+	// line, grouped by file, carrying only the line number (no line text).
+	// Compact and flat so broad searches stay small; the model reads the
+	// specific lines via the read tool.
+	OutputModeLines = "lines"
+	// OutputModeCountMatches returns the exact occurrence count per file.
+	OutputModeCountMatches = "count_matches"
+)
+
+// normalizedOutputMode maps the request outputMode to a supported mode.
+// The empty default and the legacy files_with_matches/content aliases all
+// collapse to lines: line numbers are the smallest payload that still lets
+// the model jump straight to a location, so the heavier path-only and
+// line-text shapes are no longer exposed.
+func normalizedOutputMode(mode string) string {
+	switch strings.TrimSpace(mode) {
+	case OutputModeCountMatches:
+		return OutputModeCountMatches
+	default:
+		return OutputModeLines
+	}
+}
 
 // Request is the model-facing grep request shape.
 type Request struct {
-	Pattern        string `json:"pattern"`
+	Pattern string `json:"pattern"`
+	// OutputMode defaults to lines, which returns one entry per matching line
+	// (path + line number, no line text) grouped by file. Use count_matches
+	// for exact per-file occurrence counts.
+	OutputMode     string `json:"outputMode,omitempty"`
 	Path           string `json:"path,omitempty"`
 	Glob           string `json:"glob,omitempty"`
 	IncludeIgnored bool   `json:"includeIgnored,omitempty"`
@@ -77,71 +98,50 @@ type Request struct {
 	// case-insensitive (the historic Ally default and the tool description's
 	// contract).
 	CaseSensitive bool `json:"caseSensitive,omitempty"`
-	// Offset skips the first N matching lines (entries) before collecting
-	// samples, mirroring the pagination contract of kimi-code's GrepTool.
-	// Pass the previous result's NextOffset here to page through large sets.
+	// Offset skips the first N result entries before collecting a page. In
+	// lines mode entries are matching lines; in count_matches mode they are
+	// distinct matching files. Pass the previous result's NextOffset here to
+	// page through large sets.
 	Offset int `json:"offset,omitempty"`
-	// ContextBefore/ContextAfter include that many context lines around each
-	// match (rg -B/-A). Context lines are marked `context: true` in matches
-	// and never count toward stats or pagination offsets.
-	ContextBefore int `json:"contextBefore,omitempty"`
-	ContextAfter  int `json:"contextAfter,omitempty"`
 }
 
-// Match is a single sample line within a file group. Content is capped
-// at 200 bytes; ContentTruncated is set when the cap was applied so the model
-// knows the line was shortened (and must re-read before using it as edit
-// source text). Context marks a surrounding line requested via
-// ContextBefore/ContextAfter rather than a match itself.
-type Match struct {
-	LineNum          int    `json:"lineNum"`
-	Content          string `json:"content"`
-	ContentTruncated bool   `json:"contentTruncated,omitempty"`
-	Context          bool   `json:"context,omitempty"`
+// LineFileMatch groups matching line numbers for one file. The path is
+// emitted once; Lines lists the 1-based line numbers of matching lines in
+// ascending order. It carries no line text, keeping the result flat so a
+// broad search stays compact.
+type LineFileMatch struct {
+	Path  string `json:"path"`
+	Lines []int  `json:"lines"`
 }
 
-// FileMatch groups sample matches by file path so the path is emitted once.
-// MatchCount is the exact number of hits in that file across the whole
-// search (not just the sampled lines), so the model can spot hotspots even
-// when only a few sample lines are shown.
-type FileMatch struct {
-	Path       string  `json:"path"`
-	Matches    []Match `json:"matches"`
-	MatchCount int     `json:"matchCount"`
-}
-
-// FileCount is one entry in the per-file hotspot list returned as
-// Result.FileCounts.
+// FileCount is one entry in the per-file count list returned as
+// Result.FileCounts in count_matches mode.
 type FileCount struct {
 	Path  string `json:"path"`
 	Count int    `json:"count"`
 }
 
-// Result is the grep tool result. FileHits groups sample matches by
-// file path; MatchedLines/Hits/Files are exact stats across all matches.
-// FileCounts lists the top matched files with exact hit counts, sorted by
-// count descending (top hotspots first). FileCountsTruncated reports when
-// more matching files exist beyond that bounded list. NextOffset is non-zero
-// when more matches remain past the sample window; pass it back as
-// Request.Offset to page through the rest.
+// Result is the grep tool result. Mode lines returns matching line numbers
+// grouped by file (no line text). Mode count_matches returns per-file counts.
+// MatchedLines/Hits/Files stay exact across all modes. NextOffset pages the
+// active mode's result entries.
 type Result struct {
-	FileHits            []FileMatch `json:"fileHits"`
-	FileCounts          []FileCount `json:"fileCounts"`
-	MatchedLines        int         `json:"matchedLines"`
-	Hits                int         `json:"hits"`
-	Files               int         `json:"files"`
-	Truncated           bool        `json:"truncated"`
-	SamplesTruncated    bool        `json:"samplesTruncated"`
-	StatsExact          bool        `json:"statsExact"`
-	NextOffset          int         `json:"nextOffset,omitempty"`
-	FileCountsTruncated bool        `json:"fileCountsTruncated,omitempty"`
+	Mode         string          `json:"mode"`
+	LineHits     []LineFileMatch `json:"matches,omitempty"`
+	FileCounts   []FileCount     `json:"fileCounts,omitempty"`
+	MatchedLines int             `json:"matchedLines"`
+	Hits         int             `json:"hits"`
+	Files        int             `json:"files"`
+	Truncated    bool            `json:"truncated"`
+	StatsExact   bool            `json:"statsExact"`
+	NextOffset   int             `json:"nextOffset,omitempty"`
+	// OffsetExhausted reports that Request.Offset skipped past the end of the
+	// match stream: matches is empty even though Hits > 0. Reset offset to 0
+	// to page from the beginning.
+	OffsetExhausted bool `json:"offsetExhausted,omitempty"`
 	// Skipped describes workspace-wide search policies that may hide content.
 	// Explicit path searches do not apply these broad exclusions.
 	Skipped []string `json:"skipped,omitempty"`
-	// OffsetExhausted reports that Request.Offset skipped past the end of
-	// the match stream: fileHits is empty even though Hits > 0. Reset
-	// offset to 0 to page from the beginning.
-	OffsetExhausted bool `json:"offsetExhausted,omitempty"`
 	// Warnings carries non-fatal issues encountered during search, such as
 	// individual files that rg could not open (Windows reserved names, etc.).
 	// Results are still returned; only the bad files were skipped.
@@ -231,18 +231,20 @@ type SearchStats struct {
 	FilesWithMatches int
 }
 
-// Search runs ripgrep against searchRoot and returns sample matches plus
-// exact counts. root is the workspace root used to compute relative display
-// paths.
+// Search runs ripgrep against searchRoot and returns a mode-specific result.
+// The default lines mode returns matching line numbers grouped by file,
+// keeping broad searches compact; count_matches returns per-file counts.
+// Exact counts are collected for every mode.
 //
-// It runs one --json --stats pass. Once the sample budget is full, the parser
-// stops retaining match bodies but keeps draining the same process so the
+// It runs one --json --stats pass. Once the line budget is full, the parser
+// stops retaining line numbers but keeps draining the same process so the
 // trailing summary and per-file end events remain exact without rescanning
 // the workspace.
 func Search(ctx context.Context, rgPath, root, searchRoot string, req Request) (*Result, error) {
+	mode := normalizedOutputMode(req.OutputMode)
 	maxDepth, maxFiles, maxMatches := limits(req)
 
-	fileHits, fileCounts, nextOffset, stats, truncated, offsetExhausted, warnings, err := sampleMatches(ctx, rgPath, root, searchRoot, req, maxDepth, maxFiles, maxMatches)
+	lineHits, fileCounts, nextOffset, stats, truncated, offsetExhausted, warnings, err := sampleMatches(ctx, rgPath, root, searchRoot, req, maxDepth, maxFiles, maxMatches)
 	if err != nil {
 		return nil, err
 	}
@@ -250,30 +252,27 @@ func Search(ctx context.Context, rgPath, root, searchRoot string, req Request) (
 		return nil, errors.New("ripgrep did not emit summary statistics")
 	}
 
-	// Per-file end events attach exact hit counts while the stream is read.
-	// Sort only the bounded sample groups so the model sees hotspots first.
-	sort.SliceStable(fileHits, func(i, j int) bool {
-		if fileHits[i].MatchCount != fileHits[j].MatchCount {
-			return fileHits[i].MatchCount > fileHits[j].MatchCount
-		}
-		return fileHits[i].Path < fileHits[j].Path
-	})
-
-	return &Result{
-		FileHits:            fileHits,
-		FileCounts:          fileCounts,
-		MatchedLines:        stats.MatchedLines,
-		Hits:                stats.Matches,
-		Files:               stats.FilesWithMatches,
-		Truncated:           truncated,
-		SamplesTruncated:    truncated,
-		StatsExact:          true,
-		NextOffset:          nextOffset,
-		FileCountsTruncated: stats.FilesWithMatches > len(fileCounts),
-		OffsetExhausted:     offsetExhausted,
-		Skipped:             searchSkipNotices(req),
-		Warnings:            warnings,
-	}, nil
+	res := &Result{
+		Mode:            mode,
+		MatchedLines:    stats.MatchedLines,
+		Hits:            stats.Matches,
+		Files:           stats.FilesWithMatches,
+		Truncated:       truncated,
+		StatsExact:      true,
+		NextOffset:      nextOffset,
+		OffsetExhausted: offsetExhausted,
+		Skipped:         searchSkipNotices(req),
+		Warnings:        warnings,
+	}
+	if mode == OutputModeCountMatches {
+		// count_matches returns the exact count for each file in this page.
+		// Line numbers would only duplicate that information.
+		res.FileCounts = fileCounts
+	} else {
+		// lines mode: the path→line-number groups are the payload.
+		res.LineHits = lineHits
+	}
+	return res, nil
 }
 
 // NormalizeError wraps err with a stable code if it isn't already coded.
@@ -476,7 +475,8 @@ func parseEndEvent(line []byte, root string) (path string, count int, ok bool) {
 	return DisplayPathForRoot(root, event.Data.Path.Text), event.Data.Stats.Matches, true
 }
 
-func sampleMatches(ctx context.Context, rgPath, root, searchRoot string, req Request, maxDepth, maxFiles, maxMatches int) ([]FileMatch, []FileCount, int, *SearchStats, bool, bool, []string, error) {
+func sampleMatches(ctx context.Context, rgPath, root, searchRoot string, req Request, maxDepth, maxFiles, maxMatches int) ([]LineFileMatch, []FileCount, int, *SearchStats, bool, bool, []string, error) {
+	mode := normalizedOutputMode(req.OutputMode)
 	args := baseArgs(req, maxDepth)
 	args = append(args,
 		"--json",
@@ -484,12 +484,6 @@ func sampleMatches(ctx context.Context, rgPath, root, searchRoot string, req Req
 		"--line-number",
 		"-e", req.Pattern,
 	)
-	if req.ContextBefore > 0 {
-		args = append(args, "-B", strconv.Itoa(req.ContextBefore))
-	}
-	if req.ContextAfter > 0 {
-		args = append(args, "-A", strconv.Itoa(req.ContextAfter))
-	}
 	args = append(args, searchRoot)
 
 	cmd := exec.CommandContext(ctx, rgPath, args...)
@@ -520,7 +514,7 @@ func sampleMatches(ctx context.Context, rgPath, root, searchRoot string, req Req
 	groupByPath := map[string]*sampleFile{}
 	fileCounts := &fileCountHeap{}
 	heap.Init(fileCounts)
-	totalMatches := 0
+	totalLines := 0
 	truncated := false
 	parseErr := error(nil)
 	sampleLimitReached := false
@@ -529,13 +523,9 @@ func sampleMatches(ctx context.Context, rgPath, root, searchRoot string, req Req
 	// The stream always drains to completion, so summary statistics and file
 	// counts stay exact even after the sample budget is exhausted.
 	var stats *SearchStats
-	// seen counts every match event consumed (offset-skips plus samples) so
-	// NextOffset can resume exactly after the last consumed event.
+	// seen counts every matching line consumed (offset-skips plus samples) so
+	// NextOffset can resume exactly after the last consumed line.
 	seen := 0
-	// pendingContext buffers rg context events that arrived before the first
-	// sampled match of their file (rg emits -B lines before the match), so
-	// before-context is not lost. Bounded per path by maxContextPending.
-	pendingContext := map[string][]Match{}
 
 	reader := bufio.NewReaderSize(stdout, 64*1024)
 	for {
@@ -567,83 +557,49 @@ func sampleMatches(ctx context.Context, rgPath, root, searchRoot string, req Req
 						group.matchCount = n
 					}
 				}
-			} else if !recordTruncated && !outputCapped && !sampleLimitReached {
-				event, ok, err := parseMatch(line, root)
+			} else if !recordTruncated && !outputCapped {
+				path, lineNum, ok, err := parseMatch(line, root)
 				if err != nil {
 					parseErr = err
-				} else if ok {
-					if event.Context {
-						// Context line (-B/-A): attach to the file's group when it
-						// already has samples; otherwise buffer it until the first
-						// real match arrives (rg emits -B lines before it). Never
-						// counts toward stats, offsets, or sample limits. Once the
-						// sample quota is exhausted, drop context lines too: they
-						// belong to matches that will never be sampled. The quota
-						// check is direct (totalMatches >= maxMatches) because
-						// sampleLimitReached is only set when the next match
-						// arrives, after this context line.
-						if sampleLimitReached || totalMatches >= maxMatches {
-							continue
-						}
-						if g := groupByPath[event.Path]; g != nil {
-							content, contentTruncated := truncateLine(event.Content, maxMatchPreviewBytes)
-							g.matches = append(g.matches, Match{
-								LineNum:          event.LineNum,
-								Content:          content,
-								ContentTruncated: contentTruncated,
-								Context:          true,
-							})
-						} else {
-							pending := pendingContext[event.Path]
-							if len(pending) < maxContextPending {
-								content, contentTruncated := truncateLine(event.Content, maxMatchPreviewBytes)
-								pending = append(pending, Match{
-									LineNum:          event.LineNum,
-									Content:          content,
-									ContentTruncated: contentTruncated,
-									Context:          true,
-								})
-								pendingContext[event.Path] = pending
-							}
-						}
-						continue
-					}
-					if seen < req.Offset {
-						// Within the skip window: count the consumed match but
-						// do not sample it. Drop its buffered before-context so
-						// skipped matches do not leak context lines.
+			} else if ok {
+				if mode == OutputModeCountMatches {
+					// count_matches resolves its page from the globally
+					// sorted per-file counts collected by the end events, so
+					// line grouping is skipped entirely.
+					continue
+				}
+			// lines mode: one entry per matching line, capped by the total
+			// line budget. seen counts every consumed line (skipped by
+			// offset and sampled) up to the last sampled one, so
+			// NextOffset resumes exactly after it. The line that hits the
+			// budget is not counted — it is the first line of the next page.
+			if sampleLimitReached {
+				continue
+			}
+			if seen < req.Offset {
+				seen++
+				continue
+			}
+			g := groupByPath[path]
+			if g == nil && len(groups) < maxFiles {
+				// Cap the number of files that get a line list so a
+				// search hitting thousands of files stays bounded; the
+				// exact totals still come from the summary stats. Initialize
+				// Lines so an empty group serializes as [] rather than null.
+				g = &sampleFile{path: path, lines: []int{}}
+				groupByPath[path] = g
+				groups = append(groups, g)
+			}
+				if g != nil && totalLines < maxMatches {
+					if len(g.lines) == 0 || g.lines[len(g.lines)-1] != lineNum {
+						g.lines = append(g.lines, lineNum)
+						totalLines++
 						seen++
-						delete(pendingContext, event.Path)
-					} else {
-						g := groupByPath[event.Path]
-						if g == nil && len(groups) < maxFiles {
-							// Initialize the slice so an empty group (sample quota
-							// exhausted before its first match was sampled)
-							// serializes as [] instead of null.
-							g = &sampleFile{path: event.Path, matches: []Match{}}
-							groupByPath[event.Path] = g
-							groups = append(groups, g)
-						}
-						if g != nil && totalMatches < maxMatches {
-							// Flush buffered before-context first so the group
-							// reads in file order.
-							if pending := pendingContext[event.Path]; len(pending) > 0 {
-								g.matches = append(g.matches, pending...)
-								delete(pendingContext, event.Path)
-							}
-							content, contentTruncated := truncateLine(event.Content, maxMatchPreviewBytes)
-							g.matches = append(g.matches, Match{
-								LineNum:          event.LineNum,
-								Content:          content,
-								ContentTruncated: contentTruncated,
-							})
-							totalMatches++
-							seen++
-						} else {
-							sampleLimitReached = true
-							truncated = true
-						}
 					}
+				} else {
+					sampleLimitReached = true
+					truncated = true
+				}
 				}
 			}
 		}
@@ -694,29 +650,61 @@ func sampleMatches(ctx context.Context, rgPath, root, searchRoot string, req Req
 		return nil, nil, 0, nil, false, false, nil, errors.New("ripgrep did not emit summary statistics")
 	}
 
-	fileHits := make([]FileMatch, 0, len(groups))
+	lineHits := make([]LineFileMatch, 0, len(groups))
 	for _, g := range groups {
-		fileHits = append(fileHits, FileMatch{Path: g.path, Matches: g.matches, MatchCount: g.matchCount})
+		lineHits = append(lineHits, LineFileMatch{Path: g.path, Lines: g.lines})
 	}
-	// The summary provides the exact remaining line count without rescanning.
-	nextOffset := 0
-	if truncated && stats.MatchedLines > seen {
-		if seen > req.Offset {
-			nextOffset = seen
-		} else if outputCapped && seen == req.Offset {
-			// An unusually large first record can consume the output budget before
-			// it is parsed. Advance once so paging cannot repeat offset zero.
-			nextOffset = seen + 1
+	// count_matches resolves its page from the globally sorted per-file counts
+	// collected by the end events so the hottest files lead and pagination is
+	// stable; lines mode keeps the rg traversal order for predictable offsets.
+	var resultCounts []FileCount
+	if mode == OutputModeCountMatches {
+		sorted := fileCounts.Items()
+		start := req.Offset
+		if start < 0 {
+			start = 0
 		}
+		if start > len(sorted) {
+			start = len(sorted)
+		}
+		end := start + maxFiles
+		if end > len(sorted) {
+			end = len(sorted)
+		}
+		resultCounts = sorted[start:end]
 	}
-	offsetExhausted := req.Offset > 0 && stats.MatchedLines > 0 && req.Offset >= stats.MatchedLines && len(fileHits) == 0
-	return fileHits, fileCounts.Items(), nextOffset, stats, truncated, offsetExhausted, warnings, nil
+
+	nextOffset := 0
+	offsetExhausted := false
+	if mode == OutputModeCountMatches {
+		total := stats.FilesWithMatches
+		if req.Offset > 0 && req.Offset >= total {
+			offsetExhausted = total > 0
+		} else if total > req.Offset+len(resultCounts) {
+			nextOffset = req.Offset + len(resultCounts)
+			truncated = true
+		}
+	} else {
+		if truncated && stats.MatchedLines > seen {
+			if seen > req.Offset {
+				nextOffset = seen
+			} else if outputCapped && seen == req.Offset {
+				// An unusually large first record can consume the output budget before
+				// it is parsed. Advance once so paging cannot repeat offset zero.
+				nextOffset = seen + 1
+			}
+		}
+		offsetExhausted = req.Offset > 0 && stats.MatchedLines > 0 && req.Offset >= stats.MatchedLines && len(groups) == 0
+	}
+	return lineHits, resultCounts, nextOffset, stats, truncated, offsetExhausted, warnings, nil
 }
 
-// sampleFile accumulates matches for one file path during sample collection.
+// sampleFile accumulates matching line numbers for one file path during
+// sample collection. matchCount is the exact hit count from the per-file end
+// event (used by count_matches mode).
 type sampleFile struct {
 	path       string
-	matches    []Match
+	lines      []int
 	matchCount int
 }
 
@@ -831,17 +819,6 @@ func failureError(stderr string) error {
 	}
 }
 
-type matchEvent struct {
-	Path        string
-	LineNum     int
-	Content     string
-	Occurrences int
-	// Context marks a surrounding line emitted by rg -B/-A rather than a
-	// real match. Context lines never count toward stats, offsets, or
-	// per-file counts.
-	Context bool
-}
-
 // parseSummaryStats extracts the exact counts from rg's --json --stats
 // trailing summary event. It returns nil for any other event type. A cheap
 // byte pre-check avoids a full JSON unmarshal on every non-summary record in
@@ -873,54 +850,26 @@ func parseSummaryStats(line []byte) *SearchStats {
 	}
 }
 
-func parseMatch(line []byte, root string) (matchEvent, bool, error) {
+// parseMatch returns the display path and 1-based line number for a ripgrep
+// --json "match" event. begin/end/summary/context events are handled by their
+// dedicated parsers (or ignored) and never reach here.
+func parseMatch(line []byte, root string) (path string, lineNum int, ok bool, err error) {
 	var event struct {
 		Type string `json:"type"`
 		Data struct {
 			Path struct {
 				Text string `json:"text"`
 			} `json:"path"`
-			Lines struct {
-				Text string `json:"text"`
-			} `json:"lines"`
 			LineNumber int `json:"line_number"`
-			Submatches []struct {
-				Start int `json:"start"`
-				End   int `json:"end"`
-			} `json:"submatches"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(line, &event); err != nil {
-		return matchEvent{}, false, err
+		return "", 0, false, err
 	}
-	// ripgrep --json emits surrounding lines (from -B/-A) as dedicated
-	// "context" events; real matches are "match" events with submatches.
-	if event.Data.Path.Text == "" {
-		return matchEvent{}, false, nil
+	if event.Type != "match" || event.Data.Path.Text == "" {
+		return "", 0, false, nil
 	}
-	rel := DisplayPathForRoot(root, event.Data.Path.Text)
-	content := strings.TrimRight(event.Data.Lines.Text, "\r\n")
-	if event.Type == "context" {
-		return matchEvent{
-			Path:    rel,
-			LineNum: event.Data.LineNumber,
-			Content: content,
-			Context: true,
-		}, true, nil
-	}
-	if event.Type != "match" {
-		return matchEvent{}, false, nil
-	}
-	occurrences := len(event.Data.Submatches)
-	if occurrences == 0 {
-		occurrences = 1
-	}
-	return matchEvent{
-		Path:        rel,
-		LineNum:     event.Data.LineNumber,
-		Content:     content,
-		Occurrences: occurrences,
-	}, true, nil
+	return DisplayPathForRoot(root, event.Data.Path.Text), event.Data.LineNumber, true, nil
 }
 
 func excludedDirs() []string {
@@ -940,24 +889,6 @@ func excludedDirs() []string {
 		".cache",
 		"coverage",
 	}
-}
-
-// truncateLine caps a match preview to maxLen bytes. The cut point is walked
-// back to the previous UTF-8 rune boundary so we never slice through a
-// multi-byte sequence — slicing at an arbitrary byte would produce invalid
-// UTF-8 that JSON-serializes to U+FFFD and renders as garbage in the UI for
-// CJK/emoji content. The second return value reports whether the line was
-// shortened, so callers can surface the cap to the model instead of letting
-// it mistake the truncated preview for the full line.
-func truncateLine(line string, maxLen int) (string, bool) {
-	if len(line) <= maxLen {
-		return line, false
-	}
-	end := maxLen
-	for end > 0 && !utf8.RuneStart(line[end]) {
-		end--
-	}
-	return line[:end] + "...", true
 }
 
 // limitedBuffer is a mutex-protected byte buffer that silently truncates

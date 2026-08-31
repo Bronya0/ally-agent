@@ -667,8 +667,9 @@ func TestGrepFilesSearchesHiddenDirectoryWhenItIsTheRoot(t *testing.T) {
 
 	app := NewApp()
 	got, err := app.grepFilesWithConfig(context.Background(), ConfigState{Workspace: root}, GrepRequest{
-		Pattern: "needle",
-		Path:    ".github",
+		Pattern:    "needle",
+		OutputMode: grep.OutputModeLines,
+		Path:       ".github",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -676,8 +677,8 @@ func TestGrepFilesSearchesHiddenDirectoryWhenItIsTheRoot(t *testing.T) {
 	if got.MatchedLines != 1 || got.Files != 1 {
 		t.Fatalf("expected one match in hidden search root, got %#v", got)
 	}
-	if got.FileHits[0].Path != ".github/workflows/ci.yml" {
-		t.Fatalf("unexpected match path %q", got.FileHits[0].Path)
+	if len(got.LineHits) != 1 || got.LineHits[0].Path != ".github/workflows/ci.yml" || len(got.LineHits[0].Lines) != 1 || got.LineHits[0].Lines[0] != 1 {
+		t.Fatalf("unexpected lines-mode match %#v", got.LineHits)
 	}
 }
 
@@ -689,8 +690,9 @@ func TestGrepFilesKeepsExactCountsWhenSamplesAreTruncatedByFileLimit(t *testing.
 
 	app := NewApp()
 	got, err := app.grepFilesWithConfig(context.Background(), ConfigState{Workspace: root}, GrepRequest{
-		Pattern:  "needle",
-		MaxFiles: 1,
+		Pattern:    "needle",
+		OutputMode: grep.OutputModeLines,
+		MaxFiles:   1,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -700,20 +702,33 @@ func TestGrepFilesKeepsExactCountsWhenSamplesAreTruncatedByFileLimit(t *testing.
 	}
 	// Without --sort the sampled file is whichever rg reaches first, so the
 	// contract is "samples are limited to one file", not a specific path.
-	if !got.SamplesTruncated || !got.Truncated || len(got.FileHits) != 1 {
+	if !got.Truncated || len(got.LineHits) != 1 {
 		t.Fatalf("expected single-file samples and truncation, got %#v", got)
 	}
-	hits := got.FileHits[0]
+	hits := got.LineHits[0]
 	if hits.Path != "a.txt" && hits.Path != "b.txt" {
 		t.Fatalf("unexpected sample file %q", hits.Path)
 	}
-	if len(hits.Matches) == 0 || len(hits.Matches) > 2 {
-		t.Fatalf("expected at least one sample match from the single sampled file, got %#v", hits)
+	if len(hits.Lines) == 0 || len(hits.Lines) > 2 {
+		t.Fatalf("expected at least one sample line from the single sampled file, got %#v", hits)
 	}
-	for _, m := range hits.Matches {
-		if !strings.HasPrefix(m.Content, "needle ") {
-			t.Fatalf("unexpected sample match content %q", m.Content)
-		}
+}
+
+func TestGrepFilesDefaultModeReturnsLineHits(t *testing.T) {
+	requireRipgrep(t)
+	root := t.TempDir()
+	writeToolTestFile(t, root, "a.txt", "needle\n")
+	writeToolTestFile(t, root, "b.txt", "needle\n")
+
+	app := NewApp()
+	got, err := app.grepFilesWithConfig(context.Background(), ConfigState{Workspace: root}, GrepRequest{
+		Pattern: "needle",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Mode != grep.OutputModeLines || len(got.LineHits) != 2 || len(got.FileCounts) != 0 {
+		t.Fatalf("default grep must return line groups without per-file counts, got %#v", got)
 	}
 }
 
@@ -749,6 +764,7 @@ func TestGrepFilesKeepsExactCountsWhenSamplesAreTruncatedByMatchLimit(t *testing
 	app := NewApp()
 	got, err := app.grepFilesWithConfig(context.Background(), ConfigState{Workspace: root}, GrepRequest{
 		Pattern:    "needle",
+		OutputMode: grep.OutputModeLines,
 		MaxMatches: 3,
 	})
 	if err != nil {
@@ -757,8 +773,8 @@ func TestGrepFilesKeepsExactCountsWhenSamplesAreTruncatedByMatchLimit(t *testing
 	if got.MatchedLines != 5 || got.Hits != 5 || got.Files != 1 || !got.StatsExact {
 		t.Fatalf("expected exact counts despite match sample truncation, got %#v", got)
 	}
-	if !got.SamplesTruncated || !got.Truncated || len(got.FileHits) != 1 || len(got.FileHits[0].Matches) != 3 {
-		t.Fatalf("expected three sample matches and truncation, got %#v", got)
+	if !got.Truncated || len(got.LineHits) != 1 || len(got.LineHits[0].Lines) != 3 {
+		t.Fatalf("expected three sample lines and truncation, got %#v", got)
 	}
 }
 
@@ -802,6 +818,7 @@ func TestGrepFilesAlwaysExcludesHeavyDirectories(t *testing.T) {
 	app := NewApp()
 	got, err := app.grepFilesWithConfig(context.Background(), ConfigState{Workspace: root}, GrepRequest{
 		Pattern:        "ally",
+		OutputMode:     grep.OutputModeLines,
 		IncludeIgnored: true,
 	})
 	if err != nil {
@@ -810,8 +827,8 @@ func TestGrepFilesAlwaysExcludesHeavyDirectories(t *testing.T) {
 	if got.MatchedLines != 1 || got.Hits != 1 || got.Files != 1 {
 		t.Fatalf("expected only source match outside heavy dirs, got %#v", got)
 	}
-	if got.FileHits[0].Path != "src/main.go" {
-		t.Fatalf("unexpected match path %q", got.FileHits[0].Path)
+	if got.LineHits[0].Path != "src/main.go" {
+		t.Fatalf("unexpected match path %q", got.LineHits[0].Path)
 	}
 	if len(got.Skipped) == 0 {
 		t.Fatalf("workspace-wide grep must report its skip policy, got %#v", got)
@@ -825,8 +842,9 @@ func TestGrepFilesExplicitPathSearchesExcludedDirectories(t *testing.T) {
 
 	app := NewApp()
 	got, err := app.grepFilesWithConfig(context.Background(), ConfigState{Workspace: root}, GrepRequest{
-		Pattern: "needle",
-		Path:    "vendor",
+		Pattern:    "needle",
+		OutputMode: grep.OutputModeLines,
+		Path:       "vendor",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -834,8 +852,8 @@ func TestGrepFilesExplicitPathSearchesExcludedDirectories(t *testing.T) {
 	if got.MatchedLines != 1 || got.Hits != 1 || got.Files != 1 {
 		t.Fatalf("explicit path must override broad-search exclusions, got %#v", got)
 	}
-	if len(got.FileHits) != 1 || got.FileHits[0].Path != "vendor/pkg/source.go" {
-		t.Fatalf("unexpected explicit-path result %#v", got.FileHits)
+	if len(got.LineHits) != 1 || got.LineHits[0].Path != "vendor/pkg/source.go" {
+		t.Fatalf("unexpected explicit-path lines result %#v", got.LineHits)
 	}
 	if len(got.Skipped) != 0 {
 		t.Fatalf("explicit path search must not report broad skip policies, got %#v", got.Skipped)
@@ -876,22 +894,21 @@ func requireRipgrep(t *testing.T) {
 	}
 }
 
-func TestCompactToolResultForModelCompactsGrepMatches(t *testing.T) {
+func TestCompactToolResultForModelCompactsGrepLines(t *testing.T) {
 	total := maxModelGrepMatches + 5
-	group := GrepFileMatch{Path: "a.txt", Matches: make([]GrepMatch, total), MatchCount: total + 10}
-	for i := range group.Matches {
-		group.Matches[i] = GrepMatch{LineNum: i + 1, Content: "needle"}
+	lines := make([]int, total)
+	for i := range lines {
+		lines[i] = i + 1
 	}
 	result := toolResult{OK: true, Data: GrepResult{
-		FileHits:         []GrepFileMatch{group},
-		FileCounts:       []GrepFileCount{{Path: "a.txt", Count: total + 10}},
-		MatchedLines:     total,
-		Hits:             total,
-		Files:            1,
-		Truncated:        true,
-		SamplesTruncated: true,
-		StatsExact:       true,
-		NextOffset:       total,
+		Mode:         "lines",
+		LineHits:     []GrepFileMatch{{Path: "a.txt", Lines: lines}},
+		MatchedLines: total,
+		Hits:         total,
+		Files:        1,
+		Truncated:    true,
+		StatsExact:   true,
+		NextOffset:   total,
 	}}
 	raw, err := json.Marshal(result)
 	if err != nil {
@@ -901,19 +918,18 @@ func TestCompactToolResultForModelCompactsGrepMatches(t *testing.T) {
 	got := compactToolResultForModel("grep", result, string(raw))
 
 	var decoded struct {
-		OK   bool `json:"ok"`
-		Data struct {
-			FileHits           []GrepFileMatch `json:"fileHits"`
-			FileCounts         []GrepFileCount `json:"fileCounts"`
-			MatchedLines       int             `json:"matchedLines"`
-			Hits               int             `json:"hits"`
-			Files              int             `json:"files"`
-			SamplesTruncated   bool            `json:"samplesTruncated"`
-			NextOffset         int             `json:"nextOffset"`
-			StatsExact         bool            `json:"statsExact"`
-			MatchesReduced     bool            `json:"matchesReduced"`
-			OriginalMatchCount int             `json:"originalMatchCount"`
-			MatchesOmitted     int             `json:"matchesOmitted"`
+		OK               bool `json:"ok"`
+		Data             struct {
+			Matches           []GrepFileMatch `json:"matches"`
+			FileCounts        []GrepFileCount `json:"fileCounts"`
+			MatchedLines      int             `json:"matchedLines"`
+			Hits              int             `json:"hits"`
+			Files             int             `json:"files"`
+			NextOffset        int             `json:"nextOffset"`
+			StatsExact        bool            `json:"statsExact"`
+			LinesReduced      bool            `json:"linesReduced"`
+			LinesOmitted      int             `json:"linesOmitted"`
+			OriginalLineCount int             `json:"originalLineCount"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal([]byte(got), &decoded); err != nil {
@@ -928,50 +944,45 @@ func TestCompactToolResultForModelCompactsGrepMatches(t *testing.T) {
 		t.Fatalf("model view must omit always-true statsExact: %s", got)
 	}
 	totalModel := 0
-	for _, fh := range decoded.Data.FileHits {
-		totalModel += len(fh.Matches)
+	for _, fh := range decoded.Data.Matches {
+		totalModel += len(fh.Lines)
 	}
 	if totalModel != maxModelGrepMatches {
-		t.Fatalf("expected %d model matches, got %d", maxModelGrepMatches, totalModel)
+		t.Fatalf("expected %d model lines, got %d", maxModelGrepMatches, totalModel)
 	}
 	if decoded.Data.MatchedLines != total || decoded.Data.Hits != total || decoded.Data.Files != 1 {
 		t.Fatalf("expected grep stats to be preserved, got %#v", decoded.Data)
 	}
-	// statsExact is always true and intentionally omitted from the model view
-	// (asserted above via strings.Contains); the decoded zero value is fine.
-	if !decoded.Data.SamplesTruncated {
-		t.Fatalf("expected samplesTruncated marker to be preserved, got %#v", decoded.Data)
-	}
-	if !decoded.Data.MatchesReduced || decoded.Data.OriginalMatchCount != total || decoded.Data.MatchesOmitted != 5 {
+	if !decoded.Data.LinesReduced || decoded.Data.OriginalLineCount != total || decoded.Data.LinesOmitted != 5 {
 		t.Fatalf("expected reduction metadata, got %#v", decoded.Data)
 	}
-	// matchCount, fileCounts and nextOffset must survive compaction so the
-	// model can rank hotspots and page through the rest.
-	if len(decoded.Data.FileHits) != 1 || decoded.Data.FileHits[0].MatchCount != total+10 {
-		t.Fatalf("expected exact matchCount to survive compaction, got %#v", decoded.Data.FileHits)
-	}
-	if len(decoded.Data.FileCounts) != 1 || decoded.Data.FileCounts[0].Path != "a.txt" || decoded.Data.FileCounts[0].Count != total+10 {
-		t.Fatalf("expected fileCounts to survive compaction, got %#v", decoded.Data.FileCounts)
-	}
+	// nextOffset must survive compaction so the model can page through the
+	// rest of the lines even though the sampled set was capped.
 	if decoded.Data.NextOffset != total {
 		t.Fatalf("expected nextOffset to survive compaction, got %d", decoded.Data.NextOffset)
 	}
 }
 
-func TestCompactToolResultForModelPreservesRealMatchesWithLargeContext(t *testing.T) {
-	matches := make([]GrepMatch, 0, 503)
-	for i := 0; i < 500; i++ {
-		matches = append(matches, GrepMatch{LineNum: i + 1, Content: "context", Context: true})
-	}
-	for i := 0; i < 3; i++ {
-		matches = append(matches, GrepMatch{LineNum: 501 + i, Content: "needle"})
+func TestCompactToolResultForModelCapsLinesAcrossFiles(t *testing.T) {
+	// Many line groups, each over budget: the cap is global (maxModelGrepMatches
+	// total lines), not per file, and exact totals survive in the header.
+	over := maxModelGrepMatches + 10
+	build := func() []GrepFileMatch {
+		lines := make([]int, over)
+		for i := range lines {
+			lines[i] = i + 1
+		}
+		return []GrepFileMatch{
+			{Path: "a.txt", Lines: lines},
+			{Path: "b.txt", Lines: lines},
+		}
 	}
 	result := toolResult{OK: true, Data: GrepResult{
-		FileHits:     []GrepFileMatch{{Path: "a.txt", Matches: matches, MatchCount: 3}},
-		FileCounts:   []GrepFileCount{{Path: "a.txt", Count: 3}},
-		MatchedLines: 3,
-		Hits:         3,
-		Files:        1,
+		LineHits:     build(),
+		MatchedLines: 2 * over,
+		Hits:         2 * over,
+		Files:        2,
+		Truncated:    true,
 		StatsExact:   true,
 	}}
 	raw, err := json.Marshal(result)
@@ -982,28 +993,70 @@ func TestCompactToolResultForModelPreservesRealMatchesWithLargeContext(t *testin
 	compact := compactToolResultForModel("grep", result, string(raw))
 	var decoded struct {
 		Data struct {
-			FileHits       []GrepFileMatch `json:"fileHits"`
-			MatchesOmitted int             `json:"matchesOmitted"`
-			ContextOmitted int             `json:"contextOmitted"`
-			MatchesReduced bool            `json:"matchesReduced"`
+			Matches      []GrepFileMatch `json:"matches"`
+			LinesReduced bool            `json:"linesReduced"`
+			LinesOmitted int             `json:"linesOmitted"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal([]byte(compact), &decoded); err != nil {
 		t.Fatal(err)
 	}
-	actualMatches, contextLines := 0, 0
-	for _, match := range decoded.Data.FileHits[0].Matches {
-		if match.Context {
-			contextLines++
-		} else {
-			actualMatches++
-		}
+	total := 0
+	for _, fh := range decoded.Data.Matches {
+		total += len(fh.Lines)
 	}
-	if actualMatches != 3 {
-		t.Fatalf("model compaction must preserve all real matches, got %d from %#v", actualMatches, decoded.Data.FileHits)
+	if total != maxModelGrepMatches {
+		t.Fatalf("expected global cap of %d lines across files, got %d", maxModelGrepMatches, total)
 	}
-	if contextLines > maxModelGrepContextLines || decoded.Data.MatchesOmitted != 0 || decoded.Data.ContextOmitted != 100 || !decoded.Data.MatchesReduced {
-		t.Fatalf("expected bounded context reduction without dropping matches, got context=%d data=%#v", contextLines, decoded.Data)
+	if !decoded.Data.LinesReduced || decoded.Data.LinesOmitted != 2*over-maxModelGrepMatches {
+		t.Fatalf("expected reduction metadata, got %#v", decoded.Data)
+	}
+}
+
+func TestCompactToolResultForModelPreservesGrepCounts(t *testing.T) {
+	// count_matches carries per-file counts instead of line groups. The model
+	// view must keep the counts (capped) plus the exact totals so hotspots
+	// stay rankable and truncation is still reported honestly.
+	total := maxModelGrepFileCounts + 5
+	counts := make([]GrepFileCount, total)
+	for i := range counts {
+		counts[i] = GrepFileCount{Path: fmt.Sprintf("f%02d.txt", i), Count: total - i}
+	}
+	result := toolResult{OK: true, Data: GrepResult{
+		Mode:         "count_matches",
+		FileCounts:   counts,
+		MatchedLines: 40,
+		Hits:         60,
+		Files:        total,
+		StatsExact:   true,
+	}}
+	raw, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := compactToolResultForModel("grep", result, string(raw))
+	var decoded struct {
+		Data struct {
+			Mode              string          `json:"mode"`
+			FileCounts        []GrepFileCount `json:"fileCounts"`
+			FileCountsReduced bool            `json:"fileCountsReduced"`
+			MatchedLines      int             `json:"matchedLines"`
+			Hits              int             `json:"hits"`
+			Files             int             `json:"files"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(got), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Data.Mode != "count_matches" {
+		t.Fatalf("expected count mode preserved, got %s", got)
+	}
+	if len(decoded.Data.FileCounts) != maxModelGrepFileCounts || !decoded.Data.FileCountsReduced {
+		t.Fatalf("expected fileCounts capped at %d with a reduction flag, got %#v", maxModelGrepFileCounts, decoded.Data)
+	}
+	if decoded.Data.MatchedLines != 40 || decoded.Data.Hits != 60 || decoded.Data.Files != total {
+		t.Fatalf("expected exact stats preserved, got %#v", decoded.Data)
 	}
 }
 
@@ -1018,8 +1071,25 @@ func TestGrepFilesReportsFileCountsAndOffsetEndToEnd(t *testing.T) {
 	writeToolTestFile(t, root, "cold.txt", "needle\n")
 
 	app := NewApp()
+	// count_matches: exact per-file occurrence counts, sorted descending.
+	counts, err := app.grepFilesWithConfig(context.Background(), ConfigState{Workspace: root}, GrepRequest{
+		Pattern:    "needle",
+		OutputMode: grep.OutputModeCountMatches,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counts.MatchedLines != 13 || counts.Hits != 13 || counts.Files != 2 {
+		t.Fatalf("expected exact stats, got %#v", counts)
+	}
+	if len(counts.FileCounts) != 2 || counts.FileCounts[0].Path != "hot.txt" || counts.FileCounts[0].Count != 12 || counts.FileCounts[1].Path != "cold.txt" || counts.FileCounts[1].Count != 1 {
+		t.Fatalf("expected descending fileCounts, got %#v", counts.FileCounts)
+	}
+
+	// lines mode: exact stats and line-number pagination.
 	got, err := app.grepFilesWithConfig(context.Background(), ConfigState{Workspace: root}, GrepRequest{
 		Pattern:    "needle",
+		OutputMode: grep.OutputModeLines,
 		MaxMatches: 5,
 	})
 	if err != nil {
@@ -1028,23 +1098,23 @@ func TestGrepFilesReportsFileCountsAndOffsetEndToEnd(t *testing.T) {
 	if got.MatchedLines != 13 || got.Hits != 13 || got.Files != 2 {
 		t.Fatalf("expected exact stats, got %#v", got)
 	}
-	// Hotspot list: hot.txt(12) first, cold.txt(1) second.
-	if len(got.FileCounts) != 2 || got.FileCounts[0].Path != "hot.txt" || got.FileCounts[0].Count != 12 || got.FileCounts[1].Path != "cold.txt" || got.FileCounts[1].Count != 1 {
-		t.Fatalf("expected descending fileCounts, got %#v", got.FileCounts)
-	}
 	if !got.Truncated || got.NextOffset != 5 {
 		t.Fatalf("expected truncated page with NextOffset 5, got %#v", got)
 	}
-	// Sampled file must carry its exact full-file matchCount.
-	for _, fh := range got.FileHits {
-		if fh.Path == "hot.txt" && fh.MatchCount != 12 {
-			t.Fatalf("expected hot.txt matchCount 12, got %#v", fh)
-		}
+	// The line budget is global across file groups, and rg's traversal order
+	// is not alphabetical: here cold.txt is reached first, so page 1 spans two
+	// groups totalling five line numbers rather than one group of five.
+	pageLines := 0
+	for _, g := range got.LineHits {
+		pageLines += len(g.Lines)
+	}
+	if pageLines != 5 {
+		t.Fatalf("expected 5 line numbers on page 1, got %#v", got.LineHits)
 	}
 
-	// Page 2 via offset resumes past the first page.
 	page2, err := app.grepFilesWithConfig(context.Background(), ConfigState{Workspace: root}, GrepRequest{
 		Pattern:    "needle",
+		OutputMode: grep.OutputModeLines,
 		MaxMatches: 5,
 		Offset:     got.NextOffset,
 	})
@@ -1058,6 +1128,7 @@ func TestGrepFilesReportsFileCountsAndOffsetEndToEnd(t *testing.T) {
 	// Case-sensitive search narrows results.
 	sensitive, err := app.grepFilesWithConfig(context.Background(), ConfigState{Workspace: root}, GrepRequest{
 		Pattern:       "Needle",
+		OutputMode:    grep.OutputModeLines,
 		CaseSensitive: true,
 	})
 	if err != nil {
@@ -1067,7 +1138,8 @@ func TestGrepFilesReportsFileCountsAndOffsetEndToEnd(t *testing.T) {
 		t.Fatalf("expected zero case-sensitive matches for Needle, got %#v", sensitive)
 	}
 	insensitive, err := app.grepFilesWithConfig(context.Background(), ConfigState{Workspace: root}, GrepRequest{
-		Pattern: "Needle",
+		Pattern:    "Needle",
+		OutputMode: grep.OutputModeLines,
 	})
 	if err != nil {
 		t.Fatal(err)

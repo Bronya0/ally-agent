@@ -78,7 +78,7 @@
 ## internal/app/ — infra_ 前缀（工具基础设施，跨编排共享）
 
 - infra_bridges.go — 工具基础设施桥：类型别名、provider 参数/格式/reasoningEffort 归一化、limitedBuffer、路径与哈希薄包装、原子写；关键: normalizeAPIFormat, normalizeReasoningEffort, limitedBuffer, resolveReadablePath, safeWriteFile
-- infra_result.go — 工具结果信封与模型压缩：`{ok,data,error,errorCode,details,warnings}`、CodedError 码提取、按工具压缩 data/文本输出；关键: toolResult, compactToolResultForModel, toolResultSummary
+- infra_result.go — 工具结果信封与模型压缩：`{ok,data,error,errorCode,details,warnings}`、CodedError 码提取、按工具压缩 data/文本输出；grep 默认 lines 模式按文件分组返回行号（封顶文件数 + 总行数预算），count_matches 返回逐文件计数；关键: toolResult, compactToolResultForModel, toolResultSummary
 - infra_stream.go — 流式节流：`run:stream` 64ms 纯时间节流发射器、`tool:update` 200ms/2048B 进度门控与流末强制快照；关键: runStreamDeltaEmitter, toolCallProgressTracker, eventsWithForce
 - infra_shell_env.go — 登录 shell 环境探测（macOS/Linux PATH 导入）、命令环境构造；关键: commandEnvironment, probeLoginShellPath
 - infra_bridges_test.go / infra_shell_env_test.go — 测试 reasoningEffort 归一化、mergeConfig 适配器取值、登录 shell PATH 探测
@@ -172,7 +172,7 @@
 - command/ast.go — 基于 mvdan.cc/sh/v3 的 Bash AST 调用提取与重定向目标解析；关键: astInvocations, astShellRedirectionTargets
 - command/semantic.go — 命令语义分析：嵌套调用、命令替换、heredoc、删除/写入目标识别、风险模式；关键: Invocations, MutationPathTargets, invocationRisk, scanHeredoc
 - command/command.go — 旧式回退扫描与字面量路径工具：外部修改判定、重定向目标、写目标分类；关键: MayModifyOutsidePath, LiteralWriteTargets, IsShellNullDevice
-- grep/grep.go — ripgrep 单次扫描封装：精确统计、Top-100 fileCounts 堆、offset 翻页、跳过策略；关键: Search, Find, NormalizeError, fileCountHeap
+- grep/grep.go — ripgrep 单次扫描封装：两种 outputMode（默认 lines 按文件分组返回行号 path→[]lineNum、count_matches 逐文件计数）、精确统计、按模式 offset 翻页、跳过策略；关键: Search, Find, NormalizeError, fileCountHeap
 - grep/hide_windows.go / hide_other.go — ripgrep 子进程窗口隐藏（平台分叉）
 - git/git.go — git porcelain/unified-diff 解析：StatusEntry、按路径拆分 diff、diff 统计、未跟踪文件合成 diff；关键: ParseStatusZ, SplitUnifiedDiffByPath, SynthesizeUntrackedDiff
 - memory/memory.go — 记忆 Markdown frontmatter 解析/生成；关键: ParseMarkdown, FormatMarkdown

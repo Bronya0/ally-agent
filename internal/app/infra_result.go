@@ -478,77 +478,78 @@ func compactToolDataForModel(name string, result toolResult, fullJSON string) st
 		if !decodeToolData(result.Data, &r) {
 			return fullJSON
 		}
-		fileHits := r.FileHits
+		mode := r.Mode
+		if mode == "" {
+			// Legacy results predate outputMode and default to lines today.
+			mode = "lines"
+		}
+		lineHits := r.LineHits
+		fileCounts := r.FileCounts
 		data := map[string]any{
-			"fileHits":         fileHits,
-			"fileCounts":       r.FileCounts,
-			"matchedLines":     r.MatchedLines,
-			"hits":             r.Hits,
-			"files":            r.Files,
-			"truncated":        r.Truncated,
-			"samplesTruncated": r.SamplesTruncated,
-			"nextOffset":       r.NextOffset,
+			"mode":         mode,
+			"matchedLines": r.MatchedLines,
+			"hits":         r.Hits,
+			"files":        r.Files,
+			"truncated":    r.Truncated,
+			"nextOffset":   r.NextOffset,
+		}
+		switch mode {
+		case "lines":
+			// Default: one entry per matching line, grouped by file, no line
+			// text. Cap the file groups, then the total line entries, so a
+			// huge result still fits in model context; exact totals above.
+			if len(lineHits) > maxModelGrepFileCounts {
+				lineHits = lineHits[:maxModelGrepFileCounts]
+				data["filesReduced"] = true
+			}
+			totalLines := 0
+			for _, fh := range lineHits {
+				totalLines += len(fh.Lines)
+			}
+			if totalLines > maxModelGrepMatches {
+				capped := make([]GrepFileMatch, 0, len(lineHits))
+				remaining := maxModelGrepMatches
+				keptLines := 0
+				for _, fh := range lineHits {
+					if remaining <= 0 {
+						break
+					}
+					lines := fh.Lines
+					if len(lines) > remaining {
+						lines = lines[:remaining]
+					}
+					remaining -= len(lines)
+					keptLines += len(lines)
+					capped = append(capped, GrepFileMatch{Path: fh.Path, Lines: lines})
+				}
+				lineHits = capped
+				data["linesReduced"] = true
+				data["originalLineCount"] = totalLines
+				data["linesOmitted"] = totalLines - keptLines
+			}
+			data["matches"] = lineHits
+		case "count_matches":
+			if len(fileCounts) > maxModelGrepFileCounts {
+				fileCounts = fileCounts[:maxModelGrepFileCounts]
+				data["fileCountsReduced"] = true
+			}
+			data["fileCounts"] = fileCounts
+		default:
+			return fullJSON
 		}
 		if len(r.Skipped) > 0 {
 			data["skipped"] = r.Skipped
+		}
+		if len(r.Warnings) > 0 {
+			data["warnings"] = r.Warnings
 		}
 		// statsExact is always true today; only surface it when it changes so
 		// the model sees one less always-true boolean.
 		if !r.StatsExact {
 			data["statsExact"] = false
 		}
-		if r.FileCountsTruncated {
-			data["fileCountsTruncated"] = true
-		}
 		if r.OffsetExhausted {
 			data["offsetExhausted"] = true
-		}
-		totalMatches := 0
-		totalContext := 0
-		for _, fh := range fileHits {
-			for _, match := range fh.Matches {
-				if match.Context {
-					totalContext++
-				} else {
-					totalMatches++
-				}
-			}
-		}
-		if totalMatches > maxModelGrepMatches || totalContext > maxModelGrepContextLines {
-			capped := make([]GrepFileMatch, 0, len(fileHits))
-			remainingMatches := maxModelGrepMatches
-			remainingContext := maxModelGrepContextLines
-			keptMatches := 0
-			keptContext := 0
-			for _, fh := range fileHits {
-				matches := make([]GrepMatch, 0, len(fh.Matches))
-				for _, match := range fh.Matches {
-					if match.Context {
-						if remainingContext <= 0 {
-							continue
-						}
-						remainingContext--
-						keptContext++
-					} else {
-						if remainingMatches <= 0 {
-							continue
-						}
-						remainingMatches--
-						keptMatches++
-					}
-					matches = append(matches, match)
-				}
-				if len(matches) > 0 {
-					capped = append(capped, GrepFileMatch{Path: fh.Path, Matches: matches, MatchCount: fh.MatchCount})
-				}
-			}
-			data["fileHits"] = capped
-			data["matchesReduced"] = true
-			data["originalMatchCount"] = totalMatches
-			data["matchesOmitted"] = totalMatches - keptMatches
-			data["originalContextCount"] = totalContext
-			data["contextOmitted"] = totalContext - keptContext
-			data["reductionNote"] = "grep samples shortened for model context; real matches and surrounding context use separate budgets. UI received the full result. Use a narrower pattern/path/glob or read specific files if more exact context is needed."
 		}
 		return marshalToolResultOrFallback(toolResult{OK: true, Data: data}, fullJSON)
 	case "http_request":

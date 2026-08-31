@@ -338,7 +338,7 @@ Built-in model-facing tools:
 | `edit` | Atomically apply exact-source or whole-line-range replacements to local files; after writing, returns a concise `validation` string with low-cost language checks |
 | `create` | Create/overwrite text files; after writing, returns a concise `validation` string with low-cost language checks |
 | `delete` | Delete files/directories |
-| `grep` | Regex search through bundled ripgrep, with PATH fallback in development; exact stats + per-file hotspot counts (`fileCounts`) + `offset`/`nextOffset` pagination (`offsetExhausted` marks an offset past the end); workspace-wide skip policies are returned in `skipped`, while explicit paths bypass broad generated-directory and 10 MB exclusions |
+| `grep` | Regex search through bundled ripgrep, with PATH fallback in development; `outputMode` defaults to `lines` (one entry per matching line, grouped by file with 1-based line numbers, no line text — compact and flat), `count_matches` returns exact per-file occurrence counts; exact stats + `offset`/`nextOffset` pagination remain available, workspace-wide skip policies are returned in `skipped`, and explicit paths bypass broad generated-directory and 10 MB exclusions |
 | `command` | Shell command execution with safety checks |
 | `service` | Run/inspect/stop long-lived local processes (dev servers, workers); unified three-platform stop = best-effort graceful termination, bounded grace wait (`graceSeconds`, default 3, max 30), then force kill of the whole process tree — escalation and kill failures are reported in the result `error` field |
 | `wait` | Pause the current agent run for a cancellable 1–3600 second delay |

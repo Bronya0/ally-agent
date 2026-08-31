@@ -32,8 +32,7 @@ type CalculateResult = calculatetool.Result
 // Grep type aliases keep the historical app-package names in the Wails
 // bindings while the implementations live in internal/tools/grep.
 type GrepRequest = grep.Request
-type GrepMatch = grep.Match
-type GrepFileMatch = grep.FileMatch
+type GrepFileMatch = grep.LineFileMatch
 type GrepFileCount = grep.FileCount
 type GrepResult = grep.Result
 
