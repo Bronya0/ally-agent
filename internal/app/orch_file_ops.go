@@ -15,6 +15,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -182,6 +183,150 @@ func createdDirsToDisplay(roots []string, dirs []string) []string {
 		}
 	}
 	return out
+}
+
+// copyFilesIntoWorkspaceWithConfig copies absolute source paths dropped from
+// the system file manager into a workspace directory. The destination is
+// confined to the writable roots via the same resolveWritableFilePath check
+// the other file ops use. Name conflicts never overwrite: the copy gets a
+// "name (N)" suffix like desktop file managers. Each source is independent —
+// one failure is reported per-source and does not abort the rest.
+func (a *App) copyFilesIntoWorkspaceWithConfig(cfg ConfigState, req CopyFilesIntoWorkspaceRequest) (CopyFilesIntoWorkspaceResult, error) {
+	roots, err := workspaceRoots(cfg)
+	if err != nil {
+		return CopyFilesIntoWorkspaceResult{}, err
+	}
+	targetDir := strings.TrimSpace(req.TargetDir)
+	targetAbs := roots[0]
+	if targetDir != "" {
+		abs, err := resolveWritableFilePath(roots, targetDir)
+		if err != nil {
+			return CopyFilesIntoWorkspaceResult{}, err
+		}
+		info, err := os.Stat(abs)
+		if err != nil {
+			return CopyFilesIntoWorkspaceResult{}, codedToolError("E_PATH_NOT_FOUND", err)
+		}
+		if !info.IsDir() {
+			return CopyFilesIntoWorkspaceResult{}, codedToolError("E_BAD_PATH", fmt.Errorf("drop target is not a directory: %s", targetDir))
+		}
+		targetAbs = abs
+	}
+	result := CopyFilesIntoWorkspaceResult{TargetDir: filepath.ToSlash(targetDir)}
+	for _, src := range req.Sources {
+		src = strings.TrimSpace(src)
+		if src == "" {
+			continue
+		}
+		destRel, err := copyDroppedSource(src, targetAbs, roots[0])
+		if err != nil {
+			result.Failed = append(result.Failed, CopyFileFailure{Source: src, Error: err.Error()})
+			continue
+		}
+		result.Copied = append(result.Copied, destRel)
+	}
+	return result, nil
+}
+
+// copyDroppedSource copies one dropped file or directory tree into targetAbs
+// and returns the workspace-relative destination for the tree refresh.
+func copyDroppedSource(src, targetAbs, primaryRoot string) (string, error) {
+	if !filepath.IsAbs(src) {
+		return "", codedToolError("E_BAD_PATH", fmt.Errorf("source path must be absolute: %s", src))
+	}
+	srcAbs := filepath.Clean(src)
+	info, err := os.Lstat(srcAbs)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", codedToolError("E_PATH_NOT_FOUND", err)
+		}
+		return "", err
+	}
+	if !info.Mode().IsRegular() && !info.IsDir() {
+		return "", codedToolError("E_BAD_PATH", fmt.Errorf("source is not a regular file or directory: %s", src))
+	}
+	// Copying a directory into itself (or into its own subtree) would walk a
+	// tree that grows while it is being read; reject like desktop managers do.
+	if info.IsDir() && (samePath(srcAbs, targetAbs) || isPathOrDescendant(targetAbs, srcAbs)) {
+		return "", codedToolError("E_BAD_PATH", fmt.Errorf("cannot copy a directory into itself: %s", src))
+	}
+	destAbs := nonConflictingDestPath(targetAbs, filepath.Base(srcAbs))
+	if info.IsDir() {
+		if err := copyDroppedTree(srcAbs, destAbs); err != nil {
+			return "", err
+		}
+	} else if err := copyDroppedFile(srcAbs, destAbs, info.Mode().Perm()); err != nil {
+		return "", err
+	}
+	if rel, err := filepath.Rel(primaryRoot, destAbs); err == nil {
+		return filepath.ToSlash(rel), nil
+	}
+	return filepath.ToSlash(destAbs), nil
+}
+
+// nonConflictingDestPath joins dir/name and, when that path already exists,
+// appends " (N)" before the extension (mirroring desktop file managers) until
+// it finds a free name. The result is always a fresh path, so the O_EXCL
+// creates in copyDroppedFile never collide.
+func nonConflictingDestPath(dir, name string) string {
+	candidate := filepath.Join(dir, name)
+	if _, err := os.Lstat(candidate); err != nil {
+		return candidate
+	}
+	ext := filepath.Ext(name)
+	base := strings.TrimSuffix(name, ext)
+	for i := 2; ; i++ {
+		candidate = filepath.Join(dir, fmt.Sprintf("%s (%d)%s", base, i, ext))
+		if _, err := os.Lstat(candidate); err != nil {
+			return candidate
+		}
+	}
+}
+
+// copyDroppedTree recursively copies a dropped directory. Symlinks and other
+// non-regular entries inside the tree are skipped: following a link out of
+// the dropped tree would copy unexpected content.
+func copyDroppedTree(srcDir, dstDir string) error {
+	return filepath.WalkDir(srcDir, func(p string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, err := filepath.Rel(srcDir, p)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dstDir, rel)
+		if d.IsDir() {
+			return os.MkdirAll(target, 0o755)
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return nil
+		}
+		return copyDroppedFile(p, target, info.Mode().Perm())
+	})
+}
+
+// copyDroppedFile streams one regular file. The destination was just chosen
+// as a non-existing path, so O_EXCL fails loudly if anything raced us.
+func copyDroppedFile(src, dst string, perm os.FileMode) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, perm)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		return err
+	}
+	return out.Close()
 }
 
 func (a *App) deletePathWithConfig(cfg ConfigState, req DeletePathRequest) (DeleteResult, error) {

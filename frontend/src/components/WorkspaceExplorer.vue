@@ -210,7 +210,7 @@ import MarkdownIt from 'markdown-it';
 import { isEditableNavigationTarget } from '../utils/sessionState.mjs';
 import { resolveMarkdownImagePath } from '../utils/markdownPreview.mjs';
 import { mermaidFenceSpec, normalizeMermaidSource, loadMermaid, escapeHtmlText } from '../utils/mermaidShared.mjs';
-import { ListFiles, ReadWorkspaceFileAt, ReadWorkspaceImageAt, ReadWorkspaceVideoAt, ReadWorkspacePDFAt, SaveWorkspaceFile, DeletePath, OpenWorkspacePathInFileManagerAt, CreateFile, CreateDirectory, GetWorkspaceFileInfoAt } from '../../bindings/ally-dev/internal/app/app';
+import { ListFiles, ReadWorkspaceFileAt, ReadWorkspaceImageAt, ReadWorkspaceVideoAt, ReadWorkspacePDFAt, SaveWorkspaceFile, DeletePath, OpenWorkspacePathInFileManagerAt, CreateFile, CreateDirectory, GetWorkspaceFileInfoAt, CopyFilesIntoWorkspace, ReadClipboardFiles } from '../../bindings/ally-dev/internal/app/app';
 import FileInfoModal from './FileInfoModal.vue';
 import { buildFileInfoSections } from '../utils/fileInfo.mjs';
 import { copyText } from '../utils/clipboard.mjs';
@@ -1047,6 +1047,76 @@ async function refreshNode(dirPath = '', workspace = props.workspace) {
   }
 }
 
+// ── 系统剪贴板文件粘贴（Ctrl/Cmd+V）──────────────────────────
+// 在资源管理器里 Ctrl+C 复制文件后，在树内 Ctrl/Cmd+V 把文件复制进工作区。
+// 目标目录取当前选中节点（选中文件则取其父目录，未选中则落到工作区根）。
+// chat 与 KB 的资源树是同一组件，行为天然统一。
+let pastingFiles = false;
+let pasteLoadingRe = null;
+
+async function pasteFilesFromClipboard() {
+  if (disposed) return;
+  // 防重复：上一次粘贴（尤其大目录）还在进行中时忽略新的 Ctrl+V，
+  // 否则重复请求会在后端 fileOpsMu 上排队，全部串行执行造成叠加复制。
+  if (pastingFiles) return;
+  pastingFiles = true;
+  // 大目录复制可能耗时较长；延迟弹 loading，短复制（毫秒级）无感。
+  pasteLoadingRe = window.setTimeout(() => {
+    message.loading(t('app.workspaceExplorer.pasteCopying'), { duration: 0 });
+  }, 300);
+  try {
+    await doPasteFilesFromClipboard();
+  } finally {
+    window.clearTimeout(pasteLoadingRe);
+    pasteLoadingRe = null;
+    pastingFiles = false;
+  }
+}
+
+async function doPasteFilesFromClipboard() {
+  let files;
+  try {
+    files = await ReadClipboardFiles();
+  } catch {
+    // 后端区分了"剪贴板里没有文件"（空列表）与"读不了"（错误，如被其他
+    // 程序占用 / 平台工具缺失）；这里只报告真正的读取失败。
+    message.error(t('app.workspaceExplorer.pasteReadFailed'));
+    return;
+  }
+  files = Array.isArray(files) ? files.filter((f) => typeof f === 'string' && f.trim() !== '') : [];
+  if (!files.length) {
+    message.info(t('app.workspaceExplorer.pasteEmpty'));
+    return;
+  }
+  // 目标目录：选中目录 → 它本身；选中文件 → 父目录；未选中 → 根。
+  let targetDir = '';
+  const sel = findNodeByPath(selectedKeys.value[0]);
+  if (sel?.dir) {
+    targetDir = sel.path || '';
+  } else if (sel?.path) {
+    const idx = sel.path.lastIndexOf('/');
+    targetDir = idx > 0 ? sel.path.slice(0, idx) : '';
+  }
+  try {
+    const result = await CopyFilesIntoWorkspace({ workspace: props.workspace, targetDir, sources: files });
+    const copied = Array.isArray(result?.copied) ? result.copied.length : 0;
+    const failed = Array.isArray(result?.failed) ? result.failed.length : 0;
+    // 复制完成后刷新目标目录节点（节点不在当前树中时回落刷新根），新条目立即可见。
+    if (targetDir && !findNodeByPath(targetDir)) {
+      await refreshNode('', props.workspace);
+    } else {
+      await refreshNode(targetDir, props.workspace);
+    }
+    if (failed > 0) {
+      message.error(t('app.workspaceExplorer.pastePartialFailed', { copied, failed }));
+    } else if (copied > 0) {
+      message.success(t('app.workspaceExplorer.pasteCopied', { count: copied }));
+    }
+  } catch (err) {
+    message.error(t('app.workspaceExplorer.pasteFailed', { error: errorText(err) }));
+  }
+}
+
 // 目录（非叶子节点）的展开/折叠箭头：RightOutlined 来自已依赖的 @vicons/antd，
 // Naive UI 会在展开时自动将其旋转 90°
 function renderSwitcherIcon() {
@@ -1288,15 +1358,25 @@ function copyNodePaths(relatives, full) {
 }
 
 // 资源树内 Ctrl/Cmd+C：复制选中节点相对路径（多选时换行分割）；
-// Ctrl/Cmd+Shift+C：复制完整路径。绑定在树容器上，焦点在树内才触发，
-// 不会劫持聊天区 / ace 编辑器 / 输入框的正常复制
+// Ctrl/Cmd+Shift+C：复制完整路径；Ctrl/Cmd+V：把系统剪贴板里的文件
+// （资源管理器 Ctrl+C 的结果）复制进目标目录。绑定在树容器上，
+// 焦点在树内才触发，不会劫持聊天区 / ace 编辑器 / 输入框的正常操作。
 function onTreeKeydown(event) {
   if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
-  if (String(event.key || '').toLowerCase() !== 'c') return;
-  const paths = (selectedKeys.value || []).map((p) => String(p || '')).filter(Boolean);
-  if (!paths.length) return;
-  event.preventDefault();
-  copyNodePaths(paths, event.shiftKey);
+  const key = String(event.key || '').toLowerCase();
+  if (key === 'c') {
+    const paths = (selectedKeys.value || []).map((p) => String(p || '')).filter(Boolean);
+    if (!paths.length) return;
+    event.preventDefault();
+    copyNodePaths(paths, event.shiftKey);
+    return;
+  }
+  if (key === 'v') {
+    // 可编辑元素（搜索框/ace 编辑器）里的粘贴走原生行为。
+    if (isEditableNavigationTarget(event.target)) return;
+    event.preventDefault();
+    void pasteFilesFromClipboard();
+  }
 }
 
 // 帮助弹层内容：与 onTreeKeydown / onGlobalKeydown / 右键菜单实际行为一一对应，
@@ -1306,6 +1386,7 @@ const helpMod = isMacPlatform ? 'Cmd' : 'Ctrl';
 const helpRows = computed(() => [
   { key: 'copy-rel', keys: `${helpMod}+C`, desc: t('app.workspaceExplorer.helpCopyRelative') },
   { key: 'copy-abs', keys: `${helpMod}+Shift+C`, desc: t('app.workspaceExplorer.helpCopyFull') },
+  { key: 'paste-files', keys: `${helpMod}+V`, desc: t('app.workspaceExplorer.helpPasteFiles') },
   { key: 'multi', keys: `${helpMod}+Click / Shift+Click`, desc: t('app.workspaceExplorer.helpMultiSelect') },
   { key: 'delete', keys: 'Delete', desc: t('app.workspaceExplorer.helpDelete') },
   { key: 'save', keys: `${helpMod}+S`, desc: t('app.workspaceExplorer.helpSave') },

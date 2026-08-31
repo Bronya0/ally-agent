@@ -797,6 +797,8 @@ These rules are required for future changes. They exist to keep Agent behavior d
 
 **Dependencies/Config (`app.go`)**：`dependency:missing` / `config:warning` — 罕见，前端按 tool 去重
 
+**资源树文件粘贴（`host_clipboard_*.go`）**：资源树内 Ctrl/Cmd+V → `ReadClipboardFiles` 绑定读系统剪贴板文件列表（Windows `CF_HDROP`；macOS osascript；Linux wl-paste/xclip）→ 复用 `CopyFilesIntoWorkspace` 复制进选中目录（未选中则根，冲突 (N) 后缀），完成后刷新目标节点。窗口不开启 `EnableFileDrop`（Wails 视觉托管模式下 OLE 拖放协商有秒级延迟，故不采用拖放方案）
+
 **更新 (`biz_update.go`)**：`update:progress` / `update:ready` / `update:applied` / `update:error` / `update:cancelled` — 自更新生命周期点
 
 **Services (`orch_services.go`)**：`service:update` — 仅 `startServiceWithConfig` / `finalizeService` / `stopService` 三处，不随输出滚动触发

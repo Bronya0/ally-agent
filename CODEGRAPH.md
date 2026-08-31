@@ -61,6 +61,7 @@
 ## internal/app/ — host_ 前缀（宿主桥接，唯一可 import Wails 的文件群）
 
 - host_desktop.go — Wails 生命周期与桌面桥：ServiceStartup/Shutdown、事件 sink 适配、窗口/对话框（选工作区、选背景图、导出文件）、打开文件管理器、自启动；关键: ServiceStartup, wailsEventSink, SelectWorkspace, ExportTextFile
+- host_clipboard_windows.go / host_clipboard_other.go — 资源树粘贴流程的系统剪贴板文件列表读取（CF_HDROP / osascript / wl-paste+xclip）；关键: clipboardFiles
 - host_events.go — 事件出口边界：`eventSink` 接口、`App.emit()` 唯一发射点、panic 隔离的 fanout 广播（Wails + 网络双出口）；关键: eventSink, emit, fanoutEventSink
 - host_network.go — 可选网络事件出口（`ALLY_NETWORK_EVENTS=1` 启用）：token 鉴权 SSE `/events`、轮询 `/poll`、`/healthz`、环形历史缓冲；关键: networkEventSink, handleSSE, handlePoll, eventRing
 - host_network_test.go — 测试环形缓冲、fanout 广播与 panic 隔离、非回环拒绝、SSE/轮询/鉴权/历史、大负载截断
@@ -123,7 +124,7 @@
 
 ## internal/app/ — orch_ 前缀（工具编排：绑定纯算法到 App 状态）
 
-- orch_file_ops.go — create/delete/run-command 编排：路径安全解析、Git Bash 检测（findWindowsBash）、危险删除路径守卫；关键: createFileWithConfig, deletePathWithConfig, runCommandWithConfig, isDangerousDeletePath
+- orch_file_ops.go — create/delete/run-command 编排、资源树剪贴板粘贴复制（copyFilesIntoWorkspaceWithConfig：目录递归、冲突 (N) 后缀、逐源失败隔离）：路径安全解析、Git Bash 检测（findWindowsBash）、危险删除路径守卫；关键: createFileWithConfig, deletePathWithConfig, runCommandWithConfig, isDangerousDeletePath, copyFilesIntoWorkspaceWithConfig
 - orch_read.go — 批量读取编排：并行读取、有界行预览（2000 字符/行）、run 级读取缓存、图片 DataURL 注入、办公/PDF 文档拒绝（指路 anydoc）；关键: BatchReadFiles, runReadCache, readImageWithConfig
 - orch_edit_plan.go — 本地编辑批次**唯一归一化边界**（planLocalEditBatch）：合并同路径、冲突检测、执行器与批次策略共用该计划；关键: planLocalEditBatch
 - orch_edit.go — 本地 edit 执行：模型侧扁平单文件请求（顶层 path/version/changes，一次一文件，多文件靠并行 edit call，旧版嵌套 files 格式一律 E_BAD_EDIT 拒绝）、原子提交/回滚、版本校验、流截断参数抢救（salvageEditRequest）；关键: editFilesWithConfig, salvageEditRequest
@@ -207,7 +208,7 @@
 - ChatMessages.vue — 聊天消息列表：v-memo 渲染缓存、autoFollow 自动滚动（程序化滚动落点匹配防误关）、跳底按钮、长消息折叠；关键: handleScroll, messageRenderMemo
 - ComposerInfoBar.vue — 输入区信息条：模型分组下拉（按使用频次排序）、reasoning effort、git 徽标、上下文明细+compact、任务中心/文件树开关、会话导出；关键: modelGroups, exportFullSession
 - SettingsModal.vue — 设置中心（General/Models/Skills/MCP/Network/About）：模型增删改+目录预设懒加载+连通测试+导入导出、MCP JSON/表单双向同步、代理检测与测试；关键: ensureModelCatalog, syncFormToJson, testModelConnection
-- WorkspaceExplorer.vue — 工作区侧栏文件树+编辑器：目录懒加载、多选+右键菜单、Ace 编辑器（语法校验、MD 图片加载、预览切换）、拖拽调宽；关键: openFile, saveFile, initAceEditor, onContextMenuSelect
+- WorkspaceExplorer.vue — 工作区侧栏文件树+编辑器：目录懒加载、多选+右键菜单、Ace 编辑器（语法校验、MD 图片加载、预览切换）、拖拽调宽、剪贴板文件粘贴（Ctrl/Cmd+V → ReadClipboardFiles → CopyFilesIntoWorkspace，刷新目标节点）；关键: openFile, saveFile, initAceEditor, onContextMenuSelect, pasteFilesFromClipboard
 - ToolCallCard.vue — 通用工具调用卡：动宾动词标签、edit 分组 split diff（兼容历史多文件批次结果）、create 代码预览、命令高亮、错误码本地化、validation 警告条；关键: toolVerb, highlightCommand
 - AskToolCard.vue — ask 工具卡：多问题 Tab、多选+自定义回答、一次性提交；关键: answerState, submitAnswers
 - SubagentInlineCard.vue — 子代理内联进度卡：步数/令牌/时长、最近 8 条子工具行；关键: recentTools

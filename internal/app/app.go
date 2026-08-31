@@ -730,6 +730,26 @@ type CreateDirectoryRequest struct {
 	Path      string `json:"path"`
 }
 
+// CopyFilesIntoWorkspaceRequest is the UI drag-and-drop copy payload: absolute
+// source paths from the native file-drop event plus a workspace-relative
+// destination directory ("" = workspace root).
+type CopyFilesIntoWorkspaceRequest struct {
+	Workspace string   `json:"workspace,omitempty"`
+	TargetDir string   `json:"targetDir,omitempty"`
+	Sources   []string `json:"sources"`
+}
+
+type CopyFilesIntoWorkspaceResult struct {
+	TargetDir string            `json:"targetDir"`
+	Copied    []string          `json:"copied"`
+	Failed    []CopyFileFailure `json:"failed,omitempty"`
+}
+
+type CopyFileFailure struct {
+	Source string `json:"source"`
+	Error  string `json:"error"`
+}
+
 type DeletePathRequest struct {
 	Workspace string `json:"workspace,omitempty"`
 	Path      string `json:"path"`
@@ -2897,6 +2917,33 @@ func (a *App) DeletePath(req DeletePathRequest) error {
 		a.invalidateWorkspaceMapCache(cfg)
 	}
 	return err
+}
+
+// CopyFilesIntoWorkspace copies files/directories dropped from the system
+// file manager into a workspace directory (UI drag-and-drop; not a model
+// tool). Sources are absolute paths from the native drop event; TargetDir is
+// workspace-relative ("" = workspace root). Name conflicts get "name (N)"
+// copies instead of overwriting.
+func (a *App) CopyFilesIntoWorkspace(req CopyFilesIntoWorkspaceRequest) (CopyFilesIntoWorkspaceResult, error) {
+	cfg, err := a.configForWorkspace(req.Workspace)
+	if err != nil {
+		return CopyFilesIntoWorkspaceResult{}, err
+	}
+	a.fileOpsMu.Lock()
+	defer a.fileOpsMu.Unlock()
+	result, err := a.copyFilesIntoWorkspaceWithConfig(cfg, req)
+	if err == nil {
+		a.invalidateWorkspaceMapCache(cfg)
+	}
+	return result, err
+}
+
+// ReadClipboardFiles returns the absolute file/folder paths currently on the
+// system clipboard (Explorer/Finder Ctrl+C), or an empty list when the
+// clipboard holds no file list. Used by the explorer's paste-into-workspace
+// flow; platform-specific readers live in host_clipboard_*.go.
+func (a *App) ReadClipboardFiles() ([]string, error) {
+	return clipboardFiles()
 }
 
 // MovePath moves a file or directory from Source to Destination within the
