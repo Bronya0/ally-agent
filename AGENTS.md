@@ -785,7 +785,9 @@ These rules are required for future changes. They exist to keep Agent behavior d
 
 ### 生命周期事件（天然低频，无需节流）
 
-**Chat loop (`app.go` `runChat`)**：`run:start` / `run:llm_wait` / `run:done` / `run:error`（每轮 1 次）、`run:retry`（重试时，含 adapter 内 key 切换与 turn-level 重试）、`run:inject`（排队消息进上下文）、`run:compact` / `run:compacted`（压缩时）、`run:image`（图片 delta）、`tool:result` / `tool:error`（每工具调用 1 次）、`tokens:update`（每 LLM step 1 次，**provider 无 usage 时静默跳过**）、`tokens:reset`（`ResetWorkspaceTokenUsage`）
+**Chat loop (`app.go` `runChat`)**：`run:start` / `run:llm_wait` / `run:done` / `run:error`（每轮 1 次）、`run:retry`（重试时，含 adapter 内 key 切换与 turn-level 重试）、`run:inject`（排队消息进上下文）、`run:compact` / `run:compacted`（自动压缩时）、`run:image`（图片 delta）、`tool:result` / `tool:error`（每工具调用 1 次）、`tokens:update`（每 LLM step 1 次，**provider 无 usage 时静默跳过**）、`tokens:reset`（`ResetWorkspaceTokenUsage`）
+
+**Compaction (`app.go` `compactSession` / `compactHistory`)**：`compact:start`（摘要请求发出时，含 sessionId/messages/tokensBefore/timeoutMs）、`compact:progress`（预留：携带 usage 快照，当前实现仅在超时事件上使用）、`compact:done`（每次压缩结束时保证发射，成功失败都发）。前端按 `sessionId` 键控压缩指示器，后台 Tab 的压缩不会显示到其他 Tab 的输入框上。压缩超时由 `compactTimeoutSeconds`（默认 180，钳到 30–3600）控制。
 
 **Ask (`app.go`)**：`ask:ready` / `ask:closed` — 每次 ask 1 次
 

@@ -69,6 +69,9 @@ export function defaultConfig() {
     // (0.6 = 60%). Backend clamps to [0.1, 0.95]; zero (legacy config
     // without the field) is replaced with the default in mergeConfig.
     compactThreshold: 0.6,
+    // Manual/auto compaction LLM call timeout in seconds. Backend clamps
+    // to [30, 3600]; zero (legacy config) falls back to the default.
+    compactTimeoutSeconds: 180,
     // Message body / welcome greeting font size in px. Backend clamps to
     // [12, 24] on save; zero (legacy config) is replaced by the default in
     // assignConfig below.
@@ -113,6 +116,11 @@ export function assignConfig(target, source) {
   next.compactThreshold = Number(next.compactThreshold) > 0
     ? Math.min(0.95, Math.max(0.2, Number(next.compactThreshold)))
     : 0.6;
+  // compactTimeoutSeconds: same fallback; clamp to the backend's [30, 3600]
+  // range so the settings input never shows an empty or absurd value.
+  next.compactTimeoutSeconds = Number(next.compactTimeoutSeconds) > 0
+    ? Math.min(3600, Math.max(30, Math.round(Number(next.compactTimeoutSeconds))))
+    : 180;
   // messageFontSize: same fallback; clamp to the same readable range the
   // backend enforces so the UI never shows an empty or absurd value.
   next.messageFontSize = Number(next.messageFontSize) > 0

@@ -229,16 +229,25 @@ type modelStreamResult struct {
 }
 
 func (a *App) completeModelText(ctx context.Context, cfg ConfigState, model string, messages []legacyopenai.ChatCompletionMessage, maxTokens int) (string, error) {
+	text, _, err := a.completeModelTextWithUsage(ctx, cfg, model, messages, maxTokens)
+	return text, err
+}
+
+// completeModelTextWithUsage is completeModelText plus the provider-reported
+// token usage, so non-chat flows (compaction, connectivity tests) can account
+// the call in the workspace/token statistics with the same fidelity as the
+// chat loop. Callers that ignore usage keep the old single-value signature.
+func (a *App) completeModelTextWithUsage(ctx context.Context, cfg ConfigState, model string, messages []legacyopenai.ChatCompletionMessage, maxTokens int) (string, *modelUsage, error) {
 	next := cfg
 	next.MaxTokens = maxTokens
 	result, err := a.streamModelResponse(ctx, next, model, messages, nil, nil)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	if err := modelResponseStopError(next, result); err != nil {
-		return "", err
+		return "", nil, err
 	}
-	return strings.TrimSpace(result.Content), nil
+	return strings.TrimSpace(result.Content), result.Usage, nil
 }
 
 func (a *App) streamModelResponse(ctx context.Context, cfg ConfigState, model string, messages []legacyopenai.ChatCompletionMessage, tools []legacyopenai.Tool, onEvent func(modelStreamEvent)) (*modelStreamResult, error) {

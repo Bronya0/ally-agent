@@ -212,7 +212,7 @@ Public License v3. See the LICENSE file for details.
                       <span class="composer-run-status-dot"></span>
                       <span class="composer-run-status-dot"></span>
                     </span>
-                    <span class="composer-run-prompt">{{ $t('app.compact.compacting') }}</span>
+                    <span class="composer-run-prompt">{{ compactStatusText }}</span>
                   </template>
                   <template v-else>
                     <span v-if="activeSessionRunning" class="composer-run-status-dots" aria-hidden="true">
@@ -3928,7 +3928,7 @@ function bindRuntimeEvents() {
   onRuntimeEvent('run:done', (data) => {
     flushStreamBuffer(data.runId);
     flushToolUpdateBuffer();
-    closeCompactLoading();
+    closeCompactLoading(data?.sessionId || '');
     if (retryBanner.value) {
       const session = sessionByTerminalEvent(data);
       if (session && session.id === activeSessionId.value) retryBanner.value = null;
@@ -3963,7 +3963,7 @@ function bindRuntimeEvents() {
   onRuntimeEvent('run:error', (data) => {
     flushStreamBuffer(data.runId);
     flushToolUpdateBuffer();
-    closeCompactLoading();
+    closeCompactLoading(data?.sessionId || '');
     if (retryBanner.value) {
       const session = sessionByTerminalEvent(data);
       if (session && session.id === activeSessionId.value) retryBanner.value = null;
@@ -4002,6 +4002,7 @@ function bindRuntimeEvents() {
   onRuntimeEvent('run:cancelled', (data) => {
     flushStreamBuffer(data.runId);
     flushToolUpdateBuffer();
+    closeCompactLoading(data?.sessionId || '');
     if (retryBanner.value) {
       const session = sessionByTerminalEvent(data);
       if (session && session.id === activeSessionId.value) retryBanner.value = null;
@@ -4032,18 +4033,54 @@ function bindRuntimeEvents() {
     // 后台 Tab 的会话被取消前可能已修改工作区文件，Git 统计同样要刷新。
     if (String(session.workspace || '') === String(config.workspace || '')) refreshGitStatus();
   });
-  // Auto-compaction: backend emits run:compact before the blocking summary
-  // request and run:compacted after it. Show a loading spinner during the
-  // compaction, then surface the token delta so the sudden drop in the
-  // footer token counter is no longer mysterious.
-  onRuntimeEvent('run:compact', (data) => {
-    if (data?.sessionId && data.sessionId === activeSessionId.value && !compactLoadingActive.value) {
-      compactLoadingActive.value = true;
+  // Compaction progress. Both manual /compact and in-run auto-compaction
+  // stream compact:start / compact:progress events; state is keyed per
+  // session so a background tab's compaction never surfaces in another
+  // tab's composer. tokensBefore/messages arrive up front so the user sees
+  // the scale of the summary request immediately.
+  onRuntimeEvent('compact:start', (data) => {
+    const sid = data?.sessionId || '';
+    if (!sid) return;
+    const existing = compactingSessions[sid];
+    const text = t('app.compact.compactingDetail', {
+      messages: Number(data?.messages || 0),
+      tokens: fmtK(Number(data?.tokensBefore || 0)),
+    });
+    if (existing) {
+      setCompactProgress(sid, text);
+      if (!existing.startedAt) existing.startedAt = Date.now();
+    } else {
+      startCompactTracking(sid, text);
     }
   });
-  onRuntimeEvent('run:compacted', (data) => {
-    closeCompactLoading();
+  onRuntimeEvent('compact:progress', (data) => {
     const sid = data?.sessionId || '';
+    if (!sid) return;
+    const usage = data?.usage || {};
+    const parts = [];
+    const inTok = Number(usage.inputTokens || 0);
+    const outTok = Number(usage.outputTokens || 0);
+    if (inTok > 0 || outTok > 0) {
+      parts.push(t('app.compact.usage', { input: fmtK(inTok), output: fmtK(outTok) }));
+    }
+    if (data?.note) parts.push(String(data.note));
+    const text = parts.length > 0
+      ? parts.join(' · ')
+      : t('app.compact.compacting');
+    if (compactingSessions[sid]) setCompactProgress(sid, text);
+    else startCompactTracking(sid, text);
+  });
+  onRuntimeEvent('compact:done', (data) => {
+    const sid = data?.sessionId || '';
+    if (sid) delete compactingSessions[sid];
+  });
+  // Auto-compaction: the backend emits run:compact before the blocking summary
+  // request and run:compacted after it. Surface the token delta so the sudden
+  // drop in the footer token counter is no longer mysterious.
+  onRuntimeEvent('run:compact', () => {});
+  onRuntimeEvent('run:compacted', (data) => {
+    const sid = data?.sessionId || '';
+    if (sid) delete compactingSessions[sid];
     if (!sid) return;
     if (data?.error) {
       if (sid === activeSessionId.value) message.warning(t('app.compact.failed', { error: data.error }));
@@ -6673,24 +6710,68 @@ function handlePushCommand() {
 
 // Compaction loading uses the same dotted indicator as a running chat
 // (composer-run-status-dots) so manual /compact and auto-compaction feel
-// like a normal chat run instead of a Naive toast.
-const compactLoadingActive = ref(false);
-function closeCompactLoading() {
-  compactLoadingActive.value = false;
+// like a normal chat run instead of a Naive toast. State is keyed per
+// session: a background tab's compaction must never surface in another
+// tab's composer. Progress text streams from the backend via
+// compact:start / compact:progress / compact:done events.
+const compactingSessions = reactive({});
+function compactStateFor(sid) { return compactingSessions[sid] || null; }
+const activeCompactState = computed(() => compactStateFor(activeSessionId.value));
+const compactLoadingActive = computed(() => !!activeCompactState.value);
+function setCompactProgress(sid, text) {
+  if (!sid) return;
+  compactingSessions[sid] = { ...(compactingSessions[sid] || {}), text };
 }
+function closeCompactLoading(sid) {
+  const target = sid || activeSessionId.value;
+  if (target) delete compactingSessions[target];
+}
+const compactStatusText = computed(() => {
+  const state = activeCompactState.value;
+  if (!state) return t('app.compact.compacting');
+  return [state.text, state.elapsedText].filter(Boolean).join(' · ');
+});
+// Elapsed timer so a long compaction visibly ticks instead of looking hung.
+const compactElapsedNow = ref(Date.now());
+let compactElapsedTimer = null;
+function ensureCompactElapsedTimer() {
+  if (compactElapsedTimer) return;
+  compactElapsedTimer = setInterval(() => {
+    compactElapsedNow.value = Date.now();
+    for (const [sid, state] of Object.entries(compactingSessions)) {
+      const startedAt = Number(state?.startedAt || 0);
+      if (!startedAt) continue;
+      const sec = Math.max(1, Math.floor((compactElapsedNow.value - startedAt) / 1000));
+      const elapsedText = t('app.compact.elapsed', { seconds: sec });
+      if (state.elapsedText !== elapsedText) state.elapsedText = elapsedText;
+    }
+  }, 1000);
+}
+function startCompactTracking(sid, text) {
+  if (!sid) return;
+  compactingSessions[sid] = { text, startedAt: Date.now(), elapsedText: '' };
+  ensureCompactElapsedTimer();
+}
+watch(compactingSessions, (snapshot) => {
+  if (Object.keys(snapshot || {}).length > 0) ensureCompactElapsedTimer();
+  if (compactElapsedTimer && Object.keys(snapshot || {}).length === 0) {
+    clearInterval(compactElapsedTimer);
+    compactElapsedTimer = null;
+  }
+});
+onUnmounted(() => { if (compactElapsedTimer) clearInterval(compactElapsedTimer); });
 
 async function handleCompactCommand() {
   const session = activeSession.value;
   if (!session) return;
-  if (session.runId) { message.warning(t('app.compact.wait')); return; }
+  if (session.runId || compactStateFor(session.id)) { message.warning(t('app.compact.wait')); return; }
 
-  closeCompactLoading();
-  compactLoadingActive.value = true;
+  startCompactTracking(session.id, t('app.compact.compacting'));
   saveSessions();
 
   try {
     const result = await CompactSession(session.id, '');
-    closeCompactLoading();
+    delete compactingSessions[session.id];
     const tBefore = result.tokensBefore || 0;
     const tAfter = result.tokensAfter || 0;
     const saved = tBefore - tAfter > 0 ? t('app.compact.saved', { tokens: fmtK(tBefore - tAfter) }) : '';
@@ -6710,7 +6791,7 @@ async function handleCompactCommand() {
     scrollMessagesToBottom();
     message.success(t('app.compact.success', { before: fmtK(tBefore), after: fmtK(tAfter) }));
   } catch (err) {
-    closeCompactLoading();
+    delete compactingSessions[session.id];
     pushMessage('assistant', t('app.compact.failed', { error: err?.message || err }), { error: true });
   }
 }

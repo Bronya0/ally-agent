@@ -140,6 +140,19 @@ Public License v3. See the LICENSE file for details.
               <span class="settings-field-hint">{{ $t('settings.compactThresholdHint') }}</span>
             </div>
           </n-form-item>
+          <n-form-item :label="$t('settings.compactTimeout')">
+            <div class="settings-field-stack">
+              <n-input-number
+                v-model:value="draft.compactTimeoutSeconds"
+                :min="30"
+                :max="3600"
+                :step="30"
+                :precision="0"
+                style="width: 140px"
+              />
+              <span class="settings-field-hint">{{ $t('settings.compactTimeoutHint') }}</span>
+            </div>
+          </n-form-item>
           <n-form-item v-if="isWindows" :label="$t('settings.autoUpdate')">
             <div class="settings-toggle-row">
               <n-switch v-model:value="draft.autoUpdate" />

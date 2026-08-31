@@ -155,6 +155,33 @@ func clampCompactThreshold(v float64) float64 {
 	return v
 }
 
+const (
+	// defaultCompactTimeoutSeconds covers the common compaction summary call:
+	// large history in, structured summary out, through a normally fast
+	// provider.
+	defaultCompactTimeoutSeconds = 180
+	// maxCompactTimeoutSeconds lets slow long-context providers take up to an
+	// hour instead of hard-failing with "context deadline exceeded".
+	maxCompactTimeoutSeconds = 3600
+)
+
+// clampCompactTimeoutSeconds normalizes the compaction timeout. Zero (or
+// out-of-range values) fall back to the default so legacy config.json and
+// hand-edited junk both land on a sane value; otherwise the value is clamped
+// to [30, 3600] seconds.
+func clampCompactTimeoutSeconds(v int) int {
+	if v <= 0 {
+		return defaultCompactTimeoutSeconds
+	}
+	if v < 30 {
+		return 30
+	}
+	if v > maxCompactTimeoutSeconds {
+		return maxCompactTimeoutSeconds
+	}
+	return v
+}
+
 var (
 	pythonRuntimeOnce sync.Once
 	pythonRuntimeLine string
@@ -208,16 +235,21 @@ type App struct {
 	// channel). runChat drains it at the top of every agent step so injected
 	// messages enter the model context only after the current tool batch
 	// completes, and they are persisted with the rest of the run history.
-	runInputs      map[string]chan string
-	historiesDir   string
-	sessionsDir    string
-	histories      map[string][]openai.ChatCompletionMessage
-	sessionMu      sync.Mutex
-	initialized    bool
-	disabledSkills []string
-	mcpManager     *McpManager
-	todos          map[string][]TodoEntry // sessionID → todos
-	todoRevisions  map[string]int64
+	runInputs map[string]chan string
+	// compactingSessions holds the session IDs with a compaction LLM call in
+	// flight. Compaction is a session-scoped operation, so the composer run
+	// indicator and the /compact guard must be keyed per session instead of
+	// being process-global state.
+	compactingSessions map[string]struct{}
+	historiesDir       string
+	sessionsDir        string
+	histories          map[string][]openai.ChatCompletionMessage
+	sessionMu          sync.Mutex
+	initialized        bool
+	disabledSkills     []string
+	mcpManager         *McpManager
+	todos              map[string][]TodoEntry // sessionID → todos
+	todoRevisions      map[string]int64
 	// sessionWorkspaceMaps freezes the workspace map bytes per session
 	// (sessionID → map text) so the request prefix stays byte-stable across
 	// runs and provider prompt caches survive; guarded by mu (declared in
@@ -305,6 +337,7 @@ func NewApp() *App {
 		runs:                map[string]context.CancelFunc{},
 		runSessions:         map[string]string{},
 		runInputs:           map[string]chan string{},
+		compactingSessions:  map[string]struct{}{},
 		histories:           map[string][]openai.ChatCompletionMessage{},
 		todos:               map[string][]TodoEntry{},
 		todoRevisions:       map[string]int64{},
@@ -388,15 +421,15 @@ type ConfigState struct {
 	BaseURL      string `json:"baseUrl"`
 	APIKey       string `json:"apiKey"`
 	// APIKeys is the ordered API key pool; see ModelConfig.APIKeys.
-	APIKeys             []string      `json:"apiKeys,omitempty"`
-	Model               string        `json:"model"`
-	Workspace           string        `json:"workspace"`
-	ExtraRoots          []string      `json:"extraRoots,omitempty"`
+	APIKeys    []string `json:"apiKeys,omitempty"`
+	Model      string   `json:"model"`
+	Workspace  string   `json:"workspace"`
+	ExtraRoots []string `json:"extraRoots,omitempty"`
 	// KBRoot is the user-configured knowledge-base root directory. When a run
 	// resolves its workspace to this path (SamePath), the session runs in
 	// knowledge-base mode: the KB system-prompt part is injected and the
 	// sources/ subdirectory becomes read-only for model tools.
-	KBRoot string `json:"kbRoot,omitempty"`
+	KBRoot              string        `json:"kbRoot,omitempty"`
 	MaxTokens           int           `json:"maxTokens"`
 	ContextWindow       int           `json:"contextWindow"`
 	TokenParam          string        `json:"tokenParam,omitempty"`
@@ -458,6 +491,10 @@ type ConfigState struct {
 	// configs migrate transparently; the effective value is exposed via
 	// effectiveCompactThreshold().
 	CompactThreshold float64 `json:"compactThreshold,omitempty"`
+	// CompactTimeoutSeconds bounds the compaction LLM call (summary request).
+	// Zero means "use default" so legacy configs migrate transparently; the
+	// effective value is exposed via clampCompactTimeoutSeconds().
+	CompactTimeoutSeconds int `json:"compactTimeoutSeconds,omitempty"`
 	// MessageFontSize is the AI message body / welcome greeting font size in
 	// px. Zero means "use default" (15.5); the effective value is exposed via
 	// clampMessageFontSize and applied by the frontend as a CSS variable.
@@ -466,10 +503,10 @@ type ConfigState struct {
 	// font sizes (px) for code content, tool cards, secondary text, and
 	// auxiliary text. Zero means "use default"; the frontend applies them
 	// as CSS variables.
-	CodeFontSize   float64 `json:"codeFontSize,omitempty"`
-	ToolFontSize   float64 `json:"toolFontSize,omitempty"`
-	SubFontSize    float64 `json:"subFontSize,omitempty"`
-	AuxFontSize    float64 `json:"auxFontSize,omitempty"`
+	CodeFontSize float64 `json:"codeFontSize,omitempty"`
+	ToolFontSize float64 `json:"toolFontSize,omitempty"`
+	SubFontSize  float64 `json:"subFontSize,omitempty"`
+	AuxFontSize  float64 `json:"auxFontSize,omitempty"`
 	// noAdapterRetry 是进程内非序列化标记:多 key 模式下置 true,让适配器
 	// 内部关闭退避重试,由 streamModelResponse 的外层循环统一承担重试与
 	// 故障切换,避免 N 个 key × 适配器重试组合爆炸。
@@ -879,11 +916,11 @@ type CommandResult struct {
 	// OutputFileBytes 是截断落盘文件的字节体积，让模型在读全量前能
 	// 自行判断是否分段读取。仅 OutputFilePath 非空时有意义。
 	OutputFileBytes int64 `json:"outputFileBytes,omitempty"`
-	ExitCode       int    `json:"exitCode"`
-	TimedOut       bool   `json:"timedOut"`
-	Cancelled      bool   `json:"cancelled"`
-	DurationMS     int64  `json:"durationMs"`
-	Truncated      bool   `json:"truncated"`
+	ExitCode        int   `json:"exitCode"`
+	TimedOut        bool  `json:"timedOut"`
+	Cancelled       bool  `json:"cancelled"`
+	DurationMS      int64 `json:"durationMs"`
+	Truncated       bool  `json:"truncated"`
 }
 
 type HTTPRequestToolRequest struct {
@@ -1458,6 +1495,13 @@ func (a *App) releaseSession(sessionID string, deleteHistory bool) error {
 			return errors.New("session is still running")
 		}
 	}
+	// A compaction in flight is about to saveHistory: releasing the session
+	// underneath it would drop the summary on the floor and could write into
+	// a freshly-created session reusing the same id.
+	if _, compacting := a.compactingSessions[sessionID]; compacting {
+		a.mu.Unlock()
+		return errors.New("session is compacting")
+	}
 	delete(a.histories, sessionID)
 	delete(a.todos, sessionID)
 	delete(a.todoRevisions, sessionID)
@@ -1488,6 +1532,15 @@ func (a *App) releaseSession(sessionID string, deleteHistory bool) error {
 	return nil
 }
 
+// compactSessionRunning reports whether a compaction LLM call is in flight
+// for the given session.
+func (a *App) compactSessionRunning(sessionID string) bool {
+	a.mu.Lock()
+	_, running := a.compactingSessions[sessionID]
+	a.mu.Unlock()
+	return running
+}
+
 // CompactSession compacts the conversation history for a session by asking the LLM
 // to summarize, then replacing the history with the summary.
 func (a *App) CompactSession(sessionID, instruction string) (map[string]any, error) {
@@ -1512,10 +1565,34 @@ func (a *App) compactSession(parent context.Context, sessionID, instruction stri
 	if len(resolveKeyPool(cfg)) == 0 {
 		return nil, errors.New("API key is required")
 	}
-
+	// A live chat run may rewrite history concurrently (auto-compaction,
+	// sanitize repair, new turns); compacting on top of it would interleave
+	// saveHistory calls and race the run's own message list.
 	a.mu.Lock()
-	history := sanitizeHistoryMessages(a.histories[sessionID])
+	for _, activeSessionID := range a.runSessions {
+		if activeSessionID == sessionID {
+			a.mu.Unlock()
+			return nil, errors.New("session is still running")
+		}
+	}
+	// Compaction rewrites the whole session history, so two concurrent
+	// compactions on the same session would interleave saveHistory calls and
+	// pay for the LLM request twice. Guard at the session level so other
+	// sessions compact independently.
+	if _, running := a.compactingSessions[sessionID]; running {
+		a.mu.Unlock()
+		return nil, errors.New("session is already compacting")
+	}
+	a.compactingSessions[sessionID] = struct{}{}
 	a.mu.Unlock()
+	defer func() {
+		a.mu.Lock()
+		delete(a.compactingSessions, sessionID)
+		a.mu.Unlock()
+		a.emit("compact:done", map[string]any{"sessionId": sessionID})
+	}()
+
+	history := sanitizeHistoryMessages(a.histories[sessionID])
 
 	// Manual compaction keeps the final user message so a request with pending
 	// work survives into the next turn.
@@ -1529,7 +1606,13 @@ func (a *App) compactSession(parent context.Context, sessionID, instruction stri
 // that still has pending work); callers that re-append the current request
 // themselves (auto-compaction) should pass false to avoid duplicating it.
 func (a *App) compactHistory(ctx context.Context, cfg ConfigState, sessionID, instruction string, history []openai.ChatCompletionMessage, keepLastUser bool) (map[string]any, error) {
-	ctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+	// The compaction LLM call runs inside this timeout. It is configurable
+	// (Settings → General) because long-context summary requests through slow
+	// providers can legitimately take minutes; the default covers the common
+	// case without hanging forever. Cancellation through the parent context
+	// (e.g. app shutdown) still works on top of the deadline.
+	timeout := time.Duration(clampCompactTimeoutSeconds(cfg.CompactTimeoutSeconds)) * time.Second
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	if len(history) == 0 {
@@ -1585,7 +1668,13 @@ Rules:
 	if compactionMaxTokens <= 0 || compactionMaxTokens > 8000 {
 		compactionMaxTokens = 8000
 	}
-	summary, err := a.completeModelText(ctx, cfg, cfg.Model, compactionMessages, compactionMaxTokens)
+	a.emit("compact:start", map[string]any{
+		"sessionId":    sessionID,
+		"tokensBefore": tokensBefore,
+		"messages":     len(history),
+		"timeoutMs":    int(timeout.Milliseconds()),
+	})
+	summary, usage, err := a.completeModelTextWithUsage(ctx, cfg, cfg.Model, compactionMessages, compactionMaxTokens)
 	if err != nil {
 		return nil, fmt.Errorf("compaction failed: %w", err)
 	}
@@ -1593,6 +1682,19 @@ Rules:
 	if strings.TrimSpace(summary) == "" {
 		return nil, errors.New("compaction returned empty summary")
 	}
+
+	// Account the compaction LLM call in the workspace/token statistics so the
+	// tokens spent summarizing are visible in the footer and the stats modal.
+	fallbackInput := 0
+	fallbackOutput := 0
+	if usage == nil || usage.PromptTokens <= 0 {
+		fallbackInput = estimateRequestTokens(compactionMessages, nil)
+	}
+	if usage == nil || usage.CompletionTokens <= 0 {
+		fallbackOutput = estimateCompletionTokens(summary, "", nil)
+	}
+	a.recordWorkspaceTokenUsage(cfg.Workspace, usage, fallbackInput, fallbackOutput)
+	a.recordTokenStats(cfg.Model, cfg.Workspace, usage, fallbackInput, fallbackOutput)
 
 	// Prepend the handoff prefix
 	prefix := "[This conversation has been compacted. The following is your own summary of the work so far — use it to continue. Verify any claims before relying on them.]\n\n"

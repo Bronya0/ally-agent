@@ -42,6 +42,7 @@ func defaultConfigState() ConfigState {
 		ReasoningEffort:     reasoningEffortMax,
 		BackgroundOpacity:   defaultBackgroundOpacity,
 		CompactThreshold:    defaultCompactThreshold,
+		CompactTimeoutSeconds: defaultCompactTimeoutSeconds,
 		MessageFontSize:     defaultMessageFontSize,
 		CodeFontSize:        defaultCodeFontSize,
 		ToolFontSize:        defaultToolFontSize,
@@ -275,6 +276,12 @@ func mergeConfig(base, overlay ConfigState) ConfigState {
 	// cannot starve the model of reply budget or trigger thrashing.
 	if overlay.CompactThreshold != 0 {
 		base.CompactThreshold = clampCompactThreshold(overlay.CompactThreshold)
+	}
+	// CompactTimeoutSeconds: same zero-means-absent pattern. Non-zero values
+	// are clamped to [30, 3600] so an edit cannot hang the app on compaction
+	// forever or choke a legitimately slow long-context provider.
+	if overlay.CompactTimeoutSeconds != 0 {
+		base.CompactTimeoutSeconds = clampCompactTimeoutSeconds(overlay.CompactTimeoutSeconds)
 	}
 	// MessageFontSize: zero overlay means "field absent" (legacy / older
 	// build), so base is preserved; non-zero values are clamped to a
