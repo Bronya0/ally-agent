@@ -2042,7 +2042,7 @@ watch(() => props.visible, (visible) => {
   justify-content: space-between;
   gap: 12px;
   padding: 14px 22px 12px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  border-bottom: 1px solid var(--ally-border);
   flex-shrink: 0;
 }
 
@@ -2113,7 +2113,7 @@ watch(() => props.visible, (visible) => {
 
 .license-notice {
   padding: 18px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid var(--ally-border);
   border-radius: 10px;
   background: rgba(255, 255, 255, 0.025);
   color: rgba(255, 255, 255, 0.72);
@@ -2198,7 +2198,7 @@ watch(() => props.visible, (visible) => {
 }
 
 .validation-settings-list {
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  border-top: 1px solid var(--ally-border);
 }
 
 .validation-setting-row {
@@ -2207,7 +2207,7 @@ watch(() => props.visible, (visible) => {
   justify-content: space-between;
   gap: 16px;
   padding: 12px 2px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  border-bottom: 1px solid var(--ally-border-subtle);
 }
 
 .validation-setting-copy {
@@ -2290,7 +2290,7 @@ watch(() => props.visible, (visible) => {
 
 .current-model-panel {
   background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--ally-border);
   border-radius: 8px;
   padding: 10px 12px;
   margin-bottom: 12px;
@@ -2366,7 +2366,7 @@ watch(() => props.visible, (visible) => {
 }
 
 .saved-model-item.active {
-  border-color: rgba(255, 255, 255, 0.15);
+  border-color: var(--ally-border-strong);
   background: rgba(255, 255, 255, 0.06);
 }
 
@@ -2469,7 +2469,7 @@ watch(() => props.visible, (visible) => {
 .skill-badge.builtin-locked {
   background: #3a3a3a;
   color: #a0a0a0;
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  border: 1px solid var(--ally-border-strong);
 }
 
 .skill-settings-item.builtin {
@@ -2543,7 +2543,7 @@ watch(() => props.visible, (visible) => {
 }
 
 .mcp-server-row {
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--ally-border);
   border-radius: 8px;
   padding: 8px 10px;
   display: flex;
@@ -2553,7 +2553,7 @@ watch(() => props.visible, (visible) => {
 }
 
 .mcp-server-row.expanded {
-  border-color: rgba(255, 255, 255, 0.16);
+  border-color: var(--ally-border-strong);
 }
 
 .mcp-row-main {
@@ -2621,7 +2621,7 @@ watch(() => props.visible, (visible) => {
   flex-direction: column;
   gap: 8px;
   padding-top: 4px;
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  border-top: 1px solid var(--ally-border-subtle);
 }
 
 .mcp-editor-line {

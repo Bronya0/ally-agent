@@ -758,13 +758,17 @@ defineExpose({ scrollbarRef, scrollToBottom, scrollToUserQuestion, scrollToBotto
   gap: 6px;
   margin-right: -28px;
   margin-left: -28px;
-  /* The row extends 28px into the message gutter. Keep the rail hanging left
-     while aligning the question text with the normal body line:
-     1px border + 9px padding + 12px rail + 6px gap = 28px. */
-  padding: 10px 10px 10px 9px;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  border-radius: 0;
-  background: rgba(255, 255, 255, 0.07);
+  /* The row bleeds 28px into the gutter on both sides. The bleed is
+     deliberate: it puts the question text on the same x as the assistant's
+     body text while letting the tint run the full column width. The left
+     inset has to total 28px for that to hold:
+     2px rule + 8px padding + 12px rail + 6px gap = 28px. */
+  padding: 10px 10px 10px 8px;
+  /* One accent rule on the leading edge rather than a box drawn around the
+     whole row. A 1px border on a full-bleed band reads as a striped block
+     and fights the unboxed assistant turns that follow it. */
+  border-left: 2px solid var(--ally-accent);
+  background: var(--ally-state-hover);
 }
 
 .user-rail {
@@ -859,7 +863,7 @@ defineExpose({ scrollbarRef, scrollToBottom, scrollToUserQuestion, scrollToBotto
 
 .jump-circle-btn {
   padding: 7px 12px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  border: 1px solid var(--ally-border-strong);
   border-radius: 999px;
   background: rgba(38, 38, 38, 0.92);
   color: #e5e5e5;
@@ -895,7 +899,7 @@ defineExpose({ scrollbarRef, scrollToBottom, scrollToUserQuestion, scrollToBotto
   display: inline-flex;
   align-items: center;
   padding: 3px 10px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid var(--ally-border);
   border-radius: 6px;
   background: transparent;
   color: #9a9a9a;

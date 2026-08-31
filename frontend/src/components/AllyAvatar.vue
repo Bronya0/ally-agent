@@ -276,7 +276,7 @@ onBeforeUnmount(() => {
   padding: 8px 12px;
   border-radius: 10px;
   background: #27272c;
-  border: 1px solid rgba(255, 255, 255, 0.09);
+  border: 1px solid var(--ally-border);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
   color: #ececec;
   font-size: var(--ally-sub-font-size);
@@ -293,8 +293,8 @@ onBeforeUnmount(() => {
   width: 10px;
   height: 10px;
   background: #27272c;
-  border-left: 1px solid rgba(255, 255, 255, 0.09);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.09);
+  border-left: 1px solid var(--ally-border);
+  border-bottom: 1px solid var(--ally-border);
   transform: rotate(45deg);
 }
 

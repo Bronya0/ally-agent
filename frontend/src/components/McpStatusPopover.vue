@@ -111,7 +111,7 @@ function statusClass(srv) {
 
 .mcp-list-item {
   padding: 7px 6px;
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  border-top: 1px solid var(--ally-border-subtle);
 }
 
 .mcp-list-head {

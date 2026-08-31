@@ -367,7 +367,7 @@ function showBarTooltip(event, bar) {
   justify-content: space-between;
   gap: 12px;
   padding: 14px 22px 12px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  border-bottom: 1px solid var(--ally-border);
   flex-shrink: 0;
 }
 
@@ -392,7 +392,7 @@ function showBarTooltip(event, bar) {
 }
 .stat-card {
   padding: 10px 12px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--ally-border);
   border-radius: 10px;
   background: rgba(255, 255, 255, 0.03);
   min-width: 0;
@@ -460,7 +460,7 @@ function showBarTooltip(event, bar) {
   z-index: 10;
   padding: 8px 10px;
   background: rgba(30, 30, 30, 0.95);
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  border: 1px solid var(--ally-border-strong);
   border-radius: 8px;
   font-size: 12px;
   white-space: nowrap;
@@ -563,7 +563,7 @@ function showBarTooltip(event, bar) {
 }
 .pie-section,
 .chart-card {
-  border: 1px solid rgba(255, 255, 255, 0.07);
+  border: 1px solid var(--ally-border);
   border-radius: 10px;
   padding: 12px;
   background: rgba(255, 255, 255, 0.02);

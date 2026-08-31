@@ -50,6 +50,36 @@
      default) and follow the code size when the user changes it. */
   --ally-diff-font-size: calc(var(--ally-code-font-size) - 1px);
 
+  /* ── Surface scale ──
+     Three neutral steps of one hue, rising outward: content is the darkest
+     surface, a side panel lifts one step, window chrome (header, mode rail)
+     lifts another. Steps are kept ~5/255 apart on purpose. A two-step scale
+     separated by only 6/255 lands in the "just noticeable" band — visible
+     enough to look like a mismatch, too weak to read as hierarchy. */
+  --ally-surface-content: #1a1a1a;
+  --ally-surface-panel: #1f1f1f;
+  --ally-surface-chrome: #262626;
+  --ally-surface-raised: #2c2c2c;
+
+  /* ── Dividers ──
+     One value for structural edges. Earlier builds accumulated 13 distinct
+     alphas (0.025-0.38), six of them packed into 0.06-0.12 where they are
+     visually indistinguishable, which is what made edges look uneven. */
+  --ally-border: rgba(255, 255, 255, 0.08);
+  --ally-border-subtle: rgba(255, 255, 255, 0.05);
+  --ally-border-strong: rgba(255, 255, 255, 0.14);
+
+  /* ── Interactive states ──
+     Every state pushes lighter, never darker: selected travels the same
+     direction as hover, only further. Making selected darker than its own
+     container (the old #171717 active tab) punches a hole through the
+     surface scale instead of sitting on top of it. */
+  --ally-state-hover: rgba(255, 255, 255, 0.06);
+  /* Selected stays close to hover on purpose: the accent tab underline is the
+     primary selected signal, so the fill only needs to whisper. At 0.12 the
+     active tab out-shone everything in the header and pulled the eye. */
+  --ally-state-selected: rgba(255, 255, 255, 0.07);
+
   /* Accent color family. A theme only needs to set --ally-accent; every
      other shade is derived from it via color-mix (fully supported in the
      Chromium/Webview2 runtime), so adding a theme is a one-liner below. */
@@ -207,7 +237,7 @@ body,
 }
 
 body {
-  background: #1a1a1a;
+  background: var(--ally-surface-content);
   color: #f5f5f5;
   font-family: var(--ally-ui-font);
   font-size: 14px;
@@ -225,7 +255,7 @@ code, pre {
 
 .app-shell {
   height: 100vh;
-  background: #1a1a1a;
+  background: var(--ally-surface-content);
 }
 
 .splash-screen {
@@ -308,7 +338,7 @@ code, pre {
   /* Use background-color (not the shorthand) so an inline background-image
      layer for the custom chat background is not reset. The dark base doubles
      as the fallback when no custom background is configured. */
-  background-color: #1a1a1a !important;
+  background-color: var(--ally-surface-content) !important;
 }
 
 .workspace-content-tabs {
@@ -358,8 +388,8 @@ code, pre {
   flex-direction: column;
   padding-top: 0;
   /* Same surface as the app header so the rail reads as part of the chrome. */
-  background: #202020;
-  border-right: 1px solid rgba(255, 255, 255, 0.08);
+  background: var(--ally-surface-chrome);
+  border-right: 1px solid var(--ally-border);
   overflow: hidden;
 }
 
@@ -468,7 +498,7 @@ code, pre {
   min-width: 0;
   min-height: 0;
   height: 100%;
-  background: #1a1a1a;
+  background: var(--ally-surface-content);
 }
 
 /* KB identity header: plain, tidy title row rendered only inside the hidden
@@ -479,7 +509,7 @@ code, pre {
   justify-content: space-between;
   gap: 18px;
   padding: 16px 22px 13px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  border-bottom: 1px solid var(--ally-border);
 }
 
 .kb-hero-text {
@@ -515,7 +545,7 @@ code, pre {
   padding: 6px 11px;
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.07);
+  border: 1px solid var(--ally-border);
   color: #8f8f8f;
   font-size: 12px;
 }
@@ -569,14 +599,14 @@ code, pre {
   height: 100%;
   align-items: center;
   justify-content: center;
-  background: #1a1a1a;
+  background: var(--ally-surface-content);
 }
 
 .kb-empty-card {
   max-width: 480px;
   padding: 34px 38px;
   text-align: center;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--ally-border);
   border-radius: 14px;
   background: linear-gradient(
     180deg,
@@ -611,8 +641,14 @@ code, pre {
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  background: #1a1a1a;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  /* Panel level: the tree is a side surface, one step above the chat content
+     and one below the chrome, so left and right rails read as siblings.
+     The old border-top on this element drew a line across the right column
+     only, parallel to and nearly touching the header's bottom edge while
+     the centre column had none — it is removed, the left border below now
+     separates the columns consistently. */
+  background: var(--ally-surface-panel);
+  border-left: 1px solid var(--ally-border);
 }
 
 .workspace-explorer.has-file {
@@ -634,13 +670,13 @@ code, pre {
   min-width: 150px;
   max-width: 600px;
   overflow: hidden;
-  background: #1a1a1a;
+  background: var(--ally-surface-panel);
 }
 
 .workspace-explorer-splitter {
   flex: 0 0 1px;
   cursor: col-resize;
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--ally-border);
   position: relative;
   z-index: 1;
 }
@@ -653,8 +689,10 @@ code, pre {
   right: -4px;
   cursor: col-resize;
 }
+/* Follows the active accent instead of a fixed light blue, which only ever
+   matched the cool theme and clashed with the warm ones. */
 .workspace-explorer-splitter:hover,
-.workspace-explorer-splitter:active { background: rgba(143, 211, 255, 0.4); }
+.workspace-explorer-splitter:active { background: color-mix(in srgb, var(--ally-accent) 55%, transparent); }
 
 .workspace-explorer-tree-header {
   display: flex;
@@ -663,7 +701,7 @@ code, pre {
   gap: 6px;
   min-height: 26px;
   padding: 0 6px 0 8px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  border-bottom: 1px solid var(--ally-border);
 }
 .workspace-explorer-editor-header {
   display: flex;
@@ -671,7 +709,7 @@ code, pre {
   gap: 6px;
   min-height: 26px;
   padding: 0 6px 0 8px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  border-bottom: 1px solid var(--ally-border);
 }
 .workspace-explorer-close-content {
   display: inline-flex;
@@ -747,14 +785,14 @@ code, pre {
   align-items: center;
   flex: 0 0 auto;
   padding: 2px 6px 4px 6px;
-  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  border-top: 1px solid var(--ally-border-subtle);
 }
 .workspace-explorer-help-btn { opacity: 0.55; }
 .workspace-explorer-help-btn:hover { opacity: 1; }
 .workspace-explorer-help-body { font-size: 12px; line-height: 1.5; max-width: 340px; }
 .workspace-explorer-help-title { font-weight: 600; margin-bottom: 6px; }
 .workspace-explorer-help-row { display: flex; align-items: baseline; gap: 10px; margin-top: 3px; }
-.workspace-explorer-help-keys { flex: 0 0 auto; min-width: 132px; font-family: var(--ally-mono-font); color: #a9d8ff; white-space: nowrap; }
+.workspace-explorer-help-keys { flex: 0 0 auto; min-width: 132px; font-family: var(--ally-mono-font); color: var(--ally-accent-pale); white-space: nowrap; }
 .workspace-explorer-help-desc { flex: 1 1 auto; min-width: 0; color: rgba(255, 255, 255, 0.75); }
 .workspace-explorer-tree-view { height: 100%; padding: 0; overflow-x: auto; overflow-y: hidden; }
 .workspace-explorer-node-label {
@@ -763,19 +801,24 @@ code, pre {
   white-space: nowrap;
   transition: color 0.15s ease, opacity 0.15s ease;
 }
-.workspace-explorer-node-label.is-directory { color: #d6b378; }
-.workspace-explorer-node-label.is-file { color: #9ca4b1; }
-/* 隐藏条目（. 开头）整体压暗，不改变原色相：目录仍是暗金、文件仍是暗灰 */
+/* One neutral grey ramp, two lightness steps: directories a touch brighter
+   than files. The old pairing (amber directories, cool-blue files) put two
+   competing hues into a navigation surface — four visually distinct label
+   colours with the hidden variants, which pulled attention away from the
+   conversation. */
+.workspace-explorer-node-label.is-directory { color: #c9c9c9; }
+.workspace-explorer-node-label.is-file { color: #9a9a9a; }
+/* 隐藏条目（. 开头）整体压暗，不改变原色相 */
 .workspace-explorer-node-label.is-hidden { opacity: 0.55; }
 /* 符号链接条目的箭头后缀（WalkDir 不跟随链接，仅如实标注） */
-.workspace-explorer-node-label .is-symlink-arrow { margin-left: 2px; color: #8f96a3; }
+.workspace-explorer-node-label .is-symlink-arrow { margin-left: 2px; color: #8a8a8a; }
 /* 目录超限截断的占位行：灰斜体，无交互语义 */
 .workspace-explorer-node-label.is-placeholder { color: #707070; font-style: italic; }
 /* hover 保留背景高亮（见 treeThemeOverrides），文字颜色不变 */
-.workspace-explorer-tree-view .n-tree-node--selected .workspace-explorer-node-label { color: #f5f9ff; }
+.workspace-explorer-tree-view .n-tree-node--selected .workspace-explorer-node-label { color: #f5f5f5; }
 .workspace-explorer-empty,
 .workspace-explorer-editor-state { display: flex; align-items: center; justify-content: center; min-height: 100%; padding: 24px; color: #858b98; font-size: 13px; text-align: center; }
-.workspace-explorer-editor { display: flex; flex: 1; min-width: 0; min-height: 0; flex-direction: column; background: #1a1a1a; }
+.workspace-explorer-editor { display: flex; flex: 1; min-width: 0; min-height: 0; flex-direction: column; background: var(--ally-surface-content); }
 .workspace-explorer-file-title { display: flex; align-items: center; gap: 7px; min-width: 0; flex: 1 1 auto; color: #d4d4d4; font-family: var(--ally-mono-font); font-size: 12px; }
 .workspace-explorer-file-title > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .workspace-explorer-dirty { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 50%; background: #f3b562; }
@@ -809,7 +852,7 @@ code, pre {
   white-space: nowrap;
   line-height: 1;
 }
-.workspace-explorer-preview-toggle .n-switch.n-switch--active .n-switch__rail { background: #4ea1ff; }
+.workspace-explorer-preview-toggle .n-switch.n-switch--active .n-switch__rail { background: var(--ally-accent); }
 .workspace-explorer-ace { flex: 1; min-height: 0; width: 100%; }
 .workspace-explorer-ace .ace_gutter-layer { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace !important; }
 .workspace-explorer-ace .ace_fold { display: none !important; }
@@ -864,7 +907,7 @@ code, pre {
   display: flex;
   gap: 12px;
   padding: 9px 0;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  border-bottom: 1px solid var(--ally-border-subtle);
   font-size: 13px;
   line-height: 1.5;
 }
@@ -894,7 +937,7 @@ code, pre {
   color: #6f7887;
   margin-bottom: 2px;
   padding-bottom: 4px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  border-bottom: 1px solid var(--ally-border-subtle);
 }
 .workspace-explorer-file-info .file-info-section .file-info-label {
   flex: 0 0 108px;
@@ -911,21 +954,21 @@ code, pre {
 .workspace-explorer-md-preview h4,
 .workspace-explorer-md-preview h5,
 .workspace-explorer-md-preview h6 { margin: 16px 0 8px; font-weight: 600; color: #e8e8e8; }
-.workspace-explorer-md-preview h1 { font-size: 1.6em; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 6px; }
-.workspace-explorer-md-preview h2 { font-size: 1.4em; border-bottom: 1px solid rgba(255,255,255,0.08); padding-bottom: 4px; }
+.workspace-explorer-md-preview h1 { font-size: 1.6em; border-bottom: 1px solid var(--ally-border); padding-bottom: 6px; }
+.workspace-explorer-md-preview h2 { font-size: 1.4em; border-bottom: 1px solid var(--ally-border); padding-bottom: 4px; }
 .workspace-explorer-md-preview h3 { font-size: 1.2em; }
 .workspace-explorer-md-preview p { margin: 8px 0; }
-.workspace-explorer-md-preview code { padding: 2px 6px; border-radius: 4px; background: rgba(255,255,255,0.08); font-family: var(--ally-mono-font); font-size: 0.9em; }
+.workspace-explorer-md-preview code { padding: 2px 6px; border-radius: 4px; background: var(--ally-state-hover); font-family: var(--ally-mono-font); font-size: 0.9em; }
 .workspace-explorer-md-preview pre { padding: 12px; border-radius: 6px; background: rgba(0,0,0,0.3); overflow-x: auto; margin: 8px 0; }
 .workspace-explorer-md-preview pre code { padding: 0; background: none; }
 .workspace-explorer-md-preview table { border-collapse: collapse; margin: 8px 0; width: 100%; }
 .workspace-explorer-md-preview th,
-.workspace-explorer-md-preview td { border: 1px solid rgba(255,255,255,0.1); padding: 6px 12px; text-align: left; }
+.workspace-explorer-md-preview td { border: 1px solid var(--ally-border); padding: 6px 12px; text-align: left; }
 .workspace-explorer-md-preview th { background: rgba(255,255,255,0.05); font-weight: 600; }
-.workspace-explorer-md-preview blockquote { border-left: 3px solid rgba(255,255,255,0.15); margin: 8px 0; padding: 4px 16px; color: #a0a0a0; }
+.workspace-explorer-md-preview blockquote { border-left: 3px solid var(--ally-border-strong); margin: 8px 0; padding: 4px 16px; color: #a0a0a0; }
 .workspace-explorer-md-preview ul,
 .workspace-explorer-md-preview ol { padding-left: 24px; margin: 8px 0; }
-.workspace-explorer-md-preview a { color: #8fd3ff; text-decoration: none; }
+.workspace-explorer-md-preview a { color: var(--md-link); text-decoration: none; }
 .workspace-explorer-md-preview a:hover { text-decoration: underline; }
 .workspace-explorer-md-preview img { max-width: 100%; border-radius: 4px; }
 .workspace-explorer-md-preview img.workspace-explorer-md-image-loading,
@@ -933,12 +976,12 @@ code, pre {
   display: block;
   width: min(240px, 100%);
   min-height: 48px;
-  border: 1px dashed rgba(255,255,255,0.16);
+  border: 1px dashed var(--ally-border-strong);
   background: rgba(255,255,255,0.035);
 }
 .workspace-explorer-md-preview img.workspace-explorer-md-image-error { border-color: rgba(229,154,154,0.45); }
 .workspace-explorer-error { color: #e59a9a; }
-.composer-explorer-btn.active { color: #8fd3ff; background: rgba(143, 211, 255, 0.12); }
+.composer-explorer-btn.active { color: var(--ally-accent-bright); background: color-mix(in srgb, var(--ally-accent) 12%, transparent); }
 .composer-icon-btn:focus, .composer-icon-btn:focus-visible { outline: none; }
 
 @media (max-width: 720px) {
@@ -969,9 +1012,9 @@ code, pre {
 /* 拖拽移动文件到目录：目标目录高亮 + 全局 ghost 浮层 */
 .composer { position: relative; z-index: 40; }
 
-.workspace-explorer-image-body { flex: 1; min-height: 0; overflow: auto; display: flex; align-items: center; justify-content: center; padding: 16px; background: #1a1a1a; }
+.workspace-explorer-image-body { flex: 1; min-height: 0; overflow: auto; display: flex; align-items: center; justify-content: center; padding: 16px; background: var(--ally-surface-content); }
 .workspace-explorer-image { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 4px; }
-.workspace-explorer-video-body { flex: 1; min-height: 0; overflow: auto; display: flex; align-items: center; justify-content: center; padding: 16px; background: #1a1a1a; }
+.workspace-explorer-video-body { flex: 1; min-height: 0; overflow: auto; display: flex; align-items: center; justify-content: center; padding: 16px; background: var(--ally-surface-content); }
 .workspace-explorer-video { display: block; width: 100%; max-height: 100%; border-radius: 4px; background: #000; }
 .workspace-explorer-pdf-body { flex: 1; min-height: 0; display: flex; background: #2a2a2a; }
 .workspace-explorer-pdf-frame { flex: 1; width: 100%; height: 100%; min-height: 0; border: none; background: #fff; }
@@ -1007,7 +1050,7 @@ code, pre {
   border-radius: 6px;
   color: #fafafa;
   background: transparent;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--ally-border);
 }
 
 .message-body pre code,
@@ -1026,7 +1069,7 @@ code, pre {
   white-space: pre-wrap;
   color: #e5e5e5;
   background: #0c0c0c;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--ally-border);
   border-radius: 10px;
 }
 
@@ -1045,7 +1088,7 @@ code, pre {
   width: 28px;
   height: 28px;
   padding: 4px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  border: 1px solid var(--ally-border-strong);
   border-radius: 6px;
   background: rgba(30, 30, 30, 0.85);
   color: #8a8a8a;
@@ -1143,7 +1186,7 @@ code, pre {
   border-radius: 6px;
   color: #d4d4d4;
   background: rgba(255, 255, 255, 0.055);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--ally-border);
   font-size: 12px;
 }
 
@@ -1226,7 +1269,10 @@ code, pre {
 }
 
 .composer-explorer-btn {
-  color: #4ea1ff;
+  /* Rests at the same muted grey as the sibling composer icon buttons; the
+     old always-on blue fought the accent system and made the active state
+     (accent) indistinguishable from the idle one. */
+  color: #8a8a8a;
   width: 22px;
   height: 22px;
 }
@@ -1608,7 +1654,7 @@ code, pre {
   height: 20px;
   padding: 1px 7px;
   color: #a3a3a3;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--ally-border);
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.025);
   font-size: var(--ally-aux-font-size);
@@ -1686,7 +1732,9 @@ code, pre {
 .git-diff-modal {
   width: min(1080px, calc(100vw - 48px));
   max-height: min(820px, calc(100vh - 48px));
-  background: #1a1a1a !important;
+  /* Overlays sit above the chrome step, not level with the content they
+     cover, so a dialog reads as lifted off the window. */
+  background: var(--ally-surface-raised) !important;
 }
 
 .git-diff-modal .n-card__content {
@@ -1730,7 +1778,7 @@ code, pre {
   padding: 12px;
   color: #a3a3a3;
   background: rgba(255, 255, 255, 0.035);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--ally-border);
   border-radius: 8px;
   font-size: var(--ally-sub-font-size);
 }
@@ -1752,14 +1800,14 @@ code, pre {
   height: min(680px, calc(100vh - 220px));
   min-height: 320px;
   min-width: 0;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  border-top: 1px solid var(--ally-border);
 }
 
 .git-diff-tree {
   min-height: 0;
   overflow: auto;
   padding: 8px 0;
-  border-right: 1px solid rgba(255, 255, 255, 0.08);
+  border-right: 1px solid var(--ally-border);
 }
 
 .git-diff-tree-row {
@@ -1891,21 +1939,21 @@ code, pre {
 .context-breakdown-total {
   margin-top: 4px;
   padding-top: 4px;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  border-top: 1px solid var(--ally-border);
   color: #d4d4d4;
 }
 
 .context-breakdown-footer {
   margin-top: 4px;
   padding-top: 4px;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  border-top: 1px solid var(--ally-border);
   display: flex;
   justify-content: center;
 }
 
 .context-compact-btn {
   background: transparent;
-  border: 1px solid rgba(255, 255, 255, 0.14);
+  border: 1px solid var(--ally-border-strong);
   border-radius: 6px;
   color: #a3a3a3;
   font-size: 12px;
@@ -2049,8 +2097,8 @@ code, pre {
   z-index: 20;
   overflow: visible;
   border-radius: 10px;
-  background: #1a1a1a;
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: var(--ally-surface-raised);
+  border: 1px solid var(--ally-border-strong);
   box-shadow: 0 22px 60px rgba(0, 0, 0, 0.55);
 }
 
@@ -2067,7 +2115,7 @@ code, pre {
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.12em;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  border-bottom: 1px solid var(--ally-border);
 }
 
 .session-item {
@@ -2087,7 +2135,7 @@ code, pre {
 
 .session-item:hover,
 .session-item.active {
-  background: #262626;
+  background: var(--ally-state-hover);
 }
 
 .session-item.current {
@@ -2149,7 +2197,7 @@ code, pre {
 
 .session-meta {
   padding-left: 10px;
-  border-left: 1px solid rgba(255, 255, 255, 0.1);
+  border-left: 1px solid var(--ally-border);
   color: #7d8985;
   font-size: 11px;
   font-weight: 450;
@@ -2411,7 +2459,7 @@ code, pre {
   overflow: hidden;
   border: 1px solid rgba(204, 120, 50, 0.2);
   border-radius: 10px;
-  background: #292929;
+  background: var(--ally-surface-raised);
   content-visibility: auto;
   contain-intrinsic-size: 320px;
 }
@@ -2471,7 +2519,7 @@ code, pre {
   min-height: 180px;
   overflow: hidden;
   border-radius: 6px;
-  background: #2b2b2b;
+  background: var(--ally-surface-raised);
   cursor: grab;
   touch-action: none;
 }
@@ -2496,7 +2544,7 @@ code, pre {
 }
 
 .markdown-body .markdown-mermaid.mermaid-suspended .markdown-mermaid-output {
-  background: #292929;
+  background: var(--ally-surface-raised);
 }
 
 .markdown-body .markdown-mermaid-output.dragging {
@@ -2536,7 +2584,7 @@ code, pre {
   overflow: hidden;
   border: 1px solid rgba(204, 120, 50, 0.2);
   border-radius: 10px;
-  background: #292929;
+  background: var(--ally-surface-raised);
 }
 
 .workspace-explorer-md-preview .markdown-mermaid-output {
@@ -2546,7 +2594,7 @@ code, pre {
   min-height: 60px;
   overflow: hidden;
   border-radius: 6px;
-  background: #2b2b2b;
+  background: var(--ally-surface-raised);
 }
 
 .workspace-explorer-md-preview .markdown-mermaid.rendered .markdown-mermaid-output {
@@ -2626,7 +2674,7 @@ code, pre {
   overflow: auto;
   border-radius: 10px;
   color: #bababa;
-  background: #2b2b2b;
+  background: var(--ally-surface-raised);
   border: 1px solid rgba(255, 190, 120, 0.13);
   max-height: 420px;
   white-space: pre;
@@ -2766,7 +2814,7 @@ code, pre {
 .welcome-info-table th,
 .welcome-info-table td {
   padding: 8px 10px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid var(--ally-border);
   text-align: left;
 }
 
@@ -2811,7 +2859,7 @@ code, pre {
 
 .attachment-item {
   overflow: hidden;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid var(--ally-border);
   border-radius: 6px;
   background: rgba(255, 255, 255, 0.035);
 }
@@ -2871,7 +2919,7 @@ code, pre {
   overflow: auto;
   color: #cfcfcf;
   background: rgba(0, 0, 0, 0.22);
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  border-top: 1px solid var(--ally-border);
   font-family: var(--ally-mono-font);
   font-size: 11px;
   line-height: 1.45;
@@ -3274,7 +3322,7 @@ code, pre {
   gap: 6px;
   padding: 5px 10px;
   font-size: var(--ally-aux-font-size);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  border-bottom: 1px solid var(--ally-border-subtle);
   user-select: none;
 }
 
@@ -3369,7 +3417,7 @@ code, pre {
 }
 
 .diff-view.split .diff-side + .diff-side {
-  border-left: 1px solid rgba(255, 255, 255, 0.08);
+  border-left: 1px solid var(--ally-border);
 }
 
 .diff-view.split .diff-row.diff-add .diff-side,
@@ -3444,7 +3492,7 @@ code, pre {
   font-style: italic;
   cursor: pointer;
   text-align: center;
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  border-top: 1px solid var(--ally-border-subtle);
   user-select: none;
 }
 
@@ -3549,7 +3597,7 @@ code, pre {
   transition: opacity 0.2s ease, visibility 0.2s ease;
   /* 与页面背景一致，遮住下方刚输出的正文首行，淡出时正文原位显露；
      装了背景图时由 App.vue 注入 --reasoning-curtain: transparent 关闭遮罩 */
-  background: var(--reasoning-curtain, #1a1a1a);
+  background: var(--reasoning-curtain, var(--ally-surface-content));
   pointer-events: none;
 }
 
@@ -3637,7 +3685,7 @@ code, pre {
 /* ── Plan panel (per workspace Tab, above its composer) ── */
 
 .plan-panel {
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  border-top: 1px solid var(--ally-border);
   background: rgba(26, 26, 26, 0.62);
   max-height: 160px;
   overflow: hidden;
@@ -3680,7 +3728,7 @@ code, pre {
   text-transform: uppercase;
   letter-spacing: 0.08em;
   background: transparent;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  border-bottom: 1px solid var(--ally-border-subtle);
   flex-shrink: 0;
   cursor: pointer;
   --wails-draggable: no-drag;
@@ -3919,7 +3967,7 @@ code, pre {
 .update-spinner {
   width: 28px;
   height: 28px;
-  border: 3px solid rgba(255, 255, 255, 0.12);
+  border: 3px solid var(--ally-border-strong);
   border-top-color: #67d99b;
   border-radius: 50%;
   animation: update-spin 0.9s linear infinite;

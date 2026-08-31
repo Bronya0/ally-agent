@@ -227,7 +227,7 @@ function selectionKey(selection) {
   width: 28px;
   height: 28px;
   padding: 0;
-  border: 1px solid rgba(255, 255, 255, 0.09);
+  border: 1px solid var(--ally-border);
   border-radius: 4px;
   color: #858585;
   background: transparent;
@@ -282,7 +282,7 @@ function selectionKey(selection) {
   gap: 10px;
   align-items: start;
   padding: 9px 4px;
-  border-top: 1px solid rgba(255, 255, 255, 0.055);
+  border-top: 1px solid var(--ally-border-subtle);
   cursor: pointer;
 }
 
@@ -342,7 +342,7 @@ function selectionKey(selection) {
   margin-top: 5px;
   padding: 7px 8px;
   resize: vertical;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid var(--ally-border);
   border-radius: 4px;
   outline: none;
   color: #e5e5e5;
@@ -362,7 +362,7 @@ function selectionKey(selection) {
   gap: 12px;
   min-height: 42px;
   padding: 7px 0 0;
-  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  border-top: 1px solid var(--ally-border);
 }
 
 .ask-progress {
@@ -390,7 +390,7 @@ function selectionKey(selection) {
   align-items: center;
   gap: 8px;
   padding: 7px 0;
-  border-top: 1px solid rgba(255, 255, 255, 0.055);
+  border-top: 1px solid var(--ally-border-subtle);
   color: #d4d4d4;
   font-size: var(--ally-sub-font-size);
 }

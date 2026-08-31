@@ -57,8 +57,8 @@ watch(() => props.selectedIndex, () => {
   z-index: 20;
   overflow: hidden;
   border-radius: 10px;
-  background: #1a1a1a;
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: var(--ally-surface-raised);
+  border: 1px solid var(--ally-border-strong);
   box-shadow: 0 22px 60px rgba(0, 0, 0, 0.55);
 }
 
@@ -75,7 +75,7 @@ watch(() => props.selectedIndex, () => {
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.12em;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  border-bottom: 1px solid var(--ally-border);
 }
 
 .command-item {
@@ -94,7 +94,7 @@ watch(() => props.selectedIndex, () => {
 
 .command-item:hover,
 .command-item.active {
-  background: #262626;
+  background: var(--ally-state-hover);
 }
 
 .command-label {

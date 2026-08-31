@@ -85,7 +85,7 @@ onBeforeUnmount(() => window.removeEventListener('message', handleFrameMessage))
   padding: 10px 12px;
   overflow: hidden;
   background: #1e1e1e;
-  border-top: 1px solid rgba(255, 255, 255, 0.025);
+  border-top: 1px solid var(--ally-border-subtle);
 }
 
 .html-render-writing pre {
@@ -110,7 +110,7 @@ onBeforeUnmount(() => window.removeEventListener('message', handleFrameMessage))
 .html-render-frame-wrapper {
   width: 100%;
   margin-top: 4px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--ally-border);
   border-radius: 8px;
   overflow: hidden;
 }

@@ -180,7 +180,7 @@ function groupBuiltinTools(tools) {
 
 .tool-list-item {
   padding: 7px 6px;
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  border-top: 1px solid var(--ally-border-subtle);
 }
 
 .tool-list-name {

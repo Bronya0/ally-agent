@@ -385,19 +385,24 @@ function historyMenuProps() {
 .app-header {
   height: 44px;
   flex-shrink: 0;
-  padding: 0 0 0 10px;
+  padding: 0 0 0 8px;
   display: flex;
   align-items: stretch;
-  background: #202020 !important;
-  border-bottom: none;
-  box-shadow: inset 0 -1px rgba(255, 255, 255, 0.08);
+  background: var(--ally-surface-chrome) !important;
+  /* A real border, not an inset shadow. The shadow was painted inside the
+     padding box while the mode rail and the explorer use borders on the
+     border box, so the three edges could not line up at 1px. */
+  border-bottom: 1px solid var(--ally-border);
   --wails-draggable: drag;
-  gap: 6px;
+  gap: 8px;
   --header-muted: #8d8d8d;
   --header-text: #cfcfcf;
   --header-strong: #f2f2f2;
-  --header-hover-bg: rgba(255, 255, 255, 0.07);
-  --header-active-bg: #171717;
+  /* Hover and selected both lift the surface; selected simply lifts further.
+     The old active background was #171717 — darker than the header itself,
+     which punched a hole in the surface scale instead of sitting on it. */
+  --header-hover-bg: var(--ally-state-hover);
+  --header-active-bg: var(--ally-state-selected);
 }
 
 .app-header button,
@@ -493,18 +498,22 @@ function historyMenuProps() {
   display: flex;
   align-items: center;
   flex-shrink: 0;
-  padding: 0 10px 0 2px;
+  /* The header gap already separates brand from tabs; this adds room so the
+     mark does not crowd the first tab. Everything here is on a 4px grid. */
+  padding: 0 8px 0 0;
   --wails-draggable: drag;
 }
 
+/* Sized against the 16px header icons: at 25px the mark carried more visual
+   weight than every control next to it and read as the header's subject. */
 .brand-wordmark {
-  font-size: 25px;
+  font-size: 20px;
   line-height: 1;
   white-space: nowrap;
 }
 
 body.platform-darwin .brand-wordmark {
-  font-size: 29px;
+  font-size: 24px;
 }
 
 /* ── Tabs area (flex-fill in header) ── */
@@ -612,10 +621,10 @@ body.platform-darwin .brand-wordmark {
   left: 0;
   right: 0;
   bottom: 0;
+  /* Solid full-bleed rule: at 2px tall a 1px radius just blurs the ends,
+     and the old 0.82 opacity let the header surface bleed through. */
   height: 2px;
-  border-radius: 1px;
   background: var(--n-bar-color);
-  opacity: 0.82;
   pointer-events: none;
 }
 
@@ -635,7 +644,7 @@ body.platform-darwin .brand-wordmark {
   display: flex;
   align-items: center;
   gap: 4px;
-  margin-left: 4px;
+  margin-left: 8px;
   flex-shrink: 0;
 }
 
@@ -645,7 +654,8 @@ body.platform-darwin .brand-wordmark {
   display: flex;
   align-items: stretch;
   height: 100%;
-  margin-left: 2px;
+  /* No extra margin: the header gap separates these from the actions, and the
+     buttons stay flush to the window edge as the platform expects. */
   --wails-draggable: no-drag;
   flex-shrink: 0;
 }
@@ -693,7 +703,7 @@ body.platform-darwin .window-close-icon {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 0 7px 0 11px !important;
+  padding: 0 8px 0 12px !important;
   height: 100%;
   border-radius: 0;
   cursor: grab;
@@ -704,7 +714,7 @@ body.platform-darwin .window-close-icon {
   user-select: none;
   transition: transform 0.14s ease, background 0.12s, color 0.12s;
   flex-shrink: 0;
-  min-width: 108px;
+  min-width: 112px;
   max-width: 180px;
   border: 0;
   --wails-draggable: no-drag;
