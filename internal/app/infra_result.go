@@ -352,7 +352,15 @@ func compactToolDataForModel(name string, result toolResult, fullJSON string) st
 		if !decodeToolData(result.Data, &r) {
 			return fullJSON
 		}
-		output, reduced := compactCommandOutputForModel(r.Output)
+		// 模型默认只收到尾部几行 + exitCode（对齐 UI 折叠卡片），调用时
+		// 传 fullOutput:true 才内联完整输出。UI 侧始终拿完整 JSON。
+		var output string
+		var reduced bool
+		if r.FullOutput {
+			output = r.Output
+		} else {
+			output, reduced = tailCommandOutputForModel(r.Output, r.ExitCode)
+		}
 		data := map[string]any{
 			"command":    r.Command,
 			"cwd":        r.Cwd,
@@ -367,7 +375,7 @@ func compactToolDataForModel(name string, result toolResult, fullJSON string) st
 		if reduced {
 			data["outputReduced"] = true
 			data["originalOutputBytes"] = len(r.Output)
-			data["reductionNote"] = "Command output shortened for model context; UI received the full output."
+			data["reductionNote"] = "Output trimmed to the last 3 lines plus exitCode to save context. Pass fullOutput:true on the command call when you need the complete output (git status/diff/log, ls, cat, grep, verbose failure logs); when outputFilePath is present the full output of this run is on disk and readable via read — do not re-run side-effecting commands just to see more output."
 		}
 		if r.OutputFilePath != "" {
 			data["outputFilePath"] = r.OutputFilePath
@@ -654,8 +662,38 @@ func marshalToolResultOrFallback(result toolResult, fallback string) string {
 	return string(raw)
 }
 
-func compactCommandOutputForModel(output string) (string, bool) {
-	return compactTextForModel(output, maxModelToolOutput)
+// tailCommandOutputForModel trims command output to the last few lines —
+// the same view the collapsed UI command card shows — prefixed with a
+// signal line carrying exitCode, the total line count, and how to request
+// the full output. Outputs already within the tail view pass through
+// unchanged. The model opts into the complete output with the
+// fullOutput tool parameter at call time.
+const (
+	commandTailLines = 3
+	commandTailRunes = 4096
+)
+
+func tailCommandOutputForModel(output string, exitCode int) (string, bool) {
+	if output == "" {
+		return "", false
+	}
+	body := strings.TrimSuffix(output, "\n")
+	lines := strings.Split(body, "\n")
+	total := len(lines)
+	if total <= commandTailLines && len(output) <= commandTailRunes {
+		return output, false
+	}
+	tail := lines
+	if total > commandTailLines {
+		tail = lines[total-commandTailLines:]
+	}
+	view := strings.Join(tail, "\n")
+	if runes := []rune(view); len(runes) > commandTailRunes {
+		view = string(runes[len(runes)-commandTailRunes:])
+	}
+	header := fmt.Sprintf("[command output trimmed: exitCode=%d, %d lines total, last %d shown; pass fullOutput:true for the complete output]",
+		exitCode, total, len(tail))
+	return header + "\n" + view, true
 }
 
 func compactTextForModel(output string, limit int) (string, bool) {

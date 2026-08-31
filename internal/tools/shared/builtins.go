@@ -97,12 +97,13 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"path"},
 		}),
-		functionTool("command", "Run a shell command with cwd confined to the workspace. On Windows the shell is Git Bash when available, otherwise PowerShell; on macOS/Linux, bash. Commands may inspect outside paths, redirect to null devices, and create new outside paths; modifying/deleting existing outside paths, explicit deletion commands, unsafe cwd symlinks, and long-running services are refused. On E_PATH_OUTSIDE, read the returned reason and switch target rather than retrying unchanged. When output exceeds the capture limit it is truncated and `outputFilePath` points to the full output.", map[string]any{
+		functionTool("command", "Run a shell command with cwd confined to the workspace. On Windows the shell is Git Bash when available, otherwise PowerShell; on macOS/Linux, bash. Commands may inspect outside paths, redirect to null devices, and create new outside paths; modifying/deleting existing outside paths, explicit deletion commands, unsafe cwd symlinks, and long-running services are refused. On E_PATH_OUTSIDE, read the returned reason and switch target rather than retrying unchanged. Output size: by default the model-facing output is trimmed to the last 3 lines plus a signal line with exitCode and total line count — enough for build/install/test success checks. Pass fullOutput:true when the output IS the answer (git status/diff/log, ls, cat, grep, wc) or when diagnosing a failure from verbose logs. exitCode is always a field, and when the output was trimmed its full content is saved to outputFilePath (readable via read), so never re-run a side-effecting command just to see more output. When output exceeds the capture limit it is truncated and `outputFilePath` points to the full output.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"command":        map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*"},
 				"cwd":            map[string]any{"type": "string", "description": "Relative working directory. Empty means workspace root."},
 				"timeoutSeconds": map[string]any{"type": "integer", "minimum": 1, "maximum": 600, "description": "Default 120, max 600."},
+				"fullOutput":     map[string]any{"type": "boolean", "description": "Return the complete output inline instead of the default last-3-lines tail. Use when the output is the answer (git status/diff/log, ls, cat, grep) or for failure diagnosis; omit for build/install/test success checks where the tail and exitCode suffice."},
 			},
 			"required": []string{"command"},
 		}),
@@ -252,7 +253,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"target", "path"},
 		}),
-		functionTool("remote_run_command", "Run a non-interactive shell command on a remote SSH workspace (same contract as command; explicit deletion commands are refused — use remote_delete_path). Cwd defaults to the workspace root. Use find, ls, or other shell commands for remote directory discovery. Search remote code with grep -rn 'pattern' src/. Error codes: E_PATH_OUTSIDE, E_CWD_INVALID, E_LONG_RUNNING_COMMAND.", map[string]any{
+		functionTool("remote_run_command", "Run a non-interactive shell command on a remote SSH workspace (same contract as command, including fullOutput for complete output instead of the last-3-lines tail; explicit deletion commands are refused — use remote_delete_path). Cwd defaults to the workspace root. Use find, ls, or other shell commands for remote directory discovery. Search remote code with grep -rn 'pattern' src/. Error codes: E_PATH_OUTSIDE, E_CWD_INVALID, E_LONG_RUNNING_COMMAND.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"target":         map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Explicit SSH target plus workspace root, e.g. my-dev:/srv/app."},
@@ -260,6 +261,7 @@ func chatToolsUncached() []openai.Tool {
 				"cwd":            map[string]any{"type": "string", "description": "Relative working directory inside the remote workspace. Empty means workspace root."},
 				"timeoutSeconds": map[string]any{"type": "integer", "minimum": 1, "maximum": 600, "description": "Default 120, max 600."},
 				"shell":          map[string]any{"type": "string", "description": "Remote shell executable. Default /bin/bash if available, otherwise /bin/sh."},
+				"fullOutput":     map[string]any{"type": "boolean", "description": "Return the complete output inline instead of the default last-3-lines tail."},
 			},
 			"required": []string{"target", "command"},
 		}),

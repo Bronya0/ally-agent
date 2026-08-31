@@ -4066,3 +4066,132 @@ func TestCompactToolResultForModelCapsMcpOutput(t *testing.T) {
 		t.Fatalf("small MCP output must pass through unchanged, got %s", unchanged)
 	}
 }
+
+func TestTailCommandOutputForModel(t *testing.T) {
+	// ≤3 行且不超字节上限：原样返回，不标记缩减。
+	small := "line1\nline2\nline3\n"
+	if got, reduced := tailCommandOutputForModel(small, 0); got != small || reduced {
+		t.Fatalf("small output must pass through unchanged, got %q reduced=%v", got, reduced)
+	}
+	if got, reduced := tailCommandOutputForModel("", 1); got != "" || reduced {
+		t.Fatalf("empty output must stay empty, got %q reduced=%v", got, reduced)
+	}
+
+	// >3 行：只保留最后 3 行，头部带 exitCode 与总行数信号行。
+	big := "a\nb\nc\nd\ne\nf\n"
+	got, reduced := tailCommandOutputForModel(big, 0)
+	if !reduced {
+		t.Fatal("multi-line output must be reduced")
+	}
+	want := "[command output trimmed: exitCode=0, 6 lines total, last 3 shown; pass fullOutput:true for the complete output]\nd\ne\nf"
+	if got != want {
+		t.Fatalf("tail view mismatch:\n got: %q\nwant: %q", got, want)
+	}
+	// 退出码非零要出现在信号行里，让失败一眼可见。
+	gotFail, _ := tailCommandOutputForModel(big, 2)
+	if !strings.Contains(gotFail, "exitCode=2") {
+		t.Fatalf("exitCode must appear in the signal line, got %q", gotFail)
+	}
+
+	// 尾部 3 行超过字节上限：按 rune 截到上限内。
+	longLine := strings.Repeat("x", 2000)
+	capped, reduced := tailCommandOutputForModel(longLine+"\n"+longLine+"\n"+longLine+"\n", 0)
+	if !reduced {
+		t.Fatal("over-limit tail must be reduced")
+	}
+	if n := utf8.RuneCountInString(capped); n > commandTailRunes+200 {
+		t.Fatalf("capped tail must stay near %d runes, got %d", commandTailRunes, n)
+	}
+
+	// 尾部视图判定与 pass-through 条件互为镜像。
+	if !commandTailOmitsContent(big) {
+		t.Fatal("commandTailOmitsContent must report omission for multi-line output")
+	}
+	if commandTailOmitsContent(small) {
+		t.Fatal("commandTailOmitsContent must not report omission for small output")
+	}
+}
+
+func TestSpillCommandOutputForTail(t *testing.T) {
+	dir := t.TempDir()
+
+	// 无省略的小输出不落盘。
+	if _, _, ok := spillCommandOutputForTail(dir, "a\nb\n", ""); ok {
+		t.Fatal("small output must not spill")
+	}
+	// 已有溢出落盘文件时不重复落盘。
+	if _, _, ok := spillCommandOutputForTail(dir, "a\nb\nc\nd\ne\n", "existing.log"); ok {
+		t.Fatal("existing spill path must short-circuit")
+	}
+
+	path, size, ok := spillCommandOutputForTail(dir, "a\nb\nc\nd\ne\nf\n", "")
+	if !ok {
+		t.Fatal("trimmed output must spill")
+	}
+	if !strings.HasPrefix(filepath.Base(path), "ally-run-") || !strings.HasSuffix(path, ".log") {
+		t.Fatalf("spill file naming mismatch: %s", path)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "a\nb\nc\nd\ne\nf\n" || size != int64(len(content)) {
+		t.Fatalf("spill must contain the full output, got %q size=%d", content, size)
+	}
+	_ = os.Remove(path)
+}
+
+func TestCompactToolResultForModelCommandTail(t *testing.T) {
+	// 默认：模型侧只收尾部 + 信号行，且带缩减说明与落盘路径提示。
+	full := `{"command":"go build ./...","cwd":"","shell":"bash","shellPath":"/bin/bash","output":"c1\nc2\nc3\nc4\nc5\n","exitCode":0,"timedOut":false,"durationMs":10,"truncated":false}`
+	result := toolResult{OK: true, Data: map[string]any{
+		"command": "go build ./...", "cwd": "", "shell": "bash", "shellPath": "/bin/bash",
+		"output": "c1\nc2\nc3\nc4\nc5\n", "exitCode": 0, "timedOut": false, "durationMs": 10, "truncated": false,
+	}}
+	modelJSON := compactToolDataForModel("command", result, full)
+	var decoded struct {
+		OK   bool `json:"ok"`
+		Data struct {
+			Output        string `json:"output"`
+			OutputReduced bool   `json:"outputReduced"`
+			ReductionNote string `json:"reductionNote"`
+			ExitCode      int    `json:"exitCode"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(modelJSON), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if !decoded.OK || !decoded.Data.OutputReduced {
+		t.Fatalf("expected reduced command output, got %s", modelJSON)
+	}
+	if decoded.Data.ExitCode != 0 || !strings.Contains(decoded.Data.Output, "c5") || strings.Contains(decoded.Data.Output, "c1\n") {
+		t.Fatalf("tail must keep the last lines and drop the head, got %q", decoded.Data.Output)
+	}
+	if !strings.Contains(decoded.Data.Output, "exitCode=0") || !strings.Contains(decoded.Data.Output, "5 lines total") {
+		t.Fatalf("signal line must carry exitCode and line count, got %q", decoded.Data.Output)
+	}
+	if decoded.Data.ReductionNote == "" {
+		t.Fatal("reductionNote must explain how to get the full output")
+	}
+
+	// fullOutput=true：内联完整输出，不做尾部裁剪。
+	fullReq := `{"command":"git status","cwd":"","shell":"bash","shellPath":"/bin/bash","output":"c1\nc2\nc3\nc4\nc5\n","exitCode":0,"timedOut":false,"durationMs":10,"truncated":false,"fullOutput":true}`
+	resultFull := toolResult{OK: true, Data: map[string]any{
+		"command": "git status", "cwd": "", "shell": "bash", "shellPath": "/bin/bash",
+		"output": "c1\nc2\nc3\nc4\nc5\n", "exitCode": 0, "timedOut": false, "durationMs": 10, "truncated": false,
+		"fullOutput": true,
+	}}
+	modelJSONFull := compactToolDataForModel("command", resultFull, fullReq)
+	var decodedFull struct {
+		Data struct {
+			Output        string `json:"output"`
+			OutputReduced bool   `json:"outputReduced"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(modelJSONFull), &decodedFull); err != nil {
+		t.Fatal(err)
+	}
+	if decodedFull.Data.Output != "c1\nc2\nc3\nc4\nc5\n" || decodedFull.Data.OutputReduced {
+		t.Fatalf("fullOutput must inline the complete output, got %s", modelJSONFull)
+	}
+}

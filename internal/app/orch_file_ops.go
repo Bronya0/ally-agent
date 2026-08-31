@@ -547,6 +547,15 @@ func (a *App) runCommandWithConfig(parent context.Context, cfg ConfigState, req 
 	if outputFilePath != "" {
 		result.Output += fmt.Sprintf("\n\n[输出已截断：仅保留前 %d KB。完整输出已保存到 %s（共 %s），可用 read 工具读取该文件查看全部内容；大文件建议分段或按需检索，避免整读]", maxToolOutput/1024, outputFilePath, formatMapFileSize(outputFileSize))
 	}
+	// 模型侧默认只收尾部几行；被截掉的内容落盘到 .tmp，让模型能用 read
+	// 取回本次运行的完整输出，而不是重跑可能有副作用的命令。UI 不受影响。
+	result.FullOutput = req.FullOutput
+	if !req.FullOutput {
+		if path, size, spilled := spillCommandOutputForTail(root, result.Output, outputFilePath); spilled {
+			result.OutputFilePath = path
+			result.OutputFileBytes = size
+		}
+	}
 	if err != nil {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
@@ -633,6 +642,44 @@ func cleanupCommandSpillFiles(workspaceRoot string) {
 			}
 		}
 	}
+}
+
+// spillCommandOutputForTail writes the complete command output to a
+// workspace .tmp file when the default model-facing tail view would omit
+// content, so the model can recover the full output of the run via read
+// instead of re-running a possibly side-effecting command. No-op when an
+// overflow spill file already exists or the tail keeps everything.
+// Failures degrade silently — the tail view still works without the file.
+func spillCommandOutputForTail(workspaceRoot, output, existingPath string) (string, int64, bool) {
+	if existingPath != "" || !commandTailOmitsContent(output) {
+		return "", 0, false
+	}
+	dir := filepath.Join(workspaceRoot, ".tmp")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", 0, false
+	}
+	f, err := os.CreateTemp(dir, "ally-run-*.log")
+	if err != nil {
+		return "", 0, false
+	}
+	if _, err := f.WriteString(output); err != nil {
+		_ = f.Close()
+		_ = os.Remove(f.Name())
+		return "", 0, false
+	}
+	size := int64(len(output))
+	_ = f.Close()
+	return f.Name(), size, true
+}
+
+// commandTailOmitsContent mirrors tailCommandOutputForModel's pass-through
+// check: reports whether the default tail view drops any part of output.
+func commandTailOmitsContent(output string) bool {
+	if output == "" {
+		return false
+	}
+	total := len(strings.Split(strings.TrimSuffix(output, "\n"), "\n"))
+	return total > commandTailLines || len(output) > commandTailRunes
 }
 
 type shellInvocation struct {
