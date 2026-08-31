@@ -17,7 +17,6 @@ Public License v3. See the LICENSE file for details.
           <span>{{ $t('chat.archive.summary', { count: msg.count }) }}</span>
         </button>
         <div v-else-if="msg.role === 'user'" :class="['message', msg.role, { error: msg.error }]" data-user-question>
-          <span class="user-rail" aria-hidden="true">›</span>
           <div class="user-message-content">
             <div class="message-body user-text">
               <span v-if="msg.skill" class="skill-chip">/{{ msg.skill.name }}</span>
@@ -755,32 +754,19 @@ defineExpose({ scrollbarRef, scrollToBottom, scrollToUserQuestion, scrollToBotto
 .message.user {
   display: flex;
   align-items: flex-start;
-  gap: 6px;
   margin-right: -28px;
   margin-left: -28px;
   /* The row bleeds 28px into the gutter on both sides. The bleed is
      deliberate: it puts the question text on the same x as the assistant's
-     body text while letting the tint run the full column width. The left
-     inset has to total 28px for that to hold:
-     2px rule + 8px padding + 12px rail + 6px gap = 28px. */
-  padding: 10px 10px 10px 8px;
+     body text while letting the tint run the full column width. With the
+     old hanging rail glyph gone, the left inset is just the rule plus the
+     padding it needs to breathe: 2px rule + 26px padding = 28px. */
+  padding: 10px 10px 10px 26px;
   /* One accent rule on the leading edge rather than a box drawn around the
      whole row. A 1px border on a full-bleed band reads as a striped block
      and fights the unboxed assistant turns that follow it. */
   border-left: 2px solid var(--ally-accent);
   background: var(--ally-state-hover);
-}
-
-.user-rail {
-  flex: none;
-  width: 12px;
-  color: var(--ally-accent);
-  font-family: var(--ally-ui-font);
-  font-size: 15px;
-  font-weight: 600;
-  line-height: 1.7;
-  text-align: center;
-  opacity: 0.85;
 }
 
 /* Delete button on user questions: absolutely pinned to the row's top-right,
