@@ -356,7 +356,7 @@ code, pre {
   height: 100%;
   min-height: 0;
   flex-direction: column;
-  padding-top: 6px;
+  padding-top: 0;
   /* Same surface as the app header so the rail reads as part of the chrome. */
   background: #202020;
   border-right: 1px solid rgba(255, 255, 255, 0.08);
@@ -365,6 +365,18 @@ code, pre {
 
 .mode-sider .n-menu {
   --wails-draggable: no-drag;
+}
+
+/* n-menu gives every vertical item a 6px top margin which stacks with the
+   rail padding — the first icon ended up ~16px below the header. Tighten
+   every item's top margin to 4px and drop the first item's margin entirely
+   so its badge sits right under the header edge. */
+.mode-sider .n-menu .n-menu-item {
+  margin-top: 4px;
+}
+
+.mode-sider .n-menu .n-menu-item:first-child {
+  margin-top: 0;
 }
 
 /* Selected mode follows the theme accent (the neutral primary is barely

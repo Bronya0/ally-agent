@@ -27,8 +27,8 @@ Public License v3. See the LICENSE file for details.
 <script setup>
 import { computed, h } from 'vue';
 import { NIcon } from 'naive-ui';
-import HomeTwotone from '@vicons/antd/HomeTwotone';
-import BookTwotone from '@vicons/antd/BookTwotone';
+import HomeOutlined from '@vicons/antd/HomeOutlined';
+import BookOutlined from '@vicons/antd/BookOutlined';
 import BarChartOutlined from '@vicons/antd/BarChartOutlined';
 import AppstoreOutlined from '@vicons/antd/AppstoreOutlined';
 import SettingOutlined from '@vicons/antd/SettingOutlined';
@@ -46,8 +46,8 @@ const renderIcon = (icon, dot = false) => () => h('div', { class: 'mode-sider-ic
 ]);
 
 const modeOptions = computed(() => [
-  { label: t('app.mode.chat'), key: 'chat', icon: renderIcon(HomeTwotone) },
-  { label: t('app.mode.kb'), key: 'kb', icon: renderIcon(BookTwotone, props.kbRunning) },
+  { label: t('app.mode.chat'), key: 'chat', icon: renderIcon(HomeOutlined) },
+  { label: t('app.mode.kb'), key: 'kb', icon: renderIcon(BookOutlined, props.kbRunning) },
   { label: t('header.tokenStats'), key: 'stats', icon: renderIcon(BarChartOutlined) },
   { label: t('header.games'), key: 'games', icon: renderIcon(AppstoreOutlined) },
   { label: t('header.settings'), key: 'settings', icon: renderIcon(SettingOutlined) },
