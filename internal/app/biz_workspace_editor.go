@@ -8,17 +8,22 @@
 package app
 
 import (
-	"encoding/base64"
+	"context"
+	"crypto/subtle"
 	"errors"
 	"fmt"
+	"log"
+	"net"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 )
 
 const workspaceEditorMaxBytes = 16 * 1024 * 1024
-const workspacePreviewMaxBytes = workspaceEditorMaxBytes
-const workspaceVideoMaxBytes = 512 * 1024 * 1024
 
 type WorkspaceFileContent struct {
 	Path       string `json:"path"`
@@ -186,65 +191,162 @@ func pdfExtMime(path string) string {
 	return pdfExtensions[ext]
 }
 
-// ReadWorkspaceImage reads a binary image file and returns a data URL.
-func (a *App) ReadWorkspaceImage(path string) (WorkspaceImageContent, error) {
-	return a.readWorkspaceImageAt("", path)
+// ── 媒体流式服务 ──
+//
+// 图片/视频/PDF 预览不再走 base64 data URL（整文件 ×4 份内存副本，视频直接
+// 上 GB），改用本机回环 HTTP 服务按需流式输出。端口由操作系统分配
+// （127.0.0.1:0），不存在占用冲突；进程级随机 token 防止其他本机程序访问。
+
+// mediaServer 持有媒体流式服务单例；首次请求媒体 URL 时懒启动。
+type mediaServer struct {
+	mu       sync.Mutex
+	server   *http.Server
+	listener net.Listener
+	token    string
+	baseURL  string
+	running  bool
 }
 
-func (a *App) ReadWorkspaceImageAt(req WorkspacePathRequest) (WorkspaceImageContent, error) {
-	return a.readWorkspaceImageAt(req.Workspace, req.Path)
-}
+var mediaSvc = &mediaServer{}
 
-func (a *App) ReadWorkspaceVideoAt(req WorkspacePathRequest) (WorkspaceImageContent, error) {
-	return a.readWorkspaceMediaAt(req.Workspace, req.Path, videoExtMime, workspaceVideoMaxBytes, "video preview")
-}
-
-func (a *App) ReadWorkspacePDFAt(req WorkspacePathRequest) (WorkspaceImageContent, error) {
-	return a.readWorkspaceMediaAt(req.Workspace, req.Path, pdfExtMime, workspacePreviewMaxBytes, "preview")
-}
-
-func (a *App) readWorkspaceImageAt(workspace, path string) (WorkspaceImageContent, error) {
-	return a.readWorkspaceMediaAt(workspace, path, imageExtMime, workspacePreviewMaxBytes, "preview")
-}
-
-func (a *App) readWorkspaceMediaAt(workspace, path string, mimeForPath func(string) string, maxBytes int64, limitName string) (WorkspaceImageContent, error) {
-	cfg, err := a.configForWorkspace(workspace)
-	if err != nil {
-		return WorkspaceImageContent{}, err
+// GetWorkspaceMediaURL 校验文件后返回一个回环流式 URL，前端直接塞进
+// <video>/<img>/<iframe> 的 src。浏览器原生支持 Range 请求，拖进度条按需拉取。
+func (a *App) GetWorkspaceMediaURL(req WorkspacePathRequest) (string, error) {
+	if err := a.ensureInitialized(); err != nil {
+		return "", err
 	}
-	resolved, err := resolveReadPath(cfg, path)
+	if strings.TrimSpace(req.Path) == "" {
+		return "", codedToolError("E_BAD_PATH", errors.New("path is required"))
+	}
+	cfg, err := a.configForWorkspace(req.Workspace)
 	if err != nil {
-		return WorkspaceImageContent{}, err
+		return "", err
+	}
+	resolved, err := resolveReadPath(cfg, req.Path)
+	if err != nil {
+		return "", err
 	}
 	info, err := os.Stat(resolved)
 	if err != nil {
-		return WorkspaceImageContent{}, err
+		return "", err
 	}
 	if info.IsDir() {
-		return WorkspaceImageContent{}, codedToolError("E_BAD_PATH", fmt.Errorf("not a file: %s", path))
+		return "", codedToolError("E_BAD_PATH", fmt.Errorf("not a file: %s", req.Path))
 	}
-	mime := mimeForPath(path)
-	if mime == "" {
-		return WorkspaceImageContent{}, codedToolError("E_BAD_PATH", fmt.Errorf("unsupported media file: %s", path))
+	if mediaExtMime(req.Path) == "" {
+		return "", codedToolError("E_BAD_PATH", fmt.Errorf("unsupported media file: %s", req.Path))
 	}
-	if info.Size() > maxBytes {
-		return WorkspaceImageContent{}, codedToolError("E_FILE_TOO_LARGE", fmt.Errorf("file is larger than the %d MiB %s limit", maxBytes/(1024*1024), limitName))
-	}
-	data, err := os.ReadFile(resolved)
+	base, token, err := a.ensureMediaServer()
 	if err != nil {
-		return WorkspaceImageContent{}, err
+		return "", err
 	}
-	return WorkspaceImageContent{
-		Path: displayPathForConfig(cfg, resolved),
-		Mime: mime,
-		Size: info.Size(),
-		Data: "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(data),
-	}, nil
+	return fmt.Sprintf("%s/media?t=%s&ws=%s&p=%s", base, token,
+		url.QueryEscape(req.Workspace), url.QueryEscape(req.Path)), nil
 }
 
-type WorkspaceImageContent struct {
-	Path string `json:"path"`
-	Mime string `json:"mime"`
-	Size int64  `json:"size"`
-	Data string `json:"data"`
+func mediaExtMime(path string) string {
+	if m := imageExtMime(path); m != "" {
+		return m
+	}
+	if m := videoExtMime(path); m != "" {
+		return m
+	}
+	return pdfExtMime(path)
+}
+
+// ensureMediaServer 幂等启动回环媒体服务（已运行直接返回）。
+func (a *App) ensureMediaServer() (baseURL, token string, err error) {
+	mediaSvc.mu.Lock()
+	defer mediaSvc.mu.Unlock()
+	if mediaSvc.running {
+		return mediaSvc.baseURL, mediaSvc.token, nil
+	}
+	tok := generateApiToken()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return "", "", fmt.Errorf("media listen: %w", err)
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /media", a.handleWorkspaceMedia)
+	server := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	mediaSvc.server = server
+	mediaSvc.listener = ln
+	mediaSvc.token = tok
+	mediaSvc.baseURL = "http://" + ln.Addr().String()
+	mediaSvc.running = true
+	go func() {
+		if err := server.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Printf("[media] serve: %v", err)
+		}
+	}()
+	if a.ctx != nil {
+		go func() {
+			<-a.ctx.Done()
+			stopMediaServer()
+		}()
+	}
+	return mediaSvc.baseURL, mediaSvc.token, nil
+}
+
+// stopMediaServer 停止媒体服务（幂等）。
+func stopMediaServer() {
+	mediaSvc.mu.Lock()
+	server := mediaSvc.server
+	mediaSvc.server = nil
+	mediaSvc.listener = nil
+	mediaSvc.token = ""
+	mediaSvc.baseURL = ""
+	mediaSvc.running = false
+	mediaSvc.mu.Unlock()
+	if server == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_ = server.Shutdown(ctx)
+}
+
+// handleWorkspaceMedia 校验 token 与路径（必须位于工作区内）后交给
+// http.ServeContent：自动处理 Range / HEAD / 条件请求，浏览器按需拉取。
+func (a *App) handleWorkspaceMedia(w http.ResponseWriter, r *http.Request) {
+	mediaSvc.mu.Lock()
+	token := mediaSvc.token
+	mediaSvc.mu.Unlock()
+	if token == "" {
+		http.Error(w, "media server is not running", http.StatusServiceUnavailable)
+		return
+	}
+	q := r.URL.Query()
+	if subtle.ConstantTimeCompare([]byte(q.Get("t")), []byte(token)) != 1 {
+		http.Error(w, "invalid or missing token", http.StatusUnauthorized)
+		return
+	}
+	cfg, err := a.configForWorkspace(q.Get("ws"))
+	if err != nil {
+		http.Error(w, "invalid workspace", http.StatusBadRequest)
+		return
+	}
+	resolved, err := resolveReadPath(cfg, q.Get("p"))
+	if err != nil {
+		http.Error(w, "invalid path", http.StatusBadRequest)
+		return
+	}
+	info, err := os.Stat(resolved)
+	if err != nil || info.IsDir() {
+		http.Error(w, "file not found", http.StatusNotFound)
+		return
+	}
+	mime := mediaExtMime(resolved)
+	if mime == "" {
+		http.Error(w, "unsupported media file", http.StatusBadRequest)
+		return
+	}
+	f, err := os.Open(resolved)
+	if err != nil {
+		http.Error(w, "open failed", http.StatusInternalServerError)
+		return
+	}
+	defer f.Close()
+	w.Header().Set("Content-Type", mime)
+	http.ServeContent(w, r, filepath.Base(resolved), info.ModTime(), f)
 }

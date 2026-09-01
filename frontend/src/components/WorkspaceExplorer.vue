@@ -210,7 +210,7 @@ import MarkdownIt from 'markdown-it';
 import { isEditableNavigationTarget } from '../utils/sessionState.mjs';
 import { resolveMarkdownImagePath } from '../utils/markdownPreview.mjs';
 import { mermaidFenceSpec, normalizeMermaidSource, loadMermaid, escapeHtmlText } from '../utils/mermaidShared.mjs';
-import { ListFiles, ReadWorkspaceFileAt, ReadWorkspaceImageAt, ReadWorkspaceVideoAt, ReadWorkspacePDFAt, SaveWorkspaceFile, DeletePath, OpenWorkspacePathInFileManagerAt, CreateFile, CreateDirectory, GetWorkspaceFileInfoAt, CopyFilesIntoWorkspace, ReadClipboardFiles } from '../../bindings/ally-dev/internal/app/app';
+import { ListFiles, ReadWorkspaceFileAt, GetWorkspaceMediaURL, SaveWorkspaceFile, DeletePath, OpenWorkspacePathInFileManagerAt, CreateFile, CreateDirectory, GetWorkspaceFileInfoAt, CopyFilesIntoWorkspace, ReadClipboardFiles } from '../../bindings/ally-dev/internal/app/app';
 import FileInfoModal from './FileInfoModal.vue';
 import { buildFileInfoSections } from '../utils/fileInfo.mjs';
 import { copyText } from '../utils/clipboard.mjs';
@@ -290,15 +290,12 @@ let mdRenderer = null;
 // from the workspace bridge. Keep the async hydration bounded and discard
 // results from an older render when the user keeps editing or changes files.
 let markdownImageRenderSeq = 0;
-const markdownImageCache = new Map();
 const markdownImageLoads = new Map();
 // Mermaid SVG 按源码缓存：预览每次输入后整树重建（无防抖），
 // 缓存让已渲染过的图表零开销回填，内容未变时不再调 mermaid.render。
 const mermaidPreviewSvgCache = new Map();
 const MERMAID_PREVIEW_SVG_CACHE_MAX = 24;
 let mermaidPreviewIdSeq = 0;
-const MARKDOWN_IMAGE_CACHE_LIMIT = 8;
-const MARKDOWN_IMAGE_CACHE_ITEM_MAX_CHARS = 2 * 1024 * 1024;
 // nodeWrapperPadding 默认 '3px 0'：每行 hover/聚焦高亮上下各缩进 3px，
 // 相邻行之间出现 6px 视觉缝隙（表现为"聚焦区域之间存在间距"）。
 // 这里归零，让 20px 行高的高亮区域完全相邻。
@@ -748,26 +745,14 @@ function applyAceMode(path, mode) {
 }
 
 async function loadMarkdownImage(key, path) {
-  const cached = markdownImageCache.get(key);
-  if (cached) {
-    markdownImageCache.delete(key);
-    markdownImageCache.set(key, cached);
-    return cached;
-  }
   let pending = markdownImageLoads.get(key);
   if (!pending) {
-    pending = ReadWorkspaceImageAt({ workspace: props.workspace, path })
-      .then((result) => {
-        const data = String(result?.data || '');
-        if (!data) throw new Error('image data is empty');
-        if (data.length <= MARKDOWN_IMAGE_CACHE_ITEM_MAX_CHARS) {
-          markdownImageCache.delete(key);
-          markdownImageCache.set(key, data);
-          while (markdownImageCache.size > MARKDOWN_IMAGE_CACHE_LIMIT) {
-            markdownImageCache.delete(markdownImageCache.keys().next().value);
-          }
-        }
-        return data;
+    // 回环流式 URL：浏览器按需拉取，无需 base64 缓存
+    pending = GetWorkspaceMediaURL({ workspace: props.workspace, path })
+      .then((url) => {
+        const src = String(url || '');
+        if (!src) throw new Error('image url is empty');
+        return src;
       })
       .finally(() => markdownImageLoads.delete(key));
     markdownImageLoads.set(key, pending);
@@ -1635,15 +1620,13 @@ async function openFile(node) {
   loadingFile.value = true;
   try {
     if (kind === 'image' || kind === 'video' || kind === 'pdf') {
-      const result = kind === 'video'
-        ? await ReadWorkspaceVideoAt({ workspace: props.workspace, path: node.path })
-        : kind === 'pdf'
-          ? await ReadWorkspacePDFAt({ workspace: props.workspace, path: node.path })
-          : await ReadWorkspaceImageAt({ workspace: props.workspace, path: node.path });
+      // 媒体走回环 HTTP 流式 URL（Range 按需拉取），不再 base64 整读
+      const url = await GetWorkspaceMediaURL({ workspace: props.workspace, path: node.path });
       if (disposed || requestID !== requestSequence) return false;
-      if (kind === 'video') videoDataUrl.value = String(result?.data || '');
-      else if (kind === 'pdf') pdfDataUrl.value = String(result?.data || '');
-      else imageDataUrl.value = String(result?.data || '');
+      const src = String(url || '');
+      if (kind === 'video') videoDataUrl.value = src;
+      else if (kind === 'pdf') pdfDataUrl.value = src;
+      else imageDataUrl.value = src;
       activeFile.value = { path: node.path, kind };
       draftContent.value = '';
       originalContent.value = '';
@@ -1922,7 +1905,6 @@ function findNodeByPath(path, nodes = treeData.value) {
 
 onBeforeUnmount(() => {
   markdownImageRenderSeq++;
-  markdownImageCache.clear();
   markdownImageLoads.clear();
   mermaidPreviewSvgCache.clear();
   window.removeEventListener('keydown', onGlobalKeydown, true);
