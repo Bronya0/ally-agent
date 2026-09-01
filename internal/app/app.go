@@ -1876,18 +1876,6 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			// the next response starts on a fresh one.
 			a.emit("run:inject", map[string]any{"runId": runID, "sessionId": sessionID})
 		}
-		// Stage-1 slimming: replace stale tool-result bodies (everything
-		// except the most recent ones) with placeholders so context grows
-		// slowly in long-running sessions. The LLM compaction below stays
-		// the second line of defense when placeholders alone are not enough.
-		var trimmedToolResults bool
-		messages, trimmedToolResults = trimOldToolResults(messages, keepRecentToolResults)
-		if trimmedToolResults {
-			// The accumulator's incremental counts are stale after in-place
-			// edits; recompute so the context display reflects the slimmed
-			// message list.
-			breakdownAcc.reset(messages)
-		}
 		// Update live breakdown for context display (includes all tool calls/results)
 		bd := breakdownAcc.update(messages)
 		bd.ToolSchemas = estimateToolSchemaTokens(tools)
@@ -1909,36 +1897,59 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 		}
 		compactThreshold := clampCompactThreshold(cfg.CompactThreshold)
 		if usedTokens > int(float64(maxCtx)*compactThreshold) {
-			// Compact the in-run message list (system/workspace markers are
-			// stripped by sanitize) so tool activity from this run is included in
-			// the summary instead of being lost when history is replaced.
-			h := sanitizeHistoryMessages(messages)
-			if len(h) > 2 {
-				a.emit("run:compact", map[string]any{"sessionId": sessionID, "tokensBefore": usedTokens})
-				// keepLastUser=false: the current request and any continuation
-				// prompt are re-appended below, so carrying the trailing user
-				// message into the compacted history would duplicate it.
-				if result, err := a.compactHistory(ctx, cfg, sessionID, "", h, false); err == nil {
-					a.mu.Lock()
-					compacted := sanitizeHistoryMessages(a.histories[sessionID])
-					a.mu.Unlock()
-					messages = a.buildSystemContextMessages(sessionID, cfg, a.listCachedSkills())
-					messages = append(messages, compacted...)
-					if strings.TrimSpace(req.Message) != "" || len(req.Attachments) > 0 {
-						messages = appendUserMessageWithAttachments(messages, req.Message, req.Attachments)
+			// Stage-1 slimming: replace stale tool-result bodies with short
+			// placeholders first — zero cost, no LLM call, keeps tool_call/
+			// result pairing intact. Most of the time this alone drops
+			// usage back under the threshold and no LLM compaction happens.
+			var trimmedToolResults bool
+			messages, trimmedToolResults = trimOldToolResults(messages, keepRecentToolResults)
+			if trimmedToolResults {
+				// The accumulator's incremental counts are stale after
+				// in-place edits; recompute so the context display and the
+				// threshold re-check below use the slimmed list.
+				breakdownAcc.reset(messages)
+				bd = breakdownAcc.update(messages)
+				bd.ToolSchemas = estimateToolSchemaTokens(tools)
+				finalizeContextBreakdownTotal(&bd)
+				a.mu.Lock()
+				a.liveBreakdown[sessionID] = bd
+				a.mu.Unlock()
+				usedTokens = bd.Total
+			}
+			// Stage-2: tool-result stubbing was not enough — summarize with
+			// the model. Compact the in-run message list (system/workspace
+			// markers are stripped by sanitize) so tool activity from this
+			// run is included in the summary instead of being lost when
+			// history is replaced.
+			if usedTokens > int(float64(maxCtx)*compactThreshold) {
+				h := sanitizeHistoryMessages(messages)
+				if len(h) > 2 {
+					a.emit("run:compact", map[string]any{"sessionId": sessionID, "tokensBefore": usedTokens})
+					// keepLastUser=false: the current request and any continuation
+					// prompt are re-appended below, so carrying the trailing user
+					// message into the compacted history would duplicate it.
+					if result, err := a.compactHistory(ctx, cfg, sessionID, "", h, false); err == nil {
+						a.mu.Lock()
+						compacted := sanitizeHistoryMessages(a.histories[sessionID])
+						a.mu.Unlock()
+						messages = a.buildSystemContextMessages(sessionID, cfg, a.listCachedSkills())
+						messages = append(messages, compacted...)
+						if strings.TrimSpace(req.Message) != "" || len(req.Attachments) > 0 {
+							messages = appendUserMessageWithAttachments(messages, req.Message, req.Attachments)
+						}
+						breakdownAcc.reset(messages)
+						payload := map[string]any{
+							"sessionId":    sessionID,
+							"tokensBefore": intFromAny(result["tokensBefore"]),
+							"tokensAfter":  intFromAny(result["tokensAfter"]),
+						}
+						if s, _ := result["summary"].(string); s != "" {
+							payload["summary"] = s
+						}
+						a.emit("run:compacted", payload)
+					} else {
+						a.emit("run:compacted", map[string]any{"sessionId": sessionID, "error": err.Error()})
 					}
-					breakdownAcc.reset(messages)
-					payload := map[string]any{
-						"sessionId":    sessionID,
-						"tokensBefore": intFromAny(result["tokensBefore"]),
-						"tokensAfter":  intFromAny(result["tokensAfter"]),
-					}
-					if s, _ := result["summary"].(string); s != "" {
-						payload["summary"] = s
-					}
-					a.emit("run:compacted", payload)
-				} else {
-					a.emit("run:compacted", map[string]any{"sessionId": sessionID, "error": err.Error()})
 				}
 			}
 		}
