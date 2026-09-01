@@ -70,11 +70,12 @@ Public License v3. See the LICENSE file for details.
             <button v-for="(label, i) in msg.suggestions" :key="i" class="suggest-chip" @click.stop="$emit('sendSuggest', label)">{{ label }}</button>
           </div>
           <!-- 本轮统计行（时长/cache/tokens）：数据由 run:done 事件在结束时
-               一次性下发，过程中无法实时显示。正文开始输出后渲染不可见占位行，
-               保证结束时数据填入不产生布局位移。纯思考/工具执行阶段（正文
-               还是空串）不渲染占位——那条空消息位于折叠组上方，凭空多出一行
-               高度会成为折叠组上方的幽灵间距。 -->
-          <div v-if="msg.role === 'assistant' && (msg.roundDurationText || (msg.streaming && hasAnswerBody(msg)))" :class="['message-duration', { 'is-placeholder': !msg.roundDurationText }]">
+               一次性下发，过程中无法实时显示。仅当本条是列表最后一条消息且正文
+               已开始输出时渲染不可见占位行（数据最终只会填到本轮最后一条
+               assistant 消息上）；中间消息不占位——否则占位行夹在正文和
+               后续折叠组之间，成为折叠组上方的幽灵间距。新消息追加与占位
+               移除落在同一次渲染 patch 里，无中间态跳动。 -->
+          <div v-if="msg.role === 'assistant' && (msg.roundDurationText || (msg.streaming && hasAnswerBody(msg) && isLastDisplayMessage(msg)))" :class="['message-duration', { 'is-placeholder': !msg.roundDurationText }]">
             <span class="duration-text">{{ msg.roundDurationText || '\u00a0' }}</span>
             <span
               v-if="typeof msg.cacheRate === 'number'"
@@ -234,6 +235,15 @@ function hasAnswerBody(msg) {
   return msg?.hasBody === true;
 }
 
+// 统计占位行只挂在列表最后一条消息上：run:done 的统计数据只会填到本轮
+// 最后一条 assistant 消息，中间消息（后面还跟着折叠组等）占位只会成为
+// 幽灵间距。v-memo 数组里带同款判断，保证"最后一条"易主时旧消息能
+// 重渲染并移除占位行。
+function isLastDisplayMessage(msg) {
+  const list = props.messages;
+  return list[list.length - 1] === msg;
+}
+
 // Keep historical message subtrees out of the patch path while the active
 // assistant message streams. v-memo 必须挂在 v-for 的 <template> 上：只有这
 // 种写法 Vue 才会生成逐条目缓存（renderList 按 :key 校验后复用）。若把
@@ -262,6 +272,9 @@ function messageRenderMemo(msg) {
     // 渲染条件依赖它，翻转时必须触发父级重渲染；之后不再变化，流式正文
     // 增量依旧只由 StreamingMarkdownBody 子组件渲染。
     msg?.hasBody === true,
+    // 是否为列表最后一条消息：统计占位行只挂在最后一条上，新消息追加后
+    // 旧"最后一条"的 memo 变化 → 重渲染 → 占位行移除（与新增消息同 patch）。
+    isLastDisplayMessage(msg),
     msg?.reasoningChars,
     msg?.reasoningStartedAt,
     msg?.reasoningEndedAt,
