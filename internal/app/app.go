@@ -1653,6 +1653,13 @@ func (a *App) compactHistory(ctx context.Context, cfg ConfigState, sessionID, in
 		return nil, errors.New("no messages to compact")
 	}
 
+	// Stage-1 slimming before the summary call: stale tool-result bodies are
+	// stubbed, so the summary model reads the decision chain (assistant
+	// tool_calls with exact arguments) without the bulky result bodies. For
+	// the auto path this is a no-op (runChat already trimmed); manual
+	// compaction of a freshly loaded legacy session still benefits.
+	history, _ = trimOldToolResults(history, keepRecentToolResults)
+
 	// Count tokens before
 	tokensBefore := estimateTokensFromMessages(history)
 
@@ -1868,6 +1875,18 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			// context. The UI may close out the previous assistant message so
 			// the next response starts on a fresh one.
 			a.emit("run:inject", map[string]any{"runId": runID, "sessionId": sessionID})
+		}
+		// Stage-1 slimming: replace stale tool-result bodies (everything
+		// except the most recent ones) with placeholders so context grows
+		// slowly in long-running sessions. The LLM compaction below stays
+		// the second line of defense when placeholders alone are not enough.
+		var trimmedToolResults bool
+		messages, trimmedToolResults = trimOldToolResults(messages, keepRecentToolResults)
+		if trimmedToolResults {
+			// The accumulator's incremental counts are stale after in-place
+			// edits; recompute so the context display reflects the slimmed
+			// message list.
+			breakdownAcc.reset(messages)
 		}
 		// Update live breakdown for context display (includes all tool calls/results)
 		bd := breakdownAcc.update(messages)

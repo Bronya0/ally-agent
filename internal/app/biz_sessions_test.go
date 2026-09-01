@@ -287,6 +287,87 @@ func TestHistoryLoadDropsTruncatedArgsMarker(t *testing.T) {
 	}
 }
 
+func TestTrimOldToolResults(t *testing.T) {
+	toolMsg := func(id, content string) openai.ChatCompletionMessage {
+		return openai.ChatCompletionMessage{Role: openai.ChatMessageRoleTool, ToolCallID: id, Content: content}
+	}
+	build := func(n int) []openai.ChatCompletionMessage {
+		msgs := []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleUser, Content: "go"}}
+		for i := 0; i < n; i++ {
+			msgs = append(msgs,
+				openai.ChatCompletionMessage{Role: openai.ChatMessageRoleAssistant, ToolCalls: []openai.ToolCall{{ID: fmt.Sprintf("call_%d", i), Type: openai.ToolTypeFunction, Function: openai.FunctionCall{Name: "read", Arguments: "{}"}}}},
+				toolMsg(fmt.Sprintf("call_%d", i), strings.Repeat("x", 100)),
+			)
+		}
+		return msgs
+	}
+
+	t.Run("keeps recent results, stubs older ones in place", func(t *testing.T) {
+		in := build(25)
+		out, changed := trimOldToolResults(in, 20)
+		if !changed {
+			t.Fatal("expected change")
+		}
+		if len(out) != len(in) {
+			t.Fatalf("message count must not change: %d vs %d", len(out), len(in))
+		}
+		stubbed, intact := 0, 0
+		for _, m := range out {
+			if m.Role != openai.ChatMessageRoleTool {
+				continue
+			}
+			switch m.Content {
+			case trimmedToolResultPlaceholder:
+				stubbed++
+				if m.ToolCallID == "" {
+					t.Fatal("stubbed tool message lost its ToolCallID")
+				}
+			case strings.Repeat("x", 100):
+				intact++
+			}
+		}
+		if stubbed != 5 || intact != 20 {
+			t.Fatalf("expected 5 stubbed / 20 intact, got %d / %d", stubbed, intact)
+		}
+	})
+
+	t.Run("idempotent on already-stubbed history", func(t *testing.T) {
+		in, _ := trimOldToolResults(build(25), 20)
+		out, changed := trimOldToolResults(in, 20)
+		if changed {
+			t.Fatal("second pass must be a no-op")
+		}
+		if len(out) != len(in) {
+			t.Fatalf("second pass must not change length: %d vs %d", len(out), len(in))
+		}
+	})
+
+	t.Run("under the keep budget is a no-op", func(t *testing.T) {
+		in := build(5)
+		out, changed := trimOldToolResults(in, 20)
+		if changed {
+			t.Fatal("small history must pass through unchanged")
+		}
+		if len(out) != len(in) {
+			t.Fatalf("length changed: %d vs %d", len(out), len(in))
+		}
+	})
+
+	t.Run("stubs survive the pairing repair", func(t *testing.T) {
+		out, _ := trimOldToolResults(build(25), 20)
+		repaired := sanitizeHistoryMessages(out)
+		toolCount := 0
+		for _, m := range repaired {
+			if m.Role == openai.ChatMessageRoleTool {
+				toolCount++
+			}
+		}
+		if toolCount != 25 {
+			t.Fatalf("placeholder stubs must keep tool_call/result pairing intact: %d of 25 survived", toolCount)
+		}
+	})
+}
+
 func TestRepairDanglingToolCalls(t *testing.T) {
 	assistantWithCalls := func(ids ...string) openai.ChatCompletionMessage {
 		calls := make([]openai.ToolCall, 0, len(ids))

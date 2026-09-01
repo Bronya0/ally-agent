@@ -1055,6 +1055,58 @@ func trimSavedHistory(messages []openai.ChatCompletionMessage) []openai.ChatComp
 	return messages[start:]
 }
 
+// trimmedToolResultPlaceholder is the stub that replaces stale tool-result
+// bodies during stage-1 context slimming. The tool message itself is kept
+// (with its ToolCallID) so the assistant tool_call/result pairing invariant
+// enforced by repairDanglingToolCalls — and by strict providers — holds.
+const trimmedToolResultPlaceholder = "[tool result omitted]"
+
+// keepRecentToolResults bounds how many recent tool-result bodies survive
+// stage-1 context slimming; older ones are replaced by the placeholder.
+// Recent results stay intact because the model may still be reasoning
+// over them in the current turn.
+const keepRecentToolResults = 20
+
+// trimOldToolResults replaces the content of all but the most recent
+// keepResults tool-result messages with a short placeholder. Tool results
+// are the bulk of context usage; stubbing the stale ones keeps context
+// growth slow in long-running sessions while preserving the full decision
+// chain (assistant tool_calls with exact arguments). The message is kept,
+// never deleted, so tool_call/result pairing stays valid for providers
+// that reject dangling tool_calls with 400. Idempotent: already-stubbed
+// bodies are skipped. Returns the (possibly new) slice and whether
+// anything changed.
+func trimOldToolResults(messages []openai.ChatCompletionMessage, keepResults int) ([]openai.ChatCompletionMessage, bool) {
+	if keepResults < 0 {
+		keepResults = 0
+	}
+	var toolIndexes []int
+	for i := range messages {
+		if messages[i].Role == openai.ChatMessageRoleTool {
+			toolIndexes = append(toolIndexes, i)
+		}
+	}
+	if len(toolIndexes) <= keepResults {
+		return messages, false
+	}
+	changed := false
+	for _, i := range toolIndexes[:len(toolIndexes)-keepResults] {
+		if messages[i].Content == trimmedToolResultPlaceholder {
+			continue
+		}
+		if !changed {
+			messages = append([]openai.ChatCompletionMessage(nil), messages...)
+		}
+		messages[i] = openai.ChatCompletionMessage{
+			Role:       openai.ChatMessageRoleTool,
+			ToolCallID: messages[i].ToolCallID,
+			Content:    trimmedToolResultPlaceholder,
+		}
+		changed = true
+	}
+	return messages, changed
+}
+
 func sanitizeHistoryMessages(messages []openai.ChatCompletionMessage) []openai.ChatCompletionMessage {
 	filtered := make([]openai.ChatCompletionMessage, 0, len(messages))
 	for _, original := range messages {
