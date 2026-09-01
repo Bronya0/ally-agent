@@ -50,6 +50,13 @@
      default) and follow the code size when the user changes it. */
   --ally-diff-font-size: calc(var(--ally-code-font-size) - 1px);
 
+  /* ── Layout widths ──
+     Single source of truth for the left mode rail width. .mode-sider and
+     any overlay that must clear the rail (e.g. the explorer editor surface
+     .workspace-explorer.has-file) both read this variable, so changing the
+     rail width never leaves an overlay covering the rail again. */
+  --ally-mode-sider-width: 44px;
+
   /* ── Surface scale ──
      Three neutral steps of one hue, rising outward: content is the darkest
      surface, a side panel lifts one step, window chrome (header, mode rail)
@@ -382,7 +389,7 @@ code, pre {
   --wails-draggable: drag;
   display: flex;
   flex: 0 0 auto;
-  width: 44px;
+  width: var(--ally-mode-sider-width);
   height: 100%;
   min-height: 0;
   flex-direction: column;
@@ -630,8 +637,9 @@ code, pre {
   margin: 0 0 20px;
 }
 
-/* Tree-only mode is a regular right-hand flex item. Editor mode intentionally
-   becomes a full main-area surface so its editor can use the whole left side. */
+/* Tree-only mode is a regular right-hand flex item. Editor mode becomes an
+   absolute surface over the chat workbench, starting to the right of the
+   mode rail so the rail always stays visible. */
 .workspace-explorer {
   position: relative;
   display: flex;
@@ -652,11 +660,15 @@ code, pre {
 }
 
 .workspace-explorer.has-file {
-  /* In editor mode the explorer is an in-flow full-workspace surface.  The
-     tree stays on the right and the editor flexes into all remaining space;
-     unlike the old negative-offset approach, it never escapes a parent. */
+  /* In editor mode the explorer becomes an absolute surface covering the
+     chat workbench (its positioning context is .main-area). The left edge
+     is offset by the mode rail width so the rail stays visible and
+     clickable — the overlay must only cover the middle content area. The
+     tree stays on the right and the editor flexes into all remaining
+     space; unlike the old negative-offset approach, it never escapes a
+     parent. */
   position: absolute;
-  inset: 0;
+  inset: 0 0 0 var(--ally-mode-sider-width);
   z-index: 50;
   width: auto;
   max-width: none;
