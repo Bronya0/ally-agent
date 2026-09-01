@@ -91,10 +91,10 @@ const (
 	backgroundImageMaxBytes  = 12 * 1024 * 1024
 	defaultBackgroundOpacity = 0.15
 	// defaultCompactThreshold is the auto-compaction trigger as a fraction of
-	// the context window (0.6 = 60%). Treated as "use default" when the
+	// the context window (0.4 = 40%). Treated as "use default" when the
 	// stored value is zero, so legacy config.json without the field migrates
 	// to the new default transparently.
-	defaultCompactThreshold = 0.6
+	defaultCompactThreshold = 0.4
 	// defaultMessageFontSize is the default font size (px) for AI message
 	// bodies and the welcome greeting. Zero means "use default" so legacy
 	// config.json without the field migrates transparently.
@@ -1658,7 +1658,7 @@ func (a *App) compactHistory(ctx context.Context, cfg ConfigState, sessionID, in
 
 	// Build compaction prompt. Structured sections maximize information density
 	// and give the model concrete anchors to recover from after compaction.
-	compactPrompt := `The conversation is getting long and is being compacted. Produce a structured summary so you can continue seamlessly after context is cleared.
+	compactPrompt := `The conversation is getting long and is being compacted. Output a structured summary so you can continue seamlessly after context is cleared.
 
 Use exactly these sections, in this order, with Markdown headings:
 
@@ -1679,10 +1679,12 @@ Bullet list of every file path mentioned or touched in the conversation, with a 
 - <path>: read L<start>-L<end> | edited L<start>-L<end> | created | deleted | listed
 
 Rules:
+- No thinking, no reasoning, output directly.
 - Be concise and factual. Do not call tools.
 - Keep file paths, command strings, and identifiers exact.
 - Do not invent details; if something is unknown, say "unknown".
-- The summary replaces the entire prior conversation, so it must stand alone.`
+- The summary replaces the entire prior conversation, so it must stand alone.
+- Output within 1000 characters. No preamble, no wrap-up, go straight into the sections.`
 
 	if instruction != "" {
 		compactPrompt += "\n\nAdditional instruction: " + instruction
