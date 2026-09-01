@@ -156,12 +156,12 @@ test('formatHttpToolTitle surfaces body/json/saveTo/timeout/maxBytes', () => {
     'https://api.example.com · → out.json',
   );
   assert.equal(
-    formatHttpToolTitle({ url: 'https://api.example.com', timeoutSeconds: 30 }),
+    formatHttpToolTitle({ url: 'https://api.example.com', timeout: 30 }),
     'https://api.example.com · 30s',
   );
   // Default timeout is 60s and is omitted.
   assert.equal(
-    formatHttpToolTitle({ url: 'https://api.example.com', timeoutSeconds: 60 }),
+    formatHttpToolTitle({ url: 'https://api.example.com', timeout: 60 }),
     'https://api.example.com',
   );
   assert.equal(
@@ -176,7 +176,7 @@ test('formatHttpToolTitle combines multiple fields in a fixed order', () => {
       url: 'https://api.example.com',
       method: 'POST',
       json: { q: 1 },
-      timeoutSeconds: 10,
+      timeout: 10,
       maxBytes: 512,
       saveTo: 'r.json',
     }),

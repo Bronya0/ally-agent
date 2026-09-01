@@ -93,7 +93,7 @@ type Request struct {
 	MaxDepth       int    `json:"maxDepth,omitempty"`
 	MaxFiles       int    `json:"maxFiles,omitempty"`
 	MaxMatches     int    `json:"maxMatches,omitempty"`
-	TimeoutSeconds int    `json:"timeoutSeconds,omitempty"`
+	Timeout        int    `json:"timeout,omitempty"`
 	// CaseSensitive matches case exactly. Default false: searches are
 	// case-insensitive (the historic Ally default and the tool description's
 	// contract).
@@ -210,10 +210,10 @@ func InstallInstructions() []string {
 	}
 }
 
-// TimeoutSeconds returns the effective timeout for req, applying the default
-// and clamping to MaxTimeout.
-func TimeoutSeconds(req Request) int {
-	timeout := req.TimeoutSeconds
+// EffectiveTimeoutSeconds returns the effective timeout for req, applying the
+// default and clamping to MaxTimeout.
+func EffectiveTimeoutSeconds(req Request) int {
+	timeout := req.Timeout
 	if timeout <= 0 {
 		return DefaultTimeout
 	}

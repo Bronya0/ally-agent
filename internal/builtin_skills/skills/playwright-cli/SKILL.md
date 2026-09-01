@@ -105,7 +105,7 @@ fi
 
 - **路径**：传给 playwright-cli 的文件路径用 forward slash。Windows 绝对路径在 Git Bash 里写成 `/c/Users/...` 或 `"C:/Users/..."`。
 - **cwd**：`command` 的 cwd 在 workspace 内；截图、state 等输出默认落 workspace，可用 `--filename=` 指定。
-- **超时**：浏览器操作较慢，`command` 的 `timeoutSeconds` 适当调大（如 60-120）。
+- **超时**：浏览器操作较慢，`command` 的 `timeout` 适当调大（如 60-120）。
 - **资源清理**：任务结束用 `close` 或 `close-all` 释放浏览器进程，避免残留。
 - **不要**用 Ally 的 `read` 工具读 playwright-cli 生成的截图二进制文件；截图仅供用户查看或模型从命令输出文本判断。
 - **会话保持**：默认每次 `open` 是全新会话；保留登录态用 `--persistent` 或 `state-save`/`state-load`（具体参数以 `--help` 为准）。

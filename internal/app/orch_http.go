@@ -107,7 +107,7 @@ func (a *App) webFetchToolWithConfig(ctx context.Context, cfg ConfigState, req W
 		Method:             "GET",
 		URL:                req.URL,
 		Headers:            mergeStringMaps(map[string]string{"Accept": "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.5"}, req.Headers),
-		TimeoutSeconds:     req.TimeoutSeconds,
+		Timeout:            req.Timeout,
 		MaxBytes:           req.MaxBytes,
 		FollowRedirects:    boolPtr(true),
 		InsecureSkipVerify: req.InsecureSkipVerify,
@@ -185,7 +185,7 @@ func (a *App) doHTTPRequest(parent context.Context, cfg ConfigState, req HTTPReq
 		return httpFetchResult{}, err
 	}
 
-	timeout := req.TimeoutSeconds
+	timeout := req.Timeout
 	if timeout <= 0 {
 		timeout = defaultHTTPTimeout
 	}

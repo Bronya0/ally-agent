@@ -863,7 +863,7 @@ func (a *App) remoteRunCommand(ctx context.Context, req RemoteRunCommandRequest)
 	if err != nil {
 		return CommandResult{}, err
 	}
-	timeout := req.TimeoutSeconds
+	timeout := req.Timeout
 	if timeout <= 0 {
 		timeout = defaultShellLimit
 	}

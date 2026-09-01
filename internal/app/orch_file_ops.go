@@ -404,7 +404,7 @@ func (a *App) runCommandWithConfig(parent context.Context, cfg ConfigState, req 
 	if err := checkKBDenyTargets(req.Command, cwd, kbDenyRoots(parent)); err != nil {
 		return CommandResult{}, err
 	}
-	timeout := req.TimeoutSeconds
+	timeout := req.Timeout
 	if timeout <= 0 {
 		timeout = defaultShellLimit
 	}

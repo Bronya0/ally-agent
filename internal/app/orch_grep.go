@@ -66,7 +66,7 @@ func (a *App) grepFilesWithConfig(ctx context.Context, cfg ConfigState, req Grep
 		return nil, grep.MissingError()
 	}
 
-	timeoutSeconds := grep.TimeoutSeconds(req)
+	timeoutSeconds := grep.EffectiveTimeoutSeconds(req)
 	grepCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSeconds)*time.Second)
 	defer cancel()
 	result, err := grep.Search(grepCtx, rgPath, root, searchRoot, req)

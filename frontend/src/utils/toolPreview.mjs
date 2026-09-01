@@ -46,8 +46,8 @@ export function formatHttpToolTitle(parsed) {
   if (parsed.body) parts.push('body');
   else if (parsed.json !== undefined && parsed.json !== null) parts.push('json');
   if (parsed.saveTo) parts.push(`→ ${parsed.saveTo}`);
-  if (parsed.timeoutSeconds && Number(parsed.timeoutSeconds) !== 60) {
-    parts.push(`${parsed.timeoutSeconds}s`);
+  if (parsed.timeout && Number(parsed.timeout) !== 60) {
+    parts.push(`${parsed.timeout}s`);
   }
   if (parsed.maxBytes && Number(parsed.maxBytes) !== 262144) {
     parts.push(`≤${formatBytes(Number(parsed.maxBytes))}`);

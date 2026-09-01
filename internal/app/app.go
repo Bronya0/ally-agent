@@ -788,9 +788,9 @@ type DeleteResult struct {
 }
 
 type CommandRequest struct {
-	Command        string `json:"command"`
-	Cwd            string `json:"cwd"`
-	TimeoutSeconds int    `json:"timeoutSeconds"`
+	Command string `json:"command"`
+	Cwd     string `json:"cwd"`
+	Timeout int    `json:"timeout"`
 	// FullOutput 由模型在调用时显式传入：默认模型侧只收到尾部几行 +
 	// exitCode（对齐 UI 折叠卡片），传 true 才内联返回完整输出。
 	// UI 始终收到完整输出，不受该参数影响。
@@ -962,7 +962,7 @@ type HTTPRequestToolRequest struct {
 	Body                string            `json:"body,omitempty"`
 	JSON                any               `json:"json,omitempty"`
 	SaveTo              string            `json:"saveTo,omitempty"`
-	TimeoutSeconds      int               `json:"timeoutSeconds,omitempty"`
+	Timeout             int               `json:"timeout,omitempty"`
 	MaxBytes            int               `json:"maxBytes,omitempty"`
 	FollowRedirects     *bool             `json:"followRedirects,omitempty"`
 	AllowPrivateNetwork *bool             `json:"allowPrivateNetwork,omitempty"`
@@ -994,7 +994,7 @@ type WebFetchRequest struct {
 	URL                 string            `json:"url"`
 	Format              string            `json:"format,omitempty"`
 	Headers             map[string]string `json:"headers,omitempty"`
-	TimeoutSeconds      int               `json:"timeoutSeconds,omitempty"`
+	Timeout             int               `json:"timeout,omitempty"`
 	MaxBytes            int               `json:"maxBytes,omitempty"`
 	MaxChars            int               `json:"maxChars,omitempty"`
 	AllowPrivateNetwork *bool             `json:"allowPrivateNetwork,omitempty"`
@@ -1057,11 +1057,11 @@ type RemoteDeletePathRequest struct {
 }
 
 type RemoteRunCommandRequest struct {
-	Target         string `json:"target"`
-	Command        string `json:"command"`
-	Cwd            string `json:"cwd,omitempty"`
-	TimeoutSeconds int    `json:"timeoutSeconds,omitempty"`
-	Shell          string `json:"shell,omitempty"`
+	Target  string `json:"target"`
+	Command string `json:"command"`
+	Cwd     string `json:"cwd,omitempty"`
+	Timeout int    `json:"timeout,omitempty"`
+	Shell   string `json:"shell,omitempty"`
 	// FullOutput 与本地 command 同语义：默认模型侧只收尾部几行。
 	FullOutput bool `json:"fullOutput,omitempty"`
 }
