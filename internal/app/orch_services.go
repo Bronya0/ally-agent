@@ -79,6 +79,13 @@ const (
 	defaultServiceStopGraceSeconds = 3
 	maxServiceStopGraceSeconds     = 30
 	serviceForceKillConfirmWait    = 2 * time.Second
+
+	// Finished-service retention. A service that exited or was stopped stays
+	// readable (list + read) so the model can diagnose why it died — the
+	// crash reason is almost always in the last few KiB of output. Memory is
+	// bounded: each record keeps its existing rolling buffer (512 KiB cap)
+	// and only the most recent maxFinishedServices records survive.
+	maxFinishedServices = 10
 )
 
 type managedService struct {
@@ -238,13 +245,71 @@ func (a *App) startServiceWithConfig(cfg ConfigState, req StartServiceRequest) (
 
 func (a *App) finalizeService(id string, service *managedService) {
 	info := service.snapshot()
-	a.removeService(id, service)
+	// Do NOT drop the record: retain it as finished so the model can still
+	// list it and read its final output (the crash reason is almost always
+	// in the last few KiB of output). Only the most recent
+	// maxFinishedServices finished records survive; evicted ids are removed.
+	pruned := a.retainFinishedService(id)
+	for _, prunedID := range pruned {
+		if old := a.dropService(prunedID); old != nil {
+			a.emitServiceUpdate(old.snapshot())
+		}
+	}
 	a.emitServiceUpdate(info)
 }
 
 func copyServiceOutput(wg *sync.WaitGroup, dst io.Writer, src io.Reader) {
 	defer wg.Done()
 	_, _ = io.Copy(dst, src)
+}
+
+// retainFinishedService marks the service as finished and keeps it in the
+// registry for post-mortem diagnosis. It returns the ids evicted beyond
+// maxFinishedServices (oldest first); the caller must remove them from the
+// registry. Idempotent: a stop-path call racing the waiter goroutine's
+// finalizeService for the same id does not double-queue.
+func (a *App) retainFinishedService(id string) []string {
+	a.servicesMu.Lock()
+	defer a.servicesMu.Unlock()
+	for _, existing := range a.finishedQueue {
+		if existing == id {
+			return nil
+		}
+	}
+	a.finishedQueue = append(a.finishedQueue, id)
+	var pruned []string
+	for len(a.finishedQueue) > maxFinishedServices {
+		pruned = append(pruned, a.finishedQueue[0])
+		a.finishedQueue = a.finishedQueue[1:]
+	}
+	return pruned
+}
+
+// dropService removes a service from the registry and the finished queue and
+// returns the removed record (nil when absent).
+func (a *App) dropService(id string) *managedService {
+	a.servicesMu.Lock()
+	service := a.services[id]
+	if service != nil {
+		delete(a.services, id)
+	}
+	filtered := a.finishedQueue[:0]
+	for _, existing := range a.finishedQueue {
+		if existing != id {
+			filtered = append(filtered, existing)
+		}
+	}
+	a.finishedQueue = filtered
+	a.servicesMu.Unlock()
+
+	// Keep cleanup idempotent for installations upgraded from the old
+	// completed-service retention behavior.
+	dir := a.serviceHistoryDir()
+	if dir != "" && service != nil {
+		_ = os.Remove(filepath.Join(dir, id+".json"))
+		_ = os.Remove(filepath.Join(dir, id+".log"))
+	}
+	return service
 }
 
 func (a *App) stopService(req StopServiceRequest) (ServiceInfo, error) {
@@ -304,7 +369,9 @@ func (a *App) stopService(req StopServiceRequest) (ServiceInfo, error) {
 		service.cancel()
 	}
 	info := service.snapshot()
-	a.removeService(id, service)
+	// Stopped services stay readable like exited ones: the model may need to
+	// inspect the final output after an explicit stop.
+	a.retainFinishedService(id)
 	a.emitServiceUpdate(info)
 	return info, nil
 }
@@ -426,6 +493,13 @@ func (a *App) readServiceOutput(req ServiceReadRequest) (ServiceReadResult, erro
 	status := service.info.Status
 	service.mu.Unlock()
 	output, total, truncated := service.outputSnapshot()
+	// Command output is decoded at the consumption boundary (the same
+	// contract as the command tool): native Windows tools and locale-encoded
+	// runtimes emit GBK through Git Bash pipes on stock codepage-936 zh-CN
+	// systems, so repair non-UTF-8 tails as GB18030 instead of returning
+	// mojibake to the model. The whole buffer is a single encoding in
+	// practice (rolling buffer keeps only the recent tail).
+	output = decodeConsoleOutput(output)
 	// The rolling buffer drops early bits once full. fromByte reflects where
 	// the returned slice starts within the *current* buffer; the model can
 	// infer how much older output was already discarded by comparing
@@ -452,16 +526,27 @@ func (a *App) readServiceOutput(req ServiceReadRequest) (ServiceReadResult, erro
 }
 
 // stopAllServices 并发停止所有服务：每个服务最坏需要 grace+confirm 约 5s，
-// 串行会在应用退出时把这个时长乘以服务数。
+// 串行会在应用退出时把这个时长乘以服务数。只停活跃服务；已结束记录留在内存里
+// 随进程退出一起消亡（它们无进程可停）。
 func (a *App) stopAllServices() {
-	services := a.listServices().Services
+	active := make([]string, 0, len(a.services))
+	a.servicesMu.Lock()
+	for id, service := range a.services {
+		service.mu.Lock()
+		status := service.info.Status
+		service.mu.Unlock()
+		if status == "starting" || status == "running" {
+			active = append(active, id)
+		}
+	}
+	a.servicesMu.Unlock()
 	var wg sync.WaitGroup
-	for _, info := range services {
+	for _, id := range active {
 		wg.Add(1)
 		go func(id string) {
 			defer wg.Done()
 			_, _ = a.stopService(StopServiceRequest{ID: id})
-		}(info.ID)
+		}(id)
 	}
 	wg.Wait()
 }
@@ -532,20 +617,4 @@ func (a *App) loadServiceHistory() error {
 		}
 	}
 	return nil
-}
-
-func (a *App) removeService(id string, service *managedService) {
-	a.servicesMu.Lock()
-	if current := a.services[id]; current == service {
-		delete(a.services, id)
-	}
-	a.servicesMu.Unlock()
-
-	// Keep cleanup idempotent for installations upgraded from the old
-	// completed-service retention behavior.
-	dir := a.serviceHistoryDir()
-	if dir != "" {
-		_ = os.Remove(filepath.Join(dir, id+".json"))
-		_ = os.Remove(filepath.Join(dir, id+".log"))
-	}
 }

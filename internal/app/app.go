@@ -310,8 +310,9 @@ type App struct {
 	taskbarMu           sync.Mutex
 	taskbarActiveRuns   int
 
-	servicesMu sync.Mutex
-	services   map[string]*managedService
+	servicesMu    sync.Mutex
+	services      map[string]*managedService
+	finishedQueue []string // finished services, oldest first, capped at maxFinishedServices
 
 	keyStateMu   sync.Mutex
 	keyCooldowns map[string]time.Time // endpoint\x00key → cooldown until
