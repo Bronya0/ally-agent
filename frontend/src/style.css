@@ -3320,6 +3320,57 @@ code, pre {
   color: #fecaca;
 }
 
+/* ── Read + grep folded group（已读取 N 次 · 搜索 M 次）── */
+
+.read-grep-toggle {
+  cursor: pointer;
+  user-select: none;
+  border-radius: 4px;
+  transition: background 0.12s ease;
+}
+
+.read-grep-toggle:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+/* 折叠指示 ">"：紧跟文字，不靠最右；展开时旋转 90° */
+.read-grep-caret {
+  color: #6a6a6a;
+  font-size: 10px;
+  flex-shrink: 0;
+  margin-left: 4px;
+  transition: transform 0.15s ease;
+}
+
+.read-grep-group.expanded .read-grep-caret {
+  transform: rotate(90deg);
+}
+
+/* 展开条目前的动词前缀（Read / Grep），accent 色与其他工具卡片一致 */
+.read-grep-entry-verb {
+  font-size: var(--ally-tool-font-size);
+}
+
+.read-grep-stats {
+  color: #a8a8a8;
+  font-weight: 400;
+}
+
+/* running 时统计文字带 shimmer 流光（与 Thinking 同款动画） */
+.read-grep-stats-thinking {
+  background: linear-gradient(90deg, #777 25%, #e0e0e0 50%, #777 75%);
+  background-size: 200% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  animation: reasoning-shimmer 1.8s linear infinite;
+}
+
+.read-grep-body {
+  padding: 2px 8px 4px 6px;
+}
+
 /* ── Diff view ── */
 
 .diff-view {

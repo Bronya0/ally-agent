@@ -69,8 +69,13 @@ Public License v3. See the LICENSE file for details.
           <div v-if="msg.role === 'assistant' && msg.suggestions?.length && !msg.streaming" class="suggest-row">
             <button v-for="(label, i) in msg.suggestions" :key="i" class="suggest-chip" @click.stop="$emit('sendSuggest', label)">{{ label }}</button>
           </div>
-          <div v-if="msg.role === 'assistant' && msg.roundDurationText && !msg.streaming" class="message-duration">
-            <span class="duration-text">{{ msg.roundDurationText }}</span>
+          <!-- 本轮统计行（时长/cache/tokens）：数据由 run:done 事件在结束时
+               一次性下发，过程中无法实时显示。正文开始输出后渲染不可见占位行，
+               保证结束时数据填入不产生布局位移。纯思考/工具执行阶段（正文
+               还是空串）不渲染占位——那条空消息位于折叠组上方，凭空多出一行
+               高度会成为折叠组上方的幽灵间距。 -->
+          <div v-if="msg.role === 'assistant' && (msg.roundDurationText || (msg.streaming && hasAnswerBody(msg)))" :class="['message-duration', { 'is-placeholder': !msg.roundDurationText }]">
+            <span class="duration-text">{{ msg.roundDurationText || '\u00a0' }}</span>
             <span
               v-if="typeof msg.cacheRate === 'number'"
               class="cache-rate"
@@ -122,7 +127,7 @@ Public License v3. See the LICENSE file for details.
         </RenderBoundary>
         <!-- Tool call cards -->
         <RenderBoundary
-          v-else-if="!['run','read-group','subagent','render_html'].includes(msg.kind)"
+          v-else-if="!['run','read-group','read-grep-group','subagent','render_html'].includes(msg.kind)"
           :label="$t('chat.toolCard')"
         >
           <ToolCallCard
@@ -135,6 +140,15 @@ Public License v3. See the LICENSE file for details.
         <!-- Read group card -->
         <RenderBoundary v-else-if="msg.kind === 'read-group'" :label="$t('chat.readResult')">
           <ReadGroupCard
+            :msg="msg"
+            :focused="focusedId === msg.eventId"
+            @focus="$emit('focusTool', msg.eventId)"
+            @toggle="$emit('toggleTool', msg)"
+          />
+        </RenderBoundary>
+        <!-- Read + grep folded group card -->
+        <RenderBoundary v-else-if="msg.kind === 'read-grep-group'" :label="$t('chat.readResult')">
+          <ReadGrepGroupCard
             :msg="msg"
             :focused="focusedId === msg.eventId"
             @focus="$emit('focusTool', msg.eventId)"
@@ -166,7 +180,7 @@ Public License v3. See the LICENSE file for details.
 </template>
 
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, toRaw } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, provide, reactive, ref, toRaw } from 'vue';
 import { t } from '../i18n.mjs';
 import { copyText } from '../utils/clipboard.mjs';
 import { toolCardRenderSignature } from '../utils/toolCardSignature.mjs';
@@ -175,6 +189,7 @@ import WelcomeMessage from './WelcomeMessage.vue';
 import ToolCallCard from './ToolCallCard.vue';
 import AskToolCard from './AskToolCard.vue';
 import ReadGroupCard from './ReadGroupCard.vue';
+import ReadGrepGroupCard from './ReadGrepGroupCard.vue';
 import SubagentInlineCard from './SubagentInlineCard.vue';
 import HtmlRenderCard from './HtmlRenderCard.vue';
 import StreamingMarkdownBody from './StreamingMarkdownBody.vue';
@@ -198,6 +213,10 @@ const props = defineProps({
 
 const expandedUserMessages = reactive(new WeakSet());
 const userMessageStatsCache = new WeakMap();
+// read-grep 折叠组的展开状态：按组首条 eventId 索引。组对象在流式累加时
+// 每次重建，状态放组件级 Map 才能在计数增长时保持展开。
+const readGrepGroupExpanded = reactive(new Map());
+provide('readGrepGroupExpanded', readGrepGroupExpanded);
 const USER_MESSAGE_COLLAPSE_CHAR_LIMIT = 800;
 const USER_MESSAGE_COLLAPSE_LINE_LIMIT = 10;
 const USER_MESSAGE_PREVIEW_CHAR_LIMIT = 400;
@@ -205,6 +224,14 @@ const USER_MESSAGE_PREVIEW_LINE_LIMIT = 6;
 
 function userMessageText(msg) {
   return String(msg?.skill ? msg.skill.args || '' : msg?.content || '');
+}
+
+// 统计占位行的渲染条件：assistant 消息的正文是否已开始输出。读一次性
+// 标志 hasBody（App.vue 在首个内容增量时置位），不读 msg.content——
+// 那会让父级渲染 effect 订阅流式增量，破坏 StreamingMarkdownBody 的
+// 独立渲染作用域设计。
+function hasAnswerBody(msg) {
+  return msg?.hasBody === true;
 }
 
 // Keep historical message subtrees out of the patch path while the active
@@ -231,6 +258,10 @@ function messageRenderMemo(msg) {
     msg?.count,
     msg === lastAnswerMessage.value,
     props.focusedId ? props.focusedId === msg?.eventId : false,
+    // 正文是否已开始输出（一次性标志，首个内容增量时置位）：统计占位行的
+    // 渲染条件依赖它，翻转时必须触发父级重渲染；之后不再变化，流式正文
+    // 增量依旧只由 StreamingMarkdownBody 子组件渲染。
+    msg?.hasBody === true,
     msg?.reasoningChars,
     msg?.reasoningStartedAt,
     msg?.reasoningEndedAt,
@@ -910,6 +941,11 @@ defineExpose({ scrollbarRef, scrollToBottom, scrollToUserQuestion, scrollToBotto
   font-size: var(--ally-sub-font-size, 13px);
   color: #737373;
   margin-top: 4px;
+}
+
+/* 流式期间的占位行：只占高度，内容不可见 */
+.message-duration.is-placeholder {
+  visibility: hidden;
 }
 
 .duration-text {

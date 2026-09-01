@@ -2180,59 +2180,72 @@ function displayMessagesForSession(session) {
   let i = 0;
   while (i < src.length) {
     const m = src[i];
-    // Only merge 2+ consecutive read tool-call cards
-    if (m.role === 'tool_call' && m.kind === 'read' && m.status !== 'error') {
-      // Count consecutive reads
+    // Fold consecutive read + grep tool-call cards (errors included) into a
+    // single collapsed "已读取 N 次，搜索 M 次" group. Reasoning-only
+    // assistant messages BETWEEN tool batches do not break the group (they
+    // render above the fold). A trailing reasoning-only message — the model
+    // thinking right before its final answer — stays BELOW the fold: once its
+    // text streams in it must not shove the fold upward.
+    if (m.role === 'tool_call' && (m.kind === 'read' || m.kind === 'grep')) {
+      const skippedThinks = [];
+      let pendingThinks = [];
       let j = i + 1;
-      while (j < src.length && src[j].role === 'tool_call' && src[j].kind === 'read' && src[j].status !== 'error') j++;
-      const count = j - i;
-      if (count < 2) {
-        // Single read card — handle read (and legacy batch_read) specially
-        if ((m.name === 'read' || m.name === 'batch_read') && m.batchEntries && m.batchEntries.length > 0) {
-          out.push({
-            role: 'tool_call',
-            kind: 'read-group',
-            status: m.batchEntries.some((entry) => entry.status === 'error') ? 'error' : m.status,
-            time: m.time,
-            eventId: m.eventId,
-            expanded: true,
-            readEntries: m.batchEntries,
-            readTotalLines: m.batchEntries.reduce((s, e) => s + (e.lineCount || 0), 0),
-            durationMs: m.durationMs || 0,
-            durationText: m.durationText || '',
-          });
-          i++;
+      while (j < src.length) {
+        const n = src[j];
+        if (n.role === 'tool_call' && (n.kind === 'read' || n.kind === 'grep')) {
+          // 思考后面又跟了 read/grep：这批思考确实夹在两批工具之间，上提
+          skippedThinks.push(...pendingThinks);
+          pendingThinks = [];
+          j++;
           continue;
         }
-        // Regular single read: pass through unchanged
-        out.push(m);
-        i++;
-        continue;
+        // 思考消息（无正文的 assistant）：先挂起，看后面是否还有工具
+        if (n.role === 'assistant' && !String(n.content || '').trim() && !n.error && !n.system) {
+          pendingThinks.push(n);
+          j++;
+          continue;
+        }
+        break;
       }
       const group = {
         role: 'tool_call',
-        kind: 'read-group',
+        kind: 'read-grep-group',
         status: 'success',
         time: m.time,
         eventId: m.eventId,
-        expanded: true,
         readEntries: [],
+        grepItems: [],
+        readCount: 0,
+        grepCount: 0,
         durationMs: 0,
         durationText: '',
       };
       let totalLines = 0;
+      let totalHits = 0;
       let allDone = true;
       let hasError = false;
       while (i < j) {
         const entry = src[i];
-        // If this is a read (or legacy batch_read) with parsed entries, expand inline
-        if ((entry.name === 'read' || entry.name === 'batch_read') && entry.batchEntries && entry.batchEntries.length > 0) {
+        if (entry.role !== 'tool_call') { i++; continue; }
+        if (entry.kind === 'grep') {
+          group.grepCount++;
+          // 从 grep chip（"· N hits in M files"）累加命中数
+          const hitsMatch = String(entry.chip || '').match(/(\d+)\s*hits?/i);
+          totalHits += hitsMatch ? Number(hitsMatch[1]) : 0;
+          group.grepItems.push({
+            title: entry.title || '',
+            chip: entry.chip || '',
+            status: entry.status,
+            body: entry.body || '',
+          });
+        } else if ((entry.name === 'read' || entry.name === 'batch_read') && entry.batchEntries && entry.batchEntries.length > 0) {
           for (const be of entry.batchEntries) {
             const entryStatus = be.status || entry.status;
             if (entryStatus === 'error') hasError = true;
-group.readEntries.push({ title: be.title, chip: be.chip, lineCount: be.lineCount || 0, totalLines: be.totalLines || be.lineCount || 0, startLine: be.startLine || 1, endLine: be.endLine || be.totalLines || 0, truncated: !!be.truncated, body: '', status: entryStatus, expanded: false });
+            group.readEntries.push({ title: be.title, chip: be.chip, lineCount: be.lineCount || 0, totalLines: be.totalLines || be.lineCount || 0, startLine: be.startLine || 1, endLine: be.endLine || be.totalLines || 0, truncated: !!be.truncated, body: '', status: entryStatus, expanded: false });
             totalLines += be.lineCount || 0;
           }
+          group.readCount++;
         } else {
           group.readEntries.push({
             title: entry.title || '',
@@ -2244,6 +2257,7 @@ group.readEntries.push({ title: be.title, chip: be.chip, lineCount: be.lineCount
             expanded: false,
           });
           totalLines += entry.readLineCount || 0;
+          group.readCount++;
         }
         if (entry.status === 'running') allDone = false;
         if (entry.status === 'error') hasError = true;
@@ -2255,7 +2269,13 @@ group.readEntries.push({ title: be.title, chip: be.chip, lineCount: be.lineCount
       }
       group.status = hasError ? 'error' : (allDone ? 'success' : 'running');
       group.readTotalLines = totalLines;
+      group.grepTotalHits = totalHits;
+      // 夹在工具批次之间的思考上提到折叠组上方（原顺序）；
+      // 尾随的思考保持在折叠组下方（它多半是正在流式的最终回答，
+      // 一旦有正文就不能把折叠往下顶）。
+      out.push(...skippedThinks);
       out.push(group);
+      out.push(...pendingThinks);
     } else {
       out.push(m);
       i++;
@@ -3586,6 +3606,9 @@ function flushStreamBuffer(runId) {
       last.reasoningEndedAt = Date.now();
     }
     last.content += buffer.content;
+    // 一次性标志：正文已开始输出。统计占位行据此渲染（不直接读 content，
+    // 避免父级渲染 effect 订阅流式增量）；纯思考/工具阶段的空消息不占位。
+    last.hasBody = true;
   }
   // Auto-scroll on visible growth: the first reasoning delta or a content
   // delta. Pure reasoning deltas do not grow the visible message body, so
@@ -3657,9 +3680,13 @@ function flushToolUpdateBuffer() {
   // bottom, which would push the header above the viewport fold. render_html
   // uses its own fixed-height streaming preview instead of a rich tool card;
   // trying to align it would select an older rich card and repeatedly pull the
-  // viewport upward while the HTML arguments stream.
+  // viewport upward while the HTML arguments stream. read/batch_read/grep now
+  // render as the one-line folded group: aligning it to viewport-top + 96px
+  // leaves a big gap above the fold while running and snaps back when the
+  // result lands, so they follow the regular bottom-pinned scroll instead.
+  const noAlignTools = ['render_html', 'read', 'batch_read', 'grep'];
   if (lastActiveSessionId) {
-    scrollMessagesToBottom({ alignToLastToolCard: lastActiveToolName !== 'render_html' });
+    scrollMessagesToBottom({ alignToLastToolCard: !noAlignTools.includes(lastActiveToolName) });
   }
 }
 
@@ -4302,6 +4329,7 @@ function appendAssistantDelta(content) {
   }
   last.streaming = true;
   last.content += content;
+  last.hasBody = true; // 统计占位行据此渲染（见 flushStreamBuffer 同名注释）
   scrollMessagesToBottom();
 }
 
