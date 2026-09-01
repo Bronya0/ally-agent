@@ -30,7 +30,7 @@ Public License v3. See the LICENSE file for details.
       </span>
       <span v-else-if="msg.kind === 'wait' && waitCountdown" class="tool-chip wait-countdown">{{ waitCountdown }}</span>
       <span v-else-if="msg.chip" class="tool-chip">{{ msg.chip }}</span>
-      <span v-if="msg.durationText" class="tool-duration">{{ msg.durationText }}</span>
+      <span v-if="displayDuration" class="tool-duration">{{ displayDuration }}</span>
     </div>
 
     <div v-if="msg.kind === 'edit' && msg.status !== 'error' && msg.editEntries?.length" class="edit-file-groups">
@@ -135,8 +135,36 @@ const waitCountdown = computed(() => {
   return t('tools.wait.remaining', { seconds: remaining });
 });
 
+// 耗时显示：瞬时工具（read/grep/glob/list/delete/calculate/plan/skill）
+// 不展示——结果自身已含规模信息，<1s 的耗时纯噪音；ask 等待的是用户
+// 提交，计的是人不是工具。edit 运行中从 UI 收到参数的时刻（uiStartedAt）
+// 起实时跳动，结束后显示 tool:result 落盘的 durationText。
+const NO_DURATION_KINDS = new Set(['read', 'grep', 'glob', 'list', 'delete', 'calculate', 'plan', 'skill', 'ask']);
+const displayDuration = computed(() => {
+  if (NO_DURATION_KINDS.has(props.msg.kind)) return '';
+  if (props.msg.kind === 'edit' && props.msg.status === 'running') {
+    const startedAt = Number(props.msg.uiStartedAt || 0);
+    if (startedAt) return formatDurationShort(nowMs.value - startedAt);
+    return '';
+  }
+  return props.msg.durationText || '';
+});
+
+function formatDurationShort(ms) {
+  const value = Number(ms);
+  if (!Number.isFinite(value) || value <= 0) return '';
+  if (value < 1000) return '<1s';
+  const secs = Math.max(1, Math.round(value / 1000));
+  const hours = Math.floor(secs / 3600);
+  const mins = Math.floor((secs % 3600) / 60);
+  const rest = secs % 60;
+  if (hours > 0) return `${hours}h${mins > 0 ? `${mins}m` : ''}`;
+  if (mins > 0) return `${mins}m${rest > 0 ? `${rest}s` : ''}`;
+  return `${rest}s`;
+}
+
 watch(
-  () => props.msg.kind === 'wait' && props.msg.status === 'running',
+  () => (props.msg.kind === 'wait' || props.msg.kind === 'edit') && props.msg.status === 'running',
   (active) => {
     if (waitTimer) {
       clearInterval(waitTimer);

@@ -52,6 +52,17 @@ export function useToolEvents(ctx) {
   // if-chain into named adapters means editing one tool's rendering cannot
   // silently break another, and each adapter can be read in isolation.
 
+  // edit 系工具的耗时以 UI 收到参数的时刻（uiStartedAt）为基准：后端
+  // durationMs 只覆盖执行段，参数流式到达的时间不计入，显示偏短。
+  const EDIT_TOOL_NAMES = ['edit', 'replace_exact', 'replace_lines', 'remote_edit'];
+
+  function toolDurationMs(existing, data) {
+    if (EDIT_TOOL_NAMES.includes(data.name) && existing.uiStartedAt) {
+      return Math.max(0, Date.now() - Number(existing.uiStartedAt));
+    }
+    return Number(data.durationMs || 0);
+  }
+
   function applyToolResultCommon(existing, data, resultData) {
     setToolStatus(existing, 'success');
     // ESC 终止的命令不应显示绿色 √
@@ -65,7 +76,7 @@ export function useToolEvents(ctx) {
     }
     existing.body = formatToolBody(data.name, data.result);
     existing.chip = formatToolChip(data.name, data.result);
-    existing.durationMs = Number(data.durationMs || 0);
+    existing.durationMs = toolDurationMs(existing, data);
     existing.durationText = formatDurationShort(existing.durationMs);
     if (data.mcpServer) existing.mcpServer = data.mcpServer;
     if (data.mcpTool) existing.mcpTool = data.mcpTool;
@@ -234,7 +245,7 @@ export function useToolEvents(ctx) {
       existing.askSubmitting = false;
       if (existing.errorCode === 'E_ASK_CANCELLED') existing.body = t('app.ask.cancelled');
     }
-    existing.durationMs = Number(data.durationMs || 0);
+    existing.durationMs = toolDurationMs(existing, data);
     existing.durationText = formatDurationShort(existing.durationMs);
     if (data.mcpServer) existing.mcpServer = data.mcpServer;
     if (data.mcpTool) existing.mcpTool = data.mcpTool;

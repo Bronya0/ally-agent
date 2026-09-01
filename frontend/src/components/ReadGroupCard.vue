@@ -21,7 +21,6 @@ Public License v3. See the LICENSE file for details.
         <span class="tool-count">{{ fileCountLabel }}</span>
         <span v-if="msg.readTotalLines > 0" class="tool-chip">{{ readChip }}</span>
       </template>
-      <span v-if="msg.durationText" class="tool-duration">{{ msg.durationText }}</span>
     </div>
     <div v-if="hasEntries && !isSingleFile" class="read-group-body">
       <div
@@ -31,7 +30,7 @@ Public License v3. See the LICENSE file for details.
       >
         <span class="read-group-tree">{{ treePrefix(index) }}</span>
         <span class="read-group-path" :title="entry.title">{{ entry.title || $t('common.untitled') }}</span>
-        <span v-if="entryChip(entry)" class="read-group-chip">{{ entryChip(entry) }}</span>
+        <span v-if="childChip(entry)" class="read-group-chip">{{ childChip(entry) }}</span>
       </div>
     </div>
   </div>
@@ -62,13 +61,25 @@ const fileCountLabel = computed(() => {
   return `${n} file${n === 1 ? '' : 's'}`;
 });
 
+// 外层总行数固定用英文 "lines"，不走 i18n（与 formatReadRangeChip 一致）。
 const readChip = computed(() => {
   const lines = props.msg.readTotalLines || 0;
-  return t('tools.lines', { count: lines, countSuffix: lines === 1 ? '' : 's' });
+  return `· ${lines} lines`;
 });
 
 function treePrefix(index) {
   return index === props.msg.readEntries.length - 1 ? '└─' : '├─';
+}
+
+// 树里子 read 的 chip：只显示读取的行数（如 · 5 lines），不带范围统计；
+// 失败条目保留错误信息。
+function childChip(entry) {
+  if (entry.chip && String(entry.chip).startsWith('failed:')) return entry.chip;
+  const lineCount = Number(entry.lineCount) || 0;
+  if (lineCount <= 0) return '';
+  const parts = [`${lineCount} lines`];
+  if (entry.truncated) parts.push(`(${t('common.truncated')})`);
+  return `· ${parts.join(' · ')}`;
 }
 
 function entryChip(entry) {

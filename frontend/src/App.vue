@@ -5920,6 +5920,10 @@ function updateToolEvent(id, name, title, body, status = 'default', meta = {}, t
 
   const isLiveOutput = meta && meta.output !== undefined;
   const raw = isLiveOutput ? String(meta.args || existing?.toolArgs || '') : String(body || '');
+  // edit 耗时基准：UI 收到工具参数（tool:start/update 携带 args）的时刻。
+  // 后端 durationMs 只测执行段，不含参数流式到达的时间，显示偏短。
+  const uiStartedAt = existing?.uiStartedAt
+    || (normalizeToolStatus(status) === 'running' && String(raw || '').trim() ? Date.now() : 0);
   const parsed = parseToolArgsForMeta(raw, meta);
   if (name === 'edit' || name === 'remote_edit') {
 	const files = (name === 'edit' || name === 'remote_edit') && Array.isArray(parsed.files) ? parsed.files : [parsed];
@@ -5996,6 +6000,7 @@ function updateToolEvent(id, name, title, body, status = 'default', meta = {}, t
     time: new Date().toLocaleTimeString(),
     durationMs: existing?.durationMs || Number(meta.durationMs || 0),
     durationText: existing?.durationText || formatDurationShort(meta.durationMs),
+    uiStartedAt,
     status: normalizeToolStatus(status),
     kind: toolKind(name),
     mcpServer: meta.mcpServer || existing?.mcpServer || '',

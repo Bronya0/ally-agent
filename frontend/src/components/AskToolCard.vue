@@ -14,7 +14,6 @@ Public License v3. See the LICENSE file for details.
       <span class="tool-verb">{{ statusVerb }}</span>
       <span class="tool-name">Ask</span>
       <span class="tool-chip">{{ $t('ask.questionCount', { count: questions.length }) }}</span>
-      <span v-if="msg.durationText" class="tool-duration">{{ msg.durationText }}</span>
     </div>
 
     <div v-if="msg.status === 'error'" class="ask-closed-state">{{ msg.body || $t('app.ask.cancelled') }}</div>
