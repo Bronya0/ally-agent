@@ -765,7 +765,9 @@ defineExpose({ scrollbarRef, scrollToBottom, scrollToUserQuestion, scrollToBotto
   /* One accent rule on the leading edge rather than a box drawn around the
      whole row. A 1px border on a full-bleed band reads as a striped block
      and fights the unboxed assistant turns that follow it. */
-  border-left: 2px solid var(--ally-accent);
+  /* 用户消息边线比 accent 降一档亮度：消息正文已用 accent-bright 着色，
+     再顶一条全亮 accent 竖线会抢占视线。 */
+  border-left: 2px solid var(--ally-accent-dim);
   background: var(--ally-state-hover);
 }
 

@@ -23,7 +23,12 @@ const (
 	clsctxInprocServer        = 0x1
 	coinitApartmentThreaded   = 0x2
 	flashwTray                = 0x2
-	flashwTimerNoForeground   = 0xC
+	// flashCount limits the flash to a bounded number of iterations instead
+	// of FLASHW_TIMERNOFG's "flash until foregrounded" semantics, which keeps
+	// a pending flash latched on the window forever — if the window is later
+	// re-shown or the taskbar button is rebuilt (tray exit/restore, Explorer
+	// refresh), the stale flash resumes out of nowhere.
+	flashCount = 8
 )
 
 var (
@@ -148,7 +153,8 @@ func flashTaskbarWindowIfInactive() {
 
 	info := flashWindowInfo{
 		Window: hwnd,
-		Flags:  flashwTray | flashwTimerNoForeground,
+		Flags:  flashwTray,
+		Count:  flashCount,
 	}
 	info.Size = uint32(unsafe.Sizeof(info))
 	procFlashWindowEx.Call(uintptr(unsafe.Pointer(&info)))
