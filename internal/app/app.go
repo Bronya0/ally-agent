@@ -241,6 +241,10 @@ type App struct {
 	// indicator and the /compact guard must be keyed per session instead of
 	// being process-global state.
 	compactingSessions map[string]struct{}
+	// compactingCancels holds the cancel function of each in-flight manual
+	// compaction so ESC (CancelCompaction) can abort the summary LLM call
+	// instead of waiting out the full timeout.
+	compactingCancels map[string]context.CancelFunc
 	historiesDir       string
 	sessionsDir        string
 	histories          map[string][]openai.ChatCompletionMessage
@@ -339,6 +343,7 @@ func NewApp() *App {
 		runSessions:         map[string]string{},
 		runInputs:           map[string]chan string{},
 		compactingSessions:  map[string]struct{}{},
+		compactingCancels:   map[string]context.CancelFunc{},
 		histories:           map[string][]openai.ChatCompletionMessage{},
 		todos:               map[string][]TodoEntry{},
 		todoRevisions:       map[string]int64{},
@@ -1575,14 +1580,28 @@ func (a *App) compactSessionRunning(sessionID string) bool {
 	return running
 }
 
-// CompactSession compacts the conversation history for a session by asking the LLM
-// to summarize, then replacing the history with the summary.
+// CompactSession compacts the conversation history for a session. Stage 1
+// stubs stale tool-result bodies (free); the LLM summary (stage 2) only runs
+// when usage is still over the threshold afterwards.
 func (a *App) CompactSession(sessionID, instruction string) (map[string]any, error) {
 	parent := a.ctx
 	if parent == nil {
 		parent = context.Background()
 	}
 	return a.compactSession(parent, sessionID, instruction)
+}
+
+// CancelCompaction aborts an in-flight manual compaction for the session so
+// ESC does not have to wait out the compaction timeout.
+func (a *App) CancelCompaction(sessionID string) error {
+	a.mu.Lock()
+	cancel := a.compactingCancels[sessionID]
+	a.mu.Unlock()
+	if cancel == nil {
+		return nil
+	}
+	cancel()
+	return nil
 }
 
 func (a *App) compactSession(parent context.Context, sessionID, instruction string) (map[string]any, error) {
@@ -1617,20 +1636,55 @@ func (a *App) compactSession(parent context.Context, sessionID, instruction stri
 		a.mu.Unlock()
 		return nil, errors.New("session is already compacting")
 	}
+	// The summary LLM call runs on a cancellable child of the app context so
+	// CancelCompaction (ESC) can abort it mid-flight.
+	ctx, cancel := context.WithCancel(parent)
 	a.compactingSessions[sessionID] = struct{}{}
+	a.compactingCancels[sessionID] = cancel
 	a.mu.Unlock()
 	defer func() {
 		a.mu.Lock()
 		delete(a.compactingSessions, sessionID)
+		delete(a.compactingCancels, sessionID)
 		a.mu.Unlock()
+		cancel()
 		a.emit("compact:done", map[string]any{"sessionId": sessionID})
 	}()
 
 	history := sanitizeHistoryMessages(a.histories[sessionID])
 
+	// Stage 1 (same code path as the auto-compaction in runChat): stub stale
+	// tool-result bodies. If usage drops under the compaction threshold and
+	// no custom instruction was given, the trim alone is the compaction —
+	// no LLM summary call happens at all.
+	tokensBefore := estimateTokensFromMessages(history)
+	if trimmed, changed := trimOldToolResults(history, keepRecentToolResults); changed {
+		history = trimmed
+		// Persist the stubbed bodies so the trim survives app restarts.
+		a.saveHistory(sessionID, history)
+		if strings.TrimSpace(instruction) == "" &&
+			estimateTokensFromMessages(history) <= compactThresholdLimit(cfg) {
+			return map[string]any{
+				"summary":      "",
+				"tokensBefore": tokensBefore,
+				"tokensAfter":  estimateTokensFromMessages(history),
+			}, nil
+		}
+	}
+
 	// Manual compaction keeps the final user message so a request with pending
 	// work survives into the next turn.
-	return a.compactHistory(parent, cfg, sessionID, instruction, history, true)
+	return a.compactHistory(ctx, cfg, sessionID, instruction, history, true)
+}
+
+// compactThresholdLimit returns the absolute token count at which
+// auto-compaction triggers for the given config (context window × threshold).
+func compactThresholdLimit(cfg ConfigState) int {
+	maxCtx := cfg.ContextWindow
+	if maxCtx <= 0 {
+		maxCtx = 1000000
+	}
+	return int(float64(maxCtx) * clampCompactThreshold(cfg.CompactThreshold))
 }
 
 // compactHistory summarizes the given sanitized messages with the model and
@@ -1891,12 +1945,8 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 		// configurable via Settings → General (default 60%); legacy config
 		// without the field migrates to the default through mergeConfig.
 		usedTokens := bd.Total
-		maxCtx := cfg.ContextWindow
-		if maxCtx <= 0 {
-			maxCtx = 1000000
-		}
-		compactThreshold := clampCompactThreshold(cfg.CompactThreshold)
-		if usedTokens > int(float64(maxCtx)*compactThreshold) {
+		compactThreshold := compactThresholdLimit(cfg)
+		if usedTokens > compactThreshold {
 			// Stage-1 slimming: replace stale tool-result bodies with short
 			// placeholders first — zero cost, no LLM call, keeps tool_call/
 			// result pairing intact. Most of the time this alone drops
@@ -1921,7 +1971,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			// markers are stripped by sanitize) so tool activity from this
 			// run is included in the summary instead of being lost when
 			// history is replaced.
-			if usedTokens > int(float64(maxCtx)*compactThreshold) {
+			if usedTokens > compactThreshold {
 				h := sanitizeHistoryMessages(messages)
 				if len(h) > 2 {
 					a.emit("run:compact", map[string]any{"sessionId": sessionID, "tokensBefore": usedTokens})

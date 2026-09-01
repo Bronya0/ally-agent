@@ -473,6 +473,7 @@ import { mermaidFenceSpec, normalizeMermaidSource, loadMermaid } from './utils/m
 import { copyText } from './utils/clipboard.mjs';
 import {
   CancelRun,
+  CancelCompaction,
   CheckForUpdates,
   GetConfig,
   GetContextBreakdown,
@@ -5056,9 +5057,11 @@ function finalizeStreamingMessageForRun(session, runId) {
 
 async function stopRun() {
   const session = activeSession.value;
-  if (!session || !session.runId) return;
+  if (!session) return;
   try {
-    await CancelRun(session.runId);
+    if (session.runId) await CancelRun(session.runId);
+    // Manual compaction is not a run: cancel its in-flight summary LLM call too.
+    if (compactStateFor(session.id)) await CancelCompaction(session.id);
   } catch (err) {
     message.error(t('app.run.stopFailed', { error: err }));
   }
@@ -7889,7 +7892,7 @@ function handleGlobalKeydown(event) {
     // Let Naive UI modals handle their own ESC (nested stack); do not stop the run.
     return;
   }
-  if (event.key === 'Escape' && activeSession.value?.runId) {
+  if (event.key === 'Escape' && (activeSession.value?.runId || compactStateFor(activeSession.value?.id))) {
     event.preventDefault();
     event.stopPropagation();
     stopRun();

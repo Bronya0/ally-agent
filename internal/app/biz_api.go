@@ -848,7 +848,8 @@ func (a *App) apiHandleSessionTodos(w http.ResponseWriter, r *http.Request) {
 	apiWriteOK(w, map[string]any{"todos": a.GetTodos(r.PathValue("id"))})
 }
 
-// apiHandleCompactSession 压缩会话历史（同步调用：等 LLM 总结完成才返回）。
+// apiHandleCompactSession 压缩会话历史（同步调用：等 LLM 总结完成才返回；
+// 客户端断开连接即取消总结调用）。
 func (a *App) apiHandleCompactSession(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Instruction string `json:"instruction"`
@@ -857,7 +858,7 @@ func (a *App) apiHandleCompactSession(w http.ResponseWriter, r *http.Request) {
 		apiWriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	result, err := a.CompactSession(r.PathValue("id"), body.Instruction)
+	result, err := a.compactSession(r.Context(), r.PathValue("id"), body.Instruction)
 	if err != nil {
 		apiWriteError(w, http.StatusBadRequest, err.Error())
 		return
