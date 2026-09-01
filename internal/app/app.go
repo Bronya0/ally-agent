@@ -643,9 +643,13 @@ type ListFilesResult struct {
 }
 
 type WorkspacePathSearchRequest struct {
-	Query string `json:"query"`
-	Limit int    `json:"limit"`
-	Force bool   `json:"force"`
+	// Workspace pins the search root. UI workspace explorers pass the active
+	// Tab's path so a knowledge-base Tab searches the KB root, not the chat
+	// workspace. An empty value preserves the legacy active-config behavior.
+	Workspace string `json:"workspace,omitempty"`
+	Query     string `json:"query"`
+	Limit     int    `json:"limit"`
+	Force     bool   `json:"force"`
 }
 
 type WorkspacePathEntry struct {
@@ -2871,7 +2875,11 @@ func (a *App) ListFiles(req ListFilesRequest) (ListFilesResult, error) {
 }
 
 func (a *App) SearchWorkspacePaths(req WorkspacePathSearchRequest) (WorkspacePathSearchResult, error) {
-	return a.searchWorkspacePaths(a.effectiveConfig(ConfigState{}), req)
+	cfg, err := a.configForWorkspace(req.Workspace)
+	if err != nil {
+		return WorkspacePathSearchResult{}, err
+	}
+	return a.searchWorkspacePaths(cfg, req)
 }
 
 func (a *App) ReadFile(req ReadFileRequest) (ReadFileResult, error) {

@@ -270,6 +270,7 @@ Public License v3. See the LICENSE file for details.
                 <ComposerInfoBar
                   :running="activeSessionRunning"
                   :config="config"
+                  :workspace="activeComposerWorkspace"
                   :git-status="gitStatus"
                     :context-breakdown="contextBreakdown"
                     :footer-stats-loading="footerStatsLoading"
@@ -492,6 +493,7 @@ import {
   SaveSession,
   SaveSessionIndex,
   OpenWorkspaceInFileManager,
+  OpenWorkspacePathInFileManagerAt,
   ActivateSkill,
   DeactivateSkill,
   GetActiveSkills,
@@ -1924,6 +1926,13 @@ const activeTabIsKb = computed(() => (
   isKbTab(workspaceTabs.value.find((tab) => tab.id === activeWorkspaceId.value))
 ));
 
+// Workspace path shown in the composer info bar: the KB tab shows the
+// configured KB root instead of the shared chat workspace.
+const activeComposerWorkspace = computed(() => {
+  const tab = workspaceTabs.value.find((item) => item.id === activeWorkspaceId.value);
+  return (isKbTab(tab) ? tab.path : config.workspace) || '';
+});
+
 // Canned KB actions on the toolbar above the composer: drop the prompt into
 // the KB composer and send it through the normal sendPrompt path (streaming,
 // tool cards, plan all work unchanged). Queuing is intentionally not offered
@@ -1932,7 +1941,10 @@ function runKbAction(promptKey) {
   const session = activeSession.value;
   if (!session || session.isRunning) return;
   promptText.value = t(promptKey);
-  sendPrompt();
+  // The init button is the one sanctioned send path while the KB has no index
+  // yet (the composer is deliberately disabled in that state), so it must opt
+  // out of the uninitialized-KB guard inside sendPrompt().
+  sendPrompt({ allowKbUninitialized: promptKey === 'kb.init.prompt' });
 }
 
 function ensureKbTab() {
@@ -2437,7 +2449,13 @@ function openGitDiff() {
 
 async function openWorkspaceInFileManager() {
   try {
-    await OpenWorkspaceInFileManager();
+    // On the KB tab the button shows the KB root, so open that directory —
+    // not the persisted chat workspace the backend helper defaults to.
+    if (activeTabIsKb.value && activeComposerWorkspace.value) {
+      await OpenWorkspacePathInFileManagerAt({ workspace: activeComposerWorkspace.value, path: '' });
+    } else {
+      await OpenWorkspaceInFileManager();
+    }
   } catch (err) {
     message.warning(t('app.workspace.openFailed', { error: err }));
   }
@@ -4860,14 +4878,16 @@ async function sendQuickMessage(sessionId, key) {
   await sendSuggest(sessionId, message);
 }
 
-async function sendPrompt() {
+async function sendPrompt(opts) {
   const session = activeSession.value;
   if (!session) return;
   // An uninitialized knowledge base is forced through initialization: block
   // every send path (the input is disabled; this also covers quick messages
-  // and suggestion chips, which bypass the composer input).
+  // and suggestion chips, which bypass the composer input). The KB init
+  // action opts out explicitly, otherwise its own button could never send.
+  const allowKbUninitialized = opts?.allowKbUninitialized === true;
   const activeTabForSend = workspaceTabs.value.find((item) => item.id === activeWorkspaceId.value) || null;
-  if (isKbTab(activeTabForSend) && kbIndexMissing.value) {
+  if (!allowKbUninitialized && isKbTab(activeTabForSend) && kbIndexMissing.value) {
     message.warning(t('kb.action.needInit'));
     return;
   }
@@ -5274,7 +5294,7 @@ async function searchFileMentions(query, force = false) {
   const requestId = ++fileMentionRequestId;
   fileMentionLoading.value = true;
   try {
-    const result = await SearchWorkspacePaths({ query, limit: 30, force });
+    const result = await SearchWorkspacePaths({ workspace: currentWorkspacePath(), query, limit: 30, force });
     if (requestId !== fileMentionRequestId) return;
     fileMentionEntries.value = Array.isArray(result?.entries) ? result.entries : [];
     fileMentionMeta.value = result ? `${result.count || 0}/${result.total || 0} · ${result.source || '-'} · ${result.buildDurationMs || 0}ms` : '';

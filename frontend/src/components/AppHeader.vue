@@ -768,7 +768,9 @@ body.platform-darwin .window-close-icon {
 
 .workspace-tabs :deep(.workspace-tab.active) {
   color: var(--header-strong);
-  background: var(--header-active-bg);
+  /* No active fill: the bottom accent rule is the selected signal, and any
+     background on top of the chrome read as a bright band. */
+  background: transparent;
   border-color: transparent;
   box-shadow: none;
 }

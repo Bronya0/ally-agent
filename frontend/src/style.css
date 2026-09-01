@@ -2109,7 +2109,9 @@ code, pre {
   z-index: 20;
   overflow: visible;
   border-radius: 10px;
-  background: var(--ally-surface-raised);
+  /* Panel step, not raised: this is a transient dropdown over the composer,
+     and the raised surface read as a bright card against the dark theme. */
+  background: var(--ally-surface-panel);
   border: 1px solid var(--ally-border-strong);
   box-shadow: 0 22px 60px rgba(0, 0, 0, 0.55);
 }

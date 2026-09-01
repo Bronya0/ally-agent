@@ -47,10 +47,10 @@ Public License v3. See the LICENSE file for details.
     </n-dropdown>
     <span class="info-workspace">
       <button class="info-workspace-btn" type="button" :title="$t('composer.workspace.open')" @click.stop="$emit('openWorkspace')">
-        {{ config.workspace || $t('composer.workspace.none') }}
+        {{ activeWorkspacePath || $t('composer.workspace.none') }}
       </button>
       <n-popover
-        v-if="config.workspace"
+        v-if="activeWorkspacePath"
         trigger="click"
         placement="top-start"
         :show-arrow="false"
@@ -273,6 +273,9 @@ function downloadMD(content, filename) {
 
 const props = defineProps({
   config: { type: Object, required: true },
+  // Workspace path shown in the info bar. KB tabs pass the KB root here so
+  // the path does not fall back to the shared chat workspace.
+  workspace: { type: String, default: '' },
   running: { type: Boolean, default: false },
   gitStatus: { type: Object, default: () => ({ isRepo: false }) },
   contextBreakdown: { type: Object, default: null },
@@ -303,6 +306,9 @@ const contextPopoverVisible = ref(false);
 // onModelMenuSelect so the group ordering re-sorts right after a switch.
 const modelUsage = ref(getModelUsage());
 const currentModelLabel = computed(() => `${props.config.providerName || '-'} · ${props.config.model || '-'}`);
+// Single source for the workspace path shown here: explicit prop (KB root on
+// KB tabs) wins, otherwise fall back to the persisted chat workspace.
+const activeWorkspacePath = computed(() => props.workspace || props.config.workspace || '');
 const modelGroups = computed(() => {
   const usage = modelUsage.value;
   const groups = new Map();
