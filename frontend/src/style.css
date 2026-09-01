@@ -404,16 +404,14 @@ code, pre {
   --wails-draggable: no-drag;
 }
 
-/* n-menu gives every vertical item a 6px top margin which stacks with the
-   rail padding — the first icon ended up ~16px below the header. Tighten
-   every item's top margin to 4px and drop the first item's margin entirely
-   so its badge sits right under the header edge. */
+/* n-menu gives every vertical item a 6px top margin; normalize to 4px so
+   all gaps between icons (including the header → first icon) read the same. */
 .mode-sider .n-menu .n-menu-item {
   margin-top: 4px;
 }
 
 .mode-sider .n-menu .n-menu-item:first-child {
-  margin-top: 0;
+  margin-top: 4px;
 }
 
 /* Selected mode follows the theme accent (the neutral primary is barely
