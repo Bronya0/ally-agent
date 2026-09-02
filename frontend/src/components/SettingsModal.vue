@@ -2262,7 +2262,7 @@ watch(() => props.visible, (visible) => {
 .font-size-label {
   flex: none;
   font-size: 12px;
-  color: #b5b5b5;
+  color: var(--ally-text-secondary);
   white-space: nowrap;
 }
 

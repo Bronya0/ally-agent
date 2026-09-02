@@ -2618,21 +2618,25 @@ const contextPct = computed(() => {
 });
 const contextUsageStyle = computed(() => {
   const pct = Math.max(0, Math.min(100, contextPct.value));
+  // Only the hue is semantic (green → amber → red as the window fills). The
+  // old constant saturation/lightness meant a session at 0% usage rendered a
+  // fully saturated #76daa0 green in the footer — the brightest pixels in the
+  // chrome, for information that says "nothing to see yet". Now chroma scales
+  // with urgency: the calm end is a muted sage that sits at the footer's own
+  // grey level, and the alert end comes out *more* saturated than before, so
+  // the one case that should pull the eye pulls harder.
   let hue;
-  let saturation = 58;
-  let lightness = 66;
   if (pct <= 20) {
     hue = 145 - (pct / 20) * 45;
   } else if (pct <= 40) {
     hue = 100 - ((pct - 20) / 20) * 52;
-    saturation = 62;
-    lightness = 65;
   } else {
     hue = 48 - ((pct - 40) / 60) * 42;
-    saturation = 66;
-    lightness = 64 - ((pct - 40) / 60) * 6;
   }
-  return { color: `hsl(${Math.round(hue)} ${Math.round(saturation)}% ${Math.round(lightness)}%)` };
+  const urgency = pct / 100;
+  const saturation = Math.round(16 + urgency * 54);
+  const lightness = Math.round(60 - urgency * 4);
+  return { color: `hsl(${Math.round(hue)} ${saturation}% ${lightness}%)` };
 });
 
 const workspaceInputTokens = computed(() => fmtTokenUnit(workspaceTokenUsage.value?.inputTokens || 0));

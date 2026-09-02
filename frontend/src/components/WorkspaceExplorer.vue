@@ -306,7 +306,10 @@ const treeThemeOverrides = {
   nodeColorHover: 'rgba(78, 161, 255, 0.08)',
   nodeColorPressed: 'rgba(78, 161, 255, 0.14)',
   nodeColorActive: 'rgba(78, 161, 255, 0.18)',
-  nodeTextColor: '#c5cfdb',
+  // Shares the CSS token instead of repeating the hex: Naive assigns this
+  // straight to --n-node-text-color, so a var() reference resolves in the
+  // cascade (it is not fed through any JS colour math for this field).
+  nodeTextColor: 'var(--ally-text-secondary)',
   nodeTextColorDisabled: '#697384',
 };
 

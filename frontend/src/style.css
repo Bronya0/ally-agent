@@ -68,6 +68,15 @@
   --ally-surface-chrome: #262626;
   --ally-surface-raised: #2c2c2c;
 
+  /* ── Neutral text ramp ──
+     One token for the "secondary chrome" text level: bright enough to read at
+     a glance, quiet enough that it never competes with the conversation.
+     Shared by the file-tree directory labels, the left mode-rail icons, the
+     composer model label and the active header tab, so those four stay one
+     step apart from #9a9a9a (tertiary) and #f5f5f5 (hover / live status).
+     Anything brighter here has to earn it by being a live state. */
+  --ally-text-secondary: #b5b5b5;
+
   /* ── Dividers ──
      One value for structural edges. Earlier builds accumulated 13 distinct
      alphas (0.025-0.38), six of them packed into 0.06-0.12 where they are
@@ -474,6 +483,31 @@ code, pre {
   max-height: none;
 }
 
+/* Idle icons sit on the shared secondary text level: the rail is a locator,
+   not content, and Naive UI paints collapsed menu icons with textColor1
+   (#f5f5f5), which out-shines the conversation. The colour is set on the wrap
+   element rather than overriding --n-item-icon-color-collapsed, because the
+   wrap sits between Naive's coloured __icon box and the <svg>, so it wins by
+   inheritance instead of by a specificity fight with the component's own
+   rules. The glyph uses currentColor, and the running dot paints its own
+   background, so neither is affected by anything here.
+   The selected state is listed again with :hover after the hover rule: both
+   are (0,5,0), so the later one wins and hovering the already-active icon
+   keeps the accent instead of flashing white. */
+.mode-sider-icon-wrap {
+  color: var(--ally-text-secondary);
+  transition: color 0.15s ease;
+}
+
+.mode-sider .n-menu .n-menu-item-content:hover .mode-sider-icon-wrap {
+  color: #f5f5f5;
+}
+
+.mode-sider .n-menu .n-menu-item-content--selected .mode-sider-icon-wrap,
+.mode-sider .n-menu .n-menu-item-content--selected:hover .mode-sider-icon-wrap {
+  color: var(--ally-accent-bright);
+}
+
 .mode-sider-running-dot {
   position: absolute;
   top: -1px;
@@ -815,8 +849,11 @@ code, pre {
    than files. The old pairing (amber directories, cool-blue files) put two
    competing hues into a navigation surface — four visually distinct label
    colours with the hidden variants, which pulled attention away from the
-   conversation. */
-.workspace-explorer-node-label.is-directory { color: #c9c9c9; }
+   conversation. The old #c9c9c9 was still the brightest steady text in the
+   window besides the conversation itself, and a tree of ~50 folder rows
+   amplifies a single step, so the directory/file gap is now one tighter notch
+   (secondary / tertiary) that keeps the hierarchy without the glow. */
+.workspace-explorer-node-label.is-directory { color: var(--ally-text-secondary); }
 .workspace-explorer-node-label.is-file { color: #9a9a9a; }
 /* 隐藏条目（. 开头）整体压暗，不改变原色相 */
 .workspace-explorer-node-label.is-hidden { opacity: 0.55; }
@@ -1436,9 +1473,47 @@ code, pre {
 }
 
 
+/* The model name is persistent chrome, so it sits on the shared secondary
+   level rather than the #bdbdbd it used to have; hover lifts it like its
+   neighbours do. */
 .composer-info .info-provider,
 .composer-info .info-model {
-  color: #bdbdbd;
+  color: var(--ally-text-secondary);
+  transition: color 0.15s ease;
+}
+
+.composer-info .info-model:hover {
+  color: #f5f5f5;
+}
+
+/* The composer footer is auxiliary chrome like the mode rail: read once at the
+   start of a session, after which only its changes matter. The branch name
+   (#d4d4d4) and the saturated green/orange icon buttons were the
+   highest-contrast pixels in the window after the conversation itself.
+   Opacity is used instead of recolouring so each element keeps its own hue —
+   the git +/- status colours and the green new-session button stay
+   identifiable, just quieter — and hover restores full strength so nothing
+   becomes undiscoverable. The model label is not in this group because it has
+   a real colour token instead. */
+.composer-info .info-git,
+.composer-info .composer-new-session-btn,
+.composer-info .composer-sessions-btn,
+.composer-info .scheduled-task-chip {
+  opacity: 0.68;
+  transition: opacity 0.15s ease;
+}
+
+.composer-info .info-git:hover,
+.composer-info .composer-new-session-btn:hover,
+.composer-info .composer-sessions-btn:hover,
+.composer-info .scheduled-task-chip:hover {
+  opacity: 1;
+}
+
+/* A running scheduled task is a live status signal, not navigation, so it keeps
+   its full accent strength. */
+.composer-info .scheduled-task-chip.running {
+  opacity: 1;
 }
 
 .composer-info .info-workspace {

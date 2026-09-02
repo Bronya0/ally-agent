@@ -396,7 +396,6 @@ function historyMenuProps() {
   --wails-draggable: drag;
   gap: 8px;
   --header-muted: #8d8d8d;
-  --header-text: #cfcfcf;
   --header-strong: #f2f2f2;
   /* Hover and selected both lift the surface; selected simply lifts further.
      The old active background was #171717 — darker than the header itself,
@@ -764,12 +763,20 @@ body.platform-darwin .window-close-icon {
 }
 
 .workspace-tabs :deep(.workspace-tab:hover) {
+  /* Capped at the secondary level so hovering an *inactive* tab can never
+     out-shine the active one now that active uses the same token; the
+     background lift is the hover signal. */
   background: var(--header-hover-bg);
-  color: var(--header-text);
+  color: var(--ally-text-secondary);
 }
 
 .workspace-tabs :deep(.workspace-tab.active) {
-  color: var(--header-strong);
+  /* The active tab used to take --header-strong (#f2f2f2), which made the tab
+     strip the brightest steady text in the chrome. The bottom accent rule is
+     already the selected signal, so the label only needs to clear the inactive
+     #8d8d8d — it now sits on the shared secondary level with the rest of the
+     persistent chrome. */
+  color: var(--ally-text-secondary);
   /* No active fill: the bottom accent rule is the selected signal, and any
      background on top of the chrome read as a bright band. */
   background: transparent;
