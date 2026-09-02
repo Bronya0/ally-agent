@@ -5111,13 +5111,20 @@ async function chooseWorkspace() {
 }
 
 async function onSettingsSave(draftData, silent = false) {
-  const previousWorkspace = String(config.workspace || '');
+  // The settings pages never edit the workspace — it belongs to the active
+  // workspace Tab and only changes through tab switching / the workspace
+  // picker. The settings draft is a snapshot synced once (to preserve unsaved
+  // edits while the panel stays mounted), so force the live value in here as
+  // the single choke point: a stale draft workspace can otherwise flow through
+  // assignConfig + syncConfigToActiveTab and hijack the current Tab.
+  const liveWorkspace = String(config.workspace || '');
+  if (String(draftData?.workspace ?? '') !== liveWorkspace) {
+    draftData = { ...draftData, workspace: liveWorkspace };
+  }
   const previousKbRoot = String(config.kbRoot || '');
   assignConfig(config, draftData);
   assignConfig(configDraft, draftData);
   applyFontSizes(config);
-  const workspaceChanged = previousWorkspace !== String(config.workspace || '');
-  if (workspaceChanged) clearFooterStats();
   try {
     await saveWorkspaceConfig({ ...configDraft });
     syncConfigToActiveTab();
@@ -5135,18 +5142,9 @@ async function onSettingsSave(draftData, silent = false) {
     // Settings can change the active model without going through the composer
     // dropdown, so keep the current Tab's selection in sync as well.
     rememberActiveTabModel();
-    if (workspaceChanged) {
-      await refreshFooterStats({
-        tabId: activeWorkspaceId.value,
-        sessionId: activeSessionId.value,
-        workspace: config.workspace || '',
-      });
-    } else {
-      refreshContextTokens(activeSessionId.value);
-    }
+    refreshContextTokens(activeSessionId.value);
     if (!silent) message.success(t('app.config.saved'));
   } catch (err) {
-    if (workspaceChanged) footerStatsLoading.value = false;
     message.error(t('app.config.saveFailed', { error: err }));
   }
 }

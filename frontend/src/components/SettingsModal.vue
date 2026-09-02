@@ -1997,6 +1997,16 @@ let mcpStatusOff = null;
 // open, afterwards unsaved edits persist until the user hits 保存.
 let draftSynced = false;
 
+// The settings pages never edit the workspace — it is a pass-through of the
+// active tab's path. The draft is synced only once (to preserve unsaved
+// edits), so without this mirror a stale workspace would ride along on every
+// silent save (model editor / apply / remove / import, proxy watch), flow
+// back into App.vue's onSettingsSave and hijack the current workspace tab
+// via syncConfigToActiveTab.
+watch(() => props.configDraft.workspace, (value) => {
+  if (draft.workspace !== value) draft.workspace = value;
+});
+
 watch(() => props.initialPage, (value) => {
   page.value = value || 'general';
 });
