@@ -269,7 +269,7 @@ Public License v3. See the LICENSE file for details.
                 <input ref="attachmentInputRef" type="file" multiple class="hidden-file-input" @change="handleAttachmentSelected" />
                 <ComposerInfoBar
                   :running="activeSessionRunning"
-                  :config="config"
+                  :config="chatConfig"
                   :workspace="activeComposerWorkspace"
                   :git-status="gitStatus"
                     :context-breakdown="contextBreakdown"
@@ -498,7 +498,6 @@ import {
   ActivateSkill,
   DeactivateSkill,
   GetActiveSkills,
-  SwitchModel,
   GetTodos,
   GetMcpServers,
   GetMcpConfig,
@@ -1282,20 +1281,74 @@ const configDraft = reactive(defaultConfig());
 // SaveConfig — only the filename and opacity are persisted.
 const backgroundImageUrl = ref('');
 
-// Per-tab model selection. Maps a runtime workspace Tab id to the selected
-// model identity. Stored in localStorage (not backend config.json) so the
-// backend stays workspace-agnostic; StartChat's overlay already carries the
-// active model fields from the frontend config. The Tab id is intentional:
+// Per-tab model selection. Maps a runtime workspace Tab id to a full snapshot
+// of that Tab's model fields. Stored in localStorage (not backend config.json)
+// so the backend stays workspace-agnostic; chat requests overlay the active
+// Tab's snapshot on top of the persisted config. The Tab id is intentional:
 // two Tabs pointing at the same workspace must not share a model selection.
+//
+// 单一职责：config 顶层的模型字段（providerName/model/baseUrl/...）只表示
+// "默认模型"——设置页"使用模型"保存的就是它，新 Tab 从它初始化。当前 Tab
+// 实际使用的模型只存在这里，切换 Tab / 切换模型 / 保存设置都不会改写
+// config 顶层的模型字段，因此设置保存从结构上就不可能重置当前 Tab。
 const modelByTab = reactive({});
 const MODEL_BY_TAB_KEY = 'ally_model_by_tab';
+
+// Extract a normalized model snapshot from a config-shaped source (a preset
+// from config.models, or the top-level default fields).
+function modelSnapshotFrom(source) {
+  const keys = normalizeApiKeysArray(
+    Array.isArray(source?.apiKeys) && source.apiKeys.length
+      ? source.apiKeys
+      : (source?.apiKey ? [source.apiKey] : [])
+  );
+  return {
+    providerName: source?.providerName || 'OpenAI Compatible',
+    apiFormat: source?.apiFormat || 'openai_chat',
+    baseUrl: source?.baseUrl || '',
+    model: source?.model || '',
+    temperature: source?.temperature ?? 0.2,
+    maxTokens: source?.maxTokens || 131072,
+    contextWindow: source?.contextWindow || 1000000,
+    tokenParam: source?.tokenParam || 'auto',
+    reasoningTag: String(source?.reasoningTag || '').trim() || 'reasoning_content',
+    reasoningEffort: normalizeReasoningEffort(source?.reasoningEffort),
+    apiKeys: keys,
+    apiKey: keys[0] || '',
+  };
+}
+
+// The default model every newly opened Tab starts from: the preset matching
+// the top-level identity when one exists (so preset edits propagate), else
+// the raw top-level fields (custom model not in the saved list).
+function defaultModelSnapshot() {
+  const identity = modelConfigIdentity(config);
+  const preset = (config.models || []).find((m) => modelConfigIdentity(m) === identity);
+  return modelSnapshotFrom(preset || config);
+}
+
+// Initialize a Tab's model from the default the first time it is visited.
+function ensureTabModel(tab) {
+  if (!tab || modelByTab[tab.id]) return;
+  modelByTab[tab.id] = defaultModelSnapshot();
+  saveModelByTab();
+}
+
+// The config every chat request sends: the persisted config with the active
+// Tab's model snapshot overlaid. Replaces the old pattern of mutating config's
+// top-level model fields on every Tab/model switch.
+const chatConfig = computed(() => ({ ...config, ...modelByTab[activeWorkspaceId.value] }));
 
 function loadModelByTab() {
   try {
     const raw = localStorage.getItem(MODEL_BY_TAB_KEY);
     const parsed = raw ? JSON.parse(raw) : {};
     for (const [k, v] of Object.entries(parsed)) {
-      modelByTab[k] = v;
+      // Tab ids are regenerated on launch, so stale string entries from older
+      // builds never match anyway — only load full snapshots.
+      if (v && typeof v === 'object' && typeof v.model === 'string' && v.model) {
+        modelByTab[k] = modelSnapshotFrom(v);
+      }
     }
   } catch (_) { /* ignore corrupt entries */ }
 }
@@ -1306,67 +1359,17 @@ function saveModelByTab() {
   } catch (_) { /* ignore quota errors */ }
 }
 
-// Apply a model preset (by index in config.models) to the local config /
-// configDraft without calling the backend SwitchModel. Used on workspace tab
-// switch so each tab restores its remembered model. Mirrors the field set
-// that backend SwitchModel copies from ModelConfig to the top-level config.
-function applyModelToConfig(index) {
-  const model = (config.models || [])[index];
-  if (!model) return;
-  for (const target of [config, configDraft]) {
-    target.providerName = model.providerName || target.providerName;
-    target.apiFormat = model.apiFormat || target.apiFormat;
-    target.baseUrl = model.baseUrl || target.baseUrl;
-    target.model = model.model || target.model;
-    target.temperature = model.temperature ?? target.temperature;
-    target.maxTokens = model.maxTokens ?? target.maxTokens;
-    if (model.contextWindow > 0) target.contextWindow = model.contextWindow;
-    target.tokenParam = model.tokenParam || target.tokenParam;
-    target.reasoningTag = String(model.reasoningTag || '').trim() || 'reasoning_content';
-    target.reasoningEffort = normalizeReasoningEffort(model.reasoningEffort);
-    const keys = normalizeApiKeysArray(
-      Array.isArray(model.apiKeys) && model.apiKeys.length
-        ? model.apiKeys
-        : (model.apiKey ? [model.apiKey] : [])
-    );
-    target.apiKeys = keys;
-    target.apiKey = keys[0] || '';
+// After Settings saves an updated model list, re-sync every Tab's snapshot
+// from its preset so edits (API key, base URL, ...) propagate to Tabs already
+// using that model. Tabs whose preset was deleted keep their last snapshot.
+function resyncTabModelsFromPresets() {
+  const models = config.models || [];
+  for (const tabId of Object.keys(modelByTab)) {
+    const snapshot = modelByTab[tabId];
+    const preset = models.find((m) => modelConfigIdentity(m) === modelConfigIdentity(snapshot));
+    if (preset) modelByTab[tabId] = modelSnapshotFrom(preset);
   }
-}
-
-// Find the index in config.models matching the current top-level config.
-// Returns -1 when no match is found (e.g. model not in the saved list).
-function findCurrentModelIndex() {
-  const identity = modelConfigIdentity(config);
-  if (!identity) return -1;
-  return (config.models || []).findIndex((m) => modelConfigIdentity(m) === identity);
-}
-
-function findModelIndexForTab(tab) {
-  const remembered = modelByTab[tab?.id];
-  if (typeof remembered === 'string' && remembered) {
-    return (config.models || []).findIndex((model) => modelConfigIdentity(model) === remembered);
-  }
-  // Accept numeric values written by an intermediate development build, then
-  // normalize them to model identities the next time this Tab is changed.
-  if (Number.isInteger(remembered) && remembered >= 0 && remembered < (config.models || []).length) {
-    return remembered;
-  }
-  return -1;
-}
-
-function rememberModelForTab(tab, index = findCurrentModelIndex()) {
-  if (!tab || !Number.isInteger(index) || index < 0 || index >= (config.models || []).length) return;
-  const model = config.models[index];
-  const identity = modelConfigIdentity(model);
-  if (!identity || modelByTab[tab.id] === identity) return;
-  modelByTab[tab.id] = identity;
   saveModelByTab();
-}
-
-function rememberActiveTabModel() {
-  const tab = workspaceTabs.value.find((item) => item.id === activeWorkspaceId.value);
-  rememberModelForTab(tab);
 }
 
 const sessions = ref([]);
@@ -2597,7 +2600,7 @@ const contextUsed = computed(() => {
   if (n >= 1000) return (n / 1000).toFixed(1) + 'k';
   return String(n);
 });
-const contextWindow = computed(() => config.contextWindow || 1000000);
+const contextWindow = computed(() => (modelByTab[activeWorkspaceId.value] || config).contextWindow || 1000000);
 const contextMax = computed(() => {
   const m = contextWindow.value;
   if (m >= 1000000) return (m / 1000000).toFixed(1) + 'M';
@@ -2859,7 +2862,10 @@ function buildWelcomeMessage(workspacePath = '') {
   if (gitBashPath) {
     rows.push({ kind: 'gitbash', label: t('welcome.gitBash'), value: gitBashPath });
   }
-  rows.push({ kind: 'model', label: t('common.model'), value: `${config.providerName || '-'} · ${config.model || '-'}` });
+  // The info table shows the model the session will actually chat with:
+  // the active Tab's model (fall back to the default before initialization).
+  const activeModel = modelByTab[activeWorkspaceId.value] || config;
+  rows.push({ kind: 'model', label: t('common.model'), value: `${activeModel.providerName || '-'} · ${activeModel.model || '-'}` });
   rows.push({ kind: 'mcp', label: 'MCP', value: formatMcpSummary() });
   if (skillCount > 0) {
     rows.push({ kind: 'skills', label: t('common.skills'), value: t('welcome.skillsAvailable', { count: skillCount }) });
@@ -3121,6 +3127,11 @@ async function closeWorkspaceTab(id) {
   explorerWorkspaceByTab.delete(id);
   explorerRefsByTab.delete(id);
   explorerTreeWidthByTab.delete(id);
+  // 释放该 Tab 的模型快照，避免 localStorage 条目随关闭的 Tab 无限累积。
+  if (modelByTab[id]) {
+    delete modelByTab[id];
+    saveModelByTab();
+  }
   const tab = workspaceTabs.value[idx];
   if (tab?.sessionId) delete planPanelCollapsedBySession[tab.sessionId];
   planPanelListRefsByTab.delete(id);
@@ -3190,20 +3201,11 @@ async function switchWorkspaceTab(id) {
     extraRoots.value = [];
   }
   loadPromptHistory(tab.path);
-  // Restore the model remembered for this Tab before SaveConfig so the
-  // backend sync matches the Tab's model. This is a local-only switch —
-  // SwitchModel is not called to avoid touching another Tab's selection.
-  const rememberedIndex = findModelIndexForTab(tab);
-  if (rememberedIndex >= 0) {
-    const currentIndex = findCurrentModelIndex();
-    if (currentIndex !== rememberedIndex) {
-      applyModelToConfig(rememberedIndex);
-    }
-  } else {
-    // First visit to this Tab: inherit the current model as its independent
-    // baseline. Later changes are stored under this Tab's id only.
-    rememberModelForTab(tab);
-  }
+  // Each Tab owns its model snapshot; first visit initializes it from the
+  // configured default. The persisted config's model fields are NOT touched
+  // here — the active Tab's model reaches the backend only via the chat
+  // request overlay.
+  ensureTabModel(tab);
   try {
     if (!tabIsKb) await saveWorkspaceConfig({ ...config });
   } catch (err) {
@@ -3457,7 +3459,9 @@ async function init() {
   workspaceTabs.value.push(tab);
   activeWorkspaceId.value = tab.id;
   if (tab.sessionId) activeSessionId.value = tab.sessionId;
-  rememberModelForTab(tab);
+  // The startup Tab starts from the configured default model; it owns its
+  // own snapshot from here on.
+  ensureTabModel(tab);
   if (ws) addToHistory(ws);
   loadPromptHistory(ws);
 
@@ -4797,23 +4801,16 @@ async function closeWindow() {
   } catch (_) {}
 }
 
-async function switchToModel(index) {
-  try {
-    await SwitchModel(index);
-    const loaded = await GetConfig();
-    // Keep both frontend config copies aligned. Settings and workspace changes
-    // save configDraft later; leaving it on the previous model would silently
-    // switch the backend back before the next message is sent.
-    assignConfig(config, loaded);
-    assignConfig(configDraft, loaded);
-    // Remember this model for the active Tab so another Tab pointing at the
-    // same workspace keeps its own selection.
-    const tab = workspaceTabs.value.find((item) => item.id === activeWorkspaceId.value);
-    rememberModelForTab(tab);
-    message.success(t('app.model.switched', { model: loaded.model }));
-  } catch (err) {
-    message.error(t('app.model.switchFailed', { error: err }));
-  }
+// Composer dropdown: switch the ACTIVE Tab's model. Purely frontend state —
+// the persisted config (and its top-level default model) is untouched, and
+// the backend only ever sees the overlay in each StartChat request.
+function switchToModel(index) {
+  const model = (config.models || [])[index];
+  const tab = workspaceTabs.value.find((item) => item.id === activeWorkspaceId.value);
+  if (!model || !tab) return;
+  modelByTab[tab.id] = modelSnapshotFrom(model);
+  saveModelByTab();
+  message.success(t('app.model.switched', { model: model.model }));
 }
 
 const mcpConfigParseResult = computed(() => parseMcpConfigText(mcpConfigText.value));
@@ -5050,7 +5047,7 @@ async function sendPrompt(opts) {
       attachments: attachmentsForModel(attachments),
     });
     markSessionRunning(session);
-    await StartChat({ sessionId: session.id, message: sendText, messages: history, config: { ...config, extraRoots: session.extraRoots || [], workspace: sessionWorkspace || config.workspace } });
+    await StartChat({ sessionId: session.id, message: sendText, messages: history, config: { ...chatConfig.value, extraRoots: session.extraRoots || [], workspace: sessionWorkspace || config.workspace } });
   } catch (err) {
     markTransientTurn(session);
     session.runId = '';
@@ -5141,8 +5138,12 @@ async function onSettingsSave(draftData, silent = false) {
     draftData = { ...draftData, workspace: liveWorkspace };
   }
   const previousKbRoot = String(config.kbRoot || '');
+  // draft 的顶层模型字段就是"默认模型"（设置页"使用模型"），直接写入 config；
+  // 各 Tab 已选的模型存在 modelByTab 里，与这里互不干扰。仅需把预设的编辑
+  // （API key、Base URL 等）同步到正在使用该模型的 Tab 快照上。
   assignConfig(config, draftData);
   assignConfig(configDraft, draftData);
+  resyncTabModelsFromPresets();
   applyFontSizes(config);
   try {
     await saveWorkspaceConfig({ ...configDraft });
@@ -5158,9 +5159,6 @@ async function onSettingsSave(draftData, silent = false) {
         if (fresh) await switchWorkspaceTab(fresh.id);
       }
     }
-    // Settings can change the active model without going through the composer
-    // dropdown, so keep the current Tab's selection in sync as well.
-    rememberActiveTabModel();
     refreshContextTokens(activeSessionId.value);
     if (!silent) message.success(t('app.config.saved'));
   } catch (err) {
@@ -6672,7 +6670,7 @@ function handleInitCommand() {
 
   const text = INIT_PROMPT;
   markSessionRunning(session);
-  StartChat({ sessionId: session.id, message: text, messages: history, config: { ...config, extraRoots: session.extraRoots || [] } })
+  StartChat({ sessionId: session.id, message: text, messages: history, config: { ...chatConfig.value, extraRoots: session.extraRoots || [] } })
     .catch((err) => {
       markTransientTurn(session);
       session.runId = '';
@@ -6697,7 +6695,7 @@ function handleRememberCommand() {
   saveSessions();
 
   markSessionRunning(session);
-  StartChat({ sessionId: session.id, message: '', messages: history, config: { ...config, extraRoots: session.extraRoots || [] } })
+  StartChat({ sessionId: session.id, message: '', messages: history, config: { ...chatConfig.value, extraRoots: session.extraRoots || [] } })
     .catch((err) => {
       markTransientTurn(session);
       session.runId = '';
@@ -6722,7 +6720,7 @@ function handleLessonCommand() {
   saveSessions();
 
   markSessionRunning(session);
-  StartChat({ sessionId: session.id, message: '', messages: history, config: { ...config, extraRoots: session.extraRoots || [] } })
+  StartChat({ sessionId: session.id, message: '', messages: history, config: { ...chatConfig.value, extraRoots: session.extraRoots || [] } })
     .catch((err) => {
       markTransientTurn(session);
       session.runId = '';
@@ -6747,7 +6745,7 @@ function handleReviewCommand() {
   saveSessions();
 
   markSessionRunning(session);
-  StartChat({ sessionId: session.id, message: '', messages: history, config: { ...config, extraRoots: session.extraRoots || [] } })
+  StartChat({ sessionId: session.id, message: '', messages: history, config: { ...chatConfig.value, extraRoots: session.extraRoots || [] } })
     .catch((err) => {
       markTransientTurn(session);
       session.runId = '';
@@ -6772,7 +6770,7 @@ function handlePushCommand() {
   saveSessions();
 
   markSessionRunning(session);
-  StartChat({ sessionId: session.id, message: '', messages: history, config: { ...config, extraRoots: session.extraRoots || [] } })
+  StartChat({ sessionId: session.id, message: '', messages: history, config: { ...chatConfig.value, extraRoots: session.extraRoots || [] } })
     .catch((err) => {
       markTransientTurn(session);
       session.runId = '';
@@ -6952,9 +6950,9 @@ async function activateSkillByName(skillName, skillArgs = '', injectIntoChat = t
           session.title = titleBase.length > 20 ? `${titleBase.slice(0, 20)}…` : titleBase;
         }
         scrollMessagesToBottom();
-        if (config.apiKey || (Array.isArray(config.apiKeys) && config.apiKeys.length)) {
+        if (chatConfig.value.apiKey || (Array.isArray(chatConfig.value.apiKeys) && chatConfig.value.apiKeys.length)) {
           markSessionRunning(session);
-          await StartChat({ sessionId: session.id, message: '', messages: [{ role: 'user', content: modelContent }], config: { ...config, extraRoots: session.extraRoots || [] } }).catch(() => {
+          await StartChat({ sessionId: session.id, message: '', messages: [{ role: 'user', content: modelContent }], config: { ...chatConfig.value, extraRoots: session.extraRoots || [] } }).catch(() => {
             markTransientTurn(session);
             session.isRunning = false;
           });
@@ -7000,11 +6998,13 @@ async function toggleSkillFromSettings(skill, active) {
 
 async function changeReasoningEffort(level) {
   const next = String(level || 'auto').toLowerCase();
-  config.reasoningEffort = next;
-  configDraft.reasoningEffort = next;
-  // Keep the active model preset in sync so the choice survives model
-  // switching (SwitchModel applies the preset's value to the top level).
-  const activeIdentity = modelConfigIdentity(config);
+  // Effort is a per-Tab runtime choice: it lives on the active Tab's model
+  // snapshot, never on the persisted top-level (default) fields.
+  const snapshot = modelByTab[activeWorkspaceId.value];
+  if (snapshot) snapshot.reasoningEffort = next;
+  // Keep the matching preset in sync so the choice survives re-selecting the
+  // model in this (or a new) Tab.
+  const activeIdentity = modelConfigIdentity(snapshot || config);
   for (const list of [config.models, configDraft.models]) {
     const preset = (list || []).find((m) => modelConfigIdentity(m) === activeIdentity);
     if (preset) preset.reasoningEffort = next;
@@ -7864,6 +7864,7 @@ function focusPromptInput() {
 
 watch(configVisible, (visible) => {
   if (visible) {
+    // config 顶层模型字段即默认模型，设置页"使用模型"直接显示/编辑它。
     assignConfig(configDraft, config);
     refreshSkillState();
   }
