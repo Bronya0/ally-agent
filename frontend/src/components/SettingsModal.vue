@@ -55,6 +55,21 @@ Public License v3. See the LICENSE file for details.
               <div class="config-section-subtitle">{{ $t('settings.generalSubtitle') }}</div>
             </div>
           </div>
+          <n-form-item :label="$t('settings.appearance')">
+            <div class="settings-field-stack">
+              <div class="appearance-mode-row">
+                <button
+                  :class="['appearance-mode-btn', { active: colorMode === 'dark' }]"
+                  @click="selectColorMode('dark')"
+                >{{ $t('settings.modeDark') }}</button>
+                <button
+                  :class="['appearance-mode-btn', { active: colorMode === 'light' }]"
+                  @click="selectColorMode('light')"
+                >{{ $t('settings.modeLight') }}</button>
+              </div>
+              <span class="settings-field-hint">{{ $t('settings.appearanceHint') }}</span>
+            </div>
+          </n-form-item>
           <n-form-item :label="$t('settings.customPrompt')">
             <n-input
               v-model:value="draft.customPrompt"
@@ -775,6 +790,7 @@ Public License v3. See the LICENSE file for details.
 import { computed, h, onUnmounted, reactive, ref, watch } from 'vue';
 import { createDiscreteApi, darkTheme } from 'naive-ui';
 import { naiveDateLocale, naiveLocale, reasoningEffortLabel, t } from '../i18n.mjs';
+import { getStoredMode } from '../utils/theme.mjs';
 import { buildModelConfigExport, mergeModelConfigs, modelConfigIdentity, normalizeApiKeysArray, normalizeReasoningEffort, parseModelConfigImport, reasoningEffortLevels } from '../utils/modelConfigIO.mjs';
 import { saveTextFile } from '../utils/download.mjs';
 import CloseOutlined from '@vicons/antd/CloseOutlined';
@@ -802,9 +818,21 @@ import {
   GetApiServiceState, SaveApiSettings, SetApiServiceEnabled,
 } from '../../bindings/ally-dev/internal/app/app';
 
+// The discrete message API follows the active color mode so toasts never
+// render dark-on-dark / light-on-light after a mode switch.
+const colorModeState = ref(getStoredMode());
 const { message } = createDiscreteApi(['message'], {
-  configProviderProps: { theme: darkTheme, locale: naiveLocale, dateLocale: naiveDateLocale },
+  configProviderProps: computed(() => ({
+    theme: colorModeState.value === 'light' ? null : darkTheme,
+    locale: naiveLocale,
+    dateLocale: naiveDateLocale,
+  })),
 });
+
+function selectColorMode(mode) {
+  colorModeState.value = mode;
+  emit('set-mode', mode);
+}
 
 function openSourceRepository() {
   Browser.OpenURL('https://github.com/Bronya0/ally-agent');
@@ -826,11 +854,18 @@ const props = defineProps({
   // Optional result object reported by the parent after a check-update emit:
   //   { state: 'idle' | 'busy' | 'latest' | 'found' | 'failed', version?: string }
   checkUpdateResult: { type: Object, default: () => ({ state: 'idle' }) },
+  // Active color mode ('dark' | 'light'), owned by App.vue.
+  colorMode: { type: String, default: 'dark' },
 });
-const emit = defineEmits(['close', 'save', 'skills-changed', 'mcp-saved', 'background-changed', 'check-update']);
+const emit = defineEmits(['close', 'save', 'skills-changed', 'mcp-saved', 'background-changed', 'check-update', 'set-mode']);
 const checkUpdateBusy = ref(false);
 const checkUpdateMessage = ref('');
 let checkUpdateTimer = 0;
+
+// Keep the local mode state in sync when the parent changes it elsewhere.
+watch(() => props.colorMode, (mode) => {
+  colorModeState.value = mode === 'light' ? 'light' : 'dark';
+}, { immediate: true });
 
 watch(() => props.checkUpdateResult, (result) => {
   if (!result) return;
@@ -2042,7 +2077,7 @@ watch(() => props.visible, (visible) => {
   height: 100%;
   min-width: 0;
   min-height: 0;
-  background: #1a1a1a;
+  background: var(--ally-surface-content);
   overflow: hidden;
 }
 
@@ -2060,7 +2095,7 @@ watch(() => props.visible, (visible) => {
   font-size: 18px;
   font-weight: 700;
   letter-spacing: 0.5px;
-  color: #f2f2f2;
+  color: var(--ally-text-primary);
 }
 
 .config-inline-body {
@@ -2082,7 +2117,7 @@ watch(() => props.visible, (visible) => {
   border: none;
   border-radius: 6px;
   background: transparent;
-  color: #8a8a8a;
+  color: var(--ally-text-muted);
   cursor: pointer;
   text-align: left;
   transition: background 0.12s, color 0.12s;
@@ -2091,13 +2126,13 @@ watch(() => props.visible, (visible) => {
 }
 
 .settings-nav-item:hover {
-  background: rgba(255, 255, 255, 0.05);
-  color: #d4d4d4;
+  background: var(--ally-state-hover);
+  color: var(--ally-text-body);
 }
 
 .settings-nav-item.active {
-  background: rgba(255, 255, 255, 0.08);
-  color: #f5f5f5;
+  background: var(--ally-hover-strong);
+  color: var(--ally-text-primary);
 }
 
 .settings-nav-title {
@@ -2125,14 +2160,14 @@ watch(() => props.visible, (visible) => {
   padding: 18px;
   border: 1px solid var(--ally-border);
   border-radius: 10px;
-  background: rgba(255, 255, 255, 0.025);
-  color: rgba(255, 255, 255, 0.72);
+  background: var(--ally-hover-faint);
+  color: var(--ally-text-tertiary);
   line-height: 1.65;
 }
 
 .license-notice-title {
   margin-bottom: 10px;
-  color: rgba(255, 255, 255, 0.94);
+  color: var(--ally-text-primary);
   font-size: 15px;
   font-weight: 650;
 }
@@ -2143,7 +2178,7 @@ watch(() => props.visible, (visible) => {
   border-left: 3px solid #d8a657;
   background: rgba(216, 166, 87, 0.08);
   border-radius: 0 4px 4px 0;
-  color: rgba(255, 255, 255, 0.85);
+  color: var(--ally-text-body);
   font-size: 12px;
   line-height: 1.6;
 }
@@ -2156,7 +2191,7 @@ watch(() => props.visible, (visible) => {
 }
 
 .about-update-status {
-  color: rgba(255, 255, 255, 0.62);
+  color: var(--ally-text-muted);
   font-size: var(--ally-sub-font-size);
 }
 
@@ -2173,8 +2208,8 @@ watch(() => props.visible, (visible) => {
 .proxy-actions { display: flex; gap: 8px; margin-bottom: 12px; }
 .proxy-status-card { display: grid; gap: 8px; padding: 12px; border: 1px solid rgba(255,255,255,.08); border-radius: 8px; background: rgba(255,255,255,.025); }
 .proxy-status-card > div { display: grid; grid-template-columns: 90px minmax(0,1fr); gap: 10px; font-size: 12px; }
-.proxy-status-card span { color: #777; }
-.proxy-status-card strong { overflow-wrap: anywhere; color: #d0d0d0; font-family: var(--ally-mono-font); font-weight: 500; }
+.proxy-status-card span { color: var(--ally-text-faint); }
+.proxy-status-card strong { overflow-wrap: anywhere; color: var(--ally-text-body); font-family: var(--ally-mono-font); font-weight: 500; }
 
 .config-section-header {
   display: flex;
@@ -2186,12 +2221,12 @@ watch(() => props.visible, (visible) => {
 .config-section-title {
   font-size: 15px;
   font-weight: 600;
-  color: #f5f5f5;
+  color: var(--ally-text-primary);
 }
 
 .config-section-subtitle {
   font-size: 12px;
-  color: #8a8a8a;
+  color: var(--ally-text-muted);
   margin-top: 2px;
 }
 
@@ -2201,9 +2236,43 @@ watch(() => props.visible, (visible) => {
   gap: 12px;
 }
 
+/* Appearance mode picker: two quiet segmented buttons. The active segment
+   rides on a soft accent wash so the control stays calm in both modes. */
+.appearance-mode-row {
+  display: inline-flex;
+  gap: 6px;
+  padding: 3px;
+  border-radius: 8px;
+  border: 1px solid var(--ally-border);
+  background: var(--ally-hover-faint);
+}
+
+.appearance-mode-btn {
+  padding: 4px 18px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ally-text-muted);
+  font-size: var(--ally-sub-font-size);
+  line-height: 1.4;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+  --wails-draggable: no-drag;
+}
+
+.appearance-mode-btn:hover {
+  color: var(--ally-text-body);
+}
+
+.appearance-mode-btn.active {
+  color: var(--ally-accent-strong);
+  background: color-mix(in srgb, var(--ally-accent) 14%, transparent);
+  font-weight: 600;
+}
+
 .settings-toggle-hint {
   font-size: 12px;
-  color: #8a8a8a;
+  color: var(--ally-text-muted);
   line-height: 1.5;
 }
 
@@ -2225,14 +2294,14 @@ watch(() => props.visible, (visible) => {
 }
 
 .validation-setting-label {
-  color: #e5e5e5;
+  color: var(--ally-text-high);
   font-size: 13px;
   font-weight: 600;
 }
 
 .validation-setting-hint {
   margin-top: 3px;
-  color: #8a8a8a;
+  color: var(--ally-text-muted);
   font-size: 12px;
   line-height: 1.4;
 }
@@ -2273,7 +2342,7 @@ watch(() => props.visible, (visible) => {
 
 .settings-field-hint,
 .mcp-save-scope {
-  color: #777;
+  color: var(--ally-text-faint);
   font-size: 11px;
   line-height: 1.45;
 }
@@ -2291,7 +2360,7 @@ watch(() => props.visible, (visible) => {
 
 .background-image-status {
   font-size: 12px;
-  color: #8a8a8a;
+  color: var(--ally-text-muted);
 }
 
 .model-import-input {
@@ -2299,7 +2368,7 @@ watch(() => props.visible, (visible) => {
 }
 
 .current-model-panel {
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--ally-hover-faint);
   border: 1px solid var(--ally-border);
   border-radius: 8px;
   padding: 10px 12px;
@@ -2316,7 +2385,7 @@ watch(() => props.visible, (visible) => {
 
 .current-model-label {
   font-size: 11px;
-  color: #737373;
+  color: var(--ally-text-faint);
   text-transform: uppercase;
   letter-spacing: 0.5px;
   margin-bottom: 2px;
@@ -2325,12 +2394,12 @@ watch(() => props.visible, (visible) => {
 .current-model-name {
   font-size: 14px;
   font-weight: 600;
-  color: #f5f5f5;
+  color: var(--ally-text-primary);
 }
 
 .current-model-url {
   font-size: 12px;
-  color: #8a8a8a;
+  color: var(--ally-text-muted);
   margin-top: 1px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2343,12 +2412,12 @@ watch(() => props.visible, (visible) => {
   flex-direction: column;
   gap: 2px;
   font-size: 11px;
-  color: #737373;
+  color: var(--ally-text-faint);
   text-align: right;
 }
 
 .saved-model-empty {
-  color: #737373;
+  color: var(--ally-text-faint);
   font-size: var(--ally-sub-font-size);
   padding: 28px 0;
   text-align: center;
@@ -2372,12 +2441,12 @@ watch(() => props.visible, (visible) => {
 }
 
 .saved-model-item:hover {
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--ally-hover-faint);
 }
 
 .saved-model-item.active {
   border-color: var(--ally-border-strong);
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--ally-state-hover);
 }
 
 .saved-model-main {
@@ -2388,18 +2457,18 @@ watch(() => props.visible, (visible) => {
 .saved-model-name {
   font-size: var(--ally-sub-font-size);
   font-weight: 500;
-  color: #f5f5f5;
+  color: var(--ally-text-primary);
 }
 
 .saved-model-meta {
   font-size: 12px;
-  color: #8a8a8a;
+  color: var(--ally-text-muted);
   margin-top: 1px;
 }
 
 .saved-model-url {
   font-size: 11px;
-  color: #737373;
+  color: var(--ally-text-faint);
   margin-top: 1px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2424,11 +2493,11 @@ watch(() => props.visible, (visible) => {
 }
 
 .skill-settings-item:hover {
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--ally-hover-faint);
 }
 
 .skill-settings-item.active {
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--ally-state-hover);
 }
 
 .skill-settings-main {
@@ -2446,7 +2515,7 @@ watch(() => props.visible, (visible) => {
 .skill-name {
   font-size: var(--ally-sub-font-size);
   font-weight: 500;
-  color: #f5f5f5;
+  color: var(--ally-text-primary);
 }
 
 .skill-badge {
@@ -2457,8 +2526,8 @@ watch(() => props.visible, (visible) => {
   font-weight: 500;
   text-transform: uppercase;
   letter-spacing: 0.3px;
-  background: rgba(255, 255, 255, 0.08);
-  color: #8a8a8a;
+  background: var(--ally-hover-strong);
+  color: var(--ally-text-muted);
 }
 
 .skill-badge.user {
@@ -2468,7 +2537,7 @@ watch(() => props.visible, (visible) => {
 
 .skill-badge.project {
   background: #2a4a3a;
-  color: #8fd4b4;
+  color: var(--ally-success-pale);
 }
 
 .skill-badge.loaded {
@@ -2477,8 +2546,8 @@ watch(() => props.visible, (visible) => {
 }
 
 .skill-badge.builtin-locked {
-  background: #3a3a3a;
-  color: #a0a0a0;
+  background: var(--ally-scrollbar);
+  color: var(--ally-text-soft);
   border: 1px solid var(--ally-border-strong);
 }
 
@@ -2487,22 +2556,22 @@ watch(() => props.visible, (visible) => {
 }
 
 .skill-settings-item.builtin .skill-name {
-  color: #d0d0d0;
+  color: var(--ally-text-body);
 }
 
 .skill-settings-item.builtin .skill-description {
-  color: #8a8a8a;
+  color: var(--ally-text-muted);
 }
 
 .skill-description {
   font-size: 12px;
-  color: #8a8a8a;
+  color: var(--ally-text-muted);
   margin-top: 2px;
 }
 
 .skill-meta {
   font-size: 11px;
-  color: #555;
+  color: var(--ally-text-ghost);
   margin-top: 1px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2512,11 +2581,11 @@ watch(() => props.visible, (visible) => {
 
 .skill-meta.clickable {
   cursor: pointer;
-  color: #888;
+  color: var(--ally-text-muted);
 }
 
 .skill-meta.clickable:hover {
-  color: #18a058;
+  color: var(--ally-success-deep);
   text-decoration: underline;
 }
 
@@ -2559,7 +2628,7 @@ watch(() => props.visible, (visible) => {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--ally-hover-faint);
 }
 
 .mcp-server-row.expanded {
@@ -2578,14 +2647,14 @@ watch(() => props.visible, (visible) => {
   line-height: 1;
   padding: 3px 6px;
   border-radius: 4px;
-  background: rgba(255, 255, 255, 0.06);
-  color: #9aa0aa;
+  background: var(--ally-state-hover);
+  color: var(--ally-text-muted);
   flex: none;
 }
 
 .mcp-badge.off {
   background: rgba(245, 166, 35, 0.14);
-  color: #f0c060;
+  color: var(--ally-warning-text);
 }
 
 .mcp-row-side {
@@ -2599,28 +2668,28 @@ watch(() => props.visible, (visible) => {
 .mcp-status-text {
   flex: none;
   font-size: 12px;
-  color: #8a8a8a;
+  color: var(--ally-text-muted);
 }
 
 .mcp-status-text.connected {
-  color: #8fd4b4;
+  color: var(--ally-success-pale);
 }
 
 .mcp-status-text.connecting {
-  color: #f0d080;
+  color: var(--ally-warning-text);
 }
 
 .mcp-status-text.failed {
-  color: #f4a4a4;
+  color: var(--ally-danger-pale);
 }
 
 .mcp-status-text.disabled {
-  color: #5a5f6a;
+  color: var(--ally-text-faint);
 }
 
 .mcp-row-error {
   font-size: 12px;
-  color: #f4a4a4;
+  color: var(--ally-danger-pale);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2652,7 +2721,7 @@ watch(() => props.visible, (visible) => {
 
 .mcp-status-title {
   font-size: 12px;
-  color: #7d828c;
+  color: var(--ally-text-muted);
   margin-bottom: 2px;
 }
 
@@ -2662,11 +2731,11 @@ watch(() => props.visible, (visible) => {
 }
 
 .mcp-json-check.valid {
-  color: #8fd4b4;
+  color: var(--ally-success-pale);
 }
 
 .mcp-json-check.invalid {
-  color: #f4a4a4;
+  color: var(--ally-danger-pale);
 }
 
 .mcp-status-list {
@@ -2682,7 +2751,7 @@ watch(() => props.visible, (visible) => {
   gap: 8px;
   font-size: var(--ally-sub-font-size);
   padding: 6px 8px;
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--ally-hover-faint);
   border-radius: 6px;
 }
 
@@ -2694,20 +2763,20 @@ watch(() => props.visible, (visible) => {
 }
 
 .mcp-dot.connected {
-  background: #8fd4b4;
+  background: var(--ally-success-pale);
 }
 
 .mcp-dot.connecting {
-  background: #f0d080;
+  background: var(--ally-warning-text);
   animation: mcp-pulse 1.2s ease-in-out infinite;
 }
 
 .mcp-dot.failed {
-  background: #f4a4a4;
+  background: var(--ally-danger-pale);
 }
 
 .mcp-dot.disabled {
-  background: #5a5f6a;
+  background: var(--ally-text-faint);
 }
 
 @keyframes mcp-pulse {
@@ -2717,28 +2786,28 @@ watch(() => props.visible, (visible) => {
 
 .mcp-name {
   font-weight: 500;
-  color: #f5f5f5;
+  color: var(--ally-text-primary);
 }
 
 .mcp-status {
-  color: #8a8a8a;
+  color: var(--ally-text-muted);
   font-size: 12px;
 }
 
 .mcp-transport {
-  color: #6f91b8;
+  color: var(--ally-info-soft);
   font-family: var(--ally-mono-font);
   font-size: 11px;
 }
 
 .mcp-tools {
-  color: #737373;
+  color: var(--ally-text-faint);
   font-size: 11px;
   margin-left: auto;
 }
 
 .mcp-error {
-  color: #f4a4a4;
+  color: var(--ally-danger-pale);
   font-size: 11px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2776,7 +2845,7 @@ watch(() => props.visible, (visible) => {
 
 .api-hint {
   font-size: 11px;
-  color: var(--text-tertiary, #888);
+  color: var(--text-tertiary, var(--ally-text-muted));
   margin: 4px 0 2px;
   line-height: 1.5;
 }
@@ -2809,13 +2878,13 @@ watch(() => props.visible, (visible) => {
 
 .api-path {
   flex-shrink: 0;
-  color: #9ecbff;
+  color: var(--ally-info-soft);
   font-family: var(--ally-mono-font);
   font-size: 11.5px;
 }
 
 .api-desc {
-  color: var(--text-tertiary, #888);
+  color: var(--text-tertiary, var(--ally-text-muted));
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2839,7 +2908,7 @@ watch(() => props.visible, (visible) => {
 .api-key-index {
   flex-shrink: 0;
   width: 18px;
-  color: #8a8a8a;
+  color: var(--ally-text-muted);
   font-size: 12px;
   text-align: center;
   font-family: var(--ally-mono-font);
@@ -2854,7 +2923,7 @@ watch(() => props.visible, (visible) => {
 }
 
 .api-key-hint {
-  color: #8a8a8a;
+  color: var(--ally-text-muted);
   font-size: 12px;
   line-height: 1.5;
 }

@@ -395,8 +395,8 @@ function historyMenuProps() {
   border-bottom: 1px solid var(--ally-border);
   --wails-draggable: drag;
   gap: 8px;
-  --header-muted: #8d8d8d;
-  --header-strong: #f2f2f2;
+  --header-muted: var(--ally-text-muted);
+  --header-strong: var(--ally-text-primary);
   /* Hover and selected both lift the surface; selected simply lifts further.
      The old active background was #171717 — darker than the header itself,
      which punched a hole in the surface scale instead of sitting on it. */
@@ -474,23 +474,23 @@ function historyMenuProps() {
 }
 
 .repository-button.update-available {
-  color: #67d99b !important;
+  color: var(--ally-success-deep) !important;
   background: rgba(74, 222, 128, 0.1) !important;
 }
 
 .repository-button.update-available:hover {
-  color: #9af0bd !important;
+  color: var(--ally-success-pale) !important;
   background: rgba(74, 222, 128, 0.18) !important;
 }
 
 /* 历史工作空间按钮：琥珀色图标与其他 header 图标区分（参考底部会话按钮 #e0a070） */
 .history-action-button {
-  color: #e0a070 !important;
+  color: var(--ally-accent) !important;
 }
 
 .history-action-button:hover,
 .history-action-button:focus-visible {
-  color: #f0b887 !important;
+  color: var(--ally-accent-strong) !important;
 }
 
 .brand {
@@ -565,13 +565,13 @@ body.platform-darwin .brand-wordmark {
   white-space: nowrap;
   padding: 7px 12px;
   border-radius: 8px;
-  background: #2e2e2e;
-  color: #ffffff;
+  background: var(--ally-surface-raised);
+  color: var(--ally-text-primary);
   font-size: 12px;
   font-weight: 600;
   line-height: 1;
-  border: 1px solid rgba(255, 255, 255, 0.22);
-  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.55);
+  border: 1px solid var(--ally-border-strong);
+  box-shadow: var(--ally-overlay-shadow);
   pointer-events: none;
   z-index: 99999;
   opacity: 1;
@@ -731,9 +731,9 @@ body.platform-darwin .window-close-icon {
 
 .workspace-tabs-host.dragging-active .workspace-tabs :deep(.workspace-tab.dragging) {
   /* 有跟手位移后立即虚线占位：即使尚未产生缝隙（hasDragShift 之前）也必须有视觉反馈，否则原位看似“一动不动” */
-  background: rgba(255, 255, 255, 0.06) !important;
-  color: rgba(255, 255, 255, 0.45) !important;
-  border: 1px dashed rgba(255, 255, 255, 0.38) !important;
+  background: var(--ally-state-hover) !important;
+  color: var(--ally-text-faint) !important;
+  border: 1px dashed var(--ally-border-strong) !important;
   box-shadow: none !important;
   pointer-events: none;
   opacity: 0.62 !important;
@@ -742,10 +742,10 @@ body.platform-darwin .window-close-icon {
   /* 有缝隙时再压淡文字，清晰内容由跟手卡片展示 */
   visibility: visible !important;
   opacity: 0.62 !important;
-  background: rgba(255, 255, 255, 0.06) !important;
-  color: rgba(255, 255, 255, 0.45) !important;
+  background: var(--ally-state-hover) !important;
+  color: var(--ally-text-faint) !important;
   box-shadow: none !important;
-  border: 1px dashed rgba(255, 255, 255, 0.38) !important;
+  border: 1px dashed var(--ally-border-strong) !important;
   pointer-events: none;
 }
 
@@ -771,10 +771,10 @@ body.platform-darwin .window-close-icon {
 }
 
 .workspace-tabs :deep(.workspace-tab.active) {
-  /* The active tab used to take --header-strong (#f2f2f2), which made the tab
+  /* The active tab used to take --header-strong (var(--ally-text-primary)), which made the tab
      strip the brightest steady text in the chrome. The bottom accent rule is
      already the selected signal, so the label only needs to clear the inactive
-     #8d8d8d — it now sits on the shared secondary level with the rest of the
+     var(--ally-text-muted) — it now sits on the shared secondary level with the rest of the
      persistent chrome. */
   color: var(--ally-text-secondary);
   /* No active fill: the bottom accent rule is the selected signal, and any
@@ -785,11 +785,11 @@ body.platform-darwin .window-close-icon {
 }
 
 .workspace-tabs :deep(.workspace-tab.running) {
-  color: #d4d4d4;
+  color: var(--ally-text-body);
 }
 
 .workspace-tabs :deep(.workspace-tab.running.active) {
-  color: #f5f5f5;
+  color: var(--ally-text-primary);
 }
 
 .workspace-tabs :deep(.workspace-tab.running .tab-label) {
@@ -825,7 +825,7 @@ body.platform-darwin .window-close-icon {
   border: 0;
   border-radius: 4px;
   background: transparent;
-  color: #a8a8a8;
+  color: var(--ally-text-soft);
   cursor: pointer;
   transition: background 0.12s, color 0.12s;
   margin-left: auto;
@@ -833,12 +833,12 @@ body.platform-darwin .window-close-icon {
 }
 
 .workspace-tabs :deep(.workspace-tab .tab-close:hover) {
-  background: rgba(255, 255, 255, 0.12);
-  color: #f5f5f5;
+  background: var(--ally-hover-strong);
+  color: var(--ally-text-primary);
 }
 
 .workspace-tabs :deep(.workspace-tab.running .tab-close) {
-  color: rgba(216, 248, 231, 0.7);
+  color: var(--ally-success-pale);
 }
 
 </style>

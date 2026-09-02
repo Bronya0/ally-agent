@@ -67,76 +67,137 @@ export function normalizeMermaidSource(code, spec) {
 
 let mermaidModulePromise = null;
 let mermaidInitialized = false;
+let mermaidThemeMode = null;
 
-// 懒加载并初始化 mermaid（幂等；主题为聊天区同款 Darcula 派生暗色）。
+// 当前颜色模式：与 utils/theme.mjs 写在 <html data-mode> 上的值保持一致。
+function currentColorMode() {
+  try {
+    return document.documentElement.getAttribute('data-mode') === 'light' ? 'light' : 'dark';
+  } catch {
+    return 'dark';
+  }
+}
+
+// 暗色主题（Darcula 派生）。
+const MERMAID_DARK_VARIABLES = {
+  darkMode: true,
+  background: '#2b2b2b',
+  mainBkg: '#323232',
+  secondBkg: '#383838',
+  primaryColor: '#323232',
+  primaryTextColor: '#a9b7c6',
+  primaryBorderColor: '#cc7832',
+  secondaryColor: '#353535',
+  secondaryTextColor: '#a9b7c6',
+  secondaryBorderColor: '#6897bb',
+  tertiaryColor: '#303330',
+  tertiaryTextColor: '#a9b7c6',
+  tertiaryBorderColor: '#6a8759',
+  lineColor: '#808080',
+  textColor: '#a9b7c6',
+  nodeTextColor: '#a9b7c6',
+  noteBkgColor: '#3b352b',
+  noteTextColor: '#d7ba7d',
+  noteBorderColor: '#bbb529',
+  actorBkg: '#323232',
+  actorBorder: '#6897bb',
+  actorTextColor: '#a9b7c6',
+  actorLineColor: '#666666',
+  signalColor: '#a9b7c6',
+  signalTextColor: '#a9b7c6',
+  labelBoxBkgColor: '#323232',
+  labelBoxBorderColor: '#6a8759',
+  labelTextColor: '#a9b7c6',
+  loopTextColor: '#d7ba7d',
+  activationBorderColor: '#cc7832',
+  activationBkgColor: '#3b332b',
+  sequenceNumberColor: '#2b2b2b',
+  clusterBkg: '#2f2f2f',
+  clusterBorder: '#5d5d5d',
+};
+
+// 浅色主题：白纸底 + 墨色文字 + 同族强调色（与 light 模式的
+// --ally-* token 色阶保持一致的浅色系）。
+const MERMAID_LIGHT_VARIABLES = {
+  darkMode: false,
+  background: '#ffffff',
+  mainBkg: '#f2f4f7',
+  secondBkg: '#e9edf2',
+  primaryColor: '#f2f4f7',
+  primaryTextColor: '#2c333c',
+  primaryBorderColor: '#d08c3c',
+  secondaryColor: '#eef1f5',
+  secondaryTextColor: '#2c333c',
+  secondaryBorderColor: '#5b8db8',
+  tertiaryColor: '#f5f3ef',
+  tertiaryTextColor: '#2c333c',
+  tertiaryBorderColor: '#6a8759',
+  lineColor: '#8b93a0',
+  textColor: '#2c333c',
+  nodeTextColor: '#2c333c',
+  noteBkgColor: '#faf3e2',
+  noteTextColor: '#7a5f1e',
+  noteBorderColor: '#b8a44a',
+  actorBkg: '#f2f4f7',
+  actorBorder: '#5b8db8',
+  actorTextColor: '#2c333c',
+  actorLineColor: '#98a0ab',
+  signalColor: '#2c333c',
+  signalTextColor: '#2c333c',
+  labelBoxBkgColor: '#f2f4f7',
+  labelBoxBorderColor: '#6a8759',
+  labelTextColor: '#2c333c',
+  loopTextColor: '#7a5f1e',
+  activationBorderColor: '#d08c3c',
+  activationBkgColor: '#f7efe0',
+  sequenceNumberColor: '#ffffff',
+  clusterBkg: '#eef1f5',
+  clusterBorder: '#c9d1da',
+};
+
+// 懒加载并初始化 mermaid（幂等；主题跟随当前颜色模式，模式切换后
+// 再次调用会以新主题重新 initialize）。聊天流与编辑器预览共用。
 export function loadMermaid() {
+  const mode = currentColorMode();
   if (!mermaidModulePromise) {
     mermaidModulePromise = import('mermaid').then((mod) => {
-      const mermaid = mod.default || mod;
-      if (!mermaidInitialized) {
-        mermaid.initialize({
-          startOnLoad: false,
-          securityLevel: 'strict',
-          theme: 'base',
-          darkMode: true,
-          htmlLabels: false,
-          flowchart: {
-            curve: 'linear',
-            useMaxWidth: true,
-            nodeSpacing: 36,
-            rankSpacing: 48,
-          },
-          sequence: {
-            useMaxWidth: true,
-            wrap: true,
-            diagramMarginX: 24,
-            diagramMarginY: 18,
-            actorMargin: 48,
-          },
-          themeVariables: {
-            darkMode: true,
-            background: '#2b2b2b',
-            mainBkg: '#323232',
-            secondBkg: '#383838',
-            primaryColor: '#323232',
-            primaryTextColor: '#a9b7c6',
-            primaryBorderColor: '#cc7832',
-            secondaryColor: '#353535',
-            secondaryTextColor: '#a9b7c6',
-            secondaryBorderColor: '#6897bb',
-            tertiaryColor: '#303330',
-            tertiaryTextColor: '#a9b7c6',
-            tertiaryBorderColor: '#6a8759',
-            lineColor: '#808080',
-            textColor: '#a9b7c6',
-            nodeTextColor: '#a9b7c6',
-            noteBkgColor: '#3b352b',
-            noteTextColor: '#d7ba7d',
-            noteBorderColor: '#bbb529',
-            actorBkg: '#323232',
-            actorBorder: '#6897bb',
-            actorTextColor: '#a9b7c6',
-            actorLineColor: '#666666',
-            signalColor: '#a9b7c6',
-            signalTextColor: '#a9b7c6',
-            labelBoxBkgColor: '#323232',
-            labelBoxBorderColor: '#6a8759',
-            labelTextColor: '#a9b7c6',
-            loopTextColor: '#d7ba7d',
-            activationBorderColor: '#cc7832',
-            activationBkgColor: '#3b332b',
-            sequenceNumberColor: '#2b2b2b',
-            fontFamily: 'Inter, "Microsoft YaHei", sans-serif',
-            fontSize: '14px',
-          },
-          themeCSS: '.node rect,.node polygon,.node circle,.node ellipse{stroke-width:1.4px}.edgePath .path,.flowchart-link{stroke-width:1.5px}.nodeLabel,.label text{font-weight:500}.cluster rect{fill:#2f2f2f!important;stroke:#5d5d5d!important}',
-        });
-        mermaidInitialized = true;
-      }
-      return mermaid;
+      return mod.default || mod;
     });
   }
-  return mermaidModulePromise;
+  return mermaidModulePromise.then((mermaid) => {
+    if (!mermaidInitialized || mermaidThemeMode !== mode) {
+      const variables = mode === 'light' ? MERMAID_LIGHT_VARIABLES : MERMAID_DARK_VARIABLES;
+      mermaid.initialize({
+        startOnLoad: false,
+        securityLevel: 'strict',
+        theme: 'base',
+        darkMode: mode === 'light',
+        htmlLabels: false,
+        flowchart: {
+          curve: 'linear',
+          useMaxWidth: true,
+          nodeSpacing: 36,
+          rankSpacing: 48,
+        },
+        sequence: {
+          useMaxWidth: true,
+          wrap: true,
+          diagramMarginX: 24,
+          diagramMarginY: 18,
+          actorMargin: 48,
+        },
+        themeVariables: {
+          ...variables,
+          fontFamily: 'Inter, "Microsoft YaHei", sans-serif',
+          fontSize: '14px',
+        },
+        themeCSS: '.node rect,.node polygon,.node circle,.node ellipse{stroke-width:1.4px}.edgePath .path,.flowchart-link{stroke-width:1.5px}.nodeLabel,.label text{font-weight:500}',
+      });
+      mermaidInitialized = true;
+      mermaidThemeMode = mode;
+    }
+    return mermaid;
+  });
 }
 
 export function escapeHtmlText(value) {

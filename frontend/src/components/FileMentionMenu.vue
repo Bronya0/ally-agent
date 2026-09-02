@@ -64,7 +64,7 @@ watch(() => props.selectedIndex, () => {
   border-radius: 8px;
   background: var(--ally-surface-raised);
   border: 1px solid var(--ally-border-strong);
-  box-shadow: 0 22px 60px rgba(0, 0, 0, 0.55);
+  box-shadow: var(--ally-overlay-shadow);
 }
 
 .file-mention-title {
@@ -73,7 +73,7 @@ watch(() => props.selectedIndex, () => {
   justify-content: space-between;
   gap: 12px;
   padding: 8px 12px;
-  color: #737373;
+  color: var(--ally-text-faint);
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0;
@@ -93,7 +93,7 @@ watch(() => props.selectedIndex, () => {
   max-height: 260px;
   overflow-y: auto;
   scrollbar-width: thin;
-  scrollbar-color: #404040 transparent;
+  scrollbar-color: var(--ally-scrollbar) transparent;
 }
 
 .file-mention-item {
@@ -102,7 +102,7 @@ watch(() => props.selectedIndex, () => {
   align-items: center;
   width: 100%;
   padding: 8px 12px;
-  color: #d4d4d4;
+  color: var(--ally-text-body);
   text-align: left;
   border: 0;
   background: transparent;
@@ -122,7 +122,7 @@ watch(() => props.selectedIndex, () => {
 
 .file-mention-path {
   overflow: hidden;
-  color: #f5f5f5;
+  color: var(--ally-text-primary);
   font-family: var(--ally-mono-font);
   font-size: 12px;
   text-overflow: ellipsis;
@@ -131,7 +131,7 @@ watch(() => props.selectedIndex, () => {
 
 .file-mention-empty {
   padding: 12px;
-  color: #737373;
+  color: var(--ally-text-faint);
   font-size: 12px;
   text-align: center;
 }

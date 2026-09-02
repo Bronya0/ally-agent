@@ -137,7 +137,7 @@ function groupBuiltinTools(tools) {
 <style scoped>
 .tools-trigger {
   padding: 0;
-  color: #9fc3ec;
+  color: var(--ally-info-soft);
   border: 0;
   background: transparent;
   font: inherit;
@@ -146,7 +146,7 @@ function groupBuiltinTools(tools) {
 }
 
 .tools-trigger:hover {
-  color: #c4dcf8;
+  color: var(--ally-info-soft);
   text-decoration: underline;
   text-underline-offset: 2px;
 }
@@ -156,14 +156,17 @@ function groupBuiltinTools(tools) {
   max-height: min(520px, calc(100vh - 120px));
   overflow: auto;
   padding: 6px;
-  color: #bdbdbd;
-  background: #1a1a1a;
+  color: var(--ally-text-body);
+  background: var(--ally-surface-raised);
+  backdrop-filter: var(--ally-glass-blur, none);
+  -webkit-backdrop-filter: var(--ally-glass-blur, none);
+  border: 1px solid var(--ally-border);
   border-radius: 8px;
 }
 
 .tools-overview {
   padding: 4px 6px 8px;
-  color: #a3a3a3;
+  color: var(--ally-text-soft);
   font-size: 12px;
 }
 
@@ -173,7 +176,7 @@ function groupBuiltinTools(tools) {
 
 .tools-section-title {
   padding: 4px 6px;
-  color: #e5e5e5;
+  color: var(--ally-text-high);
   font-size: 12px;
   font-weight: 650;
 }
@@ -184,14 +187,14 @@ function groupBuiltinTools(tools) {
 }
 
 .tool-list-name {
-  color: #d4d4d4;
+  color: var(--ally-text-body);
   font-family: var(--ally-mono-font);
   font-size: 12px;
 }
 
 .tool-list-server,
 .tool-list-desc {
-  color: #8a8a8a;
+  color: var(--ally-text-muted);
   font-family: var(--ally-ui-font);
 }
 

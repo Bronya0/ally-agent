@@ -8,7 +8,7 @@ This file is part of ally-agent, licensed under the GNU General
 Public License v3. See the LICENSE file for details.
 -->
 <template>
-  <n-config-provider :theme="darkTheme" :theme-overrides="themeOverrides" :locale="naiveLocale" :date-locale="naiveDateLocale" inline-theme-disabled>
+  <n-config-provider :theme="naiveTheme" :theme-overrides="naiveThemeOverrides" :locale="naiveLocale" :date-locale="naiveDateLocale" inline-theme-disabled>
     <n-dialog-provider>
       <n-notification-provider>
         <n-message-provider>
@@ -346,6 +346,8 @@ Public License v3. See the LICENSE file for details.
                 :initial-page="settingsPage"
                 :config-draft="configDraft"
                 :check-update-result="checkUpdateResult"
+                :color-mode="colorMode"
+                @set-mode="setColorMode"
                 @close="closeSettings"
                 @save="onSettingsSave"
                 @skills-changed="onSkillsChanged"
@@ -446,6 +448,7 @@ Public License v3. See the LICENSE file for details.
 <script setup>
 import { computed, defineAsyncComponent, h, nextTick, onErrorCaptured, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import { NButton, createDiscreteApi, darkTheme } from 'naive-ui';
+import { getStoredMode, setMode as persistMode } from './utils/theme.mjs';
 import MarkdownIt from 'markdown-it';
 // @traptitech/markdown-it-katex 把 $...$ / $$...$$ 交给 katex 渲染。
 // katex 本体已作为 mermaid 的间接依赖存在于依赖树中，这里显式声明以避免
@@ -596,7 +599,39 @@ let promptCompositionEndedAt = 0;
 let fileMentionTimer = 0;
 let fileMentionRequestId = 0;
 
-const themeOverrides = {
+// ── Color mode (dark / light) ──
+// The mode is a pure front-end preference (localStorage, see utils/theme.mjs);
+// main.js already applied it to <html data-mode> before mount. This ref is the
+// reactive source for every Naive UI theme decision below.
+const colorMode = ref(getStoredMode());
+const isLightMode = computed(() => colorMode.value === 'light');
+const naiveTheme = computed(() => (isLightMode.value ? null : darkTheme));
+
+function setColorMode(mode) {
+  colorMode.value = persistMode(mode);
+}
+
+// Mode switch re-themes already-rendered Mermaid diagrams: mermaidShared reads
+// the new data-mode on the next loadMermaid() call, so every observed diagram
+// just needs its rendered/suspended state reset and a re-queue.
+watch(colorMode, () => {
+  for (const node of Array.from(mermaidObservedNodes)) {
+    if (!node.isConnected) continue;
+    node._mermaidCleanup?.();
+    node._mermaidCleanup = null;
+    node._mermaidStopTransforming = null;
+    node.classList.remove('rendered', 'mermaid-suspended', 'interaction-active', 'mermaid-transforming');
+    delete node.dataset.mermaidRendered;
+    delete node.dataset.mermaidQueued;
+    delete node.dataset.mermaidSuspended;
+    removeMermaidCache(node._mermaidCacheKey);
+    const output = node.querySelector('.markdown-mermaid-output');
+    if (output) output.replaceChildren();
+    queueMermaidDiagram(node);
+  }
+});
+
+const darkThemeOverrides = {
   common: {
     bodyColor: '#1a1a1a',
     baseColor: '#1a1a1a',
@@ -642,13 +677,60 @@ const themeOverrides = {
   },
 };
 
+// Light mode: clean acrylic glass (DeepSeek-style modal language). Overlay
+// surfaces are translucent white so the blur added in style.css reads as
+// frosted glass over the soft gradient canvas.
+const lightThemeOverrides = {
+  common: {
+    bodyColor: '#f6f7f9',
+    baseColor: '#ffffff',
+    cardColor: 'rgba(255, 255, 255, 0.88)',
+    modalColor: 'rgba(255, 255, 255, 0.92)',
+    popoverColor: 'rgba(255, 255, 255, 0.94)',
+    tableColor: 'rgba(255, 255, 255, 0.88)',
+    primaryColor: '#3a3f45',
+    primaryColorHover: '#1f2328',
+    primaryColorPressed: '#2e3338',
+    primaryColorSuppl: '#1f2328',
+    borderColor: 'rgba(15, 23, 42, 0.08)',
+    dividerColor: 'rgba(15, 23, 42, 0.08)',
+    textColorBase: '#1f2328',
+    textColor1: '#1f2328',
+    textColor2: '#3a3f45',
+    textColor3: '#6b7280',
+    borderRadius: '10px',
+    fontFamily: 'Inter',
+  },
+  Layout: {
+    color: 'transparent',
+    siderColor: 'rgba(255, 255, 255, 0.55)',
+    headerColor: 'rgba(255, 255, 255, 0.55)',
+  },
+  Card: {
+    color: 'rgba(255, 255, 255, 0.88)',
+    colorEmbedded: 'rgba(255, 255, 255, 0.6)',
+  },
+  Input: {
+    color: 'rgba(255, 255, 255, 0.72)',
+    colorFocus: 'rgba(255, 255, 255, 0.88)',
+    border: '1px solid rgba(15, 23, 42, 0.12)',
+    borderFocus: '1px solid rgba(15, 23, 42, 0.32)',
+  },
+  Switch: {
+    railColorActive: '#16a34a',
+    loadingColor: '#16a34a',
+  },
+};
+
+const naiveThemeOverrides = computed(() => (isLightMode.value ? lightThemeOverrides : darkThemeOverrides));
+
 const { message, dialog } = createDiscreteApi(['message', 'dialog'], {
-  configProviderProps: {
-    theme: darkTheme,
-    themeOverrides,
+  configProviderProps: computed(() => ({
+    theme: naiveTheme.value,
+    themeOverrides: naiveThemeOverrides.value,
     locale: naiveLocale,
     dateLocale: naiveDateLocale,
-  },
+  })),
 });
 
 hljs.registerLanguage('javascript', javascript);
@@ -1246,7 +1328,7 @@ function downloadMermaidSvg(node) {
     background.setAttribute('width', '100%');
     background.setAttribute('height', '100%');
   }
-  background.setAttribute('fill', '#2b2b2b');
+  background.setAttribute('fill', isLightMode.value ? '#ffffff' : '#2b2b2b');
   background.setAttribute('aria-hidden', 'true');
   copy.insertBefore(background, copy.firstChild);
   const source = decodeURIComponent(node.dataset.mermaidSource || '');
@@ -2778,7 +2860,7 @@ const historyOptions = computed(() => {
           size: 'small',
           type: 'default',
           block: true,
-          style: { color: '#e0a070', textAlign: 'left', justifyContent: 'flex-start', border: 'none', background: 'transparent' },
+          style: { color: 'var(--ally-accent)', textAlign: 'left', justifyContent: 'flex-start', border: 'none', background: 'transparent' },
         },
         {
           default: () => [
@@ -5226,13 +5308,16 @@ const chatLayoutContentStyle = computed(() => {
   const url = backgroundImageUrl.value;
   if (!url) return base;
   const overlay = Math.max(0, Math.min(1, 1 - Number(config.backgroundOpacity) || 0));
+  // The scrim matches the active mode's canvas so a custom image stays readable
+  // (dark ink text needs a light scrim in light mode, and vice versa).
+  const scrim = isLightMode.value ? `rgba(246, 247, 249, ${overlay})` : `rgba(26, 26, 26, ${overlay})`;
   return {
     ...base,
     // With a custom background image the opaque reasoning curtain would show
     // as a solid band, so disable it via the variable consumed by
-    // .reasoning-block in style.css (falls back to #1a1a1a otherwise).
+    // .reasoning-block in style.css (falls back to the surface color otherwise).
     '--reasoning-curtain': 'transparent',
-    backgroundImage: `linear-gradient(rgba(26,26,26,${overlay}), rgba(26,26,26,${overlay})), url("${url}")`,
+    backgroundImage: `linear-gradient(${scrim}, ${scrim}), url("${url}")`,
     backgroundSize: 'cover, cover',
     backgroundPosition: 'center, center',
     backgroundAttachment: 'fixed, fixed',

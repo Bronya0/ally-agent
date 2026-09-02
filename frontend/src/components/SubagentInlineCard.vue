@@ -280,7 +280,7 @@ function subToolVerb(tc) {
   width: 3px;
   height: 3px;
   border-radius: 50%;
-  background: #8a8a82;
+  background: var(--ally-text-faint);
   animation: thinking-bounce 1.3s ease-in-out infinite;
 }
 

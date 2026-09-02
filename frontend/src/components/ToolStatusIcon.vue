@@ -85,7 +85,7 @@ const icon = computed(() => {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: #9ca3af;
+  background: var(--ally-text-tertiary);
   animation: tool-svg-pulse 1.1s ease-in-out infinite;
 }
 
@@ -116,11 +116,11 @@ const icon = computed(() => {
 }
 
 .tool-svg-icon.is-error {
-  color: #ef4444;
+  color: var(--ally-danger);
 }
 
 .tool-svg-icon.is-pending {
-  color: #525252;
+  color: var(--ally-text-ghost);
 }
 
 .tool-svg-icon.is-running .hollow-dot,

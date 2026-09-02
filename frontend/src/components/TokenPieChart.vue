@@ -103,7 +103,7 @@ const totalTokens = computed(() =>
 }
 .pie-track {
   fill: none;
-  stroke: rgba(255, 255, 255, 0.07);
+  stroke: var(--ally-hover-strong);
   stroke-width: 18;
 }
 .pie-seg {
@@ -116,7 +116,7 @@ const totalTokens = computed(() =>
   font-weight: 650;
 }
 .pie-center-label {
-  fill: #8f8f8f;
+  fill: var(--ally-text-muted);
   font-size: 10px;
 }
 .pie-legend {
@@ -139,22 +139,22 @@ const totalTokens = computed(() =>
 .pie-name {
   flex: 1;
   min-width: 0;
-  color: #c8c8c8;
+  color: var(--ally-text-body);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .pie-pct {
-  color: #8f8f8f;
+  color: var(--ally-text-muted);
   font-variant-numeric: tabular-nums;
 }
 .pie-tokens {
-  color: #e8e8e8;
+  color: var(--ally-text-high);
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
   font-variant-numeric: tabular-nums;
 }
 .pie-empty {
-  color: #777;
+  color: var(--ally-text-faint);
   font-size: 12px;
   padding: 30px 0;
 }

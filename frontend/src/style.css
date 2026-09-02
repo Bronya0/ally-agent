@@ -67,13 +67,68 @@
   --ally-surface-panel: #1f1f1f;
   --ally-surface-chrome: #262626;
   --ally-surface-raised: #2c2c2c;
+  /* Deepest surface: code blocks / media mats that must sit below everything. */
+  --ally-surface-deep: #0b0b0b;
 
   /* ── Neutral text ramp ──
+     Eight tokens covering every hardcoded neutral in the app. A mode (dark /
+     light) only needs to redefine these; usage sites never hardcode grays.
+     primary > high > body > soft > secondary > tertiary > muted > faint > ghost. */
+  --ally-text-primary: #f5f5f5;
+  --ally-text-high: #e5e5e5;
+  --ally-text-body: #d4d4d4;
+  --ally-text-soft: #a3a3a3;
+  --ally-text-tertiary: #9a9a9a;
+  --ally-text-muted: #8a8a8a;
+  --ally-text-faint: #737373;
+  --ally-text-ghost: #5a5a5a;
+
+  /* ── Semantic status colors ──
+     Mid-tone on dark, darkened for light surfaces so text stays readable. */
+  --ally-success: #4ade80;
+  --ally-success-text: #4ec87e;
+  --ally-success-deep: #18a058;
+  --ally-success-pale: #8fd4b4;
+  --ally-danger: #ef4444;
+  --ally-danger-mid: #e85454;
+  --ally-danger-text: #df8b8b;
+  --ally-danger-pale: #fca5a5;
+  --ally-warning: #f59e0b;
+  --ally-warning-text: #d6bd72;
+  --ally-warning-bright: #facc15;
+  --ally-info: #4ea1ff;
+  --ally-info-soft: #9fc3ec;
+
+  /* ── Hover overlays (white tint on dark / black tint on light) ── */
+  --ally-hover-faint: rgba(255, 255, 255, 0.03);
+  --ally-hover-strong: rgba(255, 255, 255, 0.08);
+
+  /* Composer input border (visible focus ring on the glass surface). */
+  --ally-border-input: rgba(212, 212, 212, 0.32);
+  /* Composer glass surface (translucent so the chat background reads through). */
+  --ally-composer-glass: rgba(26, 26, 26, 0.5);
+  --ally-composer-glass-hover: rgba(26, 26, 26, 0.54);
+  --ally-composer-glass-focus: rgba(26, 26, 26, 0.58);
+  /* Floating plan panel glass (above the composer). */
+  --ally-panel-glass: rgba(26, 26, 26, 0.62);
+  /* Code-copy button mat on code blocks. */
+  --ally-copy-btn-bg: rgba(30, 30, 30, 0.85);
+  /* Pre/terminal preview mats inside markdown previews and attachments. */
+  --ally-pre-bg: rgba(0, 0, 0, 0.3);
+  /* Code block surface (chat markdown fenced blocks). */
+  --ally-code-bg: #0c0c0c;
+
+  /* ── Scrollbar ── */
+  --ally-scrollbar: #3a3a3a;
+  --ally-scrollbar-editor: rgba(255, 255, 255, 0.25);
+  --ally-scrollbar-editor-hover: rgba(255, 255, 255, 0.4);
+
+  /* ── Secondary chrome text ──
      One token for the "secondary chrome" text level: bright enough to read at
      a glance, quiet enough that it never competes with the conversation.
      Shared by the file-tree directory labels, the left mode-rail icons, the
      composer model label and the active header tab, so those four stay one
-     step apart from #9a9a9a (tertiary) and #f5f5f5 (hover / live status).
+     step apart from --ally-text-tertiary and --ally-text-primary (hover / live status).
      Anything brighter here has to earn it by being a live state. */
   --ally-text-secondary: #b5b5b5;
 
@@ -151,20 +206,20 @@
 }
 :root[data-theme="emerald"] {
   --ally-accent: #34d399;
-  --md-h1: #4ade80;
+  --md-h1: var(--ally-success);
   --md-h2: #2dd4bf;
   --md-h3: #86efac;
   --md-h4: #6ee7b7;
   --md-strong: #15805a;
   --md-code: #4a9d7a;
   --md-em: #86efac;
-  --md-link: #4ade80;
+  --md-link: var(--ally-success);
   --md-quote: #2dd4bf;
   --md-quote-border: rgba(45, 212, 191, 0.55);
   --md-quote-bg: rgba(45, 212, 191, 0.1);
   --md-del: #6ee7b7;
   --md-marker-ul: #86efac;
-  --md-marker-ol: #4ade80;
+  --md-marker-ol: var(--ally-success);
 }
 :root[data-theme="violet"] {
   --ally-accent: #a78bfa;
@@ -235,6 +290,320 @@
   --md-marker-ol: #a3b8cc;
 }
 
+/* ── Light mode: acrylic / liquid-glass ──
+   Activated by <html data-mode="light"> (see utils/theme.mjs). The page canvas
+   is a soft light gradient painted on <body>; every panel, the window chrome
+   and floating overlays become translucent white glass (blur + saturation)
+   lifted off that canvas, in the spirit of DeepSeek's clean modal language:
+   generous radii, hairline borders, whisper-quiet shadows.
+   NOTE: this block must come AFTER the accent [data-theme] blocks — same
+   specificity, later source order wins, so it re-derives the markdown palette
+   from the active accent seed for light-surface contrast. */
+:root[data-mode="light"] {
+  /* Surfaces: translucent white glass; content keeps an opaque fallback for
+     the reasoning curtain and media mats. */
+  --ally-surface-content: #f6f7f9;
+  --ally-surface-panel: rgba(255, 255, 255, 0.66);
+  --ally-surface-chrome: rgba(255, 255, 255, 0.55);
+  --ally-surface-raised: rgba(255, 255, 255, 0.78);
+  --ally-surface-deep: #eef0f4;
+
+  /* Text ramp inverted: near-black ink on paper, descending to quiet gray. */
+  --ally-text-primary: #1f2328;
+  --ally-text-high: #2e3338;
+  --ally-text-body: #3a3f45;
+  --ally-text-secondary: #4b5157;
+  --ally-text-soft: #5d6470;
+  --ally-text-tertiary: #6b7280;
+  --ally-text-muted: #7b828c;
+  --ally-text-faint: #98a0ab;
+  --ally-text-ghost: #b6bcc4;
+
+  /* Status colors darkened one notch for white-glass surfaces. */
+  --ally-success: #16a34a;
+  --ally-success-text: #15803d;
+  --ally-success-deep: #166534;
+  --ally-success-pale: #15803d;
+  --ally-danger: #dc2626;
+  --ally-danger-mid: #b91c1c;
+  --ally-danger-text: #b91c1c;
+  --ally-danger-pale: #c24141;
+  --ally-warning: #b45309;
+  --ally-warning-text: #96690f;
+  --ally-warning-bright: #a16207;
+  --ally-info: #2563eb;
+  --ally-info-soft: #1d4ed8;
+
+  /* Dividers / states: ink tints instead of white tints. */
+  --ally-border: rgba(15, 23, 42, 0.08);
+  --ally-border-subtle: rgba(15, 23, 42, 0.05);
+  --ally-border-strong: rgba(15, 23, 42, 0.14);
+  --ally-state-hover: rgba(15, 23, 42, 0.05);
+  --ally-state-selected: rgba(15, 23, 42, 0.06);
+  --ally-hover-faint: rgba(15, 23, 42, 0.03);
+  --ally-hover-strong: rgba(15, 23, 42, 0.09);
+
+  /* Accent derivations: mixed toward ink (not white) so accent text, links and
+     selected icons stay readable on light glass. */
+  --ally-accent-bright: color-mix(in srgb, var(--ally-accent) 62%, #1f2328);
+  --ally-accent-strong: color-mix(in srgb, var(--ally-accent) 45%, #1f2328);
+  --ally-accent-soft: color-mix(in srgb, var(--ally-accent) 52%, #1f2328);
+  --ally-accent-pale: color-mix(in srgb, var(--ally-accent) 46%, #1f2328);
+  --ally-accent-muted: color-mix(in srgb, var(--ally-accent) 50%, #6b7280);
+  --ally-accent-dim: color-mix(in srgb, var(--ally-accent) 42%, #4b5563);
+
+  --ally-wordmark-gradient: linear-gradient(120deg, #33383f 0%, #b5822f 36%, #4a5058 68%, #33383f 100%);
+
+  /* Markdown palette re-derived from the accent seed for light surfaces. */
+  --md-text: #272c33;
+  --md-muted: #5b6470;
+  --md-faint: #8b93a0;
+  --md-white: #171b20;
+  --md-border: rgba(23, 28, 33, 0.12);
+  --md-surface: rgba(15, 23, 42, 0.035);
+  --md-h1: #1f252c;
+  --md-h2: #232930;
+  --md-h3: color-mix(in srgb, var(--ally-accent) 55%, #1f2328);
+  --md-h4: #2c333b;
+  --md-strong: color-mix(in srgb, var(--ally-accent) 40%, #4a4133);
+  --md-code: color-mix(in srgb, var(--ally-accent) 55%, #4a3f30);
+  --md-em: color-mix(in srgb, var(--ally-accent) 50%, #5a4a30);
+  --md-link: color-mix(in srgb, var(--ally-accent) 55%, #1f2937);
+  --md-quote: color-mix(in srgb, var(--ally-accent) 30%, #4b463a);
+  --md-quote-border: color-mix(in srgb, var(--ally-accent) 55%, transparent);
+  --md-quote-bg: color-mix(in srgb, var(--ally-accent) 7%, transparent);
+  --md-del: #98a0ab;
+  --md-marker-ul: color-mix(in srgb, var(--ally-accent) 55%, #5c5137);
+  --md-marker-ol: color-mix(in srgb, var(--ally-accent) 45%, #3f4650);
+
+  /* Glass surfaces: translucent white, blurring whatever sits behind. */
+  --ally-border-input: rgba(15, 23, 42, 0.25);
+  --ally-composer-glass: rgba(255, 255, 255, 0.6);
+  --ally-composer-glass-hover: rgba(255, 255, 255, 0.66);
+  --ally-composer-glass-focus: rgba(255, 255, 255, 0.72);
+  --ally-panel-glass: rgba(255, 255, 255, 0.72);
+  --ally-copy-btn-bg: rgba(255, 255, 255, 0.88);
+  --ally-pre-bg: rgba(15, 23, 42, 0.045);
+  --ally-code-bg: #f4f5f7;
+
+  /* Scrollbar: quiet slate on light glass. */
+  --ally-scrollbar: #c7cdd4;
+  --ally-scrollbar-editor: rgba(15, 23, 42, 0.22);
+  --ally-scrollbar-editor-hover: rgba(15, 23, 42, 0.35);
+
+  /* Floating overlay shadow (menus, popovers, command palette). */
+  --ally-overlay-shadow: 0 22px 60px rgba(0, 0, 0, 0.55);
+
+  /* Ambient shadow used by floating glass panels (Naive modals get their own
+     via theme overrides in App.vue). */
+  --ally-glass-shadow: 0 18px 50px rgba(31, 38, 50, 0.14), 0 2px 8px rgba(31, 38, 50, 0.06);
+  --ally-glass-blur: blur(22px) saturate(1.45);
+  /* Floating overlays use the softer glass shadow on light. */
+  --ally-overlay-shadow: 0 18px 50px rgba(31, 38, 50, 0.14), 0 2px 8px rgba(31, 38, 50, 0.06);
+}
+
+/* The light page canvas: a clean, faintly warm gradient with two soft accent
+   glows, so translucent panels have something to refract (acrylic needs
+   non-flat scenery behind the glass). */
+html[data-mode="light"] body {
+  background:
+    radial-gradient(1100px 760px at 88% -8%, rgba(224, 164, 88, 0.1), transparent 62%),
+    radial-gradient(900px 700px at -8% 108%, rgba(96, 165, 250, 0.09), transparent 60%),
+    linear-gradient(165deg, #f2f3f6 0%, #f7f7f5 46%, #eef0f4 100%);
+  background-attachment: fixed;
+}
+
+/* Let the gradient canvas show through the app shell and the chat scroll
+   container (both would otherwise paint opaque --n-color / surface vars).
+   background-color only — the shorthand would wipe the user's custom chat
+   background image, which is layered on the scroll container via inline style. */
+html[data-mode="light"] .app-shell,
+html[data-mode="light"] .chat-layout,
+html[data-mode="light"] .chat-layout .n-layout-scroll-container {
+  background-color: transparent !important;
+}
+
+/* Window chrome (header, mode rail) and side panels become glass. */
+html[data-mode="light"] .mode-sider,
+html[data-mode="light"] .app-header {
+  backdrop-filter: var(--ally-glass-blur);
+  -webkit-backdrop-filter: var(--ally-glass-blur);
+}
+
+html[data-mode="light"] .workspace-explorer,
+html[data-mode="light"] .workspace-explorer-tree,
+html[data-mode="light"] .sessions-menu {
+  backdrop-filter: var(--ally-glass-blur);
+  -webkit-backdrop-filter: var(--ally-glass-blur);
+  box-shadow: var(--ally-glass-shadow);
+}
+
+/* Composer input: brighter, deeper blur — the hero glass element. */
+html[data-mode="light"] .composer .prompt-input {
+  backdrop-filter: blur(24px) saturate(1.5);
+  -webkit-backdrop-filter: blur(24px) saturate(1.5);
+}
+
+html[data-mode="light"] .plan-panel {
+  backdrop-filter: var(--ally-glass-blur);
+  -webkit-backdrop-filter: var(--ally-glass-blur);
+}
+
+/* Splash keeps its dark canvas artwork in both modes (the starfield grid and
+   glowing eye are dark-composition art that cannot simply be flipped); it is
+   a sub-second boot moment, not a themed surface. */
+
+/* Code blocks: light mat, ink text; hljs token colors darkened one notch.
+   highlight.js ships only the dark darcula theme (imported in App.vue), so the
+   light token ramp is scoped here — scoped selectors outrank darcula's plain
+   .hljs-* classes in light mode while leaving dark untouched. */
+html[data-mode="light"] .code-block,
+html[data-mode="light"] .markdown-body .code-block,
+html[data-mode="light"] .markdown-body pre.hljs {
+  color: #3f4650;
+  border-color: rgba(15, 23, 42, 0.1);
+}
+html[data-mode="light"] .markdown-body pre code {
+  color: inherit;
+}
+html[data-mode="light"] .hljs-comment,
+html[data-mode="light"] .hljs-quote {
+  color: #6e7781;
+}
+html[data-mode="light"] .hljs-keyword,
+html[data-mode="light"] .hljs-selector-tag,
+html[data-mode="light"] .hljs-tag {
+  color: #cf222e;
+}
+html[data-mode="light"] .hljs-string,
+html[data-mode="light"] .hljs-regexp,
+html[data-mode="light"] .hljs-symbol,
+html[data-mode="light"] .hljs-addition {
+  color: #0a3069;
+}
+html[data-mode="light"] .hljs-number,
+html[data-mode="light"] .hljs-literal,
+html[data-mode="light"] .hljs-bullet {
+  color: #0550ae;
+}
+html[data-mode="light"] .hljs-title,
+html[data-mode="light"] .hljs-section,
+html[data-mode="light"] .hljs-name,
+html[data-mode="light"] .hljs-selector-id,
+html[data-mode="light"] .hljs-selector-class {
+  color: #8250df;
+}
+html[data-mode="light"] .hljs-attr,
+html[data-mode="light"] .hljs-attribute,
+html[data-mode="light"] .hljs-variable,
+html[data-mode="light"] .hljs-template-variable,
+html[data-mode="light"] .hljs-type {
+  color: #953800;
+}
+html[data-mode="light"] .hljs-built_in,
+html[data-mode="light"] .hljs-builtin-name {
+  color: #8250df;
+}
+html[data-mode="light"] .hljs-meta,
+html[data-mode="light"] .hljs-link {
+  color: #6b7280;
+}
+html[data-mode="light"] .hljs-deletion {
+  color: #b91c1c;
+}
+
+/* Shell command chips (tool-command): darker syntax tokens on light mats. */
+html[data-mode="light"] .tool-command .hljs-string,
+html[data-mode="light"] .tool-command .hljs-regexp,
+html[data-mode="light"] .tool-command .hljs-symbol,
+html[data-mode="light"] .tool-command .shell-string {
+  color: #1a7f4b;
+}
+html[data-mode="light"] .tool-command .hljs-variable,
+html[data-mode="light"] .tool-command .hljs-template-variable,
+html[data-mode="light"] .tool-command .hljs-attr,
+html[data-mode="light"] .tool-command .hljs-number,
+html[data-mode="light"] .tool-command .hljs-literal,
+html[data-mode="light"] .tool-command .shell-param {
+  color: #b3425e;
+}
+html[data-mode="light"] .tool-command .hljs-operator,
+html[data-mode="light"] .tool-command .shell-operator,
+html[data-mode="light"] .tool-command .hljs-meta {
+  color: #0f766e;
+}
+
+/* Markdown images sit on a light mat instead of near-black. */
+html[data-mode="light"] .markdown-body img,
+html[data-mode="light"] .attachment-item img,
+html[data-mode="light"] .attachment-item video {
+  background: #e6e8ec;
+}
+
+/* Mark / highlight: amber wash with ink text. */
+html[data-mode="light"] .markdown-body mark {
+  color: #6e5716;
+  background: rgba(214, 189, 114, 0.35);
+}
+
+/* One-off warm text colors that only work on dark: darken for light. */
+html[data-mode="light"] .composer-retry-banner,
+html[data-mode="light"] .composer-sessions-btn,
+html[data-mode="light"] .composer-retry-text {
+  color: var(--ally-warning-text);
+}
+html[data-mode="light"] .session-time { color: #8a7434; }
+html[data-mode="light"] .git-diff-truncated,
+html[data-mode="light"] .git-diff-chip { color: var(--ally-warning-text); }
+html[data-mode="light"] .markdown-mermaid-action { color: #5d6470; }
+html[data-mode="light"] .markdown-mermaid-action:hover { color: #9a6b16; }
+html[data-mode="light"] .markdown-mermaid-toolbar { background: var(--ally-surface-raised); }
+
+/* KB empty card: warm glass instead of dark gradient. */
+html[data-mode="light"] .kb-empty-card {
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--ally-accent) 7%, #ffffff),
+    rgba(255, 255, 255, 0.9) 70%
+  );
+  box-shadow: var(--ally-glass-shadow);
+}
+
+/* DeepSeek-style glass for Naive UI overlays: modal cards, drawers and every
+   popover surface (n-popover-shared also hosts dropdowns / tooltips / select
+   menus) are painted translucent by the theme overrides in App.vue; the blur
+   here turns them into frosted glass over the gradient canvas. */
+html[data-mode="light"] .n-modal,
+html[data-mode="light"] .n-card,
+html[data-mode="light"] .n-drawer,
+html[data-mode="light"] .n-popover,
+html[data-mode="light"] .n-popover-shared {
+  backdrop-filter: var(--ally-glass-blur);
+  -webkit-backdrop-filter: var(--ally-glass-blur);
+}
+/* The modal mask must stay a flat scrim — blurring it would blur the whole
+   app under every dialog (expensive and muddy). */
+html[data-mode="light"] .n-modal-mask,
+html[data-mode="light"] .n-drawer-mask {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+/* Diff tints: slightly stronger on light so add/del rows still read. */
+html[data-mode="light"] .diff-row.diff-add,
+html[data-mode="light"] .diff-view.split .diff-row.diff-add .diff-side,
+html[data-mode="light"] .diff-view.split .diff-side.diff-add {
+  background: rgba(22, 163, 74, 0.1);
+}
+html[data-mode="light"] .diff-row.diff-del,
+html[data-mode="light"] .diff-view.split .diff-row.diff-del .diff-side,
+html[data-mode="light"] .diff-view.split .diff-side.diff-del {
+  background: rgba(220, 38, 38, 0.09);
+}
+html[data-mode="light"] .diff-add .diff-code { color: #14683c; }
+html[data-mode="light"] .diff-del .diff-code { color: #a33a3a; }
+html[data-mode="light"] .diff-ctx .diff-code { color: #3a3f45; }
+
 body.platform-windows,
 body.platform-win32 {
   --ally-ui-font: Inter;
@@ -254,7 +623,7 @@ body,
 
 body {
   background: var(--ally-surface-content);
-  color: #f5f5f5;
+  color: var(--ally-text-primary);
   font-family: var(--ally-ui-font);
   font-size: 14px;
 }
@@ -485,7 +854,7 @@ code, pre {
 
 /* Idle icons sit on the shared secondary text level: the rail is a locator,
    not content, and Naive UI paints collapsed menu icons with textColor1
-   (#f5f5f5), which out-shines the conversation. The colour is set on the wrap
+   (var(--ally-text-primary)), which out-shines the conversation. The colour is set on the wrap
    element rather than overriding --n-item-icon-color-collapsed, because the
    wrap sits between Naive's coloured __icon box and the <svg>, so it wins by
    inheritance instead of by a specificity fight with the component's own
@@ -500,7 +869,7 @@ code, pre {
 }
 
 .mode-sider .n-menu .n-menu-item-content:hover .mode-sider-icon-wrap {
-  color: #f5f5f5;
+  color: var(--ally-text-primary);
 }
 
 .mode-sider .n-menu .n-menu-item-content--selected .mode-sider-icon-wrap,
@@ -515,7 +884,7 @@ code, pre {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: #7ec97e;
+  background: var(--ally-success);
   box-shadow: 0 0 6px rgba(126, 201, 126, 0.8);
 }
 
@@ -525,7 +894,7 @@ code, pre {
   padding: 18px 14px;
   font-size: 12px;
   line-height: 1.7;
-  color: #7a7a7a;
+  color: var(--ally-text-faint);
   text-align: center;
 }
 
@@ -559,7 +928,7 @@ code, pre {
   margin: 0;
   font-size: 17px;
   font-weight: 600;
-  color: #f2f2f2;
+  color: var(--ally-text-primary);
   line-height: 1.3;
 }
 
@@ -567,7 +936,7 @@ code, pre {
   margin: 4px 0 0;
   font-size: 12.5px;
   line-height: 1.6;
-  color: #9a9a9a;
+  color: var(--ally-text-tertiary);
   max-width: 680px;
   display: -webkit-box;
   -webkit-line-clamp: 2;
@@ -583,9 +952,9 @@ code, pre {
   max-width: 300px;
   padding: 6px 11px;
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--ally-state-hover);
   border: 1px solid var(--ally-border);
-  color: #8f8f8f;
+  color: var(--ally-text-muted);
   font-size: 12px;
 }
 
@@ -613,7 +982,7 @@ code, pre {
 
 .kb-action-bar-hint {
   font-size: 11.5px;
-  color: #7a7a7a;
+  color: var(--ally-text-faint);
 }
 
 /* Knowledge-base welcome: a single plain line under the hero — the avatar,
@@ -624,7 +993,7 @@ code, pre {
 
 .welcome-kb .welcome-greeting {
   margin: 0;
-  color: #8f8f8f;
+  color: var(--ally-text-muted);
   font-size: 13px;
 }
 
@@ -658,14 +1027,14 @@ code, pre {
   font-size: 20px;
   font-weight: 700;
   letter-spacing: 0.5px;
-  color: #f0f0f0;
+  color: var(--ally-text-primary);
   margin-bottom: 12px;
 }
 
 .kb-empty-desc {
   font-size: 13px;
   line-height: 1.75;
-  color: #9a9a9a;
+  color: var(--ally-text-tertiary);
   margin: 0 0 20px;
 }
 
@@ -765,11 +1134,11 @@ code, pre {
   padding: 0;
   border: 0;
   border-radius: 4px;
-  color: #8d8d8d;
+  color: var(--ally-text-muted);
   background: transparent;
   cursor: pointer;
 }
-.workspace-explorer-close-content:hover { color: #f2f2f2; background: rgba(255, 255, 255, 0.07); }
+.workspace-explorer-close-content:hover { color: var(--ally-text-primary); background: var(--ally-hover-strong); }
 .workspace-explorer-close-content svg { width: 13px; height: 13px; }
 
 .workspace-explorer-title {
@@ -778,7 +1147,7 @@ code, pre {
   gap: 6px;
   min-width: 0;
   overflow: hidden;
-  color: #8d8d8d;
+  color: var(--ally-text-muted);
   font-size: 12px;
   font-weight: 600;
 }
@@ -798,12 +1167,12 @@ code, pre {
   height: 22px;
   padding: 0;
   border: 0;
-  color: #8d8d8d;
+  color: var(--ally-text-muted);
   background: transparent;
   cursor: pointer;
 }
 
-.workspace-explorer-icon-btn:hover:not(:disabled) { color: #f2f2f2; background: rgba(255, 255, 255, 0.07); }
+.workspace-explorer-icon-btn:hover:not(:disabled) { color: var(--ally-text-primary); background: var(--ally-hover-strong); }
 .workspace-explorer-icon-btn:disabled { opacity: 0.45; cursor: default; }
 
 .workspace-explorer-header-actions {
@@ -837,7 +1206,7 @@ code, pre {
 .workspace-explorer-help-title { font-weight: 600; margin-bottom: 6px; }
 .workspace-explorer-help-row { display: flex; align-items: baseline; gap: 10px; margin-top: 3px; }
 .workspace-explorer-help-keys { flex: 0 0 auto; min-width: 132px; font-family: var(--ally-mono-font); color: var(--ally-accent-pale); white-space: nowrap; }
-.workspace-explorer-help-desc { flex: 1 1 auto; min-width: 0; color: rgba(255, 255, 255, 0.75); }
+.workspace-explorer-help-desc { flex: 1 1 auto; min-width: 0; color: var(--ally-text-tertiary); }
 .workspace-explorer-tree-view { height: 100%; padding: 0; overflow-x: auto; overflow-y: hidden; }
 .workspace-explorer-node-label {
   overflow: hidden;
@@ -849,26 +1218,26 @@ code, pre {
    than files. The old pairing (amber directories, cool-blue files) put two
    competing hues into a navigation surface — four visually distinct label
    colours with the hidden variants, which pulled attention away from the
-   conversation. The old #c9c9c9 was still the brightest steady text in the
+   conversation. The old var(--ally-text-body) was still the brightest steady text in the
    window besides the conversation itself, and a tree of ~50 folder rows
    amplifies a single step, so the directory/file gap is now one tighter notch
    (secondary / tertiary) that keeps the hierarchy without the glow. */
 .workspace-explorer-node-label.is-directory { color: var(--ally-text-secondary); }
-.workspace-explorer-node-label.is-file { color: #9a9a9a; }
+.workspace-explorer-node-label.is-file { color: var(--ally-text-tertiary); }
 /* 隐藏条目（. 开头）整体压暗，不改变原色相 */
 .workspace-explorer-node-label.is-hidden { opacity: 0.55; }
 /* 符号链接条目的箭头后缀（WalkDir 不跟随链接，仅如实标注） */
-.workspace-explorer-node-label .is-symlink-arrow { margin-left: 2px; color: #8a8a8a; }
+.workspace-explorer-node-label .is-symlink-arrow { margin-left: 2px; color: var(--ally-text-muted); }
 /* 目录超限截断的占位行：灰斜体，无交互语义 */
-.workspace-explorer-node-label.is-placeholder { color: #707070; font-style: italic; }
+.workspace-explorer-node-label.is-placeholder { color: var(--ally-text-faint); font-style: italic; }
 /* hover 保留背景高亮（见 treeThemeOverrides），文字颜色不变 */
-.workspace-explorer-tree-view .n-tree-node--selected .workspace-explorer-node-label { color: #f5f5f5; }
+.workspace-explorer-tree-view .n-tree-node--selected .workspace-explorer-node-label { color: var(--ally-text-primary); }
 .workspace-explorer-empty,
-.workspace-explorer-editor-state { display: flex; align-items: center; justify-content: center; min-height: 100%; padding: 24px; color: #858b98; font-size: 13px; text-align: center; }
+.workspace-explorer-editor-state { display: flex; align-items: center; justify-content: center; min-height: 100%; padding: 24px; color: var(--ally-text-muted); font-size: 13px; text-align: center; }
 .workspace-explorer-editor { display: flex; flex: 1; min-width: 0; min-height: 0; flex-direction: column; background: var(--ally-surface-content); }
-.workspace-explorer-file-title { display: flex; align-items: center; gap: 7px; min-width: 0; flex: 1 1 auto; color: #d4d4d4; font-family: var(--ally-mono-font); font-size: 12px; }
+.workspace-explorer-file-title { display: flex; align-items: center; gap: 7px; min-width: 0; flex: 1 1 auto; color: var(--ally-text-body); font-family: var(--ally-mono-font); font-size: 12px; }
 .workspace-explorer-file-title > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.workspace-explorer-dirty { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 50%; background: #f3b562; }
+.workspace-explorer-dirty { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 50%; background: var(--ally-warning-text); }
 .workspace-explorer-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
 /* 语法错误状态文本：克制的小号红字，超长省略，完整信息看 title */
 .workspace-explorer-syntax-error {
@@ -878,7 +1247,7 @@ code, pre {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: #ef4444;
+  color: var(--ally-danger);
   font-size: 12px;
 }
 .workspace-explorer-actions .n-switch .n-switch__rail { font-size: 11px; }
@@ -890,12 +1259,12 @@ code, pre {
   flex: 0 0 auto;
   padding: 2px 8px;
   border-radius: 10px;
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--ally-state-hover);
   user-select: none;
 }
 .workspace-explorer-preview-toggle-label {
   font-size: 11px;
-  color: #a6adbb;
+  color: var(--ally-text-soft);
   white-space: nowrap;
   line-height: 1;
 }
@@ -903,7 +1272,7 @@ code, pre {
 .workspace-explorer-ace { flex: 1; min-height: 0; width: 100%; }
 .workspace-explorer-ace .ace_gutter-layer { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace !important; }
 .workspace-explorer-ace .ace_fold { display: none !important; }
-.workspace-explorer-ace .ace_gutter-cell { padding-left: 8px !important; color: #969896; }
+.workspace-explorer-ace .ace_gutter-cell { padding-left: 8px !important; color: var(--ally-text-tertiary); }
 
 /* 编辑器滚动条默认隐藏，滚动期间短暂显示，避免占据视觉焦点。 */
 .workspace-explorer-ace .ace_scrollbar {
@@ -911,7 +1280,7 @@ code, pre {
   pointer-events: none;
   transition: opacity 0.16s ease;
   scrollbar-width: thick;
-  scrollbar-color: rgba(255, 255, 255, 0.25) transparent;
+  scrollbar-color: var(--ally-scrollbar-editor) transparent;
 }
 .workspace-explorer-ace:hover .ace_scrollbar,
 .workspace-explorer-ace.is-scrolling .ace_scrollbar {
@@ -926,11 +1295,11 @@ code, pre {
   background: transparent;
 }
 .workspace-explorer-ace .ace_scrollbar::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.25);
+  background: var(--ally-scrollbar-editor);
   border-radius: 6px;
 }
 .workspace-explorer-ace .ace_scrollbar::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.4);
+  background: var(--ally-scrollbar-editor-hover);
 }
 .workspace-explorer-md-preview {
   flex: 1;
@@ -939,7 +1308,7 @@ code, pre {
   padding: 16px 20px;
   font-size: 14px;
   line-height: 1.7;
-  color: #d4d4d4;
+  color: var(--ally-text-body);
   font-family: 'Inter', 'Segoe UI', 'Microsoft YaHei', 'PingFang SC', sans-serif;
 }
 .workspace-explorer-file-info {
@@ -947,7 +1316,7 @@ code, pre {
   min-height: 0;
   overflow: auto;
   padding: 20px 24px;
-  color: #d4d4d4;
+  color: var(--ally-text-body);
   font-family: 'Inter', 'Segoe UI', 'Microsoft YaHei', 'PingFang SC', sans-serif;
 }
 .workspace-explorer-file-info .file-info-row {
@@ -960,7 +1329,7 @@ code, pre {
 }
 .workspace-explorer-file-info .file-info-label {
   flex: 0 0 76px;
-  color: #8a8f98;
+  color: var(--ally-text-soft);
 }
 .workspace-explorer-file-info .file-info-value {
   flex: 1;
@@ -971,7 +1340,7 @@ code, pre {
 }
 .workspace-explorer-file-info .file-info-hint {
   margin-top: 16px;
-  color: #8a8f98;
+  color: var(--ally-text-soft);
   font-size: 12px;
   line-height: 1.6;
 }
@@ -981,7 +1350,7 @@ code, pre {
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  color: #6f7887;
+  color: var(--ally-text-faint);
   margin-bottom: 2px;
   padding-bottom: 4px;
   border-bottom: 1px solid var(--ally-border-subtle);
@@ -1000,19 +1369,19 @@ code, pre {
 .workspace-explorer-md-preview h3,
 .workspace-explorer-md-preview h4,
 .workspace-explorer-md-preview h5,
-.workspace-explorer-md-preview h6 { margin: 16px 0 8px; font-weight: 600; color: #e8e8e8; }
+.workspace-explorer-md-preview h6 { margin: 16px 0 8px; font-weight: 600; color: var(--ally-text-high); }
 .workspace-explorer-md-preview h1 { font-size: 1.6em; border-bottom: 1px solid var(--ally-border); padding-bottom: 6px; }
 .workspace-explorer-md-preview h2 { font-size: 1.4em; border-bottom: 1px solid var(--ally-border); padding-bottom: 4px; }
 .workspace-explorer-md-preview h3 { font-size: 1.2em; }
 .workspace-explorer-md-preview p { margin: 8px 0; }
 .workspace-explorer-md-preview code { padding: 2px 6px; border-radius: 4px; background: var(--ally-state-hover); font-family: var(--ally-mono-font); font-size: 0.9em; }
-.workspace-explorer-md-preview pre { padding: 12px; border-radius: 6px; background: rgba(0,0,0,0.3); overflow-x: auto; margin: 8px 0; }
+.workspace-explorer-md-preview pre { padding: 12px; border-radius: 6px; background: var(--ally-pre-bg); overflow-x: auto; margin: 8px 0; }
 .workspace-explorer-md-preview pre code { padding: 0; background: none; }
 .workspace-explorer-md-preview table { border-collapse: collapse; margin: 8px 0; width: 100%; }
 .workspace-explorer-md-preview th,
 .workspace-explorer-md-preview td { border: 1px solid var(--ally-border); padding: 6px 12px; text-align: left; }
-.workspace-explorer-md-preview th { background: rgba(255,255,255,0.05); font-weight: 600; }
-.workspace-explorer-md-preview blockquote { border-left: 3px solid var(--ally-border-strong); margin: 8px 0; padding: 4px 16px; color: #a0a0a0; }
+.workspace-explorer-md-preview th { background: var(--ally-state-hover); font-weight: 600; }
+.workspace-explorer-md-preview blockquote { border-left: 3px solid var(--ally-border-strong); margin: 8px 0; padding: 4px 16px; color: var(--ally-text-soft); }
 .workspace-explorer-md-preview ul,
 .workspace-explorer-md-preview ol { padding-left: 24px; margin: 8px 0; }
 .workspace-explorer-md-preview a { color: var(--md-link); text-decoration: none; }
@@ -1024,10 +1393,10 @@ code, pre {
   width: min(240px, 100%);
   min-height: 48px;
   border: 1px dashed var(--ally-border-strong);
-  background: rgba(255,255,255,0.035);
+  background: var(--ally-hover-faint);
 }
 .workspace-explorer-md-preview img.workspace-explorer-md-image-error { border-color: rgba(229,154,154,0.45); }
-.workspace-explorer-error { color: #e59a9a; }
+.workspace-explorer-error { color: var(--ally-danger-text); }
 .composer-explorer-btn.active { color: var(--ally-accent-bright); background: color-mix(in srgb, var(--ally-accent) 12%, transparent); }
 .composer-icon-btn:focus, .composer-icon-btn:focus-visible { outline: none; }
 
@@ -1063,7 +1432,7 @@ code, pre {
 .workspace-explorer-image { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 4px; }
 .workspace-explorer-video-body { flex: 1; min-height: 0; overflow: auto; display: flex; align-items: center; justify-content: center; padding: 16px; background: var(--ally-surface-content); }
 .workspace-explorer-video { display: block; width: 100%; max-height: 100%; border-radius: 4px; background: #000; }
-.workspace-explorer-pdf-body { flex: 1; min-height: 0; display: flex; background: #2a2a2a; }
+.workspace-explorer-pdf-body { flex: 1; min-height: 0; display: flex; background: var(--ally-surface-raised); }
 .workspace-explorer-pdf-frame { flex: 1; width: 100%; height: 100%; min-height: 0; border: none; background: #fff; }
 
 /* HTML 预览：iframe 铺满编辑区，自身滚动；白色背景贴合浏览器默认渲染 */
@@ -1077,7 +1446,7 @@ code, pre {
   margin: 4px 0 8px;
   padding: 6px 8px;
   border-left: 2px solid rgba(223, 139, 139, 0.65);
-  color: #c9a0a0;
+  color: var(--ally-danger-text);
   background: rgba(223, 139, 139, 0.07);
   font-size: 12px;
   line-height: 1.4;
@@ -1086,7 +1455,7 @@ code, pre {
 .render-boundary-error button {
   padding: 0;
   border: 0;
-  color: #df8b8b;
+  color: var(--ally-danger-text);
   background: transparent;
   cursor: pointer;
   font-size: 12px;
@@ -1095,7 +1464,7 @@ code, pre {
 .message-body code {
   padding: 2px 5px;
   border-radius: 6px;
-  color: #fafafa;
+  color: var(--ally-text-primary);
   background: transparent;
   border: 1px solid var(--ally-border);
 }
@@ -1114,8 +1483,8 @@ code, pre {
   padding: 12px;
   overflow: auto;
   white-space: pre-wrap;
-  color: #e5e5e5;
-  background: #0c0c0c;
+  color: var(--ally-text-high);
+  background: var(--ally-code-bg);
   border: 1px solid var(--ally-border);
   border-radius: 10px;
 }
@@ -1137,8 +1506,8 @@ code, pre {
   padding: 4px;
   border: 1px solid var(--ally-border-strong);
   border-radius: 6px;
-  background: rgba(30, 30, 30, 0.85);
-  color: #8a8a8a;
+  background: var(--ally-copy-btn-bg);
+  color: var(--ally-text-muted);
   cursor: pointer;
   opacity: 0;
   transition: opacity 0.15s, color 0.15s;
@@ -1149,7 +1518,7 @@ code, pre {
   top: 10px;
   right: 44px;
   z-index: 1;
-  color: #8a8a8a;
+  color: var(--ally-text-muted);
   font-family: var(--ally-mono-font);
   font-size: 11px;
   line-height: 24px;
@@ -1162,7 +1531,7 @@ code, pre {
 }
 
 .code-block-wrapper .code-copy-btn:hover {
-  color: #18a058;
+  color: var(--ally-success-deep);
   border-color: rgba(24, 160, 88, 0.3);
 }
 
@@ -1194,13 +1563,13 @@ code, pre {
 }
 
 .composer .prompt-input {
-  --n-color: rgba(26, 26, 26, 0.5) !important;
-  --n-color-focus: rgba(26, 26, 26, 0.58) !important;
-  --n-color-hover: rgba(26, 26, 26, 0.54) !important;
-  --n-border-hover: 1px solid rgba(212, 212, 212, 0.32) !important;
-  --n-border-focus: 1px solid rgba(212, 212, 212, 0.32) !important;
-  --n-box-shadow-focus: 0 0 0 2px rgba(212, 212, 212, 0.08) !important;
-  background: rgba(26, 26, 26, 0.5) !important;
+  --n-color: var(--ally-composer-glass) !important;
+  --n-color-focus: var(--ally-composer-glass-focus) !important;
+  --n-color-hover: var(--ally-composer-glass-hover) !important;
+  --n-border-hover: 1px solid var(--ally-border-input) !important;
+  --n-border-focus: 1px solid var(--ally-border-input) !important;
+  --n-box-shadow-focus: 0 0 0 2px color-mix(in srgb, var(--ally-border-input) 25%, transparent) !important;
+  background: var(--ally-composer-glass) !important;
   border-radius: 8px;
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
@@ -1231,8 +1600,8 @@ code, pre {
   height: 28px;
   padding: 0 7px;
   border-radius: 6px;
-  color: #d4d4d4;
-  background: rgba(255, 255, 255, 0.055);
+  color: var(--ally-text-body);
+  background: var(--ally-state-hover);
   border: 1px solid var(--ally-border);
   font-size: 12px;
 }
@@ -1253,7 +1622,7 @@ code, pre {
 
 .pending-attachment-size {
   flex-shrink: 0;
-  color: #858585;
+  color: var(--ally-text-muted);
   font-size: 11px;
 }
 
@@ -1264,7 +1633,7 @@ code, pre {
   justify-content: center;
   border: 0;
   background: transparent;
-  color: #8a8a8a;
+  color: var(--ally-text-muted);
   cursor: pointer;
   --wails-draggable: no-drag;
 }
@@ -1284,8 +1653,8 @@ code, pre {
 
 .pending-attachment-remove:hover,
 .composer-icon-btn:hover {
-  color: #f5f5f5;
-  background: rgba(255, 255, 255, 0.08);
+  color: var(--ally-text-primary);
+  background: var(--ally-hover-strong);
 }
 
 .composer-icon-btn {
@@ -1308,7 +1677,7 @@ code, pre {
 }
 
 .composer-new-session-btn {
-  color: #18a058;
+  color: var(--ally-success-deep);
 }
 
 .composer-sessions-btn {
@@ -1319,7 +1688,7 @@ code, pre {
   /* Rests at the same muted grey as the sibling composer icon buttons; the
      old always-on blue fought the accent system and made the active state
      (accent) indistinguishable from the idle one. */
-  color: #8a8a8a;
+  color: var(--ally-text-muted);
   width: 22px;
   height: 22px;
 }
@@ -1338,7 +1707,7 @@ code, pre {
   margin-top: 6px;
   padding-top: 6px;
   font-size: var(--ally-sub-font-size);
-  color: #8a8a8a;
+  color: var(--ally-text-muted);
   overflow: hidden;
   white-space: nowrap;
 }
@@ -1358,7 +1727,7 @@ code, pre {
 }
 
 .composer-info .info-sep {
-  color: #525252;
+  color: var(--ally-text-ghost);
 }
 
 .composer-info .info-effort {
@@ -1367,7 +1736,7 @@ code, pre {
   gap: 4px;
   height: 20px;
   padding: 2px 4px 0;
-  color: #9a9a9a;
+  color: var(--ally-text-tertiary);
   border: 0;
   background: transparent;
   font-family: var(--ally-ui-font);
@@ -1379,7 +1748,7 @@ code, pre {
 }
 
 .composer-info .info-effort:hover {
-  color: #c6c6c6;
+  color: var(--ally-text-body);
 }
 
 .composer-info .info-effort-caret {
@@ -1397,7 +1766,7 @@ code, pre {
   min-height: 18px;
   margin: -2px 0 4px 2px;
   overflow: hidden;
-  color: #8a8a8a;
+  color: var(--ally-text-muted);
   font-size: 11px;
 }
 
@@ -1464,7 +1833,7 @@ code, pre {
   flex: 0 1 auto;
   margin-left: auto;
   overflow: hidden;
-  color: #777;
+  color: var(--ally-text-faint);
   font-size: 11px;
   line-height: 18px;
   letter-spacing: 0.01em;
@@ -1474,7 +1843,7 @@ code, pre {
 
 
 /* The model name is persistent chrome, so it sits on the shared secondary
-   level rather than the #bdbdbd it used to have; hover lifts it like its
+   level rather than the var(--ally-text-body) it used to have; hover lifts it like its
    neighbours do. */
 .composer-info .info-provider,
 .composer-info .info-model {
@@ -1483,12 +1852,12 @@ code, pre {
 }
 
 .composer-info .info-model:hover {
-  color: #f5f5f5;
+  color: var(--ally-text-primary);
 }
 
 /* The composer footer is auxiliary chrome like the mode rail: read once at the
    start of a session, after which only its changes matter. The branch name
-   (#d4d4d4) and the saturated green/orange icon buttons were the
+   (var(--ally-text-body)) and the saturated green/orange icon buttons were the
    highest-contrast pixels in the window after the conversation itself.
    Opacity is used instead of recolouring so each element keeps its own hue —
    the git +/- status colours and the green new-session button stay
@@ -1528,7 +1897,7 @@ code, pre {
   max-width: 100%;
   padding: 1px 0;
   overflow: hidden;
-  color: #737373;
+  color: var(--ally-text-faint);
   text-overflow: ellipsis;
   white-space: nowrap;
   vertical-align: bottom;
@@ -1539,7 +1908,7 @@ code, pre {
 }
 
 .composer-info .info-workspace-btn:hover {
-  color: #d4d4d4;
+  color: var(--ally-text-body);
 }
 
 /* ── Extra roots button + popover ── */
@@ -1555,12 +1924,12 @@ code, pre {
   padding: 0 4px;
   gap: 3px;
   border-radius: 5px;
-  color: #6a6a6a;
+  color: var(--ally-text-faint);
   flex-shrink: 0;
 }
 
 .composer-info .extra-roots-btn:hover {
-  color: #d4d4d4;
+  color: var(--ally-text-body);
 }
 
 .composer-info .extra-roots-btn.has-roots {
@@ -1601,19 +1970,19 @@ code, pre {
 .extra-roots-title {
   font-size: var(--ally-sub-font-size);
   font-weight: 600;
-  color: #e4e4e4;
+  color: var(--ally-text-high);
 }
 
 .extra-roots-hint {
   font-size: 11px;
-  color: #8a8a8a;
+  color: var(--ally-text-muted);
   line-height: 1.4;
 }
 
 .extra-roots-empty {
   padding: 12px 4px;
   font-size: 12px;
-  color: #8a8a8a;
+  color: var(--ally-text-muted);
   text-align: center;
 }
 
@@ -1634,11 +2003,11 @@ code, pre {
   gap: 6px;
   padding: 4px 6px;
   border-radius: 5px;
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--ally-hover-faint);
 }
 
 .extra-roots-item:hover {
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--ally-state-hover);
 }
 
 .extra-roots-path {
@@ -1648,7 +2017,7 @@ code, pre {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 12px;
-  color: #d4d4d4;
+  color: var(--ally-text-body);
   font-family: var(--ally-mono-font, ui-monospace, monospace);
 }
 
@@ -1662,7 +2031,7 @@ code, pre {
   border: 0;
   border-radius: 4px;
   background: transparent;
-  color: #8a8a8a;
+  color: var(--ally-text-muted);
   cursor: pointer;
   --wails-draggable: no-drag;
 }
@@ -1674,8 +2043,8 @@ code, pre {
 }
 
 .extra-roots-remove:hover {
-  color: #f5f5f5;
-  background: rgba(255, 255, 255, 0.1);
+  color: var(--ally-text-primary);
+  background: var(--ally-hover-strong);
 }
 
 .extra-roots-add {
@@ -1697,7 +2066,7 @@ code, pre {
 }
 
 .composer-info .info-context {
-  color: #8a8a8a;
+  color: var(--ally-text-muted);
   flex-shrink: 0;
   margin-left: 12px;
   font-family: var(--ally-ui-font);
@@ -1711,11 +2080,11 @@ code, pre {
 
 .composer-info .context-paren,
 .composer-info .context-max {
-  color: #8a8a8a;
+  color: var(--ally-text-muted);
 }
 
 .composer-info .info-git {
-  color: #d4d4d4;
+  color: var(--ally-text-body);
   display: flex;
   align-items: center;
   gap: 6px;
@@ -1729,7 +2098,7 @@ code, pre {
 }
 
 .composer-info .info-git:hover {
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--ally-state-hover);
 }
 
 .composer-info .scheduled-task-chip {
@@ -1738,10 +2107,10 @@ code, pre {
   gap: 4px;
   height: 20px;
   padding: 1px 7px;
-  color: #a3a3a3;
+  color: var(--ally-text-soft);
   border: 1px solid var(--ally-border);
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.025);
+  background: var(--ally-hover-faint);
   font-size: var(--ally-aux-font-size);
   cursor: pointer;
   flex-shrink: 0;
@@ -1749,7 +2118,7 @@ code, pre {
 }
 
 .composer-info .scheduled-task-chip:hover {
-  color: #e5e5e5;
+  color: var(--ally-text-high);
   border-color: color-mix(in srgb, var(--ally-accent) 38%, transparent);
   background: color-mix(in srgb, var(--ally-accent) 12%, transparent);
 }
@@ -1775,7 +2144,7 @@ code, pre {
 }
 
 .composer-info .export-btn {
-  color: #8a8a8a;
+  color: var(--ally-text-muted);
   cursor: pointer;
   padding: 1px 5px;
   border-radius: 6px;
@@ -1784,8 +2153,8 @@ code, pre {
 }
 
 .composer-info .export-btn:hover {
-  color: #e5e5e5;
-  background: rgba(255, 255, 255, 0.06);
+  color: var(--ally-text-high);
+  background: var(--ally-state-hover);
 }
 
 .git-stat {
@@ -1793,23 +2162,23 @@ code, pre {
 }
 
 .git-stat.ahead {
-  color: #4ea1ff;
+  color: var(--ally-info);
 }
 
 .git-stat.behind {
-  color: #f59e0b;
+  color: var(--ally-warning);
 }
 
 .git-stat.added {
-  color: #4ec87e;
+  color: var(--ally-success-text);
 }
 
 .git-stat.modified {
-  color: #f59e0b;
+  color: var(--ally-warning);
 }
 
 .git-stat.deleted {
-  color: #e85454;
+  color: var(--ally-danger-mid);
 }
 
 /* ── Git diff modal ── */
@@ -1842,18 +2211,18 @@ code, pre {
   align-items: center;
   gap: 8px;
   min-width: 0;
-  color: #a3a3a3;
+  color: var(--ally-text-soft);
   font-size: var(--ally-sub-font-size);
 }
 
 .git-diff-branch {
-  color: #e5e5e5;
+  color: var(--ally-text-high);
   font-weight: 600;
 }
 
 .git-diff-truncated,
 .git-diff-chip {
-  color: #d6bd72;
+  color: var(--ally-warning-text);
   font-size: 12px;
 }
 
@@ -1861,15 +2230,15 @@ code, pre {
 .git-diff-empty,
 .git-diff-error {
   padding: 12px;
-  color: #a3a3a3;
-  background: rgba(255, 255, 255, 0.035);
+  color: var(--ally-text-soft);
+  background: var(--ally-hover-faint);
   border: 1px solid var(--ally-border);
   border-radius: 8px;
   font-size: var(--ally-sub-font-size);
 }
 
 .git-diff-error {
-  color: #df8b8b;
+  color: var(--ally-danger-text);
   background: rgba(223, 139, 139, 0.08);
   border-color: rgba(223, 139, 139, 0.16);
 }
@@ -1904,7 +2273,7 @@ code, pre {
   min-height: 26px;
   padding: 3px 8px 3px calc(8px + var(--git-depth) * 14px);
   border: 0;
-  color: #bdbdbd;
+  color: var(--ally-text-body);
   background: transparent;
   cursor: pointer;
   text-align: left;
@@ -1913,32 +2282,32 @@ code, pre {
 
 .git-diff-tree-row:hover,
 .git-diff-tree-row.active {
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--ally-state-hover);
 }
 
 .git-diff-tree-row.dir {
-  color: #8a8a8a;
+  color: var(--ally-text-muted);
 }
 
 .git-diff-disclosure,
 .git-diff-dir-icon,
 .git-diff-status {
-  color: #737373;
+  color: var(--ally-text-faint);
   font-size: 11px;
   font-family: var(--ally-mono-font);
 }
 
 .git-diff-status.modified {
-  color: #d6bd72;
+  color: var(--ally-warning-text);
 }
 
 .git-diff-status.added,
 .git-diff-status.untracked {
-  color: #8fd4b4;
+  color: var(--ally-success-pale);
 }
 
 .git-diff-status.deleted {
-  color: #df8b8b;
+  color: var(--ally-danger-text);
 }
 
 .git-diff-status.renamed,
@@ -1948,7 +2317,7 @@ code, pre {
 
 .git-diff-tree-name {
   overflow: hidden;
-  color: #e5e5e5;
+  color: var(--ally-text-high);
   text-overflow: ellipsis;
   white-space: nowrap;
   font-family: var(--ally-mono-font);
@@ -1956,7 +2325,7 @@ code, pre {
 }
 
 .git-diff-tree-row.dir .git-diff-tree-name {
-  color: #9ca3af;
+  color: var(--ally-text-tertiary);
 }
 
 .git-diff-preview {
@@ -1977,7 +2346,7 @@ code, pre {
 
 .git-diff-preview-path {
   overflow: hidden;
-  color: #e5e5e5;
+  color: var(--ally-text-high);
   text-overflow: ellipsis;
   white-space: nowrap;
   font-family: var(--ally-mono-font);
@@ -1987,8 +2356,8 @@ code, pre {
 .git-diff-placeholder {
   margin: 0;
   padding: 10px;
-  color: #a3a3a3;
-  background: #151817;
+  color: var(--ally-text-soft);
+  background: var(--ally-surface-deep);
   font-family: var(--ally-mono-font);
   font-size: 12px;
   line-height: 1.6;
@@ -2001,7 +2370,7 @@ code, pre {
   min-width: 220px;
   font-size: var(--ally-aux-font-size);
   line-height: 1.8;
-  color: #a3a3a3;
+  color: var(--ally-text-soft);
   padding: 4px;
 }
 
@@ -2018,14 +2387,14 @@ code, pre {
 
 .context-breakdown-subrow {
   padding-left: 12px;
-  color: #737373;
+  color: var(--ally-text-faint);
 }
 
 .context-breakdown-total {
   margin-top: 4px;
   padding-top: 4px;
   border-top: 1px solid var(--ally-border);
-  color: #d4d4d4;
+  color: var(--ally-text-body);
 }
 
 .context-breakdown-footer {
@@ -2040,7 +2409,7 @@ code, pre {
   background: transparent;
   border: 1px solid var(--ally-border-strong);
   border-radius: 6px;
-  color: #a3a3a3;
+  color: var(--ally-text-soft);
   font-size: 12px;
   line-height: 1.6;
   padding: 2px 14px;
@@ -2049,8 +2418,8 @@ code, pre {
 }
 
 .context-compact-btn:hover:not(:disabled) {
-  color: #ffffff;
-  border-color: rgba(255, 255, 255, 0.4);
+  color: var(--ally-text-primary);
+  border-color: var(--ally-border-input);
 }
 
 .context-compact-btn:disabled {
@@ -2076,7 +2445,7 @@ code, pre {
   min-width: 0;
   flex: 1;
   overflow: hidden;
-  color: #c8c8c8;
+  color: var(--ally-text-body);
   font-size: var(--ally-aux-font-size);
   font-weight: 600;
   text-overflow: ellipsis;
@@ -2087,8 +2456,8 @@ code, pre {
   min-width: 20px;
   padding: 0 5px;
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.06);
-  color: #737373;
+  background: var(--ally-state-hover);
+  color: var(--ally-text-faint);
   font-size: 10px;
   line-height: 16px;
   text-align: center;
@@ -2112,7 +2481,7 @@ code, pre {
   min-width: 0;
   flex: 1;
   overflow: hidden;
-  color: #d4d4d4;
+  color: var(--ally-text-body);
   font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2125,12 +2494,12 @@ code, pre {
 }
 
 .model-menu .model-menu-empty {
-  color: #737373;
+  color: var(--ally-text-faint);
   font-size: var(--ally-aux-font-size);
 }
 
 .model-menu .model-menu-manage {
-  color: #a0a0a0;
+  color: var(--ally-text-soft);
   font-size: var(--ally-aux-font-size);
   font-weight: 500;
 }
@@ -2142,11 +2511,11 @@ code, pre {
 }
 
 .hist-name {
-  color: #d4d4d4;
+  color: var(--ally-text-body);
 }
 
 .hist-path {
-  color: #6b6b6b;
+  color: var(--ally-text-ghost);
   font-size: 11px;
 }
 
@@ -2161,7 +2530,7 @@ code, pre {
   border-radius: 4px;
   font-size: 14px;
   line-height: 1;
-  color: #a8a8a8;
+  color: var(--ally-text-soft);
   cursor: pointer;
   transition: background 0.1s, color 0.1s;
 }
@@ -2170,8 +2539,8 @@ code, pre {
   height: 14px;
 }
 .hist-del:hover {
-  background: rgba(255, 255, 255, 0.12);
-  color: #f5f5f5;
+  background: var(--ally-hover-strong);
+  color: var(--ally-text-primary);
 }
 
 .sessions-menu {
@@ -2186,19 +2555,19 @@ code, pre {
      and the raised surface read as a bright card against the dark theme. */
   background: var(--ally-surface-panel);
   border: 1px solid var(--ally-border-strong);
-  box-shadow: 0 22px 60px rgba(0, 0, 0, 0.55);
+  box-shadow: var(--ally-overlay-shadow);
 }
 
 .sessions-menu .command-scroll {
   max-height: 360px;
   overflow-y: auto;
   scrollbar-width: thin;
-  scrollbar-color: #404040 transparent;
+  scrollbar-color: var(--ally-scrollbar) transparent;
 }
 
 .sessions-menu .command-title {
   padding: 9px 12px;
-  color: #737373;
+  color: var(--ally-text-faint);
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.12em;
@@ -2213,7 +2582,7 @@ code, pre {
   width: 100%;
   min-height: 42px;
   padding: 7px 12px;
-  color: #d4d4d4;
+  color: var(--ally-text-body);
   text-align: left;
   border: 0;
   background: transparent;
@@ -2230,7 +2599,7 @@ code, pre {
 }
 
 .session-index {
-  color: #68716e;
+  color: var(--ally-text-faint);
   font-size: 12px;
   text-align: center;
   font-family: var(--ally-mono-font);
@@ -2239,7 +2608,7 @@ code, pre {
 .session-label {
   flex: 1 1 auto;
   min-width: 0;
-  color: #aeb7b3;
+  color: var(--ally-text-soft);
   font-size: 13px;
   font-weight: 500;
   overflow: hidden;
@@ -2251,7 +2620,7 @@ code, pre {
 .session-prompt-summary {
   display: block;
   margin-top: 2px;
-  color: #a1a1a1;
+  color: var(--ally-text-soft);
   font-size: 11px;
   line-height: 1.35;
   overflow: hidden;
@@ -2285,7 +2654,7 @@ code, pre {
 .session-meta {
   padding-left: 10px;
   border-left: 1px solid var(--ally-border);
-  color: #7d8985;
+  color: var(--ally-text-faint);
   font-size: 11px;
   font-weight: 450;
   white-space: nowrap;
@@ -2302,7 +2671,7 @@ code, pre {
 }
 
 .session-running {
-  color: #4ade80;
+  color: var(--ally-success);
   font-size: 14px;
 }
 
@@ -2316,7 +2685,7 @@ code, pre {
   border: 0;
   border-radius: 6px;
   background: transparent;
-  color: #737373;
+  color: var(--ally-text-faint);
   cursor: pointer;
   opacity: 0;
   --wails-draggable: no-drag;
@@ -2333,12 +2702,12 @@ code, pre {
 }
 
 .session-delete:hover {
-  color: #f4a4a4;
+  color: var(--ally-danger-pale);
   background: rgba(244, 164, 164, 0.12);
 }
 
 .session-delete:disabled {
-  color: #4a4a4a;
+  color: var(--ally-text-ghost);
   cursor: not-allowed;
   opacity: 0.35;
   background: transparent;
@@ -2347,7 +2716,7 @@ code, pre {
 .n-card-header,
 .n-card__footer,
 .n-card__content {
-  color: #f5f5f5;
+  color: var(--ally-text-primary);
 }
 
 .n-list {
@@ -2355,14 +2724,14 @@ code, pre {
 }
 
 .n-list-item {
-  color: #d4d4d4;
+  color: var(--ally-text-body);
   border-radius: 10px;
 }
 
 .n-timeline .n-timeline-item-content__content {
   white-space: pre-wrap;
   word-break: break-word;
-  color: #a3a3a3;
+  color: var(--ally-text-soft);
   font-size: var(--ally-aux-font-size);
 }
 
@@ -2378,7 +2747,7 @@ code, pre {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #3a3a3a;
+  background: var(--ally-scrollbar);
   border-radius: 999px;
 }
 
@@ -2400,7 +2769,7 @@ code, pre {
   background: transparent !important;
   border: none !important;
   padding: 0 !important;
-  color: #d4d4d4 !important;
+  color: var(--ally-text-body) !important;
   font-family: var(--ally-mono-font) !important;
   font-size: var(--ally-sub-font-size);
   letter-spacing: 0;
@@ -2412,7 +2781,7 @@ code, pre {
   --md-faint: #66716e;
   --md-white: #edf2ef;
   --md-border: rgba(215, 222, 220, 0.12);
-  --md-surface: rgba(255, 255, 255, 0.035);
+  --md-surface: var(--ally-hover-faint);
   /* Per-element markdown colors (--md-h1, --md-strong, --md-code, ...) are
      defined per-theme in :root / [data-theme] blocks above, so each theme
      ships a coherent same-family palette. */
@@ -2535,7 +2904,7 @@ code, pre {
   margin: 0.7em 0;
   border-radius: 6px;
   object-fit: contain;
-  background: #0b0b0b;
+  background: var(--ally-surface-deep);
 }
 
 .markdown-body .markdown-mermaid {
@@ -2565,7 +2934,7 @@ code, pre {
   padding: 4px;
   border: 1px solid rgba(204, 120, 50, 0.18);
   border-radius: 8px;
-  background: #323232;
+  background: var(--ally-surface-raised);
 }
 
 .markdown-body .markdown-mermaid-action {
@@ -2578,7 +2947,7 @@ code, pre {
   color: #a9b7c6;
   border: 1px solid rgba(169, 183, 198, 0.16);
   border-radius: 6px;
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--ally-hover-faint);
   cursor: pointer;
 }
 
@@ -2656,7 +3025,7 @@ code, pre {
 
 .markdown-body .markdown-mermaid-error {
   margin-bottom: 10px;
-  color: #f2b8b8;
+  color: var(--ally-danger-pale);
   font-size: 12px;
   line-height: 1.5;
 }
@@ -2705,7 +3074,7 @@ code, pre {
 
 .workspace-explorer-md-preview .markdown-mermaid-error {
   margin-bottom: 10px;
-  color: #f2b8b8;
+  color: var(--ally-danger-pale);
   font-size: 12px;
   line-height: 1.5;
 }
@@ -2737,17 +3106,17 @@ code, pre {
 }
 
 .markdown-body th {
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--ally-state-hover);
   font-weight: 600;
 }
 
 .markdown-body td {
   color: var(--md-text);
-  background: rgba(255, 255, 255, 0.012);
+  background: var(--ally-hover-faint);
 }
 
 .markdown-body tr:nth-child(even) td {
-  background: rgba(255, 255, 255, 0.025);
+  background: var(--ally-hover-faint);
 }
 
 .markdown-body pre {
@@ -2888,13 +3257,13 @@ code, pre {
 }
 
 .welcome-build-version {
-  color: #737373;
+  color: var(--ally-text-faint);
 }
 
 .welcome-info-table {
   width: 100%;
   border-collapse: collapse;
-  color: #d4d4d4;
+  color: var(--ally-text-body);
   font-size: var(--ally-sub-font-size);
 }
 
@@ -2907,23 +3276,23 @@ code, pre {
 
 .welcome-info-table th {
   width: 64px;
-  color: #fafafa;
+  color: var(--ally-text-primary);
   font-weight: 600;
 }
 
 .welcome-info-table td {
-  color: #c7c7c7;
+  color: var(--ally-text-body);
   overflow-wrap: anywhere;
 }
 
 .welcome-info-table .welcome-info-empty {
   color: transparent;
-  background: rgba(255, 255, 255, 0.01);
+  background: var(--ally-hover-faint);
 }
 
 .welcome-greeting {
   margin-top: 16px;
-  color: #e5e5e5;
+  color: var(--ally-text-high);
   font-size: var(--ally-message-font-size, 15.5px);
   line-height: 1.75;
 }
@@ -2948,7 +3317,7 @@ code, pre {
   overflow: hidden;
   border: 1px solid var(--ally-border);
   border-radius: 6px;
-  background: rgba(255, 255, 255, 0.035);
+  background: var(--ally-hover-faint);
 }
 
 .attachment-item img,
@@ -2957,7 +3326,7 @@ code, pre {
   width: 100%;
   max-height: 220px;
   object-fit: contain;
-  background: #0b0b0b;
+  background: var(--ally-surface-deep);
 }
 
 .attachment-item audio {
@@ -2971,10 +3340,10 @@ code, pre {
   align-items: center;
   justify-content: center;
   height: 92px;
-  color: #cfcfcf;
+  color: var(--ally-text-body);
   font-size: 12px;
   letter-spacing: 0;
-  background: #111;
+  background: var(--ally-surface-deep);
 }
 
 .attachment-meta {
@@ -2991,12 +3360,12 @@ code, pre {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: #e5e5e5;
+  color: var(--ally-text-high);
 }
 
 .attachment-size {
   flex-shrink: 0;
-  color: #8d8d8d;
+  color: var(--ally-text-muted);
 }
 
 .attachment-text-preview {
@@ -3004,8 +3373,8 @@ code, pre {
   margin: 0;
   padding: 8px;
   overflow: auto;
-  color: #cfcfcf;
-  background: rgba(0, 0, 0, 0.22);
+  color: var(--ally-text-body);
+  background: var(--ally-pre-bg);
   border-top: 1px solid var(--ally-border);
   font-family: var(--ally-mono-font);
   font-size: 11px;
@@ -3067,7 +3436,7 @@ code, pre {
 }
 
 .tool-line.clickable:hover {
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--ally-hover-faint);
 }
 
 
@@ -3092,7 +3461,7 @@ code, pre {
 /* Secondary count label (e.g. "1 file" after the Read verb) — reads as muted
    text, not a blue tool name. */
 .tool-count {
-  color: #a3a3a3;
+  color: var(--ally-text-soft);
   font-size: var(--ally-tool-font-size);
   flex-shrink: 0;
 }
@@ -3100,20 +3469,20 @@ code, pre {
 .rich-tool-card.delete .tool-name,
 .rich-tool-card.delete .tool-verb,
 .rich-tool-card.delete .tool-arg {
-  color: #ef4444;
+  color: var(--ally-danger);
 }
 
 .rich-tool-card.wait .tool-name {
-  color: #f59e0b;
+  color: var(--ally-warning);
 }
 
 .wait-countdown {
-  color: #a3a3a3;
+  color: var(--ally-text-soft);
 }
 
 .tool-arg {
   overflow: hidden;
-  color: #737373;
+  color: var(--ally-text-faint);
   font-size: var(--ally-tool-font-size);
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3125,11 +3494,11 @@ code, pre {
    title inside the card; the "Next up" verb keeps its default color.
    Other tools keep their own colors untouched. */
 .plan-next-step {
-  color: #9fc3ec;
+  color: var(--ally-info-soft);
 }
 
 .rich-tool-card.delete .tool-arg {
-  color: #e5e5e5;
+  color: var(--ally-text-high);
 }
 
 .tool-command {
@@ -3137,7 +3506,7 @@ code, pre {
   align-items: baseline;
   min-width: 0;
   overflow: hidden;
-  color: #8b949e;
+  color: var(--ally-text-muted);
   font-size: var(--ally-code-font-size);
   flex-shrink: 1;
 }
@@ -3148,7 +3517,7 @@ code, pre {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: #d4d4d4;
+  color: var(--ally-text-body);
   font-family: var(--ally-mono-font);
   font-size: var(--ally-code-font-size);
   line-height: 1.25;
@@ -3156,12 +3525,12 @@ code, pre {
 
 .tool-command-paren {
   flex-shrink: 0;
-  color: #6b7280;
+  color: var(--ally-text-faint);
 }
 
 .tool-command .hljs-comment,
 .tool-command .hljs-quote {
-  color: #7d8590;
+  color: var(--ally-text-faint);
   font-style: italic;
 }
 
@@ -3213,12 +3582,12 @@ code, pre {
 }
 
 .tool-command .shell-comment {
-  color: #7d8590;
+  color: var(--ally-text-faint);
   font-style: italic;
 }
 
 .tool-chip {
-  color: #737373;
+  color: var(--ally-text-faint);
   font-size: var(--ally-sub-font-size);
   flex-shrink: 0;
   white-space: nowrap;
@@ -3227,15 +3596,15 @@ code, pre {
 .rich-tool-card.create .tool-arg,
 .rich-tool-card.edit .tool-arg,
 .rich-tool-card.command .tool-arg {
-  color: #e5e5e5;
+  color: var(--ally-text-high);
 }
 
 .rich-tool-card.read .tool-arg {
-  color: #a8a8a8;
+  color: var(--ally-text-soft);
 }
 
 .rich-tool-card.skill .tool-arg {
-  color: #a8a8a8;
+  color: var(--ally-text-soft);
 }
 
 .edit-change-chip {
@@ -3245,28 +3614,28 @@ code, pre {
 }
 
 .tool-chip-dot {
-  color: #737373;
+  color: var(--ally-text-faint);
 }
 
 .edit-chip-added {
-  color: #4ec87e;
+  color: var(--ally-success-text);
   font-weight: 700;
 }
 
 .edit-chip-removed {
-  color: #e85454;
+  color: var(--ally-danger-mid);
   font-weight: 700;
 }
 
 .tool-line time {
-  color: #5a5a5a;
+  color: var(--ally-text-ghost);
   font-size: var(--ally-sub-font-size);
   flex-shrink: 0;
   margin-left: auto;
 }
 
 .tool-duration {
-  color: #5a5a5a;
+  color: var(--ally-text-ghost);
   font-size: var(--ally-sub-font-size);
   flex-shrink: 0;
   margin-left: 4px;
@@ -3277,7 +3646,7 @@ code, pre {
   padding: 2px 8px 4px 0;
   white-space: pre-wrap;
   word-break: break-word;
-  color: #bdbdbd;
+  color: var(--ally-text-body);
   background: transparent;
   font-family: var(--ally-ui-font);
   font-size: var(--ally-code-font-size);
@@ -3287,21 +3656,21 @@ code, pre {
 }
 
 .rich-tool-card.error .tool-body {
-  color: #fecaca;
+  color: var(--ally-danger-pale);
 }
 
 .tool-error-detail {
   display: flex;
   align-items: center;
   gap: 8px;
-  color: #fca5a5;
+  color: var(--ally-danger-pale);
   font-size: var(--ally-sub-font-size);
   padding: 2px 8px 2px 0;
   line-height: 1.4;
 }
 
 .tool-error-detail code {
-  color: #f8b4b4;
+  color: var(--ally-danger-pale);
   font-family: var(--ally-mono-font);
   font-size: 11px;
   opacity: 0.72;
@@ -3310,7 +3679,7 @@ code, pre {
 .tool-error-reason {
   margin: 0;
   padding: 2px 8px 5px 0;
-  color: #fecaca;
+  color: var(--ally-danger-pale);
   background: transparent;
   font-family: var(--ally-ui-font);
   font-size: var(--ally-aux-font-size);
@@ -3332,14 +3701,14 @@ code, pre {
 }
 
 .rich-tool-card.command .tool-body {
-  color: #8a8a8a;
+  color: var(--ally-text-muted);
   max-height: calc(1.5em * 4 + 6px);
   overflow-y: hidden;
 }
 
 .rich-tool-card.grep .tool-body,
 .rich-tool-card.calculate .tool-body {
-  color: #8a8a8a;
+  color: var(--ally-text-muted);
 }
 
 .tool-body.body-preview {
@@ -3372,13 +3741,13 @@ code, pre {
 }
 
 .read-group-tree {
-  color: #5a5a5a;
+  color: var(--ally-text-ghost);
   font-family: var(--ally-ui-font);
   flex-shrink: 0;
 }
 
 .read-group-path {
-  color: #a8a8a8;
+  color: var(--ally-text-soft);
   font-family: var(--ally-ui-font);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3386,13 +3755,13 @@ code, pre {
 }
 
 .read-group-chip {
-  color: #737373;
+  color: var(--ally-text-faint);
   flex-shrink: 0;
 }
 
 .read-group-entry.error .read-group-path,
 .read-group-entry.error .read-group-chip {
-  color: #fecaca;
+  color: var(--ally-danger-pale);
 }
 
 /* ── Read + grep folded group（已读取 N 次 · 搜索 M 次）── */
@@ -3408,7 +3777,7 @@ code, pre {
 }
 
 .read-grep-toggle:hover {
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--ally-state-hover);
 }
 
 /* 折叠指示（RightOutlined SVG，与文件树展开箭头同款）：紧跟文字，不靠最右；
@@ -3418,7 +3787,7 @@ code, pre {
   align-items: center;
   flex-shrink: 0;
   margin-left: 4px;
-  color: #737373;
+  color: var(--ally-text-faint);
   font-size: 12px;
   transition: transform 0.15s ease;
 }
@@ -3438,18 +3807,18 @@ code, pre {
 }
 
 .read-grep-stats {
-  color: #a8a8a8;
+  color: var(--ally-text-soft);
   font-weight: 400;
 }
 
 /* 有子调用失败：统计文字转红提示（折叠行无状态图标，红色文字兜底） */
 .read-grep-group.error .read-grep-stats {
-  color: #fecaca;
+  color: var(--ally-danger-pale);
 }
 
 /* running 时统计文字带 shimmer 流光（与 Thinking 同款动画） */
 .read-grep-stats-thinking {
-  background: linear-gradient(90deg, #777 25%, #e0e0e0 50%, #777 75%);
+  background: linear-gradient(90deg, var(--ally-text-faint) 25%, var(--ally-text-high) 50%, var(--ally-text-faint) 75%);
   background-size: 200% 100%;
   background-clip: text;
   -webkit-background-clip: text;
@@ -3485,21 +3854,21 @@ code, pre {
 }
 
 .diff-header.clickable:hover {
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--ally-hover-faint);
 }
 
 .diff-stat-added {
-  color: #4ec87e;
+  color: var(--ally-success-text);
   font-weight: 700;
 }
 
 .diff-stat-removed {
-  color: #e85454;
+  color: var(--ally-danger-mid);
   font-weight: 700;
 }
 
 .diff-header-path {
-  color: #d4d4d4;
+  color: var(--ally-text-body);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3513,8 +3882,8 @@ code, pre {
 .diff-raw-fallback {
   margin: 0;
   padding: 8px 10px;
-  color: #d8d2c8;
-  background: rgba(255, 255, 255, 0.02);
+  color: var(--ally-text-body);
+  background: var(--ally-hover-faint);
   white-space: pre-wrap;
   word-break: break-word;
   font-family: var(--ally-mono-font);
@@ -3585,7 +3954,7 @@ code, pre {
 }
 
 .diff-view.split .diff-side.diff-empty {
-  background: rgba(255, 255, 255, 0.025);
+  background: var(--ally-hover-faint);
 }
 
 .diff-gutter {
@@ -3593,7 +3962,7 @@ code, pre {
   min-width: 32px;
   text-align: right;
   padding-right: 8px;
-  color: #6b6b6b;
+  color: var(--ally-text-ghost);
   user-select: none;
   flex-shrink: 0;
 }
@@ -3607,11 +3976,11 @@ code, pre {
 }
 
 .diff-add .diff-marker {
-  color: #4ec87e;
+  color: var(--ally-success-text);
 }
 
 .diff-del .diff-marker {
-  color: #e85454;
+  color: var(--ally-danger-mid);
 }
 
 .diff-code {
@@ -3624,7 +3993,7 @@ code, pre {
 }
 
 .diff-add .diff-code {
-  color: #b7e7c9;
+  color: var(--ally-success-pale);
 }
 
 .diff-del .diff-code {
@@ -3632,17 +4001,17 @@ code, pre {
 }
 
 .diff-ctx .diff-code {
-  color: #bdbdbd;
+  color: var(--ally-text-body);
 }
 
 .diff-separator {
-  color: #6b6b6b;
+  color: var(--ally-text-ghost);
   font-style: italic;
 }
 
 .diff-expand-hint {
   padding: 4px 10px;
-  color: #6b6b6b;
+  color: var(--ally-text-ghost);
   font-style: italic;
   cursor: pointer;
   text-align: center;
@@ -3651,8 +4020,8 @@ code, pre {
 }
 
 .diff-expand-hint:hover {
-  color: #a3a3a3;
-  background: rgba(255, 255, 255, 0.03);
+  color: var(--ally-text-soft);
+  background: var(--ally-hover-faint);
 }
 
 .edit-warning-list {
@@ -3665,7 +4034,7 @@ code, pre {
 .edit-warning {
   padding: 7px 9px;
   border-radius: 6px;
-  color: #facc15;
+  color: var(--ally-warning-bright);
   background: rgba(250, 204, 21, 0.08);
   border: 1px solid rgba(250, 204, 21, 0.18);
   font-size: var(--ally-aux-font-size);
@@ -3681,7 +4050,7 @@ code, pre {
   max-height: 180px;
   overflow: auto;
   border-radius: 6px;
-  color: #a7f3d0;
+  color: var(--ally-success-pale);
   background: rgba(16, 185, 129, 0.07);
   border: 1px solid rgba(16, 185, 129, 0.16);
   font-family: var(--ally-mono-font);
@@ -3719,7 +4088,7 @@ code, pre {
   min-width: 44px;
   text-align: right;
   padding-right: 8px;
-  color: #6b6b6b;
+  color: var(--ally-text-ghost);
   user-select: none;
   flex-shrink: 0;
 }
@@ -3730,7 +4099,7 @@ code, pre {
   word-break: break-all;
   flex: 1;
   min-width: 0;
-  color: #a8a8a8;
+  color: var(--ally-text-soft);
 }
 
 
@@ -3770,7 +4139,7 @@ code, pre {
   align-items: center;
   gap: 8px;
   line-height: 1.4;
-  color: #a9a9a9;
+  color: var(--ally-text-soft);
   font-size: 14px;
   cursor: default;
   border-radius: 4px;
@@ -3789,19 +4158,19 @@ code, pre {
 }
 
 .reasoning-tokens {
-  color: #777;
+  color: var(--ally-text-faint);
   font-variant-numeric: tabular-nums;
   font-size: var(--ally-sub-font-size);
 }
 
 .reasoning-title {
-  color: #777;
+  color: var(--ally-text-faint);
   font-weight: 500;
 }
 
 /* 思考中：灰色文字 + 从左到右的 shimmer 擦亮动画（无缝循环） */
 .reasoning-title-thinking {
-  background: linear-gradient(90deg, #777 25%, #e0e0e0 50%, #777 75%);
+  background: linear-gradient(90deg, var(--ally-text-faint) 25%, var(--ally-text-high) 50%, var(--ally-text-faint) 75%);
   background-size: 200% 100%;
   background-clip: text;
   -webkit-background-clip: text;
@@ -3821,8 +4190,8 @@ code, pre {
   padding: 6px 10px;
   white-space: pre-wrap;
   word-break: break-word;
-  color: #9a9a9a;
-  background: rgba(255, 255, 255, 0.03);
+  color: var(--ally-text-tertiary);
+  background: var(--ally-hover-faint);
   font-family: var(--ally-ui-font);
   font-size: var(--ally-sub-font-size);
   line-height: 1.5;
@@ -3840,7 +4209,7 @@ code, pre {
 
 .plan-panel {
   border-top: 1px solid var(--ally-border);
-  background: rgba(26, 26, 26, 0.62);
+  background: var(--ally-panel-glass);
   max-height: 160px;
   overflow: hidden;
   display: flex;
@@ -3878,7 +4247,7 @@ code, pre {
   padding: 4px 14px;
   border: none;
   font-size: 11px;
-  color: #737373;
+  color: var(--ally-text-faint);
   text-transform: uppercase;
   letter-spacing: 0.08em;
   background: transparent;
@@ -3889,13 +4258,13 @@ code, pre {
 }
 
 .plan-panel-header:hover {
-  color: #d4d4d4;
-  background: rgba(255, 255, 255, 0.03);
+  color: var(--ally-text-body);
+  background: var(--ally-hover-faint);
 }
 
 .plan-panel-count {
   margin-left: 0;
-  color: #8a8a8a;
+  color: var(--ally-text-muted);
   font-variant-numeric: tabular-nums;
 }
 
@@ -3905,7 +4274,7 @@ code, pre {
   height: 12px;
   position: relative;
   margin-left: auto;
-  color: #9ca3af;
+  color: var(--ally-text-tertiary);
   line-height: 1;
 }
 
@@ -3946,7 +4315,7 @@ code, pre {
   min-width: 22px;
   text-align: right;
   margin-right: 2px;
-  color: #737373;
+  color: var(--ally-text-faint);
   font-size: var(--ally-aux-font-size);
   font-variant-numeric: tabular-nums;
 }
@@ -3959,7 +4328,7 @@ code, pre {
 }
 
 .plan-item.pending .plan-status {
-  color: #525252;
+  color: var(--ally-text-ghost);
 }
 
 .plan-item.in_progress .plan-status {
@@ -3971,17 +4340,17 @@ code, pre {
 }
 
 .plan-item.done .plan-status {
-  color: #9ca3af;
+  color: var(--ally-text-tertiary);
 }
 
 .plan-item.done .plan-title {
   text-decoration: line-through;
-  text-decoration-color: #737373;
-  color: #a3a3a3;
+  text-decoration-color: var(--ally-text-faint);
+  color: var(--ally-text-soft);
 }
 
 .plan-title {
-  color: #d4d4d4;
+  color: var(--ally-text-body);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -4013,7 +4382,7 @@ code, pre {
   align-items: center;
   justify-content: center;
   opacity: 0;
-  color: #a3a3a3;
+  color: var(--ally-text-soft);
   font-style: normal;
   animation: braille-frame-anim 0.8s steps(1, end) infinite;
   animation-delay: var(--braille-delay);
@@ -4046,13 +4415,13 @@ code, pre {
 .update-progress-bar {
   width: 100%;
   height: 8px;
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--ally-hover-strong);
   border-radius: 4px;
   overflow: hidden;
 }
 .update-progress-fill {
   height: 100%;
-  background: linear-gradient(90deg, #67d99b, #4ade80);
+  background: linear-gradient(90deg, var(--ally-success-deep), var(--ally-success));
   border-radius: 4px;
   transition: width 0.25s ease;
 }
@@ -4108,7 +4477,7 @@ code, pre {
   border: none;
   padding: 0;
   font-size: 12px;
-  color: #67d99b;
+  color: var(--ally-success-deep);
   cursor: pointer;
   text-decoration: underline;
   overflow: hidden;
@@ -4116,13 +4485,13 @@ code, pre {
   white-space: nowrap;
 }
 .update-github-link:hover {
-  color: #4ade80;
+  color: var(--ally-success);
 }
 .update-spinner {
   width: 28px;
   height: 28px;
   border: 3px solid var(--ally-border-strong);
-  border-top-color: #67d99b;
+  border-top-color: var(--ally-success-deep);
   border-radius: 50%;
   animation: update-spin 0.9s linear infinite;
   align-self: center;
@@ -4147,22 +4516,22 @@ code, pre {
 }
 
 .subagent-inline-tree {
-  color: #5a5a5a;
+  color: var(--ally-text-ghost);
   flex-shrink: 0;
 }
 
 .subagent-inline-name {
-  color: #e5e5e5;
+  color: var(--ally-text-high);
   flex-shrink: 0;
 }
 
 .subagent-inline-verb {
-  color: #737373;
+  color: var(--ally-text-faint);
   flex-shrink: 0;
 }
 
 .subagent-inline-args {
-  color: #9a9a9a;
+  color: var(--ally-text-tertiary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -4172,7 +4541,7 @@ code, pre {
 }
 
 .subagent-inline-summary {
-  color: #737373;
+  color: var(--ally-text-faint);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -4180,7 +4549,7 @@ code, pre {
 }
 
 .subagent-inline-duration {
-  color: #5a5a5a;
+  color: var(--ally-text-ghost);
   font-size: var(--ally-aux-font-size);
   flex-shrink: 0;
   margin-left: 4px;
@@ -4194,7 +4563,7 @@ code, pre {
 
 .subagent-inline-result {
   padding: 2px 8px 4px 6px;
-  color: #8a8a8a;
+  color: var(--ally-text-muted);
   font-size: var(--ally-aux-font-size);
   line-height: 1.5;
   overflow: hidden;
@@ -4204,7 +4573,7 @@ code, pre {
 
 .subagent-inline-error {
   padding: 2px 8px 4px 6px;
-  color: #ef4444;
+  color: var(--ally-danger);
   font-size: 12px;
   line-height: 1.5;
 }

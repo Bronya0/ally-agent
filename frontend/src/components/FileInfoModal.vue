@@ -112,13 +112,13 @@ function copyValue(value) {
 <style scoped>
 .file-info-body { max-height: 62vh; overflow-y: auto; padding-right: 4px; }
 .file-info-head { display: flex; flex-direction: column; gap: 2px; margin-bottom: 10px; }
-.file-info-path { font-family: var(--ally-mono-font); font-size: 12px; color: #858b98; word-break: break-all; }
+.file-info-path { font-family: var(--ally-mono-font); font-size: 12px; color: var(--ally-text-muted); word-break: break-all; }
 .file-info-section { margin-bottom: 12px; }
 .file-info-section-title {
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  color: #6f7887;
+  color: var(--ally-text-faint);
   margin-bottom: 4px;
   padding-bottom: 3px;
   border-bottom: 1px solid var(--ally-border-subtle);
@@ -132,23 +132,23 @@ function copyValue(value) {
   font-size: 12px;
   line-height: 1.6;
 }
-.file-info-label { color: #8b93a3; white-space: nowrap; }
+.file-info-label { color: var(--ally-text-muted); white-space: nowrap; }
 .file-info-value {
   font-family: var(--ally-mono-font);
-  color: #c5cfdb;
+  color: var(--ally-text-body);
   word-break: break-all;
   min-width: 0;
 }
 .file-info-copy {
   border: 0;
   background: transparent;
-  color: #6f7887;
+  color: var(--ally-text-faint);
   font-size: 11px;
   cursor: pointer;
   padding: 0 2px;
   white-space: nowrap;
 }
 .file-info-copy:hover { color: var(--ally-accent-bright); }
-.file-info-loading, .file-info-error { padding: 24px; text-align: center; color: #858b98; font-size: 13px; }
+.file-info-loading, .file-info-error { padding: 24px; text-align: center; color: var(--ally-text-muted); font-size: 13px; }
 .file-info-error { color: #e06c75; }
 </style>

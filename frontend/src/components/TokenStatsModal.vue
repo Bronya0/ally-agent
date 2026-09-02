@@ -357,7 +357,7 @@ function showBarTooltip(event, bar) {
   height: 100%;
   min-width: 0;
   min-height: 0;
-  background: #1a1a1a;
+  background: var(--ally-surface-content);
   overflow: hidden;
 }
 
@@ -375,7 +375,7 @@ function showBarTooltip(event, bar) {
   font-size: 18px;
   font-weight: 700;
   letter-spacing: 0.5px;
-  color: #f2f2f2;
+  color: var(--ally-text-primary);
 }
 
 .stats-body {
@@ -394,23 +394,23 @@ function showBarTooltip(event, bar) {
   padding: 10px 12px;
   border: 1px solid var(--ally-border);
   border-radius: 10px;
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--ally-hover-faint);
   min-width: 0;
 }
 .stat-label {
-  color: #b8b8b8;
+  color: var(--ally-text-soft);
   font-size: 11px;
 }
 .stat-value {
   margin-top: 4px;
-  color: #f1f1f1;
+  color: var(--ally-text-primary);
   font-size: 20px;
   font-weight: 650;
   letter-spacing: 0.2px;
 }
 .stat-sub {
   margin-top: 4px;
-  color: #a3a3a3;
+  color: var(--ally-text-soft);
   font-size: 11px;
   line-height: 1.5;
 }
@@ -420,14 +420,14 @@ function showBarTooltip(event, bar) {
 }
 .chart-title {
   margin: 2px 0 10px;
-  color: #9a9a9a;
+  color: var(--ally-text-tertiary);
   font-size: 12px;
 }
 .chart-legend {
   display: flex;
   gap: 16px;
   margin-bottom: 8px;
-  color: #9a9a9a;
+  color: var(--ally-text-tertiary);
   font-size: 12px;
 }
 .legend-item {
@@ -459,16 +459,16 @@ function showBarTooltip(event, bar) {
   pointer-events: none;
   z-index: 10;
   padding: 8px 10px;
-  background: rgba(30, 30, 30, 0.95);
+  background: var(--ally-copy-btn-bg);
   border: 1px solid var(--ally-border-strong);
   border-radius: 8px;
   font-size: 12px;
   white-space: nowrap;
   transform: translate(-50%, calc(-100% - 10px));
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--ally-overlay-shadow);
 }
 .chart-tooltip-title {
-  color: #f1f1f1;
+  color: var(--ally-text-primary);
   font-weight: 600;
   margin-bottom: 4px;
 }
@@ -476,7 +476,7 @@ function showBarTooltip(event, bar) {
   display: flex;
   align-items: center;
   gap: 6px;
-  color: #c0c0c0;
+  color: var(--ally-text-soft);
   line-height: 1.6;
 }
 .chart-tooltip-dot {
@@ -489,19 +489,19 @@ function showBarTooltip(event, bar) {
   flex: 1;
 }
 .chart-tooltip-value {
-  color: #e8e8e8;
+  color: var(--ally-text-high);
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
 }
 .chart-grid {
-  stroke: rgba(255, 255, 255, 0.07);
+  stroke: var(--ally-hover-strong);
   stroke-width: 1;
 }
 .chart-grid-label {
-  fill: #6f6f6f;
+  fill: var(--ally-text-faint);
   font-size: 10px;
 }
 .chart-axis-label {
-  fill: #6f6f6f;
+  fill: var(--ally-text-faint);
   font-size: 10px;
 }
 .bar-input {
@@ -527,7 +527,7 @@ function showBarTooltip(event, bar) {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #6f6f6f;
+  color: var(--ally-text-faint);
   font-size: 10px;
   height: 20px;
 }
@@ -544,7 +544,7 @@ function showBarTooltip(event, bar) {
   justify-content: center;
   border-radius: 5px;
   font-size: 11px;
-  color: #a8a8a8;
+  color: var(--ally-text-soft);
   cursor: default;
 }
 .heatmap-cell.dim {
@@ -566,7 +566,7 @@ function showBarTooltip(event, bar) {
   border: 1px solid var(--ally-border);
   border-radius: 10px;
   padding: 12px;
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--ally-hover-faint);
   min-width: 0;
 }
 
@@ -574,7 +574,7 @@ function showBarTooltip(event, bar) {
   padding: 60px 0;
 }
 .stats-empty-hint {
-  color: #777;
+  color: var(--ally-text-faint);
   font-size: 12px;
 }
 </style>

@@ -7,13 +7,21 @@
  * This file is part of ally-agent, licensed under the GNU General
  * Public License v3. See the LICENSE file for details.
  */
-// Accent theme management. Themes are a pure front-end concern: each one only
-// swaps the --ally-accent seed on <html data-theme>, and every derived shade is
-// computed from it via color-mix in style.css. Persisted in localStorage so it
-// survives reloads independent of the backend config.
+// Accent theme + color mode management. Both are pure front-end concerns: a
+// theme only swaps the --ally-accent seed on <html data-theme>, a mode swaps
+// the whole surface/text token set on <html data-mode>. Every derived shade is
+// computed from it via color-mix in style.css. Both are persisted in
+// localStorage so they survive reloads independent of the backend config.
 
 const STORAGE_KEY = 'ally_accent_theme';
+const MODE_STORAGE_KEY = 'ally_color_mode';
 export const DEFAULT_THEME = 'amber';
+export const DEFAULT_MODE = 'dark'; // 'dark' | 'light'
+
+export const MODES = [
+  { id: 'dark', label: '深色' },
+  { id: 'light', label: '浅色' },
+];
 
 // Single source of truth for the selector UI. `swatch` mirrors the seed defined
 // in style.css (:root / [data-theme=...]) purely for rendering the picker dot.
@@ -63,5 +71,45 @@ export function setTheme(theme) {
 
 // Call once at startup, before mount, to avoid a flash of the default accent.
 export function initTheme() {
-  return applyTheme(getStoredTheme());
+  const theme = applyTheme(getStoredTheme());
+  const mode = initMode();
+  return { theme, mode };
+}
+
+// ── Color mode (dark / light) ──
+
+export function normalizeMode(value) {
+  return value === 'light' ? 'light' : DEFAULT_MODE;
+}
+
+export function getStoredMode() {
+  try {
+    return normalizeMode(localStorage.getItem(MODE_STORAGE_KEY));
+  } catch {
+    return DEFAULT_MODE;
+  }
+}
+
+// Apply the mode to the document root. The default (dark) carries no
+// data-mode attribute so it falls through to the :root token set.
+export function applyMode(mode) {
+  const next = normalizeMode(mode);
+  const root = document.documentElement;
+  if (next === DEFAULT_MODE) root.removeAttribute('data-mode');
+  else root.setAttribute('data-mode', next);
+  return next;
+}
+
+export function setMode(mode) {
+  const next = applyMode(mode);
+  try {
+    localStorage.setItem(MODE_STORAGE_KEY, next);
+  } catch {
+    /* storage unavailable — mode still applies for this session */
+  }
+  return next;
+}
+
+export function initMode() {
+  return applyMode(getStoredMode());
 }

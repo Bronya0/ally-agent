@@ -228,13 +228,13 @@ function selectionKey(selection) {
   padding: 0;
   border: 1px solid var(--ally-border);
   border-radius: 4px;
-  color: #858585;
+  color: var(--ally-text-muted);
   background: transparent;
   cursor: pointer;
 }
 
 .ask-tab.active {
-  color: #e5e5e5;
+  color: var(--ally-text-high);
   border-color: color-mix(in srgb, var(--ally-accent) 48%, transparent);
   background: color-mix(in srgb, var(--ally-accent) 10%, transparent);
 }
@@ -263,7 +263,7 @@ function selectionKey(selection) {
 }
 
 .ask-question-text {
-  color: #e5e5e5;
+  color: var(--ally-text-high);
   font-size: 14px;
   line-height: 1.5;
   white-space: normal;
@@ -307,7 +307,7 @@ function selectionKey(selection) {
 }
 
 .ask-option-label {
-  color: #d4d4d4;
+  color: var(--ally-text-body);
   font-size: var(--ally-sub-font-size);
   line-height: 1.4;
   overflow-wrap: anywhere;
@@ -321,7 +321,7 @@ function selectionKey(selection) {
 }
 
 .ask-option.selected .ask-option-label {
-  color: #f0f0f0;
+  color: var(--ally-text-primary);
 }
 
 .ask-recommended {
@@ -329,7 +329,7 @@ function selectionKey(selection) {
   padding: 1px 5px;
   border: 1px solid rgba(111, 164, 125, 0.35);
   border-radius: 4px;
-  color: #88b794;
+  color: var(--ally-success-pale);
   font-size: 10px;
   line-height: 15px;
 }
@@ -344,7 +344,7 @@ function selectionKey(selection) {
   border: 1px solid var(--ally-border);
   border-radius: 4px;
   outline: none;
-  color: #e5e5e5;
+  color: var(--ally-text-high);
   background: rgba(0, 0, 0, 0.2);
   font: inherit;
   line-height: 1.45;
@@ -365,7 +365,7 @@ function selectionKey(selection) {
 }
 
 .ask-progress {
-  color: #737373;
+  color: var(--ally-text-faint);
   font-size: 12px;
 }
 
@@ -390,7 +390,7 @@ function selectionKey(selection) {
   gap: 8px;
   padding: 7px 0;
   border-top: 1px solid var(--ally-border-subtle);
-  color: #d4d4d4;
+  color: var(--ally-text-body);
   font-size: var(--ally-sub-font-size);
 }
 
@@ -400,7 +400,7 @@ function selectionKey(selection) {
 
 .ask-closed-state {
   margin: 3px 0 8px 20px;
-  color: #8a8a8a;
+  color: var(--ally-text-muted);
   font-size: 12px;
 }
 

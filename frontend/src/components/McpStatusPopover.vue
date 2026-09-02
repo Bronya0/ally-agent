@@ -73,7 +73,7 @@ function statusClass(srv) {
 <style scoped>
 .mcp-trigger {
   padding: 0;
-  color: #9fc3ec;
+  color: var(--ally-info-soft);
   border: 0;
   background: transparent;
   font: inherit;
@@ -82,7 +82,7 @@ function statusClass(srv) {
 }
 
 .mcp-trigger:hover {
-  color: #c4dcf8;
+  color: var(--ally-info-soft);
   text-decoration: underline;
   text-underline-offset: 2px;
 }
@@ -92,20 +92,23 @@ function statusClass(srv) {
   max-height: min(420px, calc(100vh - 120px));
   overflow: auto;
   padding: 6px;
-  color: #bdbdbd;
-  background: #1a1a1a;
+  color: var(--ally-text-body);
+  background: var(--ally-surface-raised);
+  backdrop-filter: var(--ally-glass-blur, none);
+  -webkit-backdrop-filter: var(--ally-glass-blur, none);
+  border: 1px solid var(--ally-border);
   border-radius: 8px;
 }
 
 .mcp-overview {
   padding: 4px 6px 8px;
-  color: #a3a3a3;
+  color: var(--ally-text-soft);
   font-size: 12px;
 }
 
 .mcp-empty {
   padding: 8px 6px;
-  color: #8a8a8a;
+  color: var(--ally-text-muted);
   font-size: 12px;
 }
 
@@ -122,14 +125,14 @@ function statusClass(srv) {
 }
 
 .mcp-list-name {
-  color: #d4d4d4;
+  color: var(--ally-text-body);
   font-family: var(--ally-mono-font);
 }
 
 .mcp-list-meta,
 .mcp-list-transport,
 .mcp-list-tools {
-  color: #8a8a8a;
+  color: var(--ally-text-muted);
   font-family: var(--ally-ui-font);
 }
 
@@ -148,12 +151,12 @@ function statusClass(srv) {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #6a6a6a;
+  background: var(--ally-text-faint);
   flex: none;
 }
 
 .mcp-status-dot.connected {
-  background: #4ade80;
+  background: var(--ally-success);
 }
 
 .mcp-status-dot.connecting {
@@ -166,11 +169,11 @@ function statusClass(srv) {
 }
 
 .mcp-status-dot.disconnected {
-  background: #6a6a6a;
+  background: var(--ally-text-faint);
 }
 
 .mcp-status-dot.unknown {
-  background: #6a6a6a;
+  background: var(--ally-text-faint);
 }
 
 @keyframes mcp-pulse {

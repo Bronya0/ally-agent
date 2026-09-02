@@ -59,19 +59,19 @@ watch(() => props.selectedIndex, () => {
   border-radius: 10px;
   background: var(--ally-surface-raised);
   border: 1px solid var(--ally-border-strong);
-  box-shadow: 0 22px 60px rgba(0, 0, 0, 0.55);
+  box-shadow: var(--ally-overlay-shadow);
 }
 
 .command-scroll {
   max-height: 240px;
   overflow-y: auto;
   scrollbar-width: thin;
-  scrollbar-color: #404040 transparent;
+  scrollbar-color: var(--ally-scrollbar) transparent;
 }
 
 .command-title {
   padding: 9px 12px;
-  color: #737373;
+  color: var(--ally-text-faint);
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.12em;
@@ -85,7 +85,7 @@ watch(() => props.selectedIndex, () => {
   gap: 10px;
   width: 100%;
   padding: 10px 12px;
-  color: #d4d4d4;
+  color: var(--ally-text-body);
   text-align: left;
   border: 0;
   background: transparent;
@@ -98,14 +98,14 @@ watch(() => props.selectedIndex, () => {
 }
 
 .command-label {
-  color: #fafafa;
+  color: var(--ally-text-primary);
   font-family: var(--ally-ui-font);
   font-size: 12px;
 }
 
 .command-desc {
   overflow: hidden;
-  color: #a3a3a3;
+  color: var(--ally-text-soft);
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 12px;
@@ -113,7 +113,7 @@ watch(() => props.selectedIndex, () => {
 
 .command-empty {
   padding: 12px;
-  color: #737373;
+  color: var(--ally-text-faint);
   font-size: 12px;
   text-align: center;
 }

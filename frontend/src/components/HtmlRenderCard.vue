@@ -76,7 +76,7 @@ onBeforeUnmount(() => window.removeEventListener('message', handleFrameMessage))
 <style scoped>
 .html-render-error {
   padding: 10px 12px;
-  color: #f2b8b8;
+  color: var(--ally-danger-pale);
   white-space: pre-wrap;
 }
 
@@ -84,7 +84,7 @@ onBeforeUnmount(() => window.removeEventListener('message', handleFrameMessage))
   height: 150px;
   padding: 10px 12px;
   overflow: hidden;
-  background: #1e1e1e;
+  background: var(--ally-surface-deep);
   border-top: 1px solid var(--ally-border-subtle);
 }
 
@@ -94,7 +94,7 @@ onBeforeUnmount(() => window.removeEventListener('message', handleFrameMessage))
   overflow: hidden;
   display: flex;
   align-items: flex-end;
-  color: #d4d4d4;
+  color: var(--ally-text-body);
   font-family: var(--ally-mono-font);
   font-size: 12px;
   line-height: 1.55;

@@ -732,15 +732,15 @@ defineExpose({ scrollbarRef, scrollToBottom, scrollToUserQuestion, scrollToBotto
   border: none;
   border-radius: 4px;
   background: transparent;
-  color: #8a8a8a;
+  color: var(--ally-text-muted);
   font-size: 12px;
   cursor: pointer;
   --wails-draggable: no-drag;
 }
 
 .message-archive-toggle:hover {
-  color: #d4d4d4;
-  background: rgba(255, 255, 255, 0.05);
+  color: var(--ally-text-body);
+  background: var(--ally-state-hover);
 }
 
 .user-message-content {
@@ -759,7 +759,7 @@ defineExpose({ scrollbarRef, scrollToBottom, scrollToUserQuestion, scrollToBotto
   padding: 2px 0;
   border: 0;
   background: transparent;
-  color: color-mix(in srgb, var(--ally-accent-bright) 68%, #8a8a8a);
+  color: color-mix(in srgb, var(--ally-accent-bright) 68%, var(--ally-text-muted));
   font-family: var(--ally-ui-font);
   font-size: var(--ally-aux-font-size);
   line-height: 1.5;
@@ -833,7 +833,7 @@ defineExpose({ scrollbarRef, scrollToBottom, scrollToUserQuestion, scrollToBotto
   margin: 0;
   padding: 0;
   border: 0;
-  color: #8a8a8a;
+  color: var(--ally-text-muted);
   background: transparent;
   cursor: pointer;
   opacity: 0;
@@ -867,7 +867,7 @@ defineExpose({ scrollbarRef, scrollToBottom, scrollToUserQuestion, scrollToBotto
 .message-body {
   padding: 0;
   line-height: 1.7;
-  color: #e5e5e5;
+  color: var(--ally-text-high);
   font-size: var(--ally-message-font-size, 15.5px);
   background: transparent;
   border: none;
@@ -897,20 +897,21 @@ defineExpose({ scrollbarRef, scrollToBottom, scrollToUserQuestion, scrollToBotto
   padding: 7px 12px;
   border: 1px solid var(--ally-border-strong);
   border-radius: 999px;
-  background: rgba(38, 38, 38, 0.92);
-  color: #e5e5e5;
+  background: var(--ally-copy-btn-bg);
+  color: var(--ally-text-high);
   font-size: var(--ally-aux-font-size);
   line-height: 1;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+  box-shadow: var(--ally-overlay-shadow);
   cursor: pointer;
-  backdrop-filter: blur(10px);
+  backdrop-filter: var(--ally-glass-blur, blur(10px));
+  -webkit-backdrop-filter: var(--ally-glass-blur, blur(10px));
   --wails-draggable: no-drag;
 }
 
 .jump-circle-btn:hover {
-  color: #fff;
-  background: rgba(55, 55, 55, 0.96);
-  border-color: rgba(255, 255, 255, 0.2);
+  color: var(--ally-text-primary);
+  background: var(--ally-surface-raised);
+  border-color: var(--ally-border-input);
 }
 
 .jump-circle-btn svg {
@@ -934,7 +935,7 @@ defineExpose({ scrollbarRef, scrollToBottom, scrollToUserQuestion, scrollToBotto
   border: 1px solid var(--ally-border);
   border-radius: 6px;
   background: transparent;
-  color: #9a9a9a;
+  color: var(--ally-text-tertiary);
   font-size: var(--ally-aux-font-size, 12px);
   line-height: 1.4;
   cursor: pointer;
@@ -952,7 +953,7 @@ defineExpose({ scrollbarRef, scrollToBottom, scrollToUserQuestion, scrollToBotto
   align-items: center;
   gap: 6px;
   font-size: var(--ally-sub-font-size, 13px);
-  color: #737373;
+  color: var(--ally-text-faint);
   margin-top: 4px;
 }
 
@@ -987,15 +988,15 @@ defineExpose({ scrollbarRef, scrollToBottom, scrollToUserQuestion, scrollToBotto
   border: none;
   border-radius: 4px;
   background: transparent;
-  color: #6a6a6a;
+  color: var(--ally-text-faint);
   cursor: pointer;
   transition: color 0.12s, background 0.12s;
   --wails-draggable: no-drag;
 }
 
 .export-icon-btn:hover {
-  color: #e5e5e5;
-  background: rgba(255, 255, 255, 0.08);
+  color: var(--ally-text-high);
+  background: var(--ally-hover-strong);
 }
 
 .export-icon-btn svg {
