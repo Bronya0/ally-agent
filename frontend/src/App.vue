@@ -2186,13 +2186,13 @@ function displayMessagesForSession(session) {
     // render above the fold). A trailing reasoning-only message — the model
     // thinking right before its final answer — stays BELOW the fold: once its
     // text streams in it must not shove the fold upward.
-    if (m.role === 'tool_call' && (m.kind === 'read' || m.kind === 'grep')) {
+    if (m.role === 'tool_call' && (m.kind === 'read' || m.kind === 'grep' || m.kind === 'list')) {
       const skippedThinks = [];
       let pendingThinks = [];
       let j = i + 1;
       while (j < src.length) {
         const n = src[j];
-        if (n.role === 'tool_call' && (n.kind === 'read' || n.kind === 'grep')) {
+        if (n.role === 'tool_call' && (n.kind === 'read' || n.kind === 'grep' || n.kind === 'list')) {
           // 思考后面又跟了 read/grep：这批思考确实夹在两批工具之间，上提
           skippedThinks.push(...pendingThinks);
           pendingThinks = [];
@@ -2215,13 +2215,16 @@ function displayMessagesForSession(session) {
         eventId: m.eventId,
         readEntries: [],
         grepItems: [],
+        listItems: [],
         readCount: 0,
         grepCount: 0,
+        listCount: 0,
         durationMs: 0,
         durationText: '',
       };
       let totalLines = 0;
       let totalHits = 0;
+      let totalItems = 0;
       let allDone = true;
       let hasError = false;
       while (i < j) {
@@ -2233,6 +2236,17 @@ function displayMessagesForSession(session) {
           const hitsMatch = String(entry.chip || '').match(/(\d+)\s*hits?/i);
           totalHits += hitsMatch ? Number(hitsMatch[1]) : 0;
           group.grepItems.push({
+            title: entry.title || '',
+            chip: entry.chip || '',
+            status: entry.status,
+            body: entry.body || '',
+          });
+        } else if (entry.kind === 'list') {
+          group.listCount++;
+          // 从 list chip（"· N items"）累加条目数
+          const itemsMatch = String(entry.chip || '').match(/(\d+)\s*items?/i);
+          totalItems += itemsMatch ? Number(itemsMatch[1]) : 0;
+          group.listItems.push({
             title: entry.title || '',
             chip: entry.chip || '',
             status: entry.status,
@@ -2270,6 +2284,7 @@ function displayMessagesForSession(session) {
       group.status = hasError ? 'error' : (allDone ? 'success' : 'running');
       group.readTotalLines = totalLines;
       group.grepTotalHits = totalHits;
+      group.listTotalItems = totalItems;
       // 夹在工具批次之间的思考上提到折叠组上方（原顺序）；
       // 尾随的思考保持在折叠组下方（它多半是正在流式的最终回答，
       // 一旦有正文就不能把折叠往下顶）。

@@ -16,6 +16,7 @@ Public License v3. See the LICENSE file for details.
       <span v-else class="read-grep-stats">{{ statsLabel }}</span>
       <span v-if="msg.readTotalLines > 0 && msg.readCount > 0" class="tool-chip">{{ readChip }}</span>
       <span v-if="hitsChip" class="tool-chip">{{ hitsChip }}</span>
+      <span v-if="itemsChip" class="tool-chip">{{ itemsChip }}</span>
       <!-- 折叠指示紧跟文字（不靠最右）；展开时旋转 90°。RightOutlined SVG
            与工作区文件树的展开箭头同款，不用 Unicode 字符避免 WebView2
            系统字体回退导致的粗细不一致 -->
@@ -24,27 +25,15 @@ Public License v3. See the LICENSE file for details.
       </span>
     </div>
     <div v-if="isExpanded" class="read-grep-body">
-      <template v-if="msg.readCount > 0">
-        <div
-          v-for="(entry, index) in msg.readEntries"
-          :key="`read-${entry.title || index}`"
-          :class="['read-group-entry', entry.status || msg.status]"
-        >
-          <span class="read-group-tree">{{ treePrefix(index, msg.readEntries.length) }}</span>
-          <span class="tool-verb read-grep-entry-verb">Read</span>
-          <span class="read-group-path" :title="entry.title">{{ entry.title || $t('common.untitled') }}</span>
-          <span v-if="childChip(entry)" class="read-group-chip">{{ childChip(entry) }}</span>
-        </div>
-      </template>
       <div
-        v-for="(item, index) in msg.grepItems"
-        :key="`grep-${item.title || index}`"
-        :class="['read-group-entry', 'grep-entry', item.status || msg.status]"
+        v-for="(entry, index) in allEntries"
+        :key="`${entry.verb}-${entry.title || index}`"
+        :class="['read-group-entry', entry.extraClass, entry.status || msg.status]"
       >
-        <span class="read-group-tree">{{ treePrefix(msg.readCount > 0 ? index + msg.readEntries.length : index, totalEntryCount) }}</span>
-        <span class="tool-verb read-grep-entry-verb">Grep</span>
-        <span class="read-group-path" :title="item.title">{{ item.title || $t('common.untitled') }}</span>
-        <span v-if="item.chip" class="read-group-chip">{{ item.chip }}</span>
+        <span class="read-group-tree">{{ treePrefix(index, allEntries.length) }}</span>
+        <span class="tool-verb read-grep-entry-verb">{{ entry.verb }}</span>
+        <span class="read-group-path" :title="entry.title">{{ entry.title || $t('common.untitled') }}</span>
+        <span v-if="entry.displayChip" class="read-group-chip">{{ entry.displayChip }}</span>
       </div>
     </div>
   </div>
@@ -92,7 +81,7 @@ function toggleExpanded() {
 
 const isRunning = computed(() => props.msg.status === 'running');
 
-// 统计行："已读取 N 次，搜索 M 次"（只读/只搜时省略另一半，逗号分隔）
+// 统计行："已读取 N 次，搜索 M 次，罗列 K 次"（单项时省略其他，逗号分隔）
 const statsLabel = computed(() => {
   const parts = [];
   if (props.msg.readCount > 0) {
@@ -100,6 +89,9 @@ const statsLabel = computed(() => {
   }
   if (props.msg.grepCount > 0) {
     parts.push(t('tools.readGrep.grepCount', { count: props.msg.grepCount }));
+  }
+  if (props.msg.listCount > 0) {
+    parts.push(t('tools.readGrep.listCount', { count: props.msg.listCount }));
   }
   if (!parts.length) parts.push(t('tools.readGrep.readCount', { count: 1 }));
   return parts.join(t('common.commaSep'));
@@ -111,12 +103,32 @@ const hitsChip = computed(() => {
   return hits > 0 ? `${hits} hits` : '';
 });
 
+// 折叠行尾的 list 条目数 chip
+const itemsChip = computed(() => {
+  const items = Number(props.msg.listTotalItems) || 0;
+  return items > 0 ? `${items} items` : '';
+});
+
 const readChip = computed(() => {
   const lines = props.msg.readTotalLines || 0;
   return `${lines} lines`;
 });
 
-const totalEntryCount = computed(() => (props.msg.readEntries?.length || 0) + (props.msg.grepItems?.length || 0));
+// 展开体的统一条目列表：read → grep → list，树形前缀按全局序计算，
+// 避免分段计算 total 导致的 '└─' 提前出现在中间行。
+const allEntries = computed(() => {
+  const entries = [];
+  for (const e of props.msg.readEntries || []) {
+    entries.push({ verb: 'Read', title: e.title, displayChip: childChip(e), status: e.status });
+  }
+  for (const e of props.msg.grepItems || []) {
+    entries.push({ verb: 'Grep', title: e.title, displayChip: e.chip, status: e.status, extraClass: 'grep-entry' });
+  }
+  for (const e of props.msg.listItems || []) {
+    entries.push({ verb: 'List', title: e.title, displayChip: e.chip, status: e.status, extraClass: 'list-entry' });
+  }
+  return entries;
+});
 
 function treePrefix(index, total) {
   return index === total - 1 ? '└─' : '├─';

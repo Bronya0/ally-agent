@@ -47,6 +47,8 @@ export function toolCardRenderSignature(msg) {
     msg.readCount,
     msg.grepCount,
     msg.grepTotalHits,
+    msg.listCount,
+    msg.listTotalItems,
     msg.durationText,
     msg.subagentId,
     msg.subagentRole,
