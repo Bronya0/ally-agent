@@ -10,16 +10,18 @@ Public License v3. See the LICENSE file for details.
 <template>
   <div :class="['rich-tool-card', 'read-grep-group', msg.status, { expanded: isExpanded, 'non-interactive': true }]">
     <div class="tool-line read-grep-toggle" @click="toggleExpanded">
-      <!-- 状态图标全程占位（运行中闪烁圆点 → 完成对勾），避免完成时
-           图标突然出现把整行往右顶 -->
-      <ToolStatusIcon :status="msg.status" />
-      <!-- 组内还有 running 调用时统计文字带 shimmer 流光；全部完成/出错恢复常色 -->
+      <!-- 折叠行不放状态图标（比圆点/对勾更干净）：组内还有 running 调用时
+           统计文字带 shimmer 流光即进行中信号，出错时统计文字转红 -->
       <span v-if="isRunning" class="read-grep-stats read-grep-stats-thinking">{{ statsLabel }}</span>
       <span v-else class="read-grep-stats">{{ statsLabel }}</span>
       <span v-if="msg.readTotalLines > 0 && msg.readCount > 0" class="tool-chip">{{ readChip }}</span>
       <span v-if="hitsChip" class="tool-chip">{{ hitsChip }}</span>
-      <!-- 折叠指示紧跟文字（不靠最右）；展开时旋转 90° -->
-      <span class="read-grep-caret" :title="isExpanded ? $t('common.collapse') : $t('common.expand')">&gt;</span>
+      <!-- 折叠指示紧跟文字（不靠最右）；展开时旋转 90°。RightOutlined SVG
+           与工作区文件树的展开箭头同款，不用 Unicode 字符避免 WebView2
+           系统字体回退导致的粗细不一致 -->
+      <span class="read-grep-caret" :title="isExpanded ? $t('common.collapse') : $t('common.expand')">
+        <RightOutlined />
+      </span>
     </div>
     <div v-if="isExpanded" class="read-grep-body">
       <template v-if="msg.readCount > 0">
@@ -51,7 +53,7 @@ Public License v3. See the LICENSE file for details.
 <script setup>
 import { computed, inject, ref } from 'vue';
 import { t } from '../i18n.mjs';
-import ToolStatusIcon from './ToolStatusIcon.vue';
+import RightOutlined from '@vicons/antd/RightOutlined';
 
 const props = defineProps({
   msg: { type: Object, required: true },
@@ -103,15 +105,15 @@ const statsLabel = computed(() => {
   return parts.join(t('common.commaSep'));
 });
 
-// grep 命中数追加在统计行尾（固定英文 "hits"，与 "lines" 一致不翻译）
+// 折叠行尾的行数统计 chip：去掉点号前缀，与统计文字用空隙分隔
 const hitsChip = computed(() => {
   const hits = Number(props.msg.grepTotalHits) || 0;
-  return hits > 0 ? `· ${hits} hits` : '';
+  return hits > 0 ? `${hits} hits` : '';
 });
 
 const readChip = computed(() => {
   const lines = props.msg.readTotalLines || 0;
-  return `· ${lines} lines`;
+  return `${lines} lines`;
 });
 
 const totalEntryCount = computed(() => (props.msg.readEntries?.length || 0) + (props.msg.grepItems?.length || 0));

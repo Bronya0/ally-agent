@@ -3323,6 +3323,9 @@ code, pre {
 /* ── Read + grep folded group（已读取 N 次 · 搜索 M 次）── */
 
 .read-grep-toggle {
+  /* 折叠行不带状态图标：跳过 .tool-line 的 -20px 图标悬挂缩进，
+     统计文字直接与消息正文左对齐 */
+  margin-left: 0;
   cursor: pointer;
   user-select: none;
   border-radius: 4px;
@@ -3333,13 +3336,21 @@ code, pre {
   background: rgba(255, 255, 255, 0.05);
 }
 
-/* 折叠指示 ">"：紧跟文字，不靠最右；展开时旋转 90° */
+/* 折叠指示（RightOutlined SVG，与文件树展开箭头同款）：紧跟文字，不靠最右；
+   展开时旋转 90° */
 .read-grep-caret {
-  color: #6a6a6a;
-  font-size: 10px;
+  display: inline-flex;
+  align-items: center;
   flex-shrink: 0;
   margin-left: 4px;
+  color: #737373;
+  font-size: 12px;
   transition: transform 0.15s ease;
+}
+
+.read-grep-caret svg {
+  width: 12px;
+  height: 12px;
 }
 
 .read-grep-group.expanded .read-grep-caret {
@@ -3354,6 +3365,11 @@ code, pre {
 .read-grep-stats {
   color: #a8a8a8;
   font-weight: 400;
+}
+
+/* 有子调用失败：统计文字转红提示（折叠行无状态图标，红色文字兜底） */
+.read-grep-group.error .read-grep-stats {
+  color: #fecaca;
 }
 
 /* running 时统计文字带 shimmer 流光（与 Thinking 同款动画） */

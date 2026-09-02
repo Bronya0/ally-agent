@@ -60,7 +60,12 @@ const icon = computed(() => {
 .tool-svg-icon {
   display: inline-flex;
   flex-shrink: 0;
-  width: 14px;
+  /* 16px for every status shape (check / close / dot / hollow). The running
+     dot previously reserved 16px while check/close used 14px, so tool lines
+     shifted 2px left on completion — the read-grep fold row made this visible
+     right next to its shimmer animation. One width here keeps every status
+     transition layout-stable; each glyph stays centered in its 16px box. */
+  width: 16px;
   height: 14px;
   justify-content: center;
   align-items: center;
@@ -69,7 +74,6 @@ const icon = computed(() => {
 /* Filled running dot — replaces the old CSS pulse dot on .tool-status-icon.running */
 .tool-svg-icon.running-dot {
   position: relative;
-  width: 16px;
   color: transparent;
 }
 
@@ -88,7 +92,6 @@ const icon = computed(() => {
 /* Hollow pending dot */
 .tool-svg-icon.hollow-dot {
   position: relative;
-  width: 16px;
 }
 
 .tool-svg-icon.hollow-dot::after {

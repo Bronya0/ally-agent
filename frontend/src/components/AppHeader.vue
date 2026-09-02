@@ -586,7 +586,9 @@ body.platform-darwin .brand-wordmark {
   height: 100%;
   --n-tab-gap: 0 !important;
   --n-tab-padding: 0 !important;
-  --n-bar-color: var(--ally-accent-bright) !important;
+  /* 与用户消息左侧竖线同一档色（accent-dim）：同族更协调，且不像全亮
+     accent 那样在 header 顶部抢视线。 */
+  --n-bar-color: var(--ally-accent-dim) !important;
   --wails-draggable: drag;
 }
 
