@@ -418,7 +418,7 @@ Public License v3. See the LICENSE file for details.
           >
             <n-tab-pane v-for="tab in providerTabs" :key="tab.name" :name="tab.name" :tab="tab.label">
               <div class="saved-model-list">
-                <div v-for="item in tab.models" :key="item.index" :class="['saved-model-item', { active: isDraftModelActive(item.model) }]">
+                <div v-for="item in tab.models" :key="item.index" class="saved-model-item">
                   <div class="saved-model-main">
                     <div class="saved-model-name">{{ normalizedProviderName(item.model.providerName) }} · {{ item.model.model || $t('settings.modelNone') }}</div>
                     <div class="saved-model-meta">{{ apiFormatLabel(item.model.apiFormat) }} · {{ item.model.model || 'Model' }}</div>
@@ -426,7 +426,6 @@ Public License v3. See the LICENSE file for details.
                     <div class="saved-model-url">max {{ item.model.maxTokens || '-' }} · context {{ item.model.contextWindow || '-' }}</div>
                   </div>
                   <n-space :size="4">
-                    <n-button size="tiny" secondary :disabled="isDraftModelActive(item.model)" @click="applyModelToDraft(item.model)">{{ $t('settings.modelUse') }}</n-button>
                     <n-button size="tiny" quaternary @click="editModelDraft(item.index)">{{ $t('common.edit') }}</n-button>
                     <n-button size="tiny" type="error" quaternary @click="removeModelDraft(item.index)">{{ $t('common.delete') }}</n-button>
                   </n-space>
@@ -1270,16 +1269,12 @@ const providerTabs = computed(() => {
   (draft.models || []).forEach((model, index) => {
     const provider = normalizedProviderName(model.providerName);
     if (!groups.has(provider)) {
-      groups.set(provider, { name: provider, label: provider, models: [], hasActiveModel: false });
+      groups.set(provider, { name: provider, label: provider, models: [] });
     }
     const group = groups.get(provider);
     group.models.push({ model, index });
-    if (isDraftModelActive(model)) group.hasActiveModel = true;
   });
-  return Array.from(groups.values()).sort((left, right) => {
-    if (left.hasActiveModel !== right.hasActiveModel) return left.hasActiveModel ? -1 : 1;
-    return 0;
-  });
+  return Array.from(groups.values());
 });
 
 function alignActiveProviderTab(preferred = '') {
@@ -1368,20 +1363,42 @@ function openProviderDocumentation() {
 async function startAddModelDraft() {
   modelEditorIndex.value = -1;
   await ensureModelCatalog();
-  const provider = activeProviderTab.value || draft.providerName || 'OpenAI Compatible';
-  // New model: start with a blank key list. Pre-filling keys from the current
-  // draft silently copies credentials into configs that often need a
-  // different key.
-  assignModelDraft({
-    providerName: provider,
-    apiFormat: normalizeApiFormat(draft.apiFormat),
-    baseUrl: draft.baseUrl || '',
-    apiKey: '',
-    apiKeys: [],
-    model: '',
-    maxTokens: draft.maxTokens || 131072,
-    contextWindow: draft.contextWindow || 1000000,
-  });
+  const provider = activeProviderTab.value || 'OpenAI Compatible';
+  // 新建模型：按模型设置页当前活跃 tab 下的首个模型进行预填充，包含 API key
+  const activeTabModels = (draft.models || []).filter((m) => normalizedProviderName(m.providerName) === provider);
+  const templateModel = activeTabModels[0];
+
+  if (templateModel) {
+    const rawKeys = Array.isArray(templateModel.apiKeys) && templateModel.apiKeys.length
+      ? templateModel.apiKeys
+      : (templateModel.apiKey ? [templateModel.apiKey] : []);
+    const normalizedKeys = normalizeModelApiKeys(rawKeys);
+    assignModelDraft({
+      providerName: provider,
+      apiFormat: normalizeApiFormat(templateModel.apiFormat),
+      baseUrl: templateModel.baseUrl || '',
+      apiKey: normalizedKeys[0] || '',
+      apiKeys: normalizedKeys,
+      model: '',
+      temperature: templateModel.temperature ?? 0.2,
+      maxTokens: templateModel.maxTokens || 131072,
+      contextWindow: templateModel.contextWindow || 1000000,
+      reasoningTag: templateModel.reasoningTag || 'reasoning_content',
+      tokenParam: templateModel.tokenParam || 'auto',
+      reasoningEffort: normalizeReasoningEffort(templateModel.reasoningEffort || 'max'),
+    });
+  } else {
+    assignModelDraft({
+      providerName: provider,
+      apiFormat: normalizeApiFormat(draft.apiFormat),
+      baseUrl: draft.baseUrl || '',
+      apiKey: '',
+      apiKeys: [],
+      model: '',
+      maxTokens: draft.maxTokens || 131072,
+      contextWindow: draft.contextWindow || 1000000,
+    });
+  }
   modelEditorVisible.value = true;
 }
 
@@ -1457,7 +1474,6 @@ function commitModelDraft() {
     tokenParam: modelDraft.tokenParam || 'auto',
     reasoningEffort: normalizeReasoningEffort(modelDraft.reasoningEffort),
   };
-  const wasActive = modelEditorIndex.value >= 0 && isDraftModelActive(draft.models[modelEditorIndex.value]);
   if (modelEditorIndex.value >= 0) {
     draft.models.splice(modelEditorIndex.value, 1, nextModel);
     const duplicateIndex = draft.models.findIndex((saved, index) => (
@@ -1469,36 +1485,9 @@ function commitModelDraft() {
     if (existingIndex >= 0) draft.models.splice(existingIndex, 1, nextModel);
     else draft.models.push(nextModel);
   }
-  if (wasActive) applyModelToDraft(nextModel);
   alignActiveProviderTab(providerName);
   modelEditorVisible.value = false;
   emit('save', { ...draft }, true);
-}
-
-function applyModelToDraft(model) {
-  if (!model) return;
-  draft.providerName = normalizedProviderName(model.providerName);
-  draft.apiFormat = normalizeApiFormat(model.apiFormat);
-  draft.baseUrl = model.baseUrl || '';
-  draft.apiKeys = normalizeModelApiKeys(model.apiKeys || (model.apiKey ? [model.apiKey] : []));
-  draft.apiKey = draft.apiKeys[0] || '';
-  draft.model = model.model || '';
-  draft.temperature = model.temperature ?? draft.temperature ?? 0.2;
-  draft.maxTokens = Number.isFinite(Number(model.maxTokens)) && Number(model.maxTokens) > 0 ? Number(model.maxTokens) : (draft.maxTokens || 131072);
-  draft.contextWindow = Number.isFinite(Number(model.contextWindow)) && Number(model.contextWindow) > 0 ? Number(model.contextWindow) : (draft.contextWindow || 1000000);
-  draft.reasoningTag = model.reasoningTag || 'reasoning_content';
-  draft.tokenParam = model.tokenParam || 'auto';
-  draft.reasoningEffort = normalizeReasoningEffort(model.reasoningEffort);
-  alignActiveProviderTab(normalizedProviderName(model.providerName));
-  emit('save', { ...draft }, true);
-}
-
-function isDraftModelActive(model) {
-  if (!model) return false;
-  return normalizedProviderName(model.providerName) === normalizedProviderName(draft.providerName)
-    && normalizeApiFormat(model.apiFormat) === normalizeApiFormat(draft.apiFormat)
-    && (model.model || '') === (draft.model || '')
-    && (model.baseUrl || '') === (draft.baseUrl || '');
 }
 
 function removeModelDraft(index) {
@@ -1526,11 +1515,8 @@ async function importModelConfigs(event) {
   try {
     if (file.size > 2 * 1024 * 1024) throw Object.assign(new Error('FILE_TOO_LARGE'), { code: 'FILE_TOO_LARGE' });
     const imported = parseModelConfigImport(await file.text());
-    const activeIdentity = modelConfigIdentity(draft);
-    const importedActiveModel = [...imported].reverse().find((model) => modelConfigIdentity(model) === activeIdentity);
     const result = mergeModelConfigs(draft.models, imported);
     draft.models = result.models;
-    if (importedActiveModel) applyModelToDraft(importedActiveModel);
     alignActiveProviderTab(activeProviderTab.value || normalizedProviderName(draft.providerName));
     emit('save', { ...draft }, true);
     message.success(t('settings.modelImportSuccess', { added: result.added, updated: result.updated }));
