@@ -22,60 +22,7 @@ Public License v3. See the LICENSE file for details.
     </template>
 
     <div class="task-center-body">
-      <n-tabs ref="tabsRef" v-model:value="activeTab" type="line" default-value="scheduled" pane-wrapper-style="padding-top: 4px;">
-        <n-tab-pane name="scheduled" :tab="$t('taskCenter.scheduledTab', { count: tasks.length })">
-          <div class="task-overview">
-            <span>{{ $t('scheduled.runningCount', { count: scheduledRunningCount }) }}</span>
-            <span>{{ $t('scheduled.sessionOnly') }}</span>
-          </div>
-          <n-spin :show="scheduledLoading">
-            <n-empty v-if="!tasks.length" :description="$t('scheduled.empty')">
-              <template #extra><span class="empty-hint">{{ $t('scheduled.emptyHint') }}</span></template>
-            </n-empty>
-            <div v-else class="task-list">
-              <article v-for="task in tasks" :key="task.id" class="task-card">
-                <div class="card-header">
-                  <div class="title-wrap">
-                    <div class="card-title">{{ task.name || task.id }}</div>
-                    <div class="mono-muted">{{ task.id }}</div>
-                  </div>
-                  <div class="tags">
-                    <n-tag size="small" round :type="scheduledStatusType(task)">{{ scheduledStatusLabel(task) }}</n-tag>
-                    <n-tag size="small" round type="warning">YOLO</n-tag>
-                  </div>
-                </div>
-                <div class="meta-grid">
-                  <div><span>{{ $t('scheduled.schedule') }}</span><strong>{{ scheduleLabel(task.schedule) }}</strong></div>
-                  <div><span>{{ $t('scheduled.nextRun') }}</span><strong>{{ formatTime(task.nextRunAt) }}</strong></div>
-                  <div><span>{{ $t('scheduled.lastRun') }}</span><strong>{{ formatTime(task.lastRunAt) }}</strong></div>
-                  <div><span>{{ $t('scheduled.runCount') }}</span><strong>{{ task.runCount || 0 }}</strong></div>
-                  <div><span>{{ $t('scheduled.limit') }}</span><strong>{{ $t('common.steps', { count: task.maxSteps }) }} · {{ durationLabel(task.timeoutSeconds) }}</strong></div>
-                  <div><span>{{ $t('scheduled.failures') }}</span><strong>{{ task.consecutiveFailures || 0 }}</strong></div>
-                </div>
-                <div class="mono-muted ellipsis" :title="task.workspace">{{ task.workspace }}</div>
-                <div class="instruction">{{ task.instruction }}</div>
-                <div v-if="task.lastSummary || task.lastError" class="buffer-preview" :class="{ error: task.lastError && !task.lastSummary }">
-                  <div class="buffer-title">{{ $t('taskCenter.bufferPreview') }}</div>
-                  <pre>{{ task.lastSummary || task.lastError }}</pre>
-                </div>
-                <div class="actions">
-                  <n-button v-if="task.lastSummary || task.lastError" size="small" ghost @click="openScheduledLog(task)">{{ $t('taskCenter.viewBuffer') }}</n-button>
-                  <n-popconfirm
-                    :positive-text="$t('common.delete')"
-                    :negative-text="$t('common.cancel')"
-                    @positive-click="$emit('deleteTask', task.id)"
-                  >
-                    <template #trigger>
-                      <n-button size="small" type="error" ghost :loading="deletingIds.includes(task.id)">{{ $t('scheduled.deleteTask') }}</n-button>
-                    </template>
-                    {{ $t('scheduled.deleteConfirm') }}
-                  </n-popconfirm>
-                </div>
-              </article>
-            </div>
-          </n-spin>
-        </n-tab-pane>
-
+      <n-tabs ref="tabsRef" v-model:value="activeTab" type="line" pane-wrapper-style="padding-top: 4px;">
         <n-tab-pane name="services" :tab="$t('taskCenter.servicesTab', { count: services.length })">
           <div class="task-overview">
             <span>{{ $t('service.runningCount', { count: serviceRunningCount }) }}</span>
@@ -87,40 +34,91 @@ Public License v3. See the LICENSE file for details.
             </n-empty>
             <div v-else class="task-list">
               <article v-for="service in services" :key="service.id" class="task-card">
-                <div class="card-header">
-                  <div class="title-wrap">
-                    <div class="card-title">{{ service.name || service.id }}</div>
-                    <div class="mono-muted">{{ service.id }} · PID {{ service.pid || '-' }}</div>
+                <div class="card-head">
+                  <div class="head-main">
+                    <span class="card-title">{{ service.name || service.id }}</span>
+                    <span class="mono-muted">{{ service.id }}<template v-if="service.pid"> · PID {{ service.pid }}</template></span>
                   </div>
-                  <n-tag size="small" round :type="serviceStatusType(service)">{{ serviceStatusLabel(service) }}</n-tag>
+                  <div class="head-side">
+                    <n-tag size="small" round :type="serviceStatusType(service)">{{ serviceStatusLabel(service) }}</n-tag>
+                    <n-button size="tiny" quaternary @click="openServiceLog(service)">{{ $t('taskCenter.viewBuffer') }}</n-button>
+                    <n-popconfirm
+                      v-if="isActiveService(service)"
+                      :positive-text="$t('service.stop')"
+                      :negative-text="$t('common.cancel')"
+                      @positive-click="$emit('stopService', service.id)"
+                    >
+                      <template #trigger>
+                        <n-button size="tiny" type="error" quaternary :loading="stoppingIds.includes(service.id)">{{ $t('service.stop') }}</n-button>
+                      </template>
+                      {{ $t('service.stopConfirm') }}
+                    </n-popconfirm>
+                  </div>
                 </div>
-                <div class="meta-grid">
-                  <div><span>{{ $t('service.startedAt') }}</span><strong>{{ formatUnixSeconds(service.startedAt) }}</strong></div>
-                  <div><span>{{ $t('service.stoppedAt') }}</span><strong>{{ formatUnixSeconds(service.stoppedAt) }}</strong></div>
-                  <div><span>{{ $t('service.exitCode') }}</span><strong>{{ isActiveService(service) ? '-' : (service.exitCode ?? 0) }}</strong></div>
-                  <div><span>{{ $t('service.bufferSize') }}</span><strong>{{ formatBytes(service.outputBytes) }}</strong></div>
-                  <div><span>{{ $t('service.retention') }}</span><strong>{{ service.outputTruncated ? $t('common.truncated') : $t('service.completeBuffer') }}</strong></div>
+                <div class="meta-line">
+                  <span class="meta-item"><i>{{ $t('service.startedAt') }}</i>{{ formatUnixSeconds(service.startedAt) }}</span>
+                  <span class="meta-item"><i>{{ $t('service.stoppedAt') }}</i>{{ formatUnixSeconds(service.stoppedAt) }}</span>
+                  <span class="meta-item"><i>{{ $t('service.exitCode') }}</i>{{ isActiveService(service) ? '-' : (service.exitCode ?? 0) }}</span>
+                  <span class="meta-item"><i>{{ $t('service.bufferSize') }}</i>{{ formatBytes(service.outputBytes) }}</span>
+                  <span class="meta-item"><i>{{ $t('service.retention') }}</i>{{ service.outputTruncated ? $t('common.truncated') : $t('service.completeBuffer') }}</span>
                 </div>
                 <div class="mono-muted ellipsis" :title="service.cwd">{{ service.cwd }}</div>
                 <div class="command" :title="service.command">{{ service.command }}</div>
                 <div v-if="service.outputTail" class="buffer-preview">
                   <div class="buffer-title">{{ $t('taskCenter.bufferPreview') }}</div>
-                  <pre>{{ service.outputTail }}</pre>
+                  <pre v-html="previewHtml(service.outputTail)"></pre>
                 </div>
                 <div v-if="service.error" class="service-error">{{ service.error }}</div>
-                <div class="actions">
-                  <n-button size="small" ghost @click="openServiceLog(service)">{{ $t('taskCenter.viewBuffer') }}</n-button>
-                  <n-popconfirm
-                    v-if="isActiveService(service)"
-                    :positive-text="$t('service.stop')"
-                    :negative-text="$t('common.cancel')"
-                    @positive-click="$emit('stopService', service.id)"
-                  >
-                    <template #trigger>
-                      <n-button size="small" type="warning" ghost :loading="stoppingIds.includes(service.id)">{{ $t('service.stop') }}</n-button>
-                    </template>
-                    {{ $t('service.stopConfirm') }}
-                  </n-popconfirm>
+              </article>
+            </div>
+          </n-spin>
+        </n-tab-pane>
+
+        <n-tab-pane name="scheduled" :tab="$t('taskCenter.scheduledTab', { count: tasks.length })">
+          <div class="task-overview">
+            <span>{{ $t('scheduled.runningCount', { count: scheduledRunningCount }) }}</span>
+            <span>{{ $t('scheduled.sessionOnly') }}</span>
+          </div>
+          <n-spin :show="scheduledLoading">
+            <n-empty v-if="!tasks.length" :description="$t('scheduled.empty')">
+              <template #extra><span class="empty-hint">{{ $t('scheduled.emptyHint') }}</span></template>
+            </n-empty>
+            <div v-else class="task-list">
+              <article v-for="task in tasks" :key="task.id" class="task-card">
+                <div class="card-head">
+                  <div class="head-main">
+                    <span class="card-title">{{ task.name || task.id }}</span>
+                    <span class="mono-muted">{{ task.id }}</span>
+                  </div>
+                  <div class="head-side">
+                    <n-tag size="small" round :type="scheduledStatusType(task)">{{ scheduledStatusLabel(task) }}</n-tag>
+                    <n-tag size="small" round type="warning">YOLO</n-tag>
+                    <n-button v-if="task.lastSummary || task.lastError" size="tiny" quaternary @click="openScheduledLog(task)">{{ $t('taskCenter.viewBuffer') }}</n-button>
+                    <n-popconfirm
+                      :positive-text="$t('common.delete')"
+                      :negative-text="$t('common.cancel')"
+                      @positive-click="$emit('deleteTask', task.id)"
+                    >
+                      <template #trigger>
+                        <n-button size="tiny" type="error" quaternary :loading="deletingIds.includes(task.id)">{{ $t('scheduled.deleteTask') }}</n-button>
+                      </template>
+                      {{ $t('scheduled.deleteConfirm') }}
+                    </n-popconfirm>
+                  </div>
+                </div>
+                <div class="meta-line">
+                  <span class="meta-item"><i>{{ $t('scheduled.schedule') }}</i>{{ scheduleLabel(task.schedule) }}</span>
+                  <span class="meta-item"><i>{{ $t('scheduled.nextRun') }}</i>{{ formatTime(task.nextRunAt) }}</span>
+                  <span class="meta-item"><i>{{ $t('scheduled.lastRun') }}</i>{{ formatTime(task.lastRunAt) }}</span>
+                  <span class="meta-item"><i>{{ $t('scheduled.runCount') }}</i>{{ task.runCount || 0 }}</span>
+                  <span class="meta-item"><i>{{ $t('scheduled.limit') }}</i>{{ $t('common.steps', { count: task.maxSteps }) }} · {{ durationLabel(task.timeoutSeconds) }}</span>
+                  <span class="meta-item"><i>{{ $t('scheduled.failures') }}</i>{{ task.consecutiveFailures || 0 }}</span>
+                </div>
+                <div class="mono-muted ellipsis" :title="task.workspace">{{ task.workspace }}</div>
+                <div class="instruction">{{ task.instruction }}</div>
+                <div v-if="task.lastSummary || task.lastError" class="buffer-preview" :class="{ error: task.lastError && !task.lastSummary }">
+                  <div class="buffer-title">{{ $t('taskCenter.bufferPreview') }}</div>
+                  <pre v-html="previewHtml(task.lastSummary || task.lastError)"></pre>
                 </div>
               </article>
             </div>
@@ -133,13 +131,15 @@ Public License v3. See the LICENSE file for details.
   <n-modal v-model:show="logVisible" preset="card" :title="logTitle" class="task-log-modal" :style="{ width: 'min(960px, 92vw)' }">
     <div class="log-toolbar">
       <span>{{ logMeta }}</span>
+      <span v-if="logRenderNote" class="log-note">{{ logRenderNote }}</span>
       <n-space>
         <n-button v-if="logServiceId" size="small" quaternary :loading="logLoading" @click="refreshServiceLog">{{ $t('common.refresh') }}</n-button>
         <n-button size="small" quaternary :disabled="!logContent" @click="copyLog">{{ $t('taskCenter.copyBuffer') }}</n-button>
       </n-space>
     </div>
     <n-spin :show="logLoading">
-      <pre ref="logPre" class="full-log">{{ logContent || $t('taskCenter.emptyBuffer') }}</pre>
+      <pre v-if="logContent" ref="logPre" class="full-log" v-html="logRenderHtml"></pre>
+      <pre v-else class="full-log">{{ $t('taskCenter.emptyBuffer') }}</pre>
     </n-spin>
   </n-modal>
 </template>
@@ -148,6 +148,7 @@ Public License v3. See the LICENSE file for details.
 import { computed, nextTick, onUnmounted, ref, watch } from 'vue';
 import { GetServiceOutput } from '../../bindings/ally-dev/internal/app/app';
 import { formatDateTime, t } from '../i18n.mjs';
+import { renderAnsiToHtml } from '../utils/ansi.mjs';
 
 const props = defineProps({
   show: { type: Boolean, default: false },
@@ -161,7 +162,10 @@ const props = defineProps({
 
 defineEmits(['close', 'refresh', 'deleteTask', 'stopService']);
 
-const activeTab = ref('scheduled');
+// Background services come first: they are the live, interactive part of the
+// task center (stop / tail a running dev server), while scheduled tasks are
+// mostly static rows you glance at.
+const activeTab = ref('services');
 const tabsRef = ref(null);
 const logVisible = ref(false);
 const logLoading = ref(false);
@@ -172,12 +176,29 @@ const logServiceId = ref('');
 const logServiceActive = ref(false);
 const logPre = ref(null);
 let logRefreshTimer = 0;
+
 const scheduledRunningCount = computed(() => props.tasks.filter((task) => task?.running).length);
 const serviceRunningCount = computed(() => props.services.filter(isActiveService).length);
 const loading = computed(() => props.scheduledLoading || props.servicesLoading);
 
+// Service output carries SGR color escapes. Converting the whole buffer to
+// styled HTML on every refresh would be wasteful, so the util drops the head of
+// oversized buffers and reports how much it dropped.
+const logRender = computed(() => renderAnsiToHtml(logContent.value));
+const logRenderHtml = computed(() => logRender.value.html);
+const logRenderNote = computed(() => (logRender.value.droppedChars > 0
+  ? t('taskCenter.renderTruncated', {
+    size: formatBytes(logRender.value.renderedChars),
+    dropped: formatBytes(logRender.value.droppedChars),
+  })
+  : ''));
+
 function syncTabs() {
   nextTick(() => tabsRef.value?.syncBarPosition?.());
+}
+
+function previewHtml(text) {
+  return renderAnsiToHtml(text).html;
 }
 
 function openScheduledLog(task) {
@@ -357,29 +378,32 @@ function formatBytes(value) {
 <style scoped>
 .task-center-body { height: min(72vh, 760px); min-height: 360px; overflow: auto; padding-right: 4px; }
 .task-center-body :deep(.n-tabs) { min-height: 100%; }
-.task-overview { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-bottom: 14px; color: var(--ally-text-muted); font-size: 12px; }
-.task-list { display: flex; flex-direction: column; gap: 12px; padding-bottom: 12px; }
-.task-card { padding: 14px; border: 1px solid var(--ally-border); border-radius: 10px; background: var(--ally-hover-faint); }
-.card-header, .actions, .log-toolbar { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
-.title-wrap { min-width: 0; }
-.card-title { color: var(--ally-text-primary); font-size: 14px; font-weight: 650; }
+.task-overview { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-bottom: 10px; color: var(--ally-text-muted); font-size: 12px; }
+.task-list { display: flex; flex-direction: column; gap: 8px; padding-bottom: 8px; }
+.task-card { padding: 8px 10px; border: 1px solid var(--ally-border); border-radius: 8px; background: var(--ally-hover-faint); }
+.card-head { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 12px; justify-content: space-between; }
+.head-main { display: flex; align-items: baseline; flex-wrap: wrap; min-width: 0; gap: 4px 8px; }
+.head-side { display: flex; align-items: center; flex-shrink: 0; gap: 4px; }
+.card-title { color: var(--ally-text-primary); font-size: 13px; font-weight: 650; }
 .mono-muted { color: var(--ally-text-faint); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 11px; }
 .ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tags { display: flex; flex-shrink: 0; gap: 6px; }
-.meta-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px 16px; margin: 14px 0 10px; }
-.meta-grid div { display: flex; flex-direction: column; gap: 2px; }
-.meta-grid span { color: var(--ally-text-faint); font-size: 11px; }
-.meta-grid strong { overflow: hidden; color: var(--ally-text-body); font-size: 12px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
-.instruction, .command { display: -webkit-box; margin-top: 10px; overflow: hidden; color: var(--ally-text-body); font-size: 12px; line-height: 1.55; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
-.command { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; -webkit-line-clamp: 2; }
-.buffer-preview { margin-top: 12px; padding: 10px; border-radius: 8px; background: var(--ally-hover-faint); }
+
+/* Dense label/value pairs on one wrapping line instead of a two-column grid. */
+.meta-line { display: flex; flex-wrap: wrap; gap: 2px 0; margin: 6px 0 4px; color: var(--ally-text-body); font-size: 11px; }
+.meta-item { display: inline-flex; align-items: baseline; gap: 4px; }
+.meta-item + .meta-item::before { margin: 0 8px; color: var(--ally-border-strong, var(--ally-text-faint)); content: '\00B7'; }
+.meta-item i { color: var(--ally-text-faint); font-size: 11px; font-style: normal; }
+
+.instruction, .command { display: -webkit-box; margin-top: 4px; overflow: hidden; color: var(--ally-text-body); font-size: 12px; line-height: 1.5; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.command { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+.buffer-preview { margin-top: 8px; padding: 8px 10px; border-radius: 8px; background: var(--ally-hover-faint); }
 .buffer-preview.error, .service-error { background: rgba(239,68,68,.08); }
 .buffer-title { margin-bottom: 6px; color: var(--ally-text-muted); font-size: 11px; }
 .buffer-preview pre { display: -webkit-box; margin: 0; overflow: hidden; color: var(--ally-text-body); font: 11px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace; white-space: pre-wrap; word-break: break-word; -webkit-box-orient: vertical; -webkit-line-clamp: 6; }
-.service-error { margin-top: 10px; padding: 8px 10px; border-radius: 8px; color: var(--ally-danger-pale); font-size: 11px; }
-.actions { justify-content: flex-end; margin-top: 12px; }
+.service-error { margin-top: 6px; padding: 6px 10px; border-radius: 8px; color: var(--ally-danger-pale); font-size: 11px; }
 .empty-hint { color: var(--ally-text-faint); font-size: 12px; }
-.log-toolbar { align-items: center; margin-bottom: 10px; color: var(--ally-text-muted); font-size: 11px; }
+.log-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 12px; margin-bottom: 10px; color: var(--ally-text-muted); font-size: 11px; }
+.log-toolbar .n-space { margin-left: auto; }
+.log-note { color: var(--ally-warning-pale, var(--ally-text-faint)); }
 .full-log { height: min(68vh, 720px); margin: 0; overflow: auto; padding: 14px; border: 1px solid var(--ally-border); border-radius: 8px; background: var(--ally-code-bg); color: var(--ally-text-body); font: 12px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace; tab-size: 2; white-space: pre-wrap; word-break: break-word; }
-@media (max-width: 720px) { .meta-grid { grid-template-columns: 1fr; } }
 </style>
