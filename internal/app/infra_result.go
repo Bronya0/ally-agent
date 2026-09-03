@@ -242,28 +242,40 @@ func compactToolDataForModel(name string, result toolResult, fullJSON string) st
 				content = "[Content omitted: this exact path/range was already returned to you earlier in this turn. version is unchanged — safe to reuse for edit. If you need the content again, re-read this same range and it will be returned in full.]"
 			}
 			item := map[string]any{
-				"path":       f.Path,
-				"kind":       f.Kind,
-				"content":    content,
-				"startLine":  f.StartLine,
-				"endLine":    f.EndLine,
-				"totalLines": f.TotalLines,
-				"version":    f.Version,
-				"lineEnding": f.LineEnding,
-				"truncated":  f.Truncated,
-				"reused":     f.Reused,
-				"error":      f.Error,
-				"errorCode":  f.ErrorCode,
+				"path":    f.Path,
+				"content": content,
+				"version": f.Version,
+			}
+			if f.StartLine > 0 {
+				item["startLine"] = f.StartLine
+			}
+			if f.EndLine > 0 {
+				item["endLine"] = f.EndLine
+			}
+			if f.TotalLines > 0 {
+				item["totalLines"] = f.TotalLines
+			}
+			if f.Truncated {
+				item["truncated"] = true
+			}
+			if f.Reused {
+				item["reused"] = true
+			}
+			if f.Error != "" {
+				item["error"] = f.Error
+			}
+			if f.ErrorCode != "" {
+				item["errorCode"] = f.ErrorCode
 			}
 			if f.DataURL != "" {
-				item["image"] = "sent as image input in the following user message"
+				item["image"] = "sent as image input in following message"
 				injected = true
 			}
 			files = append(files, item)
 		}
 		data := map[string]any{"files": files}
 		if injected {
-			data["note"] = "Image file(s) were injected as actual image input in a following user message; the base64 payload is omitted here to save tokens."
+			data["note"] = "Image file(s) injected as user image input."
 		}
 		return marshalToolResultOrFallback(toolResult{OK: true, Data: data}, fullJSON)
 	case "list_files":
@@ -306,9 +318,18 @@ func compactToolDataForModel(name string, result toolResult, fullJSON string) st
 		}
 		files := make([]map[string]any, 0, len(r.Files))
 		for _, file := range r.Files {
-			files = append(files, map[string]any{"path": file.Path, "beforeVersion": file.BeforeVersion, "version": file.Version, "addedLines": file.AddedLines, "removedLines": file.RemovedLines, "firstChangedLine": file.FirstChanged, "lastChangedLine": file.LastChanged})
+			files = append(files, map[string]any{
+				"path":    file.Path,
+				"version": file.Version,
+			})
 		}
-		data := map[string]any{"files": files, "fileCount": r.FileCount, "addedLines": r.AddedLines, "removedLines": r.RemovedLines, "summary": r.Summary, "warnings": r.Warnings, "postEditNote": "Reuse a version only when the current source is known exactly; otherwise re-read numbered text before another oldText or lineRange edit."}
+		data := map[string]any{
+			"files":   files,
+			"summary": r.Summary,
+		}
+		if len(r.Warnings) > 0 {
+			data["warnings"] = r.Warnings
+		}
 		if r.Validation != "" {
 			data["validation"] = r.Validation
 		}
@@ -319,32 +340,21 @@ func compactToolDataForModel(name string, result toolResult, fullJSON string) st
 			return fullJSON
 		}
 		data := map[string]any{
-			"path":             r.Path,
-			"beforeVersion":    r.BeforeVersion,
-			"version":          r.Version,
-			"beforeBytes":      r.BeforeBytes,
-			"afterBytes":       r.AfterBytes,
-			"addedLines":       r.AddedLines,
-			"removedLines":     r.RemovedLines,
-			"lineEnding":       r.LineEnding,
-			"summary":          r.Summary,
-			"firstChangedLine": r.FirstChanged,
-			"lastChangedLine":  r.LastChanged,
-			"warnings":         r.Warnings,
-			"classification":   r.Classification,
-			"postEditNote":     "Reuse version only when the current source is known exactly; otherwise re-read numbered text before another oldText or lineRange edit.",
+			"path":    r.Path,
+			"version": r.Version,
+			"summary": r.Summary,
 		}
 		if r.Created != nil {
 			data["created"] = *r.Created
 		}
-		if r.Validation != "" {
-			data["validation"] = r.Validation
-		}
 		if len(r.CreatedDirs) > 0 {
 			data["createdDirs"] = r.CreatedDirs
 		}
-		if r.Diff != "" {
-			data["diffOmitted"] = "Full diff omitted from model context to reduce tokens; use read around firstChangedLine/lastChangedLine if exact post-edit content is needed."
+		if r.Validation != "" {
+			data["validation"] = r.Validation
+		}
+		if len(r.Warnings) > 0 {
+			data["warnings"] = r.Warnings
 		}
 		return marshalToolResultOrFallback(toolResult{OK: true, Data: data}, fullJSON)
 	case "command", "remote_run_command":
@@ -362,27 +372,23 @@ func compactToolDataForModel(name string, result toolResult, fullJSON string) st
 			output, reduced = tailCommandOutputForModel(r.Output, r.ExitCode)
 		}
 		data := map[string]any{
-			"command":    r.Command,
-			"cwd":        r.Cwd,
-			"shell":      r.Shell,
-			"shellPath":  r.ShellPath,
-			"output":     output,
-			"exitCode":   r.ExitCode,
-			"timedOut":   r.TimedOut,
-			"durationMs": r.DurationMS,
-			"truncated":  r.Truncated,
+			"command":  r.Command,
+			"cwd":      r.Cwd,
+			"output":   output,
+			"exitCode": r.ExitCode,
+		}
+		if r.TimedOut {
+			data["timedOut"] = true
+		}
+		if r.Truncated {
+			data["truncated"] = true
 		}
 		if reduced {
 			data["outputReduced"] = true
-			data["originalOutputBytes"] = len(r.Output)
-			data["reductionNote"] = "Output trimmed to the last 3 lines plus exitCode to save context. Pass fullOutput:true on the command call when you need the complete output (git status/diff/log, ls, cat, grep, verbose failure logs); when outputFilePath is present the full output of this run is on disk and readable via read — do not re-run side-effecting commands just to see more output."
+			data["reductionNote"] = "Pass fullOutput:true for full output, or read outputFilePath."
 		}
 		if r.OutputFilePath != "" {
 			data["outputFilePath"] = r.OutputFilePath
-			if r.OutputFileBytes > 0 {
-				data["outputFileBytes"] = r.OutputFileBytes
-			}
-			data["outputNote"] = "完整输出已保存到该文件，可用 read 工具读取全部内容。"
 		}
 		return marshalToolResultOrFallback(toolResult{OK: true, Data: data}, fullJSON)
 	case "service":
@@ -471,14 +477,15 @@ func compactToolDataForModel(name string, result toolResult, fullJSON string) st
 			return fullJSON
 		}
 		data := map[string]any{
-			"deleted":      r.Deleted,
-			"path":         r.Path,
-			"kind":         r.Kind,
-			"recursive":    r.Recursive,
-			"removedFiles": r.RemovedFiles,
-			"removedDirs":  r.RemovedDirs,
-			"removedBytes": r.RemovedBytes,
-			"wasSymlink":   r.WasSymlink,
+			"deleted": r.Deleted,
+			"path":    r.Path,
+			"kind":    r.Kind,
+		}
+		if r.RemovedFiles > 0 {
+			data["removedFiles"] = r.RemovedFiles
+		}
+		if r.RemovedDirs > 0 {
+			data["removedDirs"] = r.RemovedDirs
 		}
 		return marshalToolResultOrFallback(toolResult{OK: true, Data: data}, fullJSON)
 	case "grep":
@@ -570,32 +577,28 @@ func compactToolDataForModel(name string, result toolResult, fullJSON string) st
 		}
 		body, reduced := compactTextForModel(r.Body, maxModelWebOutput)
 		data := map[string]any{
-			"method":        r.Method,
-			"url":           r.URL,
-			"finalUrl":      r.FinalURL,
-			"status":        r.Status,
-			"statusText":    r.StatusText,
-			"headers":       r.Headers,
-			"contentType":   r.ContentType,
-			"body":          body,
-			"bodyEncoding":  r.BodyEncoding,
-			"jsonPreview":   r.JSONPreview,
-			"jsonTruncated": r.JSONTruncated,
-			"bytesRead":     r.BytesRead,
-			"truncated":     r.Truncated,
-			"durationMs":    r.DurationMS,
-			"redirects":     r.Redirects,
+			"status":     r.Status,
+			"statusText": r.StatusText,
+			"url":        r.URL,
+			"body":       body,
 		}
-		if r.JSON != nil && r.JSONPreview == "" {
+		if r.FinalURL != "" && r.FinalURL != r.URL {
+			data["finalUrl"] = r.FinalURL
+		}
+		if r.ContentType != "" {
+			data["contentType"] = r.ContentType
+		}
+		if r.JSONPreview != "" {
+			data["jsonPreview"] = r.JSONPreview
+		} else if r.JSON != nil {
 			data["json"] = r.JSON
 		}
-		if r.BodyBase64 != "" {
-			data["bodyBase64Omitted"] = "Binary response body omitted from model context; UI received base64 data."
+		if r.Truncated {
+			data["truncated"] = true
 		}
 		if reduced {
 			data["bodyReduced"] = true
-			data["originalBodyChars"] = len(r.Body)
-			data["reductionNote"] = "The response exceeded the model-context safety cap. Narrow the request, use an API pagination parameter, or saveTo a workspace file and inspect it with read when the full body is required."
+			data["reductionNote"] = "Response body truncated to safety cap."
 		}
 		return marshalToolResultOrFallback(toolResult{OK: true, Data: data}, fullJSON)
 	case "web_fetch":
@@ -605,22 +608,23 @@ func compactToolDataForModel(name string, result toolResult, fullJSON string) st
 		}
 		text, reduced := compactTextForModel(r.Text, maxModelWebOutput)
 		data := map[string]any{
-			"url":         r.URL,
-			"finalUrl":    r.FinalURL,
-			"status":      r.Status,
-			"statusText":  r.StatusText,
-			"title":       r.Title,
-			"text":        text,
-			"contentType": r.ContentType,
-			"links":       r.Links,
-			"bytesRead":   r.BytesRead,
-			"truncated":   r.Truncated,
-			"durationMs":  r.DurationMS,
+			"url":    r.URL,
+			"status": r.Status,
+			"title":  r.Title,
+			"text":   text,
+		}
+		if r.FinalURL != "" && r.FinalURL != r.URL {
+			data["finalUrl"] = r.FinalURL
+		}
+		if len(r.Links) > 0 {
+			data["links"] = r.Links
+		}
+		if r.Truncated {
+			data["truncated"] = true
 		}
 		if reduced {
 			data["textReduced"] = true
-			data["originalTextChars"] = len(r.Text)
-			data["reductionNote"] = "Readable page text exceeded the model-context safety cap. Fetch a more specific page or request a smaller maxChars value only when a focused section is sufficient."
+			data["reductionNote"] = "Readable text truncated to safety cap."
 		}
 		return marshalToolResultOrFallback(toolResult{OK: true, Data: data}, fullJSON)
 	default:

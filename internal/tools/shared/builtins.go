@@ -47,7 +47,7 @@ func Builtins() []openai.Tool {
 
 func chatToolsUncached() []openai.Tool {
 	return []openai.Tool{
-		functionTool("list_files", "List files and directories. Workspace-relative paths are resolved under the workspace; explicit absolute paths are allowed for read-only inspection subject to safety checks. Returns {entries,count,truncated}: entries is a newline-joined path list where directories carry a trailing slash. A directory with more direct files than the per-directory budget collapses its remainder into one '+N more files' line — list that directory by path (empty path lists the workspace root) to enumerate it fully.", map[string]any{
+		functionTool("list_files", "List files and directories within a workspace path. Directories end with '/'.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"path":           map[string]any{"type": "string", "description": "Workspace-relative directory path, or explicit absolute path for read-only listing. Empty means workspace root."},
@@ -58,14 +58,10 @@ func chatToolsUncached() []openai.Tool {
 			},
 		}),
 		functionTool("edit", "Validate and apply exact replacements to one workspace file per call.\n"+
-			"- Edit exactly ONE file per call: `path`, `version`, and `changes` sit at the top level of the arguments. To change several files, send multiple parallel edit calls in the same response, one per file; never send two edit calls for the same file in one response.\n"+
-			"- Read the file first; `version` is the required current 6-character version token from `read` or the file's preceding successful edit. A stale version fails with `E_VERSION_MISMATCH`; re-read the file and retry.\n"+
-			"- `changes` must be a JSON array (`[...]`), never a quoted string; missing required fields fail the whole call.\n"+
-			"- Prefer a small exact unique `oldText` per change; `replace_all` replaces every non-overlapping exact occurrence; `lineRange` (A-B form) replaces larger whole-line blocks.\n"+
-			"- If exact matching fails, Ally retries once after normalizing invisible differences such as trailing spaces and smart/Unicode quotes and dashes. An ambiguous match fails with `E_MULTI_MATCH`; add surrounding context.\n"+
-			"- All changes match against the same original read snapshot, so no offset adjustment is needed between changes.\n"+
-			"- After writing, `validation` contains a concise syntax/compile check. The file is already written if validation fails; fix the reported issue with another edit.\n"+
-			"- Error codes include `E_BAD_EDIT`, `E_VERSION_MISMATCH`, and `E_PATH_OUTSIDE`.", map[string]any{
+			"- Edit exactly ONE file per call: `path`, `version`, and `changes` sit at the top level. Parallel edit calls are allowed for multiple files.\n"+
+			"- Read the file first: `version` is the required current 6-character token from `read`.\n"+
+			"- Prefer a small unique `oldText` per change; `replace_all` replaces all exact occurrences; `lineRange` (A-B form) replaces whole-line blocks.\n"+
+			"- All changes in one call match against the same original snapshot in reverse line order.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"path":    map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Workspace-relative path of the single file to edit in this call."},
@@ -80,7 +76,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"path", "version", "changes"},
 		}),
-		functionTool("create", "Create a new UTF-8 text file inside the workspace (or an additional session-level extra root). Parent directories are created automatically. Does not overwrite unless overwrite is true. Refuses symlink targets and non-text overwrites. After writing, `validation` contains a concise automatic syntax/compile check; if it reports a failure, the file is already written and should be fixed with another edit. Error codes: E_PATH_OUTSIDE, E_EXISTS, E_TARGET_IS_DIRECTORY, E_SYMLINK_PATH, E_TEXT_OVERWRITE.", map[string]any{
+		functionTool("create", "Create or overwrite a UTF-8 text file in the workspace. Parent directories are created automatically.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"path":      map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*"},
@@ -89,7 +85,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"path", "content"},
 		}),
-		functionTool("delete", "Delete a file, symlink, or directory in the workspace (or an additional session-level extra root). Directories require recursive=true. Refuses any allowed root, VCS metadata (.git, .svn, .hg), and OS-sensitive paths. Symlink parents are resolved for workspace safety; deleting a final symlink removes the link itself, not its target. Returns path, kind, and removed item counts. Error codes: E_PATH_OUTSIDE, E_PATH_NOT_FOUND, E_DIR_REQUIRES_RECURSIVE, E_DELETE_BLOCKED.", map[string]any{
+		functionTool("delete", "Delete a file or directory in the workspace. Directories require recursive=true.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"path":      map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*"},
@@ -126,7 +122,7 @@ func chatToolsUncached() []openai.Tool {
 				map[string]any{"properties": map[string]any{"action": map[string]any{"const": "list"}}},
 			},
 		}),
-		functionTool("wait", "Pause the current agent run for a short, cancellable delay after an asynchronous operation has started or while a concrete external condition is expected to change. Call wait as the only tool in the model response, then verify the condition after it completes. Do not use it for user input or long schedules. Error codes: E_BAD_WAIT, E_WAIT_CANCELLED, E_WAIT_BATCH_CONFLICT.", map[string]any{
+		functionTool("wait", "Pause the current agent run for a short, cancellable delay (1-3600 seconds) with a reason.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"seconds": map[string]any{"type": "integer", "minimum": 1, "maximum": maxWaitSeconds, "description": "Delay in whole seconds, from 1 to 3600."},
@@ -134,7 +130,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"seconds", "reason"},
 		}),
-		functionTool("ask", "Pause the current visible agent run and ask the user decision questions. Every question needs concise options with unique ids, labels, useful descriptions, and exactly one recommended option. The UI supports multiple selections and appends a custom-answer choice, so do not add an Other/Custom option. Call ask as the only tool in the model response. Error codes: E_BAD_ASK, E_ASK_CANCELLED, E_ASK_BATCH_CONFLICT.", map[string]any{
+		functionTool("ask", "Ask the user decision questions. Each question requires concise options with id, label, description, and exactly one recommended option.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"questions": map[string]any{
@@ -164,7 +160,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"questions"},
 		}),
-		functionTool("scheduled_task", "Create, list, or delete temporary scheduled Agent tasks for the current Ally process. Create only when the user explicitly requests scheduled or recurring automation. Scheduled runs get the normal tool set (commands, file ops, network, MCP, delegation) except scheduled_task itself. Tasks use fresh isolated context each run and are cleared when Ally restarts. Use action=list only when asked or an id is needed; never poll. Results appear in the Task Center UI, not the current conversation.", map[string]any{
+		functionTool("scheduled_task", "Create, list, or delete temporary scheduled tasks for the current process. Create only when the user requests recurring automation.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"action":      map[string]any{"type": "string", "enum": []string{"create", "list", "delete"}, "description": "Create, list, or delete a scheduled task."},
@@ -180,7 +176,7 @@ func chatToolsUncached() []openai.Tool {
 				map[string]any{"properties": map[string]any{"action": map[string]any{"const": "delete"}}, "required": []string{"id"}},
 			},
 		}),
-		functionTool("http_request", "Make a single HTTP/HTTPS request with custom method, headers, query, body or JSON. Use for APIs, webhooks, internal services, and precise protocol debugging. Safe defaults include a bounded response size, timeout, redirect limit, per-host rate limit, and clear User-Agent. Private/local network access follows the app's allowPrivateNetwork setting, which is enabled by default.", map[string]any{
+		functionTool("http_request", "Make a single HTTP/HTTPS request with method, headers, query, body or JSON.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"method":             map[string]any{"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9!#$%&'*+.^_`|~-]*$", "description": "HTTP method token. Default GET; normalized to uppercase before sending."},
@@ -197,7 +193,7 @@ func chatToolsUncached() []openai.Tool {
 			"required": []string{"url"},
 			"not":      map[string]any{"required": []string{"body", "json"}},
 		}),
-		functionTool("web_fetch", "Fetch a web page and return readable text, title, and links. Use for ordinary page reading instead of curl. Pass format:\"raw\" to get a bounded decoded page source without extraction, e.g. when readable mode fails or you need the original markup. Safe defaults include a bounded size, timeout, redirect limit, per-host rate limit, and clear User-Agent. Private/local network access follows the app's allowPrivateNetwork setting, which is enabled by default.", map[string]any{
+		functionTool("web_fetch", "Fetch a web page and return readable text, title, and links.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"url":                map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Absolute http:// or https:// URL."},
@@ -253,7 +249,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"target", "path"},
 		}),
-		functionTool("remote_run_command", "Run a non-interactive shell command on a remote SSH workspace (same contract as command, including the required fullOutput decision: true if you will read the output itself as the answer, false if you only check success/failure; explicit deletion commands are refused — use remote_delete_path). Cwd defaults to the workspace root. Use find, ls, or other shell commands for remote directory discovery. Search remote code with grep -rn 'pattern' src/. Error codes: E_PATH_OUTSIDE, E_CWD_INVALID, E_LONG_RUNNING_COMMAND.", map[string]any{
+		functionTool("remote_run_command", "Run a non-interactive shell command on a remote SSH workspace. Set fullOutput:true to inspect output, false for build/test status.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"target":         map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Explicit SSH target plus workspace root, e.g. my-dev:/srv/app."},
@@ -294,7 +290,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 		}),
 
-		functionTool("calculate", "Evaluate a deterministic math expression without shelling out. Supports + - * / % ^, parentheses, constants pi/e, and functions sqrt, abs, sin, cos, tan, asin, acos, atan, log, ln, exp, floor, ceil, round, min, max.", map[string]any{
+		functionTool("calculate", "Evaluate a deterministic math expression (e.g. 144 + 2^3, sqrt(16), sin(pi/2)).", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"expression": map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Math expression to evaluate."},
@@ -318,7 +314,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"html"},
 		}),
-		functionTool("plan", "Create or update a visible task list only when longer work genuinely benefits from progress tracking. Do not use it for trivial tasks or merely to demonstrate activity. State machine discipline: keep at most one item `in_progress` at a time; mark the current item `done` before advancing the next; do not jump a `pending` item straight to `done`.", map[string]any{
+		functionTool("plan", "Manage the session task list. Update todo statuses (pending, in_progress, done) or omit to read the current plan.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"todos": map[string]any{
@@ -355,7 +351,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"skill"},
 		}),
-		functionTool("suggest", "Suggest 1-4 follow-up actions as clickable chips below your last reply, ordered by relevance from most to least recommended. Each label is sent as-is as the user's next message when clicked. Call this only when the user might genuinely benefit from a concrete next step; if no useful follow-up exists, do not call it. Must be the only tool call in its batch, and a successful call ends the turn — emit it only after your reply content is complete. Error codes: E_BAD_SUGGEST, E_SUGGEST_BATCH_CONFLICT.", map[string]any{
+		functionTool("suggest", "Suggest 1-4 follow-up actions as clickable chips below your reply, ordered by relevance.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"items": map[string]any{
@@ -377,30 +373,15 @@ func chatToolsUncached() []openai.Tool {
 }
 
 var builtinToolExamples = map[string]string{
-	"list_files":         `{"path":"frontend/src","maxDepth":2,"limit":200}`,
 	"edit":               `{"path":"app.go","version":"9k3m7x","changes":[{"oldText":"const oldName = oldValue","newText":"const newName = newValue"}]}; lineRange: {"path":"app.go","version":"9k3m7x","changes":[{"lineRange":"40-72","newText":"replacement block"}]}`,
-	"create":             `{"path":"notes/example.md","content":"# Example\n","overwrite":false}`,
-	"delete":             `{"path":"tmp/generated","recursive":true}`,
 	"command":            `{"command":"go test ./...","cwd":".","timeout":120,"fullOutput":false}`,
 	"service":            `start: {"action":"start","name":"frontend","command":"npm run dev","cwd":"frontend"}; stop: {"action":"stop","id":"svc_..."}; list: {"action":"list"}; read: {"action":"read","id":"svc_...","tailBytes":8192}`,
-	"wait":               `{"seconds":5,"reason":"Wait for the development server to become ready"}`,
 	"ask":                `{"questions":[{"id":"database","question":"Which database should we use?","options":[{"id":"sqlite","label":"SQLite","description":"Simple local storage.","recommended":true},{"id":"postgres","label":"PostgreSQL","description":"Production database.","recommended":false}]}]}`,
-	"scheduled_task":     `create: {"action":"create","name":"daily check","instruction":"Run tests and summarize failures.","schedule":"0 9 * * *"}; list: {"action":"list"}; delete: {"action":"delete","id":"task_..."}`,
-	"http_request":       `{"url":"https://api.example.com/items","method":"GET","query":{"limit":"10"},"timeout":60}`,
-	"web_fetch":          `{"url":"https://example.com/docs","maxChars":60000}`,
-	"remote_read_file":   `{"target":"my-dev:/srv/app","path":"main.go"}`,
 	"remote_edit":        `{"target":"my-dev:/srv/app","path":"main.go","version":"9k3m7x","changes":[{"oldText":"func old() {}","newText":"func new() {}"}]}`,
-	"remote_create_file": `{"target":"my-dev:/srv/app","path":"notes.txt","content":"hello"}`,
-	"remote_delete_path": `{"target":"my-dev:/srv/app","path":"tmp/output","recursive":true}`,
 	"remote_run_command": `{"target":"my-dev:/srv/app","command":"go test ./...","fullOutput":false}`,
 	"grep":               `{"pattern":"TODO|FIXME","path":"frontend/src","glob":"*.vue","maxMatches":100}`,
 	"read":               `one file: {"path":"app.go"}; multiple files: {"files":[{"path":"app.go"},{"path":"main.go"}]}; range: {"files":[{"path":"services.go","startLine":1,"endLine":200}]}; tail: {"files":[{"path":"server.log","startLine":-200}]}`,
-	"calculate":          `{"expression":"sqrt(144) + 2^3"}`,
-	"render_html":        `{"title":"Interactive counter","html":"<button id='counter'>0</button><script>const button=document.getElementById('counter');button.onclick=()=>button.textContent=String(Number(button.textContent)+1)</script>"}`,
-	"plan":               `update: {"todos":[{"title":"Inspect implementation","status":"in_progress"},{"title":"Run tests","status":"pending"}]}; read current: {}`,
 	"subagent":           `{"task":"Inspect the authentication module and report concrete security issues.","role":"code reviewer","maxSteps":20,"description":"Review authentication"}`,
-	"skill":              `{"skill":"codegraph","args":"main"}`,
-	"suggest":            `{"items":["Run go build to verify","Add unit tests"]}`,
 }
 
 func functionTool(name, description string, parameters map[string]any) openai.Tool {
