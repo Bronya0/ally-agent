@@ -12,8 +12,13 @@ Public License v3. See the LICENSE file for details.
     <div class="tool-line read-grep-toggle" @click="toggleExpanded">
       <!-- 折叠行不放状态图标（比圆点/对勾更干净）：组内还有 running 调用时
            统计文字带 shimmer 流光即进行中信号，出错时统计文字转红 -->
-      <span v-if="isRunning" class="read-grep-stats read-grep-stats-thinking">{{ statsLabel }}</span>
-      <span v-else class="read-grep-stats">{{ statsLabel }}</span>
+      <!-- 折叠行：取消整行 shimmer 流光，文字保持固定，数字递增时播放微弹跳入动画 -->
+      <span class="read-grep-stats">
+        <template v-for="(part, idx) in statsParts" :key="part.key">
+          <span v-if="idx > 0" class="read-grep-stats-sep">{{ $t('common.commaSep') }}</span>
+          <span>{{ part.prefix }}</span><span class="read-grep-num-slot"><span :key="part.count" class="read-grep-num-bump">{{ part.count }}</span></span><span>{{ part.suffix }}</span>
+        </template>
+      </span>
       <span v-if="msg.readTotalLines > 0 && msg.readCount > 0" class="tool-chip">{{ readChip }}</span>
       <span v-if="hitsChip" class="tool-chip">{{ hitsChip }}</span>
       <span v-if="itemsChip" class="tool-chip">{{ itemsChip }}</span>
@@ -81,20 +86,35 @@ function toggleExpanded() {
 
 const isRunning = computed(() => props.msg.status === 'running');
 
-// 统计行："已读取 N 次，搜索 M 次，罗列 K 次"（单项时省略其他，逗号分隔）
-const statsLabel = computed(() => {
+function parseCountTemplate(tpl, count) {
+  const s = String(tpl || '');
+  const placeholder = '{count}';
+  const idx = s.indexOf(placeholder);
+  if (idx === -1) return { prefix: s, count, suffix: '' };
+  return {
+    prefix: s.slice(0, idx),
+    count,
+    suffix: s.slice(idx + placeholder.length),
+  };
+}
+
+// 统计项分片：将 "已读取 N 次" 拆分为 prefix, count, suffix
+// 使得 count 变化时仅数字部分触发微向上弹跳并柔和回落的动画，整行文字静止固定
+const statsParts = computed(() => {
   const parts = [];
   if (props.msg.readCount > 0) {
-    parts.push(t('tools.readGrep.readCount', { count: props.msg.readCount }));
+    parts.push({ key: 'read', ...parseCountTemplate(t('tools.readGrep.readCount', { count: '{count}' }), props.msg.readCount) });
   }
   if (props.msg.grepCount > 0) {
-    parts.push(t('tools.readGrep.grepCount', { count: props.msg.grepCount }));
+    parts.push({ key: 'grep', ...parseCountTemplate(t('tools.readGrep.grepCount', { count: '{count}' }), props.msg.grepCount) });
   }
   if (props.msg.listCount > 0) {
-    parts.push(t('tools.readGrep.listCount', { count: props.msg.listCount }));
+    parts.push({ key: 'list', ...parseCountTemplate(t('tools.readGrep.listCount', { count: '{count}' }), props.msg.listCount) });
   }
-  if (!parts.length) parts.push(t('tools.readGrep.readCount', { count: 1 }));
-  return parts.join(t('common.commaSep'));
+  if (!parts.length) {
+    parts.push({ key: 'read', ...parseCountTemplate(t('tools.readGrep.readCount', { count: '{count}' }), 1) });
+  }
+  return parts;
 });
 
 // 折叠行尾的行数统计 chip：去掉点号前缀，与统计文字用空隙分隔
