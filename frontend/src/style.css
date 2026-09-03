@@ -1677,11 +1677,11 @@ code, pre {
 }
 
 .composer-new-session-btn {
-  color: var(--ally-success-deep);
+  color: var(--ally-success);
 }
 
 .composer-sessions-btn {
-  color: #e0a070;
+  color: var(--ally-accent-strong);
 }
 
 .composer-explorer-btn {
@@ -1817,6 +1817,9 @@ code, pre {
   border-radius: 50%;
   background: var(--ally-accent);
   animation: thinking-bounce 1.3s ease-in-out infinite;
+  /* 三个点运行期间永不停歇：提升为独立合成层，动画只走合成器，
+     不再逐帧触发主线程重绘（WebView2 下小元素动画不必然被自动提升）。 */
+  will-change: transform, opacity;
 }
 
 .composer-run-status-dot:nth-child(2) {
@@ -1868,7 +1871,7 @@ code, pre {
 .composer-info .composer-new-session-btn,
 .composer-info .composer-sessions-btn,
 .composer-info .scheduled-task-chip {
-  opacity: 0.68;
+  opacity: 0.85;
   transition: opacity 0.15s ease;
 }
 
@@ -2084,7 +2087,7 @@ code, pre {
 }
 
 .composer-info .info-git {
-  color: var(--ally-text-body);
+  color: var(--ally-text-primary);
   display: flex;
   align-items: center;
   gap: 6px;
