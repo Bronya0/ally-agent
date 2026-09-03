@@ -2451,6 +2451,45 @@ func TestReadRejectsOfficeDocumentsWithAnydocGuidance(t *testing.T) {
 	}
 }
 
+func TestBatchReadWithTopLevelPathOffsetLimit(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "sample.txt"), []byte("line1\nline2\nline3\nline4\nline5\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	app := NewApp()
+	cfg := ConfigState{Workspace: dir}
+
+	// 1. Read whole file with only top-level path (default Pi style)
+	resWhole, err := app.batchReadFilesWithConfig(cfg, BatchReadRequest{
+		Path: "sample.txt",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resWhole.Files) != 1 || resWhole.Files[0].TotalLines != 5 || resWhole.Files[0].StartLine != 1 || resWhole.Files[0].EndLine != 5 {
+		t.Fatalf("expected whole file read, got %#v", resWhole.Files)
+	}
+	if !strings.Contains(resWhole.Files[0].Content, "1: line1") || !strings.Contains(resWhole.Files[0].Content, "5: line5") {
+		t.Fatalf("expected all 5 lines in content, got:\n%s", resWhole.Files[0].Content)
+	}
+
+	// 2. Read with offset and limit
+	resSlice, err := app.batchReadFilesWithConfig(cfg, BatchReadRequest{
+		Path:   "sample.txt",
+		Offset: 2,
+		Limit:  2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resSlice.Files) != 1 || resSlice.Files[0].StartLine != 2 || resSlice.Files[0].EndLine != 3 {
+		t.Fatalf("expected lines 2-3 with offset=2, limit=2, got %#v", resSlice.Files)
+	}
+	if resSlice.Files[0].Content != "2: line2\n3: line3" {
+		t.Fatalf("expected '2: line2\\n3: line3', got %q", resSlice.Files[0].Content)
+	}
+}
+
 func TestBatchReadKeepsSamePathWithDifferentEffectiveRanges(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "sample.txt"), []byte("one\ntwo\nthree\n"), 0o600); err != nil {

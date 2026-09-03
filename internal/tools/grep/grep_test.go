@@ -633,3 +633,86 @@ func TestSearchLegacyAliasCollapsesToLines(t *testing.T) {
 		}
 	}
 }
+
+func TestSearchPiStyleOutputFormattingAndOptions(t *testing.T) {
+	rg := requireRipgrep(t)
+	root := t.TempDir()
+	writeGrepTestFile(t, root, "pkg/main.go", "line one\nfunc TargetFunc() {\n\tconst X = 42\n}\nline five\n")
+
+	// 1. Basic match output
+	res, err := Search(context.Background(), rg, root, root, Request{
+		Pattern: "TargetFunc",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res.Output, "pkg/main.go:2: func TargetFunc() {") {
+		t.Fatalf("expected formatted output with line text, got:\n%s", res.Output)
+	}
+
+	// 2. Context lines (-C 1)
+	resContext, err := Search(context.Background(), rg, root, root, Request{
+		Pattern: "TargetFunc",
+		Context: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(resContext.Output, "pkg/main.go-1- line one") ||
+		!strings.Contains(resContext.Output, "pkg/main.go:2: func TargetFunc() {") ||
+		!strings.Contains(resContext.Output, "pkg/main.go-3- \tconst X = 42") {
+		t.Fatalf("expected context lines (-1- and -3-), got:\n%s", resContext.Output)
+	}
+
+	// 3. Literal (-F) search
+	resLiteral, err := Search(context.Background(), rg, root, root, Request{
+		Pattern: "TargetFunc()",
+		Literal: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(resLiteral.Output, "pkg/main.go:2: func TargetFunc() {") {
+		t.Fatalf("expected literal search match, got:\n%s", resLiteral.Output)
+	}
+
+	// 4. Case-insensitivity via ignoreCase
+	ignore := true
+	resIgnore, err := Search(context.Background(), rg, root, root, Request{
+		Pattern:    "targetfunc",
+		IgnoreCase: &ignore,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(resIgnore.Output, "pkg/main.go:2: func TargetFunc() {") {
+		t.Fatalf("expected case-insensitive match with ignoreCase, got:\n%s", resIgnore.Output)
+	}
+
+	// 5. Long line truncation (> 500 chars)
+	longLine := "const LongStr = \"" + strings.Repeat("A", 600) + "\""
+	writeGrepTestFile(t, root, "long.txt", longLine+"\n")
+	resLong, err := Search(context.Background(), rg, root, root, Request{
+		Pattern: "LongStr",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(resLong.Output, "... [truncated]") {
+		t.Fatalf("expected line truncation notice in line, got:\n%s", resLong.Output)
+	}
+	if !strings.Contains(resLong.Output, "[Some lines truncated to 500 chars. Use read tool to see full lines]") {
+		t.Fatalf("expected notice at end of output, got:\n%s", resLong.Output)
+	}
+
+	// 6. No matches found
+	resNone, err := Search(context.Background(), rg, root, root, Request{
+		Pattern: "NonExistentString12345",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resNone.Output != "No matches found" {
+		t.Fatalf("expected 'No matches found', got %q", resNone.Output)
+	}
+}

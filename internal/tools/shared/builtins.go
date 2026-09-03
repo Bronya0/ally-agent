@@ -265,29 +265,33 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"target", "command", "fullOutput"},
 		}),
-		functionTool("grep", "Search UTF-8 file contents with ripgrep. By default outputMode is `lines`, which returns one entry per matching line grouped by file (path + 1-based line number, no line text) — compact and flat so broad searches stay small, and the model jumps straight to a location with the read tool. Set outputMode to `count_matches` for exact per-file occurrence counts. Leaving `path` empty searches the whole workspace in one call with exact stats — do not repeat the search directory by directory. Workspace-wide searches report their skip policy in `skipped` (ignored files, heavy generated directories, files over 10 MB); an explicit `path` search intentionally bypasses those broad exclusions. Case-insensitive by default; use `caseSensitive: true` or prefix `(?-i)` for exact-case. `glob`: no slash matches the basename (`*.go`), with slash matches a relative path (`frontend/src/*.vue`). On result pagination, pass `nextOffset` back as `offset`; all stats stay exact; `offsetExhausted: true` means the offset skipped past the end, so reset to 0.", map[string]any{
+		functionTool("grep", "Search file contents for patterns using ripgrep. Returns matching lines with file paths, line numbers, and matching contents (truncated to 500 chars/line). Respects .gitignore. Supports regex or literal string search, glob filtering, context lines before/after matches, and match limits.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"pattern":        map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "ripgrep regex pattern to search for."},
-				"outputMode":     map[string]any{"type": "string", "enum": []string{"lines", "count_matches"}, "description": "Output shape. Default lines returns matching line numbers grouped by file (no line text); count_matches returns exact per-file occurrence counts."},
-				"path":           map[string]any{"type": "string", "description": "Optional subdirectory, or explicit absolute path for read-only search. Empty means workspace root."},
-				"glob":           map[string]any{"type": "string", "description": "Optional glob filter. No slash = basename (e.g. *.go); slash = relative path."},
-				"maxFiles":       map[string]any{"type": "integer", "minimum": 1, "maximum": 1000, "description": "Maximum file groups in lines mode (each still capped by maxMatches total lines), or distinct files per page in count_matches mode. Default 50. Exact stats still scan all matches."},
-				"maxMatches":     map[string]any{"type": "integer", "minimum": 1, "maximum": 5000, "description": "Maximum matching lines collected across the result in lines mode (shared across file groups). Default maxFiles*10, max 5000."},
-				"maxDepth":       map[string]any{"type": "integer", "minimum": 1, "maximum": 100, "description": "Maximum directory depth. Default 20, max 100."},
-				"timeout":        map[string]any{"type": "integer", "minimum": 1, "maximum": 120, "description": "Overall timeout in seconds across stats and samples. Default 30, max 120."},
+				"pattern":        map[string]any{"type": "string", "minLength": 1, "pattern": `.*\S.*`, "description": "Search pattern (regex or literal string)."},
+				"path":           map[string]any{"type": "string", "description": "Directory or file to search (default: workspace root)."},
+				"glob":           map[string]any{"type": "string", "description": "Filter files by glob pattern, e.g. '*.go' or 'frontend/**/*.vue'."},
+				"ignoreCase":     map[string]any{"type": "boolean", "description": "Case-insensitive search (default: true)."},
+				"literal":        map[string]any{"type": "boolean", "description": "Treat pattern as literal string instead of regex (default: false)."},
+				"context":        map[string]any{"type": "integer", "minimum": 0, "maximum": 20, "description": "Number of lines of context to show before and after each match (default: 0)."},
+				"limit":          map[string]any{"type": "integer", "minimum": 1, "maximum": 5000, "description": "Maximum number of matches to return (default: 100)."},
+				"outputMode":     map[string]any{"type": "string", "enum": []string{"lines", "count_matches"}, "description": "Output shape. Default lines returns matching lines with content; count_matches returns exact per-file counts."},
 				"includeIgnored": map[string]any{"type": "boolean", "description": "Include files ignored by .gitignore/.ignore. Default false."},
-				"caseSensitive":  map[string]any{"type": "boolean", "description": "Match case exactly. Default false (case-insensitive)."},
-				"offset":         map[string]any{"type": "integer", "minimum": 0, "description": "Skip the first N matching lines before collecting samples. Pass the previous nextOffset to page. A result with offsetExhausted: true means the offset skipped past the end, so reset to 0. Default 0."},
+				"caseSensitive":  map[string]any{"type": "boolean", "description": "Match case exactly. Default false."},
+				"offset":         map[string]any{"type": "integer", "minimum": 0, "description": "Skip the first N matching lines. Default 0."},
 			},
 			"required": []string{"pattern"},
 		}),
-		functionTool("read", "Read 1-20 files via a top-level `files` array (even for one file). Never use a top-level path/paths field or a string array; every item is an object with `path`. Missing paths and directories are silently omitted; other per-file failures stay visible. UTF-8 text is prefixed with display-only 1-based `N: ` line numbers and a 6-char `version` for edit — do not copy the prefixes into edit text. Omit startLine/endLine for the whole file; positive values give an inclusive range; a negative startLine reads the last N lines (max 10000) and must not combine with endLine. Large files auto-truncate with a `[Showing lines A-B of N. Use startLine=C to continue.]` marker — follow it to page. Only plain text files are supported: office/PDF documents (.docx/.pptx/.xlsx/.pdf, etc.) return E_DOCUMENT_UNSUPPORTED — convert them to Markdown with the anydoc skill first (e.g. npx -y @firecrawl/anydoc file.docx -o file.md), then read the converted .md. Images (.png/.jpg/.gif/.webp) are injected as visual input.", map[string]any{
+		functionTool("read", "Read file contents. Supports text files and images (jpg, png, gif, webp, bmp). Images are sent as visual input. For text files, output is prefixed with 1-based line numbers and a 6-character version for edit. By default, omit offset/limit to read the whole file (output truncated to 2000 lines or 128KB, whichever is hit first). Use offset/limit only for genuinely large files to page through them. When a file is truncated, continue with offset until complete. Accepts a single file via `path`, or multiple files via `files` (prefer `files` when reading multiple related files to reduce turn round-trips).", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"files": batchReadFilesSchema(),
+				"path":      map[string]any{"type": "string", "minLength": 1, "pattern": `.*\S.*`, "description": "Path to the file to read (relative or absolute)."},
+				"offset":    map[string]any{"type": "integer", "minimum": 1, "description": "Line number to start reading from (1-indexed). Optional; omit to read from beginning."},
+				"limit":     map[string]any{"type": "integer", "minimum": 1, "description": "Maximum number of lines to read. Optional; omit to read to end of file."},
+				"files":     batchReadFilesSchema(),
+				"startLine": map[string]any{"type": "integer", "minimum": -MaxReadRangeLines, "description": "Legacy alias for offset. Optional 1-based start line."},
+				"endLine":   map[string]any{"type": "integer", "minimum": 1, "description": "Legacy alias for end line. Optional inclusive end line."},
 			},
-			"required": []string{"files"},
 		}),
 
 		functionTool("calculate", "Evaluate a deterministic math expression without shelling out. Supports + - * / % ^, parentheses, constants pi/e, and functions sqrt, abs, sin, cos, tan, asin, acos, atan, log, ln, exp, floor, ceil, round, min, max.", map[string]any{
@@ -390,7 +394,7 @@ var builtinToolExamples = map[string]string{
 	"remote_delete_path": `{"target":"my-dev:/srv/app","path":"tmp/output","recursive":true}`,
 	"remote_run_command": `{"target":"my-dev:/srv/app","command":"go test ./...","fullOutput":false}`,
 	"grep":               `{"pattern":"TODO|FIXME","path":"frontend/src","glob":"*.vue","maxMatches":100}`,
-	"read":               `one file: {"files":[{"path":"app.go"}]}; range: {"files":[{"path":"services.go","startLine":1,"endLine":200}]}; tail: {"files":[{"path":"server.log","startLine":-200}]}`,
+	"read":               `one file: {"path":"app.go"}; multiple files: {"files":[{"path":"app.go"},{"path":"main.go"}]}; range: {"files":[{"path":"services.go","startLine":1,"endLine":200}]}; tail: {"files":[{"path":"server.log","startLine":-200}]}`,
 	"calculate":          `{"expression":"sqrt(144) + 2^3"}`,
 	"render_html":        `{"title":"Interactive counter","html":"<button id='counter'>0</button><script>const button=document.getElementById('counter');button.onclick=()=>button.textContent=String(Number(button.textContent)+1)</script>"}`,
 	"plan":               `update: {"todos":[{"title":"Inspect implementation","status":"in_progress"},{"title":"Run tests","status":"pending"}]}; read current: {}`,
@@ -425,13 +429,15 @@ func batchReadFilesSchema() map[string]any {
 		"items": map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"path":      map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "File path to read."},
-				"startLine": map[string]any{"type": "integer", "minimum": -MaxReadRangeLines, "description": "Optional 1-based start line. Positive reads from that line; negative reads the last N lines (max 10000) and must omit endLine."},
+				"path":      map[string]any{"type": "string", "minLength": 1, "pattern": `.*\S.*`, "description": "File path to read."},
+				"offset":    map[string]any{"type": "integer", "minimum": 1, "description": "Line number to start reading from (1-indexed)."},
+				"limit":     map[string]any{"type": "integer", "minimum": 1, "description": "Maximum number of lines to read."},
+				"startLine": map[string]any{"type": "integer", "minimum": -MaxReadRangeLines, "description": "Optional 1-based start line."},
 				"endLine":   map[string]any{"type": "integer", "minimum": 1, "description": "Optional inclusive end line; omit to read through EOF, and omit when startLine is negative."},
 			},
 			"required": []string{"path"},
 		},
-		"description": "Required array of file request objects. Example: [{\"path\":\"app.go\"}]. Each item must be an object with path; never use a string array. Missing paths and directories are silently omitted from results.",
+		"description": "Optional array of file request objects for reading multiple files at once.",
 	}
 }
 

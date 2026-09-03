@@ -54,6 +54,13 @@ const (
 	// maxGrepThreads keeps interactive searches responsive without allowing
 	// ripgrep to occupy every logical CPU on large workspaces.
 	maxGrepThreads = 4
+
+	// DefaultMaxMatches is the default match limit (100, matching Pi).
+	DefaultMaxMatches = 100
+	// DefaultMaxOutputBytes is the maximum byte limit for grep output (50KB, matching Pi).
+	DefaultMaxOutputBytes = 50 * 1024
+	// MaxGrepLineLength is the maximum characters per grep match line (500, matching Pi).
+	MaxGrepLineLength = 500
 )
 
 const (
@@ -103,6 +110,12 @@ type Request struct {
 	// distinct matching files. Pass the previous result's NextOffset here to
 	// page through large sets.
 	Offset int `json:"offset,omitempty"`
+
+	// Pi compatibility fields:
+	IgnoreCase *bool `json:"ignoreCase,omitempty"`
+	Literal    bool  `json:"literal,omitempty"`
+	Context    int   `json:"context,omitempty"`
+	Limit      int   `json:"limit,omitempty"`
 }
 
 // LineFileMatch groups matching line numbers for one file. The path is
@@ -126,6 +139,7 @@ type FileCount struct {
 // MatchedLines/Hits/Files stay exact across all modes. NextOffset pages the
 // active mode's result entries.
 type Result struct {
+	Output       string          `json:"output,omitempty"`
 	Mode         string          `json:"mode"`
 	LineHits     []LineFileMatch `json:"matches,omitempty"`
 	FileCounts   []FileCount     `json:"fileCounts,omitempty"`
@@ -244,7 +258,7 @@ func Search(ctx context.Context, rgPath, root, searchRoot string, req Request) (
 	mode := normalizedOutputMode(req.OutputMode)
 	maxDepth, maxFiles, maxMatches := limits(req)
 
-	lineHits, fileCounts, nextOffset, stats, truncated, offsetExhausted, warnings, err := sampleMatches(ctx, rgPath, root, searchRoot, req, maxDepth, maxFiles, maxMatches)
+	lineHits, fileCounts, output, nextOffset, stats, truncated, offsetExhausted, warnings, err := sampleMatches(ctx, rgPath, root, searchRoot, req, maxDepth, maxFiles, maxMatches)
 	if err != nil {
 		return nil, err
 	}
@@ -253,6 +267,7 @@ func Search(ctx context.Context, rgPath, root, searchRoot string, req Request) (
 	}
 
 	res := &Result{
+		Output:          output,
 		Mode:            mode,
 		MatchedLines:    stats.MatchedLines,
 		Hits:            stats.Matches,
@@ -353,9 +368,16 @@ func limits(req Request) (maxDepth, maxFiles, maxMatches int) {
 	if maxFiles > 1000 {
 		maxFiles = 1000
 	}
-	maxMatches = req.MaxMatches
+	maxMatches = req.Limit
 	if maxMatches <= 0 {
-		maxMatches = maxFiles * 10
+		maxMatches = req.MaxMatches
+	}
+	if maxMatches <= 0 {
+		if req.MaxFiles > 0 {
+			maxMatches = maxFiles * 10
+		} else {
+			maxMatches = DefaultMaxMatches
+		}
 	}
 	if maxMatches > 5000 {
 		maxMatches = 5000
@@ -401,7 +423,19 @@ func baseArgs(req Request, maxDepth int) []string {
 	if strings.TrimSpace(req.Path) == "" {
 		args = append(args, "--max-filesize", "10M")
 	}
-	if req.CaseSensitive {
+	if req.Literal {
+		args = append(args, "--fixed-strings")
+	}
+	if req.Context > 0 {
+		args = append(args, "-C", strconv.Itoa(req.Context))
+	}
+	if req.IgnoreCase != nil {
+		if *req.IgnoreCase {
+			args = append(args, "--ignore-case")
+		} else {
+			args = append(args, "--case-sensitive")
+		}
+	} else if req.CaseSensitive {
 		// rg's default is case-sensitive, but pin the explicit flag so the
 		// behavior survives a future default flip.
 		args = append(args, "--case-sensitive")
@@ -475,7 +509,7 @@ func parseEndEvent(line []byte, root string) (path string, count int, ok bool) {
 	return DisplayPathForRoot(root, event.Data.Path.Text), event.Data.Stats.Matches, true
 }
 
-func sampleMatches(ctx context.Context, rgPath, root, searchRoot string, req Request, maxDepth, maxFiles, maxMatches int) ([]LineFileMatch, []FileCount, int, *SearchStats, bool, bool, []string, error) {
+func sampleMatches(ctx context.Context, rgPath, root, searchRoot string, req Request, maxDepth, maxFiles, maxMatches int) ([]LineFileMatch, []FileCount, string, int, *SearchStats, bool, bool, []string, error) {
 	mode := normalizedOutputMode(req.OutputMode)
 	args := baseArgs(req, maxDepth)
 	args = append(args,
@@ -492,14 +526,14 @@ func sampleMatches(ctx context.Context, rgPath, root, searchRoot string, req Req
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return nil, nil, 0, nil, false, false, nil, err
+		return nil, nil, "", 0, nil, false, false, nil, err
 	}
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
-		return nil, nil, 0, nil, false, false, nil, err
+		return nil, nil, "", 0, nil, false, false, nil, err
 	}
 	if err := cmd.Start(); err != nil {
-		return nil, nil, 0, nil, false, false, nil, err
+		return nil, nil, "", 0, nil, false, false, nil, err
 	}
 
 	errBuf := &limitedBuffer{limit: 16 * 1024}
@@ -518,6 +552,12 @@ func sampleMatches(ctx context.Context, rgPath, root, searchRoot string, req Req
 	truncated := false
 	parseErr := error(nil)
 	sampleLimitReached := false
+	matchLimitReached := false
+	outputBytesLimitReached := false
+	linesTruncated := false
+	matchCount := 0
+	outputLines := []string{}
+	outputBytes := 0
 	outputCapped := false
 	stdoutBytes := 0
 	// The stream always drains to completion, so summary statistics and file
@@ -558,48 +598,74 @@ func sampleMatches(ctx context.Context, rgPath, root, searchRoot string, req Req
 					}
 				}
 			} else if !recordTruncated && !outputCapped {
-				path, lineNum, ok, err := parseMatch(line, root)
+				ev, ok, err := parseGrepLine(line, root)
 				if err != nil {
 					parseErr = err
-			} else if ok {
-				if mode == OutputModeCountMatches {
-					// count_matches resolves its page from the globally
-					// sorted per-file counts collected by the end events, so
-					// line grouping is skipped entirely.
-					continue
-				}
-			// lines mode: one entry per matching line, capped by the total
-			// line budget. seen counts every consumed line (skipped by
-			// offset and sampled) up to the last sampled one, so
-			// NextOffset resumes exactly after it. The line that hits the
-			// budget is not counted — it is the first line of the next page.
-			if sampleLimitReached {
-				continue
-			}
-			if seen < req.Offset {
-				seen++
-				continue
-			}
-			g := groupByPath[path]
-			if g == nil && len(groups) < maxFiles {
-				// Cap the number of files that get a line list so a
-				// search hitting thousands of files stays bounded; the
-				// exact totals still come from the summary stats. Initialize
-				// Lines so an empty group serializes as [] rather than null.
-				g = &sampleFile{path: path, lines: []int{}}
-				groupByPath[path] = g
-				groups = append(groups, g)
-			}
-				if g != nil && totalLines < maxMatches {
-					if len(g.lines) == 0 || g.lines[len(g.lines)-1] != lineNum {
-						g.lines = append(g.lines, lineNum)
-						totalLines++
-						seen++
+				} else if ok {
+					if mode == OutputModeCountMatches {
+						// count_matches resolves its page from the globally
+						// sorted per-file counts collected by the end events, so
+						// line grouping is skipped entirely.
+						continue
 					}
-				} else {
-					sampleLimitReached = true
-					truncated = true
-				}
+
+					rawText := strings.TrimRight(ev.Text, "\r\n")
+					runes := []rune(rawText)
+					lineText := rawText
+					if len(runes) > MaxGrepLineLength {
+						lineText = string(runes[:MaxGrepLineLength]) + "... [truncated]"
+						linesTruncated = true
+					}
+
+					if ev.IsMatch {
+						matchCount++
+						if sampleLimitReached {
+							continue
+						}
+						if seen < req.Offset {
+							seen++
+							continue
+						}
+						g := groupByPath[ev.Path]
+						if g == nil && len(groups) < maxFiles {
+							g = &sampleFile{path: ev.Path, lines: []int{}}
+							groupByPath[ev.Path] = g
+							groups = append(groups, g)
+						}
+						if g != nil && totalLines < maxMatches {
+							if len(g.lines) == 0 || g.lines[len(g.lines)-1] != ev.LineNumber {
+								g.lines = append(g.lines, ev.LineNumber)
+								totalLines++
+								seen++
+							}
+						} else {
+							sampleLimitReached = true
+							matchLimitReached = true
+							truncated = true
+							continue
+						}
+					}
+
+					// Format output lines (matching lines + context lines)
+					if !outputBytesLimitReached && (!sampleLimitReached || ev.IsContext) {
+						if ev.IsMatch && seen <= req.Offset {
+							// skipped by offset
+						} else {
+							sep := ":"
+							if ev.IsContext {
+								sep = "-"
+							}
+							formatted := fmt.Sprintf("%s%s%d%s %s", ev.Path, sep, ev.LineNumber, sep, lineText)
+							lineBytes := len(formatted) + 1
+							if outputBytes+lineBytes > DefaultMaxOutputBytes {
+								outputBytesLimitReached = true
+								truncated = true
+							} else {
+								outputLines = append(outputLines, formatted)
+								outputBytes += lineBytes
+							}
+						}
+					}
 				}
 			}
 		}
@@ -617,10 +683,10 @@ func sampleMatches(ctx context.Context, rgPath, root, searchRoot string, req Req
 	waitErr := cmd.Wait()
 	errWG.Wait()
 	if parseErr != nil {
-		return nil, nil, 0, nil, false, false, nil, parseErr
+		return nil, nil, "", 0, nil, false, false, nil, parseErr
 	}
 	if ctx.Err() != nil {
-		return nil, nil, 0, nil, false, false, nil, ctx.Err()
+		return nil, nil, "", 0, nil, false, false, nil, ctx.Err()
 	}
 	var warnings []string
 	if waitErr != nil {
@@ -639,15 +705,37 @@ func sampleMatches(ctx context.Context, rgPath, root, searchRoot string, req Req
 				if stats != nil {
 					warnings = append(warnings, msg)
 				} else {
-					return nil, nil, 0, nil, false, false, nil, failureError(msg)
+					return nil, nil, "", 0, nil, false, false, nil, failureError(msg)
 				}
 			}
 		} else {
-			return nil, nil, 0, nil, false, false, nil, waitErr
+			return nil, nil, "", 0, nil, false, false, nil, waitErr
 		}
 	}
 	if stats == nil {
-		return nil, nil, 0, nil, false, false, nil, errors.New("ripgrep did not emit summary statistics")
+		return nil, nil, "", 0, nil, false, false, nil, errors.New("ripgrep did not emit summary statistics")
+	}
+
+	var finalOutput string
+	if mode != OutputModeCountMatches {
+		if matchCount == 0 {
+			finalOutput = "No matches found"
+		} else {
+			finalOutput = strings.Join(outputLines, "\n")
+			var notices []string
+			if matchLimitReached {
+				notices = append(notices, fmt.Sprintf("%d matches limit reached. Use limit=%d for more, or refine pattern", maxMatches, maxMatches*2))
+			}
+			if outputBytesLimitReached {
+				notices = append(notices, "50.0KB limit reached")
+			}
+			if linesTruncated {
+				notices = append(notices, "Some lines truncated to 500 chars. Use read tool to see full lines")
+			}
+			if len(notices) > 0 {
+				finalOutput += "\n\n[" + strings.Join(notices, ". ") + "]"
+			}
+		}
 	}
 
 	lineHits := make([]LineFileMatch, 0, len(groups))
@@ -696,7 +784,7 @@ func sampleMatches(ctx context.Context, rgPath, root, searchRoot string, req Req
 		}
 		offsetExhausted = req.Offset > 0 && stats.MatchedLines > 0 && req.Offset >= stats.MatchedLines && len(groups) == 0
 	}
-	return lineHits, resultCounts, nextOffset, stats, truncated, offsetExhausted, warnings, nil
+	return lineHits, resultCounts, finalOutput, nextOffset, stats, truncated, offsetExhausted, warnings, nil
 }
 
 // sampleFile accumulates matching line numbers for one file path during
@@ -850,26 +938,54 @@ func parseSummaryStats(line []byte) *SearchStats {
 	}
 }
 
-// parseMatch returns the display path and 1-based line number for a ripgrep
-// --json "match" event. begin/end/summary/context events are handled by their
-// dedicated parsers (or ignored) and never reach here.
-func parseMatch(line []byte, root string) (path string, lineNum int, ok bool, err error) {
+type parsedGrepLine struct {
+	Path       string
+	LineNumber int
+	Text       string
+	IsMatch    bool
+	IsContext  bool
+}
+
+func parseGrepLine(line []byte, root string) (parsedGrepLine, bool, error) {
+	if !bytes.Contains(line, []byte(`"type":"match"`)) && !bytes.Contains(line, []byte(`"type":"context"`)) {
+		return parsedGrepLine{}, false, nil
+	}
 	var event struct {
 		Type string `json:"type"`
 		Data struct {
 			Path struct {
 				Text string `json:"text"`
 			} `json:"path"`
+			Lines struct {
+				Text string `json:"text"`
+			} `json:"lines"`
 			LineNumber int `json:"line_number"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(line, &event); err != nil {
+		return parsedGrepLine{}, false, err
+	}
+	if (event.Type != "match" && event.Type != "context") || event.Data.Path.Text == "" {
+		return parsedGrepLine{}, false, nil
+	}
+	return parsedGrepLine{
+		Path:       DisplayPathForRoot(root, event.Data.Path.Text),
+		LineNumber: event.Data.LineNumber,
+		Text:       event.Data.Lines.Text,
+		IsMatch:    event.Type == "match",
+		IsContext:  event.Type == "context",
+	}, true, nil
+}
+
+// parseMatch returns the display path and 1-based line number for a ripgrep
+// --json "match" event. begin/end/summary/context events are handled by their
+// dedicated parsers (or ignored) and never reach here.
+func parseMatch(line []byte, root string) (path string, lineNum int, ok bool, err error) {
+	p, ok, err := parseGrepLine(line, root)
+	if err != nil || !ok || !p.IsMatch {
 		return "", 0, false, err
 	}
-	if event.Type != "match" || event.Data.Path.Text == "" {
-		return "", 0, false, nil
-	}
-	return DisplayPathForRoot(root, event.Data.Path.Text), event.Data.LineNumber, true, nil
+	return p.Path, p.LineNumber, true, nil
 }
 
 func excludedDirs() []string {
