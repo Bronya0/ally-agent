@@ -447,7 +447,8 @@ function recordModelSwitch(index) {
   const model = (props.config.models || [])[index];
   if (!model) return;
   const validKeys = (props.config.models || []).map((m) => modelProviderKey(m));
-  recordModelUsage(modelProviderKey(model), validKeys);
+  const validIdentities = (props.config.models || []).map((m) => modelConfigIdentity(m));
+  recordModelUsage(modelProviderKey(model), validKeys, modelConfigIdentity(model), validIdentities);
   modelUsage.value = getModelUsage();
 }
 

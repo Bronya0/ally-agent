@@ -21,10 +21,11 @@
 //     until then.
 
 const STORAGE_KEY = 'ally_model_usage';
+const MODEL_STORAGE_KEY = 'ally_specific_model_usage';
 
-function readUsage() {
+function readUsage(storageKey = STORAGE_KEY) {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(storageKey);
     if (!raw) return {};
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
@@ -34,31 +35,47 @@ function readUsage() {
   }
 }
 
-// getModelUsage returns the persisted `{ key: count }` map. Callers read counts
-// with `usage[key] || 0`; unknown keys are treated as zero.
+// getModelUsage returns the persisted `{ key: count }` map for provider groups.
 export function getModelUsage() {
-  return readUsage();
+  return readUsage(STORAGE_KEY);
 }
 
-// recordModelUsage bumps the count for `key` by one. When `validKeys` is given
-// (the provider keys currently present in the config), keys outside that set
-// are dropped in the same write so removed providers do not accumulate stale
-// counts.
-export function recordModelUsage(key, validKeys) {
+// getSpecificModelUsage returns the persisted `{ modelIdentity: count }` map.
+export function getSpecificModelUsage() {
+  return readUsage(MODEL_STORAGE_KEY);
+}
+
+// recordModelUsage bumps the count for `key` (provider group) and optionally `modelIdentity`.
+export function recordModelUsage(key, validKeys, modelIdentity, validModelIdentities) {
   const k = String(key || '').trim();
-  if (!k) return;
-  const usage = readUsage();
-  usage[k] = (Number(usage[k]) || 0) + 1;
-  if (Array.isArray(validKeys) && validKeys.length) {
-    const valid = new Set(validKeys.map((v) => String(v || '').trim()).filter(Boolean));
-    valid.add(k);
-    for (const existing of Object.keys(usage)) {
-      if (!valid.has(existing)) delete usage[existing];
+  if (k) {
+    const usage = readUsage(STORAGE_KEY);
+    usage[k] = (Number(usage[k]) || 0) + 1;
+    if (Array.isArray(validKeys) && validKeys.length) {
+      const valid = new Set(validKeys.map((v) => String(v || '').trim()).filter(Boolean));
+      valid.add(k);
+      for (const existing of Object.keys(usage)) {
+        if (!valid.has(existing)) delete usage[existing];
+      }
     }
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(usage));
+    } catch {}
   }
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(usage));
-  } catch {
-    /* storage unavailable — ordering falls back to the in-memory default */
+
+  const mid = String(modelIdentity || '').trim();
+  if (mid) {
+    const modelUsageMap = readUsage(MODEL_STORAGE_KEY);
+    modelUsageMap[mid] = (Number(modelUsageMap[mid]) || 0) + 1;
+    if (Array.isArray(validModelIdentities) && validModelIdentities.length) {
+      const validMids = new Set(validModelIdentities.map((v) => String(v || '').trim()).filter(Boolean));
+      validMids.add(mid);
+      for (const existing of Object.keys(modelUsageMap)) {
+        if (!validMids.has(existing)) delete modelUsageMap[existing];
+      }
+    }
+    try {
+      localStorage.setItem(MODEL_STORAGE_KEY, JSON.stringify(modelUsageMap));
+    } catch {}
   }
 }

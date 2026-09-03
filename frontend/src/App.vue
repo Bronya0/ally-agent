@@ -552,6 +552,7 @@ import { useSakuraBreeze } from './composables/sakuraBreeze.mjs';
 // 樱花青草风特效的全局开关；唯一特效层实例见模板根部
 const { sakuraOn } = useSakuraBreeze();
 import { modelConfigIdentity, normalizeApiKeysArray, normalizeReasoningEffort } from './utils/modelConfigIO.mjs';
+import { getSpecificModelUsage } from './utils/modelUsage.mjs';
 import { buildVersion } from './utils/buildVersion.js';
 import { computeEditStats, formatEditStats } from './utils/diff.js';
 import { isNewerReleaseVersion } from './utils/versionCheck.mjs';
@@ -1375,6 +1376,21 @@ const backgroundImageUrl = ref('');
 // config 顶层的模型字段，因此设置保存从结构上就不可能重置当前 Tab。
 const modelByTab = reactive({});
 const MODEL_BY_TAB_KEY = 'ally_model_by_tab';
+const LAST_USED_MODEL_KEY = 'ally_last_used_model';
+
+function getLastUsedModelIdentity() {
+  try {
+    return localStorage.getItem(LAST_USED_MODEL_KEY) || '';
+  } catch {
+    return '';
+  }
+}
+
+function setLastUsedModelIdentity(identity) {
+  try {
+    if (identity) localStorage.setItem(LAST_USED_MODEL_KEY, String(identity));
+  } catch {}
+}
 
 // Extract a normalized model snapshot from a config-shaped source (a preset
 // from config.models, or the top-level default fields).
@@ -1400,13 +1416,51 @@ function modelSnapshotFrom(source) {
   };
 }
 
-// The default model every newly opened Tab starts from: the preset matching
-// the top-level identity when one exists (so preset edits propagate), else
-// the raw top-level fields (custom model not in the saved list).
+// 查找按照使用频率累计倒排的最常用有效模型，若频率都相同或无记录则返回第一个
+function getFallbackModelPreset(models) {
+  if (!Array.isArray(models) || !models.length) return null;
+  if (models.length === 1) return models[0];
+  const usage = getSpecificModelUsage();
+  const sorted = [...models].sort((a, b) => {
+    const countA = Number(usage[modelConfigIdentity(a)]) || 0;
+    const countB = Number(usage[modelConfigIdentity(b)]) || 0;
+    return countB - countA;
+  });
+  return sorted[0] || models[0];
+}
+
+// The default model every newly opened Tab starts from:
+// 1. 用户上次对话/切换选了什么模型，新开的 tab 默认就继承这个模型；
+// 2. 如果上次选的模型已经被删除了（或不存在）：按每个模型的使用频率累计倒排回退；
+// 3. 如果首次只有一个模型那默认就这个；
+// 4. 若模型列表为空则回退到 config。
 function defaultModelSnapshot() {
-  const identity = modelConfigIdentity(config);
-  const preset = (config.models || []).find((m) => modelConfigIdentity(m) === identity);
-  return modelSnapshotFrom(preset || config);
+  const models = config.models || [];
+  const lastIdentity = getLastUsedModelIdentity();
+
+  if (lastIdentity) {
+    const matched = models.find((m) => modelConfigIdentity(m) === lastIdentity);
+    if (matched) return modelSnapshotFrom(matched);
+  }
+
+  // 尝试当前活跃 Tab 上的模型
+  const activeTabModel = modelByTab[activeWorkspaceId.value];
+  if (activeTabModel) {
+    const matched = models.find((m) => modelConfigIdentity(m) === modelConfigIdentity(activeTabModel));
+    if (matched) {
+      setLastUsedModelIdentity(modelConfigIdentity(matched));
+      return modelSnapshotFrom(matched);
+    }
+  }
+
+  // 上次选的模型不存在或已被删除，按使用频率倒排回退
+  const fallbackPreset = getFallbackModelPreset(models);
+  if (fallbackPreset) {
+    setLastUsedModelIdentity(modelConfigIdentity(fallbackPreset));
+    return modelSnapshotFrom(fallbackPreset);
+  }
+
+  return modelSnapshotFrom(config);
 }
 
 // Initialize a Tab's model from the default the first time it is visited.
@@ -4890,7 +4944,9 @@ function switchToModel(index) {
   const model = (config.models || [])[index];
   const tab = workspaceTabs.value.find((item) => item.id === activeWorkspaceId.value);
   if (!model || !tab) return;
-  modelByTab[tab.id] = modelSnapshotFrom(model);
+  const snapshot = modelSnapshotFrom(model);
+  modelByTab[tab.id] = snapshot;
+  setLastUsedModelIdentity(modelConfigIdentity(model));
   saveModelByTab();
   message.success(t('app.model.switched', { model: model.model }));
 }
@@ -5129,6 +5185,8 @@ async function sendPrompt(opts) {
       attachments: attachmentsForModel(attachments),
     });
     markSessionRunning(session);
+    const activeModel = modelByTab[activeWorkspaceId.value];
+    if (activeModel) setLastUsedModelIdentity(modelConfigIdentity(activeModel));
     await StartChat({ sessionId: session.id, message: sendText, messages: history, config: { ...chatConfig.value, extraRoots: session.extraRoots || [], workspace: sessionWorkspace || config.workspace } });
   } catch (err) {
     markTransientTurn(session);
