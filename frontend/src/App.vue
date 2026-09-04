@@ -7171,6 +7171,7 @@ function toolKind(name) {
   if (name === 'create' || name === 'remote_create_file') return 'create';
   if (name === 'delete' || name === 'remote_delete_path') return 'delete';
   if (name === 'command' || name === 'remote_run_command' || name === 'Bash') return 'command';
+  if (name === 'ssh_credential') return 'ssh_credential';
   if (name === 'service' || name === 'start_service' || name === 'stop_service' || name === 'list_services') return 'service';
   if (name === 'wait') return 'wait';
   if (name === 'ask') return 'ask';
@@ -7278,6 +7279,16 @@ function makeToolTitle(name, args, meta = {}) {
   }
   if (name === 'list_services') {
     return 'tracked services';
+  }
+  if (name === 'ssh_credential') {
+    // Never render the password: show action + host only. The args string is
+    // already server-redacted (***), but build the title from target alone so
+    // even a redaction miss cannot leak it into the card.
+    const action = String(parsed.action || 'set').toLowerCase();
+    const host = String(parsed.target || '').split(':')[0] || '';
+    if (action === 'list') return 'list';
+    if (action === 'clear') return `clear · ${host}`;
+    return `set · ${host}`;
   }
   if (name === 'edit' || name === 'remote_edit') {
     if (Array.isArray(parsed.files)) return parsed.files.length === 1 ? (parsed.files[0]?.path || '') : `${parsed.files.length} files`;

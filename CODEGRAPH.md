@@ -134,7 +134,8 @@
 - orch_git.go — git status/diff 编排：porcelain V2 解析、TTL 缓存、diff 序列化与取消；关键: getGitStatus, parseGitStatusV2, GetGitDiff, CancelGitDiff
 - orch_grep.go — grep 编排：ripgrep 封装绑定工作区解析与安全检查、rg/git-bash 缺失事件；关键: GrepFiles, grepFilesWithConfig
 - orch_http.go — http_request/web_fetch 编排：重定向敏感头剥离、压缩体解码、每主机限速、Readability 正文抽取、URL 访问校验；关键: httpRequestToolWithConfig, webFetchToolWithConfig, htmlExtractContent
-- orch_remote.go — SSH 远程工具编排：向远程 stdin 注入内嵌 Python helper 完成远程读/写/编辑/删除/命令；关键: invokeRemotePython, remoteReadFile, remoteEdit, buildRemoteScript
+- orch_remote.go — SSH 远程工具编排：向远程 stdin 注入内嵌 Python helper 完成远程读/写/编辑/删除/命令；ssh 凭据注入（有密码时去 BatchMode + SSH_ASKPASS 临时 helper，用后即删）；关键: invokeRemotePython, remoteReadFile, remoteEdit, buildRemoteScript, prepareRemoteSSHInvocation
+- orch_ssh_credential.go — SSH 密码内存缓存（仅内存 12h TTL，不落盘）：ssh_credential 工具 set/clear/list、按 user@host 键查找、redactSSHCredentials 统一脱敏（tool:update/tool:result/sub:tool:start 事件与 saveHistory 落盘前替换密码为 ***）；关键: sshCredentialCache, executeSSHCredentialTool, redactSSHCredentials, prepareRemoteSSHInvocation
 - orch_services.go — 后台服务编排：512KB rolling buffer 输出、进程树控制（统一三平台停止语义：优雅终止 → graceSeconds 宽限默认 3s → 强杀进程树并在 error 上报升级）、有界 tail、service:update 事件（仅生命周期三处）；关键: StartService, stopService, finalizeService, readServiceOutput
 - orch_scheduler.go — 计划任务调度管理：cron/interval/once 解析校验、全局串行执行、scheduled:* 事件；关键: scheduledTaskManager, executeScheduledTaskTool, safeTrigger
 - orch_subagent.go — 子代理执行循环：步数预算（默认 25，上限 1000）、耗尽强制汇报轮、独立系统提示与工具排除集（无 ask/subagent/plan/skill/scheduled_task）；关键: executeDelegate, subagentSystemPrompt, subagentTools, forceSubagentFinalReport

@@ -345,6 +345,7 @@ Built-in model-facing tools:
 | `http_request` | Bounded HTTP/HTTPS API request |
 | `web_fetch` | Bounded webpage fetch and readable-text extraction |
 | `remote_*` | SSH remote read/edit/create/delete/run commands; use `remote_run_command` for directory discovery |
+| `ssh_credential` | Store/clear/list SSH passwords in memory only (12h TTL); used when the user types a password into chat so `remote_*` can password-authenticate via `SSH_ASKPASS` (BatchMode dropped). Never persisted: tool-call events, sub-agent events, and saved history are redacted through `redactSSHCredentials` before emission/write (`orch_ssh_credential.go`) |
 | `calculate` | Deterministic local math expression evaluator |
 | `ask` | Pause the visible main Agent session for one or more user questions |
 | `plan` | Session plan management; at most one `in_progress` item at a time, mark done before advancing |

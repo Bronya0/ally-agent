@@ -41,6 +41,7 @@ const TOOL_VERBS = {
   // command / process
   command: ['Running', 'Ran', 'Command'],
   remote_run_command: ['Remote Running', 'Remote Ran', 'Remote Command'],
+  ssh_credential: ['Storing credential', 'Stored credential', 'SSH credential'],
   Bash: ['Running', 'Ran', 'Command'],
   run: ['Running', 'Ran', 'Run'],
   // service is one backend tool multiplexing start/stop/list/read; this entry

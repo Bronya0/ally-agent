@@ -297,12 +297,12 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 			args := call.Function.Arguments
 			cid := toolIDs[i]
 			a.subRunsMu.Lock()
-			run.ToolCalls = append(run.ToolCalls, SubToolEvent{ToolCallID: cid, Name: name, Args: truncateRunes(args, 4096), Status: "running"})
+			run.ToolCalls = append(run.ToolCalls, SubToolEvent{ToolCallID: cid, Name: name, Args: truncateRunes(a.redactSSHCredentials(args), 4096), Status: "running"})
 			if len(run.ToolCalls) > maxSubagentToolCalls {
 				run.ToolCalls = append([]SubToolEvent(nil), run.ToolCalls[len(run.ToolCalls)-maxSubagentToolCalls:]...)
 			}
 			a.subRunsMu.Unlock()
-			a.emit("sub:tool:start", map[string]any{"id": subID, "sessionId": sessionID, "toolCallId": cid, "name": name, "args": args})
+			a.emit("sub:tool:start", map[string]any{"id": subID, "sessionId": sessionID, "toolCallId": cid, "name": name, "args": a.redactSSHCredentials(args)})
 		}
 
 		// Parallel execution: non-file tools run concurrently, file mutations run afterward in order

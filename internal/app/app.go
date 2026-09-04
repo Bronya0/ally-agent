@@ -263,6 +263,10 @@ type App struct {
 	askMu       sync.Mutex
 	pendingAsks map[string]*pendingAsk
 
+	// sshCredentials holds chat-provided SSH passwords in memory only (never
+	// persisted). Keys are lowercase user@host; see orch_ssh_credential.go.
+	sshCredentials *sshCredentialCache
+
 	subRuns   map[string]*SubagentRun // subId → run
 	subRunsMu sync.Mutex
 	subSem    chan struct{} // concurrency limiter (cap 4)
@@ -346,6 +350,7 @@ func NewApp() *App {
 		todos:               map[string][]TodoEntry{},
 		todoRevisions:       map[string]int64{},
 		pendingAsks:         map[string]*pendingAsk{},
+		sshCredentials:      newSSHCredentialCache(),
 		subRuns:             map[string]*SubagentRun{},
 		subSem:              make(chan struct{}, 4),
 		gitStatusCache:      map[string]gitStatusCacheEntry{},
@@ -1984,7 +1989,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			streamDeltas := newRunStreamDeltaEmitter(runID, sessionID, func(name string, payload map[string]any) {
 				a.emit(name, payload)
 			})
-			toolProgress = newToolCallProgressTracker()
+			toolProgress = newToolCallProgressTracker().withArgsRedact(a.redactSSHCredentials)
 			modelResp, err = a.streamModelResponse(ctx, cfg, cfg.Model, requestMessages, tools, func(event modelStreamEvent) {
 				if event.ContentDelta != "" {
 					emittedEvents = true
@@ -2174,9 +2179,9 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 		// correctly. messages append stays ordered below.
 		emitOutcome := func(o toolOutcome) {
 			if o.result.OK {
-				a.emit("tool:result", mergeToolEventMeta(map[string]any{"runId": runID, "sessionId": sessionID, "toolBatchId": toolBatchID, "toolCallIndex": o.index, "toolCallId": o.callID, "name": o.name, "result": o.json, "durationMs": o.duration}, a.mcpToolEventMeta(o.name)))
+				a.emit("tool:result", mergeToolEventMeta(map[string]any{"runId": runID, "sessionId": sessionID, "toolBatchId": toolBatchID, "toolCallIndex": o.index, "toolCallId": o.callID, "name": o.name, "result": a.redactSSHCredentials(o.json), "durationMs": o.duration}, a.mcpToolEventMeta(o.name)))
 			} else {
-				a.emit("tool:error", mergeToolEventMeta(map[string]any{"runId": runID, "sessionId": sessionID, "toolBatchId": toolBatchID, "toolCallIndex": o.index, "toolCallId": o.callID, "name": o.name, "error": o.result.Error, "errorCode": o.result.ErrorCode, "durationMs": o.duration}, a.mcpToolEventMeta(o.name)))
+				a.emit("tool:error", mergeToolEventMeta(map[string]any{"runId": runID, "sessionId": sessionID, "toolBatchId": toolBatchID, "toolCallIndex": o.index, "toolCallId": o.callID, "name": o.name, "error": a.redactSSHCredentials(o.result.Error), "errorCode": o.result.ErrorCode, "durationMs": o.duration}, a.mcpToolEventMeta(o.name)))
 			}
 		}
 
@@ -2550,6 +2555,12 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		err, argWarnings = decodeJSON(&req)
 		if err == nil {
 			data, err = a.webFetchToolWithConfig(ctx, cfg, req)
+		}
+	case "ssh_credential":
+		var req SSHCredentialRequest
+		err, argWarnings = decodeJSON(&req)
+		if err == nil {
+			data, err = a.executeSSHCredentialTool(req)
 		}
 	case "remote_read":
 		var req RemoteReadFileRequest

@@ -518,17 +518,20 @@ func (a *App) invokeRemotePython(ctx context.Context, rt remoteTarget, payload m
 	if err != nil {
 		return err
 	}
-	args := []string{"-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3"}
-	if rt.Port != "" {
-		args = append(args, "-p", rt.Port)
+	args, env, cleanup, err := a.prepareRemoteSSHInvocation(ctx, rt, rt.Port)
+	defer cleanup()
+	if err != nil {
+		return err
 	}
-	args = append(args, rt.Host, "python3", "-")
 	if timeout <= 0 {
 		timeout = 60 * time.Second
 	}
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(runCtx, "ssh", args...)
+	if env != nil {
+		cmd.Env = env
+	}
 	cmd.Stdin = strings.NewReader(script)
 	var stdout bytes.Buffer
 	var stderr limitedBuffer

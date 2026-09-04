@@ -150,6 +150,9 @@ type toolCallProgressTracker struct {
 	started   map[int]bool
 	lastState map[int]string
 	lastEmit  map[int]time.Time
+	// argsRedact is applied to streamed tool-call arguments before emission
+	// so secrets (e.g. ssh_credential passwords) never reach the frontend.
+	argsRedact func(string) string
 }
 
 // toolUpdateThrottle bounds how often a tool:update event is emitted for a
@@ -170,6 +173,12 @@ func newToolCallProgressTracker() *toolCallProgressTracker {
 		lastState: map[int]string{},
 		lastEmit:  map[int]time.Time{},
 	}
+}
+
+// withArgsRedact sets the argument redaction hook and returns the tracker.
+func (t *toolCallProgressTracker) withArgsRedact(fn func(string) string) *toolCallProgressTracker {
+	t.argsRedact = fn
+	return t
 }
 
 func (t *toolCallProgressTracker) events(runID, sessionID, batchID string, toolCalls []openai.ToolCall, metaForName func(string) map[string]any) []toolCallProgressEvent {
@@ -226,7 +235,7 @@ func (t *toolCallProgressTracker) eventsWithForce(runID, sessionID, batchID stri
 			"toolCallIndex": idx,
 			"toolCallId":    call.ID,
 			"name":          call.Function.Name,
-			"args":          call.Function.Arguments,
+			"args":          redactToolCallArgs(call.Function.Arguments, t.argsRedact),
 			"streaming":     true,
 		}
 		if metaForName != nil && call.Function.Name != "" {
@@ -246,4 +255,13 @@ func toolCallArgsHash(args string) (string, int) {
 	h := fnv.New64a()
 	h.Write([]byte(args))
 	return strconv.FormatUint(h.Sum64(), 16), len(args)
+}
+
+// redactToolCallArgs applies the tracker's redaction hook (if any) to streamed
+// tool-call arguments before they are emitted to the frontend.
+func redactToolCallArgs(args string, fn func(string) string) string {
+	if fn == nil || args == "" {
+		return args
+	}
+	return fn(args)
 }

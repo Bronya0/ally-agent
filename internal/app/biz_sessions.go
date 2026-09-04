@@ -882,6 +882,7 @@ func (a *App) saveHistory(sessionID string, messages []openai.ChatCompletionMess
 		return
 	}
 	filtered := trimSavedHistory(sanitizeHistoryMessages(messages))
+	filtered = a.redactSSHCredentialMessages(filtered)
 	breakdown := computeLiveBreakdown(filtered)
 	a.mu.Lock()
 	a.histories[sessionID] = cloneChatMessages(filtered)
@@ -899,6 +900,34 @@ func (a *App) saveHistory(sessionID string, messages []openai.ChatCompletionMess
 	if err := os.Remove(paths[1]); err != nil && !errors.Is(err, os.ErrNotExist) {
 		log.Printf("saveHistory: failed to remove legacy %s: %v", paths[1], err)
 	}
+}
+
+// redactSSHCredentialMessages applies redactSSHCredentials to persisted
+// history content and tool-call arguments before they hit disk, so a password
+// once typed into the chat never lands in session snapshot files.
+func (a *App) redactSSHCredentialMessages(messages []openai.ChatCompletionMessage) []openai.ChatCompletionMessage {
+	if a == nil || a.sshCredentials == nil {
+		return messages
+	}
+	changed := false
+	out := make([]openai.ChatCompletionMessage, len(messages))
+	for i, m := range messages {
+		out[i] = m
+		if red := a.redactSSHCredentials(m.Content); red != m.Content {
+			out[i].Content = red
+			changed = true
+		}
+		for j := range out[i].ToolCalls {
+			if red := a.redactSSHCredentials(out[i].ToolCalls[j].Function.Arguments); red != out[i].ToolCalls[j].Function.Arguments {
+				out[i].ToolCalls[j].Function.Arguments = red
+				changed = true
+			}
+		}
+	}
+	if !changed {
+		return messages
+	}
+	return out
 }
 
 func (a *App) restoreSavedHistoryBreakdown(sessionID string) {
