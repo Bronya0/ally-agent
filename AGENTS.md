@@ -744,6 +744,7 @@ These rules are required for future changes. They exist to keep Agent behavior d
 ### Module ownership and unique modification boundaries
 
 - Treat `app.go` as orchestration only: chat-loop control flow, run/session state, and coordination between domain modules belong there. New domain logic should move to the owning module instead of enlarging `app.go`.
+- Adding a new map (or other reference-type) field to the `App` struct requires BOTH: an entry in the `NewApp()` initialization literal AND a nil lazy-init guard before any write made while `a.mu` is held. A nil-map write under the lock panics before the cleanup defer is registered, so the mutex stays locked forever and every later call (ESC `CancelRun`/`CancelCompaction`, window shutdown, any Wails binding) deadlocks the whole app — the frontend shows a stuck compaction spinner on every tab the user touched, because each session's cleanup never ran.
 - Keep the Agent core host-neutral. Core/runtime files must not import Wails runtime packages or call window APIs, dialogs, browser APIs, or OS desktop integration directly.
 - Put Wails lifecycle, window management, directory/file-manager integration, and other desktop behavior in `host_desktop.go`.
 - Publish UI/runtime events only through the `eventSink` boundary in `host_events.go`; preserve event names, payload shapes, session routing, and terminal-event rules when changing implementations.

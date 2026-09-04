@@ -245,15 +245,15 @@ type App struct {
 	// compaction so ESC (CancelCompaction) can abort the summary LLM call
 	// instead of waiting out the full timeout.
 	compactingCancels map[string]context.CancelFunc
-	historiesDir       string
-	sessionsDir        string
-	histories          map[string][]openai.ChatCompletionMessage
-	sessionMu          sync.Mutex
-	initialized        bool
-	disabledSkills     []string
-	mcpManager         *McpManager
-	todos              map[string][]TodoEntry // sessionID → todos
-	todoRevisions      map[string]int64
+	historiesDir      string
+	sessionsDir       string
+	histories         map[string][]openai.ChatCompletionMessage
+	sessionMu         sync.Mutex
+	initialized       bool
+	disabledSkills    []string
+	mcpManager        *McpManager
+	todos             map[string][]TodoEntry // sessionID → todos
+	todoRevisions     map[string]int64
 	// sessionWorkspaceMaps freezes the workspace map bytes per session
 	// (sessionID → map text) so the request prefix stays byte-stable across
 	// runs and provider prompt caches survive; guarded by mu (declared in
@@ -346,6 +346,8 @@ func NewApp() *App {
 		runs:                map[string]context.CancelFunc{},
 		runSessions:         map[string]string{},
 		runInputs:           map[string]chan string{},
+		compactingSessions:  map[string]struct{}{},
+		compactingCancels:   map[string]context.CancelFunc{},
 		histories:           map[string][]openai.ChatCompletionMessage{},
 		todos:               map[string][]TodoEntry{},
 		todoRevisions:       map[string]int64{},
@@ -1643,6 +1645,17 @@ func (a *App) compactSession(parent context.Context, sessionID, instruction stri
 	// The summary LLM call runs on a cancellable child of the app context so
 	// CancelCompaction (ESC) can abort it mid-flight.
 	ctx, cancel := context.WithCancel(parent)
+	// Lazy-init guard: a nil map write here panics while a.mu is held, and
+	// the panic escapes before the cleanup defer is registered — the mutex
+	// stays locked forever and every later call (ESC cancel, shutdown, any
+	// binding) deadlocks the whole app. App instances built outside NewApp
+	// (tests) must not take the process down with them.
+	if a.compactingSessions == nil {
+		a.compactingSessions = map[string]struct{}{}
+	}
+	if a.compactingCancels == nil {
+		a.compactingCancels = map[string]context.CancelFunc{}
+	}
 	a.compactingSessions[sessionID] = struct{}{}
 	a.compactingCancels[sessionID] = cancel
 	a.mu.Unlock()
