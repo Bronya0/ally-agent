@@ -1275,8 +1275,8 @@ func (a *App) streamAnthropicMessages(ctx context.Context, cfg ConfigState, mode
 	)
 
 	system, anthropicMessages := buildAnthropicMessages(messages)
-	if len(anthropicMessages) == 0 {
-		anthropicMessages = append(anthropicMessages, anthropic.NewUserMessage(anthropic.NewTextBlock("")))
+	if len(anthropicMessages) == 0 || anthropicMessages[0].Role != anthropic.MessageParamRoleUser {
+		anthropicMessages = append([]anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock(""))}, anthropicMessages...)
 	}
 	params := anthropic.MessageNewParams{
 		Model:     anthropic.Model(model),
@@ -1560,6 +1560,27 @@ func openAIResponsesContentFromMulti(m legacyopenai.ChatCompletionMessage) oares
 func buildAnthropicMessages(messages []legacyopenai.ChatCompletionMessage) (string, []anthropic.MessageParam) {
 	systemParts := []string{}
 	out := []anthropic.MessageParam{}
+
+	appendMessage := func(role anthropic.MessageParamRole, blocks []anthropic.ContentBlockParamUnion) {
+		if len(blocks) == 0 {
+			return
+		}
+		// Anthropic Messages API requires roles to alternate strictly (user ⇄ assistant).
+		// When multiple same-role messages appear consecutively (for example: user question ->
+		// cancelledTurnMarker -> new user prompt, or tool results followed by user cancellation/input),
+		// merge their content blocks into the preceding same-role message instead of emitting
+		// adjacent same-role messages that fail Anthropic validation or get discarded by gateways.
+		if len(out) > 0 && out[len(out)-1].Role == role {
+			out[len(out)-1].Content = append(out[len(out)-1].Content, blocks...)
+			return
+		}
+		if role == anthropic.MessageParamRoleUser {
+			out = append(out, anthropic.NewUserMessage(blocks...))
+		} else {
+			out = append(out, anthropic.NewAssistantMessage(blocks...))
+		}
+	}
+
 	for i := 0; i < len(messages); i++ {
 		m := messages[i]
 		switch m.Role {
@@ -1569,9 +1590,7 @@ func buildAnthropicMessages(messages []legacyopenai.ChatCompletionMessage) (stri
 			}
 		case legacyopenai.ChatMessageRoleUser:
 			blocks := anthropicBlocksFromMessage(m)
-			if len(blocks) > 0 {
-				out = append(out, anthropic.NewUserMessage(blocks...))
-			}
+			appendMessage(anthropic.MessageParamRoleUser, blocks)
 		case legacyopenai.ChatMessageRoleAssistant:
 			blocks := []anthropic.ContentBlockParamUnion{}
 			if text := messageText(m); text != "" {
@@ -1580,9 +1599,7 @@ func buildAnthropicMessages(messages []legacyopenai.ChatCompletionMessage) (stri
 			for _, call := range m.ToolCalls {
 				blocks = append(blocks, anthropic.NewToolUseBlock(effectiveToolCallID(call), decodeToolArguments(call.Function.Arguments), call.Function.Name))
 			}
-			if len(blocks) > 0 {
-				out = append(out, anthropic.NewAssistantMessage(blocks...))
-			}
+			appendMessage(anthropic.MessageParamRoleAssistant, blocks)
 		case legacyopenai.ChatMessageRoleTool:
 			blocks := []anthropic.ContentBlockParamUnion{}
 			for i < len(messages) && messages[i].Role == legacyopenai.ChatMessageRoleTool {
@@ -1593,9 +1610,7 @@ func buildAnthropicMessages(messages []legacyopenai.ChatCompletionMessage) (stri
 				i++
 			}
 			i--
-			if len(blocks) > 0 {
-				out = append(out, anthropic.NewUserMessage(blocks...))
-			}
+			appendMessage(anthropic.MessageParamRoleUser, blocks)
 		}
 	}
 	return strings.Join(systemParts, "\n\n"), out
@@ -1616,14 +1631,19 @@ func markAnthropicPromptCacheBreakpoints(params *anthropic.MessageNewParams) {
 		params.System[len(params.System)-1].CacheControl = cc
 	}
 	for i := len(params.Messages) - 1; i >= 0; i-- {
-		if anthropicMessageIsTransientInjection(params.Messages[i]) {
-			continue
+		msg := params.Messages[i]
+		for j := len(msg.Content) - 1; j >= 0; j-- {
+			if anthropicBlockIsTransientInjection(msg.Content[j]) {
+				continue
+			}
+			setAnthropicBlockCacheControl(msg.Content[j], cc)
+			return
 		}
-		if len(params.Messages[i].Content) > 0 {
-			setAnthropicBlockCacheControl(params.Messages[i].Content[len(params.Messages[i].Content)-1], cc)
-		}
-		break
 	}
+}
+
+func anthropicBlockIsTransientInjection(block anthropic.ContentBlockParamUnion) bool {
+	return block.OfText != nil && strings.HasPrefix(block.OfText.Text, "<ally-context-budget>")
 }
 
 // anthropicMessageIsTransientInjection reports whether an outbound Anthropic
@@ -1631,11 +1651,15 @@ func markAnthropicPromptCacheBreakpoints(params *anthropic.MessageNewParams) {
 // each request and never persisted into history. Such messages must remain
 // outside the cached prefix.
 func anthropicMessageIsTransientInjection(msg anthropic.MessageParam) bool {
-	if msg.Role != "user" || len(msg.Content) != 1 || msg.Content[0].OfText == nil {
+	if msg.Role != "user" || len(msg.Content) == 0 {
 		return false
 	}
-	text := msg.Content[0].OfText.Text
-	return strings.HasPrefix(text, "<ally-context-budget>")
+	for _, block := range msg.Content {
+		if !anthropicBlockIsTransientInjection(block) {
+			return false
+		}
+	}
+	return true
 }
 
 func setAnthropicBlockCacheControl(block anthropic.ContentBlockParamUnion, cc anthropic.CacheControlEphemeralParam) {

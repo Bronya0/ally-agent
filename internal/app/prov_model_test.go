@@ -46,21 +46,113 @@ func TestMarkAnthropicPromptCacheBreakpointsSkipsTailInjections(t *testing.T) {
 	}
 
 	// The full conversion path must land the breakpoint the same way:
-	// buildAnthropicMessages merges tool results and keeps the injection last.
+	// buildAnthropicMessages merges tool results with tail injection into one valid user turn
+	// while markAnthropicPromptCacheBreakpoints skips transient blocks and marks the real content.
 	_, converted := buildAnthropicMessages([]legacyopenai.ChatCompletionMessage{
 		{Role: legacyopenai.ChatMessageRoleSystem, Content: "system"},
 		{Role: legacyopenai.ChatMessageRoleUser, Content: "question"},
+		{Role: legacyopenai.ChatMessageRoleAssistant, ToolCalls: []legacyopenai.ToolCall{{ID: "t1", Function: legacyopenai.FunctionCall{Name: "grep", Arguments: `{"a":1}`}}}},
 		{Role: legacyopenai.ChatMessageRoleTool, ToolCallID: "t1", Content: `{"ok":true}`},
 		{Role: legacyopenai.ChatMessageRoleUser, Content: "<ally-context-budget>\nWindow: 1000 tokens\n</ally-context-budget>"},
 	})
 	if len(converted) != 3 {
-		t.Fatalf("expected 3 converted messages, got %d", len(converted))
+		t.Fatalf("expected 3 converted messages (user -> assistant -> user), got %d", len(converted))
 	}
-	if !anthropicMessageIsTransientInjection(converted[2]) {
-		t.Fatalf("expected converted tail message to be detected as transient injection")
+	convParams := anthropic.MessageNewParams{
+		Messages: converted,
 	}
-	if anthropicMessageIsTransientInjection(converted[1]) {
-		t.Fatalf("tool-result message must not be detected as transient injection")
+	markAnthropicPromptCacheBreakpoints(&convParams)
+	// Cache breakpoint must land on the tool result block, skipping the trailing transient budget block
+	lastUserBlocks := convParams.Messages[2].Content
+	if len(lastUserBlocks) != 2 {
+		t.Fatalf("expected 2 blocks in last user message, got %d", len(lastUserBlocks))
+	}
+	if lastUserBlocks[0].OfToolResult == nil || lastUserBlocks[0].OfToolResult.CacheControl.TTL == "" {
+		t.Fatalf("expected cache_control breakpoint on tool result block")
+	}
+	if lastUserBlocks[1].OfText == nil || lastUserBlocks[1].OfText.CacheControl.TTL != "" {
+		t.Fatalf("transient tail injection block must stay outside cache control")
+	}
+}
+
+func TestBuildAnthropicMessagesMergesConsecutiveSameRoleMessages(t *testing.T) {
+	// Case 1: ESC interrupt pattern (user question -> user cancelled marker -> user new question)
+	// Must merge into a single user message with 3 content blocks to satisfy Anthropic's role alternation.
+	system, messages := buildAnthropicMessages([]legacyopenai.ChatCompletionMessage{
+		{Role: legacyopenai.ChatMessageRoleSystem, Content: "system instruction"},
+		{Role: legacyopenai.ChatMessageRoleUser, Content: "first question"},
+		{Role: legacyopenai.ChatMessageRoleUser, Content: "<ally-cancelled>\n上一条提问已被用户取消\n</ally-cancelled>"},
+		{Role: legacyopenai.ChatMessageRoleUser, Content: "new question"},
+	})
+	if system != "system instruction" {
+		t.Fatalf("system = %q, want %q", system, "system instruction")
+	}
+	if len(messages) != 1 {
+		t.Fatalf("expected 1 merged user message, got %d", len(messages))
+	}
+	if messages[0].Role != anthropic.MessageParamRoleUser {
+		t.Fatalf("expected user role, got %v", messages[0].Role)
+	}
+	if len(messages[0].Content) != 3 {
+		t.Fatalf("expected 3 content blocks, got %d", len(messages[0].Content))
+	}
+	if messages[0].Content[0].OfText.Text != "first question" {
+		t.Fatalf("block 0 text = %q, want %q", messages[0].Content[0].OfText.Text, "first question")
+	}
+	if !strings.Contains(messages[0].Content[1].OfText.Text, "<ally-cancelled>") {
+		t.Fatalf("block 1 text = %q, want containing <ally-cancelled>", messages[0].Content[1].OfText.Text)
+	}
+	if messages[0].Content[2].OfText.Text != "new question" {
+		t.Fatalf("block 2 text = %q, want %q", messages[0].Content[2].OfText.Text, "new question")
+	}
+
+	// Case 2: Tool turn interrupted by ESC (user -> assistant tool use -> tool result -> user cancelled -> user new question)
+	// Must produce exactly 3 messages: user -> assistant -> user (tool_result + cancelled marker + new question merged)
+	_, toolTurnMessages := buildAnthropicMessages([]legacyopenai.ChatCompletionMessage{
+		{Role: legacyopenai.ChatMessageRoleUser, Content: "read file"},
+		{Role: legacyopenai.ChatMessageRoleAssistant, ToolCalls: []legacyopenai.ToolCall{{ID: "call_1", Function: legacyopenai.FunctionCall{Name: "read", Arguments: `{"path":"app.go"}`}}}},
+		{Role: legacyopenai.ChatMessageRoleTool, ToolCallID: "call_1", Content: `{"ok":true,"data":"content"}`},
+		{Role: legacyopenai.ChatMessageRoleUser, Content: "<ally-cancelled>\n上一条提问已被用户取消\n</ally-cancelled>"},
+		{Role: legacyopenai.ChatMessageRoleUser, Content: "cancel and do something else"},
+	})
+	if len(toolTurnMessages) != 3 {
+		t.Fatalf("expected 3 alternating messages (user -> assistant -> user), got %d", len(toolTurnMessages))
+	}
+	if toolTurnMessages[0].Role != anthropic.MessageParamRoleUser {
+		t.Fatalf("msg 0 role = %v, want user", toolTurnMessages[0].Role)
+	}
+	if toolTurnMessages[1].Role != anthropic.MessageParamRoleAssistant {
+		t.Fatalf("msg 1 role = %v, want assistant", toolTurnMessages[1].Role)
+	}
+	if toolTurnMessages[2].Role != anthropic.MessageParamRoleUser {
+		t.Fatalf("msg 2 role = %v, want user", toolTurnMessages[2].Role)
+	}
+	// Last user message must merge tool_result, cancelled marker, and new question
+	lastBlocks := toolTurnMessages[2].Content
+	if len(lastBlocks) != 3 {
+		t.Fatalf("expected 3 blocks in final user message, got %d", len(lastBlocks))
+	}
+	if lastBlocks[0].OfToolResult == nil || lastBlocks[0].OfToolResult.ToolUseID != "call_1" {
+		t.Fatalf("block 0 must be tool_result with id call_1")
+	}
+	if lastBlocks[1].OfText == nil || !strings.Contains(lastBlocks[1].OfText.Text, "<ally-cancelled>") {
+		t.Fatalf("block 1 must be cancelled marker")
+	}
+	if lastBlocks[2].OfText == nil || lastBlocks[2].OfText.Text != "cancel and do something else" {
+		t.Fatalf("block 2 must be new question")
+	}
+
+	// Case 3: Consecutive assistant messages merged
+	_, assistantMerged := buildAnthropicMessages([]legacyopenai.ChatCompletionMessage{
+		{Role: legacyopenai.ChatMessageRoleUser, Content: "hi"},
+		{Role: legacyopenai.ChatMessageRoleAssistant, Content: "hello"},
+		{Role: legacyopenai.ChatMessageRoleAssistant, Content: "how can I help?"},
+	})
+	if len(assistantMerged) != 2 {
+		t.Fatalf("expected 2 messages (user -> assistant), got %d", len(assistantMerged))
+	}
+	if len(assistantMerged[1].Content) != 2 {
+		t.Fatalf("expected 2 blocks in merged assistant message, got %d", len(assistantMerged[1].Content))
 	}
 }
 
