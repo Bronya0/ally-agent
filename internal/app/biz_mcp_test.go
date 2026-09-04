@@ -297,3 +297,33 @@ func TestMcpServerConfigEqualNormalizesEnabledFlag(t *testing.T) {
 		t.Fatal("different commands must not be equal")
 	}
 }
+
+func TestIsMcpRecoverableError(t *testing.T) {
+	recoverableCases := []string{
+		"invalid session ID: 123",
+		"write: broken pipe",
+		"read: closed pipe",
+		"read tcp 127.0.0.1: connection reset by peer",
+		"dial tcp 127.0.0.1: connection refused",
+		"unexpected EOF",
+		"transport is closing",
+		"client is closed",
+	}
+	for _, msg := range recoverableCases {
+		if !isMcpRecoverableError(errors.New(msg)) {
+			t.Fatalf("expected error %q to be recoverable", msg)
+		}
+	}
+
+	nonRecoverableCases := []string{
+		"validation failed: parameter 'foo' is required",
+		"tool not found: sample_tool",
+		"unsupported operation",
+		"permission denied",
+	}
+	for _, msg := range nonRecoverableCases {
+		if isMcpRecoverableError(errors.New(msg)) {
+			t.Fatalf("expected error %q to not be recoverable", msg)
+		}
+	}
+}

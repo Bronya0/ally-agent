@@ -7508,11 +7508,8 @@ function formatToolBody(name, body) {
       let out = '';
       if (d.output) out += stripAnsi(d.output);
       if (d.output && !d.output.endsWith('\n')) out += '\n';
-      if (d.exitCode === 0) {
-        out += t('app.tools.exitCode', { code: 0 }) + ' [' + formatDuration(d.durationMs) + ']';
-      } else {
-        out += t('app.tools.exitCode', { code: d.exitCode }) + ' [' + formatDuration(d.durationMs) + ']';
-      }
+      const code = typeof d.exitCode === 'number' ? d.exitCode : 0;
+      out += 'exit code: ' + code + ' [' + formatDuration(d.durationMs) + ']';
       if (d.timedOut) out += '  ' + t('app.tools.timedOut');
       if (d.cancelled) out += '  ' + t('app.tools.cancelled');
       if (d.truncated) out += '  [' + t('common.truncated') + ']';

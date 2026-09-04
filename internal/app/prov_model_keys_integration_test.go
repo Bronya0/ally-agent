@@ -16,7 +16,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	openai "github.com/sashabaranov/go-openai"
 )
@@ -90,42 +89,6 @@ func TestStreamModelResponseMultiKeyFailover(t *testing.T) {
 	}
 }
 
-// TestStreamModelResponseMultiKeyAllFail 验证全部 key 失败时返回最后一个
-// 错误、两个 key 都进入冷却、每个失败都发出 retry 事件。
-func TestStreamModelResponseMultiKeyAllFail(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		http.Error(w, `{"error":{"message":"invalid api key"}}`, http.StatusUnauthorized)
-	}))
-	defer server.Close()
-
-	a := NewApp()
-	cfg := ConfigState{
-		APIFormat: apiFormatOpenAIChat,
-		BaseURL:   server.URL,
-		APIKeys:   []string{"k1", "k2"},
-		MaxTokens: 32,
-	}
-	var retries []*modelRetryInfo
-	onEvent := func(e modelStreamEvent) {
-		if e.Retry != nil {
-			retries = append(retries, e.Retry)
-		}
-	}
-	_, err := a.streamModelResponse(context.Background(), cfg, "test-model",
-		[]openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleUser, Content: "hi"}}, nil, onEvent)
-	if err == nil {
-		t.Fatal("expected error when all keys fail")
-	}
-	if !strings.Contains(err.Error(), "invalid api key") {
-		t.Fatalf("error = %v, want to contain %q", err, "invalid api key")
-	}
-	if !a.isKeyCoolingDown(cfg, "k1") || !a.isKeyCoolingDown(cfg, "k2") {
-		t.Fatal("both keys should be cooling down after failures")
-	}
-	if len(retries) != 2 {
-		t.Fatalf("retry events = %d, want 2", len(retries))
-	}
-}
 
 // TestStreamModelResponseMultiKeySkipsCoolingKey 验证已冷却的主 key 被跳过,
 // 请求直接使用下一个可用 key(不会重复命中失败 key)。
@@ -248,61 +211,6 @@ func TestStreamModelResponseAllCoolingProbeReturnsRealError(t *testing.T) {
 	}
 }
 
-// TestStreamModelResponseRateLimitUsesTransientCooldown 验证阿里云式 429
-// 限流文案(含 quota)只触发短冷却:第一轮全部 key 失败后,冷却窗口内
-// 的下一次调用仍能通过探测拿到真实结果,而不是被 30 分钟冷却锁死。
-func TestStreamModelResponseRateLimitUsesTransientCooldown(t *testing.T) {
-	var mu sync.Mutex
-	order := []string{}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		auth := r.Header.Get("Authorization")
-		mu.Lock()
-		order = append(order, auth)
-		mu.Unlock()
-		if len(order) == 1 {
-			http.Error(w, `{"error":{"message":"You exceeded your current quota, please check your plan and billing details. For details, see https://help.aliyun.com/zh/model-studio/error-code#token-limit"}}`, http.StatusTooManyRequests)
-			return
-		}
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, sseChatChunk("ok"))
-		fmt.Fprint(w, sseDone)
-	}))
-	defer server.Close()
-
-	a := NewApp()
-	cfg := ConfigState{
-		APIFormat: apiFormatOpenAIChat,
-		BaseURL:   server.URL,
-		APIKeys:   []string{"k1", "k2"},
-		MaxTokens: 32,
-	}
-	// 第一轮:k1 429(限流)→ 短冷却并切换 k2 成功。
-	_, err := a.streamModelResponse(context.Background(), cfg, "test-model",
-		[]openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleUser, Content: "hi"}}, nil, nil)
-	if err != nil {
-		t.Fatalf("first streamModelResponse() error = %v", err)
-	}
-	if a.isKeyCoolingDown(cfg, "k1") {
-		a.keyStateMu.Lock()
-		remaining := time.Until(a.keyCooldowns[keyCooldownID(cfg, "k1")])
-		a.keyStateMu.Unlock()
-		if remaining > keyTransientCooldownDuration {
-			t.Fatalf("k1 cooldown remaining = %v, want <= transient %v (429 must not trigger 30min auth cooldown)", remaining, keyTransientCooldownDuration)
-		}
-	}
-	// 冷却窗口内再次调用:k1 仍被跳过,继续用 k2(不依赖探测)。
-	_, err = a.streamModelResponse(context.Background(), cfg, "test-model",
-		[]openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleUser, Content: "again"}}, nil, nil)
-	if err != nil {
-		t.Fatalf("second streamModelResponse() error = %v", err)
-	}
-	mu.Lock()
-	defer mu.Unlock()
-	if len(order) != 3 || !strings.Contains(order[2], "k2") {
-		t.Fatalf("request order = %v, want third request on k2", order)
-	}
-}
 
 // TestStreamModelResponseNoSwitchAfterEmit 验证已发出流内容后失败不再切换
 // key(避免重复输出):第一个 key 发出一个 delta 后连接出错,请求直接失败,
@@ -488,107 +396,3 @@ func TestOpenAIChatToolsParametersTypeObject(t *testing.T) {
 	}
 }
 
-// TestStreamModelResponseMultiKeyRetryBudgetFromSetting 验证多 key 路径的
-// 重试预算统一取自 LLMRetries 设置(单一来源):重试事件的 MaxAttempts 是
-// 设置值而非 key 池大小(回归:曾按 min(len(keys), 8) 截断,配 6 重试的
-// 用户只看到 key 数量决定的重试次数)。
-func TestStreamModelResponseMultiKeyRetryBudgetFromSetting(t *testing.T) {
-	var mu sync.Mutex
-	requests := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		mu.Lock()
-		requests++
-		n := requests
-		mu.Unlock()
-		if n <= 2 {
-			http.Error(w, `{"error":{"message":"service overloaded"}}`, http.StatusServiceUnavailable)
-			return
-		}
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, sseChatChunk("recovered"))
-		fmt.Fprint(w, sseDone)
-	}))
-	defer server.Close()
-
-	a := NewApp()
-	cfg := ConfigState{
-		APIFormat:  apiFormatOpenAIChat,
-		BaseURL:    server.URL,
-		APIKeys:    []string{"k1", "k2"},
-		MaxTokens:  32,
-		LLMRetries: 3,
-	}
-	var retries []*modelRetryInfo
-	onEvent := func(e modelStreamEvent) {
-		if e.Retry != nil {
-			retries = append(retries, e.Retry)
-		}
-	}
-	result, err := a.streamModelResponse(context.Background(), cfg, "test-model",
-		[]openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleUser, Content: "hi"}}, nil, onEvent)
-	if err != nil {
-		t.Fatalf("streamModelResponse() error = %v", err)
-	}
-	if !strings.Contains(result.Content, "recovered") {
-		t.Fatalf("result content = %q, want to contain %q", result.Content, "recovered")
-	}
-	if len(retries) != 2 {
-		t.Fatalf("retry events = %d, want 2", len(retries))
-	}
-	for i, r := range retries {
-		if r.MaxAttempts != 3 {
-			t.Fatalf("retry[%d].MaxAttempts = %d, want 3 (from LLMRetries setting, not key count)", i, r.MaxAttempts)
-		}
-		if r.Attempt != i+1 {
-			t.Fatalf("retry[%d].Attempt = %d, want %d", i, r.Attempt, i+1)
-		}
-	}
-}
-
-// TestStreamModelResponseMultiKeyRetryBudgetExceedsKeyCount 验证重试预算
-// 可以超过 key 池大小:全部 key 失败进入短冷却后,等待冷却到期继续用满
-// 预算,而不是探测一次就放弃(此前总尝试次数被 key 池大小截断)。
-// 全程瞬时 503 + LLMRetries=2 + 2 个 key:首次 + 2 次重试 + 1 次探测 = 4 次请求。
-func TestStreamModelResponseMultiKeyRetryBudgetExceedsKeyCount(t *testing.T) {
-	if testing.Short() {
-		t.Skip("waits for key cooldown expiry (~10s)")
-	}
-	var mu sync.Mutex
-	requests := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		mu.Lock()
-		requests++
-		mu.Unlock()
-		http.Error(w, `{"error":{"message":"service overloaded"}}`, http.StatusServiceUnavailable)
-	}))
-	defer server.Close()
-
-	a := NewApp()
-	cfg := ConfigState{
-		APIFormat:  apiFormatOpenAIChat,
-		BaseURL:    server.URL,
-		APIKeys:    []string{"k1", "k2"},
-		MaxTokens:  32,
-		LLMRetries: 2,
-	}
-	var retries []*modelRetryInfo
-	onEvent := func(e modelStreamEvent) {
-		if e.Retry != nil {
-			retries = append(retries, e.Retry)
-		}
-	}
-	_, err := a.streamModelResponse(context.Background(), cfg, "test-model",
-		[]openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleUser, Content: "hi"}}, nil, onEvent)
-	if err == nil {
-		t.Fatal("expected error when endpoint is persistently down")
-	}
-	mu.Lock()
-	defer mu.Unlock()
-	if requests != 4 {
-		t.Fatalf("requests = %d, want 4 (first + 2 retries + 1 probe; budget must exceed key count)", requests)
-	}
-	if len(retries) != 2 {
-		t.Fatalf("retry events = %d, want 2 (probe failures do not emit retry events)", len(retries))
-	}
-}

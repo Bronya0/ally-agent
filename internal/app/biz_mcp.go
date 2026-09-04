@@ -532,19 +532,29 @@ func normalizedMcpRequired(value any) ([]string, bool) {
 	}
 }
 
+const (
+	// defaultMcpToolCallTimeout limits unbounded MCP calls so a hung external
+	// server (or long CAD modeling phase) does not freeze the run indefinitely.
+	defaultMcpToolCallTimeout = 5 * time.Minute
+)
+
 func (m *McpManager) CallTool(ctx context.Context, serverName, toolName string, args map[string]any) (string, error) {
-	result, failedClient, err := m.callToolOnce(ctx, serverName, toolName, args)
+	callCtx, cancel := context.WithTimeout(ctx, defaultMcpToolCallTimeout)
+	defer cancel()
+
+	result, failedClient, err := m.callToolOnce(callCtx, serverName, toolName, args)
 	if err == nil {
 		return result, nil
 	}
-	if !isMcpInvalidSessionError(err) {
+	if !isMcpRecoverableError(err) {
 		return "", err
 	}
 
+	// Try reconnecting once on recoverable errors (invalid session, closed pipe, broken pipe, connection reset)
 	if reconnectErr := m.reconnectServer(ctx, serverName, failedClient); reconnectErr != nil {
 		return "", fmt.Errorf("MCP call failed: %w; reconnect failed: %w", err, reconnectErr)
 	}
-	result, _, err = m.callToolOnce(ctx, serverName, toolName, args)
+	result, _, err = m.callToolOnce(callCtx, serverName, toolName, args)
 	return result, err
 }
 
@@ -583,7 +593,14 @@ func (m *McpManager) callToolOnce(ctx context.Context, serverName, toolName stri
 			parts = append(parts, textContent.Text)
 		}
 	}
-	return strings.Join(parts, "\n"), mcpClient, nil
+	outText := strings.Join(parts, "\n")
+	if result.IsError {
+		if strings.TrimSpace(outText) == "" {
+			outText = "MCP tool reported failure (isError: true)"
+		}
+		return "", mcpClient, fmt.Errorf("MCP tool %s error: %s", toolName, outText)
+	}
+	return outText, mcpClient, nil
 }
 
 func (m *McpManager) reconnectServer(ctx context.Context, serverName string, failedClient *client.Client) error {
@@ -655,28 +672,39 @@ func (m *McpManager) replaceToolLookupLocked(serverName string, discovered []Mcp
 }
 
 
-// mcpInvalidSessionMarkers 是 MCP 服务器报告"会话失效"的已知错误文案，
-// 来自 mcp-go 及常见 MCP 网关的 session 相关报错。mcp-go 暂无类型化判定，
-// 子串表是当前约束下的兑底；新变体加到这个单一入口，不要在调用点再散落
-// 子串匹配。
-var mcpInvalidSessionMarkers = []string{
+// mcpRecoverableErrorMarkers 是 MCP 服务器或 stdio 进程管道在断开/崩溃/
+// 会话失效时的已知错误特征文案。出现这些错误时，说明当前 Client 已经失效，
+// 应该自动重连一次再重试，而不是直接向模型报错。
+var mcpRecoverableErrorMarkers = []string{
 	"invalid session id",
 	"invalid session",
 	"session not found",
 	"session expired",
+	"closed pipe",
+	"broken pipe",
+	"connection reset",
+	"connection refused",
+	"eof",
+	"transport is closing",
+	"client is closed",
 }
 
-func isMcpInvalidSessionError(err error) bool {
+func isMcpRecoverableError(err error) bool {
 	if err == nil {
 		return false
 	}
 	msg := strings.ToLower(err.Error())
-	for _, marker := range mcpInvalidSessionMarkers {
+	for _, marker := range mcpRecoverableErrorMarkers {
 		if strings.Contains(msg, marker) {
 			return true
 		}
 	}
 	return false
+}
+
+// isMcpInvalidSessionError 保留向后兼容别名
+func isMcpInvalidSessionError(err error) bool {
+	return isMcpRecoverableError(err)
 }
 
 func (m *McpManager) CallToolByFunctionName(ctx context.Context, functionName string, args map[string]any) (string, error) {

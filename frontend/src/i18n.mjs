@@ -915,7 +915,7 @@ const zh = {
   'tools.readGrep.grepCount': '搜索 {count} 次',
   'tools.readGrep.listCount': '罗列 {count} 次',
   'tools.showFullDiff': '… 显示完整 diff …',
-  'app.tools.exitCode': '退出码：{code}',
+  'app.tools.exitCode': 'exit code: {code}',
   'app.tools.timedOut': '已超时',
   'app.tools.cancelled': '已取消',
   'app.tools.chip.trackedServices': '后台服务',

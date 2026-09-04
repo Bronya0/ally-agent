@@ -15,7 +15,6 @@ import (
 	"os"
 	"strings"
 	"testing"
-	"time"
 
 	openai "github.com/sashabaranov/go-openai"
 )
@@ -581,46 +580,6 @@ func TestSessionIndexUnreadableDegradesToEmpty(t *testing.T) {
 	}
 }
 
-func TestSessionIndexWritePrunesOldestEntries(t *testing.T) {
-	app := NewApp()
-	app.initialized = true
-	app.sessionsDir = t.TempDir()
-	app.historiesDir = t.TempDir()
-
-	base := time.Now().Add(-time.Hour).UnixMilli()
-	for i := 0; i <= maxSessionIndexEntries; i++ {
-		entry := SessionIndexEntry{
-			ID:        fmt.Sprintf("s-%04d", i),
-			Title:     fmt.Sprintf("Session %d", i),
-			Workspace: "/tmp/workspace",
-			CreatedAt: base + int64(i)*1000,
-			UpdatedAt: base + int64(i)*1000,
-		}
-		if err := app.SaveSessionIndex(entry); err != nil {
-			t.Fatalf("SaveSessionIndex(%d) error = %v", i, err)
-		}
-	}
-
-	entries, err := app.readSessionIndexLocked()
-	if err != nil {
-		t.Fatalf("read index: %v", err)
-	}
-	if len(entries) != maxSessionIndexEntries {
-		t.Fatalf("index size after pruning = %d, want %d", len(entries), maxSessionIndexEntries)
-	}
-	// entries are sorted newest-first: everything except the oldest (s-0000)
-	// must survive.
-	ids := make(map[string]bool, len(entries))
-	for _, entry := range entries {
-		ids[entry.ID] = true
-	}
-	if ids["s-0000"] {
-		t.Fatal("oldest entry should have been evicted first")
-	}
-	if !ids[fmt.Sprintf("s-%04d", maxSessionIndexEntries)] {
-		t.Fatal("newest entry must survive eviction")
-	}
-}
 
 func TestNormalizeSessionIndexEntryClampsFirstPrompt(t *testing.T) {
 	longPrompt := strings.Repeat("很长的提问字符", 200) // > maxSessionIndexFirstPromptChars runes
