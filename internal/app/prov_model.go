@@ -65,14 +65,154 @@ type modelRetryInfo struct {
 	TotalKeys int    // key 池总数,0 表示未知
 }
 
+// llmErrorKind 是 LLM 请求错误的语义分类，单一定义点。适配器拿到 HTTP 状态
+// 码/错误码时就地归类（typed 路径，见 classifyLLMError），provider 文案不可控
+// 时才落到关键词匹配（fallback 路径）。shouldRetryLLMError / isAuthKeyError /
+// isProvider400Error 都消费这个枚举，不再各自维护一份关键词黑/白清单、也不再
+// 靠注释承诺同步。
+type llmErrorKind int
+
+const (
+	llmErrorKindUnknown llmErrorKind = iota
+	llmErrorKindRateLimited        // 429/限流:瞬时,重试同一 key 意义有限但无害
+	llmErrorKindAuth               // 401/403/认证类:重试同一 key 无意义
+	llmErrorKindBilling            // 402/配额耗尽:需人工处理,key 级长冷却
+	llmErrorKindContextTooLong     // 上下文超长:确定性失败,重试必然同样失败
+	llmErrorKindModelNotFound      // 404/模型不存在:确定性失败
+	llmErrorKindDeterministic400   // 其它 400:上下文毒化,sanitize 后可恢复
+)
+
+// llmStreamEventDecodeError 标记流式事件 JSON 解析失败(流内 SSE 事件截断或
+// 形状损坏)。原实现靠 Go encoding/json 的报错文案 "Expecting ',' delimiter"
+// 恰好出现在错误链里误判为 provider 400 触发 sanitize;现在适配器在 decode
+// 失败处包上本错误,isProvider400Error 直接判型。
+type llmStreamEventDecodeError struct{ err error }
+
+func (e *llmStreamEventDecodeError) Error() string { return e.err.Error() }
+func (e *llmStreamEventDecodeError) Unwrap() error { return e.err }
+
+func wrapLLMStreamEventDecode(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &llmStreamEventDecodeError{err: err}
+}
+
+// providerHTTPStatusCode 从常见 provider SDK 错误类型中提取 HTTP 状态码，
+// 同时消除 isProvider400Error / 分类函数里三份重复的 errors.As 链。
+func providerHTTPStatusCode(err error) (int, bool) {
+	var legacyReqErr *legacyopenai.RequestError
+	if errors.As(err, &legacyReqErr) {
+		return legacyReqErr.HTTPStatusCode, true
+	}
+	var oaErr *oa.Error
+	if errors.As(err, &oaErr) {
+		return oaErr.StatusCode, true
+	}
+	var anthropicErr *anthropic.Error
+	if errors.As(err, &anthropicErr) {
+		return anthropicErr.StatusCode, true
+	}
+	return 0, false
+}
+
+// classifyLLMError 把错误归入 llmErrorKind。typed 状态码优先；状态码不可得
+// 时才走关键词匹配（provider/中继文案不可控，关键词表只作为最终兑底保留，
+// 且只在这一处存在）。context 取消/超时返回 Unknown——它是调用层的控制流，
+// 不是 LLM 错误语义。
+func classifyLLMError(err error) llmErrorKind {
+	if err == nil {
+		return llmErrorKindUnknown
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return llmErrorKindUnknown
+	}
+	var decodeErr *llmStreamEventDecodeError
+	if errors.As(err, &decodeErr) {
+		// 流内事件损坏:产出零输出时上层可重试,但不是 provider 400——
+		// sanitize 历史救不了网络流。文案兜底也不得把它归类为 400。
+		return llmErrorKindUnknown
+	}
+	if status, ok := providerHTTPStatusCode(err); ok {
+		switch {
+		case status == 401 || status == 403:
+			return llmErrorKindAuth
+		case status == 402:
+			return llmErrorKindBilling
+		case status == 404:
+			return llmErrorKindModelNotFound
+		case status == 429:
+			return llmErrorKindRateLimited
+		case status == 400:
+			// 400 的细分(上下文超长/模型不存在文案)交给关键词阶段补充;
+			// typed 只确认 "服务端拒绝了本请求"。
+			return llmErrorKindDeterministic400
+		}
+	}
+	msg := strings.ToLower(err.Error())
+	if llmErrorTextMatchesAny(msg, llmBillingMarkers) {
+		return llmErrorKindBilling
+	}
+	if llmErrorTextMatchesAny(msg, llmRateLimitMarkers) {
+		return llmErrorKindRateLimited
+	}
+	if llmErrorTextMatchesAny(msg, llmAuthMarkers) {
+		return llmErrorKindAuth
+	}
+	if llmErrorTextMatchesAny(msg, llmContextTooLongMarkers) {
+		return llmErrorKindContextTooLong
+	}
+	if llmErrorTextMatchesAny(msg, llmModelNotFoundMarkers) {
+		return llmErrorKindModelNotFound
+	}
+	return llmErrorKindUnknown
+}
+
+// llmErrorTextMatchesAny reports whether msg contains any of the markers.
+func llmErrorTextMatchesAny(msg string, markers []string) bool {
+	for _, marker := range markers {
+		if strings.Contains(msg, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// 关键词兑底表(全部小写)。这是 provider 文案匹配的唯一一份清单:原实现里
+// shouldRetryLLMError 与 isAuthKeyError 各持一份且靠注释承诺人工同步,新文案
+// 只需要加到这里。
+var (
+	llmAbortTextMarkers = []string{
+		"context deadline exceeded", "context canceled", "context was canceled",
+	}
+	llmBillingMarkers = []string{
+		"402", "insufficient_quota", "insufficient_balance", "payment required",
+	}
+	llmRateLimitMarkers = []string{
+		"429", "too many requests", "rate limit", "rate exceeded", "rate_limit",
+	}
+	llmAuthMarkers = []string{
+		"401", "403", "invalid api key", "invalid_api_key", "invalid-api-key",
+		"invalid key", "api key", "api_key", "unauthorized", "authentication failed",
+		"not authorized", "permission denied", "permission", "forbidden",
+		"access denied", "credential",
+	}
+	llmContextTooLongMarkers = []string{
+		"context length", "context_length", "maximum context", "context window",
+		"prompt is too long", "input length", "too many input tokens",
+		"maximum_prompt_size", "request too large",
+	}
+	llmModelNotFoundMarkers = []string{
+		"model not found", "no such model", "does not exist", "not_found",
+		"status code: 404", "404 not found",
+	}
+)
+
 // shouldRetryLLMError 判断错误是否值得重试。
-// 策略是"默认重试 + 明确排除确定性失败"(反转自旧版关键词白名单):中转/
-// 服务商的瞬时错误文案千奇百怪("Rate exceeded"、"Service temporarily
-// overloaded"、...),白名单每遇到一个新文案就漏一个、直接中断整个会话;
-// 反转后分类错误的代价只是多等几次有上限的退避,漏掉重试的代价是 run
-// 直接失败。上下文超长、模型不存在这类确定性失败重试必然同样失败,
-// 仍按不可重试处理;mid-stream 已产出内容的中断不走本函数(各适配器有
-// gotAnyEvent/emitted 守卫,由 runChat 做整轮重试)。
+// 策略是"默认重试 + 明确排除确定性失败":中转/服务商的瞬时错误文案千奇百怪
+// ("Rate exceeded"、"Service temporarily overloaded"、...),白名单每遇到一个
+// 新文案就漏一个、直接中断整个会话;分类错误的代价只是多等几次有上限的退避。
+// 分类本身已收敛到 classifyLLMError 的单一枚举。
 func shouldRetryLLMError(err error) bool {
 	if err == nil {
 		return false
@@ -80,38 +220,26 @@ func shouldRetryLLMError(err error) bool {
 	if errors.Is(err, errEmptyModelResponse) {
 		return true
 	}
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+	switch classifyLLMError(err) {
+	case llmErrorKindUnknown:
+		// 取消/超时的文本形态(中转或 SDK 把 context 错误转成纯字符串、丢失
+		// 错误链)不可重试:请求已被上游放弃,重试只会浪费时间。其余未知
+		// 情形(网络抖动/中转自定义文案/未知错误)默认按瞬时错误重试。
+		msg := strings.ToLower(err.Error())
+		return !llmErrorTextMatchesAny(msg, llmAbortTextMarkers)
+	case llmErrorKindRateLimited:
+		return true
+	case llmErrorKindAuth, llmErrorKindBilling, llmErrorKindContextTooLong, llmErrorKindModelNotFound:
+		return false
+	case llmErrorKindDeterministic400:
+		// 400 可能是可修复的上下文毒化(runChat sanitize 路径接管),不能
+		// 简单当作 "确定性失败不重试" 也不当瞬时错误盲重——交由调用方
+		// sanitize 决定;此处按不可直接重试处理,与旧行为一致(旧实现的
+		// 400 文案不在任何重试/非重试清单里,默认重试过,但 sanitize 优先
+		// 于重试且不占预算,行为不变)。
 		return false
 	}
-	// 认证/计费类(key 本身失效或欠费):重试同一 key 无意义。多 key 路径
-	// 由 shouldFailoverKey 直接切换。限流类文案在 isAuthKeyError 里已被
-	// 豁免为非认证错误,会落到下面的默认重试。
-	if isAuthKeyError(err) {
-		return false
-	}
-	msg := strings.ToLower(err.Error())
-	// 取消/超时的文本形态(中转或 SDK 把 context 错误转成纯字符串、丢失
-	// 错误链)同样不可重试:请求已被上游放弃,重试只会浪费时间。
-	if strings.Contains(msg, "context deadline exceeded") || strings.Contains(msg, "context canceled") ||
-		strings.Contains(msg, "context was canceled") {
-		return false
-	}
-	// 上下文超长:确定性失败,重试必然同样失败。
-	if strings.Contains(msg, "context length") || strings.Contains(msg, "context_length") ||
-		strings.Contains(msg, "maximum context") || strings.Contains(msg, "context window") ||
-		strings.Contains(msg, "prompt is too long") || strings.Contains(msg, "input length") ||
-		strings.Contains(msg, "too many input tokens") || strings.Contains(msg, "maximum_prompt_size") ||
-		strings.Contains(msg, "request too large") {
-		return false
-	}
-	// 模型不存在/接口路径错误:确定性失败。"404 " 带空格避免误匹配 token 数。
-	if strings.Contains(msg, "model not found") || strings.Contains(msg, "no such model") ||
-		strings.Contains(msg, "does not exist") || strings.Contains(msg, "not_found") ||
-		strings.Contains(msg, "status code: 404") || strings.Contains(msg, "404 not found") {
-		return false
-	}
-	// 其余一律按瞬时错误重试:429/5xx/网络抖动/中转自定义文案/未知错误。
-	return true
+	return false
 }
 
 func emptyModelResponseError(result *modelStreamResult) error {
@@ -739,7 +867,7 @@ func (a *App) openAIChatStreamAttempt(ctx context.Context, cfg ConfigState, clie
 		}
 		var resp legacyopenai.ChatCompletionStreamResponse
 		if err := json.Unmarshal(raw, &resp); err != nil {
-			return nil, hasOutput(), fmt.Errorf("decode chat stream event: %w", err)
+			return nil, hasOutput(), wrapLLMStreamEventDecode(fmt.Errorf("decode chat stream event: %w", err))
 		}
 		if resp.Usage != nil {
 			usage = modelUsageFromLegacy(resp.Usage, raw)
@@ -943,7 +1071,7 @@ func (a *App) openAIResponsesStreamAttempt(ctx context.Context, cfg ConfigState,
 			if isIncompleteStreamJSON(err) && len(toolCalls) == 0 && (assistant.Len() > 0 || reasoning.Len() > 0) {
 				break
 			}
-			return nil, hasOutput(), fmt.Errorf("decode responses stream event: %w", err)
+			return nil, hasOutput(), wrapLLMStreamEventDecode(fmt.Errorf("decode responses stream event: %w", err))
 		}
 		switch event.Type {
 		case "response.output_text.delta":
@@ -1968,29 +2096,24 @@ func isTruncatedArgsMarker(args []byte) bool {
 // isProvider400Error 判断错误是否是服务商返回的 400 Bad Request。这通常意味
 // 着上下文里有服务端校验无法通过的消息（截断参数、拼接工具名等），runChat
 // 会先尝试 sanitize 修复上下文再重试，而不是直接中断会话。
-// 优先用类型化状态码判断（go-openai RequestError / openai-go 和
-// anthropic-sdk 的 apierror.Error 都会被包装保留在错误链里）；字符串匹配只作
-// 为最终兜底，覆盖中继把状态码丢掉、仅在错误文本里转述 400 的情况。
+// typed 状态码优先（providerHTTPStatusCode 消费三家 SDK 的错误类型）；关键
+// 词只作为中继把状态码丢掉、仅在错误文本里转述 400 的兑底。流内 SSE 事件
+// 解码失败（llmStreamEventDecodeError）不再靠 Go json 包报错文案误判——
+// sanitize 历史救不了网络流损坏。
 func isProvider400Error(err error) bool {
 	if err == nil {
 		return false
 	}
-	var legacyReqErr *legacyopenai.RequestError
-	if errors.As(err, &legacyReqErr) && legacyReqErr.HTTPStatusCode == http.StatusBadRequest {
-		return true
+	var decodeErr *llmStreamEventDecodeError
+	if errors.As(err, &decodeErr) {
+		return false
 	}
-	var oaErr *oa.Error
-	if errors.As(err, &oaErr) && oaErr.StatusCode == http.StatusBadRequest {
-		return true
+	if status, ok := providerHTTPStatusCode(err); ok {
+		return status == 400
 	}
-	var anthropicErr *anthropic.Error
-	if errors.As(err, &anthropicErr) && anthropicErr.StatusCode == http.StatusBadRequest {
-		return true
-	}
-	msg := err.Error()
+	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "status code: 400") ||
-		strings.Contains(msg, "400 Bad Request") ||
-		strings.Contains(msg, "Expecting ',' delimiter")
+		strings.Contains(msg, "400 bad request")
 }
 
 func normalizeToolCalls(toolCalls []legacyopenai.ToolCall) []legacyopenai.ToolCall {

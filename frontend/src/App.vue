@@ -556,8 +556,11 @@ import { isNewerReleaseVersion } from './utils/versionCheck.mjs';
 import { findSessionWorkspaceTab, isEditableNavigationTarget, shouldAcceptRunTerminal } from './utils/sessionState.mjs';
 import { orderPlanPanelEntries, planFocusScrollDelta } from './utils/planPanel.mjs';
 import { formatDateTime, naiveDateLocale, naiveLocale, reasoningEffortLabel, t, welcomeGreeting as localizedWelcomeGreeting } from './i18n.mjs';
+import { fmtCompact, fmtDuration } from './utils/format.mjs';
+import { isSkillActive } from './utils/skills.mjs';
 import {
   displaySourceMessages as buildDisplaySourceMessages,
+  formatBytes as formatBytesShared,
   formatHttpToolTitle,
   isRenderableMessage,
 } from './utils/toolPreview.mjs';
@@ -2406,9 +2409,15 @@ function displayMessagesForSession(session) {
         if (entry.role !== 'tool_call') { i++; continue; }
         if (entry.kind === 'grep') {
           group.grepCount++;
-          // 从 grep chip（"· N hits in M files"）累加命中数
-          const hitsMatch = String(entry.chip || '').match(/(\d+)\s*hits?/i);
-          totalHits += hitsMatch ? Number(hitsMatch[1]) : 0;
+          // 命中数优先取工具结果落下的结构化 stats（B3：{hits, files}），
+          // 历史消息没有 stats 字段时回退到 grep chip（"· N hits"）正则。
+          const hitsFromStats = entry.stats ? Number(entry.stats.hits || 0) : null;
+          if (hitsFromStats !== null) {
+            totalHits += hitsFromStats;
+          } else {
+            const hitsMatch = String(entry.chip || '').match(/(\d+)\s*hits?/i);
+            totalHits += hitsMatch ? Number(hitsMatch[1]) : 0;
+          }
           group.grepItems.push({
             title: entry.title || '',
             chip: entry.chip || '',
@@ -2417,9 +2426,15 @@ function displayMessagesForSession(session) {
           });
         } else if (entry.kind === 'list') {
           group.listCount++;
-          // 从 list chip（"· N items"）累加条目数
-          const itemsMatch = String(entry.chip || '').match(/(\d+)\s*items?/i);
-          totalItems += itemsMatch ? Number(itemsMatch[1]) : 0;
+          // 条目数优先取结构化 stats.items（B3：list_files 结果 entries/
+          // count），历史消息没有 stats 时回退到 list chip（"· N items"）正则。
+          const itemsFromStats = entry.stats ? Number(entry.stats.items || 0) : null;
+          if (itemsFromStats !== null) {
+            totalItems += itemsFromStats;
+          } else {
+            const itemsMatch = String(entry.chip || '').match(/(\d+)\s*items?/i);
+            totalItems += itemsMatch ? Number(itemsMatch[1]) : 0;
+          }
           group.listItems.push({
             title: entry.title || '',
             chip: entry.chip || '',
@@ -2766,19 +2781,9 @@ watch(() => config.workspace, () => {
 });
 
 
-const contextUsed = computed(() => {
-  const n = contextTokens.value;
-  if (n >= 1000000) return Math.round(n / 1000000) + 'M';
-  if (n >= 1000) return Math.round(n / 1000) + 'k';
-  return String(Math.round(n));
-});
+const contextUsed = computed(() => fmtCompact(contextTokens.value));
 const contextWindow = computed(() => (modelByTab[activeWorkspaceId.value] || config).contextWindow || 1000000);
-const contextMax = computed(() => {
-  const m = contextWindow.value;
-  if (m >= 1000000) return Math.round(m / 1000000) + 'M';
-  if (m >= 1000) return Math.round(m / 1000) + 'K';
-  return String(Math.round(m));
-});
+const contextMax = computed(() => fmtCompact(contextWindow.value));
 const contextPercent = computed(() => {
   const used = contextTokens.value;
   const max = contextWindow.value;
@@ -3080,8 +3085,9 @@ function updateWelcomeMcpRows() {
         const modelIndex = rows.findIndex((row) => row.kind === 'model' || row.label === '模型' || row.label === 'Model');
         rows.splice(modelIndex >= 0 ? modelIndex + 1 : rows.length, 0, { kind: 'mcp', label: 'MCP', value });
       }
+      // 只更新 rows：欢迎表格由 WelcomeMessage 组件按 rows 实时渲染，
+      // msg.content（首次构建时的 Markdown 快照）保持不变——本函数只读。
       msg.welcome.rows = rows;
-      msg.content = buildWelcomeContent(msg.welcome);
     }
   }
 }
@@ -3097,13 +3103,19 @@ function workspaceLabel(path) {
 
 function inferSessionWorkspace(session) {
   if (!session) return '';
+  // 常规路径：直接读会话字段（创建会话/切 Tab 绑定/加载会话索引时写入）。
   if (session.workspace) return session.workspace;
+  // 仅旧会话缺字段时的一次性推断：从欢迎消息表格反解工作区路径并写回
+  // session.workspace，之后永远读字段，不再每次扫描消息数组（B1）。
   for (const msg of session.messages || []) {
     const rows = msg?.welcome?.rows;
     if (!Array.isArray(rows)) continue;
     const row = rows.find((item) => item?.kind === 'workspace' || item?.label === '工作区' || item?.label === 'Workspace');
     const value = String(row?.value || '').trim();
-    if (value && value !== '未选择' && value !== 'Not selected') return value;
+    if (value && value !== '未选择' && value !== 'Not selected') {
+      session.workspace = value;
+      return value;
+    }
   }
   return '';
 }
@@ -4154,6 +4166,56 @@ function bindRuntimeEvents() {
     scrollMessagesToBottom,
     activeSessionId,
   });
+  // Run 终态三胞胎（run:done / run:error / run:cancelled）的公共收尾。
+  // 收敛前每个 handler 各自维护约 70 行逐字重复的步骤；这里按三者原本完全
+  // 一致的顺序编排，差异点全部通过 opts.variant 注入（见下面的分支）：
+  // - done:      setAssistant* 之后走 finishPersistableTurn + persistCompletedSession
+  // - error:     封口后先 markTransientTurn，再插入错误/取消提示消息
+  // - cancelled: setAssistant* 之后才 markTransientTurn
+  // 说明：session.runId/isRunning 的复位对 done/cancelled 变体比原实现提前
+  // 了几步（原实现夹在 setAssistant*/finishPersistableTurn 之后），这些步骤
+  // 读写互不相交的字段（消息条目 vs 会话字段），行为完全一致；
+  // saveSessions/persistCompletedSession 的守卫依赖复位先完成，顺序保持不变。
+  function finalizeRunTerminal(session, data, opts) {
+    const variant = opts?.variant || 'done';
+    // 从末尾向前找本 run 的流式 assistant 消息封口（方向与原实现一致）。
+    let i = session.messages.length - 1;
+    while (i >= 0) {
+      const msg = session.messages[i];
+      if (msg.role === 'assistant' && msg.streaming && msg.runId === data.runId) {
+        msg.streaming = false;
+        msg.done = true;
+        finalizeReasoningTiming(msg);
+        // 思考内容始终保留在折叠的 thinking 区，不转正为正文：
+        // 对话正常结束（即使模型只输出了思考、没有正文）。
+        break;
+      }
+      i--;
+    }
+    if (variant === 'error') markTransientTurn(session, data.runId);
+    session.runId = '';
+    session.isRunning = false;
+    if (variant === 'error') {
+      // 仅当前可见会话插入错误/取消提示消息；插入发生在 setAssistant* 之前，
+      // 与原实现一致（插入的消息带 runId，roundDuration/cacheRate 落在它上面）。
+      if (session.id === activeSessionId.value) {
+        const err = data.error || 'unknown error';
+        const cancelled = err === '已取消' || err === 'Cancelled' || String(err).toLowerCase().includes('context canceled');
+        session.messages.push({ role: 'assistant', content: cancelled ? t('app.run.cancelled') : t('app.run.failed', { error: err }), error: !cancelled, system: cancelled, runId: data.runId, transientTurn: true });
+      }
+    }
+    setAssistantRoundDuration(session, data.runId, data.durationMs);
+    setAssistantCacheRate(session, data.runId, data.cacheHit, data.cacheMiss, data.inputTokens, data.outputTokens);
+    if (variant === 'cancelled') markTransientTurn(session, data.runId);
+    if (variant === 'done') {
+      finishPersistableTurn(session, data.runId);
+      persistCompletedSession(session);
+    } else {
+      // run:error / run:cancelled 是瞬态轮次，仅刷新轻量会话元数据，
+      // 不落完整快照（消息会在下一轮被 transientTurn 清理规则淘汰）。
+      saveSessions();
+    }
+  }
   onRuntimeEvent('run:done', (data) => {
     flushStreamBuffer(data.runId);
     flushToolUpdateBuffer();
@@ -4168,25 +4230,7 @@ function bindRuntimeEvents() {
     // 属于当前工作区，底部 Git 统计也应刷新（GetGitStatus 查询的是当前
     // 工作区，与具体会话无关）。
     if (String(session.workspace || '') === String(config.workspace || '')) refreshGitStatus();
-    let i = session.messages.length - 1;
-    while (i >= 0) {
-      const msg = session.messages[i];
-      if (msg.role === 'assistant' && msg.streaming && msg.runId === data.runId) {
-        msg.streaming = false;
-        msg.done = true;
-        finalizeReasoningTiming(msg);
-        // 思考内容始终保留在折叠的 thinking 区，不转正为正文：
-        // 对话正常结束（即使模型只输出了思考、没有正文）。
-        break;
-      }
-      i--;
-    }
-    setAssistantRoundDuration(session, data.runId, data.durationMs);
-    setAssistantCacheRate(session, data.runId, data.cacheHit, data.cacheMiss, data.inputTokens, data.outputTokens);
-    finishPersistableTurn(session, data.runId);
-    session.runId = '';
-    session.isRunning = false;
-    persistCompletedSession(session);
+    finalizeRunTerminal(session, data, { variant: 'done' });
     if (session.id === activeSessionId.value) refreshContextTokens(session.id);
   });
   onRuntimeEvent('run:error', (data) => {
@@ -4199,28 +4243,7 @@ function bindRuntimeEvents() {
     }
     const session = sessionByTerminalEvent(data);
     if (!session) return;
-    let i = session.messages.length - 1;
-    while (i >= 0) {
-      const msg = session.messages[i];
-      if (msg.role === 'assistant' && msg.streaming && msg.runId === data.runId) {
-        msg.streaming = false;
-        msg.done = true;
-        finalizeReasoningTiming(msg);
-        break;
-      }
-      i--;
-    }
-    markTransientTurn(session, data.runId);
-    session.runId = '';
-    session.isRunning = false;
-    if (session.id === activeSessionId.value) {
-      const err = data.error || 'unknown error';
-      const cancelled = err === '已取消' || err === 'Cancelled' || String(err).toLowerCase().includes('context canceled');
-      session.messages.push({ role: 'assistant', content: cancelled ? t('app.run.cancelled') : t('app.run.failed', { error: err }), error: !cancelled, system: cancelled, runId: data.runId, transientTurn: true });
-    }
-    setAssistantRoundDuration(session, data.runId, data.durationMs);
-    setAssistantCacheRate(session, data.runId, data.cacheHit, data.cacheMiss, data.inputTokens, data.outputTokens);
-    saveSessions();
+    finalizeRunTerminal(session, data, { variant: 'error' });
     // Refresh token count after error: messages already grew with streamed
     // content, tool args, and the error footer — the context popover should
     // reflect that immediately instead of waiting for the next session switch.
@@ -4238,23 +4261,7 @@ function bindRuntimeEvents() {
     }
     const session = sessionByTerminalEvent(data);
     if (!session) return;
-    let i = session.messages.length - 1;
-    while (i >= 0) {
-      const msg = session.messages[i];
-      if (msg.role === 'assistant' && msg.streaming && msg.runId === data.runId) {
-        msg.streaming = false;
-        msg.done = true;
-        finalizeReasoningTiming(msg);
-        break;
-      }
-      i--;
-    }
-    setAssistantRoundDuration(session, data.runId, data.durationMs);
-    setAssistantCacheRate(session, data.runId, data.cacheHit, data.cacheMiss, data.inputTokens, data.outputTokens);
-    markTransientTurn(session, data.runId);
-    session.runId = '';
-    session.isRunning = false;
-    saveSessions();
+    finalizeRunTerminal(session, data, { variant: 'cancelled' });
     // Refresh token count after cancellation: streaming deltas and any tool
     // results added before cancellation are now part of the history and the
     // context popover should reflect the actual remaining budget.
@@ -7044,7 +7051,7 @@ async function loadAndShowSkills() {
     if (skills && skills.length > 0) {
       let table = t('app.skills.tableHeader');
       for (const s of skills) {
-        const status = isSkillActive(s.name) ? t('app.skills.enabled') : t('app.skills.disabled');
+        const status = isSkillActive(s.name, activeSkillNames.value) ? t('app.skills.enabled') : t('app.skills.disabled');
         table += `| \`/${s.name}\` | ${s.description || '-'} | ${s.source || '-'} · ${status} |\n`;
       }
       pushMessage('assistant', t('app.skills.list', { count: skills.length, table }), { system: true });
@@ -7055,15 +7062,6 @@ async function loadAndShowSkills() {
     message.error(t('app.skills.listFailed', { error: err }));
   }
   scrollMessagesToBottom();
-}
-
-function normalizeSkillName(name) {
-  return String(name || '').trim().toLowerCase();
-}
-
-function isSkillActive(name) {
-  const target = normalizeSkillName(name);
-  return activeSkillNames.value.some((item) => normalizeSkillName(item) === target);
 }
 
 async function refreshSkillState() {
@@ -7090,7 +7088,7 @@ async function refreshSkillState() {
 
 async function activateSkillByName(skillName, skillArgs = '', injectIntoChat = true) {
   try {
-    const alreadyActive = isSkillActive(skillName);
+    const alreadyActive = isSkillActive(skillName, activeSkillNames.value);
     const xmlBlock = await ActivateSkill(skillName);
     if (injectIntoChat && xmlBlock) {
       const session = activeSession.value;
@@ -7823,9 +7821,7 @@ function formatHTTPDuration(ms) {
 
 function formatCharCount(chars) {
   if (!chars) return '0 chars';
-  if (chars < 1000) return chars + ' chars';
-  if (chars < 1000000) return (chars / 1000).toFixed(chars < 10000 ? 1 : 0) + 'k chars';
-  return (chars / 1000000).toFixed(1) + 'm chars';
+  return fmtCompact(chars) + ' chars';
 }
 
 function formatDuration(ms) {
@@ -7836,16 +7832,7 @@ function formatDuration(ms) {
 }
 
 function formatDurationShort(ms) {
-  const value = Number(ms);
-  if (!Number.isFinite(value) || value <= 0) return '';
-  if (value < 1000) return '<1s';
-  const secs = Math.max(1, Math.round(value / 1000));
-  const hours = Math.floor(secs / 3600);
-  const mins = Math.floor((secs % 3600) / 60);
-  const rest = secs % 60;
-  if (hours > 0) return `${hours}h${mins > 0 ? `${mins}m` : ''}`;
-  if (mins > 0) return `${mins}m${rest > 0 ? `${rest}s` : ''}`;
-  return `${rest}s`;
+  return fmtDuration(ms);
 }
 
 function stripAnsi(text) {
@@ -7909,16 +7896,7 @@ function exportAllMessages(sessionId = activeSessionId.value) {
 }
 
 function fmtK(n) {
-  if (!n) return '0';
-  if (n >= 1000) return (n / 1000).toFixed(1) + 'k';
-  return String(n);
-}
-
-function fmtTokenUnit(n) {
-  const value = Number(n) || 0;
-  if (value >= 1000000) return Math.round(value / 1000000) + 'M';
-  if (value >= 1000) return Math.round(value / 1000) + 'k';
-  return String(value);
+  return fmtCompact(n);
 }
 
 function fmtTime(ts) {
@@ -8002,17 +7980,6 @@ function escapeHTML(value) {
     .replaceAll("'", '&#039;');
 }
 
-function formatBytes(bytes) {
-  if (!bytes) return '0 B';
-  const units = ['B', 'KB', 'MB', 'GB'];
-  let i = 0;
-  let n = bytes;
-  while (n >= 1024 && i < units.length - 1) {
-    n /= 1024;
-    i++;
-  }
-  return `${n.toFixed(i ? 1 : 0)} ${units[i]}`;
-}
 
 function focusPromptInput() {
   promptInputRefs[activeWorkspaceId.value]?.focus?.();

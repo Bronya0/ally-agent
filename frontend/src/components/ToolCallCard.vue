@@ -99,6 +99,8 @@ import { highlightShellCommand } from '../utils/shellHighlight.mjs';
 import { formatToolErrorBody } from '../utils/toolError.mjs';
 import { toolVerbLabel, hasNamedVerb } from '../utils/toolVerb.mjs';
 import { t } from '../i18n.mjs';
+import { fmtDuration } from '../utils/format.mjs';
+import { normalizedLines } from '../utils/toolPreview.mjs';
 import ToolStatusIcon from './ToolStatusIcon.vue';
 
 const BODY_PREVIEW_LINES = 6;
@@ -143,24 +145,11 @@ const displayDuration = computed(() => {
   if (NO_DURATION_KINDS.has(props.msg.kind)) return '';
   if (props.msg.kind === 'edit' && props.msg.status === 'running') {
     const startedAt = Number(props.msg.uiStartedAt || 0);
-    if (startedAt) return formatDurationShort(nowMs.value - startedAt);
+    if (startedAt) return fmtDuration(nowMs.value - startedAt);
     return '';
   }
   return props.msg.durationText || '';
 });
-
-function formatDurationShort(ms) {
-  const value = Number(ms);
-  if (!Number.isFinite(value) || value <= 0) return '';
-  if (value < 1000) return '<1s';
-  const secs = Math.max(1, Math.round(value / 1000));
-  const hours = Math.floor(secs / 3600);
-  const mins = Math.floor((secs % 3600) / 60);
-  const rest = secs % 60;
-  if (hours > 0) return `${hours}h${mins > 0 ? `${mins}m` : ''}`;
-  if (mins > 0) return `${mins}m${rest > 0 ? `${rest}s` : ''}`;
-  return `${rest}s`;
-}
 
 watch(
   () => (props.msg.kind === 'wait' || props.msg.kind === 'edit') && props.msg.status === 'running',
@@ -290,12 +279,6 @@ function escapeHtml(text) {
 
 function isFixedKind(kind) {
   return ['edit', 'create', 'command'].includes(kind);
-}
-
-function normalizedLines(text) {
-  const lines = String(text || '').replace(/\r\n/g, '\n').split('\n');
-  if (lines.length > 1 && lines[lines.length - 1] === '') lines.pop();
-  return lines;
 }
 
 // tool:update 每 ~120ms 强制重渲一次，模板里反复调用 lineCount /

@@ -451,12 +451,12 @@ Public License v3. See the LICENSE file for details.
           <div class="skill-settings-list">
             <div v-if="skillsLoading && !availableSkills.length" class="saved-model-empty">{{ $t('settings.skillsLoading') }}</div>
             <div v-else-if="!availableSkills.length" class="saved-model-empty">{{ $t('settings.skillsEmpty') }}</div>
-            <div v-for="sk in sortedSkills" :key="`${sk.source || 'skill'}:${sk.name}`" :class="['skill-settings-item', { active: isSkillActive(sk.name), builtin: sk.source === 'builtin' }]">
+            <div v-for="sk in sortedSkills" :key="`${sk.source || 'skill'}:${sk.name}`" :class="['skill-settings-item', { active: isSkillActive(sk.name, activeSkillNames), builtin: sk.source === 'builtin' }]">
               <div class="skill-settings-main">
                 <div class="skill-title-row">
                   <span class="skill-name">{{ sk.name }}</span>
                   <span :class="['skill-badge', sk.source || 'unknown']">{{ sk.source || 'unknown' }}</span>
-                  <span v-if="isSkillActive(sk.name)" class="skill-badge loaded">{{ $t('common.enabled') }}</span>
+                  <span v-if="isSkillActive(sk.name, activeSkillNames)" class="skill-badge loaded">{{ $t('common.enabled') }}</span>
                   <span v-if="sk.source === 'builtin'" class="skill-badge builtin-locked">{{ $t('settings.builtinAlwaysOn') }}</span>
                 </div>
                 <div class="skill-description">{{ sk.description || sk.whenToUse || $t('common.noDescription') }}</div>
@@ -467,7 +467,7 @@ Public License v3. See the LICENSE file for details.
                 >{{ sk.path || sk.dir || '-' }}</div>
               </div>
               <n-switch
-                :value="isSkillActive(sk.name)"
+                :value="isSkillActive(sk.name, activeSkillNames)"
                 :disabled="skillsLoading || skillToggleInFlight === sk.name || sk.source === 'builtin'"
                 @update:value="(value) => toggleSkillFromSettings(sk, value)"
               />
@@ -792,6 +792,7 @@ import { naiveDateLocale, naiveLocale, reasoningEffortLabel, t } from '../i18n.m
 import { getStoredMode } from '../utils/theme.mjs';
 import { buildModelConfigExport, mergeModelConfigs, modelConfigIdentity, normalizeApiKeysArray, normalizeReasoningEffort, parseModelConfigImport, reasoningEffortLevels } from '../utils/modelConfigIO.mjs';
 import { saveTextFile } from '../utils/download.mjs';
+import { isSkillActive } from '../utils/skills.mjs';
 import CloseOutlined from '@vicons/antd/CloseOutlined';
 import PlusOutlined from '@vicons/antd/PlusOutlined';
 import CloudDownloadOutlined from '@vicons/antd/CloudDownloadOutlined';
@@ -1786,15 +1787,6 @@ const activeSkillNames = ref([]);
 const skillsLoading = ref(false);
 const skillToggleInFlight = ref('');
 
-function normalizeSkillName(name) {
-  return String(name || '').toLowerCase().replace(/[-\s]+/g, '-').replace(/[^a-z0-9-]/g, '');
-}
-
-function isSkillActive(name) {
-  const target = normalizeSkillName(name);
-  return activeSkillNames.value.some((item) => normalizeSkillName(item) === target);
-}
-
 // Sort skills: built-in skills first (always enabled), then others alphabetically
 const sortedSkills = computed(() => {
   return [...availableSkills.value].sort((a, b) => {
@@ -1809,7 +1801,7 @@ const sortedSkills = computed(() => {
 // Built-in skills are always on and excluded from the bulk sweep, so the
 // disable-all button only cares about active non-builtin skills.
 const toggleableActiveSkillCount = computed(() => {
-  return availableSkills.value.filter((sk) => sk.source !== 'builtin' && isSkillActive(sk.name)).length;
+  return availableSkills.value.filter((sk) => sk.source !== 'builtin' && isSkillActive(sk.name, activeSkillNames.value)).length;
 });
 
 async function handleOpenSkillPath(sk) {

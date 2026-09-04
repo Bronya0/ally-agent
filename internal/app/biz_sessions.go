@@ -1011,13 +1011,14 @@ func (a *App) loadHistoryLocked(sessionID string) []openai.ChatCompletionMessage
 	return messages
 }
 
+// historyMessageTokens 是单条消息 token 估算的唯一入口：直接派生自
+// estimateRequestTokens 的逐消息口径（role/body/name/toolCallID/reasoning
+// + tool call 的 ID/Type/Name/Args 全字段）。原实现漏计 tool call 的 ID 与
+// Type，导致历史裁剪预算（trimSavedHistory）与上下文面板（estimateRequestTokens
+// 路径）系统性偏差；上下文面板的 contextStaticBreakdown/liveBreakdown 也统一
+// 复用本函数与 addLiveBreakdownMessage 的同口径分桶，不再各写一份循环。
 func historyMessageTokens(message openai.ChatCompletionMessage) int {
-	tokens := estimateMessageBodyTokens(message)
-	for _, call := range message.ToolCalls {
-		tokens += estimateTokensFromText(call.Function.Name)
-		tokens += estimateTokensFromText(call.Function.Arguments)
-	}
-	return tokens
+	return estimateRequestTokens([]openai.ChatCompletionMessage{message}, nil)
 }
 
 func trimSavedHistory(messages []openai.ChatCompletionMessage) []openai.ChatCompletionMessage {

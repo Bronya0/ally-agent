@@ -196,6 +196,18 @@ export function useToolEvents(ctx) {
     }
   }
 
+  // B3: grep / list_files 命中数与条目数结构化。把结果里的数字写到消息对象
+  // 的 stats 字段（grep: {hits, files}，list_files: {items}），App.vue 的
+  // read-grep 折叠组聚合优先累加结构化值；历史消息没有 stats 时由聚合处
+  // 回退到 chip 文案正则。chip 生成处（formatToolChip）不变。
+  function applyToolStats(existing, data, resultData) {
+    if (data.name === 'grep') {
+      existing.stats = { ...(existing.stats || {}), hits: Number(resultData.hits || 0), files: Number(resultData.files || 0) };
+    } else if (data.name === 'list_files') {
+      existing.stats = { ...(existing.stats || {}), items: Array.isArray(resultData.entries) ? resultData.entries.length : Number(resultData.count || 0) };
+    }
+  }
+
   const toolResultAdapters = {
     'edit': [applyEditValidation, applyEditDiff],
     'replace_exact': [applyEditValidation, applyEditDiff],
@@ -207,6 +219,8 @@ export function useToolEvents(ctx) {
     'plan': [applyPlanTitle],
     'read': [applyReadBatchEntries],
     'remote_read': [applyReadBatchEntries],
+    'grep': [applyToolStats],
+    'list_files': [applyToolStats],
   };
 
   function applySubagentResult(existing, data, resultData) {
