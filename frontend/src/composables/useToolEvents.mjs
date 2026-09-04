@@ -196,16 +196,9 @@ export function useToolEvents(ctx) {
     }
   }
 
-  // B3: grep / list_files 命中数与条目数结构化。把结果里的数字写到消息对象
-  // 的 stats 字段（grep: {hits, files}，list_files: {items}），App.vue 的
-  // read-grep 折叠组聚合优先累加结构化值；历史消息没有 stats 时由聚合处
-  // 回退到 chip 文案正则。chip 生成处（formatToolChip）不变。
-  function applyToolStats(existing, data, resultData) {
-    if (data.name === 'grep') {
-      existing.stats = { ...(existing.stats || {}), hits: Number(resultData.hits || 0), files: Number(resultData.files || 0) };
-    } else if (data.name === 'list_files') {
-      existing.stats = { ...(existing.stats || {}), items: Array.isArray(resultData.entries) ? resultData.entries.length : Number(resultData.count || 0) };
-    }
+  function applyToolStats() {
+    // 留空钩子：折叠行尾的 hits/items/lines chip 已按需求移除，聚合处不再
+    // 需要结构化 stats。保留函数避免改动 adapters 映射表结构。
   }
 
   const toolResultAdapters = {

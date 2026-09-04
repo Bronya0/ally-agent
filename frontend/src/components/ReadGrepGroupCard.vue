@@ -19,9 +19,6 @@ Public License v3. See the LICENSE file for details.
           <span>{{ part.prefix }}</span><span class="read-grep-num-slot"><span :key="part.count" class="read-grep-num-bump">{{ part.count }}</span></span><span>{{ part.suffix }}</span>
         </template>
       </span>
-      <span v-if="msg.readTotalLines > 0 && msg.readCount > 0" class="tool-chip">{{ readChip }}</span>
-      <span v-if="hitsChip" class="tool-chip">{{ hitsChip }}</span>
-      <span v-if="itemsChip" class="tool-chip">{{ itemsChip }}</span>
       <!-- 折叠指示紧跟文字（不靠最右）；展开时旋转 90°。RightOutlined SVG
            与工作区文件树的展开箭头同款，不用 Unicode 字符避免 WebView2
            系统字体回退导致的粗细不一致 -->
@@ -117,35 +114,22 @@ const statsParts = computed(() => {
   return parts;
 });
 
-// 折叠行尾的行数统计 chip：去掉点号前缀，与统计文字用空隙分隔
-const hitsChip = computed(() => {
-  const hits = Number(props.msg.grepTotalHits) || 0;
-  return hits > 0 ? `${hits} hits` : '';
-});
-
-// 折叠行尾的 list 条目数 chip
-const itemsChip = computed(() => {
-  const items = Number(props.msg.listTotalItems) || 0;
-  return items > 0 ? `${items} items` : '';
-});
-
-const readChip = computed(() => {
-  const lines = props.msg.readTotalLines || 0;
-  return `${lines} lines`;
-});
-
-// 展开体的统一条目列表：read → grep → list，树形前缀按全局序计算，
-// 避免分段计算 total 导致的 '└─' 提前出现在中间行。
+// 展开体的统一条目列表：按调用先后顺序排列（seq 由 App.vue 折叠时按源消息顺序
+// 递增编号），树形前缀按全局序计算，避免分段计算 total 导致的 '└─' 提前出现在中间行。
+// 兼容旧数据：没有 seq 的历史组保持原 read→grep→list 分组顺序。
 const allEntries = computed(() => {
   const entries = [];
   for (const e of props.msg.readEntries || []) {
-    entries.push({ verb: 'Read', title: e.title, displayChip: childChip(e), status: e.status });
+    entries.push({ verb: 'Read', title: e.title, displayChip: childChip(e), status: e.status, seq: e.seq });
   }
   for (const e of props.msg.grepItems || []) {
-    entries.push({ verb: 'Grep', title: e.title, displayChip: e.chip, status: e.status, extraClass: 'grep-entry' });
+    entries.push({ verb: 'Grep', title: e.title, displayChip: e.chip, status: e.status, extraClass: 'grep-entry', seq: e.seq });
   }
   for (const e of props.msg.listItems || []) {
-    entries.push({ verb: 'List', title: e.title, displayChip: e.chip, status: e.status, extraClass: 'list-entry' });
+    entries.push({ verb: 'List', title: e.title, displayChip: e.chip, status: e.status, extraClass: 'list-entry', seq: e.seq });
+  }
+  if (entries.some((e) => typeof e.seq === 'number')) {
+    entries.sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0));
   }
   return entries;
 });

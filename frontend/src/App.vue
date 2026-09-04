@@ -2399,9 +2399,7 @@ function displayMessagesForSession(session) {
         durationMs: 0,
         durationText: '',
       };
-      let totalLines = 0;
-      let totalHits = 0;
-      let totalItems = 0;
+      let seq = 0;
       let allDone = true;
       let hasError = false;
       while (i < j) {
@@ -2409,44 +2407,27 @@ function displayMessagesForSession(session) {
         if (entry.role !== 'tool_call') { i++; continue; }
         if (entry.kind === 'grep') {
           group.grepCount++;
-          // 命中数优先取工具结果落下的结构化 stats（B3：{hits, files}），
-          // 历史消息没有 stats 字段时回退到 grep chip（"· N hits"）正则。
-          const hitsFromStats = entry.stats ? Number(entry.stats.hits || 0) : null;
-          if (hitsFromStats !== null) {
-            totalHits += hitsFromStats;
-          } else {
-            const hitsMatch = String(entry.chip || '').match(/(\d+)\s*hits?/i);
-            totalHits += hitsMatch ? Number(hitsMatch[1]) : 0;
-          }
           group.grepItems.push({
             title: entry.title || '',
             chip: entry.chip || '',
             status: entry.status,
             body: entry.body || '',
+            seq: seq++,
           });
         } else if (entry.kind === 'list') {
           group.listCount++;
-          // 条目数优先取结构化 stats.items（B3：list_files 结果 entries/
-          // count），历史消息没有 stats 时回退到 list chip（"· N items"）正则。
-          const itemsFromStats = entry.stats ? Number(entry.stats.items || 0) : null;
-          if (itemsFromStats !== null) {
-            totalItems += itemsFromStats;
-          } else {
-            const itemsMatch = String(entry.chip || '').match(/(\d+)\s*items?/i);
-            totalItems += itemsMatch ? Number(itemsMatch[1]) : 0;
-          }
           group.listItems.push({
             title: entry.title || '',
             chip: entry.chip || '',
             status: entry.status,
             body: entry.body || '',
+            seq: seq++,
           });
         } else if ((entry.name === 'read' || entry.name === 'batch_read') && entry.batchEntries && entry.batchEntries.length > 0) {
           for (const be of entry.batchEntries) {
             const entryStatus = be.status || entry.status;
             if (entryStatus === 'error') hasError = true;
-            group.readEntries.push({ title: be.title, chip: be.chip, lineCount: be.lineCount || 0, totalLines: be.totalLines || be.lineCount || 0, startLine: be.startLine || 1, endLine: be.endLine || be.totalLines || 0, truncated: !!be.truncated, body: '', status: entryStatus, expanded: false });
-            totalLines += be.lineCount || 0;
+            group.readEntries.push({ title: be.title, chip: be.chip, lineCount: be.lineCount || 0, totalLines: be.totalLines || be.lineCount || 0, startLine: be.startLine || 1, endLine: be.endLine || be.totalLines || 0, truncated: !!be.truncated, body: '', status: entryStatus, expanded: false, seq: seq++ });
           }
           group.readCount++;
         } else {
@@ -2458,8 +2439,8 @@ function displayMessagesForSession(session) {
             body: entry.body || '',
             status: entry.status,
             expanded: false,
+            seq: seq++,
           });
-          totalLines += entry.readLineCount || 0;
           group.readCount++;
         }
         if (entry.status === 'running') allDone = false;
@@ -2471,9 +2452,6 @@ function displayMessagesForSession(session) {
         i++;
       }
       group.status = hasError ? 'error' : (allDone ? 'success' : 'running');
-      group.readTotalLines = totalLines;
-      group.grepTotalHits = totalHits;
-      group.listTotalItems = totalItems;
       // 夹在工具批次之间的思考上提到折叠组上方（原顺序）；
       // 尾随的思考保持在折叠组下方（它多半是正在流式的最终回答，
       // 一旦有正文就不能把折叠往下顶）。
