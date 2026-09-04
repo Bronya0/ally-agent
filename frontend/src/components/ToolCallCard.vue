@@ -73,7 +73,7 @@ Public License v3. See the LICENSE file for details.
       :max-lines="BODY_PREVIEW_LINES"
       preview-mode="tail"
     />
-    <pre v-else-if="msg.body && msg.status !== 'error' && msg.kind !== 'edit' && msg.kind !== 'read' && msg.kind !== 'calculate' && msg.kind !== 'scheduled' && msg.kind !== 'grep' && msg.kind !== 'plan' && (msg.kind !== 'list' || msg.expanded)" ref="bodyPreRef" :class="['tool-body', { 'fixed-scroll': isFixedKind(msg.kind), 'body-preview': isBodyPreview(msg), 'tail-default': isServiceReadResult(msg), 'scroll-enabled': bodyScrollEnabled && isScrollableBody(msg) }]" @click.stop="handleBodyClick(msg)">{{ toolBodyText(msg) }}</pre>
+    <pre v-else-if="msg.body && msg.status !== 'error' && msg.kind !== 'edit' && msg.kind !== 'read' && msg.kind !== 'remote_read' && msg.kind !== 'calculate' && msg.kind !== 'scheduled' && msg.kind !== 'grep' && msg.kind !== 'plan' && (msg.kind !== 'list' || msg.expanded)" ref="bodyPreRef" :class="['tool-body', { 'fixed-scroll': isFixedKind(msg.kind), 'body-preview': isBodyPreview(msg), 'tail-default': isServiceReadResult(msg), 'scroll-enabled': bodyScrollEnabled && isScrollableBody(msg) }]" @click.stop="handleBodyClick(msg)">{{ toolBodyText(msg) }}</pre>
     <div v-if="isValidationWarning(msg)" class="edit-warning-list validation-warning-list" role="status" aria-live="polite">
       <div class="edit-warning validation-warning" :title="msg.validation">
         <span class="validation-warning-label">{{ $t('tools.validationWarning') }}</span>
@@ -468,7 +468,7 @@ function handleToggle(msg) {
 }
 
 function hasExpandableBody(msg) {
-  if (msg.kind === 'read' || msg.kind === 'command' || msg.kind === 'plan') return false;
+  if (msg.kind === 'read' || msg.kind === 'remote_read' || msg.kind === 'command' || msg.kind === 'plan') return false;
   if (msg.kind === 'edit') return true;
   if (msg.kind === 'create') return lineCount(msg, msg.codeContent) > BODY_PREVIEW_LINES;
   // calculate: body 只重复 title(expression) + chip(= result)，无需详情卡

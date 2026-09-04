@@ -2391,7 +2391,7 @@ function displayMessagesForSession(session) {
             status: entry.status,
             body: entry.body || '',
           });
-        } else if ((entry.name === 'read' || entry.name === 'remote_read' || entry.name === 'batch_read') && entry.batchEntries && entry.batchEntries.length > 0) {
+        } else if ((entry.name === 'read' || entry.name === 'batch_read') && entry.batchEntries && entry.batchEntries.length > 0) {
           for (const be of entry.batchEntries) {
             const entryStatus = be.status || entry.status;
             if (entryStatus === 'error') hasError = true;
@@ -5915,6 +5915,12 @@ function makeToolResultTitle(name, result, meta = {}) {
   const d = parseToolResultData(result);
   if (name === 'plan' && Array.isArray(d.todos)) return formatTodoNextStep(d.todos);
 	if ((name === 'edit' || name === 'remote_edit') && Array.isArray(d.files)) return d.files.length === 1 ? (d.files[0]?.path || '') : `${d.files.length} files`;
+  if (name === 'remote_read' && Array.isArray(d.files)) {
+    const paths = d.files.map(f => f && f.path).filter(Boolean);
+    const summary = paths.length === 1 ? (paths[0] || '') : `${paths.length} files`;
+    const target = meta?.target || d.target || '';
+    return target ? `${target} · ${summary}` : summary;
+  }
   const path = d.path || d.deleted || '';
   if (path && (name === 'create' || name === 'edit' || name === 'remote_edit' || name === 'remote_create_file' || name === 'delete' || name === 'remote_delete_path')) {
     return d.target ? `${d.target} · ${path}` : path;
@@ -7170,7 +7176,8 @@ function toolKind(name) {
   if (name === 'ask') return 'ask';
   if (name === 'calculate') return 'calculate';
   if (name === 'list_files') return 'list';
-  if (name === 'read' || name === 'remote_read') return 'read';
+  if (name === 'read') return 'read';
+  if (name === 'remote_read') return 'remote_read';
   if (name === 'Glob') return 'glob';
   if (name === 'grep') return 'grep';
   if (name === 'run') return 'run';
@@ -7349,6 +7356,11 @@ function formatToolChip(name, result) {
     // read / remote_read: list each file as separate line
     if ((name === 'read' || name === 'remote_read') && parsed.data) {
       if (!parsed.data.files || !Array.isArray(parsed.data.files)) return '';
+      if (name === 'remote_read' && parsed.data.files.length === 1) {
+        const f = parsed.data.files[0];
+        if (f.error) return '· failed';
+        return formatReadChip(f.totalLines || f.lineCount || 0);
+      }
       const lines = parsed.data.files.map(f => {
         const path = f.path || '';
         const total = f.totalLines || 0;
