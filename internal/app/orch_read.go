@@ -508,7 +508,7 @@ func collectReadImages(name string, result *toolResult) []readImageCandidate {
 		return nil
 	}
 	switch name {
-	case "read", "batch_read", "read_file":
+	case "read":
 	default:
 		return nil
 	}

@@ -342,8 +342,6 @@ func NewApp() *App {
 		runs:                map[string]context.CancelFunc{},
 		runSessions:         map[string]string{},
 		runInputs:           map[string]chan string{},
-		compactingSessions:  map[string]struct{}{},
-		compactingCancels:   map[string]context.CancelFunc{},
 		histories:           map[string][]openai.ChatCompletionMessage{},
 		todos:               map[string][]TodoEntry{},
 		todoRevisions:       map[string]int64{},
@@ -508,7 +506,6 @@ type ConfigState struct {
 	// CodeFontSize / ToolFontSize / SubFontSize / AuxFontSize are the UI
 	// font sizes (px) for code content, tool cards, secondary text, and
 	// auxiliary text. Zero means "use default"; the frontend applies them
-	// as CSS variables.
 	CodeFontSize float64 `json:"codeFontSize,omitempty"`
 	ToolFontSize float64 `json:"toolFontSize,omitempty"`
 	SubFontSize  float64 `json:"subFontSize,omitempty"`
@@ -1027,8 +1024,10 @@ type WebFetchResult struct {
 }
 
 type RemoteReadFileRequest struct {
-	Target    string `json:"target"`
-	Path      string `json:"path"`
+	Target string                 `json:"target"`
+	Files  []BatchReadFileRequest `json:"files"`
+	// Compatibility fields for legacy single-file reads
+	Path      string `json:"path,omitempty"`
 	StartLine int    `json:"startLine,omitempty"`
 	EndLine   int    `json:"endLine,omitempty"`
 }
@@ -2412,12 +2411,6 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 			req.ModelFacing = true
 			data, err = a.listFilesWithConfig(cfg, req)
 		}
-	case "read_file":
-		var req ReadFileRequest
-		err, argWarnings = decodeJSON(&req)
-		if err == nil {
-			data, err = a.readFileWithConfig(cfg, req)
-		}
 	case "edit":
 		// The model-facing request is the flat FileTextEdits itself: exactly
 		// one file per call, path/version/changes at the top level. Multi-file
@@ -2558,7 +2551,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		if err == nil {
 			data, err = a.webFetchToolWithConfig(ctx, cfg, req)
 		}
-	case "remote_read_file":
+	case "remote_read":
 		var req RemoteReadFileRequest
 		err, argWarnings = decodeJSON(&req)
 		if err == nil {

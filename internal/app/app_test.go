@@ -1123,7 +1123,7 @@ func TestSaveHistoryPreservesToolCallsAndResults(t *testing.T) {
 				ID:   "call_1",
 				Type: openai.ToolTypeFunction,
 				Function: openai.FunctionCall{
-					Name:      "batch_read",
+					Name:      "read",
 					Arguments: `{"path":"a.txt"}`,
 				},
 			}},
@@ -1136,7 +1136,7 @@ func TestSaveHistoryPreservesToolCallsAndResults(t *testing.T) {
 	if len(got) != 4 {
 		t.Fatalf("expected 4 persisted model messages, got %d: %#v", len(got), got)
 	}
-	if len(got[1].ToolCalls) != 1 || got[1].ToolCalls[0].Function.Name != "batch_read" {
+	if len(got[1].ToolCalls) != 1 || got[1].ToolCalls[0].Function.Name != "read" {
 		t.Fatalf("expected assistant tool call to be preserved, got %#v", got[1])
 	}
 	if got[2].Role != openai.ChatMessageRoleTool || got[2].ToolCallID != "call_1" || got[2].Content != toolResult {
@@ -1275,7 +1275,7 @@ func TestBuildMessagesWithRestoredFrontendUsesBackendToolResults(t *testing.T) {
 				ID:   "call_1",
 				Type: openai.ToolTypeFunction,
 				Function: openai.FunctionCall{
-					Name:      "batch_read",
+					Name:      "read",
 					Arguments: `{"path":"a.txt"}`,
 				},
 			}},

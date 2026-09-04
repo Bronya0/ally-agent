@@ -205,27 +205,25 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"url"},
 		}),
-		functionTool("remote_read_file", "Read a text file on a remote SSH workspace (same contract as read: line-numbered preview + 6-char version for remote_edit; UTF-16 LE/BE transcoded; no document extraction). By default, omit startLine/endLine to read the whole file. NEVER use startLine/endLine on normal code files. Positive startLine without endLine reads to EOF; only endLine reads lines 1..endLine; negative startLine reads the last N lines (max 10000), not with endLine.", map[string]any{
+		functionTool("remote_read", "Read one or more text files on a remote SSH workspace (same contract as read: line-numbered preview + 6-char version for remote_edit; UTF-16 LE/BE transcoded; no document extraction). By default, omit startLine/endLine to read the whole file. NEVER use startLine/endLine on normal code files. Pass ALL files you need to inspect in the files array at once to minimize round-trips.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"target":    map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Explicit SSH target plus workspace root, e.g. my-dev:/srv/app."},
-				"path":      map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Relative file path inside the remote workspace."},
-				"startLine": map[string]any{"type": "integer", "minimum": -MaxReadRangeLines, "description": "DO NOT use for normal code files. Optional 1-based start line only when continuing a truncated read; negative reads last N lines (max 10000)."},
-				"endLine":   map[string]any{"type": "integer", "minimum": 1, "description": "DO NOT use for normal code files. Optional inclusive end line; omit when startLine is negative."},
+				"target": map[string]any{"type": "string", "minLength": 1, "pattern": `.*\S.*`, "description": "Explicit SSH target plus workspace root, e.g. my-dev:/srv/app."},
+				"files":  batchReadFilesSchema(),
 			},
-			"required": []string{"target", "path"},
+			"required": []string{"target", "files"},
 		}),
 		functionTool("remote_edit", "Validate and apply exact replacements to ONE file per call in a remote SSH workspace (same flat contract as edit; to change several files, send parallel remote_edit calls in one response).\n"+
 			"- `target` selects the SSH target plus workspace root, e.g. my-dev:/srv/app; `path` is relative to that root.\n"+
-			"- Requires the current 6-character `version` from `remote_read_file`; `E_VERSION_MISMATCH` means re-read before editing.\n"+
+			"- Requires the current 6-character `version` from `remote_read`; `E_VERSION_MISMATCH` means re-read before editing.\n" +
 			"- `changes` must be a JSON array (`[...]`), never a quoted string.\n"+
-			"- Each change chooses exactly one source: a small exact unique `oldText` copied from `remote_read_file` (preferred), or an inclusive whole-line `lineRange` in A-B form for larger blocks.\n"+
+			"- Each change chooses exactly one source: a small exact unique `oldText` copied from `remote_read` (preferred), or an inclusive whole-line `lineRange` in A-B form for larger blocks.\n" +
 			"- `replace_all` works only with `oldText`. `newText` is required.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"target":  map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Explicit SSH target plus workspace root, e.g. my-dev:/srv/app."},
 				"path":    map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Relative path of the single file to edit in this call."},
-				"version": map[string]any{"type": "string", "pattern": "^[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{6}$", "description": "Required 6-char current version from remote_read_file."},
+				"version": map[string]any{"type": "string", "pattern": "^[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{6}$", "description": "Required 6-char current version from remote_read."},
 				"changes": remoteEditChangesSchema(),
 			},
 			"required": []string{"target", "path", "version", "changes"},
@@ -373,6 +371,7 @@ var builtinToolExamples = map[string]string{
 	"command":            `{"command":"go test ./...","cwd":".","timeout":120,"fullOutput":false}`,
 	"service":            `start: {"action":"start","name":"frontend","command":"npm run dev","cwd":"frontend"}; stop: {"action":"stop","id":"svc_..."}; list: {"action":"list"}; read: {"action":"read","id":"svc_...","tailBytes":8192}`,
 	"ask":                `{"questions":[{"id":"database","question":"Which database should we use?","options":[{"id":"sqlite","label":"SQLite","description":"Simple local storage.","recommended":true},{"id":"postgres","label":"PostgreSQL","description":"Production database.","recommended":false}]}]}`,
+	"remote_read":         `{"target":"my-dev:/srv/app","files":[{"path":"main.go"}]}`,
 	"remote_edit":        `{"target":"my-dev:/srv/app","path":"main.go","version":"9k3m7x","changes":[{"oldText":"func old() {}","newText":"func new() {}"}]}`,
 	"remote_run_command": `{"target":"my-dev:/srv/app","command":"go test ./...","fullOutput":false}`,
 	"grep":               `{"pattern":"TODO|FIXME","path":"frontend/src","glob":"*.vue","maxMatches":100}`,
@@ -416,15 +415,6 @@ func batchReadFilesSchema() map[string]any {
 	}
 }
 
-func editFilesSchema() map[string]any {
-	return map[string]any{"type": "array", "minItems": 1, "maxItems": 20, "items": map[string]any{
-		"type": "object", "properties": map[string]any{
-			"path":    map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*"},
-			"version": map[string]any{"type": "string", "pattern": "^[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{6}$"},
-			"changes": map[string]any{"type": "array", "minItems": 1, "maxItems": 50, "items": editChangeSchema()},
-		}, "required": []string{"path", "version", "changes"},
-	}}
-}
 
 func editChangeSchema() map[string]any {
 	return map[string]any{
@@ -539,24 +529,12 @@ func normalizeSchemaNode(node map[string]any) {
 	}
 }
 
-// toolNameAliases maps deprecated tool names to their canonical names.
-// Add an entry here when renaming a built-in tool so historical sessions
-// (whose persisted tool_call names are the old spelling) keep dispatching
-// correctly. The map is consulted after lower-casing, so aliases must use
-// lowercase keys. MCP tool names (mcp__*) are never aliased here.
-var toolNameAliases = map[string]string{
-	"batch_read": "read", // legacy name; kept so historical sessions keep dispatching
-}
 
 // normalizeToolName lower-cases the incoming tool name and resolves any
 // deprecated alias to its canonical name. It is the single entry point for
 // tool-name normalization in executeTool.
 func NormalizeName(name string) string {
-	name = strings.ToLower(strings.TrimSpace(name))
-	if canonical, ok := toolNameAliases[name]; ok {
-		return canonical
-	}
-	return name
+	return strings.ToLower(strings.TrimSpace(name))
 }
 
 // ParseFrontmatterField reads a single `field: value` line from YAML

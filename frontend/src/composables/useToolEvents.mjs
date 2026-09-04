@@ -205,10 +205,8 @@ export function useToolEvents(ctx) {
     'remote_create_file': [applyCreatePath],
     'ask': [applyAskResult],
     'plan': [applyPlanTitle],
-    'read_file': [applyReadFileMeta],
-    'remote_read_file': [applyReadFileMeta],
     'read': [applyReadBatchEntries],
-    'batch_read': [applyReadBatchEntries],
+    'remote_read': [applyReadBatchEntries],
   };
 
   function applySubagentResult(existing, data, resultData) {
@@ -291,7 +289,7 @@ export function useToolEvents(ctx) {
       // The backend silently filters directory and stale/missing paths from a
       // batch read. If every requested path was filtered, remove the transient
       // running card as well so the UI shows neither an error nor an empty read.
-      if ((data.name === 'read' || data.name === 'batch_read') && Array.isArray(resultData.files) && resultData.files.length === 0) {
+      if ((data.name === 'read' || data.name === 'remote_read' || data.name === 'batch_read') && Array.isArray(resultData.files) && resultData.files.length === 0) {
         const messageIndex = session.messages.indexOf(existing);
         if (messageIndex >= 0) session.messages.splice(messageIndex, 1);
         scheduleSaveSessions();

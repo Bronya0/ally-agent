@@ -58,7 +58,7 @@ const BUILTIN_TOOL_GROUPS = [
   {
     key: 'read',
     label: t('tools.group.read'),
-    names: ['list_files', 'read', 'batch_read'],
+    names: ['list_files', 'read'],
     description: t('tools.group.readDescription'),
   },
   {
@@ -88,7 +88,7 @@ const BUILTIN_TOOL_GROUPS = [
   {
     key: 'remote',
     label: t('tools.group.remote'),
-    names: ['remote_read_file', 'remote_edit', 'remote_create_file', 'remote_delete_path', 'remote_run_command'],
+    names: ['remote_read', 'remote_edit', 'remote_create_file', 'remote_delete_path', 'remote_run_command'],
     description: t('tools.group.remoteDescription'),
   },
   {

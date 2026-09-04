@@ -27,10 +27,7 @@
 const TOOL_VERBS = {
   // read / list
   read: ['Reading', 'Read', 'Read'],
-  read_file: ['Reading', 'Read', 'Read'],
-  remote_read_file: ['Remote Reading', 'Remote Read', 'Remote Read'],
-  batch_read: ['Reading', 'Read', 'Read'],
-  document_read: ['Reading', 'Read', 'Read'],
+  remote_read: ['Remote Reading', 'Remote Read', 'Remote Read'],
   list_files: ['Listing', 'Listed', 'List'],
   // write
   edit: ['Editing', 'Edited', 'Edit'],

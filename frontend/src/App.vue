@@ -2391,7 +2391,7 @@ function displayMessagesForSession(session) {
             status: entry.status,
             body: entry.body || '',
           });
-        } else if ((entry.name === 'read' || entry.name === 'batch_read') && entry.batchEntries && entry.batchEntries.length > 0) {
+        } else if ((entry.name === 'read' || entry.name === 'remote_read' || entry.name === 'batch_read') && entry.batchEntries && entry.batchEntries.length > 0) {
           for (const be of entry.batchEntries) {
             const entryStatus = be.status || entry.status;
             if (entryStatus === 'error') hasError = true;
@@ -6568,7 +6568,7 @@ function sanitizeStoredMessage(msg) {
   next.reasoningBody = '';
   // Read tool results hold file contents that go stale quickly and bloat the
   // snapshot; the model can re-read on demand after restore.
-  if (next.role === 'tool_call' && (next.name === 'read' || next.name === 'batch_read')) {
+  if (next.role === 'tool_call' && (next.name === 'read' || next.name === 'remote_read' || next.name === 'batch_read')) {
     next.body = '';
     next.codeContent = '';
   } else {
@@ -7170,7 +7170,7 @@ function toolKind(name) {
   if (name === 'ask') return 'ask';
   if (name === 'calculate') return 'calculate';
   if (name === 'list_files') return 'list';
-  if (name === 'read' || name === 'read_file' || name === 'remote_read_file' || name === 'batch_read' || name === 'document_read') return 'read';
+  if (name === 'read' || name === 'remote_read') return 'read';
   if (name === 'Glob') return 'glob';
   if (name === 'grep') return 'grep';
   if (name === 'run') return 'run';
@@ -7279,7 +7279,11 @@ function makeToolTitle(name, args, meta = {}) {
   if (name === 'create' || name === 'delete' || name === 'remote_create_file' || name === 'remote_delete_path') {
     return parsed.target ? `${parsed.target} · ${parsed.path || ''}` : (parsed.path || '');
   }
-  if (name === 'read_file' || name === 'remote_read_file') {
+  if (name === 'remote_read') {
+    if (parsed.target && Array.isArray(parsed.files)) {
+      const paths = parsed.files.map(f => f && f.path).filter(Boolean);
+      return `${parsed.target} · ${paths.join(', ')}`;
+    }
     return parsed.target ? `${parsed.target} · ${parsed.path || ''}` : (parsed.path || '');
   }
   if (name === 'grep') {
@@ -7342,26 +7346,8 @@ function formatToolChip(name, result) {
   }
   try {
     const parsed = JSON.parse(text);
-    // read_file: · N lines 或 · N lines M-N
-    if ((name === 'read_file' || name === 'remote_read_file') && parsed.data) {
-      const d = parsed.data;
-      if (d.kind === 'document' || d.contentFormat === 'plain') {
-        const chars = String(d.text || d.content || '').length;
-        if (chars > 0) return '\u00B7 ' + chars + ' chars' + (d.truncated ? ' truncated' : '');
-      }
-      const startLine = d.startLine || 1;
-      const endLine = d.endLine || d.totalLines || 0;
-      const linesReturned = endLine - startLine + 1;
-      if (linesReturned > 0) {
-        const isPartial = startLine > 1 || endLine < (d.totalLines || 0);
-        if (isPartial && d.totalLines > linesReturned) {
-          return '\u00B7 ' + linesReturned + ' line' + (linesReturned !== 1 ? 's' : '') + ' ' + startLine + '-' + endLine;
-        }
-        return formatReadChip(linesReturned);
-      }
-    }
-    // read (and legacy batch_read): list each file as separate line
-    if ((name === 'read' || name === 'batch_read') && parsed.data) {
+    // read / remote_read: list each file as separate line
+    if ((name === 'read' || name === 'remote_read') && parsed.data) {
       if (!parsed.data.files || !Array.isArray(parsed.data.files)) return '';
       const lines = parsed.data.files.map(f => {
         const path = f.path || '';
@@ -7495,18 +7481,8 @@ function formatToolBody(name, body) {
       return out;
     }
     // read_file result: show content with line numbers
-    if ((name === 'read_file' || name === 'remote_read_file') && parsed.data) {
-      const d = parsed.data;
-      if (d.kind === 'document' || d.contentFormat === 'plain') {
-        const sheetInfo = d.sheets && d.sheets.length ? '\nsheets: ' + d.sheets.join(', ') : '';
-        return `${d.path || ''} (${d.type || 'document'})${sheetInfo}\n\n${d.text || d.content || ''}${d.truncated ? '\n\n[truncated]' : ''}`;
-      }
-      if (d.content) return d.content;
-      if (d.output) return d.output;
-      return '';
-    }
     // read (and legacy batch_read) result: show each file's content
-    if ((name === 'read' || name === 'batch_read') && parsed.data) {
+    if ((name === 'read' || name === 'remote_read') && parsed.data) {
       const d = parsed.data;
       if (d.files && Array.isArray(d.files)) {
         return d.files.map(f => {

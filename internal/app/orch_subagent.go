@@ -688,7 +688,7 @@ func trackFileFromToolResult(name string, args string, result *toolResult, files
 		*list = append(*list, p)
 	}
 	switch name {
-	case "read", "read_file", "batch_read":
+	case "read", "remote_read":
 		// extract path from args
 		var req struct {
 			Path  string   `json:"path"`

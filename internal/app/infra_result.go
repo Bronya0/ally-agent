@@ -51,20 +51,7 @@ func toolResultSummary(name string, result *toolResult) string {
 		return ""
 	}
 	switch name {
-	case "read_file":
-		data, _ := json.Marshal(result.Data)
-		var r ReadFileResult
-		if json.Unmarshal(data, &r) == nil {
-			if r.EmptyRange || r.EndLine < r.StartLine {
-				return fmt.Sprintf("0 lines (%s, %d total)", r.RangeStatus, r.TotalLines)
-			}
-			count := r.EndLine - r.StartLine + 1
-			if r.Truncated && r.NextStartLine > 0 {
-				return fmt.Sprintf("%d lines (%d-%d of %d, next %d)", count, r.StartLine, r.EndLine, r.TotalLines, r.NextStartLine)
-			}
-			return fmt.Sprintf("%d lines (%d-%d of %d)", count, r.StartLine, r.EndLine, r.TotalLines)
-		}
-	case "read", "batch_read":
+	case "read", "remote_read":
 		data, _ := json.Marshal(result.Data)
 		var r BatchReadResult
 		if json.Unmarshal(data, &r) == nil {
@@ -229,7 +216,7 @@ func compactToolDataForModel(name string, result toolResult, fullJSON string) st
 		return compactMcpOutputForModel(result, fullJSON)
 	}
 	switch name {
-	case "read", "batch_read", "read_file":
+	case "read", "remote_read":
 		var r BatchReadResult
 		if !decodeToolData(result.Data, &r) {
 			return fullJSON

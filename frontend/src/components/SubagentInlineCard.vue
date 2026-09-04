@@ -204,7 +204,11 @@ function toolArgsTitle(tc) {
   if (name === 'create' || name === 'delete' || name === 'remote_create_file' || name === 'remote_delete_path') {
     return parsed.target ? `${parsed.target} · ${parsed.path || ''}` : (parsed.path || '');
   }
-  if (name === 'read' || name === 'batch_read' || name === 'read_file' || name === 'remote_read_file') {
+  if (name === 'read' || name === 'remote_read') {
+    if (parsed.target && Array.isArray(parsed.files)) {
+      const paths = parsed.files.map(f => f && f.path).filter(Boolean);
+      return `${parsed.target} · ${paths.join(', ')}`;
+    }
     if (parsed.target) return `${parsed.target} · ${parsed.path || ''}`;
     if (parsed.path) return parsed.path;
     const paths = Array.isArray(parsed.paths) ? parsed.paths : [];

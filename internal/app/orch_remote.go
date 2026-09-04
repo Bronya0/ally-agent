@@ -655,43 +655,72 @@ func (a *App) remoteWriteRaw(ctx context.Context, rt remoteTarget, relPath strin
 	return outcome.CreatedDirs, nil
 }
 
-func (a *App) remoteReadFile(ctx context.Context, req RemoteReadFileRequest) (ReadFileResult, error) {
-	_, file, err := a.remoteReadRaw(ctx, req.Target, req.Path)
-	if err != nil {
-		return ReadFileResult{}, err
+func (a *App) remoteReadFile(ctx context.Context, req RemoteReadFileRequest) (BatchReadResult, error) {
+	if strings.TrimSpace(req.Target) == "" {
+		return BatchReadResult{}, errors.New("target is required")
 	}
-	text, ending, _ := normalizeText(file.Data)
-	sha256Hex, version := hashBytesAndVersion(file.Data)
-	preview, err := formatLineNumberReadPreviewRangeWithBudget(text, readRangeRequest{
-		StartLine: req.StartLine,
-		EndLine:   req.EndLine,
-	}, maxToolOutput)
-	if err != nil {
-		return ReadFileResult{}, err
+	fileRequests := req.Files
+	if len(fileRequests) == 0 && strings.TrimSpace(req.Path) != "" {
+		fileRequests = []BatchReadFileRequest{
+			{
+				Path:      req.Path,
+				StartLine: req.StartLine,
+				EndLine:   req.EndLine,
+			},
+		}
 	}
-	return ReadFileResult{
-		Path:                  file.Path,
-		Content:               preview.Content,
-		RawContent:            preview.RawContent,
-		Kind:                  "text",
-		ContentFormat:         "line_numbers",
-		Editable:              true,
-		StartLine:             preview.StartLine,
-		EndLine:               preview.EndLine,
-		NextStartLine:         preview.NextStartLine,
-		TotalLines:            preview.TotalLines,
-		SHA256:                sha256Hex,
-		Version:               version,
-		Size:                  file.Size,
-		LineEnding:            ending,
-		Truncated:             preview.Truncated,
-		TruncatedLines:        preview.TruncatedLines,
-		TruncatedLinesOmitted: preview.TruncatedLinesOmitted,
-		RangeStatus:           preview.RangeStatus,
-		EmptyRange:            preview.EmptyRange,
-	}, nil
+	if len(fileRequests) == 0 {
+		return BatchReadResult{}, errors.New("remote_read requires at least one file in files")
+	}
+	if len(fileRequests) > 20 {
+		return BatchReadResult{}, errors.New("too many files; max 20 per batch")
+	}
+	results := make([]BatchReadResultItem, len(fileRequests))
+	for i, f := range fileRequests {
+		_, rawFile, err := a.remoteReadRaw(ctx, req.Target, f.Path)
+		if err != nil {
+			results[i] = BatchReadResultItem{
+				Path:  f.Path,
+				Error: err.Error(),
+			}
+			continue
+		}
+		text, ending, _ := normalizeText(rawFile.Data)
+		sha256Hex, version := hashBytesAndVersion(rawFile.Data)
+		_ = sha256Hex
+		preview, previewErr := formatLineNumberReadPreviewRangeWithBudget(text, readRangeRequest{
+			StartLine: f.StartLine,
+			EndLine:   f.EndLine,
+		}, maxToolOutput)
+		if previewErr != nil {
+			results[i] = BatchReadResultItem{
+				Path:  f.Path,
+				Error: previewErr.Error(),
+			}
+			continue
+		}
+		results[i] = BatchReadResultItem{
+			Path:                  rawFile.Path,
+			Content:               preview.Content,
+			Kind:                  "text",
+			ContentFormat:         "line_numbers",
+			Editable:              true,
+			StartLine:             preview.StartLine,
+			EndLine:               preview.EndLine,
+			NextStartLine:         preview.NextStartLine,
+			TotalLines:            preview.TotalLines,
+			Version:               version,
+			Size:                  rawFile.Size,
+			LineEnding:            ending,
+			Truncated:             preview.Truncated,
+			TruncatedLines:        preview.TruncatedLines,
+			TruncatedLinesOmitted: preview.TruncatedLinesOmitted,
+			RangeStatus:           preview.RangeStatus,
+			EmptyRange:            preview.EmptyRange,
+		}
+	}
+	return BatchReadResult{Files: results}, nil
 }
-
 // remoteEdit applies the flat single-file remote edit contract. The result is
 // the same MultiEditResult shape local edit returns, with exactly one file.
 // A single-file call needs no backup/rollback: remoteEditOne validates the
