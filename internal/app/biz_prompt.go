@@ -60,6 +60,7 @@ func sharedEditRules() string {
 		"   - Re-read when the current source or line numbers are unknown, context compaction removed the reliable snapshot, or a formatter/generator/command or other external process may have changed the file.\n" +
 		"2. Keep the model-facing `edit` request shape as follows:\n" +
 		"   - One `edit` call edits exactly ONE file: `path`, `version`, and `changes` sit at the top level of the call arguments.\n" +
+		"   - When multiple files need changes, emit parallel `edit` calls in the same turn — one call per file.\n" +
 		"   - `changes` must be a JSON array (`[...]`), never a quoted string.\n" +
 		"   - Missing required fields fail the entire call.\n" +
 		"3. Batch edits by risk and size:\n" +
@@ -77,14 +78,13 @@ func sharedEditRules() string {
 
 // sharedBatchStrategy returns the batch/parallel tool-call strategy shared by the main and sub-agent system prompts.
 func sharedBatchStrategy() string {
-	return "**Batch and parallelize aggressively** — this is the #1 way to reduce round-trips and save tokens:\n" +
-		"- For `read`, read the whole file by default to get complete context; when inspecting multiple related or known files, read them together in one `read` call (via `files: [...]`) instead of reading one file per turn; when a read is auto-truncated on large files, follow the `[Showing lines A-B of N. Use startLine=C to continue.]` marker instead of re-reading the whole file.\n" +
-		"- `edit` changes one file per call: put all small changes for the same file into that file's single `edit` call, edit several files by sending parallel `edit` calls in the same response, and give very large changes their own separate `edit` call so overly long outputs are not truncated. When `edit`/`create` returns a `validation` string (optional, enabled per language by the user), a failure means the file is already written, so fix the reported issue directly instead of repeating the same write.\n" +
-		"- If you need to search across files, use `grep` instead of reading each file. `grep` returns matching lines with file paths, line numbers, and matching line contents (truncated to 500 chars/line), with optional context lines before/after matches. Use limit to bound matches. Before concluding that content does not exist, check `skipped`; search an explicit `path` when generated directories or files over 10 MB are relevant.\n" +
-		"- Prefer one `grep` to finish a search in a single call: leaving `path` unset searches the whole project root, so avoid repeating the search over different directories — fewer `grep` calls means fewer round-trips and higher efficiency.\n" +
-		"- Batch independent reads and commands (no duplicates); use current version values for dependent edits. Reuse read content already returned in the current run instead of reading the same path and range again, unless a successful write/command or an external process may have changed it.\n" +
-		"- Only call tools one at a time when a strict serial dependency exists between them.\n" +
-		"- Merge and batch tool calls to reduce round-trips and save tokens.\n" +
+	return "**Batch and parallelize aggressively — minimize round-trips to prevent context explosion**:\n" +
+		"Every extra turn re-sends prior conversation history to the model, wasting massive context tokens and degrading attention. Fragmented, hesitant baby-step tool calls are strictly forbidden.\n" +
+		"- **Read**: In a single `read` tool call, pass ALL files you need or suspect you need into the `files: [{path: ...}, ...]` array at once. NEVER emit multiple consecutive single-file `read` calls across turns. Read whole files by omitting startLine/endLine for normal code files (<1500 lines) — partial/sliced reads pollute conversation history and cause massive token explosion across turns. NEVER re-read different line ranges of a file you already inspected. Only use `startLine` when a previous read was auto-truncated (>2000 lines) following the `[Showing lines A-B of N. Use startLine=C to continue.]` marker.\n" +
+		"- **Edit**: Fast-complete multi-file edits via PARALLEL tool calls. When multiple files need changes, emit parallel `edit` tool calls simultaneously in the exact same response turn (one call per file). Batch edits by risk and size: put all small changes for the same file into that file's single `edit` call, and give very large changes their own separate `edit` call so overly long outputs are not truncated. When `edit`/`create` returns a `validation` string (optional, enabled per language by the user), a failure means the file is already written, so fix the reported issue directly instead of repeating the same write.\n" +
+		"- **Grep**: Use it strictly for fast path/line locating (lines mode returns matching line numbers only, no line content). Jump straight to locations or batch-read full candidate files with `read`. When searching for multiple keywords or patterns, emit all `grep` calls concurrently in the same turn.\n" +
+		"- **Exploration**: Exploration has no serial dependencies. Finding candidate files (grep across patterns) and loading context (reading 2-5 candidate files) must be emitted in parallel in the VERY FIRST turn. Never waste turns probing one file or one keyword at a time.\n" +
+		"- **Rule of thumb**: Batch independent reads, edits, and commands; only separate calls across turns when a strict serial dependency exists (e.g. an edit requires the version hash obtained from a prior read). If you can do it in 1 turn, NEVER split it across 2.\n" +
 		"The backend executes independent non-file tool calls in parallel; built-in file mutations are ordered by tool-call index.\n\n"
 }
 

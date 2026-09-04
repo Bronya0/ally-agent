@@ -508,9 +508,6 @@ func compactToolDataForModel(name string, result toolResult, fullJSON string) st
 			"truncated":    r.Truncated,
 			"nextOffset":   r.NextOffset,
 		}
-		if r.Output != "" {
-			data["output"] = r.Output
-		}
 		switch mode {
 		case "lines":
 			// Default: one entry per matching line, grouped by file, no line

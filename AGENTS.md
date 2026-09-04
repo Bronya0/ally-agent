@@ -338,7 +338,7 @@ Built-in model-facing tools:
 | `edit` | Atomically apply exact-source or whole-line-range replacements to local files; after writing, returns a concise `validation` string with low-cost language checks |
 | `create` | Create/overwrite text files; after writing, returns a concise `validation` string with low-cost language checks |
 | `delete` | Delete files/directories |
-| `grep` | Search file contents for patterns using ripgrep; returns matching lines with file paths, line numbers, and matching contents (truncated to 500 chars/line), with optional context lines before/after matches (`context`), literal string search (`literal`), case-insensitivity (`ignoreCase`), and match limits (`limit`); exact stats and pagination remain available |
+| `grep` | Regex search through bundled ripgrep, with PATH fallback in development; `outputMode` defaults to `lines` (one entry per matching line, grouped by file with 1-based line numbers, no line text — compact and flat), `count_matches` returns exact per-file occurrence counts; exact stats + `offset`/`nextOffset` pagination remain available, workspace-wide skip policies are returned in `skipped`, and explicit paths bypass broad generated-directory and 10 MB exclusions |
 | `command` | Shell command execution with safety checks |
 | `service` | Run/inspect/stop long-lived local processes (dev servers, workers); unified three-platform stop = best-effort graceful termination, bounded grace wait (`graceSeconds`, default 3, max 30), then force kill of the whole process tree — escalation and kill failures are reported in the result `error` field |
 | `wait` | Pause the current agent run for a cancellable 1–3600 second delay |
@@ -368,8 +368,9 @@ mcp__<serverName>__<toolName>
 
 Accepted read forms:
 
-- Model-facing calls accept a single file via `path` (with optional `offset` and `limit`), or multiple files via `files: [{path, offset?, limit?, startLine?, endLine?}]`.
-- By default, `offset` and `limit` are omitted to read the whole file (output truncated to 2000 lines or 128KB, whichever is hit first). Use `offset`/`limit` only to page through genuinely large files.
+- Model-facing calls require `files`: an array of one or more `{path, startLine?, endLine?}` requests.
+- Omit `startLine` and `endLine` to read the whole file (output truncated to 2000 lines or 128KB, whichever is hit first). Normal code files must not be sliced with line ranges to prevent context duplication; use `startLine` only when continuing a truncated file.
+- Backend compatibility fields may still accept top-level `path`, `paths`, and `offset`/`limit`, but they are omitted from the model-facing tool schema.
 
 Text files:
 

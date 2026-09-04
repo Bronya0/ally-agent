@@ -1223,16 +1223,12 @@ type BatchReadRequest struct {
 	Path      string                 `json:"path,omitempty"`
 	Paths     []string               `json:"paths,omitempty"`
 	Files     []BatchReadFileRequest `json:"files,omitempty"`
-	Offset    int                    `json:"offset,omitempty"`
-	Limit     int                    `json:"limit,omitempty"`
 	StartLine int                    `json:"startLine,omitempty"`
 	EndLine   int                    `json:"endLine,omitempty"`
 }
 
 type BatchReadFileRequest struct {
 	Path      string `json:"path"`
-	Offset    int    `json:"offset,omitempty"`
-	Limit     int    `json:"limit,omitempty"`
 	StartLine int    `json:"startLine,omitempty"`
 	EndLine   int    `json:"endLine,omitempty"`
 }

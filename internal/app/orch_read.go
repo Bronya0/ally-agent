@@ -221,25 +221,11 @@ func (a *App) batchReadFilesWithConfig(cfg ConfigState, req BatchReadRequest) (*
 		req  ReadFileRequest
 	}
 	pending := make([]pendingRead, 0, pathCount)
-	normalizeRange := func(offset, limit, startLine, endLine int) (int, int) {
-		if offset > 0 && startLine == 0 {
-			startLine = offset
-		}
-		if limit > 0 && endLine == 0 {
-			if startLine <= 0 {
-				startLine = 1
-			}
-			endLine = startLine + limit - 1
-		}
-		return startLine, endLine
-	}
-
-	reqStart, reqEnd := normalizeRange(req.Offset, req.Limit, req.StartLine, req.EndLine)
 	if strings.TrimSpace(req.Path) != "" {
 		fileReq := ReadFileRequest{
 			Path:      req.Path,
-			StartLine: reqStart,
-			EndLine:   reqEnd,
+			StartLine: req.StartLine,
+			EndLine:   req.EndLine,
 		}
 		if addIfNotSeen(readKey(req.Path, fileReq)) {
 			pending = append(pending, pendingRead{path: req.Path, req: fileReq})
@@ -248,25 +234,24 @@ func (a *App) batchReadFilesWithConfig(cfg ConfigState, req BatchReadRequest) (*
 	for _, p := range req.Paths {
 		fileReq := ReadFileRequest{
 			Path:      p,
-			StartLine: reqStart,
-			EndLine:   reqEnd,
+			StartLine: req.StartLine,
+			EndLine:   req.EndLine,
 		}
 		if addIfNotSeen(readKey(p, fileReq)) {
 			pending = append(pending, pendingRead{path: p, req: fileReq})
 		}
 	}
 	for _, file := range req.Files {
-		fileStart, fileEnd := normalizeRange(file.Offset, file.Limit, file.StartLine, file.EndLine)
-		if fileStart == 0 {
-			fileStart = reqStart
-		}
-		if fileEnd == 0 {
-			fileEnd = reqEnd
-		}
 		fileReq := ReadFileRequest{
 			Path:      file.Path,
-			StartLine: fileStart,
-			EndLine:   fileEnd,
+			StartLine: file.StartLine,
+			EndLine:   file.EndLine,
+		}
+		if fileReq.StartLine == 0 {
+			fileReq.StartLine = req.StartLine
+		}
+		if fileReq.EndLine == 0 {
+			fileReq.EndLine = req.EndLine
 		}
 		if addIfNotSeen(readKey(file.Path, fileReq)) {
 			pending = append(pending, pendingRead{path: file.Path, req: fileReq})
