@@ -186,7 +186,10 @@ func estimateTokensFromText(text string) int {
 			nonAsciiCount++
 		}
 	}
-	return int(math.Ceil(float64(asciiCount)/4)) + nonAsciiCount
+	// In real-world LLM tokenizers (o200k, cl100k, Claude, Qwen/DeepSeek):
+	// - Code/JSON/indents/punctuation: ~3.0 - 3.2 ASCII chars per token (down from 4).
+	// - Chinese / CJK characters: typically 1.3 - 1.6 tokens per character (up from 1.0).
+	return int(math.Ceil(float64(asciiCount)/3.2)) + int(math.Ceil(float64(nonAsciiCount)*1.4))
 }
 
 func estimateRequestTokens(messages []openai.ChatCompletionMessage, tools []openai.Tool) int {

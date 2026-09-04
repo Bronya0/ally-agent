@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -117,7 +118,7 @@ func emptyModelResponseError(result *modelStreamResult) error {
 	if result == nil {
 		return errEmptyModelResponse
 	}
-	if strings.TrimSpace(result.Content) == "" && len(result.ToolCalls) == 0 && len(result.Images) == 0 {
+	if strings.TrimSpace(result.Content) == "" && strings.TrimSpace(result.Reasoning) == "" && len(result.ToolCalls) == 0 && len(result.Images) == 0 {
 		return errEmptyModelResponse
 	}
 	return nil
@@ -240,14 +241,51 @@ func (a *App) completeModelText(ctx context.Context, cfg ConfigState, model stri
 func (a *App) completeModelTextWithUsage(ctx context.Context, cfg ConfigState, model string, messages []legacyopenai.ChatCompletionMessage, maxTokens int) (string, *modelUsage, error) {
 	next := cfg
 	next.MaxTokens = maxTokens
-	result, err := a.streamModelResponse(ctx, next, model, messages, nil, nil)
+	// Like normal chat, stream the response and capture all content/reasoning deltas
+	var contentBuilder strings.Builder
+	var reasoningBuilder strings.Builder
+	result, err := a.streamModelResponse(ctx, next, model, messages, nil, func(event modelStreamEvent) {
+		if event.ContentDelta != "" {
+			contentBuilder.WriteString(event.ContentDelta)
+		}
+		if event.ReasoningDelta != "" {
+			reasoningBuilder.WriteString(event.ReasoningDelta)
+		}
+	})
 	if err != nil {
 		return "", nil, err
 	}
 	if err := modelResponseStopError(next, result); err != nil {
 		return "", nil, err
 	}
-	return strings.TrimSpace(result.Content), result.Usage, nil
+	content := strings.TrimSpace(result.Content)
+	if content == "" {
+		content = strings.TrimSpace(contentBuilder.String())
+	}
+	if content == "" {
+		content = strings.TrimSpace(result.Reasoning)
+	}
+	if content == "" {
+		content = strings.TrimSpace(reasoningBuilder.String())
+	}
+	if content == "" && len(result.ToolCalls) > 0 {
+		// The model decided to call tools (e.g. attempting to read files or call ask/done)
+		// instead of outputting direct text. Extract argument text or summarize tool calls.
+		var toolCallParts []string
+		for _, tc := range result.ToolCalls {
+			if strings.TrimSpace(tc.Function.Arguments) != "" {
+				toolCallParts = append(toolCallParts, tc.Function.Arguments)
+			}
+		}
+		content = strings.TrimSpace(strings.Join(toolCallParts, "\n"))
+	}
+	if content == "" {
+		details := fmt.Sprintf("result.Content=%q, builder=%q, reasoning=%q, rBuilder=%q, stopReason=%q, toolCalls=%d",
+			result.Content, contentBuilder.String(), result.Reasoning, reasoningBuilder.String(), result.StopReason, len(result.ToolCalls))
+		log.Printf("[compaction] debug: empty summary! %s", details)
+		return "", nil, fmt.Errorf("compaction returned empty summary (%s)", details)
+	}
+	return content, result.Usage, nil
 }
 
 func (a *App) streamModelResponse(ctx context.Context, cfg ConfigState, model string, messages []legacyopenai.ChatCompletionMessage, tools []legacyopenai.Tool, onEvent func(modelStreamEvent)) (*modelStreamResult, error) {
@@ -616,12 +654,9 @@ func (a *App) streamOpenAIChat(ctx context.Context, cfg ConfigState, model strin
 	}
 	if len(tools) > 0 {
 		streamReq.Tools = tools
-		// Do not set ToolChoice. The default is "auto" for OpenAI and all
-		// compatible gateways, so omitting the field is equivalent. Some
-		// gateways (e.g. OpenCode Go forwarding to DeepSeek) trip schema
-		// validation on extra fields, so sending the default value adds risk
-		// with no benefit.
-		// ParallelToolCalls is also intentionally omitted for the same reason.
+	} else {
+		// Explicitly tell models not to call tools (prevents models from hallucinating tool calls during text-only completion)
+		streamReq.ToolChoice = "none"
 	}
 
 	maxRetries := effectiveLLMRetries(cfg)

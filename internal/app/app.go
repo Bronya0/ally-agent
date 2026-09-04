@@ -1652,29 +1652,18 @@ func (a *App) compactSession(parent context.Context, sessionID, instruction stri
 	}()
 
 	history := sanitizeHistoryMessages(a.histories[sessionID])
-
-	// Stage 1 (same code path as the auto-compaction in runChat): stub stale
-	// tool-result bodies. If usage drops under the compaction threshold and
-	// no custom instruction was given, the trim alone is the compaction —
-	// no LLM summary call happens at all.
-	tokensBefore := estimateTokensFromMessages(history)
-	if trimmed, changed := trimOldToolResults(history, keepRecentToolResults); changed {
-		history = trimmed
-		// Persist the stubbed bodies so the trim survives app restarts.
-		a.saveHistory(sessionID, history)
-		if strings.TrimSpace(instruction) == "" &&
-			estimateTokensFromMessages(history) <= compactThresholdLimit(cfg) {
-			return map[string]any{
-				"summary":      "",
-				"tokensBefore": tokensBefore,
-				"tokensAfter":  estimateTokensFromMessages(history),
-			}, nil
-		}
+	if len(history) == 0 {
+		return nil, errors.New("no messages to compact")
 	}
 
-	// Manual compaction keeps the final user message so a request with pending
-	// work survives into the next turn.
-	return a.compactHistory(ctx, cfg, sessionID, instruction, history, true)
+	tokensBefore := a.getContextBreakdown(sessionID).Total
+	if tokensBefore <= 0 {
+		tokensBefore = estimateTokensFromMessages(history)
+	}
+
+	// 手动点击压缩是用户的明确意图：无条件执行总结压缩，将切分点之前的较早历史总结为 Summary。
+	// （自动压缩才会受 threshold 阈值限制）
+	return a.compactHistory(ctx, cfg, sessionID, instruction, history, true, tokensBefore)
 }
 
 // compactThresholdLimit returns the absolute token count at which
@@ -1687,13 +1676,11 @@ func compactThresholdLimit(cfg ConfigState) int {
 	return int(float64(maxCtx) * clampCompactThreshold(cfg.CompactThreshold))
 }
 
-// compactHistory summarizes the given sanitized messages with the model and
-// replaces the session history with the summary. history is the caller's
-// snapshot of the conversation to compact (system/workspace messages
-// excluded). keepLastUser preserves the final user message (e.g. a request
-// that still has pending work); callers that re-append the current request
-// themselves (auto-compaction) should pass false to avoid duplicating it.
-func (a *App) compactHistory(ctx context.Context, cfg ConfigState, sessionID, instruction string, history []openai.ChatCompletionMessage, keepLastUser bool) (map[string]any, error) {
+// compactHistory summarizes the older portion of history using the model while retaining
+// recent messages intact (pi-agent cut point design).
+// keepLastUser preserves the final user message when not already part of retainedTail.
+// tokensBefore is the total context tokens before compaction.
+func (a *App) compactHistory(ctx context.Context, cfg ConfigState, sessionID, instruction string, history []openai.ChatCompletionMessage, keepLastUser bool, tokensBefore int) (map[string]any, error) {
 	// The compaction LLM call runs inside this timeout. It is configurable
 	// (Settings → General) because long-context summary requests through slow
 	// providers can legitimately take minutes; the default covers the common
@@ -1707,45 +1694,40 @@ func (a *App) compactHistory(ctx context.Context, cfg ConfigState, sessionID, in
 		return nil, errors.New("no messages to compact")
 	}
 
-	// Stage-1 slimming before the summary call: stale tool-result bodies are
-	// stubbed, so the summary model reads the decision chain (assistant
-	// tool_calls with exact arguments) without the bulky result bodies. For
-	// the auto path this is a no-op (runChat already trimmed); manual
-	// compaction of a freshly loaded legacy session still benefits.
-	history, _ = trimOldToolResults(history, keepRecentToolResults)
-
-	// Count tokens before
-	tokensBefore := estimateTokensFromMessages(history)
-
+	// Summarize all existing history cleanly into a single summary.
+	messagesToSummarize := history
 	// Build compaction prompt. Structured sections maximize information density
 	// and give the model concrete anchors to recover from after compaction.
-	compactPrompt := `The conversation is getting long and is being compacted. Output a structured summary so you can continue seamlessly after context is cleared.
+	compactPrompt := `The conversation context is getting long and is being compacted. Provide a high-density, structured handoff summary so work can continue seamlessly after clearing history.
 
-Use exactly these sections, in this order, with Markdown headings:
+CRITICAL LANGUAGE RULE:
+Always write the summary in the primary language used by the user in the conversation (e.g. Chinese if the user spoke Chinese, English if the user spoke English, etc.). The section headings below may be translated into the user's language or kept as equivalent clear headings.
 
-## User's latest request
-Quote the user's most recent intent verbatim if possible. If unclear, state your best interpretation.
+Use the following structure with Markdown headings:
 
-## What has been done
-Bullet list of concrete actions: files edited (with line ranges), commands run, key findings. Keep paths and identifiers exact.
+## User Intent & Requirements / 用户需求与目标
+Concise statement of the user's core intent, ongoing tasks, and explicit requirements.
 
-## Current state
-What works, what is broken, what is unverified. Be specific.
+## Findings & Analysis / 探索与分析结果
+Key findings, root causes, architectural patterns, or logic flow discovered during investigation.
 
-## Next step
-The single precise next action to take. If multiple are needed, list them in order.
+## What Has Been Done / 已完成工作
+Bullet list of concrete actions taken: files edited, created, or deleted (with notes on changes), commands executed and their outcomes, verified items.
 
-## Key file paths referenced
-Bullet list of every file path mentioned or touched in the conversation, with a short note per path:
-- <path>: read L<start>-L<end> | edited L<start>-L<end> | created | deleted | listed
+## Key Files & Locations / 关键文件与位置
+Bullet list of key file paths referenced or touched, explicitly describing each file's specific role, responsibility, and what was modified:
+- [path]: 具体用途与职责（该文件在项目中负责什么），以及本次对话中涉及的改动内容与关键位置
+
+
+## Next Steps / 下一步工作
+Exact, prioritized next steps to take immediately.
 
 Rules:
-- No thinking, no reasoning, output directly.
-- Be concise and factual. Do not call tools.
-- Keep file paths, command strings, and identifiers exact.
-- Do not invent details; if something is unknown, say "unknown".
-- The summary replaces the entire prior conversation, so it must stand alone.
-- Output within 1000 characters. No preamble, no wrap-up, go straight into the sections.`
+- Strictly write in the user's language.
+- DO NOT CALL ANY TOOLS (no tool calls). Output plain text Markdown directly.
+- Keep file paths, command strings, function names, and identifiers exact.
+- Factual and concise. Do not invent details; state "unknown" if not certain.
+- This summary replaces prior conversation and must stand alone completely.`
 
 	if instruction != "" {
 		compactPrompt += "\n\nAdditional instruction: " + instruction
@@ -1753,17 +1735,17 @@ Rules:
 
 	// Build messages for the compaction call
 	compactionMessages := []openai.ChatCompletionMessage{
-		{Role: openai.ChatMessageRoleSystem, Content: "You are a helpful assistant. Summarize the conversation concisely."},
+		{Role: openai.ChatMessageRoleSystem, Content: "You are an expert engineering assistant generating a structured context compaction summary. Output plain Markdown text directly. Do not call any tools. Always respond in the user's primary language."},
 	}
-	compactionMessages = append(compactionMessages, history...)
+	compactionMessages = append(compactionMessages, messagesToSummarize...)
 	compactionMessages = append(compactionMessages, openai.ChatCompletionMessage{
 		Role:    openai.ChatMessageRoleUser,
 		Content: compactPrompt,
 	})
 
 	compactionMaxTokens := cfg.MaxTokens
-	if compactionMaxTokens <= 0 || compactionMaxTokens > 8000 {
-		compactionMaxTokens = 8000
+	if compactionMaxTokens <= 0 {
+		compactionMaxTokens = defaultMaxTokensForAPIFormat(cfg.APIFormat)
 	}
 	a.emit("compact:start", map[string]any{
 		"sessionId":    sessionID,
@@ -1771,7 +1753,12 @@ Rules:
 		"messages":     len(history),
 		"timeoutMs":    int(timeout.Milliseconds()),
 	})
-	summary, usage, err := a.completeModelTextWithUsage(ctx, cfg, cfg.Model, compactionMessages, compactionMaxTokens)
+	// Turn off reasoning_effort for compaction call so thinking models
+	// don't waste the entire context/budget on hidden reasoning chains.
+	compactionCfg := cfg
+	compactionCfg.ReasoningEffort = "low"
+
+	summary, usage, err := a.completeModelTextWithUsage(ctx, compactionCfg, cfg.Model, compactionMessages, compactionMaxTokens)
 	if err != nil {
 		return nil, fmt.Errorf("compaction failed: %w", err)
 	}
@@ -1791,28 +1778,19 @@ Rules:
 		fallbackOutput = estimateCompletionTokens(summary, "", nil)
 	}
 	a.recordWorkspaceTokenUsage(cfg.Workspace, usage, fallbackInput, fallbackOutput)
-	a.recordTokenStats(cfg.Model, cfg.Workspace, usage, fallbackInput, fallbackOutput)
+	fullSummary := summary
 
-	// Prepend the handoff prefix
-	prefix := "[This conversation has been compacted. The following is your own summary of the work so far — use it to continue. Verify any claims before relying on them.]\n\n"
-	fullSummary := prefix + summary
-
-	// Replace history with the compacted summary
+	// Replace history cleanly with just the compacted summary as a clean start.
 	newHistory := []openai.ChatCompletionMessage{
 		{Role: openai.ChatMessageRoleUser, Content: fullSummary},
 	}
 
-	// Keep the very last user message if it still has pending work
-	if keepLastUser && len(history) > 0 {
-		last := history[len(history)-1]
-		if last.Role == openai.ChatMessageRoleUser {
-			newHistory = append(newHistory, last)
-		}
-	}
-
 	a.saveHistory(sessionID, newHistory)
 
-	tokensAfter := estimateTokensFromMessages(newHistory)
+	tokensAfter := a.getContextBreakdown(sessionID).Total
+	if tokensAfter <= 0 {
+		tokensAfter = estimateTokensFromMessages(newHistory)
+	}
 
 	return map[string]any{
 		"summary":      summary,
@@ -1947,59 +1925,36 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 		usedTokens := bd.Total
 		compactThreshold := compactThresholdLimit(cfg)
 		if usedTokens > compactThreshold {
-			// Stage-1 slimming: replace stale tool-result bodies with short
-			// placeholders first — zero cost, no LLM call, keeps tool_call/
-			// result pairing intact. Most of the time this alone drops
-			// usage back under the threshold and no LLM compaction happens.
-			var trimmedToolResults bool
-			messages, trimmedToolResults = trimOldToolResults(messages, keepRecentToolResults)
-			if trimmedToolResults {
-				// The accumulator's incremental counts are stale after
-				// in-place edits; recompute so the context display and the
-				// threshold re-check below use the slimmed list.
-				breakdownAcc.reset(messages)
-				bd = breakdownAcc.update(messages)
-				bd.ToolSchemas = estimateToolSchemaTokens(tools)
-				finalizeContextBreakdownTotal(&bd)
-				a.mu.Lock()
-				a.liveBreakdown[sessionID] = bd
-				a.mu.Unlock()
-				usedTokens = bd.Total
-			}
-			// Stage-2: tool-result stubbing was not enough — summarize with
-			// the model. Compact the in-run message list (system/workspace
-			// markers are stripped by sanitize) so tool activity from this
-			// run is included in the summary instead of being lost when
-			// history is replaced.
-			if usedTokens > compactThreshold {
-				h := sanitizeHistoryMessages(messages)
-				if len(h) > 2 {
-					a.emit("run:compact", map[string]any{"sessionId": sessionID, "tokensBefore": usedTokens})
-					// keepLastUser=false: the current request and any continuation
-					// prompt are re-appended below, so carrying the trailing user
-					// message into the compacted history would duplicate it.
-					if result, err := a.compactHistory(ctx, cfg, sessionID, "", h, false); err == nil {
-						a.mu.Lock()
-						compacted := sanitizeHistoryMessages(a.histories[sessionID])
-						a.mu.Unlock()
-						messages = a.buildSystemContextMessages(sessionID, cfg, a.listCachedSkills())
-						messages = append(messages, compacted...)
-						if strings.TrimSpace(req.Message) != "" || len(req.Attachments) > 0 {
-							messages = appendUserMessageWithAttachments(messages, req.Message, req.Attachments)
-						}
-						breakdownAcc.reset(messages)
-						payload := map[string]any{
-							"sessionId":    sessionID,
-							"tokensBefore": intFromAny(result["tokensBefore"]),
-							"tokensAfter":  intFromAny(result["tokensAfter"]),
-						}
-						if s, _ := result["summary"].(string); s != "" {
-							payload["summary"] = s
-						}
-						a.emit("run:compacted", payload)
-					} else {
-						a.emit("run:compacted", map[string]any{"sessionId": sessionID, "error": err.Error()})
+			// Auto-compaction: context reached threshold.
+			// Summarize older history while retaining recent work intact (cut-point design),
+			// preventing prefix cache invalidation on sub-threshold turns.
+			h := sanitizeHistoryMessages(messages)
+			if len(h) > 2 {
+				a.emit("run:compact", map[string]any{"sessionId": sessionID, "tokensBefore": usedTokens})
+				// keepLastUser=false: the current request and any continuation
+				// prompt are re-appended below, so carrying the trailing user
+				// message into the compacted history would duplicate it.
+				if result, err := a.compactHistory(ctx, cfg, sessionID, "", h, false, usedTokens); err == nil {
+					a.mu.Lock()
+					compacted := sanitizeHistoryMessages(a.histories[sessionID])
+					a.mu.Unlock()
+					messages = a.buildSystemContextMessages(sessionID, cfg, a.listCachedSkills())
+					messages = append(messages, compacted...)
+					if strings.TrimSpace(req.Message) != "" || len(req.Attachments) > 0 {
+						messages = appendUserMessageWithAttachments(messages, req.Message, req.Attachments)
 					}
+					breakdownAcc.reset(messages)
+					payload := map[string]any{
+						"sessionId":    sessionID,
+						"tokensBefore": intFromAny(result["tokensBefore"]),
+						"tokensAfter":  intFromAny(result["tokensAfter"]),
+					}
+					if s, _ := result["summary"].(string); s != "" {
+						payload["summary"] = s
+					}
+					a.emit("run:compacted", payload)
+				} else {
+					a.emit("run:compacted", map[string]any{"sessionId": sessionID, "error": err.Error()})
 				}
 			}
 		}

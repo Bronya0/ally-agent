@@ -2733,21 +2733,22 @@ watch(() => config.workspace, () => {
 
 const contextUsed = computed(() => {
   const n = contextTokens.value;
-  if (n >= 1000) return (n / 1000).toFixed(1) + 'k';
-  return String(n);
+  if (n >= 1000000) return Math.round(n / 1000000) + 'M';
+  if (n >= 1000) return Math.round(n / 1000) + 'k';
+  return String(Math.round(n));
 });
 const contextWindow = computed(() => (modelByTab[activeWorkspaceId.value] || config).contextWindow || 1000000);
 const contextMax = computed(() => {
   const m = contextWindow.value;
-  if (m >= 1000000) return (m / 1000000).toFixed(1) + 'M';
-  if (m >= 1000) return (m / 1000).toFixed(1) + 'K';
-  return String(m);
+  if (m >= 1000000) return Math.round(m / 1000000) + 'M';
+  if (m >= 1000) return Math.round(m / 1000) + 'K';
+  return String(Math.round(m));
 });
 const contextPercent = computed(() => {
   const used = contextTokens.value;
   const max = contextWindow.value;
   const pct = max > 0 ? (used / max * 100) : 0;
-  return pct.toFixed(1) + '%';
+  return Math.round(pct) + '%';
 });
 
 const contextPct = computed(() => {
@@ -6986,16 +6987,14 @@ async function handleCompactCommand() {
   try {
     const result = await CompactSession(session.id, '');
     delete compactingSessions[session.id];
-    const tBefore = result.tokensBefore || 0;
-    const tAfter = result.tokensAfter || 0;
-    const saved = tBefore - tAfter > 0 ? t('app.compact.saved', { tokens: fmtK(tBefore - tAfter) }) : '';
 
-    // Replace messages with the compacted summary
+    const summaryText = result?.summary || '';
+
+    // Replace UI messages cleanly with just the LLM summary as an assistant message
     session.messages = [
       {
         role: 'assistant',
-        content: t('app.compact.done', { saved, before: fmtK(tBefore), after: fmtK(tAfter) }),
-        system: true,
+        content: summaryText,
       },
     ];
 
@@ -7003,7 +7002,6 @@ async function handleCompactCommand() {
     // Refresh context
     refreshContextTokens(session.id);
     scrollMessagesToBottom();
-    message.success(t('app.compact.success', { before: fmtK(tBefore), after: fmtK(tAfter) }));
   } catch (err) {
     delete compactingSessions[session.id];
     pushMessage('assistant', t('app.compact.failed', { error: err?.message || err }), { error: true });

@@ -93,7 +93,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"path"},
 		}),
-		functionTool("command", "Run a shell command with cwd confined to the workspace. On Windows the shell is Git Bash when available, otherwise PowerShell; on macOS/Linux, bash. Commands may inspect outside paths, redirect to null devices, and create new outside paths; modifying/deleting existing outside paths, explicit deletion commands, unsafe cwd symlinks, and long-running services are refused. On E_PATH_OUTSIDE, read the returned reason and switch target rather than retrying unchanged. Output size: fullOutput:false (default) returns only the last 3 lines plus a signal line with exitCode and total line count; fullOutput:true returns the complete output. Rule of thumb: will you read the output itself as the answer (git status/diff/log, ls, cat, grep, failure diagnosis)? true. Only checking success/failure (build, install, test)? false. exitCode is always a field, and when the output was trimmed its full content is saved to outputFilePath (readable via read), so never re-run a side-effecting command just to see more output. When output exceeds the capture limit it is truncated and `outputFilePath` points to the full output.", map[string]any{
+		functionTool("command", "Run a shell command with cwd confined to the workspace. On Windows the shell is Git Bash when available, otherwise PowerShell; on macOS/Linux, bash. Commands may inspect outside paths, redirect to null devices, and create new outside paths; modifying/deleting existing outside paths, explicit deletion commands, unsafe cwd symlinks, and long-running services are refused. On E_PATH_OUTSIDE, read the returned reason and switch target rather than retrying unchanged. Output size: fullOutput:false (recommended default) returns only the last 3 lines plus a signal line with exitCode and total line count; fullOutput:true returns the complete output. Rule of thumb: will you read the output itself as the answer (git status/diff/log, ls, cat, grep, failure diagnosis)? true. Only checking success/failure (build, install, test)? false. exitCode is always a field, and when the output was trimmed its full content is saved to outputFilePath (readable via read), so never re-run a side-effecting command just to see more output. When output exceeds the capture limit it is truncated and `outputFilePath` points to the full output.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"command":    map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*"},
@@ -205,13 +205,13 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"url"},
 		}),
-		functionTool("remote_read_file", "Read a text file on a remote SSH workspace (same contract as read: line-numbered preview + 6-char version for remote_edit; UTF-16 LE/BE transcoded; no document extraction). Omit startLine/endLine for the whole file; positive startLine without endLine reads to EOF; only endLine reads lines 1..endLine; negative startLine reads the last N lines (max 10000), not with endLine.", map[string]any{
+		functionTool("remote_read_file", "Read a text file on a remote SSH workspace (same contract as read: line-numbered preview + 6-char version for remote_edit; UTF-16 LE/BE transcoded; no document extraction). By default, omit startLine/endLine to read the whole file. NEVER use startLine/endLine on normal code files. Positive startLine without endLine reads to EOF; only endLine reads lines 1..endLine; negative startLine reads the last N lines (max 10000), not with endLine.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"target":    map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Explicit SSH target plus workspace root, e.g. my-dev:/srv/app."},
 				"path":      map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Relative file path inside the remote workspace."},
-				"startLine": map[string]any{"type": "integer", "minimum": -MaxReadRangeLines, "description": "Optional 1-based start line; negative reads last N lines (max 10000)."},
-				"endLine":   map[string]any{"type": "integer", "minimum": 1, "description": "Optional inclusive end line; omit when startLine is negative."},
+				"startLine": map[string]any{"type": "integer", "minimum": -MaxReadRangeLines, "description": "DO NOT use for normal code files. Optional 1-based start line only when continuing a truncated read; negative reads last N lines (max 10000)."},
+				"endLine":   map[string]any{"type": "integer", "minimum": 1, "description": "DO NOT use for normal code files. Optional inclusive end line; omit when startLine is negative."},
 			},
 			"required": []string{"target", "path"},
 		}),
