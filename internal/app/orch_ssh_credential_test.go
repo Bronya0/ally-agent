@@ -10,6 +10,7 @@ package app
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -163,5 +164,82 @@ func TestRedactSSHCredentials(t *testing.T) {
 	}
 	if got := a.redactSSHCredentialMessages(nil); got != nil {
 		t.Fatalf("nil messages should stay nil, got %v", got)
+	}
+}
+
+// TestSSHCredentialKeyPath covers key-based credentials: setKey stores a key
+// path without a password, list reports hasKey/keyPath (never a password),
+// and prepareRemoteSSHInvocation appends -i while keeping BatchMode. A
+// stored password and key path combine: -i present, BatchMode dropped.
+func TestSSHCredentialKeyPath(t *testing.T) {
+	a := &App{sshCredentials: newSSHCredentialCache()}
+	rt := remoteTarget{Raw: "root@h:/tmp/app", Host: "root@h", WorkspaceRoot: "/tmp/app"}
+
+	a.sshCredentials.setKey("root@h", "/keys/id_test.pem")
+	if got, ok := a.sshCredentials.get("root@h"); ok || got != "" {
+		t.Fatalf("key-only entry must not expose a password, got ok=%v %q", ok, got)
+	}
+	statuses := a.sshCredentials.list()
+	if len(statuses) != 1 || !statuses[0].HasKey || statuses[0].KeyPath != "/keys/id_test.pem" || statuses[0].HasPassword {
+		t.Fatalf("unexpected list: %+v", statuses)
+	}
+
+	args, env, cleanup, err := a.prepareRemoteSSHInvocation(context.Background(), rt, "")
+	if err != nil {
+		t.Fatalf("key prepare: %v", err)
+	}
+	cleanup()
+	foundKey := false
+	foundBatch := false
+	for i, arg := range args {
+		if arg == "-i" && i+1 < len(args) && args[i+1] == "/keys/id_test.pem" {
+			foundKey = true
+		}
+		if arg == "BatchMode=yes" {
+			foundBatch = true
+		}
+	}
+	if !foundKey || !foundBatch {
+		t.Fatalf("key invocation missing -i/BatchMode: %v", args)
+	}
+	if env != nil {
+		t.Fatalf("key-only credential must not build an askpass env, got %d entries", len(env))
+	}
+
+	// password + key combine: -i stays, BatchMode drops, askpass env is built
+	a.sshCredentials.set("root@h", "sekret")
+	args, env, cleanup, err = a.prepareRemoteSSHInvocation(context.Background(), rt, "")
+	if err != nil {
+		t.Fatalf("combined prepare: %v", err)
+	}
+	defer cleanup()
+	foundKey = false
+	for i, arg := range args {
+		if arg == "-i" && i+1 < len(args) && args[i+1] == "/keys/id_test.pem" {
+			foundKey = true
+		}
+		if arg == "BatchMode=yes" {
+			t.Fatalf("BatchMode must be dropped with a stored password: %v", args)
+		}
+	}
+	if !foundKey || env == nil {
+		t.Fatalf("combined invocation missing -i or askpass env: args=%v env=%v", args, env)
+	}
+	cleanup()
+
+	// tool-level validation: existing key file accepted, missing one rejected,
+	// neither password nor keyPath rejected
+	keyFile := filepath.Join(t.TempDir(), "id.pem")
+	if err := os.WriteFile(keyFile, []byte("key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.executeSSHCredentialTool(SSHCredentialRequest{Action: "set", Target: "root@h:/tmp/app", KeyPath: keyFile}); err != nil {
+		t.Fatalf("set with keyPath: %v", err)
+	}
+	if _, err := a.executeSSHCredentialTool(SSHCredentialRequest{Action: "set", Target: "root@h:/tmp/app", KeyPath: "missing.pem"}); err == nil {
+		t.Fatal("set with missing keyPath should fail")
+	}
+	if _, err := a.executeSSHCredentialTool(SSHCredentialRequest{Action: "set", Target: "root@h:/tmp/app"}); err == nil {
+		t.Fatal("set with neither password nor keyPath should fail")
 	}
 }

@@ -970,7 +970,7 @@ type HTTPRequestToolRequest struct {
 	Headers             map[string]string `json:"headers,omitempty"`
 	Query               map[string]string `json:"query,omitempty"`
 	Body                string            `json:"body,omitempty"`
-	JSON                any               `json:"json,omitempty"`
+	JSON                json.RawMessage   `json:"json,omitempty"`
 	SaveTo              string            `json:"saveTo,omitempty"`
 	Timeout             int               `json:"timeout,omitempty"`
 	MaxBytes            int               `json:"maxBytes,omitempty"`
@@ -2575,6 +2575,13 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 	case "http_request":
 		var req HTTPRequestToolRequest
 		err, argWarnings = decodeJSON(&req)
+		if err == nil {
+			normalized, repaired := normalizeJSONBodyArg(req.JSON)
+			req.JSON = normalized
+			if repaired {
+				argWarnings = append(argWarnings, "参数 json 应为 JSON 对象/数组，却收到了带引号的字符串，已自动修复并照常执行；后续调用请直接传 JSON 对象，不要序列化成字符串。")
+			}
+		}
 		if err == nil {
 			err = kbDenyCheckPaths(ctx, cfg, req.SaveTo)
 		}

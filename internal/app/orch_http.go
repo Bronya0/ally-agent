@@ -169,6 +169,30 @@ func (a *App) webFetchToolWithConfig(ctx context.Context, cfg ConfigState, req W
 	}, nil
 }
 
+// normalizeJSONBodyArg normalizes the model-facing "json" body argument:
+// a literal null is cleared so the field behaves as absent, and the common
+// double-encoding slip (the whole object emitted as a quoted string) is
+// unwrapped exactly once when the unquoted content itself parses as JSON.
+// It reports true only for the unwrap repair, so the caller can surface a
+// model-facing warning. Literal quoted values that are not valid JSON after
+// unquoting are kept verbatim.
+func normalizeJSONBodyArg(raw json.RawMessage) (json.RawMessage, bool) {
+	trimmed := bytes.TrimSpace(raw)
+	if string(trimmed) == "null" {
+		return nil, false
+	}
+	if len(trimmed) >= 2 && trimmed[0] == '"' {
+		var quoted string
+		if err := json.Unmarshal(trimmed, &quoted); err == nil {
+			inner := []byte(strings.TrimSpace(quoted))
+			if json.Valid(inner) {
+				return inner, true
+			}
+		}
+	}
+	return raw, false
+}
+
 func (a *App) doHTTPRequest(parent context.Context, cfg ConfigState, req HTTPRequestToolRequest, preferText bool, allowPrivateNetwork bool) (httpFetchResult, error) {
 	method := strings.ToUpper(strings.TrimSpace(req.Method))
 	if method == "" {
@@ -221,15 +245,14 @@ func (a *App) doHTTPRequest(parent context.Context, cfg ConfigState, req HTTPReq
 	}
 
 	var body io.Reader
-	if req.Body != "" && req.JSON != nil {
+	if req.Body != "" && len(req.JSON) > 0 {
 		return httpFetchResult{}, errors.New("body and json are mutually exclusive")
 	}
-	if req.JSON != nil {
-		payload, err := json.Marshal(req.JSON)
-		if err != nil {
-			return httpFetchResult{}, fmt.Errorf("encode json body: %w", err)
-		}
-		body = bytes.NewReader(payload)
+	if len(req.JSON) > 0 {
+		// JSON carries raw wire bytes (json.RawMessage): a streamed object or
+		// array is forwarded byte-exactly, and the double-encoding repair
+		// already unwrapped quoted-string slips at the decode boundary.
+		body = bytes.NewReader(req.JSON)
 		if headerValue(headers, "Content-Type") == "" {
 			headers["Content-Type"] = "application/json"
 		}

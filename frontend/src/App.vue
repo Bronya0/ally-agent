@@ -557,7 +557,7 @@ import { findSessionWorkspaceTab, isEditableNavigationTarget, shouldAcceptRunTer
 import { orderPlanPanelEntries, planFocusScrollDelta } from './utils/planPanel.mjs';
 import { formatDateTime, naiveDateLocale, naiveLocale, reasoningEffortLabel, t, welcomeGreeting as localizedWelcomeGreeting } from './i18n.mjs';
 import { fmtCompact, fmtDuration } from './utils/format.mjs';
-import { isSkillActive } from './utils/skills.mjs';
+import { isSkillActive, normalizeSkillName } from './utils/skills.mjs';
 import {
   displaySourceMessages as buildDisplaySourceMessages,
   formatBytes as formatBytesShared,

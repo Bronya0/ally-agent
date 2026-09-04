@@ -940,8 +940,12 @@ func makeEditResult(rel string, beforeHash, beforeVersion string, before, after 
 // 分支与远程 Python helper 的 is_protected_delete_path 共用同一份数据，
 // 避免 Go/Python 双份清单漂移（远程注入 remoteDeleteProtected* 并集）。
 var (
-	protectedDeleteLinuxExactOnly  = []string{"/home", "/mnt", "/media"}
-	protectedDeleteLinuxTrees      = []string{"/bin", "/boot", "/dev", "/etc", "/lib", "/lib32", "/lib64", "/libx32", "/lost+found", "/opt", "/proc", "/root", "/run", "/sbin", "/snap", "/srv", "/sys", "/usr", "/var"}
+	// /root 与 /home、/mnt、/media 同类：root 用户的主目录父根，其子树是
+	// 合法的项目/工作区位置（如 /root/ally-remote-test），只拦目录本身。
+	// 若误放进树清单，root 用户的远程工作区（几乎总在 /root 下）的
+	// 所有 delete 都会被误判为 OS-sensitive path。
+	protectedDeleteLinuxExactOnly  = []string{"/home", "/mnt", "/media", "/root"}
+	protectedDeleteLinuxTrees      = []string{"/bin", "/boot", "/dev", "/etc", "/lib", "/lib32", "/lib64", "/libx32", "/lost+found", "/opt", "/proc", "/run", "/sbin", "/snap", "/srv", "/sys", "/usr", "/var"}
 	protectedDeleteDarwinExactOnly = []string{"/Users", "/Volumes", "/Network"}
 	protectedDeleteDarwinTrees     = []string{"/Applications", "/bin", "/cores", "/dev", "/etc", "/Library", "/opt", "/private", "/sbin", "/System", "/usr", "/var"}
 )
@@ -1061,11 +1065,11 @@ func isOSProtectedDeletePath(abs string) (bool, string) {
 		if abs == "/" {
 			return true, `refusing to delete filesystem root "/"`
 		}
-		// /home, /mnt, /media are parent roots whose descendants may
+		// /home, /mnt, /media, /root are parent roots whose descendants may
 		// legitimately contain user projects (e.g. /home/tangs/projects,
-		// /mnt/external/repos, /media/user/USB/code). Block only the
-		// directory itself; individual home roots are handled by the
-		// parent-dir check in isDangerousDeletePath.
+		// /mnt/external/repos, /media/user/USB/code, /root/ally-remote-test).
+		// Block only the directory itself; individual home roots are handled
+		// by the parent-dir check in isDangerousDeletePath.
 		for _, root := range protectedDeleteLinuxExactOnly {
 			if abs == root {
 				return true, fmt.Sprintf("refusing to delete Linux top-level root %q", abs)

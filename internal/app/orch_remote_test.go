@@ -8,7 +8,12 @@
 package app
 
 import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -73,5 +78,148 @@ func TestBuildRemoteScriptInjectsProtectionAndPayload(t *testing.T) {
 	}
 	if !strings.Contains(string(out), remotePythonMarker) {
 		t.Fatalf("built script produced no result marker: %q", string(out))
+	}
+}
+
+// runRemoteHelperScript 用本地解释器执行注入 payload 后的 helper 脚本，
+// 返回 marker 后的 JSON 解码结果。远程 helper 无法直接跑远端，这里镜像
+// 执行以锁定判定契约（只触碰 t.TempDir()，不做任何真实系统路径删除）。
+func runRemoteHelperScript(t *testing.T, py, script string) (remotePythonResponse, error) {
+	t.Helper()
+	cmd := exec.Command(py, "-")
+	cmd.Stdin = strings.NewReader(script)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	if err != nil {
+		return remotePythonResponse{}, fmt.Errorf("helper failed: %v; stderr: %s", err, stderr.String())
+	}
+	out := stdout.String()
+	idx := strings.LastIndex(out, remotePythonMarker)
+	if idx < 0 {
+		return remotePythonResponse{}, fmt.Errorf("no result marker; output: %q", out)
+	}
+	var resp remotePythonResponse
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out[idx+len(remotePythonMarker):])), &resp); err != nil {
+		return remotePythonResponse{}, fmt.Errorf("bad result JSON: %w; raw: %q", err, out[idx:])
+	}
+	return resp, nil
+}
+
+// TestRemoteHelperProtectedDeleteClassification 锁定删除保护的分类契约：
+// 系统树（/etc、/usr 等）整体拒绝；主目录类父根（/root、/home）只拦目录
+// 本身，其子树内的普通工作区文件必须放行（/root 曾被误放进树清单，导致
+// root 用户远程工作区所有删除被拒）。
+func TestRemoteHelperProtectedDeleteClassification(t *testing.T) {
+	py := pickRemoteHelperPython(t)
+	root := t.TempDir()
+	cases := []struct {
+		name      string
+		path      string
+		protected bool
+	}{
+		{"filesystem root", "/", true},
+		{"root home itself", "/root", true},
+		{"etc tree dir", "/etc", true},
+		{"etc file", "/etc/passwd", true},
+		{"usr subtree", "/usr/bin/ls", true},
+		{"workspace file under /root", "/root/ally-remote-test/app.py", false},
+		{"project file under /root", "/root/projects/tooltest/file.txt", false},
+		{"project file under /home", "/home/alice/project/file.txt", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			script, err := buildRemoteScript(map[string]any{
+				"op":            "_check_protected",
+				"workspaceRoot": root,
+				"path":          tc.path,
+			})
+			if err != nil {
+				t.Fatalf("buildRemoteScript: %v", err)
+			}
+			resp, err := runRemoteHelperScript(t, py, script)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !resp.OK {
+				t.Fatalf("helper failed: %s", resp.Error)
+			}
+			var data struct {
+				Protected bool `json:"protected"`
+			}
+			if err := json.Unmarshal(resp.Data, &data); err != nil {
+				t.Fatalf("decode data: %v", err)
+			}
+			if data.Protected != tc.protected {
+				t.Fatalf("path %s: expected protected=%v, got %v", tc.path, tc.protected, data.Protected)
+			}
+		})
+	}
+}
+
+// TestRemoteHelperDeleteOpTouchesOnlyWorkspace 用真实 helper 脚本跑完整
+// delete op（只操作 t.TempDir() 内的文件）：普通文件删、目录需 recursive、
+// 递归删目录、工作区根本身拒绝、逃逸路径拒绝。
+func TestRemoteHelperDeleteOpTouchesOnlyWorkspace(t *testing.T) {
+	py := pickRemoteHelperPython(t)
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "app.py"), []byte("print('x')\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "sub", "nested.txt"), []byte("n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	run := func(payload map[string]any) remotePythonResponse {
+		t.Helper()
+		script, err := buildRemoteScript(payload)
+		if err != nil {
+			t.Fatalf("buildRemoteScript: %v", err)
+		}
+		resp, err := runRemoteHelperScript(t, py, script)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp
+	}
+
+	// 1) 普通文件删除成功
+	resp := run(map[string]any{"op": "delete", "workspaceRoot": root, "path": "app.py", "recursive": false})
+	if !resp.OK {
+		t.Fatalf("delete plain file failed: %s", resp.Error)
+	}
+	if _, err := os.Stat(filepath.Join(root, "app.py")); !os.IsNotExist(err) {
+		t.Fatalf("app.py should be deleted, stat err: %v", err)
+	}
+
+	// 2) 目录未给 recursive 报错
+	resp = run(map[string]any{"op": "delete", "workspaceRoot": root, "path": "sub", "recursive": false})
+	if resp.OK {
+		t.Fatal("delete dir without recursive should fail")
+	}
+	if !strings.Contains(resp.Error, "recursive") {
+		t.Fatalf("unexpected error: %s", resp.Error)
+	}
+
+	// 3) recursive 删除子目录成功
+	resp = run(map[string]any{"op": "delete", "workspaceRoot": root, "path": "sub", "recursive": true})
+	if !resp.OK {
+		t.Fatalf("recursive delete failed: %s", resp.Error)
+	}
+
+	// 4) 工作区根本身拒绝
+	resp = run(map[string]any{"op": "delete", "workspaceRoot": root, "path": ".", "recursive": false})
+	if resp.OK || !strings.Contains(resp.Error, "refusing to delete remote workspace root") {
+		t.Fatalf("workspace root delete should be refused, got ok=%v error=%s", resp.OK, resp.Error)
+	}
+
+	// 5) 逃逸路径拒绝
+	resp = run(map[string]any{"op": "delete", "workspaceRoot": root, "path": "../outside.txt", "recursive": false})
+	if resp.OK || !strings.Contains(resp.Error, "..") {
+		t.Fatalf("escape path should be refused, got ok=%v error=%s", resp.OK, resp.Error)
 	}
 }

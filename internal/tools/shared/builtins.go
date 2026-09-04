@@ -259,12 +259,13 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"target", "command", "fullOutput"},
 		}),
-		functionTool("ssh_credential", "Store, clear, or list SSH password credentials for remote_* tools, in memory only. Use ONLY when the user typed a password into the chat: action=set needs the target (user@host or ssh://…) and the password copied verbatim from the user message. remote_* calls then authenticate with it automatically. Never invent, guess, or repeat a password; never use for hosts the user did not give a password for. Passwords expire after 12h.", map[string]any{
+		functionTool("ssh_credential", "Store, clear, or list SSH credentials for remote_* tools, in memory only. action=set takes the target (user@host or ssh://…) plus either a password (ONLY when the user typed one into the chat — copy it verbatim) or keyPath (a local private key file such as a .pem the user named). remote_* calls then authenticate automatically. Never invent, guess, or repeat a password or key path; never use credentials for hosts the user did not provide them for. Credentials expire after 12h.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"action":   map[string]any{"type": "string", "enum": []string{"set", "clear", "list"}, "description": "set stores the password, clear drops it, list shows which hosts have one. Default set."},
+				"action":   map[string]any{"type": "string", "enum": []string{"set", "clear", "list"}, "description": "set stores the credential, clear drops it, list shows which hosts have one. Default set."},
 				"target":   map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "SSH target matching the remote_* calls, e.g. root@example.com:/srv/app or ssh://user@host:2222/srv/app. Required for set/clear."},
-				"password": map[string]any{"type": "string", "description": "The password, copied verbatim from the user's message. Required for set."},
+				"password": map[string]any{"type": "string", "description": "The password, copied verbatim from the user's message. Alternative to keyPath."},
+				"keyPath":  map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Local path to an SSH private key file (e.g. a .pem) for key-based auth. Alternative to password; validated to exist before storing."},
 			},
 			"required": []string{"action"},
 		}),
@@ -383,7 +384,7 @@ var builtinToolExamples = map[string]string{
 	"remote_read":         `{"target":"my-dev:/srv/app","files":[{"path":"main.go"}]}`,
 	"remote_edit":        `{"target":"my-dev:/srv/app","path":"main.go","version":"9k3m7x","changes":[{"oldText":"func old() {}","newText":"func new() {}"}]}`,
 	"remote_run_command": `{"target":"my-dev:/srv/app","command":"go test ./...","fullOutput":false}`,
-	"ssh_credential":     `{"action":"set","target":"root@47.120.8.34:/tmp/app","password":"<verbatim from user message>"}`,
+	"ssh_credential":     `set password: {"action":"set","target":"root@47.120.8.34:/tmp/app","password":"<verbatim from user message>"}; set key file: {"action":"set","target":"root@example.com:/srv/app","keyPath":"F:/doc/keys/server.pem"}`,
 	"grep":               `{"pattern":"TODO|FIXME","path":"frontend/src","glob":"*.vue","maxMatches":100}`,
 	"read":               `one file: {"files":[{"path":"app.go"}]}; multiple files: {"files":[{"path":"app.go"},{"path":"main.go"}]}; range: {"files":[{"path":"services.go","startLine":1,"endLine":200}]}; tail: {"files":[{"path":"server.log","startLine":-200}]}`,
 	"subagent":           `{"task":"Inspect the authentication module and report concrete security issues.","role":"code reviewer","maxSteps":20,"description":"Review authentication"}`,

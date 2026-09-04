@@ -29,6 +29,81 @@ import (
 	openai "github.com/sashabaranov/go-openai"
 )
 
+func TestNormalizeJSONBodyArg(t *testing.T) {
+	cases := []struct {
+		name    string
+		in      string
+		want    string
+		wantFix bool
+	}{
+		{"object kept", `{"a":1}`, `{"a":1}`, false},
+		{"quoted object unwrapped", `"{\"a\":1}"`, `{"a":1}`, true},
+		{"quoted array unwrapped", `"[1,2]"`, `[1,2]`, true},
+		{"quoted non-JSON kept", `"not json"`, `"not json"`, false},
+		{"null cleared", `null`, ``, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, fixed := normalizeJSONBodyArg(json.RawMessage(tc.in))
+			if fixed != tc.wantFix {
+				t.Fatalf("repaired = %v, want %v", fixed, tc.wantFix)
+			}
+			if string(got) != tc.want {
+				t.Fatalf("got %q, want %q", string(got), tc.want)
+			}
+		})
+	}
+}
+
+func TestExecuteToolHTTPRequestJSONBodyDoubleEncodedString(t *testing.T) {
+	var gotBody string
+	var gotContentType string
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		gotBody = string(raw)
+		gotContentType = r.Header.Get("Content-Type")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer target.Close()
+
+	app := NewApp()
+	args := fmt.Sprintf(`{"method":"POST","url":%q,"allowPrivateNetwork":true,"json":"{\"title\":\"x\",\"n\":1}"}`, target.URL+"/echo")
+	result := app.executeTool(context.Background(), ConfigState{}, "session-1", "http_request", []byte(args))
+	if !result.OK {
+		t.Fatalf("expected success, got error: %s", result.Error)
+	}
+	if gotBody != `{"title":"x","n":1}` {
+		t.Fatalf("expected unwrapped JSON object body, got %q", gotBody)
+	}
+	if !strings.Contains(gotContentType, "application/json") {
+		t.Fatalf("expected application/json Content-Type, got %q", gotContentType)
+	}
+}
+
+func TestHTTPRequestJSONBodyRawBytesForwardedExactly(t *testing.T) {
+	var gotBody string
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		gotBody = string(raw)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer target.Close()
+
+	app := NewApp()
+	req := HTTPRequestToolRequest{
+		Method: "POST",
+		URL:    target.URL + "/echo",
+		JSON:   json.RawMessage(`{"n": 1, "list": [true, null]}`),
+	}
+	if _, err := app.httpRequestTool(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	if gotBody != `{"n": 1, "list": [true, null]}` {
+		t.Fatalf("expected raw JSON bytes to be forwarded byte-exactly, got %q", gotBody)
+	}
+}
+
 func TestHTTPRequestRedirectStripsSensitiveHeadersAcrossOrigins(t *testing.T) {
 	received := make(chan http.Header, 1)
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -3433,6 +3508,48 @@ func TestWindowsDeleteSafetyAllowsOrdinaryCDriveWorkspacePaths(t *testing.T) {
 		`C:\Users\alice`,
 		`C:\Users\alice\project\.git\config`,
 	} {
+		blocked, reason := isDangerousDeletePath(path)
+		if !blocked {
+			t.Fatalf("expected %s to be blocked", path)
+		}
+		if strings.TrimSpace(reason) == "" {
+			t.Fatalf("expected block reason for %s", path)
+		}
+	}
+}
+
+// TestProtectedDeleteListsClassifyRootHomeAsParentRoot 锁定 /root 的分类：
+// 它是 root 用户的主目录父根（与 /home、/Users 同类），必须在 exact-only
+// 清单里拦目录本身；绝不能回到树清单（那会把 /root 子树内所有工作区
+// 文件的删除全部误拦）。
+func TestProtectedDeleteListsClassifyRootHomeAsParentRoot(t *testing.T) {
+	found := false
+	for _, p := range protectedDeleteLinuxExactOnly {
+		if p == "/root" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("/root must stay in the exact-only list (root user's home parent root)")
+	}
+	for _, p := range protectedDeleteLinuxTrees {
+		if p == "/root" {
+			t.Fatal("/root must not be a protected tree; its subtree holds legitimate workspaces")
+		}
+	}
+}
+
+// TestLinuxDeleteSafetyAllowsWorkspaceFilesUnderRootHome 验证 Linux 平台
+// 上 /root 子树内的普通工作区文件允许删除，系统树仍整体拒绝。
+func TestLinuxDeleteSafetyAllowsWorkspaceFilesUnderRootHome(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("linux path safety")
+	}
+	allowed, reason := isDangerousDeletePath("/root/ally-remote-test/app.py")
+	if allowed {
+		t.Fatalf("expected ordinary workspace file under /root to be allowed, got %q", reason)
+	}
+	for _, path := range []string{"/", "/root", "/etc", "/etc/passwd", "/usr", "/usr/bin/ls", "/var/log"} {
 		blocked, reason := isDangerousDeletePath(path)
 		if !blocked {
 			t.Fatalf("expected %s to be blocked", path)
