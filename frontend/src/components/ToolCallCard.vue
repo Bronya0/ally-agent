@@ -8,7 +8,7 @@ This file is part of ally-agent, licensed under the GNU General
 Public License v3. See the LICENSE file for details.
 -->
 <template>
-  <div :class="['rich-tool-card', msg.kind, msg.status, { focused: focused && !isFocusDisabledTool(msg), expanded: msg.expanded, 'non-interactive': isFocusDisabledTool(msg) }]" @click.stop="handleCardClick(msg)">
+  <div :class="['rich-tool-card', msg.kind, msg.status, { expanded: msg.expanded }]" @click.stop>
     <div
       :class="['tool-line', { clickable: hasExpandableBody(msg) }]"
       @click.stop="hasExpandableBody(msg) && handleToggle(msg)"
@@ -116,10 +116,9 @@ if (!hljs.getLanguage('powershell')) {
 
 const props = defineProps({
   msg: { type: Object, required: true },
-  focused: { type: Boolean, default: false },
 });
 
-const emit = defineEmits(['focus', 'toggle']);
+const emit = defineEmits(['toggle']);
 
 const DiffView = defineAsyncComponent(() => import('./DiffView.vue'));
 const CodeView = defineAsyncComponent(() => import('./CodeView.vue'));
@@ -393,18 +392,6 @@ function editDiffText(msg) {
   return '';
 }
 
-function isNonInteractiveTool(msg) {
-  return ['create', 'edit', 'delete', 'grep', 'list', 'plan'].includes(String(msg?.kind || ''));
-}
-
-function isFocusDisabledTool(msg) {
-  // All tool cards disable the click-to-focus behavior now. The focused
-  // border was a visual noise source (1px layout shift on toggle) and the
-  // focus state had no functional purpose — tool cards don't receive
-  // keyboard shortcuts or downstream actions based on being focused.
-  return true;
-}
-
 // Service read results and command output show their newest lines by default.
 // Clicking the output enables manual scrolling through the full body.
 function isServiceReadResult(msg) {
@@ -457,11 +444,6 @@ watch(
   },
   { immediate: true, flush: 'post' },
 );
-
-function handleCardClick(msg) {
-  if (isFocusDisabledTool(msg)) return;
-  emit('focus');
-}
 
 function handleToggle(msg) {
   emit('toggle');

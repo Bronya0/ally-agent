@@ -1422,14 +1422,14 @@ func (a *App) StartChat(req ChatRequest) (string, error) {
 	// 破坏模型上下文的消息顺序。前端在运行中的追问已走 InjectRunMessage
 	// 注入路径，不会触发本守卫；这是对其它事件下游（如网络端 sink）的
 	// 纵深防御，与 releaseSession 的活跃 run 检查保持对称。
-	if req.SessionID != "" {
-		for _, activeSessionID := range a.runSessions {
-			if activeSessionID == req.SessionID {
-				a.mu.Unlock()
-				cancel()
-				return "", errors.New("session already has an active run")
-			}
-		}
+	if req.SessionID != "" && a.activeRunForSession(req.SessionID) != "" {
+		// 同一会话同时只允许一个活跃 run：并发 run 会交叉执行 saveHistory，
+		// 破坏模型上下文的消息顺序。前端在运行中的追问已走 InjectRunMessage
+		// 注入路径，不会触发本守卫；这是对其它事件下游（如网络端 sink）的
+		// 纵深防御，与 releaseSession 的活跃 run 检查保持对称。
+		a.mu.Unlock()
+		cancel()
+		return "", errSessionBusy
 	}
 	a.runs[runID] = cancel
 	a.runSessions[runID] = req.SessionID
@@ -1438,6 +1438,28 @@ func (a *App) StartChat(req ChatRequest) (string, error) {
 
 	go a.runChat(ctx, runID, req, cfg)
 	return runID, nil
+}
+
+// Session runtime errors. biz_api.go maps these via errors.Is to HTTP 409;
+// the text stays part of the contract (saved histories/tests reference it),
+// but classification now goes through the sentinel, not substring matching.
+var (
+	errSessionBusy    = errors.New("session already has an active run")
+	errSessionRunning = errors.New("session is still running")
+)
+
+// activeRunForSession returns the runID of the active run for a session under
+// the assumption that a.mu is already held by the caller. This is the single
+// source for "does this session have a live run" — call sites must not
+// re-scan runSessions values themselves.
+// Precondition: caller holds a.mu.
+func (a *App) activeRunForSession(sessionID string) string {
+	for runID, activeSessionID := range a.runSessions {
+		if activeSessionID == sessionID {
+			return runID
+		}
+	}
+	return ""
 }
 
 func (a *App) CancelRun(runID string) error {
@@ -1534,11 +1556,9 @@ func (a *App) releaseSession(sessionID string, deleteHistory bool) error {
 		return errors.New("session id is required")
 	}
 	a.mu.Lock()
-	for _, activeSessionID := range a.runSessions {
-		if activeSessionID == sessionID {
-			a.mu.Unlock()
-			return errors.New("session is still running")
-		}
+	if a.activeRunForSession(sessionID) != "" {
+		a.mu.Unlock()
+		return errSessionRunning
 	}
 	// A compaction in flight is about to saveHistory: releasing the session
 	// underneath it would drop the summary on the floor and could write into
@@ -1628,11 +1648,9 @@ func (a *App) compactSession(parent context.Context, sessionID, instruction stri
 	// sanitize repair, new turns); compacting on top of it would interleave
 	// saveHistory calls and race the run's own message list.
 	a.mu.Lock()
-	for _, activeSessionID := range a.runSessions {
-		if activeSessionID == sessionID {
-			a.mu.Unlock()
-			return nil, errors.New("session is still running")
-		}
+	if a.activeRunForSession(sessionID) != "" {
+		a.mu.Unlock()
+		return nil, errSessionRunning
 	}
 	// Compaction rewrites the whole session history, so two concurrent
 	// compactions on the same session would interleave saveHistory calls and

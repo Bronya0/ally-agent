@@ -152,13 +152,15 @@ func fuzzyLocateInNormalized(content, normContent, oldText, newText string, chan
 	}
 
 	if !startOK || !endOK || origMatchStart > origMatchEnd || origMatchEnd > origBlockEnd {
-		// The boundary cannot be mapped exactly (a rune's NFKC expansion or
-		// composition crosses the match boundary — extremely rare). Fall back
-		// to rewriting the whole touched block from the normalized content;
-		// the match is still unique, so the edit remains safe.
-		block := normContent[lineStartOffset(normContent, startLine):lineEndOffsetInclusive(normContent, endLine)]
-		replaced := strings.Replace(block, normOld, newText, 1)
-		return normalizedMatch{start: origBlockStart, end: origBlockEnd, newText: replaced}, true, nil
+		// The boundary cannot be mapped exactly back to the original bytes (a
+		// rune's NFKC expansion or composition crosses the match boundary —
+		// extremely rare). Refuse the change: rewriting the whole touched block
+		// from normalized content would silently replace untouched bytes inside
+		// the block, violating the invariant that only the matched region is
+		// modified. E_NO_MATCH makes the caller re-read and retry with a
+		// narrower match instead.
+		return normalizedMatch{}, false, toolerrors.New("E_NO_MATCH", fmt.Errorf(
+			"change %d normalized match crosses a line boundary that cannot be mapped back to the original bytes; re-read the file and include more surrounding text", changeIndex))
 	}
 
 	// Splice: original bytes before the match, the new text, then the
@@ -222,38 +224,40 @@ func lineContentEnd(text string, line int) int {
 // back to a byte offset in the original line. normLine must be
 // NormalizeForFuzzyMatch(origLine). Returns ok=false when the boundary cannot
 // be mapped exactly — for example when NFKC composition crosses the boundary
-// or a rune's expansion contains the boundary — so callers can fall back to
-// the whole-block rewrite.
+// or a rune's expansion contains the boundary — so callers can refuse the
+// change instead of corrupting bytes outside the match.
 //
 // The mapping walks the original line rune by rune, accumulating the
-// normalized length of the prefix. Slicing only ever happens at rune
-// boundaries, so invalid UTF-8 prefixes (which would corrupt NFKC) never
-// occur. A whitespace rune contributes zero while it is the last rune of the
-// prefix, matching the per-line trailing-whitespace strip. The result is
-// verified against normLine before it is accepted.
+// normalized byte length of the prefix. Boundary candidates are verified
+// against normLine before acceptance:
+//   - normOff at/after the normalized line end: the match consumes the whole
+//     normalized line (whose trailing whitespace was stripped), so the whole
+//     original line content — trailing whitespace included — is inside the
+//     match region and maps to len(origLine).
+//   - mid-line normOff: normLine keeps all spaces, so the candidate prefix is
+//     compared WITHOUT the per-line trailing-whitespace strip.
+// Slicing only ever happens at rune boundaries, so invalid UTF-8 prefixes
+// (which would corrupt NFKC) never occur.
 func mapNormOffsetInLine(origLine, normLine string, normOff int) (int, bool) {
 	if normOff <= 0 {
 		return 0, true
 	}
 	if normOff >= len(normLine) {
+		// The match consumes the entire normalized line; the whole original
+		// line content (including trailing whitespace) is the match region.
 		return len(origLine), true
 	}
 	normLen := 0
 	i := 0
 	for i < len(origLine) {
 		r, size := utf8.DecodeRuneInString(origLine[i:])
-		if !unicode.IsSpace(r) {
-			normLen += len(strings.Map(normalizeFuzzyRune, norm.NFKC.String(string(r))))
-		}
+		normLen += len(strings.Map(normalizeFuzzyRune, norm.NFKC.String(string(r))))
 		i += size
-		if normLen == normOff {
-			if NormalizeForFuzzyMatch(origLine[:i]) == normLine[:normOff] {
+		if normLen >= normOff {
+			prefix := strings.Map(normalizeFuzzyRune, norm.NFKC.String(origLine[:i]))
+			if prefix == normLine[:normOff] {
 				return i, true
 			}
-			return 0, false
-		}
-		if normLen > normOff {
-			return 0, false
 		}
 	}
 	return 0, false

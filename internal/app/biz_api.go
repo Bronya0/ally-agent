@@ -530,7 +530,7 @@ func (a *App) apiHandleSendMessage(w http.ResponseWriter, r *http.Request) {
 		Attachments: body.Attachments,
 	})
 	if err != nil {
-		if strings.Contains(err.Error(), "session already has an active run") {
+		if errors.Is(err, errSessionBusy) {
 			apiWriteError(w, http.StatusConflict, err.Error())
 			return
 		}
@@ -868,7 +868,7 @@ func (a *App) apiHandleCompactSession(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) apiHandleDeleteSession(w http.ResponseWriter, r *http.Request) {
 	if err := a.DeleteSession(r.PathValue("id")); err != nil {
-		if strings.Contains(err.Error(), "session is still running") {
+		if errors.Is(err, errSessionRunning) {
 			apiWriteError(w, http.StatusConflict, err.Error())
 			return
 		}
@@ -918,7 +918,7 @@ func (a *App) apiHandleListServices(w http.ResponseWriter, r *http.Request) {
 func (a *App) apiHandleServiceOutput(w http.ResponseWriter, r *http.Request) {
 	output, err := a.GetServiceOutput(r.PathValue("id"))
 	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
+		if errors.Is(err, errServiceNotFound) {
 			apiWriteError(w, http.StatusNotFound, err.Error())
 			return
 		}
@@ -941,7 +941,7 @@ func (a *App) apiHandleStopService(w http.ResponseWriter, r *http.Request) {
 		GraceSeconds: body.GraceSeconds,
 	})
 	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
+		if errors.Is(err, errServiceNotFound) {
 			apiWriteError(w, http.StatusNotFound, err.Error())
 			return
 		}

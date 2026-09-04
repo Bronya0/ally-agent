@@ -341,14 +341,7 @@ func (m *McpManager) initializeMcpClient(ctx context.Context, name string, cfg M
 }
 
 func (m *McpManager) newMcpClient(ctx context.Context, cfg McpServerConfig) (*client.Client, error) {
-	transportName := strings.ToLower(strings.TrimSpace(cfg.Transport))
-	if transportName == "" && cfg.Command != "" {
-		transportName = "stdio"
-	}
-	if transportName == "" && cfg.URL != "" {
-		transportName = "streamable-http"
-	}
-
+	transportName := mcpTransportName(cfg)
 	var mcpClient *client.Client
 	var err error
 	switch transportName {
@@ -661,15 +654,29 @@ func (m *McpManager) replaceToolLookupLocked(serverName string, discovered []Mcp
 	}
 }
 
+
+// mcpInvalidSessionMarkers 是 MCP 服务器报告"会话失效"的已知错误文案，
+// 来自 mcp-go 及常见 MCP 网关的 session 相关报错。mcp-go 暂无类型化判定，
+// 子串表是当前约束下的兑底；新变体加到这个单一入口，不要在调用点再散落
+// 子串匹配。
+var mcpInvalidSessionMarkers = []string{
+	"invalid session id",
+	"invalid session",
+	"session not found",
+	"session expired",
+}
+
 func isMcpInvalidSessionError(err error) bool {
 	if err == nil {
 		return false
 	}
 	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "invalid session id") ||
-		strings.Contains(msg, "invalid session") ||
-		strings.Contains(msg, "session not found") ||
-		strings.Contains(msg, "session expired")
+	for _, marker := range mcpInvalidSessionMarkers {
+		if strings.Contains(msg, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *McpManager) CallToolByFunctionName(ctx context.Context, functionName string, args map[string]any) (string, error) {
@@ -734,7 +741,7 @@ func (m *McpManager) GetAllTools() []McpDiscoveredTool {
 }
 
 func mcpToolFunctionName(serverName, toolName string) string {
-	return "mcp__" + safeMcpFunctionPart(serverName) + "__" + safeMcpFunctionPart(toolName)
+	return mcpFunctionNamePrefix + safeMcpFunctionPart(serverName) + "__" + safeMcpFunctionPart(toolName)
 }
 
 func safeMcpFunctionPart(value string) string {
@@ -788,13 +795,16 @@ func (m *McpManager) GetServerStatuses() []map[string]any {
 			"status":    handle.Status,
 			"error":     handle.Error,
 			"toolCount": len(handle.ToolDefs),
-			"transport": normalizedMcpTransport(handle.Config),
+			"transport": mcpTransportName(handle.Config),
 		})
 	}
 	return result
 }
 
-func normalizedMcpTransport(cfg McpServerConfig) string {
+// mcpTransportName 是 MCP transport 推断的唯一入口：显式配置优先，未配置时
+// 按 command/url 推断，http/rest 是 streamable-http 的别名。调用点（连接、
+// 状态展示）共用本函数，不要各自实现。
+func mcpTransportName(cfg McpServerConfig) string {
 	name := strings.ToLower(strings.TrimSpace(cfg.Transport))
 	if name == "" && cfg.Command != "" {
 		return "stdio"
@@ -1013,7 +1023,7 @@ func (a *App) executeMcpFunctionTool(ctx context.Context, functionName string, a
 }
 
 func (a *App) mcpToolEventMeta(functionName string) map[string]any {
-	if a.mcpManager == nil || !strings.HasPrefix(functionName, "mcp__") {
+	if a.mcpManager == nil || !isMcpToolFunctionName(functionName) {
 		return nil
 	}
 	ref, ok := a.mcpManager.DescribeFunctionTool(functionName)

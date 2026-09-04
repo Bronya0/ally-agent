@@ -349,23 +349,10 @@ func mapKeys[V any](m map[string]V) []string {
 	return keys
 }
 
-// replaceStatsFile handles both POSIX atomic replacement and Windows, where
-// os.Rename does not replace an existing destination.
+// replaceStatsFile delegates to the shared atomic-replacement helper; the
+// comment history lives on atomicReplaceFile in infra_bridges.go.
 func replaceStatsFile(tmp, dst string) error {
-	if err := os.Rename(tmp, dst); err == nil {
-		return nil
-	}
-	backup := dst + ".bak"
-	_ = os.Remove(backup)
-	if err := os.Rename(dst, backup); err != nil && !os.IsNotExist(err) {
-		return err
-	}
-	if err := os.Rename(tmp, dst); err != nil {
-		_ = os.Rename(backup, dst)
-		return err
-	}
-	_ = os.Remove(backup)
-	return nil
+	return atomicReplaceFile(tmp, dst)
 }
 
 func recoverStatsBackups(dir string) {

@@ -686,8 +686,9 @@ func (a *App) streamOpenAIChat(ctx context.Context, cfg ConfigState, model strin
 // 调用方据此判定适配器内重试是否安全(无输出则重试不会造成重复)。
 func (a *App) openAIChatStreamAttempt(ctx context.Context, cfg ConfigState, client *legacyopenai.Client, streamReq legacyopenai.ChatCompletionRequest, onEvent func(modelStreamEvent)) (*modelStreamResult, bool, error) {
 	stream, err := client.CreateChatCompletionStream(ctx, streamReq)
-	if err != nil && strings.Contains(strings.ToLower(err.Error()), "stream_options") {
+	if err != nil && isStreamOptionsRejectedError(err) {
 		streamReq.StreamOptions = nil
+		log.Printf("[llm] gateway rejected stream_options; retrying without it: %v", err)
 		stream, err = client.CreateChatCompletionStream(ctx, streamReq)
 	}
 	if err != nil {
@@ -844,6 +845,17 @@ func (a *App) openAIChatStreamAttempt(ctx context.Context, cfg ConfigState, clie
 		Usage:      usage,
 		StopReason: stopReason,
 	}, hasOutput(), nil
+}
+
+// isStreamOptionsRejectedError 判定建流失败是否因为网关不支持 stream_options
+// 参数。这类网关在 400 报错文本里转述被拒绝的参数名；判定收紧为：400 语义
+// + 文本提及该字段名。纯文本命中而没有任何 400 语义时不再降级，避免把无关
+// 报错误判为参数被拒。文本来自 provider/中继，无法完全脱离字符串匹配。
+func isStreamOptionsRejectedError(err error) bool {
+	if err == nil || !isProvider400Error(err) {
+		return false
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "stream_options")
 }
 
 func isIncompleteChatStreamJSON(err error) bool {
@@ -1914,9 +1926,18 @@ func knownBuiltinToolNames() map[string]bool {
 	return knownToolNamesSet
 }
 
+// mcpFunctionNamePrefix 是 MCP 工具的 sanitized OpenAI function name 前缀，
+// 由 mcpToolFunctionName 生成。MCP 工具身份判定的唯一来源——判定处引用本
+// 常量，不要散落字面量。
+const mcpFunctionNamePrefix = "mcp__"
+
+func isMcpToolFunctionName(name string) bool {
+	return strings.HasPrefix(name, mcpFunctionNamePrefix)
+}
+
 // isKnownToolName 判断工具名是否是已知的内置工具或 MCP 工具。
 func isKnownToolName(name string) bool {
-	if strings.HasPrefix(name, "mcp__") {
+	if isMcpToolFunctionName(name) {
 		return true
 	}
 	return knownBuiltinToolNames()[name]
@@ -2062,22 +2083,18 @@ func modelUsageFromLegacy(usage *legacyopenai.Usage, raw []byte) *modelUsage {
 	if usage.PromptTokensDetails != nil {
 		hit = usage.PromptTokensDetails.CachedTokens
 	}
-	// DeepSeek 顶层字段（sashabaranov 不解析，从原始 JSON 补取）
-	if len(raw) > 0 {
-		var ds struct {
-			Usage *struct {
-				PromptCacheHitTokens  int `json:"prompt_cache_hit_tokens"`
-				PromptCacheMissTokens int `json:"prompt_cache_miss_tokens"`
-			} `json:"usage"`
-		}
-		if json.Unmarshal(raw, &ds) == nil && ds.Usage != nil {
-			if ds.Usage.PromptCacheHitTokens > 0 {
-				hit = ds.Usage.PromptCacheHitTokens
-			}
-			if ds.Usage.PromptCacheMissTokens > 0 {
-				miss = ds.Usage.PromptCacheMissTokens
-			}
-		}
+	// DeepSeek 顶层字段（sashabaranov 不解析，从原始 JSON 补取）。一次性
+	// 解出超集：顶层字段存在时显式覆盖 nested 值（原实现靠 ">0 才覆盖"
+	// 的隐式约定），两种命名并存时 DeepSeek 语义优先。
+	var ds struct {
+		Usage *struct {
+			PromptCacheHitTokens  int `json:"prompt_cache_hit_tokens"`
+			PromptCacheMissTokens int `json:"prompt_cache_miss_tokens"`
+		} `json:"usage"`
+	}
+	if len(raw) > 0 && json.Unmarshal(raw, &ds) == nil && ds.Usage != nil {
+		hit = ds.Usage.PromptCacheHitTokens
+		miss = ds.Usage.PromptCacheMissTokens
 	}
 	if miss == 0 && hit > 0 && usage.PromptTokens > hit {
 		miss = usage.PromptTokens - hit

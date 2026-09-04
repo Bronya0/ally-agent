@@ -31,6 +31,11 @@ import (
 
 // ───────────────────────── Section 1: Re-exports ─────────────────────────
 
+// errServiceNotFound 是后台服务的"未知 id"哨兵错误：biz_api.go 经 errors.Is
+// 映射 HTTP 404，orch_services.go 的 coded error（E_SERVICE_NOT_FOUND）包裹它
+// 供模型侧使用。
+var errServiceNotFound = errors.New("service not found")
+
 // rollingBuffer is the alias re-exported from the service tool package so
 // app-side managedService can hold a reference without importing the tool
 // package at call sites.
@@ -119,7 +124,7 @@ func (a *App) GetServiceOutput(id string) (ServiceOutputResult, error) {
 	service := a.services[id]
 	a.servicesMu.Unlock()
 	if service == nil {
-		return ServiceOutputResult{}, fmt.Errorf("service not found: %s", id)
+		return ServiceOutputResult{}, errServiceNotFound
 	}
 	output, total, truncated := service.outputSnapshot()
 	return ServiceOutputResult{ID: id, Output: output, Bytes: total, Truncated: truncated}, nil
@@ -321,7 +326,7 @@ func (a *App) stopService(req StopServiceRequest) (ServiceInfo, error) {
 	service := a.services[id]
 	a.servicesMu.Unlock()
 	if service == nil {
-		return ServiceInfo{}, fmt.Errorf("service not found: %s", id)
+		return ServiceInfo{}, errServiceNotFound
 	}
 
 	service.mu.Lock()
@@ -478,7 +483,7 @@ func (a *App) readServiceOutput(req ServiceReadRequest) (ServiceReadResult, erro
 	service := a.services[id]
 	a.servicesMu.Unlock()
 	if service == nil {
-		return ServiceReadResult{}, codedToolError("E_SERVICE_NOT_FOUND", fmt.Errorf("service not found: %s", id))
+		return ServiceReadResult{}, codedToolError("E_SERVICE_NOT_FOUND", errServiceNotFound)
 	}
 
 	tailBytes := req.TailBytes

@@ -559,7 +559,7 @@ func compactToolDataForModel(name string, result toolResult, fullJSON string) st
 		if !decodeToolData(result.Data, &r) {
 			return fullJSON
 		}
-		body, reduced := compactTextForModel(r.Body, maxModelWebOutput)
+		body, reduced := compactTextForModel(r.Body, compactTextSpec{limit: maxModelWebOutput})
 		data := map[string]any{
 			"status":     r.Status,
 			"statusText": r.StatusText,
@@ -590,7 +590,7 @@ func compactToolDataForModel(name string, result toolResult, fullJSON string) st
 		if !decodeToolData(result.Data, &r) {
 			return fullJSON
 		}
-		text, reduced := compactTextForModel(r.Text, maxModelWebOutput)
+		text, reduced := compactTextForModel(r.Text, compactTextSpec{limit: maxModelWebOutput})
 		data := map[string]any{
 			"url":    r.URL,
 			"status": r.Status,
@@ -626,7 +626,7 @@ func compactMcpOutputForModel(result toolResult, fullJSON string) string {
 	if !decodeToolData(result.Data, &r) {
 		return fullJSON
 	}
-	capped, reduced := compactTextForModel(r.Output, maxModelToolOutput)
+	capped, reduced := compactTextForModel(r.Output, compactTextSpec{limit: maxModelToolOutput, head: modelToolHeadBytes, tail: modelToolTailBytes})
 	if !reduced {
 		return fullJSON
 	}
@@ -687,7 +687,8 @@ func tailCommandOutputForModel(output string, exitCode int) (string, bool) {
 	return header + "\n" + view, true
 }
 
-func compactTextForModel(output string, limit int) (string, bool) {
+func compactTextForModel(output string, spec compactTextSpec) (string, bool) {
+	limit := spec.limit
 	if limit <= 0 || len(output) <= limit {
 		return output, false
 	}
@@ -695,16 +696,16 @@ func compactTextForModel(output string, limit int) (string, bool) {
 	if len(runes) <= limit {
 		return output, false
 	}
-	head := limit / 3
-	if limit == maxModelToolOutput {
-		head = modelToolHeadBytes
+	head := spec.head
+	if head <= 0 || head >= limit {
+		head = limit / 3
 	}
 	if head > len(runes) {
 		head = len(runes)
 	}
-	tail := limit - head
-	if limit == maxModelToolOutput {
-		tail = modelToolTailBytes
+	tail := spec.tail
+	if tail <= 0 || head+tail > limit {
+		tail = limit - head
 	}
 	if tail > len(runes)-head {
 		tail = len(runes) - head
@@ -713,4 +714,13 @@ func compactTextForModel(output string, limit int) (string, bool) {
 	return string(runes[:head]) +
 		fmt.Sprintf("\n\n[... %d characters omitted from model context ...]\n\n", omitted) +
 		string(runes[len(runes)-tail:]), true
+}
+
+// compactTextSpec 声明 compactTextForModel 的切分策略：limit 是总预算，
+// head/tail 是可选的定制切分（0 表示按 limit/3 均分）。head/tail 作为显式
+// 参数传入，通用函数不再按 "limit 恰好等于某个魔数" 推断调用方身份。
+type compactTextSpec struct {
+	limit int
+	head   int
+	tail  int
 }

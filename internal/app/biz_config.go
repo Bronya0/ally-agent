@@ -18,6 +18,7 @@ import (
 	goruntime "runtime"
 	"runtime/debug"
 	"strings"
+	"sync"
 	"time"
 
 	"ally-dev/internal/tools/pathutil"
@@ -50,9 +51,35 @@ func defaultConfigState() ConfigState {
 		AuxFontSize:         defaultAuxFontSize,
 	}
 	if goruntime.GOOS == "windows" {
-		cfg.GitBashPath, _ = findWindowsBash("")
+		cfg.GitBashPath = resolveGitBashPath("")
 	}
 	return cfg
+}
+
+// detectedGitBashPath 缓存 Windows Git Bash 自动探测结果。mergeConfig 名义
+// 上是纯函数却会在每次请求时被 effectiveConfig() 调用，直接探测等于把磁盘
+// IO 埋进配置合并热路径；探测只依赖安装环境（不依赖用户配置），进程内
+// 缓存一次即可。用户手动设置的 gitBashPath 仍每次校验，不受此缓存影响。
+var detectedGitBashPath = sync.OnceValue(func() string {
+	path, _ := findWindowsBash("")
+	return path
+})
+
+// resolveGitBashPath 把用户配置的 gitBashPath 解析为可执行的 shell 路径：
+// 手动配置优先且每次校验（用户可能修复路径后立即生效）；未配置时回落到
+// 进程内缓存一次的自动探测结果。
+func resolveGitBashPath(configured string) string {
+	if detected, _ := findWindowsBash(configured); detected != "" {
+		return detected
+	}
+	if strings.TrimSpace(configured) != "" {
+		// 用户配置存在但无效：保留原值，让启动警告与设置页能提示修复。
+		return configured
+	}
+	if goruntime.GOOS == "windows" {
+		return detectedGitBashPath()
+	}
+	return ""
 }
 
 func resolveConfigLoadPath(configPath string) (string, error) {
@@ -322,9 +349,7 @@ func mergeConfig(base, overlay ConfigState) ConfigState {
 		syncModelAPIKeyFields(&base.Models[i])
 	}
 	if goruntime.GOOS == "windows" {
-		if detected, _ := findWindowsBash(base.GitBashPath); detected != "" {
-			base.GitBashPath = detected
-		}
+		base.GitBashPath = resolveGitBashPath(base.GitBashPath)
 	}
 	return base
 }
@@ -453,9 +478,7 @@ func (a *App) SaveConfig(req ConfigState) error {
 	a.config.ProxyNoProxy = strings.TrimSpace(req.ProxyNoProxy)
 	a.config.UserAgent = strings.TrimSpace(req.UserAgent)
 	if goruntime.GOOS == "windows" {
-		if detected, _ := findWindowsBash(req.GitBashPath); detected != "" {
-			a.config.GitBashPath = detected
-		}
+		a.config.GitBashPath = resolveGitBashPath(req.GitBashPath)
 	}
 	a.config.ReasoningTag = normalizeReasoningTag(req.ReasoningTag)
 	a.config.ReasoningEffort = normalizeReasoningEffort(req.ReasoningEffort)

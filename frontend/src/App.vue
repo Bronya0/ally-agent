@@ -67,15 +67,12 @@ Public License v3. See the LICENSE file for details.
                     <ChatMessages
                       :ref="(instance) => setConversationMessagesRef(tab.id, instance)"
                       :messages="displayMessagesForTab(tab)"
-                      :focused-id="focusedToolIdForSession(tab.sessionId)"
                       :render-fn="renderMarkdown"
                       :fmt-k="fmtK"
                       :tools="availableTools"
                       :mcp-servers="mcpServers"
                       @toggle-archive="toggleArchiveMessages"
                       @toggle-tool="toggleToolExpand"
-                      @focus-tool="(eventId) => focusTool(tab.sessionId, eventId)"
-                      @clear-focus="clearFocus(tab.sessionId)"
                       @export="(key, msg) => handleExportOption(tab.sessionId, key, msg)"
                       @quick-message="(key) => sendQuickMessage(tab.sessionId, key)"
                       @submit-ask="(msg, answers) => submitAskResponse(tab.sessionId, msg, answers)"
@@ -1542,7 +1539,7 @@ function openSettings(page = 'general') {
   if (mode.value !== 'settings') preOverlayMode.value = mode.value;
   mode.value = 'settings';
 }
-const focusedToolIdsBySession = reactive({});const workspaceTabs = ref([]);
+const workspaceTabs = ref([]);
 const activeWorkspaceId = ref('');
 const extraRoots = ref([]);
 const workspaceHistory = ref(loadWorkspaceHistory());
@@ -1950,10 +1947,48 @@ function sessionDisplayTitle(session) {
   if (prompt) return prompt;
   const title = String(session?.title || '').trim();
   const workspace = sessionWorkspaceSummary(session);
-  if (!title || title === workspace || title === sessionWorkspacePath(session) || title === 'Session' || title === '会话' || title === t('app.sessions.history')) {
+  // 先读默认标题标志（内部含 legacy 会话的一次性启发式判定与写回），
+  // 再走旧的文案/工作区兜底。
+  if (!title || isDefaultSessionTitle(session) || title === workspace || title === sessionWorkspacePath(session) || title === 'Session' || title === '会话' || title === t('app.sessions.history')) {
     return t('app.sessions.new');
   }
   return promptSummaryText(title, SESSION_PROMPT_SUMMARY_MAX_CHARS);
+}
+
+// recountSessionMessages 是 session.messageCount 的唯一重算口径：user + assistant。
+// 所有写入点都必须调用它，禁止再内联同口径的 filter 重算。
+function recountSessionMessages(session) {
+  if (!Array.isArray(session?.messages)) return 0;
+  return session.messages.filter(
+    (message) => message?.role === 'user' || message?.role === 'assistant'
+  ).length;
+}
+
+// 会话标题默认态标志（前端内存态，不落盘）：会话创建时 isDefault=true；任何
+// 设置自定义标题的位置（第一条用户消息自动命名、/init 等命令命名）设置标题后
+// 必须调用 markCustomSessionTitle 清标志。旧会话（从后端索引加载，无标志）
+// 保留文案启发式 fallback，判定结果一次性写回标志，避免以"会话"开头的用户
+// 自定义标题被永久误判并反复改写。
+function markCustomSessionTitle(session) {
+  if (!session) return;
+  session.isDefault = false;
+}
+
+function isDefaultSessionTitle(session) {
+  if (!session || typeof session !== 'object') return false;
+  if (session.isDefault === true) return true;
+  if (session.isDefault === false) return false;
+  const isDefault = isLegacyDefaultSessionTitleText(session.title);
+  session.isDefault = isDefault;
+  return isDefault;
+}
+
+function isLegacyDefaultSessionTitleText(title) {
+  const value = String(title || '');
+  return value === '默认会话'
+    || value === 'Default session'
+    || value.startsWith('会话')
+    || value.startsWith('Session ');
 }
 
 function currentWorkspacePath() {
@@ -3287,7 +3322,6 @@ async function closeWorkspaceTab(id) {
       deletePendingAttachments(tab.sessionId);
       delete todosBySession[tab.sessionId];
       delete todoRevisionsBySession[tab.sessionId];
-      delete focusedToolIdsBySession[tab.sessionId];
       displayMessagesCacheBySession.delete(tab.sessionId);
       ReleaseSession(tab.sessionId).catch(() => {});
     }
@@ -3402,7 +3436,7 @@ function newSession(title) {
   const activeTab = workspaceTabs.value.find((item) => item.id === activeWorkspaceId.value) || null;
   const workspace = (isKbTab(activeTab) ? activeTab.path : config.workspace) || '';
   const sessionTitle = title || (workspace ? workspaceLabel(workspace) : t('app.sessions.new'));
-  const session = { id, title: sessionTitle, workspace, extraRoots: [], messages: [], messagesLoaded: true, runId: '', isRunning: false, createdAt: now, updatedAt: now };
+  const session = { id, title: sessionTitle, isDefault: true, workspace, extraRoots: [], messages: [], messagesLoaded: true, runId: '', isRunning: false, createdAt: now, updatedAt: now };
   sessions.value.unshift(session);
   activeSessionId.value = id;
   bindSessionToActiveWorkspaceTab(session);
@@ -3419,14 +3453,6 @@ function newSession(title) {
   }
 }
 
-function isDefaultSessionTitle(title) {
-  const value = String(title || '');
-  return value === '默认会话'
-    || value === 'Default session'
-    || value.startsWith('会话')
-    || value.startsWith('Session ');
-}
-
 async function selectSession(index) {
   const visibleSessions = currentWorkspaceSessions.value;
   if (index < 0 || index >= visibleSessions.length) return;
@@ -3440,7 +3466,7 @@ async function selectSession(index) {
 function createReplacementSession(title = t('app.sessions.new'), workspacePath = '') {
   const id = crypto.randomUUID ? crypto.randomUUID() : `s-${Date.now()}-${Math.random()}`;
   const now = Date.now();
-  const session = { id, title, workspace: workspacePath || '', extraRoots: [], messages: [], messagesLoaded: true, runId: '', isRunning: false, createdAt: now, updatedAt: now };
+  const session = { id, title, isDefault: true, workspace: workspacePath || '', extraRoots: [], messages: [], messagesLoaded: true, runId: '', isRunning: false, createdAt: now, updatedAt: now };
   session.messages.push(buildWelcomeMessage(workspacePath || t('common.notSelected')));
   return session;
 }
@@ -3490,7 +3516,6 @@ function deleteSession(index) {
   delete planPanelCollapsedBySession[deletedId];
   delete sessionPromptTexts[deletedId];
   deletePendingAttachments(deletedId);
-  delete focusedToolIdsBySession[deletedId];
   displayMessagesCacheBySession.delete(deletedId);
   enqueueSessionWrite(() => DeleteSession(deletedId)).catch(() => {});
   const expanded = new Set(expandedArchiveSessions.value);
@@ -3544,9 +3569,7 @@ async function handleDeleteUserMessage(sessionId, msg) {
         // 1. 截断底层消息数组（含该条及之后所有）
         session.messages.splice(baseIdx);
         session.updatedAt = Date.now();
-        session.messageCount = session.messages.filter(
-          (m) => m?.role === 'user' || m?.role === 'assistant'
-        ).length;
+        session.messageCount = recountSessionMessages(session);
         displayMessagesCacheBySession.delete(sessionId);
 
         // 2. 持久化 UI 快照（截断后的消息）
@@ -4548,18 +4571,6 @@ function scrollMessagesToBottomIfStale(sessionId = activeSessionId.value) {
   nextTick(() => conversationMessagesForSession(sessionId)?.scrollToBottomIfStale());
 }
 
-function focusedToolIdForSession(sessionId) {
-  return focusedToolIdsBySession[sessionId] || '';
-}
-
-function focusTool(sessionId, eventId) {
-  if (sessionId) focusedToolIdsBySession[sessionId] = eventId;
-}
-
-function clearFocus(sessionId) {
-  if (sessionId) focusedToolIdsBySession[sessionId] = '';
-}
-
 function openAttachmentPicker() {
   attachmentInputRef.value?.click();
 }
@@ -5167,9 +5178,10 @@ async function sendPrompt(opts) {
   const userMessage = { role: 'user', content: displayText, attachments, done: true };
   session.messages.push(userMessage);
   session.updatedAt = Date.now();
-  session.messageCount = session.messages.filter((message) => message?.role === 'user' || message?.role === 'assistant').length;
-  if (isDefaultSessionTitle(session.title)) {
+  session.messageCount = recountSessionMessages(session);
+  if (isDefaultSessionTitle(session)) {
     session.title = displayText.length > 20 ? `${displayText.slice(0, 20)}…` : displayText;
+    markCustomSessionTitle(session);
   }
   // Save to workspace-scoped prompt history
   addPromptHistory(displayText);
@@ -5208,9 +5220,10 @@ async function injectMessageToRun(session, sendText, displayText, attachments) {
   const userMessage = { role: 'user', content: displayText, attachments: [], done: true };
   session.messages.push(userMessage);
   session.updatedAt = Date.now();
-  session.messageCount = session.messages.filter((message) => message?.role === 'user' || message?.role === 'assistant').length;
-  if (isDefaultSessionTitle(session.title)) {
+  session.messageCount = recountSessionMessages(session);
+  if (isDefaultSessionTitle(session)) {
     session.title = displayText.length > 20 ? `${displayText.slice(0, 20)}…` : displayText;
+    markCustomSessionTitle(session);
   }
   addPromptHistory(displayText);
   commandHistoryIndex.value = -1;
@@ -5223,7 +5236,7 @@ async function injectMessageToRun(session, sendText, displayText, attachments) {
   } catch (err) {
     const idx = session.messages.indexOf(userMessage);
     if (idx >= 0) session.messages.splice(idx, 1);
-    session.messageCount = session.messages.filter((message) => message?.role === 'user' || message?.role === 'assistant').length;
+    session.messageCount = recountSessionMessages(session);
     message.error(t('app.run.injectFailed', { error: err }));
   }
 }
@@ -6442,7 +6455,7 @@ function sessionIndexEntry(session) {
     updatedAt: session?.updatedAt || session?.createdAt || Date.now(),
     messageCount: Number.isFinite(Number(session?.messageCount))
       ? Number(session.messageCount)
-      : messages.filter((message) => message?.role === 'user' || message?.role === 'assistant').length,
+      : recountSessionMessages({ messages }),
     hasSnapshot: !!session?.hasSnapshot,
   };
 }
@@ -6499,7 +6512,6 @@ function unloadInactiveSessionMessages() {
     for (const message of session.messages || []) releaseMessageAttachments(message);
     session.messages = [];
     session.messagesLoaded = false;
-    delete focusedToolIdsBySession[session.id];
     displayMessagesCacheBySession.delete(session.id);
   }
 }
@@ -6526,7 +6538,6 @@ function trimRuntimeSessions() {
     delete planPanelCollapsedBySession[session.id];
     delete sessionPromptTexts[session.id];
     deletePendingAttachments(session.id);
-    delete focusedToolIdsBySession[session.id];
     displayMessagesCacheBySession.delete(session.id);
     ReleaseSession(session.id).catch(() => {});
     const expanded = new Set(expandedArchiveSessions.value);
@@ -6744,7 +6755,7 @@ async function migrateLegacySessionStorage() {
       extraRoots: Array.isArray(meta.extraRoots) ? meta.extraRoots : [],
       createdAt: meta.createdAt || Date.now(),
       updatedAt: meta.updatedAt || meta.createdAt || Date.now(),
-      messageCount: Number(meta.messageCount || legacyMessages.filter((item) => item?.role === 'user' || item?.role === 'assistant').length),
+      messageCount: Number(meta.messageCount || recountSessionMessages({ messages: legacyMessages })),
       hasSnapshot: false,
     };
     try {
@@ -6792,7 +6803,7 @@ async function switchToSession(index) {
   const idx = parseInt(index);
   const visibleSessions = currentWorkspaceSessions.value;
   if (isNaN(idx) || idx < 1 || idx > visibleSessions.length) {
-    message.error('无效的会话编号');
+    message.error(t('app.sessions.invalidNumber'));
     return;
   }
   const target = visibleSessions[idx - 1];
@@ -6808,8 +6819,9 @@ function handleInitCommand() {
   if (!session) return;
   // Send the init exploration prompt to the LLM
   session.messages.push({ role: 'user', content: INIT_PROMPT, done: true });
-  if (isDefaultSessionTitle(session.title)) {
+  if (isDefaultSessionTitle(session)) {
     session.title = t('app.init.title');
+    markCustomSessionTitle(session);
   }
   scrollMessagesToBottom();
   saveSessions();
@@ -6838,8 +6850,9 @@ function handleRememberCommand() {
   history.push({ role: 'user', content: REMEMBER_PROMPT });
 
   session.messages.push({ role: 'user', content: t('app.note.visibleText'), done: true });
-  if (isDefaultSessionTitle(session.title)) {
+  if (isDefaultSessionTitle(session)) {
     session.title = t('app.note.title');
+    markCustomSessionTitle(session);
   }
   scrollMessagesToBottom();
   saveSessions();
@@ -6863,8 +6876,9 @@ function handleLessonCommand() {
   history.push({ role: 'user', content: LESSON_PROMPT });
 
   session.messages.push({ role: 'user', content: t('app.lesson.visibleText'), done: true });
-  if (isDefaultSessionTitle(session.title)) {
+  if (isDefaultSessionTitle(session)) {
     session.title = t('app.lesson.title');
+    markCustomSessionTitle(session);
   }
   scrollMessagesToBottom();
   saveSessions();
@@ -6888,8 +6902,9 @@ function handleReviewCommand() {
   history.push({ role: 'user', content: REVIEW_PROMPT });
 
   session.messages.push({ role: 'user', content: t('app.review.visibleText'), done: true });
-  if (isDefaultSessionTitle(session.title)) {
+  if (isDefaultSessionTitle(session)) {
     session.title = t('app.review.title');
+    markCustomSessionTitle(session);
   }
   scrollMessagesToBottom();
   saveSessions();
@@ -6913,8 +6928,9 @@ function handlePushCommand() {
   history.push({ role: 'user', content: t('app.push.prompt') });
 
   session.messages.push({ role: 'user', content: t('app.push.visibleText'), done: true });
-  if (isDefaultSessionTitle(session.title)) {
+  if (isDefaultSessionTitle(session)) {
     session.title = t('app.push.title');
+    markCustomSessionTitle(session);
   }
   scrollMessagesToBottom();
   saveSessions();
@@ -7092,9 +7108,10 @@ async function activateSkillByName(skillName, skillArgs = '', injectIntoChat = t
           system: true,
           skill: { name: skillName, args: userText },
         });
-        if (isDefaultSessionTitle(session.title)) {
+        if (isDefaultSessionTitle(session)) {
           const titleBase = userText || `/${skillName}`;
           session.title = titleBase.length > 20 ? `${titleBase.slice(0, 20)}…` : titleBase;
+          markCustomSessionTitle(session);
         }
         scrollMessagesToBottom();
         if (chatConfig.value.apiKey || (Array.isArray(chatConfig.value.apiKeys) && chatConfig.value.apiKeys.length)) {
@@ -7278,7 +7295,7 @@ function makeToolTitle(name, args, meta = {}) {
     return parsed.id || '';
   }
   if (name === 'list_services') {
-    return 'tracked services';
+    return t('app.tools.chip.trackedServices');
   }
   if (name === 'ssh_credential') {
     // Never render the password: show action + host only. The args string is
@@ -7494,13 +7511,13 @@ function formatToolBody(name, body) {
       if (d.output) out += stripAnsi(d.output);
       if (d.output && !d.output.endsWith('\n')) out += '\n';
       if (d.exitCode === 0) {
-        out += 'exit code: 0 [' + formatDuration(d.durationMs) + ']';
+        out += t('app.tools.exitCode', { code: 0 }) + ' [' + formatDuration(d.durationMs) + ']';
       } else {
-        out += 'exit code: ' + d.exitCode + ' [' + formatDuration(d.durationMs) + ']';
+        out += t('app.tools.exitCode', { code: d.exitCode }) + ' [' + formatDuration(d.durationMs) + ']';
       }
-      if (d.timedOut) out += '  TIMED OUT';
-      if (d.cancelled) out += '  CANCELLED';
-      if (d.truncated) out += '  [truncated]';
+      if (d.timedOut) out += '  ' + t('app.tools.timedOut');
+      if (d.cancelled) out += '  ' + t('app.tools.cancelled');
+      if (d.truncated) out += '  [' + t('common.truncated') + ']';
       return out;
     }
     // read_file result: show content with line numbers
@@ -7535,9 +7552,9 @@ function formatToolBody(name, body) {
     }
     if (name === 'scheduled_task' && parsed.data) {
       if (parsed.data.task) return formatScheduledTaskToolDetail(parsed.data.task);
-      if (parsed.data.deleted) return `Deleted scheduled task ${parsed.data.deleted}`;
+      if (parsed.data.deleted) return t('app.tools.scheduled.deleted', { id: parsed.data.deleted });
       const tasks = Array.isArray(parsed.data.tasks) ? parsed.data.tasks : [];
-      if (!tasks.length) return 'No scheduled tasks.';
+      if (!tasks.length) return t('app.tools.scheduled.none');
       return tasks.map(formatScheduledTaskToolDetail).join('\n\n---\n\n');
     }
     if ((name === 'service' || name === 'start_service' || name === 'stop_service') && parsed.data) {
@@ -7550,7 +7567,7 @@ function formatToolBody(name, body) {
     }
     if (name === 'list_services' && parsed.data) {
       const services = Array.isArray(parsed.data.services) ? parsed.data.services : [];
-      if (services.length === 0) return 'No tracked services.';
+      if (services.length === 0) return t('app.tools.services.none');
       return services.map((service) => formatServiceInfo(service)).join('\n\n---\n\n');
     }
     // edit result: show summary + diff
@@ -7647,25 +7664,25 @@ function humanizeToolResultKey(key) {
 
 function formatScheduledTaskToolDetail(task = {}) {
   const lines = [];
-  if (task.name) lines.push(`Task: ${task.name}`);
+  if (task.name) lines.push(t('app.tools.scheduled.task', { name: task.name }));
   if (task.id) lines.push(`ID: ${task.id}`);
-  lines.push(`Schedule: ${formatScheduledToolSchedule(task.schedule || {})}`);
-  if (task.workspace) lines.push(`Workspace: ${task.workspace}`);
-  lines.push('Mode: YOLO');
-  if (task.nextRunAt) lines.push(`Next run: ${formatDateTime(Number(task.nextRunAt))}`);
-  if (task.lastRunAt) lines.push(`Last run: ${formatDateTime(Number(task.lastRunAt))}`);
-  if (task.lastStatus) lines.push(`Status: ${task.running ? 'running' : task.lastStatus}`);
-  if (task.runCount !== undefined) lines.push(`Runs: ${task.runCount}`);
+  lines.push(t('app.tools.scheduled.schedule', { schedule: formatScheduledToolSchedule(task.schedule || {}) }));
+  if (task.workspace) lines.push(t('app.tools.scheduled.workspace', { workspace: task.workspace }));
+  lines.push(t('app.tools.scheduled.modeYolo'));
+  if (task.nextRunAt) lines.push(t('app.tools.scheduled.nextRun', { time: formatDateTime(Number(task.nextRunAt)) }));
+  if (task.lastRunAt) lines.push(t('app.tools.scheduled.lastRun', { time: formatDateTime(Number(task.lastRunAt)) }));
+  if (task.lastStatus) lines.push(t('app.tools.scheduled.status', { status: task.running ? t('common.running') : task.lastStatus }));
+  if (task.runCount !== undefined) lines.push(t('app.tools.scheduled.runs', { count: task.runCount }));
   if (task.maxSteps || task.timeoutSeconds) {
-    lines.push(`Per run: ${task.maxSteps || '-'} steps · ${task.timeoutSeconds || '-'}s timeout`);
+    lines.push(t('app.tools.scheduled.perRun', { steps: task.maxSteps || '-', timeout: task.timeoutSeconds || '-' }));
   }
   return lines.join('\n');
 }
 
 function formatScheduledToolSchedule(schedule = {}) {
-  if (schedule.type === 'once') return `once at ${schedule.at || '-'}`;
-  if (schedule.type === 'interval') return `every ${schedule.every || '-'}`;
-  if (schedule.type === 'cron') return `cron ${schedule.cron || '-'}`;
+  if (schedule.type === 'once') return t('app.tools.scheduled.onceAt', { time: schedule.at || '-' });
+  if (schedule.type === 'interval') return t('app.tools.scheduled.every', { interval: schedule.every || '-' });
+  if (schedule.type === 'cron') return t('app.tools.scheduled.cron', { cron: schedule.cron || '-' });
   return '-';
 }
 
@@ -7680,20 +7697,20 @@ function formatServiceChip(service) {
 function formatServiceInfo(service) {
   const lines = [];
   const name = String(service?.name || '').trim();
-  if (name) lines.push(`name: ${name}`);
+  if (name) lines.push(t('app.tools.service.name', { name }));
   if (service?.id) lines.push(`id: ${service.id}`);
-  if (service?.status) lines.push(`status: ${service.status}`);
+  if (service?.status) lines.push(t('app.tools.service.status', { status: service.status }));
   if (service?.pid) lines.push(`pid: ${service.pid}`);
-  if (service?.command) lines.push(`command: ${service.command}`);
-  if (service?.cwd) lines.push(`cwd: ${service.cwd}`);
-  if (service?.startedAt) lines.push(`started: ${formatUnixTimestamp(service.startedAt)}`);
-  if (service?.stoppedAt) lines.push(`stopped: ${formatUnixTimestamp(service.stoppedAt)}`);
-  if (service?.exitCode) lines.push(`exit code: ${service.exitCode}`);
-  if (service?.error) lines.push(`error: ${service.error}`);
+  if (service?.command) lines.push(t('app.tools.service.command', { command: service.command }));
+  if (service?.cwd) lines.push(t('app.tools.service.cwd', { cwd: service.cwd }));
+  if (service?.startedAt) lines.push(t('app.tools.service.started', { time: formatUnixTimestamp(service.startedAt) }));
+  if (service?.stoppedAt) lines.push(t('app.tools.service.stopped', { time: formatUnixTimestamp(service.stoppedAt) }));
+  if (service?.exitCode) lines.push(t('app.tools.exitCode', { code: service.exitCode }));
+  if (service?.error) lines.push(t('app.tools.service.error', { error: service.error }));
   const output = stripAnsi(service?.outputTail || '');
   if (output) {
     lines.push('');
-    lines.push('output tail:');
+    lines.push(t('app.tools.service.outputTail'));
     lines.push(output);
   }
   return lines.join('\n');
@@ -7741,12 +7758,12 @@ function formatServiceReadResult(data) {
 // model/user can scan all services without context bloat.
 function formatServiceListResult(data) {
   const services = Array.isArray(data?.services) ? data.services : [];
-  if (services.length === 0) return 'No tracked services.';
+  if (services.length === 0) return t('app.tools.services.none');
   const header = [];
   if (typeof data?.activeCount === 'number' && typeof data?.maxActive === 'number') {
-    header.push(`${data.activeCount}/${data.maxActive} active`);
+    header.push(t('app.tools.services.active', { active: data.activeCount, max: data.maxActive }));
   }
-  header.push(`${services.length} service${services.length === 1 ? '' : 's'}`);
+  header.push(t('app.tools.services.count', { count: services.length }));
   const lines = [header.join(' · '), ''];
   for (const svc of services) {
     const parts = [];
@@ -7911,8 +7928,7 @@ function fmtTime(ts) {
 
 function msgCount(s) {
   if (Number.isFinite(Number(s?.messageCount))) return Number(s.messageCount);
-  if (!s?.messages) return 0;
-  return s.messages.filter((message) => message?.role === 'user' || message?.role === 'assistant').length;
+  return recountSessionMessages(s);
 }
 
 

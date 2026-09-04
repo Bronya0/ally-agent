@@ -55,7 +55,7 @@ func TestToolSchemaToMapProducesProviderSafeSchema(t *testing.T) {
 	}
 }
 
-func TestNormalizedMcpTransport(t *testing.T) {
+func TestMcpTransportName(t *testing.T) {
 	tests := []struct {
 		cfg  McpServerConfig
 		want string
@@ -66,8 +66,8 @@ func TestNormalizedMcpTransport(t *testing.T) {
 		{cfg: McpServerConfig{Transport: "http", URL: "https://example.com/mcp"}, want: "streamable-http"},
 	}
 	for _, tt := range tests {
-		if got := normalizedMcpTransport(tt.cfg); got != tt.want {
-			t.Fatalf("normalizedMcpTransport(%#v) = %q, want %q", tt.cfg, got, tt.want)
+		if got := mcpTransportName(tt.cfg); got != tt.want {
+			t.Fatalf("mcpTransportName(%#v) = %q, want %q", tt.cfg, got, tt.want)
 		}
 	}
 }

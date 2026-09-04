@@ -370,3 +370,25 @@ func newID() string {
 	}
 	return hex.EncodeToString(buf)
 }
+
+// atomicReplaceFile is the single atomic file-replacement helper for the
+// Windows rename-over-existing limitation. os.Rename is tried first; when it
+// fails, the existing destination is moved aside to <dst>.bak, the completed
+// temp file is installed, and the old file is restored on failure. Callers
+// own temp-file creation/cleanup; this helper only performs the swap.
+func atomicReplaceFile(tmp, dst string) error {
+	if err := os.Rename(tmp, dst); err == nil {
+		return nil
+	}
+	backup := dst + ".bak"
+	_ = os.Remove(backup)
+	if backupErr := os.Rename(dst, backup); backupErr != nil && !errors.Is(backupErr, os.ErrNotExist) {
+		return backupErr
+	}
+	if retryErr := os.Rename(tmp, dst); retryErr != nil {
+		_ = os.Rename(backup, dst)
+		return retryErr
+	}
+	_ = os.Remove(backup)
+	return nil
+}

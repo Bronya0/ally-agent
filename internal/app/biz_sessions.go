@@ -851,20 +851,7 @@ func writeAtomicBytes(path string, data []byte, mode os.FileMode) error {
 }
 
 func replaceSessionFile(source, destination string) error {
-	if err := os.Rename(source, destination); err == nil {
-		return nil
-	}
-	backup := destination + ".bak"
-	_ = os.Remove(backup)
-	if err := os.Rename(destination, backup); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	if err := os.Rename(source, destination); err != nil {
-		_ = os.Rename(backup, destination)
-		return err
-	}
-	_ = os.Remove(backup)
-	return nil
+	return atomicReplaceFile(source, destination)
 }
 
 // ── Saved history persistence ─────────────────────────────────
@@ -976,19 +963,8 @@ func writeCompressedHistory(diskPath string, messages []openai.ChatCompletionMes
 	if closeFileErr != nil {
 		return closeFileErr
 	}
-	if err := os.Rename(tmpPath, diskPath); err != nil {
-		// Windows may reject replacing an existing destination. Move the old
-		// valid file aside, install the completed temp, and roll back on failure.
-		backupPath := diskPath + ".bak"
-		_ = os.Remove(backupPath)
-		if backupErr := os.Rename(diskPath, backupPath); backupErr != nil {
-			return err
-		}
-		if retryErr := os.Rename(tmpPath, diskPath); retryErr != nil {
-			_ = os.Rename(backupPath, diskPath)
-			return retryErr
-		}
-		_ = os.Remove(backupPath)
+	if err := atomicReplaceFile(tmpPath, diskPath); err != nil {
+		return err
 	}
 	committed = true
 	return nil

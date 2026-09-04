@@ -136,6 +136,32 @@ func TestApplyBatchTextChangesFuzzyMidLineKeepsLineTail(t *testing.T) {
 	}
 }
 
+// TestMapNormOffsetInLine verifies the boundary mapper directly: exact
+// mapping for ordinary content, end-of-line consumption including trailing
+// whitespace, and refusal when NFKC expansion crosses the boundary.
+func TestMapNormOffsetInLine(t *testing.T) {
+	orig := "value = \u2018old\u2019 && ready"
+	norm := NormalizeForFuzzyMatch(orig)
+	if got, ok := mapNormOffsetInLine(orig, norm, 0); !ok || got != 0 {
+		t.Fatalf("normOff=0: got (%d,%v)", got, ok)
+	}
+	// The boundary right after the opening quote maps into the original line.
+	if _, ok := mapNormOffsetInLine(orig, norm, 8); !ok {
+		t.Fatal("mid-line boundary failed to map")
+	}
+	// End-of-normalized-line boundary consumes the whole original line.
+	if got, ok := mapNormOffsetInLine(orig, norm, len(norm)); !ok || got != len(orig) {
+		t.Fatalf("end boundary: got (%d,%v), want (%d,true)", got, ok, len(orig))
+	}
+	// A boundary that lands mid-NFKC-expansion maps to the end of the
+	// expanding rune: the match region then covers the whole rune, so bytes
+	// outside the match are still preserved. Expansion cannot cross the
+	// boundary in a way that corrupts the splice.
+	if got, ok := mapNormOffsetInLine("\uFF21B", NormalizeForFuzzyMatch("\uFF21B"), 1); !ok || got != 3 {
+		t.Fatalf("NFKC-expansion boundary: got (%d,%v), want (3,true)", got, ok)
+	}
+}
+
 func TestApplyBatchTextChangesFuzzyPreservesUnmatchedCharsOnTouchedLines(t *testing.T) {
 	// Regression: the fuzzy fallback must rewrite only the matched region.
 	// Smart quotes on the same line but outside the match, and on the middle

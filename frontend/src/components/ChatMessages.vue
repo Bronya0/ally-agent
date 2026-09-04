@@ -10,7 +10,7 @@ Public License v3. See the LICENSE file for details.
 <template>
   <div class="messages-scroll-shell">
     <n-scrollbar ref="scrollbarRef" class="messages-scroll" @scroll="handleScroll">
-      <div ref="messagesRootRef" class="messages" @click="$emit('clearFocus')">
+      <div ref="messagesRootRef" class="messages">
         <template v-for="(msg, index) in messages" :key="msgKey(msg)" v-memo="messageRenderMemo(msg)">
         <button v-if="msg.role === 'archive'" class="message-archive-toggle" @click.stop="$emit('toggleArchive', msg.sessionId)">
           <span>{{ msg.expanded ? $t('chat.archive.collapse') : $t('chat.archive.expand') }}</span>
@@ -133,8 +133,6 @@ Public License v3. See the LICENSE file for details.
         >
           <ToolCallCard
             :msg="msg"
-            :focused="focusedId === msg.eventId"
-            @focus="$emit('focusTool', msg.eventId)"
             @toggle="$emit('toggleTool', msg)"
           />
         </RenderBoundary>
@@ -142,8 +140,6 @@ Public License v3. See the LICENSE file for details.
         <RenderBoundary v-else-if="msg.kind === 'read-group'" :label="$t('chat.readResult')">
           <ReadGroupCard
             :msg="msg"
-            :focused="focusedId === msg.eventId"
-            @focus="$emit('focusTool', msg.eventId)"
             @toggle="$emit('toggleTool', msg)"
           />
         </RenderBoundary>
@@ -151,8 +147,6 @@ Public License v3. See the LICENSE file for details.
         <RenderBoundary v-else-if="msg.kind === 'read-grep-group'" :label="$t('chat.readResult')">
           <ReadGrepGroupCard
             :msg="msg"
-            :focused="focusedId === msg.eventId"
-            @focus="$emit('focusTool', msg.eventId)"
             @toggle="$emit('toggleTool', msg)"
           />
         </RenderBoundary>
@@ -205,7 +199,6 @@ import { useMessage } from 'naive-ui';
 
 const props = defineProps({
   messages: { type: Array, required: true },
-  focusedId: { type: String, default: '' },
   renderFn: { type: Function, required: true },
   fmtK: { type: Function, required: true },
   tools: { type: Array, default: () => [] },
@@ -267,7 +260,6 @@ function messageRenderMemo(msg) {
     msg?.expanded,
     msg?.count,
     msg === lastAnswerMessage.value,
-    props.focusedId ? props.focusedId === msg?.eventId : false,
     // 正文是否已开始输出（一次性标志，首个内容增量时置位）：统计占位行的
     // 渲染条件依赖它，翻转时必须触发父级重渲染；之后不再变化，流式正文
     // 增量依旧只由 StreamingMarkdownBody 子组件渲染。
@@ -367,8 +359,6 @@ function msgKey(msg) {
 defineEmits([
   'toggleArchive',
   'toggleTool',
-  'focusTool',
-  'clearFocus',
   'export',
   'quickMessage',
   'submitAsk',
