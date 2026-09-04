@@ -441,11 +441,13 @@ Public License v3. See the LICENSE file for details.
           <div class="config-section-header">
             <div>
               <div class="config-section-title">Skills</div>
-              <div class="config-section-subtitle">{{ $t('settings.skillsSummary', { enabled: activeSkillNames.length, available: availableSkills.length }) }}</div>
+              <div class="config-section-subtitle skill-summary-row">
+                {{ $t('settings.skillsSummary', { enabled: activeSkillNames.length, available: availableSkills.length }) }}
+                <span v-for="s in skillSourceCounts" :key="s.source" :class="['skill-badge', s.source]">{{ s.source }} {{ s.count }}</span>
+              </div>
             </div>
             <n-space>
               <n-button size="small" secondary :loading="skillsLoading" @click="refreshSkillState">{{ $t('common.refresh') }}</n-button>
-              <n-button size="small" secondary :disabled="!toggleableActiveSkillCount || skillsLoading" @click="clearLoadedSkills(false)">{{ $t('settings.skillsDisableAll') }}</n-button>
             </n-space>
           </div>
           <div class="skill-settings-list">
@@ -484,22 +486,25 @@ Public License v3. See the LICENSE file for details.
             </div>
           </div>
           <div class="mcp-toolbar">
-            <div class="mcp-toolbar-mode">
-              <n-button-group size="small">
-                <n-button :type="mcpEditMode === 'form' ? 'primary' : 'default'" @click="switchMcpMode('form')">{{ $t('settings.mcpForm') }}</n-button>
-                <n-button :type="mcpEditMode === 'json' ? 'primary' : 'default'" @click="switchMcpMode('json')">{{ $t('settings.mcpJson') }}</n-button>
-              </n-button-group>
-            </div>
             <div class="mcp-toolbar-actions">
+              <n-button size="small" type="primary" @click="openMcpEditor(-1)">{{ $t('common.add') }}</n-button>
               <n-button size="small" secondary :loading="mcpLoading" @click="loadMcpConfig">{{ $t('common.refresh') }}</n-button>
-              <n-button v-if="mcpEditMode === 'json'" size="small" type="primary" :loading="mcpLoading" :disabled="!mcpConfigValid" @click="saveMcpConfigText">{{ $t('settings.mcpApplyReconnect') }}</n-button>
+              <n-button size="small" secondary @click="openMcpImport">{{ $t('settings.modelImport') }}</n-button>
+              <n-button size="small" secondary :disabled="!mcpFormServers.length" @click="exportMcpConfig">{{ $t('settings.modelExport') }}</n-button>
             </div>
+            <input
+              ref="mcpImportInput"
+              class="model-import-input"
+              type="file"
+              accept="application/json,.json"
+              @change="importMcpConfig"
+            />
           </div>
           <div class="mcp-save-scope">{{ $t('settings.mcpSaveScope') }}</div>
-          <!-- Form mode: unified server list with live status per row -->
-          <div v-if="mcpEditMode === 'form'" class="mcp-form-mode">
+          <!-- Unified server list with live status per row -->
+          <div class="mcp-form-mode">
             <div v-if="!mcpFormServers.length" class="saved-model-empty">{{ $t('settings.mcpEmpty') }}</div>
-            <div v-for="(srv, idx) in mcpFormServers" :key="srv._key" :class="['mcp-server-row', { expanded: srv._editing }]">
+            <div v-for="(srv, idx) in mcpFormServers" :key="srv._key" class="mcp-server-row">
               <div class="mcp-row-main">
                 <span :class="['mcp-dot', mcpStatusFor(srv).status]"></span>
                 <span class="mcp-name">{{ srv.name?.trim() || $t('settings.mcpUnnamedServer') }}</span>
@@ -509,58 +514,11 @@ Public License v3. See the LICENSE file for details.
                   <span v-if="mcpStatusFor(srv).toolCount" class="mcp-tools">{{ $t('tools.count', { count: mcpStatusFor(srv).toolCount }) }}</span>
                   <span :class="['mcp-status-text', mcpStatusFor(srv).status]" :title="mcpStatusFor(srv).error || ''">{{ $t(mcpStatusLabel(mcpStatusFor(srv).status)) }}</span>
                   <n-switch :value="srv.enabled" size="small" @update:value="(value) => toggleMcpEnabled(srv, value)" />
-                  <n-button size="tiny" quaternary @click="toggleMcpEdit(idx)">{{ srv._editing ? $t('settings.mcpCollapse') : $t('common.edit') }}</n-button>
+                  <n-button size="tiny" quaternary @click="openMcpEditor(idx)">{{ $t('common.edit') }}</n-button>
                   <n-button size="tiny" quaternary type="error" @click="removeMcpServer(idx)">{{ $t('common.delete') }}</n-button>
                 </div>
               </div>
-              <div v-if="srv._editing" class="mcp-row-editor">
-                <div class="mcp-editor-line">
-                  <n-input v-model:value="srv.name" :placeholder="$t('settings.mcpServerName')" size="small" class="mcp-server-name-input" />
-                  <n-select v-model:value="srv.transport" :options="[
-                    { label: $t('settings.mcpTransportStdio'), value: 'stdio' },
-                    { label: $t('settings.mcpTransportSse'), value: 'sse' },
-                    { label: $t('settings.mcpTransportStreamableHttp'), value: 'streamable-http' },
-                  ]" size="small" class="mcp-transport-select" />
-                </div>
-                <template v-if="srv.transport === 'stdio'">
-                  <n-input v-model:value="srv.command" :placeholder="$t('settings.mcpCommand')" size="small" />
-                  <n-input v-model:value="srv.args" type="textarea" :rows="2" :placeholder="$t('settings.mcpArgs')" size="small" spellcheck="false" />
-                  <n-input v-model:value="srv.env" type="textarea" :rows="2" :placeholder="$t('settings.mcpEnv')" size="small" spellcheck="false" />
-                </template>
-                <template v-else>
-                  <n-input v-model:value="srv.url" :placeholder="$t('settings.mcpUrl')" size="small" />
-                  <n-input v-model:value="srv.headers" type="textarea" :rows="2" :placeholder="$t('settings.mcpHeaders')" size="small" spellcheck="false" />
-                </template>
-                <div v-if="mcpStatusFor(srv).error" class="mcp-row-error">{{ mcpStatusFor(srv).error }}</div>
-              </div>
-              <div v-else-if="mcpStatusFor(srv).error" class="mcp-row-error" :title="mcpStatusFor(srv).error">{{ mcpStatusFor(srv).error }}</div>
-            </div>
-            <n-button size="small" dashed block @click="addMcpServer">{{ $t('settings.mcpAddServer') }}</n-button>
-          </div>
-          <!-- JSON mode -->
-          <n-input
-            v-else
-            v-model:value="mcpConfigText"
-            class="mcp-config-editor"
-            type="textarea"
-            :autosize="false"
-            :rows="10"
-            spellcheck="false"
-            placeholder='{"mcpServers":{"serviceName":{"enabled":true,"transport":"streamable-http","url":"https://...","headers":{"Authorization":"Bearer ***"}}}}'
-          />
-          <div v-if="mcpEditMode === 'json'" :class="['mcp-json-check', mcpConfigValid ? 'valid' : 'invalid']">
-            {{ mcpConfigValidationText }}
-          </div>
-          <div v-if="mcpEditMode === 'json'" class="mcp-status-list">
-            <div class="mcp-status-title">{{ $t('settings.mcpStatusTitle') }}</div>
-            <div v-if="!mcpServers.length" class="saved-model-empty">{{ $t('settings.mcpEmpty') }}</div>
-            <div v-for="srv in mcpServers" :key="srv.name" class="mcp-status-item">
-              <span :class="['mcp-dot', srv.status]"></span>
-              <span class="mcp-name">{{ srv.name }}</span>
-              <span class="mcp-status">{{ srv.status }}</span>
-              <span v-if="srv.transport" class="mcp-transport">{{ srv.transport }}</span>
-              <span class="mcp-tools">{{ $t('tools.count', { count: srv.toolCount || 0 }) }}</span>
-              <span v-if="srv.error" class="mcp-error" :title="srv.error">{{ srv.error }}</span>
+              <div v-if="mcpStatusFor(srv).error" class="mcp-list-error" :title="mcpStatusFor(srv).error">{{ mcpStatusFor(srv).error }}</div>
             </div>
           </div>
         </section>
@@ -783,6 +741,60 @@ Public License v3. See the LICENSE file for details.
       </n-space>
     </template>
   </n-modal>
+
+  <!-- MCP server editor sub-modal -->
+  <n-modal
+    :show="mcpEditorVisible"
+    preset="card"
+    :title="mcpEditorIndex >= 0 ? $t('settings.mcpEditServer') : $t('settings.mcpAddServerTitle')"
+    class="mcp-form-modal"
+    :style="modelFormModalStyle"
+    :mask-closable="false"
+    @update:show="(v) => { if (!v) mcpEditorVisible = false; }"
+  >
+    <n-form label-placement="top">
+      <n-grid :cols="2" :x-gap="12">
+        <n-form-item-gi :label="$t('settings.mcpServerName')" :span="1">
+          <n-input v-model:value="mcpEditorDraft.name" :placeholder="$t('settings.mcpServerName')" />
+        </n-form-item-gi>
+        <n-form-item-gi :label="$t('settings.mcpTransport')" :span="1">
+          <n-select
+            v-model:value="mcpEditorDraft.transport"
+            :options="[
+              { label: $t('settings.mcpTransportStdio'), value: 'stdio' },
+              { label: $t('settings.mcpTransportSse'), value: 'sse' },
+              { label: $t('settings.mcpTransportStreamableHttp'), value: 'streamable-http' },
+            ]"
+          />
+        </n-form-item-gi>
+        <template v-if="mcpEditorDraft.transport === 'stdio'">
+          <n-form-item-gi :label="$t('settings.mcpCommand')" :span="2">
+            <n-input v-model:value="mcpEditorDraft.command" :placeholder="$t('settings.mcpCommand')" spellcheck="false" />
+          </n-form-item-gi>
+          <n-form-item-gi :label="$t('settings.mcpArgs')" :span="2">
+            <n-input v-model:value="mcpEditorDraft.args" :placeholder="$t('settings.mcpArgsPlaceholder')" spellcheck="false" />
+          </n-form-item-gi>
+          <n-form-item-gi :label="$t('settings.mcpEnv')" :span="2">
+            <n-input v-model:value="mcpEditorDraft.env" type="textarea" :rows="2" :placeholder="$t('settings.mcpEnv')" spellcheck="false" />
+          </n-form-item-gi>
+        </template>
+        <template v-else>
+          <n-form-item-gi :label="$t('settings.mcpUrl')" :span="2">
+            <n-input v-model:value="mcpEditorDraft.url" :placeholder="$t('settings.mcpUrl')" spellcheck="false" />
+          </n-form-item-gi>
+          <n-form-item-gi :label="$t('settings.mcpHeaders')" :span="2">
+            <n-input v-model:value="mcpEditorDraft.headers" type="textarea" :rows="2" :placeholder="$t('settings.mcpHeaders')" spellcheck="false" />
+          </n-form-item-gi>
+        </template>
+      </n-grid>
+    </n-form>
+    <template #footer>
+      <n-space justify="end">
+        <n-button @click="mcpEditorVisible = false">{{ $t('common.cancel') }}</n-button>
+        <n-button type="primary" @click="commitMcpEditor">{{ $t('common.save') }}</n-button>
+      </n-space>
+    </template>
+  </n-modal>
 </template>
 
 <script setup>
@@ -808,7 +820,7 @@ import { Browser, Events } from '@wailsio/runtime';
 import { unwrapWailsEvent } from '../utils/wailsEvent.mjs';
 import {
   GetMcpConfig, GetMcpServers, SaveMcpConfig, ReconcileMcpServers,
-  ListSkills, ActivateSkill, DeactivateSkill, ClearSkills, GetActiveSkills,
+  ListSkills, ActivateSkill, DeactivateSkill, GetActiveSkills,
   ListTools, OpenPathInFileManager,
   TestModelConnection, FetchModelList,
   DetectSystemProxy, TestProxy,
@@ -1547,8 +1559,8 @@ const mcpConfigText = ref('');
 const mcpLastAppliedJson = ref('');
 const mcpServers = ref([]);
 const mcpLoading = ref(false);
-const mcpEditMode = ref('form'); // 'form' or 'json'
 const mcpFormServers = ref([]); // array of {name, command, args, env, transport, url, headers, enabled}
+const mcpImportInput = ref(null);
 // 稳定 key 生成器：卡片支持删除/新增，索引 key 会让 Vue 就地复用 DOM，
 // n-switch/n-select 等内部状态可能错位到相邻卡片上
 let mcpServerKeyCounter = 0;
@@ -1570,8 +1582,6 @@ const mcpConfigParseResult = computed(() => {
     return { valid: false, text: t('settings.jsonError', { error: e.message }) };
   }
 });
-const mcpConfigValid = computed(() => mcpConfigParseResult.value.valid);
-const mcpConfigValidationText = computed(() => mcpConfigParseResult.value.text);
 
 function cloneConfigDraft(source) {
   const next = JSON.parse(JSON.stringify(source || {}));
@@ -1616,8 +1626,9 @@ async function loadMcpConfig() {
 async function saveMcpConfigText() {
   mcpLoading.value = true;
   try {
-    if (!mcpConfigValid.value) {
-      message.warning(mcpConfigValidationText.value);
+    const parsed = mcpConfigParseResult.value;
+    if (!parsed.valid) {
+      message.warning(parsed.text);
       return;
     }
     await SaveMcpConfig(mcpConfigText.value);
@@ -1635,10 +1646,10 @@ async function saveMcpConfigText() {
   }
 }
 
-// Auto-apply: switch toggles, row edits committed via collapse, and deletions
-// save and reconnect without an explicit apply button. Triggers are
-// serialized so overlapping restarts cannot race, and a no-op change (the
-// serialized config equals what is already applied) skips the reconnect.
+// Auto-apply: switch toggles, editor commits, and deletions save and
+// reconnect without an explicit apply button. Triggers are serialized so
+// overlapping restarts cannot race, and a no-op change (the serialized config
+// equals what is already applied) skips the reconnect.
 let mcpApplyChain = Promise.resolve();
 
 function autoApplyMcpConfig() {
@@ -1647,27 +1658,17 @@ function autoApplyMcpConfig() {
   mcpApplyChain = mcpApplyChain.then(() => saveMcpConfigText()).catch(() => {});
 }
 
-function switchMcpMode(mode) {
-  if (mode === 'form') {
-    // Sync from JSON to form
-    syncJsonToForm();
-  } else {
-    // Sync from form to JSON
-    syncFormToJson();
-  }
-  mcpEditMode.value = mode;
-}
-
 function syncJsonToForm() {
   try {
     const parsed = JSON.parse(mcpConfigText.value || '{}');
     const servers = parsed.mcpServers || {};
     mcpFormServers.value = Object.entries(servers).map(([name, cfg]) => ({
       _key: nextMcpServerKey(),
-      _editing: false,
       name,
       command: cfg.command || '',
-      args: (cfg.args || []).join('\n'),
+      // 模态框参数输入框是单行空格分隔格式；历史多行写法（每行一个参数）
+      // 在这里一并归一化为空格分隔，保存时再按空白切分。
+      args: (cfg.args || []).join(' '),
       env: Object.entries(cfg.env || {}).map(([k, v]) => `${k}=${v}`).join('\n'),
       transport: normalizeMcpTransport(cfg),
       url: cfg.url || '',
@@ -1695,7 +1696,7 @@ function syncFormToJson() {
       if (Object.keys(headers).length) cfg.headers = headers;
     } else {
       if (srv.command?.trim()) cfg.command = srv.command.trim();
-      const args = (srv.args || '').split('\n').map(a => a.trim()).filter(Boolean);
+      const args = String(srv.args || '').split(/\s+/).map((a) => a.trim()).filter(Boolean);
       if (args.length) cfg.args = args;
       const env = {};
       (srv.env || '').split('\n').forEach(line => {
@@ -1718,10 +1719,15 @@ function normalizeMcpTransport(cfg = {}) {
   return 'stdio';
 }
 
-function addMcpServer() {
-  mcpFormServers.value.push({
+// MCP server editor modal: adding and editing both happen in a sub-modal
+// (same pattern as the model editor), committed on Save.
+const mcpEditorVisible = ref(false);
+const mcpEditorIndex = ref(-1);
+const mcpEditorDraft = reactive(blankMcpServerForm());
+
+function blankMcpServerForm() {
+  return {
     _key: nextMcpServerKey(),
-    _editing: true,
     name: '',
     command: '',
     args: '',
@@ -1730,20 +1736,79 @@ function addMcpServer() {
     url: '',
     headers: '',
     enabled: true,
+  };
+}
+
+function openMcpEditor(index) {
+  const source = index >= 0 ? mcpFormServers.value[index] : null;
+  mcpEditorIndex.value = index;
+  // 编辑沿用原行的稳定 _key，提交替换后卡片 DOM 不会错位复用。
+  Object.assign(mcpEditorDraft, blankMcpServerForm(), source ? JSON.parse(JSON.stringify(source)) : null);
+  mcpEditorVisible.value = true;
+}
+
+function commitMcpEditor() {
+  if (!String(mcpEditorDraft.name || '').trim()) {
+    message.warning(t('settings.mcpNameRequired'));
+    return;
+  }
+  const entry = JSON.parse(JSON.stringify(mcpEditorDraft));
+  if (mcpEditorIndex.value >= 0) {
+    mcpFormServers.value.splice(mcpEditorIndex.value, 1, entry);
+  } else {
+    mcpFormServers.value.push(entry);
+  }
+  mcpEditorVisible.value = false;
+  autoApplyMcpConfig();
+}
+
+function openMcpImport() {
+  if (!mcpImportInput.value) return;
+  mcpImportInput.value.value = '';
+  mcpImportInput.value.click();
+}
+
+async function importMcpConfig(event) {
+  const input = event?.target;
+  const file = input?.files?.[0];
+  if (!file) return;
+  try {
+    if (file.size > 2 * 1024 * 1024) throw Object.assign(new Error('FILE_TOO_LARGE'), { code: 'FILE_TOO_LARGE' });
+    const parsed = JSON.parse(await file.text());
+    if (!parsed || typeof parsed !== 'object' || typeof parsed.mcpServers !== 'object' || parsed.mcpServers === null || Array.isArray(parsed.mcpServers)) {
+      throw Object.assign(new Error('SERVERS_REQUIRED'), { code: 'SERVERS_REQUIRED' });
+    }
+    mcpConfigText.value = JSON.stringify(parsed, null, 2);
+    syncJsonToForm();
+    // Reconcile compares parsed configs, so a formatting-only diff (different
+    // key order) keeps live connections and only real changes reconnect.
+    autoApplyMcpConfig();
+  } catch (err) {
+    const code = String(err?.code || '');
+    if (code === 'FILE_TOO_LARGE') message.error(t('settings.modelImportError.FILE_TOO_LARGE'));
+    else if (code === 'SERVERS_REQUIRED') message.error(t('settings.mcpImportNeedsServers'));
+    else message.error(t('settings.modelImportError.JSON_INVALID'));
+  } finally {
+    if (input) input.value = '';
+  }
+}
+
+function exportMcpConfig() {
+  syncFormToJson();
+  const content = `${JSON.stringify(JSON.parse(mcpConfigText.value || '{}'), null, 2)}\n`;
+  saveTextFile({
+    filename: `ally-mcp-${new Date().toISOString().slice(0, 10)}.json`,
+    content,
+    filterName: 'JSON (*.json)',
+    filterPattern: '*.json',
+  }).then((result) => {
+    if (result.saved) message.success(t('settings.mcpExportSuccess', { count: mcpFormServers.value.length }));
   });
 }
 
 function removeMcpServer(index) {
   mcpFormServers.value.splice(index, 1);
   autoApplyMcpConfig();
-}
-
-function toggleMcpEdit(index) {
-  const srv = mcpFormServers.value[index];
-  if (!srv) return;
-  srv._editing = !srv._editing;
-  // Collapsing a row commits its fields: the collapse acts as "done editing".
-  if (!srv._editing) autoApplyMcpConfig();
 }
 
 function toggleMcpEnabled(srv, value) {
@@ -1781,6 +1846,17 @@ function transportLabel(transport) {
   return 'settings.mcpTransportStdio';
 }
 
+// 来源统计标签：按 source 分组计数（project / user / builtin），
+// 仅显示当前扫描范围内的来源（计数为 0 的来源不出现）。
+const skillSourceCounts = computed(() => {
+  const counts = {};
+  for (const sk of availableSkills.value) {
+    const source = sk.source || 'unknown';
+    counts[source] = (counts[source] || 0) + 1;
+  }
+  return Object.entries(counts).map(([source, count]) => ({ source, count }));
+});
+
 // Skills state
 const availableSkills = ref([]);
 const activeSkillNames = ref([]);
@@ -1796,12 +1872,6 @@ const sortedSkills = computed(() => {
     if (!aBuiltin && bBuiltin) return 1;
     return String(a.name).localeCompare(b.name);
   });
-});
-
-// Built-in skills are always on and excluded from the bulk sweep, so the
-// disable-all button only cares about active non-builtin skills.
-const toggleableActiveSkillCount = computed(() => {
-  return availableSkills.value.filter((sk) => sk.source !== 'builtin' && isSkillActive(sk.name, activeSkillNames.value)).length;
 });
 
 async function handleOpenSkillPath(sk) {
@@ -1846,17 +1916,6 @@ async function toggleSkillFromSettings(skill, active) {
     }));
   } finally {
     skillToggleInFlight.value = '';
-  }
-}
-
-async function clearLoadedSkills(announce = true) {
-  try {
-    await ClearSkills();
-    await refreshSkillState();
-    emit('skills-changed');
-    message.success(t('app.skills.deactivatedToast'));
-  } catch (err) {
-    message.error(t('app.skills.deactivateFailed', { error: err }));
   }
 }
 
@@ -2508,6 +2567,19 @@ watch(() => props.visible, (visible) => {
   color: var(--ally-text-muted);
 }
 
+.skill-summary-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.skill-summary-row .skill-badge {
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 10px;
+}
+
 .skill-badge.user {
   background: #2a3a5c;
   color: #8ab4ff;
@@ -2567,13 +2639,6 @@ watch(() => props.visible, (visible) => {
   text-decoration: underline;
 }
 
-.mcp-config-editor {
-  font-family: var(--ally-mono-font);
-  font-size: var(--ally-sub-font-size);
-  line-height: 1.5;
-  margin-bottom: 4px;
-}
-
 .mcp-form-mode {
   display: flex;
   flex-direction: column;
@@ -2607,10 +2672,6 @@ watch(() => props.visible, (visible) => {
   flex-direction: column;
   gap: 8px;
   background: var(--ally-hover-faint);
-}
-
-.mcp-server-row.expanded {
-  border-color: var(--ally-border-strong);
 }
 
 .mcp-row-main {
@@ -2673,64 +2734,17 @@ watch(() => props.visible, (visible) => {
   text-overflow: ellipsis;
 }
 
-.mcp-row-editor {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding-top: 4px;
-  border-top: 1px solid var(--ally-border-subtle);
-}
-
-.mcp-editor-line {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.mcp-server-name-input {
-  flex: 1;
-  min-width: 140px;
-}
-
-.mcp-transport-select {
-  width: 164px;
-  flex: none;
-}
-
-.mcp-status-title {
+.mcp-list-error {
   font-size: 12px;
-  color: var(--ally-text-muted);
-  margin-bottom: 2px;
-}
-
-.mcp-json-check {
-  font-size: 12px;
-  padding: 2px 0 6px;
-}
-
-.mcp-json-check.valid {
-  color: var(--ally-success-pale);
-}
-
-.mcp-json-check.invalid {
   color: var(--ally-danger-pale);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.mcp-status-list {
-  margin-top: 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.mcp-status-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: var(--ally-sub-font-size);
-  padding: 6px 8px;
-  background: var(--ally-hover-faint);
-  border-radius: 6px;
+.mcp-form-modal {
+  width: 580px;
+  max-width: calc(100vw - 48px);
 }
 
 .mcp-dot {
@@ -2767,30 +2781,10 @@ watch(() => props.visible, (visible) => {
   color: var(--ally-text-primary);
 }
 
-.mcp-status {
-  color: var(--ally-text-muted);
-  font-size: 12px;
-}
-
-.mcp-transport {
-  color: var(--ally-info-soft);
-  font-family: var(--ally-mono-font);
-  font-size: 11px;
-}
-
 .mcp-tools {
   color: var(--ally-text-faint);
   font-size: 11px;
   margin-left: auto;
-}
-
-.mcp-error {
-  color: var(--ally-danger-pale);
-  font-size: 11px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 200px;
 }
 
 .api-header-actions {
@@ -2917,7 +2911,8 @@ watch(() => props.visible, (visible) => {
 
 @media (max-width: 640px) {
   .config-modal,
-  .model-form-modal {
+  .model-form-modal,
+  .mcp-form-modal {
     max-width: calc(100vw - 24px);
   }
 
@@ -2927,9 +2922,7 @@ watch(() => props.visible, (visible) => {
     flex-direction: column;
   }
 
-  .mcp-toolbar-actions,
-  .mcp-server-name-input,
-  .mcp-transport-select {
+  .mcp-toolbar-actions {
     width: 100%;
   }
 
