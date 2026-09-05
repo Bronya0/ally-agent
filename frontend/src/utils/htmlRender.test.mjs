@@ -20,6 +20,8 @@ test('render document height measurement does not grow with iframe viewport heig
 
   assert.doesNotMatch(document, /html, body\s*\{[^}]*min-height:\s*100%/s);
   assert.match(document, /document\.body\.getBoundingClientRect\(\)\.height/);
+  assert.match(document, /echarts/);
+  assert.match(document, /window\.echarts\.init/);
   assert.equal(normalizeHtmlFrameHeight(201.2), 202);
   assert.equal(normalizeHtmlFrameHeight(600), 600);
   assert.equal(normalizeHtmlFrameHeight(601), 600);

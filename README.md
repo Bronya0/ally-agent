@@ -18,6 +18,8 @@ Download packages for Windows, macOS, and Linux from the [Releases page](https:/
 
 ![Ally screenshot](docs/img2.jpg)
 
+![Ally screenshot](docs/img3.jpg)
+
 ## Features
 
 - Work with local projects through natural-language conversations, attachments, and persistent sessions

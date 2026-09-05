@@ -301,14 +301,14 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"expression"},
 		}),
-		functionTool("render_html", "Render a self-contained HTML snippet inline in the chat UI. Use ONLY for interactive widgets or custom visualizations Mermaid and Markdown cannot express (calculators, data explorers, styled mockups, animated SVG). Do NOT use for diagrams, flowcharts, pie charts, or tables (use Mermaid and Markdown tables). Rendered in a sandboxed dark-theme iframe. Max 50,000 characters. No external resources.", map[string]any{
+		functionTool("render_html", "Render a self-contained HTML snippet inline in the chat UI. Use for interactive widgets, data explorers, styled mockups, animated SVG, or rich charts. Apache ECharts (global `echarts`) is pre-installed in the environment—do NOT fetch external scripts or styles. Rendered in a sandboxed dark-theme iframe. Max 50,000 characters.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"html": map[string]any{
 					"type":        "string",
 					"minLength":   1,
 					"maxLength":   50000,
-					"description": "Self-contained HTML snippet with inline CSS. No external scripts or resources. Use inline <style> tags for styling. SVG is supported for diagrams.",
+					"description": "Self-contained HTML snippet with inline CSS and JS. Global `echarts` is pre-loaded for rich data visualizations (e.g. line, bar, pie, scatter, radar, heatmap). Give chart containers explicit dimensions (e.g. style=\"width:100%;height:350px;\"). No external scripts or resources.",
 				},
 				"title": map[string]any{
 					"type":        "string",
@@ -387,6 +387,7 @@ var builtinToolExamples = map[string]string{
 	"ssh_credential":     `set password: {"action":"set","target":"root@47.120.8.34:/tmp/app","password":"<verbatim from user message>"}; set key file: {"action":"set","target":"root@example.com:/srv/app","keyPath":"F:/doc/keys/server.pem"}`,
 	"grep":               `{"pattern":"TODO|FIXME","path":"frontend/src","glob":"*.vue","maxMatches":100}`,
 	"read":               `one file: {"files":[{"path":"app.go"}]}; multiple files: {"files":[{"path":"app.go"},{"path":"main.go"}]}; range: {"files":[{"path":"services.go","startLine":1,"endLine":200}]}; tail: {"files":[{"path":"server.log","startLine":-200}]}`,
+	"render_html":        `{"html":"<div id=\"chart\" style=\"width:100%;height:350px;\"></div><script>const c=echarts.init(document.getElementById('chart'),'dark');c.setOption({title:{text:'Metrics'},xAxis:{data:['Mon','Tue','Wed','Thu','Fri']},yAxis:{},series:[{type:'bar',data:[12,34,56,78,90]}]});</script>"}`,
 	"subagent":           `{"task":"Inspect the authentication module and report concrete security issues.","role":"code reviewer","maxSteps":20,"description":"Review authentication"}`,
 }
 

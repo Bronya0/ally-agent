@@ -7,6 +7,8 @@
  * This file is part of ally-agent, licensed under the GNU General
  * Public License v3. See the LICENSE file for details.
  */
+import echartsRaw from 'echarts/dist/echarts.min.js?raw';
+
 export function normalizeHtmlFrameHeight(height) {
   const value = Number(height || 0);
   if (!Number.isFinite(value) || value <= 0) return 0;
@@ -42,6 +44,30 @@ export function buildHtmlRenderDocument(html, frameToken) {
   code { font-family: "SF Mono", "Fira Code", Consolas, monospace; font-size: 13px; }
   img { max-width: 100%; }
 </style>
+<script>
+${echartsRaw}
+</script>
+<script>
+(() => {
+  if (typeof window.echarts !== 'undefined') {
+    const origInit = window.echarts.init;
+    const charts = [];
+    window.echarts.init = function(dom, theme, opts) {
+      const chosenTheme = theme || 'dark';
+      const inst = origInit.call(this, dom, chosenTheme, opts);
+      charts.push(inst);
+      return inst;
+    };
+    window.addEventListener('resize', () => {
+      charts.forEach((c) => {
+        try {
+          if (c && !c.isDisposed()) c.resize();
+        } catch (_) {}
+      });
+    });
+  }
+})();
+</script>
 </head>
 <body>
 ${String(html || '')}
@@ -64,6 +90,11 @@ ${String(html || '')}
   new MutationObserver(reportHeight).observe(document.body, { childList: true, subtree: true, attributes: true });
   window.addEventListener('load', reportHeight);
   requestAnimationFrame(reportHeight);
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      parent.postMessage({ type: 'ally-html-escape', token }, '*');
+    }
+  }, true);
 })();
 <\/script>
 </body>

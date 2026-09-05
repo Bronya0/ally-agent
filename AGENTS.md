@@ -352,7 +352,7 @@ Built-in model-facing tools:
 | `subagent` | Spawn a sub-agent for a scoped task (requires a `role` name, shown as the card label and injected into the sub-agent system prompt) |
 | `scheduled_task` | Create, list, or delete temporary isolated Agent tasks for the current Ally process |
 | `skill` | Load an enabled skill |
-| `render_html` | Render a self-contained HTML snippet inline in the chat UI as a sandboxed srcdoc iframe (max 50k chars); mounted only after the tool completes so arguments can stream first |
+| `render_html` | Render a self-contained HTML snippet inline in the chat UI as a sandboxed srcdoc iframe (max 50k chars); includes pre-installed Apache ECharts (`echarts`) with auto-resize and dark theme support; mounted only after the tool completes so arguments can stream first |
 | `suggest` | Suggest 1–4 click-to-send follow-up chips; hidden tool (no running card), must be the only call in its batch, a single successful call ends the run |
 
 MCP tools are named:

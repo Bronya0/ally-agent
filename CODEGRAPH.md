@@ -219,7 +219,7 @@
 - DiffView.vue — diff 渲染：unified/split 双布局、聚类折叠、三来源（diffText/old+new/diffLines）；关键: parseDiffText, displayRows
 - GitDiffModal.vue — git diff 弹窗：文件树+目录折叠、DiffView 预览、按 branch/状态缓存；关键: loadDiff, buildTreeRows
 - ReadGroupCard.vue — read 多文件分组卡：树形前缀、行区间 chip；关键: entryChip, treePrefix
-- HtmlRenderCard.vue — render_html 卡片：流式尾预览，完成后挂 sandboxed srcdoc iframe + postMessage 高度上报；关键: handleFrameMessage
+- HtmlRenderCard.vue — render_html 卡片：流式尾预览，完成后挂 sandboxed srcdoc iframe（内嵌预装 ECharts）+ postMessage 高度上报，支持全屏模态（Esc 退出）；关键: handleFrameMessage, openFullscreen
 - WelcomeMessage.vue — 欢迎消息：头像+版本号+工具/MCP 信息表
 - AllyAvatar.vue — 品牌"竖瞳"眼睛头像：眨眼动画、随机搭话气泡、点击开樱花特效；关键: toggleSakura
 - AllyWordmark.vue — "Ally" 渐变文字标（纯样式）
@@ -256,7 +256,7 @@
 - planPanel.mjs — 计划面板条目编号与 in_progress 居中滚动量
 - fileInfo.mjs — 文件信息分区构建（大小/时间/哈希），弹框与面板共用
 - shellHighlight.mjs — 命令输出 shell 语法高亮；关键: highlightShellCommand
-- htmlRender.mjs — render_html 的 srcdoc 文档构建（CSP+postMessage 高度）与钳制
+- htmlRender.mjs — render_html 的 srcdoc 文档构建：内嵌 echarts.min.js（init 包装默认 dark 主题 + resize）、Esc 上报、CSP、postMessage 高度与钳制
 - markdownPreview.mjs — Markdown 内本地图片相对路径解析
 - versionCheck.mjs — 语义化版本比较；关键: isNewerReleaseVersion
 - wailsEvent.mjs — 解包 Wails v3 Events.On 回调外壳；关键: unwrapWailsEvent
