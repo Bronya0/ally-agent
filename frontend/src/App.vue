@@ -869,7 +869,10 @@ const FENCE_HIGHLIGHT_CACHE_LIMIT = 64;
 // 超长代码块的高亮 HTML 可达数百 KB，设源码长度上限防止缓存长期占用过多内存
 const FENCE_HIGHLIGHT_CACHE_MAX_CHARS = 8000;
 
+// 流式渲染期间跳过繁重的 highlight.js 正则语法高亮，保持纯文本显示；
+// 流式结束后的单次全量渲染自动恢复高亮，避免每帧对增长代码块重复分词消耗 CPU 与电量。
 function highlightFence(lang, content) {
+  if (markdownRenderStreaming) return null;
   const highlightLang = isShellLanguage(lang) ? 'bash' : lang;
   const knownLang = Boolean(highlightLang && hljs.getLanguage(highlightLang));
   if (!knownLang && markdownRenderStreaming) return null;
@@ -3969,6 +3972,7 @@ function bindRuntimeEvents() {
   runtimeEventsBound = true;
 
   onRuntimeEvent('run:start', (data) => {
+    clearRetryBanner(data);
     const sid = data?.sessionId || '';
     const session = sid ? sessions.value.find((item) => item.id === sid) || null : null;
     if (session) {
@@ -4021,14 +4025,19 @@ function bindRuntimeEvents() {
     message.warning(data.message, { duration: 10000 });
   });
 
+  function clearRetryBanner(data) {
+    if (!retryBanner.value) return;
+    const session = sessionByEvent(data);
+    if (session && session.id === activeSessionId.value) {
+      retryBanner.value = null;
+    }
+  }
+
   onRuntimeEvent('run:stream', (data) => {
     // Merged event: payload may carry content, reasoning, or both. Routing
     // both fields in one IPC halves event count vs separate run:delta +
     // run:reasoning emissions.
-    if (retryBanner.value) {
-      const session = sessionByTerminalEvent(data);
-      if (session && session.id === activeSessionId.value) retryBanner.value = null;
-    }
+    clearRetryBanner(data);
     queueStreamDelta(data);
   });
   onRuntimeEvent('run:inject', (data) => {
@@ -4044,17 +4053,11 @@ function bindRuntimeEvents() {
   // Legacy events kept for compatibility with older backend builds and with
   // session replay paths that still emit them individually.
   onRuntimeEvent('run:delta', (data) => {
-    if (retryBanner.value) {
-      const session = sessionByTerminalEvent(data);
-      if (session && session.id === activeSessionId.value) retryBanner.value = null;
-    }
+    clearRetryBanner(data);
     queueStreamDelta(data, 'content');
   });
   onRuntimeEvent('run:reasoning', (data) => {
-    if (retryBanner.value) {
-      const session = sessionByTerminalEvent(data);
-      if (session && session.id === activeSessionId.value) retryBanner.value = null;
-    }
+    clearRetryBanner(data);
     queueStreamDelta(data, 'reasoning');
   });
   onRuntimeEvent('run:retry', (data) => {
@@ -4074,6 +4077,7 @@ function bindRuntimeEvents() {
     };
   });
   onRuntimeEvent('run:image', (data) => {
+    clearRetryBanner(data);
     flushStreamBuffer(data.runId);
     const session = sessionByEvent(data);
     if (!session || !data?.dataUrl) return;
@@ -4120,6 +4124,7 @@ function bindRuntimeEvents() {
     if (session.id === activeSessionId.value) scrollMessagesToBottom();
   });
   const applyToolProgressEvent = (data) => {
+    clearRetryBanner(data);
     flushStreamBuffer(data.runId);
     const session = sessionByRunId(data.runId);
     if (!session) return;
@@ -8357,8 +8362,17 @@ function applyPlatformClass() {
   document.body.classList.add(`platform-${platform}`);
 }
 
+function handleVisibilityChange() {
+  if (document.hidden) {
+    document.documentElement.classList.add('app-hidden');
+  } else {
+    document.documentElement.classList.remove('app-hidden');
+  }
+}
+
 onMounted(async () => {
   applyPlatformClass();
+  document.addEventListener('visibilitychange', handleVisibilityChange);
   // Do not snapshot on window close. Only wait for writes already queued by a
   // successfully completed turn.
   window.addEventListener('keydown', handleGlobalKeydown, true);
@@ -8384,6 +8398,7 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
+  document.removeEventListener('visibilitychange', handleVisibilityChange);
   window.removeEventListener('keydown', handleGlobalKeydown, true);
   document.removeEventListener('pointerdown', handleMermaidOutsidePointerDown, true);
   document.removeEventListener('pointerdown', handleOverlayOutsidePointerDown, true);

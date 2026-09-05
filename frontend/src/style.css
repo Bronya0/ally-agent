@@ -4685,3 +4685,11 @@ code, pre {
 .edit-file-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); }
 .edit-file-content { margin-left: 14px; }
 .edit-file-content.no-header { margin-left: 0; }
+
+/* 窗口处于后台或最小化时强制暂停所有无限循环动画，允许 macOS 进入 App Nap 深度节能 */
+.app-hidden *,
+.app-hidden *::before,
+.app-hidden *::after {
+  animation-play-state: paused !important;
+}
+
