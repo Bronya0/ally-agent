@@ -26,7 +26,7 @@ import (
 	"testing"
 	"time"
 
-	oaresp "github.com/openai/openai-go/responses"
+	oaresp "github.com/openai/openai-go/v3/responses"
 	openai "github.com/sashabaranov/go-openai"
 )
 
@@ -1422,7 +1422,8 @@ func TestModelUsageFromResponsesCountsUncachedInputAsMiss(t *testing.T) {
 		InputTokens:  120,
 		OutputTokens: 8,
 		InputTokensDetails: oaresp.ResponseUsageInputTokensDetails{
-			CachedTokens: 0,
+			CachedTokens:     0,
+			CacheWriteTokens: 120,
 		},
 	})
 	if usage == nil {

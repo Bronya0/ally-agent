@@ -17,7 +17,7 @@ import (
 	"testing"
 
 	anthropic "github.com/anthropics/anthropic-sdk-go"
-	oa "github.com/openai/openai-go"
+	oa "github.com/openai/openai-go/v3"
 	legacyopenai "github.com/sashabaranov/go-openai"
 )
 
@@ -164,30 +164,16 @@ func TestOpenAIResponsesGPT56PromptCacheRequest(t *testing.T) {
 		MaxTokens:               1024,
 		responsesPromptCacheKey: cacheKey,
 	}
-	body, explicitPromptCache := buildOpenAIResponsesRequest(cfg, "gpt-5.6-sol", []legacyopenai.ChatCompletionMessage{
+	body := buildOpenAIResponsesRequest(cfg, "gpt-5.6-sol", []legacyopenai.ChatCompletionMessage{
 		{Role: legacyopenai.ChatMessageRoleSystem, Content: "stable system context"},
 		{Role: legacyopenai.ChatMessageRoleUser, Content: "inspect the cache"},
 	}, nil)
-	if !explicitPromptCache {
-		t.Fatal("GPT-5.6 official Responses request did not enable explicit prompt caching")
-	}
 
 	request := marshalResponsesRequest(t, body)
 	if got, _ := request["prompt_cache_key"].(string); got != cacheKey {
 		t.Fatalf("prompt_cache_key = %q, want %q", got, cacheKey)
 	}
-	items, ok := request["input"].([]any)
-	if !ok || len(items) == 0 {
-		t.Fatalf("input = %#v, want cache anchor followed by request content", request["input"])
-	}
-	first, ok := items[0].(map[string]any)
-	if !ok || first["role"] != "developer" {
-		t.Fatalf("first input item = %#v, want developer cache anchor", items[0])
-	}
-	if err := applyOpenAIResponsesPromptCacheOptions(request); err != nil {
-		t.Fatalf("applyOpenAIResponsesPromptCacheOptions() error = %v", err)
-	}
-	options, ok := request["prompt_cache_options"].(map[string]string)
+	options, ok := request["prompt_cache_options"].(map[string]any)
 	if !ok || options["mode"] != "explicit" {
 		t.Fatalf("prompt_cache_options = %#v, want explicit mode", request["prompt_cache_options"])
 	}
@@ -203,8 +189,8 @@ func TestOpenAIResponsesPromptCacheKeyFollowsCodexForCompatibleEndpoints(t *test
 		cfg             ConfigState
 		model           string
 		wantKey         bool
-		wantExplicit    bool
 		wantCacheAnchor bool
+		wantExplicitOpt bool
 	}{
 		{
 			name:            "older official model",
@@ -212,6 +198,7 @@ func TestOpenAIResponsesPromptCacheKeyFollowsCodexForCompatibleEndpoints(t *test
 			model:           "gpt-5.5",
 			wantKey:         true,
 			wantCacheAnchor: false,
+			wantExplicitOpt: false,
 		},
 		{
 			name:            "custom compatible endpoint",
@@ -219,14 +206,15 @@ func TestOpenAIResponsesPromptCacheKeyFollowsCodexForCompatibleEndpoints(t *test
 			model:           "gpt-5.6",
 			wantKey:         true,
 			wantCacheAnchor: false,
+			wantExplicitOpt: false,
 		},
 		{
 			name:            "official GPT-5.6",
 			cfg:             ConfigState{APIFormat: apiFormatOpenAIResponses, BaseURL: defaultOpenAIResponsesURL, responsesPromptCacheKey: cacheKey},
 			model:           "gpt-5.6",
 			wantKey:         true,
-			wantExplicit:    true,
 			wantCacheAnchor: true,
+			wantExplicitOpt: true,
 		},
 		{
 			name:  "missing session key",
@@ -236,13 +224,10 @@ func TestOpenAIResponsesPromptCacheKeyFollowsCodexForCompatibleEndpoints(t *test
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			body, explicitPromptCache := buildOpenAIResponsesRequest(tt.cfg, tt.model, []legacyopenai.ChatCompletionMessage{{
+			body := buildOpenAIResponsesRequest(tt.cfg, tt.model, []legacyopenai.ChatCompletionMessage{{
 				Role:    legacyopenai.ChatMessageRoleUser,
 				Content: "hello",
 			}}, nil)
-			if explicitPromptCache != tt.wantExplicit {
-				t.Fatalf("explicit prompt caching = %v, want %v", explicitPromptCache, tt.wantExplicit)
-			}
 			request := marshalResponsesRequest(t, body)
 			gotKey, hasKey := request["prompt_cache_key"].(string)
 			if hasKey != tt.wantKey || (tt.wantKey && gotKey != cacheKey) {
@@ -251,8 +236,9 @@ func TestOpenAIResponsesPromptCacheKeyFollowsCodexForCompatibleEndpoints(t *test
 			if responsesRequestHasCacheAnchorText(request) != tt.wantCacheAnchor {
 				t.Fatalf("cache anchor present = %v, want %v: %#v", responsesRequestHasCacheAnchorText(request), tt.wantCacheAnchor, request["input"])
 			}
-			if _, ok := request["prompt_cache_options"]; ok {
-				t.Fatalf("prompt_cache_options must be injected only by the explicit GPT-5.6 stream path: %#v", request)
+			_, hasOpt := request["prompt_cache_options"]
+			if hasOpt != tt.wantExplicitOpt {
+				t.Fatalf("prompt_cache_options present = %v, want %v: %#v", hasOpt, tt.wantExplicitOpt, request["prompt_cache_options"])
 			}
 		})
 	}
@@ -314,17 +300,6 @@ func TestOpenAIResponsesPromptCacheKeyIsOpaqueAndStable(t *testing.T) {
 	}
 }
 
-func TestApplyOpenAIResponsesPromptCacheOptionsRequiresAnchor(t *testing.T) {
-	err := applyOpenAIResponsesPromptCacheOptions(map[string]any{
-		"input": []any{map[string]any{
-			"role":    "developer",
-			"content": []any{map[string]any{"type": "input_text", "text": "ordinary content"}},
-		}},
-	})
-	if err == nil {
-		t.Fatal("applyOpenAIResponsesPromptCacheOptions() succeeded without an anchor")
-	}
-}
 
 func TestNormalizeToolCallsPreservesRawArgumentsForExecutionRewrite(t *testing.T) {
 	input := []legacyopenai.ToolCall{

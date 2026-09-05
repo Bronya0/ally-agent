@@ -23,9 +23,9 @@ import (
 
 	anthropic "github.com/anthropics/anthropic-sdk-go"
 	anthropicoption "github.com/anthropics/anthropic-sdk-go/option"
-	oa "github.com/openai/openai-go"
-	"github.com/openai/openai-go/packages/ssestream"
-	oaresp "github.com/openai/openai-go/responses"
+	oa "github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/packages/ssestream"
+	oaresp "github.com/openai/openai-go/v3/responses"
 	legacyopenai "github.com/sashabaranov/go-openai"
 )
 
@@ -999,10 +999,10 @@ func isIncompleteStreamJSON(err error) bool {
 }
 
 func (a *App) streamOpenAIResponses(ctx context.Context, cfg ConfigState, model string, messages []legacyopenai.ChatCompletionMessage, tools []legacyopenai.Tool, onEvent func(modelStreamEvent)) (*modelStreamResult, error) {
-	body, explicitPromptCache := buildOpenAIResponsesRequest(cfg, model, messages, tools)
+	body := buildOpenAIResponsesRequest(cfg, model, messages, tools)
 
 	maxRetries := effectiveLLMRetries(cfg)
-	result, emitted, err := a.openAIResponsesStreamAttempt(ctx, cfg, body, explicitPromptCache, onEvent)
+	result, emitted, err := a.openAIResponsesStreamAttempt(ctx, cfg, body, onEvent)
 	// 只重试"尚未产出任何输出"的失败:建流失败,或消费阶段在产出内容前
 	// 失败(流内 error/response.failed 事件等)。此时重试无重复输出风险;
 	// 已产出内容的中断交给上层 runChat 做整轮重试。
@@ -1014,7 +1014,7 @@ func (a *App) streamOpenAIResponses(ctx context.Context, cfg ConfigState, model 
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
-		result, emitted, err = a.openAIResponsesStreamAttempt(ctx, cfg, body, explicitPromptCache, onEvent)
+		result, emitted, err = a.openAIResponsesStreamAttempt(ctx, cfg, body, onEvent)
 	}
 	if err != nil {
 		return nil, err
@@ -1025,8 +1025,8 @@ func (a *App) streamOpenAIResponses(ctx context.Context, cfg ConfigState, model 
 // openAIResponsesStreamAttempt 执行一次完整的 Responses 建流与消费。第二个
 // 返回值报告本次尝试是否已产出输出(文本/推理/工具调用/图片任一非空),
 // 调用方据此判定适配器内重试是否安全(无输出则重试不会造成重复)。
-func (a *App) openAIResponsesStreamAttempt(ctx context.Context, cfg ConfigState, body oaresp.ResponseNewParams, explicitPromptCache bool, onEvent func(modelStreamEvent)) (*modelStreamResult, bool, error) {
-	stream, err := newOpenAIResponsesSSEStream(ctx, cfg, body, explicitPromptCache)
+func (a *App) openAIResponsesStreamAttempt(ctx context.Context, cfg ConfigState, body oaresp.ResponseNewParams, onEvent func(modelStreamEvent)) (*modelStreamResult, bool, error) {
+	stream, err := newOpenAIResponsesSSEStream(ctx, cfg, body)
 	if err != nil {
 		return nil, false, err
 	}
@@ -1204,7 +1204,7 @@ func openAIResponsesPromptCacheKey(sessionID string) string {
 	return fmt.Sprintf("ally:%x", sum[:16])
 }
 
-func buildOpenAIResponsesRequest(cfg ConfigState, model string, messages []legacyopenai.ChatCompletionMessage, tools []legacyopenai.Tool) (oaresp.ResponseNewParams, bool) {
+func buildOpenAIResponsesRequest(cfg ConfigState, model string, messages []legacyopenai.ChatCompletionMessage, tools []legacyopenai.Tool) oaresp.ResponseNewParams {
 	instructions, inputItems := buildOpenAIResponsesInput(messages)
 	cacheKey := strings.TrimSpace(cfg.responsesPromptCacheKey)
 	explicitPromptCache := supportsOpenAIResponsesGPT56PromptCaching(cfg, model)
@@ -1212,11 +1212,21 @@ func buildOpenAIResponsesRequest(cfg ConfigState, model string, messages []legac
 		inputItems = appendOpenAIResponsesPromptCacheAnchor(inputItems)
 	}
 	body := oaresp.ResponseNewParams{
-		Model:             oaresp.ResponsesModel(model),
-		Input:             oaresp.ResponseNewParamsInputUnion{OfInputItemList: inputItems},
-		MaxOutputTokens:   oa.Int(int64(cfg.MaxTokens)),
-		ParallelToolCalls: oa.Bool(true),
-		Store:             oa.Bool(false),
+		Model:           oaresp.ResponsesModel(model),
+		Input:           oaresp.ResponseNewParamsInputUnion{OfInputItemList: inputItems},
+		MaxOutputTokens: oa.Int(int64(cfg.MaxTokens)),
+	}
+	if explicitPromptCache {
+		body.PromptCacheOptions = oaresp.ResponseNewParamsPromptCacheOptions{
+			Mode: "explicit",
+		}
+	}
+	// Store and ParallelToolCalls are OpenAI-official fields that
+	// compatible gateways may reject with 400 ("unsupported field").
+	// Gate them behind the official-endpoint check so relays stay happy.
+	if isOfficialOpenAIResponsesEndpoint(cfg) {
+		body.ParallelToolCalls = oa.Bool(true)
+		body.Store = oa.Bool(false)
 	}
 	// Thinking strength for the Responses API (reasoning.effort). The SDK
 	// type is string-backed, so the normalized selection is sent unchanged,
@@ -1243,7 +1253,7 @@ func buildOpenAIResponsesRequest(cfg ConfigState, model string, messages []legac
 	if cacheKey != "" {
 		body.PromptCacheKey = oa.String(cacheKey)
 	}
-	return body, explicitPromptCache
+	return body
 }
 
 func supportsOpenAIResponsesGPT56PromptCaching(cfg ConfigState, model string) bool {
@@ -1254,10 +1264,12 @@ func supportsOpenAIResponsesGPT56PromptCaching(cfg ConfigState, model string) bo
 }
 
 func appendOpenAIResponsesPromptCacheAnchor(input oaresp.ResponseInputParam) oaresp.ResponseInputParam {
+	anchorContent := oaresp.ResponseInputContentParamOfInputText(openAIResponsesPromptCacheAnchorText)
+	if anchorContent.OfInputText != nil {
+		anchorContent.OfInputText.PromptCacheBreakpoint = oaresp.NewResponseInputTextPromptCacheBreakpointParam()
+	}
 	anchor := oaresp.ResponseInputItemParamOfMessage(
-		oaresp.ResponseInputMessageContentListParam{
-			oaresp.ResponseInputContentParamOfInputText(openAIResponsesPromptCacheAnchorText),
-		},
+		oaresp.ResponseInputMessageContentListParam{anchorContent},
 		oaresp.EasyInputMessageRoleDeveloper,
 	)
 	out := make(oaresp.ResponseInputParam, len(input)+1)
@@ -1279,7 +1291,7 @@ type openAIResponsesSSEStream struct {
 	decoder ssestream.Decoder
 }
 
-func newOpenAIResponsesSSEStream(ctx context.Context, cfg ConfigState, body oaresp.ResponseNewParams, explicitPromptCache bool) (*openAIResponsesSSEStream, error) {
+func newOpenAIResponsesSSEStream(ctx context.Context, cfg ConfigState, body oaresp.ResponseNewParams) (*openAIResponsesSSEStream, error) {
 	payload, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
@@ -1289,11 +1301,6 @@ func newOpenAIResponsesSSEStream(ctx context.Context, cfg ConfigState, body oare
 		return nil, err
 	}
 	requestBody["stream"] = true
-	if explicitPromptCache {
-		if err := applyOpenAIResponsesPromptCacheOptions(requestBody); err != nil {
-			return nil, err
-		}
-	}
 	payload, err = json.Marshal(requestBody)
 	if err != nil {
 		return nil, err
@@ -1338,34 +1345,12 @@ func newOpenAIResponsesSSEStream(ctx context.Context, cfg ConfigState, body oare
 	return &openAIResponsesSSEStream{decoder: decoder}, nil
 }
 
-// The SDK version currently used by Ally exposes prompt_cache_key but not the
-// GPT-5.6 cache-breakpoint fields. Inject them only after serialization, and
-// only for the stable developer anchor added by buildOpenAIResponsesRequest.
-func applyOpenAIResponsesPromptCacheOptions(requestBody map[string]any) error {
-	items, ok := requestBody["input"].([]any)
-	if !ok {
-		return errors.New("responses prompt-cache anchor input was not serialized")
+func responseInputItemParamOfFunctionCallOutput(callID, output string) oaresp.ResponseInputItemUnionParam {
+	p := oaresp.ResponseInputItemParamOfFunctionCallOutput(output)
+	if p.OfFunctionCallOutput != nil && strings.TrimSpace(callID) != "" {
+		p.OfFunctionCallOutput.CallID = oa.String(callID)
 	}
-	for _, rawItem := range items {
-		item, ok := rawItem.(map[string]any)
-		if !ok || item["role"] != string(oaresp.EasyInputMessageRoleDeveloper) {
-			continue
-		}
-		parts, ok := item["content"].([]any)
-		if !ok {
-			continue
-		}
-		for _, rawPart := range parts {
-			part, ok := rawPart.(map[string]any)
-			if !ok || part["type"] != "input_text" || part["text"] != openAIResponsesPromptCacheAnchorText {
-				continue
-			}
-			part["prompt_cache_breakpoint"] = map[string]string{"mode": "explicit"}
-			requestBody["prompt_cache_options"] = map[string]string{"mode": "explicit"}
-			return nil
-		}
-	}
-	return errors.New("responses prompt-cache anchor was not found")
+	return p
 }
 
 func (s *openAIResponsesSSEStream) Next() bool {
@@ -1648,7 +1633,7 @@ func buildOpenAIResponsesInput(messages []legacyopenai.ChatCompletionMessage) (s
 			}
 		case legacyopenai.ChatMessageRoleTool:
 			if strings.TrimSpace(m.ToolCallID) != "" {
-				input = append(input, oaresp.ResponseInputItemParamOfFunctionCallOutput(m.ToolCallID, m.Content))
+				input = append(input, responseInputItemParamOfFunctionCallOutput(m.ToolCallID, m.Content))
 			}
 		}
 	}
@@ -1982,8 +1967,8 @@ func updateToolCallFromResponsesItem(call *legacyopenai.ToolCall, item oaresp.Re
 	if item.Name != "" {
 		call.Function.Name = item.Name
 	}
-	if item.Arguments != "" {
-		call.Function.Arguments = item.Arguments
+	if args := strings.TrimSpace(item.Arguments.OfString); args != "" {
+		call.Function.Arguments = args
 	}
 }
 
@@ -2235,7 +2220,7 @@ func modelUsageFromResponses(usage oaresp.ResponseUsage) *modelUsage {
 		usage.InputTokens,
 		usage.OutputTokens,
 		usage.InputTokensDetails.CachedTokens,
-		0,
+		usage.InputTokensDetails.CacheWriteTokens,
 	)
 }
 
