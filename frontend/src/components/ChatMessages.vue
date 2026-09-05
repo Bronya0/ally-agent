@@ -59,7 +59,7 @@ Public License v3. See the LICENSE file for details.
             <div class="reasoning-header">
               <span class="reasoning-label">
                 <span class="reasoning-title reasoning-title-thinking">Thinking</span>
-                <span class="reasoning-tokens">{{ fmtK(Math.max(1, Math.round((msg.reasoningChars || 0) / 3))) }} tokens</span>
+                <span class="reasoning-tokens">{{ fmtTokens(Math.max(1, Math.round((msg.reasoningChars || 0) / 3))) }} tokens</span>
               </span>
             </div>
           </div>
