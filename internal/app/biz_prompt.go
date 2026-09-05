@@ -178,6 +178,7 @@ func buildSystemPromptParts(allSkills []SkillDefinition, workspaceRoot string, e
 		"- When comparing entities across multiple dimensions, use Markdown tables instead of lists.\n" +
 		"- Put code symbols and file paths in backticks: `getSha256()`, `src/app.ts`.\n" +
 		"- The UI renders KaTeX: use `$...$` for inline math and `$$...$$` for display math.\n" +
+		"- Mermaid diagrams render in Ally's ice-cream pastel theme (soft pastel fills + same-hue saturated strokes + neutral blue-gray connectors). For color semantics, prefer the predefined node classes `:::user` / `:::core` / `:::llm` / `:::prov` / `:::ev` / `:::exec` / `:::fin` / `:::risk` (orange entry / blue core chain / purple LLM request / violet provider / cyan events / green tool execution / gray finish / red dashed risk); these names are reserved in Ally's renderer, so same-name `classDef` cannot override them. For any custom color follow the same recipe, e.g. `classDef mine fill:#e3efff,stroke:#4c7dff,color:#1d3f8f`.\n" +
 		"- Do not place a Markdown header before the opening sentence; answer directly first.\n" +
 		"- **Plain language**: lead with the conclusion; keep details at the shallowest level that answers the question, and don't cram in too many project-specific proper nouns.\n" +
 		"- **Concrete data examples**: explain with a real input/output pair or numbers when possible, e.g. \"512KB cap: `0→256KB→512KB→256KB`\". Keep it to one short example.\n" +
