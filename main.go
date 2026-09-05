@@ -10,6 +10,7 @@ package main
 
 import (
 	"embed"
+	"log/slog"
 	"os"
 
 	backend "ally-dev/internal/app"
@@ -39,10 +40,25 @@ func main() {
 	notifier := backend.NewSafeNotificationsService()
 	backend.SetNotifier(app, notifier)
 
+	// Error logging: open ~/.ally_agent/logs/error.log and route ALL errors
+	// (wails system + backend panics + frontend-reported) through one on-disk
+	// channel. A failure here is non-fatal — the app still boots and errors
+	// fall back to stderr.
+	var errorLogger *slog.Logger
+	if logger, _, lerr := backend.InitErrorLogger(); lerr != nil {
+		println("init error logger failed:", lerr.Error())
+	} else {
+		errorLogger = logger
+		app.SetErrorLogger(logger)
+	}
+
 	wailsApp := application.New(application.Options{
 		Name:        "Ally",
 		Description: "Ally — AI coding agent desktop",
 		Icon:        appIconPNG,
+		// Route Wails system errors into the same on-disk error log as the app.
+		Logger:   errorLogger,
+		LogLevel: slog.LevelError,
 		Services: []application.Service{
 			application.NewService(app),
 			application.NewService(gameService),

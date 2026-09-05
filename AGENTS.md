@@ -722,6 +722,20 @@ Example MCP config:
 
 `wails3 build` is the only build and verification command. Run it when a change touches the Go backend or the Wails bridge; it compiles the backend, builds the Vue frontend, and produces the desktop binary. Pure frontend changes that do not affect bindings do not require verification.
 
+### Testing Safety
+
+- **不要写无用的测试。** 只为真正守住契约或边界的改动补测试：跨层拒绝、batch 冲突、归一化边界、安全拦截、事件 payload 形状等。纯装饰性、与已有覆盖重复、或只断言 getter / 构造函数默认值这类不挡回归的测试不要写——它们只增加维护成本。
+
+- **测试绝对禁止危险操作。** 所有测试必须隔离，绝不触碰真实路径或执行破坏性动作：
+
+  1. 任何文件系统读写/删除都必须在 `t.TempDir()` 内完成；禁止对真实路径（用户主目录 `~` 及其下 `~/.ally_agent`、系统目录、仓库源码树、日志目录）做读写或删除。
+  2. 禁止 `os.RemoveAll`，尤其禁止任何路径可能指向真实目录的递归删除。需要清理时只删 `t.TempDir()` 内自己刚建的文件，依赖 `t.TempDir()` 自动回收，不要手动递归删。
+  3. 被测代码若内部调用 `appDataDir()` 等取真实 home 的函数，必须用 `t.Setenv("HOME", t.TempDir())`（Windows 同时 `t.Setenv("USERPROFILE", t.TempDir())`）把家目录重定向到临时目录，绝不允许测试往真实 `~/.ally_agent` 写任何东西。
+  4. 真实执行的命令（`exec.Command`）只允许在 `t.TempDir()` 内的沙箱仓库运行（如 `git init` / `git commit` 测试仓库）；禁止对源码树或系统目录执行任何写/删命令，禁止 `rm -rf` 之类的破坏性命令。
+  5. 不要为验证日志/落盘而往真实日志目录写文件再清。这类验证必须用临时目录，且清理逻辑要像 `infra_log.go` 的 `cleanupOldErrorLogs` 那样：严格格式校验 + 日期解析 + 只删严格早于今天的自身管理文件，绝不碰无关文件、绝不删今天或未来的文件。
+
+- 仅用于本地核实的临时测试文件（如 `infra_log_verify_test.go`）用完后必须删除，不得留在 `internal/**/*_test.go` 中。
+
 ---
 
 ## Code Style Guidelines
@@ -825,7 +839,8 @@ lowercase + 冒号分隔，如 `run:stream`、`tool:result`、`mcp:status`、`su
 ## Performance And Memory Notes (Ally-specific)
 
 - `tool:update` 事件在 `toolCallProgressTracker.eventsWithForce` 中带 `toolUpdateThrottle = 200ms` + `toolUpdateThreshold = 2048` 字节节流；`forceEvents()` 在流结束后绕过节流。`command` 执行时以约 120ms 间隔发送有变化的累计 stdout/stderr，并在命令结束前发送最终输出快照。测试见 `TestToolCallProgressTrackerThrottlesLargeUpdates`。
-- 前端 `App.vue` 用 `toolUpdateBuffers` Map + `setTimeout(120ms) → requestAnimationFrame` 批量 flush `tool:update`，并在终端事件处理前显式 `flushToolUpdateBuffer()`；`streamBuffers` 走 `queueStreamDelta` + 纯 rAF 合帧处理 `run:stream`（48ms setTimeout 链已废弃）。
+- 前端 `App.vue` 用 `toolUpdateBuffers` Map + `setTimeout(120ms) → requestAnimationFrame` 批量 flush `tool:update`，并在终端事件处理前显式 `flushToolUpdateBuffer()`；`streamBuffers` 走 `queueStreamDelta` + 纯 rAF 合帧处理 `run:stream`（48ms setTimeout 链已废弃）。首个包含有效标题的更新绕过 120ms 延迟即时 flush，避免快速工具跳过 running 过程。
+- 前端消息渲染缓存：`displayMessagesCacheBySession` 用结构签名复用消息列表以避免流式正文刷帧拖慢列表。对 `role === 'tool_call'` 必须使用 `toolCardRenderSignature` 派生签名，否则 `tool:update` 期间（status 保持 running）文件名、代码草稿、改动增量更新会被签名命中缓存静默吞噬，导致卡片从无参数直接跳到完成态。
 - 单 session `localStorage` 预算 240KB，大 tool 预览 / edit 参数 / 附件 Base64 / Diff 在序列化前剥除或截断。
 - 前端 Mermaid SVG DOM 视口外卸载，16 条 / 2M 字符 LRU；`render_html` 流式期间不挂载 iframe，完成后再挂一个 sandboxed iframe。
 - `command` / `service` 后端 rolling buffer 512KB / 进程，最多 8 个活动进程；服务停止或退出后立即清理记录。

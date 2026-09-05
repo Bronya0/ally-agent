@@ -57,5 +57,9 @@ export function toolCardRenderSignature(msg) {
     msg.steps,
     len(msg.filesRead),
     len(msg.filesEdited),
+    msg.editFilePath || '',
+    msg.editAdded || 0,
+    msg.editRemoved || 0,
+    msg.codeContent ? msg.codeContent.length : 0,
   ].join('|');
 }

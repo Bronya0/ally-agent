@@ -13,7 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -339,6 +339,11 @@ type App struct {
 
 	trayIconMu sync.Mutex
 	trayIcon   []byte
+
+	// errorLogger records ERROR-level events to ~/.ally_agent/logs/error.log
+	// (set via SetErrorLogger). Backend panics and frontend-reported errors
+	// share this single on-disk channel. nil until InitErrorLogger succeeds.
+	errorLogger *slog.Logger
 }
 
 func NewApp() *App {
@@ -1908,7 +1913,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 	// 照常落盘、run 注册照常释放。
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("runChat: run %s panicked: %v\n%s", runID, r, debug.Stack())
+			a.logAppError("runChat panicked", "runId", runID, "panic", fmt.Sprintf("%v", r), "stack", string(debug.Stack()))
 			emitRunEnd("run:error", "error", map[string]any{"error": fmt.Sprintf("agent 内部错误: %v", r)})
 		}
 	}()
@@ -2121,6 +2126,11 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 		// truncation marker for both replay and execution.
 		var toolExecutionArgs []string
 		toolCalls, toolExecutionArgs = prepareToolCallsForExecution(modelResp.ToolCalls)
+		if len(toolCalls) > 0 && toolProgress != nil {
+			for _, toolEvent := range toolProgress.forceEvents(runID, sessionID, toolBatchID, toolCalls, a.mcpToolEventMeta) {
+				a.emit(toolEvent.Name, toolEvent.Payload)
+			}
+		}
 		fallbackInput := 0
 		fallbackOutput := 0
 		if modelResp.Usage == nil || modelResp.Usage.PromptTokens <= 0 {
@@ -2344,7 +2354,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 	// a normal tool error so the agent loop keeps running.
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("executeTool: tool %s panicked: %v\n%s", name, r, debug.Stack())
+			a.logAppError("executeTool panicked", "tool", name, "panic", fmt.Sprintf("%v", r), "stack", string(debug.Stack()))
 			result = toolErrorResult(codedToolError("E_TOOL_PANIC", fmt.Errorf("tool %s crashed internally: %v", name, r)))
 		}
 	}()

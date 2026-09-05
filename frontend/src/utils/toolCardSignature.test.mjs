@@ -46,3 +46,11 @@ test('array-length fields are reflected without deep comparison', () => {
   assert.notEqual(toolCardRenderSignature(base), toolCardRenderSignature(withEntries));
   assert.equal(toolCardRenderSignature(withEntries), toolCardRenderSignature({ ...base, editEntries: [{ path: 'c' }, { path: 'd' }] }));
 });
+
+test('streaming draft updates change running tool card signature', () => {
+  const initial = { role: 'tool_call', kind: 'create', status: 'running', title: '', chip: '' };
+  const withPath = { ...initial, title: 'demo.txt', editFilePath: 'demo.txt' };
+  const withCode = { ...withPath, codeContent: 'hello world', chip: '11B' };
+  assert.notEqual(toolCardRenderSignature(initial), toolCardRenderSignature(withPath));
+  assert.notEqual(toolCardRenderSignature(withPath), toolCardRenderSignature(withCode));
+});

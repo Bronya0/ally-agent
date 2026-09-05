@@ -518,6 +518,7 @@ import {
   QuitForUpdate,
   SkipUpdate,
   GetBackgroundImageURL,
+  LogFrontendError,
 } from '../bindings/ally-dev/internal/app/app';
 import { Application, Browser, Events, Window } from '@wailsio/runtime';
 import CloseOutlined from '@vicons/antd/CloseOutlined';
@@ -560,7 +561,7 @@ import { fmtCompact, fmtDuration } from './utils/format.mjs';
 import { isSkillActive, normalizeSkillName } from './utils/skills.mjs';
 import {
   displaySourceMessages as buildDisplaySourceMessages,
-  formatBytes as formatBytesShared,
+  formatBytes,
   formatHttpToolTitle,
   isRenderableMessage,
 } from './utils/toolPreview.mjs';
@@ -572,6 +573,7 @@ import {
   setToolStatus,
   toolEventId,
 } from './utils/toolEventState.mjs';
+import { toolCardRenderSignature } from './utils/toolCardSignature.mjs';
 import { useToolEvents } from './composables/useToolEvents.mjs';
 import { unwrapWailsEvent } from './utils/wailsEvent.mjs';
 
@@ -579,8 +581,31 @@ const GitDiffModal = defineAsyncComponent(() => import('./components/GitDiffModa
 const WorkspaceExplorer = defineAsyncComponent(() => import('./components/WorkspaceExplorer.vue'));
 onErrorCaptured((err, _instance, info) => {
   console.error('[ui:error]', info, err);
+  reportFrontendError(String(err && (err.stack || err.message) || err), info);
   return false;
 });
+
+// reportFrontendError funnels uncaught front-end errors into the same on-disk
+// error log the backend uses (see internal/app/infra_log.go). Reporting must
+// never throw — a failure here must not mask the original error.
+function reportFrontendError(message, stack) {
+  try {
+    LogFrontendError(message || '', stack || '').catch(() => {});
+  } catch (_e) {
+    /* swallow: logging must not break the UI */
+  }
+}
+if (typeof window !== 'undefined') {
+  window.addEventListener('error', (e) => {
+    const stack = (e.error && (e.error.stack || e.error.message)) || '';
+    reportFrontendError(e.message || 'window error', stack);
+  });
+  window.addEventListener('unhandledrejection', (e) => {
+    const reason = e.reason;
+    const detail = reason && (reason.stack || reason.message) ? reason.stack || reason.message : String(reason);
+    reportFrontendError('unhandledrejection: ' + detail, '');
+  });
+}
 
 const conversationMessagesRefs = new Map();
 const promptInputRefs = reactive({});
@@ -2341,7 +2366,11 @@ function buildDisplayMessagesSignature(session, expanded) {
   // to streaming content mutations.
   for (let i = 0; i < msgs.length; i++) {
     const m = msgs[i];
-    parts.push(`${m.role}:${m.kind || ''}:${m.status || ''}:${m.name || ''}:${m.eventId || ''}`);
+    if (m?.role === 'tool_call') {
+      parts.push(toolCardRenderSignature(m));
+    } else {
+      parts.push(`${m.role}:${m.kind || ''}:${m.status || ''}:${m.name || ''}:${m.eventId || ''}`);
+    }
   }
   return parts.join('|');
 }
@@ -2797,8 +2826,8 @@ const contextUsageStyle = computed(() => {
   return { color: `hsl(${Math.round(hue)} ${saturation}% ${lightness}%)` };
 });
 
-const workspaceInputTokens = computed(() => fmtTokenUnit(workspaceTokenUsage.value?.inputTokens || 0));
-const workspaceOutputTokens = computed(() => fmtTokenUnit(workspaceTokenUsage.value?.outputTokens || 0));
+const workspaceInputTokens = computed(() => fmtCompact(workspaceTokenUsage.value?.inputTokens || 0));
+const workspaceOutputTokens = computed(() => fmtCompact(workspaceTokenUsage.value?.outputTokens || 0));
 
 // Workspace history
 function loadWorkspaceHistory() {
@@ -3808,7 +3837,25 @@ function bufferToolUpdate(data) {
   flushStreamBuffer(data.runId);
   const session = sessionByRunId(data.runId);
   if (!session) return;
-  toolUpdateBuffers.set(toolEventId(data), data);
+  const eid = toolEventId(data);
+  const existing = findToolEventById(session, eid);
+  // If the card is currently missing a title, flush this first informative
+  // update immediately so the user sees "Creating (path)" without a 120ms delay.
+  if (existing && !existing.title) {
+    const progressMeta = { ...data, suppressScroll: true };
+    const args = String(progressMeta.args || '');
+    const title = makeToolTitle(progressMeta.name, args, progressMeta);
+    if (title) {
+      toolUpdateBuffers.delete(eid);
+      const liveBody = progressMeta.output !== undefined ? String(progressMeta.output || '') : args;
+      updateToolEvent(eid, progressMeta.name, title, liveBody, 'running', progressMeta, session);
+      if (session.id === activeSessionId.value) {
+        scrollMessagesToBottom({ alignToLastToolCard: !noAlignTools.includes(data.name || '') });
+      }
+      return;
+    }
+  }
+  toolUpdateBuffers.set(eid, data);
   scheduleToolUpdateFlush();
 }
 

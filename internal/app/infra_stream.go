@@ -222,6 +222,12 @@ func (t *toolCallProgressTracker) eventsWithForce(runID, sessionID, batchID stri
 		if t.lastState[idx] == state {
 			continue
 		}
+		// Do not emit tool:start until the function name is known. Emitting with
+		// an empty name misclassifies the card as "other" / "Using" and consumes
+		// the started state so later deltas never emit tool:start with the real name.
+		if !started && call.Function.Name == "" {
+			continue
+		}
 		eventName := "tool:update"
 		if !started {
 			eventName = "tool:start"
