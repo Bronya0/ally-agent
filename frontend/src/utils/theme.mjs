@@ -20,7 +20,7 @@ export const DEFAULT_MODE = 'dark'; // 'dark' | 'light'
 
 export const MODES = [
   { id: 'dark', label: '深色' },
-  { id: 'light', label: '浅色' },
+  { id: 'light', label: '浅色 (Beta)' },
 ];
 
 // Single source of truth for the selector UI. `swatch` mirrors the seed defined

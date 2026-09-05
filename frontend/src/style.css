@@ -181,6 +181,28 @@
   --md-del: #9a8a6a;     /* 删除线：暗棕灰 */
   --md-marker-ul: #f0d166;
   --md-marker-ol: color-mix(in srgb, #d7dedc 88%, #f0d166 12%);
+
+  /* ── Game panel theme tokens (dark default) ── */
+  --game-panel-bg: #1a1a1a;
+  --game-header-border: rgba(255, 255, 255, 0.08);
+  --game-title-color: #f2f2f2;
+  --game-sidebar-border: #2b2b2b;
+  --game-section-title-color: #ddd;
+  --game-hint-color: #999;
+  --game-invite-code-bg: #181818;
+  --game-invite-code-color: #ddd;
+  --game-empty-color: #777;
+  --game-board-grid-bg: #141414;
+  --game-board-grid-border: #333333;
+  --game-board-cell-bg: #252525;
+  --game-xiangqi-bg: #252525;
+  --game-xiangqi-border: #3d3d3d;
+  --game-xiangqi-piece-color: #e8dcc0;
+
+  /* ── Ally avatar eye shell tokens (dark default) ── */
+  --ally-eye-shell-fill: #0b0e13;
+  --ally-eye-shell-stroke: #343a45;
+  --ally-eye-shadow-opacity: 0.25;
 }
 
 /* ── Themes ── each overrides the accent seed plus a same-family markdown
@@ -302,22 +324,22 @@
 :root[data-mode="light"] {
   /* Surfaces: translucent white glass; content keeps an opaque fallback for
      the reasoning curtain and media mats. */
-  --ally-surface-content: #f6f7f9;
-  --ally-surface-panel: rgba(255, 255, 255, 0.66);
-  --ally-surface-chrome: rgba(255, 255, 255, 0.55);
-  --ally-surface-raised: rgba(255, 255, 255, 0.78);
-  --ally-surface-deep: #eef0f4;
+  --ally-surface-content: #eff1f5;
+  --ally-surface-panel: rgba(255, 255, 255, 0.72);
+  --ally-surface-chrome: rgba(255, 255, 255, 0.65);
+  --ally-surface-raised: rgba(255, 255, 255, 0.86);
+  --ally-surface-deep: #e2e6ed;
 
-  /* Text ramp inverted: near-black ink on paper, descending to quiet gray. */
-  --ally-text-primary: #1f2328;
-  --ally-text-high: #2e3338;
-  --ally-text-body: #3a3f45;
-  --ally-text-secondary: #4b5157;
-  --ally-text-soft: #5d6470;
-  --ally-text-tertiary: #6b7280;
-  --ally-text-muted: #7b828c;
-  --ally-text-faint: #98a0ab;
-  --ally-text-ghost: #b6bcc4;
+  /* Text ramp inverted: sharp, high-contrast ink on paper descending gracefully. */
+  --ally-text-primary: #111827;
+  --ally-text-high: #1e293b;
+  --ally-text-body: #334155;
+  --ally-text-secondary: #475569;
+  --ally-text-soft: #526071;
+  --ally-text-tertiary: #606f7b;
+  --ally-text-muted: #64748b;
+  --ally-text-faint: #718096;
+  --ally-text-ghost: #8896a6;
 
   /* Status colors darkened one notch for white-glass surfaces. */
   --ally-success: #16a34a;
@@ -335,56 +357,56 @@
   --ally-info-soft: #1d4ed8;
 
   /* Dividers / states: ink tints instead of white tints. */
-  --ally-border: rgba(15, 23, 42, 0.08);
+  --ally-border: rgba(15, 23, 42, 0.09);
   --ally-border-subtle: rgba(15, 23, 42, 0.05);
-  --ally-border-strong: rgba(15, 23, 42, 0.14);
+  --ally-border-strong: rgba(15, 23, 42, 0.16);
   --ally-state-hover: rgba(15, 23, 42, 0.05);
-  --ally-state-selected: rgba(15, 23, 42, 0.06);
+  --ally-state-selected: rgba(15, 23, 42, 0.07);
   --ally-hover-faint: rgba(15, 23, 42, 0.03);
   --ally-hover-strong: rgba(15, 23, 42, 0.09);
 
   /* Accent derivations: mixed toward ink (not white) so accent text, links and
      selected icons stay readable on light glass. */
-  --ally-accent-bright: color-mix(in srgb, var(--ally-accent) 62%, #1f2328);
-  --ally-accent-strong: color-mix(in srgb, var(--ally-accent) 45%, #1f2328);
-  --ally-accent-soft: color-mix(in srgb, var(--ally-accent) 52%, #1f2328);
-  --ally-accent-pale: color-mix(in srgb, var(--ally-accent) 46%, #1f2328);
-  --ally-accent-muted: color-mix(in srgb, var(--ally-accent) 50%, #6b7280);
-  --ally-accent-dim: color-mix(in srgb, var(--ally-accent) 42%, #4b5563);
+  --ally-accent-bright: color-mix(in srgb, var(--ally-accent) 55%, #111827);
+  --ally-accent-strong: color-mix(in srgb, var(--ally-accent) 40%, #111827);
+  --ally-accent-soft: color-mix(in srgb, var(--ally-accent) 48%, #1f2937);
+  --ally-accent-pale: color-mix(in srgb, var(--ally-accent) 42%, #334155);
+  --ally-accent-muted: color-mix(in srgb, var(--ally-accent) 45%, #64748b);
+  --ally-accent-dim: color-mix(in srgb, var(--ally-accent) 38%, #475569);
 
-  --ally-wordmark-gradient: linear-gradient(120deg, #33383f 0%, #b5822f 36%, #4a5058 68%, #33383f 100%);
+  --ally-wordmark-gradient: linear-gradient(120deg, #1f2937 0%, #b5822f 36%, #334155 68%, #1f2937 100%);
 
   /* Markdown palette re-derived from the accent seed for light surfaces. */
-  --md-text: #272c33;
-  --md-muted: #5b6470;
-  --md-faint: #8b93a0;
-  --md-white: #171b20;
-  --md-border: rgba(23, 28, 33, 0.12);
-  --md-surface: rgba(15, 23, 42, 0.035);
-  --md-h1: #1f252c;
-  --md-h2: #232930;
-  --md-h3: color-mix(in srgb, var(--ally-accent) 55%, #1f2328);
-  --md-h4: #2c333b;
-  --md-strong: color-mix(in srgb, var(--ally-accent) 40%, #4a4133);
-  --md-code: color-mix(in srgb, var(--ally-accent) 55%, #4a3f30);
-  --md-em: color-mix(in srgb, var(--ally-accent) 50%, #5a4a30);
-  --md-link: color-mix(in srgb, var(--ally-accent) 55%, #1f2937);
-  --md-quote: color-mix(in srgb, var(--ally-accent) 30%, #4b463a);
-  --md-quote-border: color-mix(in srgb, var(--ally-accent) 55%, transparent);
-  --md-quote-bg: color-mix(in srgb, var(--ally-accent) 7%, transparent);
-  --md-del: #98a0ab;
-  --md-marker-ul: color-mix(in srgb, var(--ally-accent) 55%, #5c5137);
-  --md-marker-ol: color-mix(in srgb, var(--ally-accent) 45%, #3f4650);
+  --md-text: #1e293b;
+  --md-muted: #475569;
+  --md-faint: #64748b;
+  --md-white: #0f172a;
+  --md-border: rgba(15, 23, 42, 0.12);
+  --md-surface: rgba(15, 23, 42, 0.04);
+  --md-h1: #0f172a;
+  --md-h2: #1e293b;
+  --md-h3: color-mix(in srgb, var(--ally-accent) 55%, #0f172a);
+  --md-h4: #1e293b;
+  --md-strong: #0f172a;
+  --md-code: color-mix(in srgb, var(--ally-accent) 55%, #1e293b);
+  --md-em: color-mix(in srgb, var(--ally-accent) 48%, #1e293b);
+  --md-link: color-mix(in srgb, var(--ally-accent) 60%, #0f172a);
+  --md-quote: #334155;
+  --md-quote-border: color-mix(in srgb, var(--ally-accent) 65%, transparent);
+  --md-quote-bg: color-mix(in srgb, var(--ally-accent) 9%, transparent);
+  --md-del: #8896a6;
+  --md-marker-ul: color-mix(in srgb, var(--ally-accent) 65%, #334155);
+  --md-marker-ol: color-mix(in srgb, var(--ally-accent) 50%, #1e293b);
 
   /* Glass surfaces: translucent white, blurring whatever sits behind. */
   --ally-border-input: rgba(15, 23, 42, 0.25);
-  --ally-composer-glass: rgba(255, 255, 255, 0.6);
-  --ally-composer-glass-hover: rgba(255, 255, 255, 0.66);
-  --ally-composer-glass-focus: rgba(255, 255, 255, 0.72);
-  --ally-panel-glass: rgba(255, 255, 255, 0.72);
-  --ally-copy-btn-bg: rgba(255, 255, 255, 0.88);
-  --ally-pre-bg: rgba(15, 23, 42, 0.045);
-  --ally-code-bg: #f4f5f7;
+  --ally-composer-glass: rgba(255, 255, 255, 0.65);
+  --ally-composer-glass-hover: rgba(255, 255, 255, 0.72);
+  --ally-composer-glass-focus: rgba(255, 255, 255, 0.78);
+  --ally-panel-glass: rgba(255, 255, 255, 0.76);
+  --ally-copy-btn-bg: rgba(255, 255, 255, 0.9);
+  --ally-pre-bg: rgba(15, 23, 42, 0.05);
+  --ally-code-bg: #eaedf2;
 
   /* Scrollbar: quiet slate on light glass. */
   --ally-scrollbar: #c7cdd4;
@@ -392,14 +414,31 @@
   --ally-scrollbar-editor-hover: rgba(15, 23, 42, 0.35);
 
   /* Floating overlay shadow (menus, popovers, command palette). */
-  --ally-overlay-shadow: 0 22px 60px rgba(0, 0, 0, 0.55);
-
-  /* Ambient shadow used by floating glass panels (Naive modals get their own
-     via theme overrides in App.vue). */
+  --ally-overlay-shadow: 0 18px 50px rgba(31, 38, 50, 0.14), 0 2px 8px rgba(31, 38, 50, 0.06);
   --ally-glass-shadow: 0 18px 50px rgba(31, 38, 50, 0.14), 0 2px 8px rgba(31, 38, 50, 0.06);
   --ally-glass-blur: blur(22px) saturate(1.45);
-  /* Floating overlays use the softer glass shadow on light. */
-  --ally-overlay-shadow: 0 18px 50px rgba(31, 38, 50, 0.14), 0 2px 8px rgba(31, 38, 50, 0.06);
+
+  /* ── Game panel theme tokens (light mode) ── */
+  --game-panel-bg: var(--ally-surface-content);
+  --game-header-border: var(--ally-border);
+  --game-title-color: var(--ally-text-primary);
+  --game-sidebar-border: var(--ally-border);
+  --game-section-title-color: var(--ally-text-high);
+  --game-hint-color: var(--ally-text-muted);
+  --game-invite-code-bg: var(--ally-surface-deep);
+  --game-invite-code-color: var(--ally-text-primary);
+  --game-empty-color: var(--ally-text-tertiary);
+  --game-board-grid-bg: #cbb493;
+  --game-board-grid-border: #a88d68;
+  --game-board-cell-bg: #dfcaab;
+  --game-xiangqi-bg: #dfcaab;
+  --game-xiangqi-border: #ad9473;
+  --game-xiangqi-piece-color: #2b2118;
+
+  /* ── Ally avatar eye shell tokens (light mode) ── */
+  --ally-eye-shell-fill: #f5ede2;
+  --ally-eye-shell-stroke: #d8c3a5;
+  --ally-eye-shadow-opacity: 0.12;
 }
 
 /* The light page canvas: a clean, faintly warm gradient with two soft accent
@@ -407,9 +446,9 @@
    non-flat scenery behind the glass). */
 html[data-mode="light"] body {
   background:
-    radial-gradient(1100px 760px at 88% -8%, rgba(224, 164, 88, 0.1), transparent 62%),
-    radial-gradient(900px 700px at -8% 108%, rgba(96, 165, 250, 0.09), transparent 60%),
-    linear-gradient(165deg, #f2f3f6 0%, #f7f7f5 46%, #eef0f4 100%);
+    radial-gradient(1100px 760px at 88% -8%, rgba(224, 164, 88, 0.08), transparent 64%),
+    radial-gradient(900px 700px at -8% 108%, rgba(96, 165, 250, 0.07), transparent 62%),
+    linear-gradient(165deg, #e9ecf2 0%, #f0f2f6 46%, #e5e9f0 100%);
   background-attachment: fixed;
 }
 
@@ -603,6 +642,51 @@ html[data-mode="light"] .diff-view.split .diff-side.diff-del {
 html[data-mode="light"] .diff-add .diff-code { color: #14683c; }
 html[data-mode="light"] .diff-del .diff-code { color: #a33a3a; }
 html[data-mode="light"] .diff-ctx .diff-code { color: #3a3f45; }
+
+/* Markdown body explicit override on light mode */
+html[data-mode="light"] .markdown-body {
+  --md-text: #1e293b;
+  --md-muted: #475569;
+  --md-faint: #64748b;
+  --md-white: #0f172a;
+  --md-border: rgba(15, 23, 42, 0.12);
+  --md-surface: rgba(15, 23, 42, 0.04);
+  color: var(--md-text);
+}
+
+/* User question text on light mode */
+html[data-mode="light"] .user-text {
+  color: var(--ally-text-primary) !important;
+}
+html[data-mode="light"] .user-text :not(pre) > code {
+  color: var(--ally-accent-strong) !important;
+}
+
+/* Tool card and command line refinements on light mode */
+html[data-mode="light"] .tool-name {
+  color: var(--ally-text-primary);
+}
+html[data-mode="light"] .tool-verb {
+  color: var(--ally-accent-strong);
+}
+html[data-mode="light"] .tool-command .shell-command-word {
+  color: var(--ally-accent-strong);
+}
+html[data-mode="light"] .tool-command code {
+  color: var(--ally-text-high);
+}
+html[data-mode="light"] .tool-body {
+  color: var(--ally-text-high);
+}
+
+/* Composer input refinements on light mode */
+html[data-mode="light"] .composer .prompt-input {
+  box-shadow: 0 4px 18px rgba(15, 23, 42, 0.07);
+  border: 1px solid rgba(15, 23, 42, 0.15) !important;
+}
+html[data-mode="light"] .composer .prompt-input textarea::placeholder {
+  color: #718096 !important;
+}
 
 body.platform-windows,
 body.platform-win32 {

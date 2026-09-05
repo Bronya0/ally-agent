@@ -209,7 +209,7 @@ async function copyInvite() { try { await navigator.clipboard.writeText(inviteTe
   height: 100%;
   min-width: 0;
   min-height: 0;
-  background: #1a1a1a;
+  background: var(--game-panel-bg);
   overflow: hidden;
 }
 
@@ -219,7 +219,7 @@ async function copyInvite() { try { await navigator.clipboard.writeText(inviteTe
   justify-content: space-between;
   gap: 12px;
   padding: 14px 22px 12px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  border-bottom: 1px solid var(--game-header-border);
   flex-shrink: 0;
 }
 
@@ -227,7 +227,7 @@ async function copyInvite() { try { await navigator.clipboard.writeText(inviteTe
   font-size: 18px;
   font-weight: 700;
   letter-spacing: 0.5px;
-  color: #f2f2f2;
+  color: var(--game-title-color);
 }
 
 .games-inline-body {
@@ -239,21 +239,21 @@ async function copyInvite() { try { await navigator.clipboard.writeText(inviteTe
 }
 
 .game-layout { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 18px; flex: 1; min-height: 0; }
-.game-sidebar { display: flex; flex-direction: column; gap: 9px; border-right: 1px solid #2b2b2b; padding-right: 14px; }
-.game-section-title { color: #ddd; font-size: 12px; font-weight: 600; margin-top: 4px; }
-.game-hint, .game-connected, .game-status { color: #999; font-size: 12px; line-height: 1.5; }
+.game-sidebar { display: flex; flex-direction: column; gap: 9px; border-right: 1px solid var(--game-sidebar-border); padding-right: 14px; }
+.game-section-title { color: var(--game-section-title-color); font-size: 12px; font-weight: 600; margin-top: 4px; }
+.game-hint, .game-connected, .game-status { color: var(--game-hint-color); font-size: 12px; line-height: 1.5; }
 .game-hint + .game-hint { margin-top: -4px; }
 .game-actions { display: flex; gap: 8px; flex-wrap: wrap; }
-.game-invite { display: grid; gap: 6px; color: #aaa; font-size: 11px; }
-.game-invite code { word-break: break-all; color: #ddd; background: #181818; padding: 6px; }
+.game-invite { display: grid; gap: 6px; color: var(--game-hint-color); font-size: 11px; }
+.game-invite code { word-break: break-all; color: var(--game-invite-code-color); background: var(--game-invite-code-bg); padding: 6px; border-radius: 4px; }
 .game-error { color: #e88989; font-size: 12px; }
 .game-board-wrap { display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 16px; min-width: 0; }
-.game-empty { color: #777; font-size: 13px; }
-.board-grid { display: grid; grid-template-columns: repeat(var(--board-size), 1fr); grid-template-rows: repeat(var(--board-size), 1fr); width: min(520px, 70vw); aspect-ratio: 1; background: #141414; border: 1px solid #333; padding: 1px; gap: 1px; }
-.board-cell { border: 0; background: #252525; padding: 0; display: grid; place-items: center; cursor: pointer; }
+.game-empty { color: var(--game-empty-color); font-size: 13px; }
+.board-grid { display: grid; grid-template-columns: repeat(var(--board-size), 1fr); grid-template-rows: repeat(var(--board-size), 1fr); width: min(520px, 70vw); aspect-ratio: 1; background: var(--game-board-grid-bg); border: 1px solid var(--game-board-grid-border); padding: 1px; gap: 1px; border-radius: 4px; }
+.board-cell { border: 0; background: var(--game-board-cell-bg); padding: 0; display: grid; place-items: center; cursor: pointer; }
 .stone { width: 78%; aspect-ratio: 1; border-radius: 50%; box-shadow: 0 1px 3px #0008; }.stone.black { background: #1c1c1c; box-shadow: 0 0 0 1px rgba(255,255,255,.3), 0 1px 3px #000a; }.stone.white { background: #fff; box-shadow: 0 0 0 1px #0004, 0 1px 3px #000a; }
-.xiangqi-board { display: grid; grid-template-columns: repeat(9, 1fr); grid-template-rows: repeat(10, 1fr); width: min(520px, 75vw); aspect-ratio: 9 / 10; background: #252525; padding: 2px; gap: 1px; }
-.xiangqi-cell { border: 1px solid #3d3d3d; background: transparent; color: #e8dcc0; font-size: clamp(13px, 3.6vw, 26px); cursor: pointer; }.xiangqi-cell.is-red { color: #e5695c; }.xiangqi-cell.is-selected { outline: 2px solid #18a058; outline-offset: -2px; background: rgba(24, 160, 88, 0.16); }
+.xiangqi-board { display: grid; grid-template-columns: repeat(9, 1fr); grid-template-rows: repeat(10, 1fr); width: min(520px, 75vw); aspect-ratio: 9 / 10; background: var(--game-xiangqi-bg); padding: 2px; gap: 1px; border-radius: 4px; border: 1px solid var(--game-xiangqi-border); }
+.xiangqi-cell { border: 1px solid var(--game-xiangqi-border); background: transparent; color: var(--game-xiangqi-piece-color); font-size: clamp(13px, 3.6vw, 26px); cursor: pointer; font-weight: 600; }.xiangqi-cell.is-red { color: #e5695c; }.xiangqi-cell.is-selected { outline: 2px solid #18a058; outline-offset: -2px; background: rgba(24, 160, 88, 0.16); }
 .poker-table { width: 100%; display: grid; gap: 20px; }.cards-row { display: flex; flex-wrap: wrap; justify-content: center; gap: 5px; }.playing-card { min-width: 34px; height: 52px; background: #f5f5f5; color: #222; border: 1px solid #aaa; border-radius: 3px; cursor: pointer; }.playing-card.selected { transform: translateY(-8px); border-color: #18a058; }
-@media (max-width: 680px) { .game-layout { grid-template-columns: 1fr; }.game-sidebar { border-right: 0; border-bottom: 1px solid #2b2b2b; padding: 0 0 12px; } }
+@media (max-width: 680px) { .game-layout { grid-template-columns: 1fr; }.game-sidebar { border-right: 0; border-bottom: 1px solid var(--game-sidebar-border); padding: 0 0 12px; } }
 </style>

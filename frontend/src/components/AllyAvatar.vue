@@ -40,7 +40,7 @@ Public License v3. See the LICENSE file for details.
       </defs>
 
       <ellipse cx="82" cy="88" rx="72" ry="62" :fill="`url(#${glowId}) transparent`"/>
-      <ellipse cx="82" cy="140" rx="42" ry="7" fill="#000" opacity="0.25"/>
+      <ellipse class="ally-eye-shadow" cx="82" cy="140" rx="42" ry="7" fill="#000"/>
       <path class="ally-eye-shell" d="M17 82c14-28 38-43 65-43s51 15 65 43c-14 28-38 43-65 43S31 110 17 82Z"/>
       <ellipse cx="82" cy="82" rx="47" ry="47" :fill="`url(#${irisId}) #d49050`" stroke="#f2c078" stroke-width="2.2"/>
       <path d="M40 69c22-21 62-22 84 0" fill="none" stroke="#fff3d6" stroke-width="2" opacity="0.34" stroke-linecap="round"/>
@@ -275,10 +275,10 @@ onBeforeUnmount(() => {
   max-width: 220px;
   padding: 8px 12px;
   border-radius: 10px;
-  background: #27272c;
+  background: var(--ally-surface-raised, #27272c);
   border: 1px solid var(--ally-border);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
-  color: #ececec;
+  box-shadow: var(--ally-overlay-shadow, 0 8px 24px rgba(0, 0, 0, 0.5));
+  color: var(--ally-text-primary, #ececec);
   font-size: var(--ally-sub-font-size);
   line-height: 1.55;
   cursor: pointer;
@@ -292,7 +292,7 @@ onBeforeUnmount(() => {
   top: 23px;
   width: 10px;
   height: 10px;
-  background: #27272c;
+  background: var(--ally-surface-raised, #27272c);
   border-left: 1px solid var(--ally-border);
   border-bottom: 1px solid var(--ally-border);
   transform: rotate(45deg);
@@ -331,10 +331,16 @@ onBeforeUnmount(() => {
   pointer-events: none;
 }
 
+.ally-eye-shadow {
+  opacity: var(--ally-eye-shadow-opacity, 0.25);
+  transition: opacity 0.2s ease;
+}
+
 .ally-eye-shell {
-  fill: #0b0e13;
-  stroke: #343a45;
+  fill: var(--ally-eye-shell-fill, #0b0e13);
+  stroke: var(--ally-eye-shell-stroke, #343a45);
   stroke-width: 2;
+  transition: fill 0.2s ease, stroke 0.2s ease;
 }
 
 .ally-eye-vortex {
