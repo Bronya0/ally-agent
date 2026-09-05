@@ -381,7 +381,7 @@ Public License v3. See the LICENSE file for details.
             @delete-task="deleteScheduledTask"
             @stop-service="stopManagedService"
           />
-          <RenderBoundary :label="$t('app.gitChanges')"><GitDiffModal v-model:show="gitDiffVisible" :git-status="gitStatus" :workspace="config.workspace" /></RenderBoundary>
+          <RenderBoundary :label="$t('app.gitChanges')"><GitDiffModal v-model:show="gitDiffVisible" :initial-repo="selectedGitRepo" :git-status="gitStatus" :workspace="config.workspace" /></RenderBoundary>
 
           <n-modal v-model:show="updateModalVisible" preset="card" :title="$t('app.update.title')" class="update-modal" :mask-closable="false" :close-on-esc="false" :show-close="!isUpdateBusy">
             <div class="update-modal-body">
@@ -2510,6 +2510,7 @@ const contextBreakdown = ref(null);
 const workspaceTokenUsage = ref({ inputTokens: 0, outputTokens: 0 });
 const gitStatus = ref({ isRepo: false });
 const gitDiffVisible = ref(false);
+const selectedGitRepo = ref('');
 const footerStatsLoading = ref(true);
 let footerStatsRequestVersion = 0;
 let contextRequestVersion = 0;
@@ -2675,7 +2676,8 @@ async function refreshGitStatus() {
   }
 }
 
-function openGitDiff() {
+function openGitDiff(repoPath = '') {
+  selectedGitRepo.value = typeof repoPath === 'string' ? repoPath : '';
   gitDiffVisible.value = true;
 }
 

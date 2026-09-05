@@ -108,7 +108,49 @@ Public License v3. See the LICENSE file for details.
     </button>
     <template v-if="gitStatus.isRepo">
       <span class="info-sep">·</span>
-      <span class="info-git" :title="$t('composer.git.open')" @click.stop="$emit('openGitDiff')">
+      <n-popover
+        v-if="gitStatus.isMultiRepo && gitStatus.repos && gitStatus.repos.length > 0"
+        trigger="hover"
+        placement="top-start"
+        :show-arrow="false"
+        :delay="120"
+        :duration="150"
+        class="multi-repo-popover"
+      >
+        <template #trigger>
+          <span class="info-git" :title="$t('composer.git.open')" @click.stop="$emit('openGitDiff', gitStatus.repos[0]?.path || '')">
+            <span class="info-git-branch">{{ `${gitStatus.repos.length} repos` }} ▾</span>
+            <span v-if="gitStatus.ahead > 0" class="git-stat ahead" :title="$t('composer.git.ahead')">↑{{ gitStatus.ahead }}</span>
+            <span v-if="gitStatus.behind > 0" class="git-stat behind" :title="$t('composer.git.behind')">↓{{ gitStatus.behind }}</span>
+            <span v-if="gitStatus.added > 0" class="git-stat added" :title="$t('composer.git.added')">+{{ gitStatus.added }}</span>
+            <span v-if="gitStatus.modified > 0" class="git-stat modified" :title="$t('composer.git.modified')">~{{ gitStatus.modified }}</span>
+            <span v-if="gitStatus.deleted > 0" class="git-stat deleted" :title="$t('composer.git.deleted')">-{{ gitStatus.deleted }}</span>
+          </span>
+        </template>
+        <div class="multi-repo-panel">
+          <ul class="multi-repo-list">
+            <li
+              v-for="repo in gitStatus.repos"
+              :key="repo.path"
+              class="multi-repo-item"
+              @click.stop="$emit('openGitDiff', repo.path)"
+            >
+              <span class="multi-repo-name" :title="repo.name">{{ repo.name }}</span>
+              <span class="multi-repo-sep">·</span>
+              <span class="multi-repo-branch" :title="repo.branch">{{ repo.branch }}</span>
+              <span class="multi-repo-stats">
+                <span v-if="repo.ahead > 0" class="git-stat ahead">↑{{ repo.ahead }}</span>
+                <span v-if="repo.behind > 0" class="git-stat behind">↓{{ repo.behind }}</span>
+                <span v-if="repo.added > 0" class="git-stat added">+{{ repo.added }}</span>
+                <span v-if="repo.modified > 0" class="git-stat modified">~{{ repo.modified }}</span>
+                <span v-if="repo.deleted > 0" class="git-stat deleted">-{{ repo.deleted }}</span>
+                <span v-if="!repo.added && !repo.modified && !repo.deleted && !repo.ahead && !repo.behind" class="multi-repo-clean">clean</span>
+              </span>
+            </li>
+          </ul>
+        </div>
+      </n-popover>
+      <span v-else class="info-git" :title="$t('composer.git.open')" @click.stop="$emit('openGitDiff')">
         <span class="info-git-branch">{{ gitStatus.branch }}</span>
         <span v-if="gitStatus.ahead > 0" class="git-stat ahead" :title="$t('composer.git.ahead')">↑{{ gitStatus.ahead }}</span>
         <span v-if="gitStatus.behind > 0" class="git-stat behind" :title="$t('composer.git.behind')">↓{{ gitStatus.behind }}</span>

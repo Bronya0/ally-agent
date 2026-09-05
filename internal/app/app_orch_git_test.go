@@ -7,7 +7,10 @@
 // Public License v3. See the LICENSE file for details.
 package app
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
 func TestParseGitStatusV2(t *testing.T) {
 	tests := []struct {
@@ -50,9 +53,18 @@ func TestParseGitStatusV2(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := parseGitStatusV2(tt.out)
-			if got != tt.want {
+			if !reflect.DeepEqual(got, tt.want) {
 				t.Fatalf("parseGitStatusV2 = %#v, want %#v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestComputeMultiRepoGitStatusEmptyOrNonRepo(t *testing.T) {
+	tempDir := t.TempDir()
+	// Test on an empty folder with no repos
+	st := computeMultiRepoGitStatus(tempDir)
+	if st.IsRepo {
+		t.Fatalf("expected IsRepo=false for empty dir, got %#v", st)
 	}
 }

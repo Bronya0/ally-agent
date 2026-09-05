@@ -1099,14 +1099,27 @@ type remoteRawFile struct {
 	LineEnding string
 }
 
-type GitStatus struct {
+type GitRepoItem struct {
+	Name     string `json:"name"`
+	Path     string `json:"path"`
+	Branch   string `json:"branch"`
+	Ahead    int    `json:"ahead"`
+	Behind   int    `json:"behind"`
 	Added    int    `json:"added"`
 	Modified int    `json:"modified"`
 	Deleted  int    `json:"deleted"`
-	Ahead    int    `json:"ahead"`
-	Behind   int    `json:"behind"`
-	IsRepo   bool   `json:"isRepo"`
-	Branch   string `json:"branch"`
+}
+
+type GitStatus struct {
+	Added       int           `json:"added"`
+	Modified    int           `json:"modified"`
+	Deleted     int           `json:"deleted"`
+	Ahead       int           `json:"ahead"`
+	Behind      int           `json:"behind"`
+	IsRepo      bool          `json:"isRepo"`
+	IsMultiRepo bool          `json:"isMultiRepo"`
+	Branch      string        `json:"branch"`
+	Repos       []GitRepoItem `json:"repos,omitempty"`
 }
 
 type GitDiffFile struct {

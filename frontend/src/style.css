@@ -2104,6 +2104,77 @@ code, pre {
   background: var(--ally-state-hover);
 }
 
+.multi-repo-panel {
+  display: flex;
+  flex-direction: column;
+  max-width: 340px;
+  min-width: 220px;
+  padding: 2px 0;
+}
+
+.multi-repo-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.multi-repo-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border-radius: var(--ally-radius, 6px);
+  cursor: pointer;
+  font-size: var(--ally-sub-font-size);
+  transition: background 0.15s ease;
+}
+
+.multi-repo-item:hover {
+  background: var(--ally-state-hover);
+}
+
+.multi-repo-name {
+  font-weight: 500;
+  color: var(--ally-text-high);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 120px;
+}
+
+.multi-repo-sep {
+  color: var(--ally-text-muted);
+  font-size: var(--ally-aux-font-size);
+}
+
+.multi-repo-branch {
+  color: var(--ally-accent);
+  font-size: var(--ally-aux-font-size);
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 90px;
+}
+.multi-repo-stats {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.multi-repo-clean {
+  font-size: var(--ally-aux-font-size);
+  color: var(--ally-text-muted);
+  opacity: 0.7;
+}
+
 .composer-info .scheduled-task-chip {
   display: inline-flex;
   align-items: center;
@@ -2216,6 +2287,10 @@ code, pre {
   min-width: 0;
   color: var(--ally-text-soft);
   font-size: var(--ally-sub-font-size);
+}
+
+.git-diff-repo-select {
+  width: 180px;
 }
 
 .git-diff-branch {

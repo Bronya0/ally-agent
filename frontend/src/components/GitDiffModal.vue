@@ -11,12 +11,20 @@ Public License v3. See the LICENSE file for details.
   <n-modal v-model:show="visible" preset="card" :title="$t('git.title')" class="git-diff-modal" @after-leave="cleanup">
     <div class="git-diff-toolbar">
       <div class="git-diff-summary">
-        <span class="git-diff-branch">{{ diffResult?.branch || gitStatus.branch || '-' }}</span>
-        <span v-if="gitStatus.ahead > 0" class="git-stat ahead" :title="$t('composer.git.ahead')">↑{{ gitStatus.ahead }}</span>
-        <span v-if="gitStatus.behind > 0" class="git-stat behind" :title="$t('composer.git.behind')">↓{{ gitStatus.behind }}</span>
-        <span v-if="gitStatus.added > 0" class="git-stat added">+{{ gitStatus.added }}</span>
-        <span v-if="gitStatus.modified > 0" class="git-stat modified">~{{ gitStatus.modified }}</span>
-        <span v-if="gitStatus.deleted > 0" class="git-stat deleted">-{{ gitStatus.deleted }}</span>
+        <n-select
+          v-if="gitStatus.isMultiRepo && repoOptions.length > 0"
+          v-model:value="activeRepo"
+          size="small"
+          :options="repoOptions"
+          class="git-diff-repo-select"
+          @update:value="onRepoChange"
+        />
+        <span v-else class="git-diff-branch">{{ diffResult?.branch || currentStatus.branch || '-' }}</span>
+        <span v-if="currentStatus.ahead > 0" class="git-stat ahead" :title="$t('composer.git.ahead')">↑{{ currentStatus.ahead }}</span>
+        <span v-if="currentStatus.behind > 0" class="git-stat behind" :title="$t('composer.git.behind')">↓{{ currentStatus.behind }}</span>
+        <span v-if="currentStatus.added > 0" class="git-stat added">+{{ currentStatus.added }}</span>
+        <span v-if="currentStatus.modified > 0" class="git-stat modified">~{{ currentStatus.modified }}</span>
+        <span v-if="currentStatus.deleted > 0" class="git-stat deleted">-{{ currentStatus.deleted }}</span>
         <span v-if="diffResult?.truncated" class="git-diff-truncated">{{ $t('common.truncated') }}</span>
       </div>
       <n-button size="small" secondary :loading="loading" @click="loadDiff(true)">{{ $t('common.refresh') }}</n-button>
@@ -79,6 +87,7 @@ import { t } from '../i18n.mjs';
 
 const props = defineProps({
   show: { type: Boolean, default: false },
+  initialRepo: { type: String, default: '' },
   gitStatus: { type: Object, default: () => ({ isRepo: false }) },
   workspace: { type: String, default: '' },
 });
@@ -88,6 +97,23 @@ const emit = defineEmits(['update:show']);
 const visible = computed({
   get: () => props.show,
   set: (value) => emit('update:show', value),
+});
+
+const activeRepo = ref('');
+const repoOptions = computed(() => {
+  if (!props.gitStatus?.repos) return [];
+  return props.gitStatus.repos.map((r) => ({
+    label: `${r.name} (${r.branch || '-'})`,
+    value: r.path,
+  }));
+});
+
+const currentStatus = computed(() => {
+  if (props.gitStatus?.isMultiRepo && activeRepo.value) {
+    const r = props.gitStatus.repos?.find((item) => item.path === activeRepo.value);
+    if (r) return r;
+  }
+  return props.gitStatus || {};
 });
 
 const loading = ref(false);
@@ -104,12 +130,24 @@ const selectedFile = computed(() => {
 const treeRows = computed(() => buildTreeRows(files.value, treeExpanded.value));
 
 watch(() => props.show, (show) => {
-  if (show) loadDiff(false);
+  if (show) {
+    if (props.gitStatus?.isMultiRepo) {
+      activeRepo.value = props.initialRepo || props.gitStatus.repos?.[0]?.path || '';
+    } else {
+      activeRepo.value = '';
+    }
+    loadDiff(false);
+  }
 });
 
+function onRepoChange(val) {
+  activeRepo.value = val;
+  loadDiff(true);
+}
+
 function cacheKey() {
-  const st = props.gitStatus || {};
-  return [props.workspace || '', st.branch || '', st.added || 0, st.modified || 0, st.deleted || 0].join('|');
+  const st = currentStatus.value || {};
+  return [props.workspace || '', activeRepo.value || '', st.branch || '', st.added || 0, st.modified || 0, st.deleted || 0].join('|');
 }
 
 async function loadDiff(force = false) {
@@ -120,7 +158,7 @@ async function loadDiff(force = false) {
   loadSeq.value = seq;
   loading.value = true;
   try {
-    const result = await GetGitDiff();
+    const result = await GetGitDiff(activeRepo.value);
     if (seq !== loadSeq.value) return;
     diffResult.value = result || { isRepo: false, files: [] };
     loadedKey.value = key;

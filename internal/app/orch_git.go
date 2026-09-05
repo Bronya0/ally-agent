@@ -73,18 +73,153 @@ func (a *App) getGitStatus(workspacePath string) GitStatus {
 	}
 }
 
-// computeGitStatus runs a single `git status --porcelain=v2 --branch -z` call,
-// which yields the branch name, ahead/behind counts, and per-file status in
-// one process. The previous implementation spawned three git processes
-// (rev-parse, status, rev-list) on every cache miss.
+// computeGitStatus runs git status on the workspace. If the workspace is not a git
+// repository itself, it safely probes first-level subdirectories for .git markers
+// and aggregates their statuses with strict limits (max 16 sub-repos, concurrency 2).
 func computeGitStatus(workspace string) GitStatus {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	out, _, err := runGitLimited(ctx, workspace, 256*1024, "status", "--porcelain=v2", "--branch", "-z")
+	if err == nil {
+		return parseGitStatusV2(out)
+	}
+
+	// Not a git repo at workspace root. Check if first-level subdirectories are git repos.
+	return computeMultiRepoGitStatus(workspace)
+}
+
+const (
+	maxSubRepos     = 16
+	subRepoWorkers  = 2
+	subRepoTimeout  = 3 * time.Second
+)
+
+// computeMultiRepoGitStatus checks immediate subdirectories of workspace for .git entries.
+// It avoids spawning git processes if no .git directories exist, caps inspected repos at 16,
+// and bounds concurrency to 2 workers with timeouts to avoid system strain.
+func computeMultiRepoGitStatus(workspace string) GitStatus {
+	// Guard against root directory inspection
+	cleanWS := filepath.Clean(workspace)
+	if cleanWS == "" || cleanWS == filepath.VolumeName(cleanWS)+string(filepath.Separator) || cleanWS == "/" {
+		return GitStatus{IsRepo: false}
+	}
+
+	entries, err := os.ReadDir(cleanWS)
 	if err != nil {
 		return GitStatus{IsRepo: false}
 	}
-	return parseGitStatusV2(out)
+
+	type subCandidate struct {
+		name string
+		path string
+	}
+	var candidates []subCandidate
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		// Skip hidden directories like .git, .vscode, .idea, etc.
+		if strings.HasPrefix(name, ".") {
+			continue
+		}
+		subPath := filepath.Join(cleanWS, name)
+		gitPath := filepath.Join(subPath, ".git")
+		// Fast zero-subprocess check
+		if fi, statErr := os.Stat(gitPath); statErr == nil && (fi.IsDir() || !fi.IsDir()) {
+			candidates = append(candidates, subCandidate{name: name, path: subPath})
+			if len(candidates) >= maxSubRepos {
+				break
+			}
+		}
+	}
+
+	if len(candidates) == 0 {
+		return GitStatus{IsRepo: false}
+	}
+
+	type repoResult struct {
+		index  int
+		status GitStatus
+		err    error
+	}
+
+	results := make([]GitStatus, len(candidates))
+	taskCh := make(chan int, len(candidates))
+	resCh := make(chan repoResult, len(candidates))
+
+	workerCount := subRepoWorkers
+	if len(candidates) < workerCount {
+		workerCount = len(candidates)
+	}
+
+	for w := 0; w < workerCount; w++ {
+		go func() {
+			for idx := range taskCh {
+				c := candidates[idx]
+				subCtx, subCancel := context.WithTimeout(context.Background(), subRepoTimeout)
+				out, _, runErr := runGitLimited(subCtx, c.path, 256*1024, "status", "--porcelain=v2", "--branch", "-z")
+				subCancel()
+				if runErr != nil {
+					resCh <- repoResult{index: idx, err: runErr}
+				} else {
+					resCh <- repoResult{index: idx, status: parseGitStatusV2(out)}
+				}
+			}
+		}()
+	}
+
+	for i := range candidates {
+		taskCh <- i
+	}
+	close(taskCh)
+
+	for i := 0; i < len(candidates); i++ {
+		res := <-resCh
+		if res.err == nil && res.status.IsRepo {
+			results[res.index] = res.status
+		}
+	}
+
+	aggregated := GitStatus{
+		IsRepo:      true,
+		IsMultiRepo: true,
+		Repos:       make([]GitRepoItem, 0, len(candidates)),
+	}
+
+	for idx, c := range candidates {
+		st := results[idx]
+		if !st.IsRepo {
+			continue
+		}
+		branch := st.Branch
+		if branch == "" {
+			branch = "-"
+		}
+		aggregated.Repos = append(aggregated.Repos, GitRepoItem{
+			Name:     c.name,
+			Path:     c.name,
+			Branch:   branch,
+			Ahead:    st.Ahead,
+			Behind:   st.Behind,
+			Added:    st.Added,
+			Modified: st.Modified,
+			Deleted:  st.Deleted,
+		})
+		aggregated.Ahead += st.Ahead
+		aggregated.Behind += st.Behind
+		aggregated.Added += st.Added
+		aggregated.Modified += st.Modified
+		aggregated.Deleted += st.Deleted
+	}
+
+	if len(aggregated.Repos) == 0 {
+		return GitStatus{IsRepo: false}
+	}
+
+	aggregated.Branch = fmt.Sprintf("%d repos", len(aggregated.Repos))
+	return aggregated
 }
 
 // parseGitStatusV2 parses `git status --porcelain=v2 --branch -z` output into a
@@ -166,16 +301,26 @@ func (a *App) cacheGitStatus(workspace string, status GitStatus) {
 	a.gitStatusCacheMu.Unlock()
 }
 
-func (a *App) GetGitDiff() GitDiffResult {
+func (a *App) GetGitDiff(repoPath ...string) GitDiffResult {
 	workspace, err := workspaceRoot(a.config)
 	if err != nil {
 		return GitDiffResult{IsRepo: false, Error: err.Error()}
 	}
 
+	targetDir := workspace
+	if len(repoPath) > 0 && strings.TrimSpace(repoPath[0]) != "" {
+		rel := strings.TrimSpace(repoPath[0])
+		// Validate safe subpath within workspace
+		sub, safeErr := safeJoin([]string{workspace}, rel)
+		if safeErr == nil {
+			targetDir = sub
+		}
+	}
+
 	ctx, cancel, runID := a.beginGitDiffRequest()
 	defer a.endGitDiffRequest(runID, cancel)
 
-	root, err := gitRepoRoot(ctx, workspace)
+	root, err := gitRepoRoot(ctx, targetDir)
 	if err != nil {
 		return GitDiffResult{IsRepo: false, Error: err.Error()}
 	}
