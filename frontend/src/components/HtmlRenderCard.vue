@@ -57,7 +57,6 @@ Public License v3. See the LICENSE file for details.
               <span v-if="msg.title" class="html-render-modal-subtitle">{{ msg.title }}</span>
             </div>
             <div class="html-render-modal-actions">
-              <span class="html-render-modal-hint">Esc</span>
               <button
                 type="button"
                 class="html-render-modal-close-btn"
@@ -118,11 +117,6 @@ const renderedDocument = computed(() => {
 });
 
 function handleFrameMessage(event) {
-  if (event.data?.token !== frameToken) return;
-  if (event.data?.type === 'ally-html-escape') {
-    if (isFullscreen.value) closeFullscreen();
-    return;
-  }
   if (event.source !== frameRef.value?.contentWindow) return;
   if (event.data?.type !== 'ally-html-height') return;
   const height = normalizeHtmlFrameHeight(event.data.height);
@@ -132,25 +126,15 @@ function handleFrameMessage(event) {
 
 function openFullscreen() {
   isFullscreen.value = true;
-  window.addEventListener('keydown', handleKeydown, true);
 }
 
 function closeFullscreen() {
   isFullscreen.value = false;
-  window.removeEventListener('keydown', handleKeydown, true);
-}
-
-function handleKeydown(event) {
-  if (event.key === 'Escape') {
-    event.stopPropagation();
-    closeFullscreen();
-  }
 }
 
 onMounted(() => window.addEventListener('message', handleFrameMessage));
 onBeforeUnmount(() => {
   window.removeEventListener('message', handleFrameMessage);
-  window.removeEventListener('keydown', handleKeydown, true);
 });
 </script>
 
@@ -312,15 +296,6 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 8px;
-}
-
-.html-render-modal-hint {
-  font-size: 11px;
-  padding: 2px 6px;
-  border-radius: 4px;
-  background: rgba(255, 255, 255, 0.08);
-  color: var(--ally-text-muted, #8b949e);
-  font-family: var(--ally-mono-font, monospace);
 }
 
 .html-render-modal-close-btn {

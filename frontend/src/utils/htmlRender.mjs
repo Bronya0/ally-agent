@@ -90,11 +90,6 @@ ${String(html || '')}
   new MutationObserver(reportHeight).observe(document.body, { childList: true, subtree: true, attributes: true });
   window.addEventListener('load', reportHeight);
   requestAnimationFrame(reportHeight);
-  window.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') {
-      parent.postMessage({ type: 'ally-html-escape', token }, '*');
-    }
-  }, true);
 })();
 <\/script>
 </body>

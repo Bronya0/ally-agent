@@ -436,6 +436,31 @@ Public License v3. See the LICENSE file for details.
           <SakuraBreeze :open="sakuraOn" />
 
           <SplashScreen v-if="splashVisible" @done="splashVisible = false" />
+
+          <!-- Mermaid 全屏预览：复用 render_html 全屏模态的布局语言（铺满 header/侧栏之外区域） -->
+          <Teleport to="body">
+            <div v-if="mermaidFullscreenActive" class="mermaid-fullscreen-overlay">
+              <div class="mermaid-fullscreen-header">
+                <div class="mermaid-fullscreen-title">
+                  <span class="mermaid-fullscreen-verb">{{ $t('app.mermaid.diagram') }}</span>
+                </div>
+                <div class="mermaid-fullscreen-actions">
+                  <button
+                    type="button"
+                    class="mermaid-fullscreen-close-btn"
+                    :title="$t('app.mermaid.closeFullscreen')"
+                    @click="closeMermaidFullscreen"
+                  >
+                    <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+                      <line x1="18" y1="6" x2="6" y2="18" />
+                      <line x1="6" y1="6" x2="18" y2="18" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+              <div ref="mermaidFullscreenBodyRef" class="markdown-mermaid mermaid-fullscreen-body" tabindex="0"></div>
+            </div>
+          </Teleport>
         </n-message-provider>
       </n-notification-provider>
     </n-dialog-provider>
@@ -788,6 +813,9 @@ const MERMAID_CACHE_MAX_ENTRIES = 16;
 const MERMAID_CACHE_MAX_CHARS = 2_000_000;
 let mermaidSvgCacheChars = 0;
 let mermaidCacheSequence = 0;
+// Mermaid 全屏预览状态（复用 render_html 全屏模态的布局语言）
+const mermaidFullscreenActive = ref(false);
+const mermaidFullscreenBodyRef = ref(null);
 
 function renderMermaidFence(code, spec) {
   const source = normalizeMermaidSource(code, spec);
@@ -798,6 +826,7 @@ function renderMermaidFence(code, spec) {
     `<div class="markdown-mermaid" data-mermaid-source="${markdown.utils.escapeHtml(encodedSource)}" tabindex="0" title="${markdown.utils.escapeHtml(t('app.mermaid.interactionHint'))}">`,
     `<div class="markdown-mermaid-toolbar" aria-label="${t('app.mermaid.actions')}">`,
     `<button type="button" class="markdown-mermaid-action" data-mermaid-action="download" title="${t('app.mermaid.download')}" aria-label="${t('app.mermaid.download')}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg></button>`,
+    `<button type="button" class="markdown-mermaid-action" data-mermaid-action="fullscreen" title="${t('app.mermaid.fullscreen')}" aria-label="${t('app.mermaid.fullscreen')}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg></button>`,
     '</div>',
     '<div class="markdown-mermaid-output"></div>',
     `<pre class="hljs code-block markdown-mermaid-fallback"><code>${markdown.utils.escapeHtml(source)}</code></pre>`,
@@ -1290,7 +1319,49 @@ function handleMermaidToolbarClick(event) {
   const action = button.dataset.mermaidAction || '';
   if (action === 'download') {
     downloadMermaidSvg(node);
+  } else if (action === 'fullscreen') {
+    void openMermaidFullscreen(node);
   }
+}
+
+// 全屏预览当前 Mermaid 图：克隆行内已渲染的 SVG 到全屏舞台，并复用
+// setupMermaidInteraction 的拖拽/缩放交互（node 与 output 同为舞台容器，
+// measureHeight=false 由 flex 布局接管高度）。未渲染/被挂起的图先恢复或
+// 补渲染一次，再取 SVG。
+async function openMermaidFullscreen(node) {
+  if (!node?.isConnected) return;
+  if (node.dataset.mermaidSuspended === 'true') restoreMermaidDiagram(node);
+  let svg = node.querySelector('.markdown-mermaid-output svg');
+  if (!svg && node.dataset.mermaidRendered !== 'true') {
+    // 全屏渲染不受「视口外挂起」限制；观察器下次回调会自行纠正该标记
+    node._mermaidNearViewport = true;
+    await renderMermaidDiagram(node);
+    svg = node.querySelector('.markdown-mermaid-output svg');
+  }
+  if (!svg) return;
+  mermaidFullscreenActive.value = true;
+  await nextTick();
+  const body = mermaidFullscreenBodyRef.value;
+  if (!body) {
+    mermaidFullscreenActive.value = false;
+    return;
+  }
+  body.replaceChildren(svg.cloneNode(true));
+  setupMermaidInteraction(body, body, null, false);
+  body.focus({ preventScroll: true });
+}
+
+function closeMermaidFullscreen() {
+  const body = mermaidFullscreenBodyRef.value;
+  if (body) {
+    body._mermaidCleanup?.();
+    body._mermaidCleanup = null;
+    body._mermaidStopTransforming = null;
+    body.classList.remove('interaction-active', 'mermaid-transforming');
+    if (document.activeElement === body) body.blur();
+    body.replaceChildren();
+  }
+  mermaidFullscreenActive.value = false;
 }
 
 function handleCodeCopyClick(event) {
