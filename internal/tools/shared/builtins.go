@@ -222,7 +222,7 @@ func chatToolsUncached() []openai.Tool {
 			"type": "object",
 			"properties": map[string]any{
 				"target":  map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Explicit SSH target plus workspace root, e.g. my-dev:/srv/app."},
-				"path":    map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Relative path of the single file to edit in this call."},
+				"path":    map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Relative path of the single file to edit in this call. Absolute paths equal to or under the workspace root are also accepted and rebased."},
 				"version": map[string]any{"type": "string", "pattern": "^[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{6}$", "description": "Required 6-char current version from remote_read."},
 				"changes": remoteEditChangesSchema(),
 			},
@@ -252,7 +252,7 @@ func chatToolsUncached() []openai.Tool {
 			"properties": map[string]any{
 				"target":         map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Explicit SSH target plus workspace root, e.g. my-dev:/srv/app."},
 				"command":        map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*"},
-				"cwd":            map[string]any{"type": "string", "description": "Relative working directory inside the remote workspace. Empty means workspace root."},
+				"cwd":            map[string]any{"type": "string", "description": "Working directory inside the remote workspace. Relative to the workspace root; an absolute path equal to or under the root is also accepted and rebased. Empty means workspace root."},
 				"timeout":        map[string]any{"type": "integer", "minimum": 1, "maximum": 600, "description": "Timeout in seconds. Default 120, max 600."},
 				"shell":          map[string]any{"type": "string", "description": "Remote shell executable. Default /bin/bash if available, otherwise /bin/sh."},
 				"fullOutput":     map[string]any{"type": "boolean", "description": "Required decision. true if you will read the output itself as the answer (git status/diff/log, ls, find, cat, grep, failure diagnosis); false if you only check success/failure — the last 3 lines plus exitCode suffice."},

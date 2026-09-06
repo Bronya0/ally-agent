@@ -426,6 +426,37 @@ func parseRemoteTarget(raw string) (remoteTarget, error) {
 	return remoteTarget{Raw: raw, Host: host, WorkspaceRoot: root}, nil
 }
 
+// validateRemoteWorkspacePath validates a path (or cwd) against the remote
+// workspace root. Relative paths pass through as before. Absolute paths are
+// rebased when they point inside the root: the root itself maps to "." and
+// deeper paths to their relative remainder — a caller that already knows the
+// absolute location (e.g. cwd="/srv/app" with target root "/srv/app") is not
+// punished for spelling it absolutely. Absolute paths outside the root are
+// rejected with an error that names the boundary, mirroring the local
+// E_PATH_OUTSIDE contract.
+func validateRemoteWorkspacePath(p, root string, allowRoot bool) (string, error) {
+	p = strings.TrimSpace(filepath.ToSlash(p))
+	if strings.HasPrefix(p, "/") {
+		root = path.Clean(filepath.ToSlash(root))
+		if p == root {
+			if !allowRoot {
+				return "", errors.New("path is required")
+			}
+			return ".", nil
+		}
+		if strings.HasPrefix(p, root+"/") {
+			p = strings.TrimPrefix(p, root+"/")
+		} else {
+			return "", fmt.Errorf("absolute path %s is outside the remote workspaceRoot %s; use a path relative to the root (empty means the root itself)", p, root)
+		}
+	}
+	return validateRemoteRelativePath(p, allowRoot)
+}
+
+// validateRemoteRelativePath validates a path already known to be relative
+// against the remote workspace root: no NUL bytes, no leading "/", no ".."
+// traversal, and path.Clean'd. Empty or "." resolves to the root itself when
+// allowRoot is set (used for remote_run_command cwd).
 func validateRemoteRelativePath(p string, allowRoot bool) (string, error) {
 	p = strings.TrimSpace(filepath.ToSlash(p))
 	if p == "" || p == "." {
@@ -616,7 +647,7 @@ func (a *App) remoteReadRaw(ctx context.Context, target, relPath string) (remote
 	if err != nil {
 		return remoteTarget{}, remoteRawFile{}, err
 	}
-	cleanPath, err := validateRemoteRelativePath(relPath, false)
+	cleanPath, err := validateRemoteWorkspacePath(relPath, rt.WorkspaceRoot, false)
 	if err != nil {
 		return remoteTarget{}, remoteRawFile{}, err
 	}
@@ -639,7 +670,7 @@ func (a *App) remoteReadRaw(ctx context.Context, target, relPath string) (remote
 }
 
 func (a *App) remoteWriteRaw(ctx context.Context, rt remoteTarget, relPath string, data []byte, overwrite, mkdirs bool) ([]string, error) {
-	cleanPath, err := validateRemoteRelativePath(relPath, false)
+	cleanPath, err := validateRemoteWorkspacePath(relPath, rt.WorkspaceRoot, false)
 	if err != nil {
 		return nil, err
 	}
@@ -824,7 +855,7 @@ func (a *App) remoteCreateFile(ctx context.Context, req RemoteCreateFileRequest)
 	if err != nil {
 		return EditResult{}, err
 	}
-	cleanPath, err := validateRemoteRelativePath(req.Path, false)
+	cleanPath, err := validateRemoteWorkspacePath(req.Path, rt.WorkspaceRoot, false)
 	if err != nil {
 		return EditResult{}, err
 	}
@@ -860,7 +891,7 @@ func (a *App) remoteDeletePath(ctx context.Context, req RemoteDeletePathRequest)
 	if err != nil {
 		return nil, err
 	}
-	cleanPath, err := validateRemoteRelativePath(req.Path, false)
+	cleanPath, err := validateRemoteWorkspacePath(req.Path, rt.WorkspaceRoot, false)
 	if err != nil {
 		return nil, err
 	}
@@ -891,7 +922,7 @@ func (a *App) remoteRunCommand(ctx context.Context, req RemoteRunCommandRequest)
 	if err != nil {
 		return CommandResult{}, err
 	}
-	cwd, err := validateRemoteRelativePath(req.Cwd, true)
+	cwd, err := validateRemoteWorkspacePath(req.Cwd, rt.WorkspaceRoot, true)
 	if err != nil {
 		return CommandResult{}, err
 	}

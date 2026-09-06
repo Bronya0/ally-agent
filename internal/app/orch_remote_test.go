@@ -107,6 +107,48 @@ func runRemoteHelperScript(t *testing.T, py, script string) (remotePythonRespons
 	return resp, nil
 }
 
+// TestValidateRemoteWorkspacePathRebase 锁定远端路径校验的重定基契约：
+// root 内的绝对路径（含 root 本身）等价于其相对拼写，root 外绝对路径拒绝。
+// 动机：cwd="/tmp" 且 target root 也是 /tmp 时，旧实现按“绝对路径一律拒绝”
+// 处理，同义拼写被误伤；语义边界只应是 root 内外，而非拼与不拼。
+func TestValidateRemoteWorkspacePathRebase(t *testing.T) {
+	cases := []struct {
+		name      string
+		p         string
+		root      string
+		allowRoot bool
+		want      string
+		wantErr   string
+	}{
+		{"root itself absolute", "/srv/app", "/srv/app", true, ".", ""},
+		{"root itself absolute no allowRoot", "/srv/app", "/srv/app", false, "", "path is required"},
+		{"inside root rebased", "/srv/app/src/main.go", "/srv/app", false, "src/main.go", ""},
+		{"empty means root", "", "/srv/app", true, ".", ""},
+		{"relative passthrough", "src/main.go", "/srv/app", false, "src/main.go", ""},
+		{"outside root rejected", "/etc/passwd", "/srv/app", true, "", "outside the remote workspaceRoot"},
+		{"sibling prefix not root", "/srv/appdata/x", "/srv/app", true, "", "outside the remote workspaceRoot"},
+		{"trailing slash root normalized", "/srv/app/", "/srv/app", true, ".", ""},
+		{"dot-dot still rejected", "/srv/app/../etc", "/srv/app", true, "", "must not contain"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := validateRemoteWorkspacePath(tc.p, tc.root, tc.allowRoot)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("path %q root %q: expected error containing %q, got %q (clean=%q)", tc.p, tc.root, tc.wantErr, err, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("path %q root %q: unexpected error: %v", tc.p, tc.root, err)
+			}
+			if got != tc.want {
+				t.Fatalf("path %q root %q: expected %q, got %q", tc.p, tc.root, tc.want, got)
+			}
+		})
+	}
+}
+
 // TestRemoteHelperProtectedDeleteClassification 锁定删除保护的分类契约：
 // 系统树（/etc、/usr 等）整体拒绝；主目录类父根（/root、/home）只拦目录
 // 本身，其子树内的普通工作区文件必须放行（/root 曾被误放进树清单，导致
