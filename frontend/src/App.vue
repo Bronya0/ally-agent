@@ -2506,7 +2506,6 @@ function displayMessagesForSession(session) {
       };
       let seq = 0;
       let allDone = true;
-      let hasError = false;
       while (i < j) {
         const entry = src[i];
         if (entry.role !== 'tool_call') { i++; continue; }
@@ -2531,7 +2530,6 @@ function displayMessagesForSession(session) {
         } else if ((entry.name === 'read' || entry.name === 'batch_read') && entry.batchEntries && entry.batchEntries.length > 0) {
           for (const be of entry.batchEntries) {
             const entryStatus = be.status || entry.status;
-            if (entryStatus === 'error') hasError = true;
             group.readEntries.push({ title: be.title, chip: be.chip, lineCount: be.lineCount || 0, totalLines: be.totalLines || be.lineCount || 0, startLine: be.startLine || 1, endLine: be.endLine || be.totalLines || 0, truncated: !!be.truncated, body: '', status: entryStatus, expanded: false, seq: seq++ });
           }
           group.readCount++;
@@ -2549,14 +2547,14 @@ function displayMessagesForSession(session) {
           group.readCount++;
         }
         if (entry.status === 'running') allDone = false;
-        if (entry.status === 'error') hasError = true;
         if ((entry.durationMs || 0) > group.durationMs) {
           group.durationMs = entry.durationMs || 0;
           group.durationText = entry.durationText || formatDurationShort(entry.durationMs);
         }
         i++;
       }
-      group.status = hasError ? 'error' : (allDone ? 'success' : 'running');
+      // 子调用失败不改组状态：失败详情看展开后的子条目，折叠行不整组转红
+      group.status = allDone ? 'success' : 'running';
       // 夹在工具批次之间的思考上提到折叠组上方（原顺序）；
       // 尾随的思考保持在折叠组下方（它多半是正在流式的最终回答，
       // 一旦有正文就不能把折叠往下顶）。

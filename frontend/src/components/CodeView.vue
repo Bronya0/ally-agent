@@ -25,6 +25,7 @@ import javascript from 'highlight.js/lib/languages/javascript'
 import typescript from 'highlight.js/lib/languages/typescript'
 import json from 'highlight.js/lib/languages/json'
 import bash from 'highlight.js/lib/languages/bash'
+import powershell from 'highlight.js/lib/languages/powershell'
 import go from 'highlight.js/lib/languages/go'
 import xml from 'highlight.js/lib/languages/xml'
 import cssLang from 'highlight.js/lib/languages/css'
@@ -39,6 +40,8 @@ hljs.registerLanguage('json', json)
 hljs.registerLanguage('bash', bash)
 hljs.registerLanguage('shell', bash)
 hljs.registerLanguage('sh', bash)
+hljs.registerLanguage('powershell', powershell)
+hljs.registerLanguage('ps1', powershell)
 hljs.registerLanguage('go', go)
 hljs.registerLanguage('html', xml)
 hljs.registerLanguage('xml', xml)
@@ -49,6 +52,7 @@ hljs.registerLanguage('md', markdownLang)
 const props = defineProps({
   code: { type: String, default: '' },
   filePath: { type: String, default: '' },
+  language: { type: String, default: '' },
   collapsed: { type: Boolean, default: false },
   maxLines: { type: Number, default: 0 },
   previewMode: { type: String, default: 'head' },
@@ -95,7 +99,8 @@ function extname(p) {
   return p.slice(i).toLowerCase()
 }
 
-function detectLang(filePath) {
+function detectLang(filePath, explicitLang) {
+  if (explicitLang) return explicitLang
   const ext = extname(filePath) // e.g. ".ts"
   const base = ext.startsWith('.') ? ext.slice(1) : ext
   if (!base) return null
@@ -126,7 +131,7 @@ function highlightCached(lang, code, maxLines) {
     return hit;
   }
   let lines;
-  if (!lang || !hljs.getLanguage(lang)) {
+  if (!lang || lang === 'none' || !hljs.getLanguage(lang)) {
     lines = escapeHtml(code).split('\n');
   } else {
     try {
@@ -148,7 +153,7 @@ function highlightCached(lang, code, maxLines) {
 const displayLines = computed(() => {
   const code = preview.value.lines.join('\n')
   if (!code) return []
-  const lang = detectLang(props.filePath)
+  const lang = detectLang(props.filePath, props.language)
   const maxLines = props.collapsed && props.maxLines > 0 ? props.maxLines : 0;
   return highlightCached(lang, code, maxLines);
 })

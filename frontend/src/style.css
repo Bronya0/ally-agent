@@ -4079,11 +4079,6 @@ code, pre {
   font-weight: 400;
 }
 
-/* 有子调用失败：统计文字转红提示（折叠行无状态图标，红色文字兜底） */
-.read-grep-group.error .read-grep-stats {
-  color: var(--ally-danger-pale);
-}
-
 .read-grep-num-slot {
   display: inline-flex;
   vertical-align: baseline;
@@ -4247,7 +4242,7 @@ code, pre {
   display: inline-block;
   min-width: 32px;
   text-align: right;
-  padding-right: 8px;
+  padding-right: 6px;
   color: var(--ally-text-ghost);
   user-select: none;
   flex-shrink: 0;
@@ -4355,7 +4350,7 @@ code, pre {
 .code-body-scroll {
   max-height: 360px;
   overflow-y: auto;
-  padding: 4px 0;
+  padding: 2px 0;
 }
 
 .code-view.collapsed .code-body-scroll {
@@ -4365,18 +4360,24 @@ code, pre {
 
 .code-row {
   display: flex;
-  padding: 0 10px;
+  padding: 0 10px 0 0;
   min-height: 20px;
 }
 
 .code-gutter {
   display: inline-block;
-  min-width: 44px;
+  min-width: 32px;
   text-align: right;
-  padding-right: 8px;
-  color: var(--ally-text-ghost);
+  padding-right: 6px;
+  color: var(--ally-text-faint);
   user-select: none;
   flex-shrink: 0;
+}
+
+/* 终端输出（no-gutter）：吃掉 .code-text 基础的 4px 左缩进（那是给行号
+   隔槽用的），让输出正文与标题行动词（Ran/…）左缘对齐 */
+.code-row.no-gutter .code-text {
+  padding-left: 0;
 }
 
 .code-text {
@@ -4385,6 +4386,7 @@ code, pre {
   word-break: break-all;
   flex: 1;
   min-width: 0;
+  /* 正文比行号亮一档：行号是装饰，文件内容是主体 */
   color: var(--ally-text-soft);
 }
 

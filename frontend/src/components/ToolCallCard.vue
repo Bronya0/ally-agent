@@ -73,6 +73,12 @@ Public License v3. See the LICENSE file for details.
       :max-lines="BODY_PREVIEW_LINES"
       preview-mode="tail"
     />
+    <TerminalOutputView
+      v-else-if="msg.kind === 'command' && msg.status !== 'error'"
+      :text="msg.body || ''"
+      :collapsed="!msg.expanded"
+      :max-lines="COMMAND_PREVIEW_LINES"
+    />
     <pre v-else-if="msg.body && msg.status !== 'error' && msg.kind !== 'edit' && msg.kind !== 'read' && msg.kind !== 'remote_read' && msg.kind !== 'calculate' && msg.kind !== 'scheduled' && msg.kind !== 'grep' && msg.kind !== 'plan' && (msg.kind !== 'list' || msg.expanded)" ref="bodyPreRef" :class="['tool-body', { 'fixed-scroll': isFixedKind(msg.kind), 'body-preview': isBodyPreview(msg), 'tail-default': isServiceReadResult(msg), 'scroll-enabled': bodyScrollEnabled && isScrollableBody(msg) }]" @click.stop="handleBodyClick(msg)">{{ toolBodyText(msg) }}</pre>
     <div v-if="isValidationWarning(msg)" class="edit-warning-list validation-warning-list" role="status" aria-live="polite">
       <div class="edit-warning validation-warning" :title="msg.validation">
@@ -105,6 +111,7 @@ import ToolStatusIcon from './ToolStatusIcon.vue';
 
 const BODY_PREVIEW_LINES = 6;
 const TOOL_OUTPUT_PREVIEW_LINES = 4;
+const COMMAND_PREVIEW_LINES = 4;
 
 const bodyPreRef = ref(null);
 const bodyScrollEnabled = ref(false);
@@ -124,6 +131,7 @@ const emit = defineEmits(['toggle']);
 
 const DiffView = defineAsyncComponent(() => import('./DiffView.vue'));
 const CodeView = defineAsyncComponent(() => import('./CodeView.vue'));
+const TerminalOutputView = defineAsyncComponent(() => import('./TerminalOutputView.vue'));
 const nowMs = ref(Date.now());
 let waitTimer = null;
 
@@ -429,11 +437,17 @@ watch(
 );
 
 function handleToggle(msg) {
+  if (msg.kind === 'command') {
+    bodyScrollEnabled.value = false;
+  }
   emit('toggle');
 }
 
 function hasExpandableBody(msg) {
-  if (msg.kind === 'read' || msg.kind === 'remote_read' || msg.kind === 'command' || msg.kind === 'plan') return false;
+  if (msg.kind === 'read' || msg.kind === 'remote_read' || msg.kind === 'plan') return false;
+  // 命令卡的可展开阈值必须与 CodeView 的裁剪阈值同源，否则 5–6 行输出会被裁成
+  // 4 行预览却判定为「无可展开内容」，截断后再也看不到全文。
+  if (msg.kind === 'command') return lineCount(msg, msg.body) > COMMAND_PREVIEW_LINES;
   if (msg.kind === 'edit') return true;
   if (msg.kind === 'create') return lineCount(msg, msg.codeContent) > BODY_PREVIEW_LINES;
   // calculate: body 只重复 title(expression) + chip(= result)，无需详情卡

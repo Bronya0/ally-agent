@@ -10,8 +10,8 @@ Public License v3. See the LICENSE file for details.
 <template>
   <div :class="['rich-tool-card', 'read-grep-group', msg.status, { expanded: isExpanded, 'non-interactive': true }]">
     <div class="tool-line read-grep-toggle" @click="toggleExpanded">
-      <!-- 折叠行不放状态图标（比圆点/对勾更干净）：组内还有 running 调用时
-           统计文字带 shimmer 流光即进行中信号，出错时统计文字转红 -->
+      <!-- 折叠行不放状态图标（比圆点/对勾更干净）；子调用失败也不改折叠行
+           颜色，失败详情在展开后的子条目上 -->
       <!-- 折叠行：取消整行 shimmer 流光，文字保持固定，数字递增时播放微弹跳入动画 -->
       <span class="read-grep-stats">
         <template v-for="(part, idx) in statsParts" :key="part.key">
