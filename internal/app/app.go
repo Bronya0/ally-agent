@@ -68,7 +68,11 @@ const (
 	defaultHTTPUA                    = "AllyAgent/1.0 (+user-controlled desktop app)"
 	workspaceMapDepth                = 3
 	workspaceMapLimit                = 320
-	workspaceMapTTL                  = 30 * time.Second
+	// workspaceMapMaxFileSize 是 rg 扫描的单文件体积上限：超过的文件不进 map
+	// （生成物/媒体/数据集挤占 320 条配额且模型 read 不动）。rg 的
+	// --max-filesize 参数和头部说明文字都引用这个值，改一处即可同步。
+	workspaceMapMaxFileSize = 1024 * 1024
+	workspaceMapTTL         = 30 * time.Second
 	workspacePathIndexTTL            = 10 * time.Minute
 	workspacePathTruncatedRefreshTTL = 60 * time.Minute
 	workspacePathIndexBuildTimeout   = 8 * time.Second

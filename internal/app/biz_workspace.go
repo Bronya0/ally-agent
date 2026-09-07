@@ -790,6 +790,7 @@ func buildWorkspaceMapContext(root string) string {
 	var b strings.Builder
 	b.WriteString("# Workspace Map\n\n")
 	b.WriteString("Bounded hidden workspace map: file paths with byte sizes; contents never included.\n")
+	b.WriteString(fmt.Sprintf("Files larger than %s are omitted.\n", formatMapFileSize(workspaceMapMaxFileSize)))
 	b.WriteString("Each file shows its size (B/KB/MB); directories show no size. \"+N more files\" means that directory has N more entries beyond the per-directory budget.\n")
 	b.WriteString("Root: " + filepath.ToSlash(root) + "\n")
 	b.WriteString(fmt.Sprintf("Limits: depth=%d entries=%d truncated=%t\n", workspaceMapDepth, workspaceMapLimit, result.Truncated))
@@ -897,7 +898,7 @@ func buildWorkspaceMapWithRg(root string, maxDepth, limit int) (workspaceMapBuil
 	// 会变成白名单（只输出匹配文件），所以交给消费端 isWorkspaceMapSensitiveFile
 	// 过滤，与 walkdir 回退路径语义完全一致（.env/.env.* 排除，模板保留）。
 	args := []string{"--files", "--hidden", "--no-require-git", "--sort", "path",
-		"--max-filesize", "1M",
+		"--max-filesize", fmt.Sprintf("%d", workspaceMapMaxFileSize),
 		"--iglob", "!.git", "--iglob", "!.git/**"}
 	for _, dir := range workspaceMapIgnoredDirs() {
 		args = append(args, "--iglob", "!"+dir+"/**", "--iglob", "!**/"+dir+"/**")

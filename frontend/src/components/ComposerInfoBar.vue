@@ -119,7 +119,7 @@ Public License v3. See the LICENSE file for details.
       >
         <template #trigger>
           <span class="info-git" :title="$t('composer.git.open')" @click.stop="$emit('openGitDiff', gitStatus.repos[0]?.path || '')">
-            <span class="info-git-branch">{{ `${gitStatus.repos.length} repos` }} ▾</span>
+            <span class="info-git-branch">{{ `${gitStatus.repos.length} repos` }}</span>
             <span v-if="gitStatus.ahead > 0" class="git-stat ahead" :title="$t('composer.git.ahead')">↑{{ gitStatus.ahead }}</span>
             <span v-if="gitStatus.behind > 0" class="git-stat behind" :title="$t('composer.git.behind')">↓{{ gitStatus.behind }}</span>
             <span v-if="gitStatus.added > 0" class="git-stat added" :title="$t('composer.git.added')">+{{ gitStatus.added }}</span>
@@ -135,8 +135,7 @@ Public License v3. See the LICENSE file for details.
               class="multi-repo-item"
               @click.stop="$emit('openGitDiff', repo.path)"
             >
-              <span class="multi-repo-name" :title="repo.name">{{ repo.name }}</span>
-              <span class="multi-repo-sep">·</span>
+              <span class="multi-repo-name" :title="repo.name">{{ repo.name }}/</span>
               <span class="multi-repo-branch" :title="repo.branch">{{ repo.branch }}</span>
               <span class="multi-repo-stats">
                 <span v-if="repo.ahead > 0" class="git-stat ahead">↑{{ repo.ahead }}</span>

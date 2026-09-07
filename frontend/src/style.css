@@ -2231,11 +2231,6 @@ code, pre {
   max-width: 120px;
 }
 
-.multi-repo-sep {
-  color: var(--ally-text-muted);
-  font-size: var(--ally-aux-font-size);
-}
-
 .multi-repo-branch {
   color: var(--ally-accent);
   font-size: var(--ally-aux-font-size);

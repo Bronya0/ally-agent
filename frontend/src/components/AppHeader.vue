@@ -837,8 +837,4 @@ body.platform-darwin .window-close-icon {
   color: var(--ally-text-primary);
 }
 
-.workspace-tabs :deep(.workspace-tab.running .tab-close) {
-  color: var(--ally-success-pale);
-}
-
 </style>
