@@ -1,0 +1,1288 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>现代 AI Agent 架构与系统工程全景解构</title>
+  <style>
+    :root {
+      --bg-base: #07090e;
+      --bg-surface: #0d111a;
+      --bg-card: rgba(18, 24, 38, 0.72);
+      --bg-card-hover: rgba(26, 35, 54, 0.85);
+      --border-subtle: rgba(255, 255, 255, 0.08);
+      --border-accent: rgba(56, 189, 248, 0.3);
+      --border-glow: rgba(56, 189, 248, 0.15);
+      
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
+      --text-dim: #64748b;
+      
+      --accent-blue: #38bdf8;
+      --accent-cyan: #2dd4bf;
+      --accent-purple: #c084fc;
+      --accent-amber: #fbbf24;
+      --accent-emerald: #34d399;
+      --accent-rose: #fb7185;
+      
+      --glow-blue: rgba(56, 189, 248, 0.12);
+      --glow-purple: rgba(192, 132, 252, 0.1);
+      
+      --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      --font-mono: "JetBrains Mono", "Fira Code", SFMono-Regular, Consolas, monospace;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background-color: var(--bg-base);
+      background-image: 
+        radial-gradient(circle at 10% 15%, rgba(56, 189, 248, 0.07) 0%, transparent 45%),
+        radial-gradient(circle at 90% 85%, rgba(192, 132, 252, 0.07) 0%, transparent 45%);
+      color: var(--text-main);
+      font-family: var(--font-sans);
+      overflow: hidden;
+      height: 100vh;
+      width: 100vw;
+      margin: 0;
+      padding: 0;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    #stage {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+      background: var(--bg-surface);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .slides-wrapper {
+      position: relative;
+      width: 100%;
+      height: calc(100vh - 46px);
+      overflow: hidden;
+    }
+
+    .slide {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      padding: 30px 52px 24px 52px;
+      display: flex;
+      flex-direction: column;
+      opacity: 0;
+      visibility: hidden;
+      transition: opacity 0.32s cubic-bezier(0.16, 1, 0.3, 1), transform 0.32s cubic-bezier(0.16, 1, 0.3, 1);
+      transform: translateX(16px);
+      pointer-events: none;
+    }
+
+    .slide.active {
+      opacity: 1;
+      visibility: visible;
+      transform: translateX(0);
+      pointer-events: auto;
+    }
+
+    /* Header */
+    .slide-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 18px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--border-subtle);
+      flex-shrink: 0;
+    }
+
+    .slide-title-group h2 {
+      font-size: 26px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      color: var(--text-main);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .badge-tag {
+      font-size: 11px;
+      font-family: var(--font-mono);
+      padding: 3px 9px;
+      border-radius: 5px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      background: rgba(56, 189, 248, 0.12);
+      border: 1px solid rgba(56, 189, 248, 0.25);
+      color: var(--accent-blue);
+      font-weight: 600;
+    }
+
+    .slide-desc {
+      font-size: 13px;
+      color: var(--text-muted);
+      margin-top: 4px;
+      line-height: 1.45;
+    }
+
+    .slide-number {
+      font-family: var(--font-mono);
+      font-size: 12.5px;
+      color: var(--text-dim);
+      font-weight: 600;
+      background: rgba(255, 255, 255, 0.04);
+      padding: 4px 10px;
+      border-radius: 6px;
+      border: 1px solid var(--border-subtle);
+    }
+
+    /* Body & Grids */
+    .slide-body {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 15px;
+      overflow-y: auto;
+      padding-right: 4px;
+    }
+
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; height: 100%; }
+    .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; height: 100%; }
+    .grid-1-2 { display: grid; grid-template-columns: 1fr 1.8fr; gap: 18px; height: 100%; }
+    .grid-2-1 { display: grid; grid-template-columns: 1.8fr 1fr; gap: 18px; height: 100%; }
+
+    /* Cards */
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: 9px;
+      padding: 15px 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      backdrop-filter: blur(12px);
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+    }
+
+    .card.glow-blue { border-color: rgba(56, 189, 248, 0.25); box-shadow: 0 4px 20px rgba(56, 189, 248, 0.06); }
+    .card.glow-purple { border-color: rgba(192, 132, 252, 0.25); box-shadow: 0 4px 20px rgba(192, 132, 252, 0.06); }
+    .card.glow-emerald { border-color: rgba(52, 211, 153, 0.25); box-shadow: 0 4px 20px rgba(52, 211, 153, 0.06); }
+
+    .card-title {
+      font-size: 14.5px;
+      font-weight: 700;
+      color: var(--text-main);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .card-title .dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--accent-blue);
+      box-shadow: 0 0 8px currentColor;
+    }
+
+    .card-body {
+      font-size: 12.8px;
+      color: var(--text-muted);
+      line-height: 1.6;
+      flex: 1;
+    }
+
+    .highlight-banner {
+      background: linear-gradient(90deg, rgba(56, 189, 248, 0.1) 0%, rgba(192, 132, 252, 0.06) 100%);
+      border: 1px solid rgba(56, 189, 248, 0.2);
+      border-left: 4px solid var(--accent-blue);
+      border-radius: 7px;
+      padding: 10px 15px;
+      font-size: 13px;
+      color: var(--text-main);
+      line-height: 1.5;
+    }
+
+    .code-block {
+      background: #05070c;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 7px;
+      padding: 11px 13px;
+      font-family: var(--font-mono);
+      font-size: 11.2px;
+      line-height: 1.55;
+      color: #93c5fd;
+      overflow-x: auto;
+      white-space: pre;
+    }
+
+    /* Comparison Table */
+    .comp-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12.5px;
+    }
+    .comp-table th {
+      background: rgba(255, 255, 255, 0.03);
+      color: var(--text-dim);
+      font-weight: 600;
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--border-subtle);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      text-align: left;
+    }
+    .comp-table td {
+      padding: 9px 12px;
+      border-bottom: 1px solid var(--border-subtle);
+      color: var(--text-main);
+      vertical-align: middle;
+      line-height: 1.45;
+    }
+
+    /* Progress & Controls */
+    .progress-bar {
+      position: absolute;
+      bottom: 45px;
+      left: 0;
+      height: 2.5px;
+      background: linear-gradient(90deg, var(--accent-blue), var(--accent-purple));
+      transition: width 0.3s ease;
+      z-index: 11;
+      box-shadow: 0 0 8px rgba(56, 189, 248, 0.4);
+    }
+
+    .controls {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      width: 100%;
+      height: 45px;
+      background: rgba(13, 17, 26, 0.95);
+      border-top: 1px solid var(--border-subtle);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 0 24px;
+      z-index: 10;
+    }
+
+    .btn {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--border-subtle);
+      color: var(--text-main);
+      padding: 5px 12px;
+      border-radius: 6px;
+      font-size: 12px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.2s;
+    }
+    .btn:hover { background: rgba(255, 255, 255, 0.1); border-color: var(--accent-blue); }
+
+    /* Overview Modal */
+    #overview-modal {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      background: rgba(7, 9, 14, 0.94);
+      backdrop-filter: blur(12px);
+      z-index: 999;
+      display: none;
+      padding: 40px;
+      overflow-y: auto;
+    }
+    #overview-modal.active { display: block; }
+    .overview-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+      gap: 18px;
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+    .overview-thumb {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: 8px;
+      padding: 14px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .overview-thumb:hover { border-color: var(--accent-blue); transform: translateY(-2px); }
+    .overview-thumb.current { border-color: var(--accent-blue); box-shadow: 0 0 12px var(--glow-blue); }
+
+    /* Cover Slide */
+    .title-slide {
+      justify-content: center;
+      align-items: flex-start;
+      padding: 0 80px;
+      position: relative;
+    }
+    .title-slide h1 {
+      font-size: 46px;
+      font-weight: 800;
+      line-height: 1.15;
+      letter-spacing: -0.03em;
+      margin-bottom: 16px;
+      background: linear-gradient(135deg, #ffffff 30%, #94a3b8 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .title-slide p.sub {
+      font-size: 18px;
+      color: var(--text-muted);
+      max-width: 860px;
+      line-height: 1.6;
+      margin-bottom: 34px;
+    }
+    .title-meta-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 20px;
+      border-top: 1px solid var(--border-subtle);
+      padding-top: 22px;
+      width: 100%;
+      max-width: 1000px;
+    }
+    .meta-box { display: flex; flex-direction: column; gap: 4px; }
+    .meta-lbl { font-size: 11px; font-family: var(--font-mono); color: var(--text-dim); text-transform: uppercase; }
+    .meta-val { font-size: 13.5px; font-weight: 600; color: var(--accent-blue); }
+  </style>
+</head>
+<body>
+
+  <div id="stage">
+    <div class="slides-wrapper">
+
+      <!-- ==================== Slide 1: 封面 ==================== -->
+      <div class="slide title-slide active" data-title="封面">
+        <div class="badge-tag" style="margin-bottom:14px;">Technical Treatise & Architecture Design</div>
+        <h1>现代 AI Agent 架构与<br>系统工程全景解构</h1>
+        <p class="sub">从控制论闭环的第一性原理，到受限解码协议、两阶段调度、提示词缓存经济学与工具检索增强 (Tool RAG)。客观解剖生产级自主智能体系统的核心骨架与韧性防线。</p>
+        <div class="title-meta-grid">
+          <div class="meta-box">
+            <span class="meta-lbl">Theoretical Root</span>
+            <span class="meta-val">Cybernetic Feedback Loops</span>
+          </div>
+          <div class="meta-box">
+            <span class="meta-lbl">Protocol Stack</span>
+            <span class="meta-val">Grammar-Guided Dec. & MCP</span>
+          </div>
+          <div class="meta-box">
+            <span class="meta-lbl">System Engineering</span>
+            <span class="meta-val">Prompt Caching & Two-Phase Batch</span>
+          </div>
+          <div class="meta-box">
+            <span class="meta-lbl">Controls</span>
+            <span class="meta-val">← / → 翻页 · O 大纲 · F 全屏</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- ==================== Slide 2: 认知范式：从开环推理到控制论闭环 ==================== -->
+      <div class="slide" data-title="认知范式：开环与闭环">
+        <div class="slide-header">
+          <div class="slide-title-group">
+            <h2>认知范式演化：从开环单次采样到环境控制论闭环 <span class="badge-tag">Cognitive Paradigm</span></h2>
+            <div class="slide-desc">为什么大模型单枪匹马只能进行“静态脑补”？从概率生成器到具备状态跃迁能力的自主智能体。</div>
+          </div>
+          <div class="slide-number">02 / 13</div>
+        </div>
+        <div class="slide-body">
+          <div class="grid-2">
+            <div class="card glow-blue" style="padding:14px; align-items:center; justify-content:center;">
+              <svg viewBox="0 0 560 380" style="width:100%; height:100%;">
+                <defs>
+                  <marker id="arr-b" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                    <path d="M 0 1 L 10 5 L 0 9 z" fill="#38bdf8" />
+                  </marker>
+                  <marker id="arr-g" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                    <path d="M 0 1 L 10 5 L 0 9 z" fill="#34d399" />
+                  </marker>
+                </defs>
+
+                <!-- 上部：开环 -->
+                <rect x="20" y="15" width="520" height="75" rx="8" fill="rgba(255,255,255,0.02)" stroke="rgba(255,255,255,0.08)"/>
+                <text x="35" y="38" fill="#94a3b8" font-size="12" font-weight="700">开环架构（Open-Loop Inference）：单次无反馈采样</text>
+                <text x="50" y="65" fill="#f1f5f9" font-size="13">初始提示词 (Prompt)</text>
+                <path d="M 170 60 L 250 60" stroke="#64748b" stroke-width="2" marker-end="url(#arr-b)"/>
+                <text x="265" y="65" fill="#38bdf8" font-size="13" font-weight="600">P(w_t | w_&lt;t)</text>
+                <path d="M 360 60 L 440 60" stroke="#64748b" stroke-width="2" marker-end="url(#arr-b)"/>
+                <text x="450" y="65" fill="#94a3b8" font-size="13">最终输出 (终止)</text>
+
+                <!-- 下部：闭环 -->
+                <rect x="20" y="110" width="520" height="255" rx="10" fill="rgba(56,189,248,0.03)" stroke="rgba(56,189,248,0.2)"/>
+                <text x="35" y="135" fill="#38bdf8" font-size="13" font-weight="700">控制论闭环架构（Cybernetic Feedback Loop）：动态状态跃迁</text>
+
+                <circle cx="110" cy="230" r="42" fill="rgba(56,189,248,0.1)" stroke="#38bdf8" stroke-width="2"/>
+                <text x="110" y="226" fill="#f1f5f9" font-size="14" font-weight="700" text-anchor="middle">Reason</text>
+                <text x="110" y="244" fill="#94a3b8" font-size="11" text-anchor="middle">决策规划</text>
+
+                <circle cx="280" cy="180" r="42" fill="rgba(192,132,252,0.1)" stroke="#c084fc" stroke-width="2"/>
+                <text x="280" y="176" fill="#f1f5f9" font-size="14" font-weight="700" text-anchor="middle">Act</text>
+                <text x="280" y="194" fill="#94a3b8" font-size="11" text-anchor="middle">发射操作</text>
+
+                <circle cx="430" cy="250" r="42" fill="rgba(52,211,153,0.1)" stroke="#34d399" stroke-width="2"/>
+                <text x="430" y="246" fill="#f1f5f9" font-size="14" font-weight="700" text-anchor="middle">Observe</text>
+                <text x="430" y="264" fill="#94a3b8" font-size="11" text-anchor="middle">环境反馈</text>
+
+                <path d="M 145 200 Q 200 160 235 175" fill="none" stroke="#38bdf8" stroke-width="2.5" marker-end="url(#arr-b)"/>
+                <path d="M 325 185 Q 375 195 395 220" fill="none" stroke="#c084fc" stroke-width="2.5" marker-end="url(#arr-b)"/>
+                <path d="M 400 280 Q 270 345 145 260" fill="none" stroke="#34d399" stroke-width="2.5" stroke-dasharray="5,4" marker-end="url(#arr-g)"/>
+                
+                <text x="270" y="325" fill="#34d399" font-size="11" font-family="monospace" text-anchor="middle">状态更新 S_(t+1) = T(S_t, A_t, O_t)</text>
+              </svg>
+            </div>
+
+            <div style="display:flex; flex-direction:column; gap:12px;">
+              <div class="card">
+                <div class="card-title"><span class="dot"></span> 认知演进路线：从纯推演到搜索树</div>
+                <div class="card-body">
+                  <strong>1. Chain-of-Thought (CoT)</strong>：增加中间推导步，提升单次前向传播计算深度。<br>
+                  <strong>2. ReAct (Yao et al., 2022)</strong>：首次将行动（Action）与思考（Thought）交替采样，建立外界环境观测（Observation）输入机制。<br>
+                  <strong>3. Reflexion (Shinn et al., 2023)</strong>：引入短期情节记忆与失败反思评估模型，驱动自主纠错。<br>
+                  <strong>4. LATS (Language Agent Tree Search)</strong>：结合蒙特卡洛树搜索（MCTS），支持状态评估与回溯搜索。
+                </div>
+              </div>
+
+              <div class="card">
+                <div class="card-title"><span class="dot" style="background:var(--accent-emerald)"></span> 智能体的四元数学建模</div>
+                <div class="card-body">
+                  一个完备的自主 Agent 系统可形式化定义为四元组：
+                  <div class="code-block" style="margin:6px 0; color:#34d399;">Agent = ⟨ P, M, T, E ⟩</div>
+                  • <strong>Perception (P)</strong>：多模态输入、代码 AST、环境状态解析器。<br>
+                  • <strong>Memory (M)</strong>：工作记忆（上下文窗口）与长程记忆（向量/归档）。<br>
+                  • <strong>Tools (T)</strong>：受限环境中具有副作用的可调用接口集。<br>
+                  • <strong>Execution Engine (E)</strong>：驱动状态机运转、超时重试与边界防护的宿主。
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ==================== Slide 3: 协议革命：从纯文本拟态到受限解码 ==================== -->
+      <div class="slide" data-title="通信协议与受限解码">
+        <div class="slide-header">
+          <div class="slide-title-group">
+            <h2>协议革命：从正则拟态到语法受限解码 (Constrained Decoding) <span class="badge-tag">Wire Protocol</span></h2>
+            <div class="slide-desc">为什么自然语言文本难以稳定驱动程序？大模型底层推理引擎如何保证 100% 语法合规。</div>
+          </div>
+          <div class="slide-number">03 / 13</div>
+        </div>
+        <div class="slide-body">
+          <div class="grid-2">
+            <div class="card">
+              <div class="card-title" style="color:var(--accent-amber);"><span class="dot" style="background:var(--accent-amber)"></span> 阶段一：纯文本正则拟态 (Prompt-Level ReAct)</div>
+              <div class="card-body">
+                早期方案完全依赖提示词约定输出格式：
+                <div class="code-block" style="margin:6px 0;">Thought: I need to list files.
+Action: execute_command
+Action Input: {"cmd": "ls -la"}</div>
+                • <strong>脆弱本质</strong>：依赖自由采样，高概率出现反引号未闭合、键名漂移、多余前缀解释等语法崩塌。<br>
+                • <strong>宿主困境</strong>：必须编写极度复杂的正则提取规则，容错边界极低。
+              </div>
+            </div>
+
+            <div class="card glow-blue">
+              <div class="card-title" style="color:var(--accent-blue);"><span class="dot"></span> 阶段二：语法引导受限解码 (FSM / Grammar Masking)</div>
+              <div class="card-body">
+                现代生产级推理后端（如 Outlines, SGLang, Guidance, vLLM）的底层实现机制：
+                <div class="code-block" style="margin:6px 0; color:#38bdf8;">JSON Schema  ──>  确定性有限状态自动机 (FSM)
+                          │
+Next Token Logits  ──>  动态 Logit 掩码 (Logit Masking)  ──>  强制合法采样</div>
+                • <strong>Logit 掩码</strong>：每生成一个 Token，根据当前 FSM 状态，将所有不合法 Token 的 Logit 设为 <code>-∞</code>。<br>
+                • <strong>数学保证</strong>：在 Token 采样阶段即从物理上抹杀语法错误，输出对 JSON Schema 的绝对合规率达到 <strong>100%</strong>。
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ==================== Slide 4: 协议标准化：Model Context Protocol (MCP) ==================== -->
+      <div class="slide" data-title="MCP 协议架构深潜">
+        <div class="slide-header">
+          <div class="slide-title-group">
+            <h2>外部世界接口标准：Model Context Protocol (MCP) <span class="badge-tag">MCP Architecture</span></h2>
+            <div class="slide-desc">Anthropic 推出的开放式通信协议：解耦模型与工具的“USB-C 标准”。</div>
+          </div>
+          <div class="slide-number">04 / 13</div>
+        </div>
+        <div class="slide-body">
+          <div class="grid-1-2">
+            <div class="card glow-purple" style="padding:14px;">
+              <div class="card-title"><span class="dot" style="background:var(--accent-purple)"></span> 协议拓扑与传输层实现</div>
+              <div class="card-body" style="display:flex; flex-direction:column; gap:10px;">
+                <p>MCP 规范严格定义了宿主（Host）、客户端（Client）与外部服务（Server）的通信拓扑：</p>
+                <div style="background:rgba(255,255,255,0.02); border:1px solid var(--border-subtle); border-radius:6px; padding:8px 10px;">
+                  <div style="display:flex; align-items:center; gap:8px;">
+                    <span style="background:#a855f7; width:6px; height:6px; border-radius:50%;"></span>
+                    <strong style="color:#c084fc; font-size:12px;">Stdio 管道传输 (本地进程)</strong>
+                  </div>
+                  <div style="font-size:11px; color:#94a3b8; margin-top:3px;">通过子进程标准输入输出流交换 JSON-RPC。低延迟、高隔离、零网络端口依赖。</div>
+                </div>
+                <div style="background:rgba(255,255,255,0.02); border:1px solid var(--border-subtle); border-radius:6px; padding:8px 10px;">
+                  <div style="display:flex; align-items:center; gap:8px;">
+                    <span style="background:#38bdf8; width:6px; height:6px; border-radius:50%;"></span>
+                    <strong style="color:#38bdf8; font-size:12px;">SSE / HTTP 传输 (远程/容器服务)</strong>
+                  </div>
+                  <div style="font-size:11px; color:#94a3b8; margin-top:3px;">基于 Server-Sent Events 单向推流与 POST 请求。适用于团队共享数据源与私有集群。</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="card glow-blue" style="padding:14px;">
+              <div class="card-title"><span class="dot"></span> MCP JSON-RPC 2.0 协议时序全景</div>
+              <div class="card-body">
+                <div class="code-block" style="font-size:10.8px; line-height:1.45;">// 1. 初始化握手 (Capabilities Negotiation)
+Client -> Server: {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{"roots":{}}}}
+Server -> Client: {"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{"listChanged":true}}}}
+Client -> Server: {"jsonrpc":"2.0","method":"notifications/initialized"}
+
+// 2. 动态能力枚举 (Tools Discovery)
+Client -> Server: {"jsonrpc":"2.0","id":2,"method":"tools/list"}
+Server -> Client: {"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"query_db","inputSchema":{...}}]}}
+
+// 3. 安全调用与副作用隔离 (Execution)
+Client -> Server: {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"query_db","arguments":{"sql":"..."}}}
+Server -> Client: {"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"..."}],"isError":false}}</div>
+              </div>
+            </div>
+          </div>
+          <div class="card" style="padding:12px 16px;">
+            <div style="display:grid; grid-template-columns: 1fr 1fr; gap:16px; font-size:12px; color:var(--text-muted); line-height:1.55;">
+              <div>• <strong>安全沙箱边界</strong>：客户端显式下发 <code>roots/list</code> 约束工作区边界，严禁服务进程越权访问外部文件系统。</div>
+              <div>• <strong>动态变更通知</strong>：服务端支持 <code>notifications/tools/list_changed</code>，允许动态热加载工具而无需重启宿主。</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ==================== Slide 5: 核心执行引擎与主循环状态机 ==================== -->
+      <div class="slide" data-title="核心循环状态机">
+        <div class="slide-header">
+          <div class="slide-title-group">
+            <h2>宿主核心循环状态机 (Host Runtime State Machine) <span class="badge-tag">Core Engine</span></h2>
+            <div class="slide-desc">生产级 Agent 绝非简单的 while 循环：一个包含 6 大核心状态、事件驱动的高内聚运行时状态机。</div>
+          </div>
+          <div class="slide-number">05 / 13</div>
+        </div>
+        <div class="slide-body">
+          <div class="grid-2-1">
+            <div class="card glow-blue" style="padding:10px;">
+              <svg viewBox="0 0 650 390" style="width:100%; height:100%;">
+                <!-- S0 Start -->
+                <rect x="20" y="25" width="120" height="40" rx="6" fill="#1e293b" stroke="#38bdf8"/>
+                <text x="80" y="49" fill="#f1f5f9" font-size="12" font-weight="600" text-anchor="middle">S0: 任务就绪</text>
+                <path d="M 140 45 L 180 45" stroke="#38bdf8" stroke-width="2" marker-end="url(#arr-b)"/>
+
+                <!-- S1 Check Injections -->
+                <rect x="180" y="20" width="165" height="50" rx="6" fill="#1e293b" stroke="#a855f7"/>
+                <text x="262" y="41" fill="#f1f5f9" font-size="11.5" font-weight="600" text-anchor="middle">S1: 动态消息出队</text>
+                <text x="262" y="58" fill="#94a3b8" font-size="10" text-anchor="middle">消费 Pending Inputs 队列</text>
+                <path d="M 345 45 L 385 45" stroke="#a855f7" stroke-width="2" marker-end="url(#arr-b)"/>
+
+                <!-- S2 Budget & Compact -->
+                <rect x="385" y="20" width="175" height="50" rx="6" fill="#1e293b" stroke="#34d399"/>
+                <text x="472" y="41" fill="#f1f5f9" font-size="11.5" font-weight="600" text-anchor="middle">S2: 上下文预算校验</text>
+                <text x="472" y="58" fill="#94a3b8" font-size="10" text-anchor="middle">触碰阈值执行语义压缩</text>
+
+                <path d="M 472 70 L 472 105" stroke="#64748b" stroke-width="2" marker-end="url(#arr-b)"/>
+
+                <!-- S3 Model Inference -->
+                <rect x="360" y="105" width="225" height="60" rx="8" fill="rgba(56,189,248,0.08)" stroke="#38bdf8" stroke-width="2"/>
+                <text x="472" y="131" fill="#38bdf8" font-size="13" font-weight="700" text-anchor="middle">S3: 流式模型推理</text>
+                <text x="472" y="150" fill="#94a3b8" font-size="10.5" text-anchor="middle">Stream Deltas & 思考链解析</text>
+
+                <!-- Diamond -->
+                <path d="M 360 135 L 290 135" stroke="#38bdf8" stroke-width="2" marker-end="url(#arr-b)"/>
+                <polygon points="250,110 290,135 250,160 210,135" fill="#1e293b" stroke="#fbbf24" stroke-width="1.5"/>
+                <text x="250" y="139" fill="#fbbf24" font-size="11" font-weight="600" text-anchor="middle">ToolCalls?</text>
+
+                <!-- No branch -->
+                <path d="M 250 160 L 250 220" stroke="#fbbf24" stroke-width="2" marker-end="url(#arr-b)"/>
+                <text x="260" y="195" fill="#94a3b8" font-size="11">无 (自然收敛)</text>
+                <rect x="180" y="220" width="140" height="45" rx="6" fill="#065f46" stroke="#34d399"/>
+                <text x="250" y="247" fill="#f1f5f9" font-size="12" font-weight="700" text-anchor="middle">S5: 持久化并归档</text>
+
+                <!-- Yes branch -->
+                <path d="M 210 135 L 85 135 L 85 195" stroke="#38bdf8" stroke-width="2" marker-end="url(#arr-b)"/>
+                <text x="130" y="128" fill="#38bdf8" font-size="11">有 (1..N 个调用)</text>
+
+                <!-- Tool Dispatch -->
+                <rect x="20" y="195" width="130" height="80" rx="6" fill="#1e293b" stroke="#a855f7"/>
+                <text x="85" y="220" fill="#a855f7" font-size="12" font-weight="700" text-anchor="middle">S4: 工具编排调度</text>
+                <text x="85" y="239" fill="#94a3b8" font-size="10" text-anchor="middle">只读并发 / 写入互斥</text>
+                <text x="85" y="255" fill="#94a3b8" font-size="10" text-anchor="middle">聚合校验与异常捕获</text>
+
+                <!-- Loop back -->
+                <path d="M 85 275 L 85 340 L 472 340 L 472 175" fill="none" stroke="#38bdf8" stroke-width="2" stroke-dasharray="6,4"/>
+                <text x="280" y="332" fill="#38bdf8" font-size="11" font-family="monospace" text-anchor="middle">压缩结果回填上下文，驱动下一步</text>
+              </svg>
+            </div>
+
+            <div style="display:flex; flex-direction:column; gap:10px;">
+              <div class="card">
+                <div class="card-title">① 动态并发插队机制 (Queue Injection)</div>
+                <div class="card-body">
+                  当 Agent 正在执行批次工具时，用户追加的新指令不得强行掐断正在写盘的任务，亦不可丢弃。<br>
+                  系统维持一条线程安全缓冲通道，在<strong>当前批次落地后、下一次推理请求组装前</strong>无锁合流进入上下文。
+                </div>
+              </div>
+
+              <div class="card">
+                <div class="card-title">② 人机对抗中断与检查点语义</div>
+                <div class="card-body">
+                  人工取消（Abort Signal）必须是<strong>可恢复的检查点持久化</strong>：<br>
+                  • 已经成功的原子写入完整保留。<br>
+                  • 历史注入 <code>[system: interrupted_by_user]</code> 显式标记，下一轮模型据此准确区分“人工变更意图”与“代码执行失败”，杜绝盲目道歉重试。
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ==================== Slide 6: 调度系统：并发、互斥与聚合校验 ==================== -->
+      <div class="slide" data-title="调度系统：并发与聚合校验">
+        <div class="slide-header">
+          <div class="slide-title-group">
+            <h2>调度系统：两阶段并发、资源互斥与批次聚合校验 <span class="badge-tag">Scheduling</span></h2>
+            <div class="slide-desc">当单次回合输出 10 个工具调用时，如何平衡 I/O 吞吐、写一致性与编译校验开销？</div>
+          </div>
+          <div class="slide-number">06 / 13</div>
+        </div>
+        <div class="slide-body">
+          <div class="grid-3">
+            <div class="card">
+              <div class="card-title" style="color:var(--accent-amber);"><span class="dot" style="background:var(--accent-amber)"></span> 阶段 0：排他性与依赖仲裁</div>
+              <div class="card-body">
+                <strong>独占工具排他检查</strong>：<br>
+                人机交互类（提问、暂停等待、最终交卷）属于强阻塞操作，必须作为单批次唯一调用，禁止与常规工具混用。<br><br>
+                <strong>同路径写冲突仲裁 (E_WRITE_BATCH_CONFLICT)</strong>：<br>
+                单批次内若模型企图向同一文件并发写入多处，直接截断并拒绝后续写入，防止未定义的数据交错脏写。
+              </div>
+            </div>
+
+            <div class="card glow-blue">
+              <div class="card-title" style="color:var(--accent-blue);"><span class="dot"></span> 阶段 1：非文件/只读并发 (Cap = 4)</div>
+              <div class="card-body">
+                <strong>并发池隔离</strong>：<br>
+                网络抓取（<code>curl</code>）、符号语义搜索（<code>grep</code>）、目录树扫描（<code>list_files</code>）完全只读且无文件锁副作用。<br><br>
+                通过<strong>带信号量上限的 Goroutine 协程池</strong>并发拉起（Concurrency = 4），将批次只读总时延压缩到单次最慢调用的级别（I/O 吞吐提升 300%）。
+              </div>
+            </div>
+
+            <div class="card glow-emerald">
+              <div class="card-title" style="color:var(--accent-emerald);"><span class="dot" style="background:var(--accent-emerald)"></span> 阶段 2：原子写入互斥排队</div>
+              <div class="card-body">
+                <strong>严格时序落地</strong>：<br>
+                所有通过阶段 0 筛选的内置文件写入操作（<code>create_file</code>, <code>edit_file</code>, <code>patch</code>）统一收敛至文件锁（<code>fileOpsMu</code>）下。<br><br>
+                <strong>严格按模型声明的 <code>toolCallIndex</code> 串行执行</strong>，并在每次写入前校验文件最新版本令牌，从架构层杜绝并发 ABA 脏写。
+              </div>
+            </div>
+          </div>
+
+          <div class="card glow-purple" style="padding:12px 18px;">
+            <div class="card-title" style="font-size:13.5px; color:var(--accent-purple);">
+              <span class="dot" style="background:var(--accent-purple)"></span> 批次摊销优化：跨文件聚合语法校验 (Batch Validation Amortization)
+            </div>
+            <div style="display:grid; grid-template-columns: 1fr 1.2fr; gap:18px; align-items:center;">
+              <div style="font-size:12.3px; color:var(--text-muted); line-height:1.55;">
+                <strong>逐个校验的灾难</strong>：修改同一项目中的 5 个文件，若每次编辑后立刻执行编译检测，由于中间态符号未闭合，前 4 次必定报错，耗费算力且诱发模型决策震荡。
+              </div>
+              <div style="border-left:1px solid var(--border-subtle); padding-left:18px; font-size:12.3px; color:var(--text-main); line-height:1.55;">
+                <strong>延迟聚合策略</strong>：静态分析调度器提取这批调用影响的根项目目录，<strong>仅在触及该单元的最后一个编辑工具落地后，合并执行一次全量类型检查</strong>。系统吞吐提升数倍。
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ==================== Slide 7: 上下文经济学：提示词前缀缓存 ==================== -->
+      <div class="slide" data-title="提示词缓存与上下文工程">
+        <div class="slide-header">
+          <div class="slide-title-group">
+            <h2>上下文工程与提示词缓存经济学 (Prompt Cache Invariance) <span class="badge-tag">Cache Economics</span></h2>
+            <div class="slide-desc">Agent 长达数十步循环的成本杀手：为什么前缀的一个字节抖动会导致费用翻十倍？</div>
+          </div>
+          <div class="slide-number">07 / 13</div>
+        </div>
+        <div class="slide-body">
+          <div class="grid-2">
+            <div class="card glow-blue" style="padding:14px;">
+              <div class="card-title"><span class="dot"></span> 前缀不变性定律 (Prefix Invariance Law)</div>
+              <div class="card-body">
+                现代大模型供应商（Anthropic, DeepSeek, OpenAI, vLLM）的前缀缓存算法基于 <strong>从第 0 字节开始的最长公共前缀匹配</strong>：
+                <div style="display:flex; flex-direction:column; gap:7px; margin-top:8px;">
+                  <div style="background:#0a1224; border:1px solid #38bdf8; border-radius:5px; padding:7px 10px;">
+                    <div style="color:#38bdf8; font-weight:700; font-size:11.8px;">1. 静态根基区（绝对稳定）</div>
+                    <div style="font-size:11px; color:#94a3b8;">系统通用指令、内置工具描述 Schema、环境边界安全守则。</div>
+                  </div>
+                  <div style="background:#0a1224; border:1px solid #38bdf8; border-radius:5px; padding:7px 10px;">
+                    <div style="color:#38bdf8; font-weight:700; font-size:11.8px;">2. 快照冻结区（首轮冻结）</div>
+                    <div style="font-size:11px; color:#94a3b8;">项目全目录树拓扑快照。<strong>运行期间绝不随磁盘文件修改重新生成</strong>。</div>
+                  </div>
+                  <div style="background:#131d1b; border:1px solid #34d399; border-radius:5px; padding:7px 10px;">
+                    <div style="color:#34d399; font-weight:700; font-size:11.8px;">3. 历史递增区（单调追加）</div>
+                    <div style="font-size:11px; color:#94a3b8;">只追加新的 Tool Calls 与结果，严禁修改已经固化的历史轮次字节。</div>
+                  </div>
+                  <div style="background:#221528; border:1px dashed #fb7185; border-radius:5px; padding:7px 10px;">
+                    <div style="color:#fb7185; font-weight:700; font-size:11.8px;">4. 瞬态尾部区（每次不同）</div>
+                    <div style="font-size:11px; color:#94a3b8;">上下文预算告警、当前即时时间戳、本次用户提问。</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div style="display:flex; flex-direction:column; gap:12px;">
+              <div class="card">
+                <div class="card-title"><span class="dot" style="background:var(--accent-rose)"></span> 常见工程陷阱：动态前缀污染</div>
+                <div class="card-body">
+                  若在系统提示词开头注入 <code>当前时间: 22:50:01</code> 或每步重新扫描目录树拼入头部，每次请求的首字节都在变化：
+                  <div class="highlight-banner" style="margin:8px 0; background:rgba(251,113,133,0.1); border-left-color:var(--accent-rose);">
+                    <strong>后果</strong>：高达数万 Token 的前缀缓存全部未命中（Cache Miss），延迟剧增 3 倍，账单呈二次方爆炸增长！
+                  </div>
+                </div>
+              </div>
+
+              <div class="card">
+                <div class="card-title"><span class="dot" style="background:var(--accent-cyan)"></span> 双通道裁剪与注意力保护</div>
+                <div class="card-body">
+                  工具返回结果必须进行分层裁剪：
+                  • <strong>UI 展现层</strong>：保留高保真 Diff、色彩转义符与大块输出日志。<br>
+                  • <strong>模型上下文层</strong>：剥离展示性噪点，压缩为行号范围与结构化错误码，防止注意力稀释。
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ==================== Slide 8: 记忆分层与剪切点压缩 ==================== -->
+      <div class="slide" data-title="记忆分层与剪切点压缩">
+        <div class="slide-header">
+          <div class="slide-title-group">
+            <h2>记忆分层体系与剪切点压缩 (Cut-Point Compaction) <span class="badge-tag">Memory Compaction</span></h2>
+            <div class="slide-desc">当长程多轮对话逼近模型窗口上限时，如何既释放 70% 空间，又保全核心意图与缓存？</div>
+          </div>
+          <div class="slide-number">08 / 13</div>
+        </div>
+        <div class="slide-body">
+          <div class="grid-2">
+            <div class="card">
+              <div class="card-title" style="color:var(--accent-rose);"><span class="dot" style="background:var(--accent-rose)"></span> 传统滑动窗口（Sliding Window）的致命伤</div>
+              <div class="card-body">
+                直接截断并丢弃前 N 条消息的粗暴方式：<br>
+                <div class="highlight-banner" style="margin:8px 0; background:rgba(251,113,133,0.1); border-left-color:var(--accent-rose);">
+                  <strong>1. 核心意图丢失</strong>：最开始制定的架构规则与边界被抛弃。<br>
+                  <strong>2. 破坏基数成对性</strong>：截断点若刚好落在 Tool Call 与 Result 之间，直接导致上游 400 崩溃。<br>
+                  <strong>3. 击碎前缀缓存</strong>：历史头部滑动导致字节改变，缓存命中归零。
+                </div>
+              </div>
+            </div>
+
+            <div class="card glow-emerald">
+              <div class="card-title" style="color:var(--accent-emerald);"><span class="dot" style="background:var(--accent-emerald)"></span> 安全剪切点增量压缩 (Cut-Point Algorithm)</div>
+              <div class="card-body">
+                基于软阈值（如 Context Window 60%）监控，动态寻找语义切分点：<br>
+                <div class="highlight-banner" style="margin:8px 0; background:rgba(52,211,153,0.1); border-left-color:var(--accent-emerald);">
+                  <strong>1. 锚定起源需求</strong>：首轮用户指令完整保留。<br>
+                  <strong>2. 锁定活跃工作区</strong>：强制保护最近 2~4 轮操作上下文，保留正在修改的代码细节。<br>
+                  <strong>3. 中间冗余归档</strong>：调用专用小模型把繁琐的文件读写提取为增量结构化摘要（Summary）。
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card glow-blue" style="padding:14px 18px;">
+            <div class="card-title" style="font-size:13.5px;">认知记忆架构三层模型 (Memory Hierarchy)</div>
+            <div style="display:grid; grid-template-columns: repeat(3, 1fr); gap:16px; margin-top:4px;">
+              <div style="background:rgba(255,255,255,0.02); border:1px solid var(--border-subtle); border-radius:6px; padding:10px;">
+                <strong style="color:var(--accent-blue); font-size:12px;">工作记忆 (Working Memory)</strong>
+                <p style="font-size:11.5px; color:var(--text-muted); margin-top:4px;">即时上下文窗口，包含当前回合规划与活跃工具结果，存活周期为单次 Run。</p>
+              </div>
+              <div style="background:rgba(255,255,255,0.02); border:1px solid var(--border-subtle); border-radius:6px; padding:10px;">
+                <strong style="color:var(--accent-emerald); font-size:12px;">短期情节记忆 (Episodic Memory)</strong>
+                <p style="font-size:11.5px; color:var(--text-muted); margin-top:4px;">持久化会话历史与经过 Cut-Point 压缩的中间态摘要，供多轮追问溯源。</p>
+              </div>
+              <div style="background:rgba(255,255,255,0.02); border:1px solid var(--border-subtle); border-radius:6px; padding:10px;">
+                <strong style="color:var(--accent-purple); font-size:12px;">长程语义记忆 (Semantic Memory)</strong>
+                <p style="font-size:11.5px; color:var(--text-muted); margin-top:4px;">跨会话持久化的 Markdown 知识库与代码图谱，通过检索按需召回。</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ==================== Slide 9: 工具发现与大规模检索增强 (Tool RAG) ==================== -->
+      <div class="slide" data-title="工具检索增强 (Tool RAG)">
+        <div class="slide-header">
+          <div class="slide-title-group">
+            <h2>工具发现机制与工具检索增强 (Tool RAG) <span class="badge-tag">Tool RAG</span></h2>
+            <div class="slide-desc">当可用工具库规模突破 100+ 时，如何化解“全量硬塞（Tool Stuffing）”引起的参数幻觉与 Token 灾难？</div>
+          </div>
+          <div class="slide-number">09 / 13</div>
+        </div>
+        <div class="slide-body">
+          <div class="grid-2">
+            <div class="card glow-purple" style="padding:14px;">
+              <div class="card-title" style="color:var(--accent-purple);"><span class="dot" style="background:var(--accent-purple)"></span> 为什么工具必须做按需检索？</div>
+              <div class="card-body">
+                <p><strong>① 工具爆炸（Tool Bloat）的实证研究</strong>：</p>
+                <div style="font-size:12px; line-height:1.6; margin:6px 0; color:var(--text-muted);">
+                  接入复杂开发环境时，候选工具可能多达数十上百个：<br>
+                  • <strong>上下文吞噬</strong>：每个 Schema 300 Token，100 个工具吃掉 30,000+ Tokens。<br>
+                  • <strong>注意力退化</strong>：实证表明候选工具超 20~30 个时，模型选择正确工具的准确率呈断崖式下跌。
+                </div>
+                <div style="background:#131929; border:1px solid #38bdf8; border-radius:6px; padding:8px 10px; margin-top:8px;">
+                  <strong style="color:#38bdf8; font-size:12px;">② 技能索引与工具索引的本质差异</strong>
+                  <div style="font-size:11.5px; color:#94a3b8; margin-top:3px; line-height:1.5;">
+                    • <strong>技能 (Skill)</strong>：自然语言说明书，仅注入名字与适用时机名片，模型按需调取全文。<br>
+                    • <strong>工具 (Tool)</strong>：强类型 API，调用前大模型必须感知精确的参数 JSON Schema。
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="card glow-blue" style="padding:14px;">
+              <div class="card-title" style="color:var(--accent-blue);"><span class="dot"></span> 业界主流演进三大范式</div>
+              <div class="card-body" style="display:flex; flex-direction:column; gap:8px;">
+                <div style="background:#0a1224; border:1px solid #38bdf8; border-radius:5px; padding:8px 10px;">
+                  <strong style="color:#38bdf8; font-size:12px;">范式 A：Meta-Tool 显式二次发现</strong>
+                  <div style="font-size:11.2px; color:#94a3b8; margin-top:2px;">
+                    提供 <code>search_tools(query)</code> 元工具。模型先搜索，命中工具的 Schema 被动态挂载（Mount）进当前会话。
+                  </div>
+                </div>
+                <div style="background:#0e1a17; border:1px solid #34d399; border-radius:5px; padding:8px 10px;">
+                  <strong style="color:#34d399; font-size:12px;">范式 B：Tool RAG 隐式语义路由</strong>
+                  <div style="font-size:11.2px; color:#94a3b8; margin-top:2px;">
+                    宿主维护本地向量/BM25 索引。每次组装请求前，后台基于用户输入自动检索 Top-K 工具注入，对模型完全透明。
+                  </div>
+                </div>
+                <div style="background:#1b1424; border:1px solid #c084fc; border-radius:5px; padding:8px 10px;">
+                  <strong style="color:#c084fc; font-size:12px;">范式 C：协议级命名空间与过滤 (MCP SEP-1576)</strong>
+                  <div style="font-size:11.2px; color:#94a3b8; margin-top:2px;">
+                    修改 MCP 标准，使 <code>tools/list</code> 支持客户端携带意图过滤参数与业务域下钻分页。
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card glow-emerald" style="padding:12px 18px;">
+            <div class="card-title" style="font-size:13.5px; color:var(--accent-emerald);">
+              <span class="dot" style="background:var(--accent-emerald)"></span> 生产级落地准则：单调递增挂载 (Monotonic Mounting)
+            </div>
+            <div style="font-size:12.3px; color:var(--text-muted); line-height:1.6; margin-top:4px;">
+              为保护 Prompt Cache，在同一会话生命周期内，<strong>一旦某扩展工具被检索命中挂载，后续步骤绝不随意注销</strong>，并始终维持严格的字典序排列。避免工具列表频繁增删抖动击穿前缀缓存。
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ==================== Slide 10: 动态 Schema 与 Prompt Cache 的冲突与破局 ==================== -->
+      <div class="slide" data-title="动态工具与缓存冲突">
+        <div class="slide-header">
+          <div class="slide-title-group">
+            <h2>动态 Tools Schema 与 Prompt Cache 冲突与破局方案 <span class="badge-tag">Cache vs Dynamic Tools</span></h2>
+            <div class="slide-desc">在会话中途动态增删或修改工具 Schema，为何会导致前缀缓存瞬间归零？工业级 Agent 系统的四大工程破解范式。</div>
+          </div>
+          <div class="slide-number">10 / 13</div>
+        </div>
+        <div class="slide-body" style="display:flex; flex-direction:column; gap:12px;">
+          <!-- Top Row: 冲突本质与认知盲区 -->
+          <div class="grid-2" style="height:auto; min-height:165px;">
+            <div class="card" style="border-color:rgba(251, 113, 133, 0.35); box-shadow:0 4px 20px rgba(251, 113, 133, 0.08); padding:13px 16px;">
+              <div class="card-title" style="color:var(--accent-rose); font-size:13.8px;">
+                <span class="dot" style="background:var(--accent-rose)"></span> 底层致命冲突：前缀哈希链崩溃 (Prefix Hash Breakage)
+              </div>
+              <div class="card-body" style="font-size:12px; line-height:1.55;">
+                • <strong>物理序列化位点</strong>：推理引擎（vLLM RadixAttention / Anthropic / DeepSeek）在组装输入序列时，<code>tools</code> 均被转为文本紧置于 <strong>System Prompt 之后、所有历史消息之前</strong>（处于 Token 0 附近）。<br>
+                • <strong>级联雪崩效应</strong>：<code>[System] → [Tools (变动点 💥)] → [Round 1..N 历史 (30k~100k Tokens)]</code>。只要中途修改或增删工具，<strong>后续全部多轮历史的 KV-Cache 瞬间归零（100% Miss）</strong>！<br>
+                • <strong>直接代价</strong>：首字延迟 (TTFT) 恶化 5~8 倍；失去 80%~90% 的缓存折扣，整段历史需全量冷算，长会话费用直接飙升 5~10 倍。
+              </div>
+            </div>
+
+            <div class="card" style="border-color:rgba(251, 191, 36, 0.35); box-shadow:0 4px 20px rgba(251, 191, 36, 0.08); padding:13px 16px;">
+              <div class="card-title" style="color:var(--accent-amber); font-size:13.8px;">
+                <span class="dot" style="background:var(--accent-amber)"></span> 常见工程盲区与认知陷阱 (Common Fallacies)
+              </div>
+              <div class="card-body" style="font-size:12px; line-height:1.55;">
+                • <strong>陷阱 ①：误以为“只增不减”就安全</strong>：若实现代码在组装时默认对工具名做了<strong>字母排序 (Alphabetical Sort)</strong>，新工具若以字母 <code>a</code> 开头被插入数组前部，依然会将后续所有 Schema 的 Token 错位，引发全盘 Miss。<br>
+                • <strong>陷阱 ②：误以为“写在消息末尾传”能利用原生工具</strong>：标准 API（OpenAI/Claude）将 <code>tools</code> 强制编译为输入首部，客户端无法在原生协议层控制其物理插入点。<br>
+                • <strong>陷阱 ③：轮轮动态重新检索注入</strong>：每轮按最新输入提取 Top-K 工具塞进 <code>tools</code>，等于每一轮都在主动摧毁上一轮沉淀的 KV-Cache。
+              </div>
+            </div>
+          </div>
+
+          <!-- Middle Row: 工业界四大破局架构 -->
+          <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap:12px; flex:1;">
+            <div class="card glow-blue" style="padding:12px 14px;">
+              <div class="card-title" style="color:var(--accent-blue); font-size:13px;">
+                <span class="dot"></span> 方案 ①：元工具 / 通用调度器
+              </div>
+              <div class="card-body" style="font-size:11.5px; line-height:1.5; display:flex; flex-direction:column; gap:6px;">
+                <div><strong style="color:var(--text-main);">架构解耦</strong>：API <code>tools</code> 永远仅暴露单一固定 Schema：<code>call_tool(name, args)</code>。</div>
+                <div style="color:var(--text-muted);">动态检索发现的工具说明作为 <strong>Tool Result 或末尾上下文</strong> 喂给模型，API 前缀 Token 序列绝对恒定。</div>
+                <div style="margin-top:auto; background:rgba(56, 189, 248, 0.1); border-radius:4px; padding:4px 8px; color:var(--accent-blue); font-size:11px;">
+                  ✔ <strong>100% 缓存保全</strong>，支持挂载数百个长尾 MCP 工具
+                </div>
+              </div>
+            </div>
+
+            <div class="card glow-purple" style="padding:12px 14px;">
+              <div class="card-title" style="color:var(--accent-purple); font-size:13px;">
+                <span class="dot" style="background:var(--accent-purple)"></span> 方案 ②：子代理沙箱隔离
+              </div>
+              <div class="card-body" style="font-size:11.5px; line-height:1.5; display:flex; flex-direction:column; gap:6px;">
+                <div><strong style="color:var(--text-main);">生命周期解耦</strong>：主 Coordinator Agent 工具集极简且永久固定（<code>read, edit, command, subagent</code>）。</div>
+                <div style="color:var(--text-muted);">垂直重型工具（如 3D/Blender、K8s）仅挂载给<strong>短命子代理</strong>。子代理跑 2~3 轮即销毁。</div>
+                <div style="margin-top:auto; background:rgba(192, 132, 252, 0.1); border-radius:4px; padding:4px 8px; color:var(--accent-purple); font-size:11px;">
+                  ✔ <strong>主干长上下文零污染</strong>，子代理轻量失效代价极低
+                </div>
+              </div>
+            </div>
+
+            <div class="card glow-emerald" style="padding:12px 14px;">
+              <div class="card-title" style="color:var(--accent-emerald); font-size:13px;">
+                <span class="dot" style="background:var(--accent-emerald)"></span> 方案 ③：首轮意图探测与冻结
+              </div>
+              <div class="card-body" style="font-size:11.5px; line-height:1.5; display:flex; flex-direction:column; gap:6px;">
+                <div><strong style="color:var(--text-main);">阶段性冻结</strong>：第一轮（Turn-1）由宿主前置轻量路由器评估任务域，一次性预选并挂载工具集。</div>
+                <div style="color:var(--text-muted);">会话建立后<strong>全流程彻底 Freeze（冻结）</strong>，严禁动态增删（机制同项目目录树快照）。</div>
+                <div style="margin-top:auto; background:rgba(52, 211, 153, 0.1); border-radius:4px; padding:4px 8px; color:var(--accent-emerald); font-size:11px;">
+                  ✔ <strong>第 2 轮起高命中</strong>，保留硬件级原生 Schema 强类型约束
+                </div>
+              </div>
+            </div>
+
+            <div class="card" style="border-color:rgba(45, 212, 191, 0.25); padding:12px 14px;">
+              <div class="card-title" style="color:var(--accent-cyan); font-size:13px;">
+                <span class="dot" style="background:var(--accent-cyan)"></span> 方案 ④：尾部追加与显式断点
+              </div>
+              <div class="card-body" style="font-size:11.5px; line-height:1.5; display:flex; flex-direction:column; gap:6px;">
+                <div><strong style="color:var(--text-main);">物理位置控制</strong>：在私有推理引擎（vLLM/SGLang）或支持断点控制的 API 中使用。</div>
+                <div style="color:var(--text-muted);">不使用原生 Tools 前缀，将动态工具定义作为特殊结构化文本追加在<strong>最新 User 消息末尾</strong>。</div>
+                <div style="margin-top:auto; background:rgba(45, 212, 191, 0.1); border-radius:4px; padding:4px 8px; color:var(--accent-cyan); font-size:11px;">
+                  ✔ <strong>保住绝大部分历史缓存</strong>，仅重算末尾变动块
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Bottom Summary Banner -->
+          <div class="highlight-banner" style="padding:8px 14px; font-size:12px; display:flex; align-items:center; justify-content:space-between; flex-shrink:0;">
+            <div>
+              <strong style="color:var(--accent-blue);">生产工程公理</strong>：永远不要在长生命周期的单会话循环中，逐轮动态“增删或重排” Top-Level Tools Schema。要么在 <strong>Schema 契约层解耦</strong>（元工具路由），要么在 <strong>执行拓扑层解耦</strong>（子代理沙箱）。
+            </div>
+            <span style="font-family:var(--font-mono); font-size:11px; color:var(--text-dim); white-space:nowrap; margin-left:12px;">KV-Cache Invariance Principle</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- ==================== Slide 11: 生产级韧性与自愈工程 ==================== -->
+      <div class="slide" data-title="生产级韧性与自愈工程">
+        <div class="slide-header">
+          <div class="slide-title-group">
+            <h2>生产级韧性：异常自愈、参数截断防护与阶梯重试 <span class="badge-tag">Resilience</span></h2>
+            <div class="slide-desc">真实生产环境中网络中断、参数残缺、上游 400 是家常便饭。如何构建自愈型容错防线？</div>
+          </div>
+          <div class="slide-number">11 / 13</div>
+        </div>
+        <div class="slide-body">
+          <div class="grid-3">
+            <div class="card glow-purple">
+              <div class="card-title" style="color:var(--accent-purple);">① 残缺参数印章 (Truncated Marker)</div>
+              <div class="card-body">
+                <strong>险境</strong>：流式响应中途网络闪断，工具 JSON 参数只吐出一半（如 <code>{"code": "fmt.Pr</code>）。<br><br>
+                <strong>自愈防线</strong>：绝不使用未闭合数据执行破坏性写入。在历史中加盖 <code>__TRUNCATED_ARGUMENTS__</code> 机器标记。执行器返回明确的“流截断”错误，引导模型在下一步重发完整指令。
+              </div>
+            </div>
+
+            <div class="card glow-blue">
+              <div class="card-title" style="color:var(--accent-blue);">② 上游 400 悬空调用手术 (Sanitize)</div>
+              <div class="card-body">
+                <strong>险境</strong>：主流 LLM 后端要求 Assistant 的每个 Tool Call 必须有且仅有一条对应的 Tool Result，多一条少一条均会引发永久 400 报错。<br><br>
+                <strong>自愈防线</strong>：捕获 400 时自动激活清洗管道，修剪未闭合的孤儿 Tool Call，对齐基数后<strong>自动发起重试</strong>，业务层无感知。
+              </div>
+            </div>
+
+            <div class="card glow-emerald">
+              <div class="card-title" style="color:var(--accent-emerald);">③ 双层分级重试机制</div>
+              <div class="card-body">
+                <strong>内层（无副作用重试）</strong>：<br>
+                首字吐出前遭遇连接超时、502 网关错误，立即在密钥池中切换故障转移（Failover）。<br><br>
+                <strong>外层（整轮退避重发）</strong>：<br>
+                内容流出中途断流时，触发带退避重试，并广播事件通知前端废弃残损消息碎片。
+              </div>
+            </div>
+          </div>
+
+          <div class="highlight-banner" style="background:rgba(251,113,133,0.08); border-left-color:var(--accent-rose);">
+            <strong style="color:var(--accent-rose);">防御性隔离原则</strong>：核心循环与单工具执行调度处必须部署 <code>recover()</code> 屏障。即使第三方工具插件发生内存崩溃或空指针 Panic，亦只能降级为普通 Tool 错误返回，宿主主进程永不崩溃。
+          </div>
+        </div>
+      </div>
+
+      <!-- ==================== Slide 12: 多 Agent 拓扑演进与协作架构 ==================== -->
+      <div class="slide" data-title="多 Agent 拓扑架构">
+        <div class="slide-header">
+          <div class="slide-title-group">
+            <h2>规模化演进：多智能体协作范式与架构拓扑 (Multi-Agent Topologies) <span class="badge-tag">Multi-Agent</span></h2>
+            <div class="slide-desc">当单一上下文无法支撑超大工程时：从单兵作战到多角色协同网络的分治演进。</div>
+          </div>
+          <div class="slide-number">12 / 13</div>
+        </div>
+        <div class="slide-body">
+          <div class="grid-2">
+            <div class="card glow-blue" style="padding:14px;">
+              <div class="card-title"><span class="dot"></span> 四大主流多智能体协作拓扑</div>
+              <div style="display:flex; flex-direction:column; gap:8px; margin-top:4px;">
+                <div style="background:rgba(255,255,255,0.02); border:1px solid var(--border-subtle); border-radius:5px; padding:7px 10px;">
+                  <strong style="color:var(--accent-blue); font-size:12px;">1. 主从路由拓扑 (Router & Worker)</strong>
+                  <div style="font-size:11px; color:var(--text-muted);">中心调度 Agent 分析意图，分发给专门的子代理（如搜索专家、代码专家），结果汇总统筹。</div>
+                </div>
+                <div style="background:rgba(255,255,255,0.02); border:1px solid var(--border-subtle); border-radius:5px; padding:7px 10px;">
+                  <strong style="color:var(--accent-emerald); font-size:12px;">2. 对等自治拓扑 (Mesh / Swarm)</strong>
+                  <div style="font-size:11px; color:var(--text-muted);">无绝对中心节点。Agent 间通过会话消息传递（Message Passing）自主握手与任务交接。</div>
+                </div>
+                <div style="background:rgba(255,255,255,0.02); border:1px solid var(--border-subtle); border-radius:5px; padding:7px 10px;">
+                  <strong style="color:var(--accent-purple); font-size:12px;">3. 顺序装配拓扑 (Sequential Pipeline)</strong>
+                  <div style="font-size:11px; color:var(--text-muted);">类似流水线作业：需求分析 -> 架构规划 -> 代码编写 -> 测试审查依次单向流转。</div>
+                </div>
+                <div style="background:rgba(255,255,255,0.02); border:1px solid var(--border-subtle); border-radius:5px; padding:7px 10px;">
+                  <strong style="color:var(--accent-amber); font-size:12px;">4. 辩论与审校拓扑 (Evaluator-Optimizer)</strong>
+                  <div style="font-size:11px; color:var(--text-muted);">生成者（Generator）与审计者（Critic）对抗推演，直至代码通过所有形式化验证断言。</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="card glow-purple" style="padding:14px;">
+              <div class="card-title"><span class="dot" style="background:var(--accent-purple)"></span> 状态隔离与工作区沙箱工程</div>
+              <div class="card-body">
+                多 Agent 并发运行时，绝不能共享同一个可变文件系统：
+                <div style="margin:8px 0; display:flex; flex-direction:column; gap:8px;">
+                  <div style="background:#171124; border:1px solid #c084fc; border-radius:5px; padding:8px 10px;">
+                    <strong style="color:#c084fc; font-size:12px;">Git Worktree / 分支隔离模式</strong>
+                    <div style="font-size:11.2px; color:#94a3b8; margin-top:2px;">
+                      每个子代理运行在隔离的磁盘分支目录中，互不干扰；完成后以 Pull Request / Patch 形式交回主代理合并。
+                    </div>
+                  </div>
+                  <div style="background:#171124; border:1px solid #38bdf8; border-radius:5px; padding:8px 10px;">
+                    <strong style="color:#38bdf8; font-size:12px;">只读上下文投影 (Read-Only Projection)</strong>
+                    <div style="font-size:11.2px; color:#94a3b8; margin-top:2px;">
+                      只读型调研 Agent 仅继承环境抽象投影，剥夺一切写权限，从架构层杜绝误操作。
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ==================== Slide 13: 工业级 Agent 评估与系统工程准则 ==================== -->
+      <div class="slide" data-title="评估体系与工程准则">
+        <div class="slide-header">
+          <div class="slide-title-group">
+            <h2>总结：工业级 Agent 评估体系与系统工程八大准则 <span class="badge-tag">Engineering Axioms</span></h2>
+            <div class="slide-desc">从 50 行原型脚本到企业级自主闭环软件的工程分水岭。</div>
+          </div>
+          <div class="slide-number">13 / 13</div>
+        </div>
+        <div class="slide-body">
+          <table class="comp-table">
+            <thead>
+              <tr>
+                <th style="width:20%;">系统维度</th>
+                <th style="width:40%;">原型阶段 (Toy Demo / Script)</th>
+                <th style="width:40%;">生产级系统工程 (Production Architecture)</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><strong>控制协议</strong></td>
+                <td>自然语言 Prompt 约定 + 正则提取</td>
+                <td>Native Tool Calling + FSM 受限解码 + MCP 设备总线</td>
+              </tr>
+              <tr>
+                <td><strong>并发与一致性</strong></td>
+                <td>无脑并发产生脏写，或全串行阻塞</td>
+                <td>两阶段调度：只读并发 + 写入排他互斥 + 聚合延迟校验</td>
+              </tr>
+              <tr>
+                <td><strong>上下文经济学</strong></td>
+                <td>动态全量拼接，前缀字节剧烈变动</td>
+                <td>前缀不变性定律 + 快照冻结 + 缓存命中率 > 90%</td>
+              </tr>
+              <tr>
+                <td><strong>记忆与容量</strong></td>
+                <td>暴力滑动窗口（丢弃意图与破损上下文）</td>
+                <td>Cut-Point 安全剪切点语义摘要 + 分层情节记忆</td>
+              </tr>
+              <tr>
+                <td><strong>插件扩展性</strong></td>
+                <td>全量硬塞 Schema 导致 Token 爆炸</td>
+                <td>Tool RAG + 元工具中继 / 子代理隔离 (保护前缀缓存)</td>
+              </tr>
+              <tr>
+                <td><strong>容错与韧性</strong></td>
+                <td>网络抖动或上游 400 抛异常崩溃</td>
+                <td>残缺参数印章标记 + 悬空调用自愈 + 双层阶梯重试</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <div class="highlight-banner" style="margin-top:4px;">
+            <strong>终极准则</strong>：构建自主 Agent 的核心不在于 Prompt 的文字修饰，而在于<strong>建立对不确定性环境的闭环控制、状态一致性防线与成本缓存经济学</strong>。
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- 底部进度条 -->
+    <div class="progress-bar" id="progress-bar"></div>
+
+    <!-- 控制台 -->
+    <div class="controls">
+      <div class="controls-left" style="display:flex; align-items:center; gap:12px;">
+        <button class="btn" id="btn-prev" title="上一页 (← 或 ↑)"><span>←</span> 上一页</button>
+        <button class="btn" id="btn-next" title="下一页 (→ 或 Space)">下一页 <span>→</span></button>
+        <button class="btn" id="btn-overview" title="大纲目录 (O)"><span>⊞</span> 大纲导航 <span style="font-family:var(--font-mono); font-size:10px; opacity:0.6;">O</span></button>
+      </div>
+      <div class="controls-right" style="display:flex; align-items:center; gap:12px;">
+        <span style="font-family:var(--font-mono); font-size:12px; color:var(--text-dim);" id="slide-indicator">01 / 13</span>
+        <button class="btn" id="btn-fullscreen" title="全屏演示 (F)"><span>⛶</span> 全屏</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 大纲弹窗 -->
+  <div id="overview-modal">
+    <div style="max-width:1200px; margin:0 auto 20px auto; display:flex; justify-content:space-between; align-items:center;">
+      <h3 style="color:#fff; font-size:20px; font-weight:700;">幻灯片大纲总览</h3>
+      <button class="btn" id="btn-close-overview">关闭 (ESC)</button>
+    </div>
+    <div class="overview-grid" id="overview-grid"></div>
+  </div>
+
+  <script>
+    (function() {
+      const slides = Array.from(document.querySelectorAll('.slide'));
+      const progressBar = document.getElementById('progress-bar');
+      const indicator = document.getElementById('slide-indicator');
+      const btnPrev = document.getElementById('btn-prev');
+      const btnNext = document.getElementById('btn-next');
+      const btnOverview = document.getElementById('btn-overview');
+      const btnCloseOverview = document.getElementById('btn-close-overview');
+      const btnFullscreen = document.getElementById('btn-fullscreen');
+      const overviewModal = document.getElementById('overview-modal');
+      const overviewGrid = document.getElementById('overview-grid');
+      const stage = document.getElementById('stage');
+
+      let currentIndex = 0;
+      const total = slides.length;
+
+      function updateSlide(idx) {
+        if (idx < 0 || idx >= total) return;
+        slides[currentIndex].classList.remove('active');
+        currentIndex = idx;
+        slides[currentIndex].classList.add('active');
+
+        progressBar.style.width = ((currentIndex + 1) / total * 100) + '%';
+        indicator.textContent = `${String(currentIndex + 1).padStart(2, '0')} / ${String(total).padStart(2, '0')}`;
+
+        const thumbs = overviewGrid.querySelectorAll('.overview-thumb');
+        thumbs.forEach((t, i) => {
+          if (i === currentIndex) t.classList.add('current');
+          else t.classList.remove('current');
+        });
+      }
+
+      function nextSlide() { if (currentIndex < total - 1) updateSlide(currentIndex + 1); }
+      function prevSlide() { if (currentIndex > 0) updateSlide(currentIndex - 1); }
+      function toggleOverview() { overviewModal.classList.toggle('active'); }
+
+      function toggleFullscreen() {
+        if (!document.fullscreenElement) {
+          document.documentElement.requestFullscreen().catch(() => {});
+        } else {
+          if (document.exitFullscreen) document.exitFullscreen();
+        }
+      }
+
+      // Build Overview Thumbnails
+      slides.forEach((slide, idx) => {
+        const title = slide.getAttribute('data-title') || `Slide ${idx + 1}`;
+        const thumb = document.createElement('div');
+        thumb.className = 'overview-thumb' + (idx === 0 ? ' current' : '');
+        thumb.innerHTML = `
+          <div style="font-family:var(--font-mono); font-size:11px; color:var(--accent-blue); margin-bottom:5px;">#${String(idx + 1).padStart(2, '0')}</div>
+          <div style="font-size:13px; font-weight:600; color:var(--text-main);">${title}</div>
+        `;
+        thumb.addEventListener('click', () => {
+          updateSlide(idx);
+          overviewModal.classList.remove('active');
+        });
+        overviewGrid.appendChild(thumb);
+      });
+
+      btnNext.addEventListener('click', nextSlide);
+      btnPrev.addEventListener('click', prevSlide);
+      btnOverview.addEventListener('click', toggleOverview);
+      btnCloseOverview.addEventListener('click', () => overviewModal.classList.remove('active'));
+      btnFullscreen.addEventListener('click', toggleFullscreen);
+
+      window.addEventListener('keydown', (e) => {
+        if (overviewModal.classList.contains('active')) {
+          if (e.key === 'Escape') overviewModal.classList.remove('active');
+          return;
+        }
+        switch(e.key) {
+          case 'ArrowRight':
+          case 'ArrowDown':
+          case ' ':
+          case 'PageDown':
+            nextSlide();
+            break;
+          case 'ArrowLeft':
+          case 'ArrowUp':
+          case 'PageUp':
+            prevSlide();
+            break;
+          case 'Home':
+            updateSlide(0);
+            break;
+          case 'End':
+            updateSlide(total - 1);
+            break;
+          case 'o':
+          case 'O':
+            toggleOverview();
+            break;
+          case 'f':
+          case 'F':
+            toggleFullscreen();
+            break;
+          case 'Escape':
+            overviewModal.classList.remove('active');
+            break;
+        }
+      });
+
+      updateSlide(0);
+    })();
+  </script>
+</body>
+</html>
