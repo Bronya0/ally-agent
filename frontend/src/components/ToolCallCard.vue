@@ -79,7 +79,7 @@ Public License v3. See the LICENSE file for details.
       :collapsed="!msg.expanded"
       :max-lines="COMMAND_PREVIEW_LINES"
     />
-    <pre v-else-if="msg.body && msg.status !== 'error' && msg.kind !== 'edit' && msg.kind !== 'read' && msg.kind !== 'remote_read' && msg.kind !== 'calculate' && msg.kind !== 'scheduled' && msg.kind !== 'grep' && msg.kind !== 'plan' && (msg.kind !== 'list' || msg.expanded)" ref="bodyPreRef" :class="['tool-body', { 'fixed-scroll': isFixedKind(msg.kind), 'body-preview': isBodyPreview(msg), 'tail-default': isServiceReadResult(msg), 'scroll-enabled': bodyScrollEnabled && isScrollableBody(msg) }]" @click.stop="handleBodyClick(msg)">{{ toolBodyText(msg) }}</pre>
+    <pre v-else-if="msg.body && msg.status !== 'error' && msg.kind !== 'edit' && msg.kind !== 'read' && msg.kind !== 'remote_read' && msg.kind !== 'calculate' && msg.kind !== 'grep' && msg.kind !== 'plan' && (msg.kind !== 'list' || msg.expanded)" ref="bodyPreRef" :class="['tool-body', { 'fixed-scroll': isFixedKind(msg.kind), 'body-preview': isBodyPreview(msg), 'tail-default': isServiceReadResult(msg), 'scroll-enabled': bodyScrollEnabled && isScrollableBody(msg) }]" @click.stop="handleBodyClick(msg)">{{ toolBodyText(msg) }}</pre>
     <div v-if="isValidationWarning(msg)" class="edit-warning-list validation-warning-list" role="status" aria-live="polite">
       <div class="edit-warning validation-warning" :title="msg.validation">
         <span class="validation-warning-label">{{ $t('tools.validationWarning') }}</span>
@@ -452,8 +452,6 @@ function hasExpandableBody(msg) {
   if (msg.kind === 'create') return lineCount(msg, msg.codeContent) > BODY_PREVIEW_LINES;
   // calculate: body 只重复 title(expression) + chip(= result)，无需详情卡
   if (msg.kind === 'calculate') return false;
-  // scheduled_task: 任务详情在 Task Center 面板查看，无需详情卡
-  if (msg.kind === 'scheduled') return false;
   // grep 永远只显示单行状态和命中统计，不加载匹配行详情。
   if (msg.kind === 'grep') return false;
   return lineCount(msg, msg.body) > BODY_PREVIEW_LINES || msg.kind === 'list';

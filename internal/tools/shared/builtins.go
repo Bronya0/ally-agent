@@ -160,18 +160,22 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"questions"},
 		}),
-		functionTool("scheduled_task", "Create, list, or delete temporary scheduled tasks for the current process. Create only when the user requests recurring automation.", map[string]any{
+		functionTool("scheduled_task", "Create, list, or delete temporary scheduled tasks for the current process. Create only when the user requests recurring automation. Two mutually exclusive task kinds: instruction (an LLM agent runs with fresh context every fire) or command (a shell command runs in the task workspace through the same safety checks as the command tool, max 600s per run) — provide exactly one.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"action":      map[string]any{"type": "string", "enum": []string{"create", "list", "delete"}, "description": "Create, list, or delete a scheduled task."},
 				"id":          map[string]any{"type": "string", "minLength": 1, "description": "Task id required for delete."},
 				"name":        map[string]any{"type": "string", "minLength": 1, "description": "Short task name required for create."},
-				"instruction": map[string]any{"type": "string", "minLength": 1, "description": "Self-contained instruction executed with fresh context on every run."},
+				"instruction": map[string]any{"type": "string", "minLength": 1, "description": "Self-contained instruction executed by an LLM agent with fresh context on every run. Mutually exclusive with command."},
+				"command":     map[string]any{"type": "string", "minLength": 1, "description": "Shell command executed in the task workspace on every run (same safety rules as the command tool; not for long-running services). Mutually exclusive with instruction."},
 				"schedule":    map[string]any{"type": "string", "description": "RFC3339 time, Go duration such as 30m/2h, or standard five-field cron expression."},
 			},
 			"required": []string{"action"},
 			"oneOf": []any{
-				map[string]any{"properties": map[string]any{"action": map[string]any{"const": "create"}}, "required": []string{"name", "instruction", "schedule"}},
+				map[string]any{"properties": map[string]any{"action": map[string]any{"const": "create"}}, "required": []string{"name", "schedule"}, "oneOf": []any{
+					map[string]any{"required": []string{"instruction"}},
+					map[string]any{"required": []string{"command"}},
+				}},
 				map[string]any{"properties": map[string]any{"action": map[string]any{"const": "list"}}},
 				map[string]any{"properties": map[string]any{"action": map[string]any{"const": "delete"}}, "required": []string{"id"}},
 			},

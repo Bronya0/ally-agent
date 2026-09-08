@@ -63,7 +63,7 @@ Public License v3. See the LICENSE file for details.
                   <span class="meta-item"><i>{{ $t('service.retention') }}</i>{{ service.outputTruncated ? $t('common.truncated') : $t('service.completeBuffer') }}</span>
                 </div>
                 <div class="mono-muted ellipsis" :title="service.cwd">{{ service.cwd }}</div>
-                <div class="command" :title="service.command">{{ service.command }}</div>
+                <div class="command" :title="service.command" v-html="highlightedCommand(service.command)"></div>
                 <div v-if="service.outputTail" class="buffer-preview">
                   <div class="buffer-title">{{ $t('taskCenter.bufferPreview') }}</div>
                   <pre v-html="previewHtml(service.outputTail)"></pre>
@@ -92,7 +92,7 @@ Public License v3. See the LICENSE file for details.
                   </div>
                   <div class="head-side">
                     <n-tag size="small" round :type="scheduledStatusType(task)">{{ scheduledStatusLabel(task) }}</n-tag>
-                    <n-tag size="small" round type="warning">YOLO</n-tag>
+                    <n-tag size="small" round :bordered="false">{{ task.command ? $t('scheduled.kind.command') : $t('scheduled.kind.agent') }}</n-tag>
                     <n-button v-if="task.lastSummary || task.lastError" size="tiny" quaternary @click="openScheduledLog(task)">{{ $t('taskCenter.viewBuffer') }}</n-button>
                     <n-popconfirm
                       :positive-text="$t('common.delete')"
@@ -111,11 +111,13 @@ Public License v3. See the LICENSE file for details.
                   <span class="meta-item"><i>{{ $t('scheduled.nextRun') }}</i>{{ formatTime(task.nextRunAt) }}</span>
                   <span class="meta-item"><i>{{ $t('scheduled.lastRun') }}</i>{{ formatTime(task.lastRunAt) }}</span>
                   <span class="meta-item"><i>{{ $t('scheduled.runCount') }}</i>{{ task.runCount || 0 }}</span>
-                  <span class="meta-item"><i>{{ $t('scheduled.limit') }}</i>{{ $t('common.steps', { count: task.maxSteps }) }} · {{ durationLabel(task.timeoutSeconds) }}</span>
+                  <span v-if="!task.command" class="meta-item"><i>{{ $t('scheduled.limit') }}</i>{{ $t('common.steps', { count: task.maxSteps }) }} · {{ durationLabel(task.timeoutSeconds) }}</span>
                   <span class="meta-item"><i>{{ $t('scheduled.failures') }}</i>{{ task.consecutiveFailures || 0 }}</span>
                 </div>
                 <div class="mono-muted ellipsis" :title="task.workspace">{{ task.workspace }}</div>
-                <div class="instruction">{{ task.instruction }}</div>
+                <!-- 任务内容：command（高亮命令）或 instruction（LLM 委托描述） -->
+                <div v-if="task.command" class="command" :title="task.command" v-html="highlightedCommand(task.command)"></div>
+                <div v-else-if="task.instruction" class="instruction">{{ task.instruction }}</div>
                 <div v-if="task.lastSummary || task.lastError" class="buffer-preview" :class="{ error: task.lastError && !task.lastSummary }">
                   <div class="buffer-title">{{ $t('taskCenter.bufferPreview') }}</div>
                   <pre v-html="previewHtml(task.lastSummary || task.lastError)"></pre>
@@ -149,6 +151,7 @@ import { computed, nextTick, onUnmounted, ref, watch } from 'vue';
 import { GetServiceOutput } from '../../bindings/ally-dev/internal/app/app';
 import { formatDateTime, t } from '../i18n.mjs';
 import { renderAnsiToHtml } from '../utils/ansi.mjs';
+import { highlightShellCommand } from '../utils/shellHighlight.mjs';
 
 const props = defineProps({
   show: { type: Boolean, default: false },
@@ -199,6 +202,21 @@ function syncTabs() {
 
 function previewHtml(text) {
   return renderAnsiToHtml(text).html;
+}
+
+// 卡内命令高亮：与服务卡标题同源的 shell 分词（自带 HTML 转义）。服务列表
+// 随 service:update 反复刷新，按原文缓存避免同一条命令每次重渲都重新分词。
+const commandHighlightCache = new Map();
+function highlightedCommand(command) {
+  const text = String(command || '');
+  if (!text) return '';
+  let html = commandHighlightCache.get(text);
+  if (!html) {
+    html = highlightShellCommand(text);
+    if (commandHighlightCache.size > 128) commandHighlightCache.clear();
+    commandHighlightCache.set(text, html);
+  }
+  return html;
 }
 
 function openScheduledLog(task) {
@@ -396,6 +414,17 @@ function formatBytes(value) {
 
 .instruction, .command { display: -webkit-box; margin-top: 4px; overflow: hidden; color: var(--ally-text-body); font-size: 12px; line-height: 1.5; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .command { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+/* v-html 注入的 shell 分词 token 不带 scoped 属性，必须 :deep 才能命中。
+   配色与工具卡 .tool-command 的暗一档四色同源。 */
+.command :deep(.shell-command-word) { color: var(--ally-accent-dim); }
+.command :deep(.shell-string) { color: #82b47e; }
+.command :deep(.shell-param) { color: #b8818c; }
+.command :deep(.shell-operator) { color: #75b5aa; }
+.command :deep(.shell-comment) { color: var(--ally-text-faint); font-style: italic; }
+html[data-mode="light"] .command :deep(.shell-command-word) { color: var(--ally-accent-strong); }
+html[data-mode="light"] .command :deep(.shell-string) { color: #1a7f4b; }
+html[data-mode="light"] .command :deep(.shell-param) { color: #b3425e; }
+html[data-mode="light"] .command :deep(.shell-operator) { color: #0f766e; }
 .buffer-preview { margin-top: 8px; padding: 8px 10px; border-radius: 8px; background: var(--ally-hover-faint); }
 .buffer-preview.error, .service-error { background: rgba(239,68,68,.08); }
 .buffer-title { margin-bottom: 6px; color: var(--ally-text-muted); font-size: 11px; }

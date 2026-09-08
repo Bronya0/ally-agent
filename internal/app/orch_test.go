@@ -4006,6 +4006,44 @@ func TestScheduledTaskToolsIncludeNormalCommandsAndExcludeScheduler(t *testing.T
 	}
 }
 
+// 任务内容契约：instruction 与 command 恰好提供一个；command 型任务的
+// 视图必须带回 command（任务中心与工具卡据此渲染内容）。
+func TestScheduledTaskCreateRequiresExactlyOneContentKind(t *testing.T) {
+	root := t.TempDir()
+	app := NewApp()
+	app.configPath = filepath.Join(root, "config.json")
+	app.config = ConfigState{Workspace: root}
+	if err := app.startScheduledTaskManager(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(app.stopScheduledTaskManager)
+
+	if _, err := app.executeScheduledTaskTool(app.config, ScheduledTaskToolRequest{
+		Action: "create", Name: "both", Instruction: "x", Command: "echo hi", Schedule: "1h",
+	}); err == nil {
+		t.Fatal("expected create with both instruction and command to fail")
+	}
+	if _, err := app.executeScheduledTaskTool(app.config, ScheduledTaskToolRequest{
+		Action: "create", Name: "neither", Schedule: "1h",
+	}); err == nil {
+		t.Fatal("expected create with neither instruction nor command to fail")
+	}
+
+	created, err := app.executeScheduledTaskTool(app.config, ScheduledTaskToolRequest{
+		Action: "create", Name: "cmd task", Command: "echo hi", Schedule: "1h",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := created.(ScheduledTaskToolResult)
+	if result.Task == nil || result.Task.Command != "echo hi" || result.Task.Instruction != "" {
+		t.Fatalf("expected command-mode task view to carry the command only, got %#v", result.Task)
+	}
+	if task := app.ListScheduledTasks(); len(task) != 1 || task[0].Command != "echo hi" {
+		t.Fatalf("expected stored command task, got %#v", task)
+	}
+}
+
 // ─────────────────────── Background services ───────────────────────
 
 func TestServiceHistoryCleanup(t *testing.T) {

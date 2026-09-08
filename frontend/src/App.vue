@@ -7766,12 +7766,15 @@ function formatScheduledTaskToolDetail(task = {}) {
   if (task.id) lines.push(`ID: ${task.id}`);
   lines.push(t('app.tools.scheduled.schedule', { schedule: formatScheduledToolSchedule(task.schedule || {}) }));
   if (task.workspace) lines.push(t('app.tools.scheduled.workspace', { workspace: task.workspace }));
-  lines.push(t('app.tools.scheduled.modeYolo'));
+  // 任务内容：instruction（LLM 委托）与 command（命令执行）恰好一个，
+  // 创建结果卡必须能看到任务到底要做什么。
+  if (task.command) lines.push(t('app.tools.scheduled.command', { command: task.command }));
+  else if (task.instruction) lines.push(t('app.tools.scheduled.instruction', { instruction: task.instruction }));
   if (task.nextRunAt) lines.push(t('app.tools.scheduled.nextRun', { time: formatDateTime(Number(task.nextRunAt)) }));
   if (task.lastRunAt) lines.push(t('app.tools.scheduled.lastRun', { time: formatDateTime(Number(task.lastRunAt)) }));
   if (task.lastStatus) lines.push(t('app.tools.scheduled.status', { status: task.running ? t('common.running') : task.lastStatus }));
   if (task.runCount !== undefined) lines.push(t('app.tools.scheduled.runs', { count: task.runCount }));
-  if (task.maxSteps || task.timeoutSeconds) {
+  if (task.instruction && (task.maxSteps || task.timeoutSeconds)) {
     lines.push(t('app.tools.scheduled.perRun', { steps: task.maxSteps || '-', timeout: task.timeoutSeconds || '-' }));
   }
   return lines.join('\n');

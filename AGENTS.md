@@ -360,7 +360,7 @@ Built-in model-facing tools:
 | `ask` | Pause the visible main Agent session for one or more user questions |
 | `plan` | Session plan management; at most one `in_progress` item at a time, mark done before advancing |
 | `subagent` | Spawn a sub-agent for a scoped task (requires a `role` name, shown as the card label and injected into the sub-agent system prompt) |
-| `scheduled_task` | Create, list, or delete temporary isolated Agent tasks for the current Ally process |
+| `scheduled_task` | Create, list, or delete temporary scheduled tasks for the current Ally process. Two mutually exclusive kinds chosen at create time: `instruction` (isolated LLM agent run with fresh context) or `command` (shell command executed in the task workspace through the same safety checks/cwd bounds as the `command` tool, capped at 600s per run; long-running services are rejected — use the `service` tool); exactly one of the two must be provided |
 | `skill` | Load an enabled skill |
 | `render_html` | Render a self-contained HTML snippet inline in the chat UI as a sandboxed srcdoc iframe (max 50k chars); includes pre-installed Apache ECharts (`echarts`) with auto-resize and dark theme support; mounted only after the tool completes so arguments can stream first |
 | `suggest` | Suggest 1–4 click-to-send follow-up chips; hidden tool (no running card), must be the only call in its batch, a single successful call ends the run |
@@ -447,6 +447,8 @@ Config path:
 ```
 
 Settings page: Settings → MCP edits the server list or the raw JSON; applying the config reconciles instead of restarting everything (`ReconcileMcpServers`): only added, removed, or changed servers are (re)connected, unchanged servers keep their live connections and tool registrations. Server status is shown with connected/connecting/failed/disabled states (disabled = configured with `enabled:false`, never connected). A broken `mcp.json` surfaces a `config:warning` instead of silently unloading servers; MCP tool results are clamped to the same model-context cap as built-in tools. Saving changed proxy settings still restarts every MCP server (`RestartMcpServers`) so the new transport reaches all of them.
+
+Per-server tool injection blacklist: each server config may carry `disabledTools` (array of original upstream tool names, normalized: trimmed, deduped, empty dropped). Blacklisted tools never enter the model request — `buildToolsWithMcp` consumes `GetEnabledTools()` (the only injection point; sub-agents and scheduled tasks inherit the filter) — while `ListTools()` and `GetServerStatuses()` (which carries a per-tool `tools:[{name,description,disabled}]` payload) stay inventory-visible, mirroring the skills pattern. Compatibility semantics: `mcpServerConfigEqual` deliberately excludes `disabledTools`, so a checkbox change reconciles as an in-place `handle.Config` update (`ReconcileConfigs`) instead of a reconnect — a reconnect would restart stdio subprocesses; blacklists are keyed by original tool name so server-side deletions leave inert entries (kept, not auto-cleaned, so a temporarily withdrawn tool does not lose the user's preference), server-side additions default to enabled, and renames behave as delete+add. Tool toggles take effect on the next run; a running run keeps its tool set. The frontend must round-trip `disabledTools` through `syncJsonToForm`/`syncFormToJson` — the form-driven JSON rebuild silently drops unknown fields.
 
 Manager flow:
 
@@ -680,7 +682,7 @@ Legacy scheduled-task file (deleted on startup and no longer written):
 ~/.ally_agent/scheduled_tasks.json
 ```
 
-Scheduled tasks exist only for the current Ally process. Each execution uses fresh isolated context and a fixed workspace. Runs are globally serialized, cannot overlap with the same task, and retain only the latest bounded summary/error. Per-run defaults are 100 steps and one hour, configurable up to 1000 steps and 24 hours.
+Scheduled tasks exist only for the current Ally process. Task content is one of two mutually exclusive kinds: `instruction` runs an isolated LLM agent with fresh context; `command` runs a shell command through the `command` tool's execution boundary (`runCommandWithConfig`: AST safety checks, workspace cwd, bounded output, 600s cap) without occupying a sub-agent slot. Runs are globally serialized, cannot overlap with the same task, and retain only the latest bounded summary/error. Per-run defaults are 100 steps and one hour, configurable up to 1000 steps and 24 hours (command tasks effectively clamp to the command tool's 600s). The legacy `PermissionMode` field was removed as write-only dead state.
 
 Legacy completed background-service history (cleaned on startup and no longer written):
 

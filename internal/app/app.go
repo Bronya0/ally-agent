@@ -597,6 +597,9 @@ type ToolDefinitionSummary struct {
 	Description string `json:"description"`
 	Source      string `json:"source"`
 	Server      string `json:"server,omitempty"`
+	// Enabled reflects the MCP per-tool injection blacklist; built-ins are
+	// always true. Disabled tools stay listed (inventory-visible, not injected).
+	Enabled bool `json:"enabled"`
 }
 
 type ChatMessageInput struct {
@@ -2174,6 +2177,10 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			runInputTokens += modelResp.Usage.PromptTokens
 			runOutputTokens += modelResp.Usage.CompletionTokens
 		}
+		// 与底部累计（recordWorkspaceTokenUsage）同策略：provider 未回报
+		// CompletionTokens 时用估算补上，否则 footer 有数而本轮 ↑↓ 与
+		// token/s 静默消失。输入侧估算（数千 token 跳变）维持不补。
+		runOutputTokens += fallbackOutput
 		if stopErr := modelResponseStopError(cfg, modelResp); stopErr != nil {
 			if content != "" || reasoning != "" {
 				messages = append(messages, openai.ChatCompletionMessage{

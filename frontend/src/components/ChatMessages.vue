@@ -404,10 +404,17 @@ const lastAnswerMessage = computed(() => {
   const msgs = props.messages || [];
   for (let i = msgs.length - 1; i >= 0; i--) {
     const m = msgs[i];
+    if (m?.role !== 'assistant' || m.welcome) continue;
+    // 正文不读代理（避免订阅流式增量，见下），但每条消息读一次低频翻转
+    // 信号：run 结束时 streaming→false / roundDurationText 落位都发生在这条
+    // 消息的正文流完之后，若不订阅它们，本 computed 会停在旧消息上——
+    // 多步运行整轮不出现复制按钮、单步运行按钮滞后一轮。
+    if (m.streaming) continue;
+    void m.roundDurationText;
     // 不读代理上的 content：那会让本 computed 订阅所有 assistant 消息内容，
     // 流式增量把整个列表渲染拖下水。toRaw 绕过代理读原始对象，不建立依赖。
     // 中间步骤的 assistant 消息可能没有正文（只有 tool_calls），必须跳过。
-    if (m?.role === 'assistant' && !m.welcome && String(toRaw(m)?.content || '').trim()) return m;
+    if (String(toRaw(m)?.content || '').trim()) return m;
   }
   return null;
 });

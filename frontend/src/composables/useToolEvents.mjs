@@ -16,7 +16,7 @@
 //     never reaches into component scope and stays unit-testable.
 // -----------------------------------------------------------------------------
 
-import { t } from '../i18n.mjs';
+import { t, formatDateTime } from '../i18n.mjs';
 import {
   setToolStatus,
   findToolEventByData,
@@ -201,6 +201,26 @@ export function useToolEvents(ctx) {
     // 需要结构化 stats。保留函数避免改动 adapters 映射表结构。
   }
 
+  // 启动服务的详情卡：结构化字段（status/pid/command/cwd/started/error），
+  // 不带持续滚动的输出尾（那是有界 buffer 的事，任务中心可看完整输出）。
+  // stop/list/read 保留 formatToolBody 的原生结果体。
+  // scheduledAction 来自流式参数，早退的 tool:start 可能没带上；running 阶段
+  // 标题一定以动作词开头（makeToolTitle: "start · ..."），作兜底信号。
+  function applyServiceResult(existing, data, resultData) {
+    const action = String(existing.scheduledAction || '').trim().toLowerCase();
+    const isStart = action === 'start' || (!action && String(existing.title || '').startsWith('start'));
+    if (!isStart) return;
+    const info = resultData && typeof resultData === 'object' ? resultData : {};
+    const lines = [];
+    if (info.status) lines.push(t('app.tools.service.status', { status: info.status }));
+    if (info.pid) lines.push(`pid: ${info.pid}`);
+    if (info.command) lines.push(t('app.tools.service.command', { command: info.command }));
+    if (info.cwd) lines.push(t('app.tools.service.cwd', { cwd: info.cwd }));
+    if (info.startedAt) lines.push(t('app.tools.service.started', { time: formatDateTime(Number(info.startedAt) * 1000) }));
+    if (info.error) lines.push(t('app.tools.service.error', { error: info.error }));
+    existing.body = lines.join('\n');
+  }
+
   const toolResultAdapters = {
     'edit': [applyEditValidation, applyEditDiff],
     'replace_exact': [applyEditValidation, applyEditDiff],
@@ -214,6 +234,7 @@ export function useToolEvents(ctx) {
     'remote_read': [applyReadBatchEntries],
     'grep': [applyToolStats],
     'list_files': [applyToolStats],
+    'service': [applyServiceResult],
   };
 
   function applySubagentResult(existing, data, resultData) {

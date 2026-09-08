@@ -50,24 +50,27 @@ type ScheduledTaskSchedule struct {
 }
 
 type ScheduledTask struct {
-	ID                  string                `json:"id"`
-	Name                string                `json:"name"`
-	Instruction         string                `json:"instruction"`
-	Workspace           string                `json:"workspace"`
-	Schedule            ScheduledTaskSchedule `json:"schedule"`
-	PermissionMode      string                `json:"permissionMode"`
-	MaxSteps            int                   `json:"maxSteps"`
-	TimeoutSeconds      int                   `json:"timeoutSeconds"`
-	CreatedAt           int64                 `json:"createdAt"`
-	UpdatedAt           int64                 `json:"updatedAt"`
-	NextRunAt           int64                 `json:"nextRunAt,omitempty"`
-	LastRunAt           int64                 `json:"lastRunAt,omitempty"`
-	LastStatus          string                `json:"lastStatus"`
-	LastSummary         string                `json:"lastSummary,omitempty"`
-	LastError           string                `json:"lastError,omitempty"`
-	RunCount            int                   `json:"runCount"`
-	ConsecutiveFailures int                   `json:"consecutiveFailures"`
-	Running             bool                  `json:"running"`
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	// 任务内容二选一：Instruction 走 LLM agent 委托，Command 走命令执行
+	// （复用 command 工具的安全检查与工作区 cwd 边界）。
+	Instruction    string                `json:"instruction,omitempty"`
+	Command        string                `json:"command,omitempty"`
+	Workspace      string                `json:"workspace"`
+	Schedule       ScheduledTaskSchedule `json:"schedule"`
+	MaxSteps       int                   `json:"maxSteps"`
+	TimeoutSeconds int                   `json:"timeoutSeconds"`
+	CreatedAt      int64                 `json:"createdAt"`
+	UpdatedAt      int64                 `json:"updatedAt"`
+	NextRunAt      int64                 `json:"nextRunAt,omitempty"`
+	LastRunAt      int64                 `json:"lastRunAt,omitempty"`
+	LastStatus     string                `json:"lastStatus"`
+	LastSummary    string                `json:"lastSummary,omitempty"`
+	LastError      string                `json:"lastError,omitempty"`
+	RunCount       int                   `json:"runCount"`
+	// ConsecutiveFailures 仅供任务中心展示；没有任何退避/停用策略消费它。
+	ConsecutiveFailures int  `json:"consecutiveFailures"`
+	Running             bool `json:"running"`
 }
 
 type ScheduledTaskToolRequest struct {
@@ -75,15 +78,17 @@ type ScheduledTaskToolRequest struct {
 	ID          string `json:"id,omitempty"`
 	Name        string `json:"name,omitempty"`
 	Instruction string `json:"instruction,omitempty"`
+	Command     string `json:"command,omitempty"`
 	Schedule    string `json:"schedule,omitempty"`
 }
 
 type ScheduledTaskToolView struct {
 	ID             string                `json:"id"`
 	Name           string                `json:"name"`
+	Instruction    string                `json:"instruction,omitempty"`
+	Command        string                `json:"command,omitempty"`
 	Workspace      string                `json:"workspace"`
 	Schedule       ScheduledTaskSchedule `json:"schedule"`
-	PermissionMode string                `json:"permissionMode"`
 	MaxSteps       int                   `json:"maxSteps"`
 	TimeoutSeconds int                   `json:"timeoutSeconds"`
 	NextRunAt      int64                 `json:"nextRunAt,omitempty"`
@@ -258,9 +263,9 @@ func (m *scheduledTaskManager) create(cfg ConfigState, req ScheduledTaskToolRequ
 		ID:             "task_" + newID(),
 		Name:           strings.TrimSpace(req.Name),
 		Instruction:    strings.TrimSpace(req.Instruction),
+		Command:        strings.TrimSpace(req.Command),
 		Workspace:      strings.TrimSpace(cfg.Workspace),
 		Schedule:       schedule,
-		PermissionMode: "workspace_write",
 		MaxSteps:       defaultScheduledTaskSteps,
 		TimeoutSeconds: defaultScheduledTaskTimeout,
 		CreatedAt:      now.UnixMilli(),
@@ -270,8 +275,9 @@ func (m *scheduledTaskManager) create(cfg ConfigState, req ScheduledTaskToolRequ
 	if task.Name == "" {
 		return nil, codedToolError("E_SCHEDULED_TASK_NAME", errors.New("name is required"))
 	}
-	if task.Instruction == "" {
-		return nil, codedToolError("E_SCHEDULED_TASK_INSTRUCTION", errors.New("instruction is required"))
+	// 任务内容二选一：instruction（LLM 委托）与 command（命令执行）恰好给一个。
+	if (task.Instruction == "") == (task.Command == "") {
+		return nil, codedToolError("E_SCHEDULED_TASK_CONTENT", errors.New("provide exactly one of instruction or command"))
 	}
 	if task.Workspace == "" {
 		return nil, codedToolError("E_SCHEDULED_TASK_WORKSPACE", errors.New("workspace is required"))
@@ -520,6 +526,14 @@ func (m *scheduledTaskManager) run(task ScheduledTask) {
 	cfg := m.app.effectiveConfig(ConfigState{Workspace: task.Workspace})
 	cfg.Workspace = task.Workspace
 
+	// 命令型任务：复用 command 工具的执行边界（AST 安全检查、工作区 cwd、
+	// 有界输出），不占 LLM 委托槽、不产生任何模型步骤。
+	if strings.TrimSpace(task.Command) != "" {
+		m.runCommandTask(task, ctx, cfg)
+		finished = true
+		return
+	}
+
 	if err := m.app.acquireSubagentSlot(ctx); err != nil {
 		m.finish(task.ID, "failed", "", err.Error())
 		finished = true
@@ -562,6 +576,46 @@ func (m *scheduledTaskManager) run(task ScheduledTask) {
 	}
 	m.finish(task.ID, status, summary, tailString(errText, 8*1024))
 	finished = true
+}
+
+// runCommandTask executes a command-mode scheduled task through the same
+// boundary as the command tool (safety AST, workspace cwd, bounded output,
+// process-tree kill on cancel) and maps the CommandResult onto the task's
+// status/summary fields.
+func (m *scheduledTaskManager) runCommandTask(task ScheduledTask, ctx context.Context, cfg ConfigState) {
+	// command 工具自身的上限是 600s；更长的任务超时只约束外层 ctx。
+	timeout := task.TimeoutSeconds
+	if timeout <= 0 || timeout > 600 {
+		timeout = 600
+	}
+	result, runErr := m.app.runCommandWithConfig(ctx, cfg, CommandRequest{
+		Command: task.Command,
+		Timeout: timeout,
+	})
+	status := "completed"
+	summary := ""
+	errText := ""
+	switch {
+	case runErr != nil:
+		status = "failed"
+		errText = runErr.Error()
+	case result.TimedOut:
+		status = "timed_out"
+		errText = fmt.Sprintf("command exceeded %ds", timeout)
+	case result.Cancelled:
+		status = "cancelled"
+		errText = "command cancelled"
+	case result.ExitCode != 0:
+		status = "failed"
+		errText = fmt.Sprintf("exit code %d", result.ExitCode)
+	}
+	// 摘要承载输出尾部（有界），任务中心预览直接看到命令实际打印的内容。
+	if output := strings.TrimSpace(result.Output); output != "" {
+		summary = tailString(output, scheduledTaskSummaryLimit)
+	} else if status == "completed" {
+		summary = fmt.Sprintf("exit 0 in %dms", result.DurationMS)
+	}
+	m.finish(task.ID, status, summary, tailString(errText, 8*1024))
 }
 
 func (m *scheduledTaskManager) finish(id, status, summary, errText string) {
@@ -608,13 +662,11 @@ func normalizeScheduledTask(task *ScheduledTask, now time.Time) error {
 	task.ID = strings.TrimSpace(task.ID)
 	task.Name = strings.TrimSpace(task.Name)
 	task.Instruction = strings.TrimSpace(task.Instruction)
+	task.Command = strings.TrimSpace(task.Command)
 	task.Workspace = strings.TrimSpace(task.Workspace)
 	if task.ID == "" {
 		return errors.New("task id is required")
 	}
-	// Scheduled tasks intentionally run with the normal workspace tool set.
-	// Force the persisted value so tasks created before this behavior migrate automatically.
-	task.PermissionMode = "workspace_write"
 
 	steps, err := scheduler.ValidateSteps(task.MaxSteps)
 	if err != nil {
@@ -657,8 +709,9 @@ func normalizeScheduledTask(task *ScheduledTask, now time.Time) error {
 
 func scheduledTaskToolView(task *ScheduledTask) ScheduledTaskToolView {
 	return ScheduledTaskToolView{
-		ID: task.ID, Name: task.Name, Workspace: task.Workspace, Schedule: task.Schedule,
-		PermissionMode: task.PermissionMode, MaxSteps: task.MaxSteps, TimeoutSeconds: task.TimeoutSeconds,
+		ID: task.ID, Name: task.Name, Instruction: task.Instruction, Command: task.Command,
+		Workspace: task.Workspace, Schedule: task.Schedule,
+		MaxSteps: task.MaxSteps, TimeoutSeconds: task.TimeoutSeconds,
 		NextRunAt: task.NextRunAt, LastRunAt: task.LastRunAt, LastStatus: task.LastStatus,
 		RunCount: task.RunCount, Running: task.Running,
 	}

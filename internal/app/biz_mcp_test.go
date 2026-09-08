@@ -298,6 +298,97 @@ func TestMcpServerConfigEqualNormalizesEnabledFlag(t *testing.T) {
 	}
 }
 
+// disabledTools 只影响注入过滤：相等性比较必须忽略它，否则勾选一个工具
+// 就会触发 reconcile 断开重连（stdio 场景重启子进程）。
+func TestMcpServerConfigEqualIgnoresDisabledTools(t *testing.T) {
+	base := McpServerConfig{Command: "x"}
+	withList := McpServerConfig{Command: "x", DisabledTools: []string{"write_file"}}
+	if !mcpServerConfigEqual(base, withList) {
+		t.Fatal("disabledTools change must not count as a connection-relevant config change")
+	}
+	if !mcpServerConfigEqual(
+		McpServerConfig{Command: "x", DisabledTools: []string{"a", "b"}},
+		McpServerConfig{Command: "x", DisabledTools: []string{"b"}},
+	) {
+		t.Fatal("different disabledTools must stay equal for connection semantics")
+	}
+}
+
+// 注入过滤：黑名单内工具不进 GetEnabledTools，但 GetAllTools（清单层）仍全量可见；
+// 黑名单按「对端原始工具名」匹配，未列出的工具（含对端新增）默认启用。
+func TestGetEnabledToolsFiltersDisabledTools(t *testing.T) {
+	manager := NewMcpManager(t.TempDir(), nil)
+	manager.clients = map[string]*McpClientHandle{
+		"fs": {
+			ServerName: "fs",
+			Status:     "connected",
+			Config:     McpServerConfig{Command: "x", DisabledTools: []string{" write_file ", "", "write_file"}},
+			ToolDefs: []McpDiscoveredTool{
+				{ServerName: "fs", Name: "read_file", FunctionName: "mcp__fs__read_file"},
+				{ServerName: "fs", Name: "write_file", FunctionName: "mcp__fs__write_file"},
+			},
+		},
+	}
+	// disabled server: 全部工具都不注入也不出现在任一视图
+	manager.clients["off"] = &McpClientHandle{ServerName: "off", Status: "disabled"}
+
+	enabled := manager.GetEnabledTools()
+	if len(enabled) != 1 || enabled[0].Name != "read_file" {
+		t.Fatalf("enabled view must drop blacklisted tools, got %#v", enabled)
+	}
+	all := manager.GetAllTools()
+	if len(all) != 2 {
+		t.Fatalf("inventory view must stay all-visible, got %#v", all)
+	}
+	if !manager.IsToolDisabled("fs", "write_file") || manager.IsToolDisabled("fs", "read_file") {
+		t.Fatal("IsToolDisabled must match the normalized blacklist only")
+	}
+	if manager.IsToolDisabled("unknown-server", "anything") {
+		t.Fatal("unknown server tools default to enabled")
+	}
+}
+
+// reconcile 兼容语义：勾选变化原地生效（连接保持、handle 指针不变）；
+// 新增 disabledTools 条目不影响 changed 计数以外的语义。
+func TestReconcileConfigsAppliesDisabledToolsInPlace(t *testing.T) {
+	configFile := filepath.Join(t.TempDir(), "mcp.json")
+	write := func(content string) {
+		t.Helper()
+		if err := os.WriteFile(configFile, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(`{"mcpServers":{"a":{"command":"x"}}}`)
+	manager := NewMcpManager(t.TempDir(), func(tools []McpDiscoveredTool) {})
+	manager.configPaths = []string{configFile}
+	handle := &McpClientHandle{ServerName: "a", Config: McpServerConfig{Command: "x"}, Status: "connected"}
+	manager.clients["a"] = handle
+
+	write(`{"mcpServers":{"a":{"command":"x","disabledTools":["write_file"]}}}`)
+	changed, err := manager.ReconcileConfigs(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed != 1 {
+		t.Fatalf("in-place tool toggle should count as touched, got %d", changed)
+	}
+	if manager.clients["a"] != handle || handle.Status != "connected" {
+		t.Fatal("tool-only change must keep the live handle without reconnect")
+	}
+	if !manager.IsToolDisabled("a", "write_file") {
+		t.Fatalf("handle config must carry the new blacklist, got %#v", handle.Config)
+	}
+
+	// 未勾选的服务器再次 reconcile：无变化时不 touch。
+	changed, err = manager.ReconcileConfigs(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed != 0 {
+		t.Fatalf("reconciling an unchanged config must be a no-op, got %d", changed)
+	}
+}
+
 func TestIsMcpRecoverableError(t *testing.T) {
 	recoverableCases := []string{
 		"invalid session ID: 123",

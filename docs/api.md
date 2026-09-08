@@ -232,7 +232,7 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:47821/api/v1/sessions?
 
 | 字段 | 说明 |
 |------|------|
-| `servers[]` | 各服务器状态：`name`、`status`（connected/connecting/failed/disabled）、`transport`、`toolCount`、`error` |
+| `servers[]` | 各服务器状态：`name`、`status`（connected/connecting/failed/disabled）、`transport`、`toolCount`、`error`、`tools[]`（每项 `{name, description, disabled}`，`description` 截断到 200 字符，`disabled` 表示该工具在注入黑名单中） |
 | `config` | `mcp.json` 文件原文（字符串），修改后可直接通过 `PUT /mcp/config` 传回 |
 
 ### `PUT /api/v1/mcp/config` — 更新并应用 MCP 配置
@@ -267,7 +267,7 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:47821/api/v1/sessions?
 
 ### `GET /api/v1/tools` — 查询工具清单
 
-响应 `data.tools[]`：`{ name, description, source, server? }`，`source` 为 `built-in` 或 `mcp`（MCP 条目带 `server` 名，`name` 即模型侧函数名 `mcp__<server>__<tool>`）。
+响应 `data.tools[]`：`{ name, description, source, server?, enabled }`，`source` 为 `built-in` 或 `mcp`（MCP 条目带 `server` 名，`name` 即模型侧函数名 `mcp__<server>__<tool>`）；`enabled=false` 表示该 MCP 工具在所在服务器的 `disabledTools` 注入黑名单中，不进入模型请求但清单内仍可见。
 
 ### `GET /api/v1/subagents` — 查询子代理运行状态
 

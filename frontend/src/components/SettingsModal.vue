@@ -511,7 +511,15 @@ Public License v3. See the LICENSE file for details.
                 <span class="mcp-badge">{{ $t(transportLabel(srv.transport)) }}</span>
                 <span v-if="srv.enabled === false" class="mcp-badge off">{{ $t('settings.mcpStatusDisabled') }}</span>
                 <div class="mcp-row-side">
-                  <span v-if="mcpStatusFor(srv).toolCount" class="mcp-tools">{{ $t('tools.count', { count: mcpStatusFor(srv).toolCount }) }}</span>
+                  <button
+                    v-if="(mcpStatusFor(srv).tools || []).length"
+                    class="mcp-tools-toggle"
+                    :title="$t('settings.mcpToolsHint')"
+                    @click="toggleMcpToolsPanel(srv._key)"
+                  >
+                    {{ $t('settings.mcpToolsToggle', { injected: mcpInjectedCount(srv), total: (mcpStatusFor(srv).tools || []).length }) }}
+                  </button>
+                  <span v-else-if="mcpStatusFor(srv).toolCount" class="mcp-tools">{{ $t('tools.count', { count: mcpStatusFor(srv).toolCount }) }}</span>
                   <span :class="['mcp-status-text', mcpStatusFor(srv).status]" :title="mcpStatusFor(srv).error || ''">{{ $t(mcpStatusLabel(mcpStatusFor(srv).status)) }}</span>
                   <n-switch :value="srv.enabled" size="small" @update:value="(value) => toggleMcpEnabled(srv, value)" />
                   <n-button size="tiny" quaternary @click="openMcpEditor(idx)">{{ $t('common.edit') }}</n-button>
@@ -519,6 +527,20 @@ Public License v3. See the LICENSE file for details.
                 </div>
               </div>
               <div v-if="mcpStatusFor(srv).error" class="mcp-list-error" :title="mcpStatusFor(srv).error">{{ mcpStatusFor(srv).error }}</div>
+              <!-- Per-server tool injection toggles. Checkbox = injected
+                   (checked by default); storage stays a blacklist
+                   (disabledTools) so server-side additions default on. -->
+              <div v-if="mcpToolsPanelOpen(srv._key) && (mcpStatusFor(srv).tools || []).length" class="mcp-tools-panel">
+                <div class="mcp-tools-hint">{{ $t('settings.mcpToolsHint') }}</div>
+                <n-checkbox-group :value="mcpInjectedTools(srv)" @update:value="(value) => setMcpInjectedTools(srv, value)">
+                  <n-checkbox v-for="tool in mcpStatusFor(srv).tools" :key="tool.name" :value="tool.name" class="mcp-tool-check">
+                    <span class="mcp-tool-line">
+                      <span class="mcp-tool-name">{{ tool.name }}</span>
+                      <span v-if="tool.description" class="mcp-tool-desc" :title="tool.description">{{ tool.description }}</span>
+                    </span>
+                  </n-checkbox>
+                </n-checkbox-group>
+              </div>
             </div>
           </div>
         </section>
@@ -1762,6 +1784,7 @@ function syncJsonToForm() {
       url: cfg.url || '',
       headers: Object.entries(cfg.headers || {}).map(([k, v]) => `${k}: ${v}`).join('\n'),
       enabled: cfg.enabled !== false,
+      disabledTools: Array.isArray(cfg.disabledTools) ? cfg.disabledTools.map((name) => String(name).trim()).filter(Boolean) : [],
     }));
   } catch {
     // keep existing form data on parse error
@@ -1794,6 +1817,10 @@ function syncFormToJson() {
       if (Object.keys(env).length) cfg.env = env;
     }
     cfg.enabled = srv.enabled !== false;
+    // 注入黑名单必须随表单往返保留，否则任何一次 auto-apply 都会把
+    // syncFormToJson 重建的 JSON 里丢掉这个字段（勾选静默清零）。
+    const disabledTools = (srv.disabledTools || []).map((name) => String(name).trim()).filter(Boolean);
+    if (disabledTools.length) cfg.disabledTools = disabledTools;
     servers[srv.name.trim()] = cfg;
   }
   mcpConfigText.value = JSON.stringify({ mcpServers: servers }, null, 2);
@@ -1824,7 +1851,37 @@ function blankMcpServerForm() {
     url: '',
     headers: '',
     enabled: true,
+    disabledTools: [],
   };
+}
+
+// 工具勾选面板的展开状态按行 key 记录；默认收起，勾选计数在行侧常显。
+const mcpExpandedToolPanels = ref(new Set());
+function toggleMcpToolsPanel(key) {
+  const next = new Set(mcpExpandedToolPanels.value);
+  if (next.has(key)) next.delete(key);
+  else next.add(key);
+  mcpExpandedToolPanels.value = next;
+}
+function mcpToolsPanelOpen(key) {
+  return mcpExpandedToolPanels.value.has(key);
+}
+function mcpInjectedCount(srv) {
+  return mcpInjectedTools(srv).length;
+}
+
+// 勾选框语义 = 「注入」：勾上的是当前进入模型上下文的工具（默认全勾）。
+// 存储仍是黑名单 disabledTools —— 差集换算保证对端新增工具默认启用。
+function mcpInjectedTools(srv) {
+  const tools = mcpStatusFor(srv).tools || [];
+  const disabled = new Set(srv.disabledTools || []);
+  return tools.map((tool) => tool.name).filter((name) => !disabled.has(name));
+}
+function setMcpInjectedTools(srv, checkedNames) {
+  const checked = new Set(checkedNames);
+  const tools = mcpStatusFor(srv).tools || [];
+  srv.disabledTools = tools.map((tool) => tool.name).filter((name) => !checked.has(name));
+  autoApplyMcpConfig();
 }
 
 function openMcpEditor(index) {
@@ -2873,6 +2930,74 @@ watch(() => props.visible, (visible) => {
   color: var(--ally-text-faint);
   font-size: 11px;
   margin-left: auto;
+}
+
+.mcp-tools-toggle {
+  border: none;
+  background: none;
+  padding: 0;
+  margin-left: auto;
+  color: var(--ally-accent-dim);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.mcp-tools-toggle:hover {
+  color: var(--ally-accent);
+}
+
+.mcp-tools-panel {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--ally-border);
+  border-radius: 8px;
+  background: var(--ally-hover-faint);
+}
+
+.mcp-tools-hint {
+  margin-bottom: 8px;
+  color: var(--ally-text-faint);
+  font-size: 11px;
+}
+
+.mcp-tools-panel .n-checkbox {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  margin: 0 0 8px;
+}
+
+/* .n-checkbox__label 是 Naive 内部元素，scoped 样式必须 :deep 才命中；
+   不约束 min-width 的话 flex 项收缩不下，长描述会撑破容器 */
+.mcp-tools-panel :deep(.n-checkbox .n-checkbox__label) {
+  flex: 1;
+  min-width: 0;
+}
+
+/* label 行做成 flex：名称固定，描述吃剩余宽度单行省略 */
+.mcp-tool-line {
+  display: flex;
+  align-items: baseline;
+  flex: 1;
+  min-width: 0;
+}
+
+.mcp-tool-name {
+  flex-shrink: 0;
+  color: var(--ally-text-body);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12px;
+}
+
+.mcp-tool-desc {
+  flex: 1;
+  min-width: 0;
+  margin-left: 8px;
+  overflow: hidden;
+  color: var(--ally-text-faint);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .api-header-actions {

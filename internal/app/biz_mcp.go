@@ -18,6 +18,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -39,6 +40,11 @@ type McpServerConfig struct {
 	URL       string            `json:"url,omitempty"`
 	Headers   map[string]string `json:"headers,omitempty"`
 	Enabled   *bool             `json:"enabled,omitempty"`
+	// DisabledTools 是按「对端原始工具名」记录的注入黑名单：名单内的工具
+	// 不进入模型请求（buildToolsWithMcp 过滤），但清单/状态接口仍可见。
+	// 对端新增工具默认启用；对端删除工具后残留条目 inert 保留，不自动清理，
+	// 以便对端临时下线再恢复时用户的勾选偏好不丢。
+	DisabledTools []string `json:"disabledTools,omitempty"`
 }
 
 type McpServersConfig struct {
@@ -153,6 +159,7 @@ func (m *McpManager) LoadConfigs() (map[string]McpServerConfig, error) {
 		// "disabled" handle and the status list shows configured-but-off
 		// entries instead of silently hiding them.
 		for name, srv := range cfg.McpServers {
+			srv.DisabledTools = normalizeDisabledTools(srv.DisabledTools)
 			merged[name] = srv
 		}
 	}
@@ -199,7 +206,42 @@ func mcpServerConfigEqual(a, b McpServerConfig) bool {
 		enabled := true
 		b.Enabled = &enabled
 	}
+	// disabledTools 只影响注入过滤，不影响连接本身：勾选变化必须走
+	// ReconcileConfigs 的原地更新路径，绝不能触发断开重连（stdio 会重启子进程）。
+	a.DisabledTools = nil
+	b.DisabledTools = nil
 	return reflect.DeepEqual(a, b)
+}
+
+// normalizeDisabledTools 归一化注入黑名单：去空白、丢空项、按首次出现去重。
+// 空结果归 nil，避免空切片与缺席在配置序列化上产生无意义差异。
+func normalizeDisabledTools(values []string) []string {
+	seen := make(map[string]bool, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		name := strings.TrimSpace(value)
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		out = append(out, name)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func disabledToolsEqual(a, b []string) bool {
+	return slices.Equal(normalizeDisabledTools(a), normalizeDisabledTools(b))
+}
+
+func disabledToolSet(values []string) map[string]bool {
+	set := make(map[string]bool, len(values))
+	for _, name := range normalizeDisabledTools(values) {
+		set[name] = true
+	}
+	return set
 }
 
 // ReconcileConfigs converges the running servers onto the persisted config
@@ -220,6 +262,14 @@ func (m *McpManager) ReconcileConfigs(ctx context.Context) (int, error) {
 		cfg, ok := configs[name]
 		if !ok || !mcpServerConfigEqual(handle.Config, cfg) {
 			stale = append(stale, name)
+			continue
+		}
+		// 连接语义未变但勾选变了：原地替换 disabledTools，保持 live 连接，
+		// 只让下一次 buildToolsWithMcp 的注入过滤生效。touched 驱动上层
+		// 失效上下文缓存并发 status。
+		if !disabledToolsEqual(handle.Config.DisabledTools, cfg.DisabledTools) {
+			handle.Config.DisabledTools = cfg.DisabledTools
+			touched[name] = true
 		}
 	}
 	for _, name := range stale {
@@ -747,13 +797,37 @@ func (m *McpManager) Shutdown() {
 	m.toolLookup = make(map[string]mcpToolRef)
 }
 
+// GetAllTools returns every discovered tool from connected servers regardless
+// of the per-server injection blacklist — the inventory/status layer stays
+// all-visible so the UI can offer toggles for hidden tools.
 func (m *McpManager) GetAllTools() []McpDiscoveredTool {
+	return m.collectTools(false)
+}
+
+// GetEnabledTools filters out tools whose original name sits in the server's
+// disabledTools blacklist. This is the model-facing view: the single injection
+// point is buildToolsWithMcp.
+func (m *McpManager) GetEnabledTools() []McpDiscoveredTool {
+	return m.collectTools(true)
+}
+
+func (m *McpManager) collectTools(enabledOnly bool) []McpDiscoveredTool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	var all []McpDiscoveredTool
 	for _, handle := range m.clients {
-		if handle.Status == "connected" {
-			all = append(all, handle.ToolDefs...)
+		if handle.Status != "connected" {
+			continue
+		}
+		var disabled map[string]bool
+		if enabledOnly {
+			disabled = disabledToolSet(handle.Config.DisabledTools)
+		}
+		for _, tool := range handle.ToolDefs {
+			if disabled[tool.Name] {
+				continue
+			}
+			all = append(all, tool)
 		}
 	}
 	sort.SliceStable(all, func(i, j int) bool {
@@ -766,6 +840,19 @@ func (m *McpManager) GetAllTools() []McpDiscoveredTool {
 		return all[i].FunctionName < all[j].FunctionName
 	})
 	return all
+}
+
+// IsToolDisabled reports whether a server's tool sits in its injection
+// blacklist. Unknown servers/tools are never disabled (absence = enabled, so
+// server-side additions default on).
+func (m *McpManager) IsToolDisabled(serverName, toolName string) bool {
+	m.mu.RLock()
+	handle, ok := m.clients[serverName]
+	m.mu.RUnlock()
+	if !ok {
+		return false
+	}
+	return disabledToolSet(handle.Config.DisabledTools)[strings.TrimSpace(toolName)]
 }
 
 func mcpToolFunctionName(serverName, toolName string) string {
@@ -813,17 +900,43 @@ func parseLegacyMcpFunctionName(name string) (string, string, bool) {
 	return parts[1], parts[2], true
 }
 
+const (
+	// mcpStatusToolDescriptionLimit bounds each tool description inside the
+	// mcp:status payload / GetMcpServers binding; the UI only previews it.
+	mcpStatusToolDescriptionLimit = 200
+)
+
 func (m *McpManager) GetServerStatuses() []map[string]any {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	var result []map[string]any
 	for name, handle := range m.clients {
+		// Per-tool injection state rides along so the settings page can offer
+		// checkboxes without a second binding. Disabled servers never
+		// discovered tools, so their list is empty by construction.
+		disabled := disabledToolSet(handle.Config.DisabledTools)
+		tools := make([]map[string]any, 0, len(handle.ToolDefs))
+		for _, tool := range handle.ToolDefs {
+			description := strings.TrimSpace(tool.Description)
+			if len(description) > mcpStatusToolDescriptionLimit {
+				description = strings.TrimSpace(description[:mcpStatusToolDescriptionLimit]) + "…"
+			}
+			tools = append(tools, map[string]any{
+				"name":        tool.Name,
+				"description": description,
+				"disabled":    disabled[tool.Name],
+			})
+		}
+		sort.SliceStable(tools, func(i, j int) bool {
+			return tools[i]["name"].(string) < tools[j]["name"].(string)
+		})
 		result = append(result, map[string]any{
 			"name":      name,
 			"status":    handle.Status,
 			"error":     handle.Error,
 			"toolCount": len(handle.ToolDefs),
 			"transport": mcpTransportName(handle.Config),
+			"tools":     tools,
 		})
 	}
 	return result
@@ -856,12 +969,14 @@ func (m *McpManager) notifyChange() {
 // ── MCP tool exposure and frontend bindings ──────────────────
 
 // buildToolsWithMcp combines static tools with dynamically discovered MCP tools.
+// MCP tools go through GetEnabledTools so a server's disabledTools blacklist
+// keeps those schemas out of the model request entirely.
 func (a *App) buildToolsWithMcp() []openai.Tool {
 	tools := chatTools()
 	if a.mcpManager == nil {
 		return tools
 	}
-	mcpTools := a.mcpManager.GetAllTools()
+	mcpTools := a.mcpManager.GetEnabledTools()
 	for _, dt := range mcpTools {
 		name := dt.FunctionName
 		if name == "" {
@@ -903,6 +1018,7 @@ func (a *App) ListTools() []ToolDefinitionSummary {
 			Name:        tool.Function.Name,
 			Description: strings.TrimSpace(tool.Function.Description),
 			Source:      "built-in",
+			Enabled:     true,
 		})
 	}
 	if a.mcpManager != nil {
@@ -927,6 +1043,7 @@ func (a *App) ListTools() []ToolDefinitionSummary {
 				Description: description,
 				Source:      "mcp",
 				Server:      tool.ServerName,
+				Enabled:     !a.mcpManager.IsToolDisabled(tool.ServerName, tool.Name),
 			})
 		}
 	}

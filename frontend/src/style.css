@@ -551,7 +551,8 @@ html[data-mode="light"] .hljs-deletion {
   color: #b91c1c;
 }
 
-/* Shell command chips (tool-command): darker syntax tokens on light mats. */
+/* Shell command chips (tool-command): darker syntax tokens on light mats;
+   the dim-mode hexes above are mid-tones that wash out on white glass. */
 html[data-mode="light"] .tool-command .hljs-string,
 html[data-mode="light"] .tool-command .hljs-regexp,
 html[data-mode="light"] .tool-command .hljs-symbol,
@@ -669,11 +670,15 @@ html[data-mode="light"] .tool-name {
 html[data-mode="light"] .tool-verb {
   color: var(--ally-accent-strong);
 }
+/* 命令词锚点在浅底上保持可读强度（accent-dim 的浅色推导太灰）。 */
+html[data-mode="light"] .tool-command .hljs-keyword,
+html[data-mode="light"] .tool-command .hljs-built_in,
+html[data-mode="light"] .tool-command .hljs-name,
+html[data-mode="light"] .tool-command .hljs-title,
+html[data-mode="light"] .tool-command .hljs-function,
+html[data-mode="light"] .tool-command .hljs-section,
 html[data-mode="light"] .tool-command .shell-command-word {
   color: var(--ally-accent-strong);
-}
-html[data-mode="light"] .tool-command code {
-  color: var(--ally-text-high);
 }
 html[data-mode="light"] .tool-body {
   color: var(--ally-text-high);
@@ -3780,7 +3785,7 @@ code, pre {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--ally-text-body);
+  color: var(--ally-text-soft);
   font-family: var(--ally-mono-font);
   font-size: var(--ally-code-font-size);
   line-height: 1.25;
@@ -3791,62 +3796,45 @@ code, pre {
   color: var(--ally-text-faint);
 }
 
+/* 括号内命令保留语法分色，但四色整体压暗一档（约 80% 亮度、同色相）：
+   亮暗两种模式都比原来的亮粉彩安静，不再和状态动词抢焦点。 */
 .tool-command .hljs-comment,
-.tool-command .hljs-quote {
+.tool-command .hljs-quote,
+.tool-command .shell-comment {
   color: var(--ally-text-faint);
   font-style: italic;
 }
 
 .tool-command .hljs-keyword,
 .tool-command .hljs-built_in,
-.tool-command .hljs-name {
-  color: var(--ally-accent);
+.tool-command .hljs-name,
+.tool-command .hljs-title,
+.tool-command .hljs-function,
+.tool-command .hljs-section,
+.tool-command .shell-command-word {
+  color: var(--ally-accent-dim);
 }
 
 .tool-command .hljs-string,
 .tool-command .hljs-regexp,
-.tool-command .hljs-symbol {
-  color: #a6e3a1;
+.tool-command .hljs-symbol,
+.tool-command .shell-string {
+  color: #82b47e;
 }
 
 .tool-command .hljs-variable,
 .tool-command .hljs-template-variable,
 .tool-command .hljs-attr,
 .tool-command .hljs-number,
-.tool-command .hljs-literal {
-  color: #eba0ad;
+.tool-command .hljs-literal,
+.tool-command .shell-param {
+  color: #b8818c;
 }
 
 .tool-command .hljs-operator,
-.tool-command .shell-operator {
-  color: #93e2d5;
-}
-
-.tool-command .hljs-title,
-.tool-command .hljs-function,
-.tool-command .hljs-section {
-  color: var(--ally-accent);
-}
-
+.tool-command .shell-operator,
 .tool-command .hljs-meta {
-  color: #93e2d5;
-}
-
-.tool-command .shell-command-word {
-  color: var(--ally-accent);
-}
-
-.tool-command .shell-param {
-  color: #eba0ad;
-}
-
-.tool-command .shell-string {
-  color: #a6e3a1;
-}
-
-.tool-command .shell-comment {
-  color: var(--ally-text-faint);
-  font-style: italic;
+  color: #75b5aa;
 }
 
 .tool-chip {
@@ -3970,7 +3958,9 @@ code, pre {
 }
 
 .rich-tool-card.grep .tool-body,
-.rich-tool-card.calculate .tool-body {
+.rich-tool-card.calculate .tool-body,
+.rich-tool-card.scheduled .tool-body,
+.rich-tool-card.service .tool-body {
   color: var(--ally-text-muted);
 }
 
@@ -4370,9 +4360,12 @@ code, pre {
 }
 
 /* 终端输出（no-gutter）：吃掉 .code-text 基础的 4px 左缩进（那是给行号
-   隔槽用的），让输出正文与标题行动词（Ran/…）左缘对齐 */
+   隔槽用的），让输出正文与标题行动词（Ran/…）左缘对齐。
+   颜色压到 muted：终端回显是机器输出不是文件主体，不能沿用 CodeView
+   文件正文的 soft 档；与标题行命令文本（.tool-command）同档，整卡一致。 */
 .code-row.no-gutter .code-text {
   padding-left: 0;
+  color: var(--ally-text-muted);
 }
 
 .code-text {
