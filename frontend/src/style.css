@@ -670,6 +670,11 @@ html[data-mode="light"] .tool-name {
 html[data-mode="light"] .tool-verb {
   color: var(--ally-accent-strong);
 }
+/* 子代理内嵌行动词与卡片 role name 在浅底上都跟随 accent-strong */
+html[data-mode="light"] .subagent-inline-name,
+html[data-mode="light"] .rich-tool-card.subagent-inline .tool-name {
+  color: var(--ally-accent-strong);
+}
 /* 命令词锚点在浅底上保持可读强度（accent-dim 的浅色推导太灰）。 */
 html[data-mode="light"] .tool-command .hljs-keyword,
 html[data-mode="light"] .tool-command .hljs-built_in,
@@ -881,10 +886,11 @@ code, pre {
   margin-top: 4px;
 }
 
-/* Selected mode follows the theme accent (the neutral primary is barely
-   visible on two items). -active-hover matters: hovering the already
-   selected item uses that combined state, which otherwise falls back to the
-   whitish primary — the "click turns white, leaves accent" artifact. */
+/* Selected mode keeps the amber icon as the locator, but the square badge
+   background stays on the shared hover gray (--ally-state-hover): an
+   accent-tinted fill made the rail the loudest thing on screen. All states
+   (hover/active/pressed) share one gray so the badge never changes color —
+   hovering the selected item reads identical to resting. */
 .mode-sider .n-menu .n-menu-item-content--selected {
   --n-item-text-color: var(--ally-accent-bright);
   --n-item-text-color-active: var(--ally-accent-bright);
@@ -896,18 +902,18 @@ code, pre {
   --n-item-icon-color-hover: var(--ally-accent-bright);
   --n-item-icon-color-pressed: var(--ally-accent-bright);
   --n-item-icon-color-active-hover: var(--ally-accent-bright);
-  --n-item-color-active: color-mix(in srgb, var(--ally-accent) 14%, transparent);
-  --n-item-color-active-collapsed: color-mix(in srgb, var(--ally-accent) 14%, transparent);
-  --n-item-color-hover: color-mix(in srgb, var(--ally-accent) 10%, transparent);
-  --n-item-color-active-hover: color-mix(in srgb, var(--ally-accent) 14%, transparent);
-  --n-item-color-pressed: color-mix(in srgb, var(--ally-accent) 16%, transparent);
+  --n-item-color-active: var(--ally-state-hover);
+  --n-item-color-active-collapsed: var(--ally-state-hover);
+  --n-item-color-hover: var(--ally-state-hover);
+  --n-item-color-active-hover: var(--ally-state-hover);
+  --n-item-color-pressed: var(--ally-state-hover);
 }
 
 /* Hover and selected both render as a centered SQUARE badge behind the icon
    (overriding Naive UI's default full-width rail strip), so the rail reads as
    a row of square icon buttons instead of a tall narrow bar. The collapsed
    selected background reads --n-item-color-active-collapsed, so that variable
-   is set above to keep the accent consistent. */
+   is set above to keep the gray consistent. */
 .mode-sider .n-menu .n-menu-item-content::before,
 .mode-sider .n-menu .n-menu-item-content--selected::before {
   left: 50%;
@@ -3844,8 +3850,8 @@ code, pre {
   white-space: nowrap;
 }
 
-.rich-tool-card.create .tool-arg,
-.rich-tool-card.edit .tool-arg,
+/* command 的参数是命令文本本身，保持高亮；create/edit（含 remote 变体，
+   同 kind）的路径参数回归默认 faint，与其他工具参数一致 */
 .rich-tool-card.command .tool-arg {
   color: var(--ally-text-high);
 }
@@ -4778,6 +4784,13 @@ code, pre {
 
 /* ── Sub-agent inline progress in main chat ── */
 
+/* 子代理卡标题的 role name 走琥珀（与动词/普通卡片的视觉主色一致）：
+   .tool-name 默认的 --md-strong 是偏黄的暖灰，读起来像"黄色"而非主题橙。
+   浅色模式跟随 .tool-verb 用 accent-strong。 */
+.rich-tool-card.subagent-inline .tool-name {
+  color: var(--ally-accent);
+}
+
 .subagent-inline-body {
   padding: 2px 8px 4px 0;
 }
@@ -4796,8 +4809,11 @@ code, pre {
   flex-shrink: 0;
 }
 
+/* 子代理内嵌行的这个 span 实际渲染的是动词（subToolVerb → "Read/Grep/…"，
+   class 名 name 是历史遗留），颜色必须与普通工具卡的 .tool-verb 同源：
+   之前用 --md-strong 会比卡片行的琥珀动词暗一截，读起来像两种工具 */
 .subagent-inline-name {
-  color: var(--ally-text-high);
+  color: var(--ally-accent);
   flex-shrink: 0;
 }
 

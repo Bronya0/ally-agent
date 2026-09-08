@@ -17,6 +17,7 @@ Public License v3. See the LICENSE file for details.
           <span>{{ $t('chat.archive.summary', { count: msg.count }) }}</span>
         </button>
         <div v-else-if="msg.role === 'user'" :class="['message', msg.role, { error: msg.error }]" data-user-question>
+          <span class="user-rail" aria-hidden="true">›</span>
           <div class="user-message-content">
             <div class="message-body user-text">
               <span v-if="msg.skill" class="skill-chip">/{{ msg.skill.name }}</span>
@@ -76,7 +77,7 @@ Public License v3. See the LICENSE file for details.
                后续折叠组之间，成为折叠组上方的幽灵间距。新消息追加与占位
                移除落在同一次渲染 patch 里，无中间态跳动。 -->
           <div v-if="msg.role === 'assistant' && (msg.roundDurationText || (msg.streaming && hasAnswerBody(msg) && isLastDisplayMessage(msg)))" :class="['message-duration', { 'is-placeholder': !msg.roundDurationText }]">
-            <span class="duration-text">{{ msg.roundDurationText || '\u00a0' }}</span>
+            <span class="duration-text">{{ msg.roundDurationText || '\u00a0' }}<template v-if="msg.completedAtText"> {{ msg.completedAtText }}</template></span>
             <span
               v-if="typeof msg.cacheRate === 'number'"
               class="cache-rate"
@@ -795,21 +796,32 @@ defineExpose({ scrollbarRef, scrollToBottom, scrollToUserQuestion, scrollToBotto
 .message.user {
   display: flex;
   align-items: flex-start;
+  gap: 6px;
   margin-right: -28px;
   margin-left: -28px;
   /* The row bleeds 28px into the gutter on both sides. The bleed is
      deliberate: it puts the question text on the same x as the assistant's
-     body text while letting the tint run the full column width. With the
-     old hanging rail glyph gone, the left inset is just the rule plus the
-     padding it needs to breathe: 2px rule + 26px padding = 28px. */
-  padding: 10px 10px 10px 26px;
-  /* One accent rule on the leading edge rather than a box drawn around the
-     whole row. A 1px border on a full-bleed band reads as a striped block
-     and fights the unboxed assistant turns that follow it. */
-  /* 用户消息边线比 accent 降一档亮度：消息正文已用 accent-bright 着色，
-     再顶一条全亮 accent 竖线会抢占视线。 */
-  border-left: 2px solid var(--ally-accent-dim);
+     body text while letting the tint run the full column width. Left inset
+     arithmetic with the restored caret: 12px rail + 6px gap + 10px padding
+     = 28px. */
+  padding: 10px 10px 10px 10px;
+  /* 纯色带区分用户轮次：只留 hover 灰底，不再画 accent 竖线 ——
+     全宽色带加竖线会读成条纹块，与后面无框的 assistant 轮次打架。 */
   background: var(--ally-state-hover);
+}
+
+/* 提问行左侧的琥珀箭头：用户轮次的定位符号（旧版 hanging caret 回归，
+   竖线移除后它是行首唯一的强调记号） */
+.user-rail {
+  flex: none;
+  width: 12px;
+  color: var(--ally-accent);
+  font-family: var(--ally-ui-font);
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.7;
+  text-align: center;
+  opacity: 0.85;
 }
 
 /* Delete button on user questions: absolutely pinned to the row's top-right,
@@ -952,6 +964,17 @@ defineExpose({ scrollbarRef, scrollToBottom, scrollToUserQuestion, scrollToBotto
   font-size: var(--ally-sub-font-size, 13px);
   color: var(--ally-text-faint);
   margin-top: 4px;
+  /* 统计行默认隐藏但保留占位（visibility 不参与布局收缩，无跳动）。
+     visibility 一起进 transition：显示时立即可见、淡入；隐藏时等 opacity
+     落到 0 才真正 hidden，浮出与淡出双向都有过渡，不突兀 */
+  visibility: hidden;
+  opacity: 0;
+  transition: opacity 0.2s ease, visibility 0.2s;
+}
+
+.message.assistant:hover > .message-duration {
+  visibility: visible;
+  opacity: 1;
 }
 
 /* 流式期间的占位行：只占高度，内容不可见 */

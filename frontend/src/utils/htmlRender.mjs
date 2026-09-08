@@ -15,15 +15,10 @@ export function normalizeHtmlFrameHeight(height) {
   return Math.max(120, Math.min(Math.ceil(value), 600));
 }
 
-export function buildHtmlRenderDocument(html, frameToken) {
-  const token = JSON.stringify(String(frameToken || ''));
-  return `<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:;">
-<style>
+// iframe 与独立下载文件共用的文档外壳：基础样式 + 内联 echarts（含暗色
+// 主题默认与 resize 联动）。下载文件必须内联 echarts —— 沙箱 CSP 禁外链，
+// 导出后脱离 Ally 环境，只有内联脚本才能让图表继续渲染。
+const DOCUMENT_HEAD_STYLES = `
   * { box-sizing: border-box; }
   html, body { margin: 0; background: transparent; }
   body {
@@ -43,11 +38,9 @@ export function buildHtmlRenderDocument(html, frameToken) {
   pre { background: rgba(255,255,255,0.05); padding: 8px; border-radius: 4px; overflow-x: auto; }
   code { font-family: "SF Mono", "Fira Code", Consolas, monospace; font-size: 13px; }
   img { max-width: 100%; }
-</style>
-<script>
-${echartsRaw}
-</script>
-<script>
+`;
+
+const ECHARTS_BOOTSTRAP = `
 (() => {
   if (typeof window.echarts !== 'undefined') {
     const origInit = window.echarts.init;
@@ -67,10 +60,30 @@ ${echartsRaw}
     });
   }
 })();
+`;
+
+const CSP_META = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:;">`;
+
+function buildBody(html) {
+  return `${String(html || '')}`;
+}
+
+export function buildHtmlRenderDocument(html, frameToken) {
+  const token = JSON.stringify(String(frameToken || ''));
+  return `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+${CSP_META}
+<style>${DOCUMENT_HEAD_STYLES}</style>
+<script>
+${echartsRaw}
 </script>
+<script>${ECHARTS_BOOTSTRAP}</script>
 </head>
 <body>
-${String(html || '')}
+${buildBody(html)}
 <script>
 (() => {
   const token = ${token};
@@ -92,6 +105,28 @@ ${String(html || '')}
   requestAnimationFrame(reportHeight);
 })();
 <\/script>
+</body>
+</html>`;
+}
+
+// 下载用的自包含文档：与 iframe 同源的外壳（样式 + 内联 echarts + 暗色默认），
+// 去掉 iframe 专用的向父窗口上报高度脚本——独立文件里没有 parent 通道。
+export function buildStandaloneHtmlDocument(html) {
+  return `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+${CSP_META}
+<title>Ally Render</title>
+<style>${DOCUMENT_HEAD_STYLES}</style>
+<script>
+${echartsRaw}
+</script>
+<script>${ECHARTS_BOOTSTRAP}</script>
+</head>
+<body>
+${buildBody(html)}
 </body>
 </html>`;
 }

@@ -248,9 +248,7 @@ Public License v3. See the LICENSE file for details.
                   }"
                   :autosize="{ minRows: 2, maxRows: 10 }"
                   :disabled="isKbTab(tab) && kbIndexMissing"
-                  :placeholder="isKbTab(tab)
-                    ? (kbIndexMissing ? $t('kb.composer.uninitPlaceholder') : $t('kb.composer.placeholder'))
-                    : $t('app.composer.placeholder')"
+                  placeholder=""
                   @update:value="(v) => { if (tab.sessionId) sessionPromptTexts[tab.sessionId] = v; }"
                   @keydown="handlePromptKeydown"
                   @input="handlePromptInput"
@@ -4002,6 +4000,9 @@ function setAssistantRoundDuration(session, runId, durationMs) {
   if (!text) return;
   msg.roundDurationMs = Number(durationMs || 0);
   msg.roundDurationText = text;
+  // 完成时间点（HH:mm，24 小时制），随消息持久化，历史会话也能看到
+  const now = new Date();
+  msg.completedAtText = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
 }
 
 function setAssistantCacheRate(session, runId, hit, miss, inputTokens, outputTokens) {
@@ -7581,7 +7582,8 @@ function formatToolChip(name, result) {
       return '\u00B7 ' + parts.join(' \u00B7 ');
     }
     if ((name === 'delete' || name === 'remote_delete_path') && parsed.data) {
-      if (parsed.data.deleted) return '\u00B7 deleted';
+      // 动词 "Deleted" + 路径参数已说明结果，尾部 "· deleted" chip 是重复噪音
+      return '';
     }
     if ((name === 'http_request' || name === 'web_fetch') && parsed.data) {
       return formatHTTPToolSummary(parsed.data);

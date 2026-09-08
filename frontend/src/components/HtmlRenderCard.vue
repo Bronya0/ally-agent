@@ -14,8 +14,19 @@ Public License v3. See the LICENSE file for details.
         <ToolStatusIcon :status="msg.status" />
         <span class="tool-verb">{{ statusLabel }}</span>
         <span v-if="msg.title" class="tool-arg" :title="msg.title">({{ msg.title }})</span>
+        <span v-if="msg.durationText" class="tool-duration">{{ msg.durationText }}</span>
       </div>
       <div v-if="canFullscreen" class="tool-header-right">
+        <button
+          type="button"
+          class="html-render-action-btn"
+          :title="$t('tools.renderHtml.download')"
+          @click="downloadHtml"
+        >
+          <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
+          </svg>
+        </button>
         <button
           type="button"
           class="html-render-action-btn"
@@ -60,6 +71,16 @@ Public License v3. See the LICENSE file for details.
               <button
                 type="button"
                 class="html-render-modal-close-btn"
+                :title="$t('tools.renderHtml.download')"
+                @click="downloadHtml"
+              >
+                <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
+                </svg>
+              </button>
+              <button
+                type="button"
+                class="html-render-modal-close-btn"
                 :title="$t('tools.renderHtml.closeFullscreen')"
                 @click="closeFullscreen"
               >
@@ -87,7 +108,7 @@ Public License v3. See the LICENSE file for details.
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { toolVerbLabel } from '../utils/toolVerb.mjs';
-import { buildHtmlRenderDocument, normalizeHtmlFrameHeight } from '../utils/htmlRender.mjs';
+import { buildHtmlRenderDocument, buildStandaloneHtmlDocument, normalizeHtmlFrameHeight } from '../utils/htmlRender.mjs';
 import ToolStatusIcon from './ToolStatusIcon.vue';
 
 const props = defineProps({
@@ -130,6 +151,27 @@ function openFullscreen() {
 
 function closeFullscreen() {
   isFullscreen.value = false;
+}
+
+// 导出自包含 HTML：echarts 与基础样式全部内联（与 iframe 同一外壳），
+// 断网双击打开图表照常渲染。文件名取卡片 title，剥掉非法字符。
+function exportBaseName() {
+  const raw = String(props.msg.title || '').trim();
+  const safe = raw.replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').slice(0, 80).trim();
+  return safe || 'ally-render';
+}
+
+function downloadHtml() {
+  if (!props.msg.htmlContent) return;
+  const blob = new Blob([buildStandaloneHtmlDocument(props.msg.htmlContent)], { type: 'text/html;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = `${exportBaseName()}.html`;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 onMounted(() => window.addEventListener('message', handleFrameMessage));

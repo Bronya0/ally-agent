@@ -99,8 +99,9 @@ const SERVICE_VERBS = {
 
 // Fallback verbs by kind, for names not in the table above (e.g. MCP tools whose
 // name is `mcp__server__tool`, or genuinely unknown tools bucketed as `other`).
+// MCP 动词带上 "MCP" 字样：紧跟的参数是 server/tool，不点明来源会读成一次普通工具调用。
 const KIND_VERBS = {
-  mcp: ['Calling', 'Called', 'Call'],
+  mcp: ['Calling MCP', 'Called MCP', 'Call MCP'],
 };
 
 function isDone(status) {

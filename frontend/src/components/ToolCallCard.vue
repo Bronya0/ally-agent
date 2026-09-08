@@ -105,7 +105,6 @@ import { highlightShellCommand } from '../utils/shellHighlight.mjs';
 import { formatToolErrorBody } from '../utils/toolError.mjs';
 import { toolVerbLabel, hasNamedVerb } from '../utils/toolVerb.mjs';
 import { t } from '../i18n.mjs';
-import { fmtDuration } from '../utils/format.mjs';
 import { normalizedLines } from '../utils/toolPreview.mjs';
 import ToolStatusIcon from './ToolStatusIcon.vue';
 
@@ -146,21 +145,18 @@ const waitCountdown = computed(() => {
 
 // 耗时显示：瞬时工具（read/grep/glob/list/delete/calculate/plan/skill）
 // 不展示——结果自身已含规模信息，<1s 的耗时纯噪音；ask 等待的是用户
-// 提交，计的是人不是工具。edit 运行中从 UI 收到参数的时刻（uiStartedAt）
-// 起实时跳动，结束后显示 tool:result 落盘的 durationText。
-const NO_DURATION_KINDS = new Set(['read', 'grep', 'glob', 'list', 'delete', 'calculate', 'plan', 'skill', 'ask']);
+// 提交，计的是人不是工具。create/edit/service 的结果卡（Created/Edited/
+// Started service 等）与 http_request/web_fetch（Requested/Fetched）按
+// 产品约定一律不显示耗时；render_html 的耗时在 HtmlRenderCard 内展示。
+const NO_DURATION_KINDS = new Set(['read', 'grep', 'glob', 'list', 'delete', 'calculate', 'plan', 'skill', 'ask', 'create', 'edit', 'service']);
+const NO_DURATION_NAMES = new Set(['http_request', 'web_fetch']);
 const displayDuration = computed(() => {
-  if (NO_DURATION_KINDS.has(props.msg.kind)) return '';
-  if (props.msg.kind === 'edit' && props.msg.status === 'running') {
-    const startedAt = Number(props.msg.uiStartedAt || 0);
-    if (startedAt) return fmtDuration(nowMs.value - startedAt);
-    return '';
-  }
+  if (NO_DURATION_KINDS.has(props.msg.kind) || NO_DURATION_NAMES.has(props.msg.name)) return '';
   return props.msg.durationText || '';
 });
 
 watch(
-  () => (props.msg.kind === 'wait' || props.msg.kind === 'edit') && props.msg.status === 'running',
+  () => props.msg.kind === 'wait' && props.msg.status === 'running',
   (active) => {
     if (waitTimer) {
       clearInterval(waitTimer);
