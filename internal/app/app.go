@@ -433,6 +433,13 @@ type ModelConfig struct {
 	// "auto" is the safe default because not every model accepts the
 	// parameter and value sets differ across providers.
 	ReasoningEffort string `json:"reasoningEffort,omitempty"`
+	// CustomHeaders are extra HTTP headers sent with every model API request
+	// for this entry (gateway auth, relay-specific requirements). They are
+	// applied after the adapter's built-in headers, so entries here may
+	// override Authorization / User-Agent; transport-managed headers (Host,
+	// Content-Length, ...) are dropped by normalizeCustomHeaders. Activating
+	// the entry mirrors the map to ConfigState.CustomHeaders.
+	CustomHeaders map[string]string `json:"customHeaders,omitempty"`
 }
 
 type ConfigState struct {
@@ -449,22 +456,25 @@ type ConfigState struct {
 	// resolves its workspace to this path (SamePath), the session runs in
 	// knowledge-base mode: the KB system-prompt part is injected and the
 	// sources/ subdirectory becomes read-only for model tools.
-	KBRoot              string        `json:"kbRoot,omitempty"`
-	MaxTokens           int           `json:"maxTokens"`
-	ContextWindow       int           `json:"contextWindow"`
-	TokenParam          string        `json:"tokenParam,omitempty"`
-	CustomPrompt        string        `json:"customPrompt"`
-	AllowPrivateNetwork bool          `json:"allowPrivateNetwork"`
-	GitBashPath         string        `json:"gitBashPath"`
-	ProxyMode           string        `json:"proxyMode,omitempty"`
-	ProxyURL            string        `json:"proxyUrl,omitempty"`
-	ProxyNoProxy        string        `json:"proxyNoProxy,omitempty"`
-	UserAgent           string        `json:"userAgent,omitempty"`
-	ReasoningTag        string        `json:"reasoningTag,omitempty"`
-	ReasoningEffort     string        `json:"reasoningEffort,omitempty"`
-	Models              []ModelConfig `json:"models,omitempty"`
-	DisabledSkills      []string      `json:"disabledSkills,omitempty"`
-	LLMRetries          int           `json:"llmRetries,omitempty"`
+	KBRoot              string `json:"kbRoot,omitempty"`
+	MaxTokens           int    `json:"maxTokens"`
+	ContextWindow       int    `json:"contextWindow"`
+	TokenParam          string `json:"tokenParam,omitempty"`
+	CustomPrompt        string `json:"customPrompt"`
+	AllowPrivateNetwork bool   `json:"allowPrivateNetwork"`
+	GitBashPath         string `json:"gitBashPath"`
+	ProxyMode           string `json:"proxyMode,omitempty"`
+	ProxyURL            string `json:"proxyUrl,omitempty"`
+	ProxyNoProxy        string `json:"proxyNoProxy,omitempty"`
+	UserAgent           string `json:"userAgent,omitempty"`
+	ReasoningTag        string `json:"reasoningTag,omitempty"`
+	ReasoningEffort     string `json:"reasoningEffort,omitempty"`
+	// CustomHeaders mirrors the active model entry's extra HTTP headers
+	// (see ModelConfig.CustomHeaders); SwitchModel keeps the two in sync.
+	CustomHeaders  map[string]string `json:"customHeaders,omitempty"`
+	Models         []ModelConfig     `json:"models,omitempty"`
+	DisabledSkills []string          `json:"disabledSkills,omitempty"`
+	LLMRetries     int               `json:"llmRetries,omitempty"`
 	// AutoValidation* are nil for legacy configs (treated as disabled).
 	// Post-write checks only run for languages the user explicitly enabled
 	// in Settings.
@@ -3159,6 +3169,7 @@ func (a *App) SwitchModel(index int) error {
 		a.config.ContextWindow = m.ContextWindow
 	}
 	a.config.TokenParam = m.TokenParam
+	a.config.CustomHeaders = normalizeCustomHeaders(m.CustomHeaders)
 	a.config.ReasoningTag = normalizeReasoningTag(m.ReasoningTag)
 	a.config.ReasoningEffort = normalizeReasoningEffort(m.ReasoningEffort)
 	cfg := a.config

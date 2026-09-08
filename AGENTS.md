@@ -154,6 +154,16 @@ Supported API formats:
 
 `normalizeAPIFormat()` accepts common aliases such as `chat`, `responses`, `anthropic`, and `claude_messages`.
 
+### 自定义请求头（Custom Headers）
+
+每个模型条目可配置随该模型所有 API 请求发送的额外 HTTP 头（网关鉴权、中转定制头）：
+
+- 存储在 `ModelConfig.CustomHeaders`（`customHeaders`，高级配置项）；`SwitchModel` 激活时镜像到 `ConfigState.CustomHeaders`，与 `APIKey`/`TokenParam` 同机制。
+- `normalizeCustomHeaders()`（`biz_config.go`）是唯一归一化边界：键值去空白、丢弃空项与传输层自管头（Host/Content-Length/Connection 等）、键归一化并确定性去重（大小写冲突字典序首个胜出）、httpguts 合法性校验、上限 32 条；空结果归 nil。前端镜像在 `modelConfigIO.mjs normalizeCustomHeaders`。
+- 应用点集中在 provider 边界：SDK 客户端（openai_chat / anthropic_messages）走 `modelHTTPClient` 的 `customHeadersTransport`（在适配器内置头之后 Set，可覆盖 Authorization/User-Agent；包装顺序 UA 在外层、custom 在内层，配置的 User-Agent 优先于全局 UA）；Responses SSE 与 `FetchModelList` 直接调 `applyCustomHeaders()`。
+- `mergeConfig` 语义：非 nil overlay 整体替换（空 map = 清空），nil = 字段缺席保留原值；模型条目内同步归一化。
+- 本地 API 服务（`biz_api.go`）对自定义头只回传键名（`customHeaderNames`），永不回传值（可能携带凭据）。
+
 各适配器的请求/响应细节（token 参数、tool-call 合并、stop_reason 处理、prompt cache、thinking 参数）见 `prov_model.go` 内注释与 `prov_model_test.go`；修改时保持 `prov_model.go` 为唯一 provider 边界，不得把 provider 特有形状泄漏进 `app.go` 或工具编排层。
 
 ### 模型预设目录（Model Catalog）

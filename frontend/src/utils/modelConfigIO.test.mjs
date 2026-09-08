@@ -12,6 +12,7 @@ import test from 'node:test';
 import {
   buildModelConfigExport,
   mergeModelConfigs,
+  normalizeCustomHeaders,
   parseModelConfigImport,
 } from './modelConfigIO.mjs';
 
@@ -95,4 +96,27 @@ test('model config import rejects unsupported or incomplete payloads', () => {
     () => parseModelConfigImport(JSON.stringify({ formatVersion: 1, models: [{}] })),
     (error) => error.code === 'MODEL_ID_REQUIRED',
   );
+});
+
+test('normalizeCustomHeaders trims, canonicalizes, and drops managed names', () => {
+  const got = normalizeCustomHeaders({
+    ' x-api-version ': ' 2023-06-01 ',
+    Host: 'evil.example',
+    'content-length': '999',
+    '': 'value',
+    'Empty': '   ',
+  });
+  assert.deepEqual(got, { 'X-Api-Version': '2023-06-01' });
+
+  assert.equal(normalizeCustomHeaders({ A: '', B: ' ' }), null);
+  assert.equal(normalizeCustomHeaders(null), null);
+});
+
+test('custom headers survive model config export and import', () => {
+  const payload = buildModelConfigExport([
+    model('Relay', 'relay-model', { customHeaders: { 'X-Relay': 'token', host: 'drop' } }),
+  ]);
+  const imported = parseModelConfigImport(JSON.stringify(payload));
+
+  assert.deepEqual(imported[0].customHeaders, { 'X-Relay': 'token' });
 });

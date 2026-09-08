@@ -19,9 +19,11 @@ import (
 
 // FetchModelList queries the OpenAI-standard `GET {baseUrl}/models` endpoint
 // and returns the model id list (`{"object":"list","data":[{"id":...}]}`).
-// Any HTTP error status, request failure, or unexpected response shape is
-// returned verbatim as an error; the UI surfaces it directly.
-func (a *App) FetchModelList(baseUrl, apiKey string) ([]string, error) {
+// customHeaders carries the model entry's configured headers so relay/gateway
+// endpoints that gate /models behind extra headers work here too. Any HTTP
+// error status, request failure, or unexpected response shape is returned
+// verbatim as an error; the UI surfaces it directly.
+func (a *App) FetchModelList(baseUrl, apiKey string, customHeaders map[string]string) ([]string, error) {
 	base := strings.TrimRight(strings.TrimSpace(baseUrl), "/")
 	if base == "" {
 		return nil, fmt.Errorf("base URL is required")
@@ -33,10 +35,11 @@ func (a *App) FetchModelList(baseUrl, apiKey string) ([]string, error) {
 	// or LM Studio reachable.
 	networkCfg := a.effectiveConfig(ConfigState{})
 	cfg := ConfigState{
-		ProxyMode:    networkCfg.ProxyMode,
-		ProxyURL:     networkCfg.ProxyURL,
-		ProxyNoProxy: networkCfg.ProxyNoProxy,
-		UserAgent:    networkCfg.UserAgent,
+		ProxyMode:     networkCfg.ProxyMode,
+		ProxyURL:      networkCfg.ProxyURL,
+		ProxyNoProxy:  networkCfg.ProxyNoProxy,
+		UserAgent:     networkCfg.UserAgent,
+		CustomHeaders: normalizeCustomHeaders(customHeaders),
 	}
 
 	ctx := context.Background()
@@ -54,6 +57,7 @@ func (a *App) FetchModelList(baseUrl, apiKey string) ([]string, error) {
 	if key := strings.TrimSpace(apiKey); key != "" {
 		req.Header.Set("Authorization", "Bearer "+key)
 	}
+	applyCustomHeaders(req, cfg)
 
 	resp, err := proxyHTTPClient(cfg, true, 15*time.Second).Do(req)
 	if err != nil {

@@ -754,7 +754,7 @@ func partialTagMatch(s, tag string) int {
 func (a *App) streamOpenAIChat(ctx context.Context, cfg ConfigState, model string, messages []legacyopenai.ChatCompletionMessage, tools []legacyopenai.Tool, onEvent func(modelStreamEvent)) (*modelStreamResult, error) {
 	clientCfg := legacyopenai.DefaultConfig(cfg.APIKey)
 	clientCfg.BaseURL = baseURLForAPIFormat(cfg)
-	clientCfg.HTTPClient = httpClientWithUserAgent(cfg, true, 0)
+	clientCfg.HTTPClient = modelHTTPClient(cfg, true, 0)
 	client := legacyopenai.NewClientWithConfig(clientCfg)
 
 	streamReq := legacyopenai.ChatCompletionRequest{
@@ -1317,6 +1317,8 @@ func newOpenAIResponsesSSEStream(ctx context.Context, cfg ConfigState, body oare
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 	req.Header.Set("User-Agent", effectiveUserAgent(cfg))
+	// 自定义头在适配器内置头之后应用，可覆盖 Authorization / User-Agent。
+	applyCustomHeaders(req, cfg)
 
 	resp, err := proxyHTTPClient(cfg, true, 0).Do(req)
 	if err != nil {
@@ -1396,7 +1398,7 @@ func (a *App) streamAnthropicMessages(ctx context.Context, cfg ConfigState, mode
 		anthropicoption.WithAPIKey(cfg.APIKey),
 		anthropicoption.WithBaseURL(baseURL),
 		anthropicoption.WithMaxRetries(0),
-		anthropicoption.WithHTTPClient(httpClientWithUserAgent(cfg, true, 0)),
+		anthropicoption.WithHTTPClient(modelHTTPClient(cfg, true, 0)),
 	)
 
 	system, anthropicMessages := buildAnthropicMessages(messages)

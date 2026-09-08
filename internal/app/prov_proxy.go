@@ -168,19 +168,40 @@ func proxyHTTPClient(cfg ConfigState, allowPrivate bool, timeout time.Duration) 
 	return &http.Client{Transport: proxyHTTPTransport(cfg, allowPrivate), Timeout: timeout}
 }
 
-// httpClientWithUserAgent returns an HTTP client that injects the configured
-// User-Agent on every outbound request when the request does not already
-// specify one. Used by LLM SDK clients (go-openai / openai-go / anthropic-sdk-go)
-// that do not expose UA configuration directly. When no custom UA is configured
-// the underlying SDK default is preserved.
-func httpClientWithUserAgent(cfg ConfigState, allowPrivate bool, timeout time.Duration) *http.Client {
+// modelHTTPClient returns the HTTP client used for model API requests: the
+// shared proxy-aware transport wrapped with two header injectors. The custom
+// headers wrapper runs below the User-Agent wrapper, so a configured custom
+// User-Agent wins over cfg.UserAgent, and both run after the SDK set its own
+// headers (custom entries may therefore override Authorization). Used by LLM
+// SDK clients (go-openai / anthropic-sdk-go) that do not expose per-request
+// header configuration. When neither a custom UA nor custom headers are
+// configured the underlying SDK defaults are preserved untouched.
+func modelHTTPClient(cfg ConfigState, allowPrivate bool, timeout time.Duration) *http.Client {
 	base := proxyHTTPClient(cfg, allowPrivate, timeout)
 	ua := strings.TrimSpace(cfg.UserAgent)
-	if ua == "" {
+	headers := normalizeCustomHeaders(cfg.CustomHeaders)
+	if ua == "" && headers == nil {
 		return base
 	}
-	base.Transport = &userAgentTransport{base: base.Transport, ua: ua}
+	var rt http.RoundTripper = base.Transport
+	if headers != nil {
+		rt = &customHeadersTransport{base: rt, headers: headers}
+	}
+	if ua != "" {
+		rt = &userAgentTransport{base: rt, ua: ua}
+	}
+	base.Transport = rt
 	return base
+}
+
+// applyCustomHeaders sets the configured custom headers on an outbound
+// request after the caller set its built-in headers; custom values win over
+// Authorization / User-Agent. Used by request builders that do not go through
+// modelHTTPClient (the Responses SSE stream, model-list fetching).
+func applyCustomHeaders(req *http.Request, cfg ConfigState) {
+	for key, value := range normalizeCustomHeaders(cfg.CustomHeaders) {
+		req.Header.Set(key, value)
+	}
 }
 
 // userAgentTransport wraps an http.RoundTripper and sets the User-Agent header
@@ -199,6 +220,23 @@ func (t *userAgentTransport) RoundTrip(req *http.Request) (*http.Response, error
 	// it exactly once, same as a direct call.
 	clone := req.Clone(req.Context())
 	clone.Header.Set("User-Agent", t.ua)
+	return t.base.RoundTrip(clone)
+}
+
+// customHeadersTransport wraps an http.RoundTripper and overwrites the
+// configured custom headers on every outbound request, after the SDK client
+// set its own headers. Transport-managed header names (Host, ...) were
+// already dropped by normalizeCustomHeaders at construction time.
+type customHeadersTransport struct {
+	base    http.RoundTripper
+	headers map[string]string
+}
+
+func (t *customHeadersTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	clone := req.Clone(req.Context())
+	for key, value := range t.headers {
+		clone.Header.Set(key, value)
+	}
 	return t.base.RoundTrip(clone)
 }
 

@@ -602,8 +602,10 @@ func apiModelSummary(index int, model ModelConfig) map[string]any {
 		"reasoningTag":    model.ReasoningTag,
 		"reasoningEffort": model.ReasoningEffort,
 		"tokenParam":      model.TokenParam,
-		"hasApiKey":       model.APIKey != "" || len(model.APIKeys) > 0,
-		"apiKeyCount":     len(model.APIKeys),
+		// 自定义头可能携带网关凭据：只回传键名，永不回传值。
+		"customHeaderNames": customHeaderNames(model.CustomHeaders),
+		"hasApiKey":         model.APIKey != "" || len(model.APIKeys) > 0,
+		"apiKeyCount":       len(model.APIKeys),
 	}
 }
 
@@ -621,12 +623,13 @@ func (a *App) apiHandleListModels(w http.ResponseWriter, r *http.Request) {
 		// 会话没有独立的模型状态：每次请求都随全局配置走（与界面一致），
 		// active 就是所有会话下一回合将使用的模型。
 		"active": map[string]any{
-			"providerName":    cfg.ProviderName,
-			"apiFormat":       cfg.APIFormat,
-			"baseUrl":         cfg.BaseURL,
-			"model":           cfg.Model,
-			"reasoningTag":    cfg.ReasoningTag,
-			"reasoningEffort": cfg.ReasoningEffort,
+			"providerName":      cfg.ProviderName,
+			"apiFormat":         cfg.APIFormat,
+			"baseUrl":           cfg.BaseURL,
+			"model":             cfg.Model,
+			"reasoningTag":      cfg.ReasoningTag,
+			"reasoningEffort":   cfg.ReasoningEffort,
+			"customHeaderNames": customHeaderNames(cfg.CustomHeaders),
 		},
 		"models": models,
 		"count":  len(models),
@@ -650,6 +653,7 @@ func (a *App) apiHandleSaveModel(w http.ResponseWriter, r *http.Request) {
 	body.Model.ProviderName = strings.TrimSpace(body.Model.ProviderName)
 	body.Model.BaseURL = strings.TrimSpace(body.Model.BaseURL)
 	body.Model.APIFormat = normalizeAPIFormat(body.Model.APIFormat)
+	body.Model.CustomHeaders = normalizeCustomHeaders(body.Model.CustomHeaders)
 
 	a.mu.Lock()
 	cfg := a.config

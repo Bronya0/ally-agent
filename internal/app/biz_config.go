@@ -13,15 +13,19 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/textproto"
 	"os"
 	"path/filepath"
 	goruntime "runtime"
 	"runtime/debug"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"ally-dev/internal/tools/pathutil"
+
+	"golang.org/x/net/http/httpguts"
 
 	openai "github.com/sashabaranov/go-openai"
 )
@@ -241,6 +245,12 @@ func mergeConfig(base, overlay ConfigState) ConfigState {
 	if strings.TrimSpace(overlay.UserAgent) != "" {
 		base.UserAgent = overlay.UserAgent
 	}
+	// CustomHeaders: non-nil overlay replaces the whole map (an explicitly
+	// empty map clears the headers); nil means "field absent" and keeps the
+	// current value, so legacy round-trips never drop a configured header.
+	if overlay.CustomHeaders != nil {
+		base.CustomHeaders = normalizeCustomHeaders(overlay.CustomHeaders)
+	}
 	if overlay.Models != nil {
 		base.Models = overlay.Models
 	}
@@ -346,6 +356,7 @@ func mergeConfig(base, overlay ConfigState) ConfigState {
 	for i := range base.Models {
 		base.Models[i].ReasoningTag = normalizeReasoningTag(base.Models[i].ReasoningTag)
 		base.Models[i].ReasoningEffort = normalizeReasoningEffort(base.Models[i].ReasoningEffort)
+		base.Models[i].CustomHeaders = normalizeCustomHeaders(base.Models[i].CustomHeaders)
 		syncModelAPIKeyFields(&base.Models[i])
 	}
 	if goruntime.GOOS == "windows" {
@@ -392,6 +403,82 @@ func syncAPIKeyFields(cfg *ConfigState) {
 		return
 	}
 	cfg.APIKeys = nil
+}
+
+// maxCustomHeaders caps the per-model custom header count so a pathological
+// config cannot bloat every outbound request.
+const maxCustomHeaders = 32
+
+// managedHeaderNames 是 HTTP 传输层自管的头（连接语义、分帧、路由）。配置它们
+// 会破坏请求本身，normalizeCustomHeaders 一律丢弃。
+var managedHeaderNames = map[string]struct{}{
+	"Host":                {},
+	"Content-Length":      {},
+	"Connection":          {},
+	"Transfer-Encoding":   {},
+	"Keep-Alive":          {},
+	"Proxy-Authenticate":  {},
+	"Proxy-Authorization": {},
+	"Te":                  {},
+	"Trailer":             {},
+	"Upgrade":             {},
+}
+
+// normalizeCustomHeaders 清洗配置的自定义请求头：键值去除空白、丢弃空项与
+// 传输层自管头（Host/Content-Length/Connection 等）、键按 net/http 规则归一化
+// （x-api-version → X-Api-Version）并去重（大小写冲突时字典序首个胜出，行为
+// 确定）、校验键值合法性（httpguts），最多保留 maxCustomHeaders 条。空结果
+// 返回 nil，避免空 map 残留在配置里。它是自定义头的唯一归一化边界：
+// mergeConfig 存储、适配器 transport 与请求构造点共用同一份语义。
+func normalizeCustomHeaders(headers map[string]string) map[string]string {
+	if len(headers) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(headers))
+	for key := range headers {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	out := make(map[string]string, len(headers))
+	for _, raw := range keys {
+		key := textproto.CanonicalMIMEHeaderKey(strings.TrimSpace(raw))
+		value := strings.TrimSpace(headers[raw])
+		if key == "" || value == "" {
+			continue
+		}
+		if _, managed := managedHeaderNames[key]; managed {
+			continue
+		}
+		if !httpguts.ValidHeaderFieldName(key) || !httpguts.ValidHeaderFieldValue(value) {
+			continue
+		}
+		if _, exists := out[key]; exists {
+			continue
+		}
+		if len(out) >= maxCustomHeaders {
+			break
+		}
+		out[key] = value
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// customHeaderNames 返回自定义头键的有序列表，供脱敏视图（本地 API 服务）
+// 展示“配置了哪些头”而不泄漏值。
+func customHeaderNames(headers map[string]string) []string {
+	normalized := normalizeCustomHeaders(headers)
+	if normalized == nil {
+		return []string{}
+	}
+	names := make([]string, 0, len(normalized))
+	for key := range normalized {
+		names = append(names, key)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // syncModelAPIKeyFields 是 syncAPIKeyFields 的 ModelConfig 版本。
@@ -554,6 +641,7 @@ func (a *App) TestModelConnection(model ModelConfig) error {
 		ProxyURL:        networkCfg.ProxyURL,
 		ProxyNoProxy:    networkCfg.ProxyNoProxy,
 		UserAgent:       networkCfg.UserAgent,
+		CustomHeaders:   normalizeCustomHeaders(model.CustomHeaders),
 	}
 	if cfg.Model == "" {
 		return errors.New("model is required")

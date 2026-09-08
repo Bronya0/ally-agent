@@ -188,9 +188,10 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:47821/api/v1/sessions?
 
 | 字段 | 说明 |
 |------|------|
-| `active` | 当前激活模型：`{providerName, apiFormat, baseUrl, model, reasoningTag, reasoningEffort}`，即所有会话下一回合使用的模型 |
+| `active` | 当前激活模型：`{providerName, apiFormat, baseUrl, model, reasoningTag, reasoningEffort, customHeaderNames}`，即所有会话下一回合使用的模型 |
 | `models[]` | 已配置的模型条目（下标即 `index`，供更新/激活用） |
 | `models[].hasApiKey` / `apiKeyCount` | 密钥配置状态（**响应永不回传密钥明文**） |
+| `models[].customHeaderNames` | 该条目自定义请求头的键名列表（**只回传键名，永不回传值**，值可能携带网关凭据） |
 
 ### `POST /api/v1/models` — 新建或更新模型配置
 
@@ -213,6 +214,7 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:47821/api/v1/sessions?
 | `apiKeys` | string[] | 否 | 密钥池 |
 | `maxTokens` / `contextWindow` | int | 否 | 输出上限 / 上下文窗口 |
 | `reasoningTag` / `reasoningEffort` / `tokenParam` | string | 否 | 推理内容标签 / 思考强度（`low`/`medium`/`high`/`xhigh`/`max`）/ token 参数风格 |
+| `customHeaders` | object | 否 | 自定义请求头（`{"X-Api-Version": "2023-06-01"}`），随该模型每个 API 请求发送；可覆盖 Authorization/User-Agent，Host/Content-Length 等传输层头部会被丢弃，最多 32 条 |
 
 注意：更新是**整体替换**该下标的条目——没传的字段会被清空，改单条时请把原条目字段一并传回。响应 `data`：`{ "index": 2 }`。
 

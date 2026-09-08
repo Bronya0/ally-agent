@@ -49,7 +49,7 @@
 ## internal/app/ — prov_ 前缀（Provider 适配）
 
 - prov_model.go — Provider 流式适配唯一边界：openai_chat / openai_responses / anthropic_messages 三适配器、SSE 解析、usage 汇总、tool-call 增量合并与修复、多 key 池故障切换（冷却/探测）；关键: streamModelResponse, streamOpenAIChat, streamOpenAIResponses, streamAnthropicMessages, mergeToolCallDeltas, shouldRetryLLMError, markAnthropicPromptCacheBreakpoints
-- prov_proxy.go — 代理感知 HTTP 客户端：fail-closed 代理解析、transport 缓存、SSRF 守卫拨号（guardedDialContext）、状态脱敏、代理环境变量生成；关键: proxyForConfig, proxyHTTPClient, guardedDialContext, sanitizeProxyStatus
+- prov_proxy.go — 代理感知 HTTP 客户端：fail-closed 代理解析、transport 缓存、SSRF 守卫拨号（guardedDialContext）、状态脱敏、代理环境变量生成、模型请求头注入（modelHTTPClient：UA + 自定义头双层 transport）；关键: proxyForConfig, proxyHTTPClient, modelHTTPClient, applyCustomHeaders, guardedDialContext, sanitizeProxyStatus
 - prov_proxy_darwin.go — macOS 系统代理检测入口（scutil）
 - prov_proxy_windows.go — Windows 系统代理检测（注册表 Internet Settings）
 - prov_proxy_other.go — Linux 等平台代理检测（环境变量）
@@ -86,7 +86,7 @@
 
 ## internal/app/ — biz_ 前缀（业务模块）
 
-- biz_config.go — 配置域：默认值、mergeConfig 覆盖合并、key 池归一化与故障转移配置、代理网络配置、模型连通测试；关键: mergeConfig, SaveConfig, effectiveConfig, TestModelConnection, normalizeAPIKeys
+- biz_config.go — 配置域：默认值、mergeConfig 覆盖合并、key 池归一化与故障转移配置、自定义请求头归一化（normalizeCustomHeaders 唯一边界）、代理网络配置、模型连通测试；关键: mergeConfig, SaveConfig, effectiveConfig, normalizeCustomHeaders, TestModelConnection, normalizeAPIKeys
 - biz_context.go — 请求消息组装与上下文核算：buildMessages（系统提示+历史+当前消息+附件）、plan/todo 状态机、ContextBreakdown token 估算与静态缓存；关键: buildMessages, handleTodoList, getContextBreakdown, appendUserMessageWithAttachments
 - biz_prompt.go — 系统提示词管线：buildSystemPromptParts、优先级声明、共享编辑规则、skill 元数据、全局记忆索引、项目 lessons（.ally/lessons.md）上下文、知识库模式契约段（workspace==KBRoot 时注入）；关键: buildSystemPromptParts, buildSkillListingMeta, buildMemoryIndexContext, sharedEditRules, knowledgeBasePromptPart
 - biz_project_context.go — AGENTS/CLAUDE 项目指令加载（用户级+工作区级，去重拼接）、CODEGRAPH.md 提示片段、聊天背景图文件管理；关键: loadAgentsMd, loadCodeGraph, buildCodeGraphPromptPart
@@ -250,7 +250,7 @@
 - sessionState.mjs — 会话/Tab 查找、runId 终止事件接受判断、可编辑元素导航判定；关键: findSessionWorkspaceTab, shouldAcceptRunTerminal
 - config.mjs — 前端配置默认值与后端配置归一化合并；关键: defaultConfig, assignConfig
 - theme.mjs — 强调色主题管理（7 主题 + localStorage）；关键: initTheme, setTheme
-- modelConfigIO.mjs — 模型配置导入导出：校验/去重合并/token 参数归一化；关键: buildModelConfigExport, mergeModelConfigs
+- modelConfigIO.mjs — 模型配置导入导出：校验/去重合并/token 参数归一化/自定义请求头归一化（镜像后端 normalizeCustomHeaders）；关键: buildModelConfigExport, mergeModelConfigs, normalizeCustomHeaders
 - modelProviderCatalog.mjs — 模型预设目录（modelCatalog.json）查询与预设回填；关键: applyCatalogPreset, providerCatalogOptions
 - modelUsage.mjs — localStorage 记录模型使用频次（下拉排序）
 - planPanel.mjs — 计划面板条目编号与 in_progress 居中滚动量

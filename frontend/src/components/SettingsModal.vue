@@ -723,6 +723,49 @@ Public License v3. See the LICENSE file for details.
           />
         </n-form-item-gi>
       </n-grid>
+      <!-- Advanced: per-model custom HTTP headers (collapsed by default). -->
+      <div class="model-advanced-toggle">
+        <button type="button" class="model-advanced-button" @click="modelAdvancedOpen = !modelAdvancedOpen">
+          <span class="model-advanced-arrow" :class="{ open: modelAdvancedOpen }">›</span>
+          <span>{{ $t('settings.modelAdvanced') }}</span>
+          <span v-if="customHeaderRowCount" class="model-advanced-count">{{ customHeaderRowCount }}</span>
+        </button>
+      </div>
+      <div v-if="modelAdvancedOpen" class="model-advanced-body">
+        <n-form-item :label="$t('settings.customHeaders')" :show-feedback="false">
+          <div class="api-key-list custom-header-list">
+            <div v-for="(row, hi) in customHeaderRows" :key="row.id" class="api-key-row custom-header-row">
+              <n-input
+                v-model:value="row.name"
+                class="custom-header-name"
+                :placeholder="$t('settings.customHeaderName')"
+                spellcheck="false"
+                @blur="row.name = row.name.trim()"
+              />
+              <n-input
+                v-model:value="row.value"
+                class="custom-header-value"
+                :placeholder="$t('settings.customHeaderValue')"
+                spellcheck="false"
+                @blur="row.value = row.value.trim()"
+              />
+              <n-button
+                quaternary
+                size="small"
+                :title="$t('settings.apiKeyRemove')"
+                @click="removeCustomHeaderRow(row.id)"
+              >
+                <template #icon><CloseOutlined /></template>
+              </n-button>
+            </div>
+            <n-button size="small" dashed class="api-key-add" @click="addCustomHeaderRow">
+              <template #icon><PlusOutlined /></template>
+              {{ $t('settings.customHeaderAdd') }}
+            </n-button>
+            <div class="api-key-hint">{{ $t('settings.customHeadersHint') }}</div>
+          </div>
+        </n-form-item>
+      </div>
       <n-alert v-if="selectedCatalogProvider" type="info" :show-icon="false" class="model-format-hint">
         <span>{{ $t('settings.providerPresetHint', { provider: selectedCatalogProvider.name }) }}</span>
         <n-button v-if="selectedCatalogProvider.doc" text type="primary" class="provider-doc-button" @click="openProviderDocumentation">
@@ -802,7 +845,7 @@ import { computed, h, onUnmounted, reactive, ref, watch } from 'vue';
 import { createDiscreteApi, darkTheme } from 'naive-ui';
 import { naiveDateLocale, naiveLocale, reasoningEffortLabel, t } from '../i18n.mjs';
 import { getStoredMode } from '../utils/theme.mjs';
-import { buildModelConfigExport, mergeModelConfigs, modelConfigIdentity, normalizeApiKeysArray, normalizeReasoningEffort, parseModelConfigImport, reasoningEffortLevels } from '../utils/modelConfigIO.mjs';
+import { buildModelConfigExport, mergeModelConfigs, modelConfigIdentity, normalizeApiKeysArray, normalizeCustomHeaders, normalizeReasoningEffort, parseModelConfigImport, reasoningEffortLevels } from '../utils/modelConfigIO.mjs';
 import { saveTextFile } from '../utils/download.mjs';
 import { isSkillActive } from '../utils/skills.mjs';
 import CloseOutlined from '@vicons/antd/CloseOutlined';
@@ -1162,6 +1205,42 @@ function normalizeModelApiKeys(keys) {
   return normalizeApiKeysArray(keys || []);
 }
 
+// ── Custom header rows ──
+// customHeaderRows 是自定义头的行编辑状态(有序、可空行)，提交时经
+// normalizeCustomHeaders 归一化为 map；与后端归一化边界共用同一套语义
+// (modelConfigIO.normalizeCustomHeaders 镜像 Go normalizeCustomHeaders)。
+let customHeaderRowSeq = 0;
+const customHeaderRows = ref([]);
+const modelAdvancedOpen = ref(false);
+const customHeaderRowCount = computed(() => customHeaderRows.value.filter((row) => row.name.trim() && row.value.trim()).length);
+
+function resetCustomHeaderRows(headers) {
+  const normalized = normalizeCustomHeaders(headers) || {};
+  customHeaderRows.value = Object.keys(normalized).sort().map((name) => ({
+    id: ++customHeaderRowSeq,
+    name,
+    value: normalized[name],
+  }));
+}
+
+function addCustomHeaderRow() {
+  customHeaderRows.value.push({ id: ++customHeaderRowSeq, name: '', value: '' });
+}
+
+function removeCustomHeaderRow(id) {
+  customHeaderRows.value = customHeaderRows.value.filter((row) => row.id !== id);
+}
+
+function collectCustomHeaders() {
+  const raw = {};
+  for (const row of customHeaderRows.value) {
+    const name = String(row.name || '').trim();
+    if (!name) continue;
+    raw[name] = String(row.value || '').trim();
+  }
+  return normalizeCustomHeaders(raw);
+}
+
 function addModelApiKey() {
   if (!Array.isArray(modelDraft.apiKeys)) modelDraft.apiKeys = [];
   modelDraft.apiKeys.push('');
@@ -1326,9 +1405,10 @@ async function fetchRemoteModels() {
   if (modelListLoading.value) return;
   const baseUrl = (modelDraft.baseUrl || '').trim() || apiFormatDefaultBaseUrl(modelDraft.apiFormat);
   const apiKeys = normalizeModelApiKeys(modelDraft.apiKeys || []);
+  const customHeaders = collectCustomHeaders();
   modelListLoading.value = true;
   try {
-    remoteModels.value = await FetchModelList(baseUrl, apiKeys[0] || '');
+    remoteModels.value = await FetchModelList(baseUrl, apiKeys[0] || '', customHeaders || undefined);
     if (!remoteModels.value.length) {
       message.warning(t('settings.fetchModelsEmpty'));
     }
@@ -1386,6 +1466,7 @@ async function startAddModelDraft() {
       ? templateModel.apiKeys
       : (templateModel.apiKey ? [templateModel.apiKey] : []);
     const normalizedKeys = normalizeModelApiKeys(rawKeys);
+    resetCustomHeaderRows(templateModel.customHeaders);
     assignModelDraft({
       providerName: provider,
       apiFormat: normalizeApiFormat(templateModel.apiFormat),
@@ -1401,6 +1482,7 @@ async function startAddModelDraft() {
       reasoningEffort: normalizeReasoningEffort(templateModel.reasoningEffort || 'max'),
     });
   } else {
+    resetCustomHeaderRows(null);
     assignModelDraft({
       providerName: provider,
       apiFormat: normalizeApiFormat(draft.apiFormat),
@@ -1419,6 +1501,7 @@ async function editModelDraft(index) {
   if (!draft.models || !draft.models[index]) return;
   modelEditorIndex.value = index;
   await ensureModelCatalog();
+  resetCustomHeaderRows(draft.models[index].customHeaders);
   assignModelDraft(draft.models[index]);
   modelEditorVisible.value = true;
 }
@@ -1429,6 +1512,8 @@ function cancelModelDraft() {
   selectedCatalogProviderId.value = CUSTOM_PROVIDER_ID;
   remoteModels.value = [];
   modelListLoading.value = false;
+  resetCustomHeaderRows(null);
+  modelAdvancedOpen.value = false;
 }
 
 async function testModelConnection() {
@@ -1454,6 +1539,7 @@ async function testModelConnection() {
       reasoningTag: modelDraft.reasoningTag || 'reasoning_content',
       tokenParam: modelDraft.tokenParam || 'auto',
       reasoningEffort: normalizeReasoningEffort(modelDraft.reasoningEffort),
+      customHeaders: collectCustomHeaders(),
     });
     message.success(t('settings.connectionSuccess'));
   } catch (err) {
@@ -1473,6 +1559,7 @@ function commitModelDraft() {
   const apiKeys = normalizeModelApiKeys(modelDraft.apiKeys || []);
   const providerName = normalizedProviderName(modelDraft.providerName);
   const apiFormat = normalizeApiFormat(modelDraft.apiFormat);
+  const customHeaders = collectCustomHeaders();
   const nextModel = {
     providerName,
     apiFormat,
@@ -1486,6 +1573,7 @@ function commitModelDraft() {
     reasoningTag: modelDraft.reasoningTag || 'reasoning_content',
     tokenParam: modelDraft.tokenParam || 'auto',
     reasoningEffort: normalizeReasoningEffort(modelDraft.reasoningEffort),
+    ...(customHeaders ? { customHeaders } : {}),
   };
   if (modelEditorIndex.value >= 0) {
     draft.models.splice(modelEditorIndex.value, 1, nextModel);
@@ -2898,6 +2986,64 @@ watch(() => props.visible, (visible) => {
   color: var(--ally-text-muted);
   font-size: 12px;
   line-height: 1.5;
+}
+
+.model-advanced-toggle {
+  margin-top: 4px;
+}
+
+.model-advanced-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
+  background: none;
+  border: none;
+  color: var(--ally-text-muted);
+  font-size: 12.5px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.model-advanced-button:hover {
+  color: var(--ally-accent, #63e2b7);
+}
+
+.model-advanced-arrow {
+  display: inline-block;
+  transition: transform 0.15s ease;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.model-advanced-arrow.open {
+  transform: rotate(90deg);
+}
+
+.model-advanced-count {
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--ally-accent, #63e2b7);
+  color: #111;
+  font-size: 11px;
+  line-height: 18px;
+  text-align: center;
+  font-family: var(--ally-mono-font);
+}
+
+.model-advanced-body {
+  margin-top: 6px;
+  padding-top: 4px;
+  border-top: 1px dashed var(--ally-border, rgba(255, 255, 255, 0.12));
+}
+
+.custom-header-row .custom-header-name {
+  flex: 0 0 38%;
+}
+
+.custom-header-row .custom-header-value {
+  flex: 1;
 }
 
 .model-input-select {

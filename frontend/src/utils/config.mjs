@@ -34,6 +34,7 @@ export function defaultConfig() {
     userAgent: '',
     reasoningTag: 'reasoning_content',
     reasoningEffort: 'max',
+    customHeaders: null,
     disabledSkills: [],
     models: [],
     llmRetries: 6,
@@ -152,6 +153,9 @@ function cloneModelConfigs(models) {
     reasoningTag: String(model?.reasoningTag || '').trim() || 'reasoning_content',
     reasoningEffort: normalizeReasoningEffort(model?.reasoningEffort),
     tokenParam: String(model?.tokenParam || '').trim() || 'auto',
+    customHeaders: model?.customHeaders && Object.keys(model.customHeaders).length
+      ? { ...model.customHeaders }
+      : null,
     apiKeys: Array.isArray(model?.apiKeys) && model.apiKeys.length
       ? normalizeApiKeysArray(model.apiKeys)
       : (model?.apiKey ? [model.apiKey] : []),

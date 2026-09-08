@@ -22,12 +22,53 @@ const MODEL_FIELDS = [
   'reasoningTag',
   'tokenParam',
   'reasoningEffort',
+  'customHeaders',
 ];
 
 function importError(code) {
   const error = new Error(code);
   error.code = code;
   return error;
+}
+
+// normalizeCustomHeaders mirrors the Go backend normalizeCustomHeaders:
+// trim key/value, drop empty entries and transport-managed header names,
+// canonicalize keys (x-api-version -> X-Api-Version) with deterministic
+// dedup (lexicographically first key wins), cap at 32 entries. Returns null
+// for an effectively empty set so no empty maps linger in configs/exports.
+const MAX_CUSTOM_HEADERS = 32;
+const MANAGED_HEADER_NAMES = new Set([
+  'Host', 'Content-Length', 'Connection', 'Transfer-Encoding', 'Keep-Alive',
+  'Proxy-Authenticate', 'Proxy-Authorization', 'Te', 'Trailer', 'Upgrade',
+]);
+
+function canonicalHeaderKey(key) {
+  return String(key || '')
+    .trim()
+    .split('-')
+    .map((part) => (part ? part[0].toUpperCase() + part.slice(1).toLowerCase() : ''))
+    .join('-');
+}
+
+function isValidHeaderKey(key) {
+  return /^[!#$%&'*+.^_|~0-9A-Za-z-]+$/.test(key);
+}
+
+export function normalizeCustomHeaders(headers) {
+  const source = headers && typeof headers === 'object' && !Array.isArray(headers) ? headers : {};
+  const keys = Object.keys(source).sort();
+  const out = {};
+  for (const raw of keys) {
+    const key = canonicalHeaderKey(raw);
+    const value = String(source[raw] ?? '').trim();
+    if (!key || !value) continue;
+    if (MANAGED_HEADER_NAMES.has(key)) continue;
+    if (!isValidHeaderKey(key)) continue;
+    if (Object.hasOwn(out, key)) continue;
+    if (Object.keys(out).length >= MAX_CUSTOM_HEADERS) break;
+    out[key] = value;
+  }
+  return Object.keys(out).length ? out : null;
 }
 
 function normalizeProviderName(value) {
@@ -127,6 +168,7 @@ function normalizeImportedModel(model) {
     reasoningTag: String(model.reasoningTag || 'reasoning_content').trim() || 'reasoning_content',
     tokenParam: normalizeTokenParam(model.tokenParam),
     reasoningEffort: normalizeReasoningEffort(model.reasoningEffort),
+    customHeaders: normalizeCustomHeaders(model.customHeaders) || undefined,
   };
 
   return normalized;
