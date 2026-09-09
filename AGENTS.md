@@ -158,7 +158,7 @@ Supported API formats:
 
 每个模型条目可配置随该模型所有 API 请求发送的额外 HTTP 头（网关鉴权、中转定制头）：
 
-- 存储在 `ModelConfig.CustomHeaders`（`customHeaders`，高级配置项）；`SwitchModel` 激活时镜像到 `ConfigState.CustomHeaders`，与 `APIKey`/`TokenParam` 同机制。
+- 存储在 `ModelConfig.CustomHeaders`（`customHeaders`，高级配置项）；UI 聊天链路经前端每 Tab 模型快照生效：`App.vue` `modelSnapshotFrom` 必须克隆 `customHeaders` 进快照，`chatConfig`（`{...config, ...snapshot}`）随每次 `StartChat` overlay 下发。`SwitchModel` 激活时镜像到 `ConfigState.CustomHeaders`（与 `APIKey`/`TokenParam` 同机制），该顶层镜像仅供无 Tab 场景（本地 API 激活、调度任务）兜底——前端 UI 从不调用 `SwitchModel`。
 - `normalizeCustomHeaders()`（`biz_config.go`）是唯一归一化边界：键值去空白、丢弃空项与传输层自管头（Host/Content-Length/Connection 等）、键归一化并确定性去重（大小写冲突字典序首个胜出）、httpguts 合法性校验、上限 32 条；空结果归 nil。前端镜像在 `modelConfigIO.mjs normalizeCustomHeaders`。
 - 应用点集中在 provider 边界：SDK 客户端（openai_chat / anthropic_messages）走 `modelHTTPClient` 的 `customHeadersTransport`（在适配器内置头之后 Set，可覆盖 Authorization/User-Agent；包装顺序 UA 在外层、custom 在内层，配置的 User-Agent 优先于全局 UA）；Responses SSE 与 `FetchModelList` 直接调 `applyCustomHeaders()`。
 - `mergeConfig` 语义：非 nil overlay 整体替换（空 map = 清空），nil = 字段缺席保留原值；模型条目内同步归一化。

@@ -1512,6 +1512,12 @@ function modelSnapshotFrom(source) {
     reasoningEffort: normalizeReasoningEffort(source?.reasoningEffort),
     apiKeys: keys,
     apiKey: keys[0] || '',
+    // Per-model custom headers must ride the snapshot: chat requests send
+    // {...config, ...snapshot}, and the StartChat overlay replaces the whole
+    // map (null = this model has none; backend keeps its top-level mirror).
+    customHeaders: source?.customHeaders && Object.keys(source.customHeaders).length
+      ? { ...source.customHeaders }
+      : null,
   };
 }
 
