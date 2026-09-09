@@ -25,8 +25,8 @@
 | Token 统计 | `internal/app/biz_stats.go` + `TokenStatsModal.vue` |
 | 工作区文件列表 / workspace map | `internal/app/biz_workspace.go` |
 | 文件树/编辑器 UI | `WorkspaceExplorer.vue` + `biz_workspace_editor.go` |
-| 设置界面（General/Models/API/Network/About） | `SettingsModal.vue` |
-| 技能 / MCP 管理页 | `SkillsPanel.vue` / `McpPanel.vue`（ModeSider 独立内联页） |
+| 设置界面（General/Advanced/Network/API/About） | `SettingsModal.vue` |
+| 技能 / MCP / 模型管理页 | `SkillsPanel.vue` / `McpPanel.vue` / `ModelsPanel.vue`（ModeSider 独立内联页） |
 | 工具卡动词 "Used X" 问题 | `frontend/src/utils/toolVerb.mjs`（TOOL_VERBS 表） |
 | 子代理 | `internal/app/orch_subagent.go` + `SubagentInlineCard.vue` |
 | 计划任务 / 后台服务 | `orch_scheduler.go` / `orch_services.go` + `TaskCenterPanel.vue` |
@@ -203,15 +203,16 @@
 - useToolEvents.mjs — 从 App.vue 抽出的工具卡子系统：tool:result/tool:error 处理与按工具名分发结果适配器；关键: useToolEvents(ctx), toolResultAdapters
 - sakuraBreeze.mjs — 樱花特效全局开关（模块级单例 ref）；关键: useSakuraBreeze, toggleSakura
 
-## frontend/src/components/（33 个 Vue 组件）
+## frontend/src/components/（34 个 Vue 组件）
 
 - AppHeader.vue — 顶部标题栏：工作区 Tab 拖拽排序（Pointer Events 模拟，非原生 DnD）、历史下拉、更新按钮、窗口控制；`--wails-draggable` 拖拽区；关键: onWorkspacePointerDown
-- ModeSider.vue — 左侧模式窄条：对话 / 知识库（运行中小圆点）/ 技能 / MCP / 统计 / 游戏 / 设置图标菜单，切换即改 mode（overlay 页集合见 App.vue overlayModes）；关键: switch emit
+- ModeSider.vue — 左侧模式窄条：对话 / 知识库（运行中小圆点）/ 技能 / MCP / 模型 / 统计 / 游戏 / 设置图标菜单，切换即改 mode（overlay 页集合见 App.vue overlayModes）；关键: switch emit
 - ChatMessages.vue — 聊天消息列表：v-memo 渲染缓存、autoFollow 自动滚动（程序化滚动落点匹配防误关）、跳底按钮、长消息折叠；关键: handleScroll, messageRenderMemo
 - ComposerInfoBar.vue — 输入区信息条：模型分组下拉（按使用频次排序）、reasoning effort、git 徽标、上下文明细+compact、任务中心/文件树开关、会话导出；关键: modelGroups, exportFullSession
-- SettingsModal.vue — 设置中心（General/Models/API/Network/About）：模型增删改+目录预设懒加载+连通测试+导入导出、代理检测与测试；关键: ensureModelCatalog, testModelConnection
+- SettingsModal.vue — 设置中心（General/Advanced/Network/API/About）：代理检测与测试、API 服务配置；关键: testModelConnection（历史遗留，代理在 detectProxy）
 - SkillsPanel.vue — 技能管理内联页（mode 'skills'，从设置拆出）：技能列表/启停/来源徽标，自有状态经 skills-changed 上报；关键: refreshSkillState, toggleSkill
 - McpPanel.vue — MCP 管理内联页（mode 'mcp'，从设置拆出）：服务表单+实时状态+mcp:status 订阅+编辑子弹窗+自动应用 reconcile，经 mcp-saved 上报；关键: loadMcpConfig, autoApplyMcpConfig, syncFormToJson
+- ModelsPanel.vue — 模型管理内联页（mode 'models'，从设置拆出）：provider 分组预设列表+模型编辑子弹窗+目录预设懒加载+连通测试+导入导出，改动经 save 直入 App.vue onSettingsSave；关键: ensureModelCatalog, commitModelDraft, testModelConnection
 - WorkspaceExplorer.vue — 工作区侧栏文件树+编辑器：目录懒加载、多选+右键菜单、Ace 编辑器（语法校验、MD 图片加载、预览切换）、拖拽调宽、剪贴板文件粘贴（Ctrl/Cmd+V → ReadClipboardFiles → CopyFilesIntoWorkspace，刷新目标节点）；关键: openFile, saveFile, initAceEditor, onContextMenuSelect, pasteFilesFromClipboard
 - ToolCallCard.vue — 通用工具调用卡：动宾动词标签、edit 分组 split diff（兼容历史多文件批次结果）、create 代码预览、命令高亮、错误码本地化、validation 警告条；关键: toolVerb, highlightCommand
 - AskToolCard.vue — ask 工具卡：多问题 Tab、多选+自定义回答、一次性提交；关键: answerState, submitAnswers

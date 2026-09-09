@@ -176,7 +176,7 @@ https://models.dev/api.json  →  docs/model_api.json →（scripts/generate-mod
 
 - `docs/model_api.json` 是 **models.dev（AI SDK 官方模型注册表）的静态快照**，约 192 个 provider，3-4 MB。格式即 models.dev 的 API 格式（provider 含 `npm`/`api`/`name`/`doc`/`models`；模型含 `tool_call`/`limit`/`modalities`/`reasoning_options` 等）。
 - `frontend/src/data/modelCatalog.json` 是**生成产物**，不要手改（下一轮生成会覆盖）；生成脚本只保留 `npm` 为 `@ai-sdk/openai-compatible` / `@ai-sdk/openai` / `@ai-sdk/anthropic` 的 provider，且模型须未废弃、支持工具调用、支持文本输出。
-- 前端在 `SettingsModal.vue` 的 `ensureModelCatalog()` 中懒加载 `modelCatalog.json`，仅用于填充 providerName/apiFormat/baseUrl/contextWindow/maxTokens/reasoningTag；API Key 仍需用户自填。
+- 前端在 `ModelsPanel.vue` 的 `ensureModelCatalog()` 中懒加载 `modelCatalog.json`，仅用于填充 providerName/apiFormat/baseUrl/contextWindow/maxTokens/reasoningTag；API Key 仍需用户自填。
 - **更新方式**：下载最新源并重新生成：
 
 ```bash
@@ -524,12 +524,11 @@ Major UI regions: header (controlled Naive UI workspace tabs, running indicators
 Settings pages (inline page on the mode rail, `mode === 'settings'`):
 
 - General: custom prompt, knowledge-base root directory picker (`SelectKnowledgeBaseRoot` binding), launch-at-login switch; the retained close-to-tray setting is currently hidden
-- Models: provider/model presets and active model selection
 - API: local HTTP API service (toggle, port, token, endpoint list); independent of the whole-config save flow
 - About: GPLv3 notice, warranty disclaimer, and source repository link
 - Network: proxy off/system/manual selection, fixed system-proxy detection, bypass list, redacted status, and a bounded connection test
 
-Skills and MCP management are NOT part of Settings: they are separate inline pages on the mode rail below the knowledge base (`SkillsPanel.vue`, `mode === 'skills'`; `McpPanel.vue`, `mode === 'mcp'`). Each panel owns its whole state (skills list + active set, MCP server form rows + live `mcp:status` subscription + editor sub-modal), stays mounted via `v-show`, and reports changes upward (`skills-changed` / `mcp-saved`) — no skills/MCP editing state lives in the Settings draft anymore. The overlay-page set (`settings`/`stats`/`games`/`skills`/`mcp`) is the `overlayModes` set in App.vue, the single source of truth driving `switchMode` pre-overlay tracking, main-area v-show guards, and ESC-back.
+Skills, MCP, and Models management are NOT part of Settings: they are separate inline pages on the mode rail below the knowledge base (`SkillsPanel.vue`, `mode === 'skills'`; `McpPanel.vue`, `mode === 'mcp'`; `ModelsPanel.vue`, `mode === 'models'`). Each panel owns its whole state (skills list + active set, MCP server form rows + live `mcp:status` subscription + editor sub-modal, provider-grouped model presets + model editor sub-modal + lazy catalog), stays mounted via `v-show`, and reports changes upward (`skills-changed` / `mcp-saved` / model saves emit straight into the Settings save path) — no skills/MCP/models editing state lives in the Settings draft anymore. The overlay-page set (`settings`/`stats`/`games`/`skills`/`mcp`/`models`) is the `overlayModes` set in App.vue, the single source of truth driving `switchMode` pre-overlay tracking, main-area v-show guards, and ESC-back.
 
 The composer task-center button opens `TaskCenterPanel` (controlled tabs separate temporary scheduled tasks from managed background services; bounded previews; full output/service buffers open in a large scrollable modal). The composer statistics button opens `TokenStatsModal`, which queries `GetTokenStats()` on every open and renders dependency-free SVG charts.
 
