@@ -934,15 +934,15 @@ code, pre {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
+  width: 20px;
+  height: 20px;
   flex: none;
 }
 
 .mode-sider-icon-wrap .n-icon,
 .mode-sider-icon-wrap .n-icon svg {
-  width: 22px;
-  height: 22px;
+  width: 20px;
+  height: 20px;
   max-width: none;
   max-height: none;
 }
