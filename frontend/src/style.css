@@ -928,21 +928,21 @@ code, pre {
 
 /* Fixed square wrapper: n-menu's flex icon slot could squeeze the glyph
    non-uniformly; an explicit box keeps the icon undistorted. Sized to match
-   the 44px rail (same 16px glyph scale as the header icon buttons). */
+   the 44px rail. */
 .mode-sider-icon-wrap {
   position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 17px;
-  height: 17px;
+  width: 22px;
+  height: 22px;
   flex: none;
 }
 
 .mode-sider-icon-wrap .n-icon,
 .mode-sider-icon-wrap .n-icon svg {
-  width: 17px;
-  height: 17px;
+  width: 22px;
+  height: 22px;
   max-width: none;
   max-height: none;
 }

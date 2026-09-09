@@ -31,7 +31,7 @@ Public License v3. See the LICENSE file for details.
           role="button"
           :aria-pressed="activeSourceFilter === s.source"
           @click="toggleSourceFilter(s.source)"
-        >{{ s.source }} {{ s.count }}</span>
+        >{{ skillSourceLabel(s.source) }} {{ s.count }}</span>
         <span
           v-if="activeSourceFilter"
           class="skill-filter-clear"
@@ -48,7 +48,7 @@ Public License v3. See the LICENSE file for details.
           <div class="skill-settings-main">
             <div class="skill-title-row">
               <span class="skill-name">{{ sk.name }}</span>
-              <span :class="['skill-badge', sk.source || 'unknown']">{{ sk.source || 'unknown' }}</span>
+              <span :class="['skill-badge', sk.source || 'unknown']">{{ skillSourceLabel(sk.source) }}</span>
               <span v-if="isSkillActive(sk.name, activeSkillNames)" class="skill-badge loaded">{{ t('common.enabled') }}</span>
               <span v-if="sk.source === 'builtin'" class="skill-badge builtin-locked">{{ t('settings.builtinAlwaysOn') }}</span>
             </div>
@@ -103,6 +103,19 @@ const skillSourceCounts = computed(() => {
   }
   return Object.entries(counts).map(([source, count]) => ({ source, count }));
 });
+
+// 来源展示名国际化：徽标 CSS class 与过滤键仍用后端原始 source 值，
+// 仅展示层经 t() 映射，未知来源原样回退。
+function skillSourceLabel(source) {
+  const key = String(source || '').trim();
+  const labelKeys = {
+    project: 'app.skills.source.project',
+    user: 'app.skills.source.user',
+    builtin: 'app.skills.source.builtin',
+  };
+  if (labelKeys[key]) return t(labelKeys[key]);
+  return key || t('app.skills.source.unknown');
+}
 
 // 来源过滤：点击来源徽标只显示该来源的技能，再次点击或点“清除过滤”恢复全部。
 const activeSourceFilter = ref('');
