@@ -36,7 +36,7 @@ Public License v3. See the LICENSE file for details.
             <!-- Main area: mode rail + (chat workbench | KB guidance card) -->
             <div class="main-area" @pointerdown.capture="clearActiveExplorerTreeSelection">
               <ModeSider :mode="mode" :kb-running="kbSessionRunning" @switch="switchMode" />
-              <n-layout v-show="!kbEmptyActive && !settingsActive && !statsActive && !gamesActive" class="chat-layout" :content-style="chatLayoutContentStyle">
+              <n-layout v-show="!kbEmptyActive && !settingsActive && !statsActive && !gamesActive && !skillsActive && !mcpActive" class="chat-layout" :content-style="chatLayoutContentStyle">
                 <n-tabs
                   class="workspace-content-tabs"
                   :value="activeWorkspaceId"
@@ -302,7 +302,7 @@ Public License v3. See the LICENSE file for details.
                  tree is a normal right-hand flex column, not an overflow escape. -->
             <template v-for="tab in workspaceTabs" :key="`explorer-${tab.id}`">
               <div
-                v-if="explorerVisibleFor(tab.id) && !kbEmptyActive && !settingsActive && !statsActive && !gamesActive"
+                v-if="explorerVisibleFor(tab.id) && !kbEmptyActive && !settingsActive && !statsActive && !gamesActive && !skillsActive && !mcpActive"
                 v-show="tab.id === activeWorkspaceId"
                 class="workspace-explorer-slot"
               >
@@ -350,6 +350,20 @@ Public License v3. See the LICENSE file for details.
                 @background-changed="onBackgroundChanged"
                 @check-update="onCheckUpdate"
               />
+            </div>
+
+            <!-- Skills page (extracted from Settings onto the mode rail):
+                 inline sibling of the settings page; v-show keeps the list
+                 across mode switches. -->
+            <div v-show="skillsActive" class="settings-page-container">
+              <SkillsPanel :show="skillsActive" @skills-changed="onSkillsChanged" />
+            </div>
+
+            <!-- MCP page (extracted from Settings onto the mode rail): inline
+                 sibling; v-show keeps the server list, live statuses, and
+                 editor draft across mode switches. -->
+            <div v-show="mcpActive" class="settings-page-container">
+              <McpPanel :show="mcpActive" @mcp-saved="onMcpSaved" />
             </div>
 
             <!-- Token stats page: v-show keeps loaded stats across switches. -->
@@ -563,6 +577,8 @@ import ModeSider from './components/ModeSider.vue';
 import CommandMenu from './components/CommandMenu.vue';
 import FileMentionMenu from './components/FileMentionMenu.vue';
 import SettingsModal from './components/SettingsModal.vue';
+import SkillsPanel from './components/SkillsPanel.vue';
+import McpPanel from './components/McpPanel.vue';
 import ChatMessages from './components/ChatMessages.vue';
 import TaskCenterPanel from './components/TaskCenterPanel.vue';
 import TokenStatsModal from './components/TokenStatsModal.vue';
@@ -2147,6 +2163,18 @@ const settingsActive = computed(() => mode.value === 'settings');
 const statsActive = computed(() => mode.value === 'stats');
 // Games page state (协作休息区, inline sibling of the settings page).
 const gamesActive = computed(() => mode.value === 'games');
+// Skills / MCP management pages: extracted from Settings onto the mode rail
+// (below the knowledge base), each an inline sibling owning its whole state.
+const skillsActive = computed(() => mode.value === 'skills');
+const mcpActive = computed(() => mode.value === 'mcp');
+
+// Overlay pages fill the main area instead of the chat workbench. This set is
+// the single source of truth for switchMode's pre-overlay tracking, the
+// main-area v-show guards, and the ESC-back handler.
+const overlayModes = new Set(['settings', 'stats', 'games', 'skills', 'mcp']);
+function isOverlayMode(value) {
+  return overlayModes.has(value);
+}
 
 function closeSettings() {
   if (!settingsActive.value) return;
@@ -2156,13 +2184,25 @@ function closeSettings() {
 
 function closeStats() {
   if (!statsActive.value) return;
-  switchMode(['chat', 'kb', 'settings'].includes(preOverlayMode.value) ? preOverlayMode.value : 'chat');
+  switchMode(['chat', 'kb', 'settings', 'skills', 'mcp'].includes(preOverlayMode.value) ? preOverlayMode.value : 'chat');
   nextTick(() => focusPromptInput());
 }
 
 function closeGames() {
   if (!gamesActive.value) return;
-  switchMode(['chat', 'kb', 'settings', 'stats'].includes(preOverlayMode.value) ? preOverlayMode.value : 'chat');
+  switchMode(['chat', 'kb', 'settings', 'stats', 'skills', 'mcp'].includes(preOverlayMode.value) ? preOverlayMode.value : 'chat');
+  nextTick(() => focusPromptInput());
+}
+
+function closeSkills() {
+  if (!skillsActive.value) return;
+  switchMode(['chat', 'kb'].includes(preOverlayMode.value) ? preOverlayMode.value : 'chat');
+  nextTick(() => focusPromptInput());
+}
+
+function closeMcp() {
+  if (!mcpActive.value) return;
+  switchMode(['chat', 'kb'].includes(preOverlayMode.value) ? preOverlayMode.value : 'chat');
   nextTick(() => focusPromptInput());
 }
 
@@ -2261,14 +2301,14 @@ function ensureKbTab() {
 
 async function switchMode(next) {
   if (next === mode.value) return;
-  if (next === 'settings' || next === 'stats' || next === 'games') {
-    if (mode.value !== 'settings' && mode.value !== 'stats' && mode.value !== 'games') {
+  if (isOverlayMode(next)) {
+    if (!isOverlayMode(mode.value)) {
       preOverlayMode.value = mode.value;
     }
     mode.value = next;
     return;
   }
-  if (mode.value === 'settings' || mode.value === 'stats' || mode.value === 'games') {
+  if (isOverlayMode(mode.value)) {
     // Sider jump straight from an overlay page to chat/kb.
     mode.value = next;
   }
@@ -8099,8 +8139,8 @@ function focusPromptInput() {
 watch(configVisible, (visible) => {
   if (visible) {
     // config 顶层模型字段即默认模型，设置页"使用模型"直接显示/编辑它。
+    // （技能/MCP 已从设置中拆出为独立侧栏页，各自持有状态，无需在此刷新。）
     assignConfig(configDraft, config);
-    refreshSkillState();
   }
 });
 
@@ -8164,12 +8204,15 @@ function handleGlobalKeydown(event) {
     event.stopPropagation();
     return;
   }
-  if (event.key === 'Escape' && (settingsActive.value || statsActive.value || gamesActive.value)) {
-    // Settings / token stats / games are inline pages now: ESC navigates back.
+  if (event.key === 'Escape' && (settingsActive.value || statsActive.value || gamesActive.value || skillsActive.value || mcpActive.value)) {
+    // Settings / stats / games / skills / mcp are inline pages now: ESC
+    // navigates back.
     event.preventDefault();
     event.stopPropagation();
     if (gamesActive.value) closeGames();
     else if (statsActive.value) closeStats();
+    else if (skillsActive.value) closeSkills();
+    else if (mcpActive.value) closeMcp();
     else closeSettings();
     return;
   }

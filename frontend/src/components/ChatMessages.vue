@@ -77,7 +77,7 @@ Public License v3. See the LICENSE file for details.
                后续折叠组之间，成为折叠组上方的幽灵间距。新消息追加与占位
                移除落在同一次渲染 patch 里，无中间态跳动。 -->
           <div v-if="msg.role === 'assistant' && (msg.roundDurationText || (msg.streaming && hasAnswerBody(msg) && isLastDisplayMessage(msg)))" :class="['message-duration', { 'is-placeholder': !msg.roundDurationText }]">
-            <span class="duration-text">{{ msg.roundDurationText || '\u00a0' }}<template v-if="msg.completedAtText"> {{ msg.completedAtText }}</template></span>
+            <span class="duration-text">{{ msg.roundDurationText || '\u00a0' }}<template v-if="msg.completedAtText">{{ '\u00a0' + msg.completedAtText }}</template></span>
             <span
               v-if="typeof msg.cacheRate === 'number'"
               class="cache-rate"
