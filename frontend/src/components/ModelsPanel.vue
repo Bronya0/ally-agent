@@ -17,6 +17,11 @@ Public License v3. See the LICENSE file for details.
   <div class="config-inline-panel">
     <header class="config-inline-header">
       <span class="config-inline-title">{{ t('app.mode.models') }}</span>
+      <div class="panel-header-actions">
+        <n-button size="small" secondary @click="openModelImport">{{ t('settings.modelImport') }}</n-button>
+        <n-button size="small" secondary :disabled="!draft.models?.length" @click="exportModelConfigs">{{ t('settings.modelExport') }}</n-button>
+        <n-button size="small" type="primary" @click="startAddModelDraft">{{ t('settings.modelAdd') }}</n-button>
+      </div>
     </header>
 
     <div class="panel-scroll-body">
@@ -25,19 +30,15 @@ Public License v3. See the LICENSE file for details.
           <div class="config-section-title">{{ t('settings.modelsTitle') }}</div>
           <div class="config-section-subtitle">{{ t('settings.modelsSubtitle') }}</div>
         </div>
-        <n-space :size="8">
-          <n-button size="small" secondary @click="openModelImport">{{ t('settings.modelImport') }}</n-button>
-          <n-button size="small" secondary :disabled="!draft.models?.length" @click="exportModelConfigs">{{ t('settings.modelExport') }}</n-button>
-          <n-button size="small" type="primary" @click="startAddModelDraft">{{ t('settings.modelAdd') }}</n-button>
-        </n-space>
-        <input
-          ref="modelImportInput"
-          class="model-import-input"
-          type="file"
-          accept="application/json,.json"
-          @change="importModelConfigs"
-        />
       </div>
+
+      <input
+        ref="modelImportInput"
+        class="model-import-input"
+        type="file"
+        accept="application/json,.json"
+        @change="importModelConfigs"
+      />
 
       <div class="current-model-panel">
         <div class="current-model-main">
@@ -884,6 +885,16 @@ watch(
   min-height: 0;
   overflow-y: auto;
   padding: 16px 24px 28px;
+}
+
+/* 页头操作按钮组：与 Skills/MCP 面板同构（导入→导出→添加，主色最后）。 */
+.panel-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .config-section-header {

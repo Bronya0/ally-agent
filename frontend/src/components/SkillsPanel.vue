@@ -17,7 +17,7 @@ Public License v3. See the LICENSE file for details.
   <div class="config-inline-panel">
     <header class="config-inline-header">
       <span class="config-inline-title">{{ t('app.mode.skills') }}</span>
-      <n-button size="small" quaternary :loading="skillsLoading" @click="refreshSkillState">{{ t('common.refresh') }}</n-button>
+      <n-button size="small" secondary :loading="skillsLoading" @click="refreshSkillState">{{ t('common.refresh') }}</n-button>
     </header>
 
     <div class="panel-scroll-body">

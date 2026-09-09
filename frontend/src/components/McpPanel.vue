@@ -17,26 +17,24 @@ Public License v3. See the LICENSE file for details.
   <div class="config-inline-panel">
     <header class="config-inline-header">
       <span class="config-inline-title">{{ t('app.mode.mcp') }}</span>
+      <div class="panel-header-actions">
+        <n-button size="small" secondary @click="openMcpImport">{{ t('settings.modelImport') }}</n-button>
+        <n-button size="small" secondary :disabled="!mcpFormServers.length" @click="exportMcpConfig">{{ t('settings.modelExport') }}</n-button>
+        <n-button size="small" secondary :loading="mcpLoading" @click="loadMcpConfig">{{ t('common.refresh') }}</n-button>
+        <n-button size="small" type="primary" @click="openMcpEditor(-1)">{{ t('common.add') }}</n-button>
+      </div>
     </header>
 
     <div class="panel-scroll-body">
       <div class="config-section-subtitle">{{ t('settings.mcpSubtitle') }}</div>
 
-      <div class="mcp-toolbar">
-        <div class="mcp-toolbar-actions">
-          <n-button size="small" type="primary" @click="openMcpEditor(-1)">{{ t('common.add') }}</n-button>
-          <n-button size="small" secondary :loading="mcpLoading" @click="loadMcpConfig">{{ t('common.refresh') }}</n-button>
-          <n-button size="small" secondary @click="openMcpImport">{{ t('settings.modelImport') }}</n-button>
-          <n-button size="small" secondary :disabled="!mcpFormServers.length" @click="exportMcpConfig">{{ t('settings.modelExport') }}</n-button>
-        </div>
-        <input
-          ref="mcpImportInput"
-          class="model-import-input"
-          type="file"
-          accept="application/json,.json"
-          @change="importMcpConfig"
-        />
-      </div>
+      <input
+        ref="mcpImportInput"
+        class="model-import-input"
+        type="file"
+        accept="application/json,.json"
+        @change="importMcpConfig"
+      />
 
       <div class="mcp-save-scope">{{ t('settings.mcpSaveScope') }}</div>
 
@@ -532,6 +530,16 @@ watch(
   padding: 16px 24px 28px;
 }
 
+/* 页头操作按钮组：与 Skills/Models 面板同构（导入→导出→刷新→添加）。 */
+.panel-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .config-section-subtitle {
   font-size: 12px;
   color: var(--ally-text-muted);
@@ -553,21 +561,6 @@ watch(
   display: flex;
   flex-direction: column;
   gap: 8px;
-}
-
-.mcp-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin: 8px 0 6px;
-}
-
-.mcp-toolbar-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex: none;
 }
 
 .mcp-save-scope {
@@ -765,14 +758,9 @@ watch(
     max-width: calc(100vw - 24px);
   }
 
-  .mcp-toolbar,
   .mcp-row-main {
     align-items: stretch;
     flex-direction: column;
-  }
-
-  .mcp-toolbar-actions {
-    width: 100%;
   }
 
   .mcp-row-side {
