@@ -59,7 +59,7 @@ func sharedEditRules() string {
 		"   - After a successful edit, reuse its returned `version` only when the current source is known exactly.\n" +
 		"   - Re-read when the current source or line numbers are unknown, context compaction removed the reliable snapshot, or a formatter/generator/command or other external process may have changed the file.\n" +
 		"2. Keep the model-facing `edit` request shape as follows:\n" +
-		"   - One `edit` call edits exactly ONE file: `path`, `version`, and `changes` sit at the top level of the call arguments.\n" +
+		"   - One `edit` call edits a single file: `path`, `version`, and `changes` sit at the top level of the call arguments.\n" +
 		"   - When multiple files need changes, emit parallel `edit` calls in the same turn — one call per file.\n" +
 		"   - `changes` must be a JSON array (`[...]`), never a quoted string.\n" +
 		"   - Missing required fields fail the entire call.\n" +
@@ -71,20 +71,25 @@ func sharedEditRules() string {
 		"   - Never send multiple file-mutation tool calls for the same path in one model response.\n" +
 		"   - Do not use patch, unified diff, or git apply.\n" +
 		"4. When an edit fails with `E_NO_MATCH` or `E_VERSION_MISMATCH`:\n" +
-		"   - The first action is always to re-read the affected file.\n" +
+		"   - The first action is to re-read the affected range or file.\n" +
 		"   - Copy the exact current text from that fresh read.\n" +
 		"   - Never retry from memory or with guessed text; a failed match means the snapshot is stale.\n"
 }
 
 // sharedBatchStrategy returns the batch/parallel tool-call strategy shared by the main and sub-agent system prompts.
 func sharedBatchStrategy() string {
-	return "**Batch and parallelize aggressively — minimize round-trips to prevent context explosion**:\n" +
-		"Every extra turn re-sends prior conversation history to the model, wasting massive context tokens and degrading attention. Fragmented, hesitant baby-step tool calls are strictly forbidden. Always parallelize tool calls for non-conflicting, independent tools (such as `edit` across different files, concurrent `command`s, etc.), read all needed files in a single `read` call, and never re-read files or contents that were already read earlier in the session, to maximize task completion efficiency.\n" +
-		"- **Read**: In a single `read` tool call, pass ALL files you need or suspect you need into the `files: [{path: ...}, ...]` array at once (max 20 files per batch). Never re-read files or contents that were already inspected earlier. NEVER emit multiple consecutive single-file `read` calls across turns. Read whole files by omitting startLine/endLine for normal code files — partial/sliced reads pollute conversation history and cause massive token explosion across turns. NEVER re-read different line ranges of a file you already inspected. Only use `startLine` when a previous read was auto-truncated (>2000 lines) following the `[Showing lines A-B of N. Use startLine=C to continue.]` marker.\n" +
-		"- **Edit**: Fast-complete multi-file edits via PARALLEL tool calls. When multiple files need changes, emit parallel `edit` tool calls simultaneously in the exact same response turn (one call per file). Batch edits by risk and size: put all small changes for the same file into that file's single `edit` call, and give very large changes their own separate `edit` call so overly long outputs are not truncated. When `edit`/`create` returns a `validation` string (optional, enabled per language by the user), a failure means the file is already written, so fix the reported issue directly instead of repeating the same write.\n" +
-		"- **Grep**: Use it strictly for fast path/line locating (lines mode returns matching line numbers only, no line content). Jump straight to locations or batch-read full candidate files with `read`. When searching for multiple keywords or patterns, emit all `grep` calls concurrently in the same turn.\n" +
-		"- **Exploration**: Exploration has no serial dependencies. Finding candidate files (grep across patterns) and loading context (reading 2-5 candidate files) must be emitted in parallel in the VERY FIRST turn. Never waste turns probing one file or one keyword at a time.\n" +
-		"- **Rule of thumb**: Batch and parallelize independent `edit`s, `command`s, and reads; read all needed files in one batch call and do not re-read previously inspected files or contents. Only separate calls across turns when a strict serial dependency exists (e.g. an edit requires the version hash obtained from a prior read). If you can do it in 1 turn, NEVER split it across 2.\n" +
+	return "**Batch and parallelize where appropriate — balance round-trips and context hygiene**:\n" +
+		"Parallelize independent tool calls when ready (such as `edit` across different files, concurrent `command`s, or batching needed file reads). Avoid unnecessary round-trips, but do not speculatively dump unneeded files into context.\n" +
+		"- **Read**: Read target files or ranges as needed to keep context clean and cache-friendly:\n" +
+		"  - Locate first when helpful: use `grep` or symbol search to find the relevant line numbers before reading.\n" +
+		"  - Use range reads for larger files: for medium/large files (>150 lines), specify `startLine` and `endLine` to inspect the relevant section instead of reading the entire file. Omit startLine/endLine when the file is small or full file context is genuinely needed.\n" +
+		"  - When truncated: if a previous read was auto-truncated (>2000 lines), follow the `[Showing lines A-B of N. Use startLine=C to continue.]` marker to continue.\n" +
+		"  - Read confirmed files: pass files you need into the `files` array. Avoid speculatively reading whole files you only suspect might be relevant.\n" +
+		"  - Avoid redundant reads: do not re-read unchanged files or ranges already present in history.\n" +
+		"- **Edit**: Multi-file edits can be emitted in parallel in the same turn (one `edit` call per file). Batch related changes for the same file in its `changes` array. When `edit`/`create` returns a `validation` string, fix any reported issues directly.\n" +
+		"- **Grep**: Use for fast path and line locating (lines mode returns matching line numbers without line content). When searching for multiple keywords or patterns, emit `grep` calls concurrently in the same turn.\n" +
+		"- **Exploration**: First search with `grep` to locate candidates and line numbers; once locations are identified, read the targeted ranges. For broad, open-ended investigations across many files, consider delegating to a `subagent` so exploratory reads remain in the subagent's context.\n" +
+		"- **Rule of thumb**: Parallelize independent operations and read focused ranges rather than entire large files. Avoid splitting dependent steps unnecessarily, but do not prematurely flood conversation history with speculative reads.\n" +
 		"The backend executes independent non-file tool calls in parallel; built-in file mutations are ordered by tool-call index.\n\n"
 }
 
@@ -134,8 +139,8 @@ func knowledgeBasePromptPart(workspaceRoot string) string {
 		"This session operates on a personal knowledge base rooted at " + root + ". It follows this contract:\n\n" +
 		"- `index.md` — the root index: one line per category directory (plus a one-sentence scope note) and direct pointers to frequently used entries. Keep it under ~200 lines; it is the entry point of every retrieval.\n" +
 		"- `<category>/` and optional `<category>/<topic>/` — knowledge entries as Markdown files, at most two directory levels.\n" +
-		"- `<category>/_index.md` — the per-directory entry list. One line per entry: relative path + one-sentence description. Every entry created, moved, renamed, or deleted MUST be reflected here in the same task.\n" +
-		"- `sources/` — original source documents. READ-ONLY for you: never create, edit, delete, or write anything under `sources/` through any tool (the backend rejects such writes). Distill what you need into entries outside `sources/` and reference the source path instead.\n" +
+		"- `<category>/_index.md` — the per-directory entry list. One line per entry: relative path + one-sentence description. Every entry created, moved, renamed, or deleted should be reflected here in the same task.\n" +
+		"- `sources/` — original source documents. Read-only for you: do not create, edit, delete, or write anything under `sources/` through any tool (the backend rejects such writes). Distill what you need into entries outside `sources/` and reference the source path instead.\n" +
 		"- Entry frontmatter (YAML): `title`, `aliases` (synonyms so grep hits paraphrased queries), `tags`, `source` (a `sources/` path or external URL), `date`.\n\n" +
 		"Retrieval strategy:\n" +
 		"1. Read `index.md` first to locate the category, then that directory's `_index.md`, then `read` the specific entries.\n" +
@@ -190,7 +195,7 @@ func buildSystemPromptParts(allSkills []SkillDefinition, workspaceRoot string, e
 		"Proactively delegate when:\n" +
 		"- A complex exploration can run without blocking the main line, or a request splits into independent modules or investigations (delegate them in the same response and continue main-line work).\n" +
 		"- A well-defined sub-task needs extensive reading, research, or experimentation and the parent only needs its conclusions.\n\n" +
-		"Do NOT delegate when:\n" +
+		"Do not delegate when:\n" +
 		"- The task is a single focused edit or read, or later steps depend on exact prior output (do those yourself).\n" +
 		"- The delegated work is the critical next step on the main line and you would only wait idle, or you haven't explored enough to give a concrete task.\n\n" +
 		"- Each `subagent` call needs a specific `task` with file paths and expected outcomes, a `role` naming what the sub-agent is (e.g. researcher, code reviewer), a `maxSteps` tool-call-round budget sized to the task (small lookups ~5-10, normal tasks ~15-30, large multi-file work ~40-80), plus a short `description`; set `cleanContext` to true when the task does not depend on project structure.\n" +

@@ -1794,7 +1794,7 @@ Exact, prioritized next steps to take immediately.
 
 Rules:
 - Strictly write in the user's language.
-- DO NOT CALL ANY TOOLS (no tool calls). Output plain text Markdown directly.
+- Do not call any tools. Output plain text Markdown directly.
 - Keep file paths, command strings, function names, and identifiers exact.
 - Factual and concise. Do not invent details; state "unknown" if not certain.
 - This summary replaces prior conversation and must stand alone completely.`

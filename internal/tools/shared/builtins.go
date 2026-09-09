@@ -58,7 +58,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 		}),
 		functionTool("edit", "Validate and apply exact replacements to one workspace file per call.\n"+
-			"- Edit exactly ONE file per call: `path`, `version`, and `changes` sit at the top level. When editing MULTIPLE files, emit PARALLEL edit calls in the SAME turn.\n"+
+			"- Edit one file per call: `path`, `version`, and `changes` sit at the top level. When editing multiple files, emit parallel edit calls in the same turn.\n"+
 			"- Read the file first: `version` is the required current 6-character token from `read`.\n"+
 			"- Prefer a small unique `oldText` per change; `replace_all` replaces all exact occurrences; `lineRange` (A-B form) replaces whole-line blocks.\n"+
 			"- All changes in one call match against the same original snapshot in reverse line order.", map[string]any{
@@ -209,7 +209,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"url"},
 		}),
-		functionTool("remote_read", "Read one or more text files on a remote SSH workspace (same contract as read: line-numbered preview + 6-char version for remote_edit; UTF-16 LE/BE transcoded; no document extraction). By default, omit startLine/endLine to read the whole file. NEVER use startLine/endLine on normal code files. Pass ALL files you need to inspect in the files array at once to minimize round-trips.", map[string]any{
+		functionTool("remote_read", "Read one or more text files on a remote SSH workspace (same contract as read: line-numbered preview + 6-char version for remote_edit; UTF-16 LE/BE transcoded; no document extraction). Omit startLine/endLine to read the whole file when needed, or specify startLine/endLine for targeted ranges in larger files. Pass needed files in the files array to read in parallel.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"target": map[string]any{"type": "string", "minLength": 1, "pattern": `.*\S.*`, "description": "Explicit SSH target plus workspace root, e.g. my-dev:/srv/app."},
@@ -263,7 +263,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"target", "command", "fullOutput"},
 		}),
-		functionTool("ssh_credential", "Store, clear, or list SSH credentials for remote_* tools, in memory only. action=set takes the target (user@host or ssh://…) plus either a password (ONLY when the user typed one into the chat — copy it verbatim) or keyPath (a local private key file such as a .pem the user named). remote_* calls then authenticate automatically. Never invent, guess, or repeat a password or key path; never use credentials for hosts the user did not provide them for. Credentials expire after 12h.", map[string]any{
+		functionTool("ssh_credential", "Store, clear, or list SSH credentials for remote_* tools, in memory only. action=set takes the target (user@host or ssh://…) plus either a password (only when the user typed one into the chat — copy it verbatim) or keyPath (a local private key file such as a .pem the user named). remote_* calls then authenticate automatically. Never invent, guess, or repeat a password or key path; never use credentials for hosts the user did not provide them for. Credentials expire after 12h.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"action":   map[string]any{"type": "string", "enum": []string{"set", "clear", "list"}, "description": "set stores the credential, clear drops it, list shows which hosts have one. Default set."},
@@ -290,7 +290,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"pattern"},
 		}),
-		functionTool("read", "Read one or more file contents. Supports text files and images (jpg, png, gif, webp, bmp). For text files, output is prefixed with 1-based line numbers and a 6-character version for edit. By default, omit startLine/endLine to read the whole file (output truncated to 2000 lines or 128KB, whichever is hit first). NEVER use startLine/endLine on normal code files — slicing code into partial reads pollutes conversation history and causes token explosion. Pass ALL files you need to inspect in the files array at once to minimize round-trips; avoid single-file reads when multiple files are known.", map[string]any{
+		functionTool("read", "Read one or more file contents. Supports text files and images (jpg, png, gif, webp, bmp). For text files, output is prefixed with 1-based line numbers and a 6-character version for edit. Omit startLine/endLine to read the whole file when needed, or specify startLine/endLine to read a targeted range in larger files to save context. Pass needed files in the files array to read in parallel.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"files": batchReadFilesSchema(),
@@ -305,7 +305,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"expression"},
 		}),
-		functionTool("render_html", "Render a self-contained HTML snippet inline in the chat UI. Use for interactive widgets, data explorers, styled mockups, animated SVG, or rich charts. Apache ECharts (global `echarts`) is pre-installed in the environment—do NOT fetch external scripts or styles. Rendered in a sandboxed dark-theme iframe. Max 50,000 characters.", map[string]any{
+		functionTool("render_html", "Render a self-contained HTML snippet inline in the chat UI. Use for interactive widgets, data explorers, styled mockups, animated SVG, or rich charts. Apache ECharts (global `echarts`) is pre-installed in the environment—do not fetch external scripts or styles. Rendered in a sandboxed dark-theme iframe. Max 50,000 characters.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"html": map[string]any{
@@ -422,8 +422,8 @@ func batchReadFilesSchema() map[string]any {
 			"type": "object",
 			"properties": map[string]any{
 				"path":      map[string]any{"type": "string", "minLength": 1, "pattern": `.*\S.*`, "description": "File path to read."},
-				"startLine": map[string]any{"type": "integer", "minimum": -MaxReadRangeLines, "description": "DO NOT use for normal code files. Optional 1-based start line only when continuing a truncated read (>2000 lines)."},
-				"endLine":   map[string]any{"type": "integer", "minimum": 1, "description": "DO NOT use for normal code files. Optional inclusive end line."},
+				"startLine": map[string]any{"type": "integer", "minimum": -MaxReadRangeLines, "description": "Optional 1-based start line for targeted reading or continuing a truncated read."},
+				"endLine":   map[string]any{"type": "integer", "minimum": 1, "description": "Optional inclusive end line for targeted reading."},
 			},
 			"required": []string{"path"},
 		},

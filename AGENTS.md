@@ -380,7 +380,7 @@ mcp__<serverName>__<toolName>
 Accepted read forms:
 
 - Model-facing calls require `files`: an array of one or more `{path, startLine?, endLine?}` requests.
-- Omit `startLine` and `endLine` to read the whole file (output truncated to 2000 lines or 128KB, whichever is hit first). Normal code files must not be sliced with line ranges to prevent context duplication; use `startLine` only when continuing a truncated file.
+- Omit `startLine` and `endLine` to read the whole file (output truncated to 2000 lines or 128KB, whichever is hit first), or specify both for a targeted range in larger files. The prompt strategy is locate-then-range-read: grep for line numbers first, then read only the relevant section of medium/large files; avoid speculatively reading whole files that are merely suspected relevant, and avoid re-reading unchanged files or ranges already present in history.
 - Backend compatibility fields may still accept top-level `path`, `paths`, and `offset`/`limit`, but they are omitted from the model-facing tool schema.
 
 Text files:

@@ -481,7 +481,7 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 func (a *App) forceSubagentFinalReport(ctx context.Context, cfg ConfigState, model string, messages []openai.ChatCompletionMessage, run *SubagentRun) (string, error) {
 	messages = append(messages, openai.ChatCompletionMessage{
 		Role:    openai.ChatMessageRoleUser,
-		Content: "[BUDGET EXHAUSTED] You have 0 tool-call rounds remaining. Do NOT call any tools. Immediately write your final report: what you accomplished, what still remains, which files changed, and any verification results.",
+		Content: "[BUDGET EXHAUSTED] You have 0 tool-call rounds remaining. Do not call any tools. Immediately write your final report: what you accomplished, what still remains, which files changed, and any verification results.",
 	})
 	resp, err := a.streamModelResponse(ctx, cfg, model, messages, nil, nil)
 	if err != nil {
@@ -587,10 +587,10 @@ func subagentSystemPrompt(role string) string {
 		sharedCodingGuidelines() + "\n" +
 		"# Safety\n\n" +
 		sharedSafetyBoundaries() +
-		"- Do NOT ask the user questions — the user cannot see you.\n" +
-		"- Do NOT call `subagent` — nested delegation is not supported.\n" +
+		"- Do not ask the user questions — the user cannot see you.\n" +
+		"- Do not call `subagent` — nested delegation is not supported.\n" +
 		"- MCP tools are available when connected. Use them when they materially help the delegated task, and treat their results like any other tool output.\n" +
-		"- Do NOT write global memories. The parent agent owns durable memory decisions.\n" +
+		"- Do not write global memories. The parent agent owns durable memory decisions.\n" +
 		"- Use network tools only when the delegated task explicitly requires external information.\n" +
 		"- When creating intermediate artifacts (scripts, drafts, test fixtures) that are not final deliverables, place them under a `.tmp/` directory within the workspace.\n\n" +
 		"# Output\n\n" +
