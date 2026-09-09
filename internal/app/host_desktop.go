@@ -129,6 +129,13 @@ func (a *App) ServiceStartup(ctx context.Context, _ application.ServiceOptions) 
 	go warmCommandEnvironment()
 	_ = a.loadServiceHistory()
 	_ = a.startScheduledTaskManager()
+	// Sweep stale temp-workspace leftovers from crashed sessions (async, never
+	// blocks startup) and remove this process's temp workspaces on exit.
+	go a.cleanupStaleTempWorkspaces()
+	go func() {
+		<-ctx.Done()
+		a.cleanupTempWorkspacesOnExit()
+	}()
 	// Load persisted token stats in the background and start the async flusher.
 	// Neither startup disk IO nor persistence can block normal chat handling.
 	if a.stats != nil {

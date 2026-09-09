@@ -116,6 +116,7 @@ const emit = defineEmits([
   'closeWorkspace',
   'reorderWorkspace',
   'addWorkspace',
+  'addTempWorkspace',
   'historySelect',
   'openRepository',
   'startUpdate',
@@ -364,6 +365,10 @@ function toggleMaximise() {
 function onHistorySelect(key) {
   if (key === '__add__') {
     emit('addWorkspace');
+    return;
+  }
+  if (key === '__temp__') {
+    emit('addTempWorkspace');
     return;
   }
   if (key && key !== '__empty__') {

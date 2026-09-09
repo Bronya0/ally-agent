@@ -541,6 +541,8 @@ Knowledge-base (KB) mode: a left `ModeSider` rail switches between chat and the 
 - `sendPrompt` pins a KB tab's `StartChat` config overlay workspace to the tab path, so a KB run's tool sandbox and system prompt (backend KB mode detection: `SamePath(cfg.Workspace, cfg.KBRoot)`) follow the KB root while the persisted chat workspace stays untouched.
 - With no `kbRoot` configured, KB mode shows a guidance card (`kb-empty-state`) instead of the chat workbench; picking a directory there persists `kbRoot` and builds the KB tab in place.
 
+Temp workspace: the workspace-history dropdown's second entry (`__temp__` → `addTempWorkspaceTab`) creates an ephemeral sandbox Tab (`kind:'temp'`) backed by `CreateTempWorkspace` (`os.MkdirTemp("", "ally-temp-*")`, `biz_temp_workspace.go`). Lifecycle follows the Tab: closing it deletes the directory (backend guard: direct child of the system temp root + `ally-temp-` prefix, else `E_TEMP_WORKSPACE_INVALID`) and the linked session; if a background run still needs the dir, cleanup is deferred in `pendingTempCleanups` until the run's terminal event. Invariants: temp tabs skip every `config.workspace` write / `saveWorkspaceConfig` / workspace-history entry (same rule as KB tabs — the dir dies with the Tab so a persisted pointer would dangle); `sendPrompt` pins the run's overlay workspace to `tab.path`; backend deletes all this process's temp dirs on exit and sweeps stale (>24h) `ally-temp-*` leftovers at startup.
+
 Frontend-specific rendering:
 
 - MarkdownIt for Markdown; highlight.js with the Darcula theme and compact line counts for code blocks

@@ -25,6 +25,7 @@ Public License v3. See the LICENSE file for details.
               @close-workspace="closeWorkspaceTab"
               @reorder-workspace="reorderWorkspaceTabs"
               @add-workspace="onHeaderAddWorkspace"
+              @add-temp-workspace="onHeaderAddTempWorkspace"
               @history-select="onHeaderHistorySelect"
               @open-repository="openRepositoryPage"
               @start-update="startUpdate"
@@ -550,6 +551,8 @@ import {
   StopService,
   DeleteSession,
   ReleaseSession,
+  CreateTempWorkspace,
+  DeleteTempWorkspace,
   TruncateSessionHistory,
   SubmitAskResponse,
   SearchWorkspacePaths,
@@ -2141,6 +2144,89 @@ function isKbTab(tab) {
   return tab?.kind === 'kb';
 }
 
+// ── 临时工作空间（temp workspace）──
+// 生命周期随 Tab：目录由后端 CreateTempWorkspace 在系统临时根下创建，
+// Tab 关闭（且后台 run 结束）时删除目录 + 会话。与 KB tab 同模式：
+// 不写入 config.workspace、不进工作区历史，重启后不残留指向已删除
+// 目录的持久化状态。run 未结束时关闭 Tab，清理挂起在 pendingTempCleanups，
+// 等 run 终止事件到达且无其它 Tab 引用同一会话时再执行。
+function isTempTab(tab) {
+  return tab?.kind === 'temp';
+}
+
+// path -> { sessionId }。挂起期间目录继续存在，供后台 run 的工具读写。
+const pendingTempCleanups = new Map();
+
+function tempTabByPath(path) {
+  if (!path) return null;
+  return workspaceTabs.value.find((tab) => isTempTab(tab) && workspaceHistoryDedupeKey(tab.path) === workspaceHistoryDedupeKey(path)) || null;
+}
+
+async function addTempWorkspaceTab() {
+  let dir;
+  try {
+    dir = await CreateTempWorkspace();
+  } catch (err) {
+    message.error(t('temp.createFailed', { error: err }));
+    return;
+  }
+  if (!dir) return;
+  mode.value = 'chat';
+  const tab = createWorkspaceTab(dir);
+  tab.kind = 'temp';
+  tab.label = t('temp.tabLabel');
+  workspaceTabs.value.push(tab);
+  await switchWorkspaceTab(tab.id);
+}
+
+// 删除临时目录并从会话列表移除关联会话。目录删除由后端护栏保护。
+async function destroyTempWorkspace(path, sessionId) {
+  if (sessionId) {
+    const idx = sessions.value.findIndex((session) => session.id === sessionId);
+    if (idx >= 0) {
+      const target = sessions.value[idx];
+      releaseSessionAttachments(target);
+      delete todosBySession[target.id];
+      delete todoRevisionsBySession[target.id];
+      delete planPanelCollapsedBySession[target.id];
+      delete sessionPromptTexts[target.id];
+      deletePendingAttachments(target.id);
+      displayMessagesCacheBySession.delete(target.id);
+      sessions.value.splice(idx, 1);
+    }
+    // DeleteSession = release + 删除持久化历史（后端会话记录随临时 Tab 销毁）。
+    // 排入会话串行写队列：run:done 路径里 persistCompletedSession 的
+    // SaveSession 已在同队列排队，串行化保证删除不会先于快照写入执行
+    // （否则后端会为已删目录重建一个孤儿会话条目）。
+    enqueueSessionWrite(() => DeleteSession(sessionId)).catch(() => {});
+  }
+  try {
+    await DeleteTempWorkspace(path);
+  } catch (err) {
+    // 目录删除失败不影响会话满理；残留自下次启动的陈旧清理回收。
+    console.warn('temp workspace delete failed:', err);
+  }
+  // 按路径键控的 localStorage 残留（提示词历史 / 资源树开关）一并清理，
+  // 避免随机目录路径永久占localStorage 配额。
+  try {
+    localStorage.removeItem(workspaceHistoryKey(path));
+    delete explorerClosedWorkspaces[workspaceHistoryDedupeKey(path)];
+    persistExplorerClosedWorkspaces();
+  } catch (_) { /* ignore */ }
+}
+
+// run 终止事件（done/error/cancelled）后检查挂起清理：目录对应会话已无
+// Tab 引用且不再运行时，删除目录与会话。
+function settlePendingTempCleanups() {
+  for (const [path, pending] of [...pendingTempCleanups.entries()]) {
+    if (tempTabByPath(path)) continue; // 另一个同路径 Tab 又建起来了
+    const session = pending.sessionId ? sessions.value.find((item) => item.id === pending.sessionId) : null;
+    if (sessionMayHaveBackgroundRun(session)) continue;
+    pendingTempCleanups.delete(path);
+    void destroyTempWorkspace(path, pending.sessionId);
+  }
+}
+
 // True when a workspace path IS the configured KB root. Used to shape the
 // welcome message and KB-specific behavior at build time.
 function isKnowledgeBasePath(path) {
@@ -2256,10 +2342,11 @@ const activeTabIsKb = computed(() => (
 ));
 
 // Workspace path shown in the composer info bar: the KB tab shows the
-// configured KB root instead of the shared chat workspace.
+// configured KB root instead of the shared chat workspace; the temp tab
+// shows its own ephemeral directory.
 const activeComposerWorkspace = computed(() => {
   const tab = workspaceTabs.value.find((item) => item.id === activeWorkspaceId.value);
-  return (isKbTab(tab) ? tab.path : config.workspace) || '';
+  return (isKbTab(tab) || isTempTab(tab) ? tab.path : config.workspace) || '';
 });
 
 // Canned KB actions on the toolbar above the composer: drop the prompt into
@@ -2375,6 +2462,10 @@ function onHeaderSwitchWorkspace(id) {
 function onHeaderAddWorkspace() {
   mode.value = 'chat';
   addWorkspaceTab();
+}
+
+function onHeaderAddTempWorkspace() {
+  addTempWorkspaceTab();
 }
 
 function onHeaderHistorySelect(key) {
@@ -3101,6 +3192,30 @@ const historyOptions = computed(() => {
         },
       ),
   },
+  {
+    key: '__temp__',
+    props: {
+      class: 'add-workspace-option',
+    },
+    label: () =>
+      h(
+        NButton,
+        {
+          size: 'small',
+          type: 'default',
+          block: true,
+          title: t('header.tempWorkspaceHint'),
+          style: { color: 'var(--ally-accent)', textAlign: 'left', justifyContent: 'flex-start', border: 'none', background: 'transparent' },
+        },
+        {
+          default: () => [
+            h('span', { class: 'add-label', style: { justifyContent: 'flex-start', width: '100%', display: 'flex', alignItems: 'center', gap: '6px' } }, [
+              h('span', null, t('header.tempWorkspace')),
+            ]),
+          ],
+        },
+      ),
+  },
   ...(recent.length === 0
     ? [{ label: t('app.history.empty'), disabled: true, key: '__empty__' }]
     : recent.map((path) => {
@@ -3136,6 +3251,10 @@ const historyOptions = computed(() => {
 
 function onHistorySelect(key) {
   if (!key || key === '__empty__') return;
+  if (key === '__temp__') {
+    addTempWorkspaceTab();
+    return;
+  }
   const tab = createWorkspaceTab(key);
   workspaceTabs.value.push(tab);
   switchWorkspaceTab(tab.id);
@@ -3275,7 +3394,8 @@ async function applySessionWorkspace(session) {
 
   const tab = bindSessionToActiveWorkspaceTab(session);
   const tabIsKb = isKbTab(tab);
-  if (tab && !tabIsKb) {
+  const tabIsTemp = isTempTab(tab);
+  if (tab && !tabIsKb && !tabIsTemp) {
     if (workspace) {
       tab.path = workspace;
       tab.label = workspaceLabel(workspace);
@@ -3291,16 +3411,16 @@ async function applySessionWorkspace(session) {
   }
 
   prepareFooterStatsForTarget(activeWorkspaceId.value, workspace);
-  // KB sessions never claim the persisted chat workspace or the workspace
-  // history list: they live entirely under the configured KB root.
-  if (!tabIsKb) {
+  // KB / temp sessions never claim the persisted chat workspace or the
+  // workspace history list: the temp dir is ephemeral and dies with its Tab.
+  if (!tabIsKb && !tabIsTemp) {
     config.workspace = workspace;
     configDraft.workspace = workspace;
     addToHistory(workspace);
   }
   loadPromptHistory(workspace);
   try {
-    if (!tabIsKb) await saveWorkspaceConfig({ ...config });
+    if (!tabIsKb && !tabIsTemp) await saveWorkspaceConfig({ ...config });
     await refreshFooterStats({
       tabId: activeWorkspaceId.value,
       sessionId: session.id,
@@ -3454,10 +3574,23 @@ async function closeWorkspaceTab(id) {
   planPanelListRefsByTab.delete(id);
   workspaceTabs.value.splice(idx, 1);
   conversationMessagesRefs.delete(id);
+  // 临时工作空间：目录与会话随 Tab 销毁。后台 run 仍需目录时挂起清理，
+  // 待 run 终止事件后由 settlePendingTempCleanups 执行。
+  if (isTempTab(tab)) {
+    const linkedSession = tab.sessionId ? sessions.value.find(s => s.id === tab.sessionId) || null : null;
+    if (sessionMayHaveBackgroundRun(linkedSession)) {
+      pendingTempCleanups.set(tab.path, { sessionId: tab.sessionId || '' });
+    } else {
+      void destroyTempWorkspace(tab.path, tab.sessionId || '');
+    }
+  }
   // Release the linked session's backend resources but keep it in the session
   // list so it remains accessible via /sessions. The session's workspace is
   // preserved via session.workspace / inferSessionWorkspace.
-  if (tab && tab.sessionId) {
+  // Temp tabs skip this block: destroyTempWorkspace already performed the full
+  // teardown (session removal + DeleteSession) or deferred it via
+  // pendingTempCleanups until the background run ends.
+  if (tab && tab.sessionId && !isTempTab(tab)) {
     const linkedSession = sessions.value.find(s => s.id === tab.sessionId) || null;
     // A closed Tab does not cancel its background run. Keep all session-local
     // UI/backend state until that run actually finishes.
@@ -3491,6 +3624,7 @@ async function switchWorkspaceTab(id) {
   const tab = workspaceTabs.value.find((t) => t.id === id);
   if (!tab) return;
   const tabIsKb = isKbTab(tab);
+  const tabIsTemp = isTempTab(tab);
   if (!workspaceExplorerByTab.has(id)) workspaceExplorerByTab.set(id, explorerDefaultForPath(tab.path));
   const switchVersion = ++workspaceSwitchVersion;
   const linkedSession = ensureWorkspaceTabSession(tab);
@@ -3504,8 +3638,10 @@ async function switchWorkspaceTab(id) {
   commandHistoryIndex.value = -1;
   // The hidden KB tab never owns the persisted chat workspace: config.json's
   // workspace must keep pointing at the last chat workspace so a restart
-  // restores chat mode, and the workspace history stays chat-only.
-  if (!tabIsKb) {
+  // restores chat mode, and the workspace history stays chat-only. The temp
+  // tab follows the same rule — its directory is deleted with the Tab, so a
+  // persisted pointer would dangle after restart.
+  if (!tabIsKb && !tabIsTemp) {
     config.workspace = tab.path;
     configDraft.workspace = tab.path;
   }
@@ -3523,7 +3659,7 @@ async function switchWorkspaceTab(id) {
   // request overlay.
   ensureTabModel(tab);
   try {
-    if (!tabIsKb) await saveWorkspaceConfig({ ...config });
+    if (!tabIsKb && !tabIsTemp) await saveWorkspaceConfig({ ...config });
   } catch (err) {
     if (workspaceSwitchVersion === switchVersion) {
       footerStatsLoading.value = false;
@@ -3565,13 +3701,14 @@ async function switchWorkspaceTab(id) {
 
 function syncConfigToActiveTab() {
   const tab = workspaceTabs.value.find((t) => t.id === activeWorkspaceId.value);
-  // The hidden KB tab does not mirror the persisted chat workspace.
-  if (tab && !isKbTab(tab) && config.workspace !== tab.path) {
+  // The hidden KB tab and the temp tab do not mirror the persisted chat
+  // workspace.
+  if (tab && !isKbTab(tab) && !isTempTab(tab) && config.workspace !== tab.path) {
     tab.path = config.workspace || '';
     tab.label = workspaceLabel(tab.path);
   }
   const session = activeSession.value;
-  if (session && config.workspace && !isKbTab(tab)) session.workspace = config.workspace;
+  if (session && config.workspace && !isKbTab(tab) && !isTempTab(tab)) session.workspace = config.workspace;
 }
 
 function newSession(title) {
@@ -3579,7 +3716,7 @@ function newSession(title) {
   const id = crypto.randomUUID ? crypto.randomUUID() : `s-${Date.now()}-${Math.random()}`;
   const now = Date.now();
   const activeTab = workspaceTabs.value.find((item) => item.id === activeWorkspaceId.value) || null;
-  const workspace = (isKbTab(activeTab) ? activeTab.path : config.workspace) || '';
+  const workspace = (isKbTab(activeTab) || isTempTab(activeTab) ? activeTab.path : config.workspace) || '';
   const sessionTitle = title || (workspace ? workspaceLabel(workspace) : t('app.sessions.new'));
   const session = { id, title: sessionTitle, isDefault: true, workspace, extraRoots: [], messages: [], messagesLoaded: true, runId: '', isRunning: false, createdAt: now, updatedAt: now };
   sessions.value.unshift(session);
@@ -4388,6 +4525,8 @@ function bindRuntimeEvents() {
     if (String(session.workspace || '') === String(config.workspace || '')) refreshGitStatus();
     finalizeRunTerminal(session, data, { variant: 'done' });
     if (session.id === activeSessionId.value) refreshContextTokens(session.id);
+    // 临时工作空间挂起清理：run 终态落地（runId 已清）后才可安全删除目录与会话。
+    settlePendingTempCleanups();
   });
   onRuntimeEvent('run:error', (data) => {
     flushStreamBuffer(data.runId);
@@ -4406,6 +4545,7 @@ function bindRuntimeEvents() {
     if (session.id === activeSessionId.value) refreshContextTokens(session.id);
     // 后台 Tab 的会话出错结束前可能已修改工作区文件，Git 统计同样要刷新。
     if (String(session.workspace || '') === String(config.workspace || '')) refreshGitStatus();
+    settlePendingTempCleanups();
   });
   onRuntimeEvent('run:cancelled', (data) => {
     flushStreamBuffer(data.runId);
@@ -4424,6 +4564,7 @@ function bindRuntimeEvents() {
     if (session.id === activeSessionId.value) refreshContextTokens(session.id);
     // 后台 Tab 的会话被取消前可能已修改工作区文件，Git 统计同样要刷新。
     if (String(session.workspace || '') === String(config.workspace || '')) refreshGitStatus();
+    settlePendingTempCleanups();
   });
   // Compaction progress. Both manual /compact and in-run auto-compaction
   // stream compact:start / compact:progress events; state is keyed per
@@ -5254,9 +5395,10 @@ async function sendPrompt(opts) {
   if (!text && attachments.length === 0) return;
 
   // The workspace this prompt runs against: the hidden KB tab pins its own
-  // root, every other session follows the persisted chat workspace.
+  // root, the temp tab pins its ephemeral dir, every other session follows
+  // the persisted chat workspace.
   const activeTab = workspaceTabs.value.find((item) => item.id === activeWorkspaceId.value) || null;
-  const sessionWorkspace = (isKbTab(activeTab) ? activeTab.path : config.workspace) || '';
+  const sessionWorkspace = (isKbTab(activeTab) || isTempTab(activeTab) ? activeTab.path : config.workspace) || '';
 
   // Resolve command: display label in UI, send expanded text to backend
   const matchedCommand = text.startsWith('/')

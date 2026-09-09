@@ -101,6 +101,7 @@
 - biz_modellist.go — 调 OpenAI 标准 GET /models 返回模型 ID 列表（走代理、15s 超时、8MB 上限）；关键: FetchModelList
 - biz_api.go — 对外本地 HTTP API 服务（v1）：~/.ally_agent/api.json 持久化端口/token、仅绑定 127.0.0.1、Bearer 常量时间鉴权、每次启动默认关闭（开关是运行时态，随 a.ctx 取消自动停止）、28 个端点薄封装既有绑定（会话列表/创建/状态/结果/消息快照/待办/发消息/取消/压缩/删除、模型列表脱敏/新建更新/激活、MCP 查询/更新应用、skill 列表/内容/启停、工具清单/子代理/工作区、后台服务列表/输出/停止、计划任务列表/删除）；关键: startApiListener, stopApiListener, apiAuthMiddleware, apiMux, GetApiServiceState, SaveApiSettings, SetApiServiceEnabled
 - biz_stats.go — 异步 Token 统计：有界非阻塞队列、按天落盘 `stats/<date>.json`（90 天保留、备份恢复）、聚合查询；关键: statsRecorder, recordTokenStats, GetTokenStats
+- biz_temp_workspace.go — 临时工作空间：`os.MkdirTemp("", "ally-temp-*")` 创建随 Tab 生命周期的沙箱目录、双护栏删除（临时根直接子目录+前缀，越界 E_TEMP_WORKSPACE_INVALID）、进程退出清理与启动扫描 >24h 陈旧残留；关键: CreateTempWorkspace, DeleteTempWorkspace, cleanupTempWorkspacesOnExit, cleanupStaleTempWorkspaces
 - biz_update.go — 应用自更新：Atom 发布检查、平台资产下载、暂存校验、Windows/macOS 原子应用与回滚、跳过版本；关键: CheckForUpdates, DownloadUpdate, ApplyUpdate, rollbackReplacedResources
 - biz_workspacedir_windows.go — Windows 默认工作区（SHGetKnownFolderPath Documents，尊重 OneDrive 重定向）
 - biz_workspacedir_other.go — macOS/Linux 默认工作区（~/Documents、XDG user-dirs）
@@ -121,6 +122,7 @@
 - biz_mcp_test.go — 测试 MCP schema 归一化/函数名/排序/invalid session
 - biz_api_test.go — 测试 API 鉴权（401/常量 token）、会话创建/列表/状态/排队注入/取消、模型脱敏与新建更新、真实 listener 生命周期
 - biz_stats_test.go — 测试 token 统计聚合/落盘/备份/淘汰（16 例）
+- biz_temp_workspace_test.go — 测试临时工作空间创建/删除幂等/护栏拒绝（越界路径返回 E_TEMP_WORKSPACE_INVALID 且诱饵目录原样保留）/退出清理/陈旧清理（fresh 与外来目录不动）
 - biz_update_atom_test.go / biz_update_rollback_test.go — 测试 Atom 解析与回滚
 
 ## internal/app/ — orch_ 前缀（工具编排：绑定纯算法到 App 状态）
