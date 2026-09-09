@@ -16,7 +16,10 @@ Public License v3. See the LICENSE file for details.
        through the `save` emit (App.vue onSettingsSave). -->
   <div class="config-inline-panel">
     <header class="config-inline-header">
-      <span class="config-inline-title">{{ t('app.mode.models') }}</span>
+      <div class="panel-header-copy">
+        <span class="config-inline-title">{{ t('app.mode.models') }}</span>
+        <span class="config-inline-subtitle">{{ t('settings.modelsSubtitle') }}</span>
+      </div>
       <div class="panel-header-actions">
         <n-button size="small" secondary @click="openModelImport">{{ t('settings.modelImport') }}</n-button>
         <n-button size="small" secondary :disabled="!draft.models?.length" @click="exportModelConfigs">{{ t('settings.modelExport') }}</n-button>
@@ -25,21 +28,6 @@ Public License v3. See the LICENSE file for details.
     </header>
 
     <div class="panel-scroll-body">
-      <div class="config-section-header">
-        <div>
-          <div class="config-section-title">{{ t('settings.modelsTitle') }}</div>
-          <div class="config-section-subtitle">{{ t('settings.modelsSubtitle') }}</div>
-        </div>
-      </div>
-
-      <input
-        ref="modelImportInput"
-        class="model-import-input"
-        type="file"
-        accept="application/json,.json"
-        @change="importModelConfigs"
-      />
-
       <div class="current-model-panel">
         <div class="current-model-main">
           <div class="current-model-label">{{ t('settings.modelCurrent') }}</div>
@@ -52,6 +40,15 @@ Public License v3. See the LICENSE file for details.
           <span>context {{ draft.contextWindow || '-' }}</span>
         </div>
       </div>
+
+      <input
+        v-show="false"
+        ref="modelImportInput"
+        class="model-import-input"
+        type="file"
+        accept="application/json,.json"
+        @change="importModelConfigs"
+      />
 
       <n-tabs
         v-if="providerTabs.length"
@@ -885,6 +882,19 @@ watch(
   min-height: 0;
   overflow-y: auto;
   padding: 16px 24px 28px;
+}
+
+/* 页头标题+副标题：与 Skills/MCP 面板同构，副标题紧贴标题下方。 */
+.panel-header-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.config-inline-subtitle {
+  font-size: 12px;
+  color: var(--ally-text-muted);
 }
 
 /* 页头操作按钮组：与 Skills/MCP 面板同构（导入→导出→添加，主色最后）。 */

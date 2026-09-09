@@ -16,13 +16,15 @@ Public License v3. See the LICENSE file for details.
        knowledge base, fully decoupled from the Settings panel. -->
   <div class="config-inline-panel">
     <header class="config-inline-header">
-      <span class="config-inline-title">{{ t('app.mode.skills') }}</span>
+      <div class="panel-header-copy">
+        <span class="config-inline-title">{{ t('app.mode.skills') }}</span>
+        <span class="config-inline-subtitle">{{ t('app.skills.subtitle', { enabled: activeSkillNames.length, available: availableSkills.length }) }}</span>
+      </div>
       <n-button size="small" secondary :loading="skillsLoading" @click="refreshSkillState">{{ t('common.refresh') }}</n-button>
     </header>
 
     <div class="panel-scroll-body">
       <div class="config-section-subtitle skill-summary-row">
-        {{ t('settings.skillsSummary', { enabled: activeSkillNames.length, available: availableSkills.length }) }}
         <span
           v-for="s in skillSourceCounts"
           :key="s.source"
@@ -316,6 +318,19 @@ watch(
   text-transform: none;
   letter-spacing: 0;
   font-size: 10px;
+}
+
+/* 页头标题+副标题：与 MCP/Models 面板同构，副标题紧贴标题下方。 */
+.panel-header-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.config-inline-subtitle {
+  font-size: 12px;
+  color: var(--ally-text-muted);
 }
 
 /* 来源徽标点击过滤：激活时描边高亮，右侧提供显式的清除入口 */
