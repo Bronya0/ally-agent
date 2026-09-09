@@ -23,13 +23,28 @@ Public License v3. See the LICENSE file for details.
     <div class="panel-scroll-body">
       <div class="config-section-subtitle skill-summary-row">
         {{ t('settings.skillsSummary', { enabled: activeSkillNames.length, available: availableSkills.length }) }}
-        <span v-for="s in skillSourceCounts" :key="s.source" :class="['skill-badge', s.source]">{{ s.source }} {{ s.count }}</span>
+        <span
+          v-for="s in skillSourceCounts"
+          :key="s.source"
+          :class="['skill-badge', 'skill-filter-badge', s.source, { active: activeSourceFilter === s.source }]"
+          :title="t('app.skills.filterHint')"
+          role="button"
+          :aria-pressed="activeSourceFilter === s.source"
+          @click="toggleSourceFilter(s.source)"
+        >{{ s.source }} {{ s.count }}</span>
+        <span
+          v-if="activeSourceFilter"
+          class="skill-filter-clear"
+          role="button"
+          @click="clearSourceFilter"
+        >{{ t('app.skills.filterClear') }}</span>
       </div>
 
       <div class="skill-settings-list">
         <div v-if="skillsLoading && !availableSkills.length" class="saved-model-empty">{{ t('settings.skillsLoading') }}</div>
         <div v-else-if="!availableSkills.length" class="saved-model-empty">{{ t('settings.skillsEmpty') }}</div>
-        <div v-for="sk in sortedSkills" :key="`${sk.source || 'skill'}:${sk.name}`" :class="['skill-settings-item', { active: isSkillActive(sk.name, activeSkillNames), builtin: sk.source === 'builtin' }]">
+        <div v-else-if="!filteredSkills.length" class="saved-model-empty">{{ t('app.skills.filterEmpty') }}</div>
+        <div v-for="sk in filteredSkills" :key="`${sk.source || 'skill'}:${sk.name}`" :class="['skill-settings-item', { active: isSkillActive(sk.name, activeSkillNames), builtin: sk.source === 'builtin' }]">
           <div class="skill-settings-main">
             <div class="skill-title-row">
               <span class="skill-name">{{ sk.name }}</span>
@@ -89,9 +104,25 @@ const skillSourceCounts = computed(() => {
   return Object.entries(counts).map(([source, count]) => ({ source, count }));
 });
 
-// Sort skills: built-in skills first (always enabled), then others alphabetically
-const sortedSkills = computed(() => {
-  return [...availableSkills.value].sort((a, b) => {
+// 来源过滤：点击来源徽标只显示该来源的技能，再次点击或点“清除过滤”恢复全部。
+const activeSourceFilter = ref('');
+
+function toggleSourceFilter(source) {
+  activeSourceFilter.value = activeSourceFilter.value === source ? '' : source;
+}
+
+function clearSourceFilter() {
+  activeSourceFilter.value = '';
+}
+
+// Sort skills: built-in skills first (always enabled), then others alphabetically;
+// the active source filter (if any) is applied before sorting.
+const filteredSkills = computed(() => {
+  const source = activeSourceFilter.value;
+  const list = source
+    ? availableSkills.value.filter((sk) => (sk.source || 'unknown') === source)
+    : availableSkills.value;
+  return [...list].sort((a, b) => {
     const aBuiltin = a.source === 'builtin';
     const bBuiltin = b.source === 'builtin';
     if (aBuiltin && !bBuiltin) return -1;
@@ -272,6 +303,33 @@ watch(
   text-transform: none;
   letter-spacing: 0;
   font-size: 10px;
+}
+
+/* 来源徽标点击过滤：激活时描边高亮，右侧提供显式的清除入口 */
+.skill-filter-badge {
+  cursor: pointer;
+  user-select: none;
+  transition: filter 0.12s ease, box-shadow 0.12s ease;
+}
+
+.skill-filter-badge:hover {
+  filter: brightness(1.2);
+}
+
+.skill-filter-badge.active {
+  box-shadow: inset 0 0 0 1.5px var(--ally-accent, #63e2b7);
+}
+
+.skill-filter-clear {
+  cursor: pointer;
+  user-select: none;
+  font-size: 10px;
+  color: var(--ally-text-muted);
+}
+
+.skill-filter-clear:hover {
+  color: var(--ally-accent, #63e2b7);
+  text-decoration: underline;
 }
 
 .skill-badge.user {
