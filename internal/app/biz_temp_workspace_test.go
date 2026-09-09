@@ -11,7 +11,6 @@ package app
 import (
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -76,26 +75,17 @@ func TestDeleteTempWorkspaceRejectsInvalidPaths(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// 拒绝用例只使用测试沙箱内或不存在的路径：护栏是纯词法校验，不依赖
+	// 目标存在。绝不把真实系统路径（C:\Windows、/etc 等）或会解析到沙箱外的
+	// 路径喂给一个底层是 os.RemoveAll 的函数——护栏一旦回归，那种用例会
+	// 把测试变成对真实路径的删除尝试。
 	invalid := []string{
 		"",
 		"   ",
 		filepath.Join(root, "not-ally-temp"),
 		filepath.Join(root, "ally-temp-x", "nested"),
-		filepath.Join(root, "..", "ally-temp-x"),
 		filepath.Join(decoyHome, "ally-temp-evil"),
 		"ally-temp-relative",
-	}
-	if runtime.GOOS == "windows" {
-		invalid = append(invalid,
-			`C:\Windows\ally-temp-x`,
-			`C:\Windows\System32\ally-temp-x`,
-		)
-	} else {
-		invalid = append(invalid,
-			"/etc/ally-temp-x",
-			"/usr/ally-temp-x",
-			"/tmp/../etc/ally-temp-x",
-		)
 	}
 	for _, path := range invalid {
 		if err := a.DeleteTempWorkspace(path); err == nil {
