@@ -343,7 +343,7 @@ Built-in model-facing tools:
 
 | Tool | Purpose |
 |------|---------|
-| `list_files` | List files/directories with depth and limit controls |
+| `list_files` | List files/directories (bounded depth/limit, `includeHidden`/`includeIgnored` filters) |
 | `read` | Read one or many local files; text returns numbered line previews; only plain text and images are supported |
 | `edit` | Atomically apply exact-source or whole-line-range replacements to local files; after writing, returns a concise `validation` string with low-cost language checks |
 | `create` | Create/overwrite text files; after writing, returns a concise `validation` string with low-cost language checks |

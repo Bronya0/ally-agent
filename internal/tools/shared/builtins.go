@@ -16,8 +16,8 @@ import (
 )
 
 const (
-	maxWaitSeconds    = 3600
-	maxHTTPBodyBytes  = 50 * 1024 * 1024
+	maxWaitSeconds = 3600
+	// MaxReadRangeLines bounds the read tool's per-file line range.
 	MaxReadRangeLines = 10000
 	MaxReadLineChars  = 2000
 	// maxDelegateStepBudget bounds the subagent maxSteps parameter. Kept in
@@ -47,12 +47,10 @@ func Builtins() []openai.Tool {
 
 func chatToolsUncached() []openai.Tool {
 	return []openai.Tool{
-		functionTool("list_files", "List files and directories within a workspace path. Directories end with '/'.", map[string]any{
+		functionTool("list_files", "List files and directories within a workspace path. Directories end with '/'. Depth and entry count are bounded automatically; when the result is truncated, narrow the path instead of asking for more entries.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"path":           map[string]any{"type": "string", "description": "Workspace-relative directory path, or explicit absolute path for read-only listing. Empty means workspace root."},
-				"maxDepth":       map[string]any{"type": "integer", "minimum": 1, "maximum": 50, "description": "Maximum recursion depth. Default 3, max 50."},
-				"limit":          map[string]any{"type": "integer", "minimum": 1, "maximum": 1000, "description": "Maximum entries returned. Default 200, max 1000. Check truncated."},
 				"includeHidden":  map[string]any{"type": "boolean", "description": "Include dotfiles and dot-directories; VCS internals like .git are always excluded. Default false."},
 				"includeIgnored": map[string]any{"type": "boolean", "description": "Include gitignored paths and dependency directories such as node_modules, __pycache__; VCS internals like .git are always excluded. Default false."},
 			},
@@ -93,15 +91,14 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"path"},
 		}),
-		functionTool("command", "Run a shell command with cwd confined to the workspace. On Windows the shell is Git Bash when available, otherwise PowerShell; on macOS/Linux, bash. Commands may inspect outside paths, redirect to null devices, and create new outside paths; modifying/deleting existing outside paths, explicit deletion commands, unsafe cwd symlinks, and long-running services are refused. On E_PATH_OUTSIDE, read the returned reason and switch target rather than retrying unchanged. Output size: fullOutput:false (recommended default) returns only the last 3 lines plus a signal line with exitCode and total line count; fullOutput:true returns the complete output. Rule of thumb: will you read the output itself as the answer (git status/diff/log, ls, cat, grep, failure diagnosis)? true. Only checking success/failure (build, install, test)? false. exitCode is always a field, and when the output was trimmed its full content is saved to outputFilePath (readable via read), so never re-run a side-effecting command just to see more output. When output exceeds the capture limit it is truncated and `outputFilePath` points to the full output.", map[string]any{
+		functionTool("command", "Run a shell command with cwd confined to the workspace. On Windows the shell is Git Bash when available, otherwise PowerShell; on macOS/Linux, bash. Commands may inspect outside paths, redirect to null devices, and create new outside paths; modifying/deleting existing outside paths, explicit deletion commands, unsafe cwd symlinks, and long-running services are refused. On E_PATH_OUTSIDE, read the returned reason and switch target rather than retrying unchanged. When output exceeds the capture limit it is truncated and `outputFilePath` points to the full output (readable via read), so never re-run a side-effecting command just to see more output; pipe through tail/head yourself when you only need part of a large output.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"command":    map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*"},
-				"cwd":        map[string]any{"type": "string", "description": "Relative working directory. Empty means workspace root."},
-				"timeout":    map[string]any{"type": "integer", "minimum": 1, "maximum": 600, "description": "Timeout in seconds. Default 120, max 600."},
-				"fullOutput": map[string]any{"type": "boolean", "description": "Required decision. true if you will read the output itself as the answer (git status/diff/log, ls, cat, grep, failure diagnosis); false if you only check success/failure (build, install, test) — the last 3 lines plus exitCode suffice. When false the model receives only the last 3 lines plus a signal line with exitCode and total line count; set true to inline the complete output."},
+				"command": map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*"},
+				"cwd":     map[string]any{"type": "string", "description": "Relative working directory. Empty means workspace root."},
+				"timeout": map[string]any{"type": "integer", "minimum": 1, "maximum": 600, "description": "Timeout in seconds. Default 120, max 600."},
 			},
-			"required": []string{"command", "fullOutput"},
+			"required": []string{"command"},
 		}),
 		functionTool("service", "Run, inspect, and stop long-running local processes (dev servers, workers) without blocking the agent loop. action=start launches a process and returns its id; list shows tracked services including the most recent finished ones (status exited/stopped, with exitCode and error — read their final output to diagnose why a service died); read returns a bounded output tail (default 8 KiB, max 32 KiB) and works on finished services too; stop first tries graceful termination for a grace window (default 3s), then force kills the whole process tree and reports which happened in the result error field. Use list/read sparingly (no polling loops); prefer a single read after a concrete condition (e.g. wait + read). Error codes: E_BAD_COMMAND, E_SERVICE_LIMIT, E_BAD_BACKGROUND_ACTION, E_BAD_SERVICE_ID, E_SERVICE_NOT_FOUND.", map[string]any{
 			"type": "object",
@@ -189,8 +186,7 @@ func chatToolsUncached() []openai.Tool {
 				"query":              map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}, "description": "Query parameters merged into the URL."},
 				"body":               map[string]any{"type": "string", "description": "Raw request body. Mutually exclusive with json."},
 				"json":               jsonValueSchema("JSON value to encode as the request body. Sets Content-Type to application/json unless provided."),
-				"saveTo":             map[string]any{"type": "string", "description": "Optional workspace-relative download path. Parent directories are created automatically."},
-				"maxBytes":           map[string]any{"type": "integer", "minimum": 1, "maximum": maxHTTPBodyBytes, "description": "Maximum decoded response bytes. Default 262144; use saveTo for large downloads."},
+				"saveTo": map[string]any{"type": "string", "description": "Optional workspace-relative download path for large responses; parent directories are created automatically."},
 				"timeout":            map[string]any{"type": "integer", "minimum": 1, "maximum": 120, "description": "Request timeout in seconds. Default 60, max 120."},
 				"insecureSkipVerify": map[string]any{"type": "boolean", "description": "Skip TLS verification. Default false; only for debugging or trusted self-signed services."},
 			},
@@ -201,9 +197,7 @@ func chatToolsUncached() []openai.Tool {
 			"type": "object",
 			"properties": map[string]any{
 				"url":                map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Absolute http:// or https:// URL."},
-				"format":             map[string]any{"type": "string", "enum": []string{"readable", "raw"}, "description": "Output mode. readable (default): Readability-extracted main-content text. raw: bounded page source without extraction (still capped by maxBytes/maxChars), not byte-exact; use when readable fails (E_WEB_FETCH_EXTRACT) or source markup matters."},
-				"maxBytes":           map[string]any{"type": "integer", "minimum": 1, "maximum": maxHTTPBodyBytes, "description": "Maximum decoded source bytes read before text extraction. Default 2097152."},
-				"maxChars":           map[string]any{"type": "integer", "minimum": 1, "maximum": 200000, "description": "Maximum readable text characters. Default 60000, max 200000."},
+				"format":             map[string]any{"type": "string", "enum": []string{"readable", "raw"}, "description": "Output mode. readable (default): Readability-extracted main-content text. raw: bounded page source without extraction, not byte-exact; use when readable fails (E_WEB_FETCH_EXTRACT) or source markup matters."},
 				"timeout":            map[string]any{"type": "integer", "minimum": 1, "maximum": 120, "description": "Request timeout in seconds. Default 60, max 120."},
 				"insecureSkipVerify": map[string]any{"type": "boolean", "description": "Skip TLS verification. Default false; only for debugging or trusted self-signed services."},
 			},
@@ -251,17 +245,16 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"target", "path"},
 		}),
-		functionTool("remote_run_command", "Run a non-interactive shell command on a remote SSH workspace. Set fullOutput:true to inspect output, false for build/test status.", map[string]any{
+		functionTool("remote_run_command", "Run a non-interactive shell command on a remote SSH workspace.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"target":         map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Explicit SSH target plus workspace root, e.g. my-dev:/srv/app."},
-				"command":        map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*"},
-				"cwd":            map[string]any{"type": "string", "description": "Working directory inside the remote workspace. Relative to the workspace root; an absolute path equal to or under the root is also accepted and rebased. Empty means workspace root."},
-				"timeout":        map[string]any{"type": "integer", "minimum": 1, "maximum": 600, "description": "Timeout in seconds. Default 120, max 600."},
-				"shell":          map[string]any{"type": "string", "description": "Remote shell executable. Default /bin/bash if available, otherwise /bin/sh."},
-				"fullOutput":     map[string]any{"type": "boolean", "description": "Required decision. true if you will read the output itself as the answer (git status/diff/log, ls, find, cat, grep, failure diagnosis); false if you only check success/failure — the last 3 lines plus exitCode suffice."},
+				"target":  map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Explicit SSH target plus workspace root, e.g. my-dev:/srv/app."},
+				"command": map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*"},
+				"cwd":     map[string]any{"type": "string", "description": "Working directory inside the remote workspace. Relative to the workspace root; an absolute path equal to or under the root is also accepted and rebased. Empty means workspace root."},
+				"timeout": map[string]any{"type": "integer", "minimum": 1, "maximum": 600, "description": "Timeout in seconds. Default 120, max 600."},
+				"shell":   map[string]any{"type": "string", "description": "Remote shell executable. Default /bin/bash if available, otherwise /bin/sh."},
 			},
-			"required": []string{"target", "command", "fullOutput"},
+			"required": []string{"target", "command"},
 		}),
 		functionTool("ssh_credential", "Store, clear, or list SSH credentials for remote_* tools, in memory only. action=set takes the target (user@host or ssh://…) plus either a password (only when the user typed one into the chat — copy it verbatim) or keyPath (a local private key file such as a .pem the user named). remote_* calls then authenticate automatically. Never invent, guess, or repeat a password or key path; never use credentials for hosts the user did not provide them for. Credentials expire after 12h.", map[string]any{
 			"type": "object",
@@ -273,16 +266,13 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"action"},
 		}),
-		functionTool("grep", "Search UTF-8 file contents with ripgrep. Default outputMode `lines` returns matching line numbers grouped by file (no line content); `count_matches` returns exact per-file counts.", map[string]any{
+		functionTool("grep", "Search UTF-8 file contents with ripgrep. Default outputMode `lines` returns matching line numbers grouped by file (no line content); `count_matches` returns exact per-file counts. Result size is bounded automatically; paginate with `offset`/`nextOffset` or narrow path/glob instead of asking for more entries.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"pattern":        map[string]any{"type": "string", "minLength": 1, "pattern": `.*\S.*`, "description": "Search regex pattern."},
 				"outputMode":     map[string]any{"type": "string", "enum": []string{"lines", "count_matches"}, "description": "Output shape: lines (default, line numbers only) or count_matches."},
 				"path":           map[string]any{"type": "string", "description": "Subdirectory or explicit absolute path. Empty means workspace root."},
 				"glob":           map[string]any{"type": "string", "description": "Optional glob filter, e.g. *.go or frontend/**/*.vue."},
-				"maxFiles":       map[string]any{"type": "integer", "minimum": 1, "maximum": 1000, "description": "Max matching file groups in lines mode, default 50."},
-				"maxMatches":     map[string]any{"type": "integer", "minimum": 1, "maximum": 5000, "description": "Max matching lines collected, default maxFiles*10."},
-				"maxDepth":       map[string]any{"type": "integer", "minimum": 1, "maximum": 100, "description": "Max directory depth, default 20."},
 				"timeout":        map[string]any{"type": "integer", "minimum": 1, "maximum": 120, "description": "Timeout in seconds, default 30."},
 				"includeIgnored": map[string]any{"type": "boolean", "description": "Include files ignored by .gitignore/.ignore. Default false."},
 				"caseSensitive":  map[string]any{"type": "boolean", "description": "Match case exactly. Default false (case-insensitive)."},
@@ -382,14 +372,14 @@ func chatToolsUncached() []openai.Tool {
 
 var builtinToolExamples = map[string]string{
 	"edit":               `{"path":"app.go","version":"9k3m7x","changes":[{"oldText":"const oldName = oldValue","newText":"const newName = newValue"}]}; lineRange: {"path":"app.go","version":"9k3m7x","changes":[{"lineRange":"40-72","newText":"replacement block"}]}`,
-	"command":            `{"command":"go test ./...","cwd":".","timeout":120,"fullOutput":false}`,
+	"command":            `{"command":"go test ./...","cwd":".","timeout":120}`,
 	"service":            `start: {"action":"start","name":"frontend","command":"npm run dev","cwd":"frontend"}; stop: {"action":"stop","id":"svc_..."}; list: {"action":"list"}; read: {"action":"read","id":"svc_...","tailBytes":8192}`,
 	"ask":                `{"questions":[{"id":"database","question":"Which database should we use?","options":[{"id":"sqlite","label":"SQLite","description":"Simple local storage.","recommended":true},{"id":"postgres","label":"PostgreSQL","description":"Production database.","recommended":false}]}]}`,
 	"remote_read":         `{"target":"my-dev:/srv/app","files":[{"path":"main.go"}]}`,
 	"remote_edit":        `{"target":"my-dev:/srv/app","path":"main.go","version":"9k3m7x","changes":[{"oldText":"func old() {}","newText":"func new() {}"}]}`,
-	"remote_run_command": `{"target":"my-dev:/srv/app","command":"go test ./...","fullOutput":false}`,
+	"remote_run_command": `{"target":"my-dev:/srv/app","command":"go test ./..."}`,
 	"ssh_credential":     `set password: {"action":"set","target":"root@47.120.8.34:/tmp/app","password":"<verbatim from user message>"}; set key file: {"action":"set","target":"root@example.com:/srv/app","keyPath":"F:/doc/keys/server.pem"}`,
-	"grep":               `{"pattern":"TODO|FIXME","path":"frontend/src","glob":"*.vue","maxMatches":100}`,
+	"grep":               `{"pattern":"TODO|FIXME","path":"frontend/src","glob":"*.vue"}`,
 	"read":               `one file: {"files":[{"path":"app.go"}]}; multiple files: {"files":[{"path":"app.go"},{"path":"main.go"}]}; range: {"files":[{"path":"services.go","startLine":1,"endLine":200}]}; tail: {"files":[{"path":"server.log","startLine":-200}]}`,
 	"render_html":        `{"html":"<div id=\"chart\" style=\"width:100%;height:350px;\"></div><script>const c=echarts.init(document.getElementById('chart'),'dark');c.setOption({title:{text:'Metrics'},xAxis:{data:['Mon','Tue','Wed','Thu','Fri']},yAxis:{},series:[{type:'bar',data:[12,34,56,78,90]}]});</script>"}`,
 	"subagent":           `{"task":"Inspect the authentication module and report concrete security issues.","role":"code reviewer","maxSteps":20,"description":"Review authentication"}`,

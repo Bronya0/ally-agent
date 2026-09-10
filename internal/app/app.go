@@ -828,10 +828,6 @@ type CommandRequest struct {
 	Command string `json:"command"`
 	Cwd     string `json:"cwd"`
 	Timeout int    `json:"timeout"`
-	// FullOutput 由模型在调用时显式传入：默认模型侧只收到尾部几行 +
-	// exitCode（对齐 UI 折叠卡片），传 true 才内联返回完整输出。
-	// UI 始终收到完整输出，不受该参数影响。
-	FullOutput bool `json:"fullOutput,omitempty"`
 }
 
 type StartServiceRequest struct {
@@ -981,14 +977,11 @@ type CommandResult struct {
 	// OutputFileBytes 是截断落盘文件的字节体积，让模型在读全量前能
 	// 自行判断是否分段读取。仅 OutputFilePath 非空时有意义。
 	OutputFileBytes int64 `json:"outputFileBytes,omitempty"`
-	ExitCode        int   `json:"exitCode"`
-	TimedOut        bool  `json:"timedOut"`
-	Cancelled       bool  `json:"cancelled"`
-	DurationMS      int64 `json:"durationMs"`
-	Truncated       bool  `json:"truncated"`
-	// FullOutput 记录模型是否通过 fullOutput 参数请求了完整输出。
-	// 只影响模型侧序列化（见 infra_result.go），不影响 UI。
-	FullOutput bool `json:"fullOutput,omitempty"`
+	ExitCode        int    `json:"exitCode"`
+	TimedOut        bool   `json:"timedOut"`
+	Cancelled       bool   `json:"cancelled"`
+	DurationMS      int64  `json:"durationMs"`
+	Truncated       bool   `json:"truncated"`
 }
 
 type HTTPRequestToolRequest struct {
@@ -1101,8 +1094,6 @@ type RemoteRunCommandRequest struct {
 	Cwd     string `json:"cwd,omitempty"`
 	Timeout int    `json:"timeout,omitempty"`
 	Shell   string `json:"shell,omitempty"`
-	// FullOutput 与本地 command 同语义：默认模型侧只收尾部几行。
-	FullOutput bool `json:"fullOutput,omitempty"`
 }
 
 type remoteTarget struct {
@@ -2684,22 +2675,6 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		err, argWarnings = decodeJSON(&req)
 		if err == nil {
 			data, err = a.remoteRunCommand(ctx, req)
-			// 与本地 command 对齐：默认模型侧只收尾部几行，被截内容
-			// 落盘到本地工作区 .tmp 供 read 取回，避免重跑远端命令。
-			if err == nil {
-				if res, ok := data.(CommandResult); ok {
-					res.FullOutput = req.FullOutput
-					if !req.FullOutput {
-						if roots, rootErr := workspaceRoots(cfg); rootErr == nil && len(roots) > 0 {
-							if path, size, spilled := spillCommandOutputForTail(roots[0], res.Output, res.OutputFilePath); spilled {
-								res.OutputFilePath = path
-								res.OutputFileBytes = size
-							}
-						}
-					}
-					data = res
-				}
-			}
 		}
 	case "grep":
 		var reqGF GrepRequest
