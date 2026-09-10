@@ -5049,10 +5049,28 @@ async function fileToAttachment(file) {
   return base;
 }
 
+// createModelImageDataUrl prepares the data URL actually sent to the model.
+// Every raster format (including PNG/JPEG/WebP) is re-encoded through canvas:
+// screenshots in particular are 1-5MB as PNG but typically shrink 5-15x as
+// WebP at quality 0.9 with max edge 2048px, which is the resolution ceiling
+// most multimodal providers downscale to anyway. GIFs are passed through
+// untouched so animations survive, and any re-encode that comes out LARGER
+// than the source falls back to the original bytes (lossless sources at
+// small sizes never regress). Tiny files (<=256KB) of a natively supported
+// format also skip the re-encode: the possible savings are negligible against
+// the quality risk. Exotic types (BMP/AVIF/...) always go through canvas so a
+// small file cannot regress from "re-encoded to WebP" to "unsupported".
+const modelImagePassthroughTypes = new Set(['image/png', 'image/jpeg', 'image/jpg', 'image/webp', 'image/gif']);
 async function createModelImageDataUrl(file) {
-  const supported = new Set(['image/png', 'image/jpeg', 'image/jpg', 'image/webp', 'image/gif']);
-  if (supported.has(String(file.type || '').toLowerCase())) return readFileAsDataUrl(file);
-  if (typeof createImageBitmap !== 'function') return '';
+  if (typeof createImageBitmap !== 'function') {
+    return passthroughModelImage(file);
+  }
+  const type = String(file.type || '').toLowerCase();
+  if (type === 'image/gif') return passthroughModelImage(file);
+  if (!type.startsWith('image/')) return '';
+  if (file.size > 0 && file.size <= 256 * 1024 && modelImagePassthroughTypes.has(type)) {
+    return passthroughModelImage(file);
+  }
   let bitmap;
   try {
     bitmap = await createImageBitmap(file);
@@ -5062,14 +5080,22 @@ async function createModelImageDataUrl(file) {
     canvas.width = Math.max(1, Math.round(bitmap.width * scale));
     canvas.height = Math.max(1, Math.round(bitmap.height * scale));
     const context = canvas.getContext('2d', { alpha: true });
-    if (!context) return '';
+    if (!context) return passthroughModelImage(file);
     context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-    return canvas.toDataURL('image/webp', 0.9);
+    const reencoded = canvas.toDataURL('image/webp', 0.9);
+    // Original data URL length ≈ base64 payload + header: 4/3 × bytes + ~50.
+    if (reencoded && reencoded.length < (file.size * 4) / 3 + 64) return reencoded;
+    return passthroughModelImage(file);
   } catch (_) {
-    return '';
+    return passthroughModelImage(file);
   } finally {
     bitmap?.close?.();
   }
+}
+
+function passthroughModelImage(file) {
+  if (modelImagePassthroughTypes.has(String(file.type || '').toLowerCase())) return readFileAsDataUrl(file);
+  return '';
 }
 
 async function createImageThumbnailUrl(file) {

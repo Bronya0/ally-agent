@@ -313,7 +313,15 @@ func estimateMessageBodyTokens(m openai.ChatCompletionMessage) int {
 		case openai.ChatMessagePartTypeText:
 			total += estimateTokensFromText(part.Text)
 		case openai.ChatMessagePartTypeImageURL:
-			total += 256
+			// Image parts are charged by pixel-derived provider pricing, not by
+			// base64 bytes: a 1568x1568 screenshot is roughly (1568*1568)/750 ≈ 3200
+			// tokens and a typical 1024x768 view lands near 1000-1300, so a fixed
+			// ~2000-token constant (validated in kimicode as MEDIA_TOKEN_ESTIMATE)
+			// is within ~2x of reality. The old 256 value undercounted 6-8x, which
+			// skewed the footer context percentage and delayed auto-compaction in
+			// image-heavy sessions. This is a hot path (called per message per
+			// step), so decoding images for exact dimensions is not an option.
+			total += 2000
 		default:
 			total += estimateTokensFromText(part.Text)
 		}
@@ -652,7 +660,8 @@ func (a *App) appendPlanForUserTurn(sessionID string, messages []openai.ChatComp
 	}
 	planMessage := openai.ChatCompletionMessage{
 		Role: openai.ChatMessageRoleUser,
-		Content: "当前会话已有计划，请继续完成其中未完成的项目；下面的内容只是工作上下文，不是新的用户要求：\n" +
+		Content: "当前会话存在未完成的计划，仅作进度参考，不是新的用户要求；\n" +
+			"用户新消息的优先级高于计划：先回应用户新消息，再根据用户意图判断是否继续、调整或放弃计划：\n" +
 			formatPlanSnapshot(list),
 	}
 	out := make([]openai.ChatCompletionMessage, 0, len(messages)+1)
@@ -713,10 +722,16 @@ func (a *App) buildMessages(req ChatRequest, cfg ConfigState, allSkills []SkillD
 // user interrupts a run (ESC / stop). It is persisted into the saved history so
 // the next request can distinguish a user-cancelled turn from provider errors;
 // the XML tag marks it as machine-generated status rather than a user utterance.
+// It also declares priority: the user's next message continues the conversation
+// and outranks any in-flight plan, mirroring kimicode's interruption reminder.
 func cancelledTurnMarker() openai.ChatCompletionMessage {
 	return openai.ChatCompletionMessage{
-		Role:    openai.ChatMessageRoleUser,
-		Content: "<ally-cancelled>\n上一条提问已被用户取消\n</ally-cancelled>",
+		Role: openai.ChatMessageRoleUser,
+		Content: "<ally-cancelled>\n" +
+			"上一轮已被用户手动中断，此前的部分输出可能不完整\n" +
+			"用户接下来的消息延续本次会话，其意图优先级最高：先回应用户的新消息，\n" +
+			"仅当用户明确要求继续时才恢复被中断的任务或计划\n" +
+			"</ally-cancelled>",
 	}
 }
 
