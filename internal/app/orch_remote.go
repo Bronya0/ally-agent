@@ -28,9 +28,11 @@ import (
 
 const remotePythonMarker = "ALLY_REMOTE_RESULT_JSON:"
 
-// maxRemoteReadBatchBytes 是 read_batch 单会话的总字节预算：超出后剩余路
-// 径排入下一轮会话（20 文件 × 2MB 单文件上限下最多三轮，仍远少于旧的
-// 逐文件 20 次握手）。
+// maxRemoteReadBatchBytes 是 read_batch 单会话的总字节预算：装不下的剩余
+// 路径排入下一轮会话。文件总量在预算内时 20 个文件一轮读完；文件很大时
+// 每轮投递更少，最坏每轮一个文件（与旧的逐文件实现持平，不多于旧的每文
+// 件一次完整握手）。单文件体积上限 maxReadFileBytes 为 32MB，因此极端
+// 情况下单文件本身即可吃满本预算。
 const maxRemoteReadBatchBytes = 16 * 1024 * 1024
 
 const remotePythonScript = `
@@ -817,10 +819,11 @@ func (a *App) remoteReadFile(ctx context.Context, req RemoteReadFileRequest) (Ba
 	if err != nil {
 		return BatchReadResult{}, err
 	}
-	// 单文件（edit 读-改-写与常规读共用）走单文件会话，保持原错误语
-	// 义；多文件用 read_batch 单会话批量读，总字节预算装不下的尾部路径
-	// 自动排入下一轮会话——20 个文件最多两三轮 ssh 握手（旧的逐文件串
-	// 行是 20 次完整握手）。
+	// 单文件请求走 remoteReadRawOne（remoteEdit 读-改-写与 remoteReadRaw
+	// 共用该实现），保持原错误语义；多文件改用 read_batch 单会话批量读，
+	// 预算装不下的尾部路径自动排入下一轮会话。文件不大时 20 个文件只需
+	// 一轮 ssh 握手（旧的逐文件串行是 20 次完整握手）；文件很大时轮次随
+	// 预算上升，最坏每轮一个文件、与旧实现持平。
 	if len(fileRequests) == 1 {
 		_, rawFile, err := a.remoteReadRawOne(ctx, rt, fileRequests[0].Path)
 		if err != nil {
