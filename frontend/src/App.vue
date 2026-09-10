@@ -276,7 +276,7 @@ Public License v3. See the LICENSE file for details.
                   :context-usage-style="contextUsageStyle"
                   :workspace-input-tokens="workspaceInputTokens"
                   :workspace-output-tokens="workspaceOutputTokens"
-                  :task-center-count="scheduledTasks.length + services.length"
+                  :task-center-count="taskCenterCount"
                   :task-center-running-count="scheduledTaskRunningCount + serviceRunningCount"
                   :fmt-k="fmtK"
                   :extra-roots="extraRoots"
@@ -2496,6 +2496,12 @@ const latestUserPromptSummary = computed(() => latestPromptSummaryForSession(act
 const activeSessionRunning = computed(() => !!activeSession.value?.isRunning);
 const scheduledTaskRunningCount = computed(() => scheduledTasks.value.filter((task) => task?.running).length);
 const serviceRunningCount = computed(() => services.value.filter((service) => ['starting', 'running'].includes(service?.status)).length);
+// 徽标数字只算“还活着”的条目：一次性任务跑完（nextRunAt 归零）不会再触发，
+// 已退出服务只是事后可查（后端 finishedQueue 保留最近 8 条）——它们仍然
+// 列在面板里，但不应把常驻徽标撑大。
+const taskCenterCount = computed(() =>
+  scheduledTasks.value.filter((task) => task?.running || Number(task?.nextRunAt || 0) > 0).length
+  + services.value.filter((service) => ['starting', 'running'].includes(service?.status)).length);
 function todosForSession(sessionId) {
   const entries = sessionId ? todosBySession[sessionId] : null;
   return Array.isArray(entries) ? entries : [];
