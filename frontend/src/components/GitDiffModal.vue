@@ -158,7 +158,7 @@ async function loadDiff(force = false) {
   loadSeq.value = seq;
   loading.value = true;
   try {
-    const result = await GetGitDiff(activeRepo.value);
+    const result = await GetGitDiff(props.workspace || '', activeRepo.value);
     if (seq !== loadSeq.value) return;
     diffResult.value = result || { isRepo: false, files: [] };
     loadedKey.value = key;

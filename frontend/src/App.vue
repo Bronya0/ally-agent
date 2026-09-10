@@ -266,7 +266,7 @@ Public License v3. See the LICENSE file for details.
                 <ComposerInfoBar
                   :running="activeSessionRunning"
                   :config="chatConfig"
-                  :workspace="activeComposerWorkspace"
+                  :workspace="activeRunWorkspace"
                   :git-status="gitStatus"
                     :context-breakdown="contextBreakdown"
                     :footer-stats-loading="footerStatsLoading"
@@ -398,7 +398,7 @@ Public License v3. See the LICENSE file for details.
             @delete-task="deleteScheduledTask"
             @stop-service="stopManagedService"
           />
-          <RenderBoundary :label="$t('app.gitChanges')"><GitDiffModal v-model:show="gitDiffVisible" :initial-repo="selectedGitRepo" :git-status="gitStatus" :workspace="config.workspace" /></RenderBoundary>
+          <RenderBoundary :label="$t('app.gitChanges')"><GitDiffModal v-model:show="gitDiffVisible" :initial-repo="selectedGitRepo" :git-status="gitStatus" :workspace="activeRunWorkspace" /></RenderBoundary>
 
           <n-modal v-model:show="updateModalVisible" preset="card" :title="$t('app.update.title')" class="update-modal" :mask-closable="false" :close-on-esc="false" :show-close="!isUpdateBusy">
             <div class="update-modal-body">
@@ -2154,6 +2154,24 @@ function isTempTab(tab) {
   return tab?.kind === 'temp';
 }
 
+// Tabs that own their workspace path instead of following the persisted chat
+// workspace: the hidden KB tab pins config.kbRoot, the temp tab its ephemeral
+// dir. This predicate is the single source of truth for that split — the footer
+// stats went dark for exactly these Tabs because the same
+// `isKbTab(tab) || isTempTab(tab)` check was inlined in a dozen places and the
+// footer's copy was missed.
+function tabOwnsWorkspace(tab) {
+  return isKbTab(tab) || isTempTab(tab);
+}
+
+// The workspace a Tab's chat run and footer stats target: Tabs that own their
+// workspace report their own path, every other Tab follows the persisted chat
+// workspace. Never compare a Tab's path against config.workspace directly.
+function runWorkspaceForTab(tab) {
+  if (tab && tabOwnsWorkspace(tab)) return String(tab.path || '');
+  return String(config.workspace || '');
+}
+
 // path -> { sessionId }。挂起期间目录继续存在，供后台 run 的工具读写。
 const pendingTempCleanups = new Map();
 
@@ -2335,19 +2353,20 @@ watch(kbSessionRunning, (running) => {
   if (!running) refreshKbIndexState();
 });
 
-// True when the active workspace tab is the hidden KB tab: gates the KB
-// action bar above the composer.
-const activeTabIsKb = computed(() => (
-  isKbTab(workspaceTabs.value.find((tab) => tab.id === activeWorkspaceId.value))
+// The Tab the workspace header/composer is currently showing. All per-Tab
+// workspace state (run overlay, footer stats, explorer) derives from it.
+const activeWorkspaceTab = computed(() => (
+  workspaceTabs.value.find((tab) => tab.id === activeWorkspaceId.value) || null
 ));
 
-// Workspace path shown in the composer info bar: the KB tab shows the
-// configured KB root instead of the shared chat workspace; the temp tab
-// shows its own ephemeral directory.
-const activeComposerWorkspace = computed(() => {
-  const tab = workspaceTabs.value.find((item) => item.id === activeWorkspaceId.value);
-  return (isKbTab(tab) || isTempTab(tab) ? tab.path : config.workspace) || '';
-});
+// True when the active workspace tab is the hidden KB tab: gates the KB
+// action bar above the composer.
+const activeTabIsKb = computed(() => isKbTab(activeWorkspaceTab.value));
+
+// Workspace the active Tab runs in: the composer info bar label, the chat
+// request overlay, the footer stats and the git badge all read it from here, so
+// a KB/temp Tab is never confused with the persisted chat workspace.
+const activeRunWorkspace = computed(() => runWorkspaceForTab(activeWorkspaceTab.value));
 
 // Canned KB actions on the toolbar above the composer: drop the prompt into
 // the KB composer and send it through the normal sendPrompt path (streaming,
@@ -2751,11 +2770,17 @@ function clearFooterStats() {
   contextBreakdown.value = null;
 }
 
+// A footer-stats reply is current only while its Tab, session and workspace
+// still match what is on screen. The workspace half must resolve through the
+// Tab: KB/temp tabs never own config.workspace, so comparing against it
+// silently discarded every one of their refreshes and left the context chip
+// stuck on the loading placeholder forever.
 function isCurrentFooterTarget(tabId, sessionId, workspace) {
+  const tab = workspaceTabs.value.find((item) => item.id === tabId) || null;
   return (
     tabId === activeWorkspaceId.value
     && sessionId === activeSessionId.value
-    && String(workspace || '') === String(config.workspace || '')
+    && String(workspace || '') === runWorkspaceForTab(tab)
   );
 }
 
@@ -2835,9 +2860,10 @@ async function refreshFooterStats({
   // GetSessionContextTokens call would just recompute the same payload on the
   // backend and double the IPC cost on every footer refresh.
   const [gitResult, usageResult, breakdownResult] = await Promise.allSettled([
-    // SaveConfig has completed before this function is called, so this uses
-    // the backend's new active workspace.
-    GetGitStatus(),
+    // Ask for the Tab's own workspace: chat tabs have already persisted it via
+    // saveWorkspaceConfig, while KB/temp tabs deliberately never claim the
+    // persisted chat workspace.
+    GetGitStatus(requestedWorkspace),
     GetWorkspaceTokenUsage(requestedWorkspace),
     GetContextBreakdown(requestedSessionId),
   ]);
@@ -2868,11 +2894,11 @@ async function refreshFooterStats({
 async function refreshGitStatus() {
   const tabId = activeWorkspaceId.value;
   const sessionId = activeSessionId.value;
-  const workspace = String(config.workspace || '');
+  const workspace = activeRunWorkspace.value;
   if (!workspace || footerStatsLoading.value) return;
   const requestVersion = ++gitStatusRequestVersion;
   try {
-    const status = await GetGitStatus();
+    const status = await GetGitStatus(workspace);
     if (
       requestVersion !== gitStatusRequestVersion
       || !isCurrentFooterTarget(tabId, sessionId, workspace)
@@ -2898,10 +2924,10 @@ function openGitDiff(repoPath = '') {
 
 async function openWorkspaceInFileManager() {
   try {
-    // On the KB tab the button shows the KB root, so open that directory —
-    // not the persisted chat workspace the backend helper defaults to.
-    if (activeTabIsKb.value && activeComposerWorkspace.value) {
-      await OpenWorkspacePathInFileManagerAt({ workspace: activeComposerWorkspace.value, path: '' });
+    // Tabs that own their workspace (KB root / temp dir) open that directory —
+    // the backend helper otherwise opens the persisted chat workspace.
+    if (tabOwnsWorkspace(activeWorkspaceTab.value) && activeRunWorkspace.value) {
+      await OpenWorkspacePathInFileManagerAt({ workspace: activeRunWorkspace.value, path: '' });
     } else {
       await OpenWorkspaceInFileManager();
     }
@@ -2911,12 +2937,14 @@ async function openWorkspaceInFileManager() {
 }
 
 function toggleWorkspaceExplorer() {
-  if (!config.workspace) {
+  const tabId = activeWorkspaceId.value;
+  const workspace = explorerTabPath(tabId);
+  // Gate on the Tab's own directory: a KB/temp Tab has a workspace even while
+  // the persisted chat workspace is still unset.
+  if (!workspace) {
     message.info(t('app.workspace.required'));
     return;
   }
-  const tabId = activeWorkspaceId.value;
-  const workspace = explorerTabPath(tabId);
   if (explorerVisibleFor(tabId)) {
     const explorer = explorerRefsByTab.get(tabId);
     if (explorer) void explorer.requestClose();
@@ -3109,7 +3137,8 @@ async function addExtraRoot() {
   const session = activeSession.value;
   if (!session) return;
   // 主工作区无需添加
-  if (config.workspace && workspaceHistoryDedupeKey(path) === workspaceHistoryDedupeKey(config.workspace)) {
+  const primaryWorkspace = activeRunWorkspace.value;
+  if (primaryWorkspace && workspaceHistoryDedupeKey(path) === workspaceHistoryDedupeKey(primaryWorkspace)) {
     message.warning(t('extraRoots.duplicatePrimary'));
     return;
   }
@@ -3149,8 +3178,11 @@ function loadPromptHistory(path = config.workspace || '') {
   commandHistoryIndex.value = -1;
 }
 
-function savePromptHistory(path = config.workspace || '') {
+function savePromptHistory(path = activeRunWorkspace.value) {
   try {
+    // Keyed by the Tab's own workspace: loadPromptHistory(tab.path) runs on
+    // every Tab switch, so writing under config.workspace would drop a KB/temp
+    // session's history into the chat workspace's bucket.
     localStorage.setItem(workspaceHistoryKey(path), JSON.stringify(commandHistory.value.slice(-50)));
   } catch (_) { /* ignore */ }
 }
@@ -3393,9 +3425,8 @@ async function applySessionWorkspace(session) {
   }
 
   const tab = bindSessionToActiveWorkspaceTab(session);
-  const tabIsKb = isKbTab(tab);
-  const tabIsTemp = isTempTab(tab);
-  if (tab && !tabIsKb && !tabIsTemp) {
+  const tabOwns = tabOwnsWorkspace(tab);
+  if (tab && !tabOwns) {
     if (workspace) {
       tab.path = workspace;
       tab.label = workspaceLabel(workspace);
@@ -3413,14 +3444,14 @@ async function applySessionWorkspace(session) {
   prepareFooterStatsForTarget(activeWorkspaceId.value, workspace);
   // KB / temp sessions never claim the persisted chat workspace or the
   // workspace history list: the temp dir is ephemeral and dies with its Tab.
-  if (!tabIsKb && !tabIsTemp) {
+  if (!tabOwns) {
     config.workspace = workspace;
     configDraft.workspace = workspace;
     addToHistory(workspace);
   }
   loadPromptHistory(workspace);
   try {
-    if (!tabIsKb && !tabIsTemp) await saveWorkspaceConfig({ ...config });
+    if (!tabOwns) await saveWorkspaceConfig({ ...config });
     await refreshFooterStats({
       tabId: activeWorkspaceId.value,
       sessionId: session.id,
@@ -3624,7 +3655,7 @@ async function switchWorkspaceTab(id) {
   const tab = workspaceTabs.value.find((t) => t.id === id);
   if (!tab) return;
   const tabIsKb = isKbTab(tab);
-  const tabIsTemp = isTempTab(tab);
+  const tabOwns = tabOwnsWorkspace(tab);
   if (!workspaceExplorerByTab.has(id)) workspaceExplorerByTab.set(id, explorerDefaultForPath(tab.path));
   const switchVersion = ++workspaceSwitchVersion;
   const linkedSession = ensureWorkspaceTabSession(tab);
@@ -3641,7 +3672,7 @@ async function switchWorkspaceTab(id) {
   // restores chat mode, and the workspace history stays chat-only. The temp
   // tab follows the same rule — its directory is deleted with the Tab, so a
   // persisted pointer would dangle after restart.
-  if (!tabIsKb && !tabIsTemp) {
+  if (!tabOwns) {
     config.workspace = tab.path;
     configDraft.workspace = tab.path;
   }
@@ -3659,7 +3690,7 @@ async function switchWorkspaceTab(id) {
   // request overlay.
   ensureTabModel(tab);
   try {
-    if (!tabIsKb && !tabIsTemp) await saveWorkspaceConfig({ ...config });
+    if (!tabOwns) await saveWorkspaceConfig({ ...config });
   } catch (err) {
     if (workspaceSwitchVersion === switchVersion) {
       footerStatsLoading.value = false;
@@ -3701,14 +3732,15 @@ async function switchWorkspaceTab(id) {
 
 function syncConfigToActiveTab() {
   const tab = workspaceTabs.value.find((t) => t.id === activeWorkspaceId.value);
-  // The hidden KB tab and the temp tab do not mirror the persisted chat
-  // workspace.
-  if (tab && !isKbTab(tab) && !isTempTab(tab) && config.workspace !== tab.path) {
+  // Tabs that own their workspace (KB root / temp dir) do not mirror the
+  // persisted chat workspace.
+  const tabOwns = tabOwnsWorkspace(tab);
+  if (tab && !tabOwns && config.workspace !== tab.path) {
     tab.path = config.workspace || '';
     tab.label = workspaceLabel(tab.path);
   }
   const session = activeSession.value;
-  if (session && config.workspace && !isKbTab(tab) && !isTempTab(tab)) session.workspace = config.workspace;
+  if (session && config.workspace && !tabOwns) session.workspace = config.workspace;
 }
 
 function newSession(title) {
@@ -3716,7 +3748,7 @@ function newSession(title) {
   const id = crypto.randomUUID ? crypto.randomUUID() : `s-${Date.now()}-${Math.random()}`;
   const now = Date.now();
   const activeTab = workspaceTabs.value.find((item) => item.id === activeWorkspaceId.value) || null;
-  const workspace = (isKbTab(activeTab) || isTempTab(activeTab) ? activeTab.path : config.workspace) || '';
+  const workspace = (tabOwnsWorkspace(activeTab) ? activeTab.path : config.workspace) || '';
   const sessionTitle = title || (workspace ? workspaceLabel(workspace) : t('app.sessions.new'));
   const session = { id, title: sessionTitle, isDefault: true, workspace, extraRoots: [], messages: [], messagesLoaded: true, runId: '', isRunning: false, createdAt: now, updatedAt: now };
   sessions.value.unshift(session);
@@ -4246,7 +4278,7 @@ function bindRuntimeEvents() {
   onRuntimeEvent('tokens:update', (data) => {
     if (
       footerStatsLoading.value
-      || String(data.workspace || '') !== String(config.workspace || '')
+      || String(data.workspace || '') !== activeRunWorkspace.value
     ) return;
     workspaceTokenUsage.value = {
       inputTokens: data.inputTokens || 0,
@@ -4522,7 +4554,7 @@ function bindRuntimeEvents() {
     // 会话结束可能修改了工作区文件。即使这个会话挂在后台 Tab 上，只要它
     // 属于当前工作区，底部 Git 统计也应刷新（GetGitStatus 查询的是当前
     // 工作区，与具体会话无关）。
-    if (String(session.workspace || '') === String(config.workspace || '')) refreshGitStatus();
+    if (String(session.workspace || '') === activeRunWorkspace.value) refreshGitStatus();
     finalizeRunTerminal(session, data, { variant: 'done' });
     if (session.id === activeSessionId.value) refreshContextTokens(session.id);
     // 临时工作空间挂起清理：run 终态落地（runId 已清）后才可安全删除目录与会话。
@@ -4544,7 +4576,7 @@ function bindRuntimeEvents() {
     // reflect that immediately instead of waiting for the next session switch.
     if (session.id === activeSessionId.value) refreshContextTokens(session.id);
     // 后台 Tab 的会话出错结束前可能已修改工作区文件，Git 统计同样要刷新。
-    if (String(session.workspace || '') === String(config.workspace || '')) refreshGitStatus();
+    if (String(session.workspace || '') === activeRunWorkspace.value) refreshGitStatus();
     settlePendingTempCleanups();
   });
   onRuntimeEvent('run:cancelled', (data) => {
@@ -4563,7 +4595,7 @@ function bindRuntimeEvents() {
     // context popover should reflect the actual remaining budget.
     if (session.id === activeSessionId.value) refreshContextTokens(session.id);
     // 后台 Tab 的会话被取消前可能已修改工作区文件，Git 统计同样要刷新。
-    if (String(session.workspace || '') === String(config.workspace || '')) refreshGitStatus();
+    if (String(session.workspace || '') === activeRunWorkspace.value) refreshGitStatus();
     settlePendingTempCleanups();
   });
   // Compaction progress. Both manual /compact and in-run auto-compaction
@@ -4984,8 +5016,8 @@ async function fileToAttachment(file) {
   const rawPath = String(file.path || '').trim();
   if (rawPath) {
     base.filePath = rawPath;
-  } else if (config.workspace) {
-    base.filePath = `${String(config.workspace).replace(/[\\/]+$/, '')}/${file.name}`;
+  } else if (activeRunWorkspace.value) {
+    base.filePath = `${activeRunWorkspace.value.replace(/[\\/]+$/, '')}/${file.name}`;
   } else {
     base.filePath = file.name;
   }
@@ -5398,7 +5430,7 @@ async function sendPrompt(opts) {
   // root, the temp tab pins its ephemeral dir, every other session follows
   // the persisted chat workspace.
   const activeTab = workspaceTabs.value.find((item) => item.id === activeWorkspaceId.value) || null;
-  const sessionWorkspace = (isKbTab(activeTab) || isTempTab(activeTab) ? activeTab.path : config.workspace) || '';
+  const sessionWorkspace = runWorkspaceForTab(activeTab);
 
   // Resolve command: display label in UI, send expanded text to backend
   const matchedCommand = text.startsWith('/')
@@ -8385,9 +8417,9 @@ function handleGlobalKeydown(event) {
   }
   if (event.key.toLowerCase() === 't') {
     event.preventDefault();
-    // New workspace tab reusing the current tab's workspace path (the KB
-    // tab never seeds a new chat tab with the KB root).
-    const basePath = isKbTab(activeTabForKeydown) ? config.workspace : activeTabForKeydown?.path;
+    // New workspace tab reusing the current tab's workspace path (tabs that
+    // own their workspace — KB root / temp dir — never seed a chat tab with it).
+    const basePath = tabOwnsWorkspace(activeTabForKeydown) ? config.workspace : activeTabForKeydown?.path;
     const tab = createWorkspaceTab(basePath || '');
     workspaceTabs.value.push(tab);
     switchWorkspaceTab(tab.id);

@@ -31,10 +31,18 @@ import (
 // burst that would otherwise spawn 3×2 git processes in <1s.
 const gitStatusCacheTTL = 2 * time.Second
 
-func (a *App) GetGitStatus() GitStatus {
-	a.mu.Lock()
-	workspacePath := a.config.Workspace
-	a.mu.Unlock()
+// GetGitStatus returns the Git status of a workspace. An empty workspace keeps
+// the previous behavior (the active config workspace); callers pass an explicit
+// one when the directory they display is not the persisted chat workspace —
+// KB and temp tabs never write config.workspace, so the composer footer must
+// ask for the Tab's own directory instead.
+func (a *App) GetGitStatus(workspace string) GitStatus {
+	workspacePath := strings.TrimSpace(workspace)
+	if workspacePath == "" {
+		a.mu.Lock()
+		workspacePath = a.config.Workspace
+		a.mu.Unlock()
+	}
 	return a.getGitStatus(workspacePath)
 }
 
@@ -301,17 +309,27 @@ func (a *App) cacheGitStatus(workspace string, status GitStatus) {
 	a.gitStatusCacheMu.Unlock()
 }
 
-func (a *App) GetGitDiff(repoPath ...string) GitDiffResult {
-	workspace, err := workspaceRoot(a.config)
+// GetGitDiff renders the diff of the repository containing the given workspace
+// (empty = active config workspace) and, optionally, of a repository
+// subdirectory inside it. The explicit workspace keeps the diff modal aligned
+// with the Tab that opened it: a KB root or a temp dir is not the persisted
+// chat workspace.
+func (a *App) GetGitDiff(workspace string, repoPath string) GitDiffResult {
+	a.mu.Lock()
+	cfg := a.config
+	a.mu.Unlock()
+	if trimmed := strings.TrimSpace(workspace); trimmed != "" {
+		cfg.Workspace = trimmed
+	}
+	workspaceDir, err := workspaceRoot(cfg)
 	if err != nil {
 		return GitDiffResult{IsRepo: false, Error: err.Error()}
 	}
 
-	targetDir := workspace
-	if len(repoPath) > 0 && strings.TrimSpace(repoPath[0]) != "" {
-		rel := strings.TrimSpace(repoPath[0])
+	targetDir := workspaceDir
+	if rel := strings.TrimSpace(repoPath); rel != "" {
 		// Validate safe subpath within workspace
-		sub, safeErr := safeJoin([]string{workspace}, rel)
+		sub, safeErr := safeJoin([]string{workspaceDir}, rel)
 		if safeErr == nil {
 			targetDir = sub
 		}

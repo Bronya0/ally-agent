@@ -136,7 +136,7 @@
 - orch_batch_policy.go — 工具批次冲突/屏障策略：同路径写去重（首个按 toolCallIndex 执行，其余 E_WRITE_BATCH_CONFLICT 拒绝待补发）、wait/ask/suggest 单调用屏障；关键: detectToolBatchConflicts, detectWriteBatchConflicts
 - orch_validation.go — edit/create 写入后低成本语言校验（Python/Go/JS/TS/Vue/Java/JSON），单个 validation 字符串回填模型；批次级校验去重：同批 edit/create 按校验单元（Go 包目录 / tsconfig 项目 / 单文件）合并到最后一个触碰调用来跑（planBatchValidation）；关键: attachValidation, validateChangedFiles, planBatchValidation
 - orch_command_safety.go — 命令安全边界：绑定 command AST 语义分析到工作区根与路径存在性，产出 E_COMMAND_BLOCKED/E_PATH_OUTSIDE；关键: checkCommandSafety, validateRemoteCommandSafety
-- orch_git.go — git status/diff 编排：porcelain V2 解析、TTL 缓存、diff 序列化与取消；关键: getGitStatus, parseGitStatusV2, GetGitDiff, CancelGitDiff
+- orch_git.go — git status/diff 编排：porcelain V2 解析、TTL 缓存、diff 序列化与取消；GetGitStatus/GetGitDiff 接受显式 workspace（空 = 当前 config 工作区），KB/临时 Tab 的页脚徽标与 diff 弹窗据此按自身目录查询；关键: getGitStatus, GetGitStatus, parseGitStatusV2, GetGitDiff, CancelGitDiff
 - orch_grep.go — grep 编排：ripgrep 封装绑定工作区解析与安全检查、rg/git-bash 缺失事件；关键: GrepFiles, grepFilesWithConfig
 - orch_http.go — http_request/web_fetch 编排：重定向敏感头剥离、压缩体解码、每主机限速、Readability 正文抽取、URL 访问校验；关键: httpRequestToolWithConfig, webFetchToolWithConfig, htmlExtractContent
 - orch_remote.go — SSH 远程工具编排：向远程 stdin 注入内嵌 Python helper 完成远程读/写/编辑/删除/命令；新建文件 0644（对齐本地 SafeWriteFile）、覆盖保留原权限；op_run 捕获 SIGTERM/SIGHUP/SIGINT 连带击杀命令进程组（取消不同步泄漏远端孤儿）；多文件 read 走 read_batch 单会话批量（逐文件错误隔离，总字节预算 16MB，超出路径自动排下一轮会话）；ssh 凭据注入（有密码时去 BatchMode + SSH_ASKPASS 临时 helper，用后即删）；关键: invokeRemotePython, remoteReadFile, remoteReadRawBatch, remoteEdit, buildRemoteScript, prepareRemoteSSHInvocation
@@ -195,7 +195,7 @@
 ## frontend/src/ — 入口与全局
 
 - main.js — Vue 应用入口：createApp、注册 $t、initTheme 后挂载
-- App.vue — **前端唯一主组件**（~7900 行）：全局状态（无 Pinia）、Wails 事件路由（bindRuntimeEvents 按 sessionId/runId 分发）、工作区 Tab 管理、知识库模式（`kind:'kb'` 隐藏 workspace tab + ModeSider 切换，sendPrompt/switchWorkspaceTab/键盘守卫均 KB 感知，config.workspace 永远只存聊天工作区）、`run:stream` rAF 合帧缓冲、tool:update 120ms 缓冲、Markdown/Mermaid 渲染与 LRU 缓存、/命令系统、附件、会话持久化、任务中心、版本更新、全局快捷键；关键: bindRuntimeEvents, queueStreamDelta/flushStreamBuffer, addWorkspaceTab/closeWorkspaceTab, ensureKbTab/switchMode, markdownRenderCache
+- App.vue — **前端唯一主组件**（~7900 行）：全局状态（无 Pinia）、Wails 事件路由（bindRuntimeEvents 按 sessionId/runId 分发）、工作区 Tab 管理、知识库模式与临时工作空间（`kind:'kb'` / `kind:'temp'` 的 workspace tab，sendPrompt/switchWorkspaceTab/键盘守卫均感知，config.workspace 永远只存聊天工作区；Tab 的当前工作区一律经 tabOwnsWorkspace/runWorkspaceForTab 解析，页脚上下文、git 徽标、token 计数、资源树同源）、`run:stream` rAF 合帧缓冲、tool:update 120ms 缓冲、Markdown/Mermaid 渲染与 LRU 缓存、/命令系统、附件、会话持久化、任务中心、版本更新、全局快捷键；关键: bindRuntimeEvents, queueStreamDelta/flushStreamBuffer, addWorkspaceTab/closeWorkspaceTab, ensureKbTab/switchMode, tabOwnsWorkspace/runWorkspaceForTab, markdownRenderCache
 - i18n.mjs — zh-CN/en-US 双语翻译源与语言工具（唯一 UI 文案来源）；关键: LOCALE_ZH_CN/LOCALE_EN_US, detectLocale, t, naiveLocale
 - style.css — 全局主样式（~3700 行）：字体、CSS 变量（字号/主题 accent 色系）
 - app.css — Wails 模板遗留样式，未被引用（残留）

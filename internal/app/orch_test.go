@@ -3618,7 +3618,7 @@ func TestGetGitDiffUsesRepositoryRootForSubdirectoryWorkspace(t *testing.T) {
 	app.initialized = true
 	app.config = ConfigState{Workspace: subdir}
 
-	got := app.GetGitDiff()
+	got := app.GetGitDiff("", "")
 	if !got.IsRepo {
 		t.Fatalf("expected subdirectory workspace to be recognized as repo, error=%q", got.Error)
 	}
@@ -3635,6 +3635,61 @@ func TestGetGitDiffUsesRepositoryRootForSubdirectoryWorkspace(t *testing.T) {
 	}
 	if !strings.Contains(file.Diff, "-alpha") || !strings.Contains(file.Diff, "+beta") {
 		t.Fatalf("expected file diff content for subdirectory workspace, got:\n%s", file.Diff)
+	}
+}
+
+// TestGitQueriesFollowExplicitWorkspace pins the contract behind the composer
+// footer: the git badge and diff modal must follow the directory the caller
+// displays. KB and temp tabs never write config.workspace, so an explicit
+// workspace is the only way for them to report their own repository.
+func TestGitQueriesFollowExplicitWorkspace(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+
+	repo := t.TempDir()
+	plain := t.TempDir()
+	runGitTestCommand(t, repo, "init")
+	runGitTestCommand(t, repo, "config", "user.email", "ally-test@example.com")
+	runGitTestCommand(t, repo, "config", "user.name", "Ally Test")
+	if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("alpha\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGitTestCommand(t, repo, "add", ".")
+	runGitTestCommand(t, repo, "commit", "-m", "init")
+	if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("beta\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	app := NewApp()
+	app.initialized = true
+	// The persisted chat workspace is not a repository: only the explicit
+	// workspace argument may surface the repo's status and diff.
+	app.config = ConfigState{Workspace: plain}
+
+	if got := app.GetGitStatus(""); got.IsRepo {
+		t.Fatalf("empty workspace must keep using the active config workspace, got %#v", got)
+	}
+	status := app.GetGitStatus(repo)
+	if !status.IsRepo || status.Modified != 1 {
+		t.Fatalf("expected explicit repo workspace to report 1 modified file, got %#v", status)
+	}
+
+	diff := app.GetGitDiff(repo, "")
+	if !diff.IsRepo {
+		t.Fatalf("expected explicit repo workspace diff, error=%q", diff.Error)
+	}
+	found := false
+	for _, file := range diff.Files {
+		if file.Path == "file.txt" && strings.Contains(file.Diff, "+beta") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected file.txt change in explicit workspace diff, got %#v", diff.Files)
+	}
+	if fallback := app.GetGitDiff("", ""); fallback.IsRepo {
+		t.Fatalf("empty workspace must keep using the active config workspace, got %#v", fallback)
 	}
 }
 
