@@ -242,7 +242,6 @@ func (a *App) setDisabledSkills(names []string) error {
 	cfg := a.config
 	path := a.configPath
 	a.mu.Unlock()
-	a.invalidateContextStaticCache()
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}

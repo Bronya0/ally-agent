@@ -449,19 +449,6 @@ func isImageInjectionMessage(m *openai.ChatCompletionMessage) bool {
 	return first.Type == openai.ChatMessagePartTypeText && strings.HasPrefix(first.Text, imageInjectionMarker)
 }
 
-// stripImageInjectionMessages removes synthesized image-input messages from the
-// slice in place (order preserved).
-func stripImageInjectionMessages(messages []openai.ChatCompletionMessage) []openai.ChatCompletionMessage {
-	out := messages[:0]
-	for _, m := range messages {
-		if isImageInjectionMessage(&m) {
-			continue
-		}
-		out = append(out, m)
-	}
-	return out
-}
-
 // readImageInjectionMessage builds a user message that carries image files
 // read by the preceding tool batch into multimodal model context. Returns nil
 // when the batch contains no readable image DataURLs.

@@ -8,8 +8,6 @@
 package app
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,21 +20,6 @@ import (
 
 	openai "github.com/sashabaranov/go-openai"
 )
-
-// contextStaticCacheHolder owns the ContextBreakdown memoization plus its
-// invalidation version counter. It lives in biz_context.go so the fields,
-// TTL, key derivation, read/write, and versioned invalidation are in one file.
-type contextStaticCacheHolder struct {
-	mu          sync.Mutex
-	cache       map[string]contextStaticCacheEntry
-	cacheVersion uint64
-}
-
-func newContextStaticCacheHolder() *contextStaticCacheHolder {
-	return &contextStaticCacheHolder{cache: map[string]contextStaticCacheEntry{}}
-}
-
-const contextStaticCacheTTL = 30 * time.Second
 
 // GetTodos returns the current todo list for a session.
 func (a *App) GetTodos(sessionID string) []TodoEntry {
@@ -96,8 +79,13 @@ type WorkspaceTokenUsage struct {
 }
 
 // GetContextBreakdown returns detailed token usage breakdown for a session.
-func (a *App) GetContextBreakdown(sessionID string) ContextBreakdown {
-	return a.getContextBreakdown(sessionID)
+// workspaceHint is an optional override from the caller (the frontend passes
+// the active Tab's workspace). It wins over the in-memory run record and the
+// session index: KB/temp sessions have neither before their first run, and
+// the footer polls breakdowns right at tab-switch time — before any request
+// has been made. An empty hint keeps the session-based resolution.
+func (a *App) GetContextBreakdown(sessionID, workspaceHint string) ContextBreakdown {
+	return a.getContextBreakdown(sessionID, workspaceHint)
 }
 
 // GetWorkspaceTokenUsage returns cumulative usage for the current app run.
@@ -110,7 +98,7 @@ func (a *App) GetWorkspaceTokenUsage(workspace string) WorkspaceTokenUsage {
 
 // GetSessionContextTokens returns the estimated token count for a session's full payload.
 func (a *App) GetSessionContextTokens(sessionID string) int {
-	return a.getContextBreakdown(sessionID).Total
+	return a.getContextBreakdown(sessionID, "").Total
 }
 
 // ResetWorkspaceTokenUsage resets cumulative token usage for a workspace.
@@ -340,23 +328,188 @@ func estimateCompletionTokens(content, reasoning string, toolCalls []openai.Tool
 	return total
 }
 
-// getContextBreakdown computes token estimates from the real session state.
-// If liveBreakdown is available, it returns a merged view (live messages + current system/tools).
-func (a *App) getContextBreakdown(sessionID string) ContextBreakdown {
+// sessionWorkspaceOverride is the per-session workspace resolution used to
+// align the footer breakdown with the config a real request would use.
+type sessionWorkspaceOverride struct {
+	workspace  string
+	extraRoots []string
+}
+
+// sessionWorkspaceOverridesCache memoizes the session index → workspace
+// resolution. getContextBreakdown is polled by the footer (debounced 120ms
+// during runs); re-reading and re-unmarshaling index.json on every call is
+// avoidable work. TTL is short so an updated session workspace shows up
+// quickly after SaveSessionIndex.
+var sessionWorkspaceOverridesCache = struct {
+	sync.Mutex
+	generatedAt time.Time
+	overrides   map[string]sessionWorkspaceOverride
+}{}
+
+const sessionWorkspaceOverridesTTL = 2 * time.Second
+
+// sessionContextConfig resolves the config a request for this session would
+// actually use. The footer breakdown used to sample a.config (the active
+// Tab's workspace), so a session running in a background Tab — or a KB/temp
+// Tab whose workspace never claims config.workspace — was counted against
+// the wrong workspace's AGENTS.md / CODEGRAPH / lessons / workspace map.
+// Resolution order mirrors StartChat's effectiveConfig:
+//  1. the caller's workspace hint (UI knows the Tab's exact workspace, even
+//     before the session's first run),
+//  2. the in-memory record written by StartChat (what this session's runs
+//     actually used),
+//  3. the session index entry's persisted workspace,
+//  4. a.config as fallback for sessions recorded before Workspace persisted.
+func (a *App) sessionContextConfig(sessionID string, workspaceHint string) ConfigState {
+	sessionID = strings.TrimSpace(sessionID)
 	a.mu.Lock()
 	cfg := a.config
+	if sessionID != "" && a.sessionWorkspaces != nil {
+		if ws, ok := a.sessionWorkspaces[sessionID]; ok && strings.TrimSpace(ws) != "" {
+			cfg.Workspace = ws
+		}
+	}
 	a.mu.Unlock()
 
-	result := a.contextStaticBreakdown(cfg, a.listCachedSkills())
+	// The UI hint wins over both the in-memory run record and the session
+	// index: the frontend knows the Tab's exact workspace even before the
+	// session's first run (KB/temp sessions have no index entry yet).
+	if hint := strings.TrimSpace(workspaceHint); hint != "" {
+		if override, ok := a.lookupSessionWorkspaceOverride(sessionID); ok {
+			cfg.ExtraRoots = cloneStringSlice(override.extraRoots)
+		}
+		cfg.Workspace = hint
+		return cfg
+	}
+	return a.sessionContextFromOverride(sessionID, cfg)
+}
 
-	// Workspace map (appended as a separate system message in buildMessages)
-	if wm := a.workspaceMapContext(cfg); wm != "" {
+// sessionContextFromOverride applies the session-index workspace override on
+// top of the given base config when one is recorded.
+func (a *App) sessionContextFromOverride(sessionID string, cfg ConfigState) ConfigState {
+	if sessionID == "" || a.sessionsDir == "" {
+		return cfg
+	}
+
+	override, ok := a.lookupSessionWorkspaceOverride(sessionID)
+	if !ok || strings.TrimSpace(override.workspace) == "" {
+		return cfg
+	}
+	cfg.Workspace = override.workspace
+	cfg.ExtraRoots = cloneStringSlice(override.extraRoots)
+	return cfg
+}
+
+func (a *App) lookupSessionWorkspaceOverride(sessionID string) (sessionWorkspaceOverride, bool) {
+	sessionWorkspaceOverridesCache.Lock()
+	if time.Since(sessionWorkspaceOverridesCache.generatedAt) < sessionWorkspaceOverridesTTL {
+		override, ok := sessionWorkspaceOverridesCache.overrides[sessionID]
+		sessionWorkspaceOverridesCache.Unlock()
+		return override, ok
+	}
+	sessionWorkspaceOverridesCache.Unlock()
+
+	a.sessionMu.Lock()
+	entries, err := a.readSessionIndexLocked()
+	a.sessionMu.Unlock()
+	if err != nil {
+		return sessionWorkspaceOverride{}, false
+	}
+	overrides := make(map[string]sessionWorkspaceOverride, len(entries))
+	for _, entry := range entries {
+		overrides[entry.ID] = sessionWorkspaceOverride{
+			workspace:  strings.TrimSpace(entry.Workspace),
+			extraRoots: cloneStringSlice(entry.ExtraRoots),
+		}
+	}
+
+	sessionWorkspaceOverridesCache.Lock()
+	sessionWorkspaceOverridesCache.generatedAt = time.Now()
+	sessionWorkspaceOverridesCache.overrides = overrides
+	sessionWorkspaceOverridesCache.Unlock()
+
+	override, ok := overrides[sessionID]
+	return override, ok
+}
+
+// peekSessionWorkspaceMap returns the bytes the request prefix would carry
+// for the workspace map without the freezing side effect of
+// sessionWorkspaceMap: an already-frozen session returns its frozen bytes; a
+// session that has not run yet is counted from the live map (plus the
+// snapshot note) so the footer estimate matches what the eventual request
+// will freeze. Read-only by design — footer polling must not pin the
+// session's map bytes ahead of the first real request.
+func (a *App) peekSessionWorkspaceMap(sessionID string, cfg ConfigState) string {
+	if strings.TrimSpace(sessionID) == "" {
+		return a.workspaceMapContext(cfg)
+	}
+	a.mu.Lock()
+	frozen, ok := a.sessionWorkspaceMaps[sessionID]
+	a.mu.Unlock()
+	if ok {
+		return frozen
+	}
+	content := a.workspaceMapContext(cfg)
+	if content == "" {
+		return ""
+	}
+	return workspaceMapSnapshotNote + content
+}
+
+// getContextBreakdown computes token estimates from the real session state.
+// If liveBreakdown is available, it returns a merged view (live messages + current system/tools).
+// workspaceHint (optional, from the UI) overrides the session-based workspace
+// resolution; see GetContextBreakdown.
+func (a *App) getContextBreakdown(sessionID string, workspaceHint string) ContextBreakdown {
+	cfg := a.sessionContextConfig(sessionID, workspaceHint)
+
+	// System prompt: count from the same bytes the request prefix carries —
+	// the session-frozen variant once frozen, the live prompt before that.
+	// Part-level granularity is preserved so the footer popover keeps its
+	// per-section breakdown (core prompt, skills, memories, AGENTS.md, ...).
+	result := ContextBreakdown{}
+	for _, part := range a.systemPromptPartsForBreakdown(sessionID, cfg, a.listCachedSkills()) {
+		tokens := estimateTokensFromText(part.content)
+		if tokens <= 0 {
+			continue
+		}
+		result.SystemPrompt += tokens
+		result.SystemPromptParts = append(result.SystemPromptParts, ContextBreakdownPart{
+			Label:  part.label,
+			Tokens: tokens,
+		})
+	}
+	// Tool schemas are not part of the frozen prompt; they follow config
+	// changes and keep their own cache.
+	result.ToolSchemas = estimateToolSchemaTokens(a.buildToolsForConfig(cfg))
+
+	// Workspace map: count the session-frozen variant, not the live map — the
+	// request prefix carries sessionWorkspaceMap(sessionID, cfg) (plus the
+	// snapshot note), so the footer must match those exact bytes. peek-
+	// semantics: a session that has not frozen its map yet is counted from
+	// the live map without freezing it — the actual request will freeze its
+	// own copy when it runs.
+	if wm := a.peekSessionWorkspaceMap(sessionID, cfg); wm != "" {
 		tokens := estimateTokensFromText(wm)
 		result.SystemPrompt += tokens
 		result.SystemPromptParts = append(result.SystemPromptParts, ContextBreakdownPart{
 			Label:  "工作区文件结构",
 			Tokens: tokens,
 		})
+	}
+
+	// Plan snapshot (appendPlanForUserTurn injects it before the latest user
+	// message on the first request of a run). It is request-only and
+	// transient, but occupies real context budget while the plan is
+	// unfinished, and the footer previously ignored it entirely.
+	if todos := a.GetTodos(sessionID); len(todos) > 0 {
+		if planTokens := estimateTokensFromText(formatPlanSnapshot(todos)); planTokens > 0 {
+			result.SystemPrompt += planTokens
+			result.SystemPromptParts = append(result.SystemPromptParts, ContextBreakdownPart{
+				Label:  "计划快照",
+				Tokens: planTokens,
+			})
+		}
 	}
 
 	// Check if live breakdown is available (covers tool calls + tool results not in a.histories)
@@ -386,7 +539,12 @@ func (a *App) getContextBreakdown(sessionID string) ContextBreakdown {
 				result.ToolResults += tokens
 			}
 			for _, tc := range m.ToolCalls {
-				result.AssistantMsgs += estimateTokensFromText(tc.Function.Name) + estimateTokensFromText(tc.Function.Arguments)
+				// Tool-call ID and Type are part of the wire payload and
+				// were previously omitted here.
+				result.AssistantMsgs += estimateTokensFromText(tc.ID) +
+					estimateTokensFromText(string(tc.Type)) +
+					estimateTokensFromText(tc.Function.Name) +
+					estimateTokensFromText(tc.Function.Arguments)
 			}
 			if m.ReasoningContent != "" {
 				result.Reasoning += estimateTokensFromText(m.ReasoningContent)
@@ -399,84 +557,6 @@ func (a *App) getContextBreakdown(sessionID string) ContextBreakdown {
 	// Do NOT recompute here — that would defeat the cache on every popover refresh.
 	finalizeContextBreakdownTotal(&result)
 	return result
-}
-
-func (a *App) contextStaticBreakdown(cfg ConfigState, skills []SkillDefinition) ContextBreakdown {
-	version := a.contextStaticCaches.version()
-	key := contextStaticCacheKey(cfg, skills, version)
-	a.contextStaticCaches.mu.Lock()
-	if cached, ok := a.contextStaticCaches.cache[key]; ok && time.Since(cached.generatedAt) < contextStaticCacheTTL {
-		result := cloneContextBreakdown(cached.breakdown)
-		a.contextStaticCaches.mu.Unlock()
-		return result
-	}
-	a.contextStaticCaches.mu.Unlock()
-
-	result := ContextBreakdown{}
-	for _, part := range buildSystemPromptParts(skills, cfg.Workspace, cfg.ExtraRoots, cfg.CustomPrompt, cfg.GitBashPath, cfg.KBRoot) {
-		tokens := estimateTokensFromText(part.content)
-		if tokens <= 0 {
-			continue
-		}
-		result.SystemPrompt += tokens
-		result.SystemPromptParts = append(result.SystemPromptParts, ContextBreakdownPart{
-			Label:  part.label,
-			Tokens: tokens,
-		})
-	}
-	result.ToolSchemas = estimateToolSchemaTokens(a.buildToolsForConfig(cfg))
-
-	a.contextStaticCaches.mu.Lock()
-	if len(a.contextStaticCaches.cache) >= 64 {
-		a.contextStaticCaches.cache = map[string]contextStaticCacheEntry{}
-	}
-	a.contextStaticCaches.cache[key] = contextStaticCacheEntry{
-		breakdown:   cloneContextBreakdown(result),
-		generatedAt: time.Now(),
-	}
-	a.contextStaticCaches.mu.Unlock()
-	return result
-}
-
-func cloneContextBreakdown(result ContextBreakdown) ContextBreakdown {
-	result.SystemPromptParts = append([]ContextBreakdownPart(nil), result.SystemPromptParts...)
-	return result
-}
-
-func contextStaticCacheKey(cfg ConfigState, skills []SkillDefinition, version uint64) string {
-	h := sha256.New()
-	write := func(value string) {
-		_, _ = h.Write([]byte(value))
-		_, _ = h.Write([]byte{0})
-	}
-	write(cfg.Workspace)
-	for _, root := range cfg.ExtraRoots {
-		write(root)
-	}
-	write(cfg.CustomPrompt)
-	write(cfg.GitBashPath)
-	write(fmt.Sprintf("%d", version))
-	for _, skill := range skills {
-		write(skill.Name)
-		write(skill.Description)
-		write(skill.Source)
-		write(skill.Path)
-		write(skill.WhenToUse)
-	}
-	return hex.EncodeToString(h.Sum(nil))
-}
-
-func (h *contextStaticCacheHolder) version() uint64 {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return h.cacheVersion
-}
-
-func (a *App) invalidateContextStaticCache() {
-	a.contextStaticCaches.mu.Lock()
-	a.contextStaticCaches.cacheVersion++
-	a.contextStaticCaches.cache = map[string]contextStaticCacheEntry{}
-	a.contextStaticCaches.mu.Unlock()
 }
 
 // liveBreakdownAccumulator exploits the append-only shape of the runChat
@@ -532,7 +612,12 @@ func addLiveBreakdownMessage(result *ContextBreakdown, message openai.ChatComple
 		result.ToolResults += tokens
 	}
 	for _, tc := range message.ToolCalls {
-		result.AssistantMsgs += estimateTokensFromText(tc.Function.Name) + estimateTokensFromText(tc.Function.Arguments)
+		// Tool-call ID and Type are part of the wire payload and
+		// were previously omitted here.
+		result.AssistantMsgs += estimateTokensFromText(tc.ID) +
+			estimateTokensFromText(string(tc.Type)) +
+			estimateTokensFromText(tc.Function.Name) +
+			estimateTokensFromText(tc.Function.Arguments)
 	}
 	if message.ReasoningContent != "" {
 		result.Reasoning += estimateTokensFromText(message.ReasoningContent)
@@ -737,63 +822,68 @@ func cancelledTurnMarker() openai.ChatCompletionMessage {
 
 func (a *App) buildSystemContextMessages(sessionID string, cfg ConfigState, allSkills []SkillDefinition) []openai.ChatCompletionMessage {
 	messages := []openai.ChatCompletionMessage{}
-	systemPrompt := defaultSystemPrompt(allSkills, cfg.Workspace, cfg.ExtraRoots, cfg.CustomPrompt, cfg.GitBashPath, cfg.KBRoot)
-	if systemPrompt != "" {
+	if systemPrompt := a.sessionSystemPrompt(sessionID, cfg, allSkills); systemPrompt != "" {
 		messages = append(messages, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleSystem, Content: systemPrompt})
 	}
 	messages = a.appendWorkspaceMapMessage(messages, sessionID, cfg)
 	return messages
 }
 
-// contextBudgetThresholdPct is the remaining-budget percentage below which the
-// context-budget item is injected. Above it the model sees no budget message at
-// all: with a ~1M-token window the numbers carry no decision information and
-// models occasionally echo the note back as noise. Only when the window is
-// actually getting tight does the hint matter (prefer grep over read, avoid
-// re-reading).
-const contextBudgetThresholdPct = 30
+// sessionSystemPrompt returns the system prompt bytes for a chat session,
+// frozen at the session's first request. Later runs in the same session reuse
+// the exact same bytes so the request prefix (system prompt + workspace map +
+// history) stays byte-stable and provider prompt caches survive across runs.
+// The prompt embeds live disk sources (memory index, project lessons,
+// AGENTS.md, CODEGRAPH.md) that the agent itself may write during the
+// conversation; rebuilding per run would invalidate the whole prefix cache on
+// every such write, so changes only take effect in new sessions. Requests
+// without a session id fall back to the live prompt (stateless callers).
+func (a *App) sessionSystemPrompt(sessionID string, cfg ConfigState, allSkills []SkillDefinition) string {
+	return joinSystemPromptParts(a.sessionSystemPromptParts(sessionID, cfg, allSkills))
+}
 
-// appendContextBudgetMessage returns a new slice with a context-budget item
-// appended to the request tail, or the input slice unchanged when remaining
-// budget is above contextBudgetThresholdPct. It deliberately allocates a fresh
-// slice so the caller's `messages` is never mutated; the budget item must not
-// be persisted into saved history (it would bloat storage and disrupt reusable
-// prefixes).
-//
-// Placing the budget at the tail follows the same strategy as other
-// dynamic, low-priority content: it goes last. The explicit GPT-5.6
-// Responses cache boundary, when active, stays before this tail.
-func appendContextBudgetMessage(messages []openai.ChatCompletionMessage, usedTokens, maxCtx int) []openai.ChatCompletionMessage {
-	if maxCtx <= 0 {
-		maxCtx = 1000000
+// sessionSystemPromptParts freezes the system prompt parts per session (the
+// request path joins them into the single system message). See
+// sessionSystemPrompts on App for the rationale.
+func (a *App) sessionSystemPromptParts(sessionID string, cfg ConfigState, allSkills []SkillDefinition) []systemPromptPart {
+	if strings.TrimSpace(sessionID) == "" {
+		return buildSystemPromptParts(allSkills, cfg.Workspace, cfg.ExtraRoots, cfg.CustomPrompt, cfg.GitBashPath, cfg.KBRoot)
 	}
-	if usedTokens < 0 {
-		usedTokens = 0
+	a.mu.Lock()
+	if frozen, ok := a.sessionSystemPrompts[sessionID]; ok {
+		a.mu.Unlock()
+		return frozen
 	}
-	remaining := maxCtx - usedTokens
-	if remaining < 0 {
-		remaining = 0
+	a.mu.Unlock()
+
+	parts := buildSystemPromptParts(allSkills, cfg.Workspace, cfg.ExtraRoots, cfg.CustomPrompt, cfg.GitBashPath, cfg.KBRoot)
+	if len(parts) == 0 {
+		return nil
 	}
-	usedPct := 0
-	if maxCtx > 0 {
-		usedPct = usedTokens * 100 / maxCtx
+
+	a.mu.Lock()
+	if a.sessionSystemPrompts == nil {
+		a.sessionSystemPrompts = map[string][]systemPromptPart{}
 	}
-	remainingPct := 100 - usedPct
-	if remainingPct >= contextBudgetThresholdPct {
-		return messages
+	a.sessionSystemPrompts[sessionID] = parts
+	a.mu.Unlock()
+	return parts
+}
+
+// systemPromptPartsForBreakdown returns the parts the footer context breakdown
+// counts: the session-frozen parts once frozen, the live parts before that
+// (peek semantics — footer polling must not pin the session's prompt bytes
+// ahead of the first real request).
+func (a *App) systemPromptPartsForBreakdown(sessionID string, cfg ConfigState, skills []SkillDefinition) []systemPromptPart {
+	if strings.TrimSpace(sessionID) != "" {
+		a.mu.Lock()
+		frozen, ok := a.sessionSystemPrompts[sessionID]
+		a.mu.Unlock()
+		if ok {
+			return frozen
+		}
 	}
-	var b strings.Builder
-	b.WriteString("<ally-context-budget>\n")
-	fmt.Fprintf(&b, "Window: %d tokens\n", maxCtx)
-	fmt.Fprintf(&b, "Used: %d tokens (%d%%)\n", usedTokens, usedPct)
-	fmt.Fprintf(&b, "Remaining: %d tokens (%d%%)\n", remaining, remainingPct)
-	b.WriteString("Note: large tool results (read, command output) consume budget quickly. ")
-	b.WriteString("When remaining is low, prefer grep/list_files over read, and avoid re-reading files already seen this turn.")
-	b.WriteString("\n</ally-context-budget>")
-	out := make([]openai.ChatCompletionMessage, len(messages)+1)
-	copy(out, messages)
-	out[len(messages)] = openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: b.String()}
-	return out
+	return buildSystemPromptParts(skills, cfg.Workspace, cfg.ExtraRoots, cfg.CustomPrompt, cfg.GitBashPath, cfg.KBRoot)
 }
 
 func (a *App) loadSessionHistoryCopy(sessionID string) []openai.ChatCompletionMessage {
@@ -813,7 +903,14 @@ func (a *App) loadSessionHistoryCopy(sessionID string) []openai.ChatCompletionMe
 func appendFrontendHistoryDelta(messages []openai.ChatCompletionMessage, backend []openai.ChatCompletionMessage, frontend []ChatMessageInput) []openai.ChatCompletionMessage {
 	backendKeys := make([]string, 0, len(backend))
 	for _, m := range backend {
-		if key := comparableMessageKey(m.Role, m.Content); key != "" {
+		// MultiContent messages (attachment images kept in memory history)
+		// compare by their text projection so frontend delta alignment sees
+		// them the same way as the frontend's plain-content messages.
+		content := m.Content
+		if len(m.MultiContent) > 0 {
+			content = textFromMultiContent(m.MultiContent)
+		}
+		if key := comparableMessageKey(m.Role, content); key != "" {
 			backendKeys = append(backendKeys, key)
 		}
 	}

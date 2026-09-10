@@ -86,9 +86,7 @@ const (
 	// base64 data URL for multimodal model input. Base64 inflates by ~33%, and
 	// Anthropic's per-image limit is 5MB of base64 data, so the raw cap is
 	// 3.5MB (~4.7MB base64) to stay safe across all providers.
-	maxReadImageBytes        = 3 * 1024 * 1024
-	maxSavedHistoryTokens    = 256 * 1024
-	maxSavedHistoryJSONBytes = 8 * 1024 * 1024
+	maxReadImageBytes = 3 * 1024 * 1024
 	// Background image storage. Bytes are written to
 	// ~/.ally_agent/background.<ext> so config.json stays small; the
 	// filename is stored in ConfigState.BackgroundImage.
@@ -205,10 +203,6 @@ type gitStatusCacheEntry struct {
 }
 
 // contextStaticCacheEntry caches a ContextBreakdown keyed by config+skills+version.
-type contextStaticCacheEntry struct {
-	breakdown   ContextBreakdown
-	generatedAt time.Time
-}
 
 type skillListCacheEntry struct {
 	skills      []SkillDefinition
@@ -264,6 +258,25 @@ type App struct {
 	// biz_workspace.go with the workspace cache fields).
 	sessionWorkspaceMaps map[string]string
 
+	// sessionSystemPrompts freezes the system prompt parts per session
+	// (sessionID → parts; joined into the system message at request time). The
+	// prompt embeds live disk sources (memory index, project lessons, AGENTS.md,
+	// CODEGRAPH.md, skill listing) that can change mid-conversation when the
+	// agent itself writes them (e.g. recording a lesson after fixing a pitfall);
+	// rebuilding per run would silently invalidate the entire prompt-cache
+	// prefix on every such write. Freezing at the session's first request makes
+	// the prefix byte-stable for the session lifetime; changes take effect in
+	// new sessions. Guarded by mu.
+	sessionSystemPrompts map[string][]systemPromptPart
+
+	// sessionWorkspaces records the workspace each session's runs actually
+	// used (sessionID → workspace), written by StartChat. It is the first
+	// priority in sessionContextConfig: KB/temp sessions have no session-index
+	// entry before their first completed run, so the index-only resolution
+	// silently counted them against the persisted chat workspace (the previous
+	// chat Tab) and the footer showed that Tab's stats. Guarded by mu.
+	sessionWorkspaces map[string]string
+
 	askMu       sync.Mutex
 	pendingAsks map[string]*pendingAsk
 
@@ -308,11 +321,6 @@ type App struct {
 	// (TTL, version, in-flight rebuilds). The concrete type lives in
 	// biz_workspace.go next to the cache logic, so this struct stays slim.
 	workspaceCaches *workspaceCacheHolder
-
-	// contextStaticCaches owns the ContextBreakdown memoization and its
-	// invalidation version. Concrete type lives in biz_context.go with the
-	// breakdown logic.
-	contextStaticCaches *contextStaticCacheHolder
 
 	httpRateMu   sync.Mutex
 	httpLastHost map[string]time.Time
@@ -365,6 +373,12 @@ func NewApp() *App {
 		histories:           map[string][]openai.ChatCompletionMessage{},
 		todos:               map[string][]TodoEntry{},
 		todoRevisions:       map[string]int64{},
+		// sessionWorkspaces 记录每个会话 run 实际使用的 workspace（见
+		// StartChat 的写入点）：KB/temp 会话在首次 run 完成前没有会话索引
+		// 条目，sessionContextConfig 若只回退 a.config 会把上下文统计算到
+		// 上一个 chat Tab 的工作区上。run 路径写入后它成为内存级第一优先。
+		sessionWorkspaces:   map[string]string{},
+		sessionSystemPrompts: map[string][]systemPromptPart{},
 		pendingAsks:         map[string]*pendingAsk{},
 		sshCredentials:      newSSHCredentialCache(),
 		subRuns:             map[string]*SubagentRun{},
@@ -373,7 +387,6 @@ func NewApp() *App {
 		gitStatusInFlight:   map[string]chan struct{}{},
 		skillCache:          map[string]skillListCacheEntry{},
 		workspaceCaches:     newWorkspaceCacheHolder(),
-		contextStaticCaches: newContextStaticCacheHolder(),
 		httpLastHost:        map[string]time.Time{},
 		liveBreakdown:       map[string]ContextBreakdown{},
 		workspaceTokenUsage: map[string]WorkspaceTokenUsage{},
@@ -1446,6 +1459,19 @@ func (a *App) StartChat(req ChatRequest) (string, error) {
 		return "", errors.New("workspace is required")
 	}
 
+	// Record the workspace this session's runs actually use. Written before
+	// the run goroutine starts so the footer breakdown (polled during the
+	// run, before any session-index entry exists for KB/temp sessions) and
+	// compaction see the right workspace from the very first request.
+	if req.SessionID != "" && strings.TrimSpace(cfg.Workspace) != "" {
+		a.mu.Lock()
+		if a.sessionWorkspaces == nil {
+			a.sessionWorkspaces = map[string]string{}
+		}
+		a.sessionWorkspaces[req.SessionID] = strings.TrimSpace(cfg.Workspace)
+		a.mu.Unlock()
+	}
+
 	runID := newID()
 	ctx, cancel := context.WithCancel(context.Background())
 	a.mu.Lock()
@@ -1603,6 +1629,8 @@ func (a *App) releaseSession(sessionID string, deleteHistory bool) error {
 	delete(a.todoRevisions, sessionID)
 	delete(a.liveBreakdown, sessionID)
 	delete(a.sessionWorkspaceMaps, sessionID)
+	delete(a.sessionSystemPrompts, sessionID)
+	delete(a.sessionWorkspaces, sessionID)
 	a.mu.Unlock()
 
 	a.subRunsMu.Lock()
@@ -1726,7 +1754,7 @@ func (a *App) compactSession(parent context.Context, sessionID, instruction stri
 		return nil, errors.New("no messages to compact")
 	}
 
-	tokensBefore := a.getContextBreakdown(sessionID).Total
+	tokensBefore := a.getContextBreakdown(sessionID, "").Total
 	if tokensBefore <= 0 {
 		tokensBefore = estimateTokensFromMessages(history)
 	}
@@ -1857,7 +1885,7 @@ Rules:
 
 	a.saveHistory(sessionID, newHistory)
 
-	tokensAfter := a.getContextBreakdown(sessionID).Total
+	tokensAfter := a.getContextBreakdown(sessionID, "").Total
 	if tokensAfter <= 0 {
 		tokensAfter = estimateTokensFromMessages(newHistory)
 	}
@@ -2324,9 +2352,9 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 
 		// Append tool results to the model message history in tool-call
 		// order. Emitting already happened per-tool as each finished.
-		// Strip the previous turn's image-injection message first so each
-		// tool batch carries only its own images (single-turn context).
-		messages = stripImageInjectionMessages(messages)
+		// Read-image injection messages now persist for the whole session
+		// (memory only; the disk copy flattens them in saveHistory), so the
+		// model keeps seeing images it read and the prefix stays stable.
 		for _, o := range outcomes {
 			messages = append(messages, openai.ChatCompletionMessage{
 				Role:       openai.ChatMessageRoleTool,

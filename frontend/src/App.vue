@@ -2872,7 +2872,10 @@ async function refreshFooterStats({
     // persisted chat workspace.
     GetGitStatus(requestedWorkspace),
     GetWorkspaceTokenUsage(requestedWorkspace),
-    GetContextBreakdown(requestedSessionId),
+    // workspaceHint：告知后端本次统计所属 Tab 的确切工作区。KB/temp 会话
+    // 在首次 run 完成前既无会话索引条目也无内存 run 记录，后端会回退到
+    // config.workspace（上一个 chat Tab），统计就会串 Tab。
+    GetContextBreakdown(requestedSessionId, requestedWorkspace),
   ]);
 
   if (
@@ -2997,7 +3000,10 @@ function doRefreshContextTokens(sid) {
   const requestVersion = ++contextRequestVersion;
   // The breakdown already carries `total`, so a separate GetSessionContextTokens
   // call would duplicate the backend computation on every tool:result burst.
-  GetContextBreakdown(sid).then((breakdown) => {
+  // workspaceHint pins the count to the active Tab's own workspace so a
+  // KB/temp session (no session-index entry before its first run) is not
+  // counted against the persisted chat workspace of the previous Tab.
+  GetContextBreakdown(sid, activeRunWorkspace.value).then((breakdown) => {
     refreshContextInFlight = false;
     // If another refresh was requested while this one was in flight, trigger
     // it now so the footer reflects the latest tool results.
@@ -3018,7 +3024,7 @@ function doRefreshContextTokens(sid) {
     }
     contextTokens.value = value;
     contextBreakdown.value = breakdown || null;
-    captureFooterSnapshot(activeWorkspaceId.value, config.workspace || '');
+    captureFooterSnapshot(activeWorkspaceId.value, activeRunWorkspace.value);
   }).catch(() => { refreshContextInFlight = false; });
 }
 

@@ -868,8 +868,12 @@ func (a *App) saveHistory(sessionID string, messages []openai.ChatCompletionMess
 	if sessionID == "" {
 		return
 	}
-	filtered := trimSavedHistory(sanitizeHistoryMessages(messages))
-	filtered = a.redactSSHCredentialMessages(filtered)
+	// In-memory history keeps image MultiContent so subsequent runs in this
+	// process still see the images (stable prefix, prompt cache survives).
+	// Only the disk copy is flattened: images are not persisted and restart
+	// recovery replays text-only history.
+	inMemory := sanitizeHistoryMessages(messages)
+	filtered := a.redactSSHCredentialMessages(inMemory)
 	breakdown := computeLiveBreakdown(filtered)
 	a.mu.Lock()
 	a.histories[sessionID] = cloneChatMessages(filtered)
@@ -879,8 +883,10 @@ func (a *App) saveHistory(sessionID string, messages []openai.ChatCompletionMess
 	if a.historiesDir == "" {
 		return
 	}
+	disk := sanitizeHistoryMessagesForDisk(inMemory)
+	disk = a.redactSSHCredentialMessages(disk)
 	paths := a.historyDiskPaths(sessionID)
-	if err := writeCompressedHistory(paths[0], filtered); err != nil {
+	if err := writeCompressedHistory(paths[0], disk); err != nil {
 		log.Printf("saveHistory: failed to write %s: %v", paths[0], err)
 		return
 	}
@@ -992,12 +998,12 @@ func (a *App) loadHistoryLocked(sessionID string) []openai.ChatCompletionMessage
 			}
 			source = zr
 		}
-		data, readErr := io.ReadAll(io.LimitReader(source, maxSavedHistoryJSONBytes+1))
+		data, readErr := io.ReadAll(source)
 		if zr != nil {
 			_ = zr.Close()
 		}
 		_ = file.Close()
-		if readErr != nil || len(data) > maxSavedHistoryJSONBytes || json.Unmarshal(data, &messages) != nil {
+		if readErr != nil || json.Unmarshal(data, &messages) != nil {
 			continue
 		}
 		loaded = true
@@ -1006,128 +1012,43 @@ func (a *App) loadHistoryLocked(sessionID string) []openai.ChatCompletionMessage
 	if !loaded {
 		return nil
 	}
-	messages = trimSavedHistory(sanitizeHistoryMessages(messages))
+	messages = sanitizeHistoryMessages(messages)
 	a.histories[sessionID] = cloneChatMessages(messages)
 	return messages
 }
 
-// historyMessageTokens 是单条消息 token 估算的唯一入口：直接派生自
-// estimateRequestTokens 的逐消息口径（role/body/name/toolCallID/reasoning
-// + tool call 的 ID/Type/Name/Args 全字段）。原实现漏计 tool call 的 ID 与
-// Type，导致历史裁剪预算（trimSavedHistory）与上下文面板（estimateRequestTokens
-// 路径）系统性偏差；上下文面板的 contextStaticBreakdown/liveBreakdown 也统一
-// 复用本函数与 addLiveBreakdownMessage 的同口径分桶，不再各写一份循环。
-func historyMessageTokens(message openai.ChatCompletionMessage) int {
-	return estimateRequestTokens([]openai.ChatCompletionMessage{message}, nil)
-}
-
-func trimSavedHistory(messages []openai.ChatCompletionMessage) []openai.ChatCompletionMessage {
-	if len(messages) == 0 {
-		return nil
-	}
-	total := 0
-	for _, message := range messages {
-		total += historyMessageTokens(message)
-	}
-	if total <= maxSavedHistoryTokens {
-		return messages
-	}
-
-	// Start only at a user message so an assistant tool call and all of its
-	// tool results remain an intact model-protocol sequence. If the newest turn
-	// alone exceeds the budget, keep it whole rather than creating orphans.
-	running := 0
-	start := len(messages)
-	lastUser := -1
-	for index := len(messages) - 1; index >= 0; index-- {
-		running += historyMessageTokens(messages[index])
-		if messages[index].Role != openai.ChatMessageRoleUser {
-			continue
-		}
-		lastUser = index
-		if running <= maxSavedHistoryTokens {
-			start = index
-			continue
-		}
-		break
-	}
-	if start == len(messages) {
-		if lastUser >= 0 {
-			start = lastUser
-		} else {
-			return messages
-		}
-	}
-	return messages[start:]
-}
-
-// trimmedToolResultPlaceholder is the stub that replaces stale tool-result
-// bodies during stage-1 context slimming. The tool message itself is kept
-// (with its ToolCallID) so the assistant tool_call/result pairing invariant
-// enforced by repairDanglingToolCalls — and by strict providers — holds.
-const trimmedToolResultPlaceholder = "[tool result omitted]"
-
-// keepRecentToolResults bounds how many recent tool-result bodies survive
-// stage-1 context slimming; older ones are replaced by the placeholder.
-// Recent results stay intact because the model may still be reasoning
-// over them in the current turn.
-const keepRecentToolResults = 20
-
-// trimOldToolResults replaces the content of all but the most recent
-// keepResults tool-result messages with a short placeholder. Tool results
-// are the bulk of context usage; stubbing the stale ones keeps context
-// growth slow in long-running sessions while preserving the full decision
-// chain (assistant tool_calls with exact arguments). The message is kept,
-// never deleted, so tool_call/result pairing stays valid for providers
-// that reject dangling tool_calls with 400. Idempotent: already-stubbed
-// bodies are skipped. Returns the (possibly new) slice and whether
-// anything changed.
-func trimOldToolResults(messages []openai.ChatCompletionMessage, keepResults int) ([]openai.ChatCompletionMessage, bool) {
-	if keepResults < 0 {
-		keepResults = 0
-	}
-	var toolIndexes []int
-	for i := range messages {
-		if messages[i].Role == openai.ChatMessageRoleTool {
-			toolIndexes = append(toolIndexes, i)
-		}
-	}
-	if len(toolIndexes) <= keepResults {
-		return messages, false
-	}
-	changed := false
-	for _, i := range toolIndexes[:len(toolIndexes)-keepResults] {
-		if messages[i].Content == trimmedToolResultPlaceholder {
-			continue
-		}
-		if !changed {
-			messages = append([]openai.ChatCompletionMessage(nil), messages...)
-		}
-		messages[i] = openai.ChatCompletionMessage{
-			Role:       openai.ChatMessageRoleTool,
-			ToolCallID: messages[i].ToolCallID,
-			Content:    trimmedToolResultPlaceholder,
-		}
-		changed = true
-	}
-	return messages, changed
-}
-
 func sanitizeHistoryMessages(messages []openai.ChatCompletionMessage) []openai.ChatCompletionMessage {
+	return sanitizeHistoryMessagesOpts(messages, false)
+}
+
+// sanitizeHistoryMessagesForDisk is the persistence variant: images are not
+// persisted (base64 payloads would bloat disk history and restart replay
+// would re-send them), so attachment images collapse to their text and read
+// image injections are dropped wholesale. In-memory history keeps images so
+// later runs in the same process still see them.
+func sanitizeHistoryMessagesForDisk(messages []openai.ChatCompletionMessage) []openai.ChatCompletionMessage {
+	return sanitizeHistoryMessagesOpts(messages, true)
+}
+
+func sanitizeHistoryMessagesOpts(messages []openai.ChatCompletionMessage, flattenImages bool) []openai.ChatCompletionMessage {
 	filtered := make([]openai.ChatCompletionMessage, 0, len(messages))
 	for _, original := range messages {
-		// Synthesized image-input messages are transient: drop them so saved
-		// history never carries "images were provided" text without the actual
-		// images (the base64 payloads are not persisted).
-		if isImageInjectionMessage(&original) || original.Role == openai.ChatMessageRoleSystem {
+		// Synthesized image-injection messages from the read tool survive in
+		// the in-memory history (the session should keep seeing them until the
+		// process exits) but are never persisted: their NUL-prefixed marker is
+		// not JSON-portable and the base64 payloads do not go to disk.
+		if flattenImages && isImageInjectionMessage(&original) {
+			continue
+		}
+		if original.Role == openai.ChatMessageRoleSystem {
 			continue
 		}
 		m := original
-		if len(m.MultiContent) > 0 {
+		if flattenImages && len(m.MultiContent) > 0 {
 			m.Content = textFromMultiContent(m.MultiContent)
 			m.MultiContent = nil
 		}
-		if strings.TrimSpace(m.Content) == "" && len(m.ToolCalls) == 0 && m.Role != openai.ChatMessageRoleTool {
+		if strings.TrimSpace(m.Content) == "" && len(m.MultiContent) == 0 && len(m.ToolCalls) == 0 && m.Role != openai.ChatMessageRoleTool {
 			continue
 		}
 		m.ToolCalls = append([]openai.ToolCall(nil), m.ToolCalls...)

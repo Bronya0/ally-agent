@@ -87,7 +87,7 @@ func TestReadImageInjectionMessage(t *testing.T) {
 	}
 }
 
-func TestIsImageInjectionMessageAndStrip(t *testing.T) {
+func TestIsImageInjectionMessage(t *testing.T) {
 	injected := readImageInjectionMessage([]readImageCandidate{
 		{Path: "a.png", DataURL: "data:image/png;base64,YWJj"},
 	})
@@ -107,36 +107,58 @@ func TestIsImageInjectionMessageAndStrip(t *testing.T) {
 	if isImageInjectionMessage(withImage) {
 		t.Fatal("attachment-style image message must not be treated as injection")
 	}
-
-	messages := []openai.ChatCompletionMessage{
-		{Role: openai.ChatMessageRoleUser, Content: "first"},
-		*injected,
-		{Role: openai.ChatMessageRoleTool, ToolCallID: "call_1", Content: "{}"},
-	}
-	stripped := stripImageInjectionMessages(messages)
-	if len(stripped) != 2 || stripped[0].Content != "first" || stripped[1].ToolCallID != "call_1" {
-		t.Fatalf("strip removed the wrong messages: %#v", stripped)
-	}
 }
 
-func TestSanitizeHistoryDropsImageInjectionMessages(t *testing.T) {
+func TestSanitizeHistoryKeepsImagesInMemoryAndDropsForDisk(t *testing.T) {
 	injected := readImageInjectionMessage([]readImageCandidate{
 		{Path: "a.png", DataURL: "data:image/png;base64,YWJj"},
 	})
+	attachment := openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, MultiContent: []openai.ChatMessagePart{
+		{Type: openai.ChatMessagePartTypeText, Text: "look at this"},
+		{Type: openai.ChatMessagePartTypeImageURL, ImageURL: &openai.ChatMessageImageURL{URL: "data:image/png;base64,YWJj"}},
+	}}
 	messages := []openai.ChatCompletionMessage{
 		{Role: openai.ChatMessageRoleSystem, Content: "sys"},
 		{Role: openai.ChatMessageRoleUser, Content: "hi"},
 		*injected,
+		attachment,
 		{Role: openai.ChatMessageRoleAssistant, Content: "let me look"},
 	}
-	sanitized := sanitizeHistoryMessages(messages)
-	for _, m := range sanitized {
-		if isImageInjectionMessage(&m) {
-			t.Fatalf("injection message leaked into sanitized history: %#v", m)
+
+	// In-memory variant keeps both image-carrying messages intact.
+	memory := sanitizeHistoryMessages(messages)
+	if len(memory) != 4 {
+		t.Fatalf("in-memory history must keep image messages, got %d: %#v", len(memory), memory)
+	}
+	keptInjection := false
+	keptAttachment := false
+	for i := range memory {
+		if isImageInjectionMessage(&memory[i]) {
+			keptInjection = true
+		}
+		if memory[i].Role == openai.ChatMessageRoleUser && len(memory[i].MultiContent) > 0 {
+			keptAttachment = true
 		}
 	}
-	if len(sanitized) != 2 || sanitized[0].Role != openai.ChatMessageRoleUser || sanitized[1].Role != openai.ChatMessageRoleAssistant {
-		t.Fatalf("unexpected sanitized history: %#v", sanitized)
+	if !keptInjection || !keptAttachment {
+		t.Fatalf("in-memory history lost image messages: injection=%v attachment=%v", keptInjection, keptAttachment)
+	}
+
+	// Disk variant drops the injection and flattens the attachment.
+	disk := sanitizeHistoryMessagesForDisk(messages)
+	if len(disk) != 3 {
+		t.Fatalf("disk history must drop the injection message, got %d: %#v", len(disk), disk)
+	}
+	for i := range disk {
+		if isImageInjectionMessage(&disk[i]) {
+			t.Fatalf("injection message leaked into disk history: %#v", disk[i])
+		}
+		if len(disk[i].MultiContent) > 0 {
+			t.Fatalf("image MultiContent leaked into disk history: %#v", disk[i])
+		}
+	}
+	if !strings.Contains(disk[1].Content, "image attachment(s) omitted") {
+		t.Fatalf("flattened attachment should carry the omission note, got %q", disk[1].Content)
 	}
 }
 

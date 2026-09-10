@@ -1109,7 +1109,6 @@ func (a *App) RestartMcpServers() error {
 	}
 	manager := NewMcpManager(root, func(tools []McpDiscoveredTool) {
 		a.emitMcpStatus()
-		a.invalidateContextStaticCache()
 	})
 	manager.SetNetworkConfigProvider(func() ConfigState { return a.effectiveConfig(ConfigState{}) })
 	manager.SetWarningHandler(func(message string) {
@@ -1135,11 +1134,8 @@ func (a *App) ReconcileMcpServers() error {
 	if a.mcpManager == nil {
 		return a.RestartMcpServers()
 	}
-	changed, err := a.mcpManager.ReconcileConfigs(a.ctx)
+	_, err := a.mcpManager.ReconcileConfigs(a.ctx)
 	a.emitMcpStatus()
-	if err == nil && changed > 0 {
-		a.invalidateContextStaticCache()
-	}
 	return err
 }
 

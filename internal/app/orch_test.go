@@ -643,11 +643,91 @@ func TestContextBreakdownIncludesToolSchemas(t *testing.T) {
 	app := NewApp()
 	app.initialized = true
 	app.config = ConfigState{}
-	normal := app.getContextBreakdown("session-1")
+	normal := app.getContextBreakdown("session-1", "")
 	if normal.ToolSchemas <= 0 {
 		t.Fatalf("expected tool schema tokens to be counted, got %#v", normal)
 	}
 
+}
+
+// TestContextBreakdownCountsPlanSnapshotAndFrozenMap guards the footer
+// alignment with the request-side injections: the plan snapshot
+// (appendPlanForUserTurn) and the session workspace map must appear in the
+// system-prompt breakdown with their own labels.
+func TestContextBreakdownCountsPlanSnapshotAndFrozenMap(t *testing.T) {
+	root := t.TempDir()
+	app := NewApp()
+	app.initialized = true
+	app.config = ConfigState{Workspace: root}
+
+	sessionID := "breakdown-session"
+
+	// No todos: no plan part.
+	bd := app.getContextBreakdown(sessionID, "")
+	for _, part := range bd.SystemPromptParts {
+		if part.Label == "计划快照" {
+			t.Fatalf("plan snapshot part must be absent without todos, got %#v", part)
+		}
+	}
+
+	// With todos, the plan snapshot part appears with tokens>0.
+	app.mu.Lock()
+	if app.todos == nil {
+		app.todos = map[string][]TodoEntry{}
+	}
+	app.todos[sessionID] = []TodoEntry{{Title: "fix the bug", Status: "in_progress"}}
+	app.mu.Unlock()
+
+	bd = app.getContextBreakdown(sessionID, "")
+	found := false
+	for _, part := range bd.SystemPromptParts {
+		if part.Label == "计划快照" {
+			found = true
+			if part.Tokens <= 0 {
+				t.Fatalf("plan snapshot tokens must be positive, got %#v", part)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected plan snapshot part, got %#v", bd.SystemPromptParts)
+	}
+}
+
+// TestContextBreakdownUsesSessionWorkspace guards the per-session workspace
+// resolution: a session whose index entry records workspace B must be counted
+// against B's AGENTS.md, not the active config workspace A.
+func TestContextBreakdownUsesSessionWorkspace(t *testing.T) {
+	workspaceA := t.TempDir()
+	workspaceB := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspaceB, "AGENTS.md"), []byte("Workspace B rule: count me.\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	app := NewApp()
+	app.initialized = true
+	app.sessionsDir = t.TempDir()
+	app.config = ConfigState{Workspace: workspaceA}
+
+	sessionID := "multi-tab-session"
+	if err := app.SaveSessionIndex(SessionIndexEntry{ID: sessionID, Workspace: workspaceB, Title: "B session"}); err != nil {
+		t.Fatalf("SaveSessionIndex: %v", err)
+	}
+	// The override cache must not hide the freshly written index entry.
+	sessionWorkspaceOverridesCache.Lock()
+	sessionWorkspaceOverridesCache.generatedAt = time.Time{}
+	sessionWorkspaceOverridesCache.overrides = nil
+	sessionWorkspaceOverridesCache.Unlock()
+
+	bd := app.getContextBreakdown(sessionID, "")
+	foundB := false
+	for _, part := range bd.SystemPromptParts {
+		if part.Label == "AGENTS.md / 项目指令" && part.Tokens > 0 {
+			foundB = true
+		}
+	}
+	if !foundB {
+		t.Fatalf("expected AGENTS.md part counted from workspace B, got %#v", bd.SystemPromptParts)
+	}
 }
 
 func TestComputeLiveBreakdownSetsTotal(t *testing.T) {

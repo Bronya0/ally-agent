@@ -919,6 +919,39 @@ func TestSystemPromptDefinesWaitSequencing(t *testing.T) {
 	}
 }
 
+// TestSessionSystemPromptFrozenWithinSession guards the prompt-cache prefix
+// contract: once a session has frozen its system prompt, later runs must see
+// the exact same bytes even when the live disk sources change (memory index,
+// project lessons, AGENTS.md, CODEGRAPH.md). Changes take effect only in new
+// sessions.
+func TestSessionSystemPromptFrozenWithinSession(t *testing.T) {
+	root := t.TempDir()
+	app := NewApp()
+	app.initialized = true
+	app.config = ConfigState{Workspace: root, CustomPrompt: "original custom prompt"}
+
+	sessionID := "frozen-prompt-session"
+	cfg := app.config
+	first := app.sessionSystemPrompt(sessionID, cfg, nil)
+	if !strings.Contains(first, "original custom prompt") {
+		t.Fatalf("first prompt should include the custom prompt, got %q", first)
+	}
+
+	// Same session, changed live sources: frozen bytes must win.
+	changed := cfg
+	changed.CustomPrompt = "changed custom prompt"
+	second := app.sessionSystemPrompt(sessionID, changed, nil)
+	if second != first {
+		t.Fatalf("frozen session prompt changed within the session")
+	}
+
+	// A different session sees the new bytes.
+	other := app.sessionSystemPrompt("another-session", changed, nil)
+	if !strings.Contains(other, "changed custom prompt") {
+		t.Fatalf("new session should see the changed prompt")
+	}
+}
+
 func TestSystemPromptExplainsRunCommandOutsidePathRecovery(t *testing.T) {
 	prompt := defaultSystemPrompt(nil, "", nil, "", "", "")
 	for _, expected := range []string{"`E_PATH_OUTSIDE`", "Do not retry the unchanged command", "read the returned Chinese explanation"} {
@@ -1132,37 +1165,6 @@ func TestSaveHistoryUsesGzipAndLoadsLegacyJSON(t *testing.T) {
 	loaded := app.loadSessionHistoryCopy(legacyID)
 	if len(loaded) != 2 || loaded[1].Content != "done twice" {
 		t.Fatalf("expected legacy JSON compatibility, got %#v", loaded)
-	}
-}
-
-func TestTrimSavedHistoryUsesTokenBudgetAndKeepsToolTurnIntact(t *testing.T) {
-	messages := make([]openai.ChatCompletionMessage, 0, 100)
-	for turn := 0; turn < 25; turn++ {
-		callID := fmt.Sprintf("call_%d", turn)
-		messages = append(messages,
-			openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: fmt.Sprintf("question-%d %s", turn, strings.Repeat("x", 50000))},
-			openai.ChatCompletionMessage{Role: openai.ChatMessageRoleAssistant, ToolCalls: []openai.ToolCall{{ID: callID, Type: openai.ToolTypeFunction, Function: openai.FunctionCall{Name: "read", Arguments: `{"files":[{"path":"a"}]}`}}}},
-			openai.ChatCompletionMessage{Role: openai.ChatMessageRoleTool, ToolCallID: callID, Content: strings.Repeat("result ", 1000)},
-			openai.ChatCompletionMessage{Role: openai.ChatMessageRoleAssistant, Content: fmt.Sprintf("answer-%d", turn)},
-		)
-	}
-
-	got := trimSavedHistory(messages)
-	if len(got) >= len(messages) {
-		t.Fatalf("expected token budget to trim long history, got %d messages", len(got))
-	}
-	if got[0].Role != openai.ChatMessageRoleUser {
-		t.Fatalf("trimmed history must start at a user boundary, got %#v", got[0])
-	}
-	for index, message := range got {
-		if message.Role == openai.ChatMessageRoleTool {
-			if index == 0 || len(got[index-1].ToolCalls) == 0 {
-				t.Fatalf("orphan tool result at index %d: %#v", index, got)
-			}
-		}
-	}
-	if len(got) <= 40 {
-		t.Fatalf("history must no longer be fixed to 40 messages, got %d", len(got))
 	}
 }
 

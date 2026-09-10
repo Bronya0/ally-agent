@@ -172,7 +172,6 @@ func (a *App) ServiceStartup(ctx context.Context, _ application.ServiceOptions) 
 		if root != "" {
 			a.mcpManager = NewMcpManager(root, func(tools []McpDiscoveredTool) {
 				a.emitMcpStatus()
-				a.invalidateContextStaticCache()
 			})
 			a.mcpManager.SetNetworkConfigProvider(func() ConfigState { return a.effectiveConfig(ConfigState{}) })
 			a.mcpManager.SetWarningHandler(func(message string) {
