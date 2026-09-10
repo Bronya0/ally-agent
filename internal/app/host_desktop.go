@@ -40,6 +40,10 @@ type wailsAppHandle struct {
 	app    *application.App
 	window *application.WebviewWindow
 	tray   *application.SystemTray
+	// windowState snapshots the main window geometry (updated from window
+	// events, persisted once at shutdown). Kept here so main-window sizing
+	// state stays in the host layer, mirroring installWebviewZoomResync.
+	windowState *windowStateTracker
 	// quitForced marks an explicit app quit (tray exit, self-update) so the
 	// close-to-tray WindowClosing hook never intercepts a real quit.
 	quitForced atomic.Bool
@@ -64,6 +68,7 @@ func (a *App) SetWindow(window *application.WebviewWindow) {
 	}
 	a.wails.window = window
 	a.installWebviewZoomResync(window)
+	a.installWindowStateTracking(window)
 }
 
 // installWebviewZoomResync guards against WebView2 restoring a stale zoom
@@ -195,6 +200,10 @@ func (a *App) ServiceStartup(ctx context.Context, _ application.ServiceOptions) 
 // completed requests are not lost when the window closes inside the periodic
 // flush interval.
 func (a *App) ServiceShutdown() error {
+	// Persist the main window geometry before the process tears down; the
+	// tracker only replays its in-memory snapshot, so a window already
+	// destroyed by the default WindowClosing listener is fine.
+	a.saveWindowState()
 	if a.stats != nil {
 		_ = a.stats.stop(statsShutdownTimeout)
 	}

@@ -81,20 +81,26 @@ func main() {
 		},
 	})
 
-	mainWindow := wailsApp.Window.NewWithOptions(application.WebviewWindowOptions{
-		Name:             "main",
-		Title:            "Ally",
-		Width:            backend.DefaultWindowWidth,
-		Height:           backend.DefaultWindowHeight,
-		MinWidth:         backend.MinWindowWidth,
-		MinHeight:        backend.MinWindowHeight,
-		Frameless:        true,
-		BackgroundColour: application.NewRGBA(12, 12, 12, 255),
-		Windows: application.WindowsWindow{
-			Theme: application.Dark,
-		},
-		URL: "/",
-	})
+	mainWindow := wailsApp.Window.NewWithOptions(func() application.WebviewWindowOptions {
+		opts := application.WebviewWindowOptions{
+			Name:             "main",
+			Title:            "Ally",
+			Width:            backend.DefaultWindowWidth,
+			Height:           backend.DefaultWindowHeight,
+			MinWidth:         backend.MinWindowWidth,
+			MinHeight:        backend.MinWindowHeight,
+			Frameless:        true,
+			BackgroundColour: application.NewRGBA(12, 12, 12, 255),
+			Windows: application.WindowsWindow{
+				Theme: application.Dark,
+			},
+			URL: "/",
+		}
+		// 恢复上次退出时持久化的窗口几何（~/.ally_agent/window.json）；
+		// 无持久化状态时保持上面的默认参数。
+		backend.ApplySavedWindowGeometry(&opts)
+		return opts
+	}())
 
 	app.SetApp(wailsApp)
 	app.SetWindow(mainWindow)

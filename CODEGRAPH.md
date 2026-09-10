@@ -66,6 +66,8 @@
 - host_events.go — 事件出口边界：`eventSink` 接口、`App.emit()` 唯一发射点、panic 隔离的 fanout 广播（Wails + 网络双出口）；关键: eventSink, emit, fanoutEventSink
 - host_network.go — 可选网络事件出口（`ALLY_NETWORK_EVENTS=1` 启用）：token 鉴权 SSE `/events`、轮询 `/poll`、`/healthz`、环形历史缓冲；关键: networkEventSink, handleSSE, handlePoll, eventRing
 - host_network_test.go — 测试环形缓冲、fanout 广播与 panic 隔离、非回环拒绝、SSE/轮询/鉴权/历史、大负载截断
+- host_window_state.go — 主窗口几何持久化（~/.ally_agent/window.json）：启动时经 WebviewWindowOptions 恢复（创建即定位无闪烁，最大化只设 StartState 不设 WindowXY）、窗口事件维护内存快照（最大化不污染普通 bounds）、ServiceShutdown 落盘、离屏一次性居中修复；关键: ApplySavedWindowGeometry, installWindowStateTracking, saveWindowState, ensureWindowOnScreen
+- host_window_state_test.go — 测试 window.json 往返/非法值拒绝、恢复参数应用（含最大化分支）、tracker 快照更新规则
 - host_notifications.go — 桌面通知服务注入与任务完成/出错/取消提示音（仅窗口最小化时，700ms 冷却）；关键: SetNotifier, notifyCompletion
 - host_process_windows.go — Windows 子进程窗口隐藏（CREATE_NO_WINDOW）与 Job Object 进程树终止；关键: hideCommandWindow, stopProcessTree
 - host_process_other.go — 非 Windows 对应实现（SIGKILL 进程组）
