@@ -751,45 +751,46 @@ const darkThemeOverrides = {
 };
 
 // Light mode: clean acrylic glass (DeepSeek-style modal language). Overlay
-// surfaces are translucent white so the blur added in style.css reads as
-// frosted glass over the soft gradient canvas.
+// surfaces are translucent kimicode surface-0 (#fafbfc) so the blur added in
+// style.css reads as frosted glass over the soft gradient canvas; the neutral
+// text/border ramp follows kimicode's light theme (apps/vis/web/src/theme.css).
 const lightThemeOverrides = {
   common: {
-    bodyColor: '#eff1f5',
-    baseColor: '#ffffff',
-    cardColor: 'rgba(255, 255, 255, 0.90)',
-    modalColor: 'rgba(255, 255, 255, 0.94)',
-    popoverColor: 'rgba(255, 255, 255, 0.96)',
-    tableColor: 'rgba(255, 255, 255, 0.90)',
-    primaryColor: '#1f2937',
-    primaryColorHover: '#111827',
-    primaryColorPressed: '#0f172a',
-    primaryColorSuppl: '#111827',
-    borderColor: 'rgba(15, 23, 42, 0.10)',
-    dividerColor: 'rgba(15, 23, 42, 0.10)',
-    textColorBase: '#111827',
-    textColor1: '#111827',
-    textColor2: '#1f2937',
-    textColor3: '#64748b',
+    bodyColor: '#eef1f6',
+    baseColor: '#fafbfc',
+    cardColor: 'rgba(250, 251, 252, 0.90)',
+    modalColor: 'rgba(250, 251, 252, 0.94)',
+    popoverColor: 'rgba(250, 251, 252, 0.96)',
+    tableColor: 'rgba(250, 251, 252, 0.90)',
+    primaryColor: '#0f1219',
+    primaryColorHover: '#0b0d12',
+    primaryColorPressed: '#0b0d12',
+    primaryColorSuppl: '#0b0d12',
+    borderColor: '#dde1ea',
+    dividerColor: '#dde1ea',
+    textColorBase: '#0f1219',
+    textColor1: '#0f1219',
+    textColor2: '#252a37',
+    textColor3: '#616878',
     borderRadius: '10px',
     fontFamily: 'Inter',
   },
   Layout: {
     color: 'transparent',
-    siderColor: 'rgba(255, 255, 255, 0.65)',
-    headerColor: 'rgba(255, 255, 255, 0.65)',
+    siderColor: 'rgba(250, 251, 252, 0.65)',
+    headerColor: 'rgba(250, 251, 252, 0.65)',
   },
   Card: {
-    color: 'rgba(255, 255, 255, 0.90)',
-    colorEmbedded: 'rgba(255, 255, 255, 0.65)',
+    color: 'rgba(250, 251, 252, 0.90)',
+    colorEmbedded: 'rgba(250, 251, 252, 0.65)',
   },
   Input: {
-    color: 'rgba(255, 255, 255, 0.78)',
-    colorFocus: 'rgba(255, 255, 255, 0.92)',
-    textColor: '#111827',
-    placeholderColor: '#718096',
-    border: '1px solid rgba(15, 23, 42, 0.15)',
-    borderFocus: '1px solid rgba(15, 23, 42, 0.35)',
+    color: 'rgba(250, 251, 252, 0.78)',
+    colorFocus: 'rgba(250, 251, 252, 0.92)',
+    textColor: '#0f1219',
+    placeholderColor: '#7a8191',
+    border: '1px solid #bfc6d4',
+    borderFocus: '1px solid #616878',
   },
   Switch: {
     railColorActive: '#16a34a',

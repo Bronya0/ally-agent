@@ -24,7 +24,6 @@ const DOCUMENT_HEAD_STYLES = `
   body {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
     color: #e5e5f0;
-    padding: 12px;
     font-size: 14px;
     line-height: 1.5;
     overflow-x: hidden;

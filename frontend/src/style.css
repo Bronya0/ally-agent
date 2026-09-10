@@ -318,28 +318,32 @@
    and floating overlays become translucent white glass (blur + saturation)
    lifted off that canvas, in the spirit of DeepSeek's clean modal language:
    generous radii, hairline borders, whisper-quiet shadows.
+   Neutral ramp (surfaces, text, borders) follows kimicode's light theme
+   (apps/vis/web/src/theme.css): cool blue-gray #fafbfc/#eef1f6/#e4e8f0
+   surfaces, #0f1219→#9097a8 ink ramp, #dde1ea/#bfc6d4 hairlines.
    NOTE: this block must come AFTER the accent [data-theme] blocks — same
    specificity, later source order wins, so it re-derives the markdown palette
    from the active accent seed for light-surface contrast. */
 :root[data-mode="light"] {
-  /* Surfaces: translucent white glass; content keeps an opaque fallback for
-     the reasoning curtain and media mats. */
-  --ally-surface-content: #eff1f5;
-  --ally-surface-panel: rgba(255, 255, 255, 0.72);
-  --ally-surface-chrome: rgba(255, 255, 255, 0.65);
-  --ally-surface-raised: rgba(255, 255, 255, 0.86);
-  --ally-surface-deep: #e2e6ed;
+  /* Surfaces: translucent kimicode surface-0 glass; content keeps an opaque
+     fallback (kimicode surface-1) for the reasoning curtain and media mats. */
+  --ally-surface-content: #eef1f6;
+  --ally-surface-panel: rgba(250, 251, 252, 0.72);
+  --ally-surface-chrome: rgba(250, 251, 252, 0.65);
+  --ally-surface-raised: rgba(250, 251, 252, 0.86);
+  --ally-surface-deep: #e4e8f0;
 
-  /* Text ramp inverted: sharp, high-contrast ink on paper descending gracefully. */
-  --ally-text-primary: #111827;
-  --ally-text-high: #1e293b;
-  --ally-text-body: #334155;
-  --ally-text-secondary: #475569;
-  --ally-text-soft: #526071;
-  --ally-text-tertiary: #606f7b;
-  --ally-text-muted: #64748b;
-  --ally-text-faint: #718096;
-  --ally-text-ghost: #8896a6;
+  /* Text ramp: kimicode's ink ladder #0f1219→#3a4154→#616878→#9097a8 with
+     interpolated mid steps filling Ally's finer-grained 9-stop scale. */
+  --ally-text-primary: #0f1219;
+  --ally-text-high: #252a37;
+  --ally-text-body: #2f3545;
+  --ally-text-secondary: #3a4154;
+  --ally-text-soft: #474e60;
+  --ally-text-tertiary: #575e71;
+  --ally-text-muted: #616878;
+  --ally-text-faint: #7a8191;
+  --ally-text-ghost: #9097a8;
 
   /* Status colors darkened one notch for white-glass surfaces. */
   --ally-success: #16a34a;
@@ -356,10 +360,11 @@
   --ally-info: #2563eb;
   --ally-info-soft: #1d4ed8;
 
-  /* Dividers / states: ink tints instead of white tints. */
-  --ally-border: rgba(15, 23, 42, 0.09);
-  --ally-border-subtle: rgba(15, 23, 42, 0.05);
-  --ally-border-strong: rgba(15, 23, 42, 0.16);
+  /* Dividers: kimicode hairlines (opaque); states stay ink tints so hover /
+     selected washes blend on translucent glass. */
+  --ally-border: #dde1ea;
+  --ally-border-subtle: #e8ebf1;
+  --ally-border-strong: #bfc6d4;
   --ally-state-hover: rgba(15, 23, 42, 0.05);
   --ally-state-selected: rgba(15, 23, 42, 0.07);
   --ally-hover-faint: rgba(15, 23, 42, 0.03);
@@ -367,49 +372,49 @@
 
   /* Accent derivations: mixed toward ink (not white) so accent text, links and
      selected icons stay readable on light glass. */
-  --ally-accent-bright: color-mix(in srgb, var(--ally-accent) 55%, #111827);
-  --ally-accent-strong: color-mix(in srgb, var(--ally-accent) 40%, #111827);
-  --ally-accent-soft: color-mix(in srgb, var(--ally-accent) 48%, #1f2937);
-  --ally-accent-pale: color-mix(in srgb, var(--ally-accent) 42%, #334155);
-  --ally-accent-muted: color-mix(in srgb, var(--ally-accent) 45%, #64748b);
-  --ally-accent-dim: color-mix(in srgb, var(--ally-accent) 38%, #475569);
+  --ally-accent-bright: color-mix(in srgb, var(--ally-accent) 55%, #0f1219);
+  --ally-accent-strong: color-mix(in srgb, var(--ally-accent) 40%, #0f1219);
+  --ally-accent-soft: color-mix(in srgb, var(--ally-accent) 48%, #252a37);
+  --ally-accent-pale: color-mix(in srgb, var(--ally-accent) 42%, #2f3545);
+  --ally-accent-muted: color-mix(in srgb, var(--ally-accent) 45%, #616878);
+  --ally-accent-dim: color-mix(in srgb, var(--ally-accent) 38%, #3a4154);
 
-  --ally-wordmark-gradient: linear-gradient(120deg, #1f2937 0%, #b5822f 36%, #334155 68%, #1f2937 100%);
+  --ally-wordmark-gradient: linear-gradient(120deg, #0f1219 0%, #b5822f 36%, #2f3545 68%, #0f1219 100%);
 
   /* Markdown palette re-derived from the accent seed for light surfaces. */
-  --md-text: #1e293b;
-  --md-muted: #475569;
-  --md-faint: #64748b;
-  --md-white: #0f172a;
+  --md-text: #252a37;
+  --md-muted: #3a4154;
+  --md-faint: #616878;
+  --md-white: #0f1219;
   --md-border: rgba(15, 23, 42, 0.12);
   --md-surface: rgba(15, 23, 42, 0.04);
-  --md-h1: #0f172a;
-  --md-h2: #1e293b;
-  --md-h3: color-mix(in srgb, var(--ally-accent) 55%, #0f172a);
-  --md-h4: #1e293b;
-  --md-strong: #0f172a;
-  --md-code: color-mix(in srgb, var(--ally-accent) 55%, #1e293b);
-  --md-em: color-mix(in srgb, var(--ally-accent) 48%, #1e293b);
-  --md-link: color-mix(in srgb, var(--ally-accent) 60%, #0f172a);
-  --md-quote: #334155;
+  --md-h1: #0f1219;
+  --md-h2: #252a37;
+  --md-h3: color-mix(in srgb, var(--ally-accent) 55%, #0f1219);
+  --md-h4: #252a37;
+  --md-strong: #0f1219;
+  --md-code: color-mix(in srgb, var(--ally-accent) 55%, #252a37);
+  --md-em: color-mix(in srgb, var(--ally-accent) 48%, #252a37);
+  --md-link: color-mix(in srgb, var(--ally-accent) 60%, #0f1219);
+  --md-quote: #2f3545;
   --md-quote-border: color-mix(in srgb, var(--ally-accent) 65%, transparent);
   --md-quote-bg: color-mix(in srgb, var(--ally-accent) 9%, transparent);
-  --md-del: #8896a6;
-  --md-marker-ul: color-mix(in srgb, var(--ally-accent) 65%, #334155);
-  --md-marker-ol: color-mix(in srgb, var(--ally-accent) 50%, #1e293b);
+  --md-del: #7a8191;
+  --md-marker-ul: color-mix(in srgb, var(--ally-accent) 65%, #2f3545);
+  --md-marker-ol: color-mix(in srgb, var(--ally-accent) 50%, #252a37);
 
-  /* Glass surfaces: translucent white, blurring whatever sits behind. */
+  /* Glass surfaces: translucent kimicode surface-0, blurring what's behind. */
   --ally-border-input: rgba(15, 23, 42, 0.25);
-  --ally-composer-glass: rgba(255, 255, 255, 0.65);
-  --ally-composer-glass-hover: rgba(255, 255, 255, 0.72);
-  --ally-composer-glass-focus: rgba(255, 255, 255, 0.78);
-  --ally-panel-glass: rgba(255, 255, 255, 0.76);
-  --ally-copy-btn-bg: rgba(255, 255, 255, 0.9);
+  --ally-composer-glass: rgba(250, 251, 252, 0.65);
+  --ally-composer-glass-hover: rgba(250, 251, 252, 0.72);
+  --ally-composer-glass-focus: rgba(250, 251, 252, 0.78);
+  --ally-panel-glass: rgba(250, 251, 252, 0.76);
+  --ally-copy-btn-bg: rgba(250, 251, 252, 0.9);
   --ally-pre-bg: rgba(15, 23, 42, 0.05);
-  --ally-code-bg: #eaedf2;
+  --ally-code-bg: #eef1f6;
 
-  /* Scrollbar: quiet slate on light glass. */
-  --ally-scrollbar: #c7cdd4;
+  /* Scrollbar: kimicode uses border-strong for the thumb — do the same. */
+  --ally-scrollbar: #bfc6d4;
   --ally-scrollbar-editor: rgba(15, 23, 42, 0.22);
   --ally-scrollbar-editor-hover: rgba(15, 23, 42, 0.35);
 
@@ -448,7 +453,7 @@ html[data-mode="light"] body {
   background:
     radial-gradient(1100px 760px at 88% -8%, rgba(224, 164, 88, 0.08), transparent 64%),
     radial-gradient(900px 700px at -8% 108%, rgba(96, 165, 250, 0.07), transparent 62%),
-    linear-gradient(165deg, #e9ecf2 0%, #f0f2f6 46%, #e5e9f0 100%);
+    linear-gradient(165deg, #f3f5f9 0%, #fafbfc 46%, #eff2f7 100%);
   background-attachment: fixed;
 }
 
@@ -577,7 +582,7 @@ html[data-mode="light"] .tool-command .hljs-meta {
 html[data-mode="light"] .markdown-body img,
 html[data-mode="light"] .attachment-item img,
 html[data-mode="light"] .attachment-item video {
-  background: #e6e8ec;
+  background: #e4e8f0;
 }
 
 /* Mark / highlight: amber wash with ink text. */
@@ -646,10 +651,10 @@ html[data-mode="light"] .diff-ctx .diff-code { color: #3a3f45; }
 
 /* Markdown body explicit override on light mode */
 html[data-mode="light"] .markdown-body {
-  --md-text: #1e293b;
-  --md-muted: #475569;
-  --md-faint: #64748b;
-  --md-white: #0f172a;
+  --md-text: #252a37;
+  --md-muted: #3a4154;
+  --md-faint: #616878;
+  --md-white: #0f1219;
   --md-border: rgba(15, 23, 42, 0.12);
   --md-surface: rgba(15, 23, 42, 0.04);
   color: var(--md-text);
@@ -695,7 +700,7 @@ html[data-mode="light"] .composer .prompt-input {
   border: 1px solid rgba(15, 23, 42, 0.15) !important;
 }
 html[data-mode="light"] .composer .prompt-input textarea::placeholder {
-  color: #718096 !important;
+  color: #7a8191 !important;
 }
 
 body.platform-windows,
