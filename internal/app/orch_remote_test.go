@@ -172,6 +172,7 @@ func TestRemoteHelperProtectedDeleteClassification(t *testing.T) {
 		{"workspace file under /root", "/root/ally-remote-test/app.py", false},
 		{"project file under /root", "/root/projects/tooltest/file.txt", false},
 		{"project file under /home", "/home/alice/project/file.txt", false},
+		{"tempdir child path", filepath.Join(os.TempDir(), "project", "file.txt"), false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

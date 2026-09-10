@@ -92,6 +92,18 @@ def is_protected_delete_path(path):
     p = str(path).replace(os.sep, "/")
     if p == "/":
         return True
+    # 镜像本地 isDangerousDeletePath 的 os.TempDir() 豁免：测试与构建工作区
+    # 常位于 OS 临时目录下（macOS 为 /var/folders/...，属于受保护的 /var 树；
+    # Linux 为 /tmp 或 /var/tmp）。上层 safe_join 已保证路径局限于
+    # workspaceRoot，因此临时目录内部的子项放行，只拦临时根目录本身。
+    for tmp_candidate in (tempfile.gettempdir(), "/tmp", "/var/tmp"):
+        try:
+            for t_str in (tmp_candidate, os.path.realpath(tmp_candidate)):
+                t_posix = str(t_str).replace(os.sep, "/")
+                if t_posix and p.startswith(t_posix.rstrip("/") + "/"):
+                    return False
+        except Exception:
+            pass
     if p == os.path.expanduser("~").replace(os.sep, "/"):
         return True
     parent = os.path.dirname(p)
