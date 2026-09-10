@@ -9,11 +9,14 @@ package app
 
 import (
 	"bytes"
+	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -197,6 +200,180 @@ func TestRemoteHelperProtectedDeleteClassification(t *testing.T) {
 				t.Fatalf("path %s: expected protected=%v, got %v", tc.path, tc.protected, data.Protected)
 			}
 		})
+	}
+}
+
+// TestRemoteHelperWriteDefaultPerm0644 锁定新建文件权限契约：mkstemp 的
+// 0600 会让远程新建文件对其他账号不可读；现在必须对齐本地
+// SafeWriteFile 的 0644 默认值，覆盖时保留原文件权限位。
+func TestRemoteHelperWriteDefaultPerm0644(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("permission bits are not enforced on Windows; the helper mirror test cannot verify fchmod locally (real remotes are POSIX)")
+	}
+	py := pickRemoteHelperPython(t)
+	root := t.TempDir()
+	run := func(payload map[string]any) remotePythonResponse {
+		t.Helper()
+		script, err := buildRemoteScript(payload)
+		if err != nil {
+			t.Fatalf("buildRemoteScript: %v", err)
+		}
+		resp, err := runRemoteHelperScript(t, py, script)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp
+	}
+
+	// 新建文件 → 0644
+	resp := run(map[string]any{"op": "write", "workspaceRoot": root, "path": "new.txt", "dataBase64": base64.StdEncoding.EncodeToString([]byte("hello")), "overwrite": false, "mkdirs": true})
+	if !resp.OK {
+		t.Fatalf("write new file failed: %s", resp.Error)
+	}
+	info, err := os.Stat(filepath.Join(root, "new.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o644 {
+		t.Fatalf("new file perm = %o, want 0644 (aligned with local SafeWriteFile)", perm)
+	}
+
+	// 覆盖已有 0600 文件 → 保留 0600
+	if err := os.WriteFile(filepath.Join(root, "secret.txt"), []byte("s"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	resp = run(map[string]any{"op": "write", "workspaceRoot": root, "path": "secret.txt", "dataBase64": base64.StdEncoding.EncodeToString([]byte("s2")), "overwrite": true, "mkdirs": false})
+	if !resp.OK {
+		t.Fatalf("overwrite failed: %s", resp.Error)
+	}
+	info, err = os.Stat(filepath.Join(root, "secret.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Fatalf("overwritten file perm = %o, want preserved 0600", perm)
+	}
+}
+
+// TestRemoteHelperReadBatchOp 锁定 read_batch 契约：逐文件错误隔离、结
+// 果槽顺序与请求一致、预算耗尽时剩余路径进 remaining 交给下一轮会话。
+func TestRemoteHelperReadBatchOp(t *testing.T) {
+	py := pickRemoteHelperPython(t)
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("aaa"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "b.txt"), []byte("bbb"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// budget: totalBytes=5 → a(3) 进末尾，b(3) 溢出进 remaining（不产生占位槽，
+	// Go 侧由 remaining 下一轮会话回填）。
+	payload := map[string]any{
+		"op":            "read_batch",
+		"workspaceRoot": root,
+		"paths":         []string{"a.txt", "missing.txt", "sub", "b.txt"},
+		"maxBytes":      1024,
+		"totalBytes":    5,
+	}
+	script, err := buildRemoteScript(payload)
+	if err != nil {
+		t.Fatalf("buildRemoteScript: %v", err)
+	}
+	resp, err := runRemoteHelperScript(t, py, script)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resp.OK {
+		t.Fatalf("read_batch failed: %s", resp.Error)
+	}
+	var data struct {
+		Files []struct {
+			Path  string `json:"path"`
+			OK    bool   `json:"ok"`
+			Error string `json:"error"`
+			Data  struct {
+				DataBase64 string `json:"dataBase64"`
+			} `json:"data"`
+		} `json:"files"`
+		Remaining []string `json:"remaining"`
+	}
+	if err := json.Unmarshal(resp.Data, &data); err != nil {
+		t.Fatalf("decode read_batch data: %v", err)
+	}
+	if len(data.Files) != 3 {
+		t.Fatalf("expected 3 filled slots (deferred file leaves no placeholder), got %d: %+v", len(data.Files), data.Files)
+	}
+	if !data.Files[0].OK || data.Files[0].Data.DataBase64 == "" {
+		t.Fatalf("a.txt should read ok, got %+v", data.Files[0])
+	}
+	if data.Files[1].OK || data.Files[1].Error == "" {
+		t.Fatalf("missing.txt should carry per-file error, got %+v", data.Files[1])
+	}
+	if data.Files[2].OK || data.Files[2].Error == "" {
+		t.Fatalf("directory target should carry per-file error, got %+v", data.Files[2])
+	}
+	if len(data.Remaining) != 1 || data.Remaining[0] != "b.txt" {
+		t.Fatalf("remaining = %v, want [b.txt]", data.Remaining)
+	}
+}
+
+// TestRemoteScriptHasCancelKill 锁定取消连带击杀存在：op_run 必须注册
+// SIGTERM/SIGHUP/SIGINT 处理器，Go 侧取消杀掉 ssh 后远端孤儿进程被同
+// 步回收。
+func TestRemoteScriptHasCancelKill(t *testing.T) {
+	if !strings.Contains(remotePythonScript, "_terminate_command_group") {
+		t.Error("remote python script lost _terminate_command_group signal handler; cancelling a run would leak remote orphan processes")
+	}
+	for _, sig := range []string{"SIGTERM", "SIGHUP", "SIGINT"} {
+		if !strings.Contains(remotePythonScript, "signal."+sig) {
+			t.Errorf("remote python script does not handle %s", sig)
+		}
+	}
+}
+
+// TestRemoteReadFileDuplicatePathSlots 锁定重复路径契约：同批同路径（不
+// 同行区间）的每个槽位都必须各自渲染，不得只填首个槽位留零值——旧实
+// 现逐槽位独立填充，批量会话重构后曾退化为只认首个槽位。通过注入假
+// 会话函数避免真实 ssh，专测 Go 侧分派/回填逻辑。
+func TestRemoteReadFileDuplicatePathSlots(t *testing.T) {
+	a := NewApp()
+	a.remoteReadBatchFn = func(ctx context.Context, rt remoteTarget, paths []string) ([]remoteReadBatchItem, []string, error) {
+		if len(paths) != 1 || paths[0] != "a.txt" {
+			t.Fatalf("expected deduped pending [a.txt], got %v", paths)
+		}
+		var it remoteReadBatchItem
+		it.Path = "a.txt"
+		it.OK = true
+		it.Data.Path = "a.txt"
+		it.Data.DataBase64 = base64.StdEncoding.EncodeToString([]byte("l1\nl2\nl3\n"))
+		it.Data.Size = 12
+		return []remoteReadBatchItem{it}, nil, nil
+	}
+	result, err := a.remoteReadFile(context.Background(), RemoteReadFileRequest{
+		Target: "user@host:/srv/app",
+		Files: []BatchReadFileRequest{
+			{Path: "a.txt"},
+			{Path: "a.txt", StartLine: 2, EndLine: 2},
+			{Path: "../escape"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Files) != 3 {
+		t.Fatalf("expected 3 slots, got %d", len(result.Files))
+	}
+	if result.Files[0].Content == "" || result.Files[1].Content == "" {
+		t.Fatalf("both duplicate-path slots must have content, got %q / %q", result.Files[0].Content, result.Files[1].Content)
+	}
+	if !strings.Contains(result.Files[1].Content, "l2") || strings.Contains(result.Files[1].Content, "l3") {
+		t.Fatalf("slot 2 should render only line range 2-2, got %q", result.Files[1].Content)
+	}
+	if result.Files[2].Error == "" {
+		t.Fatal("escape path slot must carry per-slot validation error")
 	}
 }
 

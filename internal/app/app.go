@@ -271,6 +271,11 @@ type App struct {
 	// persisted). Keys are lowercase user@host; see orch_ssh_credential.go.
 	sshCredentials *sshCredentialCache
 
+	// remoteReadBatchFn overrides the multi-file read_batch ssh session for
+	// tests; nil means the real remoteReadRawBatch implementation runs. See
+	// orch_remote.go.
+	remoteReadBatchFn func(ctx context.Context, rt remoteTarget, paths []string) ([]remoteReadBatchItem, []string, error)
+
 	subRuns   map[string]*SubagentRun // subId → run
 	subRunsMu sync.Mutex
 	subSem    chan struct{} // concurrency limiter (cap 4)

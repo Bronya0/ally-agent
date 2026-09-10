@@ -28,6 +28,11 @@ import (
 
 const remotePythonMarker = "ALLY_REMOTE_RESULT_JSON:"
 
+// maxRemoteReadBatchBytes 是 read_batch 单会话的总字节预算：超出后剩余路
+// 径排入下一轮会话（20 文件 × 2MB 单文件上限下最多三轮，仍远少于旧的
+// 逐文件 20 次握手）。
+const maxRemoteReadBatchBytes = 16 * 1024 * 1024
+
 const remotePythonScript = `
 import base64, json, os, pathlib, selectors, shutil, signal, stat as stat_mod, subprocess, sys, tempfile, time
 from datetime import datetime, timezone
@@ -104,17 +109,50 @@ def iso_mtime(st):
     return datetime.fromtimestamp(st.st_mtime, timezone.utc).isoformat()
 
 
-def op_read(root, payload):
-    path = safe_join(root, payload.get("path", ""))
-    max_bytes = int(payload.get("maxBytes") or 2097152)
+def read_raw_file(root, rel, max_bytes):
+    path = safe_join(root, rel)
     st = path.stat()
     if stat_mod.S_ISDIR(st.st_mode):
         raise ValueError("path is a directory")
     if st.st_size > max_bytes:
         raise ValueError("file is too large: %d bytes" % st.st_size)
     with open(str(path), "rb") as f:
-        data = f.read()
+        # stat 与 read 之间文件可能被追加，按实际读取字节数兜底判定，
+        # 防止增长中的文件绕过尺寸预算。
+        data = f.read(max_bytes + 1)
+    if len(data) > max_bytes:
+        raise ValueError("file is too large: %d bytes" % len(data))
     return {"path": as_posix_rel(root, path), "dataBase64": base64.b64encode(data).decode("ascii"), "size": len(data), "mode": st.st_mode & 0o777, "modTime": iso_mtime(st)}
+
+def op_read(root, payload):
+    return read_raw_file(root, payload.get("path", ""), int(payload.get("maxBytes") or 2097152))
+
+def op_read_batch(root, payload):
+    # 单会话批量读：逐文件独立 try（单文件失败只污染自己的结果槽，与
+    # 本地批量 read 的隔离契约一致）；总字节预算装不下时把余下路径排进
+    # remaining，交给 Go 侧再起一轮会话。首文件必收（files 为空时无条
+    # 件接受），不会死循环。
+    max_bytes = int(payload.get("maxBytes") or 2097152)
+    total_bytes = int(payload.get("totalBytes") or 16777216)
+    files = []
+    remaining = []
+    used = 0
+    for rel in payload.get("paths") or []:
+        item = {"path": rel, "ok": False}
+        try:
+            data = read_raw_file(root, rel, max_bytes)
+        except Exception as exc:
+            item["error"] = str(exc)
+            files.append(item)
+            continue
+        if used + int(data["size"]) > total_bytes and files:
+            remaining.append(rel)
+            continue
+        used += int(data["size"])
+        item["ok"] = True
+        item["data"] = data
+        files.append(item)
+    return {"files": files, "remaining": remaining}
 
 def op_write(root, payload):
     path = safe_join(root, payload.get("path", ""))
@@ -167,8 +205,9 @@ def op_write(root, payload):
     try:
         data = base64.b64decode(payload.get("dataBase64", ""))
         fd, tmp = tempfile.mkstemp(prefix=".ally-write-", dir=str(parent))
-        if original_mode is not None:
-            os.fchmod(fd, original_mode)
+        # 覆盖时保留原文件权限位；新建文件对齐本地 SafeWriteFile 的 0644
+        # 默认值——mkstemp 的 0600 会让远程新建文件对其他账号不可读。
+        os.fchmod(fd, original_mode if original_mode is not None else 0o644)
         with os.fdopen(fd, "wb") as f:
             fd = -1
             f.write(data)
@@ -272,6 +311,22 @@ def op_run(root, payload):
     # Python 3.12+ 对 preexec_fn 的弃用警告；远端只可能是 posix。
     new_session = hasattr(os, "setsid")
     proc = subprocess.Popen(command, shell=True, cwd=str(cwd), executable=shell, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=new_session)
+    # 取消运行时 Go 侧杀掉本地 ssh 客户端，sshd 只回收直接子进程（本脚
+    # 本）；start_new_session 起的命令进程组收不到信号会变成远端孤儿进
+    # 程。这里捕获终止信号，先击杀整个命令进程组再退出，保证会话中断
+    # 等价于远端进程同步终止。
+    def _terminate_command_group(signum, frame):
+        try:
+            if new_session and proc.poll() is None:
+                os.killpg(proc.pid, signal.SIGKILL)
+        except Exception:
+            pass
+        sys.exit(0)
+    for _sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+        try:
+            signal.signal(_sig, _terminate_command_group)
+        except (ValueError, OSError):
+            pass
     out = bytearray()
     truncated = False
     timed_out = False
@@ -361,6 +416,8 @@ try:
     op = payload.get("op")
     if op == "read":
         ok(op_read(root, payload))
+    elif op == "read_batch":
+        ok(op_read_batch(root, payload))
     elif op == "write":
         ok(op_write(root, payload))
     elif op == "delete":
@@ -582,6 +639,12 @@ func (a *App) invokeRemotePython(ctx context.Context, rt remoteTarget, payload m
 		if msg == "" {
 			msg = err.Error()
 		}
+		// 远端缺 python3 时给出可操作诊断：常见形态是 bash 的 "python3:
+		// command not found" 或 ash/dash 的 "python3: not found"，透传原始
+		// ssh 错误对模型不可辨因。
+		if strings.Contains(msg, "python3: command not found") || strings.Contains(msg, "python3: not found") {
+			return fmt.Errorf("remote host %s has no python3 in PATH; remote_* tools need python3 on the remote side (install python3 or add it to PATH): %s", rt.Host, msg)
+		}
 		return fmt.Errorf("ssh %s failed: %s", rt.Host, msg)
 	}
 	// 远程命令的输出会被原样嵌在 ok() 的 JSON output 字段里，如果命令
@@ -647,6 +710,47 @@ func (a *App) remoteReadRaw(ctx context.Context, target, relPath string) (remote
 	if err != nil {
 		return remoteTarget{}, remoteRawFile{}, err
 	}
+	return a.remoteReadRawOne(ctx, rt, relPath)
+}
+
+// remoteReadBatchItem 是 read_batch 结果槽的传输形状（纯字节搬运；转码/
+// 版本/预览语义全部在 Go 侧复用本地 read 管线，不在这里实现）。
+type remoteReadBatchItem struct {
+	Path string `json:"path"`
+	OK   bool   `json:"ok"`
+	Data struct {
+		Path       string `json:"path"`
+		DataBase64 string `json:"dataBase64"`
+		Size       int64  `json:"size"`
+		Mode       int    `json:"mode"`
+		ModTime    string `json:"modTime"`
+	} `json:"data"`
+	Error string `json:"error"`
+}
+
+// remoteReadRawBatch 在单个 ssh 会话里读多个文件（read_batch op）：每个结
+// 果槽独立 try，单文件失败只写入自己的 error 字段，与本地批量 read 的隔
+// 离契约一致；连接级失败由调用方把同一错误填进所有未填充槽。返回的
+// remaining 是总字节预算装不下而未读的路径尾部，供下一轮会话继续。
+func (a *App) remoteReadRawBatch(ctx context.Context, rt remoteTarget, paths []string) ([]remoteReadBatchItem, []string, error) {
+	var resp struct {
+		Files     []remoteReadBatchItem `json:"files"`
+		Remaining []string              `json:"remaining"`
+	}
+	err := a.invokeRemotePython(ctx, rt, remotePayload(rt, "read_batch", map[string]any{
+		"paths":      paths,
+		"maxBytes":   maxReadFileBytes,
+		"totalBytes": maxRemoteReadBatchBytes,
+	}), 300*time.Second, &resp)
+	if err != nil {
+		return nil, nil, err
+	}
+	return resp.Files, resp.Remaining, nil
+}
+
+// remoteReadRawOne 是单文件读的会话实现（edit 的读-改-写与单文件批量读
+// 共用）；路径校验失败时直接返回，不起 ssh 会话，保持原错误语义。
+func (a *App) remoteReadRawOne(ctx context.Context, rt remoteTarget, relPath string) (remoteTarget, remoteRawFile, error) {
 	cleanPath, err := validateRemoteWorkspacePath(relPath, rt.WorkspaceRoot, false)
 	if err != nil {
 		return remoteTarget{}, remoteRawFile{}, err
@@ -709,52 +813,132 @@ func (a *App) remoteReadFile(ctx context.Context, req RemoteReadFileRequest) (Ba
 	if len(fileRequests) > 20 {
 		return BatchReadResult{}, errors.New("too many files; max 20 per batch")
 	}
-	results := make([]BatchReadResultItem, len(fileRequests))
-	for i, f := range fileRequests {
-		_, rawFile, err := a.remoteReadRaw(ctx, req.Target, f.Path)
+	rt, err := parseRemoteTarget(req.Target)
+	if err != nil {
+		return BatchReadResult{}, err
+	}
+	// 单文件（edit 读-改-写与常规读共用）走单文件会话，保持原错误语
+	// 义；多文件用 read_batch 单会话批量读，总字节预算装不下的尾部路径
+	// 自动排入下一轮会话——20 个文件最多两三轮 ssh 握手（旧的逐文件串
+	// 行是 20 次完整握手）。
+	if len(fileRequests) == 1 {
+		_, rawFile, err := a.remoteReadRawOne(ctx, rt, fileRequests[0].Path)
 		if err != nil {
-			results[i] = BatchReadResultItem{
-				Path:  f.Path,
-				Error: err.Error(),
-			}
+			return BatchReadResult{Files: []BatchReadResultItem{{Path: fileRequests[0].Path, Error: err.Error()}}}, nil
+		}
+		item, itemErr := buildRemoteReadResultItem(rawFile, fileRequests[0])
+		if itemErr != nil {
+			return BatchReadResult{Files: []BatchReadResultItem{{Path: fileRequests[0].Path, Error: itemErr.Error()}}}, nil
+		}
+		return BatchReadResult{Files: []BatchReadResultItem{item}}, nil
+	}
+	results := make([]BatchReadResultItem, len(fileRequests))
+	// 先逐槽位做与单文件路径相同的清洗校验（root 内绝对路径 rebase 成相
+	// 对拼写），非法槽位直接落错误，不进会话；再按清洗后路径去重排序，
+	// 同一物理文件只传一次。重复路径的每个槽位各自渲染自己的行区间，
+	// 与旧逐文件实现语义一致。
+	slotsOf := make(map[string][]int, len(fileRequests))
+	pendingSet := make(map[string]bool, len(fileRequests))
+	pending := make([]string, 0, len(fileRequests))
+	for i, f := range fileRequests {
+		clean, err := validateRemoteWorkspacePath(f.Path, rt.WorkspaceRoot, false)
+		if err != nil {
+			results[i] = BatchReadResultItem{Path: f.Path, Error: err.Error()}
 			continue
 		}
-		text, ending, _ := normalizeText(rawFile.Data)
-		sha256Hex, version := hashBytesAndVersion(rawFile.Data)
-		_ = sha256Hex
-		preview, previewErr := formatLineNumberReadPreviewRangeWithBudget(text, readRangeRequest{
-			StartLine: f.StartLine,
-			EndLine:   f.EndLine,
-		}, maxToolOutput)
-		if previewErr != nil {
-			results[i] = BatchReadResultItem{
-				Path:  f.Path,
-				Error: previewErr.Error(),
+		if !pendingSet[clean] {
+			pendingSet[clean] = true
+			pending = append(pending, clean)
+		}
+		slotsOf[clean] = append(slotsOf[clean], i)
+	}
+	for len(pending) > 0 {
+		var items []remoteReadBatchItem
+		var remaining []string
+		var batchErr error
+		if a.remoteReadBatchFn != nil {
+			items, remaining, batchErr = a.remoteReadBatchFn(ctx, rt, pending)
+		} else {
+			items, remaining, batchErr = a.remoteReadRawBatch(ctx, rt, pending)
+		}
+		if batchErr != nil {
+			// 连接级失败：同一错误填进所有未填充槽，错误隔离契约与旧
+			// 逐文件实现一致。
+			for _, p := range pending {
+				for _, slot := range slotsOf[p] {
+					results[slot] = BatchReadResultItem{Path: fileRequests[slot].Path, Error: batchErr.Error()}
+				}
 			}
-			continue
+			break
 		}
-		results[i] = BatchReadResultItem{
-			Path:                  rawFile.Path,
-			Content:               preview.Content,
-			Kind:                  "text",
-			ContentFormat:         "line_numbers",
-			Editable:              true,
-			StartLine:             preview.StartLine,
-			EndLine:               preview.EndLine,
-			NextStartLine:         preview.NextStartLine,
-			TotalLines:            preview.TotalLines,
-			Version:               version,
-			Size:                  rawFile.Size,
-			LineEnding:            ending,
-			Truncated:             preview.Truncated,
-			TruncatedLines:        preview.TruncatedLines,
-			TruncatedLinesOmitted: preview.TruncatedLinesOmitted,
-			RangeStatus:           preview.RangeStatus,
-			EmptyRange:            preview.EmptyRange,
+		for _, it := range items {
+			slots, ok := slotsOf[it.Path]
+			if !ok {
+				continue
+			}
+			if !it.OK {
+				for _, slot := range slots {
+					results[slot] = BatchReadResultItem{Path: fileRequests[slot].Path, Error: it.Error}
+				}
+				continue
+			}
+			rawFile, decErr := decodeRemoteRawFile(it.Data)
+			for _, slot := range slots {
+				if decErr != nil {
+					results[slot] = BatchReadResultItem{Path: fileRequests[slot].Path, Error: decErr.Error()}
+					continue
+				}
+				item, itemErr := buildRemoteReadResultItem(rawFile, fileRequests[slot])
+				if itemErr != nil {
+					results[slot] = BatchReadResultItem{Path: fileRequests[slot].Path, Error: itemErr.Error()}
+					continue
+				}
+				results[slot] = item
+			}
 		}
+		if len(remaining) == 0 {
+			break
+		}
+		pending = remaining
 	}
 	return BatchReadResult{Files: results}, nil
 }
+
+// buildRemoteReadResultItem 把远端原始字节转换成与本地 read 同形状的预览
+// 结果：转码/版本令牌/行号预览/截断标记全部复用本地 read 的同一套管
+// 线，远程与本地语义不分离。
+func buildRemoteReadResultItem(rawFile remoteRawFile, f BatchReadFileRequest) (BatchReadResultItem, error) {
+	text, ending, _ := normalizeText(rawFile.Data)
+	sha256Hex, version := hashBytesAndVersion(rawFile.Data)
+	_ = sha256Hex
+	preview, previewErr := formatLineNumberReadPreviewRangeWithBudget(text, readRangeRequest{
+		StartLine: f.StartLine,
+		EndLine:   f.EndLine,
+	}, maxToolOutput)
+	if previewErr != nil {
+		return BatchReadResultItem{}, previewErr
+	}
+	return BatchReadResultItem{
+		Path:                  rawFile.Path,
+		Content:               preview.Content,
+		Kind:                  "text",
+		ContentFormat:         "line_numbers",
+		Editable:              true,
+		StartLine:             preview.StartLine,
+		EndLine:               preview.EndLine,
+		NextStartLine:         preview.NextStartLine,
+		TotalLines:            preview.TotalLines,
+		Version:               version,
+		Size:                  rawFile.Size,
+		LineEnding:            ending,
+		Truncated:             preview.Truncated,
+		TruncatedLines:        preview.TruncatedLines,
+		TruncatedLinesOmitted: preview.TruncatedLinesOmitted,
+		RangeStatus:           preview.RangeStatus,
+		EmptyRange:            preview.EmptyRange,
+	}, nil
+}
+
 // remoteEdit applies the flat single-file remote edit contract. The result is
 // the same MultiEditResult shape local edit returns, with exactly one file.
 // A single-file call needs no backup/rollback: remoteEditOne validates the
