@@ -19,6 +19,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	calculatetool "ally-dev/internal/tools/calculate"
 	"ally-dev/internal/tools/grep"
@@ -162,10 +163,17 @@ type limitedBuffer struct {
 	buf       bytes.Buffer
 	limit     int
 	truncated bool
+	// spill receives every chunk verbatim once truncation has started; it is
+	// created lazily by onTruncate on the first overflow. The buffer and the
+	// spill are written under the same mutex, so the spill file is a
+	// byte-exact, in-order copy of the complete output even though the buffer
+	// only keeps its prefix. nil means no spill sink.
+	spill io.Writer
 	// onTruncate, when set, is invoked exactly once (under mu) on the first
-	// overflow with the content buffered so far. command uses it to
-	// lazily create a full-output spill file only when truncation happens.
-	onTruncate    func(prefix []byte)
+	// overflow with the content buffered so far, and returns the sink that
+	// should receive the remaining output. command uses it to lazily create a
+	// full-output spill file only when truncation happens.
+	onTruncate    func(prefix []byte) io.Writer
 	truncatedOnce sync.Once
 }
 
@@ -176,29 +184,48 @@ func (b *limitedBuffer) Write(p []byte) (int, error) {
 		return len(p), nil
 	}
 	remaining := b.limit - b.buf.Len()
-	if remaining <= 0 {
+	switch {
+	case remaining <= 0:
 		b.truncated = true
-		b.noteTruncate()
-		return len(p), nil
-	}
-	if len(p) > remaining {
-		_, _ = b.buf.Write(p[:remaining])
+		b.ensureSpillLocked()
+	case len(p) > remaining:
+		// 截断边界向左回退到 UTF-8 字符边界：在多字节序列中间切开会让
+		// utf8.ValidString 对纯 UTF-8 输出误报失败，下游 decodeConsoleOutput
+		// 把整段按 GB18030 重解码成乱码。回退出的字节照旧完整进入 spill。
+		head := p[:remaining]
+		// 回退到完整的 UTF-8 字符边界：末字节是孤立的前导字节（如「中」
+		// 只剩 \xe6）时 RuneStart 检查会提前停住，必须用 DecodeLastRune
+		// 连前导字节一起回退，否则 utf8.ValidString 对纯 UTF-8 输出误报
+		// 失败，下游 decodeConsoleOutput 把整段按 GB18030 重解码成乱码。
+		for len(head) > 0 {
+			if r, size := utf8.DecodeLastRune(head); r == utf8.RuneError && size <= 1 {
+				head = head[:len(head)-1]
+				continue
+			}
+			break
+		}
 		b.truncated = true
-		b.noteTruncate()
-		return len(p), nil
+		// 先捕获 spill 前缀（此刻 buf 尚不含 head），再把 head 写入缓冲：
+		// 随后落盘的完整 p 因此不会与已写入的字节重复。
+		b.ensureSpillLocked()
+		_, _ = b.buf.Write(head)
+	default:
+		_, _ = b.buf.Write(p)
 	}
-	_, _ = b.buf.Write(p)
+	if b.spill != nil {
+		_, _ = b.spill.Write(p)
+	}
 	return len(p), nil
 }
 
-// noteTruncate fires the onTruncate callback once on the first overflow. It
-// must be called with b.mu held; the callback receives the buffered prefix so
-// a spill sink can capture the complete output even though the buffer drops
-// the overflowing tail.
-func (b *limitedBuffer) noteTruncate() {
+// ensureSpillLocked creates the spill sink once, on the first overflow, by
+// invoking onTruncate with the buffered prefix. Callers must hold b.mu and are
+// responsible for writing the current chunk afterwards: the full-chunk write
+// is what makes the spill a complete copy without duplicating the prefix.
+func (b *limitedBuffer) ensureSpillLocked() {
 	b.truncatedOnce.Do(func() {
 		if b.onTruncate != nil {
-			b.onTruncate(b.buf.Bytes())
+			b.spill = b.onTruncate(b.buf.Bytes())
 		}
 	})
 }
@@ -234,7 +261,13 @@ func (b *limitedBuffer) TailString(n int) string {
 	if len(p) <= n {
 		return string(p)
 	}
-	return string(p[len(p)-n:])
+	tail := p[len(p)-n:]
+	// 与 Write 的截断同理：起点回退到 UTF-8 字符边界，避免流式预览把
+	// 多字节字符切开后 decodeConsoleOutput 误判整段为 GBK。
+	for len(tail) > 0 && !utf8.RuneStart(tail[0]) {
+		tail = tail[1:]
+	}
+	return string(tail)
 }
 
 // ── Path / content-hash thin wrappers ────────────────────────

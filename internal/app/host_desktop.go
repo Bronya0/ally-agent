@@ -248,7 +248,9 @@ func (a *App) SelectWorkspace() (string, error) {
 	if err := a.ensureInitialized(); err != nil {
 		return "", err
 	}
+	a.mu.Lock()
 	current := a.config.Workspace
+	a.mu.Unlock()
 	// If the saved workspace no longer exists, fall back to the user's home
 	// directory so the directory dialog can still open and the user can pick
 	// a valid workspace.
@@ -468,5 +470,12 @@ func openPathInFileManager(path string) error {
 			cmd = exec.Command("xdg-open", path)
 		}
 	}
-	return cmd.Start()
+	// explorer.exe（Windows）不退出属预期，交给 explorerCommand 内部处理；
+	// POSIX 上 open/xdg-open 通常立即退出，Start 后不 Wait 会积累僵尸进程，
+	// 异步收割即可。
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	go func() { _ = cmd.Wait() }()
+	return nil
 }

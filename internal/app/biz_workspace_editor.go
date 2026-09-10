@@ -126,7 +126,10 @@ func (a *App) saveWorkspaceFileAt(workspace string, req SaveWorkspaceFileRequest
 	if err != nil {
 		return SaveWorkspaceFileResult{}, err
 	}
-	resolved, err := safeJoin(roots, req.Path)
+	// 与模型侧写路径（create/edit）同一边界：resolveWritableFilePath 会拒绝
+	// 叶子符号链接并把已存在前缀解析到真实路径，避免工作区内的符号链接把
+	// 编辑器保存定向到工作区之外（裸 safeJoin 只做词法拼接，会跟随链接）。
+	resolved, err := resolveWritableFilePath(roots, req.Path)
 	if err != nil {
 		return SaveWorkspaceFileResult{}, err
 	}

@@ -677,9 +677,13 @@ func sampleMatches(ctx context.Context, rgPath, root, searchRoot string, req Req
 	nextOffset := 0
 	offsetExhausted := false
 	if mode == OutputModeCountMatches {
-		total := stats.FilesWithMatches
+		// 分页数据源是 fileCountHeap（上限 maxGrepFileCountEntries 条），而非
+		// stats.FilesWithMatches（真实总数）：超过 heap 上限后用真实总数判定会让
+		// offset 卡在 heap 条数上永远翻不到下一页（counts 恒空、exhausted 恒
+		// false），模型按 nextOffset 无限重试同一页。以 heap 实际保留条数判定。
+		total := len(fileCounts.Items())
 		if req.Offset > 0 && req.Offset >= total {
-			offsetExhausted = total > 0
+			offsetExhausted = stats.FilesWithMatches > 0
 		} else if total > req.Offset+len(resultCounts) {
 			nextOffset = req.Offset + len(resultCounts)
 			truncated = true

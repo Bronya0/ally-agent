@@ -159,10 +159,18 @@ func (p *mathParser) parsePrimary() (float64, error) {
 		ident := p.parseIdentifier()
 		p.skipSpace()
 		if p.match('(') {
+			// 函数调用与括号同源：parseArguments → parseExpression 的递归链
+			// 每层消耗多个栈帧，同样需要深度守卫，否则深嵌套是 runtime
+			// fatal error（栈溢出），executeTool 的 panic 恢复捕不到。
+			p.depth++
+			if p.depth > 200 {
+				return 0, errors.New("expression nesting too deep")
+			}
 			args, err := p.parseArguments()
 			if err != nil {
 				return 0, err
 			}
+			p.depth--
 			return applyMathFunction(ident, args)
 		}
 		switch strings.ToLower(ident) {

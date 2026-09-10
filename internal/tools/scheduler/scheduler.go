@@ -108,6 +108,12 @@ func ValidateSchedule(s Schedule) error {
 		if s.Cron == "" {
 			return toolerrors.New("E_SCHEDULED_TASK_CRON", errors.New("schedule.cron is required for cron"))
 		}
+		// robfig/cron 的 ParseStandard 接受 @every/@interval 等描述符，它们
+		// 是 duration 型调度：走 cron 分支会绕过上面的 MinInterval 下限（如
+		// @every 10s），因此拒绝 @ 前缀，让调用方改用 interval 类型显式声明。
+		if strings.HasPrefix(s.Cron, "@") {
+			return toolerrors.New("E_SCHEDULED_TASK_CRON", fmt.Errorf("@-descriptors (e.g. @every) are not allowed in cron; use the interval type with a duration >= %s", MinInterval))
+		}
 		if _, err := cron.ParseStandard(s.Cron); err != nil {
 			return toolerrors.New("E_SCHEDULED_TASK_CRON", fmt.Errorf("invalid cron expression: %w", err))
 		}

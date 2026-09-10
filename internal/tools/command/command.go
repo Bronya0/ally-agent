@@ -249,7 +249,11 @@ func IsShellNullDevice(path string) bool {
 // ok is false when the value cannot be statically resolved.
 func ResolveCommandLiteralPath(value, workspaceRoot string) (string, bool) {
 	value = strings.TrimSpace(strings.Trim(value, `"'`))
-	if value == "" || strings.ContainsAny(value, "$%*?[]{}"+"`") || strings.HasPrefix(value, "&") {
+	// `~` expands to the user's home directory in real shells (bash tilde
+	// expansion, PowerShell), so a `~`-relative target cannot be statically
+	// resolved against workspaceRoot — refuse it instead of misclassifying it
+	// as a (usually nonexistent) in-workspace literal path.
+	if value == "" || strings.ContainsAny(value, "$%*?[]{}~"+"`") || strings.HasPrefix(value, "&") {
 		return "", false
 	}
 	if goruntime.GOOS == "windows" && len(value) >= 3 && value[0] == '/' && IsASCIILetter(value[1]) && value[2] == '/' {

@@ -124,11 +124,19 @@ func splitCommandSegments(commandLine string) [][]string {
 		case '<', '>':
 			if c == '<' {
 				if end, _, ok := scanHeredoc(commandLine, i); ok {
+					// The heredoc body is data, and the terminator line's
+					// trailing newline is a real command separator: flush the
+					// pending segment (e.g. `cat` in `cat <<EOF`) before
+					// skipping, otherwise the first invocation after the body
+					// is glued into the same segment and later invocations
+					// silently disappear from risk analysis.
+					flushSegment()
 					i = end - 1
 					continue
 				}
 				if i+2 < len(commandLine) && commandLine[i+1] == '<' && commandLine[i+2] == '<' {
 					if end, ok := scanHereStringWord(commandLine, i+3); ok {
+						flushWord()
 						i = end - 1
 						continue
 					}

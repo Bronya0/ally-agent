@@ -846,8 +846,8 @@ func collectHTMLTitleAndLinks(data []byte, baseURL *url.URL) (string, []WebFetch
 					titleParts = append(titleParts, text)
 				} else if pendingLink >= 0 && pendingLink < len(links) && links[pendingLink].Text == "" {
 					links[pendingLink].Text = truncateRunes(normalizeWhitespace(text), 80)
-					pendingLink = -1
 				}
+				pendingLink = -1
 			}
 		}
 		for child := n.FirstChild; child != nil; child = child.NextSibling {

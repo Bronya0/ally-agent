@@ -9,6 +9,7 @@ package command
 
 import (
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -181,5 +182,44 @@ func TestShellASTDecodesQuotedWindowsPathsAndSkipsFileDescriptorRedirection(t *t
 	wantTargets := []string{`C:\Temp\out.txt`}
 	if !slices.Equal(targets, wantTargets) {
 		t.Fatalf("ShellRedirectionTargets() = %#v, want %#v", targets, wantTargets)
+	}
+}
+
+func TestLegacyScannerFlushesWordBeforeHeredocBody(t *testing.T) {
+	// A fragment the bash parser rejects (PowerShell-style braces) falls back to
+	// the legacy scanner. The heredoc body is data: the pending word must be
+	// flushed before skipping to the terminator, otherwise the first token after
+	// the body is glued onto `cat` and every later invocation disappears from
+	// risk analysis — which would let a deletion command through the fence.
+	commandLine := "{ cat <<EOF\nbody\nEOF\nRemove-Item C:\\important }"
+	calls := invocations(commandLine, 0)
+	found := false
+	for _, call := range calls {
+		if strings.EqualFold(call.Name, "remove-item") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("legacy scanner lost the invocation after the heredoc body: %#v", calls)
+	}
+	if !ContainsExplicitDeleteCommand(commandLine) {
+		t.Fatalf("deletion after a heredoc body must be detected: %q", commandLine)
+	}
+}
+
+func TestResolveCommandLiteralPathRefusesTildeExpansion(t *testing.T) {
+	root := t.TempDir()
+	// Real shells expand `~` to the home directory, so a tilde target cannot be
+	// judged as an in-workspace literal path; it must refuse static resolution.
+	for _, value := range []string{"~/.bashrc", "~/notes.txt", "~/"} {
+		if got, ok := ResolveCommandLiteralPath(value, root); ok {
+			t.Fatalf("tilde target %q must not resolve (got %q)", value, got)
+		}
+	}
+	// Ordinary relative and absolute targets still resolve unchanged.
+	got, ok := ResolveCommandLiteralPath("sub/file.txt", root)
+	if !ok || !strings.HasPrefix(got, root) {
+		t.Fatalf("plain relative target must resolve inside the workspace, got %q ok=%v", got, ok)
 	}
 }

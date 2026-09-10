@@ -7,7 +7,12 @@
 // Public License v3. See the LICENSE file for details.
 package app
 
-import "testing"
+import (
+	"os"
+	"strings"
+	"testing"
+	"unicode/utf8"
+)
 
 func TestNormalizeReasoningEffort(t *testing.T) {
 	cases := map[string]string{
@@ -83,5 +88,57 @@ func TestReasoningEffortForAdapter(t *testing.T) {
 		if got := reasoningEffortForAdapter(c.apiFormat, c.effort); got != c.want {
 			t.Errorf("reasoningEffortForAdapter(%q, %q) = %q, want %q", c.apiFormat, c.effort, got, c.want)
 		}
+	}
+}
+
+func TestLimitedBufferSpillMatchesCompleteOutput(t *testing.T) {
+	const limit = 64
+	chunks := []string{
+		"构建输出 第一行\n",
+		"构建输出 第二行 包含较多中文内容\n",
+		"third line with ascii only\n",
+		"最后一行 ⚙ done\n",
+	}
+	buf := &limitedBuffer{limit: limit}
+	writer := &teeWriter{primary: buf, spillDir: t.TempDir()}
+	buf.onTruncate = writer.startSpill
+
+	for _, chunk := range chunks {
+		if _, err := writer.Write([]byte(chunk)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if writer.spill == nil {
+		t.Fatal("overflowing writes must create the spill sink")
+	}
+	spillPath := writer.spill.Name()
+	if err := writer.spill.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// The capped buffer keeps a UTF-8-valid prefix: a byte-sliced truncation
+	// would leave a dangling multi-byte sequence, which downstream decoding
+	// misreads as GBK mojibake.
+	kept := buf.String()
+	if !utf8.ValidString(kept) {
+		t.Fatalf("buffered prefix must stay valid UTF-8: %q", kept)
+	}
+	if !buf.truncated {
+		t.Fatal("overflow must set the truncated flag")
+	}
+
+	// The spill file is the byte-exact complete output: no chunk duplicated
+	// (the overflowing chunk is written once, not once by the prefix capture
+	// and again in full) and none lost.
+	spilled, err := os.ReadFile(spillPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := strings.Join(chunks, "")
+	if string(spilled) != want {
+		t.Fatalf("spill file must equal the complete output:\n got %q\nwant %q", spilled, want)
+	}
+	if !strings.HasPrefix(want, kept) {
+		t.Fatalf("buffered content must be a prefix of the full output, got %q", kept)
 	}
 }

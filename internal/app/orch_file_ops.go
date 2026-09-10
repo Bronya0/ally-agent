@@ -562,12 +562,12 @@ func (a *App) runCommandWithConfig(parent context.Context, cfg ConfigState, req 
 	return result, nil
 }
 
-// teeWriter mirrors command output to primary and, once the buffer first
-// overflows, lazily spills the complete output to a file under spillDir so the
-// full content survives truncation. Write ordering matters: primary.Write may
-// trigger startSpill (under the buffer lock); reading w.spill afterwards is
-// ordered by that lock's acquire/release, so the same chunk is never missed or
-// duplicated in the file.
+// teeWriter mirrors command output to the capped buffer and, once the buffer
+// first overflows, to a lazily created spill file under spillDir so the full
+// output survives truncation. The buffer owns both sinks and writes them under
+// one mutex, so the spill file stays a byte-exact in-order copy of the complete
+// output (no chunk duplicated or lost) even though stdout and stderr feed this
+// same writer concurrently.
 type teeWriter struct {
 	primary  *limitedBuffer
 	spillDir string
@@ -575,29 +575,28 @@ type teeWriter struct {
 }
 
 func (w *teeWriter) Write(p []byte) (int, error) {
-	n, err := w.primary.Write(p)
-	if w.spill != nil {
-		_, _ = w.spill.Write(p)
-	}
-	return n, err
+	return w.primary.Write(p)
 }
 
 // startSpill is invoked by limitedBuffer exactly once, on first overflow, with
-// the buffered prefix. It creates the spill file under spillDir and copies the
-// prefix into it; failures degrade gracefully to buffer-only capture.
-func (w *teeWriter) startSpill(prefix []byte) {
+// the buffered prefix (under the buffer lock). It creates the spill file under
+// spillDir, copies the prefix, and returns the sink so the buffer can append
+// the overflowing chunk and every later one verbatim; failures degrade
+// gracefully to buffer-only capture.
+func (w *teeWriter) startSpill(prefix []byte) io.Writer {
 	if w.spill != nil || w.spillDir == "" {
-		return
+		return nil
 	}
 	if err := os.MkdirAll(w.spillDir, 0o755); err != nil {
-		return
+		return nil
 	}
 	f, err := os.CreateTemp(w.spillDir, "ally-run-*.log")
 	if err != nil {
-		return
+		return nil
 	}
 	w.spill = f
 	_, _ = f.Write(prefix)
+	return f
 }
 
 // cleanupCommandSpillFiles removes stale command full-output temp files

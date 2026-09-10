@@ -552,8 +552,12 @@ func parseSkillContent(path, text string) SkillDefinition {
 		return SkillDefinition{Path: path}
 	}
 	meta.Name = stem
-	if filepath.Base(filepath.Dir(path)) == meta.Name {
-		// Directory skill: SKILL.md -> use parent dir name
+	if strings.EqualFold(base, "SKILL.md") {
+		// Directory skill (skill-dir/SKILL.md): the parent directory name is
+		// the skill name per the documented convention. The previous check
+		// (`parent dir == meta.Name`) only caught the nested SKILL/SKILL.md
+		// layout, so plain directory skills fell back to the stem "SKILL"
+		// and every such skill collided on one dedup key.
 		meta.Name = filepath.Base(filepath.Dir(path))
 	}
 	meta.Description = fmt.Sprintf("Skill loaded from %s", path)

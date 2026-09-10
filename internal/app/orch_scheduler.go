@@ -525,6 +525,11 @@ func (m *scheduledTaskManager) run(task ScheduledTask) {
 
 	cfg := m.app.effectiveConfig(ConfigState{Workspace: task.Workspace})
 	cfg.Workspace = task.Workspace
+	// KB sources/ 只读围栏挂在 run ctx 上，计划任务的 ctx 从 app.ctx 派生
+	// 不会继承它；任务可能在 KB 会话中创建、稍后触发，因此按任务自身的
+	// workspace 重新计算 deny roots（与 runChat 的 withKBDenyRoots 同源），
+	// KB root 的计划任务同样无法写 sources/。
+	ctx = withKBDenyRoots(ctx, kbDenyRootsForConfig(cfg))
 
 	// 命令型任务：复用 command 工具的执行边界（AST 安全检查、工作区 cwd、
 	// 有界输出），不占 LLM 委托槽、不产生任何模型步骤。

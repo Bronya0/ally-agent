@@ -37,6 +37,15 @@ func decodeConsoleOutput(s string) string {
 	if utf8.ValidString(s) {
 		return s
 	}
+	// 纯 UTF-8 输出被字节切片（TailString/spill 截断）切断尾部多字节字符时
+	// 不是 GBK：若无效字节恰好构成一个尾部未终结序列，且剥除后其余全部
+	// 有效，则按 UTF-8 返回（丢的只是至多 3 个不可显示字节）。其余情况
+	// （含真正的 GBK 输出）不受影响，继续走 GB18030。
+	if b := []byte(s); len(b) > 0 {
+		if n := incompleteTrailingUTF8Len(b); n > 0 && utf8.Valid(b[:len(b)-n]) {
+			return string(b[:len(b)-n])
+		}
+	}
 	decoded, err := simplifiedchinese.GB18030.NewDecoder().Bytes([]byte(s))
 	if err != nil || len(decoded) == 0 {
 		return s

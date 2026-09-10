@@ -60,6 +60,30 @@ func TestDecodeConsoleOutput(t *testing.T) {
 	}
 }
 
+func TestDecodeConsoleOutputKeepsByteSlicedUTF8(t *testing.T) {
+	// A pure UTF-8 payload whose final character was cut by a byte-boundary
+	// slice (TailString / spill truncation) is not GBK: decoding it as GB18030
+	// would mojibake the whole output. The readable prefix must survive.
+	prefix := "构建完成：全部 12 个包\n"
+	input := string(append([]byte(prefix), []byte("中")[:2]...))
+
+	got := decodeConsoleOutput(input)
+	if !utf8.ValidString(got) {
+		t.Fatalf("byte-sliced UTF-8 output must stay valid UTF-8: %q", got)
+	}
+	if got != prefix {
+		t.Fatalf("only the incomplete tail may be dropped, got %q want %q", got, prefix)
+	}
+
+	// A genuine GBK payload that ends mid-character is still decoded as GBK
+	// (the repair must not swallow real codepage output).
+	gbkCut := append(gbEncode(t, "中文输出"), 0xB5)
+	got = decodeConsoleOutput(string(gbkCut))
+	if !strings.HasPrefix(got, "中文输出") {
+		t.Fatalf("GBK output must still decode: %q", got)
+	}
+}
+
 func TestIncompleteTrailingUTF8Len(t *testing.T) {
 	cases := []struct {
 		name string

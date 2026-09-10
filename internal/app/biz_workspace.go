@@ -936,8 +936,11 @@ func buildWorkspaceMapWithRg(root string, maxDepth, limit int) (workspaceMapBuil
 		}
 	}
 	// 硬停（truncated）是正常结束；其余错误/超时统一回退 WalkDir，
-	// 避免把残缺 map 缓存 30 秒。
-	if !truncated && (runCtx.Err() != nil || scanner.Err() != nil || cmd.Wait() != nil) {
+	// 避免把残缺 map 缓存 30 秒。无论哪个分支，cmd.Wait() 都必须执行：
+	// 它负责 reap rg 进程（否则 macOS/Linux 上积累僵尸进程）并关闭
+	// StdoutPipe 的读端 fd。
+	waitErr := cmd.Wait()
+	if !truncated && (runCtx.Err() != nil || scanner.Err() != nil || waitErr != nil) {
 		return workspaceMapBuildResult{}, false
 	}
 	sortWorkspaceMapEntries(&result)

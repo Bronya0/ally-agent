@@ -633,3 +633,38 @@ func TestSearchLegacyAliasCollapsesToLines(t *testing.T) {
 		}
 	}
 }
+
+func TestSearchCountMatchesPaginationTerminates(t *testing.T) {
+	rg := requireRipgrep(t)
+	root := t.TempDir()
+	// More matching files than the per-file count heap keeps (cap 100): paging
+	// must end at the retained entries instead of pinning nextOffset on a page
+	// that can never be produced, which made a model loop on the same offset.
+	for i := 0; i < 120; i++ {
+		writeGrepTestFile(t, root, fmt.Sprintf("file-%03d.txt", i), "needle\n")
+	}
+
+	offset := 0
+	for page := 0; page < 10; page++ {
+		result, err := Search(context.Background(), rg, root, root, Request{
+			Pattern:    "needle",
+			OutputMode: OutputModeCountMatches,
+			MaxFiles:   50,
+			Offset:     offset,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.NextOffset == 0 {
+			if offset > 0 && !result.OffsetExhausted && len(result.FileCounts) == 0 {
+				t.Fatalf("an empty page must either advance or report exhaustion: %#v", result)
+			}
+			return
+		}
+		if result.NextOffset <= offset {
+			t.Fatalf("nextOffset must advance past the requested page: offset=%d next=%d", offset, result.NextOffset)
+		}
+		offset = result.NextOffset
+	}
+	t.Fatalf("count_matches pagination did not terminate, stuck at offset %d", offset)
+}

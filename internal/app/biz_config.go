@@ -287,12 +287,10 @@ func mergeConfig(base, overlay ConfigState) ConfigState {
 	if overlay.SkippedUpdates != nil {
 		base.SkippedUpdates = cloneStringSlice(overlay.SkippedUpdates)
 	}
-	// GitHubToken: overlay always wins (including empty, which clears the
-	// token). This is safe because the frontend draft is loaded from the
-	// current config, so a non-token session always sends "" — which is
-	// also the correct default. Legacy frontends that don't know this field
-	// also send "", which is correct because they never set a token.
-	base.GitHubToken = strings.TrimSpace(overlay.GitHubToken)
+	// GitHubToken 不在 mergeConfig 里覆盖：注释里“前端 draft 总是整份回传”的
+	// 前提只对 SaveConfig 成立，而 fetchReleaseByTag/DownloadUpdate 走
+	// effectiveConfigSafe()（空 overlay）——无条件覆盖会让用户配置的 token
+	// 在更新链路上永远读不到。SaveConfig 显式写入该字段（含清空）。
 	// Background image filename is stored verbatim (it is set by
 	// SaveBackgroundImage, not by SaveConfig overlay from the frontend).
 	// Opacity is normalized and clamped to [0, 1].
@@ -556,6 +554,9 @@ func (a *App) SaveConfig(req ConfigState) error {
 		strings.TrimSpace(a.config.ProxyNoProxy) != strings.TrimSpace(req.ProxyNoProxy)
 	a.config = mergeConfig(a.config, req)
 	a.config.CustomPrompt = req.CustomPrompt
+	// GitHubToken 由保存路径显式写入（含清空）：mergeConfig 不再携带该字段，
+	// 空 overlay 的 effectiveConfig 读取路径不会把它抹掉。
+	a.config.GitHubToken = strings.TrimSpace(req.GitHubToken)
 	// KBRoot 直接采用请求值（含清空），前端 draft 由 GetConfig 加载、整份回传。
 	a.config.KBRoot = strings.TrimSpace(req.KBRoot)
 	a.config.AllowPrivateNetwork = req.AllowPrivateNetwork

@@ -224,3 +224,31 @@ func TestClearSkillsKeepsBuiltinSkillsEnabled(t *testing.T) {
 		t.Fatalf("non-builtin skill must stay disabled, got %v", disabled)
 	}
 }
+
+func TestParseSkillFileDirectorySkillFallsBackToParentDir(t *testing.T) {
+	root := t.TempDir()
+	// Documented directory skill layout: <skill-dir>/SKILL.md without
+	// frontmatter takes the parent directory as its name. Falling back to the
+	// file stem would yield "SKILL" for every such skill.
+	writeSkillTestFile(t, root, filepath.Join("my-skill", "SKILL.md"), "# my skill\ndoes things\n")
+	meta := parseSkillFile(filepath.Join(root, "my-skill", "SKILL.md"))
+	if meta.Name != "my-skill" {
+		t.Fatalf("directory skill must be named after its parent directory, got %q", meta.Name)
+	}
+}
+
+func TestScanSkillDirKeepsMultipleDirectorySkillsWithoutFrontmatter(t *testing.T) {
+	root := t.TempDir()
+	writeSkillTestFile(t, root, filepath.Join("alpha-skill", "SKILL.md"), "# alpha\n")
+	writeSkillTestFile(t, root, filepath.Join("beta-skill", "SKILL.md"), "# beta\n")
+
+	skills := []SkillDefinition{}
+	scanSkillDir(root, "project", &skills, map[string]bool{})
+	names := map[string]bool{}
+	for _, skill := range skills {
+		names[skill.Name] = true
+	}
+	if !names["alpha-skill"] || !names["beta-skill"] {
+		t.Fatalf("both directory skills must survive dedup, got %#v", skills)
+	}
+}

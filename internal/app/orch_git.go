@@ -134,8 +134,10 @@ func computeMultiRepoGitStatus(workspace string) GitStatus {
 		}
 		subPath := filepath.Join(cleanWS, name)
 		gitPath := filepath.Join(subPath, ".git")
-		// Fast zero-subprocess check
-		if fi, statErr := os.Stat(gitPath); statErr == nil && (fi.IsDir() || !fi.IsDir()) {
+		// Fast zero-subprocess check: .git is either a real directory or a
+		// worktree/gitfile pointer (regular file). Both stat outcomes here are
+		// "exists", so the candidate is accepted.
+		if _, statErr := os.Stat(gitPath); statErr == nil {
 			candidates = append(candidates, subCandidate{name: name, path: subPath})
 			if len(candidates) >= maxSubRepos {
 				break

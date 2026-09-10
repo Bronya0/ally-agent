@@ -1717,7 +1717,11 @@ func (a *App) compactSession(parent context.Context, sessionID, instruction stri
 		a.emit("compact:done", map[string]any{"sessionId": sessionID})
 	}()
 
-	history := sanitizeHistoryMessages(a.histories[sessionID])
+	// loadSessionHistoryCopy 持 a.mu 读取并做磁盘懒加载回退（与 buildMessages
+	// 的历史来源一致）：直接裸读 a.histories 既缺少锁（并发 saveHistory 写同一
+	// map 是不可恢复的 fatal panic），也会在进程重启后、历史尚未被任何会话
+	// 路径懒加载时拿到 nil，误报 "no messages to compact"。
+	history := a.loadSessionHistoryCopy(sessionID)
 	if len(history) == 0 {
 		return nil, errors.New("no messages to compact")
 	}
