@@ -479,9 +479,10 @@ func (a *App) getContextBreakdown(sessionID string, workspaceHint string) Contex
 			Tokens: tokens,
 		})
 	}
-	// Tool schemas are not part of the frozen prompt; they follow config
-	// changes and keep their own cache.
-	result.ToolSchemas = estimateToolSchemaTokens(a.buildToolsForConfig(cfg))
+	// Tool schemas: count the same list the request carries — the
+	// session-frozen set once frozen (peek semantics; see buildToolsForSession),
+	// the live set before that.
+	result.ToolSchemas = estimateToolSchemaTokens(a.sessionToolsetForBreakdown(sessionID, cfg))
 
 	// Workspace map: count the session-frozen variant, not the live map — the
 	// request prefix carries sessionWorkspaceMap(sessionID, cfg) (plus the

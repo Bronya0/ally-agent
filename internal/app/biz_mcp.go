@@ -1001,6 +1001,74 @@ func (a *App) buildToolsForConfig(cfg ConfigState) []openai.Tool {
 	return a.buildToolsWithMcp()
 }
 
+// buildToolsForSession returns the model-visible tool schemas for a chat
+// session, frozen at the session's first request (see sessionToolsets on App
+// for the rationale). Stateless callers (sub-agents, scheduled tasks) use
+// buildToolsForConfig instead and always see the live set.
+func (a *App) buildToolsForSession(sessionID string, cfg ConfigState) []openai.Tool {
+	if strings.TrimSpace(sessionID) == "" {
+		return a.buildToolsForConfig(cfg)
+	}
+	a.mu.Lock()
+	if frozen, ok := a.sessionToolsets[sessionID]; ok {
+		a.mu.Unlock()
+		return cloneTools(frozen)
+	}
+	a.mu.Unlock()
+
+	tools := a.buildToolsForConfig(cfg)
+	a.mu.Lock()
+	if a.sessionToolsets == nil {
+		a.sessionToolsets = map[string][]openai.Tool{}
+	}
+	a.sessionToolsets[sessionID] = cloneTools(tools)
+	a.mu.Unlock()
+	return tools
+}
+
+// sessionToolsetForBreakdown returns the tool list the footer context
+// breakdown counts: the session-frozen set once frozen, the live set before
+// that (peek semantics — footer polling must not pin the session's toolset
+// ahead of the first real request).
+func (a *App) sessionToolsetForBreakdown(sessionID string, cfg ConfigState) []openai.Tool {
+	if strings.TrimSpace(sessionID) != "" {
+		a.mu.Lock()
+		frozen, ok := a.sessionToolsets[sessionID]
+		a.mu.Unlock()
+		if ok {
+			return cloneTools(frozen)
+		}
+	}
+	return a.buildToolsForConfig(cfg)
+}
+
+// cloneTools deep-copies the schema maps so a frozen session toolset can never
+// be mutated through a shared map reference.
+func cloneTools(tools []openai.Tool) []openai.Tool {
+	if tools == nil {
+		return nil
+	}
+	out := make([]openai.Tool, len(tools))
+	for i, t := range tools {
+		if t.Function != nil {
+			if params, ok := t.Function.Parameters.(map[string]any); ok {
+				copied := make(map[string]any, len(params))
+				for k, v := range params {
+					copied[k] = v
+				}
+				fn := *t.Function
+				fn.Parameters = copied
+				t.Function = &fn
+			} else {
+				fn := *t.Function
+				t.Function = &fn
+			}
+		}
+		out[i] = t
+	}
+	return out
+}
+
 func (a *App) GetMcpServers() []map[string]any {
 	if a.mcpManager == nil {
 		return nil

@@ -269,6 +269,15 @@ type App struct {
 	// new sessions. Guarded by mu.
 	sessionSystemPrompts map[string][]systemPromptPart
 
+	// sessionToolsets freezes the model-visible tool schema list per session
+	// (sessionID → tools). Tool schemas are part of the provider prompt-cache
+	// prefix, so an MCP server disconnect/reconnect or toggling servers/tools
+	// mid-conversation would otherwise invalidate the whole cache twice per
+	// blip. Frozen tools for a disconnected server surface as an execution
+	// error (the model adapts) instead of the tool silently vanishing. Guarded
+	// by mu.
+	sessionToolsets map[string][]openai.Tool
+
 	// sessionWorkspaces records the workspace each session's runs actually
 	// used (sessionID → workspace), written by StartChat. It is the first
 	// priority in sessionContextConfig: KB/temp sessions have no session-index
@@ -379,6 +388,7 @@ func NewApp() *App {
 		// 上一个 chat Tab 的工作区上。run 路径写入后它成为内存级第一优先。
 		sessionWorkspaces:   map[string]string{},
 		sessionSystemPrompts: map[string][]systemPromptPart{},
+		sessionToolsets:      map[string][]openai.Tool{},
 		pendingAsks:         map[string]*pendingAsk{},
 		sshCredentials:      newSSHCredentialCache(),
 		subRuns:             map[string]*SubagentRun{},
@@ -1630,6 +1640,7 @@ func (a *App) releaseSession(sessionID string, deleteHistory bool) error {
 	delete(a.liveBreakdown, sessionID)
 	delete(a.sessionWorkspaceMaps, sessionID)
 	delete(a.sessionSystemPrompts, sessionID)
+	delete(a.sessionToolsets, sessionID)
 	delete(a.sessionWorkspaces, sessionID)
 	a.mu.Unlock()
 
@@ -1979,7 +1990,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 	a.emit("run:start", map[string]any{"runId": runID, "sessionId": sessionID})
 
 	messages = a.buildMessages(req, cfg, a.listCachedSkills())
-	tools := a.buildToolsForConfig(cfg)
+	tools := a.buildToolsForSession(sessionID, cfg)
 	breakdownAcc := newLiveBreakdownAccumulator(messages)
 	readCache := newRunReadCache()
 

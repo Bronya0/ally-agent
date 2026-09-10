@@ -919,6 +919,56 @@ func TestSystemPromptDefinesWaitSequencing(t *testing.T) {
 	}
 }
 
+// TestSessionToolsetFrozenWithinSession guards the prompt-cache prefix
+// contract for tool schemas: once a session has frozen its toolset, later runs
+// must see the exact same schemas even when the live MCP connection state
+// changes (disconnect, reconnect, server toggles). Sub-agents and scheduled
+// tasks keep the live set.
+func TestSessionToolsetFrozenWithinSession(t *testing.T) {
+	app := NewApp()
+	app.initialized = true
+	app.config = ConfigState{}
+
+	sessionID := "frozen-toolset-session"
+	cfg := app.config
+	first := app.buildToolsForSession(sessionID, cfg)
+	if len(first) == 0 {
+		t.Fatal("expected built-in tools in the frozen set")
+	}
+
+	// Same session: frozen set wins even after the live set would change
+	// (simulate by pointing at a manager-less live set is not possible for
+	// built-ins, so assert byte-stability via clone identity of the frozen copy).
+	second := app.buildToolsForSession(sessionID, cfg)
+	if len(second) != len(first) {
+		t.Fatalf("frozen toolset changed within the session: %d vs %d", len(second), len(first))
+	}
+	for i := range first {
+		if first[i].Function == nil || second[i].Function == nil ||
+			first[i].Function.Name != second[i].Function.Name {
+			t.Fatalf("frozen toolset entry %d changed: %v vs %v", i, first[i].Function, second[i].Function)
+		}
+	}
+
+	// The frozen copy is not aliased: mutating the returned slice's schema map
+	// must not corrupt what the next call returns.
+	if params, ok := second[0].Function.Parameters.(map[string]any); ok {
+		params["__mutated"] = true
+	}
+	third := app.buildToolsForSession(sessionID, cfg)
+	if params, ok := third[0].Function.Parameters.(map[string]any); ok {
+		if _, polluted := params["__mutated"]; polluted {
+			t.Fatal("frozen toolset was mutated through a returned reference")
+		}
+	}
+
+	// A different session builds its own snapshot.
+	other := app.buildToolsForSession("another-toolset-session", cfg)
+	if len(other) != len(first) {
+		t.Fatalf("new session should see its own toolset")
+	}
+}
+
 // TestSessionSystemPromptFrozenWithinSession guards the prompt-cache prefix
 // contract: once a session has frozen its system prompt, later runs must see
 // the exact same bytes even when the live disk sources change (memory index,
