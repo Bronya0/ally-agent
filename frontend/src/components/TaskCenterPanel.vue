@@ -40,6 +40,7 @@ Public License v3. See the LICENSE file for details.
                     <span class="mono-muted">{{ service.id }}<template v-if="service.pid"> · PID {{ service.pid }}</template></span>
                   </div>
                   <div class="head-side">
+                    <n-tag v-if="service.promoted" size="small" round :bordered="false" class="promoted-badge">{{ $t('service.promotedBadge') }}</n-tag>
                     <n-tag size="small" round :type="serviceStatusType(service)">{{ serviceStatusLabel(service) }}</n-tag>
                     <n-button size="tiny" quaternary @click="openServiceLog(service)">{{ $t('taskCenter.viewBuffer') }}</n-button>
                     <n-popconfirm
@@ -402,6 +403,8 @@ function formatBytes(value) {
 .card-head { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 12px; justify-content: space-between; }
 .head-main { display: flex; align-items: baseline; flex-wrap: wrap; min-width: 0; gap: 4px 8px; }
 .head-side { display: flex; align-items: center; flex-shrink: 0; gap: 4px; }
+/* 超时收编服务的徽标：与状态标签并列，用 warning 色系区分来源。 */
+.head-side :deep(.promoted-badge) { background: rgba(234,179,8,.12); color: var(--ally-warning-pale, #d97706); }
 .card-title { color: var(--ally-text-primary); font-size: 13px; font-weight: 650; }
 .mono-muted { color: var(--ally-text-faint); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 11px; }
 .ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

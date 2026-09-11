@@ -15,11 +15,8 @@ package service
 
 import (
 	"bytes"
-	"fmt"
 	"strings"
 	"sync"
-
-	toolerrors "ally-dev/internal/tools/shared"
 )
 
 // Output limits used by both the app layer and the model-facing read action.
@@ -110,58 +107,25 @@ func TailString(s string, limit int) string {
 }
 
 // NormalizeCommand lower-cases the command and collapses runs of whitespace.
+// Used by the promoted-command service naming (command tools no longer
+// pre-classify: a command that outlives its timeout is promoted to a service
+// instead of being blocked or killed).
 func NormalizeCommand(command string) string {
 	return strings.ToLower(strings.Join(strings.Fields(command), " "))
 }
 
-// LooksLikeLongRunningService only blocks an explicit whitelist of known
-// dev-server commands. Anything else continues to the normal command
-// safety checks/timeouts.
-func LooksLikeLongRunningService(command string) bool {
-	cmd := NormalizeCommand(command)
-	if cmd == "" {
-		return false
+// PromotedServiceName derives the display name for a service created by
+// promoting a timed-out command. It keeps the first two tokens of the command
+// (e.g. "npm run dev ..." → "npm run"), which is enough to recognize the
+// service in the task center without leaking a long command line into the
+// name field.
+func PromotedServiceName(command string) string {
+	fields := strings.Fields(NormalizeCommand(command))
+	if len(fields) == 0 {
+		return ""
 	}
-	patterns := []string{
-		"manage.py runserver",
-		"flask run",
-		"uvicorn ",
-		"hypercorn ",
-		"fastapi dev",
-		"npm run dev",
-		"pnpm run dev",
-		"pnpm dev",
-		"yarn run dev",
-		"yarn dev",
-		"bun run dev",
-		"bun dev",
-		"next dev",
-		"nuxt dev",
-		"wails dev",
-		"vite preview",
-		"vite dev",
-		"-m http.server",
-		"streamlit run",
-		"ng serve",
-		"react-scripts start",
-		"vue-cli-service serve",
-		"mkdocs serve",
-		"hugo server",
-		"php artisan serve",
-		"jupyter notebook",
-		"jupyter lab",
-		"nodemon",
+	if len(fields) == 1 {
+		return fields[0]
 	}
-	for _, pattern := range patterns {
-		if strings.Contains(cmd, pattern) {
-			return true
-		}
-	}
-	return false
-}
-
-// LongRunningCommandError wraps the command in an E_LONG_RUNNING_COMMAND error
-// directing the caller to use service with action=start.
-func LongRunningCommandError(command string) error {
-	return toolerrors.New("E_LONG_RUNNING_COMMAND", fmt.Errorf("this command looks like a long-running process; use service with action=start so it can run without blocking the agent.\n被拦截的命令: %s", command))
+	return fields[0] + " " + fields[1]
 }

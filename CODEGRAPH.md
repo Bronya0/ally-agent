@@ -22,7 +22,7 @@
 | 配置合并 / key 池管理 | `internal/app/biz_config.go` |
 | 技能发现与加载 | `internal/app/biz_skills.go` |
 | MCP 客户端生命周期 | `internal/app/biz_mcp.go` |
-| 计划任务 / 后台服务 | `orch_scheduler.go` / `orch_services.go` + `TaskCenterPanel.vue` |
+| 计划任务 / 后台服务 / 命令超时收编 | `orch_scheduler.go` / `orch_services.go`（promoteTimedOutCommand）+ `TaskCenterPanel.vue` |
 | 远程 SSH 工具与凭证 | `orch_remote.go` / `orch_ssh_credential.go` |
 | 知识库模式（KB 提示词 / sources/ 只读） | `internal/app/orch_kb.go` + `ModeSider.vue` + `App.vue` |
 | 对外本地 HTTP API 服务 | `internal/app/biz_api.go` |

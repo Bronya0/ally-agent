@@ -286,6 +286,19 @@ type App struct {
 	// chat Tab) and the footer showed that Tab's stats. Guarded by mu.
 	sessionWorkspaces map[string]string
 
+	// sessionModelConfigs freezes the model-facing connection fields each
+	// session's runs actually used (sessionID → fields), written by StartChat
+	// from the request overlay. Chat Tabs select models purely in frontend
+	// state: the overlay (model, base URL, key pool, custom headers, ...) only
+	// reaches the backend per StartChat and never persists into a.config, so
+	// session-level LLM calls that sample the persisted config — manual
+	// compaction (compactSession), the local HTTP API compact endpoint — would
+	// summarize with the DEFAULT model's credentials and silently drop the
+	// Tab's custom headers whenever the Tab model differs from the persisted
+	// default. Resolution mirrors sessionContextConfig: in-memory record first,
+	// a.config fallback for sessions that predate the record. Guarded by mu.
+	sessionModelConfigs map[string]sessionModelConfig
+
 	askMu       sync.Mutex
 	pendingAsks map[string]*pendingAsk
 
@@ -387,6 +400,7 @@ func NewApp() *App {
 		// 条目，sessionContextConfig 若只回退 a.config 会把上下文统计算到
 		// 上一个 chat Tab 的工作区上。run 路径写入后它成为内存级第一优先。
 		sessionWorkspaces:   map[string]string{},
+		sessionModelConfigs: map[string]sessionModelConfig{},
 		sessionSystemPrompts: map[string][]systemPromptPart{},
 		sessionToolsets:      map[string][]openai.Tool{},
 		pendingAsks:         map[string]*pendingAsk{},
@@ -977,6 +991,9 @@ type ServiceInfo struct {
 	OutputBytes     int64  `json:"outputBytes,omitempty"`
 	OutputTruncated bool   `json:"outputTruncated,omitempty"`
 	Error           string `json:"error,omitempty"`
+	// Promoted 标记该服务由超时命令收编而来（而非 service start 启动），
+	// 任务中心据此显示“超时转后台”徽标。
+	Promoted bool `json:"promoted,omitempty"`
 }
 
 type ServiceListResult struct {
@@ -1005,6 +1022,9 @@ type CommandResult struct {
 	Cancelled       bool   `json:"cancelled"`
 	DurationMS      int64  `json:"durationMs"`
 	Truncated       bool   `json:"truncated"`
+	// PromotedToService 标记命令超时后已收编为后台服务：进程未死、端口未
+	// 释放，模型应改用 service 工具交互而不是重跑命令。
+	PromotedToService bool `json:"promotedToService,omitempty"`
 }
 
 type HTTPRequestToolRequest struct {
@@ -1482,6 +1502,19 @@ func (a *App) StartChat(req ChatRequest) (string, error) {
 		a.mu.Unlock()
 	}
 
+	// Freeze the model-facing connection fields the same way: manual
+	// compaction (compactSession) runs outside any run and would otherwise
+	// sample the persisted default model instead of the Tab's overlay model
+	// (custom headers, base URL, key pool).
+	if req.SessionID != "" {
+		a.mu.Lock()
+		if a.sessionModelConfigs == nil {
+			a.sessionModelConfigs = map[string]sessionModelConfig{}
+		}
+		a.sessionModelConfigs[req.SessionID] = sessionModelConfigFrom(cfg)
+		a.mu.Unlock()
+	}
+
 	runID := newID()
 	ctx, cancel := context.WithCancel(context.Background())
 	a.mu.Lock()
@@ -1642,6 +1675,7 @@ func (a *App) releaseSession(sessionID string, deleteHistory bool) error {
 	delete(a.sessionSystemPrompts, sessionID)
 	delete(a.sessionToolsets, sessionID)
 	delete(a.sessionWorkspaces, sessionID)
+	delete(a.sessionModelConfigs, sessionID)
 	a.mu.Unlock()
 
 	a.subRunsMu.Lock()
@@ -1665,6 +1699,83 @@ func (a *App) releaseSession(sessionID string, deleteHistory bool) error {
 		}
 	}
 	return nil
+}
+
+// sessionModelConfig is the frozen set of model-facing connection fields a
+// session's runs actually used, captured at StartChat. It exists because the
+// chat frontend selects models per Tab without persisting them: the overlay
+// only rides each StartChat request. Session-level LLM calls outside a run
+// (manual compaction) must replay these fields, not the persisted default.
+type sessionModelConfig struct {
+	providerName  string
+	apiFormat     string
+	baseURL       string
+	apiKey        string
+	apiKeys       []string
+	model         string
+	maxTokens     int
+	contextWindow int
+	userAgent     string
+	customHeaders map[string]string
+	tokenParam    string
+	reasoningTag  string
+}
+
+// sessionModelConfigFrom snapshots the model-facing fields of cfg. Values are
+// already normalized by StartChat (effectiveConfig + normalizeAPIFormat).
+func sessionModelConfigFrom(cfg ConfigState) sessionModelConfig {
+	return sessionModelConfig{
+		providerName:  cfg.ProviderName,
+		apiFormat:     cfg.APIFormat,
+		baseURL:       cfg.BaseURL,
+		apiKey:        cfg.APIKey,
+		apiKeys:       cloneStringSlice(cfg.APIKeys),
+		model:         cfg.Model,
+		maxTokens:     cfg.MaxTokens,
+		contextWindow: cfg.ContextWindow,
+		userAgent:     cfg.UserAgent,
+		customHeaders: normalizeCustomHeaders(cfg.CustomHeaders),
+		tokenParam:    cfg.TokenParam,
+		reasoningTag:  cfg.ReasoningTag,
+	}
+}
+
+// apply overlays the frozen session fields onto base (the current persisted
+// config, which carries the up-to-date workspace, compaction settings, proxy
+// and token-accounting context). Empty model in the record keeps base's
+// fields: sessions that predate the record (or tests) fall back gracefully.
+func (m sessionModelConfig) apply(base ConfigState) ConfigState {
+	if m.model == "" {
+		return base
+	}
+	out := base
+	out.ProviderName = m.providerName
+	out.APIFormat = m.apiFormat
+	out.BaseURL = m.baseURL
+	out.APIKey = m.apiKey
+	out.APIKeys = cloneStringSlice(m.apiKeys)
+	out.Model = m.model
+	out.MaxTokens = m.maxTokens
+	out.ContextWindow = m.contextWindow
+	out.UserAgent = m.userAgent
+	out.CustomHeaders = m.customHeaders
+	out.TokenParam = m.tokenParam
+	out.ReasoningTag = m.reasoningTag
+	return out
+}
+
+// sessionModelConfigFor returns the frozen model fields recorded by the
+// session's StartChat calls. Lazy-nil guard on the map read is not needed
+// (nil map reads are safe), but callers write only through StartChat which
+// lazily initializes under a.mu.
+func (a *App) sessionModelConfigFor(sessionID string) sessionModelConfig {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return sessionModelConfig{}
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.sessionModelConfigs[sessionID]
 }
 
 // compactSessionRunning reports whether a compaction LLM call is in flight
@@ -1708,6 +1819,11 @@ func (a *App) compactSession(parent context.Context, sessionID, instruction stri
 	if err != nil {
 		return nil, err
 	}
+	// Replay the session's frozen model fields (StartChat overlay): without
+	// this, manual compaction would summarize with the persisted default
+	// model's base URL / key pool and silently drop the Tab's custom headers
+	// whenever the Tab model differs from the persisted default.
+	cfg = a.sessionModelConfigFor(sessionID).apply(cfg)
 	if strings.TrimSpace(cfg.Model) == "" {
 		return nil, errors.New("model is required")
 	}

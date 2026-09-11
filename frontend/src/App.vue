@@ -7880,7 +7880,7 @@ function formatToolBody(name, body) {
       if (d.output && !d.output.endsWith('\n')) out += '\n';
       const code = typeof d.exitCode === 'number' ? d.exitCode : 0;
       out += 'exit code: ' + code + ' [' + formatDuration(d.durationMs) + ']';
-      if (d.timedOut) out += '  ' + t('app.tools.timedOut');
+      if (d.timedOut) out += '  ' + (d.promotedToService ? t('app.tools.promotedToService') : t('app.tools.timedOut'));
       if (d.cancelled) out += '  ' + t('app.tools.cancelled');
       if (d.truncated) out += '  [' + t('common.truncated') + ']';
       return out;

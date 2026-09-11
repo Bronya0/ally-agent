@@ -49,21 +49,6 @@ func tailString(s string, limit int) string {
 	return service.TailString(s, limit)
 }
 
-func normalizeServiceCommand(command string) string {
-	return service.NormalizeCommand(command)
-}
-
-// looksLikeLongRunningService only blocks an explicit whitelist of known
-// dev-server commands. Anything else continues to the normal command
-// safety checks/timeouts.
-func looksLikeLongRunningService(command string) bool {
-	return service.LooksLikeLongRunningService(command)
-}
-
-func longRunningCommandError(command string) error {
-	return service.LongRunningCommandError(command)
-}
-
 // ───────────────────────── Section 8: Services ─────────────────────────
 
 const (
@@ -94,10 +79,14 @@ const (
 )
 
 type managedService struct {
-	mu       sync.Mutex
-	info     ServiceInfo
-	cmd      *exec.Cmd
-	output   *rollingBuffer
+	mu     sync.Mutex
+	info   ServiceInfo
+	cmd    *exec.Cmd
+	output *rollingBuffer
+	// cancel 只对 service start 启动的命令有意义（取消其 exec ctx）。
+	// 超时收编的服务没有自己的 ctx（进程归 command 路径的 cmd 所有，
+	// 且其 cmd.Cancel 已被置空以防误杀），停止一律走按 PID 的进程树
+	// 终止，因此 cancel 为 nil。
 	cancel   context.CancelFunc
 	waitDone chan struct{}
 	waitErr  error
@@ -353,7 +342,9 @@ func (a *App) stopService(req StopServiceRequest) (ServiceInfo, error) {
 			forced = true
 			if err := stopProcessTree(pid); err != nil {
 				forceErr = err
-				service.cancel()
+				if service.cancel != nil {
+					service.cancel()
+				}
 			}
 			select {
 			case <-service.waitDone:
@@ -371,7 +362,9 @@ func (a *App) stopService(req StopServiceRequest) (ServiceInfo, error) {
 		}
 		service.updateOutputInfoLocked()
 		service.mu.Unlock()
-		service.cancel()
+		if service.cancel != nil {
+			service.cancel()
+		}
 	}
 	info := service.snapshot()
 	// Stopped services stay readable like exited ones: the model may need to
@@ -622,4 +615,164 @@ func (a *App) loadServiceHistory() error {
 		}
 	}
 	return nil
+}
+
+// ───────────────────────── Section 8b: Timed-out command promotion ─────────────────────────
+
+// errProcessAlreadyExited marks the promotion race where the command process
+// exited between the timeout firing and the registry takeover. The caller
+// falls back to the plain exit path instead of reporting an error.
+var errProcessAlreadyExited = errors.New("command process already exited")
+
+// promoteCommandParams bundles everything promoteTimedOutCommand needs to
+// adopt a running command process into the service registry without
+// restarting it (a restarted dev server would collide on its port).
+type promoteCommandParams struct {
+	cmd       *exec.Cmd
+	command   string
+	cwd       string
+	startedAt time.Time
+	tee       *teeWriter
+	timeout   int
+	// waitDone 是 command 路径已经启动的 cmd.Wait 结果信道；收编成功后其
+	// 所有权移交给本函数（由 watchPromotedCommandExit 消费）。
+	waitDone <-chan error
+}
+
+// promoteTimedOutCommand adopts a still-running timed-out command into the
+// service registry: the original process keeps running, output is re-routed
+// into a rolling buffer (512 KiB recent tail), and the frontend sees it as a
+// normal service (service:update → task center). The caller stops touching
+// cmd/buf afterwards — ownership transfers here. cmd.Cancel is cleared so the
+// caller's deferred runCtx cancel cannot kill the adopted process.
+func (a *App) promoteTimedOutCommand(p promoteCommandParams) (ServiceInfo, error) {
+	if p.cmd == nil || p.cmd.Process == nil {
+		return ServiceInfo{}, errProcessAlreadyExited
+	}
+	// Already exited? cmd.Wait would have completed; ProcessState is only set
+	// after Wait returns, and our waiter goroutine still owns it at this point.
+	// isProcessAlive is the authoritative check for a live root process.
+	if !isProcessAlive(p.cmd.Process.Pid) {
+		return ServiceInfo{}, errProcessAlreadyExited
+	}
+
+	a.servicesMu.Lock()
+	activeCount := 0
+	for _, service := range a.services {
+		service.mu.Lock()
+		active := service.info.Status == "starting" || service.info.Status == "running"
+		service.mu.Unlock()
+		if active {
+			activeCount++
+		}
+	}
+	if activeCount >= maxActiveServices {
+		a.servicesMu.Unlock()
+		// Registry full: kill the tree and let the caller report a plain
+		// timeout. Better one dead command than a runaway service invisible
+		// to the task center.
+		_ = stopProcessTree(p.cmd.Process.Pid)
+		return ServiceInfo{}, codedToolError("E_SERVICE_LIMIT", fmt.Errorf("command timed out after %ds; service registry full (%d active), process tree killed — stop a service or raise the command timeout", p.timeout, maxActiveServices))
+	}
+	a.servicesMu.Unlock()
+
+	// 关键：收编即所有权移交。command 路径的 runCtx 在其 return 后会被
+	// defer cancel() 取消，而 cmd 仍挂在 exec.CommandContext(runCtx) 上——
+	// 置空 Cancel 让 os/exec 的 watchCtx 把进程放生（这是标准库文档支持的
+	// 用法）。停止服务走 stopService 的按 PID 进程树终止，不依赖 cmd.Cancel。
+	// 本写入 happens-before 调用方 return（进而 happens-before cancel()），
+	// 与 watchCtx 的读取无竞态。
+	p.cmd.Cancel = nil
+
+	id := "svc_" + newID()
+	rolling := newRollingBuffer(serviceOutputLimit)
+	svc := &managedService{
+		info: ServiceInfo{
+			ID:        id,
+			Name:      service.PromotedServiceName(p.command),
+			Command:   p.command,
+			Cwd:       filepath.ToSlash(p.cwd),
+			PID:       p.cmd.Process.Pid,
+			Status:    "running",
+			StartedAt: p.startedAt.Unix(),
+			Promoted:  true,
+		},
+		cmd:      p.cmd,
+		output:   rolling,
+		waitDone: make(chan struct{}),
+	}
+
+	// 原子改道：把超时前已捕获的输出作为种子写进滚动缓冲，并切换写入目标
+	// （teeWriter.promoteTo）。任务中心预览与 service read 因此能看到启动日志
+	// （dev-server ready 行）而不是从空开始，切换点不丢字节也不重排。
+	p.tee.promoteTo(rolling)
+
+	a.servicesMu.Lock()
+	a.services[id] = svc
+	a.servicesMu.Unlock()
+	a.emitServiceUpdate(svc.snapshot())
+
+	// 接管退出链：command 路径的 waiter goroutine 把 cmd.Wait 结果交给我们，
+	// 我们负责把它翻译成服务的 exited 状态并 finalize。
+	a.watchPromotedCommandExit(svc, p.waitDone)
+	go func() {
+		<-svc.waitDone
+		a.finalizeService(id, svc)
+	}()
+
+	return svc.snapshot(), nil
+}
+
+// watchPromotedCommandExit lets the command path's cmd.Wait goroutine hand
+// the exit error to the promoted managedService without double-calling
+// cmd.Wait: it translates the raw wait error into the service exited state
+// and closes waitDone, which unblocks stopService waits and finalization.
+func (a *App) watchPromotedCommandExit(svc *managedService, waitDone <-chan error) {
+	go func() {
+		waitErr := <-waitDone
+		svc.mu.Lock()
+		svc.waitErr = waitErr
+		svc.updateOutputInfoLocked()
+		if svc.info.Status != "stopped" {
+			svc.info.StoppedAt = time.Now().Unix()
+			svc.info.Status = "exited"
+			if waitErr != nil {
+				var exitErr *exec.ExitError
+				if errors.As(waitErr, &exitErr) {
+					svc.info.ExitCode = exitErr.ExitCode()
+				} else {
+					svc.info.Error = waitErr.Error()
+				}
+			}
+		}
+		svc.mu.Unlock()
+		close(svc.waitDone)
+	}()
+}
+
+// promotedCommandResult builds the model-facing result for a command that was
+// promoted to a background service on timeout. The model must learn the new
+// service id and how to interact with it (read output, stop). A spill file from
+// before the promotion (output already past the in-memory cap) is reported too,
+// so the model does not mistake the truncated buffer for the complete output.
+func (a *App) promotedCommandResult(req CommandRequest, shell shellInvocation, cwd string, buf *limitedBuffer, timeout int, info ServiceInfo, outputFilePath string, outputFileSize int64) CommandResult {
+	result := CommandResult{
+		Command:           req.Command,
+		Cwd:               filepath.ToSlash(cwd),
+		Shell:             shell.name,
+		ShellPath:         shell.path,
+		Output:            decodeConsoleOutput(buf.String()),
+		ExitCode:          -1,
+		TimedOut:          true,
+		DurationMS:        int64(timeout) * 1000,
+		Truncated:         buf.truncated,
+		OutputFilePath:    outputFilePath,
+		OutputFileBytes:   outputFileSize,
+		PromotedToService: true,
+	}
+	if outputFilePath != "" {
+		result.Output += commandTruncationNotice(outputFilePath, outputFileSize)
+	}
+	result.Output += fmt.Sprintf("\n\n[命令在 %d 秒内未退出，已转为后台服务继续运行（未杀进程，端口/状态保持不变）]\n服务 ID: %s\n用 service 工具继续交互：action=read 查看输出（dev server ready 日志通常在尾部）、action=stop 停止、action=list 查看；任务中心面板也能看到该服务。若这本来就该是一次性命令，请 action=stop 停掉后自行修复超时问题。", timeout, info.ID)
+	return result
 }

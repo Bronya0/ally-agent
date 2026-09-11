@@ -381,9 +381,6 @@ func (a *App) runCommandWithConfig(parent context.Context, cfg ConfigState, req 
 	if strings.TrimSpace(req.Command) == "" {
 		return CommandResult{}, codedToolError("E_BAD_COMMAND", errors.New("command is required"))
 	}
-	if looksLikeLongRunningService(req.Command) {
-		return CommandResult{}, longRunningCommandError(req.Command)
-	}
 	roots, err := workspaceRoots(cfg)
 	if err != nil {
 		return CommandResult{}, err
@@ -411,11 +408,16 @@ func (a *App) runCommandWithConfig(parent context.Context, cfg ConfigState, req 
 	if timeout > 600 {
 		timeout = 600
 	}
-	ctx, cancel := context.WithTimeout(parent, time.Duration(timeout)*time.Second)
+	// 超时不再用 context.WithTimeout 杀进程：命令超时后会被收编为后台服务
+	// 继续运行（promoteTimedOutCommand），重启 dev server 会撞端口，收编
+	// 原进程才能无缝接管。取消（ESC/关闭运行）仍然走 parent ctx 杀树。
+	runCtx, cancel := context.WithCancel(parent)
 	defer cancel()
+	timer := time.NewTimer(time.Duration(timeout) * time.Second)
+	defer timer.Stop()
 
 	shell := commandShell(req.Command, cfg.GitBashPath)
-	cmd := exec.CommandContext(ctx, shell.path, shell.args...)
+	cmd := exec.CommandContext(runCtx, shell.path, shell.args...)
 	cmd.Dir = cwd
 	cmd.Env = commandEnvironment(cfg)
 	buf := &limitedBuffer{limit: maxToolOutput}
@@ -497,38 +499,60 @@ func (a *App) runCommandWithConfig(parent context.Context, cfg ConfigState, req 
 			}
 		}()
 	}
-	err = cmd.Start()
-	if err == nil {
+	waitDone := make(chan error, 1)
+	if err = cmd.Start(); err == nil {
 		// Job Object 注册失败（例如进程已被其他 job 接管）时忽略，
 		// 取消时回退到 taskkill /T。
 		_ = registerProcessJob(cmd.Process.Pid, job)
-		err = cmd.Wait()
-		// 进程退出后关闭 job handle；若取消时 TerminateJobObject 因
-		// 竞态失败导致仍有残留孙进程，KILL_ON_JOB_CLOSE 会兜底杀掉。
-		unregisterProcessJob(cmd.Process.Pid)
+		go func() {
+			waitDone <- cmd.Wait()
+			// 进程退出后关闭 job handle；若取消时 TerminateJobObject 因
+			// 竞态失败导致仍有残留孙进程，KILL_ON_JOB_CLOSE 会兜底杀掉。
+			unregisterProcessJob(cmd.Process.Pid)
+		}()
 	} else {
 		discardProcessJob(job)
 	}
-	close(outputDone)
-	outputWG.Wait()
-	outputFilePath := ""
-	var outputFileSize int64
-	if f := tw.spill; f != nil {
-		name := f.Name()
-		_ = f.Close()
-		if buf.truncated {
-			// On codepage-936 systems the full output is commonly GBK while
-			// the model-facing cap keeps UTF-8 in memory; rewrite the spill
-			// as UTF-8 so `read` can open it, then stat the final size.
-			outputFilePath = name
-			transcodeSpillFileForRead(name)
-			if info, statErr := os.Stat(name); statErr == nil {
-				outputFileSize = info.Size()
+	timedOut := false
+	if err == nil {
+		select {
+		case err = <-waitDone:
+		case <-timer.C:
+			// 超时收编：进程还活着（waitDone 未关），把原进程连同输出管道
+			// 一起移交给服务注册表，避免杀掉重跑撞 EADDRINUSE。
+			info, promoteErr := a.promoteTimedOutCommand(promoteCommandParams{
+				cmd:       cmd,
+				command:   req.Command,
+				cwd:       cwd,
+				startedAt: started,
+				tee:       tw,
+				timeout:   timeout,
+				waitDone:  waitDone,
+			})
+			if promoteErr == nil {
+				timedOut = true
+				close(outputDone)
+				outputWG.Wait()
+				// 收编路径同样要收尾 spill：超时前的输出可能已超过内存上限，
+				// 不关句柄会泄漏 fd、不回报落盘文件会让模型误以为拿到的是全量输出。
+				outputFilePath, outputFileSize := finalizeCommandSpill(tw, buf)
+				return a.promotedCommandResult(req, shell, cwd, buf, timeout, info, outputFilePath, outputFileSize), nil
 			}
-		} else {
-			_ = os.Remove(name)
+			if errors.Is(promoteErr, errProcessAlreadyExited) {
+				// 竞态：进程恰好在收编瞬间自行退出，drain 拿真实退出结果。
+				err = <-waitDone
+			} else {
+				// 晋升失败（如服务配额已满，进程已被杀）：按超时错误上报。
+				err = promoteErr
+			}
+		case <-runCtx.Done():
+			// parent 取消（ESC）：cmd.Cancel 已杀树；drain waitDone。
+			err = <-waitDone
 		}
 	}
+	close(outputDone)
+	outputWG.Wait()
+	outputFilePath, outputFileSize := finalizeCommandSpill(tw, buf)
 	duration := time.Since(started).Milliseconds()
 	result := CommandResult{
 		Command:         req.Command,
@@ -537,15 +561,15 @@ func (a *App) runCommandWithConfig(parent context.Context, cfg ConfigState, req 
 		ShellPath:       shell.path,
 		Output:          decodeConsoleOutput(buf.String()),
 		ExitCode:        0,
-		TimedOut:        errors.Is(ctx.Err(), context.DeadlineExceeded),
-		Cancelled:       errors.Is(ctx.Err(), context.Canceled),
+		TimedOut:        timedOut,
+		Cancelled:       errors.Is(runCtx.Err(), context.Canceled),
 		DurationMS:      duration,
 		Truncated:       buf.truncated,
 		OutputFilePath:  outputFilePath,
 		OutputFileBytes: outputFileSize,
 	}
 	if outputFilePath != "" {
-		result.Output += fmt.Sprintf("\n\n[输出已截断：仅保留前 %d KB。完整输出已保存到 %s（共 %s），可用 read 工具读取该文件查看全部内容；大文件建议分段或按需检索，避免整读]", maxToolOutput/1024, outputFilePath, formatMapFileSize(outputFileSize))
+		result.Output += commandTruncationNotice(outputFilePath, outputFileSize)
 	}
 	if err != nil {
 		var exitErr *exec.ExitError
@@ -553,13 +577,51 @@ func (a *App) runCommandWithConfig(parent context.Context, cfg ConfigState, req 
 			result.ExitCode = exitErr.ExitCode()
 			return result, nil
 		}
-		if result.TimedOut {
+		if timedOut {
 			result.ExitCode = -1
 			return result, nil
 		}
 		return result, err
 	}
 	return result, nil
+}
+
+// finalizeCommandSpill closes a command's lazily created spill file (created on
+// first overflow) and reports it for the model-facing result: the path and byte
+// size of the retained full-output file, or empty values when the output never
+// exceeded the in-memory cap. Callers must invoke it only once the command path
+// stopped writing through the teeWriter — process exited, ESC-killed, or the
+// command was promoted to a service (promotion re-routes writes away from the
+// spill, so its content is final). Without this the promoted path would leak the
+// handle and leave the model thinking the capped buffer is all the output.
+func finalizeCommandSpill(tw *teeWriter, buf *limitedBuffer) (string, int64) {
+	f := tw.spill
+	if f == nil {
+		return "", 0
+	}
+	name := f.Name()
+	_ = f.Close()
+	if !buf.truncated {
+		_ = os.Remove(name)
+		return "", 0
+	}
+	// On codepage-936 systems the full output is commonly GBK while the
+	// model-facing cap keeps UTF-8 in memory; rewrite the spill as UTF-8 so
+	// `read` can open it, then stat the final size.
+	transcodeSpillFileForRead(name)
+	info, err := os.Stat(name)
+	if err != nil {
+		return name, 0
+	}
+	return name, info.Size()
+}
+
+// commandTruncationNotice is the trailing hint appended to a command result
+// whose full output was spilled to disk, telling the model the buffered text is
+// not everything the command produced. Shared by the normal exit path and the
+// promoted-to-service path so both report the same thing.
+func commandTruncationNotice(outputFilePath string, outputFileSize int64) string {
+	return fmt.Sprintf("\n\n[输出已截断：仅保留前 %d KB。完整输出已保存到 %s（共 %s），可用 read 工具读取该文件查看全部内容；大文件建议分段或按需检索，避免整读]", maxToolOutput/1024, outputFilePath, formatMapFileSize(outputFileSize))
 }
 
 // teeWriter mirrors command output to the capped buffer and, once the buffer
@@ -572,10 +634,40 @@ type teeWriter struct {
 	primary  *limitedBuffer
 	spillDir string
 	spill    *os.File // nil until the first truncation
+	// promoted 在 promoteTo 之后非 nil：新写入只进该服务的滚动缓冲，不再进
+	// primary/spill（命令已移交给服务注册表，截断报告与 spill 文件不再有意义）。
+	promoted io.Writer
+	// mu 串行化「判断 promoted 并写入目标」的整段，而不只是判断本身：持锁写入
+	// primary 才能让 promoteTo 的切换点没有缝隙。否则并发写会先判断、解锁，
+	// 再落到 primary，正好落在 promoteTo 的种子快照之后——这段字节只进旧缓冲、
+	// 不进服务滚动缓冲（丢的往往正是 dev server 的 ready 行）。
+	// 锁序固定为 mu → limitedBuffer.mu：startSpill 是在 limitedBuffer.mu 内被
+	// 回调的，绝不可在 startSpill 里反向获取 mu（否则死锁）。
+	mu sync.Mutex
 }
 
 func (w *teeWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.promoted != nil {
+		_, _ = w.promoted.Write(p)
+		return len(p), nil
+	}
 	return w.primary.Write(p)
+}
+
+// promoteTo 把输出原子改道到 sink（收编后的服务滚动缓冲）：在同一个临界区内
+// 先把 primary 已捕获的输出作为种子写进 sink，再置位 promoted，之后所有写入都
+// 只进 sink。种子与切换同锁完成，字节既不丢也不重排——这是收编后任务中心预览
+// 与 service read 能看到超时前启动日志的前提。已改道过则无操作。
+func (w *teeWriter) promoteTo(sink io.Writer) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.promoted != nil || sink == nil {
+		return
+	}
+	_, _ = sink.Write([]byte(w.primary.String()))
+	w.promoted = sink
 }
 
 // startSpill is invoked by limitedBuffer exactly once, on first overflow, with

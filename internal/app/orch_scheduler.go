@@ -513,7 +513,20 @@ func (m *scheduledTaskManager) run(task ScheduledTask) {
 	}()
 
 	timeout := time.Duration(task.TimeoutSeconds) * time.Second
-	ctx, cancel := context.WithTimeout(m.app.ctx, timeout)
+	// 命令型任务绝不能用带 deadline 的 ctx 传给 command 工具：外层 deadline
+	// 与命令自身的超时 timer 同时到期时，三路竞态（timer.C 先赢 → 收编；
+	// runCtx.Done 先赢 → Cancel 杀树报 cancelled；watchCtx 已读到旧 Cancel →
+	// 杀掉刚收编的进程且构成对 cmd.Cancel 的无同步并发读写）。命令超时完全
+	// 由 runCommandTask 内部的 CommandRequest.Timeout（600s 上限）承担，且
+	// 超时后是收编为后台服务而不是杀进程；这里只保留取消能力（手动停任务
+	// /应用退出）。LLM 委托型任务仍用 WithTimeout 约束总时长。
+	var ctx context.Context
+	var cancel context.CancelFunc
+	if strings.TrimSpace(task.Command) != "" {
+		ctx, cancel = context.WithCancel(m.app.ctx)
+	} else {
+		ctx, cancel = context.WithTimeout(m.app.ctx, timeout)
+	}
 	defer cancel()
 	m.mu.Lock()
 	if m.tasks[task.ID] == nil {
@@ -604,6 +617,11 @@ func (m *scheduledTaskManager) runCommandTask(task ScheduledTask, ctx context.Co
 	case runErr != nil:
 		status = "failed"
 		errText = runErr.Error()
+	case result.PromotedToService:
+		// 超时命令已被收编为后台服务继续运行：任务本身没失败，但也没等到
+		// 退出。标记 timed_out 并在摘要里指向服务，便于事后诊断。
+		status = "timed_out"
+		errText = fmt.Sprintf("command exceeded %ds; promoted to background service (still running)", timeout)
 	case result.TimedOut:
 		status = "timed_out"
 		errText = fmt.Sprintf("command exceeded %ds", timeout)

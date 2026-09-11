@@ -8,6 +8,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -1073,8 +1074,8 @@ func TestCompactToolResultForModelCompactsGrepLines(t *testing.T) {
 	got := compactToolResultForModel("grep", result, string(raw))
 
 	var decoded struct {
-		OK               bool `json:"ok"`
-		Data             struct {
+		OK   bool `json:"ok"`
+		Data struct {
 			Matches           []GrepFileMatch `json:"matches"`
 			FileCounts        []GrepFileCount `json:"fileCounts"`
 			MatchedLines      int             `json:"matchedLines"`
@@ -2018,19 +2019,29 @@ func TestRunCommandInvalidatesWorkspaceMapCache(t *testing.T) {
 	mustContain(t, refreshed, "generated.txt")
 }
 
-func TestRunCommandRejectsLongRunningService(t *testing.T) {
+// TestRunCommandNoKeywordBlocking 锁定“无关键词拦截”：旧白名单里的命令
+// 不再被 E_LONG_RUNNING_COMMAND 拒绝，而是正常执行并快速返回。
+func TestRunCommandNoKeywordBlocking(t *testing.T) {
 	root := t.TempDir()
 	app := NewApp()
-	args, err := json.Marshal(CommandRequest{Command: "python manage.py runserver --noreload 0.0.0.0:8000"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	result := app.executeTool(context.Background(), ConfigState{Workspace: root}, "session-1", "command", args)
-	if result.OK {
-		t.Fatalf("expected command to reject long-running service, got %#v", result)
-	}
-	if result.ErrorCode != "E_LONG_RUNNING_COMMAND" {
-		t.Fatalf("expected E_LONG_RUNNING_COMMAND, got %#v", result)
+	for _, cmd := range []string{
+		"npm run dev-setup --if-present", // 子串“npm run dev”曾误拦截
+		"echo flask run",                 // 曾命中“flask run”
+		"echo nodemon",                   // 裸名曾命中
+	} {
+		args, err := json.Marshal(CommandRequest{Command: cmd, Timeout: 10})
+		if err != nil {
+			t.Fatal(err)
+		}
+		result := app.executeTool(context.Background(), ConfigState{Workspace: root}, "session-1", "command", args)
+		if !result.OK {
+			t.Errorf("command %q must not be pre-blocked, got %#v", cmd, result)
+			continue
+		}
+		data, ok := result.Data.(CommandResult)
+		if !ok || data.PromotedToService {
+			t.Errorf("command %q should complete normally, got %#v", cmd, result.Data)
+		}
 	}
 }
 
@@ -4381,5 +4392,67 @@ func TestCompactToolResultForModelCommandPassesOutputThrough(t *testing.T) {
 	}
 	if strings.Contains(modelJSON, "reductionNote") {
 		t.Fatalf("reductionNote must be gone after fullOutput removal, got %s", modelJSON)
+	}
+}
+
+// TestTeeWriterPromoteToPreservesAllOutput 锁定收编改道的原子性：promoteTo 在同一个
+// 临界区内把 primary 已捕获的输出作种子写进 sink 并切换目标，之后所有写入只进 sink。
+// 校验「primary + sink」拼接与原始写入序列逐字节一致（不丢、不重、不乱序）。
+// 旧实现先 String() 快照、再置位 promoted，而 Write 是「判断后解锁、再写 primary」：
+// 并发写在解锁后才落到 primary、落在快照之后，这段日志就永远丢了。
+func TestTeeWriterPromoteToPreservesAllOutput(t *testing.T) {
+	const total = 20000
+	want := make([]byte, total)
+	for i := range want {
+		want[i] = byte(i)
+	}
+	primary := &limitedBuffer{limit: total + 1}
+	tw := &teeWriter{primary: primary}
+	var sink bytes.Buffer
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for _, b := range want {
+			_, _ = tw.Write([]byte{b})
+		}
+	}()
+	// 与写入并发改道：切换点落在任意位置都必须无损。
+	tw.promoteTo(&sink)
+	<-done
+
+	if got := append([]byte(primary.String()), sink.Bytes()...); !bytes.Equal(got, want) {
+		t.Fatalf("promotion lost or reordered output: primary=%d sink=%d combined=%d want=%d", primary.Len(), sink.Len(), len(got), len(want))
+	}
+	// 改道后写入只进 sink，primary 不再增长。
+	before := primary.Len()
+	_, _ = tw.Write([]byte("tail"))
+	if primary.Len() != before || !strings.HasSuffix(sink.String(), "tail") {
+		t.Fatalf("post-promotion write must go to the service buffer only: primary=%d sink=%q", primary.Len(), sink.String())
+	}
+}
+
+// TestFinalizeCommandSpillClosesFileAndReportsPath 锁定 spill 收尾契约（普通退出路径与
+// 超时收编路径共用）：关闭句柄（防 fd 泄漏）并把完整输出的落盘路径与体积回报给模型。
+// 全程在 TempDir 沙箱内，不碰真实磁盘路径。
+func TestFinalizeCommandSpillClosesFileAndReportsPath(t *testing.T) {
+	buf := &limitedBuffer{limit: 8}
+	tw := &teeWriter{primary: buf, spillDir: t.TempDir()}
+	buf.onTruncate = tw.startSpill
+	if _, err := buf.Write([]byte("0123456789abcdef")); err != nil {
+		t.Fatal(err)
+	}
+	path, size := finalizeCommandSpill(tw, buf)
+	if path == "" || size != 16 {
+		t.Fatalf("expected full-output spill of 16 bytes, got path=%q size=%d", path, size)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "0123456789abcdef" {
+		t.Fatalf("spill must keep the complete output, got %q", content)
+	}
+	if _, err := tw.spill.Write([]byte("x")); err == nil {
+		t.Fatal("spill handle must already be closed by finalizeCommandSpill")
 	}
 }
