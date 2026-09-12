@@ -1859,10 +1859,13 @@ const builtinCommands = [
   { key: 'push', label: '/push', description: t('commands.push'), text: '', special: 'push' },
 ];
 
-// Dynamically includes skill commands
+// Dynamically includes skill commands. Active skills only: disabled skills
+// are not injected into the model's context, so offering their slash commands
+// (menu + dispatch) would silently re-activate them.
 const commands = computed(() => {
   const cmds = [...builtinCommands];
   for (const sk of availableSkills.value) {
+    if (!isSkillActive(sk.name, activeSkillNames.value)) continue;
     // Don't add duplicates if a builtin has the same label
     const label = `/${sk.name}`;
     if (!cmds.some(c => c.label === label)) {
@@ -3327,7 +3330,8 @@ function buildWelcomeMessage(workspacePath = '') {
       welcome,
     };
   }
-  const skillCount = availableSkills.value.length;
+  // 口径与模型实际可用一致：只计激活技能（禁用的不注入系统提示）。
+  const skillCount = availableSkills.value.filter((sk) => isSkillActive(sk.name, activeSkillNames.value)).length;
   const rows = [];
   if (workspacePath !== null) {
     rows.push({ kind: 'workspace', label: t('common.workspace'), value: workspacePath || t('common.notSelected') });
@@ -5508,8 +5512,9 @@ async function sendPrompt(opts) {
       const builtinPrefixes = ['new','plan','skills','clear','switch','sessions','reload','init','note','remember','compact','push','review'];
       const cmdName = slashContent.split(/\s+/)[0];
       const isBuiltin = builtinPrefixes.includes(cmdName);
-      // Also check if any skill name matches
-      const matchedSkill = availableSkills.value.find(sk => sk.name === cmdName || `skill:${sk.name}` === cmdName);
+      // Also check if any active skill name matches (disabled skills stay out
+      // of slash dispatch — same rule as the command menu)
+      const matchedSkill = availableSkills.value.find((sk) => isSkillActive(sk.name, activeSkillNames.value) && (sk.name === cmdName || `skill:${sk.name}` === cmdName));
       if (!isBuiltin && matchedSkill) {
         await activateSkillByName(matchedSkill.name, slashContent.slice(cmdName.length).trim());
         promptText.value = '';

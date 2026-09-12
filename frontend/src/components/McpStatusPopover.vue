@@ -30,7 +30,7 @@ Public License v3. See the LICENSE file for details.
             <span class="mcp-list-name">{{ srv.name }}</span>
             <span class="mcp-list-meta">{{ $t(`app.mcp.status.${statusKey(srv)}`) }}</span>
             <span v-if="srv.transport" class="mcp-list-transport">· {{ srv.transport }}</span>
-            <span v-if="Number(srv.toolCount) > 0" class="mcp-list-tools">· {{ $t('tools.count', { count: srv.toolCount }) }}</span>
+            <span v-if="Number(srv.toolCount) > 0" class="mcp-list-tools">· {{ $t('tools.count', { count: enabledToolCount(srv) }) }}</span>
           </div>
           <div v-if="srv.error" class="mcp-list-error">{{ srv.error }}</div>
         </div>
@@ -52,7 +52,14 @@ const visible = ref(false);
 
 const total = computed(() => props.servers.length);
 const connectedCount = computed(() => props.servers.filter((s) => s?.status === 'connected').length);
-const toolCount = computed(() => props.servers.reduce((sum, s) => sum + (Number(s?.toolCount) || 0), 0));
+// 与欢迎表 formatMcpSummary 同口径：统计实际注入的工具数（per-tool 黑名单
+// 在 tools[].disabled），无工具明细的条目回退发现总数。
+const toolCount = computed(() => props.servers.reduce((sum, s) => sum + enabledToolCount(s), 0));
+
+function enabledToolCount(srv) {
+  if (Array.isArray(srv?.tools)) return srv.tools.filter((tool) => !tool?.disabled).length;
+  return Number(srv?.toolCount) || 0;
+}
 
 // Map MCP status bucket to a translation key + dot color. The backend emits
 // one of: connected / connecting / failed / disconnected (missing). Unknown

@@ -49,9 +49,12 @@ const props = defineProps({
 });
 
 const visible = ref(false);
-const toolCount = computed(() => props.tools.length);
-const builtinTools = computed(() => props.tools.filter((tool) => tool?.source !== 'mcp'));
-const mcpTools = computed(() => props.tools.filter((tool) => tool?.source === 'mcp'));
+// 与 MCP 计数同口径：只统计/展示实际注入的工具（ListTools 返回的 enabled
+// 标记 = 未被 per-server 黑名单勾掉）；内置工具恒为 enabled。
+const enabledTools = computed(() => props.tools.filter((tool) => tool?.enabled !== false));
+const toolCount = computed(() => enabledTools.value.length);
+const builtinTools = computed(() => enabledTools.value.filter((tool) => tool?.source !== 'mcp'));
+const mcpTools = computed(() => enabledTools.value.filter((tool) => tool?.source === 'mcp'));
 const builtinToolGroups = computed(() => groupBuiltinTools(builtinTools.value));
 
 const BUILTIN_TOOL_GROUPS = [
