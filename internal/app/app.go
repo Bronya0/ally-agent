@@ -46,8 +46,11 @@ const (
 	modelToolHeadBytes      = 4 * 1024
 	modelToolTailBytes      = 8 * 1024
 	maxModelGrepMatches     = 200
-	maxModelGrepSampleLines = 250
 	maxModelGrepFileCounts  = 20
+	// maxModelGrepTextBytes bounds the combined size of per-line text
+	// previews in grep lines mode (on top of the per-line 500-char cap from
+	// the grep tool), so worst-case minified hits cannot flood model context.
+	maxModelGrepTextBytes = 32 * 1024
 	maxAgentSteps           = 9999
 	// runInputBufferSize is the per-run capacity of the injected-message queue
 	// (InjectRunMessage). The buffered channel plus non-blocking drain keeps

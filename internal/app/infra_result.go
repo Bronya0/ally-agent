@@ -484,9 +484,15 @@ func compactToolDataForModel(name string, result toolResult, fullJSON string) st
 		}
 		switch mode {
 		case "lines":
-			// Default: one entry per matching line, grouped by file, no line
-			// text. Cap the file groups, then the total line entries, so a
-			// huge result still fits in model context; exact totals above.
+			// Default: one entry per matching line, grouped by file, with a
+			// capped text preview per line (texts runs parallel to lines; legacy
+			// results predate texts and simply omit it). Cap the file groups,
+			// then the total line entries, so a huge result still fits in model
+			// context; exact totals above.
+			sampledLines := 0
+			for _, fh := range lineHits {
+				sampledLines += len(fh.Lines)
+			}
 			if len(lineHits) > maxModelGrepFileCounts {
 				lineHits = lineHits[:maxModelGrepFileCounts]
 				data["filesReduced"] = true
@@ -509,14 +515,37 @@ func compactToolDataForModel(name string, result toolResult, fullJSON string) st
 					}
 					remaining -= len(lines)
 					keptLines += len(lines)
-					capped = append(capped, GrepFileMatch{Path: fh.Path, Lines: lines})
+					// Trim the previews with the kept line numbers; legacy
+					// results without texts keep none.
+					texts := fh.Texts
+					if len(texts) > len(lines) {
+						texts = texts[:len(lines)]
+					}
+					capped = append(capped, GrepFileMatch{Path: fh.Path, Lines: lines, Texts: texts})
 				}
 				lineHits = capped
 				data["linesReduced"] = true
 				data["originalLineCount"] = totalLines
 				data["linesOmitted"] = totalLines - keptLines
 			}
+			// Text previews carry a global byte budget on top of the line
+			// count: once exceeded, later entries keep their line numbers but
+			// drop the text (read tool covers them when needed).
+			lineHits, textsReduced := capGrepLineTexts(lineHits, maxModelGrepTextBytes)
+			if textsReduced {
+				data["textsReduced"] = true
+			}
 			data["matches"] = lineHits
+			// nextOffset resumes after the tool-sampled page; when compaction
+			// dropped lines (file-group or line cap), resume after the lines
+			// the model actually saw so paging never skips unseen lines.
+			modelLines := 0
+			for _, fh := range lineHits {
+				modelLines += len(fh.Lines)
+			}
+			if dropped := sampledLines - modelLines; dropped > 0 && r.NextOffset > dropped {
+				data["nextOffset"] = r.NextOffset - dropped
+			}
 		case "count_matches":
 			if len(fileCounts) > maxModelGrepFileCounts {
 				fileCounts = fileCounts[:maxModelGrepFileCounts]
@@ -676,4 +705,30 @@ type compactTextSpec struct {
 	limit int
 	head   int
 	tail  int
+}
+
+// capGrepLineTexts enforces a global byte budget on the per-line text
+// previews of a grep lines result. Entries keep their path and line numbers;
+// once the budget is spent, later texts are dropped so the model still sees
+// where the matches are (and can read the lines it cares about). reduced
+// reports whether any text was dropped.
+func capGrepLineTexts(hits []GrepFileMatch, budget int) ([]GrepFileMatch, bool) {
+	remaining := budget
+	reduced := false
+	for i := range hits {
+		kept := make([]string, 0, len(hits[i].Texts))
+		for _, text := range hits[i].Texts {
+			if remaining <= 0 {
+				reduced = true
+				kept = append(kept, "")
+				continue
+			}
+			remaining -= len(text)
+			kept = append(kept, text)
+		}
+		if reduced {
+			hits[i].Texts = kept
+		}
+	}
+	return hits, reduced
 }

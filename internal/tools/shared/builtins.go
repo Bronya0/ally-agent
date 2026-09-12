@@ -266,14 +266,13 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"action"},
 		}),
-		functionTool("grep", "Search UTF-8 file contents with ripgrep. Default outputMode `lines` returns matching line numbers grouped by file (no line content); `count_matches` returns exact per-file counts. Result size is bounded automatically; paginate with `offset`/`nextOffset` or narrow path/glob instead of asking for more entries.", map[string]any{
+		functionTool("grep", "Search UTF-8 file contents with ripgrep. Default outputMode `lines` returns matching lines grouped by file: each entry carries the path (once per file), 1-based line numbers, and a text preview of each matching line (trimmed, max 500 chars) so a separate read is only needed for surrounding context; `count_matches` returns exact per-file counts. Result size is bounded automatically; paginate with `offset`/`nextOffset` (nextOffset resumes right after the last entry shown) or narrow path/glob instead of asking for more entries.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"pattern":        map[string]any{"type": "string", "minLength": 1, "pattern": `.*\S.*`, "description": "Search regex pattern."},
-				"outputMode":     map[string]any{"type": "string", "enum": []string{"lines", "count_matches"}, "description": "Output shape: lines (default, line numbers only) or count_matches."},
+				"outputMode":     map[string]any{"type": "string", "enum": []string{"lines", "count_matches"}, "description": "Output shape: lines (default, line numbers plus capped text previews) or count_matches."},
 				"path":           map[string]any{"type": "string", "description": "Subdirectory or explicit absolute path. Empty means workspace root."},
 				"glob":           map[string]any{"type": "string", "description": "Optional glob filter, e.g. *.go or frontend/**/*.vue."},
-				"timeout":        map[string]any{"type": "integer", "minimum": 1, "maximum": 120, "description": "Timeout in seconds, default 30."},
 				"includeIgnored": map[string]any{"type": "boolean", "description": "Include files ignored by .gitignore/.ignore. Default false."},
 				"caseSensitive":  map[string]any{"type": "boolean", "description": "Match case exactly. Default false (case-insensitive)."},
 				"offset":         map[string]any{"type": "integer", "minimum": 0, "description": "Skip first N matching lines/files for pagination."},

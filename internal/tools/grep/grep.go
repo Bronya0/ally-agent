@@ -54,13 +54,21 @@ const (
 	// maxGrepThreads keeps interactive searches responsive without allowing
 	// ripgrep to occupy every logical CPU on large workspaces.
 	maxGrepThreads = 4
+	// maxGrepLineTextChars caps each matching line's text preview so long or
+	// minified lines cannot blow up the result payload.
+	maxGrepLineTextChars = 500
+	// countPageSize is the count_matches pagination width (entries per page
+	// over the per-file count heap). Sized to the model-view file-group cap so
+	// a full page always fits without compaction.
+	countPageSize = 20
 )
 
 const (
 	// OutputModeLines is the default grep output: one entry per matching
-	// line, grouped by file, carrying only the line number (no line text).
-	// Compact and flat so broad searches stay small; the model reads the
-	// specific lines via the read tool.
+	// line, grouped by file, carrying the line number plus a sanitized text
+	// preview of the line (trimmed, capped at maxGrepLineTextChars). Compact
+	// and flat so broad searches stay small; the model reads surrounding
+	// context via the read tool only when needed.
 	OutputModeLines = "lines"
 	// OutputModeCountMatches returns the exact occurrence count per file.
 	OutputModeCountMatches = "count_matches"
@@ -84,15 +92,16 @@ func normalizedOutputMode(mode string) string {
 type Request struct {
 	Pattern string `json:"pattern"`
 	// OutputMode defaults to lines, which returns one entry per matching line
-	// (path + line number, no line text) grouped by file. Use count_matches
-	// for exact per-file occurrence counts.
+	// (path + line number + capped text preview) grouped by file. Use
+	// count_matches for exact per-file occurrence counts.
 	OutputMode     string `json:"outputMode,omitempty"`
 	Path           string `json:"path,omitempty"`
 	Glob           string `json:"glob,omitempty"`
 	IncludeIgnored bool   `json:"includeIgnored,omitempty"`
 	MaxDepth       int    `json:"maxDepth,omitempty"`
-	MaxFiles       int    `json:"maxFiles,omitempty"`
 	MaxMatches     int    `json:"maxMatches,omitempty"`
+	// Timeout is a request-scoped override in seconds, used by orchestration;
+	// not exposed to the model.
 	Timeout        int    `json:"timeout,omitempty"`
 	// CaseSensitive matches case exactly. Default false: searches are
 	// case-insensitive (the historic Ally default and the tool description's
@@ -105,13 +114,15 @@ type Request struct {
 	Offset int `json:"offset,omitempty"`
 }
 
-// LineFileMatch groups matching line numbers for one file. The path is
-// emitted once; Lines lists the 1-based line numbers of matching lines in
-// ascending order. It carries no line text, keeping the result flat so a
-// broad search stays compact.
+// LineFileMatch groups matching lines for one file. The path is emitted
+// once; Lines lists the 1-based line numbers of matching lines in ascending
+// order, and Texts carries the sanitized text of each matching line in
+// parallel (trimmed of surrounding whitespace and capped at
+// maxGrepLineTextChars, so a broad search stays compact).
 type LineFileMatch struct {
-	Path  string `json:"path"`
-	Lines []int  `json:"lines"`
+	Path  string   `json:"path"`
+	Lines []int    `json:"lines"`
+	Texts []string `json:"texts,omitempty"`
 }
 
 // FileCount is one entry in the per-file count list returned as
@@ -121,10 +132,10 @@ type FileCount struct {
 	Count int    `json:"count"`
 }
 
-// Result is the grep tool result. Mode lines returns matching line numbers
-// grouped by file (no line text). Mode count_matches returns per-file counts.
-// MatchedLines/Hits/Files stay exact across all modes. NextOffset pages the
-// active mode's result entries.
+// Result is the grep tool result. Mode lines returns matching lines (number
+// plus capped text preview) grouped by file. Mode count_matches returns
+// per-file counts. MatchedLines/Hits/Files stay exact across all modes.
+// NextOffset pages the active mode's result entries.
 type Result struct {
 	Mode         string          `json:"mode"`
 	LineHits     []LineFileMatch `json:"matches,omitempty"`
@@ -210,9 +221,9 @@ func InstallInstructions() []string {
 	}
 }
 
-// EffectiveTimeoutSeconds returns the effective timeout for req, applying the
-// default and clamping to MaxTimeout.
 func EffectiveTimeoutSeconds(req Request) int {
+	// Not exposed to the model; only internal callers may override, and the
+	// default already covers workspace-scale searches.
 	timeout := req.Timeout
 	if timeout <= 0 {
 		return DefaultTimeout
@@ -242,9 +253,9 @@ type SearchStats struct {
 // the workspace.
 func Search(ctx context.Context, rgPath, root, searchRoot string, req Request) (*Result, error) {
 	mode := normalizedOutputMode(req.OutputMode)
-	maxDepth, maxFiles, maxMatches := limits(req)
+	maxDepth, maxMatches := limits(req)
 
-	lineHits, fileCounts, nextOffset, stats, truncated, offsetExhausted, warnings, err := sampleMatches(ctx, rgPath, root, searchRoot, req, maxDepth, maxFiles, maxMatches)
+	lineHits, fileCounts, nextOffset, stats, truncated, offsetExhausted, warnings, err := sampleMatches(ctx, rgPath, root, searchRoot, req, maxDepth, maxMatches)
 	if err != nil {
 		return nil, err
 	}
@@ -336,9 +347,11 @@ func GlobPatternToRegex(pattern string) string {
 	return b.String()
 }
 
-// limits returns the effective maxDepth/maxFiles/maxMatches for req, applying
-// defaults and clamping to upper bounds.
-func limits(req Request) (maxDepth, maxFiles, maxMatches int) {
+// limits returns the effective maxDepth/maxMatches for req, applying defaults
+// and clamping to upper bounds. There is no separate file cap: every sampled
+// file group consumes at least one line of the maxMatches budget, so the group
+// count is bounded by the line budget itself.
+func limits(req Request) (maxDepth, maxMatches int) {
 	maxDepth = req.MaxDepth
 	if maxDepth <= 0 {
 		maxDepth = 20
@@ -346,21 +359,17 @@ func limits(req Request) (maxDepth, maxFiles, maxMatches int) {
 	if maxDepth > 100 {
 		maxDepth = 100
 	}
-	maxFiles = req.MaxFiles
-	if maxFiles <= 0 {
-		maxFiles = 50
-	}
-	if maxFiles > 1000 {
-		maxFiles = 1000
-	}
 	maxMatches = req.MaxMatches
 	if maxMatches <= 0 {
-		maxMatches = maxFiles * 10
+		// Lines beyond the model cap (200) never reach the model view; the
+		// default matches it so nextOffset never skips lines the model has
+		// not seen.
+		maxMatches = 200
 	}
 	if maxMatches > 5000 {
 		maxMatches = 5000
 	}
-	return maxDepth, maxFiles, maxMatches
+	return maxDepth, maxMatches
 }
 
 // excludedGlobArgs is the static -g exclusion list derived from excludedDirs,
@@ -475,7 +484,7 @@ func parseEndEvent(line []byte, root string) (path string, count int, ok bool) {
 	return DisplayPathForRoot(root, event.Data.Path.Text), event.Data.Stats.Matches, true
 }
 
-func sampleMatches(ctx context.Context, rgPath, root, searchRoot string, req Request, maxDepth, maxFiles, maxMatches int) ([]LineFileMatch, []FileCount, int, *SearchStats, bool, bool, []string, error) {
+func sampleMatches(ctx context.Context, rgPath, root, searchRoot string, req Request, maxDepth, maxMatches int) ([]LineFileMatch, []FileCount, int, *SearchStats, bool, bool, []string, error) {
 	mode := normalizedOutputMode(req.OutputMode)
 	args := baseArgs(req, maxDepth)
 	args = append(args,
@@ -558,10 +567,10 @@ func sampleMatches(ctx context.Context, rgPath, root, searchRoot string, req Req
 					}
 				}
 			} else if !recordTruncated && !outputCapped {
-				path, lineNum, ok, err := parseMatch(line, root)
+				path, lineNum, lineText, ok, err := parseMatch(line, root)
 				if err != nil {
 					parseErr = err
-			} else if ok {
+				} else if ok {
 				if mode == OutputModeCountMatches {
 					// count_matches resolves its page from the globally
 					// sorted per-file counts collected by the end events, so
@@ -580,19 +589,21 @@ func sampleMatches(ctx context.Context, rgPath, root, searchRoot string, req Req
 				seen++
 				continue
 			}
-			g := groupByPath[path]
-			if g == nil && len(groups) < maxFiles {
-				// Cap the number of files that get a line list so a
-				// search hitting thousands of files stays bounded; the
-				// exact totals still come from the summary stats. Initialize
-				// Lines so an empty group serializes as [] rather than null.
-				g = &sampleFile{path: path, lines: []int{}}
-				groupByPath[path] = g
-				groups = append(groups, g)
-			}
-				if g != nil && totalLines < maxMatches {
+				if totalLines < maxMatches {
+					g := groupByPath[path]
+					if g == nil {
+						// No separate file cap: every group consumes at least one
+						// line of the budget, so the group count is bounded by the
+						// line budget itself; the exact totals still come from the
+						// summary stats. The first matching line is appended
+						// immediately below, so a group never exists empty.
+						g = &sampleFile{path: path, lines: []int{}, texts: []string{}}
+						groupByPath[path] = g
+						groups = append(groups, g)
+					}
 					if len(g.lines) == 0 || g.lines[len(g.lines)-1] != lineNum {
 						g.lines = append(g.lines, lineNum)
+						g.texts = append(g.texts, lineText)
 						totalLines++
 						seen++
 					}
@@ -652,7 +663,7 @@ func sampleMatches(ctx context.Context, rgPath, root, searchRoot string, req Req
 
 	lineHits := make([]LineFileMatch, 0, len(groups))
 	for _, g := range groups {
-		lineHits = append(lineHits, LineFileMatch{Path: g.path, Lines: g.lines})
+		lineHits = append(lineHits, LineFileMatch{Path: g.path, Lines: g.lines, Texts: g.texts})
 	}
 	// count_matches resolves its page from the globally sorted per-file counts
 	// collected by the end events so the hottest files lead and pagination is
@@ -667,7 +678,7 @@ func sampleMatches(ctx context.Context, rgPath, root, searchRoot string, req Req
 		if start > len(sorted) {
 			start = len(sorted)
 		}
-		end := start + maxFiles
+		end := start + countPageSize
 		if end > len(sorted) {
 			end = len(sorted)
 		}
@@ -703,12 +714,14 @@ func sampleMatches(ctx context.Context, rgPath, root, searchRoot string, req Req
 	return lineHits, resultCounts, nextOffset, stats, truncated, offsetExhausted, warnings, nil
 }
 
-// sampleFile accumulates matching line numbers for one file path during
-// sample collection. matchCount is the exact hit count from the per-file end
-// event (used by count_matches mode).
+// sampleFile accumulates matching lines for one file path during sample
+// collection: lines holds 1-based line numbers, texts the sanitized text of
+// each matching line in parallel. matchCount is the exact hit count from the
+// per-file end event (used by count_matches mode).
 type sampleFile struct {
 	path       string
 	lines      []int
+	texts      []string
 	matchCount int
 }
 
@@ -854,10 +867,11 @@ func parseSummaryStats(line []byte) *SearchStats {
 	}
 }
 
-// parseMatch returns the display path and 1-based line number for a ripgrep
-// --json "match" event. begin/end/summary/context events are handled by their
-// dedicated parsers (or ignored) and never reach here.
-func parseMatch(line []byte, root string) (path string, lineNum int, ok bool, err error) {
+// parseMatch returns the display path, 1-based line number, and sanitized
+// text of the matching line for a ripgrep --json "match" event.
+// begin/end/summary/context events are handled by their dedicated parsers
+// (or ignored) and never reach here.
+func parseMatch(line []byte, root string) (path string, lineNum int, text string, ok bool, err error) {
 	var event struct {
 		Type string `json:"type"`
 		Data struct {
@@ -865,15 +879,38 @@ func parseMatch(line []byte, root string) (path string, lineNum int, ok bool, er
 				Text string `json:"text"`
 			} `json:"path"`
 			LineNumber int `json:"line_number"`
+			Lines      struct {
+				Text string `json:"text"`
+			} `json:"lines"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(line, &event); err != nil {
-		return "", 0, false, err
+		return "", 0, "", false, err
 	}
 	if event.Type != "match" || event.Data.Path.Text == "" {
-		return "", 0, false, nil
+		return "", 0, "", false, nil
 	}
-	return DisplayPathForRoot(root, event.Data.Path.Text), event.Data.LineNumber, true, nil
+	return DisplayPathForRoot(root, event.Data.Path.Text), event.Data.LineNumber, sanitizeLineText(event.Data.Lines.Text), true, nil
+}
+
+// sanitizeLineText prepares a matched line's text for the model-facing
+// result: drop trailing newlines (rg includes them), trim leading/trailing
+// whitespace and other invisible characters, keep only the first line of a
+// multi-line match, and cap the preview at maxGrepLineTextChars runes
+// (appending an ellipsis when truncated).
+func sanitizeLineText(s string) string {
+	s = strings.TrimSpace(s)
+	if idx := strings.IndexByte(s, '\n'); idx >= 0 {
+		s = strings.TrimSpace(s[:idx])
+	}
+	if s == "" {
+		return ""
+	}
+	runes := []rune(s)
+	if len(runes) <= maxGrepLineTextChars {
+		return s
+	}
+	return string(runes[:maxGrepLineTextChars]) + "…"
 }
 
 func excludedDirs() []string {

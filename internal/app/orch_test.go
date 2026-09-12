@@ -838,7 +838,7 @@ func TestGrepFilesSearchesHiddenDirectoryWhenItIsTheRoot(t *testing.T) {
 	}
 }
 
-func TestGrepFilesKeepsExactCountsWhenSamplesAreTruncatedByFileLimit(t *testing.T) {
+func TestGrepFilesKeepsExactCountsWhenSamplesAreTruncatedByLineBudget(t *testing.T) {
 	requireRipgrep(t)
 	root := t.TempDir()
 	writeToolTestFile(t, root, "a.txt", "needle one\nneedle two\n")
@@ -848,7 +848,7 @@ func TestGrepFilesKeepsExactCountsWhenSamplesAreTruncatedByFileLimit(t *testing.
 	got, err := app.grepFilesWithConfig(context.Background(), ConfigState{Workspace: root}, GrepRequest{
 		Pattern:    "needle",
 		OutputMode: grep.OutputModeLines,
-		MaxFiles:   1,
+		MaxMatches: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -856,17 +856,18 @@ func TestGrepFilesKeepsExactCountsWhenSamplesAreTruncatedByFileLimit(t *testing.
 	if got.Files != 2 || got.MatchedLines != 3 || got.Hits != 3 || !got.StatsExact {
 		t.Fatalf("expected exact counts despite sample truncation, got %#v", got)
 	}
-	// Without --sort the sampled file is whichever rg reaches first, so the
-	// contract is "samples are limited to one file", not a specific path.
-	if !got.Truncated || len(got.LineHits) != 1 {
-		t.Fatalf("expected single-file samples and truncation, got %#v", got)
+	// The line budget is global: one sampled line in, the next matching file
+	// trips it. The contract is "samples are limited to one line", not a
+	// specific file or path.
+	if !got.Truncated || len(got.LineHits) != 1 || len(got.LineHits[0].Lines) != 1 {
+		t.Fatalf("expected single-line samples and truncation, got %#v", got)
 	}
 	hits := got.LineHits[0]
 	if hits.Path != "a.txt" && hits.Path != "b.txt" {
 		t.Fatalf("unexpected sample file %q", hits.Path)
 	}
-	if len(hits.Lines) == 0 || len(hits.Lines) > 2 {
-		t.Fatalf("expected at least one sample line from the single sampled file, got %#v", hits)
+	if len(hits.Texts) != 1 || hits.Texts[0] == "" {
+		t.Fatalf("expected the sampled line to carry its text preview, got %#v", hits)
 	}
 }
 
@@ -1112,10 +1113,10 @@ func TestCompactToolResultForModelCompactsGrepLines(t *testing.T) {
 	if !decoded.Data.LinesReduced || decoded.Data.OriginalLineCount != total || decoded.Data.LinesOmitted != 5 {
 		t.Fatalf("expected reduction metadata, got %#v", decoded.Data)
 	}
-	// nextOffset must survive compaction so the model can page through the
-	// rest of the lines even though the sampled set was capped.
-	if decoded.Data.NextOffset != total {
-		t.Fatalf("expected nextOffset to survive compaction, got %d", decoded.Data.NextOffset)
+	// nextOffset must resume after the lines the model actually saw (the
+	// cap dropped 5), not after the full sampled set, so paging stays gapless.
+	if decoded.Data.NextOffset != maxModelGrepMatches {
+		t.Fatalf("expected nextOffset %d after compaction, got %d", maxModelGrepMatches, decoded.Data.NextOffset)
 	}
 }
 
@@ -4454,5 +4455,74 @@ func TestFinalizeCommandSpillClosesFileAndReportsPath(t *testing.T) {
 	}
 	if _, err := tw.spill.Write([]byte("x")); err == nil {
 		t.Fatal("spill handle must already be closed by finalizeCommandSpill")
+	}
+}
+
+func TestCapGrepLineTextsDropsBeyondByteBudget(t *testing.T) {
+	// 3 aligned entries x 300 bytes fits; adding a 4th exceeds the budget so
+	// it is blanked while lines stay intact.
+	line := strings.Repeat("a", 300)
+	hits := []GrepFileMatch{{
+		Path:  "a.txt",
+		Lines: []int{1, 2, 3, 4},
+		Texts: []string{line, line, line, line},
+	}}
+	capped, reduced := capGrepLineTexts(hits, 900)
+	if !reduced {
+		t.Fatalf("expected texts beyond budget to be reported as reduced")
+	}
+	if len(capped[0].Lines) != 4 {
+		t.Fatalf("line numbers must survive the text cap, got %#v", capped[0].Lines)
+	}
+	if capped[0].Texts[3] != "" || capped[0].Texts[2] != line {
+		t.Fatalf("expected the first 3 texts kept and the 4th dropped, got %#v", capped[0].Texts)
+	}
+}
+
+func TestCompactToolResultForModelKeepsGrepTextsAlignedWhenCapping(t *testing.T) {
+	// Lines beyond maxModelGrepMatches are dropped; the surviving texts must
+	// stay aligned with the surviving line numbers instead of drifting.
+	total := maxModelGrepMatches + 5
+	lines := make([]int, total)
+	texts := make([]string, total)
+	for i := range lines {
+		lines[i] = i + 1
+		texts[i] = fmt.Sprintf("line %d", i+1)
+	}
+	result := toolResult{OK: true, Data: GrepResult{
+		Mode:         "lines",
+		LineHits:     []GrepFileMatch{{Path: "a.txt", Lines: lines, Texts: texts}},
+		MatchedLines: total,
+		Hits:         total,
+		Files:        1,
+		StatsExact:   true,
+	}}
+	raw, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := compactToolResultForModel("grep", result, string(raw))
+
+	var decoded struct {
+		Data struct {
+			Matches []GrepFileMatch `json:"matches"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(got), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if len(decoded.Data.Matches) != 1 {
+		t.Fatalf("expected one file group, got %#v", decoded.Data.Matches)
+	}
+	fh := decoded.Data.Matches[0]
+	if len(fh.Lines) != maxModelGrepMatches || len(fh.Texts) != len(fh.Lines) {
+		t.Fatalf("expected %d aligned lines/texts, got %d/%d", maxModelGrepMatches, len(fh.Lines), len(fh.Texts))
+	}
+	for i := range fh.Lines {
+		want := fmt.Sprintf("line %d", fh.Lines[i])
+		if fh.Texts[i] != want {
+			t.Fatalf("texts drifted at index %d: got %q, want %q", i, fh.Texts[i], want)
+		}
 	}
 }
