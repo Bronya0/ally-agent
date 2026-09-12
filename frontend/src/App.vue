@@ -3359,7 +3359,11 @@ function buildWelcomeMessage(workspacePath = '') {
 function formatMcpSummary() {
   const servers = Array.isArray(mcpServers.value) ? mcpServers.value : [];
   const connected = servers.filter((srv) => srv.status === 'connected').length;
-  const tools = servers.reduce((sum, srv) => sum + (Number(srv.toolCount) || 0), 0);
+  // 统计注入数而非发现总数：per-tool 黑名单在 srv.tools[].disabled，勾掉的
+  // 工具不应计入表格（无工具明细的条目回退 toolCount）。
+  const tools = servers.reduce((sum, srv) => sum + (Array.isArray(srv.tools)
+    ? srv.tools.filter((tool) => !tool.disabled).length
+    : (Number(srv.toolCount) || 0)), 0);
   if (servers.length === 0) return t('app.mcp.noServices');
   if (connected === 0) return t('app.mcp.disconnected', { count: servers.length });
   return t('app.mcp.summary', { connected, count: servers.length, tools });
