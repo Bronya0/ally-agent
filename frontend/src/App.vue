@@ -1489,9 +1489,11 @@ const configDraft = reactive(defaultConfig());
 const backgroundImageUrl = ref('');
 
 // Per-tab model selection. Maps a runtime workspace Tab id to a full snapshot
-// of that Tab's model fields. Stored in localStorage (not backend config.json)
-// so the backend stays workspace-agnostic; chat requests overlay the active
-// Tab's snapshot on top of the persisted config. The Tab id is intentional:
+// of that Tab's model fields. In-memory only (not localStorage, not backend
+// config.json): Tab ids are regenerated on every launch, so persisted entries
+// were never read back — cross-restart continuity comes from the last-used
+// identity + config.models presets instead. Chat requests overlay the active
+// Tab's snapshot on top to the persisted config. The Tab id is intentional:
 // two Tabs pointing at the same workspace must not share a model selection.
 //
 // 单一职责：config 顶层的模型字段（providerName/model/baseUrl/...）只表示
@@ -1499,7 +1501,6 @@ const backgroundImageUrl = ref('');
 // 实际使用的模型只存在这里，切换 Tab / 切换模型 / 保存设置都不会改写
 // config 顶层的模型字段，因此设置保存从结构上就不可能重置当前 Tab。
 const modelByTab = reactive({});
-const MODEL_BY_TAB_KEY = 'ally_model_by_tab';
 const LAST_USED_MODEL_KEY = 'ally_last_used_model';
 
 function getLastUsedModelIdentity() {
@@ -1597,33 +1598,12 @@ function defaultModelSnapshot() {
 function ensureTabModel(tab) {
   if (!tab || modelByTab[tab.id]) return;
   modelByTab[tab.id] = defaultModelSnapshot();
-  saveModelByTab();
 }
 
 // The config every chat request sends: the persisted config with the active
 // Tab's model snapshot overlaid. Replaces the old pattern of mutating config's
 // top-level model fields on every Tab/model switch.
 const chatConfig = computed(() => ({ ...config, ...modelByTab[activeWorkspaceId.value] }));
-
-function loadModelByTab() {
-  try {
-    const raw = localStorage.getItem(MODEL_BY_TAB_KEY);
-    const parsed = raw ? JSON.parse(raw) : {};
-    for (const [k, v] of Object.entries(parsed)) {
-      // Tab ids are regenerated on launch, so stale string entries from older
-      // builds never match anyway — only load full snapshots.
-      if (v && typeof v === 'object' && typeof v.model === 'string' && v.model) {
-        modelByTab[k] = modelSnapshotFrom(v);
-      }
-    }
-  } catch (_) { /* ignore corrupt entries */ }
-}
-
-function saveModelByTab() {
-  try {
-    localStorage.setItem(MODEL_BY_TAB_KEY, JSON.stringify(modelByTab));
-  } catch (_) { /* ignore quota errors */ }
-}
 
 // After Settings saves an updated model list, re-sync every Tab's snapshot
 // from its preset so edits (API key, base URL, ...) propagate to Tabs already
@@ -1635,7 +1615,6 @@ function resyncTabModelsFromPresets() {
     const preset = models.find((m) => modelConfigIdentity(m) === modelConfigIdentity(snapshot));
     if (preset) modelByTab[tabId] = modelSnapshotFrom(preset);
   }
-  saveModelByTab();
 }
 
 const sessions = ref([]);
@@ -1694,8 +1673,8 @@ const workspaceExplorerByTab = reactive(new Map());
 const explorerWorkspaceByTab = reactive(new Map());
 const explorerRefsByTab = reactive(new Map());
 // 资源树开关持久化：按工作区路径（归一化后）记录“用户手动关闭”的工作区，
-// 无记录 = 默认开启。存 localStorage 与 modelByTab 同模式；路径比 Tab id 稳定，
-// 重启后同一工作区能恢复关闭状态。两个 Tab 指向同一工作区时共享默认值。
+// 无记录 = 默认开启。存 localStorage；路径比 Tab id 稳定，重启后同一工作区
+// 能恢复关闭状态。两个 Tab 指向同一工作区时共享默认值。
 const explorerClosedWorkspaces = reactive({});
 const EXPLORER_CLOSED_KEY = 'ally_explorer_closed_workspaces';
 
@@ -2225,10 +2204,10 @@ async function destroyTempWorkspace(path, sessionId) {
     // 目录删除失败不影响会话满理；残留自下次启动的陈旧清理回收。
     console.warn('temp workspace delete failed:', err);
   }
-  // 按路径键控的 localStorage 残留（提示词历史 / 资源树开关）一并清理，
-  // 避免随机目录路径永久占localStorage 配额。
+  // 按路径键控的残留一并清理：资源树开关存 localStorage，避免随机目录路径
+  // 永久占配额；提示词历史已改纯内存，随目录销毁直接弃桶。
+  promptHistoryByWorkspace.delete(promptHistoryBucketKey(path));
   try {
-    localStorage.removeItem(workspaceHistoryKey(path));
     delete explorerClosedWorkspaces[workspaceHistoryDedupeKey(path)];
     persistExplorerClosedWorkspaces();
   } catch (_) { /* ignore */ }
@@ -3139,6 +3118,13 @@ function removeFromHistory(path) {
   const key = workspaceHistoryDedupeKey(path);
   workspaceHistory.value = workspaceHistory.value.filter((p) => workspaceHistoryDedupeKey(p) !== key);
   saveWorkspaceHistory();
+  // 显式移除即清理信号：该工作区在 localStorage 的资源树开关条目随之释放，
+  // 避免路径永久占用配额；内存中的提示词历史桶一并弃置。
+  if (explorerClosedWorkspaces[key]) {
+    delete explorerClosedWorkspaces[key];
+    persistExplorerClosedWorkspaces();
+  }
+  promptHistoryByWorkspace.delete(promptHistoryBucketKey(path));
 }
 
 // ── 会话级附加工作区（extraRoots）管理 ──────────────────────────
@@ -3177,27 +3163,41 @@ function removeExtraRoot(path) {
   saveSessions();
 }
 
-function workspaceHistoryKey(path = config.workspace || '') {
-  return `ally_prompt_history:${path || '__none__'}`;
+// 输入框上箭头历史按工作区路径分桶，仅存内存：旧实现把提示词原文写进
+// localStorage（ally_prompt_history:<path>），工作区移除后无人清理且单条
+// 无长度上限，是配额慢性泄露的最大来源。改为会话级缓存后重启即清空，
+// 已落盘的旧条目由 clearLegacyLocalStorage 在启动时一次性回收。
+const promptHistoryByWorkspace = new Map();
+
+function promptHistoryBucketKey(path) {
+  // 与资源树开关同款路径归一化，同一工作区的不同斜杠/大小写写法共享一桶。
+  return workspaceHistoryDedupeKey(path) || '__none__';
 }
 
 function loadPromptHistory(path = config.workspace || '') {
-  try {
-    const raw = localStorage.getItem(workspaceHistoryKey(path));
-    commandHistory.value = raw ? JSON.parse(raw).slice(-50) : [];
-  } catch (_) {
-    commandHistory.value = [];
-  }
+  commandHistory.value = (promptHistoryByWorkspace.get(promptHistoryBucketKey(path)) || []).slice(-50);
   commandHistoryIndex.value = -1;
 }
 
 function savePromptHistory(path = activeRunWorkspace.value) {
+  // Keyed by the Tab's own workspace: loadPromptHistory(tab.path) runs on
+  // every Tab switch, so writing under config.workspace would drop a KB/temp
+  // session's history into the chat workspace's bucket.
+  promptHistoryByWorkspace.set(promptHistoryBucketKey(path), commandHistory.value.slice(-50));
+}
+
+// 一次性回收旧版本遗留在 localStorage 的已停用 key：提示词历史（已改纯
+// 内存）与按 Tab 持久化的模型快照（Tab id 每次启动重生成，持久化从未被
+// 读回）。幂等：无残留时是空操作。
+function clearLegacyLocalStorage() {
   try {
-    // Keyed by the Tab's own workspace: loadPromptHistory(tab.path) runs on
-    // every Tab switch, so writing under config.workspace would drop a KB/temp
-    // session's history into the chat workspace's bucket.
-    localStorage.setItem(workspaceHistoryKey(path), JSON.stringify(commandHistory.value.slice(-50)));
-  } catch (_) { /* ignore */ }
+    const stale = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && (key.startsWith('ally_prompt_history:') || key === 'ally_model_by_tab')) stale.push(key);
+    }
+    for (const key of stale) localStorage.removeItem(key);
+  } catch { /* ignore */ }
 }
 
 function addPromptHistory(text) {
@@ -3608,10 +3608,9 @@ async function closeWorkspaceTab(id) {
   explorerWorkspaceByTab.delete(id);
   explorerRefsByTab.delete(id);
   explorerTreeWidthByTab.delete(id);
-  // 释放该 Tab 的模型快照，避免 localStorage 条目随关闭的 Tab 无限累积。
+  // 释放该 Tab 的模型快照，避免内存条目随关闭的 Tab 无限累积。
   if (modelByTab[id]) {
     delete modelByTab[id];
-    saveModelByTab();
   }
   const tab = workspaceTabs.value[idx];
   if (tab?.sessionId) delete planPanelCollapsedBySession[tab.sessionId];
@@ -3936,8 +3935,8 @@ async function init() {
   } catch (err) {
     message.error(t('app.config.readFailed', { error: err }));
   }
-  loadModelByTab();
   loadExplorerClosedWorkspaces();
+  clearLegacyLocalStorage();
 
   // Init workspace tabs from config. Model state belongs to this Tab, not to
   // its workspace path, so a second Tab can point to the same path safely.
@@ -5334,7 +5333,6 @@ function switchToModel(index) {
   const snapshot = modelSnapshotFrom(model);
   modelByTab[tab.id] = snapshot;
   setLastUsedModelIdentity(modelConfigIdentity(model));
-  saveModelByTab();
   message.success(t('app.model.switched', { model: model.model }));
 }
 
