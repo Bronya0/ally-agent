@@ -46,8 +46,8 @@ Public License v3. See the LICENSE file for details.
       </span>
     </n-dropdown>
     <span class="info-workspace">
-      <button class="info-workspace-btn" type="button" :title="$t('composer.workspace.open')" @click.stop="$emit('openWorkspace')">
-        {{ activeWorkspacePath || $t('composer.workspace.none') }}
+      <button class="info-workspace-btn" type="button" :title="activeWorkspacePath || $t('composer.workspace.open')" @click.stop="$emit('openWorkspace')">
+        {{ activeWorkspaceName || $t('composer.workspace.none') }}
       </button>
       <n-popover
         v-if="activeWorkspacePath"
@@ -350,6 +350,12 @@ const currentModelLabel = computed(() => `${props.config.providerName || '-'} ·
 // Single source for the workspace path shown here: explicit prop (KB root on
 // KB tabs) wins, otherwise fall back to the persisted chat workspace.
 const activeWorkspacePath = computed(() => props.workspace || props.config.workspace || '');
+// Show only the last path segment in the info bar; the full absolute path
+// stays available via the button's tooltip.
+const activeWorkspaceName = computed(() => {
+  const segments = activeWorkspacePath.value.split(/[\\/]+/).filter(Boolean);
+  return segments.length ? segments[segments.length - 1] : '';
+});
 const modelGroups = computed(() => {
   const usage = modelUsage.value;
   const groups = new Map();
