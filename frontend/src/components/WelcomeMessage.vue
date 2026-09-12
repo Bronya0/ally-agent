@@ -24,6 +24,7 @@ Public License v3. See the LICENSE file for details.
               <td>
                 <ToolsPopover v-if="item.kind === 'tools'" :tools="tools" />
                 <McpStatusPopover v-else-if="item.kind === 'mcp'" :summary="item.value" :servers="mcpServers" />
+                <SkillsPopover v-else-if="item.kind === 'skills'" :summary="item.value" :names="skillNames" />
                 <template v-else>{{ item.value }}</template>
               </td>
             </template>
@@ -44,6 +45,7 @@ import { computed } from 'vue';
 import AllyAvatar from './AllyAvatar.vue';
 import ToolsPopover from './ToolsPopover.vue';
 import McpStatusPopover from './McpStatusPopover.vue';
+import SkillsPopover from './SkillsPopover.vue';
 import { buildVersion } from '../utils/buildVersion';
 import { t } from '../i18n.mjs';
 
@@ -56,6 +58,9 @@ const props = defineProps({
   // welcome table MCP cell can be clicked to inspect per-server connection
   // state (initialization can take a few seconds, especially for npx).
   mcpServers: { type: Array, default: () => [] },
+  // Names of the currently active (injected) skills, passed through to
+  // SkillsPopover so the welcome table skills cell lists them live.
+  skillNames: { type: Array, default: () => [] },
 });
 
 const tableRows = computed(() => {

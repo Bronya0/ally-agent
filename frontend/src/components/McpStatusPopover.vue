@@ -22,9 +22,10 @@ Public License v3. See the LICENSE file for details.
     </template>
     <div class="mcp-popover" @click.stop>
       <div class="mcp-overview">{{ $t('app.mcp.overview', { total: total, connected: connectedCount, tools: toolCount }) }}</div>
-      <div v-if="servers.length === 0" class="mcp-empty">{{ $t('app.mcp.noServices') }}</div>
+      <!-- 列表只展示当前实时已连接的服务器；连接中/失败/断开的不在此列出。 -->
+      <div v-if="connectedServers.length === 0" class="mcp-empty">{{ $t('app.mcp.noneConnected') }}</div>
       <div v-else class="mcp-section">
-        <div v-for="srv in servers" :key="srv.name" class="mcp-list-item">
+        <div v-for="srv in connectedServers" :key="srv.name" class="mcp-list-item">
           <div class="mcp-list-head">
             <span :class="['mcp-status-dot', statusClass(srv)]" aria-hidden="true"></span>
             <span class="mcp-list-name">{{ srv.name }}</span>
@@ -51,7 +52,8 @@ const props = defineProps({
 const visible = ref(false);
 
 const total = computed(() => props.servers.length);
-const connectedCount = computed(() => props.servers.filter((s) => s?.status === 'connected').length);
+const connectedServers = computed(() => props.servers.filter((s) => s?.status === 'connected'));
+const connectedCount = computed(() => connectedServers.value.length);
 // 与欢迎表 formatMcpSummary 同口径：统计实际注入的工具数（per-tool 黑名单
 // 在 tools[].disabled），无工具明细的条目回退发现总数。
 const toolCount = computed(() => props.servers.reduce((sum, s) => sum + enabledToolCount(s), 0));

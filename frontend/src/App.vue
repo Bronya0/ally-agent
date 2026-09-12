@@ -72,6 +72,7 @@ Public License v3. See the LICENSE file for details.
                       :fmt-k="fmtK"
                       :tools="availableTools"
                       :mcp-servers="mcpServers"
+                      :skill-names="activeSkillNameList"
                       @toggle-archive="toggleArchiveMessages"
                       @toggle-tool="toggleToolExpand"
                       @export="(key, msg) => handleExportOption(tab.sessionId, key, msg)"
@@ -1658,6 +1659,10 @@ const planPanelListRefsByTab = reactive(new Map());
 const isMaximised = ref(false);
 const availableSkills = ref([]);
 const activeSkillNames = ref([]);
+// 欢迎表格技能行点击后的名称列表：只含激活（实际注入）技能，随技能状态实时更新。
+const activeSkillNameList = computed(() => availableSkills.value
+  .filter((sk) => isSkillActive(sk.name, activeSkillNames.value))
+  .map((sk) => sk.name));
 const skillsLoading = ref(false);
 const skillToggleInFlight = ref('');
 const availableTools = ref([]);

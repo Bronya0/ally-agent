@@ -64,7 +64,7 @@ Public License v3. See the LICENSE file for details.
               </span>
             </div>
           </div>
-          <RenderBoundary v-if="msg.welcome" :label="$t('chat.welcome')"><WelcomeMessage :welcome="msg.welcome" :tools="tools" :mcp-servers="mcpServers" /></RenderBoundary>
+          <RenderBoundary v-if="msg.welcome" :label="$t('chat.welcome')"><WelcomeMessage :welcome="msg.welcome" :tools="tools" :mcp-servers="mcpServers" :skill-names="skillNames" /></RenderBoundary>
           <StreamingMarkdownBody v-else :msg="msg" :render-fn="renderFn" />
           <RenderBoundary :label="$t('chat.attachment')"><MessageAttachments :attachments="msg.attachments || []" /></RenderBoundary>
           <div v-if="msg.role === 'assistant' && msg.suggestions?.length && !msg.streaming" class="suggest-row">
@@ -204,6 +204,7 @@ const props = defineProps({
   fmtK: { type: Function, required: true },
   tools: { type: Array, default: () => [] },
   mcpServers: { type: Array, default: () => [] },
+  skillNames: { type: Array, default: () => [] },
 });
 
 const expandedUserMessages = reactive(new WeakSet());

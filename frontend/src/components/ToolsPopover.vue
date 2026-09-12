@@ -22,20 +22,8 @@ Public License v3. See the LICENSE file for details.
     </template>
     <div class="tools-popover" @click.stop>
       <div class="tools-overview">{{ $t('tools.overview', { total: toolCount, builtin: builtinTools.length, mcp: mcpTools.length }) }}</div>
-      <div v-if="builtinToolGroups.length" class="tools-section">
-        <div class="tools-section-title">{{ $t('tools.builtin') }}</div>
-        <div v-for="group in builtinToolGroups" :key="group.key" class="tool-list-item">
-          <div class="tool-list-name">{{ group.label }}<span class="tool-list-server"> · {{ $t('tools.count', { count: group.count }) }}</span></div>
-          <div class="tool-list-desc">{{ group.description }}</div>
-        </div>
-      </div>
-      <div v-if="mcpTools.length" class="tools-section">
-        <div class="tools-section-title">MCP</div>
-        <div v-for="tool in mcpTools" :key="tool.name" class="tool-list-item">
-          <div class="tool-list-name">{{ tool.name }}<span v-if="tool.server" class="tool-list-server"> · {{ tool.server }}</span></div>
-          <div class="tool-list-desc">{{ tool.description || $t('common.noDescription') }}</div>
-        </div>
-      </div>
+      <!-- 只列名称：工具清单来自后端 ListTools 实时状态，不写死分组。 -->
+      <div class="tools-names">{{ allNames.join(', ') }}</div>
     </div>
   </n-popover>
 </template>
@@ -55,86 +43,7 @@ const enabledTools = computed(() => props.tools.filter((tool) => tool?.enabled !
 const toolCount = computed(() => enabledTools.value.length);
 const builtinTools = computed(() => enabledTools.value.filter((tool) => tool?.source !== 'mcp'));
 const mcpTools = computed(() => enabledTools.value.filter((tool) => tool?.source === 'mcp'));
-const builtinToolGroups = computed(() => groupBuiltinTools(builtinTools.value));
-
-const BUILTIN_TOOL_GROUPS = [
-  {
-    key: 'read',
-    label: t('tools.group.read'),
-    names: ['list_files', 'read'],
-    description: t('tools.group.readDescription'),
-  },
-  {
-    key: 'search',
-    label: t('tools.group.search'),
-    names: ['grep'],
-    description: t('tools.group.searchDescription'),
-  },
-  {
-    key: 'write',
-    label: t('tools.group.write'),
-    names: ['edit', 'create', 'delete'],
-    description: t('tools.group.writeDescription'),
-  },
-  {
-    key: 'command',
-    label: t('tools.group.command'),
-    names: ['command', 'service'],
-    description: t('tools.group.commandDescription'),
-  },
-  {
-    key: 'network',
-    label: t('tools.group.network'),
-    names: ['http_request', 'web_fetch'],
-    description: t('tools.group.networkDescription'),
-  },
-  {
-    key: 'remote',
-    label: t('tools.group.remote'),
-    names: ['remote_read', 'remote_edit', 'remote_create_file', 'remote_delete_path', 'remote_run_command', 'ssh_credential'],
-    description: t('tools.group.remoteDescription'),
-  },
-  {
-    key: 'state',
-    label: t('tools.group.state'),
-    names: ['plan', 'scheduled_task'],
-    description: t('tools.group.stateDescription'),
-  },
-  {
-    key: 'agent',
-    label: t('tools.group.agent'),
-    names: ['subagent', 'skill', 'Skill'],
-    description: t('tools.group.agentDescription'),
-  },
-  {
-    key: 'utility',
-    label: t('tools.group.utility'),
-    names: ['calculate', 'wait', 'ask'],
-    description: t('tools.group.utilityDescription'),
-  },
-];
-
-function groupBuiltinTools(tools) {
-  const byName = new Map(tools.map((tool) => [tool?.name, tool]));
-  const used = new Set();
-  const groups = [];
-  for (const group of BUILTIN_TOOL_GROUPS) {
-    const count = group.names.filter((name) => byName.has(name)).length;
-    if (!count) continue;
-    group.names.forEach((name) => used.add(name));
-    groups.push({ ...group, count });
-  }
-  const otherCount = tools.filter((tool) => tool?.name && !used.has(tool.name)).length;
-  if (otherCount) {
-    groups.push({
-      key: 'other',
-      label: t('tools.group.other'),
-      count: otherCount,
-      description: t('tools.group.otherDescription'),
-    });
-  }
-  return groups;
-}
+const allNames = computed(() => enabledTools.value.map((tool) => tool?.name).filter(Boolean));
 </script>
 
 <style scoped>
@@ -173,38 +82,12 @@ function groupBuiltinTools(tools) {
   font-size: 12px;
 }
 
-.tools-section + .tools-section {
-  margin-top: 10px;
-}
-
-.tools-section-title {
+.tools-names {
   padding: 4px 6px;
-  color: var(--ally-text-high);
-  font-size: 12px;
-  font-weight: 650;
-}
-
-.tool-list-item {
-  padding: 7px 6px;
-  border-top: 1px solid var(--ally-border-subtle);
-}
-
-.tool-list-name {
   color: var(--ally-text-body);
   font-family: var(--ally-mono-font);
   font-size: 12px;
-}
-
-.tool-list-server,
-.tool-list-desc {
-  color: var(--ally-text-muted);
-  font-family: var(--ally-ui-font);
-}
-
-.tool-list-desc {
-  margin-top: 3px;
-  font-size: 12px;
-  line-height: 1.35;
-  white-space: normal;
+  line-height: 1.6;
+  word-break: break-word;
 }
 </style>
