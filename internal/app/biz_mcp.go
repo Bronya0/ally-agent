@@ -327,7 +327,7 @@ func (m *McpManager) connectOne(ctx context.Context, name string, cfg McpServerC
 	m.mu.Unlock()
 	m.notifyChange()
 
-	mcpClient, discovered, err := m.initializeMcpClient(ctx, name, cfg)
+	mcpClient, discovered, err := m.initializeMcpClientWithRetry(ctx, name, cfg)
 	if err != nil {
 		m.mu.Lock()
 		handle.Status = "failed"
@@ -412,6 +412,37 @@ func (m *McpManager) initializeMcpClient(ctx context.Context, name string, cfg M
 // maxMcpListToolsPages bounds the ListTools pagination loop against servers
 // that always return a nextCursor.
 const maxMcpListToolsPages = 100
+
+// 连接失败的固定重试策略：三条连接路径（启动 StartAll、配置变更
+// ReconcileConfigs、调用期 reconnectServer）共用，覆盖网络瞬时波动，
+// 避免一次失败就定格在 failed 直到手动刷新。
+const (
+	mcpConnectRetries    = 3
+	mcpConnectRetryDelay = 3 * time.Second
+)
+
+// initializeMcpClientWithRetry wraps initializeMcpClient with a fixed number
+// of retries and a fixed delay between attempts. ctx cancellation (app exit,
+// server removed) aborts the wait immediately; the returned error carries the
+// last attempt's cause.
+func (m *McpManager) initializeMcpClientWithRetry(ctx context.Context, name string, cfg McpServerConfig) (*client.Client, []McpDiscoveredTool, error) {
+	var lastErr error
+	for attempt := 0; attempt <= mcpConnectRetries; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return nil, nil, lastErr
+			case <-time.After(mcpConnectRetryDelay):
+			}
+		}
+		mcpClient, discovered, err := m.initializeMcpClient(ctx, name, cfg)
+		if err == nil {
+			return mcpClient, discovered, nil
+		}
+		lastErr = err
+	}
+	return nil, nil, fmt.Errorf("connect failed after %d retries: %w", mcpConnectRetries, lastErr)
+}
 
 func (m *McpManager) newMcpClient(ctx context.Context, cfg McpServerConfig) (*client.Client, error) {
 	transportName := mcpTransportName(cfg)
@@ -746,7 +777,7 @@ func (m *McpManager) reconnectServer(ctx context.Context, serverName string, fai
 		_ = oldClient.Close()
 	}
 
-	mcpClient, discovered, err := m.initializeMcpClient(ctx, serverName, cfg)
+	mcpClient, discovered, err := m.initializeMcpClientWithRetry(ctx, serverName, cfg)
 	m.mu.Lock()
 	current, ok := m.clients[serverName]
 	if !ok {

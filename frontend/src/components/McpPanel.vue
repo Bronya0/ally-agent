@@ -271,6 +271,9 @@ function syncJsonToForm() {
       enabled: cfg.enabled !== false,
       disabledTools: Array.isArray(cfg.disabledTools) ? cfg.disabledTools.map((name) => String(name).trim()).filter(Boolean) : [],
     }));
+    // 加载/刷新时排一次：开启在前、关闭沉底；之后开关切换不再重排，
+    // 组内顺序保持配置文件里的原顺序（sort 稳定）。
+    mcpFormServers.value.sort((a, b) => Number(a.enabled === false) - Number(b.enabled === false));
   } catch {
     // keep existing form data on parse error
   }
@@ -468,12 +471,15 @@ const mcpSearch = ref('');
 const filteredMcpServers = computed(() => {
   const needle = mcpSearch.value.trim().toLowerCase();
   const entries = mcpFormServers.value.map((srv, idx) => ({ srv, idx }));
-  if (!needle) return entries;
-  return entries.filter(({ srv }) => {
-    const tools = (mcpStatusFor(srv).tools || []).map((tool) => tool.name);
-    return [srv.name, srv.command, srv.url, srv.transport, ...tools]
-      .some((field) => String(field || '').toLowerCase().includes(needle));
-  });
+  const matched = needle
+    ? entries.filter(({ srv }) => {
+        const tools = (mcpStatusFor(srv).tools || []).map((tool) => tool.name);
+        return [srv.name, srv.command, srv.url, srv.transport, ...tools]
+          .some((field) => String(field || '').toLowerCase().includes(needle));
+      })
+    : entries;
+  // 不排序：展示顺序 = syncJsonToForm 加载时定下的顺序，开关切换不重排。
+  return matched;
 });
 
 function mcpStatusLabel(status) {
