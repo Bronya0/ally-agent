@@ -20,39 +20,47 @@ Public License v3. See the LICENSE file for details.
         <span class="config-inline-title">{{ t('app.mode.skills') }}</span>
         <span class="config-inline-subtitle">{{ t('app.skills.subtitle', { enabled: activeSkillNames.length, available: availableSkills.length }) }}</span>
       </div>
-      <n-button size="small" secondary :loading="skillsLoading" @click="refreshSkillState">{{ t('common.refresh') }}</n-button>
+      <div class="panel-header-actions">
+        <n-input
+          v-model:value="skillSearch"
+          class="panel-search-input"
+          size="small"
+          clearable
+          :placeholder="t('common.searchPlaceholder')"
+        >
+          <template #prefix><SearchOutlined class="panel-search-icon" /></template>
+        </n-input>
+        <n-button size="small" secondary :loading="skillsLoading" @click="refreshSkillState">{{ t('common.refresh') }}</n-button>
+      </div>
     </header>
 
     <div class="panel-scroll-body">
-      <div class="config-section-subtitle skill-summary-row">
-        <span
-          v-for="s in skillSourceCounts"
-          :key="s.source"
-          :class="['skill-badge', 'skill-filter-badge', s.source, { active: activeSourceFilter === s.source }]"
-          :title="t('app.skills.filterHint')"
-          role="button"
-          :aria-pressed="activeSourceFilter === s.source"
-          @click="toggleSourceFilter(s.source)"
-        >{{ skillSourceLabel(s.source) }} {{ s.count }}</span>
-        <span
-          v-if="activeSourceFilter"
-          class="skill-filter-clear"
-          role="button"
-          @click="clearSourceFilter"
-        >{{ t('app.skills.filterClear') }}</span>
+      <div v-if="sourceTabs.length" class="skill-source-tabs-row">
+        <!-- Source tabs double as the list filter. :key rebuilds the tabs when
+             a refresh adds/removes a source so the active-line bar recalculates
+             (n-tabs caches its pixel offset otherwise). -->
+        <n-tabs
+          :key="sourceTabSetKey"
+          :value="activeSourceTab"
+          type="line"
+          size="small"
+          class="skill-source-tabs"
+          @update:value="(value) => (activeSourceTab = value)"
+        >
+          <n-tab v-for="tab in sourceTabs" :key="tab.source" :name="tab.source">
+            {{ skillSourceLabel(tab.source) }} {{ tab.count }}
+          </n-tab>
+        </n-tabs>
       </div>
 
       <div class="skill-settings-list">
         <div v-if="skillsLoading && !availableSkills.length" class="saved-model-empty">{{ t('settings.skillsLoading') }}</div>
         <div v-else-if="!availableSkills.length" class="saved-model-empty">{{ t('settings.skillsEmpty') }}</div>
-        <div v-else-if="!filteredSkills.length" class="saved-model-empty">{{ t('app.skills.filterEmpty') }}</div>
+        <div v-else-if="!filteredSkills.length" class="saved-model-empty">{{ skillSearch.trim() ? t('common.searchEmpty') : t('app.skills.filterEmpty') }}</div>
         <div v-for="sk in filteredSkills" :key="`${sk.source || 'skill'}:${sk.name}`" :class="['skill-settings-item', { active: isSkillActive(sk.name, activeSkillNames), builtin: sk.source === 'builtin' }]">
           <div class="skill-settings-main">
             <div class="skill-title-row">
               <span class="skill-name">{{ sk.name }}</span>
-              <span :class="['skill-badge', sk.source || 'unknown']">{{ skillSourceLabel(sk.source) }}</span>
-              <span v-if="isSkillActive(sk.name, activeSkillNames)" class="skill-badge loaded">{{ t('common.enabled') }}</span>
-              <span v-if="sk.source === 'builtin'" class="skill-badge builtin-locked">{{ t('settings.builtinAlwaysOn') }}</span>
             </div>
             <div class="skill-description">{{ sk.description || sk.whenToUse || $t('common.noDescription') }}</div>
             <div
@@ -75,6 +83,7 @@ Public License v3. See the LICENSE file for details.
 <script setup>
 import { computed, ref, watch } from 'vue';
 import { useMessage } from 'naive-ui';
+import { SearchOutlined } from '@vicons/antd';
 import { t } from '../i18n.mjs';
 import { isSkillActive } from '../utils/skills.mjs';
 import {
@@ -95,15 +104,60 @@ const activeSkillNames = ref([]);
 const skillsLoading = ref(false);
 const skillToggleInFlight = ref('');
 
-// 来源统计标签：按 source 分组计数（project / user / builtin），
-// 仅显示当前扫描范围内的来源（计数为 0 的来源不出现）。
-const skillSourceCounts = computed(() => {
-  const counts = {};
+// 头部搜索框：按名称/描述/whenToUse/路径实时过滤。
+const skillSearch = ref('');
+
+function skillMatchesSearch(sk, needle) {
+  if (!needle) return true;
+  return [sk.name, sk.description, sk.whenToUse, sk.path, sk.dir]
+    .some((field) => String(field || '').toLowerCase().includes(needle));
+}
+
+// 来源 tab：每个来源一个 tab，兼作列表过滤。固定 builtin → project → user
+// 顺序，其余来源按出现顺序排在最后。搜索时只保留有命中的来源（计数显示
+// 命中数），避免激活 tab 停在无命中来源上让用户误以为没有数据；清空搜索
+// 恢复全部来源与总数。
+const activeSourceTab = ref('');
+
+const sourceTabs = computed(() => {
+  const needle = skillSearch.value.trim().toLowerCase();
+  const order = ['builtin', 'project', 'user'];
+  const bySource = new Map();
   for (const sk of availableSkills.value) {
+    if (!skillMatchesSearch(sk, needle)) continue;
     const source = sk.source || 'unknown';
-    counts[source] = (counts[source] || 0) + 1;
+    bySource.set(source, (bySource.get(source) || 0) + 1);
   }
-  return Object.entries(counts).map(([source, count]) => ({ source, count }));
+  return [...bySource.entries()]
+    .sort((a, b) => {
+      const ia = order.indexOf(a[0]);
+      const ib = order.indexOf(b[0]);
+      if (ia !== -1 && ib !== -1) return ia - ib;
+      if (ia !== -1) return -1;
+      if (ib !== -1) return 1;
+      return 0;
+    })
+    .map(([source, count]) => ({ source, count }));
+});
+
+// n-tabs 会缓存激活下划线的像素偏移：tab 集合变化（搜索过滤来源、刷新后
+// 来源增删）时用 key 强制重建让 bar 重算。
+const sourceTabSetKey = computed(() => sourceTabs.value.map((tab) => tab.source).join('\u0000'));
+
+// 激活 tab 不在可见集合（来源被刷新移除、或搜索后本来源无命中）时，
+// 回退第一个可见 tab。
+watch(sourceTabSetKey, () => {
+  if (!sourceTabs.value.some((tab) => tab.source === activeSourceTab.value)) {
+    activeSourceTab.value = sourceTabs.value[0]?.source || '';
+  }
+});
+
+// 当前来源 tab + 搜索词双重过滤；来源 tab 内 builtin 置顶无意义，按名称排序。
+const filteredSkills = computed(() => {
+  const needle = skillSearch.value.trim().toLowerCase();
+  return availableSkills.value
+    .filter((sk) => (sk.source || 'unknown') === activeSourceTab.value && skillMatchesSearch(sk, needle))
+    .sort((a, b) => String(a.name).localeCompare(b.name));
 });
 
 // 来源展示名国际化：徽标 CSS class 与过滤键仍用后端原始 source 值，
@@ -118,33 +172,6 @@ function skillSourceLabel(source) {
   if (labelKeys[key]) return t(labelKeys[key]);
   return key || t('app.skills.source.unknown');
 }
-
-// 来源过滤：点击来源徽标只显示该来源的技能，再次点击或点“清除过滤”恢复全部。
-const activeSourceFilter = ref('');
-
-function toggleSourceFilter(source) {
-  activeSourceFilter.value = activeSourceFilter.value === source ? '' : source;
-}
-
-function clearSourceFilter() {
-  activeSourceFilter.value = '';
-}
-
-// Sort skills: built-in skills first (always enabled), then others alphabetically;
-// the active source filter (if any) is applied before sorting.
-const filteredSkills = computed(() => {
-  const source = activeSourceFilter.value;
-  const list = source
-    ? availableSkills.value.filter((sk) => (sk.source || 'unknown') === source)
-    : availableSkills.value;
-  return [...list].sort((a, b) => {
-    const aBuiltin = a.source === 'builtin';
-    const bBuiltin = b.source === 'builtin';
-    if (aBuiltin && !bBuiltin) return -1;
-    if (!aBuiltin && bBuiltin) return 1;
-    return String(a.name).localeCompare(b.name);
-  });
-});
 
 async function handleOpenSkillPath(sk) {
   const path = sk?.path || sk?.dir;
@@ -239,13 +266,6 @@ watch(
   padding: 16px 24px 28px;
 }
 
-.config-section-subtitle {
-  font-size: 12px;
-  color: var(--ally-text-muted);
-  margin-top: 2px;
-  margin-bottom: 14px;
-}
-
 .saved-model-empty {
   color: var(--ally-text-faint);
   font-size: var(--ally-sub-font-size);
@@ -295,32 +315,6 @@ watch(
   color: var(--ally-text-primary);
 }
 
-.skill-badge {
-  display: inline-block;
-  font-size: 10px;
-  padding: 1px 5px;
-  border-radius: 4px;
-  font-weight: 500;
-  text-transform: uppercase;
-  letter-spacing: 0.3px;
-  background: var(--ally-hover-strong);
-  color: var(--ally-text-muted);
-}
-
-.skill-summary-row {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 4px;
-}
-
-.skill-summary-row .skill-badge {
-  text-transform: none;
-  letter-spacing: 0;
-  font-size: 10px;
-}
-
-/* 页头标题+副标题：与 MCP/Models 面板同构，副标题紧贴标题下方。 */
 .panel-header-copy {
   display: flex;
   flex-direction: column;
@@ -333,52 +327,33 @@ watch(
   color: var(--ally-text-muted);
 }
 
-/* 来源徽标点击过滤：激活时描边高亮，右侧提供显式的清除入口 */
-.skill-filter-badge {
-  cursor: pointer;
-  user-select: none;
-  transition: filter 0.12s ease, box-shadow 0.12s ease;
+/* 头部右侧动作区与搜索框：与 MCP/Models 面板完全同构。 */
+.panel-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
-.skill-filter-badge:hover {
-  filter: brightness(1.2);
+.panel-search-input {
+  width: 200px;
 }
 
-.skill-filter-badge.active {
-  box-shadow: inset 0 0 0 1.5px var(--ally-accent, #63e2b7);
-}
-
-.skill-filter-clear {
-  cursor: pointer;
-  user-select: none;
-  font-size: 10px;
+.panel-search-icon {
+  font-size: 13px;
   color: var(--ally-text-muted);
 }
 
-.skill-filter-clear:hover {
-  color: var(--ally-accent, #63e2b7);
-  text-decoration: underline;
+/* 来源 tabs：兼作列表过滤，行内嵌在滚动区顶部。 */
+.skill-source-tabs-row {
+  margin-bottom: 6px;
 }
 
-.skill-badge.user {
-  background: #2a3a5c;
-  color: #8ab4ff;
-}
-
-.skill-badge.project {
-  background: #2a4a3a;
-  color: var(--ally-success-pale);
-}
-
-.skill-badge.loaded {
-  background: #3a4a2a;
-  color: #b8d4a0;
-}
-
-.skill-badge.builtin-locked {
-  background: var(--ally-scrollbar);
-  color: var(--ally-text-soft);
-  border: 1px solid var(--ally-border-strong);
+.skill-source-tabs :deep(.n-tabs-tab) {
+  padding: 6px 10px;
+  font-size: var(--ally-sub-font-size);
 }
 
 .skill-settings-item.builtin {

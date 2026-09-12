@@ -18,6 +18,15 @@ Public License v3. See the LICENSE file for details.
     <header class="config-inline-header">
       <span class="config-inline-title">{{ t('app.mode.mcp') }}</span>
       <div class="panel-header-actions">
+        <n-input
+          v-model:value="mcpSearch"
+          class="panel-search-input"
+          size="small"
+          clearable
+          :placeholder="t('common.searchPlaceholder')"
+        >
+          <template #prefix><SearchOutlined class="panel-search-icon" /></template>
+        </n-input>
         <n-button size="small" secondary @click="openMcpImport">{{ t('settings.modelImport') }}</n-button>
         <n-button size="small" secondary :disabled="!mcpFormServers.length" @click="exportMcpConfig">{{ t('settings.modelExport') }}</n-button>
         <n-button size="small" secondary :loading="mcpLoading" @click="loadMcpConfig">{{ t('common.refresh') }}</n-button>
@@ -41,36 +50,37 @@ Public License v3. See the LICENSE file for details.
       <!-- Unified server list with live status per row -->
       <div class="mcp-form-mode">
         <div v-if="!mcpFormServers.length" class="saved-model-empty">{{ t('settings.mcpEmpty') }}</div>
-        <div v-for="(srv, idx) in mcpFormServers" :key="srv._key" class="mcp-server-row">
+        <div v-else-if="!filteredMcpServers.length" class="saved-model-empty">{{ t('common.searchEmpty') }}</div>
+        <div v-for="entry in filteredMcpServers" :key="entry.srv._key" class="mcp-server-row">
           <div class="mcp-row-main">
-            <span :class="['mcp-dot', mcpStatusFor(srv).status]"></span>
-            <span class="mcp-name">{{ srv.name?.trim() || $t('settings.mcpUnnamedServer') }}</span>
-            <span class="mcp-badge">{{ t(transportLabel(srv.transport)) }}</span>
-            <span v-if="srv.enabled === false" class="mcp-badge off">{{ $t('settings.mcpStatusDisabled') }}</span>
+            <span :class="['mcp-dot', mcpStatusFor(entry.srv).status]"></span>
+            <span class="mcp-name">{{ entry.srv.name?.trim() || $t('settings.mcpUnnamedServer') }}</span>
+            <span class="mcp-badge">{{ t(transportLabel(entry.srv.transport)) }}</span>
+            <span v-if="entry.srv.enabled === false" class="mcp-badge off">{{ $t('settings.mcpStatusDisabled') }}</span>
             <div class="mcp-row-side">
               <button
-                v-if="(mcpStatusFor(srv).tools || []).length"
+                v-if="(mcpStatusFor(entry.srv).tools || []).length"
                 class="mcp-tools-toggle"
                 :title="$t('settings.mcpToolsHint')"
-                @click="toggleMcpToolsPanel(srv._key)"
+                @click="toggleMcpToolsPanel(entry.srv._key)"
               >
-                {{ $t('settings.mcpToolsToggle', { injected: mcpInjectedCount(srv), total: (mcpStatusFor(srv).tools || []).length }) }}
+                {{ $t('settings.mcpToolsToggle', { injected: mcpInjectedCount(entry.srv), total: (mcpStatusFor(entry.srv).tools || []).length }) }}
               </button>
-              <span v-else-if="mcpStatusFor(srv).toolCount" class="mcp-tools">{{ $t('tools.count', { count: mcpStatusFor(srv).toolCount }) }}</span>
-              <span :class="['mcp-status-text', mcpStatusFor(srv).status]" :title="mcpStatusFor(srv).error || ''">{{ $t(mcpStatusLabel(mcpStatusFor(srv).status)) }}</span>
-              <n-switch :value="srv.enabled" size="small" @update:value="(value) => toggleMcpEnabled(srv, value)" />
-              <n-button size="tiny" quaternary @click="openMcpEditor(idx)">{{ $t('common.edit') }}</n-button>
-              <n-button size="tiny" quaternary type="error" @click="removeMcpServer(idx)">{{ $t('common.delete') }}</n-button>
+              <span v-else-if="mcpStatusFor(entry.srv).toolCount" class="mcp-tools">{{ $t('tools.count', { count: mcpStatusFor(entry.srv).toolCount }) }}</span>
+              <span :class="['mcp-status-text', mcpStatusFor(entry.srv).status]" :title="mcpStatusFor(entry.srv).error || ''">{{ $t(mcpStatusLabel(mcpStatusFor(entry.srv).status)) }}</span>
+              <n-switch :value="entry.srv.enabled" size="small" @update:value="(value) => toggleMcpEnabled(entry.srv, value)" />
+              <n-button size="tiny" quaternary @click="openMcpEditor(entry.idx)">{{ $t('common.edit') }}</n-button>
+              <n-button size="tiny" quaternary type="error" @click="removeMcpServer(entry.idx)">{{ $t('common.delete') }}</n-button>
             </div>
           </div>
-          <div v-if="mcpStatusFor(srv).error" class="mcp-list-error" :title="mcpStatusFor(srv).error">{{ mcpStatusFor(srv).error }}</div>
+          <div v-if="mcpStatusFor(entry.srv).error" class="mcp-list-error" :title="mcpStatusFor(entry.srv).error">{{ mcpStatusFor(entry.srv).error }}</div>
           <!-- Per-server tool injection toggles. Checkbox = injected
                (checked by default); storage stays a blacklist
                (disabledTools) so server-side additions default on. -->
-          <div v-if="mcpToolsPanelOpen(srv._key) && (mcpStatusFor(srv).tools || []).length" class="mcp-tools-panel">
+          <div v-if="mcpToolsPanelOpen(entry.srv._key) && (mcpStatusFor(entry.srv).tools || []).length" class="mcp-tools-panel">
             <div class="mcp-tools-hint">{{ $t('settings.mcpToolsHint') }}</div>
-            <n-checkbox-group :value="mcpInjectedTools(srv)" @update:value="(value) => setMcpInjectedTools(srv, value)">
-              <n-checkbox v-for="tool in mcpStatusFor(srv).tools" :key="tool.name" :value="tool.name" class="mcp-tool-check">
+            <n-checkbox-group :value="mcpInjectedTools(entry.srv)" @update:value="(value) => setMcpInjectedTools(entry.srv, value)">
+              <n-checkbox v-for="tool in mcpStatusFor(entry.srv).tools" :key="tool.name" :value="tool.name" class="mcp-tool-check">
                 <span class="mcp-tool-line">
                   <span class="mcp-tool-name">{{ tool.name }}</span>
                   <span v-if="tool.description" class="mcp-tool-desc" :title="tool.description">{{ tool.description }}</span>
@@ -142,6 +152,7 @@ Public License v3. See the LICENSE file for details.
 <script setup>
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import { useMessage } from 'naive-ui';
+import { SearchOutlined } from '@vicons/antd';
 import { saveTextFile } from '../utils/download.mjs';
 import { t } from '../i18n.mjs';
 import { Events } from '@wailsio/runtime';
@@ -449,6 +460,22 @@ function mcpStatusFor(srv) {
   return found || { status: '', toolCount: 0, error: '' };
 }
 
+// 头部搜索框：按服务器名 / 命令 / URL / 传输方式 / 已发现工具名实时过滤，
+// 工具名命中可反查其所属服务器。返回 { srv, idx } 保留 mcpFormServers
+// 原始下标——编辑与删除始终按未过滤数组的下标操作。
+const mcpSearch = ref('');
+
+const filteredMcpServers = computed(() => {
+  const needle = mcpSearch.value.trim().toLowerCase();
+  const entries = mcpFormServers.value.map((srv, idx) => ({ srv, idx }));
+  if (!needle) return entries;
+  return entries.filter(({ srv }) => {
+    const tools = (mcpStatusFor(srv).tools || []).map((tool) => tool.name);
+    return [srv.name, srv.command, srv.url, srv.transport, ...tools]
+      .some((field) => String(field || '').toLowerCase().includes(needle));
+  });
+});
+
 function mcpStatusLabel(status) {
   switch (status) {
     case 'connected': return 'settings.mcpStatusConnected';
@@ -551,6 +578,16 @@ watch(
   flex: none;
   flex-wrap: wrap;
   justify-content: flex-end;
+}
+
+/* 头部搜索框：与 Skills/Models 面板完全同构。 */
+.panel-search-input {
+  width: 200px;
+}
+
+.panel-search-icon {
+  font-size: 13px;
+  color: var(--ally-text-muted);
 }
 
 .config-section-subtitle {

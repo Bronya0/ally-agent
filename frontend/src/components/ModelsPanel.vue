@@ -21,6 +21,15 @@ Public License v3. See the LICENSE file for details.
         <span class="config-inline-subtitle">{{ t('settings.modelsSubtitle') }}</span>
       </div>
       <div class="panel-header-actions">
+        <n-input
+          v-model:value="modelSearch"
+          class="panel-search-input"
+          size="small"
+          clearable
+          :placeholder="t('common.searchPlaceholder')"
+        >
+          <template #prefix><SearchOutlined class="panel-search-icon" /></template>
+        </n-input>
         <n-button size="small" secondary @click="openModelImport">{{ t('settings.modelImport') }}</n-button>
         <n-button size="small" secondary :disabled="!draft.models?.length" @click="exportModelConfigs">{{ t('settings.modelExport') }}</n-button>
         <n-button size="small" type="primary" @click="startAddModelDraft">{{ t('settings.modelAdd') }}</n-button>
@@ -28,19 +37,6 @@ Public License v3. See the LICENSE file for details.
     </header>
 
     <div class="panel-scroll-body">
-      <div class="current-model-panel">
-        <div class="current-model-main">
-          <div class="current-model-label">{{ t('settings.modelCurrent') }}</div>
-          <div class="current-model-name">{{ draft.providerName || 'Provider' }} · {{ draft.model || t('settings.modelNone') }}</div>
-          <div class="current-model-url">{{ apiFormatLabel(draft.apiFormat) }}</div>
-          <div class="current-model-url">{{ draft.baseUrl || t('settings.baseUrlNone') }}</div>
-        </div>
-        <div class="current-model-meta">
-          <span>max {{ draft.maxTokens || '-' }}</span>
-          <span>context {{ draft.contextWindow || '-' }}</span>
-        </div>
-      </div>
-
       <input
         v-show="false"
         ref="modelImportInput"
@@ -52,6 +48,7 @@ Public License v3. See the LICENSE file for details.
 
       <n-tabs
         v-if="providerTabs.length"
+        :key="providerTabSetKey"
         v-model:value="activeProviderTab"
         type="line"
         animated
@@ -75,7 +72,7 @@ Public License v3. See the LICENSE file for details.
           </div>
         </n-tab-pane>
       </n-tabs>
-      <div v-else class="saved-model-empty">{{ t('settings.modelsEmpty') }}</div>
+      <div v-else class="saved-model-empty">{{ modelSearch.trim() ? t('common.searchEmpty') : t('settings.modelsEmpty') }}</div>
     </div>
 
     <!-- Model editor sub-modal -->
@@ -287,6 +284,7 @@ import { saveTextFile } from '../utils/download.mjs';
 import CloseOutlined from '@vicons/antd/CloseOutlined';
 import PlusOutlined from '@vicons/antd/PlusOutlined';
 import CloudDownloadOutlined from '@vicons/antd/CloudDownloadOutlined';
+import SearchOutlined from '@vicons/antd/SearchOutlined';
 import {
   CUSTOM_PROVIDER_ID,
   applyCatalogPreset,
@@ -525,9 +523,22 @@ function normalizedProviderName(value) {
   return (value || '').trim() || 'OpenAI Compatible';
 }
 
+// 头部搜索框：按提供商名 / 模型 ID / Base URL 实时过滤；全部模型未命中时
+// provider tab 整体隐藏。item.index 始终指向 draft.models 的原始下标，
+// 编辑/删除不受过滤影响。
+const modelSearch = ref('');
+
+function modelMatchesSearch(model, needle) {
+  if (!needle) return true;
+  return [model.providerName, model.model, model.baseUrl]
+    .some((field) => String(field || '').toLowerCase().includes(needle));
+}
+
 const providerTabs = computed(() => {
+  const needle = modelSearch.value.trim().toLowerCase();
   const groups = new Map();
   (draft.models || []).forEach((model, index) => {
+    if (!modelMatchesSearch(model, needle)) return;
     const provider = normalizedProviderName(model.providerName);
     if (!groups.has(provider)) {
       groups.set(provider, { name: provider, label: provider, models: [] });
@@ -537,6 +548,15 @@ const providerTabs = computed(() => {
   });
   return Array.from(groups.values());
 });
+
+// 搜索词变化后当前 tab 可能已被过滤隐藏：重新对齐到仍可见的 tab
+// （当前 tab 仍在则保持，否则回退默认模型所在 tab，再退第一个）。
+watch(modelSearch, () => alignActiveProviderTab());
+
+// n-tabs 会缓存激活下划线的像素偏移，tab 集合被搜索过滤增删后 bar 不会
+// 自动重算（下划线悬在旧位置）。用过滤后的 tab 名序列作 key，集合变化时
+// 重建 tabs 组件让 bar 按新布局重算；集合不变的连续输入不触发重建。
+const providerTabSetKey = computed(() => providerTabs.value.map((tab) => tab.name).join('\u0000'));
 
 function alignActiveProviderTab(preferred = '') {
   const tabs = providerTabs.value;
@@ -907,6 +927,16 @@ watch(
   justify-content: flex-end;
 }
 
+/* 头部搜索框：与 Skills/MCP 面板完全同构。 */
+.panel-search-input {
+  width: 200px;
+}
+
+.panel-search-icon {
+  font-size: 13px;
+  color: var(--ally-text-muted);
+}
+
 .config-section-header {
   display: flex;
   align-items: flex-start;
@@ -928,55 +958,6 @@ watch(
 
 .model-import-input {
   display: none;
-}
-
-.current-model-panel {
-  background: var(--ally-hover-faint);
-  border: 1px solid var(--ally-border);
-  border-radius: 8px;
-  padding: 10px 12px;
-  margin-bottom: 12px;
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-}
-
-.current-model-main {
-  flex: 1;
-  min-width: 0;
-}
-
-.current-model-label {
-  font-size: 11px;
-  color: var(--ally-text-faint);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  margin-bottom: 2px;
-}
-
-.current-model-name {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--ally-text-primary);
-}
-
-.current-model-url {
-  font-size: 12px;
-  color: var(--ally-text-muted);
-  margin-top: 1px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.current-model-meta {
-  flex-shrink: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  font-size: 11px;
-  color: var(--ally-text-faint);
-  text-align: right;
 }
 
 .saved-model-empty {
