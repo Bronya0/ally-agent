@@ -418,3 +418,54 @@ func TestIsMcpRecoverableError(t *testing.T) {
 		}
 	}
 }
+
+func TestMcpToolResultTextRendersAllSupportedContentTypes(t *testing.T) {
+	result := &mcp.CallToolResult{
+		Content: []mcp.Content{
+			mcp.TextContent{Annotated: mcp.Annotated{}, Type: "text", Text: "hello"},
+			mcp.ImageContent{Annotated: mcp.Annotated{}, Type: "image", Data: "AAAA", MIMEType: "image/png"},
+			mcp.AudioContent{Annotated: mcp.Annotated{}, Type: "audio", Data: "BBBB", MIMEType: "audio/wav"},
+			mcp.ResourceLink{Annotated: mcp.Annotated{}, Type: "resource_link", URI: "file:///tmp/a.csv", Name: "a.csv"},
+			mcp.EmbeddedResource{
+				Annotated: mcp.Annotated{},
+				Type:      "embedded resource",
+				Resource:  mcp.TextResourceContents{URI: "file:///tmp/b.txt", MIMEType: "text/plain", Text: "resource body"},
+			},
+			mcp.EmbeddedResource{
+				Annotated: mcp.Annotated{},
+				Type:      "embedded resource",
+				Resource:  mcp.BlobResourceContents{URI: "file:///tmp/c.bin", MIMEType: "application/octet-stream", Blob: "CCCC"},
+			},
+		},
+		StructuredContent: map[string]any{"rows": 1},
+	}
+
+	got := mcpToolResultText(result)
+	for _, want := range []string{
+		"hello",
+		"[image content: image/png, 4 bytes base64 data omitted]",
+		"[audio content: audio/wav, 4 bytes base64 data omitted]",
+		"[resource link: a.csv (file:///tmp/a.csv)]",
+		"resource body",
+		"[embedded resource file:///tmp/c.bin: application/octet-stream, 4 bytes base64 data omitted]",
+		`structured output: {"rows":1}`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("rendered output missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "AAAA") || strings.Contains(got, "BBBB") || strings.Contains(got, "CCCC") {
+		t.Fatalf("base64 payloads must not leak into model output:\n%s", got)
+	}
+}
+
+func TestMcpToolResultTextStructuredOnlyServerIsNotEmpty(t *testing.T) {
+	result := &mcp.CallToolResult{
+		Content:           nil,
+		StructuredContent: map[string]any{"status": "ok"},
+	}
+	got := mcpToolResultText(result)
+	if got != `structured output: {"status":"ok"}` {
+		t.Fatalf("structured-only result = %q", got)
+	}
+}

@@ -69,14 +69,14 @@ type McpClientHandle struct {
 }
 
 type McpManager struct {
-	mu            sync.RWMutex
+	mu             sync.RWMutex
 	reconnectLocks sync.Map // serverName -> *sync.Mutex，per-server 重连互斥
-	clients       map[string]*McpClientHandle
-	toolLookup    map[string]mcpToolRef
-	workDir       string
-	listener      func(tools []McpDiscoveredTool)
-	warnHandler   func(message string)
-	networkConfig func() ConfigState
+	clients        map[string]*McpClientHandle
+	toolLookup     map[string]mcpToolRef
+	workDir        string
+	listener       func(tools []McpDiscoveredTool)
+	warnHandler    func(message string)
+	networkConfig  func() ConfigState
 	// configPaths overrides mcpJsonPaths when set; hermetic tests point it at
 	// a temp file so reconcile tests never touch the real user config.
 	configPaths []string
@@ -258,10 +258,14 @@ func (m *McpManager) ReconcileConfigs(ctx context.Context) (int, error) {
 
 	m.mu.Lock()
 	var stale []string
+	var closing []*client.Client
 	for name, handle := range m.clients {
 		cfg, ok := configs[name]
 		if !ok || !mcpServerConfigEqual(handle.Config, cfg) {
 			stale = append(stale, name)
+			if handle.Client != nil {
+				closing = append(closing, handle.Client)
+			}
 			continue
 		}
 		// 连接语义未变但勾选变了：原地替换 disabledTools，保持 live 连接，
@@ -273,14 +277,16 @@ func (m *McpManager) ReconcileConfigs(ctx context.Context) (int, error) {
 		}
 	}
 	for _, name := range stale {
-		if handle := m.clients[name]; handle != nil && handle.Client != nil {
-			handle.Client.Close()
-		}
 		delete(m.clients, name)
 		m.replaceToolLookupLocked(name, nil)
 		touched[name] = true
 	}
 	m.mu.Unlock()
+	// Close 在锁外执行：stdio Close 可能等待子进程退出，持锁调用会拖住整个
+	// manager（与 reconnectServer 的锁外 Close 保持对称）。
+	for _, staleClient := range closing {
+		_ = staleClient.Close()
+	}
 	if len(stale) > 0 {
 		m.notifyChange()
 	}
@@ -367,28 +373,45 @@ func (m *McpManager) initializeMcpClient(ctx context.Context, name string, cfg M
 
 	// ListTools carries the same bounded timeout as Initialize: a server that
 	// completes the handshake but then hangs must not pin connectOne in
-	// "connecting" forever.
+	// "connecting" forever. The loop follows nextCursor so paginating servers
+	// expose their full tool list (non-paginating servers return an empty
+	// cursor after the first page and exit after one round-trip); the page
+	// guard bounds a misbehaving server that always returns a cursor.
 	toolsCtx, toolsCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer toolsCancel()
-	toolsResult, err := mcpClient.ListTools(toolsCtx, mcp.ListToolsRequest{})
-	if err != nil {
-		mcpClient.Close()
-		return nil, nil, fmt.Errorf("list tools failed (timed out or refused after 30s): %w", err)
-	}
-
 	var discovered []McpDiscoveredTool
-	for _, tool := range toolsResult.Tools {
-		schema := toolSchemaToMap(tool.InputSchema)
-		discovered = append(discovered, McpDiscoveredTool{
-			ServerName:   name,
-			Name:         tool.Name,
-			FunctionName: mcpToolFunctionName(name, tool.Name),
-			Description:  tool.Description,
-			Schema:       schema,
-		})
+	var cursor mcp.Cursor
+	for page := 0; ; page++ {
+		listReq := mcp.ListToolsRequest{}
+		if cursor != "" {
+			listReq.Params.Cursor = cursor
+		}
+		toolsResult, err := mcpClient.ListTools(toolsCtx, listReq)
+		if err != nil {
+			mcpClient.Close()
+			return nil, nil, fmt.Errorf("list tools failed (timed out or refused after 30s): %w", err)
+		}
+		for _, tool := range toolsResult.Tools {
+			schema := toolSchemaToMap(tool.InputSchema)
+			discovered = append(discovered, McpDiscoveredTool{
+				ServerName:   name,
+				Name:         tool.Name,
+				FunctionName: mcpToolFunctionName(name, tool.Name),
+				Description:  tool.Description,
+				Schema:       schema,
+			})
+		}
+		if toolsResult.NextCursor == "" || page >= maxMcpListToolsPages {
+			break
+		}
+		cursor = toolsResult.NextCursor
 	}
 	return mcpClient, discovered, nil
 }
+
+// maxMcpListToolsPages bounds the ListTools pagination loop against servers
+// that always return a nextCursor.
+const maxMcpListToolsPages = 100
 
 func (m *McpManager) newMcpClient(ctx context.Context, cfg McpServerConfig) (*client.Client, error) {
 	transportName := mcpTransportName(cfg)
@@ -637,13 +660,7 @@ func (m *McpManager) callToolOnce(ctx context.Context, serverName, toolName stri
 		return "", mcpClient, fmt.Errorf("MCP call failed: %w", err)
 	}
 
-	var parts []string
-	for _, content := range result.Content {
-		if textContent, ok := content.(mcp.TextContent); ok {
-			parts = append(parts, textContent.Text)
-		}
-	}
-	outText := strings.Join(parts, "\n")
+	outText := mcpToolResultText(result)
 	if result.IsError {
 		if strings.TrimSpace(outText) == "" {
 			outText = "MCP tool reported failure (isError: true)"
@@ -651,6 +668,52 @@ func (m *McpManager) callToolOnce(ctx context.Context, serverName, toolName stri
 		return "", mcpClient, fmt.Errorf("MCP tool %s error: %s", toolName, outText)
 	}
 	return outText, mcpClient, nil
+}
+
+// mcpToolResultText renders every supported MCP content block into
+// model-readable text, preserving the server's content order. Text passes
+// through unchanged; binary blocks (image/audio/blob) become metadata
+// placeholders — base64 payloads are pure token noise for a text model;
+// embedded text resources inline their text; structured output (2025-06-18
+// spec) serializes as JSON so structured-only servers no longer read as empty.
+func mcpToolResultText(result *mcp.CallToolResult) string {
+	if result == nil {
+		return ""
+	}
+	var parts []string
+	for _, content := range result.Content {
+		switch typed := content.(type) {
+		case mcp.TextContent:
+			if typed.Text != "" {
+				parts = append(parts, typed.Text)
+			}
+		case mcp.ImageContent:
+			parts = append(parts, fmt.Sprintf("[image content: %s, %d bytes base64 data omitted]", typed.MIMEType, len(typed.Data)))
+		case mcp.AudioContent:
+			parts = append(parts, fmt.Sprintf("[audio content: %s, %d bytes base64 data omitted]", typed.MIMEType, len(typed.Data)))
+		case mcp.ResourceLink:
+			link := typed.URI
+			if name := strings.TrimSpace(typed.Name); name != "" {
+				link = name + " (" + typed.URI + ")"
+			}
+			parts = append(parts, "[resource link: "+link+"]")
+		case mcp.EmbeddedResource:
+			switch resource := typed.Resource.(type) {
+			case mcp.TextResourceContents:
+				if resource.Text != "" {
+					parts = append(parts, resource.Text)
+				}
+			case mcp.BlobResourceContents:
+				parts = append(parts, fmt.Sprintf("[embedded resource %s: %s, %d bytes base64 data omitted]", resource.URI, resource.MIMEType, len(resource.Blob)))
+			}
+		}
+	}
+	if result.StructuredContent != nil {
+		if raw, err := json.Marshal(result.StructuredContent); err == nil {
+			parts = append(parts, "structured output: "+string(raw))
+		}
+	}
+	return strings.Join(parts, "\n")
 }
 
 func (m *McpManager) reconnectServer(ctx context.Context, serverName string, failedClient *client.Client) error {
@@ -720,7 +783,6 @@ func (m *McpManager) replaceToolLookupLocked(serverName string, discovered []Mcp
 		m.toolLookup[tool.FunctionName] = mcpToolRef{ServerName: tool.ServerName, ToolName: tool.Name}
 	}
 }
-
 
 // mcpRecoverableErrorMarkers 是 MCP 服务器或 stdio 进程管道在断开/崩溃/
 // 会话失效时的已知错误特征文案。出现这些错误时，说明当前 Client 已经失效，
