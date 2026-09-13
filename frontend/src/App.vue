@@ -5786,10 +5786,19 @@ const chatLayoutContentStyle = computed(() => {
 });
 
 
+// The slash menu tracks only the command word: the draft must start with '/'
+// and contain no whitespace yet ("/rev…", not "/review args"). Anything after
+// the first space is free-form arguments, not part of the command lookup.
+function isSlashCommandDraft(text) {
+  return /^\/\S*$/.test(text);
+}
+
 const filteredCommands = computed(() => {
   const value = promptText.value;
   if (!value.startsWith('/')) return commands.value;
-  const filter = value.toLowerCase();
+  // Filter by the command token only; matching the whole draft (arguments
+  // included) never hits a label and leaves the menu as an empty list.
+  const filter = value.split(/\s/, 1)[0].toLowerCase();
   return commands.value.filter(cmd => cmd.label.toLowerCase().startsWith(filter));
 });
 
@@ -5798,7 +5807,9 @@ const filteredSkills = computed(() => filteredCommands.value.filter(cmd => cmd.s
 
 function handlePromptInput() {
   const value = promptText.value;
-  if (value.startsWith('/')) {
+  // Close the menu as soon as a space follows the slash token: the command
+  // word is finished and the user is typing arguments ("/xxx content…").
+  if (isSlashCommandDraft(value)) {
     closeFileMentionMenu();
     commandMenuVisible.value = true;
     selectedCommandIndex.value = 0;
