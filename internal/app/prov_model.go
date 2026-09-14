@@ -41,9 +41,13 @@ var errEmptyModelResponse = errors.New("empty model response")
 type modelStreamEvent struct {
 	ContentDelta   string
 	ReasoningDelta string
-	ToolCalls      []legacyopenai.ToolCall
-	Image          *modelImage
-	Retry          *modelRetryInfo
+	// ReasoningPresentDelta marks a provider that explicitly emitted an
+	// (possibly empty) reasoning field, so the replay layer can distinguish
+	// "no thinking" from "thinking present but empty".
+	ReasoningPresentDelta bool
+	ToolCalls             []legacyopenai.ToolCall
+	Image                 *modelImage
+	Retry                 *modelRetryInfo
 }
 
 type modelImage struct {
@@ -133,6 +137,7 @@ func classifyLLMError(err error) llmErrorKind {
 		// sanitize 历史救不了网络流。文案兜底也不得把它归类为 400。
 		return llmErrorKindUnknown
 	}
+	msg := strings.ToLower(err.Error())
 	if status, ok := providerHTTPStatusCode(err); ok {
 		switch {
 		case status == 401 || status == 403:
@@ -142,6 +147,12 @@ func classifyLLMError(err error) llmErrorKind {
 		case status == 404:
 			return llmErrorKindModelNotFound
 		case status == 429:
+			// OpenAI and Moonshot (Kimi) return HTTP 429 for account balance/quota exhaustion
+			// (insufficient_quota, exceeded_current_quota_error, insufficient balance).
+			// Such errors are fatal account issues, not transient rate limits, and must not be retried.
+			if llmErrorTextMatchesAny(msg, llmBillingMarkers) {
+				return llmErrorKindBilling
+			}
 			return llmErrorKindRateLimited
 		case status == 400:
 			// 400 的细分(上下文超长/模型不存在文案)交给关键词阶段补充;
@@ -149,7 +160,6 @@ func classifyLLMError(err error) llmErrorKind {
 			return llmErrorKindDeterministic400
 		}
 	}
-	msg := strings.ToLower(err.Error())
 	if llmErrorTextMatchesAny(msg, llmBillingMarkers) {
 		return llmErrorKindBilling
 	}
@@ -187,6 +197,8 @@ var (
 	}
 	llmBillingMarkers = []string{
 		"402", "insufficient_quota", "insufficient_balance", "payment required",
+		"exceeded_current_quota_error", "check your account balance", "recharge your account",
+		"please recharge", "account is in arrears", "account in arrears",
 	}
 	llmRateLimitMarkers = []string{
 		"429", "too many requests", "rate limit", "rate exceeded", "rate_limit",
@@ -270,8 +282,7 @@ func isAuthKeyError(err error) bool {
 	}
 	msg := strings.ToLower(err.Error())
 	// 明确的计费类错误(余额/配额耗尽,需人工处理)保持长冷却。
-	if strings.Contains(msg, "402") || strings.Contains(msg, "insufficient_quota") ||
-		strings.Contains(msg, "insufficient_balance") || strings.Contains(msg, "payment required") {
+	if strings.Contains(msg, "402") || strings.Contains(msg, "payment required") || llmErrorTextMatchesAny(msg, llmBillingMarkers) {
 		return true
 	}
 	// 429/限流按定义是"请求过频"而非 key 失效,按瞬时错误短冷却。
@@ -350,11 +361,17 @@ func effectiveLLMRetries(cfg ConfigState) int {
 type modelStreamResult struct {
 	Content      string
 	Reasoning    string
-	ToolCalls    []legacyopenai.ToolCall
-	Images       []modelImage
-	Usage        *modelUsage
-	StopReason   string
-	StopSequence string
+	// ReasoningPresent reports that the provider explicitly produced a
+	// reasoning payload this response — including an explicitly EMPTY one
+	// (DeepSeek V4 emits reasoning_content:"" on obvious tool calls). Empty
+	// reasoning must still be replayed as a present field by thinking-mode
+	// providers, so "" + true and "" + false carry different replay duties.
+	ReasoningPresent bool
+	ToolCalls        []legacyopenai.ToolCall
+	Images           []modelImage
+	Usage            *modelUsage
+	StopReason       string
+	StopSequence     string
 }
 
 func (a *App) completeModelText(ctx context.Context, cfg ConfigState, model string, messages []legacyopenai.ChatCompletionMessage, maxTokens int) (string, error) {
@@ -751,10 +768,42 @@ func partialTagMatch(s, tag string) int {
 	return 0
 }
 
+func isOpenAIReasoningModelName(model string) bool {
+	m := strings.ToLower(strings.TrimSpace(model))
+	return strings.HasPrefix(m, "o1") || strings.HasPrefix(m, "o3") || strings.HasPrefix(m, "o4") || strings.HasPrefix(m, "gpt-5")
+}
+
+func shouldUseMaxCompletionTokens(param, model string) bool {
+	switch normalizeTokenParam(param) {
+	case tokenParamMaxCompletionTokens:
+		return true
+	case tokenParamMaxTokens:
+		return false
+	default:
+		return isOpenAIReasoningModelName(model)
+	}
+}
+
 func (a *App) streamOpenAIChat(ctx context.Context, cfg ConfigState, model string, messages []legacyopenai.ChatCompletionMessage, tools []legacyopenai.Tool, onEvent func(modelStreamEvent)) (*modelStreamResult, error) {
 	clientCfg := legacyopenai.DefaultConfig(cfg.APIKey)
 	clientCfg.BaseURL = baseURLForAPIFormat(cfg)
 	clientCfg.HTTPClient = modelHTTPClient(cfg, true, 0)
+	// Thinking-mode replay: when the session is in thinking mode, rewrite the
+	// serialized body so assistant messages keep an explicit (possibly empty)
+	// reasoning_content field — the omitempty wire tag would drop it.
+	if reasoningContentReplayActive(messages, cfg) {
+		base := modelHTTPClient(cfg, true, 0)
+		var rt http.RoundTripper = base.Transport
+		if rt == nil {
+			rt = http.DefaultTransport
+		}
+		key := defaultReasoningTag
+		if isKnownWireReasoningKey(cfg.ReasoningTag) {
+			key = strings.TrimSpace(cfg.ReasoningTag)
+		}
+		base.Transport = &reasoningContentReplayTransport{base: rt, reasoningKey: key}
+		clientCfg.HTTPClient = base
+	}
 	client := legacyopenai.NewClientWithConfig(clientCfg)
 
 	streamReq := legacyopenai.ChatCompletionRequest{
@@ -764,12 +813,11 @@ func (a *App) streamOpenAIChat(ctx context.Context, cfg ConfigState, model strin
 	}
 	// Route the token limit to the field the target provider accepts. Both
 	// fields are `omitempty`, so only the selected one is serialized — never
-	// both. "auto" and "max_tokens" use the legacy field (broadest
-	// compatibility across DeepSeek/GLM/Qwen/Kimi/vLLM/Ollama/OpenRouter/…);
-	// "max_completion_tokens" targets official OpenAI o-series / newer GPT
-	// models that reject `max_tokens` with a "please use max_completion_tokens"
-	// error.
-	if normalizeTokenParam(cfg.TokenParam) == tokenParamMaxCompletionTokens {
+	// both. "auto" automatically routes to max_completion_tokens for OpenAI
+	// o-series and newer models (which reject max_tokens with a 400 error),
+	// and uses max_tokens for other models. Explicit "max_tokens" or
+	// "max_completion_tokens" overrides auto-detection.
+	if shouldUseMaxCompletionTokens(cfg.TokenParam, model) {
 		streamReq.MaxCompletionTokens = cfg.MaxTokens
 	} else {
 		streamReq.MaxTokens = cfg.MaxTokens
@@ -781,11 +829,13 @@ func (a *App) streamOpenAIChat(ctx context.Context, cfg ConfigState, model strin
 		streamReq.ReasoningEffort = effort
 	}
 	if len(tools) > 0 {
-		streamReq.Tools = tools
-	} else {
-		// Explicitly tell models not to call tools (prevents models from hallucinating tool calls during text-only completion)
-		streamReq.ToolChoice = "none"
+		streamReq.Tools = normalizeToolsForOpenAIChat(tools)
 	}
+	// Note: Do NOT set streamReq.ToolChoice = "none" when len(tools) == 0.
+	// The official OpenAI Chat Completions API specification (and compatible
+	// gateways like Azure, Groq, DeepSeek) strictly rejects requests with
+	// HTTP 400 ("'tool_choice' cannot be set without 'tools'") when tools is
+	// omitted or empty. When no tools are provided, models cannot execute tools anyway.
 
 	maxRetries := effectiveLLMRetries(cfg)
 	result, emitted, err := a.openAIChatStreamAttempt(ctx, cfg, client, streamReq, onEvent)
@@ -826,6 +876,12 @@ func (a *App) openAIChatStreamAttempt(ctx context.Context, cfg ConfigState, clie
 
 	var assistant strings.Builder
 	var reasoning strings.Builder
+	// reasoningPresent: the provider explicitly emitted a reasoning field
+	// (possibly empty). go-openai unmarshals an absent field and an explicit
+	// empty string identically, so this only turns true once non-empty
+	// reasoning text arrives. The empty-string case is handled at replay time
+	// by reasoningContentReplayActive (session-scoped detection).
+	reasoningPresent := false
 	var reasoningState struct {
 		tag      string
 		openTag  string
@@ -871,6 +927,10 @@ func (a *App) openAIChatStreamAttempt(ctx context.Context, cfg ConfigState, clie
 		}
 		if resp.Usage != nil {
 			usage = modelUsageFromLegacy(resp.Usage, raw)
+		} else if len(resp.Choices) > 0 && len(raw) > 0 {
+			if choiceUsage := extractChoiceUsageFromRaw(raw); choiceUsage != nil {
+				usage = modelUsageFromLegacy(choiceUsage, raw)
+			}
 		}
 		if len(resp.Choices) == 0 {
 			continue
@@ -944,9 +1004,14 @@ func (a *App) openAIChatStreamAttempt(ctx context.Context, cfg ConfigState, clie
 				assistant.WriteString(delta.Content)
 				emitModelStreamEvent(onEvent, modelStreamEvent{ContentDelta: delta.Content})
 			}
-			if delta.ReasoningContent != "" {
-				reasoning.WriteString(delta.ReasoningContent)
-				emitModelStreamEvent(onEvent, modelStreamEvent{ReasoningDelta: delta.ReasoningContent})
+			reasoningText := delta.ReasoningContent
+			if reasoningText == "" {
+				reasoningText = extractRawStreamReasoning(raw)
+			}
+			if reasoningText != "" {
+				reasoning.WriteString(reasoningText)
+				reasoningPresent = true
+				emitModelStreamEvent(onEvent, modelStreamEvent{ReasoningDelta: reasoningText})
 			}
 		}
 		if len(delta.ToolCalls) > 0 {
@@ -967,11 +1032,12 @@ func (a *App) openAIChatStreamAttempt(ctx context.Context, cfg ConfigState, clie
 	}
 
 	return &modelStreamResult{
-		Content:    assistant.String(),
-		Reasoning:  reasoning.String(),
-		ToolCalls:  normalizeToolCalls(toolCalls),
-		Usage:      usage,
-		StopReason: stopReason,
+		Content:          assistant.String(),
+		Reasoning:        reasoning.String(),
+		ReasoningPresent: reasoningPresent || reasoning.Len() > 0,
+		ToolCalls:        normalizeToolCalls(toolCalls),
+		Usage:            usage,
+		StopReason:       stopReason,
 	}, hasOutput(), nil
 }
 
@@ -998,8 +1064,46 @@ func isIncompleteStreamJSON(err error) bool {
 	return strings.Contains(msg, "unexpected end of json input") || strings.Contains(msg, "unexpected eof")
 }
 
+// extractRawStreamReasoning extracts reasoning deltas from stream chunks where the
+// provider emitted thinking under "reasoning" (vLLM / OpenAI OSS) or
+// "reasoning_details" (OpenRouter) rather than go-openai's "reasoning_content".
+func extractRawStreamReasoning(raw []byte) string {
+	if !bytes.Contains(raw, []byte(`"reasoning"`)) && !bytes.Contains(raw, []byte(`"reasoning_details"`)) {
+		return ""
+	}
+	var chunk struct {
+		Choices []struct {
+			Delta struct {
+				Reasoning        any `json:"reasoning"`
+				ReasoningDetails any `json:"reasoning_details"`
+			} `json:"delta"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(raw, &chunk); err == nil && len(chunk.Choices) > 0 {
+		delta := chunk.Choices[0].Delta
+		if s, ok := delta.Reasoning.(string); ok && s != "" {
+			return s
+		}
+		if s, ok := delta.ReasoningDetails.(string); ok && s != "" {
+			return s
+		}
+	}
+	return ""
+}
+
+
 func (a *App) streamOpenAIResponses(ctx context.Context, cfg ConfigState, model string, messages []legacyopenai.ChatCompletionMessage, tools []legacyopenai.Tool, onEvent func(modelStreamEvent)) (*modelStreamResult, error) {
+	// Replay the reasoning items captured from the previous response of this
+	// session's tool loop: OpenAI requires them around function calls, and
+	// under store=false the encrypted_content is the only carrier. They are
+	// injected right before the trailing function_call outputs so the model
+	// resumes its reasoning instead of starting over (quality, not a 400).
+	if payload := a.reasoningStash.get(cfg.responsesPromptCacheKey); payload != nil && len(payload.responses) > 0 {
+		messages = withResponsesReasoningItems(messages, payload.responses)
+	}
 	body := buildOpenAIResponsesRequest(cfg, model, messages, tools)
+	// Ask for encrypted reasoning so stateless replay stays possible.
+	body.Include = append(body.Include, oaresp.ResponseIncludableReasoningEncryptedContent)
 
 	maxRetries := effectiveLLMRetries(cfg)
 	result, emitted, err := a.openAIResponsesStreamAttempt(ctx, cfg, body, onEvent)
@@ -1034,6 +1138,9 @@ func (a *App) openAIResponsesStreamAttempt(ctx context.Context, cfg ConfigState,
 
 	var assistant strings.Builder
 	var reasoning strings.Builder
+	// reasoningItems captures completed reasoning items (with encrypted
+	// content) for replay on the next request of this tool loop.
+	reasoningItems := []responsesReasoningItem{}
 	toolCalls := []legacyopenai.ToolCall{}
 	toolIndexByOutput := map[int64]int{}
 	toolIndexByItemID := map[string]int{}
@@ -1109,6 +1216,21 @@ func (a *App) openAIResponsesStreamAttempt(ctx context.Context, cfg ConfigState,
 				idx := ensureResponsesToolCall(&toolCalls, toolIndexByOutput, toolIndexByItemID, ev.OutputIndex, ev.Item.ID)
 				updateToolCallFromResponsesItem(&toolCalls[idx], ev.Item)
 				toolEventGate.emit(modelStreamEvent{ToolCalls: toolCalls})
+			} else if ev.Item.Type == "reasoning" {
+				// Capture the completed reasoning item (its encrypted_content is
+				// only complete at output_item.done) for stateless replay on the
+				// next request of this tool loop.
+				item := ev.Item.AsReasoning()
+				captured := responsesReasoningItem{
+					ID:               item.ID,
+					EncryptedContent: item.EncryptedContent,
+				}
+				for _, s := range item.Summary {
+					if s.Text != "" && captured.SummaryText == "" {
+						captured.SummaryText = s.Text
+					}
+				}
+				reasoningItems = append(reasoningItems, captured)
 			} else if ev.Item.Type == "image_generation_call" {
 				imageCall := ev.Item.AsImageGenerationCall()
 				emitImage(imageCall.ID, imageCall.Result, false)
@@ -1160,9 +1282,41 @@ func (a *App) openAIResponsesStreamAttempt(ctx context.Context, cfg ConfigState,
 				streamErr = errors.New("response failed")
 			}
 		case "response.incomplete":
+			gotTerminalEvent = true
 			ev := event.AsResponseIncomplete()
-			if ev.Response.IncompleteDetails.Reason != "" {
-				streamErr = fmt.Errorf("response incomplete: %s", ev.Response.IncompleteDetails.Reason)
+			usage = modelUsageFromResponses(ev.Response.Usage)
+			if rawUsage := modelUsageFromResponsesEvent(rawEvent); rawUsage != nil {
+				usage = rawUsage
+			}
+			finalOutputText = ev.Response.OutputText()
+			if finalOutputText != "" {
+				seen := assistant.String()
+				missing := ""
+				if seen == "" {
+					missing = finalOutputText
+				} else if strings.HasPrefix(finalOutputText, seen) {
+					missing = finalOutputText[len(seen):]
+				}
+				if missing != "" {
+					assistant.WriteString(missing)
+					emitModelStreamEvent(onEvent, modelStreamEvent{ContentDelta: missing})
+				}
+			}
+			for _, item := range ev.Response.Output {
+				if item.Type == "image_generation_call" {
+					imageCall := item.AsImageGenerationCall()
+					emitImage(imageCall.ID, imageCall.Result, false)
+				}
+			}
+			reason := ev.Response.IncompleteDetails.Reason
+			// "max_output_tokens" is the Responses API equivalent of finish_reason: "length".
+			// It indicates normal output truncation, not a fatal stream connection failure.
+			if reason != "" && reason != "max_output_tokens" {
+				if reason == "content_filter" {
+					streamErr = errors.New("OpenAI Responses was stopped by the content filter")
+				} else {
+					streamErr = fmt.Errorf("response incomplete: %s", reason)
+				}
 			}
 		}
 		if streamErr != nil {
@@ -1178,15 +1332,24 @@ func (a *App) openAIResponsesStreamAttempt(ctx context.Context, cfg ConfigState,
 	if !gotTerminalEvent {
 		return nil, hasOutput(), errors.New("stream ended without terminal event")
 	}
+	// Persist this response's reasoning items for the next request in this
+	// tool loop; a non-reasoning response clears the stash. Done here (not in
+	// streamOpenAIResponses) so adapter-internal retries rewrite it per attempt.
+	if len(reasoningItems) > 0 {
+		a.reasoningStash.set(cfg.responsesPromptCacheKey, &sessionReasoningPayload{responses: reasoningItems})
+	} else {
+		a.reasoningStash.clear(cfg.responsesPromptCacheKey)
+	}
 	content := assistant.String()
 	if content == "" && finalOutputText != "" {
 		content = finalOutputText
 	}
 	return &modelStreamResult{
-		Content:   content,
-		Reasoning: reasoning.String(),
-		ToolCalls: normalizeToolCalls(toolCalls),
-		Images:    images,
+		Content:          content,
+		Reasoning:        reasoning.String(),
+		ReasoningPresent: len(reasoningItems) > 0,
+		ToolCalls:        normalizeToolCalls(toolCalls),
+		Images:           images,
 		Usage:     usage,
 	}, hasOutput(), nil
 }
@@ -1403,7 +1566,7 @@ func (a *App) streamAnthropicMessages(ctx context.Context, cfg ConfigState, mode
 
 	system, anthropicMessages := buildAnthropicMessages(messages)
 	if len(anthropicMessages) == 0 || anthropicMessages[0].Role != anthropic.MessageParamRoleUser {
-		anthropicMessages = append([]anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock(""))}, anthropicMessages...)
+		anthropicMessages = append([]anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock("..."))}, anthropicMessages...)
 	}
 	params := anthropic.MessageNewParams{
 		Model:     anthropic.Model(model),
@@ -1416,32 +1579,33 @@ func (a *App) streamAnthropicMessages(ctx context.Context, cfg ConfigState, mode
 	if len(tools) > 0 {
 		params.Tools = convertToolsToAnthropic(tools)
 	}
-	if baseURL == defaultAnthropicMessagesURL {
-		// Prompt-cache breakpoints for the official endpoint: one on the last
-		// system block and one on the last content block of the last real
-		// message. This replaces the previous top-level params.CacheControl,
-		// whose breakpoint landed on the very last block — the per-step tail
-		// injection itself — so every step's cache entry diverged from the
-		// next request and incremental reuse never happened.
-		markAnthropicPromptCacheBreakpoints(&params)
-	}
-	// Thinking strength for Anthropic: only output_config.effort. Anthropic
-	// has no reasoning_effort parameter; effort is the equivalent control and
-	// is only sent when the user explicitly picked a level ("auto" keeps the
-	// provider default). Thinking itself is NOT enabled here: adaptive/enabled
-	// thinking would emit thinking blocks whose signatures must be replayed
-	// verbatim in the next tool turn, and buildAnthropicMessages cannot do
-	// that losslessly yet (see AGENTS.md). On models where adaptive thinking
-	// is already the default (Opus 4.6+/Sonnet 4.6+/Claude 5), effort alone
-	// tunes that existing thinking; on older models the parameter is either
-	// ignored or rejected, which the user opted into by picking a level.
-	if effort := reasoningEffortForAdapter(apiFormatAnthropicMessages, cfg.ReasoningEffort); effort != "" {
-		params.OutputConfig = anthropic.OutputConfigParam{Effort: anthropic.OutputConfigEffort(effort)}
+	// Prompt-cache breakpoints: one on the last system block and one on
+	// the last content block of the last real message. Supported by official
+	// Anthropic and Anthropic-compatible reverse proxies/gateways.
+	markAnthropicPromptCacheBreakpoints(&params)
+	// Thinking configuration for Anthropic:
+	// - For adaptive models (Claude 4.6+/5+): thinking: { type: "adaptive" } and output_config.effort.
+	// - For budget models (Claude 3.7 Sonnet): thinking: { type: "enabled", budget_tokens: N } without output_config.effort
+	//   (passing output_config.effort on 3.7 causes a 400 error).
+	// - For effort "off": thinking: { type: "disabled" }.
+	configureAnthropicThinking(&params, model, cfg.ReasoningEffort, cfg.MaxTokens)
+	// Replay the thinking blocks captured from the previous response of this
+	// session's tool loop. They must precede the tool_use blocks of the SAME
+	// assistant message; buildAnthropicMessages places them at the front.
+	if payload := a.reasoningStash.get(cfg.responsesPromptCacheKey); payload != nil && len(payload.anthropic) > 0 {
+		params.Messages = withAnthropicThinkingBlocks(params.Messages, payload.anthropic)
 	}
 
 	maxRetries := effectiveLLMRetries(cfg)
 	var assistant strings.Builder
 	var reasoning strings.Builder
+	// thinkingBlocks captures this response's thinking/redacted_thinking
+	// blocks in order, with signatures, for replay on the next request.
+	thinkingBlocks := []anthropicThinkingBlock{}
+	// blockThinkingIdx maps the stream content-block index of a thinking
+	// block to its index in thinkingBlocks, so thinking_delta and
+	// signature_delta events append to the right block.
+	blockThinkingIdx := map[int64]int{}
 	toolCalls := []legacyopenai.ToolCall{}
 	toolIndexByBlock := map[int64]int{}
 	toolEventGate := newModelToolCallEventGate(func(event modelStreamEvent) {
@@ -1454,6 +1618,8 @@ func (a *App) streamAnthropicMessages(ctx context.Context, cfg ConfigState, mode
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		assistant.Reset()
 		reasoning.Reset()
+		thinkingBlocks = thinkingBlocks[:0]
+		blockThinkingIdx = map[int64]int{}
 		toolCalls = toolCalls[:0]
 		toolIndexByBlock = map[int64]int{}
 		usage = nil
@@ -1481,10 +1647,15 @@ func (a *App) streamAnthropicMessages(ctx context.Context, cfg ConfigState, mode
 						emitModelStreamEvent(onEvent, modelStreamEvent{ContentDelta: block.Text})
 					}
 				case "thinking":
+					blockThinkingIdx[ev.Index] = len(thinkingBlocks)
+					thinkingBlocks = append(thinkingBlocks, anthropicThinkingBlock{})
 					if block.Thinking != "" {
 						reasoning.WriteString(block.Thinking)
 						emitModelStreamEvent(onEvent, modelStreamEvent{ReasoningDelta: block.Thinking})
 					}
+				case "redacted_thinking":
+					blockThinkingIdx[ev.Index] = len(thinkingBlocks)
+					thinkingBlocks = append(thinkingBlocks, anthropicThinkingBlock{Data: block.Data})
 				case "tool_use":
 					idx := len(toolCalls)
 					toolIndexByBlock[ev.Index] = idx
@@ -1516,7 +1687,14 @@ func (a *App) streamAnthropicMessages(ctx context.Context, cfg ConfigState, mode
 				case "thinking_delta":
 					if delta.Thinking != "" {
 						reasoning.WriteString(delta.Thinking)
+						if idx, ok := blockThinkingIdx[ev.Index]; ok {
+							thinkingBlocks[idx].Thinking += delta.Thinking
+						}
 						emitModelStreamEvent(onEvent, modelStreamEvent{ReasoningDelta: delta.Thinking})
+					}
+				case "signature_delta":
+					if idx, ok := blockThinkingIdx[ev.Index]; ok {
+						thinkingBlocks[idx].Signature += delta.Signature
 					}
 				case "input_json_delta":
 					if idx, ok := toolIndexByBlock[ev.Index]; ok {
@@ -1556,29 +1734,85 @@ func (a *App) streamAnthropicMessages(ctx context.Context, cfg ConfigState, mode
 			toolCalls[i].Function.Arguments = "{}"
 		}
 	}
+	// Persist this response's thinking blocks for the next request in this
+	// tool loop. Non-thinking responses clear the stash so a later turn never
+	// replays stale blocks from an earlier model response.
+	if len(thinkingBlocks) > 0 {
+		a.reasoningStash.set(cfg.responsesPromptCacheKey, &sessionReasoningPayload{anthropic: thinkingBlocks})
+	} else {
+		a.reasoningStash.clear(cfg.responsesPromptCacheKey)
+	}
 	return &modelStreamResult{
-		Content:      assistant.String(),
-		Reasoning:    reasoning.String(),
-		ToolCalls:    normalizeToolCalls(toolCalls),
-		Usage:        usage,
-		StopReason:   stopReason,
-		StopSequence: stopSequence,
+		Content:          assistant.String(),
+		Reasoning:        reasoning.String(),
+		ReasoningPresent: len(thinkingBlocks) > 0,
+		ToolCalls:        normalizeToolCalls(toolCalls),
+		Usage:            usage,
+		StopReason:       stopReason,
+		StopSequence:     stopSequence,
 	}, nil
 }
 
-func anthropicStopReasonError(reason string) error {
+func isAnthropicAdaptiveThinkingModel(model string) bool {
+	m := strings.ToLower(strings.TrimSpace(model))
+	return strings.Contains(m, "sonnet-4.6") || strings.Contains(m, "sonnet-4-6") ||
+		strings.Contains(m, "opus-4.6") || strings.Contains(m, "opus-4-6") ||
+		strings.Contains(m, "opus-4.7") || strings.Contains(m, "opus-4-7") ||
+		strings.Contains(m, "opus-4.8") || strings.Contains(m, "opus-4-8") ||
+		strings.Contains(m, "sonnet-5") || strings.Contains(m, "opus-5") ||
+		strings.Contains(m, "haiku-5") || strings.Contains(m, "fable") ||
+		strings.Contains(m, "mythos") || strings.HasPrefix(m, "claude-5")
+}
+
+func configureAnthropicThinking(params *anthropic.MessageNewParams, model, rawEffort string, maxTokens int) {
+	raw := strings.ToLower(strings.TrimSpace(rawEffort))
+	if raw == "off" || raw == "none" || raw == "disabled" {
+		params.Thinking = anthropic.ThinkingConfigParamUnion{OfDisabled: &anthropic.ThinkingConfigDisabledParam{Type: "disabled"}}
+		return
+	}
+	effort := normalizeReasoningEffort(rawEffort)
+	if effort == "" || effort == reasoningEffortAuto {
+		return
+	}
+	if isAnthropicAdaptiveThinkingModel(model) {
+		params.Thinking = anthropic.ThinkingConfigParamUnion{OfAdaptive: &anthropic.ThinkingConfigAdaptiveParam{Type: "adaptive"}}
+		params.OutputConfig = anthropic.OutputConfigParam{Effort: anthropic.OutputConfigEffort(effort)}
+	} else {
+		// Budget-tokens thinking for Claude 3.7 and non-adaptive models.
+		// Platform docs: minimum budget_tokens is 1024, and budget_tokens must be < max_tokens.
+		budget := int64(4096)
+		switch effort {
+		case "low":
+			budget = 1024
+		case "medium":
+			budget = 4096
+		case "high", "xhigh", "max":
+			budget = 32000
+		}
+		if maxTokens > 1024 && budget >= int64(maxTokens) {
+			budget = int64(maxTokens) - 256
+			if budget < 1024 {
+				budget = 1024
+			}
+		}
+		params.Thinking = anthropic.ThinkingConfigParamOfEnabled(budget)
+	}
+}
+
+func anthropicStopReasonError(reason string, hasOutput bool) error {
 	switch strings.TrimSpace(reason) {
-	case "", "end_turn", "tool_use", "stop_sequence":
+	case "", "end_turn", "tool_use", "stop_sequence", "pause_turn":
 		return nil
 	case "max_tokens":
 		return errors.New("Anthropic response reached the Max Tokens limit; increase Max Tokens or shorten the conversation")
 	case "refusal":
 		return errors.New("Anthropic refused the request")
-	case "pause_turn":
-		return errors.New("Anthropic paused the turn, which is not supported by the current client-tool workflow")
 	case "model_context_window_exceeded":
 		return errors.New("Anthropic stopped because the model context window was exceeded")
 	default:
+		if hasOutput {
+			return nil
+		}
 		return fmt.Errorf("Anthropic stopped with unsupported reason %q", reason)
 	}
 }
@@ -1587,35 +1821,57 @@ func modelResponseStopError(cfg ConfigState, result *modelStreamResult) error {
 	if result == nil {
 		return nil
 	}
+	hasOutput := strings.TrimSpace(result.Content) != "" || strings.TrimSpace(result.Reasoning) != "" || len(result.ToolCalls) > 0 || len(result.Images) > 0
 	if normalizeAPIFormat(cfg.APIFormat) == apiFormatOpenAIChat {
 		switch strings.TrimSpace(result.StopReason) {
-		case "", "stop", "tool_calls", "function_call":
+		case "", "stop", "tool_calls", "function_call", "stop_sequence", "eos", "end_turn":
 			return nil
 		case "length":
 			return errors.New("OpenAI-compatible response reached the Max Tokens limit; increase Max Tokens or shorten the conversation")
 		case "content_filter":
 			return errors.New("OpenAI-compatible response was stopped by the content filter")
 		default:
+			if hasOutput {
+				return nil
+			}
 			return fmt.Errorf("OpenAI-compatible response stopped with unsupported reason %q", result.StopReason)
 		}
 	}
 	if normalizeAPIFormat(cfg.APIFormat) != apiFormatAnthropicMessages {
 		return nil
 	}
-	return anthropicStopReasonError(result.StopReason)
+	return anthropicStopReasonError(result.StopReason, hasOutput)
 }
 
 func buildOpenAIResponsesInput(messages []legacyopenai.ChatCompletionMessage) (string, oaresp.ResponseInputParam) {
 	systemParts := []string{}
 	input := oaresp.ResponseInputParam{}
+	hasSeenTurn := false
 	for _, m := range messages {
 		role := strings.TrimSpace(m.Role)
 		switch role {
 		case legacyopenai.ChatMessageRoleSystem:
-			if text := messageText(m); text != "" {
+			text := messageText(m)
+			if text == "" {
+				continue
+			}
+			if !hasSeenTurn {
 				systemParts = append(systemParts, text)
+			} else {
+				// Preserve mid-conversation system turns (compaction summaries,
+				// steering prompts) at their chronological position using the
+				// Responses API developer role.
+				input = append(input, oaresp.ResponseInputItemParamOfMessage(text, oaresp.EasyInputMessageRoleDeveloper))
+			}
+		case roleResponsesReasoningCarrier:
+			// Synthetic carrier of captured Responses reasoning items (see
+			// withResponsesReasoningItems); expand into real reasoning input
+			// items so the model resumes its prior reasoning state.
+			for _, item := range responsesReasoningCarriers([]legacyopenai.ChatCompletionMessage{m}) {
+				input = append(input, responsesReasoningInputItem(item))
 			}
 		case legacyopenai.ChatMessageRoleUser, legacyopenai.ChatMessageRoleAssistant:
+			hasSeenTurn = true
 			if role == legacyopenai.ChatMessageRoleAssistant && len(m.ToolCalls) > 0 {
 				if text := messageText(m); text != "" {
 					input = append(input, oaresp.ResponseInputItemParamOfMessage(text, oaresp.EasyInputMessageRoleAssistant))
@@ -1634,6 +1890,7 @@ func buildOpenAIResponsesInput(messages []legacyopenai.ChatCompletionMessage) (s
 				input = append(input, oaresp.ResponseInputItemParamOfMessage(text, oaresp.EasyInputMessageRole(role)))
 			}
 		case legacyopenai.ChatMessageRoleTool:
+			hasSeenTurn = true
 			if strings.TrimSpace(m.ToolCallID) != "" {
 				input = append(input, responseInputItemParamOfFunctionCallOutput(m.ToolCallID, m.Content))
 			}
@@ -1643,26 +1900,23 @@ func buildOpenAIResponsesInput(messages []legacyopenai.ChatCompletionMessage) (s
 }
 
 func responseInputItemParamOfFunctionCall(call legacyopenai.ToolCall) oaresp.ResponseInputItemUnionParam {
-	item := oaresp.ResponseInputItemParamOfFunctionCall(call.Function.Arguments, effectiveToolCallID(call), call.Function.Name)
-	if item.OfFunctionCall != nil {
-		item.OfFunctionCall.ID = oa.String(effectiveResponsesFunctionCallItemID(call))
+	args := strings.TrimSpace(call.Function.Arguments)
+	if args == "" {
+		args = "{}"
 	}
-	return item
-}
-
-func effectiveResponsesFunctionCallItemID(call legacyopenai.ToolCall) string {
-	if strings.TrimSpace(call.ID) != "" {
-		return "fc_" + strings.TrimPrefix(call.ID, "fc_")
-	}
-	if strings.TrimSpace(call.Function.Name) != "" {
-		return "fc_" + call.Function.Name
-	}
-	return "fc_unknown"
+	return oaresp.ResponseInputItemParamOfFunctionCall(args, effectiveToolCallID(call), call.Function.Name)
 }
 
 func openAIResponsesContentFromMulti(m legacyopenai.ChatCompletionMessage) oaresp.ResponseInputMessageContentListParam {
 	content := oaresp.ResponseInputMessageContentListParam{}
-	if strings.TrimSpace(m.Content) != "" {
+	hasMultiText := false
+	for _, part := range m.MultiContent {
+		if part.Type == legacyopenai.ChatMessagePartTypeText && strings.TrimSpace(part.Text) != "" {
+			hasMultiText = true
+			break
+		}
+	}
+	if !hasMultiText && strings.TrimSpace(m.Content) != "" {
 		content = append(content, oaresp.ResponseInputContentParamOfInputText(m.Content))
 	}
 	for _, part := range m.MultiContent {
@@ -1724,16 +1978,20 @@ func buildAnthropicMessages(messages []legacyopenai.ChatCompletionMessage) (stri
 				blocks = append(blocks, anthropic.NewTextBlock(text))
 			}
 			for _, call := range m.ToolCalls {
-				blocks = append(blocks, anthropic.NewToolUseBlock(effectiveToolCallID(call), decodeToolArguments(call.Function.Arguments), call.Function.Name))
+				toolID := sanitizeAnthropicToolCallID(effectiveToolCallID(call))
+				blocks = append(blocks, anthropic.NewToolUseBlock(toolID, decodeToolArguments(call.Function.Arguments), call.Function.Name))
 			}
 			appendMessage(anthropic.MessageParamRoleAssistant, blocks)
 		case legacyopenai.ChatMessageRoleTool:
 			blocks := []anthropic.ContentBlockParamUnion{}
 			for i < len(messages) && messages[i].Role == legacyopenai.ChatMessageRoleTool {
 				toolMsg := messages[i]
-				if strings.TrimSpace(toolMsg.ToolCallID) != "" {
-					blocks = append(blocks, anthropic.NewToolResultBlock(toolMsg.ToolCallID, toolMsg.Content, anthropicToolResultIsError(toolMsg.Content)))
+				toolID := strings.TrimSpace(toolMsg.ToolCallID)
+				if toolID == "" {
+					toolID = "tool_call"
 				}
+				toolID = sanitizeAnthropicToolCallID(toolID)
+				blocks = append(blocks, anthropic.NewToolResultBlock(toolID, toolMsg.Content, anthropicToolResultIsError(toolMsg.Content)))
 				i++
 			}
 			i--
@@ -1754,6 +2012,12 @@ func buildAnthropicMessages(messages []legacyopenai.ChatCompletionMessage) (stri
 // Anthropic allows up to 4 breakpoints; 2 are used.
 func markAnthropicPromptCacheBreakpoints(params *anthropic.MessageNewParams) {
 	cc := anthropic.CacheControlEphemeralParam{TTL: anthropic.CacheControlEphemeralTTLTTL5m}
+	if len(params.Tools) > 0 {
+		lastIdx := len(params.Tools) - 1
+		if params.Tools[lastIdx].OfTool != nil {
+			params.Tools[lastIdx].OfTool.CacheControl = cc
+		}
+	}
 	if len(params.System) > 0 {
 		params.System[len(params.System)-1].CacheControl = cc
 	}
@@ -1803,18 +2067,60 @@ func setAnthropicBlockCacheControl(block anthropic.ContentBlockParamUnion, cc an
 }
 
 func anthropicToolResultIsError(content string) bool {
-	var result struct {
-		OK *bool `json:"ok"`
-	}
-	if err := json.Unmarshal([]byte(content), &result); err != nil || result.OK == nil {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
 		return false
 	}
-	return !*result.OK
+	var obj map[string]any
+	if err := json.Unmarshal([]byte(trimmed), &obj); err == nil && obj != nil {
+		if okVal, exists := obj["ok"]; exists {
+			if b, isBool := okVal.(bool); isBool {
+				return !b
+			}
+		}
+		if isErr, exists := obj["isError"]; exists {
+			if b, isBool := isErr.(bool); isBool {
+				return b
+			}
+		}
+		if isErr, exists := obj["is_error"]; exists {
+			if b, isBool := isErr.(bool); isBool {
+				return b
+			}
+		}
+		if _, hasErr := obj["error"]; hasErr {
+			if okVal, hasOK := obj["ok"]; !hasOK || okVal == false {
+				return true
+			}
+		}
+		return false
+	}
+	lower := strings.ToLower(trimmed)
+	return strings.HasPrefix(lower, "error:") ||
+		strings.HasPrefix(lower, "mcp call failed:") ||
+		strings.HasPrefix(lower, "unknown tool:") ||
+		strings.HasPrefix(lower, "tool execution failed:") ||
+		strings.HasPrefix(lower, "failed:") ||
+		strings.HasPrefix(lower, "错误:") ||
+		strings.HasPrefix(lower, "错误：") ||
+		strings.HasPrefix(lower, "未知工具:") ||
+		strings.HasPrefix(lower, "未知工具：") ||
+		strings.HasPrefix(lower, "执行失败:") ||
+		strings.HasPrefix(lower, "执行失败：") ||
+		strings.HasPrefix(lower, "调用失败:") ||
+		strings.HasPrefix(lower, "调用失败：")
 }
 
 func anthropicBlocksFromMessage(m legacyopenai.ChatCompletionMessage) []anthropic.ContentBlockParamUnion {
 	blocks := []anthropic.ContentBlockParamUnion{}
-	if strings.TrimSpace(m.Content) != "" {
+	hasMultiText := false
+	for _, part := range m.MultiContent {
+		if part.Type == legacyopenai.ChatMessagePartTypeText && strings.TrimSpace(part.Text) != "" {
+			hasMultiText = true
+			break
+		}
+	}
+	if !hasMultiText && strings.TrimSpace(m.Content) != "" {
 		blocks = append(blocks, anthropic.NewTextBlock(m.Content))
 	}
 	for _, part := range m.MultiContent {
@@ -1874,22 +2180,178 @@ func convertToolsToAnthropic(tools []legacyopenai.Tool) []anthropic.ToolUnionPar
 	return out
 }
 
+func normalizeToolsForOpenAIChat(tools []legacyopenai.Tool) []legacyopenai.Tool {
+	if len(tools) == 0 {
+		return nil
+	}
+	out := make([]legacyopenai.Tool, len(tools))
+	for i, t := range tools {
+		out[i] = t
+		if t.Function != nil && t.Function.Parameters != nil {
+			fn := *t.Function
+			fn.Parameters = schemaMap(t.Function.Parameters)
+			out[i].Function = &fn
+		}
+	}
+	return out
+}
+
 func schemaMap(value any) map[string]any {
 	if value == nil {
 		return map[string]any{"type": "object", "properties": map[string]any{}}
 	}
-	if m, ok := value.(map[string]any); ok {
-		return m
-	}
-	raw, err := json.Marshal(value)
-	if err != nil {
-		return map[string]any{"type": "object", "properties": map[string]any{}}
-	}
 	var m map[string]any
-	if err := json.Unmarshal(raw, &m); err != nil || m == nil {
+	if asMap, ok := value.(map[string]any); ok {
+		m = cloneJSONMap(asMap)
+	} else if raw, err := json.Marshal(value); err == nil {
+		_ = json.Unmarshal(raw, &m)
+	}
+	if m == nil {
 		return map[string]any{"type": "object", "properties": map[string]any{}}
 	}
-	return m
+	return derefJSONSchema(m)
+}
+
+func cloneJSONMap(m map[string]any) map[string]any {
+	if m == nil {
+		return nil
+	}
+	out := make(map[string]any, len(m))
+	for k, v := range m {
+		out[k] = cloneJSONValue(v)
+	}
+	return out
+}
+
+func cloneJSONValue(v any) any {
+	switch val := v.(type) {
+	case map[string]any:
+		return cloneJSONMap(val)
+	case []any:
+		out := make([]any, len(val))
+		for i, item := range val {
+			out[i] = cloneJSONValue(item)
+		}
+		return out
+	default:
+		return val
+	}
+}
+
+// derefJSONSchema resolves local $ref pointers (such as #/$defs/... and #/definitions/...)
+// by inlining definitions directly into the schema. Anthropic, Moonshot (Kimi), and
+// OpenAI Responses strict mode reject schemas with unresolved $ref pointers.
+// Circular references are preserved as $ref to avoid infinite recursion.
+func derefJSONSchema(root map[string]any) map[string]any {
+	if root == nil {
+		return nil
+	}
+	cloned := cloneJSONMap(root)
+	visited := make(map[string]bool)
+	resolved := resolveSchemaNode(cloned, cloned, visited)
+	resMap, ok := resolved.(map[string]any)
+	if !ok {
+		return cloned
+	}
+	if !hasUnresolvedRef(resMap, "$defs") {
+		delete(resMap, "$defs")
+	}
+	if !hasUnresolvedRef(resMap, "definitions") {
+		delete(resMap, "definitions")
+	}
+	return resMap
+}
+
+func resolveSchemaNode(node any, root map[string]any, visited map[string]bool) any {
+	switch val := node.(type) {
+	case []any:
+		out := make([]any, len(val))
+		for i, v := range val {
+			out[i] = resolveSchemaNode(v, root, visited)
+		}
+		return out
+	case map[string]any:
+		if refStr, ok := val["$ref"].(string); ok && strings.HasPrefix(refStr, "#/") {
+			if visited[refStr] {
+				return val
+			}
+			target, found := resolveLocalJSONPointer(root, refStr)
+			if found {
+				visited[refStr] = true
+				targetResolved := resolveSchemaNode(target, root, visited)
+				delete(visited, refStr)
+
+				if targetMap, isMap := targetResolved.(map[string]any); isMap {
+					merged := make(map[string]any, len(targetMap)+len(val))
+					for k, v := range targetMap {
+						merged[k] = v
+					}
+					for k, v := range val {
+						if k == "$ref" {
+							continue
+						}
+						merged[k] = resolveSchemaNode(v, root, visited)
+					}
+					return merged
+				}
+				return targetResolved
+			}
+			return val
+		}
+		out := make(map[string]any, len(val))
+		for k, v := range val {
+			out[k] = resolveSchemaNode(v, root, visited)
+		}
+		return out
+	default:
+		return node
+	}
+}
+
+func resolveLocalJSONPointer(root map[string]any, ref string) (any, bool) {
+	if ref == "#" {
+		return root, true
+	}
+	parts := strings.Split(strings.TrimPrefix(ref, "#/"), "/")
+	var curr any = root
+	for _, part := range parts {
+		part = strings.ReplaceAll(strings.ReplaceAll(part, "~1", "/"), "~0", "~")
+		currMap, ok := curr.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		val, exists := currMap[part]
+		if !exists {
+			return nil, false
+		}
+		curr = val
+	}
+	return curr, true
+}
+
+func hasUnresolvedRef(node any, bucket string) bool {
+	prefix := "#/" + bucket + "/"
+	switch val := node.(type) {
+	case []any:
+		for _, v := range val {
+			if hasUnresolvedRef(v, bucket) {
+				return true
+			}
+		}
+	case map[string]any:
+		if ref, ok := val["$ref"].(string); ok && strings.HasPrefix(ref, prefix) {
+			return true
+		}
+		for k, v := range val {
+			if k == bucket {
+				continue
+			}
+			if hasUnresolvedRef(v, bucket) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func anthropicInputSchema(schema map[string]any) anthropic.ToolInputSchemaParam {
@@ -2137,14 +2599,45 @@ func effectiveToolCallID(call legacyopenai.ToolCall) string {
 	return "call_unknown"
 }
 
-func decodeToolArguments(args string) any {
+// sanitizeAnthropicToolCallID normalizes a tool call ID to conform to the
+// Anthropic regex `^[a-zA-Z0-9_-]{1,64}$`. Non-matching characters are replaced
+// with '_', and length is capped at 64 characters.
+// If the sanitized ID exceeds 64 characters, it is truncated to 56 characters
+// followed by an underscore and a 7-character deterministic hex hash of the full ID.
+// This guarantees that tool_use and tool_result match identically while preventing
+// collisions between distinct long IDs that share the same 64-char prefix.
+func sanitizeAnthropicToolCallID(id string) string {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return "call_tool"
+	}
+	var b strings.Builder
+	for _, r := range id {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
+			b.WriteRune(r)
+		} else {
+			b.WriteRune('_')
+		}
+	}
+	s := b.String()
+	if len(s) > 64 {
+		h := fmt.Sprintf("%x", sha256.Sum256([]byte(id)))
+		s = s[:56] + "_" + h[:7]
+	}
+	return s
+}
+
+func decodeToolArguments(args string) map[string]any {
 	args = strings.TrimSpace(args)
 	if args == "" {
 		return map[string]any{}
 	}
 	var decoded any
 	if err := json.Unmarshal([]byte(args), &decoded); err == nil && decoded != nil {
-		return decoded
+		if m, ok := decoded.(map[string]any); ok {
+			return m
+		}
+		return map[string]any{"_raw": decoded}
 	}
 	return map[string]any{"_raw": args}
 }
@@ -2181,10 +2674,24 @@ func splitImageDataURL(value string) (string, string, bool) {
 	}
 }
 
+func extractChoiceUsageFromRaw(raw []byte) *legacyopenai.Usage {
+	var chunk struct {
+		Choices []struct {
+			Usage *legacyopenai.Usage `json:"usage"`
+		} `json:"choices"`
+	}
+	if json.Unmarshal(raw, &chunk) == nil && len(chunk.Choices) > 0 && chunk.Choices[0].Usage != nil {
+		return chunk.Choices[0].Usage
+	}
+	return nil
+}
+
 // modelUsageFromLegacy maps the OpenAI-compatible usage struct. DeepSeek returns
 // cache counters as top-level prompt_cache_{hit,miss}_tokens (not parsed by the
-// sashabaranov struct), so raw is re-scanned to recover them when present;
-// OpenAI/MiMo carry them nested under prompt_tokens_details.cached_tokens.
+// sashabaranov struct), and Moonshot (Kimi) returns top-level cached_tokens (or
+// choices[0].usage.cached_tokens in streaming chunks), so raw is re-scanned to
+// recover them when present; OpenAI/MiMo carry them nested under
+// prompt_tokens_details.cached_tokens.
 func modelUsageFromLegacy(usage *legacyopenai.Usage, raw []byte) *modelUsage {
 	if usage == nil {
 		return nil
@@ -2193,18 +2700,35 @@ func modelUsageFromLegacy(usage *legacyopenai.Usage, raw []byte) *modelUsage {
 	if usage.PromptTokensDetails != nil {
 		hit = usage.PromptTokensDetails.CachedTokens
 	}
-	// DeepSeek 顶层字段（sashabaranov 不解析，从原始 JSON 补取）。一次性
-	// 解出超集：顶层字段存在时显式覆盖 nested 值（原实现靠 ">0 才覆盖"
-	// 的隐式约定），两种命名并存时 DeepSeek 语义优先。
-	var ds struct {
+	// DeepSeek 与 Moonshot 顶层字段（sashabaranov 不解析，从原始 JSON 补取）。
+	// 支持顶层 usage 与 choices[0].usage（Moonshot 流式专有格式）。
+	var extra struct {
 		Usage *struct {
 			PromptCacheHitTokens  int `json:"prompt_cache_hit_tokens"`
 			PromptCacheMissTokens int `json:"prompt_cache_miss_tokens"`
+			CachedTokens          int `json:"cached_tokens"`
 		} `json:"usage"`
+		Choices []struct {
+			Usage *struct {
+				PromptCacheHitTokens  int `json:"prompt_cache_hit_tokens"`
+				PromptCacheMissTokens int `json:"prompt_cache_miss_tokens"`
+				CachedTokens          int `json:"cached_tokens"`
+			} `json:"usage"`
+		} `json:"choices"`
 	}
-	if len(raw) > 0 && json.Unmarshal(raw, &ds) == nil && ds.Usage != nil {
-		hit = ds.Usage.PromptCacheHitTokens
-		miss = ds.Usage.PromptCacheMissTokens
+	if len(raw) > 0 && json.Unmarshal(raw, &extra) == nil {
+		target := extra.Usage
+		if target == nil && len(extra.Choices) > 0 {
+			target = extra.Choices[0].Usage
+		}
+		if target != nil {
+			if target.PromptCacheHitTokens > 0 || target.PromptCacheMissTokens > 0 {
+				hit = target.PromptCacheHitTokens
+				miss = target.PromptCacheMissTokens
+			} else if target.CachedTokens > 0 {
+				hit = target.CachedTokens
+			}
+		}
 	}
 	if miss == 0 && hit > 0 && usage.PromptTokens > hit {
 		miss = usage.PromptTokens - hit

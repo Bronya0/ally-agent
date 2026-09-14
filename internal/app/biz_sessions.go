@@ -1043,6 +1043,11 @@ func sanitizeHistoryMessagesOpts(messages []openai.ChatCompletionMessage, flatte
 		if original.Role == openai.ChatMessageRoleSystem {
 			continue
 		}
+		// Reasoning-item carriers are request-only artifacts of the Responses
+		// adapter (see prov_reasoning.go); they must never persist.
+		if original.Role == roleResponsesReasoningCarrier {
+			continue
+		}
 		m := original
 		if flattenImages && len(m.MultiContent) > 0 {
 			m.Content = textFromMultiContent(m.MultiContent)

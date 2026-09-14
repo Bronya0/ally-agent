@@ -386,6 +386,11 @@ type App struct {
 	// (set via SetErrorLogger). Backend panics and frontend-reported errors
 	// share this single on-disk channel. nil until InitErrorLogger succeeds.
 	errorLogger *slog.Logger
+
+	// reasoningStash holds per-session provider reasoning replay payloads
+	// (Anthropic thinking signatures, Responses encrypted reasoning items).
+	// In-memory only; see prov_reasoning.go.
+	reasoningStash *reasoningStash
 }
 
 func NewApp() *App {
@@ -421,6 +426,7 @@ func NewApp() *App {
 		keyCooldowns:        map[string]time.Time{},
 		lastEstimatedTokens: map[string]WorkspaceTokenUsage{},
 		stats:               newStatsRecorder(),
+		reasoningStash:      newReasoningStash(),
 	}
 	// Expose the active App to package-level helpers that predate Runtime
 	// injection (listMemories, memoryIndexCache usage in prompt_builder).
@@ -2352,7 +2358,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 		}
 		if len(toolCalls) == 0 {
 			if content != "" {
-				messages = append(messages, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleAssistant, Content: content})
+				messages = append(messages, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleAssistant, Content: content, ReasoningContent: reasoning})
 			}
 			// The model stopped calling tools, but the user may have just
 			// injected a message: take the queue once more and continue for
@@ -2382,9 +2388,10 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			a.emit(event.Name, event.Payload)
 		}
 		messages = append(messages, openai.ChatCompletionMessage{
-			Role:      openai.ChatMessageRoleAssistant,
-			Content:   content,
-			ToolCalls: toolCalls,
+			Role:             openai.ChatMessageRoleAssistant,
+			Content:          content,
+			ReasoningContent: reasoning,
+			ToolCalls:        toolCalls,
 		})
 
 		// Execute non-file tools in parallel. Built-in file mutations run

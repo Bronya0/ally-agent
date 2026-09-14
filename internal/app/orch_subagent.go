@@ -252,9 +252,10 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 
 		preparedToolCalls, toolExecutionArgs := prepareToolCallsForExecution(modelResp.ToolCalls)
 		assistantMessage := openai.ChatCompletionMessage{
-			Role:      openai.ChatMessageRoleAssistant,
-			Content:   modelResp.Content,
-			ToolCalls: preparedToolCalls,
+			Role:             openai.ChatMessageRoleAssistant,
+			Content:          modelResp.Content,
+			ReasoningContent: modelResp.Reasoning,
+			ToolCalls:        preparedToolCalls,
 		}
 
 		if len(assistantMessage.ToolCalls) == 0 {

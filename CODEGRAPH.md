@@ -31,6 +31,7 @@
 | 技能 / MCP / 模型管理内联页 | `SkillsPanel.vue` / `McpPanel.vue` / `ModelsPanel.vue` |
 | 文件树 / 编辑器 UI | `WorkspaceExplorer.vue` + `biz_workspace_editor.go` |
 | 工具卡动词 "Used X" 标签 | `frontend/src/utils/toolVerb.mjs`（TOOL_VERBS 表） |
+| 思考回放（reasoning_content/signature/encrypted_content） | `internal/app/prov_reasoning.go` + 三适配器（`prov_model.go`） |
 
 ## 核心调用流
 

@@ -615,3 +615,442 @@ func responsesRequestHasCacheAnchorText(request map[string]any) bool {
 	}
 	return false
 }
+
+func TestOpenAIChatTokenParamAndToolChoice(t *testing.T) {
+	// 1. Auto-detection of o-series models
+	if !shouldUseMaxCompletionTokens("auto", "o1") {
+		t.Fatalf("expected o1 to use max_completion_tokens under auto")
+	}
+	if !shouldUseMaxCompletionTokens("auto", "o3-mini") {
+		t.Fatalf("expected o3-mini to use max_completion_tokens under auto")
+	}
+	if !shouldUseMaxCompletionTokens("auto", "gpt-5-codex") {
+		t.Fatalf("expected gpt-5 to use max_completion_tokens under auto")
+	}
+	if shouldUseMaxCompletionTokens("auto", "gpt-4o") {
+		t.Fatalf("expected gpt-4o to use max_tokens under auto")
+	}
+	if shouldUseMaxCompletionTokens("auto", "deepseek-chat") {
+		t.Fatalf("expected deepseek-chat to use max_tokens under auto")
+	}
+
+	// 2. User overrides take precedence
+	if shouldUseMaxCompletionTokens("max_tokens", "o1") {
+		t.Fatalf("expected explicit max_tokens to override o1 auto-detection")
+	}
+	if !shouldUseMaxCompletionTokens("max_completion_tokens", "gpt-4o") {
+		t.Fatalf("expected explicit max_completion_tokens to override gpt-4o auto-detection")
+	}
+}
+
+func TestMoonshotCachedTokensExtraction(t *testing.T) {
+	raw := []byte(`{
+		"usage": {
+			"prompt_tokens": 150,
+			"completion_tokens": 50,
+			"total_tokens": 200,
+			"cached_tokens": 80
+		}
+	}`)
+	usage := &legacyopenai.Usage{
+		PromptTokens:     150,
+		CompletionTokens: 50,
+		TotalTokens:      200,
+	}
+	mu := modelUsageFromLegacy(usage, raw)
+	if mu == nil {
+		t.Fatalf("expected non-nil modelUsage")
+	}
+	if mu.CacheHitTokens != 80 {
+		t.Fatalf("expected CacheHitTokens = 80 for Moonshot, got %d", mu.CacheHitTokens)
+	}
+	if mu.CacheMissTokens != 70 {
+		t.Fatalf("expected CacheMissTokens = 70 for Moonshot, got %d", mu.CacheMissTokens)
+	}
+}
+
+func TestAnthropicToolCallIDSanitization(t *testing.T) {
+	dirtyID := "call:tool.run|123_456-abc"
+	clean := sanitizeAnthropicToolCallID(dirtyID)
+	if clean != "call_tool_run_123_456-abc" {
+		t.Fatalf("sanitized ID = %q, want %q", clean, "call_tool_run_123_456-abc")
+	}
+
+	longID := strings.Repeat("a", 100)
+	cleanLong := sanitizeAnthropicToolCallID(longID)
+	if len(cleanLong) != 64 {
+		t.Fatalf("expected 64 chars, got %d", len(cleanLong))
+	}
+
+	// Two distinct IDs sharing the same 70-char prefix must NOT collide after sanitization
+	prefix := strings.Repeat("x", 70)
+	idA := prefix + "_alpha"
+	idB := prefix + "_bravo"
+	cleanA := sanitizeAnthropicToolCallID(idA)
+	cleanB := sanitizeAnthropicToolCallID(idB)
+	if cleanA == cleanB {
+		t.Fatalf("cleanA and cleanB must not collide: %q == %q", cleanA, cleanB)
+	}
+	if len(cleanA) != 64 || len(cleanB) != 64 {
+		t.Fatalf("expected 64 chars for both, got %d and %d", len(cleanA), len(cleanB))
+	}
+
+	// buildAnthropicMessages must sanitize IDs consistently on both tool_use and tool_result
+	_, messages := buildAnthropicMessages([]legacyopenai.ChatCompletionMessage{
+		{Role: legacyopenai.ChatMessageRoleUser, Content: "run"},
+		{Role: legacyopenai.ChatMessageRoleAssistant, ToolCalls: []legacyopenai.ToolCall{
+			{ID: "call:foo|bar.1", Function: legacyopenai.FunctionCall{Name: "fn", Arguments: `{"k":"v"}`}},
+		}},
+		{Role: legacyopenai.ChatMessageRoleTool, ToolCallID: "call:foo|bar.1", Content: `{"ok":true}`},
+	})
+	if len(messages) != 3 {
+		t.Fatalf("expected 3 messages, got %d", len(messages))
+	}
+	assistantToolUse := messages[1].Content[0].OfToolUse
+	if assistantToolUse == nil || assistantToolUse.ID != "call_foo_bar_1" {
+		t.Fatalf("assistant tool_use id = %q, want call_foo_bar_1", assistantToolUse.ID)
+	}
+	userToolResult := messages[2].Content[0].OfToolResult
+	if userToolResult == nil || userToolResult.ToolUseID != "call_foo_bar_1" {
+		t.Fatalf("user tool_result id = %q, want call_foo_bar_1", userToolResult.ToolUseID)
+	}
+}
+
+func TestAnthropicToolResultIsError(t *testing.T) {
+	cases := []struct {
+		input string
+		want  bool
+	}{
+		{`{"ok":false}`, true},
+		{`{"ok":true}`, false},
+		{`{"isError":true}`, true},
+		{`{"is_error":true}`, true},
+		{`{"isError":false}`, false},
+		{`{"error":"failed to connect"}`, true},
+		{`{"error":"failed to connect","ok":true}`, false},
+		{`error: command exited status 1`, true},
+		{`MCP call failed: connection refused`, true},
+		{`unknown tool: foobar`, true},
+		{`错误: 找不到指定文件`, true},
+		{`错误：参数格式不正确`, true},
+		{`执行失败: 退出码 1`, true},
+		{`调用失败：连接超时`, true},
+		{`未知工具: my_tool`, true},
+		{`File written successfully`, false},
+	}
+	for _, tc := range cases {
+		got := anthropicToolResultIsError(tc.input)
+		if got != tc.want {
+			t.Errorf("anthropicToolResultIsError(%q) = %v, want %v", tc.input, got, tc.want)
+		}
+	}
+}
+
+func TestDecodeToolArgumentsEnsuresObject(t *testing.T) {
+	// Arrays must be wrapped in map
+	resArr := decodeToolArguments(`[1, 2, 3]`)
+	if _, ok := resArr["_raw"]; !ok {
+		t.Fatalf("array arguments must be wrapped in map with _raw, got %v", resArr)
+	}
+
+	// Primitives must be wrapped in map
+	resNum := decodeToolArguments(`42`)
+	if _, ok := resNum["_raw"]; !ok {
+		t.Fatalf("number arguments must be wrapped in map with _raw, got %v", resNum)
+	}
+
+	// Objects must be preserved
+	resObj := decodeToolArguments(`{"foo":"bar"}`)
+	if resObj["foo"] != "bar" {
+		t.Fatalf("object arguments must be preserved, got %v", resObj)
+	}
+
+	// Empty string must return empty map
+	resEmpty := decodeToolArguments(``)
+	if len(resEmpty) != 0 {
+		t.Fatalf("empty arguments must return empty map, got %v", resEmpty)
+	}
+}
+
+func TestOpenAIResponsesMidTurnSystemAndDeduplication(t *testing.T) {
+	// 1. Mid-turn system message becomes developer input item
+	instructions, input := buildOpenAIResponsesInput([]legacyopenai.ChatCompletionMessage{
+		{Role: legacyopenai.ChatMessageRoleSystem, Content: "base instructions"},
+		{Role: legacyopenai.ChatMessageRoleUser, Content: "hello"},
+		{Role: legacyopenai.ChatMessageRoleAssistant, Content: "hi"},
+		{Role: legacyopenai.ChatMessageRoleSystem, Content: "steer reminder: stay concise"},
+		{Role: legacyopenai.ChatMessageRoleUser, Content: "what is 1+1?"},
+	})
+	if instructions != "base instructions" {
+		t.Fatalf("instructions = %q, want base instructions", instructions)
+	}
+	// input should have 4 items: user(hello) -> assistant(hi) -> developer(steer reminder) -> user(what is 1+1?)
+	if len(input) != 4 {
+		t.Fatalf("expected 4 input items, got %d", len(input))
+	}
+	midTurn := input[2]
+	if midTurn.OfMessage == nil || midTurn.OfMessage.Role != "developer" {
+		t.Fatalf("expected developer role for mid-turn system message, got %v", midTurn.OfMessage)
+	}
+
+	// 2. Content deduplication when MultiContent has text
+	multiMsg := legacyopenai.ChatCompletionMessage{
+		Role:    legacyopenai.ChatMessageRoleUser,
+		Content: "duplicate prompt text",
+		MultiContent: []legacyopenai.ChatMessagePart{
+			{Type: legacyopenai.ChatMessagePartTypeText, Text: "duplicate prompt text"},
+		},
+	}
+	multiContent := openAIResponsesContentFromMulti(multiMsg)
+	if len(multiContent) != 1 {
+		t.Fatalf("expected 1 content part without duplication, got %d", len(multiContent))
+	}
+
+	anthropicBlocks := anthropicBlocksFromMessage(multiMsg)
+	if len(anthropicBlocks) != 1 {
+		t.Fatalf("expected 1 anthropic block without duplication, got %d", len(anthropicBlocks))
+	}
+}
+
+func TestConfigureAnthropicThinking(t *testing.T) {
+	// 1. Claude 3.7 Sonnet (budget model): sets Thinking.OfEnabled, does NOT set OutputConfig.Effort
+	var params37 anthropic.MessageNewParams
+	configureAnthropicThinking(&params37, "claude-3-7-sonnet-20250219", "high", 8192)
+	if params37.Thinking.OfEnabled == nil {
+		t.Fatal("expected Thinking.OfEnabled for claude-3.7-sonnet")
+	}
+	if params37.Thinking.OfEnabled.BudgetTokens < 1024 {
+		t.Fatalf("expected BudgetTokens >= 1024, got %d", params37.Thinking.OfEnabled.BudgetTokens)
+	}
+	if params37.OutputConfig.Effort != "" {
+		t.Fatalf("claude-3.7-sonnet must not set OutputConfig.Effort (would cause 400), got %q", params37.OutputConfig.Effort)
+	}
+
+	// 2. Claude 4.6 Sonnet (adaptive model): sets Thinking.OfAdaptive and OutputConfig.Effort
+	var params46 anthropic.MessageNewParams
+	configureAnthropicThinking(&params46, "claude-sonnet-4.6", "medium", 8192)
+	if params46.Thinking.OfAdaptive == nil {
+		t.Fatal("expected Thinking.OfAdaptive for claude-sonnet-4.6")
+	}
+	if string(params46.OutputConfig.Effort) != "medium" {
+		t.Fatalf("expected OutputConfig.Effort = medium, got %q", params46.OutputConfig.Effort)
+	}
+
+	// 3. Effort "off"
+	var paramsOff anthropic.MessageNewParams
+	configureAnthropicThinking(&paramsOff, "claude-3-7-sonnet-20250219", "off", 8192)
+	if paramsOff.Thinking.OfDisabled == nil {
+		t.Fatal("expected Thinking.OfDisabled when effort is off")
+	}
+}
+
+func TestStopReasonHandling(t *testing.T) {
+	cfg := ConfigState{APIFormat: apiFormatOpenAIChat}
+
+	// Non-standard OpenAI finish reasons (DashScope, vLLM, OpenRouter) must not error
+	for _, reason := range []string{"stop", "stop_sequence", "eos", "end_turn"} {
+		res := &modelStreamResult{StopReason: reason, Content: "some output"}
+		if err := modelResponseStopError(cfg, res); err != nil {
+			t.Errorf("finish_reason %q with output should succeed, got error: %v", reason, err)
+		}
+	}
+
+	// Unknown finish reason with output should not fail
+	resUnknown := &modelStreamResult{StopReason: "custom_done", Content: "generated text"}
+	if err := modelResponseStopError(cfg, resUnknown); err != nil {
+		t.Fatalf("unknown finish_reason with output should not fail, got: %v", err)
+	}
+
+	// Anthropic pause_turn must not error
+	anthropicCfg := ConfigState{APIFormat: apiFormatAnthropicMessages}
+	resPause := &modelStreamResult{StopReason: "pause_turn", Content: "paused here"}
+	if err := modelResponseStopError(anthropicCfg, resPause); err != nil {
+		t.Fatalf("pause_turn with output should not fail, got: %v", err)
+	}
+}
+
+func TestClassifyLLMError429BillingVsRateLimit(t *testing.T) {
+	// Moonshot 429 quota exhaustion
+	moonshotErr := errors.New("error code: 429, body: {\"error\":{\"type\":\"exceeded_current_quota_error\",\"message\":\"You exceeded your current token quota: ... please check your account balance\"}}")
+	if kind := classifyLLMError(moonshotErr); kind != llmErrorKindBilling {
+		t.Fatalf("Moonshot 429 quota exhaustion should classify as Billing, got %v", kind)
+	}
+	if !isAuthKeyError(moonshotErr) {
+		t.Fatal("Moonshot 429 quota exhaustion should be considered an auth/key error")
+	}
+
+	// OpenAI 429 insufficient_quota
+	openAIErr := errors.New("error code: 429, message: insufficient_quota")
+	if kind := classifyLLMError(openAIErr); kind != llmErrorKindBilling {
+		t.Fatalf("OpenAI 429 insufficient_quota should classify as Billing, got %v", kind)
+	}
+	if !isAuthKeyError(openAIErr) {
+		t.Fatal("OpenAI 429 insufficient_quota should be considered an auth/key error")
+	}
+
+	// Plain 429 rate limit
+	rateLimitErr := errors.New("error code: 429, status: 429 Too Many Requests, rate limit reached")
+	if kind := classifyLLMError(rateLimitErr); kind != llmErrorKindRateLimited {
+		t.Fatalf("Plain 429 should classify as RateLimited, got %v", kind)
+	}
+	if isAuthKeyError(rateLimitErr) {
+		t.Fatal("Plain 429 should not be considered an auth/key error")
+	}
+}
+
+func TestMoonshotChoicesUsageExtraction(t *testing.T) {
+	raw := []byte(`{
+		"id": "chatcmpl-123",
+		"choices": [
+			{
+				"index": 0,
+				"delta": {},
+				"usage": {
+					"prompt_tokens": 1000,
+					"completion_tokens": 200,
+					"total_tokens": 1200,
+					"cached_tokens": 600
+				}
+			}
+		]
+	}`)
+	choiceUsage := extractChoiceUsageFromRaw(raw)
+	if choiceUsage == nil {
+		t.Fatal("expected choice usage to be extracted")
+	}
+	usage := modelUsageFromLegacy(choiceUsage, raw)
+	if usage == nil {
+		t.Fatal("expected modelUsage to be parsed")
+	}
+	if usage.PromptTokens != 1000 || usage.CompletionTokens != 200 {
+		t.Fatalf("unexpected tokens: prompt=%d completion=%d", usage.PromptTokens, usage.CompletionTokens)
+	}
+	if usage.CacheHitTokens != 600 {
+		t.Fatalf("expected CacheHitTokens=600, got %d", usage.CacheHitTokens)
+	}
+	if usage.CacheMissTokens != 400 {
+		t.Fatalf("expected CacheMissTokens=400, got %d", usage.CacheMissTokens)
+	}
+}
+
+func TestAnthropicToolPromptCacheBreakpoint(t *testing.T) {
+	params := anthropic.MessageNewParams{
+		Model: "claude-3-7-sonnet",
+		Tools: []anthropic.ToolUnionParam{
+			{OfTool: &anthropic.ToolParam{Name: "read"}},
+			{OfTool: &anthropic.ToolParam{Name: "write"}},
+		},
+		Messages: []anthropic.MessageParam{
+			anthropic.NewUserMessage(anthropic.NewTextBlock("hello")),
+		},
+	}
+	markAnthropicPromptCacheBreakpoints(&params)
+	lastTool := params.Tools[1].OfTool
+	if lastTool == nil || lastTool.CacheControl.TTL == "" {
+		t.Fatal("expected CacheControl on the last tool definition")
+	}
+	firstTool := params.Tools[0].OfTool
+	if firstTool != nil && firstTool.CacheControl.TTL != "" {
+		t.Fatal("first tool should not have cache breakpoint")
+	}
+}
+
+func TestDerefJSONSchema(t *testing.T) {
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"filter": map[string]any{
+				"$ref":        "#/$defs/FilterType",
+				"description": "override description",
+			},
+		},
+		"$defs": map[string]any{
+			"FilterType": map[string]any{
+				"type": "string",
+				"enum": []any{"all", "active"},
+			},
+		},
+	}
+	derefed := derefJSONSchema(schema)
+	if _, hasDefs := derefed["$defs"]; hasDefs {
+		t.Fatal("expected $defs to be cleaned up after full inlining")
+	}
+	props, ok := derefed["properties"].(map[string]any)
+	if !ok {
+		t.Fatal("properties missing")
+	}
+	filter, ok := props["filter"].(map[string]any)
+	if !ok {
+		t.Fatal("filter missing")
+	}
+	if filter["type"] != "string" {
+		t.Fatalf("expected inlined type=string, got %v", filter["type"])
+	}
+	if filter["description"] != "override description" {
+		t.Fatalf("sibling property override failed, got %v", filter["description"])
+	}
+}
+
+func TestResponseInputItemParamOfFunctionCallEmptyArgs(t *testing.T) {
+	call := legacyopenai.ToolCall{
+		ID: "call_123",
+		Function: legacyopenai.FunctionCall{
+			Name:      "test_tool",
+			Arguments: "",
+		},
+	}
+	item := responseInputItemParamOfFunctionCall(call)
+	if item.OfFunctionCall == nil {
+		t.Fatal("expected OfFunctionCall")
+	}
+	if item.OfFunctionCall.Arguments != "{}" {
+		t.Fatalf("expected arguments to default to {}, got %q", item.OfFunctionCall.Arguments)
+	}
+}
+
+func TestBuildAnthropicMessagesEmptyToolCallID(t *testing.T) {
+	messages := []legacyopenai.ChatCompletionMessage{
+		{
+			Role: legacyopenai.ChatMessageRoleAssistant,
+			ToolCalls: []legacyopenai.ToolCall{
+				{ID: "call_1", Function: legacyopenai.FunctionCall{Name: "fn"}},
+			},
+		},
+		{
+			Role:       legacyopenai.ChatMessageRoleTool,
+			ToolCallID: "",
+			Content:    "result text",
+		},
+	}
+	_, anthropicMsgs := buildAnthropicMessages(messages)
+	if len(anthropicMsgs) < 2 {
+		t.Fatalf("expected assistant and user turn, got %d messages", len(anthropicMsgs))
+	}
+	userTurn := anthropicMsgs[1]
+	if len(userTurn.Content) == 0 {
+		t.Fatal("tool_result block must not be dropped on empty ToolCallID")
+	}
+	if userTurn.Content[0].OfToolResult == nil {
+		t.Fatal("expected OfToolResult block")
+	}
+	if userTurn.Content[0].OfToolResult.ToolUseID != "tool_call" {
+		t.Fatalf("expected fallback tool_call ID, got %q", userTurn.Content[0].OfToolResult.ToolUseID)
+	}
+}
+
+func TestExtractRawStreamReasoningArrayTolerant(t *testing.T) {
+	raw := []byte(`{
+		"choices": [
+			{
+				"delta": {
+					"reasoning": "deep reasoning here",
+					"reasoning_details": [{"type": "text", "text": "deep reasoning here"}]
+				}
+			}
+		]
+	}`)
+	got := extractRawStreamReasoning(raw)
+	if got != "deep reasoning here" {
+		t.Fatalf("expected reasoning to be extracted despite array reasoning_details, got %q", got)
+	}
+}
