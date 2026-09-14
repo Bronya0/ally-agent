@@ -8,6 +8,7 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -634,6 +635,20 @@ func TestOpenAIChatTokenParamAndToolChoice(t *testing.T) {
 		t.Fatalf("expected deepseek-chat to use max_tokens under auto")
 	}
 
+	// 1b. Anchored boundaries (kimi-code openai-legacy.ts:130-133): a family
+	// prefix without a version boundary must not match, every o-digit series
+	// must, and provider-routing prefixes ("openai/o3-mini") are stripped.
+	for _, model := range []string{"o2", "o5-mini", "gpt-5.1", "gpt-5-nano", "openai/o3-mini", "azure/gpt-5.1", "O4-MINI"} {
+		if !shouldUseMaxCompletionTokens("auto", model) {
+			t.Fatalf("expected %q to use max_completion_tokens under auto", model)
+		}
+	}
+	for _, model := range []string{"gpt-50", "gpt-5x", "o1preview", "o3as"} {
+		if shouldUseMaxCompletionTokens("auto", model) {
+			t.Fatalf("expected %q to use max_tokens under auto", model)
+		}
+	}
+
 	// 2. User overrides take precedence
 	if shouldUseMaxCompletionTokens("max_tokens", "o1") {
 		t.Fatalf("expected explicit max_tokens to override o1 auto-detection")
@@ -1177,3 +1192,229 @@ func TestBuildAnthropicMessagesMidTurnSystem(t *testing.T) {
 	}
 }
 
+// ── Responses: streaming final arguments & stream error events ────────────
+
+// responsesSSEEvent renders one Responses SSE data frame.
+func responsesSSEEvent(data string) string {
+	return fmt.Sprintf("data: %s\n\n", data)
+}
+
+// responsesStreamTestCfg keeps adapter-internal retry backoff out of the
+// assertion path so tests fail fast on deterministic streams.
+func responsesStreamTestCfg(serverURL string) ConfigState {
+	return ConfigState{
+		APIFormat:      apiFormatOpenAIResponses,
+		BaseURL:        serverURL,
+		APIKeys:        []string{"test-key"},
+		MaxTokens:      64,
+		noAdapterRetry: true,
+	}
+}
+
+// TestResponsesArgumentsDoneWithoutFieldKeepsAccumulated verifies that a
+// function_call_arguments.done event omitting the arguments field (a
+// non-compliant relay) cannot wipe the accumulated deltas: the tool must not
+// silently run with "{}". The terminal output_item.done omits them too, so
+// nothing repairs a wipe after the fact (kimi requires the field outright,
+// openai-responses.ts:973-980).
+func TestResponsesArgumentsDoneWithoutFieldKeepsAccumulated(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, responsesSSEEvent(`{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_a","name":"calculate","arguments":""}}`))
+		fmt.Fprint(w, responsesSSEEvent(`{"type":"response.function_call_arguments.delta","item_id":"fc_1","output_index":0,"delta":"{\"expression\":"}`))
+		fmt.Fprint(w, responsesSSEEvent(`{"type":"response.function_call_arguments.delta","item_id":"fc_1","output_index":0,"delta":"\"1+1\"}"}`))
+		fmt.Fprint(w, responsesSSEEvent(`{"type":"response.function_call_arguments.done","item_id":"fc_1","output_index":0}`))
+		fmt.Fprint(w, responsesSSEEvent(`{"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_a","name":"calculate"}}`))
+		fmt.Fprint(w, responsesSSEEvent(`{"type":"response.completed","response":{"id":"resp_1","usage":{"input_tokens":3,"output_tokens":4}}}`))
+	}))
+	defer server.Close()
+
+	a := NewApp()
+	result, err := a.streamModelResponse(context.Background(), responsesStreamTestCfg(server.URL), "test-model",
+		[]legacyopenai.ChatCompletionMessage{{Role: legacyopenai.ChatMessageRoleUser, Content: "1+1"}}, nil, nil)
+	if err != nil {
+		t.Fatalf("streamModelResponse() error = %v", err)
+	}
+	if len(result.ToolCalls) != 1 {
+		t.Fatalf("tool calls = %d, want 1", len(result.ToolCalls))
+	}
+	if got := result.ToolCalls[0].Function.Arguments; got != `{"expression":"1+1"}` {
+		t.Fatalf("arguments = %q, want the accumulated deltas %q", got, `{"expression":"1+1"}`)
+	}
+}
+
+// TestResponsesArgumentsDoneFullValueStillWins verifies the done event stays
+// authoritative when it does carry the full arguments (pi overwrites,
+// openai-responses-shared.ts:656-666).
+func TestResponsesArgumentsDoneFullValueStillWins(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, responsesSSEEvent(`{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_a","name":"calculate","arguments":""}}`))
+		fmt.Fprint(w, responsesSSEEvent(`{"type":"response.function_call_arguments.delta","item_id":"fc_1","output_index":0,"delta":"{\"expr"}`))
+		fmt.Fprint(w, responsesSSEEvent(`{"type":"response.function_call_arguments.done","item_id":"fc_1","output_index":0,"arguments":"{\"expression\":\"2+2\"}"}`))
+		fmt.Fprint(w, responsesSSEEvent(`{"type":"response.completed","response":{"id":"resp_1","usage":{"input_tokens":3,"output_tokens":4}}}`))
+	}))
+	defer server.Close()
+
+	a := NewApp()
+	result, err := a.streamModelResponse(context.Background(), responsesStreamTestCfg(server.URL), "test-model",
+		[]legacyopenai.ChatCompletionMessage{{Role: legacyopenai.ChatMessageRoleUser, Content: "2+2"}}, nil, nil)
+	if err != nil {
+		t.Fatalf("streamModelResponse() error = %v", err)
+	}
+	if len(result.ToolCalls) != 1 {
+		t.Fatalf("tool calls = %d, want 1", len(result.ToolCalls))
+	}
+	if got := result.ToolCalls[0].Function.Arguments; got != `{"expression":"2+2"}` {
+		t.Fatalf("arguments = %q, want the full done value %q", got, `{"expression":"2+2"}`)
+	}
+}
+
+// TestResponsesUntypedErrorEventSurfacesAsError verifies that a gateway error
+// forwarded without a "type" field is surfaced — with its nested code
+// unpacked so the classifier still sees the 429 marker — instead of being
+// silently dropped and reported as "stream ended without terminal event"
+// (kimi: openai-responses.ts:884-892 + 270-321).
+func TestResponsesUntypedErrorEventSurfacesAsError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, responsesSSEEvent(`{"message":"received error while streaming: {\"code\":429,\"message\":\"Too many requests\"}"}`))
+	}))
+	defer server.Close()
+
+	a := NewApp()
+	_, err := a.streamModelResponse(context.Background(), responsesStreamTestCfg(server.URL), "test-model",
+		[]legacyopenai.ChatCompletionMessage{{Role: legacyopenai.ChatMessageRoleUser, Content: "hi"}}, nil, nil)
+	if err == nil {
+		t.Fatal("expected an error from the untyped gateway error event")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "429") || !strings.Contains(msg, "Too many requests") {
+		t.Fatalf("error = %q, want the nested gateway code and message", msg)
+	}
+	if strings.Contains(msg, "stream ended without terminal event") {
+		t.Fatalf("error = %q, must not degrade into the generic terminal-event failure", msg)
+	}
+	if classifyLLMError(err) != llmErrorKindRateLimited {
+		t.Fatalf("classifyLLMError(%q) = %v, want rate limited", msg, classifyLLMError(err))
+	}
+}
+
+// TestResponsesFailedWithoutErrorObjectUsesIncompleteReason verifies the
+// response.failed fallback chain: with no error object the text falls back to
+// incomplete_details.reason (kimi openai-responses.ts:323-350; pi
+// openai-responses.ts:742-752).
+func TestResponsesFailedWithoutErrorObjectUsesIncompleteReason(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, responsesSSEEvent(`{"type":"response.failed","response":{"id":"r1","incomplete_details":{"reason":"content_filter"}}}`))
+	}))
+	defer server.Close()
+
+	a := NewApp()
+	_, err := a.streamModelResponse(context.Background(), responsesStreamTestCfg(server.URL), "test-model",
+		[]legacyopenai.ChatCompletionMessage{{Role: legacyopenai.ChatMessageRoleUser, Content: "hi"}}, nil, nil)
+	if err == nil {
+		t.Fatal("expected an error from the response.failed event")
+	}
+	if msg := err.Error(); !strings.Contains(msg, "content_filter") {
+		t.Fatalf("error = %q, want the incomplete_details reason", msg)
+	}
+}
+
+// TestResponsesUnknownTypedEventStaysIgnored guards the untyped-error default
+// branch: a well-formed event type the adapter does not consume must still be
+// ignored silently (kimi: "unknown future event types carry no data we
+// currently consume").
+func TestResponsesUnknownTypedEventStaysIgnored(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, responsesSSEEvent(`{"type":"response.output_text.delta","item_id":"msg_1","output_index":0,"delta":"hi"}`))
+		fmt.Fprint(w, responsesSSEEvent(`{"type":"response.output_text.done","item_id":"msg_1","output_index":0,"text":"hi"}`))
+		fmt.Fprint(w, responsesSSEEvent(`{"type":"response.completed","response":{"id":"resp_1","usage":{"input_tokens":1,"output_tokens":1}}}`))
+	}))
+	defer server.Close()
+
+	a := NewApp()
+	result, err := a.streamModelResponse(context.Background(), responsesStreamTestCfg(server.URL), "test-model",
+		[]legacyopenai.ChatCompletionMessage{{Role: legacyopenai.ChatMessageRoleUser, Content: "hi"}}, nil, nil)
+	if err != nil {
+		t.Fatalf("streamModelResponse() error = %v", err)
+	}
+	if !strings.Contains(result.Content, "hi") {
+		t.Fatalf("content = %q, want the streamed delta", result.Content)
+	}
+}
+
+// TestBuildOpenAIResponsesRequestPairsEffortWithSummary verifies that an
+// explicit reasoning effort is paired with summary:"auto" (kimi
+// openai-responses.ts:1116-1120; pi openai-responses.ts:319-335): without the
+// summary request the Responses API emits no reasoning_summary_text deltas.
+func TestBuildOpenAIResponsesRequestPairsEffortWithSummary(t *testing.T) {
+	cfg := ConfigState{
+		APIFormat:       apiFormatOpenAIResponses,
+		BaseURL:         defaultOpenAIResponsesURL,
+		MaxTokens:       64,
+		ReasoningEffort: "medium",
+	}
+	messages := []legacyopenai.ChatCompletionMessage{{Role: legacyopenai.ChatMessageRoleUser, Content: "hi"}}
+	body := buildOpenAIResponsesRequest(cfg, "gpt-5.5", messages, nil)
+	if body.Reasoning.Summary != oa.ReasoningSummaryAuto {
+		t.Fatalf("reasoning.summary = %q, want auto", body.Reasoning.Summary)
+	}
+	if body.Reasoning.Effort != oa.ReasoningEffort("medium") {
+		t.Fatalf("reasoning.effort = %q, want medium", body.Reasoning.Effort)
+	}
+
+	cfg.ReasoningEffort = ""
+	body = buildOpenAIResponsesRequest(cfg, "gpt-5.5", messages, nil)
+	if body.Reasoning.Summary != "" || body.Reasoning.Effort != "" {
+		t.Fatalf("reasoning = %+v, want unset without an explicit effort", body.Reasoning)
+	}
+}
+
+// TestAnthropicUsageStateMergesByPresence verifies message_delta.usage fields
+// are cumulative: present fields overwrite, absent fields keep the previous
+// value, and nothing is ever added (kimi anthropic.ts:872-888; pi
+// anthropic-messages.ts:716-743).
+func TestAnthropicUsageStateMergesByPresence(t *testing.T) {
+	s := &anthropicUsageState{}
+	var start anthropic.Usage
+	if err := json.Unmarshal([]byte(`{"input_tokens":10,"output_tokens":2,"cache_creation_input_tokens":4}`), &start); err != nil {
+		t.Fatalf("unmarshal start: %v", err)
+	}
+	s.mergeStart(start)
+	mu := s.modelUsage()
+	if mu == nil || mu.PromptTokens != 14 || mu.CompletionTokens != 2 || mu.CacheHitTokens != 0 || mu.CacheMissTokens != 14 {
+		t.Fatalf("start usage = %+v, want prompt=14 completion=2 hit=0 miss=14", mu)
+	}
+
+	var delta anthropic.MessageDeltaUsage
+	if err := json.Unmarshal([]byte(`{"input_tokens":5,"cache_read_input_tokens":8,"output_tokens":3}`), &delta); err != nil {
+		t.Fatalf("unmarshal delta: %v", err)
+	}
+	s.mergeDelta(delta)
+	mu = s.modelUsage()
+	// cache_creation stays 4 (absent in the delta), so miss = 5+4 = 9 and
+	// prompt = 5+4+8 = 17.
+	if mu == nil || mu.PromptTokens != 17 || mu.CompletionTokens != 3 || mu.CacheHitTokens != 8 || mu.CacheMissTokens != 9 {
+		t.Fatalf("after delta = %+v, want prompt=17 completion=3 hit=8 miss=9", mu)
+	}
+
+	// A delta that omits the counters keeps them (no zero-overwrite), and the
+	// cumulative values are never added on top of each other.
+	var tail anthropic.MessageDeltaUsage
+	if err := json.Unmarshal([]byte(`{"output_tokens":4}`), &tail); err != nil {
+		t.Fatalf("unmarshal tail: %v", err)
+	}
+	s.mergeDelta(tail)
+	mu = s.modelUsage()
+	if mu == nil || mu.PromptTokens != 17 || mu.CacheHitTokens != 8 || mu.CompletionTokens != 4 {
+		t.Fatalf("after tail delta = %+v, want counters kept and output updated", mu)
+	}
+}

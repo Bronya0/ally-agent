@@ -17,6 +17,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -768,9 +769,22 @@ func partialTagMatch(s, tag string) int {
 	return 0
 }
 
+// openAIReasoningModelPattern matches OpenAI reasoning-series model names that
+// require max_completion_tokens instead of max_tokens. It mirrors the anchored
+// patterns of kimi-code (/^o\d(?:$|[-.])/ and /^gpt-5(?:$|[-.])/,
+// openai-legacy.ts:130-133): a family prefix without a version boundary
+// ("gpt-50", "o1preview") must NOT match, while every o-digit series ("o2",
+// "o5", ...) must. Provider-routing prefixes such as "openai/o3-mini" are
+// stripped first (pi routes by endpoint/model catalog instead of the name;
+// stripping keeps the predicate correct for gateway-style model ids).
+var openAIReasoningModelPattern = regexp.MustCompile(`^(?:o\d|gpt-5)(?:$|[-.])`)
+
 func isOpenAIReasoningModelName(model string) bool {
 	m := strings.ToLower(strings.TrimSpace(model))
-	return strings.HasPrefix(m, "o1") || strings.HasPrefix(m, "o3") || strings.HasPrefix(m, "o4") || strings.HasPrefix(m, "gpt-5")
+	if i := strings.LastIndex(m, "/"); i >= 0 && i+1 < len(m) {
+		m = m[i+1:]
+	}
+	return openAIReasoningModelPattern.MatchString(m)
 }
 
 func shouldUseMaxCompletionTokens(param, model string) bool {
@@ -1208,7 +1222,16 @@ func (a *App) openAIResponsesStreamAttempt(ctx context.Context, cfg ConfigState,
 		case "response.function_call_arguments.done":
 			ev := event.AsResponseFunctionCallArgumentsDone()
 			idx := ensureResponsesToolCall(&toolCalls, toolIndexByOutput, toolIndexByItemID, ev.OutputIndex, ev.ItemID)
-			toolCalls[idx].Function.Arguments = ev.Arguments
+			// The done event carries the authoritative full arguments, but a
+			// non-compliant relay may omit the field: an empty overwrite would
+			// wipe the accumulated deltas and the tool would silently run with
+			// "{}". Keep the accumulated value instead (kimi requires the field
+			// outright, openai-responses.ts:973-980; pi falls back to the
+			// terminal item, openai-responses-shared.ts:711). A non-empty final
+			// value always wins, exactly like pi's overwrite.
+			if ev.Arguments != "" {
+				toolCalls[idx].Function.Arguments = ev.Arguments
+			}
 			toolEventGate.emit(modelStreamEvent{ToolCalls: toolCalls})
 		case "response.output_item.done":
 			ev := event.AsResponseOutputItemDone()
@@ -1273,14 +1296,25 @@ func (a *App) openAIResponsesStreamAttempt(ctx context.Context, cfg ConfigState,
 			}
 		case "error":
 			ev := event.AsError()
-			streamErr = fmt.Errorf("%s: %s", strings.TrimSpace(ev.Code), strings.TrimSpace(ev.Message))
+			// code/message/param formatting matches kimi-code
+			// (openai-responses.ts:228-236, 1004-1012) so the text keeps the
+			// markers ("insufficient_quota", "429", "rate_limit") the retry and
+			// key classifiers match on, instead of degrading to ": message".
+			streamErr = errors.New("OpenAI Responses stream error: " + responsesErrorText(ev.Code, ev.Message, ev.Param))
 		case "response.failed":
 			ev := event.AsResponseFailed()
-			if ev.Response.Error.Message != "" {
-				streamErr = fmt.Errorf("%s: %s", ev.Response.Error.Code, ev.Response.Error.Message)
-			} else {
-				streamErr = errors.New("response failed")
+			code := string(ev.Response.Error.Code)
+			message := ev.Response.Error.Message
+			if strings.TrimSpace(code) == "" && strings.TrimSpace(message) == "" {
+				// No error object: fall back to incomplete_details.reason the way
+				// kimi (openai-responses.ts:323-350) and pi
+				// (openai-responses.ts:742-752) do.
+				if reason := ev.Response.IncompleteDetails.Reason; reason != "" {
+					code = "response.incomplete"
+					message = string(reason)
+				}
 			}
+			streamErr = errors.New("OpenAI Responses response.failed: " + responsesErrorText(code, message, ""))
 		case "response.incomplete":
 			gotTerminalEvent = true
 			ev := event.AsResponseIncomplete()
@@ -1318,6 +1352,19 @@ func (a *App) openAIResponsesStreamAttempt(ctx context.Context, cfg ConfigState,
 					streamErr = fmt.Errorf("response incomplete: %s", reason)
 				}
 			}
+		default:
+			// Unknown-but-typed events stay ignored (kimi: "unknown future event
+			// types carry no data we currently consume"). Only payloads WITHOUT a
+			// type field are examined: some gateways forward their error object
+			// that way ({"message":"..."}), which the SDK decodes with an empty
+			// Type — dropping it silently ended runs with a misleading "stream
+			// ended without terminal event". Kimi surfaces these and unpacks the
+			// nested gateway JSON (openai-responses.ts:884-892, 270-321).
+			if event.Type == "" {
+				if msg := untypedResponsesErrorMessage(rawEvent); msg != "" {
+					streamErr = errors.New(msg)
+				}
+			}
 		}
 		if streamErr != nil {
 			break
@@ -1352,6 +1399,83 @@ func (a *App) openAIResponsesStreamAttempt(ctx context.Context, cfg ConfigState,
 		Images:           images,
 		Usage:     usage,
 	}, hasOutput(), nil
+}
+
+// responsesErrorText formats a Responses error the way kimi-code does
+// (openai-responses.ts:228-236): `code: message (param: X)` with placeholders
+// for missing fields, so the text never degrades to ": msg" and always keeps
+// the code markers the retry/key classifiers match on.
+func responsesErrorText(code, message, param string) string {
+	code = strings.TrimSpace(code)
+	message = strings.TrimSpace(message)
+	if code == "" {
+		code = "unknown"
+	}
+	if message == "" {
+		message = "no message"
+	}
+	if p := strings.TrimSpace(param); p != "" {
+		return fmt.Sprintf("%s: %s (param: %s)", code, message, p)
+	}
+	return fmt.Sprintf("%s: %s", code, message)
+}
+
+// untypedResponsesErrorMessage extracts an error from a Responses stream
+// payload that carries no "type" field (some gateways forward their error
+// object that way). A nested gateway error embedded as JSON after the literal
+// "received error while streaming:" marker is unpacked first so its code
+// (numeric codes included) reaches the retry classifiers. Returns "" when the
+// payload is not an error shape.
+func untypedResponsesErrorMessage(raw []byte) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var payload struct {
+		Type    string `json:"type"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return ""
+	}
+	if payload.Type != "" || strings.TrimSpace(payload.Message) == "" {
+		return ""
+	}
+	code, message, param := "", payload.Message, ""
+	if c, m, p, ok := parseNestedGatewayStreamError(payload.Message); ok {
+		code, message, param = c, m, p
+	}
+	return "OpenAI Responses stream error: " + responsesErrorText(code, message, param)
+}
+
+// parseNestedGatewayStreamError unpacks the JSON object some gateways append
+// after the literal "received error while streaming:" marker (kimi-code
+// openai-responses.ts:270-302). Numeric codes are stringified so markers like
+// "429" survive. ok is false when the remainder is not a JSON object carrying
+// a message.
+func parseNestedGatewayStreamError(message string) (code, msg, param string, ok bool) {
+	const marker = "received error while streaming:"
+	idx := strings.Index(message, marker)
+	if idx < 0 {
+		return "", "", "", false
+	}
+	var nested struct {
+		Code    any    `json:"code"`
+		Message string `json:"message"`
+		Param   string `json:"param"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(message[idx+len(marker):])), &nested); err != nil {
+		return "", "", "", false
+	}
+	if strings.TrimSpace(nested.Message) == "" {
+		return "", "", "", false
+	}
+	switch v := nested.Code.(type) {
+	case string:
+		code = v
+	case float64:
+		code = fmt.Sprintf("%v", v)
+	}
+	return code, nested.Message, nested.Param, true
 }
 
 const openAIResponsesPromptCacheAnchorText = "<ally-prompt-cache-boundary/>"
@@ -1395,7 +1519,15 @@ func buildOpenAIResponsesRequest(cfg ConfigState, model string, messages []legac
 	// type is string-backed, so the normalized selection is sent unchanged,
 	// including xhigh and max.
 	if effort := reasoningEffortForAdapter(apiFormatOpenAIResponses, cfg.ReasoningEffort); effort != "" {
-		body.Reasoning = oa.ReasoningParam{Effort: oa.ReasoningEffort(effort)}
+		// Pair reasoning.effort with summary:"auto" — both kimi-code
+		// (openai-responses.ts:1116-1120) and pi (openai-responses.ts:319-335)
+		// do: without an explicit summary request the Responses API emits no
+		// reasoning_summary_text deltas, leaving the thinking panel empty even
+		// though the model reasoned.
+		body.Reasoning = oa.ReasoningParam{
+			Effort:  oa.ReasoningEffort(effort),
+			Summary: oa.ReasoningSummaryAuto,
+		}
 	}
 	if strings.TrimSpace(instructions) != "" {
 		body.Instructions = oa.String(instructions)
@@ -1612,6 +1744,9 @@ func (a *App) streamAnthropicMessages(ctx context.Context, cfg ConfigState, mode
 		emitModelStreamEvent(onEvent, event)
 	})
 	var usage *modelUsage
+	// usageState carries the raw Anthropic counters across message_start /
+	// message_delta events (see anthropicUsageState).
+	usageState := &anthropicUsageState{}
 	var stopReason string
 	var stopSequence string
 
@@ -1623,6 +1758,7 @@ func (a *App) streamAnthropicMessages(ctx context.Context, cfg ConfigState, mode
 		toolCalls = toolCalls[:0]
 		toolIndexByBlock = map[int64]int{}
 		usage = nil
+		usageState = &anthropicUsageState{}
 		stopReason = ""
 		stopSequence = ""
 		stream := client.Messages.NewStreaming(ctx, params)
@@ -1631,10 +1767,10 @@ func (a *App) streamAnthropicMessages(ctx context.Context, cfg ConfigState, mode
 			switch event.Type {
 			case "message_start":
 				ev := event.AsMessageStart()
-				usage = modelUsageFromAnthropic(ev.Message.Usage)
+				usageState.mergeStart(ev.Message.Usage)
 			case "message_delta":
 				ev := event.AsMessageDelta()
-				usage = mergeAnthropicUsage(usage, ev.Usage)
+				usageState.mergeDelta(ev.Usage)
 				stopReason = string(ev.Delta.StopReason)
 				stopSequence = ev.Delta.StopSequence
 			case "content_block_start":
@@ -1729,6 +1865,7 @@ func (a *App) streamAnthropicMessages(ctx context.Context, cfg ConfigState, mode
 		}
 		return nil, streamErr
 	}
+	usage = usageState.modelUsage()
 	for i := range toolCalls {
 		if strings.TrimSpace(toolCalls[i].Function.Arguments) == "" {
 			toolCalls[i].Function.Arguments = "{}"
@@ -3063,28 +3200,67 @@ func modelUsageFromResponsesEvent(raw []byte) *modelUsage {
 	return modelUsageFromResponseTokenCounts(input, output, hit, miss)
 }
 
-func modelUsageFromAnthropic(usage anthropic.Usage) *modelUsage {
-	input := usage.InputTokens + usage.CacheCreationInputTokens + usage.CacheReadInputTokens
-	output := usage.OutputTokens
-	if input <= 0 && output <= 0 {
+// anthropicUsageState accumulates the raw Anthropic usage counters across
+// message_start / message_delta events. message_delta.usage fields are
+// cumulative: a present field overwrites, an absent field keeps the previous
+// value — never add (that would double count). Kimi-code overwrites each
+// present field (anthropic.ts:872-888) and pi keeps an accumulator and
+// recomputes (anthropic-messages.ts:716-743); keeping the raw counters here
+// lets every field merge by presence even though the shared modelUsage only
+// stores derived hit/miss totals. Presence uses the SDK's respjson.Field
+// because a Go zero value cannot distinguish "0 tokens" from "field absent".
+type anthropicUsageState struct {
+	seen          bool
+	input         int64
+	output        int64
+	cacheRead     int64
+	cacheCreation int64
+}
+
+func (s *anthropicUsageState) mergeStart(usage anthropic.Usage) {
+	if s == nil {
+		return
+	}
+	s.seen = true
+	s.input = usage.InputTokens
+	s.output = usage.OutputTokens
+	s.cacheRead = usage.CacheReadInputTokens
+	s.cacheCreation = usage.CacheCreationInputTokens
+}
+
+func (s *anthropicUsageState) mergeDelta(usage anthropic.MessageDeltaUsage) {
+	if s == nil {
+		return
+	}
+	s.seen = true
+	if usage.OutputTokens > 0 {
+		s.output = usage.OutputTokens
+	}
+	if usage.JSON.InputTokens.Valid() {
+		s.input = usage.InputTokens
+	}
+	if usage.JSON.CacheReadInputTokens.Valid() {
+		s.cacheRead = usage.CacheReadInputTokens
+	}
+	if usage.JSON.CacheCreationInputTokens.Valid() {
+		s.cacheCreation = usage.CacheCreationInputTokens
+	}
+}
+
+func (s *anthropicUsageState) modelUsage() *modelUsage {
+	if s == nil || !s.seen {
+		return nil
+	}
+	input := s.input + s.cacheCreation + s.cacheRead
+	if input <= 0 && s.output <= 0 {
 		return nil
 	}
 	return &modelUsage{
 		PromptTokens:     int(input),
-		CompletionTokens: int(output),
-		CacheHitTokens:   int(usage.CacheReadInputTokens),
-		CacheMissTokens:  int(usage.InputTokens + usage.CacheCreationInputTokens),
+		CompletionTokens: int(s.output),
+		CacheHitTokens:   int(s.cacheRead),
+		CacheMissTokens:  int(s.input + s.cacheCreation),
 	}
-}
-
-func mergeAnthropicUsage(current *modelUsage, usage anthropic.MessageDeltaUsage) *modelUsage {
-	if current == nil {
-		current = &modelUsage{}
-	}
-	if usage.OutputTokens > 0 {
-		current.CompletionTokens = int(usage.OutputTokens)
-	}
-	return current
 }
 
 // mergeRepeatedStringDelta merges one non-empty streamed id/name delta into
