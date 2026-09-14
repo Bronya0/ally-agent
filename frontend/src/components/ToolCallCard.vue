@@ -33,7 +33,7 @@ Public License v3. See the LICENSE file for details.
       <span v-if="displayDuration" class="tool-duration">{{ displayDuration }}</span>
     </div>
 
-    <div v-if="msg.kind === 'edit' && msg.status !== 'error' && msg.editEntries?.length" class="edit-file-groups">
+    <div v-if="msg.kind === 'edit' && msg.status !== 'error' && msg.editEntries?.length" :class="{ 'tool-body-swap': !isBodyLive }" class="edit-file-groups">
       <div v-for="(entry, ei) in msg.editEntries" :key="entry.path || ei" class="edit-file-group">
         <div v-if="msg.editEntries.length > 1" class="edit-file-header">
           <span class="edit-file-name">{{ entry.path || $t('tools.file', { index: ei + 1 }) }}</span>
@@ -48,6 +48,7 @@ Public License v3. See the LICENSE file for details.
     </div>
     <DiffView
       v-else-if="msg.kind === 'edit' && hasEditPreview(msg)"
+      :class="{ 'tool-body-swap': !isBodyLive }"
       layout="split"
       :diff-text="editDiffText(msg)"
       :old-text="msg.editOldString"
@@ -67,6 +68,7 @@ Public License v3. See the LICENSE file for details.
     <pre v-if="msg.expanded && msg.editChangedLinesBlock" class="edit-changed-lines-block">{{ msg.editChangedLinesBlock }}</pre>
     <CodeView
       v-else-if="msg.kind === 'create' && msg.status !== 'error'"
+      :class="{ 'tool-body-swap': !isBodyLive }"
       :code="msg.codeContent || ''"
       :file-path="msg.editFilePath || ''"
       :collapsed="isCreatePreview(msg)"
@@ -75,11 +77,12 @@ Public License v3. See the LICENSE file for details.
     />
     <TerminalOutputView
       v-else-if="msg.kind === 'command' && msg.status !== 'error'"
+      :class="{ 'tool-body-swap': !isBodyLive }"
       :text="msg.body || ''"
       :collapsed="!msg.expanded"
       :max-lines="COMMAND_PREVIEW_LINES"
     />
-    <pre v-else-if="msg.body && msg.status !== 'error' && msg.kind !== 'edit' && msg.kind !== 'read' && msg.kind !== 'remote_read' && msg.kind !== 'calculate' && msg.kind !== 'grep' && msg.kind !== 'plan' && (msg.kind !== 'list' || msg.expanded)" ref="bodyPreRef" :class="['tool-body', { 'fixed-scroll': isFixedKind(msg.kind), 'body-preview': isBodyPreview(msg), 'tail-default': isServiceReadResult(msg), 'scroll-enabled': bodyScrollEnabled && isScrollableBody(msg) }]" @click.stop="handleBodyClick(msg)">{{ toolBodyText(msg) }}</pre>
+    <pre v-else-if="msg.body && msg.status !== 'error' && msg.kind !== 'edit' && msg.kind !== 'read' && msg.kind !== 'remote_read' && msg.kind !== 'calculate' && msg.kind !== 'grep' && msg.kind !== 'plan' && (msg.kind !== 'list' || msg.expanded)" ref="bodyPreRef" :class="['tool-body', { 'fixed-scroll': isFixedKind(msg.kind), 'body-preview': isBodyPreview(msg), 'tail-default': isServiceReadResult(msg), 'scroll-enabled': bodyScrollEnabled && isScrollableBody(msg), 'tool-body-swap': !isBodyLive }]" @click.stop="handleBodyClick(msg)">{{ toolBodyText(msg) }}</pre>
     <div v-if="isValidationWarning(msg)" class="edit-warning-list validation-warning-list" role="status" aria-live="polite">
       <div class="edit-warning validation-warning" :title="msg.validation">
         <span class="validation-warning-label">{{ $t('tools.validationWarning') }}</span>
@@ -154,6 +157,11 @@ const displayDuration = computed(() => {
   if (NO_DURATION_KINDS.has(props.msg.kind) || NO_DURATION_NAMES.has(props.msg.name)) return '';
   return props.msg.durationText || '';
 });
+
+// 流式期间卡片正体显示的是累积的原始参数（live），tool:result 到达后换成结果
+// 视图（final）。切换时只加一个状态类触发一次性淡入——不重建元素，因此不会
+// 打断内部状态（滚动位置、复制、选中），也不会给将来给这些视图加局部状态埋雷。
+const isBodyLive = computed(() => props.msg?.status === 'running');
 
 watch(
   () => props.msg.kind === 'wait' && props.msg.status === 'running',

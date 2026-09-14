@@ -826,7 +826,6 @@ hljs.registerLanguage('markdown', markdownLang);
 hljs.registerLanguage('md', markdownLang);
 
 
-let markdownRenderStreaming = false;
 let mermaidRenderScheduled = false;
 let mermaidRenderSequence = 0;
 let mermaidObserver = null;
@@ -859,12 +858,10 @@ function renderMermaidFence(code, spec) {
 }
 
 function renderMarkdownWithMode(source, streaming) {
-  markdownRenderStreaming = streaming;
-  try {
-    return markdown.render(source);
-  } finally {
-    markdownRenderStreaming = false;
-  }
+  // streaming 经 markdown-it 的 env 传入（规则的第 4 个参数），不再用模块级
+  // 可变标志：渲染会被流式尾部以每帧几十次的频率调用，共享可变状态一旦被
+  // 嵌套或异步调用就会串味。
+  return markdown.render(source, { streaming: streaming === true });
 }
 
 const markdown = new MarkdownIt({
@@ -893,8 +890,9 @@ markdown.renderer.rules.code_inline = (tokens, idx, options, env, self) => {
 
 markdown.renderer.rules.fence = (tokens, idx, options, env, self) => {
   const token = tokens[idx];
+  const streaming = env?.streaming === true;
   const diagramSpec = mermaidFenceSpec(token.info);
-  if (diagramSpec && !markdownRenderStreaming) {
+  if (diagramSpec && !streaming) {
     const renderedDiagram = renderMermaidFence(token.content, diagramSpec);
     if (renderedDiagram) return `${renderedDiagram}\n`;
   }
@@ -903,7 +901,7 @@ markdown.renderer.rules.fence = (tokens, idx, options, env, self) => {
     return `<pre class="ascii-banner"><code>${markdown.utils.escapeHtml(token.content)}</code></pre>\n`;
   }
   try {
-    const highlighted = highlightFence(lang, token.content);
+    const highlighted = highlightFence(lang, token.content, streaming);
     if (highlighted === null) {
       return `${renderHighlightedCodeBlock(token.content, markdown.utils.escapeHtml(token.content), '')}\n`;
     }
@@ -926,11 +924,10 @@ const FENCE_HIGHLIGHT_CACHE_MAX_CHARS = 8000;
 
 // 流式渲染期间跳过繁重的 highlight.js 正则语法高亮，保持纯文本显示；
 // 流式结束后的单次全量渲染自动恢复高亮，避免每帧对增长代码块重复分词消耗 CPU 与电量。
-function highlightFence(lang, content) {
-  if (markdownRenderStreaming) return null;
+function highlightFence(lang, content, streaming) {
+  if (streaming) return null;
   const highlightLang = isShellLanguage(lang) ? 'bash' : lang;
   const knownLang = Boolean(highlightLang && hljs.getLanguage(highlightLang));
-  if (!knownLang && markdownRenderStreaming) return null;
   // 流式 flush 与最终渲染都读写缓存：流式期间已闭合 fence 的内容稳定，
   // 第二帧起命中的正是上一帧的结果；活跃增长块每帧 key 不同，只会多占
   // 一条缓存位置，不会污染其他条目的命中。

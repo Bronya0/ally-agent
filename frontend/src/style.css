@@ -2969,6 +2969,21 @@ code, pre {
   margin-bottom: 0;
 }
 
+/* 流式正文按块切成两个容器渲染（见 components/StreamingMarkdownBody.vue）：
+   stream-committed 是已完成的块，stream-tail 是当前未完成的那一块。两个容器
+   对布局透明——只在整条消息的首尾处清零外边距，接缝处保留块与块之间的正常
+   间距，否则段落之间会被吃掉间距、挤成一坨。（上面两条直接子选择器现在匹配
+   到的是容器本身，字体块在容器里面，所以这里必须补一层。） */
+.message-body > .stream-committed:first-child > :first-child,
+.message-body > .stream-tail:first-child > :first-child {
+  margin-top: 0;
+}
+
+.message-body > .stream-committed:last-child > :last-child,
+.message-body > .stream-tail:last-child > :last-child {
+  margin-bottom: 0;
+}
+
 .markdown-body h1,
 .markdown-body h2,
 .markdown-body h3,
@@ -3682,6 +3697,37 @@ code, pre {
   border-radius: 4px;
   content-visibility: auto;
   contain-intrinsic-size: 42px;
+}
+
+/* ── Enter animations ──
+   新卡片/新消息只在元素首次插入时播一次淡入上浮：只用 transform/opacity
+   （合成器属性、不参与布局），所以不会扰动流式期间的自动贴底，也不会和
+   content-visibility 的尺寸占位打架。元素被复用（v-memo + 稳定 key）时不会
+   重播；工具卡正体从“原始参数”切到“结果视图”时由 .tool-body-swap 接管。
+   注意：动画期间元素会成为 containing block，160ms 内不要指望内部有
+   position:fixed 浮层能相对视口定位（本项目浮层都 teleport 到 body）。 */
+@keyframes ally-enter-rise {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: none; }
+}
+
+.rich-tool-card,
+.messages .message {
+  animation: ally-enter-rise 160ms ease-out;
+}
+
+/* 工具卡正体“流式原始参数 → 结果视图”的一次性淡入：由 ToolCallCard 在最终态
+   加类触发，元素本身不重建（保留滚动位置/复制/选中状态）。 */
+.tool-body-swap {
+  animation: ally-enter-rise 160ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rich-tool-card,
+  .messages .message,
+  .tool-body-swap {
+    animation: none;
+  }
 }
 
 .messages .message:has(+ .rich-tool-card) {
