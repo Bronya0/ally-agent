@@ -1533,6 +1533,9 @@ function modelSnapshotFrom(source) {
     contextWindow: source?.contextWindow || 1000000,
     tokenParam: source?.tokenParam || 'auto',
     reasoningTag: String(source?.reasoningTag || '').trim() || 'reasoning_content',
+    // 视觉能力随快照下发（目录给的三态值）：undefined = 未知，Go 侧按未知处理并
+    // 原样发送图片；只有明确 false 才会在请求构造时把图片换成文字占位。
+    visionCapable: typeof source?.visionCapable === 'boolean' ? source.visionCapable : undefined,
     reasoningEffort: normalizeReasoningEffort(source?.reasoningEffort),
     apiKeys: keys,
     apiKey: keys[0] || '',

@@ -431,11 +431,6 @@ func exactMatchDiagnosticsAtMatches(content, oldText string, changeIndex, count 
 	return lines, details
 }
 
-func exactMatchDiagnostics(content, oldText string, changeIndex, count int) ([]int, *MatchErrorDetails) {
-	matches, _ := scanExactMatches(content, oldText, maxMatchDiagnosticCandidates)
-	return exactMatchDiagnosticsAtMatches(content, oldText, changeIndex, count, matches)
-}
-
 func utf8Window(content string, start, end, focusStart, focusEnd, limit int) (string, bool, bool) {
 	if start < 0 {
 		start = 0
@@ -476,11 +471,6 @@ func utf8Window(content string, start, end, focusStart, focusEnd, limit int) (st
 		windowEnd--
 	}
 	return content[windowStart:windowEnd], windowStart > start, windowEnd < end
-}
-
-func matchCandidate(content string, start, end int) MatchCandidate {
-	line := 1 + strings.Count(content[:start], "\n")
-	return matchCandidateAtLine(content, start, end, line)
 }
 
 func matchCandidateAtLine(content string, start, end, line int) MatchCandidate {
@@ -547,11 +537,6 @@ func boundMatchErrorDetails(details *MatchErrorDetails) {
 		candidate.PreviewTruncatedBefore = candidate.PreviewTruncatedBefore || before
 		candidate.PreviewTruncatedAfter = candidate.PreviewTruncatedAfter || after
 	}
-}
-
-func exactMatchErrorDetails(content, oldText string, changeIndex, count int) *MatchErrorDetails {
-	_, details := exactMatchDiagnostics(content, oldText, changeIndex, count)
-	return details
 }
 
 type indentationMatch struct {

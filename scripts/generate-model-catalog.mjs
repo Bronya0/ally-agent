@@ -48,6 +48,12 @@ const providers = Object.values(source)
           contextWindow: Number(model.limit?.context) || 0,
           maxTokens: Number(model.limit?.output) || 0,
           reasoningTag: String(interleaved?.field || '').trim(),
+          // visionCapable 只在来源声明了输入模态时才有值：true/false 是"已知能/
+          // 不能看图"，键缺失才是"未知"（消费方按未知处理、不得降级）。生成器
+          // 此前丢掉了这个信号，运行期只能靠模型名猜。
+          visionCapable: Array.isArray(model.modalities?.input)
+            ? model.modalities.input.includes('image')
+            : undefined,
         };
       })
       .filter((model) => model.id)

@@ -15,6 +15,8 @@ import (
 	"strings"
 	"testing"
 
+	"ally-dev/internal/tools/toolcall"
+
 	openai "github.com/sashabaranov/go-openai"
 )
 
@@ -274,7 +276,7 @@ func TestHistoryLoadDropsTruncatedArgsMarker(t *testing.T) {
 	for _, m := range loaded {
 		if m.Role == openai.ChatMessageRoleAssistant {
 			for _, call := range m.ToolCalls {
-				if isTruncatedArgsMarker([]byte(call.Function.Arguments)) {
+				if toolcall.IsTruncatedArguments(call.Function.Arguments) {
 					t.Fatalf("truncated-args marker must be dropped on load: %#v", call)
 				}
 			}
@@ -498,7 +500,6 @@ func TestSessionIndexUnreadableDegradesToEmpty(t *testing.T) {
 	}
 }
 
-
 func TestNormalizeSessionIndexEntryClampsFirstPrompt(t *testing.T) {
 	longPrompt := strings.Repeat("很长的提问字符", 200) // > maxSessionIndexFirstPromptChars runes
 	entry := normalizeSessionIndexEntry(SessionIndexEntry{
@@ -528,4 +529,73 @@ func mustJSON(value any) []byte {
 		panic(err)
 	}
 	return data
+}
+
+// TestDiskProfileDropsReasoningAndToolOutput pins the persistence profile: the
+// disk copy keeps the conversation and the tool-call structure but drops the
+// reasoning text and the tool output, while the in-memory profile keeps both
+// verbatim (a running session replays it as-is).
+func TestDiskProfileDropsReasoningAndToolOutput(t *testing.T) {
+	bigOutput := strings.Repeat("file contents ", 400)
+	// Tool arguments must stay valid JSON: anything else is treated as a
+	// truncated call and stripped by the repair pass.
+	readArgs := string(mustJSON(map[string]string{"path": "a.go"}))
+	messages := []openai.ChatCompletionMessage{
+		{Role: openai.ChatMessageRoleUser, Content: "read the file"},
+		{Role: openai.ChatMessageRoleAssistant, ReasoningContent: "I should call read", ToolCalls: []openai.ToolCall{{
+			ID:       "call_1",
+			Type:     openai.ToolTypeFunction,
+			Function: openai.FunctionCall{Name: "read", Arguments: readArgs},
+		}}},
+		{Role: openai.ChatMessageRoleTool, ToolCallID: "call_1", Content: bigOutput},
+		{Role: openai.ChatMessageRoleAssistant, Content: "done", ReasoningContent: "final thoughts"},
+	}
+
+	disk := sanitizeHistoryMessagesForDisk(messages)
+	if len(disk) != len(messages) {
+		t.Fatalf("the disk profile must keep the message structure, got %d of %d messages", len(disk), len(messages))
+	}
+	if disk[1].ReasoningContent != "" || disk[3].ReasoningContent != "" {
+		t.Fatalf("reasoning text must not be persisted: %+v", disk)
+	}
+	if disk[2].Content != toolResultDiskPlaceholder {
+		t.Fatalf("tool output = %q, want the placeholder", disk[2].Content)
+	}
+	// The call itself must survive so the restored model can re-run the tool.
+	if len(disk[1].ToolCalls) != 1 || disk[1].ToolCalls[0].Function.Name != "read" || disk[1].ToolCalls[0].Function.Arguments != readArgs || disk[1].ToolCalls[0].ID != "call_1" {
+		t.Fatalf("tool call must survive for re-running: %+v", disk[1].ToolCalls)
+	}
+	if disk[0].Content != "read the file" || disk[3].Content != "done" {
+		t.Fatalf("conversation text must survive: %+v", disk)
+	}
+
+	memory := sanitizeHistoryMessages(messages)
+	if memory[1].ReasoningContent != "I should call read" {
+		t.Fatalf("the in-memory profile must keep the reasoning text: %+v", memory[1])
+	}
+	if memory[2].Content != bigOutput {
+		t.Fatal("the in-memory profile must keep the tool output verbatim")
+	}
+}
+
+// TestDiskProfileKeepsToolPairing: dropping tool output must not orphan the tool
+// call, otherwise the restored history would be repaired by deleting the call.
+func TestDiskProfileKeepsToolPairing(t *testing.T) {
+	commandArgs := string(mustJSON(map[string]string{"command": "echo hi"}))
+	messages := []openai.ChatCompletionMessage{
+		{Role: openai.ChatMessageRoleUser, Content: "run"},
+		{Role: openai.ChatMessageRoleAssistant, ToolCalls: []openai.ToolCall{{
+			ID:       "call_1",
+			Type:     openai.ToolTypeFunction,
+			Function: openai.FunctionCall{Name: "command", Arguments: commandArgs},
+		}}},
+		{Role: openai.ChatMessageRoleTool, ToolCallID: "call_1", Content: "hi"},
+	}
+	disk := sanitizeHistoryMessagesForDisk(messages)
+	if len(disk) != 3 {
+		t.Fatalf("tool round must survive with its pairing intact, got %d messages", len(disk))
+	}
+	if len(disk[1].ToolCalls) != 1 || disk[2].Role != openai.ChatMessageRoleTool {
+		t.Fatalf("pairing broken by the disk profile: %+v", disk)
+	}
 }

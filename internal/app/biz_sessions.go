@@ -21,6 +21,8 @@ import (
 	"strings"
 	"time"
 
+	"ally-dev/internal/tools/toolcall"
+
 	openai "github.com/sashabaranov/go-openai"
 )
 
@@ -874,7 +876,11 @@ func (a *App) saveHistory(sessionID string, messages []openai.ChatCompletionMess
 	// recovery replays text-only history.
 	inMemory := sanitizeHistoryMessages(messages)
 	filtered := a.redactSSHCredentialMessages(inMemory)
+	// Resolve the session's provider measurement against the stored conversation
+	// so a footer poll between runs reports the measured request size instead of
+	// a fresh text estimate. No lock is held here: the anchor lookup takes a.mu.
 	breakdown := computeLiveBreakdown(filtered)
+	a.finalizeSessionBreakdown(sessionID, &breakdown, filtered)
 	a.mu.Lock()
 	a.histories[sessionID] = cloneChatMessages(filtered)
 	a.liveBreakdown[sessionID] = breakdown
@@ -932,11 +938,18 @@ func (a *App) restoreSavedHistoryBreakdown(sessionID string) {
 	if history == nil {
 		history = cloneChatMessages(a.loadHistoryLocked(sessionID))
 	}
+	// Read the anchor under the lock already held instead of calling
+	// contextAnchorFor: a.mu is not reentrant, so a method call here would
+	// deadlock the process.
+	anchor := a.contextAnchors[sessionID]
 	if len(history) == 0 {
 		delete(a.liveBreakdown, sessionID)
-	} else {
-		a.liveBreakdown[sessionID] = computeLiveBreakdown(history)
+		a.mu.Unlock()
+		return
 	}
+	breakdown := computeLiveBreakdown(history)
+	applyContextAnchor(&breakdown, history, anchor)
+	a.liveBreakdown[sessionID] = breakdown
 	a.mu.Unlock()
 }
 
@@ -1017,20 +1030,42 @@ func (a *App) loadHistoryLocked(sessionID string) []openai.ChatCompletionMessage
 	return messages
 }
 
+// historyProfile selects how much of a message list a consumer keeps.
+type historyProfile int
+
+const (
+	// historyProfileMemory keeps the full model-facing history: a running session
+	// replays it verbatim, so nothing may be trimmed.
+	historyProfileMemory historyProfile = iota
+	// historyProfileDisk is the persistence profile used by saveHistory. It drops
+	// what a restarted session cannot use: image payloads, the reasoning text of
+	// turns whose tool loop is over, and the tool output itself (stale file
+	// contents and command output dominate the file, and the model can re-run a
+	// tool on demand). Message structure — roles, the tool_call/tool_result
+	// pairing, and the call arguments needed to re-run — stays intact so the
+	// restored history remains a valid protocol sequence.
+	historyProfileDisk
+)
+
+// toolResultDiskPlaceholder replaces persisted tool output in the disk profile.
+// It keeps the message non-empty (validators reject an empty tool message) and
+// tells the restored model how to get the data back.
+const toolResultDiskPlaceholder = "(tool result not saved in history; re-run the tool to see the output again)"
+
 func sanitizeHistoryMessages(messages []openai.ChatCompletionMessage) []openai.ChatCompletionMessage {
-	return sanitizeHistoryMessagesOpts(messages, false)
+	return sanitizeHistoryMessagesFor(messages, historyProfileMemory)
 }
 
 // sanitizeHistoryMessagesForDisk is the persistence variant: images are not
 // persisted (base64 payloads would bloat disk history and restart replay
 // would re-send them), so attachment images collapse to their text and read
-// image injections are dropped wholesale. In-memory history keeps images so
-// later runs in the same process still see them.
+// image injections are dropped wholesale. See historyProfileDisk for the rest.
 func sanitizeHistoryMessagesForDisk(messages []openai.ChatCompletionMessage) []openai.ChatCompletionMessage {
-	return sanitizeHistoryMessagesOpts(messages, true)
+	return sanitizeHistoryMessagesFor(messages, historyProfileDisk)
 }
 
-func sanitizeHistoryMessagesOpts(messages []openai.ChatCompletionMessage, flattenImages bool) []openai.ChatCompletionMessage {
+func sanitizeHistoryMessagesFor(messages []openai.ChatCompletionMessage, profile historyProfile) []openai.ChatCompletionMessage {
+	flattenImages := profile == historyProfileDisk
 	filtered := make([]openai.ChatCompletionMessage, 0, len(messages))
 	for _, original := range messages {
 		// Synthesized image-injection messages from the read tool survive in
@@ -1053,6 +1088,16 @@ func sanitizeHistoryMessagesOpts(messages []openai.ChatCompletionMessage, flatte
 			m.Content = textFromMultiContent(m.MultiContent)
 			m.MultiContent = nil
 		}
+		if profile == historyProfileDisk {
+			// Reasoning text is provider-protocol replay state for the tool loop
+			// that produced it (DeepSeek/Kimi pass it back inside the loop,
+			// Anthropic signs it). A restarted process starts a new loop, so the
+			// old thoughts only cost bytes and input tokens.
+			m.ReasoningContent = ""
+			if m.Role == openai.ChatMessageRoleTool {
+				m.Content = toolResultDiskPlaceholder
+			}
+		}
 		if strings.TrimSpace(m.Content) == "" && len(m.MultiContent) == 0 && len(m.ToolCalls) == 0 && m.Role != openai.ChatMessageRoleTool {
 			continue
 		}
@@ -1067,7 +1112,7 @@ func sanitizeHistoryMessagesOpts(messages []openai.ChatCompletionMessage, flatte
 		// so repair them on load as well.
 		for i := range m.ToolCalls {
 			m.ToolCalls[i].Function.Name = collapseRepeatedName(m.ToolCalls[i].Function.Name)
-			m.ToolCalls[i].Function.Arguments = repairTruncatedToolCallArguments(m.ToolCalls[i].Function.Arguments)
+			m.ToolCalls[i].Function.Arguments = toolcall.RepairTruncatedArguments(m.ToolCalls[i].Function.Arguments)
 		}
 		// 丢弃拼接工具名的 tool_call 和截断参数标记的 tool_call：
 		// 两者都不会通过服务商校验，repairDanglingToolCalls 会自动清除
@@ -1078,7 +1123,7 @@ func sanitizeHistoryMessagesOpts(messages []openai.ChatCompletionMessage, flatte
 				if isConcatenatedKnownToolNames(call.Function.Name) {
 					continue
 				}
-				if isTruncatedArgsMarker([]byte(call.Function.Arguments)) {
+				if toolcall.IsTruncatedArguments(call.Function.Arguments) {
 					continue
 				}
 				kept = append(kept, call)
@@ -1294,6 +1339,13 @@ func (a *App) TruncateSessionHistory(req TruncateSessionHistoryRequest) (int, er
 	}
 	truncated := messages[:cut]
 
+	// The discarded turns may have left provider reasoning artifacts (thinking
+	// signatures, encrypted reasoning) in the replay stash; they no longer belong
+	// to any message of the history.
+	a.reasoningStash.clearSession(sessionID)
+	// The conversation was rewritten: the recorded provider measurement covered
+	// turns that no longer exist.
+	a.clearContextAnchor(sessionID)
 	a.saveHistory(sessionID, truncated)
 	return len(truncated), nil
 }

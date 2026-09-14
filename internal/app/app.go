@@ -27,6 +27,7 @@ import (
 
 	"ally-dev/internal/tools/grep"
 	toolshared "ally-dev/internal/tools/shared"
+	"ally-dev/internal/tools/toolcall"
 
 	openai "github.com/sashabaranov/go-openai"
 )
@@ -96,10 +97,12 @@ const (
 	backgroundImageMaxBytes  = 12 * 1024 * 1024
 	defaultBackgroundOpacity = 0.15
 	// defaultCompactThreshold is the auto-compaction trigger as a fraction of
-	// the context window (0.4 = 40%). Treated as "use default" when the
+	// the context window (0.6 = 60%). Treated as "use default" when the
 	// stored value is zero, so legacy config.json without the field migrates
-	// to the new default transparently.
-	defaultCompactThreshold = 0.4
+	// to the default transparently. Keep it in sync with the frontend default
+	// (frontend/src/utils/config.mjs): a request that omits the field must
+	// land on the same trigger the Settings UI displays.
+	defaultCompactThreshold = 0.6
 	// defaultMessageFontSize is the default font size (px) for AI message
 	// bodies and the welcome greeting. Zero means "use default" so legacy
 	// config.json without the field migrates transparently.
@@ -204,8 +207,6 @@ type gitStatusCacheEntry struct {
 	status      GitStatus
 	generatedAt time.Time
 }
-
-// contextStaticCacheEntry caches a ContextBreakdown keyed by config+skills+version.
 
 type skillListCacheEntry struct {
 	skills      []SkillDefinition
@@ -354,6 +355,13 @@ type App struct {
 	// Updated by runChat each agent step. Maps sessionID → ContextBreakdown.
 	liveBreakdown map[string]ContextBreakdown
 
+	// contextAnchors holds each session's provider-reported context size: the
+	// prompt+completion tokens of its most recent request plus the conversation
+	// messages that request covered. Every other figure in this file is a text
+	// estimate; the anchor replaces the estimate for everything the provider
+	// actually counted (see resolveContextAnchor). Guarded by mu.
+	contextAnchors map[string]contextAnchor
+
 	// workspaceTokenUsage accumulates model-reported usage for this app run.
 	// Maps normalized workspace path → WorkspaceTokenUsage.
 	workspaceTokenUsage map[string]WorkspaceTokenUsage
@@ -421,6 +429,7 @@ func NewApp() *App {
 		workspaceCaches:     newWorkspaceCacheHolder(),
 		httpLastHost:        map[string]time.Time{},
 		liveBreakdown:       map[string]ContextBreakdown{},
+		contextAnchors:       map[string]contextAnchor{},
 		workspaceTokenUsage: map[string]WorkspaceTokenUsage{},
 		services:            map[string]*managedService{},
 		keyCooldowns:        map[string]time.Time{},
@@ -433,19 +442,6 @@ func NewApp() *App {
 	// Only one App instance exists per process; there is no teardown.
 	aGlobalApp = a
 	return a
-}
-
-func clampInt(value, minValue, maxValue int) int {
-	if maxValue < minValue {
-		return maxValue
-	}
-	if value < minValue {
-		return minValue
-	}
-	if value > maxValue {
-		return maxValue
-	}
-	return value
 }
 
 func minInt(a, b int) int {
@@ -470,6 +466,13 @@ type ModelConfig struct {
 	MaxTokens     int      `json:"maxTokens"`
 	ContextWindow int      `json:"contextWindow"`
 	ReasoningTag  string   `json:"reasoningTag,omitempty"`
+	// VisionCapable reports whether the model accepts image input. Tri-state on
+	// purpose: nil ("unknown") keeps today's behaviour and sends images as-is;
+	// false downgrades them to a text placeholder before the request is built
+	// (pi: transform-messages.ts downgradeUnsupportedImages, gated on
+	// model.input). The model catalog fills it where the provider declares its
+	// input modalities.
+	VisionCapable *bool `json:"visionCapable,omitempty"`
 	// TokenParam selects which token-limit field the OpenAI Chat adapter
 	// sends: "auto"/"max_tokens" -> max_tokens (broadest compatibility),
 	// "max_completion_tokens" -> max_completion_tokens (official OpenAI
@@ -519,6 +522,9 @@ type ConfigState struct {
 	ProxyNoProxy        string `json:"proxyNoProxy,omitempty"`
 	UserAgent           string `json:"userAgent,omitempty"`
 	ReasoningTag        string `json:"reasoningTag,omitempty"`
+	// VisionCapable mirrors ModelConfig.VisionCapable for the effective request
+	// config; see that field for the tri-state contract.
+	VisionCapable   *bool  `json:"visionCapable,omitempty"`
 	ReasoningEffort     string `json:"reasoningEffort,omitempty"`
 	// CustomHeaders mirrors the active model entry's extra HTTP headers
 	// (see ModelConfig.CustomHeaders); SwitchModel keeps the two in sync.
@@ -1685,7 +1691,12 @@ func (a *App) releaseSession(sessionID string, deleteHistory bool) error {
 	delete(a.sessionToolsets, sessionID)
 	delete(a.sessionWorkspaces, sessionID)
 	delete(a.sessionModelConfigs, sessionID)
+	delete(a.contextAnchors, sessionID)
 	a.mu.Unlock()
+
+	// Provider reasoning artifacts (thinking signatures, encrypted reasoning)
+	// belong to turns that no longer exist once the session is released.
+	a.reasoningStash.clearSession(sessionID)
 
 	a.subRunsMu.Lock()
 	for id, run := range a.subRuns {
@@ -1728,6 +1739,7 @@ type sessionModelConfig struct {
 	customHeaders map[string]string
 	tokenParam    string
 	reasoningTag  string
+	visionCapable *bool
 }
 
 // sessionModelConfigFrom snapshots the model-facing fields of cfg. Values are
@@ -1746,6 +1758,7 @@ func sessionModelConfigFrom(cfg ConfigState) sessionModelConfig {
 		customHeaders: normalizeCustomHeaders(cfg.CustomHeaders),
 		tokenParam:    cfg.TokenParam,
 		reasoningTag:  cfg.ReasoningTag,
+		visionCapable: cfg.VisionCapable,
 	}
 }
 
@@ -1770,6 +1783,7 @@ func (m sessionModelConfig) apply(base ConfigState) ConfigState {
 	out.CustomHeaders = m.customHeaders
 	out.TokenParam = m.tokenParam
 	out.ReasoningTag = m.reasoningTag
+	out.VisionCapable = m.visionCapable
 	return out
 }
 
@@ -1897,7 +1911,7 @@ func (a *App) compactSession(parent context.Context, sessionID, instruction stri
 
 	// 手动点击压缩是用户的明确意图：无条件执行总结压缩，将切分点之前的较早历史总结为 Summary。
 	// （自动压缩才会受 threshold 阈值限制）
-	return a.compactHistory(ctx, cfg, sessionID, instruction, history, true, tokensBefore)
+	return a.compactHistory(ctx, cfg, sessionID, instruction, history, tokensBefore)
 }
 
 // compactThresholdLimit returns the absolute token count at which
@@ -1910,11 +1924,9 @@ func compactThresholdLimit(cfg ConfigState) int {
 	return int(float64(maxCtx) * clampCompactThreshold(cfg.CompactThreshold))
 }
 
-// compactHistory summarizes the older portion of history using the model while retaining
-// recent messages intact (pi-agent cut point design).
-// keepLastUser preserves the final user message when not already part of retainedTail.
-// tokensBefore is the total context tokens before compaction.
-func (a *App) compactHistory(ctx context.Context, cfg ConfigState, sessionID, instruction string, history []openai.ChatCompletionMessage, keepLastUser bool, tokensBefore int) (map[string]any, error) {
+// compactHistory summarizes the given history with the model and replaces it
+// with the summary. tokensBefore is the total context tokens before compaction.
+func (a *App) compactHistory(ctx context.Context, cfg ConfigState, sessionID, instruction string, history []openai.ChatCompletionMessage, tokensBefore int) (map[string]any, error) {
 	// The compaction LLM call runs inside this timeout. It is configurable
 	// (Settings → General) because long-context summary requests through slow
 	// providers can legitimately take minutes; the default covers the common
@@ -2019,6 +2031,9 @@ Rules:
 		{Role: openai.ChatMessageRoleUser, Content: fullSummary},
 	}
 
+	// The conversation was replaced by the summary: the provider measurement
+	// covered turns that no longer exist.
+	a.clearContextAnchor(sessionID)
 	a.saveHistory(sessionID, newHistory)
 
 	tokensAfter := a.getContextBreakdown(sessionID, "").Total
@@ -2145,7 +2160,12 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 		// Update live breakdown for context display (includes all tool calls/results)
 		bd := breakdownAcc.update(messages)
 		bd.ToolSchemas = estimateToolSchemaTokens(tools)
-		finalizeContextBreakdownTotal(&bd)
+		// The request prefix (system prompt, workspace map, plan snapshot) is not
+		// part of the message buckets, and the trigger must see everything the
+		// request will carry. A provider measurement, once recorded for this
+		// session, replaces both the prefix and the messages it covered.
+		bd.SystemPrompt, _ = a.sessionPrefixBreakdown(sessionID, cfg, a.listCachedSkills())
+		a.finalizeSessionBreakdown(sessionID, &bd, messages)
 		a.mu.Lock()
 		a.liveBreakdown[sessionID] = bd
 		a.mu.Unlock()
@@ -2165,10 +2185,10 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			h := sanitizeHistoryMessages(messages)
 			if len(h) > 2 {
 				a.emit("run:compact", map[string]any{"sessionId": sessionID, "tokensBefore": usedTokens})
-				// keepLastUser=false: the current request and any continuation
-				// prompt are re-appended below, so carrying the trailing user
-				// message into the compacted history would duplicate it.
-				if result, err := a.compactHistory(ctx, cfg, sessionID, "", h, false, usedTokens); err == nil {
+				// The current request and any continuation prompt are re-appended
+				// below, so carrying the trailing user message into the compacted
+				// history would duplicate it.
+				if result, err := a.compactHistory(ctx, cfg, sessionID, "", h, usedTokens); err == nil {
 					a.mu.Lock()
 					compacted := sanitizeHistoryMessages(a.histories[sessionID])
 					a.mu.Unlock()
@@ -2352,6 +2372,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 					Content:          content,
 					ReasoningContent: reasoning,
 				})
+				a.recordContextAnchor(sessionID, messages, modelResp.Usage)
 			}
 			emitRunEnd("run:error", "error", map[string]any{"error": stopErr.Error(), "stopReason": modelResp.StopReason})
 			return
@@ -2359,6 +2380,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 		if len(toolCalls) == 0 {
 			if content != "" {
 				messages = append(messages, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleAssistant, Content: content, ReasoningContent: reasoning})
+				a.recordContextAnchor(sessionID, messages, modelResp.Usage)
 			}
 			// The model stopped calling tools, but the user may have just
 			// injected a message: take the queue once more and continue for
@@ -2393,6 +2415,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			ReasoningContent: reasoning,
 			ToolCalls:        toolCalls,
 		})
+		a.recordContextAnchor(sessionID, messages, modelResp.Usage)
 
 		// Execute non-file tools in parallel. Built-in file mutations run
 		// afterward in tool-call order so writes are deterministic.
@@ -2635,7 +2658,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 	// arguments 替换成了 {"allyTruncatedArguments":true}。直接执行会让 MCP
 	// 工具收到垃圾参数并报错，错误结果进历史后可能毒化会话。直接返回
 	// 截断错误，让模型重新调用。
-	if isTruncatedArgsMarker(args) {
+	if toolcall.IsTruncatedArguments(string(args)) {
 		return toolErrorResult(codedToolError("E_TRUNCATED_ARGS",
 			fmt.Errorf("tool arguments were truncated during streaming; please re-send the call with complete parameters (merge small changes, split large edits into separate calls)")))
 	}
@@ -3327,6 +3350,7 @@ func (a *App) SwitchModel(index int) error {
 	a.config.TokenParam = m.TokenParam
 	a.config.CustomHeaders = normalizeCustomHeaders(m.CustomHeaders)
 	a.config.ReasoningTag = normalizeReasoningTag(m.ReasoningTag)
+	a.config.VisionCapable = m.VisionCapable
 	a.config.ReasoningEffort = normalizeReasoningEffort(m.ReasoningEffort)
 	cfg := a.config
 	syncAPIKeyFields(&cfg)

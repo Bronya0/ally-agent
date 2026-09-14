@@ -22,6 +22,9 @@ import (
 	"sync"
 	"time"
 
+	"ally-dev/internal/tools/schemautil"
+	"ally-dev/internal/tools/toolcall"
+
 	anthropic "github.com/anthropics/anthropic-sdk-go"
 	anthropicoption "github.com/anthropics/anthropic-sdk-go/option"
 	oa "github.com/openai/openai-go/v3"
@@ -38,6 +41,11 @@ type modelUsage struct {
 }
 
 var errEmptyModelResponse = errors.New("empty model response")
+
+// errChatStreamNoFinishReason 表示流结束了却没收到任何显式终止标记
+// (finish_reason 或 `[DONE]`)。半截流必须按失败处理:已产出的内容由上层
+// 整轮重试（丢弃半截响应）接管,而不是当作完整回合执行。
+var errChatStreamNoFinishReason = errors.New("stream ended without finish_reason")
 
 type modelStreamEvent struct {
 	ContentDelta   string
@@ -170,7 +178,7 @@ func classifyLLMError(err error) llmErrorKind {
 	if llmErrorTextMatchesAny(msg, llmAuthMarkers) {
 		return llmErrorKindAuth
 	}
-	if llmErrorTextMatchesAny(msg, llmContextTooLongMarkers) {
+	if llmContextTooLongPattern.MatchString(msg) {
 		return llmErrorKindContextTooLong
 	}
 	if llmErrorTextMatchesAny(msg, llmModelNotFoundMarkers) {
@@ -210,16 +218,35 @@ var (
 		"not authorized", "permission denied", "permission", "forbidden",
 		"access denied", "credential",
 	}
-	llmContextTooLongMarkers = []string{
-		"context length", "context_length", "maximum context", "context window",
-		"prompt is too long", "input length", "too many input tokens",
-		"maximum_prompt_size", "request too large",
-	}
 	llmModelNotFoundMarkers = []string{
 		"model not found", "no such model", "does not exist", "not_found",
 		"status code: 404", "404 not found",
 	}
 )
+
+// llmContextTooLongPattern 识别"上下文超长"。按 pi 的做法用正则而不是纯子串
+// (utils/overflow.ts:37-60):同一件事各厂商措辞差异很大（“prompt is too long”、
+// “request_too_large”、“input token count … exceeds the maximum”、“maximum
+// prompt length is 8192”、“reduce the length of the messages”），子串表每漏一个
+// 变体，代价就是拿同一个超大请求白重试 LLMRetries 次（退避 0.5s→10s）后才报错。
+// 文本在 classifyLLMError 里已小写化，所以模式统一小写。
+var llmContextTooLongPattern = regexp.MustCompile(strings.Join([]string{
+	`prompt is too long`,                                    // Anthropic token overflow
+	`request_too_large`,                                     // Anthropic request-size overflow (HTTP 413)
+	`request too large`,                                     // 兼容旧表的空格写法
+	`input is too long for requested model`,                 // Amazon Bedrock
+	`exceeds (?:the )?(?:model'?s )?maximum context length`, // OpenAI / LiteLLM
+	`exceeds the context window`,                            // OpenAI (Completions & Responses)
+	`input token count.*exceeds the maximum`,                // Google Gemini
+	`maximum prompt length is \d+`,                          // xAI Grok
+	`reduce the length of the messages`,                     // Groq
+	`context[_ ]length`,                                     // 旧表: context length / context_length
+	`maximum context`,                                       // 旧表
+	`context window`,                                        // 旧表
+	`too many input tokens`,                                 // 旧表
+	`maximum_prompt_size`,                                   // 旧表
+	`input length`,                                          // 旧表
+}, "|"))
 
 // shouldRetryLLMError 判断错误是否值得重试。
 // 策略是"默认重试 + 明确排除确定性失败":中转/服务商的瞬时错误文案千奇百怪
@@ -265,15 +292,14 @@ func emptyModelResponseError(result *modelStreamResult) error {
 	return nil
 }
 
-// isAuthKeyError 判断错误是否属于认证/配额类(key 本身失效),这类错误重试
-// 同一 key 无意义,应切换或直接失败。匹配覆盖常见变体:HTTP 状态码
-// (401/403)、OpenAI/Anthropic 错误码(invalid_api_key、insufficient_quota、
-// permission_error 等)以及常见文案(invalid api key、unauthorized、
-// forbidden、credential 等)。
-// 例外:429/限流类错误即使文案含 quota(阿里云 429 token-limit 的
-// "You exceeded your current quota" 与 OpenAI 计费文案同形,实为分钟级
-// 限流)也按瞬时错误处理,避免整个 key 池被 30 分钟冷却冻结;只有明确的
-// 计费类标记才视为 key 级故障。
+// isAuthKeyError 判断错误是否属于认证/配额类(key 本身失效):这类错误重试同一
+// key 无意义,应切换或直接失败(配 key 池的长冷却)。
+//
+// 判定完全交给 classifyLLMError 的单一枚举(HTTP 状态码优先,provider 文案关键词
+// 兜底),这里只做“该分类是否 key 级故障”的映射:认证与计费是,限流/未知不是。
+// 旧实现在这里另持一份裸数字子串匹配("402"/"401"/"403"/"429"),报文里任何位置
+// 出现这些数字——输入长度 4021、请求 id req_402…——都会把健康 key 判为失效并冻结
+// 30 分钟,而 429 与计费文案的歧义也要和 shouldRetryLLMError 各维护一遍。
 func isAuthKeyError(err error) bool {
 	if err == nil {
 		return false
@@ -281,31 +307,12 @@ func isAuthKeyError(err error) bool {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false
 	}
-	msg := strings.ToLower(err.Error())
-	// 明确的计费类错误(余额/配额耗尽,需人工处理)保持长冷却。
-	if strings.Contains(msg, "402") || strings.Contains(msg, "payment required") || llmErrorTextMatchesAny(msg, llmBillingMarkers) {
+	switch classifyLLMError(err) {
+	case llmErrorKindAuth, llmErrorKindBilling:
 		return true
-	}
-	// 429/限流按定义是"请求过频"而非 key 失效,按瞬时错误短冷却。
-	// 变体文案与 shouldRetryLLMError 保持一致,防止 "Rate exceeded" 类
-	// 限流错误被下面的 quota 关键词误判为计费失效、触发 30 分钟长冷却。
-	if strings.Contains(msg, "429") || strings.Contains(msg, "too many requests") ||
-		strings.Contains(msg, "rate limit") ||
-		strings.Contains(msg, "rate exceeded") || strings.Contains(msg, "rate_limit") {
+	default:
 		return false
 	}
-	if strings.Contains(msg, "401") || strings.Contains(msg, "403") ||
-		strings.Contains(msg, "invalid api key") || strings.Contains(msg, "invalid_api_key") ||
-		strings.Contains(msg, "invalid-api-key") || strings.Contains(msg, "invalid key") ||
-		strings.Contains(msg, "api key") || strings.Contains(msg, "api_key") ||
-		strings.Contains(msg, "unauthorized") || strings.Contains(msg, "authentication failed") ||
-		strings.Contains(msg, "not authorized") || strings.Contains(msg, "permission denied") ||
-		strings.Contains(msg, "permission") || strings.Contains(msg, "forbidden") ||
-		strings.Contains(msg, "quota") ||
-		strings.Contains(msg, "access denied") || strings.Contains(msg, "credential") {
-		return true
-	}
-	return false
 }
 
 // shouldFailoverKey 判断错误是否值得切换到下一个 key。包含瞬时错误
@@ -787,6 +794,19 @@ func isOpenAIReasoningModelName(model string) bool {
 	return openAIReasoningModelPattern.MatchString(m)
 }
 
+// modelSupportsReasoningEffort reports whether the reasoning-effort parameter may
+// be sent for this model. pi gates every thinking/effort branch on the model
+// catalog's reasoning flag and only writes the field when the model declares
+// reasoning support (openai-completions.ts:864-935) — the official endpoints
+// reject an effort value the target model does not accept. Ally has no catalog
+// flag, so the positive signals are the model name (the OpenAI o*/gpt-5*
+// families) and a configured reasoning tag: a non-empty tag means the model was
+// observed to stream a reasoning field, which only reasoning-capable models do.
+// Unknown combinations stay unset instead of risking a rejected request.
+func modelSupportsReasoningEffort(cfg ConfigState, model string) bool {
+	return isOpenAIReasoningModelName(model) || strings.TrimSpace(cfg.ReasoningTag) != ""
+}
+
 func shouldUseMaxCompletionTokens(param, model string) bool {
 	switch normalizeTokenParam(param) {
 	case tokenParamMaxCompletionTokens:
@@ -802,22 +822,40 @@ func (a *App) streamOpenAIChat(ctx context.Context, cfg ConfigState, model strin
 	clientCfg := legacyopenai.DefaultConfig(cfg.APIKey)
 	clientCfg.BaseURL = baseURLForAPIFormat(cfg)
 	clientCfg.HTTPClient = modelHTTPClient(cfg, true, 0)
-	// Thinking-mode replay: when the session is in thinking mode, rewrite the
-	// serialized body so assistant messages keep an explicit (possibly empty)
-	// reasoning_content field — the omitempty wire tag would drop it.
-	if reasoningContentReplayActive(messages, cfg) {
-		base := modelHTTPClient(cfg, true, 0)
-		var rt http.RoundTripper = base.Transport
-		if rt == nil {
-			rt = http.DefaultTransport
-		}
-		key := defaultReasoningTag
-		if isKnownWireReasoningKey(cfg.ReasoningTag) {
-			key = strings.TrimSpace(cfg.ReasoningTag)
-		}
-		base.Transport = &reasoningContentReplayTransport{base: rt, reasoningKey: key}
-		clientCfg.HTTPClient = base
+	// Request rewrite: the Chat adapter always installs the rewriting transport,
+	// because two of its normalizations apply to every request — `content` must
+	// be a present key on tool-call/tool messages (see
+	// chatRequestRewriteTransport) and OpenRouter-style sticky-session headers
+	// are attached there. The reasoning backfill (an explicit, possibly empty
+	// reasoning field on the active tool turn) is only enabled in thinking mode:
+	// without it DeepSeek V4 / Kimi K3 reject a thinking-mode tool call with 400.
+	replayKey := reasoningReplayKey(cfg, model)
+	var details json.RawMessage
+	if payload := a.reasoningStash.get(replayKey); payload != nil {
+		details = payload.chatDetails
 	}
+	reasoningKey := ""
+	if reasoningContentReplayActive(messages, cfg) {
+		reasoningKey = defaultReasoningTag
+		if isKnownWireReasoningKey(cfg.ReasoningTag) {
+			reasoningKey = strings.TrimSpace(cfg.ReasoningTag)
+		}
+	}
+	streamDone := &sseDoneWatcher{}
+	base := modelHTTPClient(cfg, true, 0)
+	rt := base.Transport
+	if rt == nil {
+		rt = http.DefaultTransport
+	}
+	base.Transport = &chatRequestRewriteTransport{
+		base:           rt,
+		reasoningKey:   reasoningKey,
+		details:        details,
+		headers:        sessionAffinityHeaders(cfg),
+		promptCacheKey: openAIChatPromptCacheKey(cfg),
+		streamDone:     streamDone,
+	}
+	clientCfg.HTTPClient = base
 	client := legacyopenai.NewClientWithConfig(clientCfg)
 
 	streamReq := legacyopenai.ChatCompletionRequest{
@@ -836,10 +874,12 @@ func (a *App) streamOpenAIChat(ctx context.Context, cfg ConfigState, model strin
 	} else {
 		streamReq.MaxTokens = cfg.MaxTokens
 	}
-	// Thinking strength: only send reasoning_effort when the user explicitly
-	// picked a level. The normalized selection is sent unchanged, including
-	// xhigh and max; "auto" (the default) sends nothing.
-	if effort := reasoningEffortForAdapter(apiFormatOpenAIChat, cfg.ReasoningEffort); effort != "" {
+	// Thinking strength: only send reasoning_effort when a level was picked AND
+	// the model accepts the parameter. The normalized selection is sent
+	// unchanged — xhigh and max are declared values of the OpenAI SDK enum
+	// (shared.ReasoningEffortXhigh / ReasoningEffortMax) — while "auto" and
+	// non-reasoning models send nothing (see modelSupportsReasoningEffort).
+	if effort := reasoningEffortForAdapter(apiFormatOpenAIChat, cfg.ReasoningEffort); effort != "" && modelSupportsReasoningEffort(cfg, model) {
 		streamReq.ReasoningEffort = effort
 	}
 	if len(tools) > 0 {
@@ -852,7 +892,7 @@ func (a *App) streamOpenAIChat(ctx context.Context, cfg ConfigState, model strin
 	// omitted or empty. When no tools are provided, models cannot execute tools anyway.
 
 	maxRetries := effectiveLLMRetries(cfg)
-	result, emitted, err := a.openAIChatStreamAttempt(ctx, cfg, client, streamReq, onEvent)
+	result, emitted, err := a.openAIChatStreamAttempt(ctx, cfg, client, streamReq, streamDone, onEvent)
 	// 只重试"尚未产出任何输出"的失败:建流失败,或消费阶段在产出内容前
 	// 失败(中转常以 HTTP 200 建流,再以流内 {"error":...} 事件返回 529
 	// overloaded 之类瞬时错误,错误信息只有文案、不带状态码)。此时重试
@@ -865,7 +905,7 @@ func (a *App) streamOpenAIChat(ctx context.Context, cfg ConfigState, model strin
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
-		result, emitted, err = a.openAIChatStreamAttempt(ctx, cfg, client, streamReq, onEvent)
+		result, emitted, err = a.openAIChatStreamAttempt(ctx, cfg, client, streamReq, streamDone, onEvent)
 	}
 	if err != nil {
 		return nil, err
@@ -876,7 +916,13 @@ func (a *App) streamOpenAIChat(ctx context.Context, cfg ConfigState, model strin
 // openAIChatStreamAttempt 执行一次完整的 OpenAI Chat 建流与消费。第二个
 // 返回值报告本次尝试是否已产出输出(assistant/reasoning/toolCalls 任一非空),
 // 调用方据此判定适配器内重试是否安全(无输出则重试不会造成重复)。
-func (a *App) openAIChatStreamAttempt(ctx context.Context, cfg ConfigState, client *legacyopenai.Client, streamReq legacyopenai.ChatCompletionRequest, onEvent func(modelStreamEvent)) (*modelStreamResult, bool, error) {
+func (a *App) openAIChatStreamAttempt(ctx context.Context, cfg ConfigState, client *legacyopenai.Client, streamReq legacyopenai.ChatCompletionRequest, streamDone *sseDoneWatcher, onEvent func(modelStreamEvent)) (*modelStreamResult, bool, error) {
+	// The terminator watcher is owned by the caller and therefore survives this
+	// attempt's retries. A `[DONE]` that a failed attempt read off the wire must
+	// not be inherited by the next one: the retry's connection can be cut
+	// mid-stream, and a stale terminator would make that truncated response pass
+	// the {finish_reason, [DONE]} check and be persisted as a complete turn.
+	streamDone.reset()
 	stream, err := client.CreateChatCompletionStream(ctx, streamReq)
 	if err != nil && isStreamOptionsRejectedError(err) {
 		streamReq.StreamOptions = nil
@@ -890,6 +936,9 @@ func (a *App) openAIChatStreamAttempt(ctx context.Context, cfg ConfigState, clie
 
 	var assistant strings.Builder
 	var reasoning strings.Builder
+	// mergedDetails accumulates OpenRouter-style reasoning_details across the
+	// stream so the next request of this tool loop can replay them.
+	mergedDetails := []map[string]any{}
 	// reasoningPresent: the provider explicitly emitted a reasoning field
 	// (possibly empty). go-openai unmarshals an absent field and an explicit
 	// empty string identically, so this only turns true once non-empty
@@ -908,6 +957,9 @@ func (a *App) openAIChatStreamAttempt(ctx context.Context, cfg ConfigState, clie
 		reasoningState.openTag = "<" + cfg.ReasoningTag + ">"
 		reasoningState.closeTag = "</" + cfg.ReasoningTag + ">"
 	}
+	// toolAcc 按 pi 的方式(index/id 双表)把流式增量归入对应调用;它必须在
+	// 整个流期间保持存活,否则只带 index、不带 id 的增量无法跨块匹配。
+	toolAcc := newToolCallAccumulator(nil)
 	toolCalls := []legacyopenai.ToolCall{}
 	toolEventGate := newModelToolCallEventGate(func(event modelStreamEvent) {
 		emitModelStreamEvent(onEvent, event)
@@ -921,8 +973,13 @@ func (a *App) openAIChatStreamAttempt(ctx context.Context, cfg ConfigState, clie
 	for {
 		raw, err := stream.RecvRaw()
 		if errors.Is(err, io.EOF) {
-			if !gotFinishReason && assistant.Len() == 0 && reasoning.Len() == 0 && len(toolCalls) == 0 {
-				return nil, false, errors.New("stream ended without finish_reason")
+			// 终止判定与另外两个适配器一致:必须收到显式终止标记。go-openai 把
+			// `[DONE]` 与"连接在帧边界被切断"归一成同一个 io.EOF,所以这里同时
+			// 接受真实的 `[DONE]`(由 sseDoneReadCloser 记录)与 finish_reason;
+			// 两者都没有就是半截流。已产出内容时返回 hasOutput()=true,适配器内
+			// 不再重试（避免重复输出）,由上层 runChat 整轮重试。
+			if !gotFinishReason && (streamDone == nil || !streamDone.Done()) {
+				return nil, hasOutput(), errChatStreamNoFinishReason
 			}
 			break
 		}
@@ -953,6 +1010,13 @@ func (a *App) openAIChatStreamAttempt(ctx context.Context, cfg ConfigState, clie
 		if resp.Choices[0].FinishReason != "" {
 			gotFinishReason = true
 			stopReason = string(resp.Choices[0].FinishReason)
+		}
+		// Structured reasoning (OpenRouter reasoning_details, vLLM reasoning)
+		// arrives in every chunk: the text feeds the thinking panel, the detail
+		// objects are merged for replay on the next request of this loop.
+		streamReasoningText, streamReasoningDetails := parseStreamReasoning(raw)
+		for _, detail := range streamReasoningDetails {
+			mergedDetails = appendChatReasoningDetail(mergedDetails, detail)
 		}
 		if reasoningState.tag != "" {
 			// Parse content-level reasoning tags embedded in delta.Content
@@ -1020,7 +1084,7 @@ func (a *App) openAIChatStreamAttempt(ctx context.Context, cfg ConfigState, clie
 			}
 			reasoningText := delta.ReasoningContent
 			if reasoningText == "" {
-				reasoningText = extractRawStreamReasoning(raw)
+				reasoningText = streamReasoningText
 			}
 			if reasoningText != "" {
 				reasoning.WriteString(reasoningText)
@@ -1029,7 +1093,7 @@ func (a *App) openAIChatStreamAttempt(ctx context.Context, cfg ConfigState, clie
 			}
 		}
 		if len(delta.ToolCalls) > 0 {
-			mergeToolCallDeltas(&toolCalls, delta.ToolCalls)
+			toolCalls = toolAcc.merge(delta.ToolCalls)
 			toolEventGate.emit(modelStreamEvent{ToolCalls: toolCalls})
 		}
 	}
@@ -1043,6 +1107,15 @@ func (a *App) openAIChatStreamAttempt(ctx context.Context, cfg ConfigState, clie
 			assistant.WriteString(reasoningState.partial)
 			emitModelStreamEvent(onEvent, modelStreamEvent{ContentDelta: reasoningState.partial})
 		}
+	}
+
+	// Persist this response's OpenRouter-style reasoning details for the next
+	// request of this tool loop; a response without details clears the entry so a
+	// later turn never replays a stale trace (the key is model-scoped).
+	if detailsJSON := chatReasoningDetailsJSON(mergedDetails); len(detailsJSON) > 0 {
+		a.reasoningStash.set(reasoningReplayKey(cfg, streamReq.Model), &sessionReasoningPayload{chatDetails: detailsJSON})
+	} else {
+		a.reasoningStash.clear(reasoningReplayKey(cfg, streamReq.Model))
 	}
 
 	return &modelStreamResult{
@@ -1066,10 +1139,6 @@ func isStreamOptionsRejectedError(err error) bool {
 	return strings.Contains(strings.ToLower(err.Error()), "stream_options")
 }
 
-func isIncompleteChatStreamJSON(err error) bool {
-	return isIncompleteStreamJSON(err)
-}
-
 func isIncompleteStreamJSON(err error) bool {
 	if err == nil {
 		return false
@@ -1078,44 +1147,30 @@ func isIncompleteStreamJSON(err error) bool {
 	return strings.Contains(msg, "unexpected end of json input") || strings.Contains(msg, "unexpected eof")
 }
 
-// extractRawStreamReasoning extracts reasoning deltas from stream chunks where the
-// provider emitted thinking under "reasoning" (vLLM / OpenAI OSS) or
-// "reasoning_details" (OpenRouter) rather than go-openai's "reasoning_content".
-func extractRawStreamReasoning(raw []byte) string {
-	if !bytes.Contains(raw, []byte(`"reasoning"`)) && !bytes.Contains(raw, []byte(`"reasoning_details"`)) {
-		return ""
-	}
-	var chunk struct {
-		Choices []struct {
-			Delta struct {
-				Reasoning        any `json:"reasoning"`
-				ReasoningDetails any `json:"reasoning_details"`
-			} `json:"delta"`
-		} `json:"choices"`
-	}
-	if err := json.Unmarshal(raw, &chunk); err == nil && len(chunk.Choices) > 0 {
-		delta := chunk.Choices[0].Delta
-		if s, ok := delta.Reasoning.(string); ok && s != "" {
-			return s
-		}
-		if s, ok := delta.ReasoningDetails.(string); ok && s != "" {
-			return s
-		}
-	}
-	return ""
-}
-
-
 func (a *App) streamOpenAIResponses(ctx context.Context, cfg ConfigState, model string, messages []legacyopenai.ChatCompletionMessage, tools []legacyopenai.Tool, onEvent func(modelStreamEvent)) (*modelStreamResult, error) {
 	// Replay the reasoning items captured from the previous response of this
 	// session's tool loop: OpenAI requires them around function calls, and
 	// under store=false the encrypted_content is the only carrier. They are
 	// injected right before the trailing function_call outputs so the model
 	// resumes its reasoning instead of starting over (quality, not a 400).
-	if payload := a.reasoningStash.get(cfg.responsesPromptCacheKey); payload != nil && len(payload.responses) > 0 {
-		messages = withResponsesReasoningItems(messages, payload.responses)
+	replayKey := reasoningReplayKey(cfg, model)
+	var reasoningItems []responsesReasoningItem
+	var toolItemIDs map[string]string
+	if payload := a.reasoningStash.get(replayKey); payload != nil {
+		reasoningItems = payload.responses
+		toolItemIDs = payload.responsesToolItems
 	}
-	body := buildOpenAIResponsesRequest(cfg, model, messages, tools)
+	// A replayed reasoning item is paired with the id of the item that follows
+	// it; when a follower id is missing the pair cannot be completed, so the
+	// replay is skipped rather than risking the documented rejection
+	// (trailingToolTurnItemIDsComplete).
+	if len(reasoningItems) > 0 && !trailingToolTurnItemIDsComplete(messages, toolItemIDs) {
+		reasoningItems = nil
+	}
+	if len(reasoningItems) > 0 {
+		messages = withResponsesReasoningItems(messages, reasoningItems)
+	}
+	body := buildOpenAIResponsesRequest(cfg, model, messages, tools, toolItemIDs)
 	// Ask for encrypted reasoning so stateless replay stays possible.
 	body.Include = append(body.Include, oaresp.ResponseIncludableReasoningEncryptedContent)
 
@@ -1155,6 +1210,10 @@ func (a *App) openAIResponsesStreamAttempt(ctx context.Context, cfg ConfigState,
 	// reasoningItems captures completed reasoning items (with encrypted
 	// content) for replay on the next request of this tool loop.
 	reasoningItems := []responsesReasoningItem{}
+	// toolItemIDs maps the call id of every function call of this response to the
+	// item id (fc_…) the model emitted for it, for the pair-preserving replay of
+	// the captured reasoning items (see responseInputItemParamOfFunctionCall).
+	toolItemIDs := map[string]string{}
 	toolCalls := []legacyopenai.ToolCall{}
 	toolIndexByOutput := map[int64]int{}
 	toolIndexByItemID := map[string]int{}
@@ -1165,6 +1224,10 @@ func (a *App) openAIResponsesStreamAttempt(ctx context.Context, cfg ConfigState,
 	finalOutputText := ""
 	var streamErr error
 	gotTerminalEvent := false
+	// stopReason is the Responses equivalent of a finish_reason: it is derived
+	// from the terminal event so the run reports truncation / filtering the same
+	// way the Chat and Anthropic adapters do (see modelResponseStopError).
+	stopReason := ""
 	images := []modelImage{}
 	imageIndexes := map[string]int{}
 	emitImage := func(id, b64 string, partial bool) {
@@ -1207,11 +1270,39 @@ func (a *App) openAIResponsesStreamAttempt(ctx context.Context, cfg ConfigState,
 				reasoning.WriteString(ev.Delta)
 				emitModelStreamEvent(onEvent, modelStreamEvent{ReasoningDelta: ev.Delta})
 			}
+		case "response.reasoning_text.delta":
+			// Raw reasoning text, streamed when the request asks for it instead
+			// of (or in addition to) the summarized form (pi
+			// openai-responses-shared.ts:623-632 handles both).
+			ev := event.AsResponseReasoningTextDelta()
+			if ev.Delta != "" {
+				reasoning.WriteString(ev.Delta)
+				emitModelStreamEvent(onEvent, modelStreamEvent{ReasoningDelta: ev.Delta})
+			}
+		case "response.reasoning_summary_part.done":
+			// Summary parts are separate paragraphs: pi closes each one with a
+			// blank line (openai-responses-shared.ts:613-622) instead of letting
+			// consecutive parts run together in the thinking panel. A separator is
+			// only written when there is something to separate, so an empty part
+			// cannot turn into the response's only "output".
+			if reasoning.Len() > 0 {
+				reasoning.WriteString("\n\n")
+				emitModelStreamEvent(onEvent, modelStreamEvent{ReasoningDelta: "\n\n"})
+			}
+		case "response.refusal.delta":
+			// A refusal is user-visible answer text: dropping it left the panel
+			// empty even though the model answered.
+			ev := event.AsResponseRefusalDelta()
+			if ev.Delta != "" {
+				assistant.WriteString(ev.Delta)
+				emitModelStreamEvent(onEvent, modelStreamEvent{ContentDelta: ev.Delta})
+			}
 		case "response.output_item.added":
 			ev := event.AsResponseOutputItemAdded()
 			if ev.Item.Type == "function_call" {
 				idx := ensureResponsesToolCall(&toolCalls, toolIndexByOutput, toolIndexByItemID, ev.OutputIndex, ev.Item.ID)
 				updateToolCallFromResponsesItem(&toolCalls[idx], ev.Item)
+				captureResponsesToolItemID(toolItemIDs, toolCalls[idx], ev.Item)
 				toolEventGate.emit(modelStreamEvent{ToolCalls: toolCalls})
 			}
 		case "response.function_call_arguments.delta":
@@ -1238,22 +1329,17 @@ func (a *App) openAIResponsesStreamAttempt(ctx context.Context, cfg ConfigState,
 			if ev.Item.Type == "function_call" {
 				idx := ensureResponsesToolCall(&toolCalls, toolIndexByOutput, toolIndexByItemID, ev.OutputIndex, ev.Item.ID)
 				updateToolCallFromResponsesItem(&toolCalls[idx], ev.Item)
+				captureResponsesToolItemID(toolItemIDs, toolCalls[idx], ev.Item)
 				toolEventGate.emit(modelStreamEvent{ToolCalls: toolCalls})
 			} else if ev.Item.Type == "reasoning" {
 				// Capture the completed reasoning item (its encrypted_content is
 				// only complete at output_item.done) for stateless replay on the
-				// next request of this tool loop.
-				item := ev.Item.AsReasoning()
-				captured := responsesReasoningItem{
-					ID:               item.ID,
-					EncryptedContent: item.EncryptedContent,
+				// next request of this tool loop. Every documented field is kept so
+				// the next request can send back a copy of the item the API
+				// produced.
+				if captured, ok := captureResponsesReasoningItem(ev.Item.AsReasoning()); ok {
+					reasoningItems = append(reasoningItems, captured)
 				}
-				for _, s := range item.Summary {
-					if s.Text != "" && captured.SummaryText == "" {
-						captured.SummaryText = s.Text
-					}
-				}
-				reasoningItems = append(reasoningItems, captured)
 			} else if ev.Item.Type == "image_generation_call" {
 				imageCall := ev.Item.AsImageGenerationCall()
 				emitImage(imageCall.ID, imageCall.Result, false)
@@ -1263,6 +1349,7 @@ func (a *App) openAIResponsesStreamAttempt(ctx context.Context, cfg ConfigState,
 			emitImage(ev.ItemID, ev.PartialImageB64, true)
 		case "response.completed":
 			gotTerminalEvent = true
+			stopReason = "stop"
 			ev := event.AsResponseCompleted()
 			usage = modelUsageFromResponses(ev.Response.Usage)
 			// The openai-go Responses union decoder currently drops the nested
@@ -1343,14 +1430,21 @@ func (a *App) openAIResponsesStreamAttempt(ctx context.Context, cfg ConfigState,
 				}
 			}
 			reason := ev.Response.IncompleteDetails.Reason
-			// "max_output_tokens" is the Responses API equivalent of finish_reason: "length".
-			// It indicates normal output truncation, not a fatal stream connection failure.
-			if reason != "" && reason != "max_output_tokens" {
-				if reason == "content_filter" {
-					streamErr = errors.New("OpenAI Responses was stopped by the content filter")
-				} else {
-					streamErr = fmt.Errorf("response incomplete: %s", reason)
-				}
+			// "max_output_tokens" is the Responses API equivalent of
+			// finish_reason: "length". It is a normal terminal state of the
+			// response rather than a broken stream, so it is reported through
+			// StopReason — modelResponseStopError turns that into the same
+			// actionable Max Tokens message the other two adapters produce —
+			// instead of as a stream error that would be retried.
+			switch reason {
+			case "":
+			case "max_output_tokens":
+				stopReason = "length"
+			case "content_filter":
+				stopReason = "content_filter"
+				streamErr = errors.New("OpenAI Responses was stopped by the content filter")
+			default:
+				streamErr = fmt.Errorf("response incomplete: %s", reason)
 			}
 		default:
 			// Unknown-but-typed events stay ignored (kimi: "unknown future event
@@ -1382,10 +1476,10 @@ func (a *App) openAIResponsesStreamAttempt(ctx context.Context, cfg ConfigState,
 	// Persist this response's reasoning items for the next request in this
 	// tool loop; a non-reasoning response clears the stash. Done here (not in
 	// streamOpenAIResponses) so adapter-internal retries rewrite it per attempt.
-	if len(reasoningItems) > 0 {
-		a.reasoningStash.set(cfg.responsesPromptCacheKey, &sessionReasoningPayload{responses: reasoningItems})
+	if len(reasoningItems) > 0 || len(toolItemIDs) > 0 {
+		a.reasoningStash.set(reasoningReplayKey(cfg, string(body.Model)), &sessionReasoningPayload{responses: reasoningItems, responsesToolItems: toolItemIDs})
 	} else {
-		a.reasoningStash.clear(cfg.responsesPromptCacheKey)
+		a.reasoningStash.clear(reasoningReplayKey(cfg, string(body.Model)))
 	}
 	content := assistant.String()
 	if content == "" && finalOutputText != "" {
@@ -1397,7 +1491,8 @@ func (a *App) openAIResponsesStreamAttempt(ctx context.Context, cfg ConfigState,
 		ReasoningPresent: len(reasoningItems) > 0,
 		ToolCalls:        normalizeToolCalls(toolCalls),
 		Images:           images,
-		Usage:     usage,
+		Usage:            usage,
+		StopReason:       stopReason,
 	}, hasOutput(), nil
 }
 
@@ -1491,8 +1586,8 @@ func openAIResponsesPromptCacheKey(sessionID string) string {
 	return fmt.Sprintf("ally:%x", sum[:16])
 }
 
-func buildOpenAIResponsesRequest(cfg ConfigState, model string, messages []legacyopenai.ChatCompletionMessage, tools []legacyopenai.Tool) oaresp.ResponseNewParams {
-	instructions, inputItems := buildOpenAIResponsesInput(messages)
+func buildOpenAIResponsesRequest(cfg ConfigState, model string, messages []legacyopenai.ChatCompletionMessage, tools []legacyopenai.Tool, toolItemIDs map[string]string) oaresp.ResponseNewParams {
+	instructions, inputItems := buildOpenAIResponsesInput(messages, toolItemIDs)
 	cacheKey := strings.TrimSpace(cfg.responsesPromptCacheKey)
 	explicitPromptCache := supportsOpenAIResponsesGPT56PromptCaching(cfg, model)
 	if explicitPromptCache {
@@ -1501,7 +1596,7 @@ func buildOpenAIResponsesRequest(cfg ConfigState, model string, messages []legac
 	body := oaresp.ResponseNewParams{
 		Model:           oaresp.ResponsesModel(model),
 		Input:           oaresp.ResponseNewParamsInputUnion{OfInputItemList: inputItems},
-		MaxOutputTokens: oa.Int(int64(cfg.MaxTokens)),
+		MaxOutputTokens: oa.Int(int64(clampResponsesMaxOutputTokens(cfg.MaxTokens))),
 	}
 	if explicitPromptCache {
 		body.PromptCacheOptions = oaresp.ResponseNewParamsPromptCacheOptions{
@@ -1511,14 +1606,14 @@ func buildOpenAIResponsesRequest(cfg ConfigState, model string, messages []legac
 	// Store and ParallelToolCalls are OpenAI-official fields that
 	// compatible gateways may reject with 400 ("unsupported field").
 	// Gate them behind the official-endpoint check so relays stay happy.
-	if isOfficialOpenAIResponsesEndpoint(cfg) {
+	if isOfficialOpenAIEndpoint(cfg) {
 		body.ParallelToolCalls = oa.Bool(true)
 		body.Store = oa.Bool(false)
 	}
 	// Thinking strength for the Responses API (reasoning.effort). The SDK
 	// type is string-backed, so the normalized selection is sent unchanged,
 	// including xhigh and max.
-	if effort := reasoningEffortForAdapter(apiFormatOpenAIResponses, cfg.ReasoningEffort); effort != "" {
+	if effort := reasoningEffortForAdapter(apiFormatOpenAIResponses, cfg.ReasoningEffort); effort != "" && modelSupportsReasoningEffort(cfg, model) {
 		// Pair reasoning.effort with summary:"auto" — both kimi-code
 		// (openai-responses.ts:1116-1120) and pi (openai-responses.ts:319-335)
 		// do: without an explicit summary request the Responses API emits no
@@ -1552,7 +1647,7 @@ func buildOpenAIResponsesRequest(cfg ConfigState, model string, messages []legac
 }
 
 func supportsOpenAIResponsesGPT56PromptCaching(cfg ConfigState, model string) bool {
-	if normalizeAPIFormat(cfg.APIFormat) != apiFormatOpenAIResponses || strings.TrimSpace(cfg.responsesPromptCacheKey) == "" || !isOfficialOpenAIResponsesEndpoint(cfg) {
+	if normalizeAPIFormat(cfg.APIFormat) != apiFormatOpenAIResponses || strings.TrimSpace(cfg.responsesPromptCacheKey) == "" || !isOfficialOpenAIEndpoint(cfg) {
 		return false
 	}
 	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(model)), "gpt-5.6")
@@ -1574,16 +1669,93 @@ func appendOpenAIResponsesPromptCacheAnchor(input oaresp.ResponseInputParam) oar
 }
 
 func supportsOpenAIResponsesImageGeneration(cfg ConfigState) bool {
-	return isOfficialOpenAIResponsesEndpoint(cfg)
+	return isOfficialOpenAIEndpoint(cfg)
 }
 
-func isOfficialOpenAIResponsesEndpoint(cfg ConfigState) bool {
+// openAIChatPromptCacheKey returns the session-sticky prompt_cache_key for a
+// Chat Completions request, or "" when the field must not be sent. pi attaches
+// it only when the request goes to api.openai.com (openai-completions.ts:810-814)
+// — the official endpoint is the one place the field is documented, and a
+// compatible gateway may answer an unknown top-level parameter with 400. The
+// value is the same hashed session key the Responses adapter uses, so no raw
+// session id leaves the client.
+func openAIChatPromptCacheKey(cfg ConfigState) string {
+	if !isOfficialOpenAIEndpoint(cfg) {
+		return ""
+	}
+	return strings.TrimSpace(cfg.responsesPromptCacheKey)
+}
+
+// isOfficialOpenAIEndpoint reports whether the request targets the official
+// OpenAI API. It is the single identity check for the request fields only OpenAI
+// serves — prompt_cache_key / store / image_generation / explicit prompt-cache
+// options — because compatible gateways reject fields they do not know.
+func isOfficialOpenAIEndpoint(cfg ConfigState) bool {
 	base := strings.ToLower(strings.TrimRight(baseURLForAPIFormat(cfg), "/"))
-	return base == defaultOpenAIResponsesURL || strings.HasPrefix(base, defaultOpenAIResponsesURL+"/")
+	return base == openAIOfficialAPIBaseURL || strings.HasPrefix(base, openAIOfficialAPIBaseURL+"/")
+}
+
+func isOpenRouterEndpoint(cfg ConfigState) bool {
+	return strings.Contains(strings.ToLower(baseURLForAPIFormat(cfg)), "openrouter")
+}
+
+// sessionAffinityHeaders returns the sticky-routing headers that keep one
+// conversation on the same upstream so prompt / KV cache hits survive across the
+// requests of a tool loop. Only OpenRouter is handled: pi maps
+// sessionAffinityFormat "openrouter" to x-session-id and uses provider-specific
+// names elsewhere (openai-completions.ts), which Ally does not model — an unknown
+// header would be meaningless to those endpoints anyway. The value is the same
+// hashed session key used as the prompt-cache key, so no raw session id leaves
+// the client.
+func sessionAffinityHeaders(cfg ConfigState) map[string]string {
+	key := strings.TrimSpace(cfg.responsesPromptCacheKey)
+	if key == "" || !isOpenRouterEndpoint(cfg) {
+		return nil
+	}
+	return map[string]string{"x-session-id": key}
 }
 
 type openAIResponsesSSEStream struct {
 	decoder ssestream.Decoder
+}
+
+// openAIResponsesMinOutputTokens is the documented floor for max_output_tokens:
+// the Responses API rejects smaller values, so a small Max Tokens setting is
+// raised instead of failing the request (pi: OPENAI_RESPONSES_MIN_OUTPUT_TOKENS,
+// openai-responses.ts Math.max(options.maxTokens, 16)).
+const openAIResponsesMinOutputTokens = 16
+
+func clampResponsesMaxOutputTokens(maxTokens int) int {
+	if maxTokens < openAIResponsesMinOutputTokens {
+		return openAIResponsesMinOutputTokens
+	}
+	return maxTokens
+}
+
+// ensureResponsesReasoningSummaries guarantees the summary key on replayed
+// reasoning items. The SDK declares summary as required but tags it omitzero, so
+// an item captured without summary text would drop the key entirely — and the
+// API only accepts an exact copy of the reasoning item it produced, key
+// included. An empty array is a valid replay value
+// (openai-go ResponseReasoningItemParam: json:"summary,omitzero" api:"required").
+func ensureResponsesReasoningSummaries(body map[string]any) bool {
+	input, ok := body["input"].([]any)
+	if !ok {
+		return false
+	}
+	changed := false
+	for _, rawItem := range input {
+		item, ok := rawItem.(map[string]any)
+		if !ok || item["type"] != "reasoning" {
+			continue
+		}
+		if _, exists := item["summary"]; exists {
+			continue
+		}
+		item["summary"] = []any{}
+		changed = true
+	}
+	return changed
 }
 
 func newOpenAIResponsesSSEStream(ctx context.Context, cfg ConfigState, body oaresp.ResponseNewParams) (*openAIResponsesSSEStream, error) {
@@ -1596,6 +1768,9 @@ func newOpenAIResponsesSSEStream(ctx context.Context, cfg ConfigState, body oare
 		return nil, err
 	}
 	requestBody["stream"] = true
+	// Replayed reasoning items must carry their required summary key; the SDK
+	// drops it when it is empty (see ensureResponsesReasoningSummaries).
+	ensureResponsesReasoningSummaries(requestBody)
 	payload, err = json.Marshal(requestBody)
 	if err != nil {
 		return nil, err
@@ -1612,6 +1787,9 @@ func newOpenAIResponsesSSEStream(ctx context.Context, cfg ConfigState, body oare
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 	req.Header.Set("User-Agent", effectiveUserAgent(cfg))
+	for key, value := range sessionAffinityHeaders(cfg) {
+		req.Header.Set(key, value)
+	}
 	// 自定义头在适配器内置头之后应用，可覆盖 Authorization / User-Agent。
 	applyCustomHeaders(req, cfg)
 
@@ -1689,12 +1867,16 @@ func (s *openAIResponsesSSEStream) Close() error {
 func (a *App) streamAnthropicMessages(ctx context.Context, cfg ConfigState, model string, messages []legacyopenai.ChatCompletionMessage, tools []legacyopenai.Tool, onEvent func(modelStreamEvent)) (*modelStreamResult, error) {
 	baseURL := baseURLForAPIFormat(cfg)
 	// 关闭 SDK 内置重试,改用本模块统一的重试循环以便发出 run:retry 事件。
-	client := anthropic.NewClient(
+	clientOptions := []anthropicoption.RequestOption{
 		anthropicoption.WithAPIKey(cfg.APIKey),
 		anthropicoption.WithBaseURL(baseURL),
 		anthropicoption.WithMaxRetries(0),
 		anthropicoption.WithHTTPClient(modelHTTPClient(cfg, true, 0)),
-	)
+	}
+	for key, value := range sessionAffinityHeaders(cfg) {
+		clientOptions = append(clientOptions, anthropicoption.WithHeader(key, value))
+	}
+	client := anthropic.NewClient(clientOptions...)
 
 	system, anthropicMessages := buildAnthropicMessages(messages)
 	if len(anthropicMessages) == 0 || anthropicMessages[0].Role != anthropic.MessageParamRoleUser {
@@ -1720,11 +1902,14 @@ func (a *App) streamAnthropicMessages(ctx context.Context, cfg ConfigState, mode
 	// - For budget models (Claude 3.7 Sonnet): thinking: { type: "enabled", budget_tokens: N } without output_config.effort
 	//   (passing output_config.effort on 3.7 causes a 400 error).
 	// - For effort "off": thinking: { type: "disabled" }.
-	configureAnthropicThinking(&params, model, cfg.ReasoningEffort, cfg.MaxTokens)
+	thinkingEnabled := configureAnthropicThinking(&params, model, cfg.ReasoningEffort, cfg.MaxTokens)
 	// Replay the thinking blocks captured from the previous response of this
 	// session's tool loop. They must precede the tool_use blocks of the SAME
-	// assistant message; buildAnthropicMessages places them at the front.
-	if payload := a.reasoningStash.get(cfg.responsesPromptCacheKey); payload != nil && len(payload.anthropic) > 0 {
+	// assistant message; buildAnthropicMessages places them at the front. The
+	// stash is model-scoped: blocks captured from another model are never
+	// replayed, because Anthropic validates the signature against the model that
+	// produced it.
+	if payload := a.reasoningStash.get(reasoningReplayKey(cfg, model)); payload != nil && len(payload.anthropic) > 0 {
 		params.Messages = withAnthropicThinkingBlocks(params.Messages, payload.anthropic, model)
 	}
 
@@ -1761,7 +1946,16 @@ func (a *App) streamAnthropicMessages(ctx context.Context, cfg ConfigState, mode
 		usageState = &anthropicUsageState{}
 		stopReason = ""
 		stopSequence = ""
-		stream := client.Messages.NewStreaming(ctx, params)
+		// Anthropic requires the interleaved-thinking beta for extended thinking
+		// to continue across tool calls inside one turn (pi:
+		// anthropic-messages.ts betas, kimi: anthropic/requester.ts baseline).
+		// Adaptive-thinking models interleave by default, so the flag is only
+		// sent for budget-based models.
+		streamOptions := []anthropicoption.RequestOption{}
+		if beta := anthropicInterleavedThinkingBeta(thinkingEnabled, len(tools) > 0, model); beta != "" {
+			streamOptions = append(streamOptions, anthropicoption.WithHeader("anthropic-beta", beta))
+		}
+		stream := client.Messages.NewStreaming(ctx, params, streamOptions...)
 		for stream.Next() {
 			event := stream.Current()
 			switch event.Type {
@@ -1875,9 +2069,9 @@ func (a *App) streamAnthropicMessages(ctx context.Context, cfg ConfigState, mode
 	// tool loop. Non-thinking responses clear the stash so a later turn never
 	// replays stale blocks from an earlier model response.
 	if len(thinkingBlocks) > 0 {
-		a.reasoningStash.set(cfg.responsesPromptCacheKey, &sessionReasoningPayload{anthropic: thinkingBlocks})
+		a.reasoningStash.set(reasoningReplayKey(cfg, model), &sessionReasoningPayload{anthropic: thinkingBlocks})
 	} else {
-		a.reasoningStash.clear(cfg.responsesPromptCacheKey)
+		a.reasoningStash.clear(reasoningReplayKey(cfg, model))
 	}
 	return &modelStreamResult{
 		Content:          assistant.String(),
@@ -1888,6 +2082,19 @@ func (a *App) streamAnthropicMessages(ctx context.Context, cfg ConfigState, mode
 		StopReason:       stopReason,
 		StopSequence:     stopSequence,
 	}, nil
+}
+
+// anthropicInterleavedThinkingBeta returns the beta flag Anthropic requires for
+// extended thinking to continue between tool calls inside one assistant turn. pi
+// sends interleaved-thinking-2025-05-14 for any thinking request on a
+// non-adaptive model (anthropic-messages.ts betas); Ally limits it to tool turns,
+// which is where interleaving can actually happen, and never sends it to
+// adaptive-thinking models, which interleave by default.
+func anthropicInterleavedThinkingBeta(thinkingEnabled, hasTools bool, model string) string {
+	if !thinkingEnabled || !hasTools || isAnthropicAdaptiveThinkingModel(model) {
+		return ""
+	}
+	return "interleaved-thinking-2025-05-14"
 }
 
 func isAnthropicAdaptiveThinkingModel(model string) bool {
@@ -1901,22 +2108,36 @@ func isAnthropicAdaptiveThinkingModel(model string) bool {
 		strings.Contains(m, "mythos") || strings.HasPrefix(m, "claude-5")
 }
 
-func configureAnthropicThinking(params *anthropic.MessageNewParams, model, rawEffort string, maxTokens int) {
+// configureAnthropicThinking applies the thinking configuration for the
+// selected effort level and reports whether extended thinking is enabled for
+// this request (the caller uses that to decide on the interleaved-thinking
+// beta). It returns false for an explicit "off" and for "auto": auto sends no
+// thinking field at all, so the model's own default applies.
+func configureAnthropicThinking(params *anthropic.MessageNewParams, model, rawEffort string, maxTokens int) bool {
 	raw := strings.ToLower(strings.TrimSpace(rawEffort))
 	if raw == "off" || raw == "none" || raw == "disabled" {
 		params.Thinking = anthropic.ThinkingConfigParamUnion{OfDisabled: &anthropic.ThinkingConfigDisabledParam{Type: "disabled"}}
-		return
+		return false
 	}
 	effort := normalizeReasoningEffort(rawEffort)
 	if effort == "" || effort == reasoningEffortAuto {
-		return
+		return false
 	}
+	// display: "summarized" is what makes the model stream its thinking text:
+	// pi sets it explicitly on both branches so Opus 4.7 / Mythos behave like the
+	// older Claude 4 models (anthropic-messages.ts:1127/1135/1147), and the SDK
+	// documents summarized as the value that returns thinking normally instead of
+	// a signature-only ("omitted") response.
 	if isAnthropicAdaptiveThinkingModel(model) {
-		params.Thinking = anthropic.ThinkingConfigParamUnion{OfAdaptive: &anthropic.ThinkingConfigAdaptiveParam{Type: "adaptive"}}
+		params.Thinking = anthropic.ThinkingConfigParamUnion{OfAdaptive: &anthropic.ThinkingConfigAdaptiveParam{
+			Type:    "adaptive",
+			Display: anthropic.ThinkingConfigAdaptiveDisplaySummarized,
+		}}
 		params.OutputConfig = anthropic.OutputConfigParam{Effort: anthropic.OutputConfigEffort(effort)}
 	} else {
 		// Budget-tokens thinking for Claude 3.7 and non-adaptive models.
-		// Platform docs: minimum budget_tokens is 1024, and budget_tokens must be < max_tokens.
+		// Platform docs: minimum budget_tokens is 1024, and budget_tokens must be
+		// strictly less than max_tokens.
 		budget := int64(4096)
 		switch effort {
 		case "low":
@@ -1926,15 +2147,38 @@ func configureAnthropicThinking(params *anthropic.MessageNewParams, model, rawEf
 		case "high", "xhigh", "max":
 			budget = 32000
 		}
-		if maxTokens > 1024 && budget >= int64(maxTokens) {
-			budget = int64(maxTokens) - 256
-			if budget < 1024 {
-				budget = 1024
-			}
+		// The thinking budget and the visible answer share max_tokens, so a budget
+		// is capped to leave the answer room that is always kept free (pi:
+		// clampThinkingBudgetToAnswerRoom with MIN_ANSWER_TOKENS = 1024,
+		// simple-options.ts:64-72). When the configured cap cannot satisfy both
+		// the floor and the reserved answer room there is no valid
+		// extended-thinking configuration, so thinking is left unset instead of
+		// sending a request the API rejects.
+		if maxTokens < minAnthropicThinkingBudget+minAnthropicAnswerTokens {
+			log.Printf("[llm] max_tokens=%d is too small for Anthropic extended thinking; leaving thinking unset", maxTokens)
+			return false
 		}
-		params.Thinking = anthropic.ThinkingConfigParamOfEnabled(budget)
+		if room := int64(maxTokens - minAnthropicAnswerTokens); budget > room {
+			budget = room
+		}
+		params.Thinking = anthropic.ThinkingConfigParamUnion{OfEnabled: &anthropic.ThinkingConfigEnabledParam{
+			Type:         "enabled",
+			BudgetTokens: budget,
+			Display:      anthropic.ThinkingConfigEnabledDisplaySummarized,
+		}}
 	}
+	return true
 }
+
+const (
+	// minAnthropicThinkingBudget is Anthropic's documented floor for
+	// budget_tokens (budget_tokens must additionally stay below max_tokens).
+	minAnthropicThinkingBudget = 1024
+	// minAnthropicAnswerTokens is the output room always kept for the visible
+	// answer when a thinking budget shares the response ceiling (pi:
+	// MIN_ANSWER_TOKENS, simple-options.ts:64).
+	minAnthropicAnswerTokens = 1024
+)
 
 func anthropicStopReasonError(reason string, hasOutput bool) error {
 	switch strings.TrimSpace(reason) {
@@ -1974,13 +2218,28 @@ func modelResponseStopError(cfg ConfigState, result *modelStreamResult) error {
 			return fmt.Errorf("OpenAI-compatible response stopped with unsupported reason %q", result.StopReason)
 		}
 	}
+	if normalizeAPIFormat(cfg.APIFormat) == apiFormatOpenAIResponses {
+		switch strings.TrimSpace(result.StopReason) {
+		case "", "stop", "completed", "in_progress", "queued", "tool_calls":
+			return nil
+		case "length":
+			return errors.New("OpenAI Responses reached the Max Tokens limit; increase Max Tokens or shorten the conversation")
+		case "content_filter":
+			return errors.New("OpenAI Responses was stopped by the content filter")
+		default:
+			if hasOutput {
+				return nil
+			}
+			return fmt.Errorf("OpenAI Responses stopped with unsupported reason %q", result.StopReason)
+		}
+	}
 	if normalizeAPIFormat(cfg.APIFormat) != apiFormatAnthropicMessages {
 		return nil
 	}
 	return anthropicStopReasonError(result.StopReason, hasOutput)
 }
 
-func buildOpenAIResponsesInput(messages []legacyopenai.ChatCompletionMessage) (string, oaresp.ResponseInputParam) {
+func buildOpenAIResponsesInput(messages []legacyopenai.ChatCompletionMessage, toolItemIDs map[string]string) (string, oaresp.ResponseInputParam) {
 	systemParts := []string{}
 	input := oaresp.ResponseInputParam{}
 	hasSeenTurn := false
@@ -2014,7 +2273,7 @@ func buildOpenAIResponsesInput(messages []legacyopenai.ChatCompletionMessage) (s
 					input = append(input, oaresp.ResponseInputItemParamOfMessage(text, oaresp.EasyInputMessageRoleAssistant))
 				}
 				for _, call := range m.ToolCalls {
-					input = append(input, responseInputItemParamOfFunctionCall(call))
+					input = append(input, responseInputItemParamOfFunctionCall(call, toolItemIDs))
 				}
 				continue
 			}
@@ -2029,20 +2288,33 @@ func buildOpenAIResponsesInput(messages []legacyopenai.ChatCompletionMessage) (s
 		case legacyopenai.ChatMessageRoleTool:
 			hasSeenTurn = true
 			if strings.TrimSpace(m.ToolCallID) != "" {
-				input = append(input, responseInputItemParamOfFunctionCallOutput(sanitizeOpenAIResponsesCallID(m.ToolCallID), m.Content))
+				input = append(input, responseInputItemParamOfFunctionCallOutput(toolcall.ForResponsesCall(m.ToolCallID), m.Content))
 			}
 		}
 	}
 	return strings.Join(systemParts, "\n\n"), input
 }
 
-func responseInputItemParamOfFunctionCall(call legacyopenai.ToolCall) oaresp.ResponseInputItemUnionParam {
+func responseInputItemParamOfFunctionCall(call legacyopenai.ToolCall, toolItemIDs map[string]string) oaresp.ResponseInputItemUnionParam {
 	args := strings.TrimSpace(call.Function.Arguments)
 	if args == "" {
 		args = "{}"
 	}
-	callID := sanitizeOpenAIResponsesCallID(effectiveToolCallID(call))
-	return oaresp.ResponseInputItemParamOfFunctionCall(args, callID, call.Function.Name)
+	callID := toolcall.ForResponsesCall(toolcall.Effective(call.ID, call.Function.Name))
+	p := oaresp.ResponseInputItemParamOfFunctionCall(args, callID, call.Function.Name)
+	// A replayed reasoning item is paired with its follower BY ID: sending the
+	// reasoning item's id back without the id of the function_call it precedes
+	// is rejected ("Item 'rs_…' of type 'reasoning' was provided without its
+	// required following item"), which is why pi keeps the fc_* item id for the
+	// same model (openai-responses-shared.ts:247-292). The id is only replayed
+	// when it came from the current model's last response (model-scoped stash),
+	// so a foreign or stale id can never be sent.
+	if p.OfFunctionCall != nil {
+		if id := strings.TrimSpace(toolItemIDs[callID]); id != "" && toolcall.IsSafeResponsesItemID(id) {
+			p.OfFunctionCall.ID = oa.String(id)
+		}
+	}
+	return p
 }
 
 func openAIResponsesContentFromMulti(m legacyopenai.ChatCompletionMessage) oaresp.ResponseInputMessageContentListParam {
@@ -2132,8 +2404,8 @@ func buildAnthropicMessages(messages []legacyopenai.ChatCompletionMessage) (stri
 				blocks = append(blocks, anthropic.NewTextBlock(text))
 			}
 			for _, call := range m.ToolCalls {
-				toolID := sanitizeAnthropicToolCallID(effectiveToolCallID(call))
-				blocks = append(blocks, anthropic.NewToolUseBlock(toolID, decodeToolArguments(call.Function.Arguments), call.Function.Name))
+				toolID := toolcall.ForAnthropic(toolcall.Effective(call.ID, call.Function.Name))
+				blocks = append(blocks, anthropic.NewToolUseBlock(toolID, toolcall.DecodeArguments(call.Function.Arguments), call.Function.Name))
 			}
 			appendMessage(anthropic.MessageParamRoleAssistant, blocks)
 		case legacyopenai.ChatMessageRoleTool:
@@ -2144,7 +2416,7 @@ func buildAnthropicMessages(messages []legacyopenai.ChatCompletionMessage) (stri
 				if toolID == "" {
 					toolID = "tool_call"
 				}
-				toolID = sanitizeAnthropicToolCallID(toolID)
+				toolID = toolcall.ForAnthropic(toolID)
 				blocks = append(blocks, anthropic.NewToolResultBlock(toolID, toolMsg.Content, anthropicToolResultIsError(toolMsg.Content)))
 				i++
 			}
@@ -2306,7 +2578,7 @@ func convertToolsToOpenAIResponses(tools []legacyopenai.Tool) []oaresp.ToolUnion
 		if tool.Function == nil {
 			continue
 		}
-		params := schemaMap(tool.Function.Parameters)
+		params := schemautil.Map(tool.Function.Parameters)
 		next := oaresp.ToolParamOfFunction(tool.Function.Name, params, false)
 		if next.OfFunction != nil && strings.TrimSpace(tool.Function.Description) != "" {
 			next.OfFunction.Description = oa.String(tool.Function.Description)
@@ -2324,7 +2596,7 @@ func convertToolsToAnthropic(tools []legacyopenai.Tool) []anthropic.ToolUnionPar
 		}
 		t := anthropic.ToolParam{
 			Name:        tool.Function.Name,
-			InputSchema: anthropicInputSchema(schemaMap(tool.Function.Parameters)),
+			InputSchema: anthropicInputSchema(schemautil.Map(tool.Function.Parameters)),
 		}
 		if strings.TrimSpace(tool.Function.Description) != "" {
 			t.Description = anthropic.String(tool.Function.Description)
@@ -2341,319 +2613,20 @@ func normalizeToolsForOpenAIChat(tools []legacyopenai.Tool) []legacyopenai.Tool 
 	out := make([]legacyopenai.Tool, len(tools))
 	for i, t := range tools {
 		out[i] = t
-		if t.Function != nil && t.Function.Parameters != nil {
-			fn := *t.Function
-			fn.Parameters = schemaMap(t.Function.Parameters)
-			out[i].Function = &fn
-		}
-	}
-	return out
-}
-
-func schemaMap(value any) map[string]any {
-	if value == nil {
-		return map[string]any{"type": "object", "properties": map[string]any{}}
-	}
-	var m map[string]any
-	if asMap, ok := value.(map[string]any); ok {
-		m = cloneJSONMap(asMap)
-	} else if raw, err := json.Marshal(value); err == nil {
-		_ = json.Unmarshal(raw, &m)
-	}
-	if m == nil {
-		return map[string]any{"type": "object", "properties": map[string]any{}}
-	}
-	dereffed := derefJSONSchema(m)
-	return normalizeToolSchemaTypes(dereffed)
-}
-
-func cloneJSONMap(m map[string]any) map[string]any {
-	if m == nil {
-		return nil
-	}
-	out := make(map[string]any, len(m))
-	for k, v := range m {
-		out[k] = cloneJSONValue(v)
-	}
-	return out
-}
-
-func cloneJSONValue(v any) any {
-	switch val := v.(type) {
-	case map[string]any:
-		return cloneJSONMap(val)
-	case []any:
-		out := make([]any, len(val))
-		for i, item := range val {
-			out[i] = cloneJSONValue(item)
-		}
-		return out
-	default:
-		return val
-	}
-}
-
-// derefJSONSchema resolves local $ref pointers (such as #/$defs/... and #/definitions/...)
-// by inlining definitions directly into the schema. Anthropic, Moonshot (Kimi), and
-// OpenAI Responses strict mode reject schemas with unresolved $ref pointers.
-// Circular references are preserved as $ref to avoid infinite recursion.
-func derefJSONSchema(root map[string]any) map[string]any {
-	if root == nil {
-		return nil
-	}
-	cloned := cloneJSONMap(root)
-	visited := make(map[string]bool)
-	resolved := resolveSchemaNode(cloned, cloned, visited)
-	resMap, ok := resolved.(map[string]any)
-	if !ok {
-		return cloned
-	}
-	if !hasUnresolvedRef(resMap, "$defs") {
-		delete(resMap, "$defs")
-	}
-	if !hasUnresolvedRef(resMap, "definitions") {
-		delete(resMap, "definitions")
-	}
-	return resMap
-}
-
-func resolveSchemaNode(node any, root map[string]any, visited map[string]bool) any {
-	switch val := node.(type) {
-	case []any:
-		out := make([]any, len(val))
-		for i, v := range val {
-			out[i] = resolveSchemaNode(v, root, visited)
-		}
-		return out
-	case map[string]any:
-		if refStr, ok := val["$ref"].(string); ok && strings.HasPrefix(refStr, "#/") {
-			if visited[refStr] {
-				return val
-			}
-			target, found := resolveLocalJSONPointer(root, refStr)
-			if found {
-				visited[refStr] = true
-				targetResolved := resolveSchemaNode(target, root, visited)
-				delete(visited, refStr)
-
-				if targetMap, isMap := targetResolved.(map[string]any); isMap {
-					merged := make(map[string]any, len(targetMap)+len(val))
-					for k, v := range targetMap {
-						merged[k] = v
-					}
-					for k, v := range val {
-						if k == "$ref" {
-							continue
-						}
-						merged[k] = resolveSchemaNode(v, root, visited)
-					}
-					return merged
-				}
-				return targetResolved
-			}
-			return val
-		}
-		out := make(map[string]any, len(val))
-		for k, v := range val {
-			out[k] = resolveSchemaNode(v, root, visited)
-		}
-		return out
-	default:
-		return node
-	}
-}
-
-func resolveLocalJSONPointer(root map[string]any, ref string) (any, bool) {
-	if ref == "#" {
-		return root, true
-	}
-	parts := strings.Split(strings.TrimPrefix(ref, "#/"), "/")
-	var curr any = root
-	for _, part := range parts {
-		part = strings.ReplaceAll(strings.ReplaceAll(part, "~1", "/"), "~0", "~")
-		currMap, ok := curr.(map[string]any)
-		if !ok {
-			return nil, false
-		}
-		val, exists := currMap[part]
-		if !exists {
-			return nil, false
-		}
-		curr = val
-	}
-	return curr, true
-}
-
-func hasUnresolvedRef(node any, bucket string) bool {
-	prefix := "#/" + bucket + "/"
-	switch val := node.(type) {
-	case []any:
-		for _, v := range val {
-			if hasUnresolvedRef(v, bucket) {
-				return true
-			}
-		}
-	case map[string]any:
-		if ref, ok := val["$ref"].(string); ok && strings.HasPrefix(ref, prefix) {
-			return true
-		}
-		for k, v := range val {
-			if k == bucket {
-				continue
-			}
-			if hasUnresolvedRef(v, bucket) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// normalizeToolSchemaTypes ensures all property nodes in a JSON Schema have an
-// explicit valid 'type' field and repairs contradictory types (e.g. type: 'object'
-// alongside enum: ["a", "b"] caused by MCP generator bugs). Anthropic, Moonshot
-// (Kimi), and OpenAI Responses strict mode reject property schemas missing 'type'.
-func normalizeToolSchemaTypes(schema map[string]any) map[string]any {
-	if schema == nil {
-		return nil
-	}
-	normalizeSchemaNodeTypes(schema, false)
-	return schema
-}
-
-func normalizeSchemaNodeTypes(node any, isPropertyDef bool) {
-	m, ok := node.(map[string]any)
-	if !ok || m == nil {
-		return
-	}
-
-	if isPropertyDef {
-		rawType, hasType := m["type"]
-		typeStr, isStr := rawType.(string)
-		if !hasType || !isStr || strings.TrimSpace(typeStr) == "" {
-			inferred := inferSchemaTypeFromNode(m)
-			if inferred != "" {
-				m["type"] = inferred
-			} else {
-				m["type"] = "string"
-			}
-		} else {
-			if enumVal, ok := m["enum"].([]any); ok && len(enumVal) > 0 {
-				inferred := inferTypeFromEnumValues(enumVal)
-				if inferred != "" && inferred != typeStr {
-					m["type"] = inferred
-					if inferred != "object" {
-						delete(m, "properties")
-						delete(m, "required")
-					}
-					if inferred != "array" {
-						delete(m, "items")
-					}
-				}
-			}
-		}
-	}
-
-	if props, ok := m["properties"].(map[string]any); ok {
-		for _, v := range props {
-			normalizeSchemaNodeTypes(v, true)
-		}
-	}
-	if patProps, ok := m["patternProperties"].(map[string]any); ok {
-		for _, v := range patProps {
-			normalizeSchemaNodeTypes(v, true)
-		}
-	}
-	if items := m["items"]; items != nil {
-		if itemMap, ok := items.(map[string]any); ok {
-			normalizeSchemaNodeTypes(itemMap, false)
-		} else if itemArr, ok := items.([]any); ok {
-			for _, item := range itemArr {
-				normalizeSchemaNodeTypes(item, false)
-			}
-		}
-	}
-	if allOf, ok := m["allOf"].([]any); ok {
-		for _, sub := range allOf {
-			normalizeSchemaNodeTypes(sub, isPropertyDef)
-		}
-	}
-	if anyOf, ok := m["anyOf"].([]any); ok {
-		for _, sub := range anyOf {
-			normalizeSchemaNodeTypes(sub, isPropertyDef)
-		}
-	}
-	if oneOf, ok := m["oneOf"].([]any); ok {
-		for _, sub := range oneOf {
-			normalizeSchemaNodeTypes(sub, isPropertyDef)
-		}
-	}
-	if defs, ok := m["$defs"].(map[string]any); ok {
-		for _, v := range defs {
-			normalizeSchemaNodeTypes(v, false)
-		}
-	}
-	if defs, ok := m["definitions"].(map[string]any); ok {
-		for _, v := range defs {
-			normalizeSchemaNodeTypes(v, false)
-		}
-	}
-}
-
-func inferSchemaTypeFromNode(m map[string]any) string {
-	if enumVal, ok := m["enum"].([]any); ok && len(enumVal) > 0 {
-		if t := inferTypeFromEnumValues(enumVal); t != "" {
-			return t
-		}
-	}
-	if constVal, ok := m["const"]; ok {
-		if t := inferTypeFromSingleValue(constVal); t != "" {
-			return t
-		}
-	}
-	if _, ok := m["properties"]; ok {
-		return "object"
-	}
-	if _, ok := m["required"]; ok {
-		return "object"
-	}
-	if _, ok := m["items"]; ok {
-		return "array"
-	}
-	return ""
-}
-
-func inferTypeFromEnumValues(vals []any) string {
-	var inferred string
-	for _, v := range vals {
-		t := inferTypeFromSingleValue(v)
-		if t == "" {
+		if t.Function == nil {
 			continue
 		}
-		if inferred == "" {
-			inferred = t
-		} else if inferred != t {
-			return "string"
-		}
+		// A function tool must always carry a parameters object: the field is
+		// required by the API, and the Anthropic / Responses converters build the
+		// same default through schemautil.Map. Routing all three adapters through
+		// one path means a tool declared without parameters can never serialize
+		// into a request that omits the key (schemautil.Map maps nil to
+		// {"type":"object","properties":{}}).
+		fn := *t.Function
+		fn.Parameters = schemautil.Map(t.Function.Parameters)
+		out[i].Function = &fn
 	}
-	return inferred
-}
-
-func inferTypeFromSingleValue(v any) string {
-	switch v.(type) {
-	case string:
-		return "string"
-	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64, json.Number:
-		return "number"
-	case bool:
-		return "boolean"
-	case map[string]any:
-		return "object"
-	case []any:
-		return "array"
-	default:
-		return ""
-	}
+	return out
 }
 
 func anthropicInputSchema(schema map[string]any) anthropic.ToolInputSchemaParam {
@@ -2668,7 +2641,7 @@ func anthropicInputSchema(schema map[string]any) anthropic.ToolInputSchemaParam 
 	} else {
 		result.Properties = map[string]any{}
 	}
-	result.Required = stringSliceFromAny(schema["required"])
+	result.Required = schemautil.StringSlice(schema["required"])
 	result.ExtraFields = map[string]any{}
 	for key, value := range schema {
 		switch key {
@@ -2682,23 +2655,6 @@ func anthropicInputSchema(schema map[string]any) anthropic.ToolInputSchemaParam 
 		result.ExtraFields = nil
 	}
 	return result
-}
-
-func stringSliceFromAny(value any) []string {
-	switch v := value.(type) {
-	case []string:
-		return v
-	case []any:
-		out := make([]string, 0, len(v))
-		for _, item := range v {
-			if s, ok := item.(string); ok {
-				out = append(out, s)
-			}
-		}
-		return out
-	default:
-		return nil
-	}
 }
 
 func ensureResponsesToolCall(toolCalls *[]legacyopenai.ToolCall, byOutput map[int64]int, byItemID map[string]int, outputIndex int64, itemID string) int {
@@ -2723,6 +2679,24 @@ func ensureResponsesToolCall(toolCalls *[]legacyopenai.ToolCall, byOutput map[in
 	return idx
 }
 
+// captureResponsesToolItemID records the item id (fc_…) the model assigned to a
+// function call, keyed by the call id its result is replayed with. A replayed
+// reasoning item must be paired with the id of the item that follows it, so the
+// next request needs this id (see responseInputItemParamOfFunctionCall).
+func captureResponsesToolItemID(ids map[string]string, call legacyopenai.ToolCall, item oaresp.ResponseOutputItemUnion) {
+	if ids == nil || item.ID == "" || item.CallID == "" {
+		return
+	}
+	// Only ids that can be echoed back verbatim are kept
+	// (toolcall.IsSafeResponsesItemID), and the key is the same sanitized call id the
+	// replay path looks up, so a compound or over-long call id still pairs with
+	// its item id.
+	if !toolcall.IsSafeResponsesItemID(item.ID) {
+		return
+	}
+	ids[toolcall.ForResponsesCall(toolcall.Effective(call.ID, call.Function.Name))] = item.ID
+}
+
 func updateToolCallFromResponsesItem(call *legacyopenai.ToolCall, item oaresp.ResponseOutputItemUnion) {
 	if item.CallID != "" {
 		call.ID = item.CallID
@@ -2738,29 +2712,10 @@ func updateToolCallFromResponsesItem(call *legacyopenai.ToolCall, item oaresp.Re
 	}
 }
 
-// truncatedToolCallArguments replaces streamed tool-call arguments that were
-// cut off before the stream completed, leaving invalid JSON. Some providers
-// parse tool_calls[].function.arguments server-side and reject the whole
-// request with 400 when the string is malformed, so a truncated prefix must
-// never be replayed to the provider or persisted into history. The failed
-// tool result already explains the truncation to the model.
-const truncatedToolCallArguments = `{"allyTruncatedArguments":true}`
-
-// repairTruncatedToolCallArguments returns args unchanged when they are valid
-// JSON and the truncation marker otherwise. It repairs persisted history at
-// load time; live streamed arguments are rewritten the same way by
-// prepareToolCallsForExecution before execution.
-func repairTruncatedToolCallArguments(args string) string {
-	if args == "" || json.Valid([]byte(args)) {
-		return args
-	}
-	return truncatedToolCallArguments
-}
-
 // collapseRepeatedName folds a name that is an exact whole repetition of a
 // shorter string (>= 2 folds of a >= 3-char unit) back to one fold — the
 // artifact a relay that re-sends the function name in every streaming delta
-// produced in histories written before mergeRepeatedStringDelta existed.
+// produced in histories written before toolcall.MergeRepeatedDelta existed.
 // "http_request" repeated 7 times collapses back to "http_request"; real
 // tool names (snake_case verbs, mcp__server__tool) are never whole-number
 // repetitions, so the collapse cannot damage a legitimate name.
@@ -2834,16 +2789,6 @@ func isConcatenatedKnownToolNames(name string) bool {
 	return false
 }
 
-// isTruncatedArgsMarker 检测 args 是否是 normalizeToolCalls 替换出的截断标记
-// {"allyTruncatedArguments":true}。这种 tool call 不应被执行，也不应保留
-// 在历史里——它会毒化会话。
-func isTruncatedArgsMarker(args []byte) bool {
-	var v struct {
-		AllyTruncatedArguments bool `json:"allyTruncatedArguments"`
-	}
-	return json.Unmarshal(args, &v) == nil && v.AllyTruncatedArguments
-}
-
 // isProvider400Error 判断错误是否是服务商返回的 400 Bad Request。这通常意味
 // 着上下文里有服务端校验无法通过的消息（截断参数、拼接工具名等），runChat
 // 会先尝试 sanitize 修复上下文再重试，而不是直接中断会话。
@@ -2889,90 +2834,6 @@ func cloneToolCalls(toolCalls []legacyopenai.ToolCall) []legacyopenai.ToolCall {
 	out := make([]legacyopenai.ToolCall, len(toolCalls))
 	copy(out, toolCalls)
 	return out
-}
-
-func effectiveToolCallID(call legacyopenai.ToolCall) string {
-	if strings.TrimSpace(call.ID) != "" {
-		return call.ID
-	}
-	if strings.TrimSpace(call.Function.Name) != "" {
-		return "call_" + call.Function.Name
-	}
-	return "call_unknown"
-}
-
-// sanitizeAnthropicToolCallID normalizes a tool call ID to conform to the
-// Anthropic regex `^[a-zA-Z0-9_-]{1,64}$`. Non-matching characters are replaced
-// with '_', and length is capped at 64 characters.
-// If the sanitized ID exceeds 64 characters, it is truncated to 56 characters
-// followed by an underscore and a 7-character deterministic hex hash of the full ID.
-// This guarantees that tool_use and tool_result match identically while preventing
-// collisions between distinct long IDs that share the same 64-char prefix.
-func sanitizeAnthropicToolCallID(id string) string {
-	id = strings.TrimSpace(id)
-	if id == "" {
-		return "call_tool"
-	}
-	var b strings.Builder
-	for _, r := range id {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
-			b.WriteRune(r)
-		} else {
-			b.WriteRune('_')
-		}
-	}
-	s := b.String()
-	if len(s) > 64 {
-		h := fmt.Sprintf("%x", sha256.Sum256([]byte(id)))
-		s = s[:56] + "_" + h[:7]
-	}
-	return s
-}
-
-// sanitizeOpenAIResponsesCallID normalizes a tool call ID to conform to the
-// OpenAI Responses API schema (^[a-zA-Z0-9_-]{1,64}$). Compound IDs separated by '|'
-// (such as call_id|item_id) are split to retain the primary call_id, and
-// lengths > 64 chars are truncated with a deterministic SHA256 suffix.
-func sanitizeOpenAIResponsesCallID(id string) string {
-	id = strings.TrimSpace(id)
-	if id == "" {
-		return "call_tool"
-	}
-	if idx := strings.IndexByte(id, '|'); idx >= 0 {
-		id = strings.TrimSpace(id[:idx])
-		if id == "" {
-			return "call_tool"
-		}
-	}
-	var b strings.Builder
-	for _, r := range id {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
-			b.WriteRune(r)
-		} else {
-			b.WriteRune('_')
-		}
-	}
-	s := b.String()
-	if len(s) > 64 {
-		h := fmt.Sprintf("%x", sha256.Sum256([]byte(id)))
-		s = s[:56] + "_" + h[:7]
-	}
-	return s
-}
-
-func decodeToolArguments(args string) map[string]any {
-	args = strings.TrimSpace(args)
-	if args == "" {
-		return map[string]any{}
-	}
-	var decoded any
-	if err := json.Unmarshal([]byte(args), &decoded); err == nil && decoded != nil {
-		if m, ok := decoded.(map[string]any); ok {
-			return m
-		}
-		return map[string]any{"_raw": decoded}
-	}
-	return map[string]any{"_raw": args}
 }
 
 func messageText(m legacyopenai.ChatCompletionMessage) string {
@@ -3074,12 +2935,18 @@ func modelUsageFromLegacy(usage *legacyopenai.Usage, raw []byte) *modelUsage {
 	}
 }
 
+// modelUsageFromResponses maps the Responses usage counters. input_tokens is
+// inclusive of the cached and cache-write subsets (pi: openai-responses-shared
+// derives input = input_tokens - cached - cache_write), so the uncached share —
+// the denominator of the cache hit rate — is derived from input - cached instead
+// of being read from cache_write_tokens, which would under-count the miss side
+// and inflate the hit rate.
 func modelUsageFromResponses(usage oaresp.ResponseUsage) *modelUsage {
 	return modelUsageFromResponseTokenCounts(
 		usage.InputTokens,
 		usage.OutputTokens,
 		usage.InputTokensDetails.CachedTokens,
-		usage.InputTokensDetails.CacheWriteTokens,
+		0,
 	)
 }
 
@@ -3263,41 +3130,68 @@ func (s *anthropicUsageState) modelUsage() *modelUsage {
 	}
 }
 
-// mergeRepeatedStringDelta merges one non-empty streamed id/name delta into
-// its accumulated value. The OpenAI spec sends id and function name once in
-// the first delta, but some relays re-send the full value in every delta;
-// appending those verbatim produced names like "http_requesthttp_request..."
-// that then failed dispatch with "unknown tool" and, once replayed, made
-// providers that validate tool_calls reject every later request with 400.
-// Exact re-sends are ignored, extended re-sends (delta starts with the
-// accumulated value) replace it, and anything else is treated as a
-// progressive chunk and appended.
-func mergeRepeatedStringDelta(current, delta string) string {
-	switch {
-	case current == "":
-		return delta
-	case delta == current:
-		return current
-	case strings.HasPrefix(delta, current):
-		return delta
-	default:
-		return current + delta
+// toolCallAccumulator assembles streamed tool_calls deltas the way pi does
+// (openai-completions.ts:489-536): a delta is matched to its call through a
+// table keyed by the stream index and a table keyed by the call id. The index is
+// an opaque key, never a slice position, so a relay that numbers its calls from
+// 1 — or skips a number — no longer leaves a phantom empty call in the hole, and
+// a delta that carries only the id still finds its call. When neither table
+// matches, a new call is appended; no placeholder is ever created for a gap.
+//
+// Kept on top of pi (field-observed relay behaviour, locked by tests): the
+// "same index, different call" heuristic below, name/argument de-duplication.
+type toolCallAccumulator struct {
+	calls   []legacyopenai.ToolCall
+	byIndex map[int]int
+	byID    map[string]int
+}
+
+func newToolCallAccumulator(existing []legacyopenai.ToolCall) *toolCallAccumulator {
+	acc := &toolCallAccumulator{
+		calls:   cloneToolCalls(existing),
+		byIndex: map[int]int{},
+		byID:    map[string]int{},
+	}
+	for i := range acc.calls {
+		acc.bind(i, acc.calls[i])
+	}
+	return acc
+}
+
+// bind registers a slot under the delta's index and id (when present).
+func (acc *toolCallAccumulator) bind(slot int, delta legacyopenai.ToolCall) {
+	if delta.Index != nil {
+		acc.byIndex[*delta.Index] = slot
+	}
+	if id := strings.TrimSpace(delta.ID); id != "" {
+		acc.byID[id] = slot
 	}
 }
 
-// mergeToolCallDeltas merges streaming tool-call deltas into the accumulated
-// tool call list, appending or extending by index. Shared by the OpenAI
-// streaming adapters; the tests in app_test.go exercise the same package.
-func mergeToolCallDeltas(toolCalls *[]legacyopenai.ToolCall, deltas []legacyopenai.ToolCall) {
+// slot resolves the call a delta belongs to, appending a new one when the delta
+// identifies neither a known index nor a known id.
+func (acc *toolCallAccumulator) slot(delta legacyopenai.ToolCall) int {
+	if delta.Index != nil {
+		if i, ok := acc.byIndex[*delta.Index]; ok {
+			return i
+		}
+	}
+	if id := strings.TrimSpace(delta.ID); id != "" {
+		if i, ok := acc.byID[id]; ok {
+			return i
+		}
+	}
+	acc.calls = append(acc.calls, legacyopenai.ToolCall{Type: legacyopenai.ToolTypeFunction})
+	return len(acc.calls) - 1
+}
+
+// merge appends one streamed batch and returns the accumulated call list. It
+// must outlive the whole stream: index-only deltas (no id) can only be matched
+// across chunks while the tables are kept alive.
+func (acc *toolCallAccumulator) merge(deltas []legacyopenai.ToolCall) []legacyopenai.ToolCall {
 	for _, delta := range deltas {
-		idx := len(*toolCalls)
-		if delta.Index != nil {
-			idx = *delta.Index
-		}
-		for len(*toolCalls) <= idx {
-			*toolCalls = append(*toolCalls, legacyopenai.ToolCall{Type: legacyopenai.ToolTypeFunction})
-		}
-		current := &(*toolCalls)[idx]
+		slot := acc.slot(delta)
+		current := &acc.calls[slot]
 		// 不同工具名出现在同一个 Index:服务商可能对多个 tool_calls 使用了
 		// 相同的 Index（或都不带 Index），导致两个不同调用被合并。标准 OpenAI
 		// 规范里 name 只在首个 delta 出现一次，后续 delta name 为空。
@@ -3319,7 +3213,7 @@ func mergeToolCallDeltas(toolCalls *[]legacyopenai.ToolCall, deltas []legacyopen
 				distinctCall = !isKnownToolName(combined) && isKnownToolName(delta.Function.Name)
 			}
 			if distinctCall {
-				*toolCalls = append(*toolCalls, legacyopenai.ToolCall{
+				acc.calls = append(acc.calls, legacyopenai.ToolCall{
 					Type: delta.Type,
 					ID:   delta.ID,
 					Function: legacyopenai.FunctionCall{
@@ -3327,20 +3221,22 @@ func mergeToolCallDeltas(toolCalls *[]legacyopenai.ToolCall, deltas []legacyopen
 						Arguments: delta.Function.Arguments,
 					},
 				})
-				if (*toolCalls)[len(*toolCalls)-1].Type == "" {
-					(*toolCalls)[len(*toolCalls)-1].Type = legacyopenai.ToolTypeFunction
+				slot = len(acc.calls) - 1
+				if acc.calls[slot].Type == "" {
+					acc.calls[slot].Type = legacyopenai.ToolTypeFunction
 				}
+				acc.bind(slot, delta)
 				continue
 			}
 		}
 		if delta.ID != "" {
-			current.ID = mergeRepeatedStringDelta(current.ID, delta.ID)
+			current.ID = toolcall.MergeRepeatedDelta(current.ID, delta.ID)
 		}
 		if delta.Type != "" {
 			current.Type = delta.Type
 		}
 		if delta.Function.Name != "" {
-			current.Function.Name = mergeRepeatedStringDelta(current.Function.Name, delta.Function.Name)
+			current.Function.Name = toolcall.MergeRepeatedDelta(current.Function.Name, delta.Function.Name)
 		}
 		// Arguments are the one genuinely incremental field, but a relay that
 		// duplicates the whole first delta would double the opening arguments
@@ -3351,5 +3247,7 @@ func mergeToolCallDeltas(toolCalls *[]legacyopenai.ToolCall, deltas []legacyopen
 		if delta.Function.Arguments != "" && delta.Function.Arguments != current.Function.Arguments {
 			current.Function.Arguments += delta.Function.Arguments
 		}
+		acc.bind(slot, delta)
 	}
+	return acc.calls
 }

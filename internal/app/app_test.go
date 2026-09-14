@@ -95,10 +95,6 @@ func sseResponsesEvent(payload string) string {
 	return "data: " + payload + "\n\n"
 }
 
-func sseAnthropicEvent(event, payload string) string {
-	return "event: " + event + "\n" + "data: " + payload + "\n\n"
-}
-
 // runEventRecorder 记录事件序列并在 run 终止事件上通知，供异步 runChat 测试同步。
 type runEventRecorder struct {
 	mu     sync.Mutex
@@ -632,10 +628,11 @@ func TestRunStreamDeltaEmitterMergesReasoningAndContent(t *testing.T) {
 
 func TestToolCallProgressTrackerEmitsStreamingUpdates(t *testing.T) {
 	tracker := newToolCallProgressTracker()
+	acc := newToolCallAccumulator(nil)
 	toolCalls := []openai.ToolCall{}
 	idx := 0
 
-	mergeToolCallDeltas(&toolCalls, []openai.ToolCall{{
+	toolCalls = acc.merge([]openai.ToolCall{{
 		Index: &idx,
 		ID:    "call_create",
 		Type:  openai.ToolTypeFunction,
@@ -662,7 +659,7 @@ func TestToolCallProgressTrackerEmitsStreamingUpdates(t *testing.T) {
 		t.Fatalf("expected partial args in start event, got %#v", events[0].Payload["args"])
 	}
 
-	mergeToolCallDeltas(&toolCalls, []openai.ToolCall{{
+	toolCalls = acc.merge([]openai.ToolCall{{
 		Index: &idx,
 		Function: openai.FunctionCall{
 			Arguments: `\nbeta"}`,
@@ -709,13 +706,14 @@ func TestModelToolCallEventGateThrottlesLargeSnapshots(t *testing.T) {
 // payloads pass through unchanged and forceEvents always emits the final state.
 func TestToolCallProgressTrackerThrottlesLargeUpdates(t *testing.T) {
 	tracker := newToolCallProgressTracker()
+	acc := newToolCallAccumulator(nil)
 	toolCalls := []openai.ToolCall{}
 	idx := 0
 
 	// Large initial payload (above toolUpdateThreshold) emits tool:start.
 	largePrefix := `{"path":"big.txt","content":"`
 	largeSuffix := strings.Repeat("a", toolUpdateThreshold+100) + `"`
-	mergeToolCallDeltas(&toolCalls, []openai.ToolCall{{
+	toolCalls = acc.merge([]openai.ToolCall{{
 		Index: &idx,
 		ID:    "call_big",
 		Type:  openai.ToolTypeFunction,
@@ -730,7 +728,7 @@ func TestToolCallProgressTrackerThrottlesLargeUpdates(t *testing.T) {
 	}
 
 	// A rapid second update with still-large args should be throttled to zero.
-	mergeToolCallDeltas(&toolCalls, []openai.ToolCall{{
+	toolCalls = acc.merge([]openai.ToolCall{{
 		Index: &idx,
 		Function: openai.FunctionCall{
 			Arguments: `more"`,
@@ -753,9 +751,10 @@ func TestToolCallProgressTrackerThrottlesLargeUpdates(t *testing.T) {
 
 	// Small payloads (below threshold) are never throttled.
 	smallTracker := newToolCallProgressTracker()
+	smallAcc := newToolCallAccumulator(nil)
 	smallCalls := []openai.ToolCall{}
 	sidx := 0
-	mergeToolCallDeltas(&smallCalls, []openai.ToolCall{{
+	smallCalls = smallAcc.merge([]openai.ToolCall{{
 		Index: &sidx,
 		ID:    "call_small",
 		Type:  openai.ToolTypeFunction,
@@ -767,7 +766,7 @@ func TestToolCallProgressTrackerThrottlesLargeUpdates(t *testing.T) {
 	if events := smallTracker.events("run-1", "session-1", "0:0", smallCalls, nil); len(events) != 1 || events[0].Name != "tool:start" {
 		t.Fatalf("expected tool:start for small payload, got %#v", events)
 	}
-	mergeToolCallDeltas(&smallCalls, []openai.ToolCall{{
+	smallCalls = smallAcc.merge([]openai.ToolCall{{
 		Index: &sidx,
 		Function: openai.FunctionCall{
 			Arguments: `,"depth":2}`,
@@ -775,6 +774,57 @@ func TestToolCallProgressTrackerThrottlesLargeUpdates(t *testing.T) {
 	}})
 	if events = smallTracker.events("run-1", "session-1", "0:0", smallCalls, nil); len(events) != 1 || events[0].Name != "tool:update" {
 		t.Fatalf("expected unthrottled tool:update for small payload, got %#v", events)
+	}
+}
+
+// TestDowngradeUnsupportedImages locks the image-input gate: only an explicit
+// false downgrades images (pi: transform-messages.ts:35-63, gated on
+// model.input). "unknown" (nil) and true both send the images unchanged, so a
+// custom model with no catalog data keeps today's behaviour instead of being
+// guessed at.
+func TestDowngradeUnsupportedImages(t *testing.T) {
+	imagePart := openai.ChatMessagePart{
+		Type:     openai.ChatMessagePartTypeImageURL,
+		ImageURL: &openai.ChatMessageImageURL{URL: "data:image/png;base64,AAA"},
+	}
+	textPart := openai.ChatMessagePart{Type: openai.ChatMessagePartTypeText, Text: "look at this"}
+	withImage := []openai.ChatCompletionMessage{
+		{Role: openai.ChatMessageRoleUser, Content: "hi"},
+		{Role: openai.ChatMessageRoleUser, MultiContent: []openai.ChatMessagePart{textPart, imagePart}},
+	}
+	yes, no := true, false
+
+	for _, tc := range []struct {
+		name string
+		cfg  ConfigState
+	}{
+		{"unknown capability keeps images", ConfigState{}},
+		{"vision model keeps images", ConfigState{VisionCapable: &yes}},
+	} {
+		got := downgradeUnsupportedImages(withImage, tc.cfg)
+		if len(got[1].MultiContent) != 2 || got[1].MultiContent[1].Type != openai.ChatMessagePartTypeImageURL {
+			t.Fatalf("%s: %#v", tc.name, got[1].MultiContent)
+		}
+	}
+
+	got := downgradeUnsupportedImages(withImage, ConfigState{VisionCapable: &no})
+	if len(got) != 2 || got[0].Content != "hi" {
+		t.Fatalf("non-image messages must pass through: %#v", got)
+	}
+	parts := got[1].MultiContent
+	if len(parts) != 2 {
+		t.Fatalf("expected text + placeholder, got %#v", parts)
+	}
+	if parts[0].Text != "look at this" {
+		t.Fatalf("text parts must keep their order, got %#v", parts)
+	}
+	if parts[1].Type != openai.ChatMessagePartTypeText || !strings.Contains(parts[1].Text, "image omitted") {
+		t.Fatalf("the image must become a text placeholder, got %#v", parts[1])
+	}
+	// The caller's messages must not be mutated: the same in-memory history is
+	// re-sent when the user switches back to a vision model.
+	if len(withImage[1].MultiContent) != 2 || withImage[1].MultiContent[1].Type != openai.ChatMessagePartTypeImageURL {
+		t.Fatalf("input must not be mutated: %#v", withImage[1].MultiContent)
 	}
 }
 

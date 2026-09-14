@@ -239,6 +239,12 @@ func mergeConfig(base, overlay ConfigState) ConfigState {
 	if overlay.ReasoningTag != "" {
 		base.ReasoningTag = overlay.ReasoningTag
 	}
+	// VisionCapable 是三态指针：nil 表示 overlay 未提供该字段并保留 base 的
+	// 当前值，true/false 才是显式设置（否则每个不携带该字段的旧版前端都会把
+	// 已知的视觉能力抹成“未知”）。
+	if overlay.VisionCapable != nil {
+		base.VisionCapable = overlay.VisionCapable
+	}
 	if overlay.ReasoningEffort != "" {
 		base.ReasoningEffort = overlay.ReasoningEffort
 	}
@@ -570,6 +576,11 @@ func (a *App) SaveConfig(req ConfigState) error {
 	}
 	a.config.ReasoningTag = normalizeReasoningTag(req.ReasoningTag)
 	a.config.ReasoningEffort = normalizeReasoningEffort(req.ReasoningEffort)
+	// nil 表示请求没有携带该字段（旧前端、或来源未声明模态的模型）：保留已加载
+	// 的值，避免一次保存就把已知的视觉能力抹成"未知"。
+	if req.VisionCapable != nil {
+		a.config.VisionCapable = req.VisionCapable
+	}
 	// Background opacity is editable from the frontend slider; persist it
 	// directly. The image filename is managed by SaveBackgroundImage — only
 	// adopt it from the SaveConfig overlay when the frontend echoes the
@@ -637,6 +648,7 @@ func (a *App) TestModelConnection(model ModelConfig) error {
 		ContextWindow:   model.ContextWindow,
 		TokenParam:      normalizeTokenParam(model.TokenParam),
 		ReasoningTag:    normalizeReasoningTag(model.ReasoningTag),
+		VisionCapable:   model.VisionCapable,
 		ReasoningEffort: normalizeReasoningEffort(model.ReasoningEffort),
 		ProxyMode:       networkCfg.ProxyMode,
 		ProxyURL:        networkCfg.ProxyURL,

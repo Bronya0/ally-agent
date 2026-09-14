@@ -61,8 +61,19 @@ type ContextBreakdownPart struct {
 	Tokens int    `json:"tokens"`
 }
 
+// ContextBreakdown breaks down the token usage of a session's next request by
+// category.
+//
+// Total is the authoritative request size: it equals Estimated (the sum of the
+// categories below) until the provider reports a real prompt usage for the
+// session. From then on the reported size replaces the estimate for everything
+// it covered — the request prefix as well as the messages it counted — and
+// Total becomes MeasuredTokens + TrailingTokens. The category fields stay
+// estimates in both cases, so they may not add up to Total once a measurement
+// applies.
 type ContextBreakdown struct {
 	Total             int                    `json:"total"`
+	Estimated         int                    `json:"estimated"`
 	SystemPrompt      int                    `json:"systemPrompt"`
 	SystemPromptParts []ContextBreakdownPart `json:"systemPromptParts,omitempty"`
 	ToolSchemas       int                    `json:"toolSchemas"`
@@ -70,6 +81,19 @@ type ContextBreakdown struct {
 	AssistantMsgs     int                    `json:"assistantMsgs"`
 	ToolResults       int                    `json:"toolResults"`
 	Reasoning         int                    `json:"reasoning"`
+	// MeasuredTokens is the provider-reported size (prompt + completion) of the
+	// session's most recent request, covering the request prefix and the first
+	// MeasuredMessages conversation messages. Zero means no measurement is
+	// available yet and Total is a pure text estimate.
+	MeasuredTokens int `json:"measuredTokens,omitempty"`
+	// MeasuredMessages is the number of conversation messages that measurement
+	// covers. It counts persisted messages only: the system prompt and workspace
+	// map are re-prepared for every request and never stored, so counting them
+	// would make the measurement depend on which list it is resolved against.
+	MeasuredMessages int `json:"measuredMessages,omitempty"`
+	// TrailingTokens estimates the conversation messages added after the
+	// measured request.
+	TrailingTokens int `json:"trailingTokens,omitempty"`
 }
 
 // WorkspaceTokenUsage is the cumulative input/output token usage for a workspace.
@@ -290,8 +314,18 @@ func estimateToolSchemaTokens(tools []openai.Tool) int {
 	return total
 }
 
+// finalizeContextBreakdownTotal recomputes the category sum and the
+// authoritative total. A provider measurement wins over the text estimate:
+// MeasuredTokens already covers the request prefix (system prompt, workspace
+// map, plan snapshot) and the messages it counted, so only the messages added
+// after that request are estimated on top (pi: estimateContextTokens,
+// packages/ai/src/utils/estimate.ts).
 func finalizeContextBreakdownTotal(result *ContextBreakdown) {
-	result.Total = result.SystemPrompt + result.ToolSchemas + result.UserMessages + result.AssistantMsgs + result.ToolResults + result.Reasoning
+	result.Estimated = result.SystemPrompt + result.ToolSchemas + result.UserMessages + result.AssistantMsgs + result.ToolResults + result.Reasoning
+	result.Total = result.Estimated
+	if result.MeasuredTokens > 0 {
+		result.Total = result.MeasuredTokens + result.TrailingTokens
+	}
 }
 
 func estimateMessageBodyTokens(m openai.ChatCompletionMessage) int {
@@ -456,6 +490,47 @@ func (a *App) peekSessionWorkspaceMap(sessionID string, cfg ConfigState) string 
 	return workspaceMapSnapshotNote + content
 }
 
+// sessionPrefixBreakdown returns the request prefix this session will carry —
+// the system prompt parts, the session-frozen workspace map and the current plan
+// snapshot — as a token total plus the same sections broken out for the footer
+// popover.
+//
+// It is the single source of the prefix figure: the footer displays it and the
+// run loop adds it to the auto-compaction trigger, because the live message
+// breakdown only covers the conversation. Both therefore agree on what the
+// request carries before the first provider measurement arrives.
+func (a *App) sessionPrefixBreakdown(sessionID string, cfg ConfigState, allSkills []SkillDefinition) (int, []ContextBreakdownPart) {
+	parts := []ContextBreakdownPart{}
+	total := 0
+	appendPart := func(label, content string) {
+		tokens := estimateTokensFromText(content)
+		if tokens <= 0 {
+			return
+		}
+		total += tokens
+		parts = append(parts, ContextBreakdownPart{Label: label, Tokens: tokens})
+	}
+	// System prompt: the session-frozen variant once frozen, the live prompt
+	// before that (peek semantics — footer polling must not pin the session's
+	// prompt bytes ahead of the first real request). Part-level granularity is
+	// preserved so the footer popover keeps its per-section breakdown
+	// (core prompt, skills, memories, AGENTS.md, ...).
+	for _, part := range a.systemPromptPartsForBreakdown(sessionID, cfg, allSkills) {
+		appendPart(part.label, part.content)
+	}
+	// Workspace map: the session-frozen variant, not the live map — the request
+	// prefix carries sessionWorkspaceMap(sessionID, cfg) plus its snapshot note,
+	// so both consumers must count those exact bytes. A session that has not
+	// frozen its map yet is counted from the live map without freezing it — the
+	// actual request will freeze its own copy when it runs.
+	appendPart(workspaceMapPartLabel, a.peekSessionWorkspaceMap(sessionID, cfg))
+	// Plan snapshot: appendPlanForUserTurn injects it before the latest user
+	// message on the first request of a run. It is request-only and transient,
+	// but occupies real context budget while the plan is unfinished.
+	appendPart(planSnapshotPartLabel, formatPlanSnapshot(a.GetTodos(sessionID)))
+	return total, parts
+}
+
 // getContextBreakdown computes token estimates from the real session state.
 // If liveBreakdown is available, it returns a merged view (live messages + current system/tools).
 // workspaceHint (optional, from the UI) overrides the session-based workspace
@@ -463,100 +538,47 @@ func (a *App) peekSessionWorkspaceMap(sessionID string, cfg ConfigState) string 
 func (a *App) getContextBreakdown(sessionID string, workspaceHint string) ContextBreakdown {
 	cfg := a.sessionContextConfig(sessionID, workspaceHint)
 
-	// System prompt: count from the same bytes the request prefix carries —
-	// the session-frozen variant once frozen, the live prompt before that.
-	// Part-level granularity is preserved so the footer popover keeps its
-	// per-section breakdown (core prompt, skills, memories, AGENTS.md, ...).
+	// Request prefix and tool schemas: counted from the same bytes the next
+	// request carries — the session-frozen system prompt, the session's
+	// workspace map, the current plan snapshot and the session-frozen tool set.
+	// sessionPrefixBreakdown is shared with the run loop, so the footer and the
+	// auto-compaction trigger agree on the prefix figure.
 	result := ContextBreakdown{}
-	for _, part := range a.systemPromptPartsForBreakdown(sessionID, cfg, a.listCachedSkills()) {
-		tokens := estimateTokensFromText(part.content)
-		if tokens <= 0 {
-			continue
-		}
-		result.SystemPrompt += tokens
-		result.SystemPromptParts = append(result.SystemPromptParts, ContextBreakdownPart{
-			Label:  part.label,
-			Tokens: tokens,
-		})
-	}
-	// Tool schemas: count the same list the request carries — the
-	// session-frozen set once frozen (peek semantics; see buildToolsForSession),
-	// the live set before that.
+	result.SystemPrompt, result.SystemPromptParts = a.sessionPrefixBreakdown(sessionID, cfg, a.listCachedSkills())
 	result.ToolSchemas = estimateToolSchemaTokens(a.sessionToolsetForBreakdown(sessionID, cfg))
-
-	// Workspace map: count the session-frozen variant, not the live map — the
-	// request prefix carries sessionWorkspaceMap(sessionID, cfg) (plus the
-	// snapshot note), so the footer must match those exact bytes. peek-
-	// semantics: a session that has not frozen its map yet is counted from
-	// the live map without freezing it — the actual request will freeze its
-	// own copy when it runs.
-	if wm := a.peekSessionWorkspaceMap(sessionID, cfg); wm != "" {
-		tokens := estimateTokensFromText(wm)
-		result.SystemPrompt += tokens
-		result.SystemPromptParts = append(result.SystemPromptParts, ContextBreakdownPart{
-			Label:  "工作区文件结构",
-			Tokens: tokens,
-		})
-	}
-
-	// Plan snapshot (appendPlanForUserTurn injects it before the latest user
-	// message on the first request of a run). It is request-only and
-	// transient, but occupies real context budget while the plan is
-	// unfinished, and the footer previously ignored it entirely.
-	if todos := a.GetTodos(sessionID); len(todos) > 0 {
-		if planTokens := estimateTokensFromText(formatPlanSnapshot(todos)); planTokens > 0 {
-			result.SystemPrompt += planTokens
-			result.SystemPromptParts = append(result.SystemPromptParts, ContextBreakdownPart{
-				Label:  "计划快照",
-				Tokens: planTokens,
-			})
-		}
-	}
 
 	// Check if live breakdown is available (covers tool calls + tool results not in a.histories)
 	a.mu.Lock()
 	live, hasLive := a.liveBreakdown[sessionID]
 	a.mu.Unlock()
 	if hasLive {
-		// Use live message counts but keep current system/tool schemas (they may change)
+		// Use live message counts but keep current system/tool schemas (they may change).
 		result.UserMessages = live.UserMessages
 		result.AssistantMsgs = live.AssistantMsgs
 		result.ToolResults = live.ToolResults
 		result.Reasoning = live.Reasoning
-	} else {
-		// Fall back to history-based counting (missing tool calls + tool results)
-		// loadSessionHistoryCopy triggers lazy disk load when the session is not yet
-		// cached in this process (e.g. after switching sessions from localStorage),
-		// so context stats are accurate on session restore without waiting for StartChat.
-		hist := a.loadSessionHistoryCopy(sessionID)
-		for _, m := range hist {
-			tokens := estimateMessageBodyTokens(m)
-			switch m.Role {
-			case "user":
-				result.UserMessages += tokens
-			case "assistant":
-				result.AssistantMsgs += tokens
-			case "tool":
-				result.ToolResults += tokens
-			}
-			for _, tc := range m.ToolCalls {
-				// Tool-call ID and Type are part of the wire payload and
-				// were previously omitted here.
-				result.AssistantMsgs += estimateTokensFromText(tc.ID) +
-					estimateTokensFromText(string(tc.Type)) +
-					estimateTokensFromText(tc.Function.Name) +
-					estimateTokensFromText(tc.Function.Arguments)
-			}
-			if m.ReasoningContent != "" {
-				result.Reasoning += estimateTokensFromText(m.ReasoningContent)
-			}
-		}
+		// The provider measurement comes from the live run: it owns the message
+		// list the anchor was resolved against, so the footer must report the
+		// same total the run loop uses instead of re-deriving a text estimate.
+		result.MeasuredTokens = live.MeasuredTokens
+		result.MeasuredMessages = live.MeasuredMessages
+		result.TrailingTokens = live.TrailingTokens
+		finalizeContextBreakdownTotal(&result)
+		return result
 	}
 
-	// ToolSchemas already comes from contextStaticBreakdown (which caches it
-	// and is invalidated by invalidateContextStaticCache on MCP/skill changes).
-	// Do NOT recompute here — that would defeat the cache on every popover refresh.
-	finalizeContextBreakdownTotal(&result)
+	// Fall back to history-based counting (missing tool calls + tool results).
+	// loadSessionHistoryCopy triggers lazy disk load when the session is not yet
+	// cached in this process (e.g. after switching sessions from localStorage),
+	// so context stats are accurate on session restore without waiting for StartChat.
+	hist := a.loadSessionHistoryCopy(sessionID)
+	for _, m := range hist {
+		addBreakdownMessage(&result, m)
+	}
+	// No live run: resolve the session's measurement against the stored
+	// conversation, so a footer poll between runs still reports the
+	// provider-measured size.
+	a.finalizeSessionBreakdown(sessionID, &result, hist)
 	return result
 }
 
@@ -592,37 +614,49 @@ func (acc *liveBreakdownAccumulator) update(messages []openai.ChatCompletionMess
 		acc.breakdown = ContextBreakdown{}
 	}
 	for _, message := range messages[acc.nextMessage:] {
-		addLiveBreakdownMessage(&acc.breakdown, message)
+		addBreakdownMessage(&acc.breakdown, message)
 	}
 	acc.nextMessage = len(messages)
 	finalizeContextBreakdownTotal(&acc.breakdown)
 	return acc.breakdown
 }
 
-func addLiveBreakdownMessage(result *ContextBreakdown, message openai.ChatCompletionMessage) {
+// messageTokens estimates one message's wire cost: its body (text or
+// multi-content parts) plus the tool-call fields — the call ID and Type are part
+// of the payload too and were previously omitted. Reasoning text is charged
+// separately by reasoningTokens so the breakdown can report it as its own row.
+func messageTokens(message openai.ChatCompletionMessage) int {
+	total := estimateMessageBodyTokens(message)
+	for _, call := range message.ToolCalls {
+		total += estimateTokensFromText(call.ID)
+		total += estimateTokensFromText(string(call.Type))
+		total += estimateTokensFromText(call.Function.Name)
+		total += estimateTokensFromText(call.Function.Arguments)
+	}
+	return total
+}
+
+func reasoningTokens(message openai.ChatCompletionMessage) int {
+	return estimateTokensFromText(message.ReasoningContent)
+}
+
+// addBreakdownMessage counts one message into the breakdown. The live
+// accumulator and the saved-history fallback both go through it, so the footer
+// reports the same numbers whether a run is active or not.
+func addBreakdownMessage(result *ContextBreakdown, message openai.ChatCompletionMessage) {
 	if result == nil {
 		return
 	}
-	tokens := estimateMessageBodyTokens(message)
+	tokens := messageTokens(message)
 	switch message.Role {
-	case "user":
+	case openai.ChatMessageRoleUser:
 		result.UserMessages += tokens
-	case "assistant":
+	case openai.ChatMessageRoleAssistant:
 		result.AssistantMsgs += tokens
-	case "tool":
+	case openai.ChatMessageRoleTool:
 		result.ToolResults += tokens
 	}
-	for _, tc := range message.ToolCalls {
-		// Tool-call ID and Type are part of the wire payload and
-		// were previously omitted here.
-		result.AssistantMsgs += estimateTokensFromText(tc.ID) +
-			estimateTokensFromText(string(tc.Type)) +
-			estimateTokensFromText(tc.Function.Name) +
-			estimateTokensFromText(tc.Function.Arguments)
-	}
-	if message.ReasoningContent != "" {
-		result.Reasoning += estimateTokensFromText(message.ReasoningContent)
-	}
+	result.Reasoning += reasoningTokens(message)
 }
 
 // computeLiveBreakdown builds a ContextBreakdown from the actual live messages that will be sent to the API.
@@ -631,10 +665,141 @@ func addLiveBreakdownMessage(result *ContextBreakdown, message openai.ChatComple
 func computeLiveBreakdown(msgs []openai.ChatCompletionMessage) ContextBreakdown {
 	result := ContextBreakdown{}
 	for _, message := range msgs {
-		addLiveBreakdownMessage(&result, message)
+		addBreakdownMessage(&result, message)
 	}
 	finalizeContextBreakdownTotal(&result)
 	return result
+}
+
+// Breakdown section labels. They are shared with the frontend popover, which
+// maps them to localized text (ComposerInfoBar's contextPartLabel), so both
+// sides name the same sections.
+const (
+	workspaceMapPartLabel = "工作区文件结构"
+	planSnapshotPartLabel = "计划快照"
+)
+
+// contextAnchor is the provider-reported size of a session's most recent
+// request plus the number of conversation messages that request carried. pi
+// reads the same pair off the assistant message holding the usage
+// (packages/ai/src/utils/estimate.ts, getLastAssistantUsageInfo); Ally's history
+// messages are plain wire structs without a usage field, so the pair lives in
+// App state next to the other per-session run records.
+//
+// covered counts conversation messages only: the system prompt and workspace map
+// are re-prepared for every request and never persisted, so counting them would
+// tie the anchor to whichever list (run messages vs. stored history) it is
+// resolved against.
+type contextAnchor struct {
+	covered int
+	tokens  int
+}
+
+// conversationMessageCount counts the messages a session persists and replays:
+// everything except the request-only system prefix (system prompt + workspace
+// map), which is re-prepared for every request and never stored in history.
+func conversationMessageCount(messages []openai.ChatCompletionMessage) int {
+	count := 0
+	for _, message := range messages {
+		if message.Role == openai.ChatMessageRoleSystem {
+			continue
+		}
+		count++
+	}
+	return count
+}
+
+// resolveContextAnchor returns the provider measurement to use in place of the
+// text estimate for a message list, plus the estimate for the messages added
+// after the request that produced it.
+//
+// ok is false when no measurement applies: none was recorded yet, or the anchor
+// no longer covers a prefix of the list. Compaction and history truncation
+// rewrite the conversation, and a list shorter than the recorded coverage means
+// the anchor cannot describe it any more. Falling back to the pure text estimate
+// is the safe direction there: the estimate never under-counts the request.
+func resolveContextAnchor(messages []openai.ChatCompletionMessage, anchor contextAnchor) (measured contextAnchor, trailing int, ok bool) {
+	if anchor.tokens <= 0 || conversationMessageCount(messages) < anchor.covered {
+		return contextAnchor{}, 0, false
+	}
+	seen := 0
+	for _, message := range messages {
+		if message.Role == openai.ChatMessageRoleSystem {
+			continue
+		}
+		if seen >= anchor.covered {
+			trailing += messageTokens(message) + reasoningTokens(message)
+		}
+		seen++
+	}
+	return anchor, trailing, true
+}
+
+// applyContextAnchor stores the provider measurement on the breakdown when it
+// still covers a prefix of messages, then recomputes the totals.
+func applyContextAnchor(breakdown *ContextBreakdown, messages []openai.ChatCompletionMessage, anchor contextAnchor) {
+	if measured, trailing, ok := resolveContextAnchor(messages, anchor); ok {
+		breakdown.MeasuredTokens = measured.tokens
+		breakdown.MeasuredMessages = measured.covered
+		breakdown.TrailingTokens = trailing
+	}
+	finalizeContextBreakdownTotal(breakdown)
+}
+
+// recordContextAnchor stores the provider-reported size of the request that
+// produced usage. messages is the run's message list including the assistant
+// reply that usage describes, so its conversation count is exactly what the
+// measurement covers.
+func (a *App) recordContextAnchor(sessionID string, messages []openai.ChatCompletionMessage, usage *modelUsage) {
+	if sessionID == "" || usage == nil || usage.PromptTokens <= 0 {
+		return
+	}
+	tokens := usage.PromptTokens + usage.CompletionTokens
+	if tokens <= 0 {
+		return
+	}
+	a.mu.Lock()
+	// Lazy-init guard: writing an uninitialized map while holding the mutex
+	// panics and leaves it locked forever, so App values built outside NewApp
+	// must not be able to take the process down with them.
+	if a.contextAnchors == nil {
+		a.contextAnchors = map[string]contextAnchor{}
+	}
+	a.contextAnchors[sessionID] = contextAnchor{covered: conversationMessageCount(messages), tokens: tokens}
+	a.mu.Unlock()
+}
+
+// contextAnchorFor returns the recorded measurement for a session; the zero
+// value means "none", which makes resolveContextAnchor fall back to the text
+// estimate.
+func (a *App) contextAnchorFor(sessionID string) contextAnchor {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.contextAnchors[sessionID]
+}
+
+// clearContextAnchor drops a session's measurement when its conversation is
+// rewritten (compaction, truncation): the recorded coverage describes a message
+// list that no longer exists.
+func (a *App) clearContextAnchor(sessionID string) {
+	if sessionID == "" {
+		return
+	}
+	a.mu.Lock()
+	delete(a.contextAnchors, sessionID)
+	a.mu.Unlock()
+}
+
+// finalizeSessionBreakdown resolves the session's provider measurement against
+// the message list the breakdown was built from and recomputes the totals. Every
+// writer of a live breakdown goes through it (or through applyContextAnchor while
+// it already holds a.mu), so the footer, the run loop and the auto-compaction
+// trigger all report the same total. Callers must not hold a.mu.
+func (a *App) finalizeSessionBreakdown(sessionID string, breakdown *ContextBreakdown, messages []openai.ChatCompletionMessage) {
+	if breakdown == nil {
+		return
+	}
+	applyContextAnchor(breakdown, messages, a.contextAnchorFor(sessionID))
 }
 
 // handleTodoList implements the plan tool.
@@ -768,7 +933,14 @@ func cloneTodos(list []TodoEntry) []TodoEntry {
 
 // ── Request message assembly ─────────────────────────────────
 
+// buildMessages assembles the request message list and applies the model-facing
+// input downgrades. It is the single choke point every provider adapter goes
+// through, so a model limitation only has to be implemented once.
 func (a *App) buildMessages(req ChatRequest, cfg ConfigState, allSkills []SkillDefinition) []openai.ChatCompletionMessage {
+	return downgradeUnsupportedImages(a.assembleMessages(req, cfg, allSkills), cfg)
+}
+
+func (a *App) assembleMessages(req ChatRequest, cfg ConfigState, allSkills []SkillDefinition) []openai.ChatCompletionMessage {
 	messages := a.buildSystemContextMessages(req.SessionID, cfg, allSkills)
 
 	if len(req.Messages) > 0 {
@@ -802,6 +974,79 @@ func (a *App) buildMessages(req ChatRequest, cfg ConfigState, allSkills []SkillD
 		messages = appendUserMessageWithAttachments(messages, req.Message, req.Attachments)
 	}
 	return messages
+}
+
+// nonVisionImagePlaceholder is what an image becomes when the model cannot take
+// image input. pi uses the same wording (transform-messages.ts:12-13): telling
+// the model that an image was omitted beats dropping it silently, because the
+// model can then say it cannot see the image instead of guessing at it.
+//
+// pi also carries a tool-result variant ("tool image omitted"); Ally has no
+// second case to cover: images only ever ride on user messages
+// (readImageInjectionMessage builds a user turn).
+const nonVisionImagePlaceholder = "(image omitted: model does not support images)"
+
+// downgradeUnsupportedImages replaces image parts with a text placeholder when
+// the model is known to reject image input. VisionCapable == nil means "unknown"
+// and keeps the images untouched: guessing from the model id would be wrong on
+// exactly the relay/custom endpoints where it matters, so the flag comes from the
+// model catalog (pi gates this on model.input, transform-messages.ts:35-63).
+//
+// The downgrade runs at the request boundary rather than at injection time, so
+// switching back to a vision model restores the images — the in-memory history
+// still holds them.
+func downgradeUnsupportedImages(messages []openai.ChatCompletionMessage, cfg ConfigState) []openai.ChatCompletionMessage {
+	if cfg.VisionCapable == nil || *cfg.VisionCapable || len(messages) == 0 {
+		return messages
+	}
+	var out []openai.ChatCompletionMessage
+	for i := range messages {
+		if !hasImagePart(messages[i].MultiContent) {
+			continue
+		}
+		if out == nil {
+			// Copy on first hit: the common case (a vision model, or no images at
+			// all) must not pay for a full history clone.
+			out = cloneChatMessages(messages)
+		}
+		out[i].MultiContent = replaceImagePartsWithPlaceholder(out[i].MultiContent)
+	}
+	if out == nil {
+		return messages
+	}
+	return out
+}
+
+func hasImagePart(parts []openai.ChatMessagePart) bool {
+	for _, part := range parts {
+		if part.Type == openai.ChatMessagePartTypeImageURL {
+			return true
+		}
+	}
+	return false
+}
+
+// replaceImagePartsWithPlaceholder keeps the text parts in order and represents
+// the omitted images with one placeholder part, so the message keeps a valid
+// non-empty shape for a text-only model.
+func replaceImagePartsWithPlaceholder(parts []openai.ChatMessagePart) []openai.ChatMessagePart {
+	out := make([]openai.ChatMessagePart, 0, len(parts)+1)
+	omitted := 0
+	for _, part := range parts {
+		if part.Type == openai.ChatMessagePartTypeImageURL {
+			omitted++
+			continue
+		}
+		out = append(out, part)
+	}
+	if omitted == 0 {
+		return parts
+	}
+	label := nonVisionImagePlaceholder
+	if omitted > 1 {
+		label = fmt.Sprintf("%s x%d", nonVisionImagePlaceholder, omitted)
+	}
+	return append(out, openai.ChatMessagePart{Type: openai.ChatMessagePartTypeText, Text: label})
 }
 
 // cancelledTurnMarker returns the user-role control message recorded when the

@@ -12,13 +12,18 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+
+	"ally-dev/internal/tools/toolcall"
 
 	anthropic "github.com/anthropics/anthropic-sdk-go"
 	oa "github.com/openai/openai-go/v3"
+	oaresp "github.com/openai/openai-go/v3/responses"
 	legacyopenai "github.com/sashabaranov/go-openai"
 )
 
@@ -168,7 +173,7 @@ func TestOpenAIResponsesGPT56PromptCacheRequest(t *testing.T) {
 	body := buildOpenAIResponsesRequest(cfg, "gpt-5.6-sol", []legacyopenai.ChatCompletionMessage{
 		{Role: legacyopenai.ChatMessageRoleSystem, Content: "stable system context"},
 		{Role: legacyopenai.ChatMessageRoleUser, Content: "inspect the cache"},
-	}, nil)
+	}, nil, nil)
 
 	request := marshalResponsesRequest(t, body)
 	if got, _ := request["prompt_cache_key"].(string); got != cacheKey {
@@ -228,7 +233,7 @@ func TestOpenAIResponsesPromptCacheKeyFollowsCodexForCompatibleEndpoints(t *test
 			body := buildOpenAIResponsesRequest(tt.cfg, tt.model, []legacyopenai.ChatCompletionMessage{{
 				Role:    legacyopenai.ChatMessageRoleUser,
 				Content: "hello",
-			}}, nil)
+			}}, nil, nil)
 			request := marshalResponsesRequest(t, body)
 			gotKey, hasKey := request["prompt_cache_key"].(string)
 			if hasKey != tt.wantKey || (tt.wantKey && gotKey != cacheKey) {
@@ -320,7 +325,7 @@ func TestNormalizeToolCallsPreservesRawArgumentsForExecutionRewrite(t *testing.T
 	if out[2].Function.Arguments != `{"files":[]}` {
 		t.Fatalf("valid arguments must pass through unchanged: %q", out[2].Function.Arguments)
 	}
-	if input[0].Function.Arguments == truncatedToolCallArguments {
+	if input[0].Function.Arguments == toolcall.TruncatedArgumentsMarker {
 		t.Fatal("normalizeToolCalls must not mutate its input")
 	}
 }
@@ -393,6 +398,52 @@ func TestIsProvider400ErrorUsesTypedStatusCodes(t *testing.T) {
 	}
 }
 
+// mergeToolCallDeltas is the test-side stateless helper: it merges one batch
+// into an existing list, rebuilding the index/id tables from the slice. Deltas
+// that carry an id therefore resolve across calls, but index-only deltas cannot
+// — tests that span a stream use newToolCallAccumulator directly, exactly like
+// the adapter does.
+func mergeToolCallDeltas(toolCalls *[]legacyopenai.ToolCall, deltas []legacyopenai.ToolCall) {
+	*toolCalls = newToolCallAccumulator(*toolCalls).merge(deltas)
+}
+
+// TestToolCallAccumulatorSkipsPhantomCallsForNonZeroBasedIndexes locks the fix
+// for relays that number their tool calls from 1 or skip a number: the old
+// implementation treated the index as a slice position and back-filled empty
+// entries, so the gap became a tool call with an empty name in the assistant
+// message (server 400 / local "unknown tool"). pi keys the block by index/id and
+// never creates a placeholder (openai-completions.ts:493-536).
+func TestToolCallAccumulatorSkipsPhantomCallsForNonZeroBasedIndexes(t *testing.T) {
+	acc := newToolCallAccumulator(nil)
+	one := 1
+	toolCalls := acc.merge([]legacyopenai.ToolCall{{
+		Index: &one, ID: "call_b", Type: legacyopenai.ToolTypeFunction,
+		Function: legacyopenai.FunctionCall{Name: "read", Arguments: `{"path":"b.txt"`},
+	}})
+	if len(toolCalls) != 1 {
+		t.Fatalf("index 1 must produce exactly one call, got %d: %#v", len(toolCalls), toolCalls)
+	}
+	if toolCalls[0].Function.Name != "read" || toolCalls[0].ID != "call_b" {
+		t.Fatalf("call must keep its own name and id: %#v", toolCalls[0])
+	}
+
+	// A later delta carrying only the index must continue the same call — this
+	// is what requires the accumulator to outlive the whole stream.
+	toolCalls = acc.merge([]legacyopenai.ToolCall{{
+		Index:    &one,
+		Function: legacyopenai.FunctionCall{Arguments: `,"depth":1}`},
+	}})
+	if len(toolCalls) != 1 {
+		t.Fatalf("index-only delta must not create a second call: %#v", toolCalls)
+	}
+	if toolCalls[0].Function.Arguments != `{"path":"b.txt","depth":1}` {
+		t.Fatalf("index-only delta must append to the same call, got %q", toolCalls[0].Function.Arguments)
+	}
+	if toolCalls[0].Function.Name != "read" {
+		t.Fatalf("name must stay intact, got %q", toolCalls[0].Function.Name)
+	}
+}
+
 func TestMergeToolCallDeltasDedupesResentNames(t *testing.T) {
 	// The relay pattern from the field: every tool_calls delta carries the
 	// full function name (and id) again alongside each arguments chunk.
@@ -449,8 +500,9 @@ func TestMergeToolCallDeltasAppendsProgressiveNameChunks(t *testing.T) {
 	// must keep appending.
 	var toolCalls []legacyopenai.ToolCall
 	index := 0
-	mergeToolCallDeltas(&toolCalls, []legacyopenai.ToolCall{{Index: &index, ID: "call_1", Function: legacyopenai.FunctionCall{Name: "http_"}}})
-	mergeToolCallDeltas(&toolCalls, []legacyopenai.ToolCall{{Index: &index, Function: legacyopenai.FunctionCall{Name: "request"}}})
+	acc := newToolCallAccumulator(nil)
+	toolCalls = acc.merge([]legacyopenai.ToolCall{{Index: &index, ID: "call_1", Function: legacyopenai.FunctionCall{Name: "http_"}}})
+	toolCalls = acc.merge([]legacyopenai.ToolCall{{Index: &index, Function: legacyopenai.FunctionCall{Name: "request"}}})
 	if toolCalls[0].Function.Name != "http_request" {
 		t.Fatalf("progressive name chunks must append, got %q", toolCalls[0].Function.Name)
 	}
@@ -557,10 +609,11 @@ func TestMergeToolCallDeltasSkipsDuplicatedArgumentChunks(t *testing.T) {
 	// arguments chunk too; appending it verbatim corrupts the JSON.
 	var toolCalls []legacyopenai.ToolCall
 	index := 0
+	acc := newToolCallAccumulator(nil)
 	first := legacyopenai.ToolCall{Index: &index, ID: "call_1", Function: legacyopenai.FunctionCall{Name: "read", Arguments: `{"fi`}}
-	mergeToolCallDeltas(&toolCalls, []legacyopenai.ToolCall{first})
-	mergeToolCallDeltas(&toolCalls, []legacyopenai.ToolCall{first})
-	mergeToolCallDeltas(&toolCalls, []legacyopenai.ToolCall{{Index: &index, Function: legacyopenai.FunctionCall{Name: "read", Arguments: `les":[]}`}}})
+	toolCalls = acc.merge([]legacyopenai.ToolCall{first})
+	toolCalls = acc.merge([]legacyopenai.ToolCall{first})
+	toolCalls = acc.merge([]legacyopenai.ToolCall{{Index: &index, Function: legacyopenai.FunctionCall{Name: "read", Arguments: `les":[]}`}}})
 	if toolCalls[0].Function.Arguments != `{"files":[]}` {
 		t.Fatalf("duplicated argument chunks must be skipped, got %q", toolCalls[0].Function.Arguments)
 	}
@@ -684,32 +737,11 @@ func TestMoonshotCachedTokensExtraction(t *testing.T) {
 	}
 }
 
-func TestAnthropicToolCallIDSanitization(t *testing.T) {
-	dirtyID := "call:tool.run|123_456-abc"
-	clean := sanitizeAnthropicToolCallID(dirtyID)
-	if clean != "call_tool_run_123_456-abc" {
-		t.Fatalf("sanitized ID = %q, want %q", clean, "call_tool_run_123_456-abc")
-	}
-
-	longID := strings.Repeat("a", 100)
-	cleanLong := sanitizeAnthropicToolCallID(longID)
-	if len(cleanLong) != 64 {
-		t.Fatalf("expected 64 chars, got %d", len(cleanLong))
-	}
-
-	// Two distinct IDs sharing the same 70-char prefix must NOT collide after sanitization
-	prefix := strings.Repeat("x", 70)
-	idA := prefix + "_alpha"
-	idB := prefix + "_bravo"
-	cleanA := sanitizeAnthropicToolCallID(idA)
-	cleanB := sanitizeAnthropicToolCallID(idB)
-	if cleanA == cleanB {
-		t.Fatalf("cleanA and cleanB must not collide: %q == %q", cleanA, cleanB)
-	}
-	if len(cleanA) != 64 || len(cleanB) != 64 {
-		t.Fatalf("expected 64 chars for both, got %d and %d", len(cleanA), len(cleanB))
-	}
-
+// TestAnthropicToolCallIDPairingUsesSharedSanitizer: the id rules themselves
+// live in internal/tools/toolcall (see its tests); what matters here is that
+// tool_use and tool_result of one turn go through the same sanitizer, or
+// Anthropic rejects the turn with a mismatched pair.
+func TestAnthropicToolCallIDPairingUsesSharedSanitizer(t *testing.T) {
 	// buildAnthropicMessages must sanitize IDs consistently on both tool_use and tool_result
 	_, messages := buildAnthropicMessages([]legacyopenai.ChatCompletionMessage{
 		{Role: legacyopenai.ChatMessageRoleUser, Content: "run"},
@@ -761,32 +793,6 @@ func TestAnthropicToolResultIsError(t *testing.T) {
 	}
 }
 
-func TestDecodeToolArgumentsEnsuresObject(t *testing.T) {
-	// Arrays must be wrapped in map
-	resArr := decodeToolArguments(`[1, 2, 3]`)
-	if _, ok := resArr["_raw"]; !ok {
-		t.Fatalf("array arguments must be wrapped in map with _raw, got %v", resArr)
-	}
-
-	// Primitives must be wrapped in map
-	resNum := decodeToolArguments(`42`)
-	if _, ok := resNum["_raw"]; !ok {
-		t.Fatalf("number arguments must be wrapped in map with _raw, got %v", resNum)
-	}
-
-	// Objects must be preserved
-	resObj := decodeToolArguments(`{"foo":"bar"}`)
-	if resObj["foo"] != "bar" {
-		t.Fatalf("object arguments must be preserved, got %v", resObj)
-	}
-
-	// Empty string must return empty map
-	resEmpty := decodeToolArguments(``)
-	if len(resEmpty) != 0 {
-		t.Fatalf("empty arguments must return empty map, got %v", resEmpty)
-	}
-}
-
 func TestOpenAIResponsesMidTurnSystemAndDeduplication(t *testing.T) {
 	// 1. Mid-turn system message becomes developer input item
 	instructions, input := buildOpenAIResponsesInput([]legacyopenai.ChatCompletionMessage{
@@ -795,7 +801,7 @@ func TestOpenAIResponsesMidTurnSystemAndDeduplication(t *testing.T) {
 		{Role: legacyopenai.ChatMessageRoleAssistant, Content: "hi"},
 		{Role: legacyopenai.ChatMessageRoleSystem, Content: "steer reminder: stay concise"},
 		{Role: legacyopenai.ChatMessageRoleUser, Content: "what is 1+1?"},
-	})
+	}, nil)
 	if instructions != "base instructions" {
 		t.Fatalf("instructions = %q, want base instructions", instructions)
 	}
@@ -970,41 +976,6 @@ func TestAnthropicToolPromptCacheBreakpoint(t *testing.T) {
 	}
 }
 
-func TestDerefJSONSchema(t *testing.T) {
-	schema := map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"filter": map[string]any{
-				"$ref":        "#/$defs/FilterType",
-				"description": "override description",
-			},
-		},
-		"$defs": map[string]any{
-			"FilterType": map[string]any{
-				"type": "string",
-				"enum": []any{"all", "active"},
-			},
-		},
-	}
-	derefed := derefJSONSchema(schema)
-	if _, hasDefs := derefed["$defs"]; hasDefs {
-		t.Fatal("expected $defs to be cleaned up after full inlining")
-	}
-	props, ok := derefed["properties"].(map[string]any)
-	if !ok {
-		t.Fatal("properties missing")
-	}
-	filter, ok := props["filter"].(map[string]any)
-	if !ok {
-		t.Fatal("filter missing")
-	}
-	if filter["type"] != "string" {
-		t.Fatalf("expected inlined type=string, got %v", filter["type"])
-	}
-	if filter["description"] != "override description" {
-		t.Fatalf("sibling property override failed, got %v", filter["description"])
-	}
-}
 
 func TestResponseInputItemParamOfFunctionCallEmptyArgs(t *testing.T) {
 	call := legacyopenai.ToolCall{
@@ -1014,7 +985,7 @@ func TestResponseInputItemParamOfFunctionCallEmptyArgs(t *testing.T) {
 			Arguments: "",
 		},
 	}
-	item := responseInputItemParamOfFunctionCall(call)
+	item := responseInputItemParamOfFunctionCall(call, nil)
 	if item.OfFunctionCall == nil {
 		t.Fatal("expected OfFunctionCall")
 	}
@@ -1053,107 +1024,270 @@ func TestBuildAnthropicMessagesEmptyToolCallID(t *testing.T) {
 	}
 }
 
-func TestExtractRawStreamReasoningArrayTolerant(t *testing.T) {
-	raw := []byte(`{
-		"choices": [
-			{
-				"delta": {
-					"reasoning": "deep reasoning here",
-					"reasoning_details": [{"type": "text", "text": "deep reasoning here"}]
-				}
-			}
-		]
-	}`)
-	got := extractRawStreamReasoning(raw)
-	if got != "deep reasoning here" {
-		t.Fatalf("expected reasoning to be extracted despite array reasoning_details, got %q", got)
+func TestParseStreamReasoningHandlesArrayDetails(t *testing.T) {
+	chunk := func(delta map[string]any) []byte {
+		raw, err := json.Marshal(map[string]any{"choices": []map[string]any{{"delta": delta}}})
+		if err != nil {
+			t.Fatalf("marshal chunk: %v", err)
+		}
+		return raw
+	}
+	// A relay that mirrors both forms: the plain reasoning string wins for
+	// display, the structured details are still captured for replay.
+	text, details := parseStreamReasoning(chunk(map[string]any{
+		"reasoning": "deep reasoning here",
+		"reasoning_details": []map[string]any{
+			{"type": "reasoning.text", "text": "deep reasoning here"},
+		},
+	}))
+	if text != "deep reasoning here" {
+		t.Fatalf("reasoning text = %q, want the reasoning field", text)
+	}
+	if len(details) != 1 {
+		t.Fatalf("details = %+v, want the streamed detail object", details)
+	}
+
+	// OpenRouter streams only the details array: text and summary fragments are
+	// concatenated (they arrive one token at a time), encrypted details stay
+	// discrete.
+	text, details = parseStreamReasoning(chunk(map[string]any{
+		"reasoning_details": []map[string]any{
+			{"type": "reasoning.text", "text": "step ", "signature": "sig-1"},
+			{"type": "reasoning.text", "text": "two"},
+			{"type": "reasoning.encrypted", "data": "enc-1"},
+		},
+	}))
+	if text != "step two" {
+		t.Fatalf("details text = %q, want the concatenated fragments", text)
+	}
+	if len(details) != 2 {
+		t.Fatalf("details = %+v, want one merged text entry plus the encrypted entry", details)
+	}
+	if details[0]["text"] != "step two" || details[0]["signature"] != "sig-1" {
+		t.Fatalf("merged text detail = %+v, want joined text with the first signature", details[0])
+	}
+
+	// A summary-only details array still feeds the thinking panel and merges the
+	// same way across fragments.
+	text, details = parseStreamReasoning(chunk(map[string]any{
+		"reasoning_details": []map[string]any{
+			{"type": "reasoning.summary", "summary": "short "},
+			{"type": "reasoning.summary", "summary": "version"},
+		},
+	}))
+	if text != "short version" || len(details) != 1 || details[0]["summary"] != "short version" {
+		t.Fatalf("summary details = %q / %+v, want the concatenated summary", text, details)
 	}
 }
 
-func TestNormalizeToolSchemaTypes(t *testing.T) {
-	schema := map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"missing_type_enum_string": map[string]any{
-				"enum": []any{"asc", "desc"},
-			},
-			"missing_type_enum_number": map[string]any{
-				"enum": []any{1, 2, 3},
-			},
-			"contradictory_type": map[string]any{
-				"type": "object",
-				"enum": []any{"opt_a", "opt_b"},
-				"properties": map[string]any{
-					"bad": map[string]any{"type": "string"},
-				},
-			},
-			"missing_type_object": map[string]any{
-				"properties": map[string]any{
-					"sub": map[string]any{"type": "string"},
-				},
-			},
-			"missing_type_array": map[string]any{
-				"items": map[string]any{"type": "string"},
-			},
-			"fallback_typeless": map[string]any{
-				"description": "no info",
-			},
+// TestBuildOpenAIResponsesInputReplaysToolItemID covers the follower-id rule: a
+// replayed reasoning item is paired with the id of the item that follows it, so
+// the function_call item must carry the id the model emitted for that call.
+func TestBuildOpenAIResponsesInputReplaysToolItemID(t *testing.T) {
+	messages := []legacyopenai.ChatCompletionMessage{
+		{Role: legacyopenai.ChatMessageRoleUser, Content: "go"},
+		{Role: legacyopenai.ChatMessageRoleAssistant, ToolCalls: []legacyopenai.ToolCall{{
+			ID:       "call_1",
+			Type:     legacyopenai.ToolTypeFunction,
+			Function: legacyopenai.FunctionCall{Name: "read", Arguments: "{}"},
+		}}},
+		{Role: legacyopenai.ChatMessageRoleTool, ToolCallID: "call_1", Content: "ok"},
+	}
+	_, input := buildOpenAIResponsesInput(messages, map[string]string{"call_1": "fc_item_1"})
+	if len(input) != 3 {
+		t.Fatalf("input items = %d, want 3: %+v", len(input), input)
+	}
+	if call := input[1].OfFunctionCall; call == nil || call.ID.Value != "fc_item_1" {
+		t.Fatalf("function_call = %+v, want the captured item id", input[1])
+	}
+	// A call from an older turn (or another model) has no captured id: the
+	// field stays absent instead of being invented.
+	_, bare := buildOpenAIResponsesInput(messages, nil)
+	if bare[1].OfFunctionCall == nil || bare[1].OfFunctionCall.ID.Valid() {
+		t.Fatalf("foreign turn must not carry an item id: %+v", bare[1])
+	}
+	// An id that cannot be echoed back verbatim is dropped rather than sent.
+	_, unsafe := buildOpenAIResponsesInput(messages, map[string]string{"call_1": "fc bad|id"})
+	if unsafe[1].OfFunctionCall.ID.Valid() {
+		t.Fatalf("unsafe item id must be dropped: %+v", unsafe[1].OfFunctionCall.ID)
+	}
+}
+
+// TestEnsureResponsesReasoningSummaries guards the required-but-omitzero summary
+// key on replayed reasoning items.
+func TestEnsureResponsesReasoningSummaries(t *testing.T) {
+	body := map[string]any{
+		"input": []any{
+			map[string]any{"type": "reasoning", "id": "rs_1", "encrypted_content": "enc"},
+			map[string]any{"type": "function_call", "call_id": "call_1"},
+			map[string]any{"type": "reasoning", "id": "rs_2", "summary": []any{map[string]any{"type": "summary_text", "text": "kept"}}},
 		},
 	}
-
-	norm := normalizeToolSchemaTypes(schema)
-	props := norm["properties"].(map[string]any)
-
-	if props["missing_type_enum_string"].(map[string]any)["type"] != "string" {
-		t.Fatalf("expected string type for enum strings, got %v", props["missing_type_enum_string"])
+	if !ensureResponsesReasoningSummaries(body) {
+		t.Fatal("a reasoning item without a summary key must be completed")
 	}
-	if props["missing_type_enum_number"].(map[string]any)["type"] != "number" {
-		t.Fatalf("expected number type for enum numbers, got %v", props["missing_type_enum_number"])
+	items := body["input"].([]any)
+	if summary, ok := items[0].(map[string]any)["summary"].([]any); !ok || len(summary) != 0 {
+		t.Fatalf("summary = %#v, want an empty array", items[0].(map[string]any)["summary"])
 	}
-	contra := props["contradictory_type"].(map[string]any)
-	if contra["type"] != "string" {
-		t.Fatalf("expected contradictory object type to be repaired to string, got %v", contra["type"])
+	// The wire form matters: a nil slice would marshal as null instead of [],
+	// which is not the empty array the API accepts for a replayed item.
+	wire, err := json.Marshal(items)
+	if err != nil {
+		t.Fatalf("marshal input: %v", err)
 	}
-	if _, hasProps := contra["properties"]; hasProps {
-		t.Fatalf("expected properties to be deleted when repaired from object to string")
+	if !strings.Contains(string(wire), "\"summary\":[]") {
+		t.Fatalf("wire form %s must carry an empty summary array", wire)
 	}
-	if props["missing_type_object"].(map[string]any)["type"] != "object" {
-		t.Fatalf("expected object type inferred from properties")
+	if _, exists := items[1].(map[string]any)["summary"]; exists {
+		t.Fatal("only reasoning items may gain a summary key")
 	}
-	if props["missing_type_array"].(map[string]any)["type"] != "array" {
-		t.Fatalf("expected array type inferred from items")
+	if summary, ok := items[2].(map[string]any)["summary"].([]any); !ok || len(summary) != 1 {
+		t.Fatalf("an existing summary must be preserved: %#v", items[2].(map[string]any)["summary"])
 	}
-	if props["fallback_typeless"].(map[string]any)["type"] != "string" {
-		t.Fatalf("expected fallback typeless property to be string")
+	if ensureResponsesReasoningSummaries(body) {
+		t.Fatal("the normalization must be idempotent")
 	}
 }
 
-func TestSanitizeOpenAIResponsesCallID(t *testing.T) {
-	// Compound call|item ID should take the first token
-	got := sanitizeOpenAIResponsesCallID("call_12345|item_67890")
-	if got != "call_12345" {
-		t.Fatalf("expected call_12345, got %q", got)
+func TestOpenAIResponsesMaxOutputTokensFloor(t *testing.T) {
+	cfg := ConfigState{APIFormat: apiFormatOpenAIResponses, BaseURL: defaultOpenAIResponsesURL, MaxTokens: 4}
+	body := buildOpenAIResponsesRequest(cfg, "gpt-5.5", nil, nil, nil)
+	if !body.MaxOutputTokens.Valid() || body.MaxOutputTokens.Value != 16 {
+		t.Fatalf("max_output_tokens = %+v, want the documented floor of 16", body.MaxOutputTokens)
+	}
+	for _, tc := range []struct{ in, want int64 }{{4, 16}, {15, 16}, {16, 16}, {17, 17}, {4096, 4096}} {
+		cfg.MaxTokens = int(tc.in)
+		got := buildOpenAIResponsesRequest(cfg, "gpt-5.5", nil, nil, nil).MaxOutputTokens.Value
+		if got != tc.want {
+			t.Fatalf("max_output_tokens for %d = %d, want %d", tc.in, got, tc.want)
+		}
+	}
+}
+
+// TestModelUsageFromResponsesDerivesUncachedInput pins the cache arithmetic on
+// the mixed case: input_tokens includes the cached and cache-write subsets, so
+// the miss side is input - cached. Reading cache_write_tokens as the miss side
+// would under-count it (and inflate the reported hit rate).
+func TestModelUsageFromResponsesDerivesUncachedInput(t *testing.T) {
+	usage := modelUsageFromResponses(oaresp.ResponseUsage{
+		InputTokens:  1000,
+		OutputTokens: 8,
+		InputTokensDetails: oaresp.ResponseUsageInputTokensDetails{
+			CachedTokens:     800,
+			CacheWriteTokens: 100,
+		},
+	})
+	if usage == nil {
+		t.Fatal("modelUsageFromResponses() returned nil")
+	}
+	if usage.PromptTokens != 1000 || usage.CacheHitTokens != 800 || usage.CacheMissTokens != 200 {
+		t.Fatalf("usage = %+v, want prompt 1000 hit 800 miss 200", usage)
+	}
+}
+
+// TestConfigureAnthropicThinkingTinyMaxTokens covers the impossible budget: the
+// API requires 1024 <= budget_tokens < max_tokens, so a smaller output cap must
+// leave extended thinking unset instead of sending a request it rejects.
+func TestConfigureAnthropicThinkingTinyMaxTokens(t *testing.T) {
+	params := anthropic.MessageNewParams{}
+	if enabled := configureAnthropicThinking(&params, "claude-3-7-sonnet-20250219", "high", 512); enabled {
+		t.Fatal("thinking must stay disabled when max_tokens cannot hold the minimum budget")
+	}
+	if params.Thinking.OfEnabled != nil || params.Thinking.OfAdaptive != nil {
+		t.Fatalf("thinking = %+v, want unset", params.Thinking)
+	}
+}
+
+// TestIsAnthropicAdaptiveThinkingModel pins the model table: a missing pattern
+// silently sends the interleaved-thinking beta (and output_config.effort) to a
+// model that handles both by itself.
+func TestIsAnthropicAdaptiveThinkingModel(t *testing.T) {
+	adaptive := []string{
+		"claude-sonnet-4.6", "claude-sonnet-4-6", "claude-opus-4.6", "claude-opus-4-6",
+		"claude-opus-4.7", "claude-opus-4-8", "claude-sonnet-5", "claude-opus-5",
+		"claude-haiku-5", "claude-fable", "claude-mythos", "claude-5-foo",
+		"  Claude-Opus-4-6  ",
+	}
+	for _, model := range adaptive {
+		if !isAnthropicAdaptiveThinkingModel(model) {
+			t.Fatalf("%q must be treated as an adaptive-thinking model", model)
+		}
+	}
+	for _, model := range []string{"claude-3-7-sonnet-20250219", "claude-sonnet-4-5", "deepseek-r1"} {
+		if isAnthropicAdaptiveThinkingModel(model) {
+			t.Fatalf("%q must not be treated as an adaptive-thinking model", model)
+		}
+	}
+}
+
+// TestResponsesToolItemIDCaptureAndCompleteness guards the pairing contract: the
+// captured follower id is keyed the way the replay path looks it up, ids that
+// cannot be echoed verbatim are dropped, and the reasoning replay is skipped when
+// a follower id is missing.
+func TestResponsesToolItemIDCaptureAndCompleteness(t *testing.T) {
+	call := legacyopenai.ToolCall{ID: "call:foo|bar.1", Function: legacyopenai.FunctionCall{Name: "read"}}
+	ids := map[string]string{}
+	captureResponsesToolItemID(ids, call, oaresp.ResponseOutputItemUnion{Type: "function_call", ID: "fc_1", CallID: call.ID})
+	if got := ids[toolcall.ForResponsesCall(call.ID)]; got != "fc_1" {
+		t.Fatalf("captured ids = %+v, want the sanitized call id as key", ids)
+	}
+	unsafe := map[string]string{}
+	captureResponsesToolItemID(unsafe, call, oaresp.ResponseOutputItemUnion{Type: "function_call", ID: "fc bad|id", CallID: call.ID})
+	if len(unsafe) != 0 {
+		t.Fatalf("ids that cannot be echoed verbatim must be dropped: %+v", unsafe)
 	}
 
-	// Safe chars replacement
-	got = sanitizeOpenAIResponsesCallID("call:special!chars")
-	if got != "call_special_chars" {
-		t.Fatalf("expected call_special_chars, got %q", got)
+	messages := []legacyopenai.ChatCompletionMessage{
+		{Role: legacyopenai.ChatMessageRoleUser, Content: "go"},
+		{Role: legacyopenai.ChatMessageRoleAssistant, ToolCalls: []legacyopenai.ToolCall{{ID: "call_1"}}},
+		{Role: legacyopenai.ChatMessageRoleTool, ToolCallID: "call_1", Content: "ok"},
 	}
+	if !trailingToolTurnItemIDsComplete(messages, map[string]string{"call_1": "fc_1"}) {
+		t.Fatal("a complete pairing must allow the replay")
+	}
+	if trailingToolTurnItemIDsComplete(messages, nil) {
+		t.Fatal("a missing follower id must block the replay")
+	}
+	if trailingToolTurnItemIDsComplete([]legacyopenai.ChatCompletionMessage{{Role: legacyopenai.ChatMessageRoleUser, Content: "q"}}, map[string]string{"call_1": "fc_1"}) {
+		t.Fatal("a history without a trailing tool turn must block the replay")
+	}
+}
 
-	// Length > 64 truncation with deterministic hash
-	longID := strings.Repeat("a", 80)
-	got = sanitizeOpenAIResponsesCallID(longID)
-	if len(got) != 64 {
-		t.Fatalf("expected length 64, got %d (%q)", len(got), got)
+func TestSessionAffinityHeadersOnlyForOpenRouter(t *testing.T) {
+	cfg := ConfigState{APIFormat: apiFormatOpenAIChat, BaseURL: "https://openrouter.ai/api/v1", responsesPromptCacheKey: "ses-key"}
+	if headers := sessionAffinityHeaders(cfg); headers["x-session-id"] != "ses-key" {
+		t.Fatalf("headers = %+v, want the OpenRouter session header", headers)
 	}
-	if !strings.HasPrefix(got, strings.Repeat("a", 56)+"_") {
-		t.Fatalf("expected prefix of 56 a's and underscore, got %q", got)
+	cfg.BaseURL = "https://api.openai.com/v1"
+	if headers := sessionAffinityHeaders(cfg); len(headers) != 0 {
+		t.Fatalf("headers = %+v, want none for a non-OpenRouter endpoint", headers)
 	}
+	cfg.BaseURL = "https://openrouter.ai/api/v1"
+	cfg.responsesPromptCacheKey = ""
+	if headers := sessionAffinityHeaders(cfg); len(headers) != 0 {
+		t.Fatalf("headers = %+v, want none without a session key", headers)
+	}
+}
 
-	// Empty fallback
-	if sanitizeOpenAIResponsesCallID("") != "call_tool" {
-		t.Fatalf("expected call_tool on empty")
+func TestAnthropicInterleavedThinkingBeta(t *testing.T) {
+	if got := anthropicInterleavedThinkingBeta(true, true, "claude-3-7-sonnet-20250219"); got != "interleaved-thinking-2025-05-14" {
+		t.Fatalf("beta = %q, want the interleaved-thinking flag", got)
+	}
+	cases := []struct {
+		name     string
+		thinking bool
+		tools    bool
+		model    string
+	}{
+		{name: "thinking off", thinking: false, tools: true, model: "claude-3-7-sonnet-20250219"},
+		{name: "no tools", thinking: true, tools: false, model: "claude-3-7-sonnet-20250219"},
+		{name: "adaptive model", thinking: true, tools: true, model: "claude-opus-4-6"},
+	}
+	for _, tt := range cases {
+		if got := anthropicInterleavedThinkingBeta(tt.thinking, tt.tools, tt.model); got != "" {
+			t.Fatalf("%s: beta = %q, want none", tt.name, got)
+		}
 	}
 }
 
@@ -1363,7 +1497,7 @@ func TestBuildOpenAIResponsesRequestPairsEffortWithSummary(t *testing.T) {
 		ReasoningEffort: "medium",
 	}
 	messages := []legacyopenai.ChatCompletionMessage{{Role: legacyopenai.ChatMessageRoleUser, Content: "hi"}}
-	body := buildOpenAIResponsesRequest(cfg, "gpt-5.5", messages, nil)
+	body := buildOpenAIResponsesRequest(cfg, "gpt-5.5", messages, nil, nil)
 	if body.Reasoning.Summary != oa.ReasoningSummaryAuto {
 		t.Fatalf("reasoning.summary = %q, want auto", body.Reasoning.Summary)
 	}
@@ -1372,7 +1506,7 @@ func TestBuildOpenAIResponsesRequestPairsEffortWithSummary(t *testing.T) {
 	}
 
 	cfg.ReasoningEffort = ""
-	body = buildOpenAIResponsesRequest(cfg, "gpt-5.5", messages, nil)
+	body = buildOpenAIResponsesRequest(cfg, "gpt-5.5", messages, nil, nil)
 	if body.Reasoning.Summary != "" || body.Reasoning.Effort != "" {
 		t.Fatalf("reasoning = %+v, want unset without an explicit effort", body.Reasoning)
 	}
@@ -1416,5 +1550,371 @@ func TestAnthropicUsageStateMergesByPresence(t *testing.T) {
 	mu = s.modelUsage()
 	if mu == nil || mu.PromptTokens != 17 || mu.CacheHitTokens != 8 || mu.CompletionTokens != 4 {
 		t.Fatalf("after tail delta = %+v, want counters kept and output updated", mu)
+	}
+}
+
+// TestConfigureAnthropicThinkingSetsDisplayAndKeepsAnswerRoom covers two field
+// contracts. display is sent explicitly because "summarized" is what makes the
+// model stream its thinking text (pi sets it on both branches,
+// anthropic-messages.ts:1127/1135/1147), and a budget_tokens value must leave the
+// visible answer its reserved room under the shared max_tokens ceiling (pi:
+// clampThinkingBudgetToAnswerRoom / MIN_ANSWER_TOKENS).
+func TestConfigureAnthropicThinkingSetsDisplayAndKeepsAnswerRoom(t *testing.T) {
+	adaptive := anthropic.MessageNewParams{}
+	if !configureAnthropicThinking(&adaptive, "claude-opus-4-7", "high", 64000) {
+		t.Fatal("an adaptive-thinking model must enable thinking")
+	}
+	if adaptive.Thinking.OfAdaptive == nil ||
+		adaptive.Thinking.OfAdaptive.Display != anthropic.ThinkingConfigAdaptiveDisplaySummarized {
+		t.Fatalf("adaptive thinking = %+v, want display=summarized", adaptive.Thinking.OfAdaptive)
+	}
+
+	budgeted := anthropic.MessageNewParams{}
+	if !configureAnthropicThinking(&budgeted, "claude-3-7-sonnet-20250219", "high", 4096) {
+		t.Fatal("a budget-thinking model must enable thinking")
+	}
+	if budgeted.Thinking.OfEnabled == nil {
+		t.Fatalf("thinking = %+v, want enabled", budgeted.Thinking.OfEnabled)
+	}
+	if got := budgeted.Thinking.OfEnabled.BudgetTokens; got != 4096-minAnthropicAnswerTokens {
+		t.Fatalf("budget_tokens = %d, want %d", got, 4096-minAnthropicAnswerTokens)
+	}
+	if budgeted.Thinking.OfEnabled.Display != anthropic.ThinkingConfigEnabledDisplaySummarized {
+		t.Fatalf("display = %q, want summarized", budgeted.Thinking.OfEnabled.Display)
+	}
+
+	tiny := anthropic.MessageNewParams{}
+	if configureAnthropicThinking(&tiny, "claude-3-7-sonnet-20250219", "high", minAnthropicThinkingBudget) {
+		t.Fatal("a cap too small for the budget floor plus the answer room must leave thinking unset")
+	}
+}
+
+// TestReasoningEffortOnlySentToReasoningModels: the official endpoints reject an
+// effort value the target model does not accept, and pi writes the field only
+// when the model catalog declares reasoning support
+// (openai-completions.ts:864-935).
+func TestReasoningEffortOnlySentToReasoningModels(t *testing.T) {
+	for _, model := range []string{"gpt-4o", "deepseek-chat", "qwen-plus"} {
+		if modelSupportsReasoningEffort(ConfigState{}, model) {
+			t.Fatalf("%s must not receive a reasoning-effort parameter", model)
+		}
+	}
+	for _, model := range []string{"gpt-5.5", "o3-mini", "openai/o4-mini"} {
+		if !modelSupportsReasoningEffort(ConfigState{}, model) {
+			t.Fatalf("%s must be recognised as reasoning-capable", model)
+		}
+	}
+	if !modelSupportsReasoningEffort(ConfigState{ReasoningTag: "reasoning_content"}, "glm-4.7") {
+		t.Fatal("a configured reasoning tag marks the model as reasoning-capable")
+	}
+}
+
+// TestChatAdapterOmitsEffortForNonReasoningModels drives the gate end to end:
+// the shipped default effort is "max", so without the gate every request to a
+// non-reasoning model carried a parameter the model does not accept.
+func TestChatAdapterOmitsEffortForNonReasoningModels(t *testing.T) {
+	var mu sync.Mutex
+	var bodies []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		bodies = append(bodies, string(raw))
+		mu.Unlock()
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, "data: {\"id\":\"c1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"}}]}\n\n")
+		fmt.Fprint(w, "data: {\"id\":\"c1\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	cfg := ConfigState{
+		APIFormat:       apiFormatOpenAIChat,
+		BaseURL:         server.URL,
+		APIKeys:         []string{"test-key"},
+		ReasoningEffort: "max",
+	}
+	messages := []legacyopenai.ChatCompletionMessage{{Role: legacyopenai.ChatMessageRoleUser, Content: "hi"}}
+	for _, model := range []string{"gpt-4o", "gpt-5.1"} {
+		if _, err := NewApp().streamModelResponse(context.Background(), cfg, model, messages, nil, nil); err != nil {
+			t.Fatalf("streamModelResponse(%s) error = %v", model, err)
+		}
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(bodies) != 2 {
+		t.Fatalf("expected 2 requests, got %d", len(bodies))
+	}
+	if strings.Contains(bodies[0], "reasoning_effort") {
+		t.Fatalf("a non-reasoning model must not receive reasoning_effort: %s", bodies[0])
+	}
+	if !strings.Contains(bodies[1], `"reasoning_effort":"max"`) {
+		t.Fatalf("a reasoning model must receive the selected effort: %s", bodies[1])
+	}
+}
+
+// TestOpenAIChatPromptCacheKeyStaysOnOfficialEndpoint: the official endpoint is
+// the only place prompt_cache_key / store are documented, so a compatible relay
+// must never see them (pi attaches the key only for api.openai.com,
+// openai-completions.ts:810-819).
+// TestChatAdapterRequiresStreamTerminator drives the chat adapter's terminal
+// check end to end. A stream that delivers content and then just ends — no
+// finish_reason, no `[DONE]` — must fail instead of being persisted as a
+// complete turn, while the same stream WITH a terminator is accepted (relays
+// that omit finish_reason but send `[DONE]` keep working). go-openai collapses
+// both cases into a bare io.EOF (stream_reader.go:100-102 for `[DONE]`, :64-76
+// for the read error), so the decision rests on the terminator recorded by
+// sseDoneReadCloser.
+func TestChatAdapterRequiresStreamTerminator(t *testing.T) {
+	cases := []struct {
+		name      string
+		body      string
+		wantError bool
+	}{
+		{
+			name:      "cut off without any terminator",
+			body:      "data: {\"id\":\"c1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"half\"}}]}\n\n",
+			wantError: true,
+		},
+		{
+			name: "done sentinel without finish_reason",
+			body: "data: {\"id\":\"c1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"half\"}}]}\n\n" +
+				"data: [DONE]\n\n",
+			wantError: false,
+		},
+		{
+			// Gateways are not required to put a space after the colon:
+			// go-openai normalizes the field with `^data:\s*` before matching
+			// "[DONE]", so the adapter must accept the same spellings.
+			name: "done sentinel without the canonical space",
+			body: "data: {\"id\":\"c1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"half\"}}]}\n\n" +
+				"data:[DONE]\n\n",
+			wantError: false,
+		},
+		{
+			name: "finish_reason without done sentinel",
+			body: "data: {\"id\":\"c1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"half\"}}]}\n\n" +
+				"data: {\"id\":\"c1\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+			wantError: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				w.WriteHeader(http.StatusOK)
+				fmt.Fprint(w, tc.body)
+				if f, ok := w.(http.Flusher); ok {
+					f.Flush()
+				}
+			}))
+			defer server.Close()
+
+			cfg := ConfigState{
+				APIFormat: apiFormatOpenAIChat,
+				BaseURL:   server.URL,
+				APIKeys:   []string{"test-key"},
+				// The check under test is the judgement itself; retry policy is
+				// the caller's job, so in-adapter retries stay off.
+				noAdapterRetry: true,
+			}
+			messages := []legacyopenai.ChatCompletionMessage{{Role: legacyopenai.ChatMessageRoleUser, Content: "hi"}}
+			result, err := NewApp().streamModelResponse(context.Background(), cfg, "gpt-4o", messages, nil, nil)
+			if tc.wantError {
+				if err == nil {
+					t.Fatalf("a stream without any terminator must fail, got %#v", result)
+				}
+				if !strings.Contains(err.Error(), "finish_reason") {
+					t.Fatalf("the error must name the missing terminator, got %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("streamModelResponse() error = %v", err)
+			}
+			if result == nil || result.Content != "half" {
+				t.Fatalf("content must survive a terminated stream, got %#v", result)
+			}
+		})
+	}
+}
+
+func TestOpenAIChatPromptCacheKeyStaysOnOfficialEndpoint(t *testing.T) {
+	official := ConfigState{APIFormat: apiFormatOpenAIChat, BaseURL: openAIOfficialAPIBaseURL, responsesPromptCacheKey: "ally:abc"}
+	key := openAIChatPromptCacheKey(official)
+	if key != "ally:abc" {
+		t.Fatalf("official key = %q, want the session key", key)
+	}
+	relay := official
+	relay.BaseURL = "https://relay.example.com/v1"
+	if got := openAIChatPromptCacheKey(relay); got != "" {
+		t.Fatalf("relay key = %q, want empty", got)
+	}
+
+	body := []byte(`{"model":"m","messages":[{"role":"user","content":"q"}]}`)
+	patched, changed := patchChatRequestFields(body, "", nil, key)
+	if !changed {
+		t.Fatal("expected the official request to gain prompt_cache_key and store")
+	}
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(patched, &payload); err != nil {
+		t.Fatalf("unmarshal patched body: %v", err)
+	}
+	if string(payload["prompt_cache_key"]) != `"ally:abc"` || string(payload["store"]) != "false" {
+		t.Fatalf("patched body = %s, want prompt_cache_key + store:false", patched)
+	}
+	if untouched, _ := patchChatRequestFields(body, "", nil, ""); string(untouched) != string(body) {
+		t.Fatalf("a relay body must stay byte-identical: %s", untouched)
+	}
+}
+
+// TestResponsesSummaryPartsSeparateAndTruncationIsReported covers two fields the
+// adapter used to drop: summary parts are separate paragraphs (pi closes each
+// with a blank line, openai-responses-shared.ts:613-622), and an
+// incomplete+max_output_tokens terminal state is surfaced as the same Max Tokens
+// outcome the Chat and Anthropic adapters report instead of a silent truncation.
+func TestResponsesSummaryPartsSeparateAndTruncationIsReported(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, responsesSSEEvent(`{"type":"response.reasoning_summary_text.delta","item_id":"rs_1","output_index":0,"delta":"first"}`))
+		fmt.Fprint(w, responsesSSEEvent(`{"type":"response.reasoning_summary_part.done","item_id":"rs_1","output_index":0,"summary_index":0}`))
+		fmt.Fprint(w, responsesSSEEvent(`{"type":"response.reasoning_summary_text.delta","item_id":"rs_1","output_index":0,"delta":"second"}`))
+		fmt.Fprint(w, responsesSSEEvent(`{"type":"response.incomplete","response":{"id":"r1","incomplete_details":{"reason":"max_output_tokens"},"usage":{"input_tokens":3,"output_tokens":9}}}`))
+	}))
+	defer server.Close()
+
+	cfg := responsesStreamTestCfg(server.URL)
+	result, err := NewApp().streamModelResponse(context.Background(), cfg, "gpt-5.5",
+		[]legacyopenai.ChatCompletionMessage{{Role: legacyopenai.ChatMessageRoleUser, Content: "hi"}}, nil, nil)
+	if err != nil {
+		t.Fatalf("truncation is a terminal state, not a stream error: %v", err)
+	}
+	if result.Reasoning != "first\n\nsecond" {
+		t.Fatalf("reasoning = %q, want the parts separated by a blank line", result.Reasoning)
+	}
+	if result.StopReason != "length" {
+		t.Fatalf("stop reason = %q, want length", result.StopReason)
+	}
+	stopErr := modelResponseStopError(cfg, result)
+	if stopErr == nil || !strings.Contains(stopErr.Error(), "Max Tokens") {
+		t.Fatalf("stop error = %v, want the actionable Max Tokens message", stopErr)
+	}
+}
+
+// TestNormalizeToolsForOpenAIChatAlwaysCarriesParameters: every function tool
+// must ship a parameters object (the field is required), so the Chat path builds
+// the same default the Anthropic / Responses converters do.
+func TestNormalizeToolsForOpenAIChatAlwaysCarriesParameters(t *testing.T) {
+	tools := []legacyopenai.Tool{{Type: legacyopenai.ToolTypeFunction, Function: &legacyopenai.FunctionDefinition{Name: "no_args"}}}
+	out := normalizeToolsForOpenAIChat(tools)
+	if len(out) != 1 || out[0].Function == nil {
+		t.Fatalf("normalizeToolsForOpenAIChat() = %+v", out)
+	}
+	schema, ok := out[0].Function.Parameters.(map[string]any)
+	if !ok || schema["type"] != "object" {
+		t.Fatalf("parameters = %#v, want an object schema", out[0].Function.Parameters)
+	}
+	if _, isObject := schema["properties"].(map[string]any); !isObject {
+		t.Fatalf("parameters = %#v, want a properties object", schema)
+	}
+}
+
+// TestSSEDoneScannerAcceptsEveryGatewaySpelling: go-openai matches the terminator
+// frame with `^data:\s*` before comparing its payload against "[DONE]"
+// (stream_reader.go:13-16 and :96-99), so the adapter's own scanner must accept
+// the same spellings. A literal-only match reports a finished stream as truncated
+// (errChatStreamNoFinishReason) whenever a gateway omits the canonical space.
+func TestSSEDoneScannerAcceptsEveryGatewaySpelling(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want bool
+	}{
+		{"canonical", "data: [DONE]\n\n", true},
+		{"no space after the colon", "data:[DONE]\n\n", true},
+		{"extra spaces", "data:   [DONE]\n\n", true},
+		{"tab separator", "data:\t[DONE]\n\n", true},
+		{"payload is not the terminator", "data: {\"choices\":[]}\n\n", false},
+		{"unfinished frame", "data: [DO", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := containsSSEDone([]byte(tc.body)); got != tc.want {
+				t.Fatalf("containsSSEDone(%q) = %v, want %v", tc.body, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestSSEDoneReadCloserSurvivesSplitReadsAndResets: the terminator can be split
+// across two reads (this test feeds one byte at a time), and a watcher shared by
+// the retries of one stream must report nothing after reset.
+func TestSSEDoneReadCloserSurvivesSplitReadsAndResets(t *testing.T) {
+	watcher := &sseDoneWatcher{}
+	body := "data:{\"choices\":[]}\n\ndata:\t[DONE]\n\n"
+	reader := &sseDoneReadCloser{rc: io.NopCloser(strings.NewReader(body)), watcher: watcher}
+	buf := make([]byte, 1)
+	for {
+		n, err := reader.Read(buf)
+		if n == 0 && err != nil {
+			break
+		}
+		if err != nil {
+			t.Fatalf("read: %v", err)
+		}
+	}
+	if !watcher.Done() {
+		t.Fatal("a terminator split across reads must still be recorded")
+	}
+	watcher.reset()
+	if watcher.Done() {
+		t.Fatal("reset must clear the recorded terminator")
+	}
+}
+
+// TestChatAdapterTerminatorDoesNotLeakAcrossRetries: the first attempt fails on a
+// malformed frame after its read already carried the terminator, and the retry is
+// cut off mid-stream. Without a reset the retry inherits the stale `[DONE]`, its
+// half answer passes the {finish_reason, [DONE]} check and is persisted as a
+// complete turn.
+func TestChatAdapterTerminatorDoesNotLeakAcrossRetries(t *testing.T) {
+	var mu sync.Mutex
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		mu.Lock()
+		requests++
+		attempt := requests
+		mu.Unlock()
+		if attempt == 1 {
+			// One write, so the terminator and the malformed frame travel in the
+			// same read: the SDK rejects the frame, the scanner still sees both.
+			_, _ = w.Write([]byte("data: {oops}\n\ndata: [DONE]\n\n"))
+			return
+		}
+		// Cut off mid-stream: no finish_reason, no [DONE].
+		_, _ = w.Write([]byte("data: {\"id\":\"c1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"half\"}}]}\n\n"))
+	}))
+	defer server.Close()
+
+	cfg := ConfigState{
+		APIFormat:  apiFormatOpenAIChat,
+		BaseURL:    server.URL,
+		APIKeys:    []string{"test-key"},
+		LLMRetries: 1,
+	}
+	messages := []legacyopenai.ChatCompletionMessage{{Role: legacyopenai.ChatMessageRoleUser, Content: "hi"}}
+	result, err := NewApp().streamModelResponse(context.Background(), cfg, "gpt-4o", messages, nil, nil)
+	if err == nil {
+		t.Fatalf("a truncated retry must fail, got %#v", result)
+	}
+	if !strings.Contains(err.Error(), "finish_reason") {
+		t.Fatalf("error = %v, want the missing-terminator error", err)
+	}
+	if requests < 2 {
+		t.Fatalf("the first attempt must have been retried, got %d request(s)", requests)
 	}
 }

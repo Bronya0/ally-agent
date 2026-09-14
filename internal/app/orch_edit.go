@@ -14,7 +14,6 @@ package app
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -23,6 +22,7 @@ import (
 
 	"ally-dev/internal/tools/edit"
 	"ally-dev/internal/tools/read"
+	"ally-dev/internal/tools/toolcall"
 
 	openai "github.com/sashabaranov/go-openai"
 )
@@ -309,9 +309,10 @@ func prepareToolCallsForExecution(toolCalls []openai.ToolCall) ([]openai.ToolCal
 		if strings.TrimSpace(raw) == "" {
 			raw = "{}"
 		}
-		if !json.Valid([]byte(raw)) {
-			raw = truncatedToolCallArguments
-		}
+		// A truncated argument string must never reach a tool or stay in
+		// history: the marker is the single contract for that (see
+		// toolcall.RepairTruncatedArguments).
+		raw = toolcall.RepairTruncatedArguments(raw)
 		prepared[i].Function.Arguments = raw
 		executionArgs[i] = raw
 	}
@@ -320,18 +321,6 @@ func prepareToolCallsForExecution(toolCalls []openai.ToolCall) ([]openai.ToolCal
 
 func validateVersion(version string) error {
 	return read.ValidateVersion(version)
-}
-
-func isSHA256Hex(value string) bool {
-	return read.IsSHA256Hex(value)
-}
-
-func isValidVersion(value string) bool {
-	return read.IsValidVersion(value)
-}
-
-func validateBatchTextChanges(changes []TextChange) error {
-	return edit.ValidateBatchTextChanges(toEditChanges(changes))
 }
 
 func normalizeEditRequest(req EditRequest) (editPlan, error) {
@@ -413,8 +402,4 @@ func fromEditOperations(in []edit.EditOperation) []EditOperation {
 		out[i] = EditOperation{OldString: o.OldString, NewString: o.NewString, ReplaceAll: o.ReplaceAll}
 	}
 	return out
-}
-
-func normalizeEditString(s string) string {
-	return edit.NormalizeEditString(s)
 }

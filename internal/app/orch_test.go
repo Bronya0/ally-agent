@@ -27,6 +27,7 @@ import (
 	"unicode/utf8"
 
 	"ally-dev/internal/tools/grep"
+	"ally-dev/internal/tools/toolcall"
 	openai "github.com/sashabaranov/go-openai"
 )
 
@@ -4009,7 +4010,7 @@ func TestExecuteToolEditRejectsTruncatedArguments(t *testing.T) {
 
 	// The marker that prepareToolCallsForExecution substitutes for truncated
 	// JSON fails with E_TRUNCATED_ARGS before any decoding is attempted.
-	result = app.executeTool(context.Background(), cfg, "session-1", "edit", []byte(truncatedToolCallArguments))
+	result = app.executeTool(context.Background(), cfg, "session-1", "edit", []byte(toolcall.TruncatedArgumentsMarker))
 	if result.OK || result.ErrorCode != "E_TRUNCATED_ARGS" {
 		t.Fatalf("expected E_TRUNCATED_ARGS for the truncation marker, got %#v", result)
 	}
@@ -4032,7 +4033,7 @@ func TestPrepareToolCallsForExecutionRewritesInvalidJSONToMarker(t *testing.T) {
 	if prepared[1].Function.Arguments != "{}" || executionArgs[1] != "{}" {
 		t.Fatalf("empty arguments must normalize to {}: %q %q", prepared[1].Function.Arguments, executionArgs[1])
 	}
-	if !isTruncatedArgsMarker([]byte(prepared[2].Function.Arguments)) || !isTruncatedArgsMarker([]byte(executionArgs[2])) {
+	if !toolcall.IsTruncatedArguments(prepared[2].Function.Arguments) || !toolcall.IsTruncatedArguments(executionArgs[2]) {
 		t.Fatalf("truncated arguments must use the marker on both paths: %q %q", prepared[2].Function.Arguments, executionArgs[2])
 	}
 	if prepared[3].Function.Arguments != "{}" || executionArgs[3] != "{}" {

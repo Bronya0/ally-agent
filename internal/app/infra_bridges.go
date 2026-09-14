@@ -10,7 +10,6 @@ package app
 import (
 	"bytes"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -38,10 +37,14 @@ type GrepFileCount = grep.FileCount
 type GrepResult = grep.Result
 
 const (
-	apiFormatOpenAIChat           = "openai_chat"
-	apiFormatOpenAIResponses      = "openai_responses"
-	apiFormatAnthropicMessages    = "anthropic_messages"
-	defaultOpenAIResponsesURL     = "https://api.openai.com/v1"
+	apiFormatOpenAIChat        = "openai_chat"
+	apiFormatOpenAIResponses   = "openai_responses"
+	apiFormatAnthropicMessages = "anthropic_messages"
+	// openAIOfficialAPIBaseURL is the single source of truth for the official
+	// OpenAI endpoint: both adapters gate their OpenAI-only request fields on it
+	// (see isOfficialOpenAIEndpoint).
+	openAIOfficialAPIBaseURL      = "https://api.openai.com/v1"
+	defaultOpenAIResponsesURL     = openAIOfficialAPIBaseURL
 	defaultAnthropicMessagesURL   = "https://api.anthropic.com"
 	tokenParamAuto                = "auto"
 	tokenParamMaxTokens           = "max_tokens"
@@ -283,20 +286,6 @@ func insideWriteRoot(roots []string, target string) bool {
 	return pathutil.InsideWriteRoot(pathRuntime, roots, target)
 }
 
-func requireExistingDirectory(path string, missingCode string) error {
-	info, err := os.Stat(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return codedToolError(missingCode, fmt.Errorf("parent directory does not exist: %s", path))
-		}
-		return err
-	}
-	if !info.IsDir() {
-		return codedToolError("E_PARENT_NOT_DIRECTORY", fmt.Errorf("parent path is not a directory: %s", path))
-	}
-	return nil
-}
-
 func resolveReadPath(cfg ConfigState, p string) (string, error) {
 	return resolveReadablePath(cfg, p)
 }
@@ -352,10 +341,6 @@ func safeWriteNewFile(path string, data []byte, perm os.FileMode) error {
 	return read.SafeWriteNewFile(path, data, perm)
 }
 
-func safeWritePreparedFile(path string, data []byte, perm os.FileMode) error {
-	return read.SafeWritePreparedFile(path, data, perm)
-}
-
 func modeOf(path string) os.FileMode {
 	return read.ModeOf(path)
 }
@@ -373,27 +358,6 @@ func hashVersion(data []byte) string {
 // hot path, where a 10 MB file was being SHA-256'd twice per call.
 func hashBytesAndVersion(data []byte) (string, string) {
 	return read.HashBytesAndVersion(data)
-}
-
-func versionFromSHA256Hex(value string) (string, error) {
-	sum, err := hex.DecodeString(value)
-	if err != nil || len(sum) != sha256.Size {
-		return "", errors.New("invalid SHA-256 digest")
-	}
-	return read.VersionFromSHA256(sum), nil
-}
-
-func hashFileSHA256(path string) (string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 func newID() string {

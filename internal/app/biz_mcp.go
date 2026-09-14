@@ -1302,17 +1302,6 @@ func (a *App) ReconcileMcpServers() error {
 
 // ── MCP tool execution ───────────────────────────────────────
 
-func (a *App) executeMcpTool(ctx context.Context, serverName, toolName string, args map[string]any) (any, error) {
-	if a.mcpManager == nil {
-		return nil, fmt.Errorf("MCP not initialized")
-	}
-	result, err := a.mcpManager.CallTool(ctx, serverName, toolName, args)
-	if err != nil {
-		return nil, fmt.Errorf("MCP tool %s/%s failed: %w", serverName, toolName, err)
-	}
-	return map[string]any{"output": result}, nil
-}
-
 func (a *App) executeMcpFunctionTool(ctx context.Context, functionName string, args map[string]any) (any, error) {
 	if a.mcpManager == nil {
 		return nil, fmt.Errorf("MCP not initialized")

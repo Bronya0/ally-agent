@@ -23,6 +23,7 @@ const MODEL_FIELDS = [
   'tokenParam',
   'reasoningEffort',
   'customHeaders',
+  'visionCapable',
 ];
 
 function importError(code) {

@@ -55,5 +55,9 @@ export function applyCatalogPreset(provider, model, current = {}) {
     maxTokens: Number(model.maxTokens) || Number(current.maxTokens) || 131072,
     contextWindow: Number(model.contextWindow) || Number(current.contextWindow) || 1000000,
     reasoningTag: String(model.reasoningTag || current.reasoningTag || 'reasoning_content').trim() || 'reasoning_content',
+    // visionCapable 不继承 current：来源未声明时保持 undefined（未知），由后端
+    // 按未知处理。继承上一个模型的能力值会造成静默降级（与 maxTokens 的继承
+    // 不同——那个是用户可见的数字，这个是能力判断）。
+    visionCapable: typeof model.visionCapable === 'boolean' ? model.visionCapable : undefined,
   };
 }

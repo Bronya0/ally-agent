@@ -940,7 +940,3 @@ func utf8Prefix(text string, maxBytes int) string {
 	}
 	return text[:cut]
 }
-
-func formatNumberedLine(lineNum int, line string, width int) string {
-	return strconv.Itoa(lineNum) + ": " + line
-}

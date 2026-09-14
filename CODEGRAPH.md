@@ -18,7 +18,7 @@
 | 文件基础读写与删除防护 | `internal/app/orch_file_ops.go` |
 | 会话/历史持久化与坏数据修复 | `internal/app/biz_sessions.go` |
 | 系统提示词组装 | `internal/app/biz_prompt.go` |
-| 请求消息与上下文 Token 核算 | `internal/app/biz_context.go` |
+| 请求消息与上下文 Token 核算（口径：请求前缀 + provider 实测锚点） | `internal/app/biz_context.go`（`sessionPrefixBreakdown` / `contextAnchor` / `finalizeSessionBreakdown`） |
 | 配置合并 / key 池管理 | `internal/app/biz_config.go` |
 | 技能发现与加载 | `internal/app/biz_skills.go` |
 | MCP 客户端生命周期 | `internal/app/biz_mcp.go` |
@@ -31,24 +31,30 @@
 | 技能 / MCP / 模型管理内联页 | `SkillsPanel.vue` / `McpPanel.vue` / `ModelsPanel.vue` |
 | 文件树 / 编辑器 UI | `WorkspaceExplorer.vue` + `biz_workspace_editor.go` |
 | 工具卡动词 "Used X" 标签 | `frontend/src/utils/toolVerb.mjs`（TOOL_VERBS 表） |
-| 思考回放（reasoning_content/signature/encrypted_content） | `internal/app/prov_reasoning.go` + 三适配器（`prov_model.go`） |
+| 思考回放（reasoning_content / reasoning / reasoning_text / signature / encrypted_content） | `internal/app/prov_reasoning.go` + 三适配器（`prov_model.go`） |
+| 模型输入能力（视觉）降级 / 图片占位 | `internal/app/biz_context.go`（`buildMessages` 单一收口） + 目录字段 `visionCapable`（`scripts/generate-model-catalog.mjs`） |
+| 流终止判定（finish_reason / `[DONE]` 哨兵）与 tool_calls 增量归并 | `internal/app/prov_model.go`（`sseDoneWatcher`、`toolCallAccumulator`） |
+| 工具 schema 修补（$ref 内联 / 补 type / 矛盾类型修复） | `internal/tools/schemautil/` |
+| 工具调用 ID 规范化、参数解码、截断参数标记 | `internal/tools/toolcall/` |
 
 ## 核心调用流
 
 `main()` → `NewApp()` → Wails 装配 → 前端 `StartChat()` → `app.runChat()`: `buildMessages()`（biz_context）→ `buildToolsWithMcp()`（biz_mcp）→ `streamModelResponse()`（prov_model）→ 流式事件经 `host_events` 到前端 → 工具分发 `executeTool()`（并发 4，文件变更串行）→ 结果回填循环 → `saveHistory()`（biz_sessions）。子代理/调度任务走 `executeDelegate()`（orch_subagent）。
 
+每个 step 开头汇总上下文用量并决定是否 auto-compact：`breakdownAcc.update()`（消息估算）+ `sessionPrefixBreakdown()`（系统提示词 / 工作区地图 / 计划快照）+ `finalizeSessionBreakdown()`（provider 实测锚点）→ `bd.Total` 与阈值比较。footer 与自动压缩读同一个数。
+
 ## 后端分层架构
 
 ### `internal/app/`
 - `app.go`: Agent 编排核心（聊天循环 runChat、工具分发 executeTool、内建工具 chatTools、生命周期 StartChat/CancelRun）。
-- `prov_*`: 模型与网络适配。`prov_model.go`（三适配器唯一边界与多 key 池）；`prov_proxy*.go`（代理探测与 SSRF 守卫客户端）。
+- `prov_*`: 模型与网络适配。`prov_model.go`（三适配器唯一边界与多 key 池；工具声明与工具调用 ID 的纯规则已下沉到 `internal/tools/schemautil`、`internal/tools/toolcall`）；`prov_reasoning.go`（思考回放）；`prov_proxy*.go`（代理探测与 SSRF 守卫客户端）。
 - `host_*`: 桌面与宿主桥（唯一允许 import Wails）。`host_desktop.go`（桌面桥与对话框）；`host_events.go`（emit 统一出口）；`host_window_state.go`（窗口位置持久化）；`host_notifications.go`（桌面通知音）。
 - `infra_*`: 共享基础设施。`infra_bridges.go`（类型别名与原子写）；`infra_result.go`（结果信封与模型端压缩）；`infra_stream.go`（流式节流）；`infra_output_encoding.go`（控制台编码与 UTF-8/GBK 转码）。
 - `biz_*`: 独立业务模块。`biz_config.go`（配置）；`biz_context.go`（上下文与 Token 核算）；`biz_prompt.go`（系统提示词组装）；`biz_sessions.go`（会话持久化与清理）；`biz_workspace*.go`（文件列表/搜索/编辑器）；`biz_skills.go`（技能发现/加载）；`biz_mcp.go`（MCP 生命周期）；`biz_api.go`（本地 HTTP API）；`biz_update.go`（自更新）；`biz_stats.go`（Token 统计）。
 - `orch_*`: 工具编排（绑定纯算法到 `*App` 状态）。`orch_edit_plan.go` / `orch_edit.go`（编辑批次规划与原子提交）；`orch_command.go` / `orch_command_safety.go`（命令执行与安全拦截）；`orch_file_ops.go`（文件读写删与危险路径拦截）；`orch_grep.go`（ripgrep 搜索）；`orch_remote*.go`（SSH 远端操作与凭证）；`orch_scheduler.go`（计划任务）；`orch_services.go`（后台服务）；`orch_subagent.go`（子代理）；`orch_kb.go`（知识库 sources/ 读写保护）。
 
 ### `internal/tools/`（纯算法层，绝不依赖 `*App`/`ConfigState`）
-- `calculate/`（数学求值）· `command/`（Bash AST 安全解析与目标提取）· `edit/`（LCS diff 与范围替换）· `git/`（porcelain 解析）· `grep/`（ripgrep 封装）· `pathutil/`（路径安全解析）· `read/`（文本读取与版本计算）· `scheduler/`（调度表达式解析）· `service/`（rolling buffer 与长进程判定）· `shared/`（CodedError 与内置 schema）。
+- `calculate/`（数学求值）· `command/`（Bash AST 安全解析与目标提取）· `edit/`（LCS diff 与范围替换）· `git/`（porcelain 解析）· `grep/`（ripgrep 封装）· `pathutil/`（路径安全解析）· `read/`（文本读取与版本计算）· `scheduler/`（调度表达式解析）· `schemautil/`（工具 JSON-Schema 修补：$ref 内联与属性 type 推断）· `service/`（rolling buffer 与长进程判定）· `shared/`（CodedError 与内置 schema）· `toolcall/`（工具调用 ID 规范化、参数解码、截断参数标记）。
 
 ## 前端核心结构 (`frontend/src/`)
 

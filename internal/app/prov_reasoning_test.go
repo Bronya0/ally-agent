@@ -21,6 +21,7 @@ import (
 	"time"
 
 	anthropic "github.com/anthropics/anthropic-sdk-go"
+	oaresp "github.com/openai/openai-go/v3/responses"
 	legacyopenai "github.com/sashabaranov/go-openai"
 )
 
@@ -509,7 +510,9 @@ func TestPatchReasoningContentFields(t *testing.T) {
 	// Message 2: active tool-call assistant (lacks reasoning; must gain reasoning_content: "")
 	// Message 3: tool result message for the active call
 	body := []byte(`{"model":"m","messages":[{"role":"user","content":"q1"},{"role":"assistant","content":"plain history"},{"role":"assistant","content":"","tool_calls":[{"id":"c1"}]},{"role":"tool","tool_call_id":"c1","content":"ok"}]}`)
-	patched, changed := patchReasoningContentFields(body, "")
+	// Thinking-mode replay is on (the adapter passes the resolved wire key);
+	// an empty key would mean replay is off and nothing may be backfilled.
+	patched, changed := patchChatRequestFields(body, defaultReasoningTag, nil, "")
 	if !changed {
 		t.Fatal("expected the active tool-call assistant message to gain reasoning_content")
 	}
@@ -534,7 +537,7 @@ func TestPatchReasoningContentFields(t *testing.T) {
 	// Dialect test: when a message in the body uses "reasoning" (vLLM style),
 	// the empty field must be echoed back under the same dialect.
 	vllmBody := []byte(`{"model":"m","messages":[{"role":"user","content":"q"},{"role":"assistant","content":"","tool_calls":[{"id":"c2"}]},{"role":"tool","tool_call_id":"c2","content":"ok"}]}`)
-	vllmPatched, changed := patchReasoningContentFields(vllmBody, "reasoning")
+	vllmPatched, changed := patchChatRequestFields(vllmBody, "reasoning", nil, "")
 	if !changed {
 		t.Fatal("expected tool-call assistant to be patched under detected dialect")
 	}
@@ -607,6 +610,7 @@ func TestWithAnthropicThinkingBlocks(t *testing.T) {
 		anthropic.NewAssistantMessage(
 			anthropic.NewToolUseBlock("t1", map[string]any{"a": 1}, "grep"),
 		),
+		anthropic.NewUserMessage(anthropic.NewToolResultBlock("t1", "ok", false)),
 	}
 	claudeGuarded := withAnthropicThinkingBlocks(freshClaudeMessages, unsignedBlocks, "claude-3-7-sonnet")
 	if len(claudeGuarded[1].Content) != 1 {
@@ -617,6 +621,7 @@ func TestWithAnthropicThinkingBlocks(t *testing.T) {
 		anthropic.NewAssistantMessage(
 			anthropic.NewToolUseBlock("t1", map[string]any{"a": 1}, "grep"),
 		),
+		anthropic.NewUserMessage(anthropic.NewToolResultBlock("t1", "ok", false)),
 	}
 	proxyAllowed := withAnthropicThinkingBlocks(freshProxyMessages, unsignedBlocks, "deepseek-r1")
 	if len(proxyAllowed[1].Content) != 2 || proxyAllowed[1].Content[0].OfThinking == nil {
@@ -628,7 +633,7 @@ func TestWithAnthropicThinkingBlocks(t *testing.T) {
 
 func TestWithResponsesReasoningItems(t *testing.T) {
 	items := []responsesReasoningItem{
-		{ID: "rs_1", EncryptedContent: "enc-1", SummaryText: "thoughts"},
+		{ID: "rs_1", EncryptedContent: "enc-1", SummaryTexts: []string{"thoughts"}},
 	}
 	messages := []legacyopenai.ChatCompletionMessage{
 		{Role: legacyopenai.ChatMessageRoleUser, Content: "question"},
@@ -643,11 +648,12 @@ func TestWithResponsesReasoningItems(t *testing.T) {
 		t.Fatalf("message 1 role = %q, want carrier", out[1].Role)
 	}
 	carriers := responsesReasoningCarriers(out)
-	if len(carriers) != 1 || carriers[0].ID != "rs_1" || carriers[0].EncryptedContent != "enc-1" || carriers[0].SummaryText != "thoughts" {
+	if len(carriers) != 1 || carriers[0].ID != "rs_1" || carriers[0].EncryptedContent != "enc-1" ||
+		len(carriers[0].SummaryTexts) != 1 || carriers[0].SummaryTexts[0] != "thoughts" {
 		t.Fatalf("carrier round-trip mismatch: %+v", carriers)
 	}
 	// The carrier must expand into a real reasoning input item.
-	_, input := buildOpenAIResponsesInput(out)
+	_, input := buildOpenAIResponsesInput(out, nil)
 	if len(input) < 2 || input[1].OfReasoning == nil {
 		t.Fatalf("expected a reasoning input item at position 1, got %+v", input)
 	}
@@ -663,5 +669,301 @@ func TestWithResponsesReasoningItems(t *testing.T) {
 		if m.Role == roleResponsesReasoningCarrier {
 			t.Fatal("sanitizeHistoryMessages must drop reasoning-item carriers")
 		}
+	}
+}
+
+// TestWithResponsesReasoningItemsRequiresToolTurn covers the dangling-item bug:
+// a reasoning item may only be replayed when the history ends in a tool turn,
+// because the API pairs it with the item that follows it. A history that ends
+// with a user message used to receive the items at the very end of input.
+func TestWithResponsesReasoningItemsRequiresToolTurn(t *testing.T) {
+	items := []responsesReasoningItem{{ID: "rs_1", EncryptedContent: "enc-1", SummaryTexts: []string{"thoughts"}}}
+	newTurn := []legacyopenai.ChatCompletionMessage{
+		{Role: legacyopenai.ChatMessageRoleUser, Content: "first"},
+		{Role: legacyopenai.ChatMessageRoleAssistant, Content: "answer", ReasoningContent: "thoughts"},
+		{Role: legacyopenai.ChatMessageRoleUser, Content: "second"},
+	}
+	if out := withResponsesReasoningItems(newTurn, items); len(out) != len(newTurn) {
+		t.Fatalf("history without a trailing tool turn must not be injected, got %d messages", len(out))
+	}
+	// An assistant tool call whose results have not arrived yet is still a tool
+	// turn: the reasoning item belongs right before it.
+	pending := []legacyopenai.ChatCompletionMessage{
+		{Role: legacyopenai.ChatMessageRoleUser, Content: "run it"},
+		{Role: legacyopenai.ChatMessageRoleAssistant, ToolCalls: []legacyopenai.ToolCall{{ID: "call_1"}}},
+	}
+	out := withResponsesReasoningItems(pending, items)
+	if len(out) != 3 || out[1].Role != roleResponsesReasoningCarrier {
+		t.Fatalf("pending tool call must receive the reasoning carrier, got %#v", out)
+	}
+}
+
+// TestResponsesReasoningItemKeepsEveryField covers the faithful-replay contract:
+// the item sent back must be a copy of the one the API produced, so every
+// documented field survives capture -> carrier -> request. pi stores the whole
+// item as JSON for exactly that reason (openai-responses-shared.ts:222/689-690).
+func TestResponsesReasoningItemKeepsEveryField(t *testing.T) {
+	var item oaresp.ResponseReasoningItem
+	if err := json.Unmarshal([]byte(`{"type":"reasoning","id":"rs_9","status":"completed","encrypted_content":"enc-9","summary":[{"type":"summary_text","text":"part one"},{"type":"summary_text","text":"part two"}],"content":[{"type":"reasoning_text","text":"raw chain"}]}`), &item); err != nil {
+		t.Fatalf("unmarshal reasoning item: %v", err)
+	}
+	captured, ok := captureResponsesReasoningItem(item)
+	if !ok {
+		t.Fatal("a reasoning item with a usable id must be captured")
+	}
+	if captured.Status != "completed" || captured.EncryptedContent != "enc-9" ||
+		len(captured.SummaryTexts) != 2 || captured.SummaryTexts[1] != "part two" || len(captured.ContentTexts) != 1 {
+		t.Fatalf("captured = %+v, want every documented field", captured)
+	}
+
+	roundTripped := responsesReasoningCarriers([]legacyopenai.ChatCompletionMessage{
+		{Role: roleResponsesReasoningCarrier, Content: encodeResponsesReasoningCarrier(captured)},
+	})
+	if len(roundTripped) != 1 || len(roundTripped[0].SummaryTexts) != 2 || roundTripped[0].Status != "completed" {
+		t.Fatalf("carrier round-trip = %+v, want the captured item", roundTripped)
+	}
+
+	input := responsesReasoningInputItem(roundTripped[0])
+	if input.OfReasoning == nil {
+		t.Fatal("expected a reasoning input item")
+	}
+	if input.OfReasoning.ID != "rs_9" || input.OfReasoning.EncryptedContent.Value != "enc-9" ||
+		len(input.OfReasoning.Summary) != 2 || len(input.OfReasoning.Content) != 1 ||
+		string(input.OfReasoning.Status) != "completed" {
+		t.Fatalf("replayed item = %+v, want every field preserved", input.OfReasoning)
+	}
+}
+
+// TestResponsesReasoningItemWithoutUsableIDDropped: the API resolves a replayed
+// reasoning item by id, so an item a relay returned without one must never be
+// sent back. Dropping it keeps the request valid — the follower function_call
+// carries its own id, and only a reasoning item requires its follower.
+func TestResponsesReasoningItemWithoutUsableIDDropped(t *testing.T) {
+	var item oaresp.ResponseReasoningItem
+	if err := json.Unmarshal([]byte(`{"type":"reasoning","id":"","summary":[]}`), &item); err != nil {
+		t.Fatalf("unmarshal reasoning item: %v", err)
+	}
+	if _, ok := captureResponsesReasoningItem(item); ok {
+		t.Fatal("a reasoning item without a usable id must not be captured")
+	}
+	if got := encodeResponsesReasoningCarrier(responsesReasoningItem{ID: "rs_1|rs_2"}); got != "" {
+		t.Fatalf("carrier = %q, want empty for an unusable id", got)
+	}
+	if got := responsesReasoningCarriers([]legacyopenai.ChatCompletionMessage{
+		{Role: roleResponsesReasoningCarrier, Content: `{"ID":"bad id","EncryptedContent":"enc"}`},
+	}); len(got) != 0 {
+		t.Fatalf("carriers = %+v, want none for an unusable id", got)
+	}
+}
+
+// TestReasoningReplayKeyScopesModelAndProtocol guards cross-model replay:
+// signatures and encrypted reasoning are only valid for the model that emitted
+// them, so a model switch must start a fresh payload.
+func TestReasoningReplayKeyScopesModelAndProtocol(t *testing.T) {
+	base := ConfigState{APIFormat: apiFormatOpenAIResponses, Model: "gpt-5.6", responsesPromptCacheKey: "sess"}
+	same := ConfigState{APIFormat: apiFormatOpenAIResponses, Model: "GPT-5.6", responsesPromptCacheKey: "sess"}
+	if reasoningReplayKey(base, base.Model) != reasoningReplayKey(same, same.Model) {
+		t.Fatal("model comparison must be case-insensitive")
+	}
+	others := map[string]ConfigState{
+		"model":    {APIFormat: apiFormatOpenAIResponses, Model: "gpt-5.1", responsesPromptCacheKey: "sess"},
+		"protocol": {APIFormat: apiFormatAnthropicMessages, Model: "gpt-5.6", responsesPromptCacheKey: "sess"},
+		"session":  {APIFormat: apiFormatOpenAIResponses, Model: "gpt-5.6", responsesPromptCacheKey: "other"},
+	}
+	for name, cfg := range others {
+		if reasoningReplayKey(base, base.Model) == reasoningReplayKey(cfg, cfg.Model) {
+			t.Fatalf("replay key must differ when the %s changes", name)
+		}
+	}
+}
+
+// TestPatchChatRequestFieldsAddsContent covers the missing-key bug: go-openai
+// tags content omitempty, so a pure tool-call assistant message and an empty
+// tool result used to drop the key entirely (kimi-code emits content: null for
+// the same reason). The captured reasoning_details ride on the same message.
+func TestPatchChatRequestFieldsAddsContent(t *testing.T) {
+	body, err := json.Marshal(map[string]any{
+		"model": "m",
+		"messages": []map[string]any{
+			{"role": "user", "content": "q"},
+			{"role": "assistant", "tool_calls": []map[string]any{{"id": "c1"}}},
+			{"role": "tool", "tool_call_id": "c1"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+	details, err := json.Marshal([]map[string]any{{"type": "reasoning.text", "text": "why"}})
+	if err != nil {
+		t.Fatalf("marshal details: %v", err)
+	}
+	patched, changed := patchChatRequestFields(body, "", details, "")
+	if !changed {
+		t.Fatal("expected the tool-call and tool messages to be patched")
+	}
+	var payload struct {
+		Messages []map[string]json.RawMessage `json:"messages"`
+	}
+	if err := json.Unmarshal(patched, &payload); err != nil {
+		t.Fatalf("unmarshal patched body: %v", err)
+	}
+	for _, idx := range []int{1, 2} {
+		got, exists := payload.Messages[idx]["content"]
+		if !exists {
+			t.Fatalf("message %d must carry an explicit content key: %+v", idx, payload.Messages[idx])
+		}
+		if len(got) != 2 || got[0] != '"' || got[1] != '"' {
+			t.Fatalf("message %d content = %s, want an explicit empty JSON string", idx, got)
+		}
+	}
+	if got, exists := payload.Messages[1]["reasoning_details"]; !exists || string(got) != string(details) {
+		t.Fatalf("reasoning_details = %s (present=%v), want %s", got, exists, details)
+	}
+	if _, exists := payload.Messages[1]["reasoning_content"]; exists {
+		t.Fatal("a message replayed with reasoning_details must not also carry reasoning_content")
+	}
+
+	// A history that does not end in a tool turn gets no reasoning fields at all.
+	noTurn, err := json.Marshal(map[string]any{
+		"model":    "m",
+		"messages": []map[string]any{{"role": "user", "content": "q"}, {"role": "assistant", "content": "a"}},
+	})
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+	if _, changed := patchChatRequestFields(noTurn, "", details, ""); changed {
+		t.Fatal("a history without a trailing tool turn must not receive reasoning fields")
+	}
+}
+
+// TestWithAnthropicThinkingBlocksRequiresToolTurn covers the replay gate: the
+// blocks may only be attached to the trailing tool turn, so a stale payload is
+// never glued to an unrelated assistant message (a new turn, a rewind, a
+// compaction, or another session's payload from the shared fallback bucket).
+func TestWithAnthropicThinkingBlocksRequiresToolTurn(t *testing.T) {
+	blocks := []anthropicThinkingBlock{{Thinking: "step one", Signature: "sig_1"}}
+	newTurn := []anthropic.MessageParam{
+		anthropic.NewUserMessage(anthropic.NewTextBlock("first")),
+		anthropic.NewAssistantMessage(anthropic.NewTextBlock("answer")),
+		anthropic.NewUserMessage(anthropic.NewTextBlock("second")),
+	}
+	if got := withAnthropicThinkingBlocks(newTurn, blocks, "claude-3-7-sonnet"); len(got[1].Content) != 1 {
+		t.Fatalf("a history without a trailing tool turn must not be injected, got %d blocks", len(got[1].Content))
+	}
+	// An assistant tool_use whose tool_result is missing is not a tool turn
+	// either: the dangling call is stripped before the request is built.
+	pending := []anthropic.MessageParam{
+		anthropic.NewUserMessage(anthropic.NewTextBlock("question")),
+		anthropic.NewAssistantMessage(anthropic.NewToolUseBlock("t1", map[string]any{"a": 1}, "grep")),
+	}
+	if got := withAnthropicThinkingBlocks(pending, blocks, "claude-3-7-sonnet"); len(got[1].Content) != 1 {
+		t.Fatalf("a tool_use without its tool_result must not be injected, got %d blocks", len(got[1].Content))
+	}
+}
+
+// TestReasoningStashEvictionKeepsOtherEntries guards the eviction policy: with
+// keys scoped per session x protocol x model (plus one per subagent run) a full
+// map is a normal state, so a new entry may only drop the coldest one — never the
+// live payload of another session or of a concurrent tool loop.
+func TestReasoningStashEvictionKeepsOtherEntries(t *testing.T) {
+	stash := newReasoningStash()
+	payload := func() *sessionReasoningPayload {
+		return &sessionReasoningPayload{chatDetails: json.RawMessage("[]")}
+	}
+	for i := 0; i < maxReasoningStashEntries; i++ {
+		stash.set(fmt.Sprintf("session-%d", i), payload())
+	}
+	for i := 0; i < maxReasoningStashEntries; i++ {
+		if stash.get(fmt.Sprintf("session-%d", i)) == nil {
+			t.Fatalf("session-%d was evicted while filling the map", i)
+		}
+	}
+	stash.set("overflow", payload())
+	stash.mu.Lock()
+	remaining := len(stash.entries)
+	stash.mu.Unlock()
+	if remaining != maxReasoningStashEntries {
+		t.Fatalf("stash holds %d entries, want the cap %d (exactly one eviction)", remaining, maxReasoningStashEntries)
+	}
+	if stash.get("session-0") != nil {
+		t.Fatal("the coldest entry must be the one evicted")
+	}
+	if stash.get("session-1") == nil {
+		t.Fatal("warm entries must survive an eviction")
+	}
+}
+
+// TestReasoningStashClearSession drops every protocol/model payload of one
+// session without touching another session's live payload.
+func TestReasoningStashClearSession(t *testing.T) {
+	stash := newReasoningStash()
+	stash.set("sess\x1fopenai_chat\x1fmodel-a", &sessionReasoningPayload{chatDetails: json.RawMessage("[]")})
+	stash.set("sess\x1fopenai_responses\x1fmodel-b", &sessionReasoningPayload{responses: []responsesReasoningItem{{ID: "rs_1"}}})
+	stash.set("sess-other\x1fopenai_chat\x1fmodel-a", &sessionReasoningPayload{chatDetails: json.RawMessage("[]")})
+	stash.clearSession("sess")
+	if got := stash.get("sess\x1fopenai_chat\x1fmodel-a"); got != nil {
+		t.Fatalf("the chat payload must be dropped, got %+v", got)
+	}
+	if got := stash.get("sess\x1fopenai_responses\x1fmodel-b"); got != nil {
+		t.Fatalf("the responses payload must be dropped, got %+v", got)
+	}
+	if stash.get("sess-other\x1fopenai_chat\x1fmodel-a") == nil {
+		t.Fatal("another session must keep its payload")
+	}
+}
+
+// TestReasoningReplayKeyIsolatesStoredPayloads makes the scoping behavioural: a
+// payload stored for one model must not be readable for another, and the key must
+// follow the model that actually issues the request.
+func TestReasoningReplayKeyIsolatesStoredPayloads(t *testing.T) {
+	stash := newReasoningStash()
+	cfgA := ConfigState{APIFormat: apiFormatOpenAIResponses, Model: "gpt-5.6", responsesPromptCacheKey: "sess"}
+	keyA := reasoningReplayKey(cfgA, cfgA.Model)
+	stash.set(keyA, &sessionReasoningPayload{responses: []responsesReasoningItem{{ID: "rs_1"}}})
+	cfgB := ConfigState{APIFormat: apiFormatOpenAIResponses, Model: "gpt-5.1", responsesPromptCacheKey: "sess"}
+	if got := stash.get(reasoningReplayKey(cfgB, cfgB.Model)); got != nil {
+		t.Fatalf("a model switch must not expose the previous payload: %+v", got)
+	}
+	if got := stash.get(keyA); got == nil || len(got.responses) != 1 {
+		t.Fatalf("the original payload must stay reachable: %+v", got)
+	}
+	if reasoningReplayKey(cfgA, "other-model") == keyA {
+		t.Fatal("the effective model must be part of the key")
+	}
+	cfgOtherFormat := ConfigState{APIFormat: apiFormatAnthropicMessages, Model: "gpt-5.6", responsesPromptCacheKey: "sess"}
+	if reasoningReplayKey(cfgA, cfgA.Model) == reasoningReplayKey(cfgOtherFormat, cfgOtherFormat.Model) {
+		t.Fatal("the wire protocol must be part of the key")
+	}
+}
+
+// TestParseStreamReasoningSupportsReasoningText locks the dialect that was
+// missing: newer vLLM / llama.cpp-class servers stream `reasoning_text`, which
+// pi supports too (openai-completions.ts:280 lists reasoning,
+// reasoning_content, reasoning_text).
+func TestParseStreamReasoningSupportsReasoningText(t *testing.T) {
+	text, details := parseStreamReasoning([]byte(`{"choices":[{"delta":{"reasoning_text":"thinking..."}}]}`))
+	if text != "thinking..." {
+		t.Fatalf("reasoning_text must be parsed, got %q", text)
+	}
+	if len(details) != 0 {
+		t.Fatalf("no reasoning details expected, got %#v", details)
+	}
+
+	// Field precedence follows pi: the first non-empty field wins, so
+	// `reasoning` beats `reasoning_text`.
+	if text, _ := parseStreamReasoning([]byte(`{"choices":[{"delta":{"reasoning":"first","reasoning_text":"second"}}]}`)); text != "first" {
+		t.Fatalf("reasoning must win over reasoning_text, got %q", text)
+	}
+
+	// A chunk that only mentions an unrelated parameter must not enter the parse
+	// path: the quoted-key check exists to keep "reasoning_effort" out.
+	if text, _ := parseStreamReasoning([]byte(`{"reasoning_effort":"high"}`)); text != "" {
+		t.Fatalf("a non-reasoning chunk must not be parsed, got %q", text)
+	}
+
+	// The same key list drives replay-dialect selection, so a model configured
+	// with tag=reasoning_text replays under that field name.
+	if !isKnownWireReasoningKey("reasoning_text") {
+		t.Fatal("reasoning_text must be a known replay dialect")
 	}
 }

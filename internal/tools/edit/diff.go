@@ -103,26 +103,6 @@ const (
 	editDiffWindowMaxBytes = 512 * 1024
 )
 
-type readRangeRequest struct {
-	StartLine     int
-	EndLine       int
-	LineCount     int
-	ContextBefore int
-	ContextAfter  int
-}
-
-type readPreviewResult struct {
-	Content       string
-	RawContent    string
-	TotalLines    int
-	StartLine     int
-	EndLine       int
-	NextStartLine int
-	Truncated     bool
-	RangeStatus   string
-	EmptyRange    bool
-}
-
 func GenerateEditDiffPreview(oldContent, newContent string, maxBytes int) string {
 	if oldContent == newContent {
 		return ""
