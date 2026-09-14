@@ -1054,3 +1054,126 @@ func TestExtractRawStreamReasoningArrayTolerant(t *testing.T) {
 		t.Fatalf("expected reasoning to be extracted despite array reasoning_details, got %q", got)
 	}
 }
+
+func TestNormalizeToolSchemaTypes(t *testing.T) {
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"missing_type_enum_string": map[string]any{
+				"enum": []any{"asc", "desc"},
+			},
+			"missing_type_enum_number": map[string]any{
+				"enum": []any{1, 2, 3},
+			},
+			"contradictory_type": map[string]any{
+				"type": "object",
+				"enum": []any{"opt_a", "opt_b"},
+				"properties": map[string]any{
+					"bad": map[string]any{"type": "string"},
+				},
+			},
+			"missing_type_object": map[string]any{
+				"properties": map[string]any{
+					"sub": map[string]any{"type": "string"},
+				},
+			},
+			"missing_type_array": map[string]any{
+				"items": map[string]any{"type": "string"},
+			},
+			"fallback_typeless": map[string]any{
+				"description": "no info",
+			},
+		},
+	}
+
+	norm := normalizeToolSchemaTypes(schema)
+	props := norm["properties"].(map[string]any)
+
+	if props["missing_type_enum_string"].(map[string]any)["type"] != "string" {
+		t.Fatalf("expected string type for enum strings, got %v", props["missing_type_enum_string"])
+	}
+	if props["missing_type_enum_number"].(map[string]any)["type"] != "number" {
+		t.Fatalf("expected number type for enum numbers, got %v", props["missing_type_enum_number"])
+	}
+	contra := props["contradictory_type"].(map[string]any)
+	if contra["type"] != "string" {
+		t.Fatalf("expected contradictory object type to be repaired to string, got %v", contra["type"])
+	}
+	if _, hasProps := contra["properties"]; hasProps {
+		t.Fatalf("expected properties to be deleted when repaired from object to string")
+	}
+	if props["missing_type_object"].(map[string]any)["type"] != "object" {
+		t.Fatalf("expected object type inferred from properties")
+	}
+	if props["missing_type_array"].(map[string]any)["type"] != "array" {
+		t.Fatalf("expected array type inferred from items")
+	}
+	if props["fallback_typeless"].(map[string]any)["type"] != "string" {
+		t.Fatalf("expected fallback typeless property to be string")
+	}
+}
+
+func TestSanitizeOpenAIResponsesCallID(t *testing.T) {
+	// Compound call|item ID should take the first token
+	got := sanitizeOpenAIResponsesCallID("call_12345|item_67890")
+	if got != "call_12345" {
+		t.Fatalf("expected call_12345, got %q", got)
+	}
+
+	// Safe chars replacement
+	got = sanitizeOpenAIResponsesCallID("call:special!chars")
+	if got != "call_special_chars" {
+		t.Fatalf("expected call_special_chars, got %q", got)
+	}
+
+	// Length > 64 truncation with deterministic hash
+	longID := strings.Repeat("a", 80)
+	got = sanitizeOpenAIResponsesCallID(longID)
+	if len(got) != 64 {
+		t.Fatalf("expected length 64, got %d (%q)", len(got), got)
+	}
+	if !strings.HasPrefix(got, strings.Repeat("a", 56)+"_") {
+		t.Fatalf("expected prefix of 56 a's and underscore, got %q", got)
+	}
+
+	// Empty fallback
+	if sanitizeOpenAIResponsesCallID("") != "call_tool" {
+		t.Fatalf("expected call_tool on empty")
+	}
+}
+
+func TestBuildAnthropicMessagesMidTurnSystem(t *testing.T) {
+	messages := []legacyopenai.ChatCompletionMessage{
+		{Role: legacyopenai.ChatMessageRoleSystem, Content: "base system prompt"},
+		{Role: legacyopenai.ChatMessageRoleUser, Content: "user prompt 1"},
+		{Role: legacyopenai.ChatMessageRoleAssistant, Content: "assistant reply 1"},
+		{Role: legacyopenai.ChatMessageRoleSystem, Content: "compaction summary / reminder"},
+		{Role: legacyopenai.ChatMessageRoleUser, Content: "user prompt 2"},
+	}
+
+	system, anthropicMsgs := buildAnthropicMessages(messages)
+	// Base system prompt must stay strictly intact to preserve prompt cache breakpoint
+	if system != "base system prompt" {
+		t.Fatalf("expected system to be 'base system prompt', got %q", system)
+	}
+
+	// The mid-conversation system message must be wrapped inside a user turn
+	// and merged with the following user prompt to preserve alternating roles
+	if len(anthropicMsgs) != 3 {
+		t.Fatalf("expected 3 turns (user 1, assistant 1, user 2 merged), got %d turns", len(anthropicMsgs))
+	}
+	lastUserTurn := anthropicMsgs[2]
+	if lastUserTurn.Role != anthropic.MessageParamRoleUser {
+		t.Fatalf("expected last turn to be user, got %v", lastUserTurn.Role)
+	}
+	if len(lastUserTurn.Content) != 2 {
+		t.Fatalf("expected 2 blocks in last user turn (<system> and user prompt 2), got %d", len(lastUserTurn.Content))
+	}
+	if lastUserTurn.Content[0].OfText == nil || !strings.Contains(lastUserTurn.Content[0].OfText.Text, "<system>\ncompaction summary / reminder\n</system>") {
+		t.Fatalf("expected first block to be wrapped system, got %+v", lastUserTurn.Content[0])
+	}
+	if lastUserTurn.Content[1].OfText == nil || lastUserTurn.Content[1].OfText.Text != "user prompt 2" {
+		t.Fatalf("expected second block to be user prompt 2, got %+v", lastUserTurn.Content[1])
+	}
+}
+

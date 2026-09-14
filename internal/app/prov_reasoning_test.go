@@ -566,7 +566,7 @@ func TestWithAnthropicThinkingBlocks(t *testing.T) {
 		),
 		anthropic.NewUserMessage(anthropic.NewToolResultBlock("t1", "ok", false)),
 	}
-	out := withAnthropicThinkingBlocks(messages, blocks)
+	out := withAnthropicThinkingBlocks(messages, blocks, "claude-3-7-sonnet")
 	if len(out) != 3 {
 		t.Fatalf("expected 3 messages, got %d", len(out))
 	}
@@ -587,14 +587,40 @@ func TestWithAnthropicThinkingBlocks(t *testing.T) {
 		t.Fatalf("block 2 must be the tool_use block, got %+v", assistant.Content[2])
 	}
 	// Idempotence: replaying again must not stack blocks.
-	again := withAnthropicThinkingBlocks(out, blocks)
+	again := withAnthropicThinkingBlocks(out, blocks, "claude-3-7-sonnet")
 	if len(again[1].Content) != 3 {
 		t.Fatalf("second application must be a no-op, got %d blocks", len(again[1].Content))
 	}
 	// No assistant message: payload dropped, messages unchanged.
 	onlyUser := []anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock("q"))}
-	if got := withAnthropicThinkingBlocks(onlyUser, blocks); len(got) != 1 || len(got[0].Content) != 1 {
+	if got := withAnthropicThinkingBlocks(onlyUser, blocks, "claude-3-7-sonnet"); len(got) != 1 || len(got[0].Content) != 1 {
 		t.Fatal("without an assistant message the blocks must be dropped")
+	}
+
+	// Claude unsigned thinking guard: an unsigned thinking block must NOT be replayed on Claude models (would trigger 400),
+	// but is permitted on non-Claude Anthropic-compatible proxies.
+	unsignedBlocks := []anthropicThinkingBlock{
+		{Thinking: "unsigned thoughts", Signature: ""},
+	}
+	freshClaudeMessages := []anthropic.MessageParam{
+		anthropic.NewUserMessage(anthropic.NewTextBlock("question")),
+		anthropic.NewAssistantMessage(
+			anthropic.NewToolUseBlock("t1", map[string]any{"a": 1}, "grep"),
+		),
+	}
+	claudeGuarded := withAnthropicThinkingBlocks(freshClaudeMessages, unsignedBlocks, "claude-3-7-sonnet")
+	if len(claudeGuarded[1].Content) != 1 {
+		t.Fatalf("Claude model must not replay unsigned thinking block, got %d blocks", len(claudeGuarded[1].Content))
+	}
+	freshProxyMessages := []anthropic.MessageParam{
+		anthropic.NewUserMessage(anthropic.NewTextBlock("question")),
+		anthropic.NewAssistantMessage(
+			anthropic.NewToolUseBlock("t1", map[string]any{"a": 1}, "grep"),
+		),
+	}
+	proxyAllowed := withAnthropicThinkingBlocks(freshProxyMessages, unsignedBlocks, "deepseek-r1")
+	if len(proxyAllowed[1].Content) != 2 || proxyAllowed[1].Content[0].OfThinking == nil {
+		t.Fatalf("non-Claude model must allow replaying unsigned thinking block, got %d blocks", len(proxyAllowed[1].Content))
 	}
 }
 

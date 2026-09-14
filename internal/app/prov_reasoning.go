@@ -426,6 +426,11 @@ findDialect:
 	return out, true
 }
 
+func isAnthropicClaudeModel(model string) bool {
+	m := strings.ToLower(strings.TrimSpace(model))
+	return strings.Contains(m, "claude")
+}
+
 // withAnthropicThinkingBlocks prepends the captured thinking blocks to the
 // LAST assistant message of the request. Anthropic requires thinking blocks
 // to be replayed unmodified, in order, alongside the tool_use blocks of the
@@ -434,7 +439,7 @@ findDialect:
 // assistant message exists the payload cannot be replayed meaningfully and
 // is dropped (the API allows omitting thinking only when the request has no
 // in-flight tool loop, which is exactly that case).
-func withAnthropicThinkingBlocks(messages []anthropic.MessageParam, blocks []anthropicThinkingBlock) []anthropic.MessageParam {
+func withAnthropicThinkingBlocks(messages []anthropic.MessageParam, blocks []anthropicThinkingBlock, model string) []anthropic.MessageParam {
 	if len(blocks) == 0 || len(messages) == 0 {
 		return messages
 	}
@@ -456,9 +461,9 @@ func withAnthropicThinkingBlocks(messages []anthropic.MessageParam, blocks []ant
 			union := messages[last].Content[i]
 			if b.redacted() {
 				if union.OfRedactedThinking == nil || union.OfRedactedThinking.Data != b.Data {
-						already = false
-						break
-					}
+					already = false
+					break
+				}
 			} else if union.OfThinking == nil || union.OfThinking.Thinking != b.Thinking || union.OfThinking.Signature != b.Signature {
 				already = false
 				break
@@ -468,13 +473,23 @@ func withAnthropicThinkingBlocks(messages []anthropic.MessageParam, blocks []ant
 			return messages
 		}
 	}
+	isClaude := isAnthropicClaudeModel(model)
 	prefix := make([]anthropic.ContentBlockParamUnion, 0, len(blocks)+len(messages[last].Content))
 	for _, b := range blocks {
 		if b.redacted() {
 			prefix = append(prefix, anthropic.NewRedactedThinkingBlock(b.Data))
 		} else {
+			// If model is Claude and signature is empty, Anthropic official API strictly
+			// rejects the request with HTTP 400 ("messages.N.content.0.thinking.signature: Field required").
+			// Unsigned thinking is only permitted for non-Claude Anthropic-compatible proxies.
+			if isClaude && strings.TrimSpace(b.Signature) == "" {
+				continue
+			}
 			prefix = append(prefix, anthropic.NewThinkingBlock(b.Signature, b.Thinking))
 		}
+	}
+	if len(prefix) == 0 {
+		return messages
 	}
 	messages[last].Content = append(prefix, messages[last].Content...)
 	return messages

@@ -1593,7 +1593,7 @@ func (a *App) streamAnthropicMessages(ctx context.Context, cfg ConfigState, mode
 	// session's tool loop. They must precede the tool_use blocks of the SAME
 	// assistant message; buildAnthropicMessages places them at the front.
 	if payload := a.reasoningStash.get(cfg.responsesPromptCacheKey); payload != nil && len(payload.anthropic) > 0 {
-		params.Messages = withAnthropicThinkingBlocks(params.Messages, payload.anthropic)
+		params.Messages = withAnthropicThinkingBlocks(params.Messages, payload.anthropic, model)
 	}
 
 	maxRetries := effectiveLLMRetries(cfg)
@@ -1892,7 +1892,7 @@ func buildOpenAIResponsesInput(messages []legacyopenai.ChatCompletionMessage) (s
 		case legacyopenai.ChatMessageRoleTool:
 			hasSeenTurn = true
 			if strings.TrimSpace(m.ToolCallID) != "" {
-				input = append(input, responseInputItemParamOfFunctionCallOutput(m.ToolCallID, m.Content))
+				input = append(input, responseInputItemParamOfFunctionCallOutput(sanitizeOpenAIResponsesCallID(m.ToolCallID), m.Content))
 			}
 		}
 	}
@@ -1904,7 +1904,8 @@ func responseInputItemParamOfFunctionCall(call legacyopenai.ToolCall) oaresp.Res
 	if args == "" {
 		args = "{}"
 	}
-	return oaresp.ResponseInputItemParamOfFunctionCall(args, effectiveToolCallID(call), call.Function.Name)
+	callID := sanitizeOpenAIResponsesCallID(effectiveToolCallID(call))
+	return oaresp.ResponseInputItemParamOfFunctionCall(args, callID, call.Function.Name)
 }
 
 func openAIResponsesContentFromMulti(m legacyopenai.ChatCompletionMessage) oaresp.ResponseInputMessageContentListParam {
@@ -1962,17 +1963,33 @@ func buildAnthropicMessages(messages []legacyopenai.ChatCompletionMessage) (stri
 		}
 	}
 
+	hasSeenTurn := false
 	for i := 0; i < len(messages); i++ {
 		m := messages[i]
 		switch m.Role {
 		case legacyopenai.ChatMessageRoleSystem:
-			if text := messageText(m); text != "" {
+			text := messageText(m)
+			if text == "" {
+				continue
+			}
+			if !hasSeenTurn {
 				systemParts = append(systemParts, text)
+			} else {
+				// Mid-conversation system turns (compaction summaries, steering reminders)
+				// must not be hoisted into the top-level system prompt, which would corrupt
+				// the primary prompt-cache breakpoint. Emit as a chronological <system>...</system>
+				// block in a user message (merged with adjacent user messages to preserve alternating roles).
+				wrapped := fmt.Sprintf("<system>\n%s\n</system>", text)
+				appendMessage(anthropic.MessageParamRoleUser, []anthropic.ContentBlockParamUnion{
+					anthropic.NewTextBlock(wrapped),
+				})
 			}
 		case legacyopenai.ChatMessageRoleUser:
+			hasSeenTurn = true
 			blocks := anthropicBlocksFromMessage(m)
 			appendMessage(anthropic.MessageParamRoleUser, blocks)
 		case legacyopenai.ChatMessageRoleAssistant:
+			hasSeenTurn = true
 			blocks := []anthropic.ContentBlockParamUnion{}
 			if text := messageText(m); text != "" {
 				blocks = append(blocks, anthropic.NewTextBlock(text))
@@ -2209,7 +2226,8 @@ func schemaMap(value any) map[string]any {
 	if m == nil {
 		return map[string]any{"type": "object", "properties": map[string]any{}}
 	}
-	return derefJSONSchema(m)
+	dereffed := derefJSONSchema(m)
+	return normalizeToolSchemaTypes(dereffed)
 }
 
 func cloneJSONMap(m map[string]any) map[string]any {
@@ -2352,6 +2370,153 @@ func hasUnresolvedRef(node any, bucket string) bool {
 		}
 	}
 	return false
+}
+
+// normalizeToolSchemaTypes ensures all property nodes in a JSON Schema have an
+// explicit valid 'type' field and repairs contradictory types (e.g. type: 'object'
+// alongside enum: ["a", "b"] caused by MCP generator bugs). Anthropic, Moonshot
+// (Kimi), and OpenAI Responses strict mode reject property schemas missing 'type'.
+func normalizeToolSchemaTypes(schema map[string]any) map[string]any {
+	if schema == nil {
+		return nil
+	}
+	normalizeSchemaNodeTypes(schema, false)
+	return schema
+}
+
+func normalizeSchemaNodeTypes(node any, isPropertyDef bool) {
+	m, ok := node.(map[string]any)
+	if !ok || m == nil {
+		return
+	}
+
+	if isPropertyDef {
+		rawType, hasType := m["type"]
+		typeStr, isStr := rawType.(string)
+		if !hasType || !isStr || strings.TrimSpace(typeStr) == "" {
+			inferred := inferSchemaTypeFromNode(m)
+			if inferred != "" {
+				m["type"] = inferred
+			} else {
+				m["type"] = "string"
+			}
+		} else {
+			if enumVal, ok := m["enum"].([]any); ok && len(enumVal) > 0 {
+				inferred := inferTypeFromEnumValues(enumVal)
+				if inferred != "" && inferred != typeStr {
+					m["type"] = inferred
+					if inferred != "object" {
+						delete(m, "properties")
+						delete(m, "required")
+					}
+					if inferred != "array" {
+						delete(m, "items")
+					}
+				}
+			}
+		}
+	}
+
+	if props, ok := m["properties"].(map[string]any); ok {
+		for _, v := range props {
+			normalizeSchemaNodeTypes(v, true)
+		}
+	}
+	if patProps, ok := m["patternProperties"].(map[string]any); ok {
+		for _, v := range patProps {
+			normalizeSchemaNodeTypes(v, true)
+		}
+	}
+	if items := m["items"]; items != nil {
+		if itemMap, ok := items.(map[string]any); ok {
+			normalizeSchemaNodeTypes(itemMap, false)
+		} else if itemArr, ok := items.([]any); ok {
+			for _, item := range itemArr {
+				normalizeSchemaNodeTypes(item, false)
+			}
+		}
+	}
+	if allOf, ok := m["allOf"].([]any); ok {
+		for _, sub := range allOf {
+			normalizeSchemaNodeTypes(sub, isPropertyDef)
+		}
+	}
+	if anyOf, ok := m["anyOf"].([]any); ok {
+		for _, sub := range anyOf {
+			normalizeSchemaNodeTypes(sub, isPropertyDef)
+		}
+	}
+	if oneOf, ok := m["oneOf"].([]any); ok {
+		for _, sub := range oneOf {
+			normalizeSchemaNodeTypes(sub, isPropertyDef)
+		}
+	}
+	if defs, ok := m["$defs"].(map[string]any); ok {
+		for _, v := range defs {
+			normalizeSchemaNodeTypes(v, false)
+		}
+	}
+	if defs, ok := m["definitions"].(map[string]any); ok {
+		for _, v := range defs {
+			normalizeSchemaNodeTypes(v, false)
+		}
+	}
+}
+
+func inferSchemaTypeFromNode(m map[string]any) string {
+	if enumVal, ok := m["enum"].([]any); ok && len(enumVal) > 0 {
+		if t := inferTypeFromEnumValues(enumVal); t != "" {
+			return t
+		}
+	}
+	if constVal, ok := m["const"]; ok {
+		if t := inferTypeFromSingleValue(constVal); t != "" {
+			return t
+		}
+	}
+	if _, ok := m["properties"]; ok {
+		return "object"
+	}
+	if _, ok := m["required"]; ok {
+		return "object"
+	}
+	if _, ok := m["items"]; ok {
+		return "array"
+	}
+	return ""
+}
+
+func inferTypeFromEnumValues(vals []any) string {
+	var inferred string
+	for _, v := range vals {
+		t := inferTypeFromSingleValue(v)
+		if t == "" {
+			continue
+		}
+		if inferred == "" {
+			inferred = t
+		} else if inferred != t {
+			return "string"
+		}
+	}
+	return inferred
+}
+
+func inferTypeFromSingleValue(v any) string {
+	switch v.(type) {
+	case string:
+		return "string"
+	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64, json.Number:
+		return "number"
+	case bool:
+		return "boolean"
+	case map[string]any:
+		return "object"
+	case []any:
+		return "array"
+	default:
+		return ""
+	}
 }
 
 func anthropicInputSchema(schema map[string]any) anthropic.ToolInputSchemaParam {
@@ -2610,6 +2775,37 @@ func sanitizeAnthropicToolCallID(id string) string {
 	id = strings.TrimSpace(id)
 	if id == "" {
 		return "call_tool"
+	}
+	var b strings.Builder
+	for _, r := range id {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
+			b.WriteRune(r)
+		} else {
+			b.WriteRune('_')
+		}
+	}
+	s := b.String()
+	if len(s) > 64 {
+		h := fmt.Sprintf("%x", sha256.Sum256([]byte(id)))
+		s = s[:56] + "_" + h[:7]
+	}
+	return s
+}
+
+// sanitizeOpenAIResponsesCallID normalizes a tool call ID to conform to the
+// OpenAI Responses API schema (^[a-zA-Z0-9_-]{1,64}$). Compound IDs separated by '|'
+// (such as call_id|item_id) are split to retain the primary call_id, and
+// lengths > 64 chars are truncated with a deterministic SHA256 suffix.
+func sanitizeOpenAIResponsesCallID(id string) string {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return "call_tool"
+	}
+	if idx := strings.IndexByte(id, '|'); idx >= 0 {
+		id = strings.TrimSpace(id[:idx])
+		if id == "" {
+			return "call_tool"
+		}
 	}
 	var b strings.Builder
 	for _, r := range id {
