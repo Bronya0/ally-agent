@@ -57,7 +57,7 @@ Public License v3. See the LICENSE file for details.
         <div v-if="skillsLoading && !availableSkills.length" class="saved-model-empty">{{ t('settings.skillsLoading') }}</div>
         <div v-else-if="!availableSkills.length" class="saved-model-empty">{{ t('settings.skillsEmpty') }}</div>
         <div v-else-if="!filteredSkills.length" class="saved-model-empty">{{ skillSearch.trim() ? t('common.searchEmpty') : t('app.skills.filterEmpty') }}</div>
-        <div v-for="sk in filteredSkills" :key="`${sk.source || 'skill'}:${sk.name}`" :class="['skill-settings-item', { active: isSkillActive(sk.name, activeSkillNames), builtin: sk.source === 'builtin' }]">
+        <div v-for="sk in filteredSkills" :key="`${sk.source || 'skill'}:${sk.name}`" :class="['skill-settings-item', { active: isSkillActive(sk.name, activeSkillNames) }]">
           <div class="skill-settings-main">
             <div class="skill-title-row">
               <span class="skill-name">{{ sk.name }}</span>
@@ -71,7 +71,7 @@ Public License v3. See the LICENSE file for details.
           </div>
           <n-switch
             :value="isSkillActive(sk.name, activeSkillNames)"
-            :disabled="skillsLoading || skillToggleInFlight === sk.name || sk.source === 'builtin'"
+            :disabled="skillsLoading || skillToggleInFlight === sk.name"
             @update:value="(value) => toggleSkill(sk, value)"
           />
         </div>
@@ -354,18 +354,6 @@ watch(
 .skill-source-tabs :deep(.n-tabs-tab) {
   padding: 6px 10px;
   font-size: var(--ally-sub-font-size);
-}
-
-.skill-settings-item.builtin {
-  opacity: 0.85;
-}
-
-.skill-settings-item.builtin .skill-name {
-  color: var(--ally-text-body);
-}
-
-.skill-settings-item.builtin .skill-description {
-  color: var(--ally-text-muted);
 }
 
 .skill-description {
