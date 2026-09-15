@@ -207,6 +207,43 @@ onMounted(start);
   }
 }
 
+/* ── Light mode ──
+   同一套构图换成亮画布：近黑径向接上页面渐变那套近白值，星空网格改墨色发丝线，
+   字标改用共享的亮色字标渐变（墨→琥珀，和欢迎页同一 token）。琥珀光晕两种模式
+   都保持琥珀：它是品牌色，不是表面色。刻意只写 light 作用域，上面的暗色规则
+   一字未改。 */
+html[data-mode="light"] .splash-bg {
+  background:
+    radial-gradient(ellipse 62% 48% at 50% 47%, rgba(224, 164, 88, 0.14), rgba(224, 164, 88, 0.05) 45%, transparent 72%),
+    radial-gradient(ellipse at 50% 42%, #fafbfc 0%, #f1f4f8 42%, #e6ebf2 100%);
+}
+
+/* 网格：亮底上须用墨色（原来的浅灰在白底上等于隐形） */
+html[data-mode="light"] .splash-bg::after {
+  background-image:
+    linear-gradient(rgba(15, 23, 42, 0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(15, 23, 42, 0.06) 1px, transparent 1px);
+}
+
+/* 光晕：亮底比暗底“吃”光，同强度会看不见，略提一档补回观感 */
+html[data-mode="light"] .splash-eye-glow {
+  background: radial-gradient(circle, rgba(224, 164, 88, 0.28) 0%, rgba(224, 164, 88, 0.09) 45%, transparent 70%);
+}
+
+/* 字标：只换渐变图，不用 background 简写——简写会把基类里紧跟在后面的
+   -webkit-background-clip / background-clip: text 重置回初始值 border-box，
+   而字色是 color: transparent，一旦不再裁到字形，整个“ALLY”就变成一块渐变。
+   用 background-image 长属性只替换图，裁剪与 color 保持基类不变。 */
+html[data-mode="light"] .splash-wordmark {
+  background-image: var(--ally-wordmark-gradient);
+}
+
+html[data-mode="light"] .splash-version {
+  color: var(--ally-accent-bright);
+  background: var(--ally-state-hover);
+  border-color: var(--ally-border);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .splash-eye-wrap,
   .splash-wordmark,

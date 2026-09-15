@@ -544,9 +544,22 @@ html[data-mode="light"] .plan-panel {
   -webkit-backdrop-filter: var(--ally-glass-blur);
 }
 
-/* Splash keeps its dark canvas artwork in both modes (the starfield grid and
-   glowing eye are dark-composition art that cannot simply be flipped); it is
-   a sub-second boot moment, not a themed surface. */
+/* Splash artwork follows the color mode. The dark canvas (starfield grid over a
+   near-black radial, white wordmark) reads as a hole punched through the light
+   UI, so light mode paints the same composition on the light page canvas: same
+   layout, same amber eye glow, ink wordmark. The artwork is split across two
+   blocks — the deck (.splash-bg / eye glow / wordmark / version, scoped inside
+   SplashScreen.vue) and the chrome here — so each carries its own light rules. */
+html[data-mode="light"] .splash-screen {
+  background: #f3f5f9;
+}
+
+/* The HUD sits on the artwork, not on a surface: its shadow halo exists to lift
+   text off the dark radial, and on the light canvas a black halo would smear
+   gray under every glyph. */
+html[data-mode="light"] .splash-hud {
+  text-shadow: none;
+}
 
 /* Code blocks: light mat, ink text; hljs token colors darkened one notch.
    highlight.js ships only the dark darcula theme (imported in App.vue), so the
