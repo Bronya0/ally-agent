@@ -186,7 +186,7 @@ func chatToolsUncached() []openai.Tool {
 				"query":              map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}, "description": "Query parameters merged into the URL."},
 				"body":               map[string]any{"type": "string", "description": "Raw request body. Mutually exclusive with json."},
 				"json":               jsonValueSchema("JSON value to encode as the request body. Sets Content-Type to application/json unless provided."),
-				"saveTo": map[string]any{"type": "string", "description": "Optional workspace-relative download path for large responses; parent directories are created automatically."},
+				"saveTo":             map[string]any{"type": "string", "description": "Optional workspace-relative download path for large responses; parent directories are created automatically."},
 				"timeout":            map[string]any{"type": "integer", "minimum": 1, "maximum": 120, "description": "Request timeout in seconds. Default 60, max 120."},
 				"insecureSkipVerify": map[string]any{"type": "boolean", "description": "Skip TLS verification. Default false; only for debugging or trusted self-signed services."},
 			},
@@ -213,9 +213,9 @@ func chatToolsUncached() []openai.Tool {
 		}),
 		functionTool("remote_edit", "Validate and apply exact replacements to ONE file per call in a remote SSH workspace (same flat contract as edit; to change several files, send parallel remote_edit calls in one response).\n"+
 			"- `target` selects the SSH target plus workspace root, e.g. my-dev:/srv/app; `path` is relative to that root.\n"+
-			"- Requires the current 6-character `version` from `remote_read`; `E_VERSION_MISMATCH` means re-read before editing.\n" +
+			"- Requires the current 6-character `version` from `remote_read`; `E_VERSION_MISMATCH` means re-read before editing.\n"+
 			"- `changes` must be a JSON array (`[...]`), never a quoted string.\n"+
-			"- Each change chooses exactly one source: a small exact unique `oldText` copied from `remote_read` (preferred), or an inclusive whole-line `lineRange` in A-B form for larger blocks.\n" +
+			"- Each change chooses exactly one source: a small exact unique `oldText` copied from `remote_read` (preferred), or an inclusive whole-line `lineRange` in A-B form for larger blocks.\n"+
 			"- `replace_all` works only with `oldText`. `newText` is required.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -374,7 +374,7 @@ var builtinToolExamples = map[string]string{
 	"command":            `{"command":"go test ./...","cwd":".","timeout":120}`,
 	"service":            `start: {"action":"start","name":"frontend","command":"npm run dev","cwd":"frontend"}; stop: {"action":"stop","id":"svc_..."}; list: {"action":"list"}; read: {"action":"read","id":"svc_...","tailBytes":8192}`,
 	"ask":                `{"questions":[{"id":"database","question":"Which database should we use?","options":[{"id":"sqlite","label":"SQLite","description":"Simple local storage.","recommended":true},{"id":"postgres","label":"PostgreSQL","description":"Production database.","recommended":false}]}]}`,
-	"remote_read":         `{"target":"my-dev:/srv/app","files":[{"path":"main.go"}]}`,
+	"remote_read":        `{"target":"my-dev:/srv/app","files":[{"path":"main.go"}]}`,
 	"remote_edit":        `{"target":"my-dev:/srv/app","path":"main.go","version":"9k3m7x","changes":[{"oldText":"func old() {}","newText":"func new() {}"}]}`,
 	"remote_run_command": `{"target":"my-dev:/srv/app","command":"go test ./..."}`,
 	"ssh_credential":     `set password: {"action":"set","target":"root@47.120.8.34:/tmp/app","password":"<verbatim from user message>"}; set key file: {"action":"set","target":"root@example.com:/srv/app","keyPath":"F:/doc/keys/server.pem"}`,
@@ -419,7 +419,6 @@ func batchReadFilesSchema() map[string]any {
 		"description": "Required array of file request objects for reading one or more files in parallel.",
 	}
 }
-
 
 func editChangeSchema() map[string]any {
 	return map[string]any{
@@ -533,7 +532,6 @@ func normalizeSchemaNode(node map[string]any) {
 		normalizeSchemaNode(additional)
 	}
 }
-
 
 // normalizeToolName lower-cases the incoming tool name and resolves any
 // deprecated alias to its canonical name. It is the single entry point for

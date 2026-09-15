@@ -703,7 +703,7 @@ func compactTextForModel(output string, spec compactTextSpec) (string, bool) {
 // 参数传入，通用函数不再按 "limit 恰好等于某个魔数" 推断调用方身份。
 type compactTextSpec struct {
 	limit int
-	head   int
+	head  int
 	tail  int
 }
 

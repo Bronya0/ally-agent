@@ -59,7 +59,7 @@ func TestOpenAIChatStreamEmitsToolStartDuringStreaming(t *testing.T) {
 		BaseURL:   server.URL,
 		APIKey:    "test",
 		Model:     "test-model",
-		MaxTokens:  1024,
+		MaxTokens: 1024,
 	}
 
 	var events []string

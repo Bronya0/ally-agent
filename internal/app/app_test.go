@@ -242,7 +242,6 @@ func TestRunChatRetriesEmptyResponseAfterToolError(t *testing.T) {
 	}
 }
 
-
 // TestRunChatRejectsOpenAIChatLengthStop verifies that a truncated compatible
 // Chat Completions response is surfaced as an error instead of being persisted
 // and presented as a normally completed answer.
@@ -961,7 +960,7 @@ func TestLoadAgentsMdLoadsSubdirsWhenRootMissing(t *testing.T) {
 }
 
 func TestSystemPromptDefinesWaitSequencing(t *testing.T) {
-	prompt := defaultSystemPrompt(nil, "", nil, "", "", "")
+	prompt := joinSystemPromptParts(buildSystemPromptParts(nil, "", nil, "", "", ""))
 	for _, expected := range []string{"Use `wait` only", "only tool in that model response", "verify the condition after it completes"} {
 		if !strings.Contains(prompt, expected) {
 			t.Fatalf("system prompt missing wait guidance %q", expected)
@@ -1053,7 +1052,7 @@ func TestSessionSystemPromptFrozenWithinSession(t *testing.T) {
 }
 
 func TestSystemPromptExplainsRunCommandOutsidePathRecovery(t *testing.T) {
-	prompt := defaultSystemPrompt(nil, "", nil, "", "", "")
+	prompt := joinSystemPromptParts(buildSystemPromptParts(nil, "", nil, "", "", ""))
 	for _, expected := range []string{"`E_PATH_OUTSIDE`", "Do not retry the unchanged command", "read the returned Chinese explanation"} {
 		if !strings.Contains(prompt, expected) {
 			t.Fatalf("system prompt missing command recovery guidance %q", expected)
@@ -1062,7 +1061,7 @@ func TestSystemPromptExplainsRunCommandOutsidePathRecovery(t *testing.T) {
 }
 
 func TestSystemPromptIncludesConsolidatedSafetyRules(t *testing.T) {
-	prompt := defaultSystemPrompt(nil, "", nil, "", "", "")
+	prompt := joinSystemPromptParts(buildSystemPromptParts(nil, "", nil, "", "", ""))
 	for _, expected := range []string{
 		"# Safety",
 		"Sensitive files",
@@ -1086,7 +1085,7 @@ func TestSystemPromptIncludesConsolidatedSafetyRules(t *testing.T) {
 }
 
 func TestSystemPromptDiscouragesRedundantReadsBeforeEdit(t *testing.T) {
-	prompt := defaultSystemPrompt(nil, "", nil, "", "", "")
+	prompt := joinSystemPromptParts(buildSystemPromptParts(nil, "", nil, "", "", ""))
 	for _, expected := range []string{
 		"assume workspace files are not concurrently edited by another person",
 		"do not re-read a file merely for reassurance",
@@ -1102,7 +1101,7 @@ func TestSystemPromptDiscouragesRedundantReadsBeforeEdit(t *testing.T) {
 }
 
 func TestSystemPromptKeepsEditBehavioralRules(t *testing.T) {
-	prompt := defaultSystemPrompt(nil, "", nil, "", "", "")
+	prompt := joinSystemPromptParts(buildSystemPromptParts(nil, "", nil, "", "", ""))
 	for _, expected := range []string{
 		"must never be copied into edit text",
 		"do not re-read a file merely for reassurance",
@@ -1466,7 +1465,7 @@ func TestHandleTodoListDoesNotRestartAllDoneList(t *testing.T) {
 	}
 }
 
-func TestAppendPlanForUserTurnAddsTransientPlanBeforeLatestUser(t *testing.T) {
+func TestAppendTransientTailAddsTimeAndPlanBeforeLatestUser(t *testing.T) {
 	app := NewApp()
 	if _, err := app.handleTodoList("session-1", TodoListRequest{
 		Todos: []TodoEntry{{Title: "Inspect implementation", Status: "in_progress"}},
@@ -1478,15 +1477,18 @@ func TestAppendPlanForUserTurnAddsTransientPlanBeforeLatestUser(t *testing.T) {
 		{Role: openai.ChatMessageRoleAssistant, Content: "done"},
 		{Role: openai.ChatMessageRoleUser, Content: "continue"},
 	}
-	got := app.appendPlanForUserTurn("session-1", messages)
+	got := app.appendTransientTailForUserTurn("session-1", messages, true)
 	if len(got) != len(messages)+1 {
 		t.Fatalf("message count = %d, want %d", len(got), len(messages)+1)
 	}
 	if len(messages) != 3 {
-		t.Fatal("appendPlanForUserTurn mutated the original messages")
+		t.Fatal("appendTransientTailForUserTurn mutated the original messages")
 	}
 	if got[2].Role != openai.ChatMessageRoleUser || !strings.Contains(got[2].Content, "- [~] Inspect implementation") {
-		t.Fatalf("plan was not inserted before the latest user message: %#v", got)
+		t.Fatalf("tail was not inserted before the latest user message: %#v", got)
+	}
+	if !strings.Contains(got[2].Content, "当前时间") {
+		t.Fatalf("transient tail must carry the current time: %q", got[2].Content)
 	}
 	if strings.Contains(got[2].Content, "revision") || strings.Contains(got[2].Content, "<ally-plan") {
 		t.Fatalf("plan contains an internal marker: %q", got[2].Content)
@@ -1496,12 +1498,23 @@ func TestAppendPlanForUserTurnAddsTransientPlanBeforeLatestUser(t *testing.T) {
 	}
 }
 
-func TestAppendPlanForUserTurnDoesNothingWithoutPlan(t *testing.T) {
+// Without an open plan the tail still carries the current time — and only the
+// time: no plan snapshot may appear out of nowhere.
+func TestAppendTransientTailWithoutPlanCarriesOnlyCurrentTime(t *testing.T) {
 	app := NewApp()
 	messages := []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleUser, Content: "hello"}}
-	got := app.appendPlanForUserTurn("session-1", messages)
-	if len(got) != len(messages) || got[0].Content != messages[0].Content {
-		t.Fatalf("unexpected plan injection without a plan: %#v", got)
+	got := app.appendTransientTailForUserTurn("session-1", messages, true)
+	if len(got) != len(messages)+1 {
+		t.Fatalf("message count = %d, want %d", len(got), len(messages)+1)
+	}
+	if !strings.Contains(got[0].Content, "当前时间") {
+		t.Fatalf("expected the current time in the tail, got %q", got[0].Content)
+	}
+	if strings.Contains(got[0].Content, "未完成的计划") {
+		t.Fatalf("plan snapshot injected without a plan: %q", got[0].Content)
+	}
+	if got[1].Content != "hello" {
+		t.Fatalf("latest user message moved or changed: %#v", got[1])
 	}
 }
 

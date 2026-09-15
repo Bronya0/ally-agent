@@ -315,11 +315,11 @@ func TestIsAuthKeyErrorRateLimitNotAuth(t *testing.T) {
 func TestShouldRetryLLMErrorDefaultRetry(t *testing.T) {
 	// 真实踩坑案例:中转限流/过载文案不在任何旧白名单关键词里。
 	retryable := []string{
-		"responses request failed: Rate exceeded.",                       // 状态码被中转吃掉的限流
+		"responses request failed: Rate exceeded.",                        // 状态码被中转吃掉的限流
 		"responses request failed: 429 Too Many Requests: Rate exceeded.", // 修复后带状态码的限流
-		"error, Service temporarily overloaded",                          // Anthropic 529 过载
+		"error, Service temporarily overloaded",                           // Anthropic 529 过载
 		"error, status code: 529, message: overloaded_error",
-		"upstream weird relay error: something odd happened",             // 未知文案默认重试
+		"upstream weird relay error: something odd happened", // 未知文案默认重试
 		"error, status code: 503, message: service unavailable",
 	}
 	for _, msg := range retryable {

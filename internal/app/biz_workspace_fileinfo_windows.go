@@ -19,8 +19,7 @@ import (
 // Windows：FileInfo.Sys() 是 syscall.Win32FileAttributeData，可取创建/
 // 访问/写入时间；无 POSIX ctime 与块分配信息，回退零值。
 func statTimes(info os.FileInfo) statTimesResult {
-	if sys, ok := info.Sys().(*syscall.Win32FileAttributeData);
-	ok && sys != nil {
+	if sys, ok := info.Sys().(*syscall.Win32FileAttributeData); ok && sys != nil {
 		toTime := func(ft syscall.Filetime) time.Time {
 			if ft.HighDateTime == 0 && ft.LowDateTime == 0 {
 				return time.Time{}

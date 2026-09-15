@@ -22,6 +22,7 @@ import (
 	"time"
 	"unsafe"
 )
+
 var (
 	procOpenClipboard              = modUser32.NewProc("OpenClipboard")
 	procCloseClipboard             = modUser32.NewProc("CloseClipboard")

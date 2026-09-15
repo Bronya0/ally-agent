@@ -118,12 +118,12 @@ func TestModelRequestCarriesCustomHeaders(t *testing.T) {
 	result, err := app.streamModelResponse(
 		context.Background(),
 		ConfigState{
-			APIFormat:      apiFormatOpenAIChat,
-			BaseURL:        server.URL,
-			APIKeys:        []string{"test-key"},
-			Model:          "test-model",
-			MaxTokens:      64,
-			CustomHeaders:  map[string]string{"Authorization": "Gateway-Token", "X-Relay-Route": "premium", "x-api-version": "2023-06-01"},
+			APIFormat:     apiFormatOpenAIChat,
+			BaseURL:       server.URL,
+			APIKeys:       []string{"test-key"},
+			Model:         "test-model",
+			MaxTokens:     64,
+			CustomHeaders: map[string]string{"Authorization": "Gateway-Token", "X-Relay-Route": "premium", "x-api-version": "2023-06-01"},
 		},
 		"test-model", nil, nil, nil,
 	)

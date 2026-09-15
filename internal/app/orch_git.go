@@ -97,9 +97,9 @@ func computeGitStatus(workspace string) GitStatus {
 }
 
 const (
-	maxSubRepos     = 16
-	subRepoWorkers  = 2
-	subRepoTimeout  = 3 * time.Second
+	maxSubRepos    = 16
+	subRepoWorkers = 2
+	subRepoTimeout = 3 * time.Second
 )
 
 // computeMultiRepoGitStatus checks immediate subdirectories of workspace for .git entries.

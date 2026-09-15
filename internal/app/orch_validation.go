@@ -647,14 +647,14 @@ func validateJavaFiles(ctx context.Context, files []validationFile) validationRe
 // attribution-stage errors such as "cannot find symbol" or "package x does
 // not exist" that merely reflect the missing classpath.
 var javaSyntaxErrorPatterns = []string{
-	"expected",        // '(' expected, ';' expected, <identifier> expected, ...
-	"illegal start",   // illegal start of expression/type
+	"expected",      // '(' expected, ';' expected, <identifier> expected, ...
+	"illegal start", // illegal start of expression/type
 	"illegal character",
 	"reached end of file while parsing",
-	"unclosed",        // unclosed string/character literal/comment
+	"unclosed", // unclosed string/character literal/comment
 	"not a statement",
-	"without",         // 'catch' without 'try', 'else' without 'if', ...
-	"outside",         // return/break/continue outside ...
+	"without", // 'catch' without 'try', 'else' without 'if', ...
+	"outside", // return/break/continue outside ...
 	"illegal underscore",
 	"variable declaration not allowed here",
 }

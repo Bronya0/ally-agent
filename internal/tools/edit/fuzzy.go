@@ -236,6 +236,7 @@ func lineContentEnd(text string, line int) int {
 //     match region and maps to len(origLine).
 //   - mid-line normOff: normLine keeps all spaces, so the candidate prefix is
 //     compared WITHOUT the per-line trailing-whitespace strip.
+//
 // Slicing only ever happens at rune boundaries, so invalid UTF-8 prefixes
 // (which would corrupt NFKC) never occur.
 func mapNormOffsetInLine(origLine, normLine string, normOff int) (int, bool) {

@@ -28,16 +28,16 @@ import (
 // Bounded execution limits. These mirror the historical app-layer constants
 // so callers can reference them by name without depending on app state.
 const (
-	DefaultSteps        = 100
-	MaxSteps            = 1000
-	DefaultTimeout      = 3600
-	MaxTimeout          = 86400
-	MinTimeout          = 60
-	MinInterval         = time.Minute
-	MaxTasks            = 100
-	SummaryLimit        = 128 * 1024
-	ErrorTextLimit      = 8 * 1024
-	ListTruncateAt      = 50
+	DefaultSteps   = 100
+	MaxSteps       = 1000
+	DefaultTimeout = 3600
+	MaxTimeout     = 86400
+	MinTimeout     = 60
+	MinInterval    = time.Minute
+	MaxTasks       = 100
+	SummaryLimit   = 128 * 1024
+	ErrorTextLimit = 8 * 1024
+	ListTruncateAt = 50
 )
 
 // Schedule is the pure, app-agnostic representation of a scheduled-task
@@ -54,7 +54,6 @@ type Schedule struct {
 //   - RFC3339 timestamp -> "once"
 //   - Go duration        -> "interval" (must be >= MinInterval)
 //   - anything else      -> "cron" (validated later)
-//
 func ParseSchedule(value string) (Schedule, error) {
 	value = strings.TrimSpace(value)
 	if value == "" {

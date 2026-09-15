@@ -102,7 +102,7 @@ type Request struct {
 	MaxMatches     int    `json:"maxMatches,omitempty"`
 	// Timeout is a request-scoped override in seconds, used by orchestration;
 	// not exposed to the model.
-	Timeout        int    `json:"timeout,omitempty"`
+	Timeout int `json:"timeout,omitempty"`
 	// CaseSensitive matches case exactly. Default false: searches are
 	// case-insensitive (the historic Ally default and the tool description's
 	// contract).
@@ -571,46 +571,46 @@ func sampleMatches(ctx context.Context, rgPath, root, searchRoot string, req Req
 				if err != nil {
 					parseErr = err
 				} else if ok {
-				if mode == OutputModeCountMatches {
-					// count_matches resolves its page from the globally
-					// sorted per-file counts collected by the end events, so
-					// line grouping is skipped entirely.
-					continue
-				}
-			// lines mode: one entry per matching line, capped by the total
-			// line budget. seen counts every consumed line (skipped by
-			// offset and sampled) up to the last sampled one, so
-			// NextOffset resumes exactly after it. The line that hits the
-			// budget is not counted — it is the first line of the next page.
-			if sampleLimitReached {
-				continue
-			}
-			if seen < req.Offset {
-				seen++
-				continue
-			}
-				if totalLines < maxMatches {
-					g := groupByPath[path]
-					if g == nil {
-						// No separate file cap: every group consumes at least one
-						// line of the budget, so the group count is bounded by the
-						// line budget itself; the exact totals still come from the
-						// summary stats. The first matching line is appended
-						// immediately below, so a group never exists empty.
-						g = &sampleFile{path: path, lines: []int{}, texts: []string{}}
-						groupByPath[path] = g
-						groups = append(groups, g)
+					if mode == OutputModeCountMatches {
+						// count_matches resolves its page from the globally
+						// sorted per-file counts collected by the end events, so
+						// line grouping is skipped entirely.
+						continue
 					}
-					if len(g.lines) == 0 || g.lines[len(g.lines)-1] != lineNum {
-						g.lines = append(g.lines, lineNum)
-						g.texts = append(g.texts, lineText)
-						totalLines++
+					// lines mode: one entry per matching line, capped by the total
+					// line budget. seen counts every consumed line (skipped by
+					// offset and sampled) up to the last sampled one, so
+					// NextOffset resumes exactly after it. The line that hits the
+					// budget is not counted — it is the first line of the next page.
+					if sampleLimitReached {
+						continue
+					}
+					if seen < req.Offset {
 						seen++
+						continue
 					}
-				} else {
-					sampleLimitReached = true
-					truncated = true
-				}
+					if totalLines < maxMatches {
+						g := groupByPath[path]
+						if g == nil {
+							// No separate file cap: every group consumes at least one
+							// line of the budget, so the group count is bounded by the
+							// line budget itself; the exact totals still come from the
+							// summary stats. The first matching line is appended
+							// immediately below, so a group never exists empty.
+							g = &sampleFile{path: path, lines: []int{}, texts: []string{}}
+							groupByPath[path] = g
+							groups = append(groups, g)
+						}
+						if len(g.lines) == 0 || g.lines[len(g.lines)-1] != lineNum {
+							g.lines = append(g.lines, lineNum)
+							g.texts = append(g.texts, lineText)
+							totalLines++
+							seen++
+						}
+					} else {
+						sampleLimitReached = true
+						truncated = true
+					}
 				}
 			}
 		}

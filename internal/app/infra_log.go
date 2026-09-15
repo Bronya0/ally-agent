@@ -33,6 +33,7 @@ type rotatingErrorWriter struct {
 
 var globalRotatingErrorWriter = &rotatingErrorWriter{}
 var globalErrorLogger *slog.Logger
+
 const errorLogPrefix = "error-"
 const errorLogSuffix = ".log"
 
@@ -105,6 +106,7 @@ func InitErrorLogger() (*slog.Logger, string, error) {
 	globalErrorLogger = slog.New(handler)
 	return globalErrorLogger, globalRotatingErrorWriter.path, nil
 }
+
 // errorLogNameRe matches the exact shape we manage: error-YYYY-MM-DD.log.
 // A strict pattern (not just a prefix/suffix check) prevents deleting files
 // that merely look similar but are not our dated error logs.
@@ -117,6 +119,7 @@ var errorLogNameRe = regexp.MustCompile(`^error-(\d{4}-\d{2}-\d{2})\.log$`)
 //   - the embedded date must parse as a real calendar date;
 //   - only dates strictly before today are removed (today and any future-dated
 //     file are left untouched).
+//
 // Unrelated files (service.log, error-foo.log, subdirs, …) are never touched.
 func cleanupOldErrorLogs(dir, today string) {
 	entries, err := os.ReadDir(dir)

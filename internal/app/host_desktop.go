@@ -26,10 +26,10 @@ const (
 	// DefaultWindowWidth/Height follow the industry-standard default for
 	// desktop coding tools (e.g. VS Code's 1200x800). Used on first launch
 	// before the user has resized the window manually.
-	DefaultWindowWidth  = 1200
-	DefaultWindowHeight = 800
-	MinWindowWidth      = 860
-	MinWindowHeight     = 600
+	DefaultWindowWidth     = 1200
+	DefaultWindowHeight    = 800
+	MinWindowWidth         = 860
+	MinWindowHeight        = 600
 	WindowsWindowClassName = "AllyMainWindow"
 )
 

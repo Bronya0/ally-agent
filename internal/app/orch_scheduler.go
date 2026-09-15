@@ -50,8 +50,8 @@ type ScheduledTaskSchedule struct {
 }
 
 type ScheduledTask struct {
-	ID     string `json:"id"`
-	Name   string `json:"name"`
+	ID   string `json:"id"`
+	Name string `json:"name"`
 	// 任务内容二选一：Instruction 走 LLM agent 委托，Command 走命令执行
 	// （复用 command 工具的安全检查与工作区 cwd 边界）。
 	Instruction    string                `json:"instruction,omitempty"`

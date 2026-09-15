@@ -89,7 +89,6 @@ func TestStreamModelResponseMultiKeyFailover(t *testing.T) {
 	}
 }
 
-
 // TestStreamModelResponseMultiKeySkipsCoolingKey 验证已冷却的主 key 被跳过,
 // 请求直接使用下一个可用 key(不会重复命中失败 key)。
 func TestStreamModelResponseMultiKeySkipsCoolingKey(t *testing.T) {
@@ -210,7 +209,6 @@ func TestStreamModelResponseAllCoolingProbeReturnsRealError(t *testing.T) {
 		t.Fatalf("requests = %d, want exactly one bounded probe", requests)
 	}
 }
-
 
 // TestStreamModelResponseNoSwitchAfterEmit 验证已发出流内容后失败不再切换
 // key(避免重复输出):第一个 key 发出一个 delta 后连接出错,请求直接失败,
@@ -336,8 +334,8 @@ func TestStreamOpenAIChatPreservesMaxReasoningEffort(t *testing.T) {
 		t.Fatalf("decode request body: %v", decodeErr)
 	}
 	if got, _ := request["reasoning_effort"].(string); got != reasoningEffortMax {
-			t.Fatalf("request reasoning_effort = %v, want %q", request["reasoning_effort"], reasoningEffortMax)
-		}
+		t.Fatalf("request reasoning_effort = %v, want %q", request["reasoning_effort"], reasoningEffortMax)
+	}
 }
 
 // TestAnthropicToolsSchemaTypeObject verifies every tool sent on the
@@ -398,4 +396,3 @@ func TestOpenAIChatToolsParametersTypeObject(t *testing.T) {
 		}
 	}
 }
-

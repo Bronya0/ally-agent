@@ -51,14 +51,14 @@ type networkEventSink struct {
 	ring      *eventRing
 	server    *http.Server
 	closeOnce sync.Once
-	sses int // 当前活跃 SSE 连接数
+	sses      int // 当前活跃 SSE 连接数
 }
 
 const (
-	defaultNetworkAddr       = "127.0.0.1:39876"
-	networkHistoryDefault    = 200
-	subscriberQueueSize      = 64
-	SSEKeepaliveInterval     = 15 * time.Second
+	defaultNetworkAddr    = "127.0.0.1:39876"
+	networkHistoryDefault = 200
+	subscriberQueueSize   = 64
+	SSEKeepaliveInterval  = 15 * time.Second
 	// maxNetworkPayloadBytes 限制单条事件入环/入订阅的 payload 大小。
 	// tool:result 等事件可携带数百 KB 的完整工具输出（read 结果刻意不压缩），
 	// 若不截断，200 条历史会让本机任意进程拉走大量文件内容并占用内存。

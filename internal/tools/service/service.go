@@ -21,11 +21,11 @@ import (
 
 // Output limits used by both the app layer and the model-facing read action.
 const (
-	OutputLimit       = 512 * 1024
-	OutputPreview     = 8 * 1024
-	MaxActive         = 8
-	DefaultReadTail   = 8 * 1024
-	MaxReadTail       = 32 * 1024
+	OutputLimit     = 512 * 1024
+	OutputPreview   = 8 * 1024
+	MaxActive       = 8
+	DefaultReadTail = 8 * 1024
+	MaxReadTail     = 32 * 1024
 )
 
 // RollingBuffer is a thread-safe byte buffer that keeps at most `limit` bytes

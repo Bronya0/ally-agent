@@ -24,8 +24,8 @@ func prepareServiceCommand(cmd *exec.Cmd) uintptr {
 }
 
 func registerProcessJob(pid int, job uintptr) error { return nil }
-func unregisterProcessJob(pid int)                   {}
-func discardProcessJob(job uintptr)                  {}
+func unregisterProcessJob(pid int)                  {}
+func discardProcessJob(job uintptr)                 {}
 
 // isProcessAlive 探测进程是否仍在运行（kill 0 只做权限/存在性检查）。
 func isProcessAlive(pid int) bool {
