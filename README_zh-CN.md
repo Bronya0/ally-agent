@@ -73,7 +73,7 @@ Ally 是采用 [GNU General Public License v3.0 only](LICENSE)（`GPL-3.0-only`�
 
 ## 参考项目
 
-Ally 的若干设计取舍来自下列开源项目的启发，在此致谢。各项目遵循其自身许可证，Ally 与它们没有隶属关系。
+Ally 在部分实现细节上参考了下列开源项目的做法，在此致谢。各项目遵循其自身许可证，Ally 与它们没有隶属关系。
 
 - [Kimi Code CLI（kimicode）](https://github.com/MoonshotAI/kimi-code) — 亮色主题色板、图片 token 估算、中断提醒等交互与计量细节
 - [Codex CLI](https://github.com/openai/codex) — Responses 协议的会话缓存键与用量字段处理

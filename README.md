@@ -73,7 +73,7 @@ Release packages include [ripgrep](https://github.com/BurntSushi/ripgrep) under 
 
 ## Reference projects
 
-Ally's design borrows heavily from the ideas of these open-source projects — thanks to their authors. Each follows its own license, and Ally is not affiliated with any of them.
+Ally picked up a few implementation details from these open-source projects — credits to their authors. Each follows its own license, and Ally is not affiliated with any of them.
 
 - [Kimi Code CLI (kimicode)](https://github.com/MoonshotAI/kimi-code) — light-theme palette, image token estimation, interruption reminders
 - [Codex CLI](https://github.com/openai/codex) — Responses session cache key and usage field handling
