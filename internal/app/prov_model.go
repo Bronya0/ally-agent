@@ -86,13 +86,13 @@ type modelRetryInfo struct {
 type llmErrorKind int
 
 const (
-	llmErrorKindUnknown llmErrorKind = iota
-	llmErrorKindRateLimited        // 429/限流:瞬时,重试同一 key 意义有限但无害
-	llmErrorKindAuth               // 401/403/认证类:重试同一 key 无意义
-	llmErrorKindBilling            // 402/配额耗尽:需人工处理,key 级长冷却
-	llmErrorKindContextTooLong     // 上下文超长:确定性失败,重试必然同样失败
-	llmErrorKindModelNotFound      // 404/模型不存在:确定性失败
-	llmErrorKindDeterministic400   // 其它 400:上下文毒化,sanitize 后可恢复
+	llmErrorKindUnknown          llmErrorKind = iota
+	llmErrorKindRateLimited                   // 429/限流:瞬时,重试同一 key 意义有限但无害
+	llmErrorKindAuth                          // 401/403/认证类:重试同一 key 无意义
+	llmErrorKindBilling                       // 402/配额耗尽:需人工处理,key 级长冷却
+	llmErrorKindContextTooLong                // 上下文超长:确定性失败,重试必然同样失败
+	llmErrorKindModelNotFound                 // 404/模型不存在:确定性失败
+	llmErrorKindDeterministic400              // 其它 400:上下文毒化,sanitize 后可恢复
 )
 
 // llmStreamEventDecodeError 标记流式事件 JSON 解析失败(流内 SSE 事件截断或
@@ -367,8 +367,8 @@ func effectiveLLMRetries(cfg ConfigState) int {
 }
 
 type modelStreamResult struct {
-	Content      string
-	Reasoning    string
+	Content   string
+	Reasoning string
 	// ReasoningPresent reports that the provider explicitly produced a
 	// reasoning payload this response — including an explicitly EMPTY one
 	// (DeepSeek V4 emits reasoning_content:"" on obvious tool calls). Empty
@@ -827,20 +827,22 @@ func (a *App) streamOpenAIChat(ctx context.Context, cfg ConfigState, model strin
 	// be a present key on tool-call/tool messages (see
 	// chatRequestRewriteTransport) and OpenRouter-style sticky-session headers
 	// are attached there. The reasoning backfill (an explicit, possibly empty
-	// reasoning field on the active tool turn) is only enabled in thinking mode:
-	// without it DeepSeek V4 / Kimi K3 reject a thinking-mode tool call with 400.
+	// reasoning field on every assistant message) is written for every endpoint
+	// except the official OpenAI API, and only while the selected level leaves
+	// thinking on: without it DeepSeek V4 / Kimi K3 reject a request whose
+	// assistant messages omit the field, while "off" has nothing to hand back
+	// (chatReasoningBackfillKey).
 	replayKey := reasoningReplayKey(cfg, model)
 	var details json.RawMessage
 	if payload := a.reasoningStash.get(replayKey); payload != nil {
 		details = payload.chatDetails
 	}
-	reasoningKey := ""
-	if reasoningContentReplayActive(messages, cfg) {
-		reasoningKey = defaultReasoningTag
-		if isKnownWireReasoningKey(cfg.ReasoningTag) {
-			reasoningKey = strings.TrimSpace(cfg.ReasoningTag)
-		}
-	}
+	reasoningKey := chatReasoningBackfillKey(cfg)
+	// "off" reaches a compatible endpoint as the stop-thinking field the body
+	// rewrite adds below; the official endpoint spells it as an effort value
+	// instead (see reasoningWireForAdapter).
+	reasoningWire := reasoningWireForAdapter(cfg, apiFormatOpenAIChat, cfg.ReasoningEffort)
+	disableThinking := reasoningWire.DisableThinking && modelSupportsReasoningEffort(cfg, model)
 	streamDone := &sseDoneWatcher{}
 	base := modelHTTPClient(cfg, true, 0)
 	rt := base.Transport
@@ -848,12 +850,13 @@ func (a *App) streamOpenAIChat(ctx context.Context, cfg ConfigState, model strin
 		rt = http.DefaultTransport
 	}
 	base.Transport = &chatRequestRewriteTransport{
-		base:           rt,
-		reasoningKey:   reasoningKey,
-		details:        details,
-		headers:        sessionAffinityHeaders(cfg),
-		promptCacheKey: openAIChatPromptCacheKey(cfg),
-		streamDone:     streamDone,
+		base:            rt,
+		reasoningKey:    reasoningKey,
+		details:         details,
+		headers:         sessionAffinityHeaders(cfg),
+		promptCacheKey:  openAIChatPromptCacheKey(cfg),
+		streamDone:      streamDone,
+		disableThinking: disableThinking,
 	}
 	clientCfg.HTTPClient = base
 	client := legacyopenai.NewClientWithConfig(clientCfg)
@@ -874,13 +877,14 @@ func (a *App) streamOpenAIChat(ctx context.Context, cfg ConfigState, model strin
 	} else {
 		streamReq.MaxTokens = cfg.MaxTokens
 	}
-	// Thinking strength: only send reasoning_effort when a level was picked AND
+	// Thinking strength: send an effort value only when a level was picked AND
 	// the model accepts the parameter. The normalized selection is sent
 	// unchanged — xhigh and max are declared values of the OpenAI SDK enum
 	// (shared.ReasoningEffortXhigh / ReasoningEffortMax) — while "auto" and
-	// non-reasoning models send nothing (see modelSupportsReasoningEffort).
-	if effort := reasoningEffortForAdapter(apiFormatOpenAIChat, cfg.ReasoningEffort); effort != "" && modelSupportsReasoningEffort(cfg, model) {
-		streamReq.ReasoningEffort = effort
+	// non-reasoning models send nothing (see modelSupportsReasoningEffort and
+	// reasoningWireForAdapter).
+	if reasoningWire.Effort != "" && modelSupportsReasoningEffort(cfg, model) {
+		streamReq.ReasoningEffort = reasoningWire.Effort
 	}
 	if len(tools) > 0 {
 		streamReq.Tools = normalizeToolsForOpenAIChat(tools)
@@ -942,8 +946,8 @@ func (a *App) openAIChatStreamAttempt(ctx context.Context, cfg ConfigState, clie
 	// reasoningPresent: the provider explicitly emitted a reasoning field
 	// (possibly empty). go-openai unmarshals an absent field and an explicit
 	// empty string identically, so this only turns true once non-empty
-	// reasoning text arrives. The empty-string case is handled at replay time
-	// by reasoningContentReplayActive (session-scoped detection).
+	// reasoning text arrives; the wire field for the next request is filled by
+	// the rewrite transport instead (see chatReasoningBackfillKey).
 	reasoningPresent := false
 	var reasoningState struct {
 		tag      string
@@ -1610,18 +1614,21 @@ func buildOpenAIResponsesRequest(cfg ConfigState, model string, messages []legac
 		body.ParallelToolCalls = oa.Bool(true)
 		body.Store = oa.Bool(false)
 	}
-	// Thinking strength for the Responses API (reasoning.effort). The SDK
-	// type is string-backed, so the normalized selection is sent unchanged,
-	// including xhigh and max.
-	if effort := reasoningEffortForAdapter(apiFormatOpenAIResponses, cfg.ReasoningEffort); effort != "" && modelSupportsReasoningEffort(cfg, model) {
-		// Pair reasoning.effort with summary:"auto" — both kimi-code
-		// (openai-responses.ts:1116-1120) and pi (openai-responses.ts:319-335)
-		// do: without an explicit summary request the Responses API emits no
-		// reasoning_summary_text deltas, leaving the thinking panel empty even
-		// though the model reasoned.
-		body.Reasoning = oa.ReasoningParam{
-			Effort:  oa.ReasoningEffort(effort),
-			Summary: oa.ReasoningSummaryAuto,
+	// Thinking strength for the Responses API (reasoning.effort): "off" arrives as
+	// effort "none" (DeepSeek documents "none" as 关闭思考模式). The SDK type is
+	// string-backed, so the normalized selection is sent unchanged, including
+	// xhigh and max.
+	reasoningWire := reasoningWireForAdapter(cfg, apiFormatOpenAIResponses, cfg.ReasoningEffort)
+	if reasoningWire.Effort != "" && modelSupportsReasoningEffort(cfg, model) {
+		body.Reasoning = oa.ReasoningParam{Effort: oa.ReasoningEffort(reasoningWire.Effort)}
+		if reasoningWire.Effort != reasoningEffortOffWireValue {
+			// Pair reasoning.effort with summary:"auto" — both kimi-code
+			// (openai-responses.ts:1116-1120) and pi (openai-responses.ts:319-335)
+			// do: without an explicit summary request the Responses API emits no
+			// reasoning_summary_text deltas, leaving the thinking panel empty even
+			// though the model reasoned. With thinking off there is nothing to
+			// summarize, so the summary request is left out.
+			body.Reasoning.Summary = oa.ReasoningSummaryAuto
 		}
 	}
 	if strings.TrimSpace(instructions) != "" {
@@ -2115,7 +2122,7 @@ func isAnthropicAdaptiveThinkingModel(model string) bool {
 // thinking field at all, so the model's own default applies.
 func configureAnthropicThinking(params *anthropic.MessageNewParams, model, rawEffort string, maxTokens int) bool {
 	raw := strings.ToLower(strings.TrimSpace(rawEffort))
-	if raw == "off" || raw == "none" || raw == "disabled" {
+	if normalizeReasoningEffort(raw) == reasoningEffortOff {
 		params.Thinking = anthropic.ThinkingConfigParamUnion{OfDisabled: &anthropic.ThinkingConfigDisabledParam{Type: "disabled"}}
 		return false
 	}
@@ -2461,22 +2468,6 @@ func markAnthropicPromptCacheBreakpoints(params *anthropic.MessageNewParams) {
 
 func anthropicBlockIsTransientInjection(block anthropic.ContentBlockParamUnion) bool {
 	return block.OfText != nil && strings.HasPrefix(block.OfText.Text, "<ally-context-budget>")
-}
-
-// anthropicMessageIsTransientInjection reports whether an outbound Anthropic
-// message is a per-step tail injection (context budget) that is rebuilt fresh
-// each request and never persisted into history. Such messages must remain
-// outside the cached prefix.
-func anthropicMessageIsTransientInjection(msg anthropic.MessageParam) bool {
-	if msg.Role != "user" || len(msg.Content) == 0 {
-		return false
-	}
-	for _, block := range msg.Content {
-		if !anthropicBlockIsTransientInjection(block) {
-			return false
-		}
-	}
-	return true
 }
 
 func setAnthropicBlockCacheControl(block anthropic.ContentBlockParamUnion, cc anthropic.CacheControlEphemeralParam) {

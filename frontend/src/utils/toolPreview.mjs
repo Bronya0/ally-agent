@@ -7,8 +7,6 @@
  * This file is part of ally-agent, licensed under the GNU General
  * Public License v3. See the LICENSE file for details.
  */
-export const DEFAULT_TOOL_PREVIEW_LINES = 6;
-
 export function normalizedLines(text) {
   const lines = String(text || '').replace(/\r\n/g, '\n').split('\n');
   if (lines.length > 1 && lines[lines.length - 1] === '') lines.pop();

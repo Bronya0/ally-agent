@@ -52,31 +52,31 @@ const (
 	// previews in grep lines mode (on top of the per-line 500-char cap from
 	// the grep tool), so worst-case minified hits cannot flood model context.
 	maxModelGrepTextBytes = 32 * 1024
-	maxAgentSteps           = 9999
+	maxAgentSteps         = 9999
 	// runInputBufferSize is the per-run capacity of the injected-message queue
 	// (InjectRunMessage). The buffered channel plus non-blocking drain keeps
 	// injection off the chat hot path; a full queue fails the call instead of
 	// blocking the frontend.
-	runInputBufferSize               = 32
-	defaultLLMRetries                = 6
-	defaultShellLimit                = 120
-	defaultHTTPTimeout               = 60
-	defaultGrepTimeout               = grep.DefaultTimeout
-	maxGrepTimeout                   = grep.MaxTimeout
-	maxWaitSeconds                   = 3600
-	maxHTTPBodyBytes                 = 50 * 1024 * 1024
-	defaultHTTPMaxBody               = 256 * 1024
-	defaultWebFetchBody              = 2 * 1024 * 1024
-	maxHTTPJSONPreview               = 24 * 1024
-	httpRateDelay                    = 1 * time.Second
-	defaultHTTPUA                    = "AllyAgent/1.0 (+user-controlled desktop app)"
-	workspaceMapDepth                = 3
-	workspaceMapLimit                = 320
+	runInputBufferSize  = 32
+	defaultLLMRetries   = 6
+	defaultShellLimit   = 120
+	defaultHTTPTimeout  = 60
+	defaultGrepTimeout  = grep.DefaultTimeout
+	maxGrepTimeout      = grep.MaxTimeout
+	maxWaitSeconds      = 3600
+	maxHTTPBodyBytes    = 50 * 1024 * 1024
+	defaultHTTPMaxBody  = 256 * 1024
+	defaultWebFetchBody = 2 * 1024 * 1024
+	maxHTTPJSONPreview  = 24 * 1024
+	httpRateDelay       = 1 * time.Second
+	defaultHTTPUA       = "AllyAgent/1.0 (+user-controlled desktop app)"
+	workspaceMapDepth   = 3
+	workspaceMapLimit   = 320
 	// workspaceMapMaxFileSize 是 rg 扫描的单文件体积上限：超过的文件不进 map
 	// （生成物/媒体/数据集挤占 320 条配额且模型 read 不动）。rg 的
 	// --max-filesize 参数和头部说明文字都引用这个值，改一处即可同步。
-	workspaceMapMaxFileSize = 1024 * 1024
-	workspaceMapTTL         = 30 * time.Second
+	workspaceMapMaxFileSize          = 1024 * 1024
+	workspaceMapTTL                  = 30 * time.Second
 	workspacePathIndexTTL            = 10 * time.Minute
 	workspacePathTruncatedRefreshTTL = 60 * time.Minute
 	workspacePathIndexBuildTimeout   = 8 * time.Second
@@ -403,39 +403,39 @@ type App struct {
 
 func NewApp() *App {
 	a := &App{
-		runs:                map[string]context.CancelFunc{},
-		runSessions:         map[string]string{},
-		runInputs:           map[string]chan string{},
-		compactingSessions:  map[string]struct{}{},
-		compactingCancels:   map[string]context.CancelFunc{},
-		histories:           map[string][]openai.ChatCompletionMessage{},
-		todos:               map[string][]TodoEntry{},
-		todoRevisions:       map[string]int64{},
+		runs:               map[string]context.CancelFunc{},
+		runSessions:        map[string]string{},
+		runInputs:          map[string]chan string{},
+		compactingSessions: map[string]struct{}{},
+		compactingCancels:  map[string]context.CancelFunc{},
+		histories:          map[string][]openai.ChatCompletionMessage{},
+		todos:              map[string][]TodoEntry{},
+		todoRevisions:      map[string]int64{},
 		// sessionWorkspaces 记录每个会话 run 实际使用的 workspace（见
 		// StartChat 的写入点）：KB/temp 会话在首次 run 完成前没有会话索引
 		// 条目，sessionContextConfig 若只回退 a.config 会把上下文统计算到
 		// 上一个 chat Tab 的工作区上。run 路径写入后它成为内存级第一优先。
-		sessionWorkspaces:   map[string]string{},
-		sessionModelConfigs: map[string]sessionModelConfig{},
+		sessionWorkspaces:    map[string]string{},
+		sessionModelConfigs:  map[string]sessionModelConfig{},
 		sessionSystemPrompts: map[string][]systemPromptPart{},
 		sessionToolsets:      map[string][]openai.Tool{},
-		pendingAsks:         map[string]*pendingAsk{},
-		sshCredentials:      newSSHCredentialCache(),
-		subRuns:             map[string]*SubagentRun{},
-		subSem:              make(chan struct{}, 4),
-		gitStatusCache:      map[string]gitStatusCacheEntry{},
-		gitStatusInFlight:   map[string]chan struct{}{},
-		skillCache:          map[string]skillListCacheEntry{},
-		workspaceCaches:     newWorkspaceCacheHolder(),
-		httpLastHost:        map[string]time.Time{},
-		liveBreakdown:       map[string]ContextBreakdown{},
+		pendingAsks:          map[string]*pendingAsk{},
+		sshCredentials:       newSSHCredentialCache(),
+		subRuns:              map[string]*SubagentRun{},
+		subSem:               make(chan struct{}, 4),
+		gitStatusCache:       map[string]gitStatusCacheEntry{},
+		gitStatusInFlight:    map[string]chan struct{}{},
+		skillCache:           map[string]skillListCacheEntry{},
+		workspaceCaches:      newWorkspaceCacheHolder(),
+		httpLastHost:         map[string]time.Time{},
+		liveBreakdown:        map[string]ContextBreakdown{},
 		contextAnchors:       map[string]contextAnchor{},
-		workspaceTokenUsage: map[string]WorkspaceTokenUsage{},
-		services:            map[string]*managedService{},
-		keyCooldowns:        map[string]time.Time{},
-		lastEstimatedTokens: map[string]WorkspaceTokenUsage{},
-		stats:               newStatsRecorder(),
-		reasoningStash:      newReasoningStash(),
+		workspaceTokenUsage:  map[string]WorkspaceTokenUsage{},
+		services:             map[string]*managedService{},
+		keyCooldowns:         map[string]time.Time{},
+		lastEstimatedTokens:  map[string]WorkspaceTokenUsage{},
+		stats:                newStatsRecorder(),
+		reasoningStash:       newReasoningStash(),
 	}
 	// Expose the active App to package-level helpers that predate Runtime
 	// injection (listMemories, memoryIndexCache usage in prompt_builder).
@@ -525,7 +525,7 @@ type ConfigState struct {
 	// VisionCapable mirrors ModelConfig.VisionCapable for the effective request
 	// config; see that field for the tri-state contract.
 	VisionCapable   *bool  `json:"visionCapable,omitempty"`
-	ReasoningEffort     string `json:"reasoningEffort,omitempty"`
+	ReasoningEffort string `json:"reasoningEffort,omitempty"`
 	// CustomHeaders mirrors the active model entry's extra HTTP headers
 	// (see ModelConfig.CustomHeaders); SwitchModel keeps the two in sync.
 	CustomHeaders  map[string]string `json:"customHeaders,omitempty"`
@@ -1032,11 +1032,11 @@ type CommandResult struct {
 	// OutputFileBytes 是截断落盘文件的字节体积，让模型在读全量前能
 	// 自行判断是否分段读取。仅 OutputFilePath 非空时有意义。
 	OutputFileBytes int64 `json:"outputFileBytes,omitempty"`
-	ExitCode        int    `json:"exitCode"`
-	TimedOut        bool   `json:"timedOut"`
-	Cancelled       bool   `json:"cancelled"`
-	DurationMS      int64  `json:"durationMs"`
-	Truncated       bool   `json:"truncated"`
+	ExitCode        int   `json:"exitCode"`
+	TimedOut        bool  `json:"timedOut"`
+	Cancelled       bool  `json:"cancelled"`
+	DurationMS      int64 `json:"durationMs"`
+	Truncated       bool  `json:"truncated"`
 	// PromotedToService 标记命令超时后已收编为后台服务：进程未死、端口未
 	// 释放，模型应改用 service 工具交互而不是重跑命令。
 	PromotedToService bool `json:"promotedToService,omitempty"`
@@ -1999,12 +1999,11 @@ Rules:
 		"messages":     len(history),
 		"timeoutMs":    int(timeout.Milliseconds()),
 	})
-	// Turn off reasoning_effort for compaction call so thinking models
-	// don't waste the entire context/budget on hidden reasoning chains.
-	compactionCfg := cfg
-	compactionCfg.ReasoningEffort = "low"
-
-	summary, usage, err := a.completeModelTextWithUsage(ctx, compactionCfg, cfg.Model, compactionMessages, compactionMaxTokens)
+	// The summary call runs on the user's own thinking configuration, untouched:
+	// forcing a level here ("low" or a stop-thinking one) would silently diverge
+	// from what Settings shows, and a stop-thinking field breaks models that
+	// require thinking.
+	summary, usage, err := a.completeModelTextWithUsage(ctx, cfg, cfg.Model, compactionMessages, compactionMaxTokens)
 	if err != nil {
 		return nil, fmt.Errorf("compaction failed: %w", err)
 	}
@@ -2213,13 +2212,11 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			}
 		}
 
-		// 当前用户会话只在第一次模型请求前附带一次计划。
+		// 每次请求都在最新用户消息前附带瞬态尾部（当前时间）；未完成的计划只在
+		// 本次运行的第一次请求前附带一次。
 		requestIncludesPlan := !planAttached
-		requestMessages := messages
-		if requestIncludesPlan {
-			requestMessages = a.appendPlanForUserTurn(sessionID, messages)
-			planAttached = true
-		}
+		planAttached = true
+		requestMessages := a.appendTransientTailForUserTurn(sessionID, messages, requestIncludesPlan)
 
 		a.emit("run:llm_wait", map[string]any{"runId": runID, "sessionId": sessionID})
 		toolCalls := []openai.ToolCall{}
@@ -2298,13 +2295,10 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 				repaired := sanitizeHistoryMessages(messages)
 				if len(repaired) < len(messages) {
 					messages = repaired
-					// requestMessages is a request-only snapshot (it may contain
-					// the transient plan message). Rebuild it after sanitizing so
-					// the retry cannot send the poisoned pre-repair context again.
-					requestMessages = messages
-					if requestIncludesPlan {
-						requestMessages = a.appendPlanForUserTurn(sessionID, messages)
-					}
+					// requestMessages is a request-only snapshot (it carries the
+					// transient tail). Rebuild it after sanitizing so the retry
+					// cannot send the poisoned pre-repair context again.
+					requestMessages = a.appendTransientTailForUserTurn(sessionID, messages, requestIncludesPlan)
 					a.emit("run:retry", map[string]any{"runId": runID, "sessionId": sessionID, "attempt": 1, "maxAttempts": 1, "reason": "context sanitized after provider 400"})
 					continue
 				}

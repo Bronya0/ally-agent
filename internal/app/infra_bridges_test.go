@@ -21,7 +21,10 @@ func TestNormalizeReasoningEffort(t *testing.T) {
 		"Auto":        reasoningEffortAuto,
 		"default":     reasoningEffortAuto,
 		"unset":       reasoningEffortAuto,
-		"off":         reasoningEffortAuto,
+		"off":         reasoningEffortOff,
+		"OFF":         reasoningEffortOff,
+		"none":        reasoningEffortOff,
+		"disabled":    reasoningEffortOff,
 		"low":         reasoningEffortLow,
 		"LOW":         reasoningEffortLow,
 		"medium":      reasoningEffortMedium,
@@ -64,29 +67,41 @@ func TestMergeConfigReasoningEffort(t *testing.T) {
 	}
 }
 
-func TestReasoningEffortForAdapter(t *testing.T) {
+func TestReasoningWireForAdapter(t *testing.T) {
+	compatible := ConfigState{APIFormat: apiFormatOpenAIChat, BaseURL: "https://api.deepseek.com"}
+	official := ConfigState{APIFormat: apiFormatOpenAIChat, BaseURL: openAIOfficialAPIBaseURL}
 	cases := []struct {
-		apiFormat string
-		effort    string
-		want      string
+		name   string
+		cfg    ConfigState
+		format string
+		effort string
+		want   reasoningWirePlan
 	}{
-		{apiFormatOpenAIChat, "", ""},
-		{apiFormatOpenAIChat, reasoningEffortAuto, ""},
-		{apiFormatOpenAIChat, reasoningEffortLow, reasoningEffortLow},
-		{apiFormatOpenAIChat, reasoningEffortMedium, reasoningEffortMedium},
-		{apiFormatOpenAIChat, reasoningEffortHigh, reasoningEffortHigh},
-		{apiFormatOpenAIChat, reasoningEffortXHigh, reasoningEffortXHigh},
-		{apiFormatOpenAIChat, reasoningEffortMax, reasoningEffortMax},
-		{apiFormatOpenAIResponses, reasoningEffortXHigh, reasoningEffortXHigh},
-		{apiFormatOpenAIResponses, reasoningEffortMax, reasoningEffortMax},
-		{apiFormatAnthropicMessages, "", ""},
-		{apiFormatAnthropicMessages, reasoningEffortLow, reasoningEffortLow},
-		{apiFormatAnthropicMessages, reasoningEffortXHigh, reasoningEffortXHigh},
-		{apiFormatAnthropicMessages, reasoningEffortMax, reasoningEffortMax},
+		{"empty sends nothing", compatible, apiFormatOpenAIChat, "", reasoningWirePlan{}},
+		{"auto leaves it to the provider", compatible, apiFormatOpenAIChat, reasoningEffortAuto, reasoningWirePlan{}},
+		{
+			"off asks a compatible Chat endpoint to stop thinking",
+			compatible, apiFormatOpenAIChat, reasoningEffortOff, reasoningWirePlan{DisableThinking: true},
+		},
+		{
+			"off aliases resolve to the same plan",
+			compatible, apiFormatOpenAIChat, "disabled", reasoningWirePlan{DisableThinking: true},
+		},
+		{
+			"off is spelled as an effort on the Responses wire",
+			compatible, apiFormatOpenAIResponses, reasoningEffortOff, reasoningWirePlan{Effort: reasoningEffortOffWireValue},
+		},
+		{
+			"off is spelled as an effort on the official Chat endpoint",
+			official, apiFormatOpenAIChat, reasoningEffortOff, reasoningWirePlan{Effort: reasoningEffortOffWireValue},
+		},
+		{"levels pass through", compatible, apiFormatOpenAIChat, reasoningEffortLow, reasoningWirePlan{Effort: reasoningEffortLow}},
+		{"xhigh passes through", compatible, apiFormatOpenAIResponses, reasoningEffortXHigh, reasoningWirePlan{Effort: reasoningEffortXHigh}},
+		{"max passes through", official, apiFormatOpenAIChat, reasoningEffortMax, reasoningWirePlan{Effort: reasoningEffortMax}},
 	}
 	for _, c := range cases {
-		if got := reasoningEffortForAdapter(c.apiFormat, c.effort); got != c.want {
-			t.Errorf("reasoningEffortForAdapter(%q, %q) = %q, want %q", c.apiFormat, c.effort, got, c.want)
+		if got := reasoningWireForAdapter(c.cfg, c.format, c.effort); got != c.want {
+			t.Errorf("%s: reasoningWireForAdapter(%q, %q) = %+v, want %+v", c.name, c.format, c.effort, got, c.want)
 		}
 	}
 }

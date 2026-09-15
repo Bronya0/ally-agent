@@ -475,51 +475,46 @@ var (
 	jsonEmptyString = jsonStringValue("")
 	// jsonBoolFalse is the explicit false written for `store`.
 	jsonBoolFalse = json.RawMessage("false")
+	// jsonThinkingDisabled is the stop-thinking field written for the "off" level.
+	// It is DeepSeek's documented spelling for the OpenAI wire — their sample passes
+	// `{"thinking": {"type": "disabled"}}` through extra_body, because the OpenAI
+	// Chat schema has no such field — and the compatible gateways follow the same
+	// shape.
+	jsonThinkingDisabled = json.RawMessage(`{"type":"disabled"}`)
 )
 
-// reasoningContentReplayActive reports whether replay mode is on for this
-// request: the user explicitly picked a thinking-effort level (thinking mode
-// is definitely enabled), or the active turn's assistant history carried
-// reasoning from the model (the provider is in thinking mode even under
-// "auto").
+// chatReasoningBackfillKey returns the wire field every assistant message of the
+// request must carry, or "" when no placeholder may be written.
 //
-// Scoped to avoid contamination: if the user switched from a reasoning model
-// to a non-thinking model mid-session, old reasoning from earlier turns does
-// not falsely activate replay on the new model's requests.
-func reasoningContentReplayActive(messages []legacyopenai.ChatCompletionMessage, cfg ConfigState) bool {
-	if reasoningEffortForAdapter(apiFormatOpenAIChat, cfg.ReasoningEffort) != "" {
-		return true
+// The placeholder exists so a history restored from disk still satisfies the
+// providers that validate the field per assistant message: DeepSeek documents
+// that with the tools parameter present the reasoning_content "must be fully
+// passed back to the API in all subsequent requests — even for turns where the
+// model did not perform a tool call", while the disk profile deliberately
+// stores no reasoning text (so a restored history has nothing to send).
+//
+// It is written for every non-OpenAI endpoint without asking which model is in
+// use: the requirement belongs to the provider, and a model list would be wrong
+// within weeks. The official OpenAI API is the one endpoint left out — its
+// protocol never exposes reasoning over the Chat wire and its message-field
+// validation is strict — which also keeps the first-party path byte-identical to
+// what plain SDK clients send.
+//
+// The "off" level (关闭思考) is the other case that writes nothing: the request
+// asks the provider to stop thinking, so there is no reasoning to hand back and
+// the field must not be added (reasoningWireForAdapter owns how the level itself
+// reaches the wire).
+func chatReasoningBackfillKey(cfg ConfigState) string {
+	if isOfficialOpenAIEndpoint(cfg) {
+		return ""
 	}
-	// Look back through the current turn (since the latest user message).
-	// In a tool loop, there will be assistant message(s) between the latest
-	// user message and the end of the history.
-	hasAssistantInCurrentTurn := false
-	for i := len(messages) - 1; i >= 0; i-- {
-		m := messages[i]
-		if m.Role == legacyopenai.ChatMessageRoleUser {
-			break
-		}
-		if m.Role == legacyopenai.ChatMessageRoleAssistant {
-			hasAssistantInCurrentTurn = true
-			if m.ReasoningContent != "" {
-				return true
-			}
-		}
+	if normalizeReasoningEffort(cfg.ReasoningEffort) == reasoningEffortOff {
+		return ""
 	}
-	// If an assistant has already spoken in the current turn (e.g. issued a tool call)
-	// and produced no reasoning, then the current turn's model is NOT in thinking mode.
-	if hasAssistantInCurrentTurn {
-		return false
+	if isKnownWireReasoningKey(cfg.ReasoningTag) {
+		return strings.TrimSpace(cfg.ReasoningTag)
 	}
-	// If no assistant has spoken in the current turn yet (start of turn), check
-	// the immediately preceding assistant response from the prior turn.
-	for i := len(messages) - 1; i >= 0; i-- {
-		m := messages[i]
-		if m.Role == legacyopenai.ChatMessageRoleAssistant {
-			return m.ReasoningContent != ""
-		}
-	}
-	return false
+	return defaultReasoningTag
 }
 
 // The stream terminator is an SSE frame: the `data:` field whose payload is
@@ -622,9 +617,11 @@ func (r *sseDoneReadCloser) Close() error { return r.rc.Close() }
 //     reject that instead of treating the field as absent. The normalization is
 //     deterministic, so the same bytes are produced on every request and the
 //     prompt-cache prefix stays stable afterwards.
-//  2. The active trailing tool-turn assistant message keeps an explicit
-//     (possibly empty) reasoning field — the omitempty wire tag would drop it,
-//     and DeepSeek V4 / Kimi K3 reject a thinking-mode tool call without it.
+//  2. Every assistant message keeps an explicit (possibly empty) reasoning
+//     field — the omitempty wire tag would drop it, and DeepSeek V4 / Kimi K3
+//     reject a request whose assistant messages omit it (see
+//     chatReasoningBackfillKey; asking to stop thinking is the one level that
+//     adds nothing, since there is no reasoning to hand back).
 //  3. reasoning_details captured from the previous response of this tool loop
 //     are attached to that same message, so providers that require reasoning to
 //     be passed back with its signature (Anthropic through OpenRouter) keep
@@ -642,6 +639,9 @@ type chatRequestRewriteTransport struct {
 	headers        map[string]string
 	promptCacheKey string
 	streamDone     *sseDoneWatcher
+	// disableThinking writes the stop-thinking field the "off" level asks for
+	// (see patchChatRequestFields).
+	disableThinking bool
 }
 
 func (t *chatRequestRewriteTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -664,7 +664,7 @@ func (t *chatRequestRewriteTransport) RoundTrip(req *http.Request) (*http.Respon
 		return nil, err
 	}
 	rewritten := body
-	if patched, ok := patchChatRequestFields(body, t.reasoningKey, t.details, t.promptCacheKey); ok {
+	if patched, ok := patchChatRequestFields(body, t.reasoningKey, t.details, t.promptCacheKey, t.disableThinking); ok {
 		rewritten = patched
 	}
 	// Restore a replayable body: the SDK may retry the request object, so
@@ -691,19 +691,23 @@ func (t *chatRequestRewriteTransport) RoundTrip(req *http.Request) (*http.Respon
 // changed.
 //
 // Key contracts (aligning with Kimi-code and KV-cache / Prompt Cache stability):
-//  1. KV-cache / Prompt Cache preservation: the reasoning backfill only ever
-//     touches the active trailing tool-turn assistant message. All earlier
-//     historical messages in the request prefix remain strictly frozen and
-//     byte-stable so the upstream KV-cache / prompt-cache prefix hash never
-//     drifts. The `content` normalization is exception-free by design: it is a
-//     one-time, deterministic rewrite of a key that is missing on every
-//     request, so the prefix is stable from the first patched request on.
-//  2. Only assistant messages that carry tool_calls require the empty reasoning
-//     field (DeepSeek V4 / Moonshot Kimi 400 requirement). Plain assistant text
-//     responses without tool calls must never be backfilled.
+//  1. KV-cache / Prompt Cache preservation: every rewrite below is deterministic
+//     and idempotent — the same wire bytes always produce the same output, and a
+//     key that already exists is never rewritten — so from the first patched
+//     request on the provider keeps hashing the same message prefix. The
+//     `content` normalization and the reasoning placeholder are both one-time
+//     rewrites of keys that are missing on every request.
+//  2. EVERY assistant message carries the reasoning field on every non-OpenAI
+//     endpoint whose level leaves thinking on: the requirement is per message,
+//     not per turn, and a history restored from disk has no reasoning text left
+//     to send (the disk profile never stores it). The field is written as an
+//     explicit empty string — presence is what the provider validates, so the
+//     session file stays free of stale reasoning. See chatReasoningBackfillKey
+//     for why the endpoint, and not a model list, decides this, and for the "off"
+//     level, which adds nothing at all.
 //  3. If the assistant message already carries ANY known reasoning key
 //     ("reasoning_content", "reasoning_details", "reasoning"), it is left
-//     untouched.
+//     untouched — the real text the SDK serialized belongs there.
 //  4. Dialect detection: echoes the dialect the messages actually carry
 //     ("reply in the dialect the peer spoke"), falling back to defaultKey.
 //     defaultKey is empty when thinking-mode replay is off, and then no
@@ -713,7 +717,12 @@ func (t *chatRequestRewriteTransport) RoundTrip(req *http.Request) (*http.Respon
 //  5. The session-sticky prompt cache key (and `store: false`) is attached for
 //     the official OpenAI endpoint only; promptCacheKey is empty everywhere
 //     else, so a compatible gateway never sees an unknown top-level parameter.
-func patchChatRequestFields(body []byte, defaultKey string, details json.RawMessage, promptCacheKey string) ([]byte, bool) {
+//  6. The stop-thinking field (`thinking: {"type": "disabled"}`) is written when
+//     the selected level is "off" and the endpoint is not the official OpenAI API
+//     (reasoningWireForAdapter). It is a top-level parameter, so the message
+//     prefix the provider hashes stays untouched, and it is only written when
+//     absent — the same bytes every request.
+func patchChatRequestFields(body []byte, defaultKey string, details json.RawMessage, promptCacheKey string, disableThinking bool) ([]byte, bool) {
 	var payload map[string]json.RawMessage
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return body, false
@@ -745,6 +754,14 @@ func patchChatRequestFields(body []byte, defaultKey string, details json.RawMess
 		}
 	}
 
+	// 6. Stop-thinking field for the "off" level (see the doc comment).
+	if disableThinking {
+		if _, exists := payload["thinking"]; !exists {
+			payload["thinking"] = jsonThinkingDisabled
+			changed = true
+		}
+	}
+
 	// 2. content must be a present key on assistant tool-call and tool
 	// messages (see the transport doc comment).
 	for i := range messages {
@@ -764,22 +781,35 @@ func patchChatRequestFields(body []byte, defaultKey string, details json.RawMess
 		changed = true
 	}
 
-	// 3./4. reasoning replay on the active trailing tool turn.
-	targetIdx := trailingToolTurnAssistantIndex(messages)
-	if targetIdx >= 0 {
-		target := messages[targetIdx]
-		if len(details) > 0 {
-			if _, exists := target["reasoning_details"]; !exists {
-				target["reasoning_details"] = details
-				changed = true
-			}
+	// 3./4. reasoning replay. The dialect is resolved from the messages as they
+	// arrived, before reasoning_details is attached: the attached array is itself
+	// a known reasoning key and would otherwise become the detected dialect.
+	fillKey := ""
+	if defaultKey != "" {
+		fillKey = detectChatReasoningDialect(messages, defaultKey)
+	}
+
+	// 3. reasoning_details belong to the active trailing tool turn: they are the
+	// captured trace of the response that turn continues.
+	if targetIdx := trailingToolTurnAssistantIndex(messages); targetIdx >= 0 && len(details) > 0 {
+		if _, exists := messages[targetIdx]["reasoning_details"]; !exists {
+			messages[targetIdx]["reasoning_details"] = details
+			changed = true
 		}
-		if defaultKey != "" && !chatMessageHasReasoningKey(target) {
-			key := detectChatReasoningDialect(messages, defaultKey)
-			if key != "reasoning_details" {
-				target[key] = jsonEmptyString
-				changed = true
+	}
+
+	// 4. The plain reasoning field goes on every assistant message (see the doc
+	// comment). "reasoning_details" is an array and can never be a placeholder.
+	if fillKey != "" && fillKey != "reasoning_details" {
+		for i := range messages {
+			if chatMessageRole(messages[i]) != legacyopenai.ChatMessageRoleAssistant {
+				continue
 			}
+			if chatMessageHasReasoningKey(messages[i]) {
+				continue
+			}
+			messages[i][fillKey] = jsonEmptyString
+			changed = true
 		}
 	}
 	if !changed {

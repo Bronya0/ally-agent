@@ -306,7 +306,6 @@ func TestOpenAIResponsesPromptCacheKeyIsOpaqueAndStable(t *testing.T) {
 	}
 }
 
-
 func TestNormalizeToolCallsPreservesRawArgumentsForExecutionRewrite(t *testing.T) {
 	input := []legacyopenai.ToolCall{
 		// Stream cut off mid-arguments: the accumulated string is not JSON.
@@ -857,11 +856,88 @@ func TestConfigureAnthropicThinking(t *testing.T) {
 		t.Fatalf("expected OutputConfig.Effort = medium, got %q", params46.OutputConfig.Effort)
 	}
 
-	// 3. Effort "off"
+	// 3. Effort "off": the explicit "stop thinking" form (the UI's 关闭思考).
 	var paramsOff anthropic.MessageNewParams
-	configureAnthropicThinking(&paramsOff, "claude-3-7-sonnet-20250219", "off", 8192)
+	if enabled := configureAnthropicThinking(&paramsOff, "claude-3-7-sonnet-20250219", "off", 8192); enabled {
+		t.Fatal("effort off must not report thinking as enabled")
+	}
 	if paramsOff.Thinking.OfDisabled == nil {
 		t.Fatal("expected Thinking.OfDisabled when effort is off")
+	}
+}
+
+// TestChatAdapterTurnsThinkingOffOnCompatibleEndpoint drives the "off" level end
+// to end on a relay: the request carries thinking:{"type":"disabled"} — the field
+// DeepSeek documents and passes through extra_body in their own sample, because
+// the OpenAI Chat schema has no such field — and no effort value next to it. The
+// assistant turn already in the history must not gain the reasoning placeholder
+// either: with thinking off there is no reasoning to hand back.
+func TestChatAdapterTurnsThinkingOffOnCompatibleEndpoint(t *testing.T) {
+	var mu sync.Mutex
+	var bodies []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		bodies = append(bodies, string(raw))
+		mu.Unlock()
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, "data: {\"id\":\"c1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"}}]}\n\n")
+		fmt.Fprint(w, "data: {\"id\":\"c1\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	cfg := ConfigState{
+		APIFormat:       apiFormatOpenAIChat,
+		BaseURL:         server.URL,
+		APIKeys:         []string{"test-key"},
+		ReasoningEffort: reasoningEffortOff,
+		ReasoningTag:    defaultReasoningTag,
+	}
+	messages := []legacyopenai.ChatCompletionMessage{
+		{Role: legacyopenai.ChatMessageRoleUser, Content: "hi"},
+		{Role: legacyopenai.ChatMessageRoleAssistant, Content: "plain answer"},
+		{Role: legacyopenai.ChatMessageRoleUser, Content: "hi again"},
+	}
+	if _, err := NewApp().streamModelResponse(context.Background(), cfg, "deepseek-chat", messages, nil, nil); err != nil {
+		t.Fatalf("streamModelResponse() error = %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(bodies) != 1 {
+		t.Fatalf("expected 1 request, got %d", len(bodies))
+	}
+	if !strings.Contains(bodies[0], `"thinking":{"type":"disabled"}`) {
+		t.Fatalf("expected the stop-thinking field on the wire: %s", bodies[0])
+	}
+	if strings.Contains(bodies[0], "reasoning_effort") {
+		t.Fatalf("\"off\" must not also carry an effort value: %s", bodies[0])
+	}
+	if strings.Contains(bodies[0], "reasoning_content") {
+		t.Fatalf("\"off\" leaves nothing to hand back, so no reasoning field may be added: %s", bodies[0])
+	}
+}
+
+// TestOpenAIResponsesRequestTurnsThinkingOff: on the Responses wire "off" is
+// effort "none" (DeepSeek documents "none" as 关闭思考模式) and no summary is
+// requested, since there is nothing to summarize.
+func TestOpenAIResponsesRequestTurnsThinkingOff(t *testing.T) {
+	cfg := ConfigState{
+		APIFormat:       apiFormatOpenAIResponses,
+		BaseURL:         defaultOpenAIResponsesURL,
+		MaxTokens:       64,
+		ReasoningEffort: reasoningEffortOff,
+		ReasoningTag:    defaultReasoningTag,
+	}
+	messages := []legacyopenai.ChatCompletionMessage{{Role: legacyopenai.ChatMessageRoleUser, Content: "hi"}}
+	body := buildOpenAIResponsesRequest(cfg, "gpt-5.5", messages, nil, nil)
+	if body.Reasoning.Effort != oa.ReasoningEffort(reasoningEffortOffWireValue) {
+		t.Fatalf("reasoning.effort = %q, want %q", body.Reasoning.Effort, reasoningEffortOffWireValue)
+	}
+	if body.Reasoning.Summary != "" {
+		t.Fatalf("reasoning.summary = %q, want unset while thinking is off", body.Reasoning.Summary)
 	}
 }
 
@@ -975,7 +1051,6 @@ func TestAnthropicToolPromptCacheBreakpoint(t *testing.T) {
 		t.Fatal("first tool should not have cache breakpoint")
 	}
 }
-
 
 func TestResponseInputItemParamOfFunctionCallEmptyArgs(t *testing.T) {
 	call := legacyopenai.ToolCall{
@@ -1753,7 +1828,7 @@ func TestOpenAIChatPromptCacheKeyStaysOnOfficialEndpoint(t *testing.T) {
 	}
 
 	body := []byte(`{"model":"m","messages":[{"role":"user","content":"q"}]}`)
-	patched, changed := patchChatRequestFields(body, "", nil, key)
+	patched, changed := patchChatRequestFields(body, "", nil, key, false)
 	if !changed {
 		t.Fatal("expected the official request to gain prompt_cache_key and store")
 	}
@@ -1764,7 +1839,7 @@ func TestOpenAIChatPromptCacheKeyStaysOnOfficialEndpoint(t *testing.T) {
 	if string(payload["prompt_cache_key"]) != `"ally:abc"` || string(payload["store"]) != "false" {
 		t.Fatalf("patched body = %s, want prompt_cache_key + store:false", patched)
 	}
-	if untouched, _ := patchChatRequestFields(body, "", nil, ""); string(untouched) != string(body) {
+	if untouched, _ := patchChatRequestFields(body, "", nil, "", false); string(untouched) != string(body) {
 		t.Fatalf("a relay body must stay byte-identical: %s", untouched)
 	}
 }

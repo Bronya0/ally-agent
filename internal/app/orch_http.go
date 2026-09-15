@@ -43,10 +43,6 @@ type httpFetchResult struct {
 	Raw    []byte
 }
 
-func (a *App) httpRequestTool(ctx context.Context, req HTTPRequestToolRequest) (HTTPRequestToolResult, error) {
-	return a.httpRequestToolWithConfig(ctx, a.effectiveConfigSafe(), req)
-}
-
 func (a *App) httpRequestToolWithConfig(ctx context.Context, cfg ConfigState, req HTTPRequestToolRequest) (HTTPRequestToolResult, error) {
 	if strings.TrimSpace(req.SaveTo) != "" && req.MaxBytes <= 0 {
 		req.MaxBytes = maxHTTPBodyBytes

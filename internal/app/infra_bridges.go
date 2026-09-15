@@ -50,11 +50,22 @@ const (
 	tokenParamMaxTokens           = "max_tokens"
 	tokenParamMaxCompletionTokens = "max_completion_tokens"
 	reasoningEffortAuto           = "auto"
-	reasoningEffortLow            = "low"
-	reasoningEffortMedium         = "medium"
-	reasoningEffortHigh           = "high"
-	reasoningEffortXHigh          = "xhigh"
-	reasoningEffortMax            = "max"
+	// reasoningEffortOff is the explicit "stop thinking" level (the UI's 关闭思考),
+	// as opposed to auto, which leaves the decision to the provider. How it reaches
+	// the provider depends on the protocol: reasoningWireForAdapter owns the Chat
+	// and Responses wires, configureAnthropicThinking the Anthropic one.
+	reasoningEffortOff = "off"
+	// reasoningEffortOffWireValue is the effort value that turns thinking off on an
+	// OpenAI effort field. DeepSeek documents "none" as 关闭思考模式 for the
+	// Responses API, and the official endpoint uses the same enum on its newest
+	// reasoning models; a provider that accepts neither answers 400, which is the
+	// same contract the other levels follow.
+	reasoningEffortOffWireValue = "none"
+	reasoningEffortLow          = "low"
+	reasoningEffortMedium       = "medium"
+	reasoningEffortHigh         = "high"
+	reasoningEffortXHigh        = "xhigh"
+	reasoningEffortMax          = "max"
 )
 
 // normalizeReasoningEffort accepts any supported spelling (with case, dash,
@@ -65,8 +76,10 @@ func normalizeReasoningEffort(value string) string {
 	v := strings.ToLower(strings.TrimSpace(value))
 	v = strings.NewReplacer("-", "", "_", "", " ", "").Replace(v)
 	switch v {
-	case "auto", "default", "unset", "", "off":
+	case "auto", "default", "unset", "":
 		return reasoningEffortAuto
+	case "off", "none", "disabled", "nothinking", "nothink":
+		return reasoningEffortOff
 	case "low":
 		return reasoningEffortLow
 	case "medium", "med":
@@ -82,16 +95,43 @@ func normalizeReasoningEffort(value string) string {
 	}
 }
 
-// reasoningEffortForAdapter returns the normalized effort level to send for a
-// provider adapter, or "" when nothing should be sent (auto). The selected
-// supported level is preserved unchanged, including xhigh and max; the
+// reasoningWirePlan is what the selected thinking level puts on a non-Anthropic
+// wire. It is the single mapping for every level, so an adapter never decides a
+// spelling of its own.
+type reasoningWirePlan struct {
+	// Effort is the value for the protocol's effort field (Chat:
+	// reasoning_effort, Responses: reasoning.effort); "" means the field must not
+	// be sent at all.
+	Effort string
+	// DisableThinking adds the stop-thinking field —
+	// `thinking: {"type": "disabled"}` — to a Chat Completions body.
+	DisableThinking bool
+}
+
+// reasoningWireForAdapter maps the configured level to the fields this request
+// carries. Every level is preserved unchanged, including xhigh and max; the
 // provider is responsible for rejecting a level it does not support.
-func reasoningEffortForAdapter(_ string, effort string) string {
-	effort = normalizeReasoningEffort(effort)
-	if effort == reasoningEffortAuto {
-		return ""
+//
+// "off" is the one level with no shared spelling, so it is resolved per wire:
+//   - Responses: effort "none" — DeepSeek documents it as the way to turn
+//     thinking off, and it is the only reasoning field that protocol has.
+//   - Chat on a compatible endpoint: `thinking: {"type": "disabled"}`, the field
+//     DeepSeek documents and whose own sample passes through extra_body, because
+//     the OpenAI Chat schema has no such field (the request rewrite adds it).
+//   - Chat on the official OpenAI API: its own enum value instead, since that
+//     endpoint rejects an unknown field outright.
+func reasoningWireForAdapter(cfg ConfigState, apiFormat, effort string) reasoningWirePlan {
+	level := normalizeReasoningEffort(effort)
+	switch level {
+	case reasoningEffortAuto:
+		return reasoningWirePlan{}
+	case reasoningEffortOff:
+		if normalizeAPIFormat(apiFormat) == apiFormatOpenAIResponses || isOfficialOpenAIEndpoint(cfg) {
+			return reasoningWirePlan{Effort: reasoningEffortOffWireValue}
+		}
+		return reasoningWirePlan{DisableThinking: true}
 	}
-	return effort
+	return reasoningWirePlan{Effort: level}
 }
 
 func normalizeTokenParam(value string) string {

@@ -91,15 +91,23 @@ export function normalizeTokenParam(value) {
   return 'auto';
 }
 
-// normalizeReasoningEffort mirrors the Go backend normalizeReasoningEffort so
-// a value resolves identically regardless of which layer reads it. Recognized
-// aliases (case/dash/space/underscore variants, "default"/"off"/"unset")
-// collapse to the canonical level; anything else falls back to "auto".
+// normalizeReasoningEffort collapses the spellings of a level into the canonical
+// value. Levels are picked from a dropdown (reasoningEffortLevels), so nothing in
+// the UI produces any other spelling — this is a safety net for values that
+// arrive from elsewhere, e.g. a hand-edited config. Recognized aliases (case/
+// dash/space/underscore variants, "default"/"unset") collapse to the canonical
+// level; "off" is a level of its own (explicitly stop thinking, unlike "auto"
+// which leaves the decision to the provider); anything else falls back to
+// "auto". The Go normalizer is the more tolerant of the two — it also accepts
+// "nothinking"/"nothink" as "off", which this side would read as "auto"; no UI
+// value distinguishes them.
 export function normalizeReasoningEffort(value) {
   const v = String(value || '').trim().toLowerCase().replace(/[-_\s]+/g, '');
   switch (v) {
-    case 'auto': case 'default': case 'unset': case 'off': case '':
+    case 'auto': case 'default': case 'unset': case '':
       return 'auto';
+    case 'off': case 'none': case 'disabled':
+      return 'off';
     case 'low': return 'low';
     case 'medium': case 'med': return 'medium';
     case 'high': return 'high';
@@ -110,8 +118,11 @@ export function normalizeReasoningEffort(value) {
 }
 
 // reasoningEffortLevels is the canonical ordered set of levels exposed in the
-// UI (auto = send nothing). Keep in sync with the backend constants.
-export const reasoningEffortLevels = ['auto', 'low', 'medium', 'high', 'xhigh', 'max'];
+// UI. auto = send nothing (the provider decides), off = ask the provider to stop
+// thinking — each protocol spells that in its own way (reasoning_effort: "none",
+// reasoning: {effort: "none"}, Anthropic thinking.type: "disabled").
+// Keep in sync with the backend constants.
+export const reasoningEffortLevels = ['auto', 'off', 'low', 'medium', 'high', 'xhigh', 'max'];
 
 export function modelConfigIdentity(model) {
   return `${normalizeProviderName(model?.providerName).toLocaleLowerCase('en-US')}\u0000${normalizeModelId(model?.model).toLocaleLowerCase('en-US')}`;

@@ -98,7 +98,7 @@ func TestHTTPRequestJSONBodyRawBytesForwardedExactly(t *testing.T) {
 		URL:    target.URL + "/echo",
 		JSON:   json.RawMessage(`{"n": 1, "list": [true, null]}`),
 	}
-	if _, err := app.httpRequestTool(context.Background(), req); err != nil {
+	if _, err := app.httpRequestToolWithConfig(context.Background(), app.effectiveConfigSafe(), req); err != nil {
 		t.Fatal(err)
 	}
 	if gotBody != `{"n": 1, "list": [true, null]}` {
@@ -121,7 +121,7 @@ func TestHTTPRequestRedirectStripsSensitiveHeadersAcrossOrigins(t *testing.T) {
 	defer source.Close()
 
 	app := NewApp()
-	_, err := app.httpRequestTool(context.Background(), HTTPRequestToolRequest{
+	_, err := app.httpRequestToolWithConfig(context.Background(), app.effectiveConfigSafe(), HTTPRequestToolRequest{
 		URL: source.URL + "/redirect",
 		Headers: map[string]string{
 			"Authorization": "Bearer secret",
@@ -166,7 +166,7 @@ func TestHTTPRequestRedirectPreservesSensitiveHeadersOnSameOrigin(t *testing.T) 
 	defer server.Close()
 
 	app := NewApp()
-	_, err := app.httpRequestTool(context.Background(), HTTPRequestToolRequest{
+	_, err := app.httpRequestToolWithConfig(context.Background(), app.effectiveConfigSafe(), HTTPRequestToolRequest{
 		URL: server.URL + "/redirect",
 		Headers: map[string]string{
 			"Authorization": "Bearer secret",
@@ -194,7 +194,7 @@ func TestHTTPRequestParsesJSONResponse(t *testing.T) {
 	defer server.Close()
 
 	app := NewApp()
-	got, err := app.httpRequestTool(context.Background(), HTTPRequestToolRequest{
+	got, err := app.httpRequestToolWithConfig(context.Background(), app.effectiveConfigSafe(), HTTPRequestToolRequest{
 		URL: server.URL,
 	})
 	if err != nil {
@@ -653,9 +653,9 @@ func TestContextBreakdownIncludesToolSchemas(t *testing.T) {
 }
 
 // TestContextBreakdownCountsPlanSnapshotAndFrozenMap guards the footer
-// alignment with the request-side injections: the plan snapshot
-// (appendPlanForUserTurn) and the session workspace map must appear in the
-// system-prompt breakdown with their own labels.
+// alignment with the request-side injections: the transient tail
+// (appendTransientTailForUserTurn: current time + plan snapshot) and the session
+// workspace map must appear in the system-prompt breakdown with their own labels.
 func TestContextBreakdownCountsPlanSnapshotAndFrozenMap(t *testing.T) {
 	root := t.TempDir()
 	app := NewApp()

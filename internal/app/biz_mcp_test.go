@@ -176,42 +176,6 @@ func TestGetAllToolsReturnsDeterministicOrder(t *testing.T) {
 	}
 }
 
-func TestIsMcpInvalidSessionError(t *testing.T) {
-	cases := []struct {
-		name string
-		err  error
-		want bool
-	}{
-		{
-			name: "zhihu sse invalid session id",
-			err:  errors.New(`MCP call failed: transport error: request failed with status 400: {"jsonrpc":"2.0","id":null,"error":{"code":-32602,"message":"Invalid session ID"}}`),
-			want: true,
-		},
-		{
-			name: "session expired",
-			err:  errors.New("remote MCP session expired"),
-			want: true,
-		},
-		{
-			name: "ordinary validation error",
-			err:  errors.New("MCP call failed: invalid query parameter"),
-			want: false,
-		},
-		{
-			name: "nil",
-			err:  nil,
-			want: false,
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := isMcpInvalidSessionError(tc.err); got != tc.want {
-				t.Fatalf("isMcpInvalidSessionError() = %v, want %v", got, tc.want)
-			}
-		})
-	}
-}
-
 func TestMcpManagerReconcileKeepsUnchangedServers(t *testing.T) {
 	enabled := true
 	disabled := false
@@ -392,6 +356,10 @@ func TestReconcileConfigsAppliesDisabledToolsInPlace(t *testing.T) {
 func TestIsMcpRecoverableError(t *testing.T) {
 	recoverableCases := []string{
 		"invalid session ID: 123",
+		// The transport error that motivated the marker list: a full JSON-RPC
+		// payload, not just the bare marker substring.
+		`MCP call failed: transport error: request failed with status 400: {"jsonrpc":"2.0","id":null,"error":{"code":-32602,"message":"Invalid session ID"}}`,
+		"remote MCP session expired",
 		"write: broken pipe",
 		"read: closed pipe",
 		"read tcp 127.0.0.1: connection reset by peer",
@@ -416,6 +384,9 @@ func TestIsMcpRecoverableError(t *testing.T) {
 		if isMcpRecoverableError(errors.New(msg)) {
 			t.Fatalf("expected error %q to not be recoverable", msg)
 		}
+	}
+	if isMcpRecoverableError(nil) {
+		t.Fatal("a nil error must never be recoverable")
 	}
 }
 

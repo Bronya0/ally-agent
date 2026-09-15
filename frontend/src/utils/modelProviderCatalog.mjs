@@ -9,13 +9,6 @@
  */
 export const CUSTOM_PROVIDER_ID = '__custom__';
 
-export function naturalCompare(left, right) {
-  return String(left || '').localeCompare(String(right || ''), undefined, {
-    numeric: true,
-    sensitivity: 'base',
-  });
-}
-
 export function providerCatalogOptions(catalog, customLabel) {
   const providers = Array.isArray(catalog?.providers) ? catalog.providers : [];
   return [

@@ -498,6 +498,8 @@ const zh = {
   'composer.context.part.instructions': 'AGENTS.md / 项目指令',
   'composer.context.part.custom': '自定义提示词',
   'composer.context.part.workspace': '工作区文件结构',
+  'composer.context.part.plan': '计划快照',
+  'composer.context.part.time': '当前时间',
 
   'git.title': 'Git 改动',
   'git.loading': '正在加载 diff...',
@@ -1327,6 +1329,7 @@ Response language: Preserve the response language already used in the current co
   'composer.context.part.core': 'Core system prompt', 'composer.context.part.skills': 'Skill metadata',
   'composer.context.part.memory': 'Global memory index', 'composer.context.part.instructions': 'AGENTS.md / project instructions',
   'composer.context.part.custom': 'Custom prompt', 'composer.context.part.workspace': 'Workspace file map',
+  'composer.context.part.plan': 'Plan snapshot', 'composer.context.part.time': 'Current time',
 
   'git.title': 'Git changes', 'git.loading': 'Loading diff...', 'git.empty': 'No Git changes.',
   'git.noText': 'No text diff.', 'git.selectFile': 'Select a file to view its diff.', 'git.loadFailed': 'Failed to load Git diff',
@@ -1808,16 +1811,14 @@ export function t(key, params = {}) {
   return interpolate(table[key] ?? zh[key] ?? key, params);
 }
 
-export function hasTranslation(key) {
-  return Object.prototype.hasOwnProperty.call(zh, key) && Object.prototype.hasOwnProperty.call(enOverrides, key);
-}
-
 // reasoningEffortLabel returns the raw thinking-strength parameter value
-// (auto/low/medium/high/xhigh/max) as the UI label. These levels are
-// provider parameter names and are intentionally not localized — what the
-// user picks is exactly what gets sent. Unknown values fall back to "auto".
+// (auto/off/low/medium/high/xhigh/max) as the UI label. Provider parameter names
+// are intentionally not localized — what the user picks is exactly what gets
+// sent — with one exception: "off" reads as the plain-language "关闭思考"/"Off"
+// choice next to "auto". Unknown values fall back to "auto".
 export function reasoningEffortLabel(level) {
   const v = String(level || 'auto').trim().toLowerCase();
+  if (v === 'off') return isZh ? '关闭思考' : 'Off';
   return ['auto', 'low', 'medium', 'high', 'xhigh', 'max'].includes(v) ? v : 'auto';
 }
 

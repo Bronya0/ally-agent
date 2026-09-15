@@ -57,5 +57,21 @@ test('catalog preset fills connection metadata and preserves credentials', () =>
     maxTokens: 16000,
     contextWindow: 128000,
     reasoningTag: 'reasoning_content',
+    // 目录未声明视觉能力时必须显式给出 undefined（三态里的"未知"），而不是省掉
+    // 这个键：ModelsPanel 用 Object.assign(modelDraft, preset) 套用结果，键缺失会
+    // 把上一个模型的 visionCapable 静默继承下来。
+    visionCapable: undefined,
   });
+});
+
+test('catalog preset carries the tri-state vision capability without inheriting it', () => {
+  const provider = findCatalogProvider(catalog, 'known');
+  const undeclared = findCatalogModel(provider, 'model-2');
+
+  const cleared = applyCatalogPreset(provider, undeclared, { apiKey: 'secret', visionCapable: true });
+  assert.equal(Object.hasOwn(cleared, 'visionCapable'), true);
+  assert.equal(cleared.visionCapable, undefined);
+
+  const textOnly = { ...undeclared, visionCapable: false };
+  assert.equal(applyCatalogPreset(provider, textOnly, { visionCapable: true }).visionCapable, false);
 });

@@ -94,22 +94,6 @@ export function findToolEventByData(session, data = {}) {
 }
 
 /**
- * Canonical tool-card status vocabulary.
- *
- * Every status flip on a tool card MUST go through setToolStatus(); never
- * assign `msg.status` directly. Routing all flips through one function is what
- * keeps the card from getting stuck in `running` — there is exactly one place
- * that writes the field, so a forgotten or doubled flip cannot hide in some
- * distant handler.
- */
-export const TOOL_STATUS = {
-  PENDING: 'pending',
-  RUNNING: 'running',
-  SUCCESS: 'success',
-  ERROR: 'error',
-};
-
-/**
  * Canonicalize the ad-hoc status vocabulary into the four values the render
  * layer understands: success | error | running | default.
  *

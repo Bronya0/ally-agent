@@ -416,33 +416,6 @@ func xmlEscape(s string) string {
 	return s
 }
 
-// listSkillsUnlocked scans skill dirs (caller must hold mu or be in init context).
-func (a *App) listSkillsUnlocked() ([]SkillDefinition, error) {
-	root, err := workspaceRoot(a.config)
-	if err != nil {
-		return nil, err
-	}
-	skills := []SkillDefinition{}
-	seen := map[string]bool{}
-	if homeDir, err := os.UserHomeDir(); err == nil {
-		for _, d := range userSkillScanDirs {
-			scanSkillDir(filepath.Join(homeDir, d.path), d.source, &skills, seen)
-		}
-	}
-	for _, sub := range skillScanDirs {
-		scanSkillDir(filepath.Join(root, sub), "project", &skills, seen)
-	}
-	for _, b := range builtinSkillEntries() {
-		key := strings.ToLower(b.Name)
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
-		skills = append(skills, b)
-	}
-	return skills, nil
-}
-
 func scanSkillDir(dir string, source string, skills *[]SkillDefinition, seen map[string]bool) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {

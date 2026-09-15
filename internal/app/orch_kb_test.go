@@ -174,18 +174,18 @@ func TestKBPromptPartInjection(t *testing.T) {
 	kbRoot := t.TempDir()
 	other := t.TempDir()
 
-	inKB := defaultSystemPrompt(nil, kbRoot, nil, "", "", kbRoot)
+	inKB := joinSystemPromptParts(buildSystemPromptParts(nil, kbRoot, nil, "", "", kbRoot))
 	if !strings.Contains(inKB, "Knowledge Base Mode") {
 		t.Fatal("KB workspace must inject the KB prompt part")
 	}
 	if !strings.Contains(inKB, "sources/") {
 		t.Fatal("KB prompt part must state the sources/ read-only boundary")
 	}
-	outsideKB := defaultSystemPrompt(nil, other, nil, "", "", kbRoot)
+	outsideKB := joinSystemPromptParts(buildSystemPromptParts(nil, other, nil, "", "", kbRoot))
 	if strings.Contains(outsideKB, "Knowledge Base Mode") {
 		t.Fatal("non-KB workspace must not inject the KB prompt part")
 	}
-	noRoot := defaultSystemPrompt(nil, kbRoot, nil, "", "", "")
+	noRoot := joinSystemPromptParts(buildSystemPromptParts(nil, kbRoot, nil, "", "", ""))
 	if strings.Contains(noRoot, "Knowledge Base Mode") {
 		t.Fatal("empty kbRoot must disable KB mode")
 	}

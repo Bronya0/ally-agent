@@ -845,11 +845,6 @@ func isMcpRecoverableError(err error) bool {
 	return false
 }
 
-// isMcpInvalidSessionError 保留向后兼容别名
-func isMcpInvalidSessionError(err error) bool {
-	return isMcpRecoverableError(err)
-}
-
 func (m *McpManager) CallToolByFunctionName(ctx context.Context, functionName string, args map[string]any) (string, error) {
 	m.mu.RLock()
 	ref, ok := m.toolLookup[functionName]

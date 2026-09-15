@@ -213,7 +213,7 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:47821/api/v1/sessions?
 | `apiKey` | string | 否 | 密钥；多 key 用 `apiKeys` 数组（首个优先） |
 | `apiKeys` | string[] | 否 | 密钥池 |
 | `maxTokens` / `contextWindow` | int | 否 | 输出上限 / 上下文窗口 |
-| `reasoningTag` / `reasoningEffort` / `tokenParam` | string | 否 | 推理内容标签 / 思考强度（`low`/`medium`/`high`/`xhigh`/`max`）/ token 参数风格 |
+| `reasoningTag` / `reasoningEffort` / `tokenParam` | string | 否 | 推理内容标签 / 思考强度（`auto`/`off`/`low`/`medium`/`high`/`xhigh`/`max`；`off` 表示关闭思考，`auto` 交给供应商决定）/ token 参数风格 |
 | `customHeaders` | object | 否 | 自定义请求头（`{"X-Api-Version": "2023-06-01"}`），随该模型每个 API 请求发送；可覆盖 Authorization/User-Agent，Host/Content-Length 等传输层头部会被丢弃，最多 32 条 |
 
 注意：更新是**整体替换**该下标的条目——没传的字段会被清空，改单条时请把原条目字段一并传回。响应 `data`：`{ "index": 2 }`。

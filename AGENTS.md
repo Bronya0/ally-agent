@@ -12,6 +12,7 @@
 | `wails3 dev` | 启动桌面端热重载开发模式 |
 | `wails3 build` | 构建并校验桌面端二进制（修改 Go 或 Wails 绑定的唯一验证命令） |
 | `go test ./...` | 执行全套后端测试（测试前必须确保满足隔离规则） |
+| `gofmt -l .` | 格式化自查，期望输出为空（2026-09-15 已统一 25 个文件，此前长期不全绿） |
 
 ## 2. Git 提交规范 (Git Convention)
 
@@ -57,3 +58,20 @@ git push origin main
    - 单元测试**绝对禁止**读写或删除真实磁盘路径（`~`、`~/.ally_agent`、源码树、系统目录）。所有文件系统操作必须在 `t.TempDir()` 沙箱内完成，读取用户主目录的逻辑需通过 `t.Setenv("HOME", t.TempDir())` 隔离。
 5. **本地编辑契约 (Edit Protocol)**:
    - 模型侧修改文件必须先 `read` 获取 `version` token，再调用 `edit`（单次调用修改单一文件；跨文件修改在同轮返回中并行调用 `edit`，由后端执行原子校验与批次写入）。
+6. **本地文本缓存必须结构性有界**:
+   - 输入历史一类本地文本缓存只有两种合法形态：结构性有界（每桶条数上限 + 单条长度上限 + 全库字符预算 + 工作区移除时显式弃桶，收口在 `frontend/src/utils/promptHistoryStore.mjs`）或明说重启即丢。只做一半 = 配额慢性泄露或丢用户数据。
+
+## 5. 模型协议铁律 (Model Protocol Rules)
+
+对接 provider 的约定，违反即静默降级或线上 400：
+
+1. **思考档位**:
+   - “关闭思考”（`off`）是独立档位，不得归一到 `auto`：auto = 交给供应商决定（Ally 侧按“在思考”处理，只是不发等级），off = 明确要求别思考。
+   - 同一档位在不同协议上拼写不同，映射**必须收口在一处**：Chat/Responses 走 `reasoningWireForAdapter`（`reasoningWirePlan`），Anthropic 走 `configureAnthropicThinking`；禁止适配器各自拼写。UI 下拉只产 `reasoningEffortLevels` 里的规范值，别名容错只归后端。
+2. **回填判据是端点，不是模型名单**:
+   - 思考字段（`reasoning_content` 等）按“每条助手消息”校验（DeepSeek/Kimi）：除 OpenAI 官方端点外一律回填显式空串（`chatReasoningBackfillKey` + `chatRequestRewriteTransport`）；除官方端点之外还有一处例外——“关闭思考”档位（请求本身要求对方别思考，无内容可回传）。
+   - 供应商校验的是字段**存在性**，而 `omitempty` 会丢空串键，所以只能请求侧改写；改写必须确定且幂等，否则破坏 prompt/KV 前缀缓存。
+3. **内部 LLM 调用不得改写用户的思考档位**:
+   - 压缩总结等内部调用原样传 `cfg`。写死档位会与设置静默漂移，且强推“关闭思考”会让必思考模型直接 400。
+4. **瞬态注入只放最新用户消息之前**:
+   - 当前时间等每次重建的瞬态内容注入在最新用户消息**之前**、永不落盘；计划快照只在本次 run 的首个请求附一次。插入位置稳定才不破坏供应商前缀缓存。

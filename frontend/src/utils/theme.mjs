@@ -18,12 +18,7 @@ const MODE_STORAGE_KEY = 'ally_color_mode';
 export const DEFAULT_THEME = 'amber';
 export const DEFAULT_MODE = 'dark'; // 'dark' | 'light'
 
-export const MODES = [
-  { id: 'dark', label: '深色' },
-  { id: 'light', label: '浅色 (Beta)' },
-];
-
-// Single source of truth for the selector UI. `swatch` mirrors the seed defined
+// Single source of truth for the theme ids. `swatch` mirrors the seed defined
 // in style.css (:root / [data-theme=...]) purely for rendering the picker dot.
 export const THEMES = [
   { id: 'amber',   label: 'Amber 琥珀',   swatch: '#e0a458' },
@@ -56,16 +51,6 @@ export function applyTheme(theme) {
   const root = document.documentElement;
   if (next === DEFAULT_THEME) root.removeAttribute('data-theme');
   else root.setAttribute('data-theme', next);
-  return next;
-}
-
-export function setTheme(theme) {
-  const next = applyTheme(theme);
-  try {
-    localStorage.setItem(STORAGE_KEY, next);
-  } catch {
-    /* storage unavailable — theme still applies for this session */
-  }
   return next;
 }
 

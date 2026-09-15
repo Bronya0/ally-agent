@@ -539,13 +539,9 @@ import {
   OpenWorkspaceInFileManager,
   OpenWorkspacePathInFileManagerAt,
   ActivateSkill,
-  DeactivateSkill,
   GetActiveSkills,
   GetTodos,
   GetMcpServers,
-  GetMcpConfig,
-  SaveMcpConfig,
-  RestartMcpServers,
   ListScheduledTasks,
   DeleteScheduledTask,
   ListServices,
@@ -624,6 +620,7 @@ import {
 import { toolCardRenderSignature } from './utils/toolCardSignature.mjs';
 import { useToolEvents } from './composables/useToolEvents.mjs';
 import { unwrapWailsEvent } from './utils/wailsEvent.mjs';
+import { createPromptHistoryStore } from './utils/promptHistoryStore.mjs';
 
 const GitDiffModal = defineAsyncComponent(() => import('./components/GitDiffModal.vue'));
 const WorkspaceExplorer = defineAsyncComponent(() => import('./components/WorkspaceExplorer.vue'));
@@ -1649,7 +1646,6 @@ const workspaceTabs = ref([]);
 const activeWorkspaceId = ref('');
 const extraRoots = ref([]);
 const workspaceHistory = ref(loadWorkspaceHistory());
-const showSkillsPanel = ref(false);
 const todosBySession = reactive({});
 const todoRevisionsBySession = reactive({});
 // Plan UI state is per session/Tab so switching tabs never reuses another
@@ -1664,7 +1660,6 @@ const activeSkillNameList = computed(() => availableSkills.value
   .filter((sk) => isSkillActive(sk.name, activeSkillNames.value))
   .map((sk) => sk.name));
 const skillsLoading = ref(false);
-const skillToggleInFlight = ref('');
 const availableTools = ref([]);
 const scheduledTasks = ref([]);
 const services = ref([]);
@@ -1763,7 +1758,6 @@ const scheduledTasksLoading = ref(false);
 const servicesLoading = ref(false);
 const scheduledTaskDeletingIds = ref([]);
 const serviceStoppingIds = ref([]);
-const mcpConfigText = ref('');
 const mcpServers = ref([]);
 const mcpLoading = ref(false);
 const streamBuffers = new Map();
@@ -2212,9 +2206,9 @@ async function destroyTempWorkspace(path, sessionId) {
     // 目录删除失败不影响会话满理；残留自下次启动的陈旧清理回收。
     console.warn('temp workspace delete failed:', err);
   }
-  // 按路径键控的残留一并清理：资源树开关存 localStorage，避免随机目录路径
-  // 永久占配额；提示词历史已改纯内存，随目录销毁直接弃桶。
-  promptHistoryByWorkspace.delete(promptHistoryBucketKey(path));
+  // 按路径键控的残留一并清理：资源树开关与提示词历史都存 localStorage，避免
+  // 随机目录路径永久占配额。
+  promptHistoryStore.remove(promptHistoryBucketKey(path));
   try {
     delete explorerClosedWorkspaces[workspaceHistoryDedupeKey(path)];
     persistExplorerClosedWorkspaces();
@@ -2728,11 +2722,6 @@ function displayMessagesForTab(tab) {
   return displayMessagesForSession(sessionForWorkspaceTab(tab));
 }
 
-const canSend = computed(() => {
-  const s = activeSession.value;
-  return (promptText.value.trim().length > 0 || activePendingAttachments.value.length > 0) && !(s && (s.runId || s.isRunning));
-});
-
 const contextTokens = ref(0);
 const contextBreakdown = ref(null);
 const workspaceTokenUsage = ref({ inputTokens: 0, outputTokens: 0 });
@@ -3126,13 +3115,13 @@ function removeFromHistory(path) {
   const key = workspaceHistoryDedupeKey(path);
   workspaceHistory.value = workspaceHistory.value.filter((p) => workspaceHistoryDedupeKey(p) !== key);
   saveWorkspaceHistory();
-  // 显式移除即清理信号：该工作区在 localStorage 的资源树开关条目随之释放，
-  // 避免路径永久占用配额；内存中的提示词历史桶一并弃置。
+  // 显式移除即清理信号：该工作区在 localStorage 的资源树开关与提示词历史条目
+  // 随之释放，避免路径永久占用配额。
   if (explorerClosedWorkspaces[key]) {
     delete explorerClosedWorkspaces[key];
     persistExplorerClosedWorkspaces();
   }
-  promptHistoryByWorkspace.delete(promptHistoryBucketKey(path));
+  promptHistoryStore.remove(promptHistoryBucketKey(path));
 }
 
 // ── 会话级附加工作区（extraRoots）管理 ──────────────────────────
@@ -3171,11 +3160,10 @@ function removeExtraRoot(path) {
   saveSessions();
 }
 
-// 输入框上箭头历史按工作区路径分桶，仅存内存：旧实现把提示词原文写进
-// localStorage（ally_prompt_history:<path>），工作区移除后无人清理且单条
-// 无长度上限，是配额慢性泄露的最大来源。改为会话级缓存后重启即清空，
-// 已落盘的旧条目由 clearLegacyLocalStorage 在启动时一次性回收。
-const promptHistoryByWorkspace = new Map();
+// 输入框上箭头历史按工作区路径分桶，落 localStorage（见 utils/promptHistoryStore.mjs）
+// 以便重启后仍能召回。上限与淘汰规则全在 store 内：每工作区 20 条、单条超长不记、
+// 全库超预算时从最久未写的工作区开始丢弃，工作区移除时由这里显式弃桶。
+const promptHistoryStore = createPromptHistoryStore();
 
 function promptHistoryBucketKey(path) {
   // 与资源树开关同款路径归一化，同一工作区的不同斜杠/大小写写法共享一桶。
@@ -3183,20 +3171,14 @@ function promptHistoryBucketKey(path) {
 }
 
 function loadPromptHistory(path = config.workspace || '') {
-  commandHistory.value = (promptHistoryByWorkspace.get(promptHistoryBucketKey(path)) || []).slice(-50);
+  commandHistory.value = promptHistoryStore.list(promptHistoryBucketKey(path));
   commandHistoryIndex.value = -1;
 }
 
-function savePromptHistory(path = activeRunWorkspace.value) {
-  // Keyed by the Tab's own workspace: loadPromptHistory(tab.path) runs on
-  // every Tab switch, so writing under config.workspace would drop a KB/temp
-  // session's history into the chat workspace's bucket.
-  promptHistoryByWorkspace.set(promptHistoryBucketKey(path), commandHistory.value.slice(-50));
-}
-
-// 一次性回收旧版本遗留在 localStorage 的已停用 key：提示词历史（已改纯
-// 内存）与按 Tab 持久化的模型快照（Tab id 每次启动重生成，持久化从未被
-// 读回）。幂等：无残留时是空操作。
+// 一次性回收旧版本遗留在 localStorage 的已停用 key：旧的按路径分桶提示词历史
+// （单条无长度上限、工作区移除后无人清理；现改由 promptHistoryStore 以新键
+// ally_prompt_history_store 记录，故不做迁移）与按 Tab 持久化的模型快照（Tab id
+// 每次启动重生成，持久化从未被读回）。幂等：无残留时是空操作。
 function clearLegacyLocalStorage() {
   try {
     const stale = [];
@@ -3211,10 +3193,11 @@ function clearLegacyLocalStorage() {
 function addPromptHistory(text) {
   const value = (text || '').trim();
   if (!value) return;
-  commandHistory.value = commandHistory.value.filter((item) => item !== value);
-  commandHistory.value.push(value);
-  commandHistory.value = commandHistory.value.slice(-50);
-  savePromptHistory();
+  // 记录/去重/限长/预算淘汰全部由 store 决定，视图直接采用它的结果，避免内存
+  // 视图与落盘内容各自维护一套上限。桶按 Tab 自己的工作区键控：loadPromptHistory
+  // (tab.path) 在每次切 Tab 时运行，写进 config.workspace 会把 KB/临时 Tab 的
+  // 历史丢进聊天工作区的桶里。
+  commandHistory.value = promptHistoryStore.record(promptHistoryBucketKey(activeRunWorkspace.value), value);
 }
 
 const historyOptions = computed(() => {
@@ -4862,49 +4845,6 @@ function pushMessage(role, content, extra = {}) {
   scrollMessagesToBottom();
 }
 
-function appendAssistantDelta(content) {
-  if (!content) return;
-  const session = activeSession.value;
-  if (!session) return;
-  let last = session.messages[session.messages.length - 1];
-  if (!last || last.role !== 'assistant' || last.error || last.system || last.done) {
-    last = { role: 'assistant', content: '', reasoningChars: 0, streaming: true };
-    session.messages.push(last);
-  }
-  last.streaming = true;
-  last.content += content;
-  last.hasBody = true; // 统计占位行据此渲染（见 flushStreamBuffer 同名注释）
-  scrollMessagesToBottom();
-}
-
-function markStreamingDone() {
-  const session = activeSession.value;
-  if (!session) return;
-  for (let i = session.messages.length - 1; i >= 0; i--) {
-    const msg = session.messages[i];
-    if (msg.role === 'assistant' && msg.streaming) {
-      msg.streaming = false;
-      msg.done = true;
-      return;
-    }
-  }
-}
-
-function appendReasoningDelta(runId, content) {
-  if (!content) return;
-  const session = activeSession.value;
-  if (!session) return;
-  let last = session.messages[session.messages.length - 1];
-  if (!last || last.role !== 'assistant' || last.error || last.system || last.done) {
-    last = { role: 'assistant', content: '', reasoningChars: 0, streaming: true };
-    session.messages.push(last);
-  }
-  last.streaming = true;
-  if (last.reasoningChars === undefined) last.reasoningChars = 0;
-  if (!last.reasoningStartedAt) last.reasoningStartedAt = Date.now();
-  last.reasoningChars += content.length;
-}
-
 function setConversationMessagesRef(tabId, instance) {
   if (!tabId) return;
   if (instance) conversationMessagesRefs.set(tabId, instance);
@@ -5349,35 +5289,9 @@ function switchToModel(index) {
   message.success(t('app.model.switched', { model: model.model }));
 }
 
-const mcpConfigParseResult = computed(() => parseMcpConfigText(mcpConfigText.value));
-const mcpConfigValid = computed(() => mcpConfigParseResult.value.valid);
-const mcpConfigValidationText = computed(() => {
-  const result = mcpConfigParseResult.value;
-  if (!result.valid) return t('app.mcp.jsonError', { error: result.error });
-  const servers = Object.keys(result.config.mcpServers || {}).length;
-  return t('app.mcp.jsonValid', { count: servers });
-});
-
-function parseMcpConfigText(text) {
-  try {
-    const parsed = JSON.parse(text || '{"mcpServers":{}}');
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      return { valid: false, error: t('app.mcp.rootObject'), config: { mcpServers: {} } };
-    }
-    if (parsed.mcpServers === undefined) parsed.mcpServers = {};
-    if (!parsed.mcpServers || typeof parsed.mcpServers !== 'object' || Array.isArray(parsed.mcpServers)) {
-      return { valid: false, error: t('app.mcp.serversObject'), config: { mcpServers: {} } };
-    }
-    return { valid: true, error: '', config: parsed };
-  } catch (err) {
-    return { valid: false, error: err?.message || String(err), config: { mcpServers: {} } };
-  }
-}
-
 async function loadMcpConfig() {
   mcpLoading.value = true;
   try {
-    mcpConfigText.value = await GetMcpConfig();
     mcpServers.value = await GetMcpServers() || [];
     await refreshToolList();
     updateWelcomeMcpRows();
@@ -5394,34 +5308,6 @@ async function refreshToolList() {
   } catch (_) {
     availableTools.value = [];
   }
-}
-
-async function saveMcpConfigText() {
-  mcpLoading.value = true;
-  try {
-    if (!mcpConfigValid.value) {
-      message.warning(mcpConfigValidationText.value);
-      return;
-    }
-    await SaveMcpConfig(mcpConfigText.value);
-    await RestartMcpServers();
-    mcpServers.value = await GetMcpServers() || [];
-    await refreshToolList();
-    updateWelcomeMcpRows();
-    message.success(t('app.mcp.saved'));
-  } catch (err) {
-    message.error(t('app.mcp.saveFailed', { error: err }));
-  } finally {
-    mcpLoading.value = false;
-  }
-}
-
-function estimateTokens(text) {
-  if (!text) return '0';
-  const chars = text.length;
-  const tokens = Math.round(chars / 3);
-  if (tokens > 999) return (tokens / 1000).toFixed(1) + 'k';
-  return String(tokens);
 }
 
 function formatReadChip(lines) {
@@ -7525,31 +7411,6 @@ async function activateSkillByName(skillName, skillArgs = '', injectIntoChat = t
   scrollMessagesToBottom();
 }
 
-async function deactivateSkillByName(skillName) {
-  try {
-    await DeactivateSkill(skillName);
-    await refreshSkillState();
-    message.success(t('app.skills.deactivated', { name: skillName }));
-  } catch (err) {
-    message.error(t('app.skills.deactivateFailed', { error: err }));
-  }
-}
-
-async function toggleSkillFromSettings(skill, active) {
-  const skillName = skill?.name || '';
-  if (!skillName) return;
-  skillToggleInFlight.value = skillName;
-  try {
-    if (active) {
-      await activateSkillByName(skillName, '', false);
-    } else {
-      await deactivateSkillByName(skillName);
-    }
-  } finally {
-    skillToggleInFlight.value = '';
-  }
-}
-
 async function changeReasoningEffort(level) {
   const next = String(level || 'auto').toLowerCase();
   // Effort is a per-Tab runtime choice: it lives on the active Tab's model
@@ -8189,14 +8050,6 @@ function formatHTTPToolSummary(data) {
   return '\u00B7 ' + parts.filter(Boolean).join(' \u00B7 ');
 }
 
-function formatHTTPToolBody(name, data) {
-  return [
-    `${name}: ${formatHTTPStatus(data)}`,
-    `size: ${formatBytes(Number(data.bytesRead) || 0)}`,
-    `duration: ${formatHTTPDuration(data.durationMs)}`,
-  ].join('\n');
-}
-
 function formatHTTPStatus(data) {
   const status = Number(data?.status) || 0;
   const statusText = String(data?.statusText || '').trim();
@@ -8362,15 +8215,6 @@ function countUnescapedBackticks(text) {
     if (text[i] === '`' && text[i - 1] !== '\\') count++;
   }
   return count;
-}
-
-function escapeHTML(value) {
-  return String(value || '')
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#039;');
 }
 
 

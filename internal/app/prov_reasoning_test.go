@@ -141,12 +141,12 @@ func TestRunChatKeepsEmptyReasoningFieldWithExplicitEffort(t *testing.T) {
 		SessionID: "reasoning-empty-chat",
 		Message:   "2+2",
 		Config: ConfigState{
-			APIFormat:      apiFormatOpenAIChat,
-			BaseURL:        server.URL,
-			APIKeys:        []string{"test-key"},
-			Model:          "test-model",
-			MaxTokens:      256,
-			Workspace:      t.TempDir(),
+			APIFormat:       apiFormatOpenAIChat,
+			BaseURL:         server.URL,
+			APIKeys:         []string{"test-key"},
+			Model:           "test-model",
+			MaxTokens:       256,
+			Workspace:       t.TempDir(),
 			ReasoningEffort: reasoningEffortMedium,
 		},
 	}); err != nil {
@@ -171,11 +171,12 @@ func TestRunChatKeepsEmptyReasoningFieldWithExplicitEffort(t *testing.T) {
 	}
 }
 
-// TestRunChatNoReasoningFieldByDefault verifies the zero-impact guarantee:
-// under the default auto effort with no captured reasoning, the wire body
-// stays untouched — assistant messages carry NO reasoning_content field, so
-// non-thinking providers never see the extension.
-func TestRunChatNoReasoningFieldByDefault(t *testing.T) {
+// TestRunChatBackfillsEmptyReasoningPlaceholder: with "auto" effort and a model
+// that produced no reasoning at all, the tool-turn assistant message still
+// carries an explicitly empty reasoning field — presence is what DeepSeek/Kimi
+// validate, and a history restored from disk has nothing else to send. Nothing
+// is invented beyond the placeholder.
+func TestRunChatBackfillsEmptyReasoningPlaceholder(t *testing.T) {
 	var mu sync.Mutex
 	var bodies []string
 	var requests atomic.Int32
@@ -232,8 +233,8 @@ func TestRunChatNoReasoningFieldByDefault(t *testing.T) {
 	if len(bodies) < 2 {
 		t.Fatalf("expected >= 2 requests, got %d", len(bodies))
 	}
-	if assistantToolCallHasReasoningField(t, bodies[1], "call_calc_1") {
-		t.Fatalf("default auto effort with no reasoning must NOT add reasoning_content to the wire body")
+	if !assistantToolCallHasReasoningField(t, bodies[1], "call_calc_1") {
+		t.Fatal("expected the empty reasoning_content placeholder on the tool-turn assistant message")
 	}
 }
 
@@ -469,52 +470,18 @@ func assistantToolCallHasReasoningField(t *testing.T, body, callID string) bool 
 
 // ── Unit: replay activation & empty-field patch ─────────────────────────────
 
-func TestReasoningContentReplayActive(t *testing.T) {
-	plain := []legacyopenai.ChatCompletionMessage{
-		{Role: legacyopenai.ChatMessageRoleUser, Content: "hi"},
-		{Role: legacyopenai.ChatMessageRoleAssistant, Content: "hello"},
-	}
-	if reasoningContentReplayActive(plain, ConfigState{}) {
-		t.Fatal("auto effort with plain history must keep replay off")
-	}
-	withEffort := ConfigState{ReasoningEffort: reasoningEffortHigh}
-	if !reasoningContentReplayActive(plain, withEffort) {
-		t.Fatal("explicit effort must turn replay on")
-	}
-	withHistory := []legacyopenai.ChatCompletionMessage{
-		{Role: legacyopenai.ChatMessageRoleUser, Content: "hi"},
-		{Role: legacyopenai.ChatMessageRoleAssistant, Content: "hello", ReasoningContent: "thought"},
-	}
-	if !reasoningContentReplayActive(withHistory, ConfigState{}) {
-		t.Fatal("history carrying reasoning must turn replay on")
-	}
-
-	// Model switch: earlier turn had reasoning, but the current turn's model
-	// produced an assistant response with NO reasoning (e.g. user switched to GPT-4o).
-	// Replay must stay OFF so non-thinking models are not contaminated.
-	switchedModel := []legacyopenai.ChatCompletionMessage{
-		{Role: legacyopenai.ChatMessageRoleUser, Content: "old question"},
-		{Role: legacyopenai.ChatMessageRoleAssistant, Content: "r1 answer", ReasoningContent: "thought"},
-		{Role: legacyopenai.ChatMessageRoleUser, Content: "new question"},
-		{Role: legacyopenai.ChatMessageRoleAssistant, Content: "plain answer", ToolCalls: []legacyopenai.ToolCall{{ID: "c1"}}},
-		{Role: legacyopenai.ChatMessageRoleTool, ToolCallID: "c1", Content: "result"},
-	}
-	if reasoningContentReplayActive(switchedModel, ConfigState{}) {
-		t.Fatal("switched non-thinking model in current turn must keep replay off despite older history")
-	}
-}
-
 func TestPatchReasoningContentFields(t *testing.T) {
 	// Message 0: user message
-	// Message 1: frozen historical assistant (without tool calls; must stay untouched)
-	// Message 2: active tool-call assistant (lacks reasoning; must gain reasoning_content: "")
+	// Message 1: historical assistant (gains the empty placeholder too: the
+	//            provider validates the field per assistant message)
+	// Message 2: active tool-call assistant (lacks reasoning; gains reasoning_content: "")
 	// Message 3: tool result message for the active call
 	body := []byte(`{"model":"m","messages":[{"role":"user","content":"q1"},{"role":"assistant","content":"plain history"},{"role":"assistant","content":"","tool_calls":[{"id":"c1"}]},{"role":"tool","tool_call_id":"c1","content":"ok"}]}`)
 	// Thinking-mode replay is on (the adapter passes the resolved wire key);
 	// an empty key would mean replay is off and nothing may be backfilled.
-	patched, changed := patchChatRequestFields(body, defaultReasoningTag, nil, "")
+	patched, changed := patchChatRequestFields(body, defaultReasoningTag, nil, "", false)
 	if !changed {
-		t.Fatal("expected the active tool-call assistant message to gain reasoning_content")
+		t.Fatal("expected the assistant messages to gain reasoning_content")
 	}
 	var payload struct {
 		Messages []map[string]json.RawMessage `json:"messages"`
@@ -522,24 +489,27 @@ func TestPatchReasoningContentFields(t *testing.T) {
 	if err := json.Unmarshal(patched, &payload); err != nil {
 		t.Fatalf("unmarshal patched body: %v", err)
 	}
-	// Historical assistant (Message 1) must remain frozen without reasoning_content.
-	if _, exists := payload.Messages[1]["reasoning_content"]; exists {
-		t.Fatal("historical assistant message must remain frozen and not gain reasoning_content")
-	}
-	// Active tool-call assistant (Message 2) must gain reasoning_content: "".
-	if got := string(payload.Messages[2]["reasoning_content"]); got != `""` {
-		t.Fatalf("tool-call assistant reasoning_content = %s, want \"\"", got)
+	// Every assistant message carries the placeholder: a history restored from
+	// disk keeps no reasoning text, and DeepSeek rejects a thinking-mode request
+	// whose assistant messages omit the field.
+	for _, idx := range []int{1, 2} {
+		if got := string(payload.Messages[idx]["reasoning_content"]); got != `""` {
+			t.Fatalf("assistant message %d reasoning_content = %s, want \"\"", idx, got)
+		}
 	}
 	if _, exists := payload.Messages[0]["reasoning_content"]; exists {
 		t.Fatal("user message must not gain reasoning_content")
 	}
+	if _, exists := payload.Messages[3]["reasoning_content"]; exists {
+		t.Fatal("tool message must not gain reasoning_content")
+	}
 
-	// Dialect test: when a message in the body uses "reasoning" (vLLM style),
-	// the empty field must be echoed back under the same dialect.
+	// Dialect test: when the configured dialect is "reasoning" (vLLM style),
+	// the empty field must be written under that dialect.
 	vllmBody := []byte(`{"model":"m","messages":[{"role":"user","content":"q"},{"role":"assistant","content":"","tool_calls":[{"id":"c2"}]},{"role":"tool","tool_call_id":"c2","content":"ok"}]}`)
-	vllmPatched, changed := patchChatRequestFields(vllmBody, "reasoning", nil, "")
+	vllmPatched, changed := patchChatRequestFields(vllmBody, "reasoning", nil, "", false)
 	if !changed {
-		t.Fatal("expected tool-call assistant to be patched under detected dialect")
+		t.Fatal("expected the assistant message to be patched under the configured dialect")
 	}
 	var vllmPayload struct {
 		Messages []map[string]json.RawMessage `json:"messages"`
@@ -548,10 +518,118 @@ func TestPatchReasoningContentFields(t *testing.T) {
 		t.Fatalf("unmarshal vllm patched body: %v", err)
 	}
 	if got := string(vllmPayload.Messages[1]["reasoning"]); got != `""` {
-		t.Fatalf("tool-call assistant reasoning = %s, want \"\"", got)
+		t.Fatalf("assistant reasoning = %s, want \"\"", got)
 	}
 	if _, exists := vllmPayload.Messages[1]["reasoning_content"]; exists {
-		t.Fatal("vLLM dialect must not inject reasoning_content")
+		t.Fatal("the vLLM dialect must not inject reasoning_content")
+	}
+}
+
+// TestPatchReasoningContentFieldsCoversRestoredHistory pins the restart case:
+// the session was loaded from disk (reasoning was never persisted), the tool turn
+// is old and complete, and the assistant messages still need the field —
+// otherwise DeepSeek answers 400 with "the reasoning_content in the thinking mode
+// must be passed back to the API".
+func TestPatchReasoningContentFieldsCoversRestoredHistory(t *testing.T) {
+	body := []byte(`{"model":"m","messages":[` +
+		`{"role":"user","content":"q1"},` +
+		`{"role":"assistant","content":"","tool_calls":[{"id":"c1"}]},` +
+		`{"role":"tool","tool_call_id":"c1","content":"ok"},` +
+		`{"role":"assistant","content":"answer"},` +
+		`{"role":"assistant","content":"spoken","reasoning_content":"real trace"},` +
+		`{"role":"user","content":"q2"}]}`)
+	patched, changed := patchChatRequestFields(body, defaultReasoningTag, nil, "", false)
+	if !changed {
+		t.Fatal("a restored history must gain the missing reasoning fields")
+	}
+	var payload struct {
+		Messages []map[string]json.RawMessage `json:"messages"`
+	}
+	if err := json.Unmarshal(patched, &payload); err != nil {
+		t.Fatalf("unmarshal patched body: %v", err)
+	}
+	for _, idx := range []int{1, 3} {
+		if got := string(payload.Messages[idx]["reasoning_content"]); got != `""` {
+			t.Fatalf("assistant message %d reasoning_content = %s, want \"\"", idx, got)
+		}
+	}
+	if got := string(payload.Messages[4]["reasoning_content"]); got != `"real trace"` {
+		t.Fatalf("an existing reasoning trace must survive untouched, got %s", got)
+	}
+	if _, exists := payload.Messages[5]["reasoning_content"]; exists {
+		t.Fatal("user message must not gain reasoning_content")
+	}
+}
+
+// TestPatchChatRequestFieldsAddsStopThinkingField: the "off" level reaches a
+// compatible Chat endpoint as thinking:{"type":"disabled"} — the field DeepSeek
+// documents and passes through extra_body in their own sample, because the typed
+// OpenAI Chat schema has no such field. It is a top-level parameter, so the
+// message prefix stays untouched, it is written once, and it never overwrites a
+// field the caller already set.
+func TestPatchChatRequestFieldsAddsStopThinkingField(t *testing.T) {
+	body := []byte(`{"model":"m","messages":[{"role":"user","content":"q"}]}`)
+	patched, changed := patchChatRequestFields(body, defaultReasoningTag, nil, "", true)
+	if !changed {
+		t.Fatal("expected the body to gain the stop-thinking field")
+	}
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(patched, &payload); err != nil {
+		t.Fatalf("unmarshal patched body: %v", err)
+	}
+	if got := string(payload["thinking"]); got != `{"type":"disabled"}` {
+		t.Fatalf("thinking = %s, want {\"type\":\"disabled\"}", got)
+	}
+	if strings.Contains(string(patched), "reasoning_content") {
+		t.Fatalf("the stop-thinking field must not drag a reasoning placeholder along: %s", patched)
+	}
+
+	// Idempotent: presence is what the provider validates, so the second pass
+	// must leave the body byte-identical.
+	if again, changed := patchChatRequestFields(patched, defaultReasoningTag, nil, "", true); changed {
+		t.Fatalf("second patch must be a no-op, got %s", again)
+	}
+
+	// A field the caller already set wins.
+	explicit := []byte(`{"model":"m","messages":[],"thinking":{"type":"enabled"}}`)
+	kept, _ := patchChatRequestFields(explicit, defaultReasoningTag, nil, "", true)
+	if !strings.Contains(string(kept), `"thinking":{"type":"enabled"}`) {
+		t.Fatalf("an existing thinking field must survive: %s", kept)
+	}
+}
+
+// TestChatReasoningBackfillKey: the placeholder is written for every endpoint
+// except the official OpenAI API, so a session restored from disk (which carries
+// no reasoning text at all) still satisfies the providers that validate the
+// field on every assistant message. The dialect follows the configured one, and
+// asking the provider to stop thinking opts out of the field entirely.
+func TestChatReasoningBackfillKey(t *testing.T) {
+	if got := chatReasoningBackfillKey(ConfigState{BaseURL: openAIOfficialAPIBaseURL}); got != "" {
+		t.Fatalf("official OpenAI endpoint: key = %q, want empty", got)
+	}
+	compatible := ConfigState{BaseURL: "https://api.deepseek.com"}
+	if got := chatReasoningBackfillKey(compatible); got != defaultReasoningTag {
+		t.Fatalf("compatible endpoint: key = %q, want %q", got, defaultReasoningTag)
+	}
+	compatible.ReasoningTag = "reasoning"
+	if got := chatReasoningBackfillKey(compatible); got != "reasoning" {
+		t.Fatalf("the configured dialect must win over the default, got %q", got)
+	}
+	compatible.ReasoningTag = "sink"
+	if got := chatReasoningBackfillKey(compatible); got != defaultReasoningTag {
+		t.Fatalf("a banner tag must fall back to the default dialect, got %q", got)
+	}
+	// 关闭思考: the request asks the provider to stop thinking, so there is no
+	// reasoning to hand back — no assistant message may gain the field. An alias
+	// of the level resolves the same way.
+	compatible.ReasoningTag = defaultReasoningTag
+	compatible.ReasoningEffort = reasoningEffortOff
+	if got := chatReasoningBackfillKey(compatible); got != "" {
+		t.Fatalf("the off level must not backfill a reasoning field, got %q", got)
+	}
+	compatible.ReasoningEffort = "disabled"
+	if got := chatReasoningBackfillKey(compatible); got != "" {
+		t.Fatalf("an off alias must not backfill a reasoning field, got %q", got)
 	}
 }
 
@@ -797,7 +875,7 @@ func TestPatchChatRequestFieldsAddsContent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal details: %v", err)
 	}
-	patched, changed := patchChatRequestFields(body, "", details, "")
+	patched, changed := patchChatRequestFields(body, "", details, "", false)
 	if !changed {
 		t.Fatal("expected the tool-call and tool messages to be patched")
 	}
@@ -831,7 +909,7 @@ func TestPatchChatRequestFieldsAddsContent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal request: %v", err)
 	}
-	if _, changed := patchChatRequestFields(noTurn, "", details, ""); changed {
+	if _, changed := patchChatRequestFields(noTurn, "", details, "", false); changed {
 		t.Fatal("a history without a trailing tool turn must not receive reasoning fields")
 	}
 }

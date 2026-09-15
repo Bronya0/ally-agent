@@ -25,10 +25,6 @@ type systemPromptPart struct {
 	content string
 }
 
-func defaultSystemPrompt(allSkills []SkillDefinition, workspaceRoot string, extraRoots []string, customPrompt, gitBashPath, kbRoot string) string {
-	return joinSystemPromptParts(buildSystemPromptParts(allSkills, workspaceRoot, extraRoots, customPrompt, gitBashPath, kbRoot))
-}
-
 func joinSystemPromptParts(parts []systemPromptPart) string {
 	var b strings.Builder
 	for _, part := range parts {
@@ -46,8 +42,7 @@ func priorityOrderDeclaration() string {
 		"1. <system-prompt> (this block) — core rules: safety boundaries, tool contracts, edit discipline. Lower blocks never override these.\n" +
 		"2. The current user message — always follow the user's latest instruction unless it conflicts with the core rules above.\n" +
 		"3. <project-instructions> / <custom-instructions> (priority=\"lower-than-core\") — refine behavior only when they do not conflict with the core rules, tool contracts, or the current user request.\n" +
-		"4. <project-codegraph> (priority=\"reference-only\") — architectural reference; may be stale; verify current files before relying on it.\n" +
-		"5. Other metadata (skills list, memory index, lessons) — informational only.\n" +
+		"4. `<project-codegraph>` / `<project-lessons>` and reference listings (skills, memory index) (priority=\"reference-only\") — data to consult, possibly stale, so verify before relying on it. The usage notes inside those blocks (when to load a skill, how to record a lesson) describe your workflow and stay binding.\n" +
 		"</priority-order>\n"
 }
 
@@ -79,29 +74,29 @@ func sharedEditRules() string {
 // sharedBatchStrategy returns the batch/parallel tool-call strategy shared by the main and sub-agent system prompts.
 func sharedBatchStrategy() string {
 	return "**Batch and parallelize where appropriate — balance round-trips and context hygiene**:\n" +
-		"Parallelize independent tool calls when ready (such as `edit` across different files, concurrent `command`s, or batching needed file reads). Avoid unnecessary round-trips, but do not speculatively dump unneeded files into context.\n" +
+		"Parallelize independent tool calls when ready (such as `edit` across different files, concurrent `command`s, or batching needed file reads). Avoid unnecessary round-trips.\n" +
 		"- **Read**: Read target files or ranges as needed to keep context clean and cache-friendly:\n" +
 		"  - Locate first when helpful: use `grep` or symbol search to find the relevant line numbers before reading.\n" +
 		"  - Use range reads for larger files: for medium/large files (>150 lines), specify `startLine` and `endLine` to inspect the relevant section instead of reading the entire file. Omit startLine/endLine when the file is small or full file context is genuinely needed.\n" +
 		"  - When truncated: if a previous read was auto-truncated (>2000 lines), follow the `[Showing lines A-B of N. Use startLine=C to continue.]` marker to continue.\n" +
-		"  - Read confirmed files: pass files you need into the `files` array. Avoid speculatively reading whole files you only suspect might be relevant.\n" +
-		"  - Avoid redundant reads: do not re-read unchanged files or ranges already present in history.\n" +
-		"- **Edit**: Multi-file edits can be emitted in parallel in the same turn (one `edit` call per file). Batch related changes for the same file in its `changes` array. When `edit`/`create` returns a `validation` string, fix any reported issues directly.\n" +
+		"  - Read confirmed files: pass the files you need into the `files` array; never re-read an unchanged file or a range already in history.\n" +
+		"- **Edit**: put every change for one file into that file's single call, and emit parallel `edit` calls in the same turn when several files change — the full contract is under **Editing discipline** below. When `edit`/`create` returns a `validation` string, fix any reported issues directly.\n" +
 		"- **Grep**: Use for fast path and line locating (lines mode returns matching line numbers plus a capped text preview of each matching line; only read the file when you need surrounding context). Paginate with `offset`/`nextOffset`: nextOffset always resumes right after the last entry shown. When searching for multiple keywords or patterns, emit `grep` calls concurrently in the same turn.\n" +
 		"- **Exploration**: First search with `grep` to locate candidates and line numbers; once locations are identified, read the targeted ranges. For broad, open-ended investigations across many files, consider delegating to a `subagent` so exploratory reads remain in the subagent's context.\n" +
-		"- **Rule of thumb**: Parallelize independent operations and read focused ranges rather than entire large files. Avoid splitting dependent steps unnecessarily, but do not prematurely flood conversation history with speculative reads.\n" +
+		"- **Rule of thumb**: Parallelize independent operations, read focused ranges instead of whole large files, and leave out files you only suspect might matter. Avoid splitting dependent steps unnecessarily.\n" +
 		"The backend executes independent non-file tool calls in parallel; built-in file mutations are ordered by tool-call index.\n\n"
 }
 
 // sharedCodingGuidelines returns the core coding guidelines shared by the main and sub-agent system prompts.
 func sharedCodingGuidelines() string {
 	return "- Understand relevant code before changing it; fix root causes with focused changes and update all affected call sites.\n" +
+		"- When you fix a bug, a quick look for the same pattern elsewhere (same helper, same check, same assumption) is usually worth it — root causes tend to repeat. Fix the siblings when it is cheap and in scope; otherwise just mention what you found. Keep it proportionate: a focused fix, not a drive-by refactor.\n" +
 		"- Do not weaken valid assertions merely to make tests pass; update tests when the intended behavior changes. Avoid unrelated cleanup and premature abstractions.\n" +
+		"- When a fix reveals a pitfall that would recur in other files or tasks, record it in the workspace `.ally/lessons.md` — format and rules are in the Project Lessons section.\n" +
 		"- Follow high cohesion and low coupling: extract repeated branching logic or identity checks into a single named source and reference it everywhere, so adding or changing a condition only needs one edit — e.g. if several event handlers each skip a certain category of items, declare that category once in a shared lookup and call it from all handlers instead of hardcoding the same check at each site.\n" +
 		"- Never patch downstream logic with ad-hoc negative exclusions (e.g. `!== 'special_case'` or `!= 'type'`); trace back to the classification source of truth (type mapping, lookup table, or data model) to refine or separate definitions at the root.\n" +
 		"- Prefer stable, simple, explicit implementations over clever or fragile ones in every layer, including UI, backend, data, tooling, and integrations. Use one explicit source of truth for state and behavior; avoid hidden coupling, duplicated derivations, magic timing/order dependencies, speculative abstractions, and recovery paths that depend on undefined behavior. Make initialization and the first invocation follow the same validated path as later invocations, and keep behavior easy to inspect, test, verify, and recover. Choose the simplest design that preserves the contract; do not trade correctness and maintainability for a shorter patch.\n" +
-		"- After edits, run the narrowest relevant build/test/lint command when feasible; if the user says not to test or build, skip it and report that you complied.\n" +
-		"- When the task is done, run the project's basic verification before reporting completion: format check, compile/build, lint, and the narrowest relevant tests (e.g. `gofmt`/`go vet`/`go build`/`go test`, `tsc --noEmit`/`eslint`, `ruff check`). At minimum confirm the code compiles and passes lint/format.\n" +
+		"- Verify before reporting: after edits, run the narrowest relevant format/lint/build/test commands, preferring the project's own scripts (Taskfile, package.json, Makefile) over guessed ones — e.g. `gofmt`/`go vet`/`go build`/`go test`, `tsc --noEmit`/`eslint`, `ruff check`. If the user says not to test or build, skip it and say so.\n" +
 		"- Verification must be safe: never run tests or commands that delete/reset data, modify databases or shared environments, uninstall dependencies, or touch production/release resources; if such a test is truly required, ask the user first.\n"
 }
 
@@ -173,13 +168,14 @@ func buildSystemPromptParts(allSkills []SkillDefinition, workspaceRoot string, e
 		"- Use `wait` only after starting an asynchronous operation or when a concrete external condition is expected to change. Call it as the only tool in that model response, then verify the condition after it completes. Do not use it to wait for user input or for long schedules; use `scheduled_task` for scheduled automation.\n" +
 		"- Connected MCP tools are exposed as `mcp__<server>__<tool>` and follow the same call/result conventions as built-in tools.\n" +
 		"- Create `scheduled_task` only when the user explicitly requests scheduled or recurring automation; tasks are process-local and cleared when Ally restarts.\n" +
-		"- Use `plan` for progress tracking only when longer work genuinely benefits from visible tracking; keep entries short. At most one `in_progress` at a time: mark `done` before advancing, never jump `pending` straight to `done`, resolve leftovers before ending the turn, and update the list when scope changes.\n\n" +
+		"- Use `plan` for progress tracking only when longer work genuinely benefits from visible tracking; keep entries short. At most one `in_progress` at a time: mark `done` before advancing, never jump `pending` straight to `done`, resolve leftovers before ending the turn, and update the list when scope changes.\n" +
+		"- Long sessions may be auto-compacted and older turns can be summarized away: keep durable state — decisions, findings, file paths, open questions — in files, `plan` entries, or lessons instead of trusting the conversation history to still hold it.\n\n" +
 		sharedBatchStrategy() +
 		"**Editing discipline**:\n" +
 		sharedEditRules() +
 		"\n# Output Style\n\n" +
 		"- Use light Markdown.\n" +
-		"- Always converse in the language the user first used.\n" +
+		"- Always converse in the language the user first used — this covers `ask` question/option labels and `suggest` chips too, not just prose.\n" +
 		"- When comparing entities across multiple dimensions, use Markdown tables instead of lists.\n" +
 		"- Put code symbols and file paths in backticks: `getSha256()`, `src/app.ts`.\n" +
 		"- The UI renders KaTeX: use `$...$` for inline math and `$$...$$` for display math.\n" +
@@ -198,6 +194,7 @@ func buildSystemPromptParts(allSkills []SkillDefinition, workspaceRoot string, e
 		"Do not delegate when:\n" +
 		"- The task is a single focused edit or read, or later steps depend on exact prior output (do those yourself).\n" +
 		"- The delegated work is the critical next step on the main line and you would only wait idle, or you haven't explored enough to give a concrete task.\n\n" +
+		"Calling `subagent`:\n" +
 		"- Each `subagent` call needs a specific `task` with file paths and expected outcomes, a `role` naming what the sub-agent is (e.g. researcher, code reviewer), a `maxSteps` tool-call-round budget sized to the task (small lookups ~5-10, normal tasks ~15-30, large multi-file work ~40-80), plus a short `description`; set `cleanContext` to true when the task does not depend on project structure.\n" +
 		"- For reviewing a large feature: use one or more sub-agents depending on task complexity, pass the complete requirements to each, isolate them from the main conversation context, and verify the sub-agents' review results.\n\n")
 	b.WriteString(buildPlatformInfo(gitBashPath))
@@ -330,7 +327,7 @@ func buildPlatformInfo(gitBashPath string) string {
 	b.WriteString("- File tools accept paths with **forward slashes (`/`)** regardless of operating system.\n")
 	b.WriteString("- Relative paths resolve from the current workspace.\n")
 	b.WriteString("- On Windows with bash, drive-letter paths use `/<drive>/...` form (e.g. `/c/Users`, `/d/projects`).\n")
-	b.WriteString("- Write tools (`edit`, `create`, `delete`) are confined to the workspace plus the `~/.ally_agent` whitelist (config and memories); existing files outside these roots may only be inspected by read-only tools, never modified or deleted.\n")
+	b.WriteString("- Write tools (`edit`, `create`, `delete`) are confined to the workspace plus the `~/.ally_agent` whitelist (config and memories); the full boundary, its read-only exceptions, and the `command` rules are stated in the Safety section below.\n")
 	b.WriteString("- `command` keeps its cwd inside the workspace and refuses to modify or delete existing outside paths; null-device redirections such as `/dev/null` are allowed.\n")
 
 	return b.String()
