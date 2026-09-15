@@ -474,12 +474,63 @@ html[data-mode="light"] .app-header {
   -webkit-backdrop-filter: var(--ally-glass-blur);
 }
 
-html[data-mode="light"] .workspace-explorer,
-html[data-mode="light"] .workspace-explorer-tree,
+/* Selected mode icon on the light rail is green: on white glass the accent's
+   bright shade sits too close to the surrounding chrome to read as a locator,
+   and the app's green carries that job without adding a new colour. Scoped to
+   light on purpose — dark keeps --ally-accent-bright. Both the resting and the
+   hover-over-selected selectors are listed so hovering the active icon does not
+   fall through to the rail's hover colour. */
+html[data-mode="light"] .mode-sider .n-menu .n-menu-item-content--selected .mode-sider-icon-wrap,
+html[data-mode="light"] .mode-sider .n-menu .n-menu-item-content--selected:hover .mode-sider-icon-wrap {
+  color: var(--ally-success);
+}
+
+/* The docked explorer paints nothing of its own: it inherits the page canvas.
+   "Same colour as the main interface" is literal here — the chat column is
+   transparent in light mode (see .app-shell / .chat-layout above) and lets the
+   body gradient show through, so the tree column does exactly the same and the
+   two are identical by construction rather than by matched constants. Before,
+   the panel laid its own 0.72-white glass over that gradient (a lighter block
+   than its neighbour) and cast a -10px, 26px shadow leftwards across the chat
+   along the divider. Both are gone; worse, layering shadows on the panel *and*
+   its inner tree column got clipped by the panel's overflow, which is what made
+   the seam read as a dark band. Now the divider is the 1px hairline and nothing
+   else: no shadow, no blur, no second surface.
+   Editor mode is the exception below because it is an overlay, not a column. */
+html[data-mode="light"] .workspace-explorer {
+  background: transparent;
+  box-shadow: none;
+}
+html[data-mode="light"] .workspace-explorer-tree { background: transparent; }
+
+/* .has-file covers the chat workbench (absolute overlay over .main-area), so it
+   must not be see-through: it takes the opaque content surface — the same mat
+   the ace board and the editor pane already use, which also makes the
+   tree/editor splitter a single hairline with no brightness step on either
+   side. */
+html[data-mode="light"] .workspace-explorer.has-file { background: var(--ally-surface-content); }
+
+/* The sessions menu is a floating dropdown, not a docked column, so it keeps
+   the glass and its halo. */
 html[data-mode="light"] .sessions-menu {
   backdrop-filter: var(--ally-glass-blur);
   -webkit-backdrop-filter: var(--ally-glass-blur);
   box-shadow: var(--ally-glass-shadow);
+}
+
+/* Workspace code editor: the dark ace theme is swapped for its light sibling in
+   JS (ACE_THEME_BY_MODE in WorkspaceExplorer.vue); the two mats ace hardcodes
+   there (white editor, #f6f6f6 gutter) are re-pointed at the surface tokens so
+   the editor is the same surface as its pane, and the active line — white on
+   white with the theme's own value — follows the shared hover tint. */
+html[data-mode="light"] .workspace-explorer-ace .ace-tomorrow {
+  background-color: var(--ally-surface-content);
+}
+html[data-mode="light"] .workspace-explorer-ace .ace-tomorrow .ace_gutter {
+  background: var(--ally-surface-deep);
+}
+html[data-mode="light"] .workspace-explorer-ace .ace-tomorrow .ace_marker-layer .ace_active-line {
+  background: var(--ally-state-hover);
 }
 
 /* Composer input: brighter, deeper blur — the hero glass element. */

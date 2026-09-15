@@ -488,13 +488,26 @@ function historyMenuProps() {
   background: rgba(74, 222, 128, 0.18) !important;
 }
 
-/* 历史工作空间按钮：琥珀色图标与其他 header 图标区分（参考底部会话按钮 #e0a070） */
+/* 历史工作空间按钮：琥珀色图标与其他 header 图标区分（参考底部会话按钮 #e0a070）。
+   亮色下种子色会被白玻璃洗淡：纯 #e0a458 对近似白底只有 ~2.2:1，而旁边图标用的
+   --ally-text-muted 是 ~5.4:1，所以看上去“发灰、看不清”。亮色改用 accent 家族里
+   专为浅底推导的 ink 混合色（与侧栏亮色菜单图标同一档），保留琥珀色身份的同时
+   把对比度拉到和相邻图标一致；暗色仍是种子色（那里已经够亮）。 */
 .history-action-button {
   color: var(--ally-accent) !important;
 }
 
 .history-action-button:hover,
 .history-action-button:focus-visible {
+  color: var(--ally-accent-strong) !important;
+}
+
+html[data-mode="light"] .history-action-button {
+  color: var(--ally-accent-bright) !important;
+}
+
+html[data-mode="light"] .history-action-button:hover,
+html[data-mode="light"] .history-action-button:focus-visible {
   color: var(--ally-accent-strong) !important;
 }
 

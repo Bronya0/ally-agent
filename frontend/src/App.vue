@@ -312,6 +312,7 @@ Public License v3. See the LICENSE file for details.
                   :ref="(el) => setExplorerRef(tab.id, el)"
                   :workspace="explorerWorkspaceFor(tab.id)"
                   :active="tab.id === activeWorkspaceId"
+                  :color-mode="colorMode"
                   :initial-width="explorerTreeWidthFor(tab.id)"
                   :hide-hidden="isKbTab(tab)"
                   :title-text="isKbTab(tab) ? $t('kb.tabLabel') : ''"
