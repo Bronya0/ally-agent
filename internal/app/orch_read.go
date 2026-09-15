@@ -395,24 +395,36 @@ func injectableImageMime(mime string) bool {
 // Kind is "image", Content is a short text notice, and DataURL carries the
 // base64 data URL for multimodal model input. Non-editable.
 func (a *App) readImageWithConfig(cfg ConfigState, path string, req ReadFileRequest, mime string) (ReadFileResult, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return ReadFileResult{}, err
-	}
+	// Stat before reading: os.ReadFile has no size limit, so a huge file whose
+	// first bytes look like an image would be pulled into memory in full and
+	// then discarded by the maxReadImageBytes guard — one plain read call could
+	// take the whole process down. The size also feeds the notice, so an
+	// oversized image still reports its real size.
 	info, err := os.Stat(path)
 	if err != nil {
 		return ReadFileResult{}, err
 	}
 	name := filepath.Base(path)
-	notice := fmt.Sprintf("[Image: %s (%s, %d bytes)]", name, strings.ToUpper(strings.TrimPrefix(mime, "image/")), len(data))
+	notice := fmt.Sprintf("[Image: %s (%s, %d bytes)]", name, strings.ToUpper(strings.TrimPrefix(mime, "image/")), info.Size())
 	var dataURL string
 	switch {
 	case !injectableImageMime(mime):
 		notice += " (format not supported for image input)"
-	case len(data) > maxReadImageBytes:
+	case info.Size() > maxReadImageBytes:
 		notice += " (too large to send as image input)"
 	default:
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return ReadFileResult{}, err
+		}
 		dataURL = imageDataURL(mime, data)
+	}
+	// Hash by streaming: the bytes above are deliberately not kept for an
+	// oversized image, and the version token is part of the result contract
+	// (same value the in-memory path would produce).
+	sha256Hex, version, err := hashFileAndVersion(path)
+	if err != nil {
+		return ReadFileResult{}, err
 	}
 	return ReadFileResult{
 		Path:          displayPathForConfig(cfg, path),
@@ -422,8 +434,8 @@ func (a *App) readImageWithConfig(cfg ConfigState, path string, req ReadFileRequ
 		ContentFormat: "image",
 		Type:          strings.TrimPrefix(mime, "image/"),
 		Editable:      false,
-		SHA256:        hashBytes(data),
-		Version:       hashVersion(data),
+		SHA256:        sha256Hex,
+		Version:       version,
 		Size:          info.Size(),
 		DataURL:       dataURL,
 	}, nil

@@ -389,6 +389,37 @@ func TestRepairDanglingToolCalls(t *testing.T) {
 			t.Fatalf("first result must survive: %#v", out[2])
 		}
 	})
+
+	t.Run("duplicate call IDs are repaired instead of left dangling", func(t *testing.T) {
+		// A relay can return two calls sharing one ID. The old ID-keyed table
+		// consumed its entry on the first result, dropped the second result as a
+		// duplicate and then had nothing left to strip — the unanswered call stayed
+		// in the history and every later request was rejected with 400.
+		in := []openai.ChatCompletionMessage{
+			userMsg,
+			assistantWithCalls("dup", "dup"),
+			toolMsg("dup"),
+			toolMsg("dup"),
+			{Role: openai.ChatMessageRoleAssistant, Content: "done"},
+		}
+		out := repairDanglingToolCalls(in)
+		if len(out) != 5 || len(out[1].ToolCalls) != 2 {
+			t.Fatalf("two answered calls must both survive: %#v", out)
+		}
+
+		// Only one result for two same-ID calls: the second call has to be
+		// stripped so nothing is left unanswered.
+		out = repairDanglingToolCalls(in[:3])
+		if len(out) != 3 {
+			t.Fatalf("expected 3 messages, got %d: %#v", len(out), out)
+		}
+		if len(out[1].ToolCalls) != 1 || out[1].ToolCalls[0].ID != "dup" {
+			t.Fatalf("the unanswered duplicate call must be stripped: %#v", out[1].ToolCalls)
+		}
+		if out[2].ToolCallID != "dup" {
+			t.Fatalf("the answered result must survive: %#v", out[2])
+		}
+	})
 }
 
 func TestHistoryLoadRepairsDanglingToolCalls(t *testing.T) {

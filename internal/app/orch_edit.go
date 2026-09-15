@@ -173,7 +173,11 @@ func (a *App) editWithConfig(cfg ConfigState, req EditRequest) (EditResult, erro
 	if err != nil {
 		return EditResult{}, err
 	}
-	path, err := safeJoin(roots, req.Path)
+	// Writes resolve exactly like create/delete/editor saves (symlinks rejected,
+	// real path confined to the write roots); SafeWriteFile replaces the file in
+	// place, so joining lexically here would write through a symlinked
+	// directory and land outside the workspace.
+	path, err := resolveWritableFilePath(roots, req.Path)
 	if err != nil {
 		return EditResult{}, err
 	}

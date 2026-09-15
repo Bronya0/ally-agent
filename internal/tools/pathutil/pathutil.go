@@ -164,6 +164,69 @@ func SamePath(a, b string) bool {
 	return a == b
 }
 
+// vcsMetadataDirNames are the version-control metadata directories that no tool
+// may create, overwrite, or delete: writing .git/hooks executes code on the
+// next git command, and overwriting .git/index or a ref corrupts the
+// repository.
+var vcsMetadataDirNames = []string{".git", ".svn", ".hg"}
+
+// CanonicalPath returns the form every path comparison must use. Beyond
+// filepath.Clean it strips trailing dots and spaces from each component on
+// Windows, where the Win32 path parser ignores them: ".git." and ".git" name
+// the same directory, so a guard comparing literal names can be side-stepped by
+// appending a dot (filepath.Clean keeps it).
+func CanonicalPath(p string) string {
+	cleaned := filepath.Clean(p)
+	if !IsWindows {
+		return cleaned
+	}
+	volume := filepath.VolumeName(cleaned)
+	rest := strings.TrimPrefix(cleaned, volume)
+	if rest == "" {
+		return cleaned
+	}
+	leadingSep := rest[0] == '\\' || rest[0] == '/'
+	parts := strings.FieldsFunc(rest, func(r rune) bool { return r == '\\' || r == '/' })
+	for i, part := range parts {
+		parts[i] = trimWindowsAlias(part)
+	}
+	joined := strings.Join(parts, `\`)
+	if leadingSep {
+		joined = `\` + joined
+	}
+	return volume + joined
+}
+
+// trimWindowsAlias drops the trailing dots and spaces Win32 ignores. "." and
+// ".." are path syntax rather than names and must survive untouched.
+func trimWindowsAlias(name string) string {
+	if name == "." || name == ".." {
+		return name
+	}
+	trimmed := strings.TrimRight(name, ". ")
+	if trimmed == "" {
+		return name
+	}
+	return trimmed
+}
+
+// VCSMetadataReason reports whether p is, or lies inside, version-control
+// metadata. It is the single judgement shared by the write-path guards
+// (create/edit/editor save/saveTo/move), the delete guard, and the command
+// target guard, so a new entry point cannot silently omit it and the delete and
+// write sides can not drift apart.
+func VCSMetadataReason(p string) (bool, string) {
+	canonical := CanonicalPath(p)
+	for _, part := range strings.Split(filepath.ToSlash(canonical), "/") {
+		for _, name := range vcsMetadataDirNames {
+			if strings.EqualFold(part, name) {
+				return true, fmt.Sprintf("path %q is inside version control metadata (%s); refusing to create, modify, or delete it", filepath.ToSlash(p), name)
+			}
+		}
+	}
+	return false, ""
+}
+
 // SafeJoin joins p onto the primary workspace root (roots[0]) and validates
 // that the result is inside one of the roots or ~/.ally_agent. Absolute paths
 // are accepted as-is; relative paths are resolved against roots[0] only.

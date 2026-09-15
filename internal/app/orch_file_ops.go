@@ -1008,17 +1008,14 @@ func remoteDeleteProtectedTrees() []string {
 // OS-protected locations, home roots, VCS metadata, or workspace root.
 func isDangerousDeletePath(absPath string) (bool, string) {
 	abs := filepath.Clean(absPath)
-	lower := strings.ToLower(abs)
 
-	// 1. VCS metadata — never delete .git or similar
-	base := strings.ToLower(filepath.Base(abs))
-	if base == ".git" || base == ".svn" || base == ".hg" {
-		return true, fmt.Sprintf("refusing to delete VCS directory %q; if you need to remove version control data, do it manually", abs)
-	}
-	// Also block any path containing /.git/ (not just the .git dir itself)
-	if strings.Contains(lower, string(filepath.Separator)+".git"+string(filepath.Separator)) ||
-		strings.HasSuffix(lower, string(filepath.Separator)+".git") {
-		return true, fmt.Sprintf("path %q contains .git; refusing to protect version control data", abs)
+	// 1. VCS metadata — never delete .git or similar, nor anything below it.
+	// The shared canonical judgement also covers Windows aliases such as
+	// ".git." (Win32 strips the trailing dot, filepath.Clean keeps it), which
+	// used to slip past the literal name comparisons and deleted the real
+	// repository metadata.
+	if blocked, reason := pathutil.VCSMetadataReason(abs); blocked {
+		return true, reason
 	}
 
 	// Test and build workspaces commonly live below the OS temp directory.
@@ -1257,6 +1254,14 @@ func resolveWritableFilePath(roots []string, p string) (string, error) {
 	if err != nil {
 		return "", codedToolError("E_PATH_OUTSIDE", err)
 	}
+	// Version-control metadata is off limits for every write path (create, edit,
+	// editor save, http_request saveTo, move destination): .git/hooks runs on
+	// the next git command, and overwriting .git/index or a ref corrupts the
+	// repository. The judgement is shared with the delete path through
+	// pathutil so the two can not drift apart.
+	if blocked, reason := pathutil.VCSMetadataReason(abs); blocked {
+		return "", codedToolError("E_PROTECTED_PATH", errors.New(reason))
+	}
 	if info, err := os.Lstat(abs); err == nil && info.Mode()&os.ModeSymlink != 0 {
 		return "", codedToolError("E_SYMLINK_PATH", fmt.Errorf("refusing to write through symlink path: %s", p))
 	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -1276,6 +1281,9 @@ func resolveDeletablePath(roots []string, p string) (string, error) {
 	abs, err := safeJoin(roots, p)
 	if err != nil {
 		return "", codedToolError("E_PATH_OUTSIDE", err)
+	}
+	if blocked, reason := pathutil.VCSMetadataReason(abs); blocked {
+		return "", codedToolError("E_PROTECTED_PATH", errors.New(reason))
 	}
 	info, err := os.Lstat(abs)
 	if err != nil {

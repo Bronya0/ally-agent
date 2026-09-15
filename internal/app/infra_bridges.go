@@ -400,6 +400,14 @@ func hashBytesAndVersion(data []byte) (string, string) {
 	return read.HashBytesAndVersion(data)
 }
 
+// hashFileAndVersion streams the file at path through SHA-256 and returns the
+// same (hex digest, version token) pair hashBytesAndVersion produces. Used where
+// the caller must not read the file into memory (an image above
+// maxReadImageBytes is hashed but never buffered).
+func hashFileAndVersion(path string) (string, string, error) {
+	return read.HashFileAndVersion(path)
+}
+
 func newID() string {
 	buf := make([]byte, 8)
 	if _, err := rand.Read(buf); err != nil {

@@ -141,6 +141,24 @@ func TestKBDenyBlocksCommandWriteTargets(t *testing.T) {
 	}
 }
 
+// TestKBDenyBlocksMoveSourceOutOfSources: a move removes its source, so the
+// source operand has to be treated as a mutation target. Inspecting destinations
+// only let an ordinary `mv` carry the read-only originals out of sources/.
+func TestKBDenyBlocksMoveSourceOutOfSources(t *testing.T) {
+	app, cfg, ctx, _ := kbTestSetup(t)
+
+	res := app.executeTool(ctx, cfg, "s-1", "command", []byte(`{"command":"mv sources/note.md ."}`))
+	if res.OK || !strings.Contains(res.Error, "E_KB_SOURCES_READONLY") {
+		t.Fatalf("moving a file out of sources/ must be denied, got ok=%v err=%v", res.OK, res.Error)
+	}
+
+	// Moving a file that is not part of the read-only originals still works.
+	res = app.executeTool(ctx, cfg, "s-1", "command", []byte(`{"command":"mv entry.md moved.md"}`))
+	if !res.OK {
+		t.Fatalf("moving a file outside sources/ must succeed, got err=%v", res.Error)
+	}
+}
+
 func TestKBConfigMergeAndClear(t *testing.T) {
 	// mergeConfig: overlay non-empty wins; empty overlay keeps the base value
 	// so a KB session's StartChat (or an older frontend) never clears it.

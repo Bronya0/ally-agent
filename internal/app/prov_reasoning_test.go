@@ -972,20 +972,39 @@ func TestReasoningStashEvictionKeepsOtherEntries(t *testing.T) {
 }
 
 // TestReasoningStashClearSession drops every protocol/model payload of one
-// session without touching another session's live payload.
+// session without touching another session's live payload. Keys are built
+// through the production derivation on purpose: clearSession only has the raw
+// session id while the write path keys on the hashed prompt-cache scope, and the
+// two must agree. They used to be derived separately (raw id vs hash), which made
+// this cleanup a silent no-op that kept dead turns' signatures replayed onto
+// later turns and left their entries occupying the LRU.
 func TestReasoningStashClearSession(t *testing.T) {
+	scope := func(sessionID string) string { return openAIResponsesPromptCacheKey(sessionID) }
+	key := func(sessionID, format, model string) string {
+		return reasoningReplayKey(ConfigState{
+			APIFormat:               format,
+			Model:                   model,
+			responsesPromptCacheKey: scope(sessionID),
+		}, model)
+	}
 	stash := newReasoningStash()
-	stash.set("sess\x1fopenai_chat\x1fmodel-a", &sessionReasoningPayload{chatDetails: json.RawMessage("[]")})
-	stash.set("sess\x1fopenai_responses\x1fmodel-b", &sessionReasoningPayload{responses: []responsesReasoningItem{{ID: "rs_1"}}})
-	stash.set("sess-other\x1fopenai_chat\x1fmodel-a", &sessionReasoningPayload{chatDetails: json.RawMessage("[]")})
+	chatKey := key("sess", apiFormatOpenAIChat, "model-a")
+	responsesKey := key("sess", apiFormatOpenAIResponses, "model-b")
+	otherKey := key("sess-other", apiFormatOpenAIChat, "model-a")
+	if chatKey == otherKey {
+		t.Fatalf("the two sessions must not share a key: %q", chatKey)
+	}
+	stash.set(chatKey, &sessionReasoningPayload{chatDetails: json.RawMessage("[]")})
+	stash.set(responsesKey, &sessionReasoningPayload{responses: []responsesReasoningItem{{ID: "rs_1"}}})
+	stash.set(otherKey, &sessionReasoningPayload{chatDetails: json.RawMessage("[]")})
 	stash.clearSession("sess")
-	if got := stash.get("sess\x1fopenai_chat\x1fmodel-a"); got != nil {
+	if got := stash.get(chatKey); got != nil {
 		t.Fatalf("the chat payload must be dropped, got %+v", got)
 	}
-	if got := stash.get("sess\x1fopenai_responses\x1fmodel-b"); got != nil {
+	if got := stash.get(responsesKey); got != nil {
 		t.Fatalf("the responses payload must be dropped, got %+v", got)
 	}
-	if stash.get("sess-other\x1fopenai_chat\x1fmodel-a") == nil {
+	if stash.get(otherKey) == nil {
 		t.Fatal("another session must keep its payload")
 	}
 }

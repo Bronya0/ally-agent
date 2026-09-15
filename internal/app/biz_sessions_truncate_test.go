@@ -108,3 +108,47 @@ func TestTruncateSessionHistoryBacksUpToolTurn(t *testing.T) {
 		t.Fatalf("last message should be the tool-round assistant, got %+v", restored[len(restored)-1])
 	}
 }
+
+// TestTruncateSessionHistoryKeepsRoundBeforeAToolResult covers the shape where a
+// user turn directly follows a tool result — a message queued while the run was
+// working, or the first message after a run interrupted between a tool result and
+// the next turn. The old rewind stepped back to the previous user turn, so
+// deleting "second question" also dropped the first question's whole round, and
+// emptied the history outright when that round was the first one.
+func TestTruncateSessionHistoryKeepsRoundBeforeAToolResult(t *testing.T) {
+	app := NewApp()
+	app.initialized = true
+	app.historiesDir = t.TempDir()
+
+	sessionID := "trunc-after-tool"
+	initial := []openai.ChatCompletionMessage{
+		{Role: openai.ChatMessageRoleUser, Content: "run a tool"},
+		{Role: openai.ChatMessageRoleAssistant, ToolCalls: []openai.ToolCall{{ID: "call_1", Type: "function", Function: openai.FunctionCall{Name: "read", Arguments: `{"path":"a.go"}`}}}},
+		{Role: openai.ChatMessageRoleTool, ToolCallID: "call_1", Content: `{"ok":true}`},
+		{Role: openai.ChatMessageRoleUser, Content: "queued follow-up"},
+		{Role: openai.ChatMessageRoleAssistant, Content: "follow-up answer"},
+	}
+	app.saveHistory(sessionID, initial)
+
+	kept, err := app.TruncateSessionHistory(TruncateSessionHistoryRequest{
+		SessionID:        sessionID,
+		UserMessageIndex: 1,
+		ExpectedContent:  "queued follow-up",
+	})
+	if err != nil {
+		t.Fatalf("TruncateSessionHistory: %v", err)
+	}
+	if kept != 3 {
+		t.Fatalf("kept = %d, want 3 (the first question plus its tool round)", kept)
+	}
+	restored := app.loadSessionHistoryCopy(sessionID)
+	if len(restored) != 3 {
+		t.Fatalf("restored len = %d, want 3: %#v", len(restored), restored)
+	}
+	if restored[0].Role != openai.ChatMessageRoleUser || !strings.Contains(restored[0].Content, "run a tool") {
+		t.Fatalf("the kept round lost its question: %#v", restored[0])
+	}
+	if len(restored[1].ToolCalls) != 1 || restored[2].ToolCallID != "call_1" {
+		t.Fatalf("the kept round lost its tool pairing: %#v", restored)
+	}
+}

@@ -145,12 +145,24 @@ func reasoningStashKey(sessionKey string) string {
 // fresh payload instead of reusing the previous one (pi: transform-messages.ts
 // isSameModel). The separator is stripped from the session component so a
 // caller-supplied session id cannot forge another session's key.
+// reasoningStashScope normalizes the session component of every stash key. It is
+// the one place the write path (reasoningReplayKey, whose cfg carries
+// openAIResponsesPromptCacheKey(sessionID)) and the cleanup path (clearSession,
+// which only has the raw session id) have to agree on: they used to derive it
+// separately — the write path hashed the id, the cleanup path compared the raw
+// id — which silently turned clearSession into a no-op, so released and rewound
+// sessions kept replaying signatures of turns that no longer existed and their
+// entries occupied the LRU against live tool loops.
+func reasoningStashScope(sessionID string) string {
+	return strings.ReplaceAll(reasoningStashKey(sessionID), "\x1f", "_")
+}
+
 func reasoningReplayKey(cfg ConfigState, model string) string {
 	if strings.TrimSpace(model) == "" {
 		model = cfg.Model
 	}
 	return strings.Join([]string{
-		strings.ReplaceAll(reasoningStashKey(cfg.responsesPromptCacheKey), "\x1f", "_"),
+		reasoningStashScope(cfg.responsesPromptCacheKey),
 		normalizeAPIFormat(cfg.APIFormat),
 		strings.ToLower(strings.TrimSpace(model)),
 	}, "\x1f")
@@ -227,11 +239,11 @@ func (s *reasoningStash) clear(key string) {
 // rewind/truncate): the retained signatures and encrypted reasoning belong to
 // turns that no longer exist, and replaying them later would attach them to an
 // unrelated assistant message.
-func (s *reasoningStash) clearSession(sessionKey string) {
+func (s *reasoningStash) clearSession(sessionID string) {
 	if s == nil {
 		return
 	}
-	prefix := reasoningStashKey(sessionKey) + "\x1f"
+	prefix := reasoningStashScope(openAIResponsesPromptCacheKey(sessionID)) + "\x1f"
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for key := range s.entries {
@@ -526,34 +538,35 @@ func chatReasoningBackfillKey(cfg ConfigState) string {
 // the chat adapter require one of {finish_reason, [DONE]} instead of guessing
 // (pi does the same by requiring a finish_reason, openai-completions.ts:685-693).
 //
-// The frame is matched the way go-openai's own reader matches it (`^data:\s*`
-// before comparing the payload against "[DONE]", stream_reader.go:13-16 and
-// :96-99), not by a single literal: `data: [DONE]`, `data:[DONE]` and
-// `data:  [DONE]` all terminate the stream for the SDK, so a literal-only match
-// would report a finished stream as truncated whenever a gateway sends one of
-// the other spellings.
+// The terminator frame is matched the way go-openai's own reader matches it
+// (`strings.TrimSpace(line)` → prefix `data:` → TrimSpace of the rest equals
+// "[DONE]", stream_reader.go:13-16 and :96-99), not by a single literal:
+// `data: [DONE]`, `data:[DONE]` and `data:  [DONE]` all terminate the stream for
+// the SDK, so a literal-only match would report a finished stream as truncated
+// whenever a gateway sends one of the other spellings.
+//
+// Matching is anchored to a frame line and never searched for in the raw byte
+// window: the window also holds the payloads, so assistant text or a tool
+// argument that literally contains `data: [DONE]` (a review of this scanner, an
+// SSE test file) would mark a stream that is cut later as complete, and the
+// truncated turn would be persisted as a finished one.
 var (
 	sseDoneField = []byte("data:")
 	sseDoneToken = []byte("[DONE]")
 )
 
-// sseDoneCarryLen is how many trailing bytes of a read are kept for the next
-// one so a terminator split across two reads is still recognized: the field name
-// plus the whitespace a gateway may put between it and the payload.
-const sseDoneCarryLen = 16
+// maxSSEDoneLineBytes bounds the per-line buffer: every accepted spelling of the
+// terminator fits in far less, so a longer line is known not to be one and its
+// bytes are dropped instead of accumulated.
+const maxSSEDoneLineBytes = 64
 
-// containsSSEDone reports whether window holds a terminator frame.
-func containsSSEDone(window []byte) bool {
-	for {
-		idx := bytes.Index(window, sseDoneField)
-		if idx < 0 {
-			return false
-		}
-		window = bytes.TrimLeft(window[idx+len(sseDoneField):], " \t")
-		if bytes.HasPrefix(window, sseDoneToken) {
-			return true
-		}
+// lineIsSSEDone reports whether one complete frame line is the terminator.
+func lineIsSSEDone(line []byte) bool {
+	trimmed := bytes.TrimSpace(line)
+	if !bytes.HasPrefix(trimmed, sseDoneField) {
+		return false
 	}
+	return bytes.Equal(bytes.TrimSpace(trimmed[len(sseDoneField):]), sseDoneToken)
 }
 
 type sseDoneWatcher struct{ seen atomic.Bool }
@@ -577,32 +590,63 @@ func (w *sseDoneWatcher) reset() {
 	w.seen.Store(false)
 }
 
-// sseDoneReadCloser scans the response body for the terminator, carrying the
-// last len(sseDoneMarker)-1 bytes across reads so a marker split between two
-// Read calls is still matched.
+// sseDoneReadCloser matches the terminator frame while the body streams by. Only
+// the current, not yet newline-terminated line is kept (bounded by
+// maxSSEDoneLineBytes), which is what lets a marker split across two reads — or
+// two events arriving in one read — still be recognized.
 type sseDoneReadCloser struct {
 	rc      io.ReadCloser
 	watcher *sseDoneWatcher
-	carry   []byte
-	window  []byte
+	line    []byte
+	// dead marks a line that can no longer be the terminator (it got too long).
+	// Its remainder is the middle of a line, never the start of a new one.
+	dead bool
 }
 
 func (r *sseDoneReadCloser) Read(p []byte) (int, error) {
 	n, err := r.rc.Read(p)
 	if n > 0 && !r.watcher.Done() {
-		r.window = append(r.window[:0], r.carry...)
-		r.window = append(r.window, p[:n]...)
-		if containsSSEDone(r.window) {
-			r.watcher.mark()
-		}
-		keep := sseDoneCarryLen
-		if len(r.window) > keep {
-			r.carry = append(r.carry[:0], r.window[len(r.window)-keep:]...)
-		} else {
-			r.carry = append(r.carry[:0], r.window...)
-		}
+		r.scanLines(p[:n])
+	}
+	if err != nil && !r.watcher.Done() && r.lineIsDone() {
+		// The last line of a body is not required to end with a newline.
+		r.watcher.mark()
 	}
 	return n, err
+}
+
+func (r *sseDoneReadCloser) scanLines(chunk []byte) {
+	for len(chunk) > 0 {
+		idx := bytes.IndexByte(chunk, '\n')
+		if idx < 0 {
+			r.appendLine(chunk)
+			return
+		}
+		r.appendLine(chunk[:idx])
+		if r.lineIsDone() {
+			r.watcher.mark()
+			return
+		}
+		r.line = r.line[:0]
+		r.dead = false
+		chunk = chunk[idx+1:]
+	}
+}
+
+func (r *sseDoneReadCloser) appendLine(b []byte) {
+	if r.dead {
+		return
+	}
+	if len(r.line)+len(b) > maxSSEDoneLineBytes {
+		r.dead = true
+		r.line = r.line[:0]
+		return
+	}
+	r.line = append(r.line, b...)
+}
+
+func (r *sseDoneReadCloser) lineIsDone() bool {
+	return !r.dead && lineIsSSEDone(r.line)
 }
 
 func (r *sseDoneReadCloser) Close() error { return r.rc.Close() }

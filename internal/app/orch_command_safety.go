@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	"ally-dev/internal/tools/command"
+	"ally-dev/internal/tools/pathutil"
 )
 
 // checkCommandSafety resolves a request cwd before inspecting relative mutation
@@ -46,11 +47,32 @@ func checkCommandSafetyAtCwd(req CommandRequest, roots []string, workingDir stri
 	if command.ContainsExplicitDeleteCommand(cmd) && !command.IsAllowedDeleteContext(cmd) {
 		return codedToolError("E_COMMAND_BLOCKED", fmt.Errorf("安全围栏已拦截：command 不允许直接执行文件删除命令。\n原因：shell 删除命令可能绕过工作区边界、系统目录和 .git 保护。\n处理方式：请改用 delete 工具，由专用工具检查目标路径和递归范围。\n被拦截的命令：%s", cmd))
 	}
+	if risk := firstVCSMetadataMutationTarget(cmd, workingDir); risk != nil {
+		return codedToolError("E_PROTECTED_PATH", fmt.Errorf("安全围栏已拦截：命令目标是版本控制元数据内的路径。\n原因：创建、覆盖或删除 .git/.svn/.hg 的元数据会损坏仓库，写入 hooks 更会在下次 git 命令时执行代码；目标在工作区内，所以工作区外检查不会拦它。\n检测到的目标：%s\n处理方式：版本控制状态请手动在终端变更。\n被拦截的命令：%s", risk.Path, cmd))
+	}
 	if risk := firstExistingOutsideMutationTarget(cmd, roots, workingDir); risk != nil {
 		return codedToolError("E_PATH_OUTSIDE", fmt.Errorf("安全围栏已拦截：命令可能修改工作区外的受保护目标。\n原因：%s。\n检测到的目标：%s\n允许的操作：读取工作区外路径、写入 /dev/null 等空设备、创建不存在的新路径。\n禁止的操作：覆盖、追加、移动、改权限或以其他方式修改已经存在的工作区外文件或目录。\n允许写入的根目录：\n%s\n被拦截的命令：%s", risk.Reason, risk.Path, formatAllowedRoots(roots), cmd))
 	}
 	if risk := command.MatchRiskPattern(cmd); risk != nil {
 		return codedToolError("E_COMMAND_BLOCKED", fmt.Errorf("高危命令拒绝: 检测到%s - 命令已被安全围栏拦截。\n如需执行此操作，请手动在终端中执行。\n被拦截的命令: %s", risk.Reason, cmd))
+	}
+	return nil
+}
+
+// firstVCSMetadataMutationTarget blocks commands whose statically resolvable
+// operands touch version-control metadata. Targets inside the workspace pass the
+// outside-write check by design, and .git used to have a delete guard only, so
+// `> .git/hooks/pre-commit` (code execution on the next git command) and
+// `> .git/index` (repository corruption) were both accepted.
+func firstVCSMetadataMutationTarget(commandLine string, workingDir string) *outsideMutationRisk {
+	for _, target := range command.LiteralWriteTargets(commandLine) {
+		path, ok := command.ResolveCommandLiteralPath(target.Path, workingDir)
+		if !ok {
+			continue
+		}
+		if blocked, _ := pathutil.VCSMetadataReason(path); blocked {
+			return &outsideMutationRisk{Path: filepath.ToSlash(path)}
+		}
 	}
 	return nil
 }

@@ -1897,29 +1897,55 @@ func TestNormalizeToolsForOpenAIChatAlwaysCarriesParameters(t *testing.T) {
 }
 
 // TestSSEDoneScannerAcceptsEveryGatewaySpelling: go-openai matches the terminator
-// frame with `^data:\s*` before comparing its payload against "[DONE]"
-// (stream_reader.go:13-16 and :96-99), so the adapter's own scanner must accept
-// the same spellings. A literal-only match reports a finished stream as truncated
-// (errChatStreamNoFinishReason) whenever a gateway omits the canonical space.
+// frame as `strings.TrimSpace(line)` → prefix `data:` → TrimSpace of the rest
+// equals "[DONE]" (stream_reader.go:13-16 and :96-99), so the adapter's own
+// scanner must accept the same spellings. A literal-only match reports a finished
+// stream as truncated (errChatStreamNoFinishReason) whenever a gateway omits the
+// canonical space.
+//
+// Matching is anchored to a frame line: a payload that merely *contains* the
+// marker (assistant text, a tool argument, an SSE sample file) must not count,
+// otherwise a stream cut later is accepted as a finished turn.
 func TestSSEDoneScannerAcceptsEveryGatewaySpelling(t *testing.T) {
 	cases := []struct {
 		name string
-		body string
+		line string
 		want bool
 	}{
-		{"canonical", "data: [DONE]\n\n", true},
-		{"no space after the colon", "data:[DONE]\n\n", true},
-		{"extra spaces", "data:   [DONE]\n\n", true},
-		{"tab separator", "data:\t[DONE]\n\n", true},
-		{"payload is not the terminator", "data: {\"choices\":[]}\n\n", false},
+		{"canonical", "data: [DONE]", true},
+		{"no space after the colon", "data:[DONE]", true},
+		{"extra spaces", "data:   [DONE]", true},
+		{"tab separator", "data:\t[DONE]", true},
+		{"trailing carriage return", "data: [DONE]\r", true},
+		{"payload is not the terminator", `data: {"choices":[]}`, false},
 		{"unfinished frame", "data: [DO", false},
+		{"marker inside a payload", `data: {"content":"data: [DONE]"}`, false},
+		{"continuation of a longer line", `{"note":"data: [DONE]"}`, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := containsSSEDone([]byte(tc.body)); got != tc.want {
-				t.Fatalf("containsSSEDone(%q) = %v, want %v", tc.body, got, tc.want)
+			if got := lineIsSSEDone([]byte(tc.line)); got != tc.want {
+				t.Fatalf("lineIsSSEDone(%q) = %v, want %v", tc.line, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestSSEDoneReadCloserIgnoresMarkerInsidePayload: a payload that literally
+// contains `data: [DONE]` — assistant text reviewing this scanner, a tool
+// argument writing an SSE fixture — must not mark the stream as terminated. The
+// old scanner searched the raw byte window, so this body marked the stream done
+// and a later cut-off was persisted as a complete turn.
+func TestSSEDoneReadCloserIgnoresMarkerInsidePayload(t *testing.T) {
+	body := "data: {\"choices\":[{\"delta\":{\"content\":\"data: [DONE]\"}}]}\n\n" +
+		"data: {\"choices\":[{\"delta\":{\"content\":\"half\"}}]}\n\n"
+	watcher := &sseDoneWatcher{}
+	reader := &sseDoneReadCloser{rc: io.NopCloser(strings.NewReader(body)), watcher: watcher}
+	if _, err := io.ReadAll(reader); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if watcher.Done() {
+		t.Fatal("a marker inside a payload must not terminate the stream")
 	}
 }
 

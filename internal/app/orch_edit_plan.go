@@ -63,11 +63,22 @@ func planLocalEditBatch(cfg ConfigState, files []FileTextEdits, mode localEditPl
 	}
 	byTarget := make(map[string]int, len(files))
 	for i, file := range files {
-		resolved, resolveErr := safeJoin(roots, file.Path)
-		target, targetOK := localMutationTargetFromRoots(roots, file.Path)
-		if mode == localEditPlanForExecution && resolveErr != nil {
-			return localEditBatchPlan{}, fmt.Errorf("file %d (%s): %w", i+1, file.Path, resolveErr)
+		// Execution resolves the write path exactly like create/delete do, so a
+		// symlinked directory inside the workspace cannot carry the write
+		// outside it (SafeWriteFile creates its temp file in filepath.Dir(path),
+		// i.e. in the link's target). Conflict analysis stays lexical — it only
+		// needs a stable identity, and the path guards belong to the executor.
+		var resolved string
+		if mode == localEditPlanForExecution {
+			writePath, resolveErr := resolveWritableFilePath(roots, file.Path)
+			if resolveErr != nil {
+				return localEditBatchPlan{}, fmt.Errorf("file %d (%s): %w", i+1, file.Path, resolveErr)
+			}
+			resolved = writePath
+		} else {
+			resolved, _ = safeJoin(roots, file.Path)
 		}
+		target, targetOK := localMutationTargetFromRoots(roots, file.Path)
 		if !targetOK {
 			// An invalid target has no executable identity. Conflict analysis
 			// leaves argument/path validation to executeTool, matching the

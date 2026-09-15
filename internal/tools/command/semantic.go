@@ -621,13 +621,42 @@ func MutationPathTargets(commandLine string) []string {
 	return targets
 }
 
+// moveMutationTargets returns the destination followed by every source of a
+// move/rename: the destination is created or overwritten AND each source is
+// removed, so a source is a mutation target too. Treating a move like a copy
+// let `mv sources/x .` (shell) walk straight past the knowledge-base read-only
+// guard and `mv .git /tmp/x` past the repository-metadata guard.
+func moveMutationTargets(args []string) []string {
+	if values := optionValues(args, "-t", "--target-directory", "-destination"); len(values) > 0 {
+		// `mv -t DIR SRC...`: every operand that is not the option value is a
+		// source (rm -t style option values are not operands).
+		targets := append([]string(nil), values...)
+		for _, operand := range positionalArgs(args) {
+			if !containsString(values, operand) {
+				targets = append(targets, operand)
+			}
+		}
+		return targets
+	}
+	positionals := positionalArgs(args)
+	if len(positionals) < 2 {
+		return nil
+	}
+	// `mv SRC... DEST`: the last operand is the destination.
+	targets := make([]string, 0, len(positionals))
+	targets = append(targets, positionals[len(positionals)-1])
+	return append(targets, positionals[:len(positionals)-1]...)
+}
+
 func mutationTargets(invocation Invocation) []string {
 	switch invocation.Name {
-	case "cp", "copy", "mv", "move", "install", "ren", "rename", "copy-item", "move-item", "rename-item":
+	case "cp", "copy", "install", "copy-item":
 		if values := optionValues(invocation.Args, "-t", "--target-directory", "-destination"); len(values) > 0 {
 			return values
 		}
 		return lastPositional(invocation.Args)
+	case "mv", "move", "ren", "rename", "move-item", "rename-item":
+		return moveMutationTargets(invocation.Args)
 	case "touch":
 		return touchTargets(invocation.Args)
 	case "mkdir", "md", "tee", "new-item":

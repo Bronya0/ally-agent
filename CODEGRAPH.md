@@ -16,6 +16,7 @@
 | edit 读写契约 / 原子写 / 冲突合并 | `orch_edit_plan.go` → `orch_edit.go` → `tools/edit`、`tools/read` |
 | 命令安全拦截与路径校验 | `orch_command_safety.go` + `internal/tools/command` |
 | 文件基础读写与删除防护 | `internal/app/orch_file_ops.go` |
+| 受保护路径判定（VCS 元数据 / 路径别名归一） | `internal/tools/pathutil/pathutil.go`（`CanonicalPath` / `VCSMetadataReason`；写、删、命令目标三条入口共用） |
 | 会话/历史持久化与坏数据修复 | `internal/app/biz_sessions.go` |
 | 系统提示词组装 | `internal/app/biz_prompt.go` |
 | 请求消息与上下文 Token 核算（口径：请求前缀 + provider 实测锚点） | `internal/app/biz_context.go`（`sessionPrefixBreakdown` / `contextAnchor` / `finalizeSessionBreakdown`） |
@@ -41,7 +42,7 @@
 
 `main()` → `NewApp()` → Wails 装配 → 前端 `StartChat()` → `app.runChat()`: `buildMessages()`（biz_context）→ `buildToolsWithMcp()`（biz_mcp）→ `streamModelResponse()`（prov_model）→ 流式事件经 `host_events` 到前端 → 工具分发 `executeTool()`（并发 4，文件变更串行）→ 结果回填循环 → `saveHistory()`（biz_sessions）。子代理/调度任务走 `executeDelegate()`（orch_subagent）。
 
-每个 step 开头汇总上下文用量并决定是否 auto-compact：`breakdownAcc.update()`（消息估算）+ `sessionPrefixBreakdown()`（系统提示词 / 工作区地图 / 计划快照）+ `finalizeSessionBreakdown()`（provider 实测锚点）→ `bd.Total` 与阈值比较。footer 与自动压缩读同一个数。
+每个 step 开头汇总上下文用量并决定是否 auto-compact：`breakdownAcc.update()`（消息估算）+ `sessionPrefixBreakdown()`（系统提示词 / 工作区地图 / 计划快照）+ `finalizeSessionBreakdown()`（provider 实测锚点）→ `bd.Total` 与阈值比较。footer 与自动压缩读同一个数。压缩统一走 `compactRunHistory(reason)`：`threshold` 为阈值触发（失败不致命），`overflow` 为请求被判定上下文超长后的强制压缩并重试（`llmErrorKindContextTooLong`）；压缩也失败才报出可操作提示。
 
 ## 后端分层架构
 

@@ -20,6 +20,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -272,6 +273,25 @@ func HashVersion(data []byte) string {
 func HashBytesAndVersion(data []byte) (sha256Hex, version string) {
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:]), VersionFromSHA256(sum[:])
+}
+
+// HashFileAndVersion hashes the file at path without holding its contents in
+// memory and returns the same (sha256 hex, version token) pair
+// HashBytesAndVersion derives from bytes. Callers whose size guard must not
+// require reading the whole file first (the image read path) use this instead
+// of os.ReadFile so a huge file cannot be pulled into memory.
+func HashFileAndVersion(path string) (sha256Hex, version string, err error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", "", err
+	}
+	defer file.Close()
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return "", "", err
+	}
+	sum := hash.Sum(nil)
+	return hex.EncodeToString(sum), VersionFromSHA256(sum), nil
 }
 
 // VersionFromSHA256 derives the 6-character Crockford Base32 version token

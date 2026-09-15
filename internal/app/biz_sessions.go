@@ -1144,55 +1144,68 @@ func sanitizeHistoryMessagesFor(messages []openai.ChatCompletionMessage, profile
 // reject every request with 400 because the dangling tool_calls can never be
 // answered. Unanswered tool_calls are stripped (the assistant text is kept);
 // orphan and duplicate tool messages are dropped.
+//
+// Calls are tracked per declared position instead of per ID. A relay can return
+// two tool_calls sharing one ID, and the old ID-keyed table consumed the entry
+// on the first result: the second result was dropped as a duplicate *and* the
+// entry was gone, so the call that was never answered stayed in the history — a
+// permanent 400 that this function was supposed to repair.
 func repairDanglingToolCalls(messages []openai.ChatCompletionMessage) []openai.ChatCompletionMessage {
 	out := make([]openai.ChatCompletionMessage, 0, len(messages))
-	// pending maps toolCallID -> index in out of the assistant message that
-	// declared it. An entry is removed once its tool result arrives.
-	pending := make(map[string]int)
-	// closeTurn strips every still-pending (never answered) tool_call from
-	// the assistant message that declared it. It runs whenever the current
-	// assistant turn ends: the next assistant/user message, or the end of the
-	// history.
+	// pending maps toolCallID -> the declared calls still awaiting a result, in
+	// declaration order. Entries are consumed as results arrive.
+	pending := make(map[string][]pendingToolCall)
+	// closeTurn strips every still-pending (never answered) tool_call from the
+	// message that declared it. It runs whenever the current assistant turn
+	// ends: the next assistant/user message, or the end of the history.
 	closeTurn := func() {
 		if len(pending) == 0 {
 			return
 		}
-		dangling := make(map[string]bool, len(pending))
-		for id := range pending {
-			dangling[id] = true
+		strip := make(map[int]map[int]bool, len(pending))
+		for _, queue := range pending {
+			for _, call := range queue {
+				if strip[call.msgIndex] == nil {
+					strip[call.msgIndex] = map[int]bool{}
+				}
+				strip[call.msgIndex][call.callIndex] = true
+			}
 		}
-		byIndex := make(map[int]bool)
-		for _, idx := range pending {
-			byIndex[idx] = true
-		}
-		for idx := range byIndex {
-			kept := make([]openai.ToolCall, 0, len(out[idx].ToolCalls))
-			for _, call := range out[idx].ToolCalls {
-				if !dangling[call.ID] {
+		for msgIndex, callIndexes := range strip {
+			kept := make([]openai.ToolCall, 0, len(out[msgIndex].ToolCalls))
+			for i, call := range out[msgIndex].ToolCalls {
+				if !callIndexes[i] {
 					kept = append(kept, call)
 				}
 			}
-			updated := out[idx]
+			updated := out[msgIndex]
 			updated.ToolCalls = kept
-			out[idx] = updated
+			out[msgIndex] = updated
 		}
-		pending = make(map[string]int)
+		pending = make(map[string][]pendingToolCall)
 	}
 	for _, m := range messages {
 		switch m.Role {
 		case openai.ChatMessageRoleAssistant:
 			closeTurn()
 			out = append(out, m)
-			for _, call := range m.ToolCalls {
-				pending[call.ID] = len(out) - 1
+			assistantIndex := len(out) - 1
+			for i, call := range m.ToolCalls {
+				pending[call.ID] = append(pending[call.ID], pendingToolCall{msgIndex: assistantIndex, callIndex: i})
 			}
 		case openai.ChatMessageRoleTool:
-			if _, answered := pending[m.ToolCallID]; !answered {
-				// Orphan tool result (no pending call, or a duplicate result
-				// for an already-answered call) — providers reject these too.
+			queue := pending[m.ToolCallID]
+			if len(queue) == 0 {
+				// Orphan tool result: no pending call, or one more result than the
+				// turn declared. Providers reject these too.
 				continue
 			}
-			delete(pending, m.ToolCallID)
+			// One result answers the oldest call still waiting for this ID.
+			if len(queue) == 1 {
+				delete(pending, m.ToolCallID)
+			} else {
+				pending[m.ToolCallID] = queue[1:]
+			}
 			out = append(out, m)
 		default:
 			closeTurn()
@@ -1210,6 +1223,14 @@ func repairDanglingToolCalls(messages []openai.ChatCompletionMessage) []openai.C
 		final = append(final, m)
 	}
 	return final
+}
+
+// pendingToolCall locates one declared tool_call: the assistant message holding
+// it (an index into the message list being built) and its position inside that
+// message's ToolCalls slice.
+type pendingToolCall struct {
+	msgIndex  int
+	callIndex int
 }
 
 func textFromMultiContent(parts []openai.ChatMessagePart) string {
@@ -1260,6 +1281,13 @@ func (a *App) TruncateSessionHistory(req TruncateSessionHistoryRequest) (int, er
 	}
 	if req.UserMessageIndex < 0 {
 		return 0, errors.New("user message index must be non-negative")
+	}
+
+	// A compaction rewrites the same history on its own goroutine, so a truncate
+	// running concurrently would be overwritten by the compaction result —
+	// silently restoring the turns the user just deleted.
+	if a.compactSessionRunning(sessionID) {
+		return 0, codedToolError("E_SESSION_COMPACTING", errors.New("session is compacting; retry the deletion after the compaction finishes"))
 	}
 
 	// Load the complete history, preferring the in-memory run source and
@@ -1318,26 +1346,17 @@ func (a *App) TruncateSessionHistory(req TruncateSessionHistoryRequest) (int, er
 		}
 	}
 
-	// If the located user turn is the first message in history, there is
-	// nothing before it to keep; treat that as "keep everything up to it".
-	// Otherwise keep everything strictly before the target user turn. If a
-	// tool-call assistant turn immediately precedes it, back up to the user
-	// turn that opened that round so the truncated prefix is an intact
-	// protocol sequence.
-
-	// Keep everything strictly before the target user turn. If a tool-call
-	// assistant turn immediately precedes it, back up to the user turn that
-	// opened that round so the truncated prefix is an intact protocol sequence.
-	cut := targetIndex
-	if cut > 0 && messages[cut-1].Role == openai.ChatMessageRoleTool {
-		for j := cut - 1; j >= 0; j-- {
-			if messages[j].Role == openai.ChatMessageRoleUser {
-				cut = j
-				break
-			}
-		}
-	}
-	truncated := messages[:cut]
+	// Keep everything strictly before the target user turn. No rewinding is
+	// needed on top of that: the only way such a prefix can be protocol-invalid
+	// is a trailing assistant message whose tool_calls were never answered, and
+	// repairDanglingToolCalls is the single authority on that invariant (saved
+	// and loaded histories already go through it). The old hand-written rewind
+	// ("a tool message precedes the cut, so back up to the user turn that opened
+	// that round") dropped that entire earlier round, and emptied the history
+	// when the target was the second user turn — which happens whenever the user
+	// message was queued while a run was working or the run was interrupted
+	// between a tool result and the next user turn.
+	truncated := repairDanglingToolCalls(messages[:targetIndex])
 
 	// The discarded turns may have left provider reasoning artifacts (thinking
 	// signatures, encrypted reasoning) in the replay stash; they no longer belong

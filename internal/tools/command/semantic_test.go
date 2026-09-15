@@ -132,7 +132,11 @@ func TestMutationPathTargetsDistinguishInputsFromOutputs(t *testing.T) {
 		want        []string
 	}{
 		{`cp /tmp/source.txt ./source.txt`, []string{"./source.txt"}},
-		{`mv /tmp/source.txt ./source.txt`, []string{"./source.txt"}},
+		// A move also removes its source, so the source is a mutation target:
+		// treating it like a copy let `mv sources/x .` past the knowledge-base
+		// read-only guard and `mv .git /tmp/x` past the metadata guard.
+		{`mv /tmp/source.txt ./source.txt`, []string{"./source.txt", "/tmp/source.txt"}},
+		{`mv -t ./dest /tmp/a.txt /tmp/b.txt`, []string{"./dest", "/tmp/a.txt", "/tmp/b.txt"}},
 		{`python -c "print(open('/etc/hosts').read())"`, nil},
 		{`node -e "console.log(require('fs').readFileSync('/etc/hosts'))"`, nil},
 		{`unzip -l /tmp/archive.zip`, nil},

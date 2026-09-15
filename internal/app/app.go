@@ -1914,6 +1914,59 @@ func (a *App) compactSession(parent context.Context, sessionID, instruction stri
 	return a.compactHistory(ctx, cfg, sessionID, instruction, history, tokensBefore)
 }
 
+const (
+	// compactReasonThreshold is the auto-compaction trigger: context usage is
+	// above the configured threshold.
+	compactReasonThreshold = "threshold"
+	// compactReasonOverflow is the recovery path for a provider that rejected the
+	// request as context-too-long: the request is retried once after a forced
+	// compaction (pi's overflow recovery).
+	compactReasonOverflow = "overflow"
+)
+
+// errHistoryTooShortToCompact marks the "nothing worth summarizing" case. It is
+// not a failure the user can act on, so callers report it differently from a
+// real compaction failure.
+var errHistoryTooShortToCompact = errors.New("history is too short to compact")
+
+// compactRunHistory summarizes history and rebuilds the request message list
+// from the compacted result: system context, then the compacted history, then
+// the current user turn. The compaction call itself carries the trailing user
+// message (that is what it summarizes), so re-appending it here is what keeps it
+// in the request — carrying it inside the summarized history would duplicate it.
+//
+// reason labels the compact:start / run:compacted event pair so the UI can tell
+// a threshold compaction from the context-overflow recovery.
+func (a *App) compactRunHistory(ctx context.Context, cfg ConfigState, sessionID, reason string, req ChatRequest, history []openai.ChatCompletionMessage, tokensBefore int) ([]openai.ChatCompletionMessage, map[string]any, error) {
+	h := sanitizeHistoryMessages(history)
+	if len(h) <= 2 {
+		return nil, nil, errHistoryTooShortToCompact
+	}
+	a.emit("run:compact", map[string]any{"sessionId": sessionID, "tokensBefore": tokensBefore, "reason": reason})
+	result, err := a.compactHistory(ctx, cfg, sessionID, "", h, tokensBefore)
+	if err != nil {
+		return nil, nil, err
+	}
+	a.mu.Lock()
+	compacted := sanitizeHistoryMessages(a.histories[sessionID])
+	a.mu.Unlock()
+	messages := a.buildSystemContextMessages(sessionID, cfg, a.listCachedSkills())
+	messages = append(messages, compacted...)
+	if strings.TrimSpace(req.Message) != "" || len(req.Attachments) > 0 {
+		messages = appendUserMessageWithAttachments(messages, req.Message, req.Attachments)
+	}
+	payload := map[string]any{
+		"sessionId":    sessionID,
+		"tokensBefore": intFromAny(result["tokensBefore"]),
+		"tokensAfter":  intFromAny(result["tokensAfter"]),
+		"reason":       reason,
+	}
+	if s, _ := result["summary"].(string); s != "" {
+		payload["summary"] = s
+	}
+	return messages, payload, nil
+}
+
 // compactThresholdLimit returns the absolute token count at which
 // auto-compaction triggers for the given config (context window × threshold).
 func compactThresholdLimit(cfg ConfigState) int {
@@ -2136,6 +2189,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 	planAttached := false
 	for step := 0; step < maxAgentSteps; step++ {
 		sanitizedThisStep := false
+		overflowCompacted := false
 		select {
 		case <-ctx.Done():
 			// 记录用户主动取消标记，让下一轮模型能区分"用户中断"与
@@ -2178,37 +2232,16 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 		usedTokens := bd.Total
 		compactThreshold := compactThresholdLimit(cfg)
 		if usedTokens > compactThreshold {
-			// Auto-compaction: context reached threshold.
-			// Summarize older history while retaining recent work intact (cut-point design),
-			// preventing prefix cache invalidation on sub-threshold turns.
-			h := sanitizeHistoryMessages(messages)
-			if len(h) > 2 {
-				a.emit("run:compact", map[string]any{"sessionId": sessionID, "tokensBefore": usedTokens})
-				// The current request and any continuation prompt are re-appended
-				// below, so carrying the trailing user message into the compacted
-				// history would duplicate it.
-				if result, err := a.compactHistory(ctx, cfg, sessionID, "", h, usedTokens); err == nil {
-					a.mu.Lock()
-					compacted := sanitizeHistoryMessages(a.histories[sessionID])
-					a.mu.Unlock()
-					messages = a.buildSystemContextMessages(sessionID, cfg, a.listCachedSkills())
-					messages = append(messages, compacted...)
-					if strings.TrimSpace(req.Message) != "" || len(req.Attachments) > 0 {
-						messages = appendUserMessageWithAttachments(messages, req.Message, req.Attachments)
-					}
-					breakdownAcc.reset(messages)
-					payload := map[string]any{
-						"sessionId":    sessionID,
-						"tokensBefore": intFromAny(result["tokensBefore"]),
-						"tokensAfter":  intFromAny(result["tokensAfter"]),
-					}
-					if s, _ := result["summary"].(string); s != "" {
-						payload["summary"] = s
-					}
-					a.emit("run:compacted", payload)
-				} else {
-					a.emit("run:compacted", map[string]any{"sessionId": sessionID, "error": err.Error()})
-				}
+			// Auto-compaction: context reached the configured threshold. A failure
+			// here is not fatal on its own — the request still goes out, and if the
+			// provider answers context-too-long the overflow recovery below retries
+			// once with a forced compaction.
+			if newMessages, payload, compactErr := a.compactRunHistory(ctx, cfg, sessionID, compactReasonThreshold, req, messages, usedTokens); compactErr == nil {
+				messages = newMessages
+				breakdownAcc.reset(messages)
+				a.emit("run:compacted", payload)
+			} else if !errors.Is(compactErr, errHistoryTooShortToCompact) {
+				a.emit("run:compacted", map[string]any{"sessionId": sessionID, "error": compactErr.Error()})
 			}
 		}
 
@@ -2302,6 +2335,25 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 					a.emit("run:retry", map[string]any{"runId": runID, "sessionId": sessionID, "attempt": 1, "maxAttempts": 1, "reason": "context sanitized after provider 400"})
 					continue
 				}
+			}
+			// 上下文超窗是确定性失败：同一份历史再发多少次都是同一个 400
+			// (shouldRetryLLMError 对 llmErrorKindContextTooLong 返回 false)。
+			// 这里忽略阈值强制压缩一次再发(pi 的 overflow recovery:
+			// reason="overflow" + willRetry)，压缩后请求不再超窗、run 得以继续。
+			// 压缩本身也失败时(压缩请求用同一份历史、同一个模型，超窗时它同样会
+			// 失败)把两条原因一起报出来，用户才知道只能删历史自救。
+			if !overflowCompacted && !emittedEvents && classifyLLMError(err) == llmErrorKindContextTooLong {
+				overflowCompacted = true
+				newMessages, payload, compactErr := a.compactRunHistory(ctx, cfg, sessionID, compactReasonOverflow, req, messages, usedTokens)
+				if compactErr != nil {
+					emitRunEnd("run:error", "error", map[string]any{"error": fmt.Sprintf("%v；上下文超出模型窗口且压缩失败(%v)，请删除部分历史或改用窗口更大的模型后重试", err, compactErr)})
+					return
+				}
+				messages = newMessages
+				requestMessages = a.appendTransientTailForUserTurn(sessionID, messages, requestIncludesPlan)
+				breakdownAcc.reset(messages)
+				a.emit("run:compacted", payload)
+				continue
 			}
 			// 轮次重试只接管内层无法重试的场景:流中断(已发射事件,内层重试会
 			// 造成重复输出)或空响应(errEmptyModelResponse,内层重试逻辑不覆盖)。
@@ -2561,6 +2613,19 @@ func rawFunctionTool(name, description string, parameters map[string]any) openai
 }
 func normalizeToolName(name string) string { return toolshared.NormalizeName(name) }
 
+// withFileOpsLock runs fn while holding the file-operation mutex, the single
+// serialization point for every workspace write (model tools, UI bindings,
+// MovePath). The unlock is deferred instead of written by hand after the call:
+// executeTool converts a handler panic into a tool error, so a hand-written
+// Unlock is skipped on exactly that path — the mutex would then stay locked
+// forever and every later write, editor save, and UI binding would queue behind
+// it until the process restarts.
+func (a *App) withFileOpsLock(fn func()) {
+	a.fileOpsMu.Lock()
+	defer a.fileOpsMu.Unlock()
+	fn()
+}
+
 func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name string, args []byte) (result toolResult) {
 	// Tool execution digests model-controlled JSON and is the single choke
 	// point for the main loop, sub-agents, and scheduled tasks. A panic in
@@ -2689,9 +2754,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 			err = kbDenyCheckPaths(ctx, cfg, req.Path)
 		}
 		if err == nil {
-			a.fileOpsMu.Lock()
-			data, err = a.editFilesWithConfig(cfg, []FileTextEdits{req})
-			a.fileOpsMu.Unlock()
+			a.withFileOpsLock(func() { data, err = a.editFilesWithConfig(cfg, []FileTextEdits{req}) })
 			if err == nil {
 				data = attachValidation(data, a.validateChangedFilesForCall(ctx, cfg, []string{req.Path}))
 				a.invalidateWorkspaceMapCache(cfg)
@@ -2705,9 +2768,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 			err = kbDenyCheckPaths(ctx, cfg, req.Path)
 		}
 		if err == nil {
-			a.fileOpsMu.Lock()
-			data, err = a.createFileWithConfig(cfg, req)
-			a.fileOpsMu.Unlock()
+			a.withFileOpsLock(func() { data, err = a.createFileWithConfig(cfg, req) })
 			if err == nil {
 				data = attachValidation(data, a.validateChangedFilesForCall(ctx, cfg, []string{req.Path}))
 				a.invalidateWorkspaceMapCache(cfg)
@@ -2721,9 +2782,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 			err = kbDenyCheckPaths(ctx, cfg, req.Path)
 		}
 		if err == nil {
-			a.fileOpsMu.Lock()
-			data, err = a.deletePathWithConfig(cfg, req)
-			a.fileOpsMu.Unlock()
+			a.withFileOpsLock(func() { data, err = a.deletePathWithConfig(cfg, req) })
 			if err == nil {
 				a.invalidateWorkspaceMapCache(cfg)
 				invalidateRunReadCache(ctx)

@@ -164,8 +164,17 @@ func classifyLLMError(err error) llmErrorKind {
 			}
 			return llmErrorKindRateLimited
 		case status == 400:
-			// 400 的细分(上下文超长/模型不存在文案)交给关键词阶段补充;
-			// typed 只确认 "服务端拒绝了本请求"。
+			// 400 的细分必须在 typed 分支里完成：关键词阶段在本分支之后，而这里
+			// 会 return，否则上下文超长/模型不存在永远分不到自己的枚举（注释曾
+			// 说交给关键词阶段补充，实际上走不到）。重试策略不受影响——
+			// shouldRetryLLMError 对这三种都返回 false；但 overflow 恢复与
+			// sanitize 以外的处理依赖这个细分。
+			if llmContextTooLongPattern.MatchString(msg) {
+				return llmErrorKindContextTooLong
+			}
+			if llmErrorTextMatchesAny(msg, llmModelNotFoundMarkers) {
+				return llmErrorKindModelNotFound
+			}
 			return llmErrorKindDeterministic400
 		}
 	}
