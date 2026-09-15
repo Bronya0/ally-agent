@@ -499,7 +499,6 @@ const zh = {
   'composer.context.part.custom': '自定义提示词',
   'composer.context.part.workspace': '工作区文件结构',
   'composer.context.part.plan': '计划快照',
-  'composer.context.part.time': '当前时间',
 
   'git.title': 'Git 改动',
   'git.loading': '正在加载 diff...',
@@ -1329,7 +1328,7 @@ Response language: Preserve the response language already used in the current co
   'composer.context.part.core': 'Core system prompt', 'composer.context.part.skills': 'Skill metadata',
   'composer.context.part.memory': 'Global memory index', 'composer.context.part.instructions': 'AGENTS.md / project instructions',
   'composer.context.part.custom': 'Custom prompt', 'composer.context.part.workspace': 'Workspace file map',
-  'composer.context.part.plan': 'Plan snapshot', 'composer.context.part.time': 'Current time',
+  'composer.context.part.plan': 'Plan snapshot',
 
   'git.title': 'Git changes', 'git.loading': 'Loading diff...', 'git.empty': 'No Git changes.',
   'git.noText': 'No text diff.', 'git.selectFile': 'Select a file to view its diff.', 'git.loadFailed': 'Failed to load Git diff',

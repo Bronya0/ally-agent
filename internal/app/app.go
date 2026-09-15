@@ -2245,8 +2245,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			}
 		}
 
-		// 每次请求都在最新用户消息前附带瞬态尾部（当前时间）；未完成的计划只在
-		// 本次运行的第一次请求前附带一次。
+		// 未完成的计划只在本次运行的第一次请求前、于最新用户消息之前附带一次。
 		requestIncludesPlan := !planAttached
 		planAttached = true
 		requestMessages := a.appendTransientTailForUserTurn(sessionID, messages, requestIncludesPlan)

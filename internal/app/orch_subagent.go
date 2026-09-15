@@ -605,10 +605,6 @@ func subagentSystemPrompt(role string) string {
 func (a *App) buildSubagentEnv(cfg ConfigState) string {
 	var b strings.Builder
 	b.WriteString("Workspace: " + cfg.Workspace + "\n")
-	// Sub-agents have no user turn, so the transient tail of the main agent
-	// never reaches them; this env is built once per run, so the line is stable
-	// within that run.
-	b.WriteString(formatCurrentTimeNotice() + "\n")
 
 	entries, err := a.listFilesWithConfig(cfg, ListFilesRequest{MaxDepth: 2, Limit: 60, ModelFacing: true})
 	if err == nil && len(entries.Entries) > 0 {

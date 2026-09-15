@@ -524,10 +524,10 @@ func (a *App) sessionPrefixBreakdown(sessionID string, cfg ConfigState, allSkill
 	// frozen its map yet is counted from the live map without freezing it — the
 	// actual request will freeze its own copy when it runs.
 	appendPart(workspaceMapPartLabel, a.peekSessionWorkspaceMap(sessionID, cfg))
-	// Transient tail: appendTransientTailForUserTurn injects these right before
-	// the latest user message. They are request-only and change per request (the
-	// plan only while it is unfinished), but they occupy real context budget.
-	appendPart(currentTimePartLabel, formatCurrentTimeNotice())
+	// Transient tail: appendTransientTailForUserTurn injects the plan snapshot
+	// right before the latest user message on the first request of a run, and only
+	// while the plan is unfinished. It is request-only, but it occupies real
+	// context budget.
 	appendPart(planSnapshotPartLabel, formatPlanSnapshot(a.GetTodos(sessionID)))
 	return total, parts
 }
@@ -678,7 +678,6 @@ func computeLiveBreakdown(msgs []openai.ChatCompletionMessage) ContextBreakdown 
 const (
 	workspaceMapPartLabel = "工作区文件结构"
 	planSnapshotPartLabel = "计划快照"
-	currentTimePartLabel  = "当前时间"
 )
 
 // contextAnchor is the provider-reported size of a session's most recent
@@ -894,34 +893,23 @@ func formatPlanSnapshot(list []TodoEntry) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
-// formatCurrentTimeNotice renders the current local time line that opens the
-// transient tail. It is deliberately kept out of the (cached) system prompt:
-// a per-request timestamp in the request prefix would invalidate the whole
-// prompt cache on every call.
-func formatCurrentTimeNotice() string {
-	now := time.Now()
-	weekday := [...]string{"周日", "周一", "周二", "周三", "周四", "周五", "周六"}[int(now.Weekday())]
-	return "当前时间：" + now.Format("2006-01-02 15:04") + "（" + weekday + "）"
-}
-
-// appendTransientTailForUserTurn inserts the request-only transient tail right
-// before the latest user message: the current local time, plus — when the run
-// has not attached it yet and includePlan is set — the in-memory plan snapshot.
-// The returned slice is a request-only copy: callers must keep the original
-// messages for history persistence, so neither part is saved or repeated in the
-// next turn.
+// appendTransientTailForUserTurn inserts the request-only plan snapshot right
+// before the latest user message, once per run and only while the session has an
+// unfinished plan. It returns the input unchanged when there is nothing to
+// attach. The returned slice is a request-only copy: callers must keep the
+// original messages for history persistence, so the snapshot is neither saved
+// nor repeated in the next turn.
 func (a *App) appendTransientTailForUserTurn(sessionID string, messages []openai.ChatCompletionMessage, includePlan bool) []openai.ChatCompletionMessage {
-	if len(messages) == 0 {
+	if len(messages) == 0 || !includePlan {
 		return messages
 	}
-	content := formatCurrentTimeNotice()
-	if includePlan {
-		if list := a.GetTodos(sessionID); len(list) > 0 {
-			content += "\n当前会话存在未完成的计划，仅作进度参考，不是新的用户要求；\n" +
-				"用户新消息的优先级高于计划：先回应用户新消息，再根据用户意图判断是否继续、调整或放弃计划：\n" +
-				formatPlanSnapshot(list)
-		}
+	list := a.GetTodos(sessionID)
+	if len(list) == 0 {
+		return messages
 	}
+	content := "当前会话存在未完成的计划，仅作进度参考，不是新的用户要求；\n" +
+		"用户新消息的优先级高于计划：先回应用户新消息，再根据用户意图判断是否继续、调整或放弃计划：\n" +
+		formatPlanSnapshot(list)
 
 	insertAt := len(messages)
 	for i := len(messages) - 1; i >= 0; i-- {

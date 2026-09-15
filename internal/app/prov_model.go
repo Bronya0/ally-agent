@@ -970,9 +970,11 @@ func (a *App) openAIChatStreamAttempt(ctx context.Context, cfg ConfigState, clie
 		reasoningState.openTag = "<" + cfg.ReasoningTag + ">"
 		reasoningState.closeTag = "</" + cfg.ReasoningTag + ">"
 	}
-	// toolAcc 按 pi 的方式(index/id 双表)把流式增量归入对应调用;它必须在
-	// 整个流期间保持存活,否则只带 index、不带 id 的增量无法跨块匹配。
+	// toolAcc 把流式增量归入对应调用;它必须在整个流期间保持存活,否则只带
+	// index、不带 id 的增量无法跨块匹配。id 表先由对话历史播种:中转跨回合复用
+	// 同一个 id 时会被改写成唯一 id,而不是让下一个请求带上重复的 tool_call id。
 	toolAcc := newToolCallAccumulator(nil)
+	toolAcc.seedConversation(streamReq.Messages)
 	toolCalls := []legacyopenai.ToolCall{}
 	toolEventGate := newModelToolCallEventGate(func(event modelStreamEvent) {
 		emitModelStreamEvent(onEvent, event)
@@ -1129,6 +1131,10 @@ func (a *App) openAIChatStreamAttempt(ctx context.Context, cfg ConfigState, clie
 		a.reasoningStash.set(reasoningReplayKey(cfg, streamReq.Model), &sessionReasoningPayload{chatDetails: detailsJSON})
 	} else {
 		a.reasoningStash.clear(reasoningReplayKey(cfg, streamReq.Model))
+	}
+
+	if notes := toolAcc.diagnostics(); len(notes) > 0 {
+		log.Printf("[toolcall] %s", strings.Join(notes, "; "))
 	}
 
 	return &modelStreamResult{
@@ -2657,18 +2663,34 @@ func anthropicInputSchema(schema map[string]any) anthropic.ToolInputSchemaParam 
 	return result
 }
 
+// ensureResponsesToolCall resolves the tool call a Responses event belongs to. The
+// item id is the call's identity — a function_call item is never renamed — and the
+// output index is only a locator for the events that carry no item id (an
+// arguments delta without item_id). The index must therefore never win over a
+// differing item id, which is what the original lookup did: a relay that reuses
+// one output_index for two items had the second item merged into the first call,
+// and the item table was poisoned with the second id pointing at the first call.
 func ensureResponsesToolCall(toolCalls *[]legacyopenai.ToolCall, byOutput map[int64]int, byItemID map[string]int, outputIndex int64, itemID string) int {
-	if idx, ok := byOutput[outputIndex]; ok {
-		if itemID != "" {
-			byItemID[itemID] = idx
-		}
-		return idx
-	}
+	itemID = strings.TrimSpace(itemID)
 	if itemID != "" {
 		if idx, ok := byItemID[itemID]; ok {
-			byOutput[outputIndex] = idx
+			// Keep an alias for an index this item has not been seen on yet, but
+			// never overwrite the newest start binding: an id-less event has to keep
+			// resolving to the call that most recently started on that index.
+			if _, bound := byOutput[outputIndex]; !bound {
+				byOutput[outputIndex] = idx
+			}
 			return idx
 		}
+		// An index whose call has no item id yet belongs to this event: the relay
+		// opened the call without one and names it now. An index whose call already
+		// has an item id is a different item reusing that index.
+		if idx, ok := byOutput[outputIndex]; ok && !responsesSlotHasItemID(byItemID, idx) {
+			byItemID[itemID] = idx
+			return idx
+		}
+	} else if idx, ok := byOutput[outputIndex]; ok {
+		return idx
 	}
 	idx := len(*toolCalls)
 	*toolCalls = append(*toolCalls, legacyopenai.ToolCall{Type: legacyopenai.ToolTypeFunction})
@@ -2677,6 +2699,18 @@ func ensureResponsesToolCall(toolCalls *[]legacyopenai.ToolCall, byOutput map[in
 		byItemID[itemID] = idx
 	}
 	return idx
+}
+
+// responsesSlotHasItemID reports whether an already resolved call was named by an
+// item id. The item table holds one entry per call in the response, so a scan
+// keeps the caller from maintaining a third lookup table.
+func responsesSlotHasItemID(byItemID map[string]int, slot int) bool {
+	for _, mapped := range byItemID {
+		if mapped == slot {
+			return true
+		}
+	}
+	return false
 }
 
 // captureResponsesToolItemID records the item id (fc_…) the model assigned to a
@@ -3130,124 +3164,264 @@ func (s *anthropicUsageState) modelUsage() *modelUsage {
 	}
 }
 
-// toolCallAccumulator assembles streamed tool_calls deltas the way pi does
-// (openai-completions.ts:489-536): a delta is matched to its call through a
-// table keyed by the stream index and a table keyed by the call id. The index is
-// an opaque key, never a slice position, so a relay that numbers its calls from
-// 1 — or skips a number — no longer leaves a phantom empty call in the hole, and
-// a delta that carries only the id still finds its call. When neither table
-// matches, a new call is appended; no placeholder is ever created for a gap.
+// toolCallAccumulator assembles streamed tool_calls deltas into whole calls. Its
+// only job is to answer two questions per fragment: which call does this fragment
+// belong to, and is it a new one? The answers come from one ordered rule set,
+// strongest evidence first:
 //
-// Kept on top of pi (field-observed relay behaviour, locked by tests): the
-// "same index, different call" heuristic below, name/argument de-duplication.
+//  1. The id is the identity. A fragment that carries an id no open call owns
+//     starts a new call (a call never changes its id), so two fragments that both
+//     state an identity never merge unless their ids are equal. The stream index
+//     is only a locator and must never be consulted first: it used to be the
+//     primary key, and a relay that sends two calls under one index then had the
+//     second call's identity swallowed by the index table — the two were welded
+//     into one call with a spliced name and a corrupted argument string, and the
+//     round was lost with a misleading "arguments were truncated" error.
+//  2. For a fragment without an id, the index (or, when it carries no index at
+//     all, the newest open call) locates the call it continues, and the tool name
+//     decides whether it is in fact a different call: a name that continues the
+//     accumulated one — equal, a prefix ("http_" -> "http_request"), or a
+//     concatenation that spells a known tool name — is a continuation, while a
+//     fragment that names a known tool on its own is a different call. That name
+//     test is the only heuristic left, and it exists for relays that send neither
+//     an id nor a usable index.
+//  3. A fragment that states neither an id nor a name is a continuation: it is
+//     located through the index or the newest open call, and with no call to
+//     continue it is a stray and gets dropped instead of being appended as a
+//     nameless call (providers reject those).
+//
+// Ids come from toolcall.CallIDFoundry, seeded from the conversation, so every call
+// ends up with a unique id — even for a relay that reuses one id or sends none —
+// and every call stays pairable with its result.
 type toolCallAccumulator struct {
-	calls   []legacyopenai.ToolCall
-	byIndex map[int]int
-	byID    map[string]int
+	calls     []legacyopenai.ToolCall
+	byIndex   map[int]int
+	byID      map[string]int
+	synthetic map[int]bool
+	foundry   *toolcall.CallIDFoundry
+	notes     []string
 }
+
+// toolCallAction is what resolve decided for one fragment.
+type toolCallAction int
+
+const (
+	// toolCallMerge folds the fragment into the resolved call.
+	toolCallMerge toolCallAction = iota
+	// toolCallAppend starts a new call for the fragment.
+	toolCallAppend
+	// toolCallDrop discards a stray continuation.
+	toolCallDrop
+	// toolCallAdoptID keeps the resolved call and replaces the id the foundry
+	// minted with the provider's own id, sent after the call started.
+	toolCallAdoptID
+)
 
 func newToolCallAccumulator(existing []legacyopenai.ToolCall) *toolCallAccumulator {
 	acc := &toolCallAccumulator{
-		calls:   cloneToolCalls(existing),
-		byIndex: map[int]int{},
-		byID:    map[string]int{},
+		calls:     cloneToolCalls(existing),
+		byIndex:   map[int]int{},
+		byID:      map[string]int{},
+		synthetic: map[int]bool{},
+		foundry:   toolcall.NewCallIDFoundry(),
 	}
 	for i := range acc.calls {
-		acc.bind(i, acc.calls[i])
+		acc.bind(i, acc.calls[i].ID, nil)
 	}
 	return acc
 }
 
-// bind registers a slot under the delta's index and id (when present).
-func (acc *toolCallAccumulator) bind(slot int, delta legacyopenai.ToolCall) {
-	if delta.Index != nil {
-		acc.byIndex[*delta.Index] = slot
+// seedConversation registers the ids the conversation already uses, so a relay
+// that re-sends one of them (the common "call_0" per-response numbering) gets it
+// rewritten instead of producing a request whose assistant messages share a
+// tool_call id.
+func (acc *toolCallAccumulator) seedConversation(messages []legacyopenai.ChatCompletionMessage) {
+	for i := range messages {
+		for _, call := range messages[i].ToolCalls {
+			acc.foundry.Seed(call.ID)
+		}
+		acc.foundry.Seed(messages[i].ToolCallID)
 	}
-	if id := strings.TrimSpace(delta.ID); id != "" {
+}
+
+// diagnostics returns the notes recorded while assembling — rewritten duplicate
+// ids, adopted late ids, dropped strays — as log lines for the adapter.
+func (acc *toolCallAccumulator) diagnostics() []string {
+	notes := make([]string, 0, len(acc.notes))
+	for _, remap := range acc.foundry.Remaps() {
+		notes = append(notes, fmt.Sprintf("rewrote duplicate tool call id %q to %q", remap.Raw, remap.Assigned))
+	}
+	return append(notes, acc.notes...)
+}
+
+// bind registers a slot under the fragment's stream index and under an id.
+func (acc *toolCallAccumulator) bind(slot int, id string, index *int) {
+	if index != nil {
+		acc.byIndex[*index] = slot
+	}
+	if id = strings.TrimSpace(id); id != "" {
 		acc.byID[id] = slot
 	}
 }
 
-// slot resolves the call a delta belongs to, appending a new one when the delta
-// identifies neither a known index nor a known id.
-func (acc *toolCallAccumulator) slot(delta legacyopenai.ToolCall) int {
+// resolve decides where one fragment belongs. It never mutates the accumulated
+// calls; merge applies the outcome.
+func (acc *toolCallAccumulator) resolve(delta legacyopenai.ToolCall) (int, toolCallAction) {
+	id := strings.TrimSpace(delta.ID)
+	name := strings.TrimSpace(delta.Function.Name)
+	slotByID, hasID := -1, false
+	if id != "" {
+		slotByID, hasID = acc.byID[id]
+	}
+	slotByIndex, hasIndex := -1, false
 	if delta.Index != nil {
-		if i, ok := acc.byIndex[*delta.Index]; ok {
-			return i
-		}
+		slotByIndex, hasIndex = acc.byIndex[*delta.Index]
 	}
-	if id := strings.TrimSpace(delta.ID); id != "" {
-		if i, ok := acc.byID[id]; ok {
-			return i
+	// Rule 1: an id no open call owns starts a new call — unless the index still
+	// points at a call that is waiting for the provider id, because some relays
+	// send the id only after the call has already started.
+	if id != "" && !hasID {
+		if hasIndex && acc.synthetic[slotByIndex] {
+			return slotByIndex, toolCallAdoptID
 		}
+		return 0, toolCallAppend
 	}
-	acc.calls = append(acc.calls, legacyopenai.ToolCall{Type: legacyopenai.ToolTypeFunction})
-	return len(acc.calls) - 1
+	slot, ok := slotByID, hasID
+	if !ok {
+		slot, ok = slotByIndex, hasIndex
+	}
+	if !ok {
+		// Rule 2/3: no id and no usable index — the newest open call is the one a
+		// fragment belongs to, because a stream keeps a call's fragments adjacent.
+		if len(acc.calls) == 0 {
+			if id == "" && name == "" {
+				acc.note("dropped a tool call fragment with no call to continue: " + describeToolCallFragment(delta))
+				return 0, toolCallDrop
+			}
+			return 0, toolCallAppend
+		}
+		slot = len(acc.calls) - 1
+	}
+	// Rule 2: a fragment that names a tool the accumulated name is not continuing
+	// belongs to a different call.
+	if name != "" && !nameContinues(acc.calls[slot].Function.Name, name) {
+		return 0, toolCallAppend
+	}
+	return slot, toolCallMerge
 }
 
-// merge appends one streamed batch and returns the accumulated call list. It
-// must outlive the whole stream: index-only deltas (no id) can only be matched
-// across chunks while the tables are kept alive.
+// merge appends one streamed batch and returns the accumulated calls. It must
+// outlive the whole stream: index-only deltas can only be matched across chunks
+// while the tables are kept alive.
 func (acc *toolCallAccumulator) merge(deltas []legacyopenai.ToolCall) []legacyopenai.ToolCall {
 	for _, delta := range deltas {
-		slot := acc.slot(delta)
-		current := &acc.calls[slot]
-		// 不同工具名出现在同一个 Index:服务商可能对多个 tool_calls 使用了
-		// 相同的 Index（或都不带 Index），导致两个不同调用被合并。标准 OpenAI
-		// 规范里 name 只在首个 delta 出现一次，后续 delta name 为空。
-		// 判断方法（按证据强度）：
-		//  1. 两个非空且不同的 ID —— 无论工具名是否已知。两个 MCP 工具名拼接后
-		//     仍带 mcp__ 前缀，会被前缀检查误判为“已知名”，只有 ID 能区分。
-		//     标准流式不会在同一调用的后续 delta 里携带不同的 ID。
-		//  2. 拼接后是已知工具名，说明是渐进式分片（如 "http_" + "request"），
-		//     正常追加；如果拼接结果不是已知工具名但 delta 本身是已知工具名
-		//     （如 delta="list_files" 而 current="read"），说明是不同工具调用
-		//     被错误合并，追加新条目。
-		if delta.Function.Name != "" && current.Function.Name != "" &&
-			delta.Function.Name != current.Function.Name {
-			distinctCall := false
-			if delta.ID != "" && current.ID != "" && delta.ID != current.ID {
-				distinctCall = true
-			} else {
-				combined := current.Function.Name + delta.Function.Name
-				distinctCall = !isKnownToolName(combined) && isKnownToolName(delta.Function.Name)
-			}
-			if distinctCall {
-				acc.calls = append(acc.calls, legacyopenai.ToolCall{
-					Type: delta.Type,
-					ID:   delta.ID,
-					Function: legacyopenai.FunctionCall{
-						Name:      delta.Function.Name,
-						Arguments: delta.Function.Arguments,
-					},
-				})
-				slot = len(acc.calls) - 1
-				if acc.calls[slot].Type == "" {
-					acc.calls[slot].Type = legacyopenai.ToolTypeFunction
-				}
-				acc.bind(slot, delta)
-				continue
-			}
+		slot, action := acc.resolve(delta)
+		switch action {
+		case toolCallAppend:
+			acc.appendCall(delta)
+		case toolCallDrop:
+		case toolCallAdoptID:
+			acc.adoptID(slot, delta.ID)
+			acc.mergeInto(slot, delta)
+		default:
+			acc.mergeInto(slot, delta)
 		}
-		if delta.ID != "" {
-			current.ID = toolcall.MergeRepeatedDelta(current.ID, delta.ID)
-		}
-		if delta.Type != "" {
-			current.Type = delta.Type
-		}
-		if delta.Function.Name != "" {
-			current.Function.Name = toolcall.MergeRepeatedDelta(current.Function.Name, delta.Function.Name)
-		}
-		// Arguments are the one genuinely incremental field, but a relay that
-		// duplicates the whole first delta would double the opening arguments
-		// chunk too and corrupt the JSON; skip exact duplicates only — a
-		// prefix-based replace is NOT safe here because a legitimate
-		// continuation chunk can itself start with the accumulated prefix
-		// (nested JSON objects).
-		if delta.Function.Arguments != "" && delta.Function.Arguments != current.Function.Arguments {
-			current.Function.Arguments += delta.Function.Arguments
-		}
-		acc.bind(slot, delta)
 	}
 	return acc.calls
+}
+
+// appendCall starts a new call for a fragment that declares an identity.
+func (acc *toolCallAccumulator) appendCall(delta legacyopenai.ToolCall) {
+	id, synthetic := acc.foundry.Claim(delta.ID)
+	call := legacyopenai.ToolCall{
+		Type: delta.Type,
+		ID:   id,
+		Function: legacyopenai.FunctionCall{
+			Name:      delta.Function.Name,
+			Arguments: delta.Function.Arguments,
+		},
+	}
+	if call.Type == "" {
+		call.Type = legacyopenai.ToolTypeFunction
+	}
+	acc.calls = append(acc.calls, call)
+	slot := len(acc.calls) - 1
+	if synthetic {
+		acc.synthetic[slot] = true
+	}
+	acc.bind(slot, id, delta.Index)
+}
+
+// adoptID replaces the id the foundry minted with the provider's own id for a
+// call whose id arrived late.
+func (acc *toolCallAccumulator) adoptID(slot int, rawID string) {
+	id := strings.TrimSpace(rawID)
+	if id == "" || slot < 0 || slot >= len(acc.calls) {
+		return
+	}
+	delete(acc.synthetic, slot)
+	acc.calls[slot].ID = id
+	acc.bind(slot, id, nil)
+	acc.note(fmt.Sprintf("adopted the tool call id %q that arrived after the call started", id))
+}
+
+// mergeInto folds one fragment into an existing call: names and ids dedupe
+// through MergeRepeatedDelta (a relay that re-sends the full value must not
+// produce "http_requesthttp_request"), argument chunks concatenate, and an exact
+// duplicate argument chunk is skipped. A prefix-based replace is NOT safe for
+// arguments: a legitimate continuation chunk can itself start with the
+// accumulated prefix (nested JSON objects).
+func (acc *toolCallAccumulator) mergeInto(slot int, delta legacyopenai.ToolCall) {
+	current := &acc.calls[slot]
+	if id := strings.TrimSpace(delta.ID); id != "" {
+		current.ID = toolcall.MergeRepeatedDelta(current.ID, id)
+	}
+	if delta.Type != "" {
+		current.Type = delta.Type
+	}
+	if name := delta.Function.Name; name != "" {
+		current.Function.Name = toolcall.MergeRepeatedDelta(current.Function.Name, name)
+	}
+	if args := delta.Function.Arguments; args != "" && args != current.Function.Arguments {
+		current.Function.Arguments += args
+	}
+	acc.bind(slot, current.ID, delta.Index)
+}
+
+// nameContinues reports whether a fragment's tool name belongs to the call that
+// already accumulated `current`. Names arrive in pieces ("http_" then "request"),
+// relays re-send the whole name with every chunk, and a relay that reuses one
+// index for two calls names the second one outright: only that last case is a
+// different call — the fragment names a tool that is known on its own while the
+// accumulated name does not continue into it.
+func nameContinues(current, delta string) bool {
+	current = strings.TrimSpace(current)
+	delta = strings.TrimSpace(delta)
+	if current == "" || delta == "" {
+		return true
+	}
+	if delta == current || strings.HasPrefix(delta, current) {
+		return true
+	}
+	if isKnownToolName(current + delta) {
+		return true
+	}
+	return !isKnownToolName(delta)
+}
+
+// note records a bounded diagnostic line for the adapter to log.
+func (acc *toolCallAccumulator) note(message string) {
+	if len(acc.notes) < 8 {
+		acc.notes = append(acc.notes, message)
+	}
+}
+
+// describeToolCallFragment renders a fragment for a diagnostic line without
+// dumping an unbounded argument string.
+func describeToolCallFragment(delta legacyopenai.ToolCall) string {
+	index := "none"
+	if delta.Index != nil {
+		index = fmt.Sprintf("%d", *delta.Index)
+	}
+	return fmt.Sprintf("index=%s id=%q name=%q args=%q", index, delta.ID, delta.Function.Name, truncateRunes(delta.Function.Arguments, 40))
 }

@@ -425,7 +425,6 @@ function contextPartLabel(label) {
     '自定义提示词': 'composer.context.part.custom',
     '工作区文件结构': 'composer.context.part.workspace',
     '计划快照': 'composer.context.part.plan',
-    '当前时间': 'composer.context.part.time',
   };
   return labels[label] ? t(labels[label]) : label;
 }

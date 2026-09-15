@@ -401,7 +401,9 @@ func TestIsProvider400ErrorUsesTypedStatusCodes(t *testing.T) {
 // into an existing list, rebuilding the index/id tables from the slice. Deltas
 // that carry an id therefore resolve across calls, but index-only deltas cannot
 // — tests that span a stream use newToolCallAccumulator directly, exactly like
-// the adapter does.
+// the adapter does. It also rebuilds the id foundry, so a case that depends on it
+// (a repeated or missing provider id) has to drive one accumulator across the
+// whole stream.
 func mergeToolCallDeltas(toolCalls *[]legacyopenai.ToolCall, deltas []legacyopenai.ToolCall) {
 	*toolCalls = newToolCallAccumulator(*toolCalls).merge(deltas)
 }
@@ -615,6 +617,233 @@ func TestMergeToolCallDeltasSkipsDuplicatedArgumentChunks(t *testing.T) {
 	toolCalls = acc.merge([]legacyopenai.ToolCall{{Index: &index, Function: legacyopenai.FunctionCall{Name: "read", Arguments: `les":[]}`}}})
 	if toolCalls[0].Function.Arguments != `{"files":[]}` {
 		t.Fatalf("duplicated argument chunks must be skipped, got %q", toolCalls[0].Function.Arguments)
+	}
+}
+
+// toolCallFragment builds one streamed tool_calls fragment; index < 0 means the
+// fragment carries no index at all.
+func toolCallFragment(index int, id, name, args string) legacyopenai.ToolCall {
+	fragment := legacyopenai.ToolCall{
+		Type:     legacyopenai.ToolTypeFunction,
+		ID:       id,
+		Function: legacyopenai.FunctionCall{Name: name, Arguments: args},
+	}
+	if index >= 0 {
+		i := index
+		fragment.Index = &i
+	}
+	return fragment
+}
+
+// TestToolCallAccumulatorIdentityTable drives the production accumulator over one
+// whole stream per row and locks the identity rules: the id decides, the index
+// only locates a continuation, and the name test is the last resort for relays
+// that send neither an id nor a usable index.
+func TestToolCallAccumulatorIdentityTable(t *testing.T) {
+	cases := []struct {
+		name      string
+		batches   [][]legacyopenai.ToolCall
+		wantIDs   []string
+		wantNames []string
+		wantArgs  []string
+	}{
+		{
+			name: "standard stream: the name arrives once and the arguments in chunks",
+			batches: [][]legacyopenai.ToolCall{
+				{toolCallFragment(0, "call_a", "read", `{"path":`)},
+				{toolCallFragment(0, "", "", `"a.go"}`)},
+			},
+			wantIDs:   []string{"call_a"},
+			wantNames: []string{"read"},
+			wantArgs:  []string{`{"path":"a.go"}`},
+		},
+		{
+			// The reported relay failure: two calls of the same tool share one
+			// index. Their ids differ, so they are two calls — the old index-first
+			// lookup welded them into one and corrupted the arguments.
+			name: "two calls sharing one index are separated by their ids when the name repeats",
+			batches: [][]legacyopenai.ToolCall{
+				{toolCallFragment(0, "call_a", "read", `{"path":"a.go"}`)},
+				{toolCallFragment(0, "call_b", "read", `{"path":"b.go"}`)},
+			},
+			wantIDs:   []string{"call_a", "call_b"},
+			wantNames: []string{"read", "read"},
+			wantArgs:  []string{`{"path":"a.go"}`, `{"path":"b.go"}`},
+		},
+		{
+			name: "two calls sharing one index with different names",
+			batches: [][]legacyopenai.ToolCall{
+				{toolCallFragment(0, "call_a", "read", `{"files":[{"path":"a.txt"}]}`)},
+				{toolCallFragment(0, "call_b", "list_files", `{}`)},
+			},
+			wantIDs:   []string{"call_a", "call_b"},
+			wantNames: []string{"read", "list_files"},
+			wantArgs:  []string{`{"files":[{"path":"a.txt"}]}`, `{}`},
+		},
+		{
+			name: "the same id re-sent with every chunk stays one call",
+			batches: [][]legacyopenai.ToolCall{
+				{toolCallFragment(0, "call_1", "http_request", `{"ur`)},
+				{toolCallFragment(0, "call_1", "http_request", `l":"ht`)},
+				{toolCallFragment(0, "call_1", "http_request", `tps:`)},
+			},
+			wantIDs:   []string{"call_1"},
+			wantNames: []string{"http_request"},
+			wantArgs:  []string{`{"url":"https:`},
+		},
+		{
+			name: "a name arriving in chunks is spliced onto the call it continues",
+			batches: [][]legacyopenai.ToolCall{
+				{toolCallFragment(0, "call_1", "http_", `{"url":"x"}`)},
+				{toolCallFragment(0, "", "request", "")},
+			},
+			wantIDs:   []string{"call_1"},
+			wantNames: []string{"http_request"},
+			wantArgs:  []string{`{"url":"x"}`},
+		},
+		{
+			name: "one index and one id reused for two calls: the duplicate id is rewritten",
+			batches: [][]legacyopenai.ToolCall{
+				{toolCallFragment(0, "call_a", "read", `{"path":"a"}`)},
+				{toolCallFragment(0, "call_a", "list_files", `{}`)},
+			},
+			wantIDs:   []string{"call_a", "call_a__2"},
+			wantNames: []string{"read", "list_files"},
+			wantArgs:  []string{`{"path":"a"}`, `{}`},
+		},
+		{
+			name: "index-only continuation with a non-zero index",
+			batches: [][]legacyopenai.ToolCall{
+				{toolCallFragment(1, "call_b", "read", `{"path":"b.txt"`)},
+				{toolCallFragment(1, "", "", `,"depth":1}`)},
+			},
+			wantIDs:   []string{"call_b"},
+			wantNames: []string{"read"},
+			wantArgs:  []string{`{"path":"b.txt","depth":1}`},
+		},
+		{
+			name: "fragments without an index continue the newest call",
+			batches: [][]legacyopenai.ToolCall{
+				{toolCallFragment(-1, "call_a", "read", `{"path":`)},
+				{toolCallFragment(-1, "", "", `"a.go"}`)},
+			},
+			wantIDs:   []string{"call_a"},
+			wantNames: []string{"read"},
+			wantArgs:  []string{`{"path":"a.go"}`},
+		},
+		{
+			name: "two id-less calls on one index are separated by their names and get unique ids",
+			batches: [][]legacyopenai.ToolCall{
+				{toolCallFragment(0, "", "read", `{"path":"a"}`)},
+				{toolCallFragment(0, "", "list_files", `{}`)},
+			},
+			wantIDs:   []string{"call_1", "call_2"},
+			wantNames: []string{"read", "list_files"},
+			wantArgs:  []string{`{"path":"a"}`, `{}`},
+		},
+		{
+			name: "the provider id arriving after the call started is adopted",
+			batches: [][]legacyopenai.ToolCall{
+				{toolCallFragment(0, "", "read", `{"path":"a"`)},
+				{toolCallFragment(0, "call_a", "", `}`)},
+			},
+			wantIDs:   []string{"call_a"},
+			wantNames: []string{"read"},
+			wantArgs:  []string{`{"path":"a"}`},
+		},
+		{
+			name:    "a stray continuation is dropped instead of becoming a nameless call",
+			batches: [][]legacyopenai.ToolCall{{toolCallFragment(0, "", "", `{"path":"a"}`)}},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			acc := newToolCallAccumulator(nil)
+			var got []legacyopenai.ToolCall
+			for _, batch := range tc.batches {
+				got = acc.merge(batch)
+			}
+			if len(got) != len(tc.wantIDs) {
+				t.Fatalf("call count = %d, want %d: %#v", len(got), len(tc.wantIDs), got)
+			}
+			for i := range got {
+				if got[i].ID != tc.wantIDs[i] {
+					t.Errorf("call %d id = %q, want %q", i, got[i].ID, tc.wantIDs[i])
+				}
+				if got[i].Function.Name != tc.wantNames[i] {
+					t.Errorf("call %d name = %q, want %q", i, got[i].Function.Name, tc.wantNames[i])
+				}
+				if got[i].Function.Arguments != tc.wantArgs[i] {
+					t.Errorf("call %d args = %q, want %q", i, got[i].Function.Arguments, tc.wantArgs[i])
+				}
+			}
+		})
+	}
+}
+
+func TestToolCallAccumulatorReportsDroppedStray(t *testing.T) {
+	acc := newToolCallAccumulator(nil)
+	if got := acc.merge([]legacyopenai.ToolCall{toolCallFragment(0, "", "", `{"path":"a"}`)}); len(got) != 0 {
+		t.Fatalf("a stray continuation must not create a call: %#v", got)
+	}
+	if notes := acc.diagnostics(); len(notes) == 0 {
+		t.Fatal("the dropped fragment must be reported")
+	}
+}
+
+func TestToolCallAccumulatorRewritesIDsTheHistoryUses(t *testing.T) {
+	// A relay that numbers its calls per response sends "call_0" again in the
+	// second response of a session; the history already owns that id, so the new
+	// call must get another one — otherwise the next request carries a duplicate
+	// tool_call id and the provider rejects it.
+	acc := newToolCallAccumulator(nil)
+	acc.seedConversation([]legacyopenai.ChatCompletionMessage{
+		{
+			Role:      legacyopenai.ChatMessageRoleAssistant,
+			ToolCalls: []legacyopenai.ToolCall{{Type: legacyopenai.ToolTypeFunction, ID: "call_0", Function: legacyopenai.FunctionCall{Name: "read"}}},
+		},
+		{Role: legacyopenai.ChatMessageRoleTool, ToolCallID: "call_0", Content: "ok"},
+	})
+	got := acc.merge([]legacyopenai.ToolCall{toolCallFragment(0, "call_0", "read", `{"path":"a"}`)})
+	if len(got) != 1 || got[0].ID != "call_0__2" {
+		t.Fatalf("a re-sent id must be rewritten: %#v", got)
+	}
+	if notes := acc.diagnostics(); len(notes) == 0 {
+		t.Fatal("the rewrite must be reported")
+	}
+}
+
+func TestEnsureResponsesToolCallSeparatesItemsReusingOneOutputIndex(t *testing.T) {
+	var calls []legacyopenai.ToolCall
+	byOutput := map[int64]int{}
+	byItemID := map[string]int{}
+	first := ensureResponsesToolCall(&calls, byOutput, byItemID, 0, "fc_1")
+	second := ensureResponsesToolCall(&calls, byOutput, byItemID, 0, "fc_2")
+	if first == second || len(calls) != 2 {
+		t.Fatalf("two items reusing output_index 0 must not share a call: %#v", calls)
+	}
+	if byItemID["fc_1"] != first || byItemID["fc_2"] != second {
+		t.Fatalf("each item id must keep pointing at its own call: %#v", byItemID)
+	}
+	if got := ensureResponsesToolCall(&calls, byOutput, byItemID, 0, "fc_1"); got != first {
+		t.Fatalf("an event naming the first item must resolve to it, got %d want %d", got, first)
+	}
+	if got := ensureResponsesToolCall(&calls, byOutput, byItemID, 0, ""); got != second {
+		t.Fatalf("an event with no item id must fall back to the newest binding, got %d want %d", got, second)
+	}
+}
+
+func TestEnsureResponsesToolCallAdoptsALateItemID(t *testing.T) {
+	var calls []legacyopenai.ToolCall
+	byOutput := map[int64]int{}
+	byItemID := map[string]int{}
+	opened := ensureResponsesToolCall(&calls, byOutput, byItemID, 3, "")
+	named := ensureResponsesToolCall(&calls, byOutput, byItemID, 3, "fc_9")
+	if opened != named || len(calls) != 1 {
+		t.Fatalf("an item id arriving after the call opened must join that call: %#v", calls)
+	}
+	if byItemID["fc_9"] != opened {
+		t.Fatalf("the adopted item id must map to the opened call: %#v", byItemID)
 	}
 }
 
