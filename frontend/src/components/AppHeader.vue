@@ -488,11 +488,11 @@ function historyMenuProps() {
   background: rgba(74, 222, 128, 0.18) !important;
 }
 
-/* 历史工作空间按钮：琥珀色图标与其他 header 图标区分（参考底部会话按钮 #e0a070）。
-   亮色下种子色会被白玻璃洗淡：纯 #e0a458 对近似白底只有 ~2.2:1，而旁边图标用的
-   --ally-text-muted 是 ~5.4:1，所以看上去“发灰、看不清”。亮色改用 accent 家族里
-   专为浅底推导的 ink 混合色（与侧栏亮色菜单图标同一档），保留琥珀色身份的同时
-   把对比度拉到和相邻图标一致；暗色仍是种子色（那里已经够亮）。 */
+/* 历史工作空间按钮：暗色用琥珀种子色与其他 header 图标区分（参考底部会话按钮
+   #e0a070）；亮色下种子色会被白玻璃洗淡（纯 #e0a458 对近似白底只有 ~2.2:1，而
+   旁边图标用的 --ally-text-muted 是 ~5.4:1，看上去“发灰、看不清”），因此亮色换用
+   与左侧栏活跃菜单图标同一支的绿色 --ally-success：同一个 token、同一个含义
+   （“当前所在位置”），不再两处各自挑色。 */
 .history-action-button {
   color: var(--ally-accent) !important;
 }
@@ -503,12 +503,12 @@ function historyMenuProps() {
 }
 
 html[data-mode="light"] .history-action-button {
-  color: var(--ally-accent-bright) !important;
+  color: var(--ally-success) !important;
 }
 
 html[data-mode="light"] .history-action-button:hover,
 html[data-mode="light"] .history-action-button:focus-visible {
-  color: var(--ally-accent-strong) !important;
+  color: var(--ally-success-deep) !important;
 }
 
 .brand {
@@ -603,10 +603,19 @@ body.platform-darwin .brand-wordmark {
   height: 100%;
   --n-tab-gap: 0 !important;
   --n-tab-padding: 0 !important;
-  /* 与用户消息左侧竖线同一档色（accent-dim）：同族更协调，且不像全亮
+  /* 暗色：与用户消息左侧竖线同一档色（accent-dim）——同族更协调，且不像全亮
      accent 那样在 header 顶部抢视线。 */
   --n-bar-color: var(--ally-accent-dim) !important;
   --wails-draggable: drag;
+}
+
+/* 亮色：下划线改用左侧栏活跃菜单图标同一支的绿色（--ally-success）。琥珀
+   accent-dim 在白玻璃 header 上与相邻的 text-muted 图标亮度接近，读不出“当前在
+   哪个 tab”；绿色在本项目里已承担“当前位置”这一个含义（.mode-sider 选中图标
+   用的就是它），这里复用同一 token，不再另挑颜色。只覆盖变量，指示线自身的
+   ::after 规则不动。 */
+html[data-mode="light"] .workspace-tabs {
+  --n-bar-color: var(--ally-success) !important;
 }
 
 .workspace-tabs :deep(.n-tabs-nav),

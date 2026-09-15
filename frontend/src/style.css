@@ -4502,9 +4502,13 @@ code, pre {
 
 /* ── Reasoning / thinking block ── */
 
-/* Thinking 浮层：不占文档流，覆盖在正文起点上。思考时消息靠
-   .message:has() 占位规则保底高度；正文开始输出时浮层淡出，正文在
-   原位显露（被浮层背景遮住的部分逐渐露出），全程无位移、无塌缩。 */
+/* Thinking 提示行：不占文档流，覆盖在正文起点上；正文起始前消息靠
+   .message:has() 占位规则保底高度。它本身只是浮在正文起点上的一行文字，
+   不画背景——旧方案给它铺了一块与页面同色的“帘幕”来遮住浮层下方刚输出
+   的正文首行，但这块不透明背景在玻璃/带背景图的画布上会显成一条横贯
+   消息的色带（浅色模式尤其明显），已去掉。
+   代价：不能再淡出。淡出期间这行字会与同时出现的正文首行叠字，所以思考
+   结束时直接移除（display: none），正文在同一帧原位出现，无位移、无塌缩。 */
 .reasoning-block {
   position: absolute;
   top: 0;
@@ -4512,18 +4516,11 @@ code, pre {
   right: 0;
   z-index: 2;
   margin: 0;
-  opacity: 1;
-  visibility: visible;
-  transition: opacity 0.2s ease, visibility 0.2s ease;
-  /* 与页面背景一致，遮住下方刚输出的正文首行，淡出时正文原位显露；
-     装了背景图时由 App.vue 注入 --reasoning-curtain: transparent 关闭遮罩 */
-  background: var(--reasoning-curtain, var(--ally-surface-content));
   pointer-events: none;
 }
 
 .reasoning-block.reasoning-hidden {
-  opacity: 0;
-  visibility: hidden;
+  display: none;
 }
 
 /* 思考中：消息保留一行高度，浮层不溢出压到上一条消息 */

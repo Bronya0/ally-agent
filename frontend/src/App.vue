@@ -5710,10 +5710,6 @@ const chatLayoutContentStyle = computed(() => {
   const scrim = isLightMode.value ? `rgba(246, 247, 249, ${overlay})` : `rgba(26, 26, 26, ${overlay})`;
   return {
     ...base,
-    // With a custom background image the opaque reasoning curtain would show
-    // as a solid band, so disable it via the variable consumed by
-    // .reasoning-block in style.css (falls back to the surface color otherwise).
-    '--reasoning-curtain': 'transparent',
     backgroundImage: `linear-gradient(${scrim}, ${scrim}), url("${url}")`,
     backgroundSize: 'cover, cover',
     backgroundPosition: 'center, center',
