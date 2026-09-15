@@ -205,6 +205,7 @@ import ace from 'ace-builds';
 import 'ace-builds/src-noconflict/ext-language_tools';
 import 'ace-builds/src-noconflict/ext-searchbox';
 import 'ace-builds/src-noconflict/theme-tomorrow_night';
+import 'ace-builds/src-noconflict/theme-tomorrow';
 import 'ace-builds/src-noconflict/mode-text';
 import MarkdownIt from 'markdown-it';
 import { isEditableNavigationTarget } from '../utils/sessionState.mjs';
@@ -229,6 +230,9 @@ const props = defineProps({
   hideHidden: { type: Boolean, default: false },
   titleText: { type: String, default: '' },
   emptyHint: { type: String, default: '' },
+  // 颜色模式（'dark' | 'light'），与 App.vue 的 colorMode 同源：Ace 主题跟着
+  // 模式走，暗色面板里不嵌亮色编辑器，亮色面板里也不嵌深色编辑器。
+  colorMode: { type: String, default: 'dark' },
 });
 const emit = defineEmits(['close', 'treeWidthChange']);
 const dialog = useDialog();
@@ -299,19 +303,40 @@ let mermaidPreviewIdSeq = 0;
 // nodeWrapperPadding 默认 '3px 0'：每行 hover/聚焦高亮上下各缩进 3px，
 // 相邻行之间出现 6px 视觉缝隙（表现为"聚焦区域之间存在间距"）。
 // 这里归零，让 20px 行高的高亮区域完全相邻。
-const treeThemeOverrides = {
-  nodeHeight: '20px',
-  fontSize: '12px',
-  nodeWrapperPadding: '0',
-  nodeColorHover: 'rgba(78, 161, 255, 0.08)',
-  nodeColorPressed: 'rgba(78, 161, 255, 0.14)',
-  nodeColorActive: 'rgba(78, 161, 255, 0.18)',
-  // Shares the CSS token instead of repeating the hex: Naive assigns this
-  // straight to --n-node-text-color, so a var() reference resolves in the
-  // cascade (it is not fed through any JS colour math for this field).
-  nodeTextColor: 'var(--ally-text-secondary)',
-  nodeTextColorDisabled: '#697384',
+// 行状态色按颜色模式分流（naive 把这些值原样写进 --n-node-color-* 自定义属性，
+// 其 tree 样式直接 `background: var(--n-node-color-hover)` 取用，不经 JS 颜色
+// 运算，因此 var()/color-mix() 能在层叠中解析）。
+// 暗色保持历史蓝色不变；亮色改用共享 token：悬停跟随全应用统一的
+// --ally-state-hover，选中用 accent 淡染（与输入栏资源管理器开关、提问卡片同语言），
+// 免得亮色玻璃面板里出现一块冷蓝色。
+const TREE_ROW_COLORS = {
+  dark: {
+    hover: 'rgba(78, 161, 255, 0.08)',
+    pressed: 'rgba(78, 161, 255, 0.14)',
+    active: 'rgba(78, 161, 255, 0.18)',
+  },
+  light: {
+    hover: 'var(--ally-state-hover)',
+    pressed: 'var(--ally-hover-strong)',
+    active: 'color-mix(in srgb, var(--ally-accent) 14%, transparent)',
+  },
 };
+const treeThemeOverrides = computed(() => {
+  const rows = TREE_ROW_COLORS[props.colorMode] || TREE_ROW_COLORS.dark;
+  return {
+    nodeHeight: '20px',
+    fontSize: '12px',
+    nodeWrapperPadding: '0',
+    nodeColorHover: rows.hover,
+    nodeColorPressed: rows.pressed,
+    nodeColorActive: rows.active,
+    // Shares the CSS token instead of repeating the hex: Naive assigns this
+    // straight to --n-node-text-color, so a var() reference resolves in the
+    // cascade (it is not fed through any JS colour math for this field).
+    nodeTextColor: 'var(--ally-text-secondary)',
+    nodeTextColorDisabled: '#697384',
+  };
+});
 
 const workspaceLabel = computed(() => {
   const value = String(props.workspace || '').replace(/[\\/]+$/, '');
@@ -641,11 +666,22 @@ function onAceScroll() {
   }, 700);
 }
 
+// Ace 主题按颜色模式选择：暗色沿用 tomorrow_night，亮色改用同一家族的亮色版
+// tomorrow（token 语义一一对应，不必另造主题）。写死单一主题时，亮色面板中间
+// 会嵌进一整块深色编辑器。
+const ACE_THEME_BY_MODE = {
+  dark: 'ace/theme/tomorrow_night',
+  light: 'ace/theme/tomorrow',
+};
+function aceThemeForMode() {
+  return ACE_THEME_BY_MODE[props.colorMode] || ACE_THEME_BY_MODE.dark;
+}
+
 function initAceEditor() {
   if (aceEditor || !aceContainerRef.value) return;
   aceEditor = ace.edit(aceContainerRef.value, {
     mode: 'ace/mode/text',
-    theme: 'ace/theme/tomorrow_night',
+    theme: aceThemeForMode(),
     fontSize: '15px',
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
     showPrintMargin: false,
@@ -1841,6 +1877,11 @@ watch(() => props.workspace, () => {
   // invalidates in-flight operations from the previous Tab/root.
   void loadRoot();
 }, { immediate: true });
+
+// 颜色模式切换：Ace 实例常驻，只换主题，不重建编辑器。
+watch(() => props.colorMode, () => {
+  aceEditor?.setTheme(aceThemeForMode());
+});
 
 onMounted(() => {
   const element = treeContainerRef.value?.$el || treeContainerRef.value;

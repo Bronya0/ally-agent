@@ -37,3 +37,8 @@ nul
 temp_demo/
 temp_test.txt
 nul
+
+# ── Local scratch material (not part of the app) ──
+# h5ppt deck workspace: kept on disk for reference, never published.
+h5ppt-agent-dev/
+h5ppt-agent-dev.zip

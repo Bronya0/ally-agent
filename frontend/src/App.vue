@@ -312,6 +312,7 @@ Public License v3. See the LICENSE file for details.
                   :ref="(el) => setExplorerRef(tab.id, el)"
                   :workspace="explorerWorkspaceFor(tab.id)"
                   :active="tab.id === activeWorkspaceId"
+                  :color-mode="colorMode"
                   :initial-width="explorerTreeWidthFor(tab.id)"
                   :hide-hidden="isKbTab(tab)"
                   :title-text="isKbTab(tab) ? $t('kb.tabLabel') : ''"
@@ -595,6 +596,7 @@ import { useSakuraBreeze } from './composables/sakuraBreeze.mjs';
 const { sakuraOn } = useSakuraBreeze();
 import { modelConfigIdentity, normalizeApiKeysArray, normalizeReasoningEffort } from './utils/modelConfigIO.mjs';
 import { getSpecificModelUsage } from './utils/modelUsage.mjs';
+import { formatModelLabel } from './utils/modelLabel.mjs';
 import { buildVersion } from './utils/buildVersion.js';
 import { computeEditStats, formatEditStats } from './utils/diff.js';
 import { isNewerReleaseVersion } from './utils/versionCheck.mjs';
@@ -1596,6 +1598,9 @@ function defaultModelSnapshot() {
 function ensureTabModel(tab) {
   if (!tab || modelByTab[tab.id]) return;
   modelByTab[tab.id] = defaultModelSnapshot();
+  // 首访初始化的模型通常不等于建欢迎消息时的回退值（config 顶层是「默认模型」，
+  // 而 defaultModelSnapshot 会继承上次用的模型），补一次表格刷新。
+  updateWelcomeModelRows();
 }
 
 // The config every chat request sends: the persisted config with the active
@@ -1613,6 +1618,8 @@ function resyncTabModelsFromPresets() {
     const preset = models.find((m) => modelConfigIdentity(m) === modelConfigIdentity(snapshot));
     if (preset) modelByTab[tabId] = modelSnapshotFrom(preset);
   }
+  // 预设编辑可能改了 providerName / model 名称，欢迎表格的模型行要跟着变。
+  updateWelcomeModelRows();
 }
 
 const sessions = ref([]);
@@ -3330,8 +3337,9 @@ function buildWelcomeMessage(workspacePath = '') {
   }
   // The info table shows the model the session will actually chat with:
   // the active Tab's model (fall back to the default before initialization).
+  // 这里只写下创建这一刻的值；之后由 updateWelcomeModelRows() 随 Tab 的模型刷新。
   const activeModel = modelByTab[activeWorkspaceId.value] || config;
-  rows.push({ kind: 'model', label: t('common.model'), value: `${activeModel.providerName || '-'} · ${activeModel.model || '-'}` });
+  rows.push({ kind: 'model', label: t('common.model'), value: formatModelLabel(activeModel) });
   rows.push({ kind: 'mcp', label: 'MCP', value: formatMcpSummary() });
   if (skillCount > 0) {
     rows.push({ kind: 'skills', label: t('common.skills'), value: t('welcome.skillsAvailable', { count: skillCount }) });
@@ -3361,21 +3369,60 @@ function formatMcpSummary() {
   return t('app.mcp.summary', { connected, count: servers.length, tools });
 }
 
+// 欢迎表格行的身份判定：新写入的行带 kind，但已落盘的历史欢迎消息只有 label，
+// 刷新逻辑必须同时认 label，否则打开旧会话时匹配不到（甚至重复插入）。
+// 每种行的 kind/label 组合只在这里定义一次，构建与刷新都走它。
+const WELCOME_ROW_LABELS = {
+  model: ['模型', 'Model'],
+  workspace: ['工作区', 'Workspace'],
+  commands: ['指令', 'Commands'],
+  mcp: ['MCP'],
+};
+function isWelcomeRowKind(row, kind) {
+  if (!row) return false;
+  if (row.kind === kind) return true;
+  const labels = WELCOME_ROW_LABELS[kind];
+  return Array.isArray(labels) && labels.includes(row.label);
+}
+
+// 欢迎消息里承载表格的行（KB 欢迎消息没有 rows）。
+function welcomeRowRowsFor(msg) {
+  return Array.isArray(msg?.welcome?.rows) ? msg.welcome.rows : [];
+}
+
+// 刷新欢迎表格的「模型」行。rows 是创建欢迎消息时的快照，不刷新的话在 composer
+// 里换成别的模型后表格仍显示换之前的模型。取值口径与构建欢迎表格、composer 信息
+// 栏完全一致（modelByTab[Tab] || config + formatModelLabel）：没有归属 Tab 的会话
+// 不猜；只有正显示在活动 Tab 上的那个会话回退到活动 Tab 的模型。
+function updateWelcomeModelRows() {
+  for (const session of sessions.value) {
+    const ownerTab = findSessionWorkspaceTab(workspaceTabs.value, session.id);
+    const tabId = ownerTab ? ownerTab.id
+      : (session.id === activeSessionId.value ? activeWorkspaceId.value : '');
+    if (!tabId) continue;
+    const value = formatModelLabel(modelByTab[tabId] || config);
+    for (const msg of session.messages || []) {
+      const row = welcomeRowRowsFor(msg).find((item) => isWelcomeRowKind(item, 'model'));
+      if (row && row.value !== value) row.value = value;
+    }
+  }
+}
+
 function updateWelcomeMcpRows() {
   const value = formatMcpSummary();
   const gitBashPath = String(config.gitBashPath || '').trim();
   for (const session of sessions.value) {
     for (const msg of session.messages || []) {
       if (!msg.welcome || !Array.isArray(msg.welcome.rows)) continue;
-      const rows = msg.welcome.rows.filter((row) => row.kind !== 'commands' && row.label !== '指令' && row.label !== 'Commands' && row.kind !== 'gitbash');
+      const rows = msg.welcome.rows.filter((row) => !isWelcomeRowKind(row, 'commands') && row.kind !== 'gitbash');
       if (gitBashPath) {
-        const workspaceIndex = rows.findIndex((row) => row.kind === 'workspace' || row.label === '工作区' || row.label === 'Workspace');
+        const workspaceIndex = rows.findIndex((row) => isWelcomeRowKind(row, 'workspace'));
         rows.splice(workspaceIndex >= 0 ? workspaceIndex + 1 : 0, 0, { kind: 'gitbash', label: t('welcome.gitBash'), value: gitBashPath });
       }
-      const existing = rows.find((row) => row.kind === 'mcp' || row.label === 'MCP');
+      const existing = rows.find((row) => isWelcomeRowKind(row, 'mcp'));
       if (existing) existing.value = value;
       else {
-        const modelIndex = rows.findIndex((row) => row.kind === 'model' || row.label === '模型' || row.label === 'Model');
+        const modelIndex = rows.findIndex((row) => isWelcomeRowKind(row, 'model'));
         rows.splice(modelIndex >= 0 ? modelIndex + 1 : rows.length, 0, { kind: 'mcp', label: 'MCP', value });
       }
       // 只更新 rows：欢迎表格由 WelcomeMessage 组件按 rows 实时渲染，
@@ -3403,7 +3450,7 @@ function inferSessionWorkspace(session) {
   for (const msg of session.messages || []) {
     const rows = msg?.welcome?.rows;
     if (!Array.isArray(rows)) continue;
-    const row = rows.find((item) => item?.kind === 'workspace' || item?.label === '工作区' || item?.label === 'Workspace');
+    const row = rows.find((item) => isWelcomeRowKind(item, 'workspace'));
     const value = String(row?.value || '').trim();
     if (value && value !== '未选择' && value !== 'Not selected') {
       session.workspace = value;
@@ -3823,6 +3870,9 @@ function deleteSession(index) {
   for (const tab of linkedTabs) {
     tab.sessionId = replacementId;
   }
+  // 替换出来的欢迎消息可能是为非活动 Tab 建的（建时按活动 Tab 的模型取值），
+  // 归属关系刚重排完，这里补齐一次模型行。
+  updateWelcomeModelRows();
 
   if (wasActive) {
     activeSessionId.value = replacementId;
@@ -5286,6 +5336,7 @@ function switchToModel(index) {
   const snapshot = modelSnapshotFrom(model);
   modelByTab[tab.id] = snapshot;
   setLastUsedModelIdentity(modelConfigIdentity(model));
+  updateWelcomeModelRows();
   message.success(t('app.model.switched', { model: model.model }));
 }
 
@@ -5659,10 +5710,6 @@ const chatLayoutContentStyle = computed(() => {
   const scrim = isLightMode.value ? `rgba(246, 247, 249, ${overlay})` : `rgba(26, 26, 26, ${overlay})`;
   return {
     ...base,
-    // With a custom background image the opaque reasoning curtain would show
-    // as a solid band, so disable it via the variable consumed by
-    // .reasoning-block in style.css (falls back to the surface color otherwise).
-    '--reasoning-curtain': 'transparent',
     backgroundImage: `linear-gradient(${scrim}, ${scrim}), url("${url}")`,
     backgroundSize: 'cover, cover',
     backgroundPosition: 'center, center',
