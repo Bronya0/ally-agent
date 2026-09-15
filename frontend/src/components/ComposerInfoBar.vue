@@ -251,6 +251,7 @@ import FolderAddOutlined from '@vicons/antd/FolderAddOutlined';
 import AppstoreOutlined from '@vicons/antd/AppstoreOutlined';
 import CloseOutlined from '@vicons/antd/CloseOutlined';
 import { formatDateTime, reasoningEffortLabel, t } from '../i18n.mjs';
+import { formatModelLabel } from '../utils/modelLabel.mjs';
 import { modelConfigIdentity, reasoningEffortLevels } from '../utils/modelConfigIO.mjs';
 import { getModelUsage, recordModelUsage } from '../utils/modelUsage.mjs';
 import { saveTextFile } from '../utils/download.mjs';
@@ -346,7 +347,7 @@ const contextPopoverVisible = ref(false);
 // Reactive snapshot of the persisted `{ groupKey: count }` usage map. Bumped in
 // onModelMenuSelect so the group ordering re-sorts right after a switch.
 const modelUsage = ref(getModelUsage());
-const currentModelLabel = computed(() => `${props.config.providerName || '-'} · ${props.config.model || '-'}`);
+const currentModelLabel = computed(() => formatModelLabel(props.config));
 // Single source for the workspace path shown here: explicit prop (KB root on
 // KB tabs) wins, otherwise fall back to the persisted chat workspace.
 const activeWorkspacePath = computed(() => props.workspace || props.config.workspace || '');
