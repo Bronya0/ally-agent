@@ -19,6 +19,7 @@ import (
 	"time"
 
 	openai "github.com/sashabaranov/go-openai"
+	"unicode/utf8"
 )
 
 // GetTodos returns the current todo list for a session.
@@ -1367,4 +1368,12 @@ func validImageDataURL(value string) bool {
 func escapeAttribute(value string) string {
 	replacer := strings.NewReplacer("&", "&amp;", "\"", "&quot;", "<", "&lt;", ">", "&gt;")
 	return replacer.Replace(value)
+}
+
+func estimateTokensFromMessages(msgs []openai.ChatCompletionMessage) int {
+	total := 0
+	for _, m := range msgs {
+		total += utf8.RuneCountInString(m.Content)
+	}
+	return total / 3 // rough estimate: 3 chars ≈ 1 token
 }

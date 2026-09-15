@@ -2892,6 +2892,25 @@ func normalizeToolCalls(toolCalls []legacyopenai.ToolCall) []legacyopenai.ToolCa
 	return out
 }
 
+// mintMissingToolCallIDs is runChat's backstop after the adapter returned:
+// calls that still reach history without an id (a provider or relay that sent
+// none) get a run-scoped one so every call stays pairable with its result, and
+// a bare type is normalized. The stream-side identity authority is the
+// accumulator's CallIDFoundry (id-first merging, dedup minting); this runs
+// after it, on the exact slice that is appended to the history — which is also
+// why a turn captured with all-empty ids into the reasoning ledger can never
+// be matched again and is not stored (see reasoningTurn.callIDs).
+func mintMissingToolCallIDs(runID string, toolCalls []legacyopenai.ToolCall) {
+	for i := range toolCalls {
+		if toolCalls[i].ID == "" {
+			toolCalls[i].ID = fmt.Sprintf("call_%s_%d", runID, i)
+		}
+		if toolCalls[i].Type == "" {
+			toolCalls[i].Type = legacyopenai.ToolTypeFunction
+		}
+	}
+}
+
 func cloneToolCalls(toolCalls []legacyopenai.ToolCall) []legacyopenai.ToolCall {
 	if len(toolCalls) == 0 {
 		return nil
