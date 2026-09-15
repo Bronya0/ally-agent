@@ -45,9 +45,16 @@ import (
 // The reasoning TEXT travels on the internal history messages
 // (ChatCompletionMessage.ReasoningContent) so it persists with the session.
 // Signature / encrypted-content payloads are provider-protocol artifacts that
-// only make sense inside the current tool loop (they cannot survive a
-// provider switch or a restart), so they live here in a per-session stash
-// keyed by the prompt-cache session key, never in the persisted history.
+// only make sense for the model that produced them (they cannot survive a
+// provider switch or a restart), so they live here in a per-session,
+// per-model stash keyed by the prompt-cache session key, never in the
+// persisted history. The stash is a per-TURN ledger: every tool-loop turn's
+// payload is kept and replayed on its own assistant message in every later
+// request, because a payload that decorates only the trailing turn is dropped
+// from that (now older) message in the next request — the prefix bytes change
+// and the provider prompt cache is lost from that message onward, re-billing
+// the recent tool output on every agent step (pi keeps the payloads on the
+// conversation messages for the same reason).
 
 const (
 	// maxReasoningStashEntries bounds the stash with LRU eviction. Keys are
@@ -57,29 +64,110 @@ const (
 	maxReasoningStashEntries = 64
 )
 
-// sessionReasoningPayload holds the provider-specific replay payloads captured
-// from the latest model response of a session's current tool loop.
-type sessionReasoningPayload struct {
-	// anthropic carries the thinking blocks (text + signature) and redacted
-	// thinking blocks captured from the last Anthropic response, in order.
+// reasoningTurn is the replay payload of ONE assistant turn of a tool loop,
+// identified by the turn's tool-call ids. Keeping every turn — not just the
+// latest response — is what keeps the request prefix byte-stable across
+// agent steps (see the file-header note).
+type reasoningTurn struct {
+	// callIDs are the tool-call ids of the assistant turn that produced the
+	// payload. Ids are minted/deduped per stream (toolcall.CallIDFoundry) and
+	// survive into the history verbatim, so a later request can match the
+	// turn again however many turns were appended since. runChat fills ids
+	// that arrive empty only AFTER the adapter returned, so a turn whose ids
+	// were all empty at capture time can never be matched again and is not
+	// stored at all.
+	callIDs []string
+
+	// anthropic carries the thinking/redacted_thinking blocks of the turn,
+	// in order, replayed at the front of the turn's assistant message.
 	anthropic []anthropicThinkingBlock
-	// responses carries the encrypted reasoning items captured from the last
-	// OpenAI Responses output, in order, for replay around function calls.
+	// responses carries the encrypted reasoning items of the turn, in order,
+	// replayed right before the turn's function_call items.
 	responses []responsesReasoningItem
-	// responsesToolItems maps a function-call id to the Responses item id
-	// (fc_…) the model emitted for it. OpenAI pairs a replayed reasoning item
-	// with the item that FOLLOWS it by id: sending the reasoning item's id
-	// back without the follower's id is rejected ("Item 'rs_…' of type
-	// 'reasoning' was provided without its required following item"), which is
-	// why pi keeps the item id for the same model
+	// responsesItems maps the turn's sanitized call id to the Responses item
+	// id (fc_…) the model emitted for it. OpenAI pairs a replayed reasoning
+	// item with the item that FOLLOWS it by id: sending the reasoning item's
+	// id back without the follower's id is rejected ("Item 'rs_…' of type
+	// 'reasoning' was provided without its required following item"), which
+	// is why pi keeps the item id for the same model
 	// (openai-responses-shared.ts:247-292 using the stored `call_id|item_id`).
-	responsesToolItems map[string]string
-	// chatDetails carries OpenRouter-style reasoning_details (array form)
-	// captured from the last Chat Completions response. Sending the details
-	// back is what preserves reasoning for providers that require the signed
-	// trace (Anthropic through OpenRouter); `reasoning_content` alone is not
-	// enough there.
+	responsesItems map[string]string
+	// chatDetails carries the turn's OpenRouter-style reasoning_details
+	// (array form). Sending the details back is what preserves reasoning for
+	// providers that require the signed trace (Anthropic through OpenRouter);
+	// `reasoning_content` alone is not enough there.
 	chatDetails json.RawMessage
+}
+
+func (t reasoningTurn) empty() bool {
+	return len(t.anthropic) == 0 && len(t.responses) == 0 && t.chatDetails == nil
+}
+
+// sessionReasoningPayload is one session's per-turn replay ledger (scope:
+// session x wire protocol x model, see reasoningReplayKey). Turns are
+// append-only; appending replaces an existing turn of the same identity so a
+// retried capture cannot stack duplicates. The ledger has no per-session turn
+// cap on purpose: trimming it would shift the request prefix and kill the
+// provider prompt cache. Its only bounds are the process lifetime (it is
+// memory-only, never persisted) and compaction — when the compact threshold
+// rewrites the history, the stash is cleared with it (see compactHistory).
+type sessionReasoningPayload struct {
+	turns []reasoningTurn
+}
+
+// turnForAny returns the turn whose call ids intersect callIDs, or nil. The
+// nil receiver is a valid "no ledger" so callers can chain it off stash.get.
+func (p *sessionReasoningPayload) turnForAny(callIDs []string) *reasoningTurn {
+	if p == nil {
+		return nil
+	}
+	for _, want := range callIDs {
+		want = strings.TrimSpace(want)
+		if want == "" {
+			continue
+		}
+		for i := range p.turns {
+			for _, stored := range p.turns[i].callIDs {
+				if stored == want {
+					return &p.turns[i]
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// chatDetailsByCallID flattens the ledger into the id→details map the Chat
+// request rewrite consumes (see patchChatRequestFields).
+func (p *sessionReasoningPayload) chatDetailsByCallID() map[string]json.RawMessage {
+	if p == nil {
+		return nil
+	}
+	var out map[string]json.RawMessage
+	for _, turn := range p.turns {
+		if len(turn.chatDetails) == 0 {
+			continue
+		}
+		for _, id := range turn.callIDs {
+			if out == nil {
+				out = map[string]json.RawMessage{}
+			}
+			out[id] = turn.chatDetails
+		}
+	}
+	return out
+}
+
+// toolCallIDsOf returns the non-empty tool-call ids of a turn — the identity
+// the reasoning ledger matches on (see reasoningTurn.callIDs).
+func toolCallIDsOf(calls []legacyopenai.ToolCall) []string {
+	ids := make([]string, 0, len(calls))
+	for _, c := range calls {
+		if id := strings.TrimSpace(c.ID); id != "" {
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }
 
 // anthropicThinkingBlock is one thinking/redacted_thinking block of an
@@ -183,22 +271,40 @@ func (s *reasoningStash) get(key string) *sessionReasoningPayload {
 	return entry.payload
 }
 
-// set stores the payload for one key, evicting the coldest entries when the map
-// is full. Never stores a nil-equivalent payload so get() can distinguish
-// "no thinking yet".
-func (s *reasoningStash) set(key string, payload *sessionReasoningPayload) {
-	if s == nil || payload == nil {
-		return
-	}
-	if len(payload.anthropic) == 0 && len(payload.responses) == 0 &&
-		len(payload.responsesToolItems) == 0 && len(payload.chatDetails) == 0 {
+// appendTurn records one turn's replay payload, evicting the coldest
+// entries when the map is full. The payload snapshot is replaced copy-on-write
+// so a reader holding the previous snapshot (a concurrent stateless caller
+// sharing the default bucket) never observes a mid-append slice.
+func (s *reasoningStash) appendTurn(key string, turn reasoningTurn) {
+	if s == nil || turn.empty() || len(turn.callIDs) == 0 {
 		return
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.evictLocked(key)
+	entry, ok := s.entries[key]
+	if !ok {
+		s.evictLocked(key)
+		entry = &reasoningStashEntry{}
+		s.entries[key] = entry
+	}
+	next := &sessionReasoningPayload{}
+	if entry.payload != nil {
+		next.turns = append(next.turns, entry.payload.turns...)
+	}
+	replaced := false
+	for i := range next.turns {
+		if len(next.turns[i].callIDs) > 0 && next.turns[i].callIDs[0] == turn.callIDs[0] {
+			next.turns[i] = turn
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		next.turns = append(next.turns, turn)
+	}
 	s.clock++
-	s.entries[key] = &reasoningStashEntry{payload: payload, lastUsed: s.clock}
+	entry.lastUsed = s.clock
+	entry.payload = next
 }
 
 // evictLocked drops the coldest entry until the map has room for one more. It
@@ -308,124 +414,6 @@ func responsesReasoningInputItem(item responsesReasoningItem) oaresp.ResponseInp
 		input.OfReasoning.Status = oaresp.ResponseReasoningItemStatus(item.Status)
 	}
 	return input
-}
-
-// trailingToolTurnStart returns the index of the assistant message that starts
-// the trailing tool turn (tool calls, optionally followed by the tool results
-// answering them), or -1 when the history does not end in one. Single source of
-// truth for "may provider reasoning artifacts be replayed here?".
-func trailingToolTurnStart(messages []legacyopenai.ChatCompletionMessage) int {
-	cut := len(messages)
-	for cut > 0 && messages[cut-1].Role == legacyopenai.ChatMessageRoleTool {
-		cut--
-	}
-	if cut == 0 {
-		return -1
-	}
-	turn := messages[cut-1]
-	if turn.Role != legacyopenai.ChatMessageRoleAssistant || len(turn.ToolCalls) == 0 {
-		return -1
-	}
-	return cut - 1
-}
-
-// withResponsesReasoningItems injects the captured reasoning items into the
-// request input right before the trailing tool turn. OpenAI expects reasoning
-// items to precede the function_call items they belong to; inserting them at the
-// start of that block preserves the order while leaving the stable prefix
-// untouched (prompt cache survives). Callers pass a fresh message list per
-// request, so the carriers are never duplicated.
-//
-// The history must END in a tool turn. Without one there is no item to attach the
-// reasoning to: appending it anyway leaves a dangling reasoning item at the end
-// of the input (the first request of every new user turn), which the API rejects
-// — "Item 'rs_...' of type 'reasoning' was provided without its required
-// following item" — and which would otherwise glue a stale reasoning trace to the
-// new question.
-func withResponsesReasoningItems(messages []legacyopenai.ChatCompletionMessage, items []responsesReasoningItem) []legacyopenai.ChatCompletionMessage {
-	if len(items) == 0 {
-		return messages
-	}
-	cut := trailingToolTurnStart(messages)
-	if cut < 0 {
-		return messages
-	}
-	// Rebuild with the reasoning items converted into a synthetic carrier.
-	// The internal message type cannot hold Responses reasoning items, so
-	// they ride as a dedicated marker message the request builder expands.
-	out := make([]legacyopenai.ChatCompletionMessage, 0, len(messages)+len(items))
-	out = append(out, messages[:cut]...)
-	for _, item := range items {
-		carrier := encodeResponsesReasoningCarrier(item)
-		if carrier == "" {
-			continue
-		}
-		out = append(out, legacyopenai.ChatCompletionMessage{
-			Role:    roleResponsesReasoningCarrier,
-			Content: carrier,
-		})
-	}
-	out = append(out, messages[cut:]...)
-	return out
-}
-
-// trailingToolTurnItemIDsComplete reports whether every tool call of the trailing
-// tool turn has a captured Responses item id. OpenAI pairs a replayed reasoning
-// item with the id of the item that follows it: when a follower id is unknown (a
-// foreign turn, a relay with unusual ids, a payload evicted meanwhile), the pair
-// cannot be completed, and the caller skips the replay entirely instead of
-// risking the documented "reasoning item was provided without its required
-// following item" rejection.
-func trailingToolTurnItemIDsComplete(messages []legacyopenai.ChatCompletionMessage, toolItemIDs map[string]string) bool {
-	start := trailingToolTurnStart(messages)
-	if start < 0 {
-		return false
-	}
-	for _, call := range messages[start].ToolCalls {
-		key := toolcall.ForResponsesCall(toolcall.Effective(call.ID, call.Function.Name))
-		if strings.TrimSpace(toolItemIDs[key]) == "" {
-			return false
-		}
-	}
-	return true
-}
-
-// roleResponsesReasoningCarrier marks an internal-history message that only
-// exists to carry captured Responses reasoning items from the stash to the
-// request builder. It is never persisted: buildOpenAIResponsesInput expands
-// it into real reasoning input items, and every other consumer must skip it
-// (sanitizers drop unknown roles).
-const roleResponsesReasoningCarrier = "ally-responses-reasoning"
-
-// encodeResponsesReasoningCarrier serializes a captured reasoning item into the
-// carrier message that transports it from the stash to the request builder. The
-// internal history type cannot hold a Responses reasoning item, so it rides as
-// JSON text; the carrier is request-only and never persisted (see
-// roleResponsesReasoningCarrier), and JSON keeps every field of the item in one
-// place instead of a positional encoding that has to be extended by hand.
-func encodeResponsesReasoningCarrier(item responsesReasoningItem) string {
-	raw, err := json.Marshal(item)
-	if err != nil || !toolcall.IsSafeResponsesItemID(strings.TrimSpace(item.ID)) {
-		return ""
-	}
-	return string(raw)
-}
-
-// responsesReasoningCarriers returns the reasoning items carried by the
-// synthetic carrier messages of a request message list.
-func responsesReasoningCarriers(messages []legacyopenai.ChatCompletionMessage) []responsesReasoningItem {
-	items := []responsesReasoningItem{}
-	for _, m := range messages {
-		if m.Role != roleResponsesReasoningCarrier || strings.TrimSpace(m.Content) == "" {
-			continue
-		}
-		var item responsesReasoningItem
-		if err := json.Unmarshal([]byte(m.Content), &item); err != nil || !toolcall.IsSafeResponsesItemID(strings.TrimSpace(item.ID)) {
-			continue
-		}
-		items = append(items, item)
-	}
-	return items
 }
 
 // ── OpenAI Chat reasoning_content replay (empty-string preservation) ────────
@@ -666,10 +654,12 @@ func (r *sseDoneReadCloser) Close() error { return r.rc.Close() }
 //     reject a request whose assistant messages omit it (see
 //     chatReasoningBackfillKey; asking to stop thinking is the one level that
 //     adds nothing, since there is no reasoning to hand back).
-//  3. reasoning_details captured from the previous response of this tool loop
-//     are attached to that same message, so providers that require reasoning to
-//     be passed back with its signature (Anthropic through OpenRouter) keep
-//     working where `reasoning_content` alone is not enough.
+//  3. reasoning_details captured from each tool-loop turn are attached to
+//     that turn's own assistant message — on EVERY request, not just the
+//     trailing one — so providers that require reasoning to be passed back
+//     with its signature (Anthropic through OpenRouter) keep working where
+//     `reasoning_content` alone is not enough, and the message prefix stays
+//     byte-identical across agent steps (prompt-cache stability).
 //
 // Every POST body is buffered once so the rewrite can be decided on the parsed
 // message list; when nothing needs rewriting the original bytes are replayed
@@ -679,7 +669,7 @@ func (r *sseDoneReadCloser) Close() error { return r.rc.Close() }
 type chatRequestRewriteTransport struct {
 	base           http.RoundTripper
 	reasoningKey   string
-	details        json.RawMessage
+	turnDetails    map[string]json.RawMessage
 	headers        map[string]string
 	promptCacheKey string
 	streamDone     *sseDoneWatcher
@@ -708,7 +698,7 @@ func (t *chatRequestRewriteTransport) RoundTrip(req *http.Request) (*http.Respon
 		return nil, err
 	}
 	rewritten := body
-	if patched, ok := patchChatRequestFields(body, t.reasoningKey, t.details, t.promptCacheKey, t.disableThinking); ok {
+	if patched, ok := patchChatRequestFields(body, t.reasoningKey, t.turnDetails, t.promptCacheKey, t.disableThinking); ok {
 		rewritten = patched
 	}
 	// Restore a replayable body: the SDK may retry the request object, so
@@ -766,7 +756,7 @@ func (t *chatRequestRewriteTransport) RoundTrip(req *http.Request) (*http.Respon
 //     (reasoningWireForAdapter). It is a top-level parameter, so the message
 //     prefix the provider hashes stays untouched, and it is only written when
 //     absent — the same bytes every request.
-func patchChatRequestFields(body []byte, defaultKey string, details json.RawMessage, promptCacheKey string, disableThinking bool) ([]byte, bool) {
+func patchChatRequestFields(body []byte, defaultKey string, turnDetails map[string]json.RawMessage, promptCacheKey string, disableThinking bool) ([]byte, bool) {
 	var payload map[string]json.RawMessage
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return body, false
@@ -833,13 +823,24 @@ func patchChatRequestFields(body []byte, defaultKey string, details json.RawMess
 		fillKey = detectChatReasoningDialect(messages, defaultKey)
 	}
 
-	// 3. reasoning_details belong to the active trailing tool turn: they are the
-	// captured trace of the response that turn continues.
-	if targetIdx := trailingToolTurnAssistantIndex(messages); targetIdx >= 0 && len(details) > 0 {
-		if _, exists := messages[targetIdx]["reasoning_details"]; !exists {
-			messages[targetIdx]["reasoning_details"] = details
-			changed = true
+	// 3. reasoning_details belong to their own assistant turn: the captured
+	// trace of the response that turn continues, matched by the turn's
+	// tool-call ids. Attaching every turn's details on every request — not
+	// just the trailing turn's — keeps the message prefix byte-identical
+	// across agent steps, which is what the provider prompt cache hashes.
+	for i := range messages {
+		if chatMessageRole(messages[i]) != legacyopenai.ChatMessageRoleAssistant || !chatMessageHasToolCalls(messages[i]) {
+			continue
 		}
+		if _, exists := messages[i]["reasoning_details"]; exists {
+			continue
+		}
+		details, ok := chatTurnDetails(turnDetails, chatToolCallIDs(messages[i]))
+		if !ok {
+			continue
+		}
+		messages[i]["reasoning_details"] = details
+		changed = true
 	}
 
 	// 4. The plain reasoning field goes on every assistant message (see the doc
@@ -894,18 +895,41 @@ func chatMessageHasReasoningKey(m map[string]json.RawMessage) bool {
 	return false
 }
 
-// trailingToolTurnAssistantIndex returns the index of the assistant message
-// that starts the trailing tool turn (tool calls optionally followed by the tool
-// results answering them), or -1 when the history does not end in such a turn.
-func trailingToolTurnAssistantIndex(messages []map[string]json.RawMessage) int {
-	cut := len(messages)
-	for cut > 0 && chatMessageRole(messages[cut-1]) == legacyopenai.ChatMessageRoleTool {
-		cut--
+// chatToolCallIDs returns the tool-call ids of a serialized assistant
+// message, in order, for matching the message against the session's per-turn
+// reasoning ledger.
+func chatToolCallIDs(m map[string]json.RawMessage) []string {
+	raw, ok := m["tool_calls"]
+	if !ok {
+		return nil
 	}
-	if cut == 0 || chatMessageRole(messages[cut-1]) != legacyopenai.ChatMessageRoleAssistant || !chatMessageHasToolCalls(messages[cut-1]) {
-		return -1
+	var calls []struct {
+		ID string `json:"id"`
 	}
-	return cut - 1
+	if err := json.Unmarshal(raw, &calls); err != nil {
+		return nil
+	}
+	ids := make([]string, 0, len(calls))
+	for _, c := range calls {
+		if id := strings.TrimSpace(c.ID); id != "" {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
+// chatTurnDetails returns the captured reasoning_details of the first ledger
+// turn matching any of callIDs.
+func chatTurnDetails(turnDetails map[string]json.RawMessage, callIDs []string) (json.RawMessage, bool) {
+	if len(turnDetails) == 0 {
+		return nil, false
+	}
+	for _, id := range callIDs {
+		if details, ok := turnDetails[id]; ok && len(details) > 0 {
+			return details, true
+		}
+	}
+	return nil, false
 }
 
 // detectChatReasoningDialect echoes the reasoning dialect the request already
@@ -1065,102 +1089,24 @@ func isAnthropicClaudeModel(model string) bool {
 	return strings.Contains(m, "claude")
 }
 
-// anthropicRequestEndsInToolTurn reports whether the converted request ends in a
-// tool turn: an assistant message carrying tool_use followed by the user message
-// that carries its tool_result blocks. Thinking blocks may only be replayed
-// there — Anthropic requires them alongside the tool_use blocks of the same turn
-// and accepts omitting them everywhere else. The gate also keeps a stale payload
-// from being attached to an unrelated assistant message after a rewind, a
-// compaction, or when the payload belongs to another session.
-func anthropicRequestEndsInToolTurn(messages []anthropic.MessageParam) bool {
-	if len(messages) < 2 {
-		return false
-	}
-	last := messages[len(messages)-1]
-	prev := messages[len(messages)-2]
-	if last.Role != anthropic.MessageParamRoleUser || prev.Role != anthropic.MessageParamRoleAssistant {
-		return false
-	}
-	hasToolResult := false
-	for _, block := range last.Content {
-		if block.OfToolResult != nil {
-			hasToolResult = true
-			break
-		}
-	}
-	if !hasToolResult {
-		return false
-	}
-	for _, block := range prev.Content {
-		if block.OfToolUse != nil {
-			return true
-		}
-	}
-	return false
-}
-
-// withAnthropicThinkingBlocks prepends the captured thinking blocks to the LAST
-// assistant message of the request. Anthropic requires thinking blocks to be
-// replayed unmodified, in order, alongside the tool_use blocks of the same
-// assistant turn; buildAnthropicMessages emits tool_use blocks on the last
-// assistant message, so the thinking blocks belong exactly there — and only
-// there: without a trailing tool turn the payload is dropped, because the API
-// allows omitting thinking for every earlier turn.
-func withAnthropicThinkingBlocks(messages []anthropic.MessageParam, blocks []anthropicThinkingBlock, model string) []anthropic.MessageParam {
-	if len(blocks) == 0 || len(messages) == 0 {
-		return messages
-	}
-	if !anthropicRequestEndsInToolTurn(messages) {
-		return messages
-	}
-	last := -1
-	for i := len(messages) - 1; i >= 0; i-- {
-		if messages[i].Role == anthropic.MessageParamRoleAssistant {
-			last = i
-			break
-		}
-	}
-	if last < 0 {
-		return messages
-	}
-	// Idempotence: if the last assistant message already starts with the
-	// replayed thinking blocks (a retried request path), do not stack them.
-	if len(messages[last].Content) >= len(blocks) {
-		already := true
-		for i, b := range blocks {
-			union := messages[last].Content[i]
-			if b.redacted() {
-				if union.OfRedactedThinking == nil || union.OfRedactedThinking.Data != b.Data {
-					already = false
-					break
-				}
-			} else if union.OfThinking == nil || union.OfThinking.Thinking != b.Thinking || union.OfThinking.Signature != b.Signature {
-				already = false
-				break
-			}
-		}
-		if already {
-			return messages
-		}
-	}
+// anthropicThinkingBlockParams converts captured thinking blocks into request
+// content blocks. Redacted blocks replay verbatim; plain thinking blocks must
+// carry the provider signature — Anthropic's official API rejects an unsigned
+// thinking block outright ("thinking.signature: Field required"), so unsigned
+// blocks are only replayed to non-Claude Anthropic-compatible proxies that
+// accept them.
+func anthropicThinkingBlockParams(blocks []anthropicThinkingBlock, model string) []anthropic.ContentBlockParamUnion {
+	out := make([]anthropic.ContentBlockParamUnion, 0, len(blocks))
 	isClaude := isAnthropicClaudeModel(model)
-	prefix := make([]anthropic.ContentBlockParamUnion, 0, len(blocks)+len(messages[last].Content))
 	for _, b := range blocks {
 		if b.redacted() {
-			prefix = append(prefix, anthropic.NewRedactedThinkingBlock(b.Data))
-		} else {
-			// If model is Claude and signature is empty, Anthropic official API strictly
-			// rejects the request with HTTP 400 ("messages.N.content.0.thinking.signature: Field required").
-			// Unsigned thinking is only permitted for non-Claude Anthropic-compatible proxies.
-			if isClaude && strings.TrimSpace(b.Signature) == "" {
-				continue
-			}
-			prefix = append(prefix, anthropic.NewThinkingBlock(b.Signature, b.Thinking))
+			out = append(out, anthropic.NewRedactedThinkingBlock(b.Data))
+			continue
 		}
+		if isClaude && strings.TrimSpace(b.Signature) == "" {
+			continue
+		}
+		out = append(out, anthropic.NewThinkingBlock(b.Signature, b.Thinking))
 	}
-	if len(prefix) == 0 {
-		return messages
-	}
-	messages[last].Content = append(prefix, messages[last].Content...)
-	return messages
+	return out
 }

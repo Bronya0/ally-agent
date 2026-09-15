@@ -9,6 +9,7 @@
 package app
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -20,7 +21,6 @@ import (
 	"testing"
 	"time"
 
-	anthropic "github.com/anthropics/anthropic-sdk-go"
 	oaresp "github.com/openai/openai-go/v3/responses"
 	legacyopenai "github.com/sashabaranov/go-openai"
 )
@@ -635,144 +635,137 @@ func TestChatReasoningBackfillKey(t *testing.T) {
 
 // ── Anthropic: thinking block + signature replay ────────────────────────────
 
-func TestWithAnthropicThinkingBlocks(t *testing.T) {
+func TestAnthropicThinkingBlockParams(t *testing.T) {
 	blocks := []anthropicThinkingBlock{
 		{Thinking: "step one", Signature: "sig_1"},
 		{Data: "redacted-bytes"},
 	}
-	messages := []anthropic.MessageParam{
-		anthropic.NewUserMessage(anthropic.NewTextBlock("question")),
-		anthropic.NewAssistantMessage(
-			anthropic.NewToolUseBlock("t1", map[string]any{"a": 1}, "grep"),
-		),
-		anthropic.NewUserMessage(anthropic.NewToolResultBlock("t1", "ok", false)),
+	params := anthropicThinkingBlockParams(blocks, "claude-3-7-sonnet")
+	if len(params) != 2 {
+		t.Fatalf("expected thinking + redacted blocks, got %d", len(params))
 	}
-	out := withAnthropicThinkingBlocks(messages, blocks, "claude-3-7-sonnet")
-	if len(out) != 3 {
-		t.Fatalf("expected 3 messages, got %d", len(out))
+	if params[0].OfThinking == nil || params[0].OfThinking.Thinking != "step one" || params[0].OfThinking.Signature != "sig_1" {
+		t.Fatalf("block 0 must be the thinking block with signature, got %+v", params[0])
 	}
-	assistant := out[1]
-	if assistant.Role != anthropic.MessageParamRoleAssistant {
-		t.Fatalf("message 1 role = %v, want assistant", assistant.Role)
+	if params[1].OfRedactedThinking == nil || params[1].OfRedactedThinking.Data != "redacted-bytes" {
+		t.Fatalf("block 1 must be the redacted thinking block, got %+v", params[1])
 	}
-	if len(assistant.Content) != 3 {
-		t.Fatalf("expected thinking + redacted + tool_use blocks, got %d", len(assistant.Content))
+	// Claude unsigned thinking guard: an unsigned thinking block must NOT be
+	// replayed on Claude models (the official API rejects it with a 400), but
+	// is permitted on non-Claude Anthropic-compatible proxies.
+	unsigned := []anthropicThinkingBlock{{Thinking: "unsigned thoughts"}}
+	if got := anthropicThinkingBlockParams(unsigned, "claude-3-7-sonnet"); len(got) != 0 {
+		t.Fatalf("Claude model must not replay unsigned thinking blocks, got %d", len(got))
 	}
-	if assistant.Content[0].OfThinking == nil || assistant.Content[0].OfThinking.Thinking != "step one" || assistant.Content[0].OfThinking.Signature != "sig_1" {
-		t.Fatalf("block 0 must be the thinking block with signature, got %+v", assistant.Content[0])
-	}
-	if assistant.Content[1].OfRedactedThinking == nil || assistant.Content[1].OfRedactedThinking.Data != "redacted-bytes" {
-		t.Fatalf("block 1 must be the redacted thinking block, got %+v", assistant.Content[1])
-	}
-	if assistant.Content[2].OfToolUse == nil || assistant.Content[2].OfToolUse.ID != "t1" {
-		t.Fatalf("block 2 must be the tool_use block, got %+v", assistant.Content[2])
-	}
-	// Idempotence: replaying again must not stack blocks.
-	again := withAnthropicThinkingBlocks(out, blocks, "claude-3-7-sonnet")
-	if len(again[1].Content) != 3 {
-		t.Fatalf("second application must be a no-op, got %d blocks", len(again[1].Content))
-	}
-	// No assistant message: payload dropped, messages unchanged.
-	onlyUser := []anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock("q"))}
-	if got := withAnthropicThinkingBlocks(onlyUser, blocks, "claude-3-7-sonnet"); len(got) != 1 || len(got[0].Content) != 1 {
-		t.Fatal("without an assistant message the blocks must be dropped")
-	}
-
-	// Claude unsigned thinking guard: an unsigned thinking block must NOT be replayed on Claude models (would trigger 400),
-	// but is permitted on non-Claude Anthropic-compatible proxies.
-	unsignedBlocks := []anthropicThinkingBlock{
-		{Thinking: "unsigned thoughts", Signature: ""},
-	}
-	freshClaudeMessages := []anthropic.MessageParam{
-		anthropic.NewUserMessage(anthropic.NewTextBlock("question")),
-		anthropic.NewAssistantMessage(
-			anthropic.NewToolUseBlock("t1", map[string]any{"a": 1}, "grep"),
-		),
-		anthropic.NewUserMessage(anthropic.NewToolResultBlock("t1", "ok", false)),
-	}
-	claudeGuarded := withAnthropicThinkingBlocks(freshClaudeMessages, unsignedBlocks, "claude-3-7-sonnet")
-	if len(claudeGuarded[1].Content) != 1 {
-		t.Fatalf("Claude model must not replay unsigned thinking block, got %d blocks", len(claudeGuarded[1].Content))
-	}
-	freshProxyMessages := []anthropic.MessageParam{
-		anthropic.NewUserMessage(anthropic.NewTextBlock("question")),
-		anthropic.NewAssistantMessage(
-			anthropic.NewToolUseBlock("t1", map[string]any{"a": 1}, "grep"),
-		),
-		anthropic.NewUserMessage(anthropic.NewToolResultBlock("t1", "ok", false)),
-	}
-	proxyAllowed := withAnthropicThinkingBlocks(freshProxyMessages, unsignedBlocks, "deepseek-r1")
-	if len(proxyAllowed[1].Content) != 2 || proxyAllowed[1].Content[0].OfThinking == nil {
-		t.Fatalf("non-Claude model must allow replaying unsigned thinking block, got %d blocks", len(proxyAllowed[1].Content))
+	if got := anthropicThinkingBlockParams(unsigned, "deepseek-r1"); len(got) != 1 || got[0].OfThinking == nil {
+		t.Fatalf("non-Claude model must allow replaying unsigned thinking blocks, got %d", len(got))
 	}
 }
 
-// ── Responses: reasoning item + encrypted_content replay ────────────────────
-
-func TestWithResponsesReasoningItems(t *testing.T) {
-	items := []responsesReasoningItem{
-		{ID: "rs_1", EncryptedContent: "enc-1", SummaryTexts: []string{"thoughts"}},
-	}
-	messages := []legacyopenai.ChatCompletionMessage{
+// TestBuildAnthropicMessagesReplaysThinkingPerTurn pins the prefix-stability
+// contract: EVERY tool-loop turn keeps its captured thinking blocks in every
+// later request, not just the trailing one. A payload that decorates only the
+// trailing turn is dropped from that (now older) message in the next request —
+// the prefix bytes change and the provider prompt cache is lost from that
+// message onward, re-billing the recent tool output on every agent step.
+func TestBuildAnthropicMessagesReplaysThinkingPerTurn(t *testing.T) {
+	replay := &sessionReasoningPayload{turns: []reasoningTurn{
+		{callIDs: []string{"t1"}, anthropic: []anthropicThinkingBlock{{Thinking: "step one", Signature: "sig_1"}}},
+		{callIDs: []string{"t2"}, anthropic: []anthropicThinkingBlock{{Thinking: "step two", Signature: "sig_2"}}},
+	}}
+	turn1 := []legacyopenai.ChatCompletionMessage{
 		{Role: legacyopenai.ChatMessageRoleUser, Content: "question"},
-		{Role: legacyopenai.ChatMessageRoleAssistant, ToolCalls: []legacyopenai.ToolCall{{ID: "fc_1", Function: legacyopenai.FunctionCall{Name: "calculate", Arguments: "{}"}}}},
-		{Role: legacyopenai.ChatMessageRoleTool, ToolCallID: "fc_1", Content: "2"},
+		{Role: legacyopenai.ChatMessageRoleAssistant, ToolCalls: []legacyopenai.ToolCall{{ID: "t1", Function: legacyopenai.FunctionCall{Name: "grep", Arguments: "{}"}}}},
+		{Role: legacyopenai.ChatMessageRoleTool, ToolCallID: "t1", Content: "ok"},
 	}
-	out := withResponsesReasoningItems(messages, items)
-	if len(out) != 4 {
-		t.Fatalf("expected 4 messages (carrier injected), got %d", len(out))
+	turn2 := append(append([]legacyopenai.ChatCompletionMessage{}, turn1...),
+		legacyopenai.ChatCompletionMessage{Role: legacyopenai.ChatMessageRoleAssistant, ToolCalls: []legacyopenai.ToolCall{{ID: "t2", Function: legacyopenai.FunctionCall{Name: "read", Arguments: "{}"}}}},
+		legacyopenai.ChatCompletionMessage{Role: legacyopenai.ChatMessageRoleTool, ToolCallID: "t2", Content: "data"},
+	)
+
+	_, step1 := buildAnthropicMessages(turn1, replay, "claude-3-7-sonnet")
+	if len(step1) != 3 {
+		t.Fatalf("step 1 messages = %d, want 3", len(step1))
 	}
-	if out[1].Role != roleResponsesReasoningCarrier {
-		t.Fatalf("message 1 role = %q, want carrier", out[1].Role)
+	if blocks := step1[1].Content; len(blocks) != 2 || blocks[0].OfThinking == nil || blocks[0].OfThinking.Thinking != "step one" || blocks[1].OfToolUse == nil {
+		t.Fatalf("step 1 assistant blocks = %+v, want thinking + tool_use", blocks)
 	}
-	carriers := responsesReasoningCarriers(out)
-	if len(carriers) != 1 || carriers[0].ID != "rs_1" || carriers[0].EncryptedContent != "enc-1" ||
-		len(carriers[0].SummaryTexts) != 1 || carriers[0].SummaryTexts[0] != "thoughts" {
-		t.Fatalf("carrier round-trip mismatch: %+v", carriers)
+
+	_, step2 := buildAnthropicMessages(turn2, replay, "claude-3-7-sonnet")
+	if len(step2) != 5 {
+		t.Fatalf("step 2 messages = %d, want 5", len(step2))
 	}
-	// The carrier must expand into a real reasoning input item.
-	_, input := buildOpenAIResponsesInput(out, nil)
-	if len(input) < 2 || input[1].OfReasoning == nil {
-		t.Fatalf("expected a reasoning input item at position 1, got %+v", input)
+	// The step-1 request must be a byte-identical prefix of the step-2
+	// request: that is exactly what the provider prompt cache hashes.
+	firstStep1, err := json.Marshal(step1)
+	if err != nil {
+		t.Fatalf("marshal step 1: %v", err)
 	}
-	if input[1].OfReasoning.ID != "rs_1" {
-		t.Fatalf("reasoning item id = %q, want rs_1", input[1].OfReasoning.ID)
+	firstStep2, err := json.Marshal(step2[:3])
+	if err != nil {
+		t.Fatalf("marshal step 2 prefix: %v", err)
 	}
-	if input[1].OfReasoning.EncryptedContent.Value != "enc-1" {
-		t.Fatalf("reasoning item encrypted_content mismatch: %+v", input[1].OfReasoning.EncryptedContent)
+	if string(firstStep1) != string(firstStep2) {
+		t.Fatalf("the step-1 prefix must be byte-identical in the step-2 request:\n%s\n%s", firstStep1, firstStep2)
 	}
-	// Sanitizer must drop the carrier so it never persists.
-	sanitized := sanitizeHistoryMessages(out)
-	for _, m := range sanitized {
-		if m.Role == roleResponsesReasoningCarrier {
-			t.Fatal("sanitizeHistoryMessages must drop reasoning-item carriers")
-		}
+	if blocks := step2[3].Content; len(blocks) != 2 || blocks[0].OfThinking == nil || blocks[0].OfThinking.Thinking != "step two" {
+		t.Fatalf("step 2 assistant blocks = %+v, want the turn's own thinking blocks", blocks)
+	}
+
+	// A turn without a ledger entry (no thinking captured, another model's
+	// payload, or an unmatched id) simply emits none — on every request.
+	_, bare := buildAnthropicMessages(turn2, nil, "claude-3-7-sonnet")
+	if blocks := bare[1].Content; len(blocks) != 1 || blocks[0].OfToolUse == nil {
+		t.Fatalf("a turn without a ledger entry must emit its tool_use only, got %+v", blocks)
 	}
 }
 
-// TestWithResponsesReasoningItemsRequiresToolTurn covers the dangling-item bug:
-// a reasoning item may only be replayed when the history ends in a tool turn,
-// because the API pairs it with the item that follows it. A history that ends
-// with a user message used to receive the items at the very end of input.
-func TestWithResponsesReasoningItemsRequiresToolTurn(t *testing.T) {
-	items := []responsesReasoningItem{{ID: "rs_1", EncryptedContent: "enc-1", SummaryTexts: []string{"thoughts"}}}
-	newTurn := []legacyopenai.ChatCompletionMessage{
-		{Role: legacyopenai.ChatMessageRoleUser, Content: "first"},
-		{Role: legacyopenai.ChatMessageRoleAssistant, Content: "answer", ReasoningContent: "thoughts"},
-		{Role: legacyopenai.ChatMessageRoleUser, Content: "second"},
+// TestBuildOpenAIResponsesInputReplaysReasoningPerTurn pins the same
+// prefix-stability contract for the Responses wire: every captured reasoning
+// item stays right before its own turn's function_call outputs in every later
+// request, so the input prefix never sheds replay decorations.
+func TestBuildOpenAIResponsesInputReplaysReasoningPerTurn(t *testing.T) {
+	replay := &sessionReasoningPayload{turns: []reasoningTurn{
+		{
+			callIDs:        []string{"call_1"},
+			responses:      []responsesReasoningItem{{ID: "rs_1", EncryptedContent: "enc-1", SummaryTexts: []string{"thoughts"}}},
+			responsesItems: map[string]string{"call_1": "fc_item_1"},
+		},
+		{
+			callIDs:        []string{"call_2"},
+			responses:      []responsesReasoningItem{{ID: "rs_2", EncryptedContent: "enc-2"}},
+			responsesItems: map[string]string{"call_2": "fc_item_2"},
+		},
+	}}
+	turn1 := []legacyopenai.ChatCompletionMessage{
+		{Role: legacyopenai.ChatMessageRoleUser, Content: "question"},
+		{Role: legacyopenai.ChatMessageRoleAssistant, ToolCalls: []legacyopenai.ToolCall{{ID: "call_1", Function: legacyopenai.FunctionCall{Name: "calculate", Arguments: "{}"}}}},
+		{Role: legacyopenai.ChatMessageRoleTool, ToolCallID: "call_1", Content: "2"},
 	}
-	if out := withResponsesReasoningItems(newTurn, items); len(out) != len(newTurn) {
-		t.Fatalf("history without a trailing tool turn must not be injected, got %d messages", len(out))
+	turn2 := append(append([]legacyopenai.ChatCompletionMessage{}, turn1...),
+		legacyopenai.ChatCompletionMessage{Role: legacyopenai.ChatMessageRoleAssistant, ToolCalls: []legacyopenai.ToolCall{{ID: "call_2", Function: legacyopenai.FunctionCall{Name: "read", Arguments: "{}"}}}},
+		legacyopenai.ChatCompletionMessage{Role: legacyopenai.ChatMessageRoleTool, ToolCallID: "call_2", Content: "data"},
+	)
+
+	_, step1 := buildOpenAIResponsesInput(turn1, replay)
+	// user -> reasoning -> function_call -> function_call output
+	if len(step1) != 4 || step1[1].OfReasoning == nil || step1[1].OfReasoning.ID != "rs_1" {
+		t.Fatalf("step 1 input = %+v, want the reasoning item before its function_call", step1)
 	}
-	// An assistant tool call whose results have not arrived yet is still a tool
-	// turn: the reasoning item belongs right before it.
-	pending := []legacyopenai.ChatCompletionMessage{
-		{Role: legacyopenai.ChatMessageRoleUser, Content: "run it"},
-		{Role: legacyopenai.ChatMessageRoleAssistant, ToolCalls: []legacyopenai.ToolCall{{ID: "call_1"}}},
+	_, step2 := buildOpenAIResponsesInput(turn2, replay)
+	if len(step2) != 7 {
+		t.Fatalf("step 2 input = %d items, want 7", len(step2))
 	}
-	out := withResponsesReasoningItems(pending, items)
-	if len(out) != 3 || out[1].Role != roleResponsesReasoningCarrier {
-		t.Fatalf("pending tool call must receive the reasoning carrier, got %#v", out)
+	firstStep1, err := json.Marshal(step1)
+	if err != nil {
+		t.Fatalf("marshal step 1: %v", err)
+	}
+	firstStep2, err := json.Marshal(step2[:4])
+	if err != nil {
+		t.Fatalf("marshal step 2 prefix: %v", err)
+	}
+	if string(firstStep1) != string(firstStep2) {
+		t.Fatalf("the step-1 input prefix must be byte-identical in the step-2 request:\n%s\n%s", firstStep1, firstStep2)
 	}
 }
 
@@ -794,14 +787,15 @@ func TestResponsesReasoningItemKeepsEveryField(t *testing.T) {
 		t.Fatalf("captured = %+v, want every documented field", captured)
 	}
 
-	roundTripped := responsesReasoningCarriers([]legacyopenai.ChatCompletionMessage{
-		{Role: roleResponsesReasoningCarrier, Content: encodeResponsesReasoningCarrier(captured)},
-	})
-	if len(roundTripped) != 1 || len(roundTripped[0].SummaryTexts) != 2 || roundTripped[0].Status != "completed" {
-		t.Fatalf("carrier round-trip = %+v, want the captured item", roundTripped)
+	ledger := &sessionReasoningPayload{turns: []reasoningTurn{{
+		callIDs:   []string{"call_9"},
+		responses: []responsesReasoningItem{captured},
+	}}}
+	if turn := ledger.turnForAny([]string{"call_9"}); turn == nil || len(turn.responses) != 1 || len(turn.responses[0].SummaryTexts) != 2 || turn.responses[0].Status != "completed" {
+		t.Fatalf("ledger turn = %+v, want the captured item", turn)
 	}
 
-	input := responsesReasoningInputItem(roundTripped[0])
+	input := responsesReasoningInputItem(ledger.turns[0].responses[0])
 	if input.OfReasoning == nil {
 		t.Fatal("expected a reasoning input item")
 	}
@@ -823,14 +817,6 @@ func TestResponsesReasoningItemWithoutUsableIDDropped(t *testing.T) {
 	}
 	if _, ok := captureResponsesReasoningItem(item); ok {
 		t.Fatal("a reasoning item without a usable id must not be captured")
-	}
-	if got := encodeResponsesReasoningCarrier(responsesReasoningItem{ID: "rs_1|rs_2"}); got != "" {
-		t.Fatalf("carrier = %q, want empty for an unusable id", got)
-	}
-	if got := responsesReasoningCarriers([]legacyopenai.ChatCompletionMessage{
-		{Role: roleResponsesReasoningCarrier, Content: `{"ID":"bad id","EncryptedContent":"enc"}`},
-	}); len(got) != 0 {
-		t.Fatalf("carriers = %+v, want none for an unusable id", got)
 	}
 }
 
@@ -875,7 +861,7 @@ func TestPatchChatRequestFieldsAddsContent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal details: %v", err)
 	}
-	patched, changed := patchChatRequestFields(body, "", details, "", false)
+	patched, changed := patchChatRequestFields(body, "", map[string]json.RawMessage{"c1": details}, "", false)
 	if !changed {
 		t.Fatal("expected the tool-call and tool messages to be patched")
 	}
@@ -901,7 +887,9 @@ func TestPatchChatRequestFieldsAddsContent(t *testing.T) {
 		t.Fatal("a message replayed with reasoning_details must not also carry reasoning_content")
 	}
 
-	// A history that does not end in a tool turn gets no reasoning fields at all.
+	// A history without a matching tool-call assistant message gets no
+	// reasoning fields at all: the ledger only ever attaches to the turn it
+	// was captured with.
 	noTurn, err := json.Marshal(map[string]any{
 		"model":    "m",
 		"messages": []map[string]any{{"role": "user", "content": "q"}, {"role": "assistant", "content": "a"}},
@@ -909,33 +897,89 @@ func TestPatchChatRequestFieldsAddsContent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal request: %v", err)
 	}
-	if _, changed := patchChatRequestFields(noTurn, "", details, "", false); changed {
-		t.Fatal("a history without a trailing tool turn must not receive reasoning fields")
+	if _, changed := patchChatRequestFields(noTurn, "", map[string]json.RawMessage{"c1": details}, "", false); changed {
+		t.Fatal("a history without a matching tool turn must not receive reasoning fields")
 	}
 }
 
-// TestWithAnthropicThinkingBlocksRequiresToolTurn covers the replay gate: the
-// blocks may only be attached to the trailing tool turn, so a stale payload is
-// never glued to an unrelated assistant message (a new turn, a rewind, a
-// compaction, or another session's payload from the shared fallback bucket).
-func TestWithAnthropicThinkingBlocksRequiresToolTurn(t *testing.T) {
-	blocks := []anthropicThinkingBlock{{Thinking: "step one", Signature: "sig_1"}}
-	newTurn := []anthropic.MessageParam{
-		anthropic.NewUserMessage(anthropic.NewTextBlock("first")),
-		anthropic.NewAssistantMessage(anthropic.NewTextBlock("answer")),
-		anthropic.NewUserMessage(anthropic.NewTextBlock("second")),
+// TestPatchChatRequestFieldsDetailsPerTurn pins the Chat wire's share of the
+// prefix-stability contract: each turn's reasoning_details attach to that
+// turn's own assistant message in every request, so a patched two-turn body
+// keeps the first turn's messages byte-identical to the one-turn body.
+func TestPatchChatRequestFieldsDetailsPerTurn(t *testing.T) {
+	marshal := func(v any) []byte {
+		t.Helper()
+		raw, err := json.Marshal(v)
+		if err != nil {
+			t.Fatalf("marshal request: %v", err)
+		}
+		return raw
 	}
-	if got := withAnthropicThinkingBlocks(newTurn, blocks, "claude-3-7-sonnet"); len(got[1].Content) != 1 {
-		t.Fatalf("a history without a trailing tool turn must not be injected, got %d blocks", len(got[1].Content))
+	details := marshal([]map[string]any{{"type": "reasoning.text", "text": "why"}})
+	turn1 := map[string]any{
+		"model": "m",
+		"messages": []map[string]any{
+			{"role": "user", "content": "q"},
+			{"role": "assistant", "tool_calls": []map[string]any{{"id": "c1"}}},
+			{"role": "tool", "tool_call_id": "c1"},
+		},
 	}
-	// An assistant tool_use whose tool_result is missing is not a tool turn
-	// either: the dangling call is stripped before the request is built.
-	pending := []anthropic.MessageParam{
-		anthropic.NewUserMessage(anthropic.NewTextBlock("question")),
-		anthropic.NewAssistantMessage(anthropic.NewToolUseBlock("t1", map[string]any{"a": 1}, "grep")),
+	turn2Messages := append(append([]map[string]any{}, turn1["messages"].([]map[string]any)...),
+		map[string]any{"role": "assistant", "tool_calls": []map[string]any{{"id": "c2"}}},
+		map[string]any{"role": "tool", "tool_call_id": "c2"},
+	)
+	turn2 := map[string]any{"model": "m", "messages": turn2Messages}
+
+	patched1, _ := patchChatRequestFields(marshal(turn1), "", map[string]json.RawMessage{"c1": details}, "", false)
+	patched2, _ := patchChatRequestFields(marshal(turn2), "", map[string]json.RawMessage{"c1": details, "c2": details}, "", false)
+	var payload1, payload2 struct {
+		Messages []json.RawMessage `json:"messages"`
 	}
-	if got := withAnthropicThinkingBlocks(pending, blocks, "claude-3-7-sonnet"); len(got[1].Content) != 1 {
-		t.Fatalf("a tool_use without its tool_result must not be injected, got %d blocks", len(got[1].Content))
+	if err := json.Unmarshal(patched1, &payload1); err != nil {
+		t.Fatalf("unmarshal patched body 1: %v", err)
+	}
+	if err := json.Unmarshal(patched2, &payload2); err != nil {
+		t.Fatalf("unmarshal patched body 2: %v", err)
+	}
+	if len(payload1.Messages) != 3 || len(payload2.Messages) != 5 {
+		t.Fatalf("messages = %d / %d, want 3 / 5", len(payload1.Messages), len(payload2.Messages))
+	}
+	for i := range payload1.Messages {
+		if string(payload1.Messages[i]) != string(payload2.Messages[i]) {
+			t.Fatalf("message %d must be byte-identical across steps:\n%s\n%s", i, payload1.Messages[i], payload2.Messages[i])
+		}
+	}
+	if !bytes.Contains(payload2.Messages[3], []byte("reasoning_details")) {
+		t.Fatalf("the second turn's message must carry its own details: %s", payload2.Messages[3])
+	}
+}
+
+// TestBuildAnthropicMessagesThinkingRequiresMatchingTurn: the per-turn gate
+// replaces the old trailing-turn gate — a payload only ever lands on the
+// assistant turn whose call ids it was captured with, so a stale or foreign
+// payload cannot be glued to an unrelated message.
+func TestBuildAnthropicMessagesThinkingRequiresMatchingTurn(t *testing.T) {
+	replay := &sessionReasoningPayload{turns: []reasoningTurn{
+		{callIDs: []string{"other"}, anthropic: []anthropicThinkingBlock{{Thinking: "step one", Signature: "sig_1"}}},
+	}}
+	messages := []legacyopenai.ChatCompletionMessage{
+		{Role: legacyopenai.ChatMessageRoleUser, Content: "question"},
+		{Role: legacyopenai.ChatMessageRoleAssistant, ToolCalls: []legacyopenai.ToolCall{{ID: "t1", Function: legacyopenai.FunctionCall{Name: "grep", Arguments: "{}"}}}},
+		{Role: legacyopenai.ChatMessageRoleTool, ToolCallID: "t1", Content: "ok"},
+	}
+	_, converted := buildAnthropicMessages(messages, replay, "claude-3-7-sonnet")
+	if blocks := converted[1].Content; len(blocks) != 1 || blocks[0].OfToolUse == nil {
+		t.Fatalf("a payload captured for another turn must not be replayed, got %+v", blocks)
+	}
+	// A plain assistant answer (no tool calls) never matches a ledger turn.
+	answer := []legacyopenai.ChatCompletionMessage{
+		{Role: legacyopenai.ChatMessageRoleUser, Content: "first"},
+		{Role: legacyopenai.ChatMessageRoleAssistant, Content: "answer", ReasoningContent: "thoughts"},
+		{Role: legacyopenai.ChatMessageRoleUser, Content: "second"},
+	}
+	_, convertedAnswer := buildAnthropicMessages(answer, replay, "claude-3-7-sonnet")
+	if blocks := convertedAnswer[1].Content; len(blocks) != 1 || blocks[0].OfText == nil {
+		t.Fatalf("a non-tool assistant message must not gain thinking blocks, got %+v", blocks)
 	}
 }
 
@@ -945,18 +989,18 @@ func TestWithAnthropicThinkingBlocksRequiresToolTurn(t *testing.T) {
 // live payload of another session or of a concurrent tool loop.
 func TestReasoningStashEvictionKeepsOtherEntries(t *testing.T) {
 	stash := newReasoningStash()
-	payload := func() *sessionReasoningPayload {
-		return &sessionReasoningPayload{chatDetails: json.RawMessage("[]")}
+	turn := func() reasoningTurn {
+		return reasoningTurn{callIDs: []string{"c"}, chatDetails: json.RawMessage("[]")}
 	}
 	for i := 0; i < maxReasoningStashEntries; i++ {
-		stash.set(fmt.Sprintf("session-%d", i), payload())
+		stash.appendTurn(fmt.Sprintf("session-%d", i), turn())
 	}
 	for i := 0; i < maxReasoningStashEntries; i++ {
 		if stash.get(fmt.Sprintf("session-%d", i)) == nil {
 			t.Fatalf("session-%d was evicted while filling the map", i)
 		}
 	}
-	stash.set("overflow", payload())
+	stash.appendTurn("overflow", turn())
 	stash.mu.Lock()
 	remaining := len(stash.entries)
 	stash.mu.Unlock()
@@ -994,9 +1038,9 @@ func TestReasoningStashClearSession(t *testing.T) {
 	if chatKey == otherKey {
 		t.Fatalf("the two sessions must not share a key: %q", chatKey)
 	}
-	stash.set(chatKey, &sessionReasoningPayload{chatDetails: json.RawMessage("[]")})
-	stash.set(responsesKey, &sessionReasoningPayload{responses: []responsesReasoningItem{{ID: "rs_1"}}})
-	stash.set(otherKey, &sessionReasoningPayload{chatDetails: json.RawMessage("[]")})
+	stash.appendTurn(chatKey, reasoningTurn{callIDs: []string{"c1"}, chatDetails: json.RawMessage("[]")})
+	stash.appendTurn(responsesKey, reasoningTurn{callIDs: []string{"c2"}, responses: []responsesReasoningItem{{ID: "rs_1"}}})
+	stash.appendTurn(otherKey, reasoningTurn{callIDs: []string{"c3"}, chatDetails: json.RawMessage("[]")})
 	stash.clearSession("sess")
 	if got := stash.get(chatKey); got != nil {
 		t.Fatalf("the chat payload must be dropped, got %+v", got)
@@ -1016,12 +1060,12 @@ func TestReasoningReplayKeyIsolatesStoredPayloads(t *testing.T) {
 	stash := newReasoningStash()
 	cfgA := ConfigState{APIFormat: apiFormatOpenAIResponses, Model: "gpt-5.6", responsesPromptCacheKey: "sess"}
 	keyA := reasoningReplayKey(cfgA, cfgA.Model)
-	stash.set(keyA, &sessionReasoningPayload{responses: []responsesReasoningItem{{ID: "rs_1"}}})
+	stash.appendTurn(keyA, reasoningTurn{callIDs: []string{"c1"}, responses: []responsesReasoningItem{{ID: "rs_1"}}})
 	cfgB := ConfigState{APIFormat: apiFormatOpenAIResponses, Model: "gpt-5.1", responsesPromptCacheKey: "sess"}
 	if got := stash.get(reasoningReplayKey(cfgB, cfgB.Model)); got != nil {
 		t.Fatalf("a model switch must not expose the previous payload: %+v", got)
 	}
-	if got := stash.get(keyA); got == nil || len(got.responses) != 1 {
+	if got := stash.get(keyA); got == nil || got.turnForAny([]string{"c1"}) == nil || len(got.turns) != 1 {
 		t.Fatalf("the original payload must stay reachable: %+v", got)
 	}
 	if reasoningReplayKey(cfgA, "other-model") == keyA {
@@ -1030,6 +1074,30 @@ func TestReasoningReplayKeyIsolatesStoredPayloads(t *testing.T) {
 	cfgOtherFormat := ConfigState{APIFormat: apiFormatAnthropicMessages, Model: "gpt-5.6", responsesPromptCacheKey: "sess"}
 	if reasoningReplayKey(cfgA, cfgA.Model) == reasoningReplayKey(cfgOtherFormat, cfgOtherFormat.Model) {
 		t.Fatal("the wire protocol must be part of the key")
+	}
+}
+
+// TestReasoningStashAppendTurnAccumulates: the stash is a per-turn ledger —
+// turns accumulate within one key, a re-captured turn replaces its entry
+// instead of stacking, and an empty or unidentified turn is ignored.
+func TestReasoningStashAppendTurnAccumulates(t *testing.T) {
+	stash := newReasoningStash()
+	stash.appendTurn("k", reasoningTurn{callIDs: []string{"c1"}, anthropic: []anthropicThinkingBlock{{Thinking: "one", Signature: "s1"}}})
+	stash.appendTurn("k", reasoningTurn{callIDs: []string{"c2"}, anthropic: []anthropicThinkingBlock{{Thinking: "two", Signature: "s2"}}})
+	payload := stash.get("k")
+	if payload == nil || len(payload.turns) != 2 {
+		t.Fatalf("turns = %+v, want two accumulated turns", payload)
+	}
+	// Re-capturing the same turn replaces it.
+	stash.appendTurn("k", reasoningTurn{callIDs: []string{"c1"}, anthropic: []anthropicThinkingBlock{{Thinking: "one again", Signature: "s1"}}})
+	if payload = stash.get("k"); len(payload.turns) != 2 || payload.turnForAny([]string{"c1"}).anthropic[0].Thinking != "one again" {
+		t.Fatalf("re-captured turn must replace its entry: %+v", payload.turns)
+	}
+	// Empty turns and turns without identity are ignored.
+	stash.appendTurn("k", reasoningTurn{callIDs: []string{"c3"}})
+	stash.appendTurn("k", reasoningTurn{anthropic: []anthropicThinkingBlock{{Thinking: "x", Signature: "s"}}})
+	if payload = stash.get("k"); len(payload.turns) != 2 {
+		t.Fatalf("empty or unidentified turns must be ignored: %+v", payload.turns)
 	}
 }
 

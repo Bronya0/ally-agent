@@ -60,7 +60,7 @@ func TestMarkAnthropicPromptCacheBreakpointsSkipsTailInjections(t *testing.T) {
 		{Role: legacyopenai.ChatMessageRoleAssistant, ToolCalls: []legacyopenai.ToolCall{{ID: "t1", Function: legacyopenai.FunctionCall{Name: "grep", Arguments: `{"a":1}`}}}},
 		{Role: legacyopenai.ChatMessageRoleTool, ToolCallID: "t1", Content: `{"ok":true}`},
 		{Role: legacyopenai.ChatMessageRoleUser, Content: "<ally-context-budget>\nWindow: 1000 tokens\n</ally-context-budget>"},
-	})
+	}, nil, "")
 	if len(converted) != 3 {
 		t.Fatalf("expected 3 converted messages (user -> assistant -> user), got %d", len(converted))
 	}
@@ -89,7 +89,7 @@ func TestBuildAnthropicMessagesMergesConsecutiveSameRoleMessages(t *testing.T) {
 		{Role: legacyopenai.ChatMessageRoleUser, Content: "first question"},
 		{Role: legacyopenai.ChatMessageRoleUser, Content: "<ally-cancelled>\n上一条提问已被用户取消\n</ally-cancelled>"},
 		{Role: legacyopenai.ChatMessageRoleUser, Content: "new question"},
-	})
+	}, nil, "")
 	if system != "system instruction" {
 		t.Fatalf("system = %q, want %q", system, "system instruction")
 	}
@@ -120,7 +120,7 @@ func TestBuildAnthropicMessagesMergesConsecutiveSameRoleMessages(t *testing.T) {
 		{Role: legacyopenai.ChatMessageRoleTool, ToolCallID: "call_1", Content: `{"ok":true,"data":"content"}`},
 		{Role: legacyopenai.ChatMessageRoleUser, Content: "<ally-cancelled>\n上一条提问已被用户取消\n</ally-cancelled>"},
 		{Role: legacyopenai.ChatMessageRoleUser, Content: "cancel and do something else"},
-	})
+	}, nil, "")
 	if len(toolTurnMessages) != 3 {
 		t.Fatalf("expected 3 alternating messages (user -> assistant -> user), got %d", len(toolTurnMessages))
 	}
@@ -153,7 +153,7 @@ func TestBuildAnthropicMessagesMergesConsecutiveSameRoleMessages(t *testing.T) {
 		{Role: legacyopenai.ChatMessageRoleUser, Content: "hi"},
 		{Role: legacyopenai.ChatMessageRoleAssistant, Content: "hello"},
 		{Role: legacyopenai.ChatMessageRoleAssistant, Content: "how can I help?"},
-	})
+	}, nil, "")
 	if len(assistantMerged) != 2 {
 		t.Fatalf("expected 2 messages (user -> assistant), got %d", len(assistantMerged))
 	}
@@ -977,7 +977,7 @@ func TestAnthropicToolCallIDPairingUsesSharedSanitizer(t *testing.T) {
 			{ID: "call:foo|bar.1", Function: legacyopenai.FunctionCall{Name: "fn", Arguments: `{"k":"v"}`}},
 		}},
 		{Role: legacyopenai.ChatMessageRoleTool, ToolCallID: "call:foo|bar.1", Content: `{"ok":true}`},
-	})
+	}, nil, "")
 	if len(messages) != 3 {
 		t.Fatalf("expected 3 messages, got %d", len(messages))
 	}
@@ -1312,7 +1312,7 @@ func TestBuildAnthropicMessagesEmptyToolCallID(t *testing.T) {
 			Content:    "result text",
 		},
 	}
-	_, anthropicMsgs := buildAnthropicMessages(messages)
+	_, anthropicMsgs := buildAnthropicMessages(messages, nil, "")
 	if len(anthropicMsgs) < 2 {
 		t.Fatalf("expected assistant and user turn, got %d messages", len(anthropicMsgs))
 	}
@@ -1397,23 +1397,37 @@ func TestBuildOpenAIResponsesInputReplaysToolItemID(t *testing.T) {
 		}}},
 		{Role: legacyopenai.ChatMessageRoleTool, ToolCallID: "call_1", Content: "ok"},
 	}
-	_, input := buildOpenAIResponsesInput(messages, map[string]string{"call_1": "fc_item_1"})
-	if len(input) != 3 {
-		t.Fatalf("input items = %d, want 3: %+v", len(input), input)
+	replay := &sessionReasoningPayload{turns: []reasoningTurn{{
+		callIDs:        []string{"call_1"},
+		responses:      []responsesReasoningItem{{ID: "rs_1", EncryptedContent: "enc"}},
+		responsesItems: map[string]string{"call_1": "fc_item_1"},
+	}}}
+	_, input := buildOpenAIResponsesInput(messages, replay)
+	// user -> reasoning item -> function_call -> function_call output
+	if len(input) != 4 {
+		t.Fatalf("input items = %d, want 4: %+v", len(input), input)
 	}
-	if call := input[1].OfFunctionCall; call == nil || call.ID.Value != "fc_item_1" {
-		t.Fatalf("function_call = %+v, want the captured item id", input[1])
+	if input[1].OfReasoning == nil {
+		t.Fatalf("input[1] = %+v, want the captured reasoning item before its function_call", input[1])
+	}
+	if call := input[2].OfFunctionCall; call == nil || call.ID.Value != "fc_item_1" {
+		t.Fatalf("function_call = %+v, want the captured item id", input[2])
 	}
 	// A call from an older turn (or another model) has no captured id: the
 	// field stays absent instead of being invented.
 	_, bare := buildOpenAIResponsesInput(messages, nil)
-	if bare[1].OfFunctionCall == nil || bare[1].OfFunctionCall.ID.Valid() {
-		t.Fatalf("foreign turn must not carry an item id: %+v", bare[1])
+	if len(bare) != 3 || bare[1].OfFunctionCall == nil || bare[1].OfFunctionCall.ID.Valid() {
+		t.Fatalf("foreign turn must not carry an item id: %+v", bare)
 	}
 	// An id that cannot be echoed back verbatim is dropped rather than sent.
-	_, unsafe := buildOpenAIResponsesInput(messages, map[string]string{"call_1": "fc bad|id"})
-	if unsafe[1].OfFunctionCall.ID.Valid() {
-		t.Fatalf("unsafe item id must be dropped: %+v", unsafe[1].OfFunctionCall.ID)
+	unsafeTurn := &sessionReasoningPayload{turns: []reasoningTurn{{
+		callIDs:        []string{"call_1"},
+		responses:      []responsesReasoningItem{{ID: "rs_2"}},
+		responsesItems: map[string]string{"call_1": "fc bad|id"},
+	}}}
+	_, unsafe := buildOpenAIResponsesInput(messages, unsafeTurn)
+	if unsafe[2].OfFunctionCall == nil || unsafe[2].OfFunctionCall.ID.Valid() {
+		t.Fatalf("unsafe item id must be dropped: %+v", unsafe[2].OfFunctionCall)
 	}
 }
 
@@ -1542,19 +1556,23 @@ func TestResponsesToolItemIDCaptureAndCompleteness(t *testing.T) {
 		t.Fatalf("ids that cannot be echoed verbatim must be dropped: %+v", unsafe)
 	}
 
-	messages := []legacyopenai.ChatCompletionMessage{
-		{Role: legacyopenai.ChatMessageRoleUser, Content: "go"},
-		{Role: legacyopenai.ChatMessageRoleAssistant, ToolCalls: []legacyopenai.ToolCall{{ID: "call_1"}}},
-		{Role: legacyopenai.ChatMessageRoleTool, ToolCallID: "call_1", Content: "ok"},
+	turn := &reasoningTurn{
+		callIDs:        []string{"call_1"},
+		responses:      []responsesReasoningItem{{ID: "rs_1"}},
+		responsesItems: map[string]string{"call_1": "fc_1"},
 	}
-	if !trailingToolTurnItemIDsComplete(messages, map[string]string{"call_1": "fc_1"}) {
+	calls := []legacyopenai.ToolCall{{ID: "call_1"}}
+	if !responsesTurnItemsComplete(turn, calls) {
 		t.Fatal("a complete pairing must allow the replay")
 	}
-	if trailingToolTurnItemIDsComplete(messages, nil) {
+	if responsesTurnItemsComplete(turn, []legacyopenai.ToolCall{{ID: "call_1"}, {ID: "call_2"}}) {
 		t.Fatal("a missing follower id must block the replay")
 	}
-	if trailingToolTurnItemIDsComplete([]legacyopenai.ChatCompletionMessage{{Role: legacyopenai.ChatMessageRoleUser, Content: "q"}}, map[string]string{"call_1": "fc_1"}) {
-		t.Fatal("a history without a trailing tool turn must block the replay")
+	if responsesTurnItemsComplete(nil, calls) {
+		t.Fatal("a turn without captured items must block the replay")
+	}
+	if responsesTurnItemsComplete(&reasoningTurn{callIDs: []string{"call_1"}, responses: []responsesReasoningItem{{ID: "rs_1"}}}, calls) {
+		t.Fatal("a turn without item ids must block the replay")
 	}
 }
 
@@ -1604,7 +1622,7 @@ func TestBuildAnthropicMessagesMidTurnSystem(t *testing.T) {
 		{Role: legacyopenai.ChatMessageRoleUser, Content: "user prompt 2"},
 	}
 
-	system, anthropicMsgs := buildAnthropicMessages(messages)
+	system, anthropicMsgs := buildAnthropicMessages(messages, nil, "")
 	// Base system prompt must stay strictly intact to preserve prompt cache breakpoint
 	if system != "base system prompt" {
 		t.Fatalf("expected system to be 'base system prompt', got %q", system)

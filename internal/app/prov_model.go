@@ -842,9 +842,9 @@ func (a *App) streamOpenAIChat(ctx context.Context, cfg ConfigState, model strin
 	// assistant messages omit the field, while "off" has nothing to hand back
 	// (chatReasoningBackfillKey).
 	replayKey := reasoningReplayKey(cfg, model)
-	var details json.RawMessage
+	var turnDetails map[string]json.RawMessage
 	if payload := a.reasoningStash.get(replayKey); payload != nil {
-		details = payload.chatDetails
+		turnDetails = payload.chatDetailsByCallID()
 	}
 	reasoningKey := chatReasoningBackfillKey(cfg)
 	// "off" reaches a compatible endpoint as the stop-thinking field the body
@@ -861,7 +861,7 @@ func (a *App) streamOpenAIChat(ctx context.Context, cfg ConfigState, model strin
 	base.Transport = &chatRequestRewriteTransport{
 		base:            rt,
 		reasoningKey:    reasoningKey,
-		details:         details,
+		turnDetails:     turnDetails,
 		headers:         sessionAffinityHeaders(cfg),
 		promptCacheKey:  openAIChatPromptCacheKey(cfg),
 		streamDone:      streamDone,
@@ -1124,13 +1124,17 @@ func (a *App) openAIChatStreamAttempt(ctx context.Context, cfg ConfigState, clie
 		}
 	}
 
-	// Persist this response's OpenRouter-style reasoning details for the next
-	// request of this tool loop; a response without details clears the entry so a
-	// later turn never replays a stale trace (the key is model-scoped).
-	if detailsJSON := chatReasoningDetailsJSON(mergedDetails); len(detailsJSON) > 0 {
-		a.reasoningStash.set(reasoningReplayKey(cfg, streamReq.Model), &sessionReasoningPayload{chatDetails: detailsJSON})
-	} else {
-		a.reasoningStash.clear(reasoningReplayKey(cfg, streamReq.Model))
+	// Record this response's OpenRouter-style reasoning details as one turn of
+	// the session ledger, keyed by the turn's tool-call ids: every later
+	// request replays them on this turn's own assistant message, so the
+	// message prefix stays byte-identical across agent steps (the key is
+	// model-scoped). A response without details records no turn; earlier
+	// turns keep theirs.
+	if detailsJSON := chatReasoningDetailsJSON(mergedDetails); len(detailsJSON) > 0 && len(toolCalls) > 0 {
+		a.reasoningStash.appendTurn(reasoningReplayKey(cfg, streamReq.Model), reasoningTurn{
+			callIDs:     toolCallIDsOf(toolCalls),
+			chatDetails: detailsJSON,
+		})
 	}
 
 	if notes := toolAcc.diagnostics(); len(notes) > 0 {
@@ -1167,29 +1171,16 @@ func isIncompleteStreamJSON(err error) bool {
 }
 
 func (a *App) streamOpenAIResponses(ctx context.Context, cfg ConfigState, model string, messages []legacyopenai.ChatCompletionMessage, tools []legacyopenai.Tool, onEvent func(modelStreamEvent)) (*modelStreamResult, error) {
-	// Replay the reasoning items captured from the previous response of this
-	// session's tool loop: OpenAI requires them around function calls, and
-	// under store=false the encrypted_content is the only carrier. They are
-	// injected right before the trailing function_call outputs so the model
-	// resumes its reasoning instead of starting over (quality, not a 400).
+	// Replay the reasoning items captured from every tool-loop turn of this
+	// session: OpenAI requires them around function calls, and under
+	// store=false the encrypted_content is the only carrier. Each turn's items
+	// are replayed right before that turn's own function_call outputs — on
+	// every request, not just the trailing turn's — so the model resumes its
+	// reasoning instead of starting over (quality) and the input prefix stays
+	// byte-identical across agent steps (prompt cache).
 	replayKey := reasoningReplayKey(cfg, model)
-	var reasoningItems []responsesReasoningItem
-	var toolItemIDs map[string]string
-	if payload := a.reasoningStash.get(replayKey); payload != nil {
-		reasoningItems = payload.responses
-		toolItemIDs = payload.responsesToolItems
-	}
-	// A replayed reasoning item is paired with the id of the item that follows
-	// it; when a follower id is missing the pair cannot be completed, so the
-	// replay is skipped rather than risking the documented rejection
-	// (trailingToolTurnItemIDsComplete).
-	if len(reasoningItems) > 0 && !trailingToolTurnItemIDsComplete(messages, toolItemIDs) {
-		reasoningItems = nil
-	}
-	if len(reasoningItems) > 0 {
-		messages = withResponsesReasoningItems(messages, reasoningItems)
-	}
-	body := buildOpenAIResponsesRequest(cfg, model, messages, tools, toolItemIDs)
+	replay := a.reasoningStash.get(replayKey)
+	body := buildOpenAIResponsesRequest(cfg, model, messages, tools, replay)
 	// Ask for encrypted reasoning so stateless replay stays possible.
 	body.Include = append(body.Include, oaresp.ResponseIncludableReasoningEncryptedContent)
 
@@ -1492,13 +1483,18 @@ func (a *App) openAIResponsesStreamAttempt(ctx context.Context, cfg ConfigState,
 	if !gotTerminalEvent {
 		return nil, hasOutput(), errors.New("stream ended without terminal event")
 	}
-	// Persist this response's reasoning items for the next request in this
-	// tool loop; a non-reasoning response clears the stash. Done here (not in
-	// streamOpenAIResponses) so adapter-internal retries rewrite it per attempt.
-	if len(reasoningItems) > 0 || len(toolItemIDs) > 0 {
-		a.reasoningStash.set(reasoningReplayKey(cfg, string(body.Model)), &sessionReasoningPayload{responses: reasoningItems, responsesToolItems: toolItemIDs})
-	} else {
-		a.reasoningStash.clear(reasoningReplayKey(cfg, string(body.Model)))
+	// Record this response's reasoning items as one turn of the session
+	// ledger, keyed by the turn's tool-call ids: every later request replays
+	// them before that turn's own function_call outputs. Done here (not in
+	// streamOpenAIResponses) so adapter-internal retries rewrite it per
+	// attempt. A response without reasoning items records no turn; earlier
+	// turns keep theirs.
+	if len(reasoningItems) > 0 && len(toolCalls) > 0 {
+		a.reasoningStash.appendTurn(reasoningReplayKey(cfg, string(body.Model)), reasoningTurn{
+			callIDs:        toolCallIDsOf(toolCalls),
+			responses:      reasoningItems,
+			responsesItems: toolItemIDs,
+		})
 	}
 	content := assistant.String()
 	if content == "" && finalOutputText != "" {
@@ -1605,8 +1601,8 @@ func openAIResponsesPromptCacheKey(sessionID string) string {
 	return fmt.Sprintf("ally:%x", sum[:16])
 }
 
-func buildOpenAIResponsesRequest(cfg ConfigState, model string, messages []legacyopenai.ChatCompletionMessage, tools []legacyopenai.Tool, toolItemIDs map[string]string) oaresp.ResponseNewParams {
-	instructions, inputItems := buildOpenAIResponsesInput(messages, toolItemIDs)
+func buildOpenAIResponsesRequest(cfg ConfigState, model string, messages []legacyopenai.ChatCompletionMessage, tools []legacyopenai.Tool, replay *sessionReasoningPayload) oaresp.ResponseNewParams {
+	instructions, inputItems := buildOpenAIResponsesInput(messages, replay)
 	cacheKey := strings.TrimSpace(cfg.responsesPromptCacheKey)
 	explicitPromptCache := supportsOpenAIResponsesGPT56PromptCaching(cfg, model)
 	if explicitPromptCache {
@@ -1900,7 +1896,8 @@ func (a *App) streamAnthropicMessages(ctx context.Context, cfg ConfigState, mode
 	}
 	client := anthropic.NewClient(clientOptions...)
 
-	system, anthropicMessages := buildAnthropicMessages(messages)
+	replay := a.reasoningStash.get(reasoningReplayKey(cfg, model))
+	system, anthropicMessages := buildAnthropicMessages(messages, replay, model)
 	if len(anthropicMessages) == 0 || anthropicMessages[0].Role != anthropic.MessageParamRoleUser {
 		anthropicMessages = append([]anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock("..."))}, anthropicMessages...)
 	}
@@ -1925,15 +1922,6 @@ func (a *App) streamAnthropicMessages(ctx context.Context, cfg ConfigState, mode
 	//   (passing output_config.effort on 3.7 causes a 400 error).
 	// - For effort "off": thinking: { type: "disabled" }.
 	thinkingEnabled := configureAnthropicThinking(&params, model, cfg.ReasoningEffort, cfg.MaxTokens)
-	// Replay the thinking blocks captured from the previous response of this
-	// session's tool loop. They must precede the tool_use blocks of the SAME
-	// assistant message; buildAnthropicMessages places them at the front. The
-	// stash is model-scoped: blocks captured from another model are never
-	// replayed, because Anthropic validates the signature against the model that
-	// produced it.
-	if payload := a.reasoningStash.get(reasoningReplayKey(cfg, model)); payload != nil && len(payload.anthropic) > 0 {
-		params.Messages = withAnthropicThinkingBlocks(params.Messages, payload.anthropic, model)
-	}
 
 	maxRetries := effectiveLLMRetries(cfg)
 	var assistant strings.Builder
@@ -2087,13 +2075,16 @@ func (a *App) streamAnthropicMessages(ctx context.Context, cfg ConfigState, mode
 			toolCalls[i].Function.Arguments = "{}"
 		}
 	}
-	// Persist this response's thinking blocks for the next request in this
-	// tool loop. Non-thinking responses clear the stash so a later turn never
-	// replays stale blocks from an earlier model response.
-	if len(thinkingBlocks) > 0 {
-		a.reasoningStash.set(reasoningReplayKey(cfg, model), &sessionReasoningPayload{anthropic: thinkingBlocks})
-	} else {
-		a.reasoningStash.clear(reasoningReplayKey(cfg, model))
+	// Record this response's thinking blocks as one turn of the session
+	// ledger, keyed by the turn's tool-call ids: every later request replays
+	// them at the front of this turn's own assistant message, so the prefix
+	// stays byte-identical across agent steps. Non-thinking responses record
+	// no turn; earlier turns keep theirs.
+	if len(thinkingBlocks) > 0 && len(toolCalls) > 0 {
+		a.reasoningStash.appendTurn(reasoningReplayKey(cfg, model), reasoningTurn{
+			callIDs:   toolCallIDsOf(toolCalls),
+			anthropic: thinkingBlocks,
+		})
 	}
 	return &modelStreamResult{
 		Content:          assistant.String(),
@@ -2261,7 +2252,27 @@ func modelResponseStopError(cfg ConfigState, result *modelStreamResult) error {
 	return anthropicStopReasonError(result.StopReason, hasOutput)
 }
 
-func buildOpenAIResponsesInput(messages []legacyopenai.ChatCompletionMessage, toolItemIDs map[string]string) (string, oaresp.ResponseInputParam) {
+// responsesTurnItemsComplete reports whether every tool call of the turn has
+// its captured Responses item id. OpenAI pairs a replayed reasoning item with
+// the id of the item that follows it: when a follower id is unknown the pair
+// cannot be completed, and replaying the items would risk the documented
+// "reasoning item was provided without its required following item"
+// rejection — so the whole turn replays without ids, exactly like a fresh
+// turn.
+func responsesTurnItemsComplete(turn *reasoningTurn, calls []legacyopenai.ToolCall) bool {
+	if turn == nil || len(turn.responses) == 0 {
+		return false
+	}
+	for _, call := range calls {
+		key := toolcall.ForResponsesCall(toolcall.Effective(call.ID, call.Function.Name))
+		if strings.TrimSpace(turn.responsesItems[key]) == "" {
+			return false
+		}
+	}
+	return true
+}
+
+func buildOpenAIResponsesInput(messages []legacyopenai.ChatCompletionMessage, replay *sessionReasoningPayload) (string, oaresp.ResponseInputParam) {
 	systemParts := []string{}
 	input := oaresp.ResponseInputParam{}
 	hasSeenTurn := false
@@ -2281,21 +2292,29 @@ func buildOpenAIResponsesInput(messages []legacyopenai.ChatCompletionMessage, to
 				// Responses API developer role.
 				input = append(input, oaresp.ResponseInputItemParamOfMessage(text, oaresp.EasyInputMessageRoleDeveloper))
 			}
-		case roleResponsesReasoningCarrier:
-			// Synthetic carrier of captured Responses reasoning items (see
-			// withResponsesReasoningItems); expand into real reasoning input
-			// items so the model resumes its prior reasoning state.
-			for _, item := range responsesReasoningCarriers([]legacyopenai.ChatCompletionMessage{m}) {
-				input = append(input, responsesReasoningInputItem(item))
-			}
 		case legacyopenai.ChatMessageRoleUser, legacyopenai.ChatMessageRoleAssistant:
 			hasSeenTurn = true
 			if role == legacyopenai.ChatMessageRoleAssistant && len(m.ToolCalls) > 0 {
 				if text := messageText(m); text != "" {
 					input = append(input, oaresp.ResponseInputItemParamOfMessage(text, oaresp.EasyInputMessageRoleAssistant))
 				}
-				for _, call := range m.ToolCalls {
-					input = append(input, responseInputItemParamOfFunctionCall(call, toolItemIDs))
+				// The turn's captured reasoning items replay right before its
+				// function_call outputs — on every request that still carries
+				// the turn, so the input prefix stays byte-identical across
+				// agent steps. The all-or-nothing guard keeps a reasoning item
+				// from being sent without its follower item id.
+				turn := replay.turnForAny(toolCallIDsOf(m.ToolCalls))
+				if responsesTurnItemsComplete(turn, m.ToolCalls) {
+					for _, item := range turn.responses {
+						input = append(input, responsesReasoningInputItem(item))
+					}
+					for _, call := range m.ToolCalls {
+						input = append(input, responseInputItemParamOfFunctionCall(call, turn.responsesItems))
+					}
+				} else {
+					for _, call := range m.ToolCalls {
+						input = append(input, responseInputItemParamOfFunctionCall(call, nil))
+					}
 				}
 				continue
 			}
@@ -2370,7 +2389,7 @@ func openAIResponsesContentFromMulti(m legacyopenai.ChatCompletionMessage) oares
 	return content
 }
 
-func buildAnthropicMessages(messages []legacyopenai.ChatCompletionMessage) (string, []anthropic.MessageParam) {
+func buildAnthropicMessages(messages []legacyopenai.ChatCompletionMessage, replay *sessionReasoningPayload, model string) (string, []anthropic.MessageParam) {
 	systemParts := []string{}
 	out := []anthropic.MessageParam{}
 
@@ -2422,6 +2441,18 @@ func buildAnthropicMessages(messages []legacyopenai.ChatCompletionMessage) (stri
 		case legacyopenai.ChatMessageRoleAssistant:
 			hasSeenTurn = true
 			blocks := []anthropic.ContentBlockParamUnion{}
+			// The turn's captured thinking blocks replay at the front of its own
+			// assistant message — on every request that still carries the turn —
+			// so the request prefix stays byte-identical across agent steps.
+			// Anthropic requires thinking blocks to precede the tool_use blocks
+			// of the same message and accepts omitting them entirely, which is
+			// why a turn without a ledger entry simply emits none. The ledger is
+			// model-scoped: blocks captured from another model are never
+			// replayed, because Anthropic validates the signature against the
+			// model that produced it.
+			if turn := replay.turnForAny(toolCallIDsOf(m.ToolCalls)); turn != nil {
+				blocks = append(blocks, anthropicThinkingBlockParams(turn.anthropic, model)...)
+			}
 			if text := messageText(m); text != "" {
 				blocks = append(blocks, anthropic.NewTextBlock(text))
 			}

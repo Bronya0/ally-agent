@@ -365,8 +365,6 @@ type App struct {
 	// workspaceTokenUsage accumulates model-reported usage for this app run.
 	// Maps normalized workspace path → WorkspaceTokenUsage.
 	workspaceTokenUsage map[string]WorkspaceTokenUsage
-	taskbarMu           sync.Mutex
-	taskbarActiveRuns   int
 
 	servicesMu    sync.Mutex
 	services      map[string]*managedService
@@ -1462,29 +1460,6 @@ func (a *App) ensureInitialized() error {
 	return nil
 }
 
-func (a *App) beginTaskbarRun() {
-	a.taskbarMu.Lock()
-	defer a.taskbarMu.Unlock()
-
-	a.taskbarActiveRuns++
-	if a.taskbarActiveRuns == 1 {
-		setTaskbarRunningProgress()
-	}
-}
-
-func (a *App) endTaskbarRun() {
-	a.taskbarMu.Lock()
-	if a.taskbarActiveRuns > 0 {
-		a.taskbarActiveRuns--
-	}
-	if a.taskbarActiveRuns == 0 {
-		clearTaskbarProgress()
-	}
-	a.taskbarMu.Unlock()
-
-	flashTaskbarWindowIfInactive()
-}
-
 func (a *App) StartChat(req ChatRequest) (string, error) {
 	if err := a.ensureInitialized(); err != nil {
 		return "", err
@@ -2086,6 +2061,11 @@ Rules:
 	// The conversation was replaced by the summary: the provider measurement
 	// covered turns that no longer exist.
 	a.clearContextAnchor(sessionID)
+	// The per-turn reasoning ledger followed those turns into history: every
+	// entry is now unmatched dead weight, and clearing it here is the ledger's
+	// single bounding path (appendTurn never trims, to keep the request
+	// prefix — and with it the provider prompt cache — byte-stable).
+	a.reasoningStash.clearSession(sessionID)
 	a.saveHistory(sessionID, newHistory)
 
 	tokensAfter := a.getContextBreakdown(sessionID, "").Total
@@ -2129,7 +2109,6 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 	// Knowledge-base runs mark their sources/ subtree read-only for every
 	// tool call in this run; sub-agents inherit the policy via ctx.
 	ctx = withKBDenyRoots(ctx, kbDenyRootsForConfig(cfg))
-	a.beginTaskbarRun()
 	// success marks a run that already persisted its history on the normal
 	// run:done path. Interrupted runs (ESC/cancel, provider errors, stop
 	// reasons, step limits) fall through to the deferred checkpoint save so
@@ -2165,7 +2144,10 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			a.saveHistory(req.SessionID, messages)
 		}
 		a.restoreSavedHistoryBreakdown(sessionID)
-		a.endTaskbarRun()
+		// run 结束的一次性任务栏提醒（仅窗口非前台时闪烁数次）。
+		// 运行中不设任务栏进度：TBPF_INDETERMINATE 跑马灯贯穿整个
+		// run，会被用户感知为后台窗口图标持续闪烁。
+		flashTaskbarWindowIfInactive()
 		a.finishRun(runID)
 	}()
 	// Panic 兜底：runChat 在独立 goroutine 里运行，逃逸的 panic 会直接击穿

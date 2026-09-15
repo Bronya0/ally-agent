@@ -10,8 +10,7 @@
 
 package app
 
-func setTaskbarRunningProgress() {}
-
-func clearTaskbarProgress() {}
-
+// flashTaskbarWindowIfInactive is the Windows-only run-end attention cue;
+// other platforms have no taskbar flash equivalent. 运行中不设任务栏
+// 进度动画（TBPF_INDETERMINATE 跑马灯会被感知为持续闪烁）。
 func flashTaskbarWindowIfInactive() {}
