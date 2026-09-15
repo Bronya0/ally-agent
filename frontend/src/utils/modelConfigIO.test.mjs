@@ -12,7 +12,9 @@ import test from 'node:test';
 import {
   buildModelConfigExport,
   mergeModelConfigs,
+  normalizeApiFormat,
   normalizeCustomHeaders,
+  normalizeReasoningEffort,
   parseModelConfigImport,
 } from './modelConfigIO.mjs';
 
@@ -110,6 +112,71 @@ test('normalizeCustomHeaders trims, canonicalizes, and drops managed names', () 
 
   assert.equal(normalizeCustomHeaders({ A: '', B: ' ' }), null);
   assert.equal(normalizeCustomHeaders(null), null);
+});
+
+// Mirrors TestNormalizeReasoningEffort in internal/app/infra_bridges_test.go.
+// Every spelling the backend accepts must fold the same way here: a spelling
+// only one side folds is not "tolerated", it is silently rewritten, and an
+// "off" read as "auto" turns thinking back on (and this side persists it).
+test('normalizeReasoningEffort folds exactly the spellings the backend accepts', () => {
+  const cases = {
+    '': 'auto',
+    auto: 'auto',
+    Auto: 'auto',
+    default: 'auto',
+    unset: 'auto',
+    off: 'off',
+    OFF: 'off',
+    none: 'off',
+    disabled: 'off',
+    nothinking: 'off',
+    nothink: 'off',
+    'no-think': 'off',
+    NO_THINK: 'off',
+    low: 'low',
+    LOW: 'low',
+    medium: 'medium',
+    med: 'medium',
+    high: 'high',
+    xhigh: 'xhigh',
+    'X-HIGH': 'xhigh',
+    extra_high: 'xhigh',
+    extremehigh: 'xhigh',
+    max: 'max',
+    maximum: 'max',
+    maximal: 'max',
+    bogus: 'auto',
+    'high effort': 'auto',
+  };
+  for (const [input, want] of Object.entries(cases)) {
+    assert.equal(normalizeReasoningEffort(input), want, `normalizeReasoningEffort(${JSON.stringify(input)})`);
+  }
+});
+
+// Mirrors the alias buckets of the Go normalizeAPIFormat (infra_bridges.go).
+test('normalizeApiFormat folds exactly the spellings the backend accepts', () => {
+  const cases = {
+    '': 'openai_chat',
+    openai: 'openai_chat',
+    openai_compatible: 'openai_chat',
+    openai_chat: 'openai_chat',
+    chat: 'openai_chat',
+    chat_completions: 'openai_chat',
+    chat_completion: 'openai_chat',
+    'OpenAI-Chat': 'openai_chat',
+    bogus: 'openai_chat',
+    openai_responses: 'openai_responses',
+    responses: 'openai_responses',
+    response: 'openai_responses',
+    anthropic: 'anthropic_messages',
+    anthropic_messages: 'anthropic_messages',
+    claude: 'anthropic_messages',
+    claude_messages: 'anthropic_messages',
+    messages: 'anthropic_messages',
+  };
+  for (const [input, want] of Object.entries(cases)) {
+    assert.equal(normalizeApiFormat(input), want, `normalizeApiFormat(${JSON.stringify(input)})`);
+  }
 });
 
 test('custom headers survive model config export and import', () => {

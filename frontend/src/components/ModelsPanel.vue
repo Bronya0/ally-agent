@@ -279,7 +279,7 @@ Public License v3. See the LICENSE file for details.
 import { computed, reactive, ref, watch } from 'vue';
 import { useMessage } from 'naive-ui';
 import { reasoningEffortLabel, t } from '../i18n.mjs';
-import { buildModelConfigExport, mergeModelConfigs, modelConfigIdentity, normalizeApiKeysArray, normalizeCustomHeaders, normalizeReasoningEffort, parseModelConfigImport, reasoningEffortLevels } from '../utils/modelConfigIO.mjs';
+import { buildModelConfigExport, mergeModelConfigs, modelConfigIdentity, normalizeApiFormat, normalizeApiKeysArray, normalizeCustomHeaders, normalizeReasoningEffort, parseModelConfigImport, reasoningEffortLevels } from '../utils/modelConfigIO.mjs';
 import { saveTextFile } from '../utils/download.mjs';
 import CloseOutlined from '@vicons/antd/CloseOutlined';
 import PlusOutlined from '@vicons/antd/PlusOutlined';
@@ -489,13 +489,6 @@ function onContextWindowSelected(value) {
 
 function onReasoningTagSelected(value) {
   modelDraft.reasoningTag = String(value ?? '').trim() || 'reasoning_content';
-}
-
-function normalizeApiFormat(value) {
-  const v = String(value || '').trim().toLowerCase().replace(/[-\s]+/g, '_');
-  if (['openai_responses', 'responses', 'response'].includes(v)) return 'openai_responses';
-  if (['anthropic', 'anthropic_messages', 'claude', 'claude_messages', 'messages'].includes(v)) return 'anthropic_messages';
-  return 'openai_chat';
 }
 
 function apiFormatLabel(value) {

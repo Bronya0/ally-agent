@@ -91,6 +91,21 @@ export function normalizeTokenParam(value) {
   return 'auto';
 }
 
+// normalizeApiFormat mirrors the Go backend: the canonical wire formats are
+// 'openai_chat', 'openai_responses' and 'anthropic_messages'. Recognized aliases
+// (case/dash/space variants, 'responses', 'claude', 'messages', ...) fold into
+// one of them; anything unknown — including every Chat spelling the backend
+// accepts, such as 'openai' or 'chat_completions' — falls back to 'openai_chat',
+// which is the backend's default bucket too. It lives here rather than inside a
+// component so the alias table has one reusable home: a component-local copy is
+// how the reasoning-effort tables drifted apart in the first place.
+export function normalizeApiFormat(value) {
+  const v = String(value || '').trim().toLowerCase().replace(/[-\s]+/g, '_');
+  if (['openai_responses', 'responses', 'response'].includes(v)) return 'openai_responses';
+  if (['anthropic', 'anthropic_messages', 'claude', 'claude_messages', 'messages'].includes(v)) return 'anthropic_messages';
+  return 'openai_chat';
+}
+
 // normalizeReasoningEffort collapses the spellings of a level into the canonical
 // value. Levels are picked from a dropdown (reasoningEffortLevels), so nothing in
 // the UI produces any other spelling — this is a safety net for values that
@@ -98,15 +113,17 @@ export function normalizeTokenParam(value) {
 // dash/space/underscore variants, "default"/"unset") collapse to the canonical
 // level; "off" is a level of its own (explicitly stop thinking, unlike "auto"
 // which leaves the decision to the provider); anything else falls back to
-// "auto". The Go normalizer is the more tolerant of the two — it also accepts
-// "nothinking"/"nothink" as "off", which this side would read as "auto"; no UI
-// value distinguishes them.
+// "auto". The alias set mirrors the Go normalizer (infra_bridges.go) exactly.
+// Tolerance has to match, not merely exist: a spelling only one side folds is
+// not "cleaned up", it is silently rewritten — an "off" that reads as "auto"
+// turns thinking back on behind the user's back, and this side runs on config
+// load and can persist the rewrite. Both alias tables are pinned by tests.
 export function normalizeReasoningEffort(value) {
   const v = String(value || '').trim().toLowerCase().replace(/[-_\s]+/g, '');
   switch (v) {
     case 'auto': case 'default': case 'unset': case '':
       return 'auto';
-    case 'off': case 'none': case 'disabled':
+    case 'off': case 'none': case 'disabled': case 'nothinking': case 'nothink':
       return 'off';
     case 'low': return 'low';
     case 'medium': case 'med': return 'medium';

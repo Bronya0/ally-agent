@@ -25,6 +25,9 @@ func TestNormalizeReasoningEffort(t *testing.T) {
 		"OFF":         reasoningEffortOff,
 		"none":        reasoningEffortOff,
 		"disabled":    reasoningEffortOff,
+		"nothinking":  reasoningEffortOff,
+		"no-think":    reasoningEffortOff,
+		"NO_THINK":    reasoningEffortOff,
 		"low":         reasoningEffortLow,
 		"LOW":         reasoningEffortLow,
 		"medium":      reasoningEffortMedium,
@@ -42,6 +45,37 @@ func TestNormalizeReasoningEffort(t *testing.T) {
 	for in, want := range cases {
 		if got := normalizeReasoningEffort(in); got != want {
 			t.Errorf("normalizeReasoningEffort(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestNormalizeAPIFormat pins the alias buckets the frontend mirrors
+// (modelConfigIO.mjs normalizeAPIFormat). Both tables have to be pinned on their
+// own side: a spelling only one of them folds is not "tolerated", it is silently
+// rewritten on the side that missed it.
+func TestNormalizeAPIFormat(t *testing.T) {
+	cases := map[string]string{
+		"":                   apiFormatOpenAIChat,
+		"openai":             apiFormatOpenAIChat,
+		"openai_compatible":  apiFormatOpenAIChat,
+		"openai_chat":        apiFormatOpenAIChat,
+		"chat":               apiFormatOpenAIChat,
+		"chat_completions":   apiFormatOpenAIChat,
+		"chat_completion":    apiFormatOpenAIChat,
+		"OpenAI-Chat":        apiFormatOpenAIChat,
+		"bogus":              apiFormatOpenAIChat,
+		"openai_responses":   apiFormatOpenAIResponses,
+		"responses":          apiFormatOpenAIResponses,
+		"response":           apiFormatOpenAIResponses,
+		"anthropic":          apiFormatAnthropicMessages,
+		"anthropic_messages": apiFormatAnthropicMessages,
+		"claude":             apiFormatAnthropicMessages,
+		"claude_messages":    apiFormatAnthropicMessages,
+		"messages":           apiFormatAnthropicMessages,
+	}
+	for in, want := range cases {
+		if got := normalizeAPIFormat(in); got != want {
+			t.Errorf("normalizeAPIFormat(%q) = %q, want %q", in, got, want)
 		}
 	}
 }
