@@ -70,3 +70,12 @@ Copyright (C) 2026 Bronya0。
 Ally 是采用 [GNU General Public License v3.0 only](LICENSE)（`GPL-3.0-only`）发布的自由软件。你可以依照该许可证使用、研究、修改和重新分发本项目。分发 Ally 或其修改版本时，必须提供对应源代码并保留 GPLv3 许可证声明。
 
 发行包包含采用自身 MIT/Unlicense 条款的 [ripgrep](https://github.com/BurntSushi/ripgrep)。其他第三方资源保留各自的许可证，详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+
+## 参考项目
+
+Ally 的若干设计取舍来自下列开源项目的启发，在此致谢。各项目遵循其自身许可证，Ally 与它们没有隶属关系。
+
+- [Kimi Code CLI（kimicode）](https://github.com/MoonshotAI/kimi-code) — 亮色主题色板、图片 token 估算、中断提醒等交互与计量细节
+- [Codex CLI](https://github.com/openai/codex) — Responses 协议的会话缓存键与用量字段处理
+- [pi](https://github.com/earendil-works/pi) — 编辑模糊匹配、上下文估算、思考档位能力判定、溢出恢复压缩
+- [OpenCode](https://github.com/sst/opencode) — 请求头与 User-Agent 等兼容性约定

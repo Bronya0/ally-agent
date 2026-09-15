@@ -70,3 +70,12 @@ Copyright (C) 2026 Bronya0.
 Ally is free software licensed under the [GNU General Public License v3.0 only](LICENSE) (`GPL-3.0-only`). You may use, study, modify, and redistribute it under those terms. Distributions of Ally or modified versions must provide the corresponding source code and retain the GPLv3 license notices.
 
 Release packages include [ripgrep](https://github.com/BurntSushi/ripgrep) under its own MIT/Unlicense terms. Other third-party resources retain their respective licenses; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+## Reference projects
+
+Ally's design borrows heavily from the ideas of these open-source projects — thanks to their authors. Each follows its own license, and Ally is not affiliated with any of them.
+
+- [Kimi Code CLI (kimicode)](https://github.com/MoonshotAI/kimi-code) — light-theme palette, image token estimation, interruption reminders
+- [Codex CLI](https://github.com/openai/codex) — Responses session cache key and usage field handling
+- [pi](https://github.com/earendil-works/pi) — fuzzy edit matching, context estimation, reasoning capability checks, overflow-recovery compaction
+- [OpenCode](https://github.com/sst/opencode) — request header and User-Agent compatibility conventions
