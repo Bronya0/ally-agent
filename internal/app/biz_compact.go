@@ -78,9 +78,12 @@ func (a *App) compactSessionRunning(sessionID string) bool {
 	return running
 }
 
-// CompactSession compacts the conversation history for a session. Stage 1
-// stubs stale tool-result bodies (free); the LLM summary (stage 2) only runs
-// when usage is still over the threshold afterwards.
+// CompactSession compacts the conversation history for a session. A manual
+// compaction is the user's explicit intent, so it runs the LLM summary
+// unconditionally (compactHistory). Only the automatic path is gated: the run
+// loop compacts above the configured threshold (compactRunHistory with
+// compactReasonThreshold) or once as overflow recovery after a provider
+// reported the context as too long (compactReasonOverflow).
 func (a *App) CompactSession(sessionID, instruction string) (map[string]any, error) {
 	parent := a.ctx
 	if parent == nil {
