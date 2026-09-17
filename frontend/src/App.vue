@@ -5540,7 +5540,8 @@ async function sendPrompt(opts) {
   }
 
   if (!sessionWorkspace) {
-    const workspace = await chooseWorkspace();
+    // 无工作区 Tab 首次选定工作区：这里才把选中路径采纳进当前会话与 config。
+    const workspace = await chooseWorkspace({ adopt: true });
     if (!workspace) {
       message.warning(t('app.workspace.required'));
       return;
@@ -5663,14 +5664,20 @@ async function stopRun() {
   }
 }
 
-async function chooseWorkspace() {
+// 选择工作区目录。adopt=true 时（无工作区 Tab 首次发送消息选定工作区）才把
+// 选中路径绑定到 config.workspace 与当前活动会话；为别处选目录（新建 Tab 等）
+// 必须保持 adopt=false —— 否则当前 Tab 的会话会被隐性改挂到新工作区：旧会话
+// 出现在新 Tab 的 /sessions 列表并随后持久化，同时从原工作区列表里消失。
+async function chooseWorkspace({ adopt = false } = {}) {
   try {
     const workspace = await SelectWorkspace();
     if (!workspace) return null;
-    config.workspace = workspace;
-    configDraft.workspace = workspace;
-    const session = activeSession.value;
-    if (session) session.workspace = workspace;
+    if (adopt) {
+      config.workspace = workspace;
+      configDraft.workspace = workspace;
+      const session = activeSession.value;
+      if (session) session.workspace = workspace;
+    }
     return workspace;
   } catch (err) {
     message.error(t('app.workspace.selectFailed', { error: err }));
