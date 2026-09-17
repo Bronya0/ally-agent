@@ -101,6 +101,61 @@ fi
 
 出现 alert/confirm/prompt 时其他命令会提示「⚠ Dialog appeared」，**必须先 `dialog-accept`/`dialog-dismiss` 再继续**。
 
+### 会话生命周期（最容易踩的坑）
+
+会话挂在**发起它的那条命令的进程树**上。`open` 返回后，只要那条命令的进程树被回收，浏览器就跟着关闭，下一条命令报 `The browser 'default' is not open, please run open first`（另一处措辞：`Browser 'default' is not open. Run playwright-cli open to start the browser session.`），`playwright-cli list` 显示 `(no browsers)`。
+
+Windows 上这是**确定行为**：Ally 的 command 工具给每条命令建一个 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` 的 Job Object，命令结束关掉 handle 时把整棵树（含 playwright-cli 的 detached daemon）一并杀掉；实测 `open` 那条命令返回后，下一条 `list` 已是 `(no browsers)`。macOS/Linux 上 daemon 走 `setsid` 独立会话、正常结束不会被回收，可能跨命令存活——**不要依赖它能存活**，下面两种用法在三个平台都成立。
+
+另外：playwright-cli **没有 `wait`/`expect` 这类等待命令**（`--help` 里查不到），等待只能靠 `sleep`，或靠 B 方案反复读直到出现。
+
+所以有两种正确用法，按任务性质选：
+
+#### A. 一次性验证 → 整条链路写进**一条命令**
+
+步骤、选择器、断言事先就确定时用这种（回归复查、检查某页是否报错/NaN、元素是否可见）：不占 service 槽位、跑完即净、命令可原样重跑。
+
+```bash
+playwright-cli open "$URL" --browser=msedge --headed >/dev/null 2>&1
+playwright-cli fill 'input[placeholder="用户名"]' "$USER" >/dev/null 2>&1
+playwright-cli fill 'input[placeholder="密码"]' "$PASS" >/dev/null 2>&1
+playwright-cli click 'button[type="submit"]' >/dev/null 2>&1
+sleep 4
+playwright-cli eval "() => Array.from(document.querySelectorAll('.menu-item')).map(e => e.textContent.trim())" 2>&1 | grep -A 20 Result
+playwright-cli close
+```
+
+- 子命令一律 `>/dev/null 2>&1` 静音，只把需要的值用 `eval` 取出并 `grep -A N Result` 截断；别把整棵 `snapshot` 倒进上下文。
+- 想看“DOM 里有但没有显示”这种状态，用 `getBoundingClientRect().height > 0` 判定可见性，而不是 `querySelectorAll` 的数量。
+- 一条命令内用 `&&` 串联时前一步失败会中断后续；需要“尽力继续”时用 `;`。
+
+#### B. 探索式调试 / 需要看窗口 → 用 `service` 挂一个 holder
+
+需要按上一步结果决定下一步、要等异步渲染、要反复微调看效果、或要用户看着窗口时用这种：`open` 之后拖住进程树，之后每条 command 都能接管同一个浏览器，登录态与页面位置都还在。
+
+```
+service start: playwright-cli open "$URL" --browser=msedge --headed && sleep 600
+```
+
+```bash
+playwright-cli list                                           # 确认 default 会话 open
+playwright-cli eval "() => localStorage.getItem('token')"      # 登录态还在
+playwright-cli goto "$URL/next-page"                           # 后续命令继续操作同一浏览器
+```
+
+- 收尾：`service stop <id>`（连浏览器一起回收），必要时 `playwright-cli kill-all` 兜底。
+- `sleep` 到期 holder 退出、会话即消失；`service` 槽位上限 8，别长期占着。
+- **状态会累积**（上一个实验留下的 localStorage、mock 路由、登录态仍在），同一会话里做对照实验要留神。
+
+#### 判断口径
+
+| 场景 | 选择 |
+|---|---|
+| 一次性验证、回归复查（步骤固定） | A 串完 |
+| 需要按结果分支、等渲染、反复试 | B holder |
+| 演示、要让用户接管鼠标键盘 | B holder（可另开 `playwright-cli show` 仪表盘） |
+| 想每次都串、但不想重复登录 | A 首次加 `state-save`，之后 `state-load` |
+
 ## 4. Ally 集成注意事项（help 不会讲的部分）
 
 - **路径**：传给 playwright-cli 的文件路径用 forward slash。Windows 绝对路径在 Git Bash 里写成 `/c/Users/...` 或 `"C:/Users/..."`。
@@ -108,11 +163,12 @@ fi
 - **超时**：浏览器操作较慢，`command` 的 `timeout` 适当调大（如 60-120）。
 - **资源清理**：任务结束用 `close` 或 `close-all` 释放浏览器进程，避免残留。
 - **不要**用 Ally 的 `read` 工具读 playwright-cli 生成的截图二进制文件；截图仅供用户查看或模型从命令输出文本判断。
-- **会话保持**：默认每次 `open` 是全新会话；保留登录态用 `--persistent` 或 `state-save`/`state-load`（具体参数以 `--help` 为准）。
+- **会话保持**：会话挂在发起它的命令进程树上，命令结束即回收（见第 3 节「会话生命周期」）；`--persistent` 只把 profile（cookie/localStorage）落盘，**不能**让会话跨命令存活。`state-save`/`state-load` 只覆盖 cookie + localStorage（**不含 sessionStorage**），适合“每次都串、但不想重复登录”。
 
 ## 5. 错误恢复速查
 
 - `playwright-cli: command not found` → 回第 1 步检查/安装。
+- `The browser 'default' is not open` / `Browser 'default' is not open` / `(no browsers)` → 前一命令的进程树已回收，会话被连带关闭：把链路合并到一条命令里，或用 `service` 挂住 holder（见第 3 节）。
 - `Browser not installed` / `channel not found` → 走第 2 节回退分支，`ask` 后下载 chromium。
 - `Element not found` / ref 失效 → 重新 `snapshot` 确认 ref。
 - 其他命令参数错误 → 先 `playwright-cli <command> --help` 查准确用法，不要硬猜。
