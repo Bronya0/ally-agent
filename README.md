@@ -55,6 +55,8 @@ Download packages for Windows, macOS, and Linux from the [Releases page](https:/
 3. Open Settings and configure your model provider, model, API URL, and API key.
 4. Start chatting about your project.
 
+macOS: the package is not signed, so drag `Ally.app` into Applications first, then double-click `免签名启动Ally.command` from the DMG once — it clears the quarantine flag and launches Ally.
+
 ## Local build
 
 ```bash

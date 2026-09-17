@@ -55,6 +55,8 @@
 3. 打开设置，填写模型服务、模型名称、API 地址和 API Key。
 4. 开始与 Ally 对话。
 
+macOS：安装包未签名，请先把 `Ally.app` 拖进 Applications，再双击 DMG 里的 `免签名启动Ally.command` 一次，即可去除隔离属性并启动 Ally。
+
 ## 本地构建
 
 ```bash
