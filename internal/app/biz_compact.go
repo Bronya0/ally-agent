@@ -270,10 +270,19 @@ func (a *App) compactHistory(ctx context.Context, cfg ConfigState, sessionID, in
 CRITICAL LANGUAGE RULE:
 Always write the summary in the primary language used by the user in the conversation (e.g. Chinese if the user spoke Chinese, English if the user spoke English, etc.). The section headings below may be translated into the user's language or kept as equivalent clear headings.
 
+REQUIREMENTS DRIFT RULES:
+- If the messages above already contain a previous compaction summary (it appears as the first message: a structured Markdown summary), carry its "User Intent & Requirements" and "Constraints & Preferences" sections forward UNCHANGED. Only modify an entry when the user explicitly changed or refined it in the newer messages; then write the current effective version and note the change briefly (e.g. "changed by user: ...").
+- Never shorten, merge, or drop existing requirements or constraints for the sake of brevity, and never resurrect a requirement the user has already superseded.
+- State requirements as the CURRENT EFFECTIVE version: your synthesized understanding after all clarifications and corrections. Do not quote the user verbatim - users often phrase things loosely; the refined understanding is the requirement.
+- When statements conflict, the user's latest instruction wins.
+
 Use the following structure with Markdown headings:
 
 ## User Intent & Requirements / 用户需求与目标
-Concise statement of the user's core intent, ongoing tasks, and explicit requirements.
+The user's core intent, ongoing tasks, and explicit requirements, stated as the current effective version (see the drift rules above).
+
+## Constraints & Preferences / 约束与偏好
+One-off directives that are easy to lose and costly to forget: files or areas the user said NOT to touch, mandated approaches or tools, output style, workflow preferences. These must survive every compaction unchanged unless the user changed them.
 
 ## Findings & Analysis / 探索与分析结果
 Key findings, root causes, architectural patterns, or logic flow discovered during investigation.
