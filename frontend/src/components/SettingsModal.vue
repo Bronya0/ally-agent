@@ -48,15 +48,33 @@ Public License v3. See the LICENSE file for details.
           </div>
           <n-form-item :label="$t('settings.appearance')">
             <div class="settings-field-stack">
-              <div class="appearance-mode-row">
-                <button
-                  :class="['appearance-mode-btn', { active: colorMode === 'dark' }]"
-                  @click="selectColorMode('dark')"
-                >{{ $t('settings.modeDark') }}</button>
-                <button
-                  :class="['appearance-mode-btn', { active: colorMode === 'light' }]"
-                  @click="selectColorMode('light')"
-                >{{ $t('settings.modeLight') }}</button>
+              <!-- One appearance control, two segments: mode (dark / light) and
+                   palette swatches. Wraps on narrow widths; one merged hint below. -->
+              <div class="appearance-row">
+                <div class="appearance-mode-row">
+                  <button
+                    type="button"
+                    :class="['appearance-mode-btn', { active: colorMode === 'dark' }]"
+                    @click="selectColorMode('dark')"
+                  >{{ $t('settings.modeDark') }}</button>
+                  <button
+                    type="button"
+                    :class="['appearance-mode-btn', { active: colorMode === 'light' }]"
+                    @click="selectColorMode('light')"
+                  >{{ $t('settings.modeLight') }}</button>
+                </div>
+                <div class="appearance-theme-row">
+                  <button
+                    v-for="item in themeOptions"
+                    :key="item.id"
+                    type="button"
+                    :class="['appearance-theme-btn', { active: themeState === item.id }]"
+                    @click="selectTheme(item.id)"
+                  >
+                    <span class="appearance-theme-dot" :style="{ background: item.swatch }" />
+                    {{ item.label }}
+                  </button>
+                </div>
               </div>
               <span class="settings-field-hint">{{ $t('settings.appearanceHint') }}</span>
             </div>
@@ -434,7 +452,7 @@ Public License v3. See the LICENSE file for details.
 import { computed, h, onUnmounted, reactive, ref, watch } from 'vue';
 import { createDiscreteApi, darkTheme } from 'naive-ui';
 import { naiveDateLocale, naiveLocale, t } from '../i18n.mjs';
-import { getStoredMode } from '../utils/theme.mjs';
+import { getStoredMode, THEMES } from '../utils/theme.mjs';
 import { normalizeApiKeysArray } from '../utils/modelConfigIO.mjs';
 import { Browser } from '@wailsio/runtime';
 import {
@@ -480,8 +498,11 @@ const props = defineProps({
   checkUpdateResult: { type: Object, default: () => ({ state: 'idle' }) },
   // Active color mode ('dark' | 'light'), owned by App.vue.
   colorMode: { type: String, default: 'dark' },
+  // Active color theme id ('amber' | 'icecream' | 'ocean' | 'forest' | 'violet'),
+  // owned by App.vue.
+  theme: { type: String, default: 'amber' },
 });
-const emit = defineEmits(['close', 'save', 'background-changed', 'check-update', 'set-mode']);
+const emit = defineEmits(['close', 'save', 'background-changed', 'check-update', 'set-mode', 'set-theme']);
 const checkUpdateBusy = ref(false);
 const checkUpdateMessage = ref('');
 let checkUpdateTimer = 0;
@@ -490,6 +511,20 @@ let checkUpdateTimer = 0;
 watch(() => props.colorMode, (mode) => {
   colorModeState.value = mode === 'light' ? 'light' : 'dark';
 }, { immediate: true });
+
+// Color theme picker: same mirror-the-prop shape as the mode picker (the
+// palette itself is applied by style.css, so nothing here needs the
+// document root).
+const themeOptions = THEMES;
+const themeState = ref(props.theme);
+watch(() => props.theme, (theme) => {
+  themeState.value = theme;
+}, { immediate: true });
+
+function selectTheme(id) {
+  themeState.value = id;
+  emit('set-theme', id);
+}
 
 watch(() => props.checkUpdateResult, (result) => {
   if (!result) return;
@@ -558,8 +593,8 @@ const validationSettingKeys = [
 // Deep-clone the config draft so changes don't mutate parent reactively until save
 const draft = reactive(cloneConfigDraft(props.configDraft));
 
-// Accent theme is a pure front-end preference (localStorage), independent of the
-// backend config draft. Applied live on selection.
+// Color mode is a pure front-end preference (localStorage, see utils/theme.mjs),
+// independent of the backend config draft. Applied live on selection.
 
 const page = ref('general');
 const proxyDetecting = ref(false);
@@ -1071,6 +1106,15 @@ watch(() => props.visible, (visible) => {
   gap: 12px;
 }
 
+/* Appearance picker: one row = the mode segment (dark / light) plus the palette
+   segment, wrapping on narrow widths; both share the quiet segmented language. */
+.appearance-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
 /* Appearance mode picker: two quiet segmented buttons. The active segment
    rides on a soft accent wash so the control stays calm in both modes. */
 .appearance-mode-row {
@@ -1103,6 +1147,53 @@ watch(() => props.visible, (visible) => {
   color: var(--ally-accent-strong);
   background: color-mix(in srgb, var(--ally-accent) 14%, transparent);
   font-weight: 600;
+}
+
+/* Color theme picker: the same quiet segmented language as the mode picker, plus
+   a swatch dot so a palette is recognisable before it is applied. Wraps because
+   the labels carry two languages. */
+.appearance-theme-row {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 3px;
+  border-radius: 8px;
+  border: 1px solid var(--ally-border);
+  background: var(--ally-hover-faint);
+}
+
+.appearance-theme-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 14px 4px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ally-text-muted);
+  font-size: var(--ally-sub-font-size);
+  line-height: 1.4;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+  --wails-draggable: no-drag;
+}
+
+.appearance-theme-btn:hover {
+  color: var(--ally-text-body);
+}
+
+.appearance-theme-btn.active {
+  color: var(--ally-accent-strong);
+  background: color-mix(in srgb, var(--ally-accent) 14%, transparent);
+  font-weight: 600;
+}
+
+.appearance-theme-dot {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 1px solid var(--ally-border-strong);
 }
 
 .settings-toggle-hint {

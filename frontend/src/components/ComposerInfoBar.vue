@@ -230,16 +230,18 @@ Public License v3. See the LICENSE file for details.
       />
     </span>
     <span v-else class="info-context info-context-loading" aria-hidden="true">...</span>
-    <!-- 文件树开关停靠信息栏最右（界面右下角），紧邻右侧树面板。图标用层级
-         树而不是 FolderOpen：张开文件夹的语义是"在文件管理器里打开工作区"
-         （那是左下工作区名字按钮的职责），用户反馈过两者混淆。 -->
+    <!-- 文件树开关停靠信息栏最右（界面右下角），紧邻右侧树面板。图标用
+         FolderOpenTwotone（张开文件夹，次色为 currentColor + 15% 透明，随主题色
+         变化）。历史注记：曾因与“在文件管理器里打开工作区”（左下工作区名字
+         按钮的职责）混淆而改用层级树 ApartmentOutlined，现按用户指定换回
+         FolderOpen 系，若再收混淆反馈可回退。 -->
     <button
       type="button"
       :class="['composer-icon-btn', 'composer-explorer-btn', { active: explorerVisible }]"
       :title="$t('app.workspaceExplorer.open')"
       :aria-label="$t('app.workspaceExplorer.open')"
       @click.stop="$emit('toggleExplorer')"
-    ><ApartmentOutlined /></button>
+    ><FolderOpenTwotone /></button>
   </div>
 </template>
 
@@ -248,7 +250,7 @@ import { computed, h, ref } from 'vue';
 import ContextUsageInline from './ContextUsageInline.vue';
 import PlusOutlined from '@vicons/antd/PlusOutlined';
 import MenuOutlined from '@vicons/antd/MenuOutlined';
-import ApartmentOutlined from '@vicons/antd/ApartmentOutlined';
+import FolderOpenTwotone from '@vicons/antd/FolderOpenTwotone';
 import FolderAddOutlined from '@vicons/antd/FolderAddOutlined';
 import AppstoreOutlined from '@vicons/antd/AppstoreOutlined';
 import CloseOutlined from '@vicons/antd/CloseOutlined';

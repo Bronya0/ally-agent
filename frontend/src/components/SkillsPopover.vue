@@ -42,7 +42,7 @@ const visible = ref(false);
 <style scoped>
 .skills-trigger {
   padding: 0;
-  color: var(--ally-info-soft);
+  color: var(--ally-accent-bright);
   border: 0;
   background: transparent;
   font: inherit;
@@ -51,7 +51,7 @@ const visible = ref(false);
 }
 
 .skills-trigger:hover {
-  color: var(--ally-info-soft);
+  color: var(--ally-accent-bright);
   text-decoration: underline;
   text-underline-offset: 2px;
 }

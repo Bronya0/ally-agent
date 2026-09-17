@@ -49,7 +49,7 @@ const allNames = computed(() => enabledTools.value.map((tool) => tool?.name).fil
 <style scoped>
 .tools-trigger {
   padding: 0;
-  color: var(--ally-info-soft);
+  color: var(--ally-accent-bright);
   border: 0;
   background: transparent;
   font: inherit;
@@ -58,7 +58,7 @@ const allNames = computed(() => enabledTools.value.map((tool) => tool?.name).fil
 }
 
 .tools-trigger:hover {
-  color: var(--ally-info-soft);
+  color: var(--ally-accent-bright);
   text-decoration: underline;
   text-underline-offset: 2px;
 }

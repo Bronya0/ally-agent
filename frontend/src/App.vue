@@ -349,7 +349,9 @@ Public License v3. See the LICENSE file for details.
                 :config-draft="configDraft"
                 :check-update-result="checkUpdateResult"
                 :color-mode="colorMode"
+                :theme="colorTheme"
                 @set-mode="setColorMode"
+                @set-theme="setColorTheme"
                 @close="closeSettings"
                 @save="onSettingsSave"
                 @background-changed="onBackgroundChanged"
@@ -494,7 +496,10 @@ Public License v3. See the LICENSE file for details.
 <script setup>
 import { computed, defineAsyncComponent, h, nextTick, onErrorCaptured, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import { NButton, createDiscreteApi, darkTheme } from 'naive-ui';
-import { getStoredMode, setMode as persistMode } from './utils/theme.mjs';
+import {
+  getStoredMode, setMode as persistMode,
+  getStoredTheme, setTheme as persistTheme,
+} from './utils/theme.mjs';
 import MarkdownIt from 'markdown-it';
 // @traptitech/markdown-it-katex 把 $...$ / $$...$$ 交给 katex 渲染。
 // katex 本体已作为 mermaid 的间接依赖存在于依赖树中，这里显式声明以避免
@@ -677,16 +682,24 @@ let promptCompositionEndedAt = 0;
 let fileMentionTimer = 0;
 let fileMentionRequestId = 0;
 
-// ── Color mode (dark / light) ──
-// The mode is a pure front-end preference (localStorage, see utils/theme.mjs);
-// main.js already applied it to <html data-mode> before mount. This ref is the
-// reactive source for every Naive UI theme decision below.
+// ── Appearance: color theme (palette) + color mode (dark / light) ──
+// Both are pure front-end preferences (localStorage, see utils/theme.mjs);
+// main.js already applied them to <html data-theme> / <html data-mode> before
+// mount. `colorMode` is the reactive source for every Naive UI decision below;
+// `colorTheme` only needs to round-trip to the settings page, because the theme
+// axis lives entirely in CSS (style.css reads data-theme).
 const colorMode = ref(getStoredMode());
 const isLightMode = computed(() => colorMode.value === 'light');
 const naiveTheme = computed(() => (isLightMode.value ? null : darkTheme));
 
 function setColorMode(mode) {
   colorMode.value = persistMode(mode);
+}
+
+const colorTheme = ref(getStoredTheme());
+
+function setColorTheme(theme) {
+  colorTheme.value = persistTheme(theme);
 }
 
 // Mode switch re-themes already-rendered Mermaid diagrams: mermaidShared reads

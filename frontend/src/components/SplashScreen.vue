@@ -136,7 +136,7 @@ onMounted(start);
   font-weight: 700;
   font-family: Inter, system-ui, sans-serif;
   letter-spacing: 0.5px;
-  background: linear-gradient(90deg, #f8fafc 0%, #e0a458 36%, #d7dde8 68%, #f8fafc 100%);
+  background: var(--ally-wordmark-gradient);
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;

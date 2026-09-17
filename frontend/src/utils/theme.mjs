@@ -7,45 +7,52 @@
  * This file is part of ally-agent, licensed under the GNU General
  * Public License v3. See the LICENSE file for details.
  */
-// Accent theme + color mode management. Both are pure front-end concerns: a
-// theme only swaps the --ally-accent seed on <html data-theme>, a mode swaps
-// the whole surface/text token set on <html data-mode>. Every derived shade is
-// computed from it via color-mix in style.css. Both are persisted in
-// localStorage so they survive reloads independent of the backend config.
+// Appearance preferences: a color THEME (whole palette) and a color MODE
+// (dark / light). Both are pure front-end concerns, persisted in localStorage
+// and applied to <html> before mount, independent of the backend config.
+//
+//   theme → <html data-theme="…">    (attribute absent for the default "amber")
+//   mode  → <html data-mode="light"> (attribute absent for the default "dark")
+//
+// style.css owns the palettes; this file only owns the ids and the storage.
+// Every theme ships one block per mode in style.css —
+// `:root[data-theme="x"]:not([data-mode="light"])` for dark and
+// `:root[data-theme="x"][data-mode="light"]` for light — so the two axes are
+// resolved by selector, never by source order (a previous build resolved them by
+// source order and silently lost six markdown palettes). Adding a theme = one
+// entry below + those two blocks.
 
-const STORAGE_KEY = 'ally_accent_theme';
+const THEME_STORAGE_KEY = 'ally_accent_theme';
 const MODE_STORAGE_KEY = 'ally_color_mode';
 export const DEFAULT_THEME = 'amber';
 export const DEFAULT_MODE = 'dark'; // 'dark' | 'light'
 
-// Single source of truth for the theme ids. `swatch` mirrors the seed defined
-// in style.css (:root / [data-theme=...]) purely for rendering the picker dot.
+// Single source of truth for the theme ids. `swatch` mirrors the seed declared
+// in style.css and is only used to paint the picker dot.
 export const THEMES = [
-  { id: 'amber',   label: 'Amber 琥珀',   swatch: '#e0a458' },
-  { id: 'cool',    label: 'Cool 冷蓝',    swatch: '#60a5fa' },
-  { id: 'emerald', label: 'Emerald 翠绿', swatch: '#34d399' },
-  { id: 'violet',  label: 'Violet 紫罗兰', swatch: '#a78bfa' },
-  { id: 'rose',    label: 'Rose 玫瑰',    swatch: '#fb7185' },
-  { id: 'cyan',    label: 'Cyan 青碧',    swatch: '#22d3ee' },
-  { id: 'slate',   label: 'Slate 石墨',   swatch: '#94a3b8' },
+  { id: 'amber',    label: 'Amber 琥珀',      swatch: '#e0a458' },
+  { id: 'icecream', label: 'Ice Cream 冰淇淋', swatch: '#ff9ec4' },
+  { id: 'ocean',    label: 'Ocean 海洋',      swatch: '#5b9cf6' },
+  { id: 'forest',   label: 'Forest 森林',     swatch: '#57c98a' },
+  { id: 'violet',   label: 'Violet 紫罗兰',   swatch: '#a78bfa' },
 ];
 
-const VALID = new Set(THEMES.map((t) => t.id));
+const VALID_THEMES = new Set(THEMES.map((t) => t.id));
 
 export function normalizeTheme(value) {
-  return VALID.has(value) ? value : DEFAULT_THEME;
+  return VALID_THEMES.has(value) ? value : DEFAULT_THEME;
 }
 
 export function getStoredTheme() {
   try {
-    return normalizeTheme(localStorage.getItem(STORAGE_KEY));
+    return normalizeTheme(localStorage.getItem(THEME_STORAGE_KEY));
   } catch {
     return DEFAULT_THEME;
   }
 }
 
 // Apply the theme to the document root. The default theme carries no data-theme
-// attribute so it falls through to the :root seed.
+// attribute so it falls through to the amber palette in :root.
 export function applyTheme(theme) {
   const next = normalizeTheme(theme);
   const root = document.documentElement;
@@ -54,11 +61,14 @@ export function applyTheme(theme) {
   return next;
 }
 
-// Call once at startup, before mount, to avoid a flash of the default accent.
-export function initTheme() {
-  const theme = applyTheme(getStoredTheme());
-  const mode = initMode();
-  return { theme, mode };
+export function setTheme(theme) {
+  const next = applyTheme(theme);
+  try {
+    localStorage.setItem(THEME_STORAGE_KEY, next);
+  } catch {
+    /* storage unavailable — theme still applies for this session */
+  }
+  return next;
 }
 
 // ── Color mode (dark / light) ──
@@ -97,4 +107,12 @@ export function setMode(mode) {
 
 export function initMode() {
   return applyMode(getStoredMode());
+}
+
+// Call once at startup, before mount, so the first paint already carries the
+// saved theme and mode (no flash of the amber default).
+export function initTheme() {
+  const theme = applyTheme(getStoredTheme());
+  const mode = initMode();
+  return { theme, mode };
 }

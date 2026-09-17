@@ -27,7 +27,7 @@ Public License v3. See the LICENSE file for details.
 <script setup>
 import { computed, h } from 'vue';
 import { NIcon } from 'naive-ui';
-import HomeOutlined from '@vicons/antd/HomeOutlined';
+import SlackOutlined from '@vicons/antd/SlackOutlined';
 import BookOutlined from '@vicons/antd/BookOutlined';
 import ThunderboltOutlined from '@vicons/antd/ThunderboltOutlined';
 import ApiOutlined from '@vicons/antd/ApiOutlined';
@@ -49,7 +49,7 @@ const renderIcon = (icon, dot = false) => () => h('div', { class: 'mode-sider-ic
 ]);
 
 const modeOptions = computed(() => [
-  { label: t('app.mode.chat'), key: 'chat', icon: renderIcon(HomeOutlined) },
+  { label: t('app.mode.chat'), key: 'chat', icon: renderIcon(SlackOutlined) },
   { label: t('app.mode.kb'), key: 'kb', icon: renderIcon(BookOutlined, props.kbRunning) },
   { label: t('app.mode.skills'), key: 'skills', icon: renderIcon(ThunderboltOutlined) },
   { label: t('app.mode.mcp'), key: 'mcp', icon: renderIcon(ApiOutlined) },

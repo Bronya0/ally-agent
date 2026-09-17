@@ -609,12 +609,16 @@ body.platform-darwin .brand-wordmark {
   --wails-draggable: drag;
 }
 
-/* 亮色：下划线改用左侧栏活跃菜单图标同一支的绿色（--ally-success）。琥珀
-   accent-dim 在白玻璃 header 上与相邻的 text-muted 图标亮度接近，读不出“当前在
-   哪个 tab”；绿色在本项目里已承担“当前位置”这一个含义（.mode-sider 选中图标
-   用的就是它），这里复用同一 token，不再另挑颜色。只覆盖变量，指示线自身的
-   ::after 规则不动。 */
+/* 亮色两档，特异性决胜：所有主题一律用各自的 --ally-accent-bright（浅色块已朝
+    ink 混合，可读性同绿档，且与左侧栏选中图标同支 token（style.css），“当前位置”
+    仍是单一颜色）；默认（琥珀）例外地沿用绿色——琥珀 accent-dim 在白玻璃 header
+    上读不出“当前在哪个 tab”，绿是按琥珀冷调画布调的。琥珀 = 无 data-theme
+    属性，:not() 圈定，主题列表零维护。两档同带 !important，指示线自身的
+    ::after 规则不动。 */
 html[data-mode="light"] .workspace-tabs {
+  --n-bar-color: var(--ally-accent-bright) !important;
+}
+html[data-mode="light"]:not([data-theme]) .workspace-tabs {
   --n-bar-color: var(--ally-success) !important;
 }
 

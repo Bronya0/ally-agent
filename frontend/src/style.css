@@ -151,9 +151,10 @@
      active tab out-shone everything in the header and pulled the eye. */
   --ally-state-selected: rgba(255, 255, 255, 0.07);
 
-  /* Accent color family. A theme only needs to set --ally-accent; every
-     other shade is derived from it via color-mix (fully supported in the
-     Chromium/Webview2 runtime), so adding a theme is a one-liner below. */
+  /* Accent color family. One seed (--ally-accent, amber) and every other
+     shade derived from it via color-mix (fully supported in the
+     Chromium/Webview2 runtime), so the accent stays a single-source value:
+     changing the seed below re-tints every accent usage in the app. */
   --ally-accent: #e0a458; /* amber seed */
   --ally-accent-bright: color-mix(in srgb, var(--ally-accent) 82%, #ffffff);
   --ally-accent-strong: color-mix(in srgb, var(--ally-accent) 62%, #ffffff);
@@ -182,6 +183,13 @@
   --md-marker-ul: #f0d166;
   --md-marker-ol: color-mix(in srgb, #d7dedc 88%, #f0d166 12%);
 
+  /* ── Naive overlay surface ──
+     Modal surfaces are painted by App.vue's per-mode theme overrides (literals on
+     the JS side, which cannot see the theme axis). This token carries the same
+     value so a color theme can re-point it from CSS alone. Only the modal is bound
+     this way; see the `:root .n-modal` rule for why popovers are not. */
+  --ally-overlay-modal: #1a1a1a;
+
   /* ── Game panel theme tokens (dark default) ── */
   --game-panel-bg: #1a1a1a;
   --game-header-border: rgba(255, 255, 255, 0.08);
@@ -205,113 +213,6 @@
   --ally-eye-shadow-opacity: 0.25;
 }
 
-/* ── Themes ── each overrides the accent seed plus a same-family markdown
-   palette so headings, bold, inline code, etc. stay within one color family
-   (warm themes stay warm, cool themes stay cool) and differentiate by
-   lightness and hue shift rather than cold/warm contrast. */
-:root[data-theme="cool"] {
-  --ally-accent: #60a5fa;
-  --md-h1: #7cc0ff;
-  --md-h2: #5fa8e8;
-  --md-h3: #9dd0f5;
-  --md-h4: #6b8fd4;
-  --md-strong: #4f7fd9;
-  --md-code: #6a8fb4;
-  --md-em: #9dd0f5;
-  --md-link: #7cc0ff;
-  --md-quote: #5fa8e8;
-  --md-quote-border: rgba(95, 168, 232, 0.55);
-  --md-quote-bg: rgba(95, 168, 232, 0.1);
-  --md-del: #8a9bd4;
-  --md-marker-ul: #9dd0f5;
-  --md-marker-ol: #7cc0ff;
-}
-:root[data-theme="emerald"] {
-  --ally-accent: #34d399;
-  --md-h1: var(--ally-success);
-  --md-h2: #2dd4bf;
-  --md-h3: #86efac;
-  --md-h4: #6ee7b7;
-  --md-strong: #15805a;
-  --md-code: #4a9d7a;
-  --md-em: #86efac;
-  --md-link: var(--ally-success);
-  --md-quote: #2dd4bf;
-  --md-quote-border: rgba(45, 212, 191, 0.55);
-  --md-quote-bg: rgba(45, 212, 191, 0.1);
-  --md-del: #6ee7b7;
-  --md-marker-ul: #86efac;
-  --md-marker-ol: var(--ally-success);
-}
-:root[data-theme="violet"] {
-  --ally-accent: #a78bfa;
-  --md-h1: #c4b5fd;
-  --md-h2: #a78bfa;
-  --md-h3: #d8b4fe;
-  --md-h4: #c084fc;
-  --md-strong: #7c4edd;
-  --md-code: #9a7ec4;
-  --md-em: #d8b4fe;
-  --md-link: #c4b5fd;
-  --md-quote: #a78bfa;
-  --md-quote-border: rgba(167, 139, 250, 0.55);
-  --md-quote-bg: rgba(167, 139, 250, 0.1);
-  --md-del: #c084fc;
-  --md-marker-ul: #d8b4fe;
-  --md-marker-ol: #c4b5fd;
-}
-:root[data-theme="rose"] {
-  --ally-accent: #fb7185;
-  --md-h1: #fb7185;
-  --md-h2: #f43f5e;
-  --md-h3: #fda4af;
-  --md-h4: #e879a8;
-  --md-strong: #d62f5a;
-  --md-code: #c47a9a;
-  --md-em: #fda4af;
-  --md-link: #fb7185;
-  --md-quote: #f43f5e;
-  --md-quote-border: rgba(244, 63, 94, 0.55);
-  --md-quote-bg: rgba(244, 63, 94, 0.1);
-  --md-del: #e879a8;
-  --md-marker-ul: #fda4af;
-  --md-marker-ol: #fb7185;
-}
-:root[data-theme="cyan"] {
-  --ally-accent: #22d3ee;
-  --md-h1: #22d3ee;
-  --md-h2: #06b6d4;
-  --md-h3: #67e8f9;
-  --md-h4: #2dd4bf;
-  --md-strong: #0e8aa8;
-  --md-code: #4a92a8;
-  --md-em: #67e8f9;
-  --md-link: #22d3ee;
-  --md-quote: #06b6d4;
-  --md-quote-border: rgba(6, 182, 212, 0.55);
-  --md-quote-bg: rgba(6, 182, 212, 0.1);
-  --md-del: #2dd4bf;
-  --md-marker-ul: #67e8f9;
-  --md-marker-ol: #22d3ee;
-}
-:root[data-theme="slate"] {
-  --ally-accent: #94a3b8;
-  --md-h1: #a3b8cc;
-  --md-h2: #8ba3bd;
-  --md-h3: #b0c4de;
-  --md-h4: #7d8fa8;
-  --md-strong: #64748b;
-  --md-code: #7d8fa8;
-  --md-em: #b0c4de;
-  --md-link: #a3b8cc;
-  --md-quote: #8ba3bd;
-  --md-quote-border: rgba(139, 163, 189, 0.55);
-  --md-quote-bg: rgba(139, 163, 189, 0.1);
-  --md-del: #7d8fa8;
-  --md-marker-ul: #b0c4de;
-  --md-marker-ol: #a3b8cc;
-}
-
 /* ── Light mode: acrylic / liquid-glass ──
    Activated by <html data-mode="light"> (see utils/theme.mjs). The page canvas
    is a soft light gradient painted on <body>; every panel, the window chrome
@@ -321,9 +222,9 @@
    Neutral ramp (surfaces, text, borders) follows kimicode's light theme
    (apps/vis/web/src/theme.css): cool blue-gray #fafbfc/#eef1f6/#e4e8f0
    surfaces, #0f1219→#9097a8 ink ramp, #dde1ea/#bfc6d4 hairlines.
-   NOTE: this block must come AFTER the accent [data-theme] blocks — same
-   specificity, later source order wins, so it re-derives the markdown palette
-   from the active accent seed for light-surface contrast. */
+   NOTE: this block must come AFTER the :root token block — same specificity,
+   later source order wins, so these overrides actually take effect and the
+   markdown palette is re-derived from the accent seed for light contrast. */
 :root[data-mode="light"] {
   /* Surfaces: translucent kimicode surface-0 glass; content keeps an opaque
      fallback (kimicode surface-1) for the reasoning curtain and media mats. */
@@ -403,6 +304,10 @@
   --md-marker-ul: color-mix(in srgb, var(--ally-accent) 65%, #2f3545);
   --md-marker-ol: color-mix(in srgb, var(--ally-accent) 50%, #252a37);
 
+  /* Same value as App.vue's light theme override (modalColor 0.94) so amber keeps
+     its exact current glass. */
+  --ally-overlay-modal: rgba(250, 251, 252, 0.94);
+
   /* Glass surfaces: translucent kimicode surface-0, blurring what's behind. */
   --ally-border-input: rgba(15, 23, 42, 0.25);
   --ally-composer-glass: rgba(250, 251, 252, 0.65);
@@ -474,14 +379,19 @@ html[data-mode="light"] .app-header {
   -webkit-backdrop-filter: var(--ally-glass-blur);
 }
 
-/* Selected mode icon on the light rail is green: on white glass the accent's
-   bright shade sits too close to the surrounding chrome to read as a locator,
-   and the app's green carries that job without adding a new colour. Scoped to
-   light on purpose — dark keeps --ally-accent-bright. Both the resting and the
-   hover-over-selected selectors are listed so hovering the active icon does not
-   fall through to the rail's hover colour. */
+/* Light rail locator, two tiers resolved by specificity (never source order):
+   every themed light palette paints its own ink-mixed --ally-accent-bright,
+   while AMBER light stays green — that green was tuned for amber's cool canvas
+   and "current location" keeps exactly one colour per theme. Amber is literally
+   the absence of the data-theme attribute, so :not() scopes it with zero
+   maintained theme list. Both tiers list resting + hover-over-selected so
+   hovering the active icon never falls through to the rail's hover colour. */
 html[data-mode="light"] .mode-sider .n-menu .n-menu-item-content--selected .mode-sider-icon-wrap,
 html[data-mode="light"] .mode-sider .n-menu .n-menu-item-content--selected:hover .mode-sider-icon-wrap {
+  color: var(--ally-accent-bright);
+}
+html[data-mode="light"]:not([data-theme]) .mode-sider .n-menu .n-menu-item-content--selected .mode-sider-icon-wrap,
+html[data-mode="light"]:not([data-theme]) .mode-sider .n-menu .n-menu-item-content--selected:hover .mode-sider-icon-wrap {
   color: var(--ally-success);
 }
 
@@ -661,11 +571,12 @@ html[data-mode="light"] .composer-sessions-btn,
 html[data-mode="light"] .composer-retry-text {
   color: var(--ally-warning-text);
 }
-html[data-mode="light"] .session-time { color: #8a7434; }
+/* Amber-only literal (themes take the token version near the theme blocks). */
+html[data-mode="light"]:not([data-theme]) .session-time { color: #8a7434; }
 html[data-mode="light"] .git-diff-truncated,
 html[data-mode="light"] .git-diff-chip { color: var(--ally-warning-text); }
-html[data-mode="light"] .markdown-mermaid-action { color: #5d6470; }
-html[data-mode="light"] .markdown-mermaid-action:hover { color: #9a6b16; }
+html[data-mode="light"]:not([data-theme]) .markdown-mermaid-action { color: #5d6470; }
+html[data-mode="light"]:not([data-theme]) .markdown-mermaid-action:hover { color: #9a6b16; }
 html[data-mode="light"] .markdown-mermaid-toolbar { background: var(--ally-surface-raised); }
 
 /* KB empty card: warm glass instead of dark gradient. */
@@ -696,6 +607,21 @@ html[data-mode="light"] .n-modal-mask,
 html[data-mode="light"] .n-drawer-mask {
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
+}
+
+/* Bind Naive's modal surface to the overlay token. The `:root` prefix is not
+   decoration: it lifts this rule above Naive's runtime-injected styles without
+   !important, so a color theme can re-point it from CSS only.
+   Deliberately modal-only: `.n-popover` / `.n-popover-shared` is also the element
+   Naive builds TOOLTIPS on (one bubble carries both classes and reads `--n-color`
+   from the Tooltip theme — an inverted white-on-dark bubble in light mode).
+   Repainting it made the sider's hover labels invisible, so popovers and tooltips
+   keep Naive's own colors: they follow the MODE, not the color theme. Nor can the
+   value be handed to App.vue as `popoverColor: 'var(--…)'` — Naive feeds
+   cardColor/modalColor/popoverColor through composite() math in components such as
+   Avatar and Calendar, which a var() string would break. */
+:root .n-modal {
+  background-color: var(--ally-overlay-modal);
 }
 
 /* Diff tints: slightly stronger on light so add/del rows still read. */
@@ -758,13 +684,800 @@ html[data-mode="light"] .tool-body {
   color: var(--ally-text-high);
 }
 
-/* Composer input refinements on light mode */
+/* Composer input refinements on light mode: the shadow is shared by every
+   palette; the border / placeholder literals were tuned for amber's cool canvas,
+   so they are amber-scoped (:not([data-theme])) and themed palettes take the
+   token versions near the theme blocks (border-input / text-faint). */
 html[data-mode="light"] .composer .prompt-input {
   box-shadow: 0 4px 18px rgba(15, 23, 42, 0.07);
+}
+html[data-mode="light"]:not([data-theme]) .composer .prompt-input {
   border: 1px solid rgba(15, 23, 42, 0.15) !important;
 }
-html[data-mode="light"] .composer .prompt-input textarea::placeholder {
+html[data-mode="light"]:not([data-theme]) .composer .prompt-input textarea::placeholder {
   color: #7a8191 !important;
+}
+
+/* ── Color themes ──
+   A theme is a whole palette, not an accent seed: "ocean" only reads as sea
+   because the surface, ink and canvas ramp change with it. The theme axis
+   is orthogonal to dark/light, so every theme ships one block per mode and each
+   block names the mode it targets:
+     dark  → :root[data-theme="x"]:not([data-mode="light"])
+     light → :root[data-theme="x"][data-mode="light"]
+   The mutual exclusion is deliberate. The previous build decided between an
+   accent-theme block and the light block by SOURCE ORDER (identical
+   specificity), which silently turned six markdown palettes into dead code;
+   naming the mode in the selector makes that impossible, and each block is also
+   more specific than the amber base set (:root / :root[data-mode="light"]).
+   Amber is the default theme and carries no data-theme attribute — which is
+   also how amber-only light literals are scoped (:not([data-theme])).
+   Every theme restates the same token sets as its mode base, so nothing is
+   inherited by accident; status colors are left alone on purpose (they are
+   semantic, and re-tinting them would weaken the signal).
+   Theme-scoped ids live in frontend/src/utils/theme.mjs. */
+
+/* ── Ice cream — dark: deep plum base, pastel candy accents ── */
+:root[data-theme="icecream"]:not([data-mode="light"]) {
+  --ally-surface-content: #17171f;
+  --ally-surface-panel: #1c1c26;
+  --ally-surface-chrome: #23232f;
+  --ally-surface-raised: #2a2a38;
+  --ally-surface-deep: #0c0c12;
+
+  --ally-text-primary: #f6f2f8;
+  --ally-text-high: #e4dfeb;
+  --ally-text-body: #d2cddc;
+  --ally-text-secondary: #b0aabd;
+  --ally-text-soft: #a49eb3;
+  --ally-text-tertiary: #9a94a9;
+  --ally-text-muted: #8b8599;
+  --ally-text-faint: #7a7488;
+  --ally-text-ghost: #615c70;
+
+  --ally-border: rgba(255, 255, 255, 0.09);
+  --ally-border-subtle: rgba(255, 255, 255, 0.06);
+  --ally-border-strong: rgba(255, 255, 255, 0.18);
+
+  --ally-accent: #ff9ec4; /* strawberry */
+  --ally-accent-bright: color-mix(in srgb, var(--ally-accent) 78%, #fff2f7);
+  --ally-accent-strong: color-mix(in srgb, var(--ally-accent) 60%, #f3e7f0);
+  --ally-accent-soft:   color-mix(in srgb, var(--ally-accent) 46%, #e7dcea);
+  --ally-accent-pale:   color-mix(in srgb, var(--ally-accent) 34%, #d8cfdd);
+  --ally-accent-muted:  color-mix(in srgb, var(--ally-accent) 42%, #9a94a9);
+  --ally-accent-dim:    color-mix(in srgb, var(--ally-accent) 48%, #7a7488);
+
+  --ally-wordmark-gradient: linear-gradient(120deg, #fdf5fb 0%, #ff9ec4 36%, #cfe3ff 68%, #fdf5fb 100%);
+
+  --md-h1: #f4eef6;
+  --md-h2: #e6dfeb;
+  --md-h3: color-mix(in srgb, var(--ally-accent) 42%, #f4eef6);
+  --md-h4: #d2cddc;
+  --md-strong: color-mix(in srgb, var(--ally-accent) 20%, #d2cddc);
+  --md-code: color-mix(in srgb, var(--ally-accent) 40%, #cfc6d8);
+  --md-em: color-mix(in srgb, var(--ally-accent) 30%, #e6dfeb);
+  --md-link: color-mix(in srgb, var(--ally-accent) 60%, #f4eef6);
+  --md-quote: #dcd5e4;
+  --md-quote-border: color-mix(in srgb, var(--ally-accent) 55%, transparent);
+  --md-quote-bg: color-mix(in srgb, var(--ally-accent) 8%, transparent);
+  --md-del: #8b8599;
+  --md-marker-ul: color-mix(in srgb, var(--ally-accent) 55%, #cfc6d8);
+  --md-marker-ol: color-mix(in srgb, var(--ally-accent) 40%, #d8cfdd);
+
+  --ally-border-input: rgba(246, 242, 248, 0.30);
+  --ally-composer-glass: rgba(23, 23, 31, 0.55);
+  --ally-composer-glass-hover: rgba(23, 23, 31, 0.58);
+  --ally-composer-glass-focus: rgba(23, 23, 31, 0.62);
+  --ally-panel-glass: rgba(23, 23, 31, 0.68);
+  --ally-copy-btn-bg: rgba(28, 28, 38, 0.85);
+  --ally-pre-bg: rgba(0, 0, 0, 0.30);
+  --ally-code-bg: #0e0e15;
+
+  --ally-scrollbar: #43414f;
+  --ally-scrollbar-editor: rgba(255, 255, 255, 0.24);
+  --ally-scrollbar-editor-hover: rgba(255, 255, 255, 0.38);
+
+  --ally-overlay-modal: #1c1c26;
+
+  --ally-eye-shell-fill: #12121a;
+  --ally-eye-shell-stroke: #3a3748;
+  --ally-eye-shadow-opacity: 0.25;
+}
+
+/* Ice cream dark: the neutral markdown tokens live on .markdown-body itself, so
+   the plum-tinted ramp has to be re-pointed there, not on :root. */
+:root[data-theme="icecream"]:not([data-mode="light"]) .markdown-body {
+  --md-text: #dcd6e3;
+  --md-muted: #a49eb3;
+  --md-faint: #7a7488;
+  --md-white: #f4eef6;
+  --md-border: rgba(220, 214, 227, 0.12);
+  --md-surface: var(--ally-hover-faint);
+  color: var(--md-text);
+}
+:root[data-theme="icecream"]:not([data-mode="light"]) .splash-screen .splash-bg {
+  background: linear-gradient(165deg, #14141c 0%, #1a1a24 46%, #101018 100%);
+}
+
+/* ── Ice cream — light: vanilla / mint glass, same strawberry accent ── */
+:root[data-theme="icecream"][data-mode="light"] {
+  --ally-surface-content: #f6fbf9;
+  --ally-surface-panel: rgba(255, 255, 255, 0.72);
+  --ally-surface-chrome: rgba(255, 255, 255, 0.64);
+  --ally-surface-raised: rgba(255, 255, 255, 0.88);
+  --ally-surface-deep: #eaf3ef;
+
+  --ally-text-primary: #1d2a2f;
+  --ally-text-high: #2b383d;
+  --ally-text-body: #36444a;
+  --ally-text-secondary: #465b62;
+  --ally-text-soft: #4b5a60;
+  --ally-text-tertiary: #556469;
+  --ally-text-muted: #5f6e74;
+  --ally-text-faint: #79888d;
+  --ally-text-ghost: #8e9da2;
+
+  --ally-border: #dbe9e4;
+  --ally-border-subtle: #e6f0ec;
+  --ally-border-strong: #c0d3cc;
+  --ally-state-hover: rgba(29, 42, 47, 0.05);
+  --ally-state-selected: rgba(29, 42, 47, 0.07);
+  --ally-hover-faint: rgba(29, 42, 47, 0.03);
+  --ally-hover-strong: rgba(29, 42, 47, 0.09);
+
+  --ally-accent: #ff9ec4; /* strawberry */
+  --ally-accent-bright: color-mix(in srgb, var(--ally-accent) 62%, #1d2a2f);
+  --ally-accent-strong: color-mix(in srgb, var(--ally-accent) 50%, #1d2a2f);
+  --ally-accent-soft:   color-mix(in srgb, var(--ally-accent) 55%, #2b383d);
+  --ally-accent-pale:   color-mix(in srgb, var(--ally-accent) 50%, #36444a);
+  --ally-accent-muted:  color-mix(in srgb, var(--ally-accent) 52%, #5f6e74);
+  --ally-accent-dim:    color-mix(in srgb, var(--ally-accent) 45%, #2b383d);
+
+  --ally-wordmark-gradient: linear-gradient(120deg, #1d2a2f 0%, #e0698f 36%, #3f5d66 68%, #1d2a2f 100%);
+
+  --md-h1: #1d2a2f;
+  --md-h2: #2b383d;
+  --md-h3: color-mix(in srgb, var(--ally-accent) 55%, #1d2a2f);
+  --md-h4: #36444a;
+  --md-strong: #1d2a2f;
+  --md-code: color-mix(in srgb, var(--ally-accent) 42%, #2b383d);
+  --md-em: color-mix(in srgb, var(--ally-accent) 45%, #2b383d);
+  --md-link: color-mix(in srgb, var(--ally-accent) 60%, #1d2a2f);
+  --md-quote: #36444a;
+  --md-quote-border: color-mix(in srgb, var(--ally-accent) 65%, transparent);
+  --md-quote-bg: color-mix(in srgb, var(--ally-accent) 9%, transparent);
+  --md-del: #8e9da2;
+  --md-marker-ul: color-mix(in srgb, var(--ally-accent) 65%, #36444a);
+  --md-marker-ol: color-mix(in srgb, var(--ally-accent) 50%, #2b383d);
+
+  --ally-border-input: rgba(29, 42, 47, 0.24);
+  --ally-composer-glass: rgba(255, 255, 255, 0.62);
+  --ally-composer-glass-hover: rgba(255, 255, 255, 0.70);
+  --ally-composer-glass-focus: rgba(255, 255, 255, 0.78);
+  --ally-panel-glass: rgba(255, 255, 255, 0.76);
+  --ally-copy-btn-bg: rgba(255, 255, 255, 0.90);
+  --ally-pre-bg: rgba(29, 42, 47, 0.045);
+  --ally-code-bg: #f1f8f5;
+
+  --ally-scrollbar: #c0d3cc;
+  --ally-scrollbar-editor: rgba(29, 42, 47, 0.20);
+  --ally-scrollbar-editor-hover: rgba(29, 42, 47, 0.33);
+
+  --ally-overlay-shadow: 0 18px 50px rgba(31, 62, 58, 0.14), 0 2px 8px rgba(31, 62, 58, 0.06);
+  --ally-glass-shadow: 0 18px 50px rgba(31, 62, 58, 0.14), 0 2px 8px rgba(31, 62, 58, 0.06);
+
+  --ally-overlay-modal: rgba(255, 255, 255, 0.93);
+
+  --ally-eye-shell-fill: #fdf4f6;
+  --ally-eye-shell-stroke: #f0d6dd;
+  --ally-eye-shadow-opacity: 0.10;
+}
+
+:root[data-theme="icecream"][data-mode="light"] .markdown-body {
+  --md-text: #2b383d;
+  --md-muted: #36444a;
+  --md-faint: #5f6e74;
+  --md-white: #1d2a2f;
+  --md-border: rgba(29, 42, 47, 0.12);
+  --md-surface: rgba(29, 42, 47, 0.04);
+  color: var(--md-text);
+}
+/* Pastel canvas: two soft glows (strawberry / sky) over a mint-to-vanilla wash. */
+:root[data-theme="icecream"][data-mode="light"] body {
+  background:
+    radial-gradient(1100px 760px at 88% -8%, rgba(255, 158, 196, 0.10), transparent 64%),
+    radial-gradient(900px 700px at -8% 108%, rgba(150, 220, 255, 0.10), transparent 62%),
+    linear-gradient(165deg, #f3fbf7 0%, #fdf9f7 46%, #f0f8fd 100%);
+  background-attachment: fixed;
+}
+:root[data-theme="icecream"][data-mode="light"] .splash-screen .splash-bg {
+  background: linear-gradient(165deg, #f3fbf7 0%, #fdf9f7 46%, #f0f8fd 100%);
+}
+:root[data-theme="icecream"][data-mode="light"] .markdown-body img,
+:root[data-theme="icecream"][data-mode="light"] .attachment-item img,
+:root[data-theme="icecream"][data-mode="light"] .attachment-item video {
+  background: #e9f4f0;
+}
+/* Highlight: peach wash instead of amber's gold. */
+:root[data-theme="icecream"][data-mode="light"] .markdown-body mark {
+  color: #7a3b52;
+  background: rgba(255, 190, 150, 0.38);
+}
+
+/* ── Ocean — dark: deep navy night, azure accent ── */
+:root[data-theme="ocean"]:not([data-mode="light"]) {
+  --ally-surface-content: #10151f;
+  --ally-surface-panel: #141a26;
+  --ally-surface-chrome: #1a2230;
+  --ally-surface-raised: #212a3a;
+  --ally-surface-deep: #080b11;
+
+  --ally-text-primary: #eef3fb;
+  --ally-text-high: #dde6f3;
+  --ally-text-body: #cdd8e8;
+  --ally-text-secondary: #aebdd2;
+  --ally-text-soft: #a2b1c7;
+  --ally-text-tertiary: #98a7bd;
+  --ally-text-muted: #8796ad;
+  --ally-text-faint: #75849b;
+  --ally-text-ghost: #5c6a80;
+
+  --ally-border: rgba(238, 243, 251, 0.09);
+  --ally-border-subtle: rgba(238, 243, 251, 0.06);
+  --ally-border-strong: rgba(238, 243, 251, 0.18);
+
+  --ally-accent: #5b9cf6; /* azure */
+  --ally-accent-bright: color-mix(in srgb, var(--ally-accent) 78%, #eaf2ff);
+  --ally-accent-strong: color-mix(in srgb, var(--ally-accent) 60%, #dfe9f8);
+  --ally-accent-soft:   color-mix(in srgb, var(--ally-accent) 46%, #d3dff0);
+  --ally-accent-pale:   color-mix(in srgb, var(--ally-accent) 34%, #c4d1e6);
+  --ally-accent-muted:  color-mix(in srgb, var(--ally-accent) 42%, #98a7bd);
+  --ally-accent-dim:    color-mix(in srgb, var(--ally-accent) 48%, #75849b);
+
+  --ally-wordmark-gradient: linear-gradient(120deg, #f4f8ff 0%, #5b9cf6 36%, #9fc8ef 68%, #f4f8ff 100%);
+
+  --md-h1: #eaf1fa;
+  --md-h2: #dbe5f2;
+  --md-h3: color-mix(in srgb, var(--ally-accent) 42%, #eaf1fa);
+  --md-h4: #cdd8e8;
+  --md-strong: color-mix(in srgb, var(--ally-accent) 20%, #cdd8e8);
+  --md-code: color-mix(in srgb, var(--ally-accent) 40%, #c2cfe3);
+  --md-em: color-mix(in srgb, var(--ally-accent) 30%, #dbe5f2);
+  --md-link: color-mix(in srgb, var(--ally-accent) 60%, #eaf1fa);
+  --md-quote: #d3ddef;
+  --md-quote-border: color-mix(in srgb, var(--ally-accent) 55%, transparent);
+  --md-quote-bg: color-mix(in srgb, var(--ally-accent) 8%, transparent);
+  --md-del: #8796ad;
+  --md-marker-ul: color-mix(in srgb, var(--ally-accent) 55%, #c2cfe3);
+  --md-marker-ol: color-mix(in srgb, var(--ally-accent) 40%, #c4d1e6);
+
+  --ally-border-input: rgba(238, 243, 251, 0.30);
+  --ally-composer-glass: rgba(16, 21, 31, 0.55);
+  --ally-composer-glass-hover: rgba(16, 21, 31, 0.58);
+  --ally-composer-glass-focus: rgba(16, 21, 31, 0.62);
+  --ally-panel-glass: rgba(16, 21, 31, 0.68);
+  --ally-copy-btn-bg: rgba(21, 27, 39, 0.85);
+  --ally-pre-bg: rgba(0, 0, 0, 0.30);
+  --ally-code-bg: #0b0f17;
+
+  --ally-scrollbar: #3d4557;
+  --ally-scrollbar-editor: rgba(255, 255, 255, 0.24);
+  --ally-scrollbar-editor-hover: rgba(255, 255, 255, 0.38);
+
+  --ally-overlay-modal: #141a26;
+
+  --ally-eye-shell-fill: #0d1119;
+  --ally-eye-shell-stroke: #333e52;
+  --ally-eye-shadow-opacity: 0.25;
+}
+
+:root[data-theme="ocean"]:not([data-mode="light"]) .markdown-body {
+  --md-text: #d8e1ef;
+  --md-muted: #a2b1c7;
+  --md-faint: #8796ad;
+  --md-white: #eef3fb;
+  --md-border: rgba(221, 230, 243, 0.12);
+  --md-surface: var(--ally-hover-faint);
+  color: var(--md-text);
+}
+:root[data-theme="ocean"]:not([data-mode="light"]) .splash-screen .splash-bg {
+  background: linear-gradient(165deg, #0e131d 0%, #131a27 46%, #0a0e15 100%);
+}
+
+/* ── Ocean — light: sea-mist glass, ink-navy ramp ── */
+:root[data-theme="ocean"][data-mode="light"] {
+  --ally-surface-content: #eef3f9;
+  --ally-surface-panel: rgba(248, 251, 254, 0.72);
+  --ally-surface-chrome: rgba(248, 251, 254, 0.65);
+  --ally-surface-raised: rgba(248, 251, 254, 0.88);
+  --ally-surface-deep: #e2eaf3;
+
+  --ally-text-primary: #131c2b;
+  --ally-text-high: #202e45;
+  --ally-text-body: #2b3c55;
+  --ally-text-secondary: #3b4d68;
+  --ally-text-soft: #42546e;
+  --ally-text-tertiary: #4c5e77;
+  --ally-text-muted: #586a83;
+  --ally-text-faint: #71829a;
+  --ally-text-ghost: #8b9ab0;
+
+  --ally-border: #d5dfeb;
+  --ally-border-subtle: #e1eaf4;
+  --ally-border-strong: #b8c9dd;
+  --ally-state-hover: rgba(19, 28, 43, 0.05);
+  --ally-state-selected: rgba(19, 28, 43, 0.07);
+  --ally-hover-faint: rgba(19, 28, 43, 0.03);
+  --ally-hover-strong: rgba(19, 28, 43, 0.09);
+
+  --ally-accent: #5b9cf6; /* azure */
+  --ally-accent-bright: color-mix(in srgb, var(--ally-accent) 62%, #131c2b);
+  --ally-accent-strong: color-mix(in srgb, var(--ally-accent) 50%, #131c2b);
+  --ally-accent-soft:   color-mix(in srgb, var(--ally-accent) 55%, #202e45);
+  --ally-accent-pale:   color-mix(in srgb, var(--ally-accent) 50%, #2b3c55);
+  --ally-accent-muted:  color-mix(in srgb, var(--ally-accent) 52%, #586a83);
+  --ally-accent-dim:    color-mix(in srgb, var(--ally-accent) 45%, #202e45);
+
+  --ally-wordmark-gradient: linear-gradient(120deg, #131c2b 0%, #3d6fc4 36%, #465a74 68%, #131c2b 100%);
+
+  --md-h1: #131c2b;
+  --md-h2: #202e45;
+  --md-h3: color-mix(in srgb, var(--ally-accent) 55%, #131c2b);
+  --md-h4: #2b3c55;
+  --md-strong: #131c2b;
+  --md-code: color-mix(in srgb, var(--ally-accent) 42%, #202e45);
+  --md-em: color-mix(in srgb, var(--ally-accent) 45%, #202e45);
+  --md-link: color-mix(in srgb, var(--ally-accent) 60%, #131c2b);
+  --md-quote: #2b3c55;
+  --md-quote-border: color-mix(in srgb, var(--ally-accent) 65%, transparent);
+  --md-quote-bg: color-mix(in srgb, var(--ally-accent) 9%, transparent);
+  --md-del: #8b9ab0;
+  --md-marker-ul: color-mix(in srgb, var(--ally-accent) 65%, #2b3c55);
+  --md-marker-ol: color-mix(in srgb, var(--ally-accent) 50%, #202e45);
+
+  --ally-border-input: rgba(19, 28, 43, 0.24);
+  --ally-composer-glass: rgba(248, 251, 254, 0.62);
+  --ally-composer-glass-hover: rgba(248, 251, 254, 0.70);
+  --ally-composer-glass-focus: rgba(248, 251, 254, 0.78);
+  --ally-panel-glass: rgba(248, 251, 254, 0.76);
+  --ally-copy-btn-bg: rgba(248, 251, 254, 0.90);
+  --ally-pre-bg: rgba(19, 28, 43, 0.045);
+  --ally-code-bg: #edf2f8;
+
+  --ally-scrollbar: #b8c9dd;
+  --ally-scrollbar-editor: rgba(19, 28, 43, 0.20);
+  --ally-scrollbar-editor-hover: rgba(19, 28, 43, 0.33);
+
+  --ally-overlay-shadow: 0 18px 50px rgba(23, 38, 63, 0.14), 0 2px 8px rgba(23, 38, 63, 0.06);
+  --ally-glass-shadow: 0 18px 50px rgba(23, 38, 63, 0.14), 0 2px 8px rgba(23, 38, 63, 0.06);
+
+  --ally-overlay-modal: rgba(248, 251, 254, 0.93);
+
+  --ally-eye-shell-fill: #eef4fb;
+  --ally-eye-shell-stroke: #cfdff0;
+  --ally-eye-shadow-opacity: 0.10;
+}
+
+:root[data-theme="ocean"][data-mode="light"] .markdown-body {
+  --md-text: #202e45;
+  --md-muted: #2b3c55;
+  --md-faint: #586a83;
+  --md-white: #131c2b;
+  --md-border: rgba(19, 28, 43, 0.12);
+  --md-surface: rgba(19, 28, 43, 0.04);
+  color: var(--md-text);
+}
+/* Sea-mist canvas: azure and soft cyan glows over a cool wash. */
+:root[data-theme="ocean"][data-mode="light"] body {
+  background:
+    radial-gradient(1100px 760px at 88% -8%, rgba(91, 156, 246, 0.10), transparent 64%),
+    radial-gradient(900px 700px at -8% 108%, rgba(94, 200, 210, 0.08), transparent 62%),
+    linear-gradient(165deg, #eef4fa 0%, #f7fafd 46%, #e8eff7 100%);
+  background-attachment: fixed;
+}
+:root[data-theme="ocean"][data-mode="light"] .splash-screen .splash-bg {
+  background: linear-gradient(165deg, #eef4fa 0%, #f7fafd 46%, #e8eff7 100%);
+}
+:root[data-theme="ocean"][data-mode="light"] .markdown-body img,
+:root[data-theme="ocean"][data-mode="light"] .attachment-item img,
+:root[data-theme="ocean"][data-mode="light"] .attachment-item video {
+  background: #e6edf5;
+}
+/* Highlight: sky wash instead of amber's gold. */
+:root[data-theme="ocean"][data-mode="light"] .markdown-body mark {
+  color: #274a7a;
+  background: rgba(147, 197, 253, 0.35);
+}
+
+/* ── Forest — dark: deep greenwood, emerald accent ── */
+:root[data-theme="forest"]:not([data-mode="light"]) {
+  --ally-surface-content: #111711;
+  --ally-surface-panel: #161d16;
+  --ally-surface-chrome: #1c241b;
+  --ally-surface-raised: #232c21;
+  --ally-surface-deep: #090d09;
+
+  --ally-text-primary: #f0f6ee;
+  --ally-text-high: #dee9db;
+  --ally-text-body: #cddccd;
+  --ally-text-secondary: #adc2ab;
+  --ally-text-soft: #a1b6a0;
+  --ally-text-tertiary: #97ab96;
+  --ally-text-muted: #869a85;
+  --ally-text-faint: #748373;
+  --ally-text-ghost: #5b695a;
+
+  --ally-border: rgba(240, 246, 238, 0.09);
+  --ally-border-subtle: rgba(240, 246, 238, 0.06);
+  --ally-border-strong: rgba(240, 246, 238, 0.18);
+
+  --ally-accent: #57c98a; /* emerald */
+  --ally-accent-bright: color-mix(in srgb, var(--ally-accent) 78%, #edf7ee);
+  --ally-accent-strong: color-mix(in srgb, var(--ally-accent) 60%, #dceadc);
+  --ally-accent-soft:   color-mix(in srgb, var(--ally-accent) 46%, #d0e2d1);
+  --ally-accent-pale:   color-mix(in srgb, var(--ally-accent) 34%, #c1d6c3);
+  --ally-accent-muted:  color-mix(in srgb, var(--ally-accent) 42%, #97ab96);
+  --ally-accent-dim:    color-mix(in srgb, var(--ally-accent) 48%, #748373);
+
+  --ally-wordmark-gradient: linear-gradient(120deg, #f2faf2 0%, #57c98a 36%, #a9e3c3 68%, #f2faf2 100%);
+
+  --md-h1: #eaf3ea;
+  --md-h2: #dbe8db;
+  --md-h3: color-mix(in srgb, var(--ally-accent) 42%, #eaf3ea);
+  --md-h4: #cddccd;
+  --md-strong: color-mix(in srgb, var(--ally-accent) 20%, #cddccd);
+  --md-code: color-mix(in srgb, var(--ally-accent) 40%, #c0d4c1);
+  --md-em: color-mix(in srgb, var(--ally-accent) 30%, #dbe8db);
+  --md-link: color-mix(in srgb, var(--ally-accent) 60%, #eaf3ea);
+  --md-quote: #d2e2d3;
+  --md-quote-border: color-mix(in srgb, var(--ally-accent) 55%, transparent);
+  --md-quote-bg: color-mix(in srgb, var(--ally-accent) 8%, transparent);
+  --md-del: #869a85;
+  --md-marker-ul: color-mix(in srgb, var(--ally-accent) 55%, #c0d4c1);
+  --md-marker-ol: color-mix(in srgb, var(--ally-accent) 40%, #c1d6c3);
+
+  --ally-border-input: rgba(240, 246, 238, 0.30);
+  --ally-composer-glass: rgba(17, 23, 17, 0.55);
+  --ally-composer-glass-hover: rgba(17, 23, 17, 0.58);
+  --ally-composer-glass-focus: rgba(17, 23, 17, 0.62);
+  --ally-panel-glass: rgba(17, 23, 17, 0.68);
+  --ally-copy-btn-bg: rgba(22, 29, 22, 0.85);
+  --ally-pre-bg: rgba(0, 0, 0, 0.30);
+  --ally-code-bg: #0c110c;
+
+  --ally-scrollbar: #3f4a3f;
+  --ally-scrollbar-editor: rgba(255, 255, 255, 0.24);
+  --ally-scrollbar-editor-hover: rgba(255, 255, 255, 0.38);
+
+  --ally-overlay-modal: #161d16;
+
+  --ally-eye-shell-fill: #0e130e;
+  --ally-eye-shell-stroke: #364434;
+  --ally-eye-shadow-opacity: 0.25;
+}
+
+:root[data-theme="forest"]:not([data-mode="light"]) .markdown-body {
+  --md-text: #d6e4d6;
+  --md-muted: #a1b6a0;
+  --md-faint: #869a85;
+  --md-white: #f0f6ee;
+  --md-border: rgba(222, 233, 219, 0.12);
+  --md-surface: var(--ally-hover-faint);
+  color: var(--md-text);
+}
+:root[data-theme="forest"]:not([data-mode="light"]) .splash-screen .splash-bg {
+  background: linear-gradient(165deg, #101510 0%, #151c14 46%, #0b0f0b 100%);
+}
+
+/* ── Forest — light: sage wash, ink-green ramp ── */
+:root[data-theme="forest"][data-mode="light"] {
+  --ally-surface-content: #eff4ee;
+  --ally-surface-panel: rgba(249, 252, 249, 0.72);
+  --ally-surface-chrome: rgba(249, 252, 249, 0.65);
+  --ally-surface-raised: rgba(249, 252, 249, 0.88);
+  --ally-surface-deep: #e3ebe2;
+
+  --ally-text-primary: #15211a;
+  --ally-text-high: #22302a;
+  --ally-text-body: #2c3b34;
+  --ally-text-secondary: #3c4d45;
+  --ally-text-soft: #43554c;
+  --ally-text-tertiary: #4d5f56;
+  --ally-text-muted: #5a6c62;
+  --ally-text-faint: #73837a;
+  --ally-text-ghost: #8d9c92;
+
+  --ally-border: #d8e3d8;
+  --ally-border-subtle: #e3ece3;
+  --ally-border-strong: #c0d2c1;
+  --ally-state-hover: rgba(21, 33, 26, 0.05);
+  --ally-state-selected: rgba(21, 33, 26, 0.07);
+  --ally-hover-faint: rgba(21, 33, 26, 0.03);
+  --ally-hover-strong: rgba(21, 33, 26, 0.09);
+
+  --ally-accent: #57c98a; /* emerald */
+  --ally-accent-bright: color-mix(in srgb, var(--ally-accent) 62%, #15211a);
+  --ally-accent-strong: color-mix(in srgb, var(--ally-accent) 50%, #15211a);
+  --ally-accent-soft:   color-mix(in srgb, var(--ally-accent) 55%, #22302a);
+  --ally-accent-pale:   color-mix(in srgb, var(--ally-accent) 50%, #2c3b34);
+  --ally-accent-muted:  color-mix(in srgb, var(--ally-accent) 52%, #5a6c62);
+  --ally-accent-dim:    color-mix(in srgb, var(--ally-accent) 45%, #22302a);
+
+  --ally-wordmark-gradient: linear-gradient(120deg, #15211a 0%, #37804f 36%, #43554c 68%, #15211a 100%);
+
+  --md-h1: #15211a;
+  --md-h2: #22302a;
+  --md-h3: color-mix(in srgb, var(--ally-accent) 55%, #15211a);
+  --md-h4: #2c3b34;
+  --md-strong: #15211a;
+  --md-code: color-mix(in srgb, var(--ally-accent) 42%, #22302a);
+  --md-em: color-mix(in srgb, var(--ally-accent) 45%, #22302a);
+  --md-link: color-mix(in srgb, var(--ally-accent) 60%, #15211a);
+  --md-quote: #2c3b34;
+  --md-quote-border: color-mix(in srgb, var(--ally-accent) 65%, transparent);
+  --md-quote-bg: color-mix(in srgb, var(--ally-accent) 9%, transparent);
+  --md-del: #8d9c92;
+  --md-marker-ul: color-mix(in srgb, var(--ally-accent) 65%, #2c3b34);
+  --md-marker-ol: color-mix(in srgb, var(--ally-accent) 50%, #22302a);
+
+  --ally-border-input: rgba(21, 33, 26, 0.24);
+  --ally-composer-glass: rgba(249, 252, 249, 0.62);
+  --ally-composer-glass-hover: rgba(249, 252, 249, 0.70);
+  --ally-composer-glass-focus: rgba(249, 252, 249, 0.78);
+  --ally-panel-glass: rgba(249, 252, 249, 0.76);
+  --ally-copy-btn-bg: rgba(249, 252, 249, 0.90);
+  --ally-pre-bg: rgba(21, 33, 26, 0.045);
+  --ally-code-bg: #eef3ed;
+
+  --ally-scrollbar: #c0d2c1;
+  --ally-scrollbar-editor: rgba(21, 33, 26, 0.20);
+  --ally-scrollbar-editor-hover: rgba(21, 33, 26, 0.33);
+
+  --ally-overlay-shadow: 0 18px 50px rgba(38, 58, 46, 0.14), 0 2px 8px rgba(38, 58, 46, 0.06);
+  --ally-glass-shadow: 0 18px 50px rgba(38, 58, 46, 0.14), 0 2px 8px rgba(38, 58, 46, 0.06);
+
+  --ally-overlay-modal: rgba(249, 252, 249, 0.93);
+
+  --ally-eye-shell-fill: #eff6ef;
+  --ally-eye-shell-stroke: #cfe2d2;
+  --ally-eye-shadow-opacity: 0.10;
+}
+
+:root[data-theme="forest"][data-mode="light"] .markdown-body {
+  --md-text: #22302a;
+  --md-muted: #2c3b34;
+  --md-faint: #5a6c62;
+  --md-white: #15211a;
+  --md-border: rgba(21, 33, 26, 0.12);
+  --md-surface: rgba(21, 33, 26, 0.04);
+  color: var(--md-text);
+}
+/* Sage canvas: emerald and soft lime glows over a green-tinted wash. */
+:root[data-theme="forest"][data-mode="light"] body {
+  background:
+    radial-gradient(1100px 760px at 88% -8%, rgba(87, 201, 138, 0.10), transparent 64%),
+    radial-gradient(900px 700px at -8% 108%, rgba(151, 205, 122, 0.07), transparent 62%),
+    linear-gradient(165deg, #eef4ed 0%, #f8fbf7 46%, #e9f0e8 100%);
+  background-attachment: fixed;
+}
+:root[data-theme="forest"][data-mode="light"] .splash-screen .splash-bg {
+  background: linear-gradient(165deg, #eef4ed 0%, #f8fbf7 46%, #e9f0e8 100%);
+}
+:root[data-theme="forest"][data-mode="light"] .markdown-body img,
+:root[data-theme="forest"][data-mode="light"] .attachment-item img,
+:root[data-theme="forest"][data-mode="light"] .attachment-item video {
+  background: #e7efe6;
+}
+/* Highlight: mint wash instead of amber's gold. */
+:root[data-theme="forest"][data-mode="light"] .markdown-body mark {
+  color: #2c5a3d;
+  background: rgba(167, 220, 186, 0.35);
+}
+
+/* ── Violet — dark: plum night, violet accent ── */
+:root[data-theme="violet"]:not([data-mode="light"]) {
+  --ally-surface-content: #151221;
+  --ally-surface-panel: #1a1628;
+  --ally-surface-chrome: #211c31;
+  --ally-surface-raised: #28223a;
+  --ally-surface-deep: #0b0913;
+
+  --ally-text-primary: #f3f0fa;
+  --ally-text-high: #e2dcf0;
+  --ally-text-body: #d1c9e3;
+  --ally-text-secondary: #b0a6c8;
+  --ally-text-soft: #a49aba;
+  --ally-text-tertiary: #9a90b0;
+  --ally-text-muted: #8a80a0;
+  --ally-text-faint: #786f8d;
+  --ally-text-ghost: #5f5773;
+
+  --ally-border: rgba(243, 240, 250, 0.09);
+  --ally-border-subtle: rgba(243, 240, 250, 0.06);
+  --ally-border-strong: rgba(243, 240, 250, 0.18);
+
+  --ally-accent: #a78bfa; /* violet */
+  --ally-accent-bright: color-mix(in srgb, var(--ally-accent) 78%, #f3edfe);
+  --ally-accent-strong: color-mix(in srgb, var(--ally-accent) 60%, #e6def5);
+  --ally-accent-soft:   color-mix(in srgb, var(--ally-accent) 46%, #d9d0ec);
+  --ally-accent-pale:   color-mix(in srgb, var(--ally-accent) 34%, #cbc0e3);
+  --ally-accent-muted:  color-mix(in srgb, var(--ally-accent) 42%, #9a90b0);
+  --ally-accent-dim:    color-mix(in srgb, var(--ally-accent) 48%, #786f8d);
+
+  --ally-wordmark-gradient: linear-gradient(120deg, #f7f4fe 0%, #a78bfa 36%, #d3c4f5 68%, #f7f4fe 100%);
+
+  --md-h1: #eeeaf7;
+  --md-h2: #ded7ee;
+  --md-h3: color-mix(in srgb, var(--ally-accent) 42%, #eeeaf7);
+  --md-h4: #d1c9e3;
+  --md-strong: color-mix(in srgb, var(--ally-accent) 20%, #d1c9e3);
+  --md-code: color-mix(in srgb, var(--ally-accent) 40%, #c8bfe0);
+  --md-em: color-mix(in srgb, var(--ally-accent) 30%, #ded7ee);
+  --md-link: color-mix(in srgb, var(--ally-accent) 60%, #eeeaf7);
+  --md-quote: #d6cfe9;
+  --md-quote-border: color-mix(in srgb, var(--ally-accent) 55%, transparent);
+  --md-quote-bg: color-mix(in srgb, var(--ally-accent) 8%, transparent);
+  --md-del: #8a80a0;
+  --md-marker-ul: color-mix(in srgb, var(--ally-accent) 55%, #c8bfe0);
+  --md-marker-ol: color-mix(in srgb, var(--ally-accent) 40%, #cbc0e3);
+
+  --ally-border-input: rgba(243, 240, 250, 0.30);
+  --ally-composer-glass: rgba(21, 18, 33, 0.55);
+  --ally-composer-glass-hover: rgba(21, 18, 33, 0.58);
+  --ally-composer-glass-focus: rgba(21, 18, 33, 0.62);
+  --ally-panel-glass: rgba(21, 18, 33, 0.68);
+  --ally-copy-btn-bg: rgba(26, 22, 40, 0.85);
+  --ally-pre-bg: rgba(0, 0, 0, 0.30);
+  --ally-code-bg: #100d1a;
+
+  --ally-scrollbar: #443d59;
+  --ally-scrollbar-editor: rgba(255, 255, 255, 0.24);
+  --ally-scrollbar-editor-hover: rgba(255, 255, 255, 0.38);
+
+  --ally-overlay-modal: #1a1628;
+
+  --ally-eye-shell-fill: #12101d;
+  --ally-eye-shell-stroke: #3b3552;
+  --ally-eye-shadow-opacity: 0.25;
+}
+
+:root[data-theme="violet"]:not([data-mode="light"]) .markdown-body {
+  --md-text: #d9d2e8;
+  --md-muted: #a49aba;
+  --md-faint: #8a80a0;
+  --md-white: #f3f0fa;
+  --md-border: rgba(226, 220, 240, 0.12);
+  --md-surface: var(--ally-hover-faint);
+  color: var(--md-text);
+}
+:root[data-theme="violet"]:not([data-mode="light"]) .splash-screen .splash-bg {
+  background: linear-gradient(165deg, #13101e 0%, #181425 46%, #0e0b17 100%);
+}
+
+/* ── Violet — light: lilac wash, ink-plum ramp ── */
+:root[data-theme="violet"][data-mode="light"] {
+  --ally-surface-content: #f1effa;
+  --ally-surface-panel: rgba(251, 250, 254, 0.72);
+  --ally-surface-chrome: rgba(251, 250, 254, 0.65);
+  --ally-surface-raised: rgba(251, 250, 254, 0.88);
+  --ally-surface-deep: #e6e2f2;
+
+  --ally-text-primary: #1c1630;
+  --ally-text-high: #2a2344;
+  --ally-text-body: #352d52;
+  --ally-text-secondary: #453c68;
+  --ally-text-soft: #4c4371;
+  --ally-text-tertiary: #564d7b;
+  --ally-text-muted: #635984;
+  --ally-text-faint: #7c739c;
+  --ally-text-ghost: #968cb4;
+
+  --ally-border: #ded9ee;
+  --ally-border-subtle: #e8e4f4;
+  --ally-border-strong: #c6bfdf;
+  --ally-state-hover: rgba(28, 22, 48, 0.05);
+  --ally-state-selected: rgba(28, 22, 48, 0.07);
+  --ally-hover-faint: rgba(28, 22, 48, 0.03);
+  --ally-hover-strong: rgba(28, 22, 48, 0.09);
+
+  --ally-accent: #a78bfa; /* violet */
+  --ally-accent-bright: color-mix(in srgb, var(--ally-accent) 62%, #1c1630);
+  --ally-accent-strong: color-mix(in srgb, var(--ally-accent) 50%, #1c1630);
+  --ally-accent-soft:   color-mix(in srgb, var(--ally-accent) 55%, #2a2344);
+  --ally-accent-pale:   color-mix(in srgb, var(--ally-accent) 50%, #352d52);
+  --ally-accent-muted:  color-mix(in srgb, var(--ally-accent) 52%, #635984);
+  --ally-accent-dim:    color-mix(in srgb, var(--ally-accent) 45%, #2a2344);
+
+  --ally-wordmark-gradient: linear-gradient(120deg, #1c1630 0%, #7b5fd0 36%, #4c4371 68%, #1c1630 100%);
+
+  --md-h1: #1c1630;
+  --md-h2: #2a2344;
+  --md-h3: color-mix(in srgb, var(--ally-accent) 55%, #1c1630);
+  --md-h4: #352d52;
+  --md-strong: #1c1630;
+  --md-code: color-mix(in srgb, var(--ally-accent) 42%, #2a2344);
+  --md-em: color-mix(in srgb, var(--ally-accent) 45%, #2a2344);
+  --md-link: color-mix(in srgb, var(--ally-accent) 60%, #1c1630);
+  --md-quote: #352d52;
+  --md-quote-border: color-mix(in srgb, var(--ally-accent) 65%, transparent);
+  --md-quote-bg: color-mix(in srgb, var(--ally-accent) 9%, transparent);
+  --md-del: #968cb4;
+  --md-marker-ul: color-mix(in srgb, var(--ally-accent) 65%, #352d52);
+  --md-marker-ol: color-mix(in srgb, var(--ally-accent) 50%, #2a2344);
+
+  --ally-border-input: rgba(28, 22, 48, 0.24);
+  --ally-composer-glass: rgba(251, 250, 254, 0.62);
+  --ally-composer-glass-hover: rgba(251, 250, 254, 0.70);
+  --ally-composer-glass-focus: rgba(251, 250, 254, 0.78);
+  --ally-panel-glass: rgba(251, 250, 254, 0.76);
+  --ally-copy-btn-bg: rgba(251, 250, 254, 0.90);
+  --ally-pre-bg: rgba(28, 22, 48, 0.045);
+  --ally-code-bg: #f0edf9;
+
+  --ally-scrollbar: #c6bfdf;
+  --ally-scrollbar-editor: rgba(28, 22, 48, 0.20);
+  --ally-scrollbar-editor-hover: rgba(28, 22, 48, 0.33);
+
+  --ally-overlay-shadow: 0 18px 50px rgba(46, 36, 80, 0.14), 0 2px 8px rgba(46, 36, 80, 0.06);
+  --ally-glass-shadow: 0 18px 50px rgba(46, 36, 80, 0.14), 0 2px 8px rgba(46, 36, 80, 0.06);
+
+  --ally-overlay-modal: rgba(251, 250, 254, 0.93);
+
+  --ally-eye-shell-fill: #f2effb;
+  --ally-eye-shell-stroke: #d8d0ef;
+  --ally-eye-shadow-opacity: 0.10;
+}
+
+:root[data-theme="violet"][data-mode="light"] .markdown-body {
+  --md-text: #2a2344;
+  --md-muted: #352d52;
+  --md-faint: #635984;
+  --md-white: #1c1630;
+  --md-border: rgba(28, 22, 48, 0.12);
+  --md-surface: rgba(28, 22, 48, 0.04);
+  color: var(--md-text);
+}
+/* Lilac canvas: violet and soft periwinkle glows over a cool wash. */
+:root[data-theme="violet"][data-mode="light"] body {
+  background:
+    radial-gradient(1100px 760px at 88% -8%, rgba(167, 139, 250, 0.10), transparent 64%),
+    radial-gradient(900px 700px at -8% 108%, rgba(125, 160, 250, 0.08), transparent 62%),
+    linear-gradient(165deg, #f0eefa 0%, #faf9fd 46%, #eceaf6 100%);
+  background-attachment: fixed;
+}
+:root[data-theme="violet"][data-mode="light"] .splash-screen .splash-bg {
+  background: linear-gradient(165deg, #f0eefa 0%, #faf9fd 46%, #eceaf6 100%);
+}
+:root[data-theme="violet"][data-mode="light"] .markdown-body img,
+:root[data-theme="violet"][data-mode="light"] .attachment-item img,
+:root[data-theme="violet"][data-mode="light"] .attachment-item video {
+  background: #e9e6f4;
+}
+/* Highlight: lilac wash instead of amber's gold. */
+:root[data-theme="violet"][data-mode="light"] .markdown-body mark {
+  color: #4a3a78;
+  background: rgba(196, 181, 253, 0.35);
+}
+
+/* Light-scope literals that were tuned for amber's cool canvas: themed
+   palettes take these token versions; amber keeps its literals via
+   :not([data-theme]) at their original spots, so adding a theme never touches
+   this block. (The self-update error box used to hardcode amber in both modes;
+   that one is token-based now, see .update-error-detail.) */
+html[data-mode="light"] .composer .prompt-input {
+  border-color: var(--ally-border-input) !important;
+}
+html[data-mode="light"] .composer .prompt-input textarea::placeholder {
+  color: var(--ally-text-faint) !important;
+}
+html[data-mode="light"] .session-time {
+  color: var(--ally-text-muted);
+}
+html[data-mode="light"] .markdown-mermaid-action {
+  color: var(--ally-text-tertiary);
+}
+html[data-mode="light"] .markdown-mermaid-action:hover {
+  color: var(--ally-accent-strong);
 }
 
 body.platform-windows,
@@ -3029,8 +3742,9 @@ code, pre {
   --md-border: rgba(215, 222, 220, 0.12);
   --md-surface: var(--ally-hover-faint);
   /* Per-element markdown colors (--md-h1, --md-strong, --md-code, ...) are
-     defined per-theme in :root / [data-theme] blocks above, so each theme
-     ships a coherent same-family palette. */
+     defined once in :root above (dark) and re-derived by the
+     [data-mode="light"] block, so the single accent seed still yields a
+     coherent same-family palette in both modes. */
   color: var(--md-text);
 }
 
@@ -4854,9 +5568,9 @@ code, pre {
 .update-error-detail {
   font-size: var(--ally-sub-font-size);
   line-height: 1.55;
-  color: #e8a55c;
-  background: rgba(232, 165, 92, 0.08);
-  border: 1px solid rgba(232, 165, 92, 0.18);
+  color: var(--ally-accent-soft);
+  background: color-mix(in srgb, var(--ally-accent) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--ally-accent) 18%, transparent);
   border-radius: 6px;
   padding: 8px 10px;
   max-height: 180px;
