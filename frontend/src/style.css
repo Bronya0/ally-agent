@@ -2811,6 +2811,15 @@ code, pre {
   border-bottom: 1px solid var(--ally-border);
 }
 
+/* Empty-list hint pointing at sessions that live under other workspaces. */
+.sessions-menu .sessions-other-hint {
+  padding: 9px 12px;
+  color: var(--ally-text-faint);
+  font-size: 12px;
+  line-height: 1.5;
+  border-top: 1px solid var(--ally-border);
+}
+
 .session-item {
   display: grid;
   grid-template-columns: 26px minmax(0, 1fr) auto auto 24px;

@@ -230,14 +230,16 @@ Public License v3. See the LICENSE file for details.
       />
     </span>
     <span v-else class="info-context info-context-loading" aria-hidden="true">...</span>
-    <!-- 文件树开关停靠信息栏最右（界面右下角），紧邻右侧树面板 -->
+    <!-- 文件树开关停靠信息栏最右（界面右下角），紧邻右侧树面板。图标用层级
+         树而不是 FolderOpen：张开文件夹的语义是"在文件管理器里打开工作区"
+         （那是左下工作区名字按钮的职责），用户反馈过两者混淆。 -->
     <button
       type="button"
       :class="['composer-icon-btn', 'composer-explorer-btn', { active: explorerVisible }]"
       :title="$t('app.workspaceExplorer.open')"
       :aria-label="$t('app.workspaceExplorer.open')"
       @click.stop="$emit('toggleExplorer')"
-    ><FolderOpenOutlined /></button>
+    ><ApartmentOutlined /></button>
   </div>
 </template>
 
@@ -246,7 +248,7 @@ import { computed, h, ref } from 'vue';
 import ContextUsageInline from './ContextUsageInline.vue';
 import PlusOutlined from '@vicons/antd/PlusOutlined';
 import MenuOutlined from '@vicons/antd/MenuOutlined';
-import FolderOpenOutlined from '@vicons/antd/FolderOpenOutlined';
+import ApartmentOutlined from '@vicons/antd/ApartmentOutlined';
 import FolderAddOutlined from '@vicons/antd/FolderAddOutlined';
 import AppstoreOutlined from '@vicons/antd/AppstoreOutlined';
 import CloseOutlined from '@vicons/antd/CloseOutlined';

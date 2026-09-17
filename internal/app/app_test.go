@@ -30,13 +30,11 @@ import (
 	openai "github.com/sashabaranov/go-openai"
 )
 
-func TestDefaultConfigWorkspaceDefaultsToDocuments(t *testing.T) {
-	got := defaultConfigState().Workspace
-	if got == "" {
-		t.Fatalf("default workspace = empty, want the user's Documents directory on first launch")
-	}
-	if !filepath.IsAbs(got) {
-		t.Fatalf("default workspace = %q, want an absolute path", got)
+func TestDefaultConfigWorkspaceEmptyUntilChosen(t *testing.T) {
+	// 空 workspace = 用户从未选择过工作区：首次启动前端据此落在临时工作区
+	// Tab，而不是把用户文档目录静默当作默认工作区。
+	if got := defaultConfigState().Workspace; got != "" {
+		t.Fatalf("default workspace = %q, want empty (first launch starts on a temp workspace tab)", got)
 	}
 }
 

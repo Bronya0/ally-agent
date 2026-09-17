@@ -198,6 +198,11 @@ Public License v3. See the LICENSE file for details.
                       </button>
                     </div>
                   </div>
+                  <!-- 会话按工作区隔离：空列表 + 其他工作区有历史时给一句提示，
+                       避免"重启后历史对话不见了"的错觉（换工作区即可看到）。 -->
+                  <div v-if="!currentWorkspaceSessions.length && otherWorkspaceSessionCount > 0" class="sessions-other-hint">
+                    {{ $t('app.sessions.otherWorkspaces', { count: otherWorkspaceSessionCount }) }}
+                  </div>
                 </div>
                 <div v-if="retryBanner" class="composer-retry-banner" :title="retryBanner.error">
                   <ReloadOutlined class="composer-retry-icon" aria-hidden="true" />
@@ -1536,7 +1541,11 @@ function modelSnapshotFrom(source) {
     // 原样发送图片；只有明确 false 才会在请求构造时把图片换成文字占位。
     visionCapable: typeof source?.visionCapable === 'boolean' ? source.visionCapable : undefined,
     reasoningEffort: normalizeReasoningEffort(source?.reasoningEffort),
-    apiKeys: keys,
+    // 空 key 池置 null 而不是 []，与下方 customHeaders 同款契约：null = 该
+    // 模型未配 key，overlay 不携带该字段，后端保留顶层默认模型的 key 池。
+    // [] 会被 mergeConfig 判为非 nil 而"显式清空"，把已保存的 key 一起抹
+    // 掉——首次配置完直接发送报 "API key is required" 就是这条路径。
+    apiKeys: keys.length ? keys : null,
     apiKey: keys[0] || '',
     // Per-model custom headers must ride the snapshot: chat requests send
     // {...config, ...snapshot}, and the StartChat overlay replaces the whole
@@ -1620,6 +1629,25 @@ function resyncTabModelsFromPresets() {
   }
   // 预设编辑可能改了 providerName / model 名称，欢迎表格的模型行要跟着变。
   updateWelcomeModelRows();
+}
+
+// 首次配置采纳：Tab 的模型快照在启动时就初始化，首次安装时必然是出厂占位
+// （默认模型 + 空 key）。用户保存第一个模型配置（顶层或预设）后，这类从未
+// 被触碰过的占位快照重新解析默认模型，把新配置立即采纳进 Tab——否则占位
+// 快照会一直顶在 composer 上，配置完直接发送仍报 "API key is required"，
+// 重启才恢复。判定收窄到"出厂占位身份 + 无 key"：已选过模型、快照带 key、
+// 或预设被删后残留的快照都不受影响。
+function adoptPristineTabModels() {
+  const pristineIdentity = modelConfigIdentity(defaultConfig());
+  let changed = false;
+  for (const tabId of Object.keys(modelByTab)) {
+    const snapshot = modelByTab[tabId];
+    if (!snapshot || (snapshot.apiKeys || []).length) continue;
+    if (modelConfigIdentity(snapshot) !== pristineIdentity) continue;
+    modelByTab[tabId] = defaultModelSnapshot();
+    changed = true;
+  }
+  if (changed) updateWelcomeModelRows();
 }
 
 const sessions = ref([]);
@@ -2120,6 +2148,9 @@ const currentWorkspaceSessions = computed(() => {
   ));
 });
 
+// 当前工作区之外的历史会话数，仅用于空列表时的提示（见 sessions-menu）。
+const otherWorkspaceSessionCount = computed(() => Math.max(0, sessions.value.length - currentWorkspaceSessions.value.length));
+
 // ── Knowledge base mode ──
 // The KB is a hidden workspace tab (kind:'kb') that never appears in the
 // header tab list. Mode switching only repoints activeWorkspaceId, so every
@@ -2179,7 +2210,7 @@ async function addTempWorkspaceTab() {
   }
   if (!dir) return;
   mode.value = 'chat';
-  const tab = createWorkspaceTab(dir);
+  const tab = createWorkspaceTab(dir, { temp: true });
   tab.kind = 'temp';
   tab.label = t('temp.tabLabel');
   workspaceTabs.value.push(tab);
@@ -3307,7 +3338,7 @@ function welcomeGreeting() {
   return localizedWelcomeGreeting();
 }
 
-function buildWelcomeMessage(workspacePath = '') {
+function buildWelcomeMessage(workspacePath = '', opts = {}) {
   // Knowledge-base sessions skip the avatar / info table / greeting chrome:
   // the KB page has its own identity header (kb-hero), so the welcome stays
   // a single plain line.
@@ -3329,7 +3360,13 @@ function buildWelcomeMessage(workspacePath = '') {
   const skillCount = availableSkills.value.filter((sk) => isSkillActive(sk.name, activeSkillNames.value)).length;
   const rows = [];
   if (workspacePath !== null) {
-    rows.push({ kind: 'workspace', label: t('common.workspace'), value: workspacePath || t('common.notSelected') });
+    // 临时工作区展示语义标签而不是原始 Temp 目录路径——首启用户看到的
+    // 第一屏不该是一串 ally-temp-* 系统路径。
+    rows.push({
+      kind: 'workspace',
+      label: t('common.workspace'),
+      value: opts.temp ? t('temp.welcomeLabel') : (workspacePath || t('common.notSelected')),
+    });
   }
   const gitBashPath = String(config.gitBashPath || '').trim();
   if (gitBashPath) {
@@ -3602,14 +3639,14 @@ async function activateSelectedSession(target) {
   return true;
 }
 
-function createWorkspaceTab(path) {
+function createWorkspaceTab(path, opts = {}) {
   const id = crypto.randomUUID ? crypto.randomUUID() : `ws-${Date.now()}-${Math.random()}`;
   const label = workspaceLabel(path);
   // Create a linked session for this tab
   const sessionId = crypto.randomUUID ? crypto.randomUUID() : `s-${Date.now()}-${Math.random()}`;
   const now = Date.now();
   const session = { id: sessionId, title: label, workspace: path || '', extraRoots: [], messages: [], messagesLoaded: true, runId: '', isRunning: false, createdAt: now, updatedAt: now };
-  session.messages.push(buildWelcomeMessage(path || t('common.notSelected')));
+  session.messages.push(buildWelcomeMessage(path || t('common.notSelected'), opts));
   sessions.value.unshift(session);
   // Reset cumulative token usage for this workspace (new workspace = fresh counter)
   if (path) {
@@ -3987,22 +4024,45 @@ async function init() {
   // Init workspace tabs from config. Model state belongs to this Tab, not to
   // its workspace path, so a second Tab can point to the same path safely.
   const ws = config.workspace || '';
-  const tab = createWorkspaceTab(ws);
-  workspaceTabs.value.push(tab);
-  activeWorkspaceId.value = tab.id;
-  if (tab.sessionId) activeSessionId.value = tab.sessionId;
-  // The startup Tab starts from the configured default model; it owns its
-  // own snapshot from here on.
-  ensureTabModel(tab);
-  if (ws) addToHistory(ws);
-  loadPromptHistory(ws);
+  let bootTab = null;
+  if (ws) {
+    bootTab = createWorkspaceTab(ws);
+    workspaceTabs.value.push(bootTab);
+    activeWorkspaceId.value = bootTab.id;
+    if (bootTab.sessionId) activeSessionId.value = bootTab.sessionId;
+    // The startup Tab starts from the configured default model; it owns its
+    // own snapshot from here on.
+    ensureTabModel(bootTab);
+    addToHistory(ws);
+    loadPromptHistory(ws);
+  } else {
+    // 首次启动且从未选择过工作区：落在临时工作区 Tab 上（kind:'temp'，
+    // 随 Tab 关闭/进程退出销毁），而不是把某个目录静默当作默认工作区。
+    // 临时 Tab 不回写 config.workspace：用户经 "+" 选定真实工作区后才会
+    // 持久化，之后的启动恢复那个工作区。
+    await addTempWorkspaceTab();
+    if (!workspaceTabs.value.length) {
+      // 临时目录创建失败的兜底：空工作区普通 Tab（欢迎页提示未选择，
+      // 发送时弹出工作区选择器），保证应用始终至少有一个 Tab。
+      bootTab = createWorkspaceTab('');
+      workspaceTabs.value.push(bootTab);
+      activeWorkspaceId.value = bootTab.id;
+      if (bootTab.sessionId) activeSessionId.value = bootTab.sessionId;
+      ensureTabModel(bootTab);
+      // 空工作区没有可拉的统计：直接结束页脚加载态（与 refreshFooterStats
+      // 收到空 workspace 时的早退分支等价）。
+      footerStatsLoading.value = false;
+    }
+  }
 
   await loadSavedSessions();
-  await refreshFooterStats({
-    tabId: tab.id,
-    sessionId: tab.sessionId,
-    workspace: ws,
-  });
+  if (ws) {
+    await refreshFooterStats({
+      tabId: bootTab.id,
+      sessionId: bootTab.sessionId,
+      workspace: ws,
+    });
+  }
   loadMcpConfig();
   loadBackgroundImage();
 }
@@ -5623,6 +5683,7 @@ async function onSettingsSave(draftData, silent = false) {
   assignConfig(config, draftData);
   assignConfig(configDraft, draftData);
   resyncTabModelsFromPresets();
+  adoptPristineTabModels();
   applyFontSizes(config);
   try {
     await saveWorkspaceConfig({ ...configDraft });

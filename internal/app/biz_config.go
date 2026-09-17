@@ -32,13 +32,16 @@ import (
 
 // ── Config state ─────────────────────────────────────────────
 
+// Workspace 的默认值刻意留空：空 = 用户从未选择过工作区。首次启动时前端
+// 据此落在一个临时工作区 Tab（kind:'temp'，随 Tab/进程销毁），而不是把
+// 用户文档目录静默当作工作区。用户经 "+" / 发送时选择器选定真实工作区后，
+// config.json 持久化该路径，后续启动恢复它。
 func defaultConfigState() ConfigState {
 	cfg := ConfigState{
 		ProviderName:          "OpenAI Compatible",
 		APIFormat:             apiFormatOpenAIChat,
 		BaseURL:               defaultBaseURL,
 		Model:                 defaultModel,
-		Workspace:             defaultWorkspaceDir(),
 		MaxTokens:             131072,
 		ContextWindow:         1000000,
 		AllowPrivateNetwork:   true,
