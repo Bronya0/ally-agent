@@ -439,6 +439,7 @@ Public License v3. See the LICENSE file for details.
             <p>{{ $t('settings.licenseWarranty') }}</p>
             <p>{{ $t('settings.licenseSource') }}</p>
             <n-button secondary @click="openSourceRepository">{{ $t('settings.sourceLicense') }}</n-button>
+            <n-button secondary @click="openIssueTracker">{{ $t('settings.feedback') }}</n-button>
           </div>
           <div class="about-update-check">
             <n-button
@@ -488,6 +489,10 @@ function selectColorMode(mode) {
 
 function openSourceRepository() {
   Browser.OpenURL('https://github.com/Bronya0/ally-agent');
+}
+
+function openIssueTracker() {
+  Browser.OpenURL('https://github.com/Bronya0/ally-agent/issues/new/choose');
 }
 
 const autostartEnabled = ref(false);

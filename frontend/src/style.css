@@ -3379,6 +3379,11 @@ code, pre {
 
 /* ── Model menu popover ── */
 
+.model-menu .model-menu-search {
+  padding: 4px 8px 6px;
+  cursor: default;
+}
+
 .model-menu .model-menu-group {
   display: flex;
   align-items: center;

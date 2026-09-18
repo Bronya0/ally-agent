@@ -31,6 +31,7 @@ Public License v3. See the LICENSE file for details.
       :render-label="renderModelMenuLabel"
       :menu-props="modelMenuProps"
       @select="onModelMenuSelect"
+      @update:show="onModelMenuShow"
     >
       <span class="info-model" style="cursor:pointer">{{ currentModelLabel }}</span>
     </n-dropdown>
@@ -247,6 +248,7 @@ Public License v3. See the LICENSE file for details.
 
 <script setup>
 import { computed, h, ref } from 'vue';
+import { NInput } from 'naive-ui';
 import ContextUsageInline from './ContextUsageInline.vue';
 import PlusOutlined from '@vicons/antd/PlusOutlined';
 import MenuOutlined from '@vicons/antd/MenuOutlined';
@@ -351,6 +353,8 @@ const contextPopoverVisible = ref(false);
 // Reactive snapshot of the persisted `{ groupKey: count }` usage map. Bumped in
 // onModelMenuSelect so the group ordering re-sorts right after a switch.
 const modelUsage = ref(getModelUsage());
+// Live filter query for the model dropdown's search box; cleared on close.
+const modelSearch = ref('');
 const currentModelLabel = computed(() => formatModelLabel(props.config));
 // Single source for the workspace path shown here: explicit prop (KB root on
 // KB tabs) wins, otherwise fall back to the persisted chat workspace.
@@ -388,9 +392,54 @@ const modelGroups = computed(() => {
 });
 const modelMenuOptions = computed(() => {
   const options = [];
-  const groups = modelGroups.value;
+  // Live search box, rendered as the first (non-selectable) row of the menu;
+  // typing filters the model groups below by model name or provider label
+  // (case-insensitive substring). The menu is `scrollable`, so this row lives
+  // inside the scroll container and scrolls away with the list rather than
+  // staying pinned at the top.
+  options.push({
+    key: 'search',
+    type: 'render',
+    render: () => h(
+      'div',
+      {
+        class: 'model-menu-search',
+        // While the dropdown is open naive's NDropdown keeps a document-level
+        // keydown handler (vooks useKeyboard) that `preventDefault`s the arrow
+        // keys (no caret movement in a text field) and treats Enter as "select
+        // the pending option" (a stray Enter could switch models and close the
+        // menu). Keep those keys inside this component; Escape is let through
+        // so it still closes the dropdown.
+        onKeydown: (event) => { if (event.key !== 'Escape') event.stopPropagation(); },
+      },
+      [
+        h(NInput, {
+          size: 'tiny',
+          value: modelSearch.value,
+          placeholder: t('composer.models.search'),
+          'onUpdate:value': (value) => { modelSearch.value = String(value || ''); },
+          onClick: (event) => event.stopPropagation(),
+        }),
+      ],
+    ),
+  });
+  const query = modelSearch.value.trim().toLocaleLowerCase();
+  const matches = (item) => {
+    if (!query) return true;
+    const name = String(item.model?.model || '').toLocaleLowerCase();
+    const provider = providerLabel(item.model).toLocaleLowerCase();
+    return name.includes(query) || provider.includes(query);
+  };
+  const groups = modelGroups.value
+    .map((group) => {
+      // Recompute the active flag from the *filtered* models so a group is not
+      // highlighted while the active model is hidden by the query.
+      const models = group.models.filter(matches);
+      return { ...group, models, hasActiveModel: models.some((item) => isActiveModel(item.model)) };
+    })
+    .filter((group) => group.models.length > 0);
   if (groups.length === 0) {
-    options.push({ key: 'empty', label: t('composer.models.empty'), disabled: true, isEmpty: true });
+    options.push({ key: 'empty', label: query ? t('composer.models.noMatch') : t('composer.models.empty'), disabled: true, isEmpty: true });
   } else {
     for (const group of groups) {
       options.push({
@@ -475,6 +524,11 @@ function renderModelMenuLabel(option) {
     h('span', { class: 'model-menu-item-name' }, option.label),
     option.active ? h('span', { class: 'model-menu-item-mark' }, '✓') : null,
   ]);
+}
+
+function onModelMenuShow(show) {
+  // Reset the filter when the dropdown closes so the next open starts fresh.
+  if (!show) modelSearch.value = '';
 }
 
 function modelMenuProps() {
