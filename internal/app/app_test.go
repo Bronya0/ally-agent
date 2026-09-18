@@ -1463,60 +1463,6 @@ func TestHandleTodoListDoesNotRestartAllDoneList(t *testing.T) {
 	}
 }
 
-func TestAppendTransientTailAddsPlanBeforeLatestUser(t *testing.T) {
-	app := NewApp()
-	if _, err := app.handleTodoList("session-1", TodoListRequest{
-		Todos: []TodoEntry{{Title: "Inspect implementation", Status: "in_progress"}},
-	}); err != nil {
-		t.Fatalf("handleTodoList() error = %v", err)
-	}
-	messages := []openai.ChatCompletionMessage{
-		{Role: openai.ChatMessageRoleUser, Content: "earlier"},
-		{Role: openai.ChatMessageRoleAssistant, Content: "done"},
-		{Role: openai.ChatMessageRoleUser, Content: "continue"},
-	}
-	got := app.appendTransientTailForUserTurn("session-1", messages, true)
-	if len(got) != len(messages)+1 {
-		t.Fatalf("message count = %d, want %d", len(got), len(messages)+1)
-	}
-	if len(messages) != 3 {
-		t.Fatal("appendTransientTailForUserTurn mutated the original messages")
-	}
-	if got[2].Role != openai.ChatMessageRoleUser || !strings.Contains(got[2].Content, "- [~] Inspect implementation") {
-		t.Fatalf("tail was not inserted before the latest user message: %#v", got)
-	}
-	if strings.Contains(got[2].Content, "revision") || strings.Contains(got[2].Content, "<ally-plan") {
-		t.Fatalf("plan contains an internal marker: %q", got[2].Content)
-	}
-	if got[3].Content != "continue" {
-		t.Fatalf("latest user message moved or changed: %#v", got[3])
-	}
-}
-
-// Without an unfinished plan there is nothing to attach, so the tail must not
-// inject an empty message — and includePlan=false must skip the snapshot even
-// when a plan exists.
-func TestAppendTransientTailWithoutPlanIsNoop(t *testing.T) {
-	app := NewApp()
-	messages := []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleUser, Content: "hello"}}
-	got := app.appendTransientTailForUserTurn("session-1", messages, true)
-	if len(got) != len(messages) {
-		t.Fatalf("message count = %d, want %d (no plan means no tail)", len(got), len(messages))
-	}
-	if got[0].Content != "hello" {
-		t.Fatalf("original messages changed: %#v", got)
-	}
-	if _, err := app.handleTodoList("session-1", TodoListRequest{
-		Todos: []TodoEntry{{Title: "Inspect implementation", Status: "in_progress"}},
-	}); err != nil {
-		t.Fatalf("handleTodoList() error = %v", err)
-	}
-	got = app.appendTransientTailForUserTurn("session-1", messages, false)
-	if len(got) != len(messages) {
-		t.Fatalf("includePlan=false must not attach the plan: %#v", got)
-	}
-}
-
 func TestTodoResultDoesNotContainPlanMarker(t *testing.T) {
 	app := NewApp()
 	res, err := app.handleTodoList("session-1", TodoListRequest{

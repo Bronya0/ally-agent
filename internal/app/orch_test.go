@@ -652,10 +652,9 @@ func TestContextBreakdownIncludesToolSchemas(t *testing.T) {
 
 }
 
-// TestContextBreakdownCountsPlanSnapshotAndFrozenMap guards the footer
-// alignment with the request-side injections: the transient tail
-// (appendTransientTailForUserTurn: current time + plan snapshot) and the session
-// workspace map must appear in the system-prompt breakdown with their own labels.
+// TestContextBreakdownCountsPlanSnapshotAndFrozenMap guards that the request prefix
+// contains only the stable system prompt and workspace map, without transient plan snapshots
+// polluting the prefix and breaking KV cache.
 func TestContextBreakdownCountsPlanSnapshotAndFrozenMap(t *testing.T) {
 	root := t.TempDir()
 	app := NewApp()
@@ -668,11 +667,11 @@ func TestContextBreakdownCountsPlanSnapshotAndFrozenMap(t *testing.T) {
 	bd := app.getContextBreakdown(sessionID, "")
 	for _, part := range bd.SystemPromptParts {
 		if part.Label == "计划快照" {
-			t.Fatalf("plan snapshot part must be absent without todos, got %#v", part)
+			t.Fatalf("plan snapshot part must be absent, got %#v", part)
 		}
 	}
 
-	// With todos, the plan snapshot part appears with tokens>0.
+	// With todos, the plan snapshot is still not in prefix parts (state lives in tool messages).
 	app.mu.Lock()
 	if app.todos == nil {
 		app.todos = map[string][]TodoEntry{}
@@ -681,17 +680,10 @@ func TestContextBreakdownCountsPlanSnapshotAndFrozenMap(t *testing.T) {
 	app.mu.Unlock()
 
 	bd = app.getContextBreakdown(sessionID, "")
-	found := false
 	for _, part := range bd.SystemPromptParts {
 		if part.Label == "计划快照" {
-			found = true
-			if part.Tokens <= 0 {
-				t.Fatalf("plan snapshot tokens must be positive, got %#v", part)
-			}
+			t.Fatalf("plan snapshot part must not be in system prompt parts, got %#v", part)
 		}
-	}
-	if !found {
-		t.Fatalf("expected plan snapshot part, got %#v", bd.SystemPromptParts)
 	}
 }
 

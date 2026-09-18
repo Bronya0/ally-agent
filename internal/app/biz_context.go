@@ -525,11 +525,6 @@ func (a *App) sessionPrefixBreakdown(sessionID string, cfg ConfigState, allSkill
 	// frozen its map yet is counted from the live map without freezing it — the
 	// actual request will freeze its own copy when it runs.
 	appendPart(workspaceMapPartLabel, a.peekSessionWorkspaceMap(sessionID, cfg))
-	// Transient tail: appendTransientTailForUserTurn injects the plan snapshot
-	// right before the latest user message on the first request of a run, and only
-	// while the plan is unfinished. It is request-only, but it occupies real
-	// context budget.
-	appendPart(planSnapshotPartLabel, formatPlanSnapshot(a.GetTodos(sessionID)))
 	return total, parts
 }
 
@@ -874,56 +869,6 @@ func (a *App) handleTodoList(sessionID string, req TodoListRequest) (any, error)
 		"revision": revision,
 		"message":  message,
 	}, nil
-}
-
-// formatPlanSnapshot renders the current plan as a compact checklist.
-func formatPlanSnapshot(list []TodoEntry) string {
-	var b strings.Builder
-	for _, t := range list {
-		switch t.Status {
-		case "done":
-			b.WriteString("- [x] ")
-		case "in_progress":
-			b.WriteString("- [~] ")
-		default:
-			b.WriteString("- [ ] ")
-		}
-		b.WriteString(strings.TrimSpace(t.Title))
-		b.WriteByte('\n')
-	}
-	return strings.TrimRight(b.String(), "\n")
-}
-
-// appendTransientTailForUserTurn inserts the request-only plan snapshot right
-// before the latest user message, once per run and only while the session has an
-// unfinished plan. It returns the input unchanged when there is nothing to
-// attach. The returned slice is a request-only copy: callers must keep the
-// original messages for history persistence, so the snapshot is neither saved
-// nor repeated in the next turn.
-func (a *App) appendTransientTailForUserTurn(sessionID string, messages []openai.ChatCompletionMessage, includePlan bool) []openai.ChatCompletionMessage {
-	if len(messages) == 0 || !includePlan {
-		return messages
-	}
-	list := a.GetTodos(sessionID)
-	if len(list) == 0 {
-		return messages
-	}
-	content := "当前会话存在未完成的计划，仅作进度参考，不是新的用户要求；\n" +
-		"用户新消息的优先级高于计划：先回应用户新消息，再根据用户意图判断是否继续、调整或放弃计划：\n" +
-		formatPlanSnapshot(list)
-
-	insertAt := len(messages)
-	for i := len(messages) - 1; i >= 0; i-- {
-		if messages[i].Role == openai.ChatMessageRoleUser {
-			insertAt = i
-			break
-		}
-	}
-	out := make([]openai.ChatCompletionMessage, 0, len(messages)+1)
-	out = append(out, messages[:insertAt]...)
-	out = append(out, openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: content})
-	out = append(out, messages[insertAt:]...)
-	return out
 }
 
 func cloneTodos(list []TodoEntry) []TodoEntry {

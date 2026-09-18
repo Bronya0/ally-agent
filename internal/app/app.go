@@ -1802,7 +1802,6 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 	breakdownAcc := newLiveBreakdownAccumulator(messages)
 	readCache := newRunReadCache()
 
-	planAttached := false
 	for step := 0; step < maxAgentSteps; step++ {
 		sanitizedThisStep := false
 		overflowCompacted := false
@@ -1861,10 +1860,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			}
 		}
 
-		// 未完成的计划只在本次运行的第一次请求前、于最新用户消息之前附带一次。
-		requestIncludesPlan := !planAttached
-		planAttached = true
-		requestMessages := a.appendTransientTailForUserTurn(sessionID, messages, requestIncludesPlan)
+		requestMessages := messages
 
 		a.emit("run:llm_wait", map[string]any{"runId": runID, "sessionId": sessionID})
 		toolCalls := []openai.ToolCall{}
@@ -1943,10 +1939,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 				repaired := sanitizeHistoryMessages(messages)
 				if len(repaired) < len(messages) {
 					messages = repaired
-					// requestMessages is a request-only snapshot (it carries the
-					// transient tail). Rebuild it after sanitizing so the retry
-					// cannot send the poisoned pre-repair context again.
-					requestMessages = a.appendTransientTailForUserTurn(sessionID, messages, requestIncludesPlan)
+					requestMessages = messages
 					a.emit("run:retry", map[string]any{"runId": runID, "sessionId": sessionID, "attempt": 1, "maxAttempts": 1, "reason": "context sanitized after provider 400"})
 					continue
 				}
@@ -1965,7 +1958,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 					return
 				}
 				messages = newMessages
-				requestMessages = a.appendTransientTailForUserTurn(sessionID, messages, requestIncludesPlan)
+				requestMessages = messages
 				breakdownAcc.reset(messages)
 				a.emit("run:compacted", payload)
 				continue

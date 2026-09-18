@@ -153,17 +153,13 @@ func TestSessionPrefixBreakdownCoversRequestPrefix(t *testing.T) {
 	app.mu.Unlock()
 
 	withPlan, parts := app.sessionPrefixBreakdown(sessionID, app.config, app.listCachedSkills())
-	if withPlan <= prefix {
-		t.Fatalf("plan snapshot must add to the prefix: %d -> %d", prefix, withPlan)
+	if withPlan != prefix {
+		t.Fatalf("request prefix must stay stable regardless of todos to protect cache: %d -> %d", prefix, withPlan)
 	}
-	found := false
 	for _, part := range parts {
 		if part.Label == planSnapshotPartLabel {
-			found = true
+			t.Fatalf("plan snapshot must not be injected into request prefix, got %#v", parts)
 		}
-	}
-	if !found {
-		t.Fatalf("expected the plan snapshot part, got %#v", parts)
 	}
 }
 

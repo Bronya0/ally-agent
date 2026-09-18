@@ -21,7 +21,7 @@
 type ContextBreakdown struct {
     Total        int   // 权威值
     Estimated    int   // 各分项估算之和
-    SystemPrompt int   // 请求前缀：系统提示词 + 工作区地图 + 计划快照
+    SystemPrompt int   // 请求前缀：系统提示词 + 工作区地图
     ToolSchemas  int
     UserMessages, AssistantMsgs, ToolResults, Reasoning int
     MeasuredTokens   int  // provider 实测（prompt + completion）
@@ -59,13 +59,12 @@ if result.MeasuredTokens > 0 { result.Total = result.MeasuredTokens + result.Tra
 ```go
 for _, part := range a.systemPromptPartsForBreakdown(...) { appendPart(part.label, part.content) } // 系统提示词各段
 appendPart(workspaceMapPartLabel, a.peekSessionWorkspaceMap(sessionID, cfg))                       // 工作区地图
-appendPart(planSnapshotPartLabel, formatPlanSnapshot(a.GetTodos(sessionID)))                       // 计划快照（瞬态注入）
 ```
 
 - **peek 语义**：还没有冻结的 session 用实时内容计数，但**不去冻结它**——footer 的轮询不能抢在首次真实请求之前把提示词字节定下来。
-- 计划快照是瞬态注入（只在 run 首个请求、插在最新用户消息之前），但它占真实预算，所以必须计入。
+- 计划任务与进度完全由内置 `plan` 工具的调用与返回结果（Tool Message）自然保存在历史中，不向前缀动态注入非持久快照，保证消息序列 100% 严格单调追加与 KV 缓存复用。
 - 这个函数同时被 footer 和 run 循环使用（`app.go:1824`），这就是「一个数」的实现方式。
-- 分节 label 与前端共享（`workspaceMapPartLabel` / `planSnapshotPartLabel` 常量，`biz_context.go:679`），前端 `ComposerInfoBar` 用同一批 label 做本地化。
+- 分节 label 与前端共享（`workspaceMapPartLabel` 常量，`biz_context.go:679`），前端 `ComposerInfoBar` 用同一批 label 做本地化。
 
 ### 3.2 消息分桶：`liveBreakdownAccumulator`（`:590`）
 

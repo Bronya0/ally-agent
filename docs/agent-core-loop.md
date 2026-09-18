@@ -72,7 +72,7 @@ return downgradeUnsupportedImages(messages, cfg)      // 不支持图片的模�
 两个贯穿全局的原则：
 
 - **系统提示词按 session 冻结**（`biz_context.go:1091`）：它内嵌 memory 索引、`AGENTS.md`、`CODEGRAPH.md` 等磁盘内容，而 agent 自己会写这些文件；每步重拼会让请求前缀从第一个字节起失效，供应商 prompt cache 全线作废。
-- **瞬态注入只放最新用户消息之前、且只放一次**（`app.go:1852` + `appendTransientTailForUserTurn`）：位置稳定，前缀才稳定。
+- **提示词前缀单调递增**：请求消息严格按序单调追加，不向最新消息前注入非持久化的瞬态文本，保证前缀字节绝对稳定，供应商 prompt cache 全程命中。
 
 ## 5. 调用模型：`streamModelResponse`（`prov_model.go:453`）
 
