@@ -473,6 +473,13 @@ type ConfigState struct {
 	// config; see that field for the tri-state contract.
 	VisionCapable   *bool  `json:"visionCapable,omitempty"`
 	ReasoningEffort string `json:"reasoningEffort,omitempty"`
+	// CacheRetention selects how long the provider should keep the request
+	// prefix cached: "short" (the provider default) or "long" (Anthropic
+	// cache_control.ttl "1h", OpenAI prompt_cache_retention "24h" on models
+	// before GPT-5.6 / prompt_cache_options.ttl "30m" from GPT-5.6 on). One
+	// setting, mapped per protocol in prov_wire_config.go. The empty field of a
+	// config written before this option existed means "short".
+	CacheRetention string `json:"cacheRetention,omitempty"`
 	// CustomHeaders mirrors the active model entry's extra HTTP headers
 	// (see ModelConfig.CustomHeaders); SwitchModel keeps the two in sync.
 	CustomHeaders  map[string]string `json:"customHeaders,omitempty"`
@@ -544,7 +551,12 @@ type ConfigState struct {
 	// 内部关闭退避重试,由 streamModelResponse 的外层循环统一承担重试与
 	// 故障切换,避免 N 个 key × 适配器重试组合爆炸。
 	noAdapterRetry          bool
-	responsesPromptCacheKey string // nonserialized, session-local OpenAI Responses cache route
+	responsesPromptCacheKey string // nonserialized, session/run-local prompt-cache route
+	// reasoningScope is the nonserialized replay-ledger scope of this run; empty
+	// means "same as the cache route". A sub-agent run sets its own run-local
+	// scope because the ledger replaces a turn by its first tool-call id, and two
+	// concurrent runs can mint the same id (see reasoningReplayKey).
+	reasoningScope string
 }
 
 // clampMessageFontSize normalizes the message font size (px). Zero (field

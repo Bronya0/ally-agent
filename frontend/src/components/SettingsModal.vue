@@ -334,6 +334,13 @@ Public License v3. See the LICENSE file for details.
             </div>
           </div>
           <div class="validation-settings-list">
+            <div class="validation-setting-row">
+              <div class="validation-setting-copy">
+                <div class="validation-setting-label">{{ $t('settings.cacheRetention') }}</div>
+                <div class="validation-setting-hint">{{ $t('settings.cacheRetentionHint') }}</div>
+              </div>
+              <n-select v-model:value="draft.cacheRetention" :options="cacheRetentionOptions" style="width: 180px" />
+            </div>
             <div v-for="item in validationSettings" :key="item.key" class="validation-setting-row">
               <div class="validation-setting-copy">
                 <div class="validation-setting-label">{{ item.label }}</div>
@@ -604,6 +611,10 @@ const proxyModeOptions = computed(() => [
   { label: t('settings.proxyOff'), value: 'off' },
   { label: t('settings.proxySystem'), value: 'system' },
   { label: t('settings.proxyManual'), value: 'manual' },
+]);
+const cacheRetentionOptions = computed(() => [
+  { label: t('settings.cacheRetentionShort'), value: 'short' },
+  { label: t('settings.cacheRetentionLong'), value: 'long' },
 ]);
 const validationSettings = computed(() => [
   { key: 'autoValidationPython', label: t('settings.validationPython'), hint: t('settings.validationPythonHint') },

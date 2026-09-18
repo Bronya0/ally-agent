@@ -35,6 +35,9 @@ Public License v3. See the LICENSE file for details.
               </div>
               <div class="stat-sub">
                 {{ $t('stats.cacheHitRate') }} {{ (range.summary.cacheHitRate * 100).toFixed(1) }}%
+                <template v-if="range.summary.cacheWriteTokens">
+                  · {{ $t('stats.cacheWrite') }} {{ fmtTokens(range.summary.cacheWriteTokens) }}
+                </template>
               </div>
             </div>
           </div>

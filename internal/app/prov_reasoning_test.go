@@ -479,7 +479,7 @@ func TestPatchReasoningContentFields(t *testing.T) {
 	body := []byte(`{"model":"m","messages":[{"role":"user","content":"q1"},{"role":"assistant","content":"plain history"},{"role":"assistant","content":"","tool_calls":[{"id":"c1"}]},{"role":"tool","tool_call_id":"c1","content":"ok"}]}`)
 	// Thinking-mode replay is on (the adapter passes the resolved wire key);
 	// an empty key would mean replay is off and nothing may be backfilled.
-	patched, changed := patchChatRequestFields(body, defaultReasoningTag, nil, "", false)
+	patched, changed := patchChatRequestFields(body, defaultReasoningTag, nil, "", "", false)
 	if !changed {
 		t.Fatal("expected the assistant messages to gain reasoning_content")
 	}
@@ -507,7 +507,7 @@ func TestPatchReasoningContentFields(t *testing.T) {
 	// Dialect test: when the configured dialect is "reasoning" (vLLM style),
 	// the empty field must be written under that dialect.
 	vllmBody := []byte(`{"model":"m","messages":[{"role":"user","content":"q"},{"role":"assistant","content":"","tool_calls":[{"id":"c2"}]},{"role":"tool","tool_call_id":"c2","content":"ok"}]}`)
-	vllmPatched, changed := patchChatRequestFields(vllmBody, "reasoning", nil, "", false)
+	vllmPatched, changed := patchChatRequestFields(vllmBody, "reasoning", nil, "", "", false)
 	if !changed {
 		t.Fatal("expected the assistant message to be patched under the configured dialect")
 	}
@@ -538,7 +538,7 @@ func TestPatchReasoningContentFieldsCoversRestoredHistory(t *testing.T) {
 		`{"role":"assistant","content":"answer"},` +
 		`{"role":"assistant","content":"spoken","reasoning_content":"real trace"},` +
 		`{"role":"user","content":"q2"}]}`)
-	patched, changed := patchChatRequestFields(body, defaultReasoningTag, nil, "", false)
+	patched, changed := patchChatRequestFields(body, defaultReasoningTag, nil, "", "", false)
 	if !changed {
 		t.Fatal("a restored history must gain the missing reasoning fields")
 	}
@@ -569,7 +569,7 @@ func TestPatchReasoningContentFieldsCoversRestoredHistory(t *testing.T) {
 // field the caller already set.
 func TestPatchChatRequestFieldsAddsStopThinkingField(t *testing.T) {
 	body := []byte(`{"model":"m","messages":[{"role":"user","content":"q"}]}`)
-	patched, changed := patchChatRequestFields(body, defaultReasoningTag, nil, "", true)
+	patched, changed := patchChatRequestFields(body, defaultReasoningTag, nil, "", "", true)
 	if !changed {
 		t.Fatal("expected the body to gain the stop-thinking field")
 	}
@@ -586,13 +586,13 @@ func TestPatchChatRequestFieldsAddsStopThinkingField(t *testing.T) {
 
 	// Idempotent: presence is what the provider validates, so the second pass
 	// must leave the body byte-identical.
-	if again, changed := patchChatRequestFields(patched, defaultReasoningTag, nil, "", true); changed {
+	if again, changed := patchChatRequestFields(patched, defaultReasoningTag, nil, "", "", true); changed {
 		t.Fatalf("second patch must be a no-op, got %s", again)
 	}
 
 	// A field the caller already set wins.
 	explicit := []byte(`{"model":"m","messages":[],"thinking":{"type":"enabled"}}`)
-	kept, _ := patchChatRequestFields(explicit, defaultReasoningTag, nil, "", true)
+	kept, _ := patchChatRequestFields(explicit, defaultReasoningTag, nil, "", "", true)
 	if !strings.Contains(string(kept), `"thinking":{"type":"enabled"}`) {
 		t.Fatalf("an existing thinking field must survive: %s", kept)
 	}
@@ -861,7 +861,7 @@ func TestPatchChatRequestFieldsAddsContent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal details: %v", err)
 	}
-	patched, changed := patchChatRequestFields(body, "", map[string]json.RawMessage{"c1": details}, "", false)
+	patched, changed := patchChatRequestFields(body, "", map[string]json.RawMessage{"c1": details}, "", "", false)
 	if !changed {
 		t.Fatal("expected the tool-call and tool messages to be patched")
 	}
@@ -897,7 +897,7 @@ func TestPatchChatRequestFieldsAddsContent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal request: %v", err)
 	}
-	if _, changed := patchChatRequestFields(noTurn, "", map[string]json.RawMessage{"c1": details}, "", false); changed {
+	if _, changed := patchChatRequestFields(noTurn, "", map[string]json.RawMessage{"c1": details}, "", "", false); changed {
 		t.Fatal("a history without a matching tool turn must not receive reasoning fields")
 	}
 }
@@ -930,8 +930,8 @@ func TestPatchChatRequestFieldsDetailsPerTurn(t *testing.T) {
 	)
 	turn2 := map[string]any{"model": "m", "messages": turn2Messages}
 
-	patched1, _ := patchChatRequestFields(marshal(turn1), "", map[string]json.RawMessage{"c1": details}, "", false)
-	patched2, _ := patchChatRequestFields(marshal(turn2), "", map[string]json.RawMessage{"c1": details, "c2": details}, "", false)
+	patched1, _ := patchChatRequestFields(marshal(turn1), "", map[string]json.RawMessage{"c1": details}, "", "", false)
+	patched2, _ := patchChatRequestFields(marshal(turn2), "", map[string]json.RawMessage{"c1": details, "c2": details}, "", "", false)
 	var payload1, payload2 struct {
 		Messages []json.RawMessage `json:"messages"`
 	}

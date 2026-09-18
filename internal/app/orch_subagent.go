@@ -80,6 +80,40 @@ const maxDelegateSteps = maxScheduledTaskSteps
 // tokens up to the hard maximum.
 const defaultSubagentSteps = 25
 
+// subagentCacheLane is the cache-identity lane of the sub-agent runs one session
+// delegates. pi derives its cache identity as `<session id>:<lane name>`
+// (agent/src/harness/runtime/drive/generation.ts:218), so requests sharing a
+// prefix share a cache group; a fresh identity per run instead made every
+// sub-agent start from a cold cache even though its header (sub-agent system
+// prompt + environment context + tool list) is identical across runs.
+const subagentCacheLane = ":subagent"
+
+// subagentReasoningScope is the run-local replay-ledger scope of one sub-agent
+// run — the value the per-run cache identity used to carry. See
+// subagentCacheConfig for why the ledger scope and the cache route differ.
+func subagentReasoningScope(subID string) string {
+	return openAIResponsesPromptCacheKey("subagent:" + strings.TrimSpace(subID))
+}
+
+// subagentCacheConfig pins one sub-agent run's cache route and replay scope.
+//
+// The route is the parent session's sub-agent lane, so repeated delegations by
+// the same session reuse the cached header. The ledger scope stays per run: a
+// turn is matched (and replaced) by its first tool-call id, and concurrent runs
+// can mint the same id, so sharing one ledger could replay one run's thinking
+// blocks on another run's turn.
+func subagentCacheConfig(cfg ConfigState, sessionID, subID string) ConfigState {
+	if parent := strings.TrimSpace(sessionID); parent != "" {
+		cfg.responsesPromptCacheKey = openAIResponsesPromptCacheKey(parent + subagentCacheLane)
+	} else {
+		// Without a parent session there is no lane to share: keep the run-local
+		// identity, which only ever groups this run with itself.
+		cfg.responsesPromptCacheKey = subagentReasoningScope(subID)
+	}
+	cfg.reasoningScope = subagentReasoningScope(subID)
+	return cfg
+}
+
 func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID string, req AgentDelegateRequest, cancel context.CancelFunc) (*AgentDelegateResult, error) {
 	if strings.TrimSpace(req.Task) == "" {
 		return nil, errors.New("task is required")
@@ -99,10 +133,7 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 		model = req.Model
 	}
 	subID := newID()
-	// Keep concurrent sub-agents on independent cache routes. The key is
-	// process-local and is consumed by the Responses adapter for every
-	// compatible endpoint.
-	cfg.responsesPromptCacheKey = openAIResponsesPromptCacheKey("subagent:" + subID)
+	cfg = subagentCacheConfig(cfg, sessionID, subID)
 	desc := req.Description
 	if desc == "" {
 		desc = req.Task
@@ -126,6 +157,10 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 	a.subRuns[subID] = run
 	a.subRunsMu.Unlock()
 	defer a.finishSubagentRecord(subID)
+	// The run's replay ledger is scoped to this run, so nothing else would ever
+	// release it: without this, dead scopes accumulate inside the bounded stash
+	// (maxReasoningStashEntries) and its LRU evicts a live session instead.
+	defer a.reasoningStash.clearScope(subagentReasoningScope(subID))
 	spawnPayload := map[string]any{"id": subID, "sessionId": sessionID, "description": desc, "profile": "coder", "role": req.Role, "startTime": run.StartTime}
 	if meta, ok := ctx.Value(toolExecutionMetaContextKey{}).(toolExecutionMeta); ok {
 		spawnPayload["runId"] = meta.runID

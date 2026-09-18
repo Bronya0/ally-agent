@@ -47,6 +47,7 @@ func defaultConfigState() ConfigState {
 		AllowPrivateNetwork:   true,
 		ProxyMode:             proxyModeOff,
 		ReasoningTag:          defaultReasoningTag,
+		CacheRetention:        cacheRetentionShort,
 		ReasoningEffort:       reasoningEffortMax,
 		BackgroundOpacity:     defaultBackgroundOpacity,
 		CompactThreshold:      defaultCompactThreshold,
@@ -242,6 +243,9 @@ func mergeConfig(base, overlay ConfigState) ConfigState {
 	if overlay.ReasoningTag != "" {
 		base.ReasoningTag = overlay.ReasoningTag
 	}
+	if overlay.CacheRetention != "" {
+		base.CacheRetention = normalizeCacheRetention(overlay.CacheRetention)
+	}
 	// VisionCapable 是三态指针：nil 表示 overlay 未提供该字段并保留 base 的
 	// 当前值，true/false 才是显式设置（否则每个不携带该字段的旧版前端都会把
 	// 已知的视觉能力抹成“未知”）。
@@ -360,6 +364,7 @@ func mergeConfig(base, overlay ConfigState) ConfigState {
 	}
 	base.ReasoningTag = normalizeReasoningTag(base.ReasoningTag)
 	base.ReasoningEffort = normalizeReasoningEffort(base.ReasoningEffort)
+	base.CacheRetention = normalizeCacheRetention(base.CacheRetention)
 	for i := range base.Models {
 		base.Models[i].ReasoningTag = normalizeReasoningTag(base.Models[i].ReasoningTag)
 		base.Models[i].ReasoningEffort = normalizeReasoningEffort(base.Models[i].ReasoningEffort)
@@ -579,6 +584,7 @@ func (a *App) SaveConfig(req ConfigState) error {
 	}
 	a.config.ReasoningTag = normalizeReasoningTag(req.ReasoningTag)
 	a.config.ReasoningEffort = normalizeReasoningEffort(req.ReasoningEffort)
+	a.config.CacheRetention = normalizeCacheRetention(req.CacheRetention)
 	// nil 表示请求没有携带该字段（旧前端、或来源未声明模态的模型）：保留已加载
 	// 的值，避免一次保存就把已知的视觉能力抹成"未知"。
 	if req.VisionCapable != nil {

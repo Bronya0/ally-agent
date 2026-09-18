@@ -63,7 +63,11 @@ type statsRecord struct {
 	OutputTokens    int    `json:"outputTokens"`
 	CacheHitTokens  int    `json:"cacheHitTokens"`
 	CacheMissTokens int    `json:"cacheMissTokens"`
-	Requests        int    `json:"requests"`
+	// CacheWriteTokens is the share of CacheMissTokens the provider wrote to its
+	// prompt cache (see modelUsage.CacheWriteTokens). Absent in records written
+	// before the field existed, hence omitempty.
+	CacheWriteTokens int `json:"cacheWriteTokens,omitempty"`
+	Requests         int `json:"requests"`
 }
 
 // statsRecorder keeps usage records in memory and persists them as day files.
@@ -506,6 +510,7 @@ func (a *App) recordTokenStats(model, workspace string, usage *modelUsage, fallb
 	output := fallbackOutput
 	cacheHit := 0
 	cacheMiss := 0
+	cacheWrite := 0
 	if usage != nil {
 		if usage.PromptTokens > 0 {
 			input = usage.PromptTokens
@@ -515,19 +520,21 @@ func (a *App) recordTokenStats(model, workspace string, usage *modelUsage, fallb
 		}
 		cacheHit = usage.CacheHitTokens
 		cacheMiss = usage.CacheMissTokens
+		cacheWrite = usage.CacheWriteTokens
 	}
 	if input <= 0 && output <= 0 {
 		return
 	}
 	a.stats.record(statsRecord{
-		Model:           model,
-		Workspace:       workspace,
-		Ts:              time.Now().UnixMilli(),
-		InputTokens:     input,
-		OutputTokens:    output,
-		CacheHitTokens:  cacheHit,
-		CacheMissTokens: cacheMiss,
-		Requests:        1,
+		Model:            model,
+		Workspace:        workspace,
+		Ts:               time.Now().UnixMilli(),
+		InputTokens:      input,
+		OutputTokens:     output,
+		CacheHitTokens:   cacheHit,
+		CacheMissTokens:  cacheMiss,
+		CacheWriteTokens: cacheWrite,
+		Requests:         1,
 	})
 }
 
@@ -540,14 +547,15 @@ func (a *App) recordTokenStats(model, workspace string, usage *modelUsage, fallb
 
 // TokenStatsSummary aggregates usage over one fixed range.
 type TokenStatsSummary struct {
-	TotalTokens     int     `json:"totalTokens"`
-	InputTokens     int     `json:"inputTokens"`
-	OutputTokens    int     `json:"outputTokens"`
-	CacheHitTokens  int     `json:"cacheHitTokens"`
-	CacheMissTokens int     `json:"cacheMissTokens"`
-	AvgPerRequest   int     `json:"avgPerRequest"`
-	CacheHitRate    float64 `json:"cacheHitRate"` // 0-1 over hit+miss prompt tokens
-	Requests        int     `json:"requests"`
+	TotalTokens      int     `json:"totalTokens"`
+	InputTokens      int     `json:"inputTokens"`
+	OutputTokens     int     `json:"outputTokens"`
+	CacheHitTokens   int     `json:"cacheHitTokens"`
+	CacheMissTokens  int     `json:"cacheMissTokens"`
+	CacheWriteTokens int     `json:"cacheWriteTokens"` // ⊂ CacheMissTokens; see statsRecord
+	AvgPerRequest    int     `json:"avgPerRequest"`
+	CacheHitRate     float64 `json:"cacheHitRate"` // 0-1 over hit+miss prompt tokens
+	Requests         int     `json:"requests"`
 }
 
 // TokenDailyStat aggregates usage for one calendar day (zero-filled).
@@ -690,6 +698,7 @@ func summarizeStatsRecords(records []statsRecord) TokenStatsSummary {
 		s.InputTokens += r.InputTokens
 		s.OutputTokens += r.OutputTokens
 		s.CacheHitTokens += r.CacheHitTokens
+		s.CacheWriteTokens += r.CacheWriteTokens
 		s.CacheMissTokens += r.CacheMissTokens
 		s.Requests += r.Requests
 	}

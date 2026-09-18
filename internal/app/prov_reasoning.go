@@ -58,9 +58,10 @@ import (
 
 const (
 	// maxReasoningStashEntries bounds the stash with LRU eviction. Keys are
-	// scoped per session x wire protocol x model, plus one key per subagent run,
-	// so a bounded map is what keeps long-lived processes from growing without
-	// limit; the eviction never drops more than it has to (see evictLocked).
+	// scoped per session x wire protocol x model, plus one key per sub-agent run
+	// (released when the run ends, see clearScope), so a bounded map is what keeps
+	// long-lived processes from growing without limit; the eviction never drops
+	// more than it has to (see evictLocked).
 	maxReasoningStashEntries = 64
 )
 
@@ -245,12 +246,25 @@ func reasoningStashScope(sessionID string) string {
 	return strings.ReplaceAll(reasoningStashKey(sessionID), "\x1f", "_")
 }
 
+// reasoningReplayScope is the replay-ledger scope of one conversation: the
+// run-local identity when the run set one (a sub-agent run), the prompt-cache
+// route otherwise. Two runs must never share a scope — the ledger replaces a turn
+// whose first tool-call id matches, and a relay that renumbers every response as
+// call_0 (exactly the shape CallIDFoundry repairs on the wire) would let one
+// run's thinking blocks land on another run's turn.
+func reasoningReplayScope(cfg ConfigState) string {
+	if scope := strings.TrimSpace(cfg.reasoningScope); scope != "" {
+		return scope
+	}
+	return cfg.responsesPromptCacheKey
+}
+
 func reasoningReplayKey(cfg ConfigState, model string) string {
 	if strings.TrimSpace(model) == "" {
 		model = cfg.Model
 	}
 	return strings.Join([]string{
-		reasoningStashScope(cfg.responsesPromptCacheKey),
+		reasoningStashScope(reasoningReplayScope(cfg)),
 		normalizeAPIFormat(cfg.APIFormat),
 		strings.ToLower(strings.TrimSpace(model)),
 	}, "\x1f")
@@ -346,10 +360,24 @@ func (s *reasoningStash) clear(key string) {
 // turns that no longer exist, and replaying them later would attach them to an
 // unrelated assistant message.
 func (s *reasoningStash) clearSession(sessionID string) {
+	s.clearScope(openAIResponsesPromptCacheKey(sessionID))
+}
+
+// clearScope drops every payload of one stash scope across protocols and models.
+// Callers pass the scope reasoningReplayScope would derive — a released session,
+// or a finished sub-agent run, whose scope is run-local and would otherwise keep
+// a dead entry inside the bounded stash until the LRU cap evicted a live session
+// instead. An empty scope is a no-op: those keys belong to stateless callers that
+// share the default bucket, not to whoever called clear.
+func (s *reasoningStash) clearScope(scope string) {
 	if s == nil {
 		return
 	}
-	prefix := reasoningStashScope(openAIResponsesPromptCacheKey(sessionID)) + "\x1f"
+	scope = strings.TrimSpace(scope)
+	if scope == "" {
+		return
+	}
+	prefix := reasoningStashScope(scope) + "\x1f"
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for key := range s.entries {
@@ -667,12 +695,13 @@ func (r *sseDoneReadCloser) Close() error { return r.rc.Close() }
 // Streaming responses are additionally wrapped so the adapter can tell a
 // finished stream (`[DONE]`) from a connection that was cut mid-stream.
 type chatRequestRewriteTransport struct {
-	base           http.RoundTripper
-	reasoningKey   string
-	turnDetails    map[string]json.RawMessage
-	headers        map[string]string
-	promptCacheKey string
-	streamDone     *sseDoneWatcher
+	base                 http.RoundTripper
+	reasoningKey         string
+	turnDetails          map[string]json.RawMessage
+	headers              map[string]string
+	promptCacheKey       string
+	promptCacheRetention string
+	streamDone           *sseDoneWatcher
 	// disableThinking writes the stop-thinking field the "off" level asks for
 	// (see patchChatRequestFields).
 	disableThinking bool
@@ -698,7 +727,7 @@ func (t *chatRequestRewriteTransport) RoundTrip(req *http.Request) (*http.Respon
 		return nil, err
 	}
 	rewritten := body
-	if patched, ok := patchChatRequestFields(body, t.reasoningKey, t.turnDetails, t.promptCacheKey, t.disableThinking); ok {
+	if patched, ok := patchChatRequestFields(body, t.reasoningKey, t.turnDetails, t.promptCacheKey, t.promptCacheRetention, t.disableThinking); ok {
 		rewritten = patched
 	}
 	// Restore a replayable body: the SDK may retry the request object, so
@@ -751,12 +780,14 @@ func (t *chatRequestRewriteTransport) RoundTrip(req *http.Request) (*http.Respon
 //  5. The session-sticky prompt cache key (and `store: false`) is attached for
 //     the official OpenAI endpoint only; promptCacheKey is empty everywhere
 //     else, so a compatible gateway never sees an unknown top-level parameter.
+//     Extended retention is written by the same pass under the same endpoint
+//     gate, and only when the user selected it (openAIExtendedCacheRetention).
 //  6. The stop-thinking field (`thinking: {"type": "disabled"}`) is written when
 //     the selected level is "off" and the endpoint is not the official OpenAI API
 //     (reasoningWireForAdapter). It is a top-level parameter, so the message
 //     prefix the provider hashes stays untouched, and it is only written when
 //     absent — the same bytes every request.
-func patchChatRequestFields(body []byte, defaultKey string, turnDetails map[string]json.RawMessage, promptCacheKey string, disableThinking bool) ([]byte, bool) {
+func patchChatRequestFields(body []byte, defaultKey string, turnDetails map[string]json.RawMessage, promptCacheKey, promptCacheRetention string, disableThinking bool) ([]byte, bool) {
 	var payload map[string]json.RawMessage
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return body, false
@@ -784,6 +815,16 @@ func patchChatRequestFields(body []byte, defaultKey string, turnDetails map[stri
 		}
 		if _, exists := payload["store"]; !exists {
 			payload["store"] = jsonBoolFalse
+			changed = true
+		}
+	}
+
+	// Extended prompt-cache retention for the same official endpoint (see
+	// openAIExtendedCacheRetention). It is a top-level parameter too, so it never
+	// touches the message prefix the provider hashes.
+	if promptCacheRetention != "" {
+		if _, exists := payload["prompt_cache_retention"]; !exists {
+			payload["prompt_cache_retention"] = jsonStringValue(promptCacheRetention)
 			changed = true
 		}
 	}

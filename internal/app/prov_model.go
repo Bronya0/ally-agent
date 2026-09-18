@@ -38,6 +38,14 @@ type modelUsage struct {
 	CompletionTokens int
 	CacheHitTokens   int
 	CacheMissTokens  int
+	// CacheWriteTokens is what the provider reports as written to its prompt cache
+	// — Anthropic cache_creation_input_tokens, OpenAI Responses
+	// cache_write_tokens. It is an observation, not a third bucket: on the native
+	// protocols the written tokens are already inside miss, so the hit rate stays
+	// Σhit/Σ(hit+miss). It exists to price extended retention (pi reports the same
+	// split as usage.cacheWrite / cacheWrite1h, ai/src/types.ts:386-389). Chat
+	// Completions reports no cache-write counter, so it stays 0 there.
+	CacheWriteTokens int
 }
 
 var errEmptyModelResponse = errors.New("empty model response")
@@ -859,13 +867,14 @@ func (a *App) streamOpenAIChat(ctx context.Context, cfg ConfigState, model strin
 		rt = http.DefaultTransport
 	}
 	base.Transport = &chatRequestRewriteTransport{
-		base:            rt,
-		reasoningKey:    reasoningKey,
-		turnDetails:     turnDetails,
-		headers:         sessionAffinityHeaders(cfg),
-		promptCacheKey:  openAIChatPromptCacheKey(cfg),
-		streamDone:      streamDone,
-		disableThinking: disableThinking,
+		base:                 rt,
+		reasoningKey:         reasoningKey,
+		turnDetails:          turnDetails,
+		headers:              sessionAffinityHeaders(cfg),
+		promptCacheKey:       openAIChatPromptCacheKey(cfg),
+		promptCacheRetention: openAIExtendedCacheRetention(cfg, model),
+		streamDone:           streamDone,
+		disableThinking:      disableThinking,
 	}
 	clientCfg.HTTPClient = base
 	client := legacyopenai.NewClientWithConfig(clientCfg)
@@ -1588,8 +1597,6 @@ func parseNestedGatewayStreamError(message string) (code, msg, param string, ok 
 	return code, nested.Message, nested.Param, true
 }
 
-const openAIResponsesPromptCacheAnchorText = "<ally-prompt-cache-boundary/>"
-
 // openAIResponsesPromptCacheKey keeps cache routing session-local without
 // exposing the caller-provided session ID to the provider.
 func openAIResponsesPromptCacheKey(sessionID string) string {
@@ -1604,19 +1611,25 @@ func openAIResponsesPromptCacheKey(sessionID string) string {
 func buildOpenAIResponsesRequest(cfg ConfigState, model string, messages []legacyopenai.ChatCompletionMessage, tools []legacyopenai.Tool, replay *sessionReasoningPayload) oaresp.ResponseNewParams {
 	instructions, inputItems := buildOpenAIResponsesInput(messages, replay)
 	cacheKey := strings.TrimSpace(cfg.responsesPromptCacheKey)
-	explicitPromptCache := supportsOpenAIResponsesGPT56PromptCaching(cfg, model)
-	if explicitPromptCache {
-		inputItems = appendOpenAIResponsesPromptCacheAnchor(inputItems)
-	}
 	body := oaresp.ResponseNewParams{
 		Model:           oaresp.ResponsesModel(model),
 		Input:           oaresp.ResponseNewParamsInputUnion{OfInputItemList: inputItems},
 		MaxOutputTokens: oa.Int(int64(clampResponsesMaxOutputTokens(cfg.MaxTokens))),
 	}
-	if explicitPromptCache {
-		body.PromptCacheOptions = oaresp.ResponseNewParamsPromptCacheOptions{
-			Mode: "explicit",
-		}
+	// Prompt caching runs in the provider's implicit mode: it places the
+	// breakpoint at the end of the latest eligible message — the newest user or
+	// tool-response message — which is exactly the growing prefix of a tool loop,
+	// so no explicit breakpoint marker is needed anywhere in the input. Explicit
+	// mode is the opposite of what an agent loop wants (it *disables* the implicit
+	// breakpoint, and a request without its own marker then uses no caching at
+	// all), which is why pi only selects it to turn caching off. Extended retention
+	// is requested separately, and only when the user asked for it — see
+	// prov_wire_config.go for the per-protocol spellings.
+	if retention := openAIExtendedCacheRetention(cfg, model); retention != "" {
+		body.PromptCacheRetention = oaresp.ResponseNewParamsPromptCacheRetention(retention)
+	}
+	if ttl := openAIPromptCacheOptionsTTL(cfg, model); ttl != "" {
+		body.PromptCacheOptions = oaresp.ResponseNewParamsPromptCacheOptions{Ttl: ttl}
 	}
 	// Store and ParallelToolCalls are OpenAI-official fields that
 	// compatible gateways may reject with 400 ("unsupported field").
@@ -1664,26 +1677,25 @@ func buildOpenAIResponsesRequest(cfg ConfigState, model string, messages []legac
 	return body
 }
 
-func supportsOpenAIResponsesGPT56PromptCaching(cfg ConfigState, model string) bool {
-	if normalizeAPIFormat(cfg.APIFormat) != apiFormatOpenAIResponses || strings.TrimSpace(cfg.responsesPromptCacheKey) == "" || !isOfficialOpenAIEndpoint(cfg) {
-		return false
-	}
+// modelUsesPromptCacheOptionsTTL reports whether the model replaced
+// prompt_cache_retention with prompt_cache_options.ttl (GPT-5.6 and later, per
+// the prompt-caching guide's migration note; the SDK still ships the old field
+// marked deprecated). pi asks the same question through its
+// supportsExplicitPromptCacheMode compat flag; this codebase keys off the model
+// prefix, like its other GPT-5.6 checks.
+func modelUsesPromptCacheOptionsTTL(model string) bool {
 	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(model)), "gpt-5.6")
 }
 
-func appendOpenAIResponsesPromptCacheAnchor(input oaresp.ResponseInputParam) oaresp.ResponseInputParam {
-	anchorContent := oaresp.ResponseInputContentParamOfInputText(openAIResponsesPromptCacheAnchorText)
-	if anchorContent.OfInputText != nil {
-		anchorContent.OfInputText.PromptCacheBreakpoint = oaresp.NewResponseInputTextPromptCacheBreakpointParam()
+// supportsOpenAIPromptCacheOptions reports whether the request may carry
+// prompt_cache_options. Only GPT-5.6 and later understand the parameter, and
+// only the Responses API accepts it; older models reject it outright, which is
+// why pi defaults its compat flag to false.
+func supportsOpenAIPromptCacheOptions(cfg ConfigState, model string) bool {
+	if normalizeAPIFormat(cfg.APIFormat) != apiFormatOpenAIResponses || !isOfficialOpenAIEndpoint(cfg) {
+		return false
 	}
-	anchor := oaresp.ResponseInputItemParamOfMessage(
-		oaresp.ResponseInputMessageContentListParam{anchorContent},
-		oaresp.EasyInputMessageRoleDeveloper,
-	)
-	out := make(oaresp.ResponseInputParam, len(input)+1)
-	out[0] = anchor
-	copy(out[1:], input)
-	return out
+	return modelUsesPromptCacheOptionsTTL(model)
 }
 
 func supportsOpenAIResponsesImageGeneration(cfg ConfigState) bool {
@@ -1912,10 +1924,11 @@ func (a *App) streamAnthropicMessages(ctx context.Context, cfg ConfigState, mode
 	if len(tools) > 0 {
 		params.Tools = convertToolsToAnthropic(tools)
 	}
-	// Prompt-cache breakpoints: one on the last system block and one on
-	// the last content block of the last real message. Supported by official
-	// Anthropic and Anthropic-compatible reverse proxies/gateways.
-	markAnthropicPromptCacheBreakpoints(&params)
+	// Prompt-cache breakpoints: one on the last tool definition, one on the last
+	// system block, one on the last content block of the last real message.
+	// Supported by official Anthropic and Anthropic-compatible reverse
+	// proxies/gateways; the ttl follows the user's retention setting.
+	markAnthropicPromptCacheBreakpoints(&params, cfg)
 	// Thinking configuration for Anthropic:
 	// - For adaptive models (Claude 4.6+/5+): thinking: { type: "adaptive" } and output_config.effort.
 	// - For budget models (Claude 3.7 Sonnet): thinking: { type: "enabled", budget_tokens: N } without output_config.effort
@@ -2481,16 +2494,19 @@ func buildAnthropicMessages(messages []legacyopenai.ChatCompletionMessage, repla
 }
 
 // markAnthropicPromptCacheBreakpoints places explicit prompt-cache
-// breakpoints: one on the last system block (caches tools+system, reusable
-// across runs while the header bytes stay stable) and one on the last content
+// breakpoints: one on the last tool definition and one on the last system block
+// (together they cache tools+system, reusable across runs while the header bytes
+// stay stable), and one on the last content
 // block of the last non-transient message (caches the stable request prefix
 // so it grows incrementally across agent steps). Transient tail items such as
 // <ally-context-budget> (currently disabled; see the commented call in
 // runChat) are rebuilt every request and stay outside the cached prefix, so
 // they can appear, change, or vanish without invalidating anything.
-// Anthropic allows up to 4 breakpoints; 2 are used.
-func markAnthropicPromptCacheBreakpoints(params *anthropic.MessageNewParams) {
-	cc := anthropic.CacheControlEphemeralParam{TTL: anthropic.CacheControlEphemeralTTLTTL5m}
+// Anthropic allows up to 4 breakpoints; 3 are used (the last tool, the last
+// system block, the last non-transient block of the last message), and the ttl
+// comes from the user's retention setting (prov_wire_config.go).
+func markAnthropicPromptCacheBreakpoints(params *anthropic.MessageNewParams, cfg ConfigState) {
+	cc := anthropic.CacheControlEphemeralParam{TTL: anthropic.CacheControlEphemeralTTL(anthropicCacheControlTTL(cfg))}
 	if len(params.Tools) > 0 {
 		lastIdx := len(params.Tools) - 1
 		if params.Tools[lastIdx].OfTool != nil {
@@ -3031,10 +3047,11 @@ func modelUsageFromResponses(usage oaresp.ResponseUsage) *modelUsage {
 		usage.OutputTokens,
 		usage.InputTokensDetails.CachedTokens,
 		0,
+		usage.InputTokensDetails.CacheWriteTokens,
 	)
 }
 
-func modelUsageFromResponseTokenCounts(input, output, hit, miss int64) *modelUsage {
+func modelUsageFromResponseTokenCounts(input, output, hit, miss, write int64) *modelUsage {
 	if input <= 0 && output <= 0 && hit <= 0 && miss <= 0 {
 		return nil
 	}
@@ -3050,6 +3067,9 @@ func modelUsageFromResponseTokenCounts(input, output, hit, miss int64) *modelUsa
 	if miss < 0 {
 		miss = 0
 	}
+	if write < 0 {
+		write = 0
+	}
 	if input <= 0 {
 		input = hit + miss
 	}
@@ -3061,6 +3081,7 @@ func modelUsageFromResponseTokenCounts(input, output, hit, miss int64) *modelUsa
 		CompletionTokens: int(output),
 		CacheHitTokens:   int(hit),
 		CacheMissTokens:  int(miss),
+		CacheWriteTokens: int(write),
 	}
 }
 
@@ -3136,6 +3157,19 @@ func modelUsageFromResponsesEvent(raw []byte) *modelUsage {
 			}
 		}
 	}
+	// The cache-write counter is recorded as an observation on top of the derived
+	// miss (see modelUsage.CacheWriteTokens), read with the same field-name
+	// fallbacks as the hit side because compatible relays spell it differently.
+	write := int64(0)
+	if usage.InputTokensDetails != nil {
+		write = usage.InputTokensDetails.CacheWriteTokens
+	}
+	if write <= 0 && usage.PromptTokensDetails != nil {
+		write = usage.PromptTokensDetails.CacheWriteTokens
+	}
+	if write <= 0 {
+		write = usage.CacheWriteInputTokens
+	}
 	miss := usage.PromptCacheMissTokens
 	if input <= 0 && miss <= 0 {
 		if usage.InputTokensDetails != nil {
@@ -3148,7 +3182,7 @@ func modelUsageFromResponsesEvent(raw []byte) *modelUsage {
 			miss = usage.CacheWriteInputTokens
 		}
 	}
-	return modelUsageFromResponseTokenCounts(input, output, hit, miss)
+	return modelUsageFromResponseTokenCounts(input, output, hit, miss, write)
 }
 
 // anthropicUsageState accumulates the raw Anthropic usage counters across
@@ -3211,6 +3245,7 @@ func (s *anthropicUsageState) modelUsage() *modelUsage {
 		CompletionTokens: int(s.output),
 		CacheHitTokens:   int(s.cacheRead),
 		CacheMissTokens:  int(s.input + s.cacheCreation),
+		CacheWriteTokens: int(s.cacheCreation),
 	}
 }
 
