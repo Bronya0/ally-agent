@@ -461,64 +461,6 @@ func TestSaveConfigClearsCustomPrompt(t *testing.T) {
 	if app.config.CustomPrompt != "" {
 		t.Fatalf("expected in-memory custom prompt to be cleared, got %q", app.config.CustomPrompt)
 	}
-
-	got, err := app.ReloadConfig()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.CustomPrompt != "" {
-		t.Fatalf("expected reloaded custom prompt to be cleared, got %q", got.CustomPrompt)
-	}
-}
-
-func TestReloadConfigLoadsModelsFromConfigFile(t *testing.T) {
-	dir := t.TempDir()
-	configPath := filepath.Join(dir, "config.json")
-	data := []byte(`{
-  "providerName": "Reloaded Provider",
-  "baseUrl": "https://example.test/v1",
-  "model": "reloaded-model",
-  "models": [
-    {
-      "name": "Reloaded",
-      "providerName": "Reloaded Provider",
-      "baseUrl": "https://example.test/v1",
-      "model": "reloaded-model"
-    }
-  ]
-}`)
-	if err := os.WriteFile(configPath, data, 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	app := NewApp()
-	app.initialized = true
-	app.configPath = configPath
-	app.config = ConfigState{
-		ProviderName: "Old Provider",
-		BaseURL:      "https://old.test/v1",
-		Model:        "old-model",
-		Models:       []ModelConfig{{Model: "old-model"}},
-	}
-
-	got, err := app.ReloadConfig()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.Model != "reloaded-model" {
-		t.Fatalf("expected reloaded model, got %q", got.Model)
-	}
-	if len(got.Models) != 1 || got.Models[0].Model != "reloaded-model" {
-		t.Fatalf("expected reloaded model list, got %#v", got.Models)
-	}
-
-	mem, err := app.GetConfig()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if mem.Model != got.Model || len(mem.Models) != 1 || mem.Models[0].Model != "reloaded-model" {
-		t.Fatalf("expected in-memory config to be reloaded, got %#v", mem)
-	}
 }
 
 func TestAgentDelegateSemaphoreRespectsCancelledContext(t *testing.T) {
@@ -1391,11 +1333,6 @@ func TestAppEmitUsesHostEventSink(t *testing.T) {
 	if !ok || got["sessionId"] != "session-1" {
 		t.Fatalf("unexpected event payload: %#v", sink.payload)
 	}
-}
-
-func TestAppEmitWithoutHostSinkIsNoop(t *testing.T) {
-	app := NewApp()
-	app.emit("run:delta", "ignored")
 }
 
 func TestHandleTodoListRejectsMultipleInProgress(t *testing.T) {

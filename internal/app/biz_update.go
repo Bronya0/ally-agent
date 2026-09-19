@@ -103,14 +103,6 @@ type UpdateApplyResult struct {
 	Error string `json:"error,omitempty"`
 }
 
-// StagedUpdateInfo describes an already-downloaded update on disk.
-type StagedUpdateInfo struct {
-	OK        bool   `json:"ok"`
-	Version   string `json:"version,omitempty"`
-	StagedDir string `json:"stagedDir,omitempty"`
-	Error     string `json:"error,omitempty"`
-}
-
 // SkipUpdateResult is returned by SkipUpdate.
 type SkipUpdateResult struct {
 	OK      bool   `json:"ok"`
@@ -1292,33 +1284,6 @@ func (a *App) findStagedUpdate() string {
 	return bestTag
 }
 
-// GetStagedUpdate returns info about the most recent staged update on disk,
-// if any. Used by the frontend to decide whether to show "restart to apply"
-// without re-downloading.
-func (a *App) GetStagedUpdate() StagedUpdateInfo {
-	tag := a.findStagedUpdate()
-	if tag == "" {
-		return StagedUpdateInfo{Error: "no staged update found"}
-	}
-	var stagedDir string
-	var probe string
-	if goruntime.GOOS == "darwin" {
-		stagedDir = updateVersionDir(tag)
-		probe = updateAssetPath(tag)
-	} else {
-		stagedDir = updateStagedDir(tag)
-		probe = filepath.Join(stagedDir, "Ally.exe")
-	}
-	if _, err := os.Stat(probe); err != nil {
-		return StagedUpdateInfo{Error: fmt.Sprintf("staged update missing: %v", err)}
-	}
-	return StagedUpdateInfo{
-		OK:        true,
-		Version:   tag,
-		StagedDir: stagedDir,
-	}
-}
-
 // SkipUpdate marks a release tag as skipped. Future automatic download checks
 // will ignore this tag until the user clears the skip list. Any staged files
 // for the tag are removed so disk space is not held by a skipped version.
@@ -1355,30 +1320,6 @@ func (a *App) SkipUpdate(version string) SkipUpdateResult {
 	// Remove staged files for the skipped version so disk space is released.
 	_ = os.RemoveAll(updateVersionDir(version))
 	return SkipUpdateResult{OK: true, Version: version}
-}
-
-// ClearSkippedUpdates empties the skipped-update list so automatic downloads
-// resume for previously skipped tags. Returns the number of cleared entries.
-func (a *App) ClearSkippedUpdates() int {
-	a.mu.Lock()
-	cfg := a.config
-	n := len(cfg.SkippedUpdates)
-	if n == 0 {
-		a.mu.Unlock()
-		return 0
-	}
-	cfg.SkippedUpdates = nil
-	a.config = cfg
-	configPath := a.configPath
-	a.mu.Unlock()
-	data, err := json.MarshalIndent(cfg, "", "  ")
-	if err != nil {
-		return 0
-	}
-	if err := os.WriteFile(configPath, data, 0o600); err != nil {
-		return 0
-	}
-	return n
 }
 
 // ── Release check ────────────────────────────────────────────

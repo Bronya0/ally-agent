@@ -15,7 +15,6 @@ import (
 	"path/filepath"
 	goruntime "runtime"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -39,14 +38,10 @@ const (
 type wailsAppHandle struct {
 	app    *application.App
 	window *application.WebviewWindow
-	tray   *application.SystemTray
 	// windowState snapshots the main window geometry (updated from window
 	// events, persisted once at shutdown). Kept here so main-window sizing
 	// state stays in the host layer, mirroring installWebviewZoomResync.
 	windowState *windowStateTracker
-	// quitForced marks an explicit app quit (tray exit, self-update) so the
-	// close-to-tray WindowClosing hook never intercepts a real quit.
-	quitForced atomic.Bool
 }
 
 // SetApp injects the Wails v3 application handle into the Agent core. It must
@@ -124,10 +119,6 @@ func (a *App) ServiceStartup(ctx context.Context, _ application.ServiceOptions) 
 		fan.Add(netSink)
 	}
 	a.events = fan
-	// System tray support is kept in host_tray.go but disabled for the
-	// current release. Do not intercept window close, so closing exits Ally.
-	// a.setupSystemTray()
-	// a.setupCloseToTrayHook()
 	_ = a.ensureInitialized()
 	// Warm the one-time POSIX login-shell PATH probe without delaying the UI.
 	// command/service wait on the same sync.Once if needed.
@@ -210,16 +201,25 @@ func (a *App) ServiceShutdown() error {
 }
 
 // quitApp asks the Wails application to quit. No-op when the desktop host is
-// absent (tests/headless). Used by the self-update flow and tray exit.
+// absent (tests/headless). Used by the self-update flow.
 func (a *App) quitApp() {
 	if a.wails != nil && a.wails.app != nil {
-		a.wails.quitForced.Store(true)
 		a.wails.app.Quit()
 	}
 }
 
-// ShowMainWindow displays and focuses the main window. Used by the tray menu
-// and the second-instance activation callback.
+// showMainWindow displays and focuses the main window. Used by the exposed
+// ShowMainWindow binding for the second-instance activation callback.
+func (a *App) showMainWindow() {
+	if a.wails == nil || a.wails.window == nil {
+		return
+	}
+	a.wails.window.Show()
+	a.wails.window.Focus()
+}
+
+// ShowMainWindow displays and focuses the main window. Used by the
+// second-instance activation callback.
 func (a *App) ShowMainWindow() {
 	a.showMainWindow()
 }
@@ -389,12 +389,6 @@ func (a *App) OpenWorkspaceInFileManager() error {
 		return err
 	}
 	return openPathInFileManager(root)
-}
-
-// OpenWorkspacePathInFileManager opens a workspace-relative file or directory
-// in the system file manager. An empty path opens the workspace root.
-func (a *App) OpenWorkspacePathInFileManager(path string) error {
-	return a.openWorkspacePathInFileManagerAt("", path)
 }
 
 func (a *App) OpenWorkspacePathInFileManagerAt(req WorkspacePathRequest) error {

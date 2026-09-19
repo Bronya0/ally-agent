@@ -8,7 +8,7 @@
  * Public License v3. See the LICENSE file for details.
  */
 
-// 文件信息分区构建（唯一来源）：把后端 GetWorkspaceFileInfo 的结果整理成
+// 文件信息分区构建（唯一来源）：把后端 GetWorkspaceFileInfoAt 的结果整理成
 // 「分区 → 行」结构。属性弹框（FileInfoModal）与内容区信息面板
 // （WorkspaceExplorer 的 infoMode）共用，保证两处展示的信息完全一致。
 

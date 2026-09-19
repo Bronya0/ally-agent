@@ -48,13 +48,9 @@ type SaveWorkspaceFileResult struct {
 	Size    int64  `json:"size"`
 }
 
-// ReadWorkspaceFile returns an unnumbered, complete text snapshot for the
-// user-facing workspace editor. It is deliberately separate from ReadFile,
-// whose bounded line-number preview is designed for model context.
-func (a *App) ReadWorkspaceFile(path string) (WorkspaceFileContent, error) {
-	return a.readWorkspaceFileAt("", path)
-}
-
+// ReadWorkspaceFileAt returns an unnumbered, complete text snapshot for the
+// user-facing workspace editor. It is deliberately separate from the model
+// read tool, whose bounded line-number preview is designed for model context.
 func (a *App) ReadWorkspaceFileAt(req WorkspacePathRequest) (WorkspaceFileContent, error) {
 	return a.readWorkspaceFileAt(req.Workspace, req.Path)
 }
@@ -172,11 +168,6 @@ var videoExtensions = map[string]string{
 
 var pdfExtensions = map[string]string{
 	".pdf": "application/pdf",
-}
-
-// IsWorkspaceImage reports whether the given path has an image extension.
-func (a *App) IsWorkspaceImage(path string) bool {
-	return imageExtMime(path) != ""
 }
 
 func imageExtMime(path string) string {

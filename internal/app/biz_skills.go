@@ -160,19 +160,6 @@ func (a *App) ActivateSkill(name string) (string, error) {
 	return "", fmt.Errorf("skill not found: %s", name)
 }
 
-// ClearSkills disables every discovered skill, built-ins included: skill
-// toggles treat built-in skills like any other entry, so the bulk sweep does
-// not spare them. Replacing the disabled list also drops stale entries left
-// behind for skills that are no longer discovered.
-func (a *App) ClearSkills() error {
-	skills, _ := a.ListSkills()
-	disabled := make([]string, 0, len(skills))
-	for _, sk := range skills {
-		disabled = append(disabled, sk.Name)
-	}
-	return a.setDisabledSkills(disabled)
-}
-
 func (a *App) GetActiveSkills() []string {
 	skills, _ := a.ListSkills()
 	a.mu.Lock()

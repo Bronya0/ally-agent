@@ -352,9 +352,6 @@ func mergeConfig(base, overlay ConfigState) ConfigState {
 	if overlay.AuxFontSize != 0 {
 		base.AuxFontSize = clampFontSize(overlay.AuxFontSize, defaultAuxFontSize, 10, 20)
 	}
-	if overlay.CloseToTray != nil {
-		base.CloseToTray = overlay.CloseToTray
-	}
 	if overlay.WindowWidth > 0 && overlay.WindowHeight > 0 {
 		base.WindowWidth = overlay.WindowWidth
 		base.WindowHeight = overlay.WindowHeight
@@ -527,32 +524,6 @@ func (a *App) GetConfig() (ConfigState, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.config, nil
-}
-
-func (a *App) ReloadConfig() (ConfigState, error) {
-	if err := a.ensureInitialized(); err != nil {
-		return ConfigState{}, err
-	}
-	a.mu.Lock()
-	configPath := a.configPath
-	a.mu.Unlock()
-
-	loadPath, err := resolveConfigLoadPath(configPath)
-	if err != nil {
-		return ConfigState{}, fmt.Errorf("config file not found: %w", err)
-	}
-	loaded, err := readConfigFile(loadPath)
-	if err != nil {
-		return ConfigState{}, err
-	}
-	cfg := mergeConfig(defaultConfigState(), loaded)
-
-	a.mu.Lock()
-	a.config = cfg
-	a.disabledSkills = normalizeSkillNameList(cfg.DisabledSkills)
-	a.config.DisabledSkills = cloneStringSlice(a.disabledSkills)
-	a.mu.Unlock()
-	return cfg, nil
 }
 
 func (a *App) SaveConfig(req ConfigState) error {

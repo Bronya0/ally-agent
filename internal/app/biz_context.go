@@ -33,20 +33,6 @@ func (a *App) GetTodos(sessionID string) []TodoEntry {
 	return cloneTodos(list)
 }
 
-// ClearTodos clears the current todo list for a session.
-func (a *App) ClearTodos(sessionID string) {
-	sid := strings.TrimSpace(sessionID)
-	if sid == "" {
-		return
-	}
-	a.mu.Lock()
-	delete(a.todos, sid)
-	a.todoRevisions[sid]++
-	revision := a.todoRevisions[sid]
-	a.mu.Unlock()
-	a.emitTodoUpdate(sid, []TodoEntry{}, revision)
-}
-
 // emitTodoUpdate sends the current todo list to the frontend.
 func (a *App) emitTodoUpdate(sid string, todos []TodoEntry, revision int64) {
 	a.emit("plan:update", map[string]any{
@@ -121,11 +107,6 @@ func (a *App) GetWorkspaceTokenUsage(workspace string) WorkspaceTokenUsage {
 	return a.workspaceTokenUsage[key]
 }
 
-// GetSessionContextTokens returns the estimated token count for a session's full payload.
-func (a *App) GetSessionContextTokens(sessionID string) int {
-	return a.getContextBreakdown(sessionID, "").Total
-}
-
 // ResetWorkspaceTokenUsage resets cumulative token usage for a workspace.
 func (a *App) ResetWorkspaceTokenUsage(workspace string) {
 	key := workspaceUsageKey(workspace)
@@ -133,7 +114,6 @@ func (a *App) ResetWorkspaceTokenUsage(workspace string) {
 	delete(a.workspaceTokenUsage, key)
 	delete(a.lastEstimatedTokens, key)
 	a.mu.Unlock()
-	a.emit("tokens:reset", map[string]any{"workspace": workspace})
 }
 
 func (a *App) recordWorkspaceTokenUsage(workspace string, usage *modelUsage, fallbackInput, fallbackOutput int) {

@@ -2434,14 +2434,6 @@ func TestRunCommandWithGitBashResolvesWindowsToolchainAndShellExpansion(t *testi
 	}
 }
 
-func TestListServicesStartsEmpty(t *testing.T) {
-	app := NewApp()
-	data := app.ListServices()
-	if len(data.Services) != 0 {
-		t.Fatalf("expected no services, got %#v", data.Services)
-	}
-}
-
 func TestRunCommandRejectsCwdSymlinkOutsideWorkspace(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink creation requires privileges on many Windows environments")
@@ -3642,36 +3634,6 @@ func TestLinuxDeleteSafetyAllowsWorkspaceFilesUnderRootHome(t *testing.T) {
 		if strings.TrimSpace(reason) == "" {
 			t.Fatalf("expected block reason for %s", path)
 		}
-	}
-}
-
-func TestReplaceLinesUsesCurrentFileContent(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "sample.txt"), []byte("alpha\nbeta\ngamma\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	app := NewApp()
-	app.initialized = true
-	app.config = ConfigState{Workspace: dir}
-
-	result, err := app.ReplaceLines(ReplaceLinesRequest{
-		Path:      "sample.txt",
-		StartLine: 2,
-		EndLine:   2,
-		NewText:   "BETA",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.AddedLines != 1 || result.RemovedLines != 1 {
-		t.Fatalf("expected replacement stats +1 -1, got +%d -%d", result.AddedLines, result.RemovedLines)
-	}
-	got, err := os.ReadFile(filepath.Join(dir, "sample.txt"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(got) != "alpha\nBETA\ngamma\n" {
-		t.Fatalf("unexpected file content: %q", string(got))
 	}
 }
 

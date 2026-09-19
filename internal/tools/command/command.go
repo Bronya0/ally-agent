@@ -17,7 +17,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"regexp"
 	goruntime "runtime"
 	"strings"
 )
@@ -26,13 +25,6 @@ import (
 type RiskPattern struct {
 	Reason string
 }
-
-var (
-	// WinPathRE matches Windows-style absolute paths in a command string.
-	WinPathRE = regexp.MustCompile(`(?i)\b[A-Z]:[\\/][^\s"'<>|;&()]+`)
-	// UnixPathRE matches Unix-style absolute paths in a command string.
-	UnixPathRE = regexp.MustCompile(`(?i)(?:^|[\s"'=])(/[^\s"'<>|;&()]+)`)
-)
 
 // MayModifyOutsidePath reports whether semantic analysis found an explicit
 // path operand that the command may mutate.
@@ -315,36 +307,6 @@ func LiteralWriteTargets(commandLine string) []WriteTarget {
 func PathExists(path string) bool {
 	_, err := os.Lstat(path)
 	return err == nil || !errors.Is(err, os.ErrNotExist)
-}
-
-// AbsolutePathCandidates extracts Windows-style and Unix-style absolute paths
-// from `command`. On Windows, MSYS2 drive paths (/c/...) are converted to
-// Windows paths (C:\...). The bare `/c` form (cmd.exe /c option) is excluded.
-func AbsolutePathCandidates(command string) []string {
-	candidates := []string{}
-	for _, match := range WinPathRE.FindAllString(command, -1) {
-		value := strings.TrimRight(match, `.,:;`)
-		if value != "" {
-			candidates = append(candidates, value)
-		}
-	}
-	for _, match := range UnixPathRE.FindAllStringSubmatch(command, -1) {
-		value := match[1]
-		value = strings.Trim(value, ` "'`)
-		value = strings.TrimRight(value, `.,:;`)
-		if value == "" || strings.HasPrefix(value, "//") {
-			continue
-		}
-		if goruntime.GOOS == "windows" {
-			if len(value) >= 3 && value[0] == '/' && IsASCIILetter(value[1]) && value[2] == '/' {
-				value = string(ToUpperByte(value[1])) + ":\\" + value[3:]
-			} else if len(value) == 2 && value[0] == '/' && IsASCIILetter(value[1]) {
-				continue
-			}
-		}
-		candidates = append(candidates, filepath.FromSlash(value))
-	}
-	return candidates
 }
 
 // IsASCIILetter reports whether b is an ASCII letter (a-z, A-Z).

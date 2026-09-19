@@ -2891,8 +2891,8 @@ async function refreshFooterStats({
   }
 
   // Only the breakdown is fetched: it already carries `total`, so a separate
-  // GetSessionContextTokens call would just recompute the same payload on the
-  // backend and double the IPC cost on every footer refresh.
+  // token-total call would just recompute the same payload on the backend and
+  // double the IPC cost on every footer refresh.
   const [gitResult, usageResult, breakdownResult] = await Promise.allSettled([
     // Ask for the Tab's own workspace: chat tabs have already persisted it via
     // saveWorkspaceConfig, while KB/temp tabs deliberately never claim the
@@ -2995,8 +2995,8 @@ function toggleWorkspaceExplorer() {
 
 // Context computation — call backend for accurate full-payload token count.
 // React to session switches and tool completions; in-run token refresh is
-// handled by tool:result / tool:error / run:done / run:error / run:cancelled /
-// run:compacted handlers. A previous deep:true watch on activeMessages fired
+// handled by tool:result / tool:error / run:done / run:error / run:compacted
+// handlers. A previous deep:true watch on activeMessages fired
 // on every streaming delta (40+ IPC/s) — wasteful. Only the active session is
 // refreshed because the backend calculates context data from its active config.
 let refreshContextTimer = null;
@@ -3025,8 +3025,8 @@ function doRefreshContextTokens(sid) {
   if (!sid || sid !== activeSessionId.value || footerStatsLoading.value) return;
   refreshContextInFlight = true;
   const requestVersion = ++contextRequestVersion;
-  // The breakdown already carries `total`, so a separate GetSessionContextTokens
-  // call would duplicate the backend computation on every tool:result burst.
+  // The breakdown already carries `total`, so a separate token-total call
+  // would duplicate the backend computation on every tool:result burst.
   // workspaceHint pins the count to the active Tab's own workspace so a
   // KB/temp session (no session-index entry before its first run) is not
   // counted against the persisted chat workspace of the previous Tab.
@@ -4622,13 +4622,12 @@ function bindRuntimeEvents() {
     scrollMessagesToBottom,
     activeSessionId,
   });
-  // Run 终态三胞胎（run:done / run:error / run:cancelled）的公共收尾。
-  // 收敛前每个 handler 各自维护约 70 行逐字重复的步骤；这里按三者原本完全
+  // Run 终态（run:done / run:error）的公共收尾。
+  // 收敛前每个 handler 各自维护约 70 行逐字重复的步骤；这里按两者原本完全
   // 一致的顺序编排，差异点全部通过 opts.variant 注入（见下面的分支）：
   // - done:      setAssistant* 之后走 finishPersistableTurn + persistCompletedSession
-  // - error:     封口后先 markTransientTurn，再插入错误/取消提示消息
-  // - cancelled: setAssistant* 之后才 markTransientTurn
-  // 说明：session.runId/isRunning 的复位对 done/cancelled 变体比原实现提前
+  // - error:     封口后先 markTransientTurn，再插入错误提示消息
+  // 说明：session.runId/isRunning 的复位比原实现提前
   // 了几步（原实现夹在 setAssistant*/finishPersistableTurn 之后），这些步骤
   // 读写互不相交的字段（消息条目 vs 会话字段），行为完全一致；
   // saveSessions/persistCompletedSession 的守卫依赖复位先完成，顺序保持不变。
@@ -4662,12 +4661,11 @@ function bindRuntimeEvents() {
     }
     setAssistantRoundDuration(session, data.runId, data.durationMs);
     setAssistantCacheRate(session, data.runId, data.cacheHit, data.cacheMiss, data.inputTokens, data.outputTokens);
-    if (variant === 'cancelled') markTransientTurn(session, data.runId);
     if (variant === 'done') {
       finishPersistableTurn(session, data.runId);
       persistCompletedSession(session);
     } else {
-      // run:error / run:cancelled 是瞬态轮次，仅刷新轻量会话元数据，
+      // run:error 是瞬态轮次，仅刷新轻量会话元数据，
       // 不落完整快照（消息会在下一轮被 transientTurn 清理规则淘汰）。
       saveSessions();
     }
@@ -4710,27 +4708,8 @@ function bindRuntimeEvents() {
     if (String(session.workspace || '') === activeRunWorkspace.value) refreshGitStatus();
     settlePendingTempCleanups();
   });
-  onRuntimeEvent('run:cancelled', (data) => {
-    flushStreamBuffer(data.runId);
-    flushToolUpdateBuffer();
-    closeCompactLoading(data?.sessionId || '');
-    if (retryBanner.value) {
-      const session = sessionByTerminalEvent(data);
-      if (session && session.id === activeSessionId.value) retryBanner.value = null;
-    }
-    const session = sessionByTerminalEvent(data);
-    if (!session) return;
-    finalizeRunTerminal(session, data, { variant: 'cancelled' });
-    // Refresh token count after cancellation: streaming deltas and any tool
-    // results added before cancellation are now part of the history and the
-    // context popover should reflect the actual remaining budget.
-    if (session.id === activeSessionId.value) refreshContextTokens(session.id);
-    // 后台 Tab 的会话被取消前可能已修改工作区文件，Git 统计同样要刷新。
-    if (String(session.workspace || '') === activeRunWorkspace.value) refreshGitStatus();
-    settlePendingTempCleanups();
-  });
-  // Compaction progress. Both manual /compact and in-run auto-compaction
-  // stream compact:start / compact:progress events; state is keyed per
+  // Compaction indicator. Both manual /compact and in-run auto-compaction
+  // stream compact:start / compact:done events; state is keyed per
   // session so a background tab's compaction never surfaces in another
   // tab's composer. tokensBefore/messages arrive up front so the user sees
   // the scale of the summary request immediately.
@@ -4748,23 +4727,6 @@ function bindRuntimeEvents() {
     } else {
       startCompactTracking(sid, text);
     }
-  });
-  onRuntimeEvent('compact:progress', (data) => {
-    const sid = data?.sessionId || '';
-    if (!sid) return;
-    const usage = data?.usage || {};
-    const parts = [];
-    const inTok = Number(usage.inputTokens || 0);
-    const outTok = Number(usage.outputTokens || 0);
-    if (inTok > 0 || outTok > 0) {
-      parts.push(t('app.compact.usage', { input: fmtK(inTok), output: fmtK(outTok) }));
-    }
-    if (data?.note) parts.push(String(data.note));
-    const text = parts.length > 0
-      ? parts.join(' · ')
-      : t('app.compact.compacting');
-    if (compactingSessions[sid]) setCompactProgress(sid, text);
-    else startCompactTracking(sid, text);
   });
   onRuntimeEvent('compact:done', (data) => {
     const sid = data?.sessionId || '';
@@ -7363,7 +7325,7 @@ function handlePushCommand() {
 // like a normal chat run instead of a Naive toast. State is keyed per
 // session: a background tab's compaction must never surface in another
 // tab's composer. Progress text streams from the backend via
-// compact:start / compact:progress / compact:done events.
+// compact:start / compact:done events.
 const compactingSessions = reactive({});
 function compactStateFor(sid) { return compactingSessions[sid] || null; }
 const activeCompactState = computed(() => compactStateFor(activeSessionId.value));

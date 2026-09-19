@@ -92,10 +92,6 @@ type managedService struct {
 	waitErr  error
 }
 
-func (a *App) StartService(req StartServiceRequest) (ServiceInfo, error) {
-	return a.startServiceWithConfig(a.effectiveConfig(ConfigState{}), req)
-}
-
 func (a *App) StopService(req StopServiceRequest) (ServiceInfo, error) {
 	return a.stopService(req)
 }

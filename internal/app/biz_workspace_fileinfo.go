@@ -49,14 +49,10 @@ type WorkspaceFileInfo struct {
 	TotalSize  int64  `json:"totalSize"`
 }
 
-// GetWorkspaceFileInfo returns detailed metadata and content hashes for a
+// GetWorkspaceFileInfoAt returns detailed metadata and content hashes for a
 // workspace path, powering the explorer's "file info" dialog. Files are
 // streamed through every hash in a single pass; directories are summarized
 // with a bounded recursive walk.
-func (a *App) GetWorkspaceFileInfo(path string) (WorkspaceFileInfo, error) {
-	return a.getWorkspaceFileInfoAt("", path)
-}
-
 func (a *App) GetWorkspaceFileInfoAt(req WorkspacePathRequest) (WorkspaceFileInfo, error) {
 	return a.getWorkspaceFileInfoAt(req.Workspace, req.Path)
 }

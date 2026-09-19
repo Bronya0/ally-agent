@@ -26,14 +26,6 @@ import (
 	"ally-dev/internal/tools/grep"
 )
 
-func (a *App) GrepFiles(req GrepRequest) (*GrepResult, error) {
-	ctx := a.ctx
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	return a.grepFilesWithConfig(ctx, a.effectiveConfig(ConfigState{}), req)
-}
-
 func (a *App) grepFilesWithConfig(ctx context.Context, cfg ConfigState, req GrepRequest) (*GrepResult, error) {
 	root, err := workspaceRoot(cfg)
 	if err != nil {

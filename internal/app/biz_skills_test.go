@@ -183,39 +183,6 @@ func TestScanSkillDirDedupsCaseInsensitively(t *testing.T) {
 	}
 }
 
-func TestClearSkillsDisablesAllSkills(t *testing.T) {
-	dir := t.TempDir()
-	workspace := filepath.Join(dir, "workspace")
-	writeSkillTestFile(t, filepath.Join(workspace, ".agents", "skills", "my-skill"), "SKILL.md", "---\nname: my-skill\ndescription: project skill\n---\nbody")
-
-	app := NewApp()
-	app.initialized = true
-	app.configPath = filepath.Join(dir, "config.json")
-	app.config = ConfigState{Workspace: workspace}
-
-	// Built-in skills are toggleable like any other skill, so the bulk sweep
-	// must disable them too.
-	builtin := builtinSkillEntries()
-	if len(builtin) == 0 {
-		t.Fatal("expected embedded built-in skills")
-	}
-	if err := app.ClearSkills(); err != nil {
-		t.Fatal(err)
-	}
-	app.mu.Lock()
-	disabled := cloneStringSlice(app.disabledSkills)
-	app.mu.Unlock()
-
-	for _, b := range builtin {
-		if !skillNameInList(disabled, b.Name) {
-			t.Fatalf("built-in skill %s must be disabled by ClearSkills", b.Name)
-		}
-	}
-	if !skillNameInList(disabled, "my-skill") {
-		t.Fatalf("non-builtin skill must be disabled too, got %v", disabled)
-	}
-}
-
 func TestParseSkillFileDirectorySkillFallsBackToParentDir(t *testing.T) {
 	root := t.TempDir()
 	// Documented directory skill layout: <skill-dir>/SKILL.md without

@@ -171,10 +171,6 @@ func reusedBatchReadResult(previous *BatchReadResult) *BatchReadResult {
 	return &BatchReadResult{Files: files}
 }
 
-func (a *App) BatchReadFiles(req BatchReadRequest) (*BatchReadResult, error) {
-	return a.batchReadFilesWithConfig(a.effectiveConfig(ConfigState{}), req)
-}
-
 func (a *App) batchReadFilesWithConfig(cfg ConfigState, req BatchReadRequest) (*BatchReadResult, error) {
 	pathCount := len(req.Paths) + len(req.Files)
 	if strings.TrimSpace(req.Path) != "" {

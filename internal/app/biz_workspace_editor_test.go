@@ -25,7 +25,7 @@ func TestWorkspaceEditorReadSavePreservesTextShape(t *testing.T) {
 	}
 
 	app := newWorkspaceEditorTestApp(dir)
-	snapshot, err := app.ReadWorkspaceFile("sample.txt")
+	snapshot, err := app.ReadWorkspaceFileAt(WorkspacePathRequest{Path: "sample.txt"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +61,7 @@ func TestWorkspaceEditorRejectsStaleSave(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := newWorkspaceEditorTestApp(dir)
-	snapshot, err := app.ReadWorkspaceFile("sample.txt")
+	snapshot, err := app.ReadWorkspaceFileAt(WorkspacePathRequest{Path: "sample.txt"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +93,7 @@ func TestWorkspaceEditorRejectsOversizedFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := newWorkspaceEditorTestApp(dir)
-	_, err := app.ReadWorkspaceFile("large.txt")
+	_, err := app.ReadWorkspaceFileAt(WorkspacePathRequest{Path: "large.txt"})
 	if err == nil || !strings.Contains(err.Error(), "E_FILE_TOO_LARGE") {
 		t.Fatalf("expected oversized file to fail with E_FILE_TOO_LARGE, got %v", err)
 	}

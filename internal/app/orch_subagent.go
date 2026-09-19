@@ -47,26 +47,6 @@ func cloneSubagentRun(r *SubagentRun) *SubagentRun {
 	return &c
 }
 
-// StopSubagent cancels a running sub-agent.
-func (a *App) StopSubagent(subID string) error {
-	a.subRunsMu.Lock()
-	run := a.subRuns[subID]
-	if run == nil {
-		a.subRunsMu.Unlock()
-		return fmt.Errorf("sub-agent not found: %s", subID)
-	}
-	if run.Status != "running" {
-		a.subRunsMu.Unlock()
-		return fmt.Errorf("sub-agent is not running: %s", subID)
-	}
-	cancel := run.cancel
-	a.subRunsMu.Unlock()
-	if cancel != nil {
-		cancel()
-	}
-	return nil
-}
-
 // ── Sub-agent execution loop ─────────────────────────────────
 
 // Hard step cap for every delegate execution. Scheduled tasks keep their own

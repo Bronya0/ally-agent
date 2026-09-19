@@ -79,12 +79,6 @@ func (s *Service) GetNetworkInfo() NetworkInfo {
 	return NetworkInfo{Addresses: localIPv4Addresses()}
 }
 
-func (s *Service) GetServerInfo() ServerInfo {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return cloneServerInfo(s.info)
-}
-
 func (s *Service) StartServer(req StartRequest) (ServerInfo, error) {
 	port := req.Port
 	if port < 0 || port > 65535 {

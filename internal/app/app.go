@@ -334,9 +334,6 @@ type App struct {
 	// persistence runs on its own goroutine.
 	stats *statsRecorder
 
-	trayIconMu sync.Mutex
-	trayIcon   []byte
-
 	// errorLogger records ERROR-level events to ~/.ally_agent/logs/error.log
 	// (set via SetErrorLogger). Backend panics and frontend-reported errors
 	// share this single on-disk channel. nil until InitErrorLogger succeeds.
@@ -517,10 +514,6 @@ type ConfigState struct {
 	// shows through the chat area. 0 = invisible, 1 = fully opaque. Clamped
 	// to [0, 1] on save; the frontend default is 0.15 (faint silhouette).
 	BackgroundOpacity float64 `json:"backgroundOpacity,omitempty"`
-	// CloseToTray is a pointer so an absent field in legacy config.json is
-	// treated as "default on" (closing the window hides to the system tray).
-	// Only an explicit false makes closing the window quit the app.
-	CloseToTray *bool `json:"closeToTray,omitempty"`
 	// WindowWidth / WindowHeight remember the user's manual window size.
 	// Zero means "no saved size yet": the window starts at a golden-ratio
 	// share of the primary screen (61.8% x 61.8%) and the size is saved
@@ -595,15 +588,6 @@ func clampFontSize(v, def, min, max float64) float64 {
 func (c ConfigState) autoUpdateEnabled() bool {
 	if c.AutoUpdate != nil {
 		return *c.AutoUpdate
-	}
-	return true
-}
-
-// closeToTrayEnabled returns true unless CloseToTray was explicitly set to
-// false. Legacy config without the field defaults to hide-to-tray.
-func (c ConfigState) closeToTrayEnabled() bool {
-	if c.CloseToTray != nil {
-		return *c.CloseToTray
 	}
 	return true
 }
@@ -754,22 +738,6 @@ type ReadFileResult struct {
 	DataURL string `json:"dataUrl,omitempty"`
 }
 
-type ReplaceExactRequest struct {
-	Path           string `json:"path"`
-	ExpectedSHA256 string `json:"expectedSha256"`
-	OldString      string `json:"oldString"`
-	NewString      string `json:"newString"`
-	ReplaceAll     bool   `json:"replaceAll"`
-}
-
-type ReplaceLinesRequest struct {
-	Path           string `json:"path"`
-	ExpectedSHA256 string `json:"expectedSha256"`
-	StartLine      int    `json:"startLine"`
-	EndLine        int    `json:"endLine"`
-	NewText        string `json:"newText"`
-}
-
 type CreateFileRequest struct {
 	Workspace string `json:"workspace,omitempty"`
 	Path      string `json:"path"`
@@ -806,21 +774,6 @@ type DeletePathRequest struct {
 	Workspace string `json:"workspace,omitempty"`
 	Path      string `json:"path"`
 	Recursive bool   `json:"recursive"`
-}
-
-// MovePathRequest moves a file or directory from Source to Destination
-// within the workspace. Both paths are workspace-relative.
-type MovePathRequest struct {
-	Source      string `json:"source"`
-	Destination string `json:"destination"`
-	Overwrite   bool   `json:"overwrite"`
-}
-
-// MovePathResult reports the resolved absolute paths after a move.
-type MovePathResult struct {
-	Source      string `json:"source"`
-	Destination string `json:"destination"`
-	Moved       bool   `json:"moved"`
 }
 
 type DeleteResult struct {
@@ -1862,7 +1815,6 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 
 		requestMessages := messages
 
-		a.emit("run:llm_wait", map[string]any{"runId": runID, "sessionId": sessionID})
 		toolCalls := []openai.ToolCall{}
 		var modelResp *modelStreamResult
 		var toolProgress *toolCallProgressTracker
@@ -2215,8 +2167,8 @@ func rawFunctionTool(name, description string, parameters map[string]any) openai
 func normalizeToolName(name string) string { return toolshared.NormalizeName(name) }
 
 // withFileOpsLock runs fn while holding the file-operation mutex, the single
-// serialization point for every workspace write (model tools, UI bindings,
-// MovePath). The unlock is deferred instead of written by hand after the call:
+// serialization point for every workspace write (model tools, UI bindings).
+// The unlock is deferred instead of written by hand after the call:
 // executeTool converts a handler panic into a tool error, so a hand-written
 // Unlock is skipped on exactly that path — the mutex would then stay locked
 // forever and every later write, editor save, and UI binding would queue behind
@@ -2832,39 +2784,13 @@ func (a *App) SearchWorkspacePaths(req WorkspacePathSearchRequest) (WorkspacePat
 	return a.searchWorkspacePaths(cfg, req)
 }
 
-func (a *App) ReadFile(req ReadFileRequest) (ReadFileResult, error) {
-	return a.readFileWithConfig(a.effectiveConfig(ConfigState{}), req)
-}
-
-func (a *App) ReplaceExact(req ReplaceExactRequest) (EditResult, error) {
-	editReq := EditRequest{
-		Path:           req.Path,
-		ExpectedSHA256: req.ExpectedSHA256,
-		OldString:      req.OldString,
-		NewString:      req.NewString,
-		ReplaceAll:     req.ReplaceAll,
-	}
-	return a.editWithConfig(a.effectiveConfig(ConfigState{}), editReq)
-}
-
-func (a *App) ReplaceLines(req ReplaceLinesRequest) (EditResult, error) {
-	editReq := EditRequest{
-		Path:           req.Path,
-		ExpectedSHA256: req.ExpectedSHA256,
-		StartLine:      req.StartLine,
-		EndLine:        req.EndLine,
-		NewText:        &req.NewText,
-	}
-	return a.editWithConfig(a.effectiveConfig(ConfigState{}), editReq)
-}
-
 func (a *App) CreateFile(req CreateFileRequest) (EditResult, error) {
 	cfg, err := a.configForWorkspace(req.Workspace)
 	if err != nil {
 		return EditResult{}, err
 	}
-	// UI 直调的写操作与模型侧文件变更共用 fileOpsMu 串行化（对齐 executeTool
-	// 与 MovePath），避免用户与 Agent 同时写同一路径时丢失更新。
+	// UI 直调的写操作与模型侧文件变更共用 fileOpsMu 串行化（对齐 executeTool），
+	// 避免用户与 Agent 同时写同一路径时丢失更新。
 	a.fileOpsMu.Lock()
 	defer a.fileOpsMu.Unlock()
 	result, err := a.createFileWithConfig(cfg, req)
@@ -2927,57 +2853,6 @@ func (a *App) CopyFilesIntoWorkspace(req CopyFilesIntoWorkspaceRequest) (CopyFil
 // flow; platform-specific readers live in host_clipboard_*.go.
 func (a *App) ReadClipboardFiles() ([]string, error) {
 	return clipboardFiles()
-}
-
-// MovePath moves a file or directory from Source to Destination within the
-// workspace. Both paths are workspace-relative. It rejects symlink paths and
-// paths resolving outside the workspace. When Overwrite is false the
-// destination must not already exist; when true an existing file at the
-// destination is replaced (directories are not merged or replaced).
-func (a *App) MovePath(req MovePathRequest) (MovePathResult, error) {
-	if strings.TrimSpace(req.Source) == "" || strings.TrimSpace(req.Destination) == "" {
-		return MovePathResult{}, codedToolError("E_BAD_PATH", errors.New("move requires non-empty source and destination"))
-	}
-	cfg := a.effectiveConfig(ConfigState{})
-	a.fileOpsMu.Lock()
-	defer a.fileOpsMu.Unlock()
-	roots, err := workspaceRoots(cfg)
-	if err != nil {
-		return MovePathResult{}, err
-	}
-	srcAbs, err := resolveDeletablePath(roots, req.Source)
-	if err != nil {
-		return MovePathResult{}, err
-	}
-	dstAbs, err := resolveWritableFilePath(roots, req.Destination)
-	if err != nil {
-		return MovePathResult{}, err
-	}
-	if samePath(srcAbs, dstAbs) {
-		return MovePathResult{Source: srcAbs, Destination: dstAbs, Moved: false}, nil
-	}
-	if _, err := os.Lstat(dstAbs); err == nil {
-		if !req.Overwrite {
-			return MovePathResult{}, codedToolError("E_EXISTS", fmt.Errorf("destination already exists: %s", req.Destination))
-		}
-		if err := os.RemoveAll(dstAbs); err != nil {
-			return MovePathResult{}, err
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return MovePathResult{}, err
-	}
-	if err := os.MkdirAll(filepath.Dir(dstAbs), 0o755); err != nil {
-		return MovePathResult{}, err
-	}
-	if err := os.Rename(srcAbs, dstAbs); err != nil {
-		return MovePathResult{}, err
-	}
-	a.invalidateWorkspaceMapCache(cfg)
-	return MovePathResult{Source: srcAbs, Destination: dstAbs, Moved: true}, nil
-}
-
-func (a *App) RunCommand(req CommandRequest) (CommandResult, error) {
-	return a.runCommandWithConfig(context.Background(), a.effectiveConfig(ConfigState{}), req)
 }
 
 // SwitchModel applies a model config by index to the current settings.
@@ -3185,5 +3060,5 @@ func repairJSONLeaf(raw json.RawMessage, wantSlice bool) (json.RawMessage, bool)
 	return raw, false
 }
 
-// Sub-agent frontend bindings (GetSubagents, cloneSubagentRun, StopSubagent)
-// moved to orch_subagent.go.
+// Sub-agent frontend bindings (GetSubagents, cloneSubagentRun) moved to
+// orch_subagent.go.

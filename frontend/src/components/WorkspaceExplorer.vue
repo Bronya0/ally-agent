@@ -618,7 +618,7 @@ function classifyFile(path) {
 // 信息面板模式：当前打开的是不可编辑/预览的文件，用树节点已有数据展示基本信息
 const infoMode = computed(() => Boolean(activeFile.value && activeFile.value.info));
 
-// 内容区信息面板的完整数据：进入 infoMode 后异步加载 GetWorkspaceFileInfo，
+// 内容区信息面板的完整数据：进入 infoMode 后异步加载 GetWorkspaceFileInfoAt，
 // 与属性弹框同源同布局（分区 → 行，展示统一保留的信息字段）。
 // 加载完成前或失败时回退树节点基础数据
 const infoDetail = ref(null);
