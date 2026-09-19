@@ -8,9 +8,9 @@ export const GAME_META = {
 };
 
 export function createState(game, players = []) {
-  if (game === 'gomoku') return { game, size: GOMOKU_SIZE, board: Array(GOMOKU_SIZE * GOMOKU_SIZE).fill(0), turn: 0, players, winner: null, seq: 0 };
-  if (game === 'go') return { game, size: 9, board: Array(81).fill(0), turn: 0, players, passes: 0, ko: -1, winner: null, seq: 0 };
-  if (game === 'xiangqi') return { game, board: xiangqiStart(), turn: 0, players, winner: null, seq: 0 };
+  if (game === 'gomoku') return { game, size: GOMOKU_SIZE, board: Array(GOMOKU_SIZE * GOMOKU_SIZE).fill(0), turn: 0, players, winner: null, seq: 0, lastIndex: -1 };
+  if (game === 'go') return { game, size: 9, board: Array(81).fill(0), turn: 0, players, passes: 0, ko: -1, winner: null, seq: 0, lastIndex: -1 };
+  if (game === 'xiangqi') return { game, board: xiangqiStart(), turn: 0, players, winner: null, seq: 0, lastIndex: -1 };
   return { game, phase: 'deal', players, hands: [], bottom: [], landlord: -1, turn: 0, last: null, passes: 0, winner: null, seq: 0 };
 }
 
@@ -33,6 +33,7 @@ function applyGomoku(state, player, action) {
   next.board[index] = player + 1;
   next.turn = 1 - player;
   next.seq++;
+  next.lastIndex = index;
   if (hasFive(next.board, x, y, player + 1)) next.winner = player;
   return next;
 }
@@ -72,7 +73,7 @@ function applyGo(state, player, action) {
   const own = collectGroup(next.board, index);
   if (!own.liberties.length) throw new Error('不能自杀');
   next.ko = captured.size === 1 && own.stones.length === 1 ? [...captured][0] : -1;
-  next.passes = 0; next.turn = 1 - player; next.seq++;
+  next.passes = 0; next.turn = 1 - player; next.seq++; next.lastIndex = index;
   return next;
 }
 
@@ -101,7 +102,7 @@ function applyXiangqi(state, player, action) {
   if (![fx, fy, tx, ty].every(Number.isInteger) || fx < 0 || fx > 8 || tx < 0 || tx > 8 || fy < 0 || fy > 9 || ty < 0 || ty > 9) throw new Error('走法无效');
   const p = b[fy][fx], target = b[ty][tx]; if (!p || (player === 0) !== isRed(p) || (target && isRed(target) === isRed(p))) throw new Error('不能走这枚棋');
   if (!xiangqiMoveOK(b, fx, fy, tx, ty, p)) throw new Error('不符合棋子走法');
-  const next = clone(state); next.board[ty][tx] = p; next.board[fy][fx] = ''; next.turn = 1 - player; next.seq++;
+  const next = clone(state); next.board[ty][tx] = p; next.board[fy][fx] = ''; next.turn = 1 - player; next.seq++; next.lastIndex = ty * 9 + tx;
   if (isInCheck(next.board, player === 0)) throw new Error('不能送将或让将帅照面');
   const opponent = 1 - player;
   if (!next.board.flat().includes(opponent === 0 ? 'bK' : 'rK')) next.winner = player;

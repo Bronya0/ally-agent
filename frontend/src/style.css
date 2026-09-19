@@ -200,12 +200,14 @@
   --game-invite-code-bg: #181818;
   --game-invite-code-color: #ddd;
   --game-empty-color: #777;
-  --game-board-grid-bg: #141414;
-  --game-board-grid-border: #333333;
-  --game-board-cell-bg: #252525;
-  --game-xiangqi-bg: #252525;
-  --game-xiangqi-border: #3d3d3d;
-  --game-xiangqi-piece-color: #e8dcc0;
+  --game-board-grid-bg: #5f4d33;
+  --game-board-grid-border: #3a2d1c;
+  --game-board-line: rgba(26, 18, 8, 0.5);
+  --game-xiangqi-bg: #5f4d33;
+  --game-xiangqi-border: #3a2d1c;
+  --game-panel-card-bg: rgba(255, 255, 255, 0.04);
+  --game-panel-card-border: rgba(255, 255, 255, 0.09);
+  --game-status-bg: rgba(255, 255, 255, 0.05);
 
   /* ── Ally avatar eye shell tokens (dark default) ── */
   --ally-eye-shell-fill: #0b0e13;
@@ -338,12 +340,14 @@
   --game-invite-code-bg: var(--ally-surface-deep);
   --game-invite-code-color: var(--ally-text-primary);
   --game-empty-color: var(--ally-text-tertiary);
-  --game-board-grid-bg: #cbb493;
-  --game-board-grid-border: #a88d68;
-  --game-board-cell-bg: #dfcaab;
-  --game-xiangqi-bg: #dfcaab;
-  --game-xiangqi-border: #ad9473;
-  --game-xiangqi-piece-color: #2b2118;
+  --game-board-grid-bg: #e6cda6;
+  --game-board-grid-border: #b0916a;
+  --game-board-line: rgba(96, 70, 40, 0.48);
+  --game-xiangqi-bg: #e6cda6;
+  --game-xiangqi-border: #b0916a;
+  --game-panel-card-bg: rgba(15, 23, 42, 0.03);
+  --game-panel-card-border: rgba(15, 23, 42, 0.08);
+  --game-status-bg: rgba(15, 23, 42, 0.05);
 
   /* ── Ally avatar eye shell tokens (light mode) ── */
   --ally-eye-shell-fill: #f5ede2;
