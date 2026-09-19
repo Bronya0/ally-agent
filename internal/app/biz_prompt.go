@@ -55,7 +55,6 @@ func sharedEditRules() string {
 		"   - Re-read when the current source or line numbers are unknown, context compaction removed the reliable snapshot, or a formatter/generator/command or other external process may have changed the file.\n" +
 		"2. Keep the model-facing `edit` request shape as follows:\n" +
 		"   - One `edit` call edits a single file: `path`, `version`, and `changes` sit at the top level of the call arguments.\n" +
-		"   - When multiple files need changes, emit parallel `edit` calls in the same turn — one call per file.\n" +
 		"   - `changes` must be a JSON array (`[...]`), never a quoted string.\n" +
 		"   - Missing required fields fail the entire call.\n" +
 		"3. Batch edits by risk and size:\n" +
@@ -80,9 +79,9 @@ func sharedBatchStrategy() string {
 		"  - Use range reads for larger files: for medium/large files (>150 lines), specify `startLine` and `endLine` to inspect the relevant section instead of reading the entire file. Omit startLine/endLine when the file is small or full file context is genuinely needed.\n" +
 		"  - When truncated: if a previous read was auto-truncated (>2000 lines), follow the `[Showing lines A-B of N. Use startLine=C to continue.]` marker to continue.\n" +
 		"  - Read confirmed files: pass the files you need into the `files` array; never re-read an unchanged file or a range already in history.\n" +
-		"- **Edit**: put every change for one file into that file's single call, and emit parallel `edit` calls in the same turn when several files change — the full contract is under **Editing discipline** below. When `edit`/`create` returns a `validation` string, fix any reported issues directly.\n" +
+		"- **Edit**: the batching and failure contract lives in **Editing discipline** below; when `edit`/`create` returns a `validation` string, fix any reported issues directly.\n" +
 		"- **Grep**: Use for fast path and line locating (lines mode returns matching line numbers plus a capped text preview of each matching line; only read the file when you need surrounding context). Paginate with `offset`/`nextOffset`: nextOffset always resumes right after the last entry shown. When searching for multiple keywords or patterns, emit `grep` calls concurrently in the same turn.\n" +
-		"- **Exploration**: First search with `grep` to locate candidates and line numbers; once locations are identified, read the targeted ranges. For broad, open-ended investigations across many files, consider delegating to a `subagent` so exploratory reads remain in the subagent's context.\n" +
+		"- **Exploration**: First search with `grep` to locate candidates and line numbers; once locations are identified, read the targeted ranges.\n" +
 		"- **Rule of thumb**: Parallelize independent operations, read focused ranges instead of whole large files, and leave out files you only suspect might matter. Avoid splitting dependent steps unnecessarily.\n" +
 		"The backend executes independent non-file tool calls in parallel; built-in file mutations are ordered by tool-call index.\n\n"
 }
@@ -391,6 +390,14 @@ func parsePythonVersion(output string) string {
 	return ""
 }
 
+// Prompt metadata caps count runes, never bytes: a byte cap can cut a
+// multi-byte CJK character in half and ship invalid UTF-8 (which the request
+// JSON encoder turns into U+FFFD) straight into the system prompt.
+const (
+	skillListingFieldLimit = 250
+	memoryDescLimit        = 300
+)
+
 func buildSkillListingMeta(skills []SkillDefinition) string {
 	type group struct {
 		label  string
@@ -432,13 +439,9 @@ func buildSkillListingMeta(skills []SkillDefinition) string {
 		}
 		b.WriteString(fmt.Sprintf("### %s\n", g.label))
 		for _, sk := range filtered {
-			desc := sk.Description
-			if len(desc) > 250 {
-				desc = desc[:247] + "..."
-			}
-			b.WriteString(fmt.Sprintf("- %s: %s\n", sk.Name, desc))
+			b.WriteString(fmt.Sprintf("- %s: %s\n", sk.Name, truncateRunes(sk.Description, skillListingFieldLimit)))
 			if sk.WhenToUse != "" {
-				b.WriteString(fmt.Sprintf("  When to use: %s\n", sk.WhenToUse))
+				b.WriteString(fmt.Sprintf("  When to use: %s\n", truncateRunes(sk.WhenToUse, skillListingFieldLimit)))
 			}
 		}
 	}
@@ -468,11 +471,7 @@ func buildMemoryIndexContext() string {
 			fmt.Fprintf(&b, "- ... %d more memories omitted from index\n", len(entries.Memories)-i)
 			break
 		}
-		desc := mem.Description
-		if len(desc) > 300 {
-			desc = desc[:297] + "..."
-		}
-		fmt.Fprintf(&b, "- %s: %s\n", filepath.ToSlash(mem.Path), desc)
+		fmt.Fprintf(&b, "- %s: %s\n", filepath.ToSlash(mem.Path), truncateRunes(mem.Description, memoryDescLimit))
 	}
 	return b.String()
 }

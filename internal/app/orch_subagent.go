@@ -689,24 +689,28 @@ func (a *App) buildSubagentInstructionContext(cfg ConfigState) string {
 	return strings.TrimSpace(b.String())
 }
 
+// subagentBlockedTools lists parent-owned or user-interaction tools that
+// sub-agents never receive. It is the single source shared by the
+// subagentTools filter and the prompt drift guard test
+// (biz_prompt_guard_test.go): the sub-agent system prompt must not reference
+// any of these outside an explicit prohibition line.
+var subagentBlockedTools = map[string]bool{
+	"subagent":       true,
+	"agent_delegate": true,
+	"plan":           true,
+	"skill":          true,
+	"scheduled_task": true,
+	"ask":            true,
+}
+
 // subagentTools returns tools available to sub-agents, excluding parent-owned
 // session state and tools that require interaction with the visible user.
 func (a *App) subagentTools(cfg ConfigState) []openai.Tool {
 	all := a.buildToolsForConfig(cfg)
-	filtered := make([]openai.Tool, 0, len(all)-1)
-	blocked := map[string]bool{
-		"subagent":       true,
-		"agent_delegate": true,
-		"plan":           true,
-		"skill":          true,
-		"scheduled_task": true,
-		"ask":            true,
-	}
+	filtered := make([]openai.Tool, 0, len(all))
 	for _, t := range all {
-		if t.Function != nil {
-			if blocked[t.Function.Name] {
-				continue
-			}
+		if t.Function != nil && subagentBlockedTools[t.Function.Name] {
+			continue
 		}
 		filtered = append(filtered, t)
 	}
