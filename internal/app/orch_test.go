@@ -1078,11 +1078,149 @@ func TestCompactToolResultForModelCompactsGrepLines(t *testing.T) {
 	if !strings.Contains(got, fmt.Sprintf("[%d of %d matching lines shown]", maxModelGrepMatches, total)) {
 		t.Fatalf("expected reduction note, got %.200s", got)
 	}
-	if !strings.Contains(got, "a.txt:1\n") || !strings.Contains(got, fmt.Sprintf("a.txt:%d\n", maxModelGrepMatches)) {
+	if !strings.Contains(got, "a.txt\n  1\n") || !strings.Contains(got, fmt.Sprintf("  %d\n", maxModelGrepMatches)) {
 		t.Fatalf("expected first and last kept line, got %.200s", got)
 	}
-	if strings.Contains(got, fmt.Sprintf("a.txt:%d\n", maxModelGrepMatches+1)) {
+	if strings.Contains(got, fmt.Sprintf("  %d\n", maxModelGrepMatches+1)) {
 		t.Fatalf("line beyond the cap must be dropped, got %.200s", got)
+	}
+}
+
+func TestCompactToolResultForModelGroupsGrepRowsByFile(t *testing.T) {
+	// lines mode renders one bare path row per file group, then indented
+	// "line: text" rows — the path is spelled once per file to save tokens.
+	result := toolResult{OK: true, Data: GrepResult{
+		Mode: "lines", MatchedLines: 3, Hits: 3, Files: 2, StatsExact: true,
+		LineHits: []GrepFileMatch{
+			{Path: "a/x.txt", Lines: []int{10, 20}, Texts: []string{"ten", "twenty"}},
+			{Path: "b/y.txt", Lines: []int{5}},
+		},
+	}}
+	got := compactToolResultForModel("grep", result, "fallback")
+	want := "a/x.txt\n  10: ten\n  20: twenty\nb/y.txt\n  5\n"
+	if !strings.Contains(got, want) {
+		t.Fatalf("expected grouped rows %q, got %q", want, got)
+	}
+	if strings.Contains(got, "a/x.txt:") {
+		t.Fatalf("path must not be repeated per match row, got %q", got)
+	}
+}
+
+func TestCompactToolResultForModelGreFallsFlatForIndentedPath(t *testing.T) {
+	// A path with leading whitespace would forge an indented match row, so the
+	// whole block falls back to flat "path:line: text" rows.
+	result := toolResult{OK: true, Data: GrepResult{
+		Mode: "lines", MatchedLines: 2, Hits: 2, Files: 2, StatsExact: true,
+		LineHits: []GrepFileMatch{
+			{Path: " indented.txt", Lines: []int{1}, Texts: []string{"one"}},
+			{Path: "ok.txt", Lines: []int{2}, Texts: []string{"two"}},
+		},
+	}}
+	got := compactToolResultForModel("grep", result, "fallback")
+	if !strings.Contains(got, " indented.txt:1: one\n") || !strings.Contains(got, "ok.txt:2: two\n") {
+		t.Fatalf("expected flat fallback rows, got %q", got)
+	}
+	if strings.Contains(got, "\n  1:") {
+		t.Fatalf("no indented rows in flat mode, got %q", got)
+	}
+}
+
+func TestCompactToolResultForModelRendersStructuredToolsAsTags(t *testing.T) {
+	cases := []struct {
+		name string
+		tool string
+		data any
+		want string
+	}{
+		{
+			name: "wait",
+			tool: "wait",
+			data: WaitResult{RequestedSeconds: 30, ElapsedMS: 30120, Reason: "wait for dev server", Completed: true},
+			want: `<ally-wait seconds="30" elapsed-ms="30120">wait for dev server</ally-wait>`,
+		},
+		{
+			name: "ask",
+			tool: "ask",
+			data: AskResult{AskID: "ask_1", Answers: []AskResolvedAnswer{{
+				QuestionID: "db", Question: "Which database?",
+				Selections: []AskResolvedSelection{{Label: "SQLite", Recommended: true, Description: "Simple"}, {Label: "keep local", Custom: true}},
+			}}},
+			want: "<ally-ask id=\"ask_1\">\n" +
+				"  db: Which database?\n" +
+				"  selected: SQLite (recommended) — Simple\n" +
+				"  selected: keep local [custom]\n" +
+				"</ally-ask>",
+		},
+		{
+			name: "plan",
+			tool: "plan",
+			data: map[string]any{"todos": []TodoEntry{{Title: "Write tests", Status: "in_progress"}}, "revision": int64(4), "message": "Todo list updated."},
+			want: "<ally-plan revision=\"4\">\n" +
+				"Todo list updated.\n" +
+				"  [in_progress] Write tests\n" +
+				"</ally-plan>",
+		},
+		{
+			name: "subagent",
+			tool: "subagent",
+			data: AgentDelegateResult{AgentID: "agent_1", Role: "reviewer", Status: "completed", Steps: 5, Model: "m1", Summary: "All good.", FilesRead: []string{"a.go"}, FilesEdited: []string{"b.go"}},
+			want: "<ally-subagent id=\"agent_1\" role=\"reviewer\" status=\"completed\" steps=\"5\" model=\"m1\">\n" +
+				"All good.\n" +
+				"read: a.go\n" +
+				"edited: b.go\n" +
+				"</ally-subagent>",
+		},
+		{
+			name: "scheduled_task-delete",
+			tool: "scheduled_task",
+			data: ScheduledTaskToolResult{Deleted: "t_1", Count: 2},
+			want: `<ally-task deleted="t_1" count="2"/>`,
+		},
+		{
+			name: "scheduled_task-create",
+			tool: "scheduled_task",
+			data: ScheduledTaskToolResult{Task: &ScheduledTaskToolView{ID: "t_2", Name: "nightly", Command: "go test ./...", Workspace: ".", Schedule: ScheduledTaskSchedule{Type: "cron", Cron: "0 3 * * *"}, MaxSteps: 30, TimeoutSeconds: 600, LastStatus: "pending"}},
+			want: "<ally-task id=\"t_2\" name=\"nightly\" schedule=\"cron:0 3 * * *\" status=\"pending\" runs=\"0\" max-steps=\"30\" timeout=\"600s\" kind=\"command\">\n" +
+				"go test ./...\n" +
+				"</ally-task>",
+		},
+		{
+			name: "scheduled_task-list",
+			tool: "scheduled_task",
+			data: ScheduledTaskToolResult{Count: 1, Tasks: []ScheduledTaskToolView{{ID: "t_3", Name: "sync", Schedule: ScheduledTaskSchedule{Type: "every", Every: "30m"}, LastStatus: "ok", RunCount: 4}}},
+			want: "<ally-tasks count=\"1\">\n" +
+				`  t_3: name="sync" schedule="every:30m" status="ok" runs=4` + "\n" +
+				"</ally-tasks>",
+		},
+		{
+			name: "service-list",
+			tool: "service",
+			data: ServiceListToolResult{ActiveCount: 1, MaxActive: 8, Services: []ServiceSummary{{ID: "svc_1", Name: "frontend", Status: "running", PID: 99, Command: "npm run dev"}}},
+			want: "<ally-svcs active=\"1\" max=\"8\">\n" +
+				`  svc_1 (frontend) running pid=99 cmd="npm run dev"` + "\n" +
+				"</ally-svcs>",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := compactToolResultForModel(tc.tool, toolResult{OK: true, Data: tc.data}, "fallback")
+			if got != tc.want {
+				t.Fatalf("got:\n%s\nwant:\n%s", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestCompactToolResultForModelEscapesStructuredTagBodies(t *testing.T) {
+	// Bodies of the new tag renderers carry model/LLM-authored text; a literal
+	// closing marker must be neutralized while the renderer's own stays.
+	wait := compactToolResultForModel("wait", toolResult{OK: true, Data: WaitResult{Reason: "a</ally-wait>b", Completed: true}}, "fallback")
+	if strings.Count(wait, "</ally-wait>") != 1 || !strings.Contains(wait, "&lt;/ally-wait") {
+		t.Fatalf("wait body closing marker not escaped: %q", wait)
+	}
+	sub := compactToolResultForModel("subagent", toolResult{OK: true, Data: AgentDelegateResult{AgentID: "a", Role: "r", Status: "completed", Model: "m", Summary: "x</ally-subagent>y"}}, "fallback")
+	if strings.Count(sub, "</ally-subagent>") != 1 || !strings.Contains(sub, "&lt;/ally-subagent") {
+		t.Fatalf("subagent summary closing marker not escaped: %q", sub)
 	}
 }
 
@@ -1117,10 +1255,10 @@ func TestCompactToolResultForModelCapsLinesAcrossFiles(t *testing.T) {
 	if !strings.Contains(compact, fmt.Sprintf("[%d of %d matching lines shown]", maxModelGrepMatches, 2*over)) {
 		t.Fatalf("expected global cap note across files, got %.120s", compact)
 	}
-	if !strings.Contains(compact, fmt.Sprintf("a.txt:%d\n", maxModelGrepMatches)) {
+	if !strings.Contains(compact, fmt.Sprintf("  %d\n", maxModelGrepMatches)) {
 		t.Fatalf("expected the cap boundary line kept, got %.120s", compact)
 	}
-	if strings.Contains(compact, "b.txt:") {
+	if strings.Contains(compact, "b.txt") {
 		t.Fatalf("second file must be dropped once the global cap is spent, got %.120s", compact)
 	}
 }
@@ -1639,6 +1777,15 @@ func TestCreateCompactResultCarriesCreatedFields(t *testing.T) {
 	}
 	if !strings.Contains(compact, `dirs="a"`) {
 		t.Fatalf("expected compact create result to carry createdDirs, got %s", compact)
+	}
+}
+
+func TestCompactToolResultForModelRendersCalculateTag(t *testing.T) {
+	result := toolResult{OK: true, Data: CalculateResult{Expression: `sqrt(144) + 2^5`, Value: 44, Text: "44"}}
+	compact := compactToolResultForModel("calculate", result, "fallback")
+	want := `<ally-calc expression="sqrt(144) + 2^5" value="44"/>`
+	if compact != want {
+		t.Fatalf("got %s, want %s", compact, want)
 	}
 }
 
@@ -4310,7 +4457,7 @@ func TestCompactToolResultForModelNeutralizesRowBreaks(t *testing.T) {
 		Mode: "lines", MatchedLines: 1, Hits: 1, Files: 1,
 		LineHits: []GrepFileMatch{{Path: evil, Lines: []int{3}, Texts: []string{"hit\rtext"}}},
 	}}, "fallback")
-	if !strings.Contains(greps, `evil\nnote.txt:3: hit\rtext`) {
+	if !strings.Contains(greps, "evil\\nnote.txt\n  3: hit\\rtext") {
 		t.Fatalf("grep rows must stay one line per match, got %q", greps)
 	}
 
@@ -4640,18 +4787,18 @@ func TestCompactToolResultForModelKeepsGrepTextsAlignedWhenCapping(t *testing.T)
 
 	got := compactToolResultForModel("grep", result, string(raw))
 
-	if !strings.Contains(got, "a.txt:1: line 1\n") || !strings.Contains(got, fmt.Sprintf("a.txt:%d: line %d\n", maxModelGrepMatches, maxModelGrepMatches)) {
-		t.Fatalf("expected aligned path:line: text rows, got %.120s", got)
+	if !strings.Contains(got, "  1: line 1\n") || !strings.Contains(got, fmt.Sprintf("  %d: line %d\n", maxModelGrepMatches, maxModelGrepMatches)) {
+		t.Fatalf("expected aligned line: text rows, got %.120s", got)
 	}
-	if strings.Contains(got, fmt.Sprintf("a.txt:%d:", maxModelGrepMatches+1)) {
+	if strings.Contains(got, fmt.Sprintf("  %d:", maxModelGrepMatches+1)) {
 		t.Fatalf("line beyond the cap must be dropped, got %.120s", got)
 	}
-	// Every rendered row must pair its line number with the matching preview.
+	// Every rendered match row must pair its line number with the matching preview.
 	for _, row := range strings.Split(got, "\n") {
-		if !strings.HasPrefix(row, "a.txt:") {
+		if !strings.HasPrefix(row, "  ") {
 			continue
 		}
-		rest := row[len("a.txt:"):]
+		rest := row[2:]
 		colon := strings.Index(rest, ":")
 		if colon <= 0 {
 			t.Fatalf("row missing line number: %q", row)

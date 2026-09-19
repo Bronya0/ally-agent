@@ -149,6 +149,11 @@ func toolResultSummary(name string, result *toolResult) string {
 		if json.Unmarshal(data, &r) == nil {
 			return fmt.Sprintf("%d entries", r.Count)
 		}
+	case "calculate":
+		var r CalculateResult
+		if decodeToolData(result.Data, &r) {
+			return "= " + r.Text
+		}
 	case "create", "remote_create_file":
 		return "created"
 	case "delete":
@@ -254,13 +259,12 @@ func compactToolDataForModel(name string, result toolResult, fullJSON string) st
 		// start/stop return ServiceInfo, list returns ServiceListToolResult,
 		// read returns ServiceReadResult. Discriminate by concrete type (not
 		// JSON reshaping, which would silently succeed for overlapping fields).
-		// Read and info carry real output bodies, so they render as tag blocks;
-		// list is pure structured metadata and stays a JSON payload.
+		// All three render as tag blocks; list keeps one summary row per service.
 		switch typed := result.Data.(type) {
 		case ServiceReadResult:
 			return renderServiceReadResultForModel(typed)
 		case ServiceListToolResult:
-			return marshalToolResultOrFallback(toolResult{OK: true, Data: typed}, fullJSON)
+			return renderServiceListResultForModel(typed)
 		case ServiceInfo:
 			return renderServiceInfoResultForModel(typed)
 		}
@@ -294,21 +298,283 @@ func compactToolDataForModel(name string, result toolResult, fullJSON string) st
 			return fullJSON
 		}
 		return renderWebFetchResultForModel(r)
+	case "calculate":
+		var r CalculateResult
+		if !decodeToolData(result.Data, &r) {
+			return fullJSON
+		}
+		return renderCalculateResultForModel(r)
+	case "scheduled_task":
+		var r ScheduledTaskToolResult
+		if !decodeToolData(result.Data, &r) {
+			return fullJSON
+		}
+		return renderScheduledTaskResultForModel(r)
+	case "wait":
+		var r WaitResult
+		if !decodeToolData(result.Data, &r) {
+			return fullJSON
+		}
+		return renderWaitResultForModel(r)
+	case "ask":
+		var r AskResult
+		if !decodeToolData(result.Data, &r) {
+			return fullJSON
+		}
+		return renderAskResultForModel(r)
+	case "plan":
+		var r struct {
+			Todos    []TodoEntry `json:"todos"`
+			Revision int64       `json:"revision"`
+			Message  string      `json:"message"`
+		}
+		if !decodeToolData(result.Data, &r) {
+			return fullJSON
+		}
+		return renderPlanResultForModel(r.Todos, r.Revision, r.Message)
+	case "subagent", "agent_delegate":
+		var r AgentDelegateResult
+		if !decodeToolData(result.Data, &r) {
+			return fullJSON
+		}
+		return renderSubagentResultForModel(r)
 	default:
 		return fullJSON
 	}
 }
 
-// renderGrepResultForModel renders a grep result as a <ally-grep> tag block: one
-// "path:line: text" row per match (the shape models read natively), or one
-// "path: count=N" row per file in count mode, with exact totals, the explicit
-// mode, and the paging metadata on the opening tag. The caps are identical to
-// the previous JSON envelope — file groups, total lines, and the global
-// text-preview byte budget — with reduction notes as trailing lines. An
-// unknown mode — or a row, path, count, or note that would forge the closing
-// marker — falls back to a JSON envelope rebuilt from the already-capped
-// data, so the fallback stays inside the same model-side caps instead of
-// returning the raw full JSON.
+// renderCalculateResultForModel renders a calculate result as a self-closing
+// <ally-calc> tag: the expression plus its value. Self-closing (no body), so
+// there is no closing-marker collision surface; the expression is attr-escaped.
+func renderCalculateResultForModel(r CalculateResult) string {
+	return `<ally-calc expression="` + attrEscape(r.Expression) + `" value="` + attrEscape(r.Text) + `"/>`
+}
+
+// renderServiceListResultForModel renders a service list as an <ally-svcs>
+// block: one summary row per service (id, optional name, status, pid/exit,
+// buffered output size, error). Output tails stay out on purpose — the model
+// must action=read a specific id to inspect output.
+func renderServiceListResultForModel(r ServiceListToolResult) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, `<ally-svcs active="%d" max="%d">`+"\n", r.ActiveCount, r.MaxActive)
+	for _, s := range r.Services {
+		row := "  " + s.ID
+		if s.Name != "" {
+			row += " (" + s.Name + ")"
+		}
+		row += " " + s.Status
+		if s.PID > 0 {
+			row += fmt.Sprintf(" pid=%d", s.PID)
+		}
+		if s.ExitCode != 0 {
+			row += fmt.Sprintf(" exit=%d", s.ExitCode)
+		}
+		if s.OutputBytes > 0 {
+			row += fmt.Sprintf(" bytes=%d", s.OutputBytes)
+		}
+		if s.OutputTruncated {
+			row += " truncated"
+		}
+		if s.Command != "" {
+			row += " cmd=" + strconv.Quote(s.Command)
+		}
+		if s.Error != "" {
+			row += " error=" + strconv.Quote(s.Error)
+		}
+		b.WriteString(neutralizeRowBreaks(row) + "\n")
+	}
+	if len(r.Services) == 0 {
+		b.WriteString("  (none)\n")
+	}
+	return strings.TrimRight(escapeClosingMarker(b.String(), "</ally-svcs"), "\n") + "\n</ally-svcs>"
+}
+
+// scheduledTaskScheduleSpec compacts a schedule struct into one attribute
+// value ("cron:0 3 * * *", "every:30m", "at:2026-01-02T15:04:05Z").
+func scheduledTaskScheduleSpec(s ScheduledTaskSchedule) string {
+	switch s.Type {
+	case "cron":
+		return "cron:" + s.Cron
+	case "every":
+		return "every:" + s.Every
+	case "at":
+		return "at:" + s.At
+	}
+	return s.Type
+}
+
+// renderScheduledTaskRow renders one list row: id, name, schedule, last
+// status, run count, and optional running/max-steps/timeout flags.
+func renderScheduledTaskRow(t ScheduledTaskToolView) string {
+	row := fmt.Sprintf("  %s: name=%s schedule=%s status=%s runs=%d", t.ID, strconv.Quote(t.Name), strconv.Quote(scheduledTaskScheduleSpec(t.Schedule)), strconv.Quote(t.LastStatus), t.RunCount)
+	if t.Running {
+		row += " running"
+	}
+	if t.MaxSteps > 0 {
+		row += fmt.Sprintf(" max-steps=%d", t.MaxSteps)
+	}
+	if t.TimeoutSeconds > 0 {
+		row += fmt.Sprintf(" timeout=%ds", t.TimeoutSeconds)
+	}
+	return neutralizeRowBreaks(row)
+}
+
+// renderScheduledTaskResultForModel renders the scheduled_task tool result:
+// a self-closing <ally-task deleted> for deletes, a single <ally-task> block
+// (instruction/command as the body) for creates, and an <ally-tasks> list
+// block with one row per task otherwise.
+func renderScheduledTaskResultForModel(r ScheduledTaskToolResult) string {
+	switch {
+	case r.Deleted != "":
+		out := fmt.Sprintf(`<ally-task deleted=%s`, strconv.Quote(r.Deleted))
+		if r.Count > 0 {
+			out += fmt.Sprintf(` count="%d"`, r.Count)
+		}
+		return out + "/>"
+	case r.Task != nil:
+		t := r.Task
+		var b strings.Builder
+		fmt.Fprintf(&b, `<ally-task id=%s name=%s schedule=%s status=%s runs="%d"`, strconv.Quote(t.ID), strconv.Quote(t.Name), strconv.Quote(scheduledTaskScheduleSpec(t.Schedule)), strconv.Quote(t.LastStatus), t.RunCount)
+		if t.Running {
+			b.WriteString(` running`)
+		}
+		if t.MaxSteps > 0 {
+			fmt.Fprintf(&b, ` max-steps="%d"`, t.MaxSteps)
+		}
+		if t.TimeoutSeconds > 0 {
+			fmt.Fprintf(&b, ` timeout="%ds"`, t.TimeoutSeconds)
+		}
+		body, kind := t.Instruction, "instruction"
+		if body == "" {
+			body, kind = t.Command, "command"
+		}
+		fmt.Fprintf(&b, ` kind=%s`, strconv.Quote(kind))
+		if strings.TrimSpace(body) == "" {
+			return b.String() + "/>"
+		}
+		b.WriteString(">\n")
+		b.WriteString(escapeClosingMarker(neutralizeRowBreaks(body), "</ally-task"))
+		return b.String() + "\n</ally-task>"
+	default:
+		var b strings.Builder
+		fmt.Fprintf(&b, `<ally-tasks count="%d"`, r.Count)
+		if r.Truncated {
+			b.WriteString(` truncated`)
+		}
+		b.WriteString(">\n")
+		for _, t := range r.Tasks {
+			b.WriteString(renderScheduledTaskRow(t) + "\n")
+		}
+		if len(r.Tasks) == 0 {
+			b.WriteString("  (none)\n")
+		}
+		return strings.TrimRight(escapeClosingMarker(b.String(), "</ally-tasks"), "\n") + "\n</ally-tasks>"
+	}
+}
+
+// renderWaitResultForModel renders a wait result as <ally-wait> with the
+// requested/elapsed durations and the reason as the body (single row).
+func renderWaitResultForModel(r WaitResult) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, `<ally-wait seconds="%d" elapsed-ms="%d"`, r.RequestedSeconds, r.ElapsedMS)
+	if !r.Completed {
+		b.WriteString(` interrupted`)
+	}
+	b.WriteByte('>')
+	if r.Reason != "" {
+		b.WriteString(escapeClosingMarker(neutralizeRowBreaks(r.Reason), "</ally-wait"))
+	}
+	return b.String() + "</ally-wait>"
+}
+
+// renderAskResultForModel renders resolved ask answers as an <ally-ask>
+// block: one indented "qid: question" row per answer, then one indented
+// "selected: label" row per chosen option.
+func renderAskResultForModel(r AskResult) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, `<ally-ask id=%s>`+"\n", strconv.Quote(r.AskID))
+	for _, ans := range r.Answers {
+		fmt.Fprintf(&b, "  %s: %s\n", neutralizeRowBreaks(ans.QuestionID), neutralizeRowBreaks(ans.Question))
+		for _, sel := range ans.Selections {
+			row := "  selected: " + sel.Label
+			if sel.Recommended {
+				row += " (recommended)"
+			}
+			if sel.Custom {
+				row += " [custom]"
+			}
+			if sel.Description != "" {
+				row += " — " + sel.Description
+			}
+			b.WriteString(neutralizeRowBreaks(row) + "\n")
+		}
+	}
+	if len(r.Answers) == 0 {
+		b.WriteString("  (no answers)\n")
+	}
+	return strings.TrimRight(escapeClosingMarker(b.String(), "</ally-ask"), "\n") + "\n</ally-ask>"
+}
+
+// renderPlanResultForModel renders the plan tool result as an <ally-plan>
+// block: the outcome message, then one indented "[status] title" row per
+// todo entry.
+func renderPlanResultForModel(todos []TodoEntry, revision int64, message string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, `<ally-plan revision="%d">`+"\n", revision)
+	if message != "" {
+		b.WriteString(neutralizeRowBreaks(message) + "\n")
+	}
+	for _, td := range todos {
+		fmt.Fprintf(&b, "  [%s] %s\n", td.Status, neutralizeRowBreaks(td.Title))
+	}
+	if len(todos) == 0 {
+		b.WriteString("  (empty)\n")
+	}
+	return strings.TrimRight(escapeClosingMarker(b.String(), "</ally-plan"), "\n") + "\n</ally-plan>"
+}
+
+// renderSubagentResultForModel renders a sub-agent result as an
+// <ally-subagent> block: identity/status attrs on the opening tag, the
+// summary as the body, then one "read:"/"edited:" row per touched file.
+func renderSubagentResultForModel(r AgentDelegateResult) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, `<ally-subagent id=%s role=%s status=%s steps="%d" model=%s`, strconv.Quote(r.AgentID), strconv.Quote(r.Role), strconv.Quote(r.Status), r.Steps, strconv.Quote(r.Model))
+	if r.Description != "" {
+		fmt.Fprintf(&b, ` description=%s`, strconv.Quote(r.Description))
+	}
+	if r.Error != "" {
+		fmt.Fprintf(&b, ` error=%s`, strconv.Quote(r.Error))
+	}
+	body := strings.TrimSpace(r.Summary)
+	if body == "" && len(r.FilesRead) == 0 && len(r.FilesEdited) == 0 {
+		return b.String() + "/>"
+	}
+	b.WriteString(">\n")
+	rows := make([]string, 0, 1+len(r.FilesRead)+len(r.FilesEdited))
+	if body != "" {
+		rows = append(rows, body) // summary keeps its own line breaks
+	}
+	for _, f := range r.FilesRead {
+		rows = append(rows, "read: "+neutralizeRowBreaks(f))
+	}
+	for _, f := range r.FilesEdited {
+		rows = append(rows, "edited: "+neutralizeRowBreaks(f))
+	}
+	b.WriteString(escapeClosingMarker(strings.Join(rows, "\n"), "</ally-subagent"))
+	return b.String() + "\n</ally-subagent>"
+}
+
+// renderGrepResultForModel renders a grep result as a <ally-grep> tag block:
+// lines mode groups matches by file — one bare path row per file group, then
+// one indented "line: text" row per matching line (the colon is present only
+// when the text preview survived the byte budget) — while count mode keeps
+// one "path: count=N" row per file. Exact totals, the explicit mode, and the
+// paging metadata ride on the opening tag. The caps are identical to the
+// previous JSON envelope — file groups, total lines, and the global
+// text-preview byte budget — with reduction notes as trailing lines. A path
+// with leading whitespace would blur the indent-based row grammar, so in that
+// case the whole block falls back to flat "path:line: text" rows; any row,
+// path, count, or note that would forge the closing marker is escaped.
 func renderGrepResultForModel(r GrepResult) string {
 	mode := r.Mode
 	if mode == "" {
@@ -410,10 +676,26 @@ func renderGrepResultForModel(r GrepResult) string {
 		b.WriteString(` offset-exhausted`)
 	}
 	b.WriteString(">\n")
+	// Leading-whitespace paths would break the indent grammar (a match row is
+	// recognized by its two-space indent); render the whole block flat instead.
+	flatRows := false
+	for _, fh := range lineHits {
+		if strings.HasPrefix(fh.Path, " ") || strings.HasPrefix(fh.Path, "\t") {
+			flatRows = true
+			break
+		}
+	}
 	for _, fh := range lineHits {
 		path := neutralizeRowBreaks(fh.Path)
+		if !flatRows {
+			b.WriteString(path + "\n")
+		}
 		for i, line := range fh.Lines {
-			fmt.Fprintf(&b, "%s:%d", path, line)
+			if flatRows {
+				fmt.Fprintf(&b, "%s:%d", path, line)
+			} else {
+				fmt.Fprintf(&b, "  %d", line)
+			}
 			if i < len(fh.Texts) && fh.Texts[i] != "" {
 				b.WriteString(": " + neutralizeRowBreaks(fh.Texts[i]))
 			}
