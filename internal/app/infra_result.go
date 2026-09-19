@@ -231,7 +231,7 @@ func compactToolDataForModel(name string, result toolResult, fullJSON string) st
 		if !decodeToolData(result.Data, &r) {
 			return fullJSON
 		}
-		return renderListFilesResultForModel(r, fullJSON)
+		return renderListFilesResultForModel(r)
 	case "edit", "remote_edit":
 		var r MultiEditResult
 		if !decodeToolData(result.Data, &r) {
@@ -249,7 +249,7 @@ func compactToolDataForModel(name string, result toolResult, fullJSON string) st
 		if !decodeToolData(result.Data, &r) {
 			return fullJSON
 		}
-		return renderCommandResultForModel(r, fullJSON)
+		return renderCommandResultForModel(r)
 	case "service":
 		// start/stop return ServiceInfo, list returns ServiceListToolResult,
 		// read returns ServiceReadResult. Discriminate by concrete type (not
@@ -258,18 +258,18 @@ func compactToolDataForModel(name string, result toolResult, fullJSON string) st
 		// list is pure structured metadata and stays a JSON payload.
 		switch typed := result.Data.(type) {
 		case ServiceReadResult:
-			return renderServiceReadResultForModel(typed, fullJSON)
+			return renderServiceReadResultForModel(typed)
 		case ServiceListToolResult:
 			return marshalToolResultOrFallback(toolResult{OK: true, Data: typed}, fullJSON)
 		case ServiceInfo:
-			return renderServiceInfoResultForModel(typed, fullJSON)
+			return renderServiceInfoResultForModel(typed)
 		}
 		// Fallback for any unexpected shape: try legacy ServiceInfo decode.
 		var r ServiceInfo
 		if !decodeToolData(result.Data, &r) {
 			return fullJSON
 		}
-		return renderServiceInfoResultForModel(r, fullJSON)
+		return renderServiceInfoResultForModel(r)
 	case "delete":
 		var r DeleteResult
 		if !decodeToolData(result.Data, &r) {
@@ -281,19 +281,19 @@ func compactToolDataForModel(name string, result toolResult, fullJSON string) st
 		if !decodeToolData(result.Data, &r) {
 			return fullJSON
 		}
-		return renderGrepResultForModel(r, fullJSON)
+		return renderGrepResultForModel(r)
 	case "http_request":
 		var r HTTPRequestToolResult
 		if !decodeToolData(result.Data, &r) {
 			return fullJSON
 		}
-		return renderHTTPResultForModel(r, fullJSON)
+		return renderHTTPResultForModel(r)
 	case "web_fetch":
 		var r WebFetchResult
 		if !decodeToolData(result.Data, &r) {
 			return fullJSON
 		}
-		return renderWebFetchResultForModel(r, fullJSON)
+		return renderWebFetchResultForModel(r)
 	default:
 		return fullJSON
 	}
@@ -309,7 +309,7 @@ func compactToolDataForModel(name string, result toolResult, fullJSON string) st
 // marker — falls back to a JSON envelope rebuilt from the already-capped
 // data, so the fallback stays inside the same model-side caps instead of
 // returning the raw full JSON.
-func renderGrepResultForModel(r GrepResult, fullJSON string) string {
+func renderGrepResultForModel(r GrepResult) string {
 	mode := r.Mode
 	if mode == "" {
 		// Legacy results predate outputMode and default to lines today.
@@ -383,7 +383,8 @@ func renderGrepResultForModel(r GrepResult, fullJSON string) string {
 		// next-offset still resumes after the whole page, so the model would skip
 		// those files with no notice.
 	default:
-		return fullJSON
+		// Unknown mode: render a minimal block rather than a malformed one.
+		return fmt.Sprintf("<ally-grep mode=\"%s\">unknown mode</ally-grep>", mode)
 	}
 	var b strings.Builder
 	// The mode is spelled out on every block: a count row ("path: count=N")
@@ -432,58 +433,21 @@ func renderGrepResultForModel(r GrepResult, fullJSON string) string {
 		b.WriteString(n + "\n")
 	}
 	// Rows, counts, and notes carry outside-injection text (paths, match
-	// previews, skip reasons); a literal closing marker would forge the block
-	// boundary, so fall back to a JSON envelope over the already-capped data
-	// (JSON escaping neutralizes the marker and every cap stays enforced).
-	rendered := b.String()
-	if strings.Contains(rendered, "</ally-grep") {
-		data := map[string]any{
-			"mode":         mode,
-			"matchedLines": r.MatchedLines,
-			"hits":         r.Hits,
-			"files":        r.Files,
-			"truncated":    r.Truncated,
-			"nextOffset":   nextOffset,
-		}
-		if mode == "lines" {
-			data["matches"] = lineHits
-		} else {
-			data["fileCounts"] = fileCounts
-		}
-		if !r.StatsExact {
-			data["statsExact"] = false
-		}
-		if r.OffsetExhausted {
-			data["offsetExhausted"] = true
-		}
-		if len(r.Skipped) > 0 {
-			data["skipped"] = r.Skipped
-		}
-		if len(r.Warnings) > 0 {
-			data["warnings"] = r.Warnings
-		}
-		if len(notes) > 0 {
-			data["reductionNotes"] = notes
-		}
-		return marshalToolResultOrFallback(toolResult{OK: true, Data: data}, fullJSON)
-	}
-	return strings.TrimRight(rendered, "\n") + "\n</ally-grep>"
+	// previews, skip reasons); a literal closing marker in them would forge
+	// the block boundary, so the marker shape is escaped (readable but inert).
+	return strings.TrimRight(escapeClosingMarker(b.String(), "</ally-grep"), "\n") + "\n</ally-grep>"
 }
 
 // renderHTTPResultForModel renders an HTTP response as an <ally-http> block: the
 // body drops in verbatim (no JSON escaping) and status rides on the opening
 // tag. The request url is not echoed (the model just sent it) and statusText
-// is inferable from status, so both are dropped. Body text that itself
-// contains the closing marker falls back to a JSON envelope carrying the
-// already-capped body — remote content must never forge the block boundary,
-// and the fallback must never bypass the model-side cap either.
-func renderHTTPResultForModel(r HTTPRequestToolResult, fullJSON string) string {
+// is inferable from status, so both are dropped. A closing-marker shape in
+// the body is escaped (see escapeClosingMarker) — no fallback path.
+func renderHTTPResultForModel(r HTTPRequestToolResult) string {
 	body, reduced := compactTextForModel(r.Body, compactTextSpec{limit: maxModelWebOutput})
 	if body == "" {
-		// A body-less response (binary or JSON-only shape) still needs a payload.
-		// The substituted preview passes the same model-side cap as the body
-		// path, so neither the block nor the fallback below can carry an uncapped
-		// response body into model context.
+		// A body-less response (binary or JSON-only shape) still needs a payload;
+		// the substituted preview passes the same model-side cap as the body path.
 		substitute := r.JSONPreview
 		if substitute == "" && r.JSON != nil {
 			if raw, err := json.Marshal(r.JSON); err == nil {
@@ -495,24 +459,6 @@ func renderHTTPResultForModel(r HTTPRequestToolResult, fullJSON string) string {
 			body, subReduced = compactTextForModel(substitute, compactTextSpec{limit: maxModelWebOutput})
 			reduced = reduced || subReduced
 		}
-	}
-	if strings.Contains(body, "</ally-http") {
-		data := map[string]any{
-			"status":     r.Status,
-			"statusText": r.StatusText,
-			"url":        r.URL,
-			"body":       body,
-		}
-		if r.FinalURL != "" && r.FinalURL != r.URL {
-			data["finalUrl"] = r.FinalURL
-		}
-		if r.ContentType != "" {
-			data["contentType"] = r.ContentType
-		}
-		if r.Truncated || reduced {
-			data["truncated"] = true
-		}
-		return marshalToolResultOrFallback(toolResult{OK: true, Data: data}, fullJSON)
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, `<ally-http status="%d"`, r.Status)
@@ -526,27 +472,17 @@ func renderHTTPResultForModel(r HTTPRequestToolResult, fullJSON string) string {
 		b.WriteString(` truncated`)
 	}
 	b.WriteString(">\n")
-	b.WriteString(body)
+	b.WriteString(escapeClosingMarker(body, "</ally-http"))
 	b.WriteString("\n</ally-http>")
 	return b.String()
 }
 
 // renderWebFetchResultForModel renders a readable-page fetch as a <ally-fetch>
 // block: the article text drops in verbatim and links append as trailing
-// "link: text <url>" rows. Article text or link rows containing the closing
-// marker fall back to a JSON envelope carrying the already-capped text —
-// remote content must never forge the block boundary, and the fallback must
-// never bypass the model-side cap either.
-func renderWebFetchResultForModel(r WebFetchResult, fullJSON string) string {
+// "link: text <url>" rows. Closing-marker shapes in the text or link rows are
+// escaped (see escapeClosingMarker) — no fallback path.
+func renderWebFetchResultForModel(r WebFetchResult) string {
 	text, reduced := compactTextForModel(r.Text, compactTextSpec{limit: maxModelWebOutput})
-	if strings.Contains(text, "</ally-fetch") {
-		return webFetchJSONEnvelopeForModel(r, text, reduced, fullJSON)
-	}
-	for _, link := range r.Links {
-		if strings.Contains(link.Text, "</ally-fetch") || strings.Contains(link.URL, "</ally-fetch") {
-			return webFetchJSONEnvelopeForModel(r, text, reduced, fullJSON)
-		}
-	}
 	var b strings.Builder
 	fmt.Fprintf(&b, `<ally-fetch status="%d"`, r.Status)
 	if r.Title != "" {
@@ -564,30 +500,9 @@ func renderWebFetchResultForModel(r WebFetchResult, fullJSON string) string {
 		b.WriteString("\nlink: " + neutralizeRowBreaks(link.Text) + " <" + neutralizeRowBreaks(link.URL) + ">")
 	}
 	b.WriteString("\n</ally-fetch>")
-	return b.String()
-}
-
-// webFetchJSONEnvelopeForModel is the fallback when the fetch text or a link
-// row cannot be rendered inside a <ally-fetch> block: the JSON envelope carries
-// the already-capped text (JSON escaping neutralizes the marker) instead of
-// returning the raw full JSON, so the model-side cap stays enforced.
-func webFetchJSONEnvelopeForModel(r WebFetchResult, text string, reduced bool, fullJSON string) string {
-	data := map[string]any{
-		"url":    r.URL,
-		"status": r.Status,
-		"title":  r.Title,
-		"text":   text,
-	}
-	if r.FinalURL != "" && r.FinalURL != r.URL {
-		data["finalUrl"] = r.FinalURL
-	}
-	if len(r.Links) > 0 {
-		data["links"] = r.Links
-	}
-	if r.Truncated || reduced {
-		data["truncated"] = true
-	}
-	return marshalToolResultOrFallback(toolResult{OK: true, Data: data}, fullJSON)
+	// Escape only the content portion; the renderer's own closing tag above must
+	// stay literal, so strip it before escaping and append it back.
+	return escapeClosingMarker(strings.TrimSuffix(b.String(), "\n</ally-fetch>"), "</ally-fetch") + "\n</ally-fetch>"
 }
 
 // renderReadResultForModel renders a batch read result as <ally-file> tag blocks
@@ -596,10 +511,9 @@ func webFetchJSONEnvelopeForModel(r WebFetchResult, text string, reduced bool, f
 // escaping tax (every newline/quote/tab doubles inside a JSON string) and no
 // repeated envelope keys. The line numbers come from the read pipeline
 // (ContentFormat "line_numbers") and pass through untouched — the edit
-// lineRange contract depends on them. A body that itself contains the closing
-// marker switches that one section to a version-suffixed tag so the boundary
-// stays unforgeable; with no version token to make that suffix unique, the
-// marker shape in the body is escaped instead.
+// lineRange contract depends on them. A closing-marker shape in the body is
+// escaped (see escapeClosingMarker): the text stays readable and the block
+// boundary stays unforgeable.
 func renderReadResultForModel(r BatchReadResult) string {
 	const reusedNote = "[Content omitted: this exact path/range was already returned to you earlier in this turn. version is unchanged — safe to reuse for edit. If you need the content again, re-read this same range and it will be returned in full.]"
 	if len(r.Files) == 0 {
@@ -608,34 +522,19 @@ func renderReadResultForModel(r BatchReadResult) string {
 	var b strings.Builder
 	injected := false
 	for _, f := range r.Files {
-		tag := "ally-file"
 		body := f.Content
 		if f.Reused {
 			body = reusedNote
 		}
-		if strings.Contains(body, "</ally-file") {
-			// The version (a content hash) is what makes the suffixed closing marker
-			// unforgeable. With no version token — or a body that happens to contain
-			// the suffixed marker — the suffix proves nothing, so neutralize the
-			// marker shape in the body instead: the text stays readable and the
-			// block boundary stays authoritative.
-			if f.Version == "" || strings.Contains(body, "</ally-file-"+f.Version) {
-				body = strings.ReplaceAll(body, "</ally-file", "&lt;/ally-file")
-			} else {
-				tag = "ally-file-" + f.Version
-			}
-		}
-		b.WriteString("<" + tag + ` path="` + attrEscape(f.Path) + `"`)
+		body = escapeClosingMarker(body, "</ally-file")
+		b.WriteString(`<ally-file path="` + attrEscape(f.Path) + `"`)
 		if f.Error != "" {
 			code := f.ErrorCode
 			if code == "" {
 				code = "E_READ_FAILED"
 			}
-			message := f.Error
-			if strings.Contains(message, "</"+tag) {
-				message = strings.ReplaceAll(message, "<", "&lt;")
-			}
-			b.WriteString(` error="` + attrEscape(code) + `">` + message + "</" + tag + ">\n")
+			message := escapeClosingMarker(f.Error, "</ally-file")
+			b.WriteString(` error="` + attrEscape(code) + `">` + message + "</ally-file>\n")
 			continue
 		}
 		b.WriteString(` version="` + attrEscape(f.Version) + `"`)
@@ -657,7 +556,7 @@ func renderReadResultForModel(r BatchReadResult) string {
 		}
 		b.WriteString(">\n")
 		b.WriteString(body)
-		b.WriteString("\n</" + tag + ">\n")
+		b.WriteString("\n</ally-file>\n")
 	}
 	if injected {
 		b.WriteString("Image file(s) injected as user image input.\n")
@@ -671,31 +570,14 @@ func renderReadResultForModel(r BatchReadResult) string {
 // message earlier, and re-quoting them only doubles long commands in history.
 // A zero exit code is the implicit success path (attribute omitted); non-zero
 // exit, timeout, truncation, the spilled-output pointer, and a promotion to a
-// background service (`promoted-to-service`) stay as attributes. Output that
-// itself contains the closing marker falls back to a JSON envelope rebuilt from
-// the same fields the block carries — never the raw fullJSON, which would
-// re-add the command/shell/duration noise the block deliberately drops.
-func renderCommandResultForModel(r CommandResult, fullJSON string) string {
+// background service (`promoted-to-service`) stay as attributes. A
+// closing-marker shape in the output is escaped (see escapeClosingMarker).
+func renderCommandResultForModel(r CommandResult) string {
 	body := "(no output)"
 	if r.Output != "" {
 		body = strings.TrimRight(r.Output, "\n")
 	}
-	if strings.Contains(body, "</ally-cmd") {
-		data := map[string]any{"output": body, "exitCode": r.ExitCode}
-		if r.TimedOut {
-			data["timedOut"] = true
-		}
-		if r.PromotedToService {
-			data["promotedToService"] = true
-		}
-		if r.Truncated {
-			data["truncated"] = true
-		}
-		if r.OutputFilePath != "" {
-			data["outputFilePath"] = r.OutputFilePath
-		}
-		return marshalToolResultOrFallback(toolResult{OK: true, Data: data}, fullJSON)
-	}
+	body = escapeClosingMarker(body, "</ally-cmd")
 	var b strings.Builder
 	b.WriteString("<ally-cmd")
 	if r.ExitCode != 0 {
@@ -719,20 +601,14 @@ func renderCommandResultForModel(r CommandResult, fullJSON string) string {
 	return b.String()
 }
 
-func renderListFilesResultForModel(r ListFilesResult, fullJSON string) string {
+func renderListFilesResultForModel(r ListFilesResult) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, `<ally-files count="%d"`, r.Count)
 	if r.Truncated {
 		b.WriteString(` truncated`)
 	}
 	b.WriteString(">\n")
-	// A path containing the closing marker would forge the block boundary
-	// (Unix filenames may include '<'); fall back to the JSON envelope,
-	// where the path is escaped, before writing any row.
 	for _, entry := range r.Entries {
-		if entry.MoreFiles == 0 && strings.Contains(entry.Path, "</ally-files") {
-			return listFilesJSONEnvelopeForModel(r, fullJSON)
-		}
 		if entry.MoreFiles > 0 {
 			// Per-directory overflow placeholder: same wording as the
 			// workspace map legend.
@@ -751,35 +627,7 @@ func renderListFilesResultForModel(r ListFilesResult, fullJSON string) string {
 	case r.Truncated:
 		b.WriteString("Entry limit reached; narrow path or raise limit to see the rest.\n")
 	}
-	return strings.TrimRight(b.String(), "\n") + "\n</ally-files>"
-}
-
-// listFilesJSONEnvelopeForModel is the fallback for a listing whose paths
-// cannot be rendered as a <ally-files> block (a path contains the closing
-// marker). It rebuilds the compact JSON envelope from the already-bounded
-// entries instead of returning the raw full JSON, so the per-entry UI
-// metadata (name/size/modTime) still never reaches the model.
-func listFilesJSONEnvelopeForModel(r ListFilesResult, fullJSON string) string {
-	var b strings.Builder
-	for _, entry := range r.Entries {
-		if entry.MoreFiles > 0 {
-			fmt.Fprintf(&b, "+%d more files\n", entry.MoreFiles)
-			continue
-		}
-		b.WriteString(entry.Path)
-		if entry.Dir {
-			b.WriteByte('/')
-		}
-		b.WriteByte('\n')
-	}
-	data := map[string]any{"entries": strings.TrimRight(b.String(), "\n"), "count": r.Count, "truncated": r.Truncated}
-	switch {
-	case r.Count == 0:
-		data["note"] = "Empty listing: the directory is empty or everything was filtered as hidden/ignored. Use includeHidden/includeIgnored to widen it."
-	case r.Truncated:
-		data["note"] = "Entry limit reached; narrow path or raise limit to see the rest."
-	}
-	return marshalToolResultOrFallback(toolResult{OK: true, Data: data}, fullJSON)
+	return strings.TrimRight(escapeClosingMarker(b.String(), "</ally-files"), "\n") + "\n</ally-files>"
 }
 
 // renderMultiEditResultForModel renders a batch edit as one self-closing
@@ -849,10 +697,9 @@ func renderDeleteResultForModel(r DeleteResult) string {
 
 // renderServiceReadResultForModel renders a service read as a tag block; the
 // output body drops in verbatim and byte accounting rides on attributes. The
-// model-side tail clamp stays at 8 KiB. Output containing the closing marker
-// falls back to a JSON envelope carrying the already-clamped tail (service
-// logs can echo arbitrary text) — the clamp must survive the fallback.
-func renderServiceReadResultForModel(r ServiceReadResult, fullJSON string) string {
+// model-side tail clamp stays at 8 KiB; a closing-marker shape in the output
+// is escaped (see escapeClosingMarker).
+func renderServiceReadResultForModel(r ServiceReadResult) string {
 	const maxReadOutputForModel = 8 * 1024
 	output := r.Output
 	reducedFrom := 0
@@ -860,23 +707,7 @@ func renderServiceReadResultForModel(r ServiceReadResult, fullJSON string) strin
 		reducedFrom = len(output)
 		output = tailString(output, maxReadOutputForModel)
 	}
-	if strings.Contains(output, "</ally-svc-read") {
-		data := map[string]any{
-			"id":            r.ID,
-			"status":        r.Status,
-			"returnedBytes": r.ReturnedBytes,
-			"bufferBytes":   r.BufferBytes,
-			"totalBytes":    r.TotalBytes,
-			"truncated":     r.Truncated,
-			"fromByte":      r.FromByte,
-			"output":        output,
-		}
-		if reducedFrom > 0 {
-			data["outputReduced"] = true
-			data["originalOutputChars"] = reducedFrom
-		}
-		return marshalToolResultOrFallback(toolResult{OK: true, Data: data}, fullJSON)
-	}
+	output = escapeClosingMarker(output, "</ally-svc-read")
 	var b strings.Builder
 	b.WriteString(`<ally-svc-read id="` + attrEscape(r.ID) + `"`)
 	if r.Status != "" {
@@ -901,33 +732,11 @@ func renderServiceReadResultForModel(r ServiceReadResult, fullJSON string) strin
 // renderServiceInfoResultForModel renders a start/stop result. The command
 // and cwd are not echoed (the model just sent them) and RFC3339 timestamps
 // are noise; only identity, liveness, and the output tail reach the model.
-// The tail is clamped once, before either path renders it: a collision with
-// the closing marker falls back to a JSON envelope carrying that same clamped
-// tail plus the metadata the block would have shown, so the model-side clamp
-// survives the fallback.
-func renderServiceInfoResultForModel(r ServiceInfo, fullJSON string) string {
+// A closing-marker shape in the tail is escaped (see escapeClosingMarker).
+func renderServiceInfoResultForModel(r ServiceInfo) string {
 	outputTail := tailString(r.OutputTail, 4*1024)
 	reduced := len(outputTail) < len(r.OutputTail)
-	if strings.Contains(outputTail, "</ally-svc>") {
-		data := map[string]any{
-			"id":         r.ID,
-			"status":     r.Status,
-			"pid":        r.PID,
-			"exitCode":   r.ExitCode,
-			"outputTail": outputTail,
-		}
-		if r.Name != "" {
-			data["name"] = r.Name
-		}
-		if r.Error != "" {
-			data["error"] = r.Error
-		}
-		if reduced {
-			data["outputReduced"] = true
-			data["originalOutputChars"] = len(r.OutputTail)
-		}
-		return marshalToolResultOrFallback(toolResult{OK: true, Data: data}, fullJSON)
-	}
+	outputTail = escapeClosingMarker(outputTail, "</ally-svc>")
 	var b strings.Builder
 	b.WriteString(`<ally-svc id="` + attrEscape(r.ID) + `"`)
 	if r.Name != "" {
@@ -957,9 +766,7 @@ func renderServiceInfoResultForModel(r ServiceInfo, fullJSON string) string {
 	return b.String()
 }
 
-// mcpTruncationNote explains a capped third-party output to the model. Both the
-// tag block and the JSON fallback carry it, so the guidance never depends on
-// which rendering path ran.
+// mcpTruncationNote explains a capped third-party output to the model.
 const mcpTruncationNote = "Output exceeded the model-context safety cap and was truncated (head+tail kept). Narrow the tool arguments or paginate via the server if it supports it."
 
 func renderMcpResultForModel(result toolResult, fullJSON string) string {
@@ -970,17 +777,7 @@ func renderMcpResultForModel(result toolResult, fullJSON string) string {
 		return fullJSON
 	}
 	capped, reduced := compactTextForModel(r.Output, compactTextSpec{limit: maxModelToolOutput, head: modelToolHeadBytes, tail: modelToolTailBytes})
-	if strings.Contains(capped, "</ally-mcp") {
-		// The marker is inert inside a JSON string, but the fallback must
-		// still carry the capped output: the raw fullJSON has no bound on
-		// third-party MCP text.
-		data := map[string]any{"output": capped}
-		if reduced {
-			data["outputTruncated"] = true
-			data["truncationNote"] = mcpTruncationNote
-		}
-		return marshalToolResultOrFallback(toolResult{OK: true, Data: data}, fullJSON)
-	}
+	capped = escapeClosingMarker(capped, "</ally-mcp")
 	var b strings.Builder
 	b.WriteString("<ally-mcp")
 	if reduced {
@@ -993,6 +790,19 @@ func renderMcpResultForModel(result toolResult, fullJSON string) string {
 	}
 	b.WriteString("\n</ally-mcp>")
 	return b.String()
+}
+
+// escapeClosingMarker neutralizes a literal closing-marker shape inside a tag
+// body: external text (file contents, command output, web pages, service
+// logs) may carry "</ally-cmd" etc., and only this renderer's own closing tag
+// may announce the block end. Escaping the "<" of the marker shape keeps the
+// text readable while making the boundary unforgeable — one rule for every
+// renderer, no fallback paths.
+func escapeClosingMarker(body, marker string) string {
+	if !strings.Contains(body, marker) {
+		return body
+	}
+	return strings.ReplaceAll(body, marker, "&lt;"+marker[1:])
 }
 
 // neutralizeClosingMarkers makes closing-marker-shaped text inert in the free

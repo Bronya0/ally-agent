@@ -4273,32 +4273,22 @@ func TestCompactToolResultForModelCapsMcpOutput(t *testing.T) {
 
 	collide := toolResult{OK: true, Data: map[string]any{"output": "x</ally-mcp>y"}}
 	got := compactToolDataForModel("mcp__srv__tool", collide, `{"fallback":true}`)
-	var decoded struct {
-		OK   bool `json:"ok"`
-		Data struct {
-			Output string `json:"output"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal([]byte(got), &decoded); err != nil || !decoded.OK || decoded.Data.Output != "x</ally-mcp>y" {
-		t.Fatalf("output containing the closing marker must fall back to a JSON envelope carrying the capped output, got %s", got)
+	if got != "<ally-mcp>\nx&lt;/ally-mcp>y\n</ally-mcp>" {
+		t.Fatalf("output containing the closing marker must keep the tag block with the marker escaped, got %s", got)
 	}
 
-	// 超限且自带闭合标记：回退信封必须同样受限，绝不能退回无上限的 fullJSON。
+	// 超限且自带闭合标记：标签体同样受限（夹取后再转义），不得回退无上限的 fullJSON。
 	bigCollide := toolResult{OK: true, Data: map[string]any{"output": strings.Repeat("x</ally-mcp>y", 2+maxModelToolOutput/len("x</ally-mcp>y"))}}
 	fullCollide, _ := json.Marshal(bigCollide)
 	capped := compactToolDataForModel("mcp__srv__tool", bigCollide, string(fullCollide))
-	var cappedDecoded struct {
-		OK   bool `json:"ok"`
-		Data struct {
-			Output          string `json:"output"`
-			OutputTruncated bool   `json:"outputTruncated"`
-		} `json:"data"`
+	if !strings.Contains(capped, "<ally-mcp truncated>") || !strings.Contains(capped, mcpTruncationNote) {
+		t.Fatalf("the oversized colliding output must stay a truncated tag block, got %.128s", capped)
 	}
-	if err := json.Unmarshal([]byte(capped), &cappedDecoded); err != nil || !cappedDecoded.OK || !cappedDecoded.Data.OutputTruncated {
-		t.Fatalf("fallback envelope must carry the truncated capped output, got %.128s", capped)
+	if strings.Count(capped, "</ally-mcp>") != 1 {
+		t.Fatalf("only the renderer's own closing marker may appear literally, got %.128s", capped)
 	}
-	if n := utf8.RuneCountInString(cappedDecoded.Data.Output); n > maxModelToolOutput+200 {
-		t.Fatalf("fallback output must stay near %d runes, got %d", maxModelToolOutput, n)
+	if n := utf8.RuneCountInString(capped); n > maxModelToolOutput*3/2+200+len("<ally-mcp truncated>\n\n</ally-mcp>")+len(mcpTruncationNote) {
+		t.Fatalf("capped output must stay near %d runes (cap + escape expansion), got %d", maxModelToolOutput, n)
 	}
 }
 
@@ -4373,34 +4363,26 @@ func TestCompactToolResultForModelCommandRendersTagBlock(t *testing.T) {
 		"output": "x</ally-cmd>y", "exitCode": -1, "timedOut": true, "promotedToService": true,
 	}}
 	promotedCollideModel := compactToolDataForModel("command", promotedCollide, `{"fallback":true}`)
-	if !strings.Contains(promotedCollideModel, `"promotedToService":true`) {
-		t.Fatalf("the command fallback envelope must keep the promotion flag, got %s", promotedCollideModel)
+	if !strings.Contains(promotedCollideModel, ` promoted-to-service`) || !strings.Contains(promotedCollideModel, "x&lt;/ally-cmd>y") {
+		t.Fatalf("a colliding promoted command must keep the tag block with the marker escaped, got %s", promotedCollideModel)
 	}
 
 	collide := toolResult{OK: true, Data: map[string]any{
 		"command": "go build ./...", "shell": "bash", "output": "x</ally-cmd>y", "exitCode": 3,
 	}}
 	collideModel := compactToolDataForModel("command", collide, `{"fallback":true}`)
-	var collideDecoded struct {
-		OK   bool `json:"ok"`
-		Data struct {
-			Output   string `json:"output"`
-			ExitCode int    `json:"exitCode"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal([]byte(collideModel), &collideDecoded); err != nil || !collideDecoded.OK ||
-		collideDecoded.Data.Output != "x</ally-cmd>y" || collideDecoded.Data.ExitCode != 3 {
-		t.Fatalf("colliding output must fall back to an envelope carrying the same fields, got %s", collideModel)
+	if !strings.Contains(collideModel, `<ally-cmd exit="3">`) || !strings.Contains(collideModel, "x&lt;/ally-cmd>y") ||
+		strings.Count(collideModel, "</ally-cmd>") != 1 {
+		t.Fatalf("colliding output must keep the tag block with the marker escaped, got %s", collideModel)
 	}
 	if strings.Contains(collideModel, "go build") || strings.Contains(collideModel, `"shell"`) {
-		t.Fatalf("the command fallback must not re-add block-dropped fields, got %s", collideModel)
+		t.Fatalf("the block must not re-add block-dropped fields, got %s", collideModel)
 	}
 }
 
 func TestCompactToolResultForModelReadRendersTagBlocks(t *testing.T) {
 	// read 模型侧改为 <ally-file> 标签块：行号正文原样落体（无 JSON 转义），元数据走
-	// 属性；正文自带 </ally-file 时该节切换到 version 后缀标签，无 version 可用时
-	// 改用实体转义中和标记形状，边界始终不可伪造。
+	// 属性；正文自带 </ally-file 形状时统一实体转义中和，边界始终不可伪造。
 	result := toolResult{OK: true, Data: &BatchReadResult{Files: []BatchReadResultItem{
 		{Path: "a.go", Content: "1: hello\n2: world", Version: "abc123", StartLine: 1, EndLine: 2, TotalLines: 40, Truncated: true},
 		{Path: "b.html", Content: "1: x</ally-file>y", Version: "def456"},
@@ -4413,14 +4395,13 @@ func TestCompactToolResultForModelReadRendersTagBlocks(t *testing.T) {
 	if !strings.Contains(got, "\n1: hello\n2: world\n</ally-file>") {
 		t.Fatalf("line-numbered body must drop in verbatim, got %s", got)
 	}
-	if !strings.Contains(got, `<ally-file-def456 path="b.html"`) || !strings.Contains(got, "\n1: x</ally-file>y\n</ally-file-def456>") {
-		t.Fatalf("body containing the closing marker must switch to the version-suffixed tag, got %s", got)
+	if !strings.Contains(got, `<ally-file path="b.html" version="def456">`) || !strings.Contains(got, "\n1: x&lt;/ally-file>y\n</ally-file>") {
+		t.Fatalf("body containing the closing marker must be escaped in place, got %s", got)
 	}
 	if !strings.Contains(got, `<ally-file path="c.txt" error="E_IO">read failed: bad sector</ally-file>`) {
 		t.Fatalf("failed file must render as a self-describing error entry, got %s", got)
 	}
-	// 生产者没给 version 时后缀失去唯一性（hash 才是防伪根），必须改中和正文里的
-	// 标记形状，否则正文能被当成块边界。
+	// 正文自带闭合标记：转义后仍不可伪造边界（字面标记只剩渲染器自己写的那个）。
 	noVersion := toolResult{OK: true, Data: &BatchReadResult{Files: []BatchReadResultItem{
 		{Path: "d.txt", Content: "1: x</ally-file>y"},
 	}}}
@@ -4461,136 +4442,93 @@ func TestCompactToolResultForModelNeutralizesClosingMarkersInEditText(t *testing
 	}
 }
 
-// TestCompactToolResultForModelClosingMarkerFallback 锁定标签体渲染的边界防护：
+// TestCompactToolResultForModelEscapesClosingMarkersInBodies 锁定标签体渲染的边界防护：
 // http 正文、fetch 正文/链接、grep 行预览、服务日志、服务状态输出、命令输出、
-// list_files 路径自带闭合标记（</ally-http、</ally-fetch、</ally-grep、</ally-svc-read、</ally-svc、</ally-cmd、
-// </ally-files）时必须回退 JSON 信封（转义后标记无害），外部内容不能伪造块边界；且回退
-// 信封必须携带「同一份已加工载荷」，不得退回无上限的原文，也不得绕过模型侧上限。
-func TestCompactToolResultForModelClosingMarkerFallback(t *testing.T) {
-	type envelope struct {
-		OK   bool           `json:"ok"`
-		Data map[string]any `json:"data"`
-	}
-	mustEnvelope := func(tool string, result toolResult, wantKey string, wantVal any) map[string]any {
+// list_files 路径自带闭合标记形状时统一就地转义（</ally-x → &lt;/ally-x），字面闭合
+// 标记只允许渲染器自己写的那一个；外部内容不能伪造块边界，且没有任何回退路径。
+func TestCompactToolResultForModelEscapesClosingMarkersInBodies(t *testing.T) {
+	mustEscaped := func(tool string, result toolResult, marker string) string {
 		t.Helper()
 		got := compactToolDataForModel(tool, result, `{"fallback":true}`)
-		var decoded envelope
-		if err := json.Unmarshal([]byte(got), &decoded); err != nil || !decoded.OK {
-			t.Fatalf("%s collision must fall back to an ok JSON envelope, got %s", tool, got)
+		escaped := strings.Replace(marker, "<", "&lt;", 1)
+		if !strings.Contains(got, escaped) {
+			t.Fatalf("%s collision must escape the marker shape in place, got %s", tool, got)
 		}
-		if v, ok := decoded.Data[wantKey]; !ok || fmt.Sprint(v) != fmt.Sprint(wantVal) {
-			t.Fatalf("%s fallback envelope must carry %s=%v, got %s", tool, wantKey, wantVal, got)
+		if n := strings.Count(got, marker); n != 1 {
+			t.Fatalf("%s payload must carry exactly one literal closing marker, got %d:\n%s", tool, n, got)
 		}
-		if decoded.Data["fallback"] == true {
-			t.Fatalf("%s fallback must not be the raw full JSON", tool)
-		}
-		return decoded.Data
+		return got
 	}
 
 	httpRes := toolResult{OK: true, Data: map[string]any{
 		"status": 200, "contentType": "text/html", "body": "x</ally-http>y",
 	}}
-	mustEnvelope("http_request", httpRes, "body", "x</ally-http>y")
+	mustEscaped("http_request", httpRes, "</ally-http>")
 
 	fetchRes := toolResult{OK: true, Data: map[string]any{
 		"status": 200, "text": "page body",
 		"links": []map[string]any{{"text": "docs", "url": "https://ex.com/a</ally-fetch>b"}},
 	}}
-	mustEnvelope("web_fetch", fetchRes, "text", "page body")
+	mustEscaped("web_fetch", fetchRes, "</ally-fetch>")
 
 	grepRes := toolResult{OK: true, Data: &GrepResult{
 		Mode: "lines", MatchedLines: 1, Hits: 1, Files: 1,
 		LineHits: []GrepFileMatch{{Path: "a.txt", Lines: []int{3}, Texts: []string{"x</ally-grep>y"}}},
 	}}
-	if data := mustEnvelope("grep", grepRes, "mode", "lines"); !strings.Contains(fmt.Sprint(data["matches"]), "x</ally-grep>y") {
-		t.Fatalf("grep fallback envelope must carry the capped matches, got %v", data["matches"])
-	}
+	mustEscaped("grep", grepRes, "</ally-grep>")
 
 	svcRead := toolResult{OK: true, Data: ServiceReadResult{
 		ID: "svc_1", Output: "x</ally-svc-read>y", ReturnedBytes: 12, BufferBytes: 12, TotalBytes: 12,
 	}}
-	mustEnvelope("service", svcRead, "output", "x</ally-svc-read>y")
+	mustEscaped("service", svcRead, "</ally-svc-read>")
 
 	svcInfo := toolResult{OK: true, Data: ServiceInfo{
 		ID: "svc_2", Status: "running", PID: 7, OutputTail: "boot\nx</ally-svc>y",
 	}}
-	if data := mustEnvelope("service", svcInfo, "id", "svc_2"); !strings.Contains(fmt.Sprint(data["outputTail"]), "x</ally-svc>y") {
-		t.Fatalf("service info fallback envelope must carry the colliding tail, got %v", data["outputTail"])
-	}
+	mustEscaped("service", svcInfo, "</ally-svc>")
 
 	cmdCollide := toolResult{OK: true, Data: map[string]any{
 		"command": "npm run dev", "shell": "bash", "output": "x</ally-cmd>y", "exitCode": 3,
 	}}
-	if data := mustEnvelope("command", cmdCollide, "output", "x</ally-cmd>y"); data["command"] != nil || data["shell"] != nil {
-		t.Fatalf("command fallback envelope must not re-add block-dropped fields, got %v", data)
+	if got := mustEscaped("command", cmdCollide, "</ally-cmd>"); strings.Contains(got, "npm run") || strings.Contains(got, `"shell"`) {
+		t.Fatalf("command block must not re-add block-dropped fields, got %s", got)
 	}
 
 	listRes := toolResult{OK: true, Data: ListFilesResult{
 		Count:   1,
 		Entries: []FileEntry{{Path: "evil/</ally-files>note.txt"}},
 	}}
-	if data := mustEnvelope("list_files", listRes, "count", 1); !strings.Contains(fmt.Sprint(data["entries"]), "evil/</ally-files>note.txt") {
-		t.Fatalf("list_files fallback envelope must carry the colliding path, got %v", data["entries"])
-	}
+	mustEscaped("list_files", listRes, "</ally-files>")
 
-	// 超限 http 正文自带闭合标记：回退信封同样受模型侧上限约束（比对解码后的
-	// 正文长度，而非信封字节数——json.Marshal 的 HTML 转义会放大字节体积）。
+	// 超限 http 正文自带闭合标记：标签体同样受模型侧上限约束并标记 truncated（转义会
+	// 放大字节体积，上限放宽到 1.5 倍 + 余量）。
 	bigBody := strings.Repeat("z</ally-http>", 1+maxModelWebOutput/len("z</ally-http>"))
 	bigHTTP := toolResult{OK: true, Data: map[string]any{"status": 200, "body": bigBody}}
 	bigFull, _ := json.Marshal(bigHTTP)
 	bigGot := compactToolDataForModel("http_request", bigHTTP, string(bigFull))
-	var bigDecoded struct {
-		OK   bool `json:"ok"`
-		Data struct {
-			Body      string `json:"body"`
-			Truncated bool   `json:"truncated"`
-		} `json:"data"`
+	if !strings.Contains(bigGot, `<ally-http status="200" truncated>`) || strings.Count(bigGot, "</ally-http>") != 1 {
+		t.Fatalf("colliding http body must stay a truncated tag block, got %.64s", bigGot)
 	}
-	if err := json.Unmarshal([]byte(bigGot), &bigDecoded); err != nil || !bigDecoded.OK {
-		t.Fatalf("colliding http body must fall back to an ok JSON envelope, got %.64s", bigGot)
-	}
-	if n := utf8.RuneCountInString(bigDecoded.Data.Body); n > maxModelWebOutput+200 || !bigDecoded.Data.Truncated {
-		t.Fatalf("colliding http fallback body must stay near %d runes and be flagged truncated, got %d truncated=%v", maxModelWebOutput, n, bigDecoded.Data.Truncated)
+	if n := utf8.RuneCountInString(bigGot); n > maxModelWebOutput*3/2+256 {
+		t.Fatalf("colliding http body must stay near %d runes, got %d", maxModelWebOutput, n)
 	}
 
-	// 正文为空、只有 JSON 预览的响应：替换进来的预览必须过同一道模型侧上限（旧实现
-	// 在 cap 之后才把预览顶上，替换路径完全不受限）。
+	// 正文为空、只有 JSON 预览的响应：替换进来的预览必须过同一道模型侧上限。
 	bigPreview := strings.Repeat("y</ally-http>z", 1+maxModelWebOutput/len("y</ally-http>z"))
 	jsonOnly := toolResult{OK: true, Data: map[string]any{"status": 200, "jsonPreview": bigPreview}}
 	jsonOnlyFull, _ := json.Marshal(jsonOnly)
 	jsonOnlyGot := compactToolDataForModel("http_request", jsonOnly, string(jsonOnlyFull))
-	var jsonOnlyDecoded struct {
-		OK   bool `json:"ok"`
-		Data struct {
-			Body      string `json:"body"`
-			Truncated bool   `json:"truncated"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal([]byte(jsonOnlyGot), &jsonOnlyDecoded); err != nil || !jsonOnlyDecoded.OK {
-		t.Fatalf("a JSON-only response must fall back to an ok JSON envelope, got %.64s", jsonOnlyGot)
-	}
-	if n := utf8.RuneCountInString(jsonOnlyDecoded.Data.Body); n > maxModelWebOutput+200 || !jsonOnlyDecoded.Data.Truncated {
-		t.Fatalf("the substituted JSON preview must stay near %d runes and be flagged truncated, got %d truncated=%v", maxModelWebOutput, n, jsonOnlyDecoded.Data.Truncated)
+	if !strings.Contains(jsonOnlyGot, `<ally-http status="200" truncated>`) || strings.Count(jsonOnlyGot, "</ally-http>") != 1 {
+		t.Fatalf("the substituted JSON preview must stay a truncated tag block, got %.64s", jsonOnlyGot)
 	}
 
-	// 超限服务状态输出自带闭合标记：回退信封同样受 4 KiB 模型侧夹取约束（旧实现直接
-	// 返回 fullJSON，尾夹取被整个绕过，最多能灌上游的 8 KiB 预览上限）。
+	// 超限服务状态输出自带闭合标记：标签体同样受 4 KiB 模型侧夹取约束。
 	bigTail := strings.Repeat("l", 8*1024) + "x</ally-svc>y"
 	bigSvc := toolResult{OK: true, Data: ServiceInfo{ID: "svc_big", OutputTail: bigTail}}
 	bigSvcFull, _ := json.Marshal(bigSvc)
 	bigSvcGot := compactToolDataForModel("service", bigSvc, string(bigSvcFull))
-	var svcDecoded struct {
-		OK   bool `json:"ok"`
-		Data struct {
-			OutputTail    string `json:"outputTail"`
-			OutputReduced bool   `json:"outputReduced"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal([]byte(bigSvcGot), &svcDecoded); err != nil || !svcDecoded.OK {
-		t.Fatalf("colliding service tail must fall back to an ok JSON envelope, got %.64s", bigSvcGot)
-	}
-	if n := len(svcDecoded.Data.OutputTail); n > 4*1024 || !svcDecoded.Data.OutputReduced || !strings.Contains(svcDecoded.Data.OutputTail, "</ally-svc") {
-		t.Fatalf("colliding service tail must stay clamped to 4 KiB, got %d bytes reduced=%v", n, svcDecoded.Data.OutputReduced)
+	if !strings.Contains(bigSvcGot, ` reduced-from="`) || strings.Count(bigSvcGot, "</ally-svc>") != 1 {
+		t.Fatalf("colliding service tail must stay a clamped tag block, got %.64s", bigSvcGot)
 	}
 }
 

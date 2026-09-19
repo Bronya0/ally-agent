@@ -148,11 +148,11 @@ type toolResult struct {                       // infra_result.go:19
 | `command` | `<ally-cmd exit timed-out promoted-to-service truncated full>` 块，输出零转义落体；command/cwd 不回显（模型刚在参数里写过） |
 | `service` read/info | `<ally-svc-read>` / `<ally-svc>` 块（字节账目走属性），`list` 仍走 JSON |
 | `edit` / `create` / `delete` | 自闭合属性标签；summary/validation 走属性，warnings 走尾部行（自由文本经 `neutralizeClosingMarkers` 中和标记形状） |
-| `http_request` / `web_fetch` | `<http>` / `<fetch>` 块（砍 url/statusText 回显，链接作尾部行） |
+| `http_request` / `web_fetch` | `<ally-http>` / `<ally-fetch>` 块（砍 url/statusText 回显，链接作尾部行） |
 | `mcp__*` | 第三方无上限输出，统一夹到内置上限（`renderMcpResultForModel`） |
 | 任何失败 / 解码失败 | 回退 `fullJSON`（`marshalToolResultOrFallback`），永不因压缩丢信息 |
 
-正文或自由文本自带闭合标记时回退 JSON 信封，且信封只装「已过 cap 的载荷」，绝不裸退 `fullJSON`（read 的正文是例外：用 version 后缀标签避开碰撞，没有 version 时中和标记形状）。
+正文或自由文本自带闭合标记形状时统一就地转义（`</ally-x` → `&lt;/ally-x`，收口在 `escapeClosingMarker`）：字面闭合标记只允许渲染器自己写的那一个，外部内容无法伪造块边界，也没有任何回退路径需要保 cap。转义在 cap 之后发生，极端对抗性内容（密集标记）最多膨胀约 1/3，测试按 1.5 倍上限覆盖。
 
 `injectEnvelopeWarnings` 把参数警告合并进 `data.warnings`，解析失败就退化成追加一行纯文本——**通知必须送达模型**。
 
