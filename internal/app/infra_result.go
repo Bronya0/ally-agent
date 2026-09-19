@@ -165,7 +165,8 @@ func toolResultSummary(name string, result *toolResult) string {
 	return ""
 }
 
-// compactToolResultForModel returns the model-facing JSON for a tool result.
+// compactToolResultForModel returns the model-facing payload for a tool
+// result: a tag block for the covered tools, the JSON envelope otherwise.
 // Per-tool compaction runs first; the envelope warnings (unknown-argument
 // notices and validation notes) are then re-injected so they survive
 // even when a tool's compact payload drops the top-level envelope fields.
@@ -213,7 +214,7 @@ func compactToolDataForModel(name string, result toolResult, fullJSON string) st
 	// MCP tool output is third-party text with no producer-side cap; clamp it
 	// to the built-in bound so one runaway server cannot flood model context.
 	if strings.HasPrefix(name, "mcp__") {
-		return compactMcpOutputForModel(result, fullJSON)
+		return renderMcpResultForModel(result, fullJSON)
 	}
 	switch name {
 	case "read", "remote_read":
@@ -221,339 +222,239 @@ func compactToolDataForModel(name string, result toolResult, fullJSON string) st
 		if !decodeToolData(result.Data, &r) {
 			return fullJSON
 		}
-		injected := false
-		files := make([]map[string]any, 0, len(r.Files))
-		for _, f := range r.Files {
-			content := f.Content
-			if f.Reused {
-				content = "[Content omitted: this exact path/range was already returned to you earlier in this turn. version is unchanged — safe to reuse for edit. If you need the content again, re-read this same range and it will be returned in full.]"
-			}
-			item := map[string]any{
-				"path":    f.Path,
-				"content": content,
-				"version": f.Version,
-			}
-			if f.StartLine > 0 {
-				item["startLine"] = f.StartLine
-			}
-			if f.EndLine > 0 {
-				item["endLine"] = f.EndLine
-			}
-			if f.TotalLines > 0 {
-				item["totalLines"] = f.TotalLines
-			}
-			if f.Truncated {
-				item["truncated"] = true
-			}
-			if f.Reused {
-				item["reused"] = true
-			}
-			if f.Error != "" {
-				item["error"] = f.Error
-			}
-			if f.ErrorCode != "" {
-				item["errorCode"] = f.ErrorCode
-			}
-			if f.DataURL != "" {
-				item["image"] = "sent as image input in following message"
-				injected = true
-			}
-			files = append(files, item)
-		}
-		data := map[string]any{"files": files}
-		if injected {
-			data["note"] = "Image file(s) injected as user image input."
-		}
-		return marshalToolResultOrFallback(toolResult{OK: true, Data: data}, fullJSON)
+		return renderReadResultForModel(r)
 	case "list_files":
 		// The UI explorer consumes the full FileEntry structs (name/size/
-		// modTime/symlink); the model only needs the tree shape. A
-		// newline-joined path list with a trailing slash for directories cuts
-		// a typical 200-entry listing to roughly a quarter of the tokens —
-		// name duplicates the path suffix and modTime is RFC3339 noise.
+		// modTime/symlink); the model only needs the tree shape: a plain path
+		// list (trailing slash marks directories) inside a <files> block.
 		var r ListFilesResult
 		if !decodeToolData(result.Data, &r) {
 			return fullJSON
 		}
-		var b strings.Builder
-		b.Grow(24 * len(r.Entries))
-		for _, entry := range r.Entries {
-			if entry.MoreFiles > 0 {
-				// Per-directory overflow placeholder: same wording as the
-				// workspace map legend.
-				fmt.Fprintf(&b, "+%d more files\n", entry.MoreFiles)
-				continue
-			}
-			b.WriteString(entry.Path)
-			if entry.Dir {
-				b.WriteByte('/')
-			}
-			b.WriteByte('\n')
-		}
-		data := map[string]any{"entries": strings.TrimRight(b.String(), "\n"), "count": r.Count, "truncated": r.Truncated}
-		switch {
-		case r.Count == 0:
-			data["note"] = "Empty listing: the directory is empty or everything was filtered as hidden/ignored. Use includeHidden/includeIgnored to widen it."
-		case r.Truncated:
-			data["note"] = "Entry limit reached; narrow path or raise limit to see the rest."
-		}
-		return marshalToolResultOrFallback(toolResult{OK: true, Data: data}, fullJSON)
+		return renderListFilesResultForModel(r, fullJSON)
 	case "edit", "remote_edit":
 		var r MultiEditResult
 		if !decodeToolData(result.Data, &r) {
 			return fullJSON
 		}
-		files := make([]map[string]any, 0, len(r.Files))
-		for _, file := range r.Files {
-			files = append(files, map[string]any{
-				"path":    file.Path,
-				"version": file.Version,
-			})
-		}
-		data := map[string]any{
-			"files":   files,
-			"summary": r.Summary,
-		}
-		if len(r.Warnings) > 0 {
-			data["warnings"] = r.Warnings
-		}
-		if r.Validation != "" {
-			data["validation"] = r.Validation
-		}
-		return marshalToolResultOrFallback(toolResult{OK: true, Data: data}, fullJSON)
+		return renderMultiEditResultForModel(r)
 	case "replace_exact", "replace_lines", "create":
 		var r EditResult
 		if !decodeToolData(result.Data, &r) {
 			return fullJSON
 		}
-		data := map[string]any{
-			"path":    r.Path,
-			"version": r.Version,
-			"summary": r.Summary,
-		}
-		if r.Created != nil {
-			data["created"] = *r.Created
-		}
-		if len(r.CreatedDirs) > 0 {
-			data["createdDirs"] = r.CreatedDirs
-		}
-		if r.Validation != "" {
-			data["validation"] = r.Validation
-		}
-		if len(r.Warnings) > 0 {
-			data["warnings"] = r.Warnings
-		}
-		return marshalToolResultOrFallback(toolResult{OK: true, Data: data}, fullJSON)
+		return renderEditResultForModel(r)
 	case "command", "remote_run_command":
 		var r CommandResult
 		if !decodeToolData(result.Data, &r) {
 			return fullJSON
 		}
-		data := map[string]any{
-			"command":  r.Command,
-			"cwd":      r.Cwd,
-			"output":   r.Output,
-			"exitCode": r.ExitCode,
-		}
-		if r.TimedOut {
-			data["timedOut"] = true
-		}
-		if r.Truncated {
-			data["truncated"] = true
-		}
-		if r.OutputFilePath != "" {
-			data["outputFilePath"] = r.OutputFilePath
-		}
-		return marshalToolResultOrFallback(toolResult{OK: true, Data: data}, fullJSON)
+		return renderCommandResultForModel(r, fullJSON)
 	case "service":
-		// service now has four actions with distinct result
-		// types stored in result.Data: start/stop return ServiceInfo, list
-		// returns ServiceListToolResult, read returns ServiceReadResult.
-		// Discriminate by concrete type (not JSON reshaping, which would
-		// silently succeed for overlapping fields) so the model receives a
-		// compact, action-appropriate payload.
+		// start/stop return ServiceInfo, list returns ServiceListToolResult,
+		// read returns ServiceReadResult. Discriminate by concrete type (not
+		// JSON reshaping, which would silently succeed for overlapping fields).
+		// Read and info carry real output bodies, so they render as tag blocks;
+		// list is pure structured metadata and stays a JSON payload.
 		switch typed := result.Data.(type) {
 		case ServiceReadResult:
-			output := typed.Output
-			const maxReadOutputForModel = 8 * 1024
-			data := map[string]any{
-				"id":            typed.ID,
-				"status":        typed.Status,
-				"returnedBytes": typed.ReturnedBytes,
-				"bufferBytes":   typed.BufferBytes,
-				"totalBytes":    typed.TotalBytes,
-				"truncated":     typed.Truncated,
-				"fromByte":      typed.FromByte,
-				"output":        output,
-			}
-			if len(output) > maxReadOutputForModel {
-				data["output"] = tailString(output, maxReadOutputForModel)
-				data["outputReduced"] = true
-				data["originalOutputChars"] = len(output)
-				data["reductionNote"] = "Service output shortened for model context; UI received the full read."
-			}
-			return marshalToolResultOrFallback(toolResult{OK: true, Data: data}, fullJSON)
+			return renderServiceReadResultForModel(typed, fullJSON)
 		case ServiceListToolResult:
-			// list already omits output tails; pass through unchanged so the
-			// model sees activeCount/maxActive and the per-service metadata.
 			return marshalToolResultOrFallback(toolResult{OK: true, Data: typed}, fullJSON)
 		case ServiceInfo:
-			r := typed
-			outputTail := tailString(r.OutputTail, 4*1024)
-			data := map[string]any{
-				"id":         r.ID,
-				"name":       r.Name,
-				"command":    r.Command,
-				"cwd":        r.Cwd,
-				"pid":        r.PID,
-				"status":     r.Status,
-				"startedAt":  r.StartedAt,
-				"stoppedAt":  r.StoppedAt,
-				"exitCode":   r.ExitCode,
-				"outputTail": outputTail,
-				"error":      r.Error,
-			}
-			if len(outputTail) < len(r.OutputTail) {
-				data["outputReduced"] = true
-				data["originalOutputChars"] = len(r.OutputTail)
-				data["reductionNote"] = "Startup output shortened for model context; UI received the full output."
-			}
-			return marshalToolResultOrFallback(toolResult{OK: true, Data: data}, fullJSON)
+			return renderServiceInfoResultForModel(typed, fullJSON)
 		}
 		// Fallback for any unexpected shape: try legacy ServiceInfo decode.
 		var r ServiceInfo
 		if !decodeToolData(result.Data, &r) {
 			return fullJSON
 		}
-		outputTail := tailString(r.OutputTail, 4*1024)
-		data := map[string]any{
-			"id":         r.ID,
-			"name":       r.Name,
-			"command":    r.Command,
-			"cwd":        r.Cwd,
-			"pid":        r.PID,
-			"status":     r.Status,
-			"startedAt":  r.StartedAt,
-			"stoppedAt":  r.StoppedAt,
-			"exitCode":   r.ExitCode,
-			"outputTail": outputTail,
-			"error":      r.Error,
-		}
-		if len(outputTail) < len(r.OutputTail) {
-			data["outputReduced"] = true
-			data["originalOutputChars"] = len(r.OutputTail)
-			data["reductionNote"] = "Startup output shortened for model context; UI received the full output."
-		}
-		return marshalToolResultOrFallback(toolResult{OK: true, Data: data}, fullJSON)
+		return renderServiceInfoResultForModel(r, fullJSON)
 	case "delete":
 		var r DeleteResult
 		if !decodeToolData(result.Data, &r) {
 			return fullJSON
 		}
-		data := map[string]any{
-			"deleted": r.Deleted,
-			"path":    r.Path,
-			"kind":    r.Kind,
-		}
-		if r.RemovedFiles > 0 {
-			data["removedFiles"] = r.RemovedFiles
-		}
-		if r.RemovedDirs > 0 {
-			data["removedDirs"] = r.RemovedDirs
-		}
-		return marshalToolResultOrFallback(toolResult{OK: true, Data: data}, fullJSON)
+		return renderDeleteResultForModel(r)
 	case "grep":
 		var r GrepResult
 		if !decodeToolData(result.Data, &r) {
 			return fullJSON
 		}
-		mode := r.Mode
-		if mode == "" {
-			// Legacy results predate outputMode and default to lines today.
-			mode = "lines"
+		return renderGrepResultForModel(r, fullJSON)
+	case "http_request":
+		var r HTTPRequestToolResult
+		if !decodeToolData(result.Data, &r) {
+			return fullJSON
 		}
-		lineHits := r.LineHits
-		fileCounts := r.FileCounts
+		return renderHTTPResultForModel(r, fullJSON)
+	case "web_fetch":
+		var r WebFetchResult
+		if !decodeToolData(result.Data, &r) {
+			return fullJSON
+		}
+		return renderWebFetchResultForModel(r, fullJSON)
+	default:
+		return fullJSON
+	}
+}
+
+// renderGrepResultForModel renders a grep result as a <grep> tag block: one
+// "path:line: text" row per match (the shape models read natively), or one
+// "path: count=N" row per file in count mode, with exact totals, the explicit
+// mode, and the paging metadata on the opening tag. The caps are identical to
+// the previous JSON envelope — file groups, total lines, and the global
+// text-preview byte budget — with reduction notes as trailing lines. An
+// unknown mode — or a row, path, count, or note that would forge the closing
+// marker — falls back to a JSON envelope rebuilt from the already-capped
+// data, so the fallback stays inside the same model-side caps instead of
+// returning the raw full JSON.
+func renderGrepResultForModel(r GrepResult, fullJSON string) string {
+	mode := r.Mode
+	if mode == "" {
+		// Legacy results predate outputMode and default to lines today.
+		mode = "lines"
+	}
+	lineHits := r.LineHits
+	fileCounts := r.FileCounts
+	nextOffset := r.NextOffset
+	var notes []string
+	switch mode {
+	case "lines":
+		sampledLines := 0
+		for _, fh := range lineHits {
+			sampledLines += len(fh.Lines)
+		}
+		if len(lineHits) > maxModelGrepFileGroups {
+			lineHits = lineHits[:maxModelGrepFileGroups]
+			notes = append(notes, "[some file groups omitted]")
+		}
+		totalLines := 0
+		for _, fh := range lineHits {
+			totalLines += len(fh.Lines)
+		}
+		if totalLines > maxModelGrepMatches {
+			capped := make([]GrepFileMatch, 0, len(lineHits))
+			remaining := maxModelGrepMatches
+			keptLines := 0
+			for _, fh := range lineHits {
+				if remaining <= 0 {
+					break
+				}
+				lines := fh.Lines
+				if len(lines) > remaining {
+					lines = lines[:remaining]
+				}
+				remaining -= len(lines)
+				keptLines += len(lines)
+				// Trim the previews with the kept line numbers; legacy
+				// results without texts keep none.
+				texts := fh.Texts
+				if len(texts) > len(lines) {
+					texts = texts[:len(lines)]
+				}
+				capped = append(capped, GrepFileMatch{Path: fh.Path, Lines: lines, Texts: texts})
+			}
+			lineHits = capped
+			notes = append(notes, fmt.Sprintf("[%d of %d matching lines shown]", keptLines, totalLines))
+		}
+		// Text previews carry a global byte budget on top of the line count:
+		// once exceeded, later entries keep their line numbers but drop the
+		// text (read tool covers them when needed).
+		var textsReduced bool
+		lineHits, textsReduced = capGrepLineTexts(lineHits, maxModelGrepTextBytes)
+		if textsReduced {
+			notes = append(notes, "[some text previews dropped for budget; use read for full lines]")
+		}
+		// nextOffset resumes after the tool-sampled page; when compaction
+		// dropped lines (file-group or line cap), resume after the lines the
+		// model actually saw so paging never skips unseen lines.
+		modelLines := 0
+		for _, fh := range lineHits {
+			modelLines += len(fh.Lines)
+		}
+		if dropped := sampledLines - modelLines; dropped > 0 && nextOffset > dropped {
+			nextOffset -= dropped
+		}
+	case "count_matches":
+		// Deliberately no cap and no reduction note: the page already carries at
+		// most the grep tool's pagination width, and every row in it fits model
+		// context. Trimming rows here would drop files the tool counted while
+		// next-offset still resumes after the whole page, so the model would skip
+		// those files with no notice.
+	default:
+		return fullJSON
+	}
+	var b strings.Builder
+	// The mode is spelled out on every block: a count row ("path: count=N")
+	// must never be mistaken for a lines row whose text preview was dropped by
+	// the byte budget ("path:12"), and a bare flag is only visible to a reader
+	// that already knows which mode it asked for.
+	fmt.Fprintf(&b, `<grep mode="%s"`, mode)
+	fmt.Fprintf(&b, ` matched="%d"`, r.MatchedLines)
+	if r.Hits != r.MatchedLines {
+		fmt.Fprintf(&b, ` hits="%d"`, r.Hits)
+	}
+	fmt.Fprintf(&b, ` files="%d"`, r.Files)
+	if r.Truncated {
+		b.WriteString(` truncated`)
+	}
+	if nextOffset > 0 {
+		fmt.Fprintf(&b, ` next-offset="%d"`, nextOffset)
+	}
+	if !r.StatsExact {
+		b.WriteString(` stats-approx`)
+	}
+	if r.OffsetExhausted {
+		b.WriteString(` offset-exhausted`)
+	}
+	b.WriteString(">\n")
+	for _, fh := range lineHits {
+		path := neutralizeRowBreaks(fh.Path)
+		for i, line := range fh.Lines {
+			fmt.Fprintf(&b, "%s:%d", path, line)
+			if i < len(fh.Texts) && fh.Texts[i] != "" {
+				b.WriteString(": " + neutralizeRowBreaks(fh.Texts[i]))
+			}
+			b.WriteByte('\n')
+		}
+	}
+	for _, fc := range fileCounts {
+		fmt.Fprintf(&b, "%s: count=%d\n", neutralizeRowBreaks(fc.Path), fc.Count)
+	}
+	for _, s := range r.Skipped {
+		notes = append(notes, "[skipped: "+s+"]")
+	}
+	for _, w := range r.Warnings {
+		notes = append(notes, "warning: "+w)
+	}
+	for _, n := range notes {
+		b.WriteString(n + "\n")
+	}
+	// Rows, counts, and notes carry outside-injection text (paths, match
+	// previews, skip reasons); a literal closing marker would forge the block
+	// boundary, so fall back to a JSON envelope over the already-capped data
+	// (JSON escaping neutralizes the marker and every cap stays enforced).
+	rendered := b.String()
+	if strings.Contains(rendered, "</grep") {
 		data := map[string]any{
 			"mode":         mode,
 			"matchedLines": r.MatchedLines,
 			"hits":         r.Hits,
 			"files":        r.Files,
 			"truncated":    r.Truncated,
-			"nextOffset":   r.NextOffset,
+			"nextOffset":   nextOffset,
 		}
-		switch mode {
-		case "lines":
-			// Default: one entry per matching line, grouped by file, with a
-			// capped text preview per line (texts runs parallel to lines; legacy
-			// results predate texts and simply omit it). Cap the file groups,
-			// then the total line entries, so a huge result still fits in model
-			// context; exact totals above.
-			sampledLines := 0
-			for _, fh := range lineHits {
-				sampledLines += len(fh.Lines)
-			}
-			if len(lineHits) > maxModelGrepFileCounts {
-				lineHits = lineHits[:maxModelGrepFileCounts]
-				data["filesReduced"] = true
-			}
-			totalLines := 0
-			for _, fh := range lineHits {
-				totalLines += len(fh.Lines)
-			}
-			if totalLines > maxModelGrepMatches {
-				capped := make([]GrepFileMatch, 0, len(lineHits))
-				remaining := maxModelGrepMatches
-				keptLines := 0
-				for _, fh := range lineHits {
-					if remaining <= 0 {
-						break
-					}
-					lines := fh.Lines
-					if len(lines) > remaining {
-						lines = lines[:remaining]
-					}
-					remaining -= len(lines)
-					keptLines += len(lines)
-					// Trim the previews with the kept line numbers; legacy
-					// results without texts keep none.
-					texts := fh.Texts
-					if len(texts) > len(lines) {
-						texts = texts[:len(lines)]
-					}
-					capped = append(capped, GrepFileMatch{Path: fh.Path, Lines: lines, Texts: texts})
-				}
-				lineHits = capped
-				data["linesReduced"] = true
-				data["originalLineCount"] = totalLines
-				data["linesOmitted"] = totalLines - keptLines
-			}
-			// Text previews carry a global byte budget on top of the line
-			// count: once exceeded, later entries keep their line numbers but
-			// drop the text (read tool covers them when needed).
-			lineHits, textsReduced := capGrepLineTexts(lineHits, maxModelGrepTextBytes)
-			if textsReduced {
-				data["textsReduced"] = true
-			}
+		if mode == "lines" {
 			data["matches"] = lineHits
-			// nextOffset resumes after the tool-sampled page; when compaction
-			// dropped lines (file-group or line cap), resume after the lines
-			// the model actually saw so paging never skips unseen lines.
-			modelLines := 0
-			for _, fh := range lineHits {
-				modelLines += len(fh.Lines)
-			}
-			if dropped := sampledLines - modelLines; dropped > 0 && r.NextOffset > dropped {
-				data["nextOffset"] = r.NextOffset - dropped
-			}
-		case "count_matches":
-			if len(fileCounts) > maxModelGrepFileCounts {
-				fileCounts = fileCounts[:maxModelGrepFileCounts]
-				data["fileCountsReduced"] = true
-			}
+		} else {
 			data["fileCounts"] = fileCounts
-		default:
-			return fullJSON
+		}
+		if !r.StatsExact {
+			data["statsExact"] = false
+		}
+		if r.OffsetExhausted {
+			data["offsetExhausted"] = true
 		}
 		if len(r.Skipped) > 0 {
 			data["skipped"] = r.Skipped
@@ -561,21 +462,41 @@ func compactToolDataForModel(name string, result toolResult, fullJSON string) st
 		if len(r.Warnings) > 0 {
 			data["warnings"] = r.Warnings
 		}
-		// statsExact is always true today; only surface it when it changes so
-		// the model sees one less always-true boolean.
-		if !r.StatsExact {
-			data["statsExact"] = false
-		}
-		if r.OffsetExhausted {
-			data["offsetExhausted"] = true
+		if len(notes) > 0 {
+			data["reductionNotes"] = notes
 		}
 		return marshalToolResultOrFallback(toolResult{OK: true, Data: data}, fullJSON)
-	case "http_request":
-		var r HTTPRequestToolResult
-		if !decodeToolData(result.Data, &r) {
-			return fullJSON
+	}
+	return strings.TrimRight(rendered, "\n") + "\n</grep>"
+}
+
+// renderHTTPResultForModel renders an HTTP response as an <http> block: the
+// body drops in verbatim (no JSON escaping) and status rides on the opening
+// tag. The request url is not echoed (the model just sent it) and statusText
+// is inferable from status, so both are dropped. Body text that itself
+// contains the closing marker falls back to a JSON envelope carrying the
+// already-capped body — remote content must never forge the block boundary,
+// and the fallback must never bypass the model-side cap either.
+func renderHTTPResultForModel(r HTTPRequestToolResult, fullJSON string) string {
+	body, reduced := compactTextForModel(r.Body, compactTextSpec{limit: maxModelWebOutput})
+	if body == "" {
+		// A body-less response (binary or JSON-only shape) still needs a payload.
+		// The substituted preview passes the same model-side cap as the body
+		// path, so neither the block nor the fallback below can carry an uncapped
+		// response body into model context.
+		substitute := r.JSONPreview
+		if substitute == "" && r.JSON != nil {
+			if raw, err := json.Marshal(r.JSON); err == nil {
+				substitute = string(raw)
+			}
 		}
-		body, reduced := compactTextForModel(r.Body, compactTextSpec{limit: maxModelWebOutput})
+		if substitute != "" {
+			var subReduced bool
+			body, subReduced = compactTextForModel(substitute, compactTextSpec{limit: maxModelWebOutput})
+			reduced = reduced || subReduced
+		}
+	}
+	if strings.Contains(body, "</http") {
 		data := map[string]any{
 			"status":     r.Status,
 			"statusText": r.StatusText,
@@ -588,54 +509,460 @@ func compactToolDataForModel(name string, result toolResult, fullJSON string) st
 		if r.ContentType != "" {
 			data["contentType"] = r.ContentType
 		}
-		if r.JSONPreview != "" {
-			data["jsonPreview"] = r.JSONPreview
-		} else if r.JSON != nil {
-			data["json"] = r.JSON
-		}
-		if r.Truncated {
+		if r.Truncated || reduced {
 			data["truncated"] = true
 		}
-		if reduced {
-			data["bodyReduced"] = true
-			data["reductionNote"] = "Response body truncated to safety cap."
-		}
 		return marshalToolResultOrFallback(toolResult{OK: true, Data: data}, fullJSON)
-	case "web_fetch":
-		var r WebFetchResult
-		if !decodeToolData(result.Data, &r) {
-			return fullJSON
-		}
-		text, reduced := compactTextForModel(r.Text, compactTextSpec{limit: maxModelWebOutput})
-		data := map[string]any{
-			"url":    r.URL,
-			"status": r.Status,
-			"title":  r.Title,
-			"text":   text,
-		}
-		if r.FinalURL != "" && r.FinalURL != r.URL {
-			data["finalUrl"] = r.FinalURL
-		}
-		if len(r.Links) > 0 {
-			data["links"] = r.Links
-		}
-		if r.Truncated {
-			data["truncated"] = true
-		}
-		if reduced {
-			data["textReduced"] = true
-			data["reductionNote"] = "Readable text truncated to safety cap."
-		}
-		return marshalToolResultOrFallback(toolResult{OK: true, Data: data}, fullJSON)
-	default:
-		return fullJSON
 	}
+	var b strings.Builder
+	fmt.Fprintf(&b, `<http status="%d"`, r.Status)
+	if r.FinalURL != "" && r.FinalURL != r.URL {
+		b.WriteString(` final-url="` + attrEscape(r.FinalURL) + `"`)
+	}
+	if r.ContentType != "" {
+		b.WriteString(` content-type="` + attrEscape(r.ContentType) + `"`)
+	}
+	if r.Truncated || reduced {
+		b.WriteString(` truncated`)
+	}
+	b.WriteString(">\n")
+	b.WriteString(body)
+	b.WriteString("\n</http>")
+	return b.String()
 }
 
-// compactMcpOutputForModel clamps unbounded MCP text output to the same cap
-// as built-in text tools, keeping head+tail and flagging the truncation so
-// the model knows to narrow the call instead of treating the text as whole.
-func compactMcpOutputForModel(result toolResult, fullJSON string) string {
+// renderWebFetchResultForModel renders a readable-page fetch as a <fetch>
+// block: the article text drops in verbatim and links append as trailing
+// "link: text <url>" rows. Article text or link rows containing the closing
+// marker fall back to a JSON envelope carrying the already-capped text —
+// remote content must never forge the block boundary, and the fallback must
+// never bypass the model-side cap either.
+func renderWebFetchResultForModel(r WebFetchResult, fullJSON string) string {
+	text, reduced := compactTextForModel(r.Text, compactTextSpec{limit: maxModelWebOutput})
+	if strings.Contains(text, "</fetch") {
+		return webFetchJSONEnvelopeForModel(r, text, reduced, fullJSON)
+	}
+	for _, link := range r.Links {
+		if strings.Contains(link.Text, "</fetch") || strings.Contains(link.URL, "</fetch") {
+			return webFetchJSONEnvelopeForModel(r, text, reduced, fullJSON)
+		}
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, `<fetch status="%d"`, r.Status)
+	if r.Title != "" {
+		b.WriteString(` title="` + attrEscape(r.Title) + `"`)
+	}
+	if r.FinalURL != "" && r.FinalURL != r.URL {
+		b.WriteString(` final-url="` + attrEscape(r.FinalURL) + `"`)
+	}
+	if r.Truncated || reduced {
+		b.WriteString(` truncated`)
+	}
+	b.WriteString(">\n")
+	b.WriteString(strings.TrimRight(text, "\n"))
+	for _, link := range r.Links {
+		b.WriteString("\nlink: " + neutralizeRowBreaks(link.Text) + " <" + neutralizeRowBreaks(link.URL) + ">")
+	}
+	b.WriteString("\n</fetch>")
+	return b.String()
+}
+
+// webFetchJSONEnvelopeForModel is the fallback when the fetch text or a link
+// row cannot be rendered inside a <fetch> block: the JSON envelope carries
+// the already-capped text (JSON escaping neutralizes the marker) instead of
+// returning the raw full JSON, so the model-side cap stays enforced.
+func webFetchJSONEnvelopeForModel(r WebFetchResult, text string, reduced bool, fullJSON string) string {
+	data := map[string]any{
+		"url":    r.URL,
+		"status": r.Status,
+		"title":  r.Title,
+		"text":   text,
+	}
+	if r.FinalURL != "" && r.FinalURL != r.URL {
+		data["finalUrl"] = r.FinalURL
+	}
+	if len(r.Links) > 0 {
+		data["links"] = r.Links
+	}
+	if r.Truncated || reduced {
+		data["truncated"] = true
+	}
+	return marshalToolResultOrFallback(toolResult{OK: true, Data: data}, fullJSON)
+}
+
+// renderReadResultForModel renders a batch read result as <file> tag blocks
+// instead of a JSON envelope: metadata rides on the opening tag's attributes
+// and the line-numbered body drops in verbatim, so the payload pays no JSON
+// escaping tax (every newline/quote/tab doubles inside a JSON string) and no
+// repeated envelope keys. The line numbers come from the read pipeline
+// (ContentFormat "line_numbers") and pass through untouched — the edit
+// lineRange contract depends on them. A body that itself contains the closing
+// marker switches that one section to a version-suffixed tag so the boundary
+// stays unforgeable; with no version token to make that suffix unique, the
+// marker shape in the body is escaped instead.
+func renderReadResultForModel(r BatchReadResult) string {
+	const reusedNote = "[Content omitted: this exact path/range was already returned to you earlier in this turn. version is unchanged — safe to reuse for edit. If you need the content again, re-read this same range and it will be returned in full.]"
+	if len(r.Files) == 0 {
+		return "(no readable files returned)"
+	}
+	var b strings.Builder
+	injected := false
+	for _, f := range r.Files {
+		tag := "file"
+		body := f.Content
+		if f.Reused {
+			body = reusedNote
+		}
+		if strings.Contains(body, "</file") {
+			// The version (a content hash) is what makes the suffixed closing marker
+			// unforgeable. With no version token — or a body that happens to contain
+			// the suffixed marker — the suffix proves nothing, so neutralize the
+			// marker shape in the body instead: the text stays readable and the
+			// block boundary stays authoritative.
+			if f.Version == "" || strings.Contains(body, "</file-"+f.Version) {
+				body = strings.ReplaceAll(body, "</file", "&lt;/file")
+			} else {
+				tag = "file-" + f.Version
+			}
+		}
+		b.WriteString("<" + tag + ` path="` + attrEscape(f.Path) + `"`)
+		if f.Error != "" {
+			code := f.ErrorCode
+			if code == "" {
+				code = "E_READ_FAILED"
+			}
+			message := f.Error
+			if strings.Contains(message, "</"+tag) {
+				message = strings.ReplaceAll(message, "<", "&lt;")
+			}
+			b.WriteString(` error="` + attrEscape(code) + `">` + message + "</" + tag + ">\n")
+			continue
+		}
+		b.WriteString(` version="` + attrEscape(f.Version) + `"`)
+		if f.StartLine > 0 && f.EndLine > 0 {
+			fmt.Fprintf(&b, ` lines="%d-%d"`, f.StartLine, f.EndLine)
+		}
+		if f.TotalLines > 0 {
+			fmt.Fprintf(&b, ` total="%d"`, f.TotalLines)
+		}
+		if f.Truncated {
+			b.WriteString(` truncated`)
+		}
+		if f.Reused {
+			b.WriteString(` reused`)
+		}
+		if f.DataURL != "" {
+			b.WriteString(` image="sent as image input in following message"`)
+			injected = true
+		}
+		b.WriteString(">\n")
+		b.WriteString(body)
+		b.WriteString("\n</" + tag + ">\n")
+	}
+	if injected {
+		b.WriteString("Image file(s) injected as user image input.\n")
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// renderCommandResultForModel renders a command result as a <cmd> block with
+// the merged stdout/stderr verbatim in the body. The command text and cwd are
+// deliberately not echoed — the model just sent them in the tool call one
+// message earlier, and re-quoting them only doubles long commands in history.
+// A zero exit code is the implicit success path (attribute omitted); non-zero
+// exit, timeout, truncation, the spilled-output pointer, and a promotion to a
+// background service (`promoted-to-service`) stay as attributes. Output that
+// itself contains the closing marker falls back to a JSON envelope rebuilt from
+// the same fields the block carries — never the raw fullJSON, which would
+// re-add the command/shell/duration noise the block deliberately drops.
+func renderCommandResultForModel(r CommandResult, fullJSON string) string {
+	body := "(no output)"
+	if r.Output != "" {
+		body = strings.TrimRight(r.Output, "\n")
+	}
+	if strings.Contains(body, "</cmd") {
+		data := map[string]any{"output": body, "exitCode": r.ExitCode}
+		if r.TimedOut {
+			data["timedOut"] = true
+		}
+		if r.PromotedToService {
+			data["promotedToService"] = true
+		}
+		if r.Truncated {
+			data["truncated"] = true
+		}
+		if r.OutputFilePath != "" {
+			data["outputFilePath"] = r.OutputFilePath
+		}
+		return marshalToolResultOrFallback(toolResult{OK: true, Data: data}, fullJSON)
+	}
+	var b strings.Builder
+	b.WriteString("<cmd")
+	if r.ExitCode != 0 {
+		fmt.Fprintf(&b, ` exit="%d"`, r.ExitCode)
+	}
+	if r.TimedOut {
+		b.WriteString(` timed-out`)
+	}
+	if r.PromotedToService {
+		b.WriteString(` promoted-to-service`)
+	}
+	if r.Truncated {
+		b.WriteString(` truncated`)
+	}
+	if r.OutputFilePath != "" {
+		b.WriteString(` full="` + attrEscape(r.OutputFilePath) + `"`)
+	}
+	b.WriteString(">\n")
+	b.WriteString(body)
+	b.WriteString("\n</cmd>")
+	return b.String()
+}
+
+func renderListFilesResultForModel(r ListFilesResult, fullJSON string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, `<files count="%d"`, r.Count)
+	if r.Truncated {
+		b.WriteString(` truncated`)
+	}
+	b.WriteString(">\n")
+	// A path containing the closing marker would forge the block boundary
+	// (Unix filenames may include '<'); fall back to the JSON envelope,
+	// where the path is escaped, before writing any row.
+	for _, entry := range r.Entries {
+		if entry.MoreFiles == 0 && strings.Contains(entry.Path, "</files") {
+			return listFilesJSONEnvelopeForModel(r, fullJSON)
+		}
+		if entry.MoreFiles > 0 {
+			// Per-directory overflow placeholder: same wording as the
+			// workspace map legend.
+			fmt.Fprintf(&b, "+%d more files\n", entry.MoreFiles)
+			continue
+		}
+		b.WriteString(neutralizeRowBreaks(entry.Path))
+		if entry.Dir {
+			b.WriteByte('/')
+		}
+		b.WriteByte('\n')
+	}
+	switch {
+	case r.Count == 0:
+		b.WriteString("Empty listing: the directory is empty or everything was filtered as hidden/ignored. Use includeHidden/includeIgnored to widen it.\n")
+	case r.Truncated:
+		b.WriteString("Entry limit reached; narrow path or raise limit to see the rest.\n")
+	}
+	return strings.TrimRight(b.String(), "\n") + "\n</files>"
+}
+
+// listFilesJSONEnvelopeForModel is the fallback for a listing whose paths
+// cannot be rendered as a <files> block (a path contains the closing
+// marker). It rebuilds the compact JSON envelope from the already-bounded
+// entries instead of returning the raw full JSON, so the per-entry UI
+// metadata (name/size/modTime) still never reaches the model.
+func listFilesJSONEnvelopeForModel(r ListFilesResult, fullJSON string) string {
+	var b strings.Builder
+	for _, entry := range r.Entries {
+		if entry.MoreFiles > 0 {
+			fmt.Fprintf(&b, "+%d more files\n", entry.MoreFiles)
+			continue
+		}
+		b.WriteString(entry.Path)
+		if entry.Dir {
+			b.WriteByte('/')
+		}
+		b.WriteByte('\n')
+	}
+	data := map[string]any{"entries": strings.TrimRight(b.String(), "\n"), "count": r.Count, "truncated": r.Truncated}
+	switch {
+	case r.Count == 0:
+		data["note"] = "Empty listing: the directory is empty or everything was filtered as hidden/ignored. Use includeHidden/includeIgnored to widen it."
+	case r.Truncated:
+		data["note"] = "Entry limit reached; narrow path or raise limit to see the rest."
+	}
+	return marshalToolResultOrFallback(toolResult{OK: true, Data: data}, fullJSON)
+}
+
+// renderMultiEditResultForModel renders a batch edit as one self-closing
+// <edit path version/> line per file (the version is the edit contract) plus
+// trailing summary/validation/warning lines for the batch as a whole.
+func renderMultiEditResultForModel(r MultiEditResult) string {
+	var b strings.Builder
+	for _, file := range r.Files {
+		b.WriteString(`<edit path="` + attrEscape(file.Path) + `" version="` + attrEscape(file.Version) + `"/>` + "\n")
+	}
+	if r.Summary != "" {
+		b.WriteString("edit summary: " + neutralizeClosingMarkers(r.Summary) + "\n")
+	}
+	if r.Validation != "" {
+		b.WriteString("edit validation: " + neutralizeClosingMarkers(r.Validation) + "\n")
+	}
+	for _, w := range r.Warnings {
+		b.WriteString("warning: " + neutralizeClosingMarkers(w) + "\n")
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// renderEditResultForModel renders a single-file edit/create as one
+// self-closing tag: version is the edit contract, summary/validation ride on
+// attributes, warnings append as trailing lines.
+func renderEditResultForModel(r EditResult) string {
+	var b strings.Builder
+	b.WriteString(`<edit path="` + attrEscape(r.Path) + `" version="` + attrEscape(r.Version) + `"`)
+	if r.Summary != "" {
+		b.WriteString(` summary="` + attrEscape(r.Summary) + `"`)
+	}
+	if r.Created != nil {
+		if *r.Created {
+			b.WriteString(` created="true"`)
+		} else {
+			b.WriteString(` created="false"`)
+		}
+	}
+	if len(r.CreatedDirs) > 0 {
+		b.WriteString(` dirs="` + attrEscape(strings.Join(r.CreatedDirs, ",")) + `"`)
+	}
+	if r.Validation != "" {
+		b.WriteString(` validation="` + attrEscape(r.Validation) + `"`)
+	}
+	b.WriteString("/>")
+	for _, w := range r.Warnings {
+		b.WriteString("\nwarning: " + neutralizeClosingMarkers(w))
+	}
+	return b.String()
+}
+
+func renderDeleteResultForModel(r DeleteResult) string {
+	var b strings.Builder
+	b.WriteString(`<deleted path="` + attrEscape(r.Path) + `"`)
+	if r.Kind != "" {
+		b.WriteString(` kind="` + attrEscape(r.Kind) + `"`)
+	}
+	if r.RemovedFiles > 0 {
+		fmt.Fprintf(&b, ` files="%d"`, r.RemovedFiles)
+	}
+	if r.RemovedDirs > 0 {
+		fmt.Fprintf(&b, ` dirs="%d"`, r.RemovedDirs)
+	}
+	b.WriteString("/>")
+	return b.String()
+}
+
+// renderServiceReadResultForModel renders a service read as a tag block; the
+// output body drops in verbatim and byte accounting rides on attributes. The
+// model-side tail clamp stays at 8 KiB. Output containing the closing marker
+// falls back to a JSON envelope carrying the already-clamped tail (service
+// logs can echo arbitrary text) — the clamp must survive the fallback.
+func renderServiceReadResultForModel(r ServiceReadResult, fullJSON string) string {
+	const maxReadOutputForModel = 8 * 1024
+	output := r.Output
+	reducedFrom := 0
+	if len(output) > maxReadOutputForModel {
+		reducedFrom = len(output)
+		output = tailString(output, maxReadOutputForModel)
+	}
+	if strings.Contains(output, "</svc") {
+		data := map[string]any{
+			"id":            r.ID,
+			"status":        r.Status,
+			"returnedBytes": r.ReturnedBytes,
+			"bufferBytes":   r.BufferBytes,
+			"totalBytes":    r.TotalBytes,
+			"truncated":     r.Truncated,
+			"fromByte":      r.FromByte,
+			"output":        output,
+		}
+		if reducedFrom > 0 {
+			data["outputReduced"] = true
+			data["originalOutputChars"] = reducedFrom
+		}
+		return marshalToolResultOrFallback(toolResult{OK: true, Data: data}, fullJSON)
+	}
+	var b strings.Builder
+	b.WriteString(`<svc-read id="` + attrEscape(r.ID) + `"`)
+	if r.Status != "" {
+		b.WriteString(` status="` + attrEscape(r.Status) + `"`)
+	}
+	fmt.Fprintf(&b, ` returned="%d" buffer="%d" total="%d"`, r.ReturnedBytes, r.BufferBytes, r.TotalBytes)
+	if r.Truncated {
+		b.WriteString(` truncated`)
+	}
+	if r.FromByte > 0 {
+		fmt.Fprintf(&b, ` from-byte="%d"`, r.FromByte)
+	}
+	if reducedFrom > 0 {
+		fmt.Fprintf(&b, ` reduced-from="%d"`, reducedFrom)
+	}
+	b.WriteString(">\n")
+	b.WriteString(strings.TrimRight(output, "\n"))
+	b.WriteString("\n</svc-read>")
+	return b.String()
+}
+
+// renderServiceInfoResultForModel renders a start/stop result. The command
+// and cwd are not echoed (the model just sent them) and RFC3339 timestamps
+// are noise; only identity, liveness, and the output tail reach the model.
+// The tail is clamped once, before either path renders it: a collision with
+// the closing marker falls back to a JSON envelope carrying that same clamped
+// tail plus the metadata the block would have shown, so the model-side clamp
+// survives the fallback.
+func renderServiceInfoResultForModel(r ServiceInfo, fullJSON string) string {
+	outputTail := tailString(r.OutputTail, 4*1024)
+	reduced := len(outputTail) < len(r.OutputTail)
+	if strings.Contains(outputTail, "</svc") {
+		data := map[string]any{
+			"id":         r.ID,
+			"status":     r.Status,
+			"pid":        r.PID,
+			"exitCode":   r.ExitCode,
+			"outputTail": outputTail,
+		}
+		if r.Name != "" {
+			data["name"] = r.Name
+		}
+		if r.Error != "" {
+			data["error"] = r.Error
+		}
+		if reduced {
+			data["outputReduced"] = true
+			data["originalOutputChars"] = len(r.OutputTail)
+		}
+		return marshalToolResultOrFallback(toolResult{OK: true, Data: data}, fullJSON)
+	}
+	var b strings.Builder
+	b.WriteString(`<svc id="` + attrEscape(r.ID) + `"`)
+	if r.Name != "" {
+		b.WriteString(` name="` + attrEscape(r.Name) + `"`)
+	}
+	if r.Status != "" {
+		b.WriteString(` status="` + attrEscape(r.Status) + `"`)
+	}
+	if r.PID > 0 {
+		fmt.Fprintf(&b, ` pid="%d"`, r.PID)
+	}
+	if r.ExitCode != 0 {
+		fmt.Fprintf(&b, ` exit="%d"`, r.ExitCode)
+	}
+	if r.Error != "" {
+		b.WriteString(` error="` + attrEscape(r.Error) + `"`)
+	}
+	if reduced {
+		fmt.Fprintf(&b, ` reduced-from="%d"`, len(r.OutputTail))
+	}
+	b.WriteString(">\n")
+	if strings.TrimSpace(outputTail) != "" {
+		b.WriteString(strings.TrimRight(outputTail, "\n"))
+		b.WriteString("\n")
+	}
+	b.WriteString("</svc>")
+	return b.String()
+}
+
+// mcpTruncationNote explains a capped third-party output to the model. Both the
+// tag block and the JSON fallback carry it, so the guidance never depends on
+// which rendering path ran.
+const mcpTruncationNote = "Output exceeded the model-context safety cap and was truncated (head+tail kept). Narrow the tool arguments or paginate via the server if it supports it."
+
+func renderMcpResultForModel(result toolResult, fullJSON string) string {
 	var r struct {
 		Output string `json:"output"`
 	}
@@ -643,14 +970,70 @@ func compactMcpOutputForModel(result toolResult, fullJSON string) string {
 		return fullJSON
 	}
 	capped, reduced := compactTextForModel(r.Output, compactTextSpec{limit: maxModelToolOutput, head: modelToolHeadBytes, tail: modelToolTailBytes})
-	if !reduced {
-		return fullJSON
+	if strings.Contains(capped, "</mcp") {
+		// The marker is inert inside a JSON string, but the fallback must
+		// still carry the capped output: the raw fullJSON has no bound on
+		// third-party MCP text.
+		data := map[string]any{"output": capped}
+		if reduced {
+			data["outputTruncated"] = true
+			data["truncationNote"] = mcpTruncationNote
+		}
+		return marshalToolResultOrFallback(toolResult{OK: true, Data: data}, fullJSON)
 	}
-	return marshalToolResultOrFallback(toolResult{OK: true, Data: map[string]any{
-		"output":          capped,
-		"outputTruncated": true,
-		"truncationNote":  "Output exceeded the model-context safety cap and was truncated (head+tail kept). Narrow the tool arguments or paginate via the server if it supports it.",
-	}}, fullJSON)
+	var b strings.Builder
+	b.WriteString("<mcp")
+	if reduced {
+		b.WriteString(` truncated`)
+	}
+	b.WriteString(">\n")
+	b.WriteString(capped)
+	if reduced {
+		b.WriteString("\n" + mcpTruncationNote)
+	}
+	b.WriteString("\n</mcp>")
+	return b.String()
+}
+
+// neutralizeClosingMarkers makes closing-marker-shaped text inert in the free
+// text lines of a payload that has no enclosing block (edit summaries,
+// validation output, warnings). Those lines carry outside text — compiler and
+// linter output can contain anything — and a literal "</cmd" there would read
+// as another block's boundary. Only the marker shape is escaped, so ordinary
+// "<" text stays readable.
+func neutralizeClosingMarkers(v string) string {
+	if !strings.Contains(v, "</") {
+		return v
+	}
+	return strings.ReplaceAll(v, "</", "&lt;/")
+}
+
+// neutralizeRowBreaks makes a value safe inside a one-item-per-line row (grep's
+// "path:line: text", a <files> entry, a "link: text <url>" row): a path or link
+// carrying a line break would read as another row, and Unix filenames may well
+// contain '\n'. Line breaks become the literal \n escape models already read;
+// forging the block boundary is a different matter, handled by the
+// closing-marker fallbacks.
+func neutralizeRowBreaks(v string) string {
+	if !strings.ContainsAny(v, "\n\r") {
+		return v
+	}
+	return strings.NewReplacer("\n", `\n`, "\r", `\r`).Replace(v)
+}
+
+// attrEscape makes a value safe inside a double-quoted tag attribute; quotes,
+// angle brackets, and raw newlines would otherwise break the boundary.
+func attrEscape(v string) string {
+	if !strings.ContainsAny(v, `"<>`+"\n\r") {
+		return v
+	}
+	return strings.NewReplacer(
+		`"`, "&quot;",
+		"<", "&lt;",
+		">", "&gt;",
+		"\n", "&#10;",
+		"\r", "&#13;",
+	).Replace(v)
 }
 
 func decodeToolData(data any, target any) bool {

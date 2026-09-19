@@ -58,8 +58,11 @@ const (
 	// minified lines cannot blow up the result payload.
 	maxGrepLineTextChars = 500
 	// countPageSize is the count_matches pagination width (entries per page
-	// over the per-file count heap). Sized to the model-view file-group cap so
-	// a full page always fits without compaction.
+	// over the per-file count heap), and the only bound on how many count rows
+	// reach the model: the model view renders the page exactly as returned,
+	// because trimming it there would make the advertised next-offset resume
+	// past the trimmed files. Raising this width widens the model payload by the
+	// same number of rows.
 	countPageSize = 20
 )
 

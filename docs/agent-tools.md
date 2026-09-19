@@ -135,18 +135,24 @@ type toolResult struct {                       // infra_result.go:19
 ```
 
 - **UI 通道**：`fullJSON` 经 `a.redactSSHCredentials(...)` 脱敏后进 `tool:result` / `tool:error` 事件（前端展示完整数据）。
-- **模型通道**：`compactToolResultForModel`（`infra_result.go:172`）产出 `role=tool` 消息的 `Content`。
+- **模型通道**：`compactToolResultForModel`（`infra_result.go:173`）产出 `role=tool` 消息的 `Content`。
 
 压缩是逐工具定制的——**给模型的视图和给人的视图本来就该不一样**：
 
 | 工具 | 模型视图 |
 |---|---|
-| `list_files` | 只发换行分隔的路径（目录带 `/`），比完整 FileEntry 省约 3/4 token |
-| `read` | 本轮已读过的同一 path/range → 内容替换为「已给过你、version 未变、可复用」说明（配合 run 级 read cache，`newRunReadCache`） |
-| `read` 图片 | 内容转为后续 user 消息的图片输入，这里只留说明 |
-| `grep` | 命中行文本按预算裁剪（`capGrepLineTexts`） |
-| `mcp__*` | 第三方无上限输出，统一夹到内置上限（`compactMcpOutputForModel`） |
+| `read` | `<file path version lines total>` 标签块，行号正文零转义；本轮已读过的同一 path/range → 内容换成「已给过你、version 未变、可复用」说明（配合 run 级 read cache，`newRunReadCache`） |
+| `read` 图片 | 内容转为后续 user 消息的图片输入，块里只留 `image="…"` 说明 |
+| `list_files` | `<files count>` 标签块，只发换行分隔的路径（目录带 `/`），比完整 FileEntry 省约 3/4 token |
+| `grep` | `<grep mode matched hits files next-offset>` 头 + `path:line: text` 行（count 模式为 `path: count=N`）；命中行文本按预算裁剪（`capGrepLineTexts`） |
+| `command` | `<cmd exit timed-out promoted-to-service truncated full>` 块，输出零转义落体；command/cwd 不回显（模型刚在参数里写过） |
+| `service` read/info | `<svc-read>` / `<svc>` 块（字节账目走属性），`list` 仍走 JSON |
+| `edit` / `create` / `delete` | 自闭合属性标签；summary/validation 走属性，warnings 走尾部行（自由文本经 `neutralizeClosingMarkers` 中和标记形状） |
+| `http_request` / `web_fetch` | `<http>` / `<fetch>` 块（砍 url/statusText 回显，链接作尾部行） |
+| `mcp__*` | 第三方无上限输出，统一夹到内置上限（`renderMcpResultForModel`） |
 | 任何失败 / 解码失败 | 回退 `fullJSON`（`marshalToolResultOrFallback`），永不因压缩丢信息 |
+
+正文或自由文本自带闭合标记时回退 JSON 信封，且信封只装「已过 cap 的载荷」，绝不裸退 `fullJSON`（read 的正文是例外：用 version 后缀标签避开碰撞，没有 version 时中和标记形状）。
 
 `injectEnvelopeWarnings` 把参数警告合并进 `data.warnings`，解析失败就退化成追加一行纯文本——**通知必须送达模型**。
 
@@ -174,7 +180,7 @@ type toolResult struct {                       // infra_result.go:19
 
 1. `app.go:2225-2320` —— 分发 + `decodeJSON`
 2. `internal/tools/toolcall/toolcall.go` 全文（179 行，规则最集中）
-3. `infra_result.go:19-46`、`172-300` —— 信封 + 模型视图
+3. `infra_result.go:19-46`、`168-1096` —— 信封 + 模型视图
 4. `orch_batch_policy.go` 全文 —— 批次策略
 5. `orch_command_safety.go` 全文 —— 安全围栏
 6. `builtins.go:387-403` + `489-534` —— schema 生成与 strict 化

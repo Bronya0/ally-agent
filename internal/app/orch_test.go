@@ -636,7 +636,7 @@ func TestCompactBackgroundProcessResultForModelReducesOutput(t *testing.T) {
 	if len(compact) >= len(fullOutput) {
 		t.Fatalf("expected background process output to be reduced: compact=%d full=%d", len(compact), len(fullOutput))
 	}
-	if !strings.Contains(compact, `"outputReduced":true`) || !strings.Contains(compact, `"id":"svc_1"`) {
+	if !strings.Contains(compact, `reduced-from="`) || !strings.Contains(compact, `id="svc_1"`) || !strings.Contains(compact, "<svc ") {
 		t.Fatalf("expected compact process metadata, got %s", compact)
 	}
 }
@@ -1067,49 +1067,22 @@ func TestCompactToolResultForModelCompactsGrepLines(t *testing.T) {
 
 	got := compactToolResultForModel("grep", result, string(raw))
 
-	var decoded struct {
-		OK   bool `json:"ok"`
-		Data struct {
-			Matches           []GrepFileMatch `json:"matches"`
-			FileCounts        []GrepFileCount `json:"fileCounts"`
-			MatchedLines      int             `json:"matchedLines"`
-			Hits              int             `json:"hits"`
-			Files             int             `json:"files"`
-			NextOffset        int             `json:"nextOffset"`
-			StatsExact        bool            `json:"statsExact"`
-			LinesReduced      bool            `json:"linesReduced"`
-			LinesOmitted      int             `json:"linesOmitted"`
-			OriginalLineCount int             `json:"originalLineCount"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal([]byte(got), &decoded); err != nil {
-		t.Fatal(err)
-	}
-	if !decoded.OK {
-		t.Fatalf("expected ok compacted result, got %s", got)
+	if !strings.HasPrefix(got, fmt.Sprintf("<grep mode=\"lines\" matched=\"%d\" files=\"1\" truncated next-offset=\"%d\">\n", total, maxModelGrepMatches)) {
+		t.Fatalf("expected capped header with adjusted next-offset, got %s", got)
 	}
 	// statsExact is always true today; the model view must omit it instead of
 	// repeating an always-true field.
-	if strings.Contains(got, "statsExact") {
+	if strings.Contains(got, "statsExact") || strings.Contains(got, "stats-approx") {
 		t.Fatalf("model view must omit always-true statsExact: %s", got)
 	}
-	totalModel := 0
-	for _, fh := range decoded.Data.Matches {
-		totalModel += len(fh.Lines)
+	if !strings.Contains(got, fmt.Sprintf("[%d of %d matching lines shown]", maxModelGrepMatches, total)) {
+		t.Fatalf("expected reduction note, got %.200s", got)
 	}
-	if totalModel != maxModelGrepMatches {
-		t.Fatalf("expected %d model lines, got %d", maxModelGrepMatches, totalModel)
+	if !strings.Contains(got, "a.txt:1\n") || !strings.Contains(got, fmt.Sprintf("a.txt:%d\n", maxModelGrepMatches)) {
+		t.Fatalf("expected first and last kept line, got %.200s", got)
 	}
-	if decoded.Data.MatchedLines != total || decoded.Data.Hits != total || decoded.Data.Files != 1 {
-		t.Fatalf("expected grep stats to be preserved, got %#v", decoded.Data)
-	}
-	if !decoded.Data.LinesReduced || decoded.Data.OriginalLineCount != total || decoded.Data.LinesOmitted != 5 {
-		t.Fatalf("expected reduction metadata, got %#v", decoded.Data)
-	}
-	// nextOffset must resume after the lines the model actually saw (the
-	// cap dropped 5), not after the full sampled set, so paging stays gapless.
-	if decoded.Data.NextOffset != maxModelGrepMatches {
-		t.Fatalf("expected nextOffset %d after compaction, got %d", maxModelGrepMatches, decoded.Data.NextOffset)
+	if strings.Contains(got, fmt.Sprintf("a.txt:%d\n", maxModelGrepMatches+1)) {
+		t.Fatalf("line beyond the cap must be dropped, got %.200s", got)
 	}
 }
 
@@ -1141,43 +1114,35 @@ func TestCompactToolResultForModelCapsLinesAcrossFiles(t *testing.T) {
 	}
 
 	compact := compactToolResultForModel("grep", result, string(raw))
-	var decoded struct {
-		Data struct {
-			Matches      []GrepFileMatch `json:"matches"`
-			LinesReduced bool            `json:"linesReduced"`
-			LinesOmitted int             `json:"linesOmitted"`
-		} `json:"data"`
+	if !strings.Contains(compact, fmt.Sprintf("[%d of %d matching lines shown]", maxModelGrepMatches, 2*over)) {
+		t.Fatalf("expected global cap note across files, got %.120s", compact)
 	}
-	if err := json.Unmarshal([]byte(compact), &decoded); err != nil {
-		t.Fatal(err)
+	if !strings.Contains(compact, fmt.Sprintf("a.txt:%d\n", maxModelGrepMatches)) {
+		t.Fatalf("expected the cap boundary line kept, got %.120s", compact)
 	}
-	total := 0
-	for _, fh := range decoded.Data.Matches {
-		total += len(fh.Lines)
-	}
-	if total != maxModelGrepMatches {
-		t.Fatalf("expected global cap of %d lines across files, got %d", maxModelGrepMatches, total)
-	}
-	if !decoded.Data.LinesReduced || decoded.Data.LinesOmitted != 2*over-maxModelGrepMatches {
-		t.Fatalf("expected reduction metadata, got %#v", decoded.Data)
+	if strings.Contains(compact, "b.txt:") {
+		t.Fatalf("second file must be dropped once the global cap is spent, got %.120s", compact)
 	}
 }
 
 func TestCompactToolResultForModelPreservesGrepCounts(t *testing.T) {
-	// count_matches carries per-file counts instead of line groups. The model
-	// view must keep the counts (capped) plus the exact totals so hotspots
-	// stay rankable and truncation is still reported honestly.
-	total := maxModelGrepFileCounts + 5
-	counts := make([]GrepFileCount, total)
+	// count_matches carries per-file counts instead of line groups. Every row of
+	// the page must reach the model: the renderer applies no cap of its own here,
+	// because next-offset — which the tool computed for the whole page — would
+	// otherwise resume past the trimmed rows and the model would skip those files
+	// without notice. The page width itself is the grep tool's own contract and is
+	// asserted in that package.
+	const pageWidth = 25 // deliberately wider than the tool's real page
+	counts := make([]GrepFileCount, pageWidth)
 	for i := range counts {
-		counts[i] = GrepFileCount{Path: fmt.Sprintf("f%02d.txt", i), Count: total - i}
+		counts[i] = GrepFileCount{Path: fmt.Sprintf("f%02d.txt", i), Count: pageWidth - i}
 	}
 	result := toolResult{OK: true, Data: GrepResult{
 		Mode:         "count_matches",
 		FileCounts:   counts,
 		MatchedLines: 40,
 		Hits:         60,
-		Files:        total,
+		Files:        pageWidth,
 		StatsExact:   true,
 	}}
 	raw, err := json.Marshal(result)
@@ -1186,27 +1151,14 @@ func TestCompactToolResultForModelPreservesGrepCounts(t *testing.T) {
 	}
 
 	got := compactToolResultForModel("grep", result, string(raw))
-	var decoded struct {
-		Data struct {
-			Mode              string          `json:"mode"`
-			FileCounts        []GrepFileCount `json:"fileCounts"`
-			FileCountsReduced bool            `json:"fileCountsReduced"`
-			MatchedLines      int             `json:"matchedLines"`
-			Hits              int             `json:"hits"`
-			Files             int             `json:"files"`
-		} `json:"data"`
+	if !strings.HasPrefix(got, "<grep mode=\"count_matches\" matched=\"40\" hits=\"60\" files=\"25\">\n") {
+		t.Fatalf("expected counts header with the explicit mode and exact totals, got %s", got)
 	}
-	if err := json.Unmarshal([]byte(got), &decoded); err != nil {
-		t.Fatal(err)
+	if !strings.Contains(got, "f00.txt: count=25\n") || !strings.Contains(got, fmt.Sprintf("f%02d.txt: count=1\n", pageWidth-1)) {
+		t.Fatalf("expected every returned per-file count in the payload, got %s", got)
 	}
-	if decoded.Data.Mode != "count_matches" {
-		t.Fatalf("expected count mode preserved, got %s", got)
-	}
-	if len(decoded.Data.FileCounts) != maxModelGrepFileCounts || !decoded.Data.FileCountsReduced {
-		t.Fatalf("expected fileCounts capped at %d with a reduction flag, got %#v", maxModelGrepFileCounts, decoded.Data)
-	}
-	if decoded.Data.MatchedLines != 40 || decoded.Data.Hits != 60 || decoded.Data.Files != total {
-		t.Fatalf("expected exact stats preserved, got %#v", decoded.Data)
+	if strings.Contains(got, "[file counts capped]") {
+		t.Fatalf("count rows must not be capped a second time, got %s", got)
 	}
 }
 
@@ -1311,7 +1263,7 @@ func TestCompactEditResultForModelPreservesWarnings(t *testing.T) {
 		}},
 	}}
 	compact := compactToolResultForModel("edit", result, "fallback")
-	if !strings.Contains(compact, `"warnings":["change 1 ignored replace_all`) {
+	if !strings.Contains(compact, "warning: change 1 ignored replace_all") {
 		t.Fatalf("expected compact edit result to retain warnings, got %s", compact)
 	}
 }
@@ -1326,7 +1278,7 @@ func TestCompactListFilesResultForModelUsesPathList(t *testing.T) {
 		Count: 3,
 	}}
 	compact := compactToolResultForModel("list_files", result, "fallback")
-	if !strings.Contains(compact, `"entries":"frontend/\nfrontend/src/App.vue\nlink"`) {
+	if !strings.Contains(compact, "frontend/\nfrontend/src/App.vue\nlink") {
 		t.Fatalf("expected a newline-joined path list with dir slashes, got %s", compact)
 	}
 	// Per-entry metadata must not leak into the model copy.
@@ -1335,7 +1287,7 @@ func TestCompactListFilesResultForModelUsesPathList(t *testing.T) {
 			t.Fatalf("compact list_files result must drop %s, got %s", noisy, compact)
 		}
 	}
-	if !strings.Contains(compact, `"count":3`) || strings.Contains(compact, `"truncated":true`) {
+	if !strings.Contains(compact, `count="3"`) || strings.Contains(compact, ` truncated`) {
 		t.Fatalf("count/truncated summary mismatch: %s", compact)
 	}
 
@@ -1350,7 +1302,7 @@ func TestCompactListFilesResultForModelUsesPathList(t *testing.T) {
 		Count: 3,
 	}}
 	compact = compactToolResultForModel("list_files", overflow, "fallback")
-	if !strings.Contains(compact, `data/a.csv\n+9950 more files`) {
+	if !strings.Contains(compact, "data/a.csv\n+9950 more files") {
 		t.Fatalf("expected the +N more files line, got %s", compact)
 	}
 	if strings.Contains(compact, "+more") {
@@ -1582,7 +1534,7 @@ func TestEditAutoValidationReturnsFailureWithoutUndoingWrite(t *testing.T) {
 	}
 	full, _ := json.Marshal(result)
 	compact := compactToolResultForModel("edit", result, string(full))
-	if !strings.Contains(compact, `"validation":"自动校验失败（文件已写入）`) {
+	if !strings.Contains(compact, "edit validation: 自动校验失败（文件已写入）") {
 		t.Fatalf("expected compact edit result to expose validation string, got %s", compact)
 	}
 }
@@ -1682,10 +1634,10 @@ func TestCreateCompactResultCarriesCreatedFields(t *testing.T) {
 	tr := toolResult{OK: true, Data: result}
 	full, _ := json.Marshal(tr)
 	compact := compactToolResultForModel("create", tr, string(full))
-	if !strings.Contains(compact, `"created":true`) {
+	if !strings.Contains(compact, `created="true"`) {
 		t.Fatalf("expected compact create result to carry created=true, got %s", compact)
 	}
-	if !strings.Contains(compact, `"createdDirs":["a"]`) {
+	if !strings.Contains(compact, `dirs="a"`) {
 		t.Fatalf("expected compact create result to carry createdDirs, got %s", compact)
 	}
 }
@@ -1707,7 +1659,7 @@ func TestCreateAutoValidationIsAConciseModelString(t *testing.T) {
 	}
 	full, _ := json.Marshal(result)
 	compact := compactToolResultForModel("create", result, string(full))
-	if !strings.Contains(compact, `"validation":"自动校验失败（文件已写入）`) {
+	if !strings.Contains(compact, `validation="自动校验失败（文件已写入）`) {
 		t.Fatalf("expected compact result to expose validation string, got %s", compact)
 	}
 }
@@ -2520,7 +2472,7 @@ func TestRunReadCacheReturnsMetadataWithoutDuplicateContent(t *testing.T) {
 		t.Fatalf("expected first compact read to carry content, got: %s", firstModel)
 	}
 	secondModel := compactToolResultForModel("read", second, "")
-	if !strings.Contains(secondModel, "Content omitted") || !strings.Contains(secondModel, `"reused":true`) {
+	if !strings.Contains(secondModel, "Content omitted") || !strings.Contains(secondModel, ` reused`) || !strings.Contains(secondModel, `version="`) {
 		t.Fatalf("expected reused compact read to explain the omission, got: %s", secondModel)
 	}
 
@@ -4284,8 +4236,9 @@ func TestServiceReadErrors(t *testing.T) {
 }
 
 // TestCompactToolResultForModelCapsMcpOutput 验证 mcp__ 工具输出与内置工具
-// 一样有模型侧上限：超限输出被 head+tail 截断并带 outputTruncated 标记，
-// 小输出原样通过。
+// 一样有模型侧上限：超限输出被 head+tail 截断并包进 <mcp truncated> 块，
+// 小输出同样走 <mcp> 标签体（不再有 JSON 信封与转义）；输出自带 </mcp 时
+// 回退 JSON 信封。
 func TestCompactToolResultForModelCapsMcpOutput(t *testing.T) {
 	big := strings.Repeat("x", maxModelToolOutput*2)
 	result := toolResult{OK: true, Data: map[string]any{"output": big}}
@@ -4297,57 +4250,347 @@ func TestCompactToolResultForModelCapsMcpOutput(t *testing.T) {
 	if len(compact) >= len(big) {
 		t.Fatalf("MCP output must be capped: compact=%d raw=%d", len(compact), len(big))
 	}
-	var decoded struct {
-		OK   bool `json:"ok"`
-		Data struct {
-			Output          string `json:"output"`
-			OutputTruncated bool   `json:"outputTruncated"`
-			TruncationNote  string `json:"truncationNote"`
-		} `json:"data"`
+	if !strings.HasPrefix(compact, "<mcp truncated>\n") || !strings.HasSuffix(compact, "\n</mcp>") {
+		t.Fatalf("expected a truncated <mcp> tag block, got %.64s", compact)
 	}
-	if err := json.Unmarshal([]byte(compact), &decoded); err != nil {
-		t.Fatal(err)
-	}
-	if !decoded.OK || !decoded.Data.OutputTruncated || decoded.Data.TruncationNote == "" {
-		t.Fatalf("expected truncation flag and note, got %+v", decoded)
+	// 截断指引不能因为渲染路径换了形状就丢：回退信封有 truncationNote，块里
+	// 也必须有同一句话（两者共用 mcpTruncationNote）。
+	if !strings.Contains(compact, mcpTruncationNote) {
+		t.Fatalf("the truncated block must carry the same guidance as the fallback, got %.64s", compact)
 	}
 	// compactTextForModel keeps head+tail within the cap plus a fixed
-	// omission marker, so allow a small overhead over the limit.
-	if n := utf8.RuneCountInString(decoded.Data.Output); n > maxModelToolOutput+200 {
+	// omission marker; the tag wrapper and the guidance note are fixed
+	// overhead on top of that, so allow exactly that much.
+	if n := utf8.RuneCountInString(compact); n > maxModelToolOutput+200+len("<mcp truncated>\n\n</mcp>")+len(mcpTruncationNote) {
 		t.Fatalf("capped output must stay near %d runes, got %d", maxModelToolOutput, n)
 	}
 
 	small := toolResult{OK: true, Data: map[string]any{"output": "tiny"}}
 	unchanged := compactToolDataForModel("mcp__srv__tool", small, `{"ok":true,"data":{"output":"tiny"}}`)
-	if unchanged != `{"ok":true,"data":{"output":"tiny"}}` {
-		t.Fatalf("small MCP output must pass through unchanged, got %s", unchanged)
+	if unchanged != "<mcp>\ntiny\n</mcp>" {
+		t.Fatalf("small MCP output must render as a plain tag block, got %s", unchanged)
+	}
+
+	collide := toolResult{OK: true, Data: map[string]any{"output": "x</mcp>y"}}
+	got := compactToolDataForModel("mcp__srv__tool", collide, `{"fallback":true}`)
+	var decoded struct {
+		OK   bool `json:"ok"`
+		Data struct {
+			Output string `json:"output"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(got), &decoded); err != nil || !decoded.OK || decoded.Data.Output != "x</mcp>y" {
+		t.Fatalf("output containing the closing marker must fall back to a JSON envelope carrying the capped output, got %s", got)
+	}
+
+	// 超限且自带闭合标记：回退信封必须同样受限，绝不能退回无上限的 fullJSON。
+	bigCollide := toolResult{OK: true, Data: map[string]any{"output": strings.Repeat("x</mcp>y", 2+maxModelToolOutput/len("x</mcp>y"))}}
+	fullCollide, _ := json.Marshal(bigCollide)
+	capped := compactToolDataForModel("mcp__srv__tool", bigCollide, string(fullCollide))
+	var cappedDecoded struct {
+		OK   bool `json:"ok"`
+		Data struct {
+			Output          string `json:"output"`
+			OutputTruncated bool   `json:"outputTruncated"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(capped), &cappedDecoded); err != nil || !cappedDecoded.OK || !cappedDecoded.Data.OutputTruncated {
+		t.Fatalf("fallback envelope must carry the truncated capped output, got %.128s", capped)
+	}
+	if n := utf8.RuneCountInString(cappedDecoded.Data.Output); n > maxModelToolOutput+200 {
+		t.Fatalf("fallback output must stay near %d runes, got %d", maxModelToolOutput, n)
 	}
 }
 
-func TestCompactToolResultForModelCommandPassesOutputThrough(t *testing.T) {
-	// fullOutput 参数已移除：模型侧始终内联完整输出，不再裁尾、不再带
-	// outputReduced/reductionNote 字段。
+// TestCompactToolResultForModelNeutralizesRowBreaks 锁定行式载荷的行结构：标签体里
+// 一行就是一条记录，路径/链接里的换行会在中间造出假行（Unix 文件名可以含 \n），
+// 必须转义成字面 \n。伪造块边界是另一件事，由闭合标记回退负责。
+func TestCompactToolResultForModelNeutralizesRowBreaks(t *testing.T) {
+	evil := "evil\nnote.txt"
+
+	lists := compactToolResultForModel("list_files", toolResult{OK: true, Data: ListFilesResult{
+		Count:   1,
+		Entries: []FileEntry{{Path: evil}},
+	}}, "fallback")
+	if strings.Contains(lists, "evil\nnote.txt") || !strings.Contains(lists, `evil\nnote.txt`) {
+		t.Fatalf("a newline inside a path must not forge a second row, got %q", lists)
+	}
+
+	greps := compactToolResultForModel("grep", toolResult{OK: true, Data: &GrepResult{
+		Mode: "lines", MatchedLines: 1, Hits: 1, Files: 1,
+		LineHits: []GrepFileMatch{{Path: evil, Lines: []int{3}, Texts: []string{"hit\rtext"}}},
+	}}, "fallback")
+	if !strings.Contains(greps, `evil\nnote.txt:3: hit\rtext`) {
+		t.Fatalf("grep rows must stay one line per match, got %q", greps)
+	}
+
+	fetches := compactToolResultForModel("web_fetch", toolResult{OK: true, Data: WebFetchResult{
+		Status: 200, Text: "body",
+		Links: []WebFetchLink{{"docs\nhere", "https://ex.com/a\nb"}},
+	}}, "fallback")
+	if !strings.Contains(fetches, `link: docs\nhere <https://ex.com/a\nb>`) {
+		t.Fatalf("link rows must stay one line each, got %q", fetches)
+	}
+}
+
+func TestCompactToolResultForModelCommandRendersTagBlock(t *testing.T) {
+	// 模型侧改为 <cmd> 标签体：输出原样落体（无 JSON 转义），command/cwd 不再
+	// 回显（模型刚在 tool call 参数里写过），exit=0 是隐含成功态不占属性；
+	// 非零退出码 / 超时 / 截断 / 落盘指针以属性表达。
 	result := toolResult{OK: true, Data: map[string]any{
 		"command": "go build ./...", "cwd": "", "shell": "bash", "shellPath": "/bin/bash",
 		"output": "c1\nc2\nc3\nc4\nc5\n", "exitCode": 0, "timedOut": false, "durationMs": 10, "truncated": false,
 	}}
 	full := `{"command":"go build ./...","cwd":"","shell":"bash","shellPath":"/bin/bash","output":"c1\nc2\nc3\nc4\nc5\n","exitCode":0,"timedOut":false,"durationMs":10,"truncated":false}`
 	modelJSON := compactToolDataForModel("command", result, full)
-	var decoded struct {
+	if !strings.HasPrefix(modelJSON, "<cmd>\n") || !strings.Contains(modelJSON, "c1\nc2\nc3\nc4\nc5\n</cmd>") {
+		t.Fatalf("command output must pass through verbatim in the tag body, got %s", modelJSON)
+	}
+	if strings.Contains(modelJSON, "go build") {
+		t.Fatalf("command/cwd echo must be gone from the model payload, got %s", modelJSON)
+	}
+	if strings.Contains(modelJSON, `exit="0"`) {
+		t.Fatalf("zero exit code is implicit and must be omitted, got %s", modelJSON)
+	}
+
+	failed := toolResult{OK: true, Data: map[string]any{
+		"output": "boom", "exitCode": 2, "truncated": true, "outputFilePath": `C:\tmp\spill.log`,
+	}}
+	failedModel := compactToolDataForModel("command", failed, `{"fallback":true}`)
+	if !strings.Contains(failedModel, `exit="2"`) || !strings.Contains(failedModel, ` truncated`) || !strings.Contains(failedModel, `full="C:\tmp\spill.log"`) {
+		t.Fatalf("failure metadata must ride on attributes, got %s", failedModel)
+	}
+
+	// 超时收编：模型必须看到这块结果已经是后台服务（提示词/描述里承诺的标记）。
+	promoted := toolResult{OK: true, Data: map[string]any{
+		"command": "npm run dev", "output": "ready\n服务 ID: svc_9\n", "exitCode": -1, "timedOut": true, "promotedToService": true,
+	}}
+	promotedModel := compactToolDataForModel("command", promoted, `{"fallback":true}`)
+	if !strings.Contains(promotedModel, ` timed-out`) || !strings.Contains(promotedModel, ` promoted-to-service`) {
+		t.Fatalf("a promoted command must be flagged for the model, got %s", promotedModel)
+	}
+	promotedCollide := toolResult{OK: true, Data: map[string]any{
+		"output": "x</cmd>y", "exitCode": -1, "timedOut": true, "promotedToService": true,
+	}}
+	promotedCollideModel := compactToolDataForModel("command", promotedCollide, `{"fallback":true}`)
+	if !strings.Contains(promotedCollideModel, `"promotedToService":true`) {
+		t.Fatalf("the command fallback envelope must keep the promotion flag, got %s", promotedCollideModel)
+	}
+
+	collide := toolResult{OK: true, Data: map[string]any{
+		"command": "go build ./...", "shell": "bash", "output": "x</cmd>y", "exitCode": 3,
+	}}
+	collideModel := compactToolDataForModel("command", collide, `{"fallback":true}`)
+	var collideDecoded struct {
 		OK   bool `json:"ok"`
 		Data struct {
-			Output        string `json:"output"`
+			Output   string `json:"output"`
+			ExitCode int    `json:"exitCode"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(collideModel), &collideDecoded); err != nil || !collideDecoded.OK ||
+		collideDecoded.Data.Output != "x</cmd>y" || collideDecoded.Data.ExitCode != 3 {
+		t.Fatalf("colliding output must fall back to an envelope carrying the same fields, got %s", collideModel)
+	}
+	if strings.Contains(collideModel, "go build") || strings.Contains(collideModel, `"shell"`) {
+		t.Fatalf("the command fallback must not re-add block-dropped fields, got %s", collideModel)
+	}
+}
+
+func TestCompactToolResultForModelReadRendersTagBlocks(t *testing.T) {
+	// read 模型侧改为 <file> 标签块：行号正文原样落体（无 JSON 转义），元数据走
+	// 属性；正文自带 </file 时该节切换到 version 后缀标签，无 version 可用时
+	// 改用实体转义中和标记形状，边界始终不可伪造。
+	result := toolResult{OK: true, Data: &BatchReadResult{Files: []BatchReadResultItem{
+		{Path: "a.go", Content: "1: hello\n2: world", Version: "abc123", StartLine: 1, EndLine: 2, TotalLines: 40, Truncated: true},
+		{Path: "b.html", Content: "1: x</file>y", Version: "def456"},
+		{Path: "c.txt", Error: "read failed: bad sector", ErrorCode: "E_IO"},
+	}}}
+	got := compactToolDataForModel("read", result, "fallback")
+	if !strings.Contains(got, `<file path="a.go" version="abc123" lines="1-2" total="40" truncated>`) {
+		t.Fatalf("metadata must ride on the opening tag, got %s", got)
+	}
+	if !strings.Contains(got, "\n1: hello\n2: world\n</file>") {
+		t.Fatalf("line-numbered body must drop in verbatim, got %s", got)
+	}
+	if !strings.Contains(got, `<file-def456 path="b.html"`) || !strings.Contains(got, "\n1: x</file>y\n</file-def456>") {
+		t.Fatalf("body containing the closing marker must switch to the version-suffixed tag, got %s", got)
+	}
+	if !strings.Contains(got, `<file path="c.txt" error="E_IO">read failed: bad sector</file>`) {
+		t.Fatalf("failed file must render as a self-describing error entry, got %s", got)
+	}
+	// 生产者没给 version 时后缀失去唯一性（hash 才是防伪根），必须改中和正文里的
+	// 标记形状，否则正文能被当成块边界。
+	noVersion := toolResult{OK: true, Data: &BatchReadResult{Files: []BatchReadResultItem{
+		{Path: "d.txt", Content: "1: x</file>y"},
+	}}}
+	noVersionPayload := compactToolDataForModel("read", noVersion, "fallback")
+	if !strings.Contains(noVersionPayload, "&lt;/file") || strings.Count(noVersionPayload, "</file>") != 1 {
+		t.Fatalf("a version-less body must neutralize the marker instead of forging the boundary, got %s", noVersionPayload)
+	}
+	if strings.Contains(got, `"content":`) || strings.Contains(got, `\n`) {
+		t.Fatalf("JSON envelope and escaping must be gone, got %s", got)
+	}
+}
+
+// TestCompactToolResultForModelNeutralizesClosingMarkersInEditText 锁定编辑结果的
+// 尾部自由文本（summary/validation/warning）防护：校验/编译器输出是外部文本，
+// 里面出现 "…</cmd>…" 这类标记形状时不得原样落到载荷里，否则会被读成别的块的边界。
+func TestCompactToolResultForModelNeutralizesClosingMarkersInEditText(t *testing.T) {
+	multi := toolResult{OK: true, Data: MultiEditResult{
+		Files:      []EditResult{{Path: "a.go", Version: "v1"}},
+		Summary:    "1 file · +1 -1",
+		Validation: `go vet: token "</cmd>" is not allowed here`,
+		Warnings:   []string{"change 1 ignored replace_all: line 3 has </grep> in text"},
+	}}
+	got := compactToolDataForModel("edit", multi, "fallback")
+	if strings.Contains(got, "</cmd>") || strings.Contains(got, "</grep>") {
+		t.Fatalf("free-text lines must not carry a forgeable closing marker, got %s", got)
+	}
+	if !strings.Contains(got, "&lt;/cmd>") || !strings.Contains(got, "&lt;/grep>") {
+		t.Fatalf("marker-shaped text must stay readable but inert, got %s", got)
+	}
+	if !strings.Contains(got, `<edit path="a.go" version="v1"/>`) {
+		t.Fatalf("the edit tag itself must stay intact, got %s", got)
+	}
+
+	single := toolResult{OK: true, Data: EditResult{Path: "b.go", Version: "v2", Summary: "ok", Warnings: []string{"warn: </file> appears in the diff"}}}
+	singleGot := compactToolDataForModel("create", single, "fallback")
+	if strings.Contains(singleGot, "</file>") || !strings.Contains(singleGot, "&lt;/file>") {
+		t.Fatalf("single-file create warnings need the same guard, got %s", singleGot)
+	}
+}
+
+// TestCompactToolResultForModelClosingMarkerFallback 锁定标签体渲染的边界防护：
+// http 正文、fetch 正文/链接、grep 行预览、服务日志、服务状态输出、命令输出、
+// list_files 路径自带闭合标记（</http、</fetch、</grep、</svc-read、</svc、</cmd、
+// </files）时必须回退 JSON 信封（转义后标记无害），外部内容不能伪造块边界；且回退
+// 信封必须携带「同一份已加工载荷」，不得退回无上限的原文，也不得绕过模型侧上限。
+func TestCompactToolResultForModelClosingMarkerFallback(t *testing.T) {
+	type envelope struct {
+		OK   bool           `json:"ok"`
+		Data map[string]any `json:"data"`
+	}
+	mustEnvelope := func(tool string, result toolResult, wantKey string, wantVal any) map[string]any {
+		t.Helper()
+		got := compactToolDataForModel(tool, result, `{"fallback":true}`)
+		var decoded envelope
+		if err := json.Unmarshal([]byte(got), &decoded); err != nil || !decoded.OK {
+			t.Fatalf("%s collision must fall back to an ok JSON envelope, got %s", tool, got)
+		}
+		if v, ok := decoded.Data[wantKey]; !ok || fmt.Sprint(v) != fmt.Sprint(wantVal) {
+			t.Fatalf("%s fallback envelope must carry %s=%v, got %s", tool, wantKey, wantVal, got)
+		}
+		if decoded.Data["fallback"] == true {
+			t.Fatalf("%s fallback must not be the raw full JSON", tool)
+		}
+		return decoded.Data
+	}
+
+	httpRes := toolResult{OK: true, Data: map[string]any{
+		"status": 200, "contentType": "text/html", "body": "x</http>y",
+	}}
+	mustEnvelope("http_request", httpRes, "body", "x</http>y")
+
+	fetchRes := toolResult{OK: true, Data: map[string]any{
+		"status": 200, "text": "page body",
+		"links": []map[string]any{{"text": "docs", "url": "https://ex.com/a</fetch>b"}},
+	}}
+	mustEnvelope("web_fetch", fetchRes, "text", "page body")
+
+	grepRes := toolResult{OK: true, Data: &GrepResult{
+		Mode: "lines", MatchedLines: 1, Hits: 1, Files: 1,
+		LineHits: []GrepFileMatch{{Path: "a.txt", Lines: []int{3}, Texts: []string{"x</grep>y"}}},
+	}}
+	if data := mustEnvelope("grep", grepRes, "mode", "lines"); !strings.Contains(fmt.Sprint(data["matches"]), "x</grep>y") {
+		t.Fatalf("grep fallback envelope must carry the capped matches, got %v", data["matches"])
+	}
+
+	svcRead := toolResult{OK: true, Data: ServiceReadResult{
+		ID: "svc_1", Output: "x</svc-read>y", ReturnedBytes: 12, BufferBytes: 12, TotalBytes: 12,
+	}}
+	mustEnvelope("service", svcRead, "output", "x</svc-read>y")
+
+	svcInfo := toolResult{OK: true, Data: ServiceInfo{
+		ID: "svc_2", Status: "running", PID: 7, OutputTail: "boot\nx</svc>y",
+	}}
+	if data := mustEnvelope("service", svcInfo, "id", "svc_2"); !strings.Contains(fmt.Sprint(data["outputTail"]), "x</svc>y") {
+		t.Fatalf("service info fallback envelope must carry the colliding tail, got %v", data["outputTail"])
+	}
+
+	cmdCollide := toolResult{OK: true, Data: map[string]any{
+		"command": "npm run dev", "shell": "bash", "output": "x</cmd>y", "exitCode": 3,
+	}}
+	if data := mustEnvelope("command", cmdCollide, "output", "x</cmd>y"); data["command"] != nil || data["shell"] != nil {
+		t.Fatalf("command fallback envelope must not re-add block-dropped fields, got %v", data)
+	}
+
+	listRes := toolResult{OK: true, Data: ListFilesResult{
+		Count:   1,
+		Entries: []FileEntry{{Path: "evil/</files>note.txt"}},
+	}}
+	if data := mustEnvelope("list_files", listRes, "count", 1); !strings.Contains(fmt.Sprint(data["entries"]), "evil/</files>note.txt") {
+		t.Fatalf("list_files fallback envelope must carry the colliding path, got %v", data["entries"])
+	}
+
+	// 超限 http 正文自带闭合标记：回退信封同样受模型侧上限约束（比对解码后的
+	// 正文长度，而非信封字节数——json.Marshal 的 HTML 转义会放大字节体积）。
+	bigBody := strings.Repeat("z</http>", 1+maxModelWebOutput/len("z</http>"))
+	bigHTTP := toolResult{OK: true, Data: map[string]any{"status": 200, "body": bigBody}}
+	bigFull, _ := json.Marshal(bigHTTP)
+	bigGot := compactToolDataForModel("http_request", bigHTTP, string(bigFull))
+	var bigDecoded struct {
+		OK   bool `json:"ok"`
+		Data struct {
+			Body      string `json:"body"`
+			Truncated bool   `json:"truncated"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(bigGot), &bigDecoded); err != nil || !bigDecoded.OK {
+		t.Fatalf("colliding http body must fall back to an ok JSON envelope, got %.64s", bigGot)
+	}
+	if n := utf8.RuneCountInString(bigDecoded.Data.Body); n > maxModelWebOutput+200 || !bigDecoded.Data.Truncated {
+		t.Fatalf("colliding http fallback body must stay near %d runes and be flagged truncated, got %d truncated=%v", maxModelWebOutput, n, bigDecoded.Data.Truncated)
+	}
+
+	// 正文为空、只有 JSON 预览的响应：替换进来的预览必须过同一道模型侧上限（旧实现
+	// 在 cap 之后才把预览顶上，替换路径完全不受限）。
+	bigPreview := strings.Repeat("y</http>z", 1+maxModelWebOutput/len("y</http>z"))
+	jsonOnly := toolResult{OK: true, Data: map[string]any{"status": 200, "jsonPreview": bigPreview}}
+	jsonOnlyFull, _ := json.Marshal(jsonOnly)
+	jsonOnlyGot := compactToolDataForModel("http_request", jsonOnly, string(jsonOnlyFull))
+	var jsonOnlyDecoded struct {
+		OK   bool `json:"ok"`
+		Data struct {
+			Body      string `json:"body"`
+			Truncated bool   `json:"truncated"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(jsonOnlyGot), &jsonOnlyDecoded); err != nil || !jsonOnlyDecoded.OK {
+		t.Fatalf("a JSON-only response must fall back to an ok JSON envelope, got %.64s", jsonOnlyGot)
+	}
+	if n := utf8.RuneCountInString(jsonOnlyDecoded.Data.Body); n > maxModelWebOutput+200 || !jsonOnlyDecoded.Data.Truncated {
+		t.Fatalf("the substituted JSON preview must stay near %d runes and be flagged truncated, got %d truncated=%v", maxModelWebOutput, n, jsonOnlyDecoded.Data.Truncated)
+	}
+
+	// 超限服务状态输出自带闭合标记：回退信封同样受 4 KiB 模型侧夹取约束（旧实现直接
+	// 返回 fullJSON，尾夹取被整个绕过，最多能灌上游的 8 KiB 预览上限）。
+	bigTail := strings.Repeat("l", 8*1024) + "x</svc>y"
+	bigSvc := toolResult{OK: true, Data: ServiceInfo{ID: "svc_big", OutputTail: bigTail}}
+	bigSvcFull, _ := json.Marshal(bigSvc)
+	bigSvcGot := compactToolDataForModel("service", bigSvc, string(bigSvcFull))
+	var svcDecoded struct {
+		OK   bool `json:"ok"`
+		Data struct {
+			OutputTail    string `json:"outputTail"`
 			OutputReduced bool   `json:"outputReduced"`
 		} `json:"data"`
 	}
-	if err := json.Unmarshal([]byte(modelJSON), &decoded); err != nil {
-		t.Fatal(err)
+	if err := json.Unmarshal([]byte(bigSvcGot), &svcDecoded); err != nil || !svcDecoded.OK {
+		t.Fatalf("colliding service tail must fall back to an ok JSON envelope, got %.64s", bigSvcGot)
 	}
-	if !decoded.OK || decoded.Data.Output != "c1\nc2\nc3\nc4\nc5\n" || decoded.Data.OutputReduced {
-		t.Fatalf("command output must pass through unchanged, got %s", modelJSON)
-	}
-	if strings.Contains(modelJSON, "reductionNote") {
-		t.Fatalf("reductionNote must be gone after fullOutput removal, got %s", modelJSON)
+	if n := len(svcDecoded.Data.OutputTail); n > 4*1024 || !svcDecoded.Data.OutputReduced || !strings.Contains(svcDecoded.Data.OutputTail, "</svc") {
+		t.Fatalf("colliding service tail must stay clamped to 4 KiB, got %d bytes reduced=%v", n, svcDecoded.Data.OutputReduced)
 	}
 }
 
@@ -4459,25 +4702,24 @@ func TestCompactToolResultForModelKeepsGrepTextsAlignedWhenCapping(t *testing.T)
 
 	got := compactToolResultForModel("grep", result, string(raw))
 
-	var decoded struct {
-		Data struct {
-			Matches []GrepFileMatch `json:"matches"`
-		} `json:"data"`
+	if !strings.Contains(got, "a.txt:1: line 1\n") || !strings.Contains(got, fmt.Sprintf("a.txt:%d: line %d\n", maxModelGrepMatches, maxModelGrepMatches)) {
+		t.Fatalf("expected aligned path:line: text rows, got %.120s", got)
 	}
-	if err := json.Unmarshal([]byte(got), &decoded); err != nil {
-		t.Fatal(err)
+	if strings.Contains(got, fmt.Sprintf("a.txt:%d:", maxModelGrepMatches+1)) {
+		t.Fatalf("line beyond the cap must be dropped, got %.120s", got)
 	}
-	if len(decoded.Data.Matches) != 1 {
-		t.Fatalf("expected one file group, got %#v", decoded.Data.Matches)
-	}
-	fh := decoded.Data.Matches[0]
-	if len(fh.Lines) != maxModelGrepMatches || len(fh.Texts) != len(fh.Lines) {
-		t.Fatalf("expected %d aligned lines/texts, got %d/%d", maxModelGrepMatches, len(fh.Lines), len(fh.Texts))
-	}
-	for i := range fh.Lines {
-		want := fmt.Sprintf("line %d", fh.Lines[i])
-		if fh.Texts[i] != want {
-			t.Fatalf("texts drifted at index %d: got %q, want %q", i, fh.Texts[i], want)
+	// Every rendered row must pair its line number with the matching preview.
+	for _, row := range strings.Split(got, "\n") {
+		if !strings.HasPrefix(row, "a.txt:") {
+			continue
+		}
+		rest := row[len("a.txt:"):]
+		colon := strings.Index(rest, ":")
+		if colon <= 0 {
+			t.Fatalf("row missing line number: %q", row)
+		}
+		if want := "line " + rest[:colon]; !strings.HasSuffix(row, want) {
+			t.Fatalf("text drifted for line %s: got %q", rest[:colon], row)
 		}
 	}
 }

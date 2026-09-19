@@ -23,6 +23,7 @@ import (
 	"ally-dev/internal/tools/grep"
 	"ally-dev/internal/tools/pathutil"
 	"ally-dev/internal/tools/read"
+	"ally-dev/internal/tools/service"
 )
 
 type CalculateRequest = calculatetool.Request
@@ -78,11 +79,9 @@ func (b *limitedBuffer) Write(p []byte) (int, error) {
 		// 截断边界向左回退到 UTF-8 字符边界：在多字节序列中间切开会让
 		// utf8.ValidString 对纯 UTF-8 输出误报失败，下游 decodeConsoleOutput
 		// 把整段按 GB18030 重解码成乱码。回退出的字节照旧完整进入 spill。
+		// 末字节是孤立前导字节（如「中」只剩 \xe6）时 RuneStart 检查会提前
+		// 停住，所以用 DecodeLastRune 连前导字节一起回退。
 		head := p[:remaining]
-		// 回退到完整的 UTF-8 字符边界：末字节是孤立的前导字节（如「中」
-		// 只剩 \xe6）时 RuneStart 检查会提前停住，必须用 DecodeLastRune
-		// 连前导字节一起回退，否则 utf8.ValidString 对纯 UTF-8 输出误报
-		// 失败，下游 decodeConsoleOutput 把整段按 GB18030 重解码成乱码。
 		for len(head) > 0 {
 			if r, size := utf8.DecodeLastRune(head); r == utf8.RuneError && size <= 1 {
 				head = head[:len(head)-1]
@@ -142,18 +141,18 @@ func (b *limitedBuffer) TailString(n int) string {
 		return ""
 	}
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	p := b.buf.Bytes()
 	if len(p) <= n {
-		return string(p)
+		s := string(p)
+		b.mu.Unlock()
+		return s
 	}
-	tail := p[len(p)-n:]
-	// 与 Write 的截断同理：起点回退到 UTF-8 字符边界，避免流式预览把
-	// 多字节字符切开后 decodeConsoleOutput 误判整段为 GBK。
-	for len(tail) > 0 && !utf8.RuneStart(tail[0]) {
-		tail = tail[1:]
-	}
-	return string(tail)
+	tail := string(p[len(p)-n:])
+	b.mu.Unlock()
+	// 与 Write 的截断同理：起点对齐到 UTF-8 字符边界，避免流式预览把多字节
+	// 字符切开后 decodeConsoleOutput 误判整段为 GBK。规则与其它截尾点同源
+	// （service.AlignRuneStart）：只对 UTF-8 文本前移，GBK/二进制原样保留。
+	return service.AlignRuneStart(tail)
 }
 
 // ── Path / content-hash thin wrappers ────────────────────────

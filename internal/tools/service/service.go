@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"strings"
 	"sync"
+	"unicode/utf8"
 )
 
 // Output limits used by both the app layer and the model-facing read action.
@@ -97,13 +98,35 @@ func (b *RollingBuffer) Restore(output []byte, total int64, truncated bool) {
 	b.truncated = truncated
 }
 
-// TailString returns the last `limit` bytes of s. If limit <= 0 or s is
-// shorter than limit, s is returned unchanged.
+// TailString returns the last `limit` bytes of s, with the cut aligned to a
+// rune boundary (see AlignRuneStart). If limit <= 0 or s is shorter than
+// limit, s is returned unchanged.
 func TailString(s string, limit int) string {
 	if limit <= 0 || len(s) <= limit {
 		return s
 	}
-	return s[len(s)-limit:]
+	return AlignRuneStart(s[len(s)-limit:])
+}
+
+// AlignRuneStart repairs a tail produced by a byte-boundary cut: such a tail can
+// begin in the middle of a multi-byte character, and that leading partial rune
+// makes the whole string invalid UTF-8 — callers that then guess the encoding
+// (decodeConsoleOutput's GB18030 fallback) or JSON-encode it turn readable text
+// into mojibake (zh-CN logs land on a mid-character cut roughly two times out of
+// three). The tail moves forward by at most utf8.UTFMax-1 bytes, and only when
+// the shifted result is valid UTF-8: non-UTF-8 input (GBK log lines, binary
+// output) is returned byte-identical, so its own decoding path still sees every
+// byte.
+func AlignRuneStart(tail string) string {
+	if utf8.ValidString(tail) {
+		return tail
+	}
+	for n := 1; n < utf8.UTFMax && n < len(tail); n++ {
+		if utf8.ValidString(tail[n:]) {
+			return tail[n:]
+		}
+	}
+	return tail
 }
 
 // NormalizeCommand lower-cases the command and collapses runs of whitespace.

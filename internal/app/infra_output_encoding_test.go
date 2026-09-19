@@ -62,8 +62,10 @@ func TestDecodeConsoleOutput(t *testing.T) {
 
 func TestDecodeConsoleOutputKeepsByteSlicedUTF8(t *testing.T) {
 	// A pure UTF-8 payload whose final character was cut by a byte-boundary
-	// slice (TailString / spill truncation) is not GBK: decoding it as GB18030
-	// would mojibake the whole output. The readable prefix must survive.
+	// write/spill truncation is not GBK: decoding it as GB18030 would mojibake
+	// the whole output. The readable prefix must survive. (The mirrored case — a
+	// byte-sliced *tail*, which starts mid-character — is aligned before decoding
+	// instead; see service.AlignRuneStart.)
 	prefix := "构建完成：全部 12 个包\n"
 	input := string(append([]byte(prefix), []byte("中")[:2]...))
 

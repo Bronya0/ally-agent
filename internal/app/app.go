@@ -47,7 +47,13 @@ const (
 	modelToolHeadBytes      = 4 * 1024
 	modelToolTailBytes      = 8 * 1024
 	maxModelGrepMatches     = 200
-	maxModelGrepFileCounts  = 20
+	// maxModelGrepFileGroups bounds the file groups a lines-mode grep payload
+	// may carry (a single tool page can span far more groups than lines). The
+	// count_matches page has no counterpart cap here: its row count is already
+	// bounded by the grep tool's own pagination width, and trimming those rows a
+	// second time would make the payload's next-offset resume past the files it
+	// dropped.
+	maxModelGrepFileGroups = 20
 	// maxModelGrepTextBytes bounds the combined size of per-line text
 	// previews in grep lines mode (on top of the per-line 500-char cap from
 	// the grep tool), so worst-case minified hits cannot flood model context.
