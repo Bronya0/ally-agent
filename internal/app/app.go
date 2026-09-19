@@ -1737,10 +1737,6 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			a.saveHistory(req.SessionID, messages)
 		}
 		a.restoreSavedHistoryBreakdown(sessionID)
-		// run 结束的一次性任务栏提醒（仅窗口非前台时闪烁数次）。
-		// 运行中不设任务栏进度：TBPF_INDETERMINATE 跑马灯贯穿整个
-		// run，会被用户感知为后台窗口图标持续闪烁。
-		flashTaskbarWindowIfInactive()
 		a.finishRun(runID)
 	}()
 	// Panic 兜底：runChat 在独立 goroutine 里运行，逃逸的 panic 会直接击穿

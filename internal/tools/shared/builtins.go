@@ -266,7 +266,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"action"},
 		}),
-		functionTool("grep", "Search UTF-8 file contents with ripgrep. Returns a `<grep>` tag block whose opening tag carries the explicit `mode` (`lines`/`count_matches`), exact `matched`/`hits`/`files` totals, `truncated`/`stats-approx`/`offset-exhausted` flags, and `next-offset` while more entries remain. `lines` mode (default) returns one `path:line: text` row per matching line (text preview trimmed, max 500 chars) so a separate read is only needed for surrounding context; `count_matches` returns one `path: count=N` row per file. Result size is bounded automatically; paginate with `offset` using `next-offset` (it resumes right after the last row shown) or narrow path/glob instead of asking for more entries.", map[string]any{
+		functionTool("grep", "Search UTF-8 file contents with ripgrep. Returns a `<ally-grep>` tag block whose opening tag carries the explicit `mode` (`lines`/`count_matches`), exact `matched`/`hits`/`files` totals, `truncated`/`stats-approx`/`offset-exhausted` flags, and `next-offset` while more entries remain. `lines` mode (default) returns one `path:line: text` row per matching line (text preview trimmed, max 500 chars) so a separate read is only needed for surrounding context; `count_matches` returns one `path: count=N` row per file. Result size is bounded automatically; paginate with `offset` using `next-offset` (it resumes right after the last row shown) or narrow path/glob instead of asking for more entries.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"pattern":        map[string]any{"type": "string", "minLength": 1, "pattern": `.*\S.*`, "description": "Search regex pattern."},
@@ -279,7 +279,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"pattern"},
 		}),
-		functionTool("read", "Read one or more file contents. Supports text files and images (jpg, png, gif, webp, bmp). For text files, each file is returned as a `<file path=… version=… lines=A-B total=N>` block whose body carries 1-based line numbers; use that version attribute for edit. The `truncated`/`reused`/`image`/`error` attributes flag anything else. Omit startLine/endLine to read the whole file when needed, or specify startLine/endLine to read a targeted range in larger files to save context. Pass needed files in the files array to read in parallel.", map[string]any{
+		functionTool("read", "Read one or more file contents. Supports text files and images (jpg, png, gif, webp, bmp). For text files, each file is returned as a `<ally-file path=… version=… lines=A-B total=N>` block whose body carries 1-based line numbers; use that version attribute for edit. The `truncated`/`reused`/`image`/`error` attributes flag anything else. Omit startLine/endLine to read the whole file when needed, or specify startLine/endLine to read a targeted range in larger files to save context. Pass needed files in the files array to read in parallel.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"files": batchReadFilesSchema(),

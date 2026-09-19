@@ -141,12 +141,12 @@ type toolResult struct {                       // infra_result.go:19
 
 | 工具 | 模型视图 |
 |---|---|
-| `read` | `<file path version lines total>` 标签块，行号正文零转义；本轮已读过的同一 path/range → 内容换成「已给过你、version 未变、可复用」说明（配合 run 级 read cache，`newRunReadCache`） |
+| `read` | `<ally-file path version lines total>` 标签块，行号正文零转义；本轮已读过的同一 path/range → 内容换成「已给过你、version 未变、可复用」说明（配合 run 级 read cache，`newRunReadCache`） |
 | `read` 图片 | 内容转为后续 user 消息的图片输入，块里只留 `image="…"` 说明 |
-| `list_files` | `<files count>` 标签块，只发换行分隔的路径（目录带 `/`），比完整 FileEntry 省约 3/4 token |
-| `grep` | `<grep mode matched hits files next-offset>` 头 + `path:line: text` 行（count 模式为 `path: count=N`）；命中行文本按预算裁剪（`capGrepLineTexts`） |
-| `command` | `<cmd exit timed-out promoted-to-service truncated full>` 块，输出零转义落体；command/cwd 不回显（模型刚在参数里写过） |
-| `service` read/info | `<svc-read>` / `<svc>` 块（字节账目走属性），`list` 仍走 JSON |
+| `list_files` | `<ally-files count>` 标签块，只发换行分隔的路径（目录带 `/`），比完整 FileEntry 省约 3/4 token |
+| `grep` | `<ally-grep mode matched hits files next-offset>` 头 + `path:line: text` 行（count 模式为 `path: count=N`）；命中行文本按预算裁剪（`capGrepLineTexts`） |
+| `command` | `<ally-cmd exit timed-out promoted-to-service truncated full>` 块，输出零转义落体；command/cwd 不回显（模型刚在参数里写过） |
+| `service` read/info | `<ally-svc-read>` / `<ally-svc>` 块（字节账目走属性），`list` 仍走 JSON |
 | `edit` / `create` / `delete` | 自闭合属性标签；summary/validation 走属性，warnings 走尾部行（自由文本经 `neutralizeClosingMarkers` 中和标记形状） |
 | `http_request` / `web_fetch` | `<http>` / `<fetch>` 块（砍 url/statusText 回显，链接作尾部行） |
 | `mcp__*` | 第三方无上限输出，统一夹到内置上限（`renderMcpResultForModel`） |

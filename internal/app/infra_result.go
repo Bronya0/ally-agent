@@ -226,7 +226,7 @@ func compactToolDataForModel(name string, result toolResult, fullJSON string) st
 	case "list_files":
 		// The UI explorer consumes the full FileEntry structs (name/size/
 		// modTime/symlink); the model only needs the tree shape: a plain path
-		// list (trailing slash marks directories) inside a <files> block.
+		// list (trailing slash marks directories) inside a <ally-files> block.
 		var r ListFilesResult
 		if !decodeToolData(result.Data, &r) {
 			return fullJSON
@@ -299,7 +299,7 @@ func compactToolDataForModel(name string, result toolResult, fullJSON string) st
 	}
 }
 
-// renderGrepResultForModel renders a grep result as a <grep> tag block: one
+// renderGrepResultForModel renders a grep result as a <ally-grep> tag block: one
 // "path:line: text" row per match (the shape models read natively), or one
 // "path: count=N" row per file in count mode, with exact totals, the explicit
 // mode, and the paging metadata on the opening tag. The caps are identical to
@@ -390,7 +390,7 @@ func renderGrepResultForModel(r GrepResult, fullJSON string) string {
 	// must never be mistaken for a lines row whose text preview was dropped by
 	// the byte budget ("path:12"), and a bare flag is only visible to a reader
 	// that already knows which mode it asked for.
-	fmt.Fprintf(&b, `<grep mode="%s"`, mode)
+	fmt.Fprintf(&b, `<ally-grep mode="%s"`, mode)
 	fmt.Fprintf(&b, ` matched="%d"`, r.MatchedLines)
 	if r.Hits != r.MatchedLines {
 		fmt.Fprintf(&b, ` hits="%d"`, r.Hits)
@@ -436,7 +436,7 @@ func renderGrepResultForModel(r GrepResult, fullJSON string) string {
 	// boundary, so fall back to a JSON envelope over the already-capped data
 	// (JSON escaping neutralizes the marker and every cap stays enforced).
 	rendered := b.String()
-	if strings.Contains(rendered, "</grep") {
+	if strings.Contains(rendered, "</ally-grep") {
 		data := map[string]any{
 			"mode":         mode,
 			"matchedLines": r.MatchedLines,
@@ -467,10 +467,10 @@ func renderGrepResultForModel(r GrepResult, fullJSON string) string {
 		}
 		return marshalToolResultOrFallback(toolResult{OK: true, Data: data}, fullJSON)
 	}
-	return strings.TrimRight(rendered, "\n") + "\n</grep>"
+	return strings.TrimRight(rendered, "\n") + "\n</ally-grep>"
 }
 
-// renderHTTPResultForModel renders an HTTP response as an <http> block: the
+// renderHTTPResultForModel renders an HTTP response as an <ally-http> block: the
 // body drops in verbatim (no JSON escaping) and status rides on the opening
 // tag. The request url is not echoed (the model just sent it) and statusText
 // is inferable from status, so both are dropped. Body text that itself
@@ -496,7 +496,7 @@ func renderHTTPResultForModel(r HTTPRequestToolResult, fullJSON string) string {
 			reduced = reduced || subReduced
 		}
 	}
-	if strings.Contains(body, "</http") {
+	if strings.Contains(body, "</ally-http") {
 		data := map[string]any{
 			"status":     r.Status,
 			"statusText": r.StatusText,
@@ -515,7 +515,7 @@ func renderHTTPResultForModel(r HTTPRequestToolResult, fullJSON string) string {
 		return marshalToolResultOrFallback(toolResult{OK: true, Data: data}, fullJSON)
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, `<http status="%d"`, r.Status)
+	fmt.Fprintf(&b, `<ally-http status="%d"`, r.Status)
 	if r.FinalURL != "" && r.FinalURL != r.URL {
 		b.WriteString(` final-url="` + attrEscape(r.FinalURL) + `"`)
 	}
@@ -527,11 +527,11 @@ func renderHTTPResultForModel(r HTTPRequestToolResult, fullJSON string) string {
 	}
 	b.WriteString(">\n")
 	b.WriteString(body)
-	b.WriteString("\n</http>")
+	b.WriteString("\n</ally-http>")
 	return b.String()
 }
 
-// renderWebFetchResultForModel renders a readable-page fetch as a <fetch>
+// renderWebFetchResultForModel renders a readable-page fetch as a <ally-fetch>
 // block: the article text drops in verbatim and links append as trailing
 // "link: text <url>" rows. Article text or link rows containing the closing
 // marker fall back to a JSON envelope carrying the already-capped text —
@@ -539,16 +539,16 @@ func renderHTTPResultForModel(r HTTPRequestToolResult, fullJSON string) string {
 // never bypass the model-side cap either.
 func renderWebFetchResultForModel(r WebFetchResult, fullJSON string) string {
 	text, reduced := compactTextForModel(r.Text, compactTextSpec{limit: maxModelWebOutput})
-	if strings.Contains(text, "</fetch") {
+	if strings.Contains(text, "</ally-fetch") {
 		return webFetchJSONEnvelopeForModel(r, text, reduced, fullJSON)
 	}
 	for _, link := range r.Links {
-		if strings.Contains(link.Text, "</fetch") || strings.Contains(link.URL, "</fetch") {
+		if strings.Contains(link.Text, "</ally-fetch") || strings.Contains(link.URL, "</ally-fetch") {
 			return webFetchJSONEnvelopeForModel(r, text, reduced, fullJSON)
 		}
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, `<fetch status="%d"`, r.Status)
+	fmt.Fprintf(&b, `<ally-fetch status="%d"`, r.Status)
 	if r.Title != "" {
 		b.WriteString(` title="` + attrEscape(r.Title) + `"`)
 	}
@@ -563,12 +563,12 @@ func renderWebFetchResultForModel(r WebFetchResult, fullJSON string) string {
 	for _, link := range r.Links {
 		b.WriteString("\nlink: " + neutralizeRowBreaks(link.Text) + " <" + neutralizeRowBreaks(link.URL) + ">")
 	}
-	b.WriteString("\n</fetch>")
+	b.WriteString("\n</ally-fetch>")
 	return b.String()
 }
 
 // webFetchJSONEnvelopeForModel is the fallback when the fetch text or a link
-// row cannot be rendered inside a <fetch> block: the JSON envelope carries
+// row cannot be rendered inside a <ally-fetch> block: the JSON envelope carries
 // the already-capped text (JSON escaping neutralizes the marker) instead of
 // returning the raw full JSON, so the model-side cap stays enforced.
 func webFetchJSONEnvelopeForModel(r WebFetchResult, text string, reduced bool, fullJSON string) string {
@@ -590,7 +590,7 @@ func webFetchJSONEnvelopeForModel(r WebFetchResult, text string, reduced bool, f
 	return marshalToolResultOrFallback(toolResult{OK: true, Data: data}, fullJSON)
 }
 
-// renderReadResultForModel renders a batch read result as <file> tag blocks
+// renderReadResultForModel renders a batch read result as <ally-file> tag blocks
 // instead of a JSON envelope: metadata rides on the opening tag's attributes
 // and the line-numbered body drops in verbatim, so the payload pays no JSON
 // escaping tax (every newline/quote/tab doubles inside a JSON string) and no
@@ -608,21 +608,21 @@ func renderReadResultForModel(r BatchReadResult) string {
 	var b strings.Builder
 	injected := false
 	for _, f := range r.Files {
-		tag := "file"
+		tag := "ally-file"
 		body := f.Content
 		if f.Reused {
 			body = reusedNote
 		}
-		if strings.Contains(body, "</file") {
+		if strings.Contains(body, "</ally-file") {
 			// The version (a content hash) is what makes the suffixed closing marker
 			// unforgeable. With no version token — or a body that happens to contain
 			// the suffixed marker — the suffix proves nothing, so neutralize the
 			// marker shape in the body instead: the text stays readable and the
 			// block boundary stays authoritative.
-			if f.Version == "" || strings.Contains(body, "</file-"+f.Version) {
-				body = strings.ReplaceAll(body, "</file", "&lt;/file")
+			if f.Version == "" || strings.Contains(body, "</ally-file-"+f.Version) {
+				body = strings.ReplaceAll(body, "</ally-file", "&lt;/ally-file")
 			} else {
-				tag = "file-" + f.Version
+				tag = "ally-file-" + f.Version
 			}
 		}
 		b.WriteString("<" + tag + ` path="` + attrEscape(f.Path) + `"`)
@@ -665,7 +665,7 @@ func renderReadResultForModel(r BatchReadResult) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
-// renderCommandResultForModel renders a command result as a <cmd> block with
+// renderCommandResultForModel renders a command result as a <ally-cmd> block with
 // the merged stdout/stderr verbatim in the body. The command text and cwd are
 // deliberately not echoed — the model just sent them in the tool call one
 // message earlier, and re-quoting them only doubles long commands in history.
@@ -680,7 +680,7 @@ func renderCommandResultForModel(r CommandResult, fullJSON string) string {
 	if r.Output != "" {
 		body = strings.TrimRight(r.Output, "\n")
 	}
-	if strings.Contains(body, "</cmd") {
+	if strings.Contains(body, "</ally-cmd") {
 		data := map[string]any{"output": body, "exitCode": r.ExitCode}
 		if r.TimedOut {
 			data["timedOut"] = true
@@ -697,7 +697,7 @@ func renderCommandResultForModel(r CommandResult, fullJSON string) string {
 		return marshalToolResultOrFallback(toolResult{OK: true, Data: data}, fullJSON)
 	}
 	var b strings.Builder
-	b.WriteString("<cmd")
+	b.WriteString("<ally-cmd")
 	if r.ExitCode != 0 {
 		fmt.Fprintf(&b, ` exit="%d"`, r.ExitCode)
 	}
@@ -715,13 +715,13 @@ func renderCommandResultForModel(r CommandResult, fullJSON string) string {
 	}
 	b.WriteString(">\n")
 	b.WriteString(body)
-	b.WriteString("\n</cmd>")
+	b.WriteString("\n</ally-cmd>")
 	return b.String()
 }
 
 func renderListFilesResultForModel(r ListFilesResult, fullJSON string) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, `<files count="%d"`, r.Count)
+	fmt.Fprintf(&b, `<ally-files count="%d"`, r.Count)
 	if r.Truncated {
 		b.WriteString(` truncated`)
 	}
@@ -730,7 +730,7 @@ func renderListFilesResultForModel(r ListFilesResult, fullJSON string) string {
 	// (Unix filenames may include '<'); fall back to the JSON envelope,
 	// where the path is escaped, before writing any row.
 	for _, entry := range r.Entries {
-		if entry.MoreFiles == 0 && strings.Contains(entry.Path, "</files") {
+		if entry.MoreFiles == 0 && strings.Contains(entry.Path, "</ally-files") {
 			return listFilesJSONEnvelopeForModel(r, fullJSON)
 		}
 		if entry.MoreFiles > 0 {
@@ -751,11 +751,11 @@ func renderListFilesResultForModel(r ListFilesResult, fullJSON string) string {
 	case r.Truncated:
 		b.WriteString("Entry limit reached; narrow path or raise limit to see the rest.\n")
 	}
-	return strings.TrimRight(b.String(), "\n") + "\n</files>"
+	return strings.TrimRight(b.String(), "\n") + "\n</ally-files>"
 }
 
 // listFilesJSONEnvelopeForModel is the fallback for a listing whose paths
-// cannot be rendered as a <files> block (a path contains the closing
+// cannot be rendered as a <ally-files> block (a path contains the closing
 // marker). It rebuilds the compact JSON envelope from the already-bounded
 // entries instead of returning the raw full JSON, so the per-entry UI
 // metadata (name/size/modTime) still never reaches the model.
@@ -783,12 +783,12 @@ func listFilesJSONEnvelopeForModel(r ListFilesResult, fullJSON string) string {
 }
 
 // renderMultiEditResultForModel renders a batch edit as one self-closing
-// <edit path version/> line per file (the version is the edit contract) plus
+// <ally-edit path version/> line per file (the version is the edit contract) plus
 // trailing summary/validation/warning lines for the batch as a whole.
 func renderMultiEditResultForModel(r MultiEditResult) string {
 	var b strings.Builder
 	for _, file := range r.Files {
-		b.WriteString(`<edit path="` + attrEscape(file.Path) + `" version="` + attrEscape(file.Version) + `"/>` + "\n")
+		b.WriteString(`<ally-edit path="` + attrEscape(file.Path) + `" version="` + attrEscape(file.Version) + `"/>` + "\n")
 	}
 	if r.Summary != "" {
 		b.WriteString("edit summary: " + neutralizeClosingMarkers(r.Summary) + "\n")
@@ -807,7 +807,7 @@ func renderMultiEditResultForModel(r MultiEditResult) string {
 // attributes, warnings append as trailing lines.
 func renderEditResultForModel(r EditResult) string {
 	var b strings.Builder
-	b.WriteString(`<edit path="` + attrEscape(r.Path) + `" version="` + attrEscape(r.Version) + `"`)
+	b.WriteString(`<ally-edit path="` + attrEscape(r.Path) + `" version="` + attrEscape(r.Version) + `"`)
 	if r.Summary != "" {
 		b.WriteString(` summary="` + attrEscape(r.Summary) + `"`)
 	}
@@ -833,7 +833,7 @@ func renderEditResultForModel(r EditResult) string {
 
 func renderDeleteResultForModel(r DeleteResult) string {
 	var b strings.Builder
-	b.WriteString(`<deleted path="` + attrEscape(r.Path) + `"`)
+	b.WriteString(`<ally-deleted path="` + attrEscape(r.Path) + `"`)
 	if r.Kind != "" {
 		b.WriteString(` kind="` + attrEscape(r.Kind) + `"`)
 	}
@@ -860,7 +860,7 @@ func renderServiceReadResultForModel(r ServiceReadResult, fullJSON string) strin
 		reducedFrom = len(output)
 		output = tailString(output, maxReadOutputForModel)
 	}
-	if strings.Contains(output, "</svc") {
+	if strings.Contains(output, "</ally-svc-read") {
 		data := map[string]any{
 			"id":            r.ID,
 			"status":        r.Status,
@@ -878,7 +878,7 @@ func renderServiceReadResultForModel(r ServiceReadResult, fullJSON string) strin
 		return marshalToolResultOrFallback(toolResult{OK: true, Data: data}, fullJSON)
 	}
 	var b strings.Builder
-	b.WriteString(`<svc-read id="` + attrEscape(r.ID) + `"`)
+	b.WriteString(`<ally-svc-read id="` + attrEscape(r.ID) + `"`)
 	if r.Status != "" {
 		b.WriteString(` status="` + attrEscape(r.Status) + `"`)
 	}
@@ -894,7 +894,7 @@ func renderServiceReadResultForModel(r ServiceReadResult, fullJSON string) strin
 	}
 	b.WriteString(">\n")
 	b.WriteString(strings.TrimRight(output, "\n"))
-	b.WriteString("\n</svc-read>")
+	b.WriteString("\n</ally-svc-read>")
 	return b.String()
 }
 
@@ -908,7 +908,7 @@ func renderServiceReadResultForModel(r ServiceReadResult, fullJSON string) strin
 func renderServiceInfoResultForModel(r ServiceInfo, fullJSON string) string {
 	outputTail := tailString(r.OutputTail, 4*1024)
 	reduced := len(outputTail) < len(r.OutputTail)
-	if strings.Contains(outputTail, "</svc") {
+	if strings.Contains(outputTail, "</ally-svc>") {
 		data := map[string]any{
 			"id":         r.ID,
 			"status":     r.Status,
@@ -929,7 +929,7 @@ func renderServiceInfoResultForModel(r ServiceInfo, fullJSON string) string {
 		return marshalToolResultOrFallback(toolResult{OK: true, Data: data}, fullJSON)
 	}
 	var b strings.Builder
-	b.WriteString(`<svc id="` + attrEscape(r.ID) + `"`)
+	b.WriteString(`<ally-svc id="` + attrEscape(r.ID) + `"`)
 	if r.Name != "" {
 		b.WriteString(` name="` + attrEscape(r.Name) + `"`)
 	}
@@ -953,7 +953,7 @@ func renderServiceInfoResultForModel(r ServiceInfo, fullJSON string) string {
 		b.WriteString(strings.TrimRight(outputTail, "\n"))
 		b.WriteString("\n")
 	}
-	b.WriteString("</svc>")
+	b.WriteString("</ally-svc>")
 	return b.String()
 }
 
@@ -970,7 +970,7 @@ func renderMcpResultForModel(result toolResult, fullJSON string) string {
 		return fullJSON
 	}
 	capped, reduced := compactTextForModel(r.Output, compactTextSpec{limit: maxModelToolOutput, head: modelToolHeadBytes, tail: modelToolTailBytes})
-	if strings.Contains(capped, "</mcp") {
+	if strings.Contains(capped, "</ally-mcp") {
 		// The marker is inert inside a JSON string, but the fallback must
 		// still carry the capped output: the raw fullJSON has no bound on
 		// third-party MCP text.
@@ -982,7 +982,7 @@ func renderMcpResultForModel(result toolResult, fullJSON string) string {
 		return marshalToolResultOrFallback(toolResult{OK: true, Data: data}, fullJSON)
 	}
 	var b strings.Builder
-	b.WriteString("<mcp")
+	b.WriteString("<ally-mcp")
 	if reduced {
 		b.WriteString(` truncated`)
 	}
@@ -991,14 +991,14 @@ func renderMcpResultForModel(result toolResult, fullJSON string) string {
 	if reduced {
 		b.WriteString("\n" + mcpTruncationNote)
 	}
-	b.WriteString("\n</mcp>")
+	b.WriteString("\n</ally-mcp>")
 	return b.String()
 }
 
 // neutralizeClosingMarkers makes closing-marker-shaped text inert in the free
 // text lines of a payload that has no enclosing block (edit summaries,
 // validation output, warnings). Those lines carry outside text — compiler and
-// linter output can contain anything — and a literal "</cmd" there would read
+// linter output can contain anything — and a literal "</ally-cmd" there would read
 // as another block's boundary. Only the marker shape is escaped, so ordinary
 // "<" text stays readable.
 func neutralizeClosingMarkers(v string) string {
@@ -1009,7 +1009,7 @@ func neutralizeClosingMarkers(v string) string {
 }
 
 // neutralizeRowBreaks makes a value safe inside a one-item-per-line row (grep's
-// "path:line: text", a <files> entry, a "link: text <url>" row): a path or link
+// "path:line: text", a <ally-files> entry, a "link: text <url>" row): a path or link
 // carrying a line break would read as another row, and Unix filenames may well
 // contain '\n'. Line breaks become the literal \n escape models already read;
 // forging the block boundary is a different matter, handled by the

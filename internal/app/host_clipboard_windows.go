@@ -21,6 +21,14 @@ import (
 	"syscall"
 	"time"
 	"unsafe"
+
+	"golang.org/x/sys/windows"
+)
+
+// 包内 Windows 宿主文件共用的 Win32 DLL 注册表。
+var (
+	modUser32  = windows.NewLazySystemDLL("user32.dll")
+	modShell32 = windows.NewLazySystemDLL("shell32.dll")
 )
 
 var (
