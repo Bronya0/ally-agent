@@ -476,13 +476,6 @@ type ConfigState struct {
 	// config; see that field for the tri-state contract.
 	VisionCapable   *bool  `json:"visionCapable,omitempty"`
 	ReasoningEffort string `json:"reasoningEffort,omitempty"`
-	// CacheRetention selects how long the provider should keep the request
-	// prefix cached: "short" (the provider default) or "long" (Anthropic
-	// cache_control.ttl "1h", OpenAI prompt_cache_retention "24h" on models
-	// before GPT-5.6 / prompt_cache_options.ttl "30m" from GPT-5.6 on). One
-	// setting, mapped per protocol in prov_wire_config.go. The empty field of a
-	// config written before this option existed means "short".
-	CacheRetention string `json:"cacheRetention,omitempty"`
 	// CustomHeaders mirrors the active model entry's extra HTTP headers
 	// (see ModelConfig.CustomHeaders); SwitchModel keeps the two in sync.
 	CustomHeaders  map[string]string `json:"customHeaders,omitempty"`

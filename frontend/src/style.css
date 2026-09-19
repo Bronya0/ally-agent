@@ -703,10 +703,10 @@ html[data-mode="light"]:not([data-theme]) .composer .prompt-input textarea::plac
 }
 
 /* ── Color themes ──
-   A theme is a whole palette, not an accent seed: "ocean" only reads as sea
-   because the surface, ink and canvas ramp change with it. The theme axis
-   is orthogonal to dark/light, so every theme ships one block per mode and each
-   block names the mode it targets:
+   A theme is a palette of ink + accents: "ocean" reads as sea through its
+   text ramp, accent family and markdown colors. The theme axis is orthogonal
+   to dark/light, so every theme ships one block per mode and each block names
+   the mode it targets:
      dark  → :root[data-theme="x"]:not([data-mode="light"])
      light → :root[data-theme="x"][data-mode="light"]
    The mutual exclusion is deliberate. The previous build decided between an
@@ -719,15 +719,21 @@ html[data-mode="light"]:not([data-theme]) .composer .prompt-input textarea::plac
    Every theme restates the same token sets as its mode base, so nothing is
    inherited by accident; status colors are left alone on purpose (they are
    semantic, and re-tinting them would weaken the signal).
+   In DARK mode the surface family (content/panel/chrome/raised/deep, glass
+   mats, code bg, modal, scrollbar, splash deck) is restated at the neutral
+   :root values on purpose: a hue-tinted main canvas is the classic
+   colored-dark-theme eye strain, so dark themes carry their identity in ink,
+   accents and details only. Light mode keeps its subtle pastel wash — at that
+   luminance a few units of tint read as atmosphere, not a colored background.
    Theme-scoped ids live in frontend/src/utils/theme.mjs. */
 
-/* ── Ice cream — dark: deep plum base, pastel candy accents ── */
+/* ── Ice cream — dark: neutral canvas, pastel candy accents ── */
 :root[data-theme="icecream"]:not([data-mode="light"]) {
-  --ally-surface-content: #17171f;
-  --ally-surface-panel: #1c1c26;
-  --ally-surface-chrome: #23232f;
-  --ally-surface-raised: #2a2a38;
-  --ally-surface-deep: #0c0c12;
+  --ally-surface-content: #1a1a1a;
+  --ally-surface-panel: #1f1f1f;
+  --ally-surface-chrome: #262626;
+  --ally-surface-raised: #2c2c2c;
+  --ally-surface-deep: #0b0b0b;
 
   --ally-text-primary: #f6f2f8;
   --ally-text-high: #e4dfeb;
@@ -769,19 +775,19 @@ html[data-mode="light"]:not([data-theme]) .composer .prompt-input textarea::plac
   --md-marker-ol: color-mix(in srgb, var(--ally-accent) 40%, #d8cfdd);
 
   --ally-border-input: rgba(246, 242, 248, 0.30);
-  --ally-composer-glass: rgba(23, 23, 31, 0.55);
-  --ally-composer-glass-hover: rgba(23, 23, 31, 0.58);
-  --ally-composer-glass-focus: rgba(23, 23, 31, 0.62);
-  --ally-panel-glass: rgba(23, 23, 31, 0.68);
-  --ally-copy-btn-bg: rgba(28, 28, 38, 0.85);
+  --ally-composer-glass: rgba(26, 26, 26, 0.5);
+  --ally-composer-glass-hover: rgba(26, 26, 26, 0.54);
+  --ally-composer-glass-focus: rgba(26, 26, 26, 0.58);
+  --ally-panel-glass: rgba(26, 26, 26, 0.62);
+  --ally-copy-btn-bg: rgba(30, 30, 30, 0.85);
   --ally-pre-bg: rgba(0, 0, 0, 0.30);
-  --ally-code-bg: #0e0e15;
+  --ally-code-bg: #0c0c0c;
 
-  --ally-scrollbar: #43414f;
+  --ally-scrollbar: #3a3a3a;
   --ally-scrollbar-editor: rgba(255, 255, 255, 0.24);
   --ally-scrollbar-editor-hover: rgba(255, 255, 255, 0.38);
 
-  --ally-overlay-modal: #1c1c26;
+  --ally-overlay-modal: #1a1a1a;
 
   --ally-eye-shell-fill: #12121a;
   --ally-eye-shell-stroke: #3a3748;
@@ -798,9 +804,6 @@ html[data-mode="light"]:not([data-theme]) .composer .prompt-input textarea::plac
   --md-border: rgba(220, 214, 227, 0.12);
   --md-surface: var(--ally-hover-faint);
   color: var(--md-text);
-}
-:root[data-theme="icecream"]:not([data-mode="light"]) .splash-screen .splash-bg {
-  background: linear-gradient(165deg, #14141c 0%, #1a1a24 46%, #101018 100%);
 }
 
 /* ── Ice cream — light: vanilla / mint glass, same strawberry accent ── */
@@ -910,11 +913,11 @@ html[data-mode="light"]:not([data-theme]) .composer .prompt-input textarea::plac
 
 /* ── Ocean — dark: deep navy night, azure accent ── */
 :root[data-theme="ocean"]:not([data-mode="light"]) {
-  --ally-surface-content: #10151f;
-  --ally-surface-panel: #141a26;
-  --ally-surface-chrome: #1a2230;
-  --ally-surface-raised: #212a3a;
-  --ally-surface-deep: #080b11;
+  --ally-surface-content: #1a1a1a;
+  --ally-surface-panel: #1f1f1f;
+  --ally-surface-chrome: #262626;
+  --ally-surface-raised: #2c2c2c;
+  --ally-surface-deep: #0b0b0b;
 
   --ally-text-primary: #eef3fb;
   --ally-text-high: #dde6f3;
@@ -956,19 +959,19 @@ html[data-mode="light"]:not([data-theme]) .composer .prompt-input textarea::plac
   --md-marker-ol: color-mix(in srgb, var(--ally-accent) 40%, #c4d1e6);
 
   --ally-border-input: rgba(238, 243, 251, 0.30);
-  --ally-composer-glass: rgba(16, 21, 31, 0.55);
-  --ally-composer-glass-hover: rgba(16, 21, 31, 0.58);
-  --ally-composer-glass-focus: rgba(16, 21, 31, 0.62);
-  --ally-panel-glass: rgba(16, 21, 31, 0.68);
-  --ally-copy-btn-bg: rgba(21, 27, 39, 0.85);
+  --ally-composer-glass: rgba(26, 26, 26, 0.5);
+  --ally-composer-glass-hover: rgba(26, 26, 26, 0.54);
+  --ally-composer-glass-focus: rgba(26, 26, 26, 0.58);
+  --ally-panel-glass: rgba(26, 26, 26, 0.62);
+  --ally-copy-btn-bg: rgba(30, 30, 30, 0.85);
   --ally-pre-bg: rgba(0, 0, 0, 0.30);
-  --ally-code-bg: #0b0f17;
+  --ally-code-bg: #0c0c0c;
 
-  --ally-scrollbar: #3d4557;
+  --ally-scrollbar: #3a3a3a;
   --ally-scrollbar-editor: rgba(255, 255, 255, 0.24);
   --ally-scrollbar-editor-hover: rgba(255, 255, 255, 0.38);
 
-  --ally-overlay-modal: #141a26;
+  --ally-overlay-modal: #1a1a1a;
 
   --ally-eye-shell-fill: #0d1119;
   --ally-eye-shell-stroke: #333e52;
@@ -983,9 +986,6 @@ html[data-mode="light"]:not([data-theme]) .composer .prompt-input textarea::plac
   --md-border: rgba(221, 230, 243, 0.12);
   --md-surface: var(--ally-hover-faint);
   color: var(--md-text);
-}
-:root[data-theme="ocean"]:not([data-mode="light"]) .splash-screen .splash-bg {
-  background: linear-gradient(165deg, #0e131d 0%, #131a27 46%, #0a0e15 100%);
 }
 
 /* ── Ocean — light: sea-mist glass, ink-navy ramp ── */
@@ -1095,11 +1095,11 @@ html[data-mode="light"]:not([data-theme]) .composer .prompt-input textarea::plac
 
 /* ── Forest — dark: deep greenwood, emerald accent ── */
 :root[data-theme="forest"]:not([data-mode="light"]) {
-  --ally-surface-content: #111711;
-  --ally-surface-panel: #161d16;
-  --ally-surface-chrome: #1c241b;
-  --ally-surface-raised: #232c21;
-  --ally-surface-deep: #090d09;
+  --ally-surface-content: #1a1a1a;
+  --ally-surface-panel: #1f1f1f;
+  --ally-surface-chrome: #262626;
+  --ally-surface-raised: #2c2c2c;
+  --ally-surface-deep: #0b0b0b;
 
   --ally-text-primary: #f0f6ee;
   --ally-text-high: #dee9db;
@@ -1141,19 +1141,19 @@ html[data-mode="light"]:not([data-theme]) .composer .prompt-input textarea::plac
   --md-marker-ol: color-mix(in srgb, var(--ally-accent) 40%, #c1d6c3);
 
   --ally-border-input: rgba(240, 246, 238, 0.30);
-  --ally-composer-glass: rgba(17, 23, 17, 0.55);
-  --ally-composer-glass-hover: rgba(17, 23, 17, 0.58);
-  --ally-composer-glass-focus: rgba(17, 23, 17, 0.62);
-  --ally-panel-glass: rgba(17, 23, 17, 0.68);
-  --ally-copy-btn-bg: rgba(22, 29, 22, 0.85);
+  --ally-composer-glass: rgba(26, 26, 26, 0.5);
+  --ally-composer-glass-hover: rgba(26, 26, 26, 0.54);
+  --ally-composer-glass-focus: rgba(26, 26, 26, 0.58);
+  --ally-panel-glass: rgba(26, 26, 26, 0.62);
+  --ally-copy-btn-bg: rgba(30, 30, 30, 0.85);
   --ally-pre-bg: rgba(0, 0, 0, 0.30);
-  --ally-code-bg: #0c110c;
+  --ally-code-bg: #0c0c0c;
 
-  --ally-scrollbar: #3f4a3f;
+  --ally-scrollbar: #3a3a3a;
   --ally-scrollbar-editor: rgba(255, 255, 255, 0.24);
   --ally-scrollbar-editor-hover: rgba(255, 255, 255, 0.38);
 
-  --ally-overlay-modal: #161d16;
+  --ally-overlay-modal: #1a1a1a;
 
   --ally-eye-shell-fill: #0e130e;
   --ally-eye-shell-stroke: #364434;
@@ -1168,9 +1168,6 @@ html[data-mode="light"]:not([data-theme]) .composer .prompt-input textarea::plac
   --md-border: rgba(222, 233, 219, 0.12);
   --md-surface: var(--ally-hover-faint);
   color: var(--md-text);
-}
-:root[data-theme="forest"]:not([data-mode="light"]) .splash-screen .splash-bg {
-  background: linear-gradient(165deg, #101510 0%, #151c14 46%, #0b0f0b 100%);
 }
 
 /* ── Forest — light: sage wash, ink-green ramp ── */
@@ -1280,11 +1277,11 @@ html[data-mode="light"]:not([data-theme]) .composer .prompt-input textarea::plac
 
 /* ── Violet — dark: plum night, violet accent ── */
 :root[data-theme="violet"]:not([data-mode="light"]) {
-  --ally-surface-content: #151221;
-  --ally-surface-panel: #1a1628;
-  --ally-surface-chrome: #211c31;
-  --ally-surface-raised: #28223a;
-  --ally-surface-deep: #0b0913;
+  --ally-surface-content: #1a1a1a;
+  --ally-surface-panel: #1f1f1f;
+  --ally-surface-chrome: #262626;
+  --ally-surface-raised: #2c2c2c;
+  --ally-surface-deep: #0b0b0b;
 
   --ally-text-primary: #f3f0fa;
   --ally-text-high: #e2dcf0;
@@ -1326,19 +1323,19 @@ html[data-mode="light"]:not([data-theme]) .composer .prompt-input textarea::plac
   --md-marker-ol: color-mix(in srgb, var(--ally-accent) 40%, #cbc0e3);
 
   --ally-border-input: rgba(243, 240, 250, 0.30);
-  --ally-composer-glass: rgba(21, 18, 33, 0.55);
-  --ally-composer-glass-hover: rgba(21, 18, 33, 0.58);
-  --ally-composer-glass-focus: rgba(21, 18, 33, 0.62);
-  --ally-panel-glass: rgba(21, 18, 33, 0.68);
-  --ally-copy-btn-bg: rgba(26, 22, 40, 0.85);
+  --ally-composer-glass: rgba(26, 26, 26, 0.5);
+  --ally-composer-glass-hover: rgba(26, 26, 26, 0.54);
+  --ally-composer-glass-focus: rgba(26, 26, 26, 0.58);
+  --ally-panel-glass: rgba(26, 26, 26, 0.62);
+  --ally-copy-btn-bg: rgba(30, 30, 30, 0.85);
   --ally-pre-bg: rgba(0, 0, 0, 0.30);
-  --ally-code-bg: #100d1a;
+  --ally-code-bg: #0c0c0c;
 
-  --ally-scrollbar: #443d59;
+  --ally-scrollbar: #3a3a3a;
   --ally-scrollbar-editor: rgba(255, 255, 255, 0.24);
   --ally-scrollbar-editor-hover: rgba(255, 255, 255, 0.38);
 
-  --ally-overlay-modal: #1a1628;
+  --ally-overlay-modal: #1a1a1a;
 
   --ally-eye-shell-fill: #12101d;
   --ally-eye-shell-stroke: #3b3552;
@@ -1353,9 +1350,6 @@ html[data-mode="light"]:not([data-theme]) .composer .prompt-input textarea::plac
   --md-border: rgba(226, 220, 240, 0.12);
   --md-surface: var(--ally-hover-faint);
   color: var(--md-text);
-}
-:root[data-theme="violet"]:not([data-mode="light"]) .splash-screen .splash-bg {
-  background: linear-gradient(165deg, #13101e 0%, #181425 46%, #0e0b17 100%);
 }
 
 /* ── Violet — light: lilac wash, ink-plum ramp ── */

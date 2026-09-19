@@ -695,13 +695,12 @@ func (r *sseDoneReadCloser) Close() error { return r.rc.Close() }
 // Streaming responses are additionally wrapped so the adapter can tell a
 // finished stream (`[DONE]`) from a connection that was cut mid-stream.
 type chatRequestRewriteTransport struct {
-	base                 http.RoundTripper
-	reasoningKey         string
-	turnDetails          map[string]json.RawMessage
-	headers              map[string]string
-	promptCacheKey       string
-	promptCacheRetention string
-	streamDone           *sseDoneWatcher
+	base           http.RoundTripper
+	reasoningKey   string
+	turnDetails    map[string]json.RawMessage
+	headers        map[string]string
+	promptCacheKey string
+	streamDone     *sseDoneWatcher
 	// disableThinking writes the stop-thinking field the "off" level asks for
 	// (see patchChatRequestFields).
 	disableThinking bool
@@ -727,7 +726,7 @@ func (t *chatRequestRewriteTransport) RoundTrip(req *http.Request) (*http.Respon
 		return nil, err
 	}
 	rewritten := body
-	if patched, ok := patchChatRequestFields(body, t.reasoningKey, t.turnDetails, t.promptCacheKey, t.promptCacheRetention, t.disableThinking); ok {
+	if patched, ok := patchChatRequestFields(body, t.reasoningKey, t.turnDetails, t.promptCacheKey, t.disableThinking); ok {
 		rewritten = patched
 	}
 	// Restore a replayable body: the SDK may retry the request object, so
@@ -780,14 +779,12 @@ func (t *chatRequestRewriteTransport) RoundTrip(req *http.Request) (*http.Respon
 //  5. The session-sticky prompt cache key (and `store: false`) is attached for
 //     the official OpenAI endpoint only; promptCacheKey is empty everywhere
 //     else, so a compatible gateway never sees an unknown top-level parameter.
-//     Extended retention is written by the same pass under the same endpoint
-//     gate, and only when the user selected it (openAIExtendedCacheRetention).
 //  6. The stop-thinking field (`thinking: {"type": "disabled"}`) is written when
 //     the selected level is "off" and the endpoint is not the official OpenAI API
 //     (reasoningWireForAdapter). It is a top-level parameter, so the message
 //     prefix the provider hashes stays untouched, and it is only written when
 //     absent — the same bytes every request.
-func patchChatRequestFields(body []byte, defaultKey string, turnDetails map[string]json.RawMessage, promptCacheKey, promptCacheRetention string, disableThinking bool) ([]byte, bool) {
+func patchChatRequestFields(body []byte, defaultKey string, turnDetails map[string]json.RawMessage, promptCacheKey string, disableThinking bool) ([]byte, bool) {
 	var payload map[string]json.RawMessage
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return body, false
@@ -815,16 +812,6 @@ func patchChatRequestFields(body []byte, defaultKey string, turnDetails map[stri
 		}
 		if _, exists := payload["store"]; !exists {
 			payload["store"] = jsonBoolFalse
-			changed = true
-		}
-	}
-
-	// Extended prompt-cache retention for the same official endpoint (see
-	// openAIExtendedCacheRetention). It is a top-level parameter too, so it never
-	// touches the message prefix the provider hashes.
-	if promptCacheRetention != "" {
-		if _, exists := payload["prompt_cache_retention"]; !exists {
-			payload["prompt_cache_retention"] = jsonStringValue(promptCacheRetention)
 			changed = true
 		}
 	}

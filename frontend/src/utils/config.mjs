@@ -34,10 +34,6 @@ export function defaultConfig() {
     userAgent: '',
     reasoningTag: 'reasoning_content',
     reasoningEffort: 'max',
-    // Prompt-cache retention: 'short' (provider default) or 'long'. One setting;
-    // the backend maps it per protocol (Anthropic cache_control.ttl "1h",
-    // OpenAI prompt_cache_retention "24h" / prompt_cache_options.ttl "30m").
-    cacheRetention: 'short',
     customHeaders: null,
     disabledSkills: [],
     models: [],

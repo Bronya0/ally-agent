@@ -867,14 +867,13 @@ func (a *App) streamOpenAIChat(ctx context.Context, cfg ConfigState, model strin
 		rt = http.DefaultTransport
 	}
 	base.Transport = &chatRequestRewriteTransport{
-		base:                 rt,
-		reasoningKey:         reasoningKey,
-		turnDetails:          turnDetails,
-		headers:              sessionAffinityHeaders(cfg),
-		promptCacheKey:       openAIChatPromptCacheKey(cfg),
-		promptCacheRetention: openAIExtendedCacheRetention(cfg, model),
-		streamDone:           streamDone,
-		disableThinking:      disableThinking,
+		base:            rt,
+		reasoningKey:    reasoningKey,
+		turnDetails:     turnDetails,
+		headers:         sessionAffinityHeaders(cfg),
+		promptCacheKey:  openAIChatPromptCacheKey(cfg),
+		streamDone:      streamDone,
+		disableThinking: disableThinking,
 	}
 	clientCfg.HTTPClient = base
 	client := legacyopenai.NewClientWithConfig(clientCfg)
@@ -1622,15 +1621,8 @@ func buildOpenAIResponsesRequest(cfg ConfigState, model string, messages []legac
 	// so no explicit breakpoint marker is needed anywhere in the input. Explicit
 	// mode is the opposite of what an agent loop wants (it *disables* the implicit
 	// breakpoint, and a request without its own marker then uses no caching at
-	// all), which is why pi only selects it to turn caching off. Extended retention
-	// is requested separately, and only when the user asked for it — see
-	// prov_wire_config.go for the per-protocol spellings.
-	if retention := openAIExtendedCacheRetention(cfg, model); retention != "" {
-		body.PromptCacheRetention = oaresp.ResponseNewParamsPromptCacheRetention(retention)
-	}
-	if ttl := openAIPromptCacheOptionsTTL(cfg, model); ttl != "" {
-		body.PromptCacheOptions = oaresp.ResponseNewParamsPromptCacheOptions{Ttl: ttl}
-	}
+	// all), which is why pi only selects it to turn caching off. No retention
+	// field is sent anywhere: the provider default stays in place.
 	// Store and ParallelToolCalls are OpenAI-official fields that
 	// compatible gateways may reject with 400 ("unsupported field").
 	// Gate them behind the official-endpoint check so relays stay happy.
@@ -1675,27 +1667,6 @@ func buildOpenAIResponsesRequest(cfg ConfigState, model string, messages []legac
 		body.PromptCacheKey = oa.String(cacheKey)
 	}
 	return body
-}
-
-// modelUsesPromptCacheOptionsTTL reports whether the model replaced
-// prompt_cache_retention with prompt_cache_options.ttl (GPT-5.6 and later, per
-// the prompt-caching guide's migration note; the SDK still ships the old field
-// marked deprecated). pi asks the same question through its
-// supportsExplicitPromptCacheMode compat flag; this codebase keys off the model
-// prefix, like its other GPT-5.6 checks.
-func modelUsesPromptCacheOptionsTTL(model string) bool {
-	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(model)), "gpt-5.6")
-}
-
-// supportsOpenAIPromptCacheOptions reports whether the request may carry
-// prompt_cache_options. Only GPT-5.6 and later understand the parameter, and
-// only the Responses API accepts it; older models reject it outright, which is
-// why pi defaults its compat flag to false.
-func supportsOpenAIPromptCacheOptions(cfg ConfigState, model string) bool {
-	if normalizeAPIFormat(cfg.APIFormat) != apiFormatOpenAIResponses || !isOfficialOpenAIEndpoint(cfg) {
-		return false
-	}
-	return modelUsesPromptCacheOptionsTTL(model)
 }
 
 func supportsOpenAIResponsesImageGeneration(cfg ConfigState) bool {
@@ -1927,8 +1898,8 @@ func (a *App) streamAnthropicMessages(ctx context.Context, cfg ConfigState, mode
 	// Prompt-cache breakpoints: one on the last tool definition, one on the last
 	// system block, one on the last content block of the last real message.
 	// Supported by official Anthropic and Anthropic-compatible reverse
-	// proxies/gateways; the ttl follows the user's retention setting.
-	markAnthropicPromptCacheBreakpoints(&params, cfg)
+	// proxies/gateways; the ttl is pinned to the provider default (5m).
+	markAnthropicPromptCacheBreakpoints(&params)
 	// Thinking configuration for Anthropic:
 	// - For adaptive models (Claude 4.6+/5+): thinking: { type: "adaptive" } and output_config.effort.
 	// - For budget models (Claude 3.7 Sonnet): thinking: { type: "enabled", budget_tokens: N } without output_config.effort
@@ -2503,10 +2474,11 @@ func buildAnthropicMessages(messages []legacyopenai.ChatCompletionMessage, repla
 // runChat) are rebuilt every request and stay outside the cached prefix, so
 // they can appear, change, or vanish without invalidating anything.
 // Anthropic allows up to 4 breakpoints; 3 are used (the last tool, the last
-// system block, the last non-transient block of the last message), and the ttl
-// comes from the user's retention setting (prov_wire_config.go).
-func markAnthropicPromptCacheBreakpoints(params *anthropic.MessageNewParams, cfg ConfigState) {
-	cc := anthropic.CacheControlEphemeralParam{TTL: anthropic.CacheControlEphemeralTTL(anthropicCacheControlTTL(cfg))}
+// system block, the last non-transient block of the last message). The ttl is
+// pinned to "5m", Anthropic's documented default, written out explicitly so
+// every request carries the same breakpoint marker.
+func markAnthropicPromptCacheBreakpoints(params *anthropic.MessageNewParams) {
+	cc := anthropic.CacheControlEphemeralParam{TTL: anthropic.CacheControlEphemeralTTL("5m")}
 	if len(params.Tools) > 0 {
 		lastIdx := len(params.Tools) - 1
 		if params.Tools[lastIdx].OfTool != nil {

@@ -27,21 +27,23 @@ Public License v3. See the LICENSE file for details.
       trigger="click"
       placement="top-start"
       scrollable
+      :disabled="running"
       :options="modelMenuOptions"
       :render-label="renderModelMenuLabel"
       :menu-props="modelMenuProps"
       @select="onModelMenuSelect"
       @update:show="onModelMenuShow"
     >
-      <span class="info-model" style="cursor:pointer">{{ currentModelLabel }}</span>
+      <span class="info-model" style="cursor:pointer" :title="running ? $t('composer.lockedWhileRunning') : ''">{{ currentModelLabel }}</span>
     </n-dropdown>
     <n-dropdown
       trigger="click"
       placement="top-start"
+      :disabled="running"
       :options="reasoningEffortOptions"
       @select="onReasoningEffortSelect"
     >
-      <span class="info-effort" :title="$t('composer.effort.title')">
+      <span class="info-effort" :title="running ? $t('composer.lockedWhileRunning') : $t('composer.effort.title')">
         <span class="info-effort-label">{{ currentEffortLabel }}</span>
         <span class="info-effort-caret">▾</span>
       </span>

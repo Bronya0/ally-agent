@@ -37,7 +37,7 @@ func TestMarkAnthropicPromptCacheBreakpointsSkipsTailInjections(t *testing.T) {
 			anthropic.NewUserMessage(anthropic.NewTextBlock("<ally-context-budget>\nWindow: 1000 tokens\n</ally-context-budget>")),
 		},
 	}
-	markAnthropicPromptCacheBreakpoints(&params, ConfigState{})
+	markAnthropicPromptCacheBreakpoints(&params)
 
 	if params.System[0].CacheControl.TTL == "" {
 		t.Fatalf("expected cache_control breakpoint on last system block")
@@ -67,7 +67,7 @@ func TestMarkAnthropicPromptCacheBreakpointsSkipsTailInjections(t *testing.T) {
 	convParams := anthropic.MessageNewParams{
 		Messages: converted,
 	}
-	markAnthropicPromptCacheBreakpoints(&convParams, ConfigState{})
+	markAnthropicPromptCacheBreakpoints(&convParams)
 	// Cache breakpoint must land on the tool result block, skipping the trailing transient budget block
 	lastUserBlocks := convParams.Messages[2].Content
 	if len(lastUserBlocks) != 2 {
@@ -164,41 +164,25 @@ func TestBuildAnthropicMessagesMergesConsecutiveSameRoleMessages(t *testing.T) {
 
 // TestOpenAIResponsesPromptCacheFields pins the request-shaped half of the
 // prompt-cache contract: caching stays in the provider's implicit mode (no mode
-// marker, no explicit breakpoint anywhere in the input), and extended retention
-// is asked for with the field the model actually understands.
+// marker, no explicit breakpoint anywhere in the input) and no retention field
+// is sent — the provider default stays in place.
 func TestOpenAIResponsesPromptCacheFields(t *testing.T) {
 	cacheKey := openAIResponsesPromptCacheKey("session-1")
 	tests := []struct {
-		name          string
-		cfg           ConfigState
-		model         string
-		wantKey       bool
-		wantTTL       string
-		wantRetention string
+		name    string
+		cfg     ConfigState
+		model   string
+		wantKey bool
 	}{
 		{
-			name:    "default retention leaves caching implicit",
+			name:    "caching stays implicit with the provider-default retention",
 			cfg:     ConfigState{APIFormat: apiFormatOpenAIResponses, BaseURL: defaultOpenAIResponsesURL, responsesPromptCacheKey: cacheKey},
 			model:   "gpt-5.6-sol",
 			wantKey: true,
 		},
 		{
-			name:    "long retention on GPT-5.6 uses prompt_cache_options.ttl",
-			cfg:     ConfigState{APIFormat: apiFormatOpenAIResponses, BaseURL: defaultOpenAIResponsesURL, CacheRetention: cacheRetentionLong, responsesPromptCacheKey: cacheKey},
-			model:   "gpt-5.6-sol",
-			wantKey: true,
-			wantTTL: "30m",
-		},
-		{
-			name:          "long retention before GPT-5.6 uses prompt_cache_retention",
-			cfg:           ConfigState{APIFormat: apiFormatOpenAIResponses, BaseURL: defaultOpenAIResponsesURL, CacheRetention: cacheRetentionLong, responsesPromptCacheKey: cacheKey},
-			model:         "gpt-5.5",
-			wantKey:       true,
-			wantRetention: "24h",
-		},
-		{
-			name:    "long retention off the official endpoint sends neither field",
-			cfg:     ConfigState{APIFormat: apiFormatOpenAIResponses, BaseURL: "https://api.deepseek.com/v1", CacheRetention: cacheRetentionLong, responsesPromptCacheKey: cacheKey},
+			name:    "no retention field on a relay endpoint either",
+			cfg:     ConfigState{APIFormat: apiFormatOpenAIResponses, BaseURL: "https://api.deepseek.com/v1", responsesPromptCacheKey: cacheKey},
 			model:   "gpt-5.6",
 			wantKey: true,
 		},
@@ -219,15 +203,11 @@ func TestOpenAIResponsesPromptCacheFields(t *testing.T) {
 			if hasKey != tt.wantKey || (tt.wantKey && gotKey != cacheKey) {
 				t.Fatalf("prompt_cache_key = %q (present=%v), want %q (present=%v)", gotKey, hasKey, cacheKey, tt.wantKey)
 			}
-			if got, _ := request["prompt_cache_retention"].(string); got != tt.wantRetention {
-				t.Fatalf("prompt_cache_retention = %q, want %q", got, tt.wantRetention)
+			if got, has := request["prompt_cache_retention"]; has {
+				t.Fatalf("prompt_cache_retention must never be sent, got %#v", got)
 			}
-			options, _ := request["prompt_cache_options"].(map[string]any)
-			if got, _ := options["ttl"].(string); got != tt.wantTTL {
-				t.Fatalf("prompt_cache_options.ttl = %q, want %q (%#v)", got, tt.wantTTL, request["prompt_cache_options"])
-			}
-			if mode, hasMode := options["mode"]; hasMode {
-				t.Fatalf("prompt_cache_options.mode must stay unset — explicit mode disables implicit caching: %#v", mode)
+			if got, has := request["prompt_cache_options"]; has {
+				t.Fatalf("prompt_cache_options must never be sent, got %#v", got)
 			}
 			// The input carries the conversation only: an explicit breakpoint marker
 			// would disable the implicit breakpoint and push the whole history
@@ -853,24 +833,24 @@ func marshalResponsesRequest(t *testing.T, body any) map[string]any {
 	return request
 }
 
-// TestPatchChatRequestFieldsAddsPromptCacheRetention covers the Chat half of
-// extended retention: the field lands next to the cache key, and a second pass
-// over the same bytes changes nothing — the prefix the provider hashes must not
-// drift between requests.
-func TestPatchChatRequestFieldsAddsPromptCacheRetention(t *testing.T) {
+// TestPatchChatRequestFieldsAddsPromptCacheKey covers the Chat half of cache
+// routing: the key lands in the body, and a second pass over the same bytes
+// changes nothing — the prefix the provider hashes must not drift between
+// requests.
+func TestPatchChatRequestFieldsAddsPromptCacheKey(t *testing.T) {
 	body := []byte(`{"model":"gpt-5.5","messages":[{"role":"user","content":"hi"}]}`)
-	patched, changed := patchChatRequestFields(body, "", nil, "ally:key", "24h", false)
+	patched, changed := patchChatRequestFields(body, "", nil, "ally:key", false)
 	if !changed {
-		t.Fatal("expected the cache key and retention to be patched in")
+		t.Fatal("expected the cache key to be patched in")
 	}
 	var payload map[string]any
 	if err := json.Unmarshal(patched, &payload); err != nil {
 		t.Fatalf("patched body is not JSON: %v", err)
 	}
-	if payload["prompt_cache_key"] != "ally:key" || payload["prompt_cache_retention"] != "24h" {
-		t.Fatalf("patched cache fields = %#v / %#v", payload["prompt_cache_key"], payload["prompt_cache_retention"])
+	if payload["prompt_cache_key"] != "ally:key" {
+		t.Fatalf("patched cache field = %#v", payload["prompt_cache_key"])
 	}
-	if again, changed := patchChatRequestFields(patched, "", nil, "ally:key", "24h", false); changed {
+	if again, changed := patchChatRequestFields(patched, "", nil, "ally:key", false); changed {
 		t.Fatalf("second pass must be a no-op, got %s", again)
 	}
 }
@@ -1246,7 +1226,7 @@ func TestAnthropicToolPromptCacheBreakpoint(t *testing.T) {
 			anthropic.NewUserMessage(anthropic.NewTextBlock("hello")),
 		},
 	}
-	markAnthropicPromptCacheBreakpoints(&params, ConfigState{})
+	markAnthropicPromptCacheBreakpoints(&params)
 	lastTool := params.Tools[1].OfTool
 	if lastTool == nil || lastTool.CacheControl.TTL == "" {
 		t.Fatal("expected CacheControl on the last tool definition")
@@ -2051,7 +2031,7 @@ func TestOpenAIChatPromptCacheKeyStaysOnOfficialEndpoint(t *testing.T) {
 	}
 
 	body := []byte(`{"model":"m","messages":[{"role":"user","content":"q"}]}`)
-	patched, changed := patchChatRequestFields(body, "", nil, key, "", false)
+	patched, changed := patchChatRequestFields(body, "", nil, key, false)
 	if !changed {
 		t.Fatal("expected the official request to gain prompt_cache_key and store")
 	}
@@ -2062,7 +2042,7 @@ func TestOpenAIChatPromptCacheKeyStaysOnOfficialEndpoint(t *testing.T) {
 	if string(payload["prompt_cache_key"]) != `"ally:abc"` || string(payload["store"]) != "false" {
 		t.Fatalf("patched body = %s, want prompt_cache_key + store:false", patched)
 	}
-	if untouched, _ := patchChatRequestFields(body, "", nil, "", "", false); string(untouched) != string(body) {
+	if untouched, _ := patchChatRequestFields(body, "", nil, "", false); string(untouched) != string(body) {
 		t.Fatalf("a relay body must stay byte-identical: %s", untouched)
 	}
 }

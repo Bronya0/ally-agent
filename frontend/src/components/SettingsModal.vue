@@ -325,13 +325,6 @@ Public License v3. See the LICENSE file for details.
             </div>
           </div>
           <div class="validation-settings-list">
-            <div class="validation-setting-row">
-              <div class="validation-setting-copy">
-                <div class="validation-setting-label">{{ $t('settings.cacheRetention') }}</div>
-                <div class="validation-setting-hint">{{ $t('settings.cacheRetentionHint') }}</div>
-              </div>
-              <n-select v-model:value="draft.cacheRetention" :options="cacheRetentionOptions" style="width: 180px" />
-            </div>
             <div v-for="item in validationSettings" :key="item.key" class="validation-setting-row">
               <div class="validation-setting-copy">
                 <div class="validation-setting-label">{{ item.label }}</div>
@@ -353,8 +346,18 @@ Public License v3. See the LICENSE file for details.
               <div class="config-section-subtitle">{{ $t('settings.proxySubtitle') }}</div>
             </div>
           </div>
+          <!-- Flat segmented picker (same visual language as the theme picker):
+               three options always visible, one click to switch, no dropdown. -->
           <n-form-item :label="$t('settings.proxyMode')">
-            <n-select v-model:value="draft.proxyMode" :options="proxyModeOptions" />
+            <div class="appearance-mode-row proxy-mode-row">
+              <button
+                v-for="item in proxyModeOptions"
+                :key="item.value"
+                type="button"
+                :class="['appearance-mode-btn', { active: draft.proxyMode === item.value }]"
+                @click="draft.proxyMode = item.value"
+              >{{ item.label }}</button>
+            </div>
           </n-form-item>
           <n-form-item v-if="draft.proxyMode === 'manual'" :label="$t('settings.proxyUrl')">
             <n-input v-model:value="draft.proxyUrl" clearable placeholder="http://127.0.0.1:7890 / socks5://127.0.0.1:7891" />
@@ -607,10 +610,6 @@ const proxyModeOptions = computed(() => [
   { label: t('settings.proxyOff'), value: 'off' },
   { label: t('settings.proxySystem'), value: 'system' },
   { label: t('settings.proxyManual'), value: 'manual' },
-]);
-const cacheRetentionOptions = computed(() => [
-  { label: t('settings.cacheRetentionShort'), value: 'short' },
-  { label: t('settings.cacheRetentionLong'), value: 'long' },
 ]);
 const validationSettings = computed(() => [
   { key: 'autoValidationPython', label: t('settings.validationPython'), hint: t('settings.validationPythonHint') },

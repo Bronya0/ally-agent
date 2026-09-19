@@ -33,7 +33,7 @@
 | 文件树 / 编辑器 UI | `WorkspaceExplorer.vue` + `biz_workspace_editor.go` |
 | 工具卡动词 "Used X" 标签 | `frontend/src/utils/toolVerb.mjs`（TOOL_VERBS 表） |
 | 思考回放（reasoning_content / reasoning / reasoning_text / signature / encrypted_content） | `internal/app/prov_reasoning.go` + 三适配器（`prov_model.go`） |
-| 提示词缓存（保留档 / 断点位置 / 命中与写入口径） | `prov_wire_config.go`（档位→wire 拼写）+ `prov_model.go`（三适配器断点与 usage）+ `biz_stats.go`（落库与汇总）；身份：会话/子代理 lane 用 `responsesPromptCacheKey`，回放台账用 `reasoningScope` |
+| 提示词缓存（断点位置 / 命中与写入口径；保留时长不发送，用供应商默认） | `prov_model.go`（三适配器断点与 usage）+ `biz_stats.go`（落库与汇总）；身份：会话/子代理 lane 用 `responsesPromptCacheKey`，回放台账用 `reasoningScope` |
 | 模型输入能力（视觉）降级 / 图片占位 | `internal/app/biz_context.go`（`buildMessages` 单一收口） + 目录字段 `visionCapable`（`scripts/generate-model-catalog.mjs`） |
 | 流终止判定（finish_reason / `[DONE]` 哨兵）与 tool_calls 增量归并 | `internal/app/prov_model.go`（`sseDoneWatcher`、`toolCallAccumulator`） |
 | 工具 schema 修补（$ref 内联 / 补 type / 矛盾类型修复） | `internal/tools/schemautil/` |
@@ -49,7 +49,7 @@
 
 ### `internal/app/`
 - `app.go`: Agent 编排核心（聊天循环 runChat、工具分发 executeTool、内建工具 chatTools、生命周期 StartChat/CancelRun）。
-- `prov_*`: 模型与网络适配（协议脏代码唯一聚集区）。`prov_model.go`（三适配器唯一边界与多 key 池、流式归并、错误分类；工具声明与工具调用 ID 的纯规则已下沉到 `internal/tools/schemautil`、`internal/tools/toolcall`）；`prov_reasoning.go`（思考回放台账与请求体改写；台账 scope 按 run 隔离，见 `reasoningScope`）；`prov_wire_config.go`（思考档位与提示词缓存保留档的 wire 拼写 `reasoningWireForAdapter` / `cacheRetention*`、API 格式归一化、端点/token 参数默认值——档位拼写的唯一收口）；`prov_history_hygiene.go`（历史消息协议卫生：内存/磁盘双 profile、tool_call/tool_result 配对修复、悬空调用剥离）；`prov_proxy*.go`（代理探测与 SSRF 守卫客户端）。
+- `prov_*`: 模型与网络适配（协议脏代码唯一聚集区）。`prov_model.go`（三适配器唯一边界与多 key 池、流式归并、错误分类；工具声明与工具调用 ID 的纯规则已下沉到 `internal/tools/schemautil`、`internal/tools/toolcall`）；`prov_reasoning.go`（思考回放台账与请求体改写；台账 scope 按 run 隔离，见 `reasoningScope`）；`prov_wire_config.go`（思考档位 wire 拼写 `reasoningWireForAdapter`、API 格式归一化、端点/token 参数默认值——档位拼写的唯一收口）；`prov_history_hygiene.go`（历史消息协议卫生：内存/磁盘双 profile、tool_call/tool_result 配对修复、悬空调用剥离）；`prov_proxy*.go`（代理探测与 SSRF 守卫客户端）。
 - `host_*`: 桌面与宿主桥（唯一允许 import Wails）。`host_desktop.go`（桌面桥与对话框）；`host_events.go`（emit 统一出口）；`host_window_state.go`（窗口位置持久化）；`host_notifications.go`（桌面通知音）。
 - `infra_*`: 共享基础设施。`infra_bridges.go`（类型别名与原子写）；`infra_result.go`（结果信封与模型端压缩）；`infra_stream.go`（流式节流）；`infra_output_encoding.go`（控制台编码与 UTF-8/GBK 转码）。
 - `biz_*`: 独立业务模块。`biz_config.go`（配置）；`biz_context.go`（上下文与 Token 核算）；`biz_compact.go`（历史压缩：手动/自动/溢出恢复三入口、阈值与超时归一、`CompactSession`/`CancelCompaction`）；`biz_prompt.go`（系统提示词组装）；`biz_sessions.go`（会话持久化与清理）；`biz_workspace*.go`（文件列表/搜索/编辑器）；`biz_skills.go`（技能发现/加载）；`biz_mcp.go`（MCP 生命周期）；`biz_api.go`（本地 HTTP API）；`biz_update.go`（自更新）；`biz_stats.go`（Token 统计）。

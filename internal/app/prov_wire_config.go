@@ -39,11 +39,6 @@ const (
 	reasoningEffortHigh         = "high"
 	reasoningEffortXHigh        = "xhigh"
 	reasoningEffortMax          = "max"
-	// cacheRetentionShort / cacheRetentionLong are the two levels the user can
-	// pick for how long a provider should keep the request prefix cached (see
-	// ConfigState.CacheRetention).
-	cacheRetentionShort = "short"
-	cacheRetentionLong  = "long"
 )
 
 // Provider-facing defaults: the fallback model, its endpoint, and the
@@ -119,72 +114,6 @@ func reasoningWireForAdapter(cfg ConfigState, apiFormat, effort string) reasonin
 		return reasoningWirePlan{DisableThinking: true}
 	}
 	return reasoningWirePlan{Effort: level}
-}
-
-// normalizeCacheRetention keeps the stored retention level inside the
-// documented set. Anything else — including the empty field of a config.json
-// written before this option existed — falls back to "short", which sends no
-// retention field at all and leaves the provider default in place.
-func normalizeCacheRetention(value string) string {
-	if strings.ToLower(strings.TrimSpace(value)) == cacheRetentionLong {
-		return cacheRetentionLong
-	}
-	return cacheRetentionShort
-}
-
-// ── Prompt-cache retention ──
-//
-// One user-facing level, three wire spellings, and the spelling is decided here
-// only — the rule the thinking levels already follow (reasoningWireForAdapter)
-// and the shape pi uses (ai/src/api/openai-responses.ts getPromptCacheOptions /
-// getPromptCacheRetention, ai/src/api/anthropic-messages.ts getCacheControl):
-// Anthropic expresses retention as cache_control.ttl, OpenAI as
-// prompt_cache_retention on models before GPT-5.6 and as
-// prompt_cache_options.ttl from GPT-5.6 on.
-
-// cacheRetentionRequestsLong reports whether the user asked for extended
-// retention.
-func cacheRetentionRequestsLong(cfg ConfigState) bool {
-	return normalizeCacheRetention(cfg.CacheRetention) == cacheRetentionLong
-}
-
-// anthropicCacheControlTTL is the `cache_control.ttl` value: "1h" for extended
-// retention, "5m" otherwise. The short value is written out explicitly (it is
-// Anthropic's documented default) so every request carries the same breakpoint
-// marker whatever the setting is.
-func anthropicCacheControlTTL(cfg ConfigState) string {
-	if cacheRetentionRequestsLong(cfg) {
-		return "1h"
-	}
-	return "5m"
-}
-
-// openAIExtendedCacheRetention is the `prompt_cache_retention` value, or "" when
-// the field must not be sent. Extended retention is how a prefix is kept alive on
-// models before GPT-5.6; from GPT-5.6 on, prompt_cache_options.ttl replaced the
-// field (the SDK documents it as deprecated), so the two never travel together —
-// the same split pi makes with its explicit-prompt-cache compat flag. As with the
-// other OpenAI-only request fields, the official endpoint is the gate: a
-// compatible gateway may answer an unknown top-level parameter with 400.
-func openAIExtendedCacheRetention(cfg ConfigState, model string) string {
-	if !cacheRetentionRequestsLong(cfg) || !isOfficialOpenAIEndpoint(cfg) {
-		return ""
-	}
-	if modelUsesPromptCacheOptionsTTL(model) {
-		return ""
-	}
-	return "24h"
-}
-
-// openAIPromptCacheOptionsTTL is the `prompt_cache_options.ttl` value, or "" when
-// the field must not be sent: only GPT-5.6 and later understand it, and only the
-// Responses API carries it. "30m" is the sole supported value and also the
-// provider default, sent to state the intent explicitly (pi does the same).
-func openAIPromptCacheOptionsTTL(cfg ConfigState, model string) string {
-	if !cacheRetentionRequestsLong(cfg) || !supportsOpenAIPromptCacheOptions(cfg, model) {
-		return ""
-	}
-	return "30m"
 }
 
 func normalizeTokenParam(value string) string {
