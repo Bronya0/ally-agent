@@ -175,6 +175,43 @@ export function normalizeApiKeysArray(keys) {
   return normalizeApiKeys(keys, null);
 }
 
+// 从 config 形状的源（config.models 里的预设，或顶层默认字段）提取归一化模型快照。
+// 曾内联在 App.vue；游戏区等独立面板也需要同一归一化，下沉至此避免各处自抄一份。
+export function modelSnapshotFrom(source) {
+  const keys = normalizeApiKeysArray(
+    Array.isArray(source?.apiKeys) && source.apiKeys.length
+      ? source.apiKeys
+      : (source?.apiKey ? [source.apiKey] : [])
+  );
+  return {
+    providerName: source?.providerName || 'OpenAI Compatible',
+    apiFormat: source?.apiFormat || 'openai_chat',
+    baseUrl: source?.baseUrl || '',
+    model: source?.model || '',
+    temperature: source?.temperature ?? 0.2,
+    maxTokens: source?.maxTokens || 131072,
+    contextWindow: source?.contextWindow || 1000000,
+    tokenParam: source?.tokenParam || 'auto',
+    reasoningTag: String(source?.reasoningTag || '').trim() || 'reasoning_content',
+    // 视觉能力随快照下发（目录给的三态值）：undefined = 未知，Go 侧按未知处理并
+    // 原样发送图片；只有明确 false 才会在请求构造时把图片换成文字占位。
+    visionCapable: typeof source?.visionCapable === 'boolean' ? source.visionCapable : undefined,
+    reasoningEffort: normalizeReasoningEffort(source?.reasoningEffort),
+    // 空 key 池置 null 而不是 []，与下方 customHeaders 同款契约：null = 该
+    // 模型未配 key，overlay 不携带该字段，后端保留顶层默认模型的 key 池。
+    // [] 会被 mergeConfig 判为非 nil 而"显式清空"，把已保存的 key 一起抹
+    // 掉——首次配置完直接发送报 "API key is required" 就是这条路径。
+    apiKeys: keys.length ? keys : null,
+    apiKey: keys[0] || '',
+    // Per-model custom headers must ride the snapshot: chat requests send
+    // {...config, ...snapshot}, and the StartChat overlay replaces the whole
+    // map (null = this model has none; backend keeps its top-level mirror).
+    customHeaders: source?.customHeaders && Object.keys(source.customHeaders).length
+      ? { ...source.customHeaders }
+      : null,
+  };
+}
+
 function normalizeImportedModel(model) {
   if (!model || typeof model !== 'object' || Array.isArray(model)) {
     throw importError('MODEL_INVALID');

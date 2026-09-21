@@ -71,7 +71,7 @@
 - `calculate/`（数学求值）· `command/`（Bash AST 安全解析与目标提取）· `edit/`（LCS diff 与范围替换）· `git/`（porcelain 解析）· `grep/`（ripgrep 封装）· `memory/`（记忆条目存储与运行时接口）· `pathutil/`（路径安全解析）· `read/`（文本读取与版本计算）· `scheduler/`（调度表达式解析）· `schemautil/`（工具 JSON-Schema 修补：$ref 内联与属性 type 推断）· `service/`（rolling buffer 与长进程判定）· `shared/`（CodedError 与内置 schema）· `toolcall/`（工具调用 ID 规范化、参数解码、截断参数标记）。
 
 ### `internal/game/`
-- `service.go`（游戏后端服务，供 `frontend/src/games/` 调用）。
+（已移除：局域网联机中继服务下线，游戏区仅保留人机对战；模型调用经 `internal/app/biz_game_ai.go`。）
 
 ## 前端核心结构 (`frontend/src/`)
 
@@ -79,9 +79,9 @@
 - `i18n.mjs`: 双语文本源（在 src 根，不在 utils/ 下）。
 - `composables/`: `useToolEvents.mjs`（工具事件流分组）、`sakuraBreeze.mjs`（樱花动效）。
 - `data/`: `modelCatalog.json`（模型目录，脚本生成）、`eyeLines.mjs`。
-- `games/`: `GamePanel.vue` 与规则/玩法逻辑（`connection.mjs` / `crypto.mjs` / `rules.mjs`）。
+- `games/`: `GamePanel.vue`（人机对战面板）与规则/玩法逻辑（`rules.mjs`）；文本棋盘协议与走法解析在 `ai.mjs`（后端单次模型调用绑定 `internal/app/biz_game_ai.go`，返回 usage 供面板显示 token 用量）。
 - `components/`:
-  - 核心视图与面板: `AppHeader.vue` (顶部栏与 Tab 拖拽), `ModeSider.vue` (左侧模式栏), `ChatMessages.vue` (消息流), `ComposerInfoBar.vue` (输入栏与模型选择), `WorkspaceExplorer.vue` (文件树与编辑器), `SkillsPanel.vue` (技能管理), `McpPanel.vue` (MCP 管理), `ModelsPanel.vue` (模型管理), `TaskCenterPanel.vue` (任务中心), `SettingsModal.vue` (系统设置), `TokenStatsModal.vue` (Token 统计), `CommandMenu.vue` (命令面板), `WelcomeMessage.vue` (欢迎页), `SplashScreen.vue` (启动画面), `GamePanel.vue` (游戏面板, 在 games/)。
+  - 核心视图与面板: `AppHeader.vue` (顶部栏与 Tab 拖拽), `ModeSider.vue` (左侧模式栏), `ChatMessages.vue` (消息流), `ComposerInfoBar.vue` (输入栏), `ModelMenu.vue` (共享模型选择下拉，输入栏与游戏区共用), `WorkspaceExplorer.vue` (文件树与编辑器), `SkillsPanel.vue` (技能管理), `McpPanel.vue` (MCP 管理), `ModelsPanel.vue` (模型管理), `TaskCenterPanel.vue` (任务中心), `SettingsModal.vue` (系统设置), `TokenStatsModal.vue` (Token 统计), `CommandMenu.vue` (命令面板), `WelcomeMessage.vue` (欢迎页), `SplashScreen.vue` (启动画面), `GamePanel.vue` (游戏面板, 在 games/)。
   - 工具卡与消息渲染: `ToolCallCard.vue` (通用工具卡与 diff), `AskToolCard.vue` (交互提问), `SubagentInlineCard.vue` (子代理卡), `DiffView.vue` (Diff 渲染), `HtmlRenderCard.vue` (HTML 渲染), `ReadGroupCard.vue` / `ReadGrepGroupCard.vue` (read/grep 合并卡), `TerminalOutputView.vue` (终端输出), `CodeView.vue`, `ToolStatusIcon.vue`, `RenderBoundary.vue`, `StreamingMarkdownBody.vue` (流式 Markdown 缓动渲染), `MessageAttachments.vue`, `ContextUsageInline.vue` (上下文用量)。
   - 弹层与小组件: `ToolsPopover.vue` / `McpStatusPopover.vue` / `SkillsPopover.vue` (欢迎页触发), `GitDiffModal.vue`, `FileInfoModal.vue`, `FileMentionMenu.vue`, `TokenPieChart.vue`, `AllyAvatar.vue`, `AllyWordmark.vue`, `SakuraBreeze.vue`。
 - `utils/`: 工具卡相关（`toolVerb.mjs` 动词表、`toolEventState.mjs` 事件状态机、`toolFormat.mjs`、`toolPreview.mjs`、`toolCardSignature.mjs`、`toolError.mjs`）；模型与配置（`modelConfigIO.mjs` 归一收口、`modelProviderCatalog.mjs`、`modelLabel.mjs`、`modelUsage.mjs`、`config.mjs`）；会话与输入（`sessionStore.mjs`、`sessionState.mjs`、`promptHistoryStore.mjs` 有界历史、`planPanel.mjs`）；渲染（`diff.js`、`ansi.mjs`、`shellHighlight.mjs`、`htmlRender.mjs`、`markdownPreview.mjs`、`mermaidShared.mjs`、`streamEase.mjs` 流式缓动）；平台（`clipboard.mjs`、`download.mjs`、`theme.mjs`、`fileInfo.mjs`、`format.mjs`、`versionCheck.mjs`、`buildVersion.js`、`skills.mjs`）。

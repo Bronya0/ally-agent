@@ -37,6 +37,26 @@ import AppstoreOutlined from '@vicons/antd/AppstoreOutlined';
 import SettingOutlined from '@vicons/antd/SettingOutlined';
 import { t } from '../i18n.mjs';
 
+// Crossed-swords icon for the games (play-vs-AI) entry: no swords glyph in
+// @vicons/antd, so render an inline lucide-style SVG instead.
+const SwordsIcon = () => h('svg', {
+  viewBox: '0 0 24 24',
+  fill: 'none',
+  stroke: 'currentColor',
+  'stroke-width': 2,
+  'stroke-linecap': 'round',
+  'stroke-linejoin': 'round',
+}, [
+  h('polyline', { points: '14.5 17.5 3 6 3 3 6 3 17.5 14.5' }),
+  h('line', { x1: '13', y1: '19', x2: '19', y2: '13' }),
+  h('line', { x1: '16', y1: '16', x2: '20', y2: '20' }),
+  h('line', { x1: '19', y1: '21', x2: '21', y2: '19' }),
+  h('polyline', { points: '14.5 6.5 18 3 21 3 21 6 17.5 10' }),
+  h('line', { x1: '5', y1: '14', x2: '9', y2: '18' }),
+  h('line', { x1: '7', y1: '17', x2: '4', y2: '20' }),
+  h('line', { x1: '3', y1: '19', x2: '5', y2: '21' }),
+]);
+
 const props = defineProps({
   mode: { type: String, default: 'chat' },
   kbRunning: { type: Boolean, default: false },
@@ -55,7 +75,7 @@ const modeOptions = computed(() => [
   { label: t('app.mode.mcp'), key: 'mcp', icon: renderIcon(ApiOutlined) },
   { label: t('app.mode.models'), key: 'models', icon: renderIcon(RobotOutlined) },
   { label: t('header.tokenStats'), key: 'stats', icon: renderIcon(BarChartOutlined) },
-  { label: t('header.games'), key: 'games', icon: renderIcon(AppstoreOutlined) },
+  { label: t('header.games'), key: 'games', icon: renderIcon(SwordsIcon) },
   { label: t('header.settings'), key: 'settings', icon: renderIcon(SettingOutlined) },
 ]);
 

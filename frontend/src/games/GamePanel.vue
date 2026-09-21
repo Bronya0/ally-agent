@@ -1,70 +1,90 @@
 <template>
   <!-- Inline games page: rendered inside the main-area container
-       (App.vue mode === 'games') instead of a modal card. -->
+       (App.vue mode === 'games') instead of a modal card. Local
+       play-against-model only. -->
   <div v-if="show" class="games-inline-panel">
     <header class="games-inline-header">
       <div class="games-inline-heading">
-        <span class="games-inline-title">协作休息区</span>
+        <span class="games-inline-title">人机对战</span>
         <span class="games-inline-subtitle">{{ headerSubtitle }}</span>
-      </div>
-      <div class="games-inline-badges">
-        <span class="game-badge" :class="{ online: connected }">{{ connected ? `已连接 ${peers.length} 人` : '未联机' }}</span>
       </div>
     </header>
     <div class="games-inline-body">
     <div class="game-layout">
       <aside class="game-sidebar">
         <section class="game-card">
-          <div class="game-card-title">联机房间</div>
-          <div class="game-hint">本机 IP：{{ localIPs.join('、') || '未发现内网 IPv4' }}</div>
-          <n-select
-            v-model:value="selectedHostIP"
-            size="small"
-            :options="hostIPOptions"
-            :disabled="!localIPs.length"
-            placeholder="选择给队友连接的本机 IP"
-          />
-          <div v-if="localIPs.length > 1" class="game-hint">请选择与队友处于同一内网的地址，避免使用 VPN 或虚拟网卡地址。</div>
-          <div class="game-hint">房主点击“启动房间”后，把生成的邀请信息整行发给队友；队友完整粘贴后点击“加入房间”。</div>
-          <div class="game-hint">服务监听 TCP 端口 {{ GAME_SERVER_PORT }}；若队友始终连不上，请在系统防火墙中放行该端口。</div>
-          <n-input v-model:value="invite" size="small" placeholder="例如：ALLY-GAME-1|192.168.1.8|39877|..." :disabled="connected" />
-          <div class="game-actions">
-            <n-button size="small" type="primary" :loading="working" :disabled="connected" @click="host">启动房间</n-button>
-            <n-button size="small" :loading="working" :disabled="connected || !invite" @click="join">加入房间</n-button>
+          <div class="game-card-title">{{ aiVsAi ? '双模型对弈' : '执子模型' }}</div>
+          <div class="game-model-row composer-info">
+            <ModelMenu
+              :models="props.models"
+              :active-identity="modelAIdentity"
+              :disabled="aiThinking"
+              placement="right-start"
+              :show-manage="false"
+              :record-usage="false"
+              @select="selectModelA"
+            >
+              <span class="info-model" style="cursor:pointer">{{ modelALabel }}</span>
+            </ModelMenu>
+            <n-dropdown trigger="click" placement="right-start" :options="reasoningEffortOptions" @select="(level) => onEffortSelect('a', level)">
+              <span class="info-effort" :title="t('composer.effort.title')">
+                <span class="info-effort-label">{{ effortLabel('a') }}</span>
+                <span class="info-effort-caret">▾</span>
+              </span>
+            </n-dropdown>
           </div>
-          <div v-if="serverInfo.running" class="game-invite">
-            <div>服务端口：{{ serverInfo.port }}</div>
-            <div>房间邀请信息（整行复制给队友）</div>
-            <code>{{ inviteText }}</code>
-            <n-button size="tiny" secondary @click="copyInvite">复制邀请信息</n-button>
+          <template v-if="aiVsAi">
+            <div class="game-model-row composer-info">
+              <ModelMenu
+                :models="props.models"
+                :active-identity="modelBIdentity"
+                :disabled="aiThinking"
+                placement="right-start"
+                :show-manage="false"
+                :record-usage="false"
+                @select="selectModelB"
+              >
+                <span class="info-model" style="cursor:pointer">{{ modelBLabel }}</span>
+              </ModelMenu>
+              <n-dropdown trigger="click" placement="right-start" :options="reasoningEffortOptions" @select="(level) => onEffortSelect('b', level)">
+                <span class="info-effort" :title="t('composer.effort.title')">
+                  <span class="info-effort-label">{{ effortLabel('b') }}</span>
+                  <span class="info-effort-caret">▾</span>
+                </span>
+              </n-dropdown>
+            </div>
+            <button class="game-pick-item" :disabled="aiThinking" @click="aiVsAi = false">改回与模型对弈</button>
+          </template>
+          <button v-else class="game-pick-item" :disabled="aiThinking" @click="aiVsAi = true">切换双模型对弈（AI vs AI）</button>
+          <div v-if="aiUsage.calls" class="game-usage">
+            <span>上轮 输入 {{ fmtTokens(aiUsage.lastPrompt) }} · 输出 {{ fmtTokens(aiUsage.lastCompletion) }}</span>
+            <span>本局 {{ aiUsage.calls }} 次调用 · 累计 {{ fmtTokens(aiUsage.totalPrompt + aiUsage.totalCompletion) }} tokens</span>
           </div>
-          <div v-if="connected" class="game-connected">已连接，玩家 {{ peers.length }}/4</div>
-          <n-button v-if="connected || serverInfo.running" size="small" block type="error" secondary :loading="working" @click="isHost || serverInfo.running ? closeRoom() : leaveRoom()">
-            {{ isHost || serverInfo.running ? '关闭房间' : '离开房间' }}
-          </n-button>
-          <div v-if="errorText" class="game-error">{{ errorText }}</div>
+          <div class="game-btn-row">
+            <n-button size="small" type="primary" class="game-main-btn" :loading="aiThinking" :disabled="!canStart" @click="startAIGame">{{ state ? '重新开始' : '开始对局' }}</n-button>
+            <n-button v-if="aiThinking" size="small" secondary type="error" @click="cancelAICall">停止</n-button>
+          </div>
         </section>
         <section class="game-card">
-          <div class="game-card-title">对局</div>
+          <div class="game-card-title">棋牌</div>
           <div class="game-pick">
             <button
               v-for="option in gameOptions"
               :key="option.value"
               :class="['game-pick-item', { active: selectedGame === option.value }]"
-              :disabled="!!state"
-              @click="selectedGame = option.value"
+              :disabled="aiThinking"
+              @click="pickGame(option.value)"
             >{{ option.label }}</button>
           </div>
-          <div class="game-hint">{{ GAME_META[selectedGame].min }} 人开局 · 房主负责开局与发牌</div>
-          <n-button v-if="state && state.game === 'doudizhu' && state.phase === 'deal' && isHost" size="small" block @click="act({ type: 'start' })">发牌</n-button>
-          <n-button v-if="state && state.game === 'go'" size="small" block :disabled="playerIndex !== state.turn" @click="act({ type: 'pass' })">停一手</n-button>
-          <n-button v-if="state && isHost" size="small" block secondary @click="resetGame">重新开始</n-button>
+          <div class="game-hint">{{ modeHint }}</div>
+          <n-button v-if="state && state.game === 'doudizhu' && state.phase === 'deal' && !aiVsAi && canDeal" size="small" block @click="act({ type: 'start' })">发牌</n-button>
+          <n-button v-if="state && state.game === 'go' && !aiVsAi" size="small" block :disabled="!canActNow" @click="act({ type: 'pass' })">停一手</n-button>
         </section>
       </aside>
       <main class="game-board-wrap">
         <div v-if="!state" class="game-empty">
           <div class="game-empty-icon">♟</div>
-          <div>{{ connected ? '等待玩家加入（需要 ' + GAME_META[selectedGame].min + ' 人开局）…' : '启动或加入房间后即可开局' }}</div>
+          <div>选择模型后点击“开始对局”，与模型下一盘</div>
         </div>
         <template v-else-if="state.game === 'gomoku' || state.game === 'go'">
           <div class="board-frame">
@@ -96,7 +116,7 @@
               <button
                 v-for="(piece, index) in flatXiangqi"
                 :key="index"
-                :class="['xiangqi-cell', { 'is-red': piece?.[0] === 'r', 'is-selected': !!selectedPiece && selectedPiece.x === index % 9 && selectedPiece.y === Math.floor(index / 9) }]"
+                :class="['xiangqi-cell', { 'is-red': piece?.[0] === 'r', 'is-selected': !!selectedPiece && selectedPiece.x === index % 9 && selectedPiece.y === Math.floor(index / 9), 'is-hint': xiangqiHints.has(`${index % 9},${Math.floor(index / 9)}`) }]"
                 @click="moveXiangqi(index)"
               >
                 <span v-if="piece" class="xiangqi-piece">{{ xiangqiPieceLabel(piece) }}</span>
@@ -110,20 +130,20 @@
             <div class="game-status" :class="{ mine: isMyTurn }">{{ doudizhuStatus }}</div>
             <div class="cards-row">
               <button
-                v-for="(card, index) in myHand"
-                :key="`${card}-${index}`"
-                :class="['playing-card', { selected: selectedCards.includes(index), joker: card >= 16, 'joker-big': card === 17 }]"
-                :data-label="cardLabel(card)"
-                @click="toggleCard(index)"
-              >{{ cardLabel(card) }}</button>
+                v-for="entry in myHand"
+                :key="entry.index"
+                :class="['playing-card', { selected: selectedCards.includes(entry.index), joker: entry.card >= 16, 'joker-big': entry.card === 17 }]"
+                :data-label="cardLabel(entry.card)"
+                @click="toggleCard(entry.index)"
+              >{{ cardLabel(entry.card) }}</button>
             </div>
             <div v-if="state.phase === 'bid'" class="game-actions">
-              <n-button size="small" type="primary" :disabled="playerIndex !== state.turn" @click="bid(1)">叫地主</n-button>
-              <n-button size="small" :disabled="playerIndex !== state.turn" @click="bid(0)">不叫</n-button>
+              <n-button size="small" type="primary" :disabled="!canActNow" @click="bid(1)">叫地主</n-button>
+              <n-button size="small" :disabled="!canActNow" @click="bid(0)">不叫</n-button>
             </div>
             <div v-else-if="state.phase === 'play'" class="game-actions">
-              <n-button size="small" type="primary" :disabled="playerIndex !== state.turn" @click="playCards">出牌</n-button>
-              <n-button size="small" :disabled="playerIndex !== state.turn" @click="act({ type: 'pass' })">不要</n-button>
+              <n-button size="small" type="primary" :disabled="!canActNow" @click="playCards">出牌</n-button>
+              <n-button size="small" :disabled="!canActNow" @click="act({ type: 'pass' })">不要</n-button>
             </div>
           </div>
         </template>
@@ -134,114 +154,226 @@
 </template>
 
 <script setup>
-import { computed, onMounted, onUnmounted, ref } from 'vue';
-import { useMessage } from 'naive-ui';
-import { GetNetworkInfo, StartServer, StopServer } from '../../bindings/ally-dev/internal/game/service';
+import { computed, onUnmounted, ref } from 'vue';
+import { NButton, NDropdown, useMessage } from 'naive-ui';
+import ModelMenu from '../components/ModelMenu.vue';
+import { GameAIAction, GameAIActionCancel } from '../../bindings/ally-dev/internal/app/app';
 import { applyAction, createState, GAME_META, xiangqiPieceLabel } from './rules.mjs';
-import { buildInvite, GameConnection, parseInvite } from './connection.mjs';
+import { AI_ALT_ID, AI_PLAYER_ID, buildGameMessages, describeAction, legalXiangqiMoves, parseAIAction } from './ai.mjs';
+import { modelConfigIdentity, modelSnapshotFrom, reasoningEffortLevels } from '../utils/modelConfigIO.mjs';
+import { formatModelLabel } from '../utils/modelLabel.mjs';
+import { reasoningEffortLabel, t } from '../i18n.mjs';
 
-const props = defineProps({ show: { type: Boolean, default: false } });
+const props = defineProps({
+  show: { type: Boolean, default: false },
+  // Raw config.models presets; the shared ModelMenu consumes them directly so
+  // the games selector is the exact same menu as the composer's.
+  models: { type: Array, default: () => [] },
+  defaultModel: { type: Object, default: null },
+});
 defineEmits(['close']);
 const message = useMessage();
-const GAME_SERVER_PORT = 51873;
-const invite = ref('');
-const localIPs = ref([]);
-const working = ref(false);
-const errorText = ref('');
-const selectedHostIP = ref('');
 const selectedGame = ref('gomoku');
-const connection = ref(null);
-const peerId = ref('');
-const hostId = ref('');
-const peers = ref([]);
 const state = ref(null);
 const selectedCards = ref([]);
 const selectedPiece = ref(null);
-const serverInfo = ref({ running: false, addresses: [] });
+// AI vs AI: seats alternate between model A (even seats) and model B (odd
+// seats); otherwise seat 0 is the human and every other seat is model A.
+const aiVsAi = ref(false);
+const modelAIdentity = ref('');
+const modelBIdentity = ref('');
+// Game-level effort overrides ('' follows the selected preset's value) so a
+// quick “让它多想想” never mutates the saved config.
+const effortA = ref('');
+const effortB = ref('');
+const aiThinking = ref(false);
+const aiUsage = ref({ lastPrompt: 0, lastCompletion: 0, totalPrompt: 0, totalCompletion: 0, calls: 0 });
+// Bounded move-notation memory (last 12 actions, human + AI alike) sent with
+// every prompt so the model keeps continuity without re-sending old boards.
+const aiHistory = ref([]);
+let aiEpoch = 0;
 
 const gameOptions = Object.entries(GAME_META).map(([value, item]) => ({ value, label: item.label }));
-const connected = computed(() => !!connection.value && !!peerId.value);
-const isHost = computed(() => peerId.value && peerId.value === hostId.value);
-const hostIPOptions = computed(() => localIPs.value.map((ip) => ({ label: ip, value: ip })));
-const inviteText = computed(() => serverInfo.value.running && selectedHostIP.value ? buildInvite({ host: selectedHostIP.value, port: serverInfo.value.port, roomId: serverInfo.value.roomId, secret: serverInfo.value.secret }) : '');
-const playerIndex = computed(() => state.value?.players?.indexOf(peerId.value) ?? -1);
+
+function snapshotFor(identity, effort, fallback) {
+  const preset = (props.models || []).find((item) => modelConfigIdentity(item) === identity);
+  const base = preset ? modelSnapshotFrom(preset) : fallback;
+  if (!base) return null;
+  return effort ? { ...base, reasoningEffort: effort } : base;
+}
+const modelASnapshot = computed(() => snapshotFor(modelAIdentity.value, effortA.value, props.defaultModel));
+const modelBSnapshot = computed(() => snapshotFor(modelBIdentity.value, effortB.value, null));
+function modelForSeat(seat) {
+  if (!aiVsAi.value) return modelASnapshot.value; // human holds seat 0
+  return seat % 2 === 0 ? modelASnapshot.value : modelBSnapshot.value;
+}
+const canStart = computed(() => !!modelForSeat(0)?.model && (!aiVsAi.value || !!modelBSnapshot.value?.model));
+const modelALabel = computed(() => { const p = (props.models || []).find((m) => modelConfigIdentity(m) === modelAIdentity.value); return (p || props.defaultModel) ? formatModelLabel(p || props.defaultModel) : t('composer.models.empty'); });
+const modelBLabel = computed(() => { const p = (props.models || []).find((m) => modelConfigIdentity(m) === modelBIdentity.value); return p ? formatModelLabel(p) : t('composer.models.empty'); });
+function effortLabel(which) {
+  const identity = which === 'a' ? modelAIdentity.value : modelBIdentity.value;
+  const preset = (props.models || []).find((m) => modelConfigIdentity(m) === identity);
+  const effort = (which === 'a' ? effortA.value : effortB.value) || preset?.reasoningEffort || 'auto';
+  return reasoningEffortLabel(effort);
+}
+const reasoningEffortOptions = reasoningEffortLevels.map((level) => ({ label: reasoningEffortLabel(level), key: level }));
+const playerIndex = computed(() => state.value?.players?.[0] === 'human' ? 0 : -1);
+const canDeal = computed(() => !!state.value && state.value.phase === 'deal' && !aiThinking.value);
+const canActNow = computed(() => !!state.value && state.value.winner == null && state.value.turn === playerIndex.value && !aiThinking.value && playerIndex.value >= 0);
 const gridStyle = computed(() => ({ '--board-size': state.value?.size || 15 }));
 const flatXiangqi = computed(() => state.value?.board?.flat() || []);
-const myHand = computed(() => state.value?.hands?.[playerIndex.value] || []);
-const turnText = computed(() => state.value?.winner === -1 ? '和棋（困毙）' : state.value?.winner != null ? `玩家 ${state.value.winner + 1} 获胜` : state.value?.turn === playerIndex.value ? '轮到你' : '等待对手');
-const doudizhuStatus = computed(() => state.value?.phase === 'deal' ? (isHost.value ? '房主可以发牌' : '等待房主发牌') : state.value?.phase === 'bid' ? '叫地主阶段' : turnText.value);
-const headerSubtitle = computed(() => connected.value ? `${GAME_META[selectedGame.value].label} · ${peers.value.length} 人在房间` : '本地棋牌 · 内网联机对战');
-const boardLocked = computed(() => !state.value || state.value.winner != null || state.value.turn !== playerIndex.value);
-const isMyTurn = computed(() => !!state.value && state.value.winner == null && state.value.turn === playerIndex.value);
-
-onMounted(async () => {
-  try {
-    const info = await GetNetworkInfo();
-    localIPs.value = info.addresses || [];
-    if (localIPs.value.length === 1) selectedHostIP.value = localIPs.value[0];
-  } catch {}
+// Hand shown sorted by value (indices ride along so selection keeps mapping to
+// the real hand array regardless of the deal order).
+const myHand = computed(() => (state.value?.hands?.[playerIndex.value] || [])
+  .map((card, index) => ({ card, index }))
+  .sort((a, b) => a.card - b.card || a.index - b.index));
+// Legal-destination dots for the selected xiangqi piece (engine-enumerated).
+const xiangqiHints = computed(() => {
+  if (!selectedPiece.value || state.value?.game !== 'xiangqi' || playerIndex.value < 0) return new Set();
+  return new Set(legalXiangqiMoves(state.value, playerIndex.value)
+    .filter((m) => m.fromX === selectedPiece.value.x && m.fromY === selectedPiece.value.y)
+    .map((m) => `${m.toX},${m.toY}`));
 });
-onUnmounted(() => { connection.value?.close(); if (serverInfo.value.running) StopServer().catch(() => {}); });
+function seatLabel(seat) { return aiVsAi.value ? (seat % 2 === 0 ? '模型A' : '模型B') : '模型'; }
+const turnText = computed(() => {
+  if (!state.value) return '';
+  if (state.value.winner === -1) return '和棋（困毙）';
+  if (state.value.winner != null) return aiVsAi.value ? `座位${state.value.winner + 1}（${seatLabel(state.value.winner)}）获胜` : state.value.winner === 0 ? '你赢了 🎉' : '模型赢了';
+  if (aiVsAi.value) return `座位${state.value.turn + 1}（${seatLabel(state.value.turn)}）思考中…`;
+  return state.value.turn === playerIndex.value ? '轮到你' : '模型思考中…';
+});
+const doudizhuStatus = computed(() => state.value?.phase === 'deal' ? '点击“发牌”开始' : state.value?.phase === 'bid' && !aiVsAi.value ? '叫地主阶段' : turnText.value);
+const headerSubtitle = computed(() => `${GAME_META[selectedGame.value].label} · ${aiVsAi.value ? '双模型对弈' : '人机对战'}`);
+const boardLocked = computed(() => !state.value || state.value.winner != null || state.value.turn !== playerIndex.value || aiThinking.value);
+const isMyTurn = computed(() => !!state.value && state.value.winner == null && state.value.turn === playerIndex.value);
+const modeHint = computed(() => aiVsAi.value ? '两个模型轮流执子对弈，你观战' : `${GAME_META[selectedGame.value].min} 人局 · 你执先手，其余座位由模型接管`);
 
-function resetRoomState() {
-  connection.value = null;
-  peerId.value = '';
-  hostId.value = '';
-  peers.value = [];
+onUnmounted(() => { aiEpoch++; });
+
+function aiSeatCount(game) { return (GAME_META[game]?.min || 2) - 1; }
+function isAISeat(id) { return id === AI_PLAYER_ID || id === AI_ALT_ID; }
+
+function selectModelA(index) {
+  const preset = (props.models || [])[index];
+  if (preset) { modelAIdentity.value = modelConfigIdentity(preset); effortA.value = ''; }
+}
+function selectModelB(index) {
+  const preset = (props.models || [])[index];
+  if (preset) { modelBIdentity.value = modelConfigIdentity(preset); effortB.value = ''; }
+}
+
+function onEffortSelect(which, level) { if (which === 'a') effortA.value = level; else effortB.value = level; }
+
+// Switching game (or re-clicking the active one) just starts fresh — the old
+// board is abandoned, never a dead end of disabled buttons.
+function pickGame(game) {
+  if (aiThinking.value) return;
+  aiEpoch++;
+  selectedGame.value = game;
   state.value = null;
   selectedCards.value = [];
   selectedPiece.value = null;
-  serverInfo.value = { running: false, addresses: localIPs.value };
+  aiHistory.value = [];
+  aiUsage.value = { lastPrompt: 0, lastCompletion: 0, totalPrompt: 0, totalCompletion: 0, calls: 0 };
 }
-async function closeRoom() {
-  if (!isHost.value && !serverInfo.value.running) return;
-  working.value = true;
+
+function cancelAICall() {
+  aiEpoch++;
+  aiThinking.value = false;
+  GameAIActionCancel().catch(() => {});
+}
+
+function fmtTokens(value) {
+  if (!Number.isFinite(value) || value <= 0) return '0';
+  if (value < 1000) return String(value);
+  if (value < 10000) return `${(value / 1000).toFixed(2)}k`;
+  if (value < 1000000) return `${(value / 1000).toFixed(1)}k`;
+  return `${(value / 1000000).toFixed(2)}M`;
+}
+
+function startAIGame() {
+  if (!canStart.value) { message.error('请先选择模型（可在设置中配置）'); return; }
+  aiEpoch++;
+  const seats = aiVsAi.value
+    ? Array.from({ length: GAME_META[selectedGame.value].min }, (_, i) => (i % 2 === 0 ? AI_PLAYER_ID : AI_ALT_ID))
+    : ['human', ...Array.from({ length: aiSeatCount(selectedGame.value) }, () => AI_PLAYER_ID)];
+  state.value = createState(selectedGame.value, seats);
+  selectedCards.value = [];
+  selectedPiece.value = null;
+  aiUsage.value = { lastPrompt: 0, lastCompletion: 0, totalPrompt: 0, totalCompletion: 0, calls: 0 };
+  aiHistory.value = [];
+  // AI-vs-AI has no human to press the deal button; deal automatically.
+  if (aiVsAi.value && selectedGame.value === 'doudizhu') applyAndLog(0, { type: 'start' });
+  maybeAIMove();
+}
+
+async function maybeAIMove() {
+  if (!state.value || state.value.winner != null || aiThinking.value) return;
+  if (!isAISeat(state.value.players[state.value.turn])) return;
+  const epoch = ++aiEpoch;
+  aiThinking.value = true;
   try {
-    connection.value?.close();
-    await StopServer();
-    resetRoomState();
-  } catch (err) {
-    errorText.value = err?.message || '关闭房间失败';
-  } finally {
-    working.value = false;
-  }
-}
-function leaveRoom() {
-  if (isHost.value) return;
-  connection.value?.close();
-  resetRoomState();
-}
-async function host() {
-  working.value = true; errorText.value = '';
-  let started = false;
-  try {
-    if (!selectedHostIP.value) throw new Error('请先选择给队友连接的本机 IP');
-    serverInfo.value = await StartServer({ port: GAME_SERVER_PORT, address: selectedHostIP.value });
-    started = true;
-    if (!serverInfo.value.addresses?.includes(selectedHostIP.value)) throw new Error('所选本机 IP 已不可用，请重新选择');
-    await connect({ host: selectedHostIP.value, port: serverInfo.value.port, roomId: serverInfo.value.roomId, secret: serverInfo.value.secret });
-  }
-  catch (err) {
-    if (started) {
-      await StopServer().catch(() => {});
-      resetRoomState();
+    while (state.value && state.value.winner == null && isAISeat(state.value.players[state.value.turn]) && epoch === aiEpoch) {
+      const ok = await aiTakeTurn(state.value.turn);
+      if (!ok || epoch !== aiEpoch) break;
     }
-    errorText.value = err?.message || '启动失败';
+  } finally {
+    if (epoch === aiEpoch) aiThinking.value = false;
   }
-  finally { working.value = false; }
 }
-async function join() { working.value = true; errorText.value = ''; try { await connect(parseInvite(invite.value)); } catch (err) { errorText.value = err?.message || '加入失败'; } finally { working.value = false; } }
-async function connect(info) {
-  const c = new GameConnection({ name: `玩家-${Math.random().toString(36).slice(2, 5)}`, onReady: (v) => { peerId.value = v.peerId; hostId.value = v.hostId; ensureState(); }, onPeers: (list) => { peers.value = list; ensureState(); }, onClose: () => { errorText.value = '连接已断开'; }, onError: (text) => { errorText.value = text; }, onMessage: handleMessage });
-  await c.connect(info); connection.value = c;
+
+function applyAndLog(seat, action) {
+  const note = describeAction(state.value.game, state.value, seat, action);
+  state.value = applyAction(state.value, seat, action);
+  if (note) {
+    aiHistory.value.push(note);
+    if (aiHistory.value.length > 12) aiHistory.value.shift();
+  }
 }
-function orderedPlayerIDs() { return [hostId.value, ...peers.value.map((p) => p.id).filter((id) => id !== hostId.value)].slice(0, GAME_META[selectedGame.value].max); }
-function ensureState() { if (isHost.value && state.value) { syncState(); return; } if (isHost.value && !state.value && peers.value.length >= GAME_META[selectedGame.value].min) { state.value = createState(selectedGame.value, orderedPlayerIDs()); syncState(); } }
-function resetGame() { if (!isHost.value) return; state.value = createState(selectedGame.value, orderedPlayerIDs()); syncState(); }
-async function act(action) { if (playerIndex.value < 0) { message.info('当前为观战状态'); return; } try { if (isHost.value) { state.value = applyAction(state.value, playerIndex.value, action); await syncState(); } else { await connection.value.send('action', action, hostId.value); } } catch (err) { message.error(err?.message || '操作不合法'); } }
-function stateFor(viewerID) { const copy = JSON.parse(JSON.stringify(state.value)); if (copy.game === 'doudizhu' && Array.isArray(copy.hands)) { const viewer = copy.players.indexOf(viewerID); copy.hands = copy.hands.map((hand, index) => index === viewer ? hand : Array(hand.length).fill(null)); } return copy; }
-async function syncState(to = '') { if (!isHost.value || !connection.value) return; const targets = to ? peers.value.filter((p) => p.id === to) : peers.value; await Promise.all(targets.filter((p) => p.id !== peerId.value).map((p) => connection.value.send('sync', stateFor(p.id), p.id))); }
-async function handleMessage(msg) { if (msg.type === 'sync') { if (msg.from !== hostId.value || isHost.value || !msg.data?.game) return; state.value = msg.data; selectedCards.value = []; return; } if (msg.type === 'action' && isHost.value) { try { const index = state.value?.players?.indexOf(msg.from) ?? -1; if (index < 0) return; state.value = applyAction(state.value, index, msg.data); await syncState(); } catch {} } }
+
+async function aiTakeTurn(seat) {
+  const epoch = aiEpoch;
+  const failures = [];
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (!state.value || state.value.winner != null || epoch !== aiEpoch) return false;
+    let result = null;
+    try {
+      const { system, user } = buildGameMessages(state.value, seat, failures, aiHistory.value);
+      result = await GameAIAction(modelForSeat(seat), system, user);
+    } catch (err) {
+      // Cancelled (epoch bumped by cancelAICall/startAIGame/switch): the loop
+      // is already stopped; don't surface the abort as an error toast.
+      if (epoch !== aiEpoch) return false;
+      message.error(`模型调用失败：${err?.message || err}`);
+      return false;
+    }
+    if (result.promptTokens > 0 || result.completionTokens > 0) {
+      aiUsage.value = {
+        lastPrompt: result.promptTokens,
+        lastCompletion: result.completionTokens,
+        totalPrompt: aiUsage.value.totalPrompt + result.promptTokens,
+        totalCompletion: aiUsage.value.totalCompletion + result.completionTokens,
+        calls: aiUsage.value.calls + 1,
+      };
+    }
+    const action = parseAIAction(result.reply, state.value.game);
+    if (!action) { failures.push(`回复无法解析为 JSON：${String(result.reply).slice(0, 120)}`); continue; }
+    try {
+      applyAndLog(seat, action);
+      return true;
+    } catch (err) {
+      failures.push(`${JSON.stringify(action)} → 规则引擎拒绝：${err?.message || '非法'}`);
+    }
+  }
+  message.error('模型连续 3 次未给出合法走法，对局已暂停，可点击“重新开局”重试');
+  return false;
+}
+
+function act(action) {
+  if (!canActNow.value) { message.info(aiThinking.value ? '模型思考中，请稍候' : '当前无你的可操作回合'); return; }
+  try { applyAndLog(playerIndex.value, action); } catch (err) { message.error(err?.message || '操作不合法'); return; }
+  maybeAIMove();
+}
 function place(index) { const size = state.value.size; act({ type: 'place', x: index % size, y: Math.floor(index / size) }); }
 function moveXiangqi(index) {
   if (!state.value || state.value.winner != null) return;
@@ -258,10 +390,9 @@ function moveXiangqi(index) {
   act({ type: 'move', fromX: from.x, fromY: from.y, toX: x, toY: y });
 }
 function toggleCard(index) { const at = selectedCards.value.indexOf(index); if (at >= 0) selectedCards.value.splice(at, 1); else selectedCards.value.push(index); }
-function playCards() { act({ type: 'play', cards: selectedCards.value.map((i) => myHand.value[i]) }); selectedCards.value = []; }
+function playCards() { act({ type: 'play', cards: selectedCards.value.map((i) => state.value.hands[playerIndex.value][i]) }); selectedCards.value = []; }
 function bid(value) { act({ type: 'bid', value }); }
 function cardLabel(card) { return card === 16 ? '小王' : card === 17 ? '大王' : ({ 11: 'J', 12: 'Q', 13: 'K', 14: 'A', 15: '2' }[card] || String(card)); }
-async function copyInvite() { try { await navigator.clipboard.writeText(inviteText.value); message.success('已复制'); } catch { message.error('复制失败'); } }
 </script>
 
 <style scoped>
@@ -285,11 +416,13 @@ async function copyInvite() { try { await navigator.clipboard.writeText(inviteTe
   border-bottom: 1px solid var(--game-header-border);
   flex-shrink: 0;
 }
-
 .games-inline-heading { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
 .games-inline-title { font-size: 18px; font-weight: 700; letter-spacing: 0.5px; color: var(--game-title-color); }
 .games-inline-subtitle { color: var(--game-hint-color); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .games-inline-badges { margin-left: auto; display: flex; gap: 8px; }
+.game-btn-row { display: flex; gap: 8px; }
+.game-main-btn { flex: 1; }
+.xiangqi-cell.is-hint::after { content: ''; position: absolute; z-index: 1; inset: 38%; border-radius: 50%; background: color-mix(in srgb, #18a058 75%, transparent); box-shadow: 0 0 6px rgba(24, 160, 88, 0.6); pointer-events: none; }
 .game-badge { padding: 3px 10px; border-radius: 999px; font-size: 11px; color: var(--game-hint-color); background: var(--game-panel-card-bg); border: 1px solid var(--game-panel-card-border); }
 .game-badge.online { color: #3fbf7f; border-color: color-mix(in srgb, #3fbf7f 45%, transparent); background: color-mix(in srgb, #3fbf7f 12%, transparent); }
 
@@ -301,6 +434,12 @@ async function copyInvite() { try { await navigator.clipboard.writeText(inviteTe
 .game-card-title { color: var(--game-section-title-color); font-size: 12px; font-weight: 600; letter-spacing: 0.4px; }
 .game-hint, .game-connected { color: var(--game-hint-color); font-size: 12px; line-height: 1.5; }
 
+.game-model-row { margin-top: 0; padding-top: 0; flex-wrap: wrap; white-space: normal; min-width: 0; }
+
+.game-thinking-row { display: flex; align-items: center; gap: 8px; }
+
+.game-usage { display: flex; flex-direction: column; gap: 2px; padding: 6px 8px; border-radius: 8px; background: color-mix(in srgb, var(--game-section-title-color) 7%, transparent); color: var(--game-hint-color); font-size: 11.5px; line-height: 1.4; font-variant-numeric: tabular-nums; }
+
 .game-pick { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
 .game-pick-item { padding: 8px 4px; border-radius: 9px; border: 1px solid var(--game-panel-card-border); background: transparent; color: var(--game-section-title-color); font-family: inherit; font-size: 13px; cursor: pointer; transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease; }
 .game-pick-item:hover:not(:disabled) { background: color-mix(in srgb, var(--game-section-title-color) 12%, transparent); }
@@ -308,9 +447,6 @@ async function copyInvite() { try { await navigator.clipboard.writeText(inviteTe
 .game-pick-item:disabled { opacity: 0.55; cursor: not-allowed; }
 
 .game-actions { display: flex; gap: 8px; flex-wrap: wrap; }
-.game-invite { display: grid; gap: 6px; color: var(--game-hint-color); font-size: 11px; }
-.game-invite code { word-break: break-all; color: var(--game-invite-code-color); background: var(--game-invite-code-bg); padding: 6px 8px; border-radius: 6px; }
-.game-error { color: #e88989; font-size: 12px; }
 
 .game-board-wrap { display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 14px; min-width: 0; }
 .game-empty { display: flex; flex-direction: column; align-items: center; gap: 10px; color: var(--game-empty-color); font-size: 13px; text-align: center; }

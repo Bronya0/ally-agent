@@ -392,7 +392,7 @@ Public License v3. See the LICENSE file for details.
                  an active room/connection survives switching to other modes
                  (unmounting would stop the server and close the room). -->
             <div v-show="gamesActive" class="settings-page-container">
-              <GamePanel :show="gamesActive" @close="closeGames" />
+              <GamePanel :show="gamesActive" :models="config.models || []" :default-model="gameModelDefault" @close="closeGames" />
             </div>
 
             </div>
@@ -608,7 +608,7 @@ import { useSakuraBreeze } from './composables/sakuraBreeze.mjs';
 
 // 樱花青草风特效的全局开关；唯一特效层实例见模板根部
 const { sakuraOn } = useSakuraBreeze();
-import { modelConfigIdentity, normalizeApiKeysArray, normalizeReasoningEffort } from './utils/modelConfigIO.mjs';
+import { modelConfigIdentity, modelSnapshotFrom, normalizeApiKeysArray, normalizeReasoningEffort } from './utils/modelConfigIO.mjs';
 import { getSpecificModelUsage } from './utils/modelUsage.mjs';
 import { formatModelLabel } from './utils/modelLabel.mjs';
 import { buildVersion } from './utils/buildVersion.js';
@@ -1536,43 +1536,6 @@ function setLastUsedModelIdentity(identity) {
   } catch {}
 }
 
-// Extract a normalized model snapshot from a config-shaped source (a preset
-// from config.models, or the top-level default fields).
-function modelSnapshotFrom(source) {
-  const keys = normalizeApiKeysArray(
-    Array.isArray(source?.apiKeys) && source.apiKeys.length
-      ? source.apiKeys
-      : (source?.apiKey ? [source.apiKey] : [])
-  );
-  return {
-    providerName: source?.providerName || 'OpenAI Compatible',
-    apiFormat: source?.apiFormat || 'openai_chat',
-    baseUrl: source?.baseUrl || '',
-    model: source?.model || '',
-    temperature: source?.temperature ?? 0.2,
-    maxTokens: source?.maxTokens || 131072,
-    contextWindow: source?.contextWindow || 1000000,
-    tokenParam: source?.tokenParam || 'auto',
-    reasoningTag: String(source?.reasoningTag || '').trim() || 'reasoning_content',
-    // 视觉能力随快照下发（目录给的三态值）：undefined = 未知，Go 侧按未知处理并
-    // 原样发送图片；只有明确 false 才会在请求构造时把图片换成文字占位。
-    visionCapable: typeof source?.visionCapable === 'boolean' ? source.visionCapable : undefined,
-    reasoningEffort: normalizeReasoningEffort(source?.reasoningEffort),
-    // 空 key 池置 null 而不是 []，与下方 customHeaders 同款契约：null = 该
-    // 模型未配 key，overlay 不携带该字段，后端保留顶层默认模型的 key 池。
-    // [] 会被 mergeConfig 判为非 nil 而"显式清空"，把已保存的 key 一起抹
-    // 掉——首次配置完直接发送报 "API key is required" 就是这条路径。
-    apiKeys: keys.length ? keys : null,
-    apiKey: keys[0] || '',
-    // Per-model custom headers must ride the snapshot: chat requests send
-    // {...config, ...snapshot}, and the StartChat overlay replaces the whole
-    // map (null = this model has none; backend keeps its top-level mirror).
-    customHeaders: source?.customHeaders && Object.keys(source.customHeaders).length
-      ? { ...source.customHeaders }
-      : null,
-  };
-}
-
 // 查找按照使用频率累计倒排的最常用有效模型，若频率都相同或无记录则返回第一个
 function getFallbackModelPreset(models) {
   if (!Array.isArray(models) || !models.length) return null;
@@ -1633,6 +1596,12 @@ function ensureTabModel(tab) {
 // Tab's model snapshot overlaid. Replaces the old pattern of mutating config's
 // top-level model fields on every Tab/model switch.
 const chatConfig = computed(() => ({ ...config, ...modelByTab[activeWorkspaceId.value] }));
+
+// Games panel “人机对战”复用聊天侧同一套模型预设与归一化：传入原始 presets
+//（ModelMenu 直接消费）+ 当前 Tab 模型快照作为默认，快照归一化在
+// utils/modelConfigIO.mjs 的 modelSnapshotFrom 收口。
+// Default: the active Tab's model, falling back to the top-level default model.
+const gameModelDefault = computed(() => modelByTab[activeWorkspaceId.value] || modelSnapshotFrom(config));
 
 // After Settings saves an updated model list, re-sync every Tab's snapshot
 // from its preset so edits (API key, base URL, ...) propagate to Tabs already

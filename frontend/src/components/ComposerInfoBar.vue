@@ -23,19 +23,16 @@ Public License v3. See the LICENSE file for details.
       :aria-label="$t('commands.sessions')"
       @click.stop="$emit('showSessions')"
     ><MenuOutlined /></button>
-    <n-dropdown
-      trigger="click"
-      placement="top-start"
-      scrollable
+    <ModelMenu
+      :models="props.config.models || []"
+      :active-identity="modelConfigIdentity(props.config)"
       :disabled="running"
-      :options="modelMenuOptions"
-      :render-label="renderModelMenuLabel"
-      :menu-props="modelMenuProps"
-      @select="onModelMenuSelect"
-      @update:show="onModelMenuShow"
+      placement="top-start"
+      @select="(index) => emit('switchModel', index)"
+      @manage="emit('openConfig')"
     >
       <span class="info-model" style="cursor:pointer" :title="running ? $t('composer.lockedWhileRunning') : ''">{{ currentModelLabel }}</span>
-    </n-dropdown>
+    </ModelMenu>
     <n-dropdown
       trigger="click"
       placement="top-start"
@@ -270,9 +267,9 @@ Public License v3. See the LICENSE file for details.
 </template>
 
 <script setup>
-import { computed, h, ref } from 'vue';
-import { NInput } from 'naive-ui';
+import { computed, ref } from 'vue';
 import ContextUsageInline from './ContextUsageInline.vue';
+import ModelMenu from './ModelMenu.vue';
 import PlusOutlined from '@vicons/antd/PlusOutlined';
 import MenuOutlined from '@vicons/antd/MenuOutlined';
 import FolderOpenTwotone from '@vicons/antd/FolderOpenTwotone';
@@ -283,7 +280,6 @@ import CloseOutlined from '@vicons/antd/CloseOutlined';
 import { formatDateTime, reasoningEffortLabel, t } from '../i18n.mjs';
 import { formatModelLabel } from '../utils/modelLabel.mjs';
 import { modelConfigIdentity, reasoningEffortLevels } from '../utils/modelConfigIO.mjs';
-import { getModelUsage, recordModelUsage } from '../utils/modelUsage.mjs';
 import { saveTextFile } from '../utils/download.mjs';
 
 function formatMessageContent(msg) {
@@ -374,11 +370,6 @@ const props = defineProps({
 const emit = defineEmits(['switchModel', 'openConfig', 'openGitDiff', 'openWorkspace', 'changeReasoningEffort', 'openTaskCenter', 'newSession', 'showSessions', 'toggleExplorer', 'addExtraRoot', 'removeExtraRoot', 'openTerminal', 'compactContext', 'compactLessons', 'updateCodegraph']);
 
 const contextPopoverVisible = ref(false);
-// Reactive snapshot of the persisted `{ groupKey: count }` usage map. Bumped in
-// onModelMenuSelect so the group ordering re-sorts right after a switch.
-const modelUsage = ref(getModelUsage());
-// Live filter query for the model dropdown's search box; cleared on close.
-const modelSearch = ref('');
 const currentModelLabel = computed(() => formatModelLabel(props.config));
 // Single source for the workspace path shown here: explicit prop (KB root on
 // KB tabs) wins, otherwise fall back to the persisted chat workspace.
@@ -388,100 +379,6 @@ const activeWorkspacePath = computed(() => props.workspace || props.config.works
 const activeWorkspaceName = computed(() => {
   const segments = activeWorkspacePath.value.split(/[\\/]+/).filter(Boolean);
   return segments.length ? segments[segments.length - 1] : '';
-});
-const modelGroups = computed(() => {
-  const usage = modelUsage.value;
-  const groups = new Map();
-  (props.config.models || []).forEach((model, index) => {
-    const label = providerLabel(model);
-    const key = modelProviderKey(model);
-    if (!groups.has(key)) groups.set(key, { key, label, models: [], hasActiveModel: false });
-    const group = groups.get(key);
-    group.models.push({ model, index });
-    if (isActiveModel(model)) group.hasActiveModel = true;
-  });
-
-  return [...groups.values()]
-    .map((group) => ({
-      ...group,
-      useCount: Number(usage[group.key]) || 0,
-      models: group.models.sort((left, right) => compareModelLabels(left.model?.model, right.model?.model)),
-    }))
-    .sort((left, right) => {
-      // Most-used group first; ties (including all-zero for fresh users) keep
-      // the previous stable alphabetical order.
-      if (left.useCount !== right.useCount) return right.useCount - left.useCount;
-      return compareModelLabels(left.label, right.label);
-    });
-});
-const modelMenuOptions = computed(() => {
-  const options = [];
-  // Live search box, rendered as the first (non-selectable) row of the menu;
-  // typing filters the model groups below by model name or provider label
-  // (case-insensitive substring). The menu is `scrollable`, so this row lives
-  // inside the scroll container and scrolls away with the list rather than
-  // staying pinned at the top.
-  options.push({
-    key: 'search',
-    type: 'render',
-    render: () => h(
-      'div',
-      {
-        class: 'model-menu-search',
-        // While the dropdown is open naive's NDropdown keeps a document-level
-        // keydown handler (vooks useKeyboard) that `preventDefault`s the arrow
-        // keys (no caret movement in a text field) and treats Enter as "select
-        // the pending option" (a stray Enter could switch models and close the
-        // menu). Keep those keys inside this component; Escape is let through
-        // so it still closes the dropdown.
-        onKeydown: (event) => { if (event.key !== 'Escape') event.stopPropagation(); },
-      },
-      [
-        h(NInput, {
-          size: 'tiny',
-          value: modelSearch.value,
-          placeholder: t('composer.models.search'),
-          'onUpdate:value': (value) => { modelSearch.value = String(value || ''); },
-          onClick: (event) => event.stopPropagation(),
-        }),
-      ],
-    ),
-  });
-  const query = modelSearch.value.trim().toLocaleLowerCase();
-  const matches = (item) => {
-    if (!query) return true;
-    const name = String(item.model?.model || '').toLocaleLowerCase();
-    const provider = providerLabel(item.model).toLocaleLowerCase();
-    return name.includes(query) || provider.includes(query);
-  };
-  const groups = modelGroups.value
-    .map((group) => {
-      // Recompute the active flag from the *filtered* models so a group is not
-      // highlighted while the active model is hidden by the query.
-      const models = group.models.filter(matches);
-      return { ...group, models, hasActiveModel: models.some((item) => isActiveModel(item.model)) };
-    })
-    .filter((group) => group.models.length > 0);
-  if (groups.length === 0) {
-    options.push({ key: 'empty', label: query ? t('composer.models.noMatch') : t('composer.models.empty'), disabled: true, isEmpty: true });
-  } else {
-    for (const group of groups) {
-      options.push({
-        key: `group:${group.key}`,
-        label: group.label,
-        count: group.models.length,
-        hasActiveModel: group.hasActiveModel,
-        children: group.models.map((item) => ({
-          key: `model:${item.index}`,
-          label: item.model.model || '-',
-          active: isActiveModel(item.model),
-        })),
-      });
-    }
-  }
-  options.push({ type: 'divider', key: 'divider' });
-  options.push({ key: 'manage', label: t('composer.models.manage'), isManage: true });
-  return options;
 });
 const currentEffortLabel = computed(() => reasoningEffortLabel(props.config.reasoningEffort));
 const reasoningEffortOptions = computed(() =>
@@ -509,62 +406,6 @@ function contextPartLabel(label) {
   return labels[label] ? t(labels[label]) : label;
 }
 
-function compareModelLabels(left, right) {
-  return String(left || '').localeCompare(String(right || ''), undefined, {
-    sensitivity: 'base',
-    numeric: true,
-  });
-}
-
-function modelProviderKey(model) {
-  return providerLabel(model).toLocaleLowerCase();
-}
-
-function onModelMenuSelect(key) {
-  if (key === 'manage') {
-    emit('openConfig');
-    return;
-  }
-  if (typeof key === 'string' && key.startsWith('model:')) {
-    const index = parseInt(key.slice(6), 10);
-    if (!Number.isNaN(index)) {
-      recordModelSwitch(index);
-      emit('switchModel', index);
-    }
-  }
-}
-
-function renderModelMenuLabel(option) {
-  if (option.isManage) {
-    return h('span', { class: 'model-menu-manage' }, option.label);
-  }
-  if (option.isEmpty) {
-    return h('span', { class: 'model-menu-empty' }, option.label);
-  }
-  if (option.children && option.children.length) {
-    return h('span', { class: ['model-menu-group', { active: option.hasActiveModel }] }, [
-      h('span', { class: 'model-menu-group-name' }, option.label),
-      h('span', { class: 'model-menu-group-count' }, String(option.count)),
-    ]);
-  }
-  return h('span', { class: ['model-menu-item', { active: option.active }] }, [
-    h('span', { class: 'model-menu-item-name' }, option.label),
-    option.active ? h('span', { class: 'model-menu-item-mark' }, '✓') : null,
-  ]);
-}
-
-function onModelMenuShow(show) {
-  // Reset the filter when the dropdown closes so the next open starts fresh.
-  if (!show) modelSearch.value = '';
-}
-
-function modelMenuProps() {
-  return {
-    class: 'model-menu',
-    style: { minWidth: '240px', maxHeight: 'min(420px, calc(100vh - 160px))' },
-  };
-}
-
 function onReasoningEffortSelect(key) {
   emit('changeReasoningEffort', key);
 }
@@ -583,25 +424,4 @@ function onCodegraphClick() {
   contextPopoverVisible.value = false;
   emit('updateCodegraph');
 }
-
-// recordModelSwitch bumps the usage count for the selected model's provider
-// group, pruning keys for providers no longer present in the config, then
-// refreshes the reactive snapshot so modelGroups re-sorts.
-function recordModelSwitch(index) {
-  const model = (props.config.models || [])[index];
-  if (!model) return;
-  const validKeys = (props.config.models || []).map((m) => modelProviderKey(m));
-  const validIdentities = (props.config.models || []).map((m) => modelConfigIdentity(m));
-  recordModelUsage(modelProviderKey(model), validKeys, modelConfigIdentity(model), validIdentities);
-  modelUsage.value = getModelUsage();
-}
-
-function providerLabel(model) {
-  return (model?.providerName || '').trim() || 'OpenAI Compatible';
-}
-
-function isActiveModel(model) {
-  return modelConfigIdentity(model) === modelConfigIdentity(props.config);
-}
-
 </script>
