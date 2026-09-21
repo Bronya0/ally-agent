@@ -2797,8 +2797,8 @@ code, pre {
 
 .composer-info .extra-roots-btn {
   width: auto;
-  min-width: 20px;
-  height: 20px;
+  min-width: 22px;
+  height: 22px;
   padding: 0 4px;
   gap: 3px;
   border-radius: 5px;
@@ -2818,8 +2818,29 @@ code, pre {
   color: #f5c890;
 }
 
+.composer-info .workspace-terminal-btn {
+  width: auto;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 4px;
+  border-radius: 5px;
+  color: var(--ally-text-faint);
+  flex-shrink: 0;
+}
+
+.composer-info .workspace-terminal-btn:hover {
+  color: var(--ally-text-body);
+}
+
 .composer-info .extra-roots-icon {
   display: block;
+}
+
+/* 与最右侧资源管理器图标（.composer-explorer-btn 16px svg）同尺寸对齐 */
+.composer-info .extra-roots-btn svg,
+.composer-info .workspace-terminal-btn svg {
+  width: 16px;
+  height: 16px;
 }
 
 .composer-info .extra-roots-count {

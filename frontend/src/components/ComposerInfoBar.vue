@@ -99,6 +99,13 @@ Public License v3. See the LICENSE file for details.
           >{{ $t('extraRoots.panel.add') }}</button>
         </div>
       </n-popover>
+      <button
+        type="button"
+        class="composer-icon-btn workspace-terminal-btn"
+        :title="$t('composer.workspace.terminal')"
+        :aria-label="$t('composer.workspace.terminal')"
+        @click.stop="$emit('openTerminal')"
+      ><CodeOutlined /></button>
     </span>
     <button
       type="button"
@@ -256,6 +263,7 @@ import PlusOutlined from '@vicons/antd/PlusOutlined';
 import MenuOutlined from '@vicons/antd/MenuOutlined';
 import FolderOpenTwotone from '@vicons/antd/FolderOpenTwotone';
 import FolderAddOutlined from '@vicons/antd/FolderAddOutlined';
+import CodeOutlined from '@vicons/antd/CodeOutlined';
 import AppstoreOutlined from '@vicons/antd/AppstoreOutlined';
 import CloseOutlined from '@vicons/antd/CloseOutlined';
 import { formatDateTime, reasoningEffortLabel, t } from '../i18n.mjs';
@@ -349,7 +357,7 @@ const props = defineProps({
   fmtK: { type: Function, required: true },
 });
 
-const emit = defineEmits(['switchModel', 'openConfig', 'openGitDiff', 'openWorkspace', 'changeReasoningEffort', 'openTaskCenter', 'newSession', 'showSessions', 'toggleExplorer', 'addExtraRoot', 'removeExtraRoot', 'compactContext']);
+const emit = defineEmits(['switchModel', 'openConfig', 'openGitDiff', 'openWorkspace', 'changeReasoningEffort', 'openTaskCenter', 'newSession', 'showSessions', 'toggleExplorer', 'addExtraRoot', 'removeExtraRoot', 'openTerminal', 'compactContext']);
 
 const contextPopoverVisible = ref(false);
 // Reactive snapshot of the persisted `{ groupKey: count }` usage map. Bumped in

@@ -293,6 +293,7 @@ Public License v3. See the LICENSE file for details.
                   @open-config="switchMode('models')"
                   @open-git-diff="openGitDiff"
                   @open-workspace="openWorkspaceInFileManager"
+                  @open-terminal="openWorkspaceInTerminal"
                   @change-reasoning-effort="changeReasoningEffort"
                   @open-task-center="openTaskCenter"
                   @toggle-explorer="toggleWorkspaceExplorer"
@@ -548,6 +549,7 @@ import {
   SaveSession,
   SaveSessionIndex,
   OpenWorkspaceInFileManager,
+  OpenWorkspaceTerminalAt,
   OpenWorkspacePathInFileManagerAt,
   ActivateSkill,
   GetActiveSkills,
@@ -2972,6 +2974,16 @@ async function openWorkspaceInFileManager() {
     }
   } catch (err) {
     message.warning(t('app.workspace.openFailed', { error: err }));
+  }
+}
+
+async function openWorkspaceInTerminal() {
+  try {
+    // Same Tab-ownership split as openWorkspaceInFileManager: KB/temp Tabs
+    // open their own directory, others the persisted chat workspace.
+    await OpenWorkspaceTerminalAt({ workspace: activeRunWorkspace.value || '', path: '' });
+  } catch (err) {
+    message.warning(String(err));
   }
 }
 
