@@ -102,22 +102,35 @@ func (a *App) streamOpenAIChat(ctx context.Context, cfg ConfigState, model strin
 	// omitted or empty. When no tools are provided, models cannot execute tools anyway.
 
 	maxRetries := effectiveLLMRetries(cfg)
+	// Retry-After 捕获槽随 ctx 进入传输层（见 retryAfterCaptureTransport）：
+	// sashabaranov 的错误不带响应头，Chat 兼容路径的退避只能靠这里拿到
+	// 服务端建议的等待时间。每轮尝试前 reset，避免上一轮的值污染下一轮。
+	retryAfterCap := &retryAfterCapture{}
+	ctx = context.WithValue(ctx, retryAfterCaptureKey{}, retryAfterCap)
 	result, emitted, err := a.openAIChatStreamAttempt(ctx, cfg, client, streamReq, streamDone, onEvent)
 	// 只重试"尚未产出任何输出"的失败:建流失败,或消费阶段在产出内容前
 	// 失败(中转常以 HTTP 200 建流,再以流内 {"error":...} 事件返回 529
 	// overloaded 之类瞬时错误,错误信息只有文案、不带状态码)。此时重试
 	// 无重复输出风险;已产出内容的中断交给上层 runChat 做整轮重试。
 	for attempt := 1; err != nil && !emitted && ctx.Err() == nil && attempt <= maxRetries && shouldRetryLLMError(err); attempt++ {
-		wait := llmRetryDelay(attempt)
+		wait := llmRetryDelayForError(attempt, err)
 		emitLLMRetryEvent(onEvent, attempt, maxRetries, err, wait)
 		select {
 		case <-time.After(wait):
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
+		retryAfterCap.reset()
 		result, emitted, err = a.openAIChatStreamAttempt(ctx, cfg, client, streamReq, streamDone, onEvent)
 	}
 	if err != nil {
+		// 把传输层捕获的 Retry-After 附到错误上，供上层（多 key 轮换、
+		// 轮次重试）的退避决策使用。包装不改文案，分类不受影响。
+		if retryAfterFromError(err) == 0 {
+			if d := retryAfterCap.get(); d > 0 {
+				err = &retryAfterError{inner: err, after: d}
+			}
+		}
 		return nil, err
 	}
 	return result, nil

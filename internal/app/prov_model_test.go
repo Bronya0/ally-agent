@@ -60,7 +60,7 @@ func TestMarkAnthropicPromptCacheBreakpointsSkipsTailInjections(t *testing.T) {
 		{Role: legacyopenai.ChatMessageRoleAssistant, ToolCalls: []legacyopenai.ToolCall{{ID: "t1", Function: legacyopenai.FunctionCall{Name: "grep", Arguments: `{"a":1}`}}}},
 		{Role: legacyopenai.ChatMessageRoleTool, ToolCallID: "t1", Content: `{"ok":true}`},
 		{Role: legacyopenai.ChatMessageRoleUser, Content: "<ally-context-budget>\nWindow: 1000 tokens\n</ally-context-budget>"},
-	}, nil, "")
+	}, nil, true)
 	if len(converted) != 3 {
 		t.Fatalf("expected 3 converted messages (user -> assistant -> user), got %d", len(converted))
 	}
@@ -89,7 +89,7 @@ func TestBuildAnthropicMessagesMergesConsecutiveSameRoleMessages(t *testing.T) {
 		{Role: legacyopenai.ChatMessageRoleUser, Content: "first question"},
 		{Role: legacyopenai.ChatMessageRoleUser, Content: "<ally-cancelled>\n上一条提问已被用户取消\n</ally-cancelled>"},
 		{Role: legacyopenai.ChatMessageRoleUser, Content: "new question"},
-	}, nil, "")
+	}, nil, true)
 	if system != "system instruction" {
 		t.Fatalf("system = %q, want %q", system, "system instruction")
 	}
@@ -120,7 +120,7 @@ func TestBuildAnthropicMessagesMergesConsecutiveSameRoleMessages(t *testing.T) {
 		{Role: legacyopenai.ChatMessageRoleTool, ToolCallID: "call_1", Content: `{"ok":true,"data":"content"}`},
 		{Role: legacyopenai.ChatMessageRoleUser, Content: "<ally-cancelled>\n上一条提问已被用户取消\n</ally-cancelled>"},
 		{Role: legacyopenai.ChatMessageRoleUser, Content: "cancel and do something else"},
-	}, nil, "")
+	}, nil, true)
 	if len(toolTurnMessages) != 3 {
 		t.Fatalf("expected 3 alternating messages (user -> assistant -> user), got %d", len(toolTurnMessages))
 	}
@@ -153,7 +153,7 @@ func TestBuildAnthropicMessagesMergesConsecutiveSameRoleMessages(t *testing.T) {
 		{Role: legacyopenai.ChatMessageRoleUser, Content: "hi"},
 		{Role: legacyopenai.ChatMessageRoleAssistant, Content: "hello"},
 		{Role: legacyopenai.ChatMessageRoleAssistant, Content: "how can I help?"},
-	}, nil, "")
+	}, nil, true)
 	if len(assistantMerged) != 2 {
 		t.Fatalf("expected 2 messages (user -> assistant), got %d", len(assistantMerged))
 	}
@@ -970,7 +970,7 @@ func TestAnthropicToolCallIDPairingUsesSharedSanitizer(t *testing.T) {
 			{ID: "call:foo|bar.1", Function: legacyopenai.FunctionCall{Name: "fn", Arguments: `{"k":"v"}`}},
 		}},
 		{Role: legacyopenai.ChatMessageRoleTool, ToolCallID: "call:foo|bar.1", Content: `{"ok":true}`},
-	}, nil, "")
+	}, nil, true)
 	if len(messages) != 3 {
 		t.Fatalf("expected 3 messages, got %d", len(messages))
 	}
@@ -1305,7 +1305,7 @@ func TestBuildAnthropicMessagesEmptyToolCallID(t *testing.T) {
 			Content:    "result text",
 		},
 	}
-	_, anthropicMsgs := buildAnthropicMessages(messages, nil, "")
+	_, anthropicMsgs := buildAnthropicMessages(messages, nil, true)
 	if len(anthropicMsgs) < 2 {
 		t.Fatalf("expected assistant and user turn, got %d messages", len(anthropicMsgs))
 	}
@@ -1615,7 +1615,7 @@ func TestBuildAnthropicMessagesMidTurnSystem(t *testing.T) {
 		{Role: legacyopenai.ChatMessageRoleUser, Content: "user prompt 2"},
 	}
 
-	system, anthropicMsgs := buildAnthropicMessages(messages, nil, "")
+	system, anthropicMsgs := buildAnthropicMessages(messages, nil, true)
 	// Base system prompt must stay strictly intact to preserve prompt cache breakpoint
 	if system != "base system prompt" {
 		t.Fatalf("expected system to be 'base system prompt', got %q", system)

@@ -39,7 +39,7 @@ func (a *App) streamAnthropicMessages(ctx context.Context, cfg ConfigState, mode
 	client := anthropic.NewClient(clientOptions...)
 
 	replay := a.reasoningStash.get(reasoningReplayKey(cfg, model))
-	system, anthropicMessages := buildAnthropicMessages(messages, replay, model)
+	system, anthropicMessages := buildAnthropicMessages(messages, replay, isOfficialAnthropicEndpoint(cfg))
 	if len(anthropicMessages) == 0 || anthropicMessages[0].Role != anthropic.MessageParamRoleUser {
 		anthropicMessages = append([]anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock("..."))}, anthropicMessages...)
 	}
@@ -206,7 +206,7 @@ func (a *App) streamAnthropicMessages(ctx context.Context, cfg ConfigState, mode
 		// 半截输出拼进下一次请求。
 		if assistant.Len() == 0 && reasoning.Len() == 0 && len(toolCalls) == 0 &&
 			ctx.Err() == nil && attempt < maxRetries && shouldRetryLLMError(streamErr) {
-			wait := llmRetryDelay(attempt + 1)
+			wait := llmRetryDelayForError(attempt+1, streamErr)
 			emitLLMRetryEvent(onEvent, attempt+1, maxRetries, streamErr, wait)
 			select {
 			case <-time.After(wait):
@@ -359,7 +359,7 @@ func anthropicStopReasonError(reason string, hasOutput bool) error {
 	}
 }
 
-func buildAnthropicMessages(messages []legacyopenai.ChatCompletionMessage, replay *sessionReasoningPayload, model string) (string, []anthropic.MessageParam) {
+func buildAnthropicMessages(messages []legacyopenai.ChatCompletionMessage, replay *sessionReasoningPayload, officialEndpoint bool) (string, []anthropic.MessageParam) {
 	systemParts := []string{}
 	out := []anthropic.MessageParam{}
 
@@ -421,7 +421,7 @@ func buildAnthropicMessages(messages []legacyopenai.ChatCompletionMessage, repla
 			// replayed, because Anthropic validates the signature against the
 			// model that produced it.
 			if turn := replay.turnForAny(toolCallIDsOf(m.ToolCalls)); turn != nil {
-				blocks = append(blocks, anthropicThinkingBlockParams(turn.anthropic, model)...)
+				blocks = append(blocks, anthropicThinkingBlockParams(turn.anthropic, officialEndpoint)...)
 			}
 			if text := messageText(m); text != "" {
 				blocks = append(blocks, anthropic.NewTextBlock(text))

@@ -925,6 +925,7 @@ func renderMultiEditResultForModel(r MultiEditResult) string {
 	for _, file := range r.Files {
 		b.WriteString(`<ally-edit path="` + attrEscape(file.Path) + `" version="` + attrEscape(file.Version) + `"/>` + "\n")
 	}
+	b.WriteString("all files above are current in your context; reuse each version for the next edit — no need to Read them back.\n")
 	if r.Summary != "" {
 		b.WriteString("edit summary: " + neutralizeClosingMarkers(r.Summary) + "\n")
 	}
@@ -940,6 +941,11 @@ func renderMultiEditResultForModel(r MultiEditResult) string {
 // renderEditResultForModel renders a single-file edit/create as one
 // self-closing tag: version is the edit contract, summary/validation ride on
 // attributes, warnings append as trailing lines.
+// editNoRereadNote 告诉模型编辑后不必回读验证：磁盘内容就是它提交的 newText
+// 的应用结果，下一次编辑直接用本次返回的 version。Claude 系模型编辑后习惯性
+// 整文件复读，去重机制因内容已变拦不住，整文件会再进一遍上下文。
+const editNoRereadNote = "file content is current in your context (your edit was applied verbatim); reuse the version above for the next edit — no need to Read this file back."
+
 func renderEditResultForModel(r EditResult) string {
 	var b strings.Builder
 	b.WriteString(`<ally-edit path="` + attrEscape(r.Path) + `" version="` + attrEscape(r.Version) + `"`)
@@ -960,6 +966,7 @@ func renderEditResultForModel(r EditResult) string {
 		b.WriteString(` validation="` + attrEscape(r.Validation) + `"`)
 	}
 	b.WriteString("/>")
+	b.WriteString("\n" + editNoRereadNote)
 	for _, w := range r.Warnings {
 		b.WriteString("\nwarning: " + neutralizeClosingMarkers(w))
 	}

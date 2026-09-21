@@ -2039,7 +2039,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 				emitRunEnd("run:error", "error", failure)
 				return
 			}
-			wait := llmRetryDelay(turnAttempt + 1)
+			wait := llmRetryDelayForError(turnAttempt+1, err)
 			a.emit("run:retry", map[string]any{
 				"runId": runID, "sessionId": sessionID, "attempt": turnAttempt + 1,
 				"maxAttempts": maxTurnRetries, "error": err.Error(), "waitMs": wait,

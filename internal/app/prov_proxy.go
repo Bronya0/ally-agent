@@ -189,8 +189,69 @@ func modelHTTPClient(cfg ConfigState, allowPrivate bool, timeout time.Duration) 
 		rt = &userAgentTransport{base: rt, ua: ua}
 	}
 	rt = &streamIdleTimeoutTransport{base: rt, timeout: defaultStreamIdleTimeout}
+	rt = &retryAfterCaptureTransport{base: rt}
 	base.Transport = rt
 	return base
+}
+
+// retryAfterCaptureKey 从请求 ctx 里取回本次调用的 Retry-After 捕获槽。只有
+// 显式携带它的调用（Chat 兼容适配器）会被捕获，其余调用方零开销透传。
+type retryAfterCaptureKey struct{}
+
+// retryAfterCapture 记录一次模型调用内服务端响应头里的 Retry-After 建议。
+// 同一 http.Client 可能被并发使用，槽本身并发安全；多次响应取最大值，
+// 并在每次重试尝试前由调用方 reset，避免上一轮的值污染下一轮。
+type retryAfterCapture struct {
+	mu sync.Mutex
+	d  time.Duration
+}
+
+func (c *retryAfterCapture) set(d time.Duration) {
+	if d <= 0 {
+		return
+	}
+	c.mu.Lock()
+	if d > c.d {
+		c.d = d
+	}
+	c.mu.Unlock()
+}
+
+func (c *retryAfterCapture) get() time.Duration {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.d
+}
+
+func (c *retryAfterCapture) reset() {
+	c.mu.Lock()
+	c.d = 0
+	c.mu.Unlock()
+}
+
+// retryAfterCaptureTransport 在传输层捕获错误响应（>=400）的 Retry-After
+// 头。sashabaranov/go-openai 的 RequestError 不携带响应头，Chat 兼容路径的
+// 重试退避拿不到服务端建议；适配器把本捕获槽放进请求 ctx，这里代为记录，
+// 失败后经 retryAfterError 附到错误上（见 llmRetryDelayForError）。请求
+// ctx 里没有捕获槽时本层完全透明。
+type retryAfterCaptureTransport struct {
+	base http.RoundTripper
+}
+
+func (t *retryAfterCaptureTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	base := t.base
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	cap, _ := req.Context().Value(retryAfterCaptureKey{}).(*retryAfterCapture)
+	if cap == nil {
+		return base.RoundTrip(req)
+	}
+	resp, err := base.RoundTrip(req)
+	if resp != nil && resp.StatusCode >= 400 {
+		cap.set(parseRetryAfterHeader(resp.Header))
+	}
+	return resp, err
 }
 
 // defaultStreamIdleTimeout is the idle timeout for streamed SSE responses.

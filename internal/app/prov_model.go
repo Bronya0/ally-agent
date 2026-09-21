@@ -13,7 +13,9 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -374,6 +376,92 @@ func llmRetryDelay(attempt int) time.Duration {
 	return d
 }
 
+// maxRetryAfterWait 是服务端 Retry-After 建议等待时间的上限兜底:个别网关会
+// 返回几分钟甚至更大的值,无上限照单全收会把用户困在不可取消的长等待里。
+// 超过上限时按上限等待后重试,由服务端再次裁决。
+const maxRetryAfterWait = 60 * time.Second
+
+// llmRetryDelayForError 在本地指数退避的基础上尊重服务端的 Retry-After
+// (解析自错误响应头;Chat 兼容路径经 retryAfterCaptureTransport 捕获后由
+// retryAfterError 携带)。取两者较大值:服务端说等多久就至少等多久;超过
+// maxRetryAfterWait 的建议按上限兜底。解析失败或没有该头时退回纯指数退避。
+func llmRetryDelayForError(attempt int, err error) time.Duration {
+	d := llmRetryDelay(attempt)
+	if ra := retryAfterFromError(err); ra > d {
+		if ra > maxRetryAfterWait {
+			ra = maxRetryAfterWait
+		}
+		d = ra
+	}
+	return d
+}
+
+// retryAfterError 给错误附加从传输层捕获的 Retry-After 建议等待时间。
+// 与 upstreamError 同型:只加身份不改文案,错误链分类(classifyLLMError 等)
+// 基于原文,不受包装影响。
+type retryAfterError struct {
+	inner error
+	after time.Duration
+}
+
+func (e *retryAfterError) Error() string { return e.inner.Error() }
+func (e *retryAfterError) Unwrap() error { return e.inner }
+
+// retryAfterFromError 提取服务端建议的重试等待时间。Anthropic 与 OpenAI
+// 官方 SDK 的错误类型携带原始 http.Response,直接读响应头;Chat 兼容路径的
+// sashabaranov RequestError 不含响应头,由 retryAfterCaptureTransport 在传输
+// 层捕获、经 retryAfterError 带到这里。没有则返回 0。
+func retryAfterFromError(err error) time.Duration {
+	if err == nil {
+		return 0
+	}
+	var raErr *retryAfterError
+	if errors.As(err, &raErr) && raErr.after > 0 {
+		return raErr.after
+	}
+	var anthropicErr *anthropic.Error
+	if errors.As(err, &anthropicErr) && anthropicErr.Response != nil {
+		if d := parseRetryAfterHeader(anthropicErr.Response.Header); d > 0 {
+			return d
+		}
+	}
+	var oaErr *oa.Error
+	if errors.As(err, &oaErr) && oaErr.Response != nil {
+		if d := parseRetryAfterHeader(oaErr.Response.Header); d > 0 {
+			return d
+		}
+	}
+	return 0
+}
+
+// parseRetryAfterHeader 解析 Retry-After 响应头:delta-seconds 形式为主,
+// HTTP-date 形式按“距现在的剩余时长”折算。取值不合法或已过期返回 0。
+func parseRetryAfterHeader(h http.Header) time.Duration {
+	if h == nil {
+		return 0
+	}
+	return parseRetryAfterValue(h.Get("Retry-After"))
+}
+
+func parseRetryAfterValue(v string) time.Duration {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return 0
+	}
+	if secs, err := strconv.Atoi(v); err == nil {
+		if secs <= 0 {
+			return 0
+		}
+		return time.Duration(secs) * time.Second
+	}
+	if t, err := http.ParseTime(v); err == nil {
+		if d := time.Until(t); d > 0 {
+			return d
+		}
+	}
+	return 0
+}
+
 // emitLLMRetryEvent 通过 onEvent 通知调用方发生了一次重试。
 func emitLLMRetryEvent(onEvent func(modelStreamEvent), attempt, maxAttempts int, err error, wait time.Duration) {
 	emitLLMRetryEventForKey(onEvent, attempt, maxAttempts, err, wait, 0, 0)
@@ -604,7 +692,7 @@ func (a *App) streamModelResponse(ctx context.Context, cfg ConfigState, model st
 			// 瞬时错误(429/5xx/网络):切换前短暂退避,避免多个 key 同时
 			// 打向同一故障端点。全部冷却后的等待由上面的冷却分支承担,
 			// 不再叠加退避。
-			wait = llmRetryDelay(retries)
+			wait = llmRetryDelayForError(retries, err)
 			select {
 			case <-time.After(wait):
 			case <-ctx.Done():
@@ -877,6 +965,15 @@ func isIncompleteStreamJSON(err error) bool {
 func isOfficialOpenAIEndpoint(cfg ConfigState) bool {
 	base := strings.ToLower(strings.TrimRight(baseURLForAPIFormat(cfg), "/"))
 	return base == openAIOfficialAPIBaseURL || strings.HasPrefix(base, openAIOfficialAPIBaseURL+"/")
+}
+
+// isOfficialAnthropicEndpoint 报告请求是否指向 Anthropic 官方 API。与
+// isOfficialOpenAIEndpoint 同型的单一身份判定:只有官方端点校验 thinking 块
+// 签名的真实性,兼容网关大多只看字段存在性(baseURLForAPIFormat 已把空
+// BaseURL 归一到官方默认地址,所以自定义过端点即为非官方)。
+func isOfficialAnthropicEndpoint(cfg ConfigState) bool {
+	base := strings.ToLower(strings.TrimRight(baseURLForAPIFormat(cfg), "/"))
+	return base == defaultAnthropicMessagesURL || strings.HasPrefix(base, defaultAnthropicMessagesURL+"/")
 }
 
 func isOpenRouterEndpoint(cfg ConfigState) bool {

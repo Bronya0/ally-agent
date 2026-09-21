@@ -300,6 +300,8 @@ Public License v3. See the LICENSE file for details.
                   @new-session="createNewSession"
                   @show-sessions="showSessionList"
                   @compact-context="handleCompactCommand"
+                  @compact-lessons="handleLessonsCommand"
+                  @update-codegraph="handleCodegraphCommand"
                   :get-session-messages="() => activeMessages"
                   :session-title="activeSession?.title || ''"
                 />
@@ -1970,6 +1972,15 @@ Update LESSONS.md in the workspace root:
 4. Only record long-term pitfalls that will be hit again in another file or task. Never record one-off compile errors, failed tests, plain coding mistakes, tool errors, or state that stops mattering once the change lands.
 5. Prune as you go: drop or merge lines that no longer hold.
 6. If nothing qualifies, say there is nothing to save and do not create the file.`;
+
+// CODEGRAPH_PROMPT drives the “update code graph” context-bubble button. It is
+// a normal foreground prompt: the agent updates CODEGRAPH.md itself with
+// read/list + edit (version-checked, atomic), and the run shows in the chat.
+const CODEGRAPH_PROMPT = `Update CODEGRAPH.md (the file-level navigation map) in the workspace root.
+1. Read the current CODEGRAPH.md first (create it if this workspace has none yet) and list the current workspace structure to see what actually exists now.
+2. Entries whose paths no longer exist must be removed. Add new directories/files with responsibilities inferred from this conversation's changes; for files you have no evidence about, list the path only — do not speculate about their purpose.
+3. Keep the three-section structure: feature→file lookup table, core call flows, per-directory responsibilities. It is a navigation index, not documentation; conventions belong in AGENTS.md.
+4. Rewrite the file with edit; keep it concise and in the language of the existing file (Chinese when starting fresh).`;
 
 // REVIEW_PROMPT instructs the model when the user runs /review. Sub-agents
 // are used only when the change is complex enough to justify them; the main
@@ -7407,17 +7418,31 @@ async function handleCompactCommand() {
     const result = await CompactSession(session.id, '');
     delete compactingSessions[session.id];
 
-    const summaryText = result?.summary || '';
+    if (result?.summary) {
+      // Summary tier: replace UI messages cleanly with just the LLM summary as an assistant message
+      session.messages = [
+        {
+          role: 'assistant',
+          content: result.summary,
+        },
+      ];
 
-    // Replace UI messages cleanly with just the LLM summary as an assistant message
-    session.messages = [
-      {
-        role: 'assistant',
-        content: summaryText,
-      },
-    ];
+      persistCompletedSession(session);
+    } else {
+      // Microcompact tier (unified two-tier path): the backend rewrote the
+      // stored history in place — old tool results became placeholders — and
+      // usage landed below the summary threshold, so no summary was produced.
+      // Reload from the backend so the UI matches; never write the stale UI
+      // messages back (persistCompletedSession here would overwrite the
+      // microcompacted history with the old full tool results).
+      session.messagesLoaded = false;
+      await loadSessionMessages(session);
+      persistCompletedSession(session);
+      const before = Number(result?.tokensBefore || 0);
+      const after = Number(result?.tokensAfter || 0);
+      message.info(t('app.compact.microDone', { before: fmtK(before), after: fmtK(after) }));
+    }
 
-    persistCompletedSession(session);
     // Refresh context
     refreshContextTokens(session.id);
     scrollMessagesToBottom();
@@ -7425,6 +7450,21 @@ async function handleCompactCommand() {
     delete compactingSessions[session.id];
     pushMessage('assistant', t('app.compact.failed', { error: err?.message || err }), { error: true });
   }
+}
+
+// 上下文气泡的两个维护按钮（压缩教训 / 更新图谱）：都是普通前台 prompt，
+// agent 自己用 read/edit 执行（版本校验、原子写、过程可见、随 run 可取消），
+// 不走任何后台直连 LLM 通道。
+function handleLessonsCommand() {
+  const session = activeSession.value;
+  if (!session) return;
+  sendSuggest(session.id, LESSON_PROMPT);
+}
+
+function handleCodegraphCommand() {
+  const session = activeSession.value;
+  if (!session) return;
+  sendSuggest(session.id, CODEGRAPH_PROMPT);
 }
 
 function createNewSession() {

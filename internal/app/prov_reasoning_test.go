@@ -649,7 +649,7 @@ func TestAnthropicThinkingBlockParams(t *testing.T) {
 		{Thinking: "step one", Signature: "sig_1"},
 		{Data: "redacted-bytes"},
 	}
-	params := anthropicThinkingBlockParams(blocks, "claude-3-7-sonnet")
+	params := anthropicThinkingBlockParams(blocks, true)
 	if len(params) != 2 {
 		t.Fatalf("expected thinking + redacted blocks, got %d", len(params))
 	}
@@ -659,15 +659,21 @@ func TestAnthropicThinkingBlockParams(t *testing.T) {
 	if params[1].OfRedactedThinking == nil || params[1].OfRedactedThinking.Data != "redacted-bytes" {
 		t.Fatalf("block 1 must be the redacted thinking block, got %+v", params[1])
 	}
-	// Claude unsigned thinking guard: an unsigned thinking block must NOT be
-	// replayed on Claude models (the official API rejects it with a 400), but
-	// is permitted on non-Claude Anthropic-compatible proxies.
+	// Unsigned-thinking policy is endpoint-scoped: the official API rejects
+	// an unsigned thinking block outright (400), so it is dropped there;
+	// compatible gateways mostly check only field presence (the SDK always
+	// serializes signature), so unsigned blocks replay with an empty
+	// signature — dropping them would lose reasoning context and can 400 on
+	// gateways that require the field.
 	unsigned := []anthropicThinkingBlock{{Thinking: "unsigned thoughts"}}
-	if got := anthropicThinkingBlockParams(unsigned, "claude-3-7-sonnet"); len(got) != 0 {
-		t.Fatalf("Claude model must not replay unsigned thinking blocks, got %d", len(got))
+	if got := anthropicThinkingBlockParams(unsigned, true); len(got) != 0 {
+		t.Fatalf("official endpoint must not replay unsigned thinking blocks, got %d", len(got))
 	}
-	if got := anthropicThinkingBlockParams(unsigned, "deepseek-r1"); len(got) != 1 || got[0].OfThinking == nil {
-		t.Fatalf("non-Claude model must allow replaying unsigned thinking blocks, got %d", len(got))
+	if got := anthropicThinkingBlockParams(unsigned, false); len(got) != 1 || got[0].OfThinking == nil {
+		t.Fatalf("compatible gateway must allow replaying unsigned thinking blocks, got %d", len(got))
+	}
+	if got := anthropicThinkingBlockParams(unsigned, false); len(got) != 1 || got[0].OfThinking.Signature != "" {
+		t.Fatalf("unsigned replay must carry an explicit empty signature, got %+v", got)
 	}
 }
 
@@ -692,7 +698,7 @@ func TestBuildAnthropicMessagesReplaysThinkingPerTurn(t *testing.T) {
 		legacyopenai.ChatCompletionMessage{Role: legacyopenai.ChatMessageRoleTool, ToolCallID: "t2", Content: "data"},
 	)
 
-	_, step1 := buildAnthropicMessages(turn1, replay, "claude-3-7-sonnet")
+	_, step1 := buildAnthropicMessages(turn1, replay, true)
 	if len(step1) != 3 {
 		t.Fatalf("step 1 messages = %d, want 3", len(step1))
 	}
@@ -700,7 +706,7 @@ func TestBuildAnthropicMessagesReplaysThinkingPerTurn(t *testing.T) {
 		t.Fatalf("step 1 assistant blocks = %+v, want thinking + tool_use", blocks)
 	}
 
-	_, step2 := buildAnthropicMessages(turn2, replay, "claude-3-7-sonnet")
+	_, step2 := buildAnthropicMessages(turn2, replay, true)
 	if len(step2) != 5 {
 		t.Fatalf("step 2 messages = %d, want 5", len(step2))
 	}
@@ -723,7 +729,7 @@ func TestBuildAnthropicMessagesReplaysThinkingPerTurn(t *testing.T) {
 
 	// A turn without a ledger entry (no thinking captured, another model's
 	// payload, or an unmatched id) simply emits none — on every request.
-	_, bare := buildAnthropicMessages(turn2, nil, "claude-3-7-sonnet")
+	_, bare := buildAnthropicMessages(turn2, nil, true)
 	if blocks := bare[1].Content; len(blocks) != 1 || blocks[0].OfToolUse == nil {
 		t.Fatalf("a turn without a ledger entry must emit its tool_use only, got %+v", blocks)
 	}
@@ -976,7 +982,7 @@ func TestBuildAnthropicMessagesThinkingRequiresMatchingTurn(t *testing.T) {
 		{Role: legacyopenai.ChatMessageRoleAssistant, ToolCalls: []legacyopenai.ToolCall{{ID: "t1", Function: legacyopenai.FunctionCall{Name: "grep", Arguments: "{}"}}}},
 		{Role: legacyopenai.ChatMessageRoleTool, ToolCallID: "t1", Content: "ok"},
 	}
-	_, converted := buildAnthropicMessages(messages, replay, "claude-3-7-sonnet")
+	_, converted := buildAnthropicMessages(messages, replay, true)
 	if blocks := converted[1].Content; len(blocks) != 1 || blocks[0].OfToolUse == nil {
 		t.Fatalf("a payload captured for another turn must not be replayed, got %+v", blocks)
 	}
@@ -986,7 +992,7 @@ func TestBuildAnthropicMessagesThinkingRequiresMatchingTurn(t *testing.T) {
 		{Role: legacyopenai.ChatMessageRoleAssistant, Content: "answer", ReasoningContent: "thoughts"},
 		{Role: legacyopenai.ChatMessageRoleUser, Content: "second"},
 	}
-	_, convertedAnswer := buildAnthropicMessages(answer, replay, "claude-3-7-sonnet")
+	_, convertedAnswer := buildAnthropicMessages(answer, replay, true)
 	if blocks := convertedAnswer[1].Content; len(blocks) != 1 || blocks[0].OfText == nil {
 		t.Fatalf("a non-tool assistant message must not gain thinking blocks, got %+v", blocks)
 	}

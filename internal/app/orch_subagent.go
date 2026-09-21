@@ -218,7 +218,7 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 				break
 			}
 			if attempt < maxRetries && shouldRetryLLMError(err) {
-				wait := llmRetryDelay(attempt + 1)
+				wait := llmRetryDelayForError(attempt+1, err)
 				select {
 				case <-time.After(wait):
 				case <-ctx.Done():

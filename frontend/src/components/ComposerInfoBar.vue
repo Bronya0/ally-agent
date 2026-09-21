@@ -228,6 +228,20 @@ Public License v3. See the LICENSE file for details.
             :title="running ? $t('app.compact.wait') : $t('composer.context.compact')"
             @click.stop="onCompactClick"
           >{{ $t('composer.context.compact') }}</button>
+          <button
+            type="button"
+            class="context-compact-btn"
+            :disabled="running"
+            :title="running ? $t('app.compact.wait') : $t('composer.context.compactLessons')"
+            @click.stop="onLessonClick"
+          >{{ $t('composer.context.compactLessons') }}</button>
+          <button
+            type="button"
+            class="context-compact-btn"
+            :disabled="running"
+            :title="running ? $t('app.compact.wait') : $t('composer.context.updateCodegraph')"
+            @click.stop="onCodegraphClick"
+          >{{ $t('composer.context.updateCodegraph') }}</button>
         </div>
       </div>
     </n-popover>
@@ -357,7 +371,7 @@ const props = defineProps({
   fmtK: { type: Function, required: true },
 });
 
-const emit = defineEmits(['switchModel', 'openConfig', 'openGitDiff', 'openWorkspace', 'changeReasoningEffort', 'openTaskCenter', 'newSession', 'showSessions', 'toggleExplorer', 'addExtraRoot', 'removeExtraRoot', 'openTerminal', 'compactContext']);
+const emit = defineEmits(['switchModel', 'openConfig', 'openGitDiff', 'openWorkspace', 'changeReasoningEffort', 'openTaskCenter', 'newSession', 'showSessions', 'toggleExplorer', 'addExtraRoot', 'removeExtraRoot', 'openTerminal', 'compactContext', 'compactLessons', 'updateCodegraph']);
 
 const contextPopoverVisible = ref(false);
 // Reactive snapshot of the persisted `{ groupKey: count }` usage map. Bumped in
@@ -558,6 +572,16 @@ function onReasoningEffortSelect(key) {
 function onCompactClick() {
   contextPopoverVisible.value = false;
   emit('compactContext');
+}
+
+function onLessonClick() {
+  contextPopoverVisible.value = false;
+  emit('compactLessons');
+}
+
+function onCodegraphClick() {
+  contextPopoverVisible.value = false;
+  emit('updateCodegraph');
 }
 
 // recordModelSwitch bumps the usage count for the selected model's provider

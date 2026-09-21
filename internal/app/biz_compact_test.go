@@ -1,6 +1,7 @@
 package app
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -101,6 +102,56 @@ func TestCompactSessionReplaysSessionModelConfig(t *testing.T) {
 	fallback := app.sessionModelConfigFor("session-no-record").apply(app.effectiveConfigSafe())
 	if fallback.Model != "default-model" || fallback.CustomHeaders["X-Default"] != "1" {
 		t.Fatalf("fallback config drifted: model=%q headers=%v", fallback.Model, fallback.CustomHeaders)
+	}
+}
+
+// TestCompactSessionManualUsesUnifiedTwoTierPath pins the unified compaction
+// strategy: the manual button runs the SAME two-tier flow as the automatic
+// trigger — micro-compaction first, escalation to the LLM summary only when
+// usage is still above the threshold. Below the threshold the manual call
+// must stop at the microcompact tier with NO LLM request, and the rewritten
+// history (old tool results as placeholders) must be persisted.
+func TestCompactSessionManualUsesUnifiedTwoTierPath(t *testing.T) {
+	app := NewApp()
+	app.initialized = true
+	app.config = defaultConfigState()
+	app.config.Model = "test-model"
+	app.config.APIKey = "test-key"
+	const sessionID = "session-manual-two-tier"
+
+	history := []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleUser, Content: "go"}}
+	for i := 0; i < 6; i++ {
+		id := fmt.Sprintf("c%d", i)
+		history = append(history,
+			openai.ChatCompletionMessage{Role: openai.ChatMessageRoleAssistant, ToolCalls: []openai.ToolCall{{ID: id}}},
+			openai.ChatCompletionMessage{Role: openai.ChatMessageRoleTool, ToolCallID: id, Content: strings.Repeat("x", 5000)},
+		)
+	}
+	app.saveHistory(sessionID, history)
+
+	result, err := app.CompactSession(sessionID, "")
+	if err != nil {
+		t.Fatalf("CompactSession() error = %v", err)
+	}
+	if result["tier"] != "microcompact" {
+		t.Fatalf("manual compact below the threshold must stop at the microcompact tier, got tier=%v result=%v", result["tier"], result)
+	}
+	if _, hasSummary := result["summary"]; hasSummary {
+		t.Fatal("no LLM summary may run when usage is below the threshold")
+	}
+
+	after := app.loadSessionHistoryCopy(sessionID)
+	placeholders := 0
+	for _, m := range after {
+		if m.Role == openai.ChatMessageRoleTool && m.Content == toolResultPlaceholder {
+			placeholders++
+		}
+	}
+	if placeholders == 0 {
+		t.Fatal("the microcompacted history (tool results as placeholders) must be persisted")
+	}
+	if app.compactSessionRunning(sessionID) {
+		t.Fatal("in-flight compaction state must be cleaned up")
 	}
 }
 

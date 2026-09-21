@@ -78,12 +78,13 @@ func (a *App) compactSessionRunning(sessionID string) bool {
 	return running
 }
 
-// CompactSession compacts the conversation history for a session. A manual
-// compaction is the user's explicit intent, so it runs the LLM summary
-// unconditionally (compactHistory). Only the automatic path is gated: the run
-// loop compacts above the configured threshold (compactRunHistory with
-// compactReasonThreshold) or once as overflow recovery after a provider
-// reported the context as too long (compactReasonOverflow).
+// CompactSession compacts the conversation history for a session. Manual
+// compaction follows the SAME two-tier strategy as the automatic trigger
+// (see compactSession): micro-compaction first (zero LLM cost, clears stale
+// tool results), escalation to the LLM summary only when usage is still
+// above the configured threshold. All compaction entries — manual,
+// threshold, overflow — must keep this one strategy; per-entry special-case
+// paths are forbidden (they drift apart and break compaction).
 func (a *App) CompactSession(sessionID, instruction string) (map[string]any, error) {
 	parent := a.ctx
 	if parent == nil {
@@ -180,9 +181,27 @@ func (a *App) compactSession(parent context.Context, sessionID, instruction stri
 		tokensBefore = estimateTokensFromMessages(history)
 	}
 
-	// 手动点击压缩是用户的明确意图：无条件执行总结压缩，将切分点之前的较早历史总结为 Summary。
-	// （自动压缩才会受 threshold 阈值限制）
-	return a.compactHistory(ctx, cfg, sessionID, instruction, history, tokensBefore)
+	// 统一压缩路径（与 runChat 的阈值两级完全一致）：先微压缩（零 LLM 成本，
+	// 把较旧回合的工具结果清成占位符），再按阈值判定是否升级为 LLM 总结压缩。
+	// 手动、阈值、溢出三条入口共用这一策略，禁止为任何入口另开特例路径。
+	if micro, cleared := microcompactMessages(history, defaultMicrocompactKeepRecentToolResults); cleared > 0 {
+		history = micro
+		// 历史被原地改写：provider 实测锚点描述的是改写前的请求，必须作废。
+		a.clearContextAnchor(sessionID)
+		a.saveHistory(sessionID, history)
+	}
+	tokensCurrent := a.getContextBreakdown(sessionID, "").Total
+	if tokensCurrent <= 0 {
+		tokensCurrent = estimateTokensFromMessages(history)
+	}
+	if tokensCurrent <= compactThresholdLimit(cfg) {
+		return map[string]any{
+			"tier":         "microcompact",
+			"tokensBefore": tokensBefore,
+			"tokensAfter":  tokensCurrent,
+		}, nil
+	}
+	return a.compactHistory(ctx, cfg, sessionID, instruction, history, tokensCurrent)
 }
 
 const (
@@ -379,6 +398,7 @@ Rules:
 	}
 
 	return map[string]any{
+		"tier":         "summary",
 		"summary":      summary,
 		"tokensBefore": tokensBefore,
 		"tokensAfter":  tokensAfter,

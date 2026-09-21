@@ -48,7 +48,7 @@ func (a *App) streamOpenAIResponses(ctx context.Context, cfg ConfigState, model 
 	// 失败(流内 error/response.failed 事件等)。此时重试无重复输出风险;
 	// 已产出内容的中断交给上层 runChat 做整轮重试。
 	for attempt := 1; err != nil && !emitted && ctx.Err() == nil && attempt <= maxRetries && shouldRetryLLMError(err); attempt++ {
-		wait := llmRetryDelay(attempt)
+		wait := llmRetryDelayForError(attempt, err)
 		emitLLMRetryEvent(onEvent, attempt, maxRetries, err, wait)
 		select {
 		case <-time.After(wait):

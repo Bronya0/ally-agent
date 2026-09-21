@@ -1112,26 +1112,24 @@ func chatReasoningDetailsJSON(details []map[string]any) json.RawMessage {
 	return raw
 }
 
-func isAnthropicClaudeModel(model string) bool {
-	m := strings.ToLower(strings.TrimSpace(model))
-	return strings.Contains(m, "claude")
-}
-
 // anthropicThinkingBlockParams converts captured thinking blocks into request
 // content blocks. Redacted blocks replay verbatim; plain thinking blocks must
 // carry the provider signature — Anthropic's official API rejects an unsigned
-// thinking block outright ("thinking.signature: Field required"), so unsigned
-// blocks are only replayed to non-Claude Anthropic-compatible proxies that
-// accept them.
-func anthropicThinkingBlockParams(blocks []anthropicThinkingBlock, model string) []anthropic.ContentBlockParamUnion {
+// thinking block outright ("thinking.signature: Field required" and signature
+// validation), so unsigned blocks are dropped there. Compatible gateways by
+// contrast mostly check only field presence (the SDK always serializes
+// signature, even as an empty string), so unsigned blocks replay to them with
+// signature:"" — dropping them would silently lose reasoning context and can
+// even 400 on gateways that require the field (see the effort-off-level lesson:
+// the discriminator is the endpoint, not the model name).
+func anthropicThinkingBlockParams(blocks []anthropicThinkingBlock, officialEndpoint bool) []anthropic.ContentBlockParamUnion {
 	out := make([]anthropic.ContentBlockParamUnion, 0, len(blocks))
-	isClaude := isAnthropicClaudeModel(model)
 	for _, b := range blocks {
 		if b.redacted() {
 			out = append(out, anthropic.NewRedactedThinkingBlock(b.Data))
 			continue
 		}
-		if isClaude && strings.TrimSpace(b.Signature) == "" {
+		if officialEndpoint && strings.TrimSpace(b.Signature) == "" {
 			continue
 		}
 		out = append(out, anthropic.NewThinkingBlock(b.Signature, b.Thinking))
