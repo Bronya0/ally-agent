@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -180,9 +181,6 @@ func modelHTTPClient(cfg ConfigState, allowPrivate bool, timeout time.Duration) 
 	base := proxyHTTPClient(cfg, allowPrivate, timeout)
 	ua := strings.TrimSpace(cfg.UserAgent)
 	headers := normalizeCustomHeaders(cfg.CustomHeaders)
-	if ua == "" && headers == nil {
-		return base
-	}
 	var rt http.RoundTripper = base.Transport
 	if headers != nil {
 		rt = &customHeadersTransport{base: rt, headers: headers}
@@ -190,8 +188,94 @@ func modelHTTPClient(cfg ConfigState, allowPrivate bool, timeout time.Duration) 
 	if ua != "" {
 		rt = &userAgentTransport{base: rt, ua: ua}
 	}
+	rt = &streamIdleTimeoutTransport{base: rt, timeout: defaultStreamIdleTimeout}
 	base.Transport = rt
 	return base
+}
+
+// defaultStreamIdleTimeout is the idle timeout for streamed SSE responses.
+// Set to 180s (3 minutes) to accommodate models with prolonged thinking phases
+// before the first token (e.g. o3-mini high, DeepSeek-R1, Claude 3.7 extended thinking),
+// while still recovering from dead/hung TCP connections.
+const defaultStreamIdleTimeout = 180 * time.Second
+
+var errStreamIdleTimeout = errors.New("stream stalled: no data received within timeout")
+
+// streamIdleTimeoutTransport wraps text/event-stream response bodies with an
+// idleTimeoutReader so stalled streams that stop sending chunks unblock and trigger retries.
+type streamIdleTimeoutTransport struct {
+	base    http.RoundTripper
+	timeout time.Duration
+}
+
+func (t *streamIdleTimeoutTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	base := t.base
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	resp, err := base.RoundTrip(req)
+	if err != nil || resp == nil || resp.Body == nil {
+		return resp, err
+	}
+	if strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") {
+		resp.Body = newIdleTimeoutReader(resp.Body, t.timeout)
+	}
+	return resp, nil
+}
+
+type idleTimeoutReader struct {
+	rc       io.ReadCloser
+	timeout  time.Duration
+	timer    *time.Timer
+	mu       sync.Mutex
+	closed   bool
+	timedOut bool
+}
+
+func newIdleTimeoutReader(rc io.ReadCloser, timeout time.Duration) io.ReadCloser {
+	if timeout <= 0 || rc == nil {
+		return rc
+	}
+	r := &idleTimeoutReader{
+		rc:      rc,
+		timeout: timeout,
+	}
+	r.timer = time.AfterFunc(timeout, r.onTimeout)
+	return r
+}
+
+func (r *idleTimeoutReader) onTimeout() {
+	r.mu.Lock()
+	if r.closed {
+		r.mu.Unlock()
+		return
+	}
+	r.timedOut = true
+	r.mu.Unlock()
+	_ = r.rc.Close()
+}
+
+func (r *idleTimeoutReader) Read(p []byte) (int, error) {
+	n, err := r.rc.Read(p)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.timedOut {
+		return n, errStreamIdleTimeout
+	}
+	if !r.closed && r.timer != nil {
+		r.timer.Reset(r.timeout)
+	}
+	return n, err
+}
+
+func (r *idleTimeoutReader) Close() error {
+	r.mu.Lock()
+	r.closed = true
+	if r.timer != nil {
+		r.timer.Stop()
+	}
+	r.mu.Unlock()
+	return r.rc.Close()
 }
 
 // applyCustomHeaders sets the configured custom headers on an outbound

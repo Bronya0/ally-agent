@@ -18,7 +18,7 @@
 | 文件基础读写与删除防护 | `internal/app/orch_file_ops.go` |
 | 受保护路径判定（VCS 元数据 / 路径别名归一） | `internal/tools/pathutil/pathutil.go`（`CanonicalPath` / `VCSMetadataReason`；写、删、命令目标三条入口共用） |
 | 会话/历史持久化（坏数据协议修复在 `prov_history_hygiene.go`） | `internal/app/biz_sessions.go` |
-| 系统提示词组装 | `internal/app/biz_prompt.go` |
+| 系统提示词组装（核心规则 / 技能名片 / 记忆索引 / 用户档案 USER.md / AGENTS.md / 代码图谱 / 项目教训 LESSONS.md / 自定义提示词） | `internal/app/biz_prompt.go` |
 | 请求消息与上下文 Token 核算（口径：请求前缀 + provider 实测锚点） | `internal/app/biz_context.go`（`sessionPrefixBreakdown` / `contextAnchor` / `finalizeSessionBreakdown`） |
 | 配置合并 / key 池管理 | `internal/app/biz_config.go` |
 | 技能发现与加载 | `internal/app/biz_skills.go` |
@@ -43,16 +43,16 @@
 
 `main()` → `NewApp()` → Wails 装配 → 前端 `StartChat()` → `app.runChat()`: `buildMessages()`（biz_context）→ `buildToolsWithMcp()`（biz_mcp）→ `streamModelResponse()`（prov_model）→ 流式事件经 `host_events` 到前端 → 工具分发 `executeTool()`（并发 4，文件变更串行）→ 结果回填循环 → `saveHistory()`（biz_sessions）。子代理/调度任务走 `executeDelegate()`（orch_subagent）。
 
-每个 step 开头汇总上下文用量并决定是否 auto-compact：`breakdownAcc.update()`（消息估算）+ `sessionPrefixBreakdown()`（系统提示词 / 工作区地图）+ `finalizeSessionBreakdown()`（provider 实测锚点）→ `bd.Total` 与阈值比较。footer 与自动压缩读同一个数。压缩统一走 `compactRunHistory(reason)`：`threshold` 为阈值触发（失败不致命），`overflow` 为请求被判定上下文超长后的强制压缩并重试（`llmErrorKindContextTooLong`）；压缩也失败才报出可操作提示。
+每个 step 开头汇总上下文用量并决定是否 auto-compact：`breakdownAcc.update()`（消息估算）+ `sessionPrefixBreakdown()`（系统提示词 / 工作区地图）+ `finalizeSessionBreakdown()`（provider 实测锚点）→ `bd.Total` 与阈值比较。footer 与自动压缩读同一个数。阈值触发时先做微压缩（`microcompactMessages`：只清掉较旧的工具结果、消息条数不变，同时丢弃 provider 实测锚点并失效本次 run 的读缓存），仍在阈值之上再走 `compactRunHistory(reason)`：`threshold` 为阈值触发（失败不致命），`overflow` 为请求被判定上下文超长后的强制压缩并重试（`llmErrorKindContextTooLong`）；压缩也失败才报出可操作提示。
 
 ## 后端分层架构
 
 ### `internal/app/`
 - `app.go`: Agent 编排核心（聊天循环 runChat、工具分发 executeTool、内建工具 chatTools、生命周期 StartChat/CancelRun）。
-- `prov_*`: 模型与网络适配（协议脏代码唯一聚集区）。`prov_model.go`（多 key 池调度、流式归并、错误分类；工具声明与工具调用 ID 的纯规则已下沉到 `internal/tools/schemautil`、`internal/tools/toolcall`）；`prov_adapter_chat.go` / `prov_adapter_responses.go` / `prov_adapter_anthropic.go`（三家协议独立适配器：请求构造、工具/消息转换、流解析与 Usage 提取）；`prov_reasoning.go`（思考回放台账与请求体改写；台账 scope 按 run 隔离，见 `reasoningScope`）；`prov_wire_config.go`（思考档位 wire 拼写 `reasoningWireForAdapter`、API 格式归一化、端点/token 参数默认值——档位拼写的唯一收口）；`prov_history_hygiene.go`（历史消息协议卫生：内存/磁盘双 profile、tool_call/tool_result 配对修复、悬空调用剥离）；`prov_proxy*.go`（代理探测与 SSRF 守卫客户端）。
+- `prov_*`: 模型与网络适配（协议脏代码唯一聚集区）。`prov_model.go`（多 key 池调度、流式归并、错误分类；工具声明与工具调用 ID 的纯规则已下沉到 `internal/tools/schemautil`、`internal/tools/toolcall`）；`prov_adapter_chat.go` / `prov_adapter_responses.go` / `prov_adapter_anthropic.go`（三家协议独立适配器：请求构造、工具/消息转换、流解析与 Usage 提取）；`prov_reasoning.go`（思考回放台账与请求体改写；台账 scope 按 run 隔离，见 `reasoningScope`）；`prov_wire_config.go`（思考档位 wire 拼写 `reasoningWireForAdapter`、API 格式归一化、端点/token 参数默认值——档位拼写的唯一收口）；`prov_history_hygiene.go`（历史消息协议卫生：内存/磁盘双 profile、tool_call/tool_result 配对修复、悬空调用剥离、运行中微压缩 `microcompactMessages`）；`prov_proxy*.go`（代理探测、SSRF 守卫客户端与模型请求的流空闲超时 `streamIdleTimeoutTransport`）。
 - `host_*`: 桌面与宿主桥（唯一允许 import Wails）。`host_desktop.go`（桌面桥与对话框）；`host_events.go`（emit 统一出口）；`host_window_state.go`（窗口位置持久化）；`host_notifications.go`（桌面通知音）。
 - `infra_*`: 共享基础设施。`infra_bridges.go`（类型别名与原子写）；`infra_result.go`（结果信封与模型端压缩）；`infra_stream.go`（流式节流）；`infra_output_encoding.go`（控制台编码与 UTF-8/GBK 转码）。
-- `biz_*`: 独立业务模块。`biz_config.go`（配置）；`biz_context.go`（上下文与 Token 核算）；`biz_compact.go`（历史压缩：手动/自动/溢出恢复三入口、阈值与超时归一、`CompactSession`/`CancelCompaction`）；`biz_prompt.go`（系统提示词组装）；`biz_sessions.go`（会话持久化与清理）；`biz_workspace*.go`（文件列表/搜索/编辑器）；`biz_skills.go`（技能发现/加载）；`biz_mcp.go`（MCP 生命周期）；`biz_api.go`（本地 HTTP API）；`biz_update.go`（自更新）；`biz_stats.go`（Token 统计）。
+- `biz_*`: 独立业务模块。`biz_config.go`（配置）；`biz_context.go`（上下文与 Token 核算）；`biz_compact.go`（历史压缩：手动/自动/溢出恢复三入口、阈值与超时归一、`CompactSession`/`CancelCompaction`）；`biz_prompt.go`（系统提示词组装：各段原料的读取与预算、用户档案与项目教训的注入、提示词缓存）；`biz_sessions.go`（会话持久化与清理）；`biz_workspace*.go`（文件列表/搜索/编辑器）；`biz_skills.go`（技能发现/加载）；`biz_mcp.go`（MCP 生命周期）；`biz_api.go`（本地 HTTP API）；`biz_update.go`（自更新）；`biz_stats.go`（Token 统计）。
 - `orch_*`: 工具编排（绑定纯算法到 `*App` 状态）。`orch_edit_plan.go` / `orch_edit.go`（编辑批次规划与原子提交）；`orch_command.go` / `orch_command_safety.go`（命令执行与安全拦截）；`orch_file_ops.go`（文件读写删与危险路径拦截）；`orch_grep.go`（ripgrep 搜索）；`orch_remote*.go`（SSH 远端操作与凭证）；`orch_scheduler.go`（计划任务）；`orch_services.go`（后台服务）；`orch_subagent.go`（子代理：lane 稳定的缓存路由 + run 局部回放 scope）；`orch_kb.go`（知识库 sources/ 读写保护）。
 
 ### `internal/tools/`（纯算法层，绝不依赖 `*App`/`ConfigState`）

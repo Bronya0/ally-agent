@@ -89,8 +89,9 @@ func IsSafeResponsesItemID(id string) bool {
 // instead of being dropped, so a provider that streamed a valid-but-unusual
 // payload still shows the model something recoverable.
 func DecodeArguments(args string) map[string]any {
+	args = strings.TrimPrefix(args, "\xef\xbb\xbf")
 	args = strings.TrimSpace(args)
-	if args == "" {
+	if args == "" || args == "null" {
 		return map[string]any{}
 	}
 	var decoded any
@@ -133,11 +134,23 @@ func MergeRepeatedDelta(current, delta string) string {
 // already explains the truncation to the model.
 const TruncatedArgumentsMarker = `{"allyTruncatedArguments":true}`
 
+// CleanArguments strips UTF-8 BOM prefixes and normalizes "null" arguments to
+// "{}". Empty strings are left untouched.
+func CleanArguments(args string) string {
+	args = strings.TrimPrefix(args, "\xef\xbb\xbf")
+	trimmed := strings.TrimSpace(args)
+	if trimmed == "null" {
+		return "{}"
+	}
+	return args
+}
+
 // RepairTruncatedArguments returns args unchanged when they are valid JSON and
 // the truncation marker otherwise. It repairs persisted history at load time;
 // live streamed arguments are rewritten the same way by
 // prepareToolCallsForExecution before execution.
 func RepairTruncatedArguments(args string) string {
+	args = CleanArguments(args)
 	if args == "" || json.Valid([]byte(args)) {
 		return args
 	}

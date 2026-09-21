@@ -309,7 +309,7 @@ func prepareToolCallsForExecution(toolCalls []openai.ToolCall) ([]openai.ToolCal
 	prepared := cloneToolCalls(toolCalls)
 	executionArgs := make([]string, len(prepared))
 	for i := range prepared {
-		raw := prepared[i].Function.Arguments
+		raw := toolcall.CleanArguments(prepared[i].Function.Arguments)
 		if strings.TrimSpace(raw) == "" {
 			raw = "{}"
 		}

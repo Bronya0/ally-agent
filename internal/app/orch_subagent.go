@@ -237,7 +237,12 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 			run.Error = err.Error()
 			run.Steps = step
 			a.subRunsMu.Unlock()
-			a.emit("sub:error", map[string]any{"id": subID, "sessionId": sessionID, "error": err.Error(), "durationMs": time.Now().UnixMilli() - run.StartTime})
+			subErr := map[string]any{"id": subID, "sessionId": sessionID, "error": err.Error(), "durationMs": time.Now().UnixMilli() - run.StartTime}
+			// 与 run:error 同一约定:上游模型服务的报错带来源标记，界面加前缀区分。
+			if isUpstreamError(err) {
+				subErr["errorSource"] = upstreamErrorSource
+			}
+			a.emit("sub:error", subErr)
 			return &AgentDelegateResult{AgentID: subID, Role: req.Role, Description: desc, Status: "failed", Steps: step, Error: err.Error(), Model: model}, err
 		}
 

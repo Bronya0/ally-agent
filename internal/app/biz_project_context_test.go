@@ -8,10 +8,12 @@
 package app
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	openai "github.com/sashabaranov/go-openai"
 )
@@ -251,5 +253,36 @@ func mustNotContain(t *testing.T, text, needle string) {
 	t.Helper()
 	if strings.Contains(text, needle) {
 		t.Fatalf("expected text not to contain %q\n%s", needle, text)
+	}
+}
+
+// TestLoadCodeGraphStaysWithinBudget pins the code-graph prompt budget: the whole
+// file used to be injected (the cap was effectively 96 KiB), which let a big
+// graph crowd out the task itself. The trim keeps the head — the feature→file
+// table the graph is read for — and must land on a line boundary.
+func TestLoadCodeGraphStaysWithinBudget(t *testing.T) {
+	root := t.TempDir()
+	lines := []string{"# Code Graph: probe"}
+	for i := 0; i < 400; i++ {
+		lines = append(lines, fmt.Sprintf("| feature %03d | `internal/app/file_%03d.go` | %s |", i, i, strings.Repeat("填充", 40)))
+	}
+	writeTestFile(t, root, "CODEGRAPH.md", strings.Join(lines, "\n")+"\n")
+
+	got := loadCodeGraph(root)
+	if !strings.Contains(got, "feature 000") {
+		t.Fatal("the head of the graph must survive the trim")
+	}
+	if !strings.Contains(got, "was truncated for prompt size") {
+		t.Fatal("a trimmed graph must say so")
+	}
+	body := got[:strings.Index(got, "\n\n<!-- ")]
+	if len(body) > maxCodeGraphPromptBytes {
+		t.Fatalf("injected graph = %d bytes, want <= %d", len(body), maxCodeGraphPromptBytes)
+	}
+	if !strings.HasSuffix(strings.TrimSpace(body), "|") {
+		t.Fatalf("the trim must land on a line boundary, got tail %.40q", body[len(body)-40:])
+	}
+	if !utf8.ValidString(got) {
+		t.Fatal("the trimmed graph must stay valid UTF-8")
 	}
 }

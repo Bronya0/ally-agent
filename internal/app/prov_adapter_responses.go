@@ -620,6 +620,7 @@ func newOpenAIResponsesSSEStream(ctx context.Context, cfg ConfigState, body oare
 		}
 		return nil, fmt.Errorf("responses request failed: %s", msg)
 	}
+	resp.Body = newIdleTimeoutReader(resp.Body, defaultStreamIdleTimeout)
 	decoder := ssestream.NewDecoder(resp)
 	if decoder == nil {
 		resp.Body.Close()

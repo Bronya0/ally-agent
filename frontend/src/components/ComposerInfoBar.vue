@@ -480,6 +480,9 @@ function contextPartLabel(label) {
     '自定义提示词': 'composer.context.part.custom',
     '工作区文件结构': 'composer.context.part.workspace',
     '计划快照': 'composer.context.part.plan',
+    '项目代码图谱 Code Graph': 'composer.context.part.codegraph',
+    '项目经验 Lessons': 'composer.context.part.lessons',
+    '用户档案 User Profile': 'composer.context.part.profile',
   };
   return labels[label] ? t(labels[label]) : label;
 }

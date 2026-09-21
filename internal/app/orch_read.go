@@ -15,8 +15,9 @@ package app
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
-	"encoding/json"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -68,80 +69,69 @@ type readPreviewResult struct {
 	EmptyRange            bool
 }
 
-// runReadCache avoids sending the same read payload to the model more than once
-// during a chat run. It is deliberately run-scoped: later user turns may need a
-// fresh version after external changes. A successful write or command clears it.
+// runReadCache avoids sending an identical read payload to the model more than
+// once during a chat run. It caches the hash of what the model actually received
+// for one file range — the returned text plus any injected image data — and omits
+// the payload when a later read of the same range would send exactly the same
+// bytes, while always reporting the freshly read version token.
+//
+// Correctness rests on that comparison, not on the key: every read still hits
+// disk, so a stale key can only cost a missed de-duplication, never hide changed
+// content. invalidateRunReadCache (a command that may rewrite files, a successful
+// write/edit) is therefore defence in depth — it forces re-delivery, it is not
+// what keeps the model from acting on stale content.
 type runReadCache struct {
 	mu      sync.Mutex
-	entries map[string]runReadCacheEntry
+	entries map[string]string // key (resolvedPath#range) -> payload SHA-256 hex
 }
 
-type runReadCacheEntry struct {
-	result *BatchReadResult
-}
-
-const runReadCacheMaxEntries = 32
+const runReadCacheMaxEntries = 64
 
 func newRunReadCache() *runReadCache {
-	return &runReadCache{entries: make(map[string]runReadCacheEntry)}
+	return &runReadCache{entries: make(map[string]string)}
 }
 
-func (c *runReadCache) read(a *App, cfg ConfigState, req BatchReadRequest) (*BatchReadResult, error) {
-	keyBytes, err := json.Marshal(req)
-	if err != nil {
-		return nil, err
-	}
-	key := string(keyBytes)
-	c.mu.Lock()
-	if previous, ok := c.entries[key]; ok {
-		// One-shot receipt: the hit is served once, then the entry is removed
-		// so a later identical read re-reads the file and returns full content.
-		// A receipt is only meaningful while the model still holds the earlier
-		// content; if the model asks again, it needs the content again.
-		delete(c.entries, key)
-		c.mu.Unlock()
-		return reusedBatchReadResult(previous.result), nil
-	}
-	c.mu.Unlock()
-	// Read outside the lock: batch reads are already parallelized internally,
-	// and holding the cache mutex across disk I/O would serialize unrelated
-	// reads within the same run.
-	result, err := a.batchReadFilesWithConfig(cfg, req)
-	if err != nil {
-		return nil, err
-	}
-	// Only cache fully successful reads: a missing path can appear later in the
-	// same run, and a retryable read error should not be hidden.
-	for _, file := range result.Files {
-		if file.Error != "" {
-			return result, nil
+func fileRangeCacheKey(resolvedPath string, req ReadFileRequest) string {
+	cleanPath := filepath.Clean(filepath.ToSlash(resolvedPath))
+	return fmt.Sprintf("%s#%d:%d:%d:%d:%d", cleanPath, req.StartLine, req.EndLine, req.LineCount, req.ContextBefore, req.ContextAfter)
+}
+
+// hashText hashes the payload parts the model would receive for one read, joined
+// with a NUL separator (neither part can contain one). Hashing the text alone
+// would treat a replaced image with an identical text notice — same file name and
+// byte size — as unchanged and silently drop the new picture.
+func hashText(parts ...string) string {
+	h := sha256.New()
+	for i, part := range parts {
+		if i > 0 {
+			h.Write([]byte{0})
 		}
+		h.Write([]byte(part))
 	}
-	c.store(key, result)
-	return result, nil
+	return hex.EncodeToString(h.Sum(nil))
 }
 
-// store caches a fully successful read as a content-free receipt so a repeated
-// identical read within one run is served once as a "content already returned"
-// receipt instead of duplicating the payload in model context. Each receipt is
-// one-shot: the next hit deletes it, so a third identical read returns the full
-// content again. Entries hold no file content (store() strips it before
-// caching), so the only budget is the entry count; evicting arbitrary entries
-// under pressure is acceptable because the cache is a best-effort token saver.
-func (c *runReadCache) store(key string, result *BatchReadResult) {
-	stored := reusedBatchReadResult(result)
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if _, ok := c.entries[key]; ok {
-		return
-	}
+// putLocked records one key -> content hash entry, evicting arbitrary entries
+// while the cache is at its entry budget (the cache is a best-effort token
+// saver, so which entry is dropped does not matter). The caller must already
+// hold c.mu: runReadCache.mu is a plain Mutex and NOT reentrant, so putLocked
+// must never be called through the locking put from inside a locked region —
+// that self-deadlocks.
+func (c *runReadCache) putLocked(key string, contentHash string) {
 	for len(c.entries) >= runReadCacheMaxEntries {
 		for k := range c.entries {
 			delete(c.entries, k)
 			break
 		}
 	}
-	c.entries[key] = runReadCacheEntry{result: stored}
+	c.entries[key] = contentHash
+}
+
+// put is the locking entry point for callers outside the read path.
+func (c *runReadCache) put(key string, contentHash string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.putLocked(key, contentHash)
 }
 
 func (c *runReadCache) invalidate() {
@@ -156,22 +146,12 @@ func invalidateRunReadCache(ctx context.Context) {
 	}
 }
 
-func reusedBatchReadResult(previous *BatchReadResult) *BatchReadResult {
-	files := make([]BatchReadResultItem, len(previous.Files))
-	for i, file := range previous.Files {
-		file.Content = ""
-		file.Text = ""
-		// Images were already injected into the model context on the first
-		// read; clearing DataURL prevents a second injection for the same
-		// cached payload.
-		file.DataURL = ""
-		file.Reused = true
-		files[i] = file
-	}
-	return &BatchReadResult{Files: files}
+type pendingReadItem struct {
+	path string
+	req  ReadFileRequest
 }
 
-func (a *App) batchReadFilesWithConfig(cfg ConfigState, req BatchReadRequest) (*BatchReadResult, error) {
+func collectPendingBatchReads(req BatchReadRequest) ([]pendingReadItem, error) {
 	pathCount := len(req.Paths) + len(req.Files)
 	if strings.TrimSpace(req.Path) != "" {
 		pathCount++
@@ -189,7 +169,6 @@ func (a *App) batchReadFilesWithConfig(cfg ConfigState, req BatchReadRequest) (*
 		EndLine   int
 	}
 
-	// Deduplicate only truly identical effective read requests.
 	seen := map[batchReadKey]bool{}
 	readKey := func(path string, readReq ReadFileRequest) batchReadKey {
 		return batchReadKey{
@@ -206,17 +185,7 @@ func (a *App) batchReadFilesWithConfig(cfg ConfigState, req BatchReadRequest) (*
 		return true
 	}
 
-	// Collect (path, fileReq) pairs in request order, then execute in
-	// parallel. Parallel reads are safe: read is purely read-only,
-	// does not touch fileOpsMu, and each file's result is written to its
-	// own slot in a pre-allocated results slice — no cross-file sharing.
-	// The previous serial loop serialized N file opens + reads; with 20
-	// files on a slow disk this was the dominant per-read cost.
-	type pendingRead struct {
-		path string
-		req  ReadFileRequest
-	}
-	pending := make([]pendingRead, 0, pathCount)
+	pending := make([]pendingReadItem, 0, pathCount)
 	if strings.TrimSpace(req.Path) != "" {
 		fileReq := ReadFileRequest{
 			Path:      req.Path,
@@ -224,7 +193,7 @@ func (a *App) batchReadFilesWithConfig(cfg ConfigState, req BatchReadRequest) (*
 			EndLine:   req.EndLine,
 		}
 		if addIfNotSeen(readKey(req.Path, fileReq)) {
-			pending = append(pending, pendingRead{path: req.Path, req: fileReq})
+			pending = append(pending, pendingReadItem{path: req.Path, req: fileReq})
 		}
 	}
 	for _, p := range req.Paths {
@@ -234,7 +203,7 @@ func (a *App) batchReadFilesWithConfig(cfg ConfigState, req BatchReadRequest) (*
 			EndLine:   req.EndLine,
 		}
 		if addIfNotSeen(readKey(p, fileReq)) {
-			pending = append(pending, pendingRead{path: p, req: fileReq})
+			pending = append(pending, pendingReadItem{path: p, req: fileReq})
 		}
 	}
 	for _, file := range req.Files {
@@ -250,8 +219,48 @@ func (a *App) batchReadFilesWithConfig(cfg ConfigState, req BatchReadRequest) (*
 			fileReq.EndLine = req.EndLine
 		}
 		if addIfNotSeen(readKey(file.Path, fileReq)) {
-			pending = append(pending, pendingRead{path: file.Path, req: fileReq})
+			pending = append(pending, pendingReadItem{path: file.Path, req: fileReq})
 		}
+	}
+	return pending, nil
+}
+
+func (c *runReadCache) read(a *App, cfg ConfigState, req BatchReadRequest) (*BatchReadResult, error) {
+	result, err := a.batchReadFilesWithConfig(cfg, req)
+	if err != nil {
+		return nil, err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	for i := range result.Files {
+		item := &result.Files[i]
+		if item.Error != "" {
+			continue
+		}
+		resolvedPath, resErr := resolveReadPath(cfg, item.Path)
+		if resErr != nil {
+			resolvedPath = item.Path
+		}
+		key := fileRangeCacheKey(resolvedPath, item.Req)
+		contentHash := hashText(item.Content, item.DataURL)
+
+		if prevHash, ok := c.entries[key]; ok && prevHash == contentHash {
+			item.Content = ""
+			item.Text = ""
+			item.DataURL = ""
+			item.Reused = true
+		} else {
+			c.putLocked(key, contentHash)
+		}
+	}
+	return result, nil
+}
+
+func (a *App) batchReadFilesWithConfig(cfg ConfigState, req BatchReadRequest) (*BatchReadResult, error) {
+	pending, err := collectPendingBatchReads(req)
+	if err != nil {
+		return nil, err
 	}
 
 	results := make([]BatchReadResultItem, len(pending))
@@ -313,11 +322,12 @@ func batchReadErrorCode(err error) string {
 func (a *App) batchReadOneWithConfig(cfg ConfigState, path string, req ReadFileRequest) BatchReadResultItem {
 	result, readErr := a.readFileWithConfig(cfg, req)
 	if readErr != nil {
-		return BatchReadResultItem{Path: path, Error: readErr.Error(), ErrorCode: batchReadErrorCode(readErr)}
+		return BatchReadResultItem{Req: req, Path: path, Error: readErr.Error(), ErrorCode: batchReadErrorCode(readErr)}
 	}
 	content := result.Content
 	contentFormat := result.ContentFormat
 	return BatchReadResultItem{
+		Req:                   req,
 		Path:                  result.Path,
 		Content:               content,
 		Text:                  result.Text,

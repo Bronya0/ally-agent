@@ -783,6 +783,43 @@ func ApplyBatchTextChanges(content string, changes []TextChange) (*Result, int, 
 			}
 		}
 
+		// Exact match failed. If oldText carries line-number prefixes (such as
+		// "1: ", "1\t", "1 | ") copied from read output, strip them and retry.
+		if strippedOld, hasLineNumbers := StripReadLineNumberPrefixes(oldText); hasLineNumbers {
+			if strippedNew, okNew := StripReadLineNumberPrefixes(newText); okNew {
+				newText = strippedNew
+			}
+			oldText = strippedOld
+			warnings = append(warnings, fmt.Sprintf("change %d: stripped read line-number prefixes (N: ) from oldText", i+1))
+			if change.ReplaceAll {
+				count := 0
+				for from := 0; from <= len(content)-len(oldText); {
+					rel := strings.Index(content[from:], oldText)
+					if rel < 0 {
+						break
+					}
+					start := from + rel
+					located = append(located, locatedChange{index: i, start: start, end: start + len(oldText), newText: newText})
+					count++
+					from = start + len(oldText)
+				}
+				if count > 0 {
+					continue
+				}
+			} else {
+				matches, count := scanExactMatches(content, oldText, maxMatchDiagnosticCandidates)
+				if count > 1 {
+					lines, details := exactMatchDiagnosticsAtMatches(content, oldText, i+1, count, matches)
+					return nil, 0, toolerrors.NewWithDetails("E_MULTI_MATCH", fmt.Errorf("change %d oldText occurs %d times%s; inspect one bounded candidate and include more surrounding text to make it unique, or set replace_all=true to replace every exact occurrence", i+1, count, FormatMatchLines(lines, count)), details)
+				}
+				if count > 0 {
+					match := matches[0]
+					located = append(located, locatedChange{index: i, start: match.offset, end: match.offset + len(oldText), newText: newText})
+					continue
+				}
+			}
+		}
+
 		indentMatches := IndentationInsensitiveMatches(content, oldText, 9)
 		switch len(indentMatches) {
 		case 0:
@@ -1178,4 +1215,61 @@ func defaultSplitLines(text string) ([]string, bool) {
 		lines = lines[:len(lines)-1]
 	}
 	return lines, trailing
+}
+
+// StripReadLineNumberPrefixes removes line-number prefixes (such as "123: ",
+// "123\t", "123 | ") copied from Read tool output. It succeeds only when EVERY
+// non-empty line carries such a prefix, ensuring ordinary source lines with
+// digits are not accidentally stripped.
+func StripReadLineNumberPrefixes(s string) (string, bool) {
+	if s == "" {
+		return "", false
+	}
+	lines := strings.Split(s, "\n")
+	stripped := make([]string, len(lines))
+	hasPrefixCount := 0
+	for i, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			stripped[i] = ""
+			continue
+		}
+		prefixLen := matchLineNumberPrefix(line)
+		if prefixLen <= 0 {
+			return s, false
+		}
+		stripped[i] = line[prefixLen:]
+		hasPrefixCount++
+	}
+	if hasPrefixCount == 0 {
+		return s, false
+	}
+	return strings.Join(stripped, "\n"), true
+}
+
+func matchLineNumberPrefix(line string) int {
+	idx := 0
+	for idx < len(line) && (line[idx] == ' ' || line[idx] == '\t') {
+		idx++
+	}
+	digitStart := idx
+	for idx < len(line) && line[idx] >= '0' && line[idx] <= '9' {
+		idx++
+	}
+	if idx == digitStart {
+		return 0
+	}
+	if idx >= len(line) {
+		return 0
+	}
+	rem := line[idx:]
+	if strings.HasPrefix(rem, ": ") {
+		return idx + 2
+	}
+	if strings.HasPrefix(rem, "\t") {
+		return idx + 1
+	}
+	if strings.HasPrefix(rem, " | ") {
+		return idx + 3
+	}
+	return 0
 }

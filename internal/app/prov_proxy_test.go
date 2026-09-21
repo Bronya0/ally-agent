@@ -8,9 +8,12 @@
 package app
 
 import (
+	"errors"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestManualProxyIsFailClosedAndRedacted(t *testing.T) {
@@ -68,5 +71,39 @@ func TestEnvironmentProxyDetection(t *testing.T) {
 	status := detectEnvironmentProxy()
 	if !status.Enabled || status.HTTPSProxy != "http://127.0.0.1:8888" || status.NoProxy != "localhost" {
 		t.Fatalf("unexpected environment status: %#v", status)
+	}
+}
+
+func TestIdleTimeoutReader(t *testing.T) {
+	pr, pw := io.Pipe()
+	defer pr.Close()
+	reader := newIdleTimeoutReader(pr, 100*time.Millisecond)
+	go func() {
+		_, _ = pw.Write([]byte("chunk1"))
+		time.Sleep(30 * time.Millisecond)
+		_, _ = pw.Write([]byte("chunk2"))
+		time.Sleep(30 * time.Millisecond)
+		_ = pw.Close()
+	}()
+	buf := make([]byte, 64)
+	n, err := reader.Read(buf)
+	if err != nil || string(buf[:n]) != "chunk1" {
+		t.Fatalf("first read failed: n=%d, err=%v", n, err)
+	}
+	n, err = reader.Read(buf)
+	if err != nil || string(buf[:n]) != "chunk2" {
+		t.Fatalf("second read failed: n=%d, err=%v", n, err)
+	}
+	_ = reader.Close()
+
+	// Stalled read should time out with errStreamIdleTimeout
+	pr2, pw2 := io.Pipe()
+	defer pw2.Close()
+	reader2 := newIdleTimeoutReader(pr2, 40*time.Millisecond)
+	defer reader2.Close()
+	buf2 := make([]byte, 64)
+	_, err2 := reader2.Read(buf2)
+	if !errors.Is(err2, errStreamIdleTimeout) {
+		t.Fatalf("expected errStreamIdleTimeout, got %v", err2)
 	}
 }

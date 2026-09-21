@@ -8,6 +8,9 @@
 package app
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -125,5 +128,40 @@ func TestSkillListingTruncationIsRuneSafe(t *testing.T) {
 	}
 	if !strings.Contains(got, "...") {
 		t.Fatal("expected truncation marker in the skill listing")
+	}
+}
+
+// TestMemoryIndexStaysWithinBudget pins the memory-index byte budget: the entry
+// count cap alone allowed ~200 long descriptions (≈20 KiB of prompt). The index
+// keeps its head — the order is a stable path sort, so the kept prefix does not
+// shift between requests — and reports how many entries were left out.
+func TestMemoryIndexStaysWithinBudget(t *testing.T) {
+	home := redirectAppStateDir(t)
+	memoryIndexCache.Invalidate()
+	defer memoryIndexCache.Invalidate()
+
+	dir := filepath.Join(home, ".ally_agent", "memories")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	desc := strings.Repeat("描述", 90) // well under memoryDescLimit, still long
+	for i := 0; i < 40; i++ {
+		body := fmt.Sprintf("---\ndescription: %s %02d\n---\n\nbody\n", desc, i)
+		if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("mem-%02d.md", i)), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	NewApp() // buildMemoryIndexContext resolves the memories dir through the app
+
+	got := buildMemoryIndexContext()
+	if !strings.Contains(got, "mem-00.md") {
+		t.Fatal("the head of the index must survive the byte budget")
+	}
+	if !strings.Contains(got, "more memories omitted from index") {
+		t.Fatalf("a trimmed index must report the omissions, got %q", got)
+	}
+	index := got[strings.Index(got, "## Memory index"):]
+	if len(index) > memoryIndexMaxBytes+200 {
+		t.Fatalf("index block = %d bytes, want around the %d-byte budget", len(index), memoryIndexMaxBytes)
 	}
 }

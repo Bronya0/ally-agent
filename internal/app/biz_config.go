@@ -143,6 +143,21 @@ func (a *App) MemoriesDir() string {
 	return filepath.Join(appDataDir(), "memories")
 }
 
+// userProfileFileName is the machine-global profile file (how to address the
+// user, language, timezone, habits) stripped of anything project-specific. It is
+// injected into every request, so it lives next to config.json instead of inside
+// the memory index; see buildUserProfilePromptPart.
+const userProfileFileName = "USER.md"
+
+// userProfileDisplayPath is how the prompt names that file. Deriving both from
+// one constant keeps the reader and the prompt text from drifting apart.
+const userProfileDisplayPath = "~/.ally_agent/" + userProfileFileName
+
+// userProfilePath resolves the profile file under the app data directory.
+func userProfilePath() string {
+	return filepath.Join(appDataDir(), userProfileFileName)
+}
+
 // memoriesDir is a package-level convenience kept for the few call sites
 // that still use it instead of (*App).MemoriesDir().
 func memoriesDir() string {

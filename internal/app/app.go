@@ -43,7 +43,7 @@ const (
 	maxSubagentToolCalls    = 100
 	maxModelToolOutput      = 12 * 1024
 	maxModelWebOutput       = 96 * 1024
-	maxCodeGraphPromptBytes = 96 * 1024
+	maxCodeGraphPromptBytes = 8 * 1024
 	modelToolHeadBytes      = 4 * 1024
 	modelToolTailBytes      = 8 * 1024
 	maxModelGrepMatches     = 200
@@ -1240,28 +1240,29 @@ type BatchReadFileRequest struct {
 }
 
 type BatchReadResultItem struct {
-	Path                  string `json:"path"`
-	Content               string `json:"content"`
-	Text                  string `json:"text,omitempty"`
-	Kind                  string `json:"kind,omitempty"`
-	ContentFormat         string `json:"contentFormat,omitempty"`
-	Type                  string `json:"type,omitempty"`
-	Editable              bool   `json:"editable"`
-	StartLine             int    `json:"startLine"`
-	EndLine               int    `json:"endLine"`
-	NextStartLine         int    `json:"nextStartLine,omitempty"`
-	Version               string `json:"version"`
-	Size                  int64  `json:"size"`
-	TotalLines            int    `json:"totalLines"`
-	LineEnding            string `json:"lineEnding"`
-	Truncated             bool   `json:"truncated"`
-	TruncatedLines        []int  `json:"truncatedLines,omitempty"`
-	TruncatedLinesOmitted bool   `json:"truncatedLinesOmitted,omitempty"`
-	RangeStatus           string `json:"rangeStatus,omitempty"`
-	EmptyRange            bool   `json:"emptyRange,omitempty"`
-	Error                 string `json:"error,omitempty"`
-	ErrorCode             string `json:"errorCode,omitempty"`
-	Reused                bool   `json:"reused,omitempty"`
+	Req                   ReadFileRequest `json:"-"`
+	Path                  string          `json:"path"`
+	Content               string          `json:"content"`
+	Text                  string          `json:"text,omitempty"`
+	Kind                  string          `json:"kind,omitempty"`
+	ContentFormat         string          `json:"contentFormat,omitempty"`
+	Type                  string          `json:"type,omitempty"`
+	Editable              bool            `json:"editable"`
+	StartLine             int             `json:"startLine"`
+	EndLine               int             `json:"endLine"`
+	NextStartLine         int             `json:"nextStartLine,omitempty"`
+	Version               string          `json:"version"`
+	Size                  int64           `json:"size"`
+	TotalLines            int             `json:"totalLines"`
+	LineEnding            string          `json:"lineEnding"`
+	Truncated             bool            `json:"truncated"`
+	TruncatedLines        []int           `json:"truncatedLines,omitempty"`
+	TruncatedLinesOmitted bool            `json:"truncatedLinesOmitted,omitempty"`
+	RangeStatus           string          `json:"rangeStatus,omitempty"`
+	EmptyRange            bool            `json:"emptyRange,omitempty"`
+	Error                 string          `json:"error,omitempty"`
+	ErrorCode             string          `json:"errorCode,omitempty"`
+	Reused                bool            `json:"reused,omitempty"`
 	// DataURL is set only for image files: a data:image/<mime>;base64,... URL
 	// used to inject the picture into multimodal model context.
 	DataURL string `json:"dataUrl,omitempty"`
@@ -1414,8 +1415,14 @@ func (a *App) StartChat(req ChatRequest) (string, error) {
 		if a.sessionModelConfigs == nil {
 			a.sessionModelConfigs = map[string]sessionModelConfig{}
 		}
+		prev, hasPrev := a.sessionModelConfigs[req.SessionID]
+		modelChanged := hasPrev && isCrossModelSwitch(prev, cfg)
 		a.sessionModelConfigs[req.SessionID] = sessionModelConfigFrom(cfg)
 		a.mu.Unlock()
+
+		if modelChanged {
+			a.stripSessionReasoning(req.SessionID)
+		}
 	}
 
 	runID := newID()
@@ -1689,6 +1696,57 @@ func (a *App) sessionModelConfigFor(sessionID string) sessionModelConfig {
 	return a.sessionModelConfigs[sessionID]
 }
 
+// isCrossModelSwitch reports whether prev and curr represent different models,
+// providers, or protocols such that cross-model reasoning replay must be dropped.
+func isCrossModelSwitch(prev sessionModelConfig, curr ConfigState) bool {
+	if prev.model == "" || curr.Model == "" {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(prev.model), strings.TrimSpace(curr.Model)) {
+		return true
+	}
+	if normalizeAPIFormat(prev.apiFormat) != normalizeAPIFormat(curr.APIFormat) {
+		return true
+	}
+	if prev.providerName != "" && curr.ProviderName != "" && !strings.EqualFold(strings.TrimSpace(prev.providerName), strings.TrimSpace(curr.ProviderName)) {
+		return true
+	}
+	if prev.baseURL != "" && curr.BaseURL != "" && strings.TrimSpace(prev.baseURL) != strings.TrimSpace(curr.BaseURL) {
+		return true
+	}
+	return false
+}
+
+// stripSessionReasoning strips reasoning content and signatures from in-memory history
+// and the protocol replay stash when a model switch occurs.
+func (a *App) stripSessionReasoning(sessionID string) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return
+	}
+	a.mu.Lock()
+	hist, ok := a.histories[sessionID]
+	var cloned []openai.ChatCompletionMessage
+	if ok && len(hist) > 0 {
+		a.histories[sessionID] = stripReasoningContent(hist)
+		cloned = cloneChatMessages(a.histories[sessionID])
+	}
+	delete(a.contextAnchors, sessionID)
+	a.mu.Unlock()
+
+	if a.reasoningStash != nil {
+		a.reasoningStash.clearSession(sessionID)
+	}
+
+	if len(cloned) > 0 {
+		bd := computeLiveBreakdown(cloned)
+		a.finalizeSessionBreakdown(sessionID, &bd, cloned)
+		a.mu.Lock()
+		a.liveBreakdown[sessionID] = bd
+		a.mu.Unlock()
+	}
+}
+
 func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg ConfigState) {
 	sessionID := req.SessionID
 	cfg.responsesPromptCacheKey = openAIResponsesPromptCacheKey(sessionID)
@@ -1750,6 +1808,20 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 	breakdownAcc := newLiveBreakdownAccumulator(messages)
 	readCache := newRunReadCache()
 
+	syncBreakdown := func(msgs []openai.ChatCompletionMessage, resetAcc bool) ContextBreakdown {
+		if resetAcc {
+			breakdownAcc.reset(msgs)
+		}
+		b := breakdownAcc.update(msgs)
+		b.ToolSchemas = estimateToolSchemaTokens(tools)
+		b.SystemPrompt, _ = a.sessionPrefixBreakdown(sessionID, cfg, a.listCachedSkills())
+		a.finalizeSessionBreakdown(sessionID, &b, msgs)
+		a.mu.Lock()
+		a.liveBreakdown[sessionID] = b
+		a.mu.Unlock()
+		return b
+	}
+
 	for step := 0; step < maxAgentSteps; step++ {
 		sanitizedThisStep := false
 		overflowCompacted := false
@@ -1774,17 +1846,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			a.emit("run:inject", map[string]any{"runId": runID, "sessionId": sessionID})
 		}
 		// Update live breakdown for context display (includes all tool calls/results)
-		bd := breakdownAcc.update(messages)
-		bd.ToolSchemas = estimateToolSchemaTokens(tools)
-		// The request prefix (system prompt, workspace map, plan snapshot) is not
-		// part of the message buckets, and the trigger must see everything the
-		// request will carry. A provider measurement, once recorded for this
-		// session, replaces both the prefix and the messages it covered.
-		bd.SystemPrompt, _ = a.sessionPrefixBreakdown(sessionID, cfg, a.listCachedSkills())
-		a.finalizeSessionBreakdown(sessionID, &bd, messages)
-		a.mu.Lock()
-		a.liveBreakdown[sessionID] = bd
-		a.mu.Unlock()
+		bd := syncBreakdown(messages, false)
 
 		// Auto-compact: when context usage exceeds the configured threshold
 		// of the window, compact history. Threshold uses only usedTokens
@@ -1795,16 +1857,42 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 		usedTokens := bd.Total
 		compactThreshold := compactThresholdLimit(cfg)
 		if usedTokens > compactThreshold {
-			// Auto-compaction: context reached the configured threshold. A failure
-			// here is not fatal on its own — the request still goes out, and if the
-			// provider answers context-too-long the overflow recovery below retries
-			// once with a forced compaction.
-			if newMessages, payload, compactErr := a.compactRunHistory(ctx, cfg, sessionID, compactReasonThreshold, req, messages, usedTokens); compactErr == nil {
-				messages = newMessages
-				breakdownAcc.reset(messages)
-				a.emit("run:compacted", payload)
-			} else if !errors.Is(compactErr, errHistoryTooShortToCompact) {
-				a.emit("run:compacted", map[string]any{"sessionId": sessionID, "error": compactErr.Error()})
+			// Micro-compaction: clear large, stale tool results older than recent turns
+			// to reclaim tokens without triggering expensive LLM summarization.
+			if microcompacted, cleared := microcompactMessages(messages, defaultMicrocompactKeepRecentToolResults); cleared > 0 {
+				tokensBefore := usedTokens
+				messages = microcompacted
+				readCache.invalidate()
+				// The history was rewritten in place — same message count, much
+				// smaller payload — but a recorded provider measurement is only
+				// validated by message count. Left in place it would keep the total
+				// pinned to the pre-clearing request, and the macro summary below
+				// would still fire for a context that no longer exists.
+				a.clearContextAnchor(sessionID)
+				bd = syncBreakdown(messages, true)
+				usedTokens = bd.Total
+				// tokensBefore/tokensAfter are what the frontend's "context shrank"
+				// notice reads: this rewrite drops the footer counter just as visibly
+				// as the macro summary does, so it has to report the same pair.
+				a.emit("run:compacted", map[string]any{
+					"sessionId":    sessionID,
+					"reason":       "microcompact",
+					"clearedCount": cleared,
+					"tokensBefore": tokensBefore,
+					"tokensAfter":  usedTokens,
+				})
+			}
+			// If still above threshold after microcompact, proceed to macro LLM summary.
+			if usedTokens > compactThreshold {
+				if newMessages, payload, compactErr := a.compactRunHistory(ctx, cfg, sessionID, compactReasonThreshold, req, messages, usedTokens); compactErr == nil {
+					messages = newMessages
+					readCache.invalidate()
+					bd = syncBreakdown(messages, true)
+					usedTokens = bd.Total
+					a.emit("run:compacted", payload)
+				} else if !errors.Is(compactErr, errHistoryTooShortToCompact) {
+					a.emit("run:compacted", map[string]any{"sessionId": sessionID, "error": compactErr.Error()})
+				}
 			}
 		}
 
@@ -1883,6 +1971,13 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			}
 			if isProvider400Error(err) && !sanitizedThisStep {
 				sanitizedThisStep = true
+				if isAnthropicSignatureRejectionError(err) {
+					a.reasoningStash.clearSession(sessionID)
+					messages = stripReasoningContent(messages)
+					requestMessages = messages
+					a.emit("run:retry", map[string]any{"runId": runID, "sessionId": sessionID, "attempt": 1, "maxAttempts": 1, "reason": "reasoning signature cleared after provider 400"})
+					continue
+				}
 				repaired := sanitizeHistoryMessages(messages)
 				if len(repaired) < len(messages) {
 					messages = repaired
@@ -1899,6 +1994,24 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			// 失败)把两条原因一起报出来，用户才知道只能删历史自救。
 			if !overflowCompacted && !emittedEvents && classifyLLMError(err) == llmErrorKindContextTooLong {
 				overflowCompacted = true
+				if microcompacted, cleared := microcompactMessages(messages, 2); cleared > 0 {
+					tokensBefore := usedTokens
+					messages = microcompacted
+					requestMessages = messages
+					readCache.invalidate()
+					// Same in-place rewrite as the threshold path above: the recorded
+					// provider measurement describes a request that no longer exists.
+					a.clearContextAnchor(sessionID)
+					after := syncBreakdown(messages, true)
+					a.emit("run:compacted", map[string]any{
+						"sessionId":    sessionID,
+						"reason":       "microcompact_overflow",
+						"clearedCount": cleared,
+						"tokensBefore": tokensBefore,
+						"tokensAfter":  after.Total,
+					})
+					continue
+				}
 				newMessages, payload, compactErr := a.compactRunHistory(ctx, cfg, sessionID, compactReasonOverflow, req, messages, usedTokens)
 				if compactErr != nil {
 					emitRunEnd("run:error", "error", map[string]any{"error": fmt.Sprintf("%v；上下文超出模型窗口且压缩失败(%v)，请删除部分历史或改用窗口更大的模型后重试", err, compactErr)})
@@ -1906,7 +2019,8 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 				}
 				messages = newMessages
 				requestMessages = messages
-				breakdownAcc.reset(messages)
+				readCache.invalidate()
+				syncBreakdown(messages, true)
 				a.emit("run:compacted", payload)
 				continue
 			}
@@ -1916,7 +2030,13 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			// 这里直接失败,避免同一请求被两层循环重复重试。
 			if turnAttempt >= maxTurnRetries || !shouldRetryLLMError(err) ||
 				!(emittedEvents || errors.Is(err, errEmptyModelResponse)) {
-				emitRunEnd("run:error", "error", map[string]any{"error": err.Error()})
+				failure := map[string]any{"error": err.Error()}
+				// 上游模型服务的报错带来源标记，界面据此提示"这是服务方返回的错误"，
+				// 与 Ally 自身的报错区分开(见 upstreamError)。
+				if isUpstreamError(err) {
+					failure["errorSource"] = upstreamErrorSource
+				}
+				emitRunEnd("run:error", "error", failure)
 				return
 			}
 			wait := llmRetryDelay(turnAttempt + 1)

@@ -797,7 +797,12 @@ func renderWebFetchResultForModel(r WebFetchResult) string {
 // escaped (see escapeClosingMarker): the text stays readable and the block
 // boundary stays unforgeable.
 func renderReadResultForModel(r BatchReadResult) string {
-	const reusedNote = "[Content omitted: this exact path/range was already returned to you earlier in this turn. version is unchanged — safe to reuse for edit. If you need the content again, re-read this same range and it will be returned in full.]"
+	// The omission is decided on the returned payload, so it only ever claims that
+	// THIS path/range reads the same as before — a change elsewhere in the file
+	// keeps the version attribute (and the version really did change). Promising
+	// the whole file or the version is unchanged would be a claim the cache cannot
+	// back up.
+	const reusedNote = "[Content omitted: this exact path/range reads the same as what you were already sent earlier in this conversation, so it is not repeated. The version attribute above is the current file version — safe to reuse for edit. Ask for a narrower line range if you need the text itself.]"
 	if len(r.Files) == 0 {
 		return "(no readable files returned)"
 	}

@@ -578,6 +578,43 @@ func TestWrapProviderRequestError(t *testing.T) {
 	}
 }
 
+// 上游报错标记必须"只加身份、不改文本":界面据此加前缀，而分类/重试/切换 key
+// 都建立在错误文案与错误链之上，任何一处被改动都会静默改变行为。
+func TestMarkUpstreamErrorKeepsTextAndChain(t *testing.T) {
+	raw := &legacyopenai.RequestError{
+		HTTPStatus:     "429 Too Many Requests",
+		HTTPStatusCode: 429,
+		Err:            errors.New("rate limit reached"),
+	}
+	unmarked := wrapProviderRequestError(raw)
+	marked := markUpstreamError(unmarked)
+	if !isUpstreamError(marked) {
+		t.Fatal("marked error must report as upstream")
+	}
+	if marked.Error() != unmarked.Error() {
+		t.Fatalf("marking must not rewrite the message: %q vs %q", marked.Error(), unmarked.Error())
+	}
+	if classifyLLMError(marked) != llmErrorKindRateLimited || !shouldRetryLLMError(marked) {
+		t.Fatal("marking broke the classification used by retry and key failover")
+	}
+	var reqErr *legacyopenai.RequestError
+	if !errors.As(marked, &reqErr) {
+		t.Fatal("marking must keep the provider error in the chain")
+	}
+	// 幂等:重复标记不得叠加包装。
+	if got := markUpstreamError(marked); got != marked {
+		t.Fatalf("marking must be idempotent, got %#v", got)
+	}
+	// 未标记的错误不得被误判为上游。
+	if isUpstreamError(unmarked) || isUpstreamError(nil) || isUpstreamError(errors.New("plain")) {
+		t.Fatal("unmarked errors are not upstream errors")
+	}
+	// 调用层控制流(用户取消/超时)不是上游故障。
+	if markUpstreamError(nil) != nil || isUpstreamError(markUpstreamError(context.Canceled)) {
+		t.Fatal("nil and context cancellation must pass through unmarked")
+	}
+}
+
 func TestMergeToolCallDeltasSkipsDuplicatedArgumentChunks(t *testing.T) {
 	// A relay that duplicates the whole first delta re-sends the opening
 	// arguments chunk too; appending it verbatim corrupts the JSON.

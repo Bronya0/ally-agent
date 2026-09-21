@@ -131,7 +131,7 @@ func (a *App) streamAnthropicMessages(ctx context.Context, cfg ConfigState, mode
 					}
 				case "thinking":
 					blockThinkingIdx[ev.Index] = len(thinkingBlocks)
-					thinkingBlocks = append(thinkingBlocks, anthropicThinkingBlock{})
+					thinkingBlocks = append(thinkingBlocks, anthropicThinkingBlock{Signature: block.Signature})
 					if block.Thinking != "" {
 						reasoning.WriteString(block.Thinking)
 						emitModelStreamEvent(onEvent, modelStreamEvent{ReasoningDelta: block.Thinking})
@@ -176,8 +176,13 @@ func (a *App) streamAnthropicMessages(ctx context.Context, cfg ConfigState, mode
 						emitModelStreamEvent(onEvent, modelStreamEvent{ReasoningDelta: delta.Thinking})
 					}
 				case "signature_delta":
+					// Relays differ on the wire shape: most send incremental chunks,
+					// some re-send the whole signature in every delta. Merging with the
+					// shared delta rule (id/name merging uses the same one) keeps a
+					// cumulative re-send from producing a doubled signature that the
+					// provider then rejects as modified.
 					if idx, ok := blockThinkingIdx[ev.Index]; ok {
-						thinkingBlocks[idx].Signature += delta.Signature
+						thinkingBlocks[idx].Signature = toolcall.MergeRepeatedDelta(thinkingBlocks[idx].Signature, delta.Signature)
 					}
 				case "input_json_delta":
 					if idx, ok := toolIndexByBlock[ev.Index]; ok {

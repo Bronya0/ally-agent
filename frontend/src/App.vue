@@ -1950,22 +1950,24 @@ Popular sections to include:
 
 First, explore the codebase, then create or update AGENTS.md. If AGENTS.md exists, read it and update it with edit. If it does not exist, create it with create.`;
 
-const REMEMBER_PROMPT = `Save durable project knowledge from this conversation.
+const REMEMBER_PROMPT = `Save durable knowledge from this conversation.
 
 1. Extract only high-confidence, reusable facts: architecture decisions, conventions, hidden dependencies, gotchas, important file locations, and data flows.
-2. Each saved bullet must be concise and cite concrete file paths when relevant.
-3. Use read first if an existing memory from the global memory index may already cover this project (paths are absolute under ~/.ally_agent/memories).
-4. Save or update the knowledge with create (new) or edit (existing, using the version from read). Use an explicit stable path such as ~/.ally_agent/memories/project-knowledge/<workspace-or-project-name>.md.
-5. Do not edit AGENTS.md for this command. Do not save speculation, one-off task status, transient bug-fix notes, or generic advice.`;
+2. Route by scope. Durable facts about the user that hold in every project (how to address them, language, timezone, units, communication style, dietary or accessibility constraints, usual toolchain) belong in ~/.ally_agent/USER.md: read it first, then write the shortest form that still carries the fact — one fact per line, each line under 100 characters, no dates, no history, no rationale (8 KiB is a ceiling, not a target; that file is injected into every request). Merge superseded lines instead of appending corrections, and never put project details or credentials there. Everything else is project knowledge and goes into a memory file.
+3. Each saved bullet must be concise and cite concrete file paths when relevant.
+4. Use read first if an existing memory from the global memory index may already cover this project (paths are absolute under ~/.ally_agent/memories).
+5. Save or update the knowledge with create (new) or edit (existing, using the version from read). Use an explicit stable path such as ~/.ally_agent/memories/project-knowledge/<workspace-or-project-name>.md.
+6. Do not edit AGENTS.md for this command. Do not save speculation, one-off task status, transient bug-fix notes, or generic advice.`;
 
 const LESSON_PROMPT = `Review this conversation for reusable pitfalls: hidden framework behavior, project-specific conventions, or environment traps that would likely trip again in another file or task.
 
-Update .ally/lessons.md in the workspace root:
+Update LESSONS.md in the workspace root:
 1. Read the file first; if it does not exist, create it.
-2. Add one line per lesson in this format: - [tag] symptom → root cause → fix @file-or-area
-3. Update the matching line when the same lesson is already recorded; otherwise append a new line.
-4. Only record pitfalls that would recur elsewhere. Never record one-off compile errors, failed tests, plain coding mistakes, or tool errors.
-5. If nothing qualifies, say there is nothing to save and do not create the file.`;
+2. One lesson per line, and the whole line (tag, date, text, location) stays under 100 characters: - [tag] YYYY-MM-DD 小心：一句规则。可选一句危害。@file-or-area
+3. Update the matching line when that lesson is already recorded — merge into it instead of appending detail, bringing it under 100 characters; otherwise append a new line.
+4. Only record long-term pitfalls that will be hit again in another file or task. Never record one-off compile errors, failed tests, plain coding mistakes, tool errors, or state that stops mattering once the change lands.
+5. Prune as you go: drop or merge lines that no longer hold.
+6. If nothing qualifies, say there is nothing to save and do not create the file.`;
 
 // REVIEW_PROMPT instructs the model when the user runs /review. Sub-agents
 // are used only when the change is complex enough to justify them; the main
@@ -4622,6 +4624,13 @@ function bindRuntimeEvents() {
     scrollMessagesToBottom,
     activeSessionId,
   });
+  // 上游模型服务的报错统一加上来源标识，用户才能分清该找服务方还是找 Ally。
+  // ownText 是调用方自己的文案(某些场景只展示错误原文)，来源判定只此一处。
+  function describeEventError(data, ownText) {
+    const text = String(data?.error || '');
+    if (data?.errorSource === 'upstream') return t('app.error.upstream', { error: text });
+    return ownText(text);
+  }
   // Run 终态（run:done / run:error）的公共收尾。
   // 收敛前每个 handler 各自维护约 70 行逐字重复的步骤；这里按两者原本完全
   // 一致的顺序编排，差异点全部通过 opts.variant 注入（见下面的分支）：
@@ -4656,7 +4665,8 @@ function bindRuntimeEvents() {
       if (session.id === activeSessionId.value) {
         const err = data.error || 'unknown error';
         const cancelled = err === '已取消' || err === 'Cancelled' || String(err).toLowerCase().includes('context canceled');
-        session.messages.push({ role: 'assistant', content: cancelled ? t('app.run.cancelled') : t('app.run.failed', { error: err }), error: !cancelled, system: cancelled, runId: data.runId, transientTurn: true });
+        const failureText = describeEventError(data, (text) => t('app.run.failed', { error: text }));
+        session.messages.push({ role: 'assistant', content: cancelled ? t('app.run.cancelled') : failureText, error: !cancelled, system: cancelled, runId: data.runId, transientTurn: true });
       }
     }
     setAssistantRoundDuration(session, data.runId, data.durationMs);
@@ -4864,7 +4874,7 @@ function bindRuntimeEvents() {
     const msg = findSubagentMsg(data.id, data.sessionId || '');
     if (msg) {
       setToolStatus(msg, 'failed');
-      msg.error = data.error || '';
+      msg.error = describeEventError(data, (text) => text);
       msg.time = new Date().toLocaleTimeString();
       msg.durationMs = Number(data.durationMs || 0);
       msg.durationText = formatDurationShort(msg.durationMs);

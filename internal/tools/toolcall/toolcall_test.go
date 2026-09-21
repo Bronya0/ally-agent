@@ -148,3 +148,29 @@ func TestTruncatedArgumentsMarkerRoundTrip(t *testing.T) {
 		t.Fatal("valid arguments must not be recognised as truncated")
 	}
 }
+
+func TestCleanArgumentsAndBOM(t *testing.T) {
+	// BOM prefix stripped
+	bomJSON := "\xef\xbb\xbf{\"command\":\"echo 1\"}"
+	cleaned := CleanArguments(bomJSON)
+	if cleaned != `{"command":"echo 1"}` {
+		t.Fatalf("expected BOM stripped, got %q", cleaned)
+	}
+	if repaired := RepairTruncatedArguments(bomJSON); repaired != `{"command":"echo 1"}` {
+		t.Fatalf("expected valid JSON after BOM stripped, got %q", repaired)
+	}
+
+	// null converted to {}
+	if got := CleanArguments("null"); got != "{}" {
+		t.Fatalf("CleanArguments(null) = %q, want {}", got)
+	}
+	if got := CleanArguments(" null \n"); got != "{}" {
+		t.Fatalf("CleanArguments( null ) = %q, want {}", got)
+	}
+	if got := DecodeArguments("null"); len(got) != 0 {
+		t.Fatalf("DecodeArguments(null) = %v, want empty map", got)
+	}
+	if got := DecodeArguments(bomJSON); got["command"] != "echo 1" {
+		t.Fatalf("DecodeArguments with BOM failed: %v", got)
+	}
+}

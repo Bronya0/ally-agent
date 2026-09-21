@@ -3,6 +3,8 @@ package app
 import (
 	"strings"
 	"testing"
+
+	openai "github.com/sashabaranov/go-openai"
 )
 
 // TestNewAppInitializesCompactionMaps guards the compactSession in-flight
@@ -99,5 +101,46 @@ func TestCompactSessionReplaysSessionModelConfig(t *testing.T) {
 	fallback := app.sessionModelConfigFor("session-no-record").apply(app.effectiveConfigSafe())
 	if fallback.Model != "default-model" || fallback.CustomHeaders["X-Default"] != "1" {
 		t.Fatalf("fallback config drifted: model=%q headers=%v", fallback.Model, fallback.CustomHeaders)
+	}
+}
+
+func TestMicrocompactionReducesBreakdownWithAccumulatorReset(t *testing.T) {
+	hugeToolOutput := strings.Repeat("a", 10000)
+	messages := []openai.ChatCompletionMessage{
+		{Role: openai.ChatMessageRoleUser, Content: "read file"},
+		{Role: openai.ChatMessageRoleAssistant, ToolCalls: []openai.ToolCall{{ID: "c1"}}},
+		{Role: openai.ChatMessageRoleTool, ToolCallID: "c1", Content: hugeToolOutput},
+		{Role: openai.ChatMessageRoleAssistant, ToolCalls: []openai.ToolCall{{ID: "c2"}}},
+		{Role: openai.ChatMessageRoleTool, ToolCallID: "c2", Content: "recent 1"},
+		{Role: openai.ChatMessageRoleAssistant, ToolCalls: []openai.ToolCall{{ID: "c3"}}},
+		{Role: openai.ChatMessageRoleTool, ToolCallID: "c3", Content: "recent 2"},
+		{Role: openai.ChatMessageRoleAssistant, ToolCalls: []openai.ToolCall{{ID: "c4"}}},
+		{Role: openai.ChatMessageRoleTool, ToolCallID: "c4", Content: "recent 3"},
+		{Role: openai.ChatMessageRoleAssistant, ToolCalls: []openai.ToolCall{{ID: "c5"}}},
+		{Role: openai.ChatMessageRoleTool, ToolCallID: "c5", Content: "recent 4"},
+	}
+
+	acc := newLiveBreakdownAccumulator(messages)
+	before := acc.update(messages)
+	if before.Total < 2000 {
+		t.Fatalf("expected initial tokens > 2000, got %d", before.Total)
+	}
+
+	microcompacted, cleared := microcompactMessages(messages, 4)
+	if cleared != 1 {
+		t.Fatalf("expected 1 tool result cleared, got %d", cleared)
+	}
+
+	// Without reset, update() on in-place mutated slice yields old cached tokens
+	unresetTokens := acc.update(microcompacted).Total
+	if unresetTokens != before.Total {
+		t.Fatalf("update() without reset should have failed to recalculate tokens, got %d vs %d", unresetTokens, before.Total)
+	}
+
+	// With reset(), accumulator properly recalculates from beginning
+	acc.reset(microcompacted)
+	afterResetTokens := acc.update(microcompacted).Total
+	if afterResetTokens >= before.Total || afterResetTokens > 500 {
+		t.Fatalf("expected tokens after reset to drop drastically from %d, got %d", before.Total, afterResetTokens)
 	}
 }

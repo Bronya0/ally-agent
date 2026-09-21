@@ -111,6 +111,39 @@ func wrapLLMStreamEventDecode(err error) error {
 	return &llmStreamEventDecodeError{err: err}
 }
 
+// upstreamErrorSource 是"错误来自上游"这一事实在事件载荷里的取值，前端据此
+// 在提示前加"上游模型服务返回错误"标识。取值只在这一处定义。
+const upstreamErrorSource = "upstream"
+
+// upstreamError 标记"错误来自上游模型服务"(HTTP 错误响应、流内错误事件、传输
+// 失败)，而不是 Ally 自身的逻辑错误——界面据此把服务方的报错和本机的报错分开，
+// 用户才知道该找谁。包装只加身份、不改文本:错误链(errors.Is/As)与基于文案的
+// 关键词分类(重试/切换 key)都建立在原文之上，任何一处被改动都会静默改变行为。
+type upstreamError struct{ inner error }
+
+func (e *upstreamError) Error() string { return e.inner.Error() }
+func (e *upstreamError) Unwrap() error { return e.inner }
+
+// markUpstreamError 幂等地给发往上游的调用返回的错误打标记。nil、以及调用层
+// 控制流的取消/超时(context.Canceled/DeadlineExceeded，用户主动停止不是上游
+// 故障)一律原样返回。
+func markUpstreamError(err error) error {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	var marked *upstreamError
+	if errors.As(err, &marked) {
+		return err
+	}
+	return &upstreamError{inner: err}
+}
+
+// isUpstreamError 报告错误是否来自上游模型服务。
+func isUpstreamError(err error) bool {
+	var marked *upstreamError
+	return errors.As(err, &marked)
+}
+
 // providerHTTPStatusCode 从常见 provider SDK 错误类型中提取 HTTP 状态码，
 // 同时消除 isProvider400Error / 分类函数里三份重复的 errors.As 链。
 func providerHTTPStatusCode(err error) (int, bool) {
@@ -465,11 +498,13 @@ func (a *App) streamModelResponse(ctx context.Context, cfg ConfigState, model st
 	if len(keys) == 0 {
 		return nil, errors.New("API key is required")
 	}
+	// 从这里往下才是真正发往上游的调用，返回的错误一律标记来源(见 upstreamError):
+	// 配置类前置校验的报错(缺模型/缺 key)在更前面返回，不会被误标成上游问题。
 	// 单 key 快速路径:完全保持原有的适配器内重试行为。
 	if len(keys) == 1 {
 		result, err := a.streamModelResponseWithKey(ctx, cfg, model, messages, tools, onEvent)
 		if err != nil {
-			err = wrapProviderRequestError(err)
+			err = markUpstreamError(wrapProviderRequestError(err))
 		}
 		return result, err
 	}
@@ -540,7 +575,7 @@ func (a *App) streamModelResponse(ctx context.Context, cfg ConfigState, model st
 		if err == nil {
 			return result, nil
 		}
-		err = wrapProviderRequestError(err)
+		err = markUpstreamError(wrapProviderRequestError(err))
 		lastErr = err
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
@@ -1003,6 +1038,22 @@ func isProvider400Error(err error) bool {
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "status code: 400") ||
 		strings.Contains(msg, "400 bad request")
+}
+
+// isAnthropicSignatureRejectionError detects provider 400 errors specifically caused by
+// invalid, mismatched, or corrupted thinking block signatures (e.g. Anthropic's
+// "signature in thinking block ... cannot be modified" or "invalid signature").
+func isAnthropicSignatureRejectionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	if strings.Contains(msg, "signature in thinking block") {
+		return true
+	}
+	hasThinking := strings.Contains(msg, "thinking block") || strings.Contains(msg, "`thinking`") || strings.Contains(msg, "redacted_thinking") || strings.Contains(msg, "thinking")
+	hasSignatureFailure := strings.Contains(msg, "invalid signature") || strings.Contains(msg, "cannot be modified") || (strings.Contains(msg, "signature") && (strings.Contains(msg, "invalid") || strings.Contains(msg, "required") || strings.Contains(msg, "fail")))
+	return hasThinking && hasSignatureFailure
 }
 
 func normalizeToolCalls(toolCalls []legacyopenai.ToolCall) []legacyopenai.ToolCall {

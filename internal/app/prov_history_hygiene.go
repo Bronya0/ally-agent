@@ -32,10 +32,13 @@ const (
 	historyProfileDisk
 )
 
-// toolResultDiskPlaceholder replaces persisted tool output in the disk profile.
-// It keeps the message non-empty (validators reject an empty tool message) and
-// tells the restored model how to get the data back.
-const toolResultDiskPlaceholder = "(tool result not saved in history; re-run the tool to see the output again)"
+// toolResultPlaceholder replaces tool output that is no longer in the model's
+// context — either because the disk profile never persisted it (history profile)
+// or because micro-compaction cleared it to reclaim tokens mid-run. It keeps the
+// message non-empty (validators reject an empty tool message) and tells the model
+// how to get the data back without inviting a re-run of a mutating tool: an idempotent
+// read/inspection can simply be repeated, while `command`/`edit`/`write`/`create` must not.
+const toolResultPlaceholder = "(tool result omitted to save context; re-read the file or re-run read-only tools if you need it again — do not re-run commands, edits, or writes)"
 
 func sanitizeHistoryMessages(messages []openai.ChatCompletionMessage) []openai.ChatCompletionMessage {
 	return sanitizeHistoryMessagesFor(messages, historyProfileMemory)
@@ -75,7 +78,7 @@ func sanitizeHistoryMessagesFor(messages []openai.ChatCompletionMessage, profile
 			// old thoughts only cost bytes and input tokens.
 			m.ReasoningContent = ""
 			if m.Role == openai.ChatMessageRoleTool {
-				m.Content = toolResultDiskPlaceholder
+				m.Content = toolResultPlaceholder
 			}
 		}
 		if strings.TrimSpace(m.Content) == "" && len(m.MultiContent) == 0 && len(m.ToolCalls) == 0 && m.Role != openai.ChatMessageRoleTool {
@@ -236,4 +239,70 @@ func textFromMultiContent(parts []openai.ChatMessagePart) string {
 		fmt.Fprintf(&b, "[%d image attachment(s) omitted from saved history]", imageCount)
 	}
 	return b.String()
+}
+
+const defaultMicrocompactKeepRecentToolResults = 4
+
+// microcompactMessages clears the content of older tool result messages in-memory,
+// replacing them with toolResultPlaceholder. Only results older than
+// keepRecentToolResults and larger than the placeholder are cleared (clearing a
+// shorter one would grow the request). Preserves message sequence and tool pairing
+// while reclaiming tokens without LLM summarization.
+//
+// Callers must drop both the provider measurement anchor and the run's read cache
+// afterwards: the anchor is validated by message count (unchanged here) and the read
+// cache must let the model re-obtain anything it still needs by reading again.
+func microcompactMessages(messages []openai.ChatCompletionMessage, keepRecentToolResults int) ([]openai.ChatCompletionMessage, int) {
+	if len(messages) == 0 || keepRecentToolResults <= 0 {
+		return messages, 0
+	}
+	seenToolResults := 0
+	cutoffIdx := -1
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == openai.ChatMessageRoleTool {
+			seenToolResults++
+			if seenToolResults >= keepRecentToolResults {
+				cutoffIdx = i
+				break
+			}
+		}
+	}
+	if cutoffIdx <= 0 {
+		return messages, 0
+	}
+
+	out := make([]openai.ChatCompletionMessage, len(messages))
+	copy(out, messages)
+	clearedCount := 0
+	placeholderLen := len(toolResultPlaceholder)
+
+	for i := 0; i < cutoffIdx; i++ {
+		if out[i].Role == openai.ChatMessageRoleTool {
+			if len(out[i].Content) > placeholderLen && out[i].Content != toolResultPlaceholder {
+				out[i].Content = toolResultPlaceholder
+				clearedCount++
+			}
+		}
+	}
+	if clearedCount == 0 {
+		return messages, 0
+	}
+	return out, clearedCount
+}
+
+// stripReasoningContent returns a copy of messages with ReasoningContent cleared
+// on all assistant messages. Used during cross-model switches to avoid sending
+// irrelevant reasoning traces from previous models and prevent 400 signature rejections.
+func stripReasoningContent(messages []openai.ChatCompletionMessage) []openai.ChatCompletionMessage {
+	if len(messages) == 0 {
+		return messages
+	}
+	out := make([]openai.ChatCompletionMessage, len(messages))
+	copy(out, messages)
+	for i := range out {
+		if out[i].Role == openai.ChatMessageRoleAssistant && out[i].ReasoningContent != "" {
+			out[i].ReasoningContent = ""
+		}
+	}
+	return out
 }

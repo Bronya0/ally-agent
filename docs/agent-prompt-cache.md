@@ -143,7 +143,8 @@ if anthropicBlockIsTransientInjection(msg.Content[j]) {
 系统提示词通常内嵌当前工作区的动态数据：
 * 项目指导规则 `AGENTS.md`
 * 代码架构索引 `CODEGRAPH.md`
-* 长期记忆与经验教训 `.ally/lessons.md`
+* 长期记忆与经验教训 `LESSONS.md`
+* 用户档案 `~/.ally_agent/USER.md`（跨项目的个人偏好，全文注入）
 * 当前目录文件树结构（Workspace Map）
 
 如果 Agent 在运行期间修改了上述任何一个文件（例如修完 Bug 记录了一条 Lesson），一旦下一回合重新扫描磁盘并重新拼装 System Prompt，**头部哪怕变动一个字，整整几万 Token 的历史缓存将瞬间全军覆没**。

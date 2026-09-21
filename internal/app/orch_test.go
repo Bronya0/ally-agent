@@ -2584,21 +2584,13 @@ func TestRunReadCacheReturnsMetadataWithoutDuplicateContent(t *testing.T) {
 	if len(firstData.Files) != 1 || firstData.Files[0].Content == "" || firstData.Files[0].Reused {
 		t.Fatalf("expected complete first read, got %#v", firstData)
 	}
-	// The stored cache entry itself must be content-free; store() strips the
-	// payload before caching, so the cache cannot hold file contents.
+	// The stored cache entry itself is content-free; it holds only the content hash.
 	if len(cache.entries) != 1 {
 		t.Fatalf("cache entries after first read = %d, want 1", len(cache.entries))
 	}
-	for _, e := range cache.entries {
-		if e.result == nil || len(e.result.Files) != 1 {
-			t.Fatalf("unexpected cached entry: %#v", e.result)
-		}
-		f := e.result.Files[0]
-		if f.Content != "" || f.Text != "" || f.DataURL != "" {
-			t.Fatalf("cached entry holds file content: %#v", f)
-		}
-		if !f.Reused || f.Version == "" {
-			t.Fatalf("cached entry should be a receipt with version, got: %#v", f)
+	for _, h := range cache.entries {
+		if h == "" {
+			t.Fatalf("cached entry must hold a content hash")
 		}
 	}
 
@@ -2623,23 +2615,53 @@ func TestRunReadCacheReturnsMetadataWithoutDuplicateContent(t *testing.T) {
 		t.Fatalf("expected reused compact read to explain the omission, got: %s", secondModel)
 	}
 
-	// The receipt is one-shot: serving the hit removes the entry, so a third
-	// identical read (without any invalidation) re-reads the file and returns
-	// the full content again.
-	if len(cache.entries) != 0 {
-		t.Fatalf("cache entries after second read = %d, want 0 (receipt consumed)", len(cache.entries))
-	}
+	// In the persistent freshness-checked cache, unchanged files continue to return receipts.
 	third := app.executeTool(ctx, ConfigState{Workspace: dir}, "session-1", "read", args)
 	thirdData := third.Data.(*BatchReadResult)
-	if !third.OK || len(thirdData.Files) != 1 || thirdData.Files[0].Reused || thirdData.Files[0].Content == "" {
-		t.Fatalf("expected full read after receipt consumption, got %#v", third)
+	if !third.OK || len(thirdData.Files) != 1 || !thirdData.Files[0].Reused || thirdData.Files[0].Content != "" {
+		t.Fatalf("expected reused read when file is unchanged on disk, got %#v", thirdData)
 	}
 
-	invalidateRunReadCache(ctx)
+	// Range-awareness: reading a specific line range produces a cache miss and returns full content for that range.
+	rangeArgs := []byte(`{"files":[{"path":"sample.txt","startLine":1,"endLine":1}]}`)
+	rangeRes := app.executeTool(ctx, ConfigState{Workspace: dir}, "session-1", "read", rangeArgs)
+	rangeData := rangeRes.Data.(*BatchReadResult)
+	if !rangeRes.OK || len(rangeData.Files) != 1 || rangeData.Files[0].Reused || rangeData.Files[0].Content == "" {
+		t.Fatalf("expected full content on range read miss, got %#v", rangeData)
+	}
+
+	// Repeated range read hits the range cache!
+	rangeRes2 := app.executeTool(ctx, ConfigState{Workspace: dir}, "session-1", "read", rangeArgs)
+	rangeData2 := rangeRes2.Data.(*BatchReadResult)
+	if !rangeRes2.OK || len(rangeData2.Files) != 1 || !rangeData2.Files[0].Reused {
+		t.Fatalf("expected reused content on repeated range read, got %#v", rangeData2)
+	}
+
+	// Modifying the file on disk busts the cache for the full read because full content changed.
+	writeToolTestFile(t, dir, "sample.txt", "one\ntwo\nthree\n")
 	fourth := app.executeTool(ctx, ConfigState{Workspace: dir}, "session-1", "read", args)
 	fourthData := fourth.Data.(*BatchReadResult)
 	if !fourth.OK || len(fourthData.Files) != 1 || fourthData.Files[0].Reused || fourthData.Files[0].Content == "" {
-		t.Fatalf("expected full read after invalidation, got %#v", fourth)
+		t.Fatalf("expected full read after disk file modification, got %#v", fourthData)
+	}
+
+	// Crucial feature: reading lines 1..1 is STILL cached as reused because line 1 did not change,
+	// even though the rest of the file was modified!
+	rangeRes3 := app.executeTool(ctx, ConfigState{Workspace: dir}, "session-1", "read", rangeArgs)
+	rangeData3 := rangeRes3.Data.(*BatchReadResult)
+	if !rangeRes3.OK || len(rangeData3.Files) != 1 || !rangeData3.Files[0].Reused {
+		t.Fatalf("expected reused content for unchanged range 1..1 even after file was edited elsewhere, got %#v", rangeData3)
+	}
+
+	// Invalidation clears the entire cache.
+	invalidateRunReadCache(ctx)
+	if len(cache.entries) != 0 {
+		t.Fatalf("cache entries after invalidation = %d, want 0", len(cache.entries))
+	}
+	fifth := app.executeTool(ctx, ConfigState{Workspace: dir}, "session-1", "read", args)
+	fifthData := fifth.Data.(*BatchReadResult)
+	if !fifth.OK || len(fifthData.Files) != 1 || fifthData.Files[0].Reused || fifthData.Files[0].Content == "" {
+		t.Fatalf("expected full read after invalidation, got %#v", fifthData)
 	}
 }
 
@@ -2647,19 +2669,55 @@ func TestRunReadCacheEvictsEntriesUnderPressure(t *testing.T) {
 	cache := newRunReadCache()
 	// Fill past the entry budget; every insertion is a distinct key.
 	for i := 0; i < runReadCacheMaxEntries+8; i++ {
-		cache.store(fmt.Sprintf("key-%d", i), &BatchReadResult{
-			Files: []BatchReadResultItem{{Path: fmt.Sprintf("f%d.txt", i), Content: "x", Version: "aaaaaa"}},
-		})
+		cache.put(fmt.Sprintf("key-%d", i), "hash-val")
 	}
 	if got := len(cache.entries); got > runReadCacheMaxEntries {
 		t.Fatalf("cache entries = %d, want <= %d", got, runReadCacheMaxEntries)
 	}
 	// Re-storing an existing key must not grow the cache.
-	cache.store("key-0", &BatchReadResult{
-		Files: []BatchReadResultItem{{Path: "f0.txt", Content: "y", Version: "bbbbbb"}},
-	})
+	cache.put("key-0", "hash-val-updated")
 	if got := len(cache.entries); got > runReadCacheMaxEntries {
 		t.Fatalf("cache entries after re-store = %d, want <= %d", got, runReadCacheMaxEntries)
+	}
+}
+
+func TestBatchReadMixedWithMissingFilesDoesNotCorruptCacheKeys(t *testing.T) {
+	app := NewApp()
+	dir := t.TempDir()
+	app.config.Workspace = dir
+
+	fileA := filepath.Join(dir, "a.txt")
+	fileB := filepath.Join(dir, "b.txt")
+	if err := os.WriteFile(fileA, []byte("line1\nline2\nline3\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(fileB, []byte("b1\nb2\nb3\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cache := newRunReadCache()
+	ctx := context.WithValue(context.Background(), runReadCacheContextKey{}, cache)
+
+	// Batch read: a.txt (1..1), missing.txt (2..2), b.txt (3..3)
+	args := []byte(`{"files":[` +
+		`{"path":"a.txt","startLine":1,"endLine":1},` +
+		`{"path":"missing.txt","startLine":2,"endLine":2},` +
+		`{"path":"b.txt","startLine":3,"endLine":3}` +
+		`]}`)
+	res1 := app.executeTool(ctx, ConfigState{Workspace: dir}, "session-1", "read", args)
+	if !res1.OK {
+		t.Fatalf("executeTool read failed: %#v", res1)
+	}
+
+	// Now re-read b.txt (3..3) alone: it MUST hit the cache and be reused with correct key!
+	bArgs := []byte(`{"files":[{"path":"b.txt","startLine":3,"endLine":3}]}`)
+	res2 := app.executeTool(ctx, ConfigState{Workspace: dir}, "session-1", "read", bArgs)
+	if !res2.OK {
+		t.Fatalf("executeTool read b.txt failed: %#v", res2)
+	}
+	bData := res2.Data.(*BatchReadResult)
+	if len(bData.Files) != 1 || !bData.Files[0].Reused {
+		t.Fatalf("expected b.txt (3..3) to be reused despite missing.txt in earlier batch, got %#v", bData)
 	}
 }
 

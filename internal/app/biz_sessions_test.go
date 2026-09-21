@@ -454,7 +454,7 @@ func TestDiskProfileDropsReasoningAndToolOutput(t *testing.T) {
 	if disk[1].ReasoningContent != "" || disk[3].ReasoningContent != "" {
 		t.Fatalf("reasoning text must not be persisted: %+v", disk)
 	}
-	if disk[2].Content != toolResultDiskPlaceholder {
+	if disk[2].Content != toolResultPlaceholder {
 		t.Fatalf("tool output = %q, want the placeholder", disk[2].Content)
 	}
 	// The call itself must survive so the restored model can re-run the tool.

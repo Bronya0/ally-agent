@@ -16,7 +16,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"unicode/utf8"
 )
 
 type agentFile struct {
@@ -135,9 +134,14 @@ func loadCodeGraph(workspace string) string {
 		return content
 	}
 	content = content[:maxCodeGraphPromptBytes]
-	for !utf8.ValidString(content) && len(content) > 0 {
-		content = content[:len(content)-1]
+	// Land on a line boundary (and drop a half-cut rune) so the model never sees a
+	// table row lopped in half: the graph is injected for its head — the
+	// "feature → file" table — and the architecture sections are readable on
+	// demand with `read`.
+	if idx := strings.LastIndexByte(content, '\n'); idx > 0 {
+		content = content[:idx]
 	}
+	content = strings.ToValidUTF8(content, "")
 	return strings.TrimSpace(content) + "\n\n<!-- CODEGRAPH.md was truncated for prompt size. Run the codegraph skill to regenerate a concise graph if this omits needed architecture. -->"
 }
 

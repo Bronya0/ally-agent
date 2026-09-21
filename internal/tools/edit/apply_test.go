@@ -338,3 +338,83 @@ func TestApplyBatchTextChangesReplaceAllBeyondDiagnosticLimit(t *testing.T) {
 		t.Fatalf("unexpected replace-all content: %q", result.Content)
 	}
 }
+
+func TestStripReadLineNumberPrefixes(t *testing.T) {
+	cases := []struct {
+		input    string
+		want     string
+		wantBool bool
+	}{
+		{
+			input:    "1: func hello() {\n2:     return 42\n3: }",
+			want:     "func hello() {\n    return 42\n}",
+			wantBool: true,
+		},
+		{
+			input:    "10\tx = 1\n11\ty = 2",
+			want:     "x = 1\ny = 2",
+			wantBool: true,
+		},
+		{
+			input:    " 5 | const a = 1\n 6 | const b = 2",
+			want:     "const a = 1\nconst b = 2",
+			wantBool: true,
+		},
+		{
+			input:    "func hello() {\n    return 42\n}",
+			want:     "func hello() {\n    return 42\n}",
+			wantBool: false,
+		},
+		{
+			input:    "1: func hello() {\nreturn 42\n}",
+			want:     "1: func hello() {\nreturn 42\n}",
+			wantBool: false,
+		},
+	}
+	for _, tc := range cases {
+		got, ok := StripReadLineNumberPrefixes(tc.input)
+		if ok != tc.wantBool || got != tc.want {
+			t.Errorf("StripReadLineNumberPrefixes(%q) = (%q, %v), want (%q, %v)", tc.input, got, ok, tc.want, tc.wantBool)
+		}
+	}
+}
+
+func TestApplyBatchTextChangesWithCopiedLineNumberPrefixes(t *testing.T) {
+	content := "package main\n\nfunc calculate() int {\n\tx := 10\n\ty := 20\n\treturn x + y\n}\n"
+	// Model copied line numbers from read output:
+	oldText := "4: \tx := 10\n5: \ty := 20"
+	newText := "4: \tx := 15\n5: \ty := 25"
+	result, count, err := ApplyBatchTextChanges(content, []TextChange{{
+		OldText: oldText,
+		NewText: newText,
+	}})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected 1 replacement, got %d", count)
+	}
+	expected := "package main\n\nfunc calculate() int {\n\tx := 15\n\ty := 25\n\treturn x + y\n}\n"
+	if result.Content != expected {
+		t.Fatalf("expected:\n%s\ngot:\n%s", expected, result.Content)
+	}
+	if len(result.Warnings) == 0 {
+		t.Fatalf("expected warning about stripped line numbers")
+	}
+}
+
+func TestMatchLineNumberPrefixDoesNotStripBareColonOrTimestamp(t *testing.T) {
+	content := "const deadline = \"12:30\";\n"
+	oldText := "const deadline = \"12:30\";"
+	newText := "const deadline = \"13:30\";"
+	result, count, err := ApplyBatchTextChanges(content, []TextChange{{
+		OldText: oldText,
+		NewText: newText,
+	}})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if count != 1 || len(result.Warnings) != 0 {
+		t.Fatalf("bare colon inside text must not trigger line number stripping warning, warnings: %v", result.Warnings)
+	}
+}
