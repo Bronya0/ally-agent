@@ -349,7 +349,6 @@ function defaultModelDraft(source = {}) {
     baseUrl: draft?.baseUrl || '',
     apiKey: draft?.apiKey || '',
     model: '',
-    temperature: draft?.temperature ?? 0.2,
     ...source,
     // Keep at least one (possibly empty) row so the form always shows a key
     // input; empty strings are stripped again on save/test.
@@ -656,7 +655,6 @@ async function startAddModelDraft() {
       apiKey: normalizedKeys[0] || '',
       apiKeys: normalizedKeys,
       model: '',
-      temperature: templateModel.temperature ?? 0.2,
       maxTokens: templateModel.maxTokens || 131072,
       contextWindow: templateModel.contextWindow || 1000000,
       reasoningTag: templateModel.reasoningTag || 'reasoning_content',
@@ -715,7 +713,6 @@ async function testModelConnection() {
       apiKey: apiKeys[0] || '',
       apiKeys,
       model,
-      temperature: modelDraft.temperature ?? 0.2,
       maxTokens: modelDraft.maxTokens || 131072,
       contextWindow: modelDraft.contextWindow || 1000000,
       reasoningTag: modelDraft.reasoningTag || 'reasoning_content',
@@ -749,7 +746,6 @@ function commitModelDraft() {
     apiKey: apiKeys[0] || '',
     apiKeys,
     model,
-    temperature: modelDraft.temperature ?? draft.temperature ?? 0.2,
     maxTokens: modelDraft.maxTokens || draft.maxTokens || 131072,
     contextWindow: modelDraft.contextWindow || draft.contextWindow || 1000000,
     reasoningTag: modelDraft.reasoningTag || 'reasoning_content',

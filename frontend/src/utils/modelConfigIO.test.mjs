@@ -25,7 +25,6 @@ function model(providerName, modelId, overrides = {}) {
     baseUrl: 'https://api.example.com',
     apiKey: 'secret-key',
     model: modelId,
-    temperature: 0.2,
     maxTokens: 8192,
     contextWindow: 128000,
     reasoningTag: 'reasoning_content',

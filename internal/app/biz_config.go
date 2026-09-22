@@ -633,7 +633,7 @@ func (a *App) TestModelConnection(model ModelConfig) error {
 		APIKey:          strings.TrimSpace(model.APIKey),
 		APIKeys:         cloneStringSlice(model.APIKeys),
 		Model:           strings.TrimSpace(model.Model),
-		MaxTokens:       32,
+		MaxTokens:       model.MaxTokens,
 		ContextWindow:   model.ContextWindow,
 		TokenParam:      normalizeTokenParam(model.TokenParam),
 		ReasoningTag:    normalizeReasoningTag(model.ReasoningTag),
@@ -657,10 +657,14 @@ func (a *App) TestModelConnection(model ModelConfig) error {
 	}
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
+	testMaxTokens := cfg.MaxTokens
+	if testMaxTokens <= 0 {
+		testMaxTokens = defaultMaxTokensForAPIFormat(cfg.APIFormat)
+	}
 	_, err := a.completeModelText(ctx, cfg, cfg.Model, []openai.ChatCompletionMessage{{
 		Role:    openai.ChatMessageRoleUser,
 		Content: "Reply only with OK.",
-	}}, 32)
+	}}, testMaxTokens)
 	return err
 }
 
