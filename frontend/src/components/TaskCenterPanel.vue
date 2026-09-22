@@ -33,8 +33,9 @@ Public License v3. See the LICENSE file for details.
               <template #extra><span class="empty-hint">{{ $t('service.emptyHint') }}</span></template>
             </n-empty>
             <div v-else class="task-list">
-              <article v-for="service in services" :key="service.id" class="task-card">
+              <article v-for="service in services" :key="service.id" class="task-card service-card">
                 <div class="card-head">
+                  <span class="card-kind" :title="$t('composer.taskCenter.services')">S</span>
                   <div class="head-main">
                     <span class="card-title">{{ service.name || service.id }}</span>
                     <span class="mono-muted">{{ service.id }}<template v-if="service.pid"> · PID {{ service.pid }}</template></span>
@@ -56,15 +57,19 @@ Public License v3. See the LICENSE file for details.
                     </n-popconfirm>
                   </div>
                 </div>
+                <!-- 身份行：一眼看出在跑什么命令。 -->
+                <div v-if="service.command" class="command" :title="service.command" v-html="highlightedCommand(service.command)"></div>
+                <!-- 事实行：只留当下有意义的那几项——还活着的看启动时间，已结束的看退出码。 -->
                 <div class="meta-line">
-                  <span class="meta-item"><i>{{ $t('service.startedAt') }}</i>{{ formatUnixSeconds(service.startedAt) }}</span>
-                  <span class="meta-item"><i>{{ $t('service.stoppedAt') }}</i>{{ formatUnixSeconds(service.stoppedAt) }}</span>
-                  <span class="meta-item"><i>{{ $t('service.exitCode') }}</i>{{ isActiveService(service) ? '-' : (service.exitCode ?? 0) }}</span>
+                  <span v-if="isActiveService(service)" class="meta-item"><i>{{ $t('service.startedAt') }}</i>{{ formatUnixSeconds(service.startedAt) }}</span>
+                  <template v-else>
+                    <span class="meta-item"><i>{{ $t('service.exitCode') }}</i>{{ service.exitCode ?? 0 }}</span>
+                    <span class="meta-item"><i>{{ $t('service.stoppedAt') }}</i>{{ formatUnixSeconds(service.stoppedAt) }}</span>
+                  </template>
                   <span class="meta-item"><i>{{ $t('service.bufferSize') }}</i>{{ formatBytes(service.outputBytes) }}</span>
-                  <span class="meta-item"><i>{{ $t('service.retention') }}</i>{{ service.outputTruncated ? $t('common.truncated') : $t('service.completeBuffer') }}</span>
+                  <span v-if="service.outputTruncated" class="meta-item attention"><i>{{ $t('service.retention') }}</i>{{ $t('taskCenter.latestRetained') }}</span>
                 </div>
                 <div class="mono-muted ellipsis" :title="service.cwd">{{ service.cwd }}</div>
-                <div class="command" :title="service.command" v-html="highlightedCommand(service.command)"></div>
                 <div v-if="service.outputTail" class="buffer-preview">
                   <div class="buffer-title">{{ $t('taskCenter.bufferPreview') }}</div>
                   <pre v-html="previewHtml(service.outputTail)"></pre>
@@ -78,15 +83,16 @@ Public License v3. See the LICENSE file for details.
         <n-tab-pane name="scheduled" :tab="$t('taskCenter.scheduledTab', { count: tasks.length })">
           <div class="task-overview">
             <span>{{ $t('scheduled.runningCount', { count: scheduledRunningCount }) }}</span>
-            <span>{{ $t('scheduled.sessionOnly') }}</span>
+            <span>{{ $t('scheduled.persisted') }}</span>
           </div>
           <n-spin :show="scheduledLoading">
             <n-empty v-if="!tasks.length" :description="$t('scheduled.empty')">
               <template #extra><span class="empty-hint">{{ $t('scheduled.emptyHint') }}</span></template>
             </n-empty>
             <div v-else class="task-list">
-              <article v-for="task in tasks" :key="task.id" class="task-card">
+              <article v-for="task in tasks" :key="task.id" class="task-card scheduled-card">
                 <div class="card-head">
+                  <span class="card-kind" :title="$t('composer.taskCenter.scheduled')">C</span>
                   <div class="head-main">
                     <span class="card-title">{{ task.name || task.id }}</span>
                     <span class="mono-muted">{{ task.id }}</span>
@@ -107,20 +113,25 @@ Public License v3. See the LICENSE file for details.
                     </n-popconfirm>
                   </div>
                 </div>
-                <div class="meta-line">
-                  <span class="meta-item"><i>{{ $t('scheduled.schedule') }}</i>{{ scheduleLabel(task.schedule) }}</span>
-                  <span class="meta-item"><i>{{ $t('scheduled.nextRun') }}</i>{{ formatTime(task.nextRunAt) }}</span>
-                  <span class="meta-item"><i>{{ $t('scheduled.lastRun') }}</i>{{ formatTime(task.lastRunAt) }}</span>
-                  <span class="meta-item"><i>{{ $t('scheduled.runCount') }}</i>{{ task.runCount || 0 }}</span>
-                  <span v-if="!task.command" class="meta-item"><i>{{ $t('scheduled.limit') }}</i>{{ $t('common.steps', { count: task.maxSteps }) }} · {{ durationLabel(task.timeoutSeconds) }}</span>
-                  <span class="meta-item"><i>{{ $t('scheduled.failures') }}</i>{{ task.consecutiveFailures || 0 }}</span>
+                <!-- 调度行：“什么时候跑”——下次运行才是行动重点，单独提出来。 -->
+                <div class="schedule-line">
+                  <span class="schedule-text">{{ scheduleLabel(task.schedule) }}</span>
+                  <span v-if="task.nextRunAt" class="next-run"><i>{{ $t('scheduled.nextRun') }}</i>{{ formatTime(task.nextRunAt) }}</span>
+                  <span v-else class="next-run idle">{{ $t('scheduled.noNextRun') }}</span>
                 </div>
-                <div class="mono-muted ellipsis" :title="task.workspace">{{ task.workspace }}</div>
-                <!-- 任务内容：command（高亮命令）或 instruction（LLM 委托描述） -->
+                <!-- 内容行：“跑什么”——command（高亮命令）或 instruction（LLM 委托描述）。 -->
                 <div v-if="task.command" class="command" :title="task.command" v-html="highlightedCommand(task.command)"></div>
                 <div v-else-if="task.instruction" class="instruction">{{ task.instruction }}</div>
+                <!-- 事实行：历史计数，异常项（连续失败）才上色。 -->
+                <div class="meta-line">
+                  <span class="meta-item"><i>{{ $t('scheduled.lastRun') }}</i>{{ formatTime(task.lastRunAt) }}</span>
+                  <span class="meta-item"><i>{{ $t('scheduled.runCount') }}</i>{{ task.runCount || 0 }}</span>
+                  <span v-if="task.consecutiveFailures" class="meta-item attention"><i>{{ $t('scheduled.failures') }}</i>{{ task.consecutiveFailures }}</span>
+                  <span v-if="!task.command" class="meta-item"><i>{{ $t('scheduled.limit') }}</i>{{ $t('common.steps', { count: task.maxSteps }) }} · {{ durationLabel(task.timeoutSeconds) }}</span>
+                </div>
+                <div class="mono-muted ellipsis" :title="task.workspace">{{ task.workspace }}</div>
                 <div v-if="task.lastSummary || task.lastError" class="buffer-preview" :class="{ error: task.lastError && !task.lastSummary }">
-                  <div class="buffer-title">{{ $t('taskCenter.bufferPreview') }}</div>
+                  <div class="buffer-title">{{ task.lastSummary ? $t('scheduled.latestOutput') : $t('scheduled.latestError') }}</div>
                   <pre v-html="previewHtml(task.lastSummary || task.lastError)"></pre>
                 </div>
               </article>
@@ -162,6 +173,8 @@ const props = defineProps({
   servicesLoading: { type: Boolean, default: false },
   deletingIds: { type: Array, default: () => [] },
   stoppingIds: { type: Array, default: () => [] },
+  // 工具栏入口 chip 决定打开哪个 Tab（S=services / C=scheduled）。
+  defaultTab: { type: String, default: 'services' },
 });
 
 defineEmits(['close', 'refresh', 'deleteTask', 'stopService']);
@@ -200,6 +213,14 @@ const logRenderNote = computed(() => (logRender.value.droppedChars > 0
 function syncTabs() {
   nextTick(() => tabsRef.value?.syncBarPosition?.());
 }
+
+// 每次打开面板时定位到入口 chip 对应的 Tab；面板内的手动切换在下次打开前一直有效。
+watch(() => props.show, (visible) => {
+  if (!visible) return;
+  const next = props.defaultTab === 'scheduled' ? 'scheduled' : 'services';
+  if (activeTab.value !== next) activeTab.value = next;
+  syncTabs();
+});
 
 function previewHtml(text) {
   return renderAnsiToHtml(text).html;
@@ -333,7 +354,7 @@ function scheduledStatusLabel(task) {
   if (task?.running) return t('common.running');
   const labels = {
     scheduled: t('scheduled.status.waiting'), completed: t('scheduled.status.completed'), failed: t('scheduled.status.failed'), timed_out: t('scheduled.status.timedOut'),
-    cancelled: t('scheduled.status.cancelled'), skipped: t('scheduled.status.skipped'), missed: t('scheduled.status.missed'), invalid: t('scheduled.status.invalid'),
+    cancelled: t('scheduled.status.cancelled'), skipped: t('scheduled.status.skipped'), missed: t('scheduled.status.missed'), interrupted: t('scheduled.status.interrupted'), invalid: t('scheduled.status.invalid'),
   };
   return labels[task?.lastStatus] || task?.lastStatus || t('scheduled.status.waiting');
 }
@@ -342,7 +363,7 @@ function scheduledStatusType(task) {
   if (task?.running) return 'info';
   if (task?.lastStatus === 'completed') return 'success';
   if (['failed', 'timed_out', 'invalid'].includes(task?.lastStatus)) return 'error';
-  if (['skipped', 'missed', 'cancelled'].includes(task?.lastStatus)) return 'warning';
+  if (['skipped', 'missed', 'cancelled', 'interrupted'].includes(task?.lastStatus)) return 'warning';
   return 'default';
 }
 
@@ -399,10 +420,15 @@ function formatBytes(value) {
 .task-center-body :deep(.n-tabs) { min-height: 100%; }
 .task-overview { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-bottom: 10px; color: var(--ally-text-muted); font-size: 12px; }
 .task-list { display: flex; flex-direction: column; gap: 8px; padding-bottom: 8px; }
-.task-card { padding: 8px 10px; border: 1px solid var(--ally-border); border-radius: 8px; background: var(--ally-hover-faint); }
-.card-head { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 12px; justify-content: space-between; }
+.task-card { padding: 10px 12px; border: 1px solid var(--ally-border); border-radius: 8px; background: var(--ally-hover-faint); }
+.card-head { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; }
 .head-main { display: flex; align-items: baseline; flex-wrap: wrap; min-width: 0; gap: 4px 8px; }
-.head-side { display: flex; align-items: center; flex-shrink: 0; gap: 4px; }
+.head-side { display: flex; align-items: center; flex-shrink: 0; gap: 4px; margin-left: auto; }
+/* S / C 字母徽标：与工具栏入口 chip 同源配色（info=服务 / warning=定时）。
+   这两支是跨主题恒定的语义色，不会和主题 accent 撞成同一色相。 */
+.card-kind { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; width: 18px; height: 18px; border-radius: 5px; font-size: 11px; font-weight: 700; line-height: 1; }
+.service-card .card-kind { color: var(--ally-info); background: color-mix(in srgb, var(--ally-info) 16%, transparent); }
+.scheduled-card .card-kind { color: var(--ally-warning-text); background: color-mix(in srgb, var(--ally-warning) 16%, transparent); }
 /* 超时收编服务的徽标：与状态标签并列，用 warning 色系区分来源。 */
 .head-side :deep(.promoted-badge) { background: rgba(234,179,8,.12); color: var(--ally-warning-pale, #d97706); }
 .card-title { color: var(--ally-text-primary); font-size: 13px; font-weight: 650; }
@@ -414,8 +440,18 @@ function formatBytes(value) {
 .meta-item { display: inline-flex; align-items: baseline; gap: 4px; }
 .meta-item + .meta-item::before { margin: 0 8px; color: var(--ally-border-strong, var(--ally-text-faint)); content: '\00B7'; }
 .meta-item i { color: var(--ally-text-faint); font-size: 11px; font-style: normal; }
+/* 只在异常时出现的事实项（输出被截断、连续失败）才上警示色。 */
+.meta-item.attention, .meta-item.attention i { color: var(--ally-warning-text); }
 
-.instruction, .command { display: -webkit-box; margin-top: 4px; overflow: hidden; color: var(--ally-text-body); font-size: 12px; line-height: 1.5; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+/* 定时任务的调度行：“什么时候跑”单独成行，下次运行加粗为行动重点。 */
+.schedule-line { display: flex; align-items: baseline; flex-wrap: wrap; margin-top: 6px; font-size: 12px; }
+.schedule-text { color: var(--ally-text-body); }
+.next-run { color: var(--ally-accent-strong); font-weight: 600; }
+.next-run::before { margin: 0 8px; color: var(--ally-text-ghost); content: '\00B7'; }
+.next-run i { margin-right: 4px; color: var(--ally-text-faint); font-size: 11px; font-style: normal; font-weight: 400; }
+.next-run.idle { color: var(--ally-text-faint); font-weight: 400; }
+
+.instruction, .command { display: -webkit-box; margin-top: 6px; overflow: hidden; color: var(--ally-text-body); font-size: 12px; line-height: 1.5; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .command { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
 /* v-html 注入的 shell 分词 token 不带 scoped 属性，必须 :deep 才能命中。
    配色与工具卡 .tool-command 的暗一档四色同源。 */
@@ -431,7 +467,7 @@ html[data-mode="light"] .command :deep(.shell-operator) { color: #0f766e; }
 .buffer-preview { margin-top: 8px; padding: 8px 10px; border-radius: 8px; background: var(--ally-hover-faint); }
 .buffer-preview.error, .service-error { background: rgba(239,68,68,.08); }
 .buffer-title { margin-bottom: 6px; color: var(--ally-text-muted); font-size: 11px; }
-.buffer-preview pre { display: -webkit-box; margin: 0; overflow: hidden; color: var(--ally-text-body); font: 11px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace; white-space: pre-wrap; word-break: break-word; -webkit-box-orient: vertical; -webkit-line-clamp: 6; }
+.buffer-preview pre { display: -webkit-box; margin: 0; overflow: hidden; color: var(--ally-text-body); font: 11px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace; white-space: pre-wrap; word-break: break-word; -webkit-box-orient: vertical; -webkit-line-clamp: 4; }
 .service-error { margin-top: 6px; padding: 6px 10px; border-radius: 8px; color: var(--ally-danger-pale); font-size: 11px; }
 .empty-hint { color: var(--ally-text-faint); font-size: 12px; }
 .log-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 12px; margin-bottom: 10px; color: var(--ally-text-muted); font-size: 11px; }

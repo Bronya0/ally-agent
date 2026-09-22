@@ -2523,7 +2523,7 @@ code, pre {
 .composer-info .info-workspace,
 .composer-info .info-git,
 .composer-info .info-context,
-.composer-info .scheduled-task-chip {
+.composer-info .task-chip {
   display: inline-flex;
   align-items: center;
 }
@@ -2677,7 +2677,7 @@ code, pre {
 .composer-info .info-git,
 .composer-info .composer-new-session-btn,
 .composer-info .composer-sessions-btn,
-.composer-info .scheduled-task-chip {
+.composer-info .task-chip {
   opacity: 0.85;
   transition: opacity 0.15s ease;
 }
@@ -2685,13 +2685,13 @@ code, pre {
 .composer-info .info-git:hover,
 .composer-info .composer-new-session-btn:hover,
 .composer-info .composer-sessions-btn:hover,
-.composer-info .scheduled-task-chip:hover {
+.composer-info .task-chip:hover {
   opacity: 1;
 }
 
-/* A running scheduled task is a live status signal, not navigation, so it keeps
+/* A running task is a live status signal, not navigation, so it keeps
    its full accent strength. */
-.composer-info .scheduled-task-chip.running {
+.composer-info .task-chip.running {
   opacity: 1;
 }
 
@@ -2996,12 +2996,12 @@ code, pre {
   opacity: 0.7;
 }
 
-.composer-info .scheduled-task-chip {
+.composer-info .task-chip {
   display: inline-flex;
   align-items: center;
   gap: 4px;
   height: 20px;
-  padding: 1px 7px;
+  padding: 1px 7px 1px 5px;
   color: var(--ally-text-soft);
   border: 1px solid var(--ally-border);
   border-radius: 999px;
@@ -3012,22 +3012,41 @@ code, pre {
   --wails-draggable: no-drag;
 }
 
-.composer-info .scheduled-task-chip:hover {
+.composer-info .task-chip:hover {
   color: var(--ally-text-high);
   border-color: color-mix(in srgb, var(--ally-accent) 38%, transparent);
   background: color-mix(in srgb, var(--ally-accent) 12%, transparent);
 }
 
-.composer-info .scheduled-task-chip.running {
+.composer-info .task-chip.running {
   color: var(--ally-accent-pale);
   border-color: color-mix(in srgb, var(--ally-accent) 48%, transparent);
   background: color-mix(in srgb, var(--ally-accent) 16%, transparent);
 }
 
-.composer-info .scheduled-task-icon {
-  display: block;
+/* S / C 字母徽标：用字母代替图标，两类任务靠配色再区分一道。
+   info（蓝）/ warning（琥珀）是跨主题恒定的语义色，不跟随主题 accent，
+   避免 azure 等主题下 S 与 C 撞成同一色相。 */
+.composer-info .task-chip-letter {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 14px;
   height: 14px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.composer-info .task-chip-service .task-chip-letter {
+  color: var(--ally-info);
+  background: color-mix(in srgb, var(--ally-info) 18%, transparent);
+}
+
+.composer-info .task-chip-scheduled .task-chip-letter {
+  color: var(--ally-warning-text);
+  background: color-mix(in srgb, var(--ally-warning) 18%, transparent);
 }
 
 .composer-info .info-export {
@@ -4489,6 +4508,16 @@ code, pre {
 .messages .message {
   content-visibility: auto;
   contain-intrinsic-size: auto 120px;
+}
+
+/* 此刻渲染不出东西的 assistant 行（纯思考步骤留下的空壳行：思考已收起、正文还没
+   开始）不参与尺寸估计。跳过它没有任何收益，但浏览器一旦把它当作离屏内容，就会用
+   上面那个 120px 估计值占位——折叠组上方因此凭空多出一大截间距，直到该行重新进入
+   可视范围才突然收敛。content-visibility: visible 同时去掉了 containment，这些空行的
+   外边距也恢复自折叠（与加 containment 之前的观感一致）。 */
+.messages .message.is-empty-row {
+  content-visibility: visible;
+  contain-intrinsic-size: auto;
 }
 
 .rich-tool-card.non-interactive {

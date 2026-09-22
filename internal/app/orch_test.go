@@ -4217,21 +4217,95 @@ func TestScheduledTaskCreateListDelete(t *testing.T) {
 	}
 }
 
-func TestScheduledTasksClearLegacyPersistenceOnStartup(t *testing.T) {
+func TestScheduledTasksPersistAcrossRestart(t *testing.T) {
 	root := t.TempDir()
-	path := filepath.Join(root, "scheduled_tasks.json")
-	if err := os.WriteFile(path, []byte(`[{"id":"legacy"}]`), 0o600); err != nil {
-		t.Fatal(err)
-	}
 	app := NewApp()
 	app.configPath = filepath.Join(root, "config.json")
 	app.config = ConfigState{Workspace: root}
 	if err := app.startScheduledTaskManager(); err != nil {
 		t.Fatal(err)
 	}
+	created, err := app.executeScheduledTaskTool(app.config, ScheduledTaskToolRequest{
+		Action:      "create",
+		Name:        "recurring",
+		Instruction: "echo hi",
+		Schedule:    "30m",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := created.(ScheduledTaskToolResult).Task.ID
 	app.stopScheduledTaskManager()
-	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Fatalf("scheduled task persistence should be removed, stat err=%v", err)
+
+	// Restart: the recurring task must come back from disk.
+	app2 := NewApp()
+	app2.configPath = filepath.Join(root, "config.json")
+	app2.config = ConfigState{Workspace: root}
+	if err := app2.startScheduledTaskManager(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(app2.stopScheduledTaskManager)
+	tasks := app2.ListScheduledTasks()
+	if len(tasks) != 1 || tasks[0].ID != id || tasks[0].Running {
+		t.Fatalf("expected persisted task %s restored and not running, got %#v", id, tasks)
+	}
+
+	// Fired one-shots, past-due one-shots, tasks whose workspace is gone, tasks
+	// interrupted mid-run, and malformed entries must not block startup. Only the
+	// ones that can still run come back as schedulable; the rest stay visible with
+	// an explanatory status.
+	path := filepath.Join(root, "scheduled_tasks.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stored []ScheduledTask
+	if err := json.Unmarshal(data, &stored); err != nil {
+		t.Fatal(err)
+	}
+	past := time.Now().Add(-time.Hour).Format(time.RFC3339)
+	stored = append(stored,
+		ScheduledTask{ID: "task_fired", Name: "done", Instruction: "x", Workspace: root,
+			Schedule: ScheduledTaskSchedule{Type: "once", At: past}, LastRunAt: 1},
+		ScheduledTask{ID: "task_late", Name: "late", Instruction: "x", Workspace: root,
+			Schedule: ScheduledTaskSchedule{Type: "once", At: past}},
+		ScheduledTask{ID: "task_gone", Name: "gone", Command: "echo x", Workspace: filepath.Join(root, "deleted-workspace"),
+			Schedule: ScheduledTaskSchedule{Type: "interval", Every: "30m"}, LastStatus: "scheduled"},
+		ScheduledTask{ID: "task_crashed", Name: "crash", Command: "echo x", Workspace: root,
+			Schedule: ScheduledTaskSchedule{Type: "interval", Every: "30m"}, LastStatus: "running", Running: true},
+		ScheduledTask{ID: "task_bad", Name: "bad"},
+	)
+	app2.stopScheduledTaskManager()
+	if err := os.WriteFile(path, mustJSON(stored), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	app3 := NewApp()
+	app3.configPath = filepath.Join(root, "config.json")
+	app3.config = ConfigState{Workspace: root}
+	if err := app3.startScheduledTaskManager(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(app3.stopScheduledTaskManager)
+	byID := map[string]ScheduledTask{}
+	for _, task := range app3.ListScheduledTasks() {
+		byID[task.ID] = task
+	}
+	if _, ok := byID[id]; !ok {
+		t.Fatalf("expected the recurring task to survive, got %#v", byID)
+	}
+	for _, dropped := range []string{"task_fired", "task_bad"} {
+		if _, ok := byID[dropped]; ok {
+			t.Fatalf("%s must not come back, got %#v", dropped, byID[dropped])
+		}
+	}
+	if late := byID["task_late"]; late.LastStatus != "missed" || late.NextRunAt != 0 || late.Running {
+		t.Fatalf("a past-due one-shot must be reported as missed and never re-armed, got %#v", late)
+	}
+	if gone := byID["task_gone"]; gone.LastStatus != "invalid" || gone.NextRunAt != 0 || gone.Running {
+		t.Fatalf("a task whose workspace vanished must be marked invalid and not scheduled, got %#v", gone)
+	}
+	if crashed := byID["task_crashed"]; crashed.LastStatus != "interrupted" || crashed.Running || crashed.NextRunAt == 0 {
+		t.Fatalf("a task interrupted mid-run must resume as interrupted with a next run, got %#v", crashed)
 	}
 }
 

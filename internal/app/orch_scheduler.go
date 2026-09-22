@@ -14,6 +14,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -223,12 +224,81 @@ func (a *App) executeScheduledTaskTool(cfg ConfigState, req ScheduledTaskToolReq
 }
 
 func (m *scheduledTaskManager) load() error {
-	// Scheduled tasks are intentionally process-local. Remove the legacy file
-	// on every startup so older persistent definitions cannot restart silently.
-	if err := os.Remove(m.path); err != nil && !errors.Is(err, os.ErrNotExist) {
+	// Scheduled tasks persist across restarts: recurring tasks (interval/cron)
+	// resume from "now" without catching up missed fires, pending one-shot tasks
+	// survive, fired one-shots are dropped, and past-due ones are reported as
+	// missed instead of firing late.
+	// 调用时机：startScheduledTaskManager 在把 manager 挂到 App 上之前调用它，此时
+	// 没有任何其他 goroutine 拿得到 m，所以下面 registerLocked 的 Locked 后缀遵循
+	// 的是「尚无并发」这一前提，而不是「调用方已持锁」。
+	data, err := os.ReadFile(m.path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
 		return err
 	}
+	var stored []ScheduledTask
+	if err := json.Unmarshal(data, &stored); err != nil {
+		// Corrupt store: keep it aside as .bak and start empty instead of
+		// blocking startup.
+		_ = os.Rename(m.path, m.path+".bak")
+		return nil
+	}
+	now := time.Now()
+	for i := range stored {
+		task := &stored[i]
+		// 落盘的运行标记（running / lastStatus=running）只说明上个进程死在执行中，
+		// 那次执行本身已经不存在：清标记并把状态改判为「已中断」。否则任务卡片会
+		// 一直显示一个没翻译的 running，还与「运行中 0」自相矛盾。
+		task.Running = false
+		if task.LastStatus == "running" {
+			task.LastStatus = "interrupted"
+			task.LastError = "Ally exited while this task was running"
+		}
+		if task.Schedule.Type == "once" {
+			at, atErr := time.Parse(time.RFC3339, task.Schedule.At)
+			if atErr != nil {
+				continue
+			}
+			// 已执行过的一次性任务不再回到列表；到点时 Ally 没开着的（LastRunAt 仍为
+			// 0）留给 registerLocked 标成 missed，用户能看到它错过了什么。
+			if !at.After(now) && task.LastRunAt != 0 {
+				continue
+			}
+		}
+		if err := normalizeScheduledTask(task, now); err != nil {
+			continue
+		}
+		// 工作区已不在的任务不再排期：临时工作区随退出即删、项目目录也可能被移走，
+		// 留着只会在每次到点时白失败一次。保留在列表里标成 invalid 并把 NextRunAt
+		// 归零（不再触发），用户能看到原因并自行删除。
+		if !scheduledTaskWorkspaceUsable(task.Workspace) {
+			task.NextRunAt = 0
+			task.LastStatus = "invalid"
+			task.LastError = "workspace is no longer available: " + task.Workspace
+			m.app.logAppError("scheduled task workspace missing", "taskId", task.ID, "workspace", task.Workspace)
+			m.tasks[task.ID] = task
+			continue
+		}
+		if err := m.registerLocked(task, now); err != nil {
+			continue
+		}
+		m.tasks[task.ID] = task
+	}
 	return nil
+}
+
+// scheduledTaskWorkspaceUsable 判断任务记录的工作区是否还是个目录。任务持久化
+// 之后会跨进程存活，而工作区可能先一步消失（临时工作区退出即删、项目目录被移走），
+// 这种任务每次到点都只会失败一次，没有重试价值。
+func scheduledTaskWorkspaceUsable(workspace string) bool {
+	trimmed := strings.TrimSpace(workspace)
+	if trimmed == "" {
+		return false
+	}
+	info, err := os.Stat(trimmed)
+	return err == nil && info.IsDir()
 }
 
 func (m *scheduledTaskManager) stop() {
@@ -238,6 +308,12 @@ func (m *scheduledTaskManager) stop() {
 		return
 	}
 	m.stopped = true
+	// Persist a clean final state (running flags reset) so the next launch
+	// does not restore tasks stuck in "running".
+	for _, task := range m.tasks {
+		task.Running = false
+	}
+	_ = m.persistLocked()
 	for _, timer := range m.timers {
 		timer.Stop()
 	}
@@ -250,7 +326,6 @@ func (m *scheduledTaskManager) stop() {
 	case <-ctx.Done():
 	case <-time.After(5 * time.Second):
 	}
-	_ = os.Remove(m.path)
 }
 
 func (m *scheduledTaskManager) create(cfg ConfigState, req ScheduledTaskToolRequest) (*ScheduledTask, error) {
@@ -391,6 +466,8 @@ func (m *scheduledTaskManager) registerLocked(task *ScheduledTask, now time.Time
 			return codedToolError("E_SCHEDULED_TASK_AT", fmt.Errorf("invalid RFC3339 time: %w", err))
 		}
 		if !at.After(now) {
+			// 到点时进程没开着（load 把这类没执行过的一次性任务送到这里）：标成
+			// missed 且不再排期，而不是静默丢弃，用户能看到它错过了。
 			task.NextRunAt = 0
 			if task.LastRunAt == 0 {
 				task.LastStatus = "missed"
@@ -558,7 +635,7 @@ func (m *scheduledTaskManager) run(task ScheduledTask) {
 		return
 	}
 	result, runErr := m.app.executeDelegate(ctx, cfg, "scheduled:"+task.ID, AgentDelegateRequest{
-		Task:         "You are executing a temporary scheduled task in isolated fresh context. It exists only for the current Ally process. Do not create, list, or delete scheduled tasks. Complete the instruction and finish with a concise report for the user.\n\n" + task.Instruction,
+		Task:         "You are executing a scheduled task in isolated fresh context. The task persists across Ally restarts. Do not create, list, or delete scheduled tasks. Complete the instruction and finish with a concise report for the user.\n\n" + task.Instruction,
 		Description:  "Scheduled: " + task.Name,
 		CleanContext: false,
 		MaxSteps:     task.MaxSteps,
@@ -678,7 +755,25 @@ func (m *scheduledTaskManager) emit(name string, payload map[string]any) {
 }
 
 func (m *scheduledTaskManager) persistLocked() error {
-	return nil
+	// One-shot tasks live on disk only while pending (NextRunAt > 0); once
+	// fired or elapsed they vanish, so restarts never re-run or catch them up.
+	stored := make([]ScheduledTask, 0, len(m.tasks))
+	for _, task := range m.tasks {
+		if task.Schedule.Type == "once" && task.NextRunAt == 0 {
+			continue
+		}
+		stored = append(stored, cloneScheduledTask(task))
+	}
+	sort.Slice(stored, func(i, j int) bool { return stored[i].ID < stored[j].ID })
+	data, err := json.MarshalIndent(stored, "", "  ")
+	if err != nil {
+		return err
+	}
+	// 落盘走会话索引那条唯一收口（writeAtomicBytes → atomicReplaceFile）：临时
+	// 文件 + 原子替换，中途崩溃最多留下一个临时文件，绝不会是半截 store；且
+	// Windows 上目标被占用/只读时直接 rename 会失败，helper 会先把旧文件挪开再
+	// 重试，而这里的调用点大多是 `_ =` 忽略返回值的后台状态更新。
+	return writeAtomicBytes(m.path, data, 0o600)
 }
 
 func normalizeScheduledTask(task *ScheduledTask, now time.Time) error {

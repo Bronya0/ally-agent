@@ -52,10 +52,10 @@ Public License v3. See the LICENSE file for details.
             <CloseOutlined />
           </button>
         </div>
-        <div v-else-if="msg.role !== 'tool_call' && msg.kind !== 'subagent'" :class="['message', msg.role, { error: msg.error, system: msg.system }]">
+        <div v-else-if="msg.role !== 'tool_call' && msg.kind !== 'subagent'" :class="['message', msg.role, { error: msg.error, system: msg.system, 'is-empty-row': rendersNothing(msg) }]">
           <div
             class="reasoning-block"
-            :class="{ 'reasoning-hidden': msg.reasoningEndedAt || !(msg.reasoningChars > 0 || msg.reasoningStartedAt) }"
+            :class="{ 'reasoning-hidden': isReasoningHidden(msg) }"
           >
             <div class="reasoning-header">
               <span class="reasoning-label">
@@ -180,6 +180,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, provide, reactive, ref,
 import { t } from '../i18n.mjs';
 import { copyText } from '../utils/clipboard.mjs';
 import { toolCardRenderSignature } from '../utils/toolCardSignature.mjs';
+import { assistantRowRenderState, isReasoningHidden } from '../utils/toolPreview.mjs';
 import MessageAttachments from './MessageAttachments.vue';
 import WelcomeMessage from './WelcomeMessage.vue';
 import ToolCallCard from './ToolCallCard.vue';
@@ -228,6 +229,15 @@ function userMessageText(msg) {
 // 独立渲染作用域设计。
 function hasAnswerBody(msg) {
   return msg?.hasBody === true;
+}
+
+// 此刻渲染不出任何东西的 assistant 行（纯思考步骤留下的空壳行：思考已收起、正文还
+// 没开始）。这类行样式上要退出 content-visibility 的尺寸估计（.is-empty-row）：
+// 跳过它毫无收益，却会在浏览器把它当离屏内容时用 contain-intrinsic-size 的 120px
+// 估计值占位——折叠组上方凭空多出一大截间距，直到该行重新进入可视范围才突然收敛。
+// 判据与显示列表/计数/落盘同源，只有一处字段清单（assistantRowRenderState）。
+function rendersNothing(msg) {
+  return assistantRowRenderState(msg).empty;
 }
 
 // 统计占位行只挂在列表最后一条消息上：run:done 的统计数据只会填到本轮

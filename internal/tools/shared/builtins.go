@@ -157,7 +157,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"questions"},
 		}),
-		functionTool("scheduled_task", "Create, list, or delete temporary scheduled tasks for the current process. Create only when the user requests recurring automation. Two mutually exclusive task kinds: instruction (an LLM agent runs with fresh context every fire) or command (a shell command runs in the task workspace through the same safety checks as the command tool, max 600s per run) — provide exactly one.", map[string]any{
+		functionTool("scheduled_task", "Create, list, or delete persistent scheduled tasks that survive Ally restarts (recurring schedules resume from startup without catching up missed fires; one-shots never fire late — a past-due one is reported as missed, a fired one is dropped). Create only when the user requests recurring automation. Two mutually exclusive task kinds: instruction (an LLM agent runs with fresh context every fire) or command (a shell command runs in the task workspace through the same safety checks as the command tool, max 600s per run) — provide exactly one.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"action":      map[string]any{"type": "string", "enum": []string{"create", "list", "delete"}, "description": "Create, list, or delete a scheduled task."},

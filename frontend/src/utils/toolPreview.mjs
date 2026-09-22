@@ -101,7 +101,54 @@ export function codePreviewWindow(code, options = {}) {
 
 
 export function isRenderableMessage(msg) {
-  return !(msg?.role === 'tool_call' && msg?.kind === 'run');
+  if (msg?.role === 'tool_call' && msg?.kind === 'run') return false;
+  if (msg?.role !== 'assistant') return true;
+  return !assistantRowRenderState(msg).blank;
+}
+
+// 思考浮层是否已收起（行内那行 "Thinking" 不再显示）。行内 class 与“空壳行”
+// 判定共用这一处，避免两处各写一遍条件后静默跑偏。
+export function isReasoningHidden(msg) {
+  if (msg?.reasoningEndedAt) return true;
+  return !(msg?.reasoningChars > 0 || msg?.reasoningStartedAt);
+}
+
+// 一根 assistant 行“会不会渲染出东西”的全部输入，收口在这里：
+//   key   —— 显示列表缓存的失效判据（这些字段一变，缓存过的列表就得重算）；
+//   empty —— 此刻一个像素都渲染不出来：没有正文/附件/建议/本轮统计，思考也已收起；
+//   blank —— 渲染不出东西且已封口（不流式、done）：连“这是一条消息”都不算。
+// 三处必须共用这一份字段清单：漏一个字段，缓存过的列表就会跟真实渲染静默分叉。
+// 刻意只读终态/一次性字段，**不把正文放进 key**：正文由子组件按增量渲染，父级
+// 渲染 effect 一旦订阅它，每个流式增量都要重算整张列表。
+// 空壳行不只是白占 DOM：`.message` 上的 content-visibility 会让 0 高行不再自折叠
+// 外边距，一根就把下面的内容顶下去一行间距（多步工具批次前叠几根就是折叠组上方
+// 那一大片空白，实测 5 根 = 56px）。
+export function assistantRowRenderState(msg) {
+  if (msg?.role !== 'assistant') return { key: '', blank: false, empty: false };
+  const streaming = msg.streaming === true;
+  const done = msg.done === true;
+  const hasBody = msg.hasBody === true;
+  const error = !!msg.error;
+  const system = !!msg.system;
+  const welcome = !!msg.welcome;
+  const reasoningLive = !isReasoningHidden(msg);
+  const attachments = Array.isArray(msg.attachments) ? msg.attachments.length : 0;
+  const suggestions = Array.isArray(msg.suggestions) ? msg.suggestions.length : 0;
+  // 本轮统计行（时长/cache/tokens/导出按钮）就挂在这根行上，悬停可见，不能藏
+  const roundStats = !!msg.roundDurationText;
+  const key = [streaming, done, hasBody, error, system, welcome, reasoningLive, attachments, suggestions, roundStats].join(',');
+  // 正文兜底读一把：老快照里存在“有正文但没有 hasBody 标志”的行（实测 5730 条），
+  // 少这一道就会把真消息藏掉。它不进 key：能写正文的地方都同步置 hasBody，
+  // 两者的翻转必然同帧发生（已定稿的行的正文不会再变）。
+  const empty = !error && !system && !welcome && !hasBody && !reasoningLive
+    && !attachments && !suggestions && !roundStats
+    && String(msg.content || '').trim() === '';
+  // blank 比 empty 多两道闸门：只有已封口的空壳行才连消息都不算（显示列表、归档
+  // 额度与计数、运行时/落盘保留共用这一条）。运行中尚未封口的空壳行仍是一条消息，
+  // 只是此刻渲染不出东西 —— 那种行样式上要退出尺寸估计（见 .is-empty-row），否则
+  // 浏览器把它当离屏内容时会拿 120px 估计值占位。
+  const blank = empty && !streaming && done;
+  return { key, blank, empty };
 }
 
 export function displaySourceMessages(session, expandedArchiveSessions, options = {}) {

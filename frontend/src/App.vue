@@ -282,8 +282,9 @@ Public License v3. See the LICENSE file for details.
                   :context-usage-style="contextUsageStyle"
                   :workspace-input-tokens="workspaceInputTokens"
                   :workspace-output-tokens="workspaceOutputTokens"
-                  :task-center-count="taskCenterCount"
-                  :task-center-running-count="scheduledTaskRunningCount + serviceRunningCount"
+                  :service-running-count="serviceRunningCount"
+                  :scheduled-count="scheduledLiveCount"
+                  :scheduled-running-count="scheduledTaskRunningCount"
                   :fmt-k="fmtK"
                   :extra-roots="extraRoots"
                   :explorer-visible="explorerVisibleFor(activeWorkspaceId)"
@@ -399,6 +400,7 @@ Public License v3. See the LICENSE file for details.
           </n-layout>
           <TaskCenterPanel
             :show="taskCenterVisible"
+            :default-tab="taskCenterTab"
             :tasks="scheduledTasks"
             :services="services"
             :scheduled-loading="scheduledTasksLoading"
@@ -622,6 +624,7 @@ import { formatDateTime, naiveDateLocale, naiveLocale, reasoningEffortLabel, t, 
 import { fmtCompact, fmtDuration } from './utils/format.mjs';
 import { isSkillActive, normalizeSkillName } from './utils/skills.mjs';
 import {
+  assistantRowRenderState,
   displaySourceMessages as buildDisplaySourceMessages,
   formatBytes,
   formatHttpToolTitle,
@@ -1687,6 +1690,8 @@ const availableTools = ref([]);
 const scheduledTasks = ref([]);
 const services = ref([]);
 const taskCenterVisible = ref(false);
+// 工具栏两个入口 chip 各自直达对应 Tab（S=后台服务 / C=定时任务）。
+const taskCenterTab = ref('services');
 // Workspace explorer 状态按 Tab 独立保存：切换 Tab 时不会重置或取消任何
 // 每个 Tab 看到自己工作区的目录树。已经打开过的 Tab
 // 会保留一个常驻组件实例（v-show 切换），编辑草稿不因切 Tab 丢失。
@@ -2095,12 +2100,15 @@ function sessionDisplayTitle(session) {
   return promptSummaryText(title, SESSION_PROMPT_SUMMARY_MAX_CHARS);
 }
 
-// recountSessionMessages 是 session.messageCount 的唯一重算口径：user + assistant。
-// 所有写入点都必须调用它，禁止再内联同口径的 filter 重算。
+// recountSessionMessages 是 session.messageCount 的唯一重算口径：user + assistant 里
+// 真正算得上一根消息的行（isRenderableMessage：渲染不出东西的空壳行不算——它们不进
+// 显示列表，也永远进不了模型上下文）。空壳行通常也会被落盘裁剪丢掉，只有走“模型
+// 历史”那条支路时可能留下一根白占磁盘，所以计数可能比实际存下的行略少。所有写入点
+// 都必须调用它，禁止再内联同口径的 filter 重算。
 function recountSessionMessages(session) {
   if (!Array.isArray(session?.messages)) return 0;
   return session.messages.filter(
-    (message) => message?.role === 'user' || message?.role === 'assistant'
+    (message) => (message?.role === 'user' || message?.role === 'assistant') && isRenderableMessage(message)
   ).length;
 }
 
@@ -2517,9 +2525,8 @@ const serviceRunningCount = computed(() => services.value.filter((service) => ['
 // 徽标数字只算“还活着”的条目：一次性任务跑完（nextRunAt 归零）不会再触发，
 // 已退出服务只是事后可查（后端 finishedQueue 保留最近 8 条）——它们仍然
 // 列在面板里，但不应把常驻徽标撑大。
-const taskCenterCount = computed(() =>
-  scheduledTasks.value.filter((task) => task?.running || Number(task?.nextRunAt || 0) > 0).length
-  + services.value.filter((service) => ['starting', 'running'].includes(service?.status)).length);
+const scheduledLiveCount = computed(() =>
+  scheduledTasks.value.filter((task) => task?.running || Number(task?.nextRunAt || 0) > 0).length);
 function todosForSession(sessionId) {
   const entries = sessionId ? todosBySession[sessionId] : null;
   return Array.isArray(entries) ? entries : [];
@@ -2614,22 +2621,25 @@ function toggleArchiveMessages(sessionId) {
 // Merge consecutive read tool cards into a single aggregated card.
 //
 // perf: the display list and read-card merge depend only on message-list shape
-// and archive expansion state. A structural signature lets content-only
-// streaming updates reuse the cached array without re-running the O(n) merge
-// or re-allocating its output.
+// and archive expansion state. A signature lets content-only streaming updates
+// reuse the cached array without re-running the O(n) merge or re-allocating its
+// output — so the signature must cover **every** input of the merge: （1）结构字段，
+// （2）工具的渲染字段（toolCardRenderSignature），（3）行可见性状态：哪些空壳
+// assistant 行不算消息、哪些行还挂着统计/附件，直接决定归档额度算给谁、折叠组
+// 里有没有行要上提下压。第 3 项与 isRenderableMessage 同源（assistantRowRenderState）。
+// 仍然不读正文：正文由子组件按增量渲染，父级渲染 effect 一旦订阅它，每个流式增量
+// 都要重算整张列表。
 const displayMessagesCacheBySession = new Map();
 function buildDisplayMessagesSignature(session, expanded) {
   const msgs = session?.messages;
   if (!msgs) return '';
   const parts = [`session:${session?.id || ''}`, `len:${msgs.length}`, `exp:${expanded.has(session?.id) ? 1 : 0}`];
-  // Only structural fields — no content/body access, so we don't subscribe
-  // to streaming content mutations.
   for (let i = 0; i < msgs.length; i++) {
     const m = msgs[i];
     if (m?.role === 'tool_call') {
       parts.push(toolCardRenderSignature(m));
     } else {
-      parts.push(`${m.role}:${m.kind || ''}:${m.status || ''}:${m.name || ''}:${m.eventId || ''}`);
+      parts.push(`${m.role}:${m.kind || ''}:${m.status || ''}:${m.name || ''}:${m.eventId || ''}:${assistantRowRenderState(m).key}`);
     }
   }
   return parts.join('|');
@@ -2652,6 +2662,8 @@ function displayMessagesForSession(session) {
     // render above the fold). A trailing reasoning-only message — the model
     // thinking right before its final answer — stays BELOW the fold: once its
     // text streams in it must not shove the fold upward.
+    // 空壳思考行到不了这里（isRenderableMessage 已经把“渲染不出东西”的行挡在源头）；
+    // 这里真正要上提/下压的空行是仍然要显示的：流式中的思考行，以及挂统计/附件的行。
     if (m.role === 'tool_call' && (m.kind === 'read' || m.kind === 'grep' || m.kind === 'list')) {
       const skippedThinks = [];
       let pendingThinks = [];
@@ -6768,7 +6780,8 @@ async function refreshTaskCenter() {
   await Promise.all([loadScheduledTasks(), loadServices()]);
 }
 
-async function openTaskCenter() {
+async function openTaskCenter(tab = 'services') {
+  taskCenterTab.value = tab === 'scheduled' ? 'scheduled' : 'services';
   taskCenterVisible.value = true;
   await refreshTaskCenter();
 }

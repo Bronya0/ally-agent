@@ -106,12 +106,23 @@ Public License v3. See the LICENSE file for details.
     </span>
     <button
       type="button"
-      :class="['scheduled-task-chip', { running: taskCenterRunningCount > 0 }]"
-      :title="$t('composer.taskCenter.open')"
-      @click.stop="$emit('openTaskCenter')"
+      :class="['task-chip', 'task-chip-service', { running: serviceRunningCount > 0 }]"
+      :title="`${$t('composer.taskCenter.services')} · ${$t('service.runningCount', { count: serviceRunningCount })}`"
+      :aria-label="$t('composer.taskCenter.services')"
+      @click.stop="$emit('openTaskCenter', 'services')"
     >
-      <AppstoreOutlined class="scheduled-task-icon" />
-      <span>{{ taskCenterCount }}</span>
+      <span class="task-chip-letter">S</span>
+      <span>{{ serviceRunningCount }}</span>
+    </button>
+    <button
+      type="button"
+      :class="['task-chip', 'task-chip-scheduled', { running: scheduledRunningCount > 0 }]"
+      :title="`${$t('composer.taskCenter.scheduled')} · ${$t('scheduled.runningCount', { count: scheduledRunningCount })}`"
+      :aria-label="$t('composer.taskCenter.scheduled')"
+      @click.stop="$emit('openTaskCenter', 'scheduled')"
+    >
+      <span class="task-chip-letter">C</span>
+      <span>{{ scheduledCount }}</span>
     </button>
     <template v-if="gitStatus.isRepo">
       <span class="info-sep">·</span>
@@ -275,7 +286,6 @@ import MenuOutlined from '@vicons/antd/MenuOutlined';
 import FolderOpenTwotone from '@vicons/antd/FolderOpenTwotone';
 import FolderAddOutlined from '@vicons/antd/FolderAddOutlined';
 import CodeOutlined from '@vicons/antd/CodeOutlined';
-import AppstoreOutlined from '@vicons/antd/AppstoreOutlined';
 import CloseOutlined from '@vicons/antd/CloseOutlined';
 import { formatDateTime, reasoningEffortLabel, t } from '../i18n.mjs';
 import { formatModelLabel } from '../utils/modelLabel.mjs';
@@ -360,8 +370,9 @@ const props = defineProps({
   contextUsageStyle: { type: Object, default: () => ({}) },
   workspaceInputTokens: { type: String, default: '0' },
   workspaceOutputTokens: { type: String, default: '0' },
-  taskCenterCount: { type: Number, default: 0 },
-  taskCenterRunningCount: { type: Number, default: 0 },
+  serviceRunningCount: { type: Number, default: 0 },
+  scheduledCount: { type: Number, default: 0 },
+  scheduledRunningCount: { type: Number, default: 0 },
   extraRoots: { type: Array, default: () => [] },
   explorerVisible: { type: Boolean, default: false },
   fmtK: { type: Function, required: true },

@@ -293,9 +293,9 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:47821/api/v1/sessions?
 
 请求体（可选）：`{ "graceSeconds": 3 }`——优雅终止等待时间，缺省 3 秒、上限 30 秒，超时后强制杀死整个进程树。不存在返回 404。
 
-### `GET /api/v1/tasks` — 查询临时计划任务
+### `GET /api/v1/tasks` — 查询计划任务
 
-响应 `data.tasks[]`：`{ id, name, instruction, workspace, schedule, permissionMode, maxSteps, timeoutSeconds, nextRunAt, lastRunAt, lastStatus, lastSummary, lastError, running, ... }`。计划任务仅存活于当前 Ally 进程。
+响应 `data.tasks[]`：`{ id, name, instruction, workspace, schedule, permissionMode, maxSteps, timeoutSeconds, nextRunAt, lastRunAt, lastStatus, lastSummary, lastError, running, ... }`。计划任务持久化在配置目录，重新启动 Ally 后继续运行。
 
 ### `DELETE /api/v1/tasks/{id}` — 删除计划任务
 

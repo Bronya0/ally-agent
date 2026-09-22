@@ -38,7 +38,7 @@
 - 可将复杂任务委派给并行子代理，实时查看步骤、工具活动、Token 用量和最终摘要
 - MCP 支持 stdio、SSE 和 Streamable HTTP，可使用表单或原始 JSON 配置
 - 使用可发现的 Skills 扩展工作流程，并通过全局记忆保存跨项目知识；内置技能含 `codegraph`、`playwright-cli`、`anydoc`（Office/PDF 转 Markdown）
-- 管理多个工作区、聊天会话、Todo 和仅当前进程有效的定时任务，内置文件浏览器与文件编辑器
+- 管理多个工作区、聊天会话、Todo 和重启后继续运行的定时任务，内置文件浏览器与文件编辑器
 - 支持短时命令和带任务中心日志查看的后台进程；Windows 会自动发现 Git Bash，必要时回退到 PowerShell
 - 支持抓取网页与调用 HTTP API，带响应大小上限、超时、重定向限制与每主机限速
 - 异步 Token 统计仪表盘，可视化用量趋势
