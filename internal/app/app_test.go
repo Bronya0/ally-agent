@@ -1337,12 +1337,11 @@ func TestAppEmitUsesHostEventSink(t *testing.T) {
 
 func TestHandleTodoListRejectsMultipleInProgress(t *testing.T) {
 	app := NewApp()
-	_, err := app.handleTodoList("session-1", TodoListRequest{
-		Todos: []TodoEntry{
-			{Title: "Inspect implementation", Status: "in_progress"},
-			{Title: "Run tests", Status: "in_progress"},
-		},
-	})
+	todos := []TodoEntry{
+		{Title: "Inspect implementation", Status: "in_progress"},
+		{Title: "Run tests", Status: "in_progress"},
+	}
+	_, err := app.handleTodoList("session-1", TodoListRequest{Todos: &todos})
 	if err == nil || !strings.Contains(err.Error(), "at most one todo") {
 		t.Fatalf("handleTodoList() error = %v, want at-most-one in_progress rejection", err)
 	}
@@ -1350,12 +1349,11 @@ func TestHandleTodoListRejectsMultipleInProgress(t *testing.T) {
 
 func TestHandleTodoListAllowsSingleInProgress(t *testing.T) {
 	app := NewApp()
-	res, err := app.handleTodoList("session-1", TodoListRequest{
-		Todos: []TodoEntry{
-			{Title: "Inspect implementation", Status: "in_progress"},
-			{Title: "Run tests", Status: "pending"},
-		},
-	})
+	todos := []TodoEntry{
+		{Title: "Inspect implementation", Status: "in_progress"},
+		{Title: "Run tests", Status: "pending"},
+	}
+	res, err := app.handleTodoList("session-1", TodoListRequest{Todos: &todos})
 	if err != nil {
 		t.Fatalf("handleTodoList() error = %v", err)
 	}
@@ -1371,12 +1369,11 @@ func TestHandleTodoListAllowsSingleInProgress(t *testing.T) {
 
 func TestHandleTodoListStartsFirstPendingItem(t *testing.T) {
 	app := NewApp()
-	res, err := app.handleTodoList("session-1", TodoListRequest{
-		Todos: []TodoEntry{
-			{Title: "Inspect implementation", Status: "pending"},
-			{Title: "Run tests", Status: "pending"},
-		},
-	})
+	todos := []TodoEntry{
+		{Title: "Inspect implementation", Status: "pending"},
+		{Title: "Run tests", Status: "pending"},
+	}
+	res, err := app.handleTodoList("session-1", TodoListRequest{Todos: &todos})
 	if err != nil {
 		t.Fatalf("handleTodoList() error = %v", err)
 	}
@@ -1388,9 +1385,8 @@ func TestHandleTodoListStartsFirstPendingItem(t *testing.T) {
 
 func TestHandleTodoListDoesNotRestartAllDoneList(t *testing.T) {
 	app := NewApp()
-	res, err := app.handleTodoList("session-1", TodoListRequest{
-		Todos: []TodoEntry{{Title: "Finished", Status: "done"}},
-	})
+	todos := []TodoEntry{{Title: "Finished", Status: "done"}}
+	res, err := app.handleTodoList("session-1", TodoListRequest{Todos: &todos})
 	if err != nil {
 		t.Fatalf("handleTodoList() error = %v", err)
 	}
@@ -1402,15 +1398,59 @@ func TestHandleTodoListDoesNotRestartAllDoneList(t *testing.T) {
 
 func TestTodoResultDoesNotContainPlanMarker(t *testing.T) {
 	app := NewApp()
-	res, err := app.handleTodoList("session-1", TodoListRequest{
-		Todos: []TodoEntry{{Title: "Inspect implementation", Status: "pending"}},
-	})
+	todos := []TodoEntry{{Title: "Inspect implementation", Status: "pending"}}
+	res, err := app.handleTodoList("session-1", TodoListRequest{Todos: &todos})
 	if err != nil {
 		t.Fatalf("handleTodoList() error = %v", err)
 	}
 	message := res.(map[string]any)["message"].(string)
 	if strings.Contains(message, "revision") || strings.Contains(message, "<ally-plan") {
 		t.Fatalf("todo result contains an internal plan marker: %q", message)
+	}
+}
+
+func TestHandleTodoListUpdateAndClear(t *testing.T) {
+	app := NewApp()
+	sessionID := "session-qa"
+
+	// 初始化三项任务
+	todos := []TodoEntry{
+		{Title: "Step 1", Status: "pending"},
+		{Title: "Step 2", Status: "pending"},
+		{Title: "Step 3", Status: "pending"},
+	}
+	_, err := app.handleTodoList(sessionID, TodoListRequest{Todos: &todos})
+	if err != nil {
+		t.Fatalf("setup failed: %v", err)
+	}
+
+	// 验证第一项已自动推进为 in_progress
+	list := app.todos[sessionID]
+	if len(list) != 3 || list[0].Status != "in_progress" || list[1].Status != "pending" {
+		t.Fatalf("unexpected state after init: %#v", list)
+	}
+
+	// 推进：更新状态
+	todos[0].Status = "done"
+	todos[1].Status = "in_progress"
+	res, err := app.handleTodoList(sessionID, TodoListRequest{Todos: &todos})
+	if err != nil {
+		t.Fatalf("update failed: %v", err)
+	}
+	got := res.(map[string]any)["todos"].([]TodoEntry)
+	if got[0].Status != "done" || got[1].Status != "in_progress" || got[2].Status != "pending" {
+		t.Fatalf("unexpected state after update: %#v", got)
+	}
+
+	// 清空列表：传空数组
+	empty := []TodoEntry{}
+	res, err = app.handleTodoList(sessionID, TodoListRequest{Todos: &empty})
+	if err != nil {
+		t.Fatalf("clear failed: %v", err)
+	}
+	got = res.(map[string]any)["todos"].([]TodoEntry)
+	if len(got) != 0 {
+		t.Fatalf("expected empty todos after clear, got %#v", got)
 	}
 }
 

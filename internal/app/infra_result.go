@@ -714,6 +714,9 @@ func renderGrepResultForModel(r GrepResult) string {
 	for _, n := range notes {
 		b.WriteString(n + "\n")
 	}
+	if nextOffset > 0 {
+		fmt.Fprintf(&b, "[Truncated. Use offset=%d to continue.]\n", nextOffset)
+	}
 	// Rows, counts, and notes carry outside-injection text (paths, match
 	// previews, skip reasons); a literal closing marker in them would forge
 	// the block boundary, so the marker shape is escaped (readable but inert).

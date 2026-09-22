@@ -786,14 +786,34 @@ func (a *App) handleTodoList(sessionID string, req TodoListRequest) (any, error)
 		return nil, errors.New("no active session")
 	}
 
+	a.mu.Lock()
+	// Query mode: return current list
+	if req.Todos == nil {
+		list := a.todos[sid]
+		if list == nil {
+			list = []TodoEntry{}
+		}
+		list = cloneTodos(list)
+		revision := a.todoRevisions[sid]
+		a.mu.Unlock()
+		return map[string]any{
+			"todos":    list,
+			"revision": revision,
+			"message":  "Current todo list.",
+		}, nil
+	}
+
+	todos := *req.Todos
 	inProgress := 0
-	for _, todo := range req.Todos {
+	for _, todo := range todos {
 		switch todo.Status {
 		case "pending", "in_progress", "done":
 		default:
+			a.mu.Unlock()
 			return nil, fmt.Errorf("invalid todo status %q: must be pending, in_progress, or done", todo.Status)
 		}
 		if strings.TrimSpace(todo.Title) == "" {
+			a.mu.Unlock()
 			return nil, errors.New("todo title is required")
 		}
 		if todo.Status == "in_progress" {
@@ -801,10 +821,9 @@ func (a *App) handleTodoList(sessionID string, req TodoListRequest) (any, error)
 		}
 	}
 	if inProgress > 1 {
+		a.mu.Unlock()
 		return nil, fmt.Errorf("at most one todo may be in_progress at a time (got %d): mark the current item done or pending before starting another", inProgress)
 	}
-
-	a.mu.Lock()
 	// Query mode: return current list
 	if req.Todos == nil {
 		list := a.todos[sid]
@@ -825,7 +844,7 @@ func (a *App) handleTodoList(sessionID string, req TodoListRequest) (any, error)
 	// first pending item, so a newly created list immediately has a visible
 	// current step. This also repairs an update that finished the old step
 	// without selecting the next one.
-	updated := cloneTodos(req.Todos)
+	updated := cloneTodos(todos)
 	if inProgress == 0 {
 		for i := range updated {
 			if updated[i].Status == "pending" {

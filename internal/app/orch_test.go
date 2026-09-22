@@ -616,10 +616,22 @@ func TestAskToolWaitsForValidatedSubmission(t *testing.T) {
 	}
 }
 
-func TestAskRejectsMissingRecommendation(t *testing.T) {
-	result := NewApp().executeTool(context.Background(), ConfigState{}, "session-1", "ask", []byte(`{"questions":[{"id":"q1","question":"Choose","options":[{"id":"a","label":"A","description":"First","recommended":false},{"id":"b","label":"B","description":"Second","recommended":false}]}]}`))
-	if result.OK || result.ErrorCode != "E_BAD_ASK" {
-		t.Fatalf("expected invalid recommendation count to fail, got %#v", result)
+func TestAskAllowsOptionalRecommendation(t *testing.T) {
+	// recommended=false on all options is now allowed (recommended is optional)
+	err := validateAskRequest(AskRequest{
+		Questions: []AskQuestion{
+			{
+				ID:       "q1",
+				Question: "Choose",
+				Options: []AskOption{
+					{ID: "a", Label: "A", Description: "First"},
+					{ID: "b", Label: "B", Description: "Second"},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected optional recommendation to succeed, got error: %v", err)
 	}
 }
 

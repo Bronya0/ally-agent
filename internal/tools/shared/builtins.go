@@ -127,7 +127,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"seconds", "reason"},
 		}),
-		functionTool("ask", "Ask the user decision questions. Each question requires concise options with id, label, description, and exactly one recommended option.", map[string]any{
+		functionTool("ask", "Ask the user decision questions. Each question requires concise options with id, label, and optional description and recommended flag.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"questions": map[string]any{
@@ -144,10 +144,10 @@ func chatToolsUncached() []openai.Tool {
 									"properties": map[string]any{
 										"id":          map[string]any{"type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[A-Za-z0-9_-]+$"},
 										"label":       map[string]any{"type": "string", "minLength": 1, "maxLength": 120, "pattern": ".*\\S.*"},
-										"description": map[string]any{"type": "string", "minLength": 1, "maxLength": 400, "pattern": ".*\\S.*"},
-										"recommended": map[string]any{"type": "boolean"},
+										"description": map[string]any{"type": "string", "maxLength": 400, "description": "Optional details for this option."},
+										"recommended": map[string]any{"type": "boolean", "description": "Optional flag marking a recommended option."},
 									},
-									"required": []string{"id", "label", "description", "recommended"},
+									"required": []string{"id", "label"},
 								},
 							},
 						},
@@ -311,7 +311,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"html"},
 		}),
-		functionTool("plan", "Manage the session task list. Update todo statuses (pending, in_progress, done) or omit to read the current plan.", map[string]any{
+		functionTool("plan", "Manage the session task list. Sets or updates the whole todo list (pending, in_progress, done), or pass an empty array to clear. Omit todos to read the current plan.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"todos": map[string]any{
@@ -373,7 +373,7 @@ var builtinToolExamples = map[string]string{
 	"edit":               `{"path":"app.go","version":"9k3m7x","changes":[{"oldText":"const oldName = oldValue","newText":"const newName = newValue"}]}; lineRange: {"path":"app.go","version":"9k3m7x","changes":[{"lineRange":"40-72","newText":"replacement block"}]}`,
 	"command":            `{"command":"go test ./...","cwd":".","timeout":120}`,
 	"service":            `start: {"action":"start","name":"frontend","command":"npm run dev","cwd":"frontend"}; stop: {"action":"stop","id":"svc_..."}; list: {"action":"list"}; read: {"action":"read","id":"svc_...","tailBytes":8192}`,
-	"ask":                `{"questions":[{"id":"database","question":"Which database should we use?","options":[{"id":"sqlite","label":"SQLite","description":"Simple local storage.","recommended":true},{"id":"postgres","label":"PostgreSQL","description":"Production database.","recommended":false}]}]}`,
+	"ask":                `{"questions":[{"id":"database","question":"Which database should we use?","options":[{"id":"sqlite","label":"SQLite","description":"Simple local storage.","recommended":true},{"id":"postgres","label":"PostgreSQL","description":"Production database."}]}]}`,
 	"remote_read":        `{"target":"my-dev:/srv/app","files":[{"path":"main.go"}]}`,
 	"remote_edit":        `{"target":"my-dev:/srv/app","path":"main.go","version":"9k3m7x","changes":[{"oldText":"func old() {}","newText":"func new() {}"}]}`,
 	"remote_run_command": `{"target":"my-dev:/srv/app","command":"go test ./..."}`,
@@ -382,6 +382,7 @@ var builtinToolExamples = map[string]string{
 	"read":               `one file: {"files":[{"path":"app.go"}]}; multiple files: {"files":[{"path":"app.go"},{"path":"main.go"}]}; range: {"files":[{"path":"services.go","startLine":1,"endLine":200}]}; tail: {"files":[{"path":"server.log","startLine":-200}]}`,
 	"render_html":        `{"html":"<div id=\"chart\" style=\"width:100%;height:350px;\"></div><script>const c=echarts.init(document.getElementById('chart'),'dark');c.setOption({title:{text:'Metrics'},xAxis:{data:['Mon','Tue','Wed','Thu','Fri']},yAxis:{},series:[{type:'bar',data:[12,34,56,78,90]}]});</script>"}`,
 	"subagent":           `{"task":"Inspect the authentication module and report concrete security issues.","role":"code reviewer","maxSteps":20,"description":"Review authentication"}`,
+	"plan":               `{"todos":[{"title":"Inspect code","status":"in_progress"},{"title":"Run tests","status":"pending"}]}; clear: {"todos":[]}`,
 }
 
 func functionTool(name, description string, parameters map[string]any) openai.Tool {

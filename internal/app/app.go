@@ -1286,7 +1286,7 @@ type TodoEntry struct {
 }
 
 type TodoListRequest struct {
-	Todos []TodoEntry `json:"todos,omitempty"`
+	Todos *[]TodoEntry `json:"todos,omitempty"`
 }
 
 type AgentDelegateRequest struct {
@@ -2757,9 +2757,7 @@ func validateAskRequest(req AskRequest) error {
 				recommended++
 			}
 		}
-		if recommended != 1 {
-			return codedToolError("E_BAD_ASK", fmt.Errorf("question %s must mark exactly one option as recommended", question.ID))
-		}
+		// recommended 变为可选，不再强求 recommended == 1，允许 0、1 或多个推荐项
 	}
 	return nil
 }
