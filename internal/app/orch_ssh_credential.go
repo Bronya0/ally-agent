@@ -252,7 +252,16 @@ func (a *App) redactSSHCredentials(s string) string {
 // password can coexist (-i plus askpass fallback).
 // The returned cleanup removes the helper temp dir and must be deferred.
 func (a *App) prepareRemoteSSHInvocation(ctx context.Context, rt remoteTarget, port string) (args []string, env []string, cleanup func(), err error) {
-	args = []string{"-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3"}
+	// StrictHostKeyChecking=accept-new automatically records unseen host keys into
+	// ~/.ssh/known_hosts without prompting (preventing Host key verification failed
+	// before auth in non-interactive batch sessions), while still rejecting changed
+	// host keys to guard against man-in-the-middle attacks.
+	args = []string{
+		"-o", "ConnectTimeout=10",
+		"-o", "ServerAliveInterval=15",
+		"-o", "ServerAliveCountMax=3",
+		"-o", "StrictHostKeyChecking=accept-new",
+	}
 	if port != "" {
 		args = append(args, "-p", port)
 	}
@@ -269,7 +278,9 @@ func (a *App) prepareRemoteSSHInvocation(ctx context.Context, rt remoteTarget, p
 		// 因 MaxAuthTries 提前断连；用户显式指定的密钥即为唯一身份。
 		args = append(args, "-i", entry.keyPath, "-o", "IdentitiesOnly=yes")
 	}
-	args = append(args, rt.Host, "python3", "-")
+	// 远端优先使用 python3，若不存在则回退至 python（Python 2.7+），
+	// 经 sh -c 探测后用 exec 替换进程执行，避免写死 python3 导致仅有 Python 2 的老系统失败。
+	args = append(args, rt.Host, "sh -c 'command -v python3 >/dev/null 2>&1 && exec python3 - || exec python -'")
 	if !hasPassword {
 		return append([]string{"-o", "BatchMode=yes"}, args...), nil, func() {}, nil
 	}

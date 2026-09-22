@@ -36,8 +36,8 @@ const remotePythonMarker = "ALLY_REMOTE_RESULT_JSON:"
 const maxRemoteReadBatchBytes = 16 * 1024 * 1024
 
 const remotePythonScript = `
-import base64, json, os, pathlib, selectors, shutil, signal, stat as stat_mod, subprocess, sys, tempfile, time
-from datetime import datetime, timezone
+from __future__ import print_function
+import base64, errno, json, os, select, shutil, signal, stat as stat_mod, subprocess, sys, tempfile, time
 
 MARKER = "ALLY_REMOTE_RESULT_JSON:"
 
@@ -50,8 +50,15 @@ DELETE_PROTECTED_TREES = __DELETE_PROTECTED_TREES__
 # 整个脚本经 ssh stdin 发送，避免大 payload 塞进命令行参数。
 PAYLOAD_B64 = "__PAYLOAD_B64__"
 
+def to_unicode(s):
+    if sys.version_info[0] < 3:
+        if isinstance(s, str):
+            return s.decode("utf-8", "replace")
+        return unicode(s)
+    return str(s)
+
 def fail(msg):
-    print(MARKER + json.dumps({"ok": False, "error": str(msg)}, separators=(",", ":")))
+    print(MARKER + json.dumps({"ok": False, "error": to_unicode(msg)}, separators=(",", ":")))
     sys.exit(0)
 
 def ok(data):
@@ -60,10 +67,21 @@ def ok(data):
 
 def decode_payload():
     padding = "=" * (-len(PAYLOAD_B64) % 4)
-    return json.loads(base64.urlsafe_b64decode((PAYLOAD_B64 + padding).encode("ascii")).decode("utf-8"))
+    raw_b64 = (PAYLOAD_B64 + padding).encode("ascii")
+    decoded = base64.urlsafe_b64decode(raw_b64)
+    if hasattr(decoded, "decode"):
+        decoded = decoded.decode("utf-8")
+    return json.loads(decoded)
+
+def is_subpath(child, parent):
+    try:
+        rel = os.path.relpath(child, parent)
+        return rel != ".." and not rel.startswith(".." + os.sep) and not (os.altsep and rel.startswith(".." + os.altsep))
+    except (ValueError, OSError):
+        return False
 
 def as_posix_rel(root, path):
-    return pathlib.Path(path).relative_to(root).as_posix()
+    return os.path.relpath(path, root).replace("\\", "/")
 
 def safe_join(root, rel):
     rel = "" if rel is None else str(rel)
@@ -71,24 +89,28 @@ def safe_join(root, rel):
         raise ValueError("path contains NUL byte")
     if rel == "" or rel == ".":
         return root
-    rel_path = pathlib.PurePosixPath(rel.replace("\\", "/"))
-    if rel_path.is_absolute():
+    p = rel.replace("\\", "/")
+    if p.startswith("/"):
         raise ValueError("remote path must be relative to workspaceRoot")
-    if any(part == ".." for part in rel_path.parts):
+    parts = [part for part in p.split("/") if part and part != "."]
+    if any(part == ".." for part in p.split("/")):
         raise ValueError("remote path must not contain '..'")
-    target = (root / pathlib.Path(*rel_path.parts)).resolve(strict=False)
-    if os.path.commonpath([str(root), str(target)]) != str(root):
+    lexical = os.path.normpath(os.path.join(root, *parts)) if parts else root
+    if not is_subpath(lexical, root):
         raise ValueError("remote path is outside workspaceRoot")
-    return target
-
+    resolved = os.path.realpath(lexical)
+    if not is_subpath(resolved, root):
+        raise ValueError("remote path is outside workspaceRoot")
+    return resolved
 
 def contains_vcs(path):
-    return any(part in {".git", ".svn", ".hg"} for part in path.parts)
+    parts = path.replace("\\", "/").split("/")
+    return any(part in (".git", ".svn", ".hg") for part in parts)
 
 def is_protected_delete_path(path):
     # 与本地 isDangerousDeletePath 的 Linux/macOS 分支保持一致
     # （远端只可能是 posix 系统）。统一转成 posix 形式再判断，
-    # 避免 Windows 本地测试时 pathlib 把 /etc 渲染成 \etc。
+    # 避免 Windows 本地测试时把 /etc 渲染成 \etc。
     p = str(path).replace(os.sep, "/")
     if p == "/":
         return True
@@ -120,23 +142,31 @@ def is_protected_delete_path(path):
     return False
 
 def iso_mtime(st):
-    return datetime.fromtimestamp(st.st_mtime, timezone.utc).isoformat()
-
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(st.st_mtime))
 
 def read_raw_file(root, rel, max_bytes):
     path = safe_join(root, rel)
-    st = path.stat()
+    st = os.stat(path)
     if stat_mod.S_ISDIR(st.st_mode):
         raise ValueError("path is a directory")
     if st.st_size > max_bytes:
         raise ValueError("file is too large: %d bytes" % st.st_size)
-    with open(str(path), "rb") as f:
+    with open(path, "rb") as f:
         # stat 与 read 之间文件可能被追加，按实际读取字节数兜底判定，
         # 防止增长中的文件绕过尺寸预算。
         data = f.read(max_bytes + 1)
     if len(data) > max_bytes:
         raise ValueError("file is too large: %d bytes" % len(data))
-    return {"path": as_posix_rel(root, path), "dataBase64": base64.b64encode(data).decode("ascii"), "size": len(data), "mode": st.st_mode & 0o777, "modTime": iso_mtime(st)}
+    b64 = base64.b64encode(data)
+    if hasattr(b64, "decode"):
+        b64 = b64.decode("ascii")
+    return {
+        "path": as_posix_rel(root, path),
+        "dataBase64": str(b64),
+        "size": len(data),
+        "mode": st.st_mode & 0o777,
+        "modTime": iso_mtime(st),
+    }
 
 def op_read(root, payload):
     return read_raw_file(root, payload.get("path", ""), int(payload.get("maxBytes") or 2097152))
@@ -156,7 +186,7 @@ def op_read_batch(root, payload):
         try:
             data = read_raw_file(root, rel, max_bytes)
         except Exception as exc:
-            item["error"] = str(exc)
+            item["error"] = to_unicode(exc)
             files.append(item)
             continue
         if used + int(data["size"]) > total_bytes and files:
@@ -175,41 +205,47 @@ def op_write(root, payload):
     original_mode = None
     if overwrite:
         try:
-            existing_st = path.stat()
-        except FileNotFoundError:
-            existing_st = None
-        if existing_st is not None:
+            existing_st = os.stat(path)
             if stat_mod.S_ISDIR(existing_st.st_mode):
                 raise ValueError("path is a directory")
             original_mode = existing_st.st_mode & 0o7777
-    parent = path.parent
+        except (OSError, IOError) as exc:
+            if getattr(exc, "errno", None) != errno.ENOENT:
+                raise
+    parent = os.path.dirname(path)
     created_dirs = []
     if mkdirs:
         # 统计实际缺失的父目录链（外层→内层，相对 root），供调用方展示；
         # 必须在 mkdir 之前探测，mkdir 失败时整个 op 报错、列表无意义。
         cur = parent
-        while not cur.exists():
+        while cur and not os.path.exists(cur):
             created_dirs.append(as_posix_rel(root, cur))
-            cur = cur.parent
+            next_cur = os.path.dirname(cur)
+            if next_cur == cur:
+                break
+            cur = next_cur
         created_dirs.reverse()
-        parent.mkdir(parents=True, exist_ok=True)
-    elif not parent.exists():
-        raise FileNotFoundError(str(parent))
+        if not os.path.exists(parent):
+            os.makedirs(parent)
+    elif not os.path.exists(parent):
+        err = OSError(errno.ENOENT, "No such file or directory: " + parent)
+        err.filename = parent
+        raise err
     probe_created = False
     if not overwrite:
         # O_EXCL 原子探测（须在 mkdirs 之后）：目标已存在时立即失败，
         # 消除 stat→replace 窗口内的 TOCTOU 竞态；探测创建的空文件
         # 随后被 os.replace 原子覆盖，替换失败时由 finally 清理。
         try:
-            probe_fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        except (FileExistsError, PermissionError, IsADirectoryError):
+            probe_fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except (OSError, IOError) as exc:
             # POSIX 对已存在目标抛 EEXIST、对目录抛 EISDIR；Windows 对目录抛 EACCES。
             try:
-                if path.is_dir():
+                if os.path.isdir(path):
                     raise ValueError("path is a directory")
-            except OSError:
+            except (OSError, IOError):
                 pass
-            raise FileExistsError("file already exists: " + payload.get("path", ""))
+            raise ValueError("file already exists: " + str(payload.get("path", "")))
         probe_created = True
         os.close(probe_fd)
     data = None
@@ -217,8 +253,9 @@ def op_write(root, payload):
     tmp = None
     replaced = False
     try:
-        data = base64.b64decode(payload.get("dataBase64", ""))
-        fd, tmp = tempfile.mkstemp(prefix=".ally-write-", dir=str(parent))
+        raw_b64 = str(payload.get("dataBase64", ""))
+        data = base64.b64decode(raw_b64)
+        fd, tmp = tempfile.mkstemp(prefix=".ally-write-", dir=parent)
         # 覆盖时保留原文件权限位；新建文件对齐本地 SafeWriteFile 的 0644
         # 默认值——mkstemp 的 0600 会让远程新建文件对其他账号不可读。
         os.fchmod(fd, original_mode if original_mode is not None else 0o644)
@@ -227,19 +264,29 @@ def op_write(root, payload):
             f.write(data)
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp, path)
+        if hasattr(os, "replace"):
+            os.replace(tmp, path)
+        else:
+            if os.name == "nt":
+                try:
+                    os.rename(tmp, path)
+                except OSError:
+                    os.remove(path)
+                    os.rename(tmp, path)
+            else:
+                os.rename(tmp, path)
         replaced = True
     finally:
         if fd >= 0:
             try:
                 os.close(fd)
-            except OSError:
+            except (OSError, IOError):
                 pass
         if tmp is not None:
             try:
                 if os.path.exists(tmp):
                     os.unlink(tmp)
-            except OSError:
+            except (OSError, IOError):
                 pass
         if probe_created and not replaced and os.path.exists(path):
             # 替换失败时移除探针占位文件，避免残留空文件。
@@ -247,10 +294,16 @@ def op_write(root, payload):
             # 并发写同一路径不受支持（overwrite=false 语义本身排他）。
             try:
                 os.unlink(path)
-            except OSError:
+            except (OSError, IOError):
                 pass
-    st = path.stat()
-    return {"path": as_posix_rel(root, path), "size": st.st_size, "mode": st.st_mode & 0o7777, "modTime": iso_mtime(st), "createdDirs": created_dirs}
+    st = os.stat(path)
+    return {
+        "path": as_posix_rel(root, path),
+        "size": st.st_size,
+        "mode": st.st_mode & 0o7777,
+        "modTime": iso_mtime(st),
+        "createdDirs": created_dirs,
+    }
 
 def op_delete(root, payload):
     path = safe_join(root, payload.get("path", ""))
@@ -260,12 +313,12 @@ def op_delete(root, payload):
         raise ValueError("refusing to delete path containing VCS metadata")
     if is_protected_delete_path(path):
         raise ValueError("refusing to delete OS-sensitive path")
-    if path.is_dir():
+    if os.path.isdir(path):
         if not payload.get("recursive"):
             raise ValueError("path is a directory; set recursive=true")
         shutil.rmtree(path)
     else:
-        path.unlink()
+        os.unlink(path)
     return {"deleted": payload.get("path", "")}
 
 def check_write_targets(root, cwd, targets):
@@ -288,9 +341,9 @@ def check_write_targets(root, cwd, targets):
         lexical = p
         resolved = os.path.realpath(p)
         try:
-            lex_inside = os.path.commonpath([root_str, lexical]) == root_str
-            res_inside = os.path.commonpath([root_str, resolved]) == root_str
-        except ValueError:
+            lex_inside = is_subpath(lexical, root_str)
+            res_inside = is_subpath(resolved, root_str)
+        except (ValueError, OSError):
             lex_inside = False
             res_inside = False
         if lex_inside and not res_inside:
@@ -309,7 +362,7 @@ def op_run(root, payload):
         raise ValueError("command is required")
     cwd = safe_join(root, payload.get("cwd", ""))
     check_write_targets(root, cwd, payload.get("targets") or [])
-    if not cwd.is_dir():
+    if not os.path.isdir(cwd):
         raise ValueError("cwd is not a directory")
     timeout = int(payload.get("timeoutSeconds") or 120)
     if timeout < 1:
@@ -324,7 +377,30 @@ def op_run(root, payload):
     # start_new_session 与 preexec_fn=os.setsid 等价，但不会触发
     # Python 3.12+ 对 preexec_fn 的弃用警告；远端只可能是 posix。
     new_session = hasattr(os, "setsid")
-    proc = subprocess.Popen(command, shell=True, cwd=str(cwd), executable=shell, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=new_session)
+    popen_kwargs = {}
+    if new_session:
+        if sys.version_info >= (3, 2):
+            popen_kwargs["start_new_session"] = True
+        else:
+            popen_kwargs["preexec_fn"] = os.setsid
+    devnull = getattr(subprocess, "DEVNULL", None)
+    devnull_f = None
+    if devnull is None:
+        try:
+            devnull_f = open(os.devnull, "r+b")
+            devnull = devnull_f
+        except Exception:
+            devnull = subprocess.PIPE
+    proc = subprocess.Popen(
+        command,
+        shell=True,
+        cwd=str(cwd),
+        executable=shell,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        stdin=devnull,
+        **popen_kwargs
+    )
     # 取消运行时 Go 侧杀掉本地 ssh 客户端，sshd 只回收直接子进程（本脚
     # 本）；start_new_session 起的命令进程组收不到信号会变成远端孤儿进
     # 程。这里捕获终止信号，先击杀整个命令进程组再退出，保证会话中断
@@ -344,8 +420,6 @@ def op_run(root, payload):
     out = bytearray()
     truncated = False
     timed_out = False
-    sel = selectors.DefaultSelector()
-    sel.register(proc.stdout, selectors.EVENT_READ)
     deadline = start + timeout
     eof = False
     while True:
@@ -368,32 +442,52 @@ def op_run(root, payload):
             remain = deadline - time.time()
             if remain <= 0:
                 continue
-            try:
-                proc.wait(timeout=min(remain, 1.0))
-            except subprocess.TimeoutExpired:
-                pass
+            if hasattr(proc, "wait") and sys.version_info >= (3, 3):
+                try:
+                    proc.wait(timeout=min(remain, 0.5))
+                except Exception:
+                    pass
+            else:
+                time.sleep(min(remain, 0.05))
         else:
-            events = sel.select(timeout=0.1)
-            for key, _ in events:
-                chunk = key.fileobj.read1(8192) if hasattr(key.fileobj, "read1") else key.fileobj.read(8192)
-                if not chunk:
+            if os.name == "nt":
+                line = proc.stdout.readline()
+                if not line:
                     eof = True
-                    break
-                remain = max_output - len(out)
-                if remain > 0:
-                    out.extend(chunk[:remain])
-                if len(chunk) > remain:
-                    truncated = True
+                else:
+                    remain = max_output - len(out)
+                    if remain > 0:
+                        out.extend(line[:remain])
+                    if len(line) > remain:
+                        truncated = True
+            else:
+                rlist, _, _ = select.select([proc.stdout], [], [], 0.1)
+                if proc.stdout in rlist:
+                    if hasattr(proc.stdout, "read1"):
+                        chunk = proc.stdout.read1(8192)
+                    else:
+                        chunk = os.read(proc.stdout.fileno(), 8192)
+                    if not chunk:
+                        eof = True
+                    else:
+                        remain = max_output - len(out)
+                        if remain > 0:
+                            out.extend(chunk[:remain])
+                        if len(chunk) > remain:
+                            truncated = True
         if proc.poll() is not None:
             # 进程已退出；排空管道内剩余缓冲数据（最多等 0.5s，避免后台
             # 子进程持有 stdout fd 时无限阻塞）。
-            drain_deadline = time.time() + 0.5
-            while not eof and time.time() < drain_deadline:
-                events = sel.select(timeout=0.1)
-                if not events:
-                    break
-                for key, _ in events:
-                    chunk = key.fileobj.read1(8192) if hasattr(key.fileobj, "read1") else key.fileobj.read(8192)
+            if os.name != "nt":
+                drain_deadline = time.time() + 0.5
+                while not eof and time.time() < drain_deadline:
+                    rlist, _, _ = select.select([proc.stdout], [], [], 0.1)
+                    if not rlist or proc.stdout not in rlist:
+                        break
+                    if hasattr(proc.stdout, "read1"):
+                        chunk = proc.stdout.read1(8192)
+                    else:
+                        chunk = os.read(proc.stdout.fileno(), 8192)
                     if not chunk:
                         eof = True
                         break
@@ -403,15 +497,24 @@ def op_run(root, payload):
                     if len(chunk) > remain:
                         truncated = True
             break
-    sel.close()
     try:
-        proc.wait(timeout=5)
+        if hasattr(proc, "wait") and sys.version_info >= (3, 3):
+            proc.wait(timeout=5)
+        else:
+            wait_deadline = time.time() + 5
+            while time.time() < wait_deadline and proc.poll() is None:
+                time.sleep(0.05)
     except Exception:
         pass
     try:
         proc.stdout.close()
     except Exception:
         pass
+    if devnull_f is not None:
+        try:
+            devnull_f.close()
+        except Exception:
+            pass
     exit_code = proc.poll()
     if exit_code is None:
         # 兜底：极端情况下进程仍未退出（如 D 状态不可中断），报告 -1 而非 0
@@ -419,13 +522,28 @@ def op_run(root, payload):
     if timed_out:
         exit_code = -1
     duration = int((time.time() - start) * 1000)
-    output = out.decode("utf-8", errors="replace")
-    return {"command": command, "cwd": str(cwd), "shell": shell, "shellPath": shell, "output": output, "exitCode": exit_code, "timedOut": timed_out, "durationMs": duration, "truncated": truncated}
+    output = bytes(out).decode("utf-8", "replace")
+    return {
+        "command": command,
+        "cwd": str(cwd),
+        "shell": shell,
+        "shellPath": shell,
+        "output": output,
+        "exitCode": exit_code,
+        "timedOut": timed_out,
+        "durationMs": duration,
+        "truncated": truncated,
+    }
 
 try:
     payload = decode_payload()
-    root = pathlib.Path(payload["workspaceRoot"]).expanduser().resolve(strict=True)
-    if str(root) == "/":
+    raw_root = os.path.expanduser(str(payload["workspaceRoot"]))
+    if not os.path.exists(raw_root):
+        raise ValueError("workspaceRoot does not exist: %s" % raw_root)
+    root = os.path.realpath(raw_root)
+    if not os.path.isdir(root):
+        raise ValueError("workspaceRoot is not a directory: %s" % root)
+    if root == "/":
         raise ValueError("workspaceRoot must not be filesystem root")
     op = payload.get("op")
     if op == "read":
@@ -445,11 +563,11 @@ try:
         ok({"checked": True})
     elif op == "_check_protected":
         # 测试专用内部 op：直接暴露删除保护判定，便于本地单测。
-        ok({"protected": is_protected_delete_path(pathlib.Path(payload["path"]))})
+        ok({"protected": is_protected_delete_path(str(payload["path"]))})
     else:
         raise ValueError("unknown op: %s" % op)
 except Exception as exc:
-    fail(str(exc))
+    fail(to_unicode(exc))
 `
 
 type remotePythonResponse struct {
@@ -653,11 +771,15 @@ func (a *App) invokeRemotePython(ctx context.Context, rt remoteTarget, payload m
 		if msg == "" {
 			msg = err.Error()
 		}
-		// 远端缺 python3 时给出可操作诊断：常见形态是 bash 的 "python3:
-		// command not found" 或 ash/dash 的 "python3: not found"，透传原始
+		// 远端缺 python3/python 时给出可操作诊断：常见形态是 bash 的 "python:
+		// command not found" 或 ash/dash 的 "python: not found"，透传原始
 		// ssh 错误对模型不可辨因。
-		if strings.Contains(msg, "python3: command not found") || strings.Contains(msg, "python3: not found") {
-			return fmt.Errorf("remote host %s has no python3 in PATH; remote_* tools need python3 on the remote side (install python3 or add it to PATH): %s", rt.Host, msg)
+		if strings.Contains(msg, "python3: command not found") || strings.Contains(msg, "python3: not found") ||
+			strings.Contains(msg, "python: command not found") || strings.Contains(msg, "python: not found") {
+			return fmt.Errorf("remote host %s has neither python3 nor python in PATH; remote_* tools need python (python3 or python2) on the remote side (install python3 or python, or add it to PATH): %s", rt.Host, msg)
+		}
+		if strings.Contains(strings.ToLower(msg), "host key verification failed") {
+			return fmt.Errorf("ssh %s failed: host key verification failed (host key differs from ~/.ssh/known_hosts; remove outdated entry from ~/.ssh/known_hosts if host was reinstalled): %s", rt.Host, msg)
 		}
 		return fmt.Errorf("ssh %s failed: %s", rt.Host, msg)
 	}

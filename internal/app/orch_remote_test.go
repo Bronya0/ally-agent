@@ -52,6 +52,18 @@ func TestRemoteScriptTransportInvariants(t *testing.T) {
 	if !strings.Contains(remotePythonScript, "__DELETE_PROTECTED_TREES__") {
 		t.Error("remote python script lost __DELETE_PROTECTED_TREES__ placeholder")
 	}
+	if strings.Contains(remotePythonScript, "pathlib") {
+		t.Error("remote python script must not use pathlib (unsupported in Python 2.7)")
+	}
+	if strings.Contains(remotePythonScript, "commonpath") {
+		t.Error("remote python script must not use os.path.commonpath (unsupported in Python 2.7)")
+	}
+	if strings.Contains(remotePythonScript, "datetime") {
+		t.Error("remote python script must not use datetime.timezone (unsupported in Python 2.7)")
+	}
+	if !strings.Contains(remotePythonScript, "from __future__ import print_function") {
+		t.Error("remote python script should import print_function for Python 2 compatibility")
+	}
 }
 
 // TestBuildRemoteScriptInjectsProtectionAndPayload 验证 buildRemoteScript 把删除

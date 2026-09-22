@@ -93,13 +93,20 @@ func TestPrepareRemoteSSHInvocation(t *testing.T) {
 		t.Errorf("expected nil env without credential, got %d entries", len(env))
 	}
 	foundBatch := false
+	foundAcceptNew := false
 	for _, arg := range args {
 		if arg == "BatchMode=yes" {
 			foundBatch = true
 		}
+		if arg == "StrictHostKeyChecking=accept-new" {
+			foundAcceptNew = true
+		}
 	}
 	if !foundBatch {
 		t.Errorf("expected BatchMode=yes without credential, args=%v", args)
+	}
+	if !foundAcceptNew {
+		t.Errorf("expected StrictHostKeyChecking=accept-new without credential, args=%v", args)
 	}
 
 	// with credential: no BatchMode, askpass env present, cleanup works
@@ -109,22 +116,36 @@ func TestPrepareRemoteSSHInvocation(t *testing.T) {
 		t.Fatalf("credential prepare: %v", err)
 	}
 	defer cleanup()
+	foundAcceptNew = false
 	for _, arg := range args {
 		if arg == "BatchMode=yes" {
 			t.Errorf("BatchMode must be dropped when a credential is stored, args=%v", args)
+		}
+		if arg == "StrictHostKeyChecking=accept-new" {
+			foundAcceptNew = true
 		}
 		if arg == "-p" {
 			continue
 		}
 	}
+	if !foundAcceptNew {
+		t.Errorf("expected StrictHostKeyChecking=accept-new with credential, args=%v", args)
+	}
 	foundPort := false
+	foundFallback := false
 	for i, arg := range args {
 		if arg == "-p" && i+1 < len(args) && args[i+1] == "2222" {
 			foundPort = true
 		}
+		if strings.Contains(arg, "command -v python3") && strings.Contains(arg, "exec python -") {
+			foundFallback = true
+		}
 	}
 	if !foundPort {
 		t.Errorf("port 2222 missing from args: %v", args)
+	}
+	if !foundFallback {
+		t.Errorf("expected python3/python fallback command in args: %v", args)
 	}
 	if env == nil {
 		t.Fatal("expected non-nil env with credential")
