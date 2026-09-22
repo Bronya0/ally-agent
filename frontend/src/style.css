@@ -109,6 +109,9 @@
   --ally-composer-glass: rgba(26, 26, 26, 0.5);
   --ally-composer-glass-hover: rgba(26, 26, 26, 0.54);
   --ally-composer-glass-focus: rgba(26, 26, 26, 0.58);
+  /* Composer 毛玻璃半径的唯一来源（浅色档在 :root[data-mode="light"] 覆写）。
+     浅色那边更重是有意为之（“hero glass”），改档位只改这两处定义。 */
+  --ally-composer-blur: blur(8px);
   /* Floating plan panel glass (above the composer). */
   --ally-panel-glass: rgba(26, 26, 26, 0.62);
   /* Code-copy button mat on code blocks. */
@@ -315,6 +318,8 @@
   --ally-composer-glass: rgba(250, 251, 252, 0.65);
   --ally-composer-glass-hover: rgba(250, 251, 252, 0.72);
   --ally-composer-glass-focus: rgba(250, 251, 252, 0.78);
+  /* 浅色档：半径更深 + 轻微提饱和，就是那层“英雄玻璃”（深色档见 :root 同名 token）。 */
+  --ally-composer-blur: blur(24px) saturate(1.5);
   --ally-panel-glass: rgba(250, 251, 252, 0.76);
   --ally-copy-btn-bg: rgba(250, 251, 252, 0.9);
   --ally-pre-bg: rgba(15, 23, 42, 0.05);
@@ -447,32 +452,9 @@ html[data-mode="light"] .workspace-explorer-ace .ace-tomorrow .ace_marker-layer 
   background: var(--ally-state-hover);
 }
 
-/* Composer input: brighter, deeper blur — the hero glass element. */
-html[data-mode="light"] .composer .prompt-input {
-  backdrop-filter: blur(24px) saturate(1.5);
-  -webkit-backdrop-filter: blur(24px) saturate(1.5);
-}
-
 html[data-mode="light"] .plan-panel {
   backdrop-filter: var(--ally-glass-blur);
   -webkit-backdrop-filter: var(--ally-glass-blur);
-}
-
-/* Splash artwork follows the color mode. The dark canvas (starfield grid over a
-   near-black radial, white wordmark) reads as a hole punched through the light
-   UI, so light mode paints the same composition on the light page canvas: same
-   layout, same amber eye glow, ink wordmark. The artwork is split across two
-   blocks — the deck (.splash-bg / eye glow / wordmark / version, scoped inside
-   SplashScreen.vue) and the chrome here — so each carries its own light rules. */
-html[data-mode="light"] .splash-screen {
-  background: #f3f5f9;
-}
-
-/* The HUD sits on the artwork, not on a surface: its shadow halo exists to lift
-   text off the dark radial, and on the light canvas a black halo would smear
-   gray under every glyph. */
-html[data-mode="light"] .splash-hud {
-  text-shadow: none;
 }
 
 /* Code blocks: light mat, ink text; hljs token colors darkened one notch.
@@ -593,15 +575,21 @@ html[data-mode="light"] .kb-empty-card {
   box-shadow: var(--ally-glass-shadow);
 }
 
-/* DeepSeek-style glass for Naive UI overlays: modal cards, drawers and every
-   popover surface (n-popover-shared also hosts dropdowns / tooltips / select
-   menus) are painted translucent by the theme overrides in App.vue; the blur
-   here turns them into frosted glass over the gradient canvas. */
+/* DeepSeek-style glass for Naive UI overlays: modal cards, drawers and popover
+   surfaces (n-popover-shared also hosts dropdowns / select menus) are painted
+   translucent by the theme overrides in App.vue; the blur here turns them into
+   frosted glass over the gradient canvas.
+   Tooltips wear the very same bubble element (n-popover + n-popover-shared +
+   n-tooltip, see naive-ui PopoverBody) but are tiny and hover over moving
+   content, so they are excluded: blurring them costs a backdrop recalc for
+   nothing. n-card is deliberately absent: every n-card in this repo is a
+   preset="card" modal, and naive-ui renders that card as the modal element
+   itself (n-card + n-modal on one node, see BodyWrapper), so listing .n-card
+   here only duplicated the declaration. */
 html[data-mode="light"] .n-modal,
-html[data-mode="light"] .n-card,
 html[data-mode="light"] .n-drawer,
 html[data-mode="light"] .n-popover,
-html[data-mode="light"] .n-popover-shared {
+html[data-mode="light"] .n-popover-shared:not(.n-tooltip) {
   backdrop-filter: var(--ally-glass-blur);
   -webkit-backdrop-filter: var(--ally-glass-blur);
 }
@@ -720,7 +708,7 @@ html[data-mode="light"]:not([data-theme]) .composer .prompt-input textarea::plac
    inherited by accident; status colors are left alone on purpose (they are
    semantic, and re-tinting them would weaken the signal).
    In DARK mode the surface family (content/panel/chrome/raised/deep, glass
-   mats, code bg, modal, scrollbar, splash deck) is restated at the neutral
+   mats, code bg, modal, scrollbar) is restated at the neutral
    :root values on purpose: a hue-tinted main canvas is the classic
    colored-dark-theme eye strain, so dark themes carry their identity in ink,
    accents and details only. Light mode keeps its subtle pastel wash — at that
@@ -896,9 +884,6 @@ html[data-mode="light"]:not([data-theme]) .composer .prompt-input textarea::plac
     radial-gradient(900px 700px at -8% 108%, rgba(150, 220, 255, 0.10), transparent 62%),
     linear-gradient(165deg, #f3fbf7 0%, #fdf9f7 46%, #f0f8fd 100%);
   background-attachment: fixed;
-}
-:root[data-theme="icecream"][data-mode="light"] .splash-screen .splash-bg {
-  background: linear-gradient(165deg, #f3fbf7 0%, #fdf9f7 46%, #f0f8fd 100%);
 }
 :root[data-theme="icecream"][data-mode="light"] .markdown-body img,
 :root[data-theme="icecream"][data-mode="light"] .attachment-item img,
@@ -1079,9 +1064,6 @@ html[data-mode="light"]:not([data-theme]) .composer .prompt-input textarea::plac
     linear-gradient(165deg, #eef4fa 0%, #f7fafd 46%, #e8eff7 100%);
   background-attachment: fixed;
 }
-:root[data-theme="ocean"][data-mode="light"] .splash-screen .splash-bg {
-  background: linear-gradient(165deg, #eef4fa 0%, #f7fafd 46%, #e8eff7 100%);
-}
 :root[data-theme="ocean"][data-mode="light"] .markdown-body img,
 :root[data-theme="ocean"][data-mode="light"] .attachment-item img,
 :root[data-theme="ocean"][data-mode="light"] .attachment-item video {
@@ -1260,9 +1242,6 @@ html[data-mode="light"]:not([data-theme]) .composer .prompt-input textarea::plac
     radial-gradient(900px 700px at -8% 108%, rgba(151, 205, 122, 0.07), transparent 62%),
     linear-gradient(165deg, #eef4ed 0%, #f8fbf7 46%, #e9f0e8 100%);
   background-attachment: fixed;
-}
-:root[data-theme="forest"][data-mode="light"] .splash-screen .splash-bg {
-  background: linear-gradient(165deg, #eef4ed 0%, #f8fbf7 46%, #e9f0e8 100%);
 }
 :root[data-theme="forest"][data-mode="light"] .markdown-body img,
 :root[data-theme="forest"][data-mode="light"] .attachment-item img,
@@ -1443,9 +1422,6 @@ html[data-mode="light"]:not([data-theme]) .composer .prompt-input textarea::plac
     linear-gradient(165deg, #f0eefa 0%, #faf9fd 46%, #eceaf6 100%);
   background-attachment: fixed;
 }
-:root[data-theme="violet"][data-mode="light"] .splash-screen .splash-bg {
-  background: linear-gradient(165deg, #f0eefa 0%, #faf9fd 46%, #eceaf6 100%);
-}
 :root[data-theme="violet"][data-mode="light"] .markdown-body img,
 :root[data-theme="violet"][data-mode="light"] .attachment-item img,
 :root[data-theme="violet"][data-mode="light"] .attachment-item video {
@@ -1517,43 +1493,6 @@ code, pre {
   background: var(--ally-surface-content);
 }
 
-.splash-screen {
-  position: fixed;
-  inset: 0;
-  z-index: 9999;
-  overflow: hidden;
-  background: #080b10;
-  cursor: pointer;
-  opacity: 1;
-  transition: opacity 420ms ease;
-}
-
-.splash-screen.leaving {
-  opacity: 0;
-  pointer-events: none;
-}
-
-.splash-canvas {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-}
-
-.splash-hud {
-  position: absolute;
-  right: clamp(18px, 4vw, 42px);
-  bottom: clamp(16px, 4vh, 34px);
-  z-index: 1;
-  display: grid;
-  gap: 8px;
-  max-width: min(420px, calc(100vw - 36px));
-  text-align: right;
-  text-shadow: 0 2px 18px rgba(0, 0, 0, 0.65);
-  user-select: none;
-  pointer-events: none;
-}
-
 .build-version {
   color: rgba(199, 210, 254, 0.76);
   font-family: var(--ally-mono-font);
@@ -1562,19 +1501,6 @@ code, pre {
   line-height: 1;
   user-select: text;
 }
-
-.splash-line {
-  color: var(--ally-accent-pale);
-  font-size: var(--ally-sub-font-size);
-  line-height: 1.5;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .splash-screen {
-    display: none;
-  }
-}
-
 
 
 
@@ -2446,8 +2372,9 @@ code, pre {
   --n-box-shadow-focus: 0 0 0 2px color-mix(in srgb, var(--ally-border-input) 25%, transparent) !important;
   background: var(--ally-composer-glass) !important;
   border-radius: 8px;
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
+  /* 半径来自 --ally-composer-blur（深色 8px / 浅色 24px，定义只在 :root 两处）。 */
+  backdrop-filter: var(--ally-composer-blur);
+  -webkit-backdrop-filter: var(--ally-composer-blur);
 }
 
 .composer .prompt-input .n-input,
@@ -2686,15 +2613,20 @@ code, pre {
   gap: 4px;
 }
 
+/* 常驻“思考中”三点动画共用提层提示：WebView2 下这类小元素动画不必然被自动
+   提升，不提升就退化成逐帧主线程重绘。凡是常驻使用 thinking-bounce 的小点都
+   列在这里，新增一处只改这一行（AGENTS.md §4.7）。 */
+.composer-run-status-dot,
+.subagent-name-dot {
+  will-change: transform, opacity;
+}
+
 .composer-run-status-dot {
   width: 4px;
   height: 4px;
   border-radius: 50%;
   background: var(--ally-accent);
   animation: thinking-bounce 1.3s ease-in-out infinite;
-  /* 三个点运行期间永不停歇：提升为独立合成层，动画只走合成器，
-     不再逐帧触发主线程重绘（WebView2 下小元素动画不必然被自动提升）。 */
-  will-change: transform, opacity;
 }
 
 .composer-run-status-dot:nth-child(2) {
@@ -3563,6 +3495,11 @@ code, pre {
   gap: 10px;
   width: 100%;
   min-height: 42px;
+  /* 会话条数没有上限（App.vue 只按工作区过滤，不做分页），行高又基本固定，
+     所以离屏行可以跳过布局与绘制；估计值与 min-height 对齐，
+     量过一次后由 auto 关键字换成实测高度。 */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 42px;
   padding: 7px 12px;
   color: var(--ally-text-body);
   text-align: left;
@@ -3915,7 +3852,7 @@ code, pre {
   border-radius: 10px;
   background: var(--ally-surface-raised);
   content-visibility: auto;
-  contain-intrinsic-size: 320px;
+  contain-intrinsic-size: auto 320px; /* auto：记住实测高度，回滚不再用固定估计值 */
 }
 
 .markdown-body .markdown-mermaid:focus {
@@ -4506,7 +4443,7 @@ code, pre {
   margin-bottom: 6px;
   border-radius: 4px;
   content-visibility: auto;
-  contain-intrinsic-size: 42px;
+  contain-intrinsic-size: auto 42px; /* auto：记住实测高度，回滚不再用固定估计值 */
 }
 
 /* ── Enter animations ──
@@ -4542,6 +4479,16 @@ code, pre {
 
 .messages .message:has(+ .rich-tool-card) {
   margin-bottom: 6px;
+}
+
+/* 消息正文此前没有覆盖：内容可见性只加在工具卡 / diff 行 / mermaid 卡三类子块上，
+   一条带长代码块或大表格的消息在离屏时仍要参与样式计算与布局。
+   估计值只服务“还没被量过”的行，量过一次后由 auto 换成实测高度。
+   行自身已是 position: relative，自带 containment 不会改变行内浮层的定位基准
+   （删除按钮、悬停统计行都在行内；项目的弹层一律 teleport 到 body）。 */
+.messages .message {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 120px;
 }
 
 .rich-tool-card.non-interactive {
@@ -5034,7 +4981,7 @@ code, pre {
   min-height: 20px;
   padding: 0 10px;
   content-visibility: auto;
-  contain-intrinsic-size: 20px;
+  contain-intrinsic-size: auto 20px; /* auto：记住实测高度，回滚不再用固定估计值 */
 }
 
 .diff-sep-row {

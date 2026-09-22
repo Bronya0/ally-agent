@@ -40,7 +40,7 @@ Public License v3. See the LICENSE file for details.
       :options="reasoningEffortOptions"
       @select="onReasoningEffortSelect"
     >
-      <span class="info-effort" :title="running ? $t('composer.lockedWhileRunning') : $t('composer.effort.title')">
+      <span ref="effortTriggerRef" class="info-effort" :title="running ? $t('composer.lockedWhileRunning') : $t('composer.effort.title')">
         <span class="info-effort-label">{{ currentEffortLabel }}</span>
         <span class="info-effort-caret">▾</span>
       </span>
@@ -380,6 +380,7 @@ const activeWorkspaceName = computed(() => {
   const segments = activeWorkspacePath.value.split(/[\\/]+/).filter(Boolean);
   return segments.length ? segments[segments.length - 1] : '';
 });
+const effortTriggerRef = ref(null);
 const currentEffortLabel = computed(() => reasoningEffortLabel(props.config.reasoningEffort));
 const reasoningEffortOptions = computed(() =>
   reasoningEffortLevels.map((level) => ({ label: reasoningEffortLabel(level), key: level }))
@@ -407,7 +408,9 @@ function contextPartLabel(label) {
 }
 
 function onReasoningEffortSelect(key) {
-  emit('changeReasoningEffort', key);
+  // 一并抛出触发控件的位置：调用方拿它当全屏特效的波心（而不是从左上角 logo 起）
+  const rect = effortTriggerRef.value?.getBoundingClientRect?.();
+  emit('changeReasoningEffort', key, rect ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 } : null);
 }
 
 function onCompactClick() {

@@ -692,7 +692,9 @@ function scrollToUserQuestion(direction) {
     ? questions.find((el) => el.getBoundingClientRect().top > downThreshold)
     : [...questions].reverse().find((el) => el.getBoundingClientRect().top < upThreshold);
 
-  target?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  // 瞬时跳转：这里刻意不做平滑滚动——连点时两次平滑会相互打断，长距离平滑
+  // 滚动也很慢，观感像“页面在飘”。下方按钮（jumpToBottom）本来就不传 behavior。
+  target?.scrollIntoView({ block: 'start', behavior: 'auto' });
 }
 
 

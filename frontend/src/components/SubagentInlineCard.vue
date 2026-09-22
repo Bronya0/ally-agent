@@ -280,6 +280,8 @@ function subToolVerb(tc) {
   gap: 3px;
 }
 
+/* 提层提示（will-change）不写在这里：常驻"思考中"小点由 style.css 的
+   `.composer-run-status-dot, .subagent-name-dot` 一条规则统一负责（AGENTS.md §4.7）。 */
 .subagent-name-dot {
   width: 3px;
   height: 3px;

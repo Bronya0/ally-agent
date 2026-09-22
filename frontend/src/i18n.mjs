@@ -362,6 +362,7 @@ const zh = {
   'header.tokenStats': 'Token 统计',
   'header.games': '人机对战',
   'header.githubAria': '打开 Ally GitHub 项目主页',
+  'header.brandTip': '点击 logo：放一道全屏数码波浪',
   'header.update': '发现新版本 {version}，点击前往 GitHub',
   'header.updateAria': '发现新版本，前往 GitHub',
   'header.updateAuto': '发现新版本 {version}，点击自动更新',
@@ -475,7 +476,6 @@ const zh = {
   'render.failed': '{label} 渲染失败',
   'avatar.aria': '带旋涡和闪电的 Ally 竖瞳',
   'avatar.sakuraToggle': '点击眼球：唤醒/收回 一阵吹飞樱花与青草的风',
-  'splash.loading': '正在点亮工作区，整理上下文和工具链。',
 
   'scheduled.runningCount': '运行中 {count}',
   'scheduled.sessionOnly': '临时任务 · 关闭或重新启动 Ally 后清空',
@@ -1163,6 +1163,7 @@ Response language: Preserve the response language already used in the current co
   'header.tempWorkspaceHint': 'Create a sandbox under the system temp dir; deleted when its tab closes',
   'header.workspaceHistory': 'Recent workspaces',
   'header.github': 'Open GitHub repository', 'header.githubAria': 'Open the Ally GitHub repository', 'header.tokenStats': 'Token statistics', 'header.games': 'Play vs AI',
+  'header.brandTip': 'Click the logo: send a digital wave across the window',
   'header.update': 'Version {version} is available. Open GitHub', 'header.updateAria': 'New version available; open GitHub',
   'header.updateAuto': 'Version {version} is available. Click to update automatically',
   'header.settings': 'Settings', 'header.minimize': 'Minimize', 'header.restore': 'Restore',
@@ -1231,7 +1232,6 @@ Response language: Preserve the response language already used in the current co
   'git.noText': 'No text diff.', 'git.selectFile': 'Select a file to view its diff.', 'git.loadFailed': 'Failed to load Git diff',
   'render.failed': '{label} failed to render', 'avatar.aria': 'Ally vertical eye with a vortex and lightning',
   'avatar.sakuraToggle': 'Click the eye: summon or dismiss a breeze of sakura petals and grass',
-  'splash.loading': 'Lighting up the workspace and preparing context and tools.',
 
   'scheduled.runningCount': '{count} running',
   'scheduled.sessionOnly': 'Temporary tasks · cleared when Ally closes or starts', 'scheduled.empty': 'No scheduled tasks',

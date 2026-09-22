@@ -60,6 +60,14 @@ git push origin main
    - 模型侧修改文件必须先 `read` 获取 `version` token，再调用 `edit`（单次调用修改单一文件；跨文件修改在同轮返回中并行调用 `edit`，由后端执行原子校验与批次写入）。
 6. **本地文本缓存必须结构性有界**:
    - 输入历史一类本地文本缓存只有两种合法形态：结构性有界（每桶条数上限 + 单条长度上限 + 全库字符预算 + 工作区移除时显式弃桶，收口在 `frontend/src/utils/promptHistoryStore.mjs`）或明说重启即丢。只做一半 = 配额慢性泄露或丢用户数据。
+7. **前端渲染压力 (GPU / 主线程)**:
+   - 动画**只允许** `transform` / `opacity`（纯合成，跳过 Layout 与 Paint）；`transition: left, transform` 这类混写会让整段动画退化回 CPU，等价于没优化。改尺寸/位置用 `transform` 而非 `top/left/width/height`；阴影动画改用伪元素承载阴影、只动 `opacity`。
+   - `will-change` / `translateZ(0)` 是提示器不是加速器：每多一层 = 多一张 GPU 纹理（显存 + 光栅化 + 上传）。必须交互开始时动态加、结束后移除；**禁止**在 CSS 里静态写在长列表每一项上（图层爆炸）。
+   - `backdrop-filter` / `filter: blur()` 成本 = 面积 × 半径，是全屏级开销，且叠加动画或背后内容滚动时逐帧重算。禁止嵌套、禁止糊全屏遮罩层（现有 `.n-modal-mask` / `.n-drawer-mask` 显式 `none` 是正确先例）、禁止在滚动区域上新增视口级毛玻璃；新增大面积模糊前必须先测量。玻璃半径收口在 `--ally-glass-blur`，新增玻璃表面只引用该变量，不就地写裸 `blur(Npx)`。
+   - 长列表**先限长、再跳过**，不是先虚拟化：结构性上限收口在一处（`displaySourceMessages`：默认 180 行、展开归档 360 行）+ 离屏跳过 `content-visibility: auto` 配 `contain-intrinsic-size: auto <估计值>`（`auto` 记住实测高度，估计值只服务首次出现；现覆盖工具卡 / diff 行 / mermaid 卡 / 消息行 / 会话行）。**不要**用虚拟滚动替换：节点不在位会破坏原生查找与跨消息选取、`[data-user-question]` 上下跳转、mermaid 的按节点注册与流式贴底；只有“列表无界且行高可估”时才考虑，且必须逐项验上述行为。加 `content-visibility` / `contain` 前先确认该元素**本来就是**定位祖先、且无故意溢出的子元素（否则包含块与裁剪边界会静默改变）。
+   - 避免强制同步布局（先批量读、再批量写，别在循环里交替读写布局属性）；滚动/resize 事件 `passive` + 节流，测量改用 `IntersectionObserver` / `ResizeObserver`；动画驱动用 `requestAnimationFrame`，禁止 `setInterval`。
+   - 窗口不可见即暂停：无限动画必须监听 `visibilitychange` 挂起（正例：`SakuraBreeze.vue`）；整层卸载优于隐藏。
+   - 验收口径是 Rendering 面板的对照实验（Paint flashing / Layer borders / Frame rendering stats，开关单条声明看差值），不看主观感觉。
 
 ## 5. 模型协议铁律 (Model Protocol Rules)
 

@@ -11,7 +11,13 @@ Public License v3. See the LICENSE file for details.
   <!-- Unified header: brand + tabs + actions + meta -->
   <n-layout-header ref="headerRef" bordered class="app-header">
     <div class="brand">
-      <AllyWordmark class="brand-wordmark" />
+      <!-- 起波瞬间垫在字标底下的光晕（只动 opacity，纯合成） -->
+      <span class="brand-glow" :class="{ 'brand-glow--struck': brandStruck }" aria-hidden="true"></span>
+      <AllyWordmark
+        class="brand-wordmark"
+        :title="$t('header.brandTip')"
+        @click="onBrandClick"
+      />
     </div>
     <div class="header-tabs-area">
       <div
@@ -93,6 +99,7 @@ Public License v3. See the LICENSE file for details.
 import { computed, h, onBeforeUnmount, ref } from 'vue';
 import { NDropdown } from 'naive-ui';
 import AllyWordmark from './AllyWordmark.vue';
+import { burstDigitalWave } from '../composables/digitalWave.mjs';
 import HistoryOutlined from '@vicons/antd/HistoryOutlined';
 import DownloadOutlined from '@vicons/antd/DownloadOutlined';
 import GithubOutlined from '@vicons/antd/GithubOutlined';
@@ -126,6 +133,8 @@ const emit = defineEmits([
 ]);
 
 const headerRef = ref(null);
+const brandStruck = ref(false);
+let brandStrikeTimer = null;
 const workspaceTabsRef = ref(null);
 const draggedWorkspaceId = ref('');
 const dragPreview = ref(null);
@@ -137,6 +146,12 @@ const dragPointerId = ref(null);
 let dragStartX = 0;
 let dragStartY = 0;
 let suppressClick = false;
+// 起拖时一次性快照的几何（视口坐标）：拖动期间不再查 DOM、不再读布局。
+let dragTabRects = [];   // [{ id, left, mid, right }]，已排除被拖的那一个
+let dragHostLeft = 0;    // tab 容器左边缘，落点指示线的基准
+let dragHostWidth = 0;
+let dragMovePoint = null;
+let dragMoveRaf = 0;
 
 const dropIndicatorStyle = computed(() => {
   if (!dragPreview.value || dropIndicatorLeft.value == null) return null;
@@ -149,31 +164,27 @@ const draggedTabLabel = computed(() => {
   return props.workspaceTabs.find((t) => t.id === id)?.label || id;
 });
 
+// 跟手幽灵用 transform 定位：left/top 每个 pointermove 都要重算布局，且根本不是
+// 可合成属性（AGENTS.md §4.7）。
 const dragGhostStyle = computed(() => {
   if (!dragGhostPos.value || !draggedWorkspaceId.value || !hasDragged.value) return null;
   return {
-    left: `${dragGhostPos.value.x + 12}px`,
-    top: `${dragGhostPos.value.y + 12}px`,
+    transform: `translate3d(${dragGhostPos.value.x + 12}px, ${dragGhostPos.value.y + 12}px, 0)`,
   };
 });
 
 function updateDropIndicatorPosition(targetId, after) {
-  const host = workspaceTabsRef.value;
-  if (!host || !targetId) {
+  // 位置全部取自起拖快照：拖动中再量一次会把"已被 translate 平移的 tab"量进来，
+  // 让落点判定与视觉位移相互喂数据（抖动），也白吃每次 pointermove 的强制布局。
+  const target = dragTabRects.find((tab) => tab.id === targetId);
+  if (!target) {
     dropIndicatorLeft.value = null;
     return;
   }
-  const targetEl = host.querySelector(`.workspace-tab[data-tab-id="${targetId}"]`);
-  if (!targetEl) {
-    dropIndicatorLeft.value = null;
-    return;
-  }
-  const hostRect = host.getBoundingClientRect();
-  const rect = targetEl.getBoundingClientRect();
   // 2px 竖线以选中目标边缘为基准居中（-1 偏移 = 半宽，避免再 translate 或被边缘裁剪）
-  const edge = after ? rect.right - hostRect.left : rect.left - hostRect.left;
+  const edge = after ? target.right - dragHostLeft : target.left - dragHostLeft;
   let left = Math.round(edge - 1);
-  const maxLeft = Math.max(0, Math.round(hostRect.width - 2));
+  const maxLeft = Math.max(0, Math.round(dragHostWidth - 2));
   if (left < 0) left = 0;
   if (left > maxLeft) left = maxLeft;
   dropIndicatorLeft.value = left;
@@ -207,6 +218,34 @@ function dragShiftClass(id) {
   return dragShiftClassById.value.get(id) || '';
 }
 
+// 起拖时量一次：其余 tab 的视口坐标 + 容器左边缘/宽度。
+// 从前是每个 pointermove 都 querySelectorAll + 每个 tab 一次 getBoundingClientRect，
+// 高刷鼠标下等于每秒上百轮强制布局（AGENTS.md §4.7）。
+function captureDragTabRects() {
+  const host = workspaceTabsRef.value;
+  if (!host) {
+    dragTabRects = [];
+    dragHostLeft = 0;
+    dragHostWidth = 0;
+    return;
+  }
+  const hostRect = host.getBoundingClientRect();
+  dragHostLeft = hostRect.left;
+  dragHostWidth = hostRect.width;
+  const sourceId = draggedWorkspaceId.value;
+  dragTabRects = Array.from(host.querySelectorAll('.workspace-tab') || [])
+    .filter((el) => el.dataset.tabId !== sourceId)
+    .map((el) => {
+      const rect = el.getBoundingClientRect();
+      return {
+        id: el.dataset.tabId || '',
+        left: rect.left,
+        mid: rect.left + rect.width / 2,
+        right: rect.right,
+      };
+    });
+}
+
 function clearDragPreview() {
   dragPreview.value = null;
   dropIndicatorLeft.value = null;
@@ -230,6 +269,12 @@ function headerDragEl() {
   return h.$el || h;
 }
 function resetDragState() {
+  if (dragMoveRaf) {
+    cancelAnimationFrame(dragMoveRaf);
+    dragMoveRaf = 0;
+  }
+  dragMovePoint = null;
+  dragTabRects = [];
   window.removeEventListener('pointermove', onWindowPointerMove);
   window.removeEventListener('pointerup', onWindowPointerUp);
   window.removeEventListener('pointercancel', onWindowPointerCancel);
@@ -255,6 +300,7 @@ window.addEventListener('blur', onWindowBlur);
 onBeforeUnmount(() => {
   window.removeEventListener('blur', onWindowBlur);
   resetDragState();
+  clearTimeout(brandStrikeTimer);
 });
 
 function onWorkspaceTabUpdate(id) {
@@ -273,6 +319,7 @@ function onWorkspacePointerDown(event, id) {
   if (rect?.width) draggedTabWidth.value = rect.width;
   else draggedTabWidth.value = 112;
   draggedWorkspaceId.value = id;
+  captureDragTabRects();
   dragPointerId.value = event.pointerId;
   dragStartX = event.clientX;
   dragStartY = event.clientY;
@@ -291,20 +338,13 @@ function onWorkspacePointerDown(event, id) {
 }
 
 function computeDropTarget(clientX) {
-  const host = workspaceTabsRef.value;
-  if (!host || !draggedWorkspaceId.value) return null;
-  const tabs = Array.from(host.querySelectorAll('.workspace-tab') || []).filter(
-    (el) => el.dataset.tabId !== draggedWorkspaceId.value,
-  );
-  if (!tabs.length) return null;
-  for (const tab of tabs) {
-    const rect = tab.getBoundingClientRect();
-    if (clientX < rect.left + rect.width / 2) {
-      return { targetId: tab.dataset.tabId || '', after: false };
-    }
+  // 全部用起拖快照：拖动期间零布局读取。
+  if (!draggedWorkspaceId.value || !dragTabRects.length) return null;
+  for (const tab of dragTabRects) {
+    if (clientX < tab.mid) return { targetId: tab.id, after: false };
   }
-  const last = tabs[tabs.length - 1];
-  return { targetId: last.dataset.tabId || '', after: true };
+  const last = dragTabRects[dragTabRects.length - 1];
+  return { targetId: last.id, after: true };
 }
 
 function onWindowPointerMove(event) {
@@ -315,8 +355,18 @@ function onWindowPointerMove(event) {
   const dy = event.clientY - dragStartY;
   if (!hasDragged.value && Math.hypot(dx, dy) < 4) return;
   hasDragged.value = true;
-  dragGhostPos.value = { x: event.clientX, y: event.clientY };
-  const drop = computeDropTarget(event.clientX);
+  // 只记落点：幽灵位置、落点判定、虚线占位统一交给 rAF，一帧最多写一次。
+  dragMovePoint = { x: event.clientX, y: event.clientY };
+  if (!dragMoveRaf) dragMoveRaf = requestAnimationFrame(flushDragMove);
+}
+
+// 一帧一次地把最新落点写进界面（幽灵跟手 + 落点判定 + 预览）。
+function flushDragMove() {
+  dragMoveRaf = 0;
+  const point = dragMovePoint;
+  if (!point || !draggedWorkspaceId.value) return;
+  dragGhostPos.value = point;
+  const drop = computeDropTarget(point.x);
   if (!drop) {
     clearDragPreview();
     return;
@@ -325,6 +375,13 @@ function onWindowPointerMove(event) {
 }
 
 function onWindowPointerUp() {
+  // 抬手可能和最后一次 pointermove 落在同一帧：先把还没执行的那次 rAF 落点同步补算，
+  // 否则这一帧的位移（乃至“极快甩动”时整次拖拽）根本不参与落点判定。
+  if (dragMoveRaf) {
+    cancelAnimationFrame(dragMoveRaf);
+    dragMoveRaf = 0;
+    flushDragMove();
+  }
   const sourceId = draggedWorkspaceId.value;
   const preview = dragPreview.value;
   // 只要发生过实际拖拽位移就抑制随后的 click，避免拖回原位时误触发 tab 切换
@@ -356,6 +413,15 @@ function onRepositoryClick() {
   } else {
     emit('openRepository');
   }
+}
+
+/* 点击左上角 logo：从落点放一道全屏数码波浪，同时字标自己闪一下
+   （有因果交代，而不是“背景莫名动了一帧”）。纯装饰彩蛋，失败也不影响任何功能。 */
+function onBrandClick(event) {
+  burstDigitalWave(event.clientX, event.clientY);
+  brandStruck.value = true;
+  clearTimeout(brandStrikeTimer);
+  brandStrikeTimer = setTimeout(() => { brandStruck.value = false; }, 420);
 }
 
 function toggleMaximise() {
@@ -518,6 +584,8 @@ html[data-mode="light"] .history-action-button:focus-visible {
   /* The header gap already separates brand from tabs; this adds room so the
      mark does not crowd the first tab. Everything here is on a 4px grid. */
   padding: 0 8px 0 0;
+  /* 起波光晕（.brand-glow）的定位基准 */
+  position: relative;
   --wails-draggable: drag;
 }
 
@@ -527,6 +595,39 @@ html[data-mode="light"] .history-action-button:focus-visible {
   font-size: 20px;
   line-height: 1;
   white-space: nowrap;
+  /* 字标现在可点击（数码波浪）：整个 header 是窗口拖拽区，可交互元素必须显式
+     声明 no-drag，否则点击会被 WebView2 的窗口拖动吃掉（AGENTS.md §4.3）。
+     这里是静态规则、pointerdown 时已生效，不需要像拖 tab 那样临时设内联样式。 */
+  --wails-draggable: no-drag;
+  cursor: pointer;
+  user-select: none;
+  /* 定位 + 显式层级：字标要压在上面那层光晕之上。两者同为定位兄弟节点，
+     画序由 z-index 决定，不去赌哪个祖先恰好建了层叠上下文。 */
+  position: relative;
+  z-index: 1;
+}
+
+/* 起波瞬间字标自己亮一下（点下去 80ms 冲亮、之后 360ms 回落）。
+   光晕只动 opacity——纯合成属性；不再用 filter: brightness/drop-shadow 过渡：
+   那两个属性每帧都要重绘，正是 AGENTS.md §4.7 排除的写法。 */
+.brand-glow {
+  position: absolute;
+  top: 50%;
+  left: -6px;
+  right: 2px;
+  height: 30px;
+  transform: translateY(-50%);
+  border-radius: 10px;
+  background: radial-gradient(closest-side, color-mix(in srgb, var(--ally-accent) 60%, transparent), transparent 100%);
+  opacity: 0;
+  transition: opacity 360ms ease;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.brand-glow--struck {
+  opacity: 1;
+  transition-duration: 80ms;
 }
 
 body.platform-darwin .brand-wordmark {
@@ -577,6 +678,12 @@ body.platform-darwin .brand-wordmark {
 
 .workspace-drag-ghost {
   position: fixed;
+  /* transform 只是偏移，元素本身还得有基准原点：fixed 且不写 left/top 时它落在
+     “静态位置”上，而这个节点 teleport 到 body、排在占满整屏的 #app 之后，
+     基准纵坐标就等于视口高度——整块卡片被推到窗口下方，跟手时完全看不见。
+     位置仍然只由 transform 给（纯合成），这两行只把原点钉在视口左上角。 */
+  left: 0;
+  top: 0;
   max-width: 200px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -593,8 +700,9 @@ body.platform-darwin .brand-wordmark {
   pointer-events: none;
   z-index: 99999;
   opacity: 1;
-  will-change: left, top;
-  transform: translateZ(0);
+  /* 位置由内联 transform 给出；提示词只声明 transform——left/top 不是可合成属性，
+     给它们写 will-change 没有任何提升作用。 */
+  will-change: transform;
 }
 
 .workspace-tabs {

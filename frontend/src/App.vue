@@ -464,7 +464,8 @@ Public License v3. See the LICENSE file for details.
           <!-- 樱花青草风特效层：全局唯一实例，body 顶层播放，切 Tab 不中断 -->
           <SakuraBreeze :open="sakuraOn" />
 
-          <SplashScreen v-if="splashVisible" @done="splashVisible = false" />
+          <!-- 数码波浪特效层：同样全局唯一；触发点是启动进场、左上角 logo 与思考强度切到最高档 -->
+          <DigitalWave />
 
           <!-- Mermaid 全屏预览：复用 render_html 全屏模态的布局语言（铺满 header/侧栏之外区域） -->
           <Teleport to="body">
@@ -586,8 +587,8 @@ import ComposerInfoBar from './components/ComposerInfoBar.vue';
 import MessageAttachments from './components/MessageAttachments.vue';
 import ReadGroupCard from './components/ReadGroupCard.vue';
 import RenderBoundary from './components/RenderBoundary.vue';
-import SplashScreen from './components/SplashScreen.vue';
 import SakuraBreeze from './components/SakuraBreeze.vue';
+import DigitalWave from './components/DigitalWave.vue';
 import SubagentInlineCard from './components/SubagentInlineCard.vue';
 import WelcomeMessage from './components/WelcomeMessage.vue';
 import ToolCallCard from './components/ToolCallCard.vue';
@@ -605,10 +606,11 @@ import TokenStatsModal from './components/TokenStatsModal.vue';
 import GamePanel from './games/GamePanel.vue';
 import { assignConfig, defaultConfig } from './utils/config.mjs';
 import { useSakuraBreeze } from './composables/sakuraBreeze.mjs';
+import { burstDigitalWave } from './composables/digitalWave.mjs';
 
 // 樱花青草风特效的全局开关；唯一特效层实例见模板根部
 const { sakuraOn } = useSakuraBreeze();
-import { modelConfigIdentity, modelSnapshotFrom, normalizeApiKeysArray, normalizeReasoningEffort } from './utils/modelConfigIO.mjs';
+import { modelConfigIdentity, modelSnapshotFrom, normalizeApiKeysArray, normalizeReasoningEffort, reasoningEffortLevels } from './utils/modelConfigIO.mjs';
 import { getSpecificModelUsage } from './utils/modelUsage.mjs';
 import { formatModelLabel } from './utils/modelLabel.mjs';
 import { buildVersion } from './utils/buildVersion.js';
@@ -1837,7 +1839,6 @@ const MAX_ATTACHMENT_PREVIEW_BYTES = 8 * 1024 * 1024;
 const MAX_IMAGE_INPUT_BYTES = 5 * 1024 * 1024;
 const MAX_TEXT_ATTACHMENT_BYTES = 200 * 1024;
 const MAX_STORED_ATTACHMENT_TEXT_CHARS = 20000;
-const splashVisible = ref(true);
 const expandedArchiveSessions = ref(new Set());
 const updateAvailable = ref(false);
 const latestReleaseVersion = ref('');
@@ -7532,11 +7533,13 @@ async function activateSkillByName(skillName, skillArgs = '', injectIntoChat = t
   scrollMessagesToBottom();
 }
 
-async function changeReasoningEffort(level) {
+async function changeReasoningEffort(level, anchor) {
   const next = String(level || 'auto').toLowerCase();
   // Effort is a per-Tab runtime choice: it lives on the active Tab's model
   // snapshot, never on the persisted top-level (default) fields.
   const snapshot = modelByTab[activeWorkspaceId.value];
+  // 改之前先记住当前档位：下面要用“是否真的换了档”决定放不放波浪
+  const previous = String(snapshot?.reasoningEffort ?? config.reasoningEffort ?? 'auto').toLowerCase();
   if (snapshot) snapshot.reasoningEffort = next;
   // Keep the matching preset in sync so the choice survives re-selecting the
   // model in this (or a new) Tab.
@@ -7544,6 +7547,12 @@ async function changeReasoningEffort(level) {
   for (const list of [config.models, configDraft.models]) {
     const preset = (list || []).find((m) => modelConfigIdentity(m) === activeIdentity);
     if (preset) preset.reasoningEffort = next;
+  }
+  // 切到最高档（档位表最后一位，当前是 max）放一次数码波浪：
+  // 波心是触发它的那个控件（输入条上的思考强度），不是左上角 logo。
+  // 判据是“真的换了档”——已经是最高档再点一次不算切档，不该再放一次。
+  if (next !== previous && next === reasoningEffortLevels[reasoningEffortLevels.length - 1]) {
+    burstDigitalWave(anchor?.x, anchor?.y);
   }
   const label = reasoningEffortLabel(next);
   try {
@@ -8703,6 +8712,37 @@ function handleVisibilityChange() {
   }
 }
 
+/* 进场时放一次 logo 数码波浪（启动画面已移除，改为直接进界面、由 logo 自己起波）。
+   波心取 logo 的实际落点，与点击 logo 走的是同一条 burstDigitalWave 通道；
+   窗口此刻还不可见就等它变可见再放，避免整道波在屏外烧掉。
+   注意监听是手动增删的（不用 { once: true }）：第一次 visibilitychange 可能是
+   “变隐藏”，那样波照样烧在屏外；而且挂上去就得有人在卸载时摘掉。 */
+let startupWaveListener = null;
+
+function removeStartupWaveListener() {
+  if (!startupWaveListener) return;
+  document.removeEventListener('visibilitychange', startupWaveListener);
+  startupWaveListener = null;
+}
+
+function playStartupBrandWave() {
+  const fire = () => {
+    if (document.hidden) return;
+    removeStartupWaveListener();
+    const el = document.querySelector('.brand-wordmark');
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    burstDigitalWave(rect.left + rect.width / 2, rect.top + rect.height / 2);
+  };
+  if (document.hidden) {
+    startupWaveListener = fire;
+    document.addEventListener('visibilitychange', fire);
+    return;
+  }
+  fire();
+}
+
 onMounted(async () => {
   applyPlatformClass();
   document.addEventListener('visibilitychange', handleVisibilityChange);
@@ -8728,10 +8768,13 @@ onMounted(async () => {
   await init();
   await Promise.all([loadScheduledTasks(), loadServices()]);
   await refreshWindowMaximisedState();
+  // 界面已经进场（配置/会话/技能/任务都就绪）后再起波
+  playStartupBrandWave();
 });
 
 onUnmounted(() => {
   document.removeEventListener('visibilitychange', handleVisibilityChange);
+  removeStartupWaveListener();
   window.removeEventListener('keydown', handleGlobalKeydown, true);
   document.removeEventListener('pointerdown', handleMermaidOutsidePointerDown, true);
   document.removeEventListener('pointerdown', handleOverlayOutsidePointerDown, true);
