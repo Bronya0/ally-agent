@@ -162,7 +162,7 @@ Public License v3. See the LICENSE file for details.
                   <template #icon><CloseOutlined /></template>
                 </n-button>
               </div>
-              <n-button size="small" dashed class="api-key-add" @click="addModelApiKey">
+              <n-button size="small" dashed class="api-key-add theme-accent-outline-button" @click="addModelApiKey">
                 <template #icon><PlusOutlined /></template>
                 {{ t('settings.apiKeyAdd') }}
               </n-button>
@@ -246,7 +246,7 @@ Public License v3. See the LICENSE file for details.
                   <template #icon><CloseOutlined /></template>
                 </n-button>
               </div>
-              <n-button size="small" dashed class="api-key-add" @click="addCustomHeaderRow">
+              <n-button size="small" dashed class="api-key-add theme-accent-outline-button" @click="addCustomHeaderRow">
                 <template #icon><PlusOutlined /></template>
                 {{ t('settings.customHeaderAdd') }}
               </n-button>

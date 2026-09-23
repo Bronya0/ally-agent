@@ -189,8 +189,7 @@ Public License v3. See the LICENSE file for details.
           />
         </div>
 
-        <!-- 密码槽在 key 下也要给：带口令的私钥必须把口令存在密码槽里（后端按
-             keyPath + password 组合成 -i + askpass），藏起来等于这个能力配不出来。 -->
+        <!-- key 模式下此字段只用于解锁本机私钥；绝不会作为 SSH 账号密码发送给服务器。 -->
         <div v-if="form.authType === 'password' || form.authType === 'key'" class="ssh-form-item">
           <label class="ssh-form-label">
             {{ form.authType === 'key' ? $t('sshCluster.modal.passwordPassphrase') : $t('sshCluster.modal.password') }}
@@ -401,9 +400,8 @@ async function saveForm() {
   }
 
   saving.value = true;
-  // 认证方式是唯一真实源：不用的那个凭据槽必须显式清空，否则“改成免密登录”之后
-  // 旧密码还留在节点里继续被使用（后端按字段是否为空选认证方式，keyPath+password
-  // 的组合是“带口令的私钥”，所以 key 档保留密码槽）。
+  // 认证方式是唯一真实源：key 模式的 password 字段是本地私钥口令，不是 SSH 账号密码；
+  // 切换认证方式时仍须清空旧凭据，避免旧账号密码被继续使用。
   const credentials = form.authType === 'agent'
     ? { keyPath: '', password: '' }
     : form.authType === 'key'

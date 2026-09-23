@@ -36,7 +36,7 @@
 | 技能发现与加载 | `internal/app/biz_skills.go` |
 | MCP 客户端生命周期 | `internal/app/biz_mcp.go` |
 | 计划任务 / 后台服务 / 命令超时收编 | `orch_scheduler.go` / `orch_services.go`（promoteTimedOutCommand）+ `TaskCenterPanel.vue` |
-| 远程 SSH 工具与审批闸门（首次连接 / 危险命令 / 覆盖 / 集群登记） | `orch_remote.go` / `orch_ssh_credential.go`（内存凭据槽，按解析后的 user@host:port 入键） |
+| 远程 SSH 工具与审批闸门（首次连接 / 危险命令 / 覆盖 / 集群登记） | `orch_remote.go` / `orch_ssh_credential.go`（按解析端点缓存并区分认证模式）+ `internal/tools/sshclient/`（纯 Go 传输、密钥认证、known_hosts） |
 | SSH 集群清单与工作区授权（`ssh_clusters.json` 落盘、别名/端点两种写法、默认拒绝） | `internal/app/biz_ssh_cluster.go` + `orch_ssh_cluster.go` + `SSHClusterPanel.vue` + `ComposerInfoBar.vue` |
 | 知识库模式（KB 提示词 / sources/ 只读） | `internal/app/orch_kb.go` + `ModeSider.vue` + `App.vue` |
 | 对外本地 HTTP API 服务 | `internal/app/biz_api.go` |
@@ -69,7 +69,7 @@
 - `orch_*`: 工具编排（绑定纯算法到 `*App` 状态）。`orch_edit_plan.go` / `orch_edit.go`（编辑批次规划与原子提交）；`orch_command_safety.go`（命令安全拦截）；`orch_batch_policy.go`（文件变更工具定序与写批次冲突检测）；`orch_validation.go`（文件变更后校验与批次校验规划）；`orch_file_ops.go`（文件读写删与危险路径拦截）；`orch_read.go`（读取，含图片与去重哈希）；`orch_grep.go`（ripgrep 搜索）；`orch_http.go`（http_request / web_fetch 编排）；`orch_git.go`（git 状态）；`orch_memory.go`（memory 工具编排）；`orch_remote*.go`（SSH 远端操作：读写/编辑/删除/跑命令共用一个解析并授权入口、以及四道审批闸门）；`orch_ssh_cluster.go`（模型侧 `ssh_cluster` 工具：列清单、登记新节点、对已登记节点只申请授权不覆盖）；`orch_scheduler.go`（计划任务）；`orch_services.go`（后台服务）；`orch_subagent.go`（子代理：lane 稳定的缓存路由 + run 局部回放 scope）；`orch_kb.go`（知识库 sources/ 读写保护）。
 
 ### `internal/tools/`（纯算法层，绝不依赖 `*App`/`ConfigState`）
-- `calculate/`（数学求值）· `command/`（Bash AST 安全解析与目标提取）· `edit/`（LCS diff 与范围替换）· `git/`（porcelain 解析）· `grep/`（ripgrep 封装）· `memory/`（记忆条目存储与运行时接口）· `pathutil/`（路径安全解析）· `read/`（文本读取与版本计算）· `scheduler/`（调度表达式解析）· `schemautil/`（工具 JSON-Schema 修补：$ref 内联与属性 type 推断）· `service/`（rolling buffer 与长进程判定）· `shared/`（CodedError 与内置 schema）· `toolcall/`（工具调用 ID 规范化、参数解码、截断参数标记）。
+- `calculate/`（数学求值）· `command/`（Bash AST 安全解析与目标提取）· `edit/`（LCS diff 与范围替换）· `git/`（porcelain 解析）· `grep/`（ripgrep 封装）· `memory/`（记忆条目存储与运行时接口）· `pathutil/`（路径安全解析）· `read/`（文本读取与版本计算）· `scheduler/`（调度表达式解析）· `schemautil/`（工具 JSON-Schema 修补：$ref 内联与属性 type 推断）· `service/`（rolling buffer 与长进程判定）· `shared/`（CodedError 与内置 schema）· `sshclient/`（纯 Go SSH 连接、密钥/Agent 认证、主机指纹校验）· `toolcall/`（工具调用 ID 规范化、参数解码、截断参数标记）。
 
 ### `internal/game/`
 （已移除：局域网联机中继服务下线，游戏区仅保留人机对战；模型调用经 `internal/app/biz_game_ai.go`。）

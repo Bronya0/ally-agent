@@ -8,6 +8,7 @@
 package app
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -138,5 +139,63 @@ func TestSSHSessionApprovalLifecycle(t *testing.T) {
 	// Different session must not inherit approval
 	if app.IsServerConnectionApproved("sess-other", alias) {
 		t.Fatal("approval must be scoped to sessionID")
+	}
+}
+
+func TestNormalizeSSHAuthType(t *testing.T) {
+	cases := []struct {
+		name string
+		node SSHServerNode
+		want string
+	}{
+		{"explicit key uses passphrase semantics", SSHServerNode{AuthType: sshAuthTypeKey, Password: "key-passphrase", KeyPath: "id_ed25519"}, sshAuthTypeKey},
+		{"explicit password stays password", SSHServerNode{AuthType: sshAuthTypePassword, Password: "account-password"}, sshAuthTypePassword},
+		{"legacy key inferred", SSHServerNode{Password: "key-passphrase", KeyPath: "id_ed25519"}, sshAuthTypeKey},
+		{"legacy password inferred", SSHServerNode{Password: "account-password"}, sshAuthTypePassword},
+		{"empty credentials use agent", SSHServerNode{}, sshAuthTypeAgent},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := normalizeSSHAuthType(tc.node); got != tc.want {
+				t.Fatalf("normalizeSSHAuthType() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+
+	tempDir := t.TempDir()
+	app := NewApp()
+	app.configPath = filepath.Join(tempDir, "config.json")
+	if err := app.SaveSSHServer(SSHServerNode{Alias: "legacy", Host: "127.0.0.1", Username: "user", Password: "pw", Description: "test"}); err != nil {
+		t.Fatalf("SaveSSHServer: %v", err)
+	}
+	stored, ok := app.GetSSHServer("legacy")
+	if !ok || stored.AuthType != sshAuthTypePassword {
+		t.Fatalf("saved node authType = %q, ok=%v; want password mode", stored.AuthType, ok)
+	}
+
+	agentNode := normalizeSSHServerNode(SSHServerNode{AuthType: sshAuthTypeAgent, Password: "stale-secret", KeyPath: "stale-key"})
+	if agentNode.Password != "" || agentNode.KeyPath != "" {
+		t.Fatalf("agent mode retained hidden credentials: %+v", agentNode)
+	}
+}
+
+func TestLoadSSHClustersInfersLegacyKeyMode(t *testing.T) {
+	tempDir := t.TempDir()
+	app := NewApp()
+	app.configPath = filepath.Join(tempDir, "config.json")
+	legacy := `{"servers":[{"id":"legacy-id","alias":"legacy-key","host":"127.0.0.1","username":"user","keyPath":"id_ed25519","password":"key-passphrase","description":"test"},{"id":"agent-id","alias":"stale-agent","host":"127.0.0.2","username":"user","authType":"agent","keyPath":"stale-key","password":"stale-secret","description":"test"}]}`
+	if err := os.WriteFile(app.sshClustersFilePath(), []byte(legacy), 0o600); err != nil {
+		t.Fatalf("write legacy cluster file: %v", err)
+	}
+	if err := app.loadSSHClusters(); err != nil {
+		t.Fatalf("load legacy clusters: %v", err)
+	}
+	node, ok := app.GetSSHServer("legacy-key")
+	if !ok || node.AuthType != sshAuthTypeKey {
+		t.Fatalf("loaded authType = %q, ok=%v; want key mode", node.AuthType, ok)
+	}
+	agentNode, ok := app.GetSSHServer("stale-agent")
+	if !ok || agentNode.AuthType != sshAuthTypeAgent || agentNode.Password != "" || agentNode.KeyPath != "" {
+		t.Fatalf("loaded agent node retained hidden credentials: %+v, ok=%v", agentNode, ok)
 	}
 }

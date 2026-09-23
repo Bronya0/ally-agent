@@ -36,6 +36,47 @@ type SSHServerNode struct {
 	UpdatedAtMS int64  `json:"updatedAtMs"`
 }
 
+const (
+	sshAuthTypeAgent    = "agent"
+	sshAuthTypeKey      = "key"
+	sshAuthTypePassword = "password"
+)
+
+// normalizeSSHAuthType keeps the credential interpretation tied to the node's
+// declared mode. Legacy nodes without authType infer it from their credentials.
+func normalizeSSHAuthType(node SSHServerNode) string {
+	switch strings.ToLower(strings.TrimSpace(node.AuthType)) {
+	case sshAuthTypeAgent:
+		return sshAuthTypeAgent
+	case sshAuthTypeKey:
+		return sshAuthTypeKey
+	case sshAuthTypePassword:
+		return sshAuthTypePassword
+	default:
+		if strings.TrimSpace(node.KeyPath) != "" {
+			return sshAuthTypeKey
+		}
+		if node.Password != "" {
+			return sshAuthTypePassword
+		}
+		return sshAuthTypeAgent
+	}
+}
+
+// normalizeSSHServerNode makes stored secrets match the declared auth mode.
+// In particular, agent nodes must not retain credentials hidden from the UI.
+func normalizeSSHServerNode(node SSHServerNode) SSHServerNode {
+	node.AuthType = normalizeSSHAuthType(node)
+	switch node.AuthType {
+	case sshAuthTypeAgent:
+		node.Password = ""
+		node.KeyPath = ""
+	case sshAuthTypePassword:
+		node.KeyPath = ""
+	}
+	return node
+}
+
 // SSHServerSummary is the model-facing DTO: sensitive fields (password, keyPath)
 // are intentionally omitted to prevent secret exposure to LLM contexts.
 type SSHServerSummary struct {
@@ -155,6 +196,7 @@ func (a *App) loadSSHClusters() error {
 		a.sshClusters = make(map[string]SSHServerNode, len(store.Servers))
 	}
 	for _, s := range store.Servers {
+		s = normalizeSSHServerNode(s)
 		alias := strings.ToLower(strings.TrimSpace(s.Alias))
 		if alias != "" {
 			a.sshClusters[alias] = s
@@ -306,6 +348,7 @@ func (a *App) SaveSSHServer(node SSHServerNode) error {
 		return errors.New("server description is required")
 	}
 	node.Description = strings.TrimSpace(node.Description)
+	node = normalizeSSHServerNode(node)
 	if node.Port <= 0 {
 		node.Port = 22
 	}

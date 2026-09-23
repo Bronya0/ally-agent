@@ -417,7 +417,7 @@ func TestRemoteTargetEndpointSpellingUsesRegisteredNode(t *testing.T) {
 	if rt.Host != "deploy@10.0.0.7" || rt.Port != "2222" || rt.WorkspaceRoot != "/srv/www" {
 		t.Fatalf("unexpected resolved target: %+v", rt)
 	}
-	if entry, ok := app.sshCredentials.lookup(sshCredentialKey(rt.Host, rt.Port)); !ok || entry.password != "pw" {
+	if entry, ok := app.sshCredentials.lookup(sshCredentialKey(rt.Host, rt.Port)); !ok || entry.authType != sshAuthTypePassword || entry.password != "pw" {
 		t.Fatalf("resolving a registered node must cache its credential in the endpoint slot: ok=%v entry=%+v", ok, entry)
 	}
 }
@@ -436,7 +436,7 @@ func TestSSHClustersPurgeCredentialOnNodeChange(t *testing.T) {
 	}
 	key := sshCredentialKey("root@10.1.1.1", "")
 
-	app.sshCredentials.store(key, "secret", "")
+	app.sshCredentials.store(key, sshAuthTypePassword, "secret", "")
 	if _, ok := app.sshCredentials.lookup(key); !ok {
 		t.Fatal("precondition: credential should be cached")
 	}
@@ -449,7 +449,7 @@ func TestSSHClustersPurgeCredentialOnNodeChange(t *testing.T) {
 		t.Fatal("clearing the password must drop the cached credential")
 	}
 
-	app.sshCredentials.store(key, "secret", "")
+	app.sshCredentials.store(key, sshAuthTypePassword, "secret", "")
 	if err := app.DeleteSSHServer("n1"); err != nil {
 		t.Fatal(err)
 	}

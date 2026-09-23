@@ -15,7 +15,6 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"os/exec"
 	"path"
 	"path/filepath"
 	"strconv"
@@ -25,6 +24,7 @@ import (
 	"ally-dev/internal/tools/command"
 	"ally-dev/internal/tools/edit"
 	"ally-dev/internal/tools/read"
+	"ally-dev/internal/tools/sshclient"
 )
 
 const remotePythonMarker = "ALLY_REMOTE_RESULT_JSON:"
@@ -840,9 +840,9 @@ func (a *App) resolveAndAuthorizeRemoteTarget(ctx context.Context, raw string) (
 	}
 
 	// 凭据在四道闸门都放行之后才入槽：被拒绝的调用不应该留下可用的密码。
-	// 槽位由解析后的端点决定，与 prepareRemoteSSHInvocation 的查表同源。
+	// 槽位由解析后的端点决定，invokeRemotePython 按同一端点读取凭据。
 	if isRegistered && (serverNode.Password != "" || serverNode.KeyPath != "") {
-		a.sshCredentials.store(sshCredentialKey(rt.Host, rt.Port), serverNode.Password, serverNode.KeyPath)
+		a.sshCredentials.store(sshCredentialKey(rt.Host, rt.Port), normalizeSSHAuthType(serverNode), serverNode.Password, serverNode.KeyPath)
 	}
 
 	return rt, nil
@@ -971,35 +971,48 @@ func (a *App) invokeRemotePython(ctx context.Context, rt remoteTarget, payload m
 	if err != nil {
 		return err
 	}
-	args, env, cleanup, err := a.prepareRemoteSSHInvocation(ctx, rt, rt.Port)
-	defer cleanup()
-	if err != nil {
-		return err
+	entry, hasCredential := a.sshCredentials.lookup(sshCredentialKey(rt.Host, rt.Port))
+	sshConfig := sshclient.Config{Host: rt.Host, Port: rt.Port, AuthMode: sshclient.AuthModeAgent}
+	if hasCredential {
+		switch entry.authType {
+		case sshAuthTypeKey:
+			sshConfig.AuthMode = sshclient.AuthModeKey
+			sshConfig.KeyPath = entry.keyPath
+			sshConfig.KeyPassphrase = entry.password
+		case sshAuthTypePassword:
+			sshConfig.AuthMode = sshclient.AuthModePassword
+			sshConfig.Password = entry.password
+		}
 	}
 	if timeout <= 0 {
 		timeout = 60 * time.Second
 	}
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	cmd := exec.CommandContext(runCtx, "ssh", args...)
-	if env != nil {
-		cmd.Env = env
-	}
-	cmd.Stdin = strings.NewReader(script)
-	var stdout bytes.Buffer
-	var stderr limitedBuffer
-	stderr.limit = 64 * 1024
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	hideCommandWindow(cmd)
-	err = cmd.Run()
+
+	const remotePythonCommand = "sh -c 'command -v python3 >/dev/null 2>&1 && exec python3 - ; command -v python2 >/dev/null 2>&1 && exec python2 - ; exec python -'"
+	result, err := sshclient.Run(runCtx, sshConfig, remotePythonCommand, strings.NewReader(script))
+	stdout := result.Stdout
+	stderr := result.Stderr
 	if runCtx.Err() == context.DeadlineExceeded {
 		return fmt.Errorf("remote ssh timed out after %s", timeout)
 	}
+	if errors.Is(err, sshclient.ErrHostKeyChanged) {
+		return fmt.Errorf("ssh %s failed: host key verification failed (the saved host key differs; verify the server identity before changing known_hosts): %w", rt.Host, err)
+	}
+	if errors.Is(err, sshclient.ErrOutputTooLarge) {
+		return fmt.Errorf("ssh %s failed: remote helper output exceeded the capture limit: %w", rt.Host, err)
+	}
+	if errors.Is(err, context.Canceled) {
+		return err
+	}
+	if errors.Is(err, sshclient.ErrAuthentication) {
+		return fmt.Errorf("ssh %s failed: authentication failed. Check the SSH cluster username, password, private key, key passphrase, and server authorized_keys: %w", rt.Host, err)
+	}
 	if err != nil {
-		msg := strings.TrimSpace(stderr.String())
+		msg := strings.TrimSpace(string(stderr))
 		if msg == "" {
-			msg = strings.TrimSpace(stdout.String())
+			msg = strings.TrimSpace(string(stdout))
 		}
 		if msg == "" {
 			msg = err.Error()
@@ -1012,16 +1025,6 @@ func (a *App) invokeRemotePython(ctx context.Context, rt remoteTarget, payload m
 			strings.Contains(msg, "python: command not found") || strings.Contains(msg, "python: not found") {
 			return fmt.Errorf("remote host %s has no python3/python2/python in PATH; remote_* tools need a python interpreter on the remote side (install python3, python2 or python, or add it to PATH): %s", rt.Host, msg)
 		}
-		if strings.Contains(strings.ToLower(msg), "host key verification failed") {
-			return fmt.Errorf("ssh %s failed: host key verification failed (host key differs from ~/.ssh/known_hosts; remove outdated entry from ~/.ssh/known_hosts if host was reinstalled): %s", rt.Host, msg)
-		}
-		// 认证失败给出可操作指引。匹配 "user@host: Permission denied (methods)"
-		// 这一 ssh 认证失败的固定格式，而不是裸的 "Permission denied"：远端
-		// 命令自己的 stderr（如 sudo、ls 的权限报错）也会汇入 ssh stderr，
-		// 广撒网会把普通命令错误误判成登录失败。
-		if strings.Contains(msg, rt.Host+": Permission denied (") {
-			return fmt.Errorf("ssh %s failed: %s\nhint: authentication failed. password login: the stored password is likely wrong — fix it for that node in the SSH cluster manager (composer SSH panel › Manage clusters, or the sidebar SSH clusters page). key login: a passphrase-protected key also needs its passphrase stored as the password (keyPath and password combine). passwordless: check the local default keys (~/.ssh) and the remote authorized_keys", rt.Host, msg)
-		}
 		return fmt.Errorf("ssh %s failed: %s", rt.Host, msg)
 	}
 	// 远程命令的输出会被原样嵌在 ok() 的 JSON output 字段里，如果命令
@@ -1029,7 +1032,7 @@ func (a *App) invokeRemotePython(ctx context.Context, rt remoteTarget, payload m
 	// 简单用 LastIndex 取最后一个匹配（会命中 JSON 内部），需要从后往前
 	// 逐个尝试：真正 ok() 的 JSON 必然合法，误命中的候选必然解析失败。
 	markerBytes := []byte(remotePythonMarker)
-	stdoutBytes := stdout.Bytes()
+	stdoutBytes := stdout
 	var resp remotePythonResponse
 	decoded := false
 	searchFrom := len(stdoutBytes)
@@ -1046,7 +1049,7 @@ func (a *App) invokeRemotePython(ctx context.Context, rt remoteTarget, payload m
 		searchFrom = idx
 	}
 	if !decoded {
-		return fmt.Errorf("remote helper returned no JSON result; stderr: %s", strings.TrimSpace(stderr.String()))
+		return fmt.Errorf("remote helper returned no JSON result; stderr: %s", strings.TrimSpace(string(stderr)))
 	}
 	if !resp.OK {
 		return remoteHelperError(resp)

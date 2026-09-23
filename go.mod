@@ -4,6 +4,7 @@ go 1.27.0
 
 require (
 	codeberg.org/readeck/go-readability/v2 v2.1.2
+	github.com/Microsoft/go-winio v0.6.2
 	github.com/andybalholm/brotli v1.2.2
 	github.com/anthropics/anthropic-sdk-go v1.68.0
 	github.com/go-git/go-git/v5 v5.19.2
@@ -14,9 +15,10 @@ require (
 	github.com/sashabaranov/go-openai v1.42.0
 	github.com/sergi/go-diff v1.4.0
 	github.com/wailsapp/wails/v3 v3.0.0-beta.15
-	golang.org/x/net v0.57.0
-	golang.org/x/sys v0.47.0
-	golang.org/x/text v0.41.0
+	golang.org/x/crypto v0.57.0
+	golang.org/x/net v0.58.0
+	golang.org/x/sys v0.48.0
+	golang.org/x/text v0.42.0
 	mvdan.cc/sh/v3 v3.13.1
 )
 
@@ -51,6 +53,6 @@ require (
 	github.com/tidwall/sjson v1.2.5 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	go.yaml.in/yaml/v4 v4.0.0-rc.2 // indirect
-	golang.org/x/sync v0.22.0 // indirect
+	golang.org/x/sync v0.23.0 // indirect
 	gopkg.in/warnings.v0 v0.1.2 // indirect
 )

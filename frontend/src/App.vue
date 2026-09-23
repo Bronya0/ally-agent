@@ -796,14 +796,9 @@ const darkThemeOverrides = {
     border: '1px solid rgba(255,255,255,0.12)',
     borderFocus: '1px solid rgba(255,255,255,0.32)',
   },
-  // Switch 开启态默认沿用 primaryColor（#d4d4d4 灰白），与关闭态（灰）
-  // 区分度太低，看着像没开。这里单独覆盖为项目"激活/已连接"语义的绿色，
-  // 与 session-running / mcp-status-dot.connected 一致。不影响其它依赖
-  // primaryColor 的组件（n-button / n-checkbox / n-tag 等）。
-  Switch: {
-    railColorActive: '#4ade80',
-    loadingColor: '#4ade80',
-  },
+  // Keep Naive's base primary color neutral for components such as tags.
+  // Accent-bearing buttons and selection controls are mapped to --ally-accent
+  // in style.css; CSS vars must not be passed through Naive's JS color derivation.
 };
 
 // Light mode: clean acrylic glass (DeepSeek-style modal language). Overlay
@@ -847,10 +842,6 @@ const lightThemeOverrides = {
     placeholderColor: '#7a8191',
     border: '1px solid #bfc6d4',
     borderFocus: '1px solid #616878',
-  },
-  Switch: {
-    railColorActive: '#16a34a',
-    loadingColor: '#16a34a',
   },
 };
 

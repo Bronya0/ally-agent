@@ -1,5 +1,4 @@
 [read-doc-anydoc] 2026-08-24 小心：read 工具已移除办公/PDF 文档抽取（.docx/.pptx/.xlsx/.pdf 返回 E_DOCUMENT_UNSUPPORTED 并指路 anydoc skill）；不要再给 read 加文档解析或 sheet/maxChars 参数，读文档的唯一路径是 anydoc 转 .md 后再 read。危害：重新引入会与 schema 承诺冲突、模型行为不可预期。@internal/app/orch_read.go @internal/tools/shared/builtins.go
-[askpass-win-bat] 2026-09-22 小心：Windows 原生 OpenSSH 用 CreateProcessW 直接启动 SSH_ASKPASS，跑不了 .sh（error:193）；须 .bat 且用 setlocal EnableDelayedExpansion 的 echo(!VAR! 延迟展开（%VAR% 会被密码里的 %&|<>^" 拆断/注入）。@internal/app/orch_ssh_credential.go
 [win-explorer] 2026-08-22 小心：Go exec.Command 只在参数含空格时加引号，explorer.exe 收到无空格但含 = 等特殊字符的路径会解析失败并静默回退到“此电脑”。危害：文件浏览器“打开目录”对 D:\doc\=项目文档= 这类路径开错位置且不报错。修法：SysProcAttr.CmdLine 整段构造命令行并强制引号（explorerCommand）。@internal/app/host_filemanager_windows.go
 [tool-kind-downstream] 2026-09-04 小心：工具分类异常时严禁在下游消费处硬加 !== 'specific_tool' 负向排除打补丁，必须回溯 toolKind 源头独立分类。危害：破坏单一真实源、到处硬编码特判劣化代码复杂度。@frontend/src/App.vue
 [vue-ws-condense] 2026-09-09 小心：Vue SFC 模板里插值前后的纯空格文本节点会被 whitespace: 'condense' 移除（元素/插值边界处的空格不保留），不要靠模板里写空格做分隔。修法：把分隔符写进 JS 表达式（`{{ ' ' + x }}` 或 `{{ x + ' ' }}`）或用 CSS gap。危害：两个动态片段直接粘在一起，如 "1m 23s14:32"。@frontend/src/components/ChatMessages.vue
@@ -44,3 +43,4 @@
 [identity-alias-vs-endpoint] 2026-09-23 节点身份别只认别名：真实端点也要反查到同一节点（凭据槽按解析后端点入键）。@orch_remote.go
 [ssh-cred-cache-invalidate] 2026-09-23 节点删除/改写必须失效其凭据槽（purgeHost），否则清掉的密码用到 TTL 到期。@biz_ssh_cluster.go
 [unknown-vs-empty-replace] 2026-09-23 整份替换型保存别把“未加载”当“空”：未知态必须禁用提交，否则一次勾选静默撤销其余条目。@frontend/src/App.vue
+[ssh-auth-mode] 2026-09-23 小心：认证按 authType 分流；密钥口令只解本地密钥，绝不回用为账号密码。@internal/tools/sshclient

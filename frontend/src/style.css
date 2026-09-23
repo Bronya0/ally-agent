@@ -159,6 +159,7 @@
      Chromium/Webview2 runtime), so the accent stays a single-source value:
      changing the seed below re-tints every accent usage in the app. */
   --ally-accent: #e0a458; /* amber seed */
+  --ally-accent-ink: #1a1a1a; /* readable text on the app's light accent colors */
   --ally-accent-bright: color-mix(in srgb, var(--ally-accent) 82%, #ffffff);
   --ally-accent-strong: color-mix(in srgb, var(--ally-accent) 62%, #ffffff);
   --ally-accent-soft:   color-mix(in srgb, var(--ally-accent) 46%, #ffffff);
@@ -5838,5 +5839,86 @@ code, pre {
 .app-hidden *::before,
 .app-hidden *::after {
   animation-play-state: paused !important;
+}
+
+/* Naive's primary controls use inline theme colors, so map the interactive
+   states to the active app palette here instead of passing CSS vars through
+   Naive's JavaScript color calculations in themeOverrides. */
+.n-button.n-button--primary-type:not(.n-button--dashed):not(.n-button--ghost):not(.n-button--secondary):not(.provider-doc-button) {
+  --n-color: var(--ally-accent) !important;
+  --n-color-hover: var(--ally-accent-strong) !important;
+  --n-color-pressed: var(--ally-accent-bright) !important;
+  --n-color-focus: var(--ally-accent-strong) !important;
+  --n-color-disabled: color-mix(in srgb, var(--ally-accent) 26%, var(--ally-surface-raised)) !important;
+  --n-ripple-color: var(--ally-accent-bright) !important;
+  --n-text-color: var(--ally-accent-ink) !important;
+  --n-text-color-hover: var(--ally-accent-ink) !important;
+  --n-text-color-pressed: var(--ally-accent-ink) !important;
+  --n-text-color-focus: var(--ally-accent-ink) !important;
+  --n-text-color-disabled: var(--ally-text-muted) !important;
+  --n-border: 1px solid var(--ally-accent) !important;
+  --n-border-hover: 1px solid var(--ally-accent-strong) !important;
+  --n-border-pressed: 1px solid var(--ally-accent-bright) !important;
+  --n-border-focus: 1px solid var(--ally-accent-strong) !important;
+  --n-border-disabled: 1px solid color-mix(in srgb, var(--ally-accent) 26%, var(--ally-surface-raised)) !important;
+}
+
+.n-button.n-button--primary-type.n-button--dashed,
+.theme-accent-outline-button {
+  --n-text-color: var(--ally-accent-bright) !important;
+  --n-text-color-hover: var(--ally-accent-strong) !important;
+  --n-text-color-pressed: var(--ally-accent) !important;
+  --n-text-color-focus: var(--ally-accent-strong) !important;
+  --n-text-color-disabled: var(--ally-text-muted) !important;
+  --n-border: 1px dashed var(--ally-accent-dim) !important;
+  --n-border-hover: 1px dashed var(--ally-accent) !important;
+  --n-border-pressed: 1px dashed var(--ally-accent-strong) !important;
+  --n-border-focus: 1px dashed var(--ally-accent) !important;
+  --n-border-disabled: 1px dashed var(--ally-border-strong) !important;
+}
+
+.n-button.n-button--primary-type.n-button--ghost {
+  --n-text-color: var(--ally-accent-bright) !important;
+  --n-text-color-hover: var(--ally-accent-strong) !important;
+  --n-text-color-pressed: var(--ally-accent) !important;
+  --n-text-color-focus: var(--ally-accent-strong) !important;
+  --n-text-color-disabled: var(--ally-text-muted) !important;
+}
+
+.provider-doc-button {
+  --n-text-color: var(--ally-accent-bright) !important;
+  --n-text-color-hover: var(--ally-accent-strong) !important;
+  --n-text-color-pressed: var(--ally-accent) !important;
+  --n-text-color-focus: var(--ally-accent-strong) !important;
+}
+
+.theme-accent-outline-button {
+  --n-border: 1px dashed var(--ally-accent-dim) !important;
+  --n-border-hover: 1px dashed var(--ally-accent) !important;
+  --n-border-pressed: 1px dashed var(--ally-accent-strong) !important;
+  --n-border-focus: 1px dashed var(--ally-accent) !important;
+}
+
+.n-checkbox {
+  --n-color-checked: var(--ally-accent) !important;
+  --n-color-disabled-checked: color-mix(in srgb, var(--ally-accent) 38%, var(--ally-surface-raised)) !important;
+  --n-border-checked: 1px solid var(--ally-accent) !important;
+  --n-border-focus: 1px solid var(--ally-accent-strong) !important;
+  --n-border-disabled-checked: 1px solid color-mix(in srgb, var(--ally-accent) 38%, var(--ally-surface-raised)) !important;
+  --n-box-shadow-focus: 0 0 0 2px color-mix(in srgb, var(--ally-accent) 28%, transparent) !important;
+  --n-check-mark-color: var(--ally-accent-ink) !important;
+  --n-check-mark-color-disabled-checked: var(--ally-accent-ink) !important;
+}
+
+.n-radio {
+  --n-dot-color-active: var(--ally-accent) !important;
+  --n-box-shadow-active: 0 0 0 1px var(--ally-accent) inset !important;
+  --n-box-shadow-hover: 0 0 0 1px var(--ally-accent) inset !important;
+  --n-box-shadow-focus: 0 0 0 1px var(--ally-accent-strong) inset, 0 0 0 3px color-mix(in srgb, var(--ally-accent) 24%, transparent) !important;
+}
+
+.n-switch {
+  --n-rail-color-active: var(--ally-accent) !important;
+  --n-loading-color: var(--ally-accent-strong) !important;
 }
 
