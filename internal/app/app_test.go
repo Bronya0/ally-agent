@@ -26,9 +26,44 @@ import (
 	"testing"
 	"time"
 
+	toolshared "ally-dev/internal/tools/shared"
 	oaresp "github.com/openai/openai-go/v3/responses"
 	openai "github.com/sashabaranov/go-openai"
 )
+
+func TestRenderHTMLLimitCountsUnicodeCharacters(t *testing.T) {
+	limit := toolshared.MaxRenderHTMLCharacters
+	app := &App{}
+	for _, tc := range []struct {
+		name   string
+		length int
+		wantOK bool
+	}{
+		{name: "at limit", length: limit, wantOK: true},
+		{name: "over limit", length: limit + 1, wantOK: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args, err := json.Marshal(map[string]string{"html": strings.Repeat("界", tc.length)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			result := app.executeTool(context.Background(), ConfigState{}, "schema-test", "render_html", args)
+			if result.OK != tc.wantOK {
+				t.Fatalf("result OK = %v, want %v (error: %v)", result.OK, tc.wantOK, result.Error)
+			}
+			if !tc.wantOK {
+				return
+			}
+			data, ok := result.Data.(map[string]any)
+			if !ok {
+				t.Fatalf("unexpected render result: %#v", result.Data)
+			}
+			if got, ok := data["length"].(int); !ok || got != tc.length {
+				t.Fatalf("reported character length = %#v, want %d", data["length"], tc.length)
+			}
+		})
+	}
+}
 
 func TestDefaultConfigWorkspaceEmptyUntilChosen(t *testing.T) {
 	// 空 workspace = 用户从未选择过工作区：首次启动前端据此落在临时工作区

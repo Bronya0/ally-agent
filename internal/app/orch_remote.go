@@ -373,14 +373,24 @@ def op_write(root, payload):
         "createdDirs": created_dirs,
     }
 
+def is_workspace_root_child_directory(root, rel):
+    rel = "" if rel is None else to_os_text(rel)
+    parts = [part for part in rel.replace("\\", "/").split("/") if part and part != "."]
+    if len(parts) != 1:
+        return False
+    return os.path.isdir(os.path.join(root, parts[0]))
+
 def op_delete(root, payload):
-    path = safe_join(root, payload.get("path", ""))
+    rel = payload.get("path", "")
+    path = safe_join(root, rel)
     if path == root:
         raise ValueError("refusing to delete remote workspace root")
     if contains_vcs(path):
         raise ValueError("refusing to delete path containing VCS metadata")
     if is_protected_delete_path(path):
         raise ValueError("refusing to delete OS-sensitive path")
+    if is_workspace_root_child_directory(root, rel):
+        raise ValueError("refusing to delete top-level workspace directory")
     if os.path.isdir(path):
         if not payload.get("recursive"):
             raise ValueError("path is a directory; set recursive=true")
@@ -1513,50 +1523,6 @@ func (a *App) remoteDeletePath(ctx context.Context, req RemoteDeletePathRequest)
 	for _, part := range strings.Split(cleanPath, "/") {
 		if part == ".git" || part == ".svn" || part == ".hg" {
 			return nil, codedToolError("E_DELETE_BLOCKED", errors.New("refusing to delete VCS metadata"))
-		}
-	}
-
-	// Approval Gate 3: Delete approval
-	if meta, ok := ctx.Value(toolExecutionMetaContextKey{}).(toolExecutionMeta); ok && meta.sessionID != "" {
-		askReq := AskRequest{
-			Questions: []AskQuestion{
-				{
-					ID: "approve_remote_delete",
-					Question: fmt.Sprintf("⚠️ 高危删除警告：模型正尝试删除远端路径 [%s] %s (recursive=%v)。\n\n是否确认允许删除？",
-						rt.Host, cleanPath, req.Recursive),
-					Options: []AskOption{
-						{
-							ID:          "approve",
-							Label:       "确认删除",
-							Description: "永久删除远端目标路径及其内容",
-						},
-						{
-							ID:          "reject",
-							Label:       "拒绝删除（保留原路径）",
-							Description: "中断删除操作，远端文件与目录保持不变",
-							Recommended: true,
-						},
-					},
-				},
-			},
-		}
-		askResult, askErr := a.executeAsk(ctx, meta.sessionID, askReq)
-		if askErr != nil {
-			return nil, codedToolError("E_DELETE_CANCELLED", fmt.Errorf("delete approval was cancelled: %w", askErr))
-		}
-		approved := false
-		for _, ans := range askResult.Answers {
-			if ans.QuestionID == "approve_remote_delete" {
-				for _, sel := range ans.Selections {
-					if sel.OptionID == "approve" {
-						approved = true
-						break
-					}
-				}
-			}
-		}
-		if !approved {
-			return nil, codedToolError("E_DELETE_REJECTED", fmt.Errorf("user rejected deleting remote path %s", cleanPath))
 		}
 	}
 

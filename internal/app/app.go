@@ -2635,12 +2635,13 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		}
 		err, argWarnings = decodeJSON(&req)
 		if err == nil {
-			if len(req.HTML) > 50000 {
-				err = errors.New("HTML content exceeds 50,000 character limit")
+			htmlLength := utf8.RuneCountInString(req.HTML)
+			if htmlLength > toolshared.MaxRenderHTMLCharacters {
+				err = fmt.Errorf("HTML content exceeds %d character limit", toolshared.MaxRenderHTMLCharacters)
 			} else {
 				data = map[string]any{
 					"rendered": true,
-					"length":   len(req.HTML),
+					"length":   htmlLength,
 					"title":    req.Title,
 				}
 			}

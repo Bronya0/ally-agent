@@ -684,18 +684,21 @@ func TestRemoteReadFileDuplicatePathSlots(t *testing.T) {
 }
 
 // TestRemoteHelperDeleteOpTouchesOnlyWorkspace 用真实 helper 脚本跑完整
-// delete op（只操作 t.TempDir() 内的文件）：普通文件删、目录需 recursive、
-// 递归删目录、工作区根本身拒绝、逃逸路径拒绝。
+// delete op（只操作 t.TempDir()）：普通文件允许删、一级目录拒绝、二级目录
+// 必须 recursive 后允许删除、工作区根与逃逸路径拒绝。
 func TestRemoteHelperDeleteOpTouchesOnlyWorkspace(t *testing.T) {
 	py := pickRemoteHelperPython(t)
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "app.py"), []byte("print('x')\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(filepath.Join(root, "sub"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(root, "sub", "deep"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(root, "sub", "nested.txt"), []byte("n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "sub", "deep", "nested.txt"), []byte("d"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -721,28 +724,34 @@ func TestRemoteHelperDeleteOpTouchesOnlyWorkspace(t *testing.T) {
 		t.Fatalf("app.py should be deleted, stat err: %v", err)
 	}
 
-	// 2) 目录未给 recursive 报错
-	resp = run(map[string]any{"op": "delete", "workspaceRoot": root, "path": "sub", "recursive": false})
-	if resp.OK {
-		t.Fatal("delete dir without recursive should fail")
-	}
-	if !strings.Contains(resp.Error, "recursive") {
-		t.Fatalf("unexpected error: %s", resp.Error)
-	}
-
-	// 3) recursive 删除子目录成功
+	// 2) 禁止删除工作区根目录下的一级目录，即使 recursive=true。
 	resp = run(map[string]any{"op": "delete", "workspaceRoot": root, "path": "sub", "recursive": true})
-	if !resp.OK {
-		t.Fatalf("recursive delete failed: %s", resp.Error)
+	if resp.OK || !strings.Contains(resp.Error, "top-level workspace directory") {
+		t.Fatalf("top-level directory delete should be refused, got ok=%v error=%s", resp.OK, resp.Error)
+	}
+	if _, err := os.Stat(filepath.Join(root, "sub")); err != nil {
+		t.Fatalf("top-level directory should remain: %v", err)
 	}
 
-	// 4) 工作区根本身拒绝
+	// 3) 二级目录未给 recursive 仍拒绝。
+	resp = run(map[string]any{"op": "delete", "workspaceRoot": root, "path": "sub/deep", "recursive": false})
+	if resp.OK || !strings.Contains(resp.Error, "recursive") {
+		t.Fatalf("non-recursive nested directory delete should fail, got ok=%v error=%s", resp.OK, resp.Error)
+	}
+
+	// 4) 二级目录显式 recursive 后允许删除。
+	resp = run(map[string]any{"op": "delete", "workspaceRoot": root, "path": "sub/deep", "recursive": true})
+	if !resp.OK {
+		t.Fatalf("recursive nested delete failed: %s", resp.Error)
+	}
+
+	// 5) 工作区根本身拒绝
 	resp = run(map[string]any{"op": "delete", "workspaceRoot": root, "path": ".", "recursive": false})
 	if resp.OK || !strings.Contains(resp.Error, "refusing to delete remote workspace root") {
 		t.Fatalf("workspace root delete should be refused, got ok=%v error=%s", resp.OK, resp.Error)
 	}
 
-	// 5) 逃逸路径拒绝
+	// 6) 逃逸路径拒绝
 	resp = run(map[string]any{"op": "delete", "workspaceRoot": root, "path": "../outside.txt", "recursive": false})
 	if resp.OK || !strings.Contains(resp.Error, "..") {
 		t.Fatalf("escape path should be refused, got ok=%v error=%s", resp.OK, resp.Error)
