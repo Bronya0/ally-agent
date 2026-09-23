@@ -32,6 +32,7 @@ import BookOutlined from '@vicons/antd/BookOutlined';
 import ThunderboltOutlined from '@vicons/antd/ThunderboltOutlined';
 import ApiOutlined from '@vicons/antd/ApiOutlined';
 import RobotOutlined from '@vicons/antd/RobotOutlined';
+import ClusterOutlined from '@vicons/antd/ClusterOutlined';
 import BarChartOutlined from '@vicons/antd/BarChartOutlined';
 import AppstoreOutlined from '@vicons/antd/AppstoreOutlined';
 import SettingOutlined from '@vicons/antd/SettingOutlined';
@@ -74,6 +75,7 @@ const modeOptions = computed(() => [
   { label: t('app.mode.skills'), key: 'skills', icon: renderIcon(ThunderboltOutlined) },
   { label: t('app.mode.mcp'), key: 'mcp', icon: renderIcon(ApiOutlined) },
   { label: t('app.mode.models'), key: 'models', icon: renderIcon(RobotOutlined) },
+  { label: t('app.mode.sshCluster'), key: 'ssh', icon: renderIcon(ClusterOutlined) },
   { label: t('header.tokenStats'), key: 'stats', icon: renderIcon(BarChartOutlined) },
   { label: t('header.games'), key: 'games', icon: renderIcon(SwordsIcon) },
   { label: t('header.settings'), key: 'settings', icon: renderIcon(SettingOutlined) },

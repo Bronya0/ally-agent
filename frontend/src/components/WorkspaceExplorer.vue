@@ -1077,6 +1077,10 @@ async function refreshNode(dirPath = '', workspace = props.workspace) {
 // chat 与 KB 的资源树是同一组件，行为天然统一。
 let pastingFiles = false;
 let pasteLoadingRe = null;
+// 已弹出的 loading 提示句柄：duration 为 0 的提示不会自动消失，收尾时必须显式
+// destroy，否则大文件复制完成后“正在复制文件…”会一直挂在屏幕上（小文件因延时
+// 未触发而看不到这个提示）。
+let pasteLoading = null;
 
 async function pasteFilesFromClipboard() {
   if (disposed) return;
@@ -1086,13 +1090,18 @@ async function pasteFilesFromClipboard() {
   pastingFiles = true;
   // 大目录复制可能耗时较长；延迟弹 loading，短复制（毫秒级）无感。
   pasteLoadingRe = window.setTimeout(() => {
-    message.loading(t('app.workspaceExplorer.pasteCopying'), { duration: 0 });
+    pasteLoading = message.loading(t('app.workspaceExplorer.pasteCopying'), { duration: 0 });
   }, 300);
   try {
     await doPasteFilesFromClipboard();
   } finally {
     window.clearTimeout(pasteLoadingRe);
     pasteLoadingRe = null;
+    // 成功、部分失败、抛错三条路径都在这里收掉 loading，避免提示永久驻留。
+    if (pasteLoading) {
+      pasteLoading.destroy();
+      pasteLoading = null;
+    }
     pastingFiles = false;
   }
 }

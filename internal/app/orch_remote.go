@@ -18,6 +18,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -35,11 +36,28 @@ const remotePythonMarker = "ALLY_REMOTE_RESULT_JSON:"
 // 情况下单文件本身即可吃满本预算。
 const maxRemoteReadBatchBytes = 16 * 1024 * 1024
 
+// remotePythonScript 是远端 helper：整段脚本经 ssh stdin 发到远端执行。远端
+// 远端只支持 Linux；解释器可能是 python3，也可能是老系统上唯一的 python
+// （Python 2.7），所以脚本必须同时满足两套语义，改动时守这三条：
+//   - 文本走边界：payload 文本在入口统一转成 OS 认的形态（py2 是 UTF-8 字节串、
+//     py3 是 str），见 to_os_text / payload_os_text；py2 下禁止对 payload 文本用
+//     裸 str()——py2 的 str(unicode) 按 ASCII 编码，命令/路径含非 ASCII 直接抛错。
+//   - 能力探测：os.* / subprocess / signal 的可选 API（fchmod、replace、DEVNULL、
+//     信号表、setsid…）一律先探测再降级，不假设平台与版本。
+//   - 语法底线 Python 2.6 / 3.0：不用 f-string、海象运算符等 2.6 解析不了的写法，
+//     也不用 3.5+ 才有的标准库入口（subprocess.run 等）。
 const remotePythonScript = `
+# -*- coding: utf-8 -*-
 from __future__ import print_function
 import base64, errno, json, os, select, shutil, signal, stat as stat_mod, subprocess, sys, tempfile, time
 
 MARKER = "ALLY_REMOTE_RESULT_JSON:"
+
+# 文本类型集合：Python 2 下 unicode 与 str（字节串）都算文本。
+if sys.version_info[0] < 3:
+    TEXT_TYPES = (str, unicode)
+else:
+    TEXT_TYPES = (str,)
 
 # 受保护删除清单占位符：Go 侧在构建脚本时替换为 JSON 数组字面量。
 # 内容来自 internal/app 的 linux/darwin 分支并集（单一来源）。
@@ -52,10 +70,51 @@ PAYLOAD_B64 = "__PAYLOAD_B64__"
 
 def to_unicode(s):
     if sys.version_info[0] < 3:
+        if isinstance(s, BaseException):
+            # 不能写 unicode(exc)：Python 2 会把异常消息按 ASCII 解码，消息里
+            # 嵌了非 ASCII 字节（远端路径）时反而抛 UnicodeDecodeError。优先
+            # 取 str(exc) 的原始字节（随后按 UTF-8 容错解码），异常自身格式化
+            # 不出来时才退到逐个 args 解码。
+            try:
+                s = str(s)
+            except Exception:
+                s = " ".join(to_unicode(arg) for arg in s.args) if s.args else s.__class__.__name__
         if isinstance(s, str):
             return s.decode("utf-8", "replace")
+        if isinstance(s, unicode):
+            return s
         return unicode(s)
     return str(s)
+
+def to_os_text(s):
+    # 交给 OS（os.* 与 subprocess）的文本形态：Python 2 下必须是 UTF-8 字节串，
+    # Python 3 下是 str。Python 2 的 str(unicode) 一律按 ASCII 编码——命令或
+    # 路径里只要有一个非 ASCII 字符就抛 UnicodeEncodeError（消息里的 position
+    # 是该字符在串中的下标）；远端 locale 非 UTF-8 时 os.* / Popen 同样无法
+    # 编码 unicode 路径。
+    if sys.version_info[0] < 3:
+        if isinstance(s, unicode):
+            return s.encode("utf-8")
+        if isinstance(s, str):
+            return s
+        return str(s)
+    if isinstance(s, str):
+        return s
+    if isinstance(s, bytes):
+        return s.decode("utf-8", "replace")
+    return str(s)
+
+def payload_os_text(obj):
+    # Python 2 下把 payload 里的文本一次性转成 UTF-8 字节串：之后命令与路径
+    # 全程按字节处理，os.path / os.* 不混类型，也不依赖远端 locale 是否为
+    # UTF-8。Python 3 下不做转换（str 本身就是 OS 认的文本）。
+    if isinstance(obj, dict):
+        return dict((key, payload_os_text(value)) for key, value in obj.items())
+    if isinstance(obj, list):
+        return [payload_os_text(item) for item in obj]
+    if isinstance(obj, TEXT_TYPES):
+        return to_os_text(obj)
+    return obj
 
 def fail(msg):
     print(MARKER + json.dumps({"ok": False, "error": to_unicode(msg)}, separators=(",", ":")))
@@ -71,7 +130,10 @@ def decode_payload():
     decoded = base64.urlsafe_b64decode(raw_b64)
     if hasattr(decoded, "decode"):
         decoded = decoded.decode("utf-8")
-    return json.loads(decoded)
+    payload = json.loads(decoded)
+    if sys.version_info[0] < 3:
+        payload = payload_os_text(payload)
+    return payload
 
 def is_subpath(child, parent):
     try:
@@ -84,7 +146,7 @@ def as_posix_rel(root, path):
     return os.path.relpath(path, root).replace("\\", "/")
 
 def safe_join(root, rel):
-    rel = "" if rel is None else str(rel)
+    rel = "" if rel is None else to_os_text(rel)
     if "\x00" in rel:
         raise ValueError("path contains NUL byte")
     if rel == "" or rel == ".":
@@ -111,7 +173,7 @@ def is_protected_delete_path(path):
     # 与本地 isDangerousDeletePath 的 Linux/macOS 分支保持一致
     # （远端只可能是 posix 系统）。统一转成 posix 形式再判断，
     # 避免 Windows 本地测试时把 /etc 渲染成 \etc。
-    p = str(path).replace(os.sep, "/")
+    p = to_os_text(path).replace(os.sep, "/")
     if p == "/":
         return True
     # 镜像本地 isDangerousDeletePath 的 os.TempDir() 豁免：测试与构建工作区
@@ -121,7 +183,7 @@ def is_protected_delete_path(path):
     for tmp_candidate in (tempfile.gettempdir(), "/tmp", "/var/tmp"):
         try:
             for t_str in (tmp_candidate, os.path.realpath(tmp_candidate)):
-                t_posix = str(t_str).replace(os.sep, "/")
+                t_posix = to_os_text(t_str).replace(os.sep, "/")
                 if t_posix and p.startswith(t_posix.rstrip("/") + "/"):
                     return False
         except Exception:
@@ -162,7 +224,7 @@ def read_raw_file(root, rel, max_bytes):
         b64 = b64.decode("ascii")
     return {
         "path": as_posix_rel(root, path),
-        "dataBase64": str(b64),
+        "dataBase64": to_os_text(b64),
         "size": len(data),
         "mode": st.st_mode & 0o777,
         "modTime": iso_mtime(st),
@@ -245,7 +307,7 @@ def op_write(root, payload):
                     raise ValueError("path is a directory")
             except (OSError, IOError):
                 pass
-            raise ValueError("file already exists: " + str(payload.get("path", "")))
+            raise ValueError("file already exists: " + to_os_text(payload.get("path", "")))
         probe_created = True
         os.close(probe_fd)
     data = None
@@ -253,12 +315,18 @@ def op_write(root, payload):
     tmp = None
     replaced = False
     try:
-        raw_b64 = str(payload.get("dataBase64", ""))
+        raw_b64 = to_os_text(payload.get("dataBase64", ""))
         data = base64.b64decode(raw_b64)
         fd, tmp = tempfile.mkstemp(prefix=".ally-write-", dir=parent)
         # 覆盖时保留原文件权限位；新建文件对齐本地 SafeWriteFile 的 0644
         # 默认值——mkstemp 的 0600 会让远程新建文件对其他账号不可读。
-        os.fchmod(fd, original_mode if original_mode is not None else 0o644)
+        # Windows 直到 Python 3.13 才提供 os.fchmod（chmod 接受 fd 也是同一版本
+        # 才支持），缺失时退回按路径授权。
+        target_mode = original_mode if original_mode is not None else 0o644
+        if hasattr(os, "fchmod"):
+            os.fchmod(fd, target_mode)
+        else:
+            os.chmod(tmp, target_mode)
         with os.fdopen(fd, "wb") as f:
             fd = -1
             f.write(data)
@@ -327,12 +395,12 @@ def check_write_targets(root, cwd, targets):
     # 动态目标（变量/glob/命令替换）在 Go 侧已被过滤，不会到达这里。
     if not targets:
         return
-    root_str = str(root)
-    cwd_str = str(cwd)
+    root_str = to_os_text(root)
+    cwd_str = to_os_text(cwd)
     for t in targets:
         if not t or t.startswith("&"):
             continue
-        p = t
+        p = to_os_text(t)
         if not os.path.isabs(p):
             p = os.path.join(cwd_str, p)
         p = os.path.normpath(p)
@@ -357,7 +425,7 @@ def check_write_targets(root, cwd, targets):
             raise ValueError("E_PATH_OUTSIDE: remote command write target is outside workspaceRoot: %s" % p)
 
 def op_run(root, payload):
-    command = str(payload.get("command") or "")
+    command = to_os_text(payload.get("command") or "")
     if not command.strip():
         raise ValueError("command is required")
     cwd = safe_join(root, payload.get("cwd", ""))
@@ -369,9 +437,14 @@ def op_run(root, payload):
         timeout = 1
     if timeout > 600:
         timeout = 600
-    shell = str(payload.get("shell") or "")
+    shell = to_os_text(payload.get("shell") or "")
     if not shell:
-        shell = "/bin/bash" if os.path.exists("/bin/bash") else "/bin/sh"
+        # 默认 shell：posix 用 bash/sh；Windows 没有 /bin/sh，退回 cmd.exe
+        # （COMSPEC），否则 Popen 直接报找不到解释器。
+        if os.name == "nt":
+            shell = os.environ.get("COMSPEC") or "cmd.exe"
+        else:
+            shell = "/bin/bash" if os.path.exists("/bin/bash") else "/bin/sh"
     max_output = int(payload.get("maxOutput") or 131072)
     start = time.time()
     # start_new_session 与 preexec_fn=os.setsid 等价，但不会触发
@@ -394,7 +467,7 @@ def op_run(root, payload):
     proc = subprocess.Popen(
         command,
         shell=True,
-        cwd=str(cwd),
+        cwd=to_os_text(cwd),
         executable=shell,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -412,7 +485,12 @@ def op_run(root, payload):
         except Exception:
             pass
         sys.exit(0)
-    for _sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+    # 信号名不是所有平台都有（Windows 没有 SIGHUP）：按名字取、缺哪个跳过
+    # 哪个，不能让“取信号”这一步把 op_run 打挂。
+    for _sig_name in ("SIGTERM", "SIGHUP", "SIGINT"):
+        _sig = getattr(signal, _sig_name, None)
+        if _sig is None:
+            continue
         try:
             signal.signal(_sig, _terminate_command_group)
         except (ValueError, OSError):
@@ -525,7 +603,7 @@ def op_run(root, payload):
     output = bytes(out).decode("utf-8", "replace")
     return {
         "command": command,
-        "cwd": str(cwd),
+        "cwd": to_os_text(cwd),
         "shell": shell,
         "shellPath": shell,
         "output": output,
@@ -537,7 +615,7 @@ def op_run(root, payload):
 
 try:
     payload = decode_payload()
-    raw_root = os.path.expanduser(str(payload["workspaceRoot"]))
+    raw_root = os.path.expanduser(to_os_text(payload["workspaceRoot"]))
     if not os.path.exists(raw_root):
         raise ValueError("workspaceRoot does not exist: %s" % raw_root)
     root = os.path.realpath(raw_root)
@@ -563,7 +641,7 @@ try:
         ok({"checked": True})
     elif op == "_check_protected":
         # 测试专用内部 op：直接暴露删除保护判定，便于本地单测。
-        ok({"protected": is_protected_delete_path(str(payload["path"]))})
+        ok({"protected": is_protected_delete_path(to_os_text(payload["path"]))})
     else:
         raise ValueError("unknown op: %s" % op)
 except Exception as exc:
@@ -613,6 +691,161 @@ func parseRemoteTarget(raw string) (remoteTarget, error) {
 		return remoteTarget{}, errors.New("remote workspaceRoot must be an absolute non-root path")
 	}
 	return remoteTarget{Raw: raw, Host: host, WorkspaceRoot: root}, nil
+}
+
+// remoteDestructiveCommands 是本地命令风险表没有建模、但会不可逆改写内容的命令
+// （按名字比对，来自 shell 解析结果而不是子串，见 isDestructiveRemoteCommand）。
+var remoteDestructiveCommands = map[string]bool{
+	"truncate": true,
+	"shred":    true,
+}
+
+// isDestructiveRemoteCommand 判断命令行里是否存在破坏性调用，供审批闸门使用。
+// 判据复用本地 command 工具的同一套 shell 解析与风险表（单一真实源）：
+//   - 风险表：mkfs*/shutdown/reboot/poweroff/chmod 000/dd 写块设备/cp 自无限设备；
+//   - 删除类：复用托管删除上下文识别（git rm、docker rm 等不算裸删除）；
+//   - 另外补 truncate / shred 这两个风险表未建模的一次性破坏命令。
+//
+// 刻意不用子串匹配：`git add .`（含 "dd "）、`echo confirm this`（含 "rm "）这类
+// 误报会把审批弹窗训练成无脑点过，真正的危险操作反而被忽略。`>` 重定向也不在这里
+// 拦：远端 helper 已按 workspaceRoot 校验字面写入目标，越界直接 E_PATH_OUTSIDE，
+// 比一次确认更硬（与本地 command 的契约一致）。
+func isDestructiveRemoteCommand(cmd string) bool {
+	if command.MatchRiskPattern(cmd) != nil {
+		return true
+	}
+	if command.ContainsExplicitDeleteCommand(cmd) && !command.IsAllowedDeleteContext(cmd) {
+		return true
+	}
+	for _, invocation := range command.Invocations(cmd) {
+		if remoteDestructiveCommands[invocation.Name] {
+			return true
+		}
+	}
+	return false
+}
+
+// resolveAndAuthorizeRemoteTarget parses raw and resolves any cluster alias.
+// In interactive agent sessions (sessionID != ""), it enforces Tab-level isolation
+// (preventing diffusion attacks) and Approval Gate 2 (connection approval).
+func (a *App) resolveAndAuthorizeRemoteTarget(ctx context.Context, raw string) (remoteTarget, error) {
+	rt, err := parseRemoteTarget(raw)
+	if err != nil {
+		return remoteTarget{}, err
+	}
+
+	// 已登记节点有两种写法：别名，或真实端点（user@host[:port]）——用户给模型的
+	// 多半是后者。两者是同一个身份：认到节点就照它的人名/端口/凭据走，并沿用它的
+	// 工作区白名单；只认别名会让已授权、已存密码的节点换个写法又变成陌生主机。
+	serverKey := strings.ToLower(strings.TrimSpace(rt.Host))
+	serverNode, isRegistered := a.GetSSHServer(serverKey)
+	if !isRegistered {
+		serverNode, isRegistered = a.findSSHServerByEndpoint(rt.Host, rt.Port)
+		if isRegistered {
+			serverKey = strings.ToLower(strings.TrimSpace(serverNode.Alias))
+		}
+	}
+
+	var sessionID string
+	var workspace string
+	if meta, ok := ctx.Value(toolExecutionMetaContextKey{}).(toolExecutionMeta); ok {
+		sessionID = meta.sessionID
+	}
+	if sessionID != "" {
+		a.mu.Lock()
+		workspace = a.sessionWorkspaces[sessionID]
+		if workspace == "" {
+			workspace = a.config.Workspace
+		}
+		a.mu.Unlock()
+	}
+
+	if isRegistered {
+		rt.Host = nodeSSHHost(serverNode)
+		if serverNode.Port > 0 && serverNode.Port != 22 {
+			rt.Port = strconv.Itoa(serverNode.Port)
+		}
+	}
+
+	// In interactive sessions, enforce Tab isolation and Connection Approval (Approval Gate 2)
+	if sessionID != "" {
+		// 1. Tab-level authorization (prevent lateral movement / diffusion)
+		if isRegistered && !a.IsServerAuthorizedForWorkspace(workspace, serverKey) {
+			return remoteTarget{}, codedToolError("E_SERVER_UNAUTHORIZED",
+				fmt.Errorf("server %q is not authorized for current workspace tab; please authorize it in the tab footer or request access via ssh_cluster", serverKey))
+		}
+
+		// 2. Raw SSH targets require first-connect approval. Registered servers
+		// (whatever the spelling) are already trusted through the workspace
+		// authorization list.
+		if !isRegistered && !a.IsServerConnectionApproved(sessionID, serverKey) {
+			askReq := AskRequest{
+				Questions: []AskQuestion{
+					{
+						ID: "approve_remote_connect",
+						Question: fmt.Sprintf("模型正申请建立到服务器 [%s] (%s) 的 SSH 连接，目标工作区路径为 %s。\n\n是否允许连接？",
+							serverKey, rt.Host, rt.WorkspaceRoot),
+						Options: []AskOption{
+							{
+								ID:          "allow_session",
+								Label:       "允许连接（仅在本次会话内有效）",
+								Description: "临时放行本次会话对该服务器的 SSH 操作",
+								Recommended: true,
+							},
+							{
+								ID:          "allow_always",
+								Label:       "允许并在当前工作区保持信任",
+								Description: "在本工作区内持续信任该服务器，后续无需重复确认",
+							},
+							{
+								ID:          "reject",
+								Label:       "拒绝连接",
+								Description: "中断连接并阻止模型访问该服务器",
+							},
+						},
+					},
+				},
+			}
+
+			askResult, askErr := a.executeAsk(ctx, sessionID, askReq)
+			if askErr != nil {
+				return remoteTarget{}, codedToolError("E_CONNECTION_CANCELLED", fmt.Errorf("connection approval was cancelled: %w", askErr))
+			}
+
+			approved := false
+			allowAlways := false
+			for _, ans := range askResult.Answers {
+				if ans.QuestionID == "approve_remote_connect" {
+					for _, sel := range ans.Selections {
+						if sel.OptionID == "allow_session" || sel.OptionID == "allow_always" {
+							approved = true
+							if sel.OptionID == "allow_always" {
+								allowAlways = true
+							}
+							break
+						}
+					}
+				}
+			}
+
+			if !approved {
+				return remoteTarget{}, codedToolError("E_CONNECTION_REJECTED", fmt.Errorf("user rejected SSH connection to server %q", serverKey))
+			}
+
+			a.ApproveServerConnection(sessionID, serverKey)
+			if allowAlways && workspace != "" {
+				a.AuthorizeServerForWorkspace(workspace, serverKey)
+			}
+		}
+	}
+
+	// 凭据在四道闸门都放行之后才入槽：被拒绝的调用不应该留下可用的密码。
+	// 槽位由解析后的端点决定，与 prepareRemoteSSHInvocation 的查表同源。
+	if isRegistered && (serverNode.Password != "" || serverNode.KeyPath != "") {
+		a.sshCredentials.store(sshCredentialKey(rt.Host, rt.Port), serverNode.Password, serverNode.KeyPath)
+	}
+
+	return rt, nil
 }
 
 // validateRemoteWorkspacePath validates a path (or cwd) against the remote
@@ -771,15 +1004,23 @@ func (a *App) invokeRemotePython(ctx context.Context, rt remoteTarget, payload m
 		if msg == "" {
 			msg = err.Error()
 		}
-		// 远端缺 python3/python 时给出可操作诊断：常见形态是 bash 的 "python:
+		// 远端缺解释器时给出可操作诊断：常见形态是 bash 的 "python:
 		// command not found" 或 ash/dash 的 "python: not found"，透传原始
 		// ssh 错误对模型不可辨因。
 		if strings.Contains(msg, "python3: command not found") || strings.Contains(msg, "python3: not found") ||
+			strings.Contains(msg, "python2: command not found") || strings.Contains(msg, "python2: not found") ||
 			strings.Contains(msg, "python: command not found") || strings.Contains(msg, "python: not found") {
-			return fmt.Errorf("remote host %s has neither python3 nor python in PATH; remote_* tools need python (python3 or python2) on the remote side (install python3 or python, or add it to PATH): %s", rt.Host, msg)
+			return fmt.Errorf("remote host %s has no python3/python2/python in PATH; remote_* tools need a python interpreter on the remote side (install python3, python2 or python, or add it to PATH): %s", rt.Host, msg)
 		}
 		if strings.Contains(strings.ToLower(msg), "host key verification failed") {
 			return fmt.Errorf("ssh %s failed: host key verification failed (host key differs from ~/.ssh/known_hosts; remove outdated entry from ~/.ssh/known_hosts if host was reinstalled): %s", rt.Host, msg)
+		}
+		// 认证失败给出可操作指引。匹配 "user@host: Permission denied (methods)"
+		// 这一 ssh 认证失败的固定格式，而不是裸的 "Permission denied"：远端
+		// 命令自己的 stderr（如 sudo、ls 的权限报错）也会汇入 ssh stderr，
+		// 广撒网会把普通命令错误误判成登录失败。
+		if strings.Contains(msg, rt.Host+": Permission denied (") {
+			return fmt.Errorf("ssh %s failed: %s\nhint: authentication failed. password login: the stored password is likely wrong — fix it for that node in the SSH cluster manager (composer SSH panel › Manage clusters, or the sidebar SSH clusters page). key login: a passphrase-protected key also needs its passphrase stored as the password (keyPath and password combine). passwordless: check the local default keys (~/.ssh) and the remote authorized_keys", rt.Host, msg)
 		}
 		return fmt.Errorf("ssh %s failed: %s", rt.Host, msg)
 	}
@@ -842,7 +1083,7 @@ func decodeRemoteRawFile(data struct {
 }
 
 func (a *App) remoteReadRaw(ctx context.Context, target, relPath string) (remoteTarget, remoteRawFile, error) {
-	rt, err := parseRemoteTarget(target)
+	rt, err := a.resolveAndAuthorizeRemoteTarget(ctx, target)
 	if err != nil {
 		return remoteTarget{}, remoteRawFile{}, err
 	}
@@ -949,7 +1190,7 @@ func (a *App) remoteReadFile(ctx context.Context, req RemoteReadFileRequest) (Ba
 	if len(fileRequests) > 20 {
 		return BatchReadResult{}, errors.New("too many files; max 20 per batch")
 	}
-	rt, err := parseRemoteTarget(req.Target)
+	rt, err := a.resolveAndAuthorizeRemoteTarget(ctx, req.Target)
 	if err != nil {
 		return BatchReadResult{}, err
 	}
@@ -1172,7 +1413,7 @@ func (a *App) remoteEditOne(ctx context.Context, rt remoteTarget, req FileTextEd
 }
 
 func (a *App) remoteCreateFile(ctx context.Context, req RemoteCreateFileRequest) (EditResult, error) {
-	rt, err := parseRemoteTarget(req.Target)
+	rt, err := a.resolveAndAuthorizeRemoteTarget(ctx, req.Target)
 	if err != nil {
 		return EditResult{}, err
 	}
@@ -1191,6 +1432,53 @@ func (a *App) remoteCreateFile(ctx context.Context, req RemoteCreateFileRequest)
 	}
 	content, ending, hadBOM := normalizeText([]byte(req.Content))
 	encoded := encodeText(content, ending, hadBOM)
+
+	// Approval Gate 3: 只在本次确实是覆盖写时确认（overwrite=false 时 helper 会
+	// 直接以 "file already exists" 拒绝，问了也白问）。
+	if exists && req.Overwrite {
+		if meta, ok := ctx.Value(toolExecutionMetaContextKey{}).(toolExecutionMeta); ok && meta.sessionID != "" {
+			askReq := AskRequest{
+				Questions: []AskQuestion{
+					{
+						ID: "approve_remote_overwrite",
+						Question: fmt.Sprintf("⚠️ 高危覆盖警告：模型正尝试覆盖远端已有文件 [%s] %s。\n原文件大小: %d 字节，新写入大小: %d 字节。\n\n是否确认允许覆盖？",
+							rt.Host, cleanPath, len(before), len(encoded)),
+						Options: []AskOption{
+							{
+								ID:          "approve",
+								Label:       "确认允许覆盖写入",
+								Description: "使用模型生成的新内容完全替换远端已有文件",
+							},
+							{
+								ID:          "reject",
+								Label:       "拒绝覆盖（保留原文件）",
+								Description: "中断写入操作，远端原文件保持不变",
+								Recommended: true,
+							},
+						},
+					},
+				},
+			}
+			askResult, askErr := a.executeAsk(ctx, meta.sessionID, askReq)
+			if askErr != nil {
+				return EditResult{}, codedToolError("E_OVERWRITE_CANCELLED", fmt.Errorf("overwrite approval was cancelled: %w", askErr))
+			}
+			approved := false
+			for _, ans := range askResult.Answers {
+				if ans.QuestionID == "approve_remote_overwrite" {
+					for _, sel := range ans.Selections {
+						if sel.OptionID == "approve" {
+							approved = true
+							break
+						}
+					}
+				}
+			}
+			if !approved {
+				return EditResult{}, codedToolError("E_OVERWRITE_REJECTED", fmt.Errorf("user rejected overwriting remote file %s", cleanPath))
+			}
+		}
+	}
 	createdDirs, err := a.remoteWriteRaw(ctx, rt, cleanPath, encoded, req.Overwrite, true)
 	if err != nil {
 		return EditResult{}, err
@@ -1208,7 +1496,7 @@ func (a *App) remoteCreateFile(ctx context.Context, req RemoteCreateFileRequest)
 }
 
 func (a *App) remoteDeletePath(ctx context.Context, req RemoteDeletePathRequest) (map[string]any, error) {
-	rt, err := parseRemoteTarget(req.Target)
+	rt, err := a.resolveAndAuthorizeRemoteTarget(ctx, req.Target)
 	if err != nil {
 		return nil, err
 	}
@@ -1224,6 +1512,51 @@ func (a *App) remoteDeletePath(ctx context.Context, req RemoteDeletePathRequest)
 			return nil, codedToolError("E_DELETE_BLOCKED", errors.New("refusing to delete VCS metadata"))
 		}
 	}
+
+	// Approval Gate 3: Delete approval
+	if meta, ok := ctx.Value(toolExecutionMetaContextKey{}).(toolExecutionMeta); ok && meta.sessionID != "" {
+		askReq := AskRequest{
+			Questions: []AskQuestion{
+				{
+					ID: "approve_remote_delete",
+					Question: fmt.Sprintf("⚠️ 高危删除警告：模型正尝试删除远端路径 [%s] %s (recursive=%v)。\n\n是否确认允许删除？",
+						rt.Host, cleanPath, req.Recursive),
+					Options: []AskOption{
+						{
+							ID:          "approve",
+							Label:       "确认删除",
+							Description: "永久删除远端目标路径及其内容",
+						},
+						{
+							ID:          "reject",
+							Label:       "拒绝删除（保留原路径）",
+							Description: "中断删除操作，远端文件与目录保持不变",
+							Recommended: true,
+						},
+					},
+				},
+			},
+		}
+		askResult, askErr := a.executeAsk(ctx, meta.sessionID, askReq)
+		if askErr != nil {
+			return nil, codedToolError("E_DELETE_CANCELLED", fmt.Errorf("delete approval was cancelled: %w", askErr))
+		}
+		approved := false
+		for _, ans := range askResult.Answers {
+			if ans.QuestionID == "approve_remote_delete" {
+				for _, sel := range ans.Selections {
+					if sel.OptionID == "approve" {
+						approved = true
+						break
+					}
+				}
+			}
+		}
+		if !approved {
+			return nil, codedToolError("E_DELETE_REJECTED", fmt.Errorf("user rejected deleting remote path %s", cleanPath))
+		}
+	}
+
 	var result map[string]any
 	err = a.invokeRemotePython(ctx, rt, remotePayload(rt, "delete", map[string]any{"path": cleanPath, "recursive": req.Recursive}), 60*time.Second, &result)
 	return result, err
@@ -1239,9 +1572,55 @@ func (a *App) remoteRunCommand(ctx context.Context, req RemoteRunCommandRequest)
 	if err := validateRemoteCommandSafety(req.Command); err != nil {
 		return CommandResult{}, err
 	}
-	rt, err := parseRemoteTarget(req.Target)
+	rt, err := a.resolveAndAuthorizeRemoteTarget(ctx, req.Target)
 	if err != nil {
 		return CommandResult{}, err
+	}
+
+	// Approval Gate 3: Destructive command approval
+	if isDestructiveRemoteCommand(req.Command) {
+		if meta, ok := ctx.Value(toolExecutionMetaContextKey{}).(toolExecutionMeta); ok && meta.sessionID != "" {
+			askReq := AskRequest{
+				Questions: []AskQuestion{
+					{
+						ID: "approve_remote_command",
+						Question: fmt.Sprintf("⚠️ 高危命令警告：模型正尝试在服务器 [%s] 执行包含覆盖或破坏性的命令：\n\n```sh\n%s\n```\n\n是否确认允许执行？",
+							rt.Host, req.Command),
+						Options: []AskOption{
+							{
+								ID:          "approve",
+								Label:       "确认允许执行",
+								Description: "继续在远端服务器上执行该命令",
+							},
+							{
+								ID:          "reject",
+								Label:       "拒绝执行",
+								Description: "中断执行以保护远端环境",
+								Recommended: true,
+							},
+						},
+					},
+				},
+			}
+			askResult, askErr := a.executeAsk(ctx, meta.sessionID, askReq)
+			if askErr != nil {
+				return CommandResult{}, codedToolError("E_COMMAND_CANCELLED", fmt.Errorf("command execution approval was cancelled: %w", askErr))
+			}
+			approved := false
+			for _, ans := range askResult.Answers {
+				if ans.QuestionID == "approve_remote_command" {
+					for _, sel := range ans.Selections {
+						if sel.OptionID == "approve" {
+							approved = true
+							break
+						}
+					}
+				}
+			}
+			if !approved {
+				return CommandResult{}, codedToolError("E_COMMAND_REJECTED", fmt.Errorf("user rejected executing destructive command on %s", rt.Host))
+			}
+		}
 	}
 	cwd, err := validateRemoteWorkspacePath(req.Cwd, rt.WorkspaceRoot, true)
 	if err != nil {

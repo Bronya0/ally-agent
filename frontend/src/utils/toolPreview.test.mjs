@@ -14,7 +14,6 @@ import {
   codePreviewWindow,
   displaySourceMessages,
   formatHttpToolTitle,
-  isReasoningHidden,
   isRenderableMessage,
 } from './toolPreview.mjs';
 
@@ -123,51 +122,43 @@ test('expanded archives remain bounded instead of rendering the whole session', 
   assert.equal(display.at(-1).content, 'message 999');
 });
 
-test('blank assistant rows are not renderable messages (archive quota & count share this)', () => {
-  // 纯思考步骤留下的空壳行：思考已收起、没有正文，只是占位
-  assert.equal(isRenderableMessage(ghost()), false);
+test('assistant rows without visible content never enter the message list', () => {
+  assert.equal(isRenderableMessage(ghost()), false, 'completed empty assistant row');
+  assert.equal(isRenderableMessage({ ...ghost(), streaming: true, done: false, reasoningActive: true }), false, 'thinking-only streaming row');
 });
 
 test('every row that renders something stays renderable', () => {
-  assert.equal(isRenderableMessage({ ...ghost(), streaming: true }), true, '流式行（可能正在思考/即将出正文）');
-  assert.equal(isRenderableMessage({ ...ghost(), done: false }), true, '未封口的行');
-  assert.equal(isRenderableMessage({ ...ghost(), reasoningEndedAt: undefined }), true, '思考还在显示');
-  assert.equal(isRenderableMessage({ ...ghost(), content: '正文' }), true, '有正文（无 hasBody 标志的老快照行）');
-  assert.equal(isRenderableMessage({ ...ghost(), hasBody: true }), true, '正文已开始的标志');
-  assert.equal(isRenderableMessage({ ...ghost(), roundDurationText: '3m42s' }), true, '本轮统计行（悬停可见 + 导出按钮）');
-  assert.equal(isRenderableMessage({ ...ghost(), attachments: [{ id: 'a' }] }), true, '附件');
-  assert.equal(isRenderableMessage({ ...ghost(), suggestions: ['再来一个'] }), true, '建议芯片');
-  assert.equal(isRenderableMessage({ ...ghost(), error: true }), true, '报错行');
-  assert.equal(isRenderableMessage({ ...ghost(), system: true }), true, '系统提示行');
-  assert.equal(isRenderableMessage({ role: 'user', content: '' }), true, '用户行不参与');
-  assert.equal(isRenderableMessage({ role: 'tool_call', kind: 'read', done: true }), true, '工具卡行不参与');
-  assert.equal(isRenderableMessage({ role: 'tool_call', kind: 'run' }), false, '内部 run 状态行不算消息');
+  assert.equal(isRenderableMessage({ ...ghost(), content: '正文' }), true, 'body fallback for legacy snapshots');
+  assert.equal(isRenderableMessage({ ...ghost(), hasBody: true }), true, 'body has started');
+  assert.equal(isRenderableMessage({ ...ghost(), roundDurationText: '3m42s' }), true, 'round stats');
+  assert.equal(isRenderableMessage({ ...ghost(), attachments: [{ id: 'a' }] }), true, 'attachment');
+  assert.equal(isRenderableMessage({ ...ghost(), suggestions: ['再来一个'] }), true, 'suggestion chips');
+  assert.equal(isRenderableMessage({ ...ghost(), error: true }), true, 'error row');
+  assert.equal(isRenderableMessage({ ...ghost(), system: true }), true, 'system row');
+  assert.equal(isRenderableMessage({ role: 'user', content: '' }), true, 'user rows are unaffected');
+  assert.equal(isRenderableMessage({ role: 'tool_call', kind: 'read', done: true }), true, 'tool cards are unaffected');
+  assert.equal(isRenderableMessage({ role: 'tool_call', kind: 'run' }), false, 'internal run status is not a message');
 });
 
-// 显示列表缓存靠这个 key 失效：任何一个决定“渲染出不渲染出东西”的字段翻转，
-// 都必须让 key 变，否则缓存过的列表会跟真实渲染静默分叉。
-// 反向也要成立：key 里不能混进会按流式增量变化的字段（正文），否则每个增量
-// 都要重算整张列表——所以只比“是否为空”，不比正文本身。
-test('row render key flips with every deciding field, ignores body text', () => {
+// The display-list cache key tracks only fields that affect rendered message rows.
+test('row render key tracks visible output and ignores streaming thinking metadata', () => {
   const base = assistantRowRenderState(ghost()).key;
-  assert.equal(assistantRowRenderState(ghost()).key, base, '同样的输入得到同样的 key');
+  assert.equal(assistantRowRenderState(ghost()).key, base, 'same inputs produce the same key');
   const flips = [
-    { streaming: true },
-    { done: false },
     { hasBody: true },
     { error: true },
     { system: true },
     { welcome: {} },
-    { reasoningEndedAt: undefined },
     { attachments: [{ id: 'a' }] },
     { suggestions: ['x'] },
     { roundDurationText: '3s' },
   ];
   for (const patch of flips) {
-    assert.notEqual(assistantRowRenderState({ ...ghost(), ...patch }).key, base, `字段翻转必须换 key: ${JSON.stringify(patch)}`);
+    assert.notEqual(assistantRowRenderState({ ...ghost(), ...patch }).key, base, `visible field changes key: ${JSON.stringify(patch)}`);
   }
-  assert.equal(assistantRowRenderState({ ...ghost(), content: '正文' }).key, base, '正文不进 key（不订阅流式增量）');
-  assert.equal(assistantRowRenderState({ role: 'user', content: 'hi' }).key, '', '非 assistant 行不参与');
+  assert.equal(assistantRowRenderState({ ...ghost(), content: '正文' }).key, base, 'body text is not in the key');
+  assert.equal(assistantRowRenderState({ ...ghost(), reasoningChars: 999, reasoningActive: true }).key, base, 'thinking metadata is not in the key');
+  assert.equal(assistantRowRenderState({ role: 'user', content: 'hi' }).key, '', 'non-assistant rows are excluded');
 });
 
 function ghost() {
@@ -177,30 +168,16 @@ function ghost() {
     streaming: false,
     done: true,
     reasoningChars: 256,
-    reasoningStartedAt: 1,
-    reasoningEndedAt: 2,
+    reasoningActive: false,
   };
 }
 
-// 空壳行（当下一个像素都渲染不出来）必须被样式侧认出来：它要退出 content-visibility
-// 的尺寸估计，否则被浏览器当作离屏内容时会用 120px 估计值占位（折叠组上方凭空多出一
-// 大截间距、稍后才突然收敛）。注意 empty 与 blank 的差别：运行中尚未封口的空壳行
-// empty=true 但它仍是本轮的一条消息（blank=false），不能从列表里丢掉。
-test('rows rendering nothing are flagged empty, only settled ones are blank', () => {
-  assert.equal(assistantRowRenderState(ghost()).empty, true, '思考已收起的空壳行：渲染不出东西');
-  assert.equal(assistantRowRenderState(ghost()).blank, true, '且已封口 → 连消息都不算');
-  const runtimeGhost = { ...ghost(), streaming: true, done: false };
-  assert.equal(assistantRowRenderState(runtimeGhost).empty, true, '运行中的空壳行同样渲染不出东西');
-  assert.equal(assistantRowRenderState(runtimeGhost).blank, false, '但仍是本轮消息，不能丢');
-  assert.equal(assistantRowRenderState({ ...ghost(), reasoningEndedAt: undefined }).empty, false, '思考还在显示');
-  assert.equal(assistantRowRenderState({ ...ghost(), hasBody: true }).empty, false, '正文已开始');
-  assert.equal(assistantRowRenderState({ role: 'user', content: '' }).empty, false, '非 assistant 行不参与');
-});
-
-test('reasoning overlay visibility is one shared rule', () => {
-  assert.equal(isReasoningHidden({}), true);
-  assert.equal(isReasoningHidden({ reasoningChars: 10, reasoningStartedAt: 1 }), false);
-  assert.equal(isReasoningHidden({ reasoningChars: 10, reasoningStartedAt: 1, reasoningEndedAt: 2 }), true);
+test('empty assistant rows are excluded whether streaming or completed', () => {
+  assert.equal(assistantRowRenderState(ghost()).empty, true);
+  assert.equal(assistantRowRenderState({ ...ghost(), streaming: true, done: false, reasoningActive: true }).empty, true);
+  assert.equal(assistantRowRenderState({ ...ghost(), content: '正文' }).empty, false, 'legacy body fallback');
+  assert.equal(assistantRowRenderState({ ...ghost(), hasBody: true }).empty, false, 'body has started');
+  assert.equal(assistantRowRenderState({ role: 'user', content: '' }).empty, false, 'non-assistant row');
 });
 
 test('formatHttpToolTitle shows URL only for default GET, no options', () => {

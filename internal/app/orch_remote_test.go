@@ -16,21 +16,28 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
 )
 
-// pickRemoteHelperPython 选择本地 python3/python 解释器；都没有则跳过。
-// 远程 helper 是 Python 字符串，无法直接跑远端，这里用本地解释器做镜像测试。
+// pickRemoteHelperPython 选择镜像测试解释器。可用 ALLY_TEST_PYTHON 指定版本，
+// 例如 Python 2.7 环境设为 python2；未指定时优先 Python 3，再尝试 Python 2。
 func pickRemoteHelperPython(t *testing.T) string {
 	t.Helper()
-	for _, name := range []string{"python3", "python"} {
+	names := []string{}
+	if name := os.Getenv("ALLY_TEST_PYTHON"); name != "" {
+		names = append(names, name)
+	} else {
+		names = []string{"python3", "python", "python2"}
+	}
+	for _, name := range names {
 		if p, err := exec.LookPath(name); err == nil {
 			return p
 		}
 	}
-	t.Skip("python3/python not found; skipping remote helper tests")
+	t.Skip("Python interpreter not found; set ALLY_TEST_PYTHON to the desired interpreter")
 	return ""
 }
 
@@ -333,6 +340,291 @@ func TestRemoteHelperReadBatchOp(t *testing.T) {
 	}
 }
 
+// TestRemoteScriptNonAsciiTextBoundary 锁定 payload 文本的 OS 边界规则：
+// Python 2 的 str(unicode) 一律按 ASCII 编码，命令或路径里只要有非 ASCII 字符
+// 就可能抛编码错误；Linux 文件系统使用字节路径，因此统一转成 UTF-8 字节串。
+func TestRemoteScriptNonAsciiTextBoundary(t *testing.T) {
+	for _, forbidden := range []string{
+		`str(payload`,
+		`str(rel)`,
+		`str(path)`,
+		`str(root)`,
+		`str(cwd)`,
+		`str(t_str)`,
+		`str(b64)`,
+	} {
+		if strings.Contains(remotePythonScript, forbidden) {
+			t.Errorf("remote python script must not coerce payload text with %s (Python 2 encodes str(unicode) as ASCII): use to_os_text()", forbidden)
+		}
+	}
+	for _, required := range []string{
+		"def to_os_text(s):",
+		"payload = payload_os_text(payload)",
+		`command = to_os_text(payload.get("command")`,
+	} {
+		if !strings.Contains(remotePythonScript, required) {
+			t.Errorf("remote python script lost %q; Python 2 remotes would fail on non-ASCII commands/paths", required)
+		}
+	}
+}
+
+// TestRemoteHelperNonAsciiTextRoundTrip 用真实 helper 脚本跑非 ASCII 路径：
+// 非 ASCII 目录名 / 文件名 / 文件内容必须原样往返（只碰 t.TempDir()）。
+func TestRemoteHelperNonAsciiTextRoundTrip(t *testing.T) {
+	py := pickRemoteHelperPython(t)
+	root := t.TempDir()
+	run := func(payload map[string]any) remotePythonResponse {
+		t.Helper()
+		script, err := buildRemoteScript(payload)
+		if err != nil {
+			t.Fatalf("buildRemoteScript: %v", err)
+		}
+		resp, err := runRemoteHelperScript(t, py, script)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !resp.OK {
+			t.Fatalf("helper failed: %s", resp.Error)
+		}
+		return resp
+	}
+
+	relPath := "中文目录/说明.txt"
+	content := "你好，世界\nhello\n"
+	resp := run(map[string]any{
+		"op":            "write",
+		"workspaceRoot": root,
+		"path":          relPath,
+		"dataBase64":    base64.StdEncoding.EncodeToString([]byte(content)),
+		"overwrite":     true,
+		"mkdirs":        true,
+	})
+	var written struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal(resp.Data, &written); err != nil {
+		t.Fatalf("decode write data: %v", err)
+	}
+	if written.Path != relPath {
+		t.Fatalf("write returned path %q, want %q", written.Path, relPath)
+	}
+	if onDisk, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(relPath))); err != nil || string(onDisk) != content {
+		t.Fatalf("file on disk = %q (err %v), want %q", onDisk, err, content)
+	}
+
+	resp = run(map[string]any{
+		"op":            "read_batch",
+		"workspaceRoot": root,
+		"paths":         []string{relPath},
+		"maxBytes":      1 << 20,
+		"totalBytes":    1 << 20,
+	})
+	var batch struct {
+		Files []struct {
+			Path  string `json:"path"`
+			OK    bool   `json:"ok"`
+			Error string `json:"error"`
+			Data  struct {
+				DataBase64 string `json:"dataBase64"`
+			} `json:"data"`
+		} `json:"files"`
+	}
+	if err := json.Unmarshal(resp.Data, &batch); err != nil {
+		t.Fatalf("decode read_batch data: %v", err)
+	}
+	if len(batch.Files) != 1 || !batch.Files[0].OK {
+		t.Fatalf("read_batch should read %s, got %+v", relPath, batch.Files)
+	}
+	if batch.Files[0].Path != relPath {
+		t.Fatalf("read_batch path = %q, want %q (the path is echoed back through JSON)", batch.Files[0].Path, relPath)
+	}
+	raw, err := base64.StdEncoding.DecodeString(batch.Files[0].Data.DataBase64)
+	if err != nil {
+		t.Fatalf("decode read data: %v", err)
+	}
+	if string(raw) != content {
+		t.Fatalf("read content = %q, want %q", raw, content)
+	}
+
+	// 命令字面写入目标里的非 ASCII 路径同样要能过边界（targets 由 Go 侧从
+	// 命令文本里解析出来，与 run op 走同一条 to_os_text 通道）。
+	resp = run(map[string]any{
+		"op":            "_check_write_targets",
+		"workspaceRoot": root,
+		"cwd":           "中文目录",
+		"targets":       []string{"新建输出.txt"},
+	})
+	var checked struct {
+		Checked bool `json:"checked"`
+	}
+	if err := json.Unmarshal(resp.Data, &checked); err != nil {
+		t.Fatalf("decode check data: %v", err)
+	}
+	if !checked.Checked {
+		t.Fatalf("write-target check for a non-ASCII in-workspace path must pass, data=%s", resp.Data)
+	}
+}
+
+// TestRemoteHelperWriteFchmodFallback 锁定 os.fchmod 缺失时的降级路径（Windows
+// 直到 Python 3.13 才提供 os.fchmod）：前置钩子把 os.fchmod 拿掉后写文件，不得
+// 因 AttributeError 把整个 write 打挂，且 POSIX 上权限仍须是契约里的 0644
+// （Windows 只校验降级分支不报错，权限位不被强制）。
+func TestRemoteHelperWriteFchmodFallback(t *testing.T) {
+	py := pickRemoteHelperPython(t)
+	root := t.TempDir()
+	script, err := buildRemoteScript(map[string]any{
+		"op":            "write",
+		"workspaceRoot": root,
+		"path":          "new.txt",
+		"dataBase64":    base64.StdEncoding.EncodeToString([]byte("hello")),
+		"overwrite":     true,
+		"mkdirs":        true,
+	})
+	if err != nil {
+		t.Fatalf("buildRemoteScript: %v", err)
+	}
+	// 注入位置必须在 `from __future__ import print_function` 之后（future 导入
+	// 要求位于文件最前），且在同一进程内拿掉 os.fchmod——脚本随后 import os
+	// 拿到的是同一个模块对象，属性依旧缺失。
+	hook := "import os as _ally_os\nif hasattr(_ally_os, \"fchmod\"):\n    del _ally_os.fchmod"
+	patched := strings.Replace(script, "from __future__ import print_function",
+		"from __future__ import print_function\n"+hook, 1)
+	if patched == script {
+		t.Fatal("remote python script lost its `from __future__ import print_function` line")
+	}
+	resp, err := runRemoteHelperScript(t, py, patched)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resp.OK {
+		t.Fatalf("write without os.fchmod failed: %s", resp.Error)
+	}
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(filepath.Join(root, "new.txt"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if perm := info.Mode().Perm(); perm != 0o644 {
+			t.Fatalf("fallback perm = %o, want 0644", perm)
+		}
+	}
+}
+
+// TestRemoteHelperRunCommandShells 锁定 op_run 的两件事：
+//  1. payload 不带 shell 时 helper 必须自己挑一个能用的（posix: bash/sh，
+//     Windows: COMSPEC）。这一步同时验证信号表探测——Windows 没有 SIGHUP，
+//     旧实现取信号时就把整个 run 打挂。
+//  2. 命令与 cwd 含非 ASCII 时必须原样执行并按 UTF-8 回传（POSIX 用默认 shell；
+//     Windows 的 cmd.exe 会按控制台代码页转中文，故显式给 bash，没有则跳过）。
+func TestRemoteHelperRunCommandShells(t *testing.T) {
+	py := pickRemoteHelperPython(t)
+	root := t.TempDir()
+	type runData struct {
+		Output   string `json:"output"`
+		ExitCode int    `json:"exitCode"`
+		Shell    string `json:"shellPath"`
+	}
+	execCommand := func(payload map[string]any) runData {
+		t.Helper()
+		script, err := buildRemoteScript(payload)
+		if err != nil {
+			t.Fatalf("buildRemoteScript: %v", err)
+		}
+		resp, err := runRemoteHelperScript(t, py, script)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !resp.OK {
+			t.Fatalf("run helper failed: %s", resp.Error)
+		}
+		var data runData
+		if err := json.Unmarshal(resp.Data, &data); err != nil {
+			t.Fatalf("decode run data: %v", err)
+		}
+		return data
+	}
+
+	got := execCommand(map[string]any{
+		"op":             "run",
+		"workspaceRoot":  root,
+		"cwd":            ".",
+		"command":        "echo ally-run-ok",
+		"timeoutSeconds": 30,
+		"maxOutput":      1 << 16,
+		"shell":          "",
+		"targets":        []string{},
+	})
+	if got.Shell == "" {
+		t.Fatalf("helper must report the shell it picked: %+v", got)
+	}
+	if got.ExitCode != 0 || !strings.Contains(got.Output, "ally-run-ok") {
+		t.Fatalf("default shell (%s) run failed: exit=%d output=%q", got.Shell, got.ExitCode, got.Output)
+	}
+
+	if err := os.MkdirAll(filepath.Join(root, "中文目录"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	shell := ""
+	if runtime.GOOS == "windows" {
+		// Windows 上 Popen(shell=True) 会给 executable 拼 "/c"（cmd 语义），bash 会把
+		// /c 当脚本路径；走默认 cmd.exe 时非 ASCII 输出又会被控制台代码页转码。
+		// 非 ASCII 命令这半只在 posix 上镜像执行（Windows 的默认 shell 通道见第 1 段）。
+		t.Skip("non-ascii command text needs a POSIX shell: shell=True on Windows always means cmd.exe semantics")
+	}
+	got = execCommand(map[string]any{
+		"op":             "run",
+		"workspaceRoot":  root,
+		"cwd":            "中文目录",
+		"command":        `printf '%s\n' "你好，世界"`,
+		"timeoutSeconds": 30,
+		"maxOutput":      1 << 16,
+		"shell":          shell,
+		"targets":        []string{},
+	})
+	if got.ExitCode != 0 {
+		t.Fatalf("non-ascii run exit=%d output=%q", got.ExitCode, got.Output)
+	}
+	if !strings.Contains(got.Output, "你好，世界") {
+		t.Fatalf("non-ascii run output = %q, want the non-ASCII command output", got.Output)
+	}
+}
+
+// TestRemoteScriptVersionGuards 锁定“能力探测”契约：远端解释器可能是
+// Python 2.6/2.7，也可能是 3.x，可选 API 必须探测后降级，不得写死平台/版本
+// 假设——写死就是 AttributeError 把整个 op 打挂。语法上还要保持 2.6 能解析。
+func TestRemoteScriptVersionGuards(t *testing.T) {
+	for _, required := range []string{
+		`hasattr(os, "fchmod")`,                // Windows 直到 Python 3.13 才有
+		`os.environ.get("COMSPEC")`,            // Windows 没有 /bin/sh
+		`getattr(subprocess, "DEVNULL", None)`, // 3.3 以下没有
+		`hasattr(os, "replace")`,               // 3.3 以下没有
+		`hasattr(proc.stdout, "read1")`,        // Python 2 的 file 对象没有
+		`if sys.version_info >= (3, 2):`,       // start_new_session 要 3.2+
+		`sys.version_info >= (3, 3)`,           // Popen.wait(timeout=) 要 3.3+
+		`if sys.version_info[0] < 3:`,          // py2 专属分支
+	} {
+		if !strings.Contains(remotePythonScript, required) {
+			t.Errorf("remote python script lost version guard %q", required)
+		}
+	}
+	// 2.6 解析不了 / 语义不同的写法（本地镜像测试跑的是 py3，写错了本地测不出来）。
+	if regexp.MustCompile(`\bf["']`).MatchString(remotePythonScript) {
+		t.Error("remote python script uses an f-string, which Python 2.6 cannot parse")
+	}
+	if regexp.MustCompile(`[\w)\]]\s*:=[^=]`).MatchString(remotePythonScript) {
+		t.Error("remote python script uses the walrus operator, which Python 2.6 cannot parse")
+	}
+	if regexp.MustCompile(`\\u[0-9a-fA-F]{4}`).MatchString(remotePythonScript) {
+		t.Error("remote python script contains a \\uXXXX escape: Python 2 byte-string literals do not expand it")
+	}
+	// 2.6/3.0 底线上不存在的标准库入口。
+	for _, forbidden := range []string{"subprocess.run(", "os.scandir(", "shutil.which(", "exist_ok"} {
+		if strings.Contains(remotePythonScript, forbidden) {
+			t.Errorf("remote python script uses %s, unavailable on the Python 2.6/3.0 floor", forbidden)
+		}
+	}
+}
+
 // TestRemoteScriptHasCancelKill 锁定取消连带击杀存在：op_run 必须注册
 // SIGTERM/SIGHUP/SIGINT 处理器，Go 侧取消杀掉 ssh 后远端孤儿进程被同
 // 步回收。
@@ -340,10 +632,11 @@ func TestRemoteScriptHasCancelKill(t *testing.T) {
 	if !strings.Contains(remotePythonScript, "_terminate_command_group") {
 		t.Error("remote python script lost _terminate_command_group signal handler; cancelling a run would leak remote orphan processes")
 	}
-	for _, sig := range []string{"SIGTERM", "SIGHUP", "SIGINT"} {
-		if !strings.Contains(remotePythonScript, "signal."+sig) {
-			t.Errorf("remote python script does not handle %s", sig)
-		}
+	if !strings.Contains(remotePythonScript, `for _sig_name in ("SIGTERM", "SIGHUP", "SIGINT")`) {
+		t.Error("remote python script must register SIGTERM/SIGHUP/SIGINT handlers")
+	}
+	if !strings.Contains(remotePythonScript, `getattr(signal, _sig_name, None)`) {
+		t.Error("remote python script must resolve signal names via getattr: Windows has no SIGHUP")
 	}
 }
 

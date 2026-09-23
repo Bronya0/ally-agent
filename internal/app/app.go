@@ -261,9 +261,18 @@ type App struct {
 	askMu       sync.Mutex
 	pendingAsks map[string]*pendingAsk
 
-	// sshCredentials holds chat-provided SSH passwords in memory only (never
-	// persisted). Keys are lowercase user@host; see orch_ssh_credential.go.
+	// sshCredentials caches SSH passwords/key paths in memory for the TTL
+	// window. It is filled from the cluster inventory (ssh_clusters.json, edited
+	// in the SSH cluster manager) when a remote tool targets a registered alias;
+	// keys are lowercase user@host[:port]. See orch_ssh_credential.go.
 	sshCredentials *sshCredentialCache
+
+	sshClustersMu         sync.RWMutex
+	sshClusters           map[string]SSHServerNode
+	sshSessionApprovalsMu sync.Mutex
+	sshSessionApprovals   map[string]map[string]bool
+	sshWorkspaceAllowedMu sync.RWMutex
+	sshWorkspaceAllowed   map[string]map[string]bool
 
 	// remoteReadBatchFn overrides the multi-file read_batch ssh session for
 	// tests; nil means the real remoteReadRawBatch implementation runs. See
@@ -371,6 +380,9 @@ func NewApp() *App {
 		sessionToolsets:      map[string][]openai.Tool{},
 		pendingAsks:          map[string]*pendingAsk{},
 		sshCredentials:       newSSHCredentialCache(),
+		sshClusters:          map[string]SSHServerNode{},
+		sshSessionApprovals:  map[string]map[string]bool{},
+		sshWorkspaceAllowed:  map[string]map[string]bool{},
 		subRuns:              map[string]*SubagentRun{},
 		subSem:               make(chan struct{}, 4),
 		gitStatusCache:       map[string]gitStatusCacheEntry{},
@@ -1370,6 +1382,7 @@ func (a *App) ensureInitialized() error {
 	a.config.DisabledSkills = cloneStringSlice(a.disabledSkills)
 	// command 截断落盘文件位于工作区 .tmp，启动时清理过期文件（含旧 .ally/tmp 遗留）
 	cleanupCommandSpillFiles(a.config.Workspace)
+	_ = a.loadSSHClusters()
 	a.initialized = true
 	return nil
 }
@@ -1915,7 +1928,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			streamDeltas := newRunStreamDeltaEmitter(runID, sessionID, func(name string, payload map[string]any) {
 				a.emit(name, payload)
 			})
-			toolProgress = newToolCallProgressTracker().withArgsRedact(a.redactSSHCredentials)
+			toolProgress = newToolCallProgressTracker()
 			modelResp, err = a.streamModelResponse(ctx, cfg, cfg.Model, requestMessages, tools, func(event modelStreamEvent) {
 				if event.ContentDelta != "" {
 					emittedEvents = true
@@ -2156,9 +2169,9 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 		// correctly. messages append stays ordered below.
 		emitOutcome := func(o toolOutcome) {
 			if o.result.OK {
-				a.emit("tool:result", mergeToolEventMeta(map[string]any{"runId": runID, "sessionId": sessionID, "toolBatchId": toolBatchID, "toolCallIndex": o.index, "toolCallId": o.callID, "name": o.name, "result": a.redactSSHCredentials(o.json), "durationMs": o.duration}, a.mcpToolEventMeta(o.name)))
+				a.emit("tool:result", mergeToolEventMeta(map[string]any{"runId": runID, "sessionId": sessionID, "toolBatchId": toolBatchID, "toolCallIndex": o.index, "toolCallId": o.callID, "name": o.name, "result": o.json, "durationMs": o.duration}, a.mcpToolEventMeta(o.name)))
 			} else {
-				a.emit("tool:error", mergeToolEventMeta(map[string]any{"runId": runID, "sessionId": sessionID, "toolBatchId": toolBatchID, "toolCallIndex": o.index, "toolCallId": o.callID, "name": o.name, "error": a.redactSSHCredentials(o.result.Error), "errorCode": o.result.ErrorCode, "durationMs": o.duration}, a.mcpToolEventMeta(o.name)))
+				a.emit("tool:error", mergeToolEventMeta(map[string]any{"runId": runID, "sessionId": sessionID, "toolBatchId": toolBatchID, "toolCallIndex": o.index, "toolCallId": o.callID, "name": o.name, "error": o.result.Error, "errorCode": o.result.ErrorCode, "durationMs": o.duration}, a.mcpToolEventMeta(o.name)))
 			}
 		}
 
@@ -2547,11 +2560,11 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		if err == nil {
 			data, err = a.webFetchToolWithConfig(ctx, cfg, req)
 		}
-	case "ssh_credential":
-		var req SSHCredentialRequest
+	case "ssh_cluster":
+		var req SSHClusterRequest
 		err, argWarnings = decodeJSON(&req)
 		if err == nil {
-			data, err = a.executeSSHCredentialTool(req)
+			data, err = a.executeSSHClusterTool(ctx, sessionID, cfg.Workspace, req)
 		}
 	case "remote_read":
 		var req RemoteReadFileRequest

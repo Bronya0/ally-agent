@@ -38,10 +38,12 @@ const TOOL_VERBS = {
   remote_create_file: ['Remote Creating', 'Remote Created', 'Remote Create'],
   delete: ['Deleting', 'Deleted', 'Delete'],
   remote_delete_path: ['Remote Deleting', 'Remote Deleted', 'Remote Delete'],
+  // ssh_cluster 一词里 cluster 本身说明了对象，失败时也说得出是什么（“SSH cluster
+  // failed”），否则只剩一个无名 Failed。
+  ssh_cluster: ['Registering server', 'Registered server', 'SSH cluster'],
   // command / process
   command: ['Running', 'Ran', 'Command'],
   remote_run_command: ['Remote Running', 'Remote Ran', 'Remote Command'],
-  ssh_credential: ['Storing credential', 'Stored credential', 'SSH credential'],
   Bash: ['Running', 'Ran', 'Command'],
   run: ['Running', 'Ran', 'Run'],
   // service is one backend tool multiplexing start/stop/list/read; this entry

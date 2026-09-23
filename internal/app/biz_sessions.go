@@ -872,15 +872,18 @@ func (a *App) saveHistory(sessionID string, messages []openai.ChatCompletionMess
 	// process still see the images (stable prefix, prompt cache survives).
 	// Only the disk copy is flattened: images are not persisted and restart
 	// recovery replays text-only history.
+	// SSH passwords stay in the history verbatim (no redaction): the live history
+	// is what the next request is built from, so masking a stored password here
+	// would make the model re-send the mask for the next host instead of the real
+	// credential.
 	inMemory := sanitizeHistoryMessages(messages)
-	filtered := a.redactSSHCredentialMessages(inMemory)
 	// Resolve the session's provider measurement against the stored conversation
 	// so a footer poll between runs reports the measured request size instead of
 	// a fresh text estimate. No lock is held here: the anchor lookup takes a.mu.
-	breakdown := computeLiveBreakdown(filtered)
-	a.finalizeSessionBreakdown(sessionID, &breakdown, filtered)
+	breakdown := computeLiveBreakdown(inMemory)
+	a.finalizeSessionBreakdown(sessionID, &breakdown, inMemory)
 	a.mu.Lock()
-	a.histories[sessionID] = cloneChatMessages(filtered)
+	a.histories[sessionID] = cloneChatMessages(inMemory)
 	a.liveBreakdown[sessionID] = breakdown
 	a.mu.Unlock()
 
@@ -888,7 +891,6 @@ func (a *App) saveHistory(sessionID string, messages []openai.ChatCompletionMess
 		return
 	}
 	disk := sanitizeHistoryMessagesForDisk(inMemory)
-	disk = a.redactSSHCredentialMessages(disk)
 	paths := a.historyDiskPaths(sessionID)
 	if err := writeCompressedHistory(paths[0], disk); err != nil {
 		log.Printf("saveHistory: failed to write %s: %v", paths[0], err)
@@ -897,34 +899,6 @@ func (a *App) saveHistory(sessionID string, messages []openai.ChatCompletionMess
 	if err := os.Remove(paths[1]); err != nil && !errors.Is(err, os.ErrNotExist) {
 		log.Printf("saveHistory: failed to remove legacy %s: %v", paths[1], err)
 	}
-}
-
-// redactSSHCredentialMessages applies redactSSHCredentials to persisted
-// history content and tool-call arguments before they hit disk, so a password
-// once typed into the chat never lands in session snapshot files.
-func (a *App) redactSSHCredentialMessages(messages []openai.ChatCompletionMessage) []openai.ChatCompletionMessage {
-	if a == nil || a.sshCredentials == nil {
-		return messages
-	}
-	changed := false
-	out := make([]openai.ChatCompletionMessage, len(messages))
-	for i, m := range messages {
-		out[i] = m
-		if red := a.redactSSHCredentials(m.Content); red != m.Content {
-			out[i].Content = red
-			changed = true
-		}
-		for j := range out[i].ToolCalls {
-			if red := a.redactSSHCredentials(out[i].ToolCalls[j].Function.Arguments); red != out[i].ToolCalls[j].Function.Arguments {
-				out[i].ToolCalls[j].Function.Arguments = red
-				changed = true
-			}
-		}
-	}
-	if !changed {
-		return messages
-	}
-	return out
 }
 
 func (a *App) restoreSavedHistoryBreakdown(sessionID string) {

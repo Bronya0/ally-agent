@@ -10,70 +10,93 @@ package app
 import (
 	"context"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
-// TestSSHCredentialCacheSetGetDelete covers the in-memory cache lifecycle:
-// set → get, overwrite, TTL-independent delete, and list DTO never exposing
-// the password.
-func TestSSHCredentialCacheSetGetDelete(t *testing.T) {
+// TestSSHCredentialCacheStoreLookup covers the cache lifecycle production uses:
+// store → lookup, overwrite, password and key path merging for the same host,
+// and TTL expiry evicting the entry.
+func TestSSHCredentialCacheStoreLookup(t *testing.T) {
 	cache := newSSHCredentialCache()
-	if _, ok := cache.get("root@h1"); ok {
+	if _, ok := cache.lookup("root@h1"); ok {
 		t.Fatal("empty cache returned a credential")
 	}
-	cache.set("root@h1", "p@ss word")
-	if got, ok := cache.get("root@h1"); !ok || got != "p@ss word" {
-		t.Fatalf("get after set: ok=%v got=%q", ok, got)
+	cache.store("root@h1", "p@ss word", "")
+	entry, ok := cache.lookup("root@h1")
+	if !ok || entry.password != "p@ss word" {
+		t.Fatalf("lookup after store: ok=%v entry=%+v", ok, entry)
 	}
 	// overwrite replaces
-	cache.set("root@h1", "second")
-	if got, _ := cache.get("root@h1"); got != "second" {
-		t.Fatalf("overwrite failed: %q", got)
+	cache.store("root@h1", "second", "")
+	if entry, _ := cache.lookup("root@h1"); entry.password != "second" {
+		t.Fatalf("overwrite failed: %+v", entry)
 	}
-	// list never carries the password and reports exactly one host
-	statuses := cache.list()
-	if len(statuses) != 1 || statuses[0].Host != "root@h1" || !statuses[0].HasPassword {
-		t.Fatalf("unexpected list: %+v", statuses)
+	// an empty field keeps what is already stored, so a password and a key path
+	// for the same host combine instead of clobbering each other
+	cache.store("root@h1", "", "/keys/id_test.pem")
+	entry, ok = cache.lookup("root@h1")
+	if !ok || entry.password != "second" || entry.keyPath != "/keys/id_test.pem" {
+		t.Fatalf("password+key merge failed: ok=%v entry=%+v", ok, entry)
 	}
-	for _, s := range statuses {
-		if strings.Contains(s.Host, "second") {
-			t.Fatalf("list leaked password via host field: %+v", s)
-		}
+	// TTL expiry: lookup drops the entry instead of returning it
+	cache.mu.Lock()
+	cache.items["root@h1"] = sshCredentialEntry{password: "stale", expiresAt: time.Now().Add(-time.Minute)}
+	cache.mu.Unlock()
+	if _, ok := cache.lookup("root@h1"); ok {
+		t.Fatal("expired credential must not be returned")
 	}
-	// delete removes
-	if !cache.delete("root@h1") {
-		t.Fatal("delete on existing key returned false")
-	}
-	if cache.delete("root@h1") {
-		t.Fatal("delete on missing key returned true")
-	}
-	if _, ok := cache.get("root@h1"); ok {
-		t.Fatal("credential survived delete")
+	cache.mu.Lock()
+	remaining := len(cache.items)
+	cache.mu.Unlock()
+	if remaining != 0 {
+		t.Fatalf("expired entry should be evicted, cache still holds %d", remaining)
 	}
 }
 
-// TestNormalizeSSHCredentialKey verifies the user@host reduction across both
-// target forms and that an invalid target fails.
-func TestNormalizeSSHCredentialKey(t *testing.T) {
+// TestSSHCredentialKey locks the resolved-endpoint key contract: lowercase
+// user@host plus the effective port (empty means 22), so one machine keeps one
+// slot while host:2222 and host:22 stay apart.
+func TestSSHCredentialKey(t *testing.T) {
 	cases := []struct {
-		target, want string
+		host, port, want string
 	}{
-		{"root@47.1.2.3:/tmp/app", "root@47.1.2.3"},
-		{"ssh://deploy@Example.COM:2222/srv/app", "deploy@example.com"},
-		{"USER@Host:/a", "user@host"},
+		{"root@47.1.2.3", "", "root@47.1.2.3:22"},
+		{"Deploy@Example.COM", "2222", "deploy@example.com:2222"},
+		{" user@host ", " 2222 ", "user@host:2222"},
 	}
 	for _, tc := range cases {
-		got, err := normalizeSSHCredentialKey(tc.target)
-		if err != nil || got != tc.want {
-			t.Errorf("normalizeSSHCredentialKey(%q) = %q, %v; want %q", tc.target, got, err, tc.want)
+		if got := sshCredentialKey(tc.host, tc.port); got != tc.want {
+			t.Errorf("sshCredentialKey(%q, %q) = %q; want %q", tc.host, tc.port, got, tc.want)
 		}
 	}
-	if _, err := normalizeSSHCredentialKey("bad-target"); err == nil {
-		t.Error("invalid target should fail")
+}
+
+// TestSSHCredentialPurgeHost covers the invalidation production relies on:
+// editing or deleting a cluster node must drop every port slot of that endpoint
+// so a password the user removed cannot keep authenticating until the TTL
+// expires, while neighbouring hosts (and prefixes of them) stay untouched.
+func TestSSHCredentialPurgeHost(t *testing.T) {
+	cache := newSSHCredentialCache()
+	cache.store(sshCredentialKey("root@h1", ""), "pw", "")
+	cache.store(sshCredentialKey("root@h1", "2222"), "pw2222", "")
+	cache.store(sshCredentialKey("root@h10", ""), "neighbour", "")
+
+	cache.purgeHost("root@h1")
+	if _, ok := cache.lookup(sshCredentialKey("root@h1", "")); ok {
+		t.Error("purged host still returns a credential on the default port")
+	}
+	if _, ok := cache.lookup(sshCredentialKey("root@h1", "2222")); ok {
+		t.Error("purged host still returns a credential on the nonstandard port")
+	}
+	if _, ok := cache.lookup(sshCredentialKey("root@h10", "")); !ok {
+		t.Error("a host whose name merely starts with the purged name must survive")
 	}
 }
+
+// TestNormalizeSSHCredentialKey 已被 TestSSHCredentialKey 取代（键现在由解析后的
+// 端点得出，不再从原始 target 字符串里取主机段）。
 
 // TestPrepareRemoteSSHInvocation verifies that a stored credential switches
 // the ssh invocation from BatchMode (refuses passwords) to an askpass env,
@@ -110,7 +133,7 @@ func TestPrepareRemoteSSHInvocation(t *testing.T) {
 	}
 
 	// with credential: no BatchMode, askpass env present, cleanup works
-	a.sshCredentials.set("root@h", "sekret")
+	a.sshCredentials.store(sshCredentialKey("root@h", "2222"), "sekret", "")
 	args, env, cleanup, err = a.prepareRemoteSSHInvocation(context.Background(), rt, "2222")
 	if err != nil {
 		t.Fatalf("credential prepare: %v", err)
@@ -137,7 +160,7 @@ func TestPrepareRemoteSSHInvocation(t *testing.T) {
 		if arg == "-p" && i+1 < len(args) && args[i+1] == "2222" {
 			foundPort = true
 		}
-		if strings.Contains(arg, "command -v python3") && strings.Contains(arg, "exec python -") {
+		if strings.Contains(arg, "command -v python3") && strings.Contains(arg, "command -v python2") && strings.Contains(arg, "exec python -") {
 			foundFallback = true
 		}
 	}
@@ -145,7 +168,21 @@ func TestPrepareRemoteSSHInvocation(t *testing.T) {
 		t.Errorf("port 2222 missing from args: %v", args)
 	}
 	if !foundFallback {
-		t.Errorf("expected python3/python fallback command in args: %v", args)
+		t.Errorf("expected python3->python2->python fallback command in args: %v", args)
+	}
+	// 密码模式必须显式 BatchMode=no（抵消用户 ssh_config）并只试一次密码
+	foundBatchNo := false
+	foundSinglePrompt := false
+	for _, arg := range args {
+		if arg == "BatchMode=no" {
+			foundBatchNo = true
+		}
+		if arg == "NumberOfPasswordPrompts=1" {
+			foundSinglePrompt = true
+		}
+	}
+	if !foundBatchNo || !foundSinglePrompt {
+		t.Errorf("password invocation must force BatchMode=no and one prompt, args=%v", args)
 	}
 	if env == nil {
 		t.Fatal("expected non-nil env with credential")
@@ -165,44 +202,35 @@ func TestPrepareRemoteSSHInvocation(t *testing.T) {
 	if helperPath == "" {
 		t.Fatal("SSH_ASKPASS missing from env")
 	}
+	hasDisplay := false
+	for _, kv := range env {
+		if kv == "DISPLAY=dummy:0" {
+			hasDisplay = true
+		}
+		if strings.HasPrefix(kv, "DISPLAY=") && kv != "DISPLAY=dummy:0" {
+			t.Errorf("inherited DISPLAY must be filtered, got %q", kv)
+		}
+	}
+	if !hasDisplay {
+		t.Errorf("expected DISPLAY=dummy:0 fallback env for legacy clients, env=%v", env)
+	}
 	cleanup()
 	if _, err := os.Stat(helperPath); err == nil {
 		t.Errorf("askpass helper still exists after cleanup: %s", helperPath)
 	}
 }
 
-// TestRedactSSHCredentials covers event/history redaction across all stored
-// passwords and the no-op path when nothing is stored.
-func TestRedactSSHCredentials(t *testing.T) {
-	a := &App{sshCredentials: newSSHCredentialCache()}
-	in := `{"name":"ssh_credential","args":"{\"password\":\"s3cret!\"}"}`
-	if got := a.redactSSHCredentials(in); got != in {
-		t.Fatalf("no-credential redaction changed input: %q", got)
-	}
-	a.sshCredentials.set("root@h", "s3cret!")
-	if got := a.redactSSHCredentials(in); strings.Contains(got, "s3cret!") {
-		t.Fatalf("password survived redaction: %q", got)
-	}
-	if got := a.redactSSHCredentialMessages(nil); got != nil {
-		t.Fatalf("nil messages should stay nil, got %v", got)
-	}
-}
-
-// TestSSHCredentialKeyPath covers key-based credentials: setKey stores a key
-// path without a password, list reports hasKey/keyPath (never a password),
-// and prepareRemoteSSHInvocation appends -i while keeping BatchMode. A
-// stored password and key path combine: -i present, BatchMode dropped.
+// TestSSHCredentialKeyPath covers key-based credentials: storing a key path
+// without a password leaves the password slot empty, and
+// prepareRemoteSSHInvocation appends -i while keeping BatchMode. A stored
+// password and key path combine: -i present, BatchMode dropped, askpass env.
 func TestSSHCredentialKeyPath(t *testing.T) {
 	a := &App{sshCredentials: newSSHCredentialCache()}
 	rt := remoteTarget{Raw: "root@h:/tmp/app", Host: "root@h", WorkspaceRoot: "/tmp/app"}
 
-	a.sshCredentials.setKey("root@h", "/keys/id_test.pem")
-	if got, ok := a.sshCredentials.get("root@h"); ok || got != "" {
-		t.Fatalf("key-only entry must not expose a password, got ok=%v %q", ok, got)
-	}
-	statuses := a.sshCredentials.list()
-	if len(statuses) != 1 || !statuses[0].HasKey || statuses[0].KeyPath != "/keys/id_test.pem" || statuses[0].HasPassword {
-		t.Fatalf("unexpected list: %+v", statuses)
+	a.sshCredentials.store(sshCredentialKey("root@h", ""), "", "/keys/id_test.pem")
+	if entry, ok := a.sshCredentials.lookup(sshCredentialKey("root@h", "")); !ok || entry.password != "" || entry.keyPath != "/keys/id_test.pem" {
+		t.Fatalf("key-only entry must store the key path and no password, got ok=%v entry=%+v", ok, entry)
 	}
 
 	args, env, cleanup, err := a.prepareRemoteSSHInvocation(context.Background(), rt, "")
@@ -228,7 +256,7 @@ func TestSSHCredentialKeyPath(t *testing.T) {
 	}
 
 	// password + key combine: -i stays, BatchMode drops, askpass env is built
-	a.sshCredentials.set("root@h", "sekret")
+	a.sshCredentials.store(sshCredentialKey("root@h", ""), "sekret", "")
 	args, env, cleanup, err = a.prepareRemoteSSHInvocation(context.Background(), rt, "")
 	if err != nil {
 		t.Fatalf("combined prepare: %v", err)
@@ -248,19 +276,4 @@ func TestSSHCredentialKeyPath(t *testing.T) {
 	}
 	cleanup()
 
-	// tool-level validation: existing key file accepted, missing one rejected,
-	// neither password nor keyPath rejected
-	keyFile := filepath.Join(t.TempDir(), "id.pem")
-	if err := os.WriteFile(keyFile, []byte("key"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := a.executeSSHCredentialTool(SSHCredentialRequest{Action: "set", Target: "root@h:/tmp/app", KeyPath: keyFile}); err != nil {
-		t.Fatalf("set with keyPath: %v", err)
-	}
-	if _, err := a.executeSSHCredentialTool(SSHCredentialRequest{Action: "set", Target: "root@h:/tmp/app", KeyPath: "missing.pem"}); err == nil {
-		t.Fatal("set with missing keyPath should fail")
-	}
-	if _, err := a.executeSSHCredentialTool(SSHCredentialRequest{Action: "set", Target: "root@h:/tmp/app"}); err == nil {
-		t.Fatal("set with neither password nor keyPath should fail")
-	}
 }

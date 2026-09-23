@@ -508,7 +508,7 @@ const props = defineProps({
   // owned by App.vue.
   theme: { type: String, default: 'amber' },
 });
-const emit = defineEmits(['close', 'save', 'background-changed', 'check-update', 'set-mode', 'set-theme']);
+const emit = defineEmits(['close', 'save', 'background-changed', 'check-update', 'set-mode', 'set-theme', 'ssh-servers-changed']);
 const checkUpdateBusy = ref(false);
 const checkUpdateMessage = ref('');
 let checkUpdateTimer = 0;
@@ -603,6 +603,12 @@ const draft = reactive(cloneConfigDraft(props.configDraft));
 // independent of the backend config draft. Applied live on selection.
 
 const page = ref('general');
+
+defineExpose({
+  setPage: (p) => {
+    page.value = p;
+  },
+});
 const proxyDetecting = ref(false);
 const proxyTesting = ref(false);
 const proxyStatus = ref(null);

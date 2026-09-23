@@ -12,11 +12,11 @@ Public License v3. See the LICENSE file for details.
     <div class="tool-line read-grep-toggle" @click="toggleExpanded">
       <!-- 折叠行不放状态图标（比圆点/对勾更干净）；子调用失败也不改折叠行
            颜色，失败详情在展开后的子条目上 -->
-      <!-- 折叠行：取消整行 shimmer 流光，文字保持固定，数字递增时播放微弹跳入动画 -->
+      <!-- 折叠行不做流光或位移动画，数字变化也不应带动整行布局 -->
       <span class="read-grep-stats">
         <template v-for="(part, idx) in statsParts" :key="part.key">
           <span v-if="idx > 0" class="read-grep-stats-sep">{{ $t('common.commaSep') }}</span>
-          <span>{{ part.prefix }}</span><span class="read-grep-num-slot"><span :key="part.count" class="read-grep-num-bump">{{ part.count }}</span></span><span>{{ part.suffix }}</span>
+          <span>{{ part.prefix }}</span><span class="read-grep-num-slot">{{ part.count }}</span><span>{{ part.suffix }}</span>
         </template>
       </span>
       <!-- 折叠指示紧跟文字（不靠最右）；展开时旋转 90°。RightOutlined SVG

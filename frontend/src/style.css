@@ -2637,6 +2637,57 @@ code, pre {
   animation-delay: 0.4s;
 }
 
+/* 流光挂在整行上：一道高光从 “Thinking” 连续扫过 token 数。两段各自挂渐变
+   会变成同一时刻的两道高光，看着像两句话。子元素的 color 只在降级时生效
+   （见 reduced-motion 块）：文字填充色由这里接管，为 transparent。 */
+.composer-thinking-count {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  line-height: 18px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  color: var(--ally-text-faint);
+  background: linear-gradient(90deg, var(--ally-text-faint) 25%, var(--ally-text-high) 50%, var(--ally-text-faint) 75%);
+  background-size: 200% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: reasoning-shimmer 1.8s linear infinite;
+}
+
+.composer-thinking-label {
+  color: var(--ally-text-faint);
+  font-weight: 500;
+}
+
+.composer-thinking-tokens {
+  color: var(--ally-text-soft);
+}
+
+@keyframes reasoning-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: 0% 0; }
+}
+
+/* 计数只在思考阶段存在（v-if 挂载/卸载）。它同一行右侧的提示词是右对齐的
+   （.composer-run-prompt 的 margin-left: auto 吃掉全部剩余空间），所以淡入淡出
+   期间不会有相邻元素被推动，纯 opacity 就够，不触发布局（AGENTS.md §4.7）。 */
+.thinking-fade-enter-active {
+  transition: opacity 0.18s ease-out;
+}
+
+.thinking-fade-leave-active {
+  transition: opacity 0.15s ease-in;
+}
+
+.thinking-fade-enter-from,
+.thinking-fade-leave-to {
+  opacity: 0;
+}
+
 .composer-run-prompt {
   min-width: 0;
   max-width: min(68vw, 720px);
@@ -2894,6 +2945,156 @@ code, pre {
   border-color: rgba(232, 165, 92, 0.7);
 }
 
+.ssh-clusters-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 4px 0;
+  font-family: var(--ally-ui-font);
+}
+
+.ssh-clusters-header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ssh-clusters-header-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.ssh-clusters-title {
+  font-size: var(--ally-sub-font-size);
+  font-weight: 600;
+  color: var(--ally-text-high);
+}
+
+.ssh-clusters-manage-btn-small {
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid var(--ally-border-subtle);
+  background: var(--ally-hover-faint);
+  color: var(--ally-text-soft);
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
+  --wails-draggable: no-drag;
+}
+
+.ssh-clusters-manage-btn-small:hover {
+  color: var(--ally-text-high);
+  background: var(--ally-state-hover);
+  border-color: color-mix(in srgb, var(--ally-accent) 40%, transparent);
+}
+
+.ssh-clusters-hint {
+  font-size: 11px;
+  color: var(--ally-text-muted);
+  line-height: 1.4;
+}
+
+/* 授权列表尚未读到时给一句明确的等待说明：此时勾选是禁用的，不能让“一个都没勾”
+   看起来像是真的没有授权。*/
+.ssh-clusters-loading {
+  color: var(--ally-warning);
+}
+
+.ssh-clusters-search {
+  margin-top: 2px;
+}
+
+.ssh-clusters-search .ssh-search-icon {
+  color: var(--ally-text-muted);
+  font-size: 12px;
+}
+
+.ssh-clusters-empty {
+  padding: 12px 4px;
+  font-size: 12px;
+  color: var(--ally-text-muted);
+  text-align: center;
+}
+
+.ssh-clusters-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 240px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ssh-clusters-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  background: var(--ally-hover-faint);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.ssh-clusters-item:hover {
+  background: var(--ally-state-hover);
+}
+
+.ssh-clusters-meta {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.ssh-clusters-row1 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.ssh-clusters-alias {
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--ally-text-high);
+  flex-shrink: 0;
+}
+
+.ssh-clusters-risk-tag {
+  font-size: 10px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: rgba(239, 68, 68, 0.15);
+  color: #ef4444;
+  flex-shrink: 0;
+}
+
+.ssh-clusters-endpoint {
+  font-size: 11px;
+  color: var(--ally-text-muted);
+  font-family: var(--ally-mono-font, ui-monospace, monospace);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-left: auto;
+}
+
+.ssh-clusters-desc {
+  font-size: 11px;
+  color: var(--ally-text-soft);
+  line-height: 1.3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .composer-info .info-context {
   color: var(--ally-text-muted);
   flex-shrink: 0;
@@ -3047,6 +3248,31 @@ code, pre {
 .composer-info .task-chip-scheduled .task-chip-letter {
   color: var(--ally-warning-text);
   background: color-mix(in srgb, var(--ally-warning) 18%, transparent);
+}
+
+.composer-info .task-chip-ssh .task-chip-label {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 4px;
+  height: 14px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--ally-success-text);
+  background: color-mix(in srgb, var(--ally-success) 18%, transparent);
+}
+
+.composer-info .task-chip-ssh.active {
+  color: var(--ally-text-high);
+  border-color: color-mix(in srgb, var(--ally-success) 42%, transparent);
+  background: color-mix(in srgb, var(--ally-success) 12%, transparent);
+}
+
+.composer-info .task-chip-ssh.active:hover {
+  border-color: color-mix(in srgb, var(--ally-success) 58%, transparent);
+  background: color-mix(in srgb, var(--ally-success) 18%, transparent);
 }
 
 .composer-info .info-export {
@@ -4494,6 +4720,22 @@ code, pre {
   .tool-body-swap {
     animation: none;
   }
+  /* 流光停用时要退回纯色：只停动画的话，渐变还停在 background-position:0
+     那一帧上，一行字会一半亮一半暗。 */
+  .composer-thinking-count {
+    background: none;
+    animation: none;
+  }
+  .composer-thinking-count,
+  .composer-thinking-label,
+  .composer-thinking-tokens {
+    -webkit-text-fill-color: currentColor;
+  }
+  /* 减弱动效下连淡入淡出也免掉：计数直接出现/消失。 */
+  .thinking-fade-enter-active,
+  .thinking-fade-leave-active {
+    transition: none;
+  }
 }
 
 .messages .message:has(+ .rich-tool-card) {
@@ -4510,15 +4752,6 @@ code, pre {
   contain-intrinsic-size: auto 120px;
 }
 
-/* 此刻渲染不出东西的 assistant 行（纯思考步骤留下的空壳行：思考已收起、正文还没
-   开始）不参与尺寸估计。跳过它没有任何收益，但浏览器一旦把它当作离屏内容，就会用
-   上面那个 120px 估计值占位——折叠组上方因此凭空多出一大截间距，直到该行重新进入
-   可视范围才突然收敛。content-visibility: visible 同时去掉了 containment，这些空行的
-   外边距也恢复自折叠（与加 containment 之前的观感一致）。 */
-.messages .message.is-empty-row {
-  content-visibility: visible;
-  contain-intrinsic-size: auto;
-}
 
 .rich-tool-card.non-interactive {
   cursor: default;
@@ -4903,38 +5136,19 @@ code, pre {
 }
 
 .read-grep-stats {
+  min-width: 0;
+  overflow: hidden;
   color: var(--ally-text-soft);
   font-weight: 400;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .read-grep-num-slot {
   display: inline-flex;
   vertical-align: baseline;
   margin: 0 1px;
-}
-
-/* 数字递增时触发柔和微小的向上轻跃动画，完全保持原本文字颜色与亮度，不突兀 */
-.read-grep-num-bump {
-  display: inline-block;
   font-variant-numeric: tabular-nums;
-  font-weight: 500;
-  color: inherit;
-  animation: read-grep-count-bump 0.28s ease-out;
-}
-
-@keyframes read-grep-count-bump {
-  0% {
-    transform: translateY(2px);
-    opacity: 0.8;
-  }
-  50% {
-    transform: translateY(-1.5px);
-    opacity: 1;
-  }
-  100% {
-    transform: translateY(0);
-    opacity: 1;
-  }
 }
 .read-grep-body {
   padding: 2px 8px 4px 6px;
@@ -5222,103 +5436,6 @@ code, pre {
 }
 
 
-/* ── Reasoning / thinking block ── */
-
-/* Thinking 提示行：不占文档流，覆盖在正文起点上；正文起始前消息靠
-   .message:has() 占位规则保底高度。它本身只是浮在正文起点上的一行文字，
-   不画背景——旧方案给它铺了一块与页面同色的“帘幕”来遮住浮层下方刚输出
-   的正文首行，但这块不透明背景在玻璃/带背景图的画布上会显成一条横贯
-   消息的色带（浅色模式尤其明显），已去掉。
-   代价：不能再淡出。淡出期间这行字会与同时出现的正文首行叠字，所以思考
-   结束时直接移除（display: none），正文在同一帧原位出现，无位移、无塌缩。 */
-.reasoning-block {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  z-index: 2;
-  margin: 0;
-  pointer-events: none;
-}
-
-.reasoning-block.reasoning-hidden {
-  display: none;
-}
-
-/* 思考中：消息保留一行高度，浮层不溢出压到上一条消息 */
-.message:has(.reasoning-block:not(.reasoning-hidden)) {
-  min-height: 26px;
-}
-
-.reasoning-header {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  line-height: 1.4;
-  color: var(--ally-text-soft);
-  font-size: 14px;
-  cursor: default;
-  border-radius: 4px;
-  padding: 0;
-  --wails-draggable: no-drag;
-}
-
-.reasoning-header:hover {
-  background: transparent;
-}
-
-.reasoning-label {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.reasoning-tokens {
-  color: var(--ally-text-faint);
-  font-variant-numeric: tabular-nums;
-  font-size: var(--ally-sub-font-size);
-}
-
-.reasoning-title {
-  color: var(--ally-text-faint);
-  font-weight: 500;
-}
-
-/* 思考中：灰色文字 + 从左到右的 shimmer 擦亮动画（无缝循环） */
-.reasoning-title-thinking {
-  background: linear-gradient(90deg, var(--ally-text-faint) 25%, var(--ally-text-high) 50%, var(--ally-text-faint) 75%);
-  background-size: 200% 100%;
-  background-clip: text;
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  color: transparent;
-  font-weight: 500;
-  animation: reasoning-shimmer 1.8s linear infinite;
-}
-
-@keyframes reasoning-shimmer {
-  0% { background-position: 200% 0; }
-  100% { background-position: 0% 0; }
-}
-
-.reasoning-body {
-  margin: 4px 0 0;
-  padding: 6px 10px;
-  white-space: pre-wrap;
-  word-break: break-word;
-  color: var(--ally-text-tertiary);
-  background: var(--ally-hover-faint);
-  font-family: var(--ally-ui-font);
-  font-size: var(--ally-sub-font-size);
-  line-height: 1.5;
-  max-height: 150px;
-  overflow: hidden;
-  border-radius: 4px;
-}
-
-.reasoning-body:hover {
-  overflow-y: auto;
-}
 
 
 /* ── Plan panel (per workspace Tab, above its composer) ── */

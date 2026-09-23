@@ -66,7 +66,7 @@ Public License v3. See the LICENSE file for details.
             :aria-label="$t('extraRoots.button.title')"
             @click.stop
           >
-            <FolderAddOutlined class="extra-roots-icon" />
+            <PlusOutlined class="extra-roots-icon" />
             <span v-if="extraRoots.length > 0" class="extra-roots-count">{{ extraRoots.length }}</span>
           </button>
         </template>
@@ -124,6 +124,90 @@ Public License v3. See the LICENSE file for details.
       <span class="task-chip-letter">C</span>
       <span>{{ scheduledCount }}</span>
     </button>
+    <n-popover
+      v-if="activeWorkspacePath"
+      trigger="click"
+      placement="top-start"
+      :show-arrow="false"
+      :width="360"
+      class="ssh-clusters-popover"
+    >
+      <template #trigger>
+        <button
+          type="button"
+          :class="['task-chip', 'task-chip-ssh', { active: allowedSshServers.length > 0 }]"
+          :title="$t('sshCluster.button.title')"
+          :aria-label="$t('sshCluster.button.title')"
+          @click.stop
+        >
+          <span class="task-chip-label">SSH</span>
+          <span class="task-chip-count">{{ allowedSshServers.length }}</span>
+        </button>
+      </template>
+      <div class="ssh-clusters-panel">
+        <div class="ssh-clusters-header">
+          <div class="ssh-clusters-header-top">
+            <span class="ssh-clusters-title">{{ $t('sshCluster.panel.title') }}</span>
+            <button
+              type="button"
+              class="ssh-clusters-manage-btn-small"
+              @click.stop="openSSHClusterManager"
+            >
+              {{ $t('sshCluster.panel.manage') }}
+            </button>
+          </div>
+          <span class="ssh-clusters-hint">{{ $t('sshCluster.panel.hint') }}</span>
+          <span v-if="!allowedSshServersReady" class="ssh-clusters-hint ssh-clusters-loading">
+            {{ $t('sshCluster.loading') }}
+          </span>
+          <n-input
+            v-if="sshServers.length > 0"
+            v-model:value="sshSearchQuery"
+            size="tiny"
+            clearable
+            :placeholder="$t('common.searchPlaceholder')"
+            class="ssh-clusters-search"
+          >
+            <template #prefix><SearchOutlined class="ssh-search-icon" /></template>
+          </n-input>
+        </div>
+        <div v-if="sshServers.length === 0" class="ssh-clusters-empty">
+          {{ $t('sshCluster.panel.empty') }}
+        </div>
+        <div v-else-if="filteredSSHServers.length === 0" class="ssh-clusters-empty">
+          {{ $t('common.searchEmpty') }}
+        </div>
+        <ul v-else class="ssh-clusters-list">
+          <li
+            v-for="s in filteredSSHServers"
+            :key="s.alias"
+            class="ssh-clusters-item"
+            @click="toggleServer(s.alias)"
+          >
+            <n-checkbox
+              :checked="isServerAllowed(s.alias)"
+              :disabled="!allowedSshServersReady"
+              @click.stop
+              @update:checked="() => toggleServer(s.alias)"
+            />
+            <div class="ssh-clusters-meta">
+              <div class="ssh-clusters-row1">
+                <span class="ssh-clusters-alias">{{ s.alias }}</span>
+                <span v-if="s.riskLevel === 'high'" class="ssh-clusters-risk-tag">
+                  {{ $t('sshCluster.modal.riskHigh') }}
+                </span>
+                <span class="ssh-clusters-endpoint">
+                  {{ s.username }}@{{ s.host }}:{{ s.port || 22 }}
+                </span>
+              </div>
+              <div class="ssh-clusters-desc" :title="s.description">
+                {{ s.description || '-' }}
+              </div>
+            </div>
+          </li>
+        </ul>
+      </div>
+    </n-popover>
     <template v-if="gitStatus.isRepo">
       <span class="info-sep">·</span>
       <n-popover
@@ -284,7 +368,7 @@ import ModelMenu from './ModelMenu.vue';
 import PlusOutlined from '@vicons/antd/PlusOutlined';
 import MenuOutlined from '@vicons/antd/MenuOutlined';
 import FolderOpenTwotone from '@vicons/antd/FolderOpenTwotone';
-import FolderAddOutlined from '@vicons/antd/FolderAddOutlined';
+import SearchOutlined from '@vicons/antd/SearchOutlined';
 import CodeOutlined from '@vicons/antd/CodeOutlined';
 import CloseOutlined from '@vicons/antd/CloseOutlined';
 import { formatDateTime, reasoningEffortLabel, t } from '../i18n.mjs';
@@ -374,11 +458,47 @@ const props = defineProps({
   scheduledCount: { type: Number, default: 0 },
   scheduledRunningCount: { type: Number, default: 0 },
   extraRoots: { type: Array, default: () => [] },
+  sshServers: { type: Array, default: () => [] },
+  // 名字里不要出现连续大写：`allowedSSHServers` 无法用 :allowed-ssh-servers 绑定
+  // （Vue 只做 kebab→camel，得到 allowedSshServers，值会掉进 attrs，这里永远保持默认空数组）。
+  allowedSshServers: { type: Array, default: () => [] },
+  // 授权列表是否已经从后端读到：未知状态下勾选必须禁用，否则会把“未知”当“空”，
+  // 一次点击就撤掉该工作区其它节点的授权（后端保存是整份替换）。
+  allowedSshServersReady: { type: Boolean, default: false },
   explorerVisible: { type: Boolean, default: false },
   fmtK: { type: Function, required: true },
 });
 
-const emit = defineEmits(['switchModel', 'openConfig', 'openGitDiff', 'openWorkspace', 'changeReasoningEffort', 'openTaskCenter', 'newSession', 'showSessions', 'toggleExplorer', 'addExtraRoot', 'removeExtraRoot', 'openTerminal', 'compactContext', 'compactLessons', 'updateCodegraph']);
+const emit = defineEmits(['switchModel', 'openConfig', 'openGitDiff', 'openWorkspace', 'changeReasoningEffort', 'openTaskCenter', 'newSession', 'showSessions', 'toggleExplorer', 'addExtraRoot', 'removeExtraRoot', 'openTerminal', 'compactContext', 'compactLessons', 'updateCodegraph', 'toggle-ssh-server', 'open-ssh-cluster-manager']);
+
+const sshSearchQuery = ref('');
+
+const filteredSSHServers = computed(() => {
+  const q = sshSearchQuery.value.trim().toLowerCase();
+  if (!q) return props.sshServers;
+  return props.sshServers.filter((s) => {
+    return (
+      (s.alias && s.alias.toLowerCase().includes(q)) ||
+      (s.host && s.host.toLowerCase().includes(q)) ||
+      (s.username && s.username.toLowerCase().includes(q)) ||
+      (s.description && s.description.toLowerCase().includes(q))
+    );
+  });
+});
+
+function toggleServer(alias) {
+  if (!props.allowedSshServersReady) return;
+  emit('toggle-ssh-server', alias);
+}
+
+function openSSHClusterManager() {
+  emit('open-ssh-cluster-manager');
+}
+
+function isServerAllowed(alias) {
+  const target = String(alias || '').toLowerCase().trim();
+  return Array.isArray(props.allowedSshServers) && props.allowedSshServers.map((s) => String(s || '').toLowerCase().trim()).includes(target);
+}
 
 const contextPopoverVisible = ref(false);
 const currentModelLabel = computed(() => formatModelLabel(props.config));

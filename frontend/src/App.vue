@@ -37,7 +37,7 @@ Public License v3. See the LICENSE file for details.
             <!-- Main area: mode rail + (chat workbench | KB guidance card) -->
             <div class="main-area" @pointerdown.capture="clearActiveExplorerTreeSelection">
               <ModeSider :mode="mode" :kb-running="kbSessionRunning" @switch="switchMode" />
-              <n-layout v-show="!kbEmptyActive && !settingsActive && !statsActive && !gamesActive && !skillsActive && !mcpActive && !modelsActive" class="chat-layout" :content-style="chatLayoutContentStyle">
+              <n-layout v-show="!kbEmptyActive && !settingsActive && !statsActive && !gamesActive && !skillsActive && !mcpActive && !modelsActive && !sshActive" class="chat-layout" :content-style="chatLayoutContentStyle">
                 <n-tabs
                   class="workspace-content-tabs"
                   :value="activeWorkspaceId"
@@ -216,6 +216,12 @@ Public License v3. See the LICENSE file for details.
                       <span class="composer-run-status-dot"></span>
                       <span class="composer-run-status-dot"></span>
                     </span>
+                    <Transition name="thinking-fade">
+                      <span v-if="activeThinkingTokenCount > 0" class="composer-thinking-count">
+                        <span class="composer-thinking-label">Thinking</span>
+                        <span class="composer-thinking-tokens">{{ fmtTokens(activeThinkingTokenCount) }} tokens</span>
+                      </span>
+                    </Transition>
                     <span class="composer-run-prompt">{{ compactStatusText }}</span>
                   </template>
                   <template v-else>
@@ -224,6 +230,12 @@ Public License v3. See the LICENSE file for details.
                       <span class="composer-run-status-dot"></span>
                       <span class="composer-run-status-dot"></span>
                     </span>
+                    <Transition name="thinking-fade">
+                      <span v-if="activeThinkingTokenCount > 0" class="composer-thinking-count">
+                        <span class="composer-thinking-label">Thinking</span>
+                        <span class="composer-thinking-tokens">{{ fmtTokens(activeThinkingTokenCount) }} tokens</span>
+                      </span>
+                    </Transition>
                     <span
                       v-if="activeSessionRunning && latestUserPromptSummary"
                       class="composer-run-prompt"
@@ -287,9 +299,14 @@ Public License v3. See the LICENSE file for details.
                   :scheduled-running-count="scheduledTaskRunningCount"
                   :fmt-k="fmtK"
                   :extra-roots="extraRoots"
+                  :ssh-servers="allSSHServers"
+                  :allowed-ssh-servers="allowedSSHServersForActiveWorkspace"
+                  :allowed-ssh-servers-ready="allowedSSHServersReadyForActiveWorkspace"
                   :explorer-visible="explorerVisibleFor(activeWorkspaceId)"
                   @add-extra-root="addExtraRoot"
                   @remove-extra-root="removeExtraRoot"
+                  @toggle-ssh-server="toggleSSHServerForActiveWorkspace"
+                  @open-ssh-cluster-manager="openSSHClusterManager"
                   @switch-model="switchToModel"
                   @open-config="switchMode('models')"
                   @open-git-diff="openGitDiff"
@@ -313,7 +330,7 @@ Public License v3. See the LICENSE file for details.
                  tree is a normal right-hand flex column, not an overflow escape. -->
             <template v-for="tab in workspaceTabs" :key="`explorer-${tab.id}`">
               <div
-                v-if="explorerVisibleFor(tab.id) && !kbEmptyActive && !settingsActive && !statsActive && !gamesActive && !skillsActive && !mcpActive && !modelsActive"
+                v-if="explorerVisibleFor(tab.id) && !kbEmptyActive && !settingsActive && !statsActive && !gamesActive && !skillsActive && !mcpActive && !modelsActive && !sshActive"
                 v-show="tab.id === activeWorkspaceId"
                 class="workspace-explorer-slot"
               >
@@ -349,6 +366,7 @@ Public License v3. See the LICENSE file for details.
                  (tab, scroll, unsaved draft edits) across mode switches. -->
             <div v-show="settingsActive" class="settings-page-container">
               <SettingsModal
+                ref="settingsModalRef"
                 :visible="settingsActive"
                 :config-draft="configDraft"
                 :check-update-result="checkUpdateResult"
@@ -360,6 +378,7 @@ Public License v3. See the LICENSE file for details.
                 @save="onSettingsSave"
                 @background-changed="onBackgroundChanged"
                 @check-update="onCheckUpdate"
+                @ssh-servers-changed="refreshSSHClusters"
               />
             </div>
 
@@ -382,6 +401,12 @@ Public License v3. See the LICENSE file for details.
                  draft, and lazy catalog across mode switches. -->
             <div v-show="modelsActive" class="settings-page-container">
               <ModelsPanel :show="modelsActive" :config-draft="configDraft" @save="onSettingsSave" />
+            </div>
+
+            <!-- SSH Clusters page (extracted onto the mode rail, below Models):
+                 inline sibling; v-show keeps list and draft state across mode switches. -->
+            <div v-show="sshActive" class="settings-page-container">
+              <SSHClusterPanel :show="sshActive" @servers-changed="refreshSSHClusters" />
             </div>
 
             <!-- Token stats page: v-show keeps loaded stats across switches. -->
@@ -500,7 +525,7 @@ Public License v3. See the LICENSE file for details.
 </template>
 
 <script setup>
-import { computed, defineAsyncComponent, h, nextTick, onErrorCaptured, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
+import { computed, defineAsyncComponent, h, nextTick, onErrorCaptured, onMounted, onUnmounted, reactive, ref, Transition, watch } from 'vue';
 import { NButton, createDiscreteApi, darkTheme } from 'naive-ui';
 import {
   getStoredMode, setMode as persistMode,
@@ -578,6 +603,9 @@ import {
   SkipUpdate,
   GetBackgroundImageURL,
   LogFrontendError,
+  ListAllSSHServers,
+  GetWorkspaceAllowedServers,
+  SetWorkspaceAllowedServers,
 } from '../bindings/ally-dev/internal/app/app';
 import { Application, Browser, Events, Window } from '@wailsio/runtime';
 import CloseOutlined from '@vicons/antd/CloseOutlined';
@@ -602,6 +630,7 @@ import SettingsModal from './components/SettingsModal.vue';
 import SkillsPanel from './components/SkillsPanel.vue';
 import McpPanel from './components/McpPanel.vue';
 import ModelsPanel from './components/ModelsPanel.vue';
+import SSHClusterPanel from './components/SSHClusterPanel.vue';
 import ChatMessages from './components/ChatMessages.vue';
 import TaskCenterPanel from './components/TaskCenterPanel.vue';
 import TokenStatsModal from './components/TokenStatsModal.vue';
@@ -621,7 +650,7 @@ import { isNewerReleaseVersion } from './utils/versionCheck.mjs';
 import { findSessionWorkspaceTab, isEditableNavigationTarget, shouldAcceptRunTerminal } from './utils/sessionState.mjs';
 import { orderPlanPanelEntries, planFocusScrollDelta } from './utils/planPanel.mjs';
 import { formatDateTime, naiveDateLocale, naiveLocale, reasoningEffortLabel, t, welcomeGreeting as localizedWelcomeGreeting } from './i18n.mjs';
-import { fmtCompact, fmtDuration } from './utils/format.mjs';
+import { fmtCompact, fmtDuration, fmtTokens } from './utils/format.mjs';
 import { isSkillActive, normalizeSkillName } from './utils/skills.mjs';
 import {
   assistantRowRenderState,
@@ -1671,6 +1700,21 @@ const configVisible = computed(() => mode.value === 'settings');
 const workspaceTabs = ref([]);
 const activeWorkspaceId = ref('');
 const extraRoots = ref([]);
+const allSSHServers = ref([]);
+const allowedSSHServersMap = ref({});
+// 哪些工作区的授权列表已经真的从后端读到过。空列表与“还没读到/读失败”必须分开：
+// 后端保存授权是整份替换，把“未知”当成“一台都没授权”会让一次勾选静默撤掉
+// 该工作区其它节点的授权（还落了盘）。
+const loadedAllowedSSHWorkspaces = ref(new Set());
+const allowedSSHServersReadyForActiveWorkspace = computed(() => {
+  const ws = activeRunWorkspace.value;
+  return !!ws && loadedAllowedSSHWorkspaces.value.has(ws);
+});
+const allowedSSHServersForActiveWorkspace = computed(() => {
+  const ws = activeRunWorkspace.value;
+  if (!ws) return [];
+  return allowedSSHServersMap.value[ws] || [];
+});
 const workspaceHistory = ref(loadWorkspaceHistory());
 const todosBySession = reactive({});
 const todoRevisionsBySession = reactive({});
@@ -2291,17 +2335,18 @@ const settingsActive = computed(() => mode.value === 'settings');
 const statsActive = computed(() => mode.value === 'stats');
 // Games page state (协作休息区, inline sibling of the settings page).
 const gamesActive = computed(() => mode.value === 'games');
-// Skills / MCP / Models management pages: extracted from Settings onto the
+// Skills / MCP / Models / SSH management pages: extracted onto the
 // mode rail (below the knowledge base), each an inline sibling owning its
 // whole state.
 const skillsActive = computed(() => mode.value === 'skills');
 const mcpActive = computed(() => mode.value === 'mcp');
 const modelsActive = computed(() => mode.value === 'models');
+const sshActive = computed(() => mode.value === 'ssh');
 
 // Overlay pages fill the main area instead of the chat workbench. This set is
 // the single source of truth for switchMode's pre-overlay tracking, the
 // main-area v-show guards, and the ESC-back handler.
-const overlayModes = new Set(['settings', 'stats', 'games', 'skills', 'mcp', 'models']);
+const overlayModes = new Set(['settings', 'stats', 'games', 'skills', 'mcp', 'models', 'ssh']);
 function isOverlayMode(value) {
   return overlayModes.has(value);
 }
@@ -2314,13 +2359,13 @@ function closeSettings() {
 
 function closeStats() {
   if (!statsActive.value) return;
-  switchMode(['chat', 'kb', 'settings', 'skills', 'mcp', 'models'].includes(preOverlayMode.value) ? preOverlayMode.value : 'chat');
+  switchMode(['chat', 'kb', 'settings', 'skills', 'mcp', 'models', 'ssh'].includes(preOverlayMode.value) ? preOverlayMode.value : 'chat');
   nextTick(() => focusPromptInput());
 }
 
 function closeGames() {
   if (!gamesActive.value) return;
-  switchMode(['chat', 'kb', 'settings', 'stats', 'skills', 'mcp', 'models'].includes(preOverlayMode.value) ? preOverlayMode.value : 'chat');
+  switchMode(['chat', 'kb', 'settings', 'stats', 'skills', 'mcp', 'models', 'ssh'].includes(preOverlayMode.value) ? preOverlayMode.value : 'chat');
   nextTick(() => focusPromptInput());
 }
 
@@ -2338,6 +2383,12 @@ function closeMcp() {
 
 function closeModels() {
   if (!modelsActive.value) return;
+  switchMode(['chat', 'kb'].includes(preOverlayMode.value) ? preOverlayMode.value : 'chat');
+  nextTick(() => focusPromptInput());
+}
+
+function closeSSH() {
+  if (!sshActive.value) return;
   switchMode(['chat', 'kb'].includes(preOverlayMode.value) ? preOverlayMode.value : 'chat');
   nextTick(() => focusPromptInput());
 }
@@ -2520,6 +2571,19 @@ function onHeaderHistorySelect(key) {
 
 const latestUserPromptSummary = computed(() => latestPromptSummaryForSession(activeSession.value));
 const activeSessionRunning = computed(() => !!activeSession.value?.isRunning);
+const activeThinkingTokenCount = computed(() => {
+  const session = activeSession.value;
+  const messages = session?.messages;
+  if (!session?.isRunning || !session.runId || !Array.isArray(messages)) return 0;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (msg?.role === 'assistant' && msg.streaming && msg.runId === session.runId) {
+      if (!msg.reasoningActive || !(msg.reasoningChars > 0)) return 0;
+      return Math.max(1, Math.round(Number(msg.reasoningChars) / 3));
+    }
+  }
+  return 0;
+});
 const scheduledTaskRunningCount = computed(() => scheduledTasks.value.filter((task) => task?.running).length);
 const serviceRunningCount = computed(() => services.value.filter((service) => ['starting', 'running'].includes(service?.status)).length);
 // 徽标数字只算“还活着”的条目：一次性任务跑完（nextRunAt 归零）不会再触发，
@@ -2656,34 +2720,14 @@ function displayMessagesForSession(session) {
   let i = 0;
   while (i < src.length) {
     const m = src[i];
-    // Fold consecutive read + grep tool-call cards (errors included) into a
-    // single collapsed "已读取 N 次，搜索 M 次" group. Reasoning-only
-    // assistant messages BETWEEN tool batches do not break the group (they
-    // render above the fold). A trailing reasoning-only message — the model
-    // thinking right before its final answer — stays BELOW the fold: once its
-    // text streams in it must not shove the fold upward.
-    // 空壳思考行到不了这里（isRenderableMessage 已经把“渲染不出东西”的行挡在源头）；
-    // 这里真正要上提/下压的空行是仍然要显示的：流式中的思考行，以及挂统计/附件的行。
+    // Fold adjacent read/grep/list tool cards into one collapsed group. Empty
+    // assistant rows (including thinking-only steps) are filtered before this pass.
     if (m.role === 'tool_call' && (m.kind === 'read' || m.kind === 'grep' || m.kind === 'list')) {
-      const skippedThinks = [];
-      let pendingThinks = [];
       let j = i + 1;
       while (j < src.length) {
         const n = src[j];
-        if (n.role === 'tool_call' && (n.kind === 'read' || n.kind === 'grep' || n.kind === 'list')) {
-          // 思考后面又跟了 read/grep：这批思考确实夹在两批工具之间，上提
-          skippedThinks.push(...pendingThinks);
-          pendingThinks = [];
-          j++;
-          continue;
-        }
-        // 思考消息（无正文的 assistant）：先挂起，看后面是否还有工具
-        if (n.role === 'assistant' && !String(n.content || '').trim() && !n.error && !n.system) {
-          pendingThinks.push(n);
-          j++;
-          continue;
-        }
-        break;
+        if (n.role !== 'tool_call' || (n.kind !== 'read' && n.kind !== 'grep' && n.kind !== 'list')) break;
+        j++;
       }
       const group = {
         role: 'tool_call',
@@ -2704,7 +2748,6 @@ function displayMessagesForSession(session) {
       let allDone = true;
       while (i < j) {
         const entry = src[i];
-        if (entry.role !== 'tool_call') { i++; continue; }
         if (entry.kind === 'grep') {
           group.grepCount++;
           group.grepItems.push({
@@ -2751,12 +2794,7 @@ function displayMessagesForSession(session) {
       }
       // 子调用失败不改组状态：失败详情看展开后的子条目，折叠行不整组转红
       group.status = allDone ? 'success' : 'running';
-      // 夹在工具批次之间的思考上提到折叠组上方（原顺序）；
-      // 尾随的思考保持在折叠组下方（它多半是正在流式的最终回答，
-      // 一旦有正文就不能把折叠往下顶）。
-      out.push(...skippedThinks);
       out.push(group);
-      out.push(...pendingThinks);
     } else {
       out.push(m);
       i++;
@@ -3216,6 +3254,101 @@ function removeExtraRoot(path) {
   session.extraRoots = session.extraRoots.filter((p) => workspaceHistoryDedupeKey(p) !== key);
   extraRoots.value = [...session.extraRoots];
   saveSessions();
+}
+
+// ── SSH 集群与工作区隔离管理 ──────────────────────────
+async function refreshSSHClusters() {
+  try {
+    const list = await ListAllSSHServers();
+    allSSHServers.value = Array.isArray(list) ? list : [];
+    const ws = activeRunWorkspace.value;
+    if (ws) {
+      await loadAllowedSSHServersForWorkspace(ws);
+    }
+  } catch (err) {
+    console.error('refreshSSHClusters error:', err);
+  }
+}
+
+async function loadAllowedSSHServersForWorkspace(ws) {
+  if (!ws) return;
+  try {
+    const allowed = await GetWorkspaceAllowedServers(ws);
+    allowedSSHServersMap.value = {
+      ...allowedSSHServersMap.value,
+      [ws]: Array.isArray(allowed) ? allowed : [],
+    };
+    const loaded = new Set(loadedAllowedSSHWorkspaces.value);
+    loaded.add(ws);
+    loadedAllowedSSHWorkspaces.value = loaded;
+  } catch (err) {
+    console.error('loadAllowedSSHServersForWorkspace error:', err);
+    // 读失败就不算已加载：此时勾选一律拒绝（后端是整份替换，把“未知”当“空”
+    // 会撤掉该工作区其它节点的授权并落盘）。
+    const loaded = new Set(loadedAllowedSSHWorkspaces.value);
+    loaded.delete(ws);
+    loadedAllowedSSHWorkspaces.value = loaded;
+    message.error(t('sshCluster.loadFailed'));
+  }
+}
+
+const sshTogglingLock = new Set();
+
+async function toggleSSHServerForActiveWorkspace(alias) {
+  const ws = activeRunWorkspace.value;
+  if (!ws || !alias) return;
+  // 授权列表未知时不得提交：SetWorkspaceAllowedServers 是整份替换，拿空列表
+  // 当基准就会把该工作区其它已授权节点一起撤掉。
+  if (!allowedSSHServersReadyForActiveWorkspace.value) {
+    message.warning(t('sshCluster.notLoaded'));
+    return;
+  }
+  const target = String(alias).toLowerCase().trim();
+  const lockKey = `${ws}::${target}`;
+  if (sshTogglingLock.has(lockKey)) return;
+  sshTogglingLock.add(lockKey);
+
+  const current = allowedSSHServersForActiveWorkspace.value;
+  let updated;
+  if (current.map((s) => s.toLowerCase().trim()).includes(target)) {
+    updated = current.filter((s) => s.toLowerCase().trim() !== target);
+  } else {
+    updated = [...current, target];
+  }
+  // 乐观更新：点击即刻反馈选中态，无感知等待后端磁盘落盘延迟
+  allowedSSHServersMap.value = {
+    ...allowedSSHServersMap.value,
+    [ws]: updated,
+  };
+  try {
+    await SetWorkspaceAllowedServers(ws, updated);
+    message.success(t('sshCluster.allowedUpdated'));
+  } catch (err) {
+    // 失败时回滚
+    allowedSSHServersMap.value = {
+      ...allowedSSHServersMap.value,
+      [ws]: current,
+    };
+    message.error(err?.message || 'Update allowed servers failed');
+  } finally {
+    sshTogglingLock.delete(lockKey);
+  }
+}
+
+watch(
+  () => activeRunWorkspace.value,
+  (ws) => {
+    if (ws) {
+      loadAllowedSSHServersForWorkspace(ws);
+    }
+  },
+  { immediate: true }
+);
+
+const settingsModalRef = ref(null);
+
+function openSSHClusterManager() {
+  switchMode('ssh');
 }
 
 // 输入框上箭头历史按工作区路径分桶，落 localStorage（见 utils/promptHistoryStore.mjs）
@@ -4223,44 +4356,28 @@ function flushStreamBuffer(runId) {
   }
   last.streaming = true;
   const hadContent = !!buffer.content;
-  // The first reasoning delta inserts the "Thinking" label into the message
-  // list, so it is visible growth too. Later pure reasoning deltas only bump
-  // the token counter without changing layout height.
-  const reasoningStarts = buffer.reasoningLen > 0 && !last.reasoningStartedAt;
   if (buffer.reasoningLen > 0) {
-    // Only track a running char count for the "Thinking · N tokens" indicator.
-    // The reasoning body itself is never stored — it is too large to be useful
-    // after session restore and bloats the snapshot files.
-    if (last.reasoningChars === undefined) last.reasoningChars = 0;
-    if (!last.reasoningStartedAt) last.reasoningStartedAt = Date.now();
-    last.reasoningChars += buffer.reasoningLen;
+    // Keep only a running length for the composer status; never store the thinking body.
+    last.reasoningChars = (Number(last.reasoningChars) || 0) + buffer.reasoningLen;
+    last.reasoningActive = true;
   }
   if (buffer.content) {
-    // First content delta marks the end of the thinking phase.
-    if (last.reasoningStartedAt && !last.reasoningEndedAt) {
-      last.reasoningEndedAt = Date.now();
-    }
+    // The first answer delta ends the thinking phase.
+    endReasoningStatus(last);
     last.content += buffer.content;
     // 一次性标志：正文已开始输出。统计占位行据此渲染（不直接读 content，
     // 避免父级渲染 effect 订阅流式增量）；纯思考/工具阶段的空消息不占位。
     last.hasBody = true;
   }
-  // Auto-scroll on visible growth: the first reasoning delta or a content
-  // delta. Pure reasoning deltas do not grow the visible message body, so
-  // scrolling on every reasoning flush wastes a layout pass.
-  if (session.id === activeSessionId.value && (hadContent || reasoningStarts)) {
+  // Thinking updates only change the composer status, not the chat scroll position.
+  if (session.id === activeSessionId.value && hadContent) {
     scrollMessagesToBottom();
   }
 }
 
-// finalizeReasoningTiming closes out the thinking window when a run ends
-// without ever emitting a content delta (e.g. pure-reasoning replies, errors,
-// or cancellations), so the "Thought for Xs" label still gets a duration.
-function finalizeReasoningTiming(msg) {
+function endReasoningStatus(msg) {
   if (!msg || msg.role !== 'assistant') return;
-  if (msg.reasoningStartedAt && !msg.reasoningEndedAt) {
-    msg.reasoningEndedAt = Date.now();
-  }
+  msg.reasoningActive = false;
 }
 // Buffer the latest tool:update event per tool call and flush on a timer so
 // the main thread is not blocked by parsing/re-rendering large streaming
@@ -4519,7 +4636,7 @@ function bindRuntimeEvents() {
     }
     target.streaming = true;
     // 图片输出意味着思考已结束
-    finalizeReasoningTiming(target);
+    endReasoningStatus(target);
     if (!Array.isArray(target.attachments)) target.attachments = [];
     const imageId = data.id || `generated-${target.attachments.length + 1}`;
     let attachment = target.attachments.find((item) => item.id === imageId);
@@ -4559,9 +4676,9 @@ function bindRuntimeEvents() {
     flushStreamBuffer(data.runId);
     const session = sessionByRunId(data.runId);
     if (!session) return;
-    // 工具调用开始意味着本轮思考已结束，闭合思考时间窗口
+    // 工具调用开始意味着本轮思考状态结束
     const last = session.messages[session.messages.length - 1];
-    finalizeReasoningTiming(last);
+    endReasoningStatus(last);
     // suggest 不渲染 running card，结果直接注入前一条 assistant 消息
     if (isHiddenTool(data.name)) return;
       const title = makeToolTitle(data.name, data.args, data);
@@ -4654,9 +4771,8 @@ function bindRuntimeEvents() {
       if (msg.role === 'assistant' && msg.streaming && msg.runId === data.runId) {
         msg.streaming = false;
         msg.done = true;
-        finalizeReasoningTiming(msg);
-        // 思考内容始终保留在折叠的 thinking 区，不转正为正文：
-        // 对话正常结束（即使模型只输出了思考、没有正文）。
+        endReasoningStatus(msg);
+        // 思考状态在本轮结束时隐藏，即使模型只输出了思考、没有正文。
         break;
       }
       i--;
@@ -4783,6 +4899,9 @@ function bindRuntimeEvents() {
     onRuntimeEvent(eventName, (data) => applyScheduledTaskEvent(data));
   }
   onRuntimeEvent('service:update', (data) => applyServiceEvent(data));
+  // 集群清单与工作区授权也能由模型（ssh_cluster）或审批改动，落盘后立即重读，
+  // 否则底部 SSH 浮层要等到切 Tab 才更新。
+  onRuntimeEvent('ssh:clusters-changed', () => { void refreshSSHClusters(); });
 
   // ── Sub-agent events ──
 
@@ -5623,7 +5742,7 @@ function finalizeStreamingMessageForRun(session, runId) {
     if (msg.role === 'assistant' && msg.streaming && msg.runId === runId) {
       msg.streaming = false;
       msg.done = true;
-      finalizeReasoningTiming(msg);
+      endReasoningStatus(msg);
       return;
     }
   }
@@ -6970,10 +7089,12 @@ function sanitizeStoredMessages(messages) {
 function sanitizeStoredMessage(msg) {
   const next = { ...msg };
   next.content = truncateStoredText(next.content, MAX_STORED_MESSAGE_CHARS, t('app.cache.contentTrimmed'));
-  // Reasoning body is never persisted: it is too large for session snapshots
-  // and stale thoughts add no value after restore. Only the char count (used
-  // for the "Thinking · N tokens" indicator) is kept.
-  next.reasoningBody = '';
+  // Thinking counts and phase state are transient composer status, not history.
+  delete next.reasoningChars;
+  delete next.reasoningActive;
+  delete next.reasoningStartedAt;
+  delete next.reasoningEndedAt;
+  delete next.reasoningBody;
   // Read tool results hold file contents that go stale quickly and bloat the
   // snapshot; the model can re-read on demand after restore.
   if (next.role === 'tool_call' && (next.name === 'read' || next.name === 'remote_read' || next.name === 'batch_read')) {
@@ -7582,7 +7703,7 @@ function toolKind(name) {
   if (name === 'create' || name === 'remote_create_file') return 'create';
   if (name === 'delete' || name === 'remote_delete_path') return 'delete';
   if (name === 'command' || name === 'remote_run_command' || name === 'Bash') return 'command';
-  if (name === 'ssh_credential') return 'ssh_credential';
+  if (name === 'ssh_cluster') return 'ssh_cluster';
   if (name === 'service' || name === 'start_service' || name === 'stop_service' || name === 'list_services') return 'service';
   if (name === 'wait') return 'wait';
   if (name === 'ask') return 'ask';
@@ -7691,15 +7812,11 @@ function makeToolTitle(name, args, meta = {}) {
   if (name === 'list_services') {
     return t('app.tools.chip.trackedServices');
   }
-  if (name === 'ssh_credential') {
-    // Never render the password: show action + host only. The args string is
-    // already server-redacted (***), but build the title from target alone so
-    // even a redaction miss cannot leak it into the card.
-    const action = String(parsed.action || 'set').toLowerCase();
-    const host = String(parsed.target || '').split(':')[0] || '';
+  if (name === 'ssh_cluster') {
+    // action=list 无参数可言；add/授权只展示节点别名（凭据从不经手模型）。
+    const action = String(parsed.action || 'list').toLowerCase();
     if (action === 'list') return 'list';
-    if (action === 'clear') return `clear · ${host}`;
-    return `set · ${host}`;
+    return `add · ${parsed.alias || parsed.host || ''}`;
   }
   if (name === 'edit' || name === 'remote_edit') {
     if (Array.isArray(parsed.files)) return parsed.files.length === 1 ? (parsed.files[0]?.path || '') : `${parsed.files.length} files`;
@@ -8433,8 +8550,8 @@ function handleGlobalKeydown(event) {
     event.stopPropagation();
     return;
   }
-  if (event.key === 'Escape' && (settingsActive.value || statsActive.value || gamesActive.value || skillsActive.value || mcpActive.value || modelsActive.value)) {
-    // Settings / stats / games / skills / mcp / models are inline pages now:
+  if (event.key === 'Escape' && (settingsActive.value || statsActive.value || gamesActive.value || skillsActive.value || mcpActive.value || modelsActive.value || sshActive.value)) {
+    // Settings / stats / games / skills / mcp / models / ssh are inline pages now:
     // ESC navigates back.
     event.preventDefault();
     event.stopPropagation();
@@ -8443,6 +8560,7 @@ function handleGlobalKeydown(event) {
     else if (skillsActive.value) closeSkills();
     else if (mcpActive.value) closeMcp();
     else if (modelsActive.value) closeModels();
+    else if (sshActive.value) closeSSH();
     else closeSettings();
     return;
   }
@@ -8779,6 +8897,7 @@ onMounted(async () => {
   // Pre-load skills before init so welcome message has the count
   try { await refreshSkillState(); } catch (_) { /* ignore */ }
   await init();
+  void refreshSSHClusters();
   await Promise.all([loadScheduledTasks(), loadServices()]);
   await refreshWindowMaximisedState();
   // 界面已经进场（配置/会话/技能/任务都就绪）后再起波

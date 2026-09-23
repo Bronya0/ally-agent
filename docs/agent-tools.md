@@ -134,7 +134,7 @@ type toolResult struct {                       // infra_result.go:19
 }
 ```
 
-- **UI 通道**：`fullJSON` 经 `a.redactSSHCredentials(...)` 脱敏后进 `tool:result` / `tool:error` 事件（前端展示完整数据）。
+- **UI 通道**：`fullJSON` 进 `tool:result` / `tool:error` 事件（前端展示完整数据）。敏感凭据通过 `ssh_cluster` 安全资产池持久化并在模型侧严格脱敏，不再直接流经提示词历史。
 - **模型通道**：`compactToolResultForModel`（`infra_result.go:173`）产出 `role=tool` 消息的 `Content`。
 
 压缩是逐工具定制的——**给模型的视图和给人的视图本来就该不一样**：
