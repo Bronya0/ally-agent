@@ -52,4 +52,5 @@
 [composer-icon-h] 2026-09-24 状态行图标须 ≤18px（= 标签 line-height）否则撑行/切换抖动。@RunSpinner.vue
 [hostkey-mismatch-no-ask] 2026-09-24 指纹不一致不询问：app 层直接替换记录（留 .old 备份）并重连一次。@orch_remote.go
 [status-mark-box] 2026-09-25 状态行标记可见范围须全在布局盒内且盒高恒定，动画只动 transform。@RunSpinner.vue
-[mark-tone-vs-text] 2026-09-25 实心标记取色要比同排文字暗一档：面积效应让它同档更亮。@RunSpinner.vue
+[mark-tone-vs-text] 2026-09-25 实心标记取色须比同排文字暗一档（面积效应）；带主题色用调色板 dim 档，不用 accent。@RunSpinner.vue
+[cjk-len-bytes] 2026-09-25 Git Bash 的 awk/sed 按字节算长度，中文行会虚报；量行宽用 python len()。@LESSONS.md

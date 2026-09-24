@@ -50,14 +50,21 @@ The window-hidden pause follows the same shape as the project's other infinite
 animations (SakuraBreeze / DigitalWave / AllyAvatar): listen to visibilitychange
 and freeze through animation-play-state instead of unmounting anything.
 
-Colors reproduce the label's own brightness ramp: the bars run the label's
-resting tone --ally-text-faint, one full step under its shimmer ceiling
---ally-text-high. The middle step (--ally-text-soft, the first choice) made the
-mark outshine the very text it sits next to — solid bars cover far more area than
-the label's thin strokes, so an equal token already reads brighter than the text.
-It is a neutral ramp token, so the row keeps a single grey and a theme change
-moves label and mark together. Do not switch these bars to --ally-accent (a
-second hue), and do not lift them to --ally-text-high.
+Colors come from the theme's accent, one step down: the bars paint with
+--ally-accent-dim, the palette's "accent toned toward a muted base" value, so the
+mark carries the theme's hue while staying inside the row's tonal range instead of
+becoming the row's anchor. That token ships one value per theme *and* per mode,
+so this single declaration lands on the right tone in both (contrast computed
+from the token values: 4.9-6.1 dark / 4.4-5.9 light, against the label's own grey
+at 3.7-4.7 / 3.3-3.9).
+
+Do not paint the bars with --ally-accent itself. It is the seed the palette tunes
+for dark surfaces: on dark it roughly doubles the mark's contrast, and a solid bar
+covers far more area than the label's thin strokes, so the mark would outshine the
+text it sits next to; on light it drops below the grey it replaces, washing the
+mark out on the cream canvas and needing a per-mode rule of its own. Do not lift
+the tone either: the middle ramp step (--ally-text-soft) was tried as the resting
+tone and had to be lowered for the same area reason.
 -->
 <template>
   <span
@@ -116,10 +123,12 @@ onBeforeUnmount(() => document.removeEventListener('visibilitychange', onVisibil
      overflow: hidden 裁掉并压住标签。 */
   width: calc(var(--pitch) * 2 + var(--bar));
   height: var(--peak);
-  /* 亮度基准与标签正文同档（--ally-text-faint）；实心条覆盖面远大于细笔画，同档
-     取值已经比文字略“实”。不要往上提：中间档 --ally-text-soft 实测偏亮，已下调；
-     --ally-text-high 更不可用。理由见文件头。 */
-  color: var(--ally-text-faint);
+  /* 取主题强调色，但用调色板里压暗一档的那支（--ally-accent-dim）：色相跟着主题
+     走，明度仍落在标签灰的邻档内，不会变成整行的视觉重心。该 token 每主题、每模式
+     各有一个值，深浅两档都从这一行取到正确色调，组件里不再分模式。不要换成
+     --ally-accent：它按深色底调校，深色下对比度翻倍抢主角，浅色下反而比它替换掉的
+     灰更弱。也不要往上提（中间档 --ally-text-soft 实测偏亮，已下调）。理由见文件头。 */
+  color: var(--ally-accent-dim);
 }
 
 .run-bars i {

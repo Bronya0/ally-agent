@@ -65,8 +65,16 @@ func main() {
 			Handler: application.AssetFileServerFS(assets),
 		},
 		Windows: application.WindowsOptions{
-			WndClass:         backend.WindowsWindowClassName,
-			UseVisualHosting: true,
+			WndClass: backend.WindowsWindowClassName,
+			// UseVisualHosting (DirectComposition) 强依赖 Direct3D 设备。系统锁屏、显示器休眠
+			// 或显卡重置时 DirectComposition 设备会丢失，而 Wails v3 缺少 DComp 设备丢失重建逻辑，
+			// 会导致页面永久白屏死锁。恢复默认 Windowed (HWND) 模式后由 Win32 DWM 原生恢复表面。
+			// 同时添加后台保活参数，防止系统锁屏或长时间后台时 Chromium 挂起渲染进程与节流定时器。
+			AdditionalBrowserArgs: []string{
+				"--disable-background-timer-throttling",
+				"--disable-backgrounding-occluded-windows",
+				"--disable-renderer-backgrounding",
+			},
 		},
 		SingleInstance: &application.SingleInstanceOptions{
 			UniqueID: "io.github.bronya0.ally",
