@@ -371,6 +371,40 @@ func TestApiMcpEndpoints(t *testing.T) {
 	}
 }
 
+// TestApiMcpConfigRejectsEmptyPayload: a missing or empty config must not be read
+// as "clear every server". SaveMcpConfig normalizes an empty string to
+// {"mcpServers":{}}, so PUTting back a partial object (or an empty body) used to
+// overwrite mcp.json and disconnect every live server with no backup.
+func TestApiMcpConfigRejectsEmptyPayload(t *testing.T) {
+	handler, _, token := newApiTestHandler(t)
+	path := mcpUserConfigPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	original := "{\n  \"mcpServers\": {\n    \"keep\": {\n      \"command\": \"echo\"\n    }\n  }\n}"
+	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, body := range []string{`{}`, `{"config":""}`, `{"config":"   "}`} {
+		rec, payload := apiRequest(t, handler, "PUT", "/api/v1/mcp/config", token, body)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("empty mcp config %s: expected 400, got %d: %s", body, rec.Code, rec.Body.String())
+		}
+		if !strings.Contains(payload["error"].(string), "config is required") {
+			t.Fatalf("empty mcp config %s: unexpected error %s", body, rec.Body.String())
+		}
+	}
+
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != original {
+		t.Fatalf("mcp.json must survive an empty PUT, got %q", got)
+	}
+}
+
 func TestApiSessionMessagesTodosAndDelete(t *testing.T) {
 	handler, app, token := newApiTestHandler(t)
 

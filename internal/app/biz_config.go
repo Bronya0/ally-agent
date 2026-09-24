@@ -110,6 +110,28 @@ func readConfigFile(path string) (ConfigState, error) {
 	return loaded, nil
 }
 
+// handleUnreadableConfig decides what to do with a config that failed to load.
+// Only content that cannot parse is moved aside — leaving a corrupt file in place
+// meant the next save overwrote it with defaults, so the user's settings were gone
+// for good. A transient read error (EACCES, EMFILE) says nothing about the
+// content, so the file stays where a later start can still pick it up. The check
+// re-reads the file instead of inspecting the error, because readConfigFile
+// deliberately returns a single opaque error. Deliberately package-level and
+// lock-free: ensureInitialized holds a.mu here, so logAppError (which takes a.mu)
+// would self-deadlock.
+func handleUnreadableConfig(path string, cause error) {
+	if data, err := os.ReadFile(path); err != nil || json.Unmarshal(data, new(ConfigState)) == nil {
+		log.Printf("config file could not be read; leaving it in place: path=%s err=%v cause=%v", path, err, cause)
+		return
+	}
+	quarantined := fmt.Sprintf("%s.corrupt-%d", path, time.Now().UnixNano())
+	if err := os.Rename(path, quarantined); err != nil {
+		log.Printf("config file is invalid and could not be moved aside: path=%s err=%v cause=%v", path, err, cause)
+		return
+	}
+	log.Printf("config file is invalid; moved aside: path=%s quarantined=%s cause=%v", path, quarantined, cause)
+}
+
 func appDataDir() string {
 	if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
 		return filepath.Join(home, ".ally_agent")
@@ -175,6 +197,10 @@ func (a *App) getConfig() (ConfigState, error) {
 	return a.config, nil
 }
 
+// saveConfig persists the whole config. The write goes through the atomic
+// helper (temp sibling + rename): a plain os.WriteFile truncates in place, so a
+// crash mid-write leaves half a JSON document, and the next start silently
+// falls back to defaults and then overwrites the user's real settings.
 func (a *App) saveConfig(cfg ConfigState) error {
 	a.mu.Lock()
 	cfg.DisabledSkills = normalizeSkillNameList(cfg.DisabledSkills)
@@ -182,14 +208,11 @@ func (a *App) saveConfig(cfg ConfigState) error {
 	a.disabledSkills = cloneStringSlice(cfg.DisabledSkills)
 	path := a.configPath
 	a.mu.Unlock()
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o600)
+	return writeAtomicBytes(path, data, 0o600)
 }
 
 // ── Skills: system prompt metadata injection ──

@@ -101,7 +101,9 @@ func (a *App) DeleteTempWorkspace(path string) error {
 		return shared.Newf(tempWorkspaceErrorCode, "refusing to delete %q: not an ally temp workspace under the system temp root", path)
 	}
 	cleaned := filepath.Clean(strings.TrimSpace(path))
-	if err := os.RemoveAll(cleaned); err != nil {
+	// 即使上面的名字/层级校验通过，删除仍然走基目录断言：递归删除在全仓只有
+	// removeAllWithinBase 一条出口（目标必须是基目录的严格子目录）。
+	if err := removeTempTree(cleaned); err != nil {
 		return err
 	}
 	tempWorkspaces.Lock()
@@ -121,7 +123,7 @@ func (a *App) cleanupTempWorkspacesOnExit() {
 	tempWorkspaces.paths = map[string]struct{}{}
 	tempWorkspaces.Unlock()
 	for _, dir := range paths {
-		if err := os.RemoveAll(dir); err != nil {
+		if err := removeTempTree(dir); err != nil {
 			a.logAppError("temp workspace cleanup on exit failed", "error", err, "path", dir)
 		}
 	}
@@ -151,7 +153,7 @@ func (a *App) cleanupStaleTempWorkspaces() {
 		if info.ModTime().After(cutoff) {
 			continue
 		}
-		if err := os.RemoveAll(full); err != nil {
+		if err := removeTempTree(full); err != nil {
 			a.logAppError("stale temp workspace cleanup failed", "error", err, "path", full)
 		}
 	}

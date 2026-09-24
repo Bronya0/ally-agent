@@ -235,16 +235,19 @@ func IsShellNullDevice(path string) bool {
 
 // ResolveCommandLiteralPath resolves a literal redirection target path against
 // `workspaceRoot`. It refuses values containing variables, globs, command
-// substitution, or command separators. MSYS2 drive paths (/c/...) are
-// normalized to Windows paths (C:\...) on Windows.
+// substitution, or command separators. A leading `~`/`~/` is expanded to the
+// user's home directory first (real shells do the same). MSYS2 drive paths
+// (/c/...) are normalized to Windows paths (C:\...) on Windows.
 //
 // ok is false when the value cannot be statically resolved.
 func ResolveCommandLiteralPath(value, workspaceRoot string) (string, bool) {
 	value = strings.TrimSpace(strings.Trim(value, `"'`))
 	// `~` expands to the user's home directory in real shells (bash tilde
-	// expansion, PowerShell), so a `~`-relative target cannot be statically
-	// resolved against workspaceRoot — refuse it instead of misclassifying it
-	// as a (usually nonexistent) in-workspace literal path.
+	// expansion, PowerShell), so it is a literal path, not a dynamic one:
+	// dropping it here removed it from the write-target set and the fence never
+	// inspected it (`echo x >> ~/.zshrc` passed unchecked). Expand what can be
+	// expanded; anything still holding `~` stays unresolvable below.
+	value = expandHomePrefix(value)
 	if value == "" || strings.ContainsAny(value, "$%*?[]{}~"+"`") || strings.HasPrefix(value, "&") {
 		return "", false
 	}
@@ -257,6 +260,27 @@ func ResolveCommandLiteralPath(value, workspaceRoot string) (string, bool) {
 		value = filepath.Join(workspaceRoot, value)
 	}
 	return filepath.Clean(value), true
+}
+
+// expandHomePrefix expands a leading `~` or `~/` into the user's home
+// directory; `~user` forms and values without a home directory are returned
+// unchanged (and therefore remain unresolvable literal targets).
+func expandHomePrefix(value string) string {
+	if !strings.HasPrefix(value, "~") {
+		return value
+	}
+	rest := value[1:]
+	if rest != "" && !strings.HasPrefix(rest, "/") && !strings.HasPrefix(rest, `\`) {
+		return value
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || strings.TrimSpace(home) == "" {
+		return value
+	}
+	if rest == "" {
+		return home
+	}
+	return filepath.Join(home, rest[1:])
 }
 
 // WriteTargetKind 标识写入目标的来源。

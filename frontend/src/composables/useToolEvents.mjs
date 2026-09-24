@@ -196,11 +196,6 @@ export function useToolEvents(ctx) {
     }
   }
 
-  function applyToolStats() {
-    // 留空钩子：折叠行尾的 hits/items/lines chip 已按需求移除，聚合处不再
-    // 需要结构化 stats。保留函数避免改动 adapters 映射表结构。
-  }
-
   // 启动服务的详情卡：结构化字段（status/pid/command/cwd/started/error），
   // 不带持续滚动的输出尾（那是有界 buffer 的事，任务中心可看完整输出）。
   // stop/list/read 保留 formatToolBody 的原生结果体。
@@ -232,8 +227,6 @@ export function useToolEvents(ctx) {
     'plan': [applyPlanTitle],
     'read': [applyReadBatchEntries],
     'remote_read': [applyReadBatchEntries],
-    'grep': [applyToolStats],
-    'list_files': [applyToolStats],
     'service': [applyServiceResult],
   };
 

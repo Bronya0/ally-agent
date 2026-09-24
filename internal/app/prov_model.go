@@ -509,7 +509,6 @@ type modelStreamResult struct {
 	Images           []modelImage
 	Usage            *modelUsage
 	StopReason       string
-	StopSequence     string
 }
 
 func (a *App) completeModelText(ctx context.Context, cfg ConfigState, model string, messages []legacyopenai.ChatCompletionMessage, maxTokens int) (string, error) {
@@ -668,14 +667,21 @@ func (a *App) streamModelResponse(ctx context.Context, cfg ConfigState, model st
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		if !(!emitted && shouldFailoverKey(err)) {
+		// 记冷却与“能否中途换 key”是两件事：已发射流事件后不切换（防重复输出），
+		// 但失败记录必须留下——否则这一轮与后续的 run 级重试都会从同一个坏 key
+		// 开始，健康 key 一次都轮不到（表现为“配了多 key 却一直失败”）。
+		// 瞬时针冷却 ≤10s，到期后该 key 自动回到候选；auth/配额才走 30min。
+		failover := shouldFailoverKey(err)
+		if failover {
+			cooldown := keyTransientCooldownDuration
+			if isAuthKeyError(err) {
+				cooldown = keyAuthCooldownDuration
+			}
+			a.recordKeyFailure(cfg, key, cooldown)
+		}
+		if !(!emitted && failover) {
 			return nil, err
 		}
-		cooldown := keyTransientCooldownDuration
-		if isAuthKeyError(err) {
-			cooldown = keyAuthCooldownDuration
-		}
-		a.recordKeyFailure(cfg, key, cooldown)
 		if isProbe {
 			// 探测失败不算用户设置语义内的重试,不发重试事件;是否继续
 			// 由下一轮的冷却分支决定(等待冷却或终止)。

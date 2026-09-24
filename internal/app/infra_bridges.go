@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 	"unicode/utf8"
@@ -155,6 +156,10 @@ func (b *limitedBuffer) TailString(n int) string {
 	return service.AlignRuneStart(tail)
 }
 
+// alignRuneStart 是 service.AlignRuneStart 的包内入口：orch_services.go 的
+// 截尾点所在函数里，局部变量名 service 会遮蔽同名包，统一从这里取。
+func alignRuneStart(tail string) string { return service.AlignRuneStart(tail) }
+
 // ── Path / content-hash thin wrappers ────────────────────────
 
 func evalExistingPrefix(target string) (string, error) {
@@ -258,6 +263,40 @@ func newID() string {
 	return hex.EncodeToString(buf)
 }
 
+// removeAllWithinBase deletes target recursively after proving it is a strict
+// descendant of base. Every recursive deletion of a path derived from outside
+// input (a release tag, a cached tag, a scanned directory name) goes through
+// here: filepath.Join cleans `..` segments away, so one unvalidated component
+// used to be able to walk the target up to the filesystem root — or straight to
+// the base directory itself — before RemoveAll ran.
+func removeAllWithinBase(base, target string) error {
+	baseAbs, err := filepath.Abs(base)
+	if err != nil {
+		return fmt.Errorf("resolve base %q: %w", base, err)
+	}
+	targetAbs, err := filepath.Abs(target)
+	if err != nil {
+		return fmt.Errorf("resolve target %q: %w", target, err)
+	}
+	baseClean := filepath.Clean(baseAbs)
+	targetClean := filepath.Clean(targetAbs)
+	if samePath(baseClean, targetClean) {
+		return fmt.Errorf("refusing to remove %q: it is the base directory itself", filepath.ToSlash(targetClean))
+	}
+	if !insideRoot(baseClean, targetClean) {
+		return fmt.Errorf("refusing to remove %q: it is outside %q", filepath.ToSlash(targetClean), filepath.ToSlash(baseClean))
+	}
+	return os.RemoveAll(targetClean)
+}
+
+// removeTempTree deletes a tree this process created directly under the system
+// temp root (os.MkdirTemp with an empty dir argument). It exists so that every
+// recursive delete in the app funnels through removeAllWithinBase: a target that
+// is not a strict descendant of the temp root is refused instead of removed.
+func removeTempTree(target string) error {
+	return removeAllWithinBase(os.TempDir(), target)
+}
+
 // atomicReplaceFile is the single atomic file-replacement helper for the
 // Windows rename-over-existing limitation. os.Rename is tried first; when it
 // fails, the existing destination is moved aside to <dst>.bak, the completed
@@ -267,8 +306,12 @@ func atomicReplaceFile(tmp, dst string) error {
 	if err := os.Rename(tmp, dst); err == nil {
 		return nil
 	}
+	// 不覆盖用户自己的 <dst>.bak：优先用固定名字，已被占用就退到带时间戳的
+	// 名字——既保住别人的备份，本函数也依然有可回滚的原件。
 	backup := dst + ".bak"
-	_ = os.Remove(backup)
+	if _, err := os.Lstat(backup); err == nil {
+		backup = fmt.Sprintf("%s.bak-%d", dst, time.Now().UnixNano())
+	}
 	if backupErr := os.Rename(dst, backup); backupErr != nil && !errors.Is(backupErr, os.ErrNotExist) {
 		return backupErr
 	}

@@ -40,7 +40,6 @@ func cloneSubagentRun(r *SubagentRun) *SubagentRun {
 		return nil
 	}
 	c := *r
-	c.cancel = nil
 	c.FilesRead = append([]string(nil), r.FilesRead...)
 	c.FilesEdited = append([]string(nil), r.FilesEdited...)
 	c.ToolCalls = append([]SubToolEvent(nil), r.ToolCalls...)
@@ -94,7 +93,7 @@ func subagentCacheConfig(cfg ConfigState, sessionID, subID string) ConfigState {
 	return cfg
 }
 
-func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID string, req AgentDelegateRequest, cancel context.CancelFunc) (*AgentDelegateResult, error) {
+func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID string, req AgentDelegateRequest) (*AgentDelegateResult, error) {
 	if strings.TrimSpace(req.Task) == "" {
 		return nil, errors.New("task is required")
 	}
@@ -131,7 +130,6 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 		Role:        req.Role,
 		Status:      "running",
 		StartTime:   time.Now().UnixMilli(),
-		cancel:      cancel,
 	}
 	a.subRunsMu.Lock()
 	a.subRuns[subID] = run
@@ -328,7 +326,6 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 
 		// Parallel execution: non-file tools run concurrently, file mutations run afterward in order
 		type subToolOutcome struct {
-			index     int
 			callID    string
 			name      string
 			args      string
@@ -392,7 +389,7 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 			rj, _ := json.Marshal(r)
 			fullJSON := string(rj)
 			subOutcomes[idx] = subToolOutcome{
-				index: idx, callID: toolIDs[idx], name: c.Function.Name,
+				callID: toolIDs[idx], name: c.Function.Name,
 				args: c.Function.Arguments, result: r,
 				modelJSON: compactToolResultForModel(c.Function.Name, r, fullJSON), duration: duration,
 			}
@@ -403,7 +400,7 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 			rj, _ := json.Marshal(r)
 			fullJSON := string(rj)
 			subOutcomes[idx] = subToolOutcome{
-				index: idx, callID: toolIDs[idx], name: c.Function.Name,
+				callID: toolIDs[idx], name: c.Function.Name,
 				args: c.Function.Arguments, result: r,
 				modelJSON: fullJSON,
 			}
@@ -534,7 +531,6 @@ func (a *App) finishSubagentRecord(subID string) {
 	a.subRunsMu.Lock()
 	defer a.subRunsMu.Unlock()
 	if run := a.subRuns[subID]; run != nil {
-		run.cancel = nil
 		run.Summary = truncateRunes(run.Summary, 32*1024)
 		run.Error = truncateRunes(run.Error, 8*1024)
 	}

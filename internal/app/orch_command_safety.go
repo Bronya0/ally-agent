@@ -73,6 +73,14 @@ func firstVCSMetadataMutationTarget(commandLine string, workingDir string) *outs
 		if blocked, _ := pathutil.VCSMetadataReason(path); blocked {
 			return &outsideMutationRisk{Path: filepath.ToSlash(path)}
 		}
+		// 与写/删路径同源：字面路径干净时，工作区内的符号链接仍可把它接到
+		// .git 上（`ln -s .git gh` 之后的 `> gh/hooks/pre-commit`），因此用解析
+		// 后的真实路径再判一次。
+		if resolved, err := evalExistingPrefix(path); err == nil {
+			if blocked, _ := pathutil.VCSMetadataReason(resolved); blocked {
+				return &outsideMutationRisk{Path: filepath.ToSlash(resolved)}
+			}
+		}
 	}
 	return nil
 }

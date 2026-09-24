@@ -345,10 +345,6 @@ type App struct {
 	scheduledMu sync.Mutex
 	scheduled   *scheduledTaskManager
 
-	// lastEstimatedTokens is retained for ResetWorkspaceTokenUsage cleanup;
-	// recordWorkspaceTokenUsage no longer uses fallback delta logic.
-	lastEstimatedTokens map[string]WorkspaceTokenUsage
-
 	// stats asynchronously records LLM token usage for the stats dashboard.
 	// Its bounded non-blocking queue keeps telemetry off the chat hot path;
 	// persistence runs on its own goroutine.
@@ -400,7 +396,6 @@ func NewApp() *App {
 		workspaceTokenUsage:  map[string]WorkspaceTokenUsage{},
 		services:             map[string]*managedService{},
 		keyCooldowns:         map[string]time.Time{},
-		lastEstimatedTokens:  map[string]WorkspaceTokenUsage{},
 		stats:                newStatsRecorder(),
 		reasoningStash:       newReasoningStash(),
 	}
@@ -1331,23 +1326,22 @@ type AgentDelegateResult struct {
 
 // SubagentRun tracks a running/complete sub-agent instance.
 type SubagentRun struct {
-	ID           string             `json:"id"`
-	SessionID    string             `json:"sessionId,omitempty"`
-	Description  string             `json:"description"`
-	Profile      string             `json:"profile"`
-	Role         string             `json:"role,omitempty"`
-	Status       string             `json:"status"` // running, completed, failed
-	Steps        int                `json:"steps"`
-	Summary      string             `json:"summary,omitempty"`
-	FilesRead    []string           `json:"filesRead,omitempty"`
-	FilesEdited  []string           `json:"filesEdited,omitempty"`
-	Error        string             `json:"error,omitempty"`
-	ToolCalls    []SubToolEvent     `json:"toolCalls,omitempty"`
-	StartTime    int64              `json:"startTime"`
-	InputTokens  int                `json:"inputTokens,omitempty"`
-	OutputTokens int                `json:"outputTokens,omitempty"`
-	TotalTokens  int                `json:"totalTokens,omitempty"`
-	cancel       context.CancelFunc `json:"-"`
+	ID           string         `json:"id"`
+	SessionID    string         `json:"sessionId,omitempty"`
+	Description  string         `json:"description"`
+	Profile      string         `json:"profile"`
+	Role         string         `json:"role,omitempty"`
+	Status       string         `json:"status"` // running, completed, failed
+	Steps        int            `json:"steps"`
+	Summary      string         `json:"summary,omitempty"`
+	FilesRead    []string       `json:"filesRead,omitempty"`
+	FilesEdited  []string       `json:"filesEdited,omitempty"`
+	Error        string         `json:"error,omitempty"`
+	ToolCalls    []SubToolEvent `json:"toolCalls,omitempty"`
+	StartTime    int64          `json:"startTime"`
+	InputTokens  int            `json:"inputTokens,omitempty"`
+	OutputTokens int            `json:"outputTokens,omitempty"`
+	TotalTokens  int            `json:"totalTokens,omitempty"`
 }
 
 // SubToolEvent records a single tool invocation inside a sub-agent.
@@ -1381,6 +1375,11 @@ func (a *App) ensureInitialized() error {
 		var loaded ConfigState
 		if loaded, err = readConfigFile(loadPath); err == nil {
 			a.config = mergeConfig(a.config, loaded)
+		} else {
+			// 内容坏掉的配置不能留在原地：这次用了默认值，之后任意一次保存都会把
+			// 默认值写回同一个文件，用户的原设置就永久消失了。改名保留 + 记一行
+			// 日志，至少还能手工捞回来（瞬时 I/O 错误不算，见 handleUnreadableConfig）。
+			handleUnreadableConfig(loadPath, err)
 		}
 	}
 	a.disabledSkills = normalizeSkillNameList(a.config.DisabledSkills)
@@ -2666,7 +2665,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 				// applies within its own reads.
 				subCtx = context.WithValue(subCtx, runReadCacheContextKey{}, newRunReadCache())
 				defer cancel()
-				res, delegateErr := a.executeDelegate(subCtx, cfg, sessionID, adReq, cancel)
+				res, delegateErr := a.executeDelegate(subCtx, cfg, sessionID, adReq)
 				if delegateErr != nil {
 					err = delegateErr
 				} else {

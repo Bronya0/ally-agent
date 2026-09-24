@@ -70,8 +70,10 @@ func TestExecuteToolHTTPRequestJSONBodyDoubleEncodedString(t *testing.T) {
 	defer target.Close()
 
 	app := NewApp()
-	args := fmt.Sprintf(`{"method":"POST","url":%q,"allowPrivateNetwork":true,"json":"{\"title\":\"x\",\"n\":1}"}`, target.URL+"/echo")
-	result := app.executeTool(context.Background(), ConfigState{}, "session-1", "http_request", []byte(args))
+	// allowPrivateNetwork 是配置级开关，请求侧只能收紧不能放宽：把私网许可放在
+	// config 上，模型参数不再需要（也拿不到）这个字段。
+	args := fmt.Sprintf(`{"method":"POST","url":%q,"json":"{\"title\":\"x\",\"n\":1}"}`, target.URL+"/echo")
+	result := app.executeTool(context.Background(), ConfigState{AllowPrivateNetwork: true}, "session-1", "http_request", []byte(args))
 	if !result.OK {
 		t.Fatalf("expected success, got error: %s", result.Error)
 	}
@@ -80,6 +82,27 @@ func TestExecuteToolHTTPRequestJSONBodyDoubleEncodedString(t *testing.T) {
 	}
 	if !strings.Contains(gotContentType, "application/json") {
 		t.Fatalf("expected application/json Content-Type, got %q", gotContentType)
+	}
+}
+
+// TestHTTPRequestCannotWidenAllowPrivateNetwork: the request struct accepts the
+// flag (unknown JSON fields are tolerated with a warning) but it may only ever
+// tighten the config. Otherwise a model could open the user's SSRF guard with
+// {"allowPrivateNetwork":true}, since the field is not in the tool schema.
+func TestHTTPRequestCannotWidenAllowPrivateNetwork(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer target.Close()
+
+	app := NewApp()
+	args := fmt.Sprintf(`{"url":%q,"allowPrivateNetwork":true}`, target.URL)
+	result := app.executeTool(context.Background(), ConfigState{}, "session-1", "http_request", []byte(args))
+	if result.OK {
+		t.Fatalf("a request must not be able to open the private-network guard, got %+v", result.Data)
+	}
+	if !strings.Contains(result.Error, "allowPrivateNetwork=false") {
+		t.Fatalf("expected the private-network refusal, got %q", result.Error)
 	}
 }
 
@@ -446,6 +469,41 @@ func TestDetectToolBatchConflictsRequiresAskToRunAlone(t *testing.T) {
 	for i := range calls {
 		if toolErrorCode(conflicts[i]) != "E_ASK_BATCH_CONFLICT" {
 			t.Fatalf("expected E_ASK_BATCH_CONFLICT for call %d, got %v", i, conflicts[i])
+		}
+	}
+}
+
+// TestDetectToolBatchConflictsNormalizesToolNameCasing: a model or relay that
+// answers with `Edit`/`Ask` must be classified exactly like `edit`/`ask`. The
+// execution path normalizes the tool name at its own boundary, so the batch
+// policy has to do the same — otherwise a mixed-case file mutation slipped into
+// the parallel pool (no write ordering, E_VERSION_MISMATCH instead of
+// E_WRITE_BATCH_CONFLICT) and a mixed-case ask no longer owned its batch.
+func TestDetectToolBatchConflictsNormalizesToolNameCasing(t *testing.T) {
+	cfg := ConfigState{Workspace: t.TempDir()}
+	calls := []openai.ToolCall{
+		{Function: openai.FunctionCall{Name: "Edit", Arguments: `{"path":"sample.txt","version":"abc123","changes":[{"oldText":"a","newText":"b"}]}`}},
+		{Function: openai.FunctionCall{Name: "edit", Arguments: `{"path":"sample.txt","version":"abc123","changes":[{"oldText":"c","newText":"d"}]}`}},
+	}
+	conflicts := detectWriteBatchConflicts(cfg, calls)
+	if len(conflicts) != 1 {
+		t.Fatalf("mixed-case mutations of one path must conflict, got %#v", conflicts)
+	}
+	if toolErrorCode(conflicts[1]) != "E_WRITE_BATCH_CONFLICT" {
+		t.Fatalf("expected E_WRITE_BATCH_CONFLICT for the second call, got %v", conflicts[1])
+	}
+
+	barrier := []openai.ToolCall{
+		{Function: openai.FunctionCall{Name: "Ask", Arguments: `{"questions":[]}`}},
+		{Function: openai.FunctionCall{Name: "list_files", Arguments: `{}`}},
+	}
+	barrierConflicts := detectToolBatchConflicts(ConfigState{}, barrier)
+	if len(barrierConflicts) != len(barrier) {
+		t.Fatalf("a mixed-case ask must reject every call in its batch, got %#v", barrierConflicts)
+	}
+	for i := range barrier {
+		if code := toolErrorCode(barrierConflicts[i]); code != "E_ASK_BATCH_CONFLICT" {
+			t.Fatalf("expected E_ASK_BATCH_CONFLICT for call %d, got %q", i, code)
 		}
 	}
 }

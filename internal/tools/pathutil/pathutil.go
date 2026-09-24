@@ -297,7 +297,10 @@ func FormatAllowedRoots(roots []string) string {
 // InsideWriteRoot reports whether target (already symlink-resolved) falls
 // under any writable root. Each root is checked both lexically and after
 // EvalSymlinks so symlinked workspace roots are honored. ~/.ally_agent is
-// always whitelisted as a fallback.
+// always whitelisted as a fallback, and resolved the same way: target arrives
+// symlink-resolved, so comparing it against an unresolved ~/.ally_agent refuses
+// legitimate writes whenever the path to the data directory contains a symlink
+// (a symlinked $HOME, or /var → /private/var on macOS).
 func InsideWriteRoot(rt Runtime, roots []string, target string) bool {
 	clean := filepath.Clean(target)
 	for _, root := range roots {
@@ -313,5 +316,24 @@ func InsideWriteRoot(rt Runtime, roots []string, target string) bool {
 			return true
 		}
 	}
-	return InsideAllyAgentDir(rt, clean)
+	if InsideAllyAgentDir(rt, clean) {
+		return true
+	}
+	if rt == nil {
+		return false
+	}
+	dirAbs, err := filepath.Abs(rt.AppDataDir())
+	if err != nil {
+		return false
+	}
+	resolvedDir, err := filepath.EvalSymlinks(filepath.Clean(dirAbs))
+	if err != nil {
+		return false
+	}
+	resolvedDir = filepath.Clean(resolvedDir)
+	// 数据目录被换成指向文件系统根的软链时，兜底白名单不能跟着放大成整个盘。
+	if filepath.Dir(resolvedDir) == resolvedDir {
+		return false
+	}
+	return InsideRoot(resolvedDir, clean)
 }

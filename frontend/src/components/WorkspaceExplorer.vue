@@ -579,7 +579,9 @@ async function applySyntaxValidation() {
     return;
   }
   const issue = await validator(text, path);
-  if (seq !== syntaxValidateSeq) return; // 期间又发生了输入/切换，结果作废
+  // disposed：等待期间组件被卸载（destroyAceEditor 已把 aceEditor 置 null），
+  // 下面会直接读 aceEditor.session；seq 只挡得住输入/切换，挡不住卸载。
+  if (disposed || seq !== syntaxValidateSeq) return;
   if (!issue) {
     syntaxIssue.value = null;
     aceEditor.session.setAnnotations([]);

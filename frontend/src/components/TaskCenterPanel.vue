@@ -163,6 +163,7 @@ import { computed, nextTick, onUnmounted, ref, watch } from 'vue';
 import { GetServiceOutput } from '../../bindings/ally-dev/internal/app/app';
 import { formatDateTime, t } from '../i18n.mjs';
 import { renderAnsiToHtml } from '../utils/ansi.mjs';
+import { formatBytes } from '../utils/toolPreview.mjs';
 import { highlightShellCommand } from '../utils/shellHighlight.mjs';
 
 const props = defineProps({
@@ -407,12 +408,6 @@ function durationLabel(seconds) {
   return `${value}s`;
 }
 
-function formatBytes(value) {
-  const bytes = Number(value || 0);
-  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
-  if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
-  return `${bytes} B`;
-}
 </script>
 
 <style scoped>

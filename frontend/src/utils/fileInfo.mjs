@@ -14,7 +14,7 @@
 
 import { t } from '../i18n.mjs';
 
-export function formatTimeValue(value) {
+function formatTimeValue(value) {
   if (!value) return '';
   const date = new Date(value);
   // 过滤零值时间（如 Linux 无 birthtime 时后端返回 "0001-01-01T00:00:00Z"），
@@ -23,7 +23,7 @@ export function formatTimeValue(value) {
   return date.toLocaleString();
 }
 
-export function formatSizeValue(bytes) {
+function formatSizeValue(bytes) {
   if (bytes == null || bytes === '') return '';
   const n = Number(bytes);
   if (!Number.isFinite(n) || n < 0) return '';
@@ -34,7 +34,7 @@ export function formatSizeValue(bytes) {
   return `${v.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
 }
 
-export function formatSizeWithBytes(bytes) {
+function formatSizeWithBytes(bytes) {
   const human = formatSizeValue(bytes);
   if (!human) return '';
   return `${human} (${bytes} B)`;

@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
+    "test": "node --test \"src/**/*.test.mjs\"",
     "generate:model-catalog": "node ../scripts/generate-model-catalog.mjs"
   },
   "devDependencies": {

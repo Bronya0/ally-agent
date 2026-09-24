@@ -1149,7 +1149,8 @@ func isLikelyDirectory(abs string) bool {
 }
 
 // isDangerousDeletePath returns (blocked, reason). Blocks paths that are
-// OS-protected locations, home roots, VCS metadata, or workspace root.
+// OS-protected locations, home roots, VCS metadata, workspace root, and any
+// directory inside the Ally data directory.
 func isDangerousDeletePath(absPath string) (bool, string) {
 	abs := filepath.Clean(absPath)
 
@@ -1158,9 +1159,34 @@ func isDangerousDeletePath(absPath string) (bool, string) {
 		return true, reason
 	}
 
-	// 2. Ally Agent data directory
-	if allyDir, err := filepath.Abs(appDataDir()); err == nil && samePath(abs, allyDir) {
-		return true, fmt.Sprintf("refusing to delete Ally data directory %q", abs)
+	// 2. Ally Agent data directory：目录本身永不可删；其子树只允许「单文件」
+	// 删除（记忆笔记、缓存文件），目录一律禁止——delete 工具对目录本就强制
+	// recursive=true（IsDir && !Recursive 会被拒），所以用 isLikelyDirectory
+	// 判定就等价于用调用方的 recursive 标志，无需把标志透传到每一层。
+	//
+	// 词法与解析后两种形态都要判：调用方传进来的是词法路径，而工作区内的符号
+	// 链接可以让它指向数据目录（`ln -s ~/.ally_agent link` 之后
+	// `delete link/histories recursive`）。围栏只管「解析后是否还在允许根内」，
+	// 而数据目录本身就在写白名单里，所以这道守卫是唯一能拦它的地方。
+	if allyDir, err := filepath.Abs(appDataDir()); err == nil {
+		dirs := []string{allyDir}
+		if resolvedDir, rErr := filepath.EvalSymlinks(allyDir); rErr == nil && !samePath(resolvedDir, allyDir) {
+			dirs = append(dirs, resolvedDir)
+		}
+		candidates := []string{abs}
+		if resolved, rErr := evalExistingPrefix(abs); rErr == nil && !samePath(resolved, abs) {
+			candidates = append(candidates, resolved)
+		}
+		for _, candidate := range candidates {
+			for _, dir := range dirs {
+				if samePath(candidate, dir) {
+					return true, fmt.Sprintf("refusing to delete Ally data directory %q", candidate)
+				}
+				if insideRoot(dir, candidate) && isLikelyDirectory(candidate) {
+					return true, fmt.Sprintf("refusing to delete directory %q inside the Ally data directory; delete individual files instead, or remove it manually outside the agent", candidate)
+				}
+			}
+		}
 	}
 
 	// 3. 临时目录豁免：临时工作区与编译构建目录允许清理（但临时根目录本身如 /tmp 仍受保护）
@@ -1302,6 +1328,13 @@ func resolveWritableFilePath(roots []string, p string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// 二次判定：字面路径里没有 .git 时，工作区内的符号链接仍可指向它
+	// （`ln -s .git gh` 之后 `create gh/hooks/pre-commit` 实际落进 .git/hooks，
+	// 下次 git 命令即执行代码）。上面的词法判定看不到这一层，必须用解析后的
+	// 真实路径再判一次，与下面 insideWriteRoot 用同一个解析结果。
+	if blocked, reason := pathutil.VCSMetadataReason(resolved); blocked {
+		return "", codedToolError("E_PROTECTED_PATH", errors.New(reason))
+	}
 	if !insideWriteRoot(roots, resolved) {
 		return "", codedToolError("E_PATH_OUTSIDE", fmt.Errorf("path resolves outside workspace or ~/.ally_agent: %s\n允许写入的根目录：%s", p, formatAllowedRoots(roots)))
 	}
@@ -1330,6 +1363,11 @@ func resolveDeletablePath(roots []string, p string) (string, error) {
 	resolved, err := evalExistingPrefix(checkPath)
 	if err != nil {
 		return "", err
+	}
+	// 同 resolveWritableFilePath：符号链接可把工作区内的路径接到 VCS 元数据
+	// 上（`delete .git → gh` 的别名），词法判定看不到，按解析后的路径复判。
+	if blocked, reason := pathutil.VCSMetadataReason(resolved); blocked {
+		return "", codedToolError("E_PROTECTED_PATH", errors.New(reason))
 	}
 	if !insideWriteRoot(roots, resolved) {
 		return "", codedToolError("E_PATH_OUTSIDE", fmt.Errorf("path resolves outside workspace or ~/.ally_agent: %s\n允许写入的根目录：%s", p, formatAllowedRoots(roots)))

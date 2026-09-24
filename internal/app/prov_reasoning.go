@@ -345,15 +345,6 @@ func (s *reasoningStash) evictLocked(keep string) {
 	}
 }
 
-func (s *reasoningStash) clear(key string) {
-	if s == nil {
-		return
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	delete(s.entries, key)
-}
-
 // clearSession drops every payload of one session across protocols and models.
 // Called when the session's history is discarded or rewritten (session release,
 // rewind/truncate): the retained signatures and encrypted reasoning belong to

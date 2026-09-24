@@ -86,7 +86,6 @@ func (a *App) streamAnthropicMessages(ctx context.Context, cfg ConfigState, mode
 	// message_delta events (see anthropicUsageState).
 	usageState := &anthropicUsageState{}
 	var stopReason string
-	var stopSequence string
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		assistant.Reset()
@@ -98,7 +97,6 @@ func (a *App) streamAnthropicMessages(ctx context.Context, cfg ConfigState, mode
 		usage = nil
 		usageState = &anthropicUsageState{}
 		stopReason = ""
-		stopSequence = ""
 		// Anthropic requires the interleaved-thinking beta for extended thinking
 		// to continue across tool calls inside one turn (pi:
 		// anthropic-messages.ts betas, kimi: anthropic/requester.ts baseline).
@@ -119,7 +117,6 @@ func (a *App) streamAnthropicMessages(ctx context.Context, cfg ConfigState, mode
 				ev := event.AsMessageDelta()
 				usageState.mergeDelta(ev.Usage)
 				stopReason = string(ev.Delta.StopReason)
-				stopSequence = ev.Delta.StopSequence
 			case "content_block_start":
 				ev := event.AsContentBlockStart()
 				block := ev.ContentBlock
@@ -241,7 +238,6 @@ func (a *App) streamAnthropicMessages(ctx context.Context, cfg ConfigState, mode
 		ToolCalls:        normalizeToolCalls(toolCalls),
 		Usage:            usage,
 		StopReason:       stopReason,
-		StopSequence:     stopSequence,
 	}, nil
 }
 

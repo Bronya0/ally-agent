@@ -54,3 +54,10 @@
 [status-mark-box] 2026-09-25 状态行标记可见范围须全在布局盒内且盒高恒定，动画只动 transform。@RunSpinner.vue
 [mark-tone-vs-text] 2026-09-25 实心标记取色要比同排文字暗一档（面积效应）；勿换成 accent 色相，浅底更弱。@RunSpinner.vue
 [cjk-len-bytes] 2026-09-25 Git Bash 的 awk/sed 按字节算长度，中文行会虚报；量行宽用 python len()。@LESSONS.md
+[fence-judge-resolved-path] 2026-09-25 词法围栏必须按 EvalSymlinks 结果复判：工作区内软链与 `~` 都能绕。@orch_file_ops.go
+[tool-name-normalize-in-predicate] 2026-09-25 工具名判定把归一化放进谓词内部，别靠每个调用点自己转。@orch_batch_policy.go
+[child-stderr-drain] 2026-09-25 子进程 stderr 必须持续读空：管道满 64KiB 后子进程阻塞假死。@biz_mcp.go
+[removeall-within-base] 2026-09-25 递归删除前断言目标是基目录严格子目录：Join 会 Clean 掉 .. 段。@infra_bridges.go
+[symlink-resolve-both-sides] 2026-09-25 target 已解析而白名单没解析 = 合法路径被判越界。@pathutil.go
+[init-lock-no-app-log] 2026-09-25 ensureInitialized 持 a.mu，其间禁止调 logAppError（自锁=死锁）。@biz_config.go
+[embed-dist-needs-build] 2026-09-25 干净检出 go test ./... 需先 npm run build（根包 embed frontend/dist）。@main.go

@@ -31,8 +31,11 @@ var backtickToken = regexp.MustCompile("`([a-z][a-z0-9_]*)`")
 // which is the point: advertising a tool that does not exist (or was renamed)
 // must turn the suite red.
 var promptNonToolTokens = map[string]bool{
-	// shell commands / executables named in guidance
-	"cat": true, "del": true, "export": true, "git": true, "go": true,
+	// shell commands / executables named in guidance. `bash` reaches the prompt
+	// through the shell name/path rendered on non-Windows hosts (`via **bash**
+	// (`bash`)`), which is why this guard only ever went red on macOS/Linux.
+	"bash": true,
+	"cat":  true, "del": true, "export": true, "git": true, "go": true,
 	"gofmt": true, "npm": true, "rg": true, "rm": true, "rmdir": true,
 	"unlink": true,
 	// toolchain names

@@ -7,7 +7,16 @@
 // Public License v3. See the LICENSE file for details.
 package pathutil
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+// fakeRuntime is the minimal pathutil.Runtime: the absolute path to the data dir.
+type fakeRuntime struct{ dir string }
+
+func (f fakeRuntime) AppDataDir() string { return f.dir }
 
 // TestVCSMetadataReasonBlocksDirectoryAndContent pins the single judgement the
 // write, delete, and command guards share: .git itself and anything below it.
@@ -78,5 +87,48 @@ func TestCanonicalPathStripsWindowsTrailingDotsAndSpaces(t *testing.T) {
 	}
 	if blocked, _ := VCSMetadataReason(`C:\ws\.git.`); !blocked {
 		t.Fatal("the trailing-dot alias of .git must be recognized")
+	}
+}
+
+// TestInsideWriteRootResolvesSymlinkedAppDataDir: target arrives already
+// symlink-resolved, so the ~/.ally_agent whitelist has to resolve its own side
+// too. A symlinked $HOME (or /var → /private/var on macOS) otherwise made every
+// write inside the data directory fail with E_PATH_OUTSIDE.
+func TestInsideWriteRootResolvesSymlinkedAppDataDir(t *testing.T) {
+	real := t.TempDir()
+	link := filepath.Join(t.TempDir(), "data")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("symlinks are unavailable on this host: %v", err)
+	}
+	// Created through the link, so the real prefix carries the symlink.
+	memories := filepath.Join(link, ".ally_agent", "memories")
+	if err := os.MkdirAll(memories, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rt := fakeRuntime{dir: filepath.Join(link, ".ally_agent")}
+	// resolveWritableFilePath hands over the evalExistingPrefix result.
+	resolved, err := filepath.EvalSymlinks(memories)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !InsideWriteRoot(rt, nil, filepath.Join(resolved, "note.md")) {
+		t.Fatalf("the resolved data dir must be honored: %q", resolved)
+	}
+	if InsideWriteRoot(rt, nil, filepath.Join(filepath.Dir(real), "elsewhere.txt")) {
+		t.Fatal("a path outside the data dir must stay outside")
+	}
+}
+
+// TestInsideWriteRootRejectsDataDirPointingAtFilesystemRoot: the fallback resolves
+// its own side, so it must refuse the degenerate case where the data directory is a
+// symlink to the filesystem root — otherwise the whitelist would cover the disk.
+func TestInsideWriteRootRejectsDataDirPointingAtFilesystemRoot(t *testing.T) {
+	rootLink := filepath.Join(t.TempDir(), "rootlink")
+	if err := os.Symlink(string(filepath.Separator), rootLink); err != nil {
+		t.Skipf("symlinks are unavailable on this host: %v", err)
+	}
+	rt := fakeRuntime{dir: rootLink}
+	if InsideWriteRoot(rt, nil, filepath.Join(string(filepath.Separator), "etc", "passwd")) {
+		t.Fatal("a data dir resolving to the filesystem root must not whitelist the whole disk")
 	}
 }

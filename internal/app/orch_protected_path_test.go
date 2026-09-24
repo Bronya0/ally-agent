@@ -119,6 +119,77 @@ func TestWorkspaceWritesNearVCSMetadataStayAllowed(t *testing.T) {
 	}
 }
 
+// TestSymlinkedVCSMetadataAliasIsRefused: the VCS judgement was lexical, so a
+// workspace symlink pointing at .git carried the write straight into it —
+// `ln -s .git gh` then `create gh/hooks/post-commit` runs on the next git
+// command. The write, delete, and command paths must all judge the resolved
+// path as well as the literal one.
+func TestSymlinkedVCSMetadataAliasIsRefused(t *testing.T) {
+	dir, cfg := protectedWorkspace(t)
+	if err := os.Symlink(".git", filepath.Join(dir, "gh")); err != nil {
+		t.Skipf("symlinks are unavailable on this host: %v", err)
+	}
+	app := NewApp()
+	ctx := t.Context()
+
+	res := app.executeTool(ctx, cfg, "s-1", "create", encodedToolArgs(t, CreateFileRequest{
+		Path:      "gh/hooks/post-commit",
+		Content:   "#!/bin/sh\necho pwned\n",
+		Overwrite: true,
+	}))
+	if res.OK || !strings.Contains(res.Error, "E_PROTECTED_PATH") {
+		t.Fatalf("create through a symlink alias of .git must be refused, got ok=%v err=%v", res.OK, res.Error)
+	}
+
+	res = app.executeTool(ctx, cfg, "s-1", "delete", encodedToolArgs(t, DeletePathRequest{Path: "gh/hooks", Recursive: true}))
+	if res.OK || !strings.Contains(res.Error, "E_PROTECTED_PATH") {
+		t.Fatalf("delete through a symlink alias of .git must be refused, got ok=%v err=%v", res.OK, res.Error)
+	}
+
+	res = app.executeTool(ctx, cfg, "s-1", "command", encodedToolArgs(t, CommandRequest{Command: "echo pwned > gh/hooks/post-commit"}))
+	if res.OK || !strings.Contains(res.Error, "E_PROTECTED_PATH") {
+		t.Fatalf("a redirect through a symlink alias of .git must be refused, got ok=%v err=%v", res.OK, res.Error)
+	}
+
+	if _, err := os.Stat(filepath.Join(dir, ".git", "hooks", "post-commit")); err == nil {
+		t.Fatal("a hook file was written into .git through the symlink")
+	}
+	if info, err := os.Stat(filepath.Join(dir, ".git", "hooks")); err != nil || !info.IsDir() {
+		t.Fatalf(".git/hooks must survive the aliased delete: %v", err)
+	}
+}
+
+// TestTildeWriteTargetsStayInsideTheFence: `~` is expanded by the real shell, so
+// the fence must resolve it before deciding; treating it as an unresolvable
+// dynamic target let `>> ~/.zshrc` through with no inspection at all.
+func TestTildeWriteTargetsStayInsideTheFence(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	rc := filepath.Join(home, ".zshrc")
+	if err := os.WriteFile(rc, []byte("export PATH=$PATH:/usr/bin\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ws := t.TempDir()
+	app := NewApp()
+	cfg := ConfigState{Workspace: ws}
+
+	res := app.executeTool(t.Context(), cfg, "s-1", "command", encodedToolArgs(t, CommandRequest{Command: "echo evil >> ~/.zshrc"}))
+	if res.OK || !strings.Contains(res.Error, "E_PATH_OUTSIDE") {
+		t.Fatalf("appending to ~/.zshrc must be refused, got ok=%v err=%v", res.OK, res.Error)
+	}
+	if got, err := os.ReadFile(rc); err != nil || !strings.Contains(string(got), "export PATH") || strings.Contains(string(got), "evil") {
+		t.Fatalf("the shell rc file must be untouched: %q (err=%v)", got, err)
+	}
+
+	// The same target inside the workspace stays allowed: the guard is about the
+	// location, not about the command shape.
+	res = app.executeTool(t.Context(), cfg, "s-1", "command", encodedToolArgs(t, CommandRequest{Command: "echo ok >> ./notes.txt"}))
+	if !res.OK {
+		t.Fatalf("an in-workspace append must stay allowed, got err=%v", res.Error)
+	}
+}
+
 // TestEditRefusesSymlinkedDirectoryEscape: edit joined paths lexically while
 // create/delete resolved the real path, so a symlinked directory inside the
 // workspace carried the write to its target outside the workspace.
@@ -189,5 +260,156 @@ func TestReadOversizedImageDoesNotBufferTheFile(t *testing.T) {
 	}
 	if result.Size != size || result.SHA256 == "" || result.Version == "" {
 		t.Fatalf("result = %+v, want the real size plus a streamed hash and version", result)
+	}
+}
+
+// TestRemoveAllWithinBaseRefusesEscape covers the helper every recursive deletion
+// of an externally derived path goes through. filepath.Join cleans `..` away, so
+// one unvalidated component used to be able to walk the target up to the
+// filesystem root — or straight to the base directory itself — before RemoveAll
+// ran.
+func TestRemoveAllWithinBaseRefusesEscape(t *testing.T) {
+	root := t.TempDir()
+	base := filepath.Join(root, "updates")
+	if err := os.MkdirAll(base, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sibling := filepath.Join(root, "keep")
+	siblingFile := filepath.Join(sibling, "inner.txt")
+	if err := os.MkdirAll(sibling, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(siblingFile, []byte("keep\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	staged := filepath.Join(base, "v1.2.3")
+	if err := os.MkdirAll(filepath.Join(staged, "staged"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := removeAllWithinBase(base, staged); err != nil {
+		t.Fatalf("a strict descendant must stay removable: %v", err)
+	}
+	if _, err := os.Stat(staged); !os.IsNotExist(err) {
+		t.Fatalf("the staged version dir must be gone, stat err = %v", err)
+	}
+
+	for _, target := range []string{
+		base,
+		filepath.Join(base, ".."),
+		filepath.Join(base, "..", ".."),
+		sibling,
+		filepath.Join(base, "v1.2.3", "..", "..", ".."),
+	} {
+		if err := removeAllWithinBase(base, target); err == nil {
+			t.Fatalf("removeAllWithinBase(%q, %q) must be refused", base, target)
+		}
+	}
+	if got, err := os.ReadFile(siblingFile); err != nil || string(got) != "keep\n" {
+		t.Fatalf("an escape target must survive: %q (err=%v)", got, err)
+	}
+	if _, err := os.Stat(base); err != nil {
+		t.Fatalf("the base directory itself must survive: %v", err)
+	}
+}
+
+// TestDeleteRefusesAllyDataSubtree: ~/.ally_agent stays a write whitelist, but a
+// recursive delete inside it wiped every saved session, memory, or staged update
+// in one tool call. Single files stay deletable (the memory tool drops individual
+// notes); directory trees do not.
+func TestDeleteRefusesAllyDataSubtree(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	allyDir := filepath.Join(home, ".ally_agent")
+	histories := filepath.Join(allyDir, "histories")
+	sessionDir := filepath.Join(histories, "s-1")
+	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	historyFile := filepath.Join(sessionDir, "history.json")
+	if err := os.WriteFile(historyFile, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	note := filepath.Join(allyDir, "memories", "note.md")
+	if err := os.MkdirAll(filepath.Dir(note), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(note, []byte("# note\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	app := NewApp()
+	cfg := ConfigState{Workspace: t.TempDir()}
+
+	res := app.executeTool(t.Context(), cfg, "s-1", "delete", encodedToolArgs(t, DeletePathRequest{Path: histories, Recursive: true}))
+	if res.OK || !strings.Contains(res.Error, "E_DELETE_BLOCKED") {
+		t.Fatalf("recursive delete inside ~/.ally_agent must be refused, got ok=%v err=%v", res.OK, res.Error)
+	}
+	if _, err := os.Stat(historyFile); err != nil {
+		t.Fatalf("saved history must survive: %v", err)
+	}
+
+	res = app.executeTool(t.Context(), cfg, "s-1", "delete", encodedToolArgs(t, DeletePathRequest{Path: sessionDir, Recursive: true}))
+	if res.OK || !strings.Contains(res.Error, "E_DELETE_BLOCKED") {
+		t.Fatalf("recursive delete of a history subdir must be refused, got ok=%v err=%v", res.OK, res.Error)
+	}
+
+	res = app.executeTool(t.Context(), cfg, "s-1", "delete", encodedToolArgs(t, DeletePathRequest{Path: note}))
+	if !res.OK {
+		t.Fatalf("deleting a single memory note must stay allowed, got err=%v", res.Error)
+	}
+	if _, err := os.Stat(note); !os.IsNotExist(err) {
+		t.Fatalf("the memory note must be gone, stat err = %v", err)
+	}
+}
+
+// TestDeleteRefusesAllyDataSubtreeThroughSymlink: the guard is handed the
+// *lexical* path, so a workspace symlink aimed at the data directory carried the
+// delete straight into it (`ln -s ~/.ally_agent link` then
+// `delete link/histories recursive`), wiping every saved session in one call —
+// the fence cannot catch it either, because the data directory sits inside the
+// write whitelist. Both path forms have to be judged.
+func TestDeleteRefusesAllyDataSubtreeThroughSymlink(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	allyDir := filepath.Join(home, ".ally_agent")
+	sessionDir := filepath.Join(allyDir, "histories", "s-1")
+	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	historyFile := filepath.Join(sessionDir, "history.json")
+	if err := os.WriteFile(historyFile, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ws := t.TempDir()
+	link := filepath.Join(ws, "link")
+	if err := os.Symlink(allyDir, link); err != nil {
+		t.Skipf("symlinks are unavailable on this host: %v", err)
+	}
+
+	app := NewApp()
+	cfg := ConfigState{Workspace: ws}
+	aliased := filepath.Join(link, "histories")
+	if _, err := os.Stat(aliased); err != nil {
+		t.Fatalf("the alias must resolve before the guard is exercised: %v", err)
+	}
+
+	res := app.executeTool(t.Context(), cfg, "s-1", "delete", encodedToolArgs(t, DeletePathRequest{Path: aliased, Recursive: true}))
+	if res.OK || !strings.Contains(res.Error, "E_DELETE_BLOCKED") {
+		t.Fatalf("a symlinked path into the data directory must be refused, got ok=%v err=%v", res.OK, res.Error)
+	}
+	if _, err := os.Stat(historyFile); err != nil {
+		t.Fatalf("saved history must survive the aliased delete: %v", err)
+	}
+
+	// The alias must not be usable to delete the data directory itself either.
+	res = app.executeTool(t.Context(), cfg, "s-1", "delete", encodedToolArgs(t, DeletePathRequest{Path: link, Recursive: true}))
+	if res.OK {
+		t.Fatalf("a symlink resolving to the data directory must be refused, got %+v", res.Data)
+	}
+	if _, err := os.Stat(sessionDir); err != nil {
+		t.Fatalf("the data directory must survive: %v", err)
 	}
 }

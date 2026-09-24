@@ -112,7 +112,6 @@ func (a *App) ResetWorkspaceTokenUsage(workspace string) {
 	key := workspaceUsageKey(workspace)
 	a.mu.Lock()
 	delete(a.workspaceTokenUsage, key)
-	delete(a.lastEstimatedTokens, key)
 	a.mu.Unlock()
 }
 

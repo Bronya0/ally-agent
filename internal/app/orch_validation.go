@@ -350,7 +350,8 @@ func validatePythonFiles(ctx context.Context, root string, files []validationFil
 	if err != nil {
 		return validationReport{label: "Python", skipped: true, detail: "无法创建临时字节码目录"}
 	}
-	defer os.RemoveAll(tempDir)
+	// 统一出口：删除前断言目标在系统临时根内（不得逃逸到上级）。
+	defer func() { _ = removeTempTree(tempDir) }()
 	paths := make([]string, 0, len(files))
 	for _, file := range files {
 		paths = append(paths, file.abs)
@@ -621,7 +622,7 @@ func validateJavaFiles(ctx context.Context, files []validationFile) validationRe
 	if err != nil {
 		return validationReport{label: "Java 语法", skipped: true, detail: "无法创建临时输出目录"}
 	}
-	defer os.RemoveAll(tempDir)
+	defer func() { _ = removeTempTree(tempDir) }()
 	args := []string{"-proc:none", "-encoding", "UTF-8", "-d", tempDir}
 	for _, file := range files {
 		args = append(args, file.abs)

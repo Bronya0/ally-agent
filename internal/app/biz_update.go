@@ -151,6 +151,13 @@ func loadUpdateCache() updateReleaseCache {
 		return c
 	}
 	_ = json.Unmarshal(data, &c)
+	// 来自写坏或被手改的缓存的 tag 绝不能进文件系统：它会成为一个路径分量，
+	// 而调用方会递归删除该路径。非法就直接当成“没有缓存”。
+	if c.LastTag != "" {
+		if err := validateUpdateTag(c.LastTag); err != nil {
+			c.LastTag = ""
+		}
+	}
 	return c
 }
 
@@ -159,7 +166,9 @@ func saveUpdateCache(c updateReleaseCache) {
 	if err != nil {
 		return
 	}
-	_ = os.WriteFile(updateCachePath(), data, 0o644)
+	// 原子写：半截文件虽然读起来只是“没缓存”，但被截断的内容仍可能把野 tag
+	// 交给更新界面，所以和其它状态文件一样落盘。
+	_ = writeAtomicBytes(updateCachePath(), data, 0o600)
 }
 
 // applyGitHubAuthHeaders sets the Authorization header when a GitHub token is
@@ -672,13 +681,13 @@ func (a *App) DownloadUpdate(tag string) UpdateDownloadResult {
 		if dlCtx.Err() == nil {
 			return false
 		}
-		_ = os.RemoveAll(versionDir)
+		_ = removeAllWithinBase(updateBaseDir(), versionDir)
 		a.emit("update:cancelled", map[string]any{"version": asset.Tag})
 		return true
 	}
 
 	// Clean any previous staged state for this version.
-	_ = os.RemoveAll(versionDir)
+	_ = removeAllWithinBase(updateBaseDir(), versionDir)
 	if err := os.MkdirAll(versionDir, 0o755); err != nil {
 		msg := fmt.Sprintf("create version dir: %v", err)
 		a.emit("update:error", map[string]any{"stage": "prepare", "error": msg})
@@ -691,7 +700,7 @@ func (a *App) DownloadUpdate(tag string) UpdateDownloadResult {
 		}
 		msg := fmt.Sprintf("download: %v", err)
 		a.emit("update:error", map[string]any{"stage": "download", "error": msg})
-		_ = os.RemoveAll(versionDir)
+		_ = removeAllWithinBase(updateBaseDir(), versionDir)
 		return UpdateDownloadResult{Error: msg}
 	}
 	if cancelled() {
@@ -704,7 +713,7 @@ func (a *App) DownloadUpdate(tag string) UpdateDownloadResult {
 		if err := validateStagedDMG(archivePath); err != nil {
 			msg := fmt.Sprintf("invalid staged dmg: %v", err)
 			a.emit("update:error", map[string]any{"stage": "verify", "error": msg})
-			_ = os.RemoveAll(versionDir)
+			_ = removeAllWithinBase(updateBaseDir(), versionDir)
 			return UpdateDownloadResult{Error: msg}
 		}
 		if cancelled() {
@@ -729,7 +738,7 @@ func (a *App) DownloadUpdate(tag string) UpdateDownloadResult {
 	if err := extractZip(archivePath, stagedDir); err != nil {
 		msg := fmt.Sprintf("extract: %v", err)
 		a.emit("update:error", map[string]any{"stage": "extract", "error": msg})
-		_ = os.RemoveAll(versionDir)
+		_ = removeAllWithinBase(updateBaseDir(), versionDir)
 		return UpdateDownloadResult{Error: msg}
 	}
 	a.emit("update:progress", map[string]any{
@@ -743,7 +752,7 @@ func (a *App) DownloadUpdate(tag string) UpdateDownloadResult {
 	if err := validateStagedExecutable(stagedExe); err != nil {
 		msg := fmt.Sprintf("invalid staged executable: %v", err)
 		a.emit("update:error", map[string]any{"stage": "verify", "error": msg})
-		_ = os.RemoveAll(versionDir)
+		_ = removeAllWithinBase(updateBaseDir(), versionDir)
 		return UpdateDownloadResult{Error: msg}
 	}
 	if cancelled() {
@@ -906,7 +915,7 @@ func cleanAppliedUpdateDirs(rootDir, keepTag string) {
 		if err := validateUpdateTag(tag); err != nil {
 			continue // not a release-tag directory; leave it untouched
 		}
-		_ = os.RemoveAll(filepath.Join(rootDir, tag))
+		_ = removeAllWithinBase(rootDir, filepath.Join(rootDir, tag))
 	}
 }
 
@@ -1023,8 +1032,12 @@ func (a *App) applyWindowsUpdate(tag string) UpdateApplyResult {
 			backupPath := filepath.Join(backupDir, rel)
 			if err := copyFileAtomic(dst, backupPath); err != nil {
 				msg := fmt.Sprintf("backup resource %s: %v", rel, err)
-				if rbErr := os.Rename(backupExe, currentExe); rbErr != nil {
-					msg = fmt.Sprintf("%s; rollback exe also failed: %v; manual recovery required from %s", msg, rbErr, stagedDir)
+				// 已经替换过的资源必须一起还原，否则留下“旧二进制 + 新资源”的
+				// 混装（与下面的 replace 失败分支同源）。
+				// rollbackReplacedResources 最后会把 EXE 备份 rename 回去，
+				// 所以不必再单独动 EXE。
+				if rbMsg := rollbackReplacedResources(backupDir, exeDir, replaced, backupExe, currentExe); rbMsg != "" {
+					msg = fmt.Sprintf("%s; %s; manual recovery required from %s", msg, rbMsg, stagedDir)
 				}
 				a.emit("update:error", map[string]any{"stage": "apply", "error": msg})
 				return UpdateApplyResult{Error: msg}
@@ -1041,7 +1054,7 @@ func (a *App) applyWindowsUpdate(tag string) UpdateApplyResult {
 		replaced = append(replaced, rel)
 	}
 	// Success: drop the rollback backups.
-	_ = os.RemoveAll(backupDir)
+	_ = removeAllWithinBase(updateBaseDir(), backupDir)
 
 	cleanAppliedUpdateDirs(updateBaseDir(), tag)
 	a.emit("update:progress", map[string]any{"stage": "apply", "version": tag, "percent": 100})
@@ -1125,7 +1138,10 @@ func (a *App) applyMacUpdate(tag string) UpdateApplyResult {
 	}
 
 	backupApp := appDir + appBackupSuffix
-	_ = os.RemoveAll(backupApp)
+	// 删除时以「app bundle 所在的目录」为基目录：目标必须是它的严格子目录，所以
+	// 永远删不到安装目录本身、也删不到别处（1141 与 1151 同源）。
+	appParent := filepath.Dir(appDir)
+	_ = removeAllWithinBase(appParent, backupApp)
 	if err := os.Rename(appDir, backupApp); err != nil {
 		msg := fmt.Sprintf("backup current app: %v", err)
 		a.emit("update:error", map[string]any{"stage": "apply", "error": msg})
@@ -1135,7 +1151,7 @@ func (a *App) applyMacUpdate(tag string) UpdateApplyResult {
 	// Copy the new bundle into place with ditto, which preserves permissions
 	// and symlinks. The destination no longer exists after the rename above.
 	if err := copyDir(stagedApp, appDir); err != nil {
-		_ = os.RemoveAll(appDir)
+		_ = removeAllWithinBase(appParent, appDir)
 		if rbErr := os.Rename(backupApp, appDir); rbErr != nil {
 			msg := fmt.Sprintf("copy new app failed (%v) and rollback rename also failed (%v); manual recovery required from %s", err, rbErr, backupApp)
 			a.emit("update:error", map[string]any{"stage": "rollback", "error": msg})
@@ -1215,17 +1231,17 @@ func scheduleUpdateBackupCleanup(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-timer.C:
-			cleanupUpdateBackupIfUnchanged(backupPath, original)
+			cleanupUpdateBackupIfUnchanged(appDir, backupPath, original)
 		}
 	}()
 }
 
-func cleanupUpdateBackupIfUnchanged(path string, original os.FileInfo) {
+func cleanupUpdateBackupIfUnchanged(appDir, path string, original os.FileInfo) {
 	info, err := os.Stat(path)
 	if err != nil || !os.SameFile(original, info) {
 		return
 	}
-	_ = os.RemoveAll(path)
+	_ = removeAllWithinBase(filepath.Dir(appDir), path)
 }
 
 // cleanupUpdateBackup removes leftover backups from a previous self-update
@@ -1239,7 +1255,7 @@ func cleanupUpdateBackup() {
 		if err != nil {
 			return
 		}
-		_ = os.RemoveAll(appDir + appBackupSuffix)
+		_ = removeAllWithinBase(filepath.Dir(appDir), appDir+appBackupSuffix)
 		return
 	}
 	exeDir, err := allyExecutableDir()
@@ -1292,6 +1308,13 @@ func (a *App) SkipUpdate(version string) SkipUpdateResult {
 	if version == "" {
 		return SkipUpdateResult{Error: "version is required"}
 	}
+	// The tag becomes a path component below (updateVersionDir) and that
+	// directory is removed recursively, so it must be validated exactly like
+	// every other tag that reaches the filesystem: filepath.Join cleans `..`
+	// away, and "../../.." would delete well outside ~/.ally_agent/updates.
+	if err := validateUpdateTag(version); err != nil {
+		return SkipUpdateResult{Error: err.Error()}
+	}
 	a.mu.Lock()
 	cfg := a.config
 	already := false
@@ -1313,12 +1336,12 @@ func (a *App) SkipUpdate(version string) SkipUpdateResult {
 		if err != nil {
 			return SkipUpdateResult{Error: fmt.Sprintf("marshal config: %v", err)}
 		}
-		if err := os.WriteFile(configPath, data, 0o600); err != nil {
+		if err := writeAtomicBytes(configPath, data, 0o600); err != nil {
 			return SkipUpdateResult{Error: fmt.Sprintf("persist skip list: %v", err)}
 		}
 	}
 	// Remove staged files for the skipped version so disk space is released.
-	_ = os.RemoveAll(updateVersionDir(version))
+	_ = removeAllWithinBase(updateBaseDir(), updateVersionDir(version))
 	return SkipUpdateResult{OK: true, Version: version}
 }
 

@@ -24,8 +24,8 @@
 
 const THEME_STORAGE_KEY = 'ally_accent_theme';
 const MODE_STORAGE_KEY = 'ally_color_mode';
-export const DEFAULT_THEME = 'amber';
-export const DEFAULT_MODE = 'dark'; // 'dark' | 'light'
+const DEFAULT_THEME = 'amber';
+const DEFAULT_MODE = 'dark'; // 'dark' | 'light'
 
 // Single source of truth for the theme ids. `swatch` mirrors the seed declared
 // in style.css and is only used to paint the picker dot.

@@ -532,6 +532,7 @@ import xml from 'highlight.js/lib/languages/xml';
 import cssLang from 'highlight.js/lib/languages/css';
 import markdownLang from 'highlight.js/lib/languages/markdown';
 import 'highlight.js/styles/base16/darcula.css';
+import { stripAnsi } from './utils/ansi.mjs';
 import { highlightShellCommand, isShellLanguage, looksLikeShellCommand } from './utils/shellHighlight.mjs';
 import { formatReadRangeChip } from './utils/toolFormat.mjs';
 import {
@@ -3110,9 +3111,6 @@ function doRefreshContextTokens(sid) {
     ) return;
 
     const value = Number(breakdown?.total) || 0;
-    const session = sessions.value.find((item) => item.id === sid);
-    if (session) {
-    }
     contextTokens.value = value;
     contextBreakdown.value = breakdown || null;
     captureFooterSnapshot(activeWorkspaceId.value, activeRunWorkspace.value);
@@ -4888,7 +4886,6 @@ function bindRuntimeEvents() {
   // Auto-compaction: the backend emits run:compact before the blocking summary
   // request and run:compacted after it. Surface the token delta so the sudden
   // drop in the footer token counter is no longer mysterious.
-  onRuntimeEvent('run:compact', () => {});
   onRuntimeEvent('run:compacted', (data) => {
     const sid = data?.sessionId || '';
     if (sid) delete compactingSessions[sid];
@@ -8365,11 +8362,6 @@ function formatDuration(ms) {
 
 function formatDurationShort(ms) {
   return fmtDuration(ms);
-}
-
-function stripAnsi(text) {
-  // Strip ANSI escape sequences (color codes, cursor moves, etc.)
-  return String(text || '').replace(/\x1b\[[0-9;]*[A-Za-z]/g, '');
 }
 
 function downloadMD(content, filename) {

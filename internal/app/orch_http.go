@@ -47,9 +47,13 @@ func (a *App) httpRequestToolWithConfig(ctx context.Context, cfg ConfigState, re
 	if strings.TrimSpace(req.SaveTo) != "" && req.MaxBytes <= 0 {
 		req.MaxBytes = maxHTTPBodyBytes
 	}
+	// 只允许收紧、不允许放宽：配置是唯一的安全决策来源，请求侧只能把
+	// allowPrivateNetwork 关掉。schema 不暴露该字段，但模型仍能在 JSON 里带上
+	// （未知字段只给 warning），否则用户关掉的 SSRF 开关会被一句
+	// {"allowPrivateNetwork":true} 顶开。maxBytes 另有 maxHTTPBodyBytes 上限。
 	allowPrivate := cfg.AllowPrivateNetwork
-	if req.AllowPrivateNetwork != nil {
-		allowPrivate = *req.AllowPrivateNetwork
+	if req.AllowPrivateNetwork != nil && !*req.AllowPrivateNetwork {
+		allowPrivate = false
 	}
 	fetched, err := a.doHTTPRequest(ctx, cfg, req, false, allowPrivate)
 	if err != nil {
@@ -95,9 +99,13 @@ func (a *App) webFetchToolWithConfig(ctx context.Context, cfg ConfigState, req W
 	if req.MaxBytes <= 0 {
 		req.MaxBytes = defaultWebFetchBody
 	}
+	// 只允许收紧、不允许放宽：配置是唯一的安全决策来源，请求侧只能把
+	// allowPrivateNetwork 关掉。schema 不暴露该字段，但模型仍能在 JSON 里带上
+	// （未知字段只给 warning），否则用户关掉的 SSRF 开关会被一句
+	// {"allowPrivateNetwork":true} 顶开。maxBytes 另有 maxHTTPBodyBytes 上限。
 	allowPrivate := cfg.AllowPrivateNetwork
-	if req.AllowPrivateNetwork != nil {
-		allowPrivate = *req.AllowPrivateNetwork
+	if req.AllowPrivateNetwork != nil && !*req.AllowPrivateNetwork {
+		allowPrivate = false
 	}
 	fetched, err := a.doHTTPRequest(ctx, cfg, HTTPRequestToolRequest{
 		Method:             "GET",
@@ -648,16 +656,48 @@ func decodeHTTPText(data []byte, contentType string) string {
 	return string(bytes.ToValidUTF8(data, []byte("\uFFFD")))
 }
 
+// privateHTTPAddressBlocks holds the ranges that net.IP's own predicates miss but
+// which must still be unreachable when allowPrivateNetwork=false: CGNAT
+// (100.64.0.0/10 — cloud metadata endpoints such as 100.100.100.200 live here),
+// "this network" (0.0.0.0/8, routed to the local host on Linux), IETF protocol
+// assignments (192.0.0.0/24), benchmarking (198.18.0.0/15), the reserved class E
+// block, and NAT64 (64:ff9b::/96), whose IPv6 side maps straight onto an IPv4
+// address such as 169.254.169.254.
+var privateHTTPAddressBlocks = []*net.IPNet{
+	mustParseCIDR("0.0.0.0/8"),
+	mustParseCIDR("100.64.0.0/10"),
+	mustParseCIDR("192.0.0.0/24"),
+	mustParseCIDR("198.18.0.0/15"),
+	mustParseCIDR("240.0.0.0/4"),
+	mustParseCIDR("64:ff9b::/96"),
+}
+
+func mustParseCIDR(cidr string) *net.IPNet {
+	_, network, err := net.ParseCIDR(cidr)
+	if err != nil {
+		panic("invalid private address block: " + cidr)
+	}
+	return network
+}
+
 func isPrivateHTTPAddress(ip net.IP) bool {
 	if ip == nil {
 		return true
 	}
-	return ip.IsLoopback() ||
+	if ip.IsLoopback() ||
 		ip.IsPrivate() ||
 		ip.IsLinkLocalUnicast() ||
 		ip.IsLinkLocalMulticast() ||
 		ip.IsMulticast() ||
-		ip.IsUnspecified()
+		ip.IsUnspecified() {
+		return true
+	}
+	for _, network := range privateHTTPAddressBlocks {
+		if network.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizeHeaders(headers map[string]string) map[string]string {

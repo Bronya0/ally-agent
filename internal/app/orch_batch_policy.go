@@ -21,8 +21,14 @@ import (
 	openai "github.com/sashabaranov/go-openai"
 )
 
+// isOrderedFileMutationTool reports whether name names a tool that mutates files
+// and must therefore run in the ordered phase. The name is normalized here
+// instead of at each call site: the caller passes what the model or a relay
+// produced (`Edit`), while executeTool normalizes at its own boundary, so a raw
+// variant used to be classified as a non-mutating tool and silently lost both
+// write ordering and the ask/wait/suggest barrier.
 func isOrderedFileMutationTool(name string) bool {
-	switch name {
+	switch normalizeToolName(name) {
 	case "edit", "create", "delete", "remote_edit", "remote_create_file", "remote_delete_path":
 		return true
 	default:
@@ -74,7 +80,7 @@ func detectToolBatchConflicts(cfg ConfigState, calls []openai.ToolCall) map[int]
 	for _, barrier := range barriers {
 		found := false
 		for _, call := range calls {
-			if call.Function.Name == barrier.name {
+			if normalizeToolName(call.Function.Name) == barrier.name {
 				found = true
 				break
 			}
@@ -109,7 +115,7 @@ func detectToolBatchConflicts(cfg ConfigState, calls []openai.ToolCall) map[int]
 		if _, conflict := conflicts[i]; conflict {
 			continue
 		}
-		key := call.Function.Name + "\x00" + normalizeToolArgsForDedup(call.Function.Arguments)
+		key := normalizeToolName(call.Function.Name) + "\x00" + normalizeToolArgsForDedup(call.Function.Arguments)
 		first, ok := seen[key]
 		if !ok {
 			seen[key] = i
@@ -182,7 +188,11 @@ func sortedJSON(v any) any {
 
 type fileMutationTarget struct{ key, display string }
 
+// fileMutationTargets resolves the paths one mutation call would touch. name is
+// normalized first for the same reason as isOrderedFileMutationTool: every branch
+// below compares against the canonical lowercase tool names.
 func fileMutationTargets(cfg ConfigState, name, arguments string) []fileMutationTarget {
+	name = normalizeToolName(name)
 	if name == "edit" {
 		// The flat model-facing request carries exactly one file; conflict
 		// detection and execution share the same plan boundary.

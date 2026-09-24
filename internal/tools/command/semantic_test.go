@@ -8,6 +8,7 @@
 package command
 
 import (
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -212,13 +213,36 @@ func TestLegacyScannerFlushesWordBeforeHeredocBody(t *testing.T) {
 	}
 }
 
-func TestResolveCommandLiteralPathRefusesTildeExpansion(t *testing.T) {
+func TestResolveCommandLiteralPathExpandsTilde(t *testing.T) {
 	root := t.TempDir()
-	// Real shells expand `~` to the home directory, so a tilde target cannot be
-	// judged as an in-workspace literal path; it must refuse static resolution.
-	for _, value := range []string{"~/.bashrc", "~/notes.txt", "~/"} {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	// Real shells expand `~` before the program ever sees the argument, so the
+	// result is a literal outside path that the workspace fence must inspect.
+	// Refusing to resolve it silently dropped `>> ~/.zshrc` from the write-target
+	// set, and the fence therefore never looked at it.
+	for _, tc := range []struct{ value, want string }{
+		{"~/.bashrc", filepath.Join(home, ".bashrc")},
+		{"~/notes.txt", filepath.Join(home, "notes.txt")},
+		{"~", home},
+		{`~\.bashrc`, filepath.Join(home, ".bashrc")},
+	} {
+		got, ok := ResolveCommandLiteralPath(tc.value, root)
+		if !ok {
+			t.Fatalf("tilde target %q must resolve to the home directory", tc.value)
+		}
+		if got != tc.want {
+			t.Fatalf("ResolveCommandLiteralPath(%q) = %q, want %q", tc.value, got, tc.want)
+		}
+	}
+	// The `~user` form cannot be resolved locally, and an embedded tilde is not
+	// an expansion at all: both stay unresolvable instead of being guessed into
+	// the workspace.
+	for _, value := range []string{"~other/notes.txt", "notes~1.txt"} {
 		if got, ok := ResolveCommandLiteralPath(value, root); ok {
-			t.Fatalf("tilde target %q must not resolve (got %q)", value, got)
+			t.Fatalf("target %q must not resolve (got %q)", value, got)
 		}
 	}
 	// Ordinary relative and absolute targets still resolve unchanged.

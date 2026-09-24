@@ -89,7 +89,6 @@ type managedService struct {
 	// 终止，因此 cancel 为 nil。
 	cancel   context.CancelFunc
 	waitDone chan struct{}
-	waitErr  error
 }
 
 func (a *App) StopService(req StopServiceRequest) (ServiceInfo, error) {
@@ -207,7 +206,6 @@ func (a *App) startServiceWithConfig(cfg ConfigState, req StartServiceRequest) (
 		// 进程退出后关闭 job handle（KILL_ON_JOB_CLOSE 兜底清理残留）。
 		unregisterProcessJob(cmd.Process.Pid)
 		service.mu.Lock()
-		service.waitErr = waitErr
 		service.updateOutputInfoLocked()
 		if service.info.Status != "stopped" {
 			service.info.StoppedAt = time.Now().Unix()
@@ -332,8 +330,10 @@ func (a *App) stopService(req StopServiceRequest) (ServiceInfo, error) {
 		_ = gracefulStopProcessTree(pid)
 		forced := false
 		var forceErr error
+		exited := false
 		select {
 		case <-service.waitDone:
+			exited = true
 		case <-time.After(time.Duration(graceSeconds) * time.Second):
 			forced = true
 			if err := stopProcessTree(pid); err != nil {
@@ -344,17 +344,33 @@ func (a *App) stopService(req StopServiceRequest) (ServiceInfo, error) {
 			}
 			select {
 			case <-service.waitDone:
+				exited = true
 			case <-time.After(serviceForceKillConfirmWait):
 			}
 		}
+		// 进程组已空时 kill 会返回 ESRCH，而 waitDone 仍可能被孙进程占着的管道卡
+		// 住没关；用进程存活判定兜底，别把已经死掉的进程钉成 running
+		// （那会一直占着 maxActiveServices 名额，用户只能反复重试 stop）。
+		if !exited && !isProcessAlive(pid) {
+			exited = true
+		}
 		service.mu.Lock()
-		service.info.Status = "stopped"
-		service.info.StoppedAt = time.Now().Unix()
-		switch {
-		case forceErr != nil:
-			service.info.Error = fmt.Sprintf("force stop failed after %ds graceful wait: %v", graceSeconds, forceErr)
-		case forced:
-			service.info.Error = fmt.Sprintf("graceful stop timed out after %ds; process tree force killed", graceSeconds)
+		if forceErr != nil && !exited {
+			// 强杀失败且进程树在确认窗口内仍活着：不能标 stopped
+			// ——alreadyDone 会让下一次 stop 直接短路，用户看到“已停止”而进程
+			// 仍活着占着端口，只能重启清理。保留活跃状态让停止可以重试；若进程
+			// 随后自行退出，cmd.Wait 监控会把状态改成 exited。
+			service.info.Status = "running"
+			service.info.Error = fmt.Sprintf("force stop failed after %ds graceful wait: %v; the process tree is still alive, retry the stop", graceSeconds, forceErr)
+		} else {
+			service.info.Status = "stopped"
+			service.info.StoppedAt = time.Now().Unix()
+			switch {
+			case forceErr != nil:
+				service.info.Error = fmt.Sprintf("force stop failed after %ds graceful wait, but the process exited anyway: %v", graceSeconds, forceErr)
+			case forced:
+				service.info.Error = fmt.Sprintf("graceful stop timed out after %ds; process tree force killed", graceSeconds)
+			}
 		}
 		service.updateOutputInfoLocked()
 		service.mu.Unlock()
@@ -506,6 +522,13 @@ func (a *App) readServiceOutput(req ServiceReadRequest) (ServiceReadResult, erro
 	returned := output
 	if fromByte > 0 {
 		returned = output[fromByte:]
+		// output 已解码为 UTF-8，按字节切会把首个多字节字符切碎（中文/emoji
+		// 必中）。与 infra_bridges 的截尾同源：只对 UTF-8 前移，GBK/二进制原样
+		// 保留；fromByte 同步右移，保证它描述的仍是 returned 的真实起点。
+		if aligned := alignRuneStart(returned); len(aligned) < len(returned) {
+			fromByte += len(returned) - len(aligned)
+			returned = aligned
+		}
 	}
 	return ServiceReadResult{
 		ID:            id,
@@ -727,7 +750,6 @@ func (a *App) watchPromotedCommandExit(svc *managedService, waitDone <-chan erro
 	go func() {
 		waitErr := <-waitDone
 		svc.mu.Lock()
-		svc.waitErr = waitErr
 		svc.updateOutputInfoLocked()
 		if svc.info.Status != "stopped" {
 			svc.info.StoppedAt = time.Now().Unix()

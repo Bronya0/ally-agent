@@ -208,6 +208,11 @@ func (a *App) startApiListener() error {
 	server := &http.Server{
 		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
+		// 读与空闲也必须有上限，否则本地进程可以慢速占着连接不放。
+		// WriteTimeout 故意不设：HandleCompactSession 是同步长调用，
+		// 设了会在压缩大会话时提前奶断响应。
+		ReadTimeout: 60 * time.Second,
+		IdleTimeout: 120 * time.Second,
 	}
 
 	addr := fmt.Sprintf("127.0.0.1:%d", port)
@@ -720,14 +725,22 @@ func (a *App) apiHandleGetMcp(w http.ResponseWriter, r *http.Request) {
 // apiHandlePutMcpConfig 用原始 mcp.json 文本整体替换并应用（保存 +
 // ReconcileMcpServers，只重连增删改的服务器，与设置页行为一致）。
 func (a *App) apiHandlePutMcpConfig(w http.ResponseWriter, r *http.Request) {
+	// config 是文档（docs/api.md）里的必填字段：空 body 不能被读成“清空所有
+	// 服务器”。SaveMcpConfig 会把空串归一成 {"mcpServers":{}}，那会整份覆盖
+	// mcp.json 并断开所有 live 连接——客户端拿 GET 的响应原样 PUT、或发一个
+	// 缺字段的对象，就会静默丢掉全部配置。
 	var body struct {
-		Config string `json:"config"`
+		Config *string `json:"config"`
 	}
 	if err := apiDecodeBody(r, &body); err != nil {
 		apiWriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := a.SaveMcpConfig(body.Config); err != nil {
+	if body.Config == nil || strings.TrimSpace(*body.Config) == "" {
+		apiWriteError(w, http.StatusBadRequest, "config is required: send the complete mcp.json text, an empty body would wipe every configured server")
+		return
+	}
+	if err := a.SaveMcpConfig(*body.Config); err != nil {
 		apiWriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}

@@ -9,6 +9,7 @@ package app
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -89,5 +90,36 @@ func TestLimitedBufferSpillMatchesCompleteOutput(t *testing.T) {
 	}
 	if !strings.HasPrefix(want, kept) {
 		t.Fatalf("buffered content must be a prefix of the full output, got %q", kept)
+	}
+}
+
+// TestAtomicReplaceFileKeepsExistingBackup: the fallback path moves the current
+// file aside to <dst>.bak. It used to delete whatever already sat at that name,
+// which could be the user's own backup (or a .bak written by another tool).
+func TestAtomicReplaceFileKeepsExistingBackup(t *testing.T) {
+	dir := t.TempDir()
+	dst := filepath.Join(dir, "config.json")
+	backup := dst + ".bak"
+	if err := os.WriteFile(backup, []byte("user backup\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Make the first os.Rename(tmp, dst) fail: renaming a file over a non-empty
+	// directory is refused on every platform.
+	if err := os.MkdirAll(filepath.Join(dst, "child"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tmp := filepath.Join(dir, "tmp-file")
+	if err := os.WriteFile(tmp, []byte("new\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := atomicReplaceFile(tmp, dst); err != nil {
+		t.Fatalf("atomicReplaceFile() = %v", err)
+	}
+	if got, err := os.ReadFile(backup); err != nil || string(got) != "user backup\n" {
+		t.Fatalf("the existing .bak must survive: %q (err=%v)", got, err)
+	}
+	if got, err := os.ReadFile(dst); err != nil || string(got) != "new\n" {
+		t.Fatalf("the temp file must be installed at dst: %q (err=%v)", got, err)
 	}
 }

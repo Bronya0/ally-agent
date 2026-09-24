@@ -634,14 +634,20 @@ func (m *scheduledTaskManager) run(task ScheduledTask) {
 		finished = true
 		return
 	}
-	result, runErr := m.app.executeDelegate(ctx, cfg, "scheduled:"+task.ID, AgentDelegateRequest{
-		Task:         "You are executing a scheduled task in isolated fresh context. The task persists across Ally restarts. Do not create, list, or delete scheduled tasks. Complete the instruction and finish with a concise report for the user.\n\n" + task.Instruction,
-		Description:  "Scheduled: " + task.Name,
-		CleanContext: false,
-		MaxSteps:     task.MaxSteps,
-		tools:        m.app.scheduledTaskTools(cfg),
-	}, cancel)
-	m.app.releaseSubagentSlot()
+	// 槽位必须 defer 归还：上面的 recover defer 会吞掉 executeDelegate 的
+	// panic 并直接 return，手工写在调用之后的 release 在 panic 路径上永不
+	// 执行（与 app.go:2660 的 subagent 分支同形）,漏满槽位后
+	// acquireSubagentSlot 会把所有委派阻塞到重启。
+	result, runErr := func() (*AgentDelegateResult, error) {
+		defer m.app.releaseSubagentSlot()
+		return m.app.executeDelegate(ctx, cfg, "scheduled:"+task.ID, AgentDelegateRequest{
+			Task:         "You are executing a scheduled task in isolated fresh context. The task persists across Ally restarts. Do not create, list, or delete scheduled tasks. Complete the instruction and finish with a concise report for the user.\n\n" + task.Instruction,
+			Description:  "Scheduled: " + task.Name,
+			CleanContext: false,
+			MaxSteps:     task.MaxSteps,
+			tools:        m.app.scheduledTaskTools(cfg),
+		})
+	}()
 	if result != nil && result.AgentID != "" {
 		m.app.subRunsMu.Lock()
 		delete(m.app.subRuns, result.AgentID)

@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -476,6 +477,7 @@ func (m *McpManager) newMcpClient(ctx context.Context, cfg McpServerConfig) (*cl
 		if err != nil {
 			return nil, fmt.Errorf("stdio spawn failed: %w", err)
 		}
+		drainMcpStderr(mcpClient)
 	case "sse":
 		if strings.TrimSpace(cfg.URL) == "" {
 			return nil, errors.New("sse MCP server requires url")
@@ -1223,6 +1225,23 @@ func (a *App) GetMcpConfig() (string, error) {
 		return "", err
 	}
 	return string(data), nil
+}
+
+// drainMcpStderr consumes a stdio MCP subprocess's stderr for the lifetime of the
+// client. mcp-go creates the stderr pipe but never reads it (it only exposes it
+// through client.GetStderr), so a chatty npx/node/python server fills the ~64 KiB
+// pipe buffer, blocks on its next write, and stops answering JSON-RPC: every tool
+// call then runs into the call timeout while the server still reports connected.
+func drainMcpStderr(c *client.Client) {
+	reader, ok := client.GetStderr(c)
+	if !ok || reader == nil {
+		return
+	}
+	go func() {
+		// The drain must never stop early: dropping the reader would let the pipe
+		// buffer fill up again and bring the hang back.
+		_, _ = io.Copy(io.Discard, reader)
+	}()
 }
 
 func (a *App) SaveMcpConfig(raw string) error {
