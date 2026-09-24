@@ -86,11 +86,11 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"path", "content"},
 		}),
-		functionTool("delete", "Delete a file or directory in the workspace. Directories require recursive=true.", map[string]any{
+		functionTool("delete", "Delete a file or directory in the workspace. Directories require recursive=true. Strictly prohibited from deleting drive roots, level 1 and level 2 system backbone directories (e.g. /etc, /var, /usr, /home/*, C:\\Windows, C:\\Users/*), VCS metadata (.git), or protected system targets (e.g. /dev, /proc, /sys, /etc/shadow, /var/local/libs).", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"path":      map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*"},
-				"recursive": map[string]any{"type": "boolean"},
+				"path":      map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Workspace-relative or authorized path to delete. Refuses filesystem root, level 1/2 directories, and sensitive system targets."},
+				"recursive": map[string]any{"type": "boolean", "description": "Required when deleting a directory."},
 			},
 			"required": []string{"path"},
 		}),
@@ -239,12 +239,12 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"target", "path", "content"},
 		}),
-		functionTool("remote_delete_path", "Delete a file or directory in a remote SSH workspace. Refuses the workspace root, its immediate child directories (root-level folders), VCS metadata, and OS-sensitive paths; other directories require recursive=true, while root-level files remain deletable. Use remote deletion cautiously; it is destructive. Prefer this over remote_run_command deletion.", map[string]any{
+		functionTool("remote_delete_path", "Delete a file or directory in a remote SSH workspace. Refuses the workspace root, its immediate child directories (root-level folders), VCS metadata, and OS-sensitive paths; other directories require recursive=true, while root-level files remain deletable. Strictly prohibited from deleting filesystem roots, level 1 and level 2 system backbone directories (e.g. /etc, /var, /usr, /home/*), or protected system targets (e.g. /dev, /proc, /sys, /etc/shadow, /var/local/libs). Use remote deletion cautiously; it is destructive. Prefer this over remote_run_command deletion.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"target":    map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Explicit SSH target plus an absolute, non-root workspace path, e.g. my-dev:/srv/app. The workspace path / is rejected."},
-				"path":      map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*"},
-				"recursive": map[string]any{"type": "boolean", "description": "Required for deleting directories below the workspace root. Immediate child directories of the workspace root are always blocked."},
+				"path":      map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Remote path to delete. Refuses filesystem root, level 1/2 directories, and sensitive system targets."},
+				"recursive": map[string]any{"type": "boolean", "description": "Required for deleting directories below the workspace root. Immediate child directories of the workspace root and system level 1/2 directories are always blocked."},
 			},
 			"required": []string{"target", "path"},
 		}),

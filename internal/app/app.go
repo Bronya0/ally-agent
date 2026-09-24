@@ -267,6 +267,11 @@ type App struct {
 	// keys are lowercase user@host[:port]. See orch_ssh_credential.go.
 	sshCredentials *sshCredentialCache
 
+	// sshKnownHostsPath 覆盖 SSH 主机指纹记录文件的位置；为空时用系统默认的
+	// ~/.ssh/known_hosts。存在的意义是让测试能在临时目录里跑完整的
+	// 连接/替换/重连链路，而不去读写用户真实的 known_hosts。
+	sshKnownHostsPath string
+
 	sshClustersMu         sync.RWMutex
 	sshClusters           map[string]SSHServerNode
 	sshSessionApprovalsMu sync.Mutex

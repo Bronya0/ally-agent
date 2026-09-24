@@ -10,6 +10,7 @@ package app
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -197,5 +198,62 @@ func TestLoadSSHClustersInfersLegacyKeyMode(t *testing.T) {
 	agentNode, ok := app.GetSSHServer("stale-agent")
 	if !ok || agentNode.AuthType != sshAuthTypeAgent || agentNode.Password != "" || agentNode.KeyPath != "" {
 		t.Fatalf("loaded agent node retained hidden credentials: %+v, ok=%v", agentNode, ok)
+	}
+}
+
+func TestTestSSHServerValidationAndLookup(t *testing.T) {
+	tempDir := t.TempDir()
+	app := NewApp()
+	app.configPath = filepath.Join(tempDir, "config.json")
+
+	// 1. Empty host and empty alias
+	res := app.TestSSHServer(SSHServerNode{})
+	if res.OK || res.Error == "" {
+		t.Fatalf("expected error for empty node, got ok=%v, err=%q", res.OK, res.Error)
+	}
+
+	// 2. Unknown alias
+	res = app.TestSSHServer(SSHServerNode{Alias: "unknown-alias"})
+	if res.OK || !strings.Contains(res.Error, "not found") {
+		t.Fatalf("expected 'not found' error, got %q", res.Error)
+	}
+
+	// 3. Saved server resolved by alias (pointing to a closed port on 127.0.0.1)
+	if err := app.SaveSSHServer(SSHServerNode{
+		Alias:       "local-closed",
+		Host:        "127.0.0.1",
+		Port:        59999,
+		Username:    "testuser",
+		Description: "test closed port",
+		AuthType:    "password",
+		Password:    "testpw",
+	}); err != nil {
+		t.Fatalf("SaveSSHServer: %v", err)
+	}
+
+	res = app.TestSSHServer(SSHServerNode{Alias: "local-closed"})
+	if res.OK {
+		t.Fatalf("expected connection failure for closed port, got ok=true")
+	}
+	if strings.Contains(res.Error, "password authentication requires") {
+		t.Fatalf("unexpected password authentication parameter error: %q", res.Error)
+	}
+
+	// 4. Password auth with empty password
+	resEmptyPw := app.TestSSHServer(SSHServerNode{
+		Host:     "127.0.0.1",
+		AuthType: "password",
+	})
+	if resEmptyPw.OK || !strings.Contains(resEmptyPw.Error, "密码认证需要填写密码") {
+		t.Fatalf("expected empty password error, got %q", resEmptyPw.Error)
+	}
+
+	// 5. Key auth with empty key path
+	resEmptyKey := app.TestSSHServer(SSHServerNode{
+		Host:     "127.0.0.1",
+		AuthType: "key",
+	})
+	if resEmptyKey.OK || !strings.Contains(resEmptyKey.Error, "密钥认证需要指定私钥路径") {
+		t.Fatalf("expected empty key path error, got %q", resEmptyKey.Error)
 	}
 }

@@ -335,6 +335,35 @@ func (a *App) SelectBackgroundImage() (string, error) {
 	return a.saveBackgroundImageFromFile(selected)
 }
 
+// SelectPrivateKeyFile opens a native file picker without file type restrictions
+// and returns the chosen file path (or "" if cancelled).
+func (a *App) SelectPrivateKeyFile() (string, error) {
+	if a.wails == nil || a.wails.app == nil {
+		return "", errors.New("desktop host not initialized")
+	}
+	defaultDir := ""
+	if homeDir, err := os.UserHomeDir(); err == nil {
+		sshDir := filepath.Join(homeDir, ".ssh")
+		if info, err := os.Stat(sshDir); err == nil && info.IsDir() {
+			defaultDir = sshDir
+		} else {
+			defaultDir = homeDir
+		}
+	}
+	dialog := a.wails.app.Dialog.OpenFile().
+		SetTitle("选择 SSH 私钥文件").
+		CanChooseFiles(true).
+		CanChooseDirectories(false)
+	if defaultDir != "" {
+		dialog.SetDirectory(defaultDir)
+	}
+	selected, err := dialog.PromptForSingleSelection()
+	if err != nil {
+		return "", err
+	}
+	return selected, nil
+}
+
 // ExportTextFile opens a native save dialog and writes content to the chosen
 // path. suggestedFilename seeds the dialog; the user may change it. Returns
 // the saved path, or "" when the user cancels. WKWebView (macOS) ignores the

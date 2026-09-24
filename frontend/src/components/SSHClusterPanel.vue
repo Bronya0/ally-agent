@@ -95,6 +95,9 @@ Public License v3. See the LICENSE file for details.
             <span v-else class="ssh-risk-badge low">{{ t('sshCluster.table.riskLow') }}</span>
           </span>
           <span class="ssh-cell-actions">
+            <n-button size="tiny" secondary :loading="testingAlias === s.alias" @click="handleTest(s)">
+              {{ t('sshCluster.table.test') }}
+            </n-button>
             <n-button size="tiny" secondary @click="openCloneDialog(s)">
               {{ t('sshCluster.table.clone') }}
             </n-button>
@@ -183,10 +186,16 @@ Public License v3. See the LICENSE file for details.
 
         <div v-if="form.authType === 'key'" class="ssh-form-item">
           <label class="ssh-form-label">{{ $t('sshCluster.modal.keyPath') }}</label>
-          <n-input
-            v-model:value="form.keyPath"
-            placeholder="~/.ssh/id_rsa"
-          />
+          <div class="ssh-keypath-picker">
+            <n-input
+              v-model:value="form.keyPath"
+              placeholder="~/.ssh/id_rsa"
+              clearable
+            />
+            <n-button secondary @click="choosePrivateKeyFile">
+              {{ $t('sshCluster.modal.selectKeyFile') }}
+            </n-button>
+          </div>
         </div>
 
         <!-- key 模式下此字段只用于解锁本机私钥；绝不会作为 SSH 账号密码发送给服务器。 -->
@@ -238,7 +247,7 @@ Public License v3. See the LICENSE file for details.
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useMessage } from 'naive-ui';
 import SearchOutlined from '@vicons/antd/SearchOutlined';
-import { ListAllSSHServers, SaveSSHServer, DeleteSSHServer } from '../../bindings/ally-dev/internal/app/app';
+import { ListAllSSHServers, SaveSSHServer, DeleteSSHServer, TestSSHServer, SelectPrivateKeyFile } from '../../bindings/ally-dev/internal/app/app';
 import { t } from '../i18n.mjs';
 import { buildSSHClusterExport, parseSSHClusterImport } from '../utils/sshClusterIO.mjs';
 import { saveTextFile } from '../utils/download.mjs';
@@ -252,6 +261,7 @@ const emit = defineEmits(['servers-changed']);
 const message = useMessage();
 const loading = ref(false);
 const saving = ref(false);
+const testingAlias = ref(null);
 const servers = ref([]);
 const searchQuery = ref('');
 const importInput = ref(null);
@@ -286,7 +296,7 @@ const form = reactive({
   alias: '',
   host: '',
   port: 22,
-  username: '',
+  username: 'root',
   authType: 'agent',
   keyPath: '',
   password: '',
@@ -335,7 +345,7 @@ function fillForm(s) {
   form.alias = s.alias || '';
   form.host = s.host || '';
   form.port = s.port || 22;
-  form.username = s.username || '';
+  form.username = s.username !== undefined && s.username !== '' ? s.username : 'root';
   form.authType = s.authType || 'agent';
   form.keyPath = s.keyPath || '';
   form.password = s.password || '';
@@ -443,6 +453,33 @@ async function handleDelete(alias) {
     emit('servers-changed');
   } catch (err) {
     message.error(err?.message || 'Delete failed');
+  }
+}
+
+async function handleTest(s) {
+  testingAlias.value = s.alias;
+  try {
+    const res = await TestSSHServer(s);
+    if (res && res.ok) {
+      message.success(t('sshCluster.testSuccess', { latency: res.durationMs }));
+    } else {
+      message.error(t('sshCluster.testFailed', { error: res?.error || 'Connection failed' }));
+    }
+  } catch (err) {
+    message.error(t('sshCluster.testFailed', { error: err?.message || 'Connection failed' }));
+  } finally {
+    testingAlias.value = null;
+  }
+}
+
+async function choosePrivateKeyFile() {
+  try {
+    const selected = await SelectPrivateKeyFile();
+    if (selected) {
+      form.keyPath = selected;
+    }
+  } catch (err) {
+    message.error(err?.message || 'Failed to select private key file');
   }
 }
 
@@ -615,7 +652,7 @@ async function importServers(event) {
 /* 表格行布局：表头与数据行共用同一套 grid 列宽。列宽带下限、整表有 min-width，
    窄窗口下由 .panel-scroll-body 横向滚动，不让别名/地址被挤成竖排。 */
 .ssh-table-wrap {
-  min-width: 880px;
+  min-width: 940px;
 }
 
 .ssh-table-head,
@@ -627,7 +664,7 @@ async function importServers(event) {
     104px
     minmax(200px, 1.8fr)
     84px
-    196px;
+    240px;
   gap: 12px;
   align-items: center;
   padding: 9px 12px;
@@ -780,5 +817,15 @@ async function importServers(event) {
   justify-content: flex-end;
   gap: 10px;
   margin-top: 8px;
+}
+
+.ssh-keypath-picker {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.ssh-keypath-picker .n-input {
+  flex: 1;
 }
 </style>

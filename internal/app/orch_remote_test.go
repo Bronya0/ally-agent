@@ -53,11 +53,8 @@ func TestRemoteScriptTransportInvariants(t *testing.T) {
 	if strings.Contains(remotePythonScript, "DELETE_RE") {
 		t.Error("remote python script still contains DELETE_RE regex; deletion should be Go-side only")
 	}
-	if !strings.Contains(remotePythonScript, "__DELETE_EXACT_ONLY__") {
-		t.Error("remote python script lost __DELETE_EXACT_ONLY__ placeholder")
-	}
-	if !strings.Contains(remotePythonScript, "__DELETE_PROTECTED_TREES__") {
-		t.Error("remote python script lost __DELETE_PROTECTED_TREES__ placeholder")
+	if !strings.Contains(remotePythonScript, "__DELETE_SENSITIVE_TARGETS__") {
+		t.Error("remote python script lost __DELETE_SENSITIVE_TARGETS__ placeholder")
 	}
 	if strings.Contains(remotePythonScript, "pathlib") {
 		t.Error("remote python script must not use pathlib (unsupported in Python 2.7)")
@@ -87,7 +84,7 @@ func TestBuildRemoteScriptInjectsProtectionAndPayload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildRemoteScript: %v", err)
 	}
-	for _, placeholder := range []string{"__PAYLOAD_B64__", "__DELETE_EXACT_ONLY__", "__DELETE_PROTECTED_TREES__"} {
+	for _, placeholder := range []string{"__PAYLOAD_B64__", "__DELETE_SENSITIVE_TARGETS__"} {
 		if strings.Contains(script, placeholder) {
 			t.Errorf("buildRemoteScript left placeholder %q unreplaced", placeholder)
 		}
@@ -188,9 +185,14 @@ func TestRemoteHelperProtectedDeleteClassification(t *testing.T) {
 		{"etc tree dir", "/etc", true},
 		{"etc file", "/etc/passwd", true},
 		{"usr subtree", "/usr/bin/ls", true},
+		{"usr share tree", "/usr/share/doc/foo", true},
+		{"usr local lib tree", "/usr/local/lib/node_modules/pkg/index.js", true},
+		{"etc direct file", "/etc/hosts", true},
+		{"var local libs", "/var/local/libs", true},
 		{"workspace file under /root", "/root/ally-remote-test/app.py", false},
 		{"project file under /root", "/root/projects/tooltest/file.txt", false},
 		{"project file under /home", "/home/alice/project/file.txt", false},
+		{"deep config file in etc", "/etc/nginx/conf.d/test.conf", false},
 		{"tempdir child path", filepath.Join(os.TempDir(), "project", "file.txt"), false},
 	}
 	for _, tc := range cases {

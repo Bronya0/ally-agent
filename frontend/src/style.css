@@ -2609,45 +2609,18 @@ code, pre {
   to   { transform: rotate(360deg); }
 }
 
-.composer-run-status-dots {
-  display: inline-flex;
-  gap: 4px;
-}
-
-/* 常驻“思考中”三点动画共用提层提示：WebView2 下这类小元素动画不必然被自动
-   提升，不提升就退化成逐帧主线程重绘。凡是常驻使用 thinking-bounce 的小点都
-   列在这里，新增一处只改这一行（AGENTS.md §4.7）。 */
-.composer-run-status-dot,
-.subagent-name-dot {
-  will-change: transform, opacity;
-}
-
-.composer-run-status-dot {
-  width: 4px;
-  height: 4px;
-  border-radius: 50%;
-  background: var(--ally-accent);
-  animation: thinking-bounce 1.3s ease-in-out infinite;
-}
-
-.composer-run-status-dot:nth-child(2) {
-  animation-delay: 0.2s;
-}
-
-.composer-run-status-dot:nth-child(3) {
-  animation-delay: 0.4s;
-}
-
-/* 流光挂在整行上：一道高光从 “Thinking” 连续扫过 token 数。两段各自挂渐变
-   会变成同一时刻的两道高光，看着像两句话。子元素的 color 只在降级时生效
-   （见 reduced-motion 块）：文字填充色由这里接管，为 transparent。 */
-.composer-thinking-count {
-  display: inline-flex;
+/* 状态行左侧唯一的标签：只有思考阶段有文字（Reasoning 12.4k tokens），其余阶段
+   （等模型首字 / 正文输出 / 工具执行）一律空字符串、整块不渲染。有文字时共用这
+   一道流光，换阶段就是同一元素内换字，动画不重启、观感连续。原先的三点动画已移除
+   ——它在所有阶段长得一模一样，与并排会闪的计数也没有共同视觉基准；阶段判定见
+   utils/runPhase.mjs。
+   文字填充色交给渐变（-webkit-text-fill-color: transparent），降级见
+   prefers-reduced-motion 块。 */
+.composer-run-label {
   flex: 0 0 auto;
-  align-items: center;
-  gap: 4px;
   font-size: 13px;
   line-height: 18px;
+  font-weight: 500;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
   color: var(--ally-text-faint);
@@ -2656,36 +2629,34 @@ code, pre {
   background-clip: text;
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
-  animation: reasoning-shimmer 1.8s linear infinite;
+  animation: composer-shimmer 1.8s linear infinite;
 }
 
-.composer-thinking-label {
-  color: var(--ally-text-faint);
-  font-weight: 500;
-}
-
-.composer-thinking-tokens {
-  color: var(--ally-text-soft);
-}
-
-@keyframes reasoning-shimmer {
+@keyframes composer-shimmer {
   0% { background-position: 200% 0; }
   100% { background-position: 0% 0; }
 }
 
-/* 计数只在思考阶段存在（v-if 挂载/卸载）。它同一行右侧的提示词是右对齐的
-   （.composer-run-prompt 的 margin-left: auto 吃掉全部剩余空间），所以淡入淡出
-   期间不会有相邻元素被推动，纯 opacity 就够，不触发布局（AGENTS.md §4.7）。 */
-.thinking-fade-enter-active {
+/* 常驻“等待中”小点动画共用提层提示：WebView2 下这类小元素动画不必然被自动
+   提升，不提升就退化成逐帧主线程重绘。本项目里常驻使用 thinking-bounce 的小点
+   现在只剩子代理卡片一处，新增一处只改这一行（AGENTS.md §4.7）。 */
+.subagent-name-dot {
+  will-change: transform, opacity;
+}
+
+/* 标签只在有内容时挂载（v-if），所以工具执行阶段与压缩空档整块消失。同一行右侧的
+   提示词是右对齐的（.composer-run-prompt 的 margin-left: auto 吃掉全部剩余空间），
+   淡入淡出期间不会有相邻元素被推动，纯 opacity 就够，不触发布局（AGENTS.md §4.7）。 */
+.composer-label-fade-enter-active {
   transition: opacity 0.18s ease-out;
 }
 
-.thinking-fade-leave-active {
+.composer-label-fade-leave-active {
   transition: opacity 0.15s ease-in;
 }
 
-.thinking-fade-enter-from,
-.thinking-fade-leave-to {
+.composer-label-fade-enter-from,
+.composer-label-fade-leave-to {
   opacity: 0;
 }
 
@@ -4723,18 +4694,14 @@ code, pre {
   }
   /* 流光停用时要退回纯色：只停动画的话，渐变还停在 background-position:0
      那一帧上，一行字会一半亮一半暗。 */
-  .composer-thinking-count {
+  .composer-run-label {
     background: none;
     animation: none;
-  }
-  .composer-thinking-count,
-  .composer-thinking-label,
-  .composer-thinking-tokens {
     -webkit-text-fill-color: currentColor;
   }
-  /* 减弱动效下连淡入淡出也免掉：计数直接出现/消失。 */
-  .thinking-fade-enter-active,
-  .thinking-fade-leave-active {
+  /* 减弱动效下连淡入淡出也免掉：标签直接出现/消失。 */
+  .composer-label-fade-enter-active,
+  .composer-label-fade-leave-active {
     transition: none;
   }
 }
@@ -5593,38 +5560,6 @@ code, pre {
 @keyframes thinking-bounce {
   0%, 80%, 100% { transform: translateY(0); opacity: 0.3; }
   40% { transform: translateY(-3px); opacity: 1; }
-}
-
-/* ── Braille spinner (waiting-for-response, shown next to last user message) ── */
-
-.braille-spinner {
-  display: inline-block;
-  position: relative;
-  width: 1.15em;
-  height: 1.15em;
-  font-size: 18px;
-  line-height: 1;
-  user-select: none;
-  flex: none;
-  font-family: Inter;
-}
-
-.braille-frame {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  opacity: 0;
-  color: var(--ally-text-soft);
-  font-style: normal;
-  animation: braille-frame-anim 0.8s steps(1, end) infinite;
-  animation-delay: var(--braille-delay);
-}
-
-@keyframes braille-frame-anim {
-  0%, 9.99% { opacity: 1; }
-  10%, 100% { opacity: 0; }
 }
 
 /* ── Self-update modal ── */

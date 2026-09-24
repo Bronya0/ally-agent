@@ -44,3 +44,12 @@
 [ssh-cred-cache-invalidate] 2026-09-23 节点删除/改写必须失效其凭据槽（purgeHost），否则清掉的密码用到 TTL 到期。@biz_ssh_cluster.go
 [unknown-vs-empty-replace] 2026-09-23 整份替换型保存别把“未加载”当“空”：未知态必须禁用提交，否则一次勾选静默撤销其余条目。@frontend/src/App.vue
 [ssh-auth-mode] 2026-09-23 小心：认证按 authType 分流；密钥口令只解本地密钥，绝不回用为账号密码。@internal/tools/sshclient
+[knownhosts-field] 2026-09-24 行首字段才是主机名；改写记录须保留 @revoked/@cert-authority 行。@sshclient/client.go
+[ssh-budget-split] 2026-09-24 建连与握手/认证预算须分开；慢 sshd（UseDNS 反查）会被误报成握手超时。@sshclient/client.go
+[run-phase-signals] 2026-09-24 tool:start 早于执行到达（卡片已 running）；本步封口点是 tool:result。@runPhase.mjs
+[legacy-strip-not-dead] 2026-09-24 快照保存侧的 legacy 字段 delete 不是死代码（旧快照仍在 IndexedDB），删了就永久回搬。@App.vue
+[win-volume-strip] 2026-09-24 先 ToSlash 再取卷标裁不掉 \\?\C: 前缀，按深度/根做的判定会失守。@orch_file_ops.go
+[composer-icon-h] 2026-09-24 状态行图标须 ≤18px（= 标签 line-height）否则撑行/切换抖动。@RunSpinner.vue
+[hostkey-mismatch-no-ask] 2026-09-24 指纹不一致不询问：app 层直接替换记录（留 .old 备份）并重连一次。@orch_remote.go
+[status-mark-box] 2026-09-25 状态行标记可见范围须全在布局盒内且盒高恒定，动画只动 transform。@RunSpinner.vue
+[mark-tone-vs-text] 2026-09-25 实心标记取色要比同排文字暗一档：面积效应让它同档更亮。@RunSpinner.vue

@@ -209,40 +209,25 @@ Public License v3. See the LICENSE file for details.
                   <span class="composer-retry-text">{{ $t('app.run.retryBanner', { attempt: retryBanner.attempt, max: retryBanner.maxAttempts, error: retryBanner.error }) }}</span>
                   <span v-if="retryBanner.totalKeys > 1" class="composer-retry-key">{{ $t('app.run.retryKey', { key: retryBanner.keyIndex + 1, total: retryBanner.totalKeys }) }}</span>
                 </div>
+                <!-- 状态行：左侧三根条常驻表示“在跑”，右下只有一个标签，且只有思考阶段
+                     才带文字（Reasoning 12.4k tokens）——“Prompt Processing”与“Decoding”
+                     各自要占掉一轮里的大段时间，却不多说三根条以外的信息，已不再显示。
+                     三根条（components/RunSpinner.vue）与流光同一灰调，两者共存但不抢
+                     焦点；阶段判定见 utils/runPhase.mjs。 -->
                 <div v-if="activeSessionRunning || compactLoadingActive" class="composer-run-status">
-                  <template v-if="compactLoadingActive">
-                    <span class="composer-run-status-dots" aria-hidden="true">
-                      <span class="composer-run-status-dot"></span>
-                      <span class="composer-run-status-dot"></span>
-                      <span class="composer-run-status-dot"></span>
-                    </span>
-                    <Transition name="thinking-fade">
-                      <span v-if="activeThinkingTokenCount > 0" class="composer-thinking-count">
-                        <span class="composer-thinking-label">Thinking</span>
-                        <span class="composer-thinking-tokens">{{ fmtTokens(activeThinkingTokenCount) }} tokens</span>
-                      </span>
-                    </Transition>
-                    <span class="composer-run-prompt">{{ compactStatusText }}</span>
-                  </template>
-                  <template v-else>
-                    <span v-if="activeSessionRunning" class="composer-run-status-dots" aria-hidden="true">
-                      <span class="composer-run-status-dot"></span>
-                      <span class="composer-run-status-dot"></span>
-                      <span class="composer-run-status-dot"></span>
-                    </span>
-                    <Transition name="thinking-fade">
-                      <span v-if="activeThinkingTokenCount > 0" class="composer-thinking-count">
-                        <span class="composer-thinking-label">Thinking</span>
-                        <span class="composer-thinking-tokens">{{ fmtTokens(activeThinkingTokenCount) }} tokens</span>
-                      </span>
-                    </Transition>
-                    <span
-                      v-if="activeSessionRunning && latestUserPromptSummary"
-                      class="composer-run-prompt"
-                      :title="latestUserPromptSummary"
-                    >{{ latestUserPromptSummary }}</span>
-
-                  </template>
+                  <!-- 三根条在 run 全阶段常驻：标签为空（工具执行阶段）时它是在动的全部，
+                       有标签时就与流光并存；因为不参与挂载/卸载，标签也不会位移。 -->
+                  <RunSpinner />
+                  <!-- 标签为空时整块不渲染（思考阶段之外的所有阶段），既不占位也
+                       不空转动画；在同一个元素里换字不重放流光，观感连续。 -->
+                  <Transition name="composer-label-fade">
+                    <span v-if="composerStatusLabel" class="composer-run-label">{{ composerStatusLabel }}</span>
+                  </Transition>
+                  <span
+                    v-if="composerStatusDetail"
+                    class="composer-run-prompt"
+                    :title="composerStatusDetail"
+                  >{{ composerStatusDetail }}</span>
                 </div>
                 <!-- One input instance per workspace tab (keyed by session:tab) so each
                      keeps its own Naive UI autosize mirror, cursor and scroll state. A
@@ -614,6 +599,7 @@ import ReloadOutlined from '@vicons/antd/ReloadOutlined';
 import FolderOpenOutlined from '@vicons/antd/FolderOpenOutlined';
 import AllyWordmark from './components/AllyWordmark.vue';
 import ComposerInfoBar from './components/ComposerInfoBar.vue';
+import RunSpinner from './components/RunSpinner.vue';
 import MessageAttachments from './components/MessageAttachments.vue';
 import ReadGroupCard from './components/ReadGroupCard.vue';
 import RenderBoundary from './components/RenderBoundary.vue';
@@ -650,7 +636,7 @@ import { isNewerReleaseVersion } from './utils/versionCheck.mjs';
 import { findSessionWorkspaceTab, isEditableNavigationTarget, shouldAcceptRunTerminal } from './utils/sessionState.mjs';
 import { orderPlanPanelEntries, planFocusScrollDelta } from './utils/planPanel.mjs';
 import { formatDateTime, naiveDateLocale, naiveLocale, reasoningEffortLabel, t, welcomeGreeting as localizedWelcomeGreeting } from './i18n.mjs';
-import { fmtCompact, fmtDuration, fmtTokens } from './utils/format.mjs';
+import { fmtCompact, fmtDuration } from './utils/format.mjs';
 import { isSkillActive, normalizeSkillName } from './utils/skills.mjs';
 import {
   assistantRowRenderState,
@@ -667,6 +653,12 @@ import {
   setToolStatus,
   toolEventId,
 } from './utils/toolEventState.mjs';
+import {
+  RUN_PHASE,
+  applyRunPhaseEvent,
+  createRunPhaseState,
+  phaseLabel,
+} from './utils/runPhase.mjs';
 import { toolCardRenderSignature } from './utils/toolCardSignature.mjs';
 import { useToolEvents } from './composables/useToolEvents.mjs';
 import { unwrapWailsEvent } from './utils/wailsEvent.mjs';
@@ -2575,6 +2567,42 @@ const activeThinkingTokenCount = computed(() => {
   }
   return 0;
 });
+// 状态行（输入框上方那一行）的阶段：每个阶段只显示一个英文词，整行最多一个动效
+// 元素。状态按会话 id 存放、不落盘（瞬时状态而非历史），与压缩状态同一处置方式，
+// 所以后台 Tab 的一轮不会跑到别的 Tab 的状态行上。判定规则见 utils/runPhase.mjs。
+const runPhases = reactive({});
+function runPhaseStateFor(sessionId) {
+  return sessionId ? runPhases[sessionId] || null : null;
+}
+function trackRunPhase(eventName, data) {
+  const session = sessionByEvent(data);
+  if (!session) return;
+  if (!runPhases[session.id]) runPhases[session.id] = createRunPhaseState();
+  applyRunPhaseEvent(runPhases[session.id], eventName, data);
+}
+function clearRunPhase(session) {
+  const sessionId = typeof session === 'string' ? session : session?.id;
+  if (sessionId) delete runPhases[sessionId];
+}
+// 会推动阶段的事件。tool:result / tool:error 在这里也注册一份：卡片子系统
+// （useToolEvents）另有自己的处理，同一事件允许多个监听，两边互不依赖。
+const RUN_PHASE_EVENTS = ['run:start', 'run:stream', 'run:delta', 'run:reasoning', 'tool:start', 'tool:update', 'tool:result', 'tool:error'];
+const activeRunPhase = computed(() => {
+  const state = runPhaseStateFor(activeSessionId.value);
+  return state ? state.phase : RUN_PHASE.prompt;
+});
+// 状态行左侧唯一的标签：只有思考阶段有文字（带上估算 token 数），其余阶段是空字符串、
+// 标签整块不渲染。压缩时没有 run 事件推动阶段，所以直接按思考档取值——压缩进度本身
+// 走右侧（composerStatusDetail）。
+const composerStatusLabel = computed(() => phaseLabel(
+  compactLoadingActive.value ? RUN_PHASE.reasoning : activeRunPhase.value,
+  activeThinkingTokenCount.value,
+));
+// 右侧右对齐的那一段：运行时是用户提问摘要，压缩时是本地化的进度明细。
+// （compactStatusText 在下方定义：computed 的函数体到渲染时才求值。）
+const composerStatusDetail = computed(() => (
+  compactLoadingActive.value ? compactStatusText.value : latestUserPromptSummary.value
+));
 const scheduledTaskRunningCount = computed(() => scheduledTasks.value.filter((task) => task?.running).length);
 const serviceRunningCount = computed(() => services.value.filter((service) => ['starting', 'running'].includes(service?.status)).length);
 // 徽标数字只算“还活着”的条目：一次性任务跑完（nextRunAt 归零）不会再触发，
@@ -4737,6 +4765,8 @@ function bindRuntimeEvents() {
     scrollMessagesToBottom,
     activeSessionId,
   });
+  // 状态行的阶段（见 utils/runPhase.mjs）：喂给它同一批运行事件。
+  for (const name of RUN_PHASE_EVENTS) onRuntimeEvent(name, (data) => trackRunPhase(name, data));
   // 上游模型服务的报错统一加上来源标识，用户才能分清该找服务方还是找 Ally。
   // ownText 是调用方自己的文案(某些场景只展示错误原文)，来源判定只此一处。
   function describeEventError(data, ownText) {
@@ -4771,6 +4801,7 @@ function bindRuntimeEvents() {
     if (variant === 'error') markTransientTurn(session, data.runId);
     session.runId = '';
     session.isRunning = false;
+    clearRunPhase(session);
     if (variant === 'error') {
       // 仅当前可见会话插入错误/取消提示消息；插入发生在 setAssistant* 之前，
       // 与原实现一致（插入的消息带 runId，roundDuration/cacheRate 落在它上面）。
@@ -7083,6 +7114,9 @@ function sanitizeStoredMessage(msg) {
   // Thinking counts and phase state are transient composer status, not history.
   delete next.reasoningChars;
   delete next.reasoningActive;
+  // 这三个字段是 2026-09-23（13e412e）以前写入的，仍然留在那之前保存的快照里。
+  // 本函数是唯一一处重写已存消息的地方，所以剥离必须留在这里：否则一份旧会话
+  // 会把陈旧且体积可观的思考正文（reasoningBody）在以后每次保存时一路带下去。
   delete next.reasoningStartedAt;
   delete next.reasoningEndedAt;
   delete next.reasoningBody;
@@ -7448,12 +7482,13 @@ function handlePushCommand() {
     });
 }
 
-// Compaction loading uses the same dotted indicator as a running chat
-// (composer-run-status-dots) so manual /compact and auto-compaction feel
-// like a normal chat run instead of a Naive toast. State is keyed per
-// session: a background tab's compaction must never surface in another
-// tab's composer. Progress text streams from the backend via
-// compact:start / compact:done events.
+// Compaction loading occupies the same composer status row as a running chat,
+// so manual /compact and auto-compaction read as a normal run instead of a
+// Naive toast. State is keyed per session: a background tab's compaction must
+// never surface in another tab's composer. Progress text streams from the
+// backend via compact:start / compact:done events. The row's single label slot
+// carries the run phase word (utils/runPhase.mjs) for runs and this localized
+// progress detail for compaction.
 const compactingSessions = reactive({});
 function compactStateFor(sid) { return compactingSessions[sid] || null; }
 const activeCompactState = computed(() => compactStateFor(activeSessionId.value));

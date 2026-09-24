@@ -60,9 +60,8 @@ else:
     TEXT_TYPES = (str,)
 
 # 受保护删除清单占位符：Go 侧在构建脚本时替换为 JSON 数组字面量。
-# 内容来自 internal/app 的 linux/darwin 分支并集（单一来源）。
-DELETE_EXACT_ONLY = __DELETE_EXACT_ONLY__
-DELETE_PROTECTED_TREES = __DELETE_PROTECTED_TREES__
+# 包含跨平台统一的系统敏感目录与高危文件黑名单。
+DELETE_SENSITIVE_TARGETS = __DELETE_SENSITIVE_TARGETS__
 
 # payload 占位符：Go 侧每次调用时替换为真实 base64url 编码的 payload，
 # 整个脚本经 ssh stdin 发送，避免大 payload 塞进命令行参数。
@@ -170,37 +169,61 @@ def contains_vcs(path):
     return any(part in (".git", ".svn", ".hg") for part in parts)
 
 def is_protected_delete_path(path):
-    # 与本地 isDangerousDeletePath 的 Linux/macOS 分支保持一致
-    # （远端只可能是 posix 系统）。统一转成 posix 形式再判断，
-    # 避免 Windows 本地测试时把 /etc 渲染成 \etc。
+    # 与本地 isDangerousDeletePath 统一保持两套规则：
+    # 机制 1：系统全盘视角下，禁止删除根目录、第 1 级和第 2 级骨干目录；
+    # 机制 2：跨平台敏感文件与深层系统目录黑名单拦截。
     p = to_os_text(path).replace(os.sep, "/")
-    if p == "/":
+    norm = p.lower()
+    if len(norm) >= 2 and norm[1] == ":":
+        norm = norm[2:]
+    norm = norm.rstrip("/")
+    if not norm or norm == "/":
         return True
-    # 镜像本地 isDangerousDeletePath 的 os.TempDir() 豁免：测试与构建工作区
-    # 常位于 OS 临时目录下（macOS 为 /var/folders/...，属于受保护的 /var 树；
-    # Linux 为 /tmp 或 /var/tmp）。上层 safe_join 已保证路径局限于
-    # workspaceRoot，因此临时目录内部的子项放行，只拦临时根目录本身。
+
+    # 镜像本地 isDangerousDeletePath 的临时目录豁免：测试与构建工作区
+    # 常位于 OS 临时目录下（Linux/macOS 为 /tmp 或 /var/tmp，macOS 为 /var/folders/...）。
+    # 临时目录内部的子项放行，只拦临时根目录本身。
     for tmp_candidate in (tempfile.gettempdir(), "/tmp", "/var/tmp"):
         try:
             for t_str in (tmp_candidate, os.path.realpath(tmp_candidate)):
-                t_posix = to_os_text(t_str).replace(os.sep, "/")
-                if t_posix and p.startswith(t_posix.rstrip("/") + "/"):
+                t_posix = to_os_text(t_str).replace(os.sep, "/").lower()
+                if len(t_posix) >= 2 and t_posix[1] == ":":
+                    t_posix = t_posix[2:]
+                t_posix = t_posix.rstrip("/")
+                if t_posix and (norm == t_posix or norm.startswith(t_posix + "/")):
+                    if norm == t_posix:
+                        return True
                     return False
         except Exception:
             pass
-    if p == os.path.expanduser("~").replace(os.sep, "/"):
+
+    # 机制一：全盘视角 1 级、2 级目录绝对禁止删除
+    parts = [part for part in norm.split("/") if part]
+    depth = len(parts)
+
+    is_dir = False
+    try:
+        is_dir = os.path.isdir(path)
+    except Exception:
+        pass
+    if not is_dir:
+        try:
+            if not os.path.exists(path):
+                _, ext = os.path.splitext(norm)
+                is_dir = (ext == "")
+        except Exception:
+            pass
+
+    if depth == 1:
         return True
-    parent = os.path.dirname(p)
-    if parent in ("/home", "/Users"):
+    if depth == 2 and is_dir:
         return True
-    exact_only = DELETE_EXACT_ONLY
-    for item in exact_only:
-        if p == item:
+
+    # 机制二：敏感文件与深层目录黑名单
+    for target in DELETE_SENSITIVE_TARGETS:
+        if norm == target or norm.startswith(target + "/"):
             return True
-    protected_trees = DELETE_PROTECTED_TREES
-    for item in protected_trees:
-        if p == item or p.startswith(item.rstrip("/") + "/"):
-            return True
+
     return False
 
 def iso_mtime(st):
@@ -756,11 +779,9 @@ func (a *App) resolveAndAuthorizeRemoteTarget(ctx context.Context, raw string) (
 		}
 	}
 
-	var sessionID string
+	// 会话上下文同时决定工作区隔离与审批闸门；没有会话（后台任务、子代理）时两者都不适用。
+	sessionID := toolSessionID(ctx)
 	var workspace string
-	if meta, ok := ctx.Value(toolExecutionMetaContextKey{}).(toolExecutionMeta); ok {
-		sessionID = meta.sessionID
-	}
 	if sessionID != "" {
 		a.mu.Lock()
 		workspace = a.sessionWorkspaces[sessionID]
@@ -929,20 +950,15 @@ func remotePayload(rt remoteTarget, op string, extra map[string]any) map[string]
 	return payload
 }
 
-// buildRemoteScript 把删除保护清单与 payload（base64url）注入 Python 脚本
+// buildRemoteScript 把敏感保护清单与 payload（base64url）注入 Python 脚本
 // 占位符，整个脚本经 ssh stdin 发送。先替换清单、最后替换 payload，
 // 避免编码后的 payload 恰好包含清单占位符文本时被二次替换。
 func buildRemoteScript(payload map[string]any) (string, error) {
-	exactOnly, err := json.Marshal(remoteDeleteProtectedExactOnly())
+	targets, err := json.Marshal(remoteSensitiveDeleteTargets())
 	if err != nil {
 		return "", err
 	}
-	trees, err := json.Marshal(remoteDeleteProtectedTrees())
-	if err != nil {
-		return "", err
-	}
-	script := strings.Replace(remotePythonScript, "__DELETE_EXACT_ONLY__", string(exactOnly), 1)
-	script = strings.Replace(script, "__DELETE_PROTECTED_TREES__", string(trees), 1)
+	script := strings.Replace(remotePythonScript, "__DELETE_SENSITIVE_TARGETS__", string(targets), 1)
 	raw, err := json.Marshal(payload)
 	if err != nil {
 		return "", err
@@ -976,13 +992,61 @@ func remoteWriteTargets(commandLine string) []string {
 	return targets
 }
 
+// toolSessionID 取出工具调用所属的会话 ID；后台任务与子代理调用可能没有会话。
+func toolSessionID(ctx context.Context) string {
+	if meta, ok := ctx.Value(toolExecutionMetaContextKey{}).(toolExecutionMeta); ok {
+		return meta.sessionID
+	}
+	return ""
+}
+
+// errRemoteScriptTimeout 标记一次远端脚本调用在超时预算内没能返回，由调用方渲染
+// 成给模型看的提示。
+var errRemoteScriptTimeout = errors.New("remote ssh timed out")
+
+// runRemoteScriptOnce 执行一次远端 Python helper 调用。超时预算按单次调用计算：
+// 指纹记录被替换后的重试要重新拿到完整预算，不能共用上一次已经耗掉的额度。
+func runRemoteScriptOnce(ctx context.Context, sshConfig sshclient.Config, script string, timeout time.Duration) (sshclient.Result, error) {
+	runCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	const remotePythonCommand = "sh -c 'command -v python3 >/dev/null 2>&1 && exec python3 - ; command -v python2 >/dev/null 2>&1 && exec python2 - ; exec python -'"
+	result, err := sshclient.Run(runCtx, sshConfig, remotePythonCommand, strings.NewReader(script))
+	if runCtx.Err() == context.DeadlineExceeded {
+		return result, fmt.Errorf("%w after %s", errRemoteScriptTimeout, timeout)
+	}
+	return result, err
+}
+
+// refreshHostKeyAndRetry 执行一次远端调用；若记录中的主机指纹与服务器实际提供的
+// 不一致，直接换成本次收到的公钥并重试一次。策略口径是「一律不询问」：主代理、
+// 子代理、后台任务、本地 API 走同一条路，等价于 OpenSSH 的
+// StrictHostKeyChecking=no（替换前会把原记录备份为 <known_hosts>.old 供人工核对）。
+// 只重试一次：第二次仍对不上说明这不是一次正常的服务器换钥，照实上报而不是死循环。
+func refreshHostKeyAndRetry[T any](attempt func() (T, error)) (T, error) {
+	out, err := attempt()
+	var mismatch *sshclient.HostKeyMismatchError
+	if !errors.As(err, &mismatch) {
+		return out, err
+	}
+	if replaceErr := sshclient.ReplaceHostKey(mismatch.KnownHostsPath, mismatch.Address, mismatch.NewKey); replaceErr != nil {
+		return out, fmt.Errorf("could not update the saved host key for %s: %w", mismatch.Address, replaceErr)
+	}
+	return attempt()
+}
+
 func (a *App) invokeRemotePython(ctx context.Context, rt remoteTarget, payload map[string]any, timeout time.Duration, out any) error {
 	script, err := buildRemoteScript(payload)
 	if err != nil {
 		return err
 	}
 	entry, hasCredential := a.sshCredentials.lookup(sshCredentialKey(rt.Host, rt.Port))
-	sshConfig := sshclient.Config{Host: rt.Host, Port: rt.Port, AuthMode: sshclient.AuthModeAgent}
+	sshConfig := sshclient.Config{
+		Host:           rt.Host,
+		Port:           rt.Port,
+		AuthMode:       sshclient.AuthModeAgent,
+		KnownHostsPath: a.sshKnownHostsPath,
+	}
 	if hasCredential {
 		switch entry.authType {
 		case sshAuthTypeKey:
@@ -997,18 +1061,21 @@ func (a *App) invokeRemotePython(ctx context.Context, rt remoteTarget, payload m
 	if timeout <= 0 {
 		timeout = 60 * time.Second
 	}
-	runCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	const remotePythonCommand = "sh -c 'command -v python3 >/dev/null 2>&1 && exec python3 - ; command -v python2 >/dev/null 2>&1 && exec python2 - ; exec python -'"
-	result, err := sshclient.Run(runCtx, sshConfig, remotePythonCommand, strings.NewReader(script))
+	// 指纹不一致由 refreshHostKeyAndRetry 直接换记录并重连，这里拿到的要么是成功结果，
+	// 要么是分类上报的失败。
+	result, err := refreshHostKeyAndRetry(func() (sshclient.Result, error) {
+		return runRemoteScriptOnce(ctx, sshConfig, script, timeout)
+	})
 	stdout := result.Stdout
 	stderr := result.Stderr
-	if runCtx.Err() == context.DeadlineExceeded {
-		return fmt.Errorf("remote ssh timed out after %s", timeout)
+	if errors.Is(err, errRemoteScriptTimeout) {
+		return err
 	}
-	if errors.Is(err, sshclient.ErrHostKeyChanged) {
-		return fmt.Errorf("ssh %s failed: host key verification failed (the saved host key differs; verify the server identity before changing known_hosts): %w", rt.Host, err)
+	var mismatch *sshclient.HostKeyMismatchError
+	if errors.As(err, &mismatch) {
+		// 只有在替换记录成功后重连仍然对不上时才会走到这里（记录文件被并发改写、
+		// 服务器换了另一把钥匙等）：原样上报新旧指纹，交由人工判断。
+		return fmt.Errorf("ssh %s failed: %w", rt.Host, mismatch)
 	}
 	if errors.Is(err, sshclient.ErrOutputTooLarge) {
 		return fmt.Errorf("ssh %s failed: remote helper output exceeded the capture limit: %w", rt.Host, err)

@@ -3764,23 +3764,122 @@ func TestWindowsDeleteSafetyAllowsOrdinaryCDriveWorkspacePaths(t *testing.T) {
 	}
 }
 
-// TestProtectedDeleteListsClassifyRootHomeAsParentRoot 锁定 /root 的分类：
-// 它是 root 用户的主目录父根（与 /home、/Users 同类），必须在 exact-only
-// 清单里拦目录本身；绝不能回到树清单（那会把 /root 子树内所有工作区
-// 文件的删除全部误拦）。
-func TestProtectedDeleteListsClassifyRootHomeAsParentRoot(t *testing.T) {
-	found := false
-	for _, p := range protectedDeleteLinuxExactOnly {
-		if p == "/root" {
-			found = true
+// TestWindowsDeleteSafetyTreatsDrivePrefixSpellingsAlike 锁定卷标裁剪：
+// C:\...、\\?\C:\...、\\.\C:\... 必须得到同一判断。filepath.VolumeName 返回的是
+// 原生反斜杠形式，若先转正斜杠再裁剪，带 \\?\ 前缀的写法整段裁不掉、深度被多算，
+// 1/2 级守卫就形同虚设。
+func TestWindowsDeleteSafetyTreatsDrivePrefixSpellingsAlike(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("windows path safety")
+	}
+
+	for _, path := range []string{
+		`C:\Users\alice`,
+		`\\?\C:\Users\alice`,
+		`\\.\C:\Users\alice`,
+		`\\?\C:\Windows\System32\kernel32.dll`,
+	} {
+		blocked, reason := isDangerousDeletePath(path)
+		if !blocked {
+			t.Fatalf("expected %s to be blocked, got allowed", path)
+		}
+		if strings.TrimSpace(reason) == "" {
+			t.Fatalf("expected block reason for %s", path)
 		}
 	}
-	if !found {
-		t.Fatal("/root must stay in the exact-only list (root user's home parent root)")
+
+	// 盘符路径不再套用 POSIX 临时根字面量：C:\tmp\proj 是二级目录，照样受保护。
+	if blocked, _ := isDangerousDeletePath(`C:\tmp\proj`); !blocked {
+		t.Fatal("expected a second-level directory below a drive-level tmp folder to be protected")
 	}
-	for _, p := range protectedDeleteLinuxTrees {
-		if p == "/root" {
-			t.Fatal("/root must not be a protected tree; its subtree holds legitimate workspaces")
+
+	// 工作区里的普通文件与真正的临时目录不受影响。
+	for _, path := range []string{
+		`C:\Users\alice\project\temp.txt`,
+		`\\?\C:\Users\alice\project\temp.txt`,
+		filepath.Join(os.TempDir(), "workspace", "file.txt"),
+	} {
+		if blocked, reason := isDangerousDeletePath(path); blocked {
+			t.Fatalf("expected %s to be allowed, got blocked: %q", path, reason)
+		}
+	}
+}
+
+// TestUnifiedDeleteProtectionRules 验证两套删除保护机制：
+// 1. 系统全盘视角下，禁止删除 1 级、2 级骨干目录（如 /root, /etc, /home/alice, /etc/nginx）；
+// 2. 深度 >= 3 的常规项目/配置文件允许删除（如 /root/project/app.py, /etc/nginx/conf.d/test.conf）；
+// 3. 命中敏感黑名单的路径即使在深层也严格阻断（如 /etc/shadow, /var/local/libs）。
+func TestUnifiedDeleteProtectionRules(t *testing.T) {
+	// 验证 1 级与 2 级目录被阻断
+	for _, dir := range []string{"/", "/root", "/home", "/etc", "/var", "/home/alice", "/etc/nginx"} {
+		blocked, reason := isDangerousDeletePath(dir)
+		if !blocked {
+			t.Fatalf("expected directory %s to be blocked, got allowed", dir)
+		}
+		if strings.TrimSpace(reason) == "" {
+			t.Fatalf("expected block reason for %s", dir)
+		}
+	}
+
+	// 验证敏感黑名单在深层依然被阻断（这些路径深度都 >= 3，只能靠名单拦住）
+	for _, sensitive := range []string{
+		"/etc/shadow",
+		"/etc/passwd",
+		"/var/local/libs",
+		"/dev/sda",
+		"/proc/cpuinfo",
+		"/usr/share/doc/foo",
+		"/usr/local/lib/node_modules/pkg/index.js",
+	} {
+		blocked, reason := isDangerousDeletePath(sensitive)
+		if !blocked {
+			t.Fatalf("expected sensitive target %s to be blocked, got allowed", sensitive)
+		}
+		if strings.TrimSpace(reason) == "" {
+			t.Fatalf("expected block reason for %s", sensitive)
+		}
+	}
+
+	// 验证深层（depth >= 3）常规文件/配置允许删除（不误杀）
+	for _, allowedPath := range []string{
+		"/root/ally-remote-test/app.py",
+		"/home/alice/project/file.txt",
+		"/etc/nginx/conf.d/test.conf",
+		"/usr/local/project/file.txt",
+	} {
+		blocked, reason := isDangerousDeletePath(allowedPath)
+		if blocked {
+			t.Fatalf("expected ordinary deep path %s to be allowed, got blocked: %q", allowedPath, reason)
+		}
+	}
+
+	// 机制 1 只拦第 2 层的“目录”，/etc 直属文件落在它的覆盖之外，只能靠名单兜底：
+	// 除了验证行为，还要确认每项确实在名单里 —— 否则删掉名单项后，在文件不存在
+	// 的平台上会被层级规则偶然拦住，测试看不出回归。
+	for _, directFile := range []string{
+		"/etc/hosts",
+		"/etc/resolv.conf",
+		"/etc/nsswitch.conf",
+		"/etc/hostname",
+		"/etc/environment",
+		"/etc/profile",
+		"/etc/bash.bashrc",
+		"/etc/ld.so.conf",
+		"/etc/shells",
+		"/etc/machine-id",
+	} {
+		listed := false
+		for _, target := range sensitiveDeleteTargets {
+			if target == directFile {
+				listed = true
+				break
+			}
+		}
+		if !listed {
+			t.Errorf("sensitiveDeleteTargets lost %s: level-2 files are outside the depth guard, only this list can block them", directFile)
+		}
+		if blocked, _ := isDangerousDeletePath(directFile); !blocked {
+			t.Fatalf("expected /etc direct file %s to be blocked, got allowed", directFile)
 		}
 	}
 }

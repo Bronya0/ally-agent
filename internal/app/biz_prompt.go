@@ -109,7 +109,7 @@ func sharedCodingGuidelines() string {
 func sharedSafetyBoundaries() string {
 	return "- Workspace boundary: existing files and directories outside the workspace (except `~/.ally_agent`) may be inspected but must not be modified or deleted. `command` may create a new outside path when the target does not already exist. Null-device redirections such as `/dev/null` are allowed.\n" +
 		"- Directory traversal: never recursively walk or search ~, /, C:\\, system directories, or broad home directories. Anchor all recursive operations to a specific project subdirectory.\n" +
-		"- Destructive operations: never delete or overwrite workspace root, home roots, system directories, or any path containing .git.\n" +
+		"- Destructive operations: never delete or overwrite filesystem/drive roots, level 1 or level 2 system backbone directories (e.g. /etc, /var, /usr, /home/*, C:\\Windows, C:\\Users/*), workspace root or its immediate subdirectories, sensitive system targets (e.g. /dev, /proc, /sys, /etc/shadow, /var/local/libs), or any path containing .git.\n" +
 		"- Batch commands: review commands with wildcards or variable-expanded paths before execution to avoid unintended side effects.\n" +
 		"- Do not use shell deletion commands (e.g. `rm` / `rm -rf`, `unlink`, `rmdir`, `del`); use the `delete` tool for deletion.\n" +
 		"- Sensitive files (e.g. `~/.ssh/*` private keys, `~/.ally_agent/config.json` API keys, `.env`/`.env.*`, credential/password/secret stores): do not read them proactively or without the user's explicit request or consent. When a task legitimately needs one, read only the minimal portion required, and never echo secret values into your reply, tool summaries, or memory.\n" +

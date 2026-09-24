@@ -8,6 +8,7 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,6 +17,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"ally-dev/internal/tools/sshclient"
 )
 
 // SSHServerNode represents a persisted SSH server node in the cluster inventory.
@@ -552,4 +555,98 @@ func (a *App) ApproveServerConnection(sessionID, alias string) {
 		a.sshSessionApprovals[sessionID] = make(map[string]bool)
 	}
 	a.sshSessionApprovals[sessionID][alias] = true
+}
+
+// SSHTestResult carries the outcome of an SSH connectivity test.
+type SSHTestResult struct {
+	OK         bool   `json:"ok"`
+	DurationMS int64  `json:"durationMs"`
+	Error      string `json:"error,omitempty"`
+}
+
+// TestSSHServer tests basic SSH connectivity and authentication for a server node.
+// If node.Host is empty and node.Alias is specified, the node is loaded from storage.
+func (a *App) TestSSHServer(node SSHServerNode) SSHTestResult {
+	if strings.TrimSpace(node.Host) == "" && strings.TrimSpace(node.Alias) != "" {
+		saved, ok := a.GetSSHServer(node.Alias)
+		if !ok {
+			return SSHTestResult{OK: false, Error: fmt.Sprintf("server %q not found", node.Alias)}
+		}
+		node = saved
+	} else if strings.TrimSpace(node.Alias) != "" && node.Password == "" {
+		if saved, ok := a.GetSSHServer(node.Alias); ok && saved.Password != "" {
+			node.Password = saved.Password
+		}
+	}
+
+	node = normalizeSSHServerNode(node)
+
+	host := nodeSSHHost(node)
+	if strings.TrimSpace(host) == "" {
+		return SSHTestResult{OK: false, Error: "server host is required"}
+	}
+
+	if node.AuthType == sshAuthTypePassword && node.Password == "" {
+		return SSHTestResult{OK: false, Error: "密码认证需要填写密码 (Password is required)"}
+	}
+	if node.AuthType == sshAuthTypeKey && strings.TrimSpace(node.KeyPath) == "" {
+		return SSHTestResult{OK: false, Error: "密钥认证需要指定私钥路径 (Key path is required)"}
+	}
+
+	portStr := "22"
+	if node.Port > 0 {
+		portStr = strconv.Itoa(node.Port)
+	}
+
+	sshConfig := sshclient.Config{
+		Host:           host,
+		Port:           portStr,
+		AuthMode:       sshclient.AuthModeAgent,
+		KnownHostsPath: a.sshKnownHostsPath,
+	}
+
+	switch node.AuthType {
+	case sshAuthTypeKey:
+		sshConfig.AuthMode = sshclient.AuthModeKey
+		sshConfig.KeyPath = strings.TrimSpace(node.KeyPath)
+		sshConfig.KeyPassphrase = node.Password
+	case sshAuthTypePassword:
+		sshConfig.AuthMode = sshclient.AuthModePassword
+		sshConfig.Password = node.Password
+	case sshAuthTypeAgent:
+		sshConfig.AuthMode = sshclient.AuthModeAgent
+	}
+
+	ctx := context.Background()
+	if a.ctx != nil {
+		ctx = a.ctx
+	}
+	testCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	// 指纹记录与服务器不一致时同样是直接换记录再连一次（与远程工具口径一致，
+	// 见 orch_remote.go 的 refreshHostKeyAndRetry），所以「测试」按钮不会再卡在
+	// 一个需要用户核对身份的失败上。
+	duration, err := refreshHostKeyAndRetry(func() (time.Duration, error) {
+		return sshclient.Test(testCtx, sshConfig)
+	})
+	if err != nil {
+		if errors.Is(err, sshclient.ErrAuthentication) {
+			return SSHTestResult{
+				OK:         false,
+				DurationMS: duration.Milliseconds(),
+				Error:      "认证失败，请检查用户名、密码或私钥配置",
+			}
+		}
+		return SSHTestResult{
+			OK:         false,
+			DurationMS: duration.Milliseconds(),
+			Error:      err.Error(),
+		}
+	}
+
+	return SSHTestResult{
+		OK:         true,
+		DurationMS: duration.Milliseconds(),
+	}
 }
