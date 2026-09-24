@@ -210,7 +210,7 @@ Public License v3. See the LICENSE file for details.
                   <span v-if="retryBanner.totalKeys > 1" class="composer-retry-key">{{ $t('app.run.retryKey', { key: retryBanner.keyIndex + 1, total: retryBanner.totalKeys }) }}</span>
                 </div>
                 <!-- 状态行：左侧三根条常驻表示“在跑”，右下只有一个标签，且只有思考阶段
-                     才带文字（Reasoning 12.4k tokens）——“Prompt Processing”与“Decoding”
+                     才带文字（Thinking 12.4k tokens）——“Prompt Processing”与“Decoding”
                      各自要占掉一轮里的大段时间，却不多说三根条以外的信息，已不再显示。
                      三根条（components/RunSpinner.vue）与流光同一灰调，两者共存但不抢
                      焦点；阶段判定见 utils/runPhase.mjs。 -->

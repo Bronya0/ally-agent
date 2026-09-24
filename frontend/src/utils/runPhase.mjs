@@ -21,7 +21,8 @@
 // already say — and the row is quieter for their absence. Every other phase
 // renders an empty string, so at most one shimmering element is ever present.
 //
-// The remaining label names a wire-level concept (reasoning tokens) and stays
+// The remaining label is the plain-language word for the thinking phase (the
+// count beside it is the wire-level reasoning-token estimate), and it stays
 // English regardless of the UI locale, the same convention the tool-card verbs
 // follow (see toolVerb.mjs).
 //
@@ -46,7 +47,7 @@ export const RUN_PHASE = {
 // The row's only wording. The phases themselves stay in the machine: they are
 // what hides the label again — a finished thinking burst must not linger into
 // the answer body or into tool execution — but none of them has text.
-const REASONING_LABEL = 'Reasoning';
+const REASONING_LABEL = 'Thinking';
 
 // The single string for the row's label slot. It is one string rather than the
 // word/number span pair it used to be, because the whole label now shares one

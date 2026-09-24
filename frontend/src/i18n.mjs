@@ -1357,7 +1357,7 @@ Response language: Preserve the response language already used in the current co
   'composer.git.ahead': 'Commits ahead of remote, not pushed', 'composer.git.behind': 'Commits behind remote',
   'composer.context.system': 'System prompt', 'composer.context.tools': 'Tool schemas',
   'composer.context.user': 'User messages', 'composer.context.assistant': 'AI responses',
-  'composer.context.results': 'Tool results', 'composer.context.reasoning': 'Reasoning',
+  'composer.context.results': 'Tool results', 'composer.context.reasoning': 'Thinking',
   'composer.context.input': 'Total input', 'composer.context.output': 'Total output',
   'composer.context.compact': 'Compact context',
   'composer.context.compactLessons': 'Compact lessons',

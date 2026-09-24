@@ -106,7 +106,7 @@ test('unrelated events leave the phase untouched', () => {
 });
 
 test('only the thinking phase has a label', () => {
-  assert.equal(phaseLabel(RUN_PHASE.reasoning, 12400), 'Reasoning 12.4k tokens');
+  assert.equal(phaseLabel(RUN_PHASE.reasoning, 12400), 'Thinking 12.4k tokens');
   assert.equal(phaseLabel(RUN_PHASE.prompt, 0), '', 'waiting for the first token says nothing');
   assert.equal(phaseLabel(RUN_PHASE.decoding, 0), '', 'the body speaks for itself');
   assert.equal(phaseLabel(RUN_PHASE.tools, 0), '', 'tool cards speak for themselves');
@@ -117,8 +117,8 @@ test('the token detail never rides along into another phase', () => {
   // A stale counter must not decorate a phase that is not thinking.
   assert.equal(phaseLabel(RUN_PHASE.decoding, 12400), '');
   assert.equal(phaseLabel(RUN_PHASE.prompt, 12400), '');
-  // A zero count would read as a claim ("Reasoning 0 tokens") the estimate
+  // A zero count would read as a claim ("Thinking 0 tokens") the estimate
   // cannot make, so the word stands alone until a count exists.
-  assert.equal(phaseLabel(RUN_PHASE.reasoning, 0), 'Reasoning');
-  assert.equal(phaseLabel(RUN_PHASE.reasoning, undefined), 'Reasoning');
+  assert.equal(phaseLabel(RUN_PHASE.reasoning, 0), 'Thinking');
+  assert.equal(phaseLabel(RUN_PHASE.reasoning, undefined), 'Thinking');
 });
