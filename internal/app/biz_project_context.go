@@ -210,7 +210,7 @@ func (a *App) saveBackgroundImageFromFile(srcPath string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := os.WriteFile(path, blob, 0o600); err != nil {
+	if err := writeAtomicBytes(path, blob, 0o600); err != nil {
 		return "", err
 	}
 	return filename, nil
@@ -238,7 +238,7 @@ func (a *App) ClearBackgroundImage() error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, blob, 0o600)
+	return writeAtomicBytes(path, blob, 0o600)
 }
 
 // GetBackgroundImageURL returns the stored background image as a data URL

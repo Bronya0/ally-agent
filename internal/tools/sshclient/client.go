@@ -713,8 +713,12 @@ func replaceFileAtomically(tmp, dst string) error {
 	if err := os.Rename(tmp, dst); err == nil {
 		return nil
 	}
+	// 不覆盖用户自己的 <dst>.bak：优先用固定名字，已被占用就退到带时间戳的名字
+	// （与 internal/app 的 atomicReplaceFile 同形，理由见该处注释）。
 	backup := dst + ".bak"
-	_ = os.Remove(backup)
+	if _, err := os.Lstat(backup); err == nil {
+		backup = fmt.Sprintf("%s.bak-%d", dst, time.Now().UnixNano())
+	}
 	if err := os.Rename(dst, backup); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}

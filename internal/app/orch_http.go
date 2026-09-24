@@ -51,7 +51,7 @@ func (a *App) httpRequestToolWithConfig(ctx context.Context, cfg ConfigState, re
 	// allowPrivateNetwork 关掉。schema 不暴露该字段，但模型仍能在 JSON 里带上
 	// （未知字段只给 warning），否则用户关掉的 SSRF 开关会被一句
 	// {"allowPrivateNetwork":true} 顶开。maxBytes 另有 maxHTTPBodyBytes 上限。
-	allowPrivate := cfg.AllowPrivateNetwork
+	allowPrivate := cfg.allowPrivateNetworkEnabled()
 	if req.AllowPrivateNetwork != nil && !*req.AllowPrivateNetwork {
 		allowPrivate = false
 	}
@@ -103,7 +103,7 @@ func (a *App) webFetchToolWithConfig(ctx context.Context, cfg ConfigState, req W
 	// allowPrivateNetwork 关掉。schema 不暴露该字段，但模型仍能在 JSON 里带上
 	// （未知字段只给 warning），否则用户关掉的 SSRF 开关会被一句
 	// {"allowPrivateNetwork":true} 顶开。maxBytes 另有 maxHTTPBodyBytes 上限。
-	allowPrivate := cfg.AllowPrivateNetwork
+	allowPrivate := cfg.allowPrivateNetworkEnabled()
 	if req.AllowPrivateNetwork != nil && !*req.AllowPrivateNetwork {
 		allowPrivate = false
 	}

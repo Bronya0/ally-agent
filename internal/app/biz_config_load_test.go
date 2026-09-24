@@ -137,3 +137,43 @@ func TestUnreadableConfigDecision(t *testing.T) {
 		t.Fatal("the invalid file must be kept as broken.json.corrupt-<timestamp>")
 	}
 }
+
+// TestAllowPrivateNetworkSurvivesReload: the SSRF guard switch is persisted, so a
+// user who turned it off must still be off after a restart. mergeConfig does not
+// carry the field (a request-level overlay must never widen it), so the load path
+// has to adopt the disk value explicitly — otherwise the permissive default
+// silently wins on every start.
+func TestAllowPrivateNetworkSurvivesReload(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	dir := filepath.Join(home, ".ally_agent")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(path, []byte(`{"allowPrivateNetwork": false}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	app := NewApp()
+	if err := app.ensureInitialized(); err != nil {
+		t.Fatal(err)
+	}
+	if app.config.allowPrivateNetworkEnabled() {
+		t.Fatal("a persisted allowPrivateNetwork=false must survive the load")
+	}
+
+	// A legacy config without the field keeps the permissive default instead of
+	// being read as "off".
+	if err := os.WriteFile(path, []byte(`{"workspace": "/tmp/x"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	legacy := NewApp()
+	if err := legacy.ensureInitialized(); err != nil {
+		t.Fatal(err)
+	}
+	if !legacy.config.allowPrivateNetworkEnabled() {
+		t.Fatal("a legacy config without the field must keep the permissive default")
+	}
+}

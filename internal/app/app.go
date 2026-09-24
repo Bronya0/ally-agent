@@ -472,12 +472,17 @@ type ConfigState struct {
 	// resolves its workspace to this path (SamePath), the session runs in
 	// knowledge-base mode: the KB system-prompt part is injected and the
 	// sources/ subdirectory becomes read-only for model tools.
-	KBRoot              string `json:"kbRoot,omitempty"`
-	MaxTokens           int    `json:"maxTokens"`
-	ContextWindow       int    `json:"contextWindow"`
-	TokenParam          string `json:"tokenParam,omitempty"`
-	CustomPrompt        string `json:"customPrompt"`
-	AllowPrivateNetwork bool   `json:"allowPrivateNetwork"`
+	KBRoot        string `json:"kbRoot,omitempty"`
+	MaxTokens     int    `json:"maxTokens"`
+	ContextWindow int    `json:"contextWindow"`
+	TokenParam    string `json:"tokenParam,omitempty"`
+	CustomPrompt  string `json:"customPrompt"`
+	// AllowPrivateNetwork is a pointer only so the load path can tell an explicit
+	// false (the user turned the SSRF guard off) from a field a legacy config.json
+	// never carried; nil means "never set" and must not open the guard (see
+	// allowPrivateNetworkEnabled). Request-level overlays cannot change it because
+	// mergeConfig does not carry the field.
+	AllowPrivateNetwork *bool  `json:"allowPrivateNetwork,omitempty"`
 	GitBashPath         string `json:"gitBashPath"`
 	ProxyMode           string `json:"proxyMode,omitempty"`
 	ProxyURL            string `json:"proxyUrl,omitempty"`
@@ -601,6 +606,14 @@ func (c ConfigState) autoUpdateEnabled() bool {
 		return *c.AutoUpdate
 	}
 	return true
+}
+
+// allowPrivateNetworkEnabled reports whether the http tools may reach private
+// addresses. A nil value (a ConfigState that never carried the field) denies:
+// the zero value must not be able to open the guard. defaultConfigState and the
+// config.json load path are the only places that set it.
+func (c ConfigState) allowPrivateNetworkEnabled() bool {
+	return boolDefault(c.AllowPrivateNetwork, false)
 }
 
 type ToolDefinitionSummary struct {
@@ -1375,6 +1388,12 @@ func (a *App) ensureInitialized() error {
 		var loaded ConfigState
 		if loaded, err = readConfigFile(loadPath); err == nil {
 			a.config = mergeConfig(a.config, loaded)
+			// mergeConfig 不携带该字段（它是请求级 overlay 的合并口，请求侧不得改写
+			// SSRF 开关），所以磁盘值由加载路径显式采纳；nil 表示旧配置没有这个键，
+			// 保留 defaultConfigState 的默认值。
+			if loaded.AllowPrivateNetwork != nil {
+				a.config.AllowPrivateNetwork = loaded.AllowPrivateNetwork
+			}
 		} else {
 			// 内容坏掉的配置不能留在原地：这次用了默认值，之后任意一次保存都会把
 			// 默认值写回同一个文件，用户的原设置就永久消失了。改名保留 + 记一行

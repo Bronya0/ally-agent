@@ -44,7 +44,7 @@ func defaultConfigState() ConfigState {
 		Model:                 defaultModel,
 		MaxTokens:             131072,
 		ContextWindow:         1000000,
-		AllowPrivateNetwork:   true,
+		AllowPrivateNetwork:   boolPtr(true),
 		ProxyMode:             proxyModeOff,
 		ReasoningTag:          defaultReasoningTag,
 		ReasoningEffort:       reasoningEffortMax,
@@ -577,7 +577,11 @@ func (a *App) SaveConfig(req ConfigState) error {
 	a.config.GitHubToken = strings.TrimSpace(req.GitHubToken)
 	// KBRoot 直接采用请求值（含清空），前端 draft 由 GetConfig 加载、整份回传。
 	a.config.KBRoot = strings.TrimSpace(req.KBRoot)
-	a.config.AllowPrivateNetwork = req.AllowPrivateNetwork
+	// nil 表示请求没有携带该字段（旧前端）：保留已加载的值，避免一次保存就把用户
+	// 关掉的 SSRF 开关静默打开。该字段不放进 mergeConfig，请求级 overlay 不得改写。
+	if req.AllowPrivateNetwork != nil {
+		a.config.AllowPrivateNetwork = req.AllowPrivateNetwork
+	}
 	a.config.GitBashPath = req.GitBashPath
 	a.config.ProxyMode = normalizeProxyMode(req.ProxyMode)
 	a.config.ProxyURL = strings.TrimSpace(req.ProxyURL)
@@ -614,7 +618,9 @@ func (a *App) SaveConfig(req ConfigState) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
+	// 同样走原子替换：设置页保存是最常被用户触碰的写入点，截断写中途崩溃会留下
+	// 半截 JSON，下次启动只能整份回落默认值（见 ensureInitialized）。
+	if err := writeAtomicBytes(path, data, 0o600); err != nil {
 		return err
 	}
 	if proxyChanged && a.ctx != nil {

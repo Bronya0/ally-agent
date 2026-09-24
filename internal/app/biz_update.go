@@ -924,6 +924,9 @@ func cleanAppliedUpdateDirs(rootDir, keepTag string) {
 // bundle replace flow). On any failure it rolls back so the previous
 // installation keeps running.
 func (a *App) ApplyUpdate(tag string) UpdateApplyResult {
+	// 校验与使用必须看到同一个值：validateUpdateTag 内部会 trim，这里若保留原值，
+	// " v1.2.3 " 能通过校验、随后按带空格的路径去 stat 暂存目录。
+	tag = strings.TrimSpace(tag)
 	if !updatePlatformSupported() {
 		return UpdateApplyResult{Error: "automatic update is only supported on windows x64 and macOS"}
 	}

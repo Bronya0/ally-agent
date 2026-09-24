@@ -73,7 +73,7 @@ func TestExecuteToolHTTPRequestJSONBodyDoubleEncodedString(t *testing.T) {
 	// allowPrivateNetwork 是配置级开关，请求侧只能收紧不能放宽：把私网许可放在
 	// config 上，模型参数不再需要（也拿不到）这个字段。
 	args := fmt.Sprintf(`{"method":"POST","url":%q,"json":"{\"title\":\"x\",\"n\":1}"}`, target.URL+"/echo")
-	result := app.executeTool(context.Background(), ConfigState{AllowPrivateNetwork: true}, "session-1", "http_request", []byte(args))
+	result := app.executeTool(context.Background(), ConfigState{AllowPrivateNetwork: boolPtr(true)}, "session-1", "http_request", []byte(args))
 	if !result.OK {
 		t.Fatalf("expected success, got error: %s", result.Error)
 	}
@@ -2515,7 +2515,7 @@ func TestWebFetchDefaultSourceLimitReadsPastLegacyHTTPCap(t *testing.T) {
 	defer server.Close()
 
 	app := NewApp()
-	got, err := app.webFetchToolWithConfig(context.Background(), ConfigState{AllowPrivateNetwork: true}, WebFetchRequest{URL: server.URL, MaxChars: 1000})
+	got, err := app.webFetchToolWithConfig(context.Background(), ConfigState{AllowPrivateNetwork: boolPtr(true)}, WebFetchRequest{URL: server.URL, MaxChars: 1000})
 	if err != nil {
 		t.Fatal(err)
 	}

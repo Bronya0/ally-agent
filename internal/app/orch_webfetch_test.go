@@ -12,7 +12,7 @@ import (
 )
 
 func webFetchTestConfig() ConfigState {
-	return ConfigState{AllowPrivateNetwork: true}
+	return ConfigState{AllowPrivateNetwork: boolPtr(true)}
 }
 
 // readable 模式：结构化文章页应提取出干净正文，且不含导航噪声。
