@@ -79,12 +79,11 @@ func (a *App) compactSessionRunning(sessionID string) bool {
 }
 
 // CompactSession compacts the conversation history for a session. Manual
-// compaction follows the SAME two-tier strategy as the automatic trigger
-// (see compactSession): micro-compaction first (zero LLM cost, clears stale
-// tool results), escalation to the LLM summary only when usage is still
-// above the configured threshold. All compaction entries — manual,
-// threshold, overflow — must keep this one strategy; per-entry special-case
-// paths are forbidden (they drift apart and break compaction).
+// compaction follows the SAME single strategy as the automatic trigger and the
+// overflow recovery (see compactSession): one LLM summary that rewrites the
+// history. All compaction entries — manual, threshold, overflow — must keep
+// this one strategy; per-entry special-case paths are forbidden (they drift
+// apart and break compaction).
 func (a *App) CompactSession(sessionID, instruction string) (map[string]any, error) {
 	parent := a.ctx
 	if parent == nil {
@@ -164,7 +163,6 @@ func (a *App) compactSession(parent context.Context, sessionID, instruction stri
 		delete(a.compactingCancels, sessionID)
 		a.mu.Unlock()
 		cancel()
-		a.emit("compact:done", map[string]any{"sessionId": sessionID})
 	}()
 
 	// loadSessionHistoryCopy 持 a.mu 读取并做磁盘懒加载回退（与 buildMessages
@@ -181,27 +179,11 @@ func (a *App) compactSession(parent context.Context, sessionID, instruction stri
 		tokensBefore = estimateTokensFromMessages(history)
 	}
 
-	// 统一压缩路径（与 runChat 的阈值两级完全一致）：先微压缩（零 LLM 成本，
-	// 把较旧回合的工具结果清成占位符），再按阈值判定是否升级为 LLM 总结压缩。
-	// 手动、阈值、溢出三条入口共用这一策略，禁止为任何入口另开特例路径。
-	if micro, cleared := microcompactMessages(history, defaultMicrocompactKeepRecentToolResults); cleared > 0 {
-		history = micro
-		// 历史被原地改写：provider 实测锚点描述的是改写前的请求，必须作废。
-		a.clearContextAnchor(sessionID)
-		a.saveHistory(sessionID, history)
-	}
-	tokensCurrent := a.getContextBreakdown(sessionID, "").Total
-	if tokensCurrent <= 0 {
-		tokensCurrent = estimateTokensFromMessages(history)
-	}
-	if tokensCurrent <= compactThresholdLimit(cfg) {
-		return map[string]any{
-			"tier":         "microcompact",
-			"tokensBefore": tokensBefore,
-			"tokensAfter":  tokensCurrent,
-		}, nil
-	}
-	return a.compactHistory(ctx, cfg, sessionID, instruction, history, tokensCurrent)
+	// 唯一压缩路径：手动、阈值、溢出三条入口都走同一档 LLM 总结压缩。曾经的
+	// “微压缩”档（把较旧回合的工具结果原地清成占位符）已删除：它在历史中段
+	// 原地改写，命中前缀之后的 provider 缓存全部作废，换回的却只有几条老工具
+	// 结果。tokensBefore/tokensAfter 仍按同一口径报给前端。
+	return a.compactHistory(ctx, cfg, sessionID, instruction, history, tokensBefore)
 }
 
 const (
@@ -279,6 +261,15 @@ func (a *App) compactHistory(ctx context.Context, cfg ConfigState, sessionID, in
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
+	// Exactly one completion event per compaction, emitted from the single place
+	// both the manual and the automatic path run through: the frontend closes its
+	// live summary bubble on it, and ok separates a cancelled or failed partial
+	// summary from a finished one.
+	done := false
+	defer func() {
+		a.emit("compact:done", map[string]any{"sessionId": sessionID, "ok": done})
+	}()
+
 	if len(history) == 0 {
 		return nil, errors.New("no messages to compact")
 	}
@@ -318,9 +309,11 @@ Bullet list of key file paths referenced or touched, explicitly describing each 
 
 
 ## Next Steps / 下一步工作
-Exact, prioritized next steps to take immediately.
+Mandatory and never abbreviated: the exact prioritized actions to take immediately, including tool actions that were planned but not yet executed. Name the exact file paths, commands, and identifiers each step touches. Vague filler ("continue", "keep going", "as planned") is not acceptable.
 
 Rules:
+- The "## Next Steps" section is the only copy of the plan that survives this rewrite: when work was interrupted mid-task, state the exact next tool action.
+- The agent's current todo list is appended verbatim after your summary automatically, so do not restate it; summarize everything else faithfully.
 - Strictly write in the user's language.
 - Do not call any tools. Output plain text Markdown directly.
 - Keep file paths, command strings, function names, and identifiers exact.
@@ -355,13 +348,32 @@ Rules:
 	// forcing a level here ("low" or a stop-thinking one) would silently diverge
 	// from what Settings shows, and a stop-thinking field breaks models that
 	// require thinking.
-	summary, usage, err := a.completeModelTextWithUsage(ctx, cfg, cfg.Model, compactionMessages, compactionMaxTokens)
+	// It streams: this is the longest single request of a compaction and the one
+	// place the user would otherwise watch a frozen timer, so thinking and answer
+	// deltas go straight to the UI, which renders them exactly like a normal reply.
+	summary, usage, err := a.streamModelTextWithUsage(ctx, cfg, cfg.Model, compactionMessages, compactionMaxTokens, func(contentDelta, reasoningDelta string) {
+		a.emit("compact:delta", map[string]any{
+			"sessionId": sessionID,
+			"content":   contentDelta,
+			"reasoning": reasoningDelta,
+		})
+	})
 	if err != nil {
 		return nil, fmt.Errorf("compaction failed: %w", err)
 	}
 
 	if strings.TrimSpace(summary) == "" {
 		return nil, errors.New("compaction returned empty summary")
+	}
+
+	// The plan tool's todo list lives in its tool result, so a full-history rewrite
+	// would replace the agent's structured task state with a prose sentence. Pin
+	// the latest one verbatim after the summary: it is written once, here, so it
+	// stays byte-stable in every later request (re-injecting a plan snapshot per
+	// turn is what would break the request prefix and the cache behind it).
+	fullSummary := summary
+	if plan := latestPlanSnapshot(messagesToSummarize); plan != "" {
+		fullSummary = strings.TrimRight(fullSummary, "\n") + "\n\n" + planSnapshotTagOpen + "\n" + plan + "\n" + planSnapshotTagClose
 	}
 
 	// Account the compaction LLM call in the workspace/token statistics so the
@@ -372,10 +384,9 @@ Rules:
 		fallbackInput = estimateRequestTokens(compactionMessages, nil)
 	}
 	if usage == nil || usage.CompletionTokens <= 0 {
-		fallbackOutput = estimateCompletionTokens(summary, "", nil)
+		fallbackOutput = estimateCompletionTokens(fullSummary, "", nil)
 	}
 	a.recordWorkspaceTokenUsage(cfg.Workspace, usage, fallbackInput, fallbackOutput)
-	fullSummary := summary
 
 	// Replace history cleanly with just the compacted summary as a clean start.
 	newHistory := []openai.ChatCompletionMessage{
@@ -397,12 +408,61 @@ Rules:
 		tokensAfter = estimateTokensFromMessages(newHistory)
 	}
 
+	done = true
+	// The reported summary is the rewritten history itself (pinned plan snapshot
+	// included), not the raw model text: the UI replaces the transcript with this
+	// string, so the two must not drift apart.
 	return map[string]any{
 		"tier":         "summary",
-		"summary":      summary,
+		"summary":      fullSummary,
 		"tokensBefore": tokensBefore,
 		"tokensAfter":  tokensAfter,
 	}, nil
+}
+
+// planToolName is the built-in tool whose result carries the agent's todo list.
+const planToolName = "plan"
+
+const (
+	planSnapshotTagOpen  = "<ally-plan-snapshot>"
+	planSnapshotTagClose = "</ally-plan-snapshot>"
+)
+
+// latestPlanSnapshot returns the rendered result of the most recent plan tool
+// call in the history being summarized, or "" when the conversation never used
+// it. The todo list is only addressable through the tool result that produced
+// it, so the call ids have to be collected from the assistant turns first.
+func latestPlanSnapshot(messages []openai.ChatCompletionMessage) string {
+	planCallIDs := make(map[string]struct{})
+	for _, m := range messages {
+		if m.Role != openai.ChatMessageRoleAssistant {
+			continue
+		}
+		for _, tc := range m.ToolCalls {
+			if strings.EqualFold(strings.TrimSpace(tc.Function.Name), planToolName) {
+				planCallIDs[tc.ID] = struct{}{}
+			}
+		}
+	}
+	if len(planCallIDs) == 0 {
+		return ""
+	}
+	for i := len(messages) - 1; i >= 0; i-- {
+		m := messages[i]
+		if m.Role != openai.ChatMessageRoleTool {
+			continue
+		}
+		if _, ok := planCallIDs[m.ToolCallID]; !ok {
+			continue
+		}
+		content := strings.TrimSpace(m.Content)
+		// Placeholders carry no todo state; keep looking further back.
+		if content == "" || content == toolResultPlaceholder {
+			continue
+		}
+		return content
+	}
+	return ""
 }
 
 // intFromAny converts a JSON-decoded (float64) or native (int) numeric value

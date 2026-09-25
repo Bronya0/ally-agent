@@ -1,12 +1,39 @@
 package app
 
 import (
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	openai "github.com/sashabaranov/go-openai"
 )
+
+// compactEventRecorder captures the compaction event stream, so a test can
+// assert what the UI would have seen while the summary was produced.
+type compactEventRecorder struct {
+	mu     sync.Mutex
+	events map[string][]string
+}
+
+func (r *compactEventRecorder) Emit(name string, payload any) {
+	encoded, _ := json.Marshal(payload)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.events == nil {
+		r.events = map[string][]string{}
+	}
+	r.events[name] = append(r.events[name], string(encoded))
+}
+
+func (r *compactEventRecorder) payloads(name string) []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.events[name]...)
+}
 
 // TestNewAppInitializesCompactionMaps guards the compactSession in-flight
 // state: a nil map write while a.mu is held panics and leaves the mutex
@@ -105,27 +132,38 @@ func TestCompactSessionReplaysSessionModelConfig(t *testing.T) {
 	}
 }
 
-// TestCompactSessionManualUsesUnifiedTwoTierPath pins the unified compaction
-// strategy: the manual button runs the SAME two-tier flow as the automatic
-// trigger — micro-compaction first, escalation to the LLM summary only when
-// usage is still above the threshold. Below the threshold the manual call
-// must stop at the microcompact tier with NO LLM request, and the rewritten
-// history (old tool results as placeholders) must be persisted.
-func TestCompactSessionManualUsesUnifiedTwoTierPath(t *testing.T) {
+// TestCompactSessionManualAlwaysRunsTheSummaryTier pins the single compaction
+// strategy: manual, threshold and overflow all go through one LLM summary that
+// rewrites the history. Below the auto threshold the manual button used to stop
+// at the (now deleted) micro-compaction tier, which rewrote the middle of the
+// history in place and broke the provider prompt cache from that point on.
+func TestCompactSessionManualAlwaysRunsTheSummaryTier(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, sseChatChunk("## 已完成工作\n- 压缩前的历史"))
+		fmt.Fprint(w, sseChatFinishChunk("stop"))
+		fmt.Fprint(w, sseDone)
+	}))
+	defer server.Close()
+
 	app := NewApp()
 	app.initialized = true
+	app.stats = nil // skip token-stat persistence
 	app.config = defaultConfigState()
 	app.config.Model = "test-model"
 	app.config.APIKey = "test-key"
-	const sessionID = "session-manual-two-tier"
+	app.config.APIFormat = apiFormatOpenAIChat
+	app.config.BaseURL = server.URL
+	recorder := &compactEventRecorder{}
+	app.events = recorder
+	const sessionID = "session-manual-single-tier"
 
-	history := []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleUser, Content: "go"}}
-	for i := 0; i < 6; i++ {
-		id := fmt.Sprintf("c%d", i)
-		history = append(history,
-			openai.ChatCompletionMessage{Role: openai.ChatMessageRoleAssistant, ToolCalls: []openai.ToolCall{{ID: id}}},
-			openai.ChatCompletionMessage{Role: openai.ChatMessageRoleTool, ToolCallID: id, Content: strings.Repeat("x", 5000)},
-		)
+	// The todo list of the plan tool only lives in its tool result: the rewrite
+	// must carry it over verbatim instead of trusting the prose summary.
+	history := []openai.ChatCompletionMessage{
+		{Role: openai.ChatMessageRoleUser, Content: "go"},
+		{Role: openai.ChatMessageRoleAssistant, ToolCalls: []openai.ToolCall{{ID: "p1", Function: openai.FunctionCall{Name: "plan", Arguments: `{"todos":[]}`}}}},
+		{Role: openai.ChatMessageRoleTool, ToolCallID: "p1", Content: "Todos:\n- [ ] 收尾前端"},
 	}
 	app.saveHistory(sessionID, history)
 
@@ -133,65 +171,54 @@ func TestCompactSessionManualUsesUnifiedTwoTierPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CompactSession() error = %v", err)
 	}
-	if result["tier"] != "microcompact" {
-		t.Fatalf("manual compact below the threshold must stop at the microcompact tier, got tier=%v result=%v", result["tier"], result)
+	if result["tier"] != "summary" {
+		t.Fatalf("tier = %v, want summary (one LLM tier only)", result["tier"])
 	}
-	if _, hasSummary := result["summary"]; hasSummary {
-		t.Fatal("no LLM summary may run when usage is below the threshold")
+	summary, _ := result["summary"].(string)
+	if !strings.Contains(summary, "已完成工作") {
+		t.Fatalf("summary = %q, want the model summary", summary)
+	}
+
+	// The streamed deltas and the one completion event are what the UI renders.
+	if len(recorder.payloads("compact:delta")) == 0 {
+		t.Fatal("the summary call must stream compact:delta events")
+	}
+	done := recorder.payloads("compact:done")
+	if len(done) != 1 || !strings.Contains(done[0], `"ok":true`) {
+		t.Fatalf("compact:done = %#v, want exactly one with ok=true", done)
 	}
 
 	after := app.loadSessionHistoryCopy(sessionID)
-	placeholders := 0
-	for _, m := range after {
-		if m.Role == openai.ChatMessageRoleTool && m.Content == toolResultPlaceholder {
-			placeholders++
-		}
+	if len(after) != 1 || after[0].Role != openai.ChatMessageRoleUser {
+		t.Fatalf("history after compaction = %#v, want the single summary message", after)
 	}
-	if placeholders == 0 {
-		t.Fatal("the microcompacted history (tool results as placeholders) must be persisted")
+	if !strings.Contains(after[0].Content, "<ally-plan-snapshot>") || !strings.Contains(after[0].Content, "收尾前端") {
+		t.Fatalf("the plan snapshot must survive the rewrite: %q", after[0].Content)
+	}
+	if after[0].Content != summary {
+		t.Fatalf("the persisted summary and the reported one must not drift apart:\n%q\n%q", after[0].Content, summary)
 	}
 	if app.compactSessionRunning(sessionID) {
 		t.Fatal("in-flight compaction state must be cleaned up")
 	}
 }
 
-func TestMicrocompactionReducesBreakdownWithAccumulatorReset(t *testing.T) {
-	hugeToolOutput := strings.Repeat("a", 10000)
+// TestLatestPlanSnapshot pins the lookup: the newest plan result wins, but a
+// result already replaced by the placeholder carries no todo state and must be
+// skipped in favour of the newest one that still has some.
+func TestLatestPlanSnapshot(t *testing.T) {
 	messages := []openai.ChatCompletionMessage{
-		{Role: openai.ChatMessageRoleUser, Content: "read file"},
-		{Role: openai.ChatMessageRoleAssistant, ToolCalls: []openai.ToolCall{{ID: "c1"}}},
-		{Role: openai.ChatMessageRoleTool, ToolCallID: "c1", Content: hugeToolOutput},
-		{Role: openai.ChatMessageRoleAssistant, ToolCalls: []openai.ToolCall{{ID: "c2"}}},
-		{Role: openai.ChatMessageRoleTool, ToolCallID: "c2", Content: "recent 1"},
-		{Role: openai.ChatMessageRoleAssistant, ToolCalls: []openai.ToolCall{{ID: "c3"}}},
-		{Role: openai.ChatMessageRoleTool, ToolCallID: "c3", Content: "recent 2"},
-		{Role: openai.ChatMessageRoleAssistant, ToolCalls: []openai.ToolCall{{ID: "c4"}}},
-		{Role: openai.ChatMessageRoleTool, ToolCallID: "c4", Content: "recent 3"},
-		{Role: openai.ChatMessageRoleAssistant, ToolCalls: []openai.ToolCall{{ID: "c5"}}},
-		{Role: openai.ChatMessageRoleTool, ToolCallID: "c5", Content: "recent 4"},
+		{Role: openai.ChatMessageRoleAssistant, ToolCalls: []openai.ToolCall{{ID: "p1", Function: openai.FunctionCall{Name: "plan"}}}},
+		{Role: openai.ChatMessageRoleTool, ToolCallID: "p1", Content: "Todos:\n- [ ] old"},
+		{Role: openai.ChatMessageRoleAssistant, ToolCalls: []openai.ToolCall{{ID: "r1", Function: openai.FunctionCall{Name: "read"}}}},
+		{Role: openai.ChatMessageRoleTool, ToolCallID: "r1", Content: "file body"},
+		{Role: openai.ChatMessageRoleAssistant, ToolCalls: []openai.ToolCall{{ID: "p2", Function: openai.FunctionCall{Name: "plan"}}}},
+		{Role: openai.ChatMessageRoleTool, ToolCallID: "p2", Content: toolResultPlaceholder},
 	}
-
-	acc := newLiveBreakdownAccumulator(messages)
-	before := acc.update(messages)
-	if before.Total < 2000 {
-		t.Fatalf("expected initial tokens > 2000, got %d", before.Total)
+	if got := latestPlanSnapshot(messages); got != "Todos:\n- [ ] old" {
+		t.Fatalf("latestPlanSnapshot() = %q, want the newest result that still carries state", got)
 	}
-
-	microcompacted, cleared := microcompactMessages(messages, 4)
-	if cleared != 1 {
-		t.Fatalf("expected 1 tool result cleared, got %d", cleared)
-	}
-
-	// Without reset, update() on in-place mutated slice yields old cached tokens
-	unresetTokens := acc.update(microcompacted).Total
-	if unresetTokens != before.Total {
-		t.Fatalf("update() without reset should have failed to recalculate tokens, got %d vs %d", unresetTokens, before.Total)
-	}
-
-	// With reset(), accumulator properly recalculates from beginning
-	acc.reset(microcompacted)
-	afterResetTokens := acc.update(microcompacted).Total
-	if afterResetTokens >= before.Total || afterResetTokens > 500 {
-		t.Fatalf("expected tokens after reset to drop drastically from %d, got %d", before.Total, afterResetTokens)
+	if got := latestPlanSnapshot(messages[3:]); got != "" {
+		t.Fatalf("latestPlanSnapshot() without a plan call = %q, want empty", got)
 	}
 }

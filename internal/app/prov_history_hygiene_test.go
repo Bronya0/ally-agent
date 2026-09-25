@@ -157,46 +157,6 @@ func TestRepairDanglingToolCalls(t *testing.T) {
 	})
 }
 
-func TestMicrocompactMessages(t *testing.T) {
-	longOutput := strings.Repeat("huge log line\n", 50)
-	shortOutput := `{"ok":true}`
-
-	messages := []openai.ChatCompletionMessage{
-		{Role: openai.ChatMessageRoleUser, Content: "read file 1"},
-		{Role: openai.ChatMessageRoleAssistant, ToolCalls: []openai.ToolCall{{ID: "c1"}}},
-		{Role: openai.ChatMessageRoleTool, ToolCallID: "c1", Content: longOutput},
-		{Role: openai.ChatMessageRoleUser, Content: "read file 2"},
-		{Role: openai.ChatMessageRoleAssistant, ToolCalls: []openai.ToolCall{{ID: "c2"}}},
-		{Role: openai.ChatMessageRoleTool, ToolCallID: "c2", Content: shortOutput},
-		{Role: openai.ChatMessageRoleUser, Content: "read file 3"},
-		{Role: openai.ChatMessageRoleAssistant, ToolCalls: []openai.ToolCall{{ID: "c3"}}},
-		{Role: openai.ChatMessageRoleTool, ToolCallID: "c3", Content: longOutput},
-		{Role: openai.ChatMessageRoleUser, Content: "read file 4"},
-		{Role: openai.ChatMessageRoleAssistant, ToolCalls: []openai.ToolCall{{ID: "c4"}}},
-		{Role: openai.ChatMessageRoleTool, ToolCallID: "c4", Content: longOutput},
-	}
-
-	// Keep last 2 tool results: c3 and c4 should be kept.
-	// c1 (long) should be cleared to toolResultPlaceholder.
-	// c2 (short) is not cleared because len <= placeholder len.
-	compacted, cleared := microcompactMessages(messages, 2)
-	if cleared != 1 {
-		t.Fatalf("expected 1 cleared tool message, got %d", cleared)
-	}
-	if compacted[2].Content != toolResultPlaceholder {
-		t.Fatalf("expected c1 to be placeholder, got %q", compacted[2].Content)
-	}
-	if compacted[5].Content != shortOutput {
-		t.Fatalf("expected c2 to stay shortOutput, got %q", compacted[5].Content)
-	}
-	if compacted[8].Content != longOutput {
-		t.Fatalf("expected c3 to be untouched, got %q", compacted[8].Content)
-	}
-	if compacted[11].Content != longOutput {
-		t.Fatalf("expected c4 to be untouched, got %q", compacted[11].Content)
-	}
-}
-
 func TestIsAnthropicSignatureRejectionError(t *testing.T) {
 	cases := []struct {
 		err  string

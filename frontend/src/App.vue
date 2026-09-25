@@ -2559,10 +2559,17 @@ const activeSessionRunning = computed(() => !!activeSession.value?.isRunning);
 const activeThinkingTokenCount = computed(() => {
   const session = activeSession.value;
   const messages = session?.messages;
-  if (!session?.isRunning || !session.runId || !Array.isArray(messages)) return 0;
+  if (!Array.isArray(messages)) return 0;
+  // A compaction has no run of its own: its summary streams on the synthetic
+  // compaction run id, so that bubble carries the live thinking count while the
+  // compaction is in flight (and the run's id takes over again once it ends).
+  const runId = compactStateFor(session?.id)
+    ? compactStreamRunId(session?.id)
+    : (session?.runId || '');
+  if (!runId) return 0;
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i];
-    if (msg?.role === 'assistant' && msg.streaming && msg.runId === session.runId) {
+    if (msg?.role === 'assistant' && msg.streaming && msg.runId === runId) {
       if (!msg.reasoningActive || !(msg.reasoningChars > 0)) return 0;
       return Math.max(1, Math.round(Number(msg.reasoningChars) / 3));
     }
@@ -4242,6 +4249,20 @@ function sessionByRunId(runId) {
   return sessions.value.find(s => s.runId === runId) || null;
 }
 
+// Compaction streams its summary through the same buffered renderer as a run,
+// under a synthetic run id that can never collide with a real one: the live
+// summary bubble, the thinking indicator and the scroll handling then come for
+// free instead of needing a second render path.
+const COMPACT_STREAM_RUN_PREFIX = 'compact:';
+function compactStreamRunId(sessionId) {
+  return `${COMPACT_STREAM_RUN_PREFIX}${sessionId}`;
+}
+function sessionByCompactStreamRunId(runId) {
+  const id = String(runId || '');
+  if (!id.startsWith(COMPACT_STREAM_RUN_PREFIX)) return null;
+  return sessions.value.find(s => s.id === id.slice(COMPACT_STREAM_RUN_PREFIX.length)) || null;
+}
+
 function sessionByEvent(data) {
   const sid = data?.sessionId || '';
   if (sid) return sessions.value.find(s => s.id === sid) || null;
@@ -4353,7 +4374,7 @@ function flushStreamBuffer(runId) {
   const buffer = streamBuffers.get(runId);
   if (!buffer) return;
   streamBuffers.delete(runId);
-  const session = sessionByRunId(runId);
+  const session = sessionByRunId(runId) || sessionByCompactStreamRunId(runId);
   if (!session) return;
   // Reuse the last assistant message that is still streaming for this run.
   // Scanning (not just peeking the tail) keeps an injected user message that
@@ -4893,9 +4914,34 @@ function bindRuntimeEvents() {
       startCompactTracking(sid, text);
     }
   });
+  // Compaction summary streaming: the backend streams the summary call the same
+  // way it streams a normal answer, so the thinking phase and the summary body
+  // are visible while they are produced instead of a bare timer. The synthetic
+  // run id is what routes it into the buffered renderer above.
+  onRuntimeEvent('compact:delta', (data) => {
+    const sid = data?.sessionId || '';
+    if (!sid) return;
+    queueStreamDelta({ ...data, runId: compactStreamRunId(sid) });
+  });
   onRuntimeEvent('compact:done', (data) => {
     const sid = data?.sessionId || '';
-    if (sid) delete compactingSessions[sid];
+    if (!sid) return;
+    delete compactingSessions[sid];
+    // Close the live summary bubble here, from the one event both the manual and
+    // the automatic path emit: a failed or cancelled compaction must not leave
+    // its half-written summary in the transcript as if it had been applied. On
+    // success the bubble is replaced by the final summary right after
+    // (run:compacted for the automatic path, CompactSession's return value for
+    // the manual one).
+    const session = sessions.value.find(s => s.id === sid) || null;
+    if (!session) return;
+    const runId = compactStreamRunId(sid);
+    flushStreamBuffer(runId);
+    const idx = session.messages.findIndex(m => m?.role === 'assistant' && m.runId === runId);
+    if (idx < 0) return;
+    if (data?.ok === false) session.messages.splice(idx, 1);
+    else session.messages[idx].streaming = false;
+    scheduleSaveSessions();
   });
   // Auto-compaction: the backend emits run:compact before the blocking summary
   // request and run:compacted after it. Surface the token delta so the sudden
@@ -4907,6 +4953,16 @@ function bindRuntimeEvents() {
     if (data?.error) {
       if (sid === activeSessionId.value) message.warning(t('app.compact.failed', { error: data.error }));
       return;
+    }
+    // The backend already replaced the history with the summary: mirror that in
+    // the UI, otherwise the pre-compaction transcript stays on screen while the
+    // next request is built from a history that no longer contains it.
+    const summary = String(data?.summary || '');
+    const session = sessions.value.find(s => s.id === sid) || null;
+    if (summary && session) {
+      streamBuffers.delete(compactStreamRunId(sid));
+      session.messages = [{ role: 'assistant', content: summary }];
+      scheduleSaveSessions();
     }
     const before = Number(data?.tokensBefore || 0);
     const after = Number(data?.tokensAfter || 0);
@@ -7560,7 +7616,9 @@ async function handleCompactCommand() {
     delete compactingSessions[session.id];
 
     if (result?.summary) {
-      // Summary tier: replace UI messages cleanly with just the LLM summary as an assistant message
+      // Replace the transcript with the summary the backend just wrote to the
+      // history. The bubble that streamed during compaction was a live preview of
+      // exactly this text, so the swap is seamless.
       session.messages = [
         {
           role: 'assistant',
@@ -7569,19 +7627,6 @@ async function handleCompactCommand() {
       ];
 
       persistCompletedSession(session);
-    } else {
-      // Microcompact tier (unified two-tier path): the backend rewrote the
-      // stored history in place — old tool results became placeholders — and
-      // usage landed below the summary threshold, so no summary was produced.
-      // Reload from the backend so the UI matches; never write the stale UI
-      // messages back (persistCompletedSession here would overwrite the
-      // microcompacted history with the old full tool results).
-      session.messagesLoaded = false;
-      await loadSessionMessages(session);
-      persistCompletedSession(session);
-      const before = Number(result?.tokensBefore || 0);
-      const after = Number(result?.tokensAfter || 0);
-      message.info(t('app.compact.microDone', { before: fmtK(before), after: fmtK(after) }));
     }
 
     // Refresh context

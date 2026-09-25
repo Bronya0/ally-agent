@@ -521,6 +521,16 @@ func (a *App) completeModelText(ctx context.Context, cfg ConfigState, model stri
 // the call in the workspace/token statistics with the same fidelity as the
 // chat loop. Callers that ignore usage keep the old single-value signature.
 func (a *App) completeModelTextWithUsage(ctx context.Context, cfg ConfigState, model string, messages []legacyopenai.ChatCompletionMessage, maxTokens int) (string, *modelUsage, error) {
+	return a.streamModelTextWithUsage(ctx, cfg, model, messages, maxTokens, nil)
+}
+
+// streamModelTextWithUsage is completeModelTextWithUsage with a live delta
+// callback, so non-chat flows can render the response while it is produced
+// (compaction shows the thinking phase and the summary body instead of a
+// frozen timer). It owns the "what counts as the answer" fallbacks below, so a
+// caller that streams the deltas and a caller that only reads the returned
+// content always end up with the same text.
+func (a *App) streamModelTextWithUsage(ctx context.Context, cfg ConfigState, model string, messages []legacyopenai.ChatCompletionMessage, maxTokens int, onDelta func(contentDelta, reasoningDelta string)) (string, *modelUsage, error) {
 	next := cfg
 	next.MaxTokens = maxTokens
 	// Like normal chat, stream the response and capture all content/reasoning deltas
@@ -532,6 +542,9 @@ func (a *App) completeModelTextWithUsage(ctx context.Context, cfg ConfigState, m
 		}
 		if event.ReasoningDelta != "" {
 			reasoningBuilder.WriteString(event.ReasoningDelta)
+		}
+		if onDelta != nil && (event.ContentDelta != "" || event.ReasoningDelta != "") {
+			onDelta(event.ContentDelta, event.ReasoningDelta)
 		}
 	})
 	if err != nil {

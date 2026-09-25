@@ -1893,42 +1893,20 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 		usedTokens := bd.Total
 		compactThreshold := compactThresholdLimit(cfg)
 		if usedTokens > compactThreshold {
-			// Micro-compaction: clear large, stale tool results older than recent turns
-			// to reclaim tokens without triggering expensive LLM summarization.
-			if microcompacted, cleared := microcompactMessages(messages, defaultMicrocompactKeepRecentToolResults); cleared > 0 {
-				tokensBefore := usedTokens
-				messages = microcompacted
+			// Single compaction tier: the LLM summary. It is a complete rewrite of
+			// the history (see compactRunHistory). The former "micro-compaction"
+			// tier is gone: it rewrote the middle of the history in place on every
+			// threshold crossing, which invalidated the provider prompt cache from
+			// the rewrite point onward while reclaiming only a few stale tool
+			// results.
+			if newMessages, payload, compactErr := a.compactRunHistory(ctx, cfg, sessionID, compactReasonThreshold, req, messages, usedTokens); compactErr == nil {
+				messages = newMessages
 				readCache.invalidate()
-				// The history was rewritten in place — same message count, much
-				// smaller payload — but a recorded provider measurement is only
-				// validated by message count. Left in place it would keep the total
-				// pinned to the pre-clearing request, and the macro summary below
-				// would still fire for a context that no longer exists.
-				a.clearContextAnchor(sessionID)
 				bd = syncBreakdown(messages, true)
 				usedTokens = bd.Total
-				// tokensBefore/tokensAfter are what the frontend's "context shrank"
-				// notice reads: this rewrite drops the footer counter just as visibly
-				// as the macro summary does, so it has to report the same pair.
-				a.emit("run:compacted", map[string]any{
-					"sessionId":    sessionID,
-					"reason":       "microcompact",
-					"clearedCount": cleared,
-					"tokensBefore": tokensBefore,
-					"tokensAfter":  usedTokens,
-				})
-			}
-			// If still above threshold after microcompact, proceed to macro LLM summary.
-			if usedTokens > compactThreshold {
-				if newMessages, payload, compactErr := a.compactRunHistory(ctx, cfg, sessionID, compactReasonThreshold, req, messages, usedTokens); compactErr == nil {
-					messages = newMessages
-					readCache.invalidate()
-					bd = syncBreakdown(messages, true)
-					usedTokens = bd.Total
-					a.emit("run:compacted", payload)
-				} else if !errors.Is(compactErr, errHistoryTooShortToCompact) {
-					a.emit("run:compacted", map[string]any{"sessionId": sessionID, "error": compactErr.Error()})
-				}
+				a.emit("run:compacted", payload)
+			} else if !errors.Is(compactErr, errHistoryTooShortToCompact) {
+				a.emit("run:compacted", map[string]any{"sessionId": sessionID, "error": compactErr.Error()})
 			}
 		}
 
@@ -2030,24 +2008,6 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			// 失败)把两条原因一起报出来，用户才知道只能删历史自救。
 			if !overflowCompacted && !emittedEvents && classifyLLMError(err) == llmErrorKindContextTooLong {
 				overflowCompacted = true
-				if microcompacted, cleared := microcompactMessages(messages, 2); cleared > 0 {
-					tokensBefore := usedTokens
-					messages = microcompacted
-					requestMessages = messages
-					readCache.invalidate()
-					// Same in-place rewrite as the threshold path above: the recorded
-					// provider measurement describes a request that no longer exists.
-					a.clearContextAnchor(sessionID)
-					after := syncBreakdown(messages, true)
-					a.emit("run:compacted", map[string]any{
-						"sessionId":    sessionID,
-						"reason":       "microcompact_overflow",
-						"clearedCount": cleared,
-						"tokensBefore": tokensBefore,
-						"tokensAfter":  after.Total,
-					})
-					continue
-				}
 				newMessages, payload, compactErr := a.compactRunHistory(ctx, cfg, sessionID, compactReasonOverflow, req, messages, usedTokens)
 				if compactErr != nil {
 					emitRunEnd("run:error", "error", map[string]any{"error": fmt.Sprintf("%v；上下文超出模型窗口且压缩失败(%v)，请删除部分历史或改用窗口更大的模型后重试", err, compactErr)})

@@ -241,55 +241,6 @@ func textFromMultiContent(parts []openai.ChatMessagePart) string {
 	return b.String()
 }
 
-const defaultMicrocompactKeepRecentToolResults = 4
-
-// microcompactMessages clears the content of older tool result messages in-memory,
-// replacing them with toolResultPlaceholder. Only results older than
-// keepRecentToolResults and larger than the placeholder are cleared (clearing a
-// shorter one would grow the request). Preserves message sequence and tool pairing
-// while reclaiming tokens without LLM summarization.
-//
-// Callers must drop both the provider measurement anchor and the run's read cache
-// afterwards: the anchor is validated by message count (unchanged here) and the read
-// cache must let the model re-obtain anything it still needs by reading again.
-func microcompactMessages(messages []openai.ChatCompletionMessage, keepRecentToolResults int) ([]openai.ChatCompletionMessage, int) {
-	if len(messages) == 0 || keepRecentToolResults <= 0 {
-		return messages, 0
-	}
-	seenToolResults := 0
-	cutoffIdx := -1
-	for i := len(messages) - 1; i >= 0; i-- {
-		if messages[i].Role == openai.ChatMessageRoleTool {
-			seenToolResults++
-			if seenToolResults >= keepRecentToolResults {
-				cutoffIdx = i
-				break
-			}
-		}
-	}
-	if cutoffIdx <= 0 {
-		return messages, 0
-	}
-
-	out := make([]openai.ChatCompletionMessage, len(messages))
-	copy(out, messages)
-	clearedCount := 0
-	placeholderLen := len(toolResultPlaceholder)
-
-	for i := 0; i < cutoffIdx; i++ {
-		if out[i].Role == openai.ChatMessageRoleTool {
-			if len(out[i].Content) > placeholderLen && out[i].Content != toolResultPlaceholder {
-				out[i].Content = toolResultPlaceholder
-				clearedCount++
-			}
-		}
-	}
-	if clearedCount == 0 {
-		return messages, 0
-	}
-	return out, clearedCount
-}
-
 // stripReasoningContent returns a copy of messages with ReasoningContent cleared
 // on all assistant messages. Used during cross-model switches to avoid sending
 // irrelevant reasoning traces from previous models and prevent 400 signature rejections.
