@@ -411,9 +411,10 @@ func TestResponsesStreamReplaysReasoningItems(t *testing.T) {
 	if !strings.Contains(second, "rs_1") {
 		t.Fatal("second Responses request must reference the reasoning item id")
 	}
-	if !strings.Contains(second, "reasoning.encrypted_content") {
-		t.Fatal("requests must ask for reasoning.encrypted_content via include")
-	}
+	// The include field that asks for the encrypted copy is an OpenAI-official
+	// request field and is gated on the official endpoint (this recorder points at
+	// a local test server), so only the replay half belongs here — the request
+	// shape is pinned by TestOpenAIResponsesEncryptedReasoningIncludeIsOfficialOnly.
 }
 
 // ── helpers ─────────────────────────────────────────────────────────────────

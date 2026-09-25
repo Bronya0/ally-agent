@@ -39,7 +39,12 @@ func (a *App) streamAnthropicMessages(ctx context.Context, cfg ConfigState, mode
 	client := anthropic.NewClient(clientOptions...)
 
 	replay := a.reasoningStash.get(reasoningReplayKey(cfg, model))
-	system, anthropicMessages := buildAnthropicMessages(messages, replay, isOfficialAnthropicEndpoint(cfg))
+	// One identity check for the whole request: the official endpoint is the one
+	// that validates thinking signatures and the one whose cache-control ttl
+	// field is written out (see buildAnthropicMessages and
+	// markAnthropicPromptCacheBreakpoints).
+	officialEndpoint := isOfficialAnthropicEndpoint(cfg)
+	system, anthropicMessages := buildAnthropicMessages(messages, replay, officialEndpoint)
 	if len(anthropicMessages) == 0 || anthropicMessages[0].Role != anthropic.MessageParamRoleUser {
 		anthropicMessages = append([]anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock("..."))}, anthropicMessages...)
 	}
@@ -55,10 +60,12 @@ func (a *App) streamAnthropicMessages(ctx context.Context, cfg ConfigState, mode
 		params.Tools = convertToolsToAnthropic(tools)
 	}
 	// Prompt-cache breakpoints: one on the last tool definition, one on the last
-	// system block, one on the last content block of the last real message.
-	// Supported by official Anthropic and Anthropic-compatible reverse
-	// proxies/gateways; the ttl is pinned to the provider default (5m).
-	markAnthropicPromptCacheBreakpoints(&params)
+	// system block, one on the last content block of the last message. The
+	// markers themselves are understood by official Anthropic and by
+	// Anthropic-compatible reverse proxies/gateways; the ttl field is only
+	// written for the official endpoint (see
+	// markAnthropicPromptCacheBreakpoints).
+	markAnthropicPromptCacheBreakpoints(&params, officialEndpoint)
 	// Thinking configuration for Anthropic:
 	// - For adaptive models (Claude 4.6+/5+): thinking: { type: "adaptive" } and output_config.effort.
 	// - For budget models (Claude 3.7 Sonnet): thinking: { type: "enabled", budget_tokens: N } without output_config.effort
@@ -446,21 +453,28 @@ func buildAnthropicMessages(messages []legacyopenai.ChatCompletionMessage, repla
 	return strings.Join(systemParts, "\n\n"), out
 }
 
-// markAnthropicPromptCacheBreakpoints places explicit prompt-cache
-// breakpoints: one on the last tool definition and one on the last system block
-// (together they cache tools+system, reusable across runs while the header bytes
-// stay stable), and one on the last content
-// block of the last non-transient message (caches the stable request prefix
-// so it grows incrementally across agent steps). Transient tail items such as
-// <ally-context-budget> (currently disabled; see the commented call in
-// runChat) are rebuilt every request and stay outside the cached prefix, so
-// they can appear, change, or vanish without invalidating anything.
-// Anthropic allows up to 4 breakpoints; 3 are used (the last tool, the last
-// system block, the last non-transient block of the last message). The ttl is
-// pinned to "5m", Anthropic's documented default, written out explicitly so
-// every request carries the same breakpoint marker.
-func markAnthropicPromptCacheBreakpoints(params *anthropic.MessageNewParams) {
-	cc := anthropic.CacheControlEphemeralParam{TTL: anthropic.CacheControlEphemeralTTL("5m")}
+// markAnthropicPromptCacheBreakpoints places explicit prompt-cache breakpoints:
+// one on the last tool definition and one on the last system block (together
+// they cache tools+system, reusable across runs while those bytes stay
+// stable), and one on the last content block of the last message that accepts
+// one (caches the stable request prefix so it grows incrementally across agent
+// steps). A block that cannot carry a marker is skipped and the search keeps
+// going, so an uncacheable tail block never leaves that breakpoint unset.
+// Anthropic allows up to 4 breakpoints; 3 are used.
+//
+// The ttl is written out only for the official endpoint: "5m" is the
+// documented default, so omitting it leaves the cache lifetime identical
+// everywhere else, while a compatible gateway keeps receiving only the fields
+// it knows. The marker itself is always built through the SDK constructor,
+// because `cache_control` is tagged omitzero and a zero-value
+// CacheControlEphemeralParam (empty type AND empty ttl) is dropped from the
+// request altogether — that would silently lose the breakpoint instead of
+// sending one without a ttl.
+func markAnthropicPromptCacheBreakpoints(params *anthropic.MessageNewParams, officialEndpoint bool) {
+	cc := anthropic.NewCacheControlEphemeralParam()
+	if officialEndpoint {
+		cc.TTL = anthropic.CacheControlEphemeralTTLTTL5m
+	}
 	if len(params.Tools) > 0 {
 		lastIdx := len(params.Tools) - 1
 		if params.Tools[lastIdx].OfTool != nil {
@@ -474,20 +488,19 @@ func markAnthropicPromptCacheBreakpoints(params *anthropic.MessageNewParams) {
 	for i := len(params.Messages) - 1; i >= 0; i-- {
 		msg := params.Messages[i]
 		for j := len(msg.Content) - 1; j >= 0; j-- {
-			if anthropicBlockIsTransientInjection(msg.Content[j]) {
-				continue
+			if setAnthropicBlockCacheControl(msg.Content[j], cc) {
+				return
 			}
-			setAnthropicBlockCacheControl(msg.Content[j], cc)
-			return
 		}
 	}
 }
 
-func anthropicBlockIsTransientInjection(block anthropic.ContentBlockParamUnion) bool {
-	return block.OfText != nil && strings.HasPrefix(block.OfText.Text, "<ally-context-budget>")
-}
-
-func setAnthropicBlockCacheControl(block anthropic.ContentBlockParamUnion, cc anthropic.CacheControlEphemeralParam) {
+// setAnthropicBlockCacheControl writes the breakpoint marker onto a content block
+// and reports whether the block accepts one. The adapter builds text, tool_use,
+// tool_result and image blocks; a replayed thinking / redacted_thinking block is
+// the one shape with no cache_control field, and the caller keeps scanning for a
+// block that has one.
+func setAnthropicBlockCacheControl(block anthropic.ContentBlockParamUnion, cc anthropic.CacheControlEphemeralParam) bool {
 	switch {
 	case block.OfText != nil:
 		block.OfText.CacheControl = cc
@@ -497,7 +510,10 @@ func setAnthropicBlockCacheControl(block anthropic.ContentBlockParamUnion, cc an
 		block.OfToolUse.CacheControl = cc
 	case block.OfImage != nil:
 		block.OfImage.CacheControl = cc
+	default:
+		return false
 	}
+	return true
 }
 
 func anthropicToolResultIsError(content string) bool {

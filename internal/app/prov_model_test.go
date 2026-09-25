@@ -27,39 +27,59 @@ import (
 	legacyopenai "github.com/sashabaranov/go-openai"
 )
 
-func TestMarkAnthropicPromptCacheBreakpointsSkipsTailInjections(t *testing.T) {
+// TestMarkAnthropicPromptCacheBreakpointsLandOnLastBlocks pins where the three
+// markers go: the last tool definition, the last system block, and the last
+// content block of the last message that accepts one. A tail block that cannot
+// carry a marker is skipped instead of costing the message breakpoint.
+func TestMarkAnthropicPromptCacheBreakpointsLandOnLastBlocks(t *testing.T) {
 	params := anthropic.MessageNewParams{
 		System: []anthropic.TextBlockParam{{Text: "system"}},
 		Messages: []anthropic.MessageParam{
 			anthropic.NewUserMessage(anthropic.NewTextBlock("question")),
 			anthropic.NewAssistantMessage(anthropic.NewToolUseBlock("t1", map[string]any{"a": 1}, "grep")),
 			anthropic.NewUserMessage(anthropic.NewToolResultBlock("t1", `{"ok":true}`, false)),
-			anthropic.NewUserMessage(anthropic.NewTextBlock("<ally-context-budget>\nWindow: 1000 tokens\n</ally-context-budget>")),
+			anthropic.NewUserMessage(anthropic.NewTextBlock("follow-up question")),
 		},
 	}
-	markAnthropicPromptCacheBreakpoints(&params)
+	markAnthropicPromptCacheBreakpoints(&params, true)
 
-	if params.System[0].CacheControl.TTL == "" {
-		t.Fatalf("expected cache_control breakpoint on last system block")
+	if got := params.System[0].CacheControl.TTL; got != "5m" {
+		t.Fatalf("system breakpoint ttl = %q, want 5m", got)
 	}
-	toolResult := params.Messages[2].Content[len(params.Messages[2].Content)-1]
-	if toolResult.OfToolResult == nil || toolResult.OfToolResult.CacheControl.TTL == "" {
-		t.Fatalf("expected cache_control breakpoint on last block of last real message")
+	tail := params.Messages[3].Content[0]
+	if tail.OfText == nil || tail.OfText.CacheControl.TTL != "5m" {
+		t.Fatalf("expected cache_control breakpoint on the last block of the last message")
 	}
-	injection := params.Messages[3].Content[0]
-	if injection.OfText == nil || injection.OfText.CacheControl.TTL != "" {
-		t.Fatalf("transient tail injection must stay outside the cached prefix")
+	// One message marker only: it moves with the tail instead of staying behind on
+	// the previous turn's tool result.
+	previous := params.Messages[2].Content[len(params.Messages[2].Content)-1]
+	if previous.OfToolResult == nil || previous.OfToolResult.CacheControl.TTL != "" {
+		t.Fatalf("the previous turn's tool result must not keep a marker")
 	}
 
-	// The full conversion path must land the breakpoint the same way:
-	// buildAnthropicMessages merges tool results with tail injection into one valid user turn
-	// while markAnthropicPromptCacheBreakpoints skips transient blocks and marks the real content.
+	// A tail message whose only block cannot carry a marker (a thinking-only
+	// assistant turn) is skipped, and the marker lands on the block before it.
+	thinkingOnly := anthropic.MessageNewParams{
+		Messages: []anthropic.MessageParam{
+			anthropic.NewUserMessage(anthropic.NewTextBlock("question")),
+			anthropic.NewAssistantMessage(anthropic.NewThinkingBlock("sig", "trace")),
+		},
+	}
+	markAnthropicPromptCacheBreakpoints(&thinkingOnly, true)
+	question := thinkingOnly.Messages[0].Content[0]
+	if question.OfText == nil || question.OfText.CacheControl.TTL != "5m" {
+		t.Fatalf("expected the marker to fall back to the last cacheable block")
+	}
+
+	// The full conversion path must land the marker the same way:
+	// buildAnthropicMessages merges a trailing user message into the tool-result
+	// turn, and the marker follows the newest block of that merged message.
 	_, converted := buildAnthropicMessages([]legacyopenai.ChatCompletionMessage{
 		{Role: legacyopenai.ChatMessageRoleSystem, Content: "system"},
 		{Role: legacyopenai.ChatMessageRoleUser, Content: "question"},
 		{Role: legacyopenai.ChatMessageRoleAssistant, ToolCalls: []legacyopenai.ToolCall{{ID: "t1", Function: legacyopenai.FunctionCall{Name: "grep", Arguments: `{"a":1}`}}}},
 		{Role: legacyopenai.ChatMessageRoleTool, ToolCallID: "t1", Content: `{"ok":true}`},
-		{Role: legacyopenai.ChatMessageRoleUser, Content: "<ally-context-budget>\nWindow: 1000 tokens\n</ally-context-budget>"},
+		{Role: legacyopenai.ChatMessageRoleUser, Content: "follow-up question"},
 	}, nil, true)
 	if len(converted) != 3 {
 		t.Fatalf("expected 3 converted messages (user -> assistant -> user), got %d", len(converted))
@@ -67,17 +87,16 @@ func TestMarkAnthropicPromptCacheBreakpointsSkipsTailInjections(t *testing.T) {
 	convParams := anthropic.MessageNewParams{
 		Messages: converted,
 	}
-	markAnthropicPromptCacheBreakpoints(&convParams)
-	// Cache breakpoint must land on the tool result block, skipping the trailing transient budget block
+	markAnthropicPromptCacheBreakpoints(&convParams, true)
 	lastUserBlocks := convParams.Messages[2].Content
 	if len(lastUserBlocks) != 2 {
 		t.Fatalf("expected 2 blocks in last user message, got %d", len(lastUserBlocks))
 	}
-	if lastUserBlocks[0].OfToolResult == nil || lastUserBlocks[0].OfToolResult.CacheControl.TTL == "" {
-		t.Fatalf("expected cache_control breakpoint on tool result block")
+	if lastUserBlocks[0].OfToolResult == nil || lastUserBlocks[0].OfToolResult.CacheControl.TTL != "" {
+		t.Fatalf("tool result block must stay outside cache control")
 	}
-	if lastUserBlocks[1].OfText == nil || lastUserBlocks[1].OfText.CacheControl.TTL != "" {
-		t.Fatalf("transient tail injection block must stay outside cache control")
+	if lastUserBlocks[1].OfText == nil || lastUserBlocks[1].OfText.CacheControl.TTL != "5m" {
+		t.Fatalf("expected cache_control breakpoint on the merged message's last block")
 	}
 }
 
@@ -218,6 +237,47 @@ func TestOpenAIResponsesPromptCacheFields(t *testing.T) {
 				if item["role"] == "developer" {
 					t.Fatalf("input gained a developer cache anchor: %#v", request["input"])
 				}
+			}
+		})
+	}
+}
+
+// TestOpenAIResponsesEncryptedReasoningIncludeIsOfficialOnly pins the gate on the
+// third OpenAI-official request field: encrypted reasoning is asked for on the
+// endpoint whose requests are stateless (store=false), and nowhere else, so a
+// compatible gateway never receives the key.
+func TestOpenAIResponsesEncryptedReasoningIncludeIsOfficialOnly(t *testing.T) {
+	tests := []struct {
+		name   string
+		base   string
+		wanted bool
+	}{
+		{name: "official endpoint asks for the encrypted copy", base: defaultOpenAIResponsesURL, wanted: true},
+		{name: "relay endpoint is not sent the field", base: "https://api.deepseek.com/v1"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := ConfigState{APIFormat: apiFormatOpenAIResponses, BaseURL: tt.base}
+			body := buildOpenAIResponsesRequest(cfg, "gpt-5.6", []legacyopenai.ChatCompletionMessage{{
+				Role:    legacyopenai.ChatMessageRoleUser,
+				Content: "hello",
+			}}, nil, nil)
+			request := marshalResponsesRequest(t, body)
+			include, has := request["include"].([]any)
+			if has != tt.wanted {
+				t.Fatalf("include present = %v, want %v (%#v)", has, tt.wanted, request["include"])
+			}
+			if !tt.wanted {
+				return
+			}
+			found := false
+			for _, item := range include {
+				if item == string(oaresp.ResponseIncludableReasoningEncryptedContent) {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("include = %#v, want %s", include, oaresp.ResponseIncludableReasoningEncryptedContent)
 			}
 		})
 	}
@@ -1263,7 +1323,7 @@ func TestAnthropicToolPromptCacheBreakpoint(t *testing.T) {
 			anthropic.NewUserMessage(anthropic.NewTextBlock("hello")),
 		},
 	}
-	markAnthropicPromptCacheBreakpoints(&params)
+	markAnthropicPromptCacheBreakpoints(&params, true)
 	lastTool := params.Tools[1].OfTool
 	if lastTool == nil || lastTool.CacheControl.TTL == "" {
 		t.Fatal("expected CacheControl on the last tool definition")

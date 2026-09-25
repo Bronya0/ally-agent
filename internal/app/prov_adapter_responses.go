@@ -39,8 +39,6 @@ func (a *App) streamOpenAIResponses(ctx context.Context, cfg ConfigState, model 
 	replayKey := reasoningReplayKey(cfg, model)
 	replay := a.reasoningStash.get(replayKey)
 	body := buildOpenAIResponsesRequest(cfg, model, messages, tools, replay)
-	// Ask for encrypted reasoning so stateless replay stays possible.
-	body.Include = append(body.Include, oaresp.ResponseIncludableReasoningEncryptedContent)
 
 	maxRetries := effectiveLLMRetries(cfg)
 	result, emitted, err := a.openAIResponsesStreamAttempt(ctx, cfg, body, onEvent)
@@ -473,12 +471,18 @@ func buildOpenAIResponsesRequest(cfg ConfigState, model string, messages []legac
 	// breakpoint, and a request without its own marker then uses no caching at
 	// all), which is why pi only selects it to turn caching off. No retention
 	// field is sent anywhere: the provider default stays in place.
-	// Store and ParallelToolCalls are OpenAI-official fields that
-	// compatible gateways may reject with 400 ("unsupported field").
-	// Gate them behind the official-endpoint check so relays stay happy.
+	// Store, ParallelToolCalls and Include are OpenAI-official request fields
+	// that compatible gateways may reject with 400 ("unsupported field"), so all
+	// three are gated by the same official-endpoint check, in this one place.
 	if isOfficialOpenAIEndpoint(cfg) {
 		body.ParallelToolCalls = oa.Bool(true)
 		body.Store = oa.Bool(false)
+		// Encrypted reasoning is needed only where the request is stateless —
+		// store=false above is what makes it stateless — because it is then the
+		// only carrier of the reasoning a later request has to replay. Every
+		// other endpoint keeps the items itself, so asking for the encrypted copy
+		// would only add an unknown key to the request.
+		body.Include = append(body.Include, oaresp.ResponseIncludableReasoningEncryptedContent)
 	}
 	// Thinking strength for the Responses API (reasoning.effort): "off" arrives as
 	// effort "none" (DeepSeek documents "none" as 关闭思考模式). The SDK type is

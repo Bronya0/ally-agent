@@ -8,36 +8,53 @@
 package app
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
 	anthropic "github.com/anthropics/anthropic-sdk-go"
 )
 
-// TestMarkAnthropicPromptCacheBreakpointsUsesRetentionTTL covers the breakpoint
-// marker itself: all three breakpoints carry the provider-default ttl.
-func TestMarkAnthropicPromptCacheBreakpointsUsesRetentionTTL(t *testing.T) {
-	build := func() anthropic.MessageNewParams {
+// TestAnthropicPromptCacheBreakpointsTtlOnlyOnOfficialEndpoint covers the
+// breakpoint marker itself: the three markers are always placed, while the ttl
+// field is spelled out only for the official endpoint — "5m" is the provider
+// default, so every other endpoint gets the same cache lifetime from the fields
+// it knows and never receives a key it could reject. The marshalled request is
+// asserted because "marker without a ttl" and "no marker" are the same Go value.
+func TestAnthropicPromptCacheBreakpointsTtlOnlyOnOfficialEndpoint(t *testing.T) {
+	build := func(official bool) string {
+		t.Helper()
 		params := anthropic.MessageNewParams{
-			System: []anthropic.TextBlockParam{{Text: "system"}},
-			Tools:  []anthropic.ToolUnionParam{{OfTool: &anthropic.ToolParam{Name: "read"}}},
+			Model:     "claude-3-7-sonnet",
+			MaxTokens: 1024,
+			System:    []anthropic.TextBlockParam{{Text: "system"}},
+			Tools:     []anthropic.ToolUnionParam{{OfTool: &anthropic.ToolParam{Name: "read"}}},
 			Messages: []anthropic.MessageParam{
 				anthropic.NewUserMessage(anthropic.NewTextBlock("question")),
 			},
 		}
-		markAnthropicPromptCacheBreakpoints(&params)
-		return params
+		markAnthropicPromptCacheBreakpoints(&params, official)
+		raw, err := json.Marshal(params)
+		if err != nil {
+			t.Fatalf("marshal anthropic params: %v", err)
+		}
+		return string(raw)
 	}
 
-	built := build()
-	if got := built.System[0].CacheControl.TTL; got != "5m" {
-		t.Fatalf("system breakpoint ttl = %q, want 5m", got)
+	official := build(true)
+	if got := strings.Count(official, "cache_control"); got != 3 {
+		t.Fatalf("official endpoint: %d breakpoints, want 3 (%s)", got, official)
 	}
-	if tool := built.Tools[0].OfTool; tool == nil || tool.CacheControl.TTL != "5m" {
-		t.Fatalf("tool breakpoint ttl = %#v, want 5m", tool)
+	if !strings.Contains(official, `"ttl":"5m"`) {
+		t.Fatalf("official endpoint must spell out the provider-default ttl: %s", official)
 	}
-	if block := built.Messages[0].Content[0]; block.OfText == nil || block.OfText.CacheControl.TTL != "5m" {
-		t.Fatalf("message breakpoint ttl = %#v, want 5m", block.OfText)
+
+	compatible := build(false)
+	if got := strings.Count(compatible, "cache_control"); got != 3 {
+		t.Fatalf("compatible endpoint: %d breakpoints, want 3 (%s)", got, compatible)
+	}
+	if strings.Contains(compatible, "ttl") {
+		t.Fatalf("compatible endpoint must not receive the ttl field: %s", compatible)
 	}
 }
 

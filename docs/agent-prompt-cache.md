@@ -108,18 +108,22 @@ Anthropic 单个请求最多允许设置 **4 个** `cache_control: { type: "ephe
 3. **最新消息的最后一个有效内容块**：`setAnthropicBlockCacheControl(...)`；
    * （固化递增的对话历史，使每一次工具调用都在前一次的基础上增量缓存）。
 
-#### ② 瞬态块识别与跳过
-在寻找“最新消息的最后一个有效块”时，必须向前扫描并过滤掉所有瞬态注入内容（例如上下文预算提示标签 `<ally-context-budget>`）：
+#### ② 只跳过不能承载标记的块
+寻找“最新消息的最后一个有效块”时向前扫描：thinking / redacted_thinking 块**根本没有 `cache_control` 字段**（SDK 的 `ThinkingBlockParam` 不存在该字段），遇到这类块必须继续向前找，否则一条以思考块结尾的消息会让这个断点整个落空：
 ```go
-if anthropicBlockIsTransientInjection(msg.Content[j]) {
-    continue // 跳过瞬态尾巴，把断点打在稳定业务内容上
+for j := len(msg.Content) - 1; j >= 0; j-- {
+    if setAnthropicBlockCacheControl(msg.Content[j], cc) { // 返回是否写入了标记
+        return
+    }
 }
 ```
-这确保了即使瞬态标签发生微调，断点之前的全部前缀依然稳稳命中。
+回放的思考块只在助手消息的**最前面**（`anthropicThinkingBlockParams`），所以正常对话里断点仍落在 text / tool_use / tool_result 尾块上。
 
-#### ③ 保留时长 TTL
-* **短档（short）**：发送 `"5m"`（官方默认）；
-* **长档（long）**：发送 `"1h"`（针对大段代码阅读后长时间停顿再提问的场景；注意 1 小时档写入费用通常为输入的 2 倍，计费需在用量中体现）。
+#### ③ 保留时长 TTL：只对官方端点写出
+* **官方端点**：显式 `cache_control: { type: "ephemeral", ttl: "5m" }`；`5m` 本就是官方默认档，写出来只是让每条请求的断点标记完全一致。
+* **兼容网关/反代**：只发 `cache_control: { type: "ephemeral" }`，不带 `ttl`；兼容端点未必认识这个较新的键，而默认档就是 5m，所以两者的缓存寿命相同。
+* ⚠️ SDK 陷阱：`cache_control` 字段带 `omitzero`，`CacheControlEphemeralParam{}` 这种全零值（`type` 与 `ttl` 都为空）会被**整条丢弃**——看似“发了个不带 ttl 的标记”，实际一个断点都没发。必须用构造函数 `anthropic.NewCacheControlEphemeralParam()` 起手。
+* 1 小时长档（`ttl: "1h"`）目前在实现中未提供，只有 5m。
 
 ---
 
@@ -131,7 +135,7 @@ if anthropicBlockIsTransientInjection(msg.Content[j]) {
 | **OpenAI Chat (官方)** | `prompt_cache_key: "ally:..."` | 官方自动 1024 tok 缓存 | `prompt_cache_retention: "24h"` | 纯前缀逐字节单调匹配 |
 | **OpenAI Chat (OpenRouter)** | Header `x-session-id: "ally:..."` | 下游网关决定 | 下游网关决定 | 纯前缀逐字节单调匹配 |
 | **DeepSeek (Chat 兼容)** | 无需私有 key（自动前缀匹配） | 64 tok 起自动前缀复用 | 不支持私有字段（防 400） | 依赖历史 `reasoning_content` 确定性回填 |
-| **Anthropic Messages** | 由 API Key / Session 内部维护 | `cache_control: { ttl: "5m" }` | `cache_control: { ttl: "1h" }` | 显式 3 断点（Tool 尾 + System 尾 + 最新消息尾） |
+| **Anthropic Messages** | 由 API Key / Session 内部维护 | 官方端点 `cache_control: { ttl: "5m" }`，兼容端点不带 ttl | 未提供（仅 5m） | 显式 3 断点（Tool 尾 + System 尾 + 最新消息尾） |
 
 ---
 

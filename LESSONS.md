@@ -63,3 +63,5 @@
 [embed-dist-needs-build] 2026-09-25 干净检出 go test ./... 需先 npm run build（根包 embed frontend/dist）。@main.go
 [config-load-drop] 2026-09-25 mergeConfig 不携带的字段加载时被默认值顶回：新字段要进 mergeConfig 或在加载处采纳。@biz_config.go
 [live-flush-cadence] 2026-09-25 卡片流式刷新按载荷降频、流式期不跑 hljs：每拍全量重解析+分词会按满主线程。@App.vue @CodeView.vue
+[omitzero-zero-drop] 2026-09-25 全零 struct 会被 omitzero 整条丢弃（缓存断点），用 SDK 构造函数。@prov_adapter_anthropic
+[official-only-fields] 2026-09-25 官方专有请求字段须统一按 isOfficial*Endpoint 门控，勿逐字段各自决定。@prov_adapter_*.go
