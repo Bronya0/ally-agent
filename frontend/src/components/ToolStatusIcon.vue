@@ -22,7 +22,7 @@ Usage:
 <template>
   <CheckOutlined v-if="icon === 'check'" :class="['tool-svg-icon', statusClass]" />
   <CloseOutlined v-else-if="icon === 'close'" :class="['tool-svg-icon', statusClass]" />
-  <span v-else-if="icon === 'dot'" :class="['tool-svg-icon', 'running-dot', statusClass]" aria-hidden="true"></span>
+  <span v-else-if="icon === 'dot'" :class="['tool-svg-icon', 'running-dot', statusClass]" aria-hidden="true"><i class="running-dot-core"></i></span>
   <span v-else-if="icon === 'hollow'" :class="['tool-svg-icon', 'hollow-dot', statusClass]" aria-hidden="true"></span>
 </template>
 
@@ -71,14 +71,21 @@ const icon = computed(() => {
   align-items: center;
 }
 
-/* Filled running dot — replaces the old CSS pulse dot on .tool-status-icon.running */
+/* Filled running dot — the tool card's "in progress" mark, deliberately built in the
+   shape of the composer status row's three bars (RunSpinner.vue), the one animation
+   next to the message list that never hitches: a real child element absolutely
+   positioned in a fixed 16x14 box, animating transform only, with no static
+   will-change hint. A transform-only animation is the case every engine promotes on
+   its own, and this dot lives in a card that is re-laid out and repainted on every
+   tool:update flush, so its frames must not depend on the main thread.
+   Do not put opacity back into the keyframes: the previous revision animated
+   opacity + scale and visibly hitched while the card streamed. */
 .tool-svg-icon.running-dot {
   position: relative;
   color: transparent;
 }
 
-.tool-svg-icon.running-dot::after {
-  content: '';
+.tool-svg-icon.running-dot .running-dot-core {
   position: absolute;
   inset: 0;
   margin: auto;
@@ -86,6 +93,7 @@ const icon = computed(() => {
   height: 6px;
   border-radius: 50%;
   background: var(--ally-text-tertiary);
+  /* 盒子恒定，只有 scale 在动（AGENTS.md §4.7）。 */
   animation: tool-svg-pulse 1.1s ease-in-out infinite;
 }
 
@@ -106,8 +114,8 @@ const icon = computed(() => {
 }
 
 @keyframes tool-svg-pulse {
-  0%, 100% { opacity: 0.35; }
-  50% { opacity: 1; }
+  0%, 100% { transform: scale(0.6); }
+  50% { transform: scale(1); }
 }
 
 /* Status colors — matches the previous .tool-status-icon.* palette in style.css */

@@ -56,6 +56,9 @@ const props = defineProps({
   collapsed: { type: Boolean, default: false },
   maxLines: { type: Number, default: 0 },
   previewMode: { type: String, default: 'head' },
+  // 工具仍在跑（消息 status === 'running'）：正文每拍都在变长，视图退化成
+  // 最便宜的纯文本（见 displayLines）。
+  live: { type: Boolean, default: false },
 })
 
 /** Map file extension to highlight.js language name. */
@@ -153,8 +156,17 @@ function highlightCached(lang, code, maxLines) {
 const displayLines = computed(() => {
   const code = preview.value.lines.join('\n')
   if (!code) return []
-  const lang = detectLang(props.filePath, props.language)
   const maxLines = props.collapsed && props.maxLines > 0 ? props.maxLines : 0;
+  // 流式期间不做语法高亮、也不走高亮缓存：每拍的内容都是新的，缓存永远命不中
+  // （还会把有用条目挤出去），而 hljs 的词法分析要按整段内容全量跑一遍。颜色在
+  // 完成那一帧随 .tool-body-swap 的淡入一起出现。
+  // 只转义预览窗口内的那几行：之前是「整段转义 + 整段切行」再截取头部，既与
+  // codePreviewWindow 给出的窗口（create 走 tail）行号错位——折叠时正文显示的是
+  // 头部、行号却是尾部的——又在每拍重复处理整份内容。
+  if (props.live) {
+    return preview.value.lines.map((line) => escapeHtml(line));
+  }
+  const lang = detectLang(props.filePath, props.language)
   return highlightCached(lang, code, maxLines);
 })
 

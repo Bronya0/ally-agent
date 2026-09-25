@@ -661,6 +661,7 @@ import {
   phaseLabel,
 } from './utils/runPhase.mjs';
 import { toolCardRenderSignature } from './utils/toolCardSignature.mjs';
+import { toolUpdateFlushDelay } from './utils/toolUpdateFlush.mjs';
 import { useToolEvents } from './composables/useToolEvents.mjs';
 import { unwrapWailsEvent } from './utils/wailsEvent.mjs';
 import { createPromptHistoryStore } from './utils/promptHistoryStore.mjs';
@@ -4426,16 +4427,29 @@ function bufferToolUpdate(data) {
   scheduleToolUpdateFlush();
 }
 
+// 本拍待刷新的最大载荷长度：一次 flush 要对整个累积载荷重新解析、并整卡重渲正文，
+// 成本随载荷增长，所以刷新间隔由它选档（阈值与档位见 utils/toolUpdateFlush.mjs）。
+function bufferedToolUpdateChars() {
+  let chars = 0;
+  for (const data of toolUpdateBuffers.values()) {
+    const text = data?.output !== undefined ? data.output : data?.args;
+    const length = typeof text === 'string' ? text.length : 0;
+    if (length > chars) chars = length;
+  }
+  return chars;
+}
+
 function scheduleToolUpdateFlush() {
   if (toolUpdateFlushScheduled) return;
   toolUpdateFlushScheduled = true;
+  const delay = toolUpdateFlushDelay(bufferedToolUpdateChars());
   toolUpdateFlushTimer = window.setTimeout(() => {
     window.requestAnimationFrame(() => {
       toolUpdateFlushTimer = 0;
       toolUpdateFlushScheduled = false;
       flushToolUpdateBuffer();
     });
-  }, 120);
+  }, delay);
 }
 
 function flushToolUpdateBuffer() {

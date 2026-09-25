@@ -62,3 +62,4 @@
 [init-lock-no-app-log] 2026-09-25 ensureInitialized 持 a.mu，其间禁止调 logAppError（自锁=死锁）。@biz_config.go
 [embed-dist-needs-build] 2026-09-25 干净检出 go test ./... 需先 npm run build（根包 embed frontend/dist）。@main.go
 [config-load-drop] 2026-09-25 mergeConfig 不携带的字段加载时被默认值顶回：新字段要进 mergeConfig 或在加载处采纳。@biz_config.go
+[live-flush-cadence] 2026-09-25 卡片流式刷新按载荷降频、流式期不跑 hljs：每拍全量重解析+分词会按满主线程。@App.vue @CodeView.vue

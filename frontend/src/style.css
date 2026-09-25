@@ -2637,9 +2637,11 @@ code, pre {
   100% { background-position: 0% 0; }
 }
 
-/* 常驻“等待中”小点动画共用提层提示：WebView2 下这类小元素动画不必然被自动
-   提升，不提升就退化成逐帧主线程重绘。本项目里常驻使用 thinking-bounce 的小点
-   现在只剩子代理卡片一处，新增一处只改这一行（AGENTS.md §4.7）。 */
+/* 常驻小点动画的提层提示：只在“在跑”期间挂类、跑完即撤，不会静态摊在长列表
+   每一项上（AGENTS.md §4.7）。当前唯一消费方是子代理卡片的 thinking-bounce
+   三点（定义见 SubagentInlineCard.vue）。
+   工具卡的运行圆点不列在这里：它是纯 transform 动画，形状对齐 RunSpinner 的
+   三根条，提层交给引擎，不写这个静态提示。 */
 .subagent-name-dot {
   will-change: transform, opacity;
 }

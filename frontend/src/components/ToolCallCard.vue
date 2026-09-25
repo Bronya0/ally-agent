@@ -74,6 +74,7 @@ Public License v3. See the LICENSE file for details.
       :collapsed="isCreatePreview(msg)"
       :max-lines="BODY_PREVIEW_LINES"
       preview-mode="tail"
+      :live="isBodyLive"
     />
     <TerminalOutputView
       v-else-if="msg.kind === 'command' && msg.status !== 'error'"
@@ -293,9 +294,9 @@ function isFixedKind(kind) {
   return ['edit', 'create', 'command'].includes(kind);
 }
 
-// tool:update 每 ~120ms 强制重渲一次，模板里反复调用 lineCount /
-// toolBodyText 会对流式增长中的 body 全量切行。这里按消息对象做 WeakMap
-// 记忆化：文本与展开状态不变时直接复用上次的行数。
+// tool:update 的合并写按载荷降频（小载荷 120ms 起，见 utils/toolUpdateFlush.mjs），
+// 但每拍仍会重渲一次卡片，模板里反复调用 lineCount / toolBodyText 会对流式增长中的
+// body 全量切行。这里按消息对象做 WeakMap 记忆化：文本与展开状态不变时直接复用上次的行数。
 const lineCountMemo = new WeakMap();
 function lineCount(msg, text) {
   if (!text) return 0;
