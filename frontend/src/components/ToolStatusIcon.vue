@@ -71,15 +71,15 @@ const icon = computed(() => {
   align-items: center;
 }
 
-/* Filled running dot — the tool card's "in progress" mark, deliberately built in the
-   shape of the composer status row's three bars (RunSpinner.vue), the one animation
+/* Filled running dot — the tool card's "in progress" mark, built on the same three
+   ideas as the composer status row's bars (RunSpinner.vue), the one animation
    next to the message list that never hitches: a real child element absolutely
    positioned in a fixed 16x14 box, animating transform only, with no static
    will-change hint. A transform-only animation is the case every engine promotes on
    its own, and this dot lives in a card that is re-laid out and repainted on every
    tool:update flush, so its frames must not depend on the main thread.
-   Do not put opacity back into the keyframes: the previous revision animated
-   opacity + scale and visibly hitched while the card streamed. */
+   Before changing which properties the keyframes animate, re-run the Rendering-panel
+   comparison while the card streams. */
 .tool-svg-icon.running-dot {
   position: relative;
   color: transparent;

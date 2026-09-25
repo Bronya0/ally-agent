@@ -160,9 +160,9 @@ const displayLines = computed(() => {
   // 流式期间不做语法高亮、也不走高亮缓存：每拍的内容都是新的，缓存永远命不中
   // （还会把有用条目挤出去），而 hljs 的词法分析要按整段内容全量跑一遍。颜色在
   // 完成那一帧随 .tool-body-swap 的淡入一起出现。
-  // 只转义预览窗口内的那几行：之前是「整段转义 + 整段切行」再截取头部，既与
-  // codePreviewWindow 给出的窗口（create 走 tail）行号错位——折叠时正文显示的是
-  // 头部、行号却是尾部的——又在每拍重复处理整份内容。
+  // 只转义预览窗口内的那几行，而不是把 code 整段转义后再切行——省掉每拍对整份内容
+  // 的重复处理。行来源必须是 preview.value.lines：gutter 行号取自 previewStartLine，
+  // 只有窗口内的行才与它对得上（create 用的是 tail 窗口）。
   if (props.live) {
     return preview.value.lines.map((line) => escapeHtml(line));
   }
