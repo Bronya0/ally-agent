@@ -106,23 +106,23 @@ Public License v3. See the LICENSE file for details.
     </span>
     <button
       type="button"
-      :class="['task-chip', 'task-chip-service', { running: serviceRunningCount > 0 }]"
+      :class="['task-chip', 'task-chip-service', { 'has-tasks': serviceRunningCount > 0 }]"
       :title="`${$t('composer.taskCenter.services')} · ${$t('service.runningCount', { count: serviceRunningCount })}`"
       :aria-label="$t('composer.taskCenter.services')"
       @click.stop="$emit('openTaskCenter', 'services')"
     >
       <span class="task-chip-letter">S</span>
-      <span>{{ serviceRunningCount }}</span>
+      <span class="task-chip-count">{{ serviceRunningCount }}</span>
     </button>
     <button
       type="button"
-      :class="['task-chip', 'task-chip-scheduled', { running: scheduledRunningCount > 0 }]"
+      :class="['task-chip', 'task-chip-scheduled', { 'has-tasks': scheduledCount > 0 }]"
       :title="`${$t('composer.taskCenter.scheduled')} · ${$t('scheduled.runningCount', { count: scheduledRunningCount })}`"
       :aria-label="$t('composer.taskCenter.scheduled')"
       @click.stop="$emit('openTaskCenter', 'scheduled')"
     >
       <span class="task-chip-letter">C</span>
-      <span>{{ scheduledCount }}</span>
+      <span class="task-chip-count">{{ scheduledCount }}</span>
     </button>
     <n-popover
       v-if="activeWorkspacePath"
@@ -135,12 +135,12 @@ Public License v3. See the LICENSE file for details.
       <template #trigger>
         <button
           type="button"
-          :class="['task-chip', 'task-chip-ssh', { active: allowedSshServers.length > 0 }]"
+          :class="['task-chip', 'task-chip-ssh', { 'has-tasks': allowedSshServers.length > 0 }]"
           :title="$t('sshCluster.button.title')"
           :aria-label="$t('sshCluster.button.title')"
           @click.stop
         >
-          <span class="task-chip-label">SSH</span>
+          <span class="task-chip-letter">SSH</span>
           <span class="task-chip-count">{{ allowedSshServers.length }}</span>
         </button>
       </template>

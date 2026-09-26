@@ -5725,8 +5725,11 @@ async function sendPrompt(opts) {
   if (text.startsWith('/switch ')) {
     const idx = text.slice(8).trim();
     if (idx) {
+      // 草稿归切换前的会话所有：切换后活动会话已变，光清 promptText 只会清到
+      // 新会话的空草稿，旧会话里那句 /switch 会留到下次切回来。
+      const draftSessionId = session.id;
       await switchToSession(idx);
-      promptText.value = '';
+      clearPromptDraft(draftSessionId);
       commandMenuVisible.value = false;
       return;
     }
@@ -5753,7 +5756,7 @@ async function sendPrompt(opts) {
       const matchedSkill = availableSkills.value.find((sk) => isSkillActive(sk.name, activeSkillNames.value) && (sk.name === cmdName || `skill:${sk.name}` === cmdName));
       if (!isBuiltin && matchedSkill) {
         await activateSkillByName(matchedSkill.name, slashContent.slice(cmdName.length).trim());
-        promptText.value = '';
+        clearPromptDraft(session.id);
         commandMenuVisible.value = false;
         return;
       }
@@ -6067,13 +6070,16 @@ function getPromptTextarea(tabId = activeWorkspaceId.value) {
 // its internal syncSource guard. Replaying the normal input path after Vue has
 // rendered the reactive clear updates both the textarea and its hidden mirror,
 // so a long draft cannot leave the composer at maxRows.
-function clearPromptDraft(sessionId, tabId = activeWorkspaceId.value) {
+function clearPromptDraft(sessionId) {
   if (!sessionId) return;
   sessionPromptTexts[sessionId] = '';
   nextTick(() => {
     // Do not overwrite a new draft typed before this cleanup callback runs.
     if (sessionPromptTexts[sessionId] !== '') return;
-    const textarea = getPromptTextarea(tabId);
+    // 输入框按会话归属定位，不按「当时的活动 Tab」：/new 这类命令会先把活动 Tab
+    // 改挂到新会话，那一刻活动 Tab 里的输入框已不是这份草稿的宿主。
+    const ownerTab = workspaceTabs.value.find((item) => item.sessionId === sessionId);
+    const textarea = getPromptTextarea(ownerTab?.id || activeWorkspaceId.value);
     if (!textarea) return;
     textarea.value = '';
     textarea.dispatchEvent(new Event('input', { bubbles: true }));
@@ -6393,60 +6399,57 @@ function applyCommand(index) {
   sendPrompt();
 }
 
+// 内置命令统一收口：命令体只负责动作，草稿清理由外层统一做，新增命令不会再漏清。
 async function handleBuiltinCommand(command) {
   if (!command) return false;
+  // 草稿归「执行命令时」的活动会话所有：/new 会把活动 Tab 改挂到新会话，
+  // 归属必须在切换前记下，否则清掉的是新会话的空草稿，旧会话里那句命令会留下。
+  const draftSessionId = activeSession.value?.id || activeSessionId.value;
+  const handled = await runBuiltinCommand(command);
+  if (!handled) return false;
+  // 必须走 clearPromptDraft，不能只写 sessionPromptTexts：Naive 的 textarea 在
+  // 原生 input 之后的 syncSource 保护会跳过受控值回写，只改 store 会让输入框
+  // 继续显示刚发出去的命令文本（/compact 这类原地执行的命令最明显）。
+  clearPromptDraft(draftSessionId);
+  commandMenuVisible.value = false;
+  return true;
+}
+
+async function runBuiltinCommand(command) {
   if (command.special === 'new') {
     createNewSession();
-    promptText.value = '';
-    commandMenuVisible.value = false;
     return true;
   }
   if (command.special === 'skills') {
     await loadAndShowSkills();
-    promptText.value = '';
-    commandMenuVisible.value = false;
     return true;
   }
   if (command.special === 'sessions') {
     showSessionList();
-    promptText.value = '';
-    commandMenuVisible.value = false;
     return true;
   }
   if (command.special === 'init') {
     handleInitCommand();
-    promptText.value = '';
-    commandMenuVisible.value = false;
     return true;
   }
   if (command.special === 'remember') {
     handleRememberCommand();
-    promptText.value = '';
-    commandMenuVisible.value = false;
     return true;
   }
   if (command.special === 'lesson') {
     handleLessonCommand();
-    promptText.value = '';
-    commandMenuVisible.value = false;
     return true;
   }
   if (command.special === 'review') {
     handleReviewCommand();
-    promptText.value = '';
-    commandMenuVisible.value = false;
     return true;
   }
   if (command.special === 'compact') {
     await handleCompactCommand();
-    promptText.value = '';
-    commandMenuVisible.value = false;
     return true;
   }
   if (command.special === 'push') {
     handlePushCommand();
-    promptText.value = '';
-    commandMenuVisible.value = false;
     return true;
   }
   return false;

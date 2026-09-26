@@ -2721,9 +2721,9 @@ code, pre {
   opacity: 1;
 }
 
-/* A running task is a live status signal, not navigation, so it keeps
-   its full accent strength. */
-.composer-info .task-chip.running {
+/* A chip with tasks is a live status signal, not navigation, so the three task
+   chips keep their full strength as soon as their own count is non-zero. */
+.composer-info .task-chip.has-tasks {
   opacity: 1;
 }
 
@@ -2803,10 +2803,12 @@ code, pre {
   height: 16px;
 }
 
+/* 角标必须留在按钮自身的盒内：父级 .info-workspace 带 overflow: hidden，
+   负偏移的角标会被它裁掉上半截，右移出界还会压到相邻终端按钮的悬停底色上。 */
 .composer-info .extra-roots-count {
   position: absolute;
-  top: -4px;
-  right: -6px;
+  top: 0;
+  right: 0;
   font-size: 11px;
   font-weight: 600;
   line-height: 1;
@@ -3178,6 +3180,10 @@ code, pre {
   opacity: 0.7;
 }
 
+/* 底部任务胶囊（S 后台服务 / C 定时任务 / SSH 集群）共用一套规则，SSH 是原型：
+   类型色相只在各自的 --task-chip-hue 里声明一次，字母徽标常驻该色相；边框、底色与
+   文字仅在该类「有任务」时（.has-tasks，判据就是这个胶囊上显示的那个数字 > 0）
+   跟着色相走，空态保持中性灰。 */
 .composer-info .task-chip {
   display: inline-flex;
   align-items: center;
@@ -3194,66 +3200,62 @@ code, pre {
   --wails-draggable: no-drag;
 }
 
+/* 三类任务的色相：info（蓝）/ warning（琥珀）/ success（绿）是跨主题恒定的语义色，
+   不跟随主题 accent，避免 azure 等主题下两类任务撞成同一色相。 */
+.composer-info .task-chip-service {
+  --task-chip-hue: var(--ally-info);
+}
+
+.composer-info .task-chip-scheduled {
+  --task-chip-hue: var(--ally-warning-text);
+}
+
+.composer-info .task-chip-ssh {
+  --task-chip-hue: var(--ally-success-text);
+}
+
 .composer-info .task-chip:hover {
   color: var(--ally-text-high);
   border-color: color-mix(in srgb, var(--ally-accent) 38%, transparent);
   background: color-mix(in srgb, var(--ally-accent) 12%, transparent);
 }
 
-.composer-info .task-chip.running {
-  color: var(--ally-accent-pale);
-  border-color: color-mix(in srgb, var(--ally-accent) 48%, transparent);
-  background: color-mix(in srgb, var(--ally-accent) 16%, transparent);
+/* 有任务：边框、底色与文字取本类型色相（悬停再深一档）。 */
+.composer-info .task-chip.has-tasks {
+  color: var(--ally-text-high);
+  border-color: color-mix(in srgb, var(--task-chip-hue) 48%, transparent);
+  background: color-mix(in srgb, var(--task-chip-hue) 14%, transparent);
 }
 
-/* S / C 字母徽标：用字母代替图标，两类任务靠配色再区分一道。
-   info（蓝）/ warning（琥珀）是跨主题恒定的语义色，不跟随主题 accent，
-   避免 azure 等主题下 S 与 C 撞成同一色相。 */
+.composer-info .task-chip.has-tasks:hover {
+  border-color: color-mix(in srgb, var(--task-chip-hue) 62%, transparent);
+  background: color-mix(in srgb, var(--task-chip-hue) 18%, transparent);
+}
+
+/* S / C / SSH 字母徽标：同一个盒子（高 14px、最小宽 14px，宽度随文字伸缩），
+   三类胶囊的徽标因此横向对齐，颜色与自己的边框同源。 */
 .composer-info .task-chip-letter {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 14px;
+  box-sizing: border-box;
+  flex-shrink: 0;
+  min-width: 14px;
   height: 14px;
+  padding: 0 3px;
   border-radius: 4px;
+  color: var(--task-chip-hue);
+  background: color-mix(in srgb, var(--task-chip-hue) 18%, transparent);
   font-size: 10px;
   font-weight: 700;
   line-height: 1;
 }
 
-.composer-info .task-chip-service .task-chip-letter {
-  color: var(--ally-info);
-  background: color-mix(in srgb, var(--ally-info) 18%, transparent);
-}
-
-.composer-info .task-chip-scheduled .task-chip-letter {
-  color: var(--ally-warning-text);
-  background: color-mix(in srgb, var(--ally-warning) 18%, transparent);
-}
-
-.composer-info .task-chip-ssh .task-chip-label {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0 4px;
-  height: 14px;
-  border-radius: 4px;
-  font-size: 10px;
-  font-weight: 700;
-  line-height: 1;
-  color: var(--ally-success-text);
-  background: color-mix(in srgb, var(--ally-success) 18%, transparent);
-}
-
-.composer-info .task-chip-ssh.active {
-  color: var(--ally-text-high);
-  border-color: color-mix(in srgb, var(--ally-success) 42%, transparent);
-  background: color-mix(in srgb, var(--ally-success) 12%, transparent);
-}
-
-.composer-info .task-chip-ssh.active:hover {
-  border-color: color-mix(in srgb, var(--ally-success) 58%, transparent);
-  background: color-mix(in srgb, var(--ally-success) 18%, transparent);
+/* 数字列：等宽数字 + 最小宽度，计数变化时三个胶囊的字槽不左右跳动。 */
+.composer-info .task-chip-count {
+  min-width: 8px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
 }
 
 .composer-info .info-export {
