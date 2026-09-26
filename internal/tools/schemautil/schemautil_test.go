@@ -107,6 +107,40 @@ func TestNormalizeTypesRepairsMissingAndContradictoryTypes(t *testing.T) {
 // TestMapHandlesAbsentParameters covers the nil case every adapter relies on:
 // a tool declared without parameters must still serialize a valid object schema
 // instead of omitting the required `parameters` key.
+// TestNormalizeTypesKeepsCompositeShapes pins the node that declares its own
+// shape: an anyOf/oneOf property must not also receive a scalar type, because
+// the two intersect. The built-in http_request.json parameter was sent to the
+// model as `type: string` beside an anyOf that already allowed objects and
+// arrays, which is what this guards.
+func TestNormalizeTypesKeepsCompositeShapes(t *testing.T) {
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"payload": map[string]any{
+				"anyOf": []any{
+					map[string]any{"type": "object"},
+					map[string]any{"type": "array", "items": map[string]any{}},
+					map[string]any{"type": "string"},
+				},
+			},
+			"either": map[string]any{
+				"oneOf": []any{map[string]any{"type": "integer"}, map[string]any{"type": "string"}},
+			},
+			"bounded": map[string]any{
+				"allOf": []any{map[string]any{"type": "integer", "minimum": 0}},
+			},
+		},
+	}
+
+	norm := normalizeTypes(schema)
+	props := norm["properties"].(map[string]any)
+	for _, name := range []string{"payload", "either", "bounded"} {
+		if _, hasType := props[name].(map[string]any)["type"]; hasType {
+			t.Fatalf("%s declares its own shape and must not be given a scalar type, got %#v", name, props[name])
+		}
+	}
+}
+
 func TestMapHandlesAbsentParameters(t *testing.T) {
 	got := Map(nil)
 	if got["type"] != "object" {

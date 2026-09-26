@@ -85,10 +85,10 @@ func TestExecuteToolHTTPRequestJSONBodyDoubleEncodedString(t *testing.T) {
 	}
 }
 
-// TestHTTPRequestCannotWidenAllowPrivateNetwork: the request struct accepts the
-// flag (unknown JSON fields are tolerated with a warning) but it may only ever
-// tighten the config. Otherwise a model could open the user's SSRF guard with
-// {"allowPrivateNetwork":true}, since the field is not in the tool schema.
+// TestHTTPRequestCannotWidenAllowPrivateNetwork: the config owns the SSRF
+// switch and the model has no path to it. `allowPrivateNetwork` is not a
+// declared parameter, so the argument gate rejects a call that tries to carry
+// the override rather than silently ignoring it (or, worse, honouring it).
 func TestHTTPRequestCannotWidenAllowPrivateNetwork(t *testing.T) {
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"ok":true}`))
@@ -101,8 +101,8 @@ func TestHTTPRequestCannotWidenAllowPrivateNetwork(t *testing.T) {
 	if result.OK {
 		t.Fatalf("a request must not be able to open the private-network guard, got %+v", result.Data)
 	}
-	if !strings.Contains(result.Error, "allowPrivateNetwork=false") {
-		t.Fatalf("expected the private-network refusal, got %q", result.Error)
+	if result.ErrorCode != "E_BAD_ARGS" || !strings.Contains(result.Error, "allowPrivateNetwork") {
+		t.Fatalf("expected the undeclared parameter to be rejected by name, got %#v", result)
 	}
 }
 
@@ -530,8 +530,11 @@ func TestChatToolsExposeBackgroundProcessWithoutPollingTools(t *testing.T) {
 func TestBackgroundProcessRejectsUnknownAction(t *testing.T) {
 	app := NewApp()
 	result := app.executeTool(context.Background(), ConfigState{Workspace: t.TempDir()}, "session-1", "service", []byte(`{"action":"status"}`))
-	if result.OK || result.ErrorCode != "E_BAD_BACKGROUND_ACTION" {
-		t.Fatalf("expected unknown action to be rejected, got %#v", result)
+	// The action enum lives in the schema, so the argument gate refuses the
+	// call one round before the handler would: same refusal, and it names the
+	// value that was wrong.
+	if result.OK || !strings.Contains(result.Error, `"status"`) {
+		t.Fatalf("expected the unknown action to be rejected by name, got %#v", result)
 	}
 }
 
@@ -620,7 +623,10 @@ func TestWaitToolSchemaAndCancellation(t *testing.T) {
 	}
 
 	bad := NewApp().executeTool(context.Background(), ConfigState{}, "session-1", "wait", []byte(`{"seconds":0,"reason":"invalid"}`))
-	if bad.OK || bad.ErrorCode != "E_BAD_WAIT" {
+	// 0 is outside the declared 1..3600 range, so the gate refuses it before
+	// waitWithContext runs; that handler keeps its own check for callers that
+	// never go through tool arguments.
+	if bad.OK || bad.ErrorCode != "E_BAD_ARGS" {
 		t.Fatalf("expected invalid wait duration to fail, got %#v", bad)
 	}
 
@@ -3163,7 +3169,7 @@ func TestExecuteToolRejectsLegacyStringEditFields(t *testing.T) {
 			{"oldString": "alpha", "newString": "ALPHA"},
 			{"oldString": "gamma", "newString": "GAMMA"}
 		]}`))
-	if result.OK || !strings.Contains(result.Error, "E_BAD_VERSION") {
+	if result.OK || !strings.Contains(result.Error, "edits") {
 		t.Fatalf("expected model-facing edit tool to reject legacy edits array, got %#v", result)
 	}
 	got, err := os.ReadFile(filepath.Join(dir, "sample.txt"))
@@ -3175,7 +3181,7 @@ func TestExecuteToolRejectsLegacyStringEditFields(t *testing.T) {
 	}
 }
 
-func TestExecuteToolUnknownArgumentsWarnInsteadOfFailing(t *testing.T) {
+func TestExecuteToolRejectsUnknownArguments(t *testing.T) {
 	dir := t.TempDir()
 	original := []byte("alpha\nbeta\ngamma\n")
 	if err := os.WriteFile(filepath.Join(dir, "sample.txt"), original, 0o600); err != nil {
@@ -3184,54 +3190,42 @@ func TestExecuteToolUnknownArgumentsWarnInsteadOfFailing(t *testing.T) {
 	app := NewApp()
 	cfg := ConfigState{Workspace: dir}
 
-	// Unknown top-level keys are tolerated with an envelope warning while the
-	// known arguments still execute normally.
+	// A stray key is a model bug: it used to run on a default and come back
+	// with a warning, which hid the mistake. It now fails, names the key and
+	// lists what the tool does accept.
 	result := app.executeTool(context.Background(), cfg, "session-1", "list_files", []byte(`{"path":".","recursiveTypo":true}`))
-	if !result.OK {
-		t.Fatalf("unknown arguments must not fail the call, got %#v", result)
+	if result.OK || result.ErrorCode != "E_BAD_ARGS" {
+		t.Fatalf("unknown arguments must fail with E_BAD_ARGS, got %#v", result)
 	}
-	if len(result.Warnings) != 1 || !strings.Contains(result.Warnings[0], "recursiveTypo") {
-		t.Fatalf("expected a warning naming the ignored key, got %#v", result.Warnings)
-	}
-
-	// The warning must survive model-context compaction for tools with a
-	// rebuilt compact payload (edit), not only on the full envelope.
-	readResult := app.executeTool(context.Background(), cfg, "session-1", "read", []byte(`{"files":[{"path":"sample.txt"}]}`))
-	if !readResult.OK {
-		t.Fatalf("read failed: %#v", readResult)
-	}
-	type fileEntry struct {
-		Version string `json:"version"`
-	}
-	var batch struct {
-		Files []fileEntry `json:"files"`
-	}
-	raw, _ := json.Marshal(readResult.Data)
-	if err := json.Unmarshal(raw, &batch); err != nil || len(batch.Files) != 1 {
-		t.Fatalf("unexpected read result: %s err=%v", raw, err)
-	}
-	ver := batch.Files[0].Version
-	// Unknown keys are only detected at the top level of the arguments
-	// object; nested unknown keys fall through to parameter validation.
-	editArgs := fmt.Sprintf(`{"noteTypo":"x","path":"sample.txt","version":"%s","changes":[{"oldText":"alpha","newText":"ALPHA"}]}`, ver)
-	fullJSON, _ := json.Marshal(app.executeTool(context.Background(), cfg, "session-1", "edit", []byte(editArgs)))
-	var envelope toolResult
-	if err := json.Unmarshal(fullJSON, &envelope); err != nil {
-		t.Fatal(err)
-	}
-	if len(envelope.Warnings) == 0 {
-		t.Fatalf("expected unknown-argument warning on edit envelope, got %s", fullJSON)
-	}
-	compact := compactToolResultForModel("edit", envelope, string(fullJSON))
-	if !strings.Contains(compact, "noteTypo") {
-		t.Fatalf("compact model payload dropped the unknown-argument warning: %s", compact)
+	if !strings.Contains(result.Error, "recursiveTypo") || !strings.Contains(result.Error, "path") {
+		t.Fatalf("the rejection must name the stray key and the accepted ones, got %q", result.Error)
 	}
 
-	// Missing required parameters still fail loudly — tolerance never applies
-	// to schema-required fields.
+	// The same holds one level down: without the schema walk, a typo inside a
+	// nested object was invisible to the struct-tag check.
+	nested := app.executeTool(context.Background(), cfg, "session-1", "read", []byte(`{"files":[{"path":"sample.txt","tailLine":5}]}`))
+	if nested.OK || !strings.Contains(nested.Error, "tailLine") {
+		t.Fatalf("a nested unknown key must be rejected by name, got %#v", nested)
+	}
+
+	// Auto-repair still runs before validation, so a stringified array whose
+	// contents are valid keeps working with its warning.
+	repaired := app.executeTool(context.Background(), cfg, "session-1", "read", []byte(`{"files":"[{\"path\":\"sample.txt\"}]"}`))
+	if !repaired.OK {
+		t.Fatalf("a repaired payload must pass the gate, got %q", repaired.Error)
+	}
+	if len(repaired.Warnings) == 0 || !strings.Contains(repaired.Warnings[0], "files") {
+		t.Fatalf("expected the repair warning to survive, got %#v", repaired.Warnings)
+	}
+
+	// Missing required parameters still fail loudly, and the report covers
+	// both problems in one round instead of one per call.
 	missing := app.executeTool(context.Background(), cfg, "session-1", "wait", []byte(`{"seconds":1,"whyTypo":"x"}`))
-	if missing.OK || missing.ErrorCode != "E_BAD_WAIT" {
+	if missing.OK || missing.ErrorCode != "E_BAD_ARGS" {
 		t.Fatalf("missing required reason must still fail, got %#v", missing)
+	}
+	if !strings.Contains(missing.Error, "reason") || !strings.Contains(missing.Error, "whyTypo") {
+		t.Fatalf("the rejection must report the missing and the stray key together, got %q", missing.Error)
 	}
 }
 
@@ -3291,8 +3285,8 @@ func TestExecuteToolRejectsMixedEditSources(t *testing.T) {
 	}
 	args := fmt.Sprintf(`{"path":"sample.txt","version":%q,"changes":[{"oldText":"alpha","lineRange":"1-1","newText":"ALPHA"}]}`, hashVersion(original))
 	result := NewApp().executeTool(context.Background(), ConfigState{Workspace: dir}, "session-1", "edit", []byte(args))
-	if result.OK || result.ErrorCode != "E_BAD_EDIT" {
-		t.Fatalf("mixed sources must fail with E_BAD_EDIT, got %#v", result)
+	if result.OK || !strings.Contains(result.Error, "lineRange") {
+		t.Fatalf("mixed sources must be rejected, naming the conflicting key, got %#v", result)
 	}
 	got, err := os.ReadFile(filepath.Join(dir, "sample.txt"))
 	if err != nil {
@@ -3348,8 +3342,8 @@ func TestExecuteToolRejectsMultiFileEditCall(t *testing.T) {
 	// file; multi-file changes go through parallel edit calls instead.
 	args := fmt.Sprintf(`{"files":[{"path":"a.txt","version":%q,"changes":[{"oldText":"alpha","newText":"ALPHA"}]},{"path":"b.txt","version":%q,"changes":[{"oldText":"beta","newText":"BETA"}]}]}`, hashVersion(a), hashVersion(b))
 	result := NewApp().executeTool(context.Background(), ConfigState{Workspace: dir}, "session-1", "edit", []byte(args))
-	if result.OK || result.ErrorCode != "E_BAD_EDIT" {
-		t.Fatalf("expected multi-file edit call to fail with E_BAD_EDIT, got %#v", result)
+	if result.OK || !strings.Contains(result.Error, "files") {
+		t.Fatalf("expected multi-file edit call to be rejected, got %#v", result)
 	}
 	for path, want := range map[string]string{"a.txt": "alpha\n", "b.txt": "beta\n"} {
 		got, err := os.ReadFile(filepath.Join(dir, path))
@@ -3449,16 +3443,16 @@ func TestExecuteToolEditRejectsLegacyNestedFilesForm(t *testing.T) {
 	// touching the file — there is no compatibility backdoor.
 	args := fmt.Sprintf(`{"files":[{"path":"sample.txt","version":%q,"changes":[{"oldText":"alpha","newText":"ALPHA"}]}]}`, version)
 	result := app.executeTool(context.Background(), cfg, "session-1", "edit", []byte(args))
-	if result.OK || result.ErrorCode != "E_BAD_EDIT" {
-		t.Fatalf("expected legacy nested files form to fail with E_BAD_EDIT, got %#v", result)
+	if result.OK || !strings.Contains(result.Error, "files") {
+		t.Fatalf("expected legacy nested files form to be rejected, got %#v", result)
 	}
 
 	// A double-encoded files array is likewise rejected, not repaired into
 	// an edit.
 	stringEncoded := fmt.Sprintf(`{"files":"[{\"path\":\"sample.txt\",\"version\":\"%s\",\"changes\":[{\"oldText\":\"alpha\",\"newText\":\"ALPHA\"}]}]"}`, version)
 	result = app.executeTool(context.Background(), cfg, "session-1", "edit", []byte(stringEncoded))
-	if result.OK || result.ErrorCode != "E_BAD_EDIT" {
-		t.Fatalf("expected string-encoded legacy files form to fail with E_BAD_EDIT, got %#v", result)
+	if result.OK || !strings.Contains(result.Error, "files") {
+		t.Fatalf("expected string-encoded legacy files form to be rejected, got %#v", result)
 	}
 
 	got, err := os.ReadFile(filepath.Join(dir, "sample.txt"))
@@ -3480,8 +3474,8 @@ func TestExecuteToolEditRejectsRepeatedPathEntriesWithDifferentVersions(t *testi
 	// versions agree: one call edits exactly one file.
 	args := fmt.Sprintf(`{"files":[{"path":"sample.txt","version":%q,"changes":[{"oldText":"alpha","newText":"ALPHA"}]},{"path":"./sample.txt","version":%q,"changes":[{"oldText":"beta","newText":"BETA"}]}]}`, hashVersion(original), "zzzzzz")
 	result := NewApp().executeTool(context.Background(), ConfigState{Workspace: dir}, "session-1", "edit", []byte(args))
-	if result.OK || result.ErrorCode != "E_BAD_EDIT" {
-		t.Fatalf("expected multi-entry legacy call to fail with E_BAD_EDIT, got %#v", result)
+	if result.OK || !strings.Contains(result.Error, "files") {
+		t.Fatalf("expected multi-entry legacy call to be rejected, got %#v", result)
 	}
 	got, err := os.ReadFile(filepath.Join(dir, "sample.txt"))
 	if err != nil {
@@ -3500,8 +3494,8 @@ func TestExecuteToolRequiresVersionForEdit(t *testing.T) {
 	}
 	app := NewApp()
 	result := app.executeTool(context.Background(), ConfigState{Workspace: dir}, "session-1", "edit", []byte(`{"path": "sample.txt", "changes": [{"oldText": "beta", "newText": "BETA"}]}`))
-	if result.OK || result.ErrorCode != "E_VERSION_REQUIRED" {
-		t.Fatalf("expected E_VERSION_REQUIRED, got %#v", result)
+	if result.OK || !strings.Contains(result.Error, "version") {
+		t.Fatalf("expected the missing version to be named, got %#v", result)
 	}
 	got, err := os.ReadFile(filepath.Join(dir, "sample.txt"))
 	if err != nil {
@@ -4332,11 +4326,11 @@ func TestExecuteToolEditDoesNotMislabelSchemaErrorAsTruncation(t *testing.T) {
 	if strings.Contains(strings.ToLower(result.Error), "truncated") {
 		t.Fatalf("complete schema error must not be reported as truncation: %q", result.Error)
 	}
-	// Unknown keys inside a change are now tolerated with a warning, but the
-	// change itself still fails validation: neither oldText nor lineRange was
-	// provided, which must surface as the real E_BAD_EDIT error.
-	if !strings.Contains(result.Error, "E_BAD_EDIT") {
-		t.Fatalf("expected the real validation error, got %q", result.Error)
+	// Unknown keys inside a change used to be tolerated with a warning while
+	// the change itself failed validation; both problems are now reported
+	// together, naming every offending key.
+	if !strings.Contains(result.Error, "oldString") || !strings.Contains(result.Error, "newText") {
+		t.Fatalf("expected the unknown keys and the missing newText, got %q", result.Error)
 	}
 }
 

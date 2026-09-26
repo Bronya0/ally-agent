@@ -278,6 +278,47 @@ func TestMcpServerConfigEqualIgnoresDisabledTools(t *testing.T) {
 	}
 }
 
+// MCP 工具不入参数闸门（没有内置声明可校验），所以一个拼错或多传的参数只能
+// 靠这条警告露面；声明里没有 properties 的工具则保持安静，否则每个参数都会被点名。
+func TestMcpUnknownArgWarningsNamesUndeclaredArguments(t *testing.T) {
+	app := NewApp()
+	manager := NewMcpManager(t.TempDir(), nil)
+	manager.clients = map[string]*McpClientHandle{
+		"fs": {
+			ServerName: "fs",
+			Status:     "connected",
+			Config:     McpServerConfig{Command: "x"},
+			ToolDefs: []McpDiscoveredTool{
+				{
+					ServerName:   "fs",
+					Name:         "read_file",
+					FunctionName: "mcp__fs__read_file",
+					Schema: map[string]any{
+						"type":       "object",
+						"properties": map[string]any{"path": map[string]any{"type": "string"}},
+					},
+				},
+				{ServerName: "fs", Name: "probe", FunctionName: "mcp__fs__probe"},
+			},
+		},
+	}
+	app.mcpManager = manager
+
+	warnings := app.mcpUnknownArgWarnings("mcp__fs__read_file", map[string]any{"path": "a.txt", "recursive": true, "dept": 2})
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "dept, recursive") {
+		t.Fatalf("undeclared MCP arguments must be named together, got %#v", warnings)
+	}
+	if got := app.mcpUnknownArgWarnings("mcp__fs__read_file", map[string]any{"path": "a.txt"}); len(got) != 0 {
+		t.Fatalf("declared arguments must stay silent, got %#v", got)
+	}
+	if got := app.mcpUnknownArgWarnings("mcp__fs__probe", map[string]any{"anything": 1}); len(got) != 0 {
+		t.Fatalf("a tool without declared properties must not flag every argument, got %#v", got)
+	}
+	if got := app.mcpUnknownArgWarnings("mcp__missing__tool", map[string]any{"x": 1}); len(got) != 0 {
+		t.Fatalf("a tool outside the current set must stay silent, got %#v", got)
+	}
+}
+
 // 注入过滤：黑名单内工具不进 GetEnabledTools，但 GetAllTools（清单层）仍全量可见；
 // 黑名单按「对端原始工具名」匹配，未列出的工具（含对端新增）默认启用。
 func TestGetEnabledToolsFiltersDisabledTools(t *testing.T) {

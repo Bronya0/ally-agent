@@ -10,6 +10,8 @@ package shared
 import (
 	"strings"
 	"testing"
+
+	"ally-dev/internal/tools/schemautil"
 )
 
 func TestRuntimeSensitiveBuiltinSchemas(t *testing.T) {
@@ -74,6 +76,46 @@ func TestRuntimeSensitiveBuiltinSchemas(t *testing.T) {
 	}
 	if schemaObjectForTest(t, scheduleProperties["schedule"])["minLength"] != 1 {
 		t.Fatal("scheduled_task schedule must reject empty strings")
+	}
+}
+
+// TestEveryBuiltinSchemaIsEnforceable guards the argument gate in executeTool:
+// the gate rejects unknown keys and compiles each `pattern`, so a declaration
+// that is not a strict object would let a stray key through, and a pattern with
+// a typo would silently retire that constraint.
+func TestEveryBuiltinSchemaIsEnforceable(t *testing.T) {
+	for _, tool := range Builtins() {
+		if tool.Function == nil {
+			continue
+		}
+		name := tool.Function.Name
+		params, ok := tool.Function.Parameters.(map[string]any)
+		if !ok {
+			t.Fatalf("%s parameters have type %T, want map[string]any", name, tool.Function.Parameters)
+		}
+		if params["type"] != "object" || params["additionalProperties"] != false {
+			t.Fatalf("%s must be a strict object so unknown keys are rejected, got type=%#v additionalProperties=%#v", name, params["type"], params["additionalProperties"])
+		}
+		if err := schemautil.CheckPatterns(params); err != nil {
+			t.Fatalf("%s has a pattern that does not compile: %v", name, err)
+		}
+	}
+}
+
+// TestServiceSchemaExposesTheStopAndReadTuning pins the two parameters the
+// runtime always accepted but the schema never declared, so a model could not
+// ask a database-style service for a longer graceful stop.
+func TestServiceSchemaExposesTheStopAndReadTuning(t *testing.T) {
+	params, _ := builtinSchemaForTest(t, "service")
+	properties := schemaObjectForTest(t, params["properties"])
+
+	grace := schemaObjectForTest(t, properties["graceSeconds"])
+	if grace["maximum"] != MaxServiceStopGraceSeconds || grace["minimum"] != 0 {
+		t.Fatalf("service graceSeconds bounds = %#v, want 0..%d so an omitted or 0 value means the default", grace, MaxServiceStopGraceSeconds)
+	}
+	tail := schemaObjectForTest(t, properties["tailBytes"])
+	if tail["maximum"] != MaxServiceReadTailBytes || tail["minimum"] != 0 {
+		t.Fatalf("service tailBytes bounds = %#v, want 0..%d", tail, MaxServiceReadTailBytes)
 	}
 }
 

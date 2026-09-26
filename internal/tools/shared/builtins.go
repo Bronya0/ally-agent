@@ -17,15 +17,43 @@ import (
 )
 
 const (
-	maxWaitSeconds = 3600
+	// MaxWaitSeconds bounds the wait tool's pause. Exported because the runtime
+	// clamp in app.go reads this same constant: the schema must never promise a
+	// wider range than the tool accepts.
+	MaxWaitSeconds = 3600
 	// MaxReadRangeLines bounds the read tool's per-file line range.
 	MaxReadRangeLines = 10000
 	MaxReadLineChars  = 2000
 	// MaxRenderHTMLCharacters bounds the HTML snippet by Unicode code points.
 	MaxRenderHTMLCharacters = 50000
+	// MaxRenderHTMLTitleChars bounds the render_html title, which the UI also
+	// uses as the iframe title.
+	MaxRenderHTMLTitleChars = 200
+	// Suggest limits: the schema and the runtime check read these same constants,
+	// so the promise "1-4 short texts" cannot drift from what is enforced.
+	MaxSuggestItems     = 4
+	MaxSuggestItemChars = 80
 	// maxDelegateStepBudget bounds the subagent maxSteps parameter. Kept in
 	// sync with the app-side hard cap (scheduler.MaxSteps).
 	maxDelegateStepBudget = 1000
+	// Service bounds. A graceful stop waits DefaultServiceStopGraceSeconds before
+	// force killing the process tree, and one read returns
+	// DefaultServiceReadTailBytes of recent output; both are capped here because
+	// the service schema declares the same numbers, and the runtime clamps in
+	// orch_services.go read them from this block.
+	DefaultServiceStopGraceSeconds = 3
+	MaxServiceStopGraceSeconds     = 30
+	DefaultServiceReadTailBytes    = 8 * 1024
+	MaxServiceReadTailBytes        = 32 * 1024
+	// HTTP response-size bounds. internal/app's maxHTTPBodyBytes /
+	// defaultHTTPMaxBody / defaultWebFetchBody and web_fetch's character bounds
+	// read these same constants, so a declared range can never drift from what
+	// the runtime enforces.
+	MaxHTTPBodyBytes     = 50 * 1024 * 1024
+	DefaultHTTPMaxBody   = 256 * 1024
+	DefaultWebFetchBody  = 2 * 1024 * 1024
+	DefaultWebFetchChars = 60000
+	MaxWebFetchChars     = 200000
 )
 
 // chatToolsCache memoizes the built-in tool list. The schema is pure static
@@ -46,6 +74,38 @@ func Builtins() []openai.Tool {
 		chatToolsCache.tools = chatToolsUncached()
 	})
 	return chatToolsCache.tools
+}
+
+// builtinSchemaCache indexes the cached declarations by tool name for the
+// argument gate in executeTool.
+var builtinSchemaCache = struct {
+	once   sync.Once
+	byName map[string]map[string]any
+}{}
+
+// BuiltinSchema returns the argument schema declared for a built-in tool — the
+// exact object the model was shown. ok is false for a name with no built-in
+// declaration (MCP tools such as mcp__server__tool, and legacy aliases carried
+// for old histories), which callers must read as "nothing to validate against"
+// rather than as an argument error. The returned map is the shared cached one:
+// callers must not mutate it.
+func BuiltinSchema(name string) (map[string]any, bool) {
+	builtinSchemaCache.once.Do(func() {
+		byName := make(map[string]map[string]any)
+		for _, tool := range Builtins() {
+			if tool.Function == nil {
+				continue
+			}
+			parameters, ok := tool.Function.Parameters.(map[string]any)
+			if !ok {
+				continue
+			}
+			byName[NormalizeName(tool.Function.Name)] = parameters
+		}
+		builtinSchemaCache.byName = byName
+	})
+	schema, ok := builtinSchemaCache.byName[name]
+	return schema, ok
 }
 
 func chatToolsUncached() []openai.Tool {
@@ -125,7 +185,7 @@ func chatToolsUncached() []openai.Tool {
 		functionTool("wait", "Pause the current agent run for a short, cancellable delay (1-3600 seconds) with a reason.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"seconds": map[string]any{"type": "integer", "minimum": 1, "maximum": maxWaitSeconds, "description": "Delay in whole seconds, from 1 to 3600."},
+				"seconds": map[string]any{"type": "integer", "minimum": 1, "maximum": MaxWaitSeconds, "description": "Delay in whole seconds, from 1 to 3600."},
 				"reason":  map[string]any{"type": "string", "minLength": 1, "maxLength": 200, "pattern": ".*\\S.*", "description": "Short reason for the pause; the user reads it, so state plainly what you are waiting for."},
 			},
 			"required": []string{"seconds", "reason"},
@@ -549,9 +609,9 @@ func normalizeSchemaNode(node map[string]any) {
 	}
 }
 
-// normalizeToolName lower-cases the incoming tool name and resolves any
-// deprecated alias to its canonical name. It is the single entry point for
-// tool-name normalization in executeTool.
+// NormalizeName lower-cases the incoming tool name and trims surrounding
+// whitespace. It is the single entry point for tool-name normalization in
+// executeTool; there is no alias table behind it.
 func NormalizeName(name string) string {
 	return strings.ToLower(strings.TrimSpace(name))
 }

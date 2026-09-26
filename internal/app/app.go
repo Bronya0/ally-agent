@@ -26,6 +26,7 @@ import (
 	"unicode/utf8"
 
 	"ally-dev/internal/tools/grep"
+	"ally-dev/internal/tools/schemautil"
 	toolshared "ally-dev/internal/tools/shared"
 	"ally-dev/internal/tools/toolcall"
 
@@ -63,16 +64,18 @@ const (
 	// (InjectRunMessage). The buffered channel plus non-blocking drain keeps
 	// injection off the chat hot path; a full queue fails the call instead of
 	// blocking the frontend.
-	runInputBufferSize  = 32
-	defaultLLMRetries   = 6
-	defaultShellLimit   = 120
-	defaultHTTPTimeout  = 60
-	defaultGrepTimeout  = grep.DefaultTimeout
-	maxGrepTimeout      = grep.MaxTimeout
-	maxWaitSeconds      = 3600
-	maxHTTPBodyBytes    = 50 * 1024 * 1024
-	defaultHTTPMaxBody  = 256 * 1024
-	defaultWebFetchBody = 2 * 1024 * 1024
+	runInputBufferSize = 32
+	defaultLLMRetries  = 6
+	defaultShellLimit  = 120
+	defaultHTTPTimeout = 60
+	defaultGrepTimeout = grep.DefaultTimeout
+	maxGrepTimeout     = grep.MaxTimeout
+	maxWaitSeconds     = toolshared.MaxWaitSeconds
+	// Response-size bounds shared with the built-in tool schemas: the schema is
+	// the contract the model reads, so both sides read one definition.
+	maxHTTPBodyBytes    = toolshared.MaxHTTPBodyBytes
+	defaultHTTPMaxBody  = toolshared.DefaultHTTPMaxBody
+	defaultWebFetchBody = toolshared.DefaultWebFetchBody
 	maxHTTPJSONPreview  = 24 * 1024
 	httpRateDelay       = 1 * time.Second
 	defaultHTTPUA       = "AllyAgent/1.0 (+user-controlled desktop app)"
@@ -2306,20 +2309,28 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 			result = toolErrorResult(codedToolError("E_TOOL_PANIC", fmt.Errorf("tool %s crashed internally: %v", name, r)))
 		}
 	}()
-	// decodeJSON unmarshals args into v, allowing unknown fields but collecting
-	// them as warnings. Returns (error, warnings) where warnings are finished
-	// model-facing notices: ignored unknown argument keys plus auto-repair
-	// notes when the model emitted JSON-encoded strings where arrays/objects
-	// belong (e.g. {"files":"[{...}]"}).
+	// decodeJSON unmarshals args into v and reports whatever the model got
+	// wrong. Returns (error, warnings) where warnings are finished model-facing
+	// notices: auto-repair notes when the model emitted JSON-encoded strings
+	// where arrays/objects belong (e.g. {"files":"[{...}]"}), plus ignored
+	// unknown argument keys for the few tools that have no declared schema.
+	//
+	// For a built-in tool the payload is then checked against its declared
+	// schema (the gate below): that declaration is what the model was shown, so
+	// a mismatch is a model bug that must fail here, naming the field, instead
+	// of reaching a handler that never promised to check it. Only tools with no
+	// built-in declaration (MCP tools, legacy aliases) keep the tolerant path.
 	decodeJSON := func(v any) (error, []string) {
-		if len(bytes.TrimSpace(args)) == 0 {
-			return nil, nil
+		// Missing arguments decode as an empty object so the gate reports the
+		// absent required parameters explicitly instead of letting the handler
+		// run on zero values.
+		rawArgs := args
+		if len(bytes.TrimSpace(rawArgs)) == 0 {
+			rawArgs = []byte("{}")
 		}
-		// First, collect all valid JSON field names from the target struct.
-		validFields := collectValidJSONFields(v)
 		// Parse the raw JSON to a map to detect extra keys.
 		var rawMap map[string]json.RawMessage
-		if err := json.Unmarshal(args, &rawMap); err != nil {
+		if err := json.Unmarshal(rawArgs, &rawMap); err != nil {
 			// Only an unexpected end is evidence of a cut-off stream. Unknown
 			// fields, wrong types, and other complete-JSON schema errors used to
 			// be mislabeled as truncation, making small oldText/legacy oldString
@@ -2337,7 +2348,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		// string fields are decoded in place, so a recoverable formatting slip
 		// does not waste a model round trip.
 		var repairedFields []string
-		cur := args
+		cur := rawArgs
 		for round := 0; ; round++ {
 			err := json.Unmarshal(cur, v)
 			if err == nil {
@@ -2360,8 +2371,23 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 				"参数 %s 的格式有误（应为 JSON 数组/对象，却收到了带引号的字符串），已自动修复并照常执行；后续调用请直接传 JSON 数组或对象，不要序列化成字符串。",
 				strings.Join(repairedFields, ", ")))
 		}
-		// Collect extra keys. Repair only rewrites values, never keys, so the
-		// original rawMap stays authoritative here.
+		// Schema gate: validate the repaired payload so the stringified-array
+		// repair above still lands, and so every keyword the declaration uses
+		// (required, ranges, patterns, enum, oneOf/anyOf/not, unknown keys at any
+		// depth) is enforced exactly as written. Unknown keys used to be
+		// downgraded to a warning, which let a typo execute on a default the
+		// model never asked for.
+		if schema, ok := toolshared.BuiltinSchema(name); ok {
+			if violations := schemautil.ValidateArgs(schema, cur); len(violations) > 0 {
+				return codedToolError("E_BAD_ARGS", fmt.Errorf("invalid arguments for %s: %s", name, schemautil.DescribeViolations(violations))), nil
+			}
+			return nil, warnings
+		}
+		// No declared schema (MCP tools, legacy aliases): keep the tolerant
+		// path. Only top-level extra keys are visible without a schema, which is
+		// why this check reads the target struct's tags. Repair only rewrites
+		// values, never keys, so the original rawMap stays authoritative here.
+		validFields := collectValidJSONFields(v)
 		extraFields := make([]string, 0, len(rawMap))
 		for k := range rawMap {
 			if _, ok := validFields[k]; !ok {
@@ -2374,10 +2400,10 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		return nil, warnings
 	}
 
-	// Normalize once at the boundary: lower-case for case-insensitivity and
-	// resolve deprecated aliases so historical sessions keep working after a
-	// rename. MCP tools (mcp__*) pass through unchanged because their
-	// sanitized names are already lowercase.
+	// Normalize once at the boundary: lower-case and trim surrounding
+	// whitespace. There is no alias table behind it (shared.NormalizeName); MCP
+	// tools (mcp__*) pass through unchanged because their sanitized names are
+	// already lowercase.
 	name = normalizeToolName(name)
 
 	// 截断参数的 tool call 一律不执行：normalizeToolCalls 把流式截断的
@@ -2675,6 +2701,10 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		if strings.HasPrefix(name, "mcp__") {
 			var mcpArgs map[string]any
 			if decodeErr := json.Unmarshal(args, &mcpArgs); decodeErr == nil {
+				// MCP arguments are forwarded unchanged (there is no built-in
+				// declaration to gate them against), so an argument the model
+				// invented is only ever surfaced by naming it here.
+				argWarnings = append(argWarnings, a.mcpUnknownArgWarnings(name, mcpArgs)...)
 				result, callErr := a.executeMcpFunctionTool(ctx, name, mcpArgs)
 				if callErr != nil {
 					err = callErr

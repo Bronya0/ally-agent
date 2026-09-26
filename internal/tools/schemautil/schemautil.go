@@ -234,8 +234,11 @@ func normalizeNodeTypes(node any, isPropertyDef bool) {
 		rawType, hasType := m["type"]
 		typeStr, isStr := rawType.(string)
 		if !hasType || !isStr || strings.TrimSpace(typeStr) == "" {
-			inferred := inferTypeFromNode(m)
-			if inferred != "" {
+			if declaresOwnShape(m) {
+				// The node already states its own shape (anyOf/oneOf/allOf or an
+				// unresolved $ref); a scalar type beside it would intersect with
+				// those alternatives.
+			} else if inferred := inferTypeFromNode(m); inferred != "" {
 				m["type"] = inferred
 			} else {
 				m["type"] = "string"
@@ -301,6 +304,21 @@ func normalizeNodeTypes(node any, isPropertyDef bool) {
 			normalizeNodeTypes(v, false)
 		}
 	}
+}
+
+// declaresOwnShape reports whether a node already states its own shape through a
+// composite keyword (anyOf/oneOf/allOf) or an unresolved $ref. Such a node must
+// keep that statement: stamping a scalar `type` beside it narrows the node to the
+// intersection of the two, so `anyOf: [object, array, string]` reached the model
+// as "just a string" and every non-string argument looked wrong.
+func declaresOwnShape(m map[string]any) bool {
+	for _, key := range []string{"anyOf", "oneOf", "allOf"} {
+		if variants, ok := m[key].([]any); ok && len(variants) > 0 {
+			return true
+		}
+	}
+	ref, ok := m["$ref"].(string)
+	return ok && strings.TrimSpace(ref) != ""
 }
 
 func inferTypeFromNode(m map[string]any) string {

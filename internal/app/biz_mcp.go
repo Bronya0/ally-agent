@@ -932,6 +932,48 @@ func (m *McpManager) collectTools(enabledOnly bool) []McpDiscoveredTool {
 	return all
 }
 
+// mcpDeclaredParameters returns the parameter declaration Ally sent the model
+// for an MCP tool, or nil when that tool is not part of the current set.
+func (a *App) mcpDeclaredParameters(functionName string) map[string]any {
+	if a.mcpManager == nil {
+		return nil
+	}
+	for _, dt := range a.mcpManager.GetEnabledTools() {
+		name := dt.FunctionName
+		if name == "" {
+			name = mcpToolFunctionName(dt.ServerName, dt.Name)
+		}
+		if name == functionName {
+			return dt.Schema
+		}
+	}
+	return nil
+}
+
+// mcpUnknownArgWarnings names the arguments an MCP call carries that its
+// declaration never promised. MCP tools keep the tolerant path — there is no
+// built-in schema for the argument gate to enforce — so without this notice a
+// typo reaches the server and is dropped there with the model none the wiser.
+// A tool with no declared properties reports nothing: silence beats flagging
+// every argument of an unknown shape.
+func (a *App) mcpUnknownArgWarnings(functionName string, args map[string]any) []string {
+	properties, ok := a.mcpDeclaredParameters(functionName)["properties"].(map[string]any)
+	if !ok || len(properties) == 0 || len(args) == 0 {
+		return nil
+	}
+	unknown := make([]string, 0, len(args))
+	for key := range args {
+		if _, declared := properties[key]; !declared {
+			unknown = append(unknown, key)
+		}
+	}
+	if len(unknown) == 0 {
+		return nil
+	}
+	sort.Strings(unknown)
+	return []string{fmt.Sprintf("以下参数不在工具声明中，已原样转发给 MCP 服务端（服务端可能忽略）：%s", strings.Join(unknown, ", "))}
+}
+
 // IsToolDisabled reports whether a server's tool sits in its injection
 // blacklist. Unknown servers/tools are never disabled (absence = enabled, so
 // server-side additions default on).
