@@ -41,11 +41,13 @@ const (
 	reasoningEffortMax          = "max"
 )
 
-// Provider-facing defaults: the fallback model, its endpoint, and the
-// reasoning dialect tag the request rewrite falls back to
-// (see chatReasoningBackfillKey).
+// Provider-facing defaults: the endpoint a request falls back to when the model
+// entry carries none, and the reasoning dialect tag the request rewrite falls
+// back to (see chatReasoningBackfillKey). There is deliberately no default model
+// here: the model always comes from models[] (expanded by identity), while the
+// placeholder the UI shows when nothing is configured lives frontend-side
+// (utils/config.mjs placeholderModel).
 const (
-	defaultModel        = "deepseek-v4-flash"
 	defaultBaseURL      = "https://api.deepseek.com"
 	defaultReasoningTag = "reasoning_content"
 )

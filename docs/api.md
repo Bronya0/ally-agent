@@ -119,7 +119,7 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:47821/api/v1/sessions?
 |------|------|
 | `running` | 是否有活跃 run（AI 正在执行） |
 | `queuedMessages` | 排队等待注入的用户消息数 |
-| `model` / `modelProvider` | 下一回合将使用的模型（即全局激活模型） |
+| `model` / `modelProvider` | 下一回合将使用的模型（本地 HTTP API 会话用的是"最近使用模型"，即 `POST /api/v1/models/activate` 设的那一条） |
 | `id` / `title` / `workspace` / `createdAt` / `updatedAt` / `messageCount` / `contextTokens` | 会话元信息 |
 
 会话不存在返回 404。
@@ -182,13 +182,13 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:47821/api/v1/sessions?
 
 ## 模型
 
-### `GET /api/v1/models` — 查询模型列表与激活模型
+### `GET /api/v1/models` — 查询模型列表与最近使用模型
 
 响应 `data`：
 
 | 字段 | 说明 |
 |------|------|
-| `active` | 当前激活模型：`{providerName, apiFormat, baseUrl, model, reasoningTag, reasoningEffort, customHeaderNames}`，即所有会话下一回合使用的模型 |
+| `active` | 最近使用模型：`{providerName, apiFormat, baseUrl, model, reasoningTag, reasoningEffort, customHeaderNames}`，即本地 HTTP API 会话（不带 Tab 模型 overlay）下一回合使用的模型；界面上每个 Tab 各自有自己的模型，与它无关。一条模型都没配置时各字段为空串 |
 | `models[]` | 已配置的模型条目（下标即 `index`，供更新/激活用） |
 | `models[].hasApiKey` / `apiKeyCount` | 密钥配置状态（**响应永不回传密钥明文**） |
 | `models[].customHeaderNames` | 该条目自定义请求头的键名列表（**只回传键名，永不回传值**，值可能携带网关凭据） |
@@ -218,9 +218,9 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:47821/api/v1/sessions?
 
 注意：更新是**整体替换**该下标的条目——没传的字段会被清空，改单条时请把原条目字段一并传回。响应 `data`：`{ "index": 2 }`。
 
-### `POST /api/v1/models/activate` — 切换激活模型
+### `POST /api/v1/models/activate` — 设置最近使用模型
 
-请求体：`{ "index": 2 }`（`models[]` 的下标）。切换的是全局激活模型（Ally 的会话在后端不持有独立模型状态，所有会话的下一回合都使用它）。越界返回 400。
+请求体：`{ "index": 2 }`（`models[]` 的下标）。它记下的是模型的**身份**（providerName + model id）：config.json 里只存 `models[]` 与这个身份，模型字段在每次生效时按身份展开；界面切换模型/发送时写回的是同一个身份（两边谁后写谁生效）。本地 HTTP API 会话没有 Tab 上下文，下一回合就用它；界面上每个 Tab 的模型不受影响。越界返回 400。
 
 ---
 

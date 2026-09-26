@@ -35,9 +35,10 @@ import (
 
 const (
 	appName = "Ally"
-	// Provider defaults (defaultModel / defaultBaseURL / defaultReasoningTag)
-	// live in prov_wire_config.go with the rest of the endpoint and reasoning
-	// dialect configuration.
+	// Provider defaults (defaultBaseURL / defaultReasoningTag) live in
+	// prov_wire_config.go with the rest of the endpoint and reasoning dialect
+	// configuration. The model itself has no default: it always comes from the
+	// models[] entries.
 	maxReadFileBytes        = 32 * 1024 * 1024
 	maxToolOutput           = 128 * 1024
 	maxFinishedSubagents    = 50
@@ -465,13 +466,21 @@ type ModelConfig struct {
 }
 
 type ConfigState struct {
-	ProviderName string `json:"providerName"`
-	APIFormat    string `json:"apiFormat"`
-	BaseURL      string `json:"baseUrl"`
-	APIKey       string `json:"apiKey"`
+	// 下面这组模型字段是**请求级派生值**：config.json 只存 models[] + lastUsedModel，
+	// 它们由 effectiveConfig 按身份展开填充（expandLastUsedModel），落盘前由
+	// stripModelFields 清空。保留 JSON 标签是因为请求 overlay（前端 Tab 快照）
+	// 走同一个结构体传这些字段。除 SwitchModel / SaveConfig 外，不要直接读写
+	// a.config 的这组字段——它恒为空。
+	// 全部带 omitempty：清空后这些键彻底不出现在 config.json 与 Wails 的
+	// GetConfig 结果里（请求 overlay 是前端自己构造的 JSON，不受影响）。
+	ProviderName string `json:"providerName,omitempty"`
+	APIFormat    string `json:"apiFormat,omitempty"`
+	BaseURL      string `json:"baseUrl,omitempty"`
+	APIKey       string `json:"apiKey,omitempty"`
 	// APIKeys is the ordered API key pool; see ModelConfig.APIKeys.
-	APIKeys    []string `json:"apiKeys,omitempty"`
-	Model      string   `json:"model"`
+	APIKeys []string `json:"apiKeys,omitempty"`
+	Model   string   `json:"model,omitempty"`
+	// Workspace 不是模型字段：它同时是设置项与运行时的请求上下文。
 	Workspace  string   `json:"workspace"`
 	ExtraRoots []string `json:"extraRoots,omitempty"`
 	// KBRoot is the user-configured knowledge-base root directory. When a run
@@ -479,8 +488,8 @@ type ConfigState struct {
 	// knowledge-base mode: the KB system-prompt part is injected and the
 	// sources/ subdirectory becomes read-only for model tools.
 	KBRoot        string `json:"kbRoot,omitempty"`
-	MaxTokens     int    `json:"maxTokens"`
-	ContextWindow int    `json:"contextWindow"`
+	MaxTokens     int    `json:"maxTokens,omitempty"`
+	ContextWindow int    `json:"contextWindow,omitempty"`
 	TokenParam    string `json:"tokenParam,omitempty"`
 	CustomPrompt  string `json:"customPrompt"`
 	// AllowPrivateNetwork is a pointer only so the load path can tell an explicit
@@ -501,10 +510,17 @@ type ConfigState struct {
 	ReasoningEffort string `json:"reasoningEffort,omitempty"`
 	// CustomHeaders mirrors the active model entry's extra HTTP headers
 	// (see ModelConfig.CustomHeaders); SwitchModel keeps the two in sync.
-	CustomHeaders  map[string]string `json:"customHeaders,omitempty"`
-	Models         []ModelConfig     `json:"models,omitempty"`
-	DisabledSkills []string          `json:"disabledSkills,omitempty"`
-	LLMRetries     int               `json:"llmRetries,omitempty"`
+	CustomHeaders map[string]string `json:"customHeaders,omitempty"`
+	Models        []ModelConfig     `json:"models,omitempty"`
+	// LastUsedModel 是最近一次使用的模型**身份**（providerName + model id，
+	// 不复制连接字段与密钥）。它是新 Tab 的模型种子，也是 HTTP API 会话的模型来源：
+	// 加载/生效时按身份在 models[] 里找到那一条并展开成请求级模型配置。由前端切
+	// 模型/发送时写回，或由 /api/v1/models/activate 写入；身份在 models[] 里找不到
+	// （未配置 / 预设已删）等价于"没有模型"。计划任务的 LLM 委托不用它：任务在创建
+	// 时把自己的模型身份存进任务记录（见 ScheduledTask.Model）。
+	LastUsedModel  *ModelIdentity `json:"lastUsedModel,omitempty"`
+	DisabledSkills []string       `json:"disabledSkills,omitempty"`
+	LLMRetries     int            `json:"llmRetries,omitempty"`
 	// AutoValidation* are nil for legacy configs (treated as disabled).
 	// Post-write checks only run for languages the user explicitly enabled
 	// in Settings.
@@ -1223,7 +1239,7 @@ type TextChange struct {
 	OldText    string  `json:"oldText,omitempty"`
 	LineRange  string  `json:"lineRange,omitempty"`
 	NewText    *string `json:"newText"`
-	ReplaceAll bool    `json:"replace_all,omitempty"`
+	ReplaceAll bool    `json:"replaceAll,omitempty"`
 }
 
 type MultiEditResult struct {
@@ -1412,6 +1428,26 @@ func (a *App) ensureInitialized() error {
 			if loaded.AllowPrivateNetwork != nil {
 				a.config.AllowPrivateNetwork = loaded.AllowPrivateNetwork
 			}
+			// 同一个理由：以下两个持久化字段也不在 mergeConfig 里（overlay 不得改写
+			// token，而"最近使用模型"由 SaveConfig / saveConfig 各自的显式分支写入），
+			// 加载路径不采纳就是"重启即丢"：内存里为空，GetConfig 把空值回给前端，
+			// 下一次保存再把空值写回磁盘——用户的 token 被永久抹掉，模型身份丢失
+			// 则退化成按使用频率挑一条（选了模型重启后没选中它）。
+			a.config.GitHubToken = strings.TrimSpace(loaded.GitHubToken)
+			if loaded.LastUsedModel != nil {
+				if identity := normalizeModelIdentity(a.config.Models, *loaded.LastUsedModel); identity != nil {
+					a.config.LastUsedModel = identity
+				}
+			}
+			// 旧版 config.json 把"当前模型"直接存在顶层字段里（/api/v1/models/activate
+			// 与 2026-09 之前设置页的"使用"按钮写过它）：按身份迁到 LastUsedModel，
+			// models[] 里找不到那条时就地物化成一条 preset（含密钥）。迁移必须发生在
+			// stripModelFields 之前——它清掉的是磁盘上唯一的一份。迁移后第一次保存
+			// 就以新形状落盘。
+			if a.config.LastUsedModel == nil {
+				migrateLegacyModelFields(&a.config, loaded)
+			}
+			stripModelFields(&a.config)
 		} else {
 			// 内容坏掉的配置不能留在原地：这次用了默认值，之后任意一次保存都会把
 			// 默认值写回同一个文件，用户的原设置就永久消失了。改名保留 + 记一行
@@ -1671,10 +1707,11 @@ func (a *App) releaseSession(sessionID string, deleteHistory bool) error {
 }
 
 // sessionModelConfig is the frozen set of model-facing connection fields a
-// session's runs actually used, captured at StartChat. It exists because the
-// chat frontend selects models per Tab without persisting them: the overlay
-// only rides each StartChat request. Session-level LLM calls outside a run
-// (manual compaction) must replay these fields, not the persisted default.
+// session's runs actually used, captured at StartChat. Each Tab keeps its own
+// model snapshot in memory and only ships it with a StartChat request (the
+// persisted config stores just models[] + the last-used identity), so
+// session-level LLM calls outside a run (manual compaction) must replay these
+// fields instead of re-deriving them from the persisted config.
 type sessionModelConfig struct {
 	providerName  string
 	apiFormat     string
@@ -3103,7 +3140,9 @@ func (a *App) ReadClipboardFiles() ([]string, error) {
 	return clipboardFiles()
 }
 
-// SwitchModel applies a model config by index to the current settings.
+// SwitchModel 把 models[index] 记为"最近使用模型"（HTTP API 的
+// POST /api/v1/models/activate 就是它；界面侧在切模型/发送时写回同一个身份）。
+// 模型字段不落盘，只存身份，读回来时由 expandLastUsedModel 展开。
 func (a *App) SwitchModel(index int) error {
 	if err := a.ensureInitialized(); err != nil {
 		return err
@@ -3113,24 +3152,9 @@ func (a *App) SwitchModel(index int) error {
 		a.mu.Unlock()
 		return fmt.Errorf("model index out of range: %d", index)
 	}
-	m := a.config.Models[index]
-	a.config.ProviderName = m.ProviderName
-	a.config.APIFormat = normalizeAPIFormat(m.APIFormat)
-	a.config.BaseURL = m.BaseURL
-	a.config.APIKey = m.APIKey
-	a.config.APIKeys = cloneStringSlice(m.APIKeys)
-	a.config.Model = m.Model
-	a.config.MaxTokens = m.MaxTokens
-	if m.ContextWindow > 0 {
-		a.config.ContextWindow = m.ContextWindow
-	}
-	a.config.TokenParam = m.TokenParam
-	a.config.CustomHeaders = normalizeCustomHeaders(m.CustomHeaders)
-	a.config.ReasoningTag = normalizeReasoningTag(m.ReasoningTag)
-	a.config.VisionCapable = m.VisionCapable
-	a.config.ReasoningEffort = normalizeReasoningEffort(m.ReasoningEffort)
+	identity := identityOfModel(a.config.Models[index])
+	a.config.LastUsedModel = &identity
 	cfg := a.config
-	syncAPIKeyFields(&cfg)
 	a.mu.Unlock()
 	return a.saveConfig(cfg)
 }

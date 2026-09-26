@@ -705,7 +705,7 @@ Ally 的持久化状态分散在几个文件里，各管一摊、互不渗透：
 
 | 文件 | 管什么 | 特点 |
 |------|--------|------|
-| `~/.ally_agent/config.json` | 模型与密钥、工作区、界面偏好、代理、校验开关…… | 整体读写；合并规则有唯一边界：**非空字段才覆盖**（老配置缺字段不会被新默认值冲掉），少数三态开关用「指针字段」区分「没填」和「填了 false」 |
+| `~/.ally_agent/config.json` | 模型与密钥、工作区、界面偏好、代理、校验开关…… | 整体读写；合并规则有唯一边界：**非空字段才覆盖**（老配置缺字段不会被新默认值冲掉），少数三态开关用「指针字段」区分「没填」和「填了 false」。模型只以 `models[]` 预设 + `lastUsedModel` 身份（providerName + model id）落盘：那 13 个顶层模型字段是**请求级派生值**，由 `effectiveConfig` 按身份展开（`expandLastUsedModel`）、落盘前清空（`stripModelFields`），请求 overlay（Tab 快照）照旧走同一结构体传它们；旧版把「当前模型」存在顶层字段里的 config.json 在加载时先物化成一条 preset（含密钥）再清空，不丢用户配置 |
 | `~/.ally_agent/mcp.json` | MCP 服务器清单 | 独立文件，坏了会显式警告 |
 | `~/.ally_agent/api.json` | 本地 API 服务的端口与 Token | 独立文件；服务开关是运行时状态，每次启动默认关闭 |
 | `~/.ally_agent/sessions/`、`histories/` | 第 13 章的三份档案 | 压缩存储、原子写 |

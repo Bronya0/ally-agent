@@ -342,7 +342,7 @@ func TestEditToolSchemaIsBatchChangesOnly(t *testing.T) {
 	if !ok {
 		t.Fatalf("edit change properties missing: %#v", items)
 	}
-	for _, field := range []string{"oldText", "lineRange", "replace_all", "newText"} {
+	for _, field := range []string{"oldText", "lineRange", "replaceAll", "newText"} {
 		if _, exists := changeProperties[field]; !exists {
 			t.Fatalf("edit change schema missing %s: %#v", field, items)
 		}
@@ -1472,7 +1472,7 @@ func TestCompactEditResultForModelPreservesWarnings(t *testing.T) {
 	result := toolResult{OK: true, Data: MultiEditResult{
 		FileCount:    1,
 		Replacements: 1,
-		Warnings:     []string{"change 1 ignored replace_all because it only applies to oldText; lineRange was executed normally"},
+		Warnings:     []string{"change 1 ignored replaceAll because it only applies to oldText; lineRange was executed normally"},
 		Files: []EditResult{{
 			Path:          "sample.txt",
 			BeforeVersion: "abcdef",
@@ -1480,7 +1480,7 @@ func TestCompactEditResultForModelPreservesWarnings(t *testing.T) {
 		}},
 	}}
 	compact := compactToolResultForModel("edit", result, "fallback")
-	if !strings.Contains(compact, "warning: change 1 ignored replace_all") {
+	if !strings.Contains(compact, "warning: change 1 ignored replaceAll") {
 		t.Fatalf("expected compact edit result to retain warnings, got %s", compact)
 	}
 }
@@ -3571,16 +3571,16 @@ func TestExecuteToolEditReplacesAllMatchesWhenRequested(t *testing.T) {
 		t.Fatal(err)
 	}
 	result := NewApp().executeTool(context.Background(), ConfigState{Workspace: dir}, "session-1", "edit", []byte(fmt.Sprintf(`{"path": "sample.txt", "version": %q,
-		"changes": [{"oldText": "foo", "newText": "bar", "replace_all": true}]}`, hashVersion(original))))
+		"changes": [{"oldText": "foo", "newText": "bar", "replaceAll": true}]}`, hashVersion(original))))
 	if !result.OK {
-		t.Fatalf("replace_all edit failed: %#v", result)
+		t.Fatalf("replaceAll edit failed: %#v", result)
 	}
 	got, err := os.ReadFile(filepath.Join(dir, "sample.txt"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(got) != "bar bar\nbar\n" {
-		t.Fatalf("unexpected replace_all content: %q", got)
+		t.Fatalf("unexpected replaceAll content: %q", got)
 	}
 	edited, ok := result.Data.(MultiEditResult)
 	if !ok || edited.Replacements != 3 {
@@ -4867,7 +4867,7 @@ func TestCompactToolResultForModelNeutralizesClosingMarkersInEditText(t *testing
 		Files:      []EditResult{{Path: "a.go", Version: "v1"}},
 		Summary:    "1 file · +1 -1",
 		Validation: `go vet: token "</ally-cmd>" is not allowed here`,
-		Warnings:   []string{"change 1 ignored replace_all: line 3 has </ally-grep> in text"},
+		Warnings:   []string{"change 1 ignored replaceAll: line 3 has </ally-grep> in text"},
 	}}
 	got := compactToolDataForModel("edit", multi, "fallback")
 	if strings.Contains(got, "</ally-cmd>") || strings.Contains(got, "</ally-grep>") {

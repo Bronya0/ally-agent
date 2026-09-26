@@ -119,7 +119,7 @@ func chatToolsUncached() []openai.Tool {
 		functionTool("edit", "Validate and apply exact replacements to one workspace file per call.\n"+
 			"- Edit one file per call: `path`, `version`, and `changes` sit at the top level. When editing multiple files, emit parallel edit calls in the same turn.\n"+
 			"- Read the file first: `version` is the required current 6-character token from `read`.\n"+
-			"- Prefer a small unique `oldText` per change; `replace_all` replaces all exact occurrences; `lineRange` (A-B form) replaces whole-line blocks.\n"+
+			"- Prefer a small unique `oldText` per change; `replaceAll` replaces all exact occurrences; `lineRange` (A-B form) replaces whole-line blocks.\n"+
 			"- All changes in one call match against the same original snapshot in reverse line order.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -226,7 +226,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"questions"},
 		}),
-		functionTool("scheduled_task", "Create, list, or delete persistent scheduled tasks that survive Ally restarts. Recurring schedules resume from startup without catching up missed fires. The backend also accepts future RFC3339 one-shot times; past-due one-shots are reported as missed and never run late. For agent-created tasks, create only when the user explicitly requests recurring automation. Task content must be exactly one of instruction (an LLM agent runs with fresh context each fire) or command (a shell command runs in the task workspace through command safety checks, max 600s per run).", map[string]any{
+		functionTool("scheduled_task", "Create, list, or delete persistent scheduled tasks that survive Ally restarts. Recurring schedules resume from startup without catching up missed fires. The backend also accepts future RFC3339 one-shot times; past-due one-shots are reported as missed and never run late. For agent-created tasks, create only when the user explicitly requests recurring automation. Task content must be exactly one of instruction (an LLM agent runs with fresh context each fire, on the model that was active when the task was created) or command (a shell command runs in the task workspace through command safety checks, max 600s per run).", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"action":      map[string]any{"type": "string", "enum": []string{"create", "list", "delete"}, "description": "Create, list, or delete a scheduled task."},
@@ -296,7 +296,7 @@ func chatToolsUncached() []openai.Tool {
 			"- Requires the current 6-character `version` from `remote_read`; `E_VERSION_MISMATCH` means re-read before editing.\n"+
 			"- `changes` must be a JSON array (`[...]`), not a quoted JSON string (a quoted string is auto-repaired, but do not rely on it).\n"+
 			"- Each change chooses exactly one source: a small exact unique `oldText` copied from `remote_read` (preferred), or an inclusive whole-line `lineRange` in A-B form for larger blocks.\n"+
-			"- `replace_all` works only with `oldText`. `newText` is required.", map[string]any{
+			"- `replaceAll` works only with `oldText`. `newText` is required.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"target":  map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Explicit SSH target plus an absolute, non-root workspace path, e.g. my-dev:/srv/app. The workspace path / is rejected."},
@@ -579,7 +579,7 @@ func editChangeSchema() map[string]any {
 				// oldText useless.
 				"description": "Small exact unique source snippet copied exactly from the read result, without `N: ` prefixes; preferred over lineRange.",
 			},
-			"replace_all": map[string]any{
+			"replaceAll": map[string]any{
 				"type":        "boolean",
 				"description": "Optional; defaults to false. With oldText, true replaces every non-overlapping exact occurrence in the original snapshot; with lineRange it is ignored.",
 			},
@@ -612,10 +612,10 @@ func remoteEditChangeSchema() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"oldText":     map[string]any{"type": "string", "description": "Exact unique source snippet copied from remote_read; use this instead of lineRange for small edits."},
-			"replace_all": map[string]any{"type": "boolean", "description": "With oldText, true replaces every non-overlapping exact occurrence in the original snapshot."},
-			"lineRange":   map[string]any{"type": "string", "pattern": editLineRangeOptionalPattern, "description": "Inclusive whole-line A-B range from remote_read's displayed line numbers, e.g. \"40-72\"."},
-			"newText":     map[string]any{"type": "string", "description": "Replacement text without line prefixes; empty deletes the selected source."},
+			"oldText":    map[string]any{"type": "string", "description": "Exact unique source snippet copied from remote_read; use this instead of lineRange for small edits."},
+			"replaceAll": map[string]any{"type": "boolean", "description": "With oldText, true replaces every non-overlapping exact occurrence in the original snapshot."},
+			"lineRange":  map[string]any{"type": "string", "pattern": editLineRangeOptionalPattern, "description": "Inclusive whole-line A-B range from remote_read's displayed line numbers, e.g. \"40-72\"."},
+			"newText":    map[string]any{"type": "string", "description": "Replacement text without line prefixes; empty deletes the selected source."},
 		},
 		"required": []string{"newText"},
 		"oneOf":    editSourceOneOf(),

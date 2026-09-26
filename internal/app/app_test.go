@@ -107,7 +107,7 @@ func TestStartChatRequiresExplicitWorkspace(t *testing.T) {
 		APIFormat: apiFormatOpenAIChat,
 		BaseURL:   defaultBaseURL,
 		APIKey:    "test-key",
-		Model:     defaultModel,
+		Model:     "test-model",
 	}
 	if _, err := app.StartChat(ChatRequest{SessionID: "session-1"}); err == nil || !strings.Contains(err.Error(), "workspace is required") {
 		t.Fatalf("StartChat() error = %v, want workspace required", err)
@@ -398,12 +398,14 @@ func TestCancelRunKeepsSessionRegisteredUntilRunExits(t *testing.T) {
 	}
 }
 
-func TestMergeConfigDefaultsReasoningTags(t *testing.T) {
+func TestMergeConfigNormalizesModelReasoningTags(t *testing.T) {
 	got := mergeConfig(ConfigState{}, ConfigState{
 		Models: []ModelConfig{{Model: "test-model"}},
 	})
-	if got.ReasoningTag != defaultReasoningTag {
-		t.Fatalf("expected default reasoning tag %q, got %q", defaultReasoningTag, got.ReasoningTag)
+	// 顶层模型字段是派生值：没有可展开的模型时应保持空，mergeConfig 不再凭空补
+	// 默认值（调用方据此报 "model is required"）。
+	if got.ReasoningTag != "" {
+		t.Fatalf("expected empty top-level reasoning tag, got %q", got.ReasoningTag)
 	}
 	if len(got.Models) != 1 || got.Models[0].ReasoningTag != defaultReasoningTag {
 		t.Fatalf("expected saved model reasoning tag to default to %q, got %#v", defaultReasoningTag, got.Models)

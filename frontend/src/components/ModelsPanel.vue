@@ -280,6 +280,7 @@ import { computed, reactive, ref, watch } from 'vue';
 import { useMessage } from 'naive-ui';
 import { reasoningEffortLabel, t } from '../i18n.mjs';
 import { buildModelConfigExport, mergeModelConfigs, modelConfigIdentity, normalizeApiFormat, normalizeApiKeysArray, normalizeCustomHeaders, normalizeReasoningEffort, parseModelConfigImport, reasoningEffortLevels } from '../utils/modelConfigIO.mjs';
+import { placeholderModel } from '../utils/config.mjs';
 import { saveTextFile } from '../utils/download.mjs';
 import CloseOutlined from '@vicons/antd/CloseOutlined';
 import PlusOutlined from '@vicons/antd/PlusOutlined';
@@ -328,10 +329,11 @@ const modelImportInput = ref(null);
 const testingModel = ref(false);
 
 function defaultModelDraft(source = {}) {
+  // 新增模型时的连接默认值来自出厂占位（provider / baseUrl / maxTokens / ...）。
+  // 这些默认值以前来自 config 顶层的"默认模型"字段，那个字段已经删掉。
+  const fallback = placeholderModel();
   // When the source explicitly carries key fields (even empty), respect them:
-  // "add new model" passes blank keys and must not inherit the current
-  // draft's credentials. Only a source without key fields at all falls back
-  // to the draft keys.
+  // "add new model" passes blank keys and must not inherit anyone's credentials.
   const sourceHasKeyField = 'apiKeys' in source || 'apiKey' in source;
   const rawKeys = sourceHasKeyField
     ? (Array.isArray(source.apiKeys) && source.apiKeys.length
@@ -339,23 +341,21 @@ function defaultModelDraft(source = {}) {
       : source.apiKey
         ? [source.apiKey]
         : [])
-    : (Array.isArray(draft?.apiKeys) && draft.apiKeys.length
-      ? draft.apiKeys
-      : draft?.apiKey ? [draft.apiKey] : []);
+    : [];
   const normalizedKeys = normalizeModelApiKeys(rawKeys);
   return {
-    providerName: draft?.providerName || 'OpenAI Compatible',
-    apiFormat: normalizeApiFormat(draft?.apiFormat),
-    baseUrl: draft?.baseUrl || '',
-    apiKey: draft?.apiKey || '',
+    providerName: fallback.providerName,
+    baseUrl: fallback.baseUrl,
+    apiKey: '',
     model: '',
     ...source,
+    apiFormat: normalizeApiFormat(source.apiFormat || fallback.apiFormat),
     // Keep at least one (possibly empty) row so the form always shows a key
     // input; empty strings are stripped again on save/test.
     apiKeys: normalizedKeys.length ? normalizedKeys : [''],
-    maxTokens: Number.isFinite(Number(source.maxTokens)) && Number(source.maxTokens) > 0 ? Number(source.maxTokens) : (draft?.maxTokens || 131072),
-    contextWindow: Number.isFinite(Number(source.contextWindow)) && Number(source.contextWindow) > 0 ? Number(source.contextWindow) : (draft?.contextWindow || 1000000),
-    reasoningTag: String(source.reasoningTag || draft?.reasoningTag || 'reasoning_content').trim() || 'reasoning_content',
+    maxTokens: Number.isFinite(Number(source.maxTokens)) && Number(source.maxTokens) > 0 ? Number(source.maxTokens) : fallback.maxTokens,
+    contextWindow: Number.isFinite(Number(source.contextWindow)) && Number(source.contextWindow) > 0 ? Number(source.contextWindow) : fallback.contextWindow,
+    reasoningTag: String(source.reasoningTag || fallback.reasoningTag).trim() || 'reasoning_content',
     // "auto" and the legacy "max_tokens" both send max_tokens, so collapse the
     // explicit legacy value onto "auto" — otherwise the two-option select would
     // render blank for an imported config that stored "max_tokens".
@@ -542,7 +542,7 @@ const providerTabs = computed(() => {
 });
 
 // 搜索词变化后当前 tab 可能已被过滤隐藏：重新对齐到仍可见的 tab
-// （当前 tab 仍在则保持，否则回退默认模型所在 tab，再退第一个）。
+// （当前 tab 仍在则保持，否则回退第一个）。
 watch(modelSearch, () => alignActiveProviderTab());
 
 // n-tabs 会缓存激活下划线的像素偏移，tab 集合被搜索过滤增删后 bar 不会
@@ -557,8 +557,18 @@ function alignActiveProviderTab(preferred = '') {
     return;
   }
   const names = new Set(tabs.map((tab) => tab.name));
-  const candidates = [preferred, activeProviderTab.value, normalizedProviderName(draft.providerName), tabs[0]?.name || ''];
+  const candidates = [preferred, activeProviderTab.value, tabs[0]?.name || ''];
   activeProviderTab.value = candidates.find((name) => name && names.has(name)) || tabs[0].name;
+}
+
+// 父级给的默认 Provider 只在非空时生效：空串表示「无偏好」，不能被
+// normalizedProviderName 的兜底（空值 → OpenAI Compatible）吃掉，否则
+// 没选过模型时会被硬拉到 OpenAI Compatible 分组。
+// 来源是配置里的「最近使用模型」身份（config.lastUsedModel.providerName）：模型页
+// 自己已无默认模型概念，App 在切模型/发送时会把它同步进设置草稿。
+function defaultProviderPreference() {
+  const provider = String(props.configDraft?.lastUsedModel?.providerName || '').trim();
+  return provider ? normalizedProviderName(provider) : '';
 }
 
 async function ensureModelCatalog() {
@@ -602,10 +612,7 @@ async function fetchRemoteModels() {
 }
 
 function assignModelDraft(source = {}) {
-  Object.assign(modelDraft, defaultModelDraft({
-    ...source,
-    apiFormat: normalizeApiFormat(source.apiFormat || draft.apiFormat),
-  }));
+  Object.assign(modelDraft, defaultModelDraft(source));
   // Always default to "Custom" — never auto-match a catalog preset. The
   // preset dropdown is opt-in; auto-matching was surprising because it
   // silently switched the form into preset mode and disabled Model/Base URL.
@@ -663,15 +670,16 @@ async function startAddModelDraft() {
     });
   } else {
     resetCustomHeaderRows(null);
+    const fallback = placeholderModel();
     assignModelDraft({
       providerName: provider,
-      apiFormat: normalizeApiFormat(draft.apiFormat),
-      baseUrl: draft.baseUrl || '',
+      apiFormat: fallback.apiFormat,
+      baseUrl: fallback.baseUrl,
       apiKey: '',
       apiKeys: [],
       model: '',
-      maxTokens: draft.maxTokens || 131072,
-      contextWindow: draft.contextWindow || 1000000,
+      maxTokens: fallback.maxTokens,
+      contextWindow: fallback.contextWindow,
     });
   }
   modelEditorVisible.value = true;
@@ -746,8 +754,8 @@ function commitModelDraft() {
     apiKey: apiKeys[0] || '',
     apiKeys,
     model,
-    maxTokens: modelDraft.maxTokens || draft.maxTokens || 131072,
-    contextWindow: modelDraft.contextWindow || draft.contextWindow || 1000000,
+    maxTokens: modelDraft.maxTokens || 131072,
+    contextWindow: modelDraft.contextWindow || 1000000,
     reasoningTag: modelDraft.reasoningTag || 'reasoning_content',
     tokenParam: modelDraft.tokenParam || 'auto',
     reasoningEffort: normalizeReasoningEffort(modelDraft.reasoningEffort),
@@ -796,7 +804,7 @@ async function importModelConfigs(event) {
     const imported = parseModelConfigImport(await file.text());
     const result = mergeModelConfigs(draft.models, imported);
     draft.models = result.models;
-    alignActiveProviderTab(activeProviderTab.value || normalizedProviderName(draft.providerName));
+    alignActiveProviderTab(activeProviderTab.value || defaultProviderPreference());
     emit('save', { ...draft }, true);
     message.success(t('settings.modelImportSuccess', { added: result.added, updated: result.updated }));
   } catch (err) {
@@ -839,7 +847,7 @@ function syncDraftFromProps() {
   }
   Object.assign(draft, next);
   cancelModelDraft();
-  alignActiveProviderTab(normalizedProviderName(draft.providerName));
+  alignActiveProviderTab(defaultProviderPreference());
 }
 
 // The page stays mounted (parent v-show): re-sync the draft from the parent

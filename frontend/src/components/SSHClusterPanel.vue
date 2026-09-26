@@ -652,7 +652,9 @@ async function importServers(event) {
 /* 表格行布局：表头与数据行共用同一套 grid 列宽。列宽带下限、整表有 min-width，
    窄窗口下由 .panel-scroll-body 横向滚动，不让别名/地址被挤成竖排。 */
 .ssh-table-wrap {
-  min-width: 940px;
+  /* 列宽下限和 920 + 5×gap 12 + 左右 padding 24 = 1004：写小于它，最窄窗口下
+     表格仍会溢出横向滚动容器。 */
+  min-width: 1004px;
 }
 
 .ssh-table-head,
@@ -663,7 +665,7 @@ async function importServers(event) {
     minmax(180px, 1.3fr)
     104px
     minmax(200px, 1.8fr)
-    84px
+    56px
     240px;
   gap: 12px;
   align-items: center;
@@ -744,7 +746,7 @@ async function importServers(event) {
 .ssh-cell-actions {
   display: inline-flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: flex-start;
   gap: 6px;
 }
 
@@ -753,6 +755,7 @@ async function importServers(event) {
   padding: 1px 6px;
   border-radius: 4px;
   font-weight: 500;
+  white-space: nowrap;
 }
 
 .ssh-risk-badge.high {

@@ -484,7 +484,9 @@ func (a *App) apiHandleSessionStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_, running, queued := a.apiSessionRuntime(sessionID)
-	cfg, _ := a.getConfig()
+	// API 会话不带 Tab 模型 overlay，下一回合用的就是配置里展开出来的
+	// "最近使用模型"（见 ConfigState.LastUsedModel）。
+	cfg := a.effectiveConfigSafe()
 	apiWriteOK(w, map[string]any{
 		"id":             snapshot.ID,
 		"title":          snapshot.Title,
@@ -624,17 +626,18 @@ func (a *App) apiHandleListModels(w http.ResponseWriter, r *http.Request) {
 	for index, model := range cfg.Models {
 		models = append(models, apiModelSummary(index, model))
 	}
+	// active 是"下一回合将使用的模型"：API 会话没有 Tab 模型 overlay，就用配置里
+	// 的最近使用模型展开出来的结果（界面上的每个 Tab 各自有自己的模型，与它无关）。
+	active := expandLastUsedModel(cfg)
 	apiWriteOK(w, map[string]any{
-		// 会话没有独立的模型状态：每次请求都随全局配置走（与界面一致），
-		// active 就是所有会话下一回合将使用的模型。
 		"active": map[string]any{
-			"providerName":      cfg.ProviderName,
-			"apiFormat":         cfg.APIFormat,
-			"baseUrl":           cfg.BaseURL,
-			"model":             cfg.Model,
-			"reasoningTag":      cfg.ReasoningTag,
-			"reasoningEffort":   cfg.ReasoningEffort,
-			"customHeaderNames": customHeaderNames(cfg.CustomHeaders),
+			"providerName":      active.ProviderName,
+			"apiFormat":         active.APIFormat,
+			"baseUrl":           active.BaseURL,
+			"model":             active.Model,
+			"reasoningTag":      active.ReasoningTag,
+			"reasoningEffort":   active.ReasoningEffort,
+			"customHeaderNames": customHeaderNames(active.CustomHeaders),
 		},
 		"models": models,
 		"count":  len(models),
@@ -677,7 +680,15 @@ func (a *App) apiHandleSaveModel(w http.ResponseWriter, r *http.Request) {
 			apiWriteError(w, http.StatusBadRequest, fmt.Sprintf("model index out of range: %d", index))
 			return
 		}
+		// 改的若是"最近使用"那一条，身份要跟着新条目走：整体替换会改掉 model id，
+		// 不跟着改它就变成悬空身份（随后被 convergeLastUsedModel 清掉），HTTP API
+		// 会话与计划任务下次直接跑不了模型，而界面因为还有 Tab 快照看不出问题。
+		inUse := cfg.LastUsedModel != nil && modelIndexByIdentity(models, *cfg.LastUsedModel) == index
 		models[index] = body.Model
+		if inUse {
+			identity := identityOfModel(body.Model)
+			cfg.LastUsedModel = &identity
+		}
 	} else {
 		index = len(models)
 		models = append(models, body.Model)

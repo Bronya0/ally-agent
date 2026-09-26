@@ -181,8 +181,9 @@ func TestResponsesSSEStreamCarriesCustomHeaders(t *testing.T) {
 	}
 }
 
-// TestSwitchModelMirrorsCustomHeaders 验证激活模型条目时顶层镜像同步。
-func TestSwitchModelMirrorsCustomHeaders(t *testing.T) {
+// TestSwitchModelExpandsCustomHeaders 验证"最近使用模型"展开时带上条目自定义头：
+// 顶层镜像不再是持久化字段，而是展开时算出来的。
+func TestSwitchModelExpandsCustomHeaders(t *testing.T) {
 	app := NewApp()
 	app.initialized = true
 	app.configPath = t.TempDir() + "/config.json"
@@ -195,11 +196,19 @@ func TestSwitchModelMirrorsCustomHeaders(t *testing.T) {
 	if err := app.SwitchModel(0); err != nil {
 		t.Fatalf("SwitchModel() error = %v", err)
 	}
-	if app.config.CustomHeaders["X-Relay"] != "token" {
-		t.Fatalf("SwitchModel must mirror entry headers to top level, got %#v", app.config.CustomHeaders)
+	if app.config.LastUsedModel == nil || app.config.LastUsedModel.Model != "relay-model" {
+		t.Fatalf("SwitchModel must record the model identity, got %#v", app.config.LastUsedModel)
 	}
-	if len(app.config.CustomHeaders) != 1 {
-		t.Fatalf("mirrored headers must be normalized, got %#v", app.config.CustomHeaders)
+	// 派生字段既不留内存也不落盘。
+	if app.config.Model != "" || app.config.CustomHeaders != nil {
+		t.Fatalf("derived model fields must stay out of the config, got model=%q headers=%#v", app.config.Model, app.config.CustomHeaders)
+	}
+	cfg := app.effectiveConfig(ConfigState{})
+	if cfg.CustomHeaders["X-Relay"] != "token" {
+		t.Fatalf("expanded model must carry entry headers, got %#v", cfg.CustomHeaders)
+	}
+	if len(cfg.CustomHeaders) != 1 {
+		t.Fatalf("expanded headers must be normalized, got %#v", cfg.CustomHeaders)
 	}
 }
 

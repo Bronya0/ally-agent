@@ -69,6 +69,11 @@ type ScheduledTask struct {
 	LastSummary    string                `json:"lastSummary,omitempty"`
 	LastError      string                `json:"lastError,omitempty"`
 	RunCount       int                   `json:"runCount"`
+	// Model 是创建任务时正在使用的模型身份（providerName + model id，只记身份）。
+	// LLM 委托型任务按它在每个触发点展开模型，之后界面切模型不影响已建任务；
+	// 命令型任务不用模型，留空。身份对应的预设被删掉后，任务会以 failed 收场
+	// 并说明原因，而不是静默换一个模型跑（见 modelConfigForTask）。
+	Model *ModelIdentity `json:"model,omitempty"`
 	// ConsecutiveFailures 仅供任务中心展示；没有任何退避/停用策略消费它。
 	ConsecutiveFailures int  `json:"consecutiveFailures"`
 	Running             bool `json:"running"`
@@ -354,6 +359,12 @@ func (m *scheduledTaskManager) create(cfg ConfigState, req ScheduledTaskToolRequ
 	if (task.Instruction == "") == (task.Command == "") {
 		return nil, codedToolError("E_SCHEDULED_TASK_CONTENT", errors.New("provide exactly one of instruction or command"))
 	}
+	// LLM 委托型任务记下创建时正在使用的模型：任务存盘后跨重启存活，而配置里的
+	// "最近使用模型"会被用户切走，所以模型必须跟任务一起定下来（命令型任务不记）。
+	if task.Instruction != "" && strings.TrimSpace(cfg.Model) != "" {
+		identity := ModelIdentity{ProviderName: strings.TrimSpace(cfg.ProviderName), Model: strings.TrimSpace(cfg.Model)}
+		task.Model = &identity
+	}
 	if task.Workspace == "" {
 		return nil, codedToolError("E_SCHEDULED_TASK_WORKSPACE", errors.New("workspace is required"))
 	}
@@ -615,6 +626,21 @@ func (m *scheduledTaskManager) run(task ScheduledTask) {
 
 	cfg := m.app.effectiveConfig(ConfigState{Workspace: task.Workspace})
 	cfg.Workspace = task.Workspace
+	// LLM 委托型任务用创建时记下的模型身份；身份已失效（预设被删）就报错收场，
+	// 不静默退回"最近使用模型"——那会拿别的模型跑用户的任务。
+	if task.Instruction != "" {
+		expanded, ok := modelConfigForTask(cfg, task.Model)
+		if !ok {
+			reason := "no model is configured; configure one and recreate the task"
+			if label := modelIdentityModelID(task.Model); label != "" {
+				reason = fmt.Sprintf("model %q is no longer configured; fix the model list and recreate the task", label)
+			}
+			m.finish(task.ID, "failed", "", reason)
+			finished = true
+			return
+		}
+		cfg = expanded
+	}
 	// KB sources/ 只读围栏挂在 run ctx 上，计划任务的 ctx 从 app.ctx 派生
 	// 不会继承它；任务可能在 KB 会话中创建、稍后触发，因此按任务自身的
 	// workspace 重新计算 deny roots（与 runChat 的 withKBDenyRoots 同源），
@@ -788,6 +814,15 @@ func normalizeScheduledTask(task *ScheduledTask, now time.Time) error {
 	task.Instruction = strings.TrimSpace(task.Instruction)
 	task.Command = strings.TrimSpace(task.Command)
 	task.Workspace = strings.TrimSpace(task.Workspace)
+	// 模型身份只保留两个字段的去空格版本；空 model id 视为没记。
+	if task.Model != nil {
+		identity := ModelIdentity{ProviderName: strings.TrimSpace(task.Model.ProviderName), Model: strings.TrimSpace(task.Model.Model)}
+		if identity.Model == "" {
+			task.Model = nil
+		} else {
+			task.Model = &identity
+		}
+	}
 	if task.ID == "" {
 		return errors.New("task id is required")
 	}
@@ -845,7 +880,38 @@ func cloneScheduledTask(task *ScheduledTask) ScheduledTask {
 	if task == nil {
 		return ScheduledTask{}
 	}
-	return *task
+	copyTask := *task
+	if task.Model != nil {
+		identity := *task.Model
+		copyTask.Model = &identity
+	}
+	return copyTask
+}
+
+// modelIdentityModelID 取身份里的 model id（无身份时空串），只用于报错文案。
+func modelIdentityModelID(id *ModelIdentity) string {
+	if id == nil {
+		return ""
+	}
+	return strings.TrimSpace(id.Model)
+}
+
+// modelConfigForTask 按任务记下的模型身份展开模型字段。
+//   - 记了身份且能在 models[] 里找到：展开成那一条（ok=true）。
+//   - 没记身份（旧任务文件 / 命令型任务）：用 cfg 自带的模型（即配置里展开
+//     出来的"最近使用模型"），这与记录模型之前的旧行为一致；cfg 没有模型时
+//     ok=false。
+//   - 记了身份但已失效（预设被删）：ok=false，调用方按失败处理。
+func modelConfigForTask(cfg ConfigState, id *ModelIdentity) (ConfigState, bool) {
+	if id == nil || strings.TrimSpace(id.Model) == "" {
+		return cfg, strings.TrimSpace(cfg.Model) != ""
+	}
+	index := modelIndexByIdentity(cfg.Models, *id)
+	if index < 0 {
+		return cfg, false
+	}
+	applyModelEntry(&cfg, cfg.Models[index])
+	return cfg, true
 }
 
 func (a *App) scheduledTaskTools(cfg ConfigState) []openai.Tool {

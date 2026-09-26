@@ -725,7 +725,8 @@ async function testProxy() {
       mode: draft.proxyMode,
       url: draft.proxyUrl || '',
       noProxy: draft.proxyNoProxy || '',
-      targetUrl: draft.baseUrl || '',
+      // 不传 targetUrl：后端按"最近使用模型"的 baseUrl 探，比前端传一份可能陈旧的
+      // 地址更准（前端 config 里已经没有模型字段）。
     });
     message.success(t('settings.proxyTestSuccess', { status: result.statusCode, duration: result.durationMs, proxy: result.proxy || t('settings.proxyDirect') }));
   } catch (err) {
@@ -769,13 +770,13 @@ function normalizeModelApiKeys(keys) {
 
 function cloneConfigDraft(source) {
   const next = JSON.parse(JSON.stringify(source || {}));
-  next.reasoningTag = String(next.reasoningTag || '').trim() || 'reasoning_content';
+  // 顶层已无模型字段（模型只有 models[] 预设 + lastUsedModel 身份），这里只归一
+  // 化预设条目自己的字段。
   next.models = Array.isArray(next.models) ? next.models.map((model) => ({
     ...model,
     reasoningTag: String(model?.reasoningTag || '').trim() || 'reasoning_content',
     apiKeys: normalizeModelApiKeys(model?.apiKeys || (model?.apiKey ? [model.apiKey] : [])),
   })) : [];
-  next.apiKeys = normalizeModelApiKeys(next.apiKeys || (next.apiKey ? [next.apiKey] : []));
   for (const key of validationSettingKeys) {
     // Auto validation is opt-in: only an explicit true keeps a check enabled.
     next[key] = next[key] === true;

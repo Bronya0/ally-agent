@@ -107,10 +107,10 @@ func TestApplyBatchTextChangesFuzzyAmbiguous(t *testing.T) {
 
 func TestApplyBatchTextChangesFuzzySkippedForReplaceAll(t *testing.T) {
 	content := "a\u2014b\n"
-	// replace_all has an exact-match-only contract: fuzzy must not apply.
+	// replaceAll has an exact-match-only contract: fuzzy must not apply.
 	_, _, err := ApplyBatchTextChanges(content, []TextChange{{OldText: "a-b", NewText: "x", ReplaceAll: true}})
 	if err == nil || toolerrors.Code(err) != "E_NO_MATCH" {
-		t.Fatalf("expected E_NO_MATCH for replace_all with non-exact oldText, got %v", err)
+		t.Fatalf("expected E_NO_MATCH for replaceAll with non-exact oldText, got %v", err)
 	}
 }
 

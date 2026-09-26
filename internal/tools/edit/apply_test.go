@@ -182,10 +182,10 @@ func TestApplyBatchTextChangesLineRangesUseOriginalSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	if replacements != 2 {
-		t.Fatalf("replacements = %d, want 2; replace_all must be ignored for lineRange", replacements)
+		t.Fatalf("replacements = %d, want 2; replaceAll must be ignored for lineRange", replacements)
 	}
-	if len(result.Warnings) != 1 || !strings.Contains(result.Warnings[0], "ignored replace_all") {
-		t.Fatalf("expected replace_all warning for lineRange, got %#v", result.Warnings)
+	if len(result.Warnings) != 1 || !strings.Contains(result.Warnings[0], "ignored replaceAll") {
+		t.Fatalf("expected replaceAll warning for lineRange, got %#v", result.Warnings)
 	}
 	want := "one\nTWO\ninserted\nthree\nfour\nFIVE\nsix\n"
 	if result.Content != want {

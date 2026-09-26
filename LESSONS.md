@@ -61,7 +61,7 @@
 [symlink-resolve-both-sides] 2026-09-25 target 已解析而白名单没解析 = 合法路径被判越界。@pathutil.go
 [init-lock-no-app-log] 2026-09-25 ensureInitialized 持 a.mu，其间禁止调 logAppError（自锁=死锁）。@biz_config.go
 [embed-dist-needs-build] 2026-09-25 干净检出 go test ./... 需先 npm run build（根包 embed frontend/dist）。@main.go
-[config-load-drop] 2026-09-25 mergeConfig 不携带的字段加载时被默认值顶回：新字段要进 mergeConfig 或在加载处采纳。@biz_config.go
+[config-load-drop] 2026-09-25 mergeConfig 不带的字段：加载与读取两侧都要显式采纳，否则重启即丢。@biz_config.go
 [live-flush-cadence] 2026-09-25 卡片流式刷新按载荷降频、流式期不跑 hljs：每拍全量重解析+分词会按满主线程。@App.vue @CodeView.vue
 [omitzero-zero-drop] 2026-09-25 全零 struct 会被 omitzero 整条丢弃（缓存断点），用 SDK 构造函数。@prov_adapter_anthropic
 [official-only-fields] 2026-09-25 官方专有请求字段须统一按 isOfficial*Endpoint 门控，勿逐字段各自决定。@prov_adapter_*.go
@@ -78,4 +78,8 @@
 [ssh-helper-op] 2026-09-26 远端 helper 新增 op 要同时改三处：op_* 实现、分发 elif、Go 调用 + 镜像测试。@orch_remote.go
 [badge-stays-in-button-box] 2026-09-26 底部信息栏角标勿负偏移出按钮盒：父级 overflow:hidden 会裁掉上半截。@style.css
 [prompt-clear-dom] 2026-09-26 清输入框须走 clearPromptDraft：只写 store 被 Naive syncSource 跳过。@App.vue
-[session-llm-overlay] 2026-09-27 run 外的会话级 LLM 调用须带调用方 Tab 模型 overlay；默认模型字段无 GUI 入口。@biz_compact.go
+[session-llm-overlay] 2026-09-27 run 外的会话级 LLM 调用须带调用方 Tab 模型 overlay。@biz_compact.go
+[empty-overlay-consumers] 2026-09-27 看似没入口的配置字段可能喂着空 overlay 的 API/计划任务。@biz_config.go
+[computed-stale-store] 2026-09-27 computed 里直读 localStorage 只会算一次就冻住：先落 ref。@App.vue
+[identity-two-writers] 2026-09-28 config 不变式收敛收口一处，SaveConfig 与 saveConfig 共用；只在一边清就落悬空身份。@biz_config.go
+[derived-field-migration] 2026-09-28 字段降级成派生值前先物化旧值，strip 落盘后无备份。@biz_config.go

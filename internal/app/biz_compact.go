@@ -117,23 +117,18 @@ func (a *App) CancelCompaction(sessionID string) error {
 //  2. the session's frozen StartChat record, for callers that send no overlay
 //     (the local HTTP API has no Tab context) and for sessions that already ran
 //     a turn in this process.
-//  3. the persisted config, unchanged.
-//
-// The persisted config must never win on its own for a GUI compaction: its
-// top-level model fields are written only by SwitchModel (/api/v1/models/activate),
-// so they are a stale leftover that no GUI control updates and that can point at
-// an unrelated endpoint (typically a local server that is not running).
+//  3. the config's last-used model (lastUsedModel expanded by effectiveConfig),
+//     for a session that never ran in this process.
 func (a *App) compactSessionConfig(sessionID string, overlay ConfigState) (ConfigState, error) {
-	cfg, err := a.getConfig()
-	if err != nil {
-		return ConfigState{}, err
-	}
 	if strings.TrimSpace(overlay.Model) != "" {
 		// mergeConfig is the single request-overlay choke point: an overlay field
-		// the caller left empty keeps the persisted value.
+		// the caller left empty keeps the effective (last-used) value.
 		return a.effectiveConfig(overlay), nil
 	}
-	return a.sessionModelConfigFor(sessionID).apply(cfg), nil
+	if err := a.ensureInitialized(); err != nil {
+		return ConfigState{}, err
+	}
+	return a.sessionModelConfigFor(sessionID).apply(a.effectiveConfigSafe()), nil
 }
 
 func (a *App) compactSession(parent context.Context, sessionID, instruction string, overlay ConfigState) (map[string]any, error) {

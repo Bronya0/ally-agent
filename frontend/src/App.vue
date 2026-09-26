@@ -623,7 +623,7 @@ import ChatMessages from './components/ChatMessages.vue';
 import TaskCenterPanel from './components/TaskCenterPanel.vue';
 import TokenStatsModal from './components/TokenStatsModal.vue';
 import GamePanel from './games/GamePanel.vue';
-import { assignConfig, defaultConfig } from './utils/config.mjs';
+import { assignConfig, defaultConfig, placeholderModel } from './utils/config.mjs';
 import { useSakuraBreeze } from './composables/sakuraBreeze.mjs';
 import { burstDigitalWave } from './composables/digitalWave.mjs';
 
@@ -1528,38 +1528,59 @@ const configDraft = reactive(defaultConfig());
 const backgroundImageUrl = ref('');
 
 // Per-tab model selection. Maps a runtime workspace Tab id to a full snapshot
-// of that Tab's model fields. In-memory only (not localStorage, not backend
-// config.json): Tab ids are regenerated on every launch, so persisted entries
-// were never read back — cross-restart continuity comes from the last-used
-// identity + config.models presets instead. Chat requests overlay the active
-// Tab's snapshot on top to the persisted config. The Tab id is intentional:
-// two Tabs pointing at the same workspace must not share a model selection.
+// of that Tab's model fields. In-memory only (Tab ids are regenerated on every
+// launch, so persisted entries were never read back); cross-restart continuity
+// comes from config.lastUsedModel + config.models presets instead. Chat requests
+// overlay the active Tab's snapshot on top of the persisted config. The Tab id
+// is intentional: two Tabs pointing at the same workspace must not share a
+// model selection.
 //
-// 单一职责：config 顶层的模型字段（providerName/model/baseUrl/...）只表示
-// "默认模型"——设置页"使用模型"保存的就是它，新 Tab 从它初始化。当前 Tab
-// 实际使用的模型只存在这里，切换 Tab / 切换模型 / 保存设置都不会改写
-// config 顶层的模型字段，因此设置保存从结构上就不可能重置当前 Tab。
+// 单一职责：config 里已经没有顶层模型字段（只有 models[] + lastUsedModel 身份），
+// 当前 Tab 实际使用的模型只存在这里，切换 Tab / 切换模型 / 保存设置都不会改写
+// 它，因此设置保存从结构上就不可能重置当前 Tab。
 const modelByTab = reactive({});
-const LAST_USED_MODEL_KEY = 'ally_last_used_model';
 
-function getLastUsedModelIdentity() {
-  try {
-    return localStorage.getItem(LAST_USED_MODEL_KEY) || '';
-  } catch {
-    return '';
-  }
+// 模型使用次数存在 localStorage（utils/modelUsage.mjs）：computed 追踪不到它的变化
+// （LESSONS computed-stale-store）。记完使用后 tick 一下，读它的 computed 才会重算。
+const modelUsageTick = ref(0);
+
+// 「最近使用模型」只有一份状态：config.lastUsedModel（{providerName, model} 身份），
+// 由后端持久化。HTTP API 会话没有 Tab 上下文，靠它展开模型；计划任务的 LLM 委托
+// 不用它——任务在创建时把自己的模型身份存进任务记录。模型页的默认 Tab 也从它取
+// provider。以前这里还存了一份 localStorage 副本，两份会各自漂移，已删除。
+function lastUsedModelPreset() {
+  const id = config.lastUsedModel;
+  if (!id || !String(id.model || '').trim()) return null;
+  return (config.models || []).find((m) => modelConfigIdentity(m) === modelConfigIdentity(id)) || null;
 }
 
-function setLastUsedModelIdentity(identity) {
+// 出厂占位快照：一条模型都没配置时 composer / 欢迎表格显示的东西（不落盘）。
+function placeholderModelSnapshot() {
+  return modelSnapshotFrom(placeholderModel());
+}
+
+// 记下"最近使用模型"。同一身份不重复落盘；config 是「整份保存」的来源，这里
+// 同步更新本地对象，避免后续一次保存把旧身份写回后端。configDraft 也要跟上，
+// 否则设置页保存带着旧身份回来（App 的 onSettingsSave 另有一道强制兜底）。
+async function rememberLastUsedModel(source) {
+  const providerName = String(source?.providerName || '').trim();
+  const model = String(source?.model || '').trim();
+  if (!model) return;
+  const current = config.lastUsedModel;
+  if (current && String(current.providerName || '').trim() === providerName && String(current.model || '').trim() === model) return;
+  config.lastUsedModel = { providerName, model };
+  configDraft.lastUsedModel = { providerName, model };
   try {
-    if (identity) localStorage.setItem(LAST_USED_MODEL_KEY, String(identity));
-  } catch {}
+    await queueConfigSave({ ...config });
+  } catch (_) {}
 }
 
 // 查找按照使用频率累计倒排的最常用有效模型，若频率都相同或无记录则返回第一个
 function getFallbackModelPreset(models) {
   if (!Array.isArray(models) || !models.length) return null;
   if (models.length === 1) return models[0];
+  // 使用次数在 localStorage 里，computed 读不到它的变化：读一下 tick 把重算挂上去。
+  void modelUsageTick.value;
   const usage = getSpecificModelUsage();
   const sorted = [...models].sort((a, b) => {
     const countA = Number(usage[modelConfigIdentity(a)]) || 0;
@@ -1569,59 +1590,50 @@ function getFallbackModelPreset(models) {
   return sorted[0] || models[0];
 }
 
-// The default model every newly opened Tab starts from:
-// 1. 用户上次对话/切换选了什么模型，新开的 tab 默认就继承这个模型；
-// 2. 如果上次选的模型已经被删除了（或不存在）：按每个模型的使用频率累计倒排回退；
-// 3. 如果首次只有一个模型那默认就这个；
-// 4. 若模型列表为空则回退到 config。
+// The model every newly opened Tab starts from:
+// 1. 最近使用的模型（config.lastUsedModel，界面切模型/发送时写回）；
+// 2. 当前活跃 Tab 用的模型（预设里还在的话）；
+// 3. 都没选过 / 上次的已被删：按每个模型的使用频率累计倒排回退（无记录则第一个）；
+// 4. 一条模型都没有：出厂占位快照（不落盘）。
 function defaultModelSnapshot() {
   const models = config.models || [];
-  const lastIdentity = getLastUsedModelIdentity();
 
-  if (lastIdentity) {
-    const matched = models.find((m) => modelConfigIdentity(m) === lastIdentity);
-    if (matched) return modelSnapshotFrom(matched);
-  }
+  const lastUsed = lastUsedModelPreset();
+  if (lastUsed) return modelSnapshotFrom(lastUsed);
 
   // 尝试当前活跃 Tab 上的模型
   const activeTabModel = modelByTab[activeWorkspaceId.value];
   if (activeTabModel) {
     const matched = models.find((m) => modelConfigIdentity(m) === modelConfigIdentity(activeTabModel));
-    if (matched) {
-      setLastUsedModelIdentity(modelConfigIdentity(matched));
-      return modelSnapshotFrom(matched);
-    }
+    if (matched) return modelSnapshotFrom(matched);
   }
 
   // 上次选的模型不存在或已被删除，按使用频率倒排回退
   const fallbackPreset = getFallbackModelPreset(models);
-  if (fallbackPreset) {
-    setLastUsedModelIdentity(modelConfigIdentity(fallbackPreset));
-    return modelSnapshotFrom(fallbackPreset);
-  }
+  if (fallbackPreset) return modelSnapshotFrom(fallbackPreset);
 
-  return modelSnapshotFrom(config);
+  return placeholderModelSnapshot();
 }
 
 // Initialize a Tab's model from the default the first time it is visited.
 function ensureTabModel(tab) {
   if (!tab || modelByTab[tab.id]) return;
   modelByTab[tab.id] = defaultModelSnapshot();
-  // 首访初始化的模型通常不等于建欢迎消息时的回退值（config 顶层是「默认模型」，
-  // 而 defaultModelSnapshot 会继承上次用的模型），补一次表格刷新。
+  // 首访初始化的模型通常不等于建欢迎消息时的回退值（欢迎消息先于 Tab 模型
+  // 初始化），补一次表格刷新。
   updateWelcomeModelRows();
 }
 
 // The config every chat request sends: the persisted config with the active
-// Tab's model snapshot overlaid. Replaces the old pattern of mutating config's
-// top-level model fields on every Tab/model switch.
+// Tab's model snapshot overlaid. 持久化配置里没有模型字段（只有 models[] 与
+// lastUsedModel 身份），模型一律由这个 overlay 带进请求。
 const chatConfig = computed(() => ({ ...config, ...modelByTab[activeWorkspaceId.value] }));
 
 // Games panel “人机对战”复用聊天侧同一套模型预设与归一化：传入原始 presets
 //（ModelMenu 直接消费）+ 当前 Tab 模型快照作为默认，快照归一化在
 // utils/modelConfigIO.mjs 的 modelSnapshotFrom 收口。
-// Default: the active Tab's model, falling back to the top-level default model.
-const gameModelDefault = computed(() => modelByTab[activeWorkspaceId.value] || modelSnapshotFrom(config));
+// Default: the active Tab's model, falling back to the resolved default model.
+const gameModelDefault = computed(() => modelByTab[activeWorkspaceId.value] || defaultModelSnapshot());
 
 // After Settings saves an updated model list, re-sync every Tab's snapshot
 // from its preset so edits (API key, base URL, ...) propagate to Tabs already
@@ -1638,13 +1650,13 @@ function resyncTabModelsFromPresets() {
 }
 
 // 首次配置采纳：Tab 的模型快照在启动时就初始化，首次安装时必然是出厂占位
-// （默认模型 + 空 key）。用户保存第一个模型配置（顶层或预设）后，这类从未
-// 被触碰过的占位快照重新解析默认模型，把新配置立即采纳进 Tab——否则占位
-// 快照会一直顶在 composer 上，配置完直接发送仍报 "API key is required"，
-// 重启才恢复。判定收窄到"出厂占位身份 + 无 key"：已选过模型、快照带 key、
-// 或预设被删后残留的快照都不受影响。
+// （placeholderModel：假模型名 + 无 key）。用户保存第一个模型配置后，这类从未
+// 被触碰过的占位快照重新解析默认模型，把新配置立即采纳进 Tab——否则占位快照会
+// 一直顶在 composer 上，配置完直接发送仍报 "API key is required"，重启才恢复。
+// 判定收窄到"出厂占位身份 + 无 key"：已选过模型、快照带 key、或预设被删后残留
+// 的快照都不受影响。
 function adoptPristineTabModels() {
-  const pristineIdentity = modelConfigIdentity(defaultConfig());
+  const pristineIdentity = modelConfigIdentity(placeholderModel());
   let changed = false;
   for (const tabId of Object.keys(modelByTab)) {
     const snapshot = modelByTab[tabId];
@@ -2528,7 +2540,7 @@ async function pickKbRootFromEmptyState() {
     if (!selected) return;
     config.kbRoot = selected;
     configDraft.kbRoot = selected;
-    await saveWorkspaceConfig({ ...config });
+    await queueConfigSave({ ...config });
     const tab = ensureKbTab();
     if (tab) await switchWorkspaceTab(tab.id);
     refreshKbIndexState();
@@ -2854,7 +2866,7 @@ const footerStatsLoading = ref(true);
 let footerStatsRequestVersion = 0;
 let contextRequestVersion = 0;
 let gitStatusRequestVersion = 0;
-let workspaceConfigSaveQueue = Promise.resolve();
+let configSaveQueue = Promise.resolve();
 let workspaceSwitchVersion = 0;
 
 function emptyGitStatus() {
@@ -2932,11 +2944,11 @@ function prepareFooterStatsForTarget(tabId, workspace) {
   }
 }
 
-function saveWorkspaceConfig(snapshot) {
-  const save = workspaceConfigSaveQueue
+function queueConfigSave(snapshot) {
+  const save = configSaveQueue
     .catch(() => {})
     .then(() => SaveConfig(snapshot));
-  workspaceConfigSaveQueue = save.catch(() => {});
+  configSaveQueue = save.catch(() => {});
   return save;
 }
 
@@ -2966,7 +2978,7 @@ async function refreshFooterStats({
   // double the IPC cost on every footer refresh.
   const [gitResult, usageResult, breakdownResult] = await Promise.allSettled([
     // Ask for the Tab's own workspace: chat tabs have already persisted it via
-    // saveWorkspaceConfig, while KB/temp tabs deliberately never claim the
+    // queueConfigSave, while KB/temp tabs deliberately never claim the
     // persisted chat workspace.
     GetGitStatus(requestedWorkspace),
     GetWorkspaceTokenUsage(requestedWorkspace),
@@ -3152,7 +3164,7 @@ watch(() => config.workspace, () => {
 
 
 const contextUsed = computed(() => fmtCompact(contextTokens.value));
-const contextWindow = computed(() => (modelByTab[activeWorkspaceId.value] || config).contextWindow || 1000000);
+const contextWindow = computed(() => (modelByTab[activeWorkspaceId.value] || defaultModelSnapshot()).contextWindow || 1000000);
 const contextMax = computed(() => fmtCompact(contextWindow.value));
 const contextPercent = computed(() => {
   const used = contextTokens.value;
@@ -3559,9 +3571,10 @@ function buildWelcomeMessage(workspacePath = '', opts = {}) {
     rows.push({ kind: 'gitbash', label: t('welcome.gitBash'), value: gitBashPath });
   }
   // The info table shows the model the session will actually chat with:
-  // the active Tab's model (fall back to the default before initialization).
+  // the active Tab's model (falling back to the resolved default model before
+  // the Tab snapshot exists).
   // 这里只写下创建这一刻的值；之后由 updateWelcomeModelRows() 随 Tab 的模型刷新。
-  const activeModel = modelByTab[activeWorkspaceId.value] || config;
+  const activeModel = modelByTab[activeWorkspaceId.value] || defaultModelSnapshot();
   rows.push({ kind: 'model', label: t('common.model'), value: formatModelLabel(activeModel) });
   rows.push({ kind: 'mcp', label: 'MCP', value: formatMcpSummary() });
   if (skillCount > 0) {
@@ -3623,7 +3636,9 @@ function updateWelcomeModelRows() {
     const tabId = ownerTab ? ownerTab.id
       : (session.id === activeSessionId.value ? activeWorkspaceId.value : '');
     if (!tabId) continue;
-    const value = formatModelLabel(modelByTab[tabId] || config);
+    // 该 Tab 还没初始化模型快照时（例如刚恢复的会话）用解析出来的默认模型，
+    // 不要让表格里的模型行空掉。
+    const value = formatModelLabel(modelByTab[tabId] || defaultModelSnapshot());
     for (const msg of session.messages || []) {
       const row = welcomeRowRowsFor(msg).find((item) => isWelcomeRowKind(item, 'model'));
       if (row && row.value !== value) row.value = value;
@@ -3730,7 +3745,7 @@ async function applySessionWorkspace(session) {
   }
   loadPromptHistory(workspace);
   try {
-    if (!tabOwns) await saveWorkspaceConfig({ ...config });
+    if (!tabOwns) await queueConfigSave({ ...config });
     await refreshFooterStats({
       tabId: activeWorkspaceId.value,
       sessionId: session.id,
@@ -3968,7 +3983,7 @@ async function switchWorkspaceTab(id) {
   // request overlay.
   ensureTabModel(tab);
   try {
-    if (!tabOwns) await saveWorkspaceConfig({ ...config });
+    if (!tabOwns) await queueConfigSave({ ...config });
   } catch (err) {
     if (workspaceSwitchVersion === switchVersion) {
       footerStatsLoading.value = false;
@@ -5620,16 +5635,19 @@ async function closeWindow() {
   } catch (_) {}
 }
 
-// Composer dropdown: switch the ACTIVE Tab's model. Purely frontend state —
-// the persisted config (and its top-level default model) is untouched, and
-// the backend only ever sees the overlay in each StartChat request.
-function switchToModel(index) {
+// Composer dropdown: switch the ACTIVE Tab's model. 模型的连接字段只存在 Tab 快照里，
+// 随每次 StartChat 的 overlay 进请求；落盘的只有"最近使用模型"身份（见
+// rememberLastUsedModel），它给新 Tab 与本地 API 会话用。
+async function switchToModel(index) {
   const model = (config.models || [])[index];
   const tab = workspaceTabs.value.find((item) => item.id === activeWorkspaceId.value);
   if (!model || !tab) return;
   const snapshot = modelSnapshotFrom(model);
   modelByTab[tab.id] = snapshot;
-  setLastUsedModelIdentity(modelConfigIdentity(model));
+  // ModelMenu 在派发本事件之前已经记过这次使用（localStorage）：tick 一下，让依赖
+  // 使用频次的 computed 重算。
+  modelUsageTick.value += 1;
+  await rememberLastUsedModel(model);
   updateWelcomeModelRows();
   message.success(t('app.model.switched', { model: model.model }));
 }
@@ -5775,7 +5793,7 @@ async function sendPrompt(opts) {
     loadPromptHistory(workspace);
     clearFooterStats();
     try {
-      await saveWorkspaceConfig({ ...config });
+      await queueConfigSave({ ...config });
       await refreshFooterStats({
         tabId: activeWorkspaceId.value,
         sessionId: activeSessionId.value,
@@ -5822,7 +5840,7 @@ async function sendPrompt(opts) {
     });
     markSessionRunning(session);
     const activeModel = modelByTab[activeWorkspaceId.value];
-    if (activeModel) setLastUsedModelIdentity(modelConfigIdentity(activeModel));
+    if (activeModel) await rememberLastUsedModel(activeModel);
     await StartChat({ sessionId: session.id, message: sendText, messages: history, config: { ...chatConfig.value, extraRoots: session.extraRoots || [], workspace: sessionWorkspace || config.workspace } });
   } catch (err) {
     markTransientTurn(session);
@@ -5920,9 +5938,14 @@ async function onSettingsSave(draftData, silent = false) {
   if (String(draftData?.workspace ?? '') !== liveWorkspace) {
     draftData = { ...draftData, workspace: liveWorkspace };
   }
+  // 最近使用模型身份由界面（切模型/发送）单向写回，设置草稿可能滞后：它是后端
+  // 给 HTTP API 会话与计划任务展开模型的依据，不能被一次设置保存回退（与
+  // workspace 同一处理口径）。
+  if (JSON.stringify(draftData?.lastUsedModel ?? null) !== JSON.stringify(config.lastUsedModel ?? null)) {
+    draftData = { ...draftData, lastUsedModel: config.lastUsedModel };
+  }
   const previousKbRoot = String(config.kbRoot || '');
-  // draft 的顶层模型字段就是"默认模型"（设置页"使用模型"），直接写入 config；
-  // 各 Tab 已选的模型存在 modelByTab 里，与这里互不干扰。仅需把预设的编辑
+  // draft 里已无顶层模型字段（模型只有 models[] 预设），仅需把预设的编辑
   // （API key、Base URL 等）同步到正在使用该模型的 Tab 快照上。
   assignConfig(config, draftData);
   assignConfig(configDraft, draftData);
@@ -5930,7 +5953,7 @@ async function onSettingsSave(draftData, silent = false) {
   adoptPristineTabModels();
   applyFontSizes(config);
   try {
-    await saveWorkspaceConfig({ ...configDraft });
+    await queueConfigSave({ ...configDraft });
     syncConfigToActiveTab();
     // A changed KB root invalidates the hidden KB tab: rebuild it (or drop
     // it when cleared) so the KB mode follows the newly configured root.
@@ -7791,14 +7814,15 @@ async function activateSkillByName(skillName, skillArgs = '', injectIntoChat = t
 async function changeReasoningEffort(level, anchor) {
   const next = String(level || 'auto').toLowerCase();
   // Effort is a per-Tab runtime choice: it lives on the active Tab's model
-  // snapshot, never on the persisted top-level (default) fields.
+  // snapshot；持久化配置里没有模型字段，跨重启靠同步到匹配的那条预设。
   const snapshot = modelByTab[activeWorkspaceId.value];
   // 改之前先记住当前档位：下面要用“是否真的换了档”决定放不放波浪
-  const previous = String(snapshot?.reasoningEffort ?? config.reasoningEffort ?? 'auto').toLowerCase();
+  const previous = String(snapshot?.reasoningEffort ?? 'auto').toLowerCase();
   if (snapshot) snapshot.reasoningEffort = next;
   // Keep the matching preset in sync so the choice survives re-selecting the
-  // model in this (or a new) Tab.
-  const activeIdentity = modelConfigIdentity(snapshot || config);
+  // model in this (or a new) Tab. 快照还没建立时（例如刚恢复的会话）用解析出来的
+  // 默认模型当身份，别拿 config（它已无模型字段）去匹配一个空身份。
+  const activeIdentity = modelConfigIdentity(snapshot || defaultModelSnapshot());
   for (const list of [config.models, configDraft.models]) {
     const preset = (list || []).find((m) => modelConfigIdentity(m) === activeIdentity);
     if (preset) preset.reasoningEffort = next;
@@ -7811,7 +7835,7 @@ async function changeReasoningEffort(level, anchor) {
   }
   const label = reasoningEffortLabel(next);
   try {
-    await SaveConfig({ ...config });
+    await queueConfigSave({ ...config });
     message.success(t('app.model.effortChanged', { level: label }));
   } catch (err) {
     message.error(t('app.model.effortFailed', { error: err }));

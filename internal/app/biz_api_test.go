@@ -268,6 +268,7 @@ func TestApiModelsRedactApiKeys(t *testing.T) {
 		APIKey:       "sk-secret-value",
 		APIKeys:      []string{"sk-secret-value"},
 	}}
+	app.config.LastUsedModel = &ModelIdentity{ProviderName: "prov", Model: "m-1"}
 
 	rec, payload := apiRequest(t, handler, "GET", "/api/v1/models", token, "")
 	data := apiRequireOK(t, rec, payload)
@@ -279,8 +280,9 @@ func TestApiModelsRedactApiKeys(t *testing.T) {
 	if entry["hasApiKey"] != true || int(entry["apiKeyCount"].(float64)) != 1 {
 		t.Fatalf("unexpected key flags: %v", entry)
 	}
+	// active 是配置里“最近使用模型”的展开结果（会话没有 Tab 快照）。
 	active := data["active"].(map[string]any)
-	if active["model"] != app.config.Model {
+	if active["model"] != "m-1" || active["providerName"] != "prov" {
 		t.Fatalf("unexpected active model: %v", active)
 	}
 }
@@ -318,6 +320,44 @@ func TestApiCreateAndUpdateModelConfig(t *testing.T) {
 	rec, _ = apiRequest(t, handler, "POST", "/api/v1/models", token, `{"model":{"model":"  "}}`)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("empty model name: expected 400, got %d", rec.Code)
+	}
+}
+
+// TestApiUpdateInUseModelKeepsIdentityInSync: 整体替换条目会改掉 model id，若改的
+// 正是“最近使用”那一条，身份必须跟着新条目走——否则它立即变成悬空身份被 converge
+// 清掉，HTTP API 会话与计划任务下次直接跑不了模型。
+func TestApiUpdateInUseModelKeepsIdentityInSync(t *testing.T) {
+	handler, app, token := newApiTestHandler(t)
+
+	rec, payload := apiRequest(t, handler, "POST", "/api/v1/models", token,
+		`{"model":{"providerName":"p","apiFormat":"chat","baseUrl":"http://x/v1","apiKey":"k1","model":"gpt-x"}}`)
+	apiRequireOK(t, rec, payload)
+	rec, payload = apiRequest(t, handler, "POST", "/api/v1/models/activate", token, `{"index":0}`)
+	apiRequireOK(t, rec, payload)
+	if app.config.LastUsedModel == nil || app.config.LastUsedModel.Model != "gpt-x" {
+		t.Fatalf("activate must record the identity, got %#v", app.config.LastUsedModel)
+	}
+
+	// 改的正是当前使用的那一条：身份跟着新 id 走。
+	rec, payload = apiRequest(t, handler, "POST", "/api/v1/models", token,
+		`{"index":0,"model":{"providerName":"p","apiFormat":"chat","baseUrl":"http://x/v1","apiKey":"k1","model":"gpt-x-2"}}`)
+	apiRequireOK(t, rec, payload)
+	if app.config.LastUsedModel == nil || app.config.LastUsedModel.Model != "gpt-x-2" {
+		t.Fatalf("editing the in-use entry must move the identity with it, got %#v", app.config.LastUsedModel)
+	}
+	if got := expandLastUsedModel(app.config).Model; got != "gpt-x-2" {
+		t.Fatalf("the effective config must use the renamed entry, got %q", got)
+	}
+
+	// 改别人那一条不影响身份。
+	rec, payload = apiRequest(t, handler, "POST", "/api/v1/models", token,
+		`{"model":{"providerName":"p","apiFormat":"chat","baseUrl":"http://y/v1","apiKey":"k2","model":"other"}}`)
+	apiRequireOK(t, rec, payload)
+	rec, payload = apiRequest(t, handler, "POST", "/api/v1/models", token,
+		`{"index":1,"model":{"providerName":"p","apiFormat":"chat","baseUrl":"http://y/v1","apiKey":"k2","model":"other-2"}}`)
+	apiRequireOK(t, rec, payload)
+	if app.config.LastUsedModel == nil || app.config.LastUsedModel.Model != "gpt-x-2" {
+		t.Fatalf("editing another entry must not touch the identity, got %#v", app.config.LastUsedModel)
 	}
 }
 

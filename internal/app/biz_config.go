@@ -37,17 +37,12 @@ import (
 // 用户文档目录静默当作工作区。用户经 "+" / 发送时选择器选定真实工作区后，
 // config.json 持久化该路径，后续启动恢复它。
 func defaultConfigState() ConfigState {
+	// 这里不再给顶层模型字段任何默认值：它们由 models[] + lastUsedModel 展开
+	// （见 ConfigState 的注释），一条模型都没有时就是空的。前端"未配置模型"
+	// 的占位显示由 utils/config.mjs 的 placeholderModel 提供，不进配置。
 	cfg := ConfigState{
-		ProviderName:          "OpenAI Compatible",
-		APIFormat:             apiFormatOpenAIChat,
-		BaseURL:               defaultBaseURL,
-		Model:                 defaultModel,
-		MaxTokens:             131072,
-		ContextWindow:         1000000,
 		AllowPrivateNetwork:   boolPtr(true),
 		ProxyMode:             proxyModeOff,
-		ReasoningTag:          defaultReasoningTag,
-		ReasoningEffort:       reasoningEffortMax,
 		BackgroundOpacity:     defaultBackgroundOpacity,
 		CompactThreshold:      defaultCompactThreshold,
 		CompactTimeoutSeconds: defaultCompactTimeoutSeconds,
@@ -202,6 +197,10 @@ func (a *App) getConfig() (ConfigState, error) {
 // crash mid-write leaves half a JSON document, and the next start silently
 // falls back to defaults and then overwrites the user's real settings.
 func (a *App) saveConfig(cfg ConfigState) error {
+	convergeLastUsedModel(&cfg)
+	// 派生模型字段不落盘（见 ConfigState 的注释）：磁盘上只留 models[] 与
+	// lastUsedModel，读回来时再按身份展开。
+	stripModelFields(&cfg)
 	a.mu.Lock()
 	cfg.DisabledSkills = normalizeSkillNameList(cfg.DisabledSkills)
 	a.config = cfg
@@ -334,10 +333,13 @@ func mergeConfig(base, overlay ConfigState) ConfigState {
 	if overlay.SkippedUpdates != nil {
 		base.SkippedUpdates = cloneStringSlice(overlay.SkippedUpdates)
 	}
-	// GitHubToken 不在 mergeConfig 里覆盖：注释里“前端 draft 总是整份回传”的
-	// 前提只对 SaveConfig 成立，而 fetchReleaseByTag/DownloadUpdate 走
-	// effectiveConfigSafe()（空 overlay）——无条件覆盖会让用户配置的 token
-	// 在更新链路上永远读不到。SaveConfig 显式写入该字段（含清空）。
+	// GitHubToken 也走“非空 overlay 胜”的常规口径（与 UserAgent 同）：空 overlay 表示
+	// 字段没携带，保留 base（fetchReleaseByTag / DownloadUpdate 走
+	// effectiveConfigSafe() 的空 overlay，正是靠这一点才能读到用户配置的 token）；
+	// 清空只能经 SaveConfig 的显式写入（那里无条件采信请求值，含空串）。
+	if strings.TrimSpace(overlay.GitHubToken) != "" {
+		base.GitHubToken = strings.TrimSpace(overlay.GitHubToken)
+	}
 	// Background image filename is stored verbatim (it is set by
 	// SaveBackgroundImage, not by SaveConfig overlay from the frontend).
 	// Opacity is normalized and clamped to [0, 1].
@@ -393,8 +395,14 @@ func mergeConfig(base, overlay ConfigState) ConfigState {
 	if base.APIFormat == "" {
 		base.APIFormat = apiFormatOpenAIChat
 	}
-	base.ReasoningTag = normalizeReasoningTag(base.ReasoningTag)
-	base.ReasoningEffort = normalizeReasoningEffort(base.ReasoningEffort)
+	// 空值保持为空：base 的模型字段是请求级派生值，没有可展开的模型时就该
+	// 缺席（调用方据此报 "model is required"），不能在这里补默认值。
+	if base.ReasoningTag != "" {
+		base.ReasoningTag = normalizeReasoningTag(base.ReasoningTag)
+	}
+	if base.ReasoningEffort != "" {
+		base.ReasoningEffort = normalizeReasoningEffort(base.ReasoningEffort)
+	}
 	for i := range base.Models {
 		base.Models[i].ReasoningTag = normalizeReasoningTag(base.Models[i].ReasoningTag)
 		base.Models[i].ReasoningEffort = normalizeReasoningEffort(base.Models[i].ReasoningEffort)
@@ -590,13 +598,19 @@ func (a *App) SaveConfig(req ConfigState) error {
 	if goruntime.GOOS == "windows" {
 		a.config.GitBashPath = resolveGitBashPath(req.GitBashPath)
 	}
-	a.config.ReasoningTag = normalizeReasoningTag(req.ReasoningTag)
-	a.config.ReasoningEffort = normalizeReasoningEffort(req.ReasoningEffort)
-	// nil 表示请求没有携带该字段（旧前端、或来源未声明模态的模型）：保留已加载
-	// 的值，避免一次保存就把已知的视觉能力抹成"未知"。
-	if req.VisionCapable != nil {
-		a.config.VisionCapable = req.VisionCapable
+	// 最近使用模型身份：nil 表示请求没携带该字段（旧前端 / API 调用），保留现值；
+	// 非 nil 时按 models[] 收敛（provider 写法归一），解析不到（预设已删）就不采纳
+	// ——残留的悬空身份由随后的 convergeLastUsedModel 一并清掉，两个写入方共用同一段
+	// 收敛（界面在模型页删掉/改名那条模型后整份保存，磁盘上不能留一个展开落空的身份）。
+	// 注意 JSON 的 `null` 也落在"没携带"这一支（前端整份保存永远显式带 null）：身份只由
+	// "指向 models[] 里真实存在的那一条"定义，悬空身份统一由 convergeLastUsedModel 清掉，
+	// 不需要（也没法）用 null 主动清除。
+	if req.LastUsedModel != nil {
+		if identity := normalizeModelIdentity(a.config.Models, *req.LastUsedModel); identity != nil {
+			a.config.LastUsedModel = identity
+		}
 	}
+	convergeLastUsedModel(&a.config)
 	// Background opacity is editable from the frontend slider; persist it
 	// directly. The image filename is managed by SaveBackgroundImage — only
 	// adopt it from the SaveConfig overlay when the frontend echoes the
@@ -607,6 +621,8 @@ func (a *App) SaveConfig(req ConfigState) error {
 	a.config.BackgroundOpacity = clampBackgroundOpacity(req.BackgroundOpacity)
 	a.disabledSkills = normalizeSkillNameList(a.config.DisabledSkills)
 	a.config.DisabledSkills = cloneStringSlice(a.disabledSkills)
+	// 派生模型字段不落盘（同上）。
+	stripModelFields(&a.config)
 	cfg := a.config
 	path := a.configPath
 	a.mu.Unlock()
@@ -703,7 +719,175 @@ func (a *App) effectiveConfig(overlay ConfigState) ConfigState {
 	a.mu.Lock()
 	base := a.config
 	a.mu.Unlock()
-	return mergeConfig(base, overlay)
+	return mergeConfig(expandLastUsedModel(base), overlay)
+}
+
+// ── 最近使用模型（models[] 里的一条）─────────────────────────
+
+// ModelIdentity 是 Models 里一条模型的身份：只记 providerName + model id，
+// 不复制连接字段与密钥（否则又是第二份会漂移的模型配置）。
+type ModelIdentity struct {
+	ProviderName string `json:"providerName,omitempty"`
+	Model        string `json:"model"`
+}
+
+func identityOfModel(m ModelConfig) ModelIdentity {
+	return ModelIdentity{ProviderName: strings.TrimSpace(m.ProviderName), Model: strings.TrimSpace(m.Model)}
+}
+
+// migrateLegacyModelFields 把旧版 config.json 的顶层模型字段收敛成新形状：先按身份
+// 到 models[] 里反查；反查不到（旧配置的 models[] 为空，或那条模型已被删）而顶层又
+// 带着可用密钥时，先把顶层字段物化成一条 preset 再指向它。
+//
+// 物化这一步不能省：顶层字段只有两个写入方（/api/v1/models/activate，以及 2026-09
+// 之前设置页的"使用"按钮），而 stripModelFields 紧跟着就会清空它们、随后任意一次
+// 保存都以新形状落盘——不物化等于把用户的模型、地址与密钥一起静默抹掉（文件里没有
+// 第二份，也没有备份）。没有密钥时不物化：那种顶层字段本身跑不通（发送必然报
+// "API key is required"），凭空多一条空密钥的 preset 只会污染模型列表。
+func migrateLegacyModelFields(cfg *ConfigState, legacy ConfigState) {
+	identity := ModelIdentity{ProviderName: legacy.ProviderName, Model: legacy.Model}
+	if strings.TrimSpace(identity.Model) == "" {
+		return
+	}
+	if matched := normalizeModelIdentity(cfg.Models, identity); matched != nil {
+		cfg.LastUsedModel = matched
+		return
+	}
+	if len(resolveKeyPool(legacy)) == 0 {
+		return
+	}
+	entry := modelEntryFromLegacyFields(legacy)
+	cfg.Models = append(cfg.Models, entry)
+	migrated := identityOfModel(entry)
+	cfg.LastUsedModel = &migrated
+}
+
+// modelEntryFromLegacyFields 把旧版顶层模型字段整条搬成一条 preset（字段一对一，
+// 密钥池与镜像字段按同一条规则同步）。
+func modelEntryFromLegacyFields(legacy ConfigState) ModelConfig {
+	entry := ModelConfig{
+		ProviderName:    strings.TrimSpace(legacy.ProviderName),
+		APIFormat:       normalizeAPIFormat(legacy.APIFormat),
+		BaseURL:         strings.TrimSpace(legacy.BaseURL),
+		APIKey:          strings.TrimSpace(legacy.APIKey),
+		APIKeys:         cloneStringSlice(legacy.APIKeys),
+		Model:           strings.TrimSpace(legacy.Model),
+		MaxTokens:       legacy.MaxTokens,
+		ContextWindow:   legacy.ContextWindow,
+		TokenParam:      normalizeTokenParam(legacy.TokenParam),
+		CustomHeaders:   normalizeCustomHeaders(legacy.CustomHeaders),
+		ReasoningTag:    normalizeReasoningTag(legacy.ReasoningTag),
+		ReasoningEffort: normalizeReasoningEffort(legacy.ReasoningEffort),
+	}
+	if legacy.VisionCapable != nil {
+		vision := *legacy.VisionCapable
+		entry.VisionCapable = &vision
+	}
+	syncModelAPIKeyFields(&entry)
+	return entry
+}
+
+// modelIndexByIdentity 按身份定位 models[] 里的一条：先 provider + model 全匹配
+// （不区分大小写、忽略首尾空格），失败再退一步只按 model id 匹配——用户改了
+// provider 标签不该让"最近使用"失效。找不到返回 -1。
+func modelIndexByIdentity(models []ModelConfig, id ModelIdentity) int {
+	model := strings.TrimSpace(id.Model)
+	if model == "" {
+		return -1
+	}
+	provider := strings.TrimSpace(id.ProviderName)
+	fallback := -1
+	for i := range models {
+		if !strings.EqualFold(strings.TrimSpace(models[i].Model), model) {
+			continue
+		}
+		if provider == "" || strings.EqualFold(strings.TrimSpace(models[i].ProviderName), provider) {
+			return i
+		}
+		if fallback < 0 {
+			fallback = i
+		}
+	}
+	return fallback
+}
+
+// normalizeModelIdentity 把身份收敛到 models[] 里真实存在的那一条（顺带归一
+// provider 写法）；解析不到返回 nil，调用方保留原值。
+func normalizeModelIdentity(models []ModelConfig, id ModelIdentity) *ModelIdentity {
+	index := modelIndexByIdentity(models, id)
+	if index < 0 {
+		return nil
+	}
+	identity := identityOfModel(models[index])
+	return &identity
+}
+
+// applyModelEntry 把一条模型配置展开到请求级模型字段上。SwitchModel 与
+// expandLastUsedModel 共用这一处，避免两处各列一份字段表而漂移。
+func applyModelEntry(cfg *ConfigState, m ModelConfig) {
+	cfg.ProviderName = strings.TrimSpace(m.ProviderName)
+	cfg.APIFormat = normalizeAPIFormat(m.APIFormat)
+	cfg.BaseURL = strings.TrimSpace(m.BaseURL)
+	cfg.APIKey = strings.TrimSpace(m.APIKey)
+	cfg.APIKeys = cloneStringSlice(m.APIKeys)
+	cfg.Model = strings.TrimSpace(m.Model)
+	cfg.MaxTokens = m.MaxTokens
+	// ContextWindow 为 0（旧配置没填）时保持 base 现值；消费方对 0 有自己的
+	// 兜底（compactThresholdLimit / 前端显示都按模型条目里的值走）。
+	if m.ContextWindow > 0 {
+		cfg.ContextWindow = m.ContextWindow
+	}
+	cfg.TokenParam = m.TokenParam
+	cfg.CustomHeaders = normalizeCustomHeaders(m.CustomHeaders)
+	cfg.ReasoningTag = normalizeReasoningTag(m.ReasoningTag)
+	cfg.VisionCapable = m.VisionCapable
+	cfg.ReasoningEffort = normalizeReasoningEffort(m.ReasoningEffort)
+	syncAPIKeyFields(cfg)
+}
+
+// expandLastUsedModel 返回把"最近使用模型"展开进模型字段后的配置。没有
+// lastUsedModel（或身份已失效）时模型字段保持为空，调用方据此报
+// "model is required"。不改动传入的 cfg。
+func expandLastUsedModel(cfg ConfigState) ConfigState {
+	if cfg.LastUsedModel == nil {
+		return cfg
+	}
+	index := modelIndexByIdentity(cfg.Models, *cfg.LastUsedModel)
+	if index < 0 {
+		return cfg
+	}
+	applyModelEntry(&cfg, cfg.Models[index])
+	return cfg
+}
+
+// stripModelFields 清空请求级模型字段：保证它们既不进 config.json，也不留在
+// a.config 里（单一来源是 models[] + lastUsedModel）。
+func stripModelFields(cfg *ConfigState) {
+	cfg.ProviderName = ""
+	cfg.APIFormat = ""
+	cfg.BaseURL = ""
+	cfg.APIKey = ""
+	cfg.APIKeys = nil
+	cfg.Model = ""
+	cfg.MaxTokens = 0
+	cfg.ContextWindow = 0
+	cfg.TokenParam = ""
+	cfg.CustomHeaders = nil
+	cfg.ReasoningTag = ""
+	cfg.VisionCapable = nil
+	cfg.ReasoningEffort = ""
+}
+
+// convergeLastUsedModel 清掉在 models[] 里解析不到的悬空身份：这种身份展开永远落空
+// （等价于"没有最近使用模型"），留着还会让界面把"最近使用"指着一条不存在的模型。
+// config 有**两个**写入方——局部保存的 saveConfig 与设置页整份保存的 SaveConfig——
+// 同一不变式的收敛必须收口在这里给两边共用：只在一边清理，另一边就会把悬空身份落盘，
+// 于是 HTTP API 会话与计划任务回落直接报 "model is required"（界面自己因为还有 Tab
+// 快照、下次切模型/发送又会重写身份，看不出问题）。
+func convergeLastUsedModel(cfg *ConfigState) {
+	if cfg.LastUsedModel != nil && modelIndexByIdentity(cfg.Models, *cfg.LastUsedModel) < 0 {
+		cfg.LastUsedModel = nil
+	}
 }
 
 // configForWorkspace returns a request-scoped config whose primary workspace is

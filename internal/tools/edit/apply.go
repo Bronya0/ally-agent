@@ -26,7 +26,7 @@ type TextChange struct {
 	OldText    string `json:"oldText,omitempty"`
 	LineRange  string `json:"lineRange,omitempty"`
 	NewText    string `json:"newText"`
-	ReplaceAll bool   `json:"replace_all,omitempty"`
+	ReplaceAll bool   `json:"replaceAll,omitempty"`
 }
 
 const (
@@ -725,7 +725,7 @@ func ApplyBatchTextChanges(content string, changes []TextChange) (*Result, int, 
 		newText := NormalizeEditString(change.NewText)
 		if strings.TrimSpace(change.LineRange) != "" {
 			if change.ReplaceAll {
-				warnings = append(warnings, fmt.Sprintf("change %d ignored replace_all because it only applies to oldText; lineRange was executed normally", i+1))
+				warnings = append(warnings, fmt.Sprintf("change %d ignored replaceAll because it only applies to oldText; lineRange was executed normally", i+1))
 			}
 			if index == nil {
 				index = buildLineIndex(content)
@@ -774,7 +774,7 @@ func ApplyBatchTextChanges(content string, changes []TextChange) (*Result, int, 
 			matches, count := scanExactMatches(content, oldText, maxMatchDiagnosticCandidates)
 			if count > 1 {
 				lines, details := exactMatchDiagnosticsAtMatches(content, oldText, i+1, count, matches)
-				return nil, 0, toolerrors.NewWithDetails("E_MULTI_MATCH", fmt.Errorf("change %d oldText occurs %d times%s; inspect one bounded candidate and include more surrounding text to make it unique, or set replace_all=true to replace every exact occurrence", i+1, count, FormatMatchLines(lines, count)), details)
+				return nil, 0, toolerrors.NewWithDetails("E_MULTI_MATCH", fmt.Errorf("change %d oldText occurs %d times%s; inspect one bounded candidate and include more surrounding text to make it unique, or set replaceAll=true to replace every exact occurrence", i+1, count, FormatMatchLines(lines, count)), details)
 			}
 			if count > 0 {
 				match := matches[0]
@@ -810,7 +810,7 @@ func ApplyBatchTextChanges(content string, changes []TextChange) (*Result, int, 
 				matches, count := scanExactMatches(content, oldText, maxMatchDiagnosticCandidates)
 				if count > 1 {
 					lines, details := exactMatchDiagnosticsAtMatches(content, oldText, i+1, count, matches)
-					return nil, 0, toolerrors.NewWithDetails("E_MULTI_MATCH", fmt.Errorf("change %d oldText occurs %d times%s; inspect one bounded candidate and include more surrounding text to make it unique, or set replace_all=true to replace every exact occurrence", i+1, count, FormatMatchLines(lines, count)), details)
+					return nil, 0, toolerrors.NewWithDetails("E_MULTI_MATCH", fmt.Errorf("change %d oldText occurs %d times%s; inspect one bounded candidate and include more surrounding text to make it unique, or set replaceAll=true to replace every exact occurrence", i+1, count, FormatMatchLines(lines, count)), details)
 				}
 				if count > 0 {
 					match := matches[0]
@@ -827,7 +827,7 @@ func ApplyBatchTextChanges(content string, changes []TextChange) (*Result, int, 
 			// matching both failed. Normalize quotes/dashes/spaces and retry
 			// against the same immutable snapshot. Only a unique normalized
 			// match is accepted; ambiguity is reported instead of guessed.
-			// replace_all keeps its exact-match-only contract and skips this
+			// replaceAll keeps its exact-match-only contract and skips this
 			// fallback (replacing "every normalized occurrence" is ambiguous).
 			if !change.ReplaceAll {
 				if !normComputed {

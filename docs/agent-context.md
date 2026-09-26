@@ -120,7 +120,7 @@ func compactThresholdLimit(cfg ConfigState) int {       // biz_compact.go:270
 | 自动（阈值） | 每步 `bd.Total > 阈值`，失败不致命 | `compactRunHistory(..., compactReasonThreshold, ...)`（`app.go:1843`） |
 | 强化（溢出恢复） | provider 判定上下文超长后，忽略阈值强制压缩一次再重发 | `compactRunHistory(..., compactReasonOverflow, ...)`（`app.go:1950`） |
 
-**手动入口由调用方带模型**：`CompactSession(sessionID, instruction, overlay)` 的 overlay 就是 `StartChat` 收到的那份（GUI 传当前 Tab 的模型）。config 顶层的「默认模型」现在只由 `SwitchModel`（本地 API 的 `/api/v1/models/activate`）写入，GUI 没有任何入口能改它：读它就等于把总结发到用户从没选过的端点——恢复出来的会话既没有冻结记录、也还没有消息，正是必踩的场景。优先级收口在 `compactSessionConfig`（`biz_compact.go:126`）：调用方 overlay → 会话冻结记录（无 Tab 上下文的本地 HTTP API 走这里）→ 持久化配置。
+**手动入口由调用方带模型**：`CompactSession(sessionID, instruction, overlay)` 的 overlay 就是 `StartChat` 收到的那份（GUI 传当前 Tab 的模型）。持久化配置里已经没有顶层模型字段，只有 `models[]` 预设 + `lastUsedModel` 身份（见 `expandLastUsedModel`）：界面切模型/发送时把身份写回配置，本地 API 用 `/api/v1/models/activate` 设它。优先级收口在 `compactSessionConfig`（`biz_compact.go:126`）：调用方 overlay → 会话冻结记录（无 Tab 上下文的本地 HTTP API 走这里）→ 配置里按身份展开出来的最近使用模型（会话在本进程从没跑过时的兜底）。
 
 ### 6.1 run 内压缩后的消息列表怎么重建（`compactRunHistory`，`biz_compact.go:238`）
 

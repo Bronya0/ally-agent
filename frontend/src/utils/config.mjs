@@ -9,21 +9,16 @@
  */
 import { normalizeApiKeysArray, normalizeReasoningEffort } from './modelConfigIO.mjs';
 
+// defaultConfig 只描述持久化配置里**非模型**的部分：模型一律是 models[] 里的预设，
+// 界面在用的那个只存一个身份（lastUsedModel），其余模型字段由后端按身份展开
+// （见 internal/app ConfigState 与 expandLastUsedModel）。界面上"一条模型都没
+// 配置"时的出厂占位见 placeholderModel，它不是配置项。
 export function defaultConfig() {
   return {
-    providerName: 'OpenAI Compatible',
-    apiFormat: 'openai_chat',
-    baseUrl: 'https://api.deepseek.com',
-    apiKey: '',
-    apiKeys: [],
-    model: 'deepseek-v4-flash',
     workspace: '',
     // Knowledge-base root directory. A session whose workspace resolves to
     // this path runs in KB mode (KB system prompt + read-only sources/).
     kbRoot: '',
-    maxTokens: 131072,
-    contextWindow: 1000000,
-    tokenParam: 'auto',
     customPrompt: '',
     allowPrivateNetwork: true,
     gitBashPath: '',
@@ -31,11 +26,11 @@ export function defaultConfig() {
     proxyUrl: '',
     proxyNoProxy: '',
     userAgent: '',
-    reasoningTag: 'reasoning_content',
-    reasoningEffort: 'max',
-    customHeaders: null,
     disabledSkills: [],
     models: [],
+    // 最近使用模型身份（{providerName, model}，指向 models[] 里的一条）：新 Tab 的
+    // 模型种子，也是后端给 HTTP API 会话与计划任务展开模型的依据。
+    lastUsedModel: null,
     llmRetries: 6,
     // Post-write auto validation is opt-in: each language stays off until the
     // user enables it in Settings. Backend stores *bool (nil = disabled).
@@ -88,11 +83,11 @@ export function assignConfig(target, source) {
     ...(source || {}),
   };
   delete next.systemPrompt;
-  next.reasoningTag = String(next.reasoningTag || '').trim() || 'reasoning_content';
-  next.reasoningEffort = normalizeReasoningEffort(next.reasoningEffort);
-  next.apiKeys = normalizeApiKeysArray(next.apiKeys).length
-    ? normalizeApiKeysArray(next.apiKeys)
-    : (next.apiKey ? [next.apiKey] : []);
+  // lastUsedModel 是 {providerName, model} 身份：缺 model id 视为"没有"（null）。
+  const lastUsed = next.lastUsedModel;
+  next.lastUsedModel = lastUsed && String(lastUsed.model || '').trim()
+    ? { providerName: String(lastUsed.providerName || '').trim(), model: String(lastUsed.model).trim() }
+    : null;
   next.models = cloneModelConfigs(next.models);
   // Backend stores autoUpdate as *bool (nil = default on). Normalize null /
   // undefined back to true so the frontend always sees a real boolean.
@@ -138,6 +133,26 @@ export function assignConfig(target, source) {
   if (!Array.isArray(next.skippedUpdates)) next.skippedUpdates = [];
   delete target.systemPrompt;
   Object.assign(target, next);
+}
+
+// placeholderModel 是"一条模型都没配置"时界面上的出厂占位：新模型编辑器的预填、
+// composer 与欢迎表格的模型行。它不是配置项：不进 config、不落盘，用户配好第一个
+// 模型后就会被真实预设取代。
+export function placeholderModel() {
+  return {
+    providerName: 'OpenAI Compatible',
+    apiFormat: 'openai_chat',
+    baseUrl: 'https://api.deepseek.com',
+    apiKey: '',
+    apiKeys: [],
+    model: 'deepseek-v4-flash',
+    maxTokens: 131072,
+    contextWindow: 1000000,
+    tokenParam: 'auto',
+    reasoningTag: 'reasoning_content',
+    reasoningEffort: 'max',
+    customHeaders: null,
+  };
 }
 
 function cloneModelConfigs(models) {
