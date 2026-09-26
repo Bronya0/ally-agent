@@ -922,7 +922,7 @@ func TestGrepFilesKeepsExactCountsWhenSamplesAreTruncatedByLineBudget(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Files != 2 || got.MatchedLines != 3 || got.Hits != 3 || !got.StatsExact {
+	if got.Files != 2 || got.MatchedLines != 3 || got.Hits != 3 {
 		t.Fatalf("expected exact counts despite sample truncation, got %#v", got)
 	}
 	// The line budget is global: one sampled line in, the next matching file
@@ -977,9 +977,6 @@ func TestGrepFilesReportsOccurrenceCount(t *testing.T) {
 	if got.Hits != 4 {
 		t.Fatalf("expected four occurrences, got %#v", got)
 	}
-	if !got.StatsExact {
-		t.Fatalf("expected exact grep stats, got %#v", got)
-	}
 }
 
 func TestGrepFilesKeepsExactCountsWhenSamplesAreTruncatedByMatchLimit(t *testing.T) {
@@ -996,7 +993,7 @@ func TestGrepFilesKeepsExactCountsWhenSamplesAreTruncatedByMatchLimit(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.MatchedLines != 5 || got.Hits != 5 || got.Files != 1 || !got.StatsExact {
+	if got.MatchedLines != 5 || got.Hits != 5 || got.Files != 1 {
 		t.Fatalf("expected exact counts despite match sample truncation, got %#v", got)
 	}
 	if !got.Truncated || len(got.LineHits) != 1 || len(got.LineHits[0].Lines) != 3 {
@@ -1133,7 +1130,6 @@ func TestCompactToolResultForModelCompactsGrepLines(t *testing.T) {
 		Hits:         total,
 		Files:        1,
 		Truncated:    true,
-		StatsExact:   true,
 		NextOffset:   total,
 	}}
 	raw, err := json.Marshal(result)
@@ -1146,10 +1142,11 @@ func TestCompactToolResultForModelCompactsGrepLines(t *testing.T) {
 	if !strings.HasPrefix(got, fmt.Sprintf("<ally-grep mode=\"lines\" matched=\"%d\" files=\"1\" truncated next-offset=\"%d\">\n", total, maxModelGrepMatches)) {
 		t.Fatalf("expected capped header with adjusted next-offset, got %s", got)
 	}
-	// statsExact is always true today; the model view must omit it instead of
-	// repeating an always-true field.
-	if strings.Contains(got, "statsExact") || strings.Contains(got, "stats-approx") {
-		t.Fatalf("model view must omit always-true statsExact: %s", got)
+	// The approximation marker is gone for good: it could never be false (Search
+	// errors out when ripgrep emits no statistics), so the model view must not
+	// grow one back.
+	if strings.Contains(got, "stats-approx") {
+		t.Fatalf("model view must not carry an approximation marker: %s", got)
 	}
 	if !strings.Contains(got, fmt.Sprintf("[%d of %d matching lines shown]", maxModelGrepMatches, total)) {
 		t.Fatalf("expected reduction note, got %.200s", got)
@@ -1166,7 +1163,7 @@ func TestCompactToolResultForModelGroupsGrepRowsByFile(t *testing.T) {
 	// lines mode renders one bare path row per file group, then indented
 	// "line: text" rows — the path is spelled once per file to save tokens.
 	result := toolResult{OK: true, Data: GrepResult{
-		Mode: "lines", MatchedLines: 3, Hits: 3, Files: 2, StatsExact: true,
+		Mode: "lines", MatchedLines: 3, Hits: 3, Files: 2,
 		LineHits: []GrepFileMatch{
 			{Path: "a/x.txt", Lines: []int{10, 20}, Texts: []string{"ten", "twenty"}},
 			{Path: "b/y.txt", Lines: []int{5}},
@@ -1186,7 +1183,7 @@ func TestCompactToolResultForModelGreFallsFlatForIndentedPath(t *testing.T) {
 	// A path with leading whitespace would forge an indented match row, so the
 	// whole block falls back to flat "path:line: text" rows.
 	result := toolResult{OK: true, Data: GrepResult{
-		Mode: "lines", MatchedLines: 2, Hits: 2, Files: 2, StatsExact: true,
+		Mode: "lines", MatchedLines: 2, Hits: 2, Files: 2,
 		LineHits: []GrepFileMatch{
 			{Path: " indented.txt", Lines: []int{1}, Texts: []string{"one"}},
 			{Path: "ok.txt", Lines: []int{2}, Texts: []string{"two"}},
@@ -1263,16 +1260,24 @@ func TestCompactToolResultForModelRendersStructuredToolsAsTags(t *testing.T) {
 		{
 			name: "scheduled_task-list",
 			tool: "scheduled_task",
-			data: ScheduledTaskToolResult{Count: 1, Tasks: []ScheduledTaskToolView{{ID: "t_3", Name: "sync", Schedule: ScheduledTaskSchedule{Type: "every", Every: "30m"}, LastStatus: "ok", RunCount: 4}}},
+			data: ScheduledTaskToolResult{Count: 1, Tasks: []ScheduledTaskToolView{{ID: "t_3", Name: "sync", Schedule: ScheduledTaskSchedule{Type: "interval", Every: "30m"}, LastStatus: "ok", RunCount: 4}}},
 			want: "<ally-tasks count=\"1\">\n" +
 				`  t_3: name="sync" schedule="every:30m" status="ok" runs=4` + "\n" +
 				"</ally-tasks>",
 		},
 		{
+			name: "scheduled_task-list-one-shot",
+			tool: "scheduled_task",
+			data: ScheduledTaskToolResult{Count: 1, Tasks: []ScheduledTaskToolView{{ID: "t_4", Name: "warm", Schedule: ScheduledTaskSchedule{Type: "once", At: "2026-01-02T15:04:05Z"}, LastStatus: "scheduled", RunCount: 0}}},
+			want: "<ally-tasks count=\"1\">\n" +
+				`  t_4: name="warm" schedule="at:2026-01-02T15:04:05Z" status="scheduled" runs=0` + "\n" +
+				"</ally-tasks>",
+		},
+		{
 			name: "service-list",
 			tool: "service",
-			data: ServiceListToolResult{ActiveCount: 1, MaxActive: 8, Services: []ServiceSummary{{ID: "svc_1", Name: "frontend", Status: "running", PID: 99, Command: "npm run dev"}}},
-			want: "<ally-svcs active=\"1\" max=\"8\">\n" +
+			data: ServiceListToolResult{ActiveCount: 1, MaxActive: maxActiveServices, Services: []ServiceSummary{{ID: "svc_1", Name: "frontend", Status: "running", PID: 99, Command: "npm run dev"}}},
+			want: fmt.Sprintf("<ally-svcs active=\"1\" max=\"%d\">\n", maxActiveServices) +
 				`  svc_1 (frontend) running pid=99 cmd="npm run dev"` + "\n" +
 				"</ally-svcs>",
 		},
@@ -1320,7 +1325,6 @@ func TestCompactToolResultForModelCapsLinesAcrossFiles(t *testing.T) {
 		Hits:         2 * over,
 		Files:        2,
 		Truncated:    true,
-		StatsExact:   true,
 	}}
 	raw, err := json.Marshal(result)
 	if err != nil {
@@ -1357,7 +1361,6 @@ func TestCompactToolResultForModelPreservesGrepCounts(t *testing.T) {
 		MatchedLines: 40,
 		Hits:         60,
 		Files:        pageWidth,
-		StatsExact:   true,
 	}}
 	raw, err := json.Marshal(result)
 	if err != nil {
@@ -1524,11 +1527,11 @@ func TestCompactListFilesResultForModelUsesPathList(t *testing.T) {
 	}
 
 	empty := compactToolResultForModel("list_files", toolResult{OK: true, Data: ListFilesResult{}}, "fallback")
-	if !strings.Contains(empty, "includeHidden") {
-		t.Fatalf("empty listing must carry a widening note, got %s", empty)
+	if !strings.Contains(empty, "hidden") {
+		t.Fatalf("empty listing must explain why it can be empty, got %s", empty)
 	}
 	truncated := compactToolResultForModel("list_files", toolResult{OK: true, Data: ListFilesResult{Count: 200, Truncated: true}}, "fallback")
-	if !strings.Contains(truncated, "narrow path") {
+	if !strings.Contains(truncated, "narrow the path") {
 		t.Fatalf("truncated listing must carry a narrowing note, got %s", truncated)
 	}
 }
@@ -1675,7 +1678,7 @@ func TestExecuteToolEditValidationFollowsBatchPlan(t *testing.T) {
 	args, err := json.Marshal(FileTextEdits{
 		Path:    "config.json",
 		Version: hashVersion(original),
-		Changes: []TextChange{{OldText: "true", NewText: ""}},
+		Changes: []TextChange{{OldText: "true", NewText: textPtr("")}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1723,7 +1726,7 @@ func TestEditAutoValidationReturnsFailureWithoutUndoingWrite(t *testing.T) {
 	req := FileTextEdits{
 		Path:    "config.json",
 		Version: hashVersion(original),
-		Changes: []TextChange{{OldText: "true", NewText: ""}},
+		Changes: []TextChange{{OldText: "true", NewText: textPtr("")}},
 	}
 	payload, err := json.Marshal(req)
 	if err != nil {
@@ -3401,8 +3404,8 @@ func TestExecuteToolEditRollsBackEarlierFilesWhenCommitFails(t *testing.T) {
 	app := NewApp()
 	cfg := ConfigState{Workspace: dir}
 	files := []FileTextEdits{
-		{Path: "a.txt", Version: hashVersion(a), Changes: []TextChange{{OldText: "alpha", NewText: "ALPHA"}}},
-		{Path: "sub/b.txt", Version: hashVersion(b), Changes: []TextChange{{OldText: "beta", NewText: "BETA"}}},
+		{Path: "a.txt", Version: hashVersion(a), Changes: []TextChange{{OldText: "alpha", NewText: textPtr("ALPHA")}}},
+		{Path: "sub/b.txt", Version: hashVersion(b), Changes: []TextChange{{OldText: "beta", NewText: textPtr("BETA")}}},
 	}
 	_, err := app.editFilesWithConfig(cfg, files)
 	if err == nil {
@@ -4217,8 +4220,8 @@ func TestLocalEditPlanIsSharedByConflictDetectionAndExecution(t *testing.T) {
 	cfg := ConfigState{Workspace: dir}
 	version := hashVersion(original)
 	files := []FileTextEdits{
-		{Path: "sample.txt", Version: version, Changes: []TextChange{{OldText: "alpha", NewText: "ALPHA"}}},
-		{Path: "./sample.txt", Version: version, Changes: []TextChange{{OldText: "beta", NewText: "BETA"}}},
+		{Path: "sample.txt", Version: version, Changes: []TextChange{{OldText: "alpha", NewText: textPtr("ALPHA")}}},
+		{Path: "./sample.txt", Version: version, Changes: []TextChange{{OldText: "beta", NewText: textPtr("BETA")}}},
 	}
 
 	plan, err := planLocalEditBatch(cfg, files, localEditPlanForExecution)
@@ -4231,7 +4234,7 @@ func TestLocalEditPlanIsSharedByConflictDetectionAndExecution(t *testing.T) {
 
 	// Model-facing calls are flat and single-file. The executor and the
 	// conflict detector must still agree on the same plan boundary.
-	args, err := json.Marshal(FileTextEdits{Path: "sample.txt", Version: version, Changes: []TextChange{{OldText: "alpha", NewText: "ALPHA"}, {OldText: "beta", NewText: "BETA"}}})
+	args, err := json.Marshal(FileTextEdits{Path: "sample.txt", Version: version, Changes: []TextChange{{OldText: "alpha", NewText: textPtr("ALPHA")}, {OldText: "beta", NewText: textPtr("BETA")}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -5085,7 +5088,6 @@ func TestCompactToolResultForModelKeepsGrepTextsAlignedWhenCapping(t *testing.T)
 		MatchedLines: total,
 		Hits:         total,
 		Files:        1,
-		StatsExact:   true,
 	}}
 	raw, err := json.Marshal(result)
 	if err != nil {

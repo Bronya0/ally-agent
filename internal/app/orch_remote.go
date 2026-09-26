@@ -1388,8 +1388,12 @@ func buildRemoteReadResultItem(rawFile remoteRawFile, f BatchReadFileRequest) (B
 	text, ending, _ := normalizeText(rawFile.Data)
 	sha256Hex, version := hashBytesAndVersion(rawFile.Data)
 	_ = sha256Hex
+	previewStart, rangeErr := resolveReadStartLine(f.StartLine, f.EndLine, f.TailLines)
+	if rangeErr != nil {
+		return BatchReadResultItem{}, rangeErr
+	}
 	preview, previewErr := formatLineNumberReadPreviewRangeWithBudget(text, readRangeRequest{
-		StartLine: f.StartLine,
+		StartLine: previewStart,
 		EndLine:   f.EndLine,
 	}, maxToolOutput)
 	if previewErr != nil {

@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"ally-dev/internal/tools/service"
+	toolshared "ally-dev/internal/tools/shared"
 )
 
 // ───────────────────────── Section 1: Re-exports ─────────────────────────
@@ -59,15 +60,17 @@ const (
 	// Tool-facing read defaults. The model can request up to
 	// maxServiceReadTailBytes of recent output per call; larger reads are
 	// clamped so a single service read cannot dominate the model
-	// context window.
-	defaultServiceReadTailBytes = service.DefaultReadTail
-	maxServiceReadTailBytes     = service.MaxReadTail
+	// context window. Both numbers come from the tools/shared block that also
+	// declares the service schema, so the promise and the clamp cannot drift.
+	defaultServiceReadTailBytes = toolshared.DefaultServiceReadTailBytes
+	maxServiceReadTailBytes     = toolshared.MaxServiceReadTailBytes
 
 	// Unified three-platform stop semantics: best-effort graceful
 	// termination, a bounded grace wait, then a force kill of the whole
-	// process tree with a short confirm wait.
-	defaultServiceStopGraceSeconds = 3
-	maxServiceStopGraceSeconds     = 30
+	// process tree with a short confirm wait. Same source of truth as the
+	// schema's graceSeconds bounds.
+	defaultServiceStopGraceSeconds = toolshared.DefaultServiceStopGraceSeconds
+	maxServiceStopGraceSeconds     = toolshared.MaxServiceStopGraceSeconds
 	serviceForceKillConfirmWait    = 2 * time.Second
 
 	// Finished-service retention. A service that exited or was stopped stays
@@ -309,7 +312,7 @@ func (a *App) stopService(req StopServiceRequest) (ServiceInfo, error) {
 	service := a.services[id]
 	a.servicesMu.Unlock()
 	if service == nil {
-		return ServiceInfo{}, errServiceNotFound
+		return ServiceInfo{}, codedToolError("E_SERVICE_NOT_FOUND", errServiceNotFound)
 	}
 
 	service.mu.Lock()
@@ -409,7 +412,7 @@ func (a *App) listServices() ServiceListResult {
 }
 
 // ServiceListToolResult is the model-facing list payload. It intentionally
-// omits outputTail so listing 8 services cannot dominate the model context;
+// omits outputTail so a full listing cannot dominate the model context;
 // the model must call service with action=read on a specific id to inspect
 // output.
 type ServiceListToolResult struct {

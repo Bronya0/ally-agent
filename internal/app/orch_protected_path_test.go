@@ -63,7 +63,7 @@ func TestToolWritesRefuseVCSMetadata(t *testing.T) {
 	res = app.executeTool(ctx, cfg, "s-1", "edit", encodedToolArgs(t, FileTextEdits{
 		Path:    ".git/config",
 		Version: hashVersion([]byte("[core]\n")),
-		Changes: []TextChange{{OldText: "[core]", NewText: "[core]\n\thooksPath = /tmp/evil"}},
+		Changes: []TextChange{{OldText: "[core]", NewText: textPtr("[core]\n\thooksPath = /tmp/evil")}},
 	}))
 	if res.OK || !strings.Contains(res.Error, "E_PROTECTED_PATH") {
 		t.Fatalf("edit inside .git must be refused, got ok=%v err=%v", res.OK, res.Error)
@@ -209,7 +209,7 @@ func TestEditRefusesSymlinkedDirectoryEscape(t *testing.T) {
 	res := app.executeTool(t.Context(), cfg, "s-1", "edit", encodedToolArgs(t, FileTextEdits{
 		Path:    "link/authorized_keys",
 		Version: hashVersion([]byte("original\n")),
-		Changes: []TextChange{{OldText: "original", NewText: "owned"}},
+		Changes: []TextChange{{OldText: "original", NewText: textPtr("owned")}},
 	}))
 	if res.OK {
 		t.Fatalf("edit through a symlinked directory must be refused, got %+v", res.Data)

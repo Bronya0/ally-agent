@@ -1214,11 +1214,16 @@ type FileTextEdits struct {
 	Changes []TextChange `json:"changes"`
 }
 
+// TextChange is one model-facing replacement. NewText is a pointer on purpose:
+// the edit engine's own change type keeps a plain string, where "" legitimately
+// means "delete this text", so an absent key would decode to the same value and
+// silently delete content. The pointer keeps "absent" distinguishable and
+// validateModelTextChangeNewText rejects it at the wire boundary.
 type TextChange struct {
-	OldText    string `json:"oldText,omitempty"`
-	LineRange  string `json:"lineRange,omitempty"`
-	NewText    string `json:"newText"`
-	ReplaceAll bool   `json:"replace_all,omitempty"`
+	OldText    string  `json:"oldText,omitempty"`
+	LineRange  string  `json:"lineRange,omitempty"`
+	NewText    *string `json:"newText"`
+	ReplaceAll bool    `json:"replace_all,omitempty"`
 }
 
 type MultiEditResult struct {
@@ -1256,18 +1261,25 @@ type SkillDefinition struct {
 	embeddedContent string
 }
 
+// BatchReadRequest is the model-facing read payload. A line range belongs to one
+// entry (BatchReadFileRequest); there is deliberately no request-level range: the
+// read schema never declared one, so the argument gate refuses it, and the
+// per-entry fallback that used to apply it was therefore unreachable. Path/Paths
+// are the legacy single-file forms kept for old callers; they carry no range.
 type BatchReadRequest struct {
-	Path      string                 `json:"path,omitempty"`
-	Paths     []string               `json:"paths,omitempty"`
-	Files     []BatchReadFileRequest `json:"files,omitempty"`
-	StartLine int                    `json:"startLine,omitempty"`
-	EndLine   int                    `json:"endLine,omitempty"`
+	Path  string                 `json:"path,omitempty"`
+	Paths []string               `json:"paths,omitempty"`
+	Files []BatchReadFileRequest `json:"files,omitempty"`
 }
 
 type BatchReadFileRequest struct {
 	Path      string `json:"path"`
 	StartLine int    `json:"startLine,omitempty"`
 	EndLine   int    `json:"endLine,omitempty"`
+	// TailLines is the model-facing "last N lines" form; resolveReadStartLine
+	// folds it into a negative StartLine before the preview pipeline runs, so a
+	// tail read has one implementation (see orch_read.go).
+	TailLines int `json:"tailLines,omitempty"`
 }
 
 type BatchReadResultItem struct {
@@ -2538,11 +2550,10 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		}
 		err, argWarnings = decodeJSON(&req)
 		if err == nil {
-			if len(req.Items) == 0 {
-				err = codedToolError("E_BAD_SUGGEST", errors.New("items must contain at least 1 suggestion"))
-			} else {
-				data = map[string]any{"items": req.Items}
-			}
+			err = validateSuggestItems(req.Items)
+		}
+		if err == nil {
+			data = map[string]any{"items": req.Items}
 		}
 	case "scheduled_task":
 		var req ScheduledTaskToolRequest
@@ -2648,9 +2659,14 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		err, argWarnings = decodeJSON(&req)
 		if err == nil {
 			htmlLength := utf8.RuneCountInString(req.HTML)
-			if htmlLength > toolshared.MaxRenderHTMLCharacters {
-				err = fmt.Errorf("HTML content exceeds %d character limit", toolshared.MaxRenderHTMLCharacters)
-			} else {
+			switch {
+			case strings.TrimSpace(req.HTML) == "":
+				err = codedToolError("E_BAD_RENDER_HTML", errors.New("html must not be blank; send the snippet to render"))
+			case htmlLength > toolshared.MaxRenderHTMLCharacters:
+				err = codedToolError("E_BAD_RENDER_HTML", fmt.Errorf("HTML content exceeds %d character limit", toolshared.MaxRenderHTMLCharacters))
+			case utf8.RuneCountInString(req.Title) > toolshared.MaxRenderHTMLTitleChars:
+				err = codedToolError("E_BAD_RENDER_HTML", fmt.Errorf("title exceeds %d character limit", toolshared.MaxRenderHTMLTitleChars))
+			default:
 				data = map[string]any{
 					"rendered": true,
 					"length":   htmlLength,
@@ -2724,6 +2740,29 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 	return toolResult{OK: true, Data: data, Warnings: argWarnings}
 }
 
+// validateSuggestItems enforces the contract the suggest schema declares: 1-4
+// non-blank suggestions of at most 80 characters each. The app does not validate
+// arguments against schemas, so without this check the limits were decoration —
+// a five-item or 300-character suggestion reached the UI unfiltered while the
+// tool description promised otherwise.
+func validateSuggestItems(items []string) error {
+	if len(items) == 0 {
+		return codedToolError("E_BAD_SUGGEST", errors.New("items must contain at least 1 suggestion"))
+	}
+	if len(items) > toolshared.MaxSuggestItems {
+		return codedToolError("E_BAD_SUGGEST", fmt.Errorf("items supports at most %d suggestions, got %d", toolshared.MaxSuggestItems, len(items)))
+	}
+	for i, item := range items {
+		if strings.TrimSpace(item) == "" {
+			return codedToolError("E_BAD_SUGGEST", fmt.Errorf("item %d must not be blank", i+1))
+		}
+		if n := utf8.RuneCountInString(item); n > toolshared.MaxSuggestItemChars {
+			return codedToolError("E_BAD_SUGGEST", fmt.Errorf("item %d is %d characters long; keep each suggestion within %d characters", i+1, n, toolshared.MaxSuggestItemChars))
+		}
+	}
+	return nil
+}
+
 func waitWithContext(ctx context.Context, req WaitRequest) (WaitResult, error) {
 	reason := strings.TrimSpace(req.Reason)
 	if req.Seconds < 1 || req.Seconds > maxWaitSeconds {
@@ -2756,7 +2795,7 @@ func validateAskRequest(req AskRequest) error {
 	questionIDs := map[string]bool{}
 	for qi, question := range req.Questions {
 		question.ID = strings.TrimSpace(question.ID)
-		if question.ID == "" || len(question.ID) > 64 {
+		if question.ID == "" || utf8.RuneCountInString(question.ID) > 64 {
 			return codedToolError("E_BAD_ASK", fmt.Errorf("question %d requires an id of at most 64 characters", qi+1))
 		}
 		if questionIDs[question.ID] {
@@ -2773,7 +2812,7 @@ func validateAskRequest(req AskRequest) error {
 		recommended := 0
 		for oi, option := range question.Options {
 			option.ID = strings.TrimSpace(option.ID)
-			if option.ID == "" || len(option.ID) > 64 {
+			if option.ID == "" || utf8.RuneCountInString(option.ID) > 64 {
 				return codedToolError("E_BAD_ASK", fmt.Errorf("question %s option %d requires an id of at most 64 characters", question.ID, oi+1))
 			}
 			if optionIDs[option.ID] {
@@ -2792,7 +2831,73 @@ func validateAskRequest(req AskRequest) error {
 	return nil
 }
 
+// fillAskIDs gives every question and option an id when the model left it out.
+// Only the model-facing ask can be incomplete (the internal approval gates build
+// their own ids), and a generated id never collides with one already present.
+// Ids are plumbing: the UI echoes them back and the answer resolver matches on
+// them, so nothing the model must reason about depends on their value.
+func fillAskIDs(req AskRequest) AskRequest {
+	// Work on copies: a slice header is passed by value but its elements are not, so
+	// filling in place would mutate the caller's request as a hidden side effect.
+	questions := make([]AskQuestion, len(req.Questions))
+	copy(questions, req.Questions)
+	for i := range questions {
+		options := make([]AskOption, len(questions[i].Options))
+		copy(options, questions[i].Options)
+		questions[i].Options = options
+	}
+	req.Questions = questions
+
+	// Ids are plumbing (the UI echoes them back and the answer resolver matches on
+	// them), so the model does not have to invent them: fill in whatever it left
+	// empty before validating the complete request. "Empty" means blank after
+	// trimming, exactly as validateAskRequest decides it, so the two cannot
+	// disagree about which ids still need filling; supplied ids are normalized to
+	// the trimmed form that gets emitted and echoed back.
+	questionIDs := map[string]bool{}
+	for _, question := range req.Questions {
+		if id := strings.TrimSpace(question.ID); id != "" {
+			questionIDs[id] = true
+		}
+	}
+	for i := range req.Questions {
+		id := strings.TrimSpace(req.Questions[i].ID)
+		if id == "" {
+			id = freeAskID("q", i+1, questionIDs)
+		}
+		req.Questions[i].ID = id
+		questionIDs[id] = true
+		optionIDs := map[string]bool{}
+		for _, option := range req.Questions[i].Options {
+			if id := strings.TrimSpace(option.ID); id != "" {
+				optionIDs[id] = true
+			}
+		}
+		for j := range req.Questions[i].Options {
+			id := strings.TrimSpace(req.Questions[i].Options[j].ID)
+			if id == "" {
+				id = freeAskID("o", j+1, optionIDs)
+			}
+			req.Questions[i].Options[j].ID = id
+			optionIDs[id] = true
+		}
+	}
+	return req
+}
+
+// freeAskID returns prefix+n, or prefix+n_k when that id is already taken.
+func freeAskID(prefix string, n int, taken map[string]bool) string {
+	candidate := fmt.Sprintf("%s%d", prefix, n)
+	for k := 2; taken[candidate]; k++ {
+		candidate = fmt.Sprintf("%s%d_%d", prefix, n, k)
+	}
+	return candidate
+}
+
 func (a *App) executeAsk(ctx context.Context, sessionID string, req AskRequest) (AskResult, error) {
+	// The model is not asked to invent ids any more; fill in whatever it left empty
+	// before validating the complete request.
+	req = fillAskIDs(req)
 	if err := validateAskRequest(req); err != nil {
 		return AskResult{}, err
 	}

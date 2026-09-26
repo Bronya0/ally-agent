@@ -390,14 +390,16 @@ func renderServiceListResultForModel(r ServiceListToolResult) string {
 }
 
 // scheduledTaskScheduleSpec compacts a schedule struct into one attribute
-// value ("cron:0 3 * * *", "every:30m", "at:2026-01-02T15:04:05Z").
+// value ("cron:0 3 * * *", "every:30m", "at:2026-01-02T15:04:05Z"). The case
+// labels are the real type names: scheduler.ParseSchedule produces once /
+// interval / cron and the task manager switches on those same three.
 func scheduledTaskScheduleSpec(s ScheduledTaskSchedule) string {
 	switch s.Type {
 	case "cron":
 		return "cron:" + s.Cron
-	case "every":
+	case "interval":
 		return "every:" + s.Every
-	case "at":
+	case "once":
 		return "at:" + s.At
 	}
 	return s.Type
@@ -669,9 +671,6 @@ func renderGrepResultForModel(r GrepResult) string {
 	if nextOffset > 0 {
 		fmt.Fprintf(&b, ` next-offset="%d"`, nextOffset)
 	}
-	if !r.StatsExact {
-		b.WriteString(` stats-approx`)
-	}
 	if r.OffsetExhausted {
 		b.WriteString(` offset-exhausted`)
 	}
@@ -913,9 +912,9 @@ func renderListFilesResultForModel(r ListFilesResult) string {
 	}
 	switch {
 	case r.Count == 0:
-		b.WriteString("Empty listing: the directory is empty or everything was filtered as hidden/ignored. Use includeHidden/includeIgnored to widen it.\n")
+		b.WriteString("Empty listing: the directory is empty, or everything in it is hidden, gitignored, or VCS internals — none of which are ever listed.\n")
 	case r.Truncated:
-		b.WriteString("Entry limit reached; narrow path or raise limit to see the rest.\n")
+		b.WriteString("Entry limit reached; narrow the path to see the rest.\n")
 	}
 	return strings.TrimRight(escapeClosingMarker(b.String(), "</ally-files"), "\n") + "\n</ally-files>"
 }

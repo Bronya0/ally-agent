@@ -36,6 +36,33 @@ type preparedFileEdit struct {
 	result  EditResult
 }
 
+// validateModelTextChangeNewText rejects a change that left newText out.
+//
+// The schema declares newText required, but the app does not validate arguments
+// against schemas, so absence has to be checked where the wire shape still
+// carries it: an omitted key used to decode to "" and delete the matched text
+// without a word. An explicit empty string still means "delete" — only absence
+// is refused. Both edit and remote_edit validate through
+// validateModelEditToolRequest, so this is the single enforcement point.
+func validateModelTextChangeNewText(changes []TextChange) error {
+	for i, change := range changes {
+		if change.NewText == nil {
+			return codedToolError("E_BAD_EDIT", fmt.Errorf("change %d is missing newText; send \"newText\": \"\" to delete the matched text", i+1))
+		}
+	}
+	return nil
+}
+
+// textChangeNewText reads the model-facing newText after presence validation has
+// run. The engine's own type keeps "" as "delete this text", which is exactly
+// what a nil pointer would have meant.
+func textChangeNewText(c TextChange) string {
+	if c.NewText == nil {
+		return ""
+	}
+	return *c.NewText
+}
+
 func (a *App) editFilesWithConfig(cfg ConfigState, files []FileTextEdits) (MultiEditResult, error) {
 	plan, err := planLocalEditBatch(cfg, files, localEditPlanForExecution)
 	if err != nil {
@@ -288,6 +315,9 @@ func validateModelEditToolRequest(files []FileTextEdits) error {
 		if err := validateVersion(file.Version); err != nil {
 			return fmt.Errorf("file %d: %w", i+1, err)
 		}
+		if err := validateModelTextChangeNewText(file.Changes); err != nil {
+			return fmt.Errorf("file %d: %w", i+1, err)
+		}
 		if err := edit.ValidateBatchTextChanges(toEditChanges(file.Changes)); err != nil {
 			return fmt.Errorf("file %d: %w", i+1, err)
 		}
@@ -368,7 +398,7 @@ func toEditChanges(in []TextChange) []edit.TextChange {
 		out[i] = edit.TextChange{
 			OldText:    c.OldText,
 			LineRange:  c.LineRange,
-			NewText:    c.NewText,
+			NewText:    textChangeNewText(c),
 			ReplaceAll: c.ReplaceAll,
 		}
 	}
@@ -381,7 +411,8 @@ func fromEditChanges(in []edit.TextChange) []TextChange {
 	}
 	out := make([]TextChange, len(in))
 	for i, c := range in {
-		out[i] = TextChange{OldText: c.OldText, LineRange: c.LineRange, NewText: c.NewText, ReplaceAll: c.ReplaceAll}
+		newText := c.NewText
+		out[i] = TextChange{OldText: c.OldText, LineRange: c.LineRange, NewText: &newText, ReplaceAll: c.ReplaceAll}
 	}
 	return out
 }

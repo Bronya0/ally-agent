@@ -74,7 +74,7 @@ func TestSearchDefaultReturnsLineNumbersOnly(t *testing.T) {
 	if set := lineSet(result.LineHits, "b.txt"); len(set) != 2 || !set[1] || !set[2] {
 		t.Fatalf("b.txt must report lines 1 and 2, got %#v", result.LineHits)
 	}
-	if result.MatchedLines != 3 || result.Hits != 3 || result.Files != 2 || !result.StatsExact {
+	if result.MatchedLines != 3 || result.Hits != 3 || result.Files != 2 {
 		t.Fatalf("lines mode must preserve exact stats, got %#v", result)
 	}
 }
@@ -93,7 +93,7 @@ func TestSearchExactStatsSinglePass(t *testing.T) {
 	if result.MatchedLines != 4 || result.Hits != 4 || result.Files != 2 {
 		t.Fatalf("unexpected stats: %#v", result)
 	}
-	if result.Truncated || !result.StatsExact {
+	if result.Truncated {
 		t.Fatalf("small search must not be truncated: %#v", result)
 	}
 	if len(result.LineHits) != 2 {
@@ -131,7 +131,7 @@ func TestSearchTruncatedByMatchLimitKeepsExactStats(t *testing.T) {
 	if !result.Truncated {
 		t.Fatalf("expected truncation, got %#v", result)
 	}
-	if result.MatchedLines != 200 || result.Hits != 200 || result.Files != 1 || !result.StatsExact {
+	if result.MatchedLines != 200 || result.Hits != 200 || result.Files != 1 {
 		t.Fatalf("truncated search must still report exact stats, got %#v", result)
 	}
 	if len(result.LineHits) != 1 || len(result.LineHits[0].Lines) != 50 {
@@ -191,7 +191,7 @@ func TestSearchTruncatedByLineBudgetKeepsExactStats(t *testing.T) {
 	if !result.Truncated {
 		t.Fatalf("expected budget truncation, got %#v", result)
 	}
-	if result.MatchedLines != 50 || result.Hits != 50 || result.Files != 5 || !result.StatsExact {
+	if result.MatchedLines != 50 || result.Hits != 50 || result.Files != 5 {
 		t.Fatalf("budget-truncated search must still report exact stats, got %#v", result)
 	}
 	// rg streams matches file-by-file, so the budget is consumed by whole
@@ -285,7 +285,7 @@ func TestSearchManyFilesFallbackKeepsExactStats(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.MatchedLines != files || result.Hits != files || result.Files != files || !result.StatsExact {
+	if result.MatchedLines != files || result.Hits != files || result.Files != files {
 		t.Fatalf("fallback stats must stay exact for %d files, got %#v", files, result)
 	}
 	if !result.Truncated || len(result.LineHits) != 5 {
@@ -326,7 +326,7 @@ func TestSearchCountMatchesReturnsOnlyFileCounts(t *testing.T) {
 	if len(result.FileCounts) != 2 || result.FileCounts[0].Path != "b.txt" || result.FileCounts[0].Count != 3 || result.FileCounts[1].Path != "a.txt" || result.FileCounts[1].Count != 2 {
 		t.Fatalf("expected exact per-file counts, got %#v", result.FileCounts)
 	}
-	if result.MatchedLines != 4 || result.Hits != 5 || result.Files != 2 || !result.StatsExact {
+	if result.MatchedLines != 4 || result.Hits != 5 || result.Files != 2 {
 		t.Fatalf("count mode must preserve exact totals, got %#v", result)
 	}
 }
@@ -532,7 +532,7 @@ func TestSearchLineBudgetLeavesNoEmptyGroups(t *testing.T) {
 	if len(result.LineHits) != 1 || len(result.LineHits[0].Lines) != 1 {
 		t.Fatalf("expected exactly one one-line group (no empty trailing group), got %#v", result.LineHits)
 	}
-	if result.MatchedLines != 2 || result.Files != 2 || !result.StatsExact {
+	if result.MatchedLines != 2 || result.Files != 2 {
 		t.Fatalf("expected exact stats, got %#v", result)
 	}
 	raw, err := json.Marshal(result)

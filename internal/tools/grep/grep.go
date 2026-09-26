@@ -147,7 +147,6 @@ type Result struct {
 	Hits         int             `json:"hits"`
 	Files        int             `json:"files"`
 	Truncated    bool            `json:"truncated"`
-	StatsExact   bool            `json:"statsExact"`
 	NextOffset   int             `json:"nextOffset,omitempty"`
 	// OffsetExhausted reports that Request.Offset skipped past the end of the
 	// match stream: matches is empty even though Hits > 0. Reset offset to 0
@@ -272,7 +271,6 @@ func Search(ctx context.Context, rgPath, root, searchRoot string, req Request) (
 		Hits:            stats.Matches,
 		Files:           stats.FilesWithMatches,
 		Truncated:       truncated,
-		StatsExact:      true,
 		NextOffset:      nextOffset,
 		OffsetExhausted: offsetExhausted,
 		Skipped:         searchSkipNotices(req),

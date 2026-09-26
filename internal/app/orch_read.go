@@ -186,43 +186,60 @@ func collectPendingBatchReads(req BatchReadRequest) ([]pendingReadItem, error) {
 	}
 
 	pending := make([]pendingReadItem, 0, pathCount)
+	// Legacy single-file forms: no request-level range exists (see
+	// BatchReadRequest), so these entries read with the preview defaults.
 	if strings.TrimSpace(req.Path) != "" {
-		fileReq := ReadFileRequest{
-			Path:      req.Path,
-			StartLine: req.StartLine,
-			EndLine:   req.EndLine,
-		}
+		fileReq := ReadFileRequest{Path: req.Path}
 		if addIfNotSeen(readKey(req.Path, fileReq)) {
 			pending = append(pending, pendingReadItem{path: req.Path, req: fileReq})
 		}
 	}
 	for _, p := range req.Paths {
-		fileReq := ReadFileRequest{
-			Path:      p,
-			StartLine: req.StartLine,
-			EndLine:   req.EndLine,
-		}
+		fileReq := ReadFileRequest{Path: p}
 		if addIfNotSeen(readKey(p, fileReq)) {
 			pending = append(pending, pendingReadItem{path: p, req: fileReq})
 		}
 	}
 	for _, file := range req.Files {
+		startLine, rangeErr := resolveReadStartLine(file.StartLine, file.EndLine, file.TailLines)
+		if rangeErr != nil {
+			// The path is what tells the model which entry to fix; the rule itself
+			// lives in resolveReadStartLine.
+			return nil, fmt.Errorf("%s: %w", file.Path, rangeErr)
+		}
+		// The range is whatever this entry asked for: there is no request-level
+		// range to inherit (see BatchReadRequest).
 		fileReq := ReadFileRequest{
 			Path:      file.Path,
-			StartLine: file.StartLine,
+			StartLine: startLine,
 			EndLine:   file.EndLine,
-		}
-		if fileReq.StartLine == 0 {
-			fileReq.StartLine = req.StartLine
-		}
-		if fileReq.EndLine == 0 {
-			fileReq.EndLine = req.EndLine
 		}
 		if addIfNotSeen(readKey(file.Path, fileReq)) {
 			pending = append(pending, pendingReadItem{path: file.Path, req: fileReq})
 		}
 	}
 	return pending, nil
+}
+
+// resolveReadStartLine folds the model-facing tailLines form into the negative
+// startLine the preview pipeline already understands, so "last N lines" has one
+// implementation instead of two. Mixing the two forms is rejected here rather
+// than downstream: the preview would complain about a negative startLine the
+// model never sent, and a model can only fix a complaint about the parameter it
+// actually wrote. The value is clamped to the ceiling the preview enforces on
+// negative ranges, so an oversized tailLines degrades to the deepest tail rather
+// than failing.
+func resolveReadStartLine(startLine, endLine, tailLines int) (int, error) {
+	if tailLines > 0 && (startLine != 0 || endLine != 0) {
+		return 0, fmt.Errorf("tailLines reads the last N lines and cannot be combined with startLine or endLine; drop them for a tail read")
+	}
+	if startLine != 0 || tailLines <= 0 {
+		return startLine, nil
+	}
+	if tailLines > maxReadRangeLines {
+		tailLines = maxReadRangeLines
+	}
+	return -tailLines, nil
 }
 
 func (c *runReadCache) read(a *App, cfg ConfigState, req BatchReadRequest) (*BatchReadResult, error) {

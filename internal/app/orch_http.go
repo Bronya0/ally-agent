@@ -29,6 +29,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	toolshared "ally-dev/internal/tools/shared"
+
 	"codeberg.org/readeck/go-readability/v2"
 
 	"github.com/andybalholm/brotli"
@@ -48,9 +50,9 @@ func (a *App) httpRequestToolWithConfig(ctx context.Context, cfg ConfigState, re
 		req.MaxBytes = maxHTTPBodyBytes
 	}
 	// 只允许收紧、不允许放宽：配置是唯一的安全决策来源，请求侧只能把
-	// allowPrivateNetwork 关掉。schema 不暴露该字段，但模型仍能在 JSON 里带上
-	// （未知字段只给 warning），否则用户关掉的 SSRF 开关会被一句
-	// {"allowPrivateNetwork":true} 顶开。maxBytes 另有 maxHTTPBodyBytes 上限。
+	// allowPrivateNetwork 关掉。schema 刻意不暴露该字段，且工具入参现在按声明
+	// 硬校验（未知键直接 E_BAD_ARGS），所以模型无法用一句
+	// {"allowPrivateNetwork":true} 顶开用户关掉的 SSRF 开关。maxBytes 另有 maxHTTPBodyBytes 上限。
 	allowPrivate := cfg.allowPrivateNetworkEnabled()
 	if req.AllowPrivateNetwork != nil && !*req.AllowPrivateNetwork {
 		allowPrivate = false
@@ -84,10 +86,10 @@ func (a *App) webFetchToolWithConfig(ctx context.Context, cfg ConfigState, req W
 	}
 	maxChars := req.MaxChars
 	if maxChars <= 0 {
-		maxChars = 60000
+		maxChars = toolshared.DefaultWebFetchChars
 	}
-	if maxChars > 200000 {
-		maxChars = 200000
+	if maxChars > toolshared.MaxWebFetchChars {
+		maxChars = toolshared.MaxWebFetchChars
 	}
 	format := strings.ToLower(strings.TrimSpace(req.Format))
 	if format == "" {
@@ -100,9 +102,9 @@ func (a *App) webFetchToolWithConfig(ctx context.Context, cfg ConfigState, req W
 		req.MaxBytes = defaultWebFetchBody
 	}
 	// 只允许收紧、不允许放宽：配置是唯一的安全决策来源，请求侧只能把
-	// allowPrivateNetwork 关掉。schema 不暴露该字段，但模型仍能在 JSON 里带上
-	// （未知字段只给 warning），否则用户关掉的 SSRF 开关会被一句
-	// {"allowPrivateNetwork":true} 顶开。maxBytes 另有 maxHTTPBodyBytes 上限。
+	// allowPrivateNetwork 关掉。schema 刻意不暴露该字段，且工具入参现在按声明
+	// 硬校验（未知键直接 E_BAD_ARGS），所以模型无法用一句
+	// {"allowPrivateNetwork":true} 顶开用户关掉的 SSRF 开关。maxBytes 另有 maxHTTPBodyBytes 上限。
 	allowPrivate := cfg.allowPrivateNetworkEnabled()
 	if req.AllowPrivateNetwork != nil && !*req.AllowPrivateNetwork {
 		allowPrivate = false

@@ -29,16 +29,27 @@ func TestRuntimeSensitiveBuiltinSchemas(t *testing.T) {
 	if schemaObjectForTest(t, optionProperties["description"])["minLength"] != 1 {
 		t.Fatal("ask option description must reject empty strings")
 	}
+	// Ids are filled in by the runtime when the model omits them, so they must
+	// never be required; they stay declarable (and optional) because the
+	// runtime keeps a model-supplied id as given.
+	if schemaRequiredForTest(t, questionItem, "id") || schemaRequiredForTest(t, optionItem, "id") {
+		t.Fatal("ask ids must not be required: fillAskIDs assigns the missing ones")
+	}
 
 	readParams, _ := builtinSchemaForTest(t, "read")
 	readProperties := schemaObjectForTest(t, readParams["properties"])
 	readItems := schemaObjectForTest(t, schemaObjectForTest(t, readProperties["files"])["items"])
-	if branches, ok := readItems["oneOf"].([]any); !ok || len(branches) != 3 {
-		t.Fatalf("read file schema must distinguish omitted, non-negative, and negative-tail startLine cases; got %#v", readItems["oneOf"])
+	if branches, ok := readItems["oneOf"].([]any); !ok || len(branches) != 2 {
+		t.Fatalf("read file schema must separate the range form from the tail form; got %#v", readItems["oneOf"])
 	}
-	startLine := schemaObjectForTest(t, schemaObjectForTest(t, readItems["properties"])["startLine"])
-	if !strings.Contains(startLine["description"].(string), "negative values") {
-		t.Fatalf("read startLine description omits tail semantics: %v", startLine["description"])
+	readFileProperties := schemaObjectForTest(t, readItems["properties"])
+	startLine := schemaObjectForTest(t, readFileProperties["startLine"])
+	if startLine["minimum"] != 0 {
+		t.Fatalf("read startLine must accept 0 for \"not set\" like the runtime does, got %#v", startLine["minimum"])
+	}
+	tailLines := schemaObjectForTest(t, readFileProperties["tailLines"])
+	if tailLines["minimum"] != 0 || tailLines["maximum"] != MaxReadRangeLines {
+		t.Fatalf("read tailLines must be a bounded line count that accepts 0 for \"not set\", got %#v", tailLines)
 	}
 
 	sshParams, _ := builtinSchemaForTest(t, "ssh_cluster")

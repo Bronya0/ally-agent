@@ -509,7 +509,7 @@ func TestAgentDelegateSemaphoreRespectsCancelledContext(t *testing.T) {
 
 	done := make(chan toolResult, 1)
 	go func() {
-		done <- app.executeTool(ctx, ConfigState{}, "session-1", "subagent", []byte(`{"task":"noop"}`))
+		done <- app.executeTool(ctx, ConfigState{}, "session-1", "subagent", []byte(`{"task":"noop","role":"tester","maxSteps":1}`))
 	}()
 
 	select {

@@ -50,6 +50,16 @@ func newWorkspaceCacheHolder() *workspaceCacheHolder {
 }
 
 func (a *App) listFilesWithConfig(cfg ConfigState, req ListFilesRequest) (ListFilesResult, error) {
+	// Model-facing listings never show hidden or gitignored entries: the model's
+	// list_files schema no longer offers those switches, and nothing validates the
+	// arguments against that schema, so honouring a stray includeHidden /
+	// includeIgnored here would contradict what the tool description promises.
+	// This function is the one place that knows what model-facing means, so the
+	// normalization lives here rather than at each caller.
+	if req.ModelFacing {
+		req.IncludeHidden = false
+		req.IncludeIgnored = false
+	}
 	root, err := workspaceRoot(cfg)
 	if err != nil {
 		return ListFilesResult{}, err
@@ -128,10 +138,11 @@ func (a *App) listFilesWithConfig(cfg ConfigState, req ListFilesRequest) (ListFi
 			return nil
 		}
 		name := d.Name()
-		// VCS internals are always pruned for model-facing listings even
-		// when the model opts into hidden/ignored paths — .git noise easily
-		// dominates the entry limit. The UI explorer (ModelFacing=false)
-		// still shows them.
+		// VCS internals are always pruned for model-facing listings — .git noise
+		// easily dominates the entry limit. Model-facing listings also arrive with
+		// hidden/ignored switched off (see the top of this function), so this is the
+		// second line of defense, not the only one. The UI explorer
+		// (ModelFacing=false) still shows them.
 		if req.ModelFacing && isVCSDirName(name) {
 			if d.IsDir() {
 				return filepath.SkipDir
