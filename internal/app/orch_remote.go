@@ -256,6 +256,23 @@ def read_raw_file(root, rel, max_bytes):
 def op_read(root, payload):
     return read_raw_file(root, payload.get("path", ""), int(payload.get("maxBytes") or 2097152))
 
+def op_stat(root, payload):
+    # 只回元数据：read_raw_file 对超限文件与目录直接报错，拿不到“是否存在”，
+    # 而覆盖审批与 created 报告都必须建立在真实的存在性上。
+    path = safe_join(root, payload.get("path", ""))
+    try:
+        st = os.stat(path)
+    except (OSError, IOError):
+        return {"path": as_posix_rel(root, path), "exists": False, "isDir": False, "size": 0}
+    return {
+        "path": as_posix_rel(root, path),
+        "exists": True,
+        "isDir": bool(stat_mod.S_ISDIR(st.st_mode)),
+        "size": st.st_size,
+        "mode": st.st_mode & 0o7777,
+        "modTime": iso_mtime(st),
+    }
+
 def op_read_batch(root, payload):
     # 单会话批量读：逐文件独立 try（单文件失败只污染自己的结果槽，与
     # 本地批量 read 的隔离契约一致）；总字节预算装不下时把余下路径排进
@@ -661,6 +678,8 @@ try:
         ok(op_read(root, payload))
     elif op == "read_batch":
         ok(op_read_batch(root, payload))
+    elif op == "stat":
+        ok(op_stat(root, payload))
     elif op == "write":
         ok(op_write(root, payload))
     elif op == "delete":
@@ -1492,6 +1511,29 @@ func (a *App) remoteEditOne(ctx context.Context, rt remoteTarget, req FileTextEd
 	}, nil
 }
 
+// remoteStat is the metadata-only view of a remote path (the helper's stat op).
+// Existence cannot be inferred from a read: read_raw_file refuses files above
+// maxReadFileBytes and directories outright, so a failed read says nothing about
+// whether the target is there.
+type remoteStat struct {
+	Exists bool
+	IsDir  bool
+	Size   int64
+}
+
+func (a *App) remoteStatPath(ctx context.Context, rt remoteTarget, relPath string) (remoteStat, error) {
+	var resp struct {
+		Exists bool  `json:"exists"`
+		IsDir  bool  `json:"isDir"`
+		Size   int64 `json:"size"`
+	}
+	err := a.invokeRemotePython(ctx, rt, remotePayload(rt, "stat", map[string]any{"path": relPath}), 60*time.Second, &resp)
+	if err != nil {
+		return remoteStat{}, err
+	}
+	return remoteStat{Exists: resp.Exists, IsDir: resp.IsDir, Size: resp.Size}, nil
+}
+
 func (a *App) remoteCreateFile(ctx context.Context, req RemoteCreateFileRequest) (EditResult, error) {
 	rt, err := a.resolveAndAuthorizeRemoteTarget(ctx, req.Target)
 	if err != nil {
@@ -1501,28 +1543,46 @@ func (a *App) remoteCreateFile(ctx context.Context, req RemoteCreateFileRequest)
 	if err != nil {
 		return EditResult{}, err
 	}
+	// Existence comes from the helper's stat op, not from the pre-read:
+	// read_raw_file refuses files above maxReadFileBytes and directories outright,
+	// so inferring "does not exist" from a failed read skipped the overwrite
+	// approval for large files and reported an overwritten file as created.
+	stat, statErr := a.remoteStatPath(ctx, rt, cleanPath)
+	if statErr != nil {
+		return EditResult{}, statErr
+	}
+	if stat.IsDir {
+		return EditResult{}, codedToolError("E_BAD_PATH", fmt.Errorf("%s is a directory on %s; remote_create_file writes files only", cleanPath, rt.Host))
+	}
 	before := []byte{}
 	beforeHash := ""
 	beforeVersion := ""
-	exists := false
-	if _, existing, readErr := a.remoteReadRaw(ctx, req.Target, cleanPath); readErr == nil {
-		exists = true
-		before = existing.Data
-		beforeHash, beforeVersion = hashBytesAndVersion(existing.Data)
+	// The approval prompt must not report "0 bytes" for a file that was too large
+	// to read: stat carries the real size from the start.
+	beforeSize := stat.Size
+	// Best-effort content read: it now only feeds the diff and the version token,
+	// so a file too large to read still gets the approval gate and an honest
+	// `created` flag.
+	if stat.Exists {
+		if _, existing, readErr := a.remoteReadRaw(ctx, req.Target, cleanPath); readErr == nil {
+			before = existing.Data
+			beforeSize = int64(len(existing.Data))
+			beforeHash, beforeVersion = hashBytesAndVersion(existing.Data)
+		}
 	}
 	content, ending, hadBOM := normalizeText([]byte(req.Content))
 	encoded := encodeText(content, ending, hadBOM)
 
 	// Approval Gate 3: 只在本次确实是覆盖写时确认（overwrite=false 时 helper 会
 	// 直接以 "file already exists" 拒绝，问了也白问）。
-	if exists && req.Overwrite {
+	if stat.Exists && req.Overwrite {
 		if meta, ok := ctx.Value(toolExecutionMetaContextKey{}).(toolExecutionMeta); ok && meta.sessionID != "" {
 			askReq := AskRequest{
 				Questions: []AskQuestion{
 					{
 						ID: "approve_remote_overwrite",
 						Question: fmt.Sprintf("⚠️ 高危覆盖警告：模型正尝试覆盖远端已有文件 [%s] %s。\n原文件大小: %d 字节，新写入大小: %d 字节。\n\n是否确认允许覆盖？",
-							rt.Host, cleanPath, len(before), len(encoded)),
+							rt.Host, cleanPath, beforeSize, len(encoded)),
 						Options: []AskOption{
 							{
 								ID:          "approve",
@@ -1564,7 +1624,7 @@ func (a *App) remoteCreateFile(ctx context.Context, req RemoteCreateFileRequest)
 		return EditResult{}, err
 	}
 	result := makeEditResult(cleanPath, beforeHash, beforeVersion, before, encoded, ending, 1, string(before), content)
-	created := !exists
+	created := !stat.Exists
 	result.Created = &created
 	if len(createdDirs) > 0 {
 		result.CreatedDirs = createdDirs
@@ -1580,7 +1640,10 @@ func (a *App) remoteDeletePath(ctx context.Context, req RemoteDeletePathRequest)
 	if err != nil {
 		return nil, err
 	}
-	cleanPath, err := validateRemoteWorkspacePath(req.Path, rt.WorkspaceRoot, false)
+	// allowRoot=true maps the workspace root to "." so the dedicated refusal
+	// below reports the root, instead of the generic "path is required" that
+	// allowRoot=false raises first (which made that branch dead code).
+	cleanPath, err := validateRemoteWorkspacePath(req.Path, rt.WorkspaceRoot, true)
 	if err != nil {
 		return nil, err
 	}

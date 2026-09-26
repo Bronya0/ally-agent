@@ -56,20 +56,28 @@ func (a *App) executeSSHClusterTool(ctx context.Context, sessionID, workspace st
 			return a.authorizeExistingSSHServer(ctx, sessionID, workspace, existing)
 		}
 		host := strings.TrimSpace(req.Host)
-		if host == "" {
-			return nil, codedToolError("E_BAD_SSH_CLUSTER", errors.New("host is required for action=add"))
-		}
 		username := strings.TrimSpace(req.Username)
-		if username == "" {
-			return nil, codedToolError("E_BAD_SSH_CLUSTER", errors.New("username is required for action=add"))
-		}
 		description := strings.TrimSpace(req.Description)
-		if description == "" {
-			return nil, codedToolError("E_BAD_SSH_CLUSTER", errors.New("description is required for action=add"))
-		}
 		reason := strings.TrimSpace(req.Reason)
-		if reason == "" {
-			return nil, codedToolError("E_BAD_SSH_CLUSTER", errors.New("reason is required for action=add"))
+		// All four are needed for a node that is not registered yet. Report every
+		// missing one at once: the schema can only require `alias` (the
+		// already-registered path ignores the rest, so making them globally required
+		// would force the model to invent values for an existing node), and failing
+		// one field per round cost up to four wasted model turns.
+		missing := make([]string, 0, 4)
+		for _, field := range []struct{ name, value string }{
+			{"host", host},
+			{"username", username},
+			{"description", description},
+			{"reason", reason},
+		} {
+			if field.value == "" {
+				missing = append(missing, field.name)
+			}
+		}
+		if len(missing) > 0 {
+			return nil, codedToolError("E_BAD_SSH_CLUSTER", fmt.Errorf("action=add needs %s when registering the new alias %q; send them together in one call, or use action=list to check whether the alias is already registered",
+				strings.Join(missing, ", "), alias))
 		}
 		port := req.Port
 		if port <= 0 {

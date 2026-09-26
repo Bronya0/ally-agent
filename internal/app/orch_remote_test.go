@@ -225,6 +225,64 @@ func TestRemoteHelperProtectedDeleteClassification(t *testing.T) {
 	}
 }
 
+// TestRemoteHelperStatOp 锁定新的 stat 条目：read_raw_file 对超限文件与目录
+// 直接报错，因此存在性不能从失败的读取里推断，而覆盖审批与 created 报告都
+// 依赖这里的元数据。
+func TestRemoteHelperStatOp(t *testing.T) {
+	py := pickRemoteHelperPython(t)
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "small.txt"), []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "nested"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name   string
+		path   string
+		exists bool
+		isDir  bool
+		size   int64
+	}{
+		{"existing file", "small.txt", true, false, 5},
+		{"directory", "nested", true, true, 0},
+		{"missing path", "gone.txt", false, false, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			script, err := buildRemoteScript(map[string]any{
+				"op":            "stat",
+				"workspaceRoot": root,
+				"path":          tc.path,
+			})
+			if err != nil {
+				t.Fatalf("buildRemoteScript: %v", err)
+			}
+			resp, err := runRemoteHelperScript(t, py, script)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !resp.OK {
+				t.Fatalf("stat op failed: %s", resp.Error)
+			}
+			var data struct {
+				Exists bool  `json:"exists"`
+				IsDir  bool  `json:"isDir"`
+				Size   int64 `json:"size"`
+			}
+			if err := json.Unmarshal(resp.Data, &data); err != nil {
+				t.Fatalf("decode data: %v", err)
+			}
+			if data.Exists != tc.exists || data.IsDir != tc.isDir {
+				t.Fatalf("path %s: expected exists=%v isDir=%v, got exists=%v isDir=%v", tc.path, tc.exists, tc.isDir, data.Exists, data.IsDir)
+			}
+			if tc.exists && !tc.isDir && data.Size != tc.size {
+				t.Fatalf("path %s: expected size %d, got %d", tc.path, tc.size, data.Size)
+			}
+		})
+	}
+}
+
 // TestRemoteHelperWriteDefaultPerm0644 锁定新建文件权限契约：mkstemp 的
 // 0600 会让远程新建文件对其他账号不可读；现在必须对齐本地
 // SafeWriteFile 的 0644 默认值，覆盖时保留原文件权限位。
