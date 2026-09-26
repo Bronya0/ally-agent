@@ -7,25 +7,12 @@
  * This file is part of ally-agent, licensed under the GNU General
  * Public License v3. See the LICENSE file for details.
  */
+import { formatBytes } from './format.mjs';
+
 export function normalizedLines(text) {
   const lines = String(text || '').replace(/\r\n/g, '\n').split('\n');
   if (lines.length > 1 && lines[lines.length - 1] === '') lines.pop();
   return lines;
-}
-
-// formatBytes renders a byte count with a proper unit (B/KB/MB/GB), e.g.
-// 50000 -> "48.8 KB". Used by formatHttpToolTitle for the maxBytes limit chip.
-export function formatBytes(bytes) {
-  const n = Number(bytes);
-  if (!Number.isFinite(n) || n <= 0) return '0 B';
-  const units = ['B', 'KB', 'MB', 'GB'];
-  let i = 0;
-  let v = n;
-  while (v >= 1024 && i < units.length - 1) {
-    v /= 1024;
-    i++;
-  }
-  return `${v.toFixed(i ? 1 : 0)} ${units[i]}`;
 }
 
 // formatHttpToolTitle renders the title shown on http_request / web_fetch tool

@@ -25,6 +25,7 @@ Public License v3. See the LICENSE file for details.
 
 <script setup>
 import { t } from '../i18n.mjs';
+import { formatAttachmentSize } from '../utils/attachmentSize.mjs';
 
 defineProps({
   attachments: { type: Array, default: () => [] },
@@ -43,9 +44,12 @@ function attachmentSource(att) {
 }
 
 function attachmentState(att) {
-  const parts = [fmtBytes(att.size)];
+  const parts = [formatAttachmentSize(att, t('app.attachment.originalTag'))];
   if (att.text) parts.push(t('common.text'));
   if (att.truncated) parts.push(t('common.trimmed'));
+  // att.error 是「这张图没发出去」的唯一信号，必须显式出现在卡片上：只塞进 title
+  // 的 tooltip 等于把失败藏起来。
+  if (att.error) parts.push(att.error);
   return parts.filter(Boolean).join(' · ');
 }
 
@@ -56,12 +60,5 @@ function attachmentTitle(att) {
 function textPreview(text) {
   const source = String(text || '').trim();
   return source.length > 600 ? `${source.slice(0, 600)}\n...` : source;
-}
-
-function fmtBytes(size) {
-  const n = Number(size || 0);
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  return `${(n / 1024 / 1024).toFixed(1)} MB`;
 }
 </script>

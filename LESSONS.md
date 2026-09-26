@@ -65,3 +65,9 @@
 [live-flush-cadence] 2026-09-25 卡片流式刷新按载荷降频、流式期不跑 hljs：每拍全量重解析+分词会按满主线程。@App.vue @CodeView.vue
 [omitzero-zero-drop] 2026-09-25 全零 struct 会被 omitzero 整条丢弃（缓存断点），用 SDK 构造函数。@prov_adapter_anthropic
 [official-only-fields] 2026-09-25 官方专有请求字段须统一按 isOfficial*Endpoint 门控，勿逐字段各自决定。@prov_adapter_*.go
+[run-phase-reuse-reset] 2026-09-26 复用状态行阶段机前先清残留阶段：不回退思考，残留 decoding 会吞掉整场 Thinking 标签。@App.vue
+[bytes-format] 2026-09-26 体积文案走 formatBytes/compactBytes/formatAttachmentSize，勿自写 fmtBytes。@utils
+[utils-no-i18n] 2026-09-26 utils/*.mjs 勿 import i18n.mjs：顶层拉 naive-ui，node --test 崩；文案须调用方传。@utils
+[image-size-from-blob] 2026-09-26 附件体积取 blob.size / file.size，别从 data URL 反推（base64 假设会错）。@App.vue
+[tee-seed-duplicates] 2026-09-26 种子进 sink 后 primary 不清空：primary+sink 必重一份前缀，勿当无损判据。@orch_test.go
+[attachment-error-keep] 2026-09-26 带 error 的附件别被“无 dataUrl 且无 text 即丢”过滤器吃掉，提示到不了用户眼前。@App.vue

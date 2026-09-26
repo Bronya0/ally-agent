@@ -261,7 +261,8 @@ Public License v3. See the LICENSE file for details.
                   <div v-for="att in activePendingAttachments" :key="att.id" class="pending-attachment">
                     <span class="pending-attachment-icon">{{ attachmentIcon(att) }}</span>
                     <span class="pending-attachment-name" :title="att.name">{{ att.name }}</span>
-                    <span class="pending-attachment-size">{{ fmtBytes(att.size) }}</span>
+                    <span class="pending-attachment-size">{{ formatAttachmentSize(att, $t('app.attachment.originalTag')) }}</span>
+                    <span v-if="att.error" class="pending-attachment-error" :title="att.error">!</span>
                     <button class="pending-attachment-remove" @click="removeAttachment(att.id)" :title="$t('app.attachment.remove')"><CloseOutlined /></button>
                   </div>
                 </div>
@@ -637,12 +638,12 @@ import { isNewerReleaseVersion } from './utils/versionCheck.mjs';
 import { findSessionWorkspaceTab, isEditableNavigationTarget, shouldAcceptRunTerminal } from './utils/sessionState.mjs';
 import { orderPlanPanelEntries, planFocusScrollDelta } from './utils/planPanel.mjs';
 import { formatDateTime, naiveDateLocale, naiveLocale, reasoningEffortLabel, t, welcomeGreeting as localizedWelcomeGreeting } from './i18n.mjs';
-import { fmtCompact, fmtDuration } from './utils/format.mjs';
+import { compactBytes, formatAttachmentSize } from './utils/attachmentSize.mjs';
+import { fmtCompact, fmtDuration, formatBytes } from './utils/format.mjs';
 import { isSkillActive, normalizeSkillName } from './utils/skills.mjs';
 import {
   assistantRowRenderState,
   displaySourceMessages as buildDisplaySourceMessages,
-  formatBytes,
   formatHttpToolTitle,
   isRenderableMessage,
 } from './utils/toolPreview.mjs';
@@ -1870,7 +1871,12 @@ const activePendingAttachments = computed(() => pendingAttachmentsOf(activeSessi
 const attachmentInputRef = ref(null);
 const MAX_ATTACHMENTS_PER_MESSAGE = 8;
 const MAX_ATTACHMENT_PREVIEW_BYTES = 8 * 1024 * 1024;
-const MAX_IMAGE_INPUT_BYTES = 5 * 1024 * 1024;
+// 单张图片能发给模型的字节上限，前后端同一个数（后端 maxAttachmentImageBytes，
+// internal/app/biz_context.go）：超过 256KB 的图先重编码成 2048px 的 WebP，压完仍在
+// 5MB 以上就整张不发并说明原因。比的是**压缩之后**的图片字节，原图多大与判定无关——
+// 一张 30MB 的截图压到 1MB 就是正常发送；也不算 base64 膨胀（传输必然膨胀，与图片
+// 本身无关）。
+const MAX_MODEL_IMAGE_BYTES = 5 * 1024 * 1024;
 const MAX_TEXT_ATTACHMENT_BYTES = 200 * 1024;
 const MAX_STORED_ATTACHMENT_TEXT_CHARS = 20000;
 const expandedArchiveSessions = ref(new Set());
@@ -2601,10 +2607,12 @@ const activeRunPhase = computed(() => {
   return state ? state.phase : RUN_PHASE.prompt;
 });
 // 状态行左侧唯一的标签：只有思考阶段有文字（带上估算 token 数），其余阶段是空字符串、
-// 标签整块不渲染。压缩时没有 run 事件推动阶段，所以直接按思考档取值——压缩进度本身
-// 走右侧（composerStatusDetail）。
+// 标签整块不渲染。压缩没有自己的 run，但它的流式增量同样喂进阶段机（见 compact:delta），
+// 所以压缩与一次普通对话的观感完全一致：思考时显示 Thinking N tokens，摘要正文一开始
+// 流式标签就消失；没有思考的模型压缩时就该什么都不显示。压缩进度本身走右侧
+// （composerStatusDetail）。
 const composerStatusLabel = computed(() => phaseLabel(
-  compactLoadingActive.value ? RUN_PHASE.reasoning : activeRunPhase.value,
+  activeRunPhase.value,
   activeThinkingTokenCount.value,
 ));
 // 右侧右对齐的那一段：运行时是用户提问摘要，压缩时是本地化的进度明细。
@@ -4712,7 +4720,7 @@ function bindRuntimeEvents() {
     attachment.previewUrl = data.dataUrl;
     attachment.dataUrl = data.dataUrl;
     attachment.partial = !!data.partial;
-    attachment.size = Math.max(0, Math.floor((String(data.dataUrl).length * 3) / 4));
+    attachment.size = dataUrlByteLength(data.dataUrl);
     if (!data.partial) {
       createImageThumbnailDataUrl(data.dataUrl).then((thumbnail) => {
         if (thumbnail && attachment.dataUrl === data.dataUrl) {
@@ -4898,10 +4906,17 @@ function bindRuntimeEvents() {
   // stream compact:start / compact:done events; state is keyed per
   // session so a background tab's compaction never surfaces in another
   // tab's composer. tokensBefore/messages arrive up front so the user sees
-  // the scale of the summary request immediately.
+  // the scale of the summary request immediately. The row's thinking label is
+  // driven by the same phase machine as a run (see compact:delta), so a
+  // summarising model that thinks reads exactly like a normal reply.
   onRuntimeEvent('compact:start', (data) => {
     const sid = data?.sessionId || '';
     if (!sid) return;
+    // 压缩是当前唯一的活动：先把上一轮 run 留下的阶段丢掉。一个正常结束的回答会把状态
+    // 停在 decoding，而阶段机只认“同一段输出内不回退到思考”，于是整个总结调用的思考
+    // 都会被那个残留状态挡掉（标签只剩下光秃秃的 Thinking，或干脆不显示）。下面的增量
+    // 从头重建状态。
+    clearRunPhase(sid);
     const existing = compactingSessions[sid];
     const text = t('app.compact.compactingDetail', {
       messages: Number(data?.messages || 0),
@@ -4922,11 +4937,18 @@ function bindRuntimeEvents() {
     const sid = data?.sessionId || '';
     if (!sid) return;
     queueStreamDelta({ ...data, runId: compactStreamRunId(sid) });
+    // 与一次普通对话共用同一个阶段机（utils/runPhase.mjs）：只有思考增量时进入思考档
+    // （标签带上估算 token 数），第一条摘要正文增量结束思考档。压缩因此不再整场挂着
+    // "Thinking"——有思考才显示，正文阶段与无思考的模型都不显示。
+    trackRunPhase('run:stream', data);
   });
   onRuntimeEvent('compact:done', (data) => {
     const sid = data?.sessionId || '';
     if (!sid) return;
     delete compactingSessions[sid];
+    // 摘要正文把阶段机留在了 decoding；丢掉它，自动压缩后继续跑的那一步才能重新
+    // 回到思考档（阶段机不允许同一段输出内回退）。
+    clearRunPhase(sid);
     // Close the live summary bubble here, from the one event both the manual and
     // the automatic path emit: a failed or cancelled compaction must not leave
     // its half-written summary in the transcript as if it had been applied. On
@@ -4964,12 +4986,8 @@ function bindRuntimeEvents() {
       session.messages = [{ role: 'assistant', content: summary }];
       scheduleSaveSessions();
     }
-    const before = Number(data?.tokensBefore || 0);
-    const after = Number(data?.tokensAfter || 0);
     if (sid === activeSessionId.value) {
-      if (after > 0 && before > after) {
-        message.info(t('app.compact.autoToast', { before: fmtK(before), after: fmtK(after) }));
-      }
+      message.info(compactToastText(data?.tokensBefore, data?.tokensAfter));
       refreshContextTokens(sid);
     }
   });
@@ -5208,11 +5226,15 @@ async function addPendingAttachmentFiles(files) {
     // 只有“能真正发给模型”的附件才有意义：图片有 dataUrl，文本有 text。
     // 视频/音频/其他二进制 WebView2 拿不到真实路径，发出去也只有一个名字，
     // 会造成“以为带过去了其实没带”的误会，直接拒绝并提示。
-    if (!att.dataUrl && !att.text) {
+    // 带 error 的附件是第三种：它发不出去，但原因必须留着——卡片上的感叹号与具体
+    // 原因（不是笼统的“格式不支持”）、以及发给模型的附件文本都要带上它。按“没有
+    // dataUrl 就当格式不支持丢掉”，用户只会拿到一句错的提示，文件还凭空消失。
+    if (!att.dataUrl && !att.text && !att.error) {
       message.warning(t('app.attachment.unsupported'));
       releaseAttachmentPreview(att);
       continue;
     }
+    if (att.error) message.warning(att.error);
     arr.push(att);
   }
 }
@@ -5273,6 +5295,8 @@ async function fileToAttachment(file) {
     name: file.name,
     type: file.type,
     size: file.size,
+    // 真正发给模型的字节数（图片经 canvas 重编码，常与原图差一个数量级）。
+    sentSize: 0,
     kind,
     previewUrl: '',
     dataUrl: '',
@@ -5296,17 +5320,25 @@ async function fileToAttachment(file) {
   }
 
   try {
-    if (kind === 'image' && file.size <= MAX_ATTACHMENT_PREVIEW_BYTES) {
+    if (kind === 'image') {
+      // 预览缩略图本身就是 canvas 重编码（最长边 1280 / webp），所以不再按原始
+      // 体积设门槛：能发给模型的图就该看得见缩略图，压不动时内部已兜底返回空串。
       base.previewUrl = await createImageThumbnailUrl(file);
     } else if ((kind === 'video' || kind === 'audio') && file.size <= MAX_ATTACHMENT_PREVIEW_BYTES) {
       base.previewUrl = URL.createObjectURL(file);
     }
-    if (kind === 'image' && file.size <= MAX_IMAGE_INPUT_BYTES) {
-      base.dataUrl = await createModelImageDataUrl(file);
-      if (!base.dataUrl) base.error = t('app.attachment.imageUnsupported');
-    } else if (kind === 'image' && file.size > MAX_IMAGE_INPUT_BYTES) {
-      base.truncated = true;
-      base.error = t('app.attachment.imageTooLarge');
+    if (kind === 'image') {
+      const encoded = await encodeModelImage(file);
+      if (!encoded.dataUrl) {
+        base.error = t('app.attachment.imageUnsupported');
+      } else if (encoded.bytes > MAX_MODEL_IMAGE_BYTES) {
+        // 只有解码失败回退到原图时才会走到这里：不发送，并让卡片说明原因（上限写进文案，
+        // 常量改了文案跟着改）。
+        base.error = t('app.attachment.imageTooLarge', { limit: compactBytes(MAX_MODEL_IMAGE_BYTES) });
+      } else {
+        base.dataUrl = encoded.dataUrl;
+        base.sentSize = encoded.bytes;
+      }
     }
     if (isTextAttachment(file) && file.size <= MAX_TEXT_ATTACHMENT_BYTES) {
       base.kind = kind === 'file' ? 'text' : kind;
@@ -5322,28 +5354,31 @@ async function fileToAttachment(file) {
   return base;
 }
 
-// createModelImageDataUrl prepares the data URL actually sent to the model.
-// Every raster format (including PNG/JPEG/WebP) is re-encoded through canvas:
-// screenshots in particular are 1-5MB as PNG but typically shrink 5-15x as
-// WebP at quality 0.9 with max edge 2048px, which is the resolution ceiling
-// most multimodal providers downscale to anyway. GIFs are passed through
-// untouched so animations survive, and any re-encode that comes out LARGER
-// than the source falls back to the original bytes (lossless sources at
-// small sizes never regress). Tiny files (<=256KB) of a natively supported
-// format also skip the re-encode: the possible savings are negligible against
-// the quality risk. Exotic types (BMP/AVIF/...) always go through canvas so a
-// small file cannot regress from "re-encoded to WebP" to "unsupported".
-const modelImagePassthroughTypes = new Set(['image/png', 'image/jpeg', 'image/jpg', 'image/webp', 'image/gif']);
-async function createModelImageDataUrl(file) {
-  if (typeof createImageBitmap !== 'function') {
-    return passthroughModelImage(file);
-  }
+// encodeModelImage 准备真正发给模型的那张图，并回报它自己的字节数。每张位图都经
+// canvas 重编码为 JPEG（质量 0.7，最长边 2048px）：JPEG 没有透明通道，比带 alpha 的
+// WebP 少编码一个平面，编码器本身也更省、更快，且所有多模态供应商都收；2048px 是多数
+// 供应商本来就会降到的分辨率上限，再多的字节模型也不会看到。小图不压：<=256KB 的原生
+// 格式原样透传，这个尺寸下重编码省不了多少、只会赔上画质。GIF 一律重编码：JPEG 只有
+// 静止帧，发动画等于发没人读的字节。
+// 唯一真正的失败是「解不开」：原生格式这时原样发出（没别的办法），冷门格式则报告无法转换。
+// 判定只看压缩后的体积（调用方拿 bytes 与 MAX_MODEL_IMAGE_BYTES 比），不做「压完更大就
+// 回退原图」的比较：体积怎么变由卡片照实显示（sentSize 与原 size 并列），不在这里藏。
+// bytes 取重编码后的 blob.size / 原始 file.size，不从 data URL 反推：标签要显示的是
+// 「发出了多少图」，不是「传输时被编码成多大」。附件的 type/size 仍是用户选的那个文件
+// （发给模型的附件说明也照抄它）：图送的是 JPEG，那段文字描述的是用户手上的文件。
+const modelImagePassthroughTypes = new Set(['image/png', 'image/jpeg', 'image/jpg', 'image/webp']);
+const modelImagePassthroughMaxBytes = 256 * 1024;
+const modelImageJpegQuality = 0.7;
+async function encodeModelImage(file) {
   const type = String(file.type || '').toLowerCase();
-  if (type === 'image/gif') return passthroughModelImage(file);
-  if (!type.startsWith('image/')) return '';
-  if (file.size > 0 && file.size <= 256 * 1024 && modelImagePassthroughTypes.has(type)) {
-    return passthroughModelImage(file);
-  }
+  if (!type.startsWith('image/')) return { dataUrl: '', bytes: 0 };
+  const native = modelImagePassthroughTypes.has(type);
+  const passthrough = async () => {
+    if (!native) return { dataUrl: '', bytes: 0 };
+    return { dataUrl: await readFileAsDataUrl(file), bytes: file.size };
+  };
+  if (native && file.size > 0 && file.size <= modelImagePassthroughMaxBytes) return await passthrough();
+  if (typeof createImageBitmap !== 'function') return await passthrough();
   let bitmap;
   try {
     bitmap = await createImageBitmap(file);
@@ -5352,23 +5387,31 @@ async function createModelImageDataUrl(file) {
     const canvas = document.createElement('canvas');
     canvas.width = Math.max(1, Math.round(bitmap.width * scale));
     canvas.height = Math.max(1, Math.round(bitmap.height * scale));
-    const context = canvas.getContext('2d', { alpha: true });
-    if (!context) return passthroughModelImage(file);
+    // JPEG 没有透明通道，所以先把底铺成白色再画：opaque canvas 的初始内容是不透明黑，
+    // 让 canvas 自己丢 alpha 会把透明 PNG（图标、带透明边的截图）里的深色内容糊成黑色。
+    const context = canvas.getContext('2d', { alpha: false });
+    if (!context) return await passthrough();
+    context.fillStyle = '#ffffff';
+    context.fillRect(0, 0, canvas.width, canvas.height);
     context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-    const reencoded = canvas.toDataURL('image/webp', 0.9);
-    // Original data URL length ≈ base64 payload + header: 4/3 × bytes + ~50.
-    if (reencoded && reencoded.length < (file.size * 4) / 3 + 64) return reencoded;
-    return passthroughModelImage(file);
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', modelImageJpegQuality));
+    if (!blob) return await passthrough();
+    const dataUrl = await readFileAsDataUrl(blob);
+    if (!dataUrl) return await passthrough();
+    return { dataUrl, bytes: blob.size };
   } catch (_) {
-    return passthroughModelImage(file);
+    return await passthrough();
   } finally {
     bitmap?.close?.();
   }
 }
 
-function passthroughModelImage(file) {
-  if (modelImagePassthroughTypes.has(String(file.type || '').toLowerCase())) return readFileAsDataUrl(file);
-  return '';
+// Base64 data URL -> decoded byte count (3 bytes per 4 chars, minus padding).
+function dataUrlByteLength(dataUrl) {
+  const text = String(dataUrl || '');
+  const base64 = text.slice(text.indexOf(',') + 1);
+  const padding = base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0;
+  return Math.max(0, Math.floor((base64.length * 3) / 4) - padding);
 }
 
 async function createImageThumbnailUrl(file) {
@@ -5500,13 +5543,6 @@ function attachmentIcon(att) {
   if (att.kind === 'audio') return 'AUD';
   if (att.kind === 'text') return 'TXT';
   return 'FILE';
-}
-
-function fmtBytes(size) {
-  const n = Number(size || 0);
-  if (n >= 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
-  if (n >= 1024) return `${(n / 1024).toFixed(1)} KB`;
-  return `${n} B`;
 }
 
 function attachmentDisplayLabel(attachments) {
@@ -7558,6 +7594,15 @@ function handlePushCommand() {
 // progress detail for compaction.
 const compactingSessions = reactive({});
 function compactStateFor(sid) { return compactingSessions[sid] || null; }
+// 压缩完成提示的唯一判据与唯一文案：自动（run:compacted）与手动（CompactSession 返回值）
+// 两条路径共用。无论如何都提示：压缩完成本身就是用户该知道的事，即便这次没降下来，
+// 报出实情也比静默像“没执行”要好。
+function compactToastText(tokensBefore, tokensAfter) {
+  return t('app.compact.doneToast', {
+    before: fmtK(Number(tokensBefore || 0)),
+    after: fmtK(Number(tokensAfter || 0)),
+  });
+}
 const activeCompactState = computed(() => compactStateFor(activeSessionId.value));
 const compactLoadingActive = computed(() => !!activeCompactState.value);
 function setCompactProgress(sid, text) {
@@ -7632,6 +7677,8 @@ async function handleCompactCommand() {
     // Refresh context
     refreshContextTokens(session.id);
     scrollMessagesToBottom();
+    // 与自动压缩共用同一条判据与同一句文案（compactToastText）。
+    message.info(compactToastText(result?.tokensBefore, result?.tokensAfter));
   } catch (err) {
     delete compactingSessions[session.id];
     pushMessage('assistant', t('app.compact.failed', { error: err?.message || err }), { error: true });

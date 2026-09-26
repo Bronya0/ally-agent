@@ -2425,8 +2425,15 @@ code, pre {
 
 .pending-attachment-size {
   flex-shrink: 0;
+  white-space: nowrap;
   color: var(--ally-text-muted);
   font-size: 11px;
+}
+
+.pending-attachment-error {
+  flex-shrink: 0;
+  color: var(--ally-danger-text);
+  font-weight: 600;
 }
 
 .pending-attachment-remove,
@@ -4625,6 +4632,7 @@ code, pre {
 
 .attachment-size {
   flex-shrink: 0;
+  white-space: nowrap;
   color: var(--ally-text-muted);
 }
 

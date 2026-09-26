@@ -1,6 +1,7 @@
 package app
 
 import (
+	"strings"
 	"testing"
 
 	openai "github.com/sashabaranov/go-openai"
@@ -193,5 +194,99 @@ func TestRunBreakdownIncludesRequestPrefix(t *testing.T) {
 	}
 	if breakdown.Total <= computeLiveBreakdown(messages).Total {
 		t.Fatal("the trigger total must exceed the message-only estimate")
+	}
+}
+
+// attachmentDataURLForBytes builds an image data URL whose decoded payload is
+// raw bytes (±2): a base64 body of four characters per three decoded bytes, with
+// no padding. Sizes under test are therefore derived from the constant itself.
+func attachmentDataURLForBytes(raw int) string {
+	return "data:image/webp;base64," + strings.Repeat("A", (raw+2)/3*4)
+}
+
+// TestAttachmentImageDataURLBytes pins the base64→bytes arithmetic the size cap
+// runs on, padding included: it is the same formula the frontend uses
+// (App.vue dataUrlByteLength), so the two sides have to agree byte for byte.
+func TestAttachmentImageDataURLBytes(t *testing.T) {
+	cases := []struct {
+		in   string
+		want int
+	}{
+		{"data:image/png;base64,AAAA", 3},
+		{"data:image/png;base64,AAA=", 2},
+		{"data:image/png;base64,AA==", 1},
+		{"data:image/png;base64,", 0},
+		{"AAAA", 3},
+		{"", 0},
+	}
+	for _, tc := range cases {
+		if got := attachmentImageDataURLBytes(tc.in); got != tc.want {
+			t.Errorf("attachmentImageDataURLBytes(%q) = %d, want %d", tc.in, got, tc.want)
+		}
+	}
+}
+
+// TestAppendUserMessageWithAttachmentsKeepsImageUnderCap: below the cap the image
+// reaches the model as image input. The cap applies to the bytes actually being
+// sent (the frontend re-encodes images above 256KB to 2048px JPEG first), not to
+// the original file, so whatever compressed down to under the cap must be sent
+// rather than dropped silently.
+func TestAppendUserMessageWithAttachmentsKeepsImageUnderCap(t *testing.T) {
+	dataURL := attachmentDataURLForBytes(maxAttachmentImageBytes - 4*1024)
+	messages := appendUserMessageWithAttachments(nil, "look", []AttachmentInput{
+		{Name: "big.webp", Type: "image/webp", Kind: "image", Size: int64(len(dataURL)), DataURL: dataURL},
+	})
+	if len(messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(messages))
+	}
+	parts := messages[0].MultiContent
+	if len(parts) != 2 {
+		t.Fatalf("expected text + image parts, got %d", len(parts))
+	}
+	if parts[1].Type != openai.ChatMessagePartTypeImageURL || parts[1].ImageURL == nil || parts[1].ImageURL.URL != dataURL {
+		t.Fatalf("an under-cap data URL must be sent as image input, got %#v", parts[1])
+	}
+	if !strings.Contains(parts[0].Text, "sent as image input") {
+		t.Fatalf("attachment text must report image input, got %q", parts[0].Text)
+	}
+}
+
+// TestAppendUserMessageWithAttachmentsReportsImageOverCap covers the other half of
+// the contract: past maxAttachmentImageBytes the image is left out of the request,
+// but the model-facing attachment text must say so — a silent drop is exactly the
+// failure the cap must not reintroduce.
+func TestAppendUserMessageWithAttachmentsReportsImageOverCap(t *testing.T) {
+	dataURL := attachmentDataURLForBytes(maxAttachmentImageBytes + 4*1024)
+	messages := appendUserMessageWithAttachments(nil, "look", []AttachmentInput{
+		{Name: "huge.webp", Type: "image/webp", Kind: "image", Size: int64(len(dataURL)), DataURL: dataURL},
+	})
+	if len(messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(messages))
+	}
+	if len(messages[0].MultiContent) != 0 {
+		t.Fatalf("an over-cap image must not be sent, got %d parts", len(messages[0].MultiContent))
+	}
+	if !strings.Contains(messages[0].Content, "image too large to send") {
+		t.Fatalf("attachment text must report the refused image, got %q", messages[0].Content)
+	}
+}
+
+// An over-cap image that also carries text must not silence the text half: the
+// attachment text block is still appended below, so the attachment line has to
+// say both things — refusing the image reads as "nothing arrived" otherwise.
+func TestAppendUserMessageWithAttachmentsReportsOverCapImageText(t *testing.T) {
+	dataURL := attachmentDataURLForBytes(maxAttachmentImageBytes + 4*1024)
+	messages := appendUserMessageWithAttachments(nil, "look", []AttachmentInput{
+		{Name: "huge.webp", Type: "image/webp", Kind: "image", Size: int64(len(dataURL)), DataURL: dataURL, Text: "carried text"},
+	})
+	content := messages[0].Content
+	if !strings.Contains(content, "image too large to send") {
+		t.Fatalf("attachment line must report the refused image, got %q", content)
+	}
+	if !strings.Contains(content, "its text is sent below") {
+		t.Fatalf("attachment line must also report that the text reached the model, got %q", content)
+	}
+	if !strings.Contains(content, "carried text") {
+		t.Fatalf("the attachment text must still be appended, got %q", content)
 	}
 }

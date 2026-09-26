@@ -17,8 +17,8 @@ otherwise the three phases fit inside that window and the whole mark freezes for
 a few frames every cycle. It is mounted for the
 row's whole lifetime (App.vue mounts it unconditionally inside
 .composer-run-status), so it runs alongside the phase label and carries the row
-alone whenever the label is empty — every phase except thinking, and a
-compaction without a thinking count.
+alone whenever the label is empty — every phase except thinking, which
+includes a compacting session between its thinking bursts.
 
 This is the classic `escaleY` bar loader, rebuilt for a text row. Two structural
 changes, both load-bearing:

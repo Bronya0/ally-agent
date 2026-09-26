@@ -91,7 +91,6 @@ const (
 	workspacePathSearchMaxLimit      = 80
 	memoryIndexLimit                 = 200
 	maxAttachmentText                = 200 * 1024
-	maxAttachmentDataURL             = 8 * 1024 * 1024
 	// maxReadImageBytes caps image files that the read tool will inline as a
 	// base64 data URL for multimodal model input. Base64 inflates by ~33%, and
 	// Anthropic's per-image limit is 5MB of base64 data, so the raw cap is
@@ -213,8 +212,9 @@ type App struct {
 	todoRevisions     map[string]int64
 	// sessionWorkspaceMaps freezes the workspace map bytes per session
 	// (sessionID → map text) so the request prefix stays byte-stable across
-	// runs and provider prompt caches survive; guarded by mu (declared in
-	// biz_workspace.go with the workspace cache fields).
+	// runs and provider prompt cache survive; guarded by mu (declared in
+	// biz_workspace.go with the workspace cache fields). A successful compaction
+	// drops it (refreshSessionPromptPrefix).
 	sessionWorkspaceMaps map[string]string
 
 	// sessionSystemPrompts freezes the system prompt parts per session
@@ -224,8 +224,10 @@ type App struct {
 	// agent itself writes them (e.g. recording a lesson after fixing a pitfall);
 	// rebuilding per run would silently invalidate the entire prompt-cache
 	// prefix on every such write. Freezing at the session's first request makes
-	// the prefix byte-stable for the session lifetime; changes take effect in
-	// new sessions. Guarded by mu.
+	// the prefix byte-stable for the session lifetime; changes take effect in new
+	// sessions — or immediately after a compaction, which drops this snapshot
+	// (refreshSessionPromptPrefix) because it rewrote the history anyway. Guarded
+	// by mu.
 	sessionSystemPrompts map[string][]systemPromptPart
 
 	// sessionToolsets freezes the model-visible tool schema list per session
@@ -233,8 +235,9 @@ type App struct {
 	// prefix, so an MCP server disconnect/reconnect or toggling servers/tools
 	// mid-conversation would otherwise invalidate the whole cache twice per
 	// blip. Frozen tools for a disconnected server surface as an execution
-	// error (the model adapts) instead of the tool silently vanishing. Guarded
-	// by mu.
+	// error (the model adapts) instead of the tool silently vanishing. A successful
+	// compaction drops this snapshot too (refreshSessionPromptPrefix). Guarded by
+	// mu.
 	sessionToolsets map[string][]openai.Tool
 
 	// sessionWorkspaces records the workspace each session's runs actually

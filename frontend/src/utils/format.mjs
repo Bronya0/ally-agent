@@ -50,3 +50,19 @@ export function fmtDuration(ms) {
   if (mins > 0) return `${mins}m${rest > 0 ? `${rest}s` : ''}`;
   return `${rest}s`;
 }
+
+// formatBytes renders a byte count with a proper unit (B/KB/MB/GB), e.g.
+// 50000 -> "48.8 KB", 0/invalid -> "0 B". The single size formatter for the
+// whole UI (attachment cards, tool cards, service buffers, update progress).
+export function formatBytes(bytes) {
+  const n = Number(bytes);
+  if (!Number.isFinite(n) || n <= 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let i = 0;
+  let v = n;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i++;
+  }
+  return `${v.toFixed(i ? 1 : 0)} ${units[i]}`;
+}

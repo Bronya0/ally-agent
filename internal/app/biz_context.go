@@ -1063,6 +1063,25 @@ func (a *App) sessionSystemPromptParts(sessionID string, cfg ConfigState, allSki
 	return parts
 }
 
+// refreshSessionPromptPrefix drops the per-session request-prefix snapshots (system
+// prompt parts, workspace map, tool schemas) so the next request rebuilds them from
+// disk. A successful compaction is the only caller and the only moment this is free:
+// it rewrote the history, so the provider prompt cache is already broken at that
+// point, while refreshing anywhere else would invalidate the whole prefix in the
+// middle of a conversation. The effect is that AGENTS.md / CODEGRAPH.md / LESSONS.md /
+// USER.md / MCP changes made during a session take effect at its first compaction
+// instead of waiting for a new session (see sessionSystemPrompts on App).
+func (a *App) refreshSessionPromptPrefix(sessionID string) {
+	if strings.TrimSpace(sessionID) == "" {
+		return
+	}
+	a.mu.Lock()
+	delete(a.sessionSystemPrompts, sessionID)
+	delete(a.sessionWorkspaceMaps, sessionID)
+	delete(a.sessionToolsets, sessionID)
+	a.mu.Unlock()
+}
+
 // systemPromptPartsForBreakdown returns the parts the footer context breakdown
 // counts: the session-frozen parts once frozen, the live parts before that
 // (peek semantics — footer polling must not pin the session's prompt bytes
@@ -1199,6 +1218,63 @@ func (a *App) appendWorkspaceMapMessage(messages []openai.ChatCompletionMessage,
 	return messages
 }
 
+// maxAttachmentImageBytes 是单张图片附件的字节上限，前后端同一个数（前端
+// frontend/src/App.vue 的 MAX_MODEL_IMAGE_BYTES）：超过 256KB 的图在界面上先被重编码成
+// 2048px 的 JPEG，因此判定的对象是**重编码之后的图片字节**而不是原图（一张 30MB 的
+// 截图压到 1MB 就正常发送），也不算 base64 膨胀（传输必然膨胀，与图片本身无关）。两侧
+// 口径必须一致：界面按“图片本体字节”判、后端按 data URL 长度判，就会出现界面收下、后端
+// 悄悄丢图的静默分歧。它不是静默过滤器：超限时图片不进请求，但 attachmentImageState 会把
+// 这件事写进模型可见的附件文本。
+const maxAttachmentImageBytes = 5 * 1024 * 1024
+
+// attachmentImageDataURLBytes 返回 data URL 里图片本体的解码字节数（base64 → 字节，
+// 扣掉填充）。与前端 App.vue 的 dataUrlByteLength 同一个算法，所以两侧的 5MB 判定逐字节
+// 一致；没有逗号的输入按整串算（只有畸形输入会走到，误差不超过头部长度）。
+func attachmentImageDataURLBytes(dataURL string) int {
+	payload := dataURL
+	if idx := strings.IndexByte(payload, ','); idx >= 0 {
+		payload = payload[idx+1:]
+	}
+	payload = strings.TrimSpace(payload)
+	if payload == "" {
+		return 0
+	}
+	padding := 0
+	switch {
+	case strings.HasSuffix(payload, "=="):
+		padding = 2
+	case strings.HasSuffix(payload, "="):
+		padding = 1
+	}
+	if decoded := len(payload)*3/4 - padding; decoded > 0 {
+		return decoded
+	}
+	return 0
+}
+
+type attachmentImageState int
+
+const (
+	// 不是图片，或 data URL 不可用：不进请求，也不改变附件状态描述。
+	attachmentImageUnusable attachmentImageState = iota
+	// 作为图片输入发给模型。
+	attachmentImageSent
+	// 图片可用但超过 maxAttachmentImageBytes：不发送，且必须被说明。
+	attachmentImageOversized
+)
+
+// classifyAttachmentImage 是「这张图到底发没发」的唯一定义：图片部件的构建与模型可见的
+// 附件文本都读它，两处不可能给出互相矛盾的结论。
+func classifyAttachmentImage(att AttachmentInput) attachmentImageState {
+	if !isImageAttachment(att) || !validImageDataURL(att.DataURL) {
+		return attachmentImageUnusable
+	}
+	if attachmentImageDataURLBytes(att.DataURL) > maxAttachmentImageBytes {
+		return attachmentImageOversized
+	}
+	return attachmentImageSent
+}
+
 func appendUserMessageWithAttachments(messages []openai.ChatCompletionMessage, text string, attachments []AttachmentInput) []openai.ChatCompletionMessage {
 	content := buildAttachmentTextContext(text, attachments)
 	parts := []openai.ChatMessagePart{}
@@ -1206,10 +1282,7 @@ func appendUserMessageWithAttachments(messages []openai.ChatCompletionMessage, t
 		parts = append(parts, openai.ChatMessagePart{Type: openai.ChatMessagePartTypeText, Text: content})
 	}
 	for _, att := range attachments {
-		if !isImageAttachment(att) || !validImageDataURL(att.DataURL) {
-			continue
-		}
-		if len(att.DataURL) > maxAttachmentDataURL {
+		if classifyAttachmentImage(att) != attachmentImageSent {
 			continue
 		}
 		parts = append(parts, openai.ChatMessagePart{
@@ -1250,11 +1323,22 @@ func buildAttachmentTextContext(text string, attachments []AttachmentInput) stri
 		if mimeType == "" {
 			mimeType = kind
 		}
-		state := "metadata only"
-		if isImageAttachment(att) && validImageDataURL(att.DataURL) && len(att.DataURL) <= maxAttachmentDataURL {
+		var state string
+		switch classifyAttachmentImage(att) {
+		case attachmentImageSent:
 			state = "sent as image input"
-		} else if strings.TrimSpace(att.Text) != "" {
-			state = "sent as text"
+		case attachmentImageOversized:
+			state = "image too large to send"
+		default:
+			state = "metadata only"
+			if strings.TrimSpace(att.Text) != "" {
+				state = "sent as text"
+			}
+		}
+		// 图片状态只描述图片本身，而同一个附件的文本仍会作为 <attached_file> 发出去
+		// （见下面的循环）。不写明这一点，模型会把「图没发」读成「这个附件什么都没到」。
+		if state != "sent as text" && strings.TrimSpace(att.Text) != "" {
+			state += " (its text is sent below)"
 		}
 		if att.Truncated {
 			state += ", truncated"

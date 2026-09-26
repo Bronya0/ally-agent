@@ -448,11 +448,14 @@ func (a *App) readImageWithConfig(cfg ConfigState, path string, req ReadFileRequ
 }
 
 // imageInjectionMarker prefixes the text lead of the synthesized image-input
-// message so the rest of the pipeline can recognize and strip it:
-//   - the main loop / sub-agent remove the previous turn's injection before
-//     appending the next one (images are single-turn context, not history);
-//   - sanitizeHistoryMessages drops the message entirely so saved history never
-//     contains "images were provided" text without the actual images.
+// message so the rest of the pipeline can recognize it:
+//   - runChat appends one such message per tool batch and nothing strips it
+//     afterwards: the images stay in the in-memory history for the whole
+//     session, so every later request keeps seeing them and the request prefix
+//     stays stable (see the append site in app.go);
+//   - sanitizeHistoryMessagesForDisk drops the message entirely so saved
+//     history never contains "images were provided" text without the actual
+//     images (the NUL marker is not JSON-portable either).
 //
 // The NUL prefix cannot appear in normal model/user text.
 const imageInjectionMarker = "\x00ally-image-input\x00"

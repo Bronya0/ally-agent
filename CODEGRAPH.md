@@ -31,7 +31,7 @@
 | 受保护路径判定（VCS 元数据 / 路径别名归一） | `internal/tools/pathutil/pathutil.go`（`CanonicalPath` / `VCSMetadataReason`；写、删、命令目标三条入口共用） |
 | 会话/历史持久化（坏数据协议修复在 `prov_history_hygiene.go`） | `internal/app/biz_sessions.go` |
 | 系统提示词组装（核心规则 / 技能名片 / 记忆索引 / 用户档案 USER.md / AGENTS.md / 代码图谱 / 项目教训 LESSONS.md / 自定义提示词） | `internal/app/biz_prompt.go` |
-| 请求消息与上下文 Token 核算（口径：请求前缀 + provider 实测锚点） | `internal/app/biz_context.go`（`sessionPrefixBreakdown` / `contextAnchor` / `finalizeSessionBreakdown`） |
+| 请求消息与上下文 Token 核算（口径：请求前缀 + provider 实测锚点；会话前缀快照的冻结与压缩后刷新收口在 `refreshSessionPromptPrefix`） | `internal/app/biz_context.go`（`sessionPrefixBreakdown` / `contextAnchor` / `finalizeSessionBreakdown` / `sessionSystemPromptParts`） |
 | 配置合并 / key 池管理 | `internal/app/biz_config.go` |
 | 技能发现与加载 | `internal/app/biz_skills.go` |
 | MCP 客户端生命周期 | `internal/app/biz_mcp.go` |
@@ -56,7 +56,7 @@
 
 `main()` → `NewApp()` → Wails 装配 → 前端 `StartChat()` → `app.runChat()`: `buildMessages()`（biz_context）→ `buildToolsWithMcp()`（biz_mcp）→ `streamModelResponse()`（prov_model）→ 流式事件经 `host_events` 到前端 → 工具分发 `executeTool()`（并发 4，文件变更串行：`orch_batch_policy.go` 定序，变更后校验走 `orch_validation.go`）→ 结果回填循环 → `saveHistory()`（biz_sessions）。子代理/调度任务走 `executeDelegate()`（orch_subagent）。
 
-每个 step 开头汇总上下文用量并决定是否 auto-compact：`breakdownAcc.update()`（消息估算）+ `sessionPrefixBreakdown()`（系统提示词 / 工作区地图）+ `finalizeSessionBreakdown()`（provider 实测锚点）→ `bd.Total` 与阈值比较。footer 与自动压缩读同一个数。阈值触发时走 `compactRunHistory(reason)`（唯一一档：LLM 总结，整段历史换成一条总结 + 钉住的 plan 快照，见 `compactHistory`）：`threshold` 为阈值触发（失败不致命），`overflow` 为请求被判定上下文超长后的强制压缩并重试（`llmErrorKindContextTooLong`）；压缩也失败才报出可操作提示。总结调用是流式的（`streamModelTextWithUsage` → `compact:delta` 事件，前端按普通对话渲染思考与总结正文），完成后前端清空对话只留总结。曾经的“微压缩”档（`microcompactMessages`）已删除：它在历史中段原地改写，命中前缀之后的 provider 缓存全部作废。
+每个 step 开头汇总上下文用量并决定是否 auto-compact：`breakdownAcc.update()`（消息估算）+ `sessionPrefixBreakdown()`（系统提示词 / 工作区地图）+ `finalizeSessionBreakdown()`（provider 实测锚点）→ `bd.Total` 与阈值比较。footer 与自动压缩读同一个数。阈值触发时走 `compactRunHistory(reason)`（唯一一档：LLM 总结，整段历史换成一条总结 + 钉住的 plan 快照，见 `compactHistory`）：`threshold` 为阈值触发（失败不致命），`overflow` 为请求被判定上下文超长后的强制压缩并重试（`llmErrorKindContextTooLong`）；压缩也失败才报出可操作提示。总结调用是流式的（`streamModelTextWithUsage` → `compact:delta` 事件，前端按普通对话渲染思考与总结正文），完成后前端清空对话只留总结。压缩成功是这个前缀唯一的刷新点：`compactHistory` 丢掉会话的系统提示词 / 工作区地图 / 工具 schema 快照（`refreshSessionPromptPrefix`），下一次请求以磁盘现状重建，会话中途写入的 AGENTS.md / CODEGRAPH.md / LESSONS.md / USER.md 因此立即生效；其它时刻这些快照一律冻结以保 provider 缓存。曾经的“微压缩”档（`microcompactMessages`）已删除：它在历史中段原地改写，命中前缀之后的 provider 缓存全部作废。
 
 ## 后端分层架构
 

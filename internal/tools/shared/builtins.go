@@ -126,7 +126,7 @@ func chatToolsUncached() []openai.Tool {
 			"type": "object",
 			"properties": map[string]any{
 				"seconds": map[string]any{"type": "integer", "minimum": 1, "maximum": maxWaitSeconds, "description": "Delay in whole seconds, from 1 to 3600."},
-				"reason":  map[string]any{"type": "string", "minLength": 1, "maxLength": 200, "pattern": ".*\\S.*", "description": "Short user-visible reason for waiting."},
+				"reason":  map[string]any{"type": "string", "minLength": 1, "maxLength": 200, "pattern": ".*\\S.*", "description": "Short reason for the pause; the user reads it, so state plainly what you are waiting for."},
 			},
 			"required": []string{"seconds", "reason"},
 		}),
@@ -342,9 +342,9 @@ func chatToolsUncached() []openai.Tool {
 			"type": "object",
 			"properties": map[string]any{
 				"task":         map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "The task for the child agent. Be specific — include file paths and expected outcomes."},
-				"role":         map[string]any{"type": "string", "minLength": 1, "maxLength": 80, "pattern": ".*\\S.*", "description": "The role of the sub-agent, e.g. \"researcher\", \"code reviewer\", \"tester\". Shown as the card label in the UI and injected into the sub-agent's system prompt."},
+				"role":         map[string]any{"type": "string", "minLength": 1, "maxLength": 80, "pattern": ".*\\S.*", "description": "What the sub-agent is, as a short role name such as \"researcher\", \"code reviewer\", or \"tester\", not a sentence about the task. It is injected into the sub-agent's system prompt."},
 				"maxSteps":     map[string]any{"type": "integer", "minimum": 1, "maximum": maxDelegateStepBudget, "description": "Required tool-call-round budget, chosen by task difficulty: small lookups ~5-10, normal tasks ~15-30, large multi-file work ~40-80. The child is warned as it runs low and must output a report on the final round."},
-				"description":  map[string]any{"type": "string", "description": "Short 3-5 word description for UI display."},
+				"description":  map[string]any{"type": "string", "description": "Short 3-5 word summary of what the delegated agent is working on."},
 				"cleanContext": map[string]any{"type": "boolean", "description": "If true, skip workspace environment injection. Use for tasks that do not depend on project structure (e.g. write a standalone algorithm). Default false."},
 				"model":        map[string]any{"type": "string", "description": "Optional model override. Default uses current model."},
 			},
@@ -358,7 +358,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"skill"},
 		}),
-		functionTool("suggest", "Suggest 1-4 follow-up actions as clickable chips below your reply, ordered by relevance.", map[string]any{
+		functionTool("suggest", "Suggest 1-4 follow-up actions the user is most likely to take next. Order them by relevance, most recommended first. Each item is sent as-is as the user's next message, so phrase it as an instruction the user would send rather than a note to yourself.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"items": map[string]any{
@@ -371,7 +371,7 @@ func chatToolsUncached() []openai.Tool {
 						"maxLength": 80,
 						"pattern":   ".*\\S.*",
 					},
-					"description": "1-4 short chip texts, ordered by relevance (most recommended first). Each is sent as-is as the user's next message when clicked.",
+					"description": "1-4 short texts, ordered by relevance (most recommended first). Each is sent as-is as the user's next message: write a complete, self-contained request the user could send verbatim.",
 				},
 			},
 			"required": []string{"items"},

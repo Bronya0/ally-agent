@@ -401,6 +401,12 @@ Rules:
 	// single bounding path (appendTurn never trims, to keep the request
 	// prefix — and with it the provider prompt cache — byte-stable).
 	a.reasoningStash.clearSession(sessionID)
+	// The prefix snapshots (system prompt, workspace map, tool schemas) are the last
+	// thing frozen per session, and this is the one moment rebuilding them costs
+	// nothing: the history rewrite above already broke the provider cache. Dropping
+	// them here is what makes AGENTS.md / CODEGRAPH.md / LESSONS.md / USER.md edits
+	// made during the conversation visible to its next request.
+	a.refreshSessionPromptPrefix(sessionID)
 	a.saveHistory(sessionID, newHistory)
 
 	tokensAfter := a.getContextBreakdown(sessionID, "").Total

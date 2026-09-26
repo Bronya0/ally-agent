@@ -25,6 +25,10 @@ import (
 // prompt or workspace edits) leak into an existing session's frozen context
 // silently invalidates the whole cached history. If one of these tests fails
 // after a refactor, the refactor changes what ongoing conversations send.
+//
+// The one deliberate exception is a successful compaction: it rewrote the
+// history, so the cache is broken there anyway and every snapshot is dropped
+// (refreshSessionPromptPrefix) to rebuild from disk on the next request.
 
 // The system prompt must freeze at the session's first request and ignore
 // later drift in every input that feeds it (skills, custom prompt, extra
@@ -162,6 +166,71 @@ func TestSessionWorkspaceMapFreezeSurvivesMapDrift(t *testing.T) {
 	// visible outside the freeze and only sessions are protected.
 	if got := app.sessionWorkspaceMap("", cfg); got != "__poisoned_rebuild__" {
 		t.Fatalf("stateless workspace map must reflect the live cache, got %q", got)
+	}
+}
+
+// A successful compaction is the one point where the frozen prefix snapshots are
+// dropped: the history rewrite already broke the provider cache there, so the next
+// request rebuilds them from disk.
+func TestRefreshSessionPromptPrefixDropsEveryFrozenSnapshot(t *testing.T) {
+	app := NewApp()
+	app.initialized = true
+	const sessionID = "s-refresh"
+	app.mu.Lock()
+	app.sessionSystemPrompts[sessionID] = []systemPromptPart{{label: "core", content: "frozen"}}
+	app.sessionWorkspaceMaps = map[string]string{sessionID: "frozen map"}
+	app.sessionToolsets[sessionID] = []openai.Tool{}
+	app.mu.Unlock()
+
+	// Stateless callers own no snapshot; the guard must not panic or reach into
+	// another session's state.
+	app.refreshSessionPromptPrefix("")
+
+	app.refreshSessionPromptPrefix(sessionID)
+
+	app.mu.Lock()
+	defer app.mu.Unlock()
+	if _, ok := app.sessionSystemPrompts[sessionID]; ok {
+		t.Fatal("system prompt snapshot must be dropped by a compaction")
+	}
+	if _, ok := app.sessionWorkspaceMaps[sessionID]; ok {
+		t.Fatal("workspace map snapshot must be dropped by a compaction")
+	}
+	if _, ok := app.sessionToolsets[sessionID]; ok {
+		t.Fatal("toolset snapshot must be dropped by a compaction")
+	}
+}
+
+// The point of the refresh: the next request must see current disk content.
+// Without it a session keeps the AGENTS.md it started with for its whole life,
+// which is exactly what a long (compacted) conversation needs least.
+func TestRefreshSessionPromptPrefixRebuildsFromDisk(t *testing.T) {
+	root := t.TempDir()
+	agentsPath := filepath.Join(root, "AGENTS.md")
+	if err := os.WriteFile(agentsPath, []byte("workspace rule v1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	app := NewApp()
+	app.initialized = true
+	cfg := ConfigState{Workspace: root}
+	const sessionID = "s-refresh-disk"
+
+	first := app.sessionSystemPrompt(sessionID, cfg, nil)
+	if !strings.Contains(first, "workspace rule v1") {
+		t.Fatalf("first prompt must carry the workspace AGENTS.md, got %q", first)
+	}
+	if err := os.WriteFile(agentsPath, []byte("workspace rule v2"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := app.sessionSystemPrompt(sessionID, cfg, nil); got != first {
+		t.Fatal("a session must keep its frozen prompt until a compaction drops it")
+	}
+
+	app.refreshSessionPromptPrefix(sessionID)
+
+	rebuilt := app.sessionSystemPrompt(sessionID, cfg, nil)
+	if !strings.Contains(rebuilt, "workspace rule v2") || strings.Contains(rebuilt, "workspace rule v1") {
+		t.Fatalf("post-compaction prompt must be rebuilt from disk, got %q", rebuilt)
 	}
 }
 

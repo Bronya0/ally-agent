@@ -4982,7 +4982,9 @@ func TestCompactToolResultForModelEscapesClosingMarkersInBodies(t *testing.T) {
 
 // TestTeeWriterPromoteToPreservesAllOutput 锁定收编改道的原子性：promoteTo 在同一个
 // 临界区内把 primary 已捕获的输出作种子写进 sink 并切换目标，之后所有写入只进 sink。
-// 校验「primary + sink」拼接与原始写入序列逐字节一致（不丢、不重、不乱序）。
+// 校验的是「服务侧缓冲」逐字节等于原始写入序列（种子 + 后续写入 = 全序列）：primary
+// 改道后并不清空（模型的截断报告还要读它），所以 primary + sink 的拼接天然重一份种子，
+// 不能拿它当无损判据。
 // 旧实现先 String() 快照、再置位 promoted，而 Write 是「判断后解锁、再写 primary」：
 // 并发写在解锁后才落到 primary、落在快照之后，这段日志就永远丢了。
 func TestTeeWriterPromoteToPreservesAllOutput(t *testing.T) {
@@ -4994,19 +4996,29 @@ func TestTeeWriterPromoteToPreservesAllOutput(t *testing.T) {
 	primary := &limitedBuffer{limit: total + 1}
 	tw := &teeWriter{primary: primary}
 	var sink bytes.Buffer
+	// 先让写入侧跑出若干字节再改道：只有 primary 非空时种子路径才被覆盖，否则这个
+	// 测试会退化成空跑（改道抢在第一次写入之前，种子是空串）。
+	started := make(chan struct{})
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		for _, b := range want {
+		for i, b := range want {
 			_, _ = tw.Write([]byte{b})
+			if i == 1023 {
+				close(started)
+			}
 		}
 	}()
+	<-started
 	// 与写入并发改道：切换点落在任意位置都必须无损。
 	tw.promoteTo(&sink)
 	<-done
 
-	if got := append([]byte(primary.String()), sink.Bytes()...); !bytes.Equal(got, want) {
-		t.Fatalf("promotion lost or reordered output: primary=%d sink=%d combined=%d want=%d", primary.Len(), sink.Len(), len(got), len(want))
+	if got := sink.Bytes(); !bytes.Equal(got, want) {
+		t.Fatalf("promotion lost or reordered output: sink=%d want=%d", len(got), len(want))
+	}
+	if got := primary.String(); len(got) > len(want) || !bytes.HasPrefix(want, []byte(got)) {
+		t.Fatalf("primary must stay a prefix copy of the stream: primary=%d want=%d", len(got), len(want))
 	}
 	// 改道后写入只进 sink，primary 不再增长。
 	before := primary.Len()

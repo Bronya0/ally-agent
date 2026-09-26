@@ -163,7 +163,7 @@ import { computed, nextTick, onUnmounted, ref, watch } from 'vue';
 import { GetServiceOutput } from '../../bindings/ally-dev/internal/app/app';
 import { formatDateTime, t } from '../i18n.mjs';
 import { renderAnsiToHtml } from '../utils/ansi.mjs';
-import { formatBytes } from '../utils/toolPreview.mjs';
+import { formatBytes } from '../utils/format.mjs';
 import { highlightShellCommand } from '../utils/shellHighlight.mjs';
 
 const props = defineProps({

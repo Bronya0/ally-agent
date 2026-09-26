@@ -13,6 +13,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -92,6 +94,12 @@ type overflowServer struct {
 	rejected    atomic.Int32
 	accepted    atomic.Int32
 	failSummary bool
+	// onCompact runs while the summary request is being served, so a test can
+	// change a prompt source (AGENTS.md) mid-run and check what the post-compaction
+	// request carries.
+	onCompact    func()
+	mu           sync.Mutex
+	acceptedBody string
 }
 
 const overflowCompactPromptMarker = "is being compacted"
@@ -111,8 +119,14 @@ func (s *overflowServer) handler() http.HandlerFunc {
 				fmt.Fprint(w, overflowLengthError)
 				return
 			}
+			if s.onCompact != nil {
+				s.onCompact()
+			}
 		case strings.Contains(request, overflowSummaryMarker):
 			s.accepted.Add(1)
+			s.mu.Lock()
+			s.acceptedBody = request
+			s.mu.Unlock()
 		default:
 			s.rejected.Add(1)
 			w.Header().Set("Content-Type", "application/json")
@@ -128,9 +142,25 @@ func (s *overflowServer) handler() http.HandlerFunc {
 	}
 }
 
+// acceptedRequestBody returns the body of the request that followed a successful
+// compaction (the one carrying the summary).
+func (s *overflowServer) acceptedRequestBody() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.acceptedBody
+}
+
 // runOverflowSession starts one run against the fake provider with a history long
 // enough for compaction, and waits for the terminal event.
 func runOverflowSession(t *testing.T, baseURL, sessionID string) (*App, *compactRecorder) {
+	t.Helper()
+	return runOverflowSessionInWorkspace(t, baseURL, sessionID, t.TempDir())
+}
+
+// runOverflowSessionInWorkspace is runOverflowSession with a caller-chosen
+// workspace, so a test can mutate a prompt source from the fake provider while
+// the run is in flight.
+func runOverflowSessionInWorkspace(t *testing.T, baseURL, sessionID, workspace string) (*App, *compactRecorder) {
 	t.Helper()
 	app := NewApp()
 	app.initialized = true // skip the disk bootstrap
@@ -153,7 +183,7 @@ func runOverflowSession(t *testing.T, baseURL, sessionID string) (*App, *compact
 			APIKeys:   []string{"test-key"},
 			Model:     "test-model",
 			MaxTokens: 64,
-			Workspace: t.TempDir(),
+			Workspace: workspace,
 		},
 	}); err != nil {
 		t.Fatalf("StartChat() error = %v", err)
@@ -193,6 +223,38 @@ func TestRunChatRecoversFromContextTooLong(t *testing.T) {
 	events := recorder.compactedEvents()
 	if len(events) != 1 || !strings.Contains(events[0], `"reason":"overflow"`) {
 		t.Fatalf("run:compacted events = %#v, want exactly one with reason=overflow", events)
+	}
+}
+
+// TestOverflowCompactionRefreshesFrozenPrompt: a compaction rewrites the history,
+// so it is also the one moment the frozen prefix snapshots can be rebuilt for
+// free. An AGENTS.md edit landing mid-run must therefore reach the very retry that
+// follows the compaction instead of waiting for a new session.
+func TestOverflowCompactionRefreshesFrozenPrompt(t *testing.T) {
+	root := t.TempDir()
+	agentsPath := filepath.Join(root, "AGENTS.md")
+	if err := os.WriteFile(agentsPath, []byte("workspace rule v1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	server := &overflowServer{}
+	server.onCompact = func() {
+		if err := os.WriteFile(agentsPath, []byte("workspace rule v2"), 0o644); err != nil {
+			t.Errorf("rewriting AGENTS.md: %v", err)
+		}
+	}
+	httpServer := httptest.NewServer(server.handler())
+	defer httpServer.Close()
+
+	_, recorder := runOverflowSessionInWorkspace(t, httpServer.URL, "overflow-prefix-refresh", root)
+	if got := recorder.endStatus(); got != "run:done" {
+		t.Fatalf("run ended with %q, want run:done (errors: %v)", got, recorder.errorEvents())
+	}
+	body := server.acceptedRequestBody()
+	if !strings.Contains(body, "workspace rule v2") {
+		t.Fatal("the request after a compaction must carry the rebuilt system prompt (AGENTS.md v2)")
+	}
+	if strings.Contains(body, "workspace rule v1") {
+		t.Fatal("the request after a compaction must not carry the stale frozen prompt")
 	}
 }
 
