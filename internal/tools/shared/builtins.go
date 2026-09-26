@@ -254,14 +254,23 @@ func chatToolsUncached() []openai.Tool {
 				"insecureSkipVerify": map[string]any{"type": "boolean", "description": "Skip TLS verification. Default false; only for debugging or trusted self-signed services."},
 			},
 			"required": []string{"url"},
-			"not":      map[string]any{"required": []string{"body", "json"}},
+			// Judged on the effective value, like the runtime (req.Body != ""): an
+			// explicit empty body means "not provided", so padding the field must
+			// not read as "body and json were both sent".
+			"not": map[string]any{
+				"required":   []string{"body", "json"},
+				"properties": map[string]any{"body": map[string]any{"type": "string", "minLength": 1}},
+			},
 		}),
 		functionTool("web_fetch", "Fetch a web page and return readable text, title, and links.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"url":                map[string]any{"type": "string", "minLength": 1, "pattern": `^https?://\S+$`, "description": "Absolute http:// or https:// URL."},
-				"format":             map[string]any{"type": "string", "enum": []string{"readable", "raw"}, "description": "Output mode. readable (default): Readability-extracted main-content text. raw: bounded page source without extraction, not byte-exact; use when readable fails (E_WEB_FETCH_EXTRACT) or source markup matters."},
-				"timeout":            map[string]any{"type": "integer", "minimum": 1, "maximum": 120, "description": "Request timeout in seconds. Default 60, max 120."},
+				"format":             map[string]any{"type": "string", "enum": []string{"readable", "raw", ""}, "description": "Output mode. readable (default): Readability-extracted main-content text. raw: bounded page source without extraction, not byte-exact; use when readable fails (E_WEB_FETCH_EXTRACT) or source markup matters. An empty string means the default, exactly as the runtime reads it."},
+				"headers":            map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}, "description": "Request headers (e.g. Authorization, Cookie, Accept-Language). User-Agent defaults to AllyAgent unless provided."},
+				"timeout":            map[string]any{"type": "integer", "minimum": 0, "maximum": 120, "description": "Request timeout in seconds; omit or send 0 for the default (60), max 120."},
+				"maxBytes":           map[string]any{"type": "integer", "minimum": 0, "maximum": MaxHTTPBodyBytes, "description": fmt.Sprintf("Download cap in bytes (default %d, max %d; omit or send 0 for the default, larger requests are clamped).", DefaultWebFetchBody, MaxHTTPBodyBytes)},
+				"maxChars":           map[string]any{"type": "integer", "minimum": 0, "maximum": MaxWebFetchChars, "description": fmt.Sprintf("Character cap for the returned text (default %d, max %d; omit or send 0 for the default). Text longer than this is truncated and the result is flagged truncated.", DefaultWebFetchChars, MaxWebFetchChars)},
 				"insecureSkipVerify": map[string]any{"type": "boolean", "description": "Skip TLS verification. Default false; only for debugging or trusted self-signed services."},
 			},
 			"required": []string{"url"},
@@ -312,10 +321,10 @@ func chatToolsUncached() []openai.Tool {
 			"type": "object",
 			"properties": map[string]any{
 				"target":  map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Explicit SSH target plus an absolute, non-root workspace path, e.g. my-dev:/srv/app. The workspace path / is rejected."},
-				"command": map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*"},
+				"command": map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Shell command to run on the remote host."},
+				"shell":   map[string]any{"type": "string", "enum": []string{"/bin/bash", "/bin/sh", "/usr/bin/bash", "/usr/bin/sh", "/bin/zsh", "/usr/bin/zsh", ""}, "description": "Optional absolute path of the remote shell; an empty string means the helper chooses one itself. Omit to let the remote helper choose one (bash, then sh; cmd.exe on Windows)."},
 				"cwd":     map[string]any{"type": "string", "description": "Working directory inside the remote workspace. Relative to the workspace root; an absolute path equal to or under the root is also accepted and rebased. Empty means workspace root."},
-				"timeout": map[string]any{"type": "integer", "minimum": 1, "maximum": 600, "description": "Timeout in seconds. Default 120, max 600."},
-				"shell":   map[string]any{"type": "string", "description": "Remote shell executable. Default /bin/bash if available, otherwise /bin/sh."},
+				"timeout": map[string]any{"type": "integer", "minimum": 0, "maximum": 600, "description": "Timeout in seconds; omit or send 0 for the default (120), max 600."},
 			},
 			"required": []string{"target", "command"},
 		}),
@@ -340,7 +349,7 @@ func chatToolsUncached() []openai.Tool {
 			"type": "object",
 			"properties": map[string]any{
 				"pattern":        map[string]any{"type": "string", "minLength": 1, "pattern": `.*\S.*`, "description": "Search regex pattern."},
-				"outputMode":     map[string]any{"type": "string", "enum": []string{"lines", "count_matches"}, "description": "Output shape: lines (default, line numbers plus capped text previews) or count_matches."},
+				"outputMode":     map[string]any{"type": "string", "enum": []string{"lines", "count_matches", ""}, "description": "Output shape: lines (default, line numbers plus capped text previews) or count_matches. An empty string means the default, exactly as the runtime reads it."},
 				"path":           map[string]any{"type": "string", "description": "Subdirectory or explicit absolute path. Empty means workspace root."},
 				"glob":           map[string]any{"type": "string", "description": "Optional glob filter, e.g. *.go or frontend/**/*.vue."},
 				"includeIgnored": map[string]any{"type": "boolean", "description": "Include files ignored by .gitignore/.ignore. Default false."},
@@ -496,12 +505,59 @@ func batchReadFilesSchema() map[string]any {
 	}
 }
 
+// editLineRangePattern is the whole-line "A-B" form shared by the local edit
+// tool's changes[] and remote_edit's; tools/edit.ParseLineRange accepts the same
+// shape.
+const editLineRangePattern = `^[1-9][0-9]*-[1-9][0-9]*$`
+
+// editLineRangeOptionalPattern is what the change object's own lineRange property
+// declares: a real range, or a blank value. The runtime picks the source by
+// effective value (strings.TrimSpace(change.LineRange) != "", tools/edit/apply.go),
+// so a padded "lineRange": "" beside a real oldText means "not provided" and must
+// not be refused — the same rule editSourceOneOf already applies. The strict
+// editLineRangePattern stays on the oneOf branches, where "lineRange is the
+// source" is decided: a blank lineRange with no oldText matches no branch and is
+// still refused.
+const editLineRangeOptionalPattern = `^(?:\s*|[1-9][0-9]*-[1-9][0-9]*)$`
+
+// editSourceOneOf expresses "exactly one source per change" over the effective
+// value of each source instead of the presence of its key: oldText is a source
+// only at minLength 1 and lineRange only when it matches editLineRangePattern.
+// Key presence would report a model that pads an unused source with an empty
+// string as "both sources given", while the runtime treats that same empty
+// string as "not provided" (tools/edit/apply.go).
+func editSourceOneOf() []any {
+	return []any{
+		map[string]any{
+			"required":   []string{"oldText"},
+			"properties": map[string]any{"oldText": map[string]any{"minLength": 1}},
+			"not": map[string]any{
+				"required":   []string{"lineRange"},
+				"properties": map[string]any{"lineRange": map[string]any{"pattern": editLineRangePattern}},
+			},
+		},
+		map[string]any{
+			"required":   []string{"lineRange"},
+			"properties": map[string]any{"lineRange": map[string]any{"pattern": editLineRangePattern}},
+			"not": map[string]any{
+				"required":   []string{"oldText"},
+				"properties": map[string]any{"oldText": map[string]any{"minLength": 1}},
+			},
+		},
+	}
+}
+
 func editChangeSchema() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"oldText": map[string]any{
-				"type": "string", "minLength": 1,
+				"type": "string",
+				// No minLength here: a blank source is the runtime's "not provided"
+				// (change.OldText != "", tools/edit/apply.go), so this property must not
+				// refuse a padded empty string — editSourceOneOf decides which source the
+				// change uses, and its branches carry the minLength 1 that makes a blank
+				// oldText useless.
 				"description": "Small exact unique source snippet copied exactly from the read result, without `N: ` prefixes; preferred over lineRange.",
 			},
 			"replace_all": map[string]any{
@@ -509,7 +565,7 @@ func editChangeSchema() map[string]any {
 				"description": "Optional; defaults to false. With oldText, true replaces every non-overlapping exact occurrence in the original snapshot; with lineRange it is ignored.",
 			},
 			"lineRange": map[string]any{
-				"type": "string", "pattern": "^[1-9][0-9]*-[1-9][0-9]*$",
+				"type": "string", "pattern": editLineRangeOptionalPattern,
 				"description": "Inclusive whole-line A-B range from read's displayed line numbers, for larger blocks; replaces exactly those lines — a closing brace inside the range must be included, one outside stays untouched. All ranges use the original read version, so never adjust for earlier changes.",
 			},
 			"newText": map[string]any{
@@ -518,10 +574,7 @@ func editChangeSchema() map[string]any {
 			},
 		},
 		"required": []string{"newText"},
-		"oneOf": []any{
-			map[string]any{"required": []string{"oldText"}, "not": map[string]any{"required": []string{"lineRange"}}},
-			map[string]any{"required": []string{"lineRange"}, "not": map[string]any{"required": []string{"oldText"}}},
-		},
+		"oneOf":    editSourceOneOf(),
 	}
 }
 
@@ -536,16 +589,13 @@ func remoteEditChangeSchema() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"oldText":     map[string]any{"type": "string", "minLength": 1},
-			"replace_all": map[string]any{"type": "boolean"},
-			"lineRange":   map[string]any{"type": "string", "pattern": "^[1-9][0-9]*-[1-9][0-9]*$"},
-			"newText":     map[string]any{"type": "string"},
+			"oldText":     map[string]any{"type": "string", "description": "Exact unique source snippet copied from remote_read; use this instead of lineRange for small edits."},
+			"replace_all": map[string]any{"type": "boolean", "description": "With oldText, true replaces every non-overlapping exact occurrence in the original snapshot."},
+			"lineRange":   map[string]any{"type": "string", "pattern": editLineRangeOptionalPattern, "description": "Inclusive whole-line A-B range from remote_read's displayed line numbers, e.g. \"40-72\"."},
+			"newText":     map[string]any{"type": "string", "description": "Replacement text without line prefixes; empty deletes the selected source."},
 		},
 		"required": []string{"newText"},
-		"oneOf": []any{
-			map[string]any{"required": []string{"oldText"}, "not": map[string]any{"required": []string{"lineRange"}}},
-			map[string]any{"required": []string{"lineRange"}, "not": map[string]any{"required": []string{"oldText"}}},
-		},
+		"oneOf":    editSourceOneOf(),
 	}
 }
 

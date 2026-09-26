@@ -157,3 +157,79 @@ func schemaRequiredForTest(t *testing.T, object map[string]any, field string) bo
 	}
 	return false
 }
+
+// TestBuiltinGateTreatsEmptyOptionalsAsAbsent pins the argument gate to the
+// judgement the runtime makes about mutual exclusion: it is decided on each
+// option's effective value, not on the presence of its key.
+//
+//   - tailLines=0 and body="" mean "not provided" to the runtime, so pairing
+//     them with the other form must not read as "both forms were requested".
+//   - A blank source (oldText="", lineRange="") is "not provided" too — the
+//     runtime picks the source by effective value (tools/edit/apply.go), so a
+//     padded blank beside a real source is carried out, and one with no real
+//     source at all is still refused, because no branch matches.
+func TestBuiltinGateTreatsEmptyOptionalsAsAbsent(t *testing.T) {
+	cases := []struct {
+		name         string
+		tool         string
+		args         string
+		wantReject   bool
+		wantContains string
+		wantAbsent   string
+	}{
+		{"read pads tailLines with 0", "read", `{"files":[{"path":"a.go","startLine":5,"endLine":20,"tailLines":0}]}`, false, "", ""},
+		{"read mixes tail and range", "read", `{"files":[{"path":"a.go","startLine":5,"tailLines":100}]}`, true, "exactly one allowed shape", ""},
+		{"edit pads oldText with an empty string", "edit", `{"path":"a.go","version":"9k3m7x","changes":[{"lineRange":"1-9","newText":"x","oldText":""}]}`, false, "", ""},
+		{"edit pads lineRange with an empty string", "edit", `{"path":"a.go","version":"9k3m7x","changes":[{"oldText":"a","newText":"x","lineRange":""}]}`, false, "", ""},
+		{"edit pads lineRange with blanks", "edit", `{"path":"a.go","version":"9k3m7x","changes":[{"oldText":"a","newText":"x","lineRange":"  "}]}`, false, "", ""},
+		{"edit supplies both sources", "edit", `{"path":"a.go","version":"9k3m7x","changes":[{"oldText":"a","lineRange":"1-9","newText":"x"}]}`, true, "exactly one allowed shape", ""},
+		{"edit pads every source blank", "edit", `{"path":"a.go","version":"9k3m7x","changes":[{"oldText":"","lineRange":"","newText":"x"}]}`, true, "exactly one allowed shape", ""},
+		{"edit replaces nothing", "edit", `{"path":"a.go","version":"9k3m7x","changes":[{"lineRange":"abcdef","newText":"x"}]}`, true, "must match the pattern", ""},
+		{"remote_edit pads oldText with an empty string", "remote_edit", `{"target":"t:/w","path":"a.go","version":"9k3m7x","changes":[{"lineRange":"1-9","newText":"x","oldText":""}]}`, false, "", ""},
+		{"remote_edit pads lineRange with an empty string", "remote_edit", `{"target":"t:/w","path":"a.go","version":"9k3m7x","changes":[{"oldText":"a","newText":"x","lineRange":""}]}`, false, "", ""},
+		{"http_request pads body with an empty string", "http_request", `{"url":"https://example.test","body":"","json":{"a":1}}`, false, "", ""},
+		{"http_request supplies body and json", "http_request", `{"url":"https://example.test","body":"x","json":{"a":1}}`, true, "must not be combined with", ""},
+		{"web_fetch pads format with an empty string", "web_fetch", `{"url":"https://example.test/","format":""}`, false, "", ""},
+		{"grep pads outputMode with an empty string", "grep", `{"pattern":"x","outputMode":""}`, false, "", ""},
+		{"remote_run_command pads shell with an empty string", "remote_run_command", `{"target":"t:/w","command":"ls","shell":""}`, false, "", ""},
+		{"web_fetch rejects an unknown format", "web_fetch", `{"url":"https://example.test/","format":"markdown"}`, true, "must be one of", ""},
+	}
+	for _, tc := range cases {
+		schema, _ := builtinSchemaForTest(t, tc.tool)
+		violations := schemautil.ValidateArgs(schema, []byte(tc.args))
+		if tc.wantReject && len(violations) == 0 {
+			t.Fatalf("%s: the gate accepted args the declaration rejects: %s", tc.name, tc.args)
+		}
+		if !tc.wantReject && len(violations) != 0 {
+			t.Fatalf("%s: the gate rejected a call the runtime accepts (%s): %s", tc.name, schemautil.DescribeViolations(violations), tc.args)
+		}
+		report := schemautil.DescribeViolations(violations)
+		if tc.wantContains != "" && !strings.Contains(report, tc.wantContains) {
+			t.Fatalf("%s: rejection %q does not mention %q", tc.name, report, tc.wantContains)
+		}
+		if tc.wantAbsent != "" && strings.Contains(report, tc.wantAbsent) {
+			t.Fatalf("%s: rejection %q still blames the mutual-exclusion rule", tc.name, report)
+		}
+	}
+}
+
+// TestBuiltinSchemasExposeTheRuntimeParameters pins the parameters the runtime
+// honors but the schema long left undeclared. Without a declaration the gate
+// rejects the key outright, so a model cannot send auth headers, raise a body
+// cap, or pick a remote shell at all.
+func TestBuiltinSchemasExposeTheRuntimeParameters(t *testing.T) {
+	for _, tc := range []struct{ tool, param string }{
+		{"web_fetch", "headers"},
+		{"web_fetch", "maxChars"},
+		{"web_fetch", "maxBytes"},
+		{"http_request", "maxBytes"},
+		{"http_request", "followRedirects"},
+		{"remote_run_command", "shell"},
+	} {
+		params, _ := builtinSchemaForTest(t, tc.tool)
+		properties := schemaObjectForTest(t, params["properties"])
+		if _, ok := properties[tc.param]; !ok {
+			t.Fatalf("%s must declare %q: the runtime honors it, so an undeclared key is rejected by the argument gate", tc.tool, tc.param)
+		}
+	}
+}
