@@ -78,3 +78,4 @@
 [ssh-helper-op] 2026-09-26 远端 helper 新增 op 要同时改三处：op_* 实现、分发 elif、Go 调用 + 镜像测试。@orch_remote.go
 [badge-stays-in-button-box] 2026-09-26 底部信息栏角标勿负偏移出按钮盒：父级 overflow:hidden 会裁掉上半截。@style.css
 [prompt-clear-dom] 2026-09-26 清输入框须走 clearPromptDraft：只写 store 被 Naive syncSource 跳过。@App.vue
+[session-llm-overlay] 2026-09-27 run 外的会话级 LLM 调用须带调用方 Tab 模型 overlay；默认模型字段无 GUI 入口。@biz_compact.go

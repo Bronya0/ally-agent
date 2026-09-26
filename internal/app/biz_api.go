@@ -875,7 +875,9 @@ func (a *App) apiHandleCompactSession(w http.ResponseWriter, r *http.Request) {
 		apiWriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	result, err := a.compactSession(r.Context(), r.PathValue("id"), body.Instruction)
+	// 本地 HTTP API 没有 Tab 上下文，overlay 传空：模型选择回落会话冻结记录 /
+	// 持久化配置（GUI 侧走 App.CompactSession 并带上当前 Tab 的模型）。
+	result, err := a.compactSession(r.Context(), r.PathValue("id"), body.Instruction, ConfigState{})
 	if err != nil {
 		apiWriteError(w, http.StatusBadRequest, err.Error())
 		return

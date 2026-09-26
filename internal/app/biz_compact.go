@@ -84,12 +84,15 @@ func (a *App) compactSessionRunning(sessionID string) bool {
 // history. All compaction entries — manual, threshold, overflow — must keep
 // this one strategy; per-entry special-case paths are forbidden (they drift
 // apart and break compaction).
-func (a *App) CompactSession(sessionID, instruction string) (map[string]any, error) {
+// overlay carries the caller's model selection (the GUI passes the active Tab's
+// model, exactly the ConfigState StartChat receives); it may be empty for
+// callers without Tab context, such as the local HTTP API.
+func (a *App) CompactSession(sessionID, instruction string, overlay ConfigState) (map[string]any, error) {
 	parent := a.ctx
 	if parent == nil {
 		parent = context.Background()
 	}
-	return a.compactSession(parent, sessionID, instruction)
+	return a.compactSession(parent, sessionID, instruction, overlay)
 }
 
 // CancelCompaction aborts an in-flight manual compaction for the session so
@@ -105,19 +108,42 @@ func (a *App) CancelCompaction(sessionID string) error {
 	return nil
 }
 
-func (a *App) compactSession(parent context.Context, sessionID, instruction string) (map[string]any, error) {
+// compactSessionConfig decides which model the summary call runs on.
+//
+// Precedence:
+//  1. the caller's overlay: for the GUI this is the active Tab's model, the same
+//     ConfigState StartChat sends — the only source that is right for a session
+//     restored from disk, which has no frozen record and no messages yet.
+//  2. the session's frozen StartChat record, for callers that send no overlay
+//     (the local HTTP API has no Tab context) and for sessions that already ran
+//     a turn in this process.
+//  3. the persisted config, unchanged.
+//
+// The persisted config must never win on its own for a GUI compaction: its
+// top-level model fields are written only by SwitchModel (/api/v1/models/activate),
+// so they are a stale leftover that no GUI control updates and that can point at
+// an unrelated endpoint (typically a local server that is not running).
+func (a *App) compactSessionConfig(sessionID string, overlay ConfigState) (ConfigState, error) {
+	cfg, err := a.getConfig()
+	if err != nil {
+		return ConfigState{}, err
+	}
+	if strings.TrimSpace(overlay.Model) != "" {
+		// mergeConfig is the single request-overlay choke point: an overlay field
+		// the caller left empty keeps the persisted value.
+		return a.effectiveConfig(overlay), nil
+	}
+	return a.sessionModelConfigFor(sessionID).apply(cfg), nil
+}
+
+func (a *App) compactSession(parent context.Context, sessionID, instruction string, overlay ConfigState) (map[string]any, error) {
 	if err := a.ensureInitialized(); err != nil {
 		return nil, err
 	}
-	cfg, err := a.getConfig()
+	cfg, err := a.compactSessionConfig(sessionID, overlay)
 	if err != nil {
 		return nil, err
 	}
-	// Replay the session's frozen model fields (StartChat overlay): without
-	// this, manual compaction would summarize with the persisted default
-	// model's base URL / key pool and silently drop the Tab's custom headers
-	// whenever the Tab model differs from the persisted default.
-	cfg = a.sessionModelConfigFor(sessionID).apply(cfg)
 	if strings.TrimSpace(cfg.Model) == "" {
 		return nil, errors.New("model is required")
 	}
@@ -359,7 +385,10 @@ Rules:
 		})
 	})
 	if err != nil {
-		return nil, fmt.Errorf("compaction failed: %w", err)
+		// The model and endpoint belong in the error: the transport error only
+		// names the URL, which is exactly what the user cannot map back to a
+		// model when the request goes to an endpoint they never selected.
+		return nil, fmt.Errorf("compaction failed with model %s at %s: %w", cfg.Model, cfg.BaseURL, err)
 	}
 
 	if strings.TrimSpace(summary) == "" {

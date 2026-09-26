@@ -56,7 +56,7 @@ return runID, nil                          // 立刻返回，前端靠事件推�
 设计点：
 
 1. **同步入口、异步循环**：`StartChat` 只校验（模型 / key / 工作区）并注册，立即返回 `runID`；取消 = `cancel()`（`app.go:1504`）。
-2. **配置在入口冻结**：`sessionWorkspaces` / `sessionModelConfigs`（`app.go:1435-1455`）记录本 session 实际使用的模型连接字段，因为 Tab 的模型选择不落盘，而 run 之外的调用（手动压缩）也必须用同一套连接参数。
+2. **配置在入口冻结**：`sessionWorkspaces` / `sessionModelConfigs`（`app.go:1463-1480`）记录本 session 实际使用的模型连接字段（Tab 的模型选择不落盘）。但冻结记录只在本进程内存里、且只有跑过 `StartChat` 的会话才有，所以 run 之外的调用（手动压缩）改由调用方直接带 overlay：`CompactSession(sessionID, instruction, overlay)`，冻结记录只作为无 Tab 上下文调用方（本地 HTTP API）的兜底（`compactSessionConfig`）。
 3. **会话级单 run 守卫**（`app.go:1464`）：同一 session 不允许两个并发 run，否则交叉 `saveHistory` 会打乱消息顺序；运行中的追问走 `InjectRunMessage`（`app.go:1530`）入队，不新开 run。
 4. **注入消息在步边界进入上下文**（`app.go:1810`）：当前工具批次跑完后、下一个模型请求前追加，因此模型下一回合才看到它。
 

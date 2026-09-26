@@ -61,7 +61,7 @@ func TestCompactSessionCleansUpCompactionState(t *testing.T) {
 	app.config.APIKey = "test-key"
 	const sessionID = "session-compact-guard"
 
-	if _, err := app.CompactSession(sessionID, ""); err == nil || !strings.Contains(err.Error(), "no messages to compact") {
+	if _, err := app.CompactSession(sessionID, "", ConfigState{}); err == nil || !strings.Contains(err.Error(), "no messages to compact") {
 		t.Fatalf("CompactSession() error = %v, want no messages to compact", err)
 	}
 	if app.compactSessionRunning(sessionID) {
@@ -132,6 +132,68 @@ func TestCompactSessionReplaysSessionModelConfig(t *testing.T) {
 	}
 }
 
+// TestCompactSessionConfigModelPrecedence pins the model-selection order of the
+// single compaction decision point (manual, threshold and overflow all read it):
+// the caller's overlay wins, the session's frozen StartChat record is the
+// fallback for callers without Tab context (local HTTP API), and the persisted
+// config is the last resort. The overlay is the GUI path right after restoring a
+// session: no frozen record exists yet, so reading the persisted default used to
+// send the summary to an endpoint the user never selected.
+func TestCompactSessionConfigModelPrecedence(t *testing.T) {
+	app := &App{initialized: true}
+	app.config = defaultConfigState()
+	app.config.Model = "stale-default"
+	app.config.BaseURL = "http://127.0.0.1:1234/v1"
+	app.config.APIKeys = []string{"stale-key"}
+
+	const sessionID = "session-compact-precedence"
+	app.sessionModelConfigs = map[string]sessionModelConfig{
+		sessionID: sessionModelConfigFrom(ConfigState{
+			ProviderName: "FrozenProvider",
+			APIFormat:    apiFormatOpenAIChat,
+			BaseURL:      "https://frozen.example.com/v1",
+			APIKeys:      []string{"frozen-key"},
+			Model:        "frozen-model",
+		}),
+	}
+
+	// 1. Overlay (the Tab the user is talking to) wins over the frozen record.
+	got, err := app.compactSessionConfig(sessionID, ConfigState{
+		ProviderName: "TabProvider",
+		APIFormat:    apiFormatOpenAIChat,
+		BaseURL:      "https://tab.example.com/v1",
+		APIKeys:      []string{"tab-key"},
+		Model:        "tab-model",
+	})
+	if err != nil {
+		t.Fatalf("compactSessionConfig() error = %v", err)
+	}
+	if got.Model != "tab-model" || got.BaseURL != "https://tab.example.com/v1" {
+		t.Fatalf("overlay lost: model=%q baseURL=%q", got.Model, got.BaseURL)
+	}
+	if pool := resolveKeyPool(got); len(pool) != 1 || pool[0] != "tab-key" {
+		t.Fatalf("overlay key pool = %v, want [tab-key]", pool)
+	}
+
+	// 2. No overlay (local HTTP API) → the frozen record.
+	got, err = app.compactSessionConfig(sessionID, ConfigState{})
+	if err != nil {
+		t.Fatalf("compactSessionConfig() error = %v", err)
+	}
+	if got.Model != "frozen-model" || got.BaseURL != "https://frozen.example.com/v1" {
+		t.Fatalf("frozen record lost: model=%q baseURL=%q", got.Model, got.BaseURL)
+	}
+
+	// 3. Neither → the persisted config, unchanged.
+	got, err = app.compactSessionConfig("session-without-record", ConfigState{})
+	if err != nil {
+		t.Fatalf("compactSessionConfig() error = %v", err)
+	}
+	if got.Model != "stale-default" || got.BaseURL != "http://127.0.0.1:1234/v1" {
+		t.Fatalf("persisted fallback drifted: model=%q baseURL=%q", got.Model, got.BaseURL)
+	}
+}
+
 // TestCompactSessionManualAlwaysRunsTheSummaryTier pins the single compaction
 // strategy: manual, threshold and overflow all go through one LLM summary that
 // rewrites the history. Below the auto threshold the manual button used to stop
@@ -150,12 +212,24 @@ func TestCompactSessionManualAlwaysRunsTheSummaryTier(t *testing.T) {
 	app.initialized = true
 	app.stats = nil // skip token-stat persistence
 	app.config = defaultConfigState()
-	app.config.Model = "test-model"
-	app.config.APIKey = "test-key"
+	app.config.Model = "stale-default-model"
+	app.config.APIKey = "stale-key"
 	app.config.APIFormat = apiFormatOpenAIChat
-	app.config.BaseURL = server.URL
+	// The persisted default points at a dead endpoint on purpose: manual
+	// compaction must run on the caller's overlay (the active Tab's model), not
+	// on this leftover, so the request has to reach server.URL.
+	app.config.BaseURL = "http://127.0.0.1:9/v1"
 	recorder := &compactEventRecorder{}
 	app.events = recorder
+	// Session-level LLM calls outside a run must run on the model the user is
+	// actually talking to; the overlay is the same shape StartChat receives.
+	overlay := ConfigState{
+		ProviderName: "TabProvider",
+		APIFormat:    apiFormatOpenAIChat,
+		BaseURL:      server.URL,
+		APIKey:       "tab-key",
+		Model:        "test-model",
+	}
 	const sessionID = "session-manual-single-tier"
 
 	// The todo list of the plan tool only lives in its tool result: the rewrite
@@ -167,7 +241,7 @@ func TestCompactSessionManualAlwaysRunsTheSummaryTier(t *testing.T) {
 	}
 	app.saveHistory(sessionID, history)
 
-	result, err := app.CompactSession(sessionID, "")
+	result, err := app.CompactSession(sessionID, "", overlay)
 	if err != nil {
 		t.Fatalf("CompactSession() error = %v", err)
 	}

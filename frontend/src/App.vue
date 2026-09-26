@@ -6399,60 +6399,37 @@ function applyCommand(index) {
   sendPrompt();
 }
 
+// 内置命令的「识别」与「执行」必须分开：识别是纯查表（同步、无副作用），执行里
+// 有的会 await 长耗时调用（/compact 要等一次流式总结 LLM 调用返回，可能几十秒）。
+const builtinCommandHandlers = {
+  new: () => { createNewSession(); },
+  skills: () => loadAndShowSkills(),
+  sessions: () => { showSessionList(); },
+  init: () => { handleInitCommand(); },
+  remember: () => { handleRememberCommand(); },
+  lesson: () => { handleLessonCommand(); },
+  review: () => { handleReviewCommand(); },
+  compact: () => handleCompactCommand(),
+  push: () => { handlePushCommand(); },
+};
+
 // 内置命令统一收口：命令体只负责动作，草稿清理由外层统一做，新增命令不会再漏清。
 async function handleBuiltinCommand(command) {
-  if (!command) return false;
+  const handler = command ? builtinCommandHandlers[command.special] : null;
+  if (!handler) return false;
   // 草稿归「执行命令时」的活动会话所有：/new 会把活动 Tab 改挂到新会话，
   // 归属必须在切换前记下，否则清掉的是新会话的空草稿，旧会话里那句命令会留下。
   const draftSessionId = activeSession.value?.id || activeSessionId.value;
-  const handled = await runBuiltinCommand(command);
-  if (!handled) return false;
+  // 清理必须排在 handler 的 await 之前：/compact 这类命令要等总结 LLM 调用返回
+  // 才结束，挂在 await 之后时 "/compact" 会在整个压缩期间留在输入框里，看着像
+  // 命令没执行、框也没清。
   // 必须走 clearPromptDraft，不能只写 sessionPromptTexts：Naive 的 textarea 在
   // 原生 input 之后的 syncSource 保护会跳过受控值回写，只改 store 会让输入框
-  // 继续显示刚发出去的命令文本（/compact 这类原地执行的命令最明显）。
+  // 继续显示刚发出去的命令文本。
   clearPromptDraft(draftSessionId);
   commandMenuVisible.value = false;
+  await handler();
   return true;
-}
-
-async function runBuiltinCommand(command) {
-  if (command.special === 'new') {
-    createNewSession();
-    return true;
-  }
-  if (command.special === 'skills') {
-    await loadAndShowSkills();
-    return true;
-  }
-  if (command.special === 'sessions') {
-    showSessionList();
-    return true;
-  }
-  if (command.special === 'init') {
-    handleInitCommand();
-    return true;
-  }
-  if (command.special === 'remember') {
-    handleRememberCommand();
-    return true;
-  }
-  if (command.special === 'lesson') {
-    handleLessonCommand();
-    return true;
-  }
-  if (command.special === 'review') {
-    handleReviewCommand();
-    return true;
-  }
-  if (command.special === 'compact') {
-    await handleCompactCommand();
-    return true;
-  }
-  if (command.special === 'push') {
-    handlePushCommand();
-    return true;
-  }
-  return false;
 }
 
 function completeCommand(index) {
@@ -7656,11 +7633,23 @@ async function handleCompactCommand() {
   if (!session) return;
   if (session.runId || compactStateFor(session.id)) { message.warning(t('app.compact.wait')); return; }
 
+  // 压缩是一次会话级 LLM 调用，后端不会从 Tab 状态取值：必须把当前 Tab 的模型
+  // 带上，否则会回落到 config 顶层的“默认模型”遗留值（GUI 已无入口修改它），
+  // 恢复出来的会话就会把总结请求打到用户从没选过的端点。overlay 形状与聊天完全
+  // 一致（见 sendPrompt 里的 StartChat）。
+  const activeTab = workspaceTabs.value.find((item) => item.id === activeWorkspaceId.value) || null;
+  const sessionWorkspace = runWorkspaceForTab(activeTab);
+  if (sessionWorkspace) session.workspace = sessionWorkspace;
+
   startCompactTracking(session.id, t('app.compact.compacting'));
   saveSessions();
 
   try {
-    const result = await CompactSession(session.id, '');
+    const result = await CompactSession(session.id, '', {
+      ...chatConfig.value,
+      extraRoots: session.extraRoots || [],
+      workspace: sessionWorkspace || config.workspace,
+    });
     delete compactingSessions[session.id];
 
     if (result?.summary) {

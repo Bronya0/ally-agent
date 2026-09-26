@@ -104,7 +104,7 @@ type contextAnchor struct { covered int; tokens int }   // biz_context.go:695
 usedTokens := bd.Total                                  // app.go:1836
 if usedTokens > compactThresholdLimit(cfg) { ... }      // 自动压缩
 
-func compactThresholdLimit(cfg ConfigState) int {       // biz_compact.go:240
+func compactThresholdLimit(cfg ConfigState) int {       // biz_compact.go:270
     maxCtx := cfg.ContextWindow; if maxCtx <= 0 { maxCtx = 1000000 }
     return int(float64(maxCtx) * clampCompactThreshold(cfg.CompactThreshold))
 }
@@ -116,11 +116,13 @@ func compactThresholdLimit(cfg ConfigState) int {       // biz_compact.go:240
 
 | 入口 | 触发 | 位置 |
 |---|---|---|
-| 手动 | 用户点压缩按钮，**无条件**执行总结 | `CompactSession` → `compactSession` → `compactHistory`（`biz_compact.go:84`、`:105`、`:250`） |
+| 手动 | 用户点压缩按钮，**无条件**执行总结 | `CompactSession` → `compactSessionConfig` → `compactSession` → `compactHistory`（`biz_compact.go:90`、`:126`、`:139`、`:280`） |
 | 自动（阈值） | 每步 `bd.Total > 阈值`，失败不致命 | `compactRunHistory(..., compactReasonThreshold, ...)`（`app.go:1843`） |
 | 强化（溢出恢复） | provider 判定上下文超长后，忽略阈值强制压缩一次再重发 | `compactRunHistory(..., compactReasonOverflow, ...)`（`app.go:1950`） |
 
-### 6.1 run 内压缩后的消息列表怎么重建（`compactRunHistory`，`biz_compact.go:208`）
+**手动入口由调用方带模型**：`CompactSession(sessionID, instruction, overlay)` 的 overlay 就是 `StartChat` 收到的那份（GUI 传当前 Tab 的模型）。config 顶层的「默认模型」现在只由 `SwitchModel`（本地 API 的 `/api/v1/models/activate`）写入，GUI 没有任何入口能改它：读它就等于把总结发到用户从没选过的端点——恢复出来的会话既没有冻结记录、也还没有消息，正是必踩的场景。优先级收口在 `compactSessionConfig`（`biz_compact.go:126`）：调用方 overlay → 会话冻结记录（无 Tab 上下文的本地 HTTP API 走这里）→ 持久化配置。
+
+### 6.1 run 内压缩后的消息列表怎么重建（`compactRunHistory`，`biz_compact.go:238`）
 
 ```go
 h := sanitizeHistoryMessages(history)
@@ -134,25 +136,25 @@ if 本轮有用户消息 { messages = append(messages, 当前用户回合) }   /
 
 要点：**压缩调用本身就带着这条 user 消息**（那才是它要总结的内容），所以重建请求时必须再补一次，否则最新用户消息只存在于 summary 里、不再作为真实 turn 出现。
 
-### 6.2 内核 `compactHistory`（`biz_compact.go:250`）
+### 6.2 内核 `compactHistory`（`biz_compact.go:280`）
 
 1. **超时可配**：`clampCompactTimeoutSeconds`，默认 180s、范围 `[30, 3600]`；`Context.WithTimeout` 叠在父 ctx 上，所以 app 关闭仍能取消。
-2. **提示词是「结构化交接文档」**（`:268`），包含几条关键规则：
+2. **提示词是「结构化交接文档」**（`:307`），包含几条关键规则：
    - 语言规则：用用户的语言写；
    - **需求漂移规则**：如果历史里已有上一次的 summary，其「用户需求与目标」「约束与偏好」两节必须**原样继承**，只有用户明确改过才更新并标注；不得为简洁删减，也不得复活已被取代的需求；
    - 写「当前有效版本」而不是照抄用户原话；冲突时以用户最新指令为准；
    - 固定章节：User Intent & Requirements / Constraints & Preferences / Findings & Analysis / What Has Been Done / Key Files & Locations / Next Steps；
    - 文件路径、命令、函数名必须精确；只输出 Markdown、不得调用任何工具。
 3. **思考档位原样传递**：`completeModelTextWithUsage(ctx, cfg, ...)` 用用户自己的 `cfg`。注释明确了原因：写死档位会与设置静默漂移，而强推「关闭思考」会让必思考模型直接 400。
-4. **计入统计**：压缩请求的 token 也走 `recordWorkspaceTokenUsage`（`:355`），用户能在面板看到压缩成本。
+4. **计入统计**：压缩请求的 token 也走 `recordWorkspaceTokenUsage`（`:418`），用户能在面板看到压缩成本。
 5. **落地与失效**：新历史 = 单条 user 消息（summary），然后
    `clearContextAnchor`（实测覆盖的消息已不存在）+ `reasoningStash.clearSession`（思考台账跟那些回合一起成了死重，而台账唯一的回收点就是这里——因为 `appendTurn` 为了前缀稳定从不裁剪）+ `saveHistory`。
 
 ### 6.3 并发与取消
 
-- 同 session 只允许一个压缩（`compactingSessions`），且**run 期间禁止压缩**（`activeRunForSession` 非空直接 `errSessionRunning`）——否则两次 `saveHistory` 会交错（`biz_compact.go:127-139`）。
+- 同 session 只允许一个压缩（`compactingSessions`），且**run 期间禁止压缩**（`activeRunForSession` 非空直接 `errSessionRunning`）——否则两次 `saveHistory` 会交错（`biz_compact.go:157-166`）。
 - `compactingSessions` / `compactingCancels` 在持锁前做 **nil 懒加载兜底**，注释写明：持锁写 nil map 的 panic 会逃逸在 cleanup defer 注册之前，互斥锁永久锁死、整个应用后续调用全部死锁。
-- `CancelCompaction`（`:94`）让 ESC 不必等完压缩超时。
+- `CancelCompaction`（`:100`）让 ESC 不必等完压缩超时。
 
 ## 七、统计线：`biz_stats.go`
 
@@ -185,7 +187,7 @@ if 本轮有用户消息 { messages = append(messages, 当前用户回合) }   /
 1. `biz_context.go:60-330` —— 结构体口径 + 估算器 + `finalizeContextBreakdownTotal`
 2. `biz_context.go:477-585` —— `sessionPrefixBreakdown` / `getContextBreakdown`
 3. `biz_context.go:590-810` —— 增量累加器 + 实测锚点全套
-4. `biz_compact.go:32-105` —— clamp 规则与手动压缩入口/并发守卫
-5. `biz_compact.go:185-383` —— 三入口共用的压缩内核（提示词在这里）
+4. `biz_compact.go:32-166` —— clamp 规则与手动压缩入口/并发守卫
+5. `biz_compact.go:238-418` —— 三入口共用的压缩内核（提示词在这里）
 6. `app.go:1830-1960` —— 触发线与两条恢复路径（阈值压缩 / 溢出压缩）
 7. `biz_stats.go:24-52`、`638-778` —— 统计队列与聚合（想细看再读落盘部分）
