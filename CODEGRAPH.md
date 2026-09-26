@@ -23,7 +23,7 @@
 | 错误日志轮转 | `internal/app/infra_log.go`（InitErrorLogger） |
 | 命令环境 / 登录 shell PATH 探测 | `internal/app/infra_shell_env.go`（commandEnvironment / warmCommandEnvironment） |
 | 在终端打开工作区路径 | `internal/app/host_terminal*.go` |
-| 内置工具 schema 定义 | `internal/tools/shared/builtins.go` |
+| 内置工具 schema 定义与按名查找 | `internal/tools/shared/builtins.go`（`Builtins` / `BuiltinSchema`） |
 | 某工具的执行逻辑 | `internal/app/orch_<name>.go`（编排）+ `internal/tools/<name>/`（纯算法） |
 | edit 读写契约 / 原子写 / 冲突合并 | `orch_edit_plan.go` → `orch_edit.go` → `tools/edit`、`tools/read` |
 | 命令安全拦截与路径校验 | `orch_command_safety.go` + `internal/tools/command` |
@@ -50,11 +50,12 @@
 | 模型输入能力（视觉）降级 / 图片占位 | `internal/app/biz_context.go`（`buildMessages` 单一收口） + 目录字段 `visionCapable`（`frontend/src/data/modelCatalog.json`，由 `scripts/generate-model-catalog.mjs` 生成） |
 | 流终止判定（finish_reason / `[DONE]` 哨兵）与 tool_calls 增量归并 | `internal/app/prov_model.go`（`sseDoneWatcher`、`toolCallAccumulator`） |
 | 工具 schema 修补（$ref 内联 / 补 type / 矛盾类型修复） | `internal/tools/schemautil/` |
+| 内置工具入参按 schema 校验（闸门，报 `E_BAD_ARGS`） | `internal/tools/schemautil/validate.go`（`ValidateArgs`）+ `app.go` 的 `decodeJSON` |
 | 工具调用 ID 规范化、参数解码、截断参数标记 | `internal/tools/toolcall/` |
 
 ## 核心调用流
 
-`main()` → `NewApp()` → Wails 装配 → 前端 `StartChat()` → `app.runChat()`: `buildMessages()`（biz_context）→ `buildToolsWithMcp()`（biz_mcp）→ `streamModelResponse()`（prov_model）→ 流式事件经 `host_events` 到前端 → 工具分发 `executeTool()`（并发 4，文件变更串行：`orch_batch_policy.go` 定序，变更后校验走 `orch_validation.go`）→ 结果回填循环 → `saveHistory()`（biz_sessions）。子代理/调度任务走 `executeDelegate()`（orch_subagent）。
+`main()` → `NewApp()` → Wails 装配 → 前端 `StartChat()` → `app.runChat()`: `buildMessages()`（biz_context）→ `buildToolsWithMcp()`（biz_mcp）→ `streamModelResponse()`（prov_model）→ 流式事件经 `host_events` 到前端 → 工具分发 `executeTool()`（内置工具先按自己的 schema 校验入参，见 `schemautil.ValidateArgs`；并发 4，文件变更串行：`orch_batch_policy.go` 定序，变更后校验走 `orch_validation.go`）→ 结果回填循环 → `saveHistory()`（biz_sessions）。子代理/调度任务走 `executeDelegate()`（orch_subagent）。
 
 每个 step 开头汇总上下文用量并决定是否 auto-compact：`breakdownAcc.update()`（消息估算）+ `sessionPrefixBreakdown()`（系统提示词 / 工作区地图）+ `finalizeSessionBreakdown()`（provider 实测锚点）→ `bd.Total` 与阈值比较。footer 与自动压缩读同一个数。阈值触发时走 `compactRunHistory(reason)`（唯一一档：LLM 总结，整段历史换成一条总结 + 钉住的 plan 快照，见 `compactHistory`）：`threshold` 为阈值触发（失败不致命），`overflow` 为请求被判定上下文超长后的强制压缩并重试（`llmErrorKindContextTooLong`）；压缩也失败才报出可操作提示。总结调用是流式的（`streamModelTextWithUsage` → `compact:delta` 事件，前端按普通对话渲染思考与总结正文），完成后前端清空对话只留总结。压缩成功是这个前缀唯一的刷新点：`compactHistory` 丢掉会话的系统提示词 / 工作区地图 / 工具 schema 快照（`refreshSessionPromptPrefix`），下一次请求以磁盘现状重建，会话中途写入的 AGENTS.md / CODEGRAPH.md / LESSONS.md / USER.md 因此立即生效；其它时刻这些快照一律冻结以保 provider 缓存。曾经的“微压缩”档（`microcompactMessages`）已删除：它在历史中段原地改写，命中前缀之后的 provider 缓存全部作废。
 
@@ -69,7 +70,7 @@
 - `orch_*`: 工具编排（绑定纯算法到 `*App` 状态）。`orch_edit_plan.go` / `orch_edit.go`（编辑批次规划与原子提交）；`orch_command_safety.go`（命令安全拦截）；`orch_batch_policy.go`（文件变更工具定序与写批次冲突检测）；`orch_validation.go`（文件变更后校验与批次校验规划）；`orch_file_ops.go`（文件读写删与危险路径拦截）；`orch_read.go`（读取，含图片与去重哈希）；`orch_grep.go`（ripgrep 搜索）；`orch_http.go`（http_request / web_fetch 编排）；`orch_git.go`（git 状态）；`orch_memory.go`（memory 工具编排）；`orch_remote*.go`（SSH 远端操作：读写/编辑/删除/跑命令共用一个解析并授权入口、以及多道审批闸门（首次连接 / 危险命令 / 覆盖 / 集群登记；主机指纹不一致时不经询问直接更新记录并重连））；`orch_ssh_cluster.go`（模型侧 `ssh_cluster` 工具：列清单、登记新节点、对已登记节点只申请授权不覆盖）；`orch_scheduler.go`（计划任务）；`orch_services.go`（后台服务）；`orch_subagent.go`（子代理：lane 稳定的缓存路由 + run 局部回放 scope）；`orch_kb.go`（知识库 sources/ 读写保护）。
 
 ### `internal/tools/`（纯算法层，绝不依赖 `*App`/`ConfigState`）
-- `calculate/`（数学求值）· `command/`（Bash AST 安全解析与目标提取）· `edit/`（LCS diff 与范围替换）· `git/`（porcelain 解析）· `grep/`（ripgrep 封装）· `memory/`（记忆条目存储与运行时接口）· `pathutil/`（路径安全解析）· `read/`（文本读取与版本计算）· `scheduler/`（调度表达式解析）· `schemautil/`（工具 JSON-Schema 修补：$ref 内联与属性 type 推断）· `service/`（rolling buffer 与长进程判定）· `shared/`（CodedError 与内置 schema）· `sshclient/`（纯 Go SSH 连接、密钥/Agent 认证、主机指纹校验）· `toolcall/`（工具调用 ID 规范化、参数解码、截断参数标记）。
+- `calculate/`（数学求值）· `command/`（Bash AST 安全解析与目标提取）· `edit/`（LCS diff 与范围替换）· `git/`（porcelain 解析）· `grep/`（ripgrep 封装）· `memory/`（记忆条目存储与运行时接口）· `pathutil/`（路径安全解析）· `read/`（文本读取与版本计算）· `scheduler/`（调度表达式解析）· `schemautil/`（工具 JSON-Schema 修补：$ref 内联与属性 type 推断；另带 `ValidateArgs`——内置工具入参的 schema 闸门）· `service/`（rolling buffer 与长进程判定）· `shared/`（CodedError 与内置 schema）· `sshclient/`（纯 Go SSH 连接、密钥/Agent 认证、主机指纹校验）· `toolcall/`（工具调用 ID 规范化、参数解码、截断参数标记）。
 
 ### `internal/game/`
 （已移除：局域网联机中继服务下线，游戏区仅保留人机对战；模型调用经 `internal/app/biz_game_ai.go`。）

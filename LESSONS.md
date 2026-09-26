@@ -71,3 +71,10 @@
 [image-size-from-blob] 2026-09-26 附件体积取 blob.size / file.size，别从 data URL 反推（base64 假设会错）。@App.vue
 [tee-seed-duplicates] 2026-09-26 种子进 sink 后 primary 不清空：primary+sink 必重一份前缀，勿当无损判据。@orch_test.go
 [attachment-error-keep] 2026-09-26 带 error 的附件别被“无 dataUrl 且无 text 即丢”过滤器吃掉，提示到不了用户眼前。@App.vue
+[schema-advisory] 2026-09-26 内置工具入参按声明硬校验（E_BAD_ARGS）；MCP 工具不过闸门，未知参数仅警告提示。@builtins.go
+[arg-zero-is-unset] 2026-09-26 0/空串即“没传”：schema 的 minimum 须 0、pattern/enum 须容空串，互斥按有效值判。@builtins.go
+[absent-vs-empty] 2026-09-26 模型入参 string 分不出“没传”与“空串”（静默当空值）；要区分必须用指针。@app.go
+[existence-not-from-read] 2026-09-26 远端存在性别从失败的读取推断（超限/目录直接报错），须单独 stat。@orch_remote.go
+[ssh-helper-op] 2026-09-26 远端 helper 新增 op 要同时改三处：op_* 实现、分发 elif、Go 调用 + 镜像测试。@orch_remote.go
+[badge-stays-in-button-box] 2026-09-26 底部信息栏角标勿负偏移出按钮盒：父级 overflow:hidden 会裁掉上半截。@style.css
+[prompt-clear-dom] 2026-09-26 清输入框须走 clearPromptDraft：只写 store 被 Naive syncSource 跳过。@App.vue
