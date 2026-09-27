@@ -99,7 +99,6 @@ Public License v3. See the LICENSE file for details.
     :show="mcpEditorVisible"
     preset="card"
     :title="mcpEditorIndex >= 0 ? $t('settings.mcpEditServer') : $t('settings.mcpAddServerTitle')"
-    class="mcp-form-modal"
     :style="mcpFormModalStyle"
     :mask-closable="false"
     @update:show="(v) => { if (!v) mcpEditorVisible = false; }"
@@ -697,10 +696,9 @@ watch(
   text-overflow: ellipsis;
 }
 
-.mcp-form-modal {
-  width: 580px;
-  max-width: calc(100vw - 48px);
-}
+/* 弹窗宽度由 mcpFormModalStyle 内联给到卡片根：preset=card 会把 $attrs 的
+   class/style 落到 n-card 上，而 scoped 的 data-v 只加在往外的 .n-modal-container
+   上，命中不了卡片——别再写 .mcp-form-modal，那是看着生效的重复定义。 */
 
 .mcp-dot {
   width: 8px;
@@ -811,10 +809,6 @@ watch(
 }
 
 @media (max-width: 640px) {
-  .mcp-form-modal {
-    max-width: calc(100vw - 24px);
-  }
-
   .mcp-row-main {
     align-items: stretch;
     flex-direction: column;

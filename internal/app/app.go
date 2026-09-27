@@ -366,6 +366,12 @@ type App struct {
 	// (Anthropic thinking signatures, Responses encrypted reasoning items).
 	// In-memory only; see prov_reasoning.go.
 	reasoningStash *reasoningStash
+
+	// readCaches holds one read-dedup cache per session id (sessionReadCache in
+	// orch_read.go). Memory-only: a restarted process starts empty, and
+	// releaseSession drops the entry together with the rest of the session
+	// state. Guarded by a.mu.
+	readCaches map[string]*sessionReadCache
 }
 
 func NewApp() *App {
@@ -376,6 +382,7 @@ func NewApp() *App {
 		compactingSessions: map[string]struct{}{},
 		compactingCancels:  map[string]context.CancelFunc{},
 		histories:          map[string][]openai.ChatCompletionMessage{},
+		readCaches:         map[string]*sessionReadCache{},
 		todos:              map[string][]TodoEntry{},
 		todoRevisions:      map[string]int64{},
 		// sessionWorkspaces 记录每个会话 run 实际使用的 workspace（见
@@ -948,7 +955,7 @@ type toolExecutionMeta struct {
 }
 
 type toolExecutionMetaContextKey struct{}
-type runReadCacheContextKey struct{}
+type sessionReadCacheContextKey struct{}
 
 type ServiceInfo struct {
 	ID              string `json:"id"`
@@ -1677,6 +1684,7 @@ func (a *App) releaseSession(sessionID string, deleteHistory bool) error {
 	delete(a.sessionWorkspaces, sessionID)
 	delete(a.sessionModelConfigs, sessionID)
 	delete(a.contextAnchors, sessionID)
+	delete(a.readCaches, sessionID)
 	a.mu.Unlock()
 
 	// Provider reasoning artifacts (thinking signatures, encrypted reasoning)
@@ -1897,7 +1905,10 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 	messages = a.buildMessages(req, cfg, a.listCachedSkills())
 	tools := a.buildToolsForSession(sessionID, cfg)
 	breakdownAcc := newLiveBreakdownAccumulator(messages)
-	readCache := newRunReadCache()
+	// Read de-duplication is scoped to the session, not to this run: a file range
+	// the conversation already carries is omitted instead of re-sent, until a
+	// history rewrite (see sessionReadCache) drops it.
+	readCache := a.sessionReadCacheFor(sessionID)
 
 	syncBreakdown := func(msgs []openai.ChatCompletionMessage, resetAcc bool) ContextBreakdown {
 		if resetAcc {
@@ -1956,7 +1967,6 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			// results.
 			if newMessages, payload, compactErr := a.compactRunHistory(ctx, cfg, sessionID, compactReasonThreshold, req, messages, usedTokens); compactErr == nil {
 				messages = newMessages
-				readCache.invalidate()
 				bd = syncBreakdown(messages, true)
 				usedTokens = bd.Total
 				a.emit("run:compacted", payload)
@@ -2068,7 +2078,6 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 				}
 				messages = newMessages
 				requestMessages = messages
-				readCache.invalidate()
 				syncBreakdown(messages, true)
 				a.emit("run:compacted", payload)
 				continue
@@ -2221,7 +2230,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 				runID: runID, sessionID: sessionID, toolBatchID: toolBatchID,
 				toolCallIndex: idx, toolCallID: c.ID, toolName: c.Function.Name, toolArgs: c.Function.Arguments,
 			})
-			toolCtx = context.WithValue(toolCtx, runReadCacheContextKey{}, readCache)
+			toolCtx = context.WithValue(toolCtx, sessionReadCacheContextKey{}, readCache)
 			if hasValidationPlan {
 				toolCtx = context.WithValue(toolCtx, batchValidationPathsContextKey{}, plannedValidationPaths)
 			}
@@ -2248,7 +2257,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 				setConflictOutcome(i, call, conflictErr)
 				continue
 			}
-			if isOrderedFileMutationTool(call.Function.Name) {
+			if isOrderedFileMutationTool(call.Function.Name) || isDeferredSerialTool(call.Function.Name) {
 				continue
 			}
 			wg.Add(1)
@@ -2271,6 +2280,16 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			}
 			planned, hasPlan := validationPlan[i]
 			executeCall(i, call, planned, hasPlan)
+		}
+
+		// Deferred tail: `wait` runs after every other call in the batch, in call
+		// order. It never ends the run, so the model still sees the whole batch —
+		// the pause included — in its next step.
+		for i, call := range toolCalls {
+			if _, conflict := toolConflicts[i]; conflict || !isDeferredSerialTool(call.Function.Name) {
+				continue
+			}
+			executeCall(i, call, nil, false)
 		}
 
 		// Append tool results to the model message history in tool-call
@@ -2498,7 +2517,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 			if err == nil {
 				data = attachValidation(data, a.validateChangedFilesForCall(ctx, cfg, []string{req.Path}))
 				a.invalidateWorkspaceMapCache(cfg)
-				invalidateRunReadCache(ctx)
+				invalidateSessionReadCacheFromCtx(ctx)
 			}
 		}
 	case "create":
@@ -2512,7 +2531,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 			if err == nil {
 				data = attachValidation(data, a.validateChangedFilesForCall(ctx, cfg, []string{req.Path}))
 				a.invalidateWorkspaceMapCache(cfg)
-				invalidateRunReadCache(ctx)
+				invalidateSessionReadCacheFromCtx(ctx)
 			}
 		}
 	case "delete":
@@ -2525,7 +2544,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 			a.withFileOpsLock(func() { data, err = a.deletePathWithConfig(cfg, req) })
 			if err == nil {
 				a.invalidateWorkspaceMapCache(cfg)
-				invalidateRunReadCache(ctx)
+				invalidateSessionReadCacheFromCtx(ctx)
 			}
 		}
 	case "command":
@@ -2534,9 +2553,9 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		if err == nil {
 			// A command can modify files before returning an error, and can run
 			// concurrently with reads in one tool batch. Clear on both sides.
-			invalidateRunReadCache(ctx)
+			invalidateSessionReadCacheFromCtx(ctx)
 			data, err = a.runCommandWithConfig(ctx, cfg, req)
-			invalidateRunReadCache(ctx)
+			invalidateSessionReadCacheFromCtx(ctx)
 			if err == nil {
 				a.invalidateWorkspaceMapCache(cfg)
 			}
@@ -2670,7 +2689,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		var reqBR BatchReadRequest
 		err, argWarnings = decodeJSON(&reqBR)
 		if err == nil {
-			if cache, ok := ctx.Value(runReadCacheContextKey{}).(*runReadCache); ok {
+			if cache, ok := ctx.Value(sessionReadCacheContextKey{}).(*sessionReadCache); ok {
 				data, err = cache.read(a, cfg, reqBR)
 			} else {
 				data, err = a.batchReadFilesWithConfig(cfg, reqBR)
@@ -2718,11 +2737,11 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 				defer a.releaseSubagentSlot()
 				subCtx, cancel := context.WithCancel(ctx)
 				// Sub-agents build a fresh model context and never saw the parent
-				// run's read content, so sharing the parent's read cache would
+				// session's read content, so sharing that session's read cache would
 				// hand them a "content already returned" receipt for content they
-				// never received. Give each sub-agent a fresh cache so dedup only
+				// never received. Give each sub-agent a private cache so dedup only
 				// applies within its own reads.
-				subCtx = context.WithValue(subCtx, runReadCacheContextKey{}, newRunReadCache())
+				subCtx = context.WithValue(subCtx, sessionReadCacheContextKey{}, newSessionReadCache())
 				defer cancel()
 				res, delegateErr := a.executeDelegate(subCtx, cfg, sessionID, adReq)
 				if delegateErr != nil {

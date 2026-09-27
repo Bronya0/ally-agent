@@ -5034,6 +5034,12 @@ code, pre {
   flex-shrink: 0;
 }
 
+/* 缓存命中标记：缀在 chip 后，与 chip 同色，不加 "·" 分隔符（间隔由 gap 提供） */
+.read-group-cached {
+  color: var(--ally-text-faint);
+  flex-shrink: 0;
+}
+
 .read-group-entry.error .read-group-path,
 .read-group-entry.error .read-group-chip {
   color: var(--ally-danger-pale);

@@ -9,7 +9,8 @@ package app
 
 // Section 11: Tool batch policy (was batch_policy.go)
 // App-owned tool-batch conflict detection: same-path mutation barriers, the
-// ask/wait singleton rule, and semantic dedup of equivalent tool calls.
+// ask/suggest exclusive-barrier rule, the deferred tail phase (`wait`), and
+// semantic dedup of equivalent tool calls.
 
 import (
 	"encoding/json"
@@ -21,19 +22,58 @@ import (
 	openai "github.com/sashabaranov/go-openai"
 )
 
-// isOrderedFileMutationTool reports whether name names a tool that mutates files
-// and must therefore run in the ordered phase. The name is normalized here
-// instead of at each call site: the caller passes what the model or a relay
-// produced (`Edit`), while executeTool normalizes at its own boundary, so a raw
-// variant used to be classified as a non-mutating tool and silently lost both
-// write ordering and the ask/wait/suggest barrier.
-func isOrderedFileMutationTool(name string) bool {
-	switch normalizeToolName(name) {
-	case "edit", "create", "delete", "remote_edit", "remote_create_file", "remote_delete_path":
-		return true
-	default:
-		return false
+// toolBatchPhase says when a tool runs inside one model response's batch. A tool
+// whose meaning depends on the rest of the batch is declared here instead of
+// racing it in the concurrent pool.
+type toolBatchPhase int
+
+const (
+	// batchPhaseParallel (the default for anything missing from the table) runs
+	// in the concurrent pool with its peers.
+	batchPhaseParallel toolBatchPhase = iota
+	// batchPhaseOrderedMutation: file writes — serial in tool-call order, with
+	// the directory-level validation pass afterwards.
+	batchPhaseOrderedMutation
+	// batchPhaseDeferredSerial: runs after both phases above, serial in tool-call
+	// order. `wait` is the only member today: a pause is a sequencing detail,
+	// not a reason to discard the rest of the batch (that is what the exclusive
+	// barriers in detectToolBatchConflicts do), and its result still reaches the
+	// model because a pause never ends the run.
+	batchPhaseDeferredSerial
+)
+
+// toolBatchPhases is the single declaration of the tools that do NOT run in the
+// default parallel phase. Adding a deferred or ordered tool is one line here:
+// both agent loops (runChat and executeSubagent) classify every call through
+// toolBatchPhaseFor, so no call site needs to know the new name.
+var toolBatchPhases = map[string]toolBatchPhase{
+	"edit":               batchPhaseOrderedMutation,
+	"create":             batchPhaseOrderedMutation,
+	"delete":             batchPhaseOrderedMutation,
+	"remote_edit":        batchPhaseOrderedMutation,
+	"remote_create_file": batchPhaseOrderedMutation,
+	"remote_delete_path": batchPhaseOrderedMutation,
+	"wait":               batchPhaseDeferredSerial,
+}
+
+// toolBatchPhaseFor classifies a tool name. The name is normalized here instead
+// of at each call site: the caller passes what the model or a relay produced
+// (`Edit`), while executeTool normalizes at its own boundary, so a raw variant
+// used to be classified as a non-mutating tool and silently lost both write
+// ordering and the ask/suggest barrier.
+func toolBatchPhaseFor(name string) toolBatchPhase {
+	if phase, ok := toolBatchPhases[normalizeToolName(name)]; ok {
+		return phase
 	}
+	return batchPhaseParallel
+}
+
+func isOrderedFileMutationTool(name string) bool {
+	return toolBatchPhaseFor(name) == batchPhaseOrderedMutation
+}
+
+func isDeferredSerialTool(name string) bool {
+	return toolBatchPhaseFor(name) == batchPhaseDeferredSerial
 }
 
 func detectWriteBatchConflicts(cfg ConfigState, calls []openai.ToolCall) map[int]error {
@@ -69,15 +109,18 @@ func detectToolBatchConflicts(cfg ConfigState, calls []openai.ToolCall) map[int]
 	if len(calls) <= 1 {
 		return conflicts
 	}
-	barriers := []struct {
+	// ask and suggest own their batch: ask parks the run on a human answer and
+	// suggest ends the run outright, so neither may share a response with calls
+	// whose results the model has not seen yet. `wait` is deliberately absent — it
+	// is deferred instead of rejected (see isDeferredSerialTool).
+	exclusiveBarriers := []struct {
 		name string
 		code string
 	}{
 		{name: "ask", code: "E_ASK_BATCH_CONFLICT"},
-		{name: "wait", code: "E_WAIT_BATCH_CONFLICT"},
 		{name: "suggest", code: "E_SUGGEST_BATCH_CONFLICT"},
 	}
-	for _, barrier := range barriers {
+	for _, barrier := range exclusiveBarriers {
 		found := false
 		for _, call := range calls {
 			if normalizeToolName(call.Function.Name) == barrier.name {

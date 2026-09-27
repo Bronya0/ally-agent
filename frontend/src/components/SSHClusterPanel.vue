@@ -122,12 +122,14 @@ Public License v3. See the LICENSE file for details.
     </div>
 
     <!-- Add / Edit Dialog -->
+    <!-- mask-closable=false：这是表单弹窗，点遮罩就把填了一半的内容丢掉，
+         与 MCP / 模型 / 任务中心几个表单弹窗保持一致（ESC 仍可关闭）。 -->
     <n-modal
       :show="editorVisible"
       preset="card"
-      class="ssh-editor-modal"
       :title="editorTitle"
       style="width: min(560px, 90vw)"
+      :mask-closable="false"
       @update:show="(v) => editorVisible = v"
     >
       <div class="ssh-editor-form">

@@ -88,3 +88,7 @@
 [key-not-pointer] 2026-09-27 输入框实例 key 只绑 Tab，别绑会被后台改写的 sessionId；改了 key 就重建 DOM。@App.vue
 [vfor-inline-handler] 2026-09-28 v-for 内联 handler 每次新引用→未声明 emits 的组件被重渲染，受控值回写冲掉输入法组合。@App.vue
 [tab-link-writer] 2026-09-28 tab.sessionId 只经 repointTabSession 写：switch 不搬草稿，repair 搬。@App.vue
+[form-modal-mask] 2026-09-27 表单弹窗必须 :mask-closable="false"：点遮罩关闭会丢半填内容。@frontend/src/components
+[modal-scoped-css] 2026-09-27 preset=card 的 n-modal 卡片拿不到 scoped data-v，宽度只能内联。@SkillsPanel.vue
+[read-meta-passthrough] 2026-09-28 read 条目元数据须三处透传：适配器→组卡→卡片，漏一处静默不显示。@useToolEvents.mjs
+[read-cache-scope] 2026-09-28 读缓存按会话共享：凡改写历史的路径（压缩/删回合/磁盘重载）必须同步失效。@orch_read.go

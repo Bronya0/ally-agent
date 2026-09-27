@@ -142,7 +142,7 @@ Public License v3. See the LICENSE file for details.
     </div>
   </n-modal>
 
-  <n-modal v-model:show="logVisible" preset="card" :title="logTitle" class="task-log-modal" :style="{ width: 'min(960px, 92vw)' }">
+  <n-modal v-model:show="logVisible" preset="card" :title="logTitle" :style="{ width: 'min(960px, 92vw)' }">
     <div class="log-toolbar">
       <span>{{ logMeta }}</span>
       <span v-if="logRenderNote" class="log-note">{{ logRenderNote }}</span>

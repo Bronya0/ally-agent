@@ -80,7 +80,6 @@ Public License v3. See the LICENSE file for details.
       :show="modelEditorVisible"
       preset="card"
       :title="modelEditorIndex >= 0 ? t('settings.modelEdit') : t('settings.modelAdd')"
-      class="model-form-modal"
       :style="modelFormModalStyle"
       :mask-closable="false"
       @update:show="(v) => { if (!v) cancelModelDraft(); }"
@@ -1116,10 +1115,9 @@ watch(
   width: 100%;
 }
 
-.model-form-modal {
-  width: 580px;
-  max-width: calc(100vw - 48px);
-}
+/* 弹窗宽度由 modelFormModalStyle 内联给到卡片根：preset=card 会把 $attrs 的
+   class/style 落到 n-card 上，而 scoped 的 data-v 只加在往外的 .n-modal-container
+   上，命中不了卡片——别再写 .model-form-modal，那是看着生效的重复定义。 */
 
 .model-format-hint {
   margin-top: 4px;
@@ -1128,11 +1126,5 @@ watch(
 .provider-doc-button {
   margin-left: 8px;
   vertical-align: baseline;
-}
-
-@media (max-width: 640px) {
-  .model-form-modal {
-    max-width: calc(100vw - 24px);
-  }
 }
 </style>

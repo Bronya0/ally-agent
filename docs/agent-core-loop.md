@@ -141,12 +141,14 @@ toolSem := make(chan struct{}, 4)                          // 并发上限 4
 toolConflicts := detectToolBatchConflicts(cfg, toolCalls)  // 同路径多次写：只执行最早一个
 // 第一遍：非文件变更工具并发执行，每个完成即刻 emit tool:result / tool:error
 // 第二遍：文件变更工具按调用顺序串行执行
+// 第三遍：延后型工具（wait）串行执行，排在整批最后
 // 最后：按 tool-call 顺序把结果 append 成 role=tool 消息
 ```
 
 刻意的取舍：
 
 - **文件写必须串行且有序**：`isOrderedFileMutationTool`（`orch_batch_policy.go:24`，覆盖 `edit` / `create` / `delete` / `remote_edit` / `remote_create_file` / `remote_delete_path`）是唯一判定点；同批次对同一路径的第二个写请求判 `E_WRITE_BATCH_CONFLICT` 跳过，让模型等结果后重发。
+- **`wait` 延后执行，不是独占**：`toolBatchPhases` 表（`orch_batch_policy.go`）是唯一判定点，`isOrderedFileMutationTool` / `isDeferredSerialTool` 都从它派生（主循环与子代理循环共用）；与别的调用同批时它们照常执行，`wait` 排到批次末尾（含文件变更之后）串行跑完。它不结束 run，所以模型下一步仍能看到整批结果。对比：`ask` 停住等人回答、`suggest` 成功即结束 run，这两个仍是整批拒绝的独占型工具。
 - **结果回填顺序与执行顺序解耦**：emit 完成即发（前端用 `runId:toolBatchId:toolCallIndex` 定位卡片），但塞回 `messages` 严格按调用顺序，保持上下文确定。
 - **截断参数不执行**（`orch_edit.go:308` + `app.go:2316`）：流中断产生的半截 JSON 被替换为显式截断标记（`toolcall.RepairTruncatedArguments`），provider 不会因非法 JSON 回 400，执行器返回 `E_TRUNCATED_ARGS` 让模型重发。
 - **本批读到的图片再注入一条 user 消息**（`app.go:2176`），把 base64 图塞进多模态上下文。

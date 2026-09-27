@@ -36,6 +36,8 @@ Public License v3. See the LICENSE file for details.
         <span class="tool-verb read-grep-entry-verb">{{ entry.verb }}</span>
         <span class="read-group-path" :title="entry.title">{{ entry.title || $t('common.untitled') }}</span>
         <span v-if="entry.displayChip" class="read-group-chip">{{ entry.displayChip }}</span>
+        <!-- 缓存命中（同一次 run 内同一文件同范围重复读取）：不加分隔符，靠 flex gap 隔开 -->
+        <span v-if="entry.reused" class="read-group-cached">cached</span>
       </div>
     </div>
   </div>
@@ -120,7 +122,7 @@ const statsParts = computed(() => {
 const allEntries = computed(() => {
   const entries = [];
   for (const e of props.msg.readEntries || []) {
-    entries.push({ verb: 'Read', title: e.title, displayChip: childChip(e), status: e.status, seq: e.seq });
+    entries.push({ verb: 'Read', title: e.title, displayChip: childChip(e), reused: !!e.reused, status: e.status, seq: e.seq });
   }
   for (const e of props.msg.grepItems || []) {
     entries.push({ verb: 'Grep', title: e.title, displayChip: e.chip, status: e.status, extraClass: 'grep-entry', seq: e.seq });

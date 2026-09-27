@@ -380,7 +380,11 @@ Public License v3. See the LICENSE file for details.
                  inline sibling of the settings page; v-show keeps the list
                  across mode switches. -->
             <div v-show="skillsActive" class="settings-page-container">
-              <SkillsPanel :show="skillsActive" @skills-changed="onSkillsChanged" />
+              <SkillsPanel
+                :show="skillsActive"
+                :project-root="config.workspace || ''"
+                @skills-changed="onSkillsChanged"
+              />
             </div>
 
             <!-- MCP page (extracted from Settings onto the mode rail): inline
@@ -2846,7 +2850,7 @@ function displayMessagesForSession(session) {
         } else if ((entry.name === 'read' || entry.name === 'batch_read') && entry.batchEntries && entry.batchEntries.length > 0) {
           for (const be of entry.batchEntries) {
             const entryStatus = be.status || entry.status;
-            group.readEntries.push({ title: be.title, chip: be.chip, lineCount: be.lineCount || 0, totalLines: be.totalLines || be.lineCount || 0, startLine: be.startLine || 1, endLine: be.endLine || be.totalLines || 0, truncated: !!be.truncated, body: '', status: entryStatus, expanded: false, seq: seq++ });
+            group.readEntries.push({ title: be.title, chip: be.chip, lineCount: be.lineCount || 0, totalLines: be.totalLines || be.lineCount || 0, startLine: be.startLine || 1, endLine: be.endLine || be.totalLines || 0, truncated: !!be.truncated, reused: !!be.reused, body: '', status: entryStatus, expanded: false, seq: seq++ });
           }
           group.readCount++;
         } else {

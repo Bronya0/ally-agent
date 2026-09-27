@@ -186,7 +186,7 @@ func chatToolsUncached() []openai.Tool {
 				map[string]any{"properties": map[string]any{"action": map[string]any{"const": "list"}}},
 			},
 		}),
-		functionTool("wait", "Pause the current agent run for a short, cancellable delay (1-3600 seconds) with a reason. This must be the only tool call in that model response: Ally rejects the whole batch (E_WAIT_BATCH_CONFLICT) when anything else rides along.", map[string]any{
+		functionTool("wait", "Pause the current agent run for a short, cancellable delay (1-3600 seconds) with a reason. Prefer it as the only call in that response; when it rides along with other calls, Ally runs it last, once the rest of the batch (file mutations included) has finished, and it never ends the run.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"seconds": map[string]any{"type": "integer", "minimum": 1, "maximum": MaxWaitSeconds, "description": "Delay in whole seconds, from 1 to 3600."},

@@ -878,6 +878,12 @@ func (a *App) saveHistory(sessionID string, messages []openai.ChatCompletionMess
 	// would make the model re-send the mask for the next host instead of the real
 	// credential.
 	inMemory := sanitizeHistoryMessages(messages)
+	if countToolMessages(inMemory) < countToolMessages(messages) {
+		// The repair pass dropped tool results (dangling or duplicated calls), so
+		// the payloads they carried left the model's history: the read cache must
+		// stop telling the model it already has them.
+		a.invalidateSessionReadCache(sessionID)
+	}
 	// Resolve the session's provider measurement against the stored conversation
 	// so a footer poll between runs reports the measured request size instead of
 	// a fresh text estimate. No lock is held here: the anchor lookup takes a.mu.
@@ -900,6 +906,19 @@ func (a *App) saveHistory(sessionID string, messages []openai.ChatCompletionMess
 	if err := os.Remove(paths[1]); err != nil && !errors.Is(err, os.ErrNotExist) {
 		log.Printf("saveHistory: failed to remove legacy %s: %v", paths[1], err)
 	}
+}
+
+// countToolMessages counts role=tool messages: they are the only carriers of read
+// payloads, so a decrease across a history rewrite means content the model could
+// previously see is gone.
+func countToolMessages(messages []openai.ChatCompletionMessage) int {
+	n := 0
+	for i := range messages {
+		if messages[i].Role == openai.ChatMessageRoleTool {
+			n++
+		}
+	}
+	return n
 }
 
 func (a *App) restoreSavedHistoryBreakdown(sessionID string) {
@@ -999,6 +1018,12 @@ func (a *App) loadHistoryLocked(sessionID string) []openai.ChatCompletionMessage
 		return nil
 	}
 	messages = sanitizeHistoryMessages(messages)
+	// The disk profile replaced every tool result with a placeholder, so the
+	// model no longer carries the payloads this session's read cache remembers:
+	// dropping them keeps a later read from being answered with "you already
+	// have it" for content the model cannot see. (a.mu is held here, hence the
+	// locked variant.)
+	a.invalidateSessionReadCacheLocked(sessionID)
 	a.histories[sessionID] = cloneChatMessages(messages)
 	return messages
 }
@@ -1111,6 +1136,9 @@ func (a *App) TruncateSessionHistory(req TruncateSessionHistoryRequest) (int, er
 	// turns that no longer exist.
 	a.clearContextAnchor(sessionID)
 	a.saveHistory(sessionID, truncated)
+	// The dropped turns may have been the model's only copy of a read payload;
+	// content that is no longer in the history has to be sent again.
+	a.invalidateSessionReadCache(sessionID)
 	return len(truncated), nil
 }
 

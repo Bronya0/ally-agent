@@ -145,6 +145,7 @@ export function useToolEvents(ctx) {
             endLine: f.endLine || f.totalLines || 0,
             totalLines: f.totalLines || 0,
             truncated: !!f.truncated,
+            reused: !!f.reused,
             lineCount: (f.endLine && f.startLine) ? (f.endLine - f.startLine + 1) : (f.totalLines || 0),
             chip: f.error ? `failed: ${f.error}` : formatReadRangeChip(f.startLine || 1, f.endLine || f.totalLines || 0, f.totalLines || 0, !!f.truncated),
             status: f.error ? 'error' : 'success',

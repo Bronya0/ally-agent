@@ -31,6 +31,7 @@ Public License v3. See the LICENSE file for details.
           <template #prefix><SearchOutlined class="panel-search-icon" /></template>
         </n-input>
         <n-button size="small" secondary :loading="skillsLoading" @click="refreshSkillState">{{ t('common.refresh') }}</n-button>
+        <n-button size="small" type="primary" @click="openSkillEditor">{{ t('app.skills.add') }}</n-button>
       </div>
     </header>
 
@@ -77,24 +78,80 @@ Public License v3. See the LICENSE file for details.
         </div>
       </div>
     </div>
+
+    <!-- 新建技能：元数据进 frontmatter、正文进 SKILL.md，写盘由后端 SaveSkill 收口
+         （名称校验、拒绝重名、清列表缓存）。位置二选一，两个都是技能扫描会读到的根。 -->
+    <n-modal
+      :show="editorVisible"
+      preset="card"
+      :title="t('app.skills.addTitle')"
+      :style="skillFormModalStyle"
+      :mask-closable="false"
+      @update:show="(value) => { if (!value) editorVisible = false; }"
+    >
+      <n-form label-placement="top">
+        <n-form-item :label="t('app.skills.field.location')">
+          <n-radio-group v-model:value="skillDraft.target" :disabled="savingSkill">
+            <n-radio-button value="user">{{ t('app.skills.target.user') }}</n-radio-button>
+            <n-radio-button value="project" :disabled="!projectRoot">{{ t('app.skills.target.project') }}</n-radio-button>
+          </n-radio-group>
+        </n-form-item>
+        <div class="skill-target-hint">{{ skillTargetHint }}</div>
+        <n-form-item :label="t('app.skills.field.name')">
+          <n-input v-model:value="skillDraft.name" placeholder="my-skill" :disabled="savingSkill" />
+        </n-form-item>
+        <n-form-item :label="t('app.skills.field.description')">
+          <n-input
+            v-model:value="skillDraft.description"
+            type="textarea"
+            :autosize="{ minRows: 2, maxRows: 4 }"
+            :disabled="savingSkill"
+          />
+        </n-form-item>
+        <n-form-item :label="t('app.skills.field.whenToUse')">
+          <n-input v-model:value="skillDraft.whenToUse" :disabled="savingSkill" />
+        </n-form-item>
+        <n-form-item :label="t('app.skills.field.content')">
+          <n-input
+            v-model:value="skillDraft.content"
+            type="textarea"
+            :autosize="{ minRows: 10, maxRows: 20 }"
+            :placeholder="t('app.skills.field.contentPlaceholder')"
+            :disabled="savingSkill"
+          />
+        </n-form-item>
+      </n-form>
+      <template #footer>
+        <n-space justify="end">
+          <n-button :disabled="savingSkill" @click="editorVisible = false">{{ t('common.cancel') }}</n-button>
+          <n-button type="primary" :loading="savingSkill" @click="saveSkill">{{ t('common.save') }}</n-button>
+        </n-space>
+      </template>
+    </n-modal>
   </div>
 </template>
 
 <script setup>
-import { computed, ref, watch } from 'vue';
+import { computed, reactive, ref, watch } from 'vue';
 import { useMessage } from 'naive-ui';
 import { SearchOutlined } from '@vicons/antd';
 import { t } from '../i18n.mjs';
 import { isSkillActive } from '../utils/skills.mjs';
 import {
-  ListSkills, ActivateSkill, DeactivateSkill, GetActiveSkills, OpenPathInFileManager,
+  ListSkills, ActivateSkill, DeactivateSkill, GetActiveSkills, OpenPathInFileManager, SaveSkill,
 } from '../../bindings/ally-dev/internal/app/app';
 
 // Inline skills page (App.vue mode === 'skills'): owns its whole state — the
 // discovered skill list, the active set, and per-skill toggle busy flags —
 // and reports every change back to App.vue through `skills-changed` so the
 // welcome table / slash-command metadata / config.disabledSkills stay fresh.
-const props = defineProps({ show: { type: Boolean, default: false } });
+const props = defineProps({
+  show: { type: Boolean, default: false },
+  // 项目级技能写进“持久化工作区”，也就是后端 workspaceRoot(cfg) 解析出的同一个目录
+  // （技能扫描读的就是它），所以这里的提示值不能换成当前 Tab 的路径——临时 /
+  // 知识库 Tab 的路径与它不同。
+  projectRoot: { type: String, default: '' },
+});
 const emit = defineEmits(['skills-changed']);
 const message = useMessage();
 
@@ -215,6 +272,89 @@ async function toggleSkill(skill, active) {
     }));
   } finally {
     skillToggleInFlight.value = '';
+  }
+}
+
+// ── 新建技能 ────────────────────────────────────────────────
+const editorVisible = ref(false);
+const savingSkill = ref(false);
+const skillDraft = reactive({ target: 'user', name: '', description: '', whenToUse: '', content: '' });
+// 与后端 validateSkillName 同一规则：首字符必须是字母/数字，其后只允许字母/数字/点/
+// 短横线/下划线，且不能以点结尾。前端先拦一道给即时反馈，后端仍按同规则硬校验。
+const SKILL_NAME_PATTERN = /^[\p{L}\p{N}][\p{L}\p{N}._-]*$/u;
+const SKILL_NAME_MAX_RUNES = 64;
+
+function isValidSkillName(name) {
+  // 按码点计数，与后端的 rune 计数一致（String.length 会把中文/emoji 算成 2）。
+  return [...name].length <= SKILL_NAME_MAX_RUNES
+    && SKILL_NAME_PATTERN.test(name)
+    && !name.endsWith('.');
+}
+
+const skillFormModalStyle = {
+  width: 'min(760px, calc(100vw - 48px))',
+  maxWidth: 'calc(100vw - 48px)',
+};
+
+const skillTargetHint = computed(() => {
+  if (skillDraft.target !== 'project') return t('app.skills.target.userHint');
+  if (!props.projectRoot) return t('app.skills.target.projectUnavailable');
+  return t('app.skills.target.projectHint', { path: joinDisplayPath(props.projectRoot, '.agents/skills') });
+});
+
+// 展示用拼接：Windows 根目录带反斜杠，用根目录自己的分隔符，别把路径显示成
+// "C:\proj/.agents/skills"。
+function joinDisplayPath(root, sub) {
+  const text = String(root || '');
+  const sep = text.includes('\\') ? '\\' : '/';
+  return `${text.replace(/[\\/]+$/, '')}${sep}${sub}`;
+}
+
+function openSkillEditor() {
+  skillDraft.target = 'user';
+  skillDraft.name = '';
+  skillDraft.description = '';
+  skillDraft.whenToUse = '';
+  skillDraft.content = '';
+  editorVisible.value = true;
+}
+
+async function saveSkill() {
+  const name = skillDraft.name.trim();
+  if (!name) {
+    message.warning(t('app.skills.nameRequired'));
+    return;
+  }
+  if (!isValidSkillName(name)) {
+    message.warning(t('app.skills.nameInvalid'));
+    return;
+  }
+  if (!skillDraft.description.trim()) {
+    message.warning(t('app.skills.descriptionRequired'));
+    return;
+  }
+  savingSkill.value = true;
+  try {
+    const path = await SaveSkill({
+      target: skillDraft.target,
+      name,
+      description: skillDraft.description,
+      whenToUse: skillDraft.whenToUse,
+      content: skillDraft.content,
+    });
+    message.success(t('app.skills.saved', { path }));
+    editorVisible.value = false;
+    // 清搜索再刷新：搜索词与来源 tab 都会过滤列表，留着的话刚建好的技能可能被
+    // 挡在视野外，看起来像没保存成功。
+    skillSearch.value = '';
+    await refreshSkillState();
+    // 让新技能所在来源成为当前 tab，否则用户可能停在别的来源上，看不到刚建好的技能。
+    activeSourceTab.value = skillDraft.target;
+    emit('skills-changed');
+  } catch (err) {
+    message.error(t('app.skills.saveFailed', { error: err }));
+  } finally {
+    savingSkill.value = false;
   }
 }
 
@@ -380,5 +520,16 @@ watch(
 .skill-meta.clickable:hover {
   color: var(--ally-success-deep);
   text-decoration: underline;
+}
+
+/* 弹窗宽度由 skillFormModalStyle 内联给到卡片根（preset=card 会把 $attrs 的
+   class/style 落到 n-card 上）：scoped 的 data-v 只会加到直接子组件的根元素
+   （.n-modal-container），命中不了更里面的卡片，所以不要再写 .skill-form-modal。 */
+
+.skill-target-hint {
+  margin: -8px 0 12px;
+  font-size: 12px;
+  color: var(--ally-text-muted);
+  word-break: break-all;
 }
 </style>

@@ -413,7 +413,7 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 				setSubConflictOutcome(i, call, conflictErr)
 				continue
 			}
-			if isOrderedFileMutationTool(call.Function.Name) {
+			if isOrderedFileMutationTool(call.Function.Name) || isDeferredSerialTool(call.Function.Name) {
 				continue
 			}
 			subWg.Add(1)
@@ -433,6 +433,16 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 			}
 			planned, hasPlan := validationPlan[i]
 			executeSubCall(i, call, planned, hasPlan)
+		}
+
+		// Deferred tail, same contract as the main loop: a tool declared
+		// batchPhaseDeferredSerial runs once the rest of the sub-agent's batch is
+		// done, so it cannot race the calls it was asked to follow.
+		for i, call := range assistantMessage.ToolCalls {
+			if _, conflict := toolConflicts[i]; conflict || !isDeferredSerialTool(call.Function.Name) {
+				continue
+			}
+			executeSubCall(i, call, nil, false)
 		}
 
 		// Process outcomes in order. File tracking and the model-facing tool
@@ -612,7 +622,7 @@ func subagentSystemPrompt(role string) string {
 		"# Output\n\n" +
 		"- Be concise. The parent agent only sees your final summary.\n" +
 		"- When done, write a summary of what you did, which files you changed, and any verification results.\n" +
-		"- Use `wait` only for a concrete short delay after asynchronous work has started. It must be the only tool call in that response.\n" +
+		"- Use `wait` only for a concrete short delay after asynchronous work has started. When it shares a response with other calls, it runs last, after they finished.\n" +
 		"- For remote work, every remote tool call must include an explicit target such as host:/absolute/workspace.\n" +
 		"- " + platformNote + ". Use command syntax appropriate for this platform."
 }

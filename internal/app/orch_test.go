@@ -441,22 +441,39 @@ func TestDetectWriteBatchConflictsNormalizesSamePath(t *testing.T) {
 	}
 }
 
-func TestDetectToolBatchConflictsRequiresWaitToRunAlone(t *testing.T) {
+// 表里的名字必须是真实注册的内置工具：拼错一个字母就会静默退回并发池
+// （等于没生效），而这类错不会在别处报出来。
+func TestToolBatchPhasesOnlyNamesRegisteredTools(t *testing.T) {
+	registry := builtinToolNames(t)
+	for name := range toolBatchPhases {
+		if !registry[name] {
+			t.Fatalf("toolBatchPhases declares %q, which is not a registered builtin tool", name)
+		}
+	}
+}
+
+// wait 不再是 barrier：混批时它只是被推迟到批次末尾（runChat / executeSubagent
+// 的 deferred tail），因此同批任何调用都不该因它被拒。
+func TestDetectToolBatchConflictsDefersWaitInsteadOfRejectingTheBatch(t *testing.T) {
 	calls := []openai.ToolCall{
 		{Function: openai.FunctionCall{Name: "wait", Arguments: `{"seconds":1,"reason":"service restart"}`}},
 		{Function: openai.FunctionCall{Name: "http_request", Arguments: `{"url":"http://localhost:8080/health"}`}},
 	}
-	conflicts := detectToolBatchConflicts(ConfigState{}, calls)
-	if len(conflicts) != len(calls) {
-		t.Fatalf("expected every call to be rejected, got %#v", conflicts)
+	if conflicts := detectToolBatchConflicts(ConfigState{}, calls); len(conflicts) != 0 {
+		t.Fatalf("a batch carrying wait must not be rejected, got %#v", conflicts)
 	}
-	for i := range calls {
-		if toolErrorCode(conflicts[i]) != "E_WAIT_BATCH_CONFLICT" {
-			t.Fatalf("expected E_WAIT_BATCH_CONFLICT for call %d, got %v", i, conflicts[i])
+	// 判定本身按归一化后的工具名：中转把 wait 写成 Wait 时同样要排到末尾，
+	// 否则它会落回并发池，与它等待的那批调用抢跑。
+	if !isDeferredSerialTool("wait") || !isDeferredSerialTool("Wait") {
+		t.Fatal("wait must be classified as the deferred tail tool (name normalization included)")
+	}
+	if !isOrderedFileMutationTool("Edit") || isOrderedFileMutationTool("wait") {
+		t.Fatal("the phase table must classify ordered mutations and deferred tools independently")
+	}
+	for _, name := range []string{"ask", "suggest", "http_request", "read", "command"} {
+		if toolBatchPhaseFor(name) != batchPhaseParallel {
+			t.Fatalf("%s must stay in the default parallel phase", name)
 		}
-	}
-	if conflicts := detectToolBatchConflicts(ConfigState{}, calls[:1]); len(conflicts) != 0 {
-		t.Fatalf("single wait call should be allowed, got %#v", conflicts)
 	}
 }
 
@@ -2647,12 +2664,12 @@ func writeToolTestFile(t *testing.T, root, rel, content string) {
 	}
 }
 
-func TestRunReadCacheReturnsMetadataWithoutDuplicateContent(t *testing.T) {
+func TestSessionReadCacheReturnsMetadataWithoutDuplicateContent(t *testing.T) {
 	dir := t.TempDir()
 	writeToolTestFile(t, dir, "sample.txt", "one\ntwo\n")
 	app := NewApp()
-	cache := newRunReadCache()
-	ctx := context.WithValue(context.Background(), runReadCacheContextKey{}, cache)
+	cache := newSessionReadCache()
+	ctx := context.WithValue(context.Background(), sessionReadCacheContextKey{}, cache)
 	args := []byte(`{"files":[{"path":"sample.txt"}]}`)
 
 	first := app.executeTool(ctx, ConfigState{Workspace: dir}, "session-1", "read", args)
@@ -2733,7 +2750,7 @@ func TestRunReadCacheReturnsMetadataWithoutDuplicateContent(t *testing.T) {
 	}
 
 	// Invalidation clears the entire cache.
-	invalidateRunReadCache(ctx)
+	invalidateSessionReadCacheFromCtx(ctx)
 	if len(cache.entries) != 0 {
 		t.Fatalf("cache entries after invalidation = %d, want 0", len(cache.entries))
 	}
@@ -2744,19 +2761,19 @@ func TestRunReadCacheReturnsMetadataWithoutDuplicateContent(t *testing.T) {
 	}
 }
 
-func TestRunReadCacheEvictsEntriesUnderPressure(t *testing.T) {
-	cache := newRunReadCache()
+func TestSessionReadCacheEvictsEntriesUnderPressure(t *testing.T) {
+	cache := newSessionReadCache()
 	// Fill past the entry budget; every insertion is a distinct key.
-	for i := 0; i < runReadCacheMaxEntries+8; i++ {
+	for i := 0; i < sessionReadCacheMaxEntries+8; i++ {
 		cache.put(fmt.Sprintf("key-%d", i), "hash-val")
 	}
-	if got := len(cache.entries); got > runReadCacheMaxEntries {
-		t.Fatalf("cache entries = %d, want <= %d", got, runReadCacheMaxEntries)
+	if got := len(cache.entries); got > sessionReadCacheMaxEntries {
+		t.Fatalf("cache entries = %d, want <= %d", got, sessionReadCacheMaxEntries)
 	}
 	// Re-storing an existing key must not grow the cache.
 	cache.put("key-0", "hash-val-updated")
-	if got := len(cache.entries); got > runReadCacheMaxEntries {
-		t.Fatalf("cache entries after re-store = %d, want <= %d", got, runReadCacheMaxEntries)
+	if got := len(cache.entries); got > sessionReadCacheMaxEntries {
+		t.Fatalf("cache entries after re-store = %d, want <= %d", got, sessionReadCacheMaxEntries)
 	}
 }
 
@@ -2774,8 +2791,8 @@ func TestBatchReadMixedWithMissingFilesDoesNotCorruptCacheKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cache := newRunReadCache()
-	ctx := context.WithValue(context.Background(), runReadCacheContextKey{}, cache)
+	cache := newSessionReadCache()
+	ctx := context.WithValue(context.Background(), sessionReadCacheContextKey{}, cache)
 
 	// Batch read: a.txt (1..1), missing.txt (2..2), b.txt (3..3)
 	args := []byte(`{"files":[` +

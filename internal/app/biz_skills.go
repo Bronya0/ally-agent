@@ -21,8 +21,15 @@ import (
 
 const skillListCacheTTL = 30 * time.Second
 
+// agentsSkillsSubdir is the Ally-native skill directory ("<root>/.agents/skills").
+// It is listed first in every scan list — so a name conflict resolves in its
+// favour — and it is the only root SaveSkill writes to; .claude/skills stays
+// read-only compatibility. Defining it once keeps "what is scanned" and "what is
+// written" from drifting apart.
+var agentsSkillsSubdir = filepath.Join(".agents", "skills")
+
 var skillScanDirs = []string{
-	filepath.Join(".agents", "skills"),
+	agentsSkillsSubdir,
 	// Agent Skills open standard / Claude Code convention. Scanned last so
 	// the Ally-native .agents/skills path wins on name conflicts.
 	filepath.Join(".claude", "skills"),
@@ -35,7 +42,7 @@ var userSkillScanDirs = []struct {
 	path   string
 	source string
 }{
-	{filepath.Join(".agents", "skills"), "user"},
+	{agentsSkillsSubdir, "user"},
 	{filepath.Join(".claude", "skills"), "user"},
 }
 

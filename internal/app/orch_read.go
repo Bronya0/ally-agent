@@ -69,26 +69,77 @@ type readPreviewResult struct {
 	EmptyRange            bool
 }
 
-// runReadCache avoids sending an identical read payload to the model more than
-// once during a chat run. It caches the hash of what the model actually received
-// for one file range — the returned text plus any injected image data — and omits
-// the payload when a later read of the same range would send exactly the same
-// bytes, while always reporting the freshly read version token.
+// sessionReadCache avoids sending an identical read payload to the model more
+// than once during one session: the run that first read a file range put those
+// bytes into the conversation, so every later read of the same range — in this
+// run or in a later run of the same session — can be answered with "unchanged,
+// you already have it" instead of paying for the payload again. It caches the
+// hash of what the model actually received for one file range — the returned text
+// plus any injected image data — and omits the payload when a later read of the
+// same range would send exactly the same bytes, always reporting the freshly read
+// version token.
 //
 // Correctness rests on that comparison, not on the key: every read still hits
 // disk, so a stale key can only cost a missed de-duplication, never hide changed
-// content. invalidateRunReadCache (a command that may rewrite files, a successful
-// write/edit) is therefore defence in depth — it forces re-delivery, it is not
-// what keeps the model from acting on stale content.
-type runReadCache struct {
+// content. invalidateSessionReadCacheFromCtx (a command that may rewrite files, a
+// successful write/edit) is therefore defence in depth — it forces re-delivery,
+// it is not what keeps the model from acting on stale content.
+//
+// Sharing one cache across a session's runs adds a second requirement: an
+// omission is only honest while the payload is still in the model's own history.
+// Every rewrite that can drop it invalidates the session's cache — compactHistory
+// (the summary replaces the turns), TruncateSessionHistory (the user deletes a
+// turn) and loadHistoryLocked (a history restored from disk keeps only
+// placeholders for tool results). The cache is memory-only, so a restarted
+// process starts empty as well.
+type sessionReadCache struct {
 	mu      sync.Mutex
 	entries map[string]string // key (resolvedPath#range) -> payload SHA-256 hex
 }
 
-const runReadCacheMaxEntries = 64
+const sessionReadCacheMaxEntries = 64
 
-func newRunReadCache() *runReadCache {
-	return &runReadCache{entries: make(map[string]string)}
+func newSessionReadCache() *sessionReadCache {
+	return &sessionReadCache{entries: make(map[string]string)}
+}
+
+// sessionReadCacheFor returns the read cache shared by every run of one session,
+// creating it on first use. A call without a session id gets a private cache:
+// with no conversation there is nothing to check a payload against.
+func (a *App) sessionReadCacheFor(sessionID string) *sessionReadCache {
+	if sessionID == "" {
+		return newSessionReadCache()
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.readCaches == nil {
+		a.readCaches = map[string]*sessionReadCache{}
+	}
+	if cache, ok := a.readCaches[sessionID]; ok {
+		return cache
+	}
+	cache := newSessionReadCache()
+	a.readCaches[sessionID] = cache
+	return cache
+}
+
+// invalidateSessionReadCache drops the payloads cached for one session after its
+// history was rewritten: content the model can no longer see must be sent again.
+func (a *App) invalidateSessionReadCache(sessionID string) {
+	if sessionID == "" {
+		return
+	}
+	a.mu.Lock()
+	a.invalidateSessionReadCacheLocked(sessionID)
+	a.mu.Unlock()
+}
+
+// invalidateSessionReadCacheLocked is the a.mu-holding variant: loadHistoryLocked
+// runs with a.mu held and a.mu is not reentrant.
+func (a *App) invalidateSessionReadCacheLocked(sessionID string) {
+	if cache, ok := a.readCaches[sessionID]; ok && cache != nil {
+		cache.invalidate()
+	}
 }
 
 func fileRangeCacheKey(resolvedPath string, req ReadFileRequest) string {
@@ -114,11 +165,11 @@ func hashText(parts ...string) string {
 // putLocked records one key -> content hash entry, evicting arbitrary entries
 // while the cache is at its entry budget (the cache is a best-effort token
 // saver, so which entry is dropped does not matter). The caller must already
-// hold c.mu: runReadCache.mu is a plain Mutex and NOT reentrant, so putLocked
+// hold c.mu: sessionReadCache.mu is a plain Mutex and NOT reentrant, so putLocked
 // must never be called through the locking put from inside a locked region —
 // that self-deadlocks.
-func (c *runReadCache) putLocked(key string, contentHash string) {
-	for len(c.entries) >= runReadCacheMaxEntries {
+func (c *sessionReadCache) putLocked(key string, contentHash string) {
+	for len(c.entries) >= sessionReadCacheMaxEntries {
 		for k := range c.entries {
 			delete(c.entries, k)
 			break
@@ -128,20 +179,20 @@ func (c *runReadCache) putLocked(key string, contentHash string) {
 }
 
 // put is the locking entry point for callers outside the read path.
-func (c *runReadCache) put(key string, contentHash string) {
+func (c *sessionReadCache) put(key string, contentHash string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.putLocked(key, contentHash)
 }
 
-func (c *runReadCache) invalidate() {
+func (c *sessionReadCache) invalidate() {
 	c.mu.Lock()
 	clear(c.entries)
 	c.mu.Unlock()
 }
 
-func invalidateRunReadCache(ctx context.Context) {
-	if cache, ok := ctx.Value(runReadCacheContextKey{}).(*runReadCache); ok {
+func invalidateSessionReadCacheFromCtx(ctx context.Context) {
+	if cache, ok := ctx.Value(sessionReadCacheContextKey{}).(*sessionReadCache); ok {
 		cache.invalidate()
 	}
 }
@@ -242,7 +293,7 @@ func resolveReadStartLine(startLine, endLine, tailLines int) (int, error) {
 	return -tailLines, nil
 }
 
-func (c *runReadCache) read(a *App, cfg ConfigState, req BatchReadRequest) (*BatchReadResult, error) {
+func (c *sessionReadCache) read(a *App, cfg ConfigState, req BatchReadRequest) (*BatchReadResult, error) {
 	result, err := a.batchReadFilesWithConfig(cfg, req)
 	if err != nil {
 		return nil, err

@@ -147,7 +147,7 @@ type toolResult struct {                       // infra_result.go:19
 
 | 工具 | 模型视图 |
 |---|---|
-| `read` | `<ally-file path version lines total>` 标签块，行号正文零转义；本轮已读过的同一 path/range → 内容换成「已给过你、version 未变、可复用」说明（配合 run 级 read cache，`newRunReadCache`） |
+| `read` | `<ally-file path version lines total>` 标签块，行号正文零转义；本会话已读过的同一 path/range → 内容换成「已给过你、version 未变、可复用」说明（会话级 read cache，`sessionReadCacheFor`：后续 run 也复用；文件被编辑、跑过命令、以及压缩 / 删回合 / 历史从磁盘重载时失效） |
 | `read` 图片 | 内容转为后续 user 消息的图片输入，块里只留 `image="…"` 说明 |
 | `list_files` | `<ally-files count>` 标签块，只发换行分隔的路径（目录带 `/`），比完整 FileEntry 省约 3/4 token |
 | `grep` | `<ally-grep mode matched hits files next-offset>` 头 + `path:line: text` 行（count 模式为 `path: count=N`）；命中行文本按预算裁剪（`capGrepLineTexts`） |
@@ -168,11 +168,11 @@ type toolResult struct {                       // infra_result.go:19
 
 `detectToolBatchConflicts`（`orch_batch_policy.go:67`）在执行前统一裁决：
 
-1. **独占型工具**（`ask` / `wait` / `suggest`）必须独占一批，否则整批全部拒绝（`E_ASK_BATCH_CONFLICT` / `E_WAIT_BATCH_CONFLICT` / `E_SUGGEST_BATCH_CONFLICT`）——这类工具语义上要求模型单线程等待。
+1. **独占型工具**（`ask` / `suggest`）必须独占一批，否则整批全部拒绝（`E_ASK_BATCH_CONFLICT` / `E_SUGGEST_BATCH_CONFLICT`）——`ask` 会把 run 停在等人回答上，`suggest` 成功即结束 run，两者都不能和「结果还没被模型看到」的调用同批。执行阶段（并发 / 文件变更有序 / 延后串行）由 `toolBatchPhases` 表声明，`isOrderedFileMutationTool` 与 `isDeferredSerialTool` 都从它派生，主循环与子代理循环共用同一份分类：加新延后工具只需在表里加一行。
 2. **同路径多写**（`detectWriteBatchConflicts`，`orch_batch_policy.go:39`）：按参数解析写入目标（本地走 edit plan，远端按 `remote:<target>:<path>`），只执行最早一个，其余 `E_WRITE_BATCH_CONFLICT`。
 3. **语义重复调用**：参数 JSON 解析后按 key 排序重序列化做去重键，重复判 `E_DUPLICATE_TOOL_CALL`（字段顺序、空白差异都能识别；刻意不做默认值归一，那需要逐工具知识且会掩盖真实不同意图）。
 
-配合主循环那边（见 `agent-core-loop.md` 第 8 节）：非文件变更工具并发 4 个、文件变更按调用顺序串行、同批目录级验证只跑一次。
+配合主循环那边（见 `agent-core-loop.md` 第 8 节）：非文件变更工具并发 4 个、文件变更按调用顺序串行、`wait` 排到批次末尾串行、同批目录级验证只跑一次。
 
 ## 八、可复用的设计原则
 
