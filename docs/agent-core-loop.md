@@ -114,7 +114,11 @@ go-openai 把 `[DONE]` 与「连接在帧边界被切断」都归一成同一个
 
 ### 6.3 到前端的流式节流
 
-`runStreamDeltaEmitter`（`infra_stream.go:24`）把 content / reasoning 合并为单个 `run:stream` 事件，**64ms 一次**（≈15FPS）；reasoning 只发字符数（`reasoningLen`），正文不回传，减少 Wails IPC 开销。工具参数增量由 `modelToolCallEventGate` 限流（`infra_stream.go:114`），完整参数在 provider 返回后由 `forceEvents` 补齐。
+所有高频事件的节流参数与节流原语收口在 `infra_emit.go`：`eventCadenceTable` 是档位的唯一来源（事件名 + 间隔 + 大载荷门槛），`emitThrottle` 是共用的时间窗原语。没登记的事件就是没有节流，所以新增流式事件必须显式选档——流式文本事件的登记处是 `streamingTextEvents`，正文档与思考桶由它一起生成（`buildEventCadenceTable`）。
+
+流式文本（主对话 `run:stream` 与压缩 `compact:delta`）共用 `textDeltaCoalescer`（`infra_stream.go`）：首个增量立即发出，之后**正文每 64ms、思考每 200ms 各合并一条**——正文与思考是两个独立的桶（正文用事件名当桶名，思考用 `reasoningBucketFor` 的后缀名），长回合里思考往往是事件量的大头，所以它走更宽的窗口；思考只上报字符数（`reasoningLen`），正文不回传，减少 Wails IPC 开销；调 `flush()` 收尾（流结束/出错/取消时必调，否则尾巴留在窗口里）；桶的窗口起点是它上一次真的被发出去的时刻，被另一个桶顺手带走的桶同样从那一刻重新计时。工具参数增量由 `modelToolCallEventGate` 限流，完整参数在 provider 返回后由 `forceEvents` 补齐；命令输出走 `orch_file_ops.go` 的定时采样（只发尾部 16KB）。
+
+合并（攒增量到点发）、采样（定时读当前状态）、收尾（force flush）是三种语义，只共用参数与记账，不共用实现。
 
 ## 7. 回合判定：循环继续还是结束
 

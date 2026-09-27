@@ -371,14 +371,15 @@ Rules:
 	// require thinking.
 	// It streams: this is the longest single request of a compaction and the one
 	// place the user would otherwise watch a frozen timer, so thinking and answer
-	// deltas go straight to the UI, which renders them exactly like a normal reply.
+	// deltas reach the UI, which renders them exactly like a normal reply. 增量走
+	// textDeltaCoalescer（档位见 eventCadenceTable）：首个增量立即到界面，之后
+	// 按窗口合并；这里原先每个增量发一条事件、且带完整思考正文。
+	deltaEmitter := newCompactDeltaEmitter(sessionID, a.emitMap())
 	summary, usage, err := a.streamModelTextWithUsage(ctx, cfg, cfg.Model, compactionMessages, compactionMaxTokens, func(contentDelta, reasoningDelta string) {
-		a.emit("compact:delta", map[string]any{
-			"sessionId": sessionID,
-			"content":   contentDelta,
-			"reasoning": reasoningDelta,
-		})
+		deltaEmitter.add(contentDelta, reasoningDelta)
 	})
+	// 无论成败都要收尾：剩下的增量还在节流窗口里，收尾前不能发 compact:done。
+	deltaEmitter.flush()
 	if err != nil {
 		// The model and endpoint belong in the error: the transport error only
 		// names the URL, which is exactly what the user cannot map back to a

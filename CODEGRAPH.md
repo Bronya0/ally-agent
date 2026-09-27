@@ -10,6 +10,7 @@
 | 模型流式适配、多 key 故障切换 | `internal/app/prov_model.go`（调度/多 key）+ `prov_adapter_*.go`（三协议适配器） |
 | 代理检测 / 代理 HTTP 客户端 | `internal/app/prov_proxy*.go`（含 darwin/scutil/windows 平台探测） |
 | 事件出口（后端 emit） | `internal/app/host_events.go`；前端路由在 `App.vue` `bindRuntimeEvents()` |
+| 高频事件的节流参数与节流原语（合并 / 采样 / 收尾三种语义，节流档位唯一来源 `eventCadenceTable`） | `internal/app/infra_emit.go` + `infra_stream.go`（`textDeltaCoalescer`） |
 | 桌面生命周期、窗口几何、系统对话框 | `internal/app/host_desktop.go` / `host_window_state.go` |
 | http_request / web_fetch 工具（含 SSRF 防护） | `internal/app/orch_http.go` |
 | 文件变更后校验 / 批次内校验规划 | `internal/app/orch_validation.go`（validateChangedFiles / planBatchValidation） |

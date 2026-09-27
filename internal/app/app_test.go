@@ -555,9 +555,10 @@ func TestRunStreamDeltaEmitterBatchesRapidDeltas(t *testing.T) {
 	}
 }
 
-// TestRunStreamDeltaEmitterMergesReasoningAndContent verifies that a single
-// flush emits one run:stream event carrying both fields, halving IPC count
-// versus the previous run:reasoning + run:delta pair.
+// TestRunStreamDeltaEmitterMergesReasoningAndContent verifies the streaming
+// emitter's two buckets: thinking and content each emit on their own window,
+// and a later event can still carry both fields in a single IPC (halving the
+// event count versus separate run:reasoning + run:delta emissions).
 func TestRunStreamDeltaEmitterMergesReasoningAndContent(t *testing.T) {
 	type captured struct {
 		name      string
@@ -578,27 +579,31 @@ func TestRunStreamDeltaEmitterMergesReasoningAndContent(t *testing.T) {
 		got = append(got, c)
 	})
 
-	// First delta flushes immediately (lastEmit.IsZero). Subsequent deltas
-	// accumulate because they're under threshold and within the throttle window.
-	emitter.addContent("a")
+	// The first delta of each part emits immediately (its own window starts
+	// empty); later deltas stay buffered inside their own window.
 	emitter.addReasoning("think")
+	emitter.addContent("a")
+	emitter.addReasoning("more")
 	emitter.addContent("b")
 	emitter.flush()
 
-	if len(got) != 2 {
-		t.Fatalf("expected 2 events (first-byte then merged flush), got %d: %#v", len(got), got)
+	if len(got) != 3 {
+		t.Fatalf("expected 3 events (thinking, content, merged flush), got %d: %#v", len(got), got)
 	}
-	if got[0].content != "a" || got[0].reasonLen != 0 {
-		t.Fatalf("expected first event content-only, got %#v", got[0])
+	if got[0].content != "" || got[0].reasonLen != len("think") {
+		t.Fatalf("expected the first event to carry thinking only, got %#v", got[0])
 	}
-	if !got[1].hasBoth {
-		t.Fatalf("expected final flush to merge reasoning+content in one event, got %#v", got[1])
+	if got[1].content != "a" || got[1].reasonLen != 0 {
+		t.Fatalf("expected the second event to carry content only, got %#v", got[1])
 	}
-	if got[1].name != runStreamEvent {
-		t.Fatalf("expected merged event name %q, got %q", runStreamEvent, got[1].name)
+	if !got[2].hasBoth {
+		t.Fatalf("expected the flush to merge reasoning+content in one event, got %#v", got[2])
 	}
-	if got[1].reasonLen != len("think") || got[1].content != "b" {
-		t.Fatalf("unexpected merged payload: %#v", got[1])
+	if got[2].name != runStreamEvent {
+		t.Fatalf("expected merged event name %q, got %q", runStreamEvent, got[2].name)
+	}
+	if got[2].reasonLen != len("more") || got[2].content != "b" {
+		t.Fatalf("unexpected merged payload: %#v", got[2])
 	}
 }
 
@@ -669,7 +674,7 @@ func TestModelToolCallEventGateThrottlesLargeSnapshots(t *testing.T) {
 	if len(forwarded) != 1 {
 		t.Fatalf("expected rapid large tool snapshots to be throttled, got %d", len(forwarded))
 	}
-	gate.lastEmit = time.Now().Add(-toolUpdateThrottle)
+	gate.throttle.force(time.Now().Add(-toolUpdateInterval))
 	gate.emit(modelStreamEvent{ToolCalls: calls})
 	if len(forwarded) != 2 {
 		t.Fatalf("expected snapshot after throttle window, got %d", len(forwarded))

@@ -443,7 +443,7 @@ func (a *App) runCommandWithConfig(parent context.Context, cfg ConfigState, req 
 		outputWG.Add(1)
 		go func() {
 			defer outputWG.Done()
-			ticker := time.NewTicker(120 * time.Millisecond)
+			ticker := time.NewTicker(commandOutputSampleInterval)
 			defer ticker.Stop()
 			// Track the last emitted length so we can skip the full String()
 			// copy when the buffer hasn't grown since the last tick. The
@@ -461,14 +461,14 @@ func (a *App) runCommandWithConfig(parent context.Context, cfg ConfigState, req 
 				lastLen = curLen
 				// During streaming, emit only the tail of the buffer instead
 				// of the full content. A long build can fill the 128KB buffer;
-				// emitting the full content on every 120ms tick means ~1MB/s
+				// emitting the full content on every tick means ~1MB/s
 				// of JSON marshal + IPC transmission + frontend re-split, most
 				// of which the user cannot read at 8 FPS anyway. The complete
 				// output is delivered in the final CommandResult once the
-				// command exits. 16KB is enough to show the last ~100 lines
-				// of typical build output.
-				const streamingTailBytes = 16 * 1024
-				tail := decodeConsoleOutput(buf.TailString(streamingTailBytes))
+				// command exits. The tail size is enough to show the last ~100
+				// lines of typical build output. 采样间隔与尾巴长度收口在
+				// eventCadenceTable（commandOutput* 档）。
+				tail := decodeConsoleOutput(buf.TailString(commandOutputStreamingTailBytes))
 				payload := map[string]any{
 					"runId":         meta.runID,
 					"sessionId":     meta.sessionID,
@@ -480,11 +480,11 @@ func (a *App) runCommandWithConfig(parent context.Context, cfg ConfigState, req 
 					"output":        tail,
 					"streaming":     true,
 				}
-				if curLen > streamingTailBytes {
+				if curLen > commandOutputStreamingTailBytes {
 					payload["outputTruncated"] = true
 					payload["outputTotalBytes"] = curLen
 				}
-				a.emit("tool:update", payload)
+				a.emit(toolUpdateEvent, payload)
 			}
 			for {
 				select {

@@ -83,3 +83,4 @@
 [computed-stale-store] 2026-09-27 computed 里直读 localStorage 只会算一次就冻住：先落 ref。@App.vue
 [identity-two-writers] 2026-09-28 config 不变式收敛收口一处，SaveConfig 与 saveConfig 共用；只在一边清就落悬空身份。@biz_config.go
 [derived-field-migration] 2026-09-28 字段降级成派生值前先物化旧值，strip 落盘后无备份。@biz_config.go
+[emit-cadence] 2026-09-28 高频事件节流参数收口 eventCadenceTable，未登记=无节流。@infra_emit.go

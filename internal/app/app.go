@@ -1981,9 +1981,7 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			toolCalls = []openai.ToolCall{}
 			toolBatchID = fmt.Sprintf("%d", step)
 			emittedEvents := false
-			streamDeltas := newRunStreamDeltaEmitter(runID, sessionID, func(name string, payload map[string]any) {
-				a.emit(name, payload)
-			})
+			streamDeltas := newRunStreamDeltaEmitter(runID, sessionID, a.emitMap())
 			toolProgress = newToolCallProgressTracker()
 			modelResp, err = a.streamModelResponse(ctx, cfg, cfg.Model, requestMessages, tools, func(event modelStreamEvent) {
 				if event.ContentDelta != "" {

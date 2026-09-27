@@ -294,7 +294,8 @@ func (a *App) ListUpdateAsset(tag string) UpdateAssetInfo {
 }
 
 // downloadAsset streams an asset URL to destPath using the proxy-aware client.
-// Progress is emitted via the update:progress event approximately every 500ms.
+// Progress is emitted via the update:progress event on the cadence declared for
+// that event in eventCadenceTable.
 func (a *App) downloadAsset(ctx context.Context, assetURL, destPath, version string, totalBytes int64) error {
 	cfg := updateNetworkConfig(a.effectiveConfigSafe())
 	client := proxyHTTPClient(cfg, false, updateDownloadTimeout)
@@ -339,15 +340,18 @@ func (a *App) downloadAsset(ctx context.Context, assetURL, destPath, version str
 		total = resp.ContentLength
 	}
 
-	var lastEmit time.Time
+	// 节流参数收口在 eventCadenceTable（updateProgressEvent 档）。
+	var throttle emitThrottle
+	cadence := cadenceForEvent(updateProgressEvent)
 	var received int64
 	buf := make([]byte, 64*1024)
 	flushProgress := func(force bool) {
 		now := time.Now()
-		if !force && now.Sub(lastEmit) < 500*time.Millisecond {
+		if force {
+			throttle.force(now)
+		} else if !throttle.allow(now, cadence, 0) {
 			return
 		}
-		lastEmit = now
 		percent := 0
 		if total > 0 {
 			percent = int(received * 100 / total)
@@ -355,7 +359,7 @@ func (a *App) downloadAsset(ctx context.Context, assetURL, destPath, version str
 				percent = 100
 			}
 		}
-		a.emit("update:progress", map[string]any{
+		a.emit(updateProgressEvent, map[string]any{
 			"stage":           "download",
 			"version":         version,
 			"bytesDownloaded": received,
@@ -730,7 +734,7 @@ func (a *App) DownloadUpdate(tag string) UpdateDownloadResult {
 		}
 	}
 
-	a.emit("update:progress", map[string]any{
+	a.emit(updateProgressEvent, map[string]any{
 		"stage":   "extract",
 		"version": asset.Tag,
 		"percent": 0,
@@ -741,7 +745,7 @@ func (a *App) DownloadUpdate(tag string) UpdateDownloadResult {
 		_ = removeAllWithinBase(updateBaseDir(), versionDir)
 		return UpdateDownloadResult{Error: msg}
 	}
-	a.emit("update:progress", map[string]any{
+	a.emit(updateProgressEvent, map[string]any{
 		"stage":   "extract",
 		"version": asset.Tag,
 		"percent": 100,
@@ -959,7 +963,7 @@ func (a *App) applyWindowsUpdate(tag string) UpdateApplyResult {
 		return UpdateApplyResult{Error: fmt.Sprintf("install dir not writable: %v", err)}
 	}
 
-	a.emit("update:progress", map[string]any{"stage": "apply", "version": tag, "percent": 0})
+	a.emit(updateProgressEvent, map[string]any{"stage": "apply", "version": tag, "percent": 0})
 
 	// Stop everything that could hold a handle on Ally.exe.
 	// MCP servers are independent subprocesses and do not hold the Ally.exe
@@ -1060,7 +1064,7 @@ func (a *App) applyWindowsUpdate(tag string) UpdateApplyResult {
 	_ = removeAllWithinBase(updateBaseDir(), backupDir)
 
 	cleanAppliedUpdateDirs(updateBaseDir(), tag)
-	a.emit("update:progress", map[string]any{"stage": "apply", "version": tag, "percent": 100})
+	a.emit(updateProgressEvent, map[string]any{"stage": "apply", "version": tag, "percent": 100})
 	a.emit("update:applied", map[string]any{"version": tag})
 	return UpdateApplyResult{OK: true}
 }
@@ -1113,7 +1117,7 @@ func (a *App) applyMacUpdate(tag string) UpdateApplyResult {
 		return UpdateApplyResult{Error: fmt.Sprintf("install dir not writable: %v", err)}
 	}
 
-	a.emit("update:progress", map[string]any{"stage": "apply", "version": tag, "percent": 0})
+	a.emit(updateProgressEvent, map[string]any{"stage": "apply", "version": tag, "percent": 0})
 
 	// Stop everything that could interfere. The bundle can be renamed while
 	// the old process is still running (macOS does not lock the executable),
@@ -1168,7 +1172,7 @@ func (a *App) applyMacUpdate(tag string) UpdateApplyResult {
 	removeQuarantineAttr(appDir)
 
 	cleanAppliedUpdateDirs(updateBaseDir(), tag)
-	a.emit("update:progress", map[string]any{"stage": "apply", "version": tag, "percent": 100})
+	a.emit(updateProgressEvent, map[string]any{"stage": "apply", "version": tag, "percent": 100})
 	a.emit("update:applied", map[string]any{"version": tag})
 	return UpdateApplyResult{OK: true}
 }
