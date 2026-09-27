@@ -8,6 +8,7 @@
 package shared
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -221,6 +222,74 @@ func TestBuiltinGateTreatsEmptyOptionalsAsAbsent(t *testing.T) {
 		if tc.wantAbsent != "" && strings.Contains(report, tc.wantAbsent) {
 			t.Fatalf("%s: rejection %q still blames the mutual-exclusion rule", tc.name, report)
 		}
+	}
+}
+
+// objectOnlyKeywordsForTest mirrors the keywords the wire repair keys on: every
+// one of them only ever constrains an object instance.
+var objectOnlyKeywordsForTest = []string{"properties", "required", "patternProperties", "additionalProperties"}
+
+// TestWireSchemasDeclareObjectShape pins the rule Gemini enforces on tool
+// declarations: `properties` and `required` are allowed only on a node whose type
+// is OBJECT, and a single offending node fails the whole request (400 — no tool
+// of that session is usable at all). The repair lives in schemautil.Map, so the
+// walk runs over the schema the adapters actually send, every tool and every
+// nesting level, not over the hand-written declaration.
+func TestWireSchemasDeclareObjectShape(t *testing.T) {
+	var walk func(t *testing.T, path string, node any)
+	walk = func(t *testing.T, path string, node any) {
+		t.Helper()
+		object, ok := node.(map[string]any)
+		if !ok {
+			return
+		}
+		for _, keyword := range objectOnlyKeywordsForTest {
+			if _, declared := object[keyword]; !declared {
+				continue
+			}
+			if object["type"] != "object" {
+				t.Errorf("%s.%s: only allowed on an object node, type = %#v", path, keyword, object["type"])
+			}
+		}
+		if props, ok := object["properties"].(map[string]any); ok {
+			for name, child := range props {
+				walk(t, path+".properties["+name+"]", child)
+			}
+		}
+		if patterns, ok := object["patternProperties"].(map[string]any); ok {
+			for name, child := range patterns {
+				walk(t, path+".patternProperties["+name+"]", child)
+			}
+		}
+		if arr, ok := object["items"].([]any); ok {
+			for index, child := range arr {
+				walk(t, fmt.Sprintf("%s.items[%d]", path, index), child)
+			}
+		} else {
+			walk(t, path+".items", object["items"])
+		}
+		for _, keyword := range []string{"oneOf", "anyOf", "allOf"} {
+			variants, ok := object[keyword].([]any)
+			if !ok {
+				continue
+			}
+			for index, child := range variants {
+				walk(t, fmt.Sprintf("%s.%s[%d]", path, keyword, index), child)
+			}
+		}
+		walk(t, path+".not", object["not"])
+		walk(t, path+".additionalProperties", object["additionalProperties"])
+	}
+
+	for _, tool := range Builtins() {
+		if tool.Function == nil {
+			continue
+		}
+		params, ok := tool.Function.Parameters.(map[string]any)
+		if !ok {
+			t.Fatalf("%s parameters have type %T, want map[string]any", tool.Function.Name, tool.Function.Parameters)
+		}
+		walk(t, tool.Function.Name, schemautil.Map(params))
 	}
 }
 

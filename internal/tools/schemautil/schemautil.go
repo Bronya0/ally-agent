@@ -231,9 +231,8 @@ func normalizeNodeTypes(node any, isPropertyDef bool) {
 	}
 
 	if isPropertyDef {
-		rawType, hasType := m["type"]
-		typeStr, isStr := rawType.(string)
-		if !hasType || !isStr || strings.TrimSpace(typeStr) == "" {
+		typeStr, hasUsableType := usableType(m)
+		if !hasUsableType {
 			if declaresOwnShape(m) {
 				// The node already states its own shape (anyOf/oneOf/allOf or an
 				// unresolved $ref); a scalar type beside it would intersect with
@@ -243,22 +242,27 @@ func normalizeNodeTypes(node any, isPropertyDef bool) {
 			} else {
 				m["type"] = "string"
 			}
-		} else {
-			if enumVal, ok := m["enum"].([]any); ok && len(enumVal) > 0 {
-				inferred := inferTypeFromEnumValues(enumVal)
-				if inferred != "" && inferred != typeStr {
-					m["type"] = inferred
-					if inferred != "object" {
-						delete(m, "properties")
-						delete(m, "required")
-					}
-					if inferred != "array" {
-						delete(m, "items")
-					}
+		} else if enumVal, ok := m["enum"].([]any); ok && len(enumVal) > 0 {
+			inferred := inferTypeFromEnumValues(enumVal)
+			if inferred != "" && inferred != typeStr {
+				m["type"] = inferred
+				if inferred != "object" {
+					delete(m, "properties")
+					delete(m, "required")
+				}
+				if inferred != "array" {
+					delete(m, "items")
 				}
 			}
 		}
 	}
+
+	// The property-side repair above only covers direct property values. The
+	// branches of oneOf/anyOf/not, array items and map schemas are walked without
+	// isPropertyDef, so a node there could still carry object-only keywords while
+	// never declaring itself an object — Gemini rejects the entire request over
+	// one such node ("properties/required: only allowed for OBJECT type").
+	stampObjectShape(m)
 
 	if props, ok := m["properties"].(map[string]any); ok {
 		for _, v := range props {
@@ -294,6 +298,17 @@ func normalizeNodeTypes(node any, isPropertyDef bool) {
 			normalizeNodeTypes(sub, isPropertyDef)
 		}
 	}
+	// `not` and `additionalProperties` hold a schema for the same instance (the
+	// map values, respectively) and are repaired like any other node: the
+	// mutual-exclusion guards of edit's changes[] and http_request's body/json
+	// live inside a `not`, and a node left unvisited there is exactly the node
+	// stampObjectShape is meant to repair.
+	if notSchema, ok := m["not"].(map[string]any); ok {
+		normalizeNodeTypes(notSchema, false)
+	}
+	if additional, ok := m["additionalProperties"].(map[string]any); ok {
+		normalizeNodeTypes(additional, false)
+	}
 	if defs, ok := m["$defs"].(map[string]any); ok {
 		for _, v := range defs {
 			normalizeNodeTypes(v, false)
@@ -302,6 +317,43 @@ func normalizeNodeTypes(node any, isPropertyDef bool) {
 	if defs, ok := m["definitions"].(map[string]any); ok {
 		for _, v := range defs {
 			normalizeNodeTypes(v, false)
+		}
+	}
+}
+
+// objectOnlyKeywords are the JSON Schema keywords that only ever constrain an
+// object instance. A node carrying one of them without a usable type is
+// object-shaped in everything but name.
+var objectOnlyKeywords = []string{"properties", "required", "patternProperties", "additionalProperties"}
+
+// stampObjectShape gives a node that carries object-only keywords an explicit
+// `type: "object"`. Validators that refuse those keywords on a non-OBJECT node
+// (Gemini answers the whole request with "...properties[changes]...properties:
+// only allowed for OBJECT type", which leaves no tool usable) otherwise reject
+// the declaration over a node that never disagreed with them: the oneOf/anyOf
+// branches and `not` sub-schemas of a mutual-exclusion rule only add constraints
+// to an object. Nodes that already declare a type, and nodes whose shape is
+// decided by an unresolved $ref, are left untouched; a type list such as
+// ["object", "null"] states something of its own and must not be narrowed to a
+// single type by a repair pass.
+func stampObjectShape(m map[string]any) {
+	switch raw := m["type"].(type) {
+	case nil:
+		// No type at all: exactly the hole this fills.
+	case string:
+		if strings.TrimSpace(raw) != "" {
+			return
+		}
+	default:
+		return
+	}
+	if ref, ok := m["$ref"].(string); ok && strings.TrimSpace(ref) != "" {
+		return
+	}
+	for _, key := range objectOnlyKeywords {
+		if _, ok := m[key]; ok {
+			m["type"] = "object"
+			return
 		}
 	}
 }
@@ -319,6 +371,20 @@ func declaresOwnShape(m map[string]any) bool {
 	}
 	ref, ok := m["$ref"].(string)
 	return ok && strings.TrimSpace(ref) != ""
+}
+
+// usableType reports whether the node declares a usable type: a non-empty
+// string. A missing, non-string, or blank type counts as absent.
+func usableType(m map[string]any) (string, bool) {
+	raw, ok := m["type"]
+	if !ok {
+		return "", false
+	}
+	str, ok := raw.(string)
+	if !ok || strings.TrimSpace(str) == "" {
+		return "", false
+	}
+	return str, true
 }
 
 func inferTypeFromNode(m map[string]any) string {

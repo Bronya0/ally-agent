@@ -141,6 +141,101 @@ func TestNormalizeTypesKeepsCompositeShapes(t *testing.T) {
 	}
 }
 
+// TestStampObjectShapeCoversCompositionNodes pins the shape Gemini refuses:
+// `properties`/`required` on a node whose type is not OBJECT rejects the whole
+// tool declaration, and a mutual-exclusion rule lives exactly on such nodes —
+// the oneOf branches of edit's changes[] / read's files[] and their `not`
+// guards. The property-side repair never reached them, because composition
+// branches and array items are walked without isPropertyDef.
+func TestStampObjectShapeCoversCompositionNodes(t *testing.T) {
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"changes": map[string]any{
+				"type": "array",
+				"items": map[string]any{
+					"type":       "object",
+					"required":   []string{"newText"},
+					"properties": map[string]any{"newText": map[string]any{"type": "string"}},
+					"oneOf": []any{
+						map[string]any{
+							"required":   []string{"oldText"},
+							"properties": map[string]any{"oldText": map[string]any{"minLength": 1}},
+							"not": map[string]any{
+								"required":   []string{"lineRange"},
+								"properties": map[string]any{"lineRange": map[string]any{"pattern": `^[1-9]$`}},
+							},
+						},
+						map[string]any{"required": []string{"lineRange"}},
+					},
+				},
+			},
+		},
+	}
+
+	norm := normalizeTypes(schema)
+	items := norm["properties"].(map[string]any)["changes"].(map[string]any)["items"].(map[string]any)
+	if items["type"] != "object" {
+		t.Fatalf("array items changed type: %#v", items["type"])
+	}
+	branches, ok := items["oneOf"].([]any)
+	if !ok || len(branches) != 2 {
+		t.Fatalf("oneOf branches = %#v, want two", items["oneOf"])
+	}
+	first := branches[0].(map[string]any)
+	if first["type"] != "object" {
+		t.Fatalf("a branch deciding on properties/required must declare type: object, got %#v", first["type"])
+	}
+	guard, ok := first["not"].(map[string]any)
+	if !ok || guard["type"] != "object" {
+		t.Fatalf("a not sub-schema carrying properties/required must declare type: object, got %#v", first["not"])
+	}
+	if second := branches[1].(map[string]any); second["type"] != "object" {
+		t.Fatalf("a branch carrying only required must declare type: object, got %#v", second["type"])
+	}
+	if got := first["properties"].(map[string]any)["oldText"].(map[string]any)["type"]; got != "string" {
+		t.Fatalf("branch property type = %#v, want the inferred string", got)
+	}
+}
+
+// TestStampObjectShapeKeepsStatedShapes pins what the repair must not touch: a
+// node that already declares a type, a node whose type is a list (a statement of
+// its own — narrowing ["object","null"] to object would drop the null branch),
+// and a node whose shape is only decided once a $ref is inlined.
+func TestStampObjectShapeKeepsStatedShapes(t *testing.T) {
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"files": map[string]any{
+				"type": "array",
+				"items": map[string]any{
+					"type":       []any{"object", "null"},
+					"required":   []string{"path"},
+					"properties": map[string]any{"path": map[string]any{"type": "string"}},
+				},
+			},
+			"referenced": map[string]any{
+				"$ref":       "#/$defs/Cycle",
+				"properties": map[string]any{"a": map[string]any{"type": "string"}},
+			},
+			"typed": map[string]any{"type": "string", "properties": map[string]any{}},
+		},
+	}
+
+	norm := normalizeTypes(schema)
+	props := norm["properties"].(map[string]any)
+	items := props["files"].(map[string]any)["items"].(map[string]any)
+	if _, ok := items["type"].([]any); !ok {
+		t.Fatalf("a declared type list must survive the repair, got %#v", items["type"])
+	}
+	if got := props["referenced"].(map[string]any)["type"]; got != nil {
+		t.Fatalf("a $ref node keeps its shape undecided, got %#v", got)
+	}
+	if got := props["typed"].(map[string]any)["type"]; got != "string" {
+		t.Fatalf("stated type = %#v, want string", got)
+	}
+}
+
 func TestMapHandlesAbsentParameters(t *testing.T) {
 	got := Map(nil)
 	if got["type"] != "object" {
