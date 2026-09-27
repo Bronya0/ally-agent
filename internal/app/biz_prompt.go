@@ -74,8 +74,9 @@ func sharedEditRules() string {
 
 // sharedBatchStrategy returns the batch/parallel tool-call strategy shared by the main and sub-agent system prompts.
 func sharedBatchStrategy() string {
-	return "**Batch and parallelize where appropriate — balance round-trips and context hygiene**:\n" +
-		"Parallelize independent tool calls when ready (such as `edit` across different files, concurrent `command`s, or batching needed file reads). Avoid unnecessary round-trips.\n" +
+	return "**Batch and parallelize by default — one round for every independent call**:\n" +
+		"When N tool calls are mutually independent, emit all N in the same response instead of splitting them across rounds to inspect partial results: every extra round spends a whole model turn, so serializing independent work pays that cost N times and learns nothing in between. Only a real dependency — a call whose arguments need another call's result — belongs in a later round.\n" +
+		"Send as many calls as the work needs: there is no per-response cap and batching is never slower, because the backend queues the whole batch and runs non-file tools concurrently. Typical batches: every `grep` pattern you intend to search, every `read` you already know you need, several independent `command`s, `edit` calls for different files.\n" +
 		"- **Read**: Read target files or ranges as needed to keep context clean and cache-friendly:\n" +
 		"  - Locate first when helpful: use `grep` or symbol search to find the relevant line numbers before reading.\n" +
 		"  - Use range reads for larger files: for medium/large files (>150 lines), specify `startLine` and `endLine` to inspect the relevant section instead of reading the entire file. Omit startLine/endLine when the file is small or full file context is genuinely needed.\n" +
@@ -84,8 +85,8 @@ func sharedBatchStrategy() string {
 		"- **Edit**: the batching and failure contract lives in **Editing discipline** below; when `edit`/`create` returns a `validation` string, fix any reported issues directly.\n" +
 		"- **Grep**: Use for fast path and line locating (lines mode groups matches by file — a bare path row, then indented `line: text` rows — with capped text previews of each matching line; only read the file when you need surrounding context). Paginate with `offset` using `next-offset` (follow `[Truncated. Use offset=N to continue.]` or the opening tag attribute); it resumes right after the last row shown. When searching for multiple keywords or patterns, emit `grep` calls concurrently in the same turn.\n" +
 		"- **Exploration**: First search with `grep` to locate candidates and line numbers; once locations are identified, read the targeted ranges.\n" +
-		"- **Rule of thumb**: Parallelize independent operations, read focused ranges instead of whole large files, and leave out files you only suspect might matter. Avoid splitting dependent steps unnecessarily.\n" +
-		"The backend executes independent non-file tool calls in parallel; built-in file mutations are ordered by tool-call index.\n\n"
+		"- **Rule of thumb**: Parallelize independent operations, read focused ranges instead of whole large files, and leave out files you only suspect might matter. Never split an independent batch across rounds; never batch a call that depends on another call's result.\n" +
+		"The backend executes independent non-file tool calls in parallel and accepts any number of calls in one response; built-in file mutations are ordered by tool-call index.\n\n"
 }
 
 // sharedCodingGuidelines returns the core coding guidelines shared by the main and sub-agent system prompts.

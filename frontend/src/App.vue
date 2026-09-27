@@ -23,7 +23,6 @@ Public License v3. See the LICENSE file for details.
               :history-options="historyOptions"
               @switch-workspace="onHeaderSwitchWorkspace"
               @close-workspace="closeWorkspaceTab"
-              @reorder-workspace="reorderWorkspaceTabs"
               @add-workspace="onHeaderAddWorkspace"
               @add-temp-workspace="onHeaderAddTempWorkspace"
               @history-select="onHeaderHistorySelect"
@@ -229,16 +228,32 @@ Public License v3. See the LICENSE file for details.
                     :title="composerStatusDetail"
                   >{{ composerStatusDetail }}</span>
                 </div>
-                <!-- One input instance per workspace tab (keyed by session:tab) so each
-                     keeps its own Naive UI autosize mirror, cursor and scroll state. A
-                     single shared instance would collapse to minRows after tab switches:
+                <!-- One input instance per workspace tab, keyed by the Tab alone: instance
+                     identity is the slot, only the *value* follows the session
+                     (sessionPromptTexts[sessionId] below). One instance per tab is what
+                     keeps each Naive UI autosize mirror, cursor and scroll state; a single
+                     shared instance would collapse to minRows after tab switches, because
                      restoring a draft equal to the last typed value is skipped by the
-                     library's syncSource guard, leaving the mirror empty. -->
+                     library's syncSource guard, leaving the mirror empty.
+                     `tab.sessionId` must stay out of the key: it is re-pointed without any
+                     user action (switchSession, newSession, session delete, and the
+                     stale-link repair in ensureWorkspaceTabSession — reached from
+                     saveSessions on every tool result), and every such re-point destroyed
+                     this textarea mid-typing. Focus, the in-flight IME composition and the
+                     pending draft all live on that node, so a background repair looked like
+                     "typing got clobbered": composition aborted and focus lost.
+                     The `@update:value` handler needs the same treatment (see
+                     promptInputBindingFor): an inline arrow inside v-for is never
+                     cached by the compiler, and n-input declares no `emits`, so Vue
+                     counts the fresh function as a changed prop and re-renders this
+                     input on every App render — each of those writes the controlled
+                     value back over the textarea and kills an in-flight IME
+                     composition whose text the store has not received yet. -->
                 <n-input
                   v-for="tab in workspaceTabs"
                   v-show="tab.id === activeWorkspaceId"
-                  :key="`${tab.sessionId}:${tab.id}`"
-                  :ref="(el) => setPromptInputRef(tab.id, el)"
+                  :key="tab.id"
+                  :ref="promptInputBindingFor(tab).setRef"
                   class="prompt-input"
                   :value="tab.sessionId ? (sessionPromptTexts[tab.sessionId] || '') : ''"
                   type="textarea"
@@ -246,7 +261,7 @@ Public License v3. See the LICENSE file for details.
                   :autosize="PROMPT_AUTOSIZE"
                   :disabled="isKbTab(tab) && kbIndexMissing"
                   placeholder=""
-                  @update:value="(v) => { if (tab.sessionId) sessionPromptTexts[tab.sessionId] = v; }"
+                  @update:value="promptInputBindingFor(tab).onUpdateValue"
                   @keydown="handlePromptKeydown"
                   @input="handlePromptInput"
                 />
@@ -697,11 +712,31 @@ function setPromptInputRef(tabId, el) {
     promptInputRefs[tabId] = el;
   } else {
     delete promptInputRefs[tabId];
-    // 输入框卸载（切换/新建会话时 v-for 重建）会丢失进行中的输入法组合事件，
-    // 不重置会让 promptComposing 残留为 true，导致之后按 Enter 一直只换行不发送。
+    // 输入框卸载（关闭 Tab）会丢失进行中的输入法组合事件，不重置会让 promptComposing
+    // 残留为 true，导致之后按 Enter 一直只换行不发送。
     promptComposing.value = false;
     promptCompositionEndedAt = 0;
   }
+}
+
+// 每个 Tab 一份稳定的输入框回调，按 Tab 对象缓存（惰性创建，WeakMap 随 Tab 回收）。
+// 内联箭头函数写在 v-for 里时编译器**不会**缓存它 —— handler 闭包了循环变量，
+// hasScopeRef 直接拒缓存（compiler-core），所以每次渲染都是新引用；而 naive-ui 的 Input
+// 没有声明 emits，Vue 便把这个"变化的 prop"当作需要更新，根组件每渲染一次就重渲染一次
+// 输入框。重渲染会用受控值强行回写 textarea（patchProps 把 value 拎到最后按当前 DOM 值
+// 比对），输入法组合中尚未进入 store 的字就被撤掉。回调内部按调用时刻读 tab.sessionId，
+// 所以会话链接被后台改写后写的仍是当前那个桶。
+const promptInputBindings = new WeakMap();
+function promptInputBindingFor(tab) {
+  let binding = promptInputBindings.get(tab);
+  if (!binding) {
+    binding = {
+      setRef: (el) => setPromptInputRef(tab.id, el),
+      onUpdateValue: (value) => { if (tab.sessionId) sessionPromptTexts[tab.sessionId] = value; },
+    };
+    promptInputBindings.set(tab, binding);
+  }
+  return binding;
 }
 const promptComposing = ref(false);
 let promptCompositionEndedAt = 0;
@@ -2472,7 +2507,8 @@ function ensureKbTab() {
       tab.label = t('kb.tabLabel');
       const session = createReplacementSession(t('kb.tabLabel'), config.kbRoot);
       sessions.value.unshift(session);
-      tab.sessionId = session.id;
+      // repair 语义：槽位还是这个 KB Tab，只是换了个后端会话，草稿跟着搬。
+      repointTabSession(tab, session.id, { carryDraft: true });
       if (activeWorkspaceId.value === tab.id) activeSessionId.value = session.id;
       return tab;
     }
@@ -3694,7 +3730,8 @@ function inferSessionWorkspace(session) {
 function bindSessionToActiveWorkspaceTab(session) {
   if (!session) return null;
   const tab = workspaceTabs.value.find((item) => item.id === activeWorkspaceId.value) || null;
-  if (tab) tab.sessionId = session.id;
+  // switch 语义：只是换个会话展示，草稿各自留在自己的桶里（切回去还在）。
+  if (tab) repointTabSession(tab, session.id);
   return tab;
 }
 
@@ -3795,16 +3832,18 @@ function ensureWorkspaceTabSession(tab) {
     : null;
   if (existing) return existing;
 
+  // 链接已经失效（existing 为空）才走到这里，属 repair 语义：槽位没变，只是旧会话没了、
+  // 换一个后端身份，草稿必须跟过去（谁接手由下面两条分支决定）。
   // If the active Tab has a stale link but the UI still has a valid active
   // session, preserve what the user is viewing and repair the link in place.
   if (tab.id === activeWorkspaceId.value && activeSession.value) {
-    tab.sessionId = activeSession.value.id;
+    repointTabSession(tab, activeSession.value.id, { carryDraft: true });
     return activeSession.value;
   }
 
   const replacement = createReplacementSession(tab.label || t('app.sessions.new'), tab.path || '');
   sessions.value.unshift(replacement);
-  tab.sessionId = replacement.id;
+  repointTabSession(tab, replacement.id, { carryDraft: true });
   if (tab.id === activeWorkspaceId.value) {
     activeSessionId.value = replacement.id;
   }
@@ -3857,19 +3896,6 @@ function addWorkspaceTab() {
     workspaceTabs.value.push(tab);
     switchWorkspaceTab(tab.id);
   });
-}
-
-function reorderWorkspaceTabs({ sourceId, targetId, after = false } = {}) {
-  const sourceIndex = workspaceTabs.value.findIndex((tab) => tab.id === sourceId);
-  if (sourceIndex === -1 || sourceId === targetId) return;
-
-  const [movedTab] = workspaceTabs.value.splice(sourceIndex, 1);
-  const targetIndex = workspaceTabs.value.findIndex((tab) => tab.id === targetId);
-  if (targetIndex === -1) {
-    workspaceTabs.value.splice(sourceIndex, 0, movedTab);
-    return;
-  }
-  workspaceTabs.value.splice(targetIndex + (after ? 1 : 0), 0, movedTab);
 }
 
 async function closeWorkspaceTab(id) {
@@ -4098,8 +4124,10 @@ function deleteSession(index) {
   }
 
   const replacementId = replacement?.id || fallback?.id || sessions.value[0]?.id || '';
+  // switch 语义：被删会话的草稿由下面的 delete sessionPromptTexts[deletedId] 一并清掉，
+  // 接手的会话保留它自己的草稿，不搬。
   for (const tab of linkedTabs) {
-    tab.sessionId = replacementId;
+    repointTabSession(tab, replacementId);
   }
   // 替换出来的欢迎消息可能是为非活动 Tab 建的（建时按活动 Tab 的模型取值），
   // 归属关系刚重排完，这里补齐一次模型行。
@@ -6075,6 +6103,54 @@ function handlePromptInput() {
   }
 }
 
+// 草稿归属按 DOM 反查：事件目标 → 所属 Tab → 该 Tab 的 sessionId 就是草稿桶。不能直接
+// 用活动会话的 id：链接失效的那段时间里活动会话与 Tab 的 sessionId 是分叉的，按活动会话
+// 写会把草稿写进另一个桶（表现就是输入框里的字被换成别的）。
+function promptSessionIdForInput(target) {
+  if (!target) return '';
+  for (const tab of workspaceTabs.value) {
+    const root = promptInputRefs[tab.id]?.$el || promptInputRefs[tab.id];
+    if (root && typeof root.contains === 'function' && root.contains(target)) return tab.sessionId || '';
+  }
+  return '';
+}
+
+// 把 textarea 当前文本镜像进对应草稿桶。输入法组合期间 naive 的 handleInput 会提前 return、
+// 不发 update:value（Input.mjs:436），store 因此落后于 DOM；而任何一次重渲染都会用受控值
+// 强行回写 textarea（Vue 自己的 v-model 有 composing 守卫，naive 的 Input 只用 syncSource
+// 守住了隐藏的 autosize mirror），组合中的字就被撤掉。组合事件是这一段里唯一拿得到实时文本
+// 的入口；镜像进去的值与随后补发的 update:value 相同，幂等。
+function mirrorPromptDraftFromDom(target) {
+  if (!target || typeof target.value !== 'string') return;
+  const sessionId = promptSessionIdForInput(target);
+  if (!sessionId) return;
+  if (sessionPromptTexts[sessionId] !== target.value) sessionPromptTexts[sessionId] = target.value;
+}
+
+// Tab→会话链接的唯一写入口。链接重指有两种语义，草稿处理正好相反：
+//   - switch（换会话展示）：草稿留在原会话的桶里，切回去还在；
+//   - repair（槽位没变，只是旧会话没了 / 换了后端身份）：草稿必须跟着搬，否则旧桶再没人读，
+//     用户眼前正在输入的字看起来就被撤掉了。
+// 「搬不搬」由语义参数决定：收口前每个调用点都得自己记得调搬运函数，漏调不报错。
+function repointTabSession(tab, nextSessionId, { carryDraft = false } = {}) {
+  if (!tab) return;
+  const previousSessionId = tab.sessionId || '';
+  const next = nextSessionId || '';
+  tab.sessionId = next;
+  if (carryDraft) carryPromptDraft(previousSessionId, next);
+}
+
+// 草稿搬家（只由 repointTabSession 的 carryDraft 调用）：草稿按 sessionId 存，链接一改
+// 输入框就读到新会话的空桶。目标桶已有内容时不搬，免得覆盖新会话自己的草稿。
+function carryPromptDraft(fromSessionId, toSessionId) {
+  const from = fromSessionId || '';
+  const to = toSessionId || '';
+  if (!from || !to || from === to) return;
+  const draft = sessionPromptTexts[from] || '';
+  delete sessionPromptTexts[from];
+  if (draft && !sessionPromptTexts[to]) sessionPromptTexts[to] = draft;
+}
+
 function getPromptTextarea(tabId = activeWorkspaceId.value) {
   const root = promptInputRefs[tabId]?.$el || promptInputRefs[tabId];
   return root?.querySelector?.('textarea[data-ally-prompt-input="true"], textarea') || null;
@@ -6210,6 +6286,8 @@ function handlePromptCursorActivity() {
 }
 
 function handlePromptKeyup(event) {
+  // 平台差异兜底：个别环境组合期间不发 compositionupdate，keyup 是补镜像的入口（幂等）。
+  if (promptComposing.value || event?.isComposing) mirrorPromptDraftFromDom(event?.target);
   if (!['ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown'].includes(event.key)) return;
   handlePromptCursorActivity();
 }
@@ -6218,9 +6296,12 @@ function handlePromptCompositionStart() {
   promptComposing.value = true;
 }
 
-function handlePromptCompositionEnd() {
+function handlePromptCompositionEnd(event) {
   promptComposing.value = false;
   promptCompositionEndedAt = performance.now();
+  // 组合结束到 naive 补发 update:value 之间还有一个同步空档，先落一次，免得同一帧内的
+  // 重渲染把刚上屏的字又抹回去。
+  mirrorPromptDraftFromDom(event?.target);
 }
 
 // Stable references for the prompt textarea: inline object literals in the
@@ -6229,6 +6310,9 @@ function handlePromptCompositionEnd() {
 const PROMPT_INPUT_PROPS = {
   onPaste: handlePromptPaste,
   onCompositionstart: handlePromptCompositionStart,
+  // naive 只在自己的 textarea 上覆写 onInput/onChange，组合事件原样透传给我们，
+  // 所以实时镜像只能挂在这里（见 mirrorPromptDraftFromDom）。
+  onCompositionupdate: (event) => mirrorPromptDraftFromDom(event?.target),
   onCompositionend: handlePromptCompositionEnd,
   onClick: handlePromptCursorActivity,
   onKeyup: handlePromptKeyup,

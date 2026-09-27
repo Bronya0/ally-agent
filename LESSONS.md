@@ -85,3 +85,6 @@
 [derived-field-migration] 2026-09-28 字段降级成派生值前先物化旧值，strip 落盘后无备份。@biz_config.go
 [emit-cadence] 2026-09-28 高频事件节流参数收口 eventCadenceTable，未登记=无节流。@infra_emit.go
 [schema-shape] 2026-09-27 带 properties/required 的分支也要 type: object，否则 Gemini 400 拒全单。@schemautil
+[key-not-pointer] 2026-09-27 输入框实例 key 只绑 Tab，别绑会被后台改写的 sessionId；改了 key 就重建 DOM。@App.vue
+[vfor-inline-handler] 2026-09-28 v-for 内联 handler 每次新引用→未声明 emits 的组件被重渲染，受控值回写冲掉输入法组合。@App.vue
+[tab-link-writer] 2026-09-28 tab.sessionId 只经 repointTabSession 写：switch 不搬草稿，repair 搬。@App.vue

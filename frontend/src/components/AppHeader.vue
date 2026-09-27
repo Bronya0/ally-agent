@@ -9,7 +9,7 @@ Public License v3. See the LICENSE file for details.
 -->
 <template>
   <!-- Unified header: brand + tabs + actions + meta -->
-  <n-layout-header ref="headerRef" bordered class="app-header">
+  <n-layout-header bordered class="app-header">
     <div class="brand">
       <!-- 起波瞬间垫在字标底下的光晕（只动 opacity，纯合成） -->
       <span class="brand-glow" :class="{ 'brand-glow--struck': brandStruck }" aria-hidden="true"></span>
@@ -20,12 +20,7 @@ Public License v3. See the LICENSE file for details.
       />
     </div>
     <div class="header-tabs-area">
-      <div
-        ref="workspaceTabsRef"
-        :class="['workspace-tabs-host', { 'drag-preview-active': hasDragShift, dragging: !!draggedWorkspaceId, 'dragging-active': hasDragged }]"
-        :style="{ '--workspace-drag-offset': `${draggedTabWidth}px` }"
-        @click.capture="onHostCaptureClick"
-      >
+      <div class="workspace-tabs-host">
         <n-tabs
           class="workspace-tabs"
           type="bar"
@@ -37,9 +32,7 @@ Public License v3. See the LICENSE file for details.
             v-for="tab in workspaceTabs"
             :key="tab.id"
             :name="tab.id"
-            :class="['workspace-tab', { active: tab.id === activeWorkspaceId, running: tab.isRunning, dragging: tab.id === draggedWorkspaceId }, dragShiftClass(tab.id)]"
-            :data-tab-id="tab.id"
-            @pointerdown="onWorkspacePointerDown($event, tab.id)"
+            :class="['workspace-tab', { active: tab.id === activeWorkspaceId, running: tab.isRunning }]"
           >
             <span v-if="tab.isRunning" class="tab-running-dot" :aria-label="$t('header.running')"></span>
             <span class="tab-label">{{ tab.label }}</span>
@@ -48,11 +41,7 @@ Public License v3. See the LICENSE file for details.
             </button>
           </n-tab>
         </n-tabs>
-        <div v-if="dropIndicatorStyle" class="workspace-drop-indicator" :style="dropIndicatorStyle"></div>
       </div>
-      <Teleport to="body">
-        <div v-if="dragGhostStyle" class="workspace-drag-ghost" :style="dragGhostStyle">{{ draggedTabLabel }}</div>
-      </Teleport>
       <div class="header-tabs-actions">
         <n-dropdown
           trigger="click"
@@ -96,7 +85,7 @@ Public License v3. See the LICENSE file for details.
 </template>
 
 <script setup>
-import { computed, h, onBeforeUnmount, ref } from 'vue';
+import { onBeforeUnmount, ref } from 'vue';
 import { NDropdown } from 'naive-ui';
 import AllyWordmark from './AllyWordmark.vue';
 import { burstDigitalWave } from '../composables/digitalWave.mjs';
@@ -121,7 +110,6 @@ const props = defineProps({
 const emit = defineEmits([
   'switchWorkspace',
   'closeWorkspace',
-  'reorderWorkspace',
   'addWorkspace',
   'addTempWorkspace',
   'historySelect',
@@ -132,279 +120,14 @@ const emit = defineEmits([
   'closeWindow',
 ]);
 
-const headerRef = ref(null);
 const brandStruck = ref(false);
 let brandStrikeTimer = null;
-const workspaceTabsRef = ref(null);
-const draggedWorkspaceId = ref('');
-const dragPreview = ref(null);
-const draggedTabWidth = ref(0);
-const dropIndicatorLeft = ref(null);
-const hasDragged = ref(false);
-const dragGhostPos = ref(null);
-const dragPointerId = ref(null);
-let dragStartX = 0;
-let dragStartY = 0;
-let suppressClick = false;
-// 起拖时一次性快照的几何（视口坐标）：拖动期间不再查 DOM、不再读布局。
-let dragTabRects = [];   // [{ id, left, mid, right }]，已排除被拖的那一个
-let dragHostLeft = 0;    // tab 容器左边缘，落点指示线的基准
-let dragHostWidth = 0;
-let dragMovePoint = null;
-let dragMoveRaf = 0;
-
-const dropIndicatorStyle = computed(() => {
-  if (!dragPreview.value || dropIndicatorLeft.value == null) return null;
-  return { left: `${dropIndicatorLeft.value}px` };
-});
-
-const draggedTabLabel = computed(() => {
-  const id = draggedWorkspaceId.value;
-  if (!id) return '';
-  return props.workspaceTabs.find((t) => t.id === id)?.label || id;
-});
-
-// 跟手幽灵用 transform 定位：left/top 每个 pointermove 都要重算布局，且根本不是
-// 可合成属性（AGENTS.md §4.7）。
-const dragGhostStyle = computed(() => {
-  if (!dragGhostPos.value || !draggedWorkspaceId.value || !hasDragged.value) return null;
-  return {
-    transform: `translate3d(${dragGhostPos.value.x + 12}px, ${dragGhostPos.value.y + 12}px, 0)`,
-  };
-});
-
-function updateDropIndicatorPosition(targetId, after) {
-  // 位置全部取自起拖快照：拖动中再量一次会把"已被 translate 平移的 tab"量进来，
-  // 让落点判定与视觉位移相互喂数据（抖动），也白吃每次 pointermove 的强制布局。
-  const target = dragTabRects.find((tab) => tab.id === targetId);
-  if (!target) {
-    dropIndicatorLeft.value = null;
-    return;
-  }
-  // 2px 竖线以选中目标边缘为基准居中（-1 偏移 = 半宽，避免再 translate 或被边缘裁剪）
-  const edge = after ? target.right - dragHostLeft : target.left - dragHostLeft;
-  let left = Math.round(edge - 1);
-  const maxLeft = Math.max(0, Math.round(dragHostWidth - 2));
-  if (left < 0) left = 0;
-  if (left > maxLeft) left = maxLeft;
-  dropIndicatorLeft.value = left;
-}
-
-// 被拖 tab 保持在布局槽内；源与落点之间的 tab 平移出真实缝隙，落点即缝隙。
-const dragShiftClassById = computed(() => {
-  const preview = dragPreview.value;
-  const tabs = props.workspaceTabs;
-  const sourceIndex = tabs.findIndex((tab) => tab.id === draggedWorkspaceId.value);
-  const targetIndex = tabs.findIndex((tab) => tab.id === preview?.targetId);
-  if (sourceIndex < 0 || targetIndex < 0 || sourceIndex === targetIndex) return new Map();
-
-  const movingRight = sourceIndex < targetIndex;
-  const first = movingRight
-    ? sourceIndex + 1
-    : targetIndex + (preview.after ? 1 : 0);
-  const last = movingRight
-    ? targetIndex - (preview.after ? 0 : 1)
-    : sourceIndex - 1;
-  const result = new Map();
-  for (let index = first; index <= last; index += 1) {
-    const id = tabs[index]?.id;
-    if (id) result.set(id, movingRight ? 'drag-shift-left' : 'drag-shift-right');
-  }
-  return result;
-});
-const hasDragShift = computed(() => dragShiftClassById.value.size > 0);
-
-function dragShiftClass(id) {
-  return dragShiftClassById.value.get(id) || '';
-}
-
-// 起拖时量一次：其余 tab 的视口坐标 + 容器左边缘/宽度。
-// 从前是每个 pointermove 都 querySelectorAll + 每个 tab 一次 getBoundingClientRect，
-// 高刷鼠标下等于每秒上百轮强制布局（AGENTS.md §4.7）。
-function captureDragTabRects() {
-  const host = workspaceTabsRef.value;
-  if (!host) {
-    dragTabRects = [];
-    dragHostLeft = 0;
-    dragHostWidth = 0;
-    return;
-  }
-  const hostRect = host.getBoundingClientRect();
-  dragHostLeft = hostRect.left;
-  dragHostWidth = hostRect.width;
-  const sourceId = draggedWorkspaceId.value;
-  dragTabRects = Array.from(host.querySelectorAll('.workspace-tab') || [])
-    .filter((el) => el.dataset.tabId !== sourceId)
-    .map((el) => {
-      const rect = el.getBoundingClientRect();
-      return {
-        id: el.dataset.tabId || '',
-        left: rect.left,
-        mid: rect.left + rect.width / 2,
-        right: rect.right,
-      };
-    });
-}
-
-function clearDragPreview() {
-  dragPreview.value = null;
-  dropIndicatorLeft.value = null;
-}
-
-function applyDragPreview(targetId, after) {
-  if (!targetId || targetId === draggedWorkspaceId.value) {
-    clearDragPreview();
-    return;
-  }
-  const cur = dragPreview.value;
-  if (cur?.targetId === targetId && cur.after === after) return;
-  dragPreview.value = { targetId, after };
-  updateDropIndicatorPosition(targetId, after);
-}
-
-function headerDragEl() {
-  const h = headerRef.value;
-  if (!h) return null;
-  // naive-ui 的 n-layout-header 可能是组件实例，真实 DOM 在 $el 上
-  return h.$el || h;
-}
-function resetDragState() {
-  if (dragMoveRaf) {
-    cancelAnimationFrame(dragMoveRaf);
-    dragMoveRaf = 0;
-  }
-  dragMovePoint = null;
-  dragTabRects = [];
-  window.removeEventListener('pointermove', onWindowPointerMove);
-  window.removeEventListener('pointerup', onWindowPointerUp);
-  window.removeEventListener('pointercancel', onWindowPointerCancel);
-  // 同步恢复窗口拖动区：WebView2 在 pointerdown 时刻判定 --wails-draggable，
-  // 响应式 class 切换有下一帧延迟，必须直接写 style 才能让后续 move 不被当成窗口拖动
-  try { workspaceTabsRef.value?.style?.removeProperty('--wails-draggable'); } catch { /* ignore */ }
-  try { headerDragEl()?.style?.removeProperty('--wails-draggable'); } catch { /* ignore */ }
-  draggedWorkspaceId.value = '';
-  dragPointerId.value = null;
-  dragPreview.value = null;
-  dropIndicatorLeft.value = null;
-  dragGhostPos.value = null;
-  hasDragged.value = false;
-  draggedTabWidth.value = 0;
-}
-
-// 拖拽中途失焦（Alt+Tab 切走/弹窗抢占）或组件卸载时兜底清理：
-// 否则 window 级监听与 header 上的 no-drag 内联样式会永久残留，窗口将无法拖动。
-function onWindowBlur() {
-  resetDragState();
-}
-window.addEventListener('blur', onWindowBlur);
 onBeforeUnmount(() => {
-  window.removeEventListener('blur', onWindowBlur);
-  resetDragState();
   clearTimeout(brandStrikeTimer);
 });
 
 function onWorkspaceTabUpdate(id) {
   if (id && id !== props.activeWorkspaceId) emit('switchWorkspace', id);
-}
-
-// WebView2 对页面内部 HTML5 drag-and-drop（dragover/drop）支持不完整，
-// 因此 tab 排序用 Pointer Events 模拟：pointerdown 捕获 + window 级 move/up。
-function onWorkspacePointerDown(event, id) {
-  if (props.workspaceTabs.length <= 1 || event.button !== 0) return;
-  // 重入防护：已在拖拽中（多指/异常输入）忽略后续 pointerdown，避免重复挂 window 监听
-  if (draggedWorkspaceId.value) return;
-  const target = event.target;
-  if (target instanceof Element && target.closest('.tab-close')) return;
-  const rect = event.currentTarget?.getBoundingClientRect?.();
-  if (rect?.width) draggedTabWidth.value = rect.width;
-  else draggedTabWidth.value = 112;
-  draggedWorkspaceId.value = id;
-  captureDragTabRects();
-  dragPointerId.value = event.pointerId;
-  dragStartX = event.clientX;
-  dragStartY = event.clientY;
-  hasDragged.value = false;
-  clearDragPreview();
-  // WebView2 的 --wails-draggable 判定在 pointerdown 时机，响应式 class 要下一帧才生效，
-  // 必须同步把 host 与 header 切到 no-drag，否则后续 pointermove 会被当成窗口拖动，原 tab 看似“一动不动”
-  try { workspaceTabsRef.value?.style?.setProperty('--wails-draggable', 'no-drag'); } catch { /* ignore */ }
-  try { headerDragEl()?.style?.setProperty('--wails-draggable', 'no-drag'); } catch { /* ignore */ }
-  // 捕获指针：鼠标移出 tab/窗口也持续收到 move，不受 --wails-draggable 窗口拖动区影响
-  try { event.currentTarget?.setPointerCapture?.(event.pointerId); } catch { /* ignore */ }
-  window.addEventListener('pointermove', onWindowPointerMove);
-  window.addEventListener('pointerup', onWindowPointerUp);
-  window.addEventListener('pointercancel', onWindowPointerCancel);
-  event.preventDefault();
-}
-
-function computeDropTarget(clientX) {
-  // 全部用起拖快照：拖动期间零布局读取。
-  if (!draggedWorkspaceId.value || !dragTabRects.length) return null;
-  for (const tab of dragTabRects) {
-    if (clientX < tab.mid) return { targetId: tab.id, after: false };
-  }
-  const last = dragTabRects[dragTabRects.length - 1];
-  return { targetId: last.id, after: true };
-}
-
-function onWindowPointerMove(event) {
-  if (event.pointerId !== undefined && event.pointerId !== dragPointerId.value) return;
-  // WebView2 窗口拖动会先于 JS 消费 move，必须 preventDefault 阻止默认拖动/选区
-  try { event.preventDefault(); } catch { /* ignore */ }
-  const dx = event.clientX - dragStartX;
-  const dy = event.clientY - dragStartY;
-  if (!hasDragged.value && Math.hypot(dx, dy) < 4) return;
-  hasDragged.value = true;
-  // 只记落点：幽灵位置、落点判定、虚线占位统一交给 rAF，一帧最多写一次。
-  dragMovePoint = { x: event.clientX, y: event.clientY };
-  if (!dragMoveRaf) dragMoveRaf = requestAnimationFrame(flushDragMove);
-}
-
-// 一帧一次地把最新落点写进界面（幽灵跟手 + 落点判定 + 预览）。
-function flushDragMove() {
-  dragMoveRaf = 0;
-  const point = dragMovePoint;
-  if (!point || !draggedWorkspaceId.value) return;
-  dragGhostPos.value = point;
-  const drop = computeDropTarget(point.x);
-  if (!drop) {
-    clearDragPreview();
-    return;
-  }
-  applyDragPreview(drop.targetId, drop.after);
-}
-
-function onWindowPointerUp() {
-  // 抬手可能和最后一次 pointermove 落在同一帧：先把还没执行的那次 rAF 落点同步补算，
-  // 否则这一帧的位移（乃至“极快甩动”时整次拖拽）根本不参与落点判定。
-  if (dragMoveRaf) {
-    cancelAnimationFrame(dragMoveRaf);
-    dragMoveRaf = 0;
-    flushDragMove();
-  }
-  const sourceId = draggedWorkspaceId.value;
-  const preview = dragPreview.value;
-  // 只要发生过实际拖拽位移就抑制随后的 click，避免拖回原位时误触发 tab 切换
-  if (hasDragged.value) {
-    suppressClick = true;
-    if (sourceId && preview && sourceId !== preview.targetId) {
-      emit('reorderWorkspace', { sourceId, ...preview });
-    }
-  }
-  resetDragState();
-}
-
-function onWindowPointerCancel() {
-  // 系统取消拖拽（手势被抢占等）：只清理状态，不触发排序也不抑制 click
-  resetDragState();
-}
-
-function onHostCaptureClick(event) {
-  if (suppressClick) {
-    suppressClick = false;
-    event.stopPropagation();
-    event.preventDefault();
-  }
 }
 
 function onRepositoryClick() {
@@ -597,7 +320,7 @@ html[data-mode="light"] .history-action-button:focus-visible {
   white-space: nowrap;
   /* 字标现在可点击（数码波浪）：整个 header 是窗口拖拽区，可交互元素必须显式
      声明 no-drag，否则点击会被 WebView2 的窗口拖动吃掉（AGENTS.md §4.3）。
-     这里是静态规则、pointerdown 时已生效，不需要像拖 tab 那样临时设内联样式。 */
+     这里是静态规则、pointerdown 时已生效。 */
   --wails-draggable: no-drag;
   cursor: pointer;
   user-select: none;
@@ -653,56 +376,6 @@ body.platform-darwin .brand-wordmark {
   flex: 1;
   min-width: 0;
   --wails-draggable: drag;
-}
-
-.workspace-tabs-host.dragging,
-.workspace-tabs-host.dragging .workspace-tabs,
-.workspace-tabs-host.dragging-active,
-.workspace-tabs-host.dragging-active .workspace-tabs {
-  --wails-draggable: no-drag;
-  touch-action: none;
-  user-select: none;
-}
-
-.workspace-drop-indicator {
-  position: absolute;
-  top: 4px;
-  bottom: 4px;
-  width: 2px;
-  background: var(--ally-accent-bright);
-  border-radius: 1px;
-  pointer-events: none;
-  z-index: 10;
-  box-shadow: 0 0 8px var(--ally-accent-bright), 0 0 2px rgba(0, 0, 0, 0.6);
-}
-
-.workspace-drag-ghost {
-  position: fixed;
-  /* transform 只是偏移，元素本身还得有基准原点：fixed 且不写 left/top 时它落在
-     “静态位置”上，而这个节点 teleport 到 body、排在占满整屏的 #app 之后，
-     基准纵坐标就等于视口高度——整块卡片被推到窗口下方，跟手时完全看不见。
-     位置仍然只由 transform 给（纯合成），这两行只把原点钉在视口左上角。 */
-  left: 0;
-  top: 0;
-  max-width: 200px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  padding: 7px 12px;
-  border-radius: 8px;
-  background: var(--ally-surface-raised);
-  color: var(--ally-text-primary);
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 1;
-  border: 1px solid var(--ally-border-strong);
-  box-shadow: var(--ally-overlay-shadow);
-  pointer-events: none;
-  z-index: 99999;
-  opacity: 1;
-  /* 位置由内联 transform 给出；提示词只声明 transform——left/top 不是可合成属性，
-     给它们写 will-change 没有任何提升作用。 */
-  will-change: transform;
 }
 
 .workspace-tabs {
@@ -846,59 +519,18 @@ body.platform-darwin .window-close-icon {
   padding: 0 8px 0 12px !important;
   height: 100%;
   border-radius: 0;
-  cursor: grab;
+  cursor: pointer;
   color: var(--header-muted);
   font-size: 12px;
   line-height: 1;
   white-space: nowrap;
   user-select: none;
-  transition: transform 0.14s ease, background 0.12s, color 0.12s;
+  transition: background 0.12s, color 0.12s;
   flex-shrink: 0;
   min-width: 112px;
   max-width: 180px;
   border: 0;
   --wails-draggable: no-drag;
-}
-
-.workspace-tabs :deep(.workspace-tab.drag-shift-left) {
-  transform: translateX(calc(0px - var(--workspace-drag-offset, 0px)));
-}
-
-.workspace-tabs :deep(.workspace-tab.drag-shift-right) {
-  transform: translateX(var(--workspace-drag-offset, 0px));
-}
-
-.workspace-tabs-host.dragging-active .workspace-tabs :deep(.workspace-tab.dragging) {
-  /* 有跟手位移后立即虚线占位：即使尚未产生缝隙（hasDragShift 之前）也必须有视觉反馈，否则原位看似“一动不动” */
-  background: var(--ally-state-hover) !important;
-  color: var(--ally-text-faint) !important;
-  border: 1px dashed var(--ally-border-strong) !important;
-  box-shadow: none !important;
-  pointer-events: none;
-  opacity: 0.62 !important;
-}
-.workspace-tabs-host.drag-preview-active .workspace-tabs :deep(.workspace-tab.dragging) {
-  /* 有缝隙时再压淡文字，清晰内容由跟手卡片展示 */
-  visibility: visible !important;
-  opacity: 0.62 !important;
-  background: var(--ally-state-hover) !important;
-  color: var(--ally-text-faint) !important;
-  box-shadow: none !important;
-  border: 1px dashed var(--ally-border-strong) !important;
-  pointer-events: none;
-}
-
-/* 拖拽落点指示线：独立悬浮竖线，随鼠标实时定位到目标 tab 边缘（2 tab 相邻时也可见） */
-.workspace-tabs :deep(.workspace-tab:active) {
-  cursor: grabbing;
-}
-
-.workspace-tabs :deep(.workspace-tab.dragging) {
-  /* 未产生位移前（2 tab 相邻互换等）保持清晰可读 */
-  opacity: 1 !important;
-  z-index: 3;
-  touch-action: none;
-  user-select: none;
 }
 
 .workspace-tabs :deep(.workspace-tab:hover) {

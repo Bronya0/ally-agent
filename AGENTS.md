@@ -52,6 +52,7 @@ git push origin main
 2. **多 Tab 与工作区路由**:
    - 工作区解析必须调用 `tabOwnsWorkspace(tab)` / `runWorkspaceForTab(tab)`，禁止将 Tab 路径与 `config.workspace` 盲目比对。
    - 知识库 Tab（`kind:kb`）和临时 Tab（`kind:temp`）绝不向 `config.workspace` 写回持久化路径。
+   - `tab.sessionId` 只能经 `repointTabSession(tab, nextId, { carryDraft })` 改写：switch（换会话展示，草稿留在各自桶）与 repair（槽位换后端身份，草稿跟着搬）由参数表达，禁止调用点各自手写赋值 + 搬运（`frontend/src/App.vue`）。
 3. **前端 WebView2 交互区**:
    - `.app-header` 声明了 `--wails-draggable: drag`；其内部所有可交互元素（Tab 标签、按钮、输入框、下拉菜单）必须显式标记 `--wails-draggable: no-drag`，否则点击/拖拽手势会被 WebView2 窗口拖拽劫持。
 4. **单测安全隔离**:
