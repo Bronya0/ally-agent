@@ -8,6 +8,7 @@
 package app
 
 import (
+	"bytes"
 	"compress/gzip"
 	"encoding/json"
 	"errors"
@@ -361,7 +362,7 @@ func (a *App) readSessionIndexLocked() ([]SessionIndexEntry, error) {
 		return nil, err
 	}
 	var entries []SessionIndexEntry
-	if len(strings.TrimSpace(string(data))) == 0 {
+	if len(bytes.TrimSpace(data)) == 0 {
 		return []SessionIndexEntry{}, nil
 	}
 	if err := json.Unmarshal(data, &entries); err != nil {

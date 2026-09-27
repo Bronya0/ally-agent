@@ -1392,9 +1392,13 @@ func validImageDataURL(value string) bool {
 		strings.HasPrefix(lower, "data:image/gif;base64,")
 }
 
+// attributeEscaper is built once: escapeAttribute runs per attachment while
+// assembling the text context, and constructing a Replacer costs more than the
+// replacements it performs.
+var attributeEscaper = strings.NewReplacer("&", "&amp;", "\"", "&quot;", "<", "&lt;", ">", "&gt;")
+
 func escapeAttribute(value string) string {
-	replacer := strings.NewReplacer("&", "&amp;", "\"", "&quot;", "<", "&lt;", ">", "&gt;")
-	return replacer.Replace(value)
+	return attributeEscaper.Replace(value)
 }
 
 func estimateTokensFromMessages(msgs []openai.ChatCompletionMessage) int {

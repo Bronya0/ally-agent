@@ -155,7 +155,7 @@ func (a *App) webFetchToolWithConfig(ctx context.Context, cfg ConfigState, req W
 	}
 
 	truncated := fetched.Result.Truncated
-	if len([]rune(text)) > maxChars {
+	if utf8.RuneCountInString(text) > maxChars {
 		text = truncateRunes(text, maxChars)
 		truncated = true
 	}
@@ -914,9 +914,14 @@ func truncateRunes(text string, max int) string {
 	if max <= 0 {
 		return ""
 	}
-	runes := []rune(text)
-	if len(runes) <= max {
+	offset, count := 0, 0
+	for count < max && offset < len(text) {
+		_, size := utf8.DecodeRuneInString(text[offset:])
+		offset += size
+		count++
+	}
+	if offset >= len(text) {
 		return text
 	}
-	return string(runes[:max]) + "..."
+	return text[:offset] + "..."
 }

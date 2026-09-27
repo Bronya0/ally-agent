@@ -29,6 +29,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	toolerrors "ally-dev/internal/tools/shared"
 )
@@ -669,21 +670,22 @@ func sampleMatches(ctx context.Context, rgPath, root, searchRoot string, req Req
 	// count_matches resolves its page from the globally sorted per-file counts
 	// collected by the end events so the hottest files lead and pagination is
 	// stable; lines mode keeps the rg traversal order for predictable offsets.
+	var sortedCounts []FileCount
 	var resultCounts []FileCount
 	if mode == OutputModeCountMatches {
-		sorted := fileCounts.Items()
+		sortedCounts = fileCounts.Items()
 		start := req.Offset
 		if start < 0 {
 			start = 0
 		}
-		if start > len(sorted) {
-			start = len(sorted)
+		if start > len(sortedCounts) {
+			start = len(sortedCounts)
 		}
 		end := start + countPageSize
-		if end > len(sorted) {
-			end = len(sorted)
+		if end > len(sortedCounts) {
+			end = len(sortedCounts)
 		}
-		resultCounts = sorted[start:end]
+		resultCounts = sortedCounts[start:end]
 	}
 
 	nextOffset := 0
@@ -693,7 +695,9 @@ func sampleMatches(ctx context.Context, rgPath, root, searchRoot string, req Req
 		// stats.FilesWithMatches（真实总数）：超过 heap 上限后用真实总数判定会让
 		// offset 卡在 heap 条数上永远翻不到下一页（counts 恒空、exhausted 恒
 		// false），模型按 nextOffset 无限重试同一页。以 heap 实际保留条数判定。
-		total := len(fileCounts.Items())
+		// Same items Items() already returned above: the heap is not touched
+		// between the two call sites.
+		total := len(sortedCounts)
 		if req.Offset > 0 && req.Offset >= total {
 			offsetExhausted = stats.FilesWithMatches > 0
 		} else if total > req.Offset+len(resultCounts) {
@@ -907,11 +911,10 @@ func sanitizeLineText(s string) string {
 	if s == "" {
 		return ""
 	}
-	runes := []rune(s)
-	if len(runes) <= maxGrepLineTextChars {
+	if utf8.RuneCountInString(s) <= maxGrepLineTextChars {
 		return s
 	}
-	return string(runes[:maxGrepLineTextChars]) + "…"
+	return string([]rune(s)[:maxGrepLineTextChars]) + "…"
 }
 
 func excludedDirs() []string {

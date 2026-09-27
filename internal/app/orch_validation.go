@@ -494,6 +494,13 @@ func filterGoVetOutput(output string, relPaths map[string]struct{}) string {
 	if len(relPaths) == 0 {
 		return ""
 	}
+	// Materialize the "path:" prefixes once: the inner loop runs per output
+	// line, and the map iteration order cannot affect the result (it only
+	// decides whether this line is kept).
+	prefixes := make([]string, 0, len(relPaths))
+	for rel := range relPaths {
+		prefixes = append(prefixes, rel+":")
+	}
 	var kept []string
 	for _, line := range strings.Split(output, "\n") {
 		line = strings.TrimSpace(line)
@@ -504,8 +511,8 @@ func filterGoVetOutput(output string, relPaths map[string]struct{}) string {
 		normalized = strings.TrimPrefix(normalized, "vet.exe: ")
 		normalized = strings.TrimPrefix(normalized, "vet: ")
 		normalized = strings.TrimPrefix(normalized, "./")
-		for rel := range relPaths {
-			if strings.HasPrefix(normalized, rel+":") {
+		for _, prefix := range prefixes {
+			if strings.HasPrefix(normalized, prefix) {
 				kept = append(kept, line)
 				break
 			}

@@ -2687,7 +2687,6 @@ code, pre {
 /* The model name is persistent chrome, so it sits on the shared secondary
    level rather than the var(--ally-text-body) it used to have; hover lifts it like its
    neighbours do. */
-.composer-info .info-provider,
 .composer-info .info-model {
   color: var(--ally-text-secondary);
   transition: color 0.15s ease;
@@ -3258,28 +3257,6 @@ code, pre {
   font-variant-numeric: tabular-nums;
 }
 
-.composer-info .info-export {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  flex-shrink: 0;
-  margin-right: 8px;
-}
-
-.composer-info .export-btn {
-  color: var(--ally-text-muted);
-  cursor: pointer;
-  padding: 1px 5px;
-  border-radius: 6px;
-  font-size: var(--ally-aux-font-size);
-  --wails-draggable: no-drag;
-}
-
-.composer-info .export-btn:hover {
-  color: var(--ally-text-high);
-  background: var(--ally-state-hover);
-}
-
 .git-stat {
   font-weight: 600;
 }
@@ -3762,17 +3739,6 @@ code, pre {
   text-overflow: ellipsis;
   white-space: nowrap;
   line-height: 1.4;
-}
-
-.session-prompt-summary {
-  display: block;
-  margin-top: 2px;
-  color: var(--ally-text-soft);
-  font-size: 11px;
-  line-height: 1.35;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .session-body {
@@ -5713,11 +5679,6 @@ code, pre {
    之前用 --md-strong 会比卡片行的琥珀动词暗一截，读起来像两种工具 */
 .subagent-inline-name {
   color: var(--ally-accent);
-  flex-shrink: 0;
-}
-
-.subagent-inline-verb {
-  color: var(--ally-text-faint);
   flex-shrink: 0;
 }
 

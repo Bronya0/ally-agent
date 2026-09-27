@@ -52,13 +52,20 @@ const (
 	defaultReasoningTag = "reasoning_content"
 )
 
+// The normalizers below run on every request and every config read, so their
+// Replacers are built once instead of per call.
+var (
+	separatorDropReplacer         = strings.NewReplacer("-", "", "_", "", " ", "")
+	separatorToUnderscoreReplacer = strings.NewReplacer("-", "_", " ", "_")
+)
+
 // normalizeReasoningEffort accepts any supported spelling (with case, dash,
 // space or underscore separators) and returns the canonical lowercase level.
 // Unknown values fall back to "auto" so a stale or mistyped config never
 // injects an unsupported parameter into a request.
 func normalizeReasoningEffort(value string) string {
 	v := strings.ToLower(strings.TrimSpace(value))
-	v = strings.NewReplacer("-", "", "_", "", " ", "").Replace(v)
+	v = separatorDropReplacer.Replace(v)
 	switch v {
 	case "auto", "default", "unset", "":
 		return reasoningEffortAuto
@@ -120,7 +127,7 @@ func reasoningWireForAdapter(cfg ConfigState, apiFormat, effort string) reasonin
 
 func normalizeTokenParam(value string) string {
 	v := strings.ToLower(strings.TrimSpace(value))
-	v = strings.NewReplacer("-", "_", " ", "_").Replace(v)
+	v = separatorToUnderscoreReplacer.Replace(v)
 	switch v {
 	case tokenParamMaxCompletionTokens, "max_completion_token", "completion_tokens", "completion":
 		return tokenParamMaxCompletionTokens
@@ -133,7 +140,7 @@ func normalizeTokenParam(value string) string {
 
 func normalizeAPIFormat(value string) string {
 	v := strings.ToLower(strings.TrimSpace(value))
-	v = strings.NewReplacer("-", "_", " ", "_").Replace(v)
+	v = separatorToUnderscoreReplacer.Replace(v)
 	switch v {
 	case "", "openai", "openai_compatible", "openai_chat", "chat", "chat_completions", "chat_completion":
 		return apiFormatOpenAIChat

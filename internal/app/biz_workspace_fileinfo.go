@@ -14,7 +14,6 @@ import (
 	"crypto/sha512"
 	"encoding/hex"
 	"fmt"
-	"hash"
 	"hash/crc32"
 	"io"
 	"os"
@@ -121,9 +120,13 @@ func hashWorkspaceFile(path string, out *WorkspaceFileInfo) error {
 	for {
 		n, rerr := file.Read(buf)
 		if n > 0 {
-			for _, h := range []hash.Hash{md5h, sha1h, sha256h, sha512h, crc32h} {
-				h.Write(buf[:n])
-			}
+			// Direct calls instead of a []hash.Hash literal: the slice was rebuilt
+			// on every 64KiB block and each write went through an interface value.
+			md5h.Write(buf[:n])
+			sha1h.Write(buf[:n])
+			sha256h.Write(buf[:n])
+			sha512h.Write(buf[:n])
+			crc32h.Write(buf[:n])
 		}
 		if rerr == io.EOF {
 			break

@@ -1376,9 +1376,4 @@ watch(() => props.visible, (visible) => {
   white-space: nowrap;
 }
 
-@media (max-width: 640px) {
-  .config-modal {
-    max-width: calc(100vw - 24px);
-  }
-}
 </style>

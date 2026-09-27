@@ -71,11 +71,15 @@ func FormatMarkdown(description, content string) string {
 	return b.String()
 }
 
+// nonSlugRuneRE collapses every run of characters outside [a-z0-9]; compiled
+// once because DefaultPath runs for every memory created without a path.
+var nonSlugRuneRE = regexp.MustCompile(`[^a-z0-9]+`)
+
 // DefaultPath derives a default .md filename from a description by lowercasing
 // and replacing non-alphanumeric runs with hyphens.
 func DefaultPath(description string) string {
 	slug := strings.ToLower(strings.TrimSpace(description))
-	slug = regexp.MustCompile(`[^a-z0-9]+`).ReplaceAllString(slug, "-")
+	slug = nonSlugRuneRE.ReplaceAllString(slug, "-")
 	slug = strings.Trim(slug, "-")
 	if slug == "" {
 		slug = "memory"

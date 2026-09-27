@@ -223,7 +223,7 @@ func (a *App) openAIChatStreamAttempt(ctx context.Context, cfg ConfigState, clie
 		}
 		if resp.Usage != nil {
 			usage = modelUsageFromLegacy(resp.Usage, raw)
-		} else if len(resp.Choices) > 0 && len(raw) > 0 {
+		} else if len(resp.Choices) > 0 && len(raw) > 0 && chunkMentionsUsageKey(raw) {
 			if choiceUsage := extractChoiceUsageFromRaw(raw); choiceUsage != nil {
 				usage = modelUsageFromLegacy(choiceUsage, raw)
 			}
@@ -407,6 +407,15 @@ func normalizeToolsForOpenAIChat(tools []legacyopenai.Tool) []legacyopenai.Tool 
 		out[i].Function = &fn
 	}
 	return out
+}
+
+// chunkMentionsUsageKey reports whether a chunk's raw bytes mention the "usage"
+// key at all. choices[0].usage is the only thing extractChoiceUsageFromRaw can
+// find, so a chunk without the literal key always decoded to nil; the scan saves
+// that second decode on every content-only chunk. A provider that escaped the
+// key as \u0075sage would slip past — no JSON encoder escapes ASCII letters.
+func chunkMentionsUsageKey(raw []byte) bool {
+	return bytes.Contains(raw, []byte(`"usage"`))
 }
 
 func extractChoiceUsageFromRaw(raw []byte) *legacyopenai.Usage {

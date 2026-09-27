@@ -1075,9 +1075,18 @@ func collapseRepeatedName(name string) string {
 		if len(name)%period != 0 {
 			continue
 		}
-		unit := name[:period]
-		if name == strings.Repeat(unit, len(name)/period) && isKnownToolName(unit) {
-			return unit
+		// name == unit repeated len(name)/period times holds exactly when every
+		// byte repeats with this period; checking that in place avoids building
+		// the repeated string for every candidate period.
+		repeated := true
+		for i := period; i < len(name); i++ {
+			if name[i] != name[i%period] {
+				repeated = false
+				break
+			}
+		}
+		if repeated && isKnownToolName(name[:period]) {
+			return name[:period]
 		}
 	}
 	return name

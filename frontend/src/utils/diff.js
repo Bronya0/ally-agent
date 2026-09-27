@@ -77,10 +77,9 @@ export function computeDiffLines(oldText, newText, oldStart = 1, newStart = 1, i
     }
   }
 
-  const result = [];
-  for (let k = reversed.length - 1; k >= 0; k--) {
-    result.push(reversed[k]);
-  }
+  // reversed is dead after this point, so reverse it in place instead of
+  // copying every entry into a second array.
+  const result = reversed.reverse();
 
   // Suppress trailing deletes when streaming (incomplete)
   if (isIncomplete && result.length > 0) {

@@ -14,7 +14,6 @@
 package service
 
 import (
-	"bytes"
 	"strings"
 	"sync"
 	"unicode/utf8"
@@ -76,7 +75,7 @@ func (b *RollingBuffer) String() string {
 func (b *RollingBuffer) Snapshot() (string, int64, bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return string(bytes.Clone(b.buf)), b.total, b.truncated
+	return string(b.buf), b.total, b.truncated
 }
 
 // Restore replaces the buffer state with the given output. Used when

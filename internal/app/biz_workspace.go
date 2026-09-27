@@ -9,6 +9,7 @@ package app
 
 import (
 	"bufio"
+	"container/heap"
 	"context"
 	"fmt"
 	"io/fs"
@@ -435,7 +436,7 @@ func (a *App) searchWorkspacePaths(cfg ConfigState, req WorkspacePathSearchReque
 	}
 
 	candidateCap := min(max(limit*8, 64), 512)
-	candidates := make([]workspacePathCandidate, 0, min(candidateCap, len(index.Entries)))
+	candidates := make(workspacePathCandidateHeap, 0, min(candidateCap, len(index.Entries)))
 	count := 0
 	for pos, entry := range index.Entries {
 		score, ok := workspacePathMatchScore(entry, lowerQuery)
@@ -446,16 +447,16 @@ func (a *App) searchWorkspacePaths(cfg ConfigState, req WorkspacePathSearchReque
 		candidate := workspacePathCandidate{Entry: entry, Score: score, Pos: pos}
 		if len(candidates) < candidateCap {
 			candidates = append(candidates, candidate)
+			if len(candidates) == candidateCap {
+				heap.Init(&candidates)
+			}
 			continue
 		}
-		worst := 0
-		for i := 1; i < len(candidates); i++ {
-			if workspacePathCandidateLess(candidates[worst], candidates[i]) {
-				worst = i
-			}
-		}
-		if workspacePathCandidateLess(candidate, candidates[worst]) {
-			candidates[worst] = candidate
+		// Heap root is the worst candidate kept so far, in the same order the
+		// final sort uses; a better candidate replaces it in O(log cap).
+		if workspacePathCandidateLess(candidate, candidates[0]) {
+			candidates[0] = candidate
+			heap.Fix(&candidates, 0)
 		}
 	}
 	sort.Slice(candidates, func(i, j int) bool { return workspacePathCandidateLess(candidates[i], candidates[j]) })
@@ -493,6 +494,31 @@ func workspacePathCandidateLess(a, b workspacePathCandidate) bool {
 	return a.Pos < b.Pos
 }
 
+// workspacePathCandidateHeap keeps the best candidateCap matches while the
+// index is scanned: Less is the inverse of workspacePathCandidateLess, so index
+// 0 is always the worst candidate kept — the one a better candidate replaces.
+// Pos is unique, so the order is a strict total order and the retained set is
+// the same one the previous full-scan version kept.
+type workspacePathCandidateHeap []workspacePathCandidate
+
+func (h workspacePathCandidateHeap) Len() int { return len(h) }
+
+func (h workspacePathCandidateHeap) Less(i, j int) bool {
+	return workspacePathCandidateLess(h[j], h[i])
+}
+
+func (h workspacePathCandidateHeap) Swap(i, j int) { h[i], h[j] = h[j], h[i] }
+
+func (h *workspacePathCandidateHeap) Push(x any) { *h = append(*h, x.(workspacePathCandidate)) }
+
+func (h *workspacePathCandidateHeap) Pop() any {
+	old := *h
+	n := len(old)
+	item := old[n-1]
+	*h = old[:n-1]
+	return item
+}
+
 func workspacePathMatchScore(entry workspacePathIndexedEntry, query string) (int, bool) {
 	if query == "" {
 		if entry.Dir {
@@ -509,8 +535,17 @@ func workspacePathMatchScore(entry workspacePathIndexedEntry, query string) (int
 	if strings.Contains(entry.LowerPath, "/"+query) {
 		return 2, true
 	}
-	for _, part := range strings.Split(entry.LowerPath, "/") {
-		if strings.HasPrefix(part, query) {
+	// Same segment set as strings.Split(entry.LowerPath, "/") without the
+	// per-entry slice: query is non-empty here (the "" case returns above), so
+	// empty segments can never match and are skipped.
+	for rest := entry.LowerPath; rest != ""; {
+		seg := rest
+		if idx := strings.IndexByte(rest, '/'); idx >= 0 {
+			seg, rest = rest[:idx], rest[idx+1:]
+		} else {
+			rest = ""
+		}
+		if strings.HasPrefix(seg, query) {
 			return 3, true
 		}
 	}

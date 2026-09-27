@@ -45,6 +45,19 @@ const COMMAND_WORDS = new Set([
 
 const OPERATORS = ['<<<', '>>', '<<', '&&', '||', '|&', ';;', ';&', ';;&', '>|', '|', ';', '&', '(', ')', '<', '>'];
 
+// Operators grouped by their first character, each group keeping the OPERATORS
+// order (longest first). readWordEnd calls readOperator for every character, so
+// one Map lookup replaces a scan over all 18 candidates.
+const OPERATOR_GROUPS = new Map();
+for (const operator of OPERATORS) {
+  const group = OPERATOR_GROUPS.get(operator[0]);
+  if (group) {
+    group.push(operator);
+  } else {
+    OPERATOR_GROUPS.set(operator[0], [operator]);
+  }
+}
+
 export function isShellLanguage(lang) {
   return ['bash', 'console', 'shell', 'sh', 'terminal', 'zsh'].includes(String(lang || '').toLowerCase());
 }
@@ -68,14 +81,14 @@ export function highlightShellCommand(source) {
     const ch = text[i];
 
     if (ch === '\r' || ch === '\n') {
-      html += escapeHtml(ch);
+      html += ch;
       i += 1;
       expectingCommand = true;
       continue;
     }
 
     if (/\s/.test(ch)) {
-      html += escapeHtml(ch);
+      html += ch;
       i += 1;
       continue;
     }
@@ -153,7 +166,9 @@ function readQuoted(text, start, quote) {
 }
 
 function readOperator(text, start) {
-  return OPERATORS.find((operator) => text.startsWith(operator, start)) || '';
+  const group = OPERATOR_GROUPS.get(text[start]);
+  if (!group) return '';
+  return group.find((operator) => text.startsWith(operator, start)) || '';
 }
 
 function isCommandSeparator(operator) {
@@ -175,10 +190,12 @@ function wrap(className, text) {
   return `<span class="${className}">${escapeHtml(text)}</span>`;
 }
 
+// Single pass: the chained replaceAll version scanned the whole string once per
+// character class. Only the original characters are keys, so no replacement can
+// be escaped a second time.
+const ESCAPE_CHARS = /[&<>"]/g;
+const ESCAPE_ENTITIES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' };
+
 function escapeHtml(text) {
-  return String(text || '')
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;');
+  return String(text || '').replace(ESCAPE_CHARS, (ch) => ESCAPE_ENTITIES[ch]);
 }

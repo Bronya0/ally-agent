@@ -58,6 +58,7 @@ export function normalizeCustomHeaders(headers) {
   const source = headers && typeof headers === 'object' && !Array.isArray(headers) ? headers : {};
   const keys = Object.keys(source).sort();
   const out = {};
+  let kept = 0;
   for (const raw of keys) {
     const key = canonicalHeaderKey(raw);
     const value = String(source[raw] ?? '').trim();
@@ -65,8 +66,9 @@ export function normalizeCustomHeaders(headers) {
     if (MANAGED_HEADER_NAMES.has(key)) continue;
     if (!isValidHeaderKey(key)) continue;
     if (Object.hasOwn(out, key)) continue;
-    if (Object.keys(out).length >= MAX_CUSTOM_HEADERS) break;
+    if (kept >= MAX_CUSTOM_HEADERS) break;
     out[key] = value;
+    kept += 1;
   }
   return Object.keys(out).length ? out : null;
 }
@@ -79,14 +81,21 @@ function normalizeModelId(value) {
   return String(value || '').trim();
 }
 
+// Alias tables, compiled once: these normalizers run per config row and per
+// render pass.
+const MAX_COMPLETION_TOKENS_ALIASES = new Set(['max_completion_tokens', 'max_completion_token', 'completion_tokens', 'completion']);
+const MAX_TOKENS_ALIASES = new Set(['max_tokens', 'max_token', 'tokens', 'legacy']);
+const RESPONSES_API_ALIASES = new Set(['openai_responses', 'responses', 'response']);
+const ANTHROPIC_API_ALIASES = new Set(['anthropic', 'anthropic_messages', 'claude', 'claude_messages', 'messages']);
+
 // normalizeTokenParam mirrors the Go backend: empty/unknown -> 'auto' (legacy
 // max_tokens), only 'max_completion_tokens' opts into the newer field.
 export function normalizeTokenParam(value) {
   const v = String(value || '').trim().toLowerCase().replace(/[-\s]+/g, '_');
-  if (['max_completion_tokens', 'max_completion_token', 'completion_tokens', 'completion'].includes(v)) {
+  if (MAX_COMPLETION_TOKENS_ALIASES.has(v)) {
     return 'max_completion_tokens';
   }
-  if (['max_tokens', 'max_token', 'tokens', 'legacy'].includes(v)) return 'max_tokens';
+  if (MAX_TOKENS_ALIASES.has(v)) return 'max_tokens';
   return 'auto';
 }
 
@@ -100,8 +109,8 @@ export function normalizeTokenParam(value) {
 // how the reasoning-effort tables drifted apart in the first place.
 export function normalizeApiFormat(value) {
   const v = String(value || '').trim().toLowerCase().replace(/[-\s]+/g, '_');
-  if (['openai_responses', 'responses', 'response'].includes(v)) return 'openai_responses';
-  if (['anthropic', 'anthropic_messages', 'claude', 'claude_messages', 'messages'].includes(v)) return 'anthropic_messages';
+  if (RESPONSES_API_ALIASES.has(v)) return 'openai_responses';
+  if (ANTHROPIC_API_ALIASES.has(v)) return 'anthropic_messages';
   return 'openai_chat';
 }
 

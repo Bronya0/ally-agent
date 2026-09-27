@@ -1840,6 +1840,22 @@ export function reasoningEffortLabel(level) {
   return ['auto', 'low', 'medium', 'high', 'xhigh', 'max'].includes(v) ? v : 'auto';
 }
 
+// DateTimeFormat construction is far more expensive than format(), and the
+// session/task lists format one row at a time, so formatters are cached by
+// (locale, options). A failed construction (invalid options) still throws on
+// every call — it is never cached.
+const dateTimeFormatters = new Map();
+
+function dateTimeFormatter(options) {
+  const key = `${locale}|${JSON.stringify(options)}`;
+  let formatter = dateTimeFormatters.get(key);
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat(locale, options);
+    dateTimeFormatters.set(key, formatter);
+  }
+  return formatter;
+}
+
 export function formatDateTime(value, options) {
   const date = value instanceof Date ? value : new Date(value);
   const resolvedOptions = options || {
@@ -1850,7 +1866,7 @@ export function formatDateTime(value, options) {
     minute: '2-digit',
     second: '2-digit',
   };
-  return new Intl.DateTimeFormat(locale, resolvedOptions).format(date);
+  return dateTimeFormatter(resolvedOptions).format(date);
 }
 
 export function welcomeGreeting(now = new Date()) {

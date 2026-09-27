@@ -1114,6 +1114,20 @@ func neutralizeClosingMarkers(v string) string {
 	return strings.ReplaceAll(v, "</", "&lt;/")
 }
 
+// rowBreakReplacer and attrEscaper are built once: both helpers run per row and
+// per attribute while rendering tool results, and constructing a Replacer costs
+// more than the replacements it performs.
+var (
+	rowBreakReplacer = strings.NewReplacer("\n", `\n`, "\r", `\r`)
+	attrEscaper      = strings.NewReplacer(
+		`"`, "&quot;",
+		"<", "&lt;",
+		">", "&gt;",
+		"\n", "&#10;",
+		"\r", "&#13;",
+	)
+)
+
 // neutralizeRowBreaks makes a value safe inside a one-item-per-line row (grep's
 // "path:line: text", a <ally-files> entry, a "link: text <url>" row): a path or link
 // carrying a line break would read as another row, and Unix filenames may well
@@ -1124,7 +1138,7 @@ func neutralizeRowBreaks(v string) string {
 	if !strings.ContainsAny(v, "\n\r") {
 		return v
 	}
-	return strings.NewReplacer("\n", `\n`, "\r", `\r`).Replace(v)
+	return rowBreakReplacer.Replace(v)
 }
 
 // attrEscape makes a value safe inside a double-quoted tag attribute; quotes,
@@ -1133,13 +1147,7 @@ func attrEscape(v string) string {
 	if !strings.ContainsAny(v, `"<>`+"\n\r") {
 		return v
 	}
-	return strings.NewReplacer(
-		`"`, "&quot;",
-		"<", "&lt;",
-		">", "&gt;",
-		"\n", "&#10;",
-		"\r", "&#13;",
-	).Replace(v)
+	return attrEscaper.Replace(v)
 }
 
 func decodeToolData(data any, target any) bool {

@@ -437,11 +437,12 @@ export function loadMermaid() {
   });
 }
 
+// Single pass: the chained replaceAll version scanned the whole string once per
+// character class. Only the original characters are keys, so no replacement can
+// be escaped a second time.
+const HTML_ESCAPE_CHARS = /[&<>"']/g;
+const HTML_ESCAPE_ENTITIES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+
 export function escapeHtmlText(value) {
-  return String(value ?? '')
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#39;');
+  return String(value ?? '').replace(HTML_ESCAPE_CHARS, (ch) => HTML_ESCAPE_ENTITIES[ch]);
 }

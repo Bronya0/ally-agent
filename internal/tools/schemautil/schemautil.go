@@ -39,7 +39,9 @@ func Map(value any) map[string]any {
 	}
 	var m map[string]any
 	if asMap, ok := value.(map[string]any); ok {
-		m = cloneMap(asMap)
+		// deref deep-copies the schema it is given, so cloning here as well
+		// only copied every tool's schema twice per request.
+		m = asMap
 	} else if raw, err := json.Marshal(value); err == nil {
 		_ = json.Unmarshal(raw, &m)
 	}
@@ -100,6 +102,8 @@ func cloneValue(v any) any {
 // by inlining definitions directly into the schema. Anthropic, Moonshot (Kimi), and
 // OpenAI Responses strict mode reject schemas with unresolved $ref pointers.
 // Circular references are preserved as $ref to avoid infinite recursion.
+// It deep-copies the tree it is given, so callers may hand it their input
+// directly (Map relies on this instead of cloning first).
 func deref(root map[string]any) map[string]any {
 	if root == nil {
 		return nil

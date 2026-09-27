@@ -495,9 +495,15 @@ function openSSHClusterManager() {
   emit('open-ssh-cluster-manager');
 }
 
+// One Set per allowedSshServers change: the checkbox list calls isServerAllowed
+// for every row on every render (and on every search keystroke), so the per-call
+// map()/includes() walk made the list O(rows × servers).
+const allowedSshAliasSet = computed(() => new Set(
+  (Array.isArray(props.allowedSshServers) ? props.allowedSshServers : []).map((s) => String(s || '').toLowerCase().trim()),
+));
+
 function isServerAllowed(alias) {
-  const target = String(alias || '').toLowerCase().trim();
-  return Array.isArray(props.allowedSshServers) && props.allowedSshServers.map((s) => String(s || '').toLowerCase().trim()).includes(target);
+  return allowedSshAliasSet.value.has(String(alias || '').toLowerCase().trim());
 }
 
 const contextPopoverVisible = ref(false);

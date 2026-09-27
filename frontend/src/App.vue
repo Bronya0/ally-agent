@@ -242,15 +242,8 @@ Public License v3. See the LICENSE file for details.
                   class="prompt-input"
                   :value="tab.sessionId ? (sessionPromptTexts[tab.sessionId] || '') : ''"
                   type="textarea"
-                  :input-props="{
-                    onPaste: handlePromptPaste,
-                    onCompositionstart: handlePromptCompositionStart,
-                    onCompositionend: handlePromptCompositionEnd,
-                    onClick: handlePromptCursorActivity,
-                    onKeyup: handlePromptKeyup,
-                    'data-ally-prompt-input': 'true',
-                  }"
-                  :autosize="{ minRows: 2, maxRows: 10 }"
+                  :input-props="PROMPT_INPUT_PROPS"
+                  :autosize="PROMPT_AUTOSIZE"
                   :disabled="isKbTab(tab) && kbIndexMissing"
                   placeholder=""
                   @update:value="(v) => { if (tab.sessionId) sessionPromptTexts[tab.sessionId] = v; }"
@@ -6229,6 +6222,19 @@ function handlePromptCompositionEnd() {
   promptComposing.value = false;
   promptCompositionEndedAt = performance.now();
 }
+
+// Stable references for the prompt textarea: inline object literals in the
+// template hand n-input a new object on every App render, which makes it treat
+// inputProps/autosize as changed and re-render once per tab per render.
+const PROMPT_INPUT_PROPS = {
+  onPaste: handlePromptPaste,
+  onCompositionstart: handlePromptCompositionStart,
+  onCompositionend: handlePromptCompositionEnd,
+  onClick: handlePromptCursorActivity,
+  onKeyup: handlePromptKeyup,
+  'data-ally-prompt-input': 'true',
+};
+const PROMPT_AUTOSIZE = { minRows: 2, maxRows: 10 };
 
 function handlePromptKeydown(event) {
   // macOS WebKit may emit Enter just after compositionend and report isComposing=false.

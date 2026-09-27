@@ -470,6 +470,17 @@ var rawParsedReasoningKeys = func() []string {
 	return keys
 }()
 
+// rawParsedReasoningKeyQuoted is the quoted ("key") byte form of the keys above:
+// parseStreamReasoning scans every streamed chunk, so the quoting happens once
+// here instead of per key per chunk.
+var rawParsedReasoningKeyQuoted = func() [][]byte {
+	quoted := make([][]byte, 0, len(rawParsedReasoningKeys))
+	for _, key := range rawParsedReasoningKeys {
+		quoted = append(quoted, []byte(strconv.Quote(key)))
+	}
+	return quoted
+}()
+
 func isKnownWireReasoningKey(tag string) bool {
 	tag = strings.TrimSpace(tag)
 	for _, k := range knownReasoningWireKeys {
@@ -981,8 +992,8 @@ func detectChatReasoningDialect(messages []map[string]json.RawMessage, defaultKe
 // triggering a parse attempt: a chunk carrying only "reasoning_effort" or
 // "reasoning.enabled" must not match.
 func chunkMentionsReasoningKey(raw []byte) bool {
-	for _, key := range rawParsedReasoningKeys {
-		if bytes.Contains(raw, []byte(strconv.Quote(key))) {
+	for _, quoted := range rawParsedReasoningKeyQuoted {
+		if bytes.Contains(raw, quoted) {
 			return true
 		}
 	}

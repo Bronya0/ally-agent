@@ -61,10 +61,14 @@ function countChars(buckets) {
 function fitBudget(buckets) {
   const fitted = buckets.map(([key, entries]) => [key, [...entries]]);
   let total = countChars(fitted);
+  // Entries are only ever shifted off the head of a bucket, so the first
+  // non-empty bucket only moves forward: one cursor replaces a find() per
+  // dropped entry.
+  let cursor = 0;
   while (total > PROMPT_HISTORY_MAX_TOTAL_CHARS) {
-    const oldest = fitted.find(([, entries]) => entries.length > 0);
-    if (!oldest) break;
-    total -= oldest[1].shift().length;
+    while (cursor < fitted.length && fitted[cursor][1].length === 0) cursor += 1;
+    if (cursor >= fitted.length) break;
+    total -= fitted[cursor][1].shift().length;
   }
   return fitted.filter(([, entries]) => entries.length > 0);
 }

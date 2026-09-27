@@ -199,8 +199,9 @@ func plausibleText(s string) bool {
 // oldText). Writes must use EncodeText to restore it.
 func NormalizeText(data []byte) (string, string, bool) {
 	s := string(data)
+	hasCRLF := strings.Contains(s, "\r\n")
 	ending := "LF"
-	if strings.Contains(s, "\r\n") {
+	if hasCRLF {
 		ending = "CRLF"
 	}
 	hadBOM := false
@@ -210,7 +211,12 @@ func NormalizeText(data []byte) (string, string, bool) {
 		s = strings.TrimPrefix(s, "\uFEFF")
 		hadBOM = true
 	}
-	s = strings.ReplaceAll(s, "\r\n", "\n")
+	if hasCRLF {
+		// ReplaceAll is a no-op when nothing matches, so a pure-LF file skips a
+		// second full scan; stripping the BOM above cannot introduce or hide a
+		// CRLF pair.
+		s = strings.ReplaceAll(s, "\r\n", "\n")
+	}
 	s = strings.ReplaceAll(s, "\r", "\n")
 	return s, ending, hadBOM
 }

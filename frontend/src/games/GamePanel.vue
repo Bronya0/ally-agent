@@ -419,12 +419,9 @@ function cardLabel(card) { return card === 16 ? '小王' : card === 17 ? '大王
 .games-inline-heading { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
 .games-inline-title { font-size: 18px; font-weight: 700; letter-spacing: 0.5px; color: var(--game-title-color); }
 .games-inline-subtitle { color: var(--game-hint-color); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.games-inline-badges { margin-left: auto; display: flex; gap: 8px; }
 .game-btn-row { display: flex; gap: 8px; }
 .game-main-btn { flex: 1; }
 .xiangqi-cell.is-hint::after { content: ''; position: absolute; z-index: 1; inset: 38%; border-radius: 50%; background: color-mix(in srgb, #18a058 75%, transparent); box-shadow: 0 0 6px rgba(24, 160, 88, 0.6); pointer-events: none; }
-.game-badge { padding: 3px 10px; border-radius: 999px; font-size: 11px; color: var(--game-hint-color); background: var(--game-panel-card-bg); border: 1px solid var(--game-panel-card-border); }
-.game-badge.online { color: #3fbf7f; border-color: color-mix(in srgb, #3fbf7f 45%, transparent); background: color-mix(in srgb, #3fbf7f 12%, transparent); }
 
 .games-inline-body { flex: 1; min-height: 0; display: flex; padding: 16px 22px 20px; overflow: auto; }
 .game-layout { display: grid; grid-template-columns: 250px minmax(0, 1fr); gap: 18px; flex: 1; min-height: 0; }
@@ -432,11 +429,9 @@ function cardLabel(card) { return card === 16 ? '小王' : card === 17 ? '大王
 
 .game-card { display: flex; flex-direction: column; gap: 8px; padding: 12px; border-radius: 12px; background: var(--game-panel-card-bg); border: 1px solid var(--game-panel-card-border); }
 .game-card-title { color: var(--game-section-title-color); font-size: 12px; font-weight: 600; letter-spacing: 0.4px; }
-.game-hint, .game-connected { color: var(--game-hint-color); font-size: 12px; line-height: 1.5; }
+.game-hint { color: var(--game-hint-color); font-size: 12px; line-height: 1.5; }
 
 .game-model-row { margin-top: 0; padding-top: 0; flex-wrap: wrap; white-space: normal; min-width: 0; }
-
-.game-thinking-row { display: flex; align-items: center; gap: 8px; }
 
 .game-usage { display: flex; flex-direction: column; gap: 2px; padding: 6px 8px; border-radius: 8px; background: color-mix(in srgb, var(--game-section-title-color) 7%, transparent); color: var(--game-hint-color); font-size: 11.5px; line-height: 1.4; font-variant-numeric: tabular-nums; }
 

@@ -356,11 +356,18 @@ func (c *checker) checkArray(items []any, schema map[string]any, path string) {
 }
 
 func (c *checker) checkString(value string, schema map[string]any, path string) {
-	length := utf8.RuneCountInString(value)
-	if minimum, ok := schemaNumber(schema["minLength"]); ok && float64(length) < minimum {
+	minimum, hasMin := schemaNumber(schema["minLength"])
+	maximum, hasMax := schemaNumber(schema["maxLength"])
+	// Only pay for the rune count when a length bound uses it; the long payload
+	// fields (edit content, render_html html) declare no bound.
+	length := 0
+	if hasMin || hasMax {
+		length = utf8.RuneCountInString(value)
+	}
+	if hasMin && float64(length) < minimum {
 		c.add(path, "must be at least %d characters (got %d)", int(minimum), length)
 	}
-	if maximum, ok := schemaNumber(schema["maxLength"]); ok && float64(length) > maximum {
+	if hasMax && float64(length) > maximum {
 		c.add(path, "must be at most %d characters (got %d)", int(maximum), length)
 	}
 	if pattern, ok := schema["pattern"].(string); ok && !patternMatches(pattern, value) {
