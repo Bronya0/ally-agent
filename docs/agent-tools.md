@@ -48,9 +48,9 @@ func functionTool(name, desc string, params map[string]any) openai.Tool {  // :3
 
 三个值得学的做法：
 
-1. **示例写进描述**（`builtinToolExamples`，`builtins.go:459`）。参数描述说一百句，不如给一条能直接抄的样例 JSON——提升工具调用成功率最便宜的手段。
-2. **strict schema 递归规范化**（`enforceStrictSchema` → `normalizeSchemaNode`，`builtins.go:638` / `:646`）。遍历 `properties` / `items` / `anyOf` / `oneOf` / `allOf` / `not`，给每个 `type: object` 补 `additionalProperties: false` 与 `properties: {}`。少规范化一层，strict 模式就会被 provider 拒或在子对象上静默放宽。任意 JSON 参数用 `jsonValueSchema`（`anyOf` 五种类型，`builtins.go:625`）表达，且自带 `anyOf` 的节点不会被补上标量 `type`——两者取交集会把「对象/数组/字符串都行」缩成「只能是字符串」（`schemautil.declaresOwnShape`）。
-3. **schema 与 DTO 必须对齐**：`batchReadFilesSchema` 的 `minItems/maxItems`、`editChangeSchema` 的 `oneOf(oldText | lineRange)` 与执行侧解码/校验是同一套规则的两处表述。它们漂移的那天，模型就会发出「schema 允许但执行必拒」的调用。对齐不再靠人看：内置工具的入参会在分发层按 schema 校验一次（见四），漂移会当场地报 `E_BAD_ARGS`。另一个易错点是互斥判定的口径：`oneOf`/`not` 要按参数的**有效值**判，不能按 `required` 的键是否存在——`tailLines: 0`、`body: ""` 在运行时就是「没传」，按键存在判会把模型补零/补空串的写法误报成「两种形式都给了」。正例见 `editSourceOneOf` 与 `batchReadFilesSchema`（闸门用例 `TestBuiltinGateTreatsEmptyOptionalsAsAbsent`）。
+1. **示例写进描述**（`builtinToolExamples`，`builtins.go:460`）。参数描述说一百句，不如给一条能直接抄的样例 JSON——提升工具调用成功率最便宜的手段。
+2. **strict schema 递归规范化**（`enforceStrictSchema` → `normalizeSchemaNode`，`builtins.go:669` / `:677`）。遍历 `properties` / `items` / `anyOf` / `oneOf` / `allOf` / `not`，给每个 `type: object` 补 `additionalProperties: false` 与 `properties: {}`。少规范化一层，strict 模式就会被 provider 拒或在子对象上静默放宽。任意 JSON 参数用 `jsonValueSchema`（`anyOf` 五种类型，`builtins.go:656`）表达，且自带 `anyOf` 的节点不会被补上标量 `type`——两者取交集会把「对象/数组/字符串都行」缩成「只能是字符串」（`schemautil.declaresOwnShape`）。
+3. **schema 与 DTO 必须对齐**：`batchReadFilesSchema` 的 `minItems/maxItems`、`editChangeSchema(sourceTool)` 的 `oneOf(oldText | lineRange)`（本地与远程共用同一份声明，只有来源工具名不同）与执行侧解码/校验是同一套规则的两处表述。它们漂移的那天，模型就会发出「schema 允许但执行必拒」的调用。对齐不再靠人看：内置工具的入参会在分发层按 schema 校验一次（见四），漂移会当场地报 `E_BAD_ARGS`。另一个易错点是互斥判定的口径：`oneOf`/`not` 要按参数的**有效值**判，不能按 `required` 的键是否存在——`tailLines: 0`、`body: ""` 在运行时就是「没传」，按键存在判会把模型补零/补空串的写法误报成「两种形式都给了」。正例见 `editSourceOneOf` 与 `batchReadFilesSchema`（闸门用例 `TestBuiltinGateTreatsEmptyOptionalsAsAbsent`）。来源之外还有一处互斥：`replaceAll` 只能跟 `oldText` 搭配，配 `lineRange` 由 `editReplaceAllRule`（`allOf` + `not` + `const`）当场拒，执行侧 `ValidateBatchTextChanges` 用同一条规则复核——两处漂移就是「schema 允许、执行必拒」的经典来源。
 
 工具集本身在 session 首次请求时**冻结**（`buildToolsForSession`，`biz_mcp.go:1140`）：`tools` 是请求前缀的一部分，中途变化会让供应商 prompt cache 全线作废。`cloneTools` 深拷贝，保证冻结的那份不被后续 MCP 启停改到。子代理 / 计划任务这类无 session 的调用方走 `buildToolsForConfig`，永远看实时集合（它们本来也无前缀可保）。MCP 工具靠名字前缀 `mcp__<server>__<tool>`（`mcpFunctionNamePrefix`）并入同一张表。
 
@@ -189,4 +189,4 @@ type toolResult struct {                       // infra_result.go:19
 3. `infra_result.go:19-48`、`178-1153` —— 信封 + 模型视图
 4. `orch_batch_policy.go` 全文 —— 批次策略
 5. `orch_command_safety.go` 全文 —— 安全围栏
-6. `builtins.go:111-491` + `493-718` —— schema 生成与 strict 化
+6. `builtins.go:111-492` + `494-749` —— schema 生成与 strict 化

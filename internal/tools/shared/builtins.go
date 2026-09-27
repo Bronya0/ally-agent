@@ -119,19 +119,21 @@ func chatToolsUncached() []openai.Tool {
 		functionTool("edit", "Validate and apply exact replacements to one workspace file per call.\n"+
 			"- Edit one file per call: `path`, `version`, and `changes` sit at the top level. When editing multiple files, emit parallel edit calls in the same turn.\n"+
 			"- Read the file first: `version` is the required current 6-character token from `read`.\n"+
-			"- Prefer a small unique `oldText` per change; `replaceAll` replaces all exact occurrences; `lineRange` (A-B form) replaces whole-line blocks.\n"+
-			"- All changes in one call match against the same original snapshot in reverse line order.", map[string]any{
+			"- Prefer `oldText` to `lineRange`: give a small unique `oldText` per change, or `replaceAll` to hit all exact occurrences; use `lineRange` only for a large block replacement or deletion.\n"+
+			"- All changes in one call match against the same original snapshot in reverse line order.\n"+
+			"- Discipline (each rule prevents a specific failed call):\n"+
+			"- One source per change: `oldText` or `lineRange`, never both, and `replaceAll` only goes with `oldText`.\n"+
+			"- Copy `oldText` verbatim from the latest `read`, without the displayed `N: ` prefixes, and keep it unique; add surrounding lines when it repeats, or set `replaceAll`. A snippet written from memory fails with E_NO_MATCH, a repeated one with E_MULTI_MATCH.\n"+
+			"- Merge nearby edits: changes whose source regions overlap fail the whole call (E_OVERLAPPING_CHANGES). For several edits in one region send ONE change — a single large `oldText`/`lineRange` whose `newText` is the final content — not several small anchors.\n"+
+			"- To insert next to a line, do not anchor `oldText` on that line in one change and edit that line in another: send one `lineRange` covering the line and repeat that line inside `newText`.\n"+
+			"- Never shift line numbers for earlier edits in the same call: every `lineRange` refers to the original snapshot.\n"+
+			"- E_VERSION_MISMATCH or E_NO_MATCH means the snapshot is stale: re-read the file, then rebuild the change from the fresh text.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"path":    map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Workspace-relative path of the single file to edit in this call."},
 				"version": map[string]any{"type": "string", "pattern": "^[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{6}$", "description": "Required 6-character current version from read or the preceding successful edit of this file. Comparison is case-insensitive."},
-				"changes": map[string]any{
-					"type":        "array",
-					"minItems":    1,
-					"maxItems":    50,
-					"description": "All changes for this one file (max 50). Every change matches against the same original read snapshot; overlapping source regions fail the whole call.",
-					"items":       editChangeSchema(),
-				},
+				// Same declaration as remote_edit; only the read tool it names differs.
+				"changes": editChangesSchema("read"),
 			},
 			"required": []string{"path", "version", "changes"},
 		}),
@@ -157,7 +159,7 @@ func chatToolsUncached() []openai.Tool {
 			"properties": map[string]any{
 				"command": map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Shell command to run."},
 				"cwd":     map[string]any{"type": "string", "description": "Working directory inside the workspace. Relative to the workspace root; an absolute path inside the workspace is also accepted and rebased. Empty means workspace root."},
-				"timeout": map[string]any{"type": "integer", "minimum": 0, "maximum": 600, "description": "Timeout in seconds; omit or send 0 for the default (120), max 600."},
+				"timeout": commandTimeoutSchema(),
 			},
 			"required": []string{"command"},
 		}),
@@ -256,7 +258,7 @@ func chatToolsUncached() []openai.Tool {
 				"body":               map[string]any{"type": "string", "description": "Raw request body. Mutually exclusive with json."},
 				"json":               jsonValueSchema("JSON value to encode as the request body. Sets Content-Type to application/json unless provided."),
 				"saveTo":             map[string]any{"type": "string", "description": "Optional workspace-relative download path for large responses; parent directories are created automatically."},
-				"timeout":            map[string]any{"type": "integer", "minimum": 0, "maximum": 120, "description": "Request timeout in seconds; omit or send 0 for the default (60), max 120."},
+				"timeout":            httpTimeoutSchema(),
 				"maxBytes":           map[string]any{"type": "integer", "minimum": 0, "maximum": MaxHTTPBodyBytes, "description": fmt.Sprintf("Response body cap in bytes (default %d, max %d; omit or send 0 for the default, larger requests are clamped). saveTo raises the default to the max.", DefaultHTTPMaxBody, MaxHTTPBodyBytes)},
 				"followRedirects":    map[string]any{"type": "boolean", "description": "Follow redirects (at most 5). Default true; set false to return the first response as-is."},
 				"insecureSkipVerify": map[string]any{"type": "boolean", "description": "Skip TLS verification. Default false; only for debugging or trusted self-signed services."},
@@ -276,7 +278,7 @@ func chatToolsUncached() []openai.Tool {
 				"url":                map[string]any{"type": "string", "minLength": 1, "pattern": `^https?://\S+$`, "description": "Absolute http:// or https:// URL."},
 				"format":             map[string]any{"type": "string", "enum": []string{"readable", "raw", ""}, "description": "Output mode. readable (default): Readability-extracted main-content text. raw: bounded page source without extraction, not byte-exact; use when readable fails (E_WEB_FETCH_EXTRACT) or source markup matters. An empty string means the default, exactly as the runtime reads it."},
 				"headers":            map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}, "description": "Request headers (e.g. Authorization, Cookie, Accept-Language). User-Agent defaults to AllyAgent unless provided."},
-				"timeout":            map[string]any{"type": "integer", "minimum": 0, "maximum": 120, "description": "Request timeout in seconds; omit or send 0 for the default (60), max 120."},
+				"timeout":            httpTimeoutSchema(),
 				"maxBytes":           map[string]any{"type": "integer", "minimum": 0, "maximum": MaxHTTPBodyBytes, "description": fmt.Sprintf("Download cap in bytes (default %d, max %d; omit or send 0 for the default, larger requests are clamped).", DefaultWebFetchBody, MaxHTTPBodyBytes)},
 				"maxChars":           map[string]any{"type": "integer", "minimum": 0, "maximum": MaxWebFetchChars, "description": fmt.Sprintf("Character cap for the returned text (default %d, max %d; omit or send 0 for the default). Text longer than this is truncated and the result is flagged truncated.", DefaultWebFetchChars, MaxWebFetchChars)},
 				"insecureSkipVerify": map[string]any{"type": "boolean", "description": "Skip TLS verification. Default false; only for debugging or trusted self-signed services."},
@@ -286,7 +288,7 @@ func chatToolsUncached() []openai.Tool {
 		functionTool("remote_read", "Read one or more text files on a remote SSH workspace (same contract as read: line-numbered preview + 6-char version for remote_edit; UTF-16 LE/BE transcoded; no document extraction). Omit startLine/endLine to read the whole file when needed, or specify startLine/endLine (or `tailLines` for the end of one) for targeted ranges in larger files. Pass needed files in the files array to read in parallel.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"target": map[string]any{"type": "string", "minLength": 1, "pattern": `.*\S.*`, "description": "Explicit SSH target plus an absolute, non-root workspace path, e.g. my-dev:/srv/app. The workspace path / is rejected."},
+				"target": sshTargetSchema(),
 				"files":  batchReadFilesSchema(),
 			},
 			"required": []string{"target", "files"},
@@ -295,21 +297,20 @@ func chatToolsUncached() []openai.Tool {
 			"- `target` selects the SSH target plus an absolute, non-root workspace path, e.g. my-dev:/srv/app; `/` is rejected, and `path` is relative to that root.\n"+
 			"- Requires the current 6-character `version` from `remote_read`; `E_VERSION_MISMATCH` means re-read before editing.\n"+
 			"- `changes` must be a JSON array (`[...]`), not a quoted JSON string (a quoted string is auto-repaired, but do not rely on it).\n"+
-			"- Each change chooses exactly one source: a small exact unique `oldText` copied from `remote_read` (preferred), or an inclusive whole-line `lineRange` in A-B form for larger blocks.\n"+
-			"- `replaceAll` works only with `oldText`. `newText` is required.", map[string]any{
+			"- Sources, changes and calling discipline are identical to `edit`: both tools declare the same `changes` schema, and only `remote_read` supplies the version and the displayed line numbers.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"target":  map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Explicit SSH target plus an absolute, non-root workspace path, e.g. my-dev:/srv/app. The workspace path / is rejected."},
+				"target":  sshTargetSchema(),
 				"path":    map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Relative path of the single file to edit in this call. Absolute paths under the workspace root are also accepted and rebased (the root itself is not)."},
 				"version": map[string]any{"type": "string", "pattern": "^[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{6}$", "description": "Required 6-char current version from remote_read."},
-				"changes": remoteEditChangesSchema(),
+				"changes": editChangesSchema("remote_read"),
 			},
 			"required": []string{"target", "path", "version", "changes"},
 		}),
 		functionTool("remote_create_file", "Create a UTF-8 text file in a remote SSH workspace; single-shot write. A path that is already a directory is rejected. An existing file needs `overwrite`, and that overwrite asks the user to approve it first; without `overwrite` the write fails with a plain \"file already exists\" message that carries no E_EXISTS code.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"target":    map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Explicit SSH target plus an absolute, non-root workspace path, e.g. my-dev:/srv/app. The workspace path / is rejected."},
+				"target":    sshTargetSchema(),
 				"path":      map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Remote path of the file to create, relative to the SSH workspace root; absolute paths under that root are accepted and rebased."},
 				"content":   map[string]any{"type": "string", "description": "Full UTF-8 text of the new file (may be empty), written as-is."},
 				"overwrite": map[string]any{"type": "boolean", "description": "Set true to replace an existing file; the overwrite is approved by the user first."},
@@ -319,7 +320,7 @@ func chatToolsUncached() []openai.Tool {
 		functionTool("remote_delete_path", "Delete a file or directory in a remote SSH workspace. Refuses the workspace root, its immediate child directories (root-level folders), VCS metadata, and OS-sensitive paths; other directories require recursive=true, while root-level files remain deletable. Strictly prohibited from deleting filesystem roots, level 1 and level 2 system backbone directories (e.g. /etc, /var, /usr, /home/*), or protected system targets (e.g. /dev, /proc, /sys, /etc/shadow, /var/local/libs). Use remote deletion cautiously; it is destructive. Prefer this over remote_run_command deletion.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"target":    map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Explicit SSH target plus an absolute, non-root workspace path, e.g. my-dev:/srv/app. The workspace path / is rejected."},
+				"target":    sshTargetSchema(),
 				"path":      map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Remote path to delete. Refuses filesystem root, level 1/2 directories, and sensitive system targets."},
 				"recursive": map[string]any{"type": "boolean", "description": "Required for deleting directories below the workspace root. Immediate child directories of the workspace root and system level 1/2 directories are always blocked."},
 			},
@@ -328,11 +329,11 @@ func chatToolsUncached() []openai.Tool {
 		functionTool("remote_run_command", "Run a non-interactive shell command on a remote SSH workspace. Unmanaged shell deletion commands (e.g. rm, find -delete, rsync --delete) are refused; use remote_delete_path to delete workspace files. Recognized managed deletion contexts (e.g. git rm, docker rm, kubectl delete) follow their own rules. Unlike the local command tool, a remote timeout kills the process group instead of promoting it to a background service, output is capped at 128 KiB with no full-output file, and a literal write target outside the workspace fails with E_PATH_OUTSIDE.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"target":  map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Explicit SSH target plus an absolute, non-root workspace path, e.g. my-dev:/srv/app. The workspace path / is rejected."},
+				"target":  sshTargetSchema(),
 				"command": map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Shell command to run on the remote host."},
 				"shell":   map[string]any{"type": "string", "enum": []string{"/bin/bash", "/bin/sh", "/usr/bin/bash", "/usr/bin/sh", "/bin/zsh", "/usr/bin/zsh", ""}, "description": "Optional absolute path of the remote shell; an empty string means the helper chooses one itself. Omit to let the remote helper choose one (bash, then sh; cmd.exe on Windows)."},
 				"cwd":     map[string]any{"type": "string", "description": "Working directory inside the remote workspace. Relative to the workspace root; an absolute path equal to or under the root is also accepted and rebased. Empty means workspace root."},
-				"timeout": map[string]any{"type": "integer", "minimum": 0, "maximum": 600, "description": "Timeout in seconds; omit or send 0 for the default (120), max 600."},
+				"timeout": commandTimeoutSchema(),
 			},
 			"required": []string{"target", "command"},
 		}),
@@ -544,7 +545,28 @@ const editLineRangeOptionalPattern = `^(?:\s*|[1-9][0-9]*-[1-9][0-9]*)$`
 // only at minLength 1 and lineRange only when it matches editLineRangePattern.
 // Key presence would report a model that pads an unused source with an empty
 // string as "both sources given", while the runtime treats that same empty
-// string as "not provided" (tools/edit/apply.go).
+// string as "not provided" (tools/edit/apply.go). Two real sources are refused
+// here rather than resolved at run time: picking one silently is what lets a
+// wrong-source edit land unnoticed.
+// sshTargetSchema is the `target` argument every remote_* tool takes: the alias
+// plus the absolute workspace path on that host. One declaration keeps the five
+// remote tools from spelling the same pattern two different ways.
+func sshTargetSchema() map[string]any {
+	return map[string]any{"type": "string", "minLength": 1, "pattern": `.*\S.*`, "description": "Explicit SSH target plus an absolute, non-root workspace path, e.g. my-dev:/srv/app. The workspace path / is rejected."}
+}
+
+// commandTimeoutSchema bounds the shell tools' timeout (command,
+// remote_run_command).
+func commandTimeoutSchema() map[string]any {
+	return map[string]any{"type": "integer", "minimum": 0, "maximum": 600, "description": "Timeout in seconds; omit or send 0 for the default (120), max 600."}
+}
+
+// httpTimeoutSchema bounds the HTTP tools' request timeout (http_request,
+// web_fetch).
+func httpTimeoutSchema() map[string]any {
+	return map[string]any{"type": "integer", "minimum": 0, "maximum": 120, "description": "Request timeout in seconds; omit or send 0 for the default (60), max 120."}
+}
+
 func editSourceOneOf() []any {
 	return []any{
 		map[string]any{
@@ -566,7 +588,38 @@ func editSourceOneOf() []any {
 	}
 }
 
-func editChangeSchema() map[string]any {
+// editReplaceAllRule refuses replaceAll beside lineRange. replaceAll only changes
+// how oldText is matched, so next to a line range it cannot affect the outcome:
+// the pair is a misreading of the field, and the executor refuses it with the
+// same rule (tools/edit/apply.go, ValidateBatchTextChanges).
+func editReplaceAllRule() map[string]any {
+	return map[string]any{
+		"not": map[string]any{
+			"required": []string{"replaceAll", "lineRange"},
+			"properties": map[string]any{
+				"replaceAll": map[string]any{"const": true},
+				"lineRange":  map[string]any{"pattern": editLineRangePattern},
+			},
+		},
+	}
+}
+
+// editChangesSchema builds the `changes` array both edit tools declare. sourceTool
+// names the read tool the model copies source text from — `read` locally,
+// `remote_read` over SSH — and is the only thing the two declarations say
+// differently: bounds, shape and mutual-exclusion rules live here once, so a
+// local and a remote edit cannot drift apart.
+func editChangesSchema(sourceTool string) map[string]any {
+	return map[string]any{
+		"type":        "array",
+		"minItems":    1,
+		"maxItems":    50,
+		"description": fmt.Sprintf("All changes for this one file (max 50). Every change names exactly one source plus `newText` and matches against the same original `%s` snapshot; overlapping source regions fail the whole call.", sourceTool),
+		"items":       editChangeSchema(sourceTool),
+	}
+}
+
+func editChangeSchema(sourceTool string) map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
@@ -574,18 +627,18 @@ func editChangeSchema() map[string]any {
 				"type": "string",
 				// No minLength here: a blank source is the runtime's "not provided"
 				// (change.OldText != "", tools/edit/apply.go), so this property must not
-				// refuse a padded empty string — editSourceOneOf decides which source the
-				// change uses, and its branches carry the minLength 1 that makes a blank
-				// oldText useless.
-				"description": "Small exact unique source snippet copied exactly from the read result, without `N: ` prefixes; preferred over lineRange.",
+				// refuse a padded empty string — editSourceOneOf decides which source
+				// the change uses, and its branches carry the minLength 1 that makes a
+				// blank oldText useless.
+				"description": fmt.Sprintf("Small exact unique source snippet copied exactly from the `%s` result, without the displayed `N: ` prefixes; preferred over `lineRange`.", sourceTool),
 			},
 			"replaceAll": map[string]any{
 				"type":        "boolean",
-				"description": "Optional; defaults to false. With oldText, true replaces every non-overlapping exact occurrence in the original snapshot; with lineRange it is ignored.",
+				"description": "Optional; defaults to false. Only meaningful with `oldText`, where true replaces every non-overlapping exact occurrence in the original snapshot; it is refused beside `lineRange`.",
 			},
 			"lineRange": map[string]any{
 				"type": "string", "pattern": editLineRangeOptionalPattern,
-				"description": "Inclusive whole-line A-B range from read's displayed line numbers, for larger blocks; replaces exactly those lines — a closing brace inside the range must be included, one outside stays untouched. All ranges use the original read version, so never adjust for earlier changes.",
+				"description": fmt.Sprintf("Inclusive whole-line A-B range from `%s`'s numbered output, for a large block replacement or deletion. Align the range with the exact first and last lines you mean — a closing brace inside the range must be included, one outside stays untouched. All ranges use the original `%s` version, so never adjust for earlier changes.", sourceTool, sourceTool),
 			},
 			"newText": map[string]any{
 				"type":        "string",
@@ -594,31 +647,9 @@ func editChangeSchema() map[string]any {
 		},
 		"required": []string{"newText"},
 		"oneOf":    editSourceOneOf(),
-	}
-}
-
-// remoteEditChangesSchema / remoteEditChangeSchema 与本地 edit 的 change 结构
-// 完全一致（键名、pattern、oneOf 与 DTO 解码对齐），仅描述精简：完整规则见
-// 本地 edit 工具描述——两者每轮同场发送，远程描述只需指向它。
-func remoteEditChangesSchema() map[string]any {
-	return map[string]any{
-		"type": "array", "minItems": 1, "maxItems": 50,
-		"description": "One to fifty changes for this single file. Each change takes exactly one source (oldText or lineRange) plus newText — the same shape the local edit tool's changes[] uses.",
-		"items":       remoteEditChangeSchema(),
-	}
-}
-
-func remoteEditChangeSchema() map[string]any {
-	return map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"oldText":    map[string]any{"type": "string", "description": "Exact unique source snippet copied from remote_read; use this instead of lineRange for small edits."},
-			"replaceAll": map[string]any{"type": "boolean", "description": "With oldText, true replaces every non-overlapping exact occurrence in the original snapshot."},
-			"lineRange":  map[string]any{"type": "string", "pattern": editLineRangeOptionalPattern, "description": "Inclusive whole-line A-B range from remote_read's displayed line numbers, e.g. \"40-72\"."},
-			"newText":    map[string]any{"type": "string", "description": "Replacement text without line prefixes; empty deletes the selected source."},
-		},
-		"required": []string{"newText"},
-		"oneOf":    editSourceOneOf(),
+		// replaceAll only modifies how oldText is matched, so beside a line range
+		// it cannot change the outcome: the pair is refused, not silently dropped.
+		"allOf": []any{editReplaceAllRule()},
 	}
 }
 

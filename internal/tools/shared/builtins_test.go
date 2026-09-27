@@ -176,10 +176,12 @@ func schemaRequiredForTest(t *testing.T, object map[string]any, field string) bo
 //
 //   - tailLines=0 and body="" mean "not provided" to the runtime, so pairing
 //     them with the other form must not read as "both forms were requested".
-//   - A blank source (oldText="", lineRange="") is "not provided" too — the
-//     runtime picks the source by effective value (tools/edit/apply.go), so a
-//     padded blank beside a real source is carried out, and one with no real
-//     source at all is still refused, because no branch matches.
+//   - A blank source (oldText="", lineRange="") is "not provided" too, so a
+//     padded blank beside a real source is carried out, while a change with no
+//     real source at all is still refused, because no branch matches.
+//   - Two real sources are refused, and replaceAll beside lineRange is refused
+//     by the change object's allOf/not rule; the runtime applies the same two
+//     rules, so no call can pass the gate and fail the executor.
 func TestBuiltinGateTreatsEmptyOptionalsAsAbsent(t *testing.T) {
 	cases := []struct {
 		name         string
@@ -195,10 +197,13 @@ func TestBuiltinGateTreatsEmptyOptionalsAsAbsent(t *testing.T) {
 		{"edit pads lineRange with an empty string", "edit", `{"path":"a.go","version":"9k3m7x","changes":[{"oldText":"a","newText":"x","lineRange":""}]}`, false, "", ""},
 		{"edit pads lineRange with blanks", "edit", `{"path":"a.go","version":"9k3m7x","changes":[{"oldText":"a","newText":"x","lineRange":"  "}]}`, false, "", ""},
 		{"edit supplies both sources", "edit", `{"path":"a.go","version":"9k3m7x","changes":[{"oldText":"a","lineRange":"1-9","newText":"x"}]}`, true, "exactly one allowed shape", ""},
+		{"edit supplies both sources but a malformed range", "edit", `{"path":"a.go","version":"9k3m7x","changes":[{"oldText":"a","lineRange":"abcdef","newText":"x"}]}`, true, "must match the pattern", ""},
+		{"edit sets replaceAll beside lineRange", "edit", `{"path":"a.go","version":"9k3m7x","changes":[{"lineRange":"1-9","newText":"x","replaceAll":true}]}`, true, "must not be combined with \"replaceAll\", \"lineRange\"", ""},
 		{"edit pads every source blank", "edit", `{"path":"a.go","version":"9k3m7x","changes":[{"oldText":"","lineRange":"","newText":"x"}]}`, true, "exactly one allowed shape", ""},
 		{"edit replaces nothing", "edit", `{"path":"a.go","version":"9k3m7x","changes":[{"lineRange":"abcdef","newText":"x"}]}`, true, "must match the pattern", ""},
 		{"remote_edit pads oldText with an empty string", "remote_edit", `{"target":"t:/w","path":"a.go","version":"9k3m7x","changes":[{"lineRange":"1-9","newText":"x","oldText":""}]}`, false, "", ""},
 		{"remote_edit pads lineRange with an empty string", "remote_edit", `{"target":"t:/w","path":"a.go","version":"9k3m7x","changes":[{"oldText":"a","newText":"x","lineRange":""}]}`, false, "", ""},
+		{"remote_edit supplies both sources", "remote_edit", `{"target":"t:/w","path":"a.go","version":"9k3m7x","changes":[{"oldText":"a","lineRange":"1-9","newText":"x"}]}`, true, "exactly one allowed shape", ""},
 		{"http_request pads body with an empty string", "http_request", `{"url":"https://example.test","body":"","json":{"a":1}}`, false, "", ""},
 		{"http_request supplies body and json", "http_request", `{"url":"https://example.test","body":"x","json":{"a":1}}`, true, "must not be combined with", ""},
 		{"web_fetch pads format with an empty string", "web_fetch", `{"url":"https://example.test/","format":""}`, false, "", ""},

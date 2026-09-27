@@ -175,17 +175,17 @@ func TestIndentationInsensitiveMatchHandlesMillionLineFile(t *testing.T) {
 func TestApplyBatchTextChangesLineRangesUseOriginalSnapshot(t *testing.T) {
 	content := "one\ntwo\nthree\nfour\nfive\nsix\n"
 	result, replacements, err := ApplyBatchTextChanges(content, []TextChange{
-		{LineRange: "2-2", NewText: "TWO\ninserted", ReplaceAll: true},
+		{LineRange: "2-2", NewText: "TWO\ninserted"},
 		{LineRange: "5-5", NewText: "FIVE"},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if replacements != 2 {
-		t.Fatalf("replacements = %d, want 2; replaceAll must be ignored for lineRange", replacements)
+		t.Fatalf("replacements = %d, want 2", replacements)
 	}
-	if len(result.Warnings) != 1 || !strings.Contains(result.Warnings[0], "ignored replaceAll") {
-		t.Fatalf("expected replaceAll warning for lineRange, got %#v", result.Warnings)
+	if len(result.Warnings) != 0 {
+		t.Fatalf("a plain line-range batch must not warn, got %#v", result.Warnings)
 	}
 	want := "one\nTWO\ninserted\nthree\nfour\nFIVE\nsix\n"
 	if result.Content != want {
@@ -193,10 +193,9 @@ func TestApplyBatchTextChangesLineRangesUseOriginalSnapshot(t *testing.T) {
 	}
 }
 
-func TestApplyBatchTextChangesRejectsMixedOrOverlappingSources(t *testing.T) {
+func TestApplyBatchTextChangesRejectsMissingOrOverlappingSources(t *testing.T) {
 	for name, changes := range map[string][]TextChange{
-		"both sources": {{OldText: "two", LineRange: "2-2", NewText: "TWO"}},
-		"no source":    {{NewText: "TWO"}},
+		"no source": {{NewText: "TWO"}},
 		"overlap": {
 			{LineRange: "2-3", NewText: "replacement"},
 			{OldText: "three\n", NewText: "THREE\n"},
@@ -207,11 +206,40 @@ func TestApplyBatchTextChangesRejectsMixedOrOverlappingSources(t *testing.T) {
 			if err == nil {
 				t.Fatal("expected invalid or overlapping batch to fail")
 			}
-			if name == "overlap" && toolerrors.Code(err) != "E_OVERLAPPING_CHANGES" {
-				t.Fatalf("overlap error code = %q, want E_OVERLAPPING_CHANGES; err=%v", toolerrors.Code(err), err)
+			want := "E_BAD_EDIT"
+			if name == "overlap" {
+				want = "E_OVERLAPPING_CHANGES"
 			}
-			if name != "overlap" && toolerrors.Code(err) != "E_BAD_EDIT" {
-				t.Fatalf("validation error code = %q, want E_BAD_EDIT; err=%v", toolerrors.Code(err), err)
+			if code := toolerrors.Code(err); code != want {
+				t.Fatalf("%s error code = %q, want %s; err=%v", name, code, want, err)
+			}
+		})
+	}
+}
+
+// A change must name exactly one source, and replaceAll is refused beside
+// lineRange because it only modifies how oldText is matched. The runtime never
+// picks a source silently: a silent pick is what lets a wrong-source edit land.
+func TestApplyBatchTextChangesRejectsBothSourcesAndReplaceAllBesideLineRange(t *testing.T) {
+	cases := map[string]TextChange{
+		"both sources":                {OldText: "two", LineRange: "2-2", NewText: "TWO"},
+		"replaceAll beside lineRange": {LineRange: "2-2", NewText: "TWO", ReplaceAll: true},
+	}
+	for name, change := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, _, err := ApplyBatchTextChanges("one\ntwo\nthree\nfour\n", []TextChange{change})
+			if err == nil {
+				t.Fatal("expected the batch to be refused")
+			}
+			if code := toolerrors.Code(err); code != "E_BAD_EDIT" {
+				t.Fatalf("error code = %q, want E_BAD_EDIT; err=%v", code, err)
+			}
+			want := "replaceAll"
+			if name == "both sources" {
+				want = "exactly one source"
+			}
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("error %q must mention %q", err.Error(), want)
 			}
 		})
 	}

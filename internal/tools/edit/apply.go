@@ -125,8 +125,16 @@ func ValidateBatchTextChanges(changes []TextChange) error {
 	for i, change := range changes {
 		hasOldText := change.OldText != ""
 		hasLineRange := strings.TrimSpace(change.LineRange) != ""
-		if hasOldText == hasLineRange {
+		switch {
+		case !hasOldText && !hasLineRange:
+			return toolerrors.New("E_BAD_EDIT", fmt.Errorf("change %d must give a source: oldText for a small exact replacement, or lineRange for a larger whole-line replacement", i+1))
+		case hasOldText && hasLineRange:
 			return toolerrors.New("E_BAD_EDIT", fmt.Errorf("change %d must use exactly one source: oldText for a small exact replacement, or lineRange for a larger whole-line replacement", i+1))
+		case hasLineRange && change.ReplaceAll:
+			// replaceAll only modifies how oldText is matched, so beside a line
+			// range it cannot change the outcome: the pair is a misreading of the
+			// field, not a call worth carrying out.
+			return toolerrors.New("E_BAD_EDIT", fmt.Errorf("change %d sets replaceAll beside lineRange; replaceAll only applies to oldText", i+1))
 		}
 		if hasLineRange {
 			if _, _, err := ParseLineRange(change.LineRange); err != nil {
@@ -724,9 +732,6 @@ func ApplyBatchTextChanges(content string, changes []TextChange) (*Result, int, 
 	for i, change := range changes {
 		newText := NormalizeEditString(change.NewText)
 		if strings.TrimSpace(change.LineRange) != "" {
-			if change.ReplaceAll {
-				warnings = append(warnings, fmt.Sprintf("change %d ignored replaceAll because it only applies to oldText; lineRange was executed normally", i+1))
-			}
 			if index == nil {
 				index = buildLineIndex(content)
 			}

@@ -96,3 +96,5 @@
 [ssh-pubkey-shadow] 2026-09-27 同名 publickey 方法互相屏蔽，前一个失败整类作废。@sshclient/client.go
 [unix-sock-short] 2026-09-27 unix socket 别放 t.TempDir()：带测试名会超 macOS 上限。@sshclient
 [cache-test-dup-call] 2026-09-27 同批同参调用被 E_DUPLICATE_TOOL_CALL 拦，测读缓存须跨批。@app.go
+[edit-source] 2026-09-28 edit 只认一个来源：闸门 oneOf 硬拒并存，replaceAll 不得配 lineRange。@builtins.go
+[doc-line-refs] 2026-09-28 改工具描述会整体推移 builtins.go 行号，docs 里的 :N 引用须回扫更新。@docs/agent-tools.md

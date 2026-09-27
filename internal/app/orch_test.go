@@ -351,8 +351,12 @@ func TestEditToolSchemaIsBatchChangesOnly(t *testing.T) {
 	if !ok || len(changeRequired) != 1 || changeRequired[0] != "newText" {
 		t.Fatalf("edit change must require only newText: %#v", items["required"])
 	}
-	if variants, ok := items["oneOf"].([]any); !ok || len(variants) != 2 {
+	variants, ok := items["oneOf"].([]any)
+	if !ok || len(variants) != 2 {
 		t.Fatalf("edit change must require exactly one source form: %#v", items)
+	}
+	if _, exists := items["anyOf"]; exists {
+		t.Fatalf("edit change must not accept two source forms: %#v", items)
 	}
 }
 
@@ -1489,7 +1493,7 @@ func TestCompactEditResultForModelPreservesWarnings(t *testing.T) {
 	result := toolResult{OK: true, Data: MultiEditResult{
 		FileCount:    1,
 		Replacements: 1,
-		Warnings:     []string{"change 1 ignored replaceAll because it only applies to oldText; lineRange was executed normally"},
+		Warnings:     []string{"ignored 2 no-op change(s) whose oldText and newText were identical"},
 		Files: []EditResult{{
 			Path:          "sample.txt",
 			BeforeVersion: "abcdef",
@@ -1497,7 +1501,7 @@ func TestCompactEditResultForModelPreservesWarnings(t *testing.T) {
 		}},
 	}}
 	compact := compactToolResultForModel("edit", result, "fallback")
-	if !strings.Contains(compact, "warning: change 1 ignored replaceAll") {
+	if !strings.Contains(compact, "warning: ignored 2 no-op change(s)") {
 		t.Fatalf("expected compact edit result to retain warnings, got %s", compact)
 	}
 }
@@ -3300,23 +3304,40 @@ func TestExecuteToolAppliesOriginalSnapshotLineRangesWithoutOffsetDrift(t *testi
 	}
 }
 
-func TestExecuteToolRejectsMixedEditSources(t *testing.T) {
-	dir := t.TempDir()
-	original := []byte("alpha\nbeta\n")
-	if err := os.WriteFile(filepath.Join(dir, "sample.txt"), original, 0o600); err != nil {
-		t.Fatal(err)
+// A change naming two sources, or pairing replaceAll with lineRange, is refused
+// before anything is written: the runtime must never pick a source silently.
+func TestExecuteToolRejectsChangeWithTwoSourcesOrReplaceAllBesideLineRange(t *testing.T) {
+	cases := map[string]string{
+		"two sources":                 `{"oldText":"alpha","lineRange":"2-2","newText":"ALPHA"}`,
+		"replaceAll beside lineRange": `{"lineRange":"2-2","newText":"ALPHA","replaceAll":true}`,
 	}
-	args := fmt.Sprintf(`{"path":"sample.txt","version":%q,"changes":[{"oldText":"alpha","lineRange":"1-1","newText":"ALPHA"}]}`, hashVersion(original))
-	result := NewApp().executeTool(context.Background(), ConfigState{Workspace: dir}, "session-1", "edit", []byte(args))
-	if result.OK || !strings.Contains(result.Error, "lineRange") {
-		t.Fatalf("mixed sources must be rejected, naming the conflicting key, got %#v", result)
-	}
-	got, err := os.ReadFile(filepath.Join(dir, "sample.txt"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(got) != string(original) {
-		t.Fatalf("rejected mixed source edit changed file: %q", got)
+	for name, change := range cases {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			original := []byte("alpha\nbeta\n")
+			if err := os.WriteFile(filepath.Join(dir, "sample.txt"), original, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			args := fmt.Sprintf(`{"path":"sample.txt","version":%q,"changes":[%s]}`, hashVersion(original), change)
+			result := NewApp().executeTool(context.Background(), ConfigState{Workspace: dir}, "session-1", "edit", []byte(args))
+			if result.OK {
+				t.Fatalf("the call must be refused, got %#v", result)
+			}
+			want := "replaceAll"
+			if name == "two sources" {
+				want = "exactly one allowed shape"
+			}
+			if !strings.Contains(result.Error, want) {
+				t.Fatalf("rejection %q must mention %q", result.Error, want)
+			}
+			got, err := os.ReadFile(filepath.Join(dir, "sample.txt"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != string(original) {
+				t.Fatalf("a refused edit changed the file: %q", got)
+			}
+		})
 	}
 }
 
