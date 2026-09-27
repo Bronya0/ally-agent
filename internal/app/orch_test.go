@@ -2733,7 +2733,10 @@ func TestSessionReadCacheReturnsMetadataWithoutDuplicateContent(t *testing.T) {
 		t.Fatalf("expected reused content on repeated range read, got %#v", rangeData2)
 	}
 
-	// Modifying the file on disk busts the cache for the full read because full content changed.
+	// Modifying the file on disk busts the cache for the full read because full
+	// content changed. No write path invalidates the cache (see sessionReadCache):
+	// this hash comparison is the only thing keeping a rewritten file from being
+	// answered with its old payload, so it must keep working.
 	writeToolTestFile(t, dir, "sample.txt", "one\ntwo\nthree\n")
 	fourth := app.executeTool(ctx, ConfigState{Workspace: dir}, "session-1", "read", args)
 	fourthData := fourth.Data.(*BatchReadResult)
@@ -2750,7 +2753,7 @@ func TestSessionReadCacheReturnsMetadataWithoutDuplicateContent(t *testing.T) {
 	}
 
 	// Invalidation clears the entire cache.
-	invalidateSessionReadCacheFromCtx(ctx)
+	cache.invalidate()
 	if len(cache.entries) != 0 {
 		t.Fatalf("cache entries after invalidation = %d, want 0", len(cache.entries))
 	}

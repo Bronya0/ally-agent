@@ -535,6 +535,65 @@ func TestSessionReadCacheDropsWhenHistoryRepairDropsToolResults(t *testing.T) {
 	}
 }
 
+// TestSessionReadCacheSurvivesWriteToolsAndCommands 锁定一条设计决定：写工具与命令
+// 不再是读缓存的失效来源（唯一的失效来源是历史被改写，见上面三个测试）。正确性
+// 不靠失效兜底——每次读都真读盘并逐字节比对载荷哈希，所以这里同时验收两面：跑过
+// 命令、改过文件之后缓存条目仍在，而内容真变了的文件必须重新投递正文。
+func TestSessionReadCacheSurvivesWriteToolsAndCommands(t *testing.T) {
+	app := NewApp()
+	dir := t.TempDir()
+	app.config.Workspace = dir
+	writeToolTestFile(t, dir, "sample.txt", "one\ntwo\n")
+
+	sessionID := "read-cache-survives"
+	cache := app.sessionReadCacheFor(sessionID)
+	ctx := context.WithValue(context.Background(), sessionReadCacheContextKey{}, cache)
+	cfg := ConfigState{Workspace: dir}
+	readArgs := []byte(`{"files":[{"path":"sample.txt"}]}`)
+
+	read := func() BatchReadResultItem {
+		t.Helper()
+		res := app.executeTool(ctx, cfg, sessionID, "read", readArgs)
+		if !res.OK {
+			t.Fatalf("read failed: %#v", res)
+		}
+		items := res.Data.(*BatchReadResult).Files
+		if len(items) != 1 {
+			t.Fatalf("read slots = %d, want 1", len(items))
+		}
+		return items[0]
+	}
+
+	first := read()
+	if first.Reused || first.Content == "" {
+		t.Fatalf("first read must return content, got %#v", first)
+	}
+
+	// 命令：旧实现会在这里把整个会话的读缓存清掉，现在必须原封不动。
+	if res := app.executeTool(ctx, cfg, sessionID, "command", []byte(`{"command":"echo cache-proof"}`)); !res.OK {
+		t.Fatalf("command failed: %#v", res)
+	}
+	if got := len(cache.entries); got == 0 {
+		t.Fatal("a command must not clear the session's read cache")
+	}
+	if second := read(); !second.Reused {
+		t.Fatalf("an unchanged file must still be reused after a command, got %#v", second)
+	}
+
+	// 写工具同样不清缓存；但内容确实变了，所以重新投递正文。
+	editArgs := fmt.Sprintf(`{"path":"sample.txt","version":%q,"changes":[{"oldText":"two","newText":"TWO"}]}`, first.Version)
+	if res := app.executeTool(ctx, cfg, sessionID, "edit", []byte(editArgs)); !res.OK {
+		t.Fatalf("edit failed: %#v", res)
+	}
+	if got := len(cache.entries); got == 0 {
+		t.Fatal("a write tool must not clear the session's read cache")
+	}
+	third := read()
+	if third.Reused || third.Content == "" || !strings.Contains(third.Content, "TWO") {
+		t.Fatalf("a rewritten file must be sent again, got %#v", third)
+	}
+}
+
 // TestRunChatRetriesEmptyResponseAfterToolError verifies that an otherwise
 // successful but empty model response cannot silently finish the run after a
 // failed tool call. The empty step is transient: the loop retries it and the

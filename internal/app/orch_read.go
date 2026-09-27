@@ -14,7 +14,6 @@ package app
 
 import (
 	"bytes"
-	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -79,19 +78,20 @@ type readPreviewResult struct {
 // same range would send exactly the same bytes, always reporting the freshly read
 // version token.
 //
-// Correctness rests on that comparison, not on the key: every read still hits
-// disk, so a stale key can only cost a missed de-duplication, never hide changed
-// content. invalidateSessionReadCacheFromCtx (a command that may rewrite files, a
-// successful write/edit) is therefore defence in depth — it forces re-delivery,
-// it is not what keeps the model from acting on stale content.
+// No write path clears this cache, and none is needed: every read still hits
+// disk and the omission is decided by comparing the payload hash, so a file
+// rewritten by edit, by create, by a command, or by anything else simply fails
+// the comparison and gets sent again. A stale key can only cost a missed
+// de-duplication, never hide changed content.
 //
-// Sharing one cache across a session's runs adds a second requirement: an
-// omission is only honest while the payload is still in the model's own history.
-// Every rewrite that can drop it invalidates the session's cache — compactHistory
-// (the summary replaces the turns), TruncateSessionHistory (the user deletes a
-// turn) and loadHistoryLocked (a history restored from disk keeps only
-// placeholders for tool results). The cache is memory-only, so a restarted
-// process starts empty as well.
+// Sharing one cache across a session's runs adds the one requirement a content
+// comparison cannot cover: an omission is only honest while the payload is still
+// in the model's own history. Every rewrite that can drop it therefore
+// invalidates the session's cache — compactHistory (the summary replaces the
+// turns), TruncateSessionHistory (the user deletes a turn), loadHistoryLocked (a
+// history restored from disk keeps only placeholders for tool results), the
+// history repair pass inside saveHistory, and releaseSession. The cache is
+// memory-only, so a restarted process starts empty as well.
 type sessionReadCache struct {
 	mu      sync.Mutex
 	entries map[string]string // key (resolvedPath#range) -> payload SHA-256 hex
@@ -189,12 +189,6 @@ func (c *sessionReadCache) invalidate() {
 	c.mu.Lock()
 	clear(c.entries)
 	c.mu.Unlock()
-}
-
-func invalidateSessionReadCacheFromCtx(ctx context.Context) {
-	if cache, ok := ctx.Value(sessionReadCacheContextKey{}).(*sessionReadCache); ok {
-		cache.invalidate()
-	}
 }
 
 type pendingReadItem struct {
@@ -298,6 +292,25 @@ func (c *sessionReadCache) read(a *App, cfg ConfigState, req BatchReadRequest) (
 	if err != nil {
 		return nil, err
 	}
+	c.dedupeResult(result, func(item *BatchReadResultItem) string {
+		resolvedPath, resErr := resolveReadPath(cfg, item.Path)
+		if resErr != nil {
+			return item.Path
+		}
+		return resolvedPath
+	})
+	return result, nil
+}
+
+// dedupeResult 对一批已读结果做内容级去重：同一路径/范围（keyPath(item) +
+// item.Req 构成键）且载荷哈希与上次完全相同的条目清空正文并标记 Reused，其余
+// 条目记下本次哈希。本地 read 与 remote_read 共用这一处实现——命中判定、被清
+// 空的字段、Reused 标记都只有一份定义，两个读入口不会各自漂移。
+//
+// keyPath 只负责键里的路径部分：本地给解析后的绝对路径，远端给目标机工作区内
+// 的相对路径；两种写法不会互相撞键。即使两台机器上的同名文件撞了键，也只有载
+// 荷逐字节相同时才会命中——那时省略的正是模型已经收到过的内容。
+func (c *sessionReadCache) dedupeResult(result *BatchReadResult, keyPath func(item *BatchReadResultItem) string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -306,11 +319,7 @@ func (c *sessionReadCache) read(a *App, cfg ConfigState, req BatchReadRequest) (
 		if item.Error != "" {
 			continue
 		}
-		resolvedPath, resErr := resolveReadPath(cfg, item.Path)
-		if resErr != nil {
-			resolvedPath = item.Path
-		}
-		key := fileRangeCacheKey(resolvedPath, item.Req)
+		key := fileRangeCacheKey(keyPath(item), item.Req)
 		contentHash := hashText(item.Content, item.DataURL)
 
 		if prevHash, ok := c.entries[key]; ok && prevHash == contentHash {
@@ -322,7 +331,6 @@ func (c *sessionReadCache) read(a *App, cfg ConfigState, req BatchReadRequest) (
 			c.putLocked(key, contentHash)
 		}
 	}
-	return result, nil
 }
 
 func (a *App) batchReadFilesWithConfig(cfg ConfigState, req BatchReadRequest) (*BatchReadResult, error) {

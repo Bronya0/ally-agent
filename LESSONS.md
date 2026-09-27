@@ -91,4 +91,8 @@
 [form-modal-mask] 2026-09-27 表单弹窗必须 :mask-closable="false"：点遮罩关闭会丢半填内容。@frontend/src/components
 [modal-scoped-css] 2026-09-27 preset=card 的 n-modal 卡片拿不到 scoped data-v，宽度只能内联。@SkillsPanel.vue
 [read-meta-passthrough] 2026-09-28 read 条目元数据须三处透传：适配器→组卡→卡片，漏一处静默不显示。@useToolEvents.mjs
-[read-cache-scope] 2026-09-28 读缓存按会话共享：凡改写历史的路径（压缩/删回合/磁盘重载）必须同步失效。@orch_read.go
+[read-cache-scope] 2026-09-28 读缓存按会话共享：只在历史改写时失效（压缩/删回合/磁盘重载），写操作/命令不用清。@orch_read.go
+[read-cache-req] 2026-09-27 接读缓存的新读入口须给条目带上行区间（Req），否则同文件各区间共用一钥互相覆盖。@orch_remote.go
+[ssh-pubkey-shadow] 2026-09-27 同名 publickey 方法互相屏蔽，前一个失败整类作废。@sshclient/client.go
+[unix-sock-short] 2026-09-27 unix socket 别放 t.TempDir()：带测试名会超 macOS 上限。@sshclient
+[cache-test-dup-call] 2026-09-27 同批同参调用被 E_DUPLICATE_TOOL_CALL 拦，测读缓存须跨批。@app.go

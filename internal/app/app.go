@@ -2517,7 +2517,6 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 			if err == nil {
 				data = attachValidation(data, a.validateChangedFilesForCall(ctx, cfg, []string{req.Path}))
 				a.invalidateWorkspaceMapCache(cfg)
-				invalidateSessionReadCacheFromCtx(ctx)
 			}
 		}
 	case "create":
@@ -2531,7 +2530,6 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 			if err == nil {
 				data = attachValidation(data, a.validateChangedFilesForCall(ctx, cfg, []string{req.Path}))
 				a.invalidateWorkspaceMapCache(cfg)
-				invalidateSessionReadCacheFromCtx(ctx)
 			}
 		}
 	case "delete":
@@ -2544,18 +2542,13 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 			a.withFileOpsLock(func() { data, err = a.deletePathWithConfig(cfg, req) })
 			if err == nil {
 				a.invalidateWorkspaceMapCache(cfg)
-				invalidateSessionReadCacheFromCtx(ctx)
 			}
 		}
 	case "command":
 		var req CommandRequest
 		err, argWarnings = decodeJSON(&req)
 		if err == nil {
-			// A command can modify files before returning an error, and can run
-			// concurrently with reads in one tool batch. Clear on both sides.
-			invalidateSessionReadCacheFromCtx(ctx)
 			data, err = a.runCommandWithConfig(ctx, cfg, req)
-			invalidateSessionReadCacheFromCtx(ctx)
 			if err == nil {
 				a.invalidateWorkspaceMapCache(cfg)
 			}
@@ -2647,7 +2640,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		var req RemoteReadFileRequest
 		err, argWarnings = decodeJSON(&req)
 		if err == nil {
-			data, err = a.remoteReadFile(ctx, req)
+			data, err = a.remoteReadFileCached(ctx, req)
 		}
 	case "remote_edit":
 		// Flat single-file request: target + the same path/version/changes as

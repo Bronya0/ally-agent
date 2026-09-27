@@ -400,16 +400,28 @@ func authMethods(ctx context.Context, cfg Config) ([]ssh.AuthMethod, func(), err
 		if cfg.KeyPath != "" || cfg.KeyPassphrase != "" || cfg.Password != "" {
 			return nil, closeAgent, errors.New("agent authentication does not accept a private key or password")
 		}
+		// 代理密钥与 ~/.ssh 默认私钥必须落在同一个认证方法里：x/crypto 按方法名
+		// 去重（两边都叫 "publickey"），拆成两个方法时前一个一旦失败，整类就被判为
+		// 已试过，后一组私钥永远轮不到 —— 一个活着但没有身份的 ssh-agent 足以把
+		// 本机已配好的免密私钥整个挡死。
+		fallback := defaultSigners()
 		agentCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
 		conn, agentErr := dialAgent(agentCtx)
 		cancel()
 		if agentErr == nil {
 			agentClient := agent.NewClient(conn)
-			methods = append(methods, ssh.PublicKeysCallback(agentClient.Signers))
 			closeAgent = func() { _ = conn.Close() }
-		}
-		if signers := defaultSigners(); len(signers) > 0 {
-			methods = append(methods, ssh.PublicKeys(signers...))
+			methods = append(methods, ssh.PublicKeysCallback(func() ([]ssh.Signer, error) {
+				agentSigners, signersErr := agentClient.Signers()
+				// 代理为空或不可用（协议不兼容等）时退回默认私钥：一次坏代理
+				// 不该把免密登录整体变成失败。
+				if signersErr != nil || len(agentSigners) == 0 {
+					return fallback, nil
+				}
+				return append(agentSigners, fallback...), nil
+			}))
+		} else if len(fallback) > 0 {
+			methods = append(methods, ssh.PublicKeys(fallback...))
 		}
 	default:
 		return nil, closeAgent, fmt.Errorf("unsupported SSH authentication mode %q", mode)
