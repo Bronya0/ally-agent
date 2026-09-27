@@ -435,7 +435,7 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"skill"},
 		}),
-		functionTool("suggest", "Suggest 1-4 follow-up actions the user is most likely to take next. Order them by relevance, most recommended first. Each item is sent as-is as the user's next message, so phrase it as an instruction the user would send rather than a note to yourself. This must be the only tool call in that model response: Ally rejects the whole batch (E_SUGGEST_BATCH_CONFLICT) when anything else rides along.", map[string]any{
+		functionTool("suggest", "Suggest 1-4 follow-up actions the user is most likely to take next. Order them by relevance, most recommended first. Start every item with its ordinal (\"1. …\", \"2. …\"), counted from 1 in array order — the chips display the text exactly as written, so the number is what tells the user the intended order. Each item is sent as-is as the user's next message, so phrase it as an instruction the user would send rather than a note to yourself. This must be the only tool call in that model response: Ally rejects the whole batch (E_SUGGEST_BATCH_CONFLICT) when anything else rides along.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"items": map[string]any{
@@ -448,7 +448,7 @@ func chatToolsUncached() []openai.Tool {
 						"maxLength": MaxSuggestItemChars,
 						"pattern":   ".*\\S.*",
 					},
-					"description": "1-4 short texts, ordered by relevance (most recommended first). Each is sent as-is as the user's next message: write a complete, self-contained request the user could send verbatim.",
+					"description": "1-4 short texts, ordered by relevance (most recommended first). Begin each one with its ordinal (\"1. …\", \"2. …\"), counting from 1 in array order so the number matches its position, then the instruction itself. Each is sent as-is as the user's next message: write a complete, self-contained request the user could send verbatim, ordinal prefix included in the length limit.",
 				},
 			},
 			"required": []string{"items"},
