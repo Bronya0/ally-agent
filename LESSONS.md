@@ -98,3 +98,4 @@
 [cache-test-dup-call] 2026-09-27 同批同参调用被 E_DUPLICATE_TOOL_CALL 拦，测读缓存须跨批。@app.go
 [edit-source] 2026-09-28 edit 只认一个来源：闸门 oneOf 硬拒并存，replaceAll 不得配 lineRange。@builtins.go
 [doc-line-refs] 2026-09-28 改工具描述会整体推移 builtins.go 行号，docs 里的 :N 引用须回扫更新。@docs/agent-tools.md
+[bundle-id-macos] 2026-09-28 裸 bin/Ally 直跑无 bundleIdentifier，通知等 NSBundle 依赖静默禁用。@build/darwin

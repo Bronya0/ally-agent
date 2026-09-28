@@ -523,12 +523,12 @@ func buildMemoryIndexContext() string {
 
 // projectLessonsMaxLines / projectLessonsMaxBytes bound the injected lesson
 // content: only the newest lines are injected, and the byte cap keeps the prompt
-// part cheap even when the file grows. The byte budget is the real one; the line
-// cap only has to stay loose enough not to bind first under the per-lesson rule
-// the prompt states (one line under 100 characters — roughly 300 bytes, so 60
-// lines ≈ 18 KiB and the bytes are what trims a bloated file).
+// part cheap even when the file grows. Recent lessons run ~140 bytes per line
+// (mixed CJK/ASCII), so 100 lines ≈ 14 KiB and the line cap is normally what
+// binds; the byte budget is the safety net that drops the oldest lines of the
+// window first — today those are the legacy over-length ones.
 const (
-	projectLessonsMaxLines = 60
+	projectLessonsMaxLines = 100
 	projectLessonsMaxBytes = 16384
 )
 
