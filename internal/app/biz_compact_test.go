@@ -236,7 +236,7 @@ func TestCompactSessionManualAlwaysRunsTheSummaryTier(t *testing.T) {
 	// must carry it over verbatim instead of trusting the prose summary.
 	history := []openai.ChatCompletionMessage{
 		{Role: openai.ChatMessageRoleUser, Content: "go"},
-		{Role: openai.ChatMessageRoleAssistant, ToolCalls: []openai.ToolCall{{ID: "p1", Function: openai.FunctionCall{Name: "plan", Arguments: `{"todos":[]}`}}}},
+		{Role: openai.ChatMessageRoleAssistant, ToolCalls: []openai.ToolCall{{ID: "p1", Function: openai.FunctionCall{Name: "plan", Arguments: `{"steps":[]}`}}}},
 		{Role: openai.ChatMessageRoleTool, ToolCallID: "p1", Content: "Todos:\n- [ ] 收尾前端"},
 	}
 	app.saveHistory(sessionID, history)

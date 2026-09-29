@@ -220,6 +220,50 @@ func TestServiceTuningStaysInsideTheDeclaredBounds(t *testing.T) {
 	}
 }
 
+// TestPlanToolVocabularyPassesTheGate pins the shapes the plan description
+// teaches: the steps/next/finish vocabulary has to clear the strict gate — a
+// gate that refused it would burn a model round on every plan call. The retired
+// todos form is pinned below as gone on purpose, so no compat layer creeps back.
+func TestPlanToolVocabularyPassesTheGate(t *testing.T) {
+	app := NewApp()
+	cfg := ConfigState{Workspace: t.TempDir()}
+	ctx := context.Background()
+	for _, args := range []string{
+		`{"steps":["Read code","Run tests"]}`,
+		`{"next":"Run tests"}`,
+		// A blank value is not a source (the handler reads instead), so the
+		// declaration has to let it through instead of failing the gate.
+		`{"next":""}`,
+		`{"finish":true}`,
+		`{"steps":[]}`,
+		`{}`,
+	} {
+		if res := app.executeTool(ctx, cfg, "s-1", "plan", []byte(args)); !res.OK {
+			t.Fatalf("plan %s must pass the gate, got code=%q err=%q", args, res.ErrorCode, res.Error)
+		}
+	}
+
+	// The retired todos form is not a second spelling: it fails by name instead
+	// of being silently accepted, so nothing can quietly depend on it again.
+	retired := app.executeTool(ctx, cfg, "s-1", "plan", []byte(`{"todos":[{"title":"Read code","status":"in_progress"}]}`))
+	if retired.OK || retired.ErrorCode != "E_BAD_ARGS" || !strings.Contains(retired.Error, "todos") {
+		t.Fatalf("the retired todos form must be refused by name, got ok=%v code=%q err=%q", retired.OK, retired.ErrorCode, retired.Error)
+	}
+
+	// Two write sources in one call is a contract rejection from the handler,
+	// not a schema violation: the declared properties stay independent.
+	both := app.executeTool(ctx, cfg, "s-1", "plan", []byte(`{"steps":["a"],"next":"a"}`))
+	if both.OK || both.ErrorCode == "E_BAD_ARGS" {
+		t.Fatalf("steps + next must fail as a contract error, got ok=%v code=%q err=%q", both.OK, both.ErrorCode, both.Error)
+	}
+
+	// A field the description never mentions still fails loudly.
+	typo := app.executeTool(ctx, cfg, "s-1", "plan", []byte(`{"step":["a"]}`))
+	if typo.OK || typo.ErrorCode != "E_BAD_ARGS" || !strings.Contains(typo.Error, "step") {
+		t.Fatalf("a misspelled field must be refused by name, got ok=%v code=%q err=%q", typo.OK, typo.ErrorCode, typo.Error)
+	}
+}
+
 // TestSubagentStepBudgetIsHeldToTheDeclaredMaximum: the cap the description
 // states has to be the cap the gate enforces, otherwise a model can ask for an
 // unbounded child loop.

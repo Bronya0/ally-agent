@@ -42,10 +42,10 @@ var promptNonToolTokens = map[string]bool{
 	"eslint": true, "ruff": true, "tsc": true,
 	// runtime / library names
 	"echarts": true, "python": true,
-	// plan statuses and request/field identifiers named in guidance
-	"changes": true, "done": true, "files": true, "in_progress": true,
-	"offset": true, "path": true, "pending": true, "validation": true,
-	"version": true,
+	// plan request fields and statuses named in guidance
+	"changes": true, "done": true, "files": true, "finish": true,
+	"in_progress": true, "next": true, "offset": true, "path": true,
+	"pending": true, "steps": true, "validation": true, "version": true,
 	// frontmatter fields and IO nouns named in guidance
 	"aliases": true, "date": true, "description": true, "output": true,
 	"role": true, "source": true, "tags": true, "task": true, "title": true,

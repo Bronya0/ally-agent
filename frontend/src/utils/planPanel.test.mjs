@@ -10,7 +10,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { orderPlanPanelEntries, planFocusScrollDelta } from './planPanel.mjs';
+import { orderPlanPanelEntries, planDoneCount, planFocusScrollDelta } from './planPanel.mjs';
 
 function compact(entries) {
   return entries.map(({ status, title }) => `${status}:${title}`);
@@ -91,4 +91,34 @@ test('plan entries carry stable plan numbers in source order', () => {
   assert.deepEqual(entries.map((entry) => entry.number), [1, 2, 3]);
   assert.equal(entries[1].status, 'in_progress');
   assert.equal(entries[1].number, 2);
+});
+
+// The header reports finished steps, not the current step's number: a next call
+// can name a step further down, and closing a plan leaves the steps it never
+// reached pending, so the position sits past rows that were never done.
+test('planDoneCount counts finished steps, not the current position', () => {
+  // The plan jumped to its third step: one done, one skipped, one current.
+  assert.equal(planDoneCount([
+    { title: 'First', status: 'done' },
+    { title: 'Second', status: 'pending' },
+    { title: 'Third', status: 'in_progress' },
+  ]), 1);
+
+  // A closed plan: its current step is done and the unreached rows stay pending.
+  assert.equal(planDoneCount([
+    { title: 'First', status: 'done' },
+    { title: 'Second', status: 'pending' },
+  ]), 1);
+
+  assert.equal(planDoneCount([]), 0);
+  assert.equal(planDoneCount(null), 0);
+});
+
+// One declaration of the statuses, one fallback: the panel and the tool card
+// must not disagree about the same plan.
+test('an unrecognized status reads as pending for every reader', () => {
+  const entries = orderPlanPanelEntries([{ title: 'First', status: 'in-progress' }]);
+  assert.equal(entries[0].status, 'pending');
+  assert.equal(planDoneCount([{ title: 'First', status: 'in-progress' }]), 0);
+  assert.equal(planDoneCount([{ title: 'First', status: 'DONE' }]), 0);
 });

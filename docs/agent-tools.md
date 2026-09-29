@@ -22,10 +22,10 @@ flowchart LR
 | 环节 | 位置 |
 |---|---|
 | schema 声明 | `internal/tools/shared/builtins.go` |
-| schema 查找（按工具名） | `builtins.go:92` `BuiltinSchema` |
+| schema 查找（按工具名） | `builtins.go:98` `BuiltinSchema` |
 | 工具集组装（含 MCP） | `biz_mcp.go:1106` `buildToolsWithMcp`、`biz_mcp.go:1140` `buildToolsForSession` |
-| 分发 | `app.go:2311` `executeTool` |
-| 参数契约（宽容解码 + schema 闸门） | `app.go:2335` `decodeJSON` + `internal/tools/schemautil/validate.go` + `internal/tools/toolcall/` |
+| 分发 | `app.go:2375` `executeTool` |
+| 参数契约（宽容解码 + schema 闸门） | `app.go:2399` `decodeJSON` + `internal/tools/schemautil/validate.go` + `internal/tools/toolcall/` |
 | 编排（绑定 `*App` 状态） | `internal/app/orch_*.go` |
 | 纯算法 | `internal/tools/<name>/` |
 | 结果信封与模型视图 | `internal/app/infra_result.go` |
@@ -36,11 +36,11 @@ flowchart LR
 `internal/tools/shared/builtins.go`：
 
 ```go
-func Builtins() []openai.Tool {           // :41
+func Builtins() []openai.Tool {           // :78
     chatToolsCache.once.Do(func() { chatToolsCache.tools = chatToolsUncached() })
     return chatToolsCache.tools            // 共享只读：调用方不得改 slice 或 Parameters
 }
-func functionTool(name, desc string, params map[string]any) openai.Tool {  // :387
+func functionTool(name, desc string, params map[string]any) openai.Tool {  // :490
     if ex := builtinToolExamples[name]; ex != "" { desc += " Canonical JSON example(s): " + ex }
     return RawFunction(name, desc, enforceStrictSchema(params))
 }
@@ -48,13 +48,13 @@ func functionTool(name, desc string, params map[string]any) openai.Tool {  // :3
 
 三个值得学的做法：
 
-1. **示例写进描述**（`builtinToolExamples`，`builtins.go:460`）。参数描述说一百句，不如给一条能直接抄的样例 JSON——提升工具调用成功率最便宜的手段。
-2. **strict schema 递归规范化**（`enforceStrictSchema` → `normalizeSchemaNode`，`builtins.go:669` / `:677`）。遍历 `properties` / `items` / `anyOf` / `oneOf` / `allOf` / `not`，给每个 `type: object` 补 `additionalProperties: false` 与 `properties: {}`。少规范化一层，strict 模式就会被 provider 拒或在子对象上静默放宽。任意 JSON 参数用 `jsonValueSchema`（`anyOf` 五种类型，`builtins.go:656`）表达，且自带 `anyOf` 的节点不会被补上标量 `type`——两者取交集会把「对象/数组/字符串都行」缩成「只能是字符串」（`schemautil.declaresOwnShape`）。
+1. **示例写进描述**（`builtinToolExamples`，`builtins.go:474`）。参数描述说一百句，不如给一条能直接抄的样例 JSON——提升工具调用成功率最便宜的手段。
+2. **strict schema 递归规范化**（`enforceStrictSchema` → `normalizeSchemaNode`，`builtins.go:683` / `:691`）。遍历 `properties` / `items` / `anyOf` / `oneOf` / `allOf` / `not`，给每个 `type: object` 补 `additionalProperties: false` 与 `properties: {}`。少规范化一层，strict 模式就会被 provider 拒或在子对象上静默放宽。任意 JSON 参数用 `jsonValueSchema`（`anyOf` 五种类型，`builtins.go:670`）表达，且自带 `anyOf` 的节点不会被补上标量 `type`——两者取交集会把「对象/数组/字符串都行」缩成「只能是字符串」（`schemautil.declaresOwnShape`）。
 3. **schema 与 DTO 必须对齐**：`batchReadFilesSchema` 的 `minItems/maxItems`、`editChangeSchema(sourceTool)` 的 `oneOf(oldText | lineRange)`（本地与远程共用同一份声明，只有来源工具名不同）与执行侧解码/校验是同一套规则的两处表述。它们漂移的那天，模型就会发出「schema 允许但执行必拒」的调用。对齐不再靠人看：内置工具的入参会在分发层按 schema 校验一次（见四），漂移会当场地报 `E_BAD_ARGS`。另一个易错点是互斥判定的口径：`oneOf`/`not` 要按参数的**有效值**判，不能按 `required` 的键是否存在——`tailLines: 0`、`body: ""` 在运行时就是「没传」，按键存在判会把模型补零/补空串的写法误报成「两种形式都给了」。正例见 `editSourceOneOf` 与 `batchReadFilesSchema`（闸门用例 `TestBuiltinGateTreatsEmptyOptionalsAsAbsent`）。来源之外还有一处互斥：`replaceAll` 只能跟 `oldText` 搭配，配 `lineRange` 由 `editReplaceAllRule`（`allOf` + `not` + `const`）当场拒，执行侧 `ValidateBatchTextChanges` 用同一条规则复核——两处漂移就是「schema 允许、执行必拒」的经典来源。
 
 工具集本身在 session 首次请求时**冻结**（`buildToolsForSession`，`biz_mcp.go:1140`）：`tools` 是请求前缀的一部分，中途变化会让供应商 prompt cache 全线作废。`cloneTools` 深拷贝，保证冻结的那份不被后续 MCP 启停改到。子代理 / 计划任务这类无 session 的调用方走 `buildToolsForConfig`，永远看实时集合（它们本来也无前缀可保）。MCP 工具靠名字前缀 `mcp__<server>__<tool>`（`mcpFunctionNamePrefix`）并入同一张表。
 
-## 三、分发层：`executeTool` 是唯一入口（`app.go:2311`）
+## 三、分发层：`executeTool` 是唯一入口（`app.go:2375`）
 
 主循环、子代理、计划任务三条路径都调用它，因此所有公共契约在这里收口：
 
@@ -72,7 +72,7 @@ default:
     err = fmt.Errorf("unknown tool: %s", name)
 }
 if err != nil { return toolErrorResult(err) }
-return toolResult{OK: true, Data: data, Warnings: argWarnings}   // app.go:2740
+return toolResult{OK: true, Data: data, Warnings: argWarnings}   // app.go:2797
 ```
 
 要点：
@@ -84,7 +84,7 @@ return toolResult{OK: true, Data: data, Warnings: argWarnings}   // app.go:2740
 
 ## 四、参数契约：`decodeJSON` + schema 闸门 + `toolcall` 包
 
-`decodeJSON`（`app.go:2335`）是「宽容解码、严格报错」的示范：
+`decodeJSON`（`app.go:2399`）是「宽容解码、严格报错」的示范：
 
 | 情况 | 处理 |
 |---|---|
@@ -94,7 +94,7 @@ return toolResult{OK: true, Data: data, Warnings: argWarnings}   // app.go:2740
 | 类型 / schema 错 | 失败报错，且**不能**误标成截断（历史上这个混淆让老的 `oldString` 调用看起来像耗尽了 max_tokens） |
 | 参数是截断标记 | `E_TRUNCATED_ARGS` 直接拒绝执行 |
 
-**schema 闸门**（`app.go:2335` 内 → `schemautil.ValidateArgs`，`internal/tools/schemautil/validate.go`）：内置工具的入参在解码后按它自己的 schema 校验一次，支持 `type` / `required` / `additionalProperties` / `items` / `min–maxItems` / `min–maxLength`（按字符）/ `pattern` / `enum` / `const` / `minimum` / `maximum` / `anyOf` / `oneOf` / `allOf` / `not`，报告带路径（`changes[0].newText`）且一次列多个问题。两条约定：**`null` 等于「没提供」**（跳过类型检查，也不再满足 `required`），未被声明用到的关键字忽略不拒。它针对「模型看到的就是它要遵守的」这件事——同名规则不再一处写在提示词、一处写在 handler：
+**schema 闸门**（`app.go:2399` 内 → `schemautil.ValidateArgs`，`internal/tools/schemautil/validate.go`）：内置工具的入参在解码后按它自己的 schema 校验一次，支持 `type` / `required` / `additionalProperties` / `items` / `min–maxItems` / `min–maxLength`（按字符）/ `pattern` / `enum` / `const` / `minimum` / `maximum` / `anyOf` / `oneOf` / `allOf` / `not`，报告带路径（`changes[0].newText`）且一次列多个问题。两条约定：**`null` 等于「没提供」**（跳过类型检查，也不再满足 `required`），未被声明用到的关键字忽略不拒。它针对「模型看到的就是它要遵守的」这件事——同名规则不再一处写在提示词、一处写在 handler：
 
 - 只有内置工具过闸（MCP 工具的 schema 来自服务端，不归我们发誓）；MCP 调用里未声明的参数会被点名警告（`mcpUnknownArgWarnings`，`biz_mcp.go`），但仍原样转发给服务端。
 - 每条声明必须能过闸才能存在：`TestEveryBuiltinSchemaIsEnforceable`（strict object + pattern 可编译）、`TestExecuteToolGatesEveryBuiltinTool`（25 个名字逐个验闸）守住。
@@ -110,7 +110,7 @@ return toolResult{OK: true, Data: data, Warnings: argWarnings}   // app.go:2740
 
 | 关注点 | 收口位置 |
 |---|---|
-| 工作区写串行 | `withFileOpsLock`（`app.go:2305`）；用 defer 解锁，因为 executeTool 会把 panic 转成错误，手写 Unlock 会在那条路径上永久卡死 |
+| 工作区写串行 | `withFileOpsLock`（`app.go:2369`）；用 defer 解锁，因为 executeTool 会把 panic 转成错误，手写 Unlock 会在那条路径上永久卡死 |
 | 知识库只读 | `kbDenyCheckPaths` / `kbDenyCheckCommand`；run 开始时把策略挂到 ctx，子代理继承 |
 | 编辑后验证 | `attachValidation` + `validateChangedFilesForCall`（`orch_validation.go:170`）；批次里由 `planBatchValidation`（`orch_validation.go:189`）摊到「最后一次触碰该目录的变更」上，避免每个 edit 都跑一遍 `go vet` / `tsc` |
 | 命令安全围栏 | `checkCommandSafetyAtCwd`（`orch_command_safety.go:45`） |
@@ -166,11 +166,12 @@ type toolResult struct {                       // infra_result.go:19
 
 ## 七、批次策略：一批工具调用怎么调度（`orch_batch_policy.go`）
 
-`detectToolBatchConflicts`（`orch_batch_policy.go:67`）在执行前统一裁决：
+`detectToolBatchConflicts`（`orch_batch_policy.go:120`）在执行前统一裁决：
 
 1. **独占型工具**（`ask` / `suggest`）必须独占一批，否则整批全部拒绝（`E_ASK_BATCH_CONFLICT` / `E_SUGGEST_BATCH_CONFLICT`）——`ask` 会把 run 停在等人回答上，`suggest` 成功即结束 run，两者都不能和「结果还没被模型看到」的调用同批。执行阶段（并发 / 文件变更有序 / 延后串行）由 `toolBatchPhases` 表声明，`isOrderedFileMutationTool` 与 `isDeferredSerialTool` 都从它派生，主循环与子代理循环共用同一份分类：加新延后工具只需在表里加一行。
-2. **同路径多写**（`detectWriteBatchConflicts`，`orch_batch_policy.go:39`）：按参数解析写入目标（本地走 edit plan，远端按 `remote:<target>:<path>`），只执行最早一个，其余 `E_WRITE_BATCH_CONFLICT`。
-3. **语义重复调用**：参数 JSON 解析后按 key 排序重序列化做去重键，重复判 `E_DUPLICATE_TOOL_CALL`（字段顺序、空白差异都能识别；刻意不做默认值归一，那需要逐工具知识且会掩盖真实不同意图）。
+2. **同路径多写**（`detectWriteBatchConflicts`，`orch_batch_policy.go:79`）：按参数解析写入目标（本地走 edit plan，远端按 `remote:<target>:<path>`），只执行最早一个，其余 `E_WRITE_BATCH_CONFLICT`。
+3. **计划工具一批只许一个写操作**（`planBatchWriteSource`，`orch_batch_policy.go:111`）：`steps` / `next` / `finish` 同属写（判定直接复用工具的请求分类器，不另写一份），并发池里谁后落谁生效，会造成「推进一步又被整份重设抹掉」这种两调用互相矛盾的结果；只执行最早一个，其余 `E_PLAN_BATCH_CONFLICT`；只读（不传任何源）不算写，可以和其他调用同批。
+4. **语义重复调用**：参数 JSON 解析后按 key 排序重序列化做去重键，重复判 `E_DUPLICATE_TOOL_CALL`（字段顺序、空白差异都能识别；刻意不做默认值归一，那需要逐工具知识且会掩盖真实不同意图）。
 
 配合主循环那边（见 `agent-core-loop.md` 第 8 节）：非文件变更工具并发 4 个、文件变更按调用顺序串行、`wait` 排到批次末尾串行、同批目录级验证只跑一次。
 
@@ -184,9 +185,9 @@ type toolResult struct {                       // infra_result.go:19
 
 ## 九、建议阅读顺序
 
-1. `app.go:2311-2741` —— 分发 + `decodeJSON`
+1. `app.go:2375-2798` —— 分发 + `decodeJSON`
 2. `internal/tools/toolcall/toolcall.go` 全文（179 行，规则最集中）
-3. `infra_result.go:19-48`、`178-1153` —— 信封 + 模型视图
+3. `infra_result.go:19-48`、`178-1213` —— 信封 + 模型视图
 4. `orch_batch_policy.go` 全文 —— 批次策略
 5. `orch_command_safety.go` 全文 —— 安全围栏
-6. `builtins.go:111-492` + `494-749` —— schema 生成与 strict 化
+6. `builtins.go:117-512` + `514-763` —— schema 生成与 strict 化

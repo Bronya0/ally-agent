@@ -324,14 +324,14 @@ func compactToolDataForModel(name string, result toolResult, fullJSON string) st
 		return renderAskResultForModel(r)
 	case "plan":
 		var r struct {
-			Todos    []TodoEntry `json:"todos"`
-			Revision int64       `json:"revision"`
-			Message  string      `json:"message"`
+			Plan     []PlanStep `json:"plan"`
+			Revision int64      `json:"revision"`
+			Action   string     `json:"action"`
 		}
 		if !decodeToolData(result.Data, &r) {
 			return fullJSON
 		}
-		return renderPlanResultForModel(r.Todos, r.Revision, r.Message)
+		return renderPlanResultForModel(r.Action, r.Plan, r.Revision)
 	case "subagent", "agent_delegate":
 		var r AgentDelegateResult
 		if !decodeToolData(result.Data, &r) {
@@ -517,22 +517,119 @@ func renderAskResultForModel(r AskResult) string {
 	return strings.TrimRight(escapeClosingMarker(b.String(), "</ally-ask"), "\n") + "\n</ally-ask>"
 }
 
+// planModelRowLimit bounds how many steps one result block lists. The block is
+// written into the conversation history on every plan call, so a long plan must
+// not come back in full each time: the window keeps the current step in view and
+// reports the steps left out as counts.
+const planModelRowLimit = 30
+
 // renderPlanResultForModel renders the plan tool result as an <ally-plan>
-// block: the outcome message, then one indented "[status] title" row per
-// todo entry.
-func renderPlanResultForModel(todos []TodoEntry, revision int64, message string) string {
+// block: the action the call took, the state it left the plan in and the
+// progress sit in the opening tag, one numbered row per step, and a closing line
+// names the call that moves the plan
+// forward. The model writes no statuses, so this block is where the whole plan
+// and the position come back to it on every call — the reminder sits at the
+// point of the decision instead of only in the system prompt, and it never
+// labels itself after the next step, which is what the rows already show.
+// Plan states, declared once. The block prints the state so the model never has
+// to read "closed" out of the absence of the hint line: an empty plan and a
+// window that left the current step out of view show the same absence.
+const (
+	planStateEmpty   = "empty"
+	planStateRunning = "running"
+	planStateClosed  = "closed"
+)
+
+// planStateOf derives a plan's state from its steps rather than storing it: a
+// current step means running, and a plan that carries steps but no current one
+// was closed by finish. A set always leaves its first step current and nothing
+// else clears the position, so these three values cover every plan the tool can
+// hold.
+func planStateOf(plan []PlanStep) string {
+	if len(plan) == 0 {
+		return planStateEmpty
+	}
+	if firstPlanStepWithStatus(plan, "in_progress") >= 0 {
+		return planStateRunning
+	}
+	return planStateClosed
+}
+
+func renderPlanResultForModel(action string, plan []PlanStep, revision int64) string {
+	done := 0
+	for _, td := range plan {
+		if td.Status == "done" {
+			done++
+		}
+	}
+	open := fmt.Sprintf(`<ally-plan action=%s revision="%d" state=%s done="%d" total="%d"`, strconv.Quote(action), revision, strconv.Quote(planStateOf(plan)), done, len(plan))
+	if len(plan) == 0 {
+		return open + "/>"
+	}
+	current := firstPlanStepWithStatus(plan, "in_progress")
+	start, end := planModelWindow(len(plan), current)
 	var b strings.Builder
-	fmt.Fprintf(&b, `<ally-plan revision="%d">`+"\n", revision)
-	if message != "" {
-		b.WriteString(neutralizeRowBreaks(message) + "\n")
+	b.WriteString(open + ">\n")
+	if start > 0 {
+		fmt.Fprintf(&b, "  (%d earlier steps omitted)\n", start)
 	}
-	for _, td := range todos {
-		fmt.Fprintf(&b, "  [%s] %s\n", td.Status, neutralizeRowBreaks(td.Title))
+	for i := start; i < end; i++ {
+		fmt.Fprintf(&b, "  %d [%s] %s\n", i+1, plan[i].Status, neutralizeRowBreaks(plan[i].Title))
 	}
-	if len(todos) == 0 {
-		b.WriteString("  (empty)\n")
+	if end < len(plan) {
+		fmt.Fprintf(&b, "  (%d later steps omitted)\n", len(plan)-end)
+	}
+	if current >= 0 {
+		if next, ok := planDeclaredNextStep(plan, current); ok {
+			fmt.Fprintf(&b, "When %s is finished: send {\"next\":%s}, or {\"finish\":true} to close the plan here.\n", strconv.Quote(plan[current].Title), strconv.Quote(next))
+		} else {
+			fmt.Fprintf(&b, "When %s is finished: send {\"next\":\"...\"} naming the step that follows it, or {\"finish\":true} if nothing is left.\n", strconv.Quote(plan[current].Title))
+		}
+	} else {
+		// The plan is closed: finish marked the step it was on as done and put
+		// nothing in its place, so no row is current. Say that in words as well as
+		// in the state attribute — the missing hint line is the same absence a
+		// window that left the current step out of view shows — and name what is
+		// left, so a plan closed mid-flight is never read as one carried out.
+		if done == len(plan) {
+			b.WriteString("This plan is closed: every step is done.\n")
+		} else {
+			resume, _ := planDeclaredNextStep(plan, -1) // -1 asks for the first step still open
+			fmt.Fprintf(&b, "This plan is closed: the step it was on is marked done and %d of %d steps stay pending. Send {\"next\":%s} to pick the work back up, or {\"steps\":[...]} to lay out a new plan.\n", len(plan)-done, len(plan), strconv.Quote(resume))
+		}
 	}
 	return strings.TrimRight(escapeClosingMarker(b.String(), "</ally-plan"), "\n") + "\n</ally-plan>"
+}
+
+// planModelWindow returns the row range a result block shows. It is the whole
+// list while that fits; once it does not, the window starts at the current step
+// (or at the tail when nothing is current) so the model always sees where it is
+// and what is still ahead of it.
+func planModelWindow(total, current int) (start, end int) {
+	if total <= planModelRowLimit {
+		return 0, total
+	}
+	start = total - planModelRowLimit
+	if current >= 0 && current < start {
+		start = current
+	}
+	end = start + planModelRowLimit
+	if end > total {
+		end = total
+	}
+	return start, end
+}
+
+// planDeclaredNextStep returns the step the plan already names after the current
+// one, so the closing line can offer a call the model only has to copy. A
+// rolling plan declares nothing, and then there is no target to offer.
+func planDeclaredNextStep(plan []PlanStep, current int) (string, bool) {
+	for i := current + 1; i < len(plan); i++ {
+		if plan[i].Status != "done" {
+			return plan[i].Title, true
+		}
+	}
+	return "", false
 }
 
 // renderSubagentResultForModel renders a sub-agent result as an

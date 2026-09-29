@@ -299,7 +299,7 @@ func (a *App) apiMux() *http.ServeMux {
 	mux.HandleFunc("GET /api/v1/sessions/{id}", a.apiHandleSessionStatus)
 	mux.HandleFunc("GET /api/v1/sessions/{id}/result", a.apiHandleSessionResult)
 	mux.HandleFunc("GET /api/v1/sessions/{id}/messages", a.apiHandleSessionMessages)
-	mux.HandleFunc("GET /api/v1/sessions/{id}/todos", a.apiHandleSessionTodos)
+	mux.HandleFunc("GET /api/v1/sessions/{id}/todos", a.apiHandleSessionPlan)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/messages", a.apiHandleSendMessage)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/cancel", a.apiHandleCancelSession)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/compact", a.apiHandleCompactSession)
@@ -872,8 +872,8 @@ func (a *App) apiHandleSessionMessages(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (a *App) apiHandleSessionTodos(w http.ResponseWriter, r *http.Request) {
-	apiWriteOK(w, map[string]any{"todos": a.GetTodos(r.PathValue("id"))})
+func (a *App) apiHandleSessionPlan(w http.ResponseWriter, r *http.Request) {
+	apiWriteOK(w, map[string]any{"todos": a.GetPlan(r.PathValue("id"))})
 }
 
 // apiHandleCompactSession 压缩会话历史（同步调用：等 LLM 总结完成才返回；

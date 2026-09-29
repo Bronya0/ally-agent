@@ -42,7 +42,7 @@ Public License v3. See the LICENSE file for details.
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { t } from '../i18n.mjs';
 import { formatHttpToolTitle } from '../utils/toolPreview.mjs';
-import { toolVerbLabel } from '../utils/toolVerb.mjs';
+import { toolActionFromArgs, toolVerbLabel } from '../utils/toolVerb.mjs';
 import ToolStatusIcon from './ToolStatusIcon.vue';
 
 const props = defineProps({
@@ -157,20 +157,24 @@ function parseToolArgs(raw) {
   }
 }
 
-// Cache parsed args + derived title on the toolCall object itself, so that
-// repeated renders during sub-agent progress updates don't re-run JSON.parse
-// on the same args string. Sub-agent progress events emit ~1/s with the same
-// args payload; without this cache each tool row would parse once per render.
-function toolArgsTitle(tc) {
-  const name = tc.name || '';
-  const argsText = String(tc.args || '');
+// Parsed args for a sub-agent tool call, cached on the toolCall object itself:
+// sub-agent progress events repeat the same args payload (~1/s), so without the
+// cache every row would re-run JSON.parse on each render (and once more per
+// template call site).
+function cachedToolArgs(tc) {
+  const argsText = String(tc?.args || '');
   // Re-parse only when args actually changed (new tool call, or streaming
   // completion of a long arg payload like command).
-  if (tc._argsCacheKey !== argsText) {
+  if (tc && tc._argsCacheKey !== argsText) {
     tc._argsCacheKey = argsText;
     tc._argsCacheParsed = parseToolArgs(argsText);
   }
-  const parsed = tc._argsCacheParsed;
+  return (tc && tc._argsCacheParsed) || {};
+}
+
+function toolArgsTitle(tc) {
+  const name = tc.name || '';
+  const parsed = cachedToolArgs(tc);
 
   if (name === 'command' || name === 'remote_run_command') {
     const cmd = parsed.command || parsed.cmd || '';
@@ -245,8 +249,8 @@ function toolArgsTitle(tc) {
     return parsed.skill || '';
   }
   if (name === 'plan') {
-    const todos = Array.isArray(parsed.todos) ? parsed.todos : [];
-    return todos.length ? `${todos.length} items` : '';
+    const steps = Array.isArray(parsed.steps) ? parsed.steps : [];
+    return steps.length ? `${steps.length} items` : '';
   }
   return '';
 }
@@ -258,18 +262,11 @@ function toolArgsTitle(tc) {
 function subToolVerb(tc) {
   const name = tc?.name || '';
   const kind = typeof name === 'string' && name.startsWith('mcp__') ? 'mcp' : '';
-  // scheduled_task's verb depends on its action; reuse the args cache primed by
-  // toolArgsTitle (falling back to a parse) instead of re-parsing every render.
-  let action;
-  if (name === 'scheduled_task') {
-    const argsText = String(tc?.args || '');
-    if (tc._argsCacheKey !== argsText) {
-      tc._argsCacheKey = argsText;
-      tc._argsCacheParsed = parseToolArgs(argsText);
-    }
-    action = tc._argsCacheParsed?.action;
-  }
-  return toolVerbLabel(name, kind, tc?.status, action);
+  // The action a call took lives in its own arguments, so the row reads it
+  // through the same helper the main card uses — one rule for every card, since
+  // the action can only come from the args. Reuse the parse cached by
+  // toolArgsTitle rather than re-parsing on every render.
+  return toolVerbLabel(name, kind, tc?.status, toolActionFromArgs(name, cachedToolArgs(tc)));
 }
 </script>
 

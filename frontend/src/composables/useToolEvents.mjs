@@ -23,6 +23,7 @@ import {
   toolEventId,
 } from '../utils/toolEventState.mjs';
 import { formatReadRangeChip } from '../utils/toolFormat.mjs';
+import { isActionKeyedTool } from '../utils/toolVerb.mjs';
 
 export function useToolEvents(ctx) {
   const {
@@ -40,7 +41,7 @@ export function useToolEvents(ctx) {
     formatToolChip,
     formatDurationShort,
     makeToolResultTitle,
-    formatTodoNextStep,
+    formatPlanNextStep,
     scrollMessagesToBottomIfStale,
     scrollMessagesToBottom,
     activeSessionId,
@@ -81,6 +82,15 @@ export function useToolEvents(ctx) {
     if (data.mcpServer) existing.mcpServer = data.mcpServer;
     if (data.mcpTool) existing.mcpTool = data.mcpTool;
     existing.time = new Date().toLocaleTimeString();
+    // A tool whose verb is keyed by its action (scheduled_task / service / plan)
+    // takes that action from the call's arguments; the result names the action
+    // the backend took, which is the only source for a card whose arguments never
+    // arrived and for plan's read-back call, whose arguments state no action at
+    // all. Only a gap is filled — an action the card already captured is never
+    // replaced (plan's clear and the backend's set are two readings of one call).
+    if (!existing.toolAction && isActionKeyedTool(existing.name)) {
+      existing.toolAction = String(resultData?.action || '').trim().toLowerCase();
+    }
   }
 
   function applyDefaultToolResultTitle(existing, data, resultData) {
@@ -99,7 +109,7 @@ export function useToolEvents(ctx) {
   }
 
   function applyPlanTitle(existing, data, resultData) {
-    if (Array.isArray(resultData.todos)) existing.title = formatTodoNextStep(resultData.todos);
+    if (Array.isArray(resultData.plan)) existing.title = formatPlanNextStep(resultData.plan);
   }
 
   function applyCreatePath(existing, data, resultData) {
@@ -200,10 +210,10 @@ export function useToolEvents(ctx) {
   // 启动服务的详情卡：结构化字段（status/pid/command/cwd/started/error），
   // 不带持续滚动的输出尾（那是有界 buffer 的事，任务中心可看完整输出）。
   // stop/list/read 保留 formatToolBody 的原生结果体。
-  // scheduledAction 来自流式参数，早退的 tool:start 可能没带上；running 阶段
+  // toolAction 来自流式参数，早退的 tool:start 可能没带上；running 阶段
   // 标题一定以动作词开头（makeToolTitle: "start · ..."），作兜底信号。
   function applyServiceResult(existing, data, resultData) {
-    const action = String(existing.scheduledAction || '').trim().toLowerCase();
+    const action = String(existing.toolAction || '').trim().toLowerCase();
     const isStart = action === 'start' || (!action && String(existing.title || '').startsWith('start'));
     if (!isStart) return;
     const info = resultData && typeof resultData === 'object' ? resultData : {};

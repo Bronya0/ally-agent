@@ -104,6 +104,19 @@ func detectWriteBatchConflicts(cfg ConfigState, calls []openai.ToolCall) map[int
 	return conflicts
 }
 
+// planBatchWriteSource reports whether a plan call would change the plan. It
+// asks the same classifier the handler runs (a blank next and a false finish
+// are not sources), so the batch rule cannot drift from the tool vocabulary and
+// a call that only reads the plan back never owns the batch.
+func planBatchWriteSource(arguments string) bool {
+	var req PlanRequest
+	if json.Unmarshal([]byte(arguments), &req) != nil {
+		return false
+	}
+	action, _, err := classifyPlanRequest(req)
+	return err == nil && action != planActionRead
+}
+
 func detectToolBatchConflicts(cfg ConfigState, calls []openai.ToolCall) map[int]error {
 	conflicts := detectWriteBatchConflicts(cfg, calls)
 	if len(calls) <= 1 {
@@ -136,6 +149,25 @@ func detectToolBatchConflicts(cfg ConfigState, calls []openai.ToolCall) map[int]
 			conflicts[i] = err
 		}
 		return conflicts
+	}
+	// The plan tool takes one writer per batch. Two writes in one response —
+	// most plausibly steps + next — run in the same concurrent pool, so which
+	// one lands last is a coin flip: a steps that lands after a next rewinds the
+	// position that next had just advanced, the loser's intent silently
+	// disappears, and the two tool results contradict each other. Keep the first
+	// write and reject the rest by name, the same shape as the same-path write
+	// rule above. Read-only plan calls are not writers: several reads are
+	// harmless, and identical ones are already collapsed by the dedup below.
+	firstPlanWrite := -1
+	for i, call := range calls {
+		if normalizeToolName(call.Function.Name) != planToolName || !planBatchWriteSource(call.Function.Arguments) {
+			continue
+		}
+		if firstPlanWrite < 0 {
+			firstPlanWrite = i
+			continue
+		}
+		conflicts[i] = codedToolError("E_PLAN_BATCH_CONFLICT", fmt.Errorf("another plan write (toolCallIndex %d) appears earlier in this tool batch; only the first one executes. This call was skipped — send this plan update in a later response, once you have seen what the first one did", firstPlanWrite))
 	}
 	// Deduplicate calls with semantically identical arguments within the same batch.
 	// Models occasionally emit two or more tool calls that mean the same thing but

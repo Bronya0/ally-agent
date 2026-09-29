@@ -18,26 +18,27 @@ import (
 	"sync"
 	"time"
 
+	toolshared "ally-dev/internal/tools/shared"
 	openai "github.com/sashabaranov/go-openai"
 	"unicode/utf8"
 )
 
-// GetTodos returns the current todo list for a session.
-func (a *App) GetTodos(sessionID string) []TodoEntry {
+// GetPlan returns the current plan for a session.
+func (a *App) GetPlan(sessionID string) []PlanStep {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	list := a.todos[sessionID]
+	list := a.plans[sessionID]
 	if list == nil {
-		return []TodoEntry{}
+		return []PlanStep{}
 	}
-	return cloneTodos(list)
+	return clonePlan(list)
 }
 
-// emitTodoUpdate sends the current todo list to the frontend.
-func (a *App) emitTodoUpdate(sid string, todos []TodoEntry, revision int64) {
+// emitPlanUpdate sends the current plan to the frontend.
+func (a *App) emitPlanUpdate(sid string, plan []PlanStep, revision int64) {
 	a.emit("plan:update", map[string]any{
 		"sessionId": sid,
-		"todos":     cloneTodos(todos),
+		"plan":      clonePlan(plan),
 		"revision":  revision,
 	})
 }
@@ -471,9 +472,8 @@ func (a *App) peekSessionWorkspaceMap(sessionID string, cfg ConfigState) string 
 }
 
 // sessionPrefixBreakdown returns the request prefix this session will carry —
-// the system prompt parts, the session-frozen workspace map and the current plan
-// snapshot — as a token total plus the same sections broken out for the footer
-// popover.
+// the system prompt parts and the session-frozen workspace map — as a token total
+// plus the same sections broken out for the footer popover.
 //
 // It is the single source of the prefix figure: the footer displays it and the
 // run loop adds it to the auto-compaction trigger, because the live message
@@ -516,7 +516,7 @@ func (a *App) getContextBreakdown(sessionID string, workspaceHint string) Contex
 
 	// Request prefix and tool schemas: counted from the same bytes the next
 	// request carries — the session-frozen system prompt, the session's
-	// workspace map, the current plan snapshot and the session-frozen tool set.
+	// workspace map and the session-frozen tool set.
 	// sessionPrefixBreakdown is shared with the run loop, so the footer and the
 	// auto-compaction trigger agree on the prefix figure.
 	result := ContextBreakdown{}
@@ -652,6 +652,9 @@ func computeLiveBreakdown(msgs []openai.ChatCompletionMessage) ContextBreakdown 
 // sides name the same sections.
 const (
 	workspaceMapPartLabel = "工作区文件结构"
+	// No section carries this one any more: every plan update is a history
+	// message, never a prefix part. It stays as the name the frontend label map and
+	// the tests that assert its absence refer to.
 	planSnapshotPartLabel = "计划快照"
 )
 
@@ -778,102 +781,307 @@ func (a *App) finalizeSessionBreakdown(sessionID string, breakdown *ContextBreak
 	applyContextAnchor(breakdown, messages, a.contextAnchorFor(sessionID))
 }
 
-// handleTodoList implements the plan tool.
-func (a *App) handleTodoList(sessionID string, req TodoListRequest) (any, error) {
+// Plan action names. They travel to the model in the result block, so a later
+// step of the conversation can still tell what an earlier plan call did.
+const (
+	planActionRead   = "read"
+	planActionSet    = "set"
+	planActionNext   = "next"
+	planActionFinish = "finish"
+)
+
+// handlePlan implements the plan tool.
+func (a *App) handlePlan(sessionID string, req PlanRequest) (any, error) {
 	sid := strings.TrimSpace(sessionID)
 	if sid == "" {
 		return nil, errors.New("no active session")
 	}
+	action, nextTitle, err := classifyPlanRequest(req)
+	if err != nil {
+		return nil, err
+	}
+	// Build the requested list before taking the lock: it reads the request only.
+	var setList []PlanStep
+	if action == planActionSet {
+		setList = planStepsFromRequest(req)
+	}
 
 	a.mu.Lock()
-	// Query mode: return current list
-	if req.Todos == nil {
-		list := a.todos[sid]
-		if list == nil {
-			list = []TodoEntry{}
-		}
-		list = cloneTodos(list)
-		revision := a.todoRevisions[sid]
+	stored := a.plans[sid]
+	list := clonePlan(stored)
+	switch action {
+	case planActionSet:
+		list = setList
+	case planActionNext:
+		list = advancePlan(list, nextTitle)
+	case planActionFinish:
+		list = finishPlan(list)
+	}
+	if action == planActionRead {
+		revision := a.planRevisions[sid]
 		a.mu.Unlock()
 		return map[string]any{
-			"todos":    list,
+			"plan":     list,
 			"revision": revision,
-			"message":  "Current todo list.",
+			"action":   planActionRead,
 		}, nil
 	}
-
-	todos := *req.Todos
-	inProgress := 0
-	for _, todo := range todos {
-		switch todo.Status {
-		case "pending", "in_progress", "done":
-		default:
-			a.mu.Unlock()
-			return nil, fmt.Errorf("invalid todo status %q: must be pending, in_progress, or done", todo.Status)
-		}
-		if strings.TrimSpace(todo.Title) == "" {
-			a.mu.Unlock()
-			return nil, errors.New("todo title is required")
-		}
-		if todo.Status == "in_progress" {
-			inProgress++
-		}
-	}
-	if inProgress > 1 {
+	// The bounds are checked on the list about to be stored, not on the request
+	// that built it: a step named by next grows the plan exactly as a step from a
+	// whole-plan set does, so policing the set request alone left that path
+	// uncapped. A refused write never reaches the stored plan.
+	if err := validatePlanList(list); err != nil {
 		a.mu.Unlock()
-		return nil, fmt.Errorf("at most one todo may be in_progress at a time (got %d): mark the current item done or pending before starting another", inProgress)
+		return nil, err
 	}
-	// Query mode: return current list
-	if req.Todos == nil {
-		list := a.todos[sid]
-		if list == nil {
-			list = []TodoEntry{}
-		}
-		list = cloneTodos(list)
-		revision := a.todoRevisions[sid]
-		a.mu.Unlock()
-		return map[string]any{
-			"todos":    list,
-			"revision": revision,
-			"message":  "Current todo list.",
-		}, nil
+	// A write that leaves the plan exactly as it was is not a change: the
+	// revision counts changes, and the panel already shows this plan. The result
+	// block is what tells the model nothing moved — naming the step the plan is
+	// on, and closing a plan that has no current step, both land here.
+	changed := !planStepsEqual(list, stored)
+	if changed {
+		a.plans[sid] = list
+		a.planRevisions[sid]++
 	}
-
-	// Replace mode. Any non-empty list with actionable work starts at its
-	// first pending item, so a newly created list immediately has a visible
-	// current step. This also repairs an update that finished the old step
-	// without selecting the next one.
-	updated := cloneTodos(todos)
-	if inProgress == 0 {
-		for i := range updated {
-			if updated[i].Status == "pending" {
-				updated[i].Status = "in_progress"
-				break
-			}
-		}
-	}
-	a.todos[sid] = updated
-	a.todoRevisions[sid]++
-	revision := a.todoRevisions[sid]
+	revision := a.planRevisions[sid]
 	a.mu.Unlock()
 
-	a.emitTodoUpdate(sid, updated, revision)
-	message := "Todo list updated."
-	if len(updated) == 0 {
-		message = "Todo list cleared."
+	if changed {
+		a.emitPlanUpdate(sid, list, revision)
 	}
 	return map[string]any{
-		"todos":    updated,
+		"plan":     list,
 		"revision": revision,
-		"message":  message,
+		"action":   action,
 	}, nil
 }
 
-func cloneTodos(list []TodoEntry) []TodoEntry {
-	if len(list) == 0 {
-		return []TodoEntry{}
+// planTitleKey is the single definition of "the same step title": titles are
+// compared for identity after trimming and case folding. A title is how a later
+// call names a step, so two titles a reader cannot tell apart ("Run tests" and
+// "run Tests") are one title: the plan refuses to carry both, and a next that
+// slips into another case lands on the step it meant instead of adding a twin
+// beside it. Because an inserted step only happens when no step matches on this
+// key, no write can introduce a second title that collides with an existing one.
+func planTitleKey(title string) string {
+	return strings.ToLower(strings.TrimSpace(title))
+}
+
+// classifyPlanRequest decides what a plan call is asking for. A zero value
+// counts as absent — an empty next or a false finish is not a source — matching
+// how the rest of the tool surface treats "0 or empty means not sent", which is
+// also why this counts effective values rather than JSON keys.
+func classifyPlanRequest(req PlanRequest) (action, nextTitle string, err error) {
+	if req.Next != nil {
+		nextTitle = strings.TrimSpace(*req.Next)
 	}
-	out := make([]TodoEntry, len(list))
+	finish := req.Finish != nil && *req.Finish
+	sources := make([]string, 0, 3)
+	if req.Steps != nil {
+		sources = append(sources, "steps")
+	}
+	if nextTitle != "" {
+		sources = append(sources, "next")
+	}
+	if finish {
+		sources = append(sources, "finish")
+	}
+	if len(sources) > 1 {
+		return "", "", fmt.Errorf("plan takes one write per call, got %s: lay the plan out with steps, move on with next, or close it out with finish", strings.Join(sources, " + "))
+	}
+	switch {
+	case req.Steps != nil:
+		return planActionSet, "", nil
+	case nextTitle != "":
+		return planActionNext, nextTitle, nil
+	case finish:
+		return planActionFinish, "", nil
+	default:
+		return planActionRead, "", nil
+	}
+}
+
+// planStepsFromRequest builds the stored list for a set call: titles in order,
+// with every status derived from the position. Nothing here accepts a status
+// from the caller, which is what makes the two-current-steps state the tool used
+// to reject structurally impossible rather than an error to recover from. It
+// trims the titles and leaves whether the list is acceptable to validatePlanList,
+// so a whole-plan set and a step inserted by next answer to one rule, not two.
+func planStepsFromRequest(req PlanRequest) []PlanStep {
+	steps := *req.Steps
+	list := make([]PlanStep, 0, len(steps))
+	for _, title := range steps {
+		list = append(list, PlanStep{Title: strings.TrimSpace(title)})
+	}
+	return applyPlanPosition(list, 0)
+}
+
+// validatePlanList is the single gate every write passes through, whichever call
+// built the list: at most MaxPlanSteps steps, no blank title, every title within
+// MaxPlanStepTitleChars, and no two titles naming the same step (compared through
+// planTitleKey, so a difference in case or surrounding spaces is the same title).
+// Checking the list about to be stored rather than the request that produced it is
+// what keeps a step inserted by next inside the same bounds as a step from a
+// whole-plan set: the caps belong to the plan, not to one of the ways it grows.
+func validatePlanList(list []PlanStep) error {
+	if len(list) > toolshared.MaxPlanSteps {
+		return fmt.Errorf("a plan holds at most %d steps and this write would carry %d: keep the plan to the work at hand, and lay out a new plan when that work is done", toolshared.MaxPlanSteps, len(list))
+	}
+	seen := make(map[string]int, len(list))
+	for i, td := range list {
+		title := strings.TrimSpace(td.Title)
+		if title == "" {
+			return errors.New("plan step titles must not be blank")
+		}
+		if n := utf8.RuneCountInString(title); n > toolshared.MaxPlanStepTitleChars {
+			return fmt.Errorf("step %d is %d characters long; keep every step title within %d characters, since every plan call echoes the steps back and the panel shows one row per step", i+1, n, toolshared.MaxPlanStepTitleChars)
+		}
+		if first, ok := seen[planTitleKey(title)]; ok {
+			return fmt.Errorf("step %d repeats the title of step %d (%q); the title is how a later call names a step, so every step needs its own — titles that differ only by case or surrounding spaces count as the same", i+1, first+1, title)
+		}
+		seen[planTitleKey(title)] = i
+	}
+	return nil
+}
+
+// applyPlanPosition rewrites statuses from the position: everything before the
+// cursor is done, the cursor itself is the current step, everything after it is
+// pending. This is what makes a second in_progress impossible instead of an
+// error the model has to spend a round recovering from. Only a set writes
+// statuses this way: a next moves the current step to any step on the list, so
+// a plan can carry pending steps before the one it is on.
+func applyPlanPosition(list []PlanStep, cursor int) []PlanStep {
+	if cursor < 0 {
+		cursor = 0
+	}
+	if cursor > len(list) {
+		cursor = len(list)
+	}
+	for i := range list {
+		switch {
+		case i < cursor:
+			list[i].Status = "done"
+		case i == cursor:
+			list[i].Status = "in_progress"
+		default:
+			list[i].Status = "pending"
+		}
+	}
+	return list
+}
+
+// advancePlan puts the named step in front of the model. The name is resolved
+// before the position moves: naming the step the plan is already on means "still
+// on this one", and closing it first would make the lookup miss its own row and
+// duplicate the step. A title the plan carries under any status becomes the
+// current step (a step finished earlier is picked up again instead of copied),
+// and anything else is inserted right after the current step, so a step named
+// mid-flight lands where the model actually is rather than at the end, behind
+// steps it has not reached. Both paths hand the move to setCurrentStep, so an
+// inserted step takes over from the current one instead of leaving two behind.
+func advancePlan(list []PlanStep, title string) []PlanStep {
+	current := firstPlanStepWithStatus(list, "in_progress")
+	target := firstPlanStepWithTitle(list, title)
+	if target >= 0 {
+		if target == current {
+			return list
+		}
+		setCurrentStep(list, target)
+		return list
+	}
+	at := len(list)
+	if current >= 0 {
+		at = current + 1
+	}
+	list = append(list, PlanStep{})
+	copy(list[at+1:], list[at:])
+	list[at] = PlanStep{Title: title}
+	setCurrentStep(list, at)
+	return list
+}
+
+// setCurrentStep moves the plan's current step to idx: the step that held the
+// position is closed and idx becomes current. Every move of the position goes
+// through here or through clearCurrentStep, so the invariant the whole tool
+// rests on (exactly one step is current at a time) is held in one place instead
+// of at each call site, where one forgotten close shows up as two current steps:
+// the echoed plan then names the orphan as the step to finish next, and closing
+// the plan takes as many finish calls as it left orphans behind.
+func setCurrentStep(list []PlanStep, idx int) {
+	if idx < 0 || idx >= len(list) {
+		return
+	}
+	if prev := firstPlanStepWithStatus(list, "in_progress"); prev >= 0 && prev != idx {
+		list[prev].Status = "done"
+	}
+	list[idx].Status = "in_progress"
+}
+
+// clearCurrentStep closes the current step and leaves nothing in its place: no
+// step is current, which is what a closed plan means.
+func clearCurrentStep(list []PlanStep) {
+	if current := firstPlanStepWithStatus(list, "in_progress"); current >= 0 {
+		list[current].Status = "done"
+	}
+}
+
+// finishPlan closes the plan out: the current step is done and nothing takes
+// its place. Steps the model never reached stay pending, so the panel keeps
+// showing what was left instead of pretending the whole plan was carried out.
+func finishPlan(list []PlanStep) []PlanStep {
+	clearCurrentStep(list)
+	return list
+}
+
+// firstPlanStepWithStatus returns the index of the first step in that status, or
+// -1. Exactly one step is in_progress while a plan is running, but that step is
+// not simply "the first step that is not done": a set derives the statuses from
+// the position, and a next then moves the current step to whichever step it
+// names.
+func firstPlanStepWithStatus(list []PlanStep, status string) int {
+	for i, td := range list {
+		if td.Status == status {
+			return i
+		}
+	}
+	return -1
+}
+
+// firstPlanStepWithTitle finds a step by title, whatever its status: the title
+// is the step's identity, and a call naming one means "this is what I am on",
+// so a step finished earlier is picked up again instead of duplicated. Identity
+// goes through planTitleKey, so a slip in case or surrounding spaces lands on
+// the step it names rather than creating a twin beside it.
+func firstPlanStepWithTitle(list []PlanStep, title string) int {
+	key := planTitleKey(title)
+	for i, td := range list {
+		if planTitleKey(td.Title) == key {
+			return i
+		}
+	}
+	return -1
+}
+
+// planStepsEqual reports whether two plans are the same titles in the same
+// statuses. handlePlan uses it to keep a write that changes nothing from
+// counting as a change.
+func planStepsEqual(a, b []PlanStep) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func clonePlan(list []PlanStep) []PlanStep {
+	if len(list) == 0 {
+		return []PlanStep{}
+	}
+	out := make([]PlanStep, len(list))
 	copy(out, list)
 	return out
 }

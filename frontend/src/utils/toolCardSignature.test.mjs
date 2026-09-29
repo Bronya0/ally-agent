@@ -47,6 +47,22 @@ test('array-length fields are reflected without deep comparison', () => {
   assert.equal(toolCardRenderSignature(withEntries), toolCardRenderSignature({ ...base, editEntries: [{ path: 'c' }, { path: 'd' }] }));
 });
 
+test('signature changes when the action behind the verb arrives or changes', () => {
+  // scheduled_task / service / plan render a verb keyed by the call's action, and
+  // the action is captured from arguments that may land after the card is drawn.
+  const withoutAction = { role: 'tool_call', kind: 'plan', status: 'running', title: 'Read code' };
+  const withAction = { ...withoutAction, toolAction: 'set' };
+  assert.notEqual(
+    toolCardRenderSignature(withoutAction),
+    toolCardRenderSignature(withAction),
+    'a late action must change the memo signature or the card keeps the first verb',
+  );
+  assert.notEqual(
+    toolCardRenderSignature(withAction),
+    toolCardRenderSignature({ ...withAction, toolAction: 'next' }),
+  );
+});
+
 test('streaming draft updates change running tool card signature', () => {
   const initial = { role: 'tool_call', kind: 'create', status: 'running', title: '', chip: '' };
   const withPath = { ...initial, title: 'demo.txt', editFilePath: 'demo.txt' };

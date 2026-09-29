@@ -212,8 +212,8 @@ type App struct {
 	initialized       bool
 	disabledSkills    []string
 	mcpManager        *McpManager
-	todos             map[string][]TodoEntry // sessionID → todos
-	todoRevisions     map[string]int64
+	plans             map[string][]PlanStep // sessionID → the plan's steps
+	planRevisions     map[string]int64
 	// sessionWorkspaceMaps freezes the workspace map bytes per session
 	// (sessionID → map text) so the request prefix stays byte-stable across
 	// runs and provider prompt cache survive; guarded by mu (declared in
@@ -383,8 +383,8 @@ func NewApp() *App {
 		compactingCancels:  map[string]context.CancelFunc{},
 		histories:          map[string][]openai.ChatCompletionMessage{},
 		readCaches:         map[string]*sessionReadCache{},
-		todos:              map[string][]TodoEntry{},
-		todoRevisions:      map[string]int64{},
+		plans:              map[string][]PlanStep{},
+		planRevisions:      map[string]int64{},
 		// sessionWorkspaces 记录每个会话 run 实际使用的 workspace（见
 		// StartChat 的写入点）：KB/temp 会话在首次 run 完成前没有会话索引
 		// 条目，sessionContextConfig 若只回退 a.config 会把上下文统计算到
@@ -1346,13 +1346,26 @@ type DocumentReadResult struct {
 	Path string `json:"path"`
 }
 
-type TodoEntry struct {
+type PlanStep struct {
 	Title  string `json:"title"`
 	Status string `json:"status"` // pending, in_progress, done
 }
 
-type TodoListRequest struct {
-	Todos *[]TodoEntry `json:"todos,omitempty"`
+// PlanRequest is the plan tool's input. The model never writes a status: a call
+// either lays the plan out, moves to the next step, or closes it out, and every
+// status follows from the position that call leaves the plan on: the step the
+// plan is on is current, the ones behind it are done, the ones ahead are pending
+// (a step skipped over stays pending until a call names it). Exactly one source
+// may be effective per call; with none of them the call only reads back.
+type PlanRequest struct {
+	// Steps starts or replaces the whole plan: step titles in order, the first
+	// one becoming the current step.
+	Steps *[]string `json:"steps,omitempty"`
+	// Next names the step starting now; the step the plan was on is marked done.
+	Next *string `json:"next,omitempty"`
+	// Finish closes the plan out: the current step is marked done and nothing
+	// takes its place, so the steps never reached stay pending.
+	Finish *bool `json:"finish,omitempty"`
 }
 
 type AgentDelegateRequest struct {
@@ -1675,8 +1688,8 @@ func (a *App) releaseSession(sessionID string, deleteHistory bool) error {
 		return errors.New("session is compacting")
 	}
 	delete(a.histories, sessionID)
-	delete(a.todos, sessionID)
-	delete(a.todoRevisions, sessionID)
+	delete(a.plans, sessionID)
+	delete(a.planRevisions, sessionID)
 	delete(a.liveBreakdown, sessionID)
 	delete(a.sessionWorkspaceMaps, sessionID)
 	delete(a.sessionSystemPrompts, sessionID)
@@ -2745,10 +2758,10 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 			}
 		}
 	case "plan":
-		var tReq TodoListRequest
+		var tReq PlanRequest
 		err, argWarnings = decodeJSON(&tReq)
 		if err == nil {
-			data, err = a.handleTodoList(sessionID, tReq)
+			data, err = a.handlePlan(sessionID, tReq)
 		}
 	case "skill":
 		var skReq struct {

@@ -90,7 +90,7 @@ Public License v3. See the LICENSE file for details.
                           @click="togglePlanPanel(tab)"
                         >
                           <span>{{ $t('app.plan.title') }}</span>
-                          <span class="plan-panel-count">{{ currentPlanNumberFor(tab) }}/{{ planEntriesForTab(tab).length }}</span>
+                          <span class="plan-panel-count">{{ planDoneCountFor(tab) }}/{{ orderedPlanEntriesFor(tab).length }}</span>
                           <span :class="['plan-panel-toggle', { expanded: !isPlanPanelCollapsed(tab) }]"></span>
                         </button>
                         <div
@@ -582,7 +582,7 @@ import {
   OpenWorkspacePathInFileManagerAt,
   ActivateSkill,
   GetActiveSkills,
-  GetTodos,
+  GetPlan,
   GetMcpServers,
   ListScheduledTasks,
   DeleteScheduledTask,
@@ -648,7 +648,7 @@ import { buildVersion } from './utils/buildVersion.js';
 import { computeEditStats, formatEditStats } from './utils/diff.js';
 import { isNewerReleaseVersion } from './utils/versionCheck.mjs';
 import { findSessionWorkspaceTab, isEditableNavigationTarget, shouldAcceptRunTerminal } from './utils/sessionState.mjs';
-import { orderPlanPanelEntries, planFocusScrollDelta } from './utils/planPanel.mjs';
+import { orderPlanPanelEntries, planDoneCount, planFocusScrollDelta, normalizePlanEntries } from './utils/planPanel.mjs';
 import { formatDateTime, naiveDateLocale, naiveLocale, reasoningEffortLabel, t, welcomeGreeting as localizedWelcomeGreeting } from './i18n.mjs';
 import { compactBytes, formatAttachmentSize } from './utils/attachmentSize.mjs';
 import { fmtCompact, fmtDuration, formatBytes } from './utils/format.mjs';
@@ -657,6 +657,7 @@ import {
   assistantRowRenderState,
   displaySourceMessages as buildDisplaySourceMessages,
   formatHttpToolTitle,
+  formatPlanArgsTitle,
   isRenderableMessage,
 } from './utils/toolPreview.mjs';
 import {
@@ -675,6 +676,7 @@ import {
 } from './utils/runPhase.mjs';
 import { toolCardRenderSignature } from './utils/toolCardSignature.mjs';
 import { toolUpdateFlushDelay } from './utils/toolUpdateFlush.mjs';
+import { toolActionFromArgs } from './utils/toolVerb.mjs';
 import { useToolEvents } from './composables/useToolEvents.mjs';
 import { unwrapWailsEvent } from './utils/wailsEvent.mjs';
 import { createPromptHistoryStore } from './utils/promptHistoryStore.mjs';
@@ -1746,8 +1748,8 @@ const allowedSSHServersForActiveWorkspace = computed(() => {
   return allowedSSHServersMap.value[ws] || [];
 });
 const workspaceHistory = ref(loadWorkspaceHistory());
-const todosBySession = reactive({});
-const todoRevisionsBySession = reactive({});
+const plansBySession = reactive({});
+const planRevisionsBySession = reactive({});
 // Plan UI state is per session/Tab so switching tabs never reuses another
 // session's collapsed state or list scroll position.
 const planPanelCollapsedBySession = reactive({});
@@ -2309,8 +2311,8 @@ async function destroyTempWorkspace(path, sessionId) {
     if (idx >= 0) {
       const target = sessions.value[idx];
       releaseSessionAttachments(target);
-      delete todosBySession[target.id];
-      delete todoRevisionsBySession[target.id];
+      delete plansBySession[target.id];
+      delete planRevisionsBySession[target.id];
       delete planPanelCollapsedBySession[target.id];
       delete sessionPromptTexts[target.id];
       deletePendingAttachments(target.id);
@@ -2672,13 +2674,13 @@ const serviceRunningCount = computed(() => services.value.filter((service) => ['
 // 列在面板里，但不应把常驻徽标撑大。
 const scheduledLiveCount = computed(() =>
   scheduledTasks.value.filter((task) => task?.running || Number(task?.nextRunAt || 0) > 0).length);
-function todosForSession(sessionId) {
-  const entries = sessionId ? todosBySession[sessionId] : null;
+function planForSession(sessionId) {
+  const entries = sessionId ? plansBySession[sessionId] : null;
   return Array.isArray(entries) ? entries : [];
 }
 
 function planEntriesForTab(tab) {
-  return todosForSession(tab?.sessionId);
+  return planForSession(tab?.sessionId);
 }
 
 function showPlanPanelFor(tab) {
@@ -2686,9 +2688,12 @@ function showPlanPanelFor(tab) {
   return entries.length > 0 && entries.some((item) => item?.status !== 'done');
 }
 
-function currentPlanNumberFor(tab) {
-  const index = planEntriesForTab(tab).findIndex((item) => item?.status === 'in_progress');
-  return index >= 0 ? index + 1 : 0;
+// The header shows progress as "done/total", not the current step's number:
+// naming a later step skips the ones in between, and closing a plan leaves the
+// steps it never reached pending, so the position can sit past steps that were
+// never done.
+function planDoneCountFor(tab) {
+  return planDoneCount(planEntriesForTab(tab));
 }
 
 function orderedPlanEntriesFor(tab) {
@@ -3871,7 +3876,7 @@ async function activateSelectedSession(target) {
   await applySessionWorkspace(target);
   await loadSessionMessages(target);
   unloadInactiveSessionMessages();
-  loadTodos(target.id);
+  loadPlan(target.id);
   restoreMessagesToBottom(target.id);
   return true;
 }
@@ -3945,8 +3950,8 @@ async function closeWorkspaceTab(id) {
       releaseSessionAttachments(linkedSession);
       delete sessionPromptTexts[tab.sessionId];
       deletePendingAttachments(tab.sessionId);
-      delete todosBySession[tab.sessionId];
-      delete todoRevisionsBySession[tab.sessionId];
+      delete plansBySession[tab.sessionId];
+      delete planRevisionsBySession[tab.sessionId];
       displayMessagesCacheBySession.delete(tab.sessionId);
       ReleaseSession(tab.sessionId).catch(() => {});
     }
@@ -4022,7 +4027,7 @@ async function switchWorkspaceTab(id) {
     await loadSessionMessages(linkedSession);
     if (workspaceSwitchVersion !== switchVersion || activeWorkspaceId.value !== id) return;
     unloadInactiveSessionMessages();
-    loadTodos(linkedSession.id);
+    loadPlan(linkedSession.id);
     // Do NOT restore to bottom on tab switch - each ChatMessages instance
     // stays mounted (display-directive="show") so the browser naturally
     // preserves its scroll position when hidden/shown.
@@ -4073,7 +4078,7 @@ function newSession(title) {
   // 新会话默认无附加工作区
   extraRoots.value = [];
   promptText.value = '';
-  loadTodos(id);
+  loadPlan(id);
   addWelcome(workspace);
   // Reset workspace token usage for new session
   const ws = workspace;
@@ -4142,12 +4147,12 @@ function deleteSession(index) {
     const nextSession = sessions.value.find((item) => item.id === replacementId);
     applySessionWorkspace(nextSession);
     promptText.value = '';
-    loadTodos(replacementId);
+    loadPlan(replacementId);
     scrollMessagesToBottom();
   }
 
-  delete todosBySession[deletedId];
-  delete todoRevisionsBySession[deletedId];
+  delete plansBySession[deletedId];
+  delete planRevisionsBySession[deletedId];
   delete planPanelCollapsedBySession[deletedId];
   delete sessionPromptTexts[deletedId];
   deletePendingAttachments(deletedId);
@@ -4841,7 +4846,7 @@ function bindRuntimeEvents() {
     formatToolChip,
     formatDurationShort,
     makeToolResultTitle,
-    formatTodoNextStep,
+    formatPlanNextStep,
     scrollMessagesToBottomIfStale,
     scrollMessagesToBottom,
     activeSessionId,
@@ -5035,11 +5040,11 @@ function bindRuntimeEvents() {
     const sid = data.sessionId || '';
     if (!sid) return;
     const revision = Number(data.revision || 0);
-    const currentRevision = Number(todoRevisionsBySession[sid] || 0);
+    const currentRevision = Number(planRevisionsBySession[sid] || 0);
     if (revision && currentRevision && revision < currentRevision) return;
-    const nextTodos = Array.isArray(data.todos) ? data.todos : [];
-    todosBySession[sid] = nextTodos;
-    if (revision) todoRevisionsBySession[sid] = revision;
+    const nextPlan = Array.isArray(data.plan) ? data.plan : [];
+    plansBySession[sid] = nextPlan;
+    if (revision) planRevisionsBySession[sid] = revision;
     scrollPlanPanelsForSession(sid);
   });
   for (const eventName of ['scheduled:update', 'scheduled:run_start', 'scheduled:run_done', 'scheduled:run_error']) {
@@ -6566,9 +6571,7 @@ function appendToolEventFallback(session, data = {}, status = 'running') {
   if (!session) return null;
   const eventId = toolEventId(data);
   const title = makeToolResultTitle(data.name, data.result, data) || makeToolTitle(data.name, data.args || '', data);
-  const scheduledAction = isActionKeyedToolName(data.name)
-    ? (parseToolArgsBestEffort(data.args || '').action || '')
-    : '';
+  const toolAction = toolActionFromArgs(data.name, parseToolArgsBestEffort(data.args || ''));
   const payload = {
     role: 'tool_call',
     eventId,
@@ -6587,7 +6590,7 @@ function appendToolEventFallback(session, data = {}, status = 'running') {
     mcpServer: data.mcpServer || '',
     mcpTool: data.mcpTool || '',
     errorCode: data.errorCode || '',
-    scheduledAction,
+    toolAction,
     expanded: !isToolCollapsedByDefault(data.name),
     chip: '',
     editOldString: '',
@@ -6637,27 +6640,17 @@ function parseToolResultData(result) {
   }
 }
 
-function normalizeTodoEntries(value) {
-  if (!Array.isArray(value)) return [];
-  return value
-    .filter((todo) => todo && typeof todo === 'object' && String(todo.title || '').trim())
-    .map((todo) => ({
-      title: String(todo.title || '').trim(),
-      status: ['pending', 'in_progress', 'done'].includes(todo.status) ? todo.status : 'pending',
-    }));
-}
-
-function formatTodoNextStep(value) {
-  const todos = normalizeTodoEntries(value);
-  const next = todos.find((todo) => todo.status === 'in_progress')
-    || todos.find((todo) => todo.status === 'pending');
+function formatPlanNextStep(value) {
+  const steps = normalizePlanEntries(value);
+  const next = steps.find((step) => step.status === 'in_progress')
+    || steps.find((step) => step.status === 'pending');
   if (next) return next.title;
-  return todos.length > 0 ? t('tools.plan.status.done') : t('tools.plan.cleared');
+  return steps.length > 0 ? t('tools.plan.status.done') : t('tools.plan.cleared');
 }
 
 function makeToolResultTitle(name, result, meta = {}) {
   const d = parseToolResultData(result);
-  if (name === 'plan' && Array.isArray(d.todos)) return formatTodoNextStep(d.todos);
+  if (name === 'plan' && Array.isArray(d.plan)) return formatPlanNextStep(d.plan);
 	if ((name === 'edit' || name === 'remote_edit') && Array.isArray(d.files)) return d.files.length === 1 ? (d.files[0]?.path || '') : `${d.files.length} files`;
   if (name === 'remote_read' && Array.isArray(d.files)) {
     const paths = d.files.map(f => f && f.path).filter(Boolean);
@@ -6965,9 +6958,10 @@ function updateToolEvent(id, name, title, body, status = 'default', meta = {}, t
     askSubmitting: existing?.askSubmitting || false,
     askSubmitted: existing?.askSubmitted || false,
     askAnswers: existing?.askAnswers || [],
-    // scheduled_task / service card verbs depend on the action; capture it (args may be
-    // absent on an early tool:start, so fall back to the existing value).
-    scheduledAction: isActionKeyedToolName(name) ? (parsed.action || existing?.scheduledAction || '') : (existing?.scheduledAction || ''),
+    // scheduled_task / service / plan card verbs depend on the action the call
+    // took; capture it from the arguments (absent on an early tool:start, so keep
+    // the value already captured — the result fills a gap still left empty).
+    toolAction: toolActionFromArgs(name, parsed) || existing?.toolAction || '',
     ...((name === 'subagent' || name === 'agent_delegate') ? {
       subagentId: existing?.subagentId || '',
       description: parsed.description || existing?.description || parsed.task || '',
@@ -7034,15 +7028,15 @@ async function submitAskResponse(sessionId, msg, answers) {
   }
 }
 
-async function loadTodos(sid) {
+async function loadPlan(sid) {
   if (!sid) return;
-  if (Array.isArray(todosBySession[sid])) {
+  if (Array.isArray(plansBySession[sid])) {
     scrollPlanPanelsForSession(sid);
   }
   try {
-    const list = await GetTodos(sid);
-    const nextTodos = Array.isArray(list) ? list : [];
-    todosBySession[sid] = nextTodos;
+    const list = await GetPlan(sid);
+    const nextPlan = Array.isArray(list) ? list : [];
+    plansBySession[sid] = nextPlan;
     scrollPlanPanelsForSession(sid);
   } catch (_) {
     // Keep an already cached plan visible if the refresh fails.
@@ -7265,8 +7259,8 @@ function trimRuntimeSessions() {
     const session = sessions.value[index];
     if (protectedIds.has(session.id)) continue;
     releaseSessionAttachments(session);
-    delete todosBySession[session.id];
-    delete todoRevisionsBySession[session.id];
+    delete plansBySession[session.id];
+    delete planRevisionsBySession[session.id];
     delete planPanelCollapsedBySession[session.id];
     delete sessionPromptTexts[session.id];
     deletePendingAttachments(session.id);
@@ -7991,11 +7985,6 @@ function formatMcpArgsSummary(parsed) {
   return parts.slice(0, 2).join(' · ');
 }
 
-// Tools whose card verb is keyed by the parsed args.action (see toolVerb.mjs).
-function isActionKeyedToolName(name) {
-  return name === 'scheduled_task' || name === 'service';
-}
-
 function makeToolTitle(name, args, meta = {}) {
   if (isMcpToolName(name)) {
     // MCP 卡片名称位已显示 server/tool；括号里只放参数摘要，
@@ -8004,7 +7993,9 @@ function makeToolTitle(name, args, meta = {}) {
   }
   const parsed = parseToolArgsForMeta(args, meta);
   if (name === 'plan') {
-    return Array.isArray(parsed.todos) ? formatTodoNextStep(parsed.todos) : '';
+    // 入参通道：steps / next / finish。结果通道的格式化函数（result 里的
+    // {title,status} 数组）用在这里只会得到空串。
+    return formatPlanArgsTitle(parsed);
   }
   if (name === 'command' || name === 'remote_run_command' || name === 'Bash') {
     const command = parsed.command || parsed.cmd || '';

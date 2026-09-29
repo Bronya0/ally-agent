@@ -27,6 +27,10 @@ export function toolCardRenderSignature(msg) {
   return [
     msg.kind,
     msg.status,
+    // The verb is keyed by the action for scheduled_task / service / plan, so an
+    // action that arrives after the card renders must change the tuple or the
+    // card keeps the verb it showed first.
+    msg.toolAction,
     msg.title,
     msg.body,
     msg.error,

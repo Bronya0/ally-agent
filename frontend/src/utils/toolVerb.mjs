@@ -66,7 +66,10 @@ const TOOL_VERBS = {
   calculate: ['Calculating', 'Calculated', 'Calculation'],
   wait: ['Waiting', 'Waited', 'Wait'],
   ask: ['Asking', 'Asked', 'Ask'],
-  plan: ['Next step', 'Next step', 'Next step'],
+  // Fallback for a plan card that captured no action at all — an event whose
+  // arguments never arrived, or a snapshot written before the action was
+  // recorded. It names the tool without claiming an action.
+  plan: ['Plan', 'Plan', 'Plan'],
   // scheduled_task verb depends on the action (create/list/delete), resolved via
   // SCHEDULED_TASK_VERBS below; this entry is the fallback when the action is
   // unknown (e.g. an old card whose args weren't captured).
@@ -99,6 +102,29 @@ const SERVICE_VERBS = {
   read: ['Reading service output', 'Read service output', 'Service read'],
 };
 
+// plan has no action field: which of its three sources the model sent IS the
+// action, and the backend reads it the same way. "Next step" belongs to the next
+// form alone — a call that lays out, closes or clears a plan is not a next step,
+// and a closed plan has no next step left to name. The clear (`steps: []`) is
+// its own verb because the backend reports it as a set while the card reads very
+// differently. [inProgress, done, noun].
+const PLAN_VERBS = {
+  set: ['Planning', 'Planned', 'Plan set'],
+  clear: ['Clearing plan', 'Cleared plan', 'Plan clear'],
+  next: ['Next step', 'Next step', 'Plan step'],
+  finish: ['Finishing plan', 'Finished plan', 'Plan finish'],
+  read: ['Reading plan', 'Read plan', 'Plan read'],
+};
+
+// The tools whose verb comes from the action the call took rather than from the
+// tool name alone, keyed by tool name. One table, so toolVerbLabel and
+// isActionKeyedTool cannot disagree about which tools those are.
+const ACTION_VERBS = {
+  scheduled_task: SCHEDULED_TASK_VERBS,
+  service: SERVICE_VERBS,
+  plan: PLAN_VERBS,
+};
+
 // Fallback verbs by kind, for names not in the table above (e.g. MCP tools whose
 // name is `mcp__server__tool`, or genuinely unknown tools bucketed as `other`).
 // MCP 动词带上 "MCP" 字样：紧跟的参数是 server/tool，不点明来源会读成一次普通工具调用。
@@ -116,15 +142,16 @@ function isError(status) {
 
 // Returns the verb to show for a tool call. `name` is the raw backend tool name,
 // `kind` the derived kind (used only as a fallback), `status` the call status.
-// `action` disambiguates multi-action tools (currently scheduled_task and
-// service); pass the parsed args.action when available, omit otherwise.
+// `action` disambiguates the tools whose verb is keyed by the action they took
+// (scheduled_task / service / plan) — pass toolActionFromArgs(...) for it, and
+// omit it for every other tool.
 // On error the label names the action ("Delete failed") rather than a bare "Failed".
 export function toolVerbLabel(name, kind, status, action) {
   let forms = TOOL_VERBS[name] || KIND_VERBS[kind] || null;
-  if (name === 'scheduled_task' || name === 'service') {
+  const actionVerbs = ACTION_VERBS[name];
+  if (actionVerbs) {
     const key = String(action || '').trim().toLowerCase();
-    const table = name === 'scheduled_task' ? SCHEDULED_TASK_VERBS : SERVICE_VERBS;
-    forms = table[key] || forms;
+    forms = actionVerbs[key] || forms;
   }
   if (isError(status)) return forms ? `${forms[2]} failed` : 'Failed';
   if (forms) return isDone(status) ? forms[1] : forms[0];
@@ -135,4 +162,35 @@ export function toolVerbLabel(name, kind, status, action) {
 // and the card should NOT repeat a kind label in the name slot.
 export function hasNamedVerb(name) {
   return Object.prototype.hasOwnProperty.call(TOOL_VERBS, name);
+}
+
+// True when the tool's verb is keyed by the action the call took, i.e. the
+// caller has to capture that action and hand it to toolVerbLabel.
+export function isActionKeyedTool(name) {
+  return Object.prototype.hasOwnProperty.call(ACTION_VERBS, name);
+}
+
+// The action a call took, read from the model's own arguments — never from a
+// tool result, whose shape is different. '' means the arguments state no action,
+// so the caller keeps whatever it captured before.
+export function toolActionFromArgs(name, parsed) {
+  if (!isActionKeyedTool(name)) return '';
+  if (name === 'plan') return planActionFromArgs(parsed);
+  return String(parsed?.action || '').trim().toLowerCase();
+}
+
+// plan states its action by which source it carries — the same three the backend
+// reads. A call carrying no source states nothing, so the answer stays '' and the
+// card falls back to the plain tool name; that is deliberate, because arguments
+// that have not arrived yet parse to the same {} a read-back call sends, and
+// claiming "read" here would label every plan card that way until its arguments
+// show up. The result names the action the backend took and fills that gap
+// (useToolEvents).
+function planActionFromArgs(parsed) {
+  const args = parsed && typeof parsed === 'object' ? parsed : null;
+  if (!args) return '';
+  if (Array.isArray(args.steps)) return args.steps.length ? 'set' : 'clear';
+  if (String(args.next || '').trim()) return 'next';
+  if (args.finish === true) return 'finish';
+  return '';
 }

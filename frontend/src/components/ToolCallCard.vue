@@ -229,7 +229,7 @@ function formatToolName(name) {
   return raw;
 }
 function toolVerb(msg) {
-  return toolVerbLabel(msg.name, msg.kind, msg.status, msg.scheduledAction);
+  return toolVerbLabel(msg.name, msg.kind, msg.status, msg.toolAction);
 }
 
 // Bounded LRU cache for highlighted command HTML. highlight.js is expensive

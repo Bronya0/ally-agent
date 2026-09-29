@@ -334,7 +334,7 @@ Mandatory and never abbreviated: the exact prioritized actions to take immediate
 
 Rules:
 - The "## Next Steps" section is the only copy of the plan that survives this rewrite: when work was interrupted mid-task, state the exact next tool action.
-- The agent's current todo list is appended verbatim after your summary automatically, so do not restate it; summarize everything else faithfully.
+- The agent's current plan is appended verbatim after your summary automatically, so do not restate it; summarize everything else faithfully.
 - Strictly write in the user's language.
 - Do not call any tools. Output plain text Markdown directly.
 - Keep file paths, command strings, function names, and identifiers exact.
@@ -391,7 +391,7 @@ Rules:
 		return nil, errors.New("compaction returned empty summary")
 	}
 
-	// The plan tool's todo list lives in its tool result, so a full-history rewrite
+	// The plan tool's steps live in their tool result, so a full-history rewrite
 	// would replace the agent's structured task state with a prose sentence. Pin
 	// the latest one verbatim after the summary: it is written once, here, so it
 	// stays byte-stable in every later request (re-injecting a plan snapshot per
@@ -455,7 +455,7 @@ Rules:
 	}, nil
 }
 
-// planToolName is the built-in tool whose result carries the agent's todo list.
+// planToolName is the built-in tool whose result carries the agent's plan.
 const planToolName = "plan"
 
 const (
@@ -465,7 +465,7 @@ const (
 
 // latestPlanSnapshot returns the rendered result of the most recent plan tool
 // call in the history being summarized, or "" when the conversation never used
-// it. The todo list is only addressable through the tool result that produced
+// it. The plan is only addressable through the tool result that produced
 // it, so the call ids have to be collected from the assistant turns first.
 func latestPlanSnapshot(messages []openai.ChatCompletionMessage) string {
 	planCallIDs := make(map[string]struct{})
@@ -491,7 +491,7 @@ func latestPlanSnapshot(messages []openai.ChatCompletionMessage) string {
 			continue
 		}
 		content := strings.TrimSpace(m.Content)
-		// Placeholders carry no todo state; keep looking further back.
+		// Placeholders carry no plan state; keep looking further back.
 		if content == "" || content == toolResultPlaceholder {
 			continue
 		}

@@ -150,12 +150,12 @@ func TestSessionPrefixBreakdownCoversRequestPrefix(t *testing.T) {
 	}
 
 	app.mu.Lock()
-	app.todos[sessionID] = []TodoEntry{{Title: "finish the fix", Status: "in_progress"}}
+	app.plans[sessionID] = []PlanStep{{Title: "finish the fix", Status: "in_progress"}}
 	app.mu.Unlock()
 
 	withPlan, parts := app.sessionPrefixBreakdown(sessionID, app.config, app.listCachedSkills())
 	if withPlan != prefix {
-		t.Fatalf("request prefix must stay stable regardless of todos to protect cache: %d -> %d", prefix, withPlan)
+		t.Fatalf("request prefix must stay stable regardless of the plan to protect cache: %d -> %d", prefix, withPlan)
 	}
 	for _, part := range parts {
 		if part.Label == planSnapshotPartLabel {

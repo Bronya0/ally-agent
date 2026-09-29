@@ -1754,122 +1754,401 @@ func TestAppEmitUsesHostEventSink(t *testing.T) {
 	}
 }
 
-func TestHandleTodoListRejectsMultipleInProgress(t *testing.T) {
+func TestHandlePlanStepsStartFirstStep(t *testing.T) {
 	app := NewApp()
-	todos := []TodoEntry{
-		{Title: "Inspect implementation", Status: "in_progress"},
-		{Title: "Run tests", Status: "in_progress"},
+	steps := []string{"Inspect implementation", "Run tests"}
+	res, err := app.handlePlan("session-1", PlanRequest{Steps: &steps})
+	if err != nil {
+		t.Fatalf("handlePlan() error = %v", err)
 	}
-	_, err := app.handleTodoList("session-1", TodoListRequest{Todos: &todos})
-	if err == nil || !strings.Contains(err.Error(), "at most one todo") {
-		t.Fatalf("handleTodoList() error = %v, want at-most-one in_progress rejection", err)
+	body := res.(map[string]any)
+	if body["action"] != "set" {
+		t.Fatalf("action = %v, want set", body["action"])
+	}
+	got := body["plan"].([]PlanStep)
+	if len(got) != 2 || got[0].Title != "Inspect implementation" || got[0].Status != "in_progress" || got[1].Status != "pending" {
+		t.Fatalf("unexpected plan after steps: %#v", got)
 	}
 }
 
-func TestHandleTodoListAllowsSingleInProgress(t *testing.T) {
+func TestHandlePlanNextAdvancesAndInserts(t *testing.T) {
 	app := NewApp()
-	todos := []TodoEntry{
-		{Title: "Inspect implementation", Status: "in_progress"},
-		{Title: "Run tests", Status: "pending"},
-	}
-	res, err := app.handleTodoList("session-1", TodoListRequest{Todos: &todos})
-	if err != nil {
-		t.Fatalf("handleTodoList() error = %v", err)
-	}
-	got, ok := res.(map[string]any)
-	if !ok {
-		t.Fatalf("handleTodoList() result type = %T, want map", res)
-	}
-	list, ok := got["todos"].([]TodoEntry)
-	if !ok || len(list) != 2 || list[0].Status != "in_progress" {
-		t.Fatalf("unexpected todos in result: %#v", got)
-	}
-}
-
-func TestHandleTodoListStartsFirstPendingItem(t *testing.T) {
-	app := NewApp()
-	todos := []TodoEntry{
-		{Title: "Inspect implementation", Status: "pending"},
-		{Title: "Run tests", Status: "pending"},
-	}
-	res, err := app.handleTodoList("session-1", TodoListRequest{Todos: &todos})
-	if err != nil {
-		t.Fatalf("handleTodoList() error = %v", err)
-	}
-	got := res.(map[string]any)["todos"].([]TodoEntry)
-	if got[0].Status != "in_progress" || got[1].Status != "pending" {
-		t.Fatalf("expected first pending item to start, got %#v", got)
-	}
-}
-
-func TestHandleTodoListDoesNotRestartAllDoneList(t *testing.T) {
-	app := NewApp()
-	todos := []TodoEntry{{Title: "Finished", Status: "done"}}
-	res, err := app.handleTodoList("session-1", TodoListRequest{Todos: &todos})
-	if err != nil {
-		t.Fatalf("handleTodoList() error = %v", err)
-	}
-	got := res.(map[string]any)["todos"].([]TodoEntry)
-	if got[0].Status != "done" {
-		t.Fatalf("completed todo was unexpectedly restarted: %#v", got)
-	}
-}
-
-func TestTodoResultDoesNotContainPlanMarker(t *testing.T) {
-	app := NewApp()
-	todos := []TodoEntry{{Title: "Inspect implementation", Status: "pending"}}
-	res, err := app.handleTodoList("session-1", TodoListRequest{Todos: &todos})
-	if err != nil {
-		t.Fatalf("handleTodoList() error = %v", err)
-	}
-	message := res.(map[string]any)["message"].(string)
-	if strings.Contains(message, "revision") || strings.Contains(message, "<ally-plan") {
-		t.Fatalf("todo result contains an internal plan marker: %q", message)
-	}
-}
-
-func TestHandleTodoListUpdateAndClear(t *testing.T) {
-	app := NewApp()
-	sessionID := "session-qa"
-
-	// 初始化三项任务
-	todos := []TodoEntry{
-		{Title: "Step 1", Status: "pending"},
-		{Title: "Step 2", Status: "pending"},
-		{Title: "Step 3", Status: "pending"},
-	}
-	_, err := app.handleTodoList(sessionID, TodoListRequest{Todos: &todos})
-	if err != nil {
+	steps := []string{"Read code", "Edit code", "Run tests"}
+	if _, err := app.handlePlan("session-1", PlanRequest{Steps: &steps}); err != nil {
 		t.Fatalf("setup failed: %v", err)
 	}
 
-	// 验证第一项已自动推进为 in_progress
-	list := app.todos[sessionID]
-	if len(list) != 3 || list[0].Status != "in_progress" || list[1].Status != "pending" {
-		t.Fatalf("unexpected state after init: %#v", list)
-	}
-
-	// 推进：更新状态
-	todos[0].Status = "done"
-	todos[1].Status = "in_progress"
-	res, err := app.handleTodoList(sessionID, TodoListRequest{Todos: &todos})
+	// Naming a step the plan already carries lands on it instead of duplicating
+	// the row.
+	next := "Edit code"
+	res, err := app.handlePlan("session-1", PlanRequest{Next: &next})
 	if err != nil {
-		t.Fatalf("update failed: %v", err)
+		t.Fatalf("next failed: %v", err)
 	}
-	got := res.(map[string]any)["todos"].([]TodoEntry)
-	if got[0].Status != "done" || got[1].Status != "in_progress" || got[2].Status != "pending" {
-		t.Fatalf("unexpected state after update: %#v", got)
+	got := res.(map[string]any)["plan"].([]PlanStep)
+	if len(got) != 3 || got[0].Status != "done" || got[1].Status != "in_progress" || got[2].Status != "pending" {
+		t.Fatalf("unexpected plan after next: %#v", got)
 	}
 
-	// 清空列表：传空数组
-	empty := []TodoEntry{}
-	res, err = app.handleTodoList(sessionID, TodoListRequest{Todos: &empty})
+	// A step the plan never carried is inserted right after the current one, so
+	// it lands where the model is rather than behind steps it has not reached.
+	inserted := "Install deps"
+	res, err = app.handlePlan("session-1", PlanRequest{Next: &inserted})
+	if err != nil {
+		t.Fatalf("next failed: %v", err)
+	}
+	got = res.(map[string]any)["plan"].([]PlanStep)
+	if len(got) != 4 || got[2].Title != "Install deps" || got[2].Status != "in_progress" || got[3].Title != "Run tests" {
+		t.Fatalf("expected the new step inserted after the current one, got %#v", got)
+	}
+}
+
+func TestHandlePlanFinishLeavesUnreachedStepsPending(t *testing.T) {
+	app := NewApp()
+	steps := []string{"Read code", "Edit code", "Run tests"}
+	if _, err := app.handlePlan("session-1", PlanRequest{Steps: &steps}); err != nil {
+		t.Fatalf("setup failed: %v", err)
+	}
+	finish := true
+	res, err := app.handlePlan("session-1", PlanRequest{Finish: &finish})
+	if err != nil {
+		t.Fatalf("finish failed: %v", err)
+	}
+	got := res.(map[string]any)["plan"].([]PlanStep)
+	if got[0].Status != "done" || got[1].Status != "pending" || got[2].Status != "pending" {
+		t.Fatalf("finish must close out the current step only, got %#v", got)
+	}
+}
+
+// TestPlanWritesKeepExactlyOneCurrentStep pins the invariant the rest of the tool
+// rests on: one step is current at a time. A regression here is quiet — a step
+// that failed to close the one before it left two steps in_progress, the echoed
+// plan then named the orphan as the step to finish next, and closing the plan
+// took as many finish calls as it left orphans behind.
+func TestPlanWritesKeepExactlyOneCurrentStep(t *testing.T) {
+	app := NewApp()
+	write := func(name string, req PlanRequest) []PlanStep {
+		t.Helper()
+		res, err := app.handlePlan("session-1", req)
+		if err != nil {
+			t.Fatalf("%s failed: %v", name, err)
+		}
+		list := res.(map[string]any)["plan"].([]PlanStep)
+		current := 0
+		for _, td := range list {
+			if td.Status == "in_progress" {
+				current++
+			}
+		}
+		if current != 1 {
+			t.Fatalf("%s left %d current steps, want exactly 1: %#v", name, current, list)
+		}
+		return list
+	}
+
+	steps := []string{"Read code", "Edit code"}
+	write("set", PlanRequest{Steps: &steps})
+
+	// An unknown title inserts a step: it becomes current and the step the plan was
+	// on is closed behind it.
+	unknown := "Run tests"
+	list := write("next onto an unknown title", PlanRequest{Next: &unknown})
+	if len(list) != 3 || list[0].Status != "done" || list[1].Title != "Run tests" || list[1].Status != "in_progress" || list[2].Status != "pending" {
+		t.Fatalf("an inserted step must take over from the current one, got %#v", list)
+	}
+
+	// A title the plan carries moves the position instead of adding a row, and
+	// naming the step it is already on leaves everything as it is.
+	known := "Read code"
+	list = write("next onto a known title", PlanRequest{Next: &known})
+	if len(list) != 3 || list[0].Status != "in_progress" {
+		t.Fatalf("naming a step the plan carries must move the position, got %#v", list)
+	}
+	write("next onto the current step", PlanRequest{Next: &known})
+
+	// finish closes the plan: no step is current afterwards, so nothing is left for
+	// a second finish to close.
+	finish := true
+	res, err := app.handlePlan("session-1", PlanRequest{Finish: &finish})
+	if err != nil {
+		t.Fatalf("finish failed: %v", err)
+	}
+	list = res.(map[string]any)["plan"].([]PlanStep)
+	for _, td := range list {
+		if td.Status == "in_progress" {
+			t.Fatalf("a finished plan must have no current step, got %#v", list)
+		}
+	}
+}
+
+func TestHandlePlanReadClearAndConflictingSources(t *testing.T) {
+	app := NewApp()
+	steps := []string{"Read code"}
+	if _, err := app.handlePlan("session-1", PlanRequest{Steps: &steps}); err != nil {
+		t.Fatalf("setup failed: %v", err)
+	}
+
+	// No source at all reads the plan back without changing it.
+	before := app.planRevisions["session-1"]
+	res, err := app.handlePlan("session-1", PlanRequest{})
+	if err != nil {
+		t.Fatalf("read failed: %v", err)
+	}
+	if action := res.(map[string]any)["action"]; action != "read" {
+		t.Fatalf("action = %v, want read", action)
+	}
+	if app.planRevisions["session-1"] != before {
+		t.Fatal("a read must not bump the revision")
+	}
+
+	// A blank next is not a write source either — the declaration tolerates it
+	// and the handler decides, so a probe must read instead of failing.
+	blank := "   "
+	res, err = app.handlePlan("session-1", PlanRequest{Next: &blank})
+	if err != nil {
+		t.Fatalf("blank next failed: %v", err)
+	}
+	if action := res.(map[string]any)["action"]; action != "read" {
+		t.Fatalf("a blank next must read the plan back, got action %v", action)
+	}
+	if app.planRevisions["session-1"] != before {
+		t.Fatal("a blank next must not bump the revision")
+	}
+
+	// An empty step list clears the plan.
+	empty := []string{}
+	res, err = app.handlePlan("session-1", PlanRequest{Steps: &empty})
 	if err != nil {
 		t.Fatalf("clear failed: %v", err)
 	}
-	got = res.(map[string]any)["todos"].([]TodoEntry)
-	if len(got) != 0 {
-		t.Fatalf("expected empty todos after clear, got %#v", got)
+	if list := res.(map[string]any)["plan"].([]PlanStep); len(list) != 0 {
+		t.Fatalf("expected an empty plan after clearing, got %#v", list)
+	}
+
+	// Two write sources in one call would leave the order of intent to
+	// interpretation.
+	next := "Run tests"
+	if _, err := app.handlePlan("session-1", PlanRequest{Steps: &steps, Next: &next}); err == nil {
+		t.Fatal("expected a steps + next call to be rejected")
+	}
+}
+
+// TestHandlePlanNextOnTheCurrentStepChangesNothing pins the sharpest form of the
+// duplicate-row bug: naming the step the plan is already on means "still on this
+// one". Closing the current step before resolving the name made the lookup miss
+// its own row, so the step was inserted a second time and the panel carried two
+// identical titles.
+func TestHandlePlanNextOnTheCurrentStepChangesNothing(t *testing.T) {
+	app := NewApp()
+	steps := []string{"Read code", "Edit code"}
+	if _, err := app.handlePlan("session-1", PlanRequest{Steps: &steps}); err != nil {
+		t.Fatalf("setup failed: %v", err)
+	}
+	before := app.planRevisions["session-1"]
+
+	same := "Read code"
+	res, err := app.handlePlan("session-1", PlanRequest{Next: &same})
+	if err != nil {
+		t.Fatalf("next on the current step failed: %v", err)
+	}
+	got := res.(map[string]any)["plan"].([]PlanStep)
+	if len(got) != 2 || got[0].Status != "in_progress" || got[1].Status != "pending" {
+		t.Fatalf("naming the current step must leave the plan alone, got %#v", got)
+	}
+	if app.planRevisions["session-1"] != before {
+		t.Fatal("a write that changes nothing must not bump the revision")
+	}
+}
+
+// TestHandlePlanNextReopensAFinishedStep: the title is a step's identity, so a
+// step the plan already carries is picked up again instead of copied. Otherwise
+// two rows would share one title and neither the model nor the panel could tell
+// which row a later call means.
+func TestHandlePlanNextReopensAFinishedStep(t *testing.T) {
+	app := NewApp()
+	steps := []string{"Read code", "Edit code"}
+	if _, err := app.handlePlan("session-1", PlanRequest{Steps: &steps}); err != nil {
+		t.Fatalf("setup failed: %v", err)
+	}
+	edit := "Edit code"
+	if _, err := app.handlePlan("session-1", PlanRequest{Next: &edit}); err != nil {
+		t.Fatalf("advance failed: %v", err)
+	}
+	read := "Read code"
+	res, err := app.handlePlan("session-1", PlanRequest{Next: &read})
+	if err != nil {
+		t.Fatalf("reopening a finished step failed: %v", err)
+	}
+	got := res.(map[string]any)["plan"].([]PlanStep)
+	if len(got) != 2 {
+		t.Fatalf("a finished step must be picked up, not duplicated: %#v", got)
+	}
+	if got[0].Title != "Read code" || got[0].Status != "in_progress" || got[1].Status != "done" {
+		t.Fatalf("expected the position to move back to the finished step, got %#v", got)
+	}
+}
+
+// TestHandlePlanNextLeavesSkippedStepsPending: naming a later step moves the
+// position there and the rows in between stay pending. A plan may therefore
+// carry pending steps before the one it is on, which is why the panel counts
+// finished steps instead of reading the position as progress.
+func TestHandlePlanNextLeavesSkippedStepsPending(t *testing.T) {
+	app := NewApp()
+	steps := []string{"Read code", "Edit code", "Run tests"}
+	if _, err := app.handlePlan("session-1", PlanRequest{Steps: &steps}); err != nil {
+		t.Fatalf("setup failed: %v", err)
+	}
+	last := "Run tests"
+	res, err := app.handlePlan("session-1", PlanRequest{Next: &last})
+	if err != nil {
+		t.Fatalf("skipping ahead failed: %v", err)
+	}
+	got := res.(map[string]any)["plan"].([]PlanStep)
+	if len(got) != 3 || got[0].Status != "done" || got[1].Status != "pending" || got[2].Status != "in_progress" {
+		t.Fatalf("a skipped step must stay pending where it is, got %#v", got)
+	}
+}
+
+// TestHandlePlanFinishWithoutACurrentStepChangesNothing: closing an empty plan,
+// or one whose steps are all done, used to bump the revision and re-emit the
+// panel for a plan that had not moved.
+func TestHandlePlanFinishWithoutACurrentStepChangesNothing(t *testing.T) {
+	app := NewApp()
+	finish := true
+	if _, err := app.handlePlan("session-1", PlanRequest{Finish: &finish}); err != nil {
+		t.Fatalf("finish on an empty plan failed: %v", err)
+	}
+	if app.planRevisions["session-1"] != 0 {
+		t.Fatalf("finishing an empty plan must not bump the revision, got %d", app.planRevisions["session-1"])
+	}
+
+	steps := []string{"Read code"}
+	if _, err := app.handlePlan("session-1", PlanRequest{Steps: &steps}); err != nil {
+		t.Fatalf("setup failed: %v", err)
+	}
+	if _, err := app.handlePlan("session-1", PlanRequest{Finish: &finish}); err != nil {
+		t.Fatalf("finish failed: %v", err)
+	}
+	before := app.planRevisions["session-1"]
+	if _, err := app.handlePlan("session-1", PlanRequest{Finish: &finish}); err != nil {
+		t.Fatalf("repeated finish failed: %v", err)
+	}
+	if app.planRevisions["session-1"] != before {
+		t.Fatal("a repeated finish must not bump the revision")
+	}
+}
+
+// TestHandlePlanSetRejectsRepeatedTitles: the title is the addressing key every
+// later call uses, so a second step with the same name would make the row a
+// next call lands on ambiguous — for the model and for the panel alike.
+func TestHandlePlanSetRejectsRepeatedTitles(t *testing.T) {
+	app := NewApp()
+	steps := []string{"Run tests", "Run tests"}
+	_, err := app.handlePlan("session-1", PlanRequest{Steps: &steps})
+	if err == nil {
+		t.Fatal("a plan with two identical titles must be rejected")
+	}
+	for _, want := range []string{"step 2", "step 1", "Run tests"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("the rejection must name %q, got %q", want, err.Error())
+		}
+	}
+}
+
+// TestHandlePlanTitlesAreIdentityIgnoringCaseAndSpace: a title is how a later
+// call names a step, so two titles a reader cannot tell apart are one title. The
+// plan refuses to carry both, and a next that slips into another case lands on
+// the step it meant instead of adding a twin beside it.
+func TestHandlePlanTitlesAreIdentityIgnoringCaseAndSpace(t *testing.T) {
+	app := NewApp()
+
+	clash := []string{"Run tests", "run Tests"}
+	_, err := app.handlePlan("session-1", PlanRequest{Steps: &clash})
+	if err == nil {
+		t.Fatal("two titles that differ only by case must be rejected")
+	}
+	for _, want := range []string{"step 2", "step 1"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("the rejection must name %q, got %q", want, err.Error())
+		}
+	}
+
+	steps := []string{"Inspect code", "Run tests"}
+	if _, err := app.handlePlan("session-1", PlanRequest{Steps: &steps}); err != nil {
+		t.Fatalf("setup failed: %v", err)
+	}
+
+	// A slip in case and surrounding spaces names the same step, not a new one.
+	slipped := "  run TESTS "
+	res, err := app.handlePlan("session-1", PlanRequest{Next: &slipped})
+	if err != nil {
+		t.Fatalf("next with a case variant failed: %v", err)
+	}
+	got := res.(map[string]any)["plan"].([]PlanStep)
+	if len(got) != 2 {
+		t.Fatalf("a case variant must land on the step it names, got %#v", got)
+	}
+	if got[0].Status != "done" || got[1].Title != "Run tests" || got[1].Status != "in_progress" {
+		t.Fatalf("expected the position to move to the named step, got %#v", got)
+	}
+}
+
+// TestHandlePlanBoundsKeepSchemaAndHandlerInStep: the bounds in the declaration
+// are what the model is shown, so the handler must hold a caller to the same
+// numbers instead of trusting the gate to have run — and it must hold every write
+// path to them, not only the set the schema polices on its own.
+func TestHandlePlanBoundsKeepSchemaAndHandlerInStep(t *testing.T) {
+	app := NewApp()
+	tooLong := []string{strings.Repeat("x", toolshared.MaxPlanStepTitleChars+1)}
+	if _, err := app.handlePlan("session-1", PlanRequest{Steps: &tooLong}); err == nil || !strings.Contains(err.Error(), fmt.Sprintf("%d", toolshared.MaxPlanStepTitleChars)) {
+		t.Fatalf("an over-long step title must be refused by name, got %v", err)
+	}
+	tooMany := make([]string, 0, toolshared.MaxPlanSteps+1)
+	for i := 0; i <= toolshared.MaxPlanSteps; i++ {
+		tooMany = append(tooMany, fmt.Sprintf("step %d", i+1))
+	}
+	if _, err := app.handlePlan("session-1", PlanRequest{Steps: &tooMany}); err == nil || !strings.Contains(err.Error(), fmt.Sprintf("%d", toolshared.MaxPlanSteps)) {
+		t.Fatalf("a plan above the step limit must be refused by name, got %v", err)
+	}
+
+	// A step inserted by next grows the plan exactly as a step from a whole-plan
+	// set does, so the caps have to hold on that path too. While only the set was
+	// policed, next carried a plan past both numbers.
+	atLimit := make([]string, 0, toolshared.MaxPlanSteps)
+	for i := 0; i < toolshared.MaxPlanSteps; i++ {
+		atLimit = append(atLimit, fmt.Sprintf("step %d", i+1))
+	}
+	if _, err := app.handlePlan("session-1", PlanRequest{Steps: &atLimit}); err != nil {
+		t.Fatalf("a plan at the step limit must be accepted: %v", err)
+	}
+	revisionAtLimit := app.planRevisions["session-1"]
+	overTheLimit := "one step too many"
+	if _, err := app.handlePlan("session-1", PlanRequest{Next: &overTheLimit}); err == nil || !strings.Contains(err.Error(), fmt.Sprintf("%d", toolshared.MaxPlanSteps)) {
+		t.Fatalf("a next that would push the plan past the step limit must be refused by name, got %v", err)
+	}
+	if app.planRevisions["session-1"] != revisionAtLimit {
+		t.Fatal("a refused write must leave the plan and its revision alone")
+	}
+	if got := app.GetPlan("session-1"); len(got) != toolshared.MaxPlanSteps {
+		t.Fatalf("a refused write must leave the plan at %d steps, got %d", toolshared.MaxPlanSteps, len(got))
+	}
+
+	// The title cap holds on the insert path as well. The plan is reset first, so
+	// the step count is not the rule that answers before the title does.
+	short := []string{"Read code"}
+	if _, err := app.handlePlan("session-1", PlanRequest{Steps: &short}); err != nil {
+		t.Fatalf("setup failed: %v", err)
+	}
+	revisionShort := app.planRevisions["session-1"]
+	overLongNext := strings.Repeat("y", toolshared.MaxPlanStepTitleChars+1)
+	if _, err := app.handlePlan("session-1", PlanRequest{Next: &overLongNext}); err == nil || !strings.Contains(err.Error(), fmt.Sprintf("%d", toolshared.MaxPlanStepTitleChars)) {
+		t.Fatalf("a next carrying an over-long title must be refused by name, got %v", err)
+	}
+	if app.planRevisions["session-1"] != revisionShort {
+		t.Fatal("a refused write must leave the plan and its revision alone")
+	}
+	if got := app.GetPlan("session-1"); len(got) != 1 {
+		t.Fatalf("a refused write must leave the plan at one step, got %d", len(got))
 	}
 }
 

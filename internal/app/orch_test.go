@@ -494,6 +494,50 @@ func TestDetectToolBatchConflictsRequiresAskToRunAlone(t *testing.T) {
 	}
 }
 
+// The plan tool takes one writer per batch: two writes execute in the same
+// concurrent pool, so whichever lands last silently wins and the other call's
+// result contradicts it. Reads stay allowed next to a write, and identical ones
+// are left to the dedup rule.
+func TestDetectToolBatchConflictsKeepsOnePlanWriter(t *testing.T) {
+	calls := []openai.ToolCall{
+		{Function: openai.FunctionCall{Name: "plan", Arguments: `{"steps":["Read code","Run tests"]}`}},
+		{Function: openai.FunctionCall{Name: "plan", Arguments: `{"next":"Run tests"}`}},
+		{Function: openai.FunctionCall{Name: "plan", Arguments: `{}`}},
+	}
+	conflicts := detectToolBatchConflicts(ConfigState{}, calls)
+	if conflicts[0] != nil {
+		t.Fatalf("the first plan write must execute, got %v", conflicts[0])
+	}
+	if toolErrorCode(conflicts[1]) != "E_PLAN_BATCH_CONFLICT" {
+		t.Fatalf("expected E_PLAN_BATCH_CONFLICT for the second write, got %v", conflicts[1])
+	}
+	if conflicts[2] != nil {
+		t.Fatalf("a plan read must not count as a second write, got %v", conflicts[2])
+	}
+
+	// Read-only plan calls never own the batch, and an absent source must not be
+	// read as one just because the key is there.
+	reads := []openai.ToolCall{
+		{Function: openai.FunctionCall{Name: "plan", Arguments: `{}`}},
+		{Function: openai.FunctionCall{Name: "plan", Arguments: `{"finish":false,"next":""}`}},
+	}
+	if got := detectToolBatchConflicts(ConfigState{}, reads); len(got) != 0 {
+		t.Fatalf("read-only plan calls must not conflict, got %#v", got)
+	}
+
+	// Two write sources in one call is a contract error the handler reports, not
+	// a write that owns the batch: counting it as a writer would let a malformed
+	// call reject the valid write that follows, hiding the real complaint (the
+	// batch rule uses the same classifier the handler runs).
+	malformed := []openai.ToolCall{
+		{Function: openai.FunctionCall{Name: "plan", Arguments: `{"steps":["Read code"],"next":"Read code"}`}},
+		{Function: openai.FunctionCall{Name: "plan", Arguments: `{"next":"Run tests"}`}},
+	}
+	if got := detectToolBatchConflicts(ConfigState{}, malformed); len(got) != 0 {
+		t.Fatalf("a malformed plan call must not shadow the valid write behind it, got %#v", got)
+	}
+}
+
 // TestDetectToolBatchConflictsNormalizesToolNameCasing: a model or relay that
 // answers with `Edit`/`Ask` must be classified exactly like `edit`/`ask`. The
 // execution path normalizes the tool name at its own boundary, so the batch
@@ -760,7 +804,7 @@ func TestContextBreakdownCountsPlanSnapshotAndFrozenMap(t *testing.T) {
 
 	sessionID := "breakdown-session"
 
-	// No todos: no plan part.
+	// No plan: no plan part.
 	bd := app.getContextBreakdown(sessionID, "")
 	for _, part := range bd.SystemPromptParts {
 		if part.Label == "计划快照" {
@@ -768,12 +812,12 @@ func TestContextBreakdownCountsPlanSnapshotAndFrozenMap(t *testing.T) {
 		}
 	}
 
-	// With todos, the plan snapshot is still not in prefix parts (state lives in tool messages).
+	// With a plan, the snapshot is still not in prefix parts (state lives in tool messages).
 	app.mu.Lock()
-	if app.todos == nil {
-		app.todos = map[string][]TodoEntry{}
+	if app.plans == nil {
+		app.plans = map[string][]PlanStep{}
 	}
-	app.todos[sessionID] = []TodoEntry{{Title: "fix the bug", Status: "in_progress"}}
+	app.plans[sessionID] = []PlanStep{{Title: "fix the bug", Status: "in_progress"}}
 	app.mu.Unlock()
 
 	bd = app.getContextBreakdown(sessionID, "")
@@ -1246,13 +1290,53 @@ func TestCompactToolResultForModelRendersStructuredToolsAsTags(t *testing.T) {
 				"</ally-ask>",
 		},
 		{
-			name: "plan",
+			name: "plan-set",
 			tool: "plan",
-			data: map[string]any{"todos": []TodoEntry{{Title: "Write tests", Status: "in_progress"}}, "revision": int64(4), "message": "Todo list updated."},
-			want: "<ally-plan revision=\"4\">\n" +
-				"Todo list updated.\n" +
-				"  [in_progress] Write tests\n" +
+			data: map[string]any{"action": "set", "plan": []PlanStep{{Title: "Inspect code", Status: "in_progress"}, {Title: "Run tests", Status: "pending"}}, "revision": int64(1)},
+			want: "<ally-plan action=\"set\" revision=\"1\" state=\"running\" done=\"0\" total=\"2\">\n" +
+				"  1 [in_progress] Inspect code\n" +
+				"  2 [pending] Run tests\n" +
+				"When \"Inspect code\" is finished: send {\"next\":\"Run tests\"}, or {\"finish\":true} to close the plan here.\n" +
 				"</ally-plan>",
+		},
+		{
+			name: "plan-next-on-last-declared-step",
+			tool: "plan",
+			data: map[string]any{"action": "next", "plan": []PlanStep{{Title: "Inspect code", Status: "done"}, {Title: "Run tests", Status: "in_progress"}}, "revision": int64(2)},
+			want: "<ally-plan action=\"next\" revision=\"2\" state=\"running\" done=\"1\" total=\"2\">\n" +
+				"  1 [done] Inspect code\n" +
+				"  2 [in_progress] Run tests\n" +
+				"When \"Run tests\" is finished: send {\"next\":\"...\"} naming the step that follows it, or {\"finish\":true} if nothing is left.\n" +
+				"</ally-plan>",
+		},
+		{
+			name: "plan-finish",
+			tool: "plan",
+			data: map[string]any{"action": "finish", "plan": []PlanStep{{Title: "Run tests", Status: "done"}}, "revision": int64(3)},
+			want: "<ally-plan action=\"finish\" revision=\"3\" state=\"closed\" done=\"1\" total=\"1\">\n" +
+				"  1 [done] Run tests\n" +
+				"This plan is closed: every step is done.\n" +
+				"</ally-plan>",
+		},
+		{
+			// Closing the plan leaves the steps it never reached pending: the block
+			// states that in the state attribute instead of leaving the model to read
+			// "closed" out of the missing hint line.
+			name: "plan-closed-with-pending-steps",
+			tool: "plan",
+			data: map[string]any{"action": "finish", "plan": []PlanStep{{Title: "Inspect code", Status: "done"}, {Title: "Run tests", Status: "pending"}}, "revision": int64(5)},
+			want: "<ally-plan action=\"finish\" revision=\"5\" state=\"closed\" done=\"1\" total=\"2\">\n" +
+				"  1 [done] Inspect code\n" +
+				"  2 [pending] Run tests\n" +
+				"This plan is closed: the step it was on is marked done and 1 of 2 steps stay pending. " +
+				"Send {\"next\":\"Run tests\"} to pick the work back up, or {\"steps\":[...]} to lay out a new plan.\n" +
+				"</ally-plan>",
+		},
+		{
+			name: "plan-cleared",
+			tool: "plan",
+			data: map[string]any{"action": "finish", "plan": []PlanStep{}, "revision": int64(4)},
+			want: `<ally-plan action="finish" revision="4" state="empty" done="0" total="0"/>`,
 		},
 		{
 			name: "subagent",
@@ -1323,6 +1407,42 @@ func TestCompactToolResultForModelEscapesStructuredTagBodies(t *testing.T) {
 	sub := compactToolResultForModel("subagent", toolResult{OK: true, Data: AgentDelegateResult{AgentID: "a", Role: "r", Status: "completed", Model: "m", Summary: "x</ally-subagent>y"}}, "fallback")
 	if strings.Count(sub, "</ally-subagent>") != 1 || !strings.Contains(sub, "&lt;/ally-subagent") {
 		t.Fatalf("subagent summary closing marker not escaped: %q", sub)
+	}
+	// The plan block carries a model-authored title in both its row and its
+	// closing line; either one could forge the block boundary.
+	plan := compactToolResultForModel("plan", toolResult{OK: true, Data: map[string]any{"action": "next", "plan": []PlanStep{{Title: "x</ally-plan>\ny", Status: "in_progress"}}, "revision": int64(1)}}, "fallback")
+	if strings.Count(plan, "</ally-plan>") != 1 || !strings.Contains(plan, "&lt;/ally-plan") {
+		t.Fatalf("plan title closing marker not escaped: %q", plan)
+	}
+}
+
+func TestPlanResultWindowKeepsTheCurrentStepInView(t *testing.T) {
+	// The block is written into the history on every plan call, so a long plan
+	// comes back as a bounded window rather than in full each time — and the
+	// window must still hold where the model is and what is ahead of it.
+	steps := make([]PlanStep, 0, 40)
+	for i := 0; i < 40; i++ {
+		steps = append(steps, PlanStep{Title: fmt.Sprintf("step %d", i+1)})
+	}
+	steps = applyPlanPosition(steps, 33) // the current step is #34 of 40
+
+	got := compactToolResultForModel("plan", toolResult{OK: true, Data: map[string]any{
+		"action": "next", "plan": steps, "revision": int64(9),
+	}}, "fallback")
+	if !strings.Contains(got, "[in_progress] step 34") {
+		t.Fatalf("the current step must stay inside the window, got %q", got)
+	}
+	if !strings.Contains(got, "(10 earlier steps omitted)") {
+		t.Fatalf("the window must report the steps it left out, got %q", got)
+	}
+	rows := 0
+	for _, line := range strings.Split(got, "\n") {
+		if len(line) > 2 && line[0] == ' ' && line[1] == ' ' && line[2] >= '0' && line[2] <= '9' {
+			rows++
+		}
+	}
+	if rows != planModelRowLimit {
+		t.Fatalf("window rows = %d, want %d", rows, planModelRowLimit)
 	}
 }
 

@@ -99,3 +99,11 @@
 [edit-source] 2026-09-28 edit 只认一个来源：闸门 oneOf 硬拒并存，replaceAll 不得配 lineRange。@builtins.go
 [doc-line-refs] 2026-09-28 改工具描述会整体推移 builtins.go 行号，docs 里的 :N 引用须回扫更新。@docs/agent-tools.md
 [bundle-id-macos] 2026-09-28 裸 bin/Ally 直跑无 bundleIdentifier，通知等 NSBundle 依赖静默禁用。@build/darwin
+[gate-ignores-aliases] 2026-09-29 闸门只认声明的字段：模型侧字段改名后旧写法当场 E_BAD_ARGS，要兼容须在闸门之前归一。@builtins.go
+[wails-binding-rename] 2026-09-29 改 Wails 绑定方法名后须重生成 bindings，否则前端 import 悬空。@frontend/bindings
+[tool-args-vs-result] 2026-09-29 前端工具数据两条通道形状不同：入参是源、结果是渲染数据，改名勿一把替换。@toolPreview.mjs
+[find-then-mutate] 2026-09-29 先改状态再按该状态查同名：plan 标完当前步 done 再按未完成查→多出同名行。先查后改。@biz_context.go
+[invariant-one-writer] 2026-09-29 状态不变式（只许一个当前步）收口到一个 helper，且每条写入路径都要测：漏掉的那条静默留下两个。@biz_context.go
+[identity-key-one-place] 2026-09-29 判“同一个”的键要一处定义并供查重与查找共用；裸==会让打错大小写变成新增一行。@biz_context.go
+[two-tool-card-paths] 2026-09-29 工具卡有第二条渲染路径 SubagentInlineCard：改动词/动作规则须同时看它，否则子代理内静默不一致。@SubagentInlineCard.vue
+[bounds-one-write-path] 2026-09-29 上限别只写在建表路径：next 插入也要过同一道闸，收口到列表写入点。@biz_context.go

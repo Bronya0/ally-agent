@@ -74,6 +74,24 @@ func TestRuntimeSensitiveBuiltinSchemas(t *testing.T) {
 		t.Fatalf("render_html maxLength = %#v, want %d", got, MaxRenderHTMLCharacters)
 	}
 
+	// The plan bounds are the promise the model reads; validatePlanList holds a
+	// caller to the same numbers, whichever call built the list.
+	planParams, planDescription := builtinSchemaForTest(t, "plan")
+	planProperties := schemaObjectForTest(t, planParams["properties"])
+	planSteps := schemaObjectForTest(t, planProperties["steps"])
+	if planSteps["maxItems"] != MaxPlanSteps {
+		t.Fatalf("plan steps maxItems = %#v, want %d", planSteps["maxItems"], MaxPlanSteps)
+	}
+	if got := schemaObjectForTest(t, planSteps["items"])["maxLength"]; got != MaxPlanStepTitleChars {
+		t.Fatalf("plan step title maxLength = %#v, want %d", got, MaxPlanStepTitleChars)
+	}
+	// One write per call is a rule the handler holds and the gate cannot express:
+	// the three sources are declared as independent properties, so the description
+	// is the only place the model can read it.
+	if !strings.Contains(planDescription, "at most one of steps, next and finish") {
+		t.Fatal("plan description must state that a call carries at most one write source")
+	}
+
 	deleteParams, deleteDescription := builtinSchemaForTest(t, "remote_delete_path")
 	deleteProperties := schemaObjectForTest(t, deleteParams["properties"])
 	if !strings.Contains(deleteDescription, "other directories require recursive=true") ||

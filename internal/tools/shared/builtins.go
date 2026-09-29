@@ -33,6 +33,12 @@ const (
 	// so the promise "1-4 short texts" cannot drift from what is enforced.
 	MaxSuggestItems     = 4
 	MaxSuggestItemChars = 80
+	// Plan bounds. Every plan call echoes the plan back into the conversation,
+	// and a step title is what a later call names, so the number of steps and the
+	// title length are both bounded here and checked against these same numbers
+	// in the handler.
+	MaxPlanSteps          = 50
+	MaxPlanStepTitleChars = 200
 	// maxDelegateStepBudget bounds the subagent maxSteps parameter. Kept in
 	// sync with the app-side hard cap (scheduler.MaxSteps).
 	maxDelegateStepBudget = 1000
@@ -399,20 +405,29 @@ func chatToolsUncached() []openai.Tool {
 			},
 			"required": []string{"html"},
 		}),
-		functionTool("plan", "Manage the session task list. Sets or updates the whole todo list (pending, in_progress, done), or pass an empty array to clear. Omit todos to read the current plan. At most one todo may be in_progress; if the list you send contains none, the first pending entry is promoted to in_progress, and the result shows the list as stored.", map[string]any{
+		functionTool("plan", "Maintain the plan for the session: the short, ordered list of steps of a multi-step task, shown to the user as a progress panel. steps starts or replaces the plan (step titles in order; the first one starts immediately), next names the step starting now (the step you were on is marked done), finish closes the plan out wherever it stands: the current step is marked done and the steps you never reached stay pending. Call with none of them to read the current plan back. Carry at most one of steps, next and finish per call — a call that gives two is refused, because the order of intent would be anyone's guess. Every result names the plan's state (empty, running or closed) and echoes the whole plan with its progress and the call that moves it forward, so there is nothing to remember between calls. A step title is how a later call names that step, so keep the titles unique and tell the steps apart at a glance. Statuses are never written by hand and exactly one step is current at a time. Start a plan when the work has several steps; skip the tool for single-step requests.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"todos": map[string]any{
-					"type": "array",
-					"items": map[string]any{
-						"type": "object",
-						"properties": map[string]any{
-							"title":  map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": "Short, actionable title for the todo."},
-							"status": map[string]any{"type": "string", "enum": []any{"pending", "in_progress", "done"}, "description": "Current status of the todo. At most one todo may be in_progress at a time."},
-						},
-						"required": []string{"title", "status"},
-					},
-					"description": "The updated todo list. Omit to read current. Pass empty array to clear.",
+				"steps": map[string]any{
+					"type":     "array",
+					"maxItems": MaxPlanSteps,
+					"items":    map[string]any{"type": "string", "minLength": 1, "maxLength": MaxPlanStepTitleChars, "pattern": ".*\\S.*"},
+					"description": fmt.Sprintf("The whole plan, in order, as step titles: the first step starts immediately and the rest wait their turn. "+
+						"A title is how a later call names a step, so keep every title unique (titles that differ only by case or surrounding spaces count as the same) and within %d characters, and the whole plan within %d steps. "+
+						"Send it to start a plan or to replace one — including after the plan drifted from the work. An empty array clears the plan.", MaxPlanStepTitleChars, MaxPlanSteps),
+				},
+				"next": map[string]any{
+					"type": "string",
+					"description": "The step starting now. The step you were on is marked done and this one becomes the current step: " +
+						"a title the plan already carries moves the position to that step — a step you finished earlier is picked up again, " +
+						"never duplicated — while an unknown title becomes a new step right after the current one. Naming the step the plan " +
+						"is already on leaves everything as it is. The title is matched ignoring case and surrounding spaces, so a title the plan carries is reached however it is spelled. An empty value counts as not sending it.",
+				},
+				"finish": map[string]any{
+					"type": "boolean",
+					"description": "Close the plan out: send true once the current step is done. That step is marked done and the result names it " +
+						"and counts what is left; steps you never reached stay pending, so the panel keeps showing what was left " +
+						"instead of reporting the whole plan as carried out.",
 				},
 			},
 		}),
@@ -470,7 +485,7 @@ var builtinToolExamples = map[string]string{
 	"read":               `one file: {"files":[{"path":"app.go"}]}; multiple files: {"files":[{"path":"app.go"},{"path":"main.go"}]}; range: {"files":[{"path":"services.go","startLine":1,"endLine":200}]}; tail: {"files":[{"path":"server.log","tailLines":200}]}`,
 	"render_html":        `{"html":"<div id=\"chart\" style=\"width:100%;height:350px;\"></div><script>const c=echarts.init(document.getElementById('chart'),'dark');c.setOption({title:{text:'Metrics'},xAxis:{data:['Mon','Tue','Wed','Thu','Fri']},yAxis:{},series:[{type:'bar',data:[12,34,56,78,90]}]});</script>"}`,
 	"subagent":           `{"task":"Inspect the authentication module and report concrete security issues.","role":"code reviewer","maxSteps":20,"description":"Review authentication"}`,
-	"plan":               `{"todos":[{"title":"Inspect code","status":"in_progress"},{"title":"Run tests","status":"pending"}]}; clear: {"todos":[]}`,
+	"plan":               `start: {"steps":["Inspect code","Run tests"]}; advance: {"next":"Run tests"}; close: {"finish":true}; read: {}`,
 }
 
 func functionTool(name, description string, parameters map[string]any) openai.Tool {

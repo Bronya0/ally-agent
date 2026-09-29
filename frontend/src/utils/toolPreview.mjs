@@ -136,3 +136,17 @@ export function displaySourceMessages(session, expandedArchiveSessions, options 
   };
   return [archiveMsg, ...src.slice(keepStart)];
 }
+
+// formatPlanArgsTitle renders the title of a running plan card from the model's
+// ARGUMENTS — deliberately not from the tool result, which is a different shape
+// (a result carries {title,status} entries, while arguments carry step titles, a
+// next-step name and a finish flag). Reading a result key here left every
+// running plan card with no title at all, in both the main chat and the
+// sub-agent card.
+export function formatPlanArgsTitle(parsed) {
+  if (!parsed || typeof parsed !== 'object') return '';
+  if (Array.isArray(parsed.steps)) {
+    return parsed.steps.map((step) => String(step || '').trim()).find(Boolean) || '';
+  }
+  return String(parsed.next || '').trim();
+}
