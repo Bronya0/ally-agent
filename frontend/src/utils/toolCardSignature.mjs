@@ -45,6 +45,7 @@ export function toolCardRenderSignature(msg) {
     msg.askSubmitted,
     len(msg.askQuestions),
     len(msg.editEntries),
+    len(msg.deleteEntries),
     len(msg.batchEntries),
     msg.readLineCount,
     msg.readTotalLines,

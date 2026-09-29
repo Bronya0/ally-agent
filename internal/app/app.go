@@ -824,11 +824,15 @@ type CopyFileFailure struct {
 }
 
 type DeletePathRequest struct {
-	Workspace string `json:"workspace,omitempty"`
-	Path      string `json:"path"`
-	Recursive bool   `json:"recursive"`
+	Workspace string   `json:"workspace,omitempty"`
+	Path      string   `json:"path"`
+	Paths     []string `json:"paths"`
+	Recursive bool     `json:"recursive"`
 }
 
+// DeleteResult 是单个路径的删除结果，也就是一次调用里的一个结果槽。
+// OK 是这一条到底成不成，与信封的 ok 不是一回事：一次调用里可以有的成、有的
+// 败，信封仍是 ok=true（与批量 read 的隔离契约一致）。
 type DeleteResult struct {
 	Deleted      string `json:"deleted"`
 	Path         string `json:"path"`
@@ -839,6 +843,19 @@ type DeleteResult struct {
 	RemovedDirs  int    `json:"removedDirs"`
 	RemovedBytes int64  `json:"removedBytes"`
 	WasSymlink   bool   `json:"wasSymlink"`
+	OK           bool   `json:"ok"`
+	Error        string `json:"error,omitempty"`
+	ErrorCode    string `json:"errorCode,omitempty"`
+}
+
+// DeletePathsResult 是一次删除调用的结果。本地 delete 与远端 remote_delete_path
+// 共用同一个形状：单路径调用就是一个单槽批量，不存在第二份契约。整批无法判定
+// （路径不合法、越界、重复、包含、超过条数上限）时不返回结果而是直接报错——那时
+// 一条路径也没动；能返回结果就意味着执行阶段已经逐条进行过了。
+type DeletePathsResult struct {
+	Paths        []DeleteResult `json:"paths"`
+	DeletedCount int            `json:"deletedCount"`
+	FailedCount  int            `json:"failedCount"`
 }
 
 type CommandRequest struct {
@@ -1106,9 +1123,10 @@ type RemoteCreateFileRequest struct {
 }
 
 type RemoteDeletePathRequest struct {
-	Target    string `json:"target"`
-	Path      string `json:"path"`
-	Recursive bool   `json:"recursive"`
+	Target    string   `json:"target"`
+	Path      string   `json:"path"`
+	Paths     []string `json:"paths"`
+	Recursive bool     `json:"recursive"`
 }
 
 type RemoteRunCommandRequest struct {
@@ -2548,11 +2566,15 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 	case "delete":
 		var req DeletePathRequest
 		err, argWarnings = decodeJSON(&req)
+		var deletePaths []string
 		if err == nil {
-			err = kbDenyCheckPaths(ctx, cfg, req.Path)
+			deletePaths, err = resolveDeletePathList(req.Path, req.Paths)
 		}
 		if err == nil {
-			a.withFileOpsLock(func() { data, err = a.deletePathWithConfig(cfg, req) })
+			err = kbDenyCheckPaths(ctx, cfg, deletePaths...)
+		}
+		if err == nil {
+			a.withFileOpsLock(func() { data, err = a.deletePathsWithConfig(cfg, deletePaths, req.Recursive) })
 			if err == nil {
 				a.invalidateWorkspaceMapCache(cfg)
 			}
@@ -3127,13 +3149,25 @@ func (a *App) DeletePath(req DeletePathRequest) error {
 	if err != nil {
 		return err
 	}
+	// 这条入口不走工具闸门，所以两种写法与条数上限在这里再判一次：判据与工具
+	// 调用路径是同一份（resolveDeletePathList）。
+	paths, err := resolveDeletePathList(req.Path, req.Paths)
+	if err != nil {
+		return err
+	}
 	a.fileOpsMu.Lock()
 	defer a.fileOpsMu.Unlock()
-	_, err = a.deletePathWithConfig(cfg, req)
-	if err == nil {
-		a.invalidateWorkspaceMapCache(cfg)
+	result, err := a.deletePathsWithConfig(cfg, paths, req.Recursive)
+	if err != nil {
+		return err
 	}
-	return err
+	// 执行阶段的失败在工具调用里是按槽位上报的（模型要看是哪一条），而这条入口
+	// 的契约是 error：不把失败槽转成错误，UI 会把「删失败」当成功吞掉。
+	if summary := deletePathsFailureSummary(result); summary != "" {
+		return errors.New(summary)
+	}
+	a.invalidateWorkspaceMapCache(cfg)
+	return nil
 }
 
 // CopyFilesIntoWorkspace copies files/directories dropped from the system

@@ -41,7 +41,7 @@ Public License v3. See the LICENSE file for details.
 <script setup>
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { t } from '../i18n.mjs';
-import { formatHttpToolTitle } from '../utils/toolPreview.mjs';
+import { deletePathSummary, formatHttpToolTitle } from '../utils/toolPreview.mjs';
 import { toolActionFromArgs, toolVerbLabel } from '../utils/toolVerb.mjs';
 import ToolStatusIcon from './ToolStatusIcon.vue';
 
@@ -205,8 +205,13 @@ function toolArgsTitle(tc) {
     if (Array.isArray(parsed.files)) return parsed.files.length === 1 ? (parsed.files[0]?.path || '') : `${parsed.files.length} files`;
     return parsed.target ? `${parsed.target} · ${parsed.path || ''}` : (parsed.path || '');
   }
-  if (name === 'create' || name === 'delete' || name === 'remote_create_file' || name === 'remote_delete_path') {
+  if (name === 'create' || name === 'remote_create_file') {
     return parsed.target ? `${parsed.target} · ${parsed.path || ''}` : (parsed.path || '');
+  }
+  if (name === 'delete' || name === 'remote_delete_path') {
+    const summary = deletePathSummary(parsed);
+    if (!summary) return parsed.target || '';
+    return parsed.target ? `${parsed.target} · ${summary}` : summary;
   }
   if (name === 'read' || name === 'remote_read') {
     if (parsed.target && Array.isArray(parsed.files)) {

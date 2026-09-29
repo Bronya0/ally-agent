@@ -107,3 +107,5 @@
 [identity-key-one-place] 2026-09-29 判“同一个”的键要一处定义并供查重与查找共用；裸==会让打错大小写变成新增一行。@biz_context.go
 [two-tool-card-paths] 2026-09-29 工具卡有第二条渲染路径 SubagentInlineCard：改动词/动作规则须同时看它，否则子代理内静默不一致。@SubagentInlineCard.vue
 [bounds-one-write-path] 2026-09-29 上限别只写在建表路径：next 插入也要过同一道闸，收口到列表写入点。@biz_context.go
+[lexical-vs-resolved] 2026-09-29 远端删除须用词法路径：safe_join 给的是解析结果，按它删会删掉软链目标。@orch_remote.go
+[home-isolation] 2026-09-29 Windows 下 HOME 改不了 os.UserHomeDir()（读 USERPROFILE），只设 HOME 的隔离失效。@sshclient

@@ -2263,12 +2263,16 @@ func TestDeletePathRemovesFinalSymlinkOnly(t *testing.T) {
 	}
 	app := NewApp()
 
-	result, err := app.deletePathWithConfig(ConfigState{Workspace: root}, DeletePathRequest{Path: "link.txt"})
+	result, err := app.deletePathsWithConfig(ConfigState{Workspace: root}, []string{"link.txt"}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Kind != "symlink" || !result.WasSymlink || result.RemovedFiles != 1 {
-		t.Fatalf("unexpected symlink delete result: %#v", result)
+	if len(result.Paths) != 1 || result.DeletedCount != 1 {
+		t.Fatalf("expected exactly one deleted path, got %#v", result)
+	}
+	item := result.Paths[0]
+	if item.Kind != "symlink" || !item.WasSymlink || item.RemovedFiles != 1 {
+		t.Fatalf("unexpected symlink delete result: %#v", item)
 	}
 	if _, err := os.Lstat(link); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("expected symlink to be removed, lstat err=%v", err)

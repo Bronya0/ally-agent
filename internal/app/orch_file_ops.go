@@ -329,52 +329,107 @@ func copyDroppedFile(src, dst string, perm os.FileMode) error {
 	return out.Close()
 }
 
-func (a *App) deletePathWithConfig(cfg ConfigState, req DeletePathRequest) (DeleteResult, error) {
-	if strings.TrimSpace(req.Path) == "" {
-		return DeleteResult{}, codedToolError("E_BAD_PATH", errors.New("delete requires a non-empty path"))
+// deletePathsWithConfig 删除一次调用里的全部路径，语义与远端 remote_delete_path
+// 逐条对齐：第一遍把每条路径都判定完（含目录树统计），任何一条不通过就整批不动手；
+// 第二遍才逐个删，单条失败只污染它自己的结果槽（与批量 read 的隔离契约一致）。
+//
+// paths 由调用方经 resolveDeletePathList 归一：两种写法与条数上限只在那里判一次，
+// 所以本地与远端、工具调用与 Wails API 看到的是同一条候选列表。
+func (a *App) deletePathsWithConfig(cfg ConfigState, paths []string, recursive bool) (DeletePathsResult, error) {
+	if len(paths) == 0 {
+		return DeletePathsResult{}, codedToolError("E_BAD_ARGS", errors.New("delete requires a path or a non-empty paths list"))
 	}
 	roots, err := workspaceRoots(cfg)
 	if err != nil {
-		return DeleteResult{}, err
+		return DeletePathsResult{}, err
 	}
-	path, err := resolveDeletablePath(roots, req.Path)
+	planned := make([]plannedDeletePath, 0, len(paths))
+	targets := make([]fileMutationTarget, 0, len(paths))
+	for _, requestPath := range paths {
+		item, err := planDeletePath(roots, requestPath, recursive)
+		if err != nil {
+			return DeletePathsResult{}, err
+		}
+		planned = append(planned, item)
+		targets = append(targets, fileMutationTarget{localMutationKey(item.absPath), filepath.ToSlash(requestPath)})
+	}
+	// 与前缀表（app 与 app-backup）不同，这里的包含关系真的会让结果取决于顺序，
+	// 所以整批拒掉，让模型自己决定删哪个。
+	if err := checkDeletePathList(targets); err != nil {
+		return DeletePathsResult{}, err
+	}
+
+	result := DeletePathsResult{Paths: make([]DeleteResult, 0, len(planned))}
+	for _, item := range planned {
+		item.result.OK = true
+		var removeErr error
+		if recursive && item.isDir {
+			removeErr = os.RemoveAll(item.absPath)
+		} else {
+			removeErr = os.Remove(item.absPath)
+		}
+		if removeErr != nil {
+			// 失败时清零统计：RemoveAll 可能已经删掉一部分，报出的数字只会误导
+			// 模型；resolvedPath 留在结果里供它自己复查剩余状态。
+			item.result.OK = false
+			item.result.Error = removeErr.Error()
+			item.result.ErrorCode = toolErrorCode(removeErr)
+			item.result.RemovedFiles = 0
+			item.result.RemovedDirs = 0
+			item.result.RemovedBytes = 0
+			result.FailedCount++
+		} else {
+			result.DeletedCount++
+		}
+		result.Paths = append(result.Paths, item.result)
+	}
+	return result, nil
+}
+
+// plannedDeletePath 是「已判定、尚未动手」的一条删除目标：判定阶段的产物全部
+// 留在这里，执行阶段只读它，路径不会在删除前被第二次解析。
+type plannedDeletePath struct {
+	absPath string
+	isDir   bool
+	result  DeleteResult
+}
+
+// planDeletePath 判定单条路径能否删除，并把它将产生的结果准备好（不含是否真的
+// 删成功——那是执行阶段才知道的事）。
+func planDeletePath(roots []string, requestPath string, recursive bool) (plannedDeletePath, error) {
+	if strings.TrimSpace(requestPath) == "" {
+		return plannedDeletePath{}, codedToolError("E_BAD_PATH", errors.New("delete requires a non-empty path"))
+	}
+	path, err := resolveDeletablePath(roots, requestPath)
 	if err != nil {
-		return DeleteResult{}, err
+		return plannedDeletePath{}, err
 	}
 	for _, root := range roots {
 		if samePath(path, root) {
-			return DeleteResult{}, codedToolError("E_DELETE_BLOCKED", errors.New("refusing to delete workspace root"))
+			return plannedDeletePath{}, codedToolError("E_DELETE_BLOCKED", errors.New("refusing to delete workspace root"))
 		}
 	}
 
 	// Safety: block dangerous delete targets
 	if blocked, reason := isDangerousDeletePath(path); blocked {
-		return DeleteResult{}, codedToolError("E_DELETE_BLOCKED", fmt.Errorf("%s\n\nThis operation has been blocked for safety. If you really need to delete this path, do it manually outside the agent.", reason))
+		return plannedDeletePath{}, codedToolError("E_DELETE_BLOCKED", fmt.Errorf("%s\n\nThis operation has been blocked for safety. If you really need to delete this path, do it manually outside the agent.", reason))
 	}
 
 	info, err := os.Lstat(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return DeleteResult{}, codedToolError("E_PATH_NOT_FOUND", err)
+			return plannedDeletePath{}, codedToolError("E_PATH_NOT_FOUND", err)
 		}
-		return DeleteResult{}, err
+		return plannedDeletePath{}, err
 	}
-	if info.IsDir() && !req.Recursive {
-		return DeleteResult{}, codedToolError("E_DIR_REQUIRES_RECURSIVE", errors.New("path is a directory; set recursive=true"))
+	if info.IsDir() && !recursive {
+		return plannedDeletePath{}, codedToolError("E_DIR_REQUIRES_RECURSIVE", errors.New("path is a directory; set recursive=true"))
 	}
-	result, err := inspectDeleteTarget(req.Path, path, req.Recursive, info)
+	result, err := inspectDeleteTarget(requestPath, path, recursive, info)
 	if err != nil {
-		return DeleteResult{}, err
+		return plannedDeletePath{}, err
 	}
-	if req.Recursive && info.IsDir() {
-		err = os.RemoveAll(path)
-	} else {
-		err = os.Remove(path)
-	}
-	if err != nil {
-		return DeleteResult{}, err
-	}
-	return result, nil
+	return plannedDeletePath{absPath: path, isDir: info.IsDir(), result: result}, nil
 }
 
 func (a *App) runCommandWithConfig(parent context.Context, cfg ConfigState, req CommandRequest) (CommandResult, error) {

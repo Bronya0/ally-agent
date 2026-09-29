@@ -144,12 +144,15 @@ def is_subpath(child, parent):
 def as_posix_rel(root, path):
     return os.path.relpath(path, root).replace("\\", "/")
 
-def safe_join(root, rel):
+def safe_join_paths(root, rel):
+    # 与 safe_join 同一套判定，但把两个形态都交出来：lexical 是工作区内的字面
+    # 路径（删除/写入实际作用的那个），resolved 是符号链接解析后的真实路径
+    # （用于越界与保护判定）。两者在这里一次算出，调用方不会各自解析一遍。
     rel = "" if rel is None else to_os_text(rel)
     if "\x00" in rel:
         raise ValueError("path contains NUL byte")
     if rel == "" or rel == ".":
-        return root
+        return root, root
     p = rel.replace("\\", "/")
     if p.startswith("/"):
         raise ValueError("remote path must be relative to workspaceRoot")
@@ -162,7 +165,10 @@ def safe_join(root, rel):
     resolved = os.path.realpath(lexical)
     if not is_subpath(resolved, root):
         raise ValueError("remote path is outside workspaceRoot")
-    return resolved
+    return lexical, resolved
+
+def safe_join(root, rel):
+    return safe_join_paths(root, rel)[1]
 
 def contains_vcs(path):
     parts = path.replace("\\", "/").split("/")
@@ -420,24 +426,59 @@ def is_workspace_root_child_directory(root, rel):
         return False
     return os.path.isdir(os.path.join(root, parts[0]))
 
-def op_delete(root, payload):
-    rel = payload.get("path", "")
-    path = safe_join(root, rel)
-    if path == root:
+def check_delete_path(root, rel, recursive):
+    # 单条路径删除的全部判定，不执行任何东西。单路径与批量共用这一份：批量在
+    # 动手之前逐条跑完，任一条不通过就整批不删。Go 侧已判过路径形态（相对性、
+    # 越界、工作区根、VCS 元数据名），这里判只有远端才知道的事实：存在性、
+    # 是否目录、是否工作区一级目录、是否系统敏感目标。
+    #
+    # 两套路径各管一头：保护判定用 resolved（符号链接指向 .git 或系统目录也
+    # 要拦住），实际删除用 lexical —— 删符号链接删的是链接本身，不是它指向的
+    # 东西，与本地 delete 一致（旧实现按解析后的路径删，实测会把链接指向的
+    # 文件/目录抹掉）。
+    # 错误文案带上路径：批量里不点名的话，模型不知道是哪一条被拒。
+    lexical, resolved = safe_join_paths(root, rel)
+    if lexical == root:
         raise ValueError("refusing to delete remote workspace root")
-    if contains_vcs(path):
-        raise ValueError("refusing to delete path containing VCS metadata")
-    if is_protected_delete_path(path):
-        raise ValueError("refusing to delete OS-sensitive path")
+    if contains_vcs(resolved):
+        raise ValueError("refusing to delete path containing VCS metadata: %s" % to_unicode(rel))
+    if is_protected_delete_path(resolved):
+        raise ValueError("refusing to delete OS-sensitive path: %s" % to_unicode(rel))
     if is_workspace_root_child_directory(root, rel):
-        raise ValueError("refusing to delete top-level workspace directory")
-    if os.path.isdir(path):
-        if not payload.get("recursive"):
-            raise ValueError("path is a directory; set recursive=true")
-        shutil.rmtree(path)
+        raise ValueError("refusing to delete top-level workspace directory: %s" % to_unicode(rel))
+    if not os.path.lexists(lexical):
+        raise ValueError("path does not exist: %s" % to_unicode(rel))
+    # os.path.isdir 会跟随符号链接，而删除只作用于链接本身：链接一律按文件处理。
+    is_dir = os.path.isdir(lexical) and not os.path.islink(lexical)
+    if is_dir and not recursive:
+        raise ValueError("path is a directory; set recursive=true: %s" % to_unicode(rel))
+    return {"lexical": lexical, "resolved": resolved, "isDir": is_dir}
+
+def execute_delete_path(prepared):
+    if prepared["isDir"]:
+        shutil.rmtree(prepared["lexical"])
     else:
-        os.unlink(path)
-    return {"deleted": payload.get("path", "")}
+        os.unlink(prepared["lexical"])
+    return {"resolvedPath": prepared["resolved"]}
+
+def op_delete_batch(root, payload):
+    # 两遍：先全部判定（任一条不通过则整批一条都不删），再逐条执行（单条失败
+    # 只污染自己的结果槽，与批量读的隔离契约一致）。判定阶段顺手把解析好的
+    # 路径带下去，执行阶段不再重新解析，删除目标不会被第二个进程换掉。
+    recursive = bool(payload.get("recursive"))
+    prepared = []
+    for rel in payload.get("paths") or []:
+        prepared.append((rel, check_delete_path(root, rel, recursive)))
+    results = []
+    for rel, item in prepared:
+        try:
+            slot = execute_delete_path(item)
+            slot["path"] = rel
+            slot["ok"] = True
+            results.append(slot)
+        except Exception as exc:
+            results.append({"path": rel, "ok": False, "error": to_unicode(exc)})
+    return {"paths": results}
 
 def check_write_targets(root, cwd, targets):
     # 镜像本地 command 的 E_PATH_OUTSIDE 策略：Go 侧已把字面写入目标
@@ -682,8 +723,8 @@ try:
         ok(op_stat(root, payload))
     elif op == "write":
         ok(op_write(root, payload))
-    elif op == "delete":
-        ok(op_delete(root, payload))
+    elif op == "delete_batch":
+        ok(op_delete_batch(root, payload))
     elif op == "run":
         ok(op_run(root, payload))
     elif op == "_check_write_targets":
@@ -1666,30 +1707,74 @@ func (a *App) remoteCreateFile(ctx context.Context, req RemoteCreateFileRequest)
 	return result, nil
 }
 
-func (a *App) remoteDeletePath(ctx context.Context, req RemoteDeletePathRequest) (map[string]any, error) {
+// remoteDeletePath 删除远端一次调用里的全部路径，与本地 delete 同一套语义：
+// Go 侧先判路径形态（相对性、越界、工作区根、VCS 元数据）以及这一串路径彼此
+// 之间的重复与包含；只有远端才知道的事实（存在性、是否目录、是否工作区一级
+// 目录、是否系统敏感目标）由 helper 在动手之前逐条判完——任一条不通过，整批
+// 一条都不删。执行阶段仍是逐条隔离：单条失败只写自己的结果槽。
+func (a *App) remoteDeletePath(ctx context.Context, req RemoteDeletePathRequest) (DeletePathsResult, error) {
 	rt, err := a.resolveAndAuthorizeRemoteTarget(ctx, req.Target)
 	if err != nil {
-		return nil, err
+		return DeletePathsResult{}, err
 	}
-	// allowRoot=true maps the workspace root to "." so the dedicated refusal
-	// below reports the root, instead of the generic "path is required" that
-	// allowRoot=false raises first (which made that branch dead code).
-	cleanPath, err := validateRemoteWorkspacePath(req.Path, rt.WorkspaceRoot, true)
+	candidates, err := resolveDeletePathList(req.Path, req.Paths)
 	if err != nil {
-		return nil, err
+		return DeletePathsResult{}, err
 	}
-	if cleanPath == "." {
-		return nil, codedToolError("E_DELETE_BLOCKED", errors.New("refusing to delete remote workspace root"))
-	}
-	for _, part := range strings.Split(cleanPath, "/") {
-		if part == ".git" || part == ".svn" || part == ".hg" {
-			return nil, codedToolError("E_DELETE_BLOCKED", errors.New("refusing to delete VCS metadata"))
+	clean := make([]string, 0, len(candidates))
+	targets := make([]fileMutationTarget, 0, len(candidates))
+	for _, candidate := range candidates {
+		// allowRoot=true maps the workspace root to "." so the dedicated refusal
+		// below reports the root, instead of the generic "path is required" that
+		// allowRoot=false raises first (which made that branch dead code).
+		cleanPath, err := validateRemoteWorkspacePath(candidate, rt.WorkspaceRoot, true)
+		if err != nil {
+			return DeletePathsResult{}, err
 		}
+		if cleanPath == "." {
+			return DeletePathsResult{}, codedToolError("E_DELETE_BLOCKED", errors.New("refusing to delete remote workspace root"))
+		}
+		for _, part := range strings.Split(cleanPath, "/") {
+			if part == ".git" || part == ".svn" || part == ".hg" {
+				return DeletePathsResult{}, codedToolError("E_DELETE_BLOCKED", fmt.Errorf("refusing to delete VCS metadata (%s in %s)", part, cleanPath))
+			}
+		}
+		clean = append(clean, cleanPath)
+		targets = append(targets, fileMutationTarget{remoteMutationKey(req.Target, cleanPath), cleanPath})
+	}
+	if err := checkDeletePathList(targets); err != nil {
+		return DeletePathsResult{}, err
 	}
 
-	var result map[string]any
-	err = a.invokeRemotePython(ctx, rt, remotePayload(rt, "delete", map[string]any{"path": cleanPath, "recursive": req.Recursive}), 60*time.Second, &result)
-	return result, err
+	var resp struct {
+		Paths []struct {
+			Path         string `json:"path"`
+			OK           bool   `json:"ok"`
+			Error        string `json:"error"`
+			ResolvedPath string `json:"resolvedPath"`
+		} `json:"paths"`
+	}
+	// 一批里可能包含递归删除的大目录（构建产物、依赖目录），单路径时代的 60s
+	// 预算会误报超时；按条数放宽并封顶，一次调用不会无限期挂着。
+	timeout := time.Duration(60*len(clean)) * time.Second
+	if timeout > 5*time.Minute {
+		timeout = 5 * time.Minute
+	}
+	if err := a.invokeRemotePython(ctx, rt, remotePayload(rt, "delete_batch", map[string]any{"paths": clean, "recursive": req.Recursive}), timeout, &resp); err != nil {
+		return DeletePathsResult{}, err
+	}
+	result := DeletePathsResult{Paths: make([]DeleteResult, 0, len(resp.Paths))}
+	for _, item := range resp.Paths {
+		deleted := DeleteResult{Deleted: item.Path, Path: item.Path, ResolvedPath: item.ResolvedPath, OK: item.OK, Recursive: req.Recursive}
+		if item.OK {
+			result.DeletedCount++
+		} else {
+			deleted.Error = item.Error
+			result.FailedCount++
+		}
+		result.Paths = append(result.Paths, deleted)
+	}
+	return result, nil
 }
 
 func (a *App) remoteRunCommand(ctx context.Context, req RemoteRunCommandRequest) (CommandResult, error) {

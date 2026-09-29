@@ -23,6 +23,7 @@ import {
   toolEventId,
 } from '../utils/toolEventState.mjs';
 import { formatReadRangeChip } from '../utils/toolFormat.mjs';
+import { deletePathRows } from '../utils/toolPreview.mjs';
 import { isActionKeyedTool } from '../utils/toolVerb.mjs';
 
 export function useToolEvents(ctx) {
@@ -168,6 +169,16 @@ export function useToolEvents(ctx) {
     }
   }
 
+  // 删一批路径时卡片正体逐行列出每一条（成/败），与读卡的折叠行同一套行样式。
+  // 行只从结果里读：结果才是逐条判定的来源（入参此时只剩一串没判定过的路径）。
+  // body 一并清掉——失败详情已经落在行里，两份都留会让同一条错误显示两次。
+  function applyDeleteEntries(existing, data, resultData) {
+    const rows = deletePathRows(resultData);
+    if (!rows.length) return;
+    existing.deleteEntries = rows;
+    existing.body = '';
+  }
+
   function applyEditDiff(existing, data, resultData) {
     try {
       const resultParsed = JSON.parse(data.result);
@@ -238,6 +249,8 @@ export function useToolEvents(ctx) {
     'plan': [applyPlanTitle],
     'read': [applyReadBatchEntries],
     'remote_read': [applyReadBatchEntries],
+    'delete': [applyDeleteEntries],
+    'remote_delete_path': [applyDeleteEntries],
     'service': [applyServiceResult],
   };
 

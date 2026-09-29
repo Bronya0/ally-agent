@@ -156,15 +156,16 @@ func toolResultSummary(name string, result *toolResult) string {
 		}
 	case "create", "remote_create_file":
 		return "created"
-	case "delete":
-		var r DeleteResult
+	case "delete", "remote_delete_path":
+		var r DeletePathsResult
 		if decodeToolData(result.Data, &r) {
-			if r.Kind != "" {
-				return fmt.Sprintf("deleted %s", r.Kind)
+			if r.FailedCount > 0 {
+				return fmt.Sprintf("%d paths, %d failed", len(r.Paths), r.FailedCount)
+			}
+			if len(r.Paths) > 1 {
+				return fmt.Sprintf("%d paths", len(r.Paths))
 			}
 		}
-		return "deleted"
-	case "remote_delete_path":
 		return "deleted"
 	}
 	return ""
@@ -274,8 +275,8 @@ func compactToolDataForModel(name string, result toolResult, fullJSON string) st
 			return fullJSON
 		}
 		return renderServiceInfoResultForModel(r)
-	case "delete":
-		var r DeleteResult
+	case "delete", "remote_delete_path":
+		var r DeletePathsResult
 		if !decodeToolData(result.Data, &r) {
 			return fullJSON
 		}
@@ -1072,19 +1073,32 @@ func renderEditResultForModel(r EditResult) string {
 	return b.String()
 }
 
-func renderDeleteResultForModel(r DeleteResult) string {
+// renderDeleteResultForModel 把一次删除（本地或远端、一个路径或一批）渲染成同一个
+// 块：计数在开标签上，每条路径一行独立结果，所以「一条失败、其余成功」不用数行就
+// 看得出来。失败文案走属性转义，标记形状在里面本来就是死的。
+func renderDeleteResultForModel(r DeletePathsResult) string {
 	var b strings.Builder
-	b.WriteString(`<ally-deleted path="` + attrEscape(r.Path) + `"`)
-	if r.Kind != "" {
-		b.WriteString(` kind="` + attrEscape(r.Kind) + `"`)
+	fmt.Fprintf(&b, `<ally-deleted deleted="%d" failed="%d">`, r.DeletedCount, r.FailedCount)
+	for _, item := range r.Paths {
+		b.WriteString(`\n<path value="` + attrEscape(item.Path) + `" ok="` + strconv.FormatBool(item.OK) + `"`)
+		if item.Kind != "" {
+			b.WriteString(` kind="` + attrEscape(item.Kind) + `"`)
+		}
+		if item.RemovedFiles > 0 {
+			fmt.Fprintf(&b, ` files="%d"`, item.RemovedFiles)
+		}
+		if item.RemovedDirs > 0 {
+			fmt.Fprintf(&b, ` dirs="%d"`, item.RemovedDirs)
+		}
+		if item.RemovedBytes > 0 {
+			fmt.Fprintf(&b, ` bytes="%d"`, item.RemovedBytes)
+		}
+		if item.Error != "" {
+			b.WriteString(` error="` + attrEscape(item.Error) + `"`)
+		}
+		b.WriteString("/>")
 	}
-	if r.RemovedFiles > 0 {
-		fmt.Fprintf(&b, ` files="%d"`, r.RemovedFiles)
-	}
-	if r.RemovedDirs > 0 {
-		fmt.Fprintf(&b, ` dirs="%d"`, r.RemovedDirs)
-	}
-	b.WriteString("/>")
+	b.WriteString("</ally-deleted>")
 	return b.String()
 }
 

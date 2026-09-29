@@ -655,6 +655,8 @@ import { fmtCompact, fmtDuration, formatBytes } from './utils/format.mjs';
 import { isSkillActive, normalizeSkillName } from './utils/skills.mjs';
 import {
   assistantRowRenderState,
+  deleteFailedCount,
+  deletePathSummary,
   displaySourceMessages as buildDisplaySourceMessages,
   formatHttpToolTitle,
   formatPlanArgsTitle,
@@ -6658,8 +6660,12 @@ function makeToolResultTitle(name, result, meta = {}) {
     const target = meta?.target || d.target || '';
     return target ? `${target} · ${summary}` : summary;
   }
+  if (name === 'delete' || name === 'remote_delete_path') {
+    const summary = deletePathSummary(d);
+    if (summary) return d.target ? `${d.target} · ${summary}` : summary;
+  }
   const path = d.path || d.deleted || '';
-  if (path && (name === 'create' || name === 'edit' || name === 'remote_edit' || name === 'remote_create_file' || name === 'delete' || name === 'remote_delete_path')) {
+  if (path && (name === 'create' || name === 'edit' || name === 'remote_edit' || name === 'remote_create_file')) {
     return d.target ? `${d.target} · ${path}` : path;
   }
   if (name === 'web_fetch' || name === 'http_request') {
@@ -8052,8 +8058,13 @@ function makeToolTitle(name, args, meta = {}) {
     if (Array.isArray(parsed.files)) return parsed.files.length === 1 ? (parsed.files[0]?.path || '') : `${parsed.files.length} files`;
     return parsed.target ? `${parsed.target} · ${parsed.path || ''}` : (parsed.path || '');
   }
-  if (name === 'create' || name === 'delete' || name === 'remote_create_file' || name === 'remote_delete_path') {
+  if (name === 'create' || name === 'remote_create_file') {
     return parsed.target ? `${parsed.target} · ${parsed.path || ''}` : (parsed.path || '');
+  }
+  if (name === 'delete' || name === 'remote_delete_path') {
+    const summary = deletePathSummary(parsed);
+    if (!summary) return parsed.target || '';
+    return parsed.target ? `${parsed.target} · ${summary}` : summary;
   }
   if (name === 'remote_read') {
     if (parsed.target && Array.isArray(parsed.files)) {
@@ -8221,8 +8232,10 @@ function formatToolChip(name, result) {
       return '\u00B7 ' + parts.join(' \u00B7 ');
     }
     if ((name === 'delete' || name === 'remote_delete_path') && parsed.data) {
-      // 动词 "Deleted" + 路径参数已说明结果，尾部 "· deleted" chip 是重复噪音
-      return '';
+      // 动词 "Deleted" + 路径参数已说明结果；只有失败条数需要单独提示，否则
+      // 一批里失败一条在卡片上完全看不到。
+      const failed = deleteFailedCount(parsed.data);
+      return failed ? `\u00B7 ${failed} failed` : '';
     }
     if ((name === 'http_request' || name === 'web_fetch') && parsed.data) {
       return formatHTTPToolSummary(parsed.data);
@@ -8333,7 +8346,10 @@ function formatToolBody(name, body) {
       return parts.join('  ');
     }
     if ((name === 'delete' || name === 'remote_delete_path') && parsed.data) {
-      return '';
+      // 成功槽没什么可展开的（标题已经写了路径），失败槽是唯一需要看细节的地方。
+      const failures = Array.isArray(parsed.data.paths) ? parsed.data.paths.filter(item => item && item.ok === false) : [];
+      if (!failures.length) return '';
+      return failures.map(item => `${item.path || ''}: ${item.error || 'failed'}`).join('\n');
     }
     if ((name === 'http_request' || name === 'web_fetch') && parsed.data) return '';
     // grep results stay as a single non-expandable status line. The compact

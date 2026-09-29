@@ -144,10 +144,17 @@ func localMutationTargetFromRoots(roots []string, filePath string) (fileMutation
 		}
 	}
 	absPath, _ = filepath.Abs(absPath)
-	absPath = filepath.Clean(absPath)
-	keyPath := filepath.ToSlash(absPath)
+	return fileMutationTarget{localMutationKey(absPath), filepath.ToSlash(filePath)}, true
+}
+
+// localMutationKey 是本地变更目标的唯一键：批次写冲突判定（detectWriteBatchConflicts）
+// 与一次删除调用内部的重复/包含判定共用它，所以「同一批里写两次同一个文件」与
+// 「一次删除里列两次同一个路径」认的是同一个身份。
+func localMutationKey(absPath string) string {
+	absPath, _ = filepath.Abs(absPath)
+	keyPath := filepath.ToSlash(filepath.Clean(absPath))
 	if goruntime.GOOS == "windows" {
 		keyPath = strings.ToLower(keyPath)
 	}
-	return fileMutationTarget{"local:" + keyPath, filepath.ToSlash(filePath)}, true
+	return "local:" + keyPath
 }

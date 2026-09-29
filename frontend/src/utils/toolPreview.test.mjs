@@ -12,6 +12,10 @@ import test from 'node:test';
 import {
   assistantRowRenderState,
   codePreviewWindow,
+  deleteFailedCount,
+  deletePathList,
+  deletePathRows,
+  deletePathSummary,
   displaySourceMessages,
   formatHttpToolTitle,
   formatPlanArgsTitle,
@@ -265,4 +269,49 @@ test('formatPlanArgsTitle reads the plan call arguments, not the result shape', 
   assert.equal(formatPlanArgsTitle({ plan: [{ title: 'Read code', status: 'in_progress' }] }), '');
   assert.equal(formatPlanArgsTitle(null), '');
   assert.equal(formatPlanArgsTitle('steps'), '');
+});
+
+// The delete cards read three payload shapes: the call arguments (path or
+// paths), the current result (paths[], one slot per path) and the result older
+// sessions stored (a bare deleted/path string). Reading only one of them is what
+// blanks a card, so all three are pinned here.
+test('deletePathList reads arguments, the slot result and the legacy result shape', () => {
+  assert.deepEqual(deletePathList({ path: 'a.txt' }), ['a.txt']);
+  assert.deepEqual(deletePathList({ paths: ['a.txt', 'b.txt'] }), ['a.txt', 'b.txt']);
+  assert.deepEqual(deletePathList({ paths: [{ path: 'a.txt', ok: true }, { path: 'b.txt', ok: false }] }), ['a.txt', 'b.txt']);
+  assert.deepEqual(deletePathList({ deleted: 'old.txt', path: 'old.txt' }), ['old.txt']);
+  assert.deepEqual(deletePathList({ paths: [] }), []);
+  assert.deepEqual(deletePathList({}), []);
+  assert.deepEqual(deletePathList(null), []);
+});
+
+test('deletePathRows carries one row per path with its slot outcome', () => {
+  // 结果里的槽对象是唯一带成败的来源（批量删可以有的成、有的败）。
+  assert.deepEqual(
+    deletePathRows({ paths: [{ path: 'a.txt', ok: true }, { path: 'b.txt', ok: false, error: 'permission denied' }] }),
+    [{ path: 'a.txt', ok: true, error: '' }, { path: 'b.txt', ok: false, error: 'permission denied' }],
+  );
+  // 入参、老会话的单路径字符串、以及空/非法输入。
+  assert.deepEqual(deletePathRows({ paths: ['a.txt', 'b.txt'] }), [{ path: 'a.txt', ok: true, error: '' }, { path: 'b.txt', ok: true, error: '' }]);
+  assert.deepEqual(deletePathRows({ path: 'a.txt' }), [{ path: 'a.txt', ok: true, error: '' }]);
+  assert.deepEqual(deletePathRows({ deleted: 'old.txt', path: 'old.txt' }), [{ path: 'old.txt', ok: true, error: '' }]);
+  // 槽里有没有 ok 字段决定成败：缺字段不能把成功行误判成失败行。
+  assert.deepEqual(deletePathRows({ paths: [{ path: 'a.txt' }] }), [{ path: 'a.txt', ok: true, error: '' }]);
+  assert.deepEqual(deletePathRows({ paths: [{ path: '  ', ok: true }, { path: '', ok: false, error: 'x' }] }), []);
+  assert.deepEqual(deletePathRows({ paths: [] }), []);
+  assert.deepEqual(deletePathRows({}), []);
+  assert.deepEqual(deletePathRows(null), []);
+});
+
+test('deletePathSummary says one path or N paths', () => {
+  assert.equal(deletePathSummary({ path: 'a.txt' }), 'a.txt');
+  assert.equal(deletePathSummary({ paths: ['a.txt', 'b.txt'] }), '2 paths');
+  assert.equal(deletePathSummary({}), '');
+});
+
+test('deleteFailedCount surfaces a partial failure', () => {
+  assert.equal(deleteFailedCount({ failedCount: 1, deletedCount: 2 }), 1);
+  assert.equal(deleteFailedCount({ failedCount: 0 }), 0);
+  assert.equal(deleteFailedCount({}), 0);
+  assert.equal(deleteFailedCount(null), 0);
 });

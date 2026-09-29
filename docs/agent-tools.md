@@ -50,7 +50,7 @@ func functionTool(name, desc string, params map[string]any) openai.Tool {  // :4
 
 1. **示例写进描述**（`builtinToolExamples`，`builtins.go:474`）。参数描述说一百句，不如给一条能直接抄的样例 JSON——提升工具调用成功率最便宜的手段。
 2. **strict schema 递归规范化**（`enforceStrictSchema` → `normalizeSchemaNode`，`builtins.go:683` / `:691`）。遍历 `properties` / `items` / `anyOf` / `oneOf` / `allOf` / `not`，给每个 `type: object` 补 `additionalProperties: false` 与 `properties: {}`。少规范化一层，strict 模式就会被 provider 拒或在子对象上静默放宽。任意 JSON 参数用 `jsonValueSchema`（`anyOf` 五种类型，`builtins.go:670`）表达，且自带 `anyOf` 的节点不会被补上标量 `type`——两者取交集会把「对象/数组/字符串都行」缩成「只能是字符串」（`schemautil.declaresOwnShape`）。
-3. **schema 与 DTO 必须对齐**：`batchReadFilesSchema` 的 `minItems/maxItems`、`editChangeSchema(sourceTool)` 的 `oneOf(oldText | lineRange)`（本地与远程共用同一份声明，只有来源工具名不同）与执行侧解码/校验是同一套规则的两处表述。它们漂移的那天，模型就会发出「schema 允许但执行必拒」的调用。对齐不再靠人看：内置工具的入参会在分发层按 schema 校验一次（见四），漂移会当场地报 `E_BAD_ARGS`。另一个易错点是互斥判定的口径：`oneOf`/`not` 要按参数的**有效值**判，不能按 `required` 的键是否存在——`tailLines: 0`、`body: ""` 在运行时就是「没传」，按键存在判会把模型补零/补空串的写法误报成「两种形式都给了」。正例见 `editSourceOneOf` 与 `batchReadFilesSchema`（闸门用例 `TestBuiltinGateTreatsEmptyOptionalsAsAbsent`）。来源之外还有一处互斥：`replaceAll` 只能跟 `oldText` 搭配，配 `lineRange` 由 `editReplaceAllRule`（`allOf` + `not` + `const`）当场拒，执行侧 `ValidateBatchTextChanges` 用同一条规则复核——两处漂移就是「schema 允许、执行必拒」的经典来源。
+3. **schema 与 DTO 必须对齐**：`batchReadFilesSchema` 的 `minItems/maxItems`、`editChangeSchema(sourceTool)` 的 `oneOf(oldText | lineRange)`（本地与远程共用同一份声明，只有来源工具名不同）、`deletePathsSchema` + `deletePathSourceOneOf` 的 `path | paths`（本地 `delete` 与 `remote_delete_path` 共用，上限 `DeletePathListLimit` 同时被两个 schema、handler 侧校验与 `App.DeletePath` 读）与执行侧解码/校验是同一套规则的两处表述。它们漂移的那天，模型就会发出「schema 允许但执行必拒」的调用。对齐不再靠人看：内置工具的入参会在分发层按 schema 校验一次（见四），漂移会当场地报 `E_BAD_ARGS`。另一个易错点是互斥判定的口径：`oneOf`/`not` 要按参数的**有效值**判，不能按 `required` 的键是否存在——`tailLines: 0`、`body: ""` 在运行时就是「没传」，按键存在判会把模型补零/补空串的写法误报成「两种形式都给了」。正例见 `editSourceOneOf` 与 `batchReadFilesSchema`（闸门用例 `TestBuiltinGateTreatsEmptyOptionalsAsAbsent`）。来源之外还有一处互斥：`replaceAll` 只能跟 `oldText` 搭配，配 `lineRange` 由 `editReplaceAllRule`（`allOf` + `not` + `const`）当场拒，执行侧 `ValidateBatchTextChanges` 用同一条规则复核——两处漂移就是「schema 允许、执行必拒」的经典来源。
 
 工具集本身在 session 首次请求时**冻结**（`buildToolsForSession`，`biz_mcp.go:1140`）：`tools` 是请求前缀的一部分，中途变化会让供应商 prompt cache 全线作废。`cloneTools` 深拷贝，保证冻结的那份不被后续 MCP 启停改到。子代理 / 计划任务这类无 session 的调用方走 `buildToolsForConfig`，永远看实时集合（它们本来也无前缀可保）。MCP 工具靠名字前缀 `mcp__<server>__<tool>`（`mcpFunctionNamePrefix`）并入同一张表。
 
@@ -115,6 +115,7 @@ return toolResult{OK: true, Data: data, Warnings: argWarnings}   // app.go:2797
 | 编辑后验证 | `attachValidation` + `validateChangedFilesForCall`（`orch_validation.go:170`）；批次里由 `planBatchValidation`（`orch_validation.go:189`）摊到「最后一次触碰该目录的变更」上，避免每个 edit 都跑一遍 `go vet` / `tsc` |
 | 命令安全围栏 | `checkCommandSafetyAtCwd`（`orch_command_safety.go:45`） |
 | 路径保护 | `pathutil`：`CanonicalPath` / `VCSMetadataReason`，写、删、命令三条入口共用 |
+| 删除多路径 | `resolveDeletePathList` / `checkDeletePathList`（`orch_delete_paths.go`）：两种写法折叠成一条候选列表，并拒重复与包含；本地与远端共用这一份。单条路径的落盘判定仍各自留在自己的信任域（本地问本机文件系统，远端只能在 SSH 另一头问） |
 
 命令围栏的四道检查都是「拒绝并解释」，不是「尝试纠正」：
 
@@ -153,7 +154,8 @@ type toolResult struct {                       // infra_result.go:19
 | `grep` | `<ally-grep mode matched hits files next-offset>` 头 + `path:line: text` 行（count 模式为 `path: count=N`）；命中行文本按预算裁剪（`capGrepLineTexts`） |
 | `command` | `<ally-cmd exit timed-out promoted-to-service truncated full>` 块，输出零转义落体；command/cwd 不回显（模型刚在参数里写过） |
 | `service` read/info | `<ally-svc-read>` / `<ally-svc>` 块（字节账目走属性），`list` 仍走 JSON |
-| `edit` / `create` / `delete` | 自闭合属性标签；summary/validation 走属性，warnings 走尾部行（自由文本经 `neutralizeClosingMarkers` 中和标记形状） |
+| `edit` / `create` | 自闭合属性标签；summary/validation 走属性，warnings 走尾部行（自由文本经 `neutralizeClosingMarkers` 中和标记形状） |
+| `delete` / `remote_delete_path` | `<ally-deleted deleted failed>` 块 + 每条路径一行 `<path value ok kind files dirs bytes error>`：单路径调用就是一个单槽批量，本地与远端同一份渲染（失败槽一眼可见，不用数行） |
 | `http_request` / `web_fetch` | `<ally-http>` / `<ally-fetch>` 块（砍 url/statusText 回显，链接作尾部行） |
 | `mcp__*` | 第三方无上限输出，统一夹到内置上限（`renderMcpResultForModel`） |
 | 任何失败 / 解码失败 | 回退 `fullJSON`（`marshalToolResultOrFallback`），永不因压缩丢信息 |
@@ -169,7 +171,7 @@ type toolResult struct {                       // infra_result.go:19
 `detectToolBatchConflicts`（`orch_batch_policy.go:120`）在执行前统一裁决：
 
 1. **独占型工具**（`ask` / `suggest`）必须独占一批，否则整批全部拒绝（`E_ASK_BATCH_CONFLICT` / `E_SUGGEST_BATCH_CONFLICT`）——`ask` 会把 run 停在等人回答上，`suggest` 成功即结束 run，两者都不能和「结果还没被模型看到」的调用同批。执行阶段（并发 / 文件变更有序 / 延后串行）由 `toolBatchPhases` 表声明，`isOrderedFileMutationTool` 与 `isDeferredSerialTool` 都从它派生，主循环与子代理循环共用同一份分类：加新延后工具只需在表里加一行。
-2. **同路径多写**（`detectWriteBatchConflicts`，`orch_batch_policy.go:79`）：按参数解析写入目标（本地走 edit plan，远端按 `remote:<target>:<path>`），只执行最早一个，其余 `E_WRITE_BATCH_CONFLICT`。
+2. **同路径多写**（`detectWriteBatchConflicts`，`orch_batch_policy.go:79`）：按参数解析写入目标（本地走 `localMutationKey`，远端走 `remoteMutationKey` = `remote:<target>:<path>`）；两个删除工具认 `path` 与 `paths` 两种写法，每个路径各出一个目标。只执行最早一个，其余 `E_WRITE_BATCH_CONFLICT`。这同一套目标键还被「一次删除调用内部的重复/包含」判定复用（`checkDeletePathList`），所以同批两次与同调用两次认的是同一个身份。
 3. **计划工具一批只许一个写操作**（`planBatchWriteSource`，`orch_batch_policy.go:111`）：`steps` / `next` / `finish` 同属写（判定直接复用工具的请求分类器，不另写一份），并发池里谁后落谁生效，会造成「推进一步又被整份重设抹掉」这种两调用互相矛盾的结果；只执行最早一个，其余 `E_PLAN_BATCH_CONFLICT`；只读（不传任何源）不算写，可以和其他调用同批。
 4. **语义重复调用**：参数 JSON 解析后按 key 排序重序列化做去重键，重复判 `E_DUPLICATE_TOOL_CALL`（字段顺序、空白差异都能识别；刻意不做默认值归一，那需要逐工具知识且会掩盖真实不同意图）。
 

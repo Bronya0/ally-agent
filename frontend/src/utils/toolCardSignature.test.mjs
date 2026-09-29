@@ -47,6 +47,18 @@ test('array-length fields are reflected without deep comparison', () => {
   assert.equal(toolCardRenderSignature(withEntries), toolCardRenderSignature({ ...base, editEntries: [{ path: 'c' }, { path: 'd' }] }));
 });
 
+test('delete rows are reflected in the signature', () => {
+  // 行是 tool:result 到达后才写上去的：不进签名的话 v-memo 会继续复用旧 vnode，
+  // 卡片上的 "N paths" 就永远等不到它的逐行明细。
+  const running = { role: 'tool_call', kind: 'delete', status: 'running', title: '2 paths' };
+  const done = { ...running, status: 'success', deleteEntries: [{ path: 'a.txt', ok: true }, { path: 'b.txt', ok: false, error: 'denied' }] };
+  assert.notEqual(
+    toolCardRenderSignature(running),
+    toolCardRenderSignature(done),
+    'delete rows must change the memo signature or the card freezes on the summary title',
+  );
+});
+
 test('signature changes when the action behind the verb arrives or changes', () => {
   // scheduled_task / service / plan render a verb keyed by the call's action, and
   // the action is captured from arguments that may land after the card is drawn.

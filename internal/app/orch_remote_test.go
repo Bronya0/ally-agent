@@ -743,10 +743,18 @@ func TestRemoteReadFileDuplicatePathSlots(t *testing.T) {
 	}
 }
 
-// TestRemoteHelperDeleteOpTouchesOnlyWorkspace 用真实 helper 脚本跑完整
-// delete op（只操作 t.TempDir()）：普通文件允许删、一级目录拒绝、二级目录
-// 必须 recursive 后允许删除、工作区根与逃逸路径拒绝。
-func TestRemoteHelperDeleteOpTouchesOnlyWorkspace(t *testing.T) {
+// remoteDeleteSlotForTest 是 delete_batch 结果槽的传输形状。
+type remoteDeleteSlotForTest struct {
+	Path  string `json:"path"`
+	OK    bool   `json:"ok"`
+	Error string `json:"error"`
+}
+
+// TestRemoteHelperDeleteBatchOpTouchesOnlyWorkspace 用真实 helper 脚本跑完整
+// delete_batch op（只操作 t.TempDir()）：普通文件允许删、一级目录拒绝、二级目录
+// 必须 recursive 后允许删除、工作区根与逃逸路径拒绝、不存在的路径拒绝。批量语义
+// 单独锁一条：列表里只要有一条不允许，整批一条都不删 —— 全部判定先于任何删除。
+func TestRemoteHelperDeleteBatchOpTouchesOnlyWorkspace(t *testing.T) {
 	py := pickRemoteHelperPython(t)
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "app.py"), []byte("print('x')\n"), 0o600); err != nil {
@@ -755,11 +763,10 @@ func TestRemoteHelperDeleteOpTouchesOnlyWorkspace(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(root, "sub", "deep"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "sub", "nested.txt"), []byte("n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "sub", "deep", "nested.txt"), []byte("d"), 0o600); err != nil {
-		t.Fatal(err)
+	for _, name := range []string{"sub/nested.txt", "sub/deep/nested.txt", "a.txt", "b.txt"} {
+		if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(name)), []byte("n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	run := func(payload map[string]any) remotePythonResponse {
@@ -774,47 +781,145 @@ func TestRemoteHelperDeleteOpTouchesOnlyWorkspace(t *testing.T) {
 		}
 		return resp
 	}
+	deleteBatch := func(paths []string, recursive bool) remotePythonResponse {
+		t.Helper()
+		return run(map[string]any{"op": "delete_batch", "workspaceRoot": root, "paths": paths, "recursive": recursive})
+	}
+	slots := func(resp remotePythonResponse) []remoteDeleteSlotForTest {
+		t.Helper()
+		var data struct {
+			Paths []remoteDeleteSlotForTest `json:"paths"`
+		}
+		if err := json.Unmarshal(resp.Data, &data); err != nil {
+			t.Fatalf("decode delete_batch data: %v (data=%s)", err, resp.Data)
+		}
+		return data.Paths
+	}
+	mustRemain := func(name string) {
+		t.Helper()
+		if _, err := os.Lstat(filepath.Join(root, filepath.FromSlash(name))); err != nil {
+			t.Fatalf("%s must remain: %v", name, err)
+		}
+	}
+	mustBeGone := func(name string) {
+		t.Helper()
+		if _, err := os.Lstat(filepath.Join(root, filepath.FromSlash(name))); !os.IsNotExist(err) {
+			t.Fatalf("%s should be deleted, lstat err: %v", name, err)
+		}
+	}
 
-	// 1) 普通文件删除成功
-	resp := run(map[string]any{"op": "delete", "workspaceRoot": root, "path": "app.py", "recursive": false})
+	// 1) 普通文件删除成功（单路径也是批量：一个槽）
+	resp := deleteBatch([]string{"app.py"}, false)
 	if !resp.OK {
 		t.Fatalf("delete plain file failed: %s", resp.Error)
 	}
-	if _, err := os.Stat(filepath.Join(root, "app.py")); !os.IsNotExist(err) {
-		t.Fatalf("app.py should be deleted, stat err: %v", err)
+	if got := slots(resp); len(got) != 1 || !got[0].OK || got[0].Path != "app.py" {
+		t.Fatalf("expected one successful slot for app.py, got %#v", got)
 	}
+	mustBeGone("app.py")
 
-	// 2) 禁止删除工作区根目录下的一级目录，即使 recursive=true。
-	resp = run(map[string]any{"op": "delete", "workspaceRoot": root, "path": "sub", "recursive": true})
+	// 2) 一级目录拒绝，且同批的另一个文件不受牵连（判定先于删除）
+	resp = deleteBatch([]string{"sub/nested.txt", "sub"}, true)
 	if resp.OK || !strings.Contains(resp.Error, "top-level workspace directory") {
 		t.Fatalf("top-level directory delete should be refused, got ok=%v error=%s", resp.OK, resp.Error)
 	}
-	if _, err := os.Stat(filepath.Join(root, "sub")); err != nil {
-		t.Fatalf("top-level directory should remain: %v", err)
-	}
+	mustRemain("sub/nested.txt")
+	mustRemain("sub")
 
-	// 3) 二级目录未给 recursive 仍拒绝。
-	resp = run(map[string]any{"op": "delete", "workspaceRoot": root, "path": "sub/deep", "recursive": false})
+	// 3) 不存在的路径也整批拒绝：其余路径一条不动
+	resp = deleteBatch([]string{"sub/nested.txt", "missing.txt"}, false)
+	if resp.OK || !strings.Contains(resp.Error, "does not exist") {
+		t.Fatalf("a missing path should refuse the whole batch, got ok=%v error=%s", resp.OK, resp.Error)
+	}
+	mustRemain("sub/nested.txt")
+
+	// 4) 二级目录未给 recursive 仍拒绝。
+	resp = deleteBatch([]string{"sub/deep"}, false)
 	if resp.OK || !strings.Contains(resp.Error, "recursive") {
 		t.Fatalf("non-recursive nested directory delete should fail, got ok=%v error=%s", resp.OK, resp.Error)
 	}
 
-	// 4) 二级目录显式 recursive 后允许删除。
-	resp = run(map[string]any{"op": "delete", "workspaceRoot": root, "path": "sub/deep", "recursive": true})
+	// 5) 二级目录显式 recursive 后允许删除。
+	resp = deleteBatch([]string{"sub/deep"}, true)
 	if !resp.OK {
 		t.Fatalf("recursive nested delete failed: %s", resp.Error)
 	}
+	mustBeGone("sub/deep")
 
-	// 5) 工作区根本身拒绝
-	resp = run(map[string]any{"op": "delete", "workspaceRoot": root, "path": ".", "recursive": false})
+	// 6) 一批两个文件：每个路径一个槽，两个都删掉。
+	resp = deleteBatch([]string{"a.txt", "b.txt"}, false)
+	if !resp.OK {
+		t.Fatalf("batch delete failed: %s", resp.Error)
+	}
+	if got := slots(resp); len(got) != 2 || !got[0].OK || !got[1].OK || got[0].Path != "a.txt" || got[1].Path != "b.txt" {
+		t.Fatalf("expected two successful slots in request order, got %#v", got)
+	}
+	mustBeGone("a.txt")
+	mustBeGone("b.txt")
+
+	// 7) 工作区根本身拒绝
+	resp = deleteBatch([]string{"."}, false)
 	if resp.OK || !strings.Contains(resp.Error, "refusing to delete remote workspace root") {
 		t.Fatalf("workspace root delete should be refused, got ok=%v error=%s", resp.OK, resp.Error)
 	}
 
-	// 6) 逃逸路径拒绝
-	resp = run(map[string]any{"op": "delete", "workspaceRoot": root, "path": "../outside.txt", "recursive": false})
+	// 8) 逃逸路径拒绝
+	resp = deleteBatch([]string{"../outside.txt"}, false)
 	if resp.OK || !strings.Contains(resp.Error, "..") {
 		t.Fatalf("escape path should be refused, got ok=%v error=%s", resp.OK, resp.Error)
+	}
+}
+
+// TestRemoteHelperDeleteBatchIsolatesExecutionFailure 锁定执行阶段的隔离：判定
+// 全部通过之后，单条失败只写自己的结果槽，其余照删。用「指向目录的符号链接 +
+// recursive」构造确定性的失败（shutil.rmtree 拒绝作用于符号链接本身），同时锁住
+// 「删链接不删它指向的东西」：链接指向的目录必须原样留着。
+func TestRemoteHelperDeleteBatchIsolatesExecutionFailure(t *testing.T) {
+	py := pickRemoteHelperPython(t)
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "sub", "deep"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "sub", "nested.txt"), []byte("n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(root, "sub", "deep"), filepath.Join(root, "sub", "link")); err != nil {
+		t.Skipf("symlink creation unavailable in this environment: %v", err)
+	}
+
+	script, err := buildRemoteScript(map[string]any{
+		"op":            "delete_batch",
+		"workspaceRoot": root,
+		"paths":         []string{"sub/nested.txt", "sub/link"},
+		"recursive":     true,
+	})
+	if err != nil {
+		t.Fatalf("buildRemoteScript: %v", err)
+	}
+	resp, err := runRemoteHelperScript(t, py, script)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resp.OK {
+		t.Fatalf("execution-phase failures must not fail the whole call: %s", resp.Error)
+	}
+	var data struct {
+		Paths []remoteDeleteSlotForTest `json:"paths"`
+	}
+	if err := json.Unmarshal(resp.Data, &data); err != nil {
+		t.Fatalf("decode delete_batch data: %v (data=%s)", err, resp.Data)
+	}
+	if len(data.Paths) != 2 || !data.Paths[0].OK || data.Paths[1].OK || data.Paths[1].Error == "" {
+		t.Fatalf("expected the plain file deleted and the symlink slot carrying an error, got %#v", data.Paths)
+	}
+	if _, err := os.Lstat(filepath.Join(root, "sub", "nested.txt")); !os.IsNotExist(err) {
+		t.Fatalf("the plain file should be deleted despite the sibling failure, lstat err: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(root, "sub", "link")); err != nil {
+		t.Fatalf("the refused symlink must remain: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "sub", "deep")); err != nil {
+		t.Fatalf("deleting a symlink must never delete what it points at: %v", err)
 	}
 }
 

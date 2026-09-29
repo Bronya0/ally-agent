@@ -40,6 +40,50 @@ export function formatHttpToolTitle(parsed) {
   return parts.join(' · ');
 }
 
+// deletePathRows 读出一条删除调用的路径，一条路径一行：{path, ok, error}。三种
+// 形状都认：入参的 path（单个）与 paths（一串）、结果的 paths[]（每个槽一条，新
+// 形状）、以及老会话里存下来的 deleted / path 字符串（单路径时代的形状）。卡片
+// 标题的摘要与卡片的逐行明细都建在它上面，所以「哪些形状算一条路径」只有这一份。
+export function deletePathRows(source) {
+  if (!source || typeof source !== 'object') return [];
+  const rows = [];
+  const push = (path, ok, error) => {
+    const value = String(path || '').trim();
+    if (!value) return;
+    rows.push({ path: value, ok: ok !== false, error: String(error || '') });
+  };
+  if (Array.isArray(source.paths)) {
+    for (const item of source.paths) {
+      if (typeof item === 'string') push(item, true, '');
+      else if (item && typeof item === 'object') push(item.path || item.deleted, item.ok !== false, item.error);
+    }
+    return rows;
+  }
+  push(source.path || source.deleted, true, '');
+  return rows;
+}
+
+// deletePathList 是同一份判定里只取路径的那一面：卡片标题的摘要只关心有哪些路径。
+export function deletePathList(source) {
+  return deletePathRows(source).map(row => row.path);
+}
+
+// deletePathSummary 是卡片标题里的路径摘要：一条就直接写它，多条写成「N paths」
+// ——与 remote_read 的「N files」同一套写法。
+export function deletePathSummary(source) {
+  const paths = deletePathList(source);
+  if (!paths.length) return '';
+  return paths.length === 1 ? paths[0] : `${paths.length} paths`;
+}
+
+// deleteFailedCount 报出这一次删除里有几条失败。失败槽不显眼就等于没提示：
+// 一批里失败一条时，卡片上必须看得到。
+export function deleteFailedCount(source) {
+  if (!source || typeof source !== 'object') return 0;
+  const failed = Number(source.failedCount || 0);
+  return Number.isFinite(failed) && failed > 0 ? failed : 0;
+}
+
 export function codePreviewWindow(code, options = {}) {
   if (!code) {
     return {

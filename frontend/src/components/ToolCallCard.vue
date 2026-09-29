@@ -33,6 +33,18 @@ Public License v3. See the LICENSE file for details.
       <span v-if="displayDuration" class="tool-duration">{{ displayDuration }}</span>
     </div>
 
+    <div v-if="deleteRowsShown" class="read-group-body">
+      <div
+        v-for="(row, index) in deleteRows"
+        :key="`${row.path}-${index}`"
+        :class="['read-group-entry', row.ok ? 'success' : 'error']"
+      >
+        <span class="read-group-tree">{{ treePrefix(index) }}</span>
+        <span class="read-group-path" :title="row.path">{{ row.path }}</span>
+        <span v-if="!row.ok && row.error" class="read-group-chip" :title="row.error">{{ row.error }}</span>
+      </div>
+    </div>
+
     <div v-if="msg.kind === 'edit' && msg.status !== 'error' && msg.editEntries?.length" :class="{ 'tool-body-swap': !isBodyLive }" class="edit-file-groups">
       <div v-for="(entry, ei) in msg.editEntries" :key="entry.path || ei" class="edit-file-group">
         <div v-if="msg.editEntries.length > 1" class="edit-file-header">
@@ -131,6 +143,23 @@ const props = defineProps({
 });
 
 const emit = defineEmits(['toggle']);
+
+// 一次删多条时逐行列出每一条（成/败），行样式复用读卡的折叠行：一条路径一行，
+// 失败行沿用同款红字标记 + 错误文案。行数据来自结果适配器（见 useToolEvents），
+// 所以行的判定与标题摘要同源（utils/toolPreview 的 deletePathRows）。
+const deleteRows = computed(() => {
+  if (props.msg?.kind !== 'delete' || !Array.isArray(props.msg.deleteEntries)) return [];
+  return props.msg.deleteEntries;
+});
+
+// 单条且成功时标题已经写了那条路径，再铺一行是重复；多路径（标题只剩 "N paths"）
+// 或唯一那条失败（标题看不出失败）时必须铺开，否则卡片上看不到是哪一条。
+const deleteRowsShown = computed(() => deleteRows.value.length > 1
+  || (deleteRows.value.length === 1 && !deleteRows.value[0].ok));
+
+function treePrefix(index) {
+  return index === deleteRows.value.length - 1 ? '└─' : '├─';
+}
 
 const DiffView = defineAsyncComponent(() => import('./DiffView.vue'));
 const CodeView = defineAsyncComponent(() => import('./CodeView.vue'));

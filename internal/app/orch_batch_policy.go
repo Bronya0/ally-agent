@@ -281,23 +281,63 @@ func fileMutationTargets(cfg ConfigState, name, arguments string) []fileMutation
 		}
 		return plan.Targets
 	}
-	// remote_edit is flat and single-file now; the generic remote_* fallback
-	// below reads its top-level target/path pair.
+	// remote_edit is flat and single-file; the two delete tools also take a
+	// `paths` list, so the generic remote_*/local branches below read both
+	// spellings and return one target per entry (which is what the same-path
+	// write guard needs: a batch delete of two overlapping paths is caught in
+	// the call itself, see checkDeletePathList).
 	var args struct {
-		Target string `json:"target"`
-		Path   string `json:"path"`
+		Target string   `json:"target"`
+		Path   string   `json:"path"`
+		Paths  []string `json:"paths"`
 	}
-	if json.Unmarshal([]byte(arguments), &args) != nil || strings.TrimSpace(args.Path) == "" {
+	if json.Unmarshal([]byte(arguments), &args) != nil {
 		return nil
 	}
+	paths := mutationArgumentPaths(args.Path, args.Paths)
+	if len(paths) == 0 {
+		return nil
+	}
+	targets := make([]fileMutationTarget, 0, len(paths))
 	if strings.HasPrefix(name, "remote_") {
 		target := strings.TrimSpace(args.Target)
-		cleanPath := path.Clean(strings.ReplaceAll(strings.TrimSpace(args.Path), "\\", "/"))
-		return []fileMutationTarget{{"remote:" + target + ":" + cleanPath, target + " · " + cleanPath}}
+		for _, p := range paths {
+			cleanPath := path.Clean(strings.ReplaceAll(strings.TrimSpace(p), "\\", "/"))
+			targets = append(targets, fileMutationTarget{remoteMutationKey(target, cleanPath), target + " · " + cleanPath})
+		}
+		return targets
 	}
-	target, ok := localMutationTarget(cfg, args.Path)
-	if !ok {
-		return nil
+	for _, p := range paths {
+		target, ok := localMutationTarget(cfg, p)
+		if !ok {
+			continue
+		}
+		targets = append(targets, target)
 	}
-	return []fileMutationTarget{target}
+	return targets
+}
+
+// remoteMutationKey 是远端变更目标的唯一键：批次写冲突判定与一次远端删除调用
+// 内部的重复/包含判定共用它，所以两个判据认的是同一个身份。
+func remoteMutationKey(target, relPath string) string {
+	cleanPath := path.Clean(strings.ReplaceAll(strings.TrimSpace(relPath), "\\", "/"))
+	return "remote:" + strings.TrimSpace(target) + ":" + cleanPath
+}
+
+// mutationArgumentPaths 枚举「这次调用会动哪些路径」，供上面的写冲突判定使用：
+// 编辑类工具只写 path，删除类工具两个写法都认。它与 resolveDeletePathList 的
+// 契约不同（那个要拒绝畸形请求，这个只做尽力而为的取样）：畸形请求由执行器
+// 自己拒，但这里要把能看出来的目标都算进去，否则两个非法别名可以绕开同批写
+// 守卫。
+func mutationArgumentPaths(single string, list []string) []string {
+	paths := make([]string, 0, len(list)+1)
+	if strings.TrimSpace(single) != "" {
+		paths = append(paths, single)
+	}
+	for _, candidate := range list {
+		if strings.TrimSpace(candidate) != "" {
+			paths = append(paths, candidate)
+		}
+	}
+	return paths
 }
