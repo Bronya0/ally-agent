@@ -2199,6 +2199,9 @@ code, pre {
 }
 .workspace-explorer-md-preview img.workspace-explorer-md-image-error { border-color: rgba(229,154,154,0.45); }
 .workspace-explorer-error { color: var(--ally-danger-text); }
+/* 资源树右键菜单里的删除项：危险色文案。下拉浮层 teleport 到 body，组件内样式
+   够不到它，所以这条规则留在全局；颜色随主题切换，hover 时也保持红色。 */
+.workspace-explorer-menu-danger { color: var(--ally-danger); }
 .composer-explorer-btn.active { color: var(--ally-accent-bright); background: color-mix(in srgb, var(--ally-accent) 12%, transparent); }
 .composer-icon-btn:focus, .composer-icon-btn:focus-visible { outline: none; }
 

@@ -2308,6 +2308,234 @@ func TestCreateFileRejectsSymlinkParentOutsideWorkspace(t *testing.T) {
 	}
 }
 
+func TestRenamePathRenamesFileAndDirectory(t *testing.T) {
+	root := t.TempDir()
+	app := NewApp()
+	cfg := ConfigState{Workspace: root}
+	if _, err := app.createFileWithConfig(cfg, CreateFileRequest{Path: "docs/guide.md", Content: "hello\n"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// 文件改名：留在原目录，内容跟着走
+	renamed, err := app.renamePathWithConfig(cfg, RenamePathRequest{Path: "docs/guide.md", NewName: "readme.md"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if renamed != "docs/readme.md" {
+		t.Fatalf("expected docs/readme.md, got %q", renamed)
+	}
+	if got, err := os.ReadFile(filepath.Join(root, "docs", "readme.md")); err != nil || string(got) != "hello\n" {
+		t.Fatalf("expected content to survive the rename, got %q err=%v", string(got), err)
+	}
+	if _, err := os.Lstat(filepath.Join(root, "docs", "guide.md")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected the old name to be gone, lstat err=%v", err)
+	}
+
+	// 目录改名：整棵子树跟着走，返回值仍是工作区相对路径
+	renamed, err = app.renamePathWithConfig(cfg, RenamePathRequest{Path: "docs", NewName: "manual"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if renamed != "manual" {
+		t.Fatalf("expected manual, got %q", renamed)
+	}
+	if got, err := os.ReadFile(filepath.Join(root, "manual", "readme.md")); err != nil || string(got) != "hello\n" {
+		t.Fatalf("expected renamed directory to keep its children, got %q err=%v", string(got), err)
+	}
+}
+
+func TestRenamePathSameNameIsNoOp(t *testing.T) {
+	root := t.TempDir()
+	app := NewApp()
+	cfg := ConfigState{Workspace: root}
+	if _, err := app.createFileWithConfig(cfg, CreateFileRequest{Path: "a.txt", Content: "a\n"}); err != nil {
+		t.Fatal(err)
+	}
+
+	renamed, err := app.renamePathWithConfig(cfg, RenamePathRequest{Path: "a.txt", NewName: "a.txt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if renamed != "a.txt" {
+		t.Fatalf("expected a.txt, got %q", renamed)
+	}
+	if got, err := os.ReadFile(filepath.Join(root, "a.txt")); err != nil || string(got) != "a\n" {
+		t.Fatalf("expected the file to stay untouched, got %q err=%v", string(got), err)
+	}
+}
+
+// 只改大小写：Windows/macOS 上 Lstat 到的目标就是源文件本身，不能被“目标已存在”
+// 挡掉，否则文件名大小写永远改不了。
+func TestRenamePathChangesCaseOnly(t *testing.T) {
+	root := t.TempDir()
+	app := NewApp()
+	cfg := ConfigState{Workspace: root}
+	if _, err := app.createFileWithConfig(cfg, CreateFileRequest{Path: "notes.txt", Content: "x\n"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(root, "docs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	renamed, err := app.renamePathWithConfig(cfg, RenamePathRequest{Path: "notes.txt", NewName: "NOTES.txt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if renamed != "NOTES.txt" {
+		t.Fatalf("expected NOTES.txt, got %q", renamed)
+	}
+	renamed, err = app.renamePathWithConfig(cfg, RenamePathRequest{Path: "docs", NewName: "DOCS"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if renamed != "DOCS" {
+		t.Fatalf("expected DOCS, got %q", renamed)
+	}
+	// 名字按磁盘上的实际拼写断言：大小写不敏感的文件系统用旧名字查路径也会命中，
+	// 只有 ReadDir 返回的名字才是真相（它按文件名排序）
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		names = append(names, entry.Name())
+	}
+	if got := strings.Join(names, ","); got != "DOCS,NOTES.txt" {
+		t.Fatalf("expected exactly DOCS,NOTES.txt, got %s", got)
+	}
+}
+
+func TestRenamePathRefusesExistingTarget(t *testing.T) {
+	root := t.TempDir()
+	app := NewApp()
+	cfg := ConfigState{Workspace: root}
+	for _, name := range []string{"a.txt", "b.txt"} {
+		if _, err := app.createFileWithConfig(cfg, CreateFileRequest{Path: name, Content: name}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	_, err := app.renamePathWithConfig(cfg, RenamePathRequest{Path: "a.txt", NewName: "b.txt"})
+	if err == nil {
+		t.Fatal("expected renaming onto an existing file to fail")
+	}
+	if code := toolErrorCode(err); code != "E_EXISTS" {
+		t.Fatalf("expected E_EXISTS, got %q (%v)", code, err)
+	}
+	// 失败不能是“先删后改”：两个文件都必须完好
+	for _, name := range []string{"a.txt", "b.txt"} {
+		if got, readErr := os.ReadFile(filepath.Join(root, name)); readErr != nil || string(got) != name {
+			t.Fatalf("expected %s to keep its content, got %q err=%v", name, string(got), readErr)
+		}
+	}
+}
+
+func TestRenamePathRejectsBadNamesAndTargets(t *testing.T) {
+	root := t.TempDir()
+	app := NewApp()
+	cfg := ConfigState{Workspace: root}
+	if _, err := app.createFileWithConfig(cfg, CreateFileRequest{Path: "a.txt", Content: "a\n"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.createFileWithConfig(cfg, CreateFileRequest{Path: "hooked.txt", Content: "h\n"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		name    string
+		req     RenamePathRequest
+		wantErr string
+	}{
+		{"空名称", RenamePathRequest{Path: "a.txt", NewName: "  "}, "E_BAD_PATH"},
+		{"相对段", RenamePathRequest{Path: "a.txt", NewName: ".."}, "E_BAD_PATH"},
+		{"带路径分隔符", RenamePathRequest{Path: "a.txt", NewName: "sub/a.txt"}, "E_BAD_PATH"},
+		{"源路径穿越", RenamePathRequest{Path: "../a.txt", NewName: "x.txt"}, "E_BAD_PATH"},
+		{"源为绝对路径", RenamePathRequest{Path: "/etc/passwd", NewName: "x.txt"}, "E_BAD_PATH"},
+		{"源不存在", RenamePathRequest{Path: "missing.txt", NewName: "x.txt"}, "E_PATH_NOT_FOUND"},
+		{"新名字是 VCS 元数据", RenamePathRequest{Path: "hooked.txt", NewName: ".git"}, "E_PROTECTED_PATH"},
+		{"源是 VCS 元数据", RenamePathRequest{Path: ".git", NewName: "gitdata"}, "E_PROTECTED_PATH"},
+	}
+	for _, tc := range cases {
+		_, err := app.renamePathWithConfig(cfg, tc.req)
+		if err == nil {
+			t.Fatalf("%s：预期失败", tc.name)
+		}
+		if code := toolErrorCode(err); code != tc.wantErr {
+			t.Fatalf("%s：预期 %s，实际 %q（%v）", tc.name, tc.wantErr, code, err)
+		}
+	}
+	// 被拒绝的调用不能留下任何痕迹
+	for _, name := range []string{"a.txt", "hooked.txt", ".git"} {
+		if _, err := os.Lstat(filepath.Join(root, name)); err != nil {
+			t.Fatalf("expected %s to remain after rejected renames, lstat err=%v", name, err)
+		}
+	}
+}
+
+func TestRenamePathRenamesSymlinkItself(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation requires privileges on many Windows environments")
+	}
+	root := t.TempDir()
+	outside := t.TempDir()
+	target := filepath.Join(outside, "target.txt")
+	if err := os.WriteFile(target, []byte("keep\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(root, "link.txt")); err != nil {
+		t.Fatal(err)
+	}
+	app := NewApp()
+
+	renamed, err := app.renamePathWithConfig(ConfigState{Workspace: root}, RenamePathRequest{Path: "link.txt", NewName: "alias.txt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if renamed != "alias.txt" {
+		t.Fatalf("expected alias.txt, got %q", renamed)
+	}
+	info, err := os.Lstat(filepath.Join(root, "alias.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("expected the symlink itself to be renamed, mode=%v", info.Mode())
+	}
+	if got, err := os.ReadFile(target); err != nil || string(got) != "keep\n" {
+		t.Fatalf("expected the symlink target to remain, got %q err=%v", string(got), err)
+	}
+}
+
+func TestRenamePathRejectsSymlinkParentOutsideWorkspace(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation requires privileges on many Windows environments")
+	}
+	root := t.TempDir()
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "secret.txt"), []byte("s\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "escape")); err != nil {
+		t.Fatal(err)
+	}
+	app := NewApp()
+
+	_, err := app.renamePathWithConfig(ConfigState{Workspace: root}, RenamePathRequest{Path: "escape/secret.txt", NewName: "renamed.txt"})
+	if err == nil {
+		t.Fatal("expected rename through a symlinked parent outside the workspace to fail")
+	}
+	if code := toolErrorCode(err); code != "E_PATH_OUTSIDE" {
+		t.Fatalf("expected E_PATH_OUTSIDE, got %q (%v)", code, err)
+	}
+	if _, statErr := os.Stat(filepath.Join(outside, "renamed.txt")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("expected outside target not to be created, stat err=%v", statErr)
+	}
+}
+
 func TestRunCommandInvalidatesWorkspaceMapCache(t *testing.T) {
 	root := t.TempDir()
 	writeToolTestFile(t, root, "go.mod", "module example\n")

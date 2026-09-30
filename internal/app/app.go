@@ -803,6 +803,15 @@ type CreateDirectoryRequest struct {
 	Path      string `json:"path"`
 }
 
+// RenamePathRequest renames one workspace entry in place. NewName is a bare path
+// segment (no separators): the destination is always the source's parent
+// directory plus that name, so the entry can not be moved out of its directory.
+type RenamePathRequest struct {
+	Workspace string `json:"workspace,omitempty"`
+	Path      string `json:"path"`
+	NewName   string `json:"newName"`
+}
+
 // CopyFilesIntoWorkspaceRequest is the UI drag-and-drop copy payload: absolute
 // source paths from the native file-drop event plus a workspace-relative
 // destination directory ("" = workspace root).
@@ -3142,6 +3151,26 @@ func (a *App) CreateDirectory(req CreateDirectoryRequest) error {
 		a.invalidateWorkspaceMapCache(cfg)
 	}
 	return err
+}
+
+// RenamePath renames a workspace file or directory (explorer context menu; not a
+// model tool). The returned string is the new workspace-relative, slash-separated
+// path, so the UI does not have to derive it a second time.
+func (a *App) RenamePath(req RenamePathRequest) (string, error) {
+	cfg, err := a.configForWorkspace(req.Workspace)
+	if err != nil {
+		return "", err
+	}
+	// 与 CreateFile / DeletePath 共用 fileOpsMu（对齐 executeTool 的写路径），
+	// 避免用户改名与 Agent 写同一路径时互相踩踏。
+	a.fileOpsMu.Lock()
+	defer a.fileOpsMu.Unlock()
+	renamed, err := a.renamePathWithConfig(cfg, req)
+	if err != nil {
+		return "", err
+	}
+	a.invalidateWorkspaceMapCache(cfg)
+	return renamed, nil
 }
 
 func (a *App) DeletePath(req DeletePathRequest) error {

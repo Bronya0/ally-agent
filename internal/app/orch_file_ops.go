@@ -19,6 +19,7 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -132,6 +133,92 @@ func (a *App) createDirectoryWithConfig(cfg ConfigState, req CreateDirectoryRequ
 		return err
 	}
 	return os.MkdirAll(path, 0o755)
+}
+
+// cleanRenameSegment validates a rename target name. A rename keeps the entry in
+// its parent directory, so the name must be a bare segment: no separators, no
+// "." / "..", no NUL or other control character. The Windows-only rules are
+// added there because the OS would silently rewrite such a name (trailing dots
+// and spaces are dropped, the reserved characters are rejected), leaving the
+// dialog's name and the name on disk out of sync.
+func cleanRenameSegment(raw string) (string, error) {
+	name := strings.TrimSpace(raw)
+	if name == "" {
+		return "", codedToolError("E_BAD_PATH", errors.New("rename requires a non-empty name"))
+	}
+	if name == "." || name == ".." || strings.ContainsAny(name, `/\`) || strings.ContainsRune(name, 0) {
+		return "", codedToolError("E_BAD_PATH", fmt.Errorf("rename target must be a bare file name: %q", raw))
+	}
+	for _, r := range name {
+		if r < 0x20 || r == 0x7f {
+			return "", codedToolError("E_BAD_PATH", fmt.Errorf("rename target must not contain control characters: %q", raw))
+		}
+	}
+	if pathutil.IsWindows {
+		if strings.ContainsAny(name, `<>:"|?*`) {
+			return "", codedToolError("E_BAD_PATH", fmt.Errorf("rename target contains characters Windows rejects: %q", raw))
+		}
+		if strings.TrimRight(name, ". ") != name {
+			return "", codedToolError("E_BAD_PATH", fmt.Errorf("rename target must not end with a dot or space: %q", raw))
+		}
+	}
+	return name, nil
+}
+
+// renamePathWithConfig renames a file or directory in place and returns the new
+// workspace-relative slash path. A rename never moves an entry to another
+// directory: the name is validated as a bare segment, so the destination is
+// always the source's parent plus that name. The source goes through
+// resolveDeletablePath (must exist, refuses VCS metadata) and the destination
+// through resolveWritableFilePath (the same guards create uses), so renaming can
+// not become a way around either side's guard.
+func (a *App) renamePathWithConfig(cfg ConfigState, req RenamePathRequest) (string, error) {
+	name, err := cleanRenameSegment(req.NewName)
+	if err != nil {
+		return "", err
+	}
+	// 树节点路径固定是工作区内相对路径（/ 分隔）；Windows 上把客户端可能给出的
+	// 反斜杠一并归一（Linux 上 \ 是合法文件名字符，filepath.ToSlash 不会动它）。
+	rel := path.Clean(filepath.ToSlash(strings.TrimSpace(req.Path)))
+	if rel == "" || rel == "." || rel == ".." || path.IsAbs(rel) || strings.HasPrefix(rel, "../") {
+		return "", codedToolError("E_BAD_PATH", errors.New("rename requires a workspace-relative path"))
+	}
+	roots, err := workspaceRoots(cfg)
+	if err != nil {
+		return "", err
+	}
+	source, err := resolveDeletablePath(roots, rel)
+	if err != nil {
+		return "", err
+	}
+	targetRel := path.Join(path.Dir(rel), name)
+	target, err := resolveWritableFilePath(roots, targetRel)
+	if err != nil {
+		return "", err
+	}
+	// 名称与大小写都没变：直接当成功空操作，不去让 os.Rename 处理“改成自己”
+	// 这种平台相关的边界情况。
+	if pathutil.SamePath(source, target) && filepath.Base(source) == filepath.Base(target) {
+		return targetRel, nil
+	}
+	sourceInfo, err := os.Lstat(source)
+	if err != nil {
+		return "", err
+	}
+	if targetInfo, lstatErr := os.Lstat(target); lstatErr == nil {
+		// 目标已存在即拒绝：改名不覆盖（与 create 的 overwrite=false 同语义）。
+		// 例外是同一个文件本身——Windows/macOS 上只改大小写时 Lstat 到的目标
+		// 就是源文件，必须放行，否则文件名大小写永远改不了。
+		if !os.SameFile(sourceInfo, targetInfo) {
+			return "", codedToolError("E_EXISTS", fmt.Errorf("path already exists: %s", targetRel))
+		}
+	} else if !errors.Is(lstatErr, os.ErrNotExist) {
+		return "", lstatErr
+	}
+	if err := os.Rename(source, target); err != nil {
+		return "", err
+	}
+	return targetRel, nil
 }
 
 // newlyCreatedDirs walks up from dir until it finds an existing ancestor and

@@ -100,7 +100,7 @@
 [doc-line-refs] 2026-09-28 改工具描述会整体推移 builtins.go 行号，docs 里的 :N 引用须回扫更新。@docs/agent-tools.md
 [bundle-id-macos] 2026-09-28 裸 bin/Ally 直跑无 bundleIdentifier，通知等 NSBundle 依赖静默禁用。@build/darwin
 [gate-ignores-aliases] 2026-09-29 闸门只认声明的字段：模型侧字段改名后旧写法当场 E_BAD_ARGS，要兼容须在闸门之前归一。@builtins.go
-[wails-binding-rename] 2026-09-29 改 Wails 绑定方法名后须重生成 bindings，否则前端 import 悬空。@frontend/bindings
+[wails-binding-rename] 2026-09-29 改/增 Wails 绑定后须重生成 bindings，否则前端 import 悬空。@frontend/bindings
 [tool-args-vs-result] 2026-09-29 前端工具数据两条通道形状不同：入参是源、结果是渲染数据，改名勿一把替换。@toolPreview.mjs
 [find-then-mutate] 2026-09-29 先改状态再按该状态查同名：plan 标完当前步 done 再按未完成查→多出同名行。先查后改。@biz_context.go
 [invariant-one-writer] 2026-09-29 状态不变式（只许一个当前步）收口到一个 helper，且每条写入路径都要测：漏掉的那条静默留下两个。@biz_context.go
@@ -109,3 +109,5 @@
 [bounds-one-write-path] 2026-09-29 上限别只写在建表路径：next 插入也要过同一道闸，收口到列表写入点。@biz_context.go
 [lexical-vs-resolved] 2026-09-29 远端删除须用词法路径：safe_join 给的是解析结果，按它删会删掉软链目标。@orch_remote.go
 [home-isolation] 2026-09-29 Windows 下 HOME 改不了 os.UserHomeDir()（读 USERPROFILE），只设 HOME 的隔离失效。@sshclient
+[rename-case-only] 2026-09-29 改名判重不能比路径串：Windows 改大小写时 Lstat 目标即源，须 os.SameFile。@orch_file_ops.go
+[tree-stale-expanded-keys] 2026-09-29 树改名后旧 key 留空壳：按前缀丢展开集合再 refreshNode 重建。@WorkspaceExplorer.vue

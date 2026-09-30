@@ -211,7 +211,7 @@ import MarkdownIt from 'markdown-it';
 import { isEditableNavigationTarget } from '../utils/sessionState.mjs';
 import { resolveMarkdownImagePath } from '../utils/markdownPreview.mjs';
 import { mermaidFenceSpec, normalizeMermaidSource, loadMermaid, escapeHtmlText } from '../utils/mermaidShared.mjs';
-import { ListFiles, ReadWorkspaceFileAt, GetWorkspaceMediaURL, SaveWorkspaceFile, DeletePath, OpenWorkspacePathInFileManagerAt, CreateFile, CreateDirectory, GetWorkspaceFileInfoAt, CopyFilesIntoWorkspace, ReadClipboardFiles } from '../../bindings/ally-dev/internal/app/app';
+import { ListFiles, ReadWorkspaceFileAt, GetWorkspaceMediaURL, SaveWorkspaceFile, DeletePath, RenamePath, OpenWorkspacePathInFileManagerAt, CreateFile, CreateDirectory, GetWorkspaceFileInfoAt, CopyFilesIntoWorkspace, ReadClipboardFiles } from '../../bindings/ally-dev/internal/app/app';
 import FileInfoModal from './FileInfoModal.vue';
 import { buildFileInfoSections } from '../utils/fileInfo.mjs';
 import { copyText } from '../utils/clipboard.mjs';
@@ -1327,6 +1327,12 @@ function onTreeAreaClick(e) {
   clearTreeSelection();
 }
 
+// 右键菜单里的删除项用危险色文案。下拉浮层 teleport 到 body，颜色只能由
+// 全局 style.css 给（类名与主题色的对应关系收口在那里的一处规则）。
+function deleteMenuItem() {
+  return { label: () => h('span', { class: 'workspace-explorer-menu-danger' }, t('common.delete')), key: 'delete' };
+}
+
 const contextMenuOptions = computed(() => {
   if (!contextMenuNode.value) {
     return [
@@ -1344,7 +1350,8 @@ const contextMenuOptions = computed(() => {
       { label: t('app.workspaceExplorer.copyRelativePath'), key: 'copyRelativePath' },
       { label: t('app.workspaceExplorer.copyFullPath'), key: 'copyFullPath' },
       { label: t('app.workspaceExplorer.fileInfo'), key: 'fileInfo' },
-      { label: t('common.delete'), key: 'delete' },
+      { label: t('app.workspaceExplorer.rename'), key: 'rename' },
+      deleteMenuItem(),
       { label: t('common.refresh'), key: 'refreshNode' },
     ];
   }
@@ -1353,7 +1360,8 @@ const contextMenuOptions = computed(() => {
     { label: t('app.workspaceExplorer.copyRelativePath'), key: 'copyRelativePath' },
     { label: t('app.workspaceExplorer.copyFullPath'), key: 'copyFullPath' },
     { label: t('app.workspaceExplorer.fileInfo'), key: 'fileInfo' },
-    { label: t('common.delete'), key: 'delete' },
+    { label: t('app.workspaceExplorer.rename'), key: 'rename' },
+    deleteMenuItem(),
   ];
 });
 
@@ -1368,6 +1376,7 @@ function onContextMenuSelect(key) {
   if (key === 'copyRelativePath') copyNodePath(contextMenuNode.value, false);
   if (key === 'copyFullPath') copyNodePath(contextMenuNode.value, true);
   if (key === 'fileInfo') openFileInfo(contextMenuNode.value);
+  if (key === 'rename') openRenameDialog(contextMenuNode.value);
   if (key === 'refreshTree') void refreshTree();
   if (key === 'refreshNode') void refreshNode(contextMenuNode.value?.path);
 }
@@ -1460,8 +1469,8 @@ function copyTextToClipboard(text, onDone) {
 // action(name) 成功返回 true 时关闭弹窗，失败/异常保持打开方便改名重试。
 // 统一由 submit 手动 destroy 关闭（onPositiveClick 恒返回 false），
 // 保证按钮点击与 Enter 走同一条提交路径，避免双重关闭。
-function promptNameDialog({ title, placeholder, action }) {
-  const name = ref('');
+function promptNameDialog({ title, placeholder, action, initialValue = '', positiveText = t('common.create') }) {
+  const name = ref(initialValue);
   let submitting = false;
   const instance = dialog.create({
     title,
@@ -1477,7 +1486,7 @@ function promptNameDialog({ title, placeholder, action }) {
         void submit();
       },
     }),
-    positiveText: t('common.create'),
+    positiveText,
     negativeText: t('common.cancel'),
     onPositiveClick: () => submit(),
   });
@@ -1504,15 +1513,20 @@ function openNewFileDialog(targetDir = null) {
   });
 }
 
-async function createFile(rawName, dirPath = '') {
+// 树内「新建 / 重命名」共用的名称清洗：只接受单层名称（含扩展名），剥离任何
+// 路径分隔与相对段，防止越界写入。无效时返回空串，由调用方给出各自的提示
+// 文案；后端对新建与改名各有一道边界校验，这里只提前拦掉明显的输入错误。
+function entryNameSegment(rawName) {
   const name = String(rawName || '').trim();
-  if (!name) {
-    message.error(t('app.workspaceExplorer.newFileInvalid'));
-    return false;
-  }
-  // 仅允许单层文件名（含扩展名）；剥离任何路径分隔与相对段，防止越界写入
+  if (!name) return '';
   const base = name.split(/[\\/]/).pop();
-  if (!base || base === '.' || base === '..' || base.includes('..')) {
+  if (!base || base === '.' || base === '..' || base.includes('..')) return '';
+  return base;
+}
+
+async function createFile(rawName, dirPath = '') {
+  const base = entryNameSegment(rawName);
+  if (!base) {
     message.error(t('app.workspaceExplorer.newFileInvalid'));
     return false;
   }
@@ -1541,14 +1555,8 @@ function openNewFolderDialog(targetDir = null) {
 }
 
 async function createFolder(rawName, dirPath = '') {
-  const name = String(rawName || '').trim();
-  if (!name) {
-    message.error(t('app.workspaceExplorer.newFolderInvalid'));
-    return false;
-  }
-  // 与新建文件一致：仅允许单层名称，剥离路径分隔与相对段，防止越界写入
-  const base = name.split(/[\\/]/).pop();
-  if (!base || base === '.' || base === '..' || base.includes('..')) {
+  const base = entryNameSegment(rawName);
+  if (!base) {
     message.error(t('app.workspaceExplorer.newFolderInvalid'));
     return false;
   }
@@ -1563,6 +1571,74 @@ async function createFolder(rawName, dirPath = '') {
     message.error(t('app.workspaceExplorer.folderCreateFailed', { error: errorText(err) }));
     return false;
   }
+}
+
+// 右键「重命名」：文件与目录共用，弹窗预填当前名称。新名称只允许单层；
+// 目录改名由后端一步完成，整棵子树跟着走（不逐个搬文件）。
+function openRenameDialog(node) {
+  if (!node?.path) return;
+  promptNameDialog({
+    title: t('app.workspaceExplorer.rename'),
+    placeholder: t('app.workspaceExplorer.renamePlaceholder'),
+    initialValue: String(node.label || ''),
+    positiveText: t('common.confirm'),
+    action: (name) => renameNode(node, name),
+  });
+}
+
+async function renameNode(node, rawName) {
+  const filePath = String(node.path);
+  const base = entryNameSegment(rawName);
+  if (!base) {
+    message.error(t('app.workspaceExplorer.renameInvalid'));
+    return false;
+  }
+  const parent = filePath.includes('/') ? filePath.slice(0, filePath.lastIndexOf('/')) : '';
+  const currentName = parent ? filePath.slice(parent.length + 1) : filePath;
+  // 名称一字不差时直接当成功关窗；只改大小写仍要走后端，
+  // 在 Windows/macOS 上那是真实改动
+  if (base === currentName) return true;
+  const workspace = String(props.workspace || '');
+  let targetPath = '';
+  try {
+    // 新路径以后端返回值为准，前端不再自己推一遍（只有后端知道实际落盘的名称）
+    targetPath = String((await RenamePath({ workspace, path: filePath, newName: base })) || '')
+      || (parent ? `${parent}/${base}` : base);
+  } catch (err) {
+    message.error(t('app.workspaceExplorer.renameFailed', { error: errorText(err) }));
+    return false;
+  }
+  remapRenamedPath(filePath, targetPath);
+  message.success(t('app.workspaceExplorer.renamed', { name: base }));
+  // 刷新失败只影响树视图（改名已经落盘），不能反过来报成改名失败
+  try {
+    // 条目 key 变了，必须重新拉取父目录才能拿到新节点
+    await refreshNode(parent, workspace);
+    // 目录改名后它自身是个空壳（key 变了、子节点要重新加载），顺手展开一层，
+    // 否则树里会留下一个「展开了却什么都没有」的目录
+    if (node.dir) await refreshNode(targetPath, workspace);
+  } catch (err) {
+    message.error(t('app.workspaceExplorer.treeFailed', { error: errorText(err) }));
+  }
+  return true;
+}
+
+// 改名后把树与编辑器里指向旧路径的状态搬到新路径：打开中的文件、选中集合、
+// 范围选择锚点都跟着走（目录改名时其后代路径按前缀一并搬）。展开集合是例外：
+// 改名后是重新拉取的新节点，旧 key 留着只会渲染出「展开了但子节点没加载」的
+// 空壳，因此按前缀丢弃，由 refreshNode 重新建立。
+function remapRenamedPath(oldPath, newPath) {
+  const remap = (p) => {
+    if (p === oldPath) return newPath;
+    return p.startsWith(`${oldPath}/`) ? newPath + p.slice(oldPath.length) : p;
+  };
+  if (activeFile.value?.path) {
+    const next = remap(activeFile.value.path);
+    if (next !== activeFile.value.path) activeFile.value = { ...activeFile.value, path: next };
+  }
+  selectedKeys.value = selectedKeys.value.map(remap);
+  if (anchorPath) anchorPath = remap(anchorPath);
+  expandedKeys.value = expandedKeys.value.filter((k) => !(k === oldPath || k.startsWith(`${oldPath}/`)));
 }
 
 async function openWorkspaceFolder(node = null) {
