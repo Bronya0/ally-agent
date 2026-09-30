@@ -36,8 +36,8 @@ test('plan verb follows the action the call took', () => {
   assert.equal(toolVerbLabel('plan', 'plan', 'running', 'set'), 'Planning');
   assert.equal(toolVerbLabel('plan', 'plan', 'success', 'set'), 'Planned');
   assert.equal(toolVerbLabel('plan', 'plan', 'success', 'clear'), 'Cleared plan');
-  assert.equal(toolVerbLabel('plan', 'plan', 'running', 'next'), 'Next step');
-  assert.equal(toolVerbLabel('plan', 'plan', 'success', 'finish'), 'Finished plan');
+  assert.equal(toolVerbLabel('plan', 'plan', 'running', 'finish'), 'Finishing step');
+  assert.equal(toolVerbLabel('plan', 'plan', 'success', 'finish'), 'Finished step');
   assert.equal(toolVerbLabel('plan', 'plan', 'success', 'read'), 'Read plan');
 });
 
@@ -46,13 +46,15 @@ test('plan verb follows the action the call took', () => {
 test('plan action is read from the call arguments', () => {
   assert.equal(toolActionFromArgs('plan', { steps: ['Read code', 'Run tests'] }), 'set');
   assert.equal(toolActionFromArgs('plan', { steps: [] }), 'clear');
-  assert.equal(toolActionFromArgs('plan', { next: 'Run tests' }), 'next');
-  assert.equal(toolActionFromArgs('plan', { finish: true }), 'finish');
+  assert.equal(toolActionFromArgs('plan', { finish: 'Run tests' }), 'finish');
+  // The boolean shape is no longer part of the tool, so it states no action here;
+  // the declaration gate is what refuses it, by name.
+  assert.equal(toolActionFromArgs('plan', { finish: true }), '');
   // No source states no action. {} is also what arguments that have not arrived
   // yet parse to, so the card must not claim the read-back call here — it falls
   // back to the plain tool name and the result fills the action in.
   assert.equal(toolActionFromArgs('plan', {}), '');
-  assert.equal(toolActionFromArgs('plan', { next: '   ' }), '');
+  assert.equal(toolActionFromArgs('plan', { finish: '   ' }), '');
   assert.equal(toolActionFromArgs('plan', { finish: false }), '');
   assert.equal(toolActionFromArgs('plan', null), '');
   assert.equal(toolVerbLabel('plan', 'plan', 'success', ''), 'Plan');
@@ -65,7 +67,7 @@ test('only action-keyed tools give up their action', () => {
   assert.equal(toolActionFromArgs('scheduled_task', { action: 'list' }), 'list');
   assert.equal(toolActionFromArgs('service', {}), '');
   assert.equal(toolActionFromArgs('edit', { action: 'delete' }), '');
-  // plan reads its own three sources, never a foreign action key.
+  // plan reads its own two sources, never a foreign action key.
   assert.equal(toolActionFromArgs('plan', { action: 'stop' }), '');
   assert.ok(isActionKeyedTool('plan'));
   assert.ok(isActionKeyedTool('service'));
@@ -75,7 +77,7 @@ test('only action-keyed tools give up their action', () => {
 test('error status names the action instead of a bare failure', () => {
   assert.equal(toolVerbLabel('service', 'other', 'error', 'stop'), 'Service stop failed');
   assert.equal(toolVerbLabel('edit', 'edit', 'error'), 'Edit failed');
-  assert.equal(toolVerbLabel('plan', 'plan', 'error', 'finish'), 'Plan finish failed');
+  assert.equal(toolVerbLabel('plan', 'plan', 'error', 'finish'), 'Step finish failed');
 });
 
 test('action-keyed tools still count as named verbs', () => {

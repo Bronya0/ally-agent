@@ -140,6 +140,10 @@ func (a *App) invalidateSessionReadCacheLocked(sessionID string) {
 	if cache, ok := a.readCaches[sessionID]; ok && cache != nil {
 		cache.invalidate()
 	}
+	// 请求前缀基线同生同灭：历史被改写（压缩 / 删回合 / 从磁盘重载 / 落盘修复）
+	// 之后，"上一轮发出去的样子"已不是同一段前缀，留着只会把合法改写报成漂移
+	// （见 biz_context_lock.go）。
+	delete(a.contextLocks, sessionID)
 }
 
 func fileRangeCacheKey(resolvedPath string, req ReadFileRequest) string {

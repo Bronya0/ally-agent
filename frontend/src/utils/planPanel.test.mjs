@@ -93,22 +93,16 @@ test('plan entries carry stable plan numbers in source order', () => {
   assert.equal(entries[1].number, 2);
 });
 
-// The header reports finished steps, not the current step's number: a next call
-// can name a step further down, and closing a plan leaves the steps it never
-// reached pending, so the position sits past rows that were never done.
+// The header reports finished steps, not the current step's number: a plan that
+// ran to its last step has no current step left. A list carrying a pending row
+// above a finished one (a shape the tool does not write) still counts only the
+// finished rows.
 test('planDoneCount counts finished steps, not the current position', () => {
-  // The plan jumped to its third step: one done, one skipped, one current.
   assert.equal(planDoneCount([
     { title: 'First', status: 'done' },
     { title: 'Second', status: 'pending' },
-    { title: 'Third', status: 'in_progress' },
-  ]), 1);
-
-  // A closed plan: its current step is done and the unreached rows stay pending.
-  assert.equal(planDoneCount([
-    { title: 'First', status: 'done' },
-    { title: 'Second', status: 'pending' },
-  ]), 1);
+    { title: 'Third', status: 'done' },
+  ]), 2);
 
   assert.equal(planDoneCount([]), 0);
   assert.equal(planDoneCount(null), 0);

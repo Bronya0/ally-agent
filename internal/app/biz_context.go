@@ -43,6 +43,67 @@ func (a *App) emitPlanUpdate(sid string, plan []PlanStep, revision int64) {
 	})
 }
 
+// planRevisionFor returns the session's plan revision: 0 before its first write.
+// The run loop compares it around a tool batch to tell whether that batch moved
+// the plan, which is the only thing that makes reported progress current.
+func (a *App) planRevisionFor(sessionID string) int64 {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.planRevisions[sessionID]
+}
+
+// planCheckMarker returns the end-of-run plan check for a session whose plan is
+// behind the work the run did, and false when there is nothing to ask about: an
+// empty plan, or one whose every step is done, has nothing to reconcile.
+// The model is the only party that knows which steps it passed, so the host asks
+// instead of inferring. The message names every way out — including "the plan is
+// right as it stands" — so a plan that genuinely still sits on that step costs
+// one short round and no change to the plan.
+func (a *App) planCheckMarker(sessionID string) (openai.ChatCompletionMessage, bool) {
+	a.mu.Lock()
+	list := clonePlan(a.plans[sessionID])
+	a.mu.Unlock()
+	if planAllDone(list) {
+		return openai.ChatCompletionMessage{}, false
+	}
+	done := 0
+	for _, td := range list {
+		if td.Status == "done" {
+			done++
+		}
+	}
+	var progress string
+	if current := firstPlanStepWithStatus(list, "in_progress"); current >= 0 {
+		progress = fmt.Sprintf("it is on step %d of %d (%q), with %d of %d steps done", current+1, len(list), list[current].Title, done, len(list))
+	} else {
+		progress = fmt.Sprintf("it is closed, with %d of %d steps done", done, len(list))
+	}
+	return openai.ChatCompletionMessage{
+		Role: openai.ChatMessageRoleUser,
+		Content: "<ally-plan-check>\n" +
+			"This run did work — file changes or commands — while the plan has not moved since, so the panel may be behind it: " + progress + ".\n" +
+			"If the work reached further, report it with one call: {\"finish\":\"<the title of the last step it reached>\"} marks that step and every step before it done, and naming the last step ends the plan. Send {\"steps\":[...]} instead if the plan itself needs to change.\n" +
+			"If the plan already matches the work, end the run as it is: the plan stays where it is.\n" +
+			"Keep the reply to one short line, and do not restate your answer.\n" +
+			"</ally-plan-check>",
+	}, true
+}
+
+// planAllDone reports whether the plan has no unfinished step. An empty plan
+// counts as done here: the end-of-run check asks whether the plan is behind the
+// work, and a plan with no steps has nothing to reconcile either way.
+func planAllDone(list []PlanStep) bool {
+	if len(list) == 0 {
+		return true
+	}
+	for _, td := range list {
+		if td.Status != "done" {
+			return false
+		}
+	}
+	return true
+}
+
 // ContextBreakdown breaks down estimated token usage by category.
 type ContextBreakdownPart struct {
 	Label  string `json:"label"`
@@ -782,11 +843,12 @@ func (a *App) finalizeSessionBreakdown(sessionID string, breakdown *ContextBreak
 }
 
 // Plan action names. They travel to the model in the result block, so a later
-// step of the conversation can still tell what an earlier plan call did.
+// step of the conversation can still tell what an earlier plan call did. finish
+// is the one report parameter: it names the step the work reached, and naming
+// the last step is what ends a plan.
 const (
 	planActionRead   = "read"
 	planActionSet    = "set"
-	planActionNext   = "next"
 	planActionFinish = "finish"
 )
 
@@ -796,7 +858,7 @@ func (a *App) handlePlan(sessionID string, req PlanRequest) (any, error) {
 	if sid == "" {
 		return nil, errors.New("no active session")
 	}
-	action, nextTitle, err := classifyPlanRequest(req)
+	action, finishTitle, err := classifyPlanRequest(req)
 	if err != nil {
 		return nil, err
 	}
@@ -812,10 +874,13 @@ func (a *App) handlePlan(sessionID string, req PlanRequest) (any, error) {
 	switch action {
 	case planActionSet:
 		list = setList
-	case planActionNext:
-		list = advancePlan(list, nextTitle)
 	case planActionFinish:
-		list = finishPlan(list)
+		reported, reportErr := reportPlanProgress(list, finishTitle)
+		if reportErr != nil {
+			a.mu.Unlock()
+			return nil, reportErr
+		}
+		list = reported
 	}
 	if action == planActionRead {
 		revision := a.planRevisions[sid]
@@ -827,9 +892,9 @@ func (a *App) handlePlan(sessionID string, req PlanRequest) (any, error) {
 		}, nil
 	}
 	// The bounds are checked on the list about to be stored, not on the request
-	// that built it: a step named by next grows the plan exactly as a step from a
-	// whole-plan set does, so policing the set request alone left that path
-	// uncapped. A refused write never reaches the stored plan.
+	// that built it: the caps belong to the plan, so a call that changes the list
+	// must not have to remember to police itself. A refused write never reaches
+	// the stored plan.
 	if err := validatePlanList(list); err != nil {
 		a.mu.Unlock()
 		return nil, err
@@ -837,7 +902,7 @@ func (a *App) handlePlan(sessionID string, req PlanRequest) (any, error) {
 	// A write that leaves the plan exactly as it was is not a change: the
 	// revision counts changes, and the panel already shows this plan. The result
 	// block is what tells the model nothing moved — naming the step the plan is
-	// on, and closing a plan that has no current step, both land here.
+	// already on lands here.
 	changed := !planStepsEqual(list, stored)
 	if changed {
 		a.plans[sid] = list
@@ -868,34 +933,28 @@ func planTitleKey(title string) string {
 }
 
 // classifyPlanRequest decides what a plan call is asking for. A zero value
-// counts as absent — an empty next or a false finish is not a source — matching
-// how the rest of the tool surface treats "0 or empty means not sent", which is
-// also why this counts effective values rather than JSON keys.
-func classifyPlanRequest(req PlanRequest) (action, nextTitle string, err error) {
-	if req.Next != nil {
-		nextTitle = strings.TrimSpace(*req.Next)
+// counts as absent — a blank finish title is not a source — matching how the rest
+// of the tool surface treats "0 or empty means not sent", which is also why this
+// counts effective values rather than JSON keys.
+func classifyPlanRequest(req PlanRequest) (action, finishTitle string, err error) {
+	if req.Finish != nil {
+		finishTitle = strings.TrimSpace(req.Finish.Title)
 	}
-	finish := req.Finish != nil && *req.Finish
-	sources := make([]string, 0, 3)
+	sources := make([]string, 0, 2)
 	if req.Steps != nil {
 		sources = append(sources, "steps")
 	}
-	if nextTitle != "" {
-		sources = append(sources, "next")
-	}
-	if finish {
+	if finishTitle != "" {
 		sources = append(sources, "finish")
 	}
 	if len(sources) > 1 {
-		return "", "", fmt.Errorf("plan takes one write per call, got %s: lay the plan out with steps, move on with next, or close it out with finish", strings.Join(sources, " + "))
+		return "", "", fmt.Errorf("plan takes one write per call, got %s: lay the plan out with steps, or report where the work got to with finish", strings.Join(sources, " + "))
 	}
 	switch {
 	case req.Steps != nil:
 		return planActionSet, "", nil
-	case nextTitle != "":
-		return planActionNext, nextTitle, nil
-	case finish:
-		return planActionFinish, "", nil
+	case finishTitle != "":
+		return planActionFinish, finishTitle, nil
 	default:
 		return planActionRead, "", nil
 	}
@@ -906,7 +965,7 @@ func classifyPlanRequest(req PlanRequest) (action, nextTitle string, err error) 
 // from the caller, which is what makes the two-current-steps state the tool used
 // to reject structurally impossible rather than an error to recover from. It
 // trims the titles and leaves whether the list is acceptable to validatePlanList,
-// so a whole-plan set and a step inserted by next answer to one rule, not two.
+// so the caps are enforced against the plan rather than against one caller.
 func planStepsFromRequest(req PlanRequest) []PlanStep {
 	steps := *req.Steps
 	list := make([]PlanStep, 0, len(steps))
@@ -921,8 +980,8 @@ func planStepsFromRequest(req PlanRequest) []PlanStep {
 // MaxPlanStepTitleChars, and no two titles naming the same step (compared through
 // planTitleKey, so a difference in case or surrounding spaces is the same title).
 // Checking the list about to be stored rather than the request that produced it is
-// what keeps a step inserted by next inside the same bounds as a step from a
-// whole-plan set: the caps belong to the plan, not to one of the ways it grows.
+// what keeps the caps on the plan itself: they belong to the stored list, not to
+// one of the calls that writes it.
 func validatePlanList(list []PlanStep) error {
 	if len(list) > toolshared.MaxPlanSteps {
 		return fmt.Errorf("a plan holds at most %d steps and this write would carry %d: keep the plan to the work at hand, and lay out a new plan when that work is done", toolshared.MaxPlanSteps, len(list))
@@ -947,9 +1006,10 @@ func validatePlanList(list []PlanStep) error {
 // applyPlanPosition rewrites statuses from the position: everything before the
 // cursor is done, the cursor itself is the current step, everything after it is
 // pending. This is what makes a second in_progress impossible instead of an
-// error the model has to spend a round recovering from. Only a set writes
-// statuses this way: a next moves the current step to any step on the list, so
-// a plan can carry pending steps before the one it is on.
+// error the model has to spend a round recovering from, and it is the only way a
+// status is written: every call leaves a cursor and the statuses follow. A plan
+// therefore never carries a pending step before the one it is on — the three
+// states are the done prefix, the current step, and the steps still ahead.
 func applyPlanPosition(list []PlanStep, cursor int) []PlanStep {
 	if cursor < 0 {
 		cursor = 0
@@ -970,67 +1030,39 @@ func applyPlanPosition(list []PlanStep, cursor int) []PlanStep {
 	return list
 }
 
-// advancePlan puts the named step in front of the model. The name is resolved
-// before the position moves: naming the step the plan is already on means "still
-// on this one", and closing it first would make the lookup miss its own row and
-// duplicate the step. A title the plan carries under any status becomes the
-// current step (a step finished earlier is picked up again instead of copied),
-// and anything else is inserted right after the current step, so a step named
-// mid-flight lands where the model actually is rather than at the end, behind
-// steps it has not reached. Both paths hand the move to setCurrentStep, so an
-// inserted step takes over from the current one instead of leaving two behind.
-func advancePlan(list []PlanStep, title string) []PlanStep {
-	current := firstPlanStepWithStatus(list, "in_progress")
-	target := firstPlanStepWithTitle(list, title)
-	if target >= 0 {
-		if target == current {
-			return list
-		}
-		setCurrentStep(list, target)
-		return list
+// reportPlanProgress marks the named step and every step before it done and puts
+// the step after it in front of the model. Naming the last step therefore leaves
+// nothing current: a plan is finished exactly when the work reached its end, so
+// there is no separate "close it out" call to remember at the end of a plan, and
+// no way to jump forward leaving rows behind — the state the panel used to show
+// as "passed over but never reported".
+// A title the plan does not carry is refused rather than inserted: an inserted
+// step would be reported as done without ever having been part of this plan.
+func reportPlanProgress(list []PlanStep, title string) ([]PlanStep, error) {
+	idx := firstPlanStepWithTitle(list, title)
+	if idx < 0 {
+		return list, fmt.Errorf("the plan has no step named %q; it carries %s — report the title of the step the work reached, or lay the plan out again with steps", title, planTitleList(list))
 	}
-	at := len(list)
-	if current >= 0 {
-		at = current + 1
+	if list[idx].Status == "done" {
+		// Behind the frontier already: a report cannot rewind the position, so
+		// nothing moves. The result block still names the step the plan is on,
+		// which is what the model needs to see.
+		return list, nil
 	}
-	list = append(list, PlanStep{})
-	copy(list[at+1:], list[at:])
-	list[at] = PlanStep{Title: title}
-	setCurrentStep(list, at)
-	return list
+	return applyPlanPosition(list, idx+1), nil
 }
 
-// setCurrentStep moves the plan's current step to idx: the step that held the
-// position is closed and idx becomes current. Every move of the position goes
-// through here or through clearCurrentStep, so the invariant the whole tool
-// rests on (exactly one step is current at a time) is held in one place instead
-// of at each call site, where one forgotten close shows up as two current steps:
-// the echoed plan then names the orphan as the step to finish next, and closing
-// the plan takes as many finish calls as it left orphans behind.
-func setCurrentStep(list []PlanStep, idx int) {
-	if idx < 0 || idx >= len(list) {
-		return
+// planTitleList renders the plan's titles in order, so a refused report names the
+// titles to choose from instead of costing the model another read call.
+func planTitleList(list []PlanStep) string {
+	if len(list) == 0 {
+		return "no steps yet"
 	}
-	if prev := firstPlanStepWithStatus(list, "in_progress"); prev >= 0 && prev != idx {
-		list[prev].Status = "done"
+	titles := make([]string, 0, len(list))
+	for _, td := range list {
+		titles = append(titles, fmt.Sprintf("%q", td.Title))
 	}
-	list[idx].Status = "in_progress"
-}
-
-// clearCurrentStep closes the current step and leaves nothing in its place: no
-// step is current, which is what a closed plan means.
-func clearCurrentStep(list []PlanStep) {
-	if current := firstPlanStepWithStatus(list, "in_progress"); current >= 0 {
-		list[current].Status = "done"
-	}
-}
-
-// finishPlan closes the plan out: the current step is done and nothing takes
-// its place. Steps the model never reached stay pending, so the panel keeps
-// showing what was left instead of pretending the whole plan was carried out.
-func finishPlan(list []PlanStep) []PlanStep {
-	clearCurrentStep(list)
-	return list
+	return strings.Join(titles, ", ")
 }
 
 // firstPlanStepWithStatus returns the index of the first step in that status, or
@@ -1048,10 +1080,10 @@ func firstPlanStepWithStatus(list []PlanStep, status string) int {
 }
 
 // firstPlanStepWithTitle finds a step by title, whatever its status: the title
-// is the step's identity, and a call naming one means "this is what I am on",
-// so a step finished earlier is picked up again instead of duplicated. Identity
-// goes through planTitleKey, so a slip in case or surrounding spaces lands on
-// the step it names rather than creating a twin beside it.
+// is the step's identity, and a report naming one means "the work reached this
+// step", so it resolves to the row the plan already carries instead of a twin
+// beside it. Identity goes through planTitleKey, so a slip in case or surrounding
+// spaces lands on the step it names.
 func firstPlanStepWithTitle(list []PlanStep, title string) int {
 	key := planTitleKey(title)
 	for i, td := range list {

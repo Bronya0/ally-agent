@@ -106,8 +106,13 @@
 [invariant-one-writer] 2026-09-29 状态不变式（只许一个当前步）收口到一个 helper，且每条写入路径都要测：漏掉的那条静默留下两个。@biz_context.go
 [identity-key-one-place] 2026-09-29 判“同一个”的键要一处定义并供查重与查找共用；裸==会让打错大小写变成新增一行。@biz_context.go
 [two-tool-card-paths] 2026-09-29 工具卡有第二条渲染路径 SubagentInlineCard：改动词/动作规则须同时看它，否则子代理内静默不一致。@SubagentInlineCard.vue
-[bounds-one-write-path] 2026-09-29 上限别只写在建表路径：next 插入也要过同一道闸，收口到列表写入点。@biz_context.go
+[bounds-one-write-path] 2026-09-30 上限收口在列表写入点，别只写在某一条构建路径上，且每条写入路径都要测。@biz_context.go
+[plan-position] 2026-09-30 计划恒为「完成前缀+当位+待办」，写入口仅 set/finish（报最后一步即收尾），勿加能跳过不闭合的入口。@biz_context.go
+[json-escape-tag] 2026-09-30 断言请求体里的 ally 标签别用尖括号字面量：json 编码会把 < > 转成 \u003c。@*_test.go
 [lexical-vs-resolved] 2026-09-29 远端删除须用词法路径：safe_join 给的是解析结果，按它删会删掉软链目标。@orch_remote.go
 [home-isolation] 2026-09-29 Windows 下 HOME 改不了 os.UserHomeDir()（读 USERPROFILE），只设 HOME 的隔离失效。@sshclient
 [rename-case-only] 2026-09-29 改名判重不能比路径串：Windows 改大小写时 Lstat 目标即源，须 os.SameFile。@orch_file_ops.go
 [tree-stale-expanded-keys] 2026-09-29 树改名后旧 key 留空壳：按前缀丢展开集合再 refreshNode 重建。@WorkspaceExplorer.vue
+[card-title-one-writer] 2026-09-30 卡片标题由入参声明，结果适配器只能补空缺，别覆盖（结果里的当前步≠本动作所说那步）。@useToolEvents.mjs
+[prefix-measure-not-list] 2026-09-30 前缀指纹只量上下文本身（系统段+工具+每条消息）；拿配置值当代理必出假警。@biz_context_lock.go
+[host-msg-once-per-run] 2026-09-30 宿主催报消息（plan-check）只挂那一次请求：进历史就成每轮一条的死 token。@app.go

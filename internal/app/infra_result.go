@@ -543,9 +543,8 @@ const (
 
 // planStateOf derives a plan's state from its steps rather than storing it: a
 // current step means running, and a plan that carries steps but no current one
-// was closed by finish. A set always leaves its first step current and nothing
-// else clears the position, so these three values cover every plan the tool can
-// hold.
+// was closed. One write leaves no step current — reporting that the work reached
+// the last step — so these three values cover every plan the tool can hold.
 func planStateOf(plan []PlanStep) string {
 	if len(plan) == 0 {
 		return planStateEmpty
@@ -581,23 +580,18 @@ func renderPlanResultForModel(action string, plan []PlanStep, revision int64) st
 		fmt.Fprintf(&b, "  (%d later steps omitted)\n", len(plan)-end)
 	}
 	if current >= 0 {
-		if next, ok := planDeclaredNextStep(plan, current); ok {
-			fmt.Fprintf(&b, "When %s is finished: send {\"next\":%s}, or {\"finish\":true} to close the plan here.\n", strconv.Quote(plan[current].Title), strconv.Quote(next))
-		} else {
-			fmt.Fprintf(&b, "When %s is finished: send {\"next\":\"...\"} naming the step that follows it, or {\"finish\":true} if nothing is left.\n", strconv.Quote(plan[current].Title))
-		}
+		// The call that moves the plan on is the one the model is most likely to
+		// need next, and the title is the same either way: reporting the current
+		// step marks it, reporting a later one marks everything through it.
+		fmt.Fprintf(&b, "When %s is done: send {\"finish\":%s} to mark it — and every step before it — done.\n",
+			strconv.Quote(plan[current].Title), strconv.Quote(plan[current].Title))
 	} else {
-		// The plan is closed: finish marked the step it was on as done and put
-		// nothing in its place, so no row is current. Say that in words as well as
-		// in the state attribute — the missing hint line is the same absence a
-		// window that left the current step out of view shows — and name what is
-		// left, so a plan closed mid-flight is never read as one carried out.
-		if done == len(plan) {
-			b.WriteString("This plan is closed: every step is done.\n")
-		} else {
-			resume, _ := planDeclaredNextStep(plan, -1) // -1 asks for the first step still open
-			fmt.Fprintf(&b, "This plan is closed: the step it was on is marked done and %d of %d steps stay pending. Send {\"next\":%s} to pick the work back up, or {\"steps\":[...]} to lay out a new plan.\n", len(plan)-done, len(plan), strconv.Quote(resume))
-		}
+		// The plan is closed: nothing is current, so there is no step left to
+		// report. Say that in words as well as in the state attribute — the
+		// absence of the hint line is the same absence a window that left the
+		// current step out of view shows. A plan ends only by the work reaching
+		// its last step, so a closed plan carries no pending row.
+		b.WriteString("This plan is closed: every step is done.\n")
 	}
 	return strings.TrimRight(escapeClosingMarker(b.String(), "</ally-plan"), "\n") + "\n</ally-plan>"
 }
@@ -619,18 +613,6 @@ func planModelWindow(total, current int) (start, end int) {
 		end = total
 	}
 	return start, end
-}
-
-// planDeclaredNextStep returns the step the plan already names after the current
-// one, so the closing line can offer a call the model only has to copy. A
-// rolling plan declares nothing, and then there is no target to offer.
-func planDeclaredNextStep(plan []PlanStep, current int) (string, bool) {
-	for i := current + 1; i < len(plan); i++ {
-		if plan[i].Status != "done" {
-			return plan[i].Title, true
-		}
-	}
-	return "", false
 }
 
 // renderSubagentResultForModel renders a sub-agent result as an

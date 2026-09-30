@@ -651,6 +651,12 @@ import { findSessionWorkspaceTab, isEditableNavigationTarget, shouldAcceptRunTer
 import { orderPlanPanelEntries, planDoneCount, planFocusScrollDelta, normalizePlanEntries } from './utils/planPanel.mjs';
 import { formatDateTime, naiveDateLocale, naiveLocale, reasoningEffortLabel, t, welcomeGreeting as localizedWelcomeGreeting } from './i18n.mjs';
 import { compactBytes, formatAttachmentSize } from './utils/attachmentSize.mjs';
+import {
+  contextDriftInsertAt,
+  contextDriftNoticeKey,
+  insertContextDriftNotices,
+  shouldRecordContextDriftNotice,
+} from './utils/contextDriftNotice.mjs';
 import { fmtCompact, fmtDuration, formatBytes } from './utils/format.mjs';
 import { isSkillActive, normalizeSkillName } from './utils/skills.mjs';
 import {
@@ -2690,10 +2696,9 @@ function showPlanPanelFor(tab) {
   return entries.length > 0 && entries.some((item) => item?.status !== 'done');
 }
 
-// The header shows progress as "done/total", not the current step's number:
-// naming a later step skips the ones in between, and closing a plan leaves the
-// steps it never reached pending, so the position can sit past steps that were
-// never done.
+// The header shows progress as "done/total", not the current step's number: a
+// plan that ran to its last step has no current step left, and the finished count
+// is the number the panel can state either way.
 function planDoneCountFor(tab) {
   return planDoneCount(planEntriesForTab(tab));
 }
@@ -2750,6 +2755,50 @@ function togglePlanPanel(tab) {
 const MAX_RENDER_MESSAGES = 180;
 const MAX_EXPANDED_RENDER_MESSAGES = 360;
 
+// 前缀漂移提示（后端 context:drift）：只活在显示层，按会话存。刻意不进
+// session.messages——那份数组会落盘、也会作为模型上下文发回供应商，提示一旦进去
+// 就自己改掉了它正在保护的那段前缀（合并与去重见 utils/contextDriftNotice.mjs）。
+const contextDriftNoticesBySession = ref({});
+let contextDriftNoticeSeq = 0;
+
+function contextDriftNoticesFor(sessionId) {
+  return contextDriftNoticesBySession.value[sessionId] || [];
+}
+
+function dropContextDriftNotices(sessionId) {
+  if (!sessionId || !(sessionId in contextDriftNoticesBySession.value)) return;
+  const next = { ...contextDriftNoticesBySession.value };
+  delete next[sessionId];
+  contextDriftNoticesBySession.value = next;
+}
+
+function recordContextDriftNotice(data) {
+  const sessionId = String(data?.sessionId || '');
+  if (!sessionId) return;
+  const session = sessions.value.find((item) => item.id === sessionId) || null;
+  const existing = contextDriftNoticesFor(sessionId);
+  const messageCount = session?.messages?.length ?? Number(data?.messageCount || 0);
+  const key = contextDriftNoticeKey(data);
+  if (!shouldRecordContextDriftNotice(existing, key, messageCount)) return;
+  contextDriftNoticeSeq++;
+  const notice = {
+    id: `context-drift-${sessionId}-${contextDriftNoticeSeq}`,
+    role: 'notice',
+    kind: 'context-drift',
+    key,
+    messageCount,
+    // 记下当时的行数：提示要停在它发生的位置，而不是永远贴在流末尾。基准是"非提示
+    // 行"的条数（displayMessagesForSession 返回的已是合并过的列表，所以要减掉已有
+    // 提示——这条换算收在 contextDriftInsertAt 里）。
+    insertAt: session ? contextDriftInsertAt(displayMessagesForSession(session), existing.length) : 0,
+    text: t('app.prefixDrift.notice', { detail: prefixDriftDetail(data) }),
+  };
+  contextDriftNoticesBySession.value = {
+    ...contextDriftNoticesBySession.value,
+    [sessionId]: [...existing, notice],
+  };
+}
+
 function displaySourceMessages(session) {
   return buildDisplaySourceMessages(session, expandedArchiveSessions.value, {
     maxMessages: MAX_RENDER_MESSAGES,
@@ -2799,8 +2848,10 @@ function buildDisplayMessagesSignature(session, expanded) {
 function displayMessagesForSession(session) {
   const sessionId = session?.id || '';
   const sig = buildDisplayMessagesSignature(session, expandedArchiveSessions.value);
+  const notices = contextDriftNoticesFor(sessionId);
+  const noticeSig = notices.map((notice) => notice.id).join(',');
   const cached = displayMessagesCacheBySession.get(sessionId);
-  if (cached?.signature === sig) {
+  if (cached?.signature === sig && cached?.noticeSignature === noticeSig) {
     return cached.messages;
   }
   const src = displaySourceMessages(session);
@@ -2888,8 +2939,10 @@ function displayMessagesForSession(session) {
       i++;
     }
   }
-  displayMessagesCacheBySession.set(sessionId, { signature: sig, messages: out });
-  return out;
+  // 漂移提示插回它发生的位置（此刻才插：位置依赖 out 的最终形状）。
+  const merged = insertContextDriftNotices(out, notices);
+  displayMessagesCacheBySession.set(sessionId, { signature: sig, noticeSignature: noticeSig, messages: merged });
+  return merged;
 }
 
 function displayMessagesForTab(tab) {
@@ -3954,6 +4007,7 @@ async function closeWorkspaceTab(id) {
       deletePendingAttachments(tab.sessionId);
       delete plansBySession[tab.sessionId];
       delete planRevisionsBySession[tab.sessionId];
+      dropContextDriftNotices(tab.sessionId);
       displayMessagesCacheBySession.delete(tab.sessionId);
       ReleaseSession(tab.sessionId).catch(() => {});
     }
@@ -4156,6 +4210,7 @@ function deleteSession(index) {
   delete plansBySession[deletedId];
   delete planRevisionsBySession[deletedId];
   delete planPanelCollapsedBySession[deletedId];
+  dropContextDriftNotices(deletedId);
   delete sessionPromptTexts[deletedId];
   deletePendingAttachments(deletedId);
   displayMessagesCacheBySession.delete(deletedId);
@@ -4622,6 +4677,15 @@ function cleanupRuntimeEvents() {
   runtimeEventsBound = false;
 }
 
+// 前缀漂移提示的定位文案：后端只给 kind/index，"第几条"由前端加一（面向人的编号
+// 从 1 起）。
+function prefixDriftDetail(data) {
+  const kind = String(data?.kind || '');
+  if (kind === 'head') return t('app.prefixDrift.head');
+  if (kind === 'removed') return t('app.prefixDrift.removed');
+  return t('app.prefixDrift.message', { index: Number(data?.index ?? 0) + 1 });
+}
+
 function bindRuntimeEvents() {
   if (runtimeEventsBound) return;
   runtimeEventsBound = true;
@@ -4848,7 +4912,6 @@ function bindRuntimeEvents() {
     formatToolChip,
     formatDurationShort,
     makeToolResultTitle,
-    formatPlanNextStep,
     scrollMessagesToBottomIfStale,
     scrollMessagesToBottom,
     activeSessionId,
@@ -5048,6 +5111,14 @@ function bindRuntimeEvents() {
     plansBySession[sid] = nextPlan;
     if (revision) planRevisionsBySession[sid] = revision;
     scrollPlanPanelsForSession(sid);
+  });
+  // 前缀冻结核的告警：后端只比对、不拦请求，这里把它变成对话流里的一条内联提示，
+  // 留在原地可回看（比一闪而过的 toast 更符合"缓存被重建"这件事的分量）。
+  onRuntimeEvent('context:drift', (data) => {
+    const sid = String(data?.sessionId || '');
+    if (!sid) return;
+    recordContextDriftNotice(data);
+    if (sid === activeSessionId.value) scrollMessagesToBottomIfStale(sid);
   });
   for (const eventName of ['scheduled:update', 'scheduled:run_start', 'scheduled:run_done', 'scheduled:run_error']) {
     onRuntimeEvent(eventName, (data) => applyScheduledTaskEvent(data));
@@ -6652,7 +6723,11 @@ function formatPlanNextStep(value) {
 
 function makeToolResultTitle(name, result, meta = {}) {
   const d = parseToolResultData(result);
-  if (name === 'plan' && Array.isArray(d.plan)) return formatPlanNextStep(d.plan);
+  if (name === 'plan' && Array.isArray(d.plan)) {
+    // A report names the step the work reached, so the card keeps that title;
+    // every other call lets the result say where the plan now stands.
+    return formatPlanArgsTitle(parseToolArgsBestEffort(meta.args || '')) || formatPlanNextStep(d.plan);
+  }
 	if ((name === 'edit' || name === 'remote_edit') && Array.isArray(d.files)) return d.files.length === 1 ? (d.files[0]?.path || '') : `${d.files.length} files`;
   if (name === 'remote_read' && Array.isArray(d.files)) {
     const paths = d.files.map(f => f && f.path).filter(Boolean);
@@ -7268,6 +7343,7 @@ function trimRuntimeSessions() {
     delete plansBySession[session.id];
     delete planRevisionsBySession[session.id];
     delete planPanelCollapsedBySession[session.id];
+    dropContextDriftNotices(session.id);
     delete sessionPromptTexts[session.id];
     deletePendingAttachments(session.id);
     displayMessagesCacheBySession.delete(session.id);

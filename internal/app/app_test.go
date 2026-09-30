@@ -1771,116 +1771,191 @@ func TestHandlePlanStepsStartFirstStep(t *testing.T) {
 	}
 }
 
-func TestHandlePlanNextAdvancesAndInserts(t *testing.T) {
+func TestHandlePlanFinishReportsThroughAStep(t *testing.T) {
 	app := NewApp()
 	steps := []string{"Read code", "Edit code", "Run tests"}
 	if _, err := app.handlePlan("session-1", PlanRequest{Steps: &steps}); err != nil {
 		t.Fatalf("setup failed: %v", err)
 	}
 
-	// Naming a step the plan already carries lands on it instead of duplicating
-	// the row.
-	next := "Edit code"
-	res, err := app.handlePlan("session-1", PlanRequest{Next: &next})
+	// Naming a step reports the work as having reached it: that step and every
+	// step before it are done, and the step after it is what the plan is on.
+	res, err := app.handlePlan("session-1", PlanRequest{Finish: &PlanFinish{Title: "  edit CODE "}})
 	if err != nil {
-		t.Fatalf("next failed: %v", err)
+		t.Fatalf("report failed: %v", err)
 	}
-	got := res.(map[string]any)["plan"].([]PlanStep)
-	if len(got) != 3 || got[0].Status != "done" || got[1].Status != "in_progress" || got[2].Status != "pending" {
-		t.Fatalf("unexpected plan after next: %#v", got)
+	body := res.(map[string]any)
+	if body["action"] != "finish" {
+		t.Fatalf("action = %v, want finish", body["action"])
+	}
+	got := body["plan"].([]PlanStep)
+	if len(got) != 3 || got[0].Status != "done" || got[1].Status != "done" || got[2].Status != "in_progress" {
+		t.Fatalf("a report must mark the step and everything before it done, got %#v", got)
 	}
 
-	// A step the plan never carried is inserted right after the current one, so
-	// it lands where the model is rather than behind steps it has not reached.
-	inserted := "Install deps"
-	res, err = app.handlePlan("session-1", PlanRequest{Next: &inserted})
+	// Reporting the last step leaves nothing current: a plan is finished exactly
+	// when the work reached its end, so the end of a plan needs no second call.
+	res, err = app.handlePlan("session-1", PlanRequest{Finish: &PlanFinish{Title: "Run tests"}})
 	if err != nil {
-		t.Fatalf("next failed: %v", err)
+		t.Fatalf("report of the last step failed: %v", err)
 	}
 	got = res.(map[string]any)["plan"].([]PlanStep)
-	if len(got) != 4 || got[2].Title != "Install deps" || got[2].Status != "in_progress" || got[3].Title != "Run tests" {
-		t.Fatalf("expected the new step inserted after the current one, got %#v", got)
+	if len(got) != 3 {
+		t.Fatalf("a report must never change the steps, got %#v", got)
+	}
+	for i, td := range got {
+		if td.Status != "done" {
+			t.Fatalf("the work reached the last step, so step %d must be done: %#v", i+1, got)
+		}
 	}
 }
 
-func TestHandlePlanFinishLeavesUnreachedStepsPending(t *testing.T) {
+// TestPlanWritesKeepTheDonePrefixShape pins the invariant the whole tool rests
+// on, in the form that makes a stale panel impossible: a plan is a done prefix,
+// at most one current step, and the steps still ahead — never a pending row above
+// a step the plan already passed. The old, looser rule ("exactly one step is
+// current") allowed a jump that left the rows in between reported as neither
+// done nor reachable, which is the state the panel used to show as a stuck plan.
+func TestPlanWritesKeepTheDonePrefixShape(t *testing.T) {
 	app := NewApp()
-	steps := []string{"Read code", "Edit code", "Run tests"}
-	if _, err := app.handlePlan("session-1", PlanRequest{Steps: &steps}); err != nil {
-		t.Fatalf("setup failed: %v", err)
-	}
-	finish := true
-	res, err := app.handlePlan("session-1", PlanRequest{Finish: &finish})
-	if err != nil {
-		t.Fatalf("finish failed: %v", err)
-	}
-	got := res.(map[string]any)["plan"].([]PlanStep)
-	if got[0].Status != "done" || got[1].Status != "pending" || got[2].Status != "pending" {
-		t.Fatalf("finish must close out the current step only, got %#v", got)
-	}
-}
-
-// TestPlanWritesKeepExactlyOneCurrentStep pins the invariant the rest of the tool
-// rests on: one step is current at a time. A regression here is quiet — a step
-// that failed to close the one before it left two steps in_progress, the echoed
-// plan then named the orphan as the step to finish next, and closing the plan
-// took as many finish calls as it left orphans behind.
-func TestPlanWritesKeepExactlyOneCurrentStep(t *testing.T) {
-	app := NewApp()
-	write := func(name string, req PlanRequest) []PlanStep {
+	check := func(name string, req PlanRequest) []PlanStep {
 		t.Helper()
 		res, err := app.handlePlan("session-1", req)
 		if err != nil {
 			t.Fatalf("%s failed: %v", name, err)
 		}
 		list := res.(map[string]any)["plan"].([]PlanStep)
+		phase := 0 // 0 = the done prefix, 1 = the current step, 2 = steps still ahead
 		current := 0
-		for _, td := range list {
-			if td.Status == "in_progress" {
+		for i, td := range list {
+			switch td.Status {
+			case "done":
+				if phase > 0 {
+					t.Fatalf("%s: step %d is done after a row that is not, so the done rows are not a prefix: %#v", name, i+1, list)
+				}
+			case "in_progress":
 				current++
+				if phase > 1 {
+					t.Fatalf("%s: step %d is current after a pending row: %#v", name, i+1, list)
+				}
+				phase = 1
+			case "pending":
+				phase = 2
+			default:
+				t.Fatalf("%s: step %d carries unknown status %q", name, i+1, td.Status)
 			}
 		}
-		if current != 1 {
-			t.Fatalf("%s left %d current steps, want exactly 1: %#v", name, current, list)
+		if current > 1 {
+			t.Fatalf("%s left %d current steps, want at most 1: %#v", name, current, list)
 		}
 		return list
 	}
 
-	steps := []string{"Read code", "Edit code"}
-	write("set", PlanRequest{Steps: &steps})
-
-	// An unknown title inserts a step: it becomes current and the step the plan was
-	// on is closed behind it.
-	unknown := "Run tests"
-	list := write("next onto an unknown title", PlanRequest{Next: &unknown})
-	if len(list) != 3 || list[0].Status != "done" || list[1].Title != "Run tests" || list[1].Status != "in_progress" || list[2].Status != "pending" {
-		t.Fatalf("an inserted step must take over from the current one, got %#v", list)
+	steps := []string{"Read code", "Edit code", "Run tests"}
+	list := check("set", PlanRequest{Steps: &steps})
+	if list[0].Status != "in_progress" {
+		t.Fatalf("a set starts its first step, got %#v", list)
 	}
 
-	// A title the plan carries moves the position instead of adding a row, and
-	// naming the step it is already on leaves everything as it is.
-	known := "Read code"
-	list = write("next onto a known title", PlanRequest{Next: &known})
-	if len(list) != 3 || list[0].Status != "in_progress" {
-		t.Fatalf("naming a step the plan carries must move the position, got %#v", list)
+	list = check("report through the second step", PlanRequest{Finish: &PlanFinish{Title: "Edit code"}})
+	if list[0].Status != "done" || list[1].Status != "done" || list[2].Status != "in_progress" {
+		t.Fatalf("unexpected plan after a report: %#v", list)
 	}
-	write("next onto the current step", PlanRequest{Next: &known})
 
-	// finish closes the plan: no step is current afterwards, so nothing is left for
-	// a second finish to close.
-	finish := true
-	res, err := app.handlePlan("session-1", PlanRequest{Finish: &finish})
-	if err != nil {
-		t.Fatalf("finish failed: %v", err)
+	// Reporting the last step leaves nothing current, and no later write may
+	// reopen a position behind it: the plan is closed and every step is done.
+	check("report through the last step", PlanRequest{Finish: &PlanFinish{Title: "Run tests"}})
+	check("report of a step behind the frontier", PlanRequest{Finish: &PlanFinish{Title: "Read code"}})
+	closed := check("report the last step again", PlanRequest{Finish: &PlanFinish{Title: "Run tests"}})
+	if got := app.GetPlan("session-1"); len(got) != 3 {
+		t.Fatalf("no write may change the steps here, got %#v", got)
 	}
-	list = res.(map[string]any)["plan"].([]PlanStep)
-	for _, td := range list {
-		if td.Status == "in_progress" {
-			t.Fatalf("a finished plan must have no current step, got %#v", list)
+	for i, td := range closed {
+		if td.Status != "done" {
+			t.Fatalf("a plan ends only when every step is done, step %d is %#v", i+1, closed)
 		}
 	}
 }
 
+// TestHandlePlanReportOfAnAlreadyDoneStepChangesNothing: a report cannot rewind
+// the position, so naming a step the plan already passed is not a way back. It
+// must not bump the revision either — the panel would redraw a plan that had not
+// moved.
+func TestHandlePlanReportOfAnAlreadyDoneStepChangesNothing(t *testing.T) {
+	app := NewApp()
+	steps := []string{"Read code", "Edit code"}
+	if _, err := app.handlePlan("session-1", PlanRequest{Steps: &steps}); err != nil {
+		t.Fatalf("setup failed: %v", err)
+	}
+	if _, err := app.handlePlan("session-1", PlanRequest{Finish: &PlanFinish{Title: "Read code"}}); err != nil {
+		t.Fatalf("first report failed: %v", err)
+	}
+	before := app.planRevisions["session-1"]
+
+	res, err := app.handlePlan("session-1", PlanRequest{Finish: &PlanFinish{Title: "Read code"}})
+	if err != nil {
+		t.Fatalf("repeated report failed: %v", err)
+	}
+	got := res.(map[string]any)["plan"].([]PlanStep)
+	if len(got) != 2 || got[0].Status != "done" || got[1].Status != "in_progress" {
+		t.Fatalf("a report of a step already behind the frontier must leave the plan alone, got %#v", got)
+	}
+	if app.planRevisions["session-1"] != before {
+		t.Fatal("a write that changes nothing must not bump the revision")
+	}
+}
+
+// TestHandlePlanReportThroughALaterStepClosesTheRowsInBetween: naming a step
+// further down says the work went through the rows in between, so they are done
+// rather than left pending above the current step.
+func TestHandlePlanReportThroughALaterStepClosesTheRowsInBetween(t *testing.T) {
+	app := NewApp()
+	steps := []string{"Read code", "Edit code", "Run tests"}
+	if _, err := app.handlePlan("session-1", PlanRequest{Steps: &steps}); err != nil {
+		t.Fatalf("setup failed: %v", err)
+	}
+	res, err := app.handlePlan("session-1", PlanRequest{Finish: &PlanFinish{Title: "Run tests"}})
+	if err != nil {
+		t.Fatalf("reporting a later step failed: %v", err)
+	}
+	got := res.(map[string]any)["plan"].([]PlanStep)
+	if len(got) != 3 {
+		t.Fatalf("a report must never change the steps, got %#v", got)
+	}
+	for i, td := range got {
+		if td.Status != "done" {
+			t.Fatalf("a report naming the last step must close the rows in between, step %d is %#v", i+1, got)
+		}
+	}
+}
+
+// TestHandlePlanRefusesAnUnknownTitle: a title the plan does not carry used to
+// insert a step; that step would then be reported as done without ever having
+// been part of the plan. The refusal names the titles the plan does carry, so the
+// model can copy one instead of spending a round on a read.
+func TestHandlePlanRefusesAnUnknownTitle(t *testing.T) {
+	app := NewApp()
+	steps := []string{"Read code", "Run tests"}
+	if _, err := app.handlePlan("session-1", PlanRequest{Steps: &steps}); err != nil {
+		t.Fatalf("setup failed: %v", err)
+	}
+	before := app.planRevisions["session-1"]
+	_, err := app.handlePlan("session-1", PlanRequest{Finish: &PlanFinish{Title: "Install deps"}})
+	if err == nil {
+		t.Fatal("a report naming a step the plan does not carry must be refused")
+	}
+	for _, want := range []string{"Install deps", "Read code", "Run tests"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("the refusal must name %q, got %q", want, err.Error())
+		}
+	}
+	if app.planRevisions["session-1"] != before {
+		t.Fatal("a refused write must leave the plan and its revision alone")
+	}
+}
+
+// TestHandlePlanReadClearAndConflictingSources: a call with no effective source
+// only reads the plan back, and an empty step list clears it.
 func TestHandlePlanReadClearAndConflictingSources(t *testing.T) {
 	app := NewApp()
 	steps := []string{"Read code"}
@@ -1901,18 +1976,21 @@ func TestHandlePlanReadClearAndConflictingSources(t *testing.T) {
 		t.Fatal("a read must not bump the revision")
 	}
 
-	// A blank next is not a write source either — the declaration tolerates it
+	// A blank title is not a write source either — the declaration tolerates it
 	// and the handler decides, so a probe must read instead of failing.
-	blank := "   "
-	res, err = app.handlePlan("session-1", PlanRequest{Next: &blank})
-	if err != nil {
-		t.Fatalf("blank next failed: %v", err)
-	}
-	if action := res.(map[string]any)["action"]; action != "read" {
-		t.Fatalf("a blank next must read the plan back, got action %v", action)
-	}
-	if app.planRevisions["session-1"] != before {
-		t.Fatal("a blank next must not bump the revision")
+	for _, req := range []PlanRequest{
+		{Finish: &PlanFinish{Title: "   "}},
+	} {
+		res, err = app.handlePlan("session-1", req)
+		if err != nil {
+			t.Fatalf("a call with no effective source must read, got %v", err)
+		}
+		if action := res.(map[string]any)["action"]; action != "read" {
+			t.Fatalf("a call with no effective source must read, got action %v", action)
+		}
+		if app.planRevisions["session-1"] != before {
+			t.Fatal("a call with no effective source must not bump the revision")
+		}
 	}
 
 	// An empty step list clears the plan.
@@ -1927,120 +2005,46 @@ func TestHandlePlanReadClearAndConflictingSources(t *testing.T) {
 
 	// Two write sources in one call would leave the order of intent to
 	// interpretation.
-	next := "Run tests"
-	if _, err := app.handlePlan("session-1", PlanRequest{Steps: &steps, Next: &next}); err == nil {
-		t.Fatal("expected a steps + next call to be rejected")
+	if _, err := app.handlePlan("session-1", PlanRequest{Steps: &steps, Finish: &PlanFinish{Title: "Read code"}}); err == nil {
+		t.Fatal("expected a steps + finish call to be rejected")
 	}
 }
 
-// TestHandlePlanNextOnTheCurrentStepChangesNothing pins the sharpest form of the
-// duplicate-row bug: naming the step the plan is already on means "still on this
-// one". Closing the current step before resolving the name made the lookup miss
-// its own row, so the step was inserted a second time and the panel carried two
-// identical titles.
-func TestHandlePlanNextOnTheCurrentStepChangesNothing(t *testing.T) {
+// TestHandlePlanReportOnAClosedPlanChangesNothing: a plan ends when the work
+// reaches its last step and nothing reopens it, so a further report moves
+// neither the steps nor the revision — the panel must not redraw a plan that did
+// not change.
+func TestHandlePlanReportOnAClosedPlanChangesNothing(t *testing.T) {
 	app := NewApp()
 	steps := []string{"Read code", "Edit code"}
 	if _, err := app.handlePlan("session-1", PlanRequest{Steps: &steps}); err != nil {
 		t.Fatalf("setup failed: %v", err)
 	}
-	before := app.planRevisions["session-1"]
-
-	same := "Read code"
-	res, err := app.handlePlan("session-1", PlanRequest{Next: &same})
-	if err != nil {
-		t.Fatalf("next on the current step failed: %v", err)
-	}
-	got := res.(map[string]any)["plan"].([]PlanStep)
-	if len(got) != 2 || got[0].Status != "in_progress" || got[1].Status != "pending" {
-		t.Fatalf("naming the current step must leave the plan alone, got %#v", got)
-	}
-	if app.planRevisions["session-1"] != before {
-		t.Fatal("a write that changes nothing must not bump the revision")
-	}
-}
-
-// TestHandlePlanNextReopensAFinishedStep: the title is a step's identity, so a
-// step the plan already carries is picked up again instead of copied. Otherwise
-// two rows would share one title and neither the model nor the panel could tell
-// which row a later call means.
-func TestHandlePlanNextReopensAFinishedStep(t *testing.T) {
-	app := NewApp()
-	steps := []string{"Read code", "Edit code"}
-	if _, err := app.handlePlan("session-1", PlanRequest{Steps: &steps}); err != nil {
-		t.Fatalf("setup failed: %v", err)
-	}
-	edit := "Edit code"
-	if _, err := app.handlePlan("session-1", PlanRequest{Next: &edit}); err != nil {
-		t.Fatalf("advance failed: %v", err)
-	}
-	read := "Read code"
-	res, err := app.handlePlan("session-1", PlanRequest{Next: &read})
-	if err != nil {
-		t.Fatalf("reopening a finished step failed: %v", err)
-	}
-	got := res.(map[string]any)["plan"].([]PlanStep)
-	if len(got) != 2 {
-		t.Fatalf("a finished step must be picked up, not duplicated: %#v", got)
-	}
-	if got[0].Title != "Read code" || got[0].Status != "in_progress" || got[1].Status != "done" {
-		t.Fatalf("expected the position to move back to the finished step, got %#v", got)
-	}
-}
-
-// TestHandlePlanNextLeavesSkippedStepsPending: naming a later step moves the
-// position there and the rows in between stay pending. A plan may therefore
-// carry pending steps before the one it is on, which is why the panel counts
-// finished steps instead of reading the position as progress.
-func TestHandlePlanNextLeavesSkippedStepsPending(t *testing.T) {
-	app := NewApp()
-	steps := []string{"Read code", "Edit code", "Run tests"}
-	if _, err := app.handlePlan("session-1", PlanRequest{Steps: &steps}); err != nil {
-		t.Fatalf("setup failed: %v", err)
-	}
-	last := "Run tests"
-	res, err := app.handlePlan("session-1", PlanRequest{Next: &last})
-	if err != nil {
-		t.Fatalf("skipping ahead failed: %v", err)
-	}
-	got := res.(map[string]any)["plan"].([]PlanStep)
-	if len(got) != 3 || got[0].Status != "done" || got[1].Status != "pending" || got[2].Status != "in_progress" {
-		t.Fatalf("a skipped step must stay pending where it is, got %#v", got)
-	}
-}
-
-// TestHandlePlanFinishWithoutACurrentStepChangesNothing: closing an empty plan,
-// or one whose steps are all done, used to bump the revision and re-emit the
-// panel for a plan that had not moved.
-func TestHandlePlanFinishWithoutACurrentStepChangesNothing(t *testing.T) {
-	app := NewApp()
-	finish := true
-	if _, err := app.handlePlan("session-1", PlanRequest{Finish: &finish}); err != nil {
-		t.Fatalf("finish on an empty plan failed: %v", err)
-	}
-	if app.planRevisions["session-1"] != 0 {
-		t.Fatalf("finishing an empty plan must not bump the revision, got %d", app.planRevisions["session-1"])
-	}
-
-	steps := []string{"Read code"}
-	if _, err := app.handlePlan("session-1", PlanRequest{Steps: &steps}); err != nil {
-		t.Fatalf("setup failed: %v", err)
-	}
-	if _, err := app.handlePlan("session-1", PlanRequest{Finish: &finish}); err != nil {
-		t.Fatalf("finish failed: %v", err)
+	if _, err := app.handlePlan("session-1", PlanRequest{Finish: &PlanFinish{Title: "Edit code"}}); err != nil {
+		t.Fatalf("report of the last step failed: %v", err)
 	}
 	before := app.planRevisions["session-1"]
-	if _, err := app.handlePlan("session-1", PlanRequest{Finish: &finish}); err != nil {
-		t.Fatalf("repeated finish failed: %v", err)
+
+	for _, title := range []string{"Edit code", "Read code"} {
+		res, err := app.handlePlan("session-1", PlanRequest{Finish: &PlanFinish{Title: title}})
+		if err != nil {
+			t.Fatalf("report %q on a closed plan failed: %v", title, err)
+		}
+		list := res.(map[string]any)["plan"].([]PlanStep)
+		for i, td := range list {
+			if td.Status != "done" {
+				t.Fatalf("reporting %q must leave the closed plan alone, step %d is %#v", title, i+1, list)
+			}
+		}
 	}
 	if app.planRevisions["session-1"] != before {
-		t.Fatal("a repeated finish must not bump the revision")
+		t.Fatal("a report on a closed plan must not bump the revision")
 	}
 }
 
 // TestHandlePlanSetRejectsRepeatedTitles: the title is the addressing key every
 // later call uses, so a second step with the same name would make the row a
-// next call lands on ambiguous — for the model and for the panel alike.
+// report lands on ambiguous — for the model and for the panel alike.
 func TestHandlePlanSetRejectsRepeatedTitles(t *testing.T) {
 	app := NewApp()
 	steps := []string{"Run tests", "Run tests"}
@@ -2055,10 +2059,10 @@ func TestHandlePlanSetRejectsRepeatedTitles(t *testing.T) {
 	}
 }
 
-// TestHandlePlanTitlesAreIdentityIgnoringCaseAndSpace: a title is how a later
-// call names a step, so two titles a reader cannot tell apart are one title. The
-// plan refuses to carry both, and a next that slips into another case lands on
-// the step it meant instead of adding a twin beside it.
+// TestHandlePlanTitlesAreIdentityIgnoringCaseAndSpace: a title is how a report
+// names a step, so two titles a reader cannot tell apart are one title. The plan
+// refuses to carry both, and a report that slips into another case lands on the
+// step it meant instead of adding a twin beside it.
 func TestHandlePlanTitlesAreIdentityIgnoringCaseAndSpace(t *testing.T) {
 	app := NewApp()
 
@@ -2073,30 +2077,29 @@ func TestHandlePlanTitlesAreIdentityIgnoringCaseAndSpace(t *testing.T) {
 		}
 	}
 
-	steps := []string{"Inspect code", "Run tests"}
+	steps := []string{"Inspect code", "Run tests", "Ship it"}
 	if _, err := app.handlePlan("session-1", PlanRequest{Steps: &steps}); err != nil {
 		t.Fatalf("setup failed: %v", err)
 	}
 
 	// A slip in case and surrounding spaces names the same step, not a new one.
 	slipped := "  run TESTS "
-	res, err := app.handlePlan("session-1", PlanRequest{Next: &slipped})
+	res, err := app.handlePlan("session-1", PlanRequest{Finish: &PlanFinish{Title: slipped}})
 	if err != nil {
-		t.Fatalf("next with a case variant failed: %v", err)
+		t.Fatalf("a report with a case variant failed: %v", err)
 	}
 	got := res.(map[string]any)["plan"].([]PlanStep)
-	if len(got) != 2 {
+	if len(got) != 3 {
 		t.Fatalf("a case variant must land on the step it names, got %#v", got)
 	}
-	if got[0].Status != "done" || got[1].Title != "Run tests" || got[1].Status != "in_progress" {
-		t.Fatalf("expected the position to move to the named step, got %#v", got)
+	if got[0].Status != "done" || got[1].Status != "done" || got[2].Status != "in_progress" {
+		t.Fatalf("expected the report to land on the named step, got %#v", got)
 	}
 }
 
 // TestHandlePlanBoundsKeepSchemaAndHandlerInStep: the bounds in the declaration
 // are what the model is shown, so the handler must hold a caller to the same
-// numbers instead of trusting the gate to have run — and it must hold every write
-// path to them, not only the set the schema polices on its own.
+// numbers instead of trusting the gate to have run.
 func TestHandlePlanBoundsKeepSchemaAndHandlerInStep(t *testing.T) {
 	app := NewApp()
 	tooLong := []string{strings.Repeat("x", toolshared.MaxPlanStepTitleChars+1)}
@@ -2110,45 +2113,21 @@ func TestHandlePlanBoundsKeepSchemaAndHandlerInStep(t *testing.T) {
 	if _, err := app.handlePlan("session-1", PlanRequest{Steps: &tooMany}); err == nil || !strings.Contains(err.Error(), fmt.Sprintf("%d", toolshared.MaxPlanSteps)) {
 		t.Fatalf("a plan above the step limit must be refused by name, got %v", err)
 	}
+	if got := app.GetPlan("session-1"); len(got) != 0 {
+		t.Fatalf("a refused write must leave the plan alone, got %#v", got)
+	}
+	if app.planRevisions["session-1"] != 0 {
+		t.Fatalf("a refused write must not bump the revision, got %d", app.planRevisions["session-1"])
+	}
 
-	// A step inserted by next grows the plan exactly as a step from a whole-plan
-	// set does, so the caps have to hold on that path too. While only the set was
-	// policed, next carried a plan past both numbers.
+	// A plan exactly at the limit is still accepted, so the bound is a limit and
+	// not an off-by-one refusal.
 	atLimit := make([]string, 0, toolshared.MaxPlanSteps)
 	for i := 0; i < toolshared.MaxPlanSteps; i++ {
 		atLimit = append(atLimit, fmt.Sprintf("step %d", i+1))
 	}
 	if _, err := app.handlePlan("session-1", PlanRequest{Steps: &atLimit}); err != nil {
 		t.Fatalf("a plan at the step limit must be accepted: %v", err)
-	}
-	revisionAtLimit := app.planRevisions["session-1"]
-	overTheLimit := "one step too many"
-	if _, err := app.handlePlan("session-1", PlanRequest{Next: &overTheLimit}); err == nil || !strings.Contains(err.Error(), fmt.Sprintf("%d", toolshared.MaxPlanSteps)) {
-		t.Fatalf("a next that would push the plan past the step limit must be refused by name, got %v", err)
-	}
-	if app.planRevisions["session-1"] != revisionAtLimit {
-		t.Fatal("a refused write must leave the plan and its revision alone")
-	}
-	if got := app.GetPlan("session-1"); len(got) != toolshared.MaxPlanSteps {
-		t.Fatalf("a refused write must leave the plan at %d steps, got %d", toolshared.MaxPlanSteps, len(got))
-	}
-
-	// The title cap holds on the insert path as well. The plan is reset first, so
-	// the step count is not the rule that answers before the title does.
-	short := []string{"Read code"}
-	if _, err := app.handlePlan("session-1", PlanRequest{Steps: &short}); err != nil {
-		t.Fatalf("setup failed: %v", err)
-	}
-	revisionShort := app.planRevisions["session-1"]
-	overLongNext := strings.Repeat("y", toolshared.MaxPlanStepTitleChars+1)
-	if _, err := app.handlePlan("session-1", PlanRequest{Next: &overLongNext}); err == nil || !strings.Contains(err.Error(), fmt.Sprintf("%d", toolshared.MaxPlanStepTitleChars)) {
-		t.Fatalf("a next carrying an over-long title must be refused by name, got %v", err)
-	}
-	if app.planRevisions["session-1"] != revisionShort {
-		t.Fatal("a refused write must leave the plan and its revision alone")
-	}
-	if got := app.GetPlan("session-1"); len(got) != 1 {
-		t.Fatalf("a refused write must leave the plan at one step, got %d", len(got))
 	}
 }
 

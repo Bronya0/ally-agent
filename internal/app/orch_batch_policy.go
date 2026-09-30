@@ -76,6 +76,23 @@ func isDeferredSerialTool(name string) bool {
 	return toolBatchPhaseFor(name) == batchPhaseDeferredSerial
 }
 
+// planWorkTools are the tools whose successful call means the run did work a
+// plan could have moved past. Reads (read, grep, list_files, web_fetch, …) leave
+// the plan where it is and must not make the end-of-run plan check fire, and the
+// file-mutation tools are read from the phase table above instead of being
+// repeated here, so a new mutation tool cannot be forgotten in one of two lists.
+var planWorkTools = map[string]bool{
+	"command":            true,
+	"remote_run_command": true,
+}
+
+// toolDidPlanWork reports whether a successful call of this tool is work the plan
+// should reflect. It is the single predicate behind the end-of-run plan check.
+func toolDidPlanWork(name string) bool {
+	normalized := normalizeToolName(name)
+	return isOrderedFileMutationTool(normalized) || planWorkTools[normalized]
+}
+
 func detectWriteBatchConflicts(cfg ConfigState, calls []openai.ToolCall) map[int]error {
 	type targetRef struct {
 		index   int
@@ -105,9 +122,9 @@ func detectWriteBatchConflicts(cfg ConfigState, calls []openai.ToolCall) map[int
 }
 
 // planBatchWriteSource reports whether a plan call would change the plan. It
-// asks the same classifier the handler runs (a blank next and a false finish
-// are not sources), so the batch rule cannot drift from the tool vocabulary and
-// a call that only reads the plan back never owns the batch.
+// asks the same classifier the handler runs (a blank finish is not a source), so
+// the batch rule cannot drift from the tool vocabulary and a call that only reads
+// the plan back never owns the batch.
 func planBatchWriteSource(arguments string) bool {
 	var req PlanRequest
 	if json.Unmarshal([]byte(arguments), &req) != nil {
@@ -151,13 +168,14 @@ func detectToolBatchConflicts(cfg ConfigState, calls []openai.ToolCall) map[int]
 		return conflicts
 	}
 	// The plan tool takes one writer per batch. Two writes in one response —
-	// most plausibly steps + next — run in the same concurrent pool, so which
-	// one lands last is a coin flip: a steps that lands after a next rewinds the
-	// position that next had just advanced, the loser's intent silently
-	// disappears, and the two tool results contradict each other. Keep the first
-	// write and reject the rest by name, the same shape as the same-path write
-	// rule above. Read-only plan calls are not writers: several reads are
-	// harmless, and identical ones are already collapsed by the dedup below.
+	// most plausibly a report plus the steps rewrite it provoked — run in the same
+	// concurrent pool, so which one lands last is a coin flip: a steps that lands
+	// after a finish rewinds the position that report had just moved, the loser's
+	// intent silently disappears, and the two tool results contradict each other.
+	// Keep the first write and reject the rest by name, the same shape as the
+	// same-path write rule above. Read-only plan calls are not writers: several
+	// reads are harmless, and identical ones are already collapsed by the dedup
+	// below.
 	firstPlanWrite := -1
 	for i, call := range calls {
 		if normalizeToolName(call.Function.Name) != planToolName || !planBatchWriteSource(call.Function.Arguments) {
@@ -167,7 +185,7 @@ func detectToolBatchConflicts(cfg ConfigState, calls []openai.ToolCall) map[int]
 			firstPlanWrite = i
 			continue
 		}
-		conflicts[i] = codedToolError("E_PLAN_BATCH_CONFLICT", fmt.Errorf("another plan write (toolCallIndex %d) appears earlier in this tool batch; only the first one executes. This call was skipped — send this plan update in a later response, once you have seen what the first one did", firstPlanWrite))
+		conflicts[i] = codedToolError("E_PLAN_BATCH_CONFLICT", fmt.Errorf("a batch accepts one plan write, and another plan write (toolCallIndex %d) comes earlier in this one; this call was skipped, and that earlier call may itself have been refused — read its result before sending this update in a later response", firstPlanWrite))
 	}
 	// Deduplicate calls with semantically identical arguments within the same batch.
 	// Models occasionally emit two or more tool calls that mean the same thing but

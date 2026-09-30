@@ -256,13 +256,14 @@ test('formatHttpToolTitle returns empty for missing url or non-object input', ()
 });
 
 // The plan card's running title comes from the call ARGUMENTS, whose shape is
-// steps / next / finish. Feeding it the result payload shape (or reading a
-// result key off the arguments) is what left the card blank, so both directions
-// are pinned here.
+// steps / finish. Feeding it the result payload shape (or reading a result key
+// off the arguments) is what left the card blank, so both directions are pinned
+// here.
 test('formatPlanArgsTitle reads the plan call arguments, not the result shape', () => {
   assert.equal(formatPlanArgsTitle({ steps: ['Read code', 'Run tests'] }), 'Read code');
   assert.equal(formatPlanArgsTitle({ steps: ['  ', 'Run tests'] }), 'Run tests');
-  assert.equal(formatPlanArgsTitle({ next: 'Run tests' }), 'Run tests');
+  assert.equal(formatPlanArgsTitle({ finish: 'Run tests' }), 'Run tests');
+  assert.equal(formatPlanArgsTitle({ finish: ['Run tests'] }), '');
   assert.equal(formatPlanArgsTitle({ steps: [] }), '');
   assert.equal(formatPlanArgsTitle({ finish: true }), '');
   assert.equal(formatPlanArgsTitle({}), '');

@@ -372,6 +372,15 @@ type App struct {
 	// releaseSession drops the entry together with the rest of the session
 	// state. Guarded by a.mu.
 	readCaches map[string]*sessionReadCache
+
+	// contextLocks holds one request-prefix baseline per session id
+	// (sessionContextLock in biz_context_lock.go): the fingerprint of the last
+	// request each lane sent, so a later change to an already-sent prefix is
+	// reported instead of silently costing the provider's prompt cache.
+	// Memory-only, and dropped together with the history rewrites that
+	// invalidate readCaches. a.mu guards the map; each lock guards its own
+	// entries, because hashing must never run under a.mu.
+	contextLocks map[string]*sessionContextLock
 }
 
 func NewApp() *App {
@@ -383,6 +392,7 @@ func NewApp() *App {
 		compactingCancels:  map[string]context.CancelFunc{},
 		histories:          map[string][]openai.ChatCompletionMessage{},
 		readCaches:         map[string]*sessionReadCache{},
+		contextLocks:       map[string]*sessionContextLock{},
 		plans:              map[string][]PlanStep{},
 		planRevisions:      map[string]int64{},
 		// sessionWorkspaces 记录每个会话 run 实际使用的 workspace（见
@@ -1379,20 +1389,40 @@ type PlanStep struct {
 }
 
 // PlanRequest is the plan tool's input. The model never writes a status: a call
-// either lays the plan out, moves to the next step, or closes it out, and every
-// status follows from the position that call leaves the plan on: the step the
-// plan is on is current, the ones behind it are done, the ones ahead are pending
-// (a step skipped over stays pending until a call names it). Exactly one source
-// may be effective per call; with none of them the call only reads back.
+// either lays the plan out or reports how far the work got, and every status
+// follows from the position that call leaves the plan on: the steps it reported
+// are done, the step after them is current, the ones behind that wait their turn.
+// Exactly one source may be effective per call; with none of them the call only
+// reads back.
 type PlanRequest struct {
 	// Steps starts or replaces the whole plan: step titles in order, the first
 	// one becoming the current step.
 	Steps *[]string `json:"steps,omitempty"`
-	// Next names the step starting now; the step the plan was on is marked done.
-	Next *string `json:"next,omitempty"`
-	// Finish closes the plan out: the current step is marked done and nothing
-	// takes its place, so the steps never reached stay pending.
-	Finish *bool `json:"finish,omitempty"`
+	// Finish reports where the work got to: a step title means "this step and
+	// every step before it are done" — the step after it becomes current, and a
+	// title naming the last step ends the plan, every step done.
+	Finish *PlanFinish `json:"finish,omitempty"`
+}
+
+// PlanFinish is finish's shape: the title of the step the work reached. The zero
+// value counts as absent — a blank title is not a source — matching how the rest
+// of the tool surface treats "0 or empty means not sent". A shape the schema
+// refuses (a number, a boolean, an object) decodes to that same zero value
+// instead of failing here, so the declaration gate is the layer that reports it,
+// by name and with the keys the tool does accept.
+type PlanFinish struct {
+	Title string // finish: "<step title>" — the work reached this step.
+}
+
+func (f *PlanFinish) UnmarshalJSON(data []byte) error {
+	if f == nil {
+		return nil
+	}
+	var title string
+	if json.Unmarshal(data, &title) == nil {
+		f.Title = title
+	}
+	return nil
 }
 
 type AgentDelegateRequest struct {
@@ -1725,6 +1755,7 @@ func (a *App) releaseSession(sessionID string, deleteHistory bool) error {
 	delete(a.sessionModelConfigs, sessionID)
 	delete(a.contextAnchors, sessionID)
 	delete(a.readCaches, sessionID)
+	delete(a.contextLocks, sessionID)
 	a.mu.Unlock()
 
 	// Provider reasoning artifacts (thinking signatures, encrypted reasoning)
@@ -1905,6 +1936,19 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 	// message — a per-Run cache efficiency number, not a per-turn one.
 	var runCacheHit, runCacheMiss int
 	var runInputTokens, runOutputTokens int
+	// End-of-run plan check: planUnreportedWork is set by a batch that did work
+	// (a file mutation or a command) while the plan did not move, and cleared by
+	// any batch that moved the plan. planChecked keeps the check to one extra
+	// round per run, so a model that declines to report is never asked twice.
+	planUnreportedWork := false
+	planChecked := false
+	// The check asks one question, so it rides exactly one request and never
+	// enters messages: appended there it would be saved with the history and
+	// resent for the rest of the session's life — one fixed-size user message
+	// per run that did work, i.e. a few thousand dead tokens after a few dozen
+	// runs. messages therefore stays strictly monotonic, and the check still
+	// reaches the model (see requestMessages below).
+	var planCheckRequest *openai.ChatCompletionMessage
 	emitRunEnd := func(event string, kind string, payload map[string]any) {
 		if payload == nil {
 			payload = map[string]any{}
@@ -2016,6 +2060,12 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 		}
 
 		requestMessages := messages
+		if planCheckRequest != nil {
+			// Tail-appended on a copy: the host question is for this one request
+			// only, so the persisted history never carries it.
+			requestMessages = append(append(make([]openai.ChatCompletionMessage, 0, len(messages)+1), messages...), *planCheckRequest)
+			planCheckRequest = nil
+		}
 
 		toolCalls := []openai.ToolCall{}
 		var modelResp *modelStreamResult
@@ -2033,6 +2083,10 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			emittedEvents := false
 			streamDeltas := newRunStreamDeltaEmitter(runID, sessionID, a.emitMap())
 			toolProgress = newToolCallProgressTracker()
+			// 前缀冻结核：发之前与同一泳道上一次的指纹对一次，任何"改掉了已经发出去的
+			// 那段"都会留下一条可定位的记录（见 biz_context_lock.go）。只记录，不改请求
+			// 内容、也不拦请求。
+			a.noteRequestPrefix(sessionID, contextLockLaneChat, cfg, requestMessages, tools)
 			modelResp, err = a.streamModelResponse(ctx, cfg, cfg.Model, requestMessages, tools, func(event modelStreamEvent) {
 				if event.ContentDelta != "" {
 					emittedEvents = true
@@ -2211,6 +2265,17 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 				a.emit("run:inject", map[string]any{"runId": runID, "sessionId": sessionID})
 				continue
 			}
+			// The run did work the plan never moved for: one host message, once
+			// per run, asks the model to report where the work actually got to.
+			// The model is the only party that knows which steps it passed, so
+			// nothing is inferred and the plan is never rewritten here.
+			if !planChecked && planUnreportedWork {
+				if marker, ok := a.planCheckMarker(sessionID); ok {
+					planChecked = true
+					planCheckRequest = &marker
+					continue
+				}
+			}
 			a.saveHistory(req.SessionID, messages)
 			success = true
 			emitRunEnd("run:done", "done", nil)
@@ -2241,6 +2306,9 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			duration  int64
 		}
 
+		// The plan revision before the batch runs: a batch that moved the plan is
+		// current again by definition, which is what clears the flag below.
+		batchPlanRevision := a.planRevisionFor(sessionID)
 		totalCalls := len(toolCalls)
 		toolSem := make(chan struct{}, 4)
 		outcomes := make([]toolOutcome, totalCalls)
@@ -2332,6 +2400,20 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			executeCall(i, call, nil, false)
 		}
 
+		// Did this batch do work the plan does not reflect? A batch that moved the
+		// plan answers that itself; only work done without a plan write leaves
+		// something for the end-of-run check to ask about.
+		if a.planRevisionFor(sessionID) != batchPlanRevision {
+			planUnreportedWork = false
+		} else {
+			for _, o := range outcomes {
+				if o.result.OK && toolDidPlanWork(o.name) {
+					planUnreportedWork = true
+					break
+				}
+			}
+		}
+
 		// Append tool results to the model message history in tool-call
 		// order. Emitting already happened per-tool as each finished.
 		// Read-image injection messages now persist for the whole session
@@ -2361,7 +2443,9 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 		// under the last assistant message, so issuing another model step
 		// would only invite trailing content after them. Failed or
 		// batch-conflicted suggest calls keep the loop running so the
-		// model can recover from the error.
+		// model can recover from the error. The end-of-run plan check is
+		// deliberately absent for the same reason: its round would land
+		// after the chips.
 		if len(outcomes) == 1 && outcomes[0].name == "suggest" && outcomes[0].result.OK {
 			var injected bool
 			messages, injected = a.appendPendingRunInputs(runID, messages)

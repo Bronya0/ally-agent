@@ -102,17 +102,17 @@ const SERVICE_VERBS = {
   read: ['Reading service output', 'Read service output', 'Service read'],
 };
 
-// plan has no action field: which of its three sources the model sent IS the
-// action, and the backend reads it the same way. "Next step" belongs to the next
-// form alone — a call that lays out, closes or clears a plan is not a next step,
-// and a closed plan has no next step left to name. The clear (`steps: []`) is
-// its own verb because the backend reports it as a set while the card reads very
-// differently. [inProgress, done, noun].
+// plan has no action field: which source the model sent IS the action, and the
+// backend reads it the same way. Reporting progress ("Finished step") and the
+// read-back are the two the card can state from the arguments; naming the last
+// step ends the plan but is still a progress report, so it keeps that verb. The
+// clear (`steps: []`) is its own verb because the backend reports it as a set
+// while the card reads very differently.
+// [inProgress, done, noun].
 const PLAN_VERBS = {
   set: ['Planning', 'Planned', 'Plan set'],
   clear: ['Clearing plan', 'Cleared plan', 'Plan clear'],
-  next: ['Next step', 'Next step', 'Plan step'],
-  finish: ['Finishing plan', 'Finished plan', 'Plan finish'],
+  finish: ['Finishing step', 'Finished step', 'Step finish'],
   read: ['Reading plan', 'Read plan', 'Plan read'],
 };
 
@@ -179,18 +179,17 @@ export function toolActionFromArgs(name, parsed) {
   return String(parsed?.action || '').trim().toLowerCase();
 }
 
-// plan states its action by which source it carries — the same three the backend
-// reads. A call carrying no source states nothing, so the answer stays '' and the
-// card falls back to the plain tool name; that is deliberate, because arguments
-// that have not arrived yet parse to the same {} a read-back call sends, and
-// claiming "read" here would label every plan card that way until its arguments
-// show up. The result names the action the backend took and fills that gap
-// (useToolEvents).
+// plan states its action by which source it carries — the same two the backend
+// reads, and `finish` only when it names a step. A call carrying no source states
+// nothing, so the answer stays '' and the card falls back to the plain tool name;
+// that is deliberate, because arguments that have not arrived yet parse to the
+// same {} a read-back call sends, and claiming "read" here would label every plan
+// card that way until its arguments show up. The result names the action the
+// backend took and fills that gap (useToolEvents).
 function planActionFromArgs(parsed) {
   const args = parsed && typeof parsed === 'object' ? parsed : null;
   if (!args) return '';
   if (Array.isArray(args.steps)) return args.steps.length ? 'set' : 'clear';
-  if (String(args.next || '').trim()) return 'next';
-  if (args.finish === true) return 'finish';
+  if (typeof args.finish === 'string') return args.finish.trim() ? 'finish' : '';
   return '';
 }

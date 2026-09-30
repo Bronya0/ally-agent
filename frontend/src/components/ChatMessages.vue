@@ -52,6 +52,10 @@ Public License v3. See the LICENSE file for details.
             <CloseOutlined />
           </button>
         </div>
+        <div v-else-if="msg.role === 'notice'" :class="['message', 'notice', msg.kind]">
+          <WarningOutlined class="notice-icon" />
+          <span class="notice-text">{{ msg.text }}</span>
+        </div>
         <div v-else-if="msg.role !== 'tool_call' && msg.kind !== 'subagent'" :class="['message', msg.role, { error: msg.error, system: msg.system }]">
           <RenderBoundary v-if="msg.welcome" :label="$t('chat.welcome')"><WelcomeMessage :welcome="msg.welcome" :tools="tools" :mcp-servers="mcpServers" :skill-names="skillNames" /></RenderBoundary>
           <StreamingMarkdownBody v-else :msg="msg" :render-fn="renderFn" />
@@ -181,6 +185,7 @@ import HtmlRenderCard from './HtmlRenderCard.vue';
 import StreamingMarkdownBody from './StreamingMarkdownBody.vue';
 import RenderBoundary from './RenderBoundary.vue';
 import ExportOutlined from '@vicons/antd/ExportOutlined';
+import WarningOutlined from '@vicons/antd/WarningOutlined';
 import MessageOutlined from '@vicons/antd/MessageOutlined';
 import ArrowUpOutlined from '@vicons/antd/ArrowUpOutlined';
 import ArrowDownOutlined from '@vicons/antd/ArrowDownOutlined';
@@ -247,6 +252,7 @@ function messageRenderMemo(msg) {
   const lastAttachment = attachments.length ? attachments[attachments.length - 1] : null;
   return [
     msg?.role,
+    msg?.id,
     msg?.kind,
     msg?.skill?.name || '',
     msg?.eventId,
@@ -710,6 +716,34 @@ defineExpose({ scrollbarRef, scrollToBottom, scrollToUserQuestion, scrollToBotto
 .message {
   position: relative;
   margin-bottom: 10px;
+}
+
+/* 前缀漂移提示（context:drift）：一行内联告警，留在对话流里可回看。
+   估计高度按单行给（.messages .message 的 120px 估计值会把离屏的空隙算大）。 */
+.message.notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid color-mix(in srgb, var(--ally-warning) 35%, transparent);
+  border-left: 3px solid var(--ally-warning);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--ally-warning) 8%, transparent);
+  color: var(--ally-warning-text);
+  font-size: 12px;
+  line-height: 1.5;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 32px;
+}
+
+.notice-icon {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+}
+
+.notice-text {
+  min-width: 0;
 }
 
 .message-archive-toggle {

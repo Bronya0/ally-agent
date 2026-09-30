@@ -9,11 +9,13 @@
 package app
 
 import (
+	"fmt"
 	"log"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 )
@@ -167,7 +169,27 @@ func (a *App) logAppError(msg string, args ...any) {
 		l.Error(msg, args...)
 		return
 	}
-	log.Printf("[error] "+msg, args...)
+	log.Printf("[error] %s%s", msg, formatLogArgs(args))
+}
+
+// formatLogArgs renders the key/value pairs the structured logger would have
+// taken. The fallback line is the only record left when the log directory is
+// unwritable, and passing them positionally loses exactly the fields that make
+// a report actionable (fmt prints "%!(EXTRA string=session, ...)").
+func formatLogArgs(args []any) string {
+	if len(args) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for i := 0; i < len(args); i += 2 {
+		fmt.Fprintf(&b, " %v=", args[i])
+		if i+1 < len(args) {
+			fmt.Fprintf(&b, "%v", args[i+1])
+		} else {
+			b.WriteString("(missing value)")
+		}
+	}
+	return b.String()
 }
 
 // LogFrontendError is a Wails binding: the frontend routes uncaught errors

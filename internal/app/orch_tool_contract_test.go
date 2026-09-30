@@ -221,20 +221,28 @@ func TestServiceTuningStaysInsideTheDeclaredBounds(t *testing.T) {
 }
 
 // TestPlanToolVocabularyPassesTheGate pins the shapes the plan description
-// teaches: the steps/next/finish vocabulary has to clear the strict gate — a
-// gate that refused it would burn a model round on every plan call. The retired
-// todos form is pinned below as gone on purpose, so no compat layer creeps back.
+// teaches: the steps/finish vocabulary has to clear the strict gate — a gate that
+// refused it would burn a model round on every plan call. The retired forms
+// (todos, and the `next` parameter that the report replaced) are pinned below as
+// gone on purpose, so no compat layer creeps back.
 func TestPlanToolVocabularyPassesTheGate(t *testing.T) {
 	app := NewApp()
 	cfg := ConfigState{Workspace: t.TempDir()}
 	ctx := context.Background()
+
+	// The plan is laid out first so the report has a title to resolve against:
+	// a report naming a step the plan does not carry is a handler refusal, not a
+	// gate refusal, and the two are asserted separately below.
+	steps := app.executeTool(ctx, cfg, "s-1", "plan", []byte(`{"steps":["Read code","Run tests"]}`))
+	if !steps.OK {
+		t.Fatalf("plan steps must pass the gate, got code=%q err=%q", steps.ErrorCode, steps.Error)
+	}
+
 	for _, args := range []string{
-		`{"steps":["Read code","Run tests"]}`,
-		`{"next":"Run tests"}`,
+		`{"finish":"Run tests"}`,
 		// A blank value is not a source (the handler reads instead), so the
 		// declaration has to let it through instead of failing the gate.
-		`{"next":""}`,
-		`{"finish":true}`,
+		`{"finish":""}`,
 		`{"steps":[]}`,
 		`{}`,
 	} {
@@ -243,18 +251,42 @@ func TestPlanToolVocabularyPassesTheGate(t *testing.T) {
 		}
 	}
 
-	// The retired todos form is not a second spelling: it fails by name instead
-	// of being silently accepted, so nothing can quietly depend on it again.
-	retired := app.executeTool(ctx, cfg, "s-1", "plan", []byte(`{"todos":[{"title":"Read code","status":"in_progress"}]}`))
-	if retired.OK || retired.ErrorCode != "E_BAD_ARGS" || !strings.Contains(retired.Error, "todos") {
-		t.Fatalf("the retired todos form must be refused by name, got ok=%v code=%q err=%q", retired.OK, retired.ErrorCode, retired.Error)
+	// The retired parameter is not a second spelling: it fails by name instead of
+	// being silently accepted, so nothing can quietly depend on it again.
+	retired := app.executeTool(ctx, cfg, "s-1", "plan", []byte(`{"next":"Run tests"}`))
+	if retired.OK || retired.ErrorCode != "E_BAD_ARGS" || !strings.Contains(retired.Error, "next") {
+		t.Fatalf("the retired next parameter must be refused by name, got ok=%v code=%q err=%q", retired.OK, retired.ErrorCode, retired.Error)
 	}
 
-	// Two write sources in one call is a contract rejection from the handler,
-	// not a schema violation: the declared properties stay independent.
-	both := app.executeTool(ctx, cfg, "s-1", "plan", []byte(`{"steps":["a"],"next":"a"}`))
+	// The retired todos form is not a second spelling either.
+	todos := app.executeTool(ctx, cfg, "s-1", "plan", []byte(`{"todos":[{"title":"Read code","status":"in_progress"}]}`))
+	if todos.OK || todos.ErrorCode != "E_BAD_ARGS" || !strings.Contains(todos.Error, "todos") {
+		t.Fatalf("the retired todos form must be refused by name, got ok=%v code=%q err=%q", todos.OK, todos.ErrorCode, todos.Error)
+	}
+
+	// finish takes a step title and nothing else: a boolean, a number and an
+	// object are all refused by the gate rather than decoded into a zero value
+	// that would report nothing. The boolean shape is the one the tool used to
+	// accept as "end the plan where it stands"; it stays refused on purpose, so no
+	// compat path creeps back.
+	for _, args := range []string{
+		`{"finish":true}`,
+		`{"finish":false}`,
+		`{"finish":3}`,
+		`{"finish":{"title":"Run tests"}}`,
+		`{"finish":"` + strings.Repeat("x", toolshared.MaxPlanStepTitleChars+1) + `"}`,
+	} {
+		res := app.executeTool(ctx, cfg, "s-1", "plan", []byte(args))
+		if res.OK || res.ErrorCode != "E_BAD_ARGS" {
+			t.Fatalf("plan %s must be refused by the gate, got ok=%v code=%q err=%q", args, res.OK, res.ErrorCode, res.Error)
+		}
+	}
+
+	// Two write sources in one call is a contract rejection from the handler, not
+	// a schema violation: the declared properties stay independent.
+	both := app.executeTool(ctx, cfg, "s-1", "plan", []byte(`{"steps":["a"],"finish":"a"}`))
 	if both.OK || both.ErrorCode == "E_BAD_ARGS" {
-		t.Fatalf("steps + next must fail as a contract error, got ok=%v code=%q err=%q", both.OK, both.ErrorCode, both.Error)
+		t.Fatalf("steps + finish must fail as a contract error, got ok=%v code=%q err=%q", both.OK, both.ErrorCode, both.Error)
 	}
 
 	// A field the description never mentions still fails loudly.

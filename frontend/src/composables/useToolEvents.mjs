@@ -42,7 +42,6 @@ export function useToolEvents(ctx) {
     formatToolChip,
     formatDurationShort,
     makeToolResultTitle,
-    formatPlanNextStep,
     scrollMessagesToBottomIfStale,
     scrollMessagesToBottom,
     activeSessionId,
@@ -107,10 +106,6 @@ export function useToolEvents(ctx) {
     existing.askSubmitting = false;
     existing.askSubmitted = true;
     existing.askAnswers = Array.isArray(resultData.answers) ? resultData.answers : existing.askAnswers || [];
-  }
-
-  function applyPlanTitle(existing, data, resultData) {
-    if (Array.isArray(resultData.plan)) existing.title = formatPlanNextStep(resultData.plan);
   }
 
   function applyCreatePath(existing, data, resultData) {
@@ -246,7 +241,11 @@ export function useToolEvents(ctx) {
     'create': [applyCreatePath],
     'remote_create_file': [applyCreatePath],
     'ask': [applyAskResult],
-    'plan': [applyPlanTitle],
+    // plan has no adapter on purpose: the card's parenthetical names the step the
+    // call is ABOUT ("Finished step (X)" = the step just reported), and only the
+    // arguments state that step — the result only carries the plan, whose current
+    // step is the one the work moved ON to. The default title path below fills a
+    // title the call never stated, so the arguments' title survives the result.
     'read': [applyReadBatchEntries],
     'remote_read': [applyReadBatchEntries],
     'delete': [applyDeleteEntries],

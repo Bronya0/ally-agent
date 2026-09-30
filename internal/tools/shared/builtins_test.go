@@ -86,10 +86,23 @@ func TestRuntimeSensitiveBuiltinSchemas(t *testing.T) {
 		t.Fatalf("plan step title maxLength = %#v, want %d", got, MaxPlanStepTitleChars)
 	}
 	// One write per call is a rule the handler holds and the gate cannot express:
-	// the three sources are declared as independent properties, so the description
+	// the two sources are declared as independent properties, so the description
 	// is the only place the model can read it.
-	if !strings.Contains(planDescription, "at most one of steps, next and finish") {
+	if !strings.Contains(planDescription, "at most one of steps and finish") {
 		t.Fatal("plan description must state that a call carries at most one write source")
+	}
+	// finish is one shape — a step title — so a boolean, a number or an object is
+	// refused by the gate instead of decoding into a zero value that would report
+	// nothing — and the retired next parameter must not be declared at all.
+	planFinish := schemaObjectForTest(t, planProperties["finish"])
+	if planFinish["type"] != "string" || planFinish["maxLength"] != MaxPlanStepTitleChars {
+		t.Fatalf("plan finish must declare a bounded step title, got %#v", planFinish)
+	}
+	if _, ok := planFinish["oneOf"]; ok {
+		t.Fatal("finish must not carry a second shape")
+	}
+	if _, ok := planProperties["next"]; ok {
+		t.Fatal("the retired next parameter must not be declared")
 	}
 
 	deleteParams, deleteDescription := builtinSchemaForTest(t, "remote_delete_path")

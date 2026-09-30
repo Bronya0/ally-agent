@@ -31,11 +31,10 @@ export function normalizePlanEntries(steps) {
     });
 }
 
-// planDoneCount reports how many steps a plan has carried out. The panel header
-// reads this instead of the current step's number: a next call can name a step
-// further down (leaving the rows in between pending) and closing a plan leaves
-// the steps it never reached pending, so the position sits past steps that were
-// never done.
+// planDoneCount reports how many steps a plan has carried out. The header reads
+// this instead of the current step's number: once the work reaches the last step
+// nothing is current any more, and counting the done rows is the reading that
+// stays meaningful both while a plan runs and after it ends.
 export function planDoneCount(steps) {
   return normalizePlanEntries(steps).filter((step) => step.status === 'done').length;
 }

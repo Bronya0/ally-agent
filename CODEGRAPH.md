@@ -34,7 +34,7 @@
 | 会话/历史持久化（坏数据协议修复在 `prov_history_hygiene.go`） | `internal/app/biz_sessions.go` |
 | 系统提示词组装（核心规则 / 技能名片 / 记忆索引 / 用户档案 USER.md / AGENTS.md / 代码图谱 / 项目教训 LESSONS.md / 自定义提示词） | `internal/app/biz_prompt.go` |
 | 请求消息与上下文 Token 核算（口径：请求前缀 + provider 实测锚点；会话前缀快照的冻结与压缩后刷新收口在 `refreshSessionPromptPrefix`） | `internal/app/biz_context.go`（`sessionPrefixBreakdown` / `contextAnchor` / `finalizeSessionBreakdown` / `sessionSystemPromptParts`） |
-| 计划工具（`steps` / `next` / `finish` 位置状态机：状态由位置推导、标题即身份、上限收口单一写入点、结果块带状态与进度） | `biz_context.go`（`handlePlan` / `classifyPlanRequest` / `advancePlan` / `applyPlanPosition`）+ `infra_result.go`（`renderPlanResultForModel`）+ `orch_batch_policy.go`（`planBatchWriteSource`）；前端 `planPanel.mjs` / `toolVerb.mjs` |
+| 计划工具（`steps` / `finish` 位置状态机：报「完成到某一步」、报最后一步即收尾、状态由位置推导、标题即身份、上限收口单一写入点、结果块带状态与进度、run 收尾对账） | `biz_context.go`（`handlePlan` / `classifyPlanRequest` / `reportPlanProgress` / `applyPlanPosition` / `planCheckMarker`）+ `infra_result.go`（`renderPlanResultForModel`）+ `orch_batch_policy.go`（`planBatchWriteSource` / `toolDidPlanWork`）；前端 `planPanel.mjs` / `toolVerb.mjs` |
 | 配置合并 / key 池管理 / 最近使用模型身份展开（`expandLastUsedModel`；配置只存 models[] + lastUsedModel，13 个模型字段是请求级派生值） | `internal/app/biz_config.go` |
 | 技能发现与加载 | `internal/app/biz_skills.go` |
 | 新建技能（元数据 + SKILL.md 正文写入 `.agents/skills`：用户级 `~/` 或项目级 `<工作区>`；重名/非法名拒绝，写完清列表缓存） | `internal/app/biz_skills_write.go`（`SaveSkill`） |
@@ -51,6 +51,7 @@
 | 工具卡动词 "Used X" 标签 | `frontend/src/utils/toolVerb.mjs`（TOOL_VERBS 表） |
 | 思考回放（reasoning_content / reasoning / reasoning_text / signature / encrypted_content） | `internal/app/prov_reasoning.go` + 三适配器（`prov_adapter_*.go`） |
 | 提示词缓存（断点位置 / 命中与写入口径；保留时长不发送，用供应商默认） | `prov_model.go`（三适配器断点与 usage）+ `biz_stats.go`（落库与汇总）；身份：会话/子代理 lane 用 `responsesPromptCacheKey`，回放台账用 `reasoningScope` |
+| 请求前缀冻结（发前比对上一轮的头部与每条消息指纹，只记录不拦请求；基线随读缓存一起失效） | `internal/app/biz_context_lock.go`（`noteRequestPrefix`，主对话泳道在 `app.go` 调用）+ 前端内联提示 `frontend/src/utils/contextDriftNotice.mjs` |
 | 模型输入能力（视觉）降级 / 图片占位 | `internal/app/biz_context.go`（`buildMessages` 单一收口） + 目录字段 `visionCapable`（`frontend/src/data/modelCatalog.json`，由 `scripts/generate-model-catalog.mjs` 生成） |
 | 流终止判定（finish_reason / `[DONE]` 哨兵）与 tool_calls 增量归并 | `internal/app/prov_model.go`（`sseDoneWatcher`、`toolCallAccumulator`） |
 | 工具 schema 修补（$ref 内联 / 补 type / 矛盾类型修复） | `internal/tools/schemautil/` |

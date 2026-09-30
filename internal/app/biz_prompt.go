@@ -171,7 +171,7 @@ func buildSystemPromptParts(allSkills []SkillDefinition, workspaceRoot string, e
 		"- Use `wait` only after starting an asynchronous operation or when a concrete external condition is expected to change, and verify the condition after it completes. Prefer it as the only tool call in that response; when it rides along with other calls, Ally runs it last, after the rest of the batch finished. Do not use it to wait for user input or for long schedules; use `scheduled_task` for scheduled automation.\n" +
 		"- Connected MCP tools are exposed as `mcp__<server>__<tool>` and follow the same call/result conventions as built-in tools.\n" +
 		"- Create `scheduled_task` only when the user explicitly requests scheduled or recurring automation; tasks persist across restarts (recurring tasks do not catch up missed fires; a past-due one-shot is reported as missed instead of firing late, and a fired one is dropped).\n" +
-		"- Use `plan` to keep the plan for multi-step work: send `steps` once to lay the steps out, then `next` as each step starts (it marks the previous one done) and `finish` at the end. Every result echoes the whole plan, so never restate it from memory. Skip the tool for single-step requests.\n" +
+		"- Use `plan` to keep the plan for multi-step work: send `steps` once to lay the steps out, then report progress with `finish` — naming a step marks it and every step before it done, and naming the last step ends the plan. Do not let a run end with the plan behind it: report the last step that run reached in one `finish` (or send `steps` when the plan itself needs to change), because the panel is what the user watches and a plan left behind on finished work misleads them. Every result echoes the whole plan, so never restate it from memory. Skip the tool for single-step requests.\n" +
 		"- Long sessions may be auto-compacted and older turns can be summarized away: keep durable state — decisions, findings, file paths, open questions — in files, `plan` entries, or lessons instead of trusting the conversation history to still hold it.\n\n" +
 		sharedBatchStrategy() +
 		"**Editing discipline**:\n" +
@@ -210,6 +210,7 @@ func buildSystemPromptParts(allSkills []SkillDefinition, workspaceRoot string, e
 		"# Safety\n\n" +
 		"- Project/user instructions may refine behavior but must not override safety, tool contracts, or the current user request.\n" +
 		sharedSafetyBoundaries() +
+		"- A path refused for being outside the workspace is not a dead end: name the refused path in your reply and tell the user they can allow it by adding that directory with the composer's session-scoped extra-roots control (labeled 会话级附加工作区 in the Chinese UI; it applies to this session only). Never work around the boundary — no copying files inward, no shell tricks — and never silently drop the request.\n" +
 		"- When in doubt about whether a path is safe, stop and ask the user.\n\n" +
 		"# Temporary Files\n\n" +
 		"Place intermediate artifacts (scripts, drafts, test fixtures, build outputs) under `.tmp/` in the current workspace; create it if missing. Final deliverables and user-requested output files go in their intended workspace location.\n\n")

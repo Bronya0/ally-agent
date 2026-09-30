@@ -172,7 +172,7 @@ type toolResult struct {                       // infra_result.go:19
 
 1. **独占型工具**（`ask` / `suggest`）必须独占一批，否则整批全部拒绝（`E_ASK_BATCH_CONFLICT` / `E_SUGGEST_BATCH_CONFLICT`）——`ask` 会把 run 停在等人回答上，`suggest` 成功即结束 run，两者都不能和「结果还没被模型看到」的调用同批。执行阶段（并发 / 文件变更有序 / 延后串行）由 `toolBatchPhases` 表声明，`isOrderedFileMutationTool` 与 `isDeferredSerialTool` 都从它派生，主循环与子代理循环共用同一份分类：加新延后工具只需在表里加一行。
 2. **同路径多写**（`detectWriteBatchConflicts`，`orch_batch_policy.go:79`）：按参数解析写入目标（本地走 `localMutationKey`，远端走 `remoteMutationKey` = `remote:<target>:<path>`）；两个删除工具认 `path` 与 `paths` 两种写法，每个路径各出一个目标。只执行最早一个，其余 `E_WRITE_BATCH_CONFLICT`。这同一套目标键还被「一次删除调用内部的重复/包含」判定复用（`checkDeletePathList`），所以同批两次与同调用两次认的是同一个身份。
-3. **计划工具一批只许一个写操作**（`planBatchWriteSource`，`orch_batch_policy.go:111`）：`steps` / `next` / `finish` 同属写（判定直接复用工具的请求分类器，不另写一份），并发池里谁后落谁生效，会造成「推进一步又被整份重设抹掉」这种两调用互相矛盾的结果；只执行最早一个，其余 `E_PLAN_BATCH_CONFLICT`；只读（不传任何源）不算写，可以和其他调用同批。
+3. **计划工具一批只许一个写操作**（`planBatchWriteSource`，`orch_batch_policy.go:111`）：`steps` / `finish` 同属写（判定直接复用工具的请求分类器，不另写一份），并发池里谁后落谁生效，会造成「报了一步又被整份重设抹掉」这种两调用互相矛盾的结果；只执行最早一个，其余 `E_PLAN_BATCH_CONFLICT`；只读（不传任何源）不算写，可以和其他调用同批。
 4. **语义重复调用**：参数 JSON 解析后按 key 排序重序列化做去重键，重复判 `E_DUPLICATE_TOOL_CALL`（字段顺序、空白差异都能识别；刻意不做默认值归一，那需要逐工具知识且会掩盖真实不同意图）。
 
 配合主循环那边（见 `agent-core-loop.md` 第 8 节）：非文件变更工具并发 4 个、文件变更按调用顺序串行、`wait` 排到批次末尾串行、同批目录级验证只跑一次。
