@@ -51,7 +51,7 @@
 | 工具卡动词 "Used X" 标签 | `frontend/src/utils/toolVerb.mjs`（TOOL_VERBS 表） |
 | 思考回放（reasoning_content / reasoning / reasoning_text / signature / encrypted_content） | `internal/app/prov_reasoning.go` + 三适配器（`prov_adapter_*.go`） |
 | 提示词缓存（断点位置 / 命中与写入口径；保留时长不发送，用供应商默认） | `prov_model.go`（三适配器断点与 usage）+ `biz_stats.go`（落库与汇总）；身份：会话/子代理 lane 用 `responsesPromptCacheKey`，回放台账用 `reasoningScope` |
-| 请求前缀冻结（发前比对上一轮的头部与每条消息指纹，只记录不拦请求；基线随读缓存一起失效） | `internal/app/biz_context_lock.go`（`noteRequestPrefix`，主对话泳道在 `app.go` 调用）+ 前端内联提示 `frontend/src/utils/contextDriftNotice.mjs` |
+| 请求前缀冻结（发前比对上一轮的头部与历史段指纹，各一个哈希，只记录不拦请求；基线随读缓存一起失效） | `internal/app/biz_context_lock.go`（`noteRequestPrefix`，主对话泳道在 `app.go` 调用）+ 前端内联提示 `frontend/src/utils/contextDriftNotice.mjs` |
 | 模型输入能力（视觉）降级 / 图片占位 | `internal/app/biz_context.go`（`buildMessages` 单一收口） + 目录字段 `visionCapable`（`frontend/src/data/modelCatalog.json`，由 `scripts/generate-model-catalog.mjs` 生成） |
 | 流终止判定（finish_reason / `[DONE]` 哨兵）与 tool_calls 增量归并 | `internal/app/prov_model.go`（`sseDoneWatcher`、`toolCallAccumulator`） |
 | 工具 schema 修补（$ref 内联 / 补 type / 矛盾类型修复） | `internal/tools/schemautil/` |

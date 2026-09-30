@@ -16,7 +16,8 @@
 // 文案由调用方传入：utils/*.mjs 不 import i18n.mjs（顶层会拉 naive-ui，node --test
 // 起不来）。
 
-// 判"同一个原因"的键：报出的是哪一类、第几条。
+// 判"同一个原因"的键：报出的是哪一类、第几条。历史段已合并成整段一个哈希，所以 tail
+// 恒为 tail:-1（拿不到下标）；head 恒为 head。removed 仍带截断点，是唯一有真下标的。
 export function contextDriftNoticeKey(data) {
   const kind = String(data?.kind || 'head');
   if (kind === 'head') return 'head';

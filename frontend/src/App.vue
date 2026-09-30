@@ -4677,13 +4677,13 @@ function cleanupRuntimeEvents() {
   runtimeEventsBound = false;
 }
 
-// 前缀漂移提示的定位文案：后端只给 kind/index，"第几条"由前端加一（面向人的编号
-// 从 1 起）。
+// 前缀漂移提示的定位文案：后端只给 kind/index（removed 的 index 是历史截断点，
+// tail 不再定位到第几条——每条一个哈希的旧口径已合并成整段一个哈希）。
 function prefixDriftDetail(data) {
   const kind = String(data?.kind || '');
   if (kind === 'head') return t('app.prefixDrift.head');
   if (kind === 'removed') return t('app.prefixDrift.removed');
-  return t('app.prefixDrift.message', { index: Number(data?.index ?? 0) + 1 });
+  return t('app.prefixDrift.tail');
 }
 
 function bindRuntimeEvents() {

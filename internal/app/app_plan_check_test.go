@@ -189,6 +189,12 @@ func TestRunChatAsksForAPlanReportWhenWorkOutranThePlan(t *testing.T) {
 	if got := server.count(); got != 4 {
 		t.Fatalf("provider rounds = %d, want 4 (work, final, report, closing line)", got)
 	}
+	// 漂移告警一条都不该有。催报消息只活一次请求（不进历史），所以它必须被排除在
+	// 指纹之外：一旦被计入基线，第四轮就会看到“历史第 3 条从催报变成了模型回复”，
+	// 而那正是本次改动前会稳定复现的假警（同 host-msg-once-per-run）。
+	if drifts := recorder.driftEvents(); len(drifts) != 0 {
+		t.Fatalf("a normal run must not report prefix drift, got %v", drifts)
+	}
 	plan := app.GetPlan("plan-check-report")
 	if len(plan) != 2 || plan[0].Status != "done" || plan[1].Status != "in_progress" {
 		t.Fatalf("the report must land in the plan, got %#v", plan)

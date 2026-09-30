@@ -21,16 +21,16 @@ const rowIds = (rows) => rows.map((row) => (typeof row === 'string' ? row : row.
 
 test('drift notice key identifies the reason, not the time', () => {
   assert.equal(contextDriftNoticeKey({ kind: 'head' }), 'head');
-  assert.equal(contextDriftNoticeKey({ kind: 'message', index: 2 }), 'message:2');
+  assert.equal(contextDriftNoticeKey({ kind: 'tail', index: -1 }), 'tail:-1');
   assert.equal(contextDriftNoticeKey({ kind: 'removed', index: 7 }), 'removed:7');
   assert.equal(contextDriftNoticeKey({}), 'head');
 });
 
 test('a repeated drift without new messages is recorded once', () => {
-  const notices = [{ key: 'message:2', messageCount: 9 }];
-  assert.equal(shouldRecordContextDriftNotice(notices, 'message:2', 9), false);
-  assert.equal(shouldRecordContextDriftNotice(notices, 'message:3', 9), true);
-  assert.equal(shouldRecordContextDriftNotice(notices, 'message:2', 11), true);
+  const notices = [{ key: 'tail:-1', messageCount: 9 }];
+  assert.equal(shouldRecordContextDriftNotice(notices, 'tail:-1', 9), false);
+  assert.equal(shouldRecordContextDriftNotice(notices, 'head', 9), true);
+  assert.equal(shouldRecordContextDriftNotice(notices, 'tail:-1', 11), true);
   assert.equal(shouldRecordContextDriftNotice([], 'head', 0), true);
 });
 

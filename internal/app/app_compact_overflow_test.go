@@ -43,6 +43,7 @@ type compactRecorder struct {
 	mu        sync.Mutex
 	compacted []string
 	errors    []string
+	drifts    []string
 	end       string
 	done      chan struct{}
 }
@@ -56,6 +57,9 @@ func (r *compactRecorder) Emit(name string, payload any) {
 	case "run:error":
 		encoded, _ := json.Marshal(payload)
 		r.errors = append(r.errors, string(encoded))
+	case "context:drift":
+		encoded, _ := json.Marshal(payload)
+		r.drifts = append(r.drifts, string(encoded))
 	}
 	if (name == "run:done" || name == "run:error") && r.end == "" {
 		r.end = name
@@ -80,6 +84,14 @@ func (r *compactRecorder) errorEvents() []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return append([]string(nil), r.errors...)
+}
+
+// driftEvents 是本次 run 发出的前缀漂移告警。正常对话一条都不该有：历史单调追加、
+// 头部按会话冻结，漂移告警出现就意味着指纹被什么东西碰了。
+func (r *compactRecorder) driftEvents() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.drifts...)
 }
 
 // overflowServer answers the way a provider does when the history no longer fits

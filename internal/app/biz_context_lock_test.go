@@ -29,8 +29,8 @@ func contextLockTools() []openai.Tool {
 }
 
 // TestContextLockReportsDriftAndAcceptsAppends 锁定这套机制的全部判定：首次只记基线、
-// 追加放行、改中间一条要报出下标、改头部报 head、变短报 removed、换模型重开基线、
-// 工具清单变化算头部变化，而只改顶层请求参数的配置切换一概不算。
+// 追加放行、改历史消息报 tail（不定位到第几条）、改头部报 head、变短报 removed、
+// 换模型重开基线、工具清单变化算头部变化，而只改顶层请求参数的配置切换一概不算。
 func TestContextLockReportsDriftAndAcceptsAppends(t *testing.T) {
 	app := NewApp()
 	cfg := ConfigState{Model: "model-a", APIFormat: apiFormatOpenAIChat}
@@ -49,8 +49,20 @@ func TestContextLockReportsDriftAndAcceptsAppends(t *testing.T) {
 	edited := append([]openai.ChatCompletionMessage{}, appended...)
 	edited[1].Content = "lay out the plan, please"
 	verdict := app.noteRequestPrefix("lock-session", contextLockLaneChat, cfg, edited, tools)
-	if verdict.kind != "message" || verdict.index != 0 {
-		t.Fatalf("editing a message must report its index, got %#v", verdict)
+	if verdict.kind != "tail" || verdict.index != -1 {
+		t.Fatalf("editing a message must report tail drift, got %#v", verdict)
+	}
+
+	// 追加后再原地改一条旧消息：整段哈希最容易在这里退化成"把追加当漂移"或
+	// "看不到旧消息被改"——重叠段（基准已有的那几条）变了必须报 tail。
+	mutated := append(append([]openai.ChatCompletionMessage{}, edited...),
+		openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: "one more"})
+	if verdict := app.noteRequestPrefix("lock-session", contextLockLaneChat, cfg, mutated, tools); verdict.kind != "" {
+		t.Fatalf("appending after a drift report must not report drift again, got %#v", verdict)
+	}
+	mutated[2].Content = "done (edited)"
+	if verdict := app.noteRequestPrefix("lock-session", contextLockLaneChat, cfg, mutated, tools); verdict.kind != "tail" {
+		t.Fatalf("mutating an old message after appends must report tail, got %#v", verdict)
 	}
 
 	headEdited := append([]openai.ChatCompletionMessage{}, edited...)
@@ -102,16 +114,16 @@ func TestContextLockScopesByLane(t *testing.T) {
 }
 
 // TestContextLockFramingStaysUnambiguous 锁定长度前缀：把同样的字节切成 [ab][c] 与
-// [a][bc]，两种切分必须得到不同的头部哈希，否则"哪几条被改过"就分不清了。
+// [a][bc]，两种切分必须得到不同的头部哈希，否则"哪几段被改过"就分不清了。
 func TestContextLockFramingStaysUnambiguous(t *testing.T) {
-	_, single := fingerprintRequest([]openai.ChatCompletionMessage{
+	_, single := fingerprintHead([]openai.ChatCompletionMessage{
 		{Role: openai.ChatMessageRoleSystem, Content: "ab"},
 	}, nil)
-	_, split := fingerprintRequest([]openai.ChatCompletionMessage{
+	_, split := fingerprintHead([]openai.ChatCompletionMessage{
 		{Role: openai.ChatMessageRoleSystem, Content: "a"},
 		{Role: openai.ChatMessageRoleSystem, Content: "b"},
 	}, nil)
-	if single.head == split.head {
+	if single == split {
 		t.Fatal("different segmentations that concatenate to the same bytes must not share a head hash")
 	}
 }
@@ -165,7 +177,7 @@ func TestContextLockReportsDriftToFrontend(t *testing.T) {
 	if !ok {
 		t.Fatalf("unexpected drift payload type: %#v", sink.payload)
 	}
-	if payload["sessionId"] != "lock-emit" || payload["kind"] != "message" || payload["index"] != 0 || payload["at"] != "user" {
+	if payload["sessionId"] != "lock-emit" || payload["kind"] != "tail" || payload["index"] != -1 {
 		t.Fatalf("unexpected drift payload: %#v", payload)
 	}
 }

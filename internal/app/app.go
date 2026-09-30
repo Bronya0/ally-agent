@@ -2086,7 +2086,11 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 			// 前缀冻结核：发之前与同一泳道上一次的指纹对一次，任何"改掉了已经发出去的
 			// 那段"都会留下一条可定位的记录（见 biz_context_lock.go）。只记录，不改请求
 			// 内容、也不拦请求。
-			a.noteRequestPrefix(sessionID, contextLockLaneChat, cfg, requestMessages, tools)
+			//
+			// 量的是 messages 而不是 requestMessages：计划催报那条宿主消息只活一次请求，
+			// 计入基线会让下一轮（历史照常增长、催报已消失）在重叠段上撞出一次假漂移。
+			// 指纹的职责是盯住"持久化的那段被谁改了"，一次性消息按定义不在其列。
+			a.noteRequestPrefix(sessionID, contextLockLaneChat, cfg, messages, tools)
 			modelResp, err = a.streamModelResponse(ctx, cfg, cfg.Model, requestMessages, tools, func(event modelStreamEvent) {
 				if event.ContentDelta != "" {
 					emittedEvents = true
