@@ -162,6 +162,9 @@ func toolResultSummary(name string, result *toolResult) string {
 			if r.FailedCount > 0 {
 				return fmt.Sprintf("%d paths, %d failed", len(r.Paths), r.FailedCount)
 			}
+			if r.AbsentCount == len(r.Paths) {
+				return "already absent"
+			}
 			if len(r.Paths) > 1 {
 				return fmt.Sprintf("%d paths", len(r.Paths))
 			}
@@ -941,10 +944,16 @@ func renderReadResultForModel(r BatchReadResult) string {
 // exit, timeout, truncation, the spilled-output pointer, and a promotion to a
 // background service (`promoted-to-service`) stay as attributes. A
 // closing-marker shape in the output is escaped (see escapeClosingMarker).
+// A sandbox-denied write carries its model-facing note (DeniedWriteHint) here,
+// appended after the output: the note is deliberately kept out of Output so the
+// command card's body preview does not fill up with it.
 func renderCommandResultForModel(r CommandResult) string {
 	body := "(no output)"
 	if r.Output != "" {
 		body = strings.TrimRight(r.Output, "\n")
+	}
+	if r.DeniedWriteHint != "" {
+		body += "\n\n" + strings.TrimRight(r.DeniedWriteHint, "\n")
 	}
 	body = escapeClosingMarker(body, "</ally-cmd")
 	var b strings.Builder
@@ -1056,27 +1065,36 @@ func renderEditResultForModel(r EditResult) string {
 }
 
 // renderDeleteResultForModel 把一次删除（本地或远端、一个路径或一批）渲染成同一个
-// 块：计数在开标签上，每条路径一行独立结果，所以「一条失败、其余成功」不用数行就
-// 看得出来。失败文案走属性转义，标记形状在里面本来就是死的。
+// 块：计数在开标签上（本来就不存在的槽单独报 absent，既不成功也不失败），每条路径
+// 一行独立结果，所以「一条失败、其余成功」不用数行就看得出来。失败文案走属性转义，
+// 标记形状在里面本来就是死的。
 func renderDeleteResultForModel(r DeletePathsResult) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, `<ally-deleted deleted="%d" failed="%d">`, r.DeletedCount, r.FailedCount)
+	fmt.Fprintf(&b, "<ally-deleted deleted=\"%d\" failed=\"%d\"", r.DeletedCount, r.FailedCount)
+	if r.AbsentCount > 0 {
+		fmt.Fprintf(&b, " absent=\"%d\"", r.AbsentCount)
+	}
+	b.WriteString(">")
 	for _, item := range r.Paths {
-		b.WriteString(`\n<path value="` + attrEscape(item.Path) + `" ok="` + strconv.FormatBool(item.OK) + `"`)
+		b.WriteString("\n<path value=\"" + attrEscape(item.Path) + "\" ok=" + strconv.FormatBool(item.OK))
 		if item.Kind != "" {
-			b.WriteString(` kind="` + attrEscape(item.Kind) + `"`)
+			b.WriteString(" kind=\"" + attrEscape(item.Kind) + "\"")
+		}
+		if item.Absent {
+			// 本来就不存在：报出来，模型才知道这条没什么可重试的。
+			b.WriteString(" absent=\"true\"")
 		}
 		if item.RemovedFiles > 0 {
-			fmt.Fprintf(&b, ` files="%d"`, item.RemovedFiles)
+			fmt.Fprintf(&b, " files=\"%d\"", item.RemovedFiles)
 		}
 		if item.RemovedDirs > 0 {
-			fmt.Fprintf(&b, ` dirs="%d"`, item.RemovedDirs)
+			fmt.Fprintf(&b, " dirs=\"%d\"", item.RemovedDirs)
 		}
 		if item.RemovedBytes > 0 {
-			fmt.Fprintf(&b, ` bytes="%d"`, item.RemovedBytes)
+			fmt.Fprintf(&b, " bytes=\"%d\"", item.RemovedBytes)
 		}
 		if item.Error != "" {
-			b.WriteString(` error="` + attrEscape(item.Error) + `"`)
+			b.WriteString(" error=\"" + attrEscape(item.Error) + "\"")
 		}
 		b.WriteString("/>")
 	}
@@ -1087,7 +1105,9 @@ func renderDeleteResultForModel(r DeletePathsResult) string {
 // renderServiceReadResultForModel renders a service read as a tag block; the
 // output body drops in verbatim and byte accounting rides on attributes. The
 // model-side tail clamp stays at 8 KiB; a closing-marker shape in the output
-// is escaped (see escapeClosingMarker).
+// is escaped (see escapeClosingMarker). A kernel write refusal the service's
+// output shows carries the same note the command path appends (DeniedWriteHint,
+// kept out of Output for the same reason: the card previews the output tail).
 func renderServiceReadResultForModel(r ServiceReadResult) string {
 	const maxReadOutputForModel = 8 * 1024
 	output := r.Output
@@ -1114,6 +1134,9 @@ func renderServiceReadResultForModel(r ServiceReadResult) string {
 	}
 	b.WriteString(">\n")
 	b.WriteString(strings.TrimRight(output, "\n"))
+	if r.DeniedWriteHint != "" {
+		b.WriteString("\n\n" + strings.TrimRight(r.DeniedWriteHint, "\n"))
+	}
 	b.WriteString("\n</ally-svc-read>")
 	return b.String()
 }
@@ -1121,7 +1144,8 @@ func renderServiceReadResultForModel(r ServiceReadResult) string {
 // renderServiceInfoResultForModel renders a start/stop result. The command
 // and cwd are not echoed (the model just sent them) and RFC3339 timestamps
 // are noise; only identity, liveness, and the output tail reach the model.
-// A closing-marker shape in the tail is escaped (see escapeClosingMarker).
+// A closing-marker shape in the tail is escaped (see escapeClosingMarker) and a
+// kernel write refusal found in the tail carries the command path's note.
 func renderServiceInfoResultForModel(r ServiceInfo) string {
 	outputTail := tailString(r.OutputTail, 4*1024)
 	reduced := len(outputTail) < len(r.OutputTail)
@@ -1150,6 +1174,9 @@ func renderServiceInfoResultForModel(r ServiceInfo) string {
 	if strings.TrimSpace(outputTail) != "" {
 		b.WriteString(strings.TrimRight(outputTail, "\n"))
 		b.WriteString("\n")
+	}
+	if r.DeniedWriteHint != "" {
+		b.WriteString("\n" + strings.TrimRight(r.DeniedWriteHint, "\n") + "\n")
 	}
 	b.WriteString("</ally-svc>")
 	return b.String()

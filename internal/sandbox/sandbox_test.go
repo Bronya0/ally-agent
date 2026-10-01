@@ -24,92 +24,51 @@ func TestSpecEnforce(t *testing.T) {
 	}
 }
 
-func TestParseMode(t *testing.T) {
-	cases := map[string]Mode{
-		"":           ModeOff,
-		"off":        ModeOff,
-		"enforce":    ModeEnforce,
-		"  ENFORCE ": ModeEnforce,
-		"on":         ModeOff, // 未知取值只能落到关闭，绝不能意外打开沙箱
-		"true":       ModeOff,
+// 档位是宿主的属性，不是用户设置：强制平台恒为 enforce，其余平台恒为关闭。
+// 断言刻意不去复述解析函数自己的算法（那只能写出恒真用例），而是钉住三件各自
+// 独立的事：两个方向的对偶关系、档位只有两种取值、以及哪一族平台在强制。
+func TestResolvedModeFollowsThePlatform(t *testing.T) {
+	mode := ResolvedMode()
+	forced := ModeForced()
+
+	// 强制 ⇒ 真的 enforce；不强制 ⇒ 真的关闭。两侧分开断言，任一侧坏了都会响。
+	if forced && mode != ModeEnforce {
+		t.Fatalf("a platform that mandates confinement must resolve to enforce, got %q", mode)
 	}
-	for configured, want := range cases {
-		if got := ParseMode(configured); got != want {
-			t.Fatalf("ParseMode(%q) = %q, want %q", configured, got, want)
+	if !forced && mode != ModeOff {
+		t.Fatalf("a platform that does not mandate confinement must resolve to off, got %q", mode)
+	}
+	// 没有任何配置能影响档位：解析结果只可能落在这两个值上。
+	if mode != ModeOff && mode != ModeEnforce {
+		t.Fatalf("ResolvedMode() = %q, want off or enforce", mode)
+	}
+	// macOS 是这一版唯一强制沙箱的平台。钉住它是因为降级文案（Warning）里写死
+	// 了 macOS：哪天别的平台也开始强制，那句话必须先改。
+	if runtime.GOOS == "darwin" {
+		if !forced || mode != ModeEnforce {
+			t.Fatalf("darwin must mandate the sandbox, got mode=%q forced=%v", mode, forced)
 		}
+		return
+	}
+	if forced || mode != ModeOff {
+		t.Fatalf("%s must not mandate the sandbox, got mode=%q forced=%v", runtime.GOOS, mode, forced)
 	}
 }
 
-func TestResolveModeFollowsPlatformCapability(t *testing.T) {
-	if ResolveMode("off") != ModeOff {
-		t.Fatal("off must stay off")
-	}
-	switch runtime.GOOS {
-	case "darwin", "linux":
-		if ResolveMode("enforce") != ModeEnforce {
-			t.Fatal("darwin/linux must honour enforce")
+// 只在「强制开启但后端用不了」时出声：其余情况本机本来就不跑沙箱，没有话可说。
+func TestWarningSpeaksOnlyForAnUnavailableForcedPlatform(t *testing.T) {
+	warning := Warning()
+	if !ModeForced() || Available() {
+		if warning != "" {
+			t.Fatalf("Warning() = %q, want silence", warning)
 		}
-	default:
-		if ResolveMode("enforce") != ModeOff {
-			t.Fatalf("%s has no backend and must collapse to off", runtime.GOOS)
-		}
+		return
 	}
-}
-
-func TestWarningIsSilentWhenSandboxIsOff(t *testing.T) {
-	for _, configured := range []string{"", "off", "on"} {
-		if warning := Warning(configured); warning != "" {
-			t.Fatalf("Warning(%q) = %q, want silence", configured, warning)
-		}
-	}
-}
-
-// 没有后端的平台上开启沙箱必须出声：否则开关看起来生效、实际什么都没做。
-func TestWarningOnPlatformWithoutBackend(t *testing.T) {
-	switch runtime.GOOS {
-	case "darwin", "linux":
-		t.Skip("darwin/linux have a backend; availability is probed there, not asserted here")
-	}
-	warning := Warning(string(ModeEnforce))
 	if warning == "" {
-		t.Fatalf("%s must warn when the sandbox is requested", runtime.GOOS)
+		t.Fatal("a mandated sandbox with an unusable backend must warn")
 	}
 	if !strings.Contains(warning, UnavailableReason()) {
 		t.Fatalf("warning must name the reason %q, got %q", UnavailableReason(), warning)
-	}
-}
-
-// 用户明确要求沙箱时，失败信息必须说清"拒绝执行"而不是降级执行。
-func TestUnavailableErrorExplainsFailClosed(t *testing.T) {
-	err := UnavailableError()
-	if err == nil {
-		t.Fatal("UnavailableError must not be nil")
-	}
-	message := err.Error()
-	if !strings.Contains(message, "fail-closed") {
-		t.Fatalf("message must say the command was refused, got %q", message)
-	}
-	if !strings.Contains(message, UnavailableReason()) || !strings.Contains(message, UnavailableRemediation()) {
-		t.Fatalf("message must carry the reason and the fix, got %q", message)
-	}
-}
-
-// 平台塌缩成「关闭」时命令照常运行：提示不能搬出"会被拒绝执行"的说法，也不能
-// 叫用户去关一个已经关掉的开关——那读起来像应用没应用自己的选择。
-func TestWarningOnPlatformWithoutBackendNamesWhatStillGuards(t *testing.T) {
-	switch runtime.GOOS {
-	case "darwin", "linux":
-		t.Skip("darwin/linux have a backend; the collapse path does not run there")
-	}
-	warning := Warning(string(ModeEnforce))
-	if !strings.Contains(warning, "已按「关闭」处理") {
-		t.Fatalf("warning must say the setting was folded to off, got %q", warning)
-	}
-	if strings.Contains(warning, "fail-closed") {
-		t.Fatalf("commands keep running without a backend, so the warning must not promise a refusal, got %q", warning)
-	}
-	if !strings.Contains(warning, safetyFenceNotice()) {
-		t.Fatalf("warning must name what still guards the command, got %q", warning)
 	}
 }
 

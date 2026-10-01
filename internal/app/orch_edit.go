@@ -68,6 +68,11 @@ func (a *App) editFilesWithConfig(cfg ConfigState, files []FileTextEdits) (Multi
 	if err != nil {
 		return MultiEditResult{}, err
 	}
+	roots, err := workspaceRoots(cfg)
+	if err != nil {
+		return MultiEditResult{}, err
+	}
+	spec := fileMutationSpec(cfg, roots)
 	prepared := make([]preparedFileEdit, 0, len(plan.Files))
 	for i, filePlan := range plan.Files {
 		file := filePlan.Edit
@@ -137,7 +142,7 @@ func (a *App) editFilesWithConfig(cfg ConfigState, files []FileTextEdits) (Multi
 		var rollbackErrors []string
 		for i := len(committed) - 1; i >= 0; i-- {
 			item := prepared[committed[i]]
-			if err := safeWriteFile(item.path, item.before, item.perm); err != nil {
+			if err := sandboxedWriteFile(spec, roots, item.path, item.before, item.perm); err != nil {
 				rollbackErrors = append(rollbackErrors, item.display+": "+err.Error())
 			}
 		}
@@ -159,7 +164,7 @@ func (a *App) editFilesWithConfig(cfg ConfigState, files []FileTextEdits) (Multi
 			}
 			return MultiEditResult{}, codedToolError("E_VERSION_MISMATCH", errors.New(msg))
 		}
-		if err := safeWriteFile(item.path, item.after, item.perm); err != nil {
+		if err := sandboxedWriteFile(spec, roots, item.path, item.after, item.perm); err != nil {
 			rollbackErr := rollback()
 			msg := fmt.Sprintf("failed to commit %s: %v", item.display, err)
 			if rollbackErr != nil {
@@ -200,6 +205,7 @@ func (a *App) editWithConfig(cfg ConfigState, req EditRequest) (EditResult, erro
 	if err != nil {
 		return EditResult{}, err
 	}
+	spec := fileMutationSpec(cfg, roots)
 	// Writes resolve exactly like create/delete/editor saves (symlinks rejected,
 	// real path confined to the write roots); SafeWriteFile replaces the file in
 	// place, so joining lexically here would write through a symlinked
@@ -244,7 +250,7 @@ func (a *App) editWithConfig(cfg ConfigState, req EditRequest) (EditResult, erro
 	encoded := encodeText(updated, ending, hadBOM)
 	after := encoded
 	if text != updated {
-		if err := safeWriteFile(path, encoded, modeOf(path)); err != nil {
+		if err := sandboxedWriteFile(spec, roots, path, encoded, modeOf(path)); err != nil {
 			return EditResult{}, err
 		}
 		after, _, err = readTextFile(path)

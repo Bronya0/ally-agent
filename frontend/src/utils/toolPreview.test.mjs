@@ -12,6 +12,7 @@ import test from 'node:test';
 import {
   assistantRowRenderState,
   codePreviewWindow,
+  deleteAbsentCount,
   deleteFailedCount,
   deletePathList,
   deletePathRows,
@@ -286,6 +287,8 @@ test('deletePathList reads arguments, the slot result and the legacy result shap
   assert.deepEqual(deletePathList({ path: 'a.txt' }), ['a.txt']);
   assert.deepEqual(deletePathList({ paths: ['a.txt', 'b.txt'] }), ['a.txt', 'b.txt']);
   assert.deepEqual(deletePathList({ paths: [{ path: 'a.txt', ok: true }, { path: 'b.txt', ok: false }] }), ['a.txt', 'b.txt']);
+  // 失败行也带上原因身份，标题摘要不看它、逐行明细看（同一份判定）。
+  assert.deepEqual(deletePathRows({ paths: [{ path: 'a.txt', ok: false, error: 'x', errorCode: 'E_IO' }] }), [{ path: 'a.txt', ok: false, error: 'x', errorCode: 'E_IO', absent: false }]);
   assert.deepEqual(deletePathList({ deleted: 'old.txt', path: 'old.txt' }), ['old.txt']);
   assert.deepEqual(deletePathList({ paths: [] }), []);
   assert.deepEqual(deletePathList({}), []);
@@ -293,17 +296,24 @@ test('deletePathList reads arguments, the slot result and the legacy result shap
 });
 
 test('deletePathRows carries one row per path with its slot outcome', () => {
-  // 结果里的槽对象是唯一带成败的来源（批量删可以有的成、有的败）。
+  // 结果里的槽对象是唯一带成败的来源（批量删可以有的成、有的败）。失败原因身份
+  // （errorCode）一路带到行上：行里的原因按它取本地化句子，只留原始文本就看不懂。
   assert.deepEqual(
-    deletePathRows({ paths: [{ path: 'a.txt', ok: true }, { path: 'b.txt', ok: false, error: 'permission denied' }] }),
-    [{ path: 'a.txt', ok: true, error: '' }, { path: 'b.txt', ok: false, error: 'permission denied' }],
+    deletePathRows({ paths: [{ path: 'a.txt', ok: true }, { path: 'b.txt', ok: false, error: 'permission denied', errorCode: 'E_SANDBOX_WRITE_DENIED' }] }),
+    [{ path: 'a.txt', ok: true, error: '', errorCode: '', absent: false }, { path: 'b.txt', ok: false, error: 'permission denied', errorCode: 'E_SANDBOX_WRITE_DENIED', absent: false }],
+  );
+  // «本来就不存在» 是后端报的 absent 槽：ok 仍为真，所以行必须单独认得出来，
+  // 否则卡片会把「什么都没删」写成一次成功删除。
+  assert.deepEqual(
+    deletePathRows({ paths: [{ path: 'gone.txt', ok: true, absent: true }] }),
+    [{ path: 'gone.txt', ok: true, error: '', errorCode: '', absent: true }],
   );
   // 入参、老会话的单路径字符串、以及空/非法输入。
-  assert.deepEqual(deletePathRows({ paths: ['a.txt', 'b.txt'] }), [{ path: 'a.txt', ok: true, error: '' }, { path: 'b.txt', ok: true, error: '' }]);
-  assert.deepEqual(deletePathRows({ path: 'a.txt' }), [{ path: 'a.txt', ok: true, error: '' }]);
-  assert.deepEqual(deletePathRows({ deleted: 'old.txt', path: 'old.txt' }), [{ path: 'old.txt', ok: true, error: '' }]);
+  assert.deepEqual(deletePathRows({ paths: ['a.txt', 'b.txt'] }), [{ path: 'a.txt', ok: true, error: '', errorCode: '', absent: false }, { path: 'b.txt', ok: true, error: '', errorCode: '', absent: false }]);
+  assert.deepEqual(deletePathRows({ path: 'a.txt' }), [{ path: 'a.txt', ok: true, error: '', errorCode: '', absent: false }]);
+  assert.deepEqual(deletePathRows({ deleted: 'old.txt', path: 'old.txt' }), [{ path: 'old.txt', ok: true, error: '', errorCode: '', absent: false }]);
   // 槽里有没有 ok 字段决定成败：缺字段不能把成功行误判成失败行。
-  assert.deepEqual(deletePathRows({ paths: [{ path: 'a.txt' }] }), [{ path: 'a.txt', ok: true, error: '' }]);
+  assert.deepEqual(deletePathRows({ paths: [{ path: 'a.txt' }] }), [{ path: 'a.txt', ok: true, error: '', errorCode: '', absent: false }]);
   assert.deepEqual(deletePathRows({ paths: [{ path: '  ', ok: true }, { path: '', ok: false, error: 'x' }] }), []);
   assert.deepEqual(deletePathRows({ paths: [] }), []);
   assert.deepEqual(deletePathRows({}), []);
@@ -321,6 +331,15 @@ test('deleteFailedCount surfaces a partial failure', () => {
   assert.equal(deleteFailedCount({ failedCount: 0 }), 0);
   assert.equal(deleteFailedCount({}), 0);
   assert.equal(deleteFailedCount(null), 0);
+});
+
+// 空删（路径本来就不存在）不是失败，所以两个计数各报各的：卡片标题要把两种
+// 情况分开说，混成一个数就会把「什么都没删」说成删失败。
+test('deleteAbsentCount reports paths that were already gone', () => {
+  assert.equal(deleteAbsentCount({ absentCount: 2, failedCount: 0 }), 2);
+  assert.equal(deleteAbsentCount({ absentCount: 0 }), 0);
+  assert.equal(deleteAbsentCount({}), 0);
+  assert.equal(deleteAbsentCount(null), 0);
 });
 
 test('sshServerRows reads one row per authorized server', () => {

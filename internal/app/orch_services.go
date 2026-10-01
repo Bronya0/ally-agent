@@ -26,6 +26,7 @@ import (
 	"sync"
 	"time"
 
+	"ally-dev/internal/sandbox"
 	"ally-dev/internal/tools/service"
 	toolshared "ally-dev/internal/tools/shared"
 )
@@ -92,6 +93,9 @@ type managedService struct {
 	// 终止，因此 cancel 为 nil。
 	cancel   context.CancelFunc
 	waitDone chan struct{}
+	// writeRoots 是该服务的可写根（启动时算出的工作区 + 附加工作区），只在拒写
+	// 提示里报给模型：命令卡与服务卡说的是同一句「可写范围是哪些」。
+	writeRoots []string
 }
 
 func (a *App) StopService(req StopServiceRequest) (ServiceInfo, error) {
@@ -117,7 +121,7 @@ func (a *App) GetServiceOutput(id string) (ServiceOutputResult, error) {
 	return ServiceOutputResult{ID: id, Output: output, Bytes: total, Truncated: truncated}, nil
 }
 
-func (a *App) startServiceWithConfig(cfg ConfigState, req StartServiceRequest) (ServiceInfo, error) {
+func (a *App) startServiceWithConfig(parent context.Context, cfg ConfigState, req StartServiceRequest) (ServiceInfo, error) {
 	if strings.TrimSpace(req.Command) == "" {
 		return ServiceInfo{}, codedToolError("E_BAD_COMMAND", errors.New("command is required"))
 	}
@@ -133,7 +137,13 @@ func (a *App) startServiceWithConfig(cfg ConfigState, req StartServiceRequest) (
 			return ServiceInfo{}, err
 		}
 	}
-	if err := checkCommandSafetyAtCwd(CommandRequest{Command: req.Command, Cwd: req.Cwd}, roots, cwd); err != nil {
+	// 与 command 工具同一套围栏门控：沙箱真正包住服务命令时只保留工作区根自毁、
+	// VCS 元数据与高危语义三道检查，其余让位给内核。
+	if kernelOwnsBoundary() {
+		if err := checkConfinedCommandSafety(req.Command, cwd, roots); err != nil {
+			return ServiceInfo{}, err
+		}
+	} else if err := checkCommandSafetyAtCwd(CommandRequest{Command: req.Command, Cwd: req.Cwd}, roots, cwd); err != nil {
 		return ServiceInfo{}, err
 	}
 	a.servicesMu.Lock()
@@ -152,9 +162,16 @@ func (a *App) startServiceWithConfig(cfg ConfigState, req StartServiceRequest) (
 	}
 
 	id := "svc_" + newID()
-	ctx, cancel := context.WithCancel(context.Background())
+	// 生命周期与工具调用的那次 ctx 脱钩：后台服务要在这一轮对话结束之后继续跑，
+	// 而它又需要 ctx 里的值（kbDenyRoots 从 parent 上读知识库禁写根），所以脱掉
+	// 的只是取消链，不是带的值。取消只由 StopService / 应用退出走 cancel。
+	runCtx, cancel := context.WithCancel(context.WithoutCancel(parent))
 	shell := commandShell(req.Command, cfg.GitBashPath)
-	cmd := exec.CommandContext(ctx, shell.path, shell.args...)
+	// service 与 command 走同一套沙箱策略：只接一条会让 dev server 成为绕开沙箱的
+	// 口子。
+	spec := sandboxSpec(roots, kbDenyRoots(parent))
+	argv := wrapSandboxedCommand(spec, append([]string{shell.path}, shell.args...))
+	cmd := exec.CommandContext(runCtx, argv[0], argv[1:]...)
 	cmd.Dir = cwd
 	cmd.Env = commandEnvironment(cfg)
 	job := prepareServiceCommand(cmd)
@@ -187,11 +204,13 @@ func (a *App) startServiceWithConfig(cfg ConfigState, req StartServiceRequest) (
 			PID:       cmd.Process.Pid,
 			Status:    "running",
 			StartedAt: time.Now().Unix(),
+			Sandboxed: spec.Enforce(),
 		},
-		cmd:      cmd,
-		output:   buf,
-		cancel:   cancel,
-		waitDone: make(chan struct{}),
+		cmd:        cmd,
+		output:     buf,
+		cancel:     cancel,
+		waitDone:   make(chan struct{}),
+		writeRoots: roots,
 	}
 
 	a.servicesMu.Lock()
@@ -480,6 +499,12 @@ type ServiceReadResult struct {
 	Truncated     bool   `json:"truncated"`
 	Status        string `json:"status"`
 	FromByte      int    `json:"fromByte"`
+	// SandboxDenied / DeniedWriteHint 与服务记录上的同名标记同源（sticky）：服务
+	// 输出里的内核拒写不该只剩那句裸权限错误。模型侧读 DeniedWriteHint；SandboxDenied
+	// 只驱动卡片告警，而告警只在 start 卡上显示——读日志、停服务并不写盘，标记是
+	// 记录上的旧事，由前端按动作判定（frontend/src/utils/sandboxAlert.mjs）。
+	SandboxDenied   bool   `json:"sandboxDenied,omitempty"`
+	DeniedWriteHint string `json:"deniedWriteHint,omitempty"`
 }
 
 func (a *App) readServiceOutput(req ServiceReadRequest) (ServiceReadResult, error) {
@@ -502,9 +527,6 @@ func (a *App) readServiceOutput(req ServiceReadRequest) (ServiceReadResult, erro
 		tailBytes = maxServiceReadTailBytes
 	}
 
-	service.mu.Lock()
-	status := service.info.Status
-	service.mu.Unlock()
 	output, total, truncated := service.outputSnapshot()
 	// Command output is decoded at the consumption boundary (the same
 	// contract as the command tool): native Windows tools and locale-encoded
@@ -533,15 +555,25 @@ func (a *App) readServiceOutput(req ServiceReadRequest) (ServiceReadResult, erro
 			returned = aligned
 		}
 	}
+	// 拒写标记与状态在同一次取：本次读到的这段本身可能才刚出现内核拒写（快照
+	// 与读取之间有一次竞态窗口），所以入参是 returned 而不是缓冲全量。
+	service.mu.Lock()
+	status := service.info.Status
+	service.markSandboxDeniedLocked(returned)
+	denied := service.info.SandboxDenied
+	deniedHint := service.info.DeniedWriteHint
+	service.mu.Unlock()
 	return ServiceReadResult{
-		ID:            id,
-		Output:        returned,
-		ReturnedBytes: len(returned),
-		BufferBytes:   bufferBytes,
-		TotalBytes:    total,
-		Truncated:     truncated,
-		Status:        status,
-		FromByte:      fromByte,
+		ID:              id,
+		Output:          returned,
+		ReturnedBytes:   len(returned),
+		BufferBytes:     bufferBytes,
+		TotalBytes:      total,
+		Truncated:       truncated,
+		Status:          status,
+		FromByte:        fromByte,
+		SandboxDenied:   denied,
+		DeniedWriteHint: deniedHint,
 	}, nil
 }
 
@@ -588,6 +620,20 @@ func (s *managedService) updateOutputInfoLocked() {
 	s.info.OutputTail = tailString(output, serviceOutputPreview)
 	s.info.OutputBytes = total
 	s.info.OutputTruncated = truncated
+	s.markSandboxDeniedLocked(output)
+}
+
+// markSandboxDeniedLocked records a kernel write refusal the service's output
+// shows, and keeps it once seen: a dev server pushes the refusal out of the tail
+// within minutes, while the alert is about an event that already happened. The
+// predicate and the hint sentence are the command path's, so a service and a
+// command report one refused write the same way.
+func (s *managedService) markSandboxDeniedLocked(output string) {
+	if s.info.SandboxDenied || !sandboxRefusedWrite(s.info.Sandboxed, output) {
+		return
+	}
+	s.info.SandboxDenied = true
+	s.info.DeniedWriteHint = sandbox.WriteDeniedHint(s.writeRoots)
 }
 
 func (s *managedService) outputSnapshot() (string, int64, bool) {
@@ -656,6 +702,10 @@ type promoteCommandParams struct {
 	startedAt time.Time
 	tee       *teeWriter
 	timeout   int
+	// sandboxed 记录该命令是否跑在沙箱里，收编后随服务记录一起给模型看。
+	sandboxed bool
+	// writeRoots 同 start 路径：收编后拒写提示仍旧要说出可写范围。
+	writeRoots []string
 	// waitDone 是 command 路径已经启动的 cmd.Wait 结果信道；收编成功后其
 	// 所有权移交给本函数（由 watchPromotedCommandExit 消费）。
 	waitDone <-chan error
@@ -718,10 +768,12 @@ func (a *App) promoteTimedOutCommand(p promoteCommandParams) (ServiceInfo, error
 			Status:    "running",
 			StartedAt: p.startedAt.Unix(),
 			Promoted:  true,
+			Sandboxed: p.sandboxed,
 		},
-		cmd:      p.cmd,
-		output:   rolling,
-		waitDone: make(chan struct{}),
+		cmd:        p.cmd,
+		output:     rolling,
+		waitDone:   make(chan struct{}),
+		writeRoots: p.writeRoots,
 	}
 
 	// 原子改道：把超时前已捕获的输出作为种子写进滚动缓冲，并切换写入目标
@@ -778,15 +830,22 @@ func (a *App) watchPromotedCommandExit(svc *managedService, waitDone <-chan erro
 // so the model does not mistake the truncated buffer for the complete output.
 func (a *App) promotedCommandResult(req CommandRequest, shell shellInvocation, cwd string, buf *limitedBuffer, timeout int, info ServiceInfo, outputFilePath string, outputFileSize int64) CommandResult {
 	result := CommandResult{
-		Command:           req.Command,
-		Cwd:               filepath.ToSlash(cwd),
-		Shell:             shell.name,
-		ShellPath:         shell.path,
-		Output:            decodeConsoleOutput(buf.String()),
-		ExitCode:          -1,
-		TimedOut:          true,
-		DurationMS:        int64(timeout) * 1000,
-		Truncated:         buf.truncated,
+		Command:    req.Command,
+		Cwd:        filepath.ToSlash(cwd),
+		Shell:      shell.name,
+		ShellPath:  shell.path,
+		Output:     decodeConsoleOutput(buf.String()),
+		ExitCode:   -1,
+		TimedOut:   true,
+		DurationMS: int64(timeout) * 1000,
+		Truncated:  buf.truncated,
+		Sandboxed:  info.Sandboxed,
+		// 拒写标记与说明从刚取的快照带过来：收编是提前 return，走不到普通命令末尾的
+		// annotateSandboxDeniedWrite。超时前的输出已作为种子写进滚动缓冲并被扫过，
+		// 所以这条结果同样能说清「写没成」——否则模型只看到一句裸权限错误，正是它
+		// 最容易读成“自己命令写错了”的那种输出。
+		SandboxDenied:     info.SandboxDenied,
+		DeniedWriteHint:   info.DeniedWriteHint,
 		OutputFilePath:    outputFilePath,
 		OutputFileBytes:   outputFileSize,
 		PromotedToService: true,

@@ -122,10 +122,16 @@ func TestKBDenyBlocksCreateEditDeleteViaExecuteTool(t *testing.T) {
 }
 
 func TestKBDenyBlocksCommandWriteTargets(t *testing.T) {
-	app, cfg, ctx, _ := kbTestSetup(t)
+	app, cfg, ctx, dir := kbTestSetup(t)
 
 	res := app.executeTool(ctx, cfg, "s-1", "command", []byte(`{"command":"echo hi > sources/out.txt"}`))
-	if res.OK || !strings.Contains(res.Error, "E_KB_SOURCES_READONLY") {
+	if res.OK {
+		// 沙箱强制生效（macOS）时字面检查让位给内核：拒绝发生在执行期（exit
+		// 非 0 + 拦截提示），文件同样不许落进 sources/。
+		if _, statErr := os.Stat(filepath.Join(dir, "sources", "out.txt")); statErr == nil {
+			t.Fatal("a redirect into sources/ must not land the file under confinement either")
+		}
+	} else if !strings.Contains(res.Error, "E_KB_SOURCES_READONLY") {
 		t.Fatalf("redirect into sources/ must be denied, got ok=%v err=%v", res.OK, res.Error)
 	}
 
@@ -145,10 +151,18 @@ func TestKBDenyBlocksCommandWriteTargets(t *testing.T) {
 // source operand has to be treated as a mutation target. Inspecting destinations
 // only let an ordinary `mv` carry the read-only originals out of sources/.
 func TestKBDenyBlocksMoveSourceOutOfSources(t *testing.T) {
-	app, cfg, ctx, _ := kbTestSetup(t)
+	app, cfg, ctx, dir := kbTestSetup(t)
 
 	res := app.executeTool(ctx, cfg, "s-1", "command", []byte(`{"command":"mv sources/note.md ."}`))
-	if res.OK || !strings.Contains(res.Error, "E_KB_SOURCES_READONLY") {
+	if res.OK {
+		// 沙箱强制生效（macOS）时由内核拒绝：原件必须留在 sources/ 里。
+		if _, statErr := os.Stat(filepath.Join(dir, "note.md")); statErr == nil {
+			t.Fatal("the read-only original must not move out of sources/ under confinement")
+		}
+		if _, statErr := os.Stat(filepath.Join(dir, "sources", "note.md")); statErr != nil {
+			t.Fatal("the read-only original must stay in sources/ under confinement")
+		}
+	} else if !strings.Contains(res.Error, "E_KB_SOURCES_READONLY") {
 		t.Fatalf("moving a file out of sources/ must be denied, got ok=%v err=%v", res.OK, res.Error)
 	}
 
@@ -206,5 +220,26 @@ func TestKBPromptPartInjection(t *testing.T) {
 	noRoot := joinSystemPromptParts(buildSystemPromptParts(nil, kbRoot, nil, "", "", ""))
 	if strings.Contains(noRoot, "Knowledge Base Mode") {
 		t.Fatal("empty kbRoot must disable KB mode")
+	}
+}
+
+// TestServiceStartSurfacesKBDenyRefusal locks the one thing a guard written as
+// a condition can lose: the error itself. `if guard() == nil { start() }` turns
+// a refusal into "success with no data", which reads to the model as a service
+// that started and did nothing. The check's return value has to land on err.
+// A mandated-sandbox host leaves sources/ to the kernel's DenyWriteRoots and
+// skips the literal check, so this only runs where the fence is at full strength.
+func TestServiceStartSurfacesKBDenyRefusal(t *testing.T) {
+	if kernelOwnsBoundary() {
+		t.Skip("a confined host leaves the sources/ deny roots to the kernel")
+	}
+	app, cfg, ctx, _ := kbTestSetup(t)
+
+	res := app.executeTool(ctx, cfg, "s-1", "service", []byte(`{"action":"start","name":"dev","command":"echo x > sources/out.txt"}`))
+	if res.OK {
+		t.Fatal("a service command that writes into sources/ must be refused")
+	}
+	if !strings.Contains(res.Error, "E_KB_SOURCES_READONLY") {
+		t.Fatalf("the refusal must carry the KB deny code, got %q", res.Error)
 	}
 }

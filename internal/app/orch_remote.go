@@ -23,6 +23,7 @@ import (
 
 	"ally-dev/internal/tools/command"
 	"ally-dev/internal/tools/edit"
+	"ally-dev/internal/tools/pathutil"
 	"ally-dev/internal/tools/read"
 	"ally-dev/internal/tools/sshclient"
 )
@@ -307,7 +308,14 @@ def op_read_batch(root, payload):
     return {"files": files, "remaining": remaining}
 
 def op_write(root, payload):
-    path = safe_join(root, payload.get("path", ""))
+    lexical, resolved = safe_join_paths(root, payload.get("path", ""))
+    # 版本控制元数据在远端同样是禁区：Go 侧已按字面路径判过一遍，但工作区内的
+    # 符号链接能把干净的字面路径接到 .git 上（把 .git 链成 gh 之后写
+    # gh/hooks/pre-commit），只有远端的事实解析才看得见，所以两个形态各判一次。
+    for candidate in (lexical, resolved):
+        if contains_vcs(candidate):
+            raise ValueError("E_PROTECTED_PATH: refusing to write version-control metadata: %s" % to_unicode(payload.get("path", "")))
+    path = resolved
     mkdirs = bool(payload.get("mkdirs"))
     overwrite = bool(payload.get("overwrite"))
     original_mode = None
@@ -429,8 +437,8 @@ def is_workspace_root_child_directory(root, rel):
 def check_delete_path(root, rel, recursive):
     # 单条路径删除的全部判定，不执行任何东西。单路径与批量共用这一份：批量在
     # 动手之前逐条跑完，任一条不通过就整批不删。Go 侧已判过路径形态（相对性、
-    # 越界、工作区根、VCS 元数据名），这里判只有远端才知道的事实：存在性、
-    # 是否目录、是否工作区一级目录、是否系统敏感目标。
+    # 越界、工作区根、VCS 元数据名），这里判只有远端才知道的事实：是否目录、
+    # 是否工作区一级目录、是否系统敏感目标；存在性只记录不拒绝（见下）。
     #
     # 两套路径各管一头：保护判定用 resolved（符号链接指向 .git 或系统目录也
     # 要拦住），实际删除用 lexical —— 删符号链接删的是链接本身，不是它指向的
@@ -447,7 +455,9 @@ def check_delete_path(root, rel, recursive):
     if is_workspace_root_child_directory(root, rel):
         raise ValueError("refusing to delete top-level workspace directory: %s" % to_unicode(rel))
     if not os.path.lexists(lexical):
-        raise ValueError("path does not exist: %s" % to_unicode(rel))
+        # 不存在不是错误：删除的目的已经达成。标出来交给 op_delete_batch 报成
+        # absent 槽（本地 delete 是同一套语义），同批其它路径照删。
+        return {"missing": True, "lexical": lexical, "resolved": resolved, "isDir": False}
     # os.path.isdir 会跟随符号链接，而删除只作用于链接本身：链接一律按文件处理。
     is_dir = os.path.isdir(lexical) and not os.path.islink(lexical)
     if is_dir and not recursive:
@@ -465,12 +475,17 @@ def op_delete_batch(root, payload):
     # 两遍：先全部判定（任一条不通过则整批一条都不删），再逐条执行（单条失败
     # 只污染自己的结果槽，与批量读的隔离契约一致）。判定阶段顺手把解析好的
     # 路径带下去，执行阶段不再重新解析，删除目标不会被第二个进程换掉。
+    # 判定阶段答出来的「本来就不存在」不是失败：执行阶段跳过它，结果槽报
+    # absent（与本地 delete 同一套语义），同批其它路径照删。
     recursive = bool(payload.get("recursive"))
     prepared = []
     for rel in payload.get("paths") or []:
         prepared.append((rel, check_delete_path(root, rel, recursive)))
     results = []
     for rel, item in prepared:
+        if item.get("missing"):
+            results.append({"path": rel, "ok": True, "absent": True})
+            continue
         try:
             slot = execute_delete_path(item)
             slot["path"] = rel
@@ -510,6 +525,12 @@ def check_write_targets(root, cwd, targets):
             # 与本地 inspectCommandMutationTarget 一致，无条件拦截，
             # 无论目标文件是否已存在。
             raise ValueError("E_PATH_OUTSIDE: remote command write target escapes workspaceRoot via symlink: %s" % p)
+        # 解析后落在版本控制元数据里同样拒绝：.git 被链成 gh 之后的
+        # gh/hooks/pre-commit 字面干净（Go 侧按字面判过一遍），解析后才露出 .git
+        # ——与本地 command 用解析后路径再判一次是同一个手法。
+        for candidate in (lexical, resolved):
+            if contains_vcs(candidate):
+                raise ValueError("E_PROTECTED_PATH: remote command write target is inside version-control metadata: %s" % p)
         if res_inside:
             continue
         if os.path.lexists(p):
@@ -1035,9 +1056,13 @@ func remoteHelperError(resp remotePythonResponse) error {
 	if resp.Error == "" {
 		resp.Error = "remote helper failed"
 	}
-	if strings.HasPrefix(resp.Error, "E_PATH_OUTSIDE:") {
-		msg := strings.TrimSpace(strings.TrimPrefix(resp.Error, "E_PATH_OUTSIDE:"))
-		return codedToolError("E_PATH_OUTSIDE", errors.New(msg))
+	// 两个前缀都要转成结构化错误码：模型侧靠错误码认「这是边界拒绝」，纯文本
+	// 会被当成命令自己报的错而重试。
+	for _, code := range []string{"E_PATH_OUTSIDE", "E_PROTECTED_PATH"} {
+		if strings.HasPrefix(resp.Error, code+":") {
+			msg := strings.TrimSpace(strings.TrimPrefix(resp.Error, code+":"))
+			return codedToolError(code, errors.New(msg))
+		}
 	}
 	return errors.New(resp.Error)
 }
@@ -1052,6 +1077,36 @@ func remoteWriteTargets(commandLine string) []string {
 		targets = append(targets, t.Path)
 	}
 	return targets
+}
+
+// remoteVCSMetadataWrite 拒绝把版本控制元数据当写目标的远端路径。规则与本地写
+// 路径、删除路径、命令目标同源（pathutil.VCSMetadataReason），新增一个远端写入口
+// 只要过这一关就不会漏。这一层只能判字面路径：真实路径要在 SSH 另一头解析，工作
+// 区内的符号链接能把干净的字面路径接到 .git 上（`ln -s .git gh` 之后写
+// `gh/hooks/pre-commit`），那一步由 helper 用远端事实复判（op_write 的
+// contains_vcs）。
+func remoteVCSMetadataWrite(cleanPath string) error {
+	if blocked, reason := pathutil.VCSMetadataReason(cleanPath); blocked {
+		return codedToolError("E_PROTECTED_PATH", errors.New(reason))
+	}
+	return nil
+}
+
+// remoteCommandVCSMetadataTarget 报出远端命令行里第一个落在版本控制元数据内的字面
+// 写入目标，workingDir 用来解析相对目标（远端命令的 cwd）。与本地
+// firstVCSMetadataMutationTarget 的差别只有一处：本地还会用 evalExistingPrefix 把
+// 符号链接解析后复判，远端解析不了，那一步留给 helper 的 check_write_targets。
+func remoteCommandVCSMetadataTarget(commandLine, workingDir string) string {
+	for _, target := range command.LiteralWriteTargets(commandLine) {
+		p, ok := command.ResolveCommandLiteralPath(target.Path, workingDir)
+		if !ok {
+			continue
+		}
+		if blocked, _ := pathutil.VCSMetadataReason(p); blocked {
+			return filepath.ToSlash(p)
+		}
+	}
+	return ""
 }
 
 // toolSessionID 取出工具调用所属的会话 ID；后台任务与子代理调用可能没有会话。
@@ -1295,6 +1350,11 @@ func (a *App) remoteReadRawOne(ctx context.Context, rt remoteTarget, relPath str
 func (a *App) remoteWriteRaw(ctx context.Context, rt remoteTarget, relPath string, data []byte, overwrite, mkdirs bool) ([]string, error) {
 	cleanPath, err := validateRemoteWorkspacePath(relPath, rt.WorkspaceRoot, false)
 	if err != nil {
+		return nil, err
+	}
+	// 远端写入（create / edit）与本地同一条围栏：.git/hooks 里的文件会在下次 git
+	// 命令时执行，覆盖 .git/index 或 ref 会损坏仓库。
+	if err := remoteVCSMetadataWrite(cleanPath); err != nil {
 		return nil, err
 	}
 	var outcome struct {
@@ -1711,9 +1771,10 @@ func (a *App) remoteCreateFile(ctx context.Context, req RemoteCreateFileRequest)
 
 // remoteDeletePath 删除远端一次调用里的全部路径，与本地 delete 同一套语义：
 // Go 侧先判路径形态（相对性、越界、工作区根、VCS 元数据）以及这一串路径彼此
-// 之间的重复与包含；只有远端才知道的事实（存在性、是否目录、是否工作区一级
-// 目录、是否系统敏感目标）由 helper 在动手之前逐条判完——任一条不通过，整批
-// 一条都不删。执行阶段仍是逐条隔离：单条失败只写自己的结果槽。
+// 之间的重复与包含；只有远端才知道的事实（是否目录、是否工作区一级目录、是否
+// 系统敏感目标）由 helper 在动手之前逐条判完——任一条不通过，整批一条都不删。
+// 执行阶段仍是逐条隔离：单条失败只写自己的结果槽；本来就不存在的路径报 absent
+// 槽（既不成功也不失败），同批其它路径照删。
 func (a *App) remoteDeletePath(ctx context.Context, req RemoteDeletePathRequest) (DeletePathsResult, error) {
 	rt, err := a.resolveAndAuthorizeRemoteTarget(ctx, req.Target)
 	if err != nil {
@@ -1752,6 +1813,7 @@ func (a *App) remoteDeletePath(ctx context.Context, req RemoteDeletePathRequest)
 		Paths []struct {
 			Path         string `json:"path"`
 			OK           bool   `json:"ok"`
+			Absent       bool   `json:"absent"`
 			Error        string `json:"error"`
 			ResolvedPath string `json:"resolvedPath"`
 		} `json:"paths"`
@@ -1767,10 +1829,14 @@ func (a *App) remoteDeletePath(ctx context.Context, req RemoteDeletePathRequest)
 	}
 	result := DeletePathsResult{Paths: make([]DeleteResult, 0, len(resp.Paths))}
 	for _, item := range resp.Paths {
-		deleted := DeleteResult{Deleted: item.Path, Path: item.Path, ResolvedPath: item.ResolvedPath, OK: item.OK, Recursive: req.Recursive}
-		if item.OK {
+		deleted := DeleteResult{Deleted: item.Path, Path: item.Path, ResolvedPath: item.ResolvedPath, OK: item.OK, Absent: item.Absent, Recursive: req.Recursive}
+		switch {
+		case item.Absent:
+			// 远端本来就没有这条：既不成功也不失败，与本地 delete 同一套报法。
+			result.AbsentCount++
+		case item.OK:
 			result.DeletedCount++
-		} else {
+		default:
 			deleted.Error = item.Error
 			result.FailedCount++
 		}
@@ -1792,6 +1858,18 @@ func (a *App) remoteRunCommand(ctx context.Context, req RemoteRunCommandRequest)
 	rt, err := a.resolveAndAuthorizeRemoteTarget(ctx, req.Target)
 	if err != nil {
 		return CommandResult{}, err
+	}
+	// cwd 在审批之前就定下来：越界或非法的 cwd 不该先弹一次审批再报错；算出来的
+	// 远端绝对路径同时是下面版本控制元数据判定的解析基准。
+	cwd, err := validateRemoteWorkspacePath(req.Cwd, rt.WorkspaceRoot, true)
+	if err != nil {
+		return CommandResult{}, err
+	}
+	// 版本控制元数据：本地那条判定即便在内核接管、围栏 stand down 时也保留，远端
+	// 没有内核兜底，更必须有等价的一份，否则远端命令能写 .git/hooks（下次 git 即
+	// 执行代码）。字面目标里出现 .git 段即拒；解析后的复判在 helper 侧。
+	if risk := remoteCommandVCSMetadataTarget(req.Command, path.Join(rt.WorkspaceRoot, cwd)); risk != "" {
+		return CommandResult{}, codedToolError("E_PROTECTED_PATH", fmt.Errorf("安全围栏已拦截：远端命令的写入目标是版本控制元数据内的路径。\n原因：创建或覆盖 .git/.svn/.hg 的元数据会损坏仓库，写入 hooks 更会在下次 git 命令时执行代码。\n检测到的目标：%s\n处理方式：版本控制状态请手动在服务器上变更。\n被拦截的命令：%s", risk, req.Command))
 	}
 
 	// Approval Gate 3: Destructive command approval
@@ -1838,10 +1916,6 @@ func (a *App) remoteRunCommand(ctx context.Context, req RemoteRunCommandRequest)
 				return CommandResult{}, codedToolError("E_COMMAND_REJECTED", fmt.Errorf("user rejected executing destructive command on %s", rt.Host))
 			}
 		}
-	}
-	cwd, err := validateRemoteWorkspacePath(req.Cwd, rt.WorkspaceRoot, true)
-	if err != nil {
-		return CommandResult{}, err
 	}
 	timeout := req.Timeout
 	if timeout <= 0 {

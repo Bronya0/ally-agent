@@ -27,6 +27,7 @@ import { deletePathRows, scheduledTaskRow, scheduledTaskRows, serviceListRows, s
 import { formatBytes } from '../utils/format.mjs';
 import { scheduledStatusKey, scheduledStatusTone, serviceStatusKey, serviceStatusTone } from '../utils/taskStatus.mjs';
 import { isActionKeyedTool } from '../utils/toolVerb.mjs';
+import { showsSandboxAlert } from '../utils/sandboxAlert.mjs';
 
 export function useToolEvents(ctx) {
   const {
@@ -69,11 +70,28 @@ export function useToolEvents(ctx) {
 
   function applyToolResultCommon(existing, data, resultData) {
     setToolStatus(existing, 'success');
+    // A tool whose verb is keyed by its action (scheduled_task / service / plan)
+    // takes that action from the call's arguments; the result names the action
+    // the backend took, which is the only source for a card whose arguments never
+    // arrived and for plan's read-back call, whose arguments state no action at
+    // all. Only a gap is filled — an action the card already captured is never
+    // replaced (plan's clear and the backend's set are two readings of one call).
+    // 位置在上面的告警判定之前：告警该不该出现在这张卡上取决于这次调用是什么动作。
+    if (!existing.toolAction && isActionKeyedTool(existing.name)) {
+      existing.toolAction = String(resultData?.action || '').trim().toLowerCase();
+    }
     // ESC 终止的命令不应显示绿色 √
-    if (data.name === 'command' || data.name === 'remote_run_command') {
+    if (data.name === 'command' || data.name === 'remote_run_command' || data.name === 'service') {
       try {
         const parsed = JSON.parse(data.result);
         if (parsed?.data?.cancelled) setToolStatus(existing, 'error');
+        // 沙箱拦下的写入：命令跑完了（内核拒绝按约定是命令结果），但这次写没有
+        // 发生。标记由后端结构化给出，卡片据此固定显示一行报错 + 拒绝状态标记。
+        // service 只有 start 算「这次调用被拒写」：标记记在服务记录上是 sticky 的，
+        // read/stop 的结果会把它一起带回来，而读日志、停服务并没有写盘
+        // （判定收口在 utils/sandboxAlert）。
+        existing.sandboxDenied = Boolean(parsed?.data?.sandboxDenied)
+          && showsSandboxAlert(existing.name, existing.toolAction);
       } catch (e) {
         console.error('[tool:result] failed to parse command cancel state', data?.name, data?.toolCallId, e);
       }
@@ -85,15 +103,6 @@ export function useToolEvents(ctx) {
     if (data.mcpServer) existing.mcpServer = data.mcpServer;
     if (data.mcpTool) existing.mcpTool = data.mcpTool;
     existing.time = new Date().toLocaleTimeString();
-    // A tool whose verb is keyed by its action (scheduled_task / service / plan)
-    // takes that action from the call's arguments; the result names the action
-    // the backend took, which is the only source for a card whose arguments never
-    // arrived and for plan's read-back call, whose arguments state no action at
-    // all. Only a gap is filled — an action the card already captured is never
-    // replaced (plan's clear and the backend's set are two readings of one call).
-    if (!existing.toolAction && isActionKeyedTool(existing.name)) {
-      existing.toolAction = String(resultData?.action || '').trim().toLowerCase();
-    }
   }
 
   function applyDefaultToolResultTitle(existing, data, resultData) {

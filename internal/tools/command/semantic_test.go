@@ -251,3 +251,43 @@ func TestResolveCommandLiteralPathExpandsTilde(t *testing.T) {
 		t.Fatalf("plain relative target must resolve inside the workspace, got %q ok=%v", got, ok)
 	}
 }
+
+// DeletePathTargets names what a raw deletion verb will remove and leaves the
+// managed ones alone: only the raw set is something the caller may need to
+// refuse, because git rm / docker rm delete through a tool with its own policy.
+func TestDeletePathTargets(t *testing.T) {
+	cases := []struct {
+		command string
+		want    []string
+	}{
+		{"rm -rf build", []string{"build"}},
+		{"rm -f a.txt b.txt", []string{"a.txt", "b.txt"}},
+		{"rmdir empty", []string{"empty"}},
+		{"del /f x.txt", []string{"x.txt"}},
+		{"unlink link", []string{"link"}},
+		{"find . -name '*.log' -delete", []string{".", "*.log"}},
+		{"rm -rf build && rm -rf dist", []string{"build", "dist"}},
+	}
+	for _, tc := range cases {
+		if got := DeletePathTargets(tc.command); !equalStrings(got, tc.want) {
+			t.Fatalf("DeletePathTargets(%q) = %v, want %v", tc.command, got, tc.want)
+		}
+	}
+	for _, managed := range []string{"git rm file.txt", "docker rm container", "kubectl delete pod x", "npm uninstall lodash"} {
+		if got := DeletePathTargets(managed); len(got) != 0 {
+			t.Fatalf("DeletePathTargets(%q) = %v, want none: managed tools own their policy", managed, got)
+		}
+	}
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}

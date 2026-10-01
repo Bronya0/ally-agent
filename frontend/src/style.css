@@ -4935,13 +4935,28 @@ code, pre {
   color: var(--ally-danger-pale);
 }
 
+/* 卡片上“这次没成”只有一种外观，盒子样式定义在这里、两个入口共用：工具返回的错误
+   （.tool-error-block）与沙箱拦下的写入（.tool-sandbox-denied）。沙箱那行自占一行、
+   固定在正体之后：命令卡的正体只截尾部若干行，提示埋在正体里折叠态就被裁掉，而放在
+   正体之外既不被裁，又让输出保持原样（内核那句拒绝与退出码都在正体里）。 */
+.tool-error-block,
+.tool-sandbox-denied {
+  margin: 2px 0 4px;
+  padding: 4px 9px;
+  border-radius: 6px;
+  color: var(--ally-danger-pale);
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  font-size: var(--ally-aux-font-size);
+  line-height: 1.45;
+}
+
 .tool-error-detail {
   display: flex;
   align-items: center;
   gap: 8px;
   color: var(--ally-danger-pale);
   font-size: var(--ally-sub-font-size);
-  padding: 2px 8px 2px 0;
   line-height: 1.4;
 }
 
@@ -4954,7 +4969,7 @@ code, pre {
 
 .tool-error-reason {
   margin: 0;
-  padding: 2px 8px 5px 0;
+  padding: 2px 0 0;
   color: var(--ally-danger-pale);
   background: transparent;
   font-family: var(--ally-ui-font);
@@ -5035,6 +5050,16 @@ code, pre {
 .read-group-chip {
   color: var(--ally-text-faint);
   flex-shrink: 0;
+}
+
+/* 删除行的失败原因可能是一整段原始报错（远端删除不给错误码时尤其容易撞上）：行内
+   只留一行、超出省略，完整文本挂在 title 上。只管删除行，读卡的 chip 不受影响。 */
+.read-group-chip-error {
+  flex-shrink: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* 缓存命中标记：缀在 chip 后，与 chip 同色，不加 "·" 分隔符（间隔由 gap 提供） */

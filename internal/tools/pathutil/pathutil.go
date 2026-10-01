@@ -170,6 +170,51 @@ func SamePath(a, b string) bool {
 // repository.
 var vcsMetadataDirNames = []string{".git", ".svn", ".hg"}
 
+// IsSystemRootPath reports whether path denotes a filesystem root: "/" on
+// macOS and Linux, a drive root (C:\) or a UNC share root (\\server\share) on
+// Windows. A root used as the workspace makes every boundary check trivially
+// pass — the whole disk counts as "inside the workspace" — so the workspace
+// picker and the chat run entry reject it up front, on every platform.
+//
+// The Windows forms are parsed by hand rather than via filepath.VolumeName:
+// VolumeName returns "" when compiled off Windows, which would leave the
+// Windows branch permanently untestable anywhere else.
+func IsSystemRootPath(path string) bool {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return false
+	}
+	if IsWindows {
+		return isWindowsVolumeRoot(trimmed)
+	}
+	return filepath.Clean(trimmed) == "/"
+}
+
+// isWindowsVolumeRoot matches drive roots (C:\, C:/), UNC share roots
+// (\\server\share, //server/share), their long-path spellings (\\?\C:\,
+// \\?\UNC\server\share), and a bare separator (the current drive's root).
+// Anything one component deeper is not a root.
+func isWindowsVolumeRoot(path string) bool {
+	if strings.HasPrefix(path, `\\?\UNC\`) {
+		// \\?\UNC\server\share 就是 \\server\share 的长路径拼法。
+		path = `\\` + strings.TrimPrefix(path, `\\?\UNC\`)
+	} else {
+		path = strings.TrimPrefix(path, `\\?\`)
+	}
+	normalized := strings.ReplaceAll(path, `/`, `\`)
+	if strings.HasPrefix(normalized, `\\`) {
+		// UNC 共享根恰好两段（server\share）；再深一层就不是根。
+		parts := strings.Split(strings.Trim(normalized, `\`), `\`)
+		return len(parts) == 2
+	}
+	if len(normalized) >= 2 && normalized[1] == ':' {
+		// 盘符根：卷名之后只剩分隔符。“C:”（无分隔符）是盘上当前目录，
+		// 选择器给不出这种形态，按盘根保守处理。
+		return strings.Trim(normalized[2:], `\`) == ""
+	}
+	return strings.Trim(normalized, `\`) == ""
+}
+
 // CanonicalPath returns the form every path comparison must use. Beyond
 // filepath.Clean it strips trailing dots and spaces from each component on
 // Windows, where the Win32 path parser ignores them: ".git." and ".git" name
@@ -227,11 +272,13 @@ func VCSMetadataReason(p string) (bool, string) {
 	return false, ""
 }
 
-// SafeJoin joins p onto the primary workspace root (roots[0]) and validates
-// that the result is inside one of the roots or ~/.ally_agent. Absolute paths
-// are accepted as-is; relative paths are resolved against roots[0] only.
-// Returns an error if roots is empty or the resolved path escapes all roots.
-func SafeJoin(rt Runtime, roots []string, p string) (string, error) {
+// JoinPath normalizes p against the primary workspace root (roots[0]) without
+// judging whether the result stays inside any root: absolute paths are accepted
+// as-is, relative paths are joined onto roots[0] only. It is the half of
+// SafeJoin a caller needs where the OS sandbox owns the boundary — the kernel
+// refuses the outside write itself, so a lexical containment error here would
+// only pre-empt the authority that does not have to guess.
+func JoinPath(roots []string, p string) (string, error) {
 	if len(roots) == 0 {
 		return "", errors.New("workspace is required")
 	}
@@ -251,7 +298,20 @@ func SafeJoin(rt Runtime, roots []string, p string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	absClean := filepath.Clean(abs)
+	return filepath.Clean(abs), nil
+}
+
+// SafeJoin joins p onto the primary workspace root (roots[0]) and validates
+// that the result is inside one of the roots or ~/.ally_agent. Absolute paths
+// are accepted as-is; relative paths are resolved against roots[0] only.
+// Returns an error if roots is empty or the resolved path escapes all roots.
+// It is JoinPath plus the containment judgement: the two live here so the
+// normalization can not drift between the fenced and the kernel-owned host.
+func SafeJoin(rt Runtime, roots []string, p string) (string, error) {
+	absClean, err := JoinPath(roots, p)
+	if err != nil {
+		return "", err
+	}
 	if !InsideAnyRoot(roots, absClean) && !InsideAllyAgentDir(rt, absClean) {
 		return "", fmt.Errorf("path is outside workspace or ~/.ally_agent: %s", p)
 	}

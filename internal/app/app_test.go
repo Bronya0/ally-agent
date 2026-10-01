@@ -114,6 +114,24 @@ func TestStartChatRequiresExplicitWorkspace(t *testing.T) {
 	}
 }
 
+// TestStartChatRejectsSystemRootWorkspace 验证运行入口对根工作区的兜底拦截：
+// 手改 config.json 把 workspace 写成 "/" 也拦得住，边界检查不因此形同虚设。
+func TestStartChatRejectsSystemRootWorkspace(t *testing.T) {
+	app := NewApp()
+	app.initialized = true
+	app.config = ConfigState{
+		APIFormat: apiFormatOpenAIChat,
+		BaseURL:   defaultBaseURL,
+		APIKey:    "test-key",
+		Model:     "test-model",
+		Workspace: "/",
+	}
+	_, err := app.StartChat(ChatRequest{SessionID: "session-1"})
+	if err == nil || !strings.Contains(err.Error(), "系统根目录不能用作工作区") {
+		t.Fatalf("StartChat() error = %v, want system-root workspace rejection", err)
+	}
+}
+
 // sseChatToolCallChunk 构造一个携带 tool_calls delta 的 OpenAI 兼容流式 chunk。
 func sseChatToolCallChunk(id, name, args string) string {
 	return fmt.Sprintf(`data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":%q,"type":"function","function":{"name":%q,"arguments":%q}}]},"finish_reason":null}]}`+"\n\n", id, name, args)
@@ -1318,11 +1336,64 @@ func TestLoadAgentsMdLoadsSubdirsWhenRootMissing(t *testing.T) {
 	}
 }
 
-func TestSystemPromptDefinesWaitSequencing(t *testing.T) {
+// 系统提示词里那些「必须一直在」的规矩按组摆在一张表里：wait 的用法、越界写之后
+// 怎么恢复、安全红线、别为安心重复读文件、edit 的行为准则。分组只是为了报错时能
+// 说清缺的是哪一类，断言与原来五个用例逐条一致（多条缺失一次全报，不再只报第一条）。
+func TestSystemPromptCarriesTheStandingRules(t *testing.T) {
 	prompt := joinSystemPromptParts(buildSystemPromptParts(nil, "", nil, "", "", ""))
-	for _, expected := range []string{"Use `wait` only", "Ally runs it last", "verify the condition after it completes"} {
-		if !strings.Contains(prompt, expected) {
-			t.Fatalf("system prompt missing wait guidance %q", expected)
+	groups := []struct {
+		name string
+		want []string
+	}{
+		{"wait guidance", []string{
+			"Use `wait` only",
+			"Ally runs it last",
+			"verify the condition after it completes",
+		}},
+		{"command outside-path recovery", []string{
+			"`E_PATH_OUTSIDE`",
+			"Do not retry the unchanged command",
+			"read the returned Chinese explanation",
+		}},
+		{"consolidated safety rules", []string{
+			"# Safety",
+			"Sensitive files",
+			"`~/.ssh/*`",
+			"`~/.ally_agent/config.json`",
+			"`.env`",
+			"explicit user confirmation",
+			"`E_PATH_OUTSIDE`",
+			"stop and ask the user",
+		}},
+		{"redundant-read guidance", []string{
+			"assume workspace files are not concurrently edited by another person",
+			"do not re-read a file merely for reassurance",
+			"reuse its returned `version`",
+			"context compaction removed the reliable snapshot",
+			"formatter/generator/command or other external process may have changed the file",
+			"Use startLine=C to continue",
+		}},
+		{"edit behavioral rules", []string{
+			"must never be copied into edit text",
+			"do not re-read a file merely for reassurance",
+			"Batch edits by risk and size",
+			"one failed `oldText` match or stale `version` rejects the entire call",
+			"Never send multiple file-mutation tool calls for the same path",
+			"Do not use patch, unified diff, or git apply",
+		}},
+	}
+	for _, group := range groups {
+		for _, want := range group.want {
+			if !strings.Contains(prompt, want) {
+				t.Errorf("system prompt missing %s %q", group.name, want)
+			}
+		}
+	}
+	// 子代理提示词共用安全那一节，别只有主提示词有。
+	sub := subagentSystemPrompt("")
+	for _, want := range []string{"# Safety", "Sensitive files", "explicit user confirmation", "`E_PATH_OUTSIDE`"} {
+		if !strings.Contains(sub, want) {
+			t.Errorf("sub-agent prompt missing safety rule %q", want)
 		}
 	}
 }
@@ -1407,71 +1478,6 @@ func TestSessionSystemPromptFrozenWithinSession(t *testing.T) {
 	other := app.sessionSystemPrompt("another-session", changed, nil)
 	if !strings.Contains(other, "changed custom prompt") {
 		t.Fatalf("new session should see the changed prompt")
-	}
-}
-
-func TestSystemPromptExplainsRunCommandOutsidePathRecovery(t *testing.T) {
-	prompt := joinSystemPromptParts(buildSystemPromptParts(nil, "", nil, "", "", ""))
-	for _, expected := range []string{"`E_PATH_OUTSIDE`", "Do not retry the unchanged command", "read the returned Chinese explanation"} {
-		if !strings.Contains(prompt, expected) {
-			t.Fatalf("system prompt missing command recovery guidance %q", expected)
-		}
-	}
-}
-
-func TestSystemPromptIncludesConsolidatedSafetyRules(t *testing.T) {
-	prompt := joinSystemPromptParts(buildSystemPromptParts(nil, "", nil, "", "", ""))
-	for _, expected := range []string{
-		"# Safety",
-		"Sensitive files",
-		"`~/.ssh/*`",
-		"`~/.ally_agent/config.json`",
-		"`.env`",
-		"explicit user confirmation",
-		"`E_PATH_OUTSIDE`",
-		"stop and ask the user",
-	} {
-		if !strings.Contains(prompt, expected) {
-			t.Fatalf("system prompt missing consolidated safety rule %q", expected)
-		}
-	}
-	sub := subagentSystemPrompt("")
-	for _, expected := range []string{"# Safety", "Sensitive files", "explicit user confirmation", "`E_PATH_OUTSIDE`"} {
-		if !strings.Contains(sub, expected) {
-			t.Fatalf("sub-agent prompt missing consolidated safety rule %q", expected)
-		}
-	}
-}
-
-func TestSystemPromptDiscouragesRedundantReadsBeforeEdit(t *testing.T) {
-	prompt := joinSystemPromptParts(buildSystemPromptParts(nil, "", nil, "", "", ""))
-	for _, expected := range []string{
-		"assume workspace files are not concurrently edited by another person",
-		"do not re-read a file merely for reassurance",
-		"reuse its returned `version`",
-		"context compaction removed the reliable snapshot",
-		"formatter/generator/command or other external process may have changed the file",
-		"Use startLine=C to continue",
-	} {
-		if !strings.Contains(prompt, expected) {
-			t.Fatalf("system prompt missing redundant-read guidance %q", expected)
-		}
-	}
-}
-
-func TestSystemPromptKeepsEditBehavioralRules(t *testing.T) {
-	prompt := joinSystemPromptParts(buildSystemPromptParts(nil, "", nil, "", "", ""))
-	for _, expected := range []string{
-		"must never be copied into edit text",
-		"do not re-read a file merely for reassurance",
-		"Batch edits by risk and size",
-		"one failed `oldText` match or stale `version` rejects the entire call",
-		"Never send multiple file-mutation tool calls for the same path",
-		"Do not use patch, unified diff, or git apply",
-	} {
-		if !strings.Contains(prompt, expected) {
-			t.Fatalf("system prompt missing edit behavioral rule %q", expected)
-		}
 	}
 }
 

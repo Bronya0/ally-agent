@@ -18,6 +18,30 @@ type fakeRuntime struct{ dir string }
 
 func (f fakeRuntime) AppDataDir() string { return f.dir }
 
+// TestJoinPathNormalizesWithoutContainment pins the split the kernel-owned host
+// depends on: JoinPath normalizes and judges nothing, SafeJoin is JoinPath plus
+// that judgement, and the shared half can not drift between the two.
+func TestJoinPathNormalizesWithoutContainment(t *testing.T) {
+	rt := fakeRuntime{dir: t.TempDir()}
+	root := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "escaped.txt")
+
+	joined, err := JoinPath([]string{root}, "a/b.txt")
+	if err != nil {
+		t.Fatalf("JoinPath must join a relative path: %v", err)
+	}
+	if want := filepath.Join(root, "a", "b.txt"); joined != want {
+		t.Fatalf("JoinPath(%q) = %q, want %q", "a/b.txt", joined, want)
+	}
+	joined, err = JoinPath([]string{root}, outside)
+	if err != nil || joined != filepath.Clean(outside) {
+		t.Fatalf("JoinPath must accept an outside path unchanged, got %q %v", joined, err)
+	}
+	if _, err := SafeJoin(rt, []string{root}, outside); err == nil {
+		t.Fatal("SafeJoin must still refuse an outside path")
+	}
+}
+
 // TestVCSMetadataReasonBlocksDirectoryAndContent pins the single judgement the
 // write, delete, and command guards share: .git itself and anything below it.
 func TestVCSMetadataReasonBlocksDirectoryAndContent(t *testing.T) {
@@ -130,5 +154,55 @@ func TestInsideWriteRootRejectsDataDirPointingAtFilesystemRoot(t *testing.T) {
 	rt := fakeRuntime{dir: rootLink}
 	if InsideWriteRoot(rt, nil, filepath.Join(string(filepath.Separator), "etc", "passwd")) {
 		t.Fatal("a data dir resolving to the filesystem root must not whitelist the whole disk")
+	}
+}
+
+// 根工作区会让一切边界检查形同虚设（整盘都算"工作区内"），选择器与运行入口
+// 都靠这个判定拒绝。Unix 侧任何平台上都能测；Windows 形态走手写解析，同样
+// 全平台可测（这就是不用 filepath.VolumeName 的原因）。
+func TestIsSystemRootPathUnixForms(t *testing.T) {
+	if IsWindows {
+		t.Skip("unix forms are not meaningful on windows")
+	}
+	for _, path := range []string{"/", "//", "/.", "/../..", "  /  "} {
+		if !IsSystemRootPath(path) {
+			t.Fatalf("IsSystemRootPath(%q) = false, want true", path)
+		}
+	}
+	for _, path := range []string{"", "  ", "/Users", "/home/x", "relative", "/tmp/", ".", "C:\\"} {
+		if IsSystemRootPath(path) {
+			t.Fatalf("IsSystemRootPath(%q) = true, want false", path)
+		}
+	}
+}
+
+func TestIsWindowsVolumeRootForms(t *testing.T) {
+	roots := []string{
+		`C:\`, `C:/`, `C:`, `c:\`, `D:\`,
+		`\\server\share`, `//server/share`, `\\?\C:\`, `\\?\UNC\server\share`,
+		`\`, `/`,
+	}
+	for _, path := range roots {
+		if !isWindowsVolumeRoot(path) {
+			t.Fatalf("isWindowsVolumeRoot(%q) = false, want true", path)
+		}
+	}
+	notRoots := []string{
+		`C:\Users`, `C:\Users\x\proj`, `C:/Users`, `D:\proj`,
+		`\\server\share\docs`, `//server/share/docs/x`, `\\?\C:\Users`,
+		`\\?\UNC\server\share\docs`, `\Users`, `/Users`, `Users`, `file.txt`, `C:proj`,
+	}
+	for _, path := range notRoots {
+		if isWindowsVolumeRoot(path) {
+			t.Fatalf("isWindowsVolumeRoot(%q) = true, want false", path)
+		}
+	}
+}
+
+// Windows 构建上 IsSystemRootPath 必须路由到手写解析；这里顺带验证空路径永远
+// 不是根（它连有效路径都不是，调用方各有自己的“必填”报错）。
+func TestIsSystemRootPathEmptyIsNeverRoot(t *testing.T) {
+	if IsSystemRootPath("") || IsSystemRootPath("   ") {
+		t.Fatal("an empty path is never a filesystem root")
 	}
 }

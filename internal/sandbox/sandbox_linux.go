@@ -26,6 +26,11 @@ const bwrapExecutable = "bwrap"
 // platformHasBackend reports that this build has a confinement backend.
 func platformHasBackend() bool { return true }
 
+// platformForcedMode: 本平台不强制沙箱。档位已不再由用户配置决定，所以这里恒为
+// 关闭——bubblewrap 后端因此处于待命状态（Wrap / Available 仍由本包的测试覆盖），
+// 只有 Linux 哪天也开始强制沙箱时它才会真正接管命令。
+func platformForcedMode() (Mode, bool) { return ModeOff, false }
+
 // platformWriteExtras are the writable locations the Linux profile adds beside
 // the caller's roots. Linux adds none: the temp directory and the caches come
 // from writableDirs.
@@ -44,9 +49,24 @@ var bwrapUsability sync.Map
 // fail later with a misleading launch error and overstate the isolation. The
 // verdict is cached for the process lifetime, so installing bubblewrap while
 // Ally is running takes effect on restart — the remediation text says so.
+// bwrapExecPath caches where bwrap resolved to, for the same reason the darwin
+// side caches it: the lookup walks PATH on every call and Available() is asked
+// on every path resolution.
+var bwrapExecPath struct {
+	once sync.Once
+	path string
+}
+
+func lookPathBwrap() string {
+	bwrapExecPath.once.Do(func() {
+		bwrapExecPath.path, _ = exec.LookPath(bwrapExecutable)
+	})
+	return bwrapExecPath.path
+}
+
 func usableBwrap() (string, bool) {
-	path, err := exec.LookPath(bwrapExecutable)
-	if err != nil {
+	path := lookPathBwrap()
+	if path == "" {
 		return "", false
 	}
 	if cached, ok := bwrapUsability.Load(path); ok {
@@ -70,15 +90,10 @@ func Available() bool {
 
 // UnavailableReason names why the backend cannot run.
 func UnavailableReason() string {
-	if _, err := exec.LookPath(bwrapExecutable); err != nil {
+	if lookPathBwrap() == "" {
 		return "PATH 上找不到 bubblewrap（bwrap）"
 	}
 	return "bubblewrap（bwrap）无法在此主机上创建它需要的命名空间"
-}
-
-// UnavailableRemediation names the two ways out.
-func UnavailableRemediation() string {
-	return "安装 bubblewrap 后重启 Ally（Debian/Ubuntu: sudo apt install bubblewrap；Fedora: sudo dnf install bubblewrap；Arch: sudo pacman -S bubblewrap），或在设置里把命令沙箱改回「关闭」，" + safetyFenceNotice()
 }
 
 // Wrap prefixes argv with the bubblewrap invocation when the spec enforces and
@@ -91,12 +106,11 @@ func Wrap(spec Spec, argv []string) ([]string, bool) {
 	if !ok {
 		return argv, false
 	}
-	if !spec.ReadOnly {
-		// The toolchain caches the writable surface counts on have to exist
-		// before the profile binds them: inside the sandbox the command cannot
-		// create them, and their parents are not writable.
-		_ = EnsureWritableDirs()
-	}
+	// The toolchain caches the writable surface counts on have to exist before
+	// the profile binds them: inside the sandbox the command cannot create them,
+	// and their parents are not writable. Bounded to one attempt per process —
+	// see EnsureWritableDirsOnce.
+	EnsureWritableDirsOnce()
 	plan := buildPlan(spec)
 	args := bwrapArgs(plan.writable, plan.denyWrite, plan.masks, spec.Network)
 	// `--` ends bubblewrap's own options, so a command can never be mistaken for

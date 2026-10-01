@@ -15,22 +15,19 @@ import "os/exec"
 // platformHasBackend reports that this build has no backend for the platform.
 func platformHasBackend() bool { return false }
 
+// platformForcedMode: 本平台不强制沙箱，所以解析结果恒为关闭（见 ResolvedMode）。
+func platformForcedMode() (Mode, bool) { return ModeOff, false }
+
 // platformWriteExtras is empty: no backend renders a writable surface here.
 var platformWriteExtras []string
 
 // Available reports that this build has no backend for the platform. As on
-// Windows, ResolveMode collapses the product setting to off so the command tool
-// keeps working.
+// Windows, ResolvedMode is off here so the command tool keeps working.
 func Available() bool { return false }
 
 // UnavailableReason names why the backend cannot run.
 func UnavailableReason() string {
 	return "当前平台没有操作系统级沙箱后端"
-}
-
-// UnavailableRemediation names the way out.
-func UnavailableRemediation() string {
-	return "在设置里把命令沙箱改回「关闭」。" + safetyFenceNotice()
 }
 
 // Wrap returns argv unchanged: there is no runner to prefix it with.

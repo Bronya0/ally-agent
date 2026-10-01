@@ -174,9 +174,11 @@ func TestTildeWriteTargetsStayInsideTheFence(t *testing.T) {
 	app := NewApp()
 	cfg := ConfigState{Workspace: ws}
 
-	res := app.executeTool(t.Context(), cfg, "s-1", "command", encodedToolArgs(t, CommandRequest{Command: "echo evil >> ~/.zshrc"}))
-	if res.OK || !strings.Contains(res.Error, "E_PATH_OUTSIDE") {
-		t.Fatalf("appending to ~/.zshrc must be refused, got ok=%v err=%v", res.OK, res.Error)
+	// 围栏对 `~` 的解析是纯词法逻辑，直接测 fence 本体（macOS 强制沙箱时围栏
+	// 让位给内核，全链路的越界写行为由 TestCommandFenceStandsDownUnderConfinement
+	// 覆盖）。
+	if code := toolErrorCode(checkCommandSafety(CommandRequest{Command: "echo evil >> ~/.zshrc"}, []string{ws})); code != "E_PATH_OUTSIDE" {
+		t.Fatalf("appending to ~/.zshrc must be refused by the fence, got code=%s", code)
 	}
 	if got, err := os.ReadFile(rc); err != nil || !strings.Contains(string(got), "export PATH") || strings.Contains(string(got), "evil") {
 		t.Fatalf("the shell rc file must be untouched: %q (err=%v)", got, err)
@@ -184,7 +186,7 @@ func TestTildeWriteTargetsStayInsideTheFence(t *testing.T) {
 
 	// The same target inside the workspace stays allowed: the guard is about the
 	// location, not about the command shape.
-	res = app.executeTool(t.Context(), cfg, "s-1", "command", encodedToolArgs(t, CommandRequest{Command: "echo ok >> ./notes.txt"}))
+	res := app.executeTool(t.Context(), cfg, "s-1", "command", encodedToolArgs(t, CommandRequest{Command: "echo ok >> ./notes.txt"}))
 	if !res.OK {
 		t.Fatalf("an in-workspace append must stay allowed, got err=%v", res.Error)
 	}

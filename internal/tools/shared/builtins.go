@@ -584,11 +584,11 @@ func httpTimeoutSchema() map[string]any {
 	return map[string]any{"type": "integer", "minimum": 0, "maximum": 120, "description": "Request timeout in seconds; omit or send 0 for the default (60), max 120."}
 }
 
-// deleteBatchNote is the batch sentence both delete tools carry. The two
-// spellings, the pre-validation promise and the per-path result are one policy,
+// deleteBatchNote is the notes both delete tools carry. The two spellings, the
+// pre-validation promise, the per-path result and the absent case are one policy,
 // so the wording is written once and appended by both declarations.
 func deleteBatchNote() string {
-	return fmt.Sprintf(" One call may delete several entries: pass `paths` (at most %d) instead of `path` — the two are two spellings of one list, so a call carries exactly one of them. Every path is validated before anything is deleted (one refused path means nothing is deleted), and the result reports each path separately.", DeletePathListLimit)
+	return fmt.Sprintf(" One call may delete several entries: pass `paths` (at most %d) instead of `path` — the two are two spellings of one list, so a call carries exactly one of them. Every path is validated before anything is deleted (one refused path means nothing is deleted), and the result reports each path separately. A path that does not exist is not an error: it comes back as an `absent` slot with nothing deleted, so there is no need to retry it.", DeletePathListLimit)
 }
 
 // deletePathsSchema is the batch spelling both delete tools declare, built once

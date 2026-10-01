@@ -82,3 +82,15 @@ test('streaming draft updates change running tool card signature', () => {
   assert.notEqual(toolCardRenderSignature(initial), toolCardRenderSignature(withPath));
   assert.notEqual(toolCardRenderSignature(withPath), toolCardRenderSignature(withCode));
 });
+
+test('sandbox denial is reflected in the signature', () => {
+  // 命令跑完了但写被内核拦下：状态仍是 success，只有这个标记能推动卡片换成
+  // 拒绝标记 + 那行醒目报错，不进签名就会一直显示绿色 √。
+  const ran = { role: 'tool_call', kind: 'command', status: 'success', title: 'echo hi > /tmp/x' };
+  const denied = { ...ran, sandboxDenied: true };
+  assert.notEqual(
+    toolCardRenderSignature(ran),
+    toolCardRenderSignature(denied),
+    'the denial flag must change the memo signature or the card keeps the success mark',
+  );
+});

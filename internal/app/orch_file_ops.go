@@ -27,6 +27,7 @@ import (
 
 	goruntime "runtime"
 
+	"ally-dev/internal/sandbox"
 	"ally-dev/internal/tools/pathutil"
 )
 
@@ -38,6 +39,7 @@ func (a *App) createFileWithConfig(cfg ConfigState, req CreateFileRequest) (Edit
 	if err != nil {
 		return EditResult{}, err
 	}
+	spec := fileMutationSpec(cfg, roots)
 	path, err := resolveWritableFilePath(roots, req.Path)
 	if err != nil {
 		return EditResult{}, err
@@ -46,7 +48,7 @@ func (a *App) createFileWithConfig(cfg ConfigState, req CreateFileRequest) (Edit
 	// result can report them without a follow-up list_files. The walk must run
 	// before MkdirAll, while the missing ancestors still exist as such.
 	createdDirs := newlyCreatedDirs(filepath.Dir(path))
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := sandboxedMkdirAll(spec, roots, filepath.Dir(path)); err != nil {
 		return EditResult{}, err
 	}
 	path, err = resolveWritableFilePath(roots, req.Path)
@@ -62,7 +64,7 @@ func (a *App) createFileWithConfig(cfg ConfigState, req CreateFileRequest) (Edit
 	if info, err := os.Lstat(path); err == nil {
 		exists = true
 		if info.Mode()&os.ModeSymlink != 0 {
-			return EditResult{}, codedToolError("E_SYMLINK_PATH", fmt.Errorf("refusing to overwrite symlink target: %s", req.Path))
+			return EditResult{}, symlinkWriteError(req.Path)
 		}
 		if info.IsDir() {
 			return EditResult{}, codedToolError("E_TARGET_IS_DIRECTORY", fmt.Errorf("path is a directory: %s", req.Path))
@@ -83,11 +85,11 @@ func (a *App) createFileWithConfig(cfg ConfigState, req CreateFileRequest) (Edit
 	content, ending, hadBOM := normalizeText([]byte(req.Content))
 	encoded := encodeText(content, ending, hadBOM)
 	if req.Overwrite {
-		if err := safeWriteFileWithDir(path, encoded, perm, false); err != nil {
+		if err := sandboxedWriteFile(spec, roots, path, encoded, perm); err != nil {
 			return EditResult{}, err
 		}
 	} else {
-		if err := safeWriteNewFile(path, encoded, perm); err != nil {
+		if err := sandboxedWriteNewFile(spec, roots, path, encoded, perm); err != nil {
 			return EditResult{}, err
 		}
 	}
@@ -121,6 +123,7 @@ func (a *App) createDirectoryWithConfig(cfg ConfigState, req CreateDirectoryRequ
 	if err != nil {
 		return err
 	}
+	spec := fileMutationSpec(cfg, roots)
 	path, err := resolveWritableFilePath(roots, req.Path)
 	if err != nil {
 		return err
@@ -132,7 +135,7 @@ func (a *App) createDirectoryWithConfig(cfg ConfigState, req CreateDirectoryRequ
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	return os.MkdirAll(path, 0o755)
+	return sandboxedMkdirAll(spec, roots, path)
 }
 
 // cleanRenameSegment validates a rename target name. A rename keeps the entry in
@@ -215,7 +218,7 @@ func (a *App) renamePathWithConfig(cfg ConfigState, req RenamePathRequest) (stri
 	} else if !errors.Is(lstatErr, os.ErrNotExist) {
 		return "", lstatErr
 	}
-	if err := os.Rename(source, target); err != nil {
+	if err := sandboxedRename(fileMutationSpec(cfg, roots), roots, source, target); err != nil {
 		return "", err
 	}
 	return targetRel, nil
@@ -430,10 +433,11 @@ func (a *App) deletePathsWithConfig(cfg ConfigState, paths []string, recursive b
 	if err != nil {
 		return DeletePathsResult{}, err
 	}
+	spec := fileMutationSpec(cfg, roots)
 	planned := make([]plannedDeletePath, 0, len(paths))
 	targets := make([]fileMutationTarget, 0, len(paths))
 	for _, requestPath := range paths {
-		item, err := planDeletePath(roots, requestPath, recursive)
+		item, err := planDeletePath(spec, roots, requestPath, recursive)
 		if err != nil {
 			return DeletePathsResult{}, err
 		}
@@ -449,12 +453,14 @@ func (a *App) deletePathsWithConfig(cfg ConfigState, paths []string, recursive b
 	result := DeletePathsResult{Paths: make([]DeleteResult, 0, len(planned))}
 	for _, item := range planned {
 		item.result.OK = true
-		var removeErr error
-		if recursive && item.isDir {
-			removeErr = os.RemoveAll(item.absPath)
-		} else {
-			removeErr = os.Remove(item.absPath)
+		if item.absent {
+			// 本来就不存在：没东西可删，也没出事。单独记一笔（既不算成功也不
+			// 算失败），同批其它路径照删。
+			result.AbsentCount++
+			result.Paths = append(result.Paths, item.result)
+			continue
 		}
+		removeErr := sandboxedRemove(spec, roots, item.absPath, recursive && item.isDir)
 		if removeErr != nil {
 			// 失败时清零统计：RemoveAll 可能已经删掉一部分，报出的数字只会误导
 			// 模型；resolvedPath 留在结果里供它自己复查剩余状态。
@@ -473,21 +479,40 @@ func (a *App) deletePathsWithConfig(cfg ConfigState, paths []string, recursive b
 	return result, nil
 }
 
+// countDeleteStats 判断这次删除的目标要不要先把整棵树统计一遍。统计只服务成功
+// 报告，而边界归内核时写根之外的目标不可能是成功的：对一棵大目录（家目录、
+// /var 之类）先 WalkDir 完再等内核拒绝，等于白等几分钟。写根内、以及内核确实
+// 放行的位置（临时目录、工具链缓存）照旧精确计数。
+func countDeleteStats(spec sandbox.Spec, roots []string, path string) bool {
+	if !kernelOwnsBoundary() {
+		return true
+	}
+	resolved, err := evalExistingPrefix(path)
+	if err != nil {
+		return false
+	}
+	return insideWriteRoot(roots, resolved) || sandbox.AllowsWrite(spec, resolved)
+}
+
 // plannedDeletePath 是「已判定、尚未动手」的一条删除目标：判定阶段的产物全部
 // 留在这里，执行阶段只读它，路径不会在删除前被第二次解析。
 type plannedDeletePath struct {
 	absPath string
 	isDir   bool
-	result  DeleteResult
+	// absent 表示判定时这条路径就不存在：执行阶段跳过它，结果槽按删完了报出
+	// （见 DeleteResult.Absent），不当失败。
+	absent bool
+	result DeleteResult
 }
 
 // planDeletePath 判定单条路径能否删除，并把它将产生的结果准备好（不含是否真的
-// 删成功——那是执行阶段才知道的事）。
-func planDeletePath(roots []string, requestPath string, recursive bool) (plannedDeletePath, error) {
+// 删成功——那是执行阶段才知道的事）。目标本身不存在不算判定失败：它按 absent
+// 返回，同批其它路径照删。
+func planDeletePath(spec sandbox.Spec, roots []string, requestPath string, recursive bool) (plannedDeletePath, error) {
 	if strings.TrimSpace(requestPath) == "" {
 		return plannedDeletePath{}, codedToolError("E_BAD_PATH", errors.New("delete requires a non-empty path"))
 	}
-	path, err := resolveDeletablePath(roots, requestPath)
+	path, info, err := resolveDeleteTarget(roots, requestPath)
 	if err != nil {
 		return plannedDeletePath{}, err
 	}
@@ -502,17 +527,22 @@ func planDeletePath(roots []string, requestPath string, recursive bool) (planned
 		return plannedDeletePath{}, codedToolError("E_DELETE_BLOCKED", fmt.Errorf("%s\n\nThis operation has been blocked for safety. If you really need to delete this path, do it manually outside the agent.", reason))
 	}
 
-	info, err := os.Lstat(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return plannedDeletePath{}, codedToolError("E_PATH_NOT_FOUND", err)
-		}
-		return plannedDeletePath{}, err
+	if info == nil {
+		// 要删的东西已经不在：删除的目的达成了。不报错、也不算失败，只把这件事
+		// 放进结果槽（DeleteResult.Absent），模型与 UI 各自看得懂。
+		return plannedDeletePath{absPath: path, absent: true, result: DeleteResult{
+			Deleted:      filepath.ToSlash(requestPath),
+			Path:         filepath.ToSlash(requestPath),
+			ResolvedPath: filepath.ToSlash(path),
+			Recursive:    recursive,
+			OK:           true,
+			Absent:       true,
+		}}, nil
 	}
 	if info.IsDir() && !recursive {
 		return plannedDeletePath{}, codedToolError("E_DIR_REQUIRES_RECURSIVE", errors.New("path is a directory; set recursive=true"))
 	}
-	result, err := inspectDeleteTarget(requestPath, path, recursive, info)
+	result, err := inspectDeleteTarget(requestPath, path, recursive, info, countDeleteStats(spec, roots, path))
 	if err != nil {
 		return plannedDeletePath{}, err
 	}
@@ -535,13 +565,22 @@ func (a *App) runCommandWithConfig(parent context.Context, cfg ConfigState, req 
 			return CommandResult{}, err
 		}
 	}
-	if err := checkCommandSafetyAtCwd(req, roots, cwd); err != nil {
-		return CommandResult{}, err
-	}
-	// Knowledge-base runs additionally block literal write targets under the
-	// read-only sources/ subtree (deny roots ride in on parent ctx).
-	if err := checkKBDenyTargets(req.Command, cwd, kbDenyRoots(parent)); err != nil {
-		return CommandResult{}, err
+	if kernelOwnsBoundary() {
+		// 沙箱真正包住命令时，围栏只保留内核看不见的三道（工作区根自毁、VCS
+		// 元数据、高危语义）；工作区外写入、KB 禁写、普通删除强制走 delete 这
+		// 三道词法检查让位给内核：它们的误报正是猜测的代价，而内核不需要猜。
+		if err := checkConfinedCommandSafety(req.Command, cwd, roots); err != nil {
+			return CommandResult{}, err
+		}
+	} else {
+		if err := checkCommandSafetyAtCwd(req, roots, cwd); err != nil {
+			return CommandResult{}, err
+		}
+		// Knowledge-base runs additionally block literal write targets under the
+		// read-only sources/ subtree (deny roots ride in on parent ctx).
+		if err := checkKBDenyTargets(req.Command, cwd, kbDenyRoots(parent)); err != nil {
+			return CommandResult{}, err
+		}
 	}
 	timeout := req.Timeout
 	if timeout <= 0 {
@@ -559,7 +598,11 @@ func (a *App) runCommandWithConfig(parent context.Context, cfg ConfigState, req 
 	defer timer.Stop()
 
 	shell := commandShell(req.Command, cfg.GitBashPath)
-	cmd := exec.CommandContext(runCtx, shell.path, shell.args...)
+	// 沙箱在 shell 外面包一层：命令自己怎么拼都绕不过去，[argv] 的其余参数
+	// （-c 与整条命令串）原样透传给 shell。
+	spec := sandboxSpec(roots, kbDenyRoots(parent))
+	argv := wrapSandboxedCommand(spec, append([]string{shell.path}, shell.args...))
+	cmd := exec.CommandContext(runCtx, argv[0], argv[1:]...)
 	cmd.Dir = cwd
 	cmd.Env = commandEnvironment(cfg)
 	buf := &limitedBuffer{limit: maxToolOutput}
@@ -663,13 +706,15 @@ func (a *App) runCommandWithConfig(parent context.Context, cfg ConfigState, req 
 			// 超时收编：进程还活着（waitDone 未关），把原进程连同输出管道
 			// 一起移交给服务注册表，避免杀掉重跑撞 EADDRINUSE。
 			info, promoteErr := a.promoteTimedOutCommand(promoteCommandParams{
-				cmd:       cmd,
-				command:   req.Command,
-				cwd:       cwd,
-				startedAt: started,
-				tee:       tw,
-				timeout:   timeout,
-				waitDone:  waitDone,
+				cmd:        cmd,
+				command:    req.Command,
+				cwd:        cwd,
+				startedAt:  started,
+				tee:        tw,
+				timeout:    timeout,
+				sandboxed:  spec.Enforce(),
+				writeRoots: roots,
+				waitDone:   waitDone,
 			})
 			if promoteErr == nil {
 				timedOut = true
@@ -707,6 +752,7 @@ func (a *App) runCommandWithConfig(parent context.Context, cfg ConfigState, req 
 		Cancelled:       errors.Is(runCtx.Err(), context.Canceled),
 		DurationMS:      duration,
 		Truncated:       buf.truncated,
+		Sandboxed:       spec.Enforce(),
 		OutputFilePath:  outputFilePath,
 		OutputFileBytes: outputFileSize,
 	}
@@ -717,14 +763,14 @@ func (a *App) runCommandWithConfig(parent context.Context, cfg ConfigState, req 
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
 			result.ExitCode = exitErr.ExitCode()
-			return result, nil
-		}
-		if timedOut {
+		} else if timedOut {
 			result.ExitCode = -1
-			return result, nil
+		} else {
+			return result, err
 		}
-		return result, err
 	}
+	// 内核只回一句裸权限错误，读起来像命令自己写错了：补上能照做的下一步。
+	annotateSandboxDeniedWrite(spec, &result, roots)
 	return result, nil
 }
 
@@ -1043,7 +1089,7 @@ func wrapPowerShellCommand(command string) string {
 	return "$ErrorActionPreference = 'Stop'; try { " + command + "; if ($global:LASTEXITCODE -is [int]) { exit $global:LASTEXITCODE } } catch { Write-Error $_; exit 1 }"
 }
 
-func inspectDeleteTarget(requestPath, absPath string, recursive bool, info os.FileInfo) (DeleteResult, error) {
+func inspectDeleteTarget(requestPath, absPath string, recursive bool, info os.FileInfo, countTree bool) (DeleteResult, error) {
 	result := DeleteResult{
 		Deleted:      filepath.ToSlash(requestPath),
 		Path:         filepath.ToSlash(requestPath),
@@ -1053,6 +1099,11 @@ func inspectDeleteTarget(requestPath, absPath string, recursive bool, info os.Fi
 		WasSymlink:   info.Mode()&os.ModeSymlink != 0,
 	}
 	if info.IsDir() {
+		// 不统计时（见 countDeleteStats）连形状都只填已有的那些：这次删除会被
+		// 内核拒掉，调用方本来就会把统计清零。
+		if !countTree {
+			return result, nil
+		}
 		if !recursive {
 			result.RemovedDirs = 1
 			return result, nil
@@ -1448,8 +1499,30 @@ func safeJoin(roots []string, p string) (string, error) {
 	return pathutil.SafeJoin(pathRuntime, roots, p)
 }
 
+// resolveBoundaryPath joins p the way the current boundary owner expects: the
+// containment verdict comes from the fence only while the fence is what guards
+// the boundary, and the kernel answers for it once confinement is in force.
+// Normalization is identical either way (pathutil.JoinPath is the half SafeJoin
+// builds on), so no caller can see two spellings of the same path.
+func resolveBoundaryPath(roots []string, p string) (string, error) {
+	if kernelOwnsBoundary() {
+		return pathutil.JoinPath(roots, p)
+	}
+	return pathutil.SafeJoin(pathRuntime, roots, p)
+}
+
+// symlinkWriteError is the single model-facing explanation for refusing to
+// write through a symlink, so both entry points that can hit it (create's
+// overwrite path and the shared write-path resolver) say the same thing. It
+// also names the one asymmetry the model has to know about: a command line is
+// judged on the resolved path by the OS sandbox, so it can do what the write
+// tool refuses — without that sentence the model just retries the same call.
+func symlinkWriteError(p string) error {
+	return codedToolError("E_SYMLINK_PATH", fmt.Errorf("安全围栏已拦截：不允许通过符号链接写入。\n原因：%s 是符号链接；写工具不跟随链接，以免改动链接指向的目标（它可能落在允许范围之外）。\n处理方式：改为直接写链接指向的真实路径；要替换链接本身，请先删除它再建文件。命令行写入按真实路径判定——解析后仍在允许范围内时命令行可以做到，所以改用命令行也是一种办法。", p))
+}
+
 func resolveWritableFilePath(roots []string, p string) (string, error) {
-	abs, err := safeJoin(roots, p)
+	abs, err := resolveBoundaryPath(roots, p)
 	if err != nil {
 		return "", codedToolError("E_PATH_OUTSIDE", err)
 	}
@@ -1462,7 +1535,7 @@ func resolveWritableFilePath(roots []string, p string) (string, error) {
 		return "", codedToolError("E_PROTECTED_PATH", errors.New(reason))
 	}
 	if info, err := os.Lstat(abs); err == nil && info.Mode()&os.ModeSymlink != 0 {
-		return "", codedToolError("E_SYMLINK_PATH", fmt.Errorf("refusing to write through symlink path: %s", p))
+		return "", symlinkWriteError(p)
 	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return "", err
 	}
@@ -1477,48 +1550,62 @@ func resolveWritableFilePath(roots []string, p string) (string, error) {
 	if blocked, reason := pathutil.VCSMetadataReason(resolved); blocked {
 		return "", codedToolError("E_PROTECTED_PATH", errors.New(reason))
 	}
-	if !insideWriteRoot(roots, resolved) {
-		return "", codedToolError("E_PATH_OUTSIDE", fmt.Errorf("path resolves outside workspace or ~/.ally_agent: %s\n允许写入的根目录：%s", p, formatAllowedRoots(roots)))
+	if !kernelOwnsBoundary() && !insideWriteRoot(roots, resolved) {
+		return "", codedToolError("E_PATH_OUTSIDE", fmt.Errorf("path resolves outside workspace or ~/.ally_agent: %s\n可写范围：%s", p, formatAllowedRoots(roots)))
 	}
 	return abs, nil
 }
 
-func resolveDeletablePath(roots []string, p string) (string, error) {
-	abs, err := safeJoin(roots, p)
+// resolveDeleteTarget 解析删除目标，并把「目标本身在不在」一并答出来：不在不算
+// 解析失败（delete 的语义由 planDeletePath 决定），所以 info 为 nil 时照样返回。
+// 解析本身失败（越界、VCS 元数据、IO 错误）仍按 error 返回。
+func resolveDeleteTarget(roots []string, p string) (string, os.FileInfo, error) {
+	abs, err := resolveBoundaryPath(roots, p)
 	if err != nil {
-		return "", codedToolError("E_PATH_OUTSIDE", err)
+		return "", nil, codedToolError("E_PATH_OUTSIDE", err)
 	}
 	if blocked, reason := pathutil.VCSMetadataReason(abs); blocked {
-		return "", codedToolError("E_PROTECTED_PATH", errors.New(reason))
+		return "", nil, codedToolError("E_PROTECTED_PATH", errors.New(reason))
 	}
 	info, err := os.Lstat(abs)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return "", codedToolError("E_PATH_NOT_FOUND", err)
-		}
-		return "", err
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return "", nil, err
 	}
+	// 缺失时 info 为 nil：符号链接只对存在的东西成立，按字面路径解析已有前缀。
 	checkPath := abs
-	if info.Mode()&os.ModeSymlink != 0 {
+	if info != nil && info.Mode()&os.ModeSymlink != 0 {
 		checkPath = filepath.Dir(abs)
 	}
 	resolved, err := evalExistingPrefix(checkPath)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	// 同 resolveWritableFilePath：符号链接可把工作区内的路径接到 VCS 元数据
 	// 上（`delete .git → gh` 的别名），词法判定看不到，按解析后的路径复判。
 	if blocked, reason := pathutil.VCSMetadataReason(resolved); blocked {
-		return "", codedToolError("E_PROTECTED_PATH", errors.New(reason))
+		return "", nil, codedToolError("E_PROTECTED_PATH", errors.New(reason))
 	}
-	if !insideWriteRoot(roots, resolved) {
-		return "", codedToolError("E_PATH_OUTSIDE", fmt.Errorf("path resolves outside workspace or ~/.ally_agent: %s\n允许写入的根目录：%s", p, formatAllowedRoots(roots)))
+	if !kernelOwnsBoundary() && !insideWriteRoot(roots, resolved) {
+		return "", nil, codedToolError("E_PATH_OUTSIDE", fmt.Errorf("path resolves outside workspace or ~/.ally_agent: %s\n可写范围：%s", p, formatAllowedRoots(roots)))
+	}
+	return abs, info, nil
+}
+
+// resolveDeletablePath 是「目标必须存在」的那一面：rename 的源路径这类调用方要
+// 的是能用的路径，不是「它本来就不在」这个答案。
+func resolveDeletablePath(roots []string, p string) (string, error) {
+	abs, info, err := resolveDeleteTarget(roots, p)
+	if err != nil {
+		return "", err
+	}
+	if info == nil {
+		return "", codedToolError("E_PATH_NOT_FOUND", fmt.Errorf("path does not exist: %s", p))
 	}
 	return abs, nil
 }
 
 func resolveCommandCwd(roots []string, p string) (string, error) {
-	abs, err := safeJoin(roots, p)
+	abs, err := resolveBoundaryPath(roots, p)
 	if err != nil {
 		return "", codedToolError("E_PATH_OUTSIDE", err)
 	}
@@ -1529,8 +1616,8 @@ func resolveCommandCwd(roots []string, p string) (string, error) {
 		}
 		return "", err
 	}
-	if !insideWriteRoot(roots, resolved) {
-		return "", codedToolError("E_PATH_OUTSIDE", fmt.Errorf("cwd resolves outside workspace or ~/.ally_agent: %s\n允许写入的根目录：%s", p, formatAllowedRoots(roots)))
+	if !kernelOwnsBoundary() && !insideWriteRoot(roots, resolved) {
+		return "", codedToolError("E_PATH_OUTSIDE", fmt.Errorf("cwd resolves outside workspace or ~/.ally_agent: %s\n可写范围：%s", p, formatAllowedRoots(roots)))
 	}
 	info, err := os.Stat(resolved)
 	if err != nil {

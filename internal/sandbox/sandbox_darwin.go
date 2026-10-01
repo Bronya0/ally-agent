@@ -32,6 +32,11 @@ const devDir = "/dev"
 // platformHasBackend reports that this build has a confinement backend.
 func platformHasBackend() bool { return true }
 
+// platformForcedMode: macOS 强制开启沙箱。设置页没有开关，用户无处把它关掉，
+// 因此后端包不上时也不能 fail-closed（那等于把命令工具永久焊死），只能降级为
+// 安全围栏兜底并如实告警。
+func platformForcedMode() (Mode, bool) { return ModeEnforce, true }
+
 // platformWriteExtras are the writable locations the macOS profile adds beside
 // the caller's roots.
 var platformWriteExtras = []string{devDir}
@@ -47,13 +52,30 @@ const (
 	sandboxExecProbeCommand = "/usr/bin/true"
 )
 
+// seatbeltExecPath caches where sandbox-exec resolved to. The lookup walks PATH
+// on every call and Available() is consulted on every single path resolution, so
+// leaving it uncached makes the whole path layer pay for a directory scan. PATH
+// does not change for the life of the process, and the usability verdict is
+// already cached for just as long (see usableSandboxExec).
+var seatbeltExecPath struct {
+	once sync.Once
+	path string
+}
+
+func lookPathSeatbelt() string {
+	seatbeltExecPath.once.Do(func() {
+		seatbeltExecPath.path, _ = exec.LookPath(seatbeltExecutable)
+	})
+	return seatbeltExecPath.path
+}
+
 // usableSandboxExec distinguishes an installed sandbox-exec from a usable
 // Seatbelt backend. Restricted hosts ship the binary but refuse sandbox_apply,
 // so every launch fails with a launch error that reads like a broken command;
 // probing that operation directly is what makes the verdict honest.
 func usableSandboxExec() bool {
-	path, err := exec.LookPath(seatbeltExecutable)
-	if err != nil || path == "" {
+	path := lookPathSeatbelt()
+	if path == "" {
 		return false
 	}
 	if cached, ok := sandboxExecUsability.Load(path); ok {
@@ -80,16 +102,10 @@ func Available() bool { return usableSandboxExec() }
 // apart from one the host refuses to apply — the second is the common case on
 // managed machines and needs a different answer from the user.
 func UnavailableReason() string {
-	if _, err := exec.LookPath(seatbeltExecutable); err != nil {
+	if lookPathSeatbelt() == "" {
 		return "PATH 上找不到 sandbox-exec（macOS 自带该组件，正常位于 /usr/bin/sandbox-exec）"
 	}
 	return "sandbox-exec 存在但无法应用沙箱（通常是本机安全策略限制了 sandbox_apply）"
-}
-
-// UnavailableRemediation names the way out. Turning the sandbox off is not the
-// same as losing every guard, which is what the shared fence sentence says.
-func UnavailableRemediation() string {
-	return "请先在设置里把命令沙箱改回「关闭」，" + safetyFenceNotice()
 }
 
 // Wrap prefixes argv with `sandbox-exec -p <profile>` when the spec enforces and
@@ -100,12 +116,11 @@ func Wrap(spec Spec, argv []string) ([]string, bool) {
 	if len(argv) == 0 || !spec.Enforce() || !Available() {
 		return argv, false
 	}
-	if !spec.ReadOnly {
-		// The toolchain caches the writable surface counts on have to exist
-		// before the profile names them: inside the sandbox the command cannot
-		// create them, and their parents are not writable.
-		_ = EnsureWritableDirs()
-	}
+	// The toolchain caches the writable surface counts on have to exist before
+	// the profile names them: inside the sandbox the command cannot create them,
+	// and their parents are not writable. Bounded to one attempt per process —
+	// see EnsureWritableDirsOnce.
+	EnsureWritableDirsOnce()
 	plan := buildPlan(spec)
 	profile := seatbeltProfile(plan.writable, plan.denyWrite, plan.masks, spec.Network)
 	return append([]string{seatbeltExecutable, "-p", profile, resolveProgram(argv[0])}, argv[1:]...), true

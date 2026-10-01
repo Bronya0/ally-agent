@@ -40,26 +40,32 @@ export function formatHttpToolTitle(parsed) {
   return parts.join(' · ');
 }
 
-// deletePathRows 读出一条删除调用的路径，一条路径一行：{path, ok, error}。三种
-// 形状都认：入参的 path（单个）与 paths（一串）、结果的 paths[]（每个槽一条，新
+// deletePathRows 读出一条删除调用的路径，一条路径一行：{path, ok, absent, error, errorCode}。
+// absent 是「这条本来就不存在」（后端报的 absent 槽）：它 ok 仍为真，所以行要单独
+// 认得出来，否则卡片会把「什么都没删」写成一次成功删除。
+// 三种形状都认：入参的 path（单个）与 paths（一串）、结果的 paths[]（每个槽一条，新
 // 形状）、以及老会话里存下来的 deleted / path 字符串（单路径时代的形状）。卡片
 // 标题的摘要与卡片的逐行明细都建在它上面，所以「哪些形状算一条路径」只有这一份。
+//
+// errorCode 是这一条的失败原因身份（结果槽里就有，本地删除逐条给出；远端没有
+// 这种东西）。行上显示的原因按它取本地化句子，原始文本只是看不懂时的退路，所以
+// 两样都带出去、判定留在渲染侧；在这里截断原文就等于把原因身份丢了。
 export function deletePathRows(source) {
   if (!source || typeof source !== 'object') return [];
   const rows = [];
-  const push = (path, ok, error) => {
+  const push = (path, ok, error, errorCode, absent) => {
     const value = String(path || '').trim();
     if (!value) return;
-    rows.push({ path: value, ok: ok !== false, error: String(error || '') });
+    rows.push({ path: value, ok: ok !== false, error: String(error || ''), errorCode: String(errorCode || ''), absent: absent === true });
   };
   if (Array.isArray(source.paths)) {
     for (const item of source.paths) {
-      if (typeof item === 'string') push(item, true, '');
-      else if (item && typeof item === 'object') push(item.path || item.deleted, item.ok !== false, item.error);
+      if (typeof item === 'string') push(item, true, '', '');
+      else if (item && typeof item === 'object') push(item.path || item.deleted, item.ok !== false, item.error, item.errorCode, item.absent);
     }
     return rows;
   }
-  push(source.path || source.deleted, true, '');
+  push(source.path || source.deleted, true, '', '');
   return rows;
 }
 
@@ -82,6 +88,14 @@ export function deleteFailedCount(source) {
   if (!source || typeof source !== 'object') return 0;
   const failed = Number(source.failedCount || 0);
   return Number.isFinite(failed) && failed > 0 ? failed : 0;
+}
+
+// deleteAbsentCount 报出这一次删除里有几条「本来就不存在」。空删不是失败，但写成
+// 「Deleted x」也不对：卡片要能说出这一条什么都没删。
+export function deleteAbsentCount(source) {
+  if (!source || typeof source !== 'object') return 0;
+  const absent = Number(source.absentCount || 0);
+  return Number.isFinite(absent) && absent > 0 ? absent : 0;
 }
 
 // sshEndpointOf 是节点在 UI 上的端点写法（与 SSH 面板的 endpointOf 一致）：

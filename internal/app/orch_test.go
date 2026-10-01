@@ -902,277 +902,252 @@ func TestLiveBreakdownAccumulatorMatchesFullRecalculation(t *testing.T) {
 	}
 }
 
-func TestGrepFilesReturnsPathErrors(t *testing.T) {
-	app := NewApp()
-	_, err := app.grepFilesWithConfig(context.Background(), ConfigState{Workspace: t.TempDir()}, GrepRequest{
-		Pattern: "needle",
-		Path:    "missing",
-	})
-	if err == nil {
-		t.Fatal("expected missing search path to return an error")
-	}
-	if code := toolErrorCode(err); code != "E_GREP_PATH" {
-		t.Fatalf("expected E_GREP_PATH, got %q (%v)", code, err)
-	}
-}
+// grep 家族共用一套形状：铺一棵临时目录 → 发一次（或两次）搜索 → 看结果字段。
+// 下面两张表把原来十三个函数收进来，断言逐条照旧，只是不再每个用例重复一遍
+// requireRipgrep / t.TempDir / NewApp 这套开场。
 
-func TestGrepFilesReturnsInvalidRegexErrors(t *testing.T) {
+// TestGrepFilesReportsErrors：搜索前的三类入参错误，各自有独立的错误码。
+func TestGrepFilesReportsErrors(t *testing.T) {
 	requireRipgrep(t)
 	root := t.TempDir()
 	writeToolTestFile(t, root, "sample.txt", "needle\n")
-
 	app := NewApp()
-	_, err := app.grepFilesWithConfig(context.Background(), ConfigState{Workspace: root}, GrepRequest{
-		Pattern: "[",
-	})
-	if err == nil || !strings.Contains(err.Error(), "regex") {
-		t.Fatalf("expected ripgrep regex error, got %v", err)
+
+	cases := []struct {
+		name     string
+		req      GrepRequest
+		wantCode string
+		wantText string
+	}{
+		{name: "missing search path", req: GrepRequest{Pattern: "needle", Path: "missing"}, wantCode: "E_GREP_PATH"},
+		{name: "invalid regex", req: GrepRequest{Pattern: "["}, wantCode: "E_GREP_REGEX", wantText: "regex"},
+		{name: "invalid glob", req: GrepRequest{Pattern: "needle", Glob: "["}, wantCode: "E_GREP_GLOB", wantText: "glob"},
 	}
-	if code := toolErrorCode(err); code != "E_GREP_REGEX" {
-		t.Fatalf("expected E_GREP_REGEX, got %q (%v)", code, err)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := app.grepFilesWithConfig(context.Background(), ConfigState{Workspace: root}, tc.req)
+			if err == nil {
+				t.Fatalf("expected %s, got no error", tc.wantCode)
+			}
+			if code := toolErrorCode(err); code != tc.wantCode {
+				t.Fatalf("expected %s, got %q (%v)", tc.wantCode, code, err)
+			}
+			if tc.wantText != "" && !strings.Contains(err.Error(), tc.wantText) {
+				t.Fatalf("error should mention %q, got %v", tc.wantText, err)
+			}
+		})
 	}
 }
 
-func TestGrepFilesReturnsInvalidGlobErrors(t *testing.T) {
-	requireRipgrep(t)
-	root := t.TempDir()
-	writeToolTestFile(t, root, "sample.txt", "needle\n")
-
-	app := NewApp()
-	_, err := app.grepFilesWithConfig(context.Background(), ConfigState{Workspace: root}, GrepRequest{
-		Pattern: "needle",
-		Glob:    "[",
-	})
-	if err == nil || !strings.Contains(err.Error(), "glob") {
-		t.Fatalf("expected ripgrep glob error, got %v", err)
-	}
-	if code := toolErrorCode(err); code != "E_GREP_GLOB" {
-		t.Fatalf("expected E_GREP_GLOB, got %q (%v)", code, err)
-	}
-}
-
-func TestGrepFilesSearchesHiddenDirectoryWhenItIsTheRoot(t *testing.T) {
-	requireRipgrep(t)
-	root := t.TempDir()
-	writeToolTestFile(t, root, ".github/workflows/ci.yml", "needle\n")
-
-	app := NewApp()
-	got, err := app.grepFilesWithConfig(context.Background(), ConfigState{Workspace: root}, GrepRequest{
-		Pattern:    "needle",
-		OutputMode: grep.OutputModeLines,
-		Path:       ".github",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.MatchedLines != 1 || got.Files != 1 {
-		t.Fatalf("expected one match in hidden search root, got %#v", got)
-	}
-	if len(got.LineHits) != 1 || got.LineHits[0].Path != ".github/workflows/ci.yml" || len(got.LineHits[0].Lines) != 1 || got.LineHits[0].Lines[0] != 1 {
-		t.Fatalf("unexpected lines-mode match %#v", got.LineHits)
-	}
-}
-
-func TestGrepFilesKeepsExactCountsWhenSamplesAreTruncatedByLineBudget(t *testing.T) {
-	requireRipgrep(t)
-	root := t.TempDir()
-	writeToolTestFile(t, root, "a.txt", "needle one\nneedle two\n")
-	writeToolTestFile(t, root, "b.txt", "needle three\n")
-
-	app := NewApp()
-	got, err := app.grepFilesWithConfig(context.Background(), ConfigState{Workspace: root}, GrepRequest{
-		Pattern:    "needle",
-		OutputMode: grep.OutputModeLines,
-		MaxMatches: 1,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.Files != 2 || got.MatchedLines != 3 || got.Hits != 3 {
-		t.Fatalf("expected exact counts despite sample truncation, got %#v", got)
-	}
-	// The line budget is global: one sampled line in, the next matching file
-	// trips it. The contract is "samples are limited to one line", not a
-	// specific file or path.
-	if !got.Truncated || len(got.LineHits) != 1 || len(got.LineHits[0].Lines) != 1 {
-		t.Fatalf("expected single-line samples and truncation, got %#v", got)
-	}
-	hits := got.LineHits[0]
-	if hits.Path != "a.txt" && hits.Path != "b.txt" {
-		t.Fatalf("unexpected sample file %q", hits.Path)
-	}
-	if len(hits.Texts) != 1 || hits.Texts[0] == "" {
-		t.Fatalf("expected the sampled line to carry its text preview, got %#v", hits)
-	}
-}
-
-func TestGrepFilesDefaultModeReturnsLineHits(t *testing.T) {
-	requireRipgrep(t)
-	root := t.TempDir()
-	writeToolTestFile(t, root, "a.txt", "needle\n")
-	writeToolTestFile(t, root, "b.txt", "needle\n")
-
-	app := NewApp()
-	got, err := app.grepFilesWithConfig(context.Background(), ConfigState{Workspace: root}, GrepRequest{
-		Pattern: "needle",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.Mode != grep.OutputModeLines || len(got.LineHits) != 2 || len(got.FileCounts) != 0 {
-		t.Fatalf("default grep must return line groups without per-file counts, got %#v", got)
-	}
-}
-
-func TestGrepFilesReportsOccurrenceCount(t *testing.T) {
-	requireRipgrep(t)
-	root := t.TempDir()
-	writeToolTestFile(t, root, "a.txt", "ally ally\nfinally\n")
-	writeToolTestFile(t, root, "b.txt", "ally\n")
-
-	app := NewApp()
-	got, err := app.grepFilesWithConfig(context.Background(), ConfigState{Workspace: root}, GrepRequest{
-		Pattern: "ally",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.MatchedLines != 3 {
-		t.Fatalf("expected three matching lines, got %#v", got)
-	}
-	if got.Hits != 4 {
-		t.Fatalf("expected four occurrences, got %#v", got)
-	}
-}
-
-func TestGrepFilesKeepsExactCountsWhenSamplesAreTruncatedByMatchLimit(t *testing.T) {
-	requireRipgrep(t)
-	root := t.TempDir()
-	writeToolTestFile(t, root, "a.txt", "needle\nneedle\nneedle\nneedle\nneedle\n")
-
-	app := NewApp()
-	got, err := app.grepFilesWithConfig(context.Background(), ConfigState{Workspace: root}, GrepRequest{
-		Pattern:    "needle",
-		OutputMode: grep.OutputModeLines,
-		MaxMatches: 3,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.MatchedLines != 5 || got.Hits != 5 || got.Files != 1 {
-		t.Fatalf("expected exact counts despite match sample truncation, got %#v", got)
-	}
-	if !got.Truncated || len(got.LineHits) != 1 || len(got.LineHits[0].Lines) != 3 {
-		t.Fatalf("expected three sample lines and truncation, got %#v", got)
-	}
-}
-
-func TestGrepFilesCanIncludeIgnoredFiles(t *testing.T) {
-	requireRipgrep(t)
-	root := t.TempDir()
-	writeToolTestFile(t, root, ".ignore", "ignored.txt\n")
-	writeToolTestFile(t, root, "kept.txt", "needle\n")
-	writeToolTestFile(t, root, "ignored.txt", "needle\n")
-
-	app := NewApp()
-	defaultResult, err := app.grepFilesWithConfig(context.Background(), ConfigState{Workspace: root}, GrepRequest{
-		Pattern: "needle",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if defaultResult.MatchedLines != 1 {
-		t.Fatalf("expected ignored file to be skipped by default, got %#v", defaultResult)
-	}
-
-	includeIgnored, err := app.grepFilesWithConfig(context.Background(), ConfigState{Workspace: root}, GrepRequest{
-		Pattern:        "needle",
-		IncludeIgnored: true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if includeIgnored.MatchedLines != 2 {
-		t.Fatalf("expected ignored file to be included, got %#v", includeIgnored)
-	}
-}
-
-func TestGrepFilesAlwaysExcludesHeavyDirectories(t *testing.T) {
-	requireRipgrep(t)
-	root := t.TempDir()
-	writeToolTestFile(t, root, "src/main.go", "ally\n")
-	writeToolTestFile(t, root, "frontend/dist/app.js", "ally\n")
-	writeToolTestFile(t, root, "node_modules/pkg/index.js", "ally\n")
-
-	app := NewApp()
-	got, err := app.grepFilesWithConfig(context.Background(), ConfigState{Workspace: root}, GrepRequest{
-		Pattern:        "ally",
-		OutputMode:     grep.OutputModeLines,
-		IncludeIgnored: true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.MatchedLines != 1 || got.Hits != 1 || got.Files != 1 {
-		t.Fatalf("expected only source match outside heavy dirs, got %#v", got)
-	}
-	if got.LineHits[0].Path != "src/main.go" {
-		t.Fatalf("unexpected match path %q", got.LineHits[0].Path)
-	}
-	if len(got.Skipped) == 0 {
-		t.Fatalf("workspace-wide grep must report its skip policy, got %#v", got)
-	}
-}
-
-func TestGrepFilesExplicitPathSearchesExcludedDirectories(t *testing.T) {
-	requireRipgrep(t)
-	root := t.TempDir()
-	writeToolTestFile(t, root, "vendor/pkg/source.go", "needle\n")
-
-	app := NewApp()
-	got, err := app.grepFilesWithConfig(context.Background(), ConfigState{Workspace: root}, GrepRequest{
-		Pattern:    "needle",
-		OutputMode: grep.OutputModeLines,
-		Path:       "vendor",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.MatchedLines != 1 || got.Hits != 1 || got.Files != 1 {
-		t.Fatalf("explicit path must override broad-search exclusions, got %#v", got)
-	}
-	if len(got.LineHits) != 1 || got.LineHits[0].Path != "vendor/pkg/source.go" {
-		t.Fatalf("unexpected explicit-path lines result %#v", got.LineHits)
-	}
-	if len(got.Skipped) != 0 {
-		t.Fatalf("explicit path search must not report broad skip policies, got %#v", got.Skipped)
-	}
-}
-
-func TestGrepFilesExplicitPathSearchesLargeFiles(t *testing.T) {
-	requireRipgrep(t)
-	root := t.TempDir()
+// TestGrepFilesSearchResults：命中统计、采样截断、包含/排除策略、显式路径覆盖。
+func TestGrepFilesSearchResults(t *testing.T) {
 	large := strings.Repeat("x", 11*1024*1024) + "\nneedle\n"
-	writeToolTestFile(t, root, "large.txt", large)
+	cases := []struct {
+		name  string
+		files map[string]string
+		check func(t *testing.T, search func(GrepRequest) (*GrepResult, error))
+	}{
+		{name: "hidden directory as the search root", files: map[string]string{
+			".github/workflows/ci.yml": "needle\n",
+		}, check: func(t *testing.T, search func(GrepRequest) (*GrepResult, error)) {
+			got, err := search(GrepRequest{Pattern: "needle", OutputMode: grep.OutputModeLines, Path: ".github"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.MatchedLines != 1 || got.Files != 1 {
+				t.Fatalf("expected one match in hidden search root, got %#v", got)
+			}
+			if len(got.LineHits) != 1 || got.LineHits[0].Path != ".github/workflows/ci.yml" || len(got.LineHits[0].Lines) != 1 || got.LineHits[0].Lines[0] != 1 {
+				t.Fatalf("unexpected lines-mode match %#v", got.LineHits)
+			}
+		}},
+		{name: "default mode returns line groups", files: map[string]string{
+			"a.txt": "needle\n", "b.txt": "needle\n",
+		}, check: func(t *testing.T, search func(GrepRequest) (*GrepResult, error)) {
+			got, err := search(GrepRequest{Pattern: "needle"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Mode != grep.OutputModeLines || len(got.LineHits) != 2 || len(got.FileCounts) != 0 {
+				t.Fatalf("default grep must return line groups without per-file counts, got %#v", got)
+			}
+		}},
+		{name: "occurrence count counts every hit", files: map[string]string{
+			"a.txt": "ally ally\nfinally\n", "b.txt": "ally\n",
+		}, check: func(t *testing.T, search func(GrepRequest) (*GrepResult, error)) {
+			got, err := search(GrepRequest{Pattern: "ally"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.MatchedLines != 3 {
+				t.Fatalf("expected three matching lines, got %#v", got)
+			}
+			if got.Hits != 4 {
+				t.Fatalf("expected four occurrences, got %#v", got)
+			}
+		}},
+		{name: "exact counts survive line-budget truncation", files: map[string]string{
+			"a.txt": "needle one\nneedle two\n", "b.txt": "needle three\n",
+		}, check: func(t *testing.T, search func(GrepRequest) (*GrepResult, error)) {
+			got, err := search(GrepRequest{Pattern: "needle", OutputMode: grep.OutputModeLines, MaxMatches: 1})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Files != 2 || got.MatchedLines != 3 || got.Hits != 3 {
+				t.Fatalf("expected exact counts despite sample truncation, got %#v", got)
+			}
+			// 行预算是全局的：采样进一行之后，下一个命中文件就把它用完了。契约是
+			// 「样本限制为一行」，不承诺落在哪个文件上。
+			if !got.Truncated || len(got.LineHits) != 1 || len(got.LineHits[0].Lines) != 1 {
+				t.Fatalf("expected single-line samples and truncation, got %#v", got)
+			}
+			hits := got.LineHits[0]
+			if hits.Path != "a.txt" && hits.Path != "b.txt" {
+				t.Fatalf("unexpected sample file %q", hits.Path)
+			}
+			if len(hits.Texts) != 1 || hits.Texts[0] == "" {
+				t.Fatalf("expected the sampled line to carry its text preview, got %#v", hits)
+			}
+		}},
+		{name: "exact counts survive match-limit truncation", files: map[string]string{
+			"a.txt": "needle\nneedle\nneedle\nneedle\nneedle\n",
+		}, check: func(t *testing.T, search func(GrepRequest) (*GrepResult, error)) {
+			got, err := search(GrepRequest{Pattern: "needle", OutputMode: grep.OutputModeLines, MaxMatches: 3})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.MatchedLines != 5 || got.Hits != 5 || got.Files != 1 {
+				t.Fatalf("expected exact counts despite match sample truncation, got %#v", got)
+			}
+			if !got.Truncated || len(got.LineHits) != 1 || len(got.LineHits[0].Lines) != 3 {
+				t.Fatalf("expected three sample lines and truncation, got %#v", got)
+			}
+		}},
+		{name: "ignored files are opt-in", files: map[string]string{
+			".ignore": "ignored.txt\n", "kept.txt": "needle\n", "ignored.txt": "needle\n",
+		}, check: func(t *testing.T, search func(GrepRequest) (*GrepResult, error)) {
+			defaultResult, err := search(GrepRequest{Pattern: "needle"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if defaultResult.MatchedLines != 1 {
+				t.Fatalf("expected ignored file to be skipped by default, got %#v", defaultResult)
+			}
+			includeIgnored, err := search(GrepRequest{Pattern: "needle", IncludeIgnored: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if includeIgnored.MatchedLines != 2 {
+				t.Fatalf("expected ignored file to be included, got %#v", includeIgnored)
+			}
+		}},
+		{name: "heavy directories are always excluded", files: map[string]string{
+			"src/main.go": "ally\n", "frontend/dist/app.js": "ally\n", "node_modules/pkg/index.js": "ally\n",
+		}, check: func(t *testing.T, search func(GrepRequest) (*GrepResult, error)) {
+			got, err := search(GrepRequest{Pattern: "ally", OutputMode: grep.OutputModeLines, IncludeIgnored: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.MatchedLines != 1 || got.Hits != 1 || got.Files != 1 {
+				t.Fatalf("expected only source match outside heavy dirs, got %#v", got)
+			}
+			if got.LineHits[0].Path != "src/main.go" {
+				t.Fatalf("unexpected match path %q", got.LineHits[0].Path)
+			}
+			if len(got.Skipped) == 0 {
+				t.Fatalf("workspace-wide grep must report its skip policy, got %#v", got)
+			}
+		}},
+		{name: "explicit path overrides broad exclusions", files: map[string]string{
+			"vendor/pkg/source.go": "needle\n",
+		}, check: func(t *testing.T, search func(GrepRequest) (*GrepResult, error)) {
+			got, err := search(GrepRequest{Pattern: "needle", OutputMode: grep.OutputModeLines, Path: "vendor"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.MatchedLines != 1 || got.Hits != 1 || got.Files != 1 {
+				t.Fatalf("explicit path must override broad-search exclusions, got %#v", got)
+			}
+			if len(got.LineHits) != 1 || got.LineHits[0].Path != "vendor/pkg/source.go" {
+				t.Fatalf("unexpected explicit-path lines result %#v", got.LineHits)
+			}
+			if len(got.Skipped) != 0 {
+				t.Fatalf("explicit path search must not report broad skip policies, got %#v", got.Skipped)
+			}
+		}},
+		{name: "explicit path searches large files", files: map[string]string{
+			"large.txt": large,
+		}, check: func(t *testing.T, search func(GrepRequest) (*GrepResult, error)) {
+			workspaceSearch, err := search(GrepRequest{Pattern: "needle"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if workspaceSearch.MatchedLines != 0 {
+				t.Fatalf("workspace-wide search should keep the large-file guard, got %#v", workspaceSearch)
+			}
+			explicitSearch, err := search(GrepRequest{Pattern: "needle", Path: "large.txt"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if explicitSearch.MatchedLines != 1 || explicitSearch.Hits != 1 || explicitSearch.Files != 1 {
+				t.Fatalf("explicit path must search large files, got %#v", explicitSearch)
+			}
+		}},
+		{name: "file counts and offset end to end", files: map[string]string{
+			"cold.txt": "needle\n",
+		}, check: func(t *testing.T, search func(GrepRequest) (*GrepResult, error)) {
+			// hot.txt 由用例自己写：12 行命中 + cold.txt 1 行，共 13。
+			counts, err := search(GrepRequest{Pattern: "needle", OutputMode: grep.OutputModeCountMatches})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if counts.MatchedLines != 13 || counts.Hits != 13 || counts.Files != 2 {
+				t.Fatalf("expected exact stats, got %#v", counts)
+			}
+			if len(counts.FileCounts) != 2 || counts.FileCounts[0].Path != "hot.txt" || counts.FileCounts[0].Count != 12 || counts.FileCounts[1].Path != "cold.txt" || counts.FileCounts[1].Count != 1 {
+				t.Fatalf("expected descending fileCounts, got %#v", counts.FileCounts)
+			}
+			got, err := search(GrepRequest{Pattern: "needle", OutputMode: grep.OutputModeLines, MaxMatches: 5})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.MatchedLines != 13 || got.Hits != 13 || got.Files != 2 {
+				t.Fatalf("expected exact stats, got %#v", got)
+			}
+			if !got.Truncated || got.NextOffset != 5 {
+				t.Fatalf("expected truncated page with NextOffset 5, got %#v", got)
+			}
+			// 行预算跨文件组共享，且 rg 的遍历顺序不是字典序：这里先到 cold.txt，
+			// 所以第一页跨两个组、合计五个行号，而不是一个组的五行。
+			pageLines := 0
+			for _, g := range got.LineHits {
+				pageLines += len(g.Lines)
+			}
+			if pageLines != 5 {
+				t.Fatalf("expected five sampled line numbers on page one, got %#v", got.LineHits)
+			}
+		}},
+	}
 
-	app := NewApp()
-	workspaceSearch, err := app.grepFilesWithConfig(context.Background(), ConfigState{Workspace: root}, GrepRequest{Pattern: "needle"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if workspaceSearch.MatchedLines != 0 {
-		t.Fatalf("workspace-wide search should keep the large-file guard, got %#v", workspaceSearch)
-	}
-
-	explicitSearch, err := app.grepFilesWithConfig(context.Background(), ConfigState{Workspace: root}, GrepRequest{
-		Pattern: "needle",
-		Path:    "large.txt",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if explicitSearch.MatchedLines != 1 || explicitSearch.Hits != 1 || explicitSearch.Files != 1 {
-		t.Fatalf("explicit path must search large files, got %#v", explicitSearch)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			requireRipgrep(t)
+			root := t.TempDir()
+			for name, body := range tc.files {
+				writeToolTestFile(t, root, name, body)
+			}
+			if tc.name == "file counts and offset end to end" {
+				var b strings.Builder
+				for i := 0; i < 12; i++ {
+					fmt.Fprintf(&b, "line %d needle\n", i)
+				}
+				writeToolTestFile(t, root, "hot.txt", b.String())
+			}
+			app := NewApp()
+			tc.check(t, func(req GrepRequest) (*GrepResult, error) {
+				return app.grepFilesWithConfig(context.Background(), ConfigState{Workspace: root}, req)
+			})
+		})
 	}
 }
 
@@ -1506,95 +1481,6 @@ func TestCompactToolResultForModelPreservesGrepCounts(t *testing.T) {
 	}
 	if strings.Contains(got, "[file counts capped]") {
 		t.Fatalf("count rows must not be capped a second time, got %s", got)
-	}
-}
-
-func TestGrepFilesReportsFileCountsAndOffsetEndToEnd(t *testing.T) {
-	requireRipgrep(t)
-	root := t.TempDir()
-	var b strings.Builder
-	for i := 0; i < 12; i++ {
-		fmt.Fprintf(&b, "line %d needle\n", i)
-	}
-	writeToolTestFile(t, root, "hot.txt", b.String())
-	writeToolTestFile(t, root, "cold.txt", "needle\n")
-
-	app := NewApp()
-	// count_matches: exact per-file occurrence counts, sorted descending.
-	counts, err := app.grepFilesWithConfig(context.Background(), ConfigState{Workspace: root}, GrepRequest{
-		Pattern:    "needle",
-		OutputMode: grep.OutputModeCountMatches,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if counts.MatchedLines != 13 || counts.Hits != 13 || counts.Files != 2 {
-		t.Fatalf("expected exact stats, got %#v", counts)
-	}
-	if len(counts.FileCounts) != 2 || counts.FileCounts[0].Path != "hot.txt" || counts.FileCounts[0].Count != 12 || counts.FileCounts[1].Path != "cold.txt" || counts.FileCounts[1].Count != 1 {
-		t.Fatalf("expected descending fileCounts, got %#v", counts.FileCounts)
-	}
-
-	// lines mode: exact stats and line-number pagination.
-	got, err := app.grepFilesWithConfig(context.Background(), ConfigState{Workspace: root}, GrepRequest{
-		Pattern:    "needle",
-		OutputMode: grep.OutputModeLines,
-		MaxMatches: 5,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.MatchedLines != 13 || got.Hits != 13 || got.Files != 2 {
-		t.Fatalf("expected exact stats, got %#v", got)
-	}
-	if !got.Truncated || got.NextOffset != 5 {
-		t.Fatalf("expected truncated page with NextOffset 5, got %#v", got)
-	}
-	// The line budget is global across file groups, and rg's traversal order
-	// is not alphabetical: here cold.txt is reached first, so page 1 spans two
-	// groups totalling five line numbers rather than one group of five.
-	pageLines := 0
-	for _, g := range got.LineHits {
-		pageLines += len(g.Lines)
-	}
-	if pageLines != 5 {
-		t.Fatalf("expected 5 line numbers on page 1, got %#v", got.LineHits)
-	}
-
-	page2, err := app.grepFilesWithConfig(context.Background(), ConfigState{Workspace: root}, GrepRequest{
-		Pattern:    "needle",
-		OutputMode: grep.OutputModeLines,
-		MaxMatches: 5,
-		Offset:     got.NextOffset,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if page2.NextOffset != 10 {
-		t.Fatalf("expected page 2 NextOffset 10, got %d", page2.NextOffset)
-	}
-
-	// Case-sensitive search narrows results.
-	sensitive, err := app.grepFilesWithConfig(context.Background(), ConfigState{Workspace: root}, GrepRequest{
-		Pattern:       "Needle",
-		OutputMode:    grep.OutputModeLines,
-		CaseSensitive: true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if sensitive.MatchedLines != 0 {
-		t.Fatalf("expected zero case-sensitive matches for Needle, got %#v", sensitive)
-	}
-	insensitive, err := app.grepFilesWithConfig(context.Background(), ConfigState{Workspace: root}, GrepRequest{
-		Pattern:    "Needle",
-		OutputMode: grep.OutputModeLines,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if insensitive.MatchedLines != 13 {
-		t.Fatalf("expected case-insensitive matches for Needle, got %#v", insensitive)
 	}
 }
 
@@ -2051,43 +1937,100 @@ func TestAutoValidationCanBeDisabledPerLanguage(t *testing.T) {
 	}
 }
 
-func TestAutoValidationCatchesPythonSyntax(t *testing.T) {
-	root := t.TempDir()
-	if _, _, ok := findPythonCommand(root); !ok {
-		t.Skip("python is unavailable")
-	}
-	enabled := true
-	writeToolTestFile(t, root, "broken.py", "def broken(:\n    pass\n")
-	got := NewApp().validateChangedFiles(context.Background(), ConfigState{Workspace: root, AutoValidationPython: &enabled}, []string{"broken.py"})
-	if !strings.Contains(got, "自动校验失败") || !strings.Contains(got, "broken.py") {
-		t.Fatalf("expected Python syntax failure, got %q", got)
-	}
+// 自动校验这一族只差三样：要装什么工具、往工作区放什么文件、期望"校验失败"出现
+// 还是不出现。收成一张表之后，临时目录与 App 的样板只写一遍。
+type autoValidationCase struct {
+	name  string
+	files map[string]string
+	// needCmd 为空表示不需要外部工具；填了就先 LookPath，找不到跳过。
+	needCmd string
+	// needPython 走 findPythonCommand（它认的 python 不止 PATH 上那一个）。
+	needPython bool
+	// toggle 是要打开的那一档：空表示用默认配置（不显式开启）。
+	toggle string
+	// wantFail 为真时期望输出里出现"自动校验失败"，为假时期望它不出现。
+	wantFail bool
+	wantText []string
 }
 
-func TestAutoValidationCatchesJavaScriptSyntax(t *testing.T) {
-	if _, err := exec.LookPath("node"); err != nil {
-		t.Skip("node is unavailable")
+func (c autoValidationCase) configState(root string, enabled *bool) ConfigState {
+	cfg := ConfigState{Workspace: root}
+	switch c.toggle {
+	case "python":
+		cfg.AutoValidationPython = enabled
+	case "javascript":
+		cfg.AutoValidationJavaScript = enabled
+	case "go":
+		cfg.AutoValidationGo = enabled
+	case "java":
+		cfg.AutoValidationJava = enabled
+	case "json":
+		cfg.AutoValidationJSON = enabled
 	}
-	root := t.TempDir()
-	enabled := true
-	writeToolTestFile(t, root, "broken.js", "const = 1;\n")
-	got := NewApp().validateChangedFiles(context.Background(), ConfigState{Workspace: root, AutoValidationJavaScript: &enabled}, []string{"broken.js"})
-	if !strings.Contains(got, "自动校验失败") || !strings.Contains(got, "broken.js") {
-		t.Fatalf("expected JavaScript syntax failure, got %q", got)
-	}
+	return cfg
 }
 
-func TestAutoValidationCatchesGoVetFailure(t *testing.T) {
-	if _, err := exec.LookPath("go"); err != nil {
-		t.Skip("go is unavailable")
+func TestAutoValidationChecksChangedFiles(t *testing.T) {
+	cases := []autoValidationCase{
+		{name: "python syntax", needPython: true, toggle: "python",
+			files:    map[string]string{"broken.py": "def broken(:\n    pass\n"},
+			wantFail: true, wantText: []string{"broken.py"}},
+		{name: "javascript syntax", needCmd: "node", toggle: "javascript",
+			files:    map[string]string{"broken.js": "const = 1;\n"},
+			wantFail: true, wantText: []string{"broken.js"}},
+		{name: "go vet", needCmd: "go", toggle: "go",
+			files: map[string]string{
+				"go.mod":  "module example.com/validation\n\ngo 1.23\n",
+				"main.go": "package main\n\nfunc main() { missing() }\n",
+			},
+			wantFail: true, wantText: []string{"Go vet"}},
+		{name: "java dependency errors are not our problem", needCmd: "javac", toggle: "java",
+			files: map[string]string{
+				"Dep.java": "import non-existent.pkg.Thing;\n\npublic class Dep {\n    Thing t;\n}\n",
+			}},
+		{name: "jsx is not node --check material", needCmd: "node",
+			files: map[string]string{"component.jsx": "export const App = () => <div />;\n"}},
+		{name: "jsonc is skipped", toggle: "json",
+			files: map[string]string{"tsconfig.json": "{\n  // comments are legal JSONC\n  \"compilerOptions\": {}\n}\n"}},
 	}
-	root := t.TempDir()
-	enabled := true
-	writeToolTestFile(t, root, "go.mod", "module example.com/validation\n\ngo 1.23\n")
-	writeToolTestFile(t, root, "main.go", "package main\n\nfunc main() { missing() }\n")
-	got := NewApp().validateChangedFiles(context.Background(), ConfigState{Workspace: root, AutoValidationGo: &enabled}, []string{"main.go"})
-	if !strings.Contains(got, "自动校验失败") || !strings.Contains(got, "Go vet") {
-		t.Fatalf("expected Go vet failure, got %q", got)
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.needCmd != "" {
+				if _, err := exec.LookPath(tc.needCmd); err != nil {
+					t.Skipf("%s is unavailable", tc.needCmd)
+				}
+			}
+			root := t.TempDir()
+			if tc.needPython {
+				if _, _, ok := findPythonCommand(root); !ok {
+					t.Skip("python is unavailable")
+				}
+			}
+			for name, body := range tc.files {
+				writeToolTestFile(t, root, name, body)
+			}
+			enabled := true
+			changed := make([]string, 0, len(tc.files))
+			for name := range tc.files {
+				changed = append(changed, name)
+			}
+			got := NewApp().validateChangedFiles(context.Background(), tc.configState(root, &enabled), changed)
+			if tc.wantFail {
+				if !strings.Contains(got, "自动校验失败") {
+					t.Fatalf("expected a validation failure, got %q", got)
+				}
+				for _, want := range tc.wantText {
+					if !strings.Contains(got, want) {
+						t.Fatalf("expected the failure to name %q, got %q", want, got)
+					}
+				}
+				return
+			}
+			if strings.Contains(got, "自动校验失败") {
+				t.Fatalf("expected no validation failure, got %q", got)
+			}
+		})
 	}
 }
 
@@ -2107,41 +2050,6 @@ func TestFilterJavaSyntaxErrorsKeepsOnlyParseErrors(t *testing.T) {
 		if strings.Contains(got, dropped) {
 			t.Fatalf("expected %q to be dropped, got %q", dropped, got)
 		}
-	}
-}
-
-func TestAutoValidationJavaDependencyErrorsAreIgnored(t *testing.T) {
-	if _, err := exec.LookPath("javac"); err != nil {
-		t.Skip("javac is unavailable")
-	}
-	root := t.TempDir()
-	enabled := true
-	writeToolTestFile(t, root, "Dep.java", "import non-existent.pkg.Thing;\n\npublic class Dep {\n    Thing t;\n}\n")
-	got := NewApp().validateChangedFiles(context.Background(), ConfigState{Workspace: root, AutoValidationJava: &enabled}, []string{"Dep.java"})
-	if strings.Contains(got, "自动校验失败") {
-		t.Fatalf("dependency-only javac errors must not fail validation, got %q", got)
-	}
-}
-
-func TestAutoValidationSkipsJSXFiles(t *testing.T) {
-	if _, err := exec.LookPath("node"); err != nil {
-		t.Skip("node is unavailable")
-	}
-	root := t.TempDir()
-	writeToolTestFile(t, root, "component.jsx", "export const App = () => <div />;\n")
-	got := NewApp().validateChangedFiles(context.Background(), ConfigState{Workspace: root}, []string{"component.jsx"})
-	if strings.Contains(got, "自动校验失败") {
-		t.Fatalf("jsx files must not be checked by node --check, got %q", got)
-	}
-}
-
-func TestAutoValidationSkipsJSONCFiles(t *testing.T) {
-	root := t.TempDir()
-	enabled := true
-	writeToolTestFile(t, root, "tsconfig.json", "{\n  // comments are legal JSONC\n  \"compilerOptions\": {}\n}\n")
-	got := NewApp().validateChangedFiles(context.Background(), ConfigState{Workspace: root, AutoValidationJSON: &enabled}, []string{"tsconfig.json"})
-	if strings.Contains(got, "自动校验失败") {
-		t.Fatalf("tsconfig.json must be skipped as JSONC, got %q", got)
 	}
 }
 
@@ -2282,6 +2190,8 @@ func TestCreateFileRejectsSymlinkParentOutsideWorkspace(t *testing.T) {
 	}
 	app := NewApp()
 
+	// 本用例断言围栏在位：判据归内核时越界由内核拒，见 orch_sandbox_writes_test.go。
+	pinBoundaryOwnership(t, false)
 	_, err := app.createFileWithConfig(ConfigState{Workspace: root}, CreateFileRequest{
 		Path:    "escape/file.txt",
 		Content: "nope\n",
@@ -2513,6 +2423,8 @@ func TestRenamePathRejectsSymlinkParentOutsideWorkspace(t *testing.T) {
 	}
 	app := NewApp()
 
+	// 本用例断言围栏在位：判据归内核时越界由内核拒。
+	pinBoundaryOwnership(t, false)
 	_, err := app.renamePathWithConfig(ConfigState{Workspace: root}, RenamePathRequest{Path: "escape/secret.txt", NewName: "renamed.txt"})
 	if err == nil {
 		t.Fatal("expected rename through a symlinked parent outside the workspace to fail")
@@ -2579,291 +2491,188 @@ func TestRunCommandNoKeywordBlocking(t *testing.T) {
 	}
 }
 
-func TestCommandSafetyAllowsCmdSlashCOption(t *testing.T) {
-	if runtime.GOOS != "windows" {
-		t.Skip("cmd.exe /c is Windows-specific")
-	}
-	if err := checkCommandSafety(CommandRequest{Command: "cmd.exe /c ver"}, []string{t.TempDir()}); err != nil {
-		t.Fatalf("cmd.exe /c option must not be treated as a C drive path: %v", err)
-	}
+// commandSafetyCase 是命令围栏的一条用例。这张表把原来散在十九个函数里的判定收在
+// 一处：同一个入口、同一份工作区，只是命令与期望不同，读的人能一眼看全"什么放行、
+// 什么拦、拦成哪个错"。
+type commandSafetyCase struct {
+	name string
+	// onlyOS / skipOS 圈定平台：MSYS2 盘符与 cmd.exe 只在 Windows 有意义，
+	// 符号链接在多数 Windows 环境上建不出来。
+	onlyOS string
+	skipOS string
+	// command 是字面命令；需要按临时目录拼路径时改填 build。
+	command string
+	build   func(t *testing.T, workspace, outside string) string
+	cwd     string
+	// wantCode 为空表示期望放行。
+	wantCode string
+	// wantText 是错误文本必须同时出现的片段（围栏每条拒绝都要说清原因与指路）。
+	wantText []string
 }
 
-func TestCommandSafetyAllowsReadOnlyOutsidePath(t *testing.T) {
-	if runtime.GOOS != "windows" {
-		t.Skip("MSYS2 drive paths are Windows-specific")
-	}
-	command := `(ls -la /d/coding/python/ | grep xx)`
-	if err := checkCommandSafety(CommandRequest{Command: command}, []string{t.TempDir()}); err != nil {
-		t.Fatalf("read-only outside inspection should be allowed: %v", err)
-	}
-}
+// TestCommandSafetyFence 是命令围栏的全表：放行的一类（读区外、命令里的关键词只是
+// 数据、heredoc 正文、动态目标），拦截的一类（显式删除、高危语义、改动区外已存在的
+// 目标、工作区软链穿透、相对路径按 cwd 解析后越界）。
+func TestCommandSafetyFence(t *testing.T) {
+	cases := []commandSafetyCase{
+		{name: "cmd /c option is not a drive path", onlyOS: "windows", command: `cmd.exe /c ver`},
+		{name: "read-only outside inspection", onlyOS: "windows", command: `(ls -la /d/coding/python/ | grep xx)`},
+		{name: "git bash outside read with /dev/null", onlyOS: "windows", command: `(ls -la /c/Users/DELL/.agents/ 2>/dev/null && echo "---FOUND---" || echo "---NOT FOUND---")`},
+		{name: "git bash find outside with /dev/null", onlyOS: "windows", command: `(find /c/Users/DELL/ -maxdepth 5 -name "SKILL.md" -path "ai-writing" 2>/dev/null | head -5)`},
+		{name: "quoted git pretty format keeps email brackets", command: `git status --short && git log -1 --pretty=format:'%h %an <%ae> %s'`},
+		{name: "risk and delete words as data", command: `grep -R "rm" docs`},
+		{name: "remove-item printed as data", command: `echo remove-item`},
+		{name: "shutdown inside a git log grep", command: `git log --grep=shutdown`},
+		{name: "reboot printed as data", command: `echo "reboot"`},
+		{name: "mkfs searched as text", command: `rg mkfs docs`},
+		{name: "dd reading a file is fine", command: `dd if=input.bin bs=1 count=16`},
+		{name: "chmod 064 is not a wipe", command: `chmod 064 file.txt`},
+		{name: "dynamic redirection target stays permissive", command: `printf changed > "$HOME/existing.txt"`},
+		{name: "quoted heredoc body with a gt sign", command: "python - <<'EOF'\nif v > 1:\n    pass\nEOF\n"},
+		{name: "quoted heredoc body with rm", command: "python - <<'EOF'\nrm -rf /tmp/x\nEOF\n"},
+		{name: "quoted heredoc body with substitution text", command: "python - <<'EOF'\nprint('$(rm -rf /tmp/x)')\nEOF\n"},
+		{name: "unquoted heredoc body with a gt sign", command: "python - <<EOF\nif v > 1:\n    pass\nEOF\n"},
+		{name: "raw deletion is routed to the delete tool", command: `rm generated.txt`, wantCode: "E_COMMAND_BLOCKED"},
+		{name: "nested raw deletion", command: `bash -c "rm generated.txt"`, wantCode: "E_COMMAND_BLOCKED"},
+		{name: "deletion through xargs", command: `echo generated.txt | xargs rm`, wantCode: "E_COMMAND_BLOCKED"},
+		{name: "deletion inside command substitution", command: `echo $(rm generated.txt)`, wantCode: "E_COMMAND_BLOCKED"},
+		{name: "shutdown", command: `shutdown -h now`, wantCode: "E_COMMAND_BLOCKED"},
+		{name: "dd writing a block device", command: `dd if=image.iso of=/dev/sda`, wantCode: "E_COMMAND_BLOCKED"},
+		{name: "chmod wiping every bit", command: `chmod 000 secrets.txt`, wantCode: "E_COMMAND_BLOCKED"},
+		{name: "mixed managed and raw deletion", command: `git rm --cached tracked.txt; rm generated.txt`, wantCode: "E_COMMAND_BLOCKED"},
+		{name: "substitution inside an unquoted heredoc still executes", command: "python - <<EOF\n$(rm generated.txt)\nEOF\n", wantCode: "E_COMMAND_BLOCKED"},
 
-func TestCommandSafetyAllowsGitBashOutsideReadsWithDevNull(t *testing.T) {
-	if runtime.GOOS != "windows" {
-		t.Skip("MSYS2 drive paths are Windows-specific")
+		{name: "outside copy source is readable", build: func(t *testing.T, workspace, outside string) string {
+			source := writeOutsideFile(t, outside, "source.txt")
+			return fmt.Sprintf(`cp %q copied.txt`, filepath.ToSlash(source))
+		}},
+		{name: "python reading an outside file", build: func(t *testing.T, workspace, outside string) string {
+			source := writeOutsideFile(t, outside, "source.txt")
+			return fmt.Sprintf(`python -c "print(open(%q).read())"`, filepath.ToSlash(source))
+		}},
+		{name: "unzip listing an outside archive", build: func(t *testing.T, workspace, outside string) string {
+			archive := writeOutsideFile(t, outside, "archive.zip")
+			return fmt.Sprintf(`unzip -l %q`, filepath.ToSlash(archive))
+		}},
+		{name: "unzip extracting into the workspace", build: func(t *testing.T, workspace, outside string) string {
+			archive := writeOutsideFile(t, outside, "archive.zip")
+			return fmt.Sprintf(`unzip %q -d .`, filepath.ToSlash(archive))
+		}},
+		{name: "existing outside copy destination is blocked", build: func(t *testing.T, workspace, outside string) string {
+			writeOutsideFile(t, outside, "destination.txt")
+			return fmt.Sprintf(`cp copied.txt %q`, filepath.ToSlash(filepath.Join(outside, "destination.txt")))
+		}, wantCode: "E_PATH_OUTSIDE"},
+		{name: "touch creating a new outside path", build: func(t *testing.T, workspace, outside string) string {
+			return fmt.Sprintf(`touch %q`, filepath.ToSlash(filepath.Join(outside, "new-touch.txt")))
+		}},
+		{name: "redirect creating a new outside file", build: func(t *testing.T, workspace, outside string) string {
+			return fmt.Sprintf(`printf created > %q`, filepath.ToSlash(filepath.Join(outside, "new-redirect.txt")))
+		}},
+		{name: "touch an existing outside file", build: func(t *testing.T, workspace, outside string) string {
+			return fmt.Sprintf(`touch %q`, filepath.ToSlash(writeOutsideFile(t, outside, "existing.txt")))
+		}, wantCode: "E_PATH_OUTSIDE", wantText: []string{"安全围栏已拦截", "工作区外", "检测到的目标", "允许的操作", "禁止的操作"}},
+		{name: "overwrite an existing outside file", build: func(t *testing.T, workspace, outside string) string {
+			return fmt.Sprintf(`printf changed > %q`, filepath.ToSlash(writeOutsideFile(t, outside, "existing.txt")))
+		}, wantCode: "E_PATH_OUTSIDE", wantText: []string{"安全围栏已拦截", "工作区外", "检测到的目标", "允许的操作", "禁止的操作"}},
+		{name: "append to an existing outside file", build: func(t *testing.T, workspace, outside string) string {
+			return fmt.Sprintf(`printf changed >> %q`, filepath.ToSlash(writeOutsideFile(t, outside, "existing.txt")))
+		}, wantCode: "E_PATH_OUTSIDE", wantText: []string{"安全围栏已拦截", "工作区外", "检测到的目标", "允许的操作", "禁止的操作"}},
+		{name: "literal outside target stays blocked", build: func(t *testing.T, workspace, outside string) string {
+			return fmt.Sprintf(`printf changed > %q`, filepath.ToSlash(writeOutsideFile(t, outside, "existing.txt")))
+		}, wantCode: "E_PATH_OUTSIDE"},
+		{name: "workspace redirect while reading outside", build: func(t *testing.T, workspace, outside string) string {
+			source := writeOutsideFile(t, outside, "source.txt")
+			if runtime.GOOS == "windows" {
+				return fmt.Sprintf(`type %q > result.txt`, filepath.ToSlash(source))
+			}
+			return fmt.Sprintf(`cat %q > result.txt`, filepath.ToSlash(source))
+		}},
+		{name: "msys2 drive path mutation", onlyOS: "windows", build: func(t *testing.T, workspace, outside string) string {
+			target := writeOutsideFile(t, outside, "existing.txt")
+			volume := filepath.VolumeName(target)
+			msys := "/" + strings.ToLower(strings.TrimSuffix(volume, ":")) + filepath.ToSlash(strings.TrimPrefix(target, volume))
+			return `touch ` + msys
+		}, wantCode: "E_PATH_OUTSIDE"},
 	}
-	commands := []string{
-		`(ls -la /c/Users/DELL/.agents/ 2>/dev/null && echo "---FOUND---" || echo "---NOT FOUND---")`,
-		`(find /c/Users/DELL/ -maxdepth 5 -name "SKILL.md" -path "ai-writing" 2>/dev/null | head -5)`,
-	}
-	for _, command := range commands {
-		if err := checkCommandSafety(CommandRequest{Command: command}, []string{t.TempDir()}); err != nil {
-			t.Fatalf("Git Bash outside read with /dev/null should be allowed: %v", err)
+
+	for _, tc := range cases {
+		if tc.onlyOS != "" && runtime.GOOS != tc.onlyOS {
+			continue
 		}
-	}
-}
-
-func TestCommandSafetyAllowsGitLogPrettyFormatWithEmailBrackets(t *testing.T) {
-	command := `git status --short && git log -1 --pretty=format:'%h %an <%ae> %s'`
-	if err := checkCommandSafety(CommandRequest{Command: command}, []string{t.TempDir()}); err != nil {
-		t.Fatalf("quoted git pretty format should not be parsed as shell redirection: %v", err)
-	}
-}
-
-func TestCommandSafetyAllowsRiskAndDeleteWordsAsData(t *testing.T) {
-	commands := []string{
-		`grep -R "rm" docs`,
-		`echo remove-item`,
-		`git log --grep=shutdown`,
-		`echo "reboot"`,
-		`rg mkfs docs`,
-		`dd if=input.bin bs=1 count=16`,
-		`chmod 064 file.txt`,
-	}
-	for _, command := range commands {
-		if err := checkCommandSafety(CommandRequest{Command: command}, []string{t.TempDir()}); err != nil {
-			t.Fatalf("normal command %q should be allowed: %v", command, err)
+		if tc.skipOS != "" && runtime.GOOS == tc.skipOS {
+			continue
 		}
+		t.Run(tc.name, func(t *testing.T) {
+			workspace := t.TempDir()
+			outside := t.TempDir()
+			command := tc.command
+			if tc.build != nil {
+				command = tc.build(t, workspace, outside)
+			}
+			err := checkCommandSafety(CommandRequest{Command: command, Cwd: tc.cwd}, []string{workspace})
+			if tc.wantCode == "" {
+				if err != nil {
+					t.Fatalf("command %q should be allowed: %v", command, err)
+				}
+				return
+			}
+			if code := toolErrorCode(err); code != tc.wantCode {
+				t.Fatalf("command %q should be blocked with %s, got %v", command, tc.wantCode, code)
+			}
+			for _, want := range tc.wantText {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("refusal for %q must explain %q, got %v", command, want, err)
+				}
+			}
+		})
 	}
 }
 
-func TestCommandSafetyAllowsOutsideInputsWithWorkspaceOutputs(t *testing.T) {
-	workspace := t.TempDir()
-	outsideDir := t.TempDir()
-	source := filepath.Join(outsideDir, "source.txt")
-	archive := filepath.Join(outsideDir, "archive.zip")
-	if err := os.WriteFile(source, []byte("source\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(archive, []byte("archive\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	commands := []string{
-		fmt.Sprintf(`cp %q copied.txt`, filepath.ToSlash(source)),
-		fmt.Sprintf(`python -c "print(open(%q).read())"`, filepath.ToSlash(source)),
-		fmt.Sprintf(`unzip -l %q`, filepath.ToSlash(archive)),
-		fmt.Sprintf(`unzip %q -d .`, filepath.ToSlash(archive)),
-	}
-	for _, command := range commands {
-		if err := checkCommandSafety(CommandRequest{Command: command}, []string{workspace}); err != nil {
-			t.Fatalf("outside input with workspace output should be allowed for %q: %v", command, err)
-		}
-	}
-}
-
-func TestCommandSafetyBlocksActualAndNestedDangerousCommands(t *testing.T) {
-	commands := []string{
-		`rm generated.txt`,
-		`bash -c "rm generated.txt"`,
-		`echo generated.txt | xargs rm`,
-		`echo $(rm generated.txt)`,
-		`shutdown -h now`,
-		`dd if=image.iso of=/dev/sda`,
-		`chmod 000 secrets.txt`,
-	}
-	for _, command := range commands {
-		if code := toolErrorCode(checkCommandSafety(CommandRequest{Command: command}, []string{t.TempDir()})); code != "E_COMMAND_BLOCKED" {
-			t.Fatalf("dangerous command %q should be blocked, got code %q", command, code)
-		}
-	}
-}
-
-func TestCommandSafetyBlocksMixedManagedAndRawDeletion(t *testing.T) {
-	command := `git rm --cached tracked.txt; rm generated.txt`
-	if code := toolErrorCode(checkCommandSafety(CommandRequest{Command: command}, []string{t.TempDir()})); code != "E_COMMAND_BLOCKED" {
-		t.Fatalf("mixed managed and raw deletion should be blocked, got code %q", code)
-	}
-}
-
-func TestCommandSafetyChecksCopyDestinationNotOutsideSource(t *testing.T) {
-	workspace := t.TempDir()
-	outsideDir := t.TempDir()
-	source := filepath.Join(outsideDir, "source.txt")
-	destination := filepath.Join(outsideDir, "destination.txt")
-	for _, path := range []string{source, destination} {
-		if err := os.WriteFile(path, []byte("keep\n"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	allowed := fmt.Sprintf(`cp %q copied.txt`, filepath.ToSlash(source))
-	if err := checkCommandSafety(CommandRequest{Command: allowed}, []string{workspace}); err != nil {
-		t.Fatalf("outside copy source should be readable: %v", err)
-	}
-
-	blocked := fmt.Sprintf(`cp copied.txt %q`, filepath.ToSlash(destination))
-	if code := toolErrorCode(checkCommandSafety(CommandRequest{Command: blocked}, []string{workspace})); code != "E_PATH_OUTSIDE" {
-		t.Fatalf("existing outside copy destination should be blocked, got code %q", code)
-	}
-}
-
-func TestCommandSafetyAllowsCreatingNewOutsidePath(t *testing.T) {
+// 相对路径按 cwd 解析后越界、以及工作区软链穿透，这两条要各自准备目录/链接，
+// 单独留在表外：它们考的是"解析基准"，不是命令串本身。
+func TestCommandSafetyResolvesTargetsAgainstCwdAndSymlinks(t *testing.T) {
 	workspace := t.TempDir()
 	outside := t.TempDir()
-	commands := []string{
-		fmt.Sprintf(`touch %q`, filepath.ToSlash(filepath.Join(outside, "new-touch.txt"))),
-		fmt.Sprintf(`printf created > %q`, filepath.ToSlash(filepath.Join(outside, "new-redirect.txt"))),
-	}
-	for _, command := range commands {
-		if err := checkCommandSafety(CommandRequest{Command: command}, []string{workspace}); err != nil {
-			t.Fatalf("creating a new outside path should be allowed for %q: %v", command, err)
-		}
-	}
-}
 
-func TestCommandSafetyBlocksModifyingExistingOutsidePath(t *testing.T) {
-	workspace := t.TempDir()
-	target := filepath.Join(t.TempDir(), "existing.txt")
-	if err := os.WriteFile(target, []byte("keep\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	for _, command := range []string{
-		fmt.Sprintf(`touch %q`, filepath.ToSlash(target)),
-		fmt.Sprintf(`printf changed > %q`, filepath.ToSlash(target)),
-		fmt.Sprintf(`printf changed >> %q`, filepath.ToSlash(target)),
-	} {
-		err := checkCommandSafety(CommandRequest{Command: command}, []string{workspace})
-		if toolErrorCode(err) != "E_PATH_OUTSIDE" {
-			t.Fatalf("existing outside target should be blocked for %q, got %v", command, err)
-		}
-		for _, want := range []string{"安全围栏已拦截", "工作区外", "检测到的目标", "允许的操作", "禁止的操作", command} {
-			if !strings.Contains(err.Error(), want) {
-				t.Fatalf("error should explain %q for %q, got %v", want, command, err)
-			}
-		}
-	}
-}
-
-func TestCommandSafetyResolvesRelativeMutationFromCwd(t *testing.T) {
-	workspace := t.TempDir()
 	cwd := filepath.Join(workspace, "build")
 	if err := os.MkdirAll(cwd, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	target := filepath.Join(t.TempDir(), "existing.txt")
-	if err := os.WriteFile(target, []byte("keep\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	target := writeOutsideFile(t, outside, "existing.txt")
 	relative, err := filepath.Rel(cwd, target)
 	if err != nil {
 		t.Fatal(err)
 	}
-	command := fmt.Sprintf(`touch %q`, filepath.ToSlash(relative))
-	if code := toolErrorCode(checkCommandSafety(CommandRequest{Command: command, Cwd: "build"}, []string{workspace})); code != "E_PATH_OUTSIDE" {
+	if code := toolErrorCode(checkCommandSafety(CommandRequest{
+		Command: fmt.Sprintf(`touch %q`, filepath.ToSlash(relative)),
+		Cwd:     "build",
+	}, []string{workspace})); code != "E_PATH_OUTSIDE" {
 		t.Fatalf("relative mutation must resolve from cwd and be blocked, got %q", code)
 	}
-}
 
-func TestCommandSafetyBlocksWorkspaceSymlinkMutation(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink creation requires privileges on many Windows environments")
 	}
-	workspace := t.TempDir()
-	outside := t.TempDir()
 	if err := os.Symlink(outside, filepath.Join(workspace, "link")); err != nil {
 		t.Fatal(err)
 	}
-	existing := filepath.Join(outside, "existing.txt")
-	if err := os.WriteFile(existing, []byte("keep\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	commands := []string{
-		`touch link/existing.txt`,
-		`printf created > link/new.txt`,
-	}
-	for _, command := range commands {
+	writeOutsideFile(t, outside, "existing.txt")
+	for _, command := range []string{`touch link/existing.txt`, `printf created > link/new.txt`} {
 		if code := toolErrorCode(checkCommandSafety(CommandRequest{Command: command}, []string{workspace})); code != "E_PATH_OUTSIDE" {
 			t.Fatalf("workspace symlink mutation must be blocked for %q, got %q", command, code)
 		}
 	}
 }
 
-func TestCommandSafetyAllowsDynamicRedirectionTarget(t *testing.T) {
-	// 动态目标（变量展开、通配符、heredoc 内容）无法静态解析：宽松策略下放行，
-	// 避免对合法复杂命令误判。字面外部已存在目标仍由其他用例覆盖拦截。
-	err := checkCommandSafety(CommandRequest{Command: `printf changed > "$HOME/existing.txt"`}, []string{t.TempDir()})
-	if err != nil {
-		t.Fatalf("dynamic redirection target should be allowed under permissive policy, got %v", err)
-	}
-}
-
-func TestCommandSafetyAllowsHeredocBodyContents(t *testing.T) {
-	// heredoc body 是 stdin 数据，其中的 > 重定向外观、rm 等词、$() 替换
-	// 在带引号 delimiter（<<'EOF'）下全部字面，不得触发拦截。
-	commands := []string{
-		"python - <<'EOF'\nif v > 1:\n    pass\nEOF\n",
-		"python - <<'EOF'\nrm -rf /tmp/x\nEOF\n",
-		"python - <<'EOF'\nprint('$(rm -rf /tmp/x)')\nEOF\n",
-		"python - <<EOF\nif v > 1:\n    pass\nEOF\n",
-	}
-	for _, command := range commands {
-		if err := checkCommandSafety(CommandRequest{Command: command}, []string{t.TempDir()}); err != nil {
-			t.Fatalf("heredoc body contents should be allowed for %q: %v", command, err)
-		}
-	}
-}
-
-func TestCommandSafetyBlocksCommandSubstitutionInsideUnquotedHeredoc(t *testing.T) {
-	// 无引号 heredoc 中 $(...) 会真实执行，命令替换内的删除命令仍须拦截。
-	command := "python - <<EOF\n$(rm generated.txt)\nEOF\n"
-	if code := toolErrorCode(checkCommandSafety(CommandRequest{Command: command}, []string{t.TempDir()})); code != "E_COMMAND_BLOCKED" {
-		t.Fatalf("command substitution inside unquoted heredoc should be blocked, got code %q", code)
-	}
-}
-
-func TestCommandSafetyStillBlocksLiteralOutsideTarget(t *testing.T) {
-	// 字面外部已存在目标仍是可靠检查，必须继续拦截。
-	workspace := t.TempDir()
-	target := filepath.Join(t.TempDir(), "existing.txt")
-	if err := os.WriteFile(target, []byte("keep\n"), 0o644); err != nil {
+// writeOutsideFile 在工作区之外建一个文件并返回它的路径：越界判定只认"已经存在"
+// 的区外目标，所以这些用例必须真的把文件放下去。
+func writeOutsideFile(t *testing.T, outside string, name string) string {
+	t.Helper()
+	path := filepath.Join(outside, name)
+	if err := os.WriteFile(path, []byte("keep\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	err := checkCommandSafety(CommandRequest{Command: fmt.Sprintf(`printf changed > %q`, filepath.ToSlash(target))}, []string{workspace})
-	if toolErrorCode(err) != "E_PATH_OUTSIDE" {
-		t.Fatalf("literal existing outside target should still be blocked, got %v", err)
-	}
-}
-
-func TestCommandSafetyAllowsWorkspaceRedirectWhileReadingOutside(t *testing.T) {
-	workspace := t.TempDir()
-	outside := filepath.Join(t.TempDir(), "source.txt")
-	if err := os.WriteFile(outside, []byte("source\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	command := fmt.Sprintf(`type %q > result.txt`, filepath.ToSlash(outside))
-	if runtime.GOOS != "windows" {
-		command = fmt.Sprintf(`cat %q > result.txt`, filepath.ToSlash(outside))
-	}
-	if err := checkCommandSafety(CommandRequest{Command: command}, []string{workspace}); err != nil {
-		t.Fatalf("workspace redirect while reading outside should be allowed: %v", err)
-	}
-}
-
-func TestCommandSafetyBlocksExistingOutsidePathMutation(t *testing.T) {
-	if runtime.GOOS != "windows" {
-		t.Skip("MSYS2 drive paths are Windows-specific")
-	}
-	outDir := t.TempDir()
-	target := filepath.Join(outDir, "existing.txt")
-	if err := os.WriteFile(target, []byte("keep\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	volume := filepath.VolumeName(target)
-	msysTarget := "/" + strings.ToLower(strings.TrimSuffix(volume, ":")) + filepath.ToSlash(strings.TrimPrefix(target, volume))
-	err := checkCommandSafety(CommandRequest{Command: `touch ` + msysTarget}, []string{t.TempDir()})
-	if toolErrorCode(err) != "E_PATH_OUTSIDE" {
-		t.Fatalf("outside mutation should be blocked with E_PATH_OUTSIDE, got %v", err)
-	}
+	return path
 }
 
 func TestWebFetchModelContextKeepsDefaultSizedPage(t *testing.T) {
@@ -2985,6 +2794,8 @@ func TestRunCommandRejectsCwdSymlinkOutsideWorkspace(t *testing.T) {
 	}
 	app := NewApp()
 
+	// 本用例断言围栏在位：判据归内核时越界 cwd 交给内核（可读即能跑）。
+	pinBoundaryOwnership(t, false)
 	args, err := json.Marshal(CommandRequest{Command: "pwd", Cwd: "escape"})
 	if err != nil {
 		t.Fatal(err)
@@ -5081,6 +4892,87 @@ func TestServiceReadReturnsBoundedTail(t *testing.T) {
 	}
 }
 
+// 服务输出里的内核拒写不能只剩那句裸权限错误：模型侧读回结果要看到解释与可写范围。
+// 标记是 sticky 的：拒写那几行会被日志刷出尾部，而它说的是「这次写没成」这件已经
+// 发生过的事。卡片只在 start 那张上显示告警（读日志、停服务并不写盘，见前端
+// utils/sandboxAlert）。
+func TestServiceReadReportsSandboxDeniedWrite(t *testing.T) {
+	requireConfinement(t)
+	app := NewApp()
+	buffer := newRollingBuffer(serviceOutputLimit)
+	if _, err := buffer.Write([]byte("/bin/sh: /tmp/x: Operation not permitted\n")); err != nil {
+		t.Fatal(err)
+	}
+
+	app.servicesMu.Lock()
+	app.services["svc_denied"] = &managedService{
+		info:       ServiceInfo{ID: "svc_denied", Command: "demo", Status: "running", Sandboxed: true},
+		output:     buffer,
+		writeRoots: []string{"/tmp/workspace"},
+	}
+	app.servicesMu.Unlock()
+
+	res, err := app.readServiceOutput(ServiceReadRequest{ID: "svc_denied"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.SandboxDenied {
+		t.Fatalf("a service whose output shows a kernel refusal must be flagged, got %#v", res)
+	}
+	if !strings.Contains(res.DeniedWriteHint, "沙箱已拦截") {
+		t.Fatalf("the flag must ride with the same hint the command path gives, got %q", res.DeniedWriteHint)
+	}
+	if !strings.Contains(res.DeniedWriteHint, "/tmp/workspace") {
+		t.Fatalf("the hint must name the writable roots, got %q", res.DeniedWriteHint)
+	}
+
+	// 尾部被后续日志刷掉之后，标记仍在（sticky）。
+	if _, err := buffer.Write([]byte(strings.Repeat("later line\n", 400))); err != nil {
+		t.Fatal(err)
+	}
+	res, err = app.readServiceOutput(ServiceReadRequest{ID: "svc_denied", TailBytes: 64})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(res.Output, "Operation not permitted") {
+		t.Fatalf("the denial should have been pushed out of the tail, got %q", res.Output)
+	}
+	if !res.SandboxDenied {
+		t.Fatalf("the denial must stay recorded once seen, got %#v", res)
+	}
+}
+
+// TestPromotedCommandResultCarriesDeniedWriteHint 锁定「超时收编」这条支路的模型侧说明：
+// 收编是提前 return，到不了普通命令末尾补说明那一步，拒写标记与说明只能从快照带过来。
+// 拒写与超时能共存：沙箱拒的是那一次写，命令本身照跑（实测 `sh -c 'echo hi > /tmp/x;
+// sleep 9'` 在写被拒后照常跑完），所以收编前的输出里完全可能有内核拒写。
+func TestPromotedCommandResultCarriesDeniedWriteHint(t *testing.T) {
+	buf := &limitedBuffer{limit: 8 * 1024}
+	if _, err := buf.Write([]byte("sh: /tmp/x: Operation not permitted\n")); err != nil {
+		t.Fatal(err)
+	}
+	info := ServiceInfo{
+		ID:              "svc_promoted",
+		Sandboxed:       true,
+		SandboxDenied:   true,
+		DeniedWriteHint: "沙箱已拦截：目标 /tmp/x 在可写范围之外",
+	}
+	result := (&App{}).promotedCommandResult(
+		CommandRequest{Command: "sh -c 'echo hi > /tmp/x; sleep 99'"},
+		shellInvocation{name: "bash", path: "/bin/bash"},
+		"/tmp/workspace", buf, 30, info, "", 0,
+	)
+	if !result.SandboxDenied {
+		t.Fatalf("promoted result must carry the denied-write flag: %#v", result)
+	}
+	if result.DeniedWriteHint != info.DeniedWriteHint {
+		t.Fatalf("promoted result must carry the same hint, got %q", result.DeniedWriteHint)
+	}
+	if !result.PromotedToService || !strings.Contains(result.Output, "Operation not permitted") {
+		t.Fatalf("promoted result must keep the output and the promotion notice: %#v", result)
+	}
+}
+
 // TestServiceReadErrors verifies the error codes for missing id and unknown id.
 func TestServiceReadErrors(t *testing.T) {
 	app := NewApp()
@@ -5206,6 +5098,17 @@ func TestCompactToolResultForModelCommandRendersTagBlock(t *testing.T) {
 	failedModel := compactToolDataForModel("command", failed, `{"fallback":true}`)
 	if !strings.Contains(failedModel, `exit="2"`) || !strings.Contains(failedModel, ` truncated`) || !strings.Contains(failedModel, `full="C:\tmp\spill.log"`) {
 		t.Fatalf("failure metadata must ride on attributes, got %s", failedModel)
+	}
+
+	// 沙箱拦下的写入：解释与下一步（原因 / 可写根 / 处理方式）走独立字段、由模型
+	// 侧追加在输出之后；它刻意不进 Output，命令卡正体就不会被这段文字挤满。
+	denied := toolResult{OK: true, Data: map[string]any{
+		"output": "/bin/bash: /tmp/x: Operation not permitted\n\n", "exitCode": 1, "sandboxDenied": true,
+		"deniedWriteHint": "沙箱已拦截：这次操作试图写入可写范围之外的路径，目标没有被修改。\n原因：…\n处理方式：…",
+	}}
+	deniedModel := compactToolDataForModel("command", denied, `{"fallback":true}`)
+	if !strings.Contains(deniedModel, "Operation not permitted\n\n沙箱已拦截") || !strings.Contains(deniedModel, "处理方式：") {
+		t.Fatalf("a refused write must carry its next step in the model payload, got %s", deniedModel)
 	}
 
 	// 超时收编：模型必须看到这块结果已经是后台服务（提示词/描述里承诺的标记）。

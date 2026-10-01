@@ -114,8 +114,10 @@ return toolResult{OK: true, Data: data, Warnings: argWarnings}   // app.go:2797
 | 知识库只读 | `kbDenyCheckPaths` / `kbDenyCheckCommand`；run 开始时把策略挂到 ctx，子代理继承 |
 | 编辑后验证 | `attachValidation` + `validateChangedFilesForCall`（`orch_validation.go:170`）；批次里由 `planBatchValidation`（`orch_validation.go:189`）摊到「最后一次触碰该目录的变更」上，避免每个 edit 都跑一遍 `go vet` / `tsc` |
 | 命令安全围栏 | `checkCommandSafetyAtCwd`（`orch_command_safety.go:45`） |
-| 路径保护 | `pathutil`：`CanonicalPath` / `VCSMetadataReason`，写、删、命令三条入口共用 |
-| 删除多路径 | `resolveDeletePathList` / `checkDeletePathList`（`orch_delete_paths.go`）：两种写法折叠成一条候选列表，并拒重复与包含；本地与远端共用这一份。单条路径的落盘判定仍各自留在自己的信任域（本地问本机文件系统，远端只能在 SSH 另一头问） |
+| 命令沙箱（OS 级，宿主决定） | `sandboxSpec` / `wrapSandboxedCommand` / `annotateSandboxDeniedWrite` / `kernelOwnsBoundary`（`orch_sandbox.go`）；写工具的落盘同样包在内核里（`orch_sandbox_writes.go`）；策略与 profile 在 `internal/sandbox`（纯算法，不依赖 App）。command 与 service 两条执行路径共用；档位由 `sandbox.ResolvedMode` 从平台解析，没有任何配置项 |
+| 边界归属（越界写由谁拒） | `kernelOwnsBoundary`（`orch_sandbox.go`）：唯一的判据，问的是「沙箱此刻是否真在围」（`sandbox.ResolvedMode` + `sandbox.Available`），**不问平台**。内核接管时写 / 删 / cwd 三个解析器（`resolveBoundaryPath` + `resolveWritableFilePath` / `resolveDeletablePath` / `resolveCommandCwd`）只归一化、越界留给内核拒（报 `E_SANDBOX_WRITE_DENIED`）；内核不在时围栏全强度顶上（报 `E_PATH_OUTSIDE`）。`.git` 元数据、高危命令语义、delete 的工作区根 / dangerous / recursive 保护、软链接拒绝四类始终留在 Go 侧——内核看不见它们 |
+| 路径保护 | `pathutil`：`CanonicalPath` / `VCSMetadataReason`，本地写 / 删 / 命令与远端写（`remoteVCSMetadataWrite`）/ 命令（`remoteCommandVCSMetadataTarget`）共用同一份；远端只判得了字面路径那半，解析后（软链接到 `.git`）由 helper 用远端事实复判 |
+| 删除多路径 | `resolveDeletePathList` / `checkDeletePathList`（`orch_delete_paths.go`）：两种写法折叠成一条候选列表，并拒重复与包含；本地与远端共用这一份。单条路径的落盘判定仍各自留在自己的信任域（本地问本机文件系统，远端只能在 SSH 另一头问）。「本来就不存在」两端一致：不是失败、不拦同批其它路径，只报 `DeleteResult.Absent`（本地 `resolveDeleteTarget`，远端 `check_delete_path` 的 `missing` 标记） |
 
 命令围栏的四道检查都是「拒绝并解释」，不是「尝试纠正」：
 
@@ -124,7 +126,15 @@ return toolResult{OK: true, Data: data, Warnings: argWarnings}   // app.go:2797
 3. 写入目标在工作区外**且已存在** → `E_PATH_OUTSIDE`（允许读、允许写 `/dev/null`、允许创建新路径；并解析符号链接，拦截「经工作区内软链逃逸到外面」的写法）；
 4. 高危模式（`MatchRiskPattern`）→ `E_COMMAND_BLOCKED`。
 
-远端命令只跑第 4 道（`validateRemoteCommandSafety`）——远端路径语义不同，套本地边界只会误判。
+远端命令跑第 1、2、4 道：第 1 道同样由 Go 侧 `ContainsExplicitDeleteCommand` 拦；第 2 道用 `remoteCommandVCSMetadataTarget` 判字面写目标（按远端 cwd 解析相对路径，解析后那半在 helper 的 `check_write_targets` 里复判）；第 4 道是 `validateRemoteCommandSafety`。第 3 道（越界写）本地靠 Go 侧问本机文件系统，远端改为 helper 在动手前用远端事实判（`check_write_targets` → `E_PATH_OUTSIDE`）——两端都不套对方的路径语义。
+
+**操作系统级沙箱**（macOS Seatbelt / Linux bubblewrap）与上面四道不互斥：围栏拦的是「看得出意图的写入」，沙箱拦的是「命令自己拼出来、围栏看不出来的越界写」——命令被包在 shell 外面，怎么拼都绕不过去，脚本里的语言无关也一样（Python/Node 都是 shell 的子进程，内核级沙箱随 fork/exec 继承）。
+
+macOS 上沙箱**强制开启且没有开关**：档位是宿主的属性（`sandbox.ResolvedMode`），不是用户设置；设置 → 沙箱 页只显示本机状态与安全围栏机制。策略的其余部分也是写死的：写根 = 本次运行的 `roots` + 工具链缓存 + 临时目录，`sources/` 在写根内重新禁写，Ally 自己的数据目录（模型 key / SSH 凭据 / 会话历史）从命令视野里遮蔽，出网保持开放（包管理器与构建需要）。
+
+写根是主工作区 + 会话级附加工作区（`roots` 全量，不是只有 `roots[0]`），且**每条命令现算**：在 Tab 上加/删附加工作区，下一条命令立即生效；已在跑的后台服务仍用它启动时的策略，需重启。
+
+边界要看清：沙箱**只拦写，读是默认放开的**（除了被遮蔽的数据目录），所以“读得到密钥”这类风险靠禁读遮罩而不是沙箱本身。包不上时命令不裸跑：macOS 强制档没有关掉的退路，降级为「只受安全围栏保护」并记日志告警；拦下写入时在结果里追加可照做的下一步（内核只回一句裸权限错误，模型会当成自己命令写错而反复重试）。
 
 错误文案是写给模型看的：**说清原因 + 给出下一步该怎么做**。
 
@@ -155,7 +165,7 @@ type toolResult struct {                       // infra_result.go:19
 | `command` | `<ally-cmd exit timed-out promoted-to-service truncated full>` 块，输出零转义落体；command/cwd 不回显（模型刚在参数里写过） |
 | `service` read/info | `<ally-svc-read>` / `<ally-svc>` 块（字节账目走属性），`list` 仍走 JSON |
 | `edit` / `create` | 自闭合属性标签；summary/validation 走属性，warnings 走尾部行（自由文本经 `neutralizeClosingMarkers` 中和标记形状） |
-| `delete` / `remote_delete_path` | `<ally-deleted deleted failed>` 块 + 每条路径一行 `<path value ok kind files dirs bytes error>`：单路径调用就是一个单槽批量，本地与远端同一份渲染（失败槽一眼可见，不用数行） |
+| `delete` / `remote_delete_path` | `<ally-deleted deleted failed absent>` 块 + 每条路径一行 `<path value ok absent kind files dirs bytes error>`：单路径调用就是一个单槽批量，本地与远端同一份渲染（失败槽一眼可见，不用数行）。本来就不存在的路径报 `absent="true"`（`ok` 仍为 true，两个计数都不含它）——不报错、也不必重试 |
 | `http_request` / `web_fetch` | `<ally-http>` / `<ally-fetch>` 块（砍 url/statusText 回显，链接作尾部行） |
 | `mcp__*` | 第三方无上限输出，统一夹到内置上限（`renderMcpResultForModel`） |
 | 任何失败 / 解码失败 | 回退 `fullJSON`（`marshalToolResultOrFallback`），永不因压缩丢信息 |

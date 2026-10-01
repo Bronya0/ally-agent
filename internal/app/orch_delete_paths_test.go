@@ -126,8 +126,9 @@ func TestCheckDeletePathListRejectsDuplicateAndNesting(t *testing.T) {
 
 // TestLocalDeleteToolTakesBothSpellings covers the local tool end to end: one
 // call deletes every listed path, a path it cannot delete refuses the whole call
-// before anything is removed, and the gate holds the model to the declared shape
-// (exactly one of path/paths, at most N entries).
+// before anything is removed, a path that does not exist comes back as an absent
+// slot without failing the rest, and the gate holds the model to the declared
+// shape (exactly one of path/paths, at most N entries).
 func TestLocalDeleteToolTakesBothSpellings(t *testing.T) {
 	dir, cfg := deleteTestWorkspace(t)
 	app := NewApp()
@@ -147,14 +148,38 @@ func TestLocalDeleteToolTakesBothSpellings(t *testing.T) {
 		}
 	}
 
-	// A refused entry refuses the whole call: nothing is deleted, including the
-	// paths that would have been fine on their own.
-	res = app.executeTool(ctx, cfg, "s-1", "delete", encodedToolArgs(t, DeletePathRequest{Paths: []string{"sub/c.txt", "missing.txt"}}))
-	if res.OK || res.ErrorCode != "E_PATH_NOT_FOUND" {
-		t.Fatalf("a missing path must refuse the whole call, got ok=%v code=%q err=%v", res.OK, res.ErrorCode, res.Error)
+	// A missing entry is no longer a refusal: it comes back as an absent slot, the
+	// rest of the call still runs, and nothing was deleted for that entry.
+	fresh := filepath.Join(dir, "fresh.txt")
+	if err := os.WriteFile(fresh, []byte("x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	res = app.executeTool(ctx, cfg, "s-1", "delete", encodedToolArgs(t, DeletePathRequest{Paths: []string{"fresh.txt", "missing.txt"}}))
+	if !res.OK {
+		t.Fatalf("a missing path must not fail the call, got %v", res.Error)
+	}
+	withMissing := deleteResultOf(t, res)
+	if withMissing.DeletedCount != 1 || withMissing.FailedCount != 0 || withMissing.AbsentCount != 1 || len(withMissing.Paths) != 2 {
+		t.Fatalf("expected one deleted slot and one absent slot, got %#v", withMissing)
+	}
+	if absent := withMissing.Paths[1]; !absent.OK || !absent.Absent || absent.Path != "missing.txt" {
+		t.Fatalf("the missing path must report an ok+absent slot, got %#v", absent)
+	}
+	if _, err := os.Lstat(fresh); !os.IsNotExist(err) {
+		t.Fatalf("the deletable path in the same call must still be deleted: %v", err)
 	}
 	if _, err := os.Lstat(filepath.Join(dir, "sub", "c.txt")); err != nil {
-		t.Fatalf("a refused batch must delete nothing: %v", err)
+		t.Fatalf("an untouched path must survive the call: %v", err)
+	}
+
+	// Single path, nothing there: ok with one absent slot and no error at all.
+	res = app.executeTool(ctx, cfg, "s-1", "delete", encodedToolArgs(t, DeletePathRequest{Path: "gone.txt"}))
+	if !res.OK {
+		t.Fatalf("deleting a missing path must not error, got %v", res.Error)
+	}
+	onlyAbsent := deleteResultOf(t, res)
+	if onlyAbsent.DeletedCount != 0 || onlyAbsent.FailedCount != 0 || onlyAbsent.AbsentCount != 1 || len(onlyAbsent.Paths) != 1 || !onlyAbsent.Paths[0].Absent {
+		t.Fatalf("expected a single absent slot, got %#v", onlyAbsent)
 	}
 
 	res = app.executeTool(ctx, cfg, "s-1", "delete", encodedToolArgs(t, DeletePathRequest{Paths: []string{"sub", "sub/c.txt"}, Recursive: true}))
@@ -245,5 +270,39 @@ func TestRemoteDeleteToolGatesPathAndPaths(t *testing.T) {
 		if res.OK || res.ErrorCode != "E_BAD_ARGS" {
 			t.Fatalf("%s must be refused by the gate, got ok=%v code=%q err=%v", tc.name, res.OK, res.ErrorCode, res.Error)
 		}
+	}
+}
+
+// TestDeleteAbsentSlotsRenderForModel locks the two model-facing shapes of「本来
+// 就不存在」：块里的 absent 属性与卡片标题用的短描述。顺手锁住块里是真换行 ——
+// 这些属性原本是用反引号里的 `\n` 拼的，模型看到的是字面反斜杠 n。
+func TestDeleteAbsentSlotsRenderForModel(t *testing.T) {
+	mixed := DeletePathsResult{
+		Paths: []DeleteResult{
+			{Path: "gone.txt", OK: true, Absent: true},
+			{Path: "kept.txt", OK: false, Error: "permission denied", ErrorCode: "E_IO"},
+		},
+		FailedCount: 1,
+		AbsentCount: 1,
+	}
+	block := renderDeleteResultForModel(mixed)
+	for _, want := range []string{
+		`<ally-deleted deleted="0" failed="1" absent="1">`,
+		`value="gone.txt" ok=true absent="true"`,
+		`value="kept.txt" ok=false`,
+		`error="permission denied"`,
+	} {
+		if !strings.Contains(block, want) {
+			t.Fatalf("the model block must contain %q, got %q", want, block)
+		}
+	}
+	if strings.Contains(block, `\n`) || !strings.Contains(block, "\n<path") {
+		t.Fatalf("every slot must start on a real new line, got %q", block)
+	}
+
+	// 全是空删时不给模型看「deleted」：这次调用什么都没删。
+	allAbsent := DeletePathsResult{Paths: []DeleteResult{{Path: "gone.txt", OK: true, Absent: true}}, AbsentCount: 1}
+	if got := toolResultSummary("delete", &toolResult{OK: true, Data: allAbsent}); got != "already absent" {
+		t.Fatalf("an all-absent delete must read as already absent, got %q", got)
 	}
 }

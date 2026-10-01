@@ -72,7 +72,7 @@ func TestWritableDirsKeepsRootsTempAndCaches(t *testing.T) {
 	root := t.TempDir()
 	missing := filepath.Join(t.TempDir(), "nope")
 
-	dirs, problems := writableDirs([]string{root, missing})
+	dirs, problems := writableDirs(Spec{WriteRoots: []string{root, missing}})
 
 	for _, want := range []string{root, temp, filepath.Join(home, ".cache"), filepath.Join(home, "go")} {
 		if !containsDir(dirs, want) {
@@ -97,7 +97,7 @@ func TestWritableDirsDeduplicatesAndDropsFiles(t *testing.T) {
 		t.Fatalf("write %s: %v", file, err)
 	}
 
-	dirs, problems := writableDirs([]string{root, root, file, ""})
+	dirs, problems := writableDirs(Spec{WriteRoots: []string{root, root, file, ""}})
 
 	count := 0
 	for _, dir := range dirs {
@@ -257,7 +257,7 @@ func TestWritableDirsDropsRedirectedCache(t *testing.T) {
 		t.Skipf("symlinks unavailable here: %v", err)
 	}
 
-	dirs, problems := writableDirs(nil)
+	dirs, problems := writableDirs(Spec{})
 
 	if containsDir(dirs, elsewhere) {
 		t.Fatalf("a redirected cache must not become writable: %v", dirs)
@@ -267,23 +267,26 @@ func TestWritableDirsDropsRedirectedCache(t *testing.T) {
 	}
 }
 
-// 只读取档不给任何普通可写位置：工作区、临时目录、缓存都不加，但遮蔽仍然生效。
-func TestBuildPlanReadOnlyDropsEverydayWrites(t *testing.T) {
+// 只留调用方自己的写根：临时目录、工具链缓存、平台附加位置一个都不进策略。文件
+// 工具的落盘动作用这一档——工作区内的符号链接指向那些位置时，内核不该放行。
+func TestWritableDirsOnlyWriteRootsDropsEverydayWrites(t *testing.T) {
 	home, temp := isolateHomeAndTemp(t)
 	for _, sub := range cacheSubdirs() {
 		mustMkdir(t, filepath.Join(home, sub))
 	}
 	root := t.TempDir()
-	secret := mustMkdir(t, filepath.Join(t.TempDir(), "secret"))
 
-	plan := buildPlan(Spec{Mode: ModeEnforce, ReadOnly: true, WriteRoots: []string{root}, ForbidReadRoots: []string{secret}})
+	dirs, problems := writableDirs(Spec{WriteRoots: []string{root}, OnlyWriteRoots: true})
 
-	for _, forbidden := range []string{root, temp, filepath.Join(home, ".cache")} {
-		if containsDir(plan.writable, forbidden) {
-			t.Fatalf("read-only must not keep %s writable: %v", forbidden, plan.writable)
-		}
+	if len(dirs) != 1 || !containsDir(dirs, root) {
+		t.Fatalf("OnlyWriteRoots must keep exactly the caller's roots, got %v", dirs)
 	}
-	if len(plan.masks) != 1 {
-		t.Fatalf("read-only still hides forbid-read targets, got %+v", plan.masks)
+	if len(problems) != 0 {
+		t.Fatalf("a present root has nothing to report, got %v", problems)
+	}
+	for _, forbidden := range []string{temp, filepath.Join(home, ".cache"), filepath.Join(home, "go")} {
+		if containsDir(dirs, forbidden) {
+			t.Fatalf("OnlyWriteRoots must not keep %s writable: %v", forbidden, dirs)
+		}
 	}
 }

@@ -436,7 +436,19 @@ const bottomAnchorRef = ref(null);
 const showJumpToBottom = ref(false);
 const autoFollow = ref(true);
 const bottomThreshold = 96;
+// 当前跟随目标：'bottom' = 常规贴底；'tool-card' = 停在最新工具卡的卡头（见
+// scrollToBottom 的 alignToLastToolCard）。即时贴底只服务于前者——卡头模式下
+// 内容继续长高是预期的，把视口拉到最底恰好会把卡头推到视口之上，即那段注释里
+// 明确要避免的行为。
+let followMode = 'bottom';
 let scrollRaf = 0;
+// 贴底用的哨兵值：交给浏览器夹到真实底部。content-visibility 的占位会让
+// scrollHeight 小于真实内容高度，按 scrollHeight 算反而不准。
+const BOTTOM_SENTINEL = 999999999;
+function scrollViewportToBottom(viewport) {
+  scrollbarRef.value?.scrollTo({ top: BOTTOM_SENTINEL });
+  if (viewport) viewport.scrollTop = BOTTOM_SENTINEL;
+}
 // autoFollow 只由"真实用户意图"驱动，绝不根据滚动位置来关闭。程序化滚动
 // （流式增长、大 diff 跨帧展开、alignToLastToolCard 停在卡头、resize 补滚）
 // 触发的 scroll 事件与用户滚动无法区分，所以裸 scroll 事件永远不会关掉跟随；
@@ -460,7 +472,25 @@ function scheduleRaf(fn) {
 }
 
 let viewportResizeObserver = null;
+let contentResizeObserver = null;
 let userIntentTarget = null;
+
+// 贴底的"立即"版本：ResizeObserver 回调跑在 rAF 之后、绘制之前，这里写进去的
+// 滚动位置就是这一帧画出来的位置。scrollToBottom() 是刻意延后两帧的（rAF 套
+// rAF，用来合并一批调用），凡是"高度在这一帧变了"的场景用它，都会先画出一个没
+// 贴底的中间态、下一帧再修正——观感就是内容先跳一下再被拉回来。run 结束那一帧
+// 恰好三处高度同时变化（最后一批增量、收尾整篇重渲染、composer 状态行卸载），
+// 所以那条路径必须走即时贴底。
+//
+// 这里不做"是否已贴底"的预判：scrollHeight 在 content-visibility 占位下本就小于
+// 真实内容高度，按它算出来的"已贴底"是假的，据此跳过这一次写入就等于漏掉一次贴
+// 底。写哨兵值是幂等的（浏览器会夹到真实底部），只写滚动位置、不改任何尺寸，因
+// 此也不会自激。
+function pinToBottomNow() {
+  const viewport = getScrollViewport();
+  if (!viewport) return;
+  scrollViewportToBottom(viewport);
+}
 
 // 消息区底部一旦被布局挤压（plan 面板出现/展开、输入框自动增高、窗口
 // resize、Tab 从隐藏切回可见），可用高度变小，最新内容会被推到视口之下，
@@ -470,10 +500,24 @@ function ensureViewportResizeObserver() {
   const viewport = getScrollViewport();
   if (!viewport || viewportResizeObserver) return;
   viewportResizeObserver = new ResizeObserver(() => {
-    if (!autoFollow.value) return;
-    scrollToBottom();
+    // 卡头模式同样不介入：视口被挤压时把视口拉到底会把卡头推出视口之上。
+    if (!autoFollow.value || followMode !== 'bottom') return;
+    pinToBottomNow();
   });
   viewportResizeObserver.observe(viewport);
+}
+
+// 观察内容本体（.messages）的尺寸：流式增量、收尾的整篇重渲染、折叠组展开、
+// 本轮统计行落位……凡是"消息列表变高变矮"都走这里，在同一帧内完成贴底。
+// 工具卡卡头模式下不介入（见 followMode 的说明）。
+function ensureContentResizeObserver() {
+  const root = messagesRootRef.value;
+  if (!root || contentResizeObserver) return;
+  contentResizeObserver = new ResizeObserver(() => {
+    if (!autoFollow.value || followMode !== 'bottom') return;
+    pinToBottomNow();
+  });
+  contentResizeObserver.observe(root);
 }
 
 // A run is active while any message is still streaming. Once the run ends the
@@ -525,6 +569,7 @@ function onShellPointerDown(e) {
 
 onMounted(() => {
   ensureViewportResizeObserver();
+  ensureContentResizeObserver();
   const viewport = getScrollViewport();
   if (viewport) {
     viewport.addEventListener('wheel', markUserIntent, { passive: true });
@@ -539,6 +584,8 @@ onMounted(() => {
 onBeforeUnmount(() => {
   viewportResizeObserver?.disconnect();
   viewportResizeObserver = null;
+  contentResizeObserver?.disconnect();
+  contentResizeObserver = null;
   if (scrollRaf) cancelAnimationFrame(scrollRaf);
   for (const id of pendingRafs) cancelAnimationFrame(id);
   pendingRafs.clear();
@@ -572,8 +619,11 @@ function handleScroll() {
   const nearBottom = isNearBottom();
   autoFollow.value = nearBottom;
   showJumpToBottom.value = !nearBottom;
-  if (nearBottom) clearIdleResume();
-  else armIdleResume();
+  if (nearBottom) {
+    // 用户自己滚回底部：跟随目标回到贴底（可能刚从工具卡卡头模式出来）
+    followMode = 'bottom';
+    clearIdleResume();
+  } else armIdleResume();
 }
 
 function scrollToBottom(options = {}) {
@@ -610,6 +660,7 @@ function scrollToBottom(options = {}) {
           const delta = targetTop - viewportTop - bottomThreshold;
           scrollbarRef.value?.scrollTo({ top: viewport.scrollTop + delta });
           autoFollow.value = true;
+          followMode = 'tool-card';
           showJumpToBottom.value = false;
           return;
         }
@@ -618,9 +669,9 @@ function scrollToBottom(options = {}) {
       // scrollable bottom. This is robust against content-visibility: auto
       // elements whose contain-intrinsic-size placeholders make scrollHeight
       // smaller than the actual rendered content height.
-      scrollbarRef.value?.scrollTo({ top: 999999999 });
-      if (viewport) viewport.scrollTop = 999999999;
+      scrollViewportToBottom(viewport);
       autoFollow.value = true;
+      followMode = 'bottom';
       showJumpToBottom.value = false;
     });
   });
@@ -628,6 +679,7 @@ function scrollToBottom(options = {}) {
 
 function jumpToBottom() {
   autoFollow.value = true;
+  followMode = 'bottom';
   showJumpToBottom.value = false;
   clearIdleResume();
   scrollToBottom({ force: true });
@@ -637,6 +689,7 @@ function jumpToBottom() {
 // 不依赖内容观察器，也不受之前会话的 autoFollow 状态影响。
 async function restoreToBottom() {
   autoFollow.value = true;
+  followMode = 'bottom';
   showJumpToBottom.value = false;
   clearIdleResume();
   const requestId = ++restoreRequestId;
@@ -645,8 +698,7 @@ async function restoreToBottom() {
     if (requestId !== restoreRequestId) return;
     const viewport = getScrollViewport();
     if (!viewport) return;
-    scrollbarRef.value?.scrollTo({ top: 999999999 });
-    viewport.scrollTop = viewport.scrollHeight;
+    scrollViewportToBottom(viewport);
     bottomAnchorRef.value?.scrollIntoView({ block: 'end', behavior: 'auto' });
   };
   apply();

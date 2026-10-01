@@ -661,6 +661,7 @@ import { fmtCompact, fmtDuration, formatBytes } from './utils/format.mjs';
 import { isSkillActive, normalizeSkillName } from './utils/skills.mjs';
 import {
   assistantRowRenderState,
+  deleteAbsentCount,
   deleteFailedCount,
   deletePathSummary,
   displaySourceMessages as buildDisplaySourceMessages,
@@ -8309,10 +8310,12 @@ function formatToolChip(name, result) {
       return '\u00B7 ' + parts.join(' \u00B7 ');
     }
     if ((name === 'delete' || name === 'remote_delete_path') && parsed.data) {
-      // 动词 "Deleted" + 路径参数已说明结果；只有失败条数需要单独提示，否则
-      // 一批里失败一条在卡片上完全看不到。
+      // 动词 "Deleted" + 路径参数已说明结果；只有失败条数与「本来就不存在」需要
+      // 单独提示，否则一批里失败一条、或删的东西根本不记得在卡片上完全看不到。
       const failed = deleteFailedCount(parsed.data);
-      return failed ? `\u00B7 ${failed} failed` : '';
+      if (failed) return `\u00B7 ${failed} failed`;
+      const absent = deleteAbsentCount(parsed.data);
+      return absent ? `\u00B7 ${absent} ${t('tools.delete.absent')}` : '';
     }
     if ((name === 'http_request' || name === 'web_fetch') && parsed.data) {
       return formatHTTPToolSummary(parsed.data);

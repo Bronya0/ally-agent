@@ -21,6 +21,62 @@ import (
 	"ally-dev/internal/tools/pathutil"
 )
 
+// checkConfinedCommandSafety is the fence subset that stays on while the OS
+// sandbox is actually confining the command (kernelOwnsBoundary). The kernel
+// covers outside-workspace writes, the KB deny roots and the routing of
+// ordinary deletions exactly where the fence's lexical guessing used to produce
+// the false positives, so those checks stand down. What the kernel cannot judge
+// stays fenced: VCS metadata sits inside the writable root (git itself must
+// write .git), high-risk command semantics (curl|sh, privilege escalation) are
+// not filesystem shapes a write filter can see, and removing a writable root is
+// legal to the kernel — the roots are its writable surface, so "delete the
+// whole workspace" is something only the fence can name.
+func checkConfinedCommandSafety(commandLine string, workingDir string, roots []string) error {
+	if root := firstWorkspaceRootDeleteTarget(commandLine, workingDir, roots); root != "" {
+		return codedToolError("E_DELETE_BLOCKED", fmt.Errorf("安全围栏已拦截：不允许删除工作区根目录。\n原因：删掉工作区根等于删掉整个项目；系统沙箱把删除范围锁在工作区之内，它看不出「删掉自己」这一档，所以这一条只能由围栏拦。\n检测到的目标：%s\n处理方式：要删工作区里的具体条目请用 delete 工具（它逐条检查目标与递归范围）；确实要清空整个工作区，请手动在终端执行。\n被拦截的命令：%s", root, commandLine))
+	}
+	if risk := firstVCSMetadataMutationTarget(commandLine, workingDir); risk != nil {
+		return codedToolError("E_PROTECTED_PATH", fmt.Errorf("安全围栏已拦截：命令目标是版本控制元数据内的路径。\n原因：创建、覆盖或删除 .git/.svn/.hg 的元数据会损坏仓库，写入 hooks 更会在下次 git 命令时执行代码；目标在工作区内，沙箱必须放行它（git 自己也要写）。\n检测到的目标：%s\n处理方式：版本控制状态请手动在终端变更。\n被拦截的命令：%s", risk.Path, commandLine))
+	}
+	if risk := command.MatchRiskPattern(commandLine); risk != nil {
+		return codedToolError("E_COMMAND_BLOCKED", fmt.Errorf("高危命令拒绝: 检测到%s - 命令已被安全围栏拦截。\n如需执行此操作，请手动在终端中执行。\n被拦截的命令: %s", risk.Reason, commandLine))
+	}
+	return nil
+}
+
+// firstWorkspaceRootDeleteTarget reports the first delete target that resolves
+// to a writable root itself. The kernel's write filter cannot answer this: the
+// roots are exactly what it permits writing to, so removing one is legal there,
+// while the delete tool refuses the same target outright (planDeletePath). It
+// is deliberately narrow — only a target that resolves to a root is named, so
+// `rm -rf build` inside the workspace stays allowed.
+func firstWorkspaceRootDeleteTarget(commandLine, workingDir string, roots []string) string {
+	for _, target := range command.DeletePathTargets(commandLine) {
+		path, ok := command.ResolveCommandLiteralPath(target, workingDir)
+		if !ok {
+			continue
+		}
+		for _, root := range roots {
+			// 两侧都按真实路径比：macOS 上 $TMPDIR 是 /private/var 的链接，只解
+			// 一侧会把同一个目录判成两个。字面形态再比一次做兜底。
+			if samePath(path, root) || samePath(evalExistingPrefixOrSelf(path), evalExistingPrefixOrSelf(root)) {
+				return filepath.ToSlash(path)
+			}
+		}
+	}
+	return ""
+}
+
+// evalExistingPrefixOrSelf resolves symlinks in the existing prefix of p and
+// falls back to p itself when that cannot be done, so a comparison never loses
+// a match just because one side could not be resolved.
+func evalExistingPrefixOrSelf(p string) string {
+	if resolved, err := evalExistingPrefix(p); err == nil {
+		return resolved
+	}
+	return p
+}
+
 // checkCommandSafety resolves a request cwd before inspecting relative mutation
 // targets. It remains a compatibility wrapper for tests and callers that do not
 // already have the resolved cwd.
@@ -51,7 +107,7 @@ func checkCommandSafetyAtCwd(req CommandRequest, roots []string, workingDir stri
 		return codedToolError("E_PROTECTED_PATH", fmt.Errorf("安全围栏已拦截：命令目标是版本控制元数据内的路径。\n原因：创建、覆盖或删除 .git/.svn/.hg 的元数据会损坏仓库，写入 hooks 更会在下次 git 命令时执行代码；目标在工作区内，所以工作区外检查不会拦它。\n检测到的目标：%s\n处理方式：版本控制状态请手动在终端变更。\n被拦截的命令：%s", risk.Path, cmd))
 	}
 	if risk := firstExistingOutsideMutationTarget(cmd, roots, workingDir); risk != nil {
-		return codedToolError("E_PATH_OUTSIDE", fmt.Errorf("安全围栏已拦截：命令可能修改工作区外的受保护目标。\n原因：%s。\n检测到的目标：%s\n允许的操作：读取工作区外路径、写入 /dev/null 等空设备、创建不存在的新路径。\n禁止的操作：覆盖、追加、移动、改权限或以其他方式修改已经存在的工作区外文件或目录。\n允许写入的根目录：\n%s\n被拦截的命令：%s", risk.Reason, risk.Path, formatAllowedRoots(roots), cmd))
+		return codedToolError("E_PATH_OUTSIDE", fmt.Errorf("安全围栏已拦截：命令可能修改工作区外的受保护目标。\n原因：%s。\n检测到的目标：%s\n允许的操作：读取工作区外路径、写入 /dev/null 等空设备、创建不存在的新路径。\n禁止的操作：覆盖、追加、移动、改权限或以其他方式修改已经存在的工作区外文件或目录。\n可写范围：\n%s\n被拦截的命令：%s", risk.Reason, risk.Path, formatAllowedRoots(roots), cmd))
 	}
 	if risk := command.MatchRiskPattern(cmd); risk != nil {
 		return codedToolError("E_COMMAND_BLOCKED", fmt.Errorf("高危命令拒绝: 检测到%s - 命令已被安全围栏拦截。\n如需执行此操作，请手动在终端中执行。\n被拦截的命令: %s", risk.Reason, cmd))

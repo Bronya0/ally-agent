@@ -621,6 +621,23 @@ func MutationPathTargets(commandLine string) []string {
 	return targets
 }
 
+// DeletePathTargets returns the path operands of every raw deletion verb in the
+// command line (rm, unlink, rmdir, del, find -delete, rsync --delete, ...).
+// Managed deletions (git rm, docker rm, kubectl delete) are left out: those go
+// through a tool that owns its own policy. Flags are dropped, so `rm -rf build`
+// yields build; a flag's value stays a candidate, which only makes the caller's
+// judgement more conservative.
+func DeletePathTargets(commandLine string) []string {
+	targets := []string{}
+	for _, invocation := range Invocations(commandLine) {
+		if deletionKind(invocation) != deletionRaw {
+			continue
+		}
+		targets = append(targets, positionalArgs(invocation.Args)...)
+	}
+	return targets
+}
+
 // moveMutationTargets returns the destination followed by every source of a
 // move/rename: the destination is created or overwritten AND each source is
 // removed, so a source is a mutation target too. Treating a move like a copy

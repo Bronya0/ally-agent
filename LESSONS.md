@@ -122,3 +122,20 @@
 [list-key-no-omitempty] 2026-10-03 前端按数组键存在性分支：空清单也要发 []，加 omitempty 就退化成 {}。@orch_scheduler.go
 [cli-daemon-dies] 2026-10-01 CLI 自带 daemon 化 spawn 在 Windows 上活不过 command 调用：返回即回收进程树。改跑前台入口。@cmd
 [clip-and-expand-same-source] 2026-10-03 折叠高度与“能否展开”须同源于实测裁剪盒，别用逻辑行数：单行 JSON 恒 1 行。@ToolCallCard.vue
+[sandbox-tmpdir-writable] 2026-10-01 $TMPDIR 属沙箱可写根：测越界先建目录再改 TMPDIR。@orch_sandbox_test.go
+[nested-sandbox-apply] 2026-10-01 宿主在沙箱内时嵌套 sandbox_apply 被拒，测沙箱先 requireConfinement。@orch_sandbox*
+[error-alert-one-box] 2026-10-01 卡片“没成”的外观只定义一处：工具错误与沙箱拦截共用同一盒子，新入口加进选择器。@style.css
+[model-card-text] 2026-10-01 给模型的解说别进 Output：卡片预览尾部会显示它并挤掉真报错，改独立字段+模型侧渲染器追加。@orch_sandbox.go
+[boundary-owner] 2026-10-01 边界判据问沙箱「真在管吗」不问平台；测试钉内核接管要 requireConfinement，否则越界写真落盘。@orch_sandbox.go
+[sandbox-roots] 2026-10-01 命令可写根=工作区+$TMPDIR+~/Library/Caches；~/.ally_agent 连读都拒。@orch_sandbox.go
+[sandbox-denied-wording] 2026-10-01 拒写文案单源：WriteDeniedHint 首句 = i18n 的 SANDBOX_DENIED_* 常量。@i18n.mjs
+[staging-unconfined] 2026-10-01 staging 不受沙箱约束：目标目录本身不可写时错误出在内核前，要在此归类。@orch_sandbox_writes.go
+[http-saveto-abs] 2026-10-01 http_request 的 saveTo 给绝对路径可越界落盘（不经沙箱，事后连删都删不掉）。@orch_http.go
+[tilde-literal] 2026-10-01 文件工具不展开 ~："~/x" 按字面名在工作区建出 ./~ 目录。@orch_file_ops.go
+[helper-raw-string] 2026-10-01 远端 helper 在 Go raw string 里，注释禁用反引号（会截断脚本）。@orch_remote.go
+[remote-fence-parity] 2026-10-01 远端与本地是两套闸门：新增写入口/命令判定要各自补 .git 元数据围栏。@orch_remote.go
+[mutation-roots-narrow] 2026-10-01 文件 mutation 的写根不能复用命令那套：$TMPDIR 与工具链缓存是命令的必需品，却是落盘动作的逃逸面（工作区内符号链接指过去内核照样放行）。@orch_sandbox_writes.go
+[guard-not-a-condition] 2026-10-01 拦截别写成 if 条件（guard() == nil）：失败时错误无处可去，工具返回「成功 + 空结果」，拦截形同没做。返回值必须落到 err。@app.go
+[assert-the-right-field] 2026-10-01 断言要指向真正承载结果的字段：提示刻意不进 Output，测试却去查 Output——既绿不了，也等于什么都没测到。@orch_sandbox_test.go
+[root-self-delete] 2026-10-02 沙箱接管后唯一兜不住的自毁面：写根正是内核的可写范围，删工作区根在它眼里合法，必须由围栏拦（delete 工具本就拒同一目标）。@orch_command_safety.go
+[test-family-table] 2026-10-02 同族用例（同一个入口、只是入参与期望不同）收进一张表驱动：开场样板只写一遍，断言一条不减，函数数从 37 降到 5。别靠"删"来减测试。@orch_test.go

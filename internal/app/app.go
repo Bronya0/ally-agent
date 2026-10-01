@@ -26,6 +26,7 @@ import (
 	"unicode/utf8"
 
 	"ally-dev/internal/tools/grep"
+	"ally-dev/internal/tools/pathutil"
 	"ally-dev/internal/tools/schemautil"
 	toolshared "ally-dev/internal/tools/shared"
 	"ally-dev/internal/tools/toolcall"
@@ -862,9 +863,12 @@ type DeleteResult struct {
 	RemovedDirs  int    `json:"removedDirs"`
 	RemovedBytes int64  `json:"removedBytes"`
 	WasSymlink   bool   `json:"wasSymlink"`
-	OK           bool   `json:"ok"`
-	Error        string `json:"error,omitempty"`
-	ErrorCode    string `json:"errorCode,omitempty"`
+	// Absent 报「这条路径本来就不存在」：删除的目的已经达成，所以它 OK=true、
+	// 既不算成功也不算失败（两个计数都不含它），模型据此知道不必重试。
+	Absent    bool   `json:"absent,omitempty"`
+	OK        bool   `json:"ok"`
+	Error     string `json:"error,omitempty"`
+	ErrorCode string `json:"errorCode,omitempty"`
 }
 
 // DeletePathsResult 是一次删除调用的结果。本地 delete 与远端 remote_delete_path
@@ -875,6 +879,9 @@ type DeletePathsResult struct {
 	Paths        []DeleteResult `json:"paths"`
 	DeletedCount int            `json:"deletedCount"`
 	FailedCount  int            `json:"failedCount"`
+	// AbsentCount 是「本来就不存在」的槽数（见 DeleteResult.Absent）：它们既没
+	// 成也没败，单独报出来才不会让 deleted=0 看起来像什么都没发生。
+	AbsentCount int `json:"absentCount,omitempty"`
 }
 
 type CommandRequest struct {
@@ -1010,6 +1017,31 @@ type ServiceInfo struct {
 	// Promoted 标记该服务由超时命令收编而来（而非 service start 启动），
 	// 任务中心据此显示“超时转后台”徽标。
 	Promoted bool `json:"promoted,omitempty"`
+	// Sandboxed 标记该服务的进程跑在操作系统级沙箱里（同 CommandResult）。
+	Sandboxed bool `json:"sandboxed,omitempty"`
+	// SandboxDenied 标记该服务的输出里出现过内核拒写（同 CommandResult）：
+	// 事件一旦出现就留住——拒绝那几行很快会被日志刷出尾部，而卡片那行说的
+	// 是「这次写没成」这件已经发生的事。
+	SandboxDenied bool `json:"sandboxDenied,omitempty"`
+	// DeniedWriteHint 与 CommandResult 的同名字段同源（同一句文案）：解释与
+	// 下一步给模型，不进 Output，模型侧由 renderService*ResultForModel 追加。
+	DeniedWriteHint string `json:"deniedWriteHint,omitempty"`
+}
+
+// SandboxStatus 是设置页要如实展示的沙箱环境状态：这台机器上会不会真的包住命令、
+// 是强制开启还是本平台不用、后端是否真的可用。沙箱已不再是用户配置，所以这里没有
+// “用户选的档位”，也没有不可关闭的禁读清单。
+type SandboxStatus struct {
+	// Effective 是这台机器上实际生效的档位：强制平台（macOS）且后端可用时是
+	// "enforce"，其余一律是 ""（不启用）。
+	Effective string `json:"effective"`
+	// Forced 表示本平台强制开启沙箱：没有开关可关。
+	Forced bool `json:"forced"`
+	// Available 表示本机后端真的能应用沙箱。
+	Available bool `json:"available"`
+	// Warning 是给用户看的整句话（无事可说时为空）：强制平台后端不可用时说清
+	// 现在是安全围栏在守。
+	Warning string `json:"warning,omitempty"`
 }
 
 type ServiceListResult struct {
@@ -1038,6 +1070,18 @@ type CommandResult struct {
 	Cancelled       bool  `json:"cancelled"`
 	DurationMS      int64 `json:"durationMs"`
 	Truncated       bool  `json:"truncated"`
+	// Sandboxed 标记本次命令被操作系统级沙箱包裹执行。开启沙箱而包不上时命令
+	// 会被拒绝执行（失败即拒绝），不会出现“标记为 false 但开关是开着的”结果。
+	Sandboxed bool `json:"sandboxed,omitempty"`
+	// SandboxDenied 标记这次命令的写入被内核拦下。命令本身仍是“执行成功”的工具
+	// 结果（内核拒绝按约定是命令结果、不是工具错误），所以前端要显眼报错就需要
+	// 这个结构化字段——去嗅探输出文本会随文案与命令输出漂移。
+	SandboxDenied bool `json:"sandboxDenied,omitempty"`
+	// DeniedWriteHint 是写入被内核拦下时给模型的解释与下一步（原因 / 可写根 /
+	// 处理方式）。它刻意不进 Output：命令卡正体只预览尾部若干行，提示埋在正文里
+	// 既挤掉真正的报错，又和卡片顶部那行固定报错重复；模型侧由
+	// renderCommandResultForModel 追加在输出之后。
+	DeniedWriteHint string `json:"deniedWriteHint,omitempty"`
 	// PromotedToService 标记命令超时后已收编为后台服务：进程未死、端口未
 	// 释放，模型应改用 service 工具交互而不是重跑命令。
 	PromotedToService bool `json:"promotedToService,omitempty"`
@@ -1558,6 +1602,11 @@ func (a *App) StartChat(req ChatRequest) (string, error) {
 	}
 	if strings.TrimSpace(cfg.Workspace) == "" {
 		return "", errors.New("workspace is required")
+	}
+	// 与 SelectWorkspace 同一条底线：根工作区让所有边界检查形同虚设，手改
+	// 配置文件也绕不过这一道（运行入口再拦一次）。
+	if pathutil.IsSystemRootPath(cfg.Workspace) {
+		return "", errors.New("系统根目录不能用作工作区：整个磁盘都会变成 Agent 的可写范围，请选择一个具体的项目目录")
 	}
 
 	// Record the workspace this session's runs actually use. Written before
@@ -2691,13 +2740,23 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		if err == nil {
 			switch strings.ToLower(strings.TrimSpace(req.Action)) {
 			case "start":
-				if err = kbDenyCheckCommand(ctx, cfg, req.Command); err == nil {
-					data, err = a.startServiceWithConfig(cfg, StartServiceRequest{
-						Name:    req.Name,
-						Command: req.Command,
-						Cwd:     req.Cwd,
-					})
+				// 沙箱生效时 KB 禁写由内核 DenyWriteRoots 兜底，字面检查只在
+				// 围栏全量生效（沙箱关闭/降级）时执行。检查的结果必须落到 err
+				// 上：只把它当条件判断会让拦截退化成「成功 + 空结果」，模型读
+				// 到的是一次什么都没发生的成功启动。
+				var denyErr error
+				if !kernelOwnsBoundary() {
+					denyErr = kbDenyCheckCommand(ctx, cfg, req.Command)
 				}
+				if denyErr != nil {
+					err = denyErr
+					break
+				}
+				data, err = a.startServiceWithConfig(ctx, cfg, StartServiceRequest{
+					Name:    req.Name,
+					Command: req.Command,
+					Cwd:     req.Cwd,
+				})
 			case "stop":
 				data, err = a.stopService(StopServiceRequest{ID: req.ID, GraceSeconds: req.GraceSeconds})
 			case "list":

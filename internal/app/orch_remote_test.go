@@ -335,6 +335,119 @@ func TestRemoteHelperWriteDefaultPerm0644(t *testing.T) {
 	}
 }
 
+// TestRemoteVCSMetadataGuards 锁定远端写入与远端命令的版本控制元数据判定：与本地
+// 写路径/删除路径共用 pathutil.VCSMetadataReason 一份规则，命令侧按远端 cwd 解析
+// 相对目标；动态目标（变量/命令替换）不猜，交给 helper 用远端事实判。
+func TestRemoteVCSMetadataGuards(t *testing.T) {
+	writable := []string{"src/main.go", ".gitignore", "docs/.github/workflows/ci.yml", "app/git/config"}
+	for _, p := range writable {
+		if err := remoteVCSMetadataWrite(p); err != nil {
+			t.Fatalf("path %q must stay writable on the remote host, got %v", p, err)
+		}
+	}
+	protected := []string{".git/config", ".git/hooks/pre-commit", "app/.git/index", ".svn/entries", ".hg/hgrc"}
+	for _, p := range protected {
+		if code := toolErrorCode(remoteVCSMetadataWrite(p)); code != "E_PROTECTED_PATH" {
+			t.Fatalf("path %q: want E_PROTECTED_PATH, got %q", p, code)
+		}
+	}
+
+	cases := []struct {
+		name    string
+		command string
+		cwd     string
+		want    bool
+	}{
+		{"redirection into hooks", "echo x > .git/hooks/pre-commit", "/srv/app", true},
+		{"absolute target", "cat > /srv/app/.git/config", "/srv/app", true},
+		{"relative to the command cwd", "cat > .git/refs/heads/main", "/srv/app/sub", true},
+		{"ordinary build command", "go test ./...", "/srv/app", false},
+		{"file merely named like metadata", "echo x > .gitignore", "/srv/app", false},
+		{"dynamic target is not guessed", "echo x > $OUT", "/srv/app", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := remoteCommandVCSMetadataTarget(tc.command, tc.cwd)
+			if tc.want != (got != "") {
+				t.Fatalf("command %q (cwd %s): target = %q, want detected=%v", tc.command, tc.cwd, got, tc.want)
+			}
+		})
+	}
+
+	// 写入入口在真正发起 ssh 之前就拒（与本地写路径同一个错误码，模型侧可据此恢复）。
+	a := NewApp()
+	_, err := a.remoteWriteRaw(context.Background(), remoteTarget{Host: "example.invalid", WorkspaceRoot: "/srv/app"}, ".git/hooks/pre-commit", []byte("x"), true, true)
+	if code := toolErrorCode(err); code != "E_PROTECTED_PATH" {
+		t.Fatalf("remote write into .git must be refused before any ssh session, got %q (%v)", code, err)
+	}
+}
+
+// TestRemoteHelperRefusesVCSMetadataWrites 用真实 helper 脚本（只操作 t.TempDir()）
+// 锁定远端事实那一层：字面路径里的 .git 由 Go 侧拒，helper 还要拒「解析后才落进
+// .git」的写入——把 .git 链成工作区里的另一个名字（gh），字面路径完全干净；命令的
+// 写目标同属这一层，Go 侧看不见。
+func TestRemoteHelperRefusesVCSMetadataWrites(t *testing.T) {
+	py := pickRemoteHelperPython(t)
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".git", "hooks"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(root, ".git"), filepath.Join(root, "gh")); err != nil {
+		t.Skipf("symlinks unavailable in this environment: %v", err)
+	}
+	run := func(payload map[string]any) remotePythonResponse {
+		t.Helper()
+		script, err := buildRemoteScript(payload)
+		if err != nil {
+			t.Fatalf("buildRemoteScript: %v", err)
+		}
+		resp, err := runRemoteHelperScript(t, py, script)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp
+	}
+	write := func(rel string) map[string]any {
+		return map[string]any{
+			"op":            "write",
+			"workspaceRoot": root,
+			"path":          rel,
+			"dataBase64":    base64.StdEncoding.EncodeToString([]byte("x\n")),
+			"overwrite":     true,
+			"mkdirs":        true,
+		}
+	}
+
+	for _, rel := range []string{".git/config", ".git/hooks/pre-commit", "gh/hooks/pre-commit"} {
+		resp := run(write(rel))
+		if resp.OK {
+			t.Fatalf("write to %s must be refused by the helper", rel)
+		}
+		if !strings.Contains(resp.Error, "E_PROTECTED_PATH") {
+			t.Fatalf("write to %s: error = %q, want E_PROTECTED_PATH", rel, resp.Error)
+		}
+	}
+	// 对照：仓库里被跟踪的普通文件仍然可写（.gitignore 不是元数据）。
+	resp := run(write(".gitignore"))
+	if !resp.OK {
+		t.Fatalf("writing .gitignore must stay allowed: %s", resp.Error)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".gitignore")); err != nil {
+		t.Fatalf(".gitignore was not written: %v", err)
+	}
+
+	// 命令写目标：字面干净、解析后落进 .git 的目标由 helper 拒。
+	resp = run(map[string]any{
+		"op":            "_check_write_targets",
+		"workspaceRoot": root,
+		"cwd":           ".",
+		"targets":       []string{"gh/hooks/pre-commit"},
+	})
+	if resp.OK || !strings.Contains(resp.Error, "E_PROTECTED_PATH") {
+		t.Fatalf("write target through the .git alias must be refused, got ok=%v error=%q", resp.OK, resp.Error)
+	}
+}
+
 // TestRemoteHelperReadBatchOp 锁定 read_batch 契约：逐文件错误隔离、结
 // 果槽顺序与请求一致、预算耗尽时剩余路径进 remaining 交给下一轮会话。
 func TestRemoteHelperReadBatchOp(t *testing.T) {
@@ -745,15 +858,17 @@ func TestRemoteReadFileDuplicatePathSlots(t *testing.T) {
 
 // remoteDeleteSlotForTest 是 delete_batch 结果槽的传输形状。
 type remoteDeleteSlotForTest struct {
-	Path  string `json:"path"`
-	OK    bool   `json:"ok"`
-	Error string `json:"error"`
+	Path   string `json:"path"`
+	OK     bool   `json:"ok"`
+	Absent bool   `json:"absent"`
+	Error  string `json:"error"`
 }
 
 // TestRemoteHelperDeleteBatchOpTouchesOnlyWorkspace 用真实 helper 脚本跑完整
 // delete_batch op（只操作 t.TempDir()）：普通文件允许删、一级目录拒绝、二级目录
-// 必须 recursive 后允许删除、工作区根与逃逸路径拒绝、不存在的路径拒绝。批量语义
-// 单独锁一条：列表里只要有一条不允许，整批一条都不删 —— 全部判定先于任何删除。
+// 必须 recursive 后允许删除、工作区根与逃逸路径拒绝、不存在的路径报 absent 槽
+// （不是错误）。批量语义单独锁一条：列表里只要有一条不允许，整批一条都不删 ——
+// 全部判定先于任何删除。
 func TestRemoteHelperDeleteBatchOpTouchesOnlyWorkspace(t *testing.T) {
 	py := pickRemoteHelperPython(t)
 	root := t.TempDir()
@@ -826,12 +941,16 @@ func TestRemoteHelperDeleteBatchOpTouchesOnlyWorkspace(t *testing.T) {
 	mustRemain("sub/nested.txt")
 	mustRemain("sub")
 
-	// 3) 不存在的路径也整批拒绝：其余路径一条不动
+	// 3) 不存在的路径不是错误：报 absent 槽，同批其它路径照删
 	resp = deleteBatch([]string{"sub/nested.txt", "missing.txt"}, false)
-	if resp.OK || !strings.Contains(resp.Error, "does not exist") {
-		t.Fatalf("a missing path should refuse the whole batch, got ok=%v error=%s", resp.OK, resp.Error)
+	if !resp.OK {
+		t.Fatalf("a missing path must not fail the batch: %s", resp.Error)
 	}
-	mustRemain("sub/nested.txt")
+	missing := slots(resp)
+	if len(missing) != 2 || !missing[0].OK || missing[0].Absent || !missing[1].OK || !missing[1].Absent || missing[1].Path != "missing.txt" {
+		t.Fatalf("expected one deleted slot and one absent slot, got %#v", missing)
+	}
+	mustBeGone("sub/nested.txt")
 
 	// 4) 二级目录未给 recursive 仍拒绝。
 	resp = deleteBatch([]string{"sub/deep"}, false)

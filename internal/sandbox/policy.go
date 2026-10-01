@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 )
 
 // policyPath is one path the policy treats by kind: bubblewrap can only mount a
@@ -36,16 +37,9 @@ type policyPlan struct {
 	problems  []string
 }
 
-// buildPlan resolves a spec into this platform's policy. A read-only spec skips
-// every ordinary write — no workspace, no temp directory, no toolchain caches —
-// and keeps only the platform's device directories, which are mounts the sandbox
-// throws away rather than host state.
+// buildPlan resolves a spec into this platform's policy.
 func buildPlan(spec Spec) policyPlan {
-	if spec.ReadOnly {
-		masks, problems := readMasks(spec.ForbidReadRoots, nil)
-		return policyPlan{writable: canonicalDirs(platformWriteExtras), masks: masks, problems: problems}
-	}
-	writable, problems := writableDirs(spec.WriteRoots, platformWriteExtras...)
+	writable, problems := writableDirs(spec, platformWriteExtras...)
 	denyWrite, denyProblems := denyWritePaths(spec.DenyWriteRoots, spec.WriteRoots)
 	masks, maskProblems := readMasks(spec.ForbidReadRoots, spec.WriteRoots)
 	return policyPlan{
@@ -69,7 +63,13 @@ func buildPlan(spec Spec) policyPlan {
 // cache that does not exist yet is reported too, because EnsureWritableDirs is
 // what creates it before a launch — and if that failed, the next build inside
 // the sandbox is the thing that breaks.
-func writableDirs(roots []string, platformExtras ...string) ([]string, []string) {
+//
+// spec.OnlyWriteRoots stops after the caller's roots, leaving out the temp
+// directory, the toolchain caches and the platform extras: a caller that asks
+// for it confines one coreutil against one path, and every location besides its
+// own roots is a place it has no business writing.
+func writableDirs(spec Spec, platformExtras ...string) ([]string, []string) {
+	roots := spec.WriteRoots
 	var problems []string
 	capacity := len(roots) + len(platformExtras) + 8
 	seen := make(map[string]bool, capacity)
@@ -90,6 +90,9 @@ func writableDirs(roots []string, platformExtras ...string) ([]string, []string)
 	}
 	for _, root := range roots {
 		add(root, true)
+	}
+	if spec.OnlyWriteRoots {
+		return out, problems
 	}
 	for _, extra := range platformExtras {
 		add(extra, false)
@@ -150,6 +153,19 @@ func EnsureWritableDirs() error {
 		}
 	}
 	return errors.Join(failures...)
+}
+
+// ensureWritableDirsOnce bounds EnsureWritableDirs to one attempt per process.
+var ensureWritableDirsOnce sync.Once
+
+// EnsureWritableDirsOnce creates the toolchain caches once per process. It is
+// what Wrap calls before rendering a profile: the caches must exist before the
+// profile names them (inside the sandbox the command cannot create them, and
+// their parents are not writable), but creating them on every command would
+// touch the user's home directory for no reason. The settings path calls it too,
+// so flipping confinement on materializes them immediately.
+func EnsureWritableDirsOnce() {
+	ensureWritableDirsOnce.Do(func() { _ = EnsureWritableDirs() })
 }
 
 // cacheSubdirs are the per-user caches a development command is expected to

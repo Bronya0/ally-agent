@@ -19,6 +19,8 @@ import (
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
+
+	"ally-dev/internal/tools/pathutil"
 )
 
 const (
@@ -270,6 +272,11 @@ func (a *App) SelectWorkspace() (string, error) {
 	if err != nil || selected == "" {
 		return selected, err
 	}
+	// 系统根目录一当选成工作区，所有边界检查（写根、VCS、危险删除黑名单）就
+	// 形同虚设——整个磁盘都算“工作区内”。三个平台都在入口拒绝。
+	if pathutil.IsSystemRootPath(selected) {
+		return "", errors.New("系统根目录不能用作工作区：整个磁盘都会变成 Agent 的可写范围，请选择一个具体的项目目录")
+	}
 	cfg := a.config
 	cfg.Workspace = selected
 	if err := a.SaveConfig(cfg); err != nil {
@@ -300,6 +307,35 @@ func (a *App) SelectKnowledgeBaseRoot() (string, error) {
 	selected, err := a.wails.app.Dialog.OpenFile().
 		SetTitle("选择知识库目录").
 		SetDirectory(current).
+		CanChooseDirectories(true).
+		CanChooseFiles(false).
+		PromptForSingleSelection()
+	if err != nil {
+		return "", err
+	}
+	return selected, nil
+}
+
+// SelectDirectory opens a native directory picker and returns the chosen absolute
+// path without persisting it. Settings pages that own their own draft (the sandbox
+// deny-read list, for example) call this instead of a page-specific picker; the
+// picked path round-trips through the normal SaveConfig boundary.
+func (a *App) SelectDirectory(current string) (string, error) {
+	if err := a.ensureInitialized(); err != nil {
+		return "", err
+	}
+	if a.wails == nil || a.wails.app == nil {
+		return "", errors.New("desktop host not initialized")
+	}
+	start := strings.TrimSpace(current)
+	if info, err := os.Stat(start); err != nil || !info.IsDir() {
+		if homeDir, err := os.UserHomeDir(); err == nil {
+			start = homeDir
+		}
+	}
+	selected, err := a.wails.app.Dialog.OpenFile().
+		SetTitle("选择目录").
+		SetDirectory(start).
 		CanChooseDirectories(true).
 		CanChooseFiles(false).
 		PromptForSingleSelection()

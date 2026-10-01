@@ -15,24 +15,21 @@ import "os/exec"
 // platformHasBackend reports that this build has no backend for the platform.
 func platformHasBackend() bool { return false }
 
+// platformForcedMode: 本平台不强制沙箱，所以解析结果恒为关闭（见 ResolvedMode）。
+func platformForcedMode() (Mode, bool) { return ModeOff, false }
+
 // platformWriteExtras is empty: no backend renders a writable surface here.
 var platformWriteExtras []string
 
 // Available reports that this build has no Windows backend. Windows would need a
-// restricted token or an AppContainer plus ACL work on the workspace; until
-// that exists the product setting collapses to off (ResolveMode) so the command
-// tool keeps working exactly as it did before sandboxing existed.
+// restricted token or an AppContainer plus ACL work on the workspace; until that
+// exists ResolvedMode is off here, so the command tool keeps working exactly as
+// it did before sandboxing existed.
 func Available() bool { return false }
 
 // UnavailableReason names why the backend cannot run.
 func UnavailableReason() string {
 	return "Windows 没有内置的操作系统级沙箱后端"
-}
-
-// UnavailableRemediation names the way out. The fence wording is shared with
-// the warning path so the two surfaces cannot drift apart.
-func UnavailableRemediation() string {
-	return "在设置里把命令沙箱改回「关闭」。" + safetyFenceNotice()
 }
 
 // Wrap returns argv unchanged: there is no runner to prefix it with.

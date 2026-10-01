@@ -13,7 +13,7 @@ Public License v3. See the LICENSE file for details.
       :class="['tool-line', { clickable: hasExpandableBody(msg) }]"
       @click.stop="hasExpandableBody(msg) && handleToggle(msg)"
     >
-      <ToolStatusIcon :status="msg.status" />
+      <ToolStatusIcon :status="statusMark" />
       <span class="tool-verb">{{ toolVerb(msg) }}</span>
       <span class="tool-name">{{ toolDisplayName(msg) }}</span>
       <span v-if="msg.title && msg.kind === 'command'" class="tool-command" :title="msg.title">
@@ -41,7 +41,8 @@ Public License v3. See the LICENSE file for details.
       >
         <span class="read-group-tree">{{ treePrefix(index) }}</span>
         <span class="read-group-path" :title="row.path">{{ row.path }}</span>
-        <span v-if="!row.ok && row.error" class="read-group-chip" :title="row.error">{{ row.error }}</span>
+        <span v-if="row.absent" class="read-group-chip" :title="t('tools.delete.absent')">{{ t('tools.delete.absent') }}</span>
+        <span v-else-if="!row.ok && (row.error || row.errorCode)" class="read-group-chip read-group-chip-error" :title="row.error || row.errorCode">{{ deleteRowError(row) }}</span>
       </div>
     </div>
 
@@ -111,12 +112,19 @@ Public License v3. See the LICENSE file for details.
         {{ msg.validation }}
       </div>
     </div>
-    <div v-if="msg.status === 'error'" class="tool-error-block">
+    <div v-if="msg.status === 'error'" class="tool-error-block" role="alert">
       <div v-if="msg.errorCode" class="tool-error-detail">
         <span>{{ errorDescription(msg) }}</span>
         <code>{{ msg.errorCode }}</code>
       </div>
       <pre v-if="errorReasonText(msg)" class="tool-error-reason">{{ errorReasonText(msg) }}</pre>
+    </div>
+
+    <!-- 沙箱拦下的写入：工具结果是“命令执行成功”，绿色 √ 会把“没写成”说成“成了”，
+         所以这行必须固定显示。位置固定在正体之后：输出照实呈现（内核那句拒绝、原样的
+         退出码都在正体里），告警收尾，不与正文抢头一行。 -->
+    <div v-if="msg.sandboxDenied" class="tool-sandbox-denied" role="alert">
+      {{ $t('app.tools.sandboxDenied') }}
     </div>
   </div>
 </template>
@@ -164,6 +172,11 @@ const props = defineProps({
 
 const emit = defineEmits(['toggle']);
 
+// 被沙箱拦下的写入按拒绝显示状态标记：工具调用在后端口径里是成功的（内核拒绝是命令
+// 结果、不是工具错误），但这次写没有发生。正体照旧渲染命令输出——拒绝原因与可写根
+// 都在里面，标记只负责让用户一眼看到“这次写没成”。
+const statusMark = computed(() => (props.msg?.sandboxDenied ? 'error' : props.msg?.status));
+
 // 一次删多条时逐行列出每一条（成/败），行样式复用读卡的折叠行：一条路径一行，
 // 失败行沿用同款红字标记 + 错误文案。行数据来自结果适配器（见 useToolEvents），
 // 所以行的判定与标题摘要同源（utils/toolPreview 的 deletePathRows）。
@@ -172,13 +185,25 @@ const deleteRows = computed(() => {
   return props.msg.deleteEntries;
 });
 
-// 单条且成功时标题已经写了那条路径，再铺一行是重复；多路径（标题只剩 "N paths"）
-// 或唯一那条失败（标题看不出失败）时必须铺开，否则卡片上看不到是哪一条。
+// 单条且成功时标题已经写了那条路径，再铺一行是重复；多路径（标题只剩 "N paths"）、
+// 唯一那条失败（标题看不出失败）、或唯一那条本来就不存在（标题的 "Deleted" 里没有
+// 任何东西被删）时必须铺开，否则卡片上看不到真实结果。
 const deleteRowsShown = computed(() => deleteRows.value.length > 1
-  || (deleteRows.value.length === 1 && !deleteRows.value[0].ok));
+  || (deleteRows.value.length === 1 && (!deleteRows.value[0].ok || deleteRows.value[0].absent)));
 
 function treePrefix(index) {
   return index === deleteRows.value.length - 1 ? '└─' : '├─';
+}
+
+// 逐行失败原因：错误码有本地化句子就用它（与卡片告警行、错误块标签同一句，见 i18n
+// 的 tools.error.<CODE>），没译文才退回结果里的原始文本。原始串可能多行、且带错误
+// 码前缀与整段可写根提示（远端删除不给错误码，最容易撞上），所以行内只留第一行，
+// 完整文本照旧挂在 title 上，行本身再由 .read-group-chip-error 截断。
+function deleteRowError(row) {
+  const label = errorCodeLabel(row?.errorCode);
+  if (label) return label;
+  const raw = String(row?.error || '').trim();
+  return raw.split(/[\r\n]/, 1)[0].trim();
 }
 
 // 一批同类记录的工具结果（ssh_cluster 服务器清单 / service 进程清单 / scheduled_task
@@ -417,21 +442,27 @@ function computeToolBodyText(msg, body) {
   return lines.slice(0, BODY_PREVIEW_LINES).join('\n');
 }
 
-function errorDescription(msg) {
-  const code = msg.errorCode;
-  if (!code) return errorReasonText(msg) || String(msg.body || '');
-  const key = `tools.error.${code}`;
+// errorCodeLabel 是错误码的本地化标签：没有译文时返回空串，退回什么由调用方自己
+// 决定（错误块退到「工具执行出错」，删除卡的逐行原因退到结果里的原始文本）。
+function errorCodeLabel(code) {
+  const value = String(code || '').trim();
+  if (!value) return '';
+  const key = `tools.error.${value}`;
   const translated = t(key);
-  return translated !== key ? translated : t('tools.error.unknown');
+  return translated !== key ? translated : '';
+}
+
+function errorDescription(msg) {
+  const label = errorCodeLabel(msg?.errorCode);
+  if (label) return label;
+  if (!msg?.errorCode) return errorReasonText(msg) || String(msg.body || '');
+  return t('tools.error.unknown');
 }
 
 // 已有本地化错误描述时不重复展示原始（多为英文的）错误文本；
 // 完整错误仍通过工具结果返回给模型。
 function errorReasonText(msg) {
-  if (msg?.errorCode) {
-    const key = `tools.error.${msg.errorCode}`;
-    if (t(key) !== key) return '';
-  }
+  if (errorCodeLabel(msg?.errorCode)) return '';
   return formatToolErrorBody(msg?.body);
 }
 
