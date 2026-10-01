@@ -120,3 +120,5 @@
 [render-by-result-shape] 2026-10-01 工具卡渲染按结果形状分支，别按动作名/标题前缀：动作名来自流式参数，早退即缺失。@useToolEvents.mjs
 [flag-semantics] 2026-10-03 徽标报「动不动状态」须后端显式给 changed，勿拿 alreadyRegistered 代偿。@ssh_cluster
 [list-key-no-omitempty] 2026-10-03 前端按数组键存在性分支：空清单也要发 []，加 omitempty 就退化成 {}。@orch_scheduler.go
+[cli-daemon-dies] 2026-10-01 CLI 自带 daemon 化 spawn 在 Windows 上活不过 command 调用：返回即回收进程树。改跑前台入口。@cmd
+[clip-and-expand-same-source] 2026-10-03 折叠高度与“能否展开”须同源于实测裁剪盒，别用逻辑行数：单行 JSON 恒 1 行。@ToolCallCard.vue

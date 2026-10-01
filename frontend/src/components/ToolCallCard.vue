@@ -94,6 +94,7 @@ Public License v3. See the LICENSE file for details.
       :max-lines="BODY_PREVIEW_LINES"
       preview-mode="tail"
       :live="isBodyLive"
+      @overflow="setBodyOverflow(msg, $event)"
     />
     <TerminalOutputView
       v-else-if="msg.kind === 'command' && msg.status !== 'error'"
@@ -101,6 +102,7 @@ Public License v3. See the LICENSE file for details.
       :text="msg.body || ''"
       :collapsed="!msg.expanded"
       :max-lines="COMMAND_PREVIEW_LINES"
+      @overflow="setBodyOverflow(msg, $event)"
     />
     <pre v-else-if="msg.body && !cardGrid && msg.status !== 'error' && msg.kind !== 'edit' && msg.kind !== 'read' && msg.kind !== 'remote_read' && msg.kind !== 'calculate' && msg.kind !== 'grep' && msg.kind !== 'plan' && (msg.kind !== 'list' || msg.expanded)" ref="bodyPreRef" :class="['tool-body', { 'fixed-scroll': isFixedKind(msg.kind), 'body-preview': isBodyPreview(msg), 'tail-default': isServiceReadResult(msg), 'scroll-enabled': bodyScrollEnabled && isScrollableBody(msg), 'tool-body-swap': !isBodyLive }]" @click.stop="handleBodyClick(msg)">{{ toolBodyText(msg) }}</pre>
     <div v-if="isValidationWarning(msg)" class="edit-warning-list validation-warning-list" role="status" aria-live="polite">
@@ -135,6 +137,16 @@ import ToolStatusIcon from './ToolStatusIcon.vue';
 const BODY_PREVIEW_LINES = 6;
 const TOOL_OUTPUT_PREVIEW_LINES = 4;
 const COMMAND_PREVIEW_LINES = 4;
+
+// 折叠视图实测是否真的裁掉了内容。行数判定（hasExpandableBody）会把 minified
+// JSON、单行超长日志判成“只有 1 行，无需展开”，而折叠高度上限按渲染行数卡，
+// 于是内容被裁掉又点不开。两处口径必须同源：裁剪与否由被裁的那个盒子实测。
+// 只增不减：展开后上限撤掉、不再溢出，若跟着回落就会失去 clickable 而收不回。
+const bodyOverflow = ref(false);
+
+function setBodyOverflow(msg, value) {
+  if (value) bodyOverflow.value = true;
+}
 
 const bodyPreRef = ref(null);
 const bodyScrollEnabled = ref(false);
@@ -498,9 +510,9 @@ function hasExpandableBody(msg) {
   if (msg.kind === 'read' || msg.kind === 'remote_read' || msg.kind === 'plan') return false;
   // 命令卡的可展开阈值必须与 CodeView 的裁剪阈值同源，否则 5–6 行输出会被裁成
   // 4 行预览却判定为「无可展开内容」，截断后再也看不到全文。
-  if (msg.kind === 'command') return lineCount(msg, msg.body) > COMMAND_PREVIEW_LINES;
+  if (msg.kind === 'command') return bodyOverflow.value || lineCount(msg, msg.body) > COMMAND_PREVIEW_LINES;
   if (msg.kind === 'edit') return true;
-  if (msg.kind === 'create') return lineCount(msg, msg.codeContent) > BODY_PREVIEW_LINES;
+  if (msg.kind === 'create') return bodyOverflow.value || lineCount(msg, msg.codeContent) > BODY_PREVIEW_LINES;
   // calculate: body 只重复 title(expression) + chip(= result)，无需详情卡
   if (msg.kind === 'calculate') return false;
   // grep 永远只显示单行状态和命中统计，不加载匹配行详情。

@@ -9,7 +9,7 @@ Public License v3. See the LICENSE file for details.
 -->
 <template>
   <div :class="['code-view', { collapsed }]">
-    <div class="code-body-scroll">
+    <div ref="bodyRef" class="code-body-scroll">
       <div v-for="(line, li) in displayLines" :key="li" class="code-row">
         <span class="code-gutter">{{ padGutter(previewStartLine + li) }}</span>
         <span class="code-text" v-html="line"></span>
@@ -19,7 +19,7 @@ Public License v3. See the LICENSE file for details.
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import hljs from 'highlight.js/lib/core'
 import javascript from 'highlight.js/lib/languages/javascript'
 import typescript from 'highlight.js/lib/languages/typescript'
@@ -60,6 +60,39 @@ const props = defineProps({
   // 最便宜的纯文本（见 displayLines）。
   live: { type: Boolean, default: false },
 })
+
+// 被裁剪了就要能展开：折叠高度上限按渲染行数卡，而“有没有更多内容”若按逻辑
+// 行数判，minified 文件/单行 JSON 永远只有 1 行 → 判成无需展开 → 标题不
+// 可点，同时内容被裁掉。裁剪与否只能实测那个真正在裁剪的盒子。
+const emit = defineEmits({ overflow: Boolean });
+
+const bodyRef = ref(null);
+let observer = null;
+
+function reportOverflow() {
+  const el = bodyRef.value;
+  if (!el) return;
+  emit('overflow', el.scrollHeight - el.clientHeight > 2);
+}
+
+onMounted(() => {
+  if (typeof ResizeObserver !== 'undefined' && bodyRef.value) {
+    observer = new ResizeObserver(reportOverflow);
+    observer.observe(bodyRef.value);
+  }
+  reportOverflow();
+});
+
+onBeforeUnmount(() => {
+  if (observer) observer.disconnect();
+  observer = null;
+});
+
+watch(
+  () => [props.code, props.collapsed, props.maxLines, props.previewMode],
+  () => nextTick(reportOverflow),
+  { flush: 'post' },
+);
 
 /** Map file extension to highlight.js language name. */
 const EXT_LANG_MAP = {
