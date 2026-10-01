@@ -4765,6 +4765,36 @@ func TestScheduledTaskCreateListDelete(t *testing.T) {
 	}
 }
 
+// TestScheduledTaskToolResultKeepsEmptyTasksKey 锁定列表结果在「一条任务都没有」时的
+// 线上形状：必须带 tasks 键（[]），而不是整条退化成 {}。前端的卡片网格靠它把卡片正体
+// 换成带空态文案的清单，模型也靠它区分「一条都没有」与「结果里根本没有这个字段」——
+// 给 Tasks 加回 omitempty 就会退化（服务列表的 Services 是同一条约定）。
+func TestScheduledTaskToolResultKeepsEmptyTasksKey(t *testing.T) {
+	root := t.TempDir()
+	app := NewApp()
+	app.configPath = filepath.Join(root, "config.json")
+	app.config = ConfigState{Workspace: root}
+	if err := app.startScheduledTaskManager(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(app.stopScheduledTaskManager)
+
+	listed, err := app.executeScheduledTaskTool(app.config, ScheduledTaskToolRequest{Action: "list"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tasks := listed.(ScheduledTaskToolResult).Tasks; len(tasks) != 0 {
+		t.Fatalf("expected an empty manager to list no tasks, got %#v", tasks)
+	}
+	raw, err := json.Marshal(listed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"tasks":[]`) {
+		t.Fatalf("an empty list result must keep the tasks key, got %s", raw)
+	}
+}
+
 func TestScheduledTasksPersistAcrossRestart(t *testing.T) {
 	root := t.TempDir()
 	app := NewApp()

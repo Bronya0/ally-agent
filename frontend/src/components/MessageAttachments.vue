@@ -26,18 +26,11 @@ Public License v3. See the LICENSE file for details.
 <script setup>
 import { t } from '../i18n.mjs';
 import { formatAttachmentSize } from '../utils/attachmentSize.mjs';
+import { attachmentIcon } from '../utils/attachmentIcon.mjs';
 
 defineProps({
   attachments: { type: Array, default: () => [] },
 });
-
-function attachmentIcon(att) {
-  if (att.kind === 'image') return 'IMG';
-  if (att.kind === 'video') return 'VID';
-  if (att.kind === 'audio') return 'AUD';
-  if (att.kind === 'text') return 'TXT';
-  return 'FILE';
-}
 
 function attachmentSource(att) {
   return att.previewUrl || att.url || att.dataUrl || '';

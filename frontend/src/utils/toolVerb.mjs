@@ -39,7 +39,8 @@ const TOOL_VERBS = {
   delete: ['Deleting', 'Deleted', 'Delete'],
   remote_delete_path: ['Remote Deleting', 'Remote Deleted', 'Remote Delete'],
   // ssh_cluster 一词里 cluster 本身说明了对象，失败时也说得出是什么（“SSH cluster
-  // failed”），否则只剩一个无名 Failed。
+  // failed”），否则只剩一个无名 Failed。列表/登记的动作词见 SSH_CLUSTER_VERBS，
+  // 这里是动作没被捕获时的兜底。
   ssh_cluster: ['Registering server', 'Registered server', 'SSH cluster'],
   // command / process
   command: ['Running', 'Ran', 'Command'],
@@ -95,6 +96,14 @@ const SCHEDULED_TASK_VERBS = {
 // service multiplexes start/stop/list/read through args.action like
 // scheduled_task; key by action so a stop call reads "Stopped service" instead of
 // always "Started service". [inProgress, done, noun].
+// ssh_cluster 一个工具同时管 list 与 add；只写一个动词会把列表调用说成「登记了
+// 服务器」（什么都没登记）。按动作取词，与 service / scheduled_task 同一套。
+// [inProgress, done, noun]。
+const SSH_CLUSTER_VERBS = {
+  list: ['Listing servers', 'Listed servers', 'SSH cluster list'],
+  add: ['Registering server', 'Registered server', 'SSH cluster add'],
+};
+
 const SERVICE_VERBS = {
   start: ['Starting service', 'Started service', 'Service start'],
   stop: ['Stopping service', 'Stopped service', 'Service stop'],
@@ -123,6 +132,7 @@ const ACTION_VERBS = {
   scheduled_task: SCHEDULED_TASK_VERBS,
   service: SERVICE_VERBS,
   plan: PLAN_VERBS,
+  ssh_cluster: SSH_CLUSTER_VERBS,
 };
 
 // Fallback verbs by kind, for names not in the table above (e.g. MCP tools whose
@@ -162,6 +172,13 @@ export function toolVerbLabel(name, kind, status, action) {
 // and the card should NOT repeat a kind label in the name slot.
 export function hasNamedVerb(name) {
   return Object.prototype.hasOwnProperty.call(TOOL_VERBS, name);
+}
+
+// MCP tools arrive as `mcp__server__tool` (see KIND_VERBS for the verb they get).
+// The convention is spelled out here once: App.vue and SubagentInlineCard both
+// branch on it, and a string prefix written twice is one copy too many.
+export function isMcpToolName(name) {
+  return typeof name === 'string' && name.startsWith('mcp__');
 }
 
 // True when the tool's verb is keyed by the action the call took, i.e. the

@@ -667,6 +667,7 @@ import {
   formatHttpToolTitle,
   formatPlanArgsTitle,
   isRenderableMessage,
+  sshServerRows,
 } from './utils/toolPreview.mjs';
 import {
   commitToolEventMessage as commitToolEventById,
@@ -684,7 +685,9 @@ import {
 } from './utils/runPhase.mjs';
 import { toolCardRenderSignature } from './utils/toolCardSignature.mjs';
 import { toolUpdateFlushDelay } from './utils/toolUpdateFlush.mjs';
-import { toolActionFromArgs } from './utils/toolVerb.mjs';
+import { isMcpToolName, toolActionFromArgs } from './utils/toolVerb.mjs';
+import { isServiceActive } from './utils/taskStatus.mjs';
+import { attachmentIcon } from './utils/attachmentIcon.mjs';
 import { useToolEvents } from './composables/useToolEvents.mjs';
 import { unwrapWailsEvent } from './utils/wailsEvent.mjs';
 import { createPromptHistoryStore } from './utils/promptHistoryStore.mjs';
@@ -2676,7 +2679,7 @@ const composerStatusDetail = computed(() => (
   compactLoadingActive.value ? compactStatusText.value : latestUserPromptSummary.value
 ));
 const scheduledTaskRunningCount = computed(() => scheduledTasks.value.filter((task) => task?.running).length);
-const serviceRunningCount = computed(() => services.value.filter((service) => ['starting', 'running'].includes(service?.status)).length);
+const serviceRunningCount = computed(() => services.value.filter(isServiceActive).length);
 // 徽标数字只算“还活着”的条目：一次性任务跑完（nextRunAt 归零）不会再触发，
 // 已退出服务只是事后可查（后端 finishedQueue 保留最近 8 条）——它们仍然
 // 列在面板里，但不应把常驻徽标撑大。
@@ -4912,6 +4915,7 @@ function bindRuntimeEvents() {
     formatToolChip,
     formatDurationShort,
     makeToolResultTitle,
+    formatScheduledToolSchedule,
     scrollMessagesToBottomIfStale,
     scrollMessagesToBottom,
     activeSessionId,
@@ -5653,14 +5657,6 @@ function releaseMessageAttachments(msg) {
 
 function releaseSessionAttachments(session) {
   for (const msg of Array.isArray(session?.messages) ? session.messages : []) releaseMessageAttachments(msg);
-}
-
-function attachmentIcon(att) {
-  if (att.kind === 'image') return 'IMG';
-  if (att.kind === 'video') return 'VID';
-  if (att.kind === 'audio') return 'AUD';
-  if (att.kind === 'text') return 'TXT';
-  return 'FILE';
 }
 
 function attachmentDisplayLabel(attachments) {
@@ -7162,7 +7158,7 @@ async function loadScheduledTasks() {
 function applyServiceEvent(data = {}) {
   const service = data.service;
   if (!service?.id) return;
-  if (!['starting', 'running'].includes(service.status)) {
+  if (!isServiceActive(service)) {
     services.value = services.value.filter((item) => item.id !== service.id);
     return;
   }
@@ -7173,8 +7169,8 @@ function applyServiceEvent(data = {}) {
 
 function sortServices(items) {
   return [...items].sort((a, b) => {
-    const aActive = ['starting', 'running'].includes(a?.status);
-    const bActive = ['starting', 'running'].includes(b?.status);
+    const aActive = isServiceActive(a);
+    const bActive = isServiceActive(b);
     if (aActive !== bActive) return aActive ? -1 : 1;
     return Number(b?.startedAt || 0) - Number(a?.startedAt || 0);
   });
@@ -8047,10 +8043,6 @@ function isToolCollapsedByDefault(name) {
   return COLLAPSED_BY_DEFAULT_KINDS.has(toolKind(name)) || COLLAPSED_BY_DEFAULT_NAMES.has(name);
 }
 
-function isMcpToolName(name) {
-  return typeof name === 'string' && name.startsWith('mcp__');
-}
-
 function formatMcpArgsSummary(parsed) {
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return '';
   const parts = [];
@@ -8087,7 +8079,8 @@ function makeToolTitle(name, args, meta = {}) {
   if (name === 'service') {
     const action = String(parsed.action || '').trim();
     if (action === 'stop') return `stop · ${parsed.id || ''}`;
-    if (action === 'list') return 'list';
+    // list：动作词已说明是列表，条数由 chip 报，每台进程的卡在正体里。
+    if (action === 'list') return '';
     if (action === 'read') {
       const parts = ['read'];
       if (parsed.id) parts.push(parsed.id);
@@ -8125,10 +8118,11 @@ function makeToolTitle(name, args, meta = {}) {
     return t('app.tools.chip.trackedServices');
   }
   if (name === 'ssh_cluster') {
-    // action=list 无参数可言；add/授权只展示节点别名（凭据从不经手模型）。
+    // list 无参数可言（动作词已说明是列表，台数由 chip 报，每台机器的卡在正体里）；
+    // 登记 / 授权只展示节点别名（凭据从不经手模型），动词已写明动作，不用再缀 "add ·"。
     const action = String(parsed.action || 'list').toLowerCase();
-    if (action === 'list') return 'list';
-    return `add · ${parsed.alias || parsed.host || ''}`;
+    if (action === 'list') return '';
+    return parsed.alias || parsed.host || '';
   }
   if (name === 'edit' || name === 'remote_edit') {
     if (Array.isArray(parsed.files)) return parsed.files.length === 1 ? (parsed.files[0]?.path || '') : `${parsed.files.length} files`;
@@ -8177,7 +8171,8 @@ function makeToolTitle(name, args, meta = {}) {
   if (name === 'scheduled_task') {
     if (parsed.action === 'create') return `create · ${parsed.name || ''}`;
     if (parsed.action === 'delete') return `delete · ${parsed.id || ''}`;
-    return parsed.action || 'list';
+    // list（含参数没到的旧卡片）：动作词已说明是列表，条数由 chip 报，别再缀一个 "(list)"。
+    return '';
   }
   if (name === 'http_request' || name === 'web_fetch') {
     return formatHttpToolTitle(parsed);
@@ -8259,6 +8254,12 @@ function formatToolChip(name, result) {
     }
     if (name === 'calculate' && parsed.data) {
       return '= ' + (parsed.data.text || parsed.data.value);
+    }
+    if (name === 'ssh_cluster' && parsed.data) {
+      // 服务器卡在卡片正体里逐台展示，标题栏只报台数。
+      const servers = sshServerRows(parsed.data);
+      if (!servers) return '';
+      return '\u00B7 ' + t('tools.sshCluster.count', { count: servers.length, countSuffix: servers.length === 1 ? '' : 's' });
     }
     if (name === 'scheduled_task' && parsed.data) {
       if (parsed.data.task) return '\u00B7 created';

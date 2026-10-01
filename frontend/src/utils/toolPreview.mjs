@@ -84,6 +84,145 @@ export function deleteFailedCount(source) {
   return Number.isFinite(failed) && failed > 0 ? failed : 0;
 }
 
+// sshEndpointOf 是节点在 UI 上的端点写法（与 SSH 面板的 endpointOf 一致）：
+// username@host:port，缺端口按 22；连主机都没有时返回空串而不是 ":22"。
+function sshEndpointOf(node) {
+  const host = String(node?.host || '').trim();
+  const username = String(node?.username || '').trim();
+  const target = username && host ? `${username}@${host}` : (host || username);
+  return target ? `${target}:${Number(node?.port || 0) || 22}` : '';
+}
+
+// sshServerRows 读出一条 ssh_cluster 列表结果的服务器清单，一条一台机器。返回 null
+// 表示「这不是列表结果」（add / 授权的结果是扁平字段，走 sshClusterNodeRow），调用
+// 方据此决定要不要接管卡片正体；返回 [] 才是「确实是列表，但一台都没有」。结果的
+// 形状见 internal/app/biz_ssh_cluster.go 的 SSHServerSummary —— 密码与私钥从不下发，
+// 所以这里也读不到。
+export function sshServerRows(source) {
+  if (!source || typeof source !== 'object' || !Array.isArray(source.servers)) return null;
+  const rows = [];
+  for (const item of source.servers) {
+    if (!item || typeof item !== 'object') continue;
+    const host = String(item.host || '').trim();
+    const name = String(item.alias || '').trim() || host || String(item.username || '').trim();
+    // 三个身份字段全空的槽没有任何可展示的身份，整条丢掉。
+    if (!name) continue;
+    rows.push({
+      alias: name,
+      endpoint: sshEndpointOf(item),
+      description: String(item.description || '').trim(),
+      riskLevel: String(item.riskLevel || '').trim().toLowerCase(),
+      pending: String(item.status || '').trim().toLowerCase() === 'pending_approval',
+    });
+  }
+  return rows;
+}
+
+// sshClusterNodeRow 读 ssh_cluster action=add / 授权的结果：一台节点的扁平结果（列表
+// 结果带 servers 数组，走 sshServerRows）。别名是唯一身份，缺别名就不是节点结果。
+// changed 是「这次调用到底动没动已存状态」——新登记与「已登记但本次才授权」都改了东西，
+// 只有后端明确回 false（该节点本来就已授权给当前工作区）才算没动，所以判据写成
+// `!== false`：字段缺失时按「动了」显示，不能拿已存在当成没改动。已登记节点的结果里
+// 没有 host/username，端点自然为空。
+export function sshClusterNodeRow(source) {
+  if (!source || typeof source !== 'object' || Array.isArray(source.servers)) return null;
+  const alias = String(source.alias || '').trim();
+  if (!alias) return null;
+  return {
+    alias,
+    endpoint: sshEndpointOf(source),
+    description: String(source.description || '').trim(),
+    changed: source.changed !== false,
+  };
+}
+
+// serviceRowOf 把一条服务记录映射成卡片行：列表元素与单条结果（start / stop）共用
+// 这一份映射，免得两处的字段各自漂移。id 与 name 全空的行没有任何可展示的身份，
+// 返回 null 由调用方丢掉。状态文案与色调不在这里判（那需要 i18n 与语义词表，见
+// utils/taskStatus.mjs）。
+function serviceRowOf(item) {
+  if (!item || typeof item !== 'object') return null;
+  const id = String(item.id || '').trim();
+  const name = String(item.name || '').trim();
+  if (!id && !name) return null;
+  return {
+    id,
+    name,
+    command: String(item.command || '').trim(),
+    cwd: String(item.cwd || '').trim(),
+    pid: Number(item.pid || 0) || 0,
+    status: String(item.status || '').trim().toLowerCase(),
+    exitCode: Number(item.exitCode || 0) || 0,
+    outputBytes: Number(item.outputBytes || 0) || 0,
+    startedAt: Number(item.startedAt || 0) || 0,
+    error: String(item.error || '').trim(),
+  };
+}
+
+// serviceListRows 读出一条 service action=list 结果的进程清单；null / [] 的约定
+// 同上（null = 这不是列表结果）。
+export function serviceListRows(source) {
+  if (!source || typeof source !== 'object' || !Array.isArray(source.services)) return null;
+  const rows = [];
+  for (const item of source.services) {
+    const row = serviceRowOf(item);
+    if (row) rows.push(row);
+  }
+  return rows;
+}
+
+// serviceRow 读一条 service start / stop 结果的单条 ServiceInfo（见 internal/app 的
+// ServiceInfo）。read 结果同样带 id，但它的正体是命令输出，必须整条挡在外面——否则
+// 一次 service read 会被换成一张没有输出的服务卡，输出正文在卡片上再也看不到。
+// 判据是 read 独有的 output（app.go 的 ServiceOutputResult 是 id/output/bytes/truncated，
+// ServiceInfo 只有 outputTail），不是有则加一条的字段名猜测。
+export function serviceRow(source) {
+  if (!source || typeof source !== 'object' || Array.isArray(source.services)) return null;
+  if (typeof source.output === 'string') return null;
+  return serviceRowOf(source);
+}
+
+// scheduledTaskRowOf 把一个任务映射成卡片行：列表元素与 create 结果的单条任务本就
+// 同形，共用这一份映射。schedule 原样带出——怎么写是 UI 文案，纯函数不碰；
+// nextRunAt 是毫秒。
+function scheduledTaskRowOf(item) {
+  if (!item || typeof item !== 'object') return null;
+  const id = String(item.id || '').trim();
+  const name = String(item.name || '').trim();
+  if (!id && !name) return null;
+  return {
+    id,
+    name,
+    schedule: item.schedule && typeof item.schedule === 'object' ? { ...item.schedule } : {},
+    command: String(item.command || '').trim(),
+    instruction: String(item.instruction || '').trim(),
+    lastStatus: String(item.lastStatus || '').trim().toLowerCase(),
+    running: item.running === true,
+    nextRunAt: Number(item.nextRunAt || 0) || 0,
+  };
+}
+
+// scheduledTaskRows 读出一条 scheduled_task action=list 结果的任务清单；null / [] 的
+// 约定同上。
+export function scheduledTaskRows(source) {
+  if (!source || typeof source !== 'object' || !Array.isArray(source.tasks)) return null;
+  const rows = [];
+  for (const item of source.tasks) {
+    const row = scheduledTaskRowOf(item);
+    if (row) rows.push(row);
+  }
+  return rows;
+}
+
+// scheduledTaskRow 读一条 scheduled_task action=create 结果里的单条任务
+// （ScheduledTaskToolResult.Task）：创建后当场给出这条任务的调度、下次执行与状态，
+// 与列表里那行同一套字段。delete 的结果只有被删的 id，没有任务信息，返回 null
+// （卡片保留文本体）。
+export function scheduledTaskRow(source) {
+  if (!source || typeof source !== 'object') return null;
+  return scheduledTaskRowOf(source.task);
+}
+
 export function codePreviewWindow(code, options = {}) {
   if (!code) {
     return {

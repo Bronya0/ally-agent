@@ -45,7 +45,7 @@ Public License v3. See the LICENSE file for details.
                     <n-tag size="small" round :type="serviceStatusType(service)">{{ serviceStatusLabel(service) }}</n-tag>
                     <n-button size="tiny" quaternary @click="openServiceLog(service)">{{ $t('taskCenter.viewBuffer') }}</n-button>
                     <n-popconfirm
-                      v-if="isActiveService(service)"
+                      v-if="isServiceActive(service)"
                       :positive-text="$t('service.stop')"
                       :negative-text="$t('common.cancel')"
                       @positive-click="$emit('stopService', service.id)"
@@ -61,7 +61,7 @@ Public License v3. See the LICENSE file for details.
                 <div v-if="service.command" class="command" :title="service.command" v-html="highlightedCommand(service.command)"></div>
                 <!-- 事实行：只留当下有意义的那几项——还活着的看启动时间，已结束的看退出码。 -->
                 <div class="meta-line">
-                  <span v-if="isActiveService(service)" class="meta-item"><i>{{ $t('service.startedAt') }}</i>{{ formatUnixSeconds(service.startedAt) }}</span>
+                  <span v-if="isServiceActive(service)" class="meta-item"><i>{{ $t('service.startedAt') }}</i>{{ formatUnixSeconds(service.startedAt) }}</span>
                   <template v-else>
                     <span class="meta-item"><i>{{ $t('service.exitCode') }}</i>{{ service.exitCode ?? 0 }}</span>
                     <span class="meta-item"><i>{{ $t('service.stoppedAt') }}</i>{{ formatUnixSeconds(service.stoppedAt) }}</span>
@@ -165,6 +165,7 @@ import { formatDateTime, t } from '../i18n.mjs';
 import { renderAnsiToHtml } from '../utils/ansi.mjs';
 import { formatBytes } from '../utils/format.mjs';
 import { highlightShellCommand } from '../utils/shellHighlight.mjs';
+import { isServiceActive, scheduledStatusKey, scheduledStatusTone, serviceStatusKey, serviceStatusTone } from '../utils/taskStatus.mjs';
 
 const props = defineProps({
   show: { type: Boolean, default: false },
@@ -196,7 +197,7 @@ const logPre = ref(null);
 let logRefreshTimer = 0;
 
 const scheduledRunningCount = computed(() => props.tasks.filter((task) => task?.running).length);
-const serviceRunningCount = computed(() => props.services.filter(isActiveService).length);
+const serviceRunningCount = computed(() => props.services.filter(isServiceActive).length);
 const loading = computed(() => props.scheduledLoading || props.servicesLoading);
 
 // Service output carries SGR color escapes. Converting the whole buffer to
@@ -257,7 +258,7 @@ function openScheduledLog(task) {
 
 async function openServiceLog(service) {
   logServiceId.value = service.id;
-  logServiceActive.value = isActiveService(service);
+  logServiceActive.value = isServiceActive(service);
   logTitle.value = service.name || service.id;
   logContent.value = service.outputTail || '';
   logVisible.value = true;
@@ -294,7 +295,7 @@ watch(logServiceActive, (active) => {
 watch(() => props.services, () => {
   if (!logServiceId.value) return;
   const svc = props.services.find((s) => s?.id === logServiceId.value);
-  const stillActive = svc ? isActiveService(svc) : false;
+  const stillActive = svc ? isServiceActive(svc) : false;
   if (logServiceActive.value !== stillActive) {
     logServiceActive.value = stillActive;
   }
@@ -347,41 +348,26 @@ function scrollLogToBottom() {
   });
 }
 
-function isActiveService(service) {
-  return ['starting', 'running'].includes(service?.status);
-}
+// 状态词表与工具卡共用（utils/taskStatus.mjs）：文案 key 与语义色调只有一份判定，
+// 这里只把语义色调换成 n-tag 的预设（naive-ui 的词汇属于本组件）。
+const TAG_TYPES = { success: 'success', info: 'info', warning: 'warning', danger: 'error', neutral: 'default' };
 
 function scheduledStatusLabel(task) {
-  if (task?.running) return t('common.running');
-  const labels = {
-    scheduled: t('scheduled.status.waiting'), completed: t('scheduled.status.completed'), failed: t('scheduled.status.failed'), timed_out: t('scheduled.status.timedOut'),
-    cancelled: t('scheduled.status.cancelled'), skipped: t('scheduled.status.skipped'), missed: t('scheduled.status.missed'), interrupted: t('scheduled.status.interrupted'), invalid: t('scheduled.status.invalid'),
-  };
-  return labels[task?.lastStatus] || task?.lastStatus || t('scheduled.status.waiting');
+  const key = scheduledStatusKey(task);
+  return (key ? t(key) : '') || task?.lastStatus || t('scheduled.status.waiting');
 }
 
 function scheduledStatusType(task) {
-  if (task?.running) return 'info';
-  if (task?.lastStatus === 'completed') return 'success';
-  if (['failed', 'timed_out', 'invalid'].includes(task?.lastStatus)) return 'error';
-  if (['skipped', 'missed', 'cancelled', 'interrupted'].includes(task?.lastStatus)) return 'warning';
-  return 'default';
+  return TAG_TYPES[scheduledStatusTone(task)];
 }
 
 function serviceStatusLabel(service) {
-  const labels = {
-    starting: t('service.status.starting'), running: t('common.running'), stopped: t('service.status.stopped'),
-    exited: t('service.status.exited'), interrupted: t('service.status.interrupted'),
-  };
-  return labels[service?.status] || service?.status || '-';
+  const key = serviceStatusKey(service?.status);
+  return (key ? t(key) : '') || service?.status || '-';
 }
 
 function serviceStatusType(service) {
-  if (service?.status === 'running') return 'success';
-  if (service?.status === 'starting') return 'info';
-  if (service?.status === 'interrupted') return 'warning';
-  if (service?.status === 'exited' && service?.exitCode) return 'error';
-  return 'default';
+  return TAG_TYPES[serviceStatusTone(service)];
 }
 
 function scheduleLabel(schedule = {}) {

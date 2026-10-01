@@ -105,8 +105,12 @@ type ScheduledTaskToolView struct {
 }
 
 type ScheduledTaskToolResult struct {
-	Task      *ScheduledTaskToolView  `json:"task,omitempty"`
-	Tasks     []ScheduledTaskToolView `json:"tasks,omitempty"`
+	Task *ScheduledTaskToolView `json:"task,omitempty"`
+	// Tasks 不带 omitempty：空清单也要把键输出出来（tasks: []）。前端据此把卡片正体换成
+	// 带空态文案的网格，模型也能区分「一条都没有」与「结果里根本没有这个字段」——
+	// ServiceListToolResult.Services 是同一约定。create / delete 的结果里它是 null，
+	// 两种非列表形状都不受影响。
+	Tasks     []ScheduledTaskToolView `json:"tasks"`
 	Count     int                     `json:"count,omitempty"`
 	Truncated bool                    `json:"truncated,omitempty"`
 	Deleted   string                  `json:"deleted,omitempty"`

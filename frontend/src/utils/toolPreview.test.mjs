@@ -20,6 +20,12 @@ import {
   formatHttpToolTitle,
   formatPlanArgsTitle,
   isRenderableMessage,
+  scheduledTaskRow,
+  scheduledTaskRows,
+  serviceListRows,
+  serviceRow,
+  sshClusterNodeRow,
+  sshServerRows,
 } from './toolPreview.mjs';
 
 test('collapsed create preview uses the latest generated lines', () => {
@@ -315,4 +321,110 @@ test('deleteFailedCount surfaces a partial failure', () => {
   assert.equal(deleteFailedCount({ failedCount: 0 }), 0);
   assert.equal(deleteFailedCount({}), 0);
   assert.equal(deleteFailedCount(null), 0);
+});
+
+test('sshServerRows reads one row per authorized server', () => {
+  const rows = sshServerRows({
+    count: 1,
+    servers: [{ alias: '47.120.8.34', host: '47.120.8.34', port: 22, username: 'root', description: '生产服务器', riskLevel: 'high', status: 'approved' }],
+  });
+  assert.deepEqual(rows, [{
+    alias: '47.120.8.34',
+    endpoint: 'root@47.120.8.34:22',
+    description: '生产服务器',
+    riskLevel: 'high',
+    pending: false,
+  }]);
+});
+
+// null 与 [] 是两件事：add / 授权的结果没有 servers 数组（null，卡片保持通用键值体），
+// 列表结果里一台都没有才是空清单（[]，卡片显示空态文案）。
+test('sshServerRows tells "not a list result" apart from an empty list', () => {
+  assert.equal(sshServerRows(null), null);
+  assert.equal(sshServerRows({}), null);
+  assert.equal(sshServerRows({ servers: 'nope' }), null);
+  assert.deepEqual(sshServerRows({ count: 0, servers: [] }), []);
+});
+
+test('sshServerRows tolerates missing fields and defaults the port', () => {
+  assert.deepEqual(sshServerRows({ servers: [{ host: '10.0.0.5', username: 'deploy' }] }), [{
+    alias: '10.0.0.5', endpoint: 'deploy@10.0.0.5:22', description: '', riskLevel: '', pending: false,
+  }]);
+  assert.deepEqual(sshServerRows({ servers: [{ alias: 'n', host: 'h', username: 'u', status: 'pending_approval' }] }), [{
+    alias: 'n', endpoint: 'u@h:22', description: '', riskLevel: '', pending: true,
+  }]);
+  // 连身份都没有的槽整条丢掉。
+  assert.deepEqual(sshServerRows({ servers: [{ port: 22 }] }), []);
+});
+
+// 已登记节点的授权结果只有别名（没有 host/username），端点自然为空；列表结果带
+// servers 数组，不走这一支。changed 只认显式 false（本次什么都没改），缺字段按「改了」
+// 显示——拿 alreadyRegistered 当「没动」会把「本次才授权」说成没变化。
+test('sshClusterNodeRow reads a single add / authorize result', () => {
+  assert.deepEqual(
+    sshClusterNodeRow({ alias: 'dev-node', host: '10.0.0.5', port: 2222, username: 'ops', description: '构建机', changed: true }),
+    { alias: 'dev-node', endpoint: 'ops@10.0.0.5:2222', description: '构建机', changed: true },
+  );
+  assert.deepEqual(
+    sshClusterNodeRow({ alias: 'dev-node', alreadyRegistered: true, changed: false, note: 'nothing was modified' }),
+    { alias: 'dev-node', endpoint: '', description: '', changed: false },
+  );
+  assert.equal(sshClusterNodeRow({ alias: 'dev-node', alreadyRegistered: true }).changed, true);
+  assert.equal(sshClusterNodeRow({ alias: 'dev-node' }).changed, true);
+  assert.equal(sshClusterNodeRow({ servers: [] }), null);
+  assert.equal(sshClusterNodeRow({ authorized: true }), null);
+  assert.equal(sshClusterNodeRow(null), null);
+});
+
+test('serviceListRows reads one row per tracked service', () => {
+  assert.deepEqual(
+    serviceListRows({ activeCount: 1, maxActive: 5, services: [{ id: 'svc_1', name: 'frontend', command: 'npm run dev', cwd: 'frontend', pid: 99, status: 'running' }] }),
+    [{ id: 'svc_1', name: 'frontend', command: 'npm run dev', cwd: 'frontend', pid: 99, status: 'running', exitCode: 0, outputBytes: 0, startedAt: 0, error: '' }],
+  );
+  // 列表之外的形状（start / stop 的单条结果、read 的输出结果）都没有 services 数组。
+  assert.equal(serviceListRows({ id: 'svc_1', status: 'running', pid: 99 }), null);
+  assert.equal(serviceListRows({ id: 'svc_1', output: 'boot\n', bytes: 5, truncated: false }), null);
+  assert.equal(serviceListRows(null), null);
+  assert.deepEqual(serviceListRows({ activeCount: 0, maxActive: 5, services: [] }), []);
+});
+
+// start / stop 的单条 ServiceInfo 走 serviceRow；read 的输出结果必须被挡在外面，
+// 否则服务卡会把命令输出顶掉。
+test('serviceRow reads a single start / stop result and rejects the read output', () => {
+  assert.deepEqual(
+    serviceRow({ id: 'svc_1', command: 'npm run dev', cwd: 'frontend', pid: 99, status: 'running', startedAt: 1700000000 }),
+    { id: 'svc_1', name: '', command: 'npm run dev', cwd: 'frontend', pid: 99, status: 'running', exitCode: 0, outputBytes: 0, startedAt: 1700000000, error: '' },
+  );
+  // read 的结果形状是 ServiceOutputResult（id/output/bytes/truncated）。
+  assert.equal(serviceRow({ id: 'svc_1', output: '', bytes: 0, truncated: false }), null);
+  assert.equal(serviceRow({ id: 'svc_1', output: 'boot\n', bytes: 5, truncated: false }), null);
+  assert.equal(serviceRow({ activeCount: 0, maxActive: 5, services: [] }), null);
+  assert.equal(serviceRow({ status: 'running' }), null);
+  assert.equal(serviceRow(null), null);
+});
+
+test('scheduledTaskRows reads one row per task and keeps the schedule raw', () => {
+  assert.deepEqual(
+    scheduledTaskRows({ count: 1, tasks: [{ id: 't_1', name: 'sync', schedule: { type: 'interval', every: '30m' }, command: 'go test ./...', lastStatus: 'COMPLETED', running: false, nextRunAt: 1700000000000 }] }),
+    [{ id: 't_1', name: 'sync', schedule: { type: 'interval', every: '30m' }, command: 'go test ./...', instruction: '', lastStatus: 'completed', running: false, nextRunAt: 1700000000000 }],
+  );
+  // create（单条 task）与 delete（只有 id）都不是列表结果。
+  // 空清单：后端现在也把 tasks 键发出来（json:"tasks"，不带 omitempty），所以下面这条
+  // 断言对应的正是真实空态。
+  assert.equal(scheduledTaskRows({ task: { id: 't_1' } }), null);
+  assert.equal(scheduledTaskRows({ deleted: 't_1' }), null);
+  assert.equal(scheduledTaskRows(null), null);
+  assert.deepEqual(scheduledTaskRows({ count: 0, tasks: [] }), []);
+});
+
+// create 返回的就是列表里那一种行，同一张卡：调度、下次执行、任务内容、状态。
+test('scheduledTaskRow reads the single task a create returns', () => {
+  assert.deepEqual(
+    scheduledTaskRow({ task: { id: 't_2', name: 'nightly', schedule: { type: 'cron', cron: '0 3 * * *' }, command: 'go test ./...', lastStatus: 'scheduled', nextRunAt: 1700000000000 } }),
+    { id: 't_2', name: 'nightly', schedule: { type: 'cron', cron: '0 3 * * *' }, command: 'go test ./...', instruction: '', lastStatus: 'scheduled', running: false, nextRunAt: 1700000000000 },
+  );
+  // delete 只有被删的 id，没有任务信息；不是单条任务结果时返回 null。
+  assert.equal(scheduledTaskRow({ deleted: 't_1' }), null);
+  assert.equal(scheduledTaskRow({ count: 0, tasks: [] }), null);
+  assert.equal(scheduledTaskRow(null), null);
 });

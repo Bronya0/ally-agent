@@ -30,30 +30,25 @@ Usage:
 import { computed } from 'vue';
 import CheckOutlined from '@vicons/antd/CheckOutlined';
 import CloseOutlined from '@vicons/antd/CloseOutlined';
+import { normalizeToolStatus } from '../utils/toolEventState.mjs';
 
 const props = defineProps({
   // Raw status string: running | success | completed | error | failed | pending...
   status: { type: String, default: '' },
 });
 
-// Normalize the status family across the different components that consume
-// this icon (tool cards use success/error, sub-agent records also use
-// completed/failed, plan items use done/in_progress/pending).
-const statusClass = computed(() => {
-  const s = props.status;
-  if (s === 'success' || s === 'done' || s === 'completed') return 'is-success';
-  if (s === 'error' || s === 'failed') return 'is-error';
-  if (s === 'running' || s === 'in_progress') return 'is-running';
-  return 'is-pending';
-});
+// Which raw strings mean success/error/running is decided once, in
+// utils/toolEventState.mjs — the same function every tool card flips its status
+// through. This component owns only the mapping from that canonical state to its
+// own artifacts (a CSS class, a glyph), so a new alias is never taught twice and
+// the two can no longer disagree about e.g. `completed`.
+const state = computed(() => normalizeToolStatus(props.status));
 
-const icon = computed(() => {
-  const s = props.status;
-  if (s === 'success' || s === 'done' || s === 'completed') return 'check';
-  if (s === 'error' || s === 'failed') return 'close';
-  if (s === 'running' || s === 'in_progress') return 'dot';
-  return 'hollow';
-});
+const STATE_CLASS = { success: 'is-success', error: 'is-error', running: 'is-running', default: 'is-pending' };
+const STATE_ICON = { success: 'check', error: 'close', running: 'dot', default: 'hollow' };
+
+const statusClass = computed(() => STATE_CLASS[state.value] || STATE_CLASS.default);
+const icon = computed(() => STATE_ICON[state.value] || STATE_ICON.default);
 </script>
 
 <style>

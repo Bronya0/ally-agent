@@ -870,56 +870,81 @@ func TestRemoteHelperDeleteBatchOpTouchesOnlyWorkspace(t *testing.T) {
 	}
 }
 
-// TestRemoteHelperDeleteBatchIsolatesExecutionFailure 锁定执行阶段的隔离：判定
-// 全部通过之后，单条失败只写自己的结果槽，其余照删。用「指向目录的符号链接 +
-// recursive」构造确定性的失败（shutil.rmtree 拒绝作用于符号链接本身），同时锁住
-// 「删链接不删它指向的东西」：链接指向的目录必须原样留着。
-func TestRemoteHelperDeleteBatchIsolatesExecutionFailure(t *testing.T) {
+// TestRemoteHelperDeleteBatchKeepsSymlinkTarget 锁定远端删除对符号链接的处理：链接
+// 一律按文件删（os.unlink），带 recursive 也不跟随进目标目录——跟随一步就变成删掉
+// 链接指向的东西（可能跨出工作区）。同一个测试再锁一条执行阶段的隔离：判定全部通过
+// 之后，后一条因前一条已把它的父目录删掉而失败，只写自己的结果槽，前面的照删、
+// 不相关的路径不受牵连。
+func TestRemoteHelperDeleteBatchKeepsSymlinkTarget(t *testing.T) {
 	py := pickRemoteHelperPython(t)
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "sub", "deep"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "sub", "nested.txt"), []byte("n"), 0o600); err != nil {
-		t.Fatal(err)
+	for _, name := range []string{"sub/nested.txt", "sub/deep/nested.txt"} {
+		if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(name)), []byte("n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if err := os.Symlink(filepath.Join(root, "sub", "deep"), filepath.Join(root, "sub", "link")); err != nil {
+	// 相对链接：目标解析出来就在工作区内，失败信息里才看得出「删的是链接」。
+	if err := os.Symlink("deep", filepath.Join(root, "sub", "link")); err != nil {
 		t.Skipf("symlink creation unavailable in this environment: %v", err)
 	}
 
-	script, err := buildRemoteScript(map[string]any{
-		"op":            "delete_batch",
-		"workspaceRoot": root,
-		"paths":         []string{"sub/nested.txt", "sub/link"},
-		"recursive":     true,
-	})
-	if err != nil {
-		t.Fatalf("buildRemoteScript: %v", err)
+	deleteBatch := func(paths []string, recursive bool) remotePythonResponse {
+		t.Helper()
+		script, err := buildRemoteScript(map[string]any{
+			"op":            "delete_batch",
+			"workspaceRoot": root,
+			"paths":         paths,
+			"recursive":     recursive,
+		})
+		if err != nil {
+			t.Fatalf("buildRemoteScript: %v", err)
+		}
+		resp, err := runRemoteHelperScript(t, py, script)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp
 	}
-	resp, err := runRemoteHelperScript(t, py, script)
-	if err != nil {
-		t.Fatal(err)
+	slots := func(resp remotePythonResponse) []remoteDeleteSlotForTest {
+		t.Helper()
+		if !resp.OK {
+			t.Fatalf("execution-phase failures must not fail the whole call: %s", resp.Error)
+		}
+		var data struct {
+			Paths []remoteDeleteSlotForTest `json:"paths"`
+		}
+		if err := json.Unmarshal(resp.Data, &data); err != nil {
+			t.Fatalf("decode delete_batch data: %v (data=%s)", err, resp.Data)
+		}
+		return data.Paths
 	}
-	if !resp.OK {
-		t.Fatalf("execution-phase failures must not fail the whole call: %s", resp.Error)
+
+	// 1) 链接按文件删：带 recursive 也只删链接本身，链接指向的目录原样留着。
+	got := slots(deleteBatch([]string{"sub/link"}, true))
+	if len(got) != 1 || !got[0].OK {
+		t.Fatalf("deleting a symlink must succeed as a plain file, got %#v", got)
 	}
-	var data struct {
-		Paths []remoteDeleteSlotForTest `json:"paths"`
+	if _, err := os.Lstat(filepath.Join(root, "sub", "link")); !os.IsNotExist(err) {
+		t.Fatalf("the symlink itself should be gone, lstat err: %v", err)
 	}
-	if err := json.Unmarshal(resp.Data, &data); err != nil {
-		t.Fatalf("decode delete_batch data: %v (data=%s)", err, resp.Data)
+	if _, err := os.Stat(filepath.Join(root, "sub", "deep", "nested.txt")); err != nil {
+		t.Fatalf("deleting a symlink must never touch what it points at: %v", err)
 	}
-	if len(data.Paths) != 2 || !data.Paths[0].OK || data.Paths[1].OK || data.Paths[1].Error == "" {
-		t.Fatalf("expected the plain file deleted and the symlink slot carrying an error, got %#v", data.Paths)
+
+	// 2) 执行阶段隔离：两条路径判定时都存在，执行时后一条已被前一条的 recursive
+	// 删除连带删掉，于是只有它自己失败。
+	got = slots(deleteBatch([]string{"sub/deep", "sub/deep/nested.txt"}, true))
+	if len(got) != 2 || !got[0].OK || got[1].OK || got[1].Error == "" {
+		t.Fatalf("expected the directory deleted and the now-missing child carrying an error, got %#v", got)
 	}
-	if _, err := os.Lstat(filepath.Join(root, "sub", "nested.txt")); !os.IsNotExist(err) {
-		t.Fatalf("the plain file should be deleted despite the sibling failure, lstat err: %v", err)
+	if _, err := os.Lstat(filepath.Join(root, "sub", "deep")); !os.IsNotExist(err) {
+		t.Fatalf("sub/deep should be deleted, lstat err: %v", err)
 	}
-	if _, err := os.Lstat(filepath.Join(root, "sub", "link")); err != nil {
-		t.Fatalf("the refused symlink must remain: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(root, "sub", "deep")); err != nil {
-		t.Fatalf("deleting a symlink must never delete what it points at: %v", err)
+	if _, err := os.Lstat(filepath.Join(root, "sub", "nested.txt")); err != nil {
+		t.Fatalf("an unrelated sibling must survive the isolated failure: %v", err)
 	}
 }
 

@@ -248,43 +248,40 @@ func (p *mathParser) match(ch byte) bool {
 	}
 	return false
 }
+
+// mathUnaryFunctions is the whole vocabulary of single-argument math functions:
+// a name maps straight to its implementation. Adding one is a row here, and the
+// one-argument rule below stays in force for every entry automatically. Names
+// that share an implementation (`log` / `ln`) are simply two rows.
+var mathUnaryFunctions = map[string]func(float64) float64{
+	"sqrt":  math.Sqrt,
+	"abs":   math.Abs,
+	"sin":   math.Sin,
+	"cos":   math.Cos,
+	"tan":   math.Tan,
+	"asin":  math.Asin,
+	"acos":  math.Acos,
+	"atan":  math.Atan,
+	"log":   math.Log,
+	"ln":    math.Log,
+	"log10": math.Log10,
+	"exp":   math.Exp,
+	"floor": math.Floor,
+	"ceil":  math.Ceil,
+	"round": math.Round,
+}
+
 func applyMathFunction(name string, args []float64) (float64, error) {
 	name = strings.ToLower(name)
-	unary := func(fn func(float64) float64) (float64, error) {
+	if fn, ok := mathUnaryFunctions[name]; ok {
 		if len(args) != 1 {
 			return 0, fmt.Errorf("%s expects 1 argument", name)
 		}
 		return fn(args[0]), nil
 	}
+	// min/max are the only variadic functions, which is why they stay a branch:
+	// they take any number of arguments instead of exactly one.
 	switch name {
-	case "sqrt":
-		return unary(math.Sqrt)
-	case "abs":
-		return unary(math.Abs)
-	case "sin":
-		return unary(math.Sin)
-	case "cos":
-		return unary(math.Cos)
-	case "tan":
-		return unary(math.Tan)
-	case "asin":
-		return unary(math.Asin)
-	case "acos":
-		return unary(math.Acos)
-	case "atan":
-		return unary(math.Atan)
-	case "log", "ln":
-		return unary(math.Log)
-	case "log10":
-		return unary(math.Log10)
-	case "exp":
-		return unary(math.Exp)
-	case "floor":
-		return unary(math.Floor)
-	case "ceil":
-		return unary(math.Ceil)
-	case "round":
-		return unary(math.Round)
 	case "min", "max":
 		if len(args) == 0 {
 			return 0, fmt.Errorf("%s expects at least 1 argument", name)

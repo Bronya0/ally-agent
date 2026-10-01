@@ -10,7 +10,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { isActionKeyedTool, hasNamedVerb, toolActionFromArgs, toolVerbLabel } from './toolVerb.mjs';
+import { isActionKeyedTool, isMcpToolName, hasNamedVerb, toolActionFromArgs, toolVerbLabel } from './toolVerb.mjs';
 
 test('service verb follows the parsed action', () => {
   assert.equal(toolVerbLabel('service', 'other', 'success', 'stop'), 'Stopped service');
@@ -84,4 +84,28 @@ test('action-keyed tools still count as named verbs', () => {
   assert.ok(hasNamedVerb('service'));
   assert.ok(hasNamedVerb('scheduled_task'));
   assert.ok(hasNamedVerb('plan'));
+  assert.ok(hasNamedVerb('ssh_cluster'));
+});
+
+// 一个 ssh_cluster 工具两种动作：列表调用不能说成「登记了服务器」。
+test('ssh_cluster verb follows the action', () => {
+  assert.equal(toolVerbLabel('ssh_cluster', 'ssh_cluster', 'running', 'list'), 'Listing servers');
+  assert.equal(toolVerbLabel('ssh_cluster', 'ssh_cluster', 'success', 'list'), 'Listed servers');
+  assert.equal(toolVerbLabel('ssh_cluster', 'ssh_cluster', 'success', 'add'), 'Registered server');
+  assert.equal(toolVerbLabel('ssh_cluster', 'ssh_cluster', 'error', 'list'), 'SSH cluster list failed');
+  // 参数没到的旧卡片回落到工具名自带的动词，不谎称某个动作。
+  assert.equal(toolVerbLabel('ssh_cluster', 'ssh_cluster', 'success', ''), 'Registered server');
+  assert.ok(isActionKeyedTool('ssh_cluster'));
+  assert.equal(toolActionFromArgs('ssh_cluster', { action: 'LIST' }), 'list');
+});
+
+// mcp__server__tool 是 MCP 工具的命名约定，判定只在这里一份（App.vue 与子代理卡片共用）。
+test('mcp tool names are recognized by their prefix', () => {
+  assert.ok(isMcpToolName('mcp__filesystem__read_file'));
+  assert.ok(!isMcpToolName('read'));
+  assert.ok(!isMcpToolName('mcp'));
+  // 名字可能缺失或不是字符串（流式早期、坏数据）：判定不能抛异常。
+  assert.ok(!isMcpToolName(''));
+  assert.ok(!isMcpToolName(undefined));
+  assert.ok(!isMcpToolName(null));
 });

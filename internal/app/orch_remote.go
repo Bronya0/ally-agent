@@ -704,6 +704,17 @@ def op_run(root, payload):
         "truncated": truncated,
     }
 
+# op 名 → 实现：唯一的分发表，新增一个 op 只在这里加一行（实现本身仍是 op_* 函数）。
+# 两个测试专用 op（_check_*）形状与其余不同，留在下面的分支里。
+OPS = {
+    "read": op_read,
+    "read_batch": op_read_batch,
+    "stat": op_stat,
+    "write": op_write,
+    "delete_batch": op_delete_batch,
+    "run": op_run,
+}
+
 try:
     payload = decode_payload()
     raw_root = os.path.expanduser(to_os_text(payload["workspaceRoot"]))
@@ -715,18 +726,9 @@ try:
     if root == "/":
         raise ValueError("workspaceRoot must not be filesystem root")
     op = payload.get("op")
-    if op == "read":
-        ok(op_read(root, payload))
-    elif op == "read_batch":
-        ok(op_read_batch(root, payload))
-    elif op == "stat":
-        ok(op_stat(root, payload))
-    elif op == "write":
-        ok(op_write(root, payload))
-    elif op == "delete_batch":
-        ok(op_delete_batch(root, payload))
-    elif op == "run":
-        ok(op_run(root, payload))
+    handler = OPS.get(op)
+    if handler is not None:
+        ok(handler(root, payload))
     elif op == "_check_write_targets":
         # 测试专用内部 op：只做写目标越界检查，不执行命令。
         # cwd 同样走 safe_join，保证与 op_run 的相对路径解析一致。

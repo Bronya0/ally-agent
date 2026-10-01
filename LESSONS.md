@@ -116,3 +116,7 @@
 [card-title-one-writer] 2026-09-30 卡片标题由入参声明，结果适配器只能补空缺，别覆盖（结果里的当前步≠本动作所说那步）。@useToolEvents.mjs
 [prefix-measure-not-list] 2026-09-30 前缀指纹只量上下文本身（系统段+工具+每条消息）；拿配置值当代理必出假警。@biz_context_lock.go
 [host-msg-once-per-run] 2026-09-30 宿主催报消息（plan-check）只挂那一次请求：进历史就成每轮一条的死 token。@app.go
+[status-vocab-one-place] 2026-10-03 服务/任务状态文案与色调收口 utils/taskStatus.mjs，面板与工具卡共用。@taskStatus.mjs
+[render-by-result-shape] 2026-10-01 工具卡渲染按结果形状分支，别按动作名/标题前缀：动作名来自流式参数，早退即缺失。@useToolEvents.mjs
+[flag-semantics] 2026-10-03 徽标报「动不动状态」须后端显式给 changed，勿拿 alreadyRegistered 代偿。@ssh_cluster
+[list-key-no-omitempty] 2026-10-03 前端按数组键存在性分支：空清单也要发 []，加 omitempty 就退化成 {}。@orch_scheduler.go

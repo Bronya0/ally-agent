@@ -94,21 +94,37 @@ export function findToolEventByData(session, data = {}) {
 }
 
 /**
- * Canonicalize the ad-hoc status vocabulary into the four values the render
- * layer understands: success | error | running | default.
+ * The status vocabulary: canonical state -> every raw string that means it.
  *
  * The backend and older code have sprinkled in aliases — sub-agent records use
  * `completed`/`failed`, streaming uses `info`, plan items use `done`/
- * `in_progress`. Collapsing them here (instead of at every call site) means the
+ * `in_progress`. Declaring them as data (rather than a chain of tests) makes an
+ * alias a single row, and lets every consumer that needs its own per-state
+ * artifact index the canonical state instead of re-testing the aliases
+ * (see ToolStatusIcon).
+ */
+const STATUS_STATES = {
+  success: ['success', 'done', 'completed'],
+  error: ['error', 'failed'],
+  running: ['running', 'in_progress', 'info'],
+};
+
+const STATUS_ALIASES = new Map();
+for (const [state, aliases] of Object.entries(STATUS_STATES)) {
+  for (const alias of aliases) STATUS_ALIASES.set(alias, state);
+}
+
+/**
+ * Canonicalize the ad-hoc status vocabulary into the four states the render
+ * layer understands: success | error | running | default.
+ *
+ * Collapsing the aliases here (instead of at every call site) means the
  * vocabulary can be tightened in one place and the UI never sees an unknown
  * string. Unknown values fall back to `default`, preserving the previous
- * behavior of normalizeToolStatus for unrecognized inputs.
+ * behavior for unrecognized inputs.
  */
 export function normalizeToolStatus(status) {
-  if (status === 'success' || status === 'done' || status === 'completed') return 'success';
-  if (status === 'error' || status === 'failed') return 'error';
-  if (status === 'running' || status === 'in_progress' || status === 'info') return 'running';
-  return 'default';
+  return STATUS_ALIASES.get(status) || 'default';
 }
 
 /**

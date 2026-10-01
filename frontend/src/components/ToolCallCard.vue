@@ -45,6 +45,13 @@ Public License v3. See the LICENSE file for details.
       </div>
     </div>
 
+    <CardGrid
+      v-if="cardGrid"
+      :items="cardGrid.items"
+      :caption="cardGrid.caption"
+      :empty-text="cardGrid.emptyText"
+    />
+
     <div v-if="msg.kind === 'edit' && msg.status !== 'error' && msg.editEntries?.length" :class="{ 'tool-body-swap': !isBodyLive }" class="edit-file-groups">
       <div v-for="(entry, ei) in msg.editEntries" :key="entry.path || ei" class="edit-file-group">
         <div v-if="msg.editEntries.length > 1" class="edit-file-header">
@@ -95,7 +102,7 @@ Public License v3. See the LICENSE file for details.
       :collapsed="!msg.expanded"
       :max-lines="COMMAND_PREVIEW_LINES"
     />
-    <pre v-else-if="msg.body && msg.status !== 'error' && msg.kind !== 'edit' && msg.kind !== 'read' && msg.kind !== 'remote_read' && msg.kind !== 'calculate' && msg.kind !== 'grep' && msg.kind !== 'plan' && (msg.kind !== 'list' || msg.expanded)" ref="bodyPreRef" :class="['tool-body', { 'fixed-scroll': isFixedKind(msg.kind), 'body-preview': isBodyPreview(msg), 'tail-default': isServiceReadResult(msg), 'scroll-enabled': bodyScrollEnabled && isScrollableBody(msg), 'tool-body-swap': !isBodyLive }]" @click.stop="handleBodyClick(msg)">{{ toolBodyText(msg) }}</pre>
+    <pre v-else-if="msg.body && !cardGrid && msg.status !== 'error' && msg.kind !== 'edit' && msg.kind !== 'read' && msg.kind !== 'remote_read' && msg.kind !== 'calculate' && msg.kind !== 'grep' && msg.kind !== 'plan' && (msg.kind !== 'list' || msg.expanded)" ref="bodyPreRef" :class="['tool-body', { 'fixed-scroll': isFixedKind(msg.kind), 'body-preview': isBodyPreview(msg), 'tail-default': isServiceReadResult(msg), 'scroll-enabled': bodyScrollEnabled && isScrollableBody(msg), 'tool-body-swap': !isBodyLive }]" @click.stop="handleBodyClick(msg)">{{ toolBodyText(msg) }}</pre>
     <div v-if="isValidationWarning(msg)" class="edit-warning-list validation-warning-list" role="status" aria-live="polite">
       <div class="edit-warning validation-warning" :title="msg.validation">
         <span class="validation-warning-label">{{ $t('tools.validationWarning') }}</span>
@@ -122,6 +129,7 @@ import { formatToolErrorBody } from '../utils/toolError.mjs';
 import { toolVerbLabel, hasNamedVerb } from '../utils/toolVerb.mjs';
 import { t } from '../i18n.mjs';
 import { normalizedLines } from '../utils/toolPreview.mjs';
+import CardGrid from './CardGrid.vue';
 import ToolStatusIcon from './ToolStatusIcon.vue';
 
 const BODY_PREVIEW_LINES = 6;
@@ -160,6 +168,15 @@ const deleteRowsShown = computed(() => deleteRows.value.length > 1
 function treePrefix(index) {
   return index === deleteRows.value.length - 1 ? '└─' : '├─';
 }
+
+// 一批同类记录的工具结果（ssh_cluster 服务器清单 / service 进程清单 / scheduled_task
+// 任务清单）由结果适配器解析并映射成卡片条目，整包写进 msg.cardGrid（见 useToolEvents
+// 的 setCardGrid）：条目、标题行、空态文案一起走，卡片正体因此可以整块清空。没有这个
+// 字段的是旧卡片或其它工具，继续走原来的 body。
+const cardGrid = computed(() => {
+  const grid = props.msg?.cardGrid;
+  return grid && Array.isArray(grid.items) ? grid : null;
+});
 
 const DiffView = defineAsyncComponent(() => import('./DiffView.vue'));
 const CodeView = defineAsyncComponent(() => import('./CodeView.vue'));

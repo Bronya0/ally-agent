@@ -23,7 +23,9 @@ import {
   toolEventId,
 } from '../utils/toolEventState.mjs';
 import { formatReadRangeChip } from '../utils/toolFormat.mjs';
-import { deletePathRows } from '../utils/toolPreview.mjs';
+import { deletePathRows, scheduledTaskRow, scheduledTaskRows, serviceListRows, serviceRow, sshClusterNodeRow, sshServerRows } from '../utils/toolPreview.mjs';
+import { formatBytes } from '../utils/format.mjs';
+import { scheduledStatusKey, scheduledStatusTone, serviceStatusKey, serviceStatusTone } from '../utils/taskStatus.mjs';
 import { isActionKeyedTool } from '../utils/toolVerb.mjs';
 
 export function useToolEvents(ctx) {
@@ -42,6 +44,7 @@ export function useToolEvents(ctx) {
     formatToolChip,
     formatDurationShort,
     makeToolResultTitle,
+    formatScheduledToolSchedule,
     scrollMessagesToBottomIfStale,
     scrollMessagesToBottom,
     activeSessionId,
@@ -174,6 +177,33 @@ export function useToolEvents(ctx) {
     existing.body = '';
   }
 
+  // ssh_cluster 的结果不再倒成通用键值文本：卡片正体是一格格服务器卡（彩色网格，
+  // 一行多个、自动换行）。列表结果带 servers 数组，登记 / 授权的结果是单台节点的扁平
+  // 字段，两者各一张卡；空清单也接管正体，否则卡片只剩标题、看不出「一台都没有」。
+  function applySSHClusterResult(existing, data, resultData) {
+    const servers = sshServerRows(resultData);
+    if (servers) {
+      setCardGrid(existing, servers.map(sshServerCardItem), { emptyText: t('tools.sshCluster.empty') });
+      return;
+    }
+    const node = sshClusterNodeRow(resultData);
+    if (node) setCardGrid(existing, [sshClusterNodeCardItem(node)]);
+  }
+
+  // scheduled_task 的结果按形状分支：列表（tasks 数组）一个任务一张卡（名字 /
+  // 调度+下次执行 / 任务内容 / 状态）；create 返回单条 task，也是一张卡——创建后
+  // 当场看到调度、下次执行与状态，与列表里那行同一套字段。delete 的结果只有被删的
+  // id，没有任务信息，保持原来的文本体。
+  function applyScheduledTaskResult(existing, data, resultData) {
+    const tasks = scheduledTaskRows(resultData);
+    if (tasks) {
+      setCardGrid(existing, tasks.map(scheduledTaskCardItem), { emptyText: t('app.tools.scheduled.none') });
+      return;
+    }
+    const task = scheduledTaskRow(resultData);
+    if (task) setCardGrid(existing, [scheduledTaskCardItem(task)]);
+  }
+
   function applyEditDiff(existing, data, resultData) {
     try {
       const resultParsed = JSON.parse(data.result);
@@ -213,24 +243,102 @@ export function useToolEvents(ctx) {
     }
   }
 
-  // 启动服务的详情卡：结构化字段（status/pid/command/cwd/started/error），
-  // 不带持续滚动的输出尾（那是有界 buffer 的事，任务中心可看完整输出）。
-  // stop/list/read 保留 formatToolBody 的原生结果体。
-  // toolAction 来自流式参数，早退的 tool:start 可能没带上；running 阶段
-  // 标题一定以动作词开头（makeToolTitle: "start · ..."），作兜底信号。
+  // ── 卡片网格：结果行 → CardGrid 条目 ──
+  // 行解析是纯函数（utils/toolPreview.mjs，不 import i18n），而徽标文案与色调判定需要
+  // i18n / 语义词表，所以「行 → 条目」写在这一层，与其它适配器一样在适配器里产出展示
+  // 数据。一次调用只写 msg.cardGrid（条目、标题行、空态文案一起走），卡片正体整块清空。
+  function setCardGrid(existing, items, options = {}) {
+    existing.cardGrid = {
+      items,
+      caption: options.caption || '',
+      emptyText: options.emptyText || '',
+    };
+    existing.body = '';
+  }
+
+  // 状态串没有对应文案时原样显示：后端新加了一个状态也不能变成空白徽标。
+  function statusLabel(key, raw) {
+    return (key && t(key)) || raw || '';
+  }
+
+  function sshServerCardItem(server) {
+    return {
+      key: server.alias,
+      title: server.alias,
+      subtitle: server.endpoint,
+      description: server.description,
+      badge: server.pending
+        ? t('sshCluster.table.pending')
+        : (server.riskLevel === 'high' ? t('sshCluster.table.riskHigh') : t('sshCluster.table.riskLow')),
+      tone: server.pending ? 'warning' : (server.riskLevel === 'high' ? 'danger' : 'info'),
+    };
+  }
+
+  // 登记 / 授权的结果：一台机器一张卡，徽标说明这次到底动没动已存状态。别拿「节点已
+  // 登记」（alreadyRegistered）代偿：已登记但本次才授权的工作区授权同样是改动。
+  function sshClusterNodeCardItem(node) {
+    return {
+      key: node.alias,
+      title: node.alias,
+      subtitle: node.endpoint,
+      description: node.description,
+      badge: node.changed ? t('tools.sshCluster.authorized') : t('tools.sshCluster.unchanged'),
+      tone: node.changed ? 'success' : 'neutral',
+    };
+  }
+
+  function serviceCardItem(service, options = {}) {
+    const details = [];
+    if (service.id) details.push(service.id);
+    if (service.pid) details.push(`pid ${service.pid}`);
+    // 缓冲体积与工作目录是旧日志行里就有的两项，换卡片不能丢。
+    if (service.outputBytes > 0) details.push(formatBytes(service.outputBytes));
+    if (service.cwd) details.push(service.cwd);
+    // 启动时间只有 start / stop 那条结果需要补（列表行也有这个字段，但列表已经有
+    // id 与 pid，每张卡再挂一个时间会把卡片挤成两行），所以按需给。
+    if (options.withStartedAt && service.startedAt) details.push(formatDateTime(service.startedAt * 1000));
+    if (service.error) details.push(service.error);
+    return {
+      key: service.id || service.name,
+      title: service.name || service.id,
+      subtitle: service.command,
+      description: details.join(' · '),
+      badge: statusLabel(serviceStatusKey(service.status), service.status),
+      tone: serviceStatusTone(service),
+    };
+  }
+
+  function scheduledTaskCardItem(task) {
+    const schedule = task.schedule?.type ? formatScheduledToolSchedule(task.schedule) : '';
+    const next = task.nextRunAt ? formatDateTime(task.nextRunAt) : '';
+    return {
+      key: task.id || task.name,
+      title: task.name || task.id,
+      subtitle: [schedule, next].filter(Boolean).join(' · '),
+      description: task.command || task.instruction,
+      badge: statusLabel(scheduledStatusKey(task), task.lastStatus),
+      tone: scheduledStatusTone(task),
+    };
+  }
+
+  // service 的结果按形状分支，不按动作名：列表（services 数组）一个进程一张卡
+  // （命令、pid、工作目录都在卡里），active/max 那行数字正体里没处放，走 CardGrid
+  // 的 caption；start / stop 返回单条 ServiceInfo，同样一张卡（启动时间只有这条
+  // 结果带，卡上补出来）；read 带命令输出正文，保持 formatToolBody 的原生结果体。
+  // 动作名（existing.toolAction）只用来显示动词：它来自流式参数，早退的 tool:start
+  // 可能没带上，按它分支会漏（早先靠标题前缀兜底，仍是猜）。
   function applyServiceResult(existing, data, resultData) {
-    const action = String(existing.toolAction || '').trim().toLowerCase();
-    const isStart = action === 'start' || (!action && String(existing.title || '').startsWith('start'));
-    if (!isStart) return;
-    const info = resultData && typeof resultData === 'object' ? resultData : {};
-    const lines = [];
-    if (info.status) lines.push(t('app.tools.service.status', { status: info.status }));
-    if (info.pid) lines.push(`pid: ${info.pid}`);
-    if (info.command) lines.push(t('app.tools.service.command', { command: info.command }));
-    if (info.cwd) lines.push(t('app.tools.service.cwd', { cwd: info.cwd }));
-    if (info.startedAt) lines.push(t('app.tools.service.started', { time: formatDateTime(Number(info.startedAt) * 1000) }));
-    if (info.error) lines.push(t('app.tools.service.error', { error: info.error }));
-    existing.body = lines.join('\n');
+    const services = serviceListRows(resultData);
+    if (services) {
+      const counts = resultData && typeof resultData === 'object' ? resultData : {};
+      const caption = typeof counts.activeCount === 'number' && typeof counts.maxActive === 'number'
+        ? t('app.tools.services.active', { active: counts.activeCount, max: counts.maxActive })
+        : '';
+      setCardGrid(existing, services.map((service) => serviceCardItem(service)), { caption, emptyText: t('app.tools.services.none') });
+      return;
+    }
+    const service = serviceRow(resultData);
+    if (service) setCardGrid(existing, [serviceCardItem(service, { withStartedAt: true })]);
   }
 
   const toolResultAdapters = {
@@ -251,6 +359,8 @@ export function useToolEvents(ctx) {
     'delete': [applyDeleteEntries],
     'remote_delete_path': [applyDeleteEntries],
     'service': [applyServiceResult],
+    'scheduled_task': [applyScheduledTaskResult],
+    'ssh_cluster': [applySSHClusterResult],
   };
 
   function applySubagentResult(existing, data, resultData) {

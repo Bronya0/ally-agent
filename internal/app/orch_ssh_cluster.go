@@ -161,6 +161,7 @@ func (a *App) executeSSHClusterTool(ctx context.Context, sessionID, workspace st
 			"username":    username,
 			"description": description,
 			"authorized":  true,
+			"changed":     true,
 			"status":      "approved",
 			"note":        "server successfully registered and authorized for current workspace",
 		}, nil
@@ -184,6 +185,7 @@ func (a *App) authorizeExistingSSHServer(ctx context.Context, sessionID, workspa
 			"alias":             node.Alias,
 			"alreadyRegistered": true,
 			"authorized":        true,
+			"changed":           false,
 			"note":              "server was already registered and is already authorized for the current workspace; nothing was modified",
 		}, nil
 	}
@@ -244,6 +246,7 @@ func (a *App) authorizeExistingSSHServer(ctx context.Context, sessionID, workspa
 		"alias":             node.Alias,
 		"alreadyRegistered": true,
 		"authorized":        true,
+		"changed":           true,
 		"note":              "existing server authorized for the current workspace; stored configuration and credentials were left untouched",
 	}, nil
 }

@@ -42,7 +42,7 @@ Public License v3. See the LICENSE file for details.
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { t } from '../i18n.mjs';
 import { deletePathSummary, formatHttpToolTitle } from '../utils/toolPreview.mjs';
-import { toolActionFromArgs, toolVerbLabel } from '../utils/toolVerb.mjs';
+import { isMcpToolName, toolActionFromArgs, toolVerbLabel } from '../utils/toolVerb.mjs';
 import ToolStatusIcon from './ToolStatusIcon.vue';
 
 const props = defineProps({
@@ -266,7 +266,8 @@ function toolArgsTitle(tc) {
 // the mcp kind.
 function subToolVerb(tc) {
   const name = tc?.name || '';
-  const kind = typeof name === 'string' && name.startsWith('mcp__') ? 'mcp' : '';
+  // MCP 命名约定的判定只写一份（utils/toolVerb.mjs 的 isMcpToolName），主卡与本卡共用。
+  const kind = isMcpToolName(name) ? 'mcp' : '';
   // The action a call took lives in its own arguments, so the row reads it
   // through the same helper the main card uses — one rule for every card, since
   // the action can only come from the args. Reuse the parse cached by
