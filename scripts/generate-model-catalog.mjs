@@ -5,7 +5,6 @@ import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const sourcePath = path.join(root, 'docs', 'model_api.json');
 const outputPath = path.join(root, 'frontend', 'src', 'data', 'modelCatalog.json');
-const source = JSON.parse(fs.readFileSync(sourcePath, 'utf8'));
 const supportedPackages = new Set([
   '@ai-sdk/openai-compatible',
   '@ai-sdk/openai',
@@ -29,47 +28,62 @@ function naturalCompare(left, right) {
   });
 }
 
-const providers = Object.values(source)
-  .filter((provider) => provider && supportedPackages.has(provider.npm))
-  .map((provider) => {
-    const models = Object.values(provider.models || {})
-      .filter((model) => model
-        && model.status !== 'deprecated'
-        && model.tool_call === true
-        && Array.isArray(model.modalities?.output)
-        && model.modalities.output.includes('text'))
-      .map((model) => {
-        const interleaved = model.interleaved && typeof model.interleaved === 'object'
-          ? model.interleaved
-          : null;
-        return {
-          id: String(model.id || '').trim(),
-          name: String(model.name || model.id || '').trim(),
-          contextWindow: Number(model.limit?.context) || 0,
-          maxTokens: Number(model.limit?.output) || 0,
-          reasoningTag: String(interleaved?.field || '').trim(),
-          // visionCapable 只在来源声明了输入模态时才有值：true/false 是"已知能/
-          // 不能看图"，键缺失才是"未知"（消费方按未知处理、不得降级）。生成器
-          // 此前丢掉了这个信号，运行期只能靠模型名猜。
-          visionCapable: Array.isArray(model.modalities?.input)
-            ? model.modalities.input.includes('image')
-            : undefined,
-        };
-      })
-      .filter((model) => model.id)
-      .sort((left, right) => naturalCompare(left.name, right.name) || naturalCompare(left.id, right.id));
-    return {
-      id: String(provider.id || '').trim(),
-      name: String(provider.name || provider.id || '').trim(),
-      apiFormat: apiFormat(provider),
-      baseUrl: String(provider.api || officialBaseUrls[provider.id] || '').trim(),
-      doc: String(provider.doc || '').trim(),
-      models,
-    };
-  })
-  .filter((provider) => provider.id && provider.baseUrl && provider.models.length)
-  .sort((left, right) => naturalCompare(left.name, right.name));
+// buildModelCatalog 把上游数据整理成前端目录的**文本**（含末尾换行）。纯函数：不读
+// 文件、不写文件，因此可以直接被测试拿去和入库的产物逐字节比对——
+// frontend/src/data/modelCatalog.test.mjs 就是靠它守住“改了源、或者改了这里的生成
+// 逻辑，产物必须重新生成”：入库的目录是 755KB 的生成物，以前改完忘跑脚本只会静默
+// 用旧数据（上下文窗口、价格、接口格式都可能过期），没有任何东西会报错。
+export function buildModelCatalog(source) {
+  const providers = Object.values(source)
+    .filter((provider) => provider && supportedPackages.has(provider.npm))
+    .map((provider) => {
+      const models = Object.values(provider.models || {})
+        .filter((model) => model
+          && model.status !== 'deprecated'
+          && model.tool_call === true
+          && Array.isArray(model.modalities?.output)
+          && model.modalities.output.includes('text'))
+        .map((model) => {
+          const interleaved = model.interleaved && typeof model.interleaved === 'object'
+            ? model.interleaved
+            : null;
+          return {
+            id: String(model.id || '').trim(),
+            name: String(model.name || model.id || '').trim(),
+            contextWindow: Number(model.limit?.context) || 0,
+            maxTokens: Number(model.limit?.output) || 0,
+            reasoningTag: String(interleaved?.field || '').trim(),
+            // visionCapable 只在来源声明了输入模态时才有值：true/false 是“已知能/
+            // 不能看图”，键缺失才是“未知”（消费方按未知处理、不得降级）。生成器
+            // 此前丢掉了这个信号，运行期只能靠模型名猜。
+            visionCapable: Array.isArray(model.modalities?.input)
+              ? model.modalities.input.includes('image')
+              : undefined,
+          };
+        })
+        .filter((model) => model.id)
+        .sort((left, right) => naturalCompare(left.name, right.name) || naturalCompare(left.id, right.id));
+      return {
+        id: String(provider.id || '').trim(),
+        name: String(provider.name || provider.id || '').trim(),
+        apiFormat: apiFormat(provider),
+        baseUrl: String(provider.api || officialBaseUrls[provider.id] || '').trim(),
+        doc: String(provider.doc || '').trim(),
+        models,
+      };
+    })
+    .filter((provider) => provider.id && provider.baseUrl && provider.models.length)
+    .sort((left, right) => naturalCompare(left.name, right.name));
+  return `${JSON.stringify({ formatVersion: 1, providers })}\n`;
+}
 
-fs.mkdirSync(path.dirname(outputPath), { recursive: true });
-fs.writeFileSync(outputPath, `${JSON.stringify({ formatVersion: 1, providers })}\n`, 'utf8');
-console.log(`Generated ${providers.length} providers and ${providers.reduce((sum, provider) => sum + provider.models.length, 0)} models at ${path.relative(root, outputPath)}`);
+// 只有直接运行（node scripts/generate-model-catalog.mjs）时才写盘：被 import 时不能
+// 有副作用（测试就是这么用它比对产物的）。
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const catalog = buildModelCatalog(JSON.parse(fs.readFileSync(sourcePath, 'utf8')));
+  fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+  fs.writeFileSync(outputPath, catalog, 'utf8');
+  const { providers } = JSON.parse(catalog);
+  const modelCount = providers.reduce((sum, provider) => sum + provider.models.length, 0);
+  console.log(`Generated ${providers.length} providers and ${modelCount} models at ${path.relative(root, outputPath)}`);
+}

@@ -9,6 +9,14 @@
  */
 import { normalizeApiKeysArray, normalizeReasoningEffort } from './modelConfigIO.mjs';
 
+// 自动压缩阈值的默认值与 clamp 范围：与后端同一组数（Go 侧 defaultCompactThreshold /
+// clampCompactThreshold）。跨语言没法共用常量，所以由 config.test.mjs 读 Go 源码把两边
+// 钉在一起。以前这里只靠一句注释说“Backend clamps to [0.1, 0.95]”，而实际范围是
+// [0.2, 0.95]——没有任何守护的副本就是这么漂的。
+export const COMPACT_THRESHOLD_DEFAULT = 0.6;
+export const COMPACT_THRESHOLD_MIN = 0.2;
+export const COMPACT_THRESHOLD_MAX = 0.95;
+
 // defaultConfig 只描述持久化配置里**非模型**的部分：模型一律是 models[] 里的预设，
 // 界面在用的那个只存一个身份（lastUsedModel），其余模型字段由后端按身份展开
 // （见 internal/app ConfigState 与 expandLastUsedModel）。界面上"一条模型都没
@@ -56,10 +64,11 @@ export function defaultConfig() {
     // saves these after the user drags the window edge.
     windowWidth: 0,
     windowHeight: 0,
-    // Auto-compaction threshold as a fraction of the context window
-    // (0.6 = 60%). Backend clamps to [0.1, 0.95]; zero (legacy config
+    // Auto-compaction threshold as a fraction of the context window (see the
+    // constants above: 0.6 = 60%). The backend clamps it to the same
+    // [COMPACT_THRESHOLD_MIN, COMPACT_THRESHOLD_MAX] range; zero (legacy config
     // without the field) is replaced with the default in mergeConfig.
-    compactThreshold: 0.6,
+    compactThreshold: COMPACT_THRESHOLD_DEFAULT,
     // Manual/auto compaction LLM call timeout in seconds. Backend clamps
     // to [30, 3600]; zero (legacy config) falls back to the default.
     compactTimeoutSeconds: 180,
@@ -104,8 +113,8 @@ export function assignConfig(target, source) {
   // compactThreshold: legacy configs without the field (or explicit 0) fall
   // back to the default so the slider shows the effective value, not 0.
   next.compactThreshold = Number(next.compactThreshold) > 0
-    ? Math.min(0.95, Math.max(0.2, Number(next.compactThreshold)))
-    : 0.6;
+    ? Math.min(COMPACT_THRESHOLD_MAX, Math.max(COMPACT_THRESHOLD_MIN, Number(next.compactThreshold)))
+    : COMPACT_THRESHOLD_DEFAULT;
   // compactTimeoutSeconds: same fallback; clamp to the backend's [30, 3600]
   // range so the settings input never shows an empty or absurd value.
   next.compactTimeoutSeconds = Number(next.compactTimeoutSeconds) > 0

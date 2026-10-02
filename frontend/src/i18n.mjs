@@ -643,7 +643,6 @@ const zh = {
   'settings.proxyTestSuccess': '连接成功 · HTTP {status} · {duration} ms · {proxy}',
   'settings.proxyTestFailed': '连接失败：{error}',
   'settings.proxyDirect': '直连',
-  'settings.models': '模型',
   'settings.advanced': '高级',
   'settings.about': '关于',
   'settings.generalTitle': '通用配置',

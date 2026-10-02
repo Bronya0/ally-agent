@@ -12,6 +12,8 @@
 | `wails3 dev` | 启动桌面端热重载开发模式 |
 | `wails3 build` | 构建并校验桌面端二进制（修改 Go 或 Wails 绑定的唯一验证命令） |
 | `go test ./...` | 执行全套后端测试（测试前必须确保满足隔离规则） |
+| `cd frontend && npm test` | 前端测试（`node --test "src/**/*.test.mjs"`）：**跨语言同一组数**（附件上限 `attachmentLimits.test.mjs`、压缩阈值 `config.test.mjs`）与 **i18n 中英键集合**（`i18nKeys.test.mjs`）都由它读源码钉住，改一边没改另一边就红 |
+| `go test ./internal/app -run TestLayerBoundaries` | **分层边界**（`layer_boundaries_test.go`）：`internal/` 下非 app 的包反向 import `internal/app`、app 内非 `host_*.go` 文件碰 Wails runtime，都当场红 |
 | `gofmt -l .` | 格式化自查，期望输出为空（2026-09-15 已统一 25 个文件，此前长期不全绿） |
 
 ## 2. Git 提交规范 (Git Convention)
