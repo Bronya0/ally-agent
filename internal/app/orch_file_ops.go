@@ -337,7 +337,7 @@ func copyDroppedSource(src, targetAbs, primaryRoot string) (string, error) {
 	}
 	// Copying a directory into itself (or into its own subtree) would walk a
 	// tree that grows while it is being read; reject like desktop managers do.
-	if info.IsDir() && (samePath(srcAbs, targetAbs) || isPathOrDescendant(targetAbs, srcAbs)) {
+	if info.IsDir() && insideRoot(srcAbs, targetAbs) {
 		return "", codedToolError("E_BAD_PATH", fmt.Errorf("cannot copy a directory into itself: %s", src))
 	}
 	destAbs := nonConflictingDestPath(targetAbs, filepath.Base(srcAbs))

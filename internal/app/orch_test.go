@@ -4117,17 +4117,64 @@ func TestUnifiedDeleteProtectionRules(t *testing.T) {
 		"/etc/machine-id",
 	} {
 		listed := false
-		for _, target := range sensitiveDeleteTargets {
+		for _, target := range removableProtectedTargets() {
 			if target == directFile {
 				listed = true
 				break
 			}
 		}
 		if !listed {
-			t.Errorf("sensitiveDeleteTargets lost %s: level-2 files are outside the depth guard, only this list can block them", directFile)
+			t.Errorf("removableProtectedTargets lost %s: level-2 files are outside the depth guard, only this list can block them", directFile)
 		}
 		if blocked, _ := isDangerousDeletePath(directFile); !blocked {
 			t.Fatalf("expected /etc direct file %s to be blocked, got allowed", directFile)
+		}
+	}
+}
+
+// TestSearchGuardSharesDeleteLocationTable 钉住「搜索与删除读同一张表、同一套判据」：
+// 搜索侧不再自己存一份系统目录清单，判据也统一走 normalizeSystemPath，否则大小写
+// 不同的写法会漏（macOS 上 /system 就绕过旧清单里的 /System 项）。
+func TestSearchGuardSharesDeleteLocationTable(t *testing.T) {
+	for _, path := range []string{
+		"/etc",
+		"/etc/nginx",
+		"/usr/share/doc",
+		"/var/log",
+		"/opt/proj",
+		"/root/proj",
+		"/System/Library",
+		"/system/library",
+		"/Applications/Ally.app",
+	} {
+		if blocked, reason := isDangerousSearchRoot(path); !blocked {
+			t.Errorf("expected search root %s to be blocked, got allowed (%s)", path, reason)
+		}
+	}
+
+	if runtime.GOOS == "windows" {
+		// 盘符与长路径两种写法必须命中同一项：旧表只认 `c:\` 字面前缀，
+		// `\\?\C:\Windows\System32` 能整段漏过去。
+		if blocked, _ := isDangerousSearchRoot(`\\?\C:\Windows\System32`); !blocked {
+			t.Error("expected the long-path spelling of the Windows system directory to be blocked")
+		}
+	}
+
+	// 两个标记互不蕴含：/etc 整棵树不许扫描，但深层的项目/配置文件是允许删的。
+	if blocked, reason := isDangerousDeletePath("/etc/nginx/conf.d/test.conf"); blocked {
+		t.Errorf("delete guard must keep allowing deep files under /etc, got blocked: %q", reason)
+	}
+	if blocked, _ := isDangerousSearchRoot("/etc/nginx/conf.d/test.conf"); !blocked {
+		t.Error("search guard must block the whole /etc tree")
+	}
+
+	// 临时工作区（测试与构建常用）必须仍可搜。
+	for _, path := range []string{
+		filepath.Join(os.TempDir(), "workspace"),
+		filepath.Join(os.TempDir(), "workspace", "sub"),
+	} {
+		if blocked, reason := isDangerousSearchRoot(path); blocked {
+			t.Errorf("expected temporary workspace %s to stay searchable, got blocked: %q", path, reason)
 		}
 	}
 }

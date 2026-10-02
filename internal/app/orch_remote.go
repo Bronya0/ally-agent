@@ -1037,7 +1037,7 @@ func remotePayload(rt remoteTarget, op string, extra map[string]any) map[string]
 // 占位符，整个脚本经 ssh stdin 发送。先替换清单、最后替换 payload，
 // 避免编码后的 payload 恰好包含清单占位符文本时被二次替换。
 func buildRemoteScript(payload map[string]any) (string, error) {
-	targets, err := json.Marshal(remoteSensitiveDeleteTargets())
+	targets, err := json.Marshal(removableProtectedTargets())
 	if err != nil {
 		return "", err
 	}

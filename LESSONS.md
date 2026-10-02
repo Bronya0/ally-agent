@@ -141,3 +141,4 @@
 [test-family-table] 2026-10-02 同族用例（同一个入口、只是入参与期望不同）收进一张表驱动：开场样板只写一遍，断言一条不减，函数数从 37 降到 5。别靠"删"来减测试。@orch_test.go
 [marker-case-insensitive] 2026-10-02 中危 拒写判据别按字面比对：Go 的 errno 是小写、内核与 bash 是大写，只比一种会静默漏掉整类拒写。@orch_sandbox.go
 [fence-use-vs-read] 2026-10-03 高危 「用密钥不算读」的放行清单只能收没有 print 模式的命令：kubectl config view 会把凭据打出来。@tools/command/semantic.go
+[fence-one-table] 2026-10-03 中危 位置清单别按字面大小写/前缀比：/system 漏 /System、长路径漏；收一张表走规范化形态。@orch_fence.go

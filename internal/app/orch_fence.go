@@ -279,98 +279,129 @@ func validateRemoteCommandSafety(cmd string) error {
 
 // ── 受保护位置清单（删除 / 搜索 / 命令目标共用） ──
 
+// protectedLocation 是系统里一处受保护的位置：登记一次，两个守卫按标记取用，
+// 不再各存一份清单。形态统一为 normalizeSystemPath 的规范化形式（小写、去盘符、
+// 正斜杠开头），所以同一张表在三个平台上都成立：C:\Windows 与 \\?\C:\Windows\x
+// 命中同一项，macOS 大小写不敏感的 /system 也不会漏掉 /System 那一项。
+//
+// 两个标记互不蕴含，因为两者的判据本就不同：
+//   - remove：删除（delete 工具、命令的删除目标）保护它及其整棵子树。这里只登记
+//     「深度守卫兜不住」的目标 —— 第 1/2 层目录由 isDangerousDeletePath 的层级规则
+//     负责，所以 /etc、/var、/opt、/root 这类整树不标 remove：深层项目文件
+//     （/etc/nginx/conf.d/x.conf、/root/proj/app.py）是允许删的，整树登记会误杀。
+//   - scan：工作区之外的 grep / 列目录把它当危险根（树太大、扫全盘）。搜索没有
+//     「深度」概念，一级系统树必须逐个点名，所以 /etc、/var、/opt、/root 在这里出现。
+type protectedLocation struct {
+	path   string
+	remove bool
+	scan   bool
+}
+
 // 删除保护机制（单一来源，全平台与本地/远程统一）：
 // 机制 1：基于系统/全盘绝对视角的层级深度守卫（禁止删除盘根、1级和2级骨干目录）；
 // 机制 2：跨平台通用的敏感文件与深层系统目录黑名单（包含设备、内核接口、二进制目录、敏感认证文件等）。
 // 两个机制都建立在 normalizeSystemPath 之上：卷标必须在转正斜杠之前按原生形式裁掉，否则
 // 形如 \\?\C:\Users\alice 的写法会整段留下、把深度多算一层而绕开机制 1。
-var (
-	// sensitiveDeleteTargets 是跨平台统一的系统敏感目录与高危文件黑名单（以正斜杠开头的规范化小写路径）。
-	sensitiveDeleteTargets = []string{
-		// 1. Linux & macOS 设备接口、内核虚拟文件系统与底层
-		"/dev",
-		"/proc",
-		"/sys",
-		"/boot",
-		"/lost+found",
+var protectedLocations = []protectedLocation{
+	// 1. Linux & macOS 设备接口、内核虚拟文件系统与底层
+	{path: "/dev", remove: true, scan: true},
+	{path: "/proc", remove: true, scan: true},
+	{path: "/sys", remove: true, scan: true},
+	{path: "/boot", remove: true, scan: true},
+	{path: "/lost+found", remove: true},
 
-		// 2. 关键系统二进制与动态库
-		"/bin",
-		"/sbin",
-		"/lib",
-		"/lib32",
-		"/lib64",
-		"/libx32",
-		"/usr/bin",
-		"/usr/sbin",
-		"/usr/lib",
-		"/usr/lib64",
-		// /usr/share 与 /usr/local/lib 不是二进制目录，但同属发行版/第三方安装内容：
-		// 删掉会把 man、locale、启动脚本与已装库一起连根拔掉。
-		"/usr/share",
-		"/usr/local/lib",
-		"/usr/local/bin",
-		"/usr/local/sbin",
-		"/var/local/libs",
+	// 2. 关键系统二进制与动态库
+	{path: "/bin", remove: true, scan: true},
+	{path: "/sbin", remove: true, scan: true},
+	{path: "/lib", remove: true, scan: true},
+	{path: "/lib32", remove: true},
+	{path: "/lib64", remove: true, scan: true},
+	{path: "/libx32", remove: true},
+	{path: "/usr/bin", remove: true},
+	{path: "/usr/sbin", remove: true},
+	{path: "/usr/lib", remove: true},
+	{path: "/usr/lib64", remove: true},
+	// /usr/share 与 /usr/local/lib 不是二进制目录，但同属发行版/第三方安装内容：
+	// 删掉会把 man、locale、启动脚本与已装库一起连根拔掉。
+	{path: "/usr/share", remove: true},
+	{path: "/usr/local/lib", remove: true},
+	{path: "/usr/local/bin", remove: true},
+	{path: "/usr/local/sbin", remove: true},
+	{path: "/var/local/libs", remove: true},
 
-		// 3. 核心敏感凭据与认证配置（精确保护关键文件，避免一刀切整树封死 /etc）
-		"/etc/shadow",
-		"/etc/sudoers",
-		"/etc/passwd",
-		"/etc/group",
-		"/etc/fstab",
-		"/etc/crypttab",
-		"/etc/ssh",
-		"/etc/pam.d",
-		"/etc/security",
+	// 3. 核心敏感凭据与认证配置（精确保护关键文件，避免一刀切整树封死 /etc）
+	{path: "/etc/shadow", remove: true},
+	{path: "/etc/sudoers", remove: true},
+	{path: "/etc/passwd", remove: true},
+	{path: "/etc/group", remove: true},
+	{path: "/etc/fstab", remove: true},
+	{path: "/etc/crypttab", remove: true},
+	{path: "/etc/ssh", remove: true},
+	{path: "/etc/pam.d", remove: true},
+	{path: "/etc/security", remove: true},
 
-		// 3.1 /etc 直属文件：机制 1 只拦第 2 层的“目录”，这些文件本身落在它的覆盖
-		//     之外，必须逐个点名（旧实现靠 /etc 整树拦截，改成“层级 + 名单”后漏掉了
-		//     它们，见 TestUnifiedDeleteProtectionRules）。
-		"/etc/hosts",
-		"/etc/resolv.conf",
-		"/etc/nsswitch.conf",
-		"/etc/hostname",
-		"/etc/environment",
-		"/etc/profile",
-		"/etc/bash.bashrc",
-		"/etc/ld.so.conf",
-		"/etc/shells",
-		"/etc/machine-id",
+	// 3.1 /etc 直属文件：机制 1 只拦第 2 层的“目录”，这些文件本身落在它的覆盖
+	//     之外，必须逐个点名（旧实现靠 /etc 整树拦截，改成“层级 + 名单”后漏掉了
+	//     它们，见 TestUnifiedDeleteProtectionRules）。
+	{path: "/etc/hosts", remove: true},
+	{path: "/etc/resolv.conf", remove: true},
+	{path: "/etc/nsswitch.conf", remove: true},
+	{path: "/etc/hostname", remove: true},
+	{path: "/etc/environment", remove: true},
+	{path: "/etc/profile", remove: true},
+	{path: "/etc/bash.bashrc", remove: true},
+	{path: "/etc/ld.so.conf", remove: true},
+	{path: "/etc/shells", remove: true},
+	{path: "/etc/machine-id", remove: true},
 
-		// 4. macOS 关键系统目录
-		"/system",
-		"/library",
-		"/applications",
-		"/cores",
-		"/private/etc",
-		"/private/var",
+	// 4. macOS 关键系统目录
+	{path: "/system", remove: true, scan: true},
+	{path: "/library", remove: true, scan: true},
+	{path: "/applications", remove: true, scan: true},
+	{path: "/cores", remove: true},
+	{path: "/private/etc", remove: true},
+	{path: "/private/var", remove: true},
 
-		// 5. Windows 关键系统目录与引导文件（去除盘符后的相对根形式）
-		"/windows",
-		"/windows.old",
-		"/program files",
-		"/program files (x86)",
-		"/programdata",
-		"/system volume information",
-		"/$recycle.bin",
-		"/recovery",
-		"/perflogs",
-		"/documents and settings",
-		"/config.msi",
-		"/$windows.~bt",
-		"/$windows.~ws",
-		"/$winreagent",
-		"/$sysreset",
-		"/bootmgr",
-		"/bootsect.bak",
-		"/msocache",
-		"/inetpub",
+	// 5. Windows 关键系统目录与引导文件（去除盘符后的相对根形式）
+	{path: "/windows", remove: true, scan: true},
+	{path: "/windows.old", remove: true},
+	{path: "/program files", remove: true, scan: true},
+	{path: "/program files (x86)", remove: true, scan: true},
+	{path: "/programdata", remove: true},
+	{path: "/system volume information", remove: true},
+	{path: "/$recycle.bin", remove: true},
+	{path: "/recovery", remove: true},
+	{path: "/perflogs", remove: true},
+	{path: "/documents and settings", remove: true},
+	{path: "/config.msi", remove: true},
+	{path: "/$windows.~bt", remove: true},
+	{path: "/$windows.~ws", remove: true},
+	{path: "/$winreagent", remove: true},
+	{path: "/$sysreset", remove: true},
+	{path: "/bootmgr", remove: true},
+	{path: "/bootsect.bak", remove: true},
+	{path: "/msocache", remove: true},
+	{path: "/inetpub", remove: true},
+
+	// 6. 只参与搜索判断的一级系统树。删除侧由层级规则（根、1/2 级目录）加精确
+	//    名单负责，整树登记会把深层项目文件一起误杀。
+	{path: "/etc", scan: true},
+	{path: "/usr", scan: true},
+	{path: "/var", scan: true},
+	{path: "/opt", scan: true},
+	{path: "/root", scan: true},
+}
+
+// removableProtectedTargets 是登记了删除保护的位置，删除守卫与远端 helper 共用
+// 这一份（远端 helper 自己实现层级规则与临时目录豁免，只吃这份名单）。
+func removableProtectedTargets() []string {
+	targets := make([]string, 0, len(protectedLocations))
+	for _, loc := range protectedLocations {
+		if loc.remove {
+			targets = append(targets, loc.path)
+		}
 	}
-)
-
-func remoteSensitiveDeleteTargets() []string {
-	return append([]string(nil), sensitiveDeleteTargets...)
+	return targets
 }
 
 // driveVolume 返回路径里的“盘符型”卷标（C:、\\?\C:、\\.\C:），统一小写；
@@ -511,23 +542,13 @@ func isDangerousDeletePath(absPath string) (bool, string) {
 	}
 
 	// ── 机制二：跨平台通用敏感文件与深层目录黑名单 ──
-	for _, target := range sensitiveDeleteTargets {
-		if norm == target || strings.HasPrefix(norm, target+"/") {
+	for _, target := range removableProtectedTargets() {
+		if insideRoot(target, norm) {
 			return true, fmt.Sprintf("refusing to delete protected system target %q (%s)", abs, target)
 		}
 	}
 
 	return false, ""
-}
-
-func isPathOrDescendant(abs, protected string) bool {
-	abs = filepath.Clean(abs)
-	protected = filepath.Clean(protected)
-	if samePath(abs, protected) {
-		return true
-	}
-	sep := string(os.PathSeparator)
-	return strings.HasPrefix(abs, strings.TrimRight(protected, sep)+sep)
 }
 
 // isDangerousSearchRoot returns (blocked, reason). Blocks grep/list operations
@@ -546,28 +567,19 @@ func isDangerousSearchRoot(absPath string) (bool, string) {
 	}
 
 	// Test and temporary workspaces commonly live below /var on macOS.
-	if tmp := os.TempDir(); tmp != "" && isPathOrDescendant(abs, tmp) {
+	if tmp := os.TempDir(); tmp != "" && insideRoot(tmp, abs) {
 		return false, ""
 	}
 
-	// 2. Unix/macOS system directories
-	unixDangerous := []string{
-		"/etc", "/usr", "/bin", "/sbin", "/lib", "/lib64",
-		"/boot", "/dev", "/proc", "/sys", "/var", "/opt", "/root",
-		"/System", "/Library", "/Applications",
-	}
-	for _, d := range unixDangerous {
-		if abs == d || strings.HasPrefix(abs, d+"/") {
-			return true, fmt.Sprintf("refusing to search system directory %q; this path is outside the project scope", abs)
+	// 2. 系统位置：与删除守卫共用一张表，这里只取 scan 那一列。判据走规范化形态，
+	//    所以大小写不同的写法（macOS 上的 /system）和带盘符/长路径前缀的 Windows
+	//    写法（\\?\C:\Windows\x）都能命中同一项。
+	norm := normalizeSystemPath(abs)
+	for _, loc := range protectedLocations {
+		if !loc.scan {
+			continue
 		}
-	}
-
-	// 3. Windows system directories
-	winPrefixes := []string{
-		`c:\windows`, `c:\program files`, `c:\program files (x86)`,
-	}
-	for _, d := range winPrefixes {
-		if lower == d || strings.HasPrefix(lower, d+`\`) {
+		if insideRoot(loc.path, norm) {
 			return true, fmt.Sprintf("refusing to search system directory %q; this path is outside the project scope", abs)
 		}
 	}
