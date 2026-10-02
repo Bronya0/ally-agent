@@ -41,6 +41,10 @@ func (a *App) grepFilesWithConfig(ctx context.Context, cfg ConfigState, req Grep
 			return nil, codedToolError("E_GREP_PATH", err)
 		}
 	}
+	// 密钥/凭据位置不搜：一次递归 grep 就能把私钥读进结果里，判定与命令围栏、read 共用。
+	if blocked, reason := blockedSensitiveRead(searchRoot); blocked {
+		return nil, codedToolError("E_GREP_PATH", fmt.Errorf("安全围栏已拦截：这是密钥/凭据位置（%s），不搜。\n检测到的目标：%s\n处理方式：确需查看请你自己手动执行。", reason, filepath.ToSlash(searchRoot)))
+	}
 	if _, err := os.Stat(searchRoot); err != nil {
 		return nil, codedToolError("E_GREP_PATH", err)
 	}

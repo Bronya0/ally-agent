@@ -618,6 +618,11 @@ func (a *App) readFileWithConfig(cfg ConfigState, req ReadFileRequest) (ReadFile
 	if err != nil {
 		return ReadFileResult{}, err
 	}
+	// 密钥/凭据位置不读：与命令围栏、grep 共用同一份判定（pathutil）——模型能把
+	// 密钥喂给下一个请求，而出网是开着的。
+	if blocked, reason := blockedSensitiveRead(path); blocked {
+		return ReadFileResult{}, codedToolError("E_PROTECTED_PATH", fmt.Errorf("安全围栏已拦截：这是密钥/凭据位置（%s），不读。\n检测到的目标：%s\n处理方式：确需该凭据请你自己手动查看；让 Ally 干活时用专门的工具（例如 ssh_cluster）。", reason, filepath.ToSlash(path)))
+	}
 	// Detect images by content before the text read (which rejects binary).
 	// Only probe when the extension plausibly matches an image so non-image
 	// files keep the single-pass text path. The probe reads only the first 12

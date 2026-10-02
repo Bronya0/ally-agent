@@ -272,6 +272,102 @@ func VCSMetadataReason(p string) (bool, string) {
 	return false, ""
 }
 
+// sensitivePath is one credential store: a file or a directory where private
+// keys, tokens or passwords live in the clear.
+type sensitivePath struct {
+	path   string
+	dir    bool
+	reason string
+}
+
+// sensitiveHomeEntries are the credential stores under the user's home
+// directory. The list is deliberately about credentials, not about
+// “private-looking” files: every entry holds a key, a token or a password that
+// would hand over the user's accounts if it reached a model context (or a web
+// page the model was told to fetch).
+var sensitiveHomeEntries = []sensitivePath{
+	{path: ".ssh", dir: true, reason: "SSH 私钥与主机记录"},
+	{path: ".aws", dir: true, reason: "AWS 凭据"},
+	{path: ".gnupg", dir: true, reason: "GPG 私钥与信任库"},
+	{path: ".kube", dir: true, reason: "Kubernetes 集群凭据"},
+	{path: filepath.Join(".docker", "config.json"), reason: "镜像仓库登录令牌"},
+	{path: ".netrc", reason: "登录凭据"},
+	{path: ".git-credentials", reason: "Git 明文凭据"},
+	{path: ".npmrc", reason: "npm 发布令牌"},
+	{path: ".pypirc", reason: "PyPI 发布令牌"},
+	{path: filepath.Join(".config", "gcloud"), dir: true, reason: "GCP 凭据"},
+	{path: filepath.Join(".config", "gh"), dir: true, reason: "GitHub CLI 令牌"},
+	{path: filepath.Join(".config", "glab-cli"), dir: true, reason: "GitLab CLI 令牌"},
+}
+
+// sensitivePlatformEntries are the credential stores whose location is specific
+// to the host: the three platforms name the keychain differently, and missing
+// one would leave that platform's keys readable.
+func sensitivePlatformEntries() []sensitivePath {
+	switch goruntime.GOOS {
+	case "darwin":
+		return []sensitivePath{{path: filepath.Join("Library", "Keychains"), dir: true, reason: "macOS 钥匙串"}}
+	case "linux":
+		return []sensitivePath{{path: filepath.Join(".local", "share", "keyrings"), dir: true, reason: "GNOME 钥匙串"}}
+	case "windows":
+		return []sensitivePath{
+			{path: filepath.Join("AppData", "Roaming", "Microsoft", "Credentials"), dir: true, reason: "Windows 凭据管理器"},
+			{path: filepath.Join("AppData", "Roaming", "Microsoft", "Crypto"), dir: true, reason: "Windows 密钥容器"},
+		}
+	}
+	return nil
+}
+
+// allySecretFileNames are the files in Ally's own data directory that hold
+// secrets. The directory is judged file by file on purpose: memories/ and the
+// user profile sit in the same directory and are exactly what the model is
+// supposed to read.
+var allySecretFileNames = []string{"config.json", "api.json", "mcp.json", "ssh_clusters.json"}
+
+// SensitiveReadReason reports whether p is a credential store the model must not
+// read, with the reason to show. Callers pass the canonical path and, where they
+// can, the symlink-resolved form as well: a link with a clean name must not hide
+// a key.
+func SensitiveReadReason(rt Runtime, p string) (bool, string) {
+	clean := CanonicalPath(p)
+	if strings.TrimSpace(clean) == "" {
+		return false, ""
+	}
+	for _, entry := range sensitiveReadPaths(rt) {
+		if entry.dir {
+			if InsideRoot(entry.path, clean) {
+				return true, entry.reason
+			}
+			continue
+		}
+		if SamePath(entry.path, clean) {
+			return true, entry.reason
+		}
+	}
+	return false, ""
+}
+
+// sensitiveReadPaths builds the list for this host. It is computed per call
+// rather than cached: the home directory is re-read every time, which is what
+// keeps a test (or a user with a different HOME) from inheriting a stale list.
+func sensitiveReadPaths(rt Runtime) []sensitivePath {
+	paths := make([]sensitivePath, 0, len(sensitiveHomeEntries)+len(allySecretFileNames)+4)
+	if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
+		entries := append(append([]sensitivePath{}, sensitiveHomeEntries...), sensitivePlatformEntries()...)
+		for _, entry := range entries {
+			paths = append(paths, sensitivePath{path: filepath.Join(home, entry.path), dir: entry.dir, reason: entry.reason})
+		}
+	}
+	if rt != nil {
+		if dir, err := filepath.Abs(rt.AppDataDir()); err == nil && strings.TrimSpace(dir) != "" {
+			for _, name := range allySecretFileNames {
+				paths = append(paths, sensitivePath{path: filepath.Join(dir, name), reason: "Ally 自己的配置与凭据（模型 API key、SSH 凭据）"})
+			}
+		}
+	}
+	return paths
+}
+
 // JoinPath normalizes p against the primary workspace root (roots[0]) without
 // judging whether the result stays inside any root: absolute paths are accepted
 // as-is, relative paths are joined onto roots[0] only. It is the half of

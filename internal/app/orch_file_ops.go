@@ -1166,312 +1166,6 @@ func makeEditResult(rel string, beforeHash, beforeVersion string, before, after 
 	}
 }
 
-// ── Safety guards for destructive / expensive operations ──
-
-// 删除保护机制（单一来源，全平台与本地/远程统一）：
-// 机制 1：基于系统/全盘绝对视角的层级深度守卫（禁止删除盘根、1级和2级骨干目录）；
-// 机制 2：跨平台通用的敏感文件与深层系统目录黑名单（包含设备、内核接口、二进制目录、敏感认证文件等）。
-// 两个机制都建立在 normalizeSystemPath 之上：卷标必须在转正斜杠之前按原生形式裁掉，否则
-// 形如 \\?\C:\Users\alice 的写法会整段留下、把深度多算一层而绕开机制 1。
-var (
-	// sensitiveDeleteTargets 是跨平台统一的系统敏感目录与高危文件黑名单（以正斜杠开头的规范化小写路径）。
-	sensitiveDeleteTargets = []string{
-		// 1. Linux & macOS 设备接口、内核虚拟文件系统与底层
-		"/dev",
-		"/proc",
-		"/sys",
-		"/boot",
-		"/lost+found",
-
-		// 2. 关键系统二进制与动态库
-		"/bin",
-		"/sbin",
-		"/lib",
-		"/lib32",
-		"/lib64",
-		"/libx32",
-		"/usr/bin",
-		"/usr/sbin",
-		"/usr/lib",
-		"/usr/lib64",
-		// /usr/share 与 /usr/local/lib 不是二进制目录，但同属发行版/第三方安装内容：
-		// 删掉会把 man、locale、启动脚本与已装库一起连根拔掉。
-		"/usr/share",
-		"/usr/local/lib",
-		"/usr/local/bin",
-		"/usr/local/sbin",
-		"/var/local/libs",
-
-		// 3. 核心敏感凭据与认证配置（精确保护关键文件，避免一刀切整树封死 /etc）
-		"/etc/shadow",
-		"/etc/sudoers",
-		"/etc/passwd",
-		"/etc/group",
-		"/etc/fstab",
-		"/etc/crypttab",
-		"/etc/ssh",
-		"/etc/pam.d",
-		"/etc/security",
-
-		// 3.1 /etc 直属文件：机制 1 只拦第 2 层的“目录”，这些文件本身落在它的覆盖
-		//     之外，必须逐个点名（旧实现靠 /etc 整树拦截，改成“层级 + 名单”后漏掉了
-		//     它们，见 TestUnifiedDeleteProtectionRules）。
-		"/etc/hosts",
-		"/etc/resolv.conf",
-		"/etc/nsswitch.conf",
-		"/etc/hostname",
-		"/etc/environment",
-		"/etc/profile",
-		"/etc/bash.bashrc",
-		"/etc/ld.so.conf",
-		"/etc/shells",
-		"/etc/machine-id",
-
-		// 4. macOS 关键系统目录
-		"/system",
-		"/library",
-		"/applications",
-		"/cores",
-		"/private/etc",
-		"/private/var",
-
-		// 5. Windows 关键系统目录与引导文件（去除盘符后的相对根形式）
-		"/windows",
-		"/windows.old",
-		"/program files",
-		"/program files (x86)",
-		"/programdata",
-		"/system volume information",
-		"/$recycle.bin",
-		"/recovery",
-		"/perflogs",
-		"/documents and settings",
-		"/config.msi",
-		"/$windows.~bt",
-		"/$windows.~ws",
-		"/$winreagent",
-		"/$sysreset",
-		"/bootmgr",
-		"/bootsect.bak",
-		"/msocache",
-		"/inetpub",
-	}
-)
-
-func remoteSensitiveDeleteTargets() []string {
-	return append([]string(nil), sensitiveDeleteTargets...)
-}
-
-// driveVolume 返回路径里的“盘符型”卷标（C:、\\?\C:、\\.\C:），统一小写；
-// 没有（POSIX 路径、UNC 共享）则返回空串。
-// 必须按 Windows 原生反斜杠形式取得：filepath.VolumeName 返回的就是这种形态，
-// 若先转正斜杠再裁剪，\\?\C:\... 、\\.\C:\... 这类写法整段裁不掉，路径会被多算
-// 一到两层深度，从而绕开 1/2 级守卫（实测 \\?\C:\Users\alice 曾被整段放行）。
-// UNC（\\server\share）刻意不裁：共享根不是本机系统根，把它当盘根会让网络工作区里
-// 正常的二级目录（\\nas\work\proj 的子目录）被误拒。
-func driveVolume(nativePath string) string {
-	volume := strings.ToLower(filepath.VolumeName(nativePath))
-	if volume == "" {
-		return ""
-	}
-	tail := volume
-	for _, prefix := range []string{`\\?\`, `\\.\`} {
-		tail = strings.TrimPrefix(tail, prefix)
-	}
-	if len(tail) == 2 && tail[1] == ':' {
-		return volume
-	}
-	return ""
-}
-
-func normalizeSystemPath(p string) string {
-	cleaned := strings.ToLower(filepath.Clean(p))
-	if volume := driveVolume(cleaned); volume != "" {
-		cleaned = strings.TrimPrefix(cleaned, volume)
-	}
-	lower := strings.TrimRight(filepath.ToSlash(cleaned), "/")
-	if lower == "" {
-		return "/"
-	}
-	return lower
-}
-
-func isInsideTempDir(abs string) bool {
-	norm := normalizeSystemPath(abs)
-	// "/tmp"、"/var/tmp" 是 POSIX 临时根的字面量。盘符路径（Windows 的 C:\tmp）只是
-	// 恰好同名，不能按它们整体豁免 —— Windows 真正的临时根是 os.TempDir()，由下面
-	// 那段负责；否则 C:\tmp\x 会把整条保护链一次性让开。
-	for _, tmpPrefix := range []string{"/tmp", "/var/tmp"} {
-		if driveVolume(abs) != "" {
-			break
-		}
-		if norm == tmpPrefix {
-			return false // /tmp 本身不可删
-		}
-		if strings.HasPrefix(norm, tmpPrefix+"/") {
-			return true
-		}
-	}
-	if tmp := os.TempDir(); tmp != "" {
-		// 同卷才比较：C:\...\Temp 与 D:\...\Temp 规范化后是同一个字符串，跨盘比较
-		// 会把另一个盘上的同名目录误判成临时目录。
-		if tmpVolume := driveVolume(tmp); tmpVolume == "" || tmpVolume == driveVolume(abs) {
-			cleanTmp := normalizeSystemPath(tmp)
-			if norm == cleanTmp {
-				return false // 临时根目录本身不可删
-			}
-			if cleanTmp != "/" && strings.HasPrefix(norm, cleanTmp+"/") {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func isLikelyDirectory(abs string) bool {
-	if info, err := os.Lstat(abs); err == nil {
-		return info.IsDir()
-	}
-	// 对于磁盘上不存在的路径（如静态判定或单测中的路径字符串）：无扩展名者按目录处理（默认保守防护）
-	return filepath.Ext(abs) == ""
-}
-
-// isDangerousDeletePath returns (blocked, reason). Blocks paths that are
-// OS-protected locations, home roots, VCS metadata, workspace root, and any
-// directory inside the Ally data directory.
-func isDangerousDeletePath(absPath string) (bool, string) {
-	abs := filepath.Clean(absPath)
-
-	// 1. VCS metadata — never delete .git or similar, nor anything below it.
-	if blocked, reason := pathutil.VCSMetadataReason(abs); blocked {
-		return true, reason
-	}
-
-	// 2. Ally Agent data directory：目录本身永不可删；其子树只允许「单文件」
-	// 删除（记忆笔记、缓存文件），目录一律禁止——delete 工具对目录本就强制
-	// recursive=true（IsDir && !Recursive 会被拒），所以用 isLikelyDirectory
-	// 判定就等价于用调用方的 recursive 标志，无需把标志透传到每一层。
-	//
-	// 词法与解析后两种形态都要判：调用方传进来的是词法路径，而工作区内的符号
-	// 链接可以让它指向数据目录（`ln -s ~/.ally_agent link` 之后
-	// `delete link/histories recursive`）。围栏只管「解析后是否还在允许根内」，
-	// 而数据目录本身就在写白名单里，所以这道守卫是唯一能拦它的地方。
-	if allyDir, err := filepath.Abs(appDataDir()); err == nil {
-		dirs := []string{allyDir}
-		if resolvedDir, rErr := filepath.EvalSymlinks(allyDir); rErr == nil && !samePath(resolvedDir, allyDir) {
-			dirs = append(dirs, resolvedDir)
-		}
-		candidates := []string{abs}
-		if resolved, rErr := evalExistingPrefix(abs); rErr == nil && !samePath(resolved, abs) {
-			candidates = append(candidates, resolved)
-		}
-		for _, candidate := range candidates {
-			for _, dir := range dirs {
-				if samePath(candidate, dir) {
-					return true, fmt.Sprintf("refusing to delete Ally data directory %q", candidate)
-				}
-				if insideRoot(dir, candidate) && isLikelyDirectory(candidate) {
-					return true, fmt.Sprintf("refusing to delete directory %q inside the Ally data directory; delete individual files instead, or remove it manually outside the agent", candidate)
-				}
-			}
-		}
-	}
-
-	// 3. 临时目录豁免：临时工作区与编译构建目录允许清理（但临时根目录本身如 /tmp 仍受保护）
-	if isInsideTempDir(abs) {
-		return false, ""
-	}
-
-	norm := normalizeSystemPath(abs)
-	if norm == "" || norm == "/" {
-		return true, fmt.Sprintf("refusing to delete filesystem root %q", abs)
-	}
-
-	// ── 机制一：全盘视角 1 级、2 级目录绝对禁止删除 ──
-	parts := strings.FieldsFunc(strings.Trim(norm, "/"), func(r rune) bool { return r == '/' })
-	depth := len(parts)
-	isDir := isLikelyDirectory(abs)
-
-	if depth == 1 {
-		return true, fmt.Sprintf("refusing to delete top-level filesystem directory %q", abs)
-	}
-	if depth == 2 && isDir {
-		return true, fmt.Sprintf("refusing to delete second-level filesystem directory %q", abs)
-	}
-
-	// ── 机制二：跨平台通用敏感文件与深层目录黑名单 ──
-	for _, target := range sensitiveDeleteTargets {
-		if norm == target || strings.HasPrefix(norm, target+"/") {
-			return true, fmt.Sprintf("refusing to delete protected system target %q (%s)", abs, target)
-		}
-	}
-
-	return false, ""
-}
-
-func isPathOrDescendant(abs, protected string) bool {
-	abs = filepath.Clean(abs)
-	protected = filepath.Clean(protected)
-	if samePath(abs, protected) {
-		return true
-	}
-	sep := string(os.PathSeparator)
-	return strings.HasPrefix(abs, strings.TrimRight(protected, sep)+sep)
-}
-
-// isDangerousSearchRoot returns (blocked, reason). Blocks grep/list operations
-// that would traverse system directories, home directories, or other high-risk paths.
-func isDangerousSearchRoot(absPath string) (bool, string) {
-	abs := filepath.Clean(absPath)
-	lower := strings.ToLower(abs)
-
-	if insideAllyAgentDir(abs) {
-		return false, ""
-	}
-
-	// 1. Root paths — too broad
-	if abs == "/" || lower == `c:\` || lower == `c:` {
-		return true, fmt.Sprintf("refusing to search from root %q; this would scan the entire filesystem. Specify a project subdirectory instead", abs)
-	}
-
-	// Test and temporary workspaces commonly live below /var on macOS.
-	if tmp := os.TempDir(); tmp != "" && isPathOrDescendant(abs, tmp) {
-		return false, ""
-	}
-
-	// 2. Unix/macOS system directories
-	unixDangerous := []string{
-		"/etc", "/usr", "/bin", "/sbin", "/lib", "/lib64",
-		"/boot", "/dev", "/proc", "/sys", "/var", "/opt", "/root",
-		"/System", "/Library", "/Applications",
-	}
-	for _, d := range unixDangerous {
-		if abs == d || strings.HasPrefix(abs, d+"/") {
-			return true, fmt.Sprintf("refusing to search system directory %q; this path is outside the project scope", abs)
-		}
-	}
-
-	// 3. Windows system directories
-	winPrefixes := []string{
-		`c:\windows`, `c:\program files`, `c:\program files (x86)`,
-	}
-	for _, d := range winPrefixes {
-		if lower == d || strings.HasPrefix(lower, d+`\`) {
-			return true, fmt.Sprintf("refusing to search system directory %q; this path is outside the project scope", abs)
-		}
-	}
-
-	// 4. Home directories — too broad
-	if homeDir, err := os.UserHomeDir(); err == nil {
-		cleanHome := filepath.Clean(homeDir)
-		if abs == cleanHome {
-			return true, fmt.Sprintf("refusing to search from home directory %q; this would scan personal files. Specify a project subdirectory", abs)
-		}
-	}
-
-	return false, ""
-}
-
 // ── Workspace path resolution (thin pathutil wrappers) ───────
 
 func workspaceRoot(cfg ConfigState) (string, error) {
@@ -1521,14 +1215,6 @@ func resolveWritableFilePath(roots []string, p string) (string, error) {
 	if err != nil {
 		return "", codedToolError("E_PATH_OUTSIDE", err)
 	}
-	// Version-control metadata is off limits for every write path (create, edit,
-	// editor save, http_request saveTo, move destination): .git/hooks runs on
-	// the next git command, and overwriting .git/index or a ref corrupts the
-	// repository. The judgement is shared with the delete path through
-	// pathutil so the two can not drift apart.
-	if blocked, reason := pathutil.VCSMetadataReason(abs); blocked {
-		return "", codedToolError("E_PROTECTED_PATH", errors.New(reason))
-	}
 	if info, err := os.Lstat(abs); err == nil && info.Mode()&os.ModeSymlink != 0 {
 		return "", symlinkWriteError(p)
 	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -1538,11 +1224,12 @@ func resolveWritableFilePath(roots []string, p string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	// 二次判定：字面路径里没有 .git 时，工作区内的符号链接仍可指向它
-	// （`ln -s .git gh` 之后 `create gh/hooks/pre-commit` 实际落进 .git/hooks，
-	// 下次 git 命令即执行代码）。上面的词法判定看不到这一层，必须用解析后的
-	// 真实路径再判一次，与下面 insideWriteRoot 用同一个解析结果。
-	if blocked, reason := pathutil.VCSMetadataReason(resolved); blocked {
+	// 版本控制元数据对每一条写路径都不可碰（create / edit / 编辑器保存 /
+	// http_request saveTo / move 目标）：.git/hooks 会在下次 git 命令时执行，
+	// 覆盖 .git/index 或 ref 会损坏仓库。两种形态（字面 + 符号链接解析后）一次
+	// 判完，与删除路径、命令目标共用 vcsMetadataMutationHit，免得新入口只判了
+	// 字面那一半。
+	if _, reason := vcsMetadataMutationHit(abs, resolved); reason != "" {
 		return "", codedToolError("E_PROTECTED_PATH", errors.New(reason))
 	}
 	if !kernelOwnsBoundary() && !insideWriteRoot(roots, resolved) {
@@ -1559,9 +1246,6 @@ func resolveDeleteTarget(roots []string, p string) (string, os.FileInfo, error) 
 	if err != nil {
 		return "", nil, codedToolError("E_PATH_OUTSIDE", err)
 	}
-	if blocked, reason := pathutil.VCSMetadataReason(abs); blocked {
-		return "", nil, codedToolError("E_PROTECTED_PATH", errors.New(reason))
-	}
 	info, err := os.Lstat(abs)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return "", nil, err
@@ -1575,9 +1259,10 @@ func resolveDeleteTarget(roots []string, p string) (string, os.FileInfo, error) 
 	if err != nil {
 		return "", nil, err
 	}
-	// 同 resolveWritableFilePath：符号链接可把工作区内的路径接到 VCS 元数据
-	// 上（`delete .git → gh` 的别名），词法判定看不到，按解析后的路径复判。
-	if blocked, reason := pathutil.VCSMetadataReason(resolved); blocked {
+	// 同 resolveWritableFilePath：两种形态一次判完（vcsMetadataMutationHit），
+	// 免得这份复判在每个入口各写一遍。上面对符号链接目标取的是它的父目录
+	// （删链接本体不算动目标），所以解析结果与 abs 不同，字面判定同样会跑。
+	if _, reason := vcsMetadataMutationHit(abs, resolved); reason != "" {
 		return "", nil, codedToolError("E_PROTECTED_PATH", errors.New(reason))
 	}
 	if !kernelOwnsBoundary() && !insideWriteRoot(roots, resolved) {

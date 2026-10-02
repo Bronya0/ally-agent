@@ -628,7 +628,7 @@ defineExpose({
   },
 });
 // 沙箱不再接入（internal/sandbox 的 attached 开关关着），所以这里没有任何本机状态
-// 要查：这一页只剩安全围栏的机制说明（只读）。围栏本体在 internal/app/orch_command_safety.go，
+// 要查：这一页只剩安全围栏的机制说明（只读）。围栏本体在 internal/app/orch_fence.go，
 // 接回沙箱只需要把开关打开 + 把 GetSandboxStatus 这条链路接回来。
 
 // 安全围栏机制：一行一条，顺序在这里，文案在 i18n（zh / en 各一份）。
@@ -647,6 +647,7 @@ const sandboxFenceLineKeys = [
   'settings.sandboxFence12',
   'settings.sandboxFence13',
   'settings.sandboxFence14',
+  'settings.sandboxFence15',
 ];
 const sandboxFenceLines = computed(() => sandboxFenceLineKeys.map((key) => t(key)));
 

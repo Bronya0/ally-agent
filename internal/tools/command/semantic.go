@@ -621,6 +621,88 @@ func MutationPathTargets(commandLine string) []string {
 	return targets
 }
 
+// credentialUseCommands are commands whose operands can only ever be a name, a
+// mode, or a key to use: none of them has a way to write a file's contents back
+// to the caller, so `ls ~/.ssh`, `chmod 600 ~/.ssh/id_rsa` and
+// `ssh-add ~/.ssh/id_rsa` name a key path without reading the key.
+//
+// The bar for an entry is that the command has NO mode that prints the file.
+// A command that can print a configuration file must never be listed, however
+// convenient the flag looks: `kubectl --kubeconfig ~/.kube/config config view`
+// and `npm --userconfig ~/.npmrc config list` both print the credential store,
+// so whitelisting the flag would hand out a read channel.
+var credentialUseCommands = map[string]bool{
+	"chmod": true, "chown": true, "chgrp": true,
+	"ls": true, "stat": true, "file": true, "readlink": true, "realpath": true,
+	"du": true, "wc": true,
+	"ssh-add": true, "ssh-keygen": true, "ssh-copy-id": true,
+}
+
+// credentialUseFlags maps a command to the flags whose *value* the program
+// consumes as a credential it never prints: `ssh -i KEY host` authenticates with
+// the key while `cat KEY` hands its bytes back. The ssh family has no mode that
+// prints a private key, so such a value is a use of the key, not a read of it.
+// Positional operands stay judged — `scp ~/.ssh/id_rsa host:` sends the key.
+var credentialUseFlags = map[string][]string{
+	"ssh":         {"-i"},
+	"scp":         {"-i"},
+	"sftp":        {"-i"},
+	"ssh-copy-id": {"-i"},
+	"ssh-keygen":  {"-f"},
+}
+
+// DisclosingPathOperands returns the literal path operands whose contents the
+// command could hand back: the positional arguments of each invocation (flags
+// dropped, and with them the values of credential-use flags) plus shell
+// redirection targets. Redirection targets always stay in — writing *into* a
+// credential store is no use of a key, and the caller judges both the same way.
+//
+// MutationPathTargets deliberately leaves read-only source operands out, so it
+// cannot answer a question about a path being named at all — `cat ~/.ssh/id_rsa`
+// mutates nothing. This one can, which is what a “can this command read this
+// credential store” check needs.
+func DisclosingPathOperands(commandLine string) []string {
+	operands := []string{}
+	for _, invocation := range Invocations(commandLine) {
+		operands = append(operands, disclosingOperands(invocation)...)
+	}
+	return append(operands, ShellRedirectionTargets(commandLine)...)
+}
+
+// disclosingOperands returns the operands of one invocation whose contents the
+// program could return. The filtering is per invocation on purpose: in
+// `ssh -i ~/.ssh/k host && cat ~/.ssh/k` only the second route names the key as
+// content, and a set difference over the flattened list would drop both.
+func disclosingOperands(invocation Invocation) []string {
+	if credentialUseCommands[invocation.Name] {
+		return nil
+	}
+	flags := credentialUseFlags[invocation.Name]
+	if len(flags) == 0 {
+		return positionalArgs(invocation.Args)
+	}
+	values := credentialFlagValues(invocation.Args, flags)
+	result := []string{}
+	for i, arg := range invocation.Args {
+		if values[i] || !isOperand(arg) {
+			continue
+		}
+		result = append(result, arg)
+	}
+	return result
+}
+
+// credentialFlagValues marks the argument index of every named flag's value.
+func credentialFlagValues(args []string, flags []string) map[int]bool {
+	values := map[int]bool{}
+	for i, arg := range args {
+		if i+1 < len(args) && containsString(flags, strings.ToLower(arg)) {
+			values[i+1] = true
+		}
+	}
+	return values
+}
+
 // DeletePathTargets returns the path operands of every raw deletion verb in the
 // command line (rm, unlink, rmdir, del, find -delete, rsync --delete, ...).
 // Managed deletions (git rm, docker rm, kubectl delete) are left out: those go
@@ -735,13 +817,17 @@ func mutationTargets(invocation Invocation) []string {
 	return nil
 }
 
+// isOperand reports whether one shell word is a path operand rather than a flag
+// or the `--` separator. Flag values are operands only to callers that ask for a
+// specific flag by name (see credentialFlagValues).
+func isOperand(arg string) bool {
+	return arg != "--" && !strings.HasPrefix(arg, "-") && !(strings.HasPrefix(arg, "/") && len(arg) == 2)
+}
+
 func positionalArgs(args []string) []string {
 	result := []string{}
 	for _, arg := range args {
-		if arg == "--" {
-			continue
-		}
-		if strings.HasPrefix(arg, "-") || (strings.HasPrefix(arg, "/") && len(arg) == 2) {
+		if !isOperand(arg) {
 			continue
 		}
 		result = append(result, arg)
