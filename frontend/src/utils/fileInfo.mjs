@@ -13,6 +13,7 @@
 // （WorkspaceExplorer 的 infoMode）共用，保证两处展示的信息完全一致。
 
 import { t } from '../i18n.mjs';
+import { formatBytes } from './format.mjs';
 
 function formatTimeValue(value) {
   if (!value) return '';
@@ -23,15 +24,14 @@ function formatTimeValue(value) {
   return date.toLocaleString();
 }
 
+// 体积文案走全 UI 唯一的 format.mjs formatBytes（B/KB/MB/GB）；"没有大小"仍然返回
+// ''（那一行整条不显示），不能把缺失变成 "0 B"。以前这里又写了一遍单位循环，到 TB
+// 止、格式还略有不同，同一屏会出现两种说法。
 function formatSizeValue(bytes) {
   if (bytes == null || bytes === '') return '';
   const n = Number(bytes);
   if (!Number.isFinite(n) || n < 0) return '';
-  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-  let i = 0;
-  let v = n;
-  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
-  return `${v.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
+  return formatBytes(n);
 }
 
 function formatSizeWithBytes(bytes) {

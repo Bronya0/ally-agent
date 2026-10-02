@@ -693,6 +693,7 @@ import { toolCardRenderSignature } from './utils/toolCardSignature.mjs';
 import { toolUpdateFlushDelay } from './utils/toolUpdateFlush.mjs';
 import { isMcpToolName, toolActionFromArgs } from './utils/toolVerb.mjs';
 import { toolKindOf, toolStartsCollapsed } from './utils/toolKind.mjs';
+import { MAX_ATTACHMENT_PREVIEW_BYTES, MAX_MODEL_IMAGE_BYTES, MAX_TEXT_ATTACHMENT_BYTES, MODEL_IMAGE_PASSTHROUGH_MAX_BYTES } from './utils/attachmentLimits.mjs';
 import { isServiceActive } from './utils/taskStatus.mjs';
 import { attachmentIcon } from './utils/attachmentIcon.mjs';
 import { useToolEvents } from './composables/useToolEvents.mjs';
@@ -1934,14 +1935,7 @@ function deletePendingAttachments(sessionId) {
 const activePendingAttachments = computed(() => pendingAttachmentsOf(activeSessionId.value));
 const attachmentInputRef = ref(null);
 const MAX_ATTACHMENTS_PER_MESSAGE = 8;
-const MAX_ATTACHMENT_PREVIEW_BYTES = 8 * 1024 * 1024;
-// 单张图片能发给模型的字节上限，前后端同一个数（后端 maxAttachmentImageBytes，
-// internal/app/biz_context.go）：超过 256KB 的图先重编码成 2048px 的 WebP，压完仍在
-// 5MB 以上就整张不发并说明原因。比的是**压缩之后**的图片字节，原图多大与判定无关——
-// 一张 30MB 的截图压到 1MB 就是正常发送；也不算 base64 膨胀（传输必然膨胀，与图片
-// 本身无关）。
-const MAX_MODEL_IMAGE_BYTES = 5 * 1024 * 1024;
-const MAX_TEXT_ATTACHMENT_BYTES = 200 * 1024;
+
 const MAX_STORED_ATTACHMENT_TEXT_CHARS = 20000;
 const expandedArchiveSessions = ref(new Set());
 const updateAvailable = ref(false);
@@ -2247,10 +2241,8 @@ function currentWorkspacePath() {
 // Tab. Sessions from other workspaces remain persisted, but cannot be selected
 // or displayed from this list.
 const currentWorkspaceSessions = computed(() => {
-  const workspaceKey = workspaceHistoryDedupeKey(currentWorkspacePath());
-  return sessions.value.filter((session) => (
-    workspaceHistoryDedupeKey(sessionWorkspacePath(session)) === workspaceKey
-  ));
+  const workspace = currentWorkspacePath();
+  return sessions.value.filter((session) => sameWorkspacePath(workspace, sessionWorkspacePath(session)));
 });
 
 // 当前工作区之外的历史会话数，仅用于空列表时的提示（见 sessions-menu）。
@@ -2302,7 +2294,7 @@ const pendingTempCleanups = new Map();
 
 function tempTabByPath(path) {
   if (!path) return null;
-  return workspaceTabs.value.find((tab) => isTempTab(tab) && workspaceHistoryDedupeKey(tab.path) === workspaceHistoryDedupeKey(path)) || null;
+  return workspaceTabs.value.find((tab) => isTempTab(tab) && sameWorkspacePath(tab.path, path)) || null;
 }
 
 async function addTempWorkspaceTab() {
@@ -2375,7 +2367,7 @@ function settlePendingTempCleanups() {
 function isKnowledgeBasePath(path) {
   const value = String(path || '').trim();
   if (!value || !config.kbRoot) return false;
-  return workspaceHistoryDedupeKey(value) === workspaceHistoryDedupeKey(config.kbRoot);
+  return sameWorkspacePath(value, config.kbRoot);
 }
 
 function kbTab() {
@@ -3323,6 +3315,14 @@ function workspaceHistoryDedupeKey(path) {
   if (value.length > 1 && !/^[a-z]:\/$/i.test(value)) value = value.replace(/\/+$/, '');
   const isWindowsPath = /^[a-z]:\//i.test(value) || /^(?:\\\\|\/\/)/.test(original);
   return isWindowsPath ? value.toLowerCase() : value;
+}
+
+// 两个工作区路径是不是同一个。规则与 Go 侧 pathutil.SamePath 对齐（归一化 + Windows
+// 下忽略大小写），是前端判定“这个路径就是那个工作区”的唯一入口：“是不是 KB 根”、
+// “这个临时 Tab 属于哪个目录”、“会话属于哪个工作区”都走它。以前这三处直接拿
+// workspaceHistoryDedupeKey（历史去重用的键）比，名字上看不出与后端的对应关系。
+function sameWorkspacePath(a, b) {
+  return workspaceHistoryDedupeKey(a) === workspaceHistoryDedupeKey(b);
 }
 
 function dedupeWorkspaceHistory(paths, limit = 50) {
@@ -5496,7 +5496,6 @@ async function fileToAttachment(file) {
 // 「发出了多少图」，不是「传输时被编码成多大」。附件的 type/size 仍是用户选的那个文件
 // （发给模型的附件说明也照抄它）：图送的是 JPEG，那段文字描述的是用户手上的文件。
 const modelImagePassthroughTypes = new Set(['image/png', 'image/jpeg', 'image/jpg', 'image/webp']);
-const modelImagePassthroughMaxBytes = 256 * 1024;
 const modelImageJpegQuality = 0.7;
 async function encodeModelImage(file) {
   const type = String(file.type || '').toLowerCase();
@@ -5506,7 +5505,7 @@ async function encodeModelImage(file) {
     if (!native) return { dataUrl: '', bytes: 0 };
     return { dataUrl: await readFileAsDataUrl(file), bytes: file.size };
   };
-  if (native && file.size > 0 && file.size <= modelImagePassthroughMaxBytes) return await passthrough();
+  if (native && file.size > 0 && file.size <= MODEL_IMAGE_PASSTHROUGH_MAX_BYTES) return await passthrough();
   if (typeof createImageBitmap !== 'function') return await passthrough();
   let bitmap;
   try {
@@ -8295,7 +8294,7 @@ function formatToolChip(name, result) {
     if (name === 'FetchURL' && parsed.data) {
       const bytes = String(parsed.data.output || '').length;
       if (bytes > 0) {
-        const size = bytes < 1024 ? bytes + ' B' : (bytes / 1024).toFixed(1) + ' KB';
+        const size = formatBytes(bytes);
         return '\u00B7 ' + size;
       }
     }
