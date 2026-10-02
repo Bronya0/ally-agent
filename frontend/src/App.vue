@@ -2876,6 +2876,9 @@ function displayMessagesForSession(session) {
         status: 'success',
         time: m.time,
         eventId: m.eventId,
+        // 折起来的这几张卡本来就属于同一个 run，带上 runId 后这个折叠组在渲染层
+        // 仍被认为是那一轮的一员（本轮收尾位置判定要按它找到统计行）。
+        runId: m.runId || '',
         readEntries: [],
         grepItems: [],
         listItems: [],

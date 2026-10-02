@@ -11,7 +11,7 @@ Public License v3. See the LICENSE file for details.
   <div class="messages-scroll-shell">
     <n-scrollbar ref="scrollbarRef" class="messages-scroll" @scroll="handleScroll">
       <div ref="messagesRootRef" class="messages">
-        <template v-for="(msg, index) in messages" :key="msgKey(msg)" v-memo="messageRenderMemo(msg)">
+        <template v-for="(msg, index) in messages" :key="msgKey(msg)" v-memo="messageRenderMemo(msg, index)">
         <button v-if="msg.role === 'archive'" class="message-archive-toggle" @click.stop="$emit('toggleArchive', msg.sessionId)">
           <span>{{ msg.expanded ? $t('chat.archive.collapse') : $t('chat.archive.expand') }}</span>
           <span>{{ $t('chat.archive.summary', { count: msg.count }) }}</span>
@@ -63,59 +63,6 @@ Public License v3. See the LICENSE file for details.
           <div v-if="msg.role === 'assistant' && msg.suggestions?.length && !msg.streaming" class="suggest-row">
             <button v-for="(label, i) in msg.suggestions" :key="i" class="suggest-chip" @click.stop="$emit('sendSuggest', label)">{{ label }}</button>
           </div>
-          <!-- 本轮统计行（时长/cache/tokens）：数据由 run:done 事件在结束时
-               一次性下发，过程中无法实时显示。仅当本条是列表最后一条消息且正文
-               已开始输出时渲染不可见占位行（数据最终只会填到本轮最后一条
-               assistant 消息上）；中间消息不占位——否则占位行夹在正文和
-               后续折叠组之间，成为折叠组上方的幽灵间距。新消息追加与占位
-               移除落在同一次渲染 patch 里，无中间态跳动。 -->
-          <div v-if="msg.role === 'assistant' && (msg.roundDurationText || (msg.streaming && hasAnswerBody(msg) && isLastDisplayMessage(msg)))" :class="['message-duration', { 'is-placeholder': !msg.roundDurationText }]">
-            <span class="duration-text">{{ msg.roundDurationText || '\u00a0' }}<template v-if="msg.completedAtText">{{ '\u00a0' + msg.completedAtText }}</template></span>
-            <span
-              v-if="typeof msg.cacheRate === 'number'"
-              class="cache-rate"
-              :title="`cache hit ${msg.cacheHit} / miss ${msg.cacheMiss} (this run)`"
-            >cache {{ msg.cacheRate }}%</span>
-            <span
-              v-if="msg.runInputTokens > 0 || msg.runOutputTokens > 0"
-              class="run-tokens"
-              :title="`input ${msg.runInputTokens} / output ${msg.runOutputTokens} tokens (this run)`"
-            >↑{{ fmtTokens(msg.runInputTokens) }} ↓{{ fmtTokens(msg.runOutputTokens) }}</span>
-            <span
-              v-if="tokenSpeed(msg)"
-              class="run-tokens"
-              :title="`${fmtTokens(msg.runOutputTokens)} output tokens / ${(msg.roundDurationMs / 1000).toFixed(1)}s (whole run)`"
-            >{{ tokenSpeed(msg) }} token/s</span>
-            <n-dropdown
-              trigger="click"
-              placement="top-end"
-              :options="exportOptions"
-              @select="(key) => $emit('export', key, msg)"
-            >
-              <button class="export-icon-btn" :title="$t('chat.export.title')" :aria-label="$t('chat.export.title')" @click.stop>
-                <ExportOutlined />
-              </button>
-            </n-dropdown>
-            <button
-              v-if="msg === lastAnswerMessage"
-              class="export-icon-btn"
-              :title="$t('chat.copySummary.title')"
-              :aria-label="$t('chat.copySummary.title')"
-              @click.stop="copyFinalSummary"
-            >
-              <CopyOutlined />
-            </button>
-            <n-dropdown
-              trigger="click"
-              placement="top-end"
-              :options="quickMessageOptions"
-              @select="(key) => $emit('quickMessage', key)"
-            >
-              <button class="export-icon-btn" :title="$t('chat.quickMessage.title')" :aria-label="$t('chat.quickMessage.title')" @click.stop>
-                <MessageOutlined />
-              </button>
-            </n-dropdown>
-          </div>
         </div>
         <RenderBoundary v-else-if="msg.kind === 'ask'" :label="$t('chat.ask')">
           <AskToolCard :msg="msg" @submit="$emit('submitAsk', msg, $event)" />
@@ -150,6 +97,23 @@ Public License v3. See the LICENSE file for details.
         <RenderBoundary v-else-if="msg.kind === 'render_html'" :label="$t('tools.kind.renderHtml')">
           <HtmlRenderCard :msg="msg" />
         </RenderBoundary>
+        <!-- 本轮统计行（时长/cache/tokens/导出/复制）：渲染在本轮收尾消息之后——
+             它未必是那条承载数据的 assistant 消息。数据由 run:done 一次性下发、落在
+             本轮最后一条 assistant 消息上，但模型可以在同一条回复里「先写正文、再调
+             工具」，那一轮的收尾就是工具卡；只把行留在 assistant 消息里，统计行会被
+             夹在正文与工具卡中间。中间消息不画占位行，否则会成为后续折叠组上方的
+             幽灵间距。正文后面没跟工具时，收尾就是那条 assistant 消息，位置同旧。 -->
+        <MessageRoundStats
+          v-if="roundStatsOwner(msg, index)"
+          class="turn-stats"
+          :owner="roundStatsOwner(msg, index)"
+          :is-last-answer="roundStatsOwner(msg, index) === lastAnswerMessage"
+          :export-options="exportOptions"
+          :quick-message-options="quickMessageOptions"
+          @export="(key) => $emit('export', key, roundStatsOwner(msg, index))"
+          @quick-message="(key) => $emit('quickMessage', key)"
+          @copy-summary="copyFinalSummary"
+        />
         </template>
         <div v-if="messages.length === 0" class="empty-chat">
           <n-empty :description="$t('chat.empty')" />
@@ -184,13 +148,11 @@ import SubagentInlineCard from './SubagentInlineCard.vue';
 import HtmlRenderCard from './HtmlRenderCard.vue';
 import StreamingMarkdownBody from './StreamingMarkdownBody.vue';
 import RenderBoundary from './RenderBoundary.vue';
-import ExportOutlined from '@vicons/antd/ExportOutlined';
+import MessageRoundStats from './MessageRoundStats.vue';
 import WarningOutlined from '@vicons/antd/WarningOutlined';
-import MessageOutlined from '@vicons/antd/MessageOutlined';
 import ArrowUpOutlined from '@vicons/antd/ArrowUpOutlined';
 import ArrowDownOutlined from '@vicons/antd/ArrowDownOutlined';
 import CloseOutlined from '@vicons/antd/CloseOutlined';
-import CopyOutlined from '@vicons/antd/CopyOutlined';
 import { useMessage } from 'naive-ui';
 
 const props = defineProps({
@@ -226,13 +188,55 @@ function hasAnswerBody(msg) {
 }
 
 
-// 统计占位行只挂在列表最后一条消息上：run:done 的统计数据只会填到本轮
-// 最后一条 assistant 消息，中间消息（后面还跟着折叠组等）占位只会成为
-// 幽灵间距。v-memo 数组里带同款判断，保证"最后一条"易主时旧消息能
-// 重渲染并移除占位行。
-function isLastDisplayMessage(msg) {
+// 统计行渲染在本轮「收尾」位置，而不是固定在承载数据的那条 assistant 消息里：
+// 数据由 run:done 一次性下发、落在本轮最后一条 assistant 消息上（App.vue 的
+// assistantMessageForRun），但本轮最后一条消息未必是它——模型可以在同一条回复里
+// 先写正文、再调工具，工具卡就成了收尾。按收尾位置渲染，统计行才不会被夹在正文
+// 与工具卡之间。一次遍历算出每个 runId 的收尾下标与归属消息，渲染时按下标取。
+const runStatsOwners = computed(() => {
   const list = props.messages;
-  return list[list.length - 1] === msg;
+  const ownerByRun = new Map();
+  const tailIndexByRun = new Map();
+  for (let i = 0; i < list.length; i++) {
+    const msg = list[i];
+    const runId = msg?.runId;
+    if (!runId) continue;
+    if (msg.role === 'assistant' && !msg.welcome) ownerByRun.set(runId, msg);
+    tailIndexByRun.set(runId, i);
+  }
+  const owners = new Array(list.length).fill(null);
+  for (const [runId, tailIndex] of tailIndexByRun) {
+    const owner = ownerByRun.get(runId);
+    if (owner) owners[tailIndex] = owner;
+  }
+  return owners;
+});
+
+// 收尾消息该不该画出统计行：要么数据已到（run:done 填过时长），要么正文正在
+// 流式输出——那时先画一条不可见且不占位的行，数据到达后同一位置变可见。
+function roundStatsOwner(msg, index) {
+  const owner = runStatsOwners.value[index];
+  if (!owner) return null;
+  if (owner.roundDurationText) return owner;
+  return owner.streaming && hasAnswerBody(owner) ? owner : null;
+}
+
+// v-memo 用的签名：行内每个字段都来自归属消息，所以签名取它那些字段；收尾消息
+// 易主时新旧两条的签名都会变，一次性重渲染到位（v-memo 只比数组值）。
+function roundStatsMemo(msg, index) {
+  const owner = roundStatsOwner(msg, index);
+  if (!owner) return '';
+  return [
+    owner.roundDurationText || '',
+    owner.completedAtText || '',
+    owner.cacheRate ?? '',
+    owner.cacheHit ?? '',
+    owner.cacheMiss ?? '',
+    owner.runInputTokens ?? '',
+    owner.runOutputTokens ?? '',
+    owner.roundDurationMs ?? '',
+    owner === lastAnswerMessage.value,
+  ].join('|');
 }
 
 // Keep historical message subtrees out of the patch path while the active
@@ -247,7 +251,7 @@ function isLastDisplayMessage(msg) {
 // 一旦读取内容就会让整个列表的渲染 effect 订阅流式增量。活跃消息的正文
 // 由 StreamingMarkdownBody 子组件独立渲染；已完成消息的内容不再变化，
 // 流式结束时 streaming 标志翻转即触发最后一帧补丁。
-function messageRenderMemo(msg) {
+function messageRenderMemo(msg, index) {
   const attachments = Array.isArray(msg?.attachments) ? msg.attachments : [];
   const lastAttachment = attachments.length ? attachments[attachments.length - 1] : null;
   return [
@@ -263,22 +267,14 @@ function messageRenderMemo(msg) {
     // 渲染条件依赖它，翻转时必须触发父级重渲染；之后不再变化，流式正文
     // 增量依旧只由 StreamingMarkdownBody 子组件渲染。
     msg?.hasBody === true,
-    // 是否为列表最后一条消息：统计占位行只挂在最后一条上，新消息追加后
-    // 旧"最后一条"的 memo 变化 → 重渲染 → 占位行移除（与新增消息同 patch）。
-    isLastDisplayMessage(msg),
+    // 统计行：内容取自本轮统计归属消息（未必是本条），签名带上它那些字段。
+    roundStatsMemo(msg, index),
     msg?.streaming,
     msg?.done,
     msg?.status,
     msg?.error,
     msg?.system,
     msg?.welcome,
-    msg?.roundDurationText,
-    msg?.roundDurationMs,
-    msg?.cacheRate,
-    msg?.cacheHit,
-    msg?.cacheMiss,
-    msg?.runInputTokens,
-    msg?.runOutputTokens,
     msg?.suggestions?.length || 0,
     attachments.length,
     lastAttachment?.previewUrl,
@@ -360,25 +356,6 @@ defineEmits([
   'submitAsk',
   'deleteUserMessage',
 ]);
-
-function fmtTokens(n) {
-  const v = Number(n || 0);
-  if (v >= 1e9) return (v / 1e9).toFixed(2) + 'B';
-  if (v >= 1e6) return (v / 1e6).toFixed(2) + 'M';
-  if (v >= 1e3) return (v / 1e3).toFixed(1) + 'k';
-  return String(v);
-}
-
-// Aggregate output speed over the whole run (all LLM steps + tool time),
-// matching how roundDurationMs / runOutputTokens are accumulated on the
-// backend. Returns '' while either value is missing.
-function tokenSpeed(msg) {
-  const ms = Number(msg?.roundDurationMs || 0);
-  const out = Number(msg?.runOutputTokens || 0);
-  if (ms <= 0 || out <= 0) return '';
-  const speed = out / (ms / 1000);
-  return String(Math.round(speed));
-}
 
 const quickMessageOptions = computed(() => [
   { label: t('chat.quickMessage.continue'), key: 'continue' },
@@ -1044,71 +1021,11 @@ defineExpose({ scrollbarRef, scrollToBottom, scrollToUserQuestion, scrollToBotto
   color: var(--ally-accent);
 }
 
-.message-duration {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: var(--ally-sub-font-size, 13px);
-  color: var(--ally-text-faint);
-  margin-top: 4px;
-  /* 统计行默认隐藏但保留占位（visibility 不参与布局收缩，无跳动）。
-     visibility 一起进 transition：显示时立即可见、淡入；隐藏时等 opacity
-     落到 0 才真正 hidden，浮出与淡出双向都有过渡，不突兀 */
-  visibility: hidden;
-  opacity: 0;
-  transition: opacity 0.2s ease, visibility 0.2s;
-}
-
-.message.assistant:hover > .message-duration {
+/* 统计行的可见性跟着本轮收尾消息走（行的样式表在 MessageRoundStats.vue）：
+   鼠标压住它前面那条消息（收尾消息）或它自己时浮出。 */
+.messages > *:hover + .turn-stats,
+.turn-stats:hover {
   visibility: visible;
   opacity: 1;
-}
-
-/* 流式期间的占位行：只占高度，内容不可见 */
-.message-duration.is-placeholder {
-  visibility: hidden;
-}
-
-.duration-text {
-  font-variant-numeric: tabular-nums;
-}
-
-.run-tokens {
-  font-variant-numeric: tabular-nums;
-}
-
-.cache-rate {
-  font-variant-numeric: tabular-nums;
-  padding: 0 5px;
-  border-radius: 3px;
-  font-size: var(--ally-aux-font-size, 12px);
-  line-height: 16px;
-}
-
-.export-icon-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 18px;
-  height: 18px;
-  padding: 0;
-  border: none;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--ally-text-faint);
-  cursor: pointer;
-  transition: color 0.12s, background 0.12s;
-  --wails-draggable: no-drag;
-}
-
-.export-icon-btn:hover {
-  color: var(--ally-text-high);
-  background: var(--ally-hover-strong);
-}
-
-.export-icon-btn svg {
-  display: block;
-  width: 14px;
-  height: 14px;
 }
 </style>
