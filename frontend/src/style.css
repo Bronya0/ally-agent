@@ -2583,6 +2583,13 @@ code, pre {
   font-size: 11px;
 }
 
+/* 空闲：整行不可见但保留高度（visibility 不参与布局收缩），容器高度因此恒定。
+   见 App.vue 中 .composer-run-status 处的说明——高度一变，贴底就会把整条内容
+   整体下移一截。 */
+.composer-run-status.is-idle {
+  visibility: hidden;
+}
+
 /* LLM 请求重试横幅:显示重试次数 + 错误信息(常见 429) */
 .composer-retry-banner {
   display: flex;

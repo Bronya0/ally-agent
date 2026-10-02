@@ -213,10 +213,15 @@ Public License v3. See the LICENSE file for details.
                      各自要占掉一轮里的大段时间，却不多说三根条以外的信息，已不再显示。
                      三根条（components/RunSpinner.vue）与流光同一灰调，两者共存但不抢
                      焦点；阶段判定见 utils/runPhase.mjs。 -->
-                <div v-if="activeSessionRunning || compactLoadingActive" class="composer-run-status">
-                  <!-- 三根条在 run 全阶段常驻：标签为空（工具执行阶段）时它是在动的全部，
-                       有标签时就与流光并存；因为不参与挂载/卸载，标签也不会位移。 -->
-                  <RunSpinner />
+                <!-- 状态行容器常驻、只切内容：原先整行挂在"正在运行"上，run 结束卸载后
+                     输入框矮 20px，消息视口随之变高、贴底把整条内容整体下移——观感就是
+                     "文字突然往下掉一下"。高度恒定就没有这个问题；plan 面板折叠、附件、
+                     重试横幅等任何让输入框在 run 中途变高变矮的改动都一并免疫，
+                     不必再去滚动逻辑里打补丁。 -->
+                <div class="composer-run-status" :class="{ 'is-idle': !activeSessionRunning && !compactLoadingActive }">
+                  <!-- 三根条只在跑的时候挂载：无限动画卸载即停，比 visibility 藏着跑省。
+                       一次 run 内它不参与挂载/卸载，所以阶段标签出现/消失时不会位移。 -->
+                  <RunSpinner v-if="activeSessionRunning || compactLoadingActive" />
                   <!-- 标签为空时整块不渲染（思考阶段之外的所有阶段），既不占位也
                        不空转动画；在同一个元素里换字不重放流光，观感连续。 -->
                   <Transition name="composer-label-fade">
