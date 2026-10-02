@@ -9,13 +9,22 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/mark3labs/mcp-go/client"
+	"github.com/mark3labs/mcp-go/client/transport"
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/mark3labs/mcp-go/server"
 )
 
 func TestToolSchemaToMapProducesProviderSafeSchema(t *testing.T) {
@@ -394,7 +403,21 @@ func TestReconcileConfigsAppliesDisabledToolsInPlace(t *testing.T) {
 	}
 }
 
-func TestIsMcpRecoverableError(t *testing.T) {
+func TestIsMcpTransportFailure(t *testing.T) {
+	// mcp-go 自己的哨兵错误必须命中：手写子串清单曾经漏掉它们，于是 stdio
+	// 子进程死了、HTTP 会话 404 过期了都不重连（重连形同虚设）。
+	sentinels := []error{
+		transport.ErrTransportClosed,
+		transport.ErrSessionTerminated,
+		fmt.Errorf("MCP call failed: %w", transport.ErrTransportClosed),
+		fmt.Errorf("transport error: failed to send request: %w", transport.ErrSessionTerminated),
+	}
+	for _, err := range sentinels {
+		if !isMcpTransportFailure(err) {
+			t.Fatalf("expected sentinel error %v to count as a transport failure", err)
+		}
+	}
+
 	recoverableCases := []string{
 		"invalid session ID: 123",
 		// The transport error that motivated the marker list: a full JSON-RPC
@@ -408,10 +431,25 @@ func TestIsMcpRecoverableError(t *testing.T) {
 		"unexpected EOF",
 		"transport is closing",
 		"client is closed",
+		// 两个 mcp-go 没有导出哨兵、只能按文案认的真实错误。
+		"transport error: transport closed",
+		"transport error: connection has been closed",
 	}
 	for _, msg := range recoverableCases {
-		if !isMcpRecoverableError(errors.New(msg)) {
-			t.Fatalf("expected error %q to be recoverable", msg)
+		if !isMcpTransportFailure(errors.New(msg)) {
+			t.Fatalf("expected error %q to be a transport failure", msg)
+		}
+	}
+
+	// 标准 JSON-RPC 错误码：服务端收到了请求、明确拒绝，与链路无关，绝不重连。
+	protocolErrors := []error{
+		mcp.ErrInvalidParams,
+		mcp.ErrMethodNotFound,
+		fmt.Errorf("%w: missing required field", mcp.ErrInvalidParams),
+	}
+	for _, err := range protocolErrors {
+		if isMcpTransportFailure(err) {
+			t.Fatalf("protocol error %v must not count as a transport failure", err)
 		}
 	}
 
@@ -422,12 +460,489 @@ func TestIsMcpRecoverableError(t *testing.T) {
 		"permission denied",
 	}
 	for _, msg := range nonRecoverableCases {
-		if isMcpRecoverableError(errors.New(msg)) {
-			t.Fatalf("expected error %q to not be recoverable", msg)
+		if isMcpTransportFailure(errors.New(msg)) {
+			t.Fatalf("expected error %q to not be a transport failure", msg)
 		}
 	}
-	if isMcpRecoverableError(nil) {
-		t.Fatal("a nil error must never be recoverable")
+	if isMcpTransportFailure(nil) {
+		t.Fatal("a nil error must never be a transport failure")
+	}
+}
+
+func TestMcpCallFailureClassification(t *testing.T) {
+	// 服务端状态决定"能不能靠重连自愈"：failed 可以（上一次连接死了），
+	// disabled / connecting 不行——前者是用户明确关掉的，后者已有连接在飞。
+	cases := []struct {
+		status string
+		want   mcpCallFailure
+	}{
+		{"failed", mcpCallReconnectable},
+		{"disabled", mcpCallUnavailable},
+		{"connecting", mcpCallUnavailable},
+	}
+	for _, tc := range cases {
+		manager := NewMcpManager("", nil)
+		manager.clients["srv"] = &McpClientHandle{ServerName: "srv", Status: tc.status}
+		outcome, err := manager.callToolOnce(context.Background(), "srv", "tool", nil)
+		if err == nil {
+			t.Fatalf("status %q must fail the call", tc.status)
+		}
+		if outcome.failure != tc.want {
+			t.Fatalf("status %q: got failure %d want %d", tc.status, outcome.failure, tc.want)
+		}
+	}
+
+	manager := NewMcpManager("", nil)
+	outcome, err := manager.callToolOnce(context.Background(), "missing", "tool", nil)
+	if err == nil || outcome.failure != mcpCallUnavailable {
+		t.Fatalf("unknown server must be unavailable, got %#v / %v", outcome, err)
+	}
+}
+
+func TestCallToolDoesNotRetryToolLevelError(t *testing.T) {
+	// 工具自己回的错误文案里带 "connection refused"（下游连不上，很常见）时
+	// 绝不能重连：旧实现会杀掉并重启整个 MCP 服务端、再把工具跑第二遍。
+	var calls atomic.Int64
+	mcpServer := server.NewMCPServer("test-server", "1.0.0", server.WithToolCapabilities(true))
+	mcpServer.AddTool(mcp.NewTool("flaky"), func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		calls.Add(1)
+		return mcp.NewToolResultError("downstream write failed: connection refused"), nil
+	})
+
+	mcpClient, err := client.NewInProcessClient(mcpServer)
+	if err != nil {
+		t.Fatalf("in-process client: %v", err)
+	}
+	defer mcpClient.Close()
+	if err := mcpClient.Start(context.Background()); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	initRequest := mcp.InitializeRequest{}
+	initRequest.Params.ProtocolVersion = mcp.LATEST_PROTOCOL_VERSION
+	initRequest.Params.ClientInfo = mcp.Implementation{Name: "ally-test", Version: "1.0.0"}
+	if _, err := mcpClient.Initialize(context.Background(), initRequest); err != nil {
+		t.Fatalf("initialize: %v", err)
+	}
+
+	manager := NewMcpManager("", nil)
+	handle := &McpClientHandle{ServerName: "srv", Client: mcpClient, Status: "connected", token: &mcpConnToken{}}
+	manager.clients["srv"] = handle
+
+	_, err = manager.CallTool(context.Background(), "srv", "flaky", map[string]any{})
+	if err == nil {
+		t.Fatal("the tool's isError result must surface as an error")
+	}
+	if !strings.Contains(err.Error(), "connection refused") {
+		t.Fatalf("the server's error text must reach the caller, got %v", err)
+	}
+	if strings.Contains(err.Error(), "reconnect") {
+		t.Fatalf("a tool-level error must not trigger a reconnect, got %v", err)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("the tool must run exactly once, ran %d times", got)
+	}
+	if handle.Status != "connected" || handle.Client != mcpClient {
+		t.Fatalf("handle must stay untouched, got %+v", handle)
+	}
+}
+
+func TestHandleConnectionLostRequiresCurrentConnection(t *testing.T) {
+	manager := NewMcpManager("", nil)
+	token := &mcpConnToken{}
+	handle := &McpClientHandle{
+		ServerName: "srv",
+		Status:     "connected",
+		token:      token,
+		ToolDefs:   []McpDiscoveredTool{{ServerName: "srv", Name: "t"}},
+	}
+	manager.clients["srv"] = handle
+
+	// 旧连接（token 已被新连接替换）的死亡报告不能打翻当前这条。
+	manager.handleConnectionLost("srv", &mcpConnToken{}, "stale process exited")
+	if handle.Status != "connected" {
+		t.Fatalf("stale token must not flip the live handle, got %q", handle.Status)
+	}
+
+	// 重连中（状态已改成 connecting）也是同一种"正常关闭"，不能当成故障。
+	handle.Status = "connecting"
+	manager.handleConnectionLost("srv", token, "expected close")
+	if handle.Status != "connecting" || handle.Error != "" {
+		t.Fatalf("a reconnect in flight must not be reported as a failure, got %q/%q", handle.Status, handle.Error)
+	}
+
+	// 当前连接的意外退出：翻 failed，工具清单保留——失败服务端不参与注入，
+	// 但下一次调用要靠它把连接救回来。
+	handle.Status = "connected"
+	manager.handleConnectionLost("srv", token, "MCP server process exited (exit status 1)")
+	if handle.Status != "failed" || !strings.Contains(handle.Error, "exit status 1") {
+		t.Fatalf("unexpected loss must be recorded, got %q/%q", handle.Status, handle.Error)
+	}
+	if len(handle.ToolDefs) != 1 {
+		t.Fatal("tool defs must survive so the next call can heal the connection")
+	}
+}
+
+func TestMcpStdioDir(t *testing.T) {
+	root := t.TempDir()
+	cases := []struct {
+		name    string
+		workDir string
+		cwd     string
+		want    string
+	}{
+		{"默认用工作区根", root, "", root},
+		{"相对 cwd 相对工作区根解析", root, "sub/dir", filepath.Join(root, "sub", "dir")},
+		{"绝对 cwd 原样使用", root, "/opt/mcp", "/opt/mcp"},
+		{"没有工作区根且没写 cwd 时不设目录", "", "", ""},
+		{"没有工作区根时绝对 cwd 仍可用", "", "/opt/mcp", "/opt/mcp"},
+	}
+	for _, tc := range cases {
+		manager := NewMcpManager(tc.workDir, nil)
+		if got := manager.mcpStdioDir(McpServerConfig{Cwd: tc.cwd}); got != tc.want {
+			t.Fatalf("%s: got %q want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestMcpTimeoutResolution(t *testing.T) {
+	if got := mcpStartupTimeout(McpServerConfig{}); got != mcpDefaultStartupTimeout {
+		t.Fatalf("default startup timeout: got %s", got)
+	}
+	if got := mcpToolCallTimeout(McpServerConfig{}); got != mcpDefaultToolCallTimeout {
+		t.Fatalf("default tool timeout: got %s", got)
+	}
+	if got := mcpStartupTimeout(McpServerConfig{StartupTimeoutSec: 90}); got != 90*time.Second {
+		t.Fatalf("per-server startup timeout: got %s", got)
+	}
+	if got := mcpToolCallTimeout(McpServerConfig{ToolTimeoutSec: 600}); got != 10*time.Minute {
+		t.Fatalf("per-server tool timeout: got %s", got)
+	}
+	// 非正数回退默认值；天文数字截断到上限，而不是溢出成负数（那等于立即超时）。
+	if got := mcpToolCallTimeout(McpServerConfig{ToolTimeoutSec: -5}); got != mcpDefaultToolCallTimeout {
+		t.Fatalf("non-positive override must fall back: got %s", got)
+	}
+	if got := mcpToolCallTimeout(McpServerConfig{ToolTimeoutSec: 1e18}); got != mcpMaxTimeout {
+		t.Fatalf("absurd override must clamp to the max: got %s", got)
+	}
+}
+
+func TestNormalizeMcpConfigJSONPreservesUnknownFields(t *testing.T) {
+	raw := `{
+  "$schema": "https://example.com/mcp.schema.json",
+  "mcpServers": {
+    "files": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem"],
+      "cwd": "./data",
+      "toolTimeoutSec": 600,
+      "vendorOnly": {"nested": [1, 2]},
+      "env": {"A": "b"}
+    }
+  }
+}`
+	data, err := normalizeMcpConfigJSON(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 落盘排版要能看：RawMessage 若不重新缩进，整份 server 清单会挤成一长行。
+	if !strings.Contains(string(data), "\n    \"files\"") {
+		t.Fatalf("落盘后的 server 条目应保持缩进，实际：\n%s", data)
+	}
+	var doc map[string]json.RawMessage
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := doc["$schema"]; !ok {
+		t.Fatalf("顶层未知键必须原样保留: %s", data)
+	}
+	var servers map[string]map[string]json.RawMessage
+	if err := json.Unmarshal(doc["mcpServers"], &servers); err != nil {
+		t.Fatal(err)
+	}
+	entry := servers["files"]
+	for _, key := range []string{"command", "args", "cwd", "toolTimeoutSec", "vendorOnly", "env"} {
+		if _, ok := entry[key]; !ok {
+			t.Fatalf("字段 %q 在保存后丢失: %+v", key, entry)
+		}
+	}
+	entryRaw, err := json.Marshal(entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parsed McpServerConfig
+	if err := json.Unmarshal(entryRaw, &parsed); err != nil {
+		t.Fatal(err)
+	}
+	if parsed.Cwd != "./data" || parsed.ToolTimeoutSec != 600 {
+		t.Fatalf("新增字段必须能被解析回来: %+v", parsed)
+	}
+
+	// 校验不能放松：结构写错要当场报错（静默写成空配置比报错更糟）。
+	for _, bad := range []string{
+		`{"mcpServers": []}`,
+		`{"mcpServers": {"bad": 3}}`,
+		`{"mcpServers": {"bad": null}}`,
+		`{"mcpServers": {"bad": {"args": "not-a-list"}}}`,
+	} {
+		if _, err := normalizeMcpConfigJSON(bad); err == nil {
+			t.Fatalf("expected %s to be rejected", bad)
+		}
+	}
+
+	// 空输入 / mcpServers 为 null：落一份合法的空配置，别让面板打开时一片空白。
+	for _, empty := range []string{"   ", `{"mcpServers": null}`, `{}`} {
+		data, err := normalizeMcpConfigJSON(empty)
+		if err != nil {
+			t.Fatalf("empty input %q must not fail: %v", empty, err)
+		}
+		if !strings.Contains(string(data), `"mcpServers": {}`) {
+			t.Fatalf("empty input %q must persist an mcpServers object: %s", empty, data)
+		}
+	}
+}
+
+// mcpStdioTestServerScript 是一个最小可用的 MCP stdio 服务端（python3）：只认
+// initialize / tools/list / tools/call，其中 tools/call 回报自己的工作目录与
+// pid —— 前者用来钉住"stdio 服务端跑在工作区根"，后者用来模拟子进程暴死。
+const mcpStdioTestServerScript = `import json, os, sys
+
+def out(msg):
+    sys.stdout.write(json.dumps(msg) + "\n")
+    sys.stdout.flush()
+
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        msg = json.loads(line)
+    except Exception:
+        continue
+    method = msg.get("method")
+    rid = msg.get("id")
+    if method == "initialize":
+        params = msg.get("params") or {}
+        out({"jsonrpc": "2.0", "id": rid, "result": {
+            "protocolVersion": params.get("protocolVersion", "2025-06-18"),
+            "capabilities": {"tools": {}},
+            "serverInfo": {"name": "ally-test", "version": "1.0.0"}}})
+    elif method == "tools/list":
+        out({"jsonrpc": "2.0", "id": rid, "result": {"tools": [{
+            "name": "where",
+            "description": "report cwd and pid",
+            "inputSchema": {"type": "object", "properties": {}}}]}})
+    elif method == "tools/call":
+        out({"jsonrpc": "2.0", "id": rid, "result": {"content": [
+            {"type": "text", "text": "cwd=%s pid=%d" % (os.getcwd(), os.getpid())}]}})
+    elif rid is not None:
+        out({"jsonrpc": "2.0", "id": rid, "error": {"code": -32601, "message": "method not found"}})
+`
+
+func mcpTestPython(t *testing.T) string {
+	t.Helper()
+	for _, name := range []string{"python3", "python"} {
+		if path, err := exec.LookPath(name); err == nil {
+			return path
+		}
+	}
+	t.Skip("python3/python is not available")
+	return ""
+}
+
+func mcpHandleStatus(manager *McpManager, name string) string {
+	manager.mu.RLock()
+	defer manager.mu.RUnlock()
+	if handle, ok := manager.clients[name]; ok {
+		return handle.Status
+	}
+	return ""
+}
+
+func waitForMcpHandleStatus(t *testing.T, manager *McpManager, name, want string) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if got := mcpHandleStatus(manager, name); got == want {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("MCP 状态未在 10s 内变成 %q，当前 %q", want, mcpHandleStatus(manager, name))
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func TestMcpStdioServerUsesWorkspaceDirAndHealsAfterCrash(t *testing.T) {
+	python := mcpTestPython(t)
+	script := filepath.Join(t.TempDir(), "server.py")
+	if err := os.WriteFile(script, []byte(mcpStdioTestServerScript), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	// 工作区根 = stdio 服务端的默认工作目录（服务端不该继承 Ally 自己的 cwd）。
+	workspace := t.TempDir()
+	wantDir, err := filepath.EvalSymlinks(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := NewMcpManager(workspace, nil)
+	defer manager.Shutdown()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	manager.connectOne(ctx, "echo", McpServerConfig{Command: python, Args: []string{script}})
+	if got := mcpHandleStatus(manager, "echo"); got != "connected" {
+		t.Fatalf("真正的 stdio 服务端应连上，got status %q", got)
+	}
+
+	out, err := manager.CallTool(ctx, "echo", "where", map[string]any{})
+	if err != nil {
+		t.Fatalf("tools/call: %v", err)
+	}
+	if !strings.Contains(out, wantDir) {
+		t.Fatalf("stdio 服务端的工作目录应为工作区根：got %q want %q", out, wantDir)
+	}
+
+	pid := 0
+	for _, field := range strings.Fields(out) {
+		if value, ok := strings.CutPrefix(field, "pid="); ok {
+			pid, _ = strconv.Atoi(value)
+		}
+	}
+	if pid <= 0 {
+		t.Fatalf("测试服务端没报出 pid: %q", out)
+	}
+
+	// 子进程暴死：守护必须发现并把状态翻成 failed（旧实现只会静默地一直显示
+	// "已连接"，直到用户下一次调用）。
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := proc.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	waitForMcpHandleStatus(t, manager, "echo", "failed")
+
+	// 下一次调用先重连再试（对齐 ZCode 的调用前按需重连）：连接自己救回来，
+	// 而不是把"连接已失效"一直丢给模型。
+	out, err = manager.CallTool(ctx, "echo", "where", map[string]any{})
+	if err != nil {
+		t.Fatalf("调用前重连自愈失败: %v", err)
+	}
+	if !strings.Contains(out, wantDir) {
+		t.Fatalf("重连后的调用应正常返回：got %q", out)
+	}
+	if got := mcpHandleStatus(manager, "echo"); got != "connected" {
+		t.Fatalf("重连后状态应回到 connected，got %q", got)
+	}
+}
+
+func TestCommitConnectionRecordsLossDuringHandshake(t *testing.T) {
+	// 握手刚成功、进程就被杀的窗口：登记时必须如实落 failed，而不是把一条
+	// 已经没了的连接写成 connected（那正是"面板永远显示已连接"的者毛病）。
+	manager := NewMcpManager("", nil)
+	deadToken := &mcpConnToken{}
+	deadToken.markLost("MCP server process exited (exit status 1)")
+	deadHandle := &McpClientHandle{ServerName: "dead", Status: "connecting"}
+	manager.mu.Lock()
+	manager.commitConnectionLocked(deadHandle, mcpEstablished{token: deadToken})
+	manager.mu.Unlock()
+	if deadHandle.Status != "failed" || !strings.Contains(deadHandle.Error, "exit status 1") {
+		t.Fatalf("已死的连接不能被登记成 %q/%q", deadHandle.Status, deadHandle.Error)
+	}
+
+	// 活着的照常登记，工具映射跟着一起写入。
+	liveToken := &mcpConnToken{}
+	liveHandle := &McpClientHandle{ServerName: "live", Status: "connecting"}
+	manager.mu.Lock()
+	manager.commitConnectionLocked(liveHandle, mcpEstablished{
+		tools: []McpDiscoveredTool{{ServerName: "live", Name: "t", FunctionName: "mcp__live__t"}},
+		token: liveToken,
+	})
+	manager.mu.Unlock()
+	if liveHandle.Status != "connected" || liveHandle.Error != "" || liveHandle.token != liveToken {
+		t.Fatalf("正常连接应登记为 connected，got %q/%q", liveHandle.Status, liveHandle.Error)
+	}
+	if _, ok := manager.toolLookup["mcp__live__t"]; !ok {
+		t.Fatal("工具映射必须跟着登记一起写入")
+	}
+}
+
+func TestReconcileRetriesFailedServerInBackground(t *testing.T) {
+	enabled := true
+	const missingBinary = "ally-mcp-test-definitely-missing-binary"
+	configFile := filepath.Join(t.TempDir(), "mcp.json")
+	if err := os.WriteFile(configFile, []byte(`{"mcpServers":{"a":{"command":"`+missingBinary+`"}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manager := NewMcpManager(t.TempDir(), func(tools []McpDiscoveredTool) {})
+	manager.configPaths = []string{configFile}
+	manager.clients["a"] = &McpClientHandle{
+		ServerName: "a",
+		Config:     McpServerConfig{Command: missingBinary, Enabled: &enabled},
+		Status:     "failed",
+		Error:      "boom",
+	}
+
+	// 配置没变的 failed 服务端也要重试（否则新会话里它的工具已不参与注入，
+	// 模型再也调不到，只能重启应用），但绝不能同步等拨号——一次失败的拨号要
+	// 跑满 4 次尝试，面板的"保存"会被拖成分钟级。
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = manager.ReconcileConfigs(context.Background())
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("failed 服务端的重试不能阻塞 ReconcileConfigs 的调用方")
+	}
+	waitForMcpHandleStatus(t, manager, "a", "connecting")
+}
+
+func TestToolRefreshCoalescesBurstAndKeepsPending(t *testing.T) {
+	manager := NewMcpManager("", nil)
+	var calls atomic.Int64
+	refreshing := make(chan struct{}, 4)
+	release := make(chan struct{}, 4)
+	manager.toolRefresher = func(string, *mcpConnToken) {
+		calls.Add(1)
+		refreshing <- struct{}{}
+		<-release
+	}
+
+	// 一次突发里的三条通知合成一轮。
+	for i := 0; i < 3; i++ {
+		manager.markToolsListDirty("srv", &mcpConnToken{})
+	}
+	<-refreshing
+	// 刷新进行中又来的通知不能丢：跑完必须再补一轮。
+	manager.markToolsListDirty("srv", &mcpConnToken{})
+	release <- struct{}{}
+	<-refreshing
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("突发三条 + 期间一条应合成两轮，got %d", got)
+	}
+	release <- struct{}{}
+
+	// 收尾：没有新通知时 running 必须回落，否则这个槽永久卡住（后续通知再也
+	// 不会触发刷新）。
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		manager.refreshMu.Lock()
+		running := manager.refreshSlots["srv"].running
+		manager.refreshMu.Unlock()
+		if !running {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("刷新循环未收尾：running 一直是 true")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("收尾后不该再触发刷新，got %d", got)
 	}
 }
 

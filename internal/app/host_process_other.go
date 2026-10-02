@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"os/exec"
 	"syscall"
+	"time"
 )
 
 func hideCommandWindow(cmd *exec.Cmd) {}
@@ -33,6 +34,23 @@ func isProcessAlive(pid int) bool {
 		return false
 	}
 	return syscall.Kill(pid, 0) == nil
+}
+
+// mcpProcessGroupKillGrace 是 MCP 子进程退出后、对遗留进程组先 SIGTERM 再
+// SIGKILL 之间的宽限期（对齐 codex 的两段式：先给机会优雅退出，再强杀）。
+const mcpProcessGroupKillGrace = time.Second
+
+// reapProcessGroupLeftovers 清理 stdio MCP 子进程退出后脱管的孙进程：
+// prepareServiceCommand 已用 Setpgid 给它建了独立进程组，组里还活着的先
+// SIGTERM 再 SIGKILL。npx / sh 包裹脚本的 node 后代就靠这一步，否则根进程
+// 一死它们就变成常驻孤儿。
+func reapProcessGroupLeftovers(pid int) {
+	if pid <= 0 {
+		return
+	}
+	_ = gracefulStopProcessTree(pid)
+	time.Sleep(mcpProcessGroupKillGrace)
+	_ = stopProcessTree(pid)
 }
 
 // gracefulStopProcessTree 向进程组投递 SIGTERM（prepareServiceCommand 已用

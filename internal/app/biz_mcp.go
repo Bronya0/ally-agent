@@ -8,6 +8,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -34,13 +35,22 @@ import (
 
 // McpServerConfig represents a single MCP server config (Claude Desktop format).
 type McpServerConfig struct {
-	Command   string            `json:"command"`
-	Args      []string          `json:"args,omitempty"`
-	Env       map[string]string `json:"env,omitempty"`
+	Command string            `json:"command"`
+	Args    []string          `json:"args,omitempty"`
+	Env     map[string]string `json:"env,omitempty"`
+	// Cwd 是 stdio 服务端的工作目录：留空用工作区根，相对路径相对工作区根
+	// 解析，绝对路径原样使用（不展开 ~）。服务端因此不继承 Ally 自己的 cwd
+	// ——从 Finder 启动时那是 "/"，相对参数、`./server`、npx 找本地
+	// package.json 都会失效。
+	Cwd       string            `json:"cwd,omitempty"`
 	Transport string            `json:"transport,omitempty"`
 	URL       string            `json:"url,omitempty"`
 	Headers   map[string]string `json:"headers,omitempty"`
-	Enabled   *bool             `json:"enabled,omitempty"`
+	// StartupTimeoutSec / ToolTimeoutSec 覆盖默认的握手（30s）与单次工具调用
+	// （5min）超时；0 或缺席即用默认值，超过上限按上限截断。
+	StartupTimeoutSec float64 `json:"startupTimeoutSec,omitempty"`
+	ToolTimeoutSec    float64 `json:"toolTimeoutSec,omitempty"`
+	Enabled           *bool   `json:"enabled,omitempty"`
 	// DisabledTools 是按「对端原始工具名」记录的注入黑名单：名单内的工具
 	// 不进入模型请求（buildToolsWithMcp 过滤），但清单/状态接口仍可见。
 	// 对端新增工具默认启用；对端删除工具后残留条目 inert 保留，不自动清理，
@@ -60,6 +70,39 @@ type McpDiscoveredTool struct {
 	Schema       map[string]any // JSON Schema for OpenAI tool registration
 }
 
+// mcpConnToken 是一次连接尝试的身份，同时记着"这次连接还没被登记就死了"。
+// 进程守护与传输层的断线回调都带着 token 回来核对，它必须做到两件事：
+//   - 每次尝试各铸一个：同一个 token 在多次重试间复用的话，前一次尝试里那个
+//     被杀掉的进程迟到的死亡报告会命中后来成功的那条连接，把好连接打翻；
+//   - 顺手记下丢失事件：握手刚成功、进程就死的窗口里，登记时才能如实落
+//     failed，而不是把一条已经没了的连接写成 connected。
+type mcpConnToken struct {
+	mu      sync.Mutex
+	lost    bool
+	lostWhy string
+}
+
+func (t *mcpConnToken) markLost(cause string) {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !t.lost {
+		t.lost = true
+		t.lostWhy = cause
+	}
+}
+
+func (t *mcpConnToken) lostCause() (string, bool) {
+	if t == nil {
+		return "", false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.lostWhy, t.lost
+}
+
 type McpClientHandle struct {
 	ServerName string
 	Config     McpServerConfig
@@ -67,6 +110,8 @@ type McpClientHandle struct {
 	ToolDefs   []McpDiscoveredTool
 	Status     string // "connected", "connecting", "failed", "disabled"
 	Error      string
+	// token 是当前 Client 的连接身份，见 mcpConnToken。
+	token *mcpConnToken
 }
 
 type McpManager struct {
@@ -74,10 +119,18 @@ type McpManager struct {
 	reconnectLocks sync.Map // serverName -> *sync.Mutex，per-server 重连互斥
 	clients        map[string]*McpClientHandle
 	toolLookup     map[string]mcpToolRef
-	workDir        string
+	workDir        string // 构造后不再改，读它无需加锁
 	listener       func(tools []McpDiscoveredTool)
 	warnHandler    func(message string)
 	networkConfig  func() ConfigState
+	// toolRefresher 是"通知触发的工具清单重拉"动作，默认 refreshServerTools；
+	// 与 listener/warnHandler 同一种注入风格，测试可替换。
+	toolRefresher func(serverName string, token *mcpConnToken)
+	// refreshMu/refreshSlots 收口"服务端通知工具清单变化"后的重拉：每个 server
+	// 同时只跑一次 tools/list，期间到达的通知合并进下一轮（pending），不丢也
+	// 不叠加。
+	refreshMu    sync.Mutex
+	refreshSlots map[string]*mcpToolRefreshSlot
 	// configPaths overrides mcpJsonPaths when set; hermetic tests point it at
 	// a temp file so reconcile tests never touch the real user config.
 	configPaths []string
@@ -122,12 +175,15 @@ type mcpToolRef struct {
 }
 
 func NewMcpManager(workDir string, listener func(tools []McpDiscoveredTool)) *McpManager {
-	return &McpManager{
-		clients:    make(map[string]*McpClientHandle),
-		toolLookup: make(map[string]mcpToolRef),
-		workDir:    workDir,
-		listener:   listener,
+	m := &McpManager{
+		clients:      make(map[string]*McpClientHandle),
+		toolLookup:   make(map[string]mcpToolRef),
+		refreshSlots: make(map[string]*mcpToolRefreshSlot),
+		workDir:      workDir,
+		listener:     listener,
 	}
+	m.toolRefresher = m.refreshServerTools
+	return m
 }
 
 func mcpJsonPaths(workDir string) []string {
@@ -259,6 +315,7 @@ func (m *McpManager) ReconcileConfigs(ctx context.Context) (int, error) {
 
 	m.mu.Lock()
 	var stale []string
+	var failedRetries []string
 	var closing []*client.Client
 	for name, handle := range m.clients {
 		cfg, ok := configs[name]
@@ -267,6 +324,16 @@ func (m *McpManager) ReconcileConfigs(ctx context.Context) (int, error) {
 			if handle.Client != nil {
 				closing = append(closing, handle.Client)
 			}
+			continue
+		}
+		// 配置没变但上次连接失败的：它不会自愈，用户点保存/切换勾选就是显式的
+		// 重试信号（对齐 codex / kimi 的"配置变更即重连"）。这种重试放后台做：
+		// 一次失败的拨号要跑满 4 次尝试（最长可到分钟级），同步等会把面板的
+		// "保存"拖成一直转圈。必须重试的原因：failed 服务端的工具不参与注入，
+		// 新会话里模型再也调不到它，否则只能靠重启应用才能回来。
+		if handle.Status == "failed" {
+			failedRetries = append(failedRetries, name)
+			touched[name] = true
 			continue
 		}
 		// 连接语义未变但勾选变了：原地替换 disabledTools，保持 live 连接，
@@ -283,6 +350,27 @@ func (m *McpManager) ReconcileConfigs(ctx context.Context) (int, error) {
 		touched[name] = true
 	}
 	m.mu.Unlock()
+	// 刷新槽按 server 名长期保留，删除服务端时顺手清掉（它由 refreshMu 守护，
+	// 与 markToolsListDirty 同源）。
+	if len(stale) > 0 {
+		m.refreshMu.Lock()
+		for _, name := range stale {
+			delete(m.refreshSlots, name)
+		}
+		m.refreshMu.Unlock()
+	}
+	// 失败重试走后台：connectOne 会先把状态置 connecting，结果照常经
+	// notifyChange 推给界面，调用方（面板保存）立刻返回。
+	for _, name := range failedRetries {
+		cfg, ok := configs[name]
+		if !ok {
+			continue
+		}
+		name, cfg := name, cfg
+		go func() {
+			m.connectOne(ctx, name, cfg)
+		}()
+	}
 	// Close 在锁外执行：stdio Close 可能等待子进程退出，持锁调用会拖住整个
 	// manager（与 reconnectServer 的锁外 Close 保持对称）。
 	for _, staleClient := range closing {
@@ -322,13 +410,18 @@ func (m *McpManager) ReconcileConfigs(ctx context.Context) (int, error) {
 }
 
 func (m *McpManager) connectOne(ctx context.Context, name string, cfg McpServerConfig) {
+	// 拨号互斥与重连共用：同名服务端任何时刻只允许一次拨号在飞，否则并发拨号
+	// 会互相覆盖记录，输的那次连出来的子进程再也没人 Close（常驻孤儿）。
+	unlock := m.lockServerDial(name)
+	defer unlock()
+
 	handle := &McpClientHandle{ServerName: name, Config: cfg, Status: "connecting"}
 	m.mu.Lock()
 	m.clients[name] = handle
 	m.mu.Unlock()
 	m.notifyChange()
 
-	mcpClient, discovered, err := m.initializeMcpClientWithRetry(ctx, name, cfg)
+	established, err := m.initializeMcpClientWithRetry(ctx, name, cfg)
 	if err != nil {
 		m.mu.Lock()
 		handle.Status = "failed"
@@ -339,19 +432,52 @@ func (m *McpManager) connectOne(ctx context.Context, name string, cfg McpServerC
 	}
 
 	m.mu.Lock()
-	handle.Client = mcpClient
-	handle.ToolDefs = discovered
-	handle.Status = "connected"
-	handle.Error = ""
-	m.replaceToolLookupLocked(name, discovered)
+	m.commitConnectionLocked(handle, established)
 	m.mu.Unlock()
 	m.notifyChange()
 }
 
-func (m *McpManager) initializeMcpClient(ctx context.Context, name string, cfg McpServerConfig) (*client.Client, []McpDiscoveredTool, error) {
-	mcpClient, err := m.newMcpClient(ctx, cfg)
+// mcpEstablished 是一次成功建立的连接：客户端、工具清单与这条连接的身份。
+type mcpEstablished struct {
+	client *client.Client
+	tools  []McpDiscoveredTool
+	token  *mcpConnToken
+}
+
+// commitConnectionLocked 把一次成功建立的连接登记到 handle 上（调用方持 m.mu）。
+// 登记前先看这条连接是不是已经死了：握手刚成功、进程就被杀的窗口里，得如实落
+// failed，而不是把一条已经没了的连接写成 connected（那就回到了"面板永远显示
+// 已连接"的老毛病）。
+func (m *McpManager) commitConnectionLocked(handle *McpClientHandle, established mcpEstablished) {
+	handle.Client = established.client
+	handle.ToolDefs = established.tools
+	handle.token = established.token
+	m.replaceToolLookupLocked(handle.ServerName, established.tools)
+	if cause, lost := established.token.lostCause(); lost {
+		handle.Status = "failed"
+		handle.Error = cause
+		return
+	}
+	handle.Status = "connected"
+	handle.Error = ""
+}
+
+// lockServerDial 取得某个服务端的拨号互斥（首连与重连共用），返回释放函数。
+func (m *McpManager) lockServerDial(serverName string) func() {
+	lock, _ := m.reconnectLocks.LoadOrStore(serverName, &sync.Mutex{})
+	mutex := lock.(*sync.Mutex)
+	mutex.Lock()
+	return mutex.Unlock
+}
+
+// initializeMcpClient 建立一条连接：铸本次尝试的身份 → 起客户端 → 握手 → 拉
+// 工具清单。失败时它负责把已经起来的客户端关掉。
+func (m *McpManager) initializeMcpClient(ctx context.Context, name string, cfg McpServerConfig) (mcpEstablished, error) {
+	// 每次尝试各自铸一个身份，见 mcpConnToken。
+	token := &mcpConnToken{}
+	mcpClient, err := m.newMcpClient(ctx, name, cfg, token)
 	if err != nil {
-		return nil, nil, err
+		return mcpEstablished{}, err
 	}
 
 	initReq := mcp.InitializeRequest{
@@ -364,22 +490,30 @@ func (m *McpManager) initializeMcpClient(ctx context.Context, name string, cfg M
 		},
 	}
 
-	initCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	initCtx, cancel := context.WithTimeout(ctx, mcpStartupTimeout(cfg))
 	defer cancel()
 
 	if _, err := mcpClient.Initialize(initCtx, initReq); err != nil {
 		mcpClient.Close()
-		return nil, nil, fmt.Errorf("init failed: %w", err)
+		return mcpEstablished{}, fmt.Errorf("init failed: %w", err)
 	}
 
-	// ListTools carries the same bounded timeout as Initialize: a server that
-	// completes the handshake but then hangs must not pin connectOne in
-	// "connecting" forever. The loop follows nextCursor so paginating servers
-	// expose their full tool list (non-paginating servers return an empty
-	// cursor after the first page and exit after one round-trip); the page
-	// guard bounds a misbehaving server that always returns a cursor.
-	toolsCtx, toolsCancel := context.WithTimeout(ctx, 30*time.Second)
+	// ListTools 与握手同档超时：握手成功却卡在清单拉取的服务端，不能把
+	// connectOne 永久钉在 "connecting" 上（超时可 per-server 覆盖）。
+	toolsCtx, toolsCancel := context.WithTimeout(ctx, mcpStartupTimeout(cfg))
 	defer toolsCancel()
+	discovered, err := listMcpTools(toolsCtx, name, mcpClient)
+	if err != nil {
+		mcpClient.Close()
+		return mcpEstablished{}, fmt.Errorf("list tools failed (timed out or refused after %s): %w", mcpStartupTimeout(cfg), err)
+	}
+	return mcpEstablished{client: mcpClient, tools: discovered, token: token}, nil
+}
+
+// listMcpTools 拉取一个服务端的完整工具清单，三条路径共用：连接握手、通知
+// 触发的重拉。nextCursor 分页要跟着走（分页服务端第一页只有一部分）；页数上限
+// 守住"永远返回 cursor"的服务端。
+func listMcpTools(ctx context.Context, serverName string, mcpClient *client.Client) ([]McpDiscoveredTool, error) {
 	var discovered []McpDiscoveredTool
 	var cursor mcp.Cursor
 	for page := 0; ; page++ {
@@ -387,19 +521,17 @@ func (m *McpManager) initializeMcpClient(ctx context.Context, name string, cfg M
 		if cursor != "" {
 			listReq.Params.Cursor = cursor
 		}
-		toolsResult, err := mcpClient.ListTools(toolsCtx, listReq)
+		toolsResult, err := mcpClient.ListTools(ctx, listReq)
 		if err != nil {
-			mcpClient.Close()
-			return nil, nil, fmt.Errorf("list tools failed (timed out or refused after 30s): %w", err)
+			return nil, err
 		}
 		for _, tool := range toolsResult.Tools {
-			schema := toolSchemaToMap(tool.InputSchema)
 			discovered = append(discovered, McpDiscoveredTool{
-				ServerName:   name,
+				ServerName:   serverName,
 				Name:         tool.Name,
-				FunctionName: mcpToolFunctionName(name, tool.Name),
+				FunctionName: mcpToolFunctionName(serverName, tool.Name),
 				Description:  tool.Description,
-				Schema:       schema,
+				Schema:       toolSchemaToMap(tool.InputSchema),
 			})
 		}
 		if toolsResult.NextCursor == "" || page >= maxMcpListToolsPages {
@@ -407,7 +539,7 @@ func (m *McpManager) initializeMcpClient(ctx context.Context, name string, cfg M
 		}
 		cursor = toolsResult.NextCursor
 	}
-	return mcpClient, discovered, nil
+	return discovered, nil
 }
 
 // maxMcpListToolsPages bounds the ListTools pagination loop against servers
@@ -426,29 +558,33 @@ const (
 // of retries and a fixed delay between attempts. ctx cancellation (app exit,
 // server removed) aborts the wait immediately; the returned error carries the
 // last attempt's cause.
-func (m *McpManager) initializeMcpClientWithRetry(ctx context.Context, name string, cfg McpServerConfig) (*client.Client, []McpDiscoveredTool, error) {
+func (m *McpManager) initializeMcpClientWithRetry(ctx context.Context, name string, cfg McpServerConfig) (mcpEstablished, error) {
 	var lastErr error
 	for attempt := 0; attempt <= mcpConnectRetries; attempt++ {
 		if attempt > 0 {
 			select {
 			case <-ctx.Done():
-				return nil, nil, lastErr
+				return mcpEstablished{}, lastErr
 			case <-time.After(mcpConnectRetryDelay):
 			}
 		}
-		mcpClient, discovered, err := m.initializeMcpClient(ctx, name, cfg)
+		established, err := m.initializeMcpClient(ctx, name, cfg)
 		if err == nil {
-			return mcpClient, discovered, nil
+			return established, nil
 		}
 		lastErr = err
 	}
-	return nil, nil, fmt.Errorf("connect failed after %d retries: %w", mcpConnectRetries, lastErr)
+	return mcpEstablished{}, fmt.Errorf("connect failed after %d retries: %w", mcpConnectRetries, lastErr)
 }
 
-func (m *McpManager) newMcpClient(ctx context.Context, cfg McpServerConfig) (*client.Client, error) {
+func (m *McpManager) newMcpClient(ctx context.Context, name string, cfg McpServerConfig, token *mcpConnToken) (*client.Client, error) {
 	transportName := mcpTransportName(cfg)
 	var mcpClient *client.Client
 	var err error
+	// stdio 专有：cmd 与 job 必须等 transport 的 Start 真正跑完再读（Start 里才
+	// spawn 进程）。两者由同一个 goroutine 按序写入、按序读取，无数据竞争。
+	var stdioCmd *exec.Cmd
+	var stdioJob uintptr
 	switch transportName {
 	case "stdio":
 		if strings.TrimSpace(cfg.Command) == "" {
@@ -461,20 +597,24 @@ func (m *McpManager) newMcpClient(ctx context.Context, cfg McpServerConfig) (*cl
 		// NewStdioMCPClient spawns the subprocess with its own exec.Cmd and
 		// does not set SysProcAttr — on Windows this would flash a console
 		// window for every stdio MCP server (npx / python / node …) on every
-		// reconnect. Use WithCommandFunc to take ownership of Cmd creation,
-		// apply hideCommandWindow(), and join the process into a
-		// KILL_ON_JOB_CLOSE Job Object so grandchildren do not outlive the
-		// client (same orphan protection as the service tool).
+		// reconnect, and on Unix the wrapper's descendants would outlive the
+		// root process. Use WithCommandFunc to take ownership of Cmd creation:
+		// set the working directory, hide the console window, join the process
+		// into a KILL_ON_JOB_CLOSE Job Object, and watch it for exit (same
+		// orphan protection as the service tool).
 		mcpClient, err = client.NewStdioMCPClientWithOptions(cfg.Command, env, cfg.Args,
 			transport.WithCommandFunc(func(ctx context.Context, command string, cmdEnv []string, args []string) (*exec.Cmd, error) {
 				cmd := exec.CommandContext(ctx, command, args...)
 				cmd.Env = cmdEnv
+				cmd.Dir = m.mcpStdioDir(cfg)
 				hideCommandWindow(cmd)
-				watchMcpProcessJob(cmd, prepareServiceCommand(cmd))
+				stdioJob = prepareServiceCommand(cmd)
+				stdioCmd = cmd
 				return cmd, nil
 			}),
 		)
 		if err != nil {
+			discardProcessJob(stdioJob)
 			return nil, fmt.Errorf("stdio spawn failed: %w", err)
 		}
 		drainMcpStderr(mcpClient)
@@ -491,11 +631,14 @@ func (m *McpManager) newMcpClient(ctx context.Context, cfg McpServerConfig) (*cl
 		if strings.TrimSpace(cfg.URL) == "" {
 			return nil, errors.New("http MCP server requires url")
 		}
+		// 超时只经 basic client 设定：WithHTTPTimeout 与 WithHTTPBasicClient
+		// 不能并用——后者直接替换 client，会把前者的赋值整个丢掉。用工具调用
+		// 超时（per-server 可覆盖）而不是写死的 60s：否则 http 服务端的
+		// toolTimeoutSec 形同虚设，长任务到 60s 必断。
 		mcpClient, err = client.NewStreamableHttpClient(
 			cfg.URL,
 			transport.WithHTTPHeaders(cfg.Headers),
-			transport.WithHTTPTimeout(60*time.Second),
-			transport.WithHTTPBasicClient(proxyHTTPClient(m.currentNetworkConfig(), true, 60*time.Second)),
+			transport.WithHTTPBasicClient(proxyHTTPClient(m.currentNetworkConfig(), true, mcpToolCallTimeout(cfg))),
 		)
 		if err != nil {
 			return nil, fmt.Errorf("http client failed: %w", err)
@@ -504,46 +647,205 @@ func (m *McpManager) newMcpClient(ctx context.Context, cfg McpServerConfig) (*cl
 		return nil, fmt.Errorf("unsupported MCP transport %q", cfg.Transport)
 	}
 	if err := mcpClient.Start(ctx); err != nil {
+		discardProcessJob(stdioJob)
 		_ = mcpClient.Close()
 		return nil, fmt.Errorf("%s start failed: %w", transportName, err)
 	}
+	if stdioCmd != nil {
+		m.watchStdioProcess(name, stdioCmd, stdioJob, token)
+	}
+	// 服务端运行期增删工具只会通过这条通知告知（插件加载、权限变化）。回调
+	// 跑在 transport 的读取循环里，所以里面只能置脏标记，真正的 tools/list
+	// 必须另起 goroutine。
+	mcpClient.OnNotification(func(notification mcp.JSONRPCNotification) {
+		if notification.Method == mcpMethodToolListChanged {
+			m.markToolsListDirty(name, token)
+		}
+	})
+	mcpClient.OnConnectionLost(func(err error) {
+		m.handleConnectionLost(name, token, "MCP connection lost: "+err.Error())
+	})
 	return mcpClient, nil
 }
 
-// watchMcpProcessJob gives stdio MCP subprocess trees the same orphan
-// protection as the service tool. The transport owns Start/Wait, so the job
-// is registered once the process handle appears (Windows Job Object with
-// KILL_ON_JOB_CLOSE; no-op elsewhere) and unregistered after the root process
-// dies — closing the handle then also kills any surviving grandchildren.
-// Polling reads cmd.Process once after Start and never touches
-// cmd.ProcessState, avoiding races with the transport's Wait.
-func watchMcpProcessJob(cmd *exec.Cmd, job uintptr) {
-	if job == 0 {
+// mcpStdioDir 决定 stdio 服务端的工作目录：显式 cwd 优先（相对路径相对工作区
+// 根解析，绝对路径原样，不展开 ~），否则用工作区根；两者都空时返回 ""，交给
+// exec 继承当前目录。
+func (m *McpManager) mcpStdioDir(cfg McpServerConfig) string {
+	dir := strings.TrimSpace(cfg.Cwd)
+	if dir == "" {
+		return m.workDir
+	}
+	if filepath.IsAbs(dir) {
+		return filepath.Clean(dir)
+	}
+	base := strings.TrimSpace(m.workDir)
+	if base == "" {
+		return ""
+	}
+	return filepath.Join(base, dir)
+}
+
+// watchStdioProcess 守护一个 stdio MCP 子进程：等它退出，清理可能脱管的孙
+// 进程，并在"这仍是当前那条连接"时把状态翻成 failed（下一次调用会重连自愈）。
+//
+// 退出判据用 os.Process.Wait 而不是轮询 kill(pid,0)：Unix 上子进程退出后会
+// 先变成僵尸，kill(pid,0) 依旧返回成功，只有 wait4 能看出它已经不在了
+// （对齐 codex 的进程句柄语义）。代价是 mcp-go 自己的 Close→cmd.Wait() 会拿到
+// ECHILD：它只把该错误返回给调用方，而所有调用点都忽略 Close 的返回值，既不
+// 会 panic 也不会漏杀进程；进程已死时反而让 Close 立即返回，不必再等满
+// 2s+3s+3s 的优雅期。
+func (m *McpManager) watchStdioProcess(serverName string, cmd *exec.Cmd, job uintptr, token *mcpConnToken) {
+	proc := cmd.Process
+	if proc == nil {
+		discardProcessJob(job)
 		return
 	}
+	pid := proc.Pid
 	go func() {
-		var pid int
-		for i := 0; i < 100; i++ {
-			if p := cmd.Process; p != nil {
-				pid = p.Pid
-				break
-			}
-			time.Sleep(50 * time.Millisecond)
-		}
-		if pid == 0 {
+		if err := registerProcessJob(pid, job); err != nil {
+			// 注册失败（例如进程已被别的 job 接管）：同样要关掉 handle。
 			discardProcessJob(job)
+		}
+		state, err := proc.Wait()
+		unregisterProcessJob(pid)
+		// 先翻状态再回收残留进程组：状态要尽快诚实，那 1s 的宽限期不该拖住
+		// 界面（两者互不依赖）。
+		m.handleConnectionLost(serverName, token, mcpProcessExitCause(state, err))
+		reapProcessGroupLeftovers(pid)
+	}()
+}
+
+func mcpProcessExitCause(state *os.ProcessState, err error) string {
+	switch {
+	case state != nil:
+		return fmt.Sprintf("MCP server process exited (%s)", state)
+	case err != nil:
+		return fmt.Sprintf("MCP server process exited: %v", err)
+	default:
+		return "MCP server process exited"
+	}
+}
+
+// handleConnectionLost 把一次"连接意外结束"（子进程退出、SSE 断流）记进状态。
+// 判定必须同时满足"记录还是那一条"与"状态仍是 connected"：重连会把状态先改成
+// connecting、删除会先把记录摘掉、退出会整体换掉 map——这些正常路径都不该被
+// 当成故障，更不能让旧连接的死亡打翻刚建好的新连接。
+//
+// 工具清单与 client 都保留：失败服务端本就不参与工具注入，而"下一次调用先
+// 重连再试"要靠它们把连接救回来（对齐 ZCode 的调用前按需重连）。client 不在
+// 这里关闭——本函数可能就跑在传输层的回调/读取路径上，同步关闭有自锁风险；
+// 它持有的管道与句柄会在下一次重连、配置调和或退出时随 Close 一起释放。
+func (m *McpManager) handleConnectionLost(serverName string, token *mcpConnToken, cause string) {
+	// 先记进 token：连接可能还没被登记到 handle 上（握手刚成功、进程就死），
+	// 登记那一步要靠它把结果落成 failed。
+	token.markLost(cause)
+
+	m.mu.Lock()
+	handle, ok := m.clients[serverName]
+	if !ok || handle.token != token || handle.Status != "connected" {
+		m.mu.Unlock()
+		return
+	}
+	handle.Status = "failed"
+	handle.Error = cause
+	m.mu.Unlock()
+	m.notifyChange()
+}
+
+// mcpMethodToolListChanged 是服务端"工具清单变了"的通知方法名。
+const mcpMethodToolListChanged = "notifications/tools/list_changed"
+
+// mcpToolRefreshDebounce 合并突发通知：一次清单变化常连发多条，隔一下再拉，
+// 避免对着同一个服务端连打 tools/list。
+const mcpToolRefreshDebounce = 500 * time.Millisecond
+
+// mcpToolRefreshSlot 是每个 server 的刷新槽：running = 已有一轮在跑，
+// pending = 跑的过程中又来了通知（下一轮必须再拉一次，不能丢）。
+type mcpToolRefreshSlot struct {
+	running bool
+	pending bool
+	token   *mcpConnToken
+}
+
+// markToolsListDirty 处理服务端通知：置脏 + 保证每个 server 同时只有一轮刷新。
+// 通知回调跑在 transport 的读取循环里，这里绝不允许做同步的 tools/list。
+func (m *McpManager) markToolsListDirty(serverName string, token *mcpConnToken) {
+	m.refreshMu.Lock()
+	if m.refreshSlots == nil {
+		m.refreshSlots = map[string]*mcpToolRefreshSlot{}
+	}
+	slot, ok := m.refreshSlots[serverName]
+	if !ok {
+		slot = &mcpToolRefreshSlot{}
+		m.refreshSlots[serverName] = slot
+	}
+	slot.pending = true
+	slot.token = token
+	if slot.running {
+		m.refreshMu.Unlock()
+		return
+	}
+	slot.running = true
+	refresh := m.toolRefresher
+	m.refreshMu.Unlock()
+	go m.runToolRefresh(serverName, slot, refresh)
+}
+
+// runToolRefresh 是一轮"防抖 + 不丢"的刷新循环：refresh 收到的是最新一次通知
+// 的连接身份，连接被换掉时 refreshServerTools 会自行放弃。
+func (m *McpManager) runToolRefresh(serverName string, slot *mcpToolRefreshSlot, refresh func(string, *mcpConnToken)) {
+	for {
+		time.Sleep(mcpToolRefreshDebounce)
+		m.refreshMu.Lock()
+		slot.pending = false
+		token := slot.token
+		m.refreshMu.Unlock()
+
+		refresh(serverName, token)
+
+		m.refreshMu.Lock()
+		if !slot.pending {
+			slot.running = false
+			m.refreshMu.Unlock()
 			return
 		}
-		_ = registerProcessJob(pid, job)
-		ticker := time.NewTicker(500 * time.Millisecond)
-		defer ticker.Stop()
-		for range ticker.C {
-			if !isProcessAlive(pid) {
-				unregisterProcessJob(pid)
-				return
-			}
-		}
-	}()
+		m.refreshMu.Unlock()
+	}
+}
+
+// refreshServerTools 重拉一个已连接服务端的工具清单。连接已被替换（token 不
+// 匹配）或当前不是 connected 时直接放弃——那不是这条连接的活。拉取失败不做
+// 任何状态变更：一次临时失败不该把一个好好的连接翻成 failed，等下一次通知或
+// 重连即可。
+//
+// 已冻结的会话工具集（sessionToolsets）不会因此变化，新工具在下一个会话可见
+// ——冻结是提示词前缀缓存的前提，不能被一次通知破掉。
+func (m *McpManager) refreshServerTools(serverName string, token *mcpConnToken) {
+	m.mu.RLock()
+	handle, ok := m.clients[serverName]
+	if !ok || handle.token != token || handle.Status != "connected" || handle.Client == nil {
+		m.mu.RUnlock()
+		return
+	}
+	mcpClient := handle.Client
+	cfg := handle.Config
+	m.mu.RUnlock()
+
+	// 通知没有调用方 ctx：自己带一个与握手同档的上限，别让拉取悬空。
+	ctx, cancel := context.WithTimeout(context.Background(), mcpStartupTimeout(cfg))
+	defer cancel()
+	discovered, err := listMcpTools(ctx, serverName, mcpClient)
+	if err != nil {
+		return
+	}
+	m.mu.Lock()
+	if current, ok := m.clients[serverName]; ok && current.token == token && current.Client == mcpClient && current.Status == "connected" {
+		current.ToolDefs = discovered
+		m.replaceToolLookupLocked(serverName, discovered)
+	}
+	m.mu.Unlock()
+	m.notifyChange()
 }
 
 // toolSchemaToMap converts an MCP input schema to provider-safe JSON Schema.
@@ -639,47 +941,122 @@ func normalizedMcpRequired(value any) ([]string, bool) {
 }
 
 const (
-	// defaultMcpToolCallTimeout limits unbounded MCP calls so a hung external
+	// mcpDefaultToolCallTimeout limits unbounded MCP calls so a hung external
 	// server (or long CAD modeling phase) does not freeze the run indefinitely.
-	defaultMcpToolCallTimeout = 5 * time.Minute
+	mcpDefaultToolCallTimeout = 5 * time.Minute
+	// mcpDefaultStartupTimeout 约束握手与随后的 tools/list：一条连接得先"能
+	// 用"，才有资格进入模型请求。
+	mcpDefaultStartupTimeout = 30 * time.Second
+	// mcpMaxTimeout 是 per-server 覆盖值的上限：小时级足够，同时挡住误填的
+	// 天文数字（time.Duration 溢出会变成负数，等于立即超时）。
+	mcpMaxTimeout = 12 * time.Hour
 )
 
+// mcpTimeoutFromSeconds 是配置里的秒数换算超时的唯一入口：非正数用默认值，
+// 超过上限一律截断（超时是资源约束，不该被配置写成无限）。
+func mcpTimeoutFromSeconds(seconds float64, fallback time.Duration) time.Duration {
+	// 写成 !(seconds > 0) 而不是 seconds <= 0：NaN 两种都比不出来，落进后面
+	// 的换算会得到一个实现定义的时长（可能是极大的负数 = 立即超时）。
+	if !(seconds > 0) {
+		return fallback
+	}
+	if seconds > mcpMaxTimeout.Seconds() {
+		return mcpMaxTimeout
+	}
+	return time.Duration(seconds * float64(time.Second))
+}
+
+// mcpStartupTimeout / mcpToolCallTimeout 是两档超时的唯一出处（连接建立、工具
+// 调用各一档），都支持 per-server 覆盖。
+func mcpStartupTimeout(cfg McpServerConfig) time.Duration {
+	return mcpTimeoutFromSeconds(cfg.StartupTimeoutSec, mcpDefaultStartupTimeout)
+}
+
+func mcpToolCallTimeout(cfg McpServerConfig) time.Duration {
+	return mcpTimeoutFromSeconds(cfg.ToolTimeoutSec, mcpDefaultToolCallTimeout)
+}
+
+// mcpCallFailure 说明一次 MCP 调用失败的性质，决定"是否值得重连后再试一次"。
+// 只有连接本身不可用才允许重连；服务端已经跑过工具再回错误的情况必须原样
+// 上报——重试会让有副作用的工具发生第二次（对齐 codex：运行期只重试
+// tools/list，工具调用绝不自动重放）。
+type mcpCallFailure int
+
+const (
+	mcpCallSucceeded mcpCallFailure = iota
+	// mcpCallReconnectable：传输层断了（子进程死了、管道关了、会话 404 过期）
+	// 或上一次连接已经定格在 failed —— 值得先重连再试一次。
+	mcpCallReconnectable
+	// mcpCallToolFailed：服务端跑过这个工具并回了错误结果（isError:true）。
+	mcpCallToolFailed
+	// mcpCallUnavailable：服务端被停用、仍在连接中、工具不存在，或调用超时
+	// 取消（服务端可能还在跑）——没有可重连的连接，重试也不安全。
+	mcpCallUnavailable
+)
+
+// mcpCallOutcome 是一次 callToolOnce 的结果信封：文本、当时用的 client
+// （重连时用来核对是不是同一条连接）与失败归类。
+type mcpCallOutcome struct {
+	text    string
+	client  *client.Client
+	failure mcpCallFailure
+}
+
 func (m *McpManager) CallTool(ctx context.Context, serverName, toolName string, args map[string]any) (string, error) {
-	callCtx, cancel := context.WithTimeout(ctx, defaultMcpToolCallTimeout)
+	callCtx, cancel := context.WithTimeout(ctx, mcpToolCallTimeout(m.serverConfig(serverName)))
 	defer cancel()
 
-	result, failedClient, err := m.callToolOnce(callCtx, serverName, toolName, args)
+	outcome, err := m.callToolOnce(callCtx, serverName, toolName, args)
 	if err == nil {
-		return result, nil
+		return outcome.text, nil
 	}
-	if !isMcpRecoverableError(err) {
+	if outcome.failure != mcpCallReconnectable {
 		return "", err
 	}
 
-	// Try reconnecting once on recoverable errors (invalid session, closed pipe, broken pipe, connection reset)
-	if reconnectErr := m.reconnectServer(ctx, serverName, failedClient); reconnectErr != nil {
+	// 连接不可用了：重连一次再试。重试的是连接，至多重放一次调用——服务端
+	// 已经执行过工具并明确报错（isError / 协议错误码）的一律不走到这里。
+	if reconnectErr := m.reconnectServer(ctx, serverName, outcome.client); reconnectErr != nil {
 		return "", fmt.Errorf("MCP call failed: %w; reconnect failed: %w", err, reconnectErr)
 	}
-	result, _, err = m.callToolOnce(callCtx, serverName, toolName, args)
-	return result, err
+	retry, retryErr := m.callToolOnce(callCtx, serverName, toolName, args)
+	return retry.text, retryErr
 }
 
-func (m *McpManager) callToolOnce(ctx context.Context, serverName, toolName string, args map[string]any) (string, *client.Client, error) {
+// serverConfig 取某个服务端的当前配置（超时、cwd、env 都从这里读）；服务端已
+// 被移除时返回零值配置，即走默认超时。
+func (m *McpManager) serverConfig(serverName string) McpServerConfig {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if handle, ok := m.clients[serverName]; ok {
+		return handle.Config
+	}
+	return McpServerConfig{}
+}
+
+func (m *McpManager) callToolOnce(ctx context.Context, serverName, toolName string, args map[string]any) (mcpCallOutcome, error) {
 	m.mu.RLock()
 	handle, ok := m.clients[serverName]
 	if !ok {
 		m.mu.RUnlock()
-		return "", nil, fmt.Errorf("MCP server %s not found", serverName)
+		return mcpCallOutcome{failure: mcpCallUnavailable}, fmt.Errorf("MCP server %s not found", serverName)
 	}
 	status := handle.Status
 	handleErr := handle.Error
 	mcpClient := handle.Client
 	m.mu.RUnlock()
 	if status != "connected" {
-		return "", mcpClient, fmt.Errorf("MCP server %s status: %s/%s", serverName, status, handleErr)
+		// failed 是"上一次连接已经死了"，允许调用前重连自愈；disabled 与
+		// connecting 都不该由一次工具调用拉起来（后者已有连接在飞）。
+		failure := mcpCallUnavailable
+		if status == "failed" {
+			failure = mcpCallReconnectable
+		}
+		return mcpCallOutcome{client: mcpClient, failure: failure},
+			fmt.Errorf("MCP server %s status: %s/%s", serverName, status, handleErr)
 	}
 	if mcpClient == nil {
-		return "", nil, fmt.Errorf("MCP server %s has no active client", serverName)
+		return mcpCallOutcome{failure: mcpCallUnavailable}, fmt.Errorf("MCP server %s has no active client", serverName)
 	}
 
 	req := mcp.CallToolRequest{
@@ -690,7 +1067,14 @@ func (m *McpManager) callToolOnce(ctx context.Context, serverName, toolName stri
 	}
 	result, err := mcpClient.CallTool(ctx, req)
 	if err != nil {
-		return "", mcpClient, fmt.Errorf("MCP call failed: %w", err)
+		failure := mcpCallUnavailable
+		switch {
+		case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
+			// 超时/取消：服务端可能还在跑这个工具，重试就是把副作用放两遍。
+		case isMcpTransportFailure(err):
+			failure = mcpCallReconnectable
+		}
+		return mcpCallOutcome{client: mcpClient, failure: failure}, fmt.Errorf("MCP call failed: %w", err)
 	}
 
 	outText := mcpToolResultText(result)
@@ -698,9 +1082,13 @@ func (m *McpManager) callToolOnce(ctx context.Context, serverName, toolName stri
 		if strings.TrimSpace(outText) == "" {
 			outText = "MCP tool reported failure (isError: true)"
 		}
-		return "", mcpClient, fmt.Errorf("MCP tool %s error: %s", toolName, outText)
+		// 服务端确实执行了这个工具：错误文案再像网络故障也不能重连或重试。
+		// 旧的纯子串判据下，一个回 "connection refused" 的工具会让 Ally 杀掉
+		// 并重启整个 MCP 服务端、再把工具跑第二遍。
+		return mcpCallOutcome{client: mcpClient, failure: mcpCallToolFailed},
+			fmt.Errorf("MCP tool %s error: %s", toolName, outText)
 	}
-	return outText, mcpClient, nil
+	return mcpCallOutcome{text: outText, client: mcpClient, failure: mcpCallSucceeded}, nil
 }
 
 // mcpToolResultText renders every supported MCP content block into
@@ -750,12 +1138,10 @@ func mcpToolResultText(result *mcp.CallToolResult) string {
 }
 
 func (m *McpManager) reconnectServer(ctx context.Context, serverName string, failedClient *client.Client) error {
-	// Per-server lock: one server's slow reconnect (up to the 30s handshake
-	// timeout) must not serialize reconnects of unrelated servers.
-	lock, _ := m.reconnectLocks.LoadOrStore(serverName, &sync.Mutex{})
-	mutex := lock.(*sync.Mutex)
-	mutex.Lock()
-	defer mutex.Unlock()
+	// 拨号互斥（与首连共用）：一台服务端的慢重连不该串住别的服务端，但同名
+	// 服务端不能有两次拨号同时在飞（见 connectOne）。
+	unlock := m.lockServerDial(serverName)
+	defer unlock()
 
 	m.mu.Lock()
 	handle, ok := m.clients[serverName]
@@ -779,15 +1165,17 @@ func (m *McpManager) reconnectServer(ctx context.Context, serverName string, fai
 		_ = oldClient.Close()
 	}
 
-	mcpClient, discovered, err := m.initializeMcpClientWithRetry(ctx, serverName, cfg)
+	established, err := m.initializeMcpClientWithRetry(ctx, serverName, cfg)
 	m.mu.Lock()
 	current, ok := m.clients[serverName]
-	if !ok {
+	// 记录被换掉时不能往上写（配置调和重建了这台服务端）：否则我们刚连出来的
+	// 客户端会挂在别人的记录上，或者反过来变成再也没人关闭的孤儿进程。
+	if !ok || current != handle {
 		m.mu.Unlock()
-		if mcpClient != nil {
-			_ = mcpClient.Close()
+		if established.client != nil {
+			_ = established.client.Close()
 		}
-		return fmt.Errorf("MCP server %s removed during reconnect", serverName)
+		return fmt.Errorf("MCP server %s was replaced during reconnect", serverName)
 	}
 	if err != nil {
 		current.Status = "failed"
@@ -796,11 +1184,7 @@ func (m *McpManager) reconnectServer(ctx context.Context, serverName string, fai
 		m.notifyChange()
 		return err
 	}
-	current.Client = mcpClient
-	current.ToolDefs = discovered
-	current.Status = "connected"
-	current.Error = ""
-	m.replaceToolLookupLocked(serverName, discovered)
+	m.commitConnectionLocked(current, established)
 	m.mu.Unlock()
 	m.notifyChange()
 	return nil
@@ -817,29 +1201,64 @@ func (m *McpManager) replaceToolLookupLocked(serverName string, discovered []Mcp
 	}
 }
 
-// mcpRecoverableErrorMarkers 是 MCP 服务器或 stdio 进程管道在断开/崩溃/
-// 会话失效时的已知错误特征文案。出现这些错误时，说明当前 Client 已经失效，
-// 应该自动重连一次再重试，而不是直接向模型报错。
-var mcpRecoverableErrorMarkers = []string{
+// mcpTransportFailureSentinels 是 mcp-go 自己导出的"连接已不可用"哨兵错误。
+// 判据必须优先走 errors.Is：手写子串清单会漏——曾经漏掉 stdio 的
+// "transport closed" 与 streamable-http 的 "session terminated (404)"，于是
+// 子进程死了、会话过期了都只会把错误丢给模型，自动重连形同虚设。
+var mcpTransportFailureSentinels = []error{
+	transport.ErrTransportClosed,   // stdio：子进程退出 / 管道关闭
+	transport.ErrSessionTerminated, // streamable-http：404 会话已失效
+}
+
+// mcpTransportFailureMarkers 是兜底文案特征：覆盖 mcp-go 没有导出哨兵的传输
+// 错误（SSE 的 "connection has been closed"）与中转服务端自述的会话文案。
+var mcpTransportFailureMarkers = []string{
 	"invalid session id",
 	"invalid session",
 	"session not found",
 	"session expired",
+	"session terminated (404)",
+	"transport closed",
+	"transport is closing",
+	"client is closed",
+	"connection has been closed",
 	"closed pipe",
 	"broken pipe",
 	"connection reset",
 	"connection refused",
 	"eof",
-	"transport is closing",
-	"client is closed",
 }
 
-func isMcpRecoverableError(err error) bool {
+// mcpProtocolErrorSentinels 是 mcp-go 把标准 JSON-RPC 错误码映射出来的哨兵：
+// 它们说明"服务端收到了这个请求并明确拒绝"，与链路无关，绝不重连。
+// （非标准错误码 mcp-go 只留一个字符串错误，分不出来源——所以下面的文案兜底
+// 仍然要覆盖它，中转服务端的"会话失效"就是这么报的。）
+var mcpProtocolErrorSentinels = []error{
+	mcp.ErrParseError,
+	mcp.ErrInvalidRequest,
+	mcp.ErrMethodNotFound,
+	mcp.ErrInvalidParams,
+}
+
+// isMcpTransportFailure 判断一个错误是否意味着当前连接已经不能用了。
+// 只能喂给它链路层/协议层的错误：服务端执行工具后回的 isError 结果绝不能进
+// 这里（见 mcpCallToolFailed）。
+func isMcpTransportFailure(err error) bool {
 	if err == nil {
 		return false
 	}
+	for _, sentinel := range mcpProtocolErrorSentinels {
+		if errors.Is(err, sentinel) {
+			return false
+		}
+	}
+	for _, sentinel := range mcpTransportFailureSentinels {
+		if errors.Is(err, sentinel) {
+			return true
+		}
+	}
 	msg := strings.ToLower(err.Error())
-	for _, marker := range mcpRecoverableErrorMarkers {
+	for _, marker := range mcpTransportFailureMarkers {
 		if strings.Contains(msg, marker) {
 			return true
 		}
@@ -877,14 +1296,28 @@ func (m *McpManager) DescribeFunctionTool(functionName string) (mcpToolRef, bool
 
 func (m *McpManager) Shutdown() {
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	closing := make([]*client.Client, 0, len(m.clients))
 	for _, handle := range m.clients {
 		if handle.Client != nil {
-			handle.Client.Close()
+			closing = append(closing, handle.Client)
 		}
 	}
 	m.clients = make(map[string]*McpClientHandle)
 	m.toolLookup = make(map[string]mcpToolRef)
+	m.mu.Unlock()
+	// Close 必须在锁外、且并行：stdio 的 Close 含 2s 优雅 + 3s+3s 强杀等待，
+	// 持锁逐个关会把整个 manager（状态推送、工具清单）卡住数秒到数十秒（与
+	// ReconcileConfigs / reconnectServer 的锁外 Close 对齐；退出时 N 个服务端
+	// 也不该串成 8s×N）。
+	var wg sync.WaitGroup
+	for _, mcpClient := range closing {
+		wg.Add(1)
+		go func(c *client.Client) {
+			defer wg.Done()
+			_ = c.Close()
+		}(mcpClient)
+	}
+	wg.Wait()
 }
 
 // GetAllTools returns every discovered tool from connected servers regardless
@@ -1286,19 +1719,11 @@ func drainMcpStderr(c *client.Client) {
 	}()
 }
 
+// SaveMcpConfig 写盘时保留配置里的未知字段：解析成 RawMessage 后原样写回，只做
+// "结构校验 + 统一缩进"。按固定 struct 重建会把 cwd、超时与外部客户端
+// （Claude Desktop / Cursor）的专有键整段吃掉——用户从面板导入一次就少一半。
 func (a *App) SaveMcpConfig(raw string) error {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		raw = "{\"mcpServers\":{}}"
-	}
-	var cfg McpServersConfig
-	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
-		return fmt.Errorf("invalid MCP JSON: %w", err)
-	}
-	if cfg.McpServers == nil {
-		cfg.McpServers = map[string]McpServerConfig{}
-	}
-	data, err := json.MarshalIndent(cfg, "", "  ")
+	data, err := normalizeMcpConfigJSON(raw)
 	if err != nil {
 		return err
 	}
@@ -1309,6 +1734,63 @@ func (a *App) SaveMcpConfig(raw string) error {
 	// mcp.json 与 config.json 同规格：走原子写。原地截断写在崩溃时留下半截 JSON，
 	// 下次启动整份 MCP 配置回默认值，用户自己写的服务器列表就没了。
 	return writeAtomicBytes(path, data, 0o600)
+}
+
+// defaultMcpConfigJSON 是空配置的落盘形态。
+const defaultMcpConfigJSON = "{\"mcpServers\":{}}"
+
+// normalizeMcpConfigJSON 校验并规整一份 mcp.json：mcpServers 必须是对象，每个
+// server 的已知字段类型必须合法（写错了当场报错，而不是等到启动才发现全部加载
+// 失败），其余键一律原样保留。键序由 map 序列化保证（升序）。
+func normalizeMcpConfigJSON(raw string) ([]byte, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		raw = defaultMcpConfigJSON
+	}
+	doc := map[string]json.RawMessage{}
+	if err := json.Unmarshal([]byte(raw), &doc); err != nil {
+		return nil, fmt.Errorf("invalid MCP JSON: %w", err)
+	}
+	servers := map[string]json.RawMessage{}
+	if rawServers, ok := doc["mcpServers"]; ok {
+		// null 按"没有 server"收（与缺席同义，落盘成 {}）：它是空配置的一种
+		// 写法，不是语法错误。数组/字符串/数字才是真写错了，当场报错，别静默
+		// 写成一份空配置让用户以为保存成功了。
+		if err := json.Unmarshal(rawServers, &servers); err != nil {
+			return nil, fmt.Errorf("invalid mcpServers (expected an object): %w", err)
+		}
+	}
+	if servers == nil {
+		servers = map[string]json.RawMessage{}
+	}
+	for name, rawServer := range servers {
+		// server 值是 null（而不是对象）也是写错：它会变成一个既无 command
+		// 也无 url 的"服务端"，启动时只报一句难以定位的错。
+		if trimmed := strings.TrimSpace(string(rawServer)); trimmed == "null" {
+			return nil, fmt.Errorf("invalid MCP server %q (expected an object, got null)", name)
+		}
+		var cfg McpServerConfig
+		if err := json.Unmarshal(rawServer, &cfg); err != nil {
+			return nil, fmt.Errorf("invalid MCP server %q: %w", name, err)
+		}
+	}
+	rawServers, err := json.Marshal(servers)
+	if err != nil {
+		return nil, err
+	}
+	doc["mcpServers"] = rawServers
+	packed, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	// RawMessage 在 MarshalIndent 里只走"原样紧凑"路径（自定义 Marshaler 的输出
+	// 不会被重新缩进），不补这一步的话整份 server 清单会挤成一长行——面板里那个
+	// 手写 JSON 的地方就没法看了。json.Indent 按文本重新排版，键序不变。
+	var out bytes.Buffer
+	if err := json.Indent(&out, packed, "", "  "); err != nil {
+		return nil, err
+	}
+	return out.Bytes(), nil
 }
 
 func (a *App) RestartMcpServers() error {

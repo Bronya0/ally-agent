@@ -107,7 +107,10 @@ const tokenSpeed = computed(() => {
   gap: 6px;
   font-size: var(--ally-sub-font-size, 13px);
   color: var(--ally-text-faint);
-  margin-top: 4px;
+  /* 4px 贴合上面那条收尾块（它的底部外边距已被 style.css 的
+     `.messages > .message:has(+ .turn-stats)` 规则清零）；10px 是到下一轮的
+     行距——本行已是收尾块的兄弟节点，那段行距必须由它自己承担，不能省。 */
+  margin: 4px 0 10px;
   /* 统计行默认隐藏但保留占位（visibility 不参与布局收缩，无跳动）。
      visibility 一起进 transition：显示时立即可见、淡入；隐藏时等 opacity
      落到 0 才真正 hidden，浮出与淡出双向都有过渡，不突兀 */

@@ -142,3 +142,8 @@
 [marker-case-insensitive] 2026-10-02 中危 拒写判据别按字面比对：Go 的 errno 是小写、内核与 bash 是大写，只比一种会静默漏掉整类拒写。@orch_sandbox.go
 [fence-use-vs-read] 2026-10-03 高危 「用密钥不算读」的放行清单只能收没有 print 模式的命令：kubectl config view 会把凭据打出来。@tools/command/semantic.go
 [fence-one-table] 2026-10-03 中危 位置清单别按字面大小写/前缀比：/system 漏 /System、长路径漏；收一张表走规范化形态。@orch_fence.go
+[mcp-reconnect-sentinel] 2026-10-03 高危 重连判据必须问依赖库导出的哨兵：手写子串漏了 transport closed、session terminated(404)，自动重连失效。@biz_mcp.go
+[mcp-tool-error-not-transport] 2026-10-03 高危 服务端 isError 文案不能进"链路故障"判据：否则会重连并把有副作用的工具跑第二遍。@biz_mcp.go
+[unix-zombie-alive] 2026-10-03 中危 Unix 子进程死后是僵尸，kill(pid,0) 仍报活：进程死亡只能靠 Process.Wait/wait4 看出。@biz_mcp.go
+[mcp-http-option-clobber] 2026-10-03 中危 mcp-go 的 WithHTTPTimeout 会被后面的 WithHTTPBasicClient 覆盖；超时须设在 basic client 上。@biz_mcp.go
+[save-config-keeps-unknown] 2026-10-03 中危 存第三方配置文件别按固定 struct 重建：cwd/超时/导入来的专有键会整段丢。@biz_mcp.go

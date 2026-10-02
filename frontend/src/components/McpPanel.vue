@@ -252,24 +252,37 @@ function autoApplyMcpConfig() {
   mcpApplyChain = mcpApplyChain.then(() => saveMcpConfigText()).catch(() => {});
 }
 
+// 只接受普通对象：外部/手写的 mcp.json 里出现 null、数组、字符串时不能让表单
+// 构建半道抛错——外层 catch 会保住旧表单，导入看着成功、实际什么都没变，
+// 随后 auto-apply 还会反过来用旧行盖掉用户刚导入的整份配置。
+function mcpPlainObject(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+}
+
 function syncJsonToForm() {
   try {
-    const parsed = JSON.parse(mcpConfigText.value || '{}');
-    const servers = parsed.mcpServers || {};
-    mcpFormServers.value = Object.entries(servers).map(([name, cfg]) => ({
-      _key: nextMcpServerKey(),
-      name,
-      command: cfg.command || '',
-      // 模态框参数输入框是单行空格分隔格式；历史多行写法（每行一个参数）
-      // 在这里一并归一化为空格分隔，保存时再按空白切分。
-      args: (cfg.args || []).join(' '),
-      env: Object.entries(cfg.env || {}).map(([k, v]) => `${k}=${v}`).join('\n'),
-      transport: normalizeMcpTransport(cfg),
-      url: cfg.url || '',
-      headers: Object.entries(cfg.headers || {}).map(([k, v]) => `${k}: ${v}`).join('\n'),
-      enabled: cfg.enabled !== false,
-      disabledTools: Array.isArray(cfg.disabledTools) ? cfg.disabledTools.map((name) => String(name).trim()).filter(Boolean) : [],
-    }));
+    const parsed = mcpPlainObject(JSON.parse(mcpConfigText.value || '{}'));
+    const servers = mcpPlainObject(parsed.mcpServers);
+    mcpFormServers.value = Object.entries(servers).map(([name, rawCfg]) => {
+      const cfg = mcpPlainObject(rawCfg);
+      return {
+        _key: nextMcpServerKey(),
+        name,
+        command: typeof cfg.command === 'string' ? cfg.command : '',
+        // 模态框参数输入框是单行空格分隔格式；历史多行写法（每行一个参数）
+        // 在这里一并归一化为空格分隔，保存时再按空白切分。
+        args: Array.isArray(cfg.args) ? cfg.args.join(' ') : '',
+        env: Object.entries(mcpPlainObject(cfg.env)).map(([k, v]) => `${k}=${v}`).join('\n'),
+        transport: normalizeMcpTransport(cfg),
+        url: typeof cfg.url === 'string' ? cfg.url : '',
+        headers: Object.entries(mcpPlainObject(cfg.headers)).map(([k, v]) => `${k}: ${v}`).join('\n'),
+        enabled: cfg.enabled !== false,
+        disabledTools: Array.isArray(cfg.disabledTools) ? cfg.disabledTools.map((name) => String(name).trim()).filter(Boolean) : [],
+        // 原样留着这一条服务端的完整 JSON：表单只掌管它认识的那几个字段，其余
+        // （用户手写的 cwd / 超时、从 Claude/Cursor 导入的专有键）回写时原样带回。
+        _raw: cfg,
+      };
+    });
     // 加载/刷新时排一次：开启在前、关闭沉底；之后开关切换不再重排，
     // 组内顺序保持配置文件里的原顺序（sort 稳定）。
     mcpFormServers.value.sort((a, b) => Number(a.enabled === false) - Number(b.enabled === false));
@@ -282,7 +295,11 @@ function syncFormToJson() {
   const servers = {};
   for (const srv of mcpFormServers.value) {
     if (!srv.name?.trim()) continue;
-    const cfg = {};
+    // 表单掌管的字段每次往返都整体重写（先删后按当前输入写），其余键
+    // （cwd / 超时 / 外部客户端专有字段）原样保留。整份重建会静默吃掉未知
+    // 字段：导入一份 Claude/Cursor 的 mcp.json，保存一次就少一半。
+    const cfg = { ...(srv._raw || {}) };
+    for (const key of MCP_FORM_OWNED_KEYS) delete cfg[key];
     if (srv.transport !== 'stdio') {
       cfg.transport = srv.transport === 'sse' ? 'sse' : 'streamable-http';
       if (srv.url?.trim()) cfg.url = srv.url.trim();
@@ -330,6 +347,9 @@ const mcpEditorDraft = reactive(blankMcpServerForm());
 function blankMcpServerForm() {
   return {
     _key: nextMcpServerKey(),
+    // 新建的条目没有任何原始 JSON；显式占位，避免上一份草稿的 _raw 残留下来
+    // （Object.assign 只覆盖出现过的键）。
+    _raw: null,
     name: '',
     command: '',
     args: '',
@@ -341,6 +361,11 @@ function blankMcpServerForm() {
     disabledTools: [],
   };
 }
+
+// 表单掌管的 server 字段：每次往返整体重写，其余键一律原样保留（见
+// syncFormToJson）。由表单形状派生，加字段时不用记得改两处；name 也在内——
+// 服务名以 JSON 外层键为准，条目内若自带 name 不该落盘成自相矛盾的一行。
+const MCP_FORM_OWNED_KEYS = Object.keys(blankMcpServerForm()).filter((key) => !key.startsWith('_'));
 
 // 工具勾选面板的展开状态按行 key 记录；默认收起，勾选计数在行侧常显。
 const mcpExpandedToolPanels = ref(new Set());

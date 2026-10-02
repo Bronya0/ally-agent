@@ -152,6 +152,11 @@ func discardProcessJob(job uintptr) {
 	}
 }
 
+// reapProcessGroupLeftovers 在 Windows 上无事可做：整棵树的回收交给 Job
+// Object —— unregisterProcessJob 关掉 job handle 时 KILL_ON_JOB_CLOSE 会连带
+// 终止 job 内仍存活的进程，不存在 Unix 那种需要单独补刀的进程组。
+func reapProcessGroupLeftovers(pid int) {}
+
 // gracefulStopProcessTree 尽力触发目标树的优雅退出：taskkill 不带 /F 只对
 // 有窗口的进程投递 WM_CLOSE；无窗口控制台进程（dev server 常态）会立即失败
 // 返回，属预期行为——宽限等待随后照常进行，超时由 stopProcessTree 强杀。

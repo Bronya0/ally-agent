@@ -4698,6 +4698,16 @@ code, pre {
   margin-bottom: 6px;
 }
 
+/* 本轮统计行是收尾块的兄弟节点（在 .message 之外，见 ChatMessages）：收尾块
+   不许再交出底部外边距，否则缝隙 = 收尾块的 10px + 统计行的 4px，统计行被顶
+   得离正文一截。那段行距改由统计行自己向下承担（MessageRoundStats 的 margin）。
+   两档都是 :has()（权重 0,3,0）：`.message` 在组件 scoped 样式里以同权重设过
+   margin-bottom，不能靠源码顺序取胜。 */
+.messages > .message:has(+ .turn-stats),
+.messages > .rich-tool-card:has(+ .turn-stats) {
+  margin-bottom: 0;
+}
+
 /* 消息正文此前没有覆盖：内容可见性只加在工具卡 / diff 行 / mermaid 卡三类子块上，
    一条带长代码块或大表格的消息在离屏时仍要参与样式计算与布局。
    估计值只服务“还没被量过”的行，量过一次后由 auto 换成实测高度。
