@@ -139,3 +139,4 @@
 [assert-the-right-field] 2026-10-01 断言要指向真正承载结果的字段：提示刻意不进 Output，测试却去查 Output——既绿不了，也等于什么都没测到。@orch_sandbox_test.go
 [root-self-delete] 2026-10-02 沙箱接管后唯一兜不住的自毁面：写根正是内核的可写范围，删工作区根在它眼里合法，必须由围栏拦（delete 工具本就拒同一目标）。@orch_command_safety.go
 [test-family-table] 2026-10-02 同族用例（同一个入口、只是入参与期望不同）收进一张表驱动：开场样板只写一遍，断言一条不减，函数数从 37 降到 5。别靠"删"来减测试。@orch_test.go
+[marker-case-insensitive] 2026-10-02 中危 拒写判据别按字面比对：Go 的 errno 是小写、内核与 bash 是大写，只比一种会静默漏掉整类拒写。@orch_sandbox.go

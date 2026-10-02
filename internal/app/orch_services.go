@@ -137,13 +137,8 @@ func (a *App) startServiceWithConfig(parent context.Context, cfg ConfigState, re
 			return ServiceInfo{}, err
 		}
 	}
-	// 与 command 工具同一套围栏门控：沙箱真正包住服务命令时只保留工作区根自毁、
-	// VCS 元数据与高危语义三道检查，其余让位给内核。
-	if kernelOwnsBoundary() {
-		if err := checkConfinedCommandSafety(req.Command, cwd, roots); err != nil {
-			return ServiceInfo{}, err
-		}
-	} else if err := checkCommandSafetyAtCwd(CommandRequest{Command: req.Command, Cwd: req.Cwd}, roots, cwd); err != nil {
+	// 与 command 工具同一个围栏入口：围栏自己问「谁管边界」，沙箱接不接都走这里。
+	if err := checkCommandSafetyAtCwd(CommandRequest{Command: req.Command, Cwd: req.Cwd}, roots, cwd); err != nil {
 		return ServiceInfo{}, err
 	}
 	a.servicesMu.Lock()
@@ -633,7 +628,10 @@ func (s *managedService) markSandboxDeniedLocked(output string) {
 		return
 	}
 	s.info.SandboxDenied = true
-	s.info.DeniedWriteHint = sandbox.WriteDeniedHint(s.writeRoots)
+	// 服务记录只留下可写根，没有留下那次运行的完整策略：用可写根重建一个，只用于
+	// 核验「这条路径真的不可写吗」。缺 KB 禁写根只会让我们少报一条路径，绝不会把
+	// 可写的位置说成被拒 —— 偏差只在保守方向。
+	s.info.DeniedWriteHint = sandbox.WriteDeniedHint(s.writeRoots, sandboxDeniedWriteTargets(sandboxSpec(s.writeRoots, nil), output)...)
 }
 
 func (s *managedService) outputSnapshot() (string, int64, bool) {

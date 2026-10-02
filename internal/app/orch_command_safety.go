@@ -21,29 +21,6 @@ import (
 	"ally-dev/internal/tools/pathutil"
 )
 
-// checkConfinedCommandSafety is the fence subset that stays on while the OS
-// sandbox is actually confining the command (kernelOwnsBoundary). The kernel
-// covers outside-workspace writes, the KB deny roots and the routing of
-// ordinary deletions exactly where the fence's lexical guessing used to produce
-// the false positives, so those checks stand down. What the kernel cannot judge
-// stays fenced: VCS metadata sits inside the writable root (git itself must
-// write .git), high-risk command semantics (curl|sh, privilege escalation) are
-// not filesystem shapes a write filter can see, and removing a writable root is
-// legal to the kernel — the roots are its writable surface, so "delete the
-// whole workspace" is something only the fence can name.
-func checkConfinedCommandSafety(commandLine string, workingDir string, roots []string) error {
-	if root := firstWorkspaceRootDeleteTarget(commandLine, workingDir, roots); root != "" {
-		return codedToolError("E_DELETE_BLOCKED", fmt.Errorf("安全围栏已拦截：不允许删除工作区根目录。\n原因：删掉工作区根等于删掉整个项目；系统沙箱把删除范围锁在工作区之内，它看不出「删掉自己」这一档，所以这一条只能由围栏拦。\n检测到的目标：%s\n处理方式：要删工作区里的具体条目请用 delete 工具（它逐条检查目标与递归范围）；确实要清空整个工作区，请手动在终端执行。\n被拦截的命令：%s", root, commandLine))
-	}
-	if risk := firstVCSMetadataMutationTarget(commandLine, workingDir); risk != nil {
-		return codedToolError("E_PROTECTED_PATH", fmt.Errorf("安全围栏已拦截：命令目标是版本控制元数据内的路径。\n原因：创建、覆盖或删除 .git/.svn/.hg 的元数据会损坏仓库，写入 hooks 更会在下次 git 命令时执行代码；目标在工作区内，沙箱必须放行它（git 自己也要写）。\n检测到的目标：%s\n处理方式：版本控制状态请手动在终端变更。\n被拦截的命令：%s", risk.Path, commandLine))
-	}
-	if risk := command.MatchRiskPattern(commandLine); risk != nil {
-		return codedToolError("E_COMMAND_BLOCKED", fmt.Errorf("高危命令拒绝: 检测到%s - 命令已被安全围栏拦截。\n如需执行此操作，请手动在终端中执行。\n被拦截的命令: %s", risk.Reason, commandLine))
-	}
-	return nil
-}
-
 // firstWorkspaceRootDeleteTarget reports the first delete target that resolves
 // to a writable root itself. The kernel's write filter cannot answer this: the
 // roots are exactly what it permits writing to, so removing one is legal there,
@@ -95,19 +72,43 @@ func checkCommandSafety(req CommandRequest, roots []string) error {
 	return checkCommandSafetyAtCwd(req, roots, workingDir)
 }
 
-// checkCommandSafetyAtCwd inspects commands for high-risk patterns and routes
-// explicit deletion through delete, where workspace and OS guards apply.
+// checkCommandSafetyAtCwd is THE command safety fence: every check the fence owns
+// runs from here, in one place, and exactly one part of it depends on who owns
+// the filesystem boundary — asked once, below, through the single judgement
+// (kernelOwnsBoundary).
+//
+// Three checks are kernel-blind and always on: high-risk command semantics
+// (curl|sh, privilege escalation) are not filesystem shapes any write filter can
+// see; .git metadata sits inside the writable root, because git itself must write
+// it; and deleting a whole workspace is legal to a boundary whose writable surface
+// is exactly those roots.
+//
+// Two are lexical guesses about where a write lands, and only the fence owns them
+// while no kernel does: routing an explicit delete through the delete tool, and
+// refusing a literal target that already exists outside the workspace. A kernel
+// confines those by resolved path, and those guesses were the false-positive
+// machine the sandbox existed to retire — so they stand down while it is in
+// charge. Attaching or detaching the sandbox (internal/sandbox) moves nothing but
+// this judgement.
+//
 // roots[0] 是主工作区（命令的默认 cwd），其余为会话级附加根目录。
 func checkCommandSafetyAtCwd(req CommandRequest, roots []string, workingDir string) error {
 	cmd := req.Command
-	if command.ContainsExplicitDeleteCommand(cmd) && !command.IsAllowedDeleteContext(cmd) {
+	kernelOwns := kernelOwnsBoundary()
+	if kernelOwns {
+		if root := firstWorkspaceRootDeleteTarget(cmd, workingDir, roots); root != "" {
+			return codedToolError("E_DELETE_BLOCKED", fmt.Errorf("安全围栏已拦截：不允许删除工作区根目录。\n原因：删掉工作区根等于删掉整个项目，而 delete 工具明确拒绝同一个目标，所以这一档必须由围栏自己说。\n检测到的目标：%s\n处理方式：要删工作区里的具体条目请用 delete 工具（它逐条检查目标与递归范围）；确实要清空整个工作区，请手动在终端执行。\n被拦截的命令：%s", root, cmd))
+		}
+	} else if command.ContainsExplicitDeleteCommand(cmd) && !command.IsAllowedDeleteContext(cmd) {
 		return codedToolError("E_COMMAND_BLOCKED", fmt.Errorf("安全围栏已拦截：command 不允许直接执行文件删除命令。\n原因：shell 删除命令可能绕过工作区边界、系统目录和 .git 保护。\n处理方式：请改用 delete 工具，由专用工具检查目标路径和递归范围。\n被拦截的命令：%s", cmd))
 	}
 	if risk := firstVCSMetadataMutationTarget(cmd, workingDir); risk != nil {
-		return codedToolError("E_PROTECTED_PATH", fmt.Errorf("安全围栏已拦截：命令目标是版本控制元数据内的路径。\n原因：创建、覆盖或删除 .git/.svn/.hg 的元数据会损坏仓库，写入 hooks 更会在下次 git 命令时执行代码；目标在工作区内，所以工作区外检查不会拦它。\n检测到的目标：%s\n处理方式：版本控制状态请手动在终端变更。\n被拦截的命令：%s", risk.Path, cmd))
+		return codedToolError("E_PROTECTED_PATH", fmt.Errorf("安全围栏已拦截：命令目标是版本控制元数据内的路径。\n原因：创建、覆盖或删除 .git/.svn/.hg 的元数据会损坏仓库，写入 hooks 更会在下次 git 命令时执行代码；目标在工作区内，所以「工作区外写入」那道检查不会拦它。\n检测到的目标：%s\n处理方式：版本控制状态请手动在终端变更。\n被拦截的命令：%s", risk.Path, cmd))
 	}
-	if risk := firstExistingOutsideMutationTarget(cmd, roots, workingDir); risk != nil {
-		return codedToolError("E_PATH_OUTSIDE", fmt.Errorf("安全围栏已拦截：命令可能修改工作区外的受保护目标。\n原因：%s。\n检测到的目标：%s\n允许的操作：读取工作区外路径、写入 /dev/null 等空设备、创建不存在的新路径。\n禁止的操作：覆盖、追加、移动、改权限或以其他方式修改已经存在的工作区外文件或目录。\n可写范围：\n%s\n被拦截的命令：%s", risk.Reason, risk.Path, formatAllowedRoots(roots), cmd))
+	if !kernelOwns {
+		if risk := firstExistingOutsideMutationTarget(cmd, roots, workingDir); risk != nil {
+			return codedToolError("E_PATH_OUTSIDE", fmt.Errorf("安全围栏已拦截：命令可能修改工作区外的受保护目标。\n原因：%s。\n检测到的目标：%s\n允许的操作：读取工作区外路径、写入 /dev/null 等空设备、创建不存在的新路径。\n禁止的操作：覆盖、追加、移动、改权限或以其他方式修改已经存在的工作区外文件或目录。\n可写范围：\n%s\n被拦截的命令：%s", risk.Reason, risk.Path, formatAllowedRoots(roots), cmd))
+		}
 	}
 	if risk := command.MatchRiskPattern(cmd); risk != nil {
 		return codedToolError("E_COMMAND_BLOCKED", fmt.Errorf("高危命令拒绝: 检测到%s - 命令已被安全围栏拦截。\n如需执行此操作，请手动在终端中执行。\n被拦截的命令: %s", risk.Reason, cmd))

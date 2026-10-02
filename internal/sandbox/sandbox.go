@@ -16,11 +16,16 @@
 // almost anything (compilers read GOROOT, git reads ~/.gitconfig) but writes
 // only inside the writable roots — the workspace plus the toolchain caches
 // builds actually need — with Ally's own credential store masked out of its
-// view and the network left open for package managers. There is no user setting:
-// ResolvedMode reports the platform's own policy (macOS mandates the sandbox,
-// every other platform never applies it), and the host without a backend (Windows,
-// the BSDs) keeps the command tool working exactly as it did before sandboxing
-// existed.
+// view and the network left open for package managers.
+//
+// Attachment is one switch (see attached). While it is off, nothing in the tree
+// hands work to this package: ResolvedMode resolves to ModeOff everywhere, the
+// safety fence (internal/app) stays at full strength, and the profiles, the
+// writable surface, the diagnostics and the probe stay whole for re-attaching.
+// While it is on, ResolvedMode reports the platform's own policy (macOS mandates
+// the sandbox, every other platform never applies it), and a host without a
+// backend (Windows, the BSDs) keeps the command tool working exactly as it did
+// before sandboxing existed.
 //
 // Nothing here depends on App state, ConfigState, or any *App receiver; the
 // package takes plain paths and returns plain argv. That keeps it callable from
@@ -127,22 +132,44 @@ func AllowsWrite(spec Spec, resolved string) bool {
 	return true
 }
 
-// ResolvedMode is the confinement policy for the running platform: a platform
-// that mandates the sandbox enforces it, every other platform runs commands
-// unwrapped. The mode is a property of the host rather than a user setting, so
-// no config value can turn confinement on or off by accident.
+// attached is the one integration switch of this package: true hands local
+// commands and file mutations to the OS sandbox, false keeps all of them on
+// Ally's own safety fence. Everything here is written for the attached case and
+// stays ready — profiles, writable surface, diagnostics, probe — so re-attaching
+// is this constant plus the settings-page wiring (GetSandboxStatus in
+// internal/app), with no other change in the tree: every caller asks this package
+// (Spec.Enforce, ResolvedMode, ModeForced, Warning) instead of asking the
+// platform.
+const attached = false
+
+// Attached reports whether this build hands work to the OS sandbox at all: what
+// tests and the settings page read to tell "detached by choice" apart from "this
+// platform never confines".
+func Attached() bool { return attached }
+
+// ResolvedMode is the confinement policy in force right now: ModeEnforce only
+// while the package is attached and the platform mandates confinement, ModeOff
+// otherwise. Callers derive everything from it — Spec.Enforce decides whether a
+// command is wrapped, kernelOwnsBoundary decides whether the safety fence stands
+// down — so detaching cannot leave one of them behind.
 func ResolvedMode() Mode {
+	if !attached {
+		return ModeOff
+	}
 	if forced, ok := platformForcedMode(); ok {
 		return forced
 	}
 	return ModeOff
 }
 
-// ModeForced reports whether confinement is mandated on this platform: there is
-// no switch for it. A forced platform must degrade to the safety fence when the
-// backend cannot wrap a command — refusing everything fail-closed would brick
-// the tool with no way out (see wrapSandboxedCommand).
+// ModeForced reports whether confinement is mandated on this platform with no
+// switch of its own: true only while attached. A forced platform must degrade to
+// the safety fence when the backend cannot wrap a command — refusing everything
+// fail-closed would brick the tool with no way out (see wrapSandboxedCommand).
 func ModeForced() bool {
+	if !attached {
+		return false
+	}
 	_, forced := platformForcedMode()
 	return forced
 }
@@ -190,13 +217,40 @@ func Warning() string {
 // them as the wrong place for a result instead of leaving them out: "only the
 // following directories are writable" was untrue, and a model that found the
 // one it tried really is writable had no explanation left for the refusal.
-func WriteDeniedHint(allowedRoots []string) string {
+//
+// deniedPaths are the targets the refusal named, when the caller could recover
+// them: the kernel reports errno and nothing else, so the caller pulls the path
+// out of the output and keeps only what the same policy refuses (best-effort by
+// construction). They turn "something was refused" into "this path was
+// refused" — with the writable roots alone the model still has to guess which
+// operand to move.
+func WriteDeniedHint(allowedRoots []string, deniedPaths ...string) string {
 	var b strings.Builder
 	b.WriteString("沙箱已拦截：这次操作试图写入可写范围之外的路径，目标没有被修改。\n")
+	if named := formatDeniedPaths(deniedPaths); named != "" {
+		b.WriteString("被拒的目标：" + named + "\n")
+	}
 	b.WriteString("原因：这次操作运行在操作系统级沙箱里，可写范围只有下列目录（系统临时与缓存目录同样可写，但不是放结果的地方）：\n")
 	b.WriteString(pathutil.FormatAllowedRoots(allowedRoots))
 	b.WriteString("\n处理方式：把改动放进上面的目录后重试；确实需要写入其它位置时，先向用户说明用途，由用户手动在终端执行。")
 	return b.String()
+}
+
+// formatDeniedPaths renders the refused targets one hint names: blanks and
+// repeats dropped, and an empty list adds no line at all (the callers recover
+// the paths best-effort, so "nothing to name" is a normal outcome).
+func formatDeniedPaths(paths []string) string {
+	seen := make(map[string]bool, len(paths))
+	named := make([]string, 0, len(paths))
+	for _, p := range paths {
+		p = strings.TrimSpace(p)
+		if p == "" || seen[p] {
+			continue
+		}
+		seen[p] = true
+		named = append(named, p)
+	}
+	return strings.Join(named, "、")
 }
 
 // resolveProgram turns a bare program name into the absolute path the runner

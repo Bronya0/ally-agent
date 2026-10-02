@@ -28,7 +28,7 @@
 | 某工具的执行逻辑 | `internal/app/orch_<name>.go`（编排）+ `internal/tools/<name>/`（纯算法） |
 | edit 读写契约 / 原子写 / 冲突合并 | `orch_edit_plan.go` → `orch_edit.go` → `tools/edit`、`tools/read` |
 | 命令安全拦截与路径校验 | `orch_command_safety.go` + `internal/tools/command` |
-| 命令沙箱（宿主强制 / 无配置 → 平台策略 → shell 包裹、包不上降级为围栏并告警、写拒绝提示、本机可用性状态；文件工具与命令的落盘同样包在沙箱里） | `internal/app/orch_sandbox.go`（`sandboxSpec` / `wrapSandboxedCommand` / `annotateSandboxDeniedWrite` / `GetSandboxStatus` / `kernelOwnsBoundary` ＝边界归属的唯一判据）+ `orch_sandbox_writes.go`（create·edit·delete·rename 的落盘经 mv/rm/mkdir/ln 包裹）+ `internal/sandbox/`（`ResolvedMode` 平台策略、`AllowsWrite` 可写判定与 SBPL / bwrap profile，不依赖 App）+ 设置页 `SettingsModal.vue` 的 sandbox 页（只读状态 + 围栏机制说明）；command 与 service 两条执行路径共用 |
+| 命令安全围栏 + 命令沙箱（沙箱**当前未接入**：`internal/sandbox` 的 `attached` 开关关着，三个平台都只走围栏；围栏是单一入口，边界归属在 `kernelOwnsBoundary` 一处判定；沙箱本体原样保留，改一个常量即可接回） | `orch_command_safety.go`（`checkCommandSafetyAtCwd` 唯一入口）+ `internal/app/orch_sandbox.go`（`sandboxSpec` / `wrapSandboxedCommand` / `annotateSandboxDeniedWrite` / `GetSandboxStatus` / `kernelOwnsBoundary` ＝边界归属的唯一判据）+ `orch_sandbox_writes.go`（create·edit·delete·rename 的落盘经 mv/rm/mkdir/ln 包裹）+ `internal/sandbox/`（`attached` / `Attached` 接入开关、`ResolvedMode` 平台策略、`AllowsWrite` 可写判定与 SBPL / bwrap profile，不依赖 App）+ 设置页 `SettingsModal.vue` 的围栏机制说明（不再查本机状态）；command 与 service 两条执行路径共用 |
 | 文件基础读写与删除防护 | `internal/app/orch_file_ops.go` |
 | 多路径删除的共用规则（`path`/`paths` 两种写法折叠、条数上限、重复与包含判定） | `internal/app/orch_delete_paths.go`（本地 `delete` 与 `remote_delete_path` 共用；单条路径的落盘判定仍在各自信任域） |
 | 受保护路径判定（VCS 元数据 / 路径别名归一） | `internal/tools/pathutil/pathutil.go`（`CanonicalPath` / `VCSMetadataReason`；本地写/删/命令与远端写/命令共用，远端只判得了字面那半） |

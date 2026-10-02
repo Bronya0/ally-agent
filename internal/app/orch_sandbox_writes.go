@@ -110,7 +110,7 @@ func runFileMutation(spec sandbox.Spec, roots []string, argv []string) error {
 	// 住，同一句 “Operation not permitted” 只是普通权限问题，安到沙箱头上会让
 	// 模型找错方向。
 	if sandboxRefusedWrite(spec.Enforce(), detail) {
-		return codedToolError("E_SANDBOX_WRITE_DENIED", fmt.Errorf("%s\n\n%s", detail, sandbox.WriteDeniedHint(roots)))
+		return codedToolError("E_SANDBOX_WRITE_DENIED", fmt.Errorf("%s\n\n%s", detail, sandbox.WriteDeniedHint(roots, sandboxDeniedWriteTargets(spec, detail)...)))
 	}
 	if detail == "" {
 		return err
@@ -157,7 +157,7 @@ func stagingRefusal(spec sandbox.Spec, roots []string, dir string, err error) er
 	if !spec.Enforce() || insideWriteRoot(roots, dir) || !isWriteRefusal(err) {
 		return err
 	}
-	return codedToolError("E_SANDBOX_WRITE_DENIED", fmt.Errorf("%s\n\n%s", stagingRefusalDetail(dir, err), sandbox.WriteDeniedHint(roots)))
+	return codedToolError("E_SANDBOX_WRITE_DENIED", fmt.Errorf("%s\n\n%s", stagingRefusalDetail(dir, err), sandbox.WriteDeniedHint(roots, dir)))
 }
 
 // isWriteRefusal reports whether err is the OS refusing the write itself, as
@@ -168,13 +168,9 @@ func isWriteRefusal(err error) bool {
 	if errors.Is(err, fs.ErrPermission) {
 		return true
 	}
-	text := strings.ToLower(err.Error())
-	for _, marker := range sandboxDeniedWriteMarkers {
-		if strings.Contains(text, strings.ToLower(marker)) {
-			return true
-		}
-	}
-	return false
+	// 与命令侧同一个判据（sandboxDeniedWriteMarkerIndex）：大小写不是判据的一部分，
+	// 两条路径对「什么算内核拒写」只能有一套答案。
+	return sandboxDeniedWriteMarkerIndex(err.Error()) >= 0
 }
 
 // stagingRefusalDetail names the directory the write was staged in rather than

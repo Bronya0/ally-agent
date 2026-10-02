@@ -395,12 +395,6 @@ Public License v3. See the LICENSE file for details.
               <div class="config-section-subtitle">{{ $t('settings.sandboxSubtitle') }}</div>
             </div>
           </div>
-          <n-alert
-            v-if="sandboxStatusAlert"
-            :type="sandboxStatusAvailable ? 'success' : 'warning'"
-            :show-icon="true"
-            class="sandbox-status-alert"
-          >{{ sandboxStatusText }}</n-alert>
           <!-- 只读说明：没有可配项，一行一条（文案见 i18n settings.sandboxFence*）。 -->
           <div class="sandbox-fence-title">{{ $t('settings.sandboxFenceTitle') }}</div>
           <ul class="sandbox-fence-list">
@@ -485,7 +479,6 @@ import {
   DetectSystemProxy, TestProxy,
   SelectBackgroundImage, ClearBackgroundImage,
   SelectKnowledgeBaseRoot,
-  GetSandboxStatus,
   GetAutostartEnabled, SetAutostartEnabled,
   GetApiServiceState, SaveApiSettings, SetApiServiceEnabled,
 } from '../../bindings/ally-dev/internal/app/app';
@@ -634,26 +627,9 @@ defineExpose({
     page.value = p;
   },
 });
-const sandboxStatus = ref(null);
-
-// 沙箱页不再有可配置项：上面只说本机情况（强制平台能不能真的包住命令），下面列出
-// 安全围栏的机制（只读）。围栏本体在 internal/app/orch_command_safety.go。
-const sandboxForced = computed(() => Boolean(sandboxStatus.value?.forced));
-const sandboxStatusAvailable = computed(() => Boolean(sandboxStatus.value?.available));
-
-// 状态行直报本机：强制平台且后端可用 = 强制开启；强制平台但后端不可用 = 后端的
-// 降级说明（说的是围栏在守）；其余平台不启用沙箱，命令只受围栏保护。
-const sandboxStatusText = computed(() => {
-  const status = sandboxStatus.value;
-  if (!status) return t('settings.sandboxStatusUnknown');
-  if (sandboxForced.value && sandboxStatusAvailable.value) {
-    return t('settings.sandboxStatusForced');
-  }
-  const warning = String(status.warning || '').trim();
-  if (warning) return warning;
-  return t('settings.sandboxStatusInactive');
-});
-const sandboxStatusAlert = computed(() => sandboxStatusText.value !== t('settings.sandboxStatusInactive'));
+// 沙箱不再接入（internal/sandbox 的 attached 开关关着），所以这里没有任何本机状态
+// 要查：这一页只剩安全围栏的机制说明（只读）。围栏本体在 internal/app/orch_command_safety.go，
+// 接回沙箱只需要把开关打开 + 把 GetSandboxStatus 这条链路接回来。
 
 // 安全围栏机制：一行一条，顺序在这里，文案在 i18n（zh / en 各一份）。
 const sandboxFenceLineKeys = [
@@ -673,18 +649,6 @@ const sandboxFenceLineKeys = [
   'settings.sandboxFence14',
 ];
 const sandboxFenceLines = computed(() => sandboxFenceLineKeys.map((key) => t(key)));
-
-async function loadSandboxStatus() {
-  try {
-    sandboxStatus.value = await GetSandboxStatus();
-  } catch (error) {
-    sandboxStatus.value = null;
-  }
-}
-
-watch(page, (value) => {
-  if (value === 'sandbox') loadSandboxStatus();
-});
 
 const proxyDetecting = ref(false);
 const proxyTesting = ref(false);

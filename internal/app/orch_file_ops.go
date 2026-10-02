@@ -565,19 +565,14 @@ func (a *App) runCommandWithConfig(parent context.Context, cfg ConfigState, req 
 			return CommandResult{}, err
 		}
 	}
-	if kernelOwnsBoundary() {
-		// 沙箱真正包住命令时，围栏只保留内核看不见的三道（工作区根自毁、VCS
-		// 元数据、高危语义）；工作区外写入、KB 禁写、普通删除强制走 delete 这
-		// 三道词法检查让位给内核：它们的误报正是猜测的代价，而内核不需要猜。
-		if err := checkConfinedCommandSafety(req.Command, cwd, roots); err != nil {
-			return CommandResult{}, err
-		}
-	} else {
-		if err := checkCommandSafetyAtCwd(req, roots, cwd); err != nil {
-			return CommandResult{}, err
-		}
-		// Knowledge-base runs additionally block literal write targets under the
-		// read-only sources/ subtree (deny roots ride in on parent ctx).
+	// 围栏是一个入口：它自己问「谁管边界」（kernelOwnsBoundary），沙箱接不接都走这里。
+	if err := checkCommandSafetyAtCwd(req, roots, cwd); err != nil {
+		return CommandResult{}, err
+	}
+	// Knowledge-base runs additionally block literal write targets under the
+	// read-only sources/ subtree (deny roots ride in on parent ctx). 内核管边界时
+	// 这一层由沙箱的 DenyWriteRoots 兑住，所以只在围栏自己管的时候跑。
+	if !kernelOwnsBoundary() {
 		if err := checkKBDenyTargets(req.Command, cwd, kbDenyRoots(parent)); err != nil {
 			return CommandResult{}, err
 		}

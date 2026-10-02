@@ -54,6 +54,14 @@ func pinBoundaryOwnership(t *testing.T, kernelOwns bool) {
 	t.Cleanup(func() { kernelBoundaryOverride.Store(previous) })
 }
 
+// confinedFence 跑统一围栏入口的「内核接管边界」那一侧：先钉住判据（不提供内核），
+// 只验证围栏自己留下的那几道。沙箱接不接，入口都是同一条。
+func confinedFence(t *testing.T, commandLine, workingDir string, roots []string) error {
+	t.Helper()
+	pinBoundaryOwnership(t, true)
+	return checkCommandSafetyAtCwd(CommandRequest{Command: commandLine, Cwd: workingDir}, roots, workingDir)
+}
+
 // 判据只问沙箱，不问平台：钉住哪一侧就返回哪一侧。
 func TestKernelOwnsBoundaryFollowsTheKernel(t *testing.T) {
 	pinBoundaryOwnership(t, true)
@@ -481,19 +489,19 @@ func TestConfinedCommandSafetyKeepsKernelBlindSpots(t *testing.T) {
 		t.Fatal(err)
 	}
 	// 删除命令放行：内核把 rm 的爆炸半径锁进写根，围栏不再强制走 delete 工具。
-	if err := checkConfinedCommandSafety("rm -rf build", workspace, []string{workspace}); err != nil {
+	if err := confinedFence(t, "rm -rf build", workspace, []string{workspace}); err != nil {
 		t.Fatalf("a confined rm must not be forced through the delete tool: %v", err)
 	}
 	// 工作区外写入放行：词法判断“目标已存在且在区外”正是误报大户，内核拦得更准。
-	if err := checkConfinedCommandSafety("echo hi > /etc/hosts", workspace, []string{workspace}); err != nil {
+	if err := confinedFence(t, "echo hi > /etc/hosts", workspace, []string{workspace}); err != nil {
 		t.Fatalf("a confined outside write must be left to the kernel: %v", err)
 	}
 	// VCS 元数据仍然拦截：.git 在写根之内（git 自己要写），内核管不了它。
-	if code := toolErrorCode(checkConfinedCommandSafety("echo x > .git/hooks/pre-commit", workspace, []string{workspace})); code != "E_PROTECTED_PATH" {
+	if code := toolErrorCode(confinedFence(t, "echo x > .git/hooks/pre-commit", workspace, []string{workspace})); code != "E_PROTECTED_PATH" {
 		t.Fatalf("a confined VCS-metadata write must stay blocked, got %v", code)
 	}
 	// 高危语义仍然拦截：fork 炸弹不碰文件系统，写过滤器看不见它。
-	if code := toolErrorCode(checkConfinedCommandSafety(":(){ :|:& };:", workspace, []string{workspace})); code != "E_COMMAND_BLOCKED" {
+	if code := toolErrorCode(confinedFence(t, ":(){ :|:& };:", workspace, []string{workspace})); code != "E_COMMAND_BLOCKED" {
 		t.Fatalf("a confined fork bomb must stay blocked, got %v", code)
 	}
 }
@@ -506,17 +514,17 @@ func TestConfinedCommandSafetyKeepsWorkspaceRootDelete(t *testing.T) {
 	roots := []string{workspace, extra}
 
 	for _, cmd := range []string{"rm -rf .", "rm -rf " + filepath.ToSlash(workspace), "rm -rf ./", "rmdir ."} {
-		if code := toolErrorCode(checkConfinedCommandSafety(cmd, workspace, roots)); code != "E_DELETE_BLOCKED" {
+		if code := toolErrorCode(confinedFence(t, cmd, workspace, roots)); code != "E_DELETE_BLOCKED" {
 			t.Fatalf("deleting the workspace root must stay blocked, %q got %v", cmd, code)
 		}
 	}
 	// 附加工作区根同样是「自己」：它也是写根之一。
-	if code := toolErrorCode(checkConfinedCommandSafety("rm -rf "+filepath.ToSlash(extra), workspace, roots)); code != "E_DELETE_BLOCKED" {
+	if code := toolErrorCode(confinedFence(t, "rm -rf "+filepath.ToSlash(extra), workspace, roots)); code != "E_DELETE_BLOCKED" {
 		t.Fatalf("deleting an extra workspace root must stay blocked, got %v", code)
 	}
 	// 窄检查只认「解析后就是写根」：工作区内的子目录照旧放行。
 	for _, cmd := range []string{"rm -rf build", "rm -rf ./build", "rm -f notes.txt"} {
-		if err := checkConfinedCommandSafety(cmd, workspace, roots); err != nil {
+		if err := confinedFence(t, cmd, workspace, roots); err != nil {
 			t.Fatalf("%q must stay allowed under confinement: %v", cmd, err)
 		}
 	}

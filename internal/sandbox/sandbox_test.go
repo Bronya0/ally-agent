@@ -24,9 +24,9 @@ func TestSpecEnforce(t *testing.T) {
 	}
 }
 
-// 档位是宿主的属性，不是用户设置：强制平台恒为 enforce，其余平台恒为关闭。
-// 断言刻意不去复述解析函数自己的算法（那只能写出恒真用例），而是钉住三件各自
-// 独立的事：两个方向的对偶关系、档位只有两种取值、以及哪一族平台在强制。
+// 档位由接入开关与宿主策略共同决定，不是用户设置。断言刻意不去复述解析函数自己的
+// 算法（那只能写出恒真用例），而是钉住三件各自独立的事：两个方向的对偶关系、档位
+// 只有两种取值、以及接入时哪一族平台在强制。
 func TestResolvedModeFollowsThePlatform(t *testing.T) {
 	mode := ResolvedMode()
 	forced := ModeForced()
@@ -42,11 +42,18 @@ func TestResolvedModeFollowsThePlatform(t *testing.T) {
 	if mode != ModeOff && mode != ModeEnforce {
 		t.Fatalf("ResolvedMode() = %q, want off or enforce", mode)
 	}
-	// macOS 是这一版唯一强制沙箱的平台。钉住它是因为降级文案（Warning）里写死
-	// 了 macOS：哪天别的平台也开始强制，那句话必须先改。
+	// 沙箱没接入时宿主策略一概不生效：三个平台都只走安全围栏。
+	if !Attached() {
+		if mode != ModeOff || forced {
+			t.Fatalf("a detached sandbox must resolve to off on every platform, got mode=%q forced=%v", mode, forced)
+		}
+		return
+	}
+	// 接入时 macOS 是这一版唯一强制沙箱的平台。钉住它是因为降级文案（Warning）里
+	// 写死了 macOS：哪天别的平台也开始强制，那句话必须先改。
 	if runtime.GOOS == "darwin" {
 		if !forced || mode != ModeEnforce {
-			t.Fatalf("darwin must mandate the sandbox, got mode=%q forced=%v", mode, forced)
+			t.Fatalf("darwin must mandate the sandbox when attached, got mode=%q forced=%v", mode, forced)
 		}
 		return
 	}
