@@ -1306,7 +1306,9 @@ func (a *App) SaveMcpConfig(raw string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o600)
+	// mcp.json 与 config.json 同规格：走原子写。原地截断写在崩溃时留下半截 JSON，
+	// 下次启动整份 MCP 配置回默认值，用户自己写的服务器列表就没了。
+	return writeAtomicBytes(path, data, 0o600)
 }
 
 func (a *App) RestartMcpServers() error {

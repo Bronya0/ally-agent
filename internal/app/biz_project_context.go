@@ -9,7 +9,6 @@ package app
 
 import (
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -198,19 +197,9 @@ func (a *App) saveBackgroundImageFromFile(srcPath string) (string, error) {
 	// Remove any previously stored background with a different extension so
 	// the directory never accumulates stale variants.
 	purgeStaleBackgroundFiles(appDataDir(), filename)
-	a.mu.Lock()
-	a.config.BackgroundImage = filename
-	cfg := a.config
-	path := a.configPath
-	a.mu.Unlock()
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return "", err
-	}
-	blob, err := json.MarshalIndent(cfg, "", "  ")
-	if err != nil {
-		return "", err
-	}
-	if err := writeAtomicBytes(path, blob, 0o600); err != nil {
+	if err := a.updateConfigAndPersist(func(cfg *ConfigState) {
+		cfg.BackgroundImage = filename
+	}); err != nil {
 		return "", err
 	}
 	return filename, nil
@@ -224,21 +213,16 @@ func (a *App) ClearBackgroundImage() error {
 	}
 	a.mu.Lock()
 	current := a.config.BackgroundImage
-	a.config.BackgroundImage = ""
-	cfg := a.config
-	path := a.configPath
 	a.mu.Unlock()
+	if err := a.updateConfigAndPersist(func(cfg *ConfigState) {
+		cfg.BackgroundImage = ""
+	}); err != nil {
+		return err
+	}
 	if current != "" {
 		_ = os.Remove(filepath.Join(appDataDir(), current))
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
-	blob, err := json.MarshalIndent(cfg, "", "  ")
-	if err != nil {
-		return err
-	}
-	return writeAtomicBytes(path, blob, 0o600)
+	return nil
 }
 
 // GetBackgroundImageURL returns the stored background image as a data URL

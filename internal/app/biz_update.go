@@ -1323,27 +1323,19 @@ func (a *App) SkipUpdate(version string) SkipUpdateResult {
 		return SkipUpdateResult{Error: err.Error()}
 	}
 	a.mu.Lock()
-	cfg := a.config
 	already := false
-	for _, s := range cfg.SkippedUpdates {
-		if s == version {
+	for _, skipped := range a.config.SkippedUpdates {
+		if skipped == version {
 			already = true
 			break
 		}
 	}
-	if !already {
-		cfg.SkippedUpdates = append(cfg.SkippedUpdates, version)
-		a.config = cfg
-	}
-	configPath := a.configPath
 	a.mu.Unlock()
 
 	if !already {
-		data, err := json.MarshalIndent(cfg, "", "  ")
-		if err != nil {
-			return SkipUpdateResult{Error: fmt.Sprintf("marshal config: %v", err)}
-		}
-		if err := writeAtomicBytes(configPath, data, 0o600); err != nil {
+		if err := a.updateConfigAndPersist(func(cfg *ConfigState) {
+			cfg.SkippedUpdates = append(cfg.SkippedUpdates, version)
+		}); err != nil {
 			return SkipUpdateResult{Error: fmt.Sprintf("persist skip list: %v", err)}
 		}
 	}

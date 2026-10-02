@@ -8,7 +8,6 @@
 package app
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -227,20 +226,10 @@ func (a *App) setDisabledSkills(names []string) error {
 		return err
 	}
 	next := normalizeSkillNameList(names)
-	a.mu.Lock()
-	a.disabledSkills = cloneStringSlice(next)
-	a.config.DisabledSkills = cloneStringSlice(next)
-	cfg := a.config
-	path := a.configPath
-	a.mu.Unlock()
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
-	data, err := json.MarshalIndent(cfg, "", "  ")
-	if err != nil {
-		return err
-	}
-	return writeAtomicBytes(path, data, 0o600)
+	return a.updateConfigAndPersist(func(cfg *ConfigState) {
+		cfg.DisabledSkills = cloneStringSlice(next)
+		a.disabledSkills = cloneStringSlice(next)
+	})
 }
 
 func normalizeSkillNameList(names []string) []string {

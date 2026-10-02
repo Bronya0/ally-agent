@@ -192,26 +192,56 @@ func (a *App) getConfig() (ConfigState, error) {
 	return a.config, nil
 }
 
-// saveConfig persists the whole config. The write goes through the atomic
-// helper (temp sibling + rename): a plain os.WriteFile truncates in place, so a
-// crash mid-write leaves half a JSON document, and the next start silently
-// falls back to defaults and then overwrites the user's real settings.
-func (a *App) saveConfig(cfg ConfigState) error {
+// persistableConfig 施加落盘前的两条不变式：悬空身份收敛（展开不出东西的身份等于
+// “没有最近使用模型”）+ 派生模型字段清空（磁盘上只留 models[] 与 lastUsedModel）。
+// 两条落盘路径共用这一份，免得新加的写入方漏掉其中一条。
+func persistableConfig(cfg ConfigState) ConfigState {
 	convergeLastUsedModel(&cfg)
-	// 派生模型字段不落盘（见 ConfigState 的注释）：磁盘上只留 models[] 与
-	// lastUsedModel，读回来时再按身份展开。
+	// 派生模型字段不落盘（见 ConfigState 的注释）：读回来时再按身份展开。
 	stripModelFields(&cfg)
-	a.mu.Lock()
-	cfg.DisabledSkills = normalizeSkillNameList(cfg.DisabledSkills)
-	a.config = cfg
-	a.disabledSkills = cloneStringSlice(cfg.DisabledSkills)
-	path := a.configPath
-	a.mu.Unlock()
+	return cfg
+}
+
+// persistConfigFile 把一份配置写进磁盘：目录兜底 + 缩进序列化 + 原子写（临时文件 +
+// rename）。这是“配置落盘”的唯一一处：saveConfig 与那几个只改单个字段的写入方
+// （禁用技能、背景图、跳过更新）都经由它，所以不会再出现第二种磁盘形状。
+func persistConfigFile(path string, cfg ConfigState) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err
 	}
 	return writeAtomicBytes(path, data, 0o600)
+}
+
+// updateConfigAndPersist 在锁内把 a.config 交给 mutate 改一个字段，再按同一组不变式落盘。
+// 这是“改一处配置并保存”的唯一路径——以前这些写入方各自 marshal + 写盘，既绕过了
+// saveConfig 的不变式（加了新不变式也只会有一处执行），又各自重复了一遍写盘细节。
+func (a *App) updateConfigAndPersist(mutate func(*ConfigState)) error {
+	a.mu.Lock()
+	mutate(&a.config)
+	cfg := persistableConfig(a.config)
+	a.config = cfg
+	path := a.configPath
+	a.mu.Unlock()
+	return persistConfigFile(path, cfg)
+}
+
+// saveConfig persists the whole config. The write goes through the atomic
+// helper (temp sibling + rename): a plain os.WriteFile truncates in place, so a
+// crash mid-write leaves half a JSON document, and the next start silently
+// falls back to defaults and then overwrites the user's real settings.
+func (a *App) saveConfig(cfg ConfigState) error {
+	a.mu.Lock()
+	cfg.DisabledSkills = normalizeSkillNameList(cfg.DisabledSkills)
+	cfg = persistableConfig(cfg)
+	a.config = cfg
+	a.disabledSkills = cloneStringSlice(cfg.DisabledSkills)
+	path := a.configPath
+	a.mu.Unlock()
+	return persistConfigFile(path, cfg)
 }
 
 // ── Skills: system prompt metadata injection ──
@@ -610,7 +640,6 @@ func (a *App) SaveConfig(req ConfigState) error {
 			a.config.LastUsedModel = identity
 		}
 	}
-	convergeLastUsedModel(&a.config)
 	// Background opacity is editable from the frontend slider; persist it
 	// directly. The image filename is managed by SaveBackgroundImage — only
 	// adopt it from the SaveConfig overlay when the frontend echoes the
@@ -621,22 +650,16 @@ func (a *App) SaveConfig(req ConfigState) error {
 	a.config.BackgroundOpacity = clampBackgroundOpacity(req.BackgroundOpacity)
 	a.disabledSkills = normalizeSkillNameList(a.config.DisabledSkills)
 	a.config.DisabledSkills = cloneStringSlice(a.disabledSkills)
-	// 派生模型字段不落盘（同上）。
-	stripModelFields(&a.config)
+	// 落盘不变式（收敛悬空身份 + 清派生模型字段）与写盘都收在同一处，不再在这里
+	// 各写一遍：见 persistableConfig / persistConfigFile。
+	a.config = persistableConfig(a.config)
 	cfg := a.config
 	path := a.configPath
 	a.mu.Unlock()
 
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
-	data, err := json.MarshalIndent(cfg, "", "  ")
-	if err != nil {
-		return err
-	}
-	// 同样走原子替换：设置页保存是最常被用户触碰的写入点，截断写中途崩溃会留下
-	// 半截 JSON，下次启动只能整份回落默认值（见 ensureInitialized）。
-	if err := writeAtomicBytes(path, data, 0o600); err != nil {
+	// 设置页保存是最常被用户触碰的写入点，同样走原子替换（截断写中途崩溃会留下
+	// 半截 JSON，下次启动只能整份回落默认值，见 ensureInitialized）。
+	if err := persistConfigFile(path, cfg); err != nil {
 		return err
 	}
 	if proxyChanged && a.ctx != nil {
