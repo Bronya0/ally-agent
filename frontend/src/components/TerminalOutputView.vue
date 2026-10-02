@@ -14,8 +14,13 @@ Public License v3. See the LICENSE file for details.
        一条超长 JSON 行足以把卡片撑到满屏。 -->
   <div :class="['code-view', { collapsed }]">
     <div ref="bodyRef" class="code-body-scroll">
+      <!-- 命令输出是不可信文本，必须走文本插值转义：用 v-html 时输出里的 style
+           标签会被当场解析成真样式表注入全局（curl 一个页面、shell 把命令原文
+           回显到报错里都会带出完整 style 元素），html/body 一旦被改写就整窗变形
+           ——正文被 30em 居中卡窄、底色刷成白，只有重启才恢复。这里也不需要
+           高亮，纯文本就是正确呈现。 -->
       <div v-for="(line, li) in displayLines" :key="li" class="code-row no-gutter">
-        <span class="code-text" v-html="line"></span>
+        <span class="code-text">{{ line }}</span>
       </div>
     </div>
   </div>
