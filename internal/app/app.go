@@ -37,7 +37,7 @@ import (
 const (
 	appName = "Ally"
 	// Provider defaults (defaultBaseURL / defaultReasoningTag) live in
-	// prov_wire_config.go with the rest of the endpoint and reasoning dialect
+	// prov_model.go with the rest of the endpoint and reasoning dialect
 	// configuration. The model itself has no default: it always comes from the
 	// models[] entries.
 	maxReadFileBytes        = 32 * 1024 * 1024
@@ -183,7 +183,7 @@ type App struct {
 	wails *wailsAppHandle
 
 	// notifier is the desktop notifications service injected by SetNotifier
-	// (host_notifications.go); nil in tests and headless embeddings.
+	// (host_desktop.go); nil in tests and headless embeddings.
 	notifier               completionNotifier
 	lastCompletionNotifyAt time.Time
 
@@ -272,7 +272,7 @@ type App struct {
 	// sshCredentials caches SSH passwords/key paths in memory for the TTL
 	// window. It is filled from the cluster inventory (ssh_clusters.json, edited
 	// in the SSH cluster manager) when a remote tool targets a registered alias;
-	// keys are lowercase user@host[:port]. See orch_ssh_credential.go.
+	// keys are lowercase user@host[:port]. See orch_ssh_cluster.go.
 	sshCredentials *sshCredentialCache
 
 	// sshKnownHostsPath 覆盖 SSH 主机指纹记录文件的位置；为空时用系统默认的

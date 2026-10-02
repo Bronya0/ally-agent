@@ -10,8 +10,8 @@
 | 模型流式适配、多 key 故障切换 | `internal/app/prov_model.go`（调度/多 key）+ `prov_adapter_*.go`（三协议适配器） |
 | 代理检测 / 代理 HTTP 客户端 | `internal/app/prov_proxy*.go`（含 darwin/scutil/windows 平台探测） |
 | 事件出口（后端 emit） | `internal/app/host_events.go`；前端路由在 `App.vue` `bindRuntimeEvents()` |
-| 高频事件的节流参数与节流原语（合并 / 采样 / 收尾三种语义，节流档位唯一来源 `eventCadenceTable`） | `internal/app/infra_emit.go` + `infra_stream.go`（`textDeltaCoalescer`） |
-| 桌面生命周期、窗口几何、系统对话框 | `internal/app/host_desktop.go` / `host_window_state.go` |
+| 高频事件的节流参数与节流原语（合并 / 采样 / 收尾三种语义，节流档位唯一来源 `eventCadenceTable`） | `internal/app/infra_stream.go`（`eventCadenceTable` 档位表 + `emitThrottle` + `textDeltaCoalescer`） |
+| 桌面生命周期、窗口几何、系统对话框 | `internal/app/host_desktop.go`（含窗口几何、桌面通知） |
 | http_request / web_fetch 工具（含 SSRF 防护） | `internal/app/orch_http.go` |
 | 文件变更后校验 / 批次内校验规划 | `internal/app/orch_validation.go`（validateChangedFiles / planBatchValidation） |
 | 工具批次策略（文件变更串行、`wait` 延后排到批次末尾、写冲突检测） | `internal/app/orch_batch_policy.go` |
@@ -20,17 +20,16 @@
 | 模型列表拉取 | `internal/app/biz_modellist.go`（FetchModelList） |
 | AGENTS.md / CODEGRAPH.md 注入、背景图 | `internal/app/biz_project_context.go`（loadAgentsMd / loadCodeGraph） |
 | 临时工作区（创建/清理） | `internal/app/biz_temp_workspace.go` |
-| 内置技能清单 | `internal/app/biz_builtin_skills.go` |
+| 内置技能清单 | `internal/app/biz_skills.go`（`builtinSkillEntries`） |
 | 错误日志轮转 | `internal/app/infra_log.go`（InitErrorLogger） |
 | 命令环境 / 登录 shell PATH 探测 | `internal/app/infra_shell_env.go`（commandEnvironment / warmCommandEnvironment） |
 | 在终端打开工作区路径 | `internal/app/host_terminal*.go` |
 | 内置工具 schema 定义与按名查找 | `internal/tools/shared/builtins.go`（`Builtins` / `BuiltinSchema`） |
 | 某工具的执行逻辑 | `internal/app/orch_<name>.go`（编排）+ `internal/tools/<name>/`（纯算法） |
-| edit 读写契约 / 原子写 / 冲突合并 | `orch_edit_plan.go` → `orch_edit.go` → `tools/edit`、`tools/read` |
+| edit 读写契约 / 原子写 / 冲突合并 | `orch_batch_policy.go`（`planLocalEditBatch`）→ `orch_edit.go` → `tools/edit`、`tools/read` |
 | 命令安全拦截与路径校验（含密钥/凭据禁读：`pathutil.SensitiveReadReason`，三平台清单，command / read / grep 三条入口共用） | `orch_fence.go` + `orch_read.go` + `orch_grep.go` + `internal/tools/command`（`DisclosingPathOperands`：只是用密钥不算读）+ `internal/tools/pathutil` |
-| 命令安全围栏 + 命令沙箱（沙箱**当前未接入**：`internal/sandbox` 的 `attached` 开关关着，三个平台都只走围栏；围栏是单一入口，边界归属在 `kernelOwnsBoundary` 一处判定；沙箱本体原样保留，改一个常量即可接回） | `orch_fence.go`（`checkCommandSafetyAtCwd` 唯一入口、受保护位置清单、两形态路径复判）+ `internal/app/orch_sandbox.go`（`sandboxSpec` / `wrapSandboxedCommand` / `annotateSandboxDeniedWrite` / `GetSandboxStatus` / `kernelOwnsBoundary` ＝边界归属的唯一判据）+ `orch_sandbox_writes.go`（create·edit·delete·rename 的落盘经 mv/rm/mkdir/ln 包裹）+ `internal/sandbox/`（`attached` / `Attached` 接入开关、`ResolvedMode` 平台策略、`AllowsWrite` 可写判定与 SBPL / bwrap profile，不依赖 App）+ 设置页 `SettingsModal.vue` 的围栏机制说明（不再查本机状态）；command 与 service 两条执行路径共用 |
-| 文件基础读写与删除防护 | `internal/app/orch_file_ops.go` |
-| 多路径删除的共用规则（`path`/`paths` 两种写法折叠、条数上限、重复与包含判定） | `internal/app/orch_delete_paths.go`（本地 `delete` 与 `remote_delete_path` 共用；单条路径的落盘判定仍在各自信任域） |
+| 命令安全围栏 + 命令沙箱（沙箱**当前未接入**：`internal/sandbox` 的 `attached` 开关关着，三个平台都只走围栏；围栏是单一入口，边界归属在 `kernelOwnsBoundary` 一处判定；沙箱本体原样保留，改一个常量即可接回） | `orch_fence.go`（`checkCommandSafetyAtCwd` 唯一入口、受保护位置清单、两形态路径复判）+ `internal/app/orch_sandbox.go`（`sandboxSpec` / `wrapSandboxedCommand` / `annotateSandboxDeniedWrite` / `GetSandboxStatus` / `kernelOwnsBoundary` ＝边界归属的唯一判据；create·edit·delete·rename 的落盘也在这里经 mv/rm/mkdir/ln 包裹）+ `internal/sandbox/`（`attached` / `Attached` 接入开关、`ResolvedMode` 平台策略、`AllowsWrite` 可写判定与 SBPL / bwrap profile，不依赖 App）+ 设置页 `SettingsModal.vue` 的围栏机制说明（不再查本机状态）；command 与 service 两条执行路径共用 |
+| 文件基础读写与删除防护（含本地 `delete` 与 `remote_delete_path` 共用的 `path`/`paths` 折叠、条数上限、重复与包含判定；单条路径的落盘判定仍在各自信任域） | `internal/app/orch_file_ops.go` |
 | 受保护路径判定（VCS 元数据 / 路径别名归一） | `internal/tools/pathutil/pathutil.go`（`CanonicalPath` / `VCSMetadataReason`；本地写/删/命令与远端写/命令共用，远端只判得了字面那半） |
 | 会话/历史持久化（坏数据协议修复在 `prov_history_hygiene.go`） | `internal/app/biz_sessions.go` |
 | 系统提示词组装（核心规则 / 技能名片 / 记忆索引 / 用户档案 USER.md / AGENTS.md / 代码图谱 / 项目教训 LESSONS.md / 自定义提示词） | `internal/app/biz_prompt.go` |
@@ -38,10 +37,10 @@
 | 计划工具（`steps` / `finish` 位置状态机：报「完成到某一步」、报最后一步即收尾、状态由位置推导、标题即身份、上限收口单一写入点、结果块带状态与进度、run 收尾对账） | `biz_context.go`（`handlePlan` / `classifyPlanRequest` / `reportPlanProgress` / `applyPlanPosition` / `planCheckMarker`）+ `infra_result.go`（`renderPlanResultForModel`）+ `orch_batch_policy.go`（`planBatchWriteSource` / `toolDidPlanWork`）；前端 `planPanel.mjs` / `toolVerb.mjs` |
 | 配置合并 / key 池管理 / 最近使用模型身份展开（`expandLastUsedModel`；配置只存 models[] + lastUsedModel，13 个模型字段是请求级派生值） | `internal/app/biz_config.go` |
 | 技能发现与加载 | `internal/app/biz_skills.go` |
-| 新建技能（元数据 + SKILL.md 正文写入 `.agents/skills`：用户级 `~/` 或项目级 `<工作区>`；重名/非法名拒绝，写完清列表缓存） | `internal/app/biz_skills_write.go`（`SaveSkill`） |
+| 新建技能（元数据 + SKILL.md 正文写入 `.agents/skills`：用户级 `~/` 或项目级 `<工作区>`；重名/非法名拒绝，写完清列表缓存） | `internal/app/biz_skills.go`（`SaveSkill`） |
 | MCP 客户端生命周期 | `internal/app/biz_mcp.go` |
 | 计划任务 / 后台服务 / 命令超时收编（LLM 任务在创建时记下模型身份，运行时按身份展开） | `orch_scheduler.go` / `orch_services.go`（promoteTimedOutCommand）+ `TaskCenterPanel.vue` |
-| 远程 SSH 工具与审批闸门（首次连接 / 危险命令 / 覆盖 / 集群登记；主机指纹不一致直接换记录重连；写入与命令同过 `.git` 元数据围栏） | `orch_remote.go` / `orch_ssh_credential.go`（按解析端点缓存并区分认证模式）+ `internal/tools/sshclient/`（纯 Go 传输、密钥认证、known_hosts 固化与不一致时替换） |
+| 远程 SSH 工具与审批闸门（首次连接 / 危险命令 / 覆盖 / 集群登记；主机指纹不一致直接换记录重连；写入与命令同过 `.git` 元数据围栏） | `orch_remote.go` / `orch_ssh_cluster.go`（按解析端点缓存并区分认证模式）+ `internal/tools/sshclient/`（纯 Go 传输、密钥认证、known_hosts 固化与不一致时替换） |
 | SSH 集群清单与工作区授权（`ssh_clusters.json` 落盘、别名/端点两种写法、默认拒绝） | `internal/app/biz_ssh_cluster.go` + `orch_ssh_cluster.go` + `SSHClusterPanel.vue` + `ComposerInfoBar.vue` |
 | 知识库模式（KB 提示词 / sources/ 只读） | `internal/app/orch_kb.go` + `ModeSider.vue` + `App.vue` |
 | 对外本地 HTTP API 服务 | `internal/app/biz_api.go` |
@@ -70,11 +69,11 @@
 
 ### `internal/app/`
 - `app.go`: Agent 编排核心（聊天循环 runChat、工具分发 executeTool、内建工具 chatTools、生命周期 StartChat/CancelRun；command 工具执行也在此分发）。
-- `prov_*`: 模型与网络适配（协议脏代码唯一聚集区）。`prov_model.go`（多 key 池调度、流式归并、错误分类；工具声明与工具调用 ID 的纯规则已下沉到 `internal/tools/schemautil`、`internal/tools/toolcall`）；`prov_adapter_chat.go` / `prov_adapter_responses.go` / `prov_adapter_anthropic.go`（三家协议独立适配器：请求构造、工具/消息转换、流解析与 Usage 提取）；`prov_reasoning.go`（思考回放台账与请求体改写；台账 scope 按 run 隔离，见 `reasoningScope`）；`prov_wire_config.go`（思考档位 wire 拼写 `reasoningWireForAdapter`、API 格式归一化、端点/token 参数默认值——档位拼写的唯一收口）；`prov_history_hygiene.go`（历史消息协议卫生：内存/磁盘双 profile、tool_call/tool_result 配对修复、悬空调用剥离）；`prov_proxy*.go`（代理探测、SSRF 守卫客户端与模型请求的流空闲超时 `streamIdleTimeoutTransport`）。
-- `host_*`: 桌面与宿主桥（唯一允许 import Wails）。`host_desktop.go`（桌面桥与对话框）；`host_events.go`（emit 统一出口）；`host_window_state.go`（窗口位置持久化）；`host_notifications.go`（桌面通知音）；`host_network.go`（网络事件环与订阅分发）；`host_terminal*.go`（在终端打开工作区路径）；另有按平台分文件：`host_clipboard_windows.go`/`_other.go`、`host_filemanager_windows.go`/`_other.go`、`host_process_windows.go`/`_other.go`、`host_update_relaunch_darwin.go`/`_other.go`。
-- `infra_*`: 共享基础设施。`infra_bridges.go`（类型别名与原子写）；`infra_result.go`（结果信封与模型端压缩）；`infra_stream.go`（流式节流）；`infra_output_encoding.go`（控制台编码与 UTF-8/GBK 转码）；`infra_log.go`（错误日志按日轮转）；`infra_shell_env.go`（登录 shell PATH 探测与命令环境组装）。
-- `biz_*`: 独立业务模块。`biz_config.go`（配置）；`biz_context.go`（上下文与 Token 核算）；`biz_compact.go`（历史压缩：手动/自动/溢出恢复三入口共用唯一一档 LLM 总结、阈值与超时归一、总结流式产出与 plan 快照钉入、`CompactSession`（带调用方模型 overlay，无 overlay 时回落会话冻结记录，见 `compactSessionConfig`）/`CancelCompaction`）；`biz_prompt.go`（系统提示词组装：各段原料的读取与预算、用户档案与项目教训的注入、提示词缓存）；`biz_sessions.go`（会话持久化与清理）；`biz_workspace*.go`（文件列表/搜索/编辑器/文件信息，fileinfo 按平台分文件）；`biz_ssh_cluster.go`（SSH 集群清单落盘、端点/别名解析、工作区白名单与会话级连接放行；写盘后 emit `ssh:clusters-changed`）；`biz_skills.go`（技能发现/加载）+ `biz_skills_write.go`（新建技能落盘）；`biz_builtin_skills.go`（内置技能条目）；`biz_mcp.go`（MCP 生命周期）；`biz_api.go`（本地 HTTP API）；`biz_modellist.go`（拉取模型列表）；`biz_project_context.go`（AGENTS.md / CODEGRAPH.md 读取注入、背景图管理）；`biz_temp_workspace.go`（临时工作区创建与退出清理）；`biz_update.go`（自更新）；`biz_stats.go`（Token 统计）。
-- `orch_*`: 工具编排（绑定纯算法到 `*App` 状态）。`orch_edit_plan.go` / `orch_edit.go`（编辑批次规划与原子提交）；`orch_fence.go`（安全围栏：命令拦截、受保护位置清单、凭据禁读、两形态路径复判；原 orch_command_safety.go）；`orch_batch_policy.go`（文件变更工具定序与写批次冲突检测）；`orch_validation.go`（文件变更后校验与批次校验规划）；`orch_file_ops.go`（文件读写删）；`orch_delete_paths.go`（两个删除工具共用的候选列表与重复/包含判定）；`orch_read.go`（读取与会话级读缓存：图片、去重哈希，本地/远端读共用）；`orch_grep.go`（ripgrep 搜索）；`orch_http.go`（http_request / web_fetch 编排）；`orch_git.go`（git 状态）；`orch_memory.go`（memory 工具编排）；`orch_remote*.go`（SSH 远端操作：读写/编辑/删除/跑命令共用一个解析并授权入口、以及多道审批闸门（首次连接 / 危险命令 / 覆盖 / 集群登记；主机指纹不一致时不经询问直接更新记录并重连）；远端读接入会话级读缓存）；`orch_ssh_cluster.go`（模型侧 `ssh_cluster` 工具：列清单、登记新节点、对已登记节点只申请授权不覆盖）；`orch_scheduler.go`（计划任务）；`orch_services.go`（后台服务）；`orch_subagent.go`（子代理：lane 稳定的缓存路由 + run 局部回放 scope）；`orch_kb.go`（知识库 sources/ 读写保护）。
+- `prov_*`: 模型与网络适配（协议脏代码唯一聚集区）。`prov_model.go`（多 key 池调度、流式归并、错误分类；协议常量表：思考档位 wire 拼写 `reasoningWireForAdapter`、API 格式归一化、端点/token 参数默认值——档位拼写的唯一收口；工具声明与工具调用 ID 的纯规则已下沉到 `internal/tools/schemautil`、`internal/tools/toolcall`）；`prov_adapter_chat.go` / `prov_adapter_responses.go` / `prov_adapter_anthropic.go`（三家协议独立适配器：请求构造、工具/消息转换、流解析与 Usage 提取）；`prov_reasoning.go`（思考回放台账与请求体改写；台账 scope 按 run 隔离，见 `reasoningScope`）；`prov_history_hygiene.go`（历史消息协议卫生：内存/磁盘双 profile、tool_call/tool_result 配对修复、悬空调用剥离）；`prov_proxy*.go`（代理探测、SSRF 守卫客户端与模型请求的流空闲超时 `streamIdleTimeoutTransport`）。
+- `host_*`: 桌面与宿主桥（唯一允许 import Wails）。`host_desktop.go`（桌面桥与对话框、窗口位置持久化、桌面通知音）；`host_events.go`（emit 统一出口）；`host_network.go`（网络事件环与订阅分发）；`host_terminal*.go`（在终端打开工作区路径）；另有按平台分文件：`host_clipboard_windows.go`/`_other.go`、`host_filemanager_windows.go`/`_other.go`、`host_process_windows.go`/`_other.go`、`host_update_relaunch_darwin.go`/`_other.go`。
+- `infra_*`: 共享基础设施。`infra_bridges.go`（类型别名与原子写）；`infra_result.go`（结果信封与模型端压缩）；`infra_stream.go`（流式节流：档位表 `eventCadenceTable` + 合并器）；`infra_output_encoding.go`（控制台编码与 UTF-8/GBK 转码）；`infra_log.go`（错误日志按日轮转）；`infra_shell_env.go`（登录 shell PATH 探测与命令环境组装）。
+- `biz_*`: 独立业务模块。`biz_config.go`（配置）；`biz_context.go`（上下文与 Token 核算）；`biz_compact.go`（历史压缩：手动/自动/溢出恢复三入口共用唯一一档 LLM 总结、阈值与超时归一、总结流式产出与 plan 快照钉入、`CompactSession`（带调用方模型 overlay，无 overlay 时回落会话冻结记录，见 `compactSessionConfig`）/`CancelCompaction`）；`biz_prompt.go`（系统提示词组装：各段原料的读取与预算、用户档案与项目教训的注入、提示词缓存）；`biz_sessions.go`（会话持久化与清理）；`biz_workspace*.go`（文件列表/搜索/编辑器/文件信息，fileinfo 按平台分文件）；`biz_ssh_cluster.go`（SSH 集群清单落盘、端点/别名解析、工作区白名单与会话级连接放行；写盘后 emit `ssh:clusters-changed`）；`biz_skills.go`（技能发现/加载 + 内置清单 + 新建技能落盘）；`biz_mcp.go`（MCP 生命周期）；`biz_api.go`（本地 HTTP API）；`biz_modellist.go`（拉取模型列表）；`biz_project_context.go`（AGENTS.md / CODEGRAPH.md 读取注入、背景图管理）；`biz_temp_workspace.go`（临时工作区创建与退出清理）；`biz_update.go`（自更新）；`biz_stats.go`（Token 统计）。
+- `orch_*`: 工具编排（绑定纯算法到 `*App` 状态）。`orch_edit.go`（编辑：批次规划与原子提交）；`orch_fence.go`（安全围栏：命令拦截、受保护位置清单、凭据禁读、两形态路径复判；原 orch_command_safety.go）；`orch_batch_policy.go`（文件变更工具定序与写批次冲突检测）；`orch_validation.go`（文件变更后校验与批次校验规划）；`orch_file_ops.go`（文件读写删 + 两个删除工具共用的候选列表与重复/包含判定）；`orch_read.go`（读取与会话级读缓存：图片、去重哈希，本地/远端读共用）；`orch_grep.go`（ripgrep 搜索）；`orch_http.go`（http_request / web_fetch 编排）；`orch_git.go`（git 状态）；`orch_memory.go`（memory 工具编排）；`orch_remote*.go`（SSH 远端操作：读写/编辑/删除/跑命令共用一个解析并授权入口、以及多道审批闸门（首次连接 / 危险命令 / 覆盖 / 集群登记；主机指纹不一致时不经询问直接更新记录并重连）；远端读接入会话级读缓存）；`orch_ssh_cluster.go`（模型侧 `ssh_cluster` 工具：列清单、登记新节点、对已登记节点只申请授权不覆盖；以及从清单读出的内存凭据缓存）；`orch_scheduler.go`（计划任务）；`orch_services.go`（后台服务）；`orch_subagent.go`（子代理：lane 稳定的缓存路由 + run 局部回放 scope）；`orch_kb.go`（知识库 sources/ 读写保护）。
 
 ### `internal/tools/`（纯算法层，绝不依赖 `*App`/`ConfigState`）
 - `calculate/`（数学求值）· `command/`（Bash AST 安全解析与目标提取）· `edit/`（LCS diff 与范围替换）· `git/`（porcelain 解析）· `grep/`（ripgrep 封装）· `memory/`（记忆条目存储与运行时接口）· `pathutil/`（路径安全解析）· `read/`（文本读取与版本计算）· `scheduler/`（调度表达式解析）· `schemautil/`（工具 JSON-Schema 修补：$ref 内联与属性 type 推断；另带 `ValidateArgs`——内置工具入参的 schema 闸门）· `service/`（rolling buffer 与长进程判定）· `shared/`（CodedError 与内置 schema）· `sshclient/`（纯 Go SSH 连接、密钥/Agent 认证、主机指纹校验）· `toolcall/`（工具调用 ID 规范化、参数解码、截断参数标记）。

@@ -2190,7 +2190,7 @@ func TestCreateFileRejectsSymlinkParentOutsideWorkspace(t *testing.T) {
 	}
 	app := NewApp()
 
-	// 本用例断言围栏在位：判据归内核时越界由内核拒，见 orch_sandbox_writes_test.go。
+	// 本用例断言围栏在位：判据归内核时越界由内核拒，见 orch_sandbox_test.go。
 	pinBoundaryOwnership(t, false)
 	_, err := app.createFileWithConfig(ConfigState{Workspace: root}, CreateFileRequest{
 		Path:    "escape/file.txt",

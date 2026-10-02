@@ -379,7 +379,7 @@ func (a *App) storeSSHServerLocked(alias string, node SSHServerNode) error {
 		a.sshClusters = make(map[string]SSHServerNode)
 	}
 	// 节点是凭据的唯一来源：更新前后两套端点都要丢掉缓存槽，否则用户刚清掉的
-	// 密码/口令会继续用到 TTL 到期（见 orch_ssh_credential.go 的 purgeHost）。
+	// 密码/口令会继续用到 TTL 到期（见 orch_ssh_cluster.go 的 purgeHost）。
 	if previous, ok := a.sshClusters[alias]; ok {
 		a.sshCredentials.purgeHost(nodeSSHHost(previous))
 	}

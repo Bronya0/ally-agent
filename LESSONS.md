@@ -24,7 +24,7 @@
 [light-scope-literal-leak] 2026-09-19 小心：只带 `data-mode` 不带主题轴的选择器（`html[data-mode="light"] .foo`）会命中**所有主题**的浅色；里面的瑰珀调字面量/通用 token 会原样漏进每个新主题。已收口（2026-09-19 换主题批次）：瑰珀专属浅色字面量一律带 `:not([data-theme])`（瑰珀=默认主题、无 data-theme 属性），其余主题走通用 token 规则；左侧菜单选中图标、tab 下划线、prompt-input 边框、session-time、mermaid-action 都已按此两档制改造。因此新增主题 = theme.mjs 一条 + style.css 深/浅两个块，**不再维护 :is() 主题名单**。危害（历史）：非瑰珀浅色主题菜单选中/tab 下划线一直是瑰珀调的绿。@frontend/src/style.css @frontend/src/components/AppHeader.vue @frontend/src/utils/theme.mjs
 [link-affordance-not-status-token] 2026-09-19 小心：可点击/链接类 affordance（欢迎表格三个 popover 触发钮等）不要用全局状态色 token（`--ally-info-*` 只在基础 :root 与琥珀浅色块定义、主题不变，同 danger/warning 一样是“跨主题恒定”的语义）；链接的颜色归 theme accent（`--ally-accent-bright`，每主题深/浅块必有、与 --md-link 同源），否则每个主题里都是同一支固定蓝。危害：换主题后首页表格可点部分仍是琥珀调蓝，看着像 bug。@frontend/src/components/ToolsPopover.vue @frontend/src/components/McpStatusPopover.vue @frontend/src/components/SkillsPopover.vue
 [picker-side-effect-adopts-active-session] 2026-09-21 小心：选目录类函数（chooseWorkspace 等）不得无条件把选中路径写进当前活动会话/config ——“为别处选目录”（新建 Tab、加 extraRoot）和“为当前 Tab 首次采纳工作区”是两种语义，副作用必须由调用方显式声明（adopt 参数）。危害：点 “+” 新建工作区 Tab 时旧 Tab 的活动会话被隐性改挂到新工作区：/sessions 列表看到别的工作区的会话并随后持久化到索引（重启仍在），同时它从原工作区列表里消失，全程无任何提示。@frontend/src/App.vue
-[provider-cache-explicit-mode-is-off] 2026-09-21 小心：OpenAI Responses 的 `prompt_cache_options.mode="explicit"` 不是“显式缓存”，而是**关掉**隐式断点；请求里若没有自己的 `prompt_cache_breakpoint`，等于完全不缓存（SDK 文档原话如此，pi 也只在 CacheRetention="none" 时才选它）。危害：gpt-5.6 长会话的正文（占输入 90%+）每轮按全价重算，命中率上限只剩 header 占比。修法：默认走隐式模式（不写 mode、不在 input 里塞锚点），延长缓存用 prompt_cache_retention（GPT-5.6 之前）/ prompt_cache_options.ttl（GPT-5.6+），拼写收口在 prov_wire_config.go。@internal/app/prov_model.go @internal/app/prov_wire_config.go
+[provider-cache-explicit-mode-is-off] 2026-09-21 小心：OpenAI Responses 的 `prompt_cache_options.mode="explicit"` 不是“显式缓存”，而是**关掉**隐式断点；请求里若没有自己的 `prompt_cache_breakpoint`，等于完全不缓存（SDK 文档原话如此，pi 也只在 CacheRetention="none" 时才选它）。危害：gpt-5.6 长会话的正文（占输入 90%+）每轮按全价重算，命中率上限只剩 header 占比。修法：默认走隐式模式（不写 mode、不在 input 里塞锚点），延长缓存用 prompt_cache_retention（GPT-5.6 之前）/ prompt_cache_options.ttl（GPT-5.6+），拼写收口在 prov_model.go。@internal/app/prov_model.go
 [cache-route-vs-replay-scope] 2026-09-21 小心：子代理的“缓存路由键”与“思考回放台账 scope”是两种身份，不得共用一个字段：路由键要按 lane 稳定（同一会话的多次委派复用同一份 header 缓存，pi 用 `<session id>:<lane name>`），台账 scope 必须按 run 隔离（回放按首个 tool_call id 匹配并**替换**，中转把每条响应都重编成 call_0 时两个并发 run 会互相顶掉签名）。危害：共用 per-run key → 每次子代理冷启动；共用稳定 key → 并发子代理互串签名；且 per-run key 无人清理会占满台账 LRU。修法：ConfigState.reasoningScope 与 responsesPromptCacheKey 分开，run 结束 clearScope。@internal/app/orch_subagent.go @internal/app/prov_reasoning.go
 [dedup-hash-must-cover-full-payload] 2026-09-21 小心：做“内容没变就不再重复发送”的去重时，哈希必须覆盖模型实际收到的**全部载荷**，而不是其中那段可读文本。读图片的结果里图片本体在 dataURL、正文只有一句“文件名+体积”的说明——只哈希说明文字时，同名同体积的换图会被当成“没变”。危害：用户换了截图，模型仍只拿到旧说明且被告知“内容已给过”，新图永远进不了上下文。@internal/app/orch_read.go
 [retry-after-cap] 2026-09-22 小心：重试退避必须与服务端 Retry-After 取大者且设上限（60s）兑底；sashabaranov 错误不带响应头，Chat 路径须经传输层捕获（retryAfterCaptureTransport）再附到错误上。@internal/app/prov_model.go @internal/app/prov_proxy.go
@@ -83,7 +83,7 @@
 [computed-stale-store] 2026-09-27 computed 里直读 localStorage 只会算一次就冻住：先落 ref。@App.vue
 [identity-two-writers] 2026-09-28 config 不变式收敛收口一处，SaveConfig 与 saveConfig 共用；只在一边清就落悬空身份。@biz_config.go
 [derived-field-migration] 2026-09-28 字段降级成派生值前先物化旧值，strip 落盘后无备份。@biz_config.go
-[emit-cadence] 2026-09-28 高频事件节流参数收口 eventCadenceTable，未登记=无节流。@infra_emit.go
+[emit-cadence] 2026-09-28 高频事件节流参数收口 eventCadenceTable，未登记=无节流。@infra_stream.go
 [schema-shape] 2026-09-27 带 properties/required 的分支也要 type: object，否则 Gemini 400 拒全单。@schemautil
 [key-not-pointer] 2026-09-27 输入框实例 key 只绑 Tab，别绑会被后台改写的 sessionId；改了 key 就重建 DOM。@App.vue
 [vfor-inline-handler] 2026-09-28 v-for 内联 handler 每次新引用→未声明 emits 的组件被重渲染，受控值回写冲掉输入法组合。@App.vue
@@ -129,12 +129,12 @@
 [boundary-owner] 2026-10-01 边界判据问沙箱「真在管吗」不问平台；测试钉内核接管要 requireConfinement，否则越界写真落盘。@orch_sandbox.go
 [sandbox-roots] 2026-10-01 命令可写根=工作区+$TMPDIR+~/Library/Caches；~/.ally_agent 连读都拒。@orch_sandbox.go
 [sandbox-denied-wording] 2026-10-01 拒写文案单源：WriteDeniedHint 首句 = i18n 的 SANDBOX_DENIED_* 常量。@i18n.mjs
-[staging-unconfined] 2026-10-01 staging 不受沙箱约束：目标目录本身不可写时错误出在内核前，要在此归类。@orch_sandbox_writes.go
+[staging-unconfined] 2026-10-01 staging 不受沙箱约束：目标目录本身不可写时错误出在内核前，要在此归类。@orch_sandbox.go
 [http-saveto-abs] 2026-10-01 http_request 的 saveTo 给绝对路径可越界落盘（不经沙箱，事后连删都删不掉）。@orch_http.go
 [tilde-literal] 2026-10-01 文件工具不展开 ~："~/x" 按字面名在工作区建出 ./~ 目录。@orch_file_ops.go
 [helper-raw-string] 2026-10-01 远端 helper 在 Go raw string 里，注释禁用反引号（会截断脚本）。@orch_remote.go
 [remote-fence-parity] 2026-10-01 远端与本地是两套闸门：新增写入口/命令判定要各自补 .git 元数据围栏。@orch_remote.go
-[mutation-roots-narrow] 2026-10-01 文件 mutation 的写根不能复用命令那套：$TMPDIR 与工具链缓存是命令的必需品，却是落盘动作的逃逸面（工作区内符号链接指过去内核照样放行）。@orch_sandbox_writes.go
+[mutation-roots-narrow] 2026-10-01 文件 mutation 的写根不能复用命令那套：$TMPDIR 与工具链缓存是命令的必需品，却是落盘动作的逃逸面（工作区内符号链接指过去内核照样放行）。@orch_sandbox.go
 [guard-not-a-condition] 2026-10-01 拦截别写成 if 条件（guard() == nil）：失败时错误无处可去，工具返回「成功 + 空结果」，拦截形同没做。返回值必须落到 err。@app.go
 [assert-the-right-field] 2026-10-01 断言要指向真正承载结果的字段：提示刻意不进 Output，测试却去查 Output——既绿不了，也等于什么都没测到。@orch_sandbox_test.go
 [root-self-delete] 2026-10-02 沙箱接管后唯一兜不住的自毁面：写根正是内核的可写范围，删工作区根在它眼里合法，必须由围栏拦（delete 工具本就拒同一目标）。@orch_fence.go
