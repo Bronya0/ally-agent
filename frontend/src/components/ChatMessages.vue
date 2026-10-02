@@ -605,9 +605,21 @@ function getScrollViewport() {
   return root.closest('.n-scrollbar-container') || root.parentElement;
 }
 
+// 贴底判定必须用实测位置，不能用 scrollHeight 算术：.messages .message 挂了
+// content-visibility: auto，离屏消息只占 contain-intrinsic-size 的占位高度，
+// scrollHeight 因此小于真实内容高度，算出来的“离底距离”永远偏小——用户往上滚
+// 到底了仍被判成贴底，autoFollow 一直为真，滚动的每一帧都被内容尺寸变化触发的
+// pinToBottomNow 拽回底部（表现就是“滚不动”）。底部锚点是真实渲染的最后一个
+// 盒子，它与视口底的实际距离不受占位影响。
 function isNearBottom() {
   const viewport = getScrollViewport();
   if (!viewport) return true;
+  const anchor = bottomAnchorRef.value;
+  if (anchor) {
+    const viewportBottom = viewport.getBoundingClientRect().bottom;
+    const distance = anchor.getBoundingClientRect().bottom - viewportBottom;
+    return distance <= bottomThreshold;
+  }
   return viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight <= bottomThreshold;
 }
 
@@ -718,9 +730,12 @@ function scrollToBottomIfStale() {
   scrollToBottom();
   scheduleRaf(() => {
     if (!autoFollow.value) return;
-    if (viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight > bottomThreshold) {
-      scrollToBottom({ force: true });
-    }
+    // 同一个 content-visibility 陷阱：这里也必须用锚点实测，不能用 scrollHeight。
+    const anchor = bottomAnchorRef.value;
+    const stale = anchor
+      ? anchor.getBoundingClientRect().bottom - viewport.getBoundingClientRect().bottom > bottomThreshold
+      : viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight > bottomThreshold;
+    if (stale) scrollToBottom({ force: true });
   });
 }
 
