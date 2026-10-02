@@ -27,6 +27,8 @@
 const TOOL_VERBS = {
   // read / list
   read: ['Reading', 'Read', 'Read'],
+  // 批形状的读（旧快照里仍有这个名字，result 里带 files[]）；没有它就只能显示通用的 Used。
+  batch_read: ['Reading', 'Read', 'Read'],
   remote_read: ['Remote Reading', 'Remote Read', 'Remote Read'],
   list_files: ['Listing', 'Listed', 'List'],
   // write

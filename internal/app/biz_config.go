@@ -670,26 +670,7 @@ func (a *App) SaveConfig(req ConfigState) error {
 }
 
 func (a *App) TestModelConnection(model ModelConfig) error {
-	networkCfg := a.effectiveConfig(ConfigState{})
-	cfg := ConfigState{
-		ProviderName:    model.ProviderName,
-		APIFormat:       normalizeAPIFormat(model.APIFormat),
-		BaseURL:         strings.TrimSpace(model.BaseURL),
-		APIKey:          strings.TrimSpace(model.APIKey),
-		APIKeys:         cloneStringSlice(model.APIKeys),
-		Model:           strings.TrimSpace(model.Model),
-		MaxTokens:       model.MaxTokens,
-		ContextWindow:   model.ContextWindow,
-		TokenParam:      normalizeTokenParam(model.TokenParam),
-		ReasoningTag:    normalizeReasoningTag(model.ReasoningTag),
-		VisionCapable:   model.VisionCapable,
-		ReasoningEffort: normalizeReasoningEffort(model.ReasoningEffort),
-		ProxyMode:       networkCfg.ProxyMode,
-		ProxyURL:        networkCfg.ProxyURL,
-		ProxyNoProxy:    networkCfg.ProxyNoProxy,
-		UserAgent:       networkCfg.UserAgent,
-		CustomHeaders:   normalizeCustomHeaders(model.CustomHeaders),
-	}
+	cfg := a.configForModelEntry(model)
 	if cfg.Model == "" {
 		return errors.New("model is required")
 	}
@@ -843,6 +824,19 @@ func applyModelEntry(cfg *ConfigState, m ModelConfig) {
 	cfg.VisionCapable = m.VisionCapable
 	cfg.ReasoningEffort = normalizeReasoningEffort(m.ReasoningEffort)
 	syncAPIKeyFields(cfg)
+}
+
+// configForModelEntry 造一份“网络字段取当前配置、模型字段取给定条目”的请求配置。
+// 这是从一条 ModelConfig 造请求配置的唯一路径：“测试连接”（TestModelConnection）
+// 与“和模型下棋”（GameAIAction）以前各自手抄一份字段表，加一个模型字段时只有聊天
+// 主路径会生效——设置里能配、聊天里也生效，偏偏这两条路用不上。
+func (a *App) configForModelEntry(model ModelConfig) ConfigState {
+	cfg := a.effectiveConfig(ConfigState{})
+	// 模型字段整段换掉：applyModelEntry 在条目没填 ContextWindow（0）时会保留
+	// 基底现值，而基底那份窗口可能来自另一个模型，所以先清零再套用。
+	cfg.ContextWindow = 0
+	applyModelEntry(&cfg, model)
+	return cfg
 }
 
 // expandLastUsedModel 返回把"最近使用模型"展开进模型字段后的配置。没有

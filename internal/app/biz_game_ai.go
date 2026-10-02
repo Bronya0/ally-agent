@@ -57,26 +57,7 @@ func (a *App) GameAIAction(model ModelConfig, system, user string) (GameAIAction
 	if len(system) > maxPromptBytes || len(user) > maxPromptBytes {
 		return GameAIActionResult{}, errors.New("prompt is too large")
 	}
-	networkCfg := a.effectiveConfig(ConfigState{})
-	cfg := ConfigState{
-		ProviderName:    model.ProviderName,
-		APIFormat:       normalizeAPIFormat(model.APIFormat),
-		BaseURL:         strings.TrimSpace(model.BaseURL),
-		APIKey:          strings.TrimSpace(model.APIKey),
-		APIKeys:         cloneStringSlice(model.APIKeys),
-		Model:           strings.TrimSpace(model.Model),
-		MaxTokens:       model.MaxTokens,
-		ContextWindow:   model.ContextWindow,
-		TokenParam:      normalizeTokenParam(model.TokenParam),
-		ReasoningTag:    normalizeReasoningTag(model.ReasoningTag),
-		VisionCapable:   model.VisionCapable,
-		ReasoningEffort: normalizeReasoningEffort(model.ReasoningEffort),
-		ProxyMode:       networkCfg.ProxyMode,
-		ProxyURL:        networkCfg.ProxyURL,
-		ProxyNoProxy:    networkCfg.ProxyNoProxy,
-		UserAgent:       networkCfg.UserAgent,
-		CustomHeaders:   normalizeCustomHeaders(model.CustomHeaders),
-	}
+	cfg := a.configForModelEntry(model)
 	if cfg.Model == "" {
 		return GameAIActionResult{}, errors.New("model is required")
 	}

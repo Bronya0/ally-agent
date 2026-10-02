@@ -222,7 +222,7 @@ func injectEnvelopeWarnings(compactJSON string, warnings []string) string {
 func compactToolDataForModel(name string, result toolResult, fullJSON string) string {
 	// MCP tool output is third-party text with no producer-side cap; clamp it
 	// to the built-in bound so one runaway server cannot flood model context.
-	if strings.HasPrefix(name, "mcp__") {
+	if isMcpToolFunctionName(name) {
 		return renderMcpResultForModel(result, fullJSON)
 	}
 	switch name {

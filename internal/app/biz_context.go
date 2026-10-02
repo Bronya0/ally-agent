@@ -294,7 +294,7 @@ func mcpToolSchemaTokens(tools []openai.Tool) int {
 	// Fast path: if no MCP tools, skip Marshal entirely.
 	hasMcp := false
 	for _, t := range tools {
-		if t.Function != nil && strings.HasPrefix(t.Function.Name, "mcp__") {
+		if t.Function != nil && isMcpToolFunctionName(t.Function.Name) {
 			hasMcp = true
 			break
 		}
@@ -306,7 +306,7 @@ func mcpToolSchemaTokens(tools []openai.Tool) int {
 	// large built-in schema that is already accounted for by the cache.
 	mcpOnly := make([]openai.Tool, 0, 8)
 	for _, t := range tools {
-		if t.Function != nil && strings.HasPrefix(t.Function.Name, "mcp__") {
+		if t.Function != nil && isMcpToolFunctionName(t.Function.Name) {
 			mcpOnly = append(mcpOnly, t)
 		}
 	}
@@ -329,7 +329,7 @@ func estimateToolSchemaTokens(tools []openai.Tool) int {
 	builtinCount := 0
 	hasMcp := false
 	for _, t := range tools {
-		if t.Function != nil && strings.HasPrefix(t.Function.Name, "mcp__") {
+		if t.Function != nil && isMcpToolFunctionName(t.Function.Name) {
 			hasMcp = true
 			continue
 		}
@@ -343,7 +343,7 @@ func estimateToolSchemaTokens(tools []openai.Tool) int {
 		// Filtered builtin subset — marshal directly.
 		builtinOnly := make([]openai.Tool, 0, builtinCount)
 		for _, t := range tools {
-			if t.Function != nil && !strings.HasPrefix(t.Function.Name, "mcp__") {
+			if t.Function != nil && !isMcpToolFunctionName(t.Function.Name) {
 				builtinOnly = append(builtinOnly, t)
 			}
 		}

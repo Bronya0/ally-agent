@@ -2952,7 +2952,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		}
 	default:
 		// Route MCP tool calls by their sanitized OpenAI function name.
-		if strings.HasPrefix(name, "mcp__") {
+		if isMcpToolFunctionName(name) {
 			var mcpArgs map[string]any
 			if decodeErr := json.Unmarshal(args, &mcpArgs); decodeErr == nil {
 				// MCP arguments are forwarded unchanged (there is no built-in

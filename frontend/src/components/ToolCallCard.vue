@@ -105,7 +105,7 @@ Public License v3. See the LICENSE file for details.
       :max-lines="COMMAND_PREVIEW_LINES"
       @overflow="setBodyOverflow(msg, $event)"
     />
-    <pre v-else-if="msg.body && !cardGrid && msg.status !== 'error' && msg.kind !== 'edit' && msg.kind !== 'read' && msg.kind !== 'remote_read' && msg.kind !== 'calculate' && msg.kind !== 'grep' && msg.kind !== 'plan' && (msg.kind !== 'list' || msg.expanded)" ref="bodyPreRef" :class="['tool-body', { 'fixed-scroll': isFixedKind(msg.kind), 'body-preview': isBodyPreview(msg), 'tail-default': isServiceReadResult(msg), 'scroll-enabled': bodyScrollEnabled && isScrollableBody(msg), 'tool-body-swap': !isBodyLive }]" @click.stop="handleBodyClick(msg)">{{ toolBodyText(msg) }}</pre>
+    <pre v-else-if="msg.body && !cardGrid && msg.status !== 'error' && msg.kind !== 'edit' && msg.kind !== 'read' && msg.kind !== 'remote_read' && msg.kind !== 'calculate' && msg.kind !== 'grep' && msg.kind !== 'plan' && (msg.kind !== 'list' || msg.expanded)" ref="bodyPreRef" :class="['tool-body', { 'fixed-scroll': isFixedBodyKind(msg.kind), 'body-preview': isBodyPreview(msg), 'tail-default': isServiceReadResult(msg), 'scroll-enabled': bodyScrollEnabled && isScrollableBody(msg), 'tool-body-swap': !isBodyLive }]" @click.stop="handleBodyClick(msg)">{{ toolBodyText(msg) }}</pre>
     <div v-if="isValidationWarning(msg)" class="edit-warning-list validation-warning-list" role="status" aria-live="polite">
       <div class="edit-warning validation-warning" :title="msg.validation">
         <span class="validation-warning-label">{{ $t('tools.validationWarning') }}</span>
@@ -137,6 +137,7 @@ import powershell from 'highlight.js/lib/languages/powershell';
 import { highlightShellCommand } from '../utils/shellHighlight.mjs';
 import { formatToolErrorBody } from '../utils/toolError.mjs';
 import { toolVerbLabel, hasNamedVerb } from '../utils/toolVerb.mjs';
+import { isFixedBodyKind, kindLabelKey, toolShowsDuration } from '../utils/toolKind.mjs';
 import { t } from '../i18n.mjs';
 import { normalizedLines } from '../utils/toolPreview.mjs';
 import CardGrid from './CardGrid.vue';
@@ -230,17 +231,13 @@ const waitCountdown = computed(() => {
   return t('tools.wait.remaining', { seconds: remaining });
 });
 
-// 耗时显示：瞬时工具（read/grep/glob/list/delete/calculate/plan/skill）
-// 不展示——结果自身已含规模信息，<1s 的耗时纯噪音；ask 等待的是用户
-// 提交，计的是人不是工具。create/edit/service 的结果卡（Created/Edited/
-// Started service 等）与 http_request/web_fetch（Requested/Fetched）按
-// 产品约定一律不显示耗时；render_html 的耗时在 HtmlRenderCard 内展示。
-const NO_DURATION_KINDS = new Set(['read', 'grep', 'glob', 'list', 'delete', 'calculate', 'plan', 'skill', 'ask', 'create', 'edit', 'service']);
-const NO_DURATION_NAMES = new Set(['http_request', 'web_fetch']);
-const displayDuration = computed(() => {
-  if (NO_DURATION_KINDS.has(props.msg.kind) || NO_DURATION_NAMES.has(props.msg.name)) return '';
-  return props.msg.durationText || '';
-});
+// 耗时显示：瞬时工具（read/grep/glob/list/delete/calculate/plan/skill）不展示——
+// 结果自身已含规模信息，<1s 的耗时纯噪音；ask 计的是人不是工具；create/edit/service
+// 与 http_request/web_fetch（Requested/Fetched）按产品约定也不显示，render_html 的
+// 耗时在 HtmlRenderCard 内展示。
+// 名单与“默认折叠 / 正体固定高度”同源，数据在 utils/toolKind.mjs 那一张表里：本卡片
+// 不再自己列 kind（曾经四处各列一份，于是远端读卡比本地读卡多一条耗时角标）。
+const displayDuration = computed(() => (toolShowsDuration(props.msg.name) ? props.msg.durationText || '' : ''));
 
 // 流式期间卡片正体显示的是累积的原始参数（live），tool:result 到达后换成结果
 // 视图（final）。切换时只加一个状态类触发一次性淡入——不重建元素，因此不会
@@ -266,30 +263,6 @@ onUnmounted(() => {
   if (waitTimer) clearInterval(waitTimer);
 });
 
-function toolKindLabel(kind) {
-  const labels = {
-    edit: t('tools.kind.edit'),
-    create: t('tools.kind.create'),
-    delete: t('tools.kind.delete'),
-    command: t('tools.kind.command'),
-    calculate: t('tools.kind.calculate'),
-    list: t('tools.kind.list'),
-    read: t('tools.kind.read'),
-    glob: t('tools.kind.glob'),
-    grep: t('tools.kind.grep'),
-    run: t('tools.kind.run'),
-    other: t('tools.kind.tool'),
-    plan: t('tools.kind.plan'),
-    scheduled: t('tools.kind.scheduled'),
-    memory: t('tools.kind.memory'),
-    service: t('tools.kind.service'),
-    wait: t('tools.kind.wait'),
-    subagent: t('tools.kind.subagent'),
-    mcp: 'MCP',
-  };
-  return labels[kind] || '';
-}
-
 function toolDisplayName(msg) {
   if (msg.kind === 'mcp') {
     if (msg.mcpServer && msg.mcpTool) return `${msg.mcpServer}/${msg.mcpTool}`;
@@ -301,8 +274,9 @@ function toolDisplayName(msg) {
   // When the verb already names the action (Edited/Read/Ran/Grep/...), don't
   // repeat it as the name; the target/file is shown in the (msg.title) arg span.
   if (hasNamedVerb(msg.name)) return '';
-  const kindLabel = toolKindLabel(msg.kind);
-  if (kindLabel && msg.kind !== 'other') return kindLabel;
+  // 类型标签是兜底：动词已经说清动作的工具在上面就返回了，走不到这里。
+  const kindLabel = kindLabelKey(msg.kind);
+  if (kindLabel && msg.kind !== 'other') return t(kindLabel);
   return formatToolName(msg.name) || t('tools.kind.tool');
 }
 
@@ -371,10 +345,6 @@ function escapeHtml(text) {
     .replaceAll('<', '&lt;')
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;');
-}
-
-function isFixedKind(kind) {
-  return ['edit', 'create', 'command'].includes(kind);
 }
 
 // tool:update 的合并写按载荷降频（小载荷 120ms 起，见 utils/toolUpdateFlush.mjs），

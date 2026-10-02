@@ -53,7 +53,9 @@ const isSingleFile = computed(() => Array.isArray(props.msg.readEntries) && prop
 const singleEntry = computed(() => (isSingleFile.value ? props.msg.readEntries[0] || {} : {}));
 const singleEntryChip = computed(() => (isSingleFile.value ? entryChip(singleEntry.value) : ''));
 
-const readVerb = computed(() => toolVerbLabel('read_file', 'read', props.msg.status));
+// 组卡片没有自己的工具名（组是前端折出来的），动词固定取 read：以前这里传的是
+// 'read_file'，动词表里根本没有这个名字，卡片头部就只能退化成通用的 Used/Using。
+const readVerb = computed(() => toolVerbLabel('read', props.msg.kind, props.msg.status));
 
 // Secondary count, e.g. "1 file" / "3 files" — kept in English to match the verb.
 const fileCountLabel = computed(() => {

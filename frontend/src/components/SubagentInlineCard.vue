@@ -42,7 +42,9 @@ Public License v3. See the LICENSE file for details.
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { t } from '../i18n.mjs';
 import { deletePathSummary, formatHttpToolTitle } from '../utils/toolPreview.mjs';
-import { isMcpToolName, toolActionFromArgs, toolVerbLabel } from '../utils/toolVerb.mjs';
+import { toolActionFromArgs, toolVerbLabel } from '../utils/toolVerb.mjs';
+import { fmtDuration } from '../utils/format.mjs';
+import { toolKindOf } from '../utils/toolKind.mjs';
 import ToolStatusIcon from './ToolStatusIcon.vue';
 
 const props = defineProps({
@@ -61,19 +63,6 @@ const rolePending = computed(() =>
 
 const now = ref(Date.now());
 let durationTimer = null;
-
-function formatDurationShort(ms) {
-  const value = Number(ms);
-  if (!Number.isFinite(value) || value <= 0) return '';
-  if (value < 1000) return '<1s';
-  const secs = Math.max(1, Math.round(value / 1000));
-  const hours = Math.floor(secs / 3600);
-  const mins = Math.floor((secs % 3600) / 60);
-  const rest = secs % 60;
-  if (hours > 0) return `${hours}h${mins > 0 ? `${mins}m` : ''}`;
-  if (mins > 0) return `${mins}m${rest > 0 ? `${rest}s` : ''}`;
-  return `${rest}s`;
-}
 
 function stopDurationTimer() {
   if (durationTimer === null) return;
@@ -106,7 +95,7 @@ const displayDuration = computed(() => {
   if (props.msg?.status !== 'running') return props.msg?.durationText || '';
   const startTime = Number(props.msg?.startTime || 0);
   if (!startTime) return '';
-  return formatDurationShort(Math.max(0, now.value - startTime));
+  return fmtDuration(Math.max(0, now.value - startTime));
 });
 
 const recentTools = computed(() => {
@@ -266,8 +255,8 @@ function toolArgsTitle(tc) {
 // the mcp kind.
 function subToolVerb(tc) {
   const name = tc?.name || '';
-  // MCP 命名约定的判定只写一份（utils/toolVerb.mjs 的 isMcpToolName），主卡与本卡共用。
-  const kind = isMcpToolName(name) ? 'mcp' : '';
+  // kind 走主卡那张表（utils/toolKind.mjs）：MCP 前缀的判定只在 toolVerb.mjs 一处。
+  const kind = toolKindOf(name);
   // The action a call took lives in its own arguments, so the row reads it
   // through the same helper the main card uses — one rule for every card, since
   // the action can only come from the args. Reuse the parse cached by

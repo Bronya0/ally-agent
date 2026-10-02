@@ -692,6 +692,7 @@ import {
 import { toolCardRenderSignature } from './utils/toolCardSignature.mjs';
 import { toolUpdateFlushDelay } from './utils/toolUpdateFlush.mjs';
 import { isMcpToolName, toolActionFromArgs } from './utils/toolVerb.mjs';
+import { toolKindOf, toolStartsCollapsed } from './utils/toolKind.mjs';
 import { isServiceActive } from './utils/taskStatus.mjs';
 import { attachmentIcon } from './utils/attachmentIcon.mjs';
 import { useToolEvents } from './composables/useToolEvents.mjs';
@@ -6661,12 +6662,12 @@ function appendToolEventFallback(session, data = {}, status = 'running') {
     durationMs: Number(data.durationMs || 0),
     durationText: formatDurationShort(data.durationMs),
     status: normalizeToolStatus(status),
-    kind: toolKind(data.name),
+    kind: toolKindOf(data.name),
     mcpServer: data.mcpServer || '',
     mcpTool: data.mcpTool || '',
     errorCode: data.errorCode || '',
     toolAction,
-    expanded: !isToolCollapsedByDefault(data.name),
+    expanded: !toolStartsCollapsed(data.name),
     chip: '',
     editOldString: '',
     editNewString: '',
@@ -6929,7 +6930,7 @@ function updateToolEvent(id, name, title, body, status = 'default', meta = {}, t
   let waitSeconds = Number(existing?.waitSeconds || 0);
   let waitStartedAt = Number(existing?.waitStartedAt || 0);
   let askQuestions = existing?.askQuestions || [];
-  const expanded = existing ? existing.expanded : !isToolCollapsedByDefault(name);
+  const expanded = existing ? existing.expanded : !toolStartsCollapsed(name);
 
   const isLiveOutput = meta && meta.output !== undefined;
   const raw = isLiveOutput ? String(meta.args || existing?.toolArgs || '') : String(body || '');
@@ -7015,7 +7016,7 @@ function updateToolEvent(id, name, title, body, status = 'default', meta = {}, t
     durationText: existing?.durationText || formatDurationShort(meta.durationMs),
     uiStartedAt,
     status: normalizeToolStatus(status),
-    kind: toolKind(name),
+    kind: toolKindOf(name),
     mcpServer: meta.mcpServer || existing?.mcpServer || '',
     mcpTool: meta.mcpTool || existing?.mcpTool || '',
     // Rich display data
@@ -8012,41 +8013,6 @@ async function changeReasoningEffort(level, anchor) {
   } catch (err) {
     message.error(t('app.model.effortFailed', { error: err }));
   }
-}
-
-function toolKind(name) {
-  if (isMcpToolName(name)) return 'mcp';
-  if (name === 'edit' || name === 'replace_exact' || name === 'replace_lines' || name === 'remote_edit') return 'edit';
-  if (name === 'create' || name === 'remote_create_file') return 'create';
-  if (name === 'delete' || name === 'remote_delete_path') return 'delete';
-  if (name === 'command' || name === 'remote_run_command' || name === 'Bash') return 'command';
-  if (name === 'ssh_cluster') return 'ssh_cluster';
-  if (name === 'service' || name === 'start_service' || name === 'stop_service' || name === 'list_services') return 'service';
-  if (name === 'wait') return 'wait';
-  if (name === 'ask') return 'ask';
-  if (name === 'calculate') return 'calculate';
-  if (name === 'list_files') return 'list';
-  if (name === 'read') return 'read';
-  if (name === 'remote_read') return 'remote_read';
-  if (name === 'Glob') return 'glob';
-  if (name === 'grep') return 'grep';
-  if (name === 'run') return 'run';
-  if (name === 'plan') return 'plan';
-  if (name === 'scheduled_task') return 'scheduled';
-  if (name === 'subagent' || name === 'agent_delegate') return 'subagent';
-  if (name === 'skill' || name === 'Skill') return 'skill';
-  if (name === 'render_html') return 'render_html';
-
-  return 'other';
-}
-
-// Kinds and tool names whose cards start collapsed, showing only the fixed
-// non-scrollable preview lines until the user expands them manually.
-const COLLAPSED_BY_DEFAULT_KINDS = new Set(['grep', 'list', 'create', 'command']);
-const COLLAPSED_BY_DEFAULT_NAMES = new Set(['http_request', 'web_fetch']);
-
-function isToolCollapsedByDefault(name) {
-  return COLLAPSED_BY_DEFAULT_KINDS.has(toolKind(name)) || COLLAPSED_BY_DEFAULT_NAMES.has(name);
 }
 
 function formatMcpArgsSummary(parsed) {
