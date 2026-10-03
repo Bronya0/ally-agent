@@ -67,13 +67,16 @@ const icon = computed(() => STATE_ICON[state.value] || STATE_ICON.default);
 }
 
 /* Filled running dot — the tool card's "in progress" mark: a solid 6px dot that
-   blinks, the same signal the terminal coding agents put on their "Running…"
-   line (Claude Code / Codex).
-   Opacity only — deliberately no scale and no rotation: the mark has to say
-   "still working, nothing is wrong", and a dot that grows/shrinks or spins reads
-   as urgency instead. Because the property is opacity, the box stays exactly
-   16x14 and the swap to the green check never shifts the line.
-   The will-change below is what keeps the blink smooth: this dot lives in a card
+   fades softly in and out (opacity 1 ↔ 0.3, one cycle per 1.2s). Same signal the
+   terminal coding agents put on their "Running…" line (Claude Code / Codex), but
+   deliberately softer than their hard on/off blink: several tool cards can be
+   running at once, and hard blinks out of phase read as urgency, while the 0.3
+   floor keeps the dot visible at its dimmest so it never looks like it vanished.
+   Opacity only — no scale and no rotation: the mark has to say "still working,
+   nothing is wrong", and a dot that grows/shrinks or spins reads as urgency
+   instead. Because the property is opacity, the box stays exactly 16x14 and the
+   swap to the green check never shifts the line.
+   The will-change below is what keeps the fade smooth: this dot lives in a card
    that is re-laid out and repainted on every tool:update flush, and a mark this
    small is not promoted to its own layer on its own, so without the hint its
    frames are drawn by the main thread and it hitches whenever the main thread is
@@ -95,17 +98,19 @@ const icon = computed(() => STATE_ICON[state.value] || STATE_ICON.default);
   height: 6px;
   border-radius: 50%;
   background: var(--ally-text-tertiary);
-  /* 只动透明度：0.6s 亮 / 0.6s 暗的硬闪，盒恒定、不缩放（AGENTS.md §4.7）。 */
-  animation: tool-svg-blink 1.2s linear infinite;
+  /* 只动透明度：1.2s 一轮的软闪（亮 1 ↔ 暗 0.3 平滑渐变，不硬切），盒恒定、不缩放
+     （AGENTS.md §4.7）。 */
+  animation: tool-svg-blink 1.2s ease-in-out infinite;
   /* 提层提示：随“正在运行”这个类动态挂上、跑完即撤，不静态摊在长列表每一项上
      （AGENTS.md §4.7）。同一原则的另一处落点见 style.css 的 .subagent-name-dot。 */
   will-change: opacity;
 }
 
-/* 硬闪：到点直接换值，不做过渡（终端里那颗点也是瞬间亮灭）。 */
+/* 软闪：亮暗之间平滑来回，两端各一个半程（0.6s 亮 → 0.6s 暗），不做硬切。
+   最暗留 0.3：暗下去仍然看得见，才不会被误认成“点没了 / 卡死了”。 */
 @keyframes tool-svg-blink {
-  0%, 49.9% { opacity: 1; }
-  50%, 100% { opacity: 0.1; }
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
 }
 
 /* 减弱动效：停成一颗不动的灰点，并撤掉提层（不再动画就不占那一层）。 */
