@@ -66,15 +66,14 @@ const icon = computed(() => STATE_ICON[state.value] || STATE_ICON.default);
   align-items: center;
 }
 
-/* Filled running dot — the tool card's "in progress" mark, built on the same three
-   ideas as the composer status row's bars (RunSpinner.vue), the one animation
-   next to the message list that never hitches: a real child element absolutely
-   positioned in a fixed 16x14 box, animating transform only, with no static
-   will-change hint. A transform-only animation is the case every engine promotes on
-   its own, and this dot lives in a card that is re-laid out and repainted on every
-   tool:update flush, so its frames must not depend on the main thread.
-   Before changing which properties the keyframes animate, re-run the Rendering-panel
-   comparison while the card streams. */
+/* Filled running dot — the tool card's "in progress" mark. It breathes slowly:
+   opacity only (0.4 ↔ 0.9 over 3s), never scale. The mark only has to say "still
+   working, nothing is wrong" — a fast pulse or a spinner reads as urgency, and a
+   scaling dot in a card that repaints on every tool:update flush looks jittery on
+   top of it. Opacity costs nothing on the compositor, and the 16x14 box stays
+   fixed so every status keeps the same box. Do not reintroduce transform here or
+   speed this up without re-running the Rendering panel while the card streams
+   (AGENTS.md §4.7). */
 .tool-svg-icon.running-dot {
   position: relative;
   color: transparent;
@@ -88,8 +87,20 @@ const icon = computed(() => STATE_ICON[state.value] || STATE_ICON.default);
   height: 6px;
   border-radius: 50%;
   background: var(--ally-text-tertiary);
-  /* 盒子恒定，只有 scale 在动（AGENTS.md §4.7）。 */
-  animation: tool-svg-pulse 1.1s ease-in-out infinite;
+  /* 只动透明度：3 秒一轮的慢呼吸，刻意不做缩放（AGENTS.md §4.7）。 */
+  animation: tool-svg-breathe 3s ease-in-out infinite;
+}
+
+@keyframes tool-svg-breathe {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 0.9; }
+}
+
+/* 减弱动效：停成一颗不动的灰点，「还在跑」由卡片本身的变化承担。 */
+@media (prefers-reduced-motion: reduce) {
+  .tool-svg-icon.running-dot .running-dot-core {
+    animation: none;
+  }
 }
 
 /* Hollow pending dot */
@@ -106,11 +117,6 @@ const icon = computed(() => STATE_ICON[state.value] || STATE_ICON.default);
   height: 6px;
   border-radius: 50%;
   border: 1px solid currentColor;
-}
-
-@keyframes tool-svg-pulse {
-  0%, 100% { transform: scale(0.6); }
-  50% { transform: scale(1); }
 }
 
 /* Status colors — matches the previous .tool-status-icon.* palette in style.css */
