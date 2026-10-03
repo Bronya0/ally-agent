@@ -162,6 +162,9 @@ const props = defineProps({
   tools: { type: Array, default: () => [] },
   mcpServers: { type: Array, default: () => [] },
   skillNames: { type: Array, default: () => [] },
+  // 当前正在跑的那一轮 id（会话空闲时为空串）。统计占位行按它留位，见
+  // roundStatsOwner。
+  inFlightRunId: { type: String, default: '' },
 });
 
 const expandedUserMessages = reactive(new WeakSet());
@@ -212,12 +215,20 @@ const runStatsOwners = computed(() => {
   return owners;
 });
 
-// 收尾消息该不该画出统计行：要么数据已到（run:done 填过时长），要么正文正在
-// 流式输出——那时先画一条不可见且不占位的行，数据到达后同一位置变可见。
+// 收尾消息该不该画出统计行：要么数据已到（run:done 填过时长），要么这一轮还在
+// 跑——那时先画一条不可见的占位行占住高度，数据到达后同一位置变可见（可见性由
+// 悬停控制，见文件末尾的 .turn-stats 规则）。
+//
+// 判据必须是「这一轮有没有在跑」（inFlightRunId），不能只看「正文还在不在流式」：
+// 工具执行阶段 assistant 消息已经封口（streaming=false）而本轮并没有结束，按流式
+// 判据会撤掉那条占位行。列表是贴底的，尾部凭空少掉 32px，整条内容就跟着往下掉一
+// 截；下一轮正文一开始又弹回来——观感就是「内容先往上顶一下，又恢复」。本轮结束
+// 时（runId 复位）统计数据已在同一批到达，占位行直接转成有数据的行，高度不变。
 function roundStatsOwner(msg, index) {
   const owner = runStatsOwners.value[index];
   if (!owner) return null;
   if (owner.roundDurationText) return owner;
+  if (props.inFlightRunId && owner.runId === props.inFlightRunId) return owner;
   return owner.streaming && hasAnswerBody(owner) ? owner : null;
 }
 

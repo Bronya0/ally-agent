@@ -166,3 +166,5 @@
 [stream-hotpath-o-n] 2026-10-03 中危 流式热路径勿对整段累积载荷全量处理（split/join/全文正则/逐字符拼串/整篇 v-html 重建）：每拍一次、随输出线性增长，挤掉动画帧。@frontend/src
 [stream-block-render] 2026-10-03 中危 流式正文分块增量渲染：跨块语法（链接引用定义）与整篇解析不同，收尾须整篇重渲兜底；块要一块一节点，拼成单串交 v-html 等于整棵重建。@streamEase.mjs
 [scanner-partial-line] 2026-10-03 中危 增量扫描只能越过已完整显示的行：越过未显示完的空白行会永久丢掉切分点；尾部围栏判据只取当前行。@streamEase.mjs
+[prompt-hardcoded-numbers] 2026-10-03 中危 提示词里写死的阈值（如 read 2000 行）与实现分离、无测试守护：漂移后模型按错数字判断，静默漏读。@biz_prompt.go
+[pinned-tail-placeholder] 2026-10-04 中危 贴底列表尾部的不可见占位行出现/消失会让整条内容上下跳：本轮占位要按「这一轮在跑」留位，别按「正文是否在流式」开关。@ChatMessages.vue

@@ -67,6 +67,7 @@ Public License v3. See the LICENSE file for details.
                     <ChatMessages
                       :ref="(instance) => setConversationMessagesRef(tab.id, instance)"
                       :messages="displayMessagesForTab(tab)"
+                      :in-flight-run-id="inFlightRunIdFor(tab)"
                       :render-fn="renderMarkdown"
                       :fmt-k="fmtK"
                       :tools="availableTools"
@@ -2095,6 +2096,16 @@ function sessionForWorkspaceTab(tab) {
   if (!tab?.sessionId) return null;
   return sessions.value.find((session) => session.id === tab.sessionId) || null;
 }
+
+// 这个 Tab 正在跑的那一轮 id（空闲时为空串）：聊天区用它把本轮统计行的占位高度
+// 从头留到尾（见 ChatMessages 的 roundStatsOwner）。run:start 写入 runId/isRunning，
+// 终态事件在同一批里先填统计数据再复位两者，所以行高只在「还没数据」到「有数据」
+// 之间切换一次，不会在工具阶段被撤掉又补回来。
+function inFlightRunIdFor(tab) {
+  const session = sessionForWorkspaceTab(tab);
+  return session?.isRunning ? String(session.runId || '') : '';
+}
+
 // Return a stable array reference when nothing actually changed so downstream
 // watchers (AppHeader) short-circuit. The previous version returned a fresh
 // array + fresh per-tab object literals on every recompute, even when every
