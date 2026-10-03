@@ -80,7 +80,7 @@ func sharedBatchStrategy() string {
 		"- **Read**: Read target files or ranges as needed to keep context clean and cache-friendly:\n" +
 		"  - Locate first when helpful: use `grep` or symbol search to find the relevant line numbers before reading.\n" +
 		"  - Use range reads for larger files: for medium/large files (>150 lines), specify `startLine` and `endLine` to inspect the relevant section instead of reading the entire file. Omit startLine/endLine when the file is small or full file context is genuinely needed.\n" +
-		"  - When truncated: if a previous read was auto-truncated (>2000 lines), follow the `[Showing lines A-B of N. Use startLine=C to continue.]` marker to continue.\n" +
+		"  - When truncated: if a previous read came back auto-truncated (byte budget or the per-call line-range cap — not a line count), follow the `[Showing lines A-B of N. Use startLine=C to continue.]` marker to continue.\n" +
 		"  - Read confirmed files: pass the files you need into the `files` array; never re-read an unchanged file or a range already in history.\n" +
 		"- **Edit**: the batching and failure contract lives in **Editing discipline** below; when `edit`/`create` returns a `validation` string, fix any reported issues directly.\n" +
 		"- **Grep**: Use for fast path and line locating (lines mode groups matches by file — a bare path row, then indented `line: text` rows — with capped text previews of each matching line; only read the file when you need surrounding context). Paginate with `offset` using `next-offset` (follow `[Truncated. Use offset=N to continue.]` or the opening tag attribute); it resumes right after the last row shown. When searching for multiple keywords or patterns, emit `grep` calls concurrently in the same turn.\n" +
