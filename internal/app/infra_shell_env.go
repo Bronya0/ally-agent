@@ -144,11 +144,18 @@ var commandEnvironmentState struct {
 	env []string
 }
 
-// commandEnvironment returns the stable process environment used by local
-// command and background-service subprocesses, with proxy settings applied
-// for the current request. The login-shell probe is memoized process-wide so
-// every command does not rerun user startup files.
-func commandEnvironment(cfg ConfigState) []string {
+// commandBaseEnv returns the memoized process environment shared by command and
+// background-service subprocesses **before** proxy settings are applied:
+// os.Environ with the login shell's PATH entries merged in. The probe is
+// memoized process-wide so every child process does not rerun user startup
+// files.
+//
+// Callers must not mutate the returned slice — it is the memoized value.
+// Prefer commandEnvironment for the usual "environment with the current proxy"
+// case; a caller that filters the environment itself (MCP's stdio allowlist)
+// starts here and applies proxyEnvironment *after* filtering, because the
+// filter would otherwise drop the proxy variables.
+func commandBaseEnv() []string {
 	commandEnvironmentState.Do(func() {
 		base := os.Environ()
 		commandEnvironmentState.env = enrichLoginShellPathEnvironment(
@@ -158,7 +165,14 @@ func commandEnvironment(cfg ConfigState) []string {
 			runLoginShellText,
 		)
 	})
-	return proxyEnvironment(cfg, commandEnvironmentState.env)
+	return commandEnvironmentState.env
+}
+
+// commandEnvironment returns the stable process environment used by local
+// command and background-service subprocesses, with proxy settings applied for
+// the current request.
+func commandEnvironment(cfg ConfigState) []string {
+	return proxyEnvironment(cfg, commandBaseEnv())
 }
 
 // warmCommandEnvironment starts the same one-time probe used by commands.
@@ -166,15 +180,7 @@ func commandEnvironment(cfg ConfigState) []string {
 // window, while the first command still waits for the shared sync.Once if
 // probing is not complete yet.
 func warmCommandEnvironment() {
-	commandEnvironmentState.Do(func() {
-		base := os.Environ()
-		commandEnvironmentState.env = enrichLoginShellPathEnvironment(
-			base,
-			goruntime.GOOS,
-			accountLoginShell,
-			runLoginShellText,
-		)
-	})
+	_ = commandBaseEnv()
 }
 
 func cloneEnvironment(env []string) []string {

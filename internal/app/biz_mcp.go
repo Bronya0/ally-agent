@@ -585,15 +585,16 @@ func (m *McpManager) newMcpClient(ctx context.Context, name string, cfg McpServe
 	// spawn 进程）。两者由同一个 goroutine 按序写入、按序读取，无数据竞争。
 	var stdioCmd *exec.Cmd
 	var stdioJob uintptr
+	// 网络配置只取一次：stdio 的代理变量与 http/sse 的私网许可都由它决定，
+	// 同一条连接里两处必须看到同一份配置。
+	networkCfg := m.currentNetworkConfig()
+	allowPrivate := networkCfg.allowPrivateNetworkEnabled()
 	switch transportName {
 	case "stdio":
 		if strings.TrimSpace(cfg.Command) == "" {
 			return nil, errors.New("stdio MCP server requires command")
 		}
-		env := proxyEnvironment(m.currentNetworkConfig(), os.Environ())
-		for k, v := range cfg.Env {
-			env = append(env, k+"="+v)
-		}
+		env := mcpStdioEnv(networkCfg, cfg)
 		// NewStdioMCPClient spawns the subprocess with its own exec.Cmd and
 		// does not set SysProcAttr — on Windows this would flash a console
 		// window for every stdio MCP server (npx / python / node …) on every
@@ -622,7 +623,10 @@ func (m *McpManager) newMcpClient(ctx context.Context, name string, cfg McpServe
 		if strings.TrimSpace(cfg.URL) == "" {
 			return nil, errors.New("sse MCP server requires url")
 		}
-		httpClient := proxyHTTPClient(m.currentNetworkConfig(), true, 0)
+		// 私网许可与 http_request / web_fetch 同一个开关：关掉 allowPrivateNetwork
+		// 时 MCP 服务端也不该能把请求打到 localhost / 内网（旧实现写死放行，等于
+		// 绕过用户刚关掉的那道 SSRF 围栏）。
+		httpClient := proxyHTTPClient(networkCfg, allowPrivate, 0)
 		mcpClient, err = client.NewSSEMCPClient(cfg.URL, client.WithHeaders(cfg.Headers), client.WithHTTPClient(httpClient))
 		if err != nil {
 			return nil, fmt.Errorf("sse client failed: %w", err)
@@ -638,7 +642,9 @@ func (m *McpManager) newMcpClient(ctx context.Context, name string, cfg McpServe
 		mcpClient, err = client.NewStreamableHttpClient(
 			cfg.URL,
 			transport.WithHTTPHeaders(cfg.Headers),
-			transport.WithHTTPBasicClient(proxyHTTPClient(m.currentNetworkConfig(), true, mcpToolCallTimeout(cfg))),
+			// 超时与私网许可都只经 basic client 设定：WithHTTPTimeout 会把
+			// WithHTTPBasicClient 的赋值整个丢掉。
+			transport.WithHTTPBasicClient(proxyHTTPClient(networkCfg, allowPrivate, mcpToolCallTimeout(cfg))),
 		)
 		if err != nil {
 			return nil, fmt.Errorf("http client failed: %w", err)
@@ -684,6 +690,95 @@ func (m *McpManager) mcpStdioDir(cfg McpServerConfig) string {
 		return ""
 	}
 	return filepath.Join(base, dir)
+}
+
+// mcpStdioEnvAllowlist 是交给 stdio MCP 服务端的环境变量白名单。
+//
+// 为什么是白名单而不是「全量继承 + 敏感名黑名单」：stdio 服务端是第三方程序
+// （npx / uvx / node 起的包），全量继承等于把它放进一个什么都有的 shell 里
+// （旧实现就是 os.Environ() 原样传下去）；而按名字猜密钥既有漏（自定义名猜不
+// 到）也有误伤。所以默认只给「跑一个子进程本来就需要」的那几个进程级变量，服
+// 务端真正需要的变量由它自己的 env 字段显式声明（显式项覆盖同名白名单项，见
+// mcpStdioEnv）。代理变量不在此列：它由 prov_proxy.go 一处定义，且由
+// mcpStdioBaseEnv 在过滤之后注入。
+var mcpStdioEnvAllowlist = []string{
+	// 进程启动与可执行查找。PWD 刻意不给：子进程的 cwd 是工作区根，继承 Ally 自己
+	// 的 PWD 只会是个错值（Go 只在 Env == nil 时才会替我改它）。
+	"PATH", "HOME", "SHELL", "TMPDIR",
+	"LANG", "LC_ALL", "LC_CTYPE", "TZ",
+	// 企业代理下的自签根证书：丢了这几条会让服务端自己发出的 HTTPS 请求全失败
+	// （各家运行时认的变量名不一样，一并给上）。
+	"SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS",
+	"REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
+	// uv / npm 一类运行时的缓存与数据目录：缺了会回落到 ~/.cache 重新下载。
+	"XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME",
+	// Windows：缺 SystemRoot/windir 时 cmd 与部分运行时起不来；其余是常规进程变量。
+	"SystemRoot", "SystemDrive", "windir", "ComSpec", "PATHEXT", "OS",
+	"NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE", "USERPROFILE", "APPDATA",
+	"LOCALAPPDATA", "ProgramData", "ProgramFiles", "ProgramFiles(x86)",
+	"TEMP", "TMP", "USERNAME", "USERDOMAIN", "HOMEDRIVE", "HOMEPATH",
+}
+
+// mcpStdioBaseEnv 是交给 stdio 服务端的基础环境：从**共享的进程环境**
+// （commandBaseEnv）里挑出白名单内的变量，再按当前配置注入代理变量。
+//
+// 来源刻意不是 os.Environ()，而是 command / 后台服务子进程用的那一份：它多做了
+// 一件事——把用户登录 shell 的 PATH 条目并进来（见 infra_shell_env.go）。从 Dock
+// 启动 Ally 时父进程的 PATH 很短（没有 Homebrew，也没有 nvm 装的 node），配置里
+// 写的 `npx …` 会直接「命令找不到」；接上这份环境，MCP 服务端才和命令行工具看到
+// 同一批命令。登录 shell 进程内只探一次（启动时已预热）。
+//
+// 顺序要紧：**先过滤、再注入代理**。白名单里本来就不该有代理键名（那是
+// prov_proxy.go 的唯一来源），反过来写会把已经写好的代理整批滤掉——对配了代理的
+// 用户，服务端就从「走代理」静默变成「直连出去」。
+//
+// 名称比对刻意不分大小写：Windows 的环境变量名不区分大小写（实际常写成
+// `Path`），用大小写敏感的白名单会把 PATH 整条丢掉，服务端连命令都找不到。
+func mcpStdioBaseEnv(cfg ConfigState) []string {
+	return proxyEnvironment(cfg, mcpStdioFilterEnv(commandBaseEnv()))
+}
+
+// mcpStdioFilterEnv 是白名单过滤本身，候选环境由调用方给：这条链上唯一会变的
+// 就是来源，测试因此可以直接喂一份构造好的环境，不必去跑用户的登录 shell。
+func mcpStdioFilterEnv(base []string) []string {
+	allowed := make(map[string]struct{}, len(mcpStdioEnvAllowlist))
+	for _, name := range mcpStdioEnvAllowlist {
+		allowed[strings.ToLower(name)] = struct{}{}
+	}
+	kept := make([]string, 0, len(mcpStdioEnvAllowlist))
+	for _, item := range base {
+		key, _, found := strings.Cut(item, "=")
+		if !found {
+			continue
+		}
+		if _, keep := allowed[strings.ToLower(key)]; keep {
+			kept = append(kept, item)
+		}
+	}
+	return kept
+}
+
+// mcpStdioEnv 是 stdio 服务端环境的唯一入口：白名单基础环境 + 服务端声明的
+// env。
+func mcpStdioEnv(cfg ConfigState, srv McpServerConfig) []string {
+	return mcpStdioEnvFromBase(mcpStdioBaseEnv(cfg), srv)
+}
+
+// mcpStdioEnvFromBase 把服务端声明的 env 叠到基础环境上：显式项排在最后，
+// os/exec 对同名键保留最后一个，显式声明因此总能覆盖基础环境里的同名项（例如服
+// 务端要自带 PATH）。按键名排序是为了结果确定：同一份配置每次起的子进程环境逐
+// 字节一致。
+func mcpStdioEnvFromBase(base []string, srv McpServerConfig) []string {
+	env := append(make([]string, 0, len(base)+len(srv.Env)), base...)
+	keys := make([]string, 0, len(srv.Env))
+	for key := range srv.Env {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		env = append(env, key+"="+srv.Env[key])
+	}
+	return env
 }
 
 // watchStdioProcess 守护一个 stdio MCP 子进程：等它退出，清理可能脱管的孙

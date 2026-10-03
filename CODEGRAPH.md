@@ -38,7 +38,7 @@
 | 配置合并 / key 池管理 / 最近使用模型身份展开（`expandLastUsedModel`；配置只存 models[] + lastUsedModel，13 个模型字段是请求级派生值） | `internal/app/biz_config.go` |
 | 技能发现与加载 | `internal/app/biz_skills.go` |
 | 新建技能（元数据 + SKILL.md 正文写入 `.agents/skills`：用户级 `~/` 或项目级 `<工作区>`；重名/非法名拒绝，写完清列表缓存） | `internal/app/biz_skills.go`（`SaveSkill`） |
-| MCP 客户端生命周期 | `internal/app/biz_mcp.go` |
+| MCP 客户端生命周期 | `internal/app/biz_mcp.go`（stdio 环境走白名单 `mcpStdioEnv`，不吃 os.Environ；http/sse 与 http 工具共用 `allowPrivateNetwork` 开关） |
 | 计划任务 / 后台服务 / 命令超时收编（LLM 任务在创建时记下模型身份，运行时按身份展开） | `orch_scheduler.go` / `orch_services.go`（promoteTimedOutCommand）+ `TaskCenterPanel.vue` |
 | 远程 SSH 工具与审批闸门（首次连接 / 危险命令 / 覆盖 / 集群登记；主机指纹不一致直接换记录重连；写入与命令同过 `.git` 元数据围栏） | `orch_remote.go` / `orch_ssh_cluster.go`（按解析端点缓存并区分认证模式）+ `internal/tools/sshclient/`（纯 Go 传输、密钥认证、known_hosts 固化与不一致时替换） |
 | SSH 集群清单与工作区授权（`ssh_clusters.json` 落盘、别名/端点两种写法、默认拒绝） | `internal/app/biz_ssh_cluster.go` + `orch_ssh_cluster.go` + `SSHClusterPanel.vue` + `ComposerInfoBar.vue` |

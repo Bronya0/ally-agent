@@ -12,6 +12,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -733,7 +735,10 @@ for line in sys.stdin:
             "inputSchema": {"type": "object", "properties": {}}}]}})
     elif method == "tools/call":
         out({"jsonrpc": "2.0", "id": rid, "result": {"content": [
-            {"type": "text", "text": "cwd=%s pid=%d" % (os.getcwd(), os.getpid())}]}})
+            {"type": "text", "text": "cwd=%s pid=%d env_secret=%s env_path=%d" % (
+                os.getcwd(), os.getpid(),
+                os.environ.get("ALLY_MCP_TEST_SECRET", "-"),
+                1 if os.environ.get("PATH") else 0)}]}})
     elif rid is not None:
         out({"jsonrpc": "2.0", "id": rid, "error": {"code": -32601, "message": "method not found"}})
 `
@@ -835,6 +840,222 @@ func TestMcpStdioServerUsesWorkspaceDirAndHealsAfterCrash(t *testing.T) {
 	}
 	if got := mcpHandleStatus(manager, "echo"); got != "connected" {
 		t.Fatalf("重连后状态应回到 connected，got %q", got)
+	}
+}
+
+// mcpTestEnvValue 返回环境变量在 []string 形态里的最后一个取值：os/exec 对同名
+// 键保留最后一个，而这正是「显式声明覆盖白名单」依赖的语义。
+func mcpTestEnvValue(env []string, key string) (string, bool) {
+	value, found := "", false
+	for _, item := range env {
+		if k, v, ok := strings.Cut(item, "="); ok && k == key {
+			value, found = v, true
+		}
+	}
+	return value, found
+}
+
+func TestMcpStdioFilterEnvKeepsOnlyBaselineVariables(t *testing.T) {
+	// 过滤本身与来源无关，所以直接喂一份候选环境：共享环境是进程内 memoize 的，
+	// 测试里 t.Setenv 也改不动它（登录 shell 只探一次）。
+	base := []string{
+		"PATH=/usr/bin",
+		"HOME=/tmp/ally-home",
+		"ANTHROPIC_API_KEY=sk-must-not-leak",
+		"GITHUB_TOKEN=gh-must-not-leak",
+		"MALFORMED",
+	}
+	env := mcpStdioFilterEnv(base)
+	for key, want := range map[string]string{"PATH": "/usr/bin", "HOME": "/tmp/ally-home"} {
+		if got, ok := mcpTestEnvValue(env, key); !ok || got != want {
+			t.Fatalf("%s 是跑子进程的必要变量，必须保留：got %q ok=%v", key, got, ok)
+		}
+	}
+	// Ally 自己进程里的密钥不该顺手交给第三方服务端（旧实现是全量继承）。
+	for _, key := range []string{"ANTHROPIC_API_KEY", "GITHUB_TOKEN"} {
+		if _, ok := mcpTestEnvValue(env, key); ok {
+			t.Fatalf("%s 不该出现在 stdio 服务端的环境里：%v", key, env)
+		}
+	}
+	if len(env) != 2 {
+		t.Fatalf("白名单外的键（含没有等号的畸形项）都不该留下：%v", env)
+	}
+}
+
+func TestMcpStdioEnvUsesSharedCommandEnvironment(t *testing.T) {
+	// stdio 服务端的 PATH 必须与 command / 后台服务子进程同源：登录 shell 的
+	// PATH 增强只在 commandEnvironment 里做过一次（从 Dock 启动时父进程的 PATH
+	// 很短，配置里写的 npx / node 会「命令找不到」）。
+	cfg := ConfigState{}
+	want, ok := mcpTestEnvValue(commandEnvironment(cfg), "PATH")
+	if !ok {
+		t.Fatal("共享环境里应当有 PATH")
+	}
+	got, ok := mcpTestEnvValue(mcpStdioBaseEnv(cfg), "PATH")
+	if !ok || got != want {
+		t.Fatalf("stdio 的 PATH 必须取自共享环境：got %q want %q", got, want)
+	}
+	// 增强后的 PATH 与原始进程环境不同时，得真的看到「不同」：两边都取自
+	// os.Environ() 的旧实现会让这条失败（登录 shell 这次没贡献新条目时这条就没
+	// 牙，所以真正守门的是下面那条端到端）。
+	if raw, ok := mcpTestEnvValue(os.Environ(), "PATH"); ok && raw != want && got == raw {
+		t.Fatal("stdio 的 PATH 仍取自原始进程环境，没接上登录 shell 增强")
+	}
+	// 白名单过滤对共享环境同样生效：进程里的密钥一样不给。
+	t.Setenv("ALLY_MCP_TEST_SECRET", "must-not-leak")
+	if _, leaked := mcpTestEnvValue(mcpStdioBaseEnv(cfg), "ALLY_MCP_TEST_SECRET"); leaked {
+		t.Fatal("共享环境里的非白名单变量不该漏给服务端")
+	}
+}
+
+func TestMcpStdioEnvLetsExplicitEnvOverrideBaseline(t *testing.T) {
+	env := mcpStdioEnvFromBase(
+		[]string{"PATH=/usr/bin", "GITHUB_TOKEN=inherited-must-lose"},
+		McpServerConfig{Env: map[string]string{
+			"PATH":         "/opt/bin",
+			"GITHUB_TOKEN": "declared-wins",
+			"EXTRA":        "1",
+		}},
+	)
+	if got, _ := mcpTestEnvValue(env, "PATH"); got != "/opt/bin" {
+		t.Fatalf("显式 PATH 应压过基础环境里的 PATH：got %q", got)
+	}
+	if got, _ := mcpTestEnvValue(env, "GITHUB_TOKEN"); got != "declared-wins" {
+		t.Fatalf("服务端显式声明的变量应被采纳：got %q", got)
+	}
+	if got, ok := mcpTestEnvValue(env, "EXTRA"); !ok || got != "1" {
+		t.Fatalf("白名单外的新键只能靠显式声明带进来：got %q ok=%v", got, ok)
+	}
+}
+
+func TestMcpStdioEnvKeepsProxyVariables(t *testing.T) {
+	// 代理变量必须在过滤**之后**注入：白名单里没有代理键名，顺序反了就会被整批
+	// 滤掉，配了代理的用户会静默变成直连（第三方服务端绕过用户设的路由）。
+	cfg := ConfigState{ProxyMode: proxyModeManual, ProxyURL: "http://127.0.0.1:7890"}
+	env := mcpStdioBaseEnv(cfg)
+	if got, ok := mcpTestEnvValue(env, "HTTPS_PROXY"); !ok || got != "http://127.0.0.1:7890" {
+		t.Fatalf("stdio 服务端必须拿到配置里的代理：got %q ok=%v", got, ok)
+	}
+	if _, ok := mcpTestEnvValue(env, "HTTP_PROXY"); !ok {
+		t.Fatal("http_proxy 一族要一起下发，只给一个会让部分运行时不认")
+	}
+	if _, ok := mcpTestEnvValue(env, "NO_PROXY"); !ok {
+		t.Fatal("NO_PROXY 也该跟着下发，否则本地地址会被硬塞进代理")
+	}
+}
+
+func TestMcpStdioEnvFiltersAtTheCallSite(t *testing.T) {
+	// 不依赖 python 的那一半：newMcpClient 交给子进程的就是这个函数的结果，这
+	// 里钉住它的形状——进程里的密钥一定不在，服务端显式声明的键一定在，条数也被
+	// 白名单 + 显式声明夹住（零值配置没有代理，因而不会多出代理键）。
+	t.Setenv("ALLY_MCP_TEST_SECRET", "must-not-leak")
+	cfg := ConfigState{}
+	srv := McpServerConfig{Env: map[string]string{"EXPLICIT_ONLY": "1"}}
+	env := mcpStdioEnv(cfg, srv)
+
+	if _, leaked := mcpTestEnvValue(env, "ALLY_MCP_TEST_SECRET"); leaked {
+		t.Fatalf("进程里的密钥不该进入子进程环境：%v", env)
+	}
+	if got, ok := mcpTestEnvValue(env, "EXPLICIT_ONLY"); !ok || got != "1" {
+		t.Fatalf("服务端显式声明的变量必须带上：got %q ok=%v", got, ok)
+	}
+	if limit := len(mcpStdioEnvAllowlist) + len(srv.Env); len(env) > limit {
+		t.Fatalf("环境条数应被白名单 + 显式声明夹住：got %d > %d", len(env), limit)
+	}
+}
+
+func TestMcpSSETransportHonorsAllowPrivateNetworkSwitch(t *testing.T) {
+	// sse 与 streamable-http 是同一次改动的两处，必须一起跟随开关。
+	var hits atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+	}))
+	defer server.Close()
+
+	manager := NewMcpManager("", nil)
+	defer manager.Shutdown()
+	manager.SetNetworkConfigProvider(func() ConfigState {
+		return ConfigState{AllowPrivateNetwork: boolPtr(false)}
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	cfg := McpServerConfig{URL: server.URL, Transport: "sse", StartupTimeoutSec: 2}
+	if _, err := manager.initializeMcpClient(ctx, "sse", cfg); err == nil {
+		t.Fatal("allowPrivateNetwork=false 时本地 sse 服务端必须连不上")
+	} else if !strings.Contains(err.Error(), "private or local network") {
+		t.Fatalf("这次失败应来自私网围栏，got %v", err)
+	}
+	if got := hits.Load(); got != 0 {
+		t.Fatalf("被围栏拦下的连接不该发出请求，got %d 次", got)
+	}
+}
+
+func TestMcpStdioServerDoesNotInheritAllyEnvironment(t *testing.T) {
+	python := mcpTestPython(t)
+	script := filepath.Join(t.TempDir(), "server.py")
+	if err := os.WriteFile(script, []byte(mcpStdioTestServerScript), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// 端到端钉住调用点：真起一个 stdio 服务端，问它自己看见了什么。
+	t.Setenv("ALLY_MCP_TEST_SECRET", "leaked-secret-value")
+
+	manager := NewMcpManager(t.TempDir(), nil)
+	defer manager.Shutdown()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	manager.connectOne(ctx, "env", McpServerConfig{Command: python, Args: []string{script}})
+
+	out, err := manager.CallTool(ctx, "env", "where", map[string]any{})
+	if err != nil {
+		t.Fatalf("tools/call: %v", err)
+	}
+	if strings.Contains(out, "leaked-secret-value") {
+		t.Fatalf("stdio 服务端不该继承 Ally 的进程私密变量：%q", out)
+	}
+	if !strings.Contains(out, "env_path=1") {
+		t.Fatalf("PATH 这类进程级变量必须保留，否则 npx/node 起不来：%q", out)
+	}
+}
+
+func TestMcpServerHonorsAllowPrivateNetworkSwitch(t *testing.T) {
+	var hits atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18","capabilities":{"tools":{}},"serverInfo":{"name":"ally-test","version":"1.0.0"}}}`))
+	}))
+	defer server.Close()
+
+	manager := NewMcpManager("", nil)
+	defer manager.Shutdown()
+	cfg := McpServerConfig{URL: server.URL, Transport: "streamable-http", StartupTimeoutSec: 2}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	// 与 http_request 同一个开关：关掉后本地/内网服务端必须连不上，而且一个请求
+	// 都不该真的发出去（有请求到达就说明围栏没生效）。
+	manager.SetNetworkConfigProvider(func() ConfigState {
+		return ConfigState{AllowPrivateNetwork: boolPtr(false)}
+	})
+	if _, err := manager.initializeMcpClient(ctx, "net", cfg); err == nil {
+		t.Fatal("allowPrivateNetwork=false 时本地 MCP 服务端必须连不上")
+	} else if !strings.Contains(err.Error(), "private or local network") {
+		t.Fatalf("这次失败应来自私网围栏，got %v", err)
+	}
+	if got := hits.Load(); got != 0 {
+		t.Fatalf("被围栏拦下的连接不该发出请求，got %d 次", got)
+	}
+
+	// 打开开关后同一个地址必须能连出去（握手是否成功取决于假服务端，这里只钉
+	// "请求确实到达"，证明开关是判据）。
+	manager.SetNetworkConfigProvider(func() ConfigState {
+		return ConfigState{AllowPrivateNetwork: boolPtr(true)}
+	})
+	if established, err := manager.initializeMcpClient(ctx, "net", cfg); err == nil {
+		_ = established.client.Close()
+	}
+	if hits.Load() == 0 {
+		t.Fatal("allowPrivateNetwork=true 时 MCP 请求应到达服务端")
 	}
 }
 

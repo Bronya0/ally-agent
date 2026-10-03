@@ -160,3 +160,5 @@
 [vendor-key-not-version] 2026-10-04 高危 厂商表别拿带版本号的模型 id 当键：下一代匹配不到行，档位静默丢、服务端按默认最贵档跑。@prov_model.go
 [generation-not-pinned] 2026-10-04 中危 能力判据钉固定代际(gpt-5 / claude-4.6 清单)：下一代匹配不到，档位静默丢或直接 400。@prov_model.go
 [sdk-required-blocks-doc-shape] 2026-10-04 中危 SDK 必填字段挡住文档的可选形态：用 param.Override 发原始 JSON。@prov_adapter_anthropic.go
+[env-not-allowlisted] 2026-10-04 高危 给第三方子进程别继承整份 os.Environ（含 shell 导出的 key），走白名单＋显式 env。@biz_mcp.go
+[safety-switch-all-exits] 2026-10-04 高危 安全开关要盖全出口：MCP 曾写死 allowPrivate=true 绕过 allowPrivateNetwork。@biz_mcp.go

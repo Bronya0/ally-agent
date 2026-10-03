@@ -608,6 +608,10 @@ func (a *App) SaveConfig(req ConfigState) error {
 	proxyChanged := normalizeProxyMode(a.config.ProxyMode) != normalizeProxyMode(req.ProxyMode) ||
 		strings.TrimSpace(a.config.ProxyURL) != strings.TrimSpace(req.ProxyURL) ||
 		strings.TrimSpace(a.config.ProxyNoProxy) != strings.TrimSpace(req.ProxyNoProxy)
+	// MCP 的 http/sse 传输把私网许可烘进 transport，改开关后已经连上的服务端
+	// 不会自己换掉它：必须重建连接，「关掉开关」才算真的生效。这里先记下旧的
+	// 生效值，等字段落地后再比（拿请求字段比会误判，见下）。
+	allowPrivateBefore := a.config.allowPrivateNetworkEnabled()
 	a.config = mergeConfig(a.config, req)
 	a.config.CustomPrompt = req.CustomPrompt
 	// GitHubToken 由保存路径显式写入（含清空）：mergeConfig 不再携带该字段，
@@ -620,6 +624,9 @@ func (a *App) SaveConfig(req ConfigState) error {
 	if req.AllowPrivateNetwork != nil {
 		a.config.AllowPrivateNetwork = req.AllowPrivateNetwork
 	}
+	// 比的是「生效值」，不是请求里那个字段：请求没带它时上面保留旧值，拿请求值
+	// 比会把「没变」判成「变了」，白重建一次全部 MCP 连接。
+	allowPrivateChanged := a.config.allowPrivateNetworkEnabled() != allowPrivateBefore
 	a.config.GitBashPath = req.GitBashPath
 	a.config.ProxyMode = normalizeProxyMode(req.ProxyMode)
 	a.config.ProxyURL = strings.TrimSpace(req.ProxyURL)
@@ -666,13 +673,17 @@ func (a *App) SaveConfig(req ConfigState) error {
 		// Drop cached Transports immediately so idle connections through the
 		// old proxy are released instead of lingering up to IdleConnTimeout.
 		invalidateProxyTransportCache()
+	}
+	// 全量重启（连 stdio 服务端一起）而不是只重连 http/sse：私网许可只影响那两种
+	// 传输，但重启只有这一条路径，为省一点收益再分叉一条重组逻辑不划算。
+	if (proxyChanged || allowPrivateChanged) && a.ctx != nil {
 		go func() {
 			defer func() {
 				if r := recover(); r != nil {
-					log.Printf("RestartMcpServers after proxy change panicked: %v\n%s", r, debug.Stack())
+					log.Printf("RestartMcpServers after network config change panicked: %v\n%s", r, debug.Stack())
 					a.emit("config:warning", map[string]any{
 						"field":   "mcp",
-						"message": fmt.Sprintf("MCP servers failed to restart after proxy change: %v", r),
+						"message": fmt.Sprintf("MCP servers failed to restart after network config change: %v", r),
 					})
 				}
 			}()
