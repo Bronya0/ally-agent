@@ -147,3 +147,16 @@
 [unix-zombie-alive] 2026-10-03 中危 Unix 子进程死后是僵尸，kill(pid,0) 仍报活：进程死亡只能靠 Process.Wait/wait4 看出。@biz_mcp.go
 [mcp-http-option-clobber] 2026-10-03 中危 mcp-go 的 WithHTTPTimeout 会被后面的 WithHTTPBasicClient 覆盖；超时须设在 basic client 上。@biz_mcp.go
 [save-config-keeps-unknown] 2026-10-03 中危 存第三方配置文件别按固定 struct 重建：cwd/超时/导入来的专有键会整段丢。@biz_mcp.go
+[auto-compact-no-breaker] 2026-10-03 中危 自动压缩失败不熔断：阈值判断每个 step 重跑，一次持久失败会逐步重付一次长上下文总结请求。@biz_compact.go
+[tautological-gate] 2026-10-04 高危 能力判据勿读必被填满的配置字段(ReasoningTag 默认值)：判据恒真、字段发给所有模型，单测仍绿。@prov_model.go
+[effort-gate-by-vendor] 2026-10-04 中危 该不该发协议字段须查厂商表，按模型名形状判会恒假：DeepSeek/GLM/Kimi 档位全静默丢。@prov_model.go
+[doc-md-suffix-html] 2026-10-04 中危 抓文档别只信 .md 后缀：SPA 页会返 HTML 外壳，正文静默空却照收。@scripts/audit-provider-api-docs.py
+[read-long-line] 2026-10-04 高危 read 把 >2000 字符的单行截成 ~2000（标 truncated），照它整篇改写会静默丢行尾，改前先 grep 长行。@*.md
+[anthropic-cache-toplevel] 2026-10-04 中危 兼容端点可能只认顶层 cache_control：消息体标记被忽略且不写缓存=静默 0 命中。@prov_adapter_anthropic.go
+[anthropic-thinking-shape] 2026-10-04 中危 Anthropic 的 thinking 形态与档位字段都要查端点家族表，按模型名判会漏厂商、静默丢档位。@prov_adapter_anthropic.go
+[vendor-field-dispatch] 2026-10-04 中危 档位/关思考/上限字段都要按厂商查表分派；文档说无效的字段别发，发了就是写假话。@prov_model.go
+[off-field-three-ways] 2026-10-04 中危 「关闭X」类字段三种落法：有开关就写、关不掉且有档位就退最低档、无效不写；漏中间＝界面说关、服务端按最贵默认跑。@prov_model.go
+[vendor-by-host] 2026-10-04 中危 只按模型 id 判厂商：平台直供别家模型时拼写会错(千问上的 GLM/Kimi 要走 enable_thinking)。@prov_model.go
+[vendor-key-not-version] 2026-10-04 高危 厂商表别拿带版本号的模型 id 当键：下一代匹配不到行，档位静默丢、服务端按默认最贵档跑。@prov_model.go
+[generation-not-pinned] 2026-10-04 中危 能力判据钉固定代际(gpt-5 / claude-4.6 清单)：下一代匹配不到，档位静默丢或直接 400。@prov_model.go
+[sdk-required-blocks-doc-shape] 2026-10-04 中危 SDK 必填字段挡住文档的可选形态：用 param.Override 发原始 JSON。@prov_adapter_anthropic.go

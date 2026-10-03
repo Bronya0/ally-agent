@@ -46,7 +46,6 @@ if result.MeasuredTokens > 0 { result.Total = result.MeasuredTokens + result.Tra
 |---|---|
 | `estimateTokensFromText`（`biz_context.go:189`） | 按字符分类：ASCII `⌈n/3.2⌉`，非 ASCII（CJK）`⌈n×1.4⌉`。注释说明这是按 o200k/cl100k/Claude/Qwen 的真实分词率调过的——老的 4 字符/token 会低估代码与 JSON |
 | `estimateMessageBodyTokens`（`:332`） | 文本/多模态 part；**图片 part 固定计 2000 token**（按像素定价 1568×1568≈3200、1024×768≈1000-1300 取常数；旧的 256 曾低估 6-8 倍，导致图片多的会话不触发压缩） |
-| `estimateRequestTokens`（`:208`） | 逐消息累加 role/body/name/toolCallID/reasoning + 每个 tool_call 的 id/type/name/arguments，最后加工具 schema |
 | `estimateToolSchemaTokens`（`:279`） | 内置 schema 走 `sync.OnceValue` 进程级缓存（静态 5-15KB JSON，footer 每秒会轮询多次）；只挑 `mcp__` 前缀的部分单独 marshal，避免重复计数 |
 | `estimateTokensFromMessages`（`:1373`） | 粗糙兜底（`字符数/3`），仅用于压缩路径的初始值/回退 |
 
@@ -146,7 +145,7 @@ if 本轮有用户消息 { messages = append(messages, 当前用户回合) }   /
    - 固定章节：User Intent & Requirements / Constraints & Preferences / Findings & Analysis / What Has Been Done / Key Files & Locations / Next Steps；
    - 文件路径、命令、函数名必须精确；只输出 Markdown、不得调用任何工具。
 3. **思考档位原样传递**：`completeModelTextWithUsage(ctx, cfg, ...)` 用用户自己的 `cfg`。注释明确了原因：写死档位会与设置静默漂移，而强推「关闭思考」会让必思考模型直接 400。
-4. **计入统计**：压缩请求的 token 也走 `recordWorkspaceTokenUsage`（`:418`），用户能在面板看到压缩成本。
+4. **计入统计**：压缩请求的 token 与主循环、子代理走**同一个记账入口** `recordLLMUsage`（`biz_stats.go`），footer 累计与统计面板因此是同一份事件的两个视图。
 5. **落地与失效**：新历史 = 单条 user 消息（summary），然后
    `clearContextAnchor`（实测覆盖的消息已不存在）+ `reasoningStash.clearSession`（思考台账跟那些回合一起成了死重，而台账唯一的回收点就是这里——因为 `appendTurn` 为了前缀稳定从不裁剪）+ `saveHistory`。
 
@@ -166,7 +165,7 @@ if 本轮有用户消息 { messages = append(messages, 当前用户回合) }   /
 - **聚合按需算**：`GetTokenStats` 从内存快照计算，打开面板零磁盘 IO；`statsWindows` 同时覆盖「日柱状窗口」与「月初窗口」（注释举例：31 天月份的 1 号会落在 today-29 之前，只看 dailyStart 会漏掉月度汇总）。
 - `statsRecord` 字段：model / workspace / ts / input / output / cacheHit / cacheMiss / requests；缓存命中率 = `Σhit / Σ(hit+miss)`。
 
-**footer 的累计口径要注意一处刻意的取舍**（`biz_context.go:139` `recordWorkspaceTokenUsage`）：provider 没回真实 `PromptTokens` 时**不累加估算输入**（只累加估算输出）。原因是估算的输入包含整个留存上下文，会让 footer 的累计输入计数在很小的问题上突然跳几千。
+**累计口径只有一条规则**（`recordLLMUsage` → `recordWorkspaceTokenUsage` / `recordTokenStats`）：provider 没回真实 `PromptTokens` 时**不累加估算输入**（只累加估算输出），footer 与统计面板都照此办。原因是估算的输入包含整个留存上下文，会让累计输入在很小的问题上突然跳几千；给一次「花费未知」的调用编一个数则是虚报，宁可少记。
 
 ## 八、一处已修正的注释
 

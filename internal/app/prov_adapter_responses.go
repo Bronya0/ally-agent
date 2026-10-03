@@ -457,7 +457,7 @@ func openAIResponsesPromptCacheKey(sessionID string) string {
 
 func buildOpenAIResponsesRequest(cfg ConfigState, model string, messages []legacyopenai.ChatCompletionMessage, tools []legacyopenai.Tool, replay *sessionReasoningPayload) oaresp.ResponseNewParams {
 	instructions, inputItems := buildOpenAIResponsesInput(messages, replay)
-	cacheKey := strings.TrimSpace(cfg.responsesPromptCacheKey)
+	cacheKey := promptCacheKeyForRequest(cfg, apiFormatOpenAIResponses, model)
 	body := oaresp.ResponseNewParams{
 		Model:           oaresp.ResponsesModel(model),
 		Input:           oaresp.ResponseNewParamsInputUnion{OfInputItemList: inputItems},
@@ -484,12 +484,15 @@ func buildOpenAIResponsesRequest(cfg ConfigState, model string, messages []legac
 		// would only add an unknown key to the request.
 		body.Include = append(body.Include, oaresp.ResponseIncludableReasoningEncryptedContent)
 	}
-	// Thinking strength for the Responses API (reasoning.effort): "off" arrives as
-	// effort "none" (DeepSeek documents "none" as 关闭思考模式). The SDK type is
-	// string-backed, so the normalized selection is sent unchanged, including
-	// xhigh and max.
-	reasoningWire := reasoningWireForAdapter(cfg, apiFormatOpenAIResponses, cfg.ReasoningEffort)
-	if reasoningWire.Effort != "" && modelSupportsReasoningEffort(cfg, model) {
+	// Thinking strength for the Responses API (reasoning.effort): the level is
+	// resolved against this model's vendor first — DeepSeek accepts low/high/max
+	// with its own translations, while a vendor that declares no effort field
+	// sends nothing — and "off" arrives as an effort value: "none" where the docs
+	// name it (DeepSeek documents "none" as 关闭思考模式), the vendor's lowest level
+	// where they say the model cannot stop thinking. The SDK type is string-backed,
+	// so the resolved value goes out unchanged.
+	reasoningWire := reasoningWireForAdapter(cfg, apiFormatOpenAIResponses, model, cfg.ReasoningEffort)
+	if reasoningWire.Effort != "" {
 		body.Reasoning = oa.ReasoningParam{Effort: oa.ReasoningEffort(reasoningWire.Effort)}
 		if reasoningWire.Effort != reasoningEffortOffWireValue {
 			// Pair reasoning.effort with summary:"auto" — both kimi-code
@@ -513,10 +516,13 @@ func buildOpenAIResponsesRequest(cfg ConfigState, model string, messages []legac
 	if len(body.Tools) > 0 {
 		body.ToolChoice = oaresp.ResponseNewParamsToolChoiceUnion{OfToolChoiceMode: oa.Opt(oaresp.ToolChoiceOptionsAuto)}
 	}
-	// Codex sends the stable session key on every Responses request, including
-	// custom compatible endpoints. Only the explicit breakpoint/options below
-	// are restricted to the official GPT-5.6 route because older gateways may
-	// reject those newer fields.
+	// The session routing key travels to the endpoints that document it
+	// (promptCacheKeyForRequest): the official API and 智谱 / Kimi / MiniMax, whose
+	// Responses docs each declare prompt_cache_key — 用于集群路由，以提高缓存命中率 /
+	// 同会话使用相同取值提升缓存命中率 / Prompt 缓存路由标识. A relay of another vendor
+	// has no such field (DeepSeek answers 不支持), and an unknown top-level key can
+	// come back as a 400 while omitting it only costs the sticky route; routing a
+	// gateway does document travels in its own header instead (sessionAffinityHeaders).
 	if cacheKey != "" {
 		body.PromptCacheKey = oa.String(cacheKey)
 	}
@@ -588,6 +594,13 @@ func newOpenAIResponsesSSEStream(ctx context.Context, cfg ConfigState, body oare
 		return nil, err
 	}
 
+	// Capture the Retry-After this attempt's response carries: the error returned
+	// below is a plain string, so without the capture no outer policy — the
+	// multi-key failover or the chat loop's turn retry — can see the wait the
+	// provider asked for, and the backoff falls back to the local schedule.
+	retryAfterCap := &retryAfterCapture{}
+	ctx = context.WithValue(ctx, retryAfterCaptureKey{}, retryAfterCap)
+
 	endpoint := strings.TrimRight(baseURLForAPIFormat(cfg), "/") + "/responses"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
 	if err != nil {
@@ -605,7 +618,9 @@ func newOpenAIResponsesSSEStream(ctx context.Context, cfg ConfigState, body oare
 	// 自定义头在适配器内置头之后应用，可覆盖 Authorization / User-Agent。
 	applyCustomHeaders(req, cfg)
 
-	resp, err := proxyHTTPClient(cfg, true, 0).Do(req)
+	client := proxyHTTPClient(cfg, true, 0)
+	client.Transport = &retryAfterCaptureTransport{base: client.Transport}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -622,7 +637,13 @@ func newOpenAIResponsesSSEStream(ctx context.Context, cfg ConfigState, body oare
 		} else {
 			msg = resp.Status + ": " + msg
 		}
-		return nil, fmt.Errorf("responses request failed: %s", msg)
+		failure := fmt.Errorf("responses request failed: %s", msg)
+		// The provider's own advice rides along as retryAfterError; the message is
+		// unchanged, so classification (retryable / not) is unaffected.
+		if d := retryAfterCap.get(); d > 0 {
+			return nil, &retryAfterError{inner: failure, after: d}
+		}
+		return nil, failure
 	}
 	resp.Body = newIdleTimeoutReader(resp.Body, defaultStreamIdleTimeout)
 	decoder := ssestream.NewDecoder(resp)

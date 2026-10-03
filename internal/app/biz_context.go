@@ -177,7 +177,15 @@ func (a *App) ResetWorkspaceTokenUsage(workspace string) {
 	a.mu.Unlock()
 }
 
-func (a *App) recordWorkspaceTokenUsage(workspace string, usage *modelUsage, fallbackInput, fallbackOutput int) {
+// recordWorkspaceTokenUsage adds one LLM call to the workspace's running total.
+// The prompt side counts only what the provider reported: an estimated request
+// size includes the entire retained context and would make the footer's
+// cumulative input counter jump by thousands on a tiny prompt, and inventing
+// spend for a call whose cost is unknown is worse than leaving it out. The output
+// side keeps the caller's estimate, which is the text the model actually
+// produced. The dashboard follows the same rule (see recordTokenStats), so the two
+// totals never disagree.
+func (a *App) recordWorkspaceTokenUsage(workspace string, usage *modelUsage, fallbackOutput int) {
 	input := 0
 	output := fallbackOutput
 	if usage != nil {
@@ -188,10 +196,6 @@ func (a *App) recordWorkspaceTokenUsage(workspace string, usage *modelUsage, fal
 			output = usage.CompletionTokens
 		}
 	}
-	// If the provider did not return real prompt usage, do not add the full
-	// estimated request size: it includes the entire retained context and makes
-	// the footer cumulative input counter jump by thousands on tiny prompts.
-	_ = fallbackInput
 	if input <= 0 && output <= 0 {
 		return
 	}
@@ -244,27 +248,6 @@ func estimateTokensFromText(text string) int {
 	// - Code/JSON/indents/punctuation: ~3.0 - 3.2 ASCII chars per token (down from 4).
 	// - Chinese / CJK characters: typically 1.3 - 1.6 tokens per character (up from 1.0).
 	return int(math.Ceil(float64(asciiCount)/3.2)) + int(math.Ceil(float64(nonAsciiCount)*1.4))
-}
-
-func estimateRequestTokens(messages []openai.ChatCompletionMessage, tools []openai.Tool) int {
-	total := 0
-	for _, m := range messages {
-		total += estimateTokensFromText(m.Role)
-		total += estimateMessageBodyTokens(m)
-		total += estimateTokensFromText(m.Name)
-		total += estimateTokensFromText(m.ToolCallID)
-		if m.ReasoningContent != "" {
-			total += estimateTokensFromText(m.ReasoningContent)
-		}
-		for _, tc := range m.ToolCalls {
-			total += estimateTokensFromText(tc.ID)
-			total += estimateTokensFromText(string(tc.Type))
-			total += estimateTokensFromText(tc.Function.Name)
-			total += estimateTokensFromText(tc.Function.Arguments)
-		}
-	}
-	total += estimateToolSchemaTokens(tools)
-	return total
 }
 
 // builtinToolSchemaTokens caches the token estimate of the built-in tool

@@ -302,9 +302,9 @@ func TestStreamModelResponseSingleKeyNoFailover(t *testing.T) {
 
 // TestStreamOpenAIChatPreservesMaxReasoningEffort verifies that the selected
 // max level reaches the OpenAI-compatible request body unchanged for a model that
-// accepts the parameter. The effort is written only for a reasoning-capable
-// target — see modelSupportsReasoningEffort — because the official endpoints
-// reject an effort the target model does not accept.
+// accepts the parameter. The effort is written only for a target whose vendor
+// declares the field — see reasoningEffortFamilies — because an endpoint rejects
+// an effort its model does not accept.
 func TestStreamOpenAIChatPreservesMaxReasoningEffort(t *testing.T) {
 	var request map[string]any
 	var decodeErr error

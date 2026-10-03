@@ -20,12 +20,18 @@ import (
 	"testing"
 
 	anthropic "github.com/anthropics/anthropic-sdk-go"
+	anthropicoption "github.com/anthropics/anthropic-sdk-go/option"
 	oa "github.com/openai/openai-go/v3"
 	oaresp "github.com/openai/openai-go/v3/responses"
 	legacyopenai "github.com/sashabaranov/go-openai"
 
 	"ally-dev/internal/tools/toolcall"
 )
+
+// anthropicOfficialCfg is the official Anthropic endpoint. The breakpoint helper
+// takes the whole config because both the ttl and the top-level marker depend on
+// which endpoint the request lands on.
+var anthropicOfficialCfg = ConfigState{APIFormat: apiFormatAnthropicMessages, BaseURL: defaultAnthropicMessagesURL}
 
 // TestMarkAnthropicPromptCacheBreakpointsLandOnLastBlocks pins where the three
 // markers go: the last tool definition, the last system block, and the last
@@ -41,7 +47,7 @@ func TestMarkAnthropicPromptCacheBreakpointsLandOnLastBlocks(t *testing.T) {
 			anthropic.NewUserMessage(anthropic.NewTextBlock("follow-up question")),
 		},
 	}
-	markAnthropicPromptCacheBreakpoints(&params, true)
+	markAnthropicPromptCacheBreakpoints(&params, anthropicOfficialCfg)
 
 	if got := params.System[0].CacheControl.TTL; got != "5m" {
 		t.Fatalf("system breakpoint ttl = %q, want 5m", got)
@@ -65,7 +71,7 @@ func TestMarkAnthropicPromptCacheBreakpointsLandOnLastBlocks(t *testing.T) {
 			anthropic.NewAssistantMessage(anthropic.NewThinkingBlock("sig", "trace")),
 		},
 	}
-	markAnthropicPromptCacheBreakpoints(&thinkingOnly, true)
+	markAnthropicPromptCacheBreakpoints(&thinkingOnly, anthropicOfficialCfg)
 	question := thinkingOnly.Messages[0].Content[0]
 	if question.OfText == nil || question.OfText.CacheControl.TTL != "5m" {
 		t.Fatalf("expected the marker to fall back to the last cacheable block")
@@ -87,7 +93,7 @@ func TestMarkAnthropicPromptCacheBreakpointsLandOnLastBlocks(t *testing.T) {
 	convParams := anthropic.MessageNewParams{
 		Messages: converted,
 	}
-	markAnthropicPromptCacheBreakpoints(&convParams, true)
+	markAnthropicPromptCacheBreakpoints(&convParams, anthropicOfficialCfg)
 	lastUserBlocks := convParams.Messages[2].Content
 	if len(lastUserBlocks) != 2 {
 		t.Fatalf("expected 2 blocks in last user message, got %d", len(lastUserBlocks))
@@ -183,8 +189,12 @@ func TestBuildAnthropicMessagesMergesConsecutiveSameRoleMessages(t *testing.T) {
 
 // TestOpenAIResponsesPromptCacheFields pins the request-shaped half of the
 // prompt-cache contract: caching stays in the provider's implicit mode (no mode
-// marker, no explicit breakpoint anywhere in the input) and no retention field
-// is sent — the provider default stays in place.
+// marker, no explicit breakpoint anywhere in the input), no retention field is
+// sent — the provider default stays in place — and the session routing key travels
+// to the endpoints that document it (promptCacheKeyForRequest): the official API
+// and the vendors that declare prompt_cache_key on their Responses API (智谱 / Kimi /
+// MiniMax), so a relay of an undocumented vendor never receives a top-level key it
+// may answer with 400.
 func TestOpenAIResponsesPromptCacheFields(t *testing.T) {
 	cacheKey := openAIResponsesPromptCacheKey("session-1")
 	tests := []struct {
@@ -200,10 +210,17 @@ func TestOpenAIResponsesPromptCacheFields(t *testing.T) {
 			wantKey: true,
 		},
 		{
-			name:    "no retention field on a relay endpoint either",
-			cfg:     ConfigState{APIFormat: apiFormatOpenAIResponses, BaseURL: "https://api.deepseek.com/v1", responsesPromptCacheKey: cacheKey},
-			model:   "gpt-5.6",
+			// 智谱 的 Responses 文档把这个字段写作「用于集群路由，以提高缓存命中率」，
+			// 所以它那条线上必须照旧带上会话路由键。
+			name:    "a vendor that documents the field keeps the routing key",
+			cfg:     ConfigState{APIFormat: apiFormatOpenAIResponses, BaseURL: "https://open.bigmodel.cn/api/v1", responsesPromptCacheKey: cacheKey},
+			model:   "glm-5.3",
 			wantKey: true,
+		},
+		{
+			name:  "no session key for a vendor that does not document it",
+			cfg:   ConfigState{APIFormat: apiFormatOpenAIResponses, BaseURL: "https://api.deepseek.com/v1", responsesPromptCacheKey: cacheKey},
+			model: "deepseek-v4-pro",
 		},
 		{
 			name:  "missing session key",
@@ -812,6 +829,16 @@ func TestToolCallAccumulatorIdentityTable(t *testing.T) {
 			wantArgs:  []string{`{"path":"a"}`, `{}`},
 		},
 		{
+			name: "an id-bearing fragment naming another tool opens its own call instead of adopting the id",
+			batches: [][]legacyopenai.ToolCall{
+				{toolCallFragment(0, "", "read", `{"path":"a"}`)},
+				{toolCallFragment(0, "call_b", "list_files", `{}`)},
+			},
+			wantIDs:   []string{"call_1", "call_b"},
+			wantNames: []string{"read", "list_files"},
+			wantArgs:  []string{`{"path":"a"}`, `{}`},
+		},
+		{
 			name: "the provider id arriving after the call started is adopted",
 			batches: [][]legacyopenai.ToolCall{
 				{toolCallFragment(0, "", "read", `{"path":"a"`)},
@@ -931,24 +958,41 @@ func marshalResponsesRequest(t *testing.T, body any) map[string]any {
 }
 
 // TestPatchChatRequestFieldsAddsPromptCacheKey covers the Chat half of cache
-// routing: the key lands in the body, and a second pass over the same bytes
-// changes nothing — the prefix the provider hashes must not drift between
-// requests.
+// routing: the vendor key lands in the body, the official endpoint also pins
+// store:false, and a second pass over the same bytes changes nothing — the prefix
+// the provider hashes must not drift between requests.
 func TestPatchChatRequestFieldsAddsPromptCacheKey(t *testing.T) {
 	body := []byte(`{"model":"gpt-5.5","messages":[{"role":"user","content":"hi"}]}`)
-	patched, changed := patchChatRequestFields(body, "", nil, "ally:key", false)
+	patched, changed := patchChatRequestFields(body, "", nil, "ally:key", true, reasoningStopThinkingNone)
 	if !changed {
 		t.Fatal("expected the cache key to be patched in")
 	}
-	var payload map[string]any
+	var payload map[string]json.RawMessage
 	if err := json.Unmarshal(patched, &payload); err != nil {
 		t.Fatalf("patched body is not JSON: %v", err)
 	}
-	if payload["prompt_cache_key"] != "ally:key" {
-		t.Fatalf("patched cache field = %#v", payload["prompt_cache_key"])
+	if string(payload["prompt_cache_key"]) != `"ally:key"` || string(payload["store"]) != "false" {
+		t.Fatalf("patched body = %s, want prompt_cache_key + store:false", patched)
 	}
-	if again, changed := patchChatRequestFields(patched, "", nil, "ally:key", false); changed {
+	if again, changed := patchChatRequestFields(patched, "", nil, "ally:key", true, reasoningStopThinkingNone); changed {
 		t.Fatalf("second pass must be a no-op, got %s", again)
+	}
+
+	// A vendor that documents prompt_cache_key on its Chat wire gets the routing key
+	// without the official store pin (see promptCachePinStore).
+	vendorOnly, changed := patchChatRequestFields(body, "", nil, "ally:key", false, reasoningStopThinkingNone)
+	if !changed {
+		t.Fatal("expected the vendor request to gain prompt_cache_key")
+	}
+	var vendorPayload map[string]json.RawMessage
+	if err := json.Unmarshal(vendorOnly, &vendorPayload); err != nil {
+		t.Fatalf("patched body is not JSON: %v", err)
+	}
+	if string(vendorPayload["prompt_cache_key"]) != `"ally:key"` {
+		t.Fatalf("vendor patched cache field = %s", vendorOnly)
+	}
+	if _, exists := vendorPayload["store"]; exists {
+		t.Fatalf("a compatible endpoint must not receive store: %s", vendorOnly)
 	}
 }
 func TestOpenAIChatTokenParamAndToolChoice(t *testing.T) {
@@ -968,16 +1012,31 @@ func TestOpenAIChatTokenParamAndToolChoice(t *testing.T) {
 	if shouldUseMaxCompletionTokens("auto", "deepseek-chat") {
 		t.Fatalf("expected deepseek-chat to use max_tokens under auto")
 	}
+	// MiMo's parameter table lists max_completion_tokens alone (default 1024), so a
+	// request carrying the legacy field would leave the cap at the provider's own
+	// default instead of the configured value.
+	if !shouldUseMaxCompletionTokens("auto", "mimo-v2.5-pro") {
+		t.Fatalf("expected MiMo to use max_completion_tokens under auto")
+	}
+	if shouldUseMaxCompletionTokens("max_tokens", "mimo-v2.5-pro") {
+		t.Fatalf("expected an explicit max_tokens choice to override the MiMo default")
+	}
 
-	// 1b. Anchored boundaries (kimi-code openai-legacy.ts:130-133): a family
-	// prefix without a version boundary must not match, every o-digit series
-	// must, and provider-routing prefixes ("openai/o3-mini") are stripped.
-	for _, model := range []string{"o2", "o5-mini", "gpt-5.1", "gpt-5-nano", "openai/o3-mini", "azure/gpt-5.1", "O4-MINI"} {
+	// 1b. The version decides, not a pinned generation: every o-digit run and every GPT
+	// generation from 5 on (gpt-6-astra is already in the catalog) takes the new field,
+	// while a version boundary is still required and provider prefixes / region tags are
+	// stripped first.
+	for _, model := range []string{
+		"o2", "o5-mini", "o10", "gpt-5.1", "gpt-5-nano", "gpt-6", "gpt-6-astra", "gpt-50",
+		"openai/o3-mini", "azure/gpt-5.1", "gpt-5.1@eu", "O4-MINI",
+	} {
 		if !shouldUseMaxCompletionTokens("auto", model) {
 			t.Fatalf("expected %q to use max_completion_tokens under auto", model)
 		}
 	}
-	for _, model := range []string{"gpt-50", "gpt-5x", "o1preview", "o3as"} {
+	// A family prefix without a version boundary, and a GPT generation before 5 (which
+	// rejects both the effort field and max_completion_tokens).
+	for _, model := range []string{"gpt-5x", "o1preview", "o3as", "gpt-4o", "gpt-4.1", "gpt-oss-120b"} {
 		if shouldUseMaxCompletionTokens("auto", model) {
 			t.Fatalf("expected %q to use max_tokens under auto", model)
 		}
@@ -1117,7 +1176,7 @@ func TestOpenAIResponsesMidTurnSystemAndDeduplication(t *testing.T) {
 func TestConfigureAnthropicThinking(t *testing.T) {
 	// 1. Claude 3.7 Sonnet (budget model): sets Thinking.OfEnabled, does NOT set OutputConfig.Effort
 	var params37 anthropic.MessageNewParams
-	configureAnthropicThinking(&params37, "claude-3-7-sonnet-20250219", "high", 8192)
+	configureAnthropicThinking(&params37, "claude-3-7-sonnet-20250219", "high", 8192, anthropicOffPlan{})
 	if params37.Thinking.OfEnabled == nil {
 		t.Fatal("expected Thinking.OfEnabled for claude-3.7-sonnet")
 	}
@@ -1130,7 +1189,7 @@ func TestConfigureAnthropicThinking(t *testing.T) {
 
 	// 2. Claude 4.6 Sonnet (adaptive model): sets Thinking.OfAdaptive and OutputConfig.Effort
 	var params46 anthropic.MessageNewParams
-	configureAnthropicThinking(&params46, "claude-sonnet-4.6", "medium", 8192)
+	configureAnthropicThinking(&params46, "claude-sonnet-4.6", "medium", 8192, anthropicOffPlan{})
 	if params46.Thinking.OfAdaptive == nil {
 		t.Fatal("expected Thinking.OfAdaptive for claude-sonnet-4.6")
 	}
@@ -1140,7 +1199,7 @@ func TestConfigureAnthropicThinking(t *testing.T) {
 
 	// 3. Effort "off": the explicit "stop thinking" form (the UI's 关闭思考).
 	var paramsOff anthropic.MessageNewParams
-	if enabled := configureAnthropicThinking(&paramsOff, "claude-3-7-sonnet-20250219", "off", 8192); enabled {
+	if enabled := configureAnthropicThinking(&paramsOff, "claude-3-7-sonnet-20250219", "off", 8192, anthropicOffPlan{disabledThinking: true}); enabled {
 		t.Fatal("effort off must not report thinking as enabled")
 	}
 	if paramsOff.Thinking.OfDisabled == nil {
@@ -1148,13 +1207,50 @@ func TestConfigureAnthropicThinking(t *testing.T) {
 	}
 }
 
-// TestChatAdapterTurnsThinkingOffOnCompatibleEndpoint drives the "off" level end
-// to end on a relay: the request carries thinking:{"type":"disabled"} — the field
-// DeepSeek documents and passes through extra_body in their own sample, because
-// the OpenAI Chat schema has no such field — and no effort value next to it. The
-// assistant turn already in the history must not gain the reasoning placeholder
-// either: with thinking off there is no reasoning to hand back.
-func TestChatAdapterTurnsThinkingOffOnCompatibleEndpoint(t *testing.T) {
+// TestAnthropicOffPlanFollowsTheEndpoint pins the three ways "关闭思考" lands on the
+// Messages wire, all resolved from the same vendor tables the Chat and Responses wires
+// read (anthropicOffPlanFor): the thinking block where the endpoint documents that
+// switch, DeepSeek's top-level reasoning.effort (no SDK field carries it, so the
+// adapter adds the JSON key), the vendor's lowest level where its docs say the model
+// cannot stop thinking, and nothing at all where the docs call the field ineffective or
+// declare no such field.
+func TestAnthropicOffPlanFollowsTheEndpoint(t *testing.T) {
+	relay := ConfigState{APIFormat: apiFormatAnthropicMessages, BaseURL: "https://relay.example.com"}
+	deepseek := ConfigState{APIFormat: apiFormatAnthropicMessages, BaseURL: "https://api.deepseek.com/anthropic"}
+	tests := []struct {
+		name  string
+		cfg   ConfigState
+		model string
+		want  anthropicOffPlan
+	}{
+		{name: "a switch the endpoint documents", cfg: relay, model: "claude-3-7-sonnet-20250219", want: anthropicOffPlan{disabledThinking: true}},
+		{name: "千问 documents the block on this wire too", cfg: relay, model: "qwen3.8-max", want: anthropicOffPlan{disabledThinking: true}},
+		{name: "a relay keeps the generic block for a DeepSeek model", cfg: relay, model: "deepseek-v4-pro", want: anthropicOffPlan{disabledThinking: true}},
+		{name: "DeepSeek's own endpoint spells it as reasoning.effort", cfg: deepseek, model: "deepseek-v4-pro", want: anthropicOffPlan{reasoningEffort: reasoningEffortOffWireValue}},
+		{name: "Kimi K3 cannot stop thinking", cfg: relay, model: "kimi-k3", want: anthropicOffPlan{outputEffort: reasoningEffortLow}},
+		{name: "GLM-5.3 cannot stop thinking", cfg: relay, model: "glm-5.3", want: anthropicOffPlan{outputEffort: reasoningEffortLow}},
+		{name: "MiniMax M3.1 requires thinking", cfg: relay, model: "MiniMax-M3.1-Flash-Preview", want: anthropicOffPlan{outputEffort: reasoningEffortLow}},
+		// A vendor whose current generation cannot stop thinking lands on the lowest
+		// level whatever the generation: the row is keyed on the vendor, so a legacy id
+		// whose docs ignore the field gets the same treatment (it is one the vendor
+		// declares, just without a depth effect).
+		{name: "MiniMax lands on its lowest level for off", cfg: relay, model: "MiniMax-M2.7", want: anthropicOffPlan{outputEffort: reasoningEffortLow}},
+		{name: "MiMo declares no thinking field", cfg: relay, model: "mimo-v2.5-pro", want: anthropicOffPlan{}},
+	}
+	for _, tc := range tests {
+		if got := anthropicOffPlanFor(tc.cfg, tc.model); got != tc.want {
+			t.Errorf("%s: anthropicOffPlanFor(%q) = %+v, want %+v", tc.name, tc.model, got, tc.want)
+		}
+	}
+}
+
+// TestAnthropicReasoningEffortOptionLandsInTheBody covers the mechanism the DeepSeek
+// endpoint needs: MessageNewParams carries Thinking and OutputConfig only, so the
+// top-level `reasoning` object its docs spell 关闭思考 with has to be added as a raw JSON
+// key (the SDK does exactly the same for `stream`). The key must reach the serialized
+// body — the SDK refuses the option outright when the body is not a *bytes.Buffer, so a
+// broken wiring fails loudly instead of silently dropping the field.
+func TestAnthropicReasoningEffortOptionLandsInTheBody(t *testing.T) {
 	var mu sync.Mutex
 	var bodies []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1164,41 +1260,155 @@ func TestChatAdapterTurnsThinkingOffOnCompatibleEndpoint(t *testing.T) {
 		mu.Unlock()
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, "data: {\"id\":\"c1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"}}]}\n\n")
-		fmt.Fprint(w, "data: {\"id\":\"c1\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n")
-		fmt.Fprint(w, "data: [DONE]\n\n")
+		fmt.Fprint(w, "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
 	}))
 	defer server.Close()
 
-	cfg := ConfigState{
-		APIFormat:       apiFormatOpenAIChat,
-		BaseURL:         server.URL,
-		APIKeys:         []string{"test-key"},
-		ReasoningEffort: reasoningEffortOff,
-		ReasoningTag:    defaultReasoningTag,
+	client := anthropic.NewClient(
+		anthropicoption.WithAPIKey("test-key"),
+		anthropicoption.WithBaseURL(server.URL),
+		anthropicoption.WithMaxRetries(0),
+	)
+	stream := client.Messages.NewStreaming(context.Background(), anthropic.MessageNewParams{
+		Model:     anthropic.Model("deepseek-v4-pro"),
+		MaxTokens: 64,
+		Messages:  []anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock("hi"))},
+	}, anthropicoption.WithJSONSet("reasoning", map[string]string{"effort": reasoningEffortOffWireValue}))
+	for stream.Next() {
 	}
-	messages := []legacyopenai.ChatCompletionMessage{
-		{Role: legacyopenai.ChatMessageRoleUser, Content: "hi"},
-		{Role: legacyopenai.ChatMessageRoleAssistant, Content: "plain answer"},
-		{Role: legacyopenai.ChatMessageRoleUser, Content: "hi again"},
-	}
-	if _, err := NewApp().streamModelResponse(context.Background(), cfg, "deepseek-chat", messages, nil, nil); err != nil {
-		t.Fatalf("streamModelResponse() error = %v", err)
-	}
+	_ = stream.Close()
 
 	mu.Lock()
 	defer mu.Unlock()
 	if len(bodies) != 1 {
 		t.Fatalf("expected 1 request, got %d", len(bodies))
 	}
-	if !strings.Contains(bodies[0], `"thinking":{"type":"disabled"}`) {
-		t.Fatalf("expected the stop-thinking field on the wire: %s", bodies[0])
+	if want := `"reasoning":{"effort":"none"}`; !strings.Contains(bodies[0], want) {
+		t.Fatalf("request body must contain %s: %s", want, bodies[0])
 	}
-	if strings.Contains(bodies[0], "reasoning_effort") {
-		t.Fatalf("\"off\" must not also carry an effort value: %s", bodies[0])
+}
+
+// TestChatAdapterTurnsThinkingOffOnCompatibleEndpoint drives the "off" level end to
+// end on a relay: the request carries the stop-thinking spelling the model's vendor
+// documents — thinking:{"type":"disabled"} for DeepSeek (the field its own sample
+// passes through extra_body, because the OpenAI Chat schema has no such field),
+// enable_thinking:false for 千问 — nothing at all where writing the field would be a
+// lie (MiniMax M2.x accepts it and keeps thinking on; MiMo declares no thinking switch
+// anywhere), and the vendor's lowest level where its docs say the model cannot stop
+// thinking at all (Kimi K3 declares no thinking field, GLM-5.3 and MiniMax M3.1 reject
+// the off value). The assistant turn already in the history must not gain the reasoning
+// placeholder either: with thinking off there is no reasoning to hand back.
+func TestChatAdapterTurnsThinkingOffOnCompatibleEndpoint(t *testing.T) {
+	tests := []struct {
+		name       string
+		model      string
+		wantBody   []string
+		absentBody []string
+		// wantEffort marks the models whose docs say they cannot stop thinking: there
+		// "off" lands on the lowest level, so an effort value is exactly what belongs on
+		// the wire (see reasoningWireForAdapter).
+		wantEffort bool
+	}{
+		{
+			name:     "DeepSeek's spelling",
+			model:    "deepseek-chat",
+			wantBody: []string{`"thinking":{"type":"disabled"}`},
+		},
+		{
+			name:       "千问 closes thinking with enable_thinking",
+			model:      "qwen3.8-max",
+			wantBody:   []string{`"enable_thinking":false`},
+			absentBody: []string{`"thinking":`},
+		},
+		{
+			name:       "MiniMax cannot stop thinking, so off lands on its lowest level",
+			model:      "MiniMax-M2.7",
+			wantBody:   []string{`"reasoning_effort":"low"`},
+			absentBody: []string{`"thinking":`, `"enable_thinking"`},
+			wantEffort: true,
+		},
+		{
+			name:       "MiMo documents no thinking switch at all, so nothing is sent",
+			model:      "mimo-v2.5-pro",
+			absentBody: []string{`"thinking":`, `"enable_thinking"`},
+		},
+		{
+			name:       "Kimi K3 cannot stop thinking, so off lands on its lowest level",
+			model:      "kimi-k3",
+			wantBody:   []string{`"reasoning_effort":"low"`},
+			absentBody: []string{`"thinking":`, `"enable_thinking"`},
+			wantEffort: true,
+		},
+		{
+			name:       "GLM-5.3 rejects disabled, so off lands on its lowest level",
+			model:      "glm-5.3",
+			wantBody:   []string{`"reasoning_effort":"low"`},
+			absentBody: []string{`"thinking":`, `"enable_thinking"`},
+			wantEffort: true,
+		},
+		{
+			name:       "MiniMax M3.1 requires thinking, so off lands on its lowest level",
+			model:      "MiniMax-M3.1-Flash-Preview",
+			wantBody:   []string{`"reasoning_effort":"low"`},
+			absentBody: []string{`"thinking":`, `"enable_thinking"`},
+			wantEffort: true,
+		},
 	}
-	if strings.Contains(bodies[0], "reasoning_content") {
-		t.Fatalf("\"off\" leaves nothing to hand back, so no reasoning field may be added: %s", bodies[0])
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var mu sync.Mutex
+			var bodies []string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				raw, _ := io.ReadAll(r.Body)
+				mu.Lock()
+				bodies = append(bodies, string(raw))
+				mu.Unlock()
+				w.Header().Set("Content-Type", "text/event-stream")
+				w.WriteHeader(http.StatusOK)
+				fmt.Fprint(w, "data: {\"id\":\"c1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"}}]}\n\n")
+				fmt.Fprint(w, "data: {\"id\":\"c1\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n")
+				fmt.Fprint(w, "data: [DONE]\n\n")
+			}))
+			defer server.Close()
+
+			cfg := ConfigState{
+				APIFormat:       apiFormatOpenAIChat,
+				BaseURL:         server.URL,
+				APIKeys:         []string{"test-key"},
+				ReasoningEffort: reasoningEffortOff,
+				ReasoningTag:    defaultReasoningTag,
+			}
+			messages := []legacyopenai.ChatCompletionMessage{
+				{Role: legacyopenai.ChatMessageRoleUser, Content: "hi"},
+				{Role: legacyopenai.ChatMessageRoleAssistant, Content: "plain answer"},
+				{Role: legacyopenai.ChatMessageRoleUser, Content: "hi again"},
+			}
+			if _, err := NewApp().streamModelResponse(context.Background(), cfg, tc.model, messages, nil, nil); err != nil {
+				t.Fatalf("streamModelResponse() error = %v", err)
+			}
+
+			mu.Lock()
+			defer mu.Unlock()
+			if len(bodies) != 1 {
+				t.Fatalf("expected 1 request, got %d", len(bodies))
+			}
+			for _, want := range tc.wantBody {
+				if !strings.Contains(bodies[0], want) {
+					t.Fatalf("request body must contain %s: %s", want, bodies[0])
+				}
+			}
+			for _, absent := range tc.absentBody {
+				if strings.Contains(bodies[0], absent) {
+					t.Fatalf("request body must not contain %s: %s", absent, bodies[0])
+				}
+			}
+			if !tc.wantEffort && strings.Contains(bodies[0], "reasoning_effort") {
+				t.Fatalf("\"off\" on a model with a working switch must not also carry an effort value: %s", bodies[0])
+			}
+			if strings.Contains(bodies[0], "reasoning_content") {
+				t.Fatalf("\"off\" leaves nothing to hand back, so no reasoning field may be added: %s", bodies[0])
+			}
+		})
 	}
 }
 
@@ -1323,7 +1533,7 @@ func TestAnthropicToolPromptCacheBreakpoint(t *testing.T) {
 			anthropic.NewUserMessage(anthropic.NewTextBlock("hello")),
 		},
 	}
-	markAnthropicPromptCacheBreakpoints(&params, true)
+	markAnthropicPromptCacheBreakpoints(&params, anthropicOfficialCfg)
 	lastTool := params.Tools[1].OfTool
 	if lastTool == nil || lastTool.CacheControl.TTL == "" {
 		t.Fatal("expected CacheControl on the last tool definition")
@@ -1562,7 +1772,7 @@ func TestModelUsageFromResponsesDerivesUncachedInput(t *testing.T) {
 // leave extended thinking unset instead of sending a request it rejects.
 func TestConfigureAnthropicThinkingTinyMaxTokens(t *testing.T) {
 	params := anthropic.MessageNewParams{}
-	if enabled := configureAnthropicThinking(&params, "claude-3-7-sonnet-20250219", "high", 512); enabled {
+	if enabled := configureAnthropicThinking(&params, "claude-3-7-sonnet-20250219", "high", 512, anthropicOffPlan{}); enabled {
 		t.Fatal("thinking must stay disabled when max_tokens cannot hold the minimum budget")
 	}
 	if params.Thinking.OfEnabled != nil || params.Thinking.OfAdaptive != nil {
@@ -1570,14 +1780,21 @@ func TestConfigureAnthropicThinkingTinyMaxTokens(t *testing.T) {
 	}
 }
 
-// TestIsAnthropicAdaptiveThinkingModel pins the model table: a missing pattern
-// silently sends the interleaved-thinking beta (and output_config.effort) to a
-// model that handles both by itself.
+// TestIsAnthropicAdaptiveThinkingModel pins the generation rule: adaptive thinking arrived
+// with Claude 4.6, and from 4.7 the manual shape (enabled + budget_tokens) answers 400, so
+// a generation read wrong sends a shape the endpoint rejects. The rule reads the version
+// number instead of listing ids (see isAnthropicAdaptiveThinkingModel), which is what makes
+// Claude's next release inherit it.
 func TestIsAnthropicAdaptiveThinkingModel(t *testing.T) {
+	// Every way the ids spell their generation: family first (4-6), version first with a date
+	// stamp (3-7-sonnet-20250219), no separator (opus4-6), inside a Bedrock / region wrapper,
+	// and with no version at all (an alias for the current generation).
 	adaptive := []string{
 		"claude-sonnet-4.6", "claude-sonnet-4-6", "claude-opus-4.6", "claude-opus-4-6",
 		"claude-opus-4.7", "claude-opus-4-8", "claude-sonnet-5", "claude-opus-5",
-		"claude-haiku-5", "claude-fable", "claude-mythos", "claude-5-foo",
+		"claude-haiku-5", "claude-5-foo", "claude-fable", "claude-mythos",
+		"claude-fable-5", "claude-fable-5-1", "claude-opus-5-fast", "claude-code",
+		"claude-opus4-6", "us.anthropic.claude-opus-4-6-v1", "claude-opus-4-6@eu",
 		"  Claude-Opus-4-6  ",
 	}
 	for _, model := range adaptive {
@@ -1585,7 +1802,15 @@ func TestIsAnthropicAdaptiveThinkingModel(t *testing.T) {
 			t.Fatalf("%q must be treated as an adaptive-thinking model", model)
 		}
 	}
-	for _, model := range []string{"claude-3-7-sonnet-20250219", "claude-sonnet-4-5", "deepseek-r1"} {
+	// The generations that take the manual shape only (4.5 and older), and ids of other
+	// vendors carrying numbers high enough to be misread as a Claude version.
+	manual := []string{
+		"claude-3-7-sonnet-20250219", "claude-3-7-sonnet-latest", "claude-sonnet-4-5",
+		"claude-opus-4-1", "claude-haiku-4-5", "claude-sonnet-4-20250514",
+		"claude-3-5-sonnet-20241022", "claude-3-opus-latest", "deepseek-r1",
+		"glm-5.3", "MiniMax-M3", "gpt-5.6", "some-relay-model",
+	}
+	for _, model := range manual {
 		if isAnthropicAdaptiveThinkingModel(model) {
 			t.Fatalf("%q must not be treated as an adaptive-thinking model", model)
 		}
@@ -1698,6 +1923,381 @@ func TestBuildAnthropicMessagesMidTurnSystem(t *testing.T) {
 	}
 	if lastUserTurn.Content[1].OfText == nil || lastUserTurn.Content[1].OfText.Text != "user prompt 2" {
 		t.Fatalf("expected second block to be user prompt 2, got %+v", lastUserTurn.Content[1])
+	}
+}
+
+// TestBuildAnthropicMessagesKeepsToolResultFirstInUserTurn pins the Messages API
+// rule that a message following tool_use blocks must begin with its tool_result
+// blocks. A mid-turn system reminder landing between the assistant's tool_use and
+// its tool results used to be merged into the same user turn ahead of them,
+// producing [text, tool_result] — rejected with "…must begin with a matching
+// number of tool_result blocks".
+func TestBuildAnthropicMessagesKeepsToolResultFirstInUserTurn(t *testing.T) {
+	messages := []legacyopenai.ChatCompletionMessage{
+		{Role: legacyopenai.ChatMessageRoleUser, Content: "question"},
+		{Role: legacyopenai.ChatMessageRoleAssistant, ToolCalls: []legacyopenai.ToolCall{
+			{ID: "t1", Function: legacyopenai.FunctionCall{Name: "grep", Arguments: `{"a":1}`}},
+		}},
+		{Role: legacyopenai.ChatMessageRoleSystem, Content: "mid-turn reminder"},
+		{Role: legacyopenai.ChatMessageRoleTool, ToolCallID: "t1", Content: `{"ok":true}`},
+	}
+	_, msgs := buildAnthropicMessages(messages, nil, true)
+	if len(msgs) != 3 {
+		t.Fatalf("expected 3 turns (user, assistant, user), got %d", len(msgs))
+	}
+	last := msgs[2]
+	if last.Role != anthropic.MessageParamRoleUser {
+		t.Fatalf("expected the last turn to be user, got %v", last.Role)
+	}
+	if len(last.Content) != 2 {
+		t.Fatalf("expected 2 blocks (tool_result + <system>), got %d", len(last.Content))
+	}
+	if last.Content[0].OfToolResult == nil {
+		t.Fatalf("the tool_result block must come first, got %+v", last.Content[0])
+	}
+	if last.Content[1].OfText == nil || !strings.Contains(last.Content[1].OfText.Text, "mid-turn reminder") {
+		t.Fatalf("the reminder must follow the tool_result, got %+v", last.Content[1])
+	}
+}
+
+// TestAnthropicTopLevelCacheControlOnlyForEndpointsThatDocumentIt pins the two
+// spellings of the cache breakpoint. The official endpoint takes the markers nested in
+// the request, Moonshot's Messages endpoint documents cache_control as top-level-only
+// and writes no cache entry at all when that field is absent, and any other compatible
+// gateway keeps the nested markers it already understood — nothing extra is added for
+// it.
+func TestAnthropicTopLevelCacheControlOnlyForEndpointsThatDocumentIt(t *testing.T) {
+	cases := []struct {
+		name    string
+		baseURL string
+		wantTop bool
+		// wantTTL is the ttl carried by the nested breakpoints: only the official
+		// endpoint spells out the provider default.
+		wantTTL string
+	}{
+		{name: "official", baseURL: "https://api.anthropic.com", wantTTL: "5m"},
+		{name: "Moonshot documents the top-level form", baseURL: "https://api.moonshot.cn/anthropic", wantTop: true},
+		{name: "another compatible gateway", baseURL: "https://api.deepseek.com/anthropic"},
+	}
+	for _, tc := range cases {
+		params := anthropic.MessageNewParams{
+			System:   []anthropic.TextBlockParam{{Text: "system"}},
+			Messages: []anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock("question"))},
+		}
+		cfg := ConfigState{APIFormat: apiFormatAnthropicMessages, BaseURL: tc.baseURL}
+		markAnthropicPromptCacheBreakpoints(&params, cfg)
+
+		if got := params.CacheControl.Type == "ephemeral"; got != tc.wantTop {
+			t.Fatalf("%s: top-level cache_control present = %v, want %v", tc.name, got, tc.wantTop)
+		}
+		if tc.wantTop && params.CacheControl.TTL != "" {
+			t.Fatalf("%s: a gateway must not receive the ttl field, got %q", tc.name, params.CacheControl.TTL)
+		}
+		if got := string(params.System[0].CacheControl.TTL); got != tc.wantTTL {
+			t.Fatalf("%s: system breakpoint ttl = %q, want %q", tc.name, got, tc.wantTTL)
+		}
+		if params.System[0].CacheControl.Type != "ephemeral" {
+			t.Fatalf("%s: the nested breakpoints must stay in place", tc.name)
+		}
+	}
+}
+
+// TestAnthropicThinkingShapeFollowsTheEndpointFamily pins that the thinking shape
+// is decided by what the endpoint family documents, not by the shape of the model
+// id: MiniMax accepts thinking.type "disabled"/"adaptive" only, so the `enabled` +
+// budget_tokens form would be rejected there, and its `display` field is
+// undocumented so it stays unset.
+func TestAnthropicThinkingShapeFollowsTheEndpointFamily(t *testing.T) {
+	var minimax anthropic.MessageNewParams
+	if enabled := configureAnthropicThinking(&minimax, "MiniMax-M2.7", "high", 8192, anthropicOffPlan{}); !enabled {
+		t.Fatal("effort high on MiniMax must report thinking as enabled")
+	}
+	if minimax.Thinking.OfAdaptive == nil {
+		t.Fatal("MiniMax must receive the adaptive shape: its endpoint does not accept `enabled`")
+	}
+	if minimax.Thinking.OfEnabled != nil {
+		t.Fatal("MiniMax must not receive budget_tokens thinking")
+	}
+	if minimax.Thinking.OfAdaptive.Display != "" {
+		t.Fatalf("MiniMax does not document display; want it unset, got %q", minimax.Thinking.OfAdaptive.Display)
+	}
+	if string(minimax.OutputConfig.Effort) != "high" {
+		t.Fatalf("MiniMax output_config.effort = %q, want high", minimax.OutputConfig.Effort)
+	}
+	// The interleaved-thinking beta gate reads the same predicate, so an adaptive
+	// family must not be handed the flag either.
+	if got := anthropicInterleavedThinkingBeta(true, true, "MiniMax-M2.7"); got != "" {
+		t.Fatalf("interleaved beta = %q, want none for an adaptive-thinking family", got)
+	}
+
+	// A Claude adaptive model keeps the documented display field.
+	var adaptiveClaude anthropic.MessageNewParams
+	configureAnthropicThinking(&adaptiveClaude, "claude-opus-4-6", "high", 8192, anthropicOffPlan{})
+	if adaptiveClaude.Thinking.OfAdaptive == nil || adaptiveClaude.Thinking.OfAdaptive.Display == "" {
+		t.Fatal("a Claude adaptive model must keep display: summarized")
+	}
+
+	// A budget-shape Claude model is untouched.
+	var budgetClaude anthropic.MessageNewParams
+	configureAnthropicThinking(&budgetClaude, "claude-3-7-sonnet-20250219", "high", 8192, anthropicOffPlan{})
+	if budgetClaude.Thinking.OfEnabled == nil {
+		t.Fatal("claude-3.7-sonnet must keep the budget_tokens shape")
+	}
+
+	// A family that documents no thinking parameter never carries the interleaved
+	// beta: there is no thinking block for the flag to apply to.
+	if got := anthropicInterleavedThinkingBeta(true, true, "kimi-k3"); got != "" {
+		t.Fatalf("interleaved beta = %q, want none for a family with no thinking parameter", got)
+	}
+}
+
+// TestAnthropicThinkingFamiliesCarryTheLevelWhereTheEndpointDocumentsIt pins the
+// per-endpoint spelling of a thinking level: the value must reach the field the
+// vendor documents. DeepSeek / 千问 / Kimi K3 all serve an Anthropic-compatible
+// endpoint whose docs put the strength in output_config.effort — DeepSeek ignores
+// budget_tokens, 千问 marks it deprecated, Kimi K3 rejects the thinking parameter —
+// so a budget_tokens-only request left the user's selection out of the body and the
+// provider ran its own default (usually the slowest and most expensive one) while
+// the UI kept showing the chosen level.
+//
+// A model no row matches keeps the Claude budget shape: an unrecognized id on an
+// Anthropic-protocol entry is most likely a relay serving a Claude model, and the
+// official API validates that shape.
+func TestAnthropicThinkingFamiliesCarryTheLevelWhereTheEndpointDocumentsIt(t *testing.T) {
+	tests := []struct {
+		name           string
+		model          string
+		level          string
+		wantConfigured bool
+		wantShape      string // "", "enabled", "adaptive", "disabled"
+		wantEffort     string
+		wantDisplay    string
+	}{
+		{name: "Claude 3.7 keeps the budget shape and no effort field (a 400 there)", model: "claude-3-7-sonnet-20250219", level: "high", wantConfigured: true, wantShape: "enabled", wantDisplay: "summarized"},
+		{name: "Claude adaptive", model: "claude-opus-4-7", level: "high", wantConfigured: true, wantShape: "adaptive", wantEffort: "high", wantDisplay: "summarized"},
+		{name: "MiniMax adaptive without display", model: "MiniMax-M2.7", level: "high", wantConfigured: true, wantShape: "adaptive", wantEffort: "high"},
+		{name: "DeepSeek carries the level in output_config.effort", model: "deepseek-v4-pro", level: "medium", wantConfigured: true, wantShape: "enabled", wantEffort: "high"},
+		{name: "DeepSeek low", model: "deepseek-v4-pro", level: "low", wantConfigured: true, wantShape: "enabled", wantEffort: "low"},
+		{name: "DeepSeek xhigh", model: "deepseek-v4-pro", level: "xhigh", wantConfigured: true, wantShape: "enabled", wantEffort: "high"},
+		{name: "Kimi K3 takes no thinking parameter", model: "kimi-k3", level: "xhigh", wantConfigured: true, wantEffort: "max"},
+		{name: "千问 passes every level through and writes the switch without a budget", model: "qwen3.8-max", level: "xhigh", wantConfigured: true, wantShape: "enabled", wantEffort: "xhigh"},
+		// 智谱 documents the strength in output_config.effort and its Anthropic page has no
+		// field-level list, so the request keeps the documented thinking block and adds the
+		// one field the vendor declares. The row is keyed on the vendor, so every generation
+		// gets the level its row maps to.
+		{name: "智谱 carries the level beside its block", model: "glm-5.3", level: "high", wantConfigured: true, wantShape: "enabled", wantEffort: "high"},
+		{name: "智谱 maps a level its narrow set does not hold", model: "glm-5.2", level: "medium", wantConfigured: true, wantShape: "enabled", wantEffort: "high"},
+		{name: "an older 智谱 id takes the vendor row", model: "glm-4.7", level: "high", wantConfigured: true, wantShape: "enabled", wantEffort: "high"},
+		{name: "MiMo documents no thinking configuration, so nothing is written", model: "mimo-v2.5-pro", level: "high"},
+		{name: "an unknown relay model keeps the Claude shape", model: "some-relay-model", level: "high", wantConfigured: true, wantShape: "enabled", wantDisplay: "summarized"},
+		// A model whose docs say it cannot stop thinking lands on its lowest level,
+		// instead of a field the endpoint never declared (Kimi K3) or rejects (GLM-5.3).
+		{name: "off on Kimi K3 falls back to its lowest level", model: "kimi-k3", level: "off", wantEffort: "low"},
+		{name: "off on GLM-5.3 falls back to its lowest level", model: "glm-5.3", level: "off", wantEffort: "low"},
+		{name: "off keeps the thinking block where the docs declare it", model: "deepseek-v4-pro", level: "off", wantShape: "disabled"},
+		{name: "off on MiMo writes nothing", model: "mimo-v2.5-pro", level: "off"},
+		{name: "auto sends nothing", model: "deepseek-v4-pro", level: "auto"},
+	}
+	// The off plan is resolved from (endpoint, model) exactly as the adapter does it;
+	// this relay is not DeepSeek's own endpoint, so a DeepSeek model keeps the generic
+	// spelling there (see TestAnthropicOffPlanFollowsTheEndpoint).
+	relayCfg := ConfigState{APIFormat: apiFormatAnthropicMessages, BaseURL: "https://relay.example.com"}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var params anthropic.MessageNewParams
+			if got := configureAnthropicThinking(&params, tc.model, tc.level, 8192, anthropicOffPlanFor(relayCfg, tc.model)); got != tc.wantConfigured {
+				t.Fatalf("configured = %v, want %v", got, tc.wantConfigured)
+			}
+			// The shape is read off the marshalled block instead of the union's pointers:
+			// a switchOnly family（千问）carries the same bytes through param.Override, which
+			// sets none of them (see anthropicEnabledSwitchOnlyBlock).
+			shape, display := "", ""
+			if raw, err := json.Marshal(params.Thinking); err == nil {
+				var block struct {
+					Type    string `json:"type"`
+					Display string `json:"display"`
+				}
+				_ = json.Unmarshal(raw, &block)
+				shape, display = block.Type, block.Display
+			}
+			if shape != tc.wantShape {
+				t.Fatalf("thinking shape = %q, want %q (%+v)", shape, tc.wantShape, params.Thinking)
+			}
+			if got := string(params.OutputConfig.Effort); got != tc.wantEffort {
+				t.Fatalf("output_config.effort = %q, want %q", got, tc.wantEffort)
+			}
+			if display != tc.wantDisplay {
+				t.Fatalf("display = %q, want %q", display, tc.wantDisplay)
+			}
+		})
+	}
+}
+
+// TestAnthropicThinkingFamiliesStayUsable fails on a half-filled row instead of
+// letting it reach a request: a row without a shape silently falls back to the Claude
+// budget shape, and a row without an effort resolver drops the level — both look like
+// a working request on the wire.
+func TestAnthropicThinkingFamiliesStayUsable(t *testing.T) {
+	for _, family := range anthropicThinkingFamilies {
+		if strings.TrimSpace(family.name) == "" || family.matches == nil {
+			t.Fatalf("row %+v must carry a name and a matcher", family)
+		}
+		switch family.shape {
+		case anthropicShapeAdaptive, anthropicShapeEnabled, anthropicShapeNone, anthropicShapeUndocumented:
+		default:
+			t.Fatalf("row %q declares shape %q, which is none of the documented shapes", family.name, family.shape)
+		}
+		// A row whose endpoint documents no thinking configuration has no field for the
+		// level to travel in, so it must not carry a resolver nobody would ever call.
+		if family.shape == anthropicShapeUndocumented {
+			if family.effort != nil {
+				t.Fatalf("row %q writes nothing, so an effort resolver would never run", family.name)
+			}
+			continue
+		}
+		if family.effort == nil {
+			t.Fatalf("row %q must carry an effort resolver", family.name)
+		}
+	}
+}
+
+// TestAnthropicRequestCarriesTheVendorEffortField drives the selected level onto the
+// wire: the body must carry output_config.effort, the field these
+// Anthropic-compatible endpoints document for the thinking strength, and a family
+// that documents no thinking parameter must not be handed one.
+// TestAnthropicSwitchOnlyBlockCarriesNoBudget pins the shape a switchOnly family gets:
+// the thinking switch travels, the deprecated budget field does not. The SDK tags
+// budget_tokens as required, so this shape exists only because the adapter writes those
+// bytes itself (see anthropicEnabledSwitchOnlyBlock); getting it wrong would either
+// resend the deprecated field or drop the switch entirely.
+func TestAnthropicSwitchOnlyBlockCarriesNoBudget(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		display bool
+		want    string
+	}{
+		{name: "without display", want: `"thinking":{"type":"enabled"}`},
+		{name: "with display", display: true, want: `"thinking":{"display":"summarized","type":"enabled"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			params := anthropic.MessageNewParams{Model: "qwen3.8-max", MaxTokens: 8192}
+			params.Thinking = anthropicEnabledSwitchOnlyBlock(tc.display)
+			raw, err := json.Marshal(params)
+			if err != nil {
+				t.Fatalf("marshal anthropic params: %v", err)
+			}
+			if !strings.Contains(string(raw), tc.want) {
+				t.Fatalf("thinking block = %s, want it to contain %s", raw, tc.want)
+			}
+			if strings.Contains(string(raw), "budget_tokens") {
+				t.Fatalf("a switchOnly family must not receive the deprecated budget field: %s", raw)
+			}
+		})
+	}
+}
+
+func TestAnthropicRequestCarriesTheVendorEffortField(t *testing.T) {
+	tests := []struct {
+		name       string
+		model      string
+		level      string
+		wantBody   []string
+		absentBody []string
+	}{
+		{
+			name:  "DeepSeek",
+			model: "deepseek-v4-pro",
+			level: "medium",
+			// DeepSeek documents output_config with effort, and accepts the thinking
+			// block while ignoring its budget_tokens.
+			wantBody: []string{`"output_config":{"effort":"high"}`, `"type":"enabled"`},
+		},
+		{
+			// 千问 documents the switch (thinking.type) but marks budget_tokens「即将废弃，新
+			// 接入建议改用 output_config.effort」, so the block goes out without it while the
+			// level still travels in output_config.effort.
+			name:       "千问 sends the switch without the deprecated budget",
+			model:      "qwen3.8-max",
+			level:      "high",
+			wantBody:   []string{`"output_config":{"effort":"high"}`, `"thinking":{"type":"enabled"}`},
+			absentBody: []string{`budget_tokens`},
+		},
+		{
+			name:       "Kimi K3",
+			model:      "kimi-k3",
+			level:      "low",
+			wantBody:   []string{`"output_config":{"effort":"low"}`},
+			absentBody: []string{`"thinking"`},
+		},
+		{
+			// K3 declares no thinking parameter and its docs say thinking cannot be turned
+			// off (“不希望思考太长就把 reasoning_effort 设为 low”), so off lands on the
+			// lowest level instead of a field the endpoint never declared.
+			name:       "Kimi K3 cannot stop thinking",
+			model:      "kimi-k3",
+			level:      "off",
+			wantBody:   []string{`"output_config":{"effort":"low"}`},
+			absentBody: []string{`"thinking"`},
+		},
+		{
+			// GLM-5.3 rejects thinking.type=disabled on every wire it serves.
+			name:       "GLM-5.3 cannot stop thinking",
+			model:      "glm-5.3",
+			level:      "off",
+			wantBody:   []string{`"output_config":{"effort":"low"}`},
+			absentBody: []string{`"thinking"`},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var mu sync.Mutex
+			var bodies []string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				raw, _ := io.ReadAll(r.Body)
+				mu.Lock()
+				bodies = append(bodies, string(raw))
+				mu.Unlock()
+				w.Header().Set("Content-Type", "text/event-stream")
+				w.WriteHeader(http.StatusOK)
+				event := func(name, data string) { fmt.Fprintf(w, "event: %s\ndata: %s\n\n", name, data) }
+				event("message_start", `{"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":10,"output_tokens":1}}}`)
+				event("content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`)
+				event("content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"好的。"}}`)
+				event("content_block_stop", `{"type":"content_block_stop","index":0}`)
+				event("message_delta", `{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":5}}`)
+				event("message_stop", `{"type":"message_stop"}`)
+			}))
+			defer server.Close()
+
+			cfg := ConfigState{
+				APIFormat:       apiFormatAnthropicMessages,
+				BaseURL:         server.URL,
+				APIKey:          "test-key",
+				APIKeys:         []string{"test-key"},
+				MaxTokens:       8192,
+				ReasoningEffort: tc.level,
+			}
+			messages := []legacyopenai.ChatCompletionMessage{{Role: legacyopenai.ChatMessageRoleUser, Content: "hi"}}
+			if _, err := NewApp().streamModelResponse(context.Background(), cfg, tc.model, messages, nil, nil); err != nil {
+				t.Fatalf("streamModelResponse() error = %v", err)
+			}
+
+			mu.Lock()
+			defer mu.Unlock()
+			if len(bodies) != 1 {
+				t.Fatalf("expected 1 request, got %d", len(bodies))
+			}
+			for _, want := range tc.wantBody {
+				if !strings.Contains(bodies[0], want) {
+					t.Fatalf("request body must contain %s: %s", want, bodies[0])
+				}
+			}
+			for _, absent := range tc.absentBody {
+				if strings.Contains(bodies[0], absent) {
+					t.Fatalf("request body must not contain %s: %s", absent, bodies[0])
+				}
+			}
+		})
 	}
 }
 
@@ -1936,7 +2536,7 @@ func TestAnthropicUsageStateMergesByPresence(t *testing.T) {
 // clampThinkingBudgetToAnswerRoom / MIN_ANSWER_TOKENS).
 func TestConfigureAnthropicThinkingSetsDisplayAndKeepsAnswerRoom(t *testing.T) {
 	adaptive := anthropic.MessageNewParams{}
-	if !configureAnthropicThinking(&adaptive, "claude-opus-4-7", "high", 64000) {
+	if !configureAnthropicThinking(&adaptive, "claude-opus-4-7", "high", 64000, anthropicOffPlan{}) {
 		t.Fatal("an adaptive-thinking model must enable thinking")
 	}
 	if adaptive.Thinking.OfAdaptive == nil ||
@@ -1945,7 +2545,7 @@ func TestConfigureAnthropicThinkingSetsDisplayAndKeepsAnswerRoom(t *testing.T) {
 	}
 
 	budgeted := anthropic.MessageNewParams{}
-	if !configureAnthropicThinking(&budgeted, "claude-3-7-sonnet-20250219", "high", 4096) {
+	if !configureAnthropicThinking(&budgeted, "claude-3-7-sonnet-20250219", "high", 4096, anthropicOffPlan{}) {
 		t.Fatal("a budget-thinking model must enable thinking")
 	}
 	if budgeted.Thinking.OfEnabled == nil {
@@ -1959,35 +2559,176 @@ func TestConfigureAnthropicThinkingSetsDisplayAndKeepsAnswerRoom(t *testing.T) {
 	}
 
 	tiny := anthropic.MessageNewParams{}
-	if configureAnthropicThinking(&tiny, "claude-3-7-sonnet-20250219", "high", minAnthropicThinkingBudget) {
+	if configureAnthropicThinking(&tiny, "claude-3-7-sonnet-20250219", "high", minAnthropicThinkingBudget, anthropicOffPlan{}) {
 		t.Fatal("a cap too small for the budget floor plus the answer room must leave thinking unset")
 	}
 }
 
-// TestReasoningEffortOnlySentToReasoningModels: the official endpoints reject an
-// effort value the target model does not accept, and pi writes the field only
-// when the model catalog declares reasoning support
-// (openai-completions.ts:864-935).
-func TestReasoningEffortOnlySentToReasoningModels(t *testing.T) {
-	for _, model := range []string{"gpt-4o", "deepseek-chat", "qwen-plus"} {
-		if modelSupportsReasoningEffort(ConfigState{}, model) {
-			t.Fatalf("%s must not receive a reasoning-effort parameter", model)
-		}
+// TestReasoningEffortForModel pins the per-vendor translation: a level the vendor
+// declares goes out verbatim, a level it does not declare goes through the translation
+// its docs state, and a model of no known vendor keeps the request free of the field.
+//
+// Rows are keyed on the vendor, so the cases below span generations on purpose: every id
+// of a known vendor takes that vendor's row, whether or not the generation's own docs
+// mention the field yet.
+//
+// Before this table existed the capability test was "the model name looks like
+// o*/gpt-5*", so DeepSeek / 智谱 / Kimi received nothing at all: the level the user
+// picked was never in the request body and the provider ran its own default
+// (DeepSeek high, GLM max, Kimi max) while the UI kept showing the selection.
+//
+// The classification reads the model name and nothing else. Every other candidate
+// is a config field that is populated for every request — the reasoning tag
+// defaults to defaultReasoningTag for every model entry — so reading one as a
+// capability declaration would make the gate unconditionally true.
+func TestReasoningEffortForModel(t *testing.T) {
+	cases := []struct{ name, model, level, want string }{
+		{"deepseek passes a declared level through", "deepseek-flash", reasoningEffortLow, reasoningEffortLow},
+		{"deepseek translates medium to high (documented)", "deepseek-flash", reasoningEffortMedium, reasoningEffortHigh},
+		{"deepseek translates xhigh to high (documented)", "deepseek-v4-pro", reasoningEffortXHigh, reasoningEffortHigh},
+		{"deepseek max", "deepseek-flash", reasoningEffortMax, reasoningEffortMax},
+		{"a routing prefix does not change the vendor", "deepseek/deepseek-flash", reasoningEffortMax, reasoningEffortMax},
+		{"智谱 keeps a declared level", "glm-5.3", reasoningEffortLow, reasoningEffortLow},
+		{"智谱 translates medium to high", "glm-5.3", reasoningEffortMedium, reasoningEffortHigh},
+		// The row holds the narrow set every generation takes (low/high/max), so a level
+		// one generation would accept verbatim is translated instead.
+		{"智谱 translates xhigh onto max", "glm-5.2", reasoningEffortXHigh, reasoningEffortMax},
+		{"智谱 max", "glm-5.3-flashx", reasoningEffortMax, reasoningEffortMax},
+		// The vendor is the key, not the version: a generation whose docs predate the
+		// field takes the same row.
+		{"an older 智谱 id takes the vendor row", "glm-4.6", reasoningEffortHigh, reasoningEffortHigh},
+		{"moonshot keeps a declared level", "kimi-k3", reasoningEffortLow, reasoningEffortLow},
+		{"moonshot translates medium to high", "kimi-k3", reasoningEffortMedium, reasoningEffortHigh},
+		{"moonshot translates xhigh to max", "kimi-k3", reasoningEffortXHigh, reasoningEffortMax},
+		{"an older moonshot id takes the vendor row too", "kimi-k2.6", reasoningEffortHigh, reasoningEffortHigh},
+		// 千问's Chat field takes low/medium/xhigh only (no high, no max).
+		{"千问 keeps a declared level", "qwen3.8-flash", reasoningEffortMedium, reasoningEffortMedium},
+		{"千问 translates high onto xhigh", "qwen3.8-max", reasoningEffortHigh, reasoningEffortXHigh},
+		{"千问 clamps max onto its top level", "qwen3.8-max", reasoningEffortMax, reasoningEffortXHigh},
+		{"a non-3.8 qwen id takes the same row", "qwen3.7-max", reasoningEffortHigh, reasoningEffortXHigh},
+		// MiniMax takes the full enum on every generation; the older ones ignore the field
+		// rather than rejecting it.
+		{"MiniMax accepts every level", "MiniMax-M3.1-Flash-Preview", reasoningEffortMax, reasoningEffortMax},
+		{"MiniMax accepts every level on an older generation too", "MiniMax-M2.7", reasoningEffortXHigh, reasoningEffortXHigh},
+		// "off" lands on the value the docs name, or on the vendor's lowest level where
+		// those docs say the models cannot stop thinking at all.
+		{"deepseek spells off as none (documented)", "deepseek-flash", reasoningEffortOff, reasoningEffortOffWireValue},
+		{"千问 spells off as none on the effort wires", "qwen3.8-max", reasoningEffortOff, reasoningEffortOffWireValue},
+		{"智谱 cannot stop thinking, so off becomes its lowest level", "glm-5.3", reasoningEffortOff, reasoningEffortLow},
+		{"moonshot cannot stop thinking, so off becomes its lowest level", "kimi-k3", reasoningEffortOff, reasoningEffortLow},
+		{"MiniMax cannot stop thinking, so off becomes its lowest level", "MiniMax-M3.1-Flash-Preview", reasoningEffortOff, reasoningEffortLow},
+		{"openai reasoning models accept every level", "openai/o3-mini", reasoningEffortXHigh, reasoningEffortXHigh},
+		{"a GPT generation after the pinned ones takes the same row", "gpt-6-astra", reasoningEffortHigh, reasoningEffortHigh},
+		{"a region tag does not change the model", "gpt-5.1@eu", reasoningEffortMedium, reasoningEffortMedium},
+		{"a region tag does not change the vendor", "glm-5.2@eu", reasoningEffortMedium, reasoningEffortHigh},
+		{"a plain chat model of an unknown vendor declares nothing", "gpt-4o", reasoningEffortMax, ""},
+		{"a gateway model of no known vendor declares nothing", "some-unknown-model", reasoningEffortMax, ""},
+		{"auto leaves the decision to the provider", "deepseek-flash", reasoningEffortAuto, ""},
+		{"a misspelled level normalizes to auto and sends nothing", "deepseek-flash", "highh", ""},
 	}
-	for _, model := range []string{"gpt-5.5", "o3-mini", "openai/o4-mini"} {
-		if !modelSupportsReasoningEffort(ConfigState{}, model) {
-			t.Fatalf("%s must be recognised as reasoning-capable", model)
+	for _, c := range cases {
+		if got := reasoningEffortForModel(c.model, c.level); got != c.want {
+			t.Errorf("%s: reasoningEffortForModel(%q, %q) = %q, want %q", c.name, c.model, c.level, got, c.want)
 		}
-	}
-	if !modelSupportsReasoningEffort(ConfigState{ReasoningTag: "reasoning_content"}, "glm-4.7") {
-		t.Fatal("a configured reasoning tag marks the model as reasoning-capable")
 	}
 }
 
-// TestChatAdapterOmitsEffortForNonReasoningModels drives the gate end to end:
-// the shipped default effort is "max", so without the gate every request to a
-// non-reasoning model carried a parameter the model does not accept.
-func TestChatAdapterOmitsEffortForNonReasoningModels(t *testing.T) {
+// TestReasoningEffortFamiliesStayUsable pins the contract every row of the vendor
+// table has to satisfy, so a row added later cannot ship a mapping nobody can use:
+// the accepted levels are non-empty and ascending, every documented translation
+// points at a declared level, and every level the UI can produce resolves to a
+// level the row declares — a level inside the range without a translation is a gap
+// that would otherwise silently drop the field at runtime.
+func TestReasoningEffortFamiliesStayUsable(t *testing.T) {
+	declared := func(family reasoningEffortFamily, level string) bool {
+		for _, accepted := range family.accepts {
+			if accepted == level {
+				return true
+			}
+		}
+		return false
+	}
+	uiLevels := []string{
+		reasoningEffortLow, reasoningEffortMedium, reasoningEffortHigh,
+		reasoningEffortXHigh, reasoningEffortMax,
+	}
+	for _, family := range reasoningEffortFamilies {
+		if family.matches == nil {
+			t.Errorf("family %q has no match rule", family.name)
+			continue
+		}
+		if len(family.accepts) == 0 {
+			t.Errorf("family %q declares no accepted level", family.name)
+			continue
+		}
+		for i, level := range family.accepts {
+			if reasoningEffortRank(level) == 0 {
+				t.Errorf("family %q declares unknown level %q", family.name, level)
+			}
+			if i > 0 && reasoningEffortRank(family.accepts[i-1]) >= reasoningEffortRank(level) {
+				t.Errorf("family %q declares levels out of order: %v", family.name, family.accepts)
+			}
+		}
+		for level, target := range family.alias {
+			if reasoningEffortRank(level) == 0 {
+				t.Errorf("family %q translates an unknown level %q", family.name, level)
+			}
+			if !declared(family, target) {
+				t.Errorf("family %q translates %q to %q, which it does not accept", family.name, level, target)
+			}
+		}
+		for _, level := range uiLevels {
+			if got := family.wireValue(level); !declared(family, got) {
+				t.Errorf("family %q maps %q to %q, which it does not accept", family.name, level, got)
+			}
+		}
+	}
+}
+
+// TestReasoningEffortFamilyWireValueHandlesUnlistedLevels covers the two rules a
+// row needs when the selected level is not one it declares. No shipped row needs
+// the clamp today (each one accepts both ends of the UI's range), so the rows are
+// built here on purpose.
+func TestReasoningEffortFamilyWireValueHandlesUnlistedLevels(t *testing.T) {
+	t.Run("a level above the range clamps onto its highest value", func(t *testing.T) {
+		row := reasoningEffortFamily{
+			name:    "synthetic",
+			matches: func(string) bool { return true },
+			accepts: []string{reasoningEffortLow, reasoningEffortHigh},
+			alias:   map[string]string{reasoningEffortMedium: reasoningEffortHigh},
+		}
+		cases := map[string]string{
+			reasoningEffortLow:    reasoningEffortLow,
+			reasoningEffortMedium: reasoningEffortHigh, // documented translation
+			reasoningEffortHigh:   reasoningEffortHigh,
+			reasoningEffortXHigh:  reasoningEffortHigh, // above the range
+			reasoningEffortMax:    reasoningEffortHigh, // above the range
+		}
+		for level, want := range cases {
+			if got := row.wireValue(level); got != want {
+				t.Errorf("wireValue(%q) = %q, want %q", level, got, want)
+			}
+		}
+	})
+
+	t.Run("an undocumented level inside the range sends nothing", func(t *testing.T) {
+		row := reasoningEffortFamily{
+			name:    "synthetic-gap",
+			matches: func(string) bool { return true },
+			accepts: []string{reasoningEffortLow, reasoningEffortHigh, reasoningEffortMax},
+		}
+		if got := row.wireValue(reasoningEffortMedium); got != "" {
+			t.Fatalf("wireValue(medium) = %q, want empty for a level the row neither accepts nor translates", got)
+		}
+	})
+}
+
+// TestChatAdapterSendsEffortPerVendor drives the table end to end: the shipped
+// default effort is "max", and each vendor now receives exactly what it declares —
+// the parameter for DeepSeek / 智谱 GLM-5.3 / Kimi K3 / OpenAI reasoning models,
+// and nothing at all for a vendor that does not declare the field (the official
+// endpoints reject an effort value the target model does not accept).
+func TestChatAdapterSendsEffortPerVendor(t *testing.T) {
 	var mu sync.Mutex
 	var bodies []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -2008,24 +2749,74 @@ func TestChatAdapterOmitsEffortForNonReasoningModels(t *testing.T) {
 		BaseURL:         server.URL,
 		APIKeys:         []string{"test-key"},
 		ReasoningEffort: "max",
+		// The shipped shape: normalizeReasoningTag gives every model entry a tag, so a
+		// gate that read the tag as a capability declaration would let the parameter
+		// through for every model.
+		ReasoningTag: defaultReasoningTag,
+	}
+	cases := []struct{ model, want string }{
+		{"gpt-4o", ""},
+		// A model of no known vendor keeps the field out: a value the vendor never
+		// declared can only come back as a 400, while leaving it out keeps the
+		// provider's own default.
+		{"some-unknown-model", ""},
+		// The table is keyed on the vendor, not on a version, so every generation of a
+		// known vendor takes its row — including the ones whose docs predate the field
+		// (they ignore or reject it, which is the price of a table that survives the
+		// vendor's next release).
+		{"qwen-plus", `"reasoning_effort":"xhigh"`},
+		{"kimi-k2.6", `"reasoning_effort":"max"`},
+		{"gpt-5.1", `"reasoning_effort":"max"`},
+		{"deepseek-flash", `"reasoning_effort":"max"`},
+		{"glm-5.3", `"reasoning_effort":"max"`},
+		{"kimi-k3", `"reasoning_effort":"max"`},
 	}
 	messages := []legacyopenai.ChatCompletionMessage{{Role: legacyopenai.ChatMessageRoleUser, Content: "hi"}}
-	for _, model := range []string{"gpt-4o", "gpt-5.1"} {
-		if _, err := NewApp().streamModelResponse(context.Background(), cfg, model, messages, nil, nil); err != nil {
-			t.Fatalf("streamModelResponse(%s) error = %v", model, err)
+	for _, c := range cases {
+		if _, err := NewApp().streamModelResponse(context.Background(), cfg, c.model, messages, nil, nil); err != nil {
+			t.Fatalf("streamModelResponse(%s) error = %v", c.model, err)
 		}
 	}
 
 	mu.Lock()
 	defer mu.Unlock()
-	if len(bodies) != 2 {
-		t.Fatalf("expected 2 requests, got %d", len(bodies))
+	if len(bodies) != len(cases) {
+		t.Fatalf("expected %d requests, got %d", len(cases), len(bodies))
 	}
-	if strings.Contains(bodies[0], "reasoning_effort") {
-		t.Fatalf("a non-reasoning model must not receive reasoning_effort: %s", bodies[0])
+	for i, c := range cases {
+		has := strings.Contains(bodies[i], "reasoning_effort")
+		if c.want == "" && has {
+			t.Errorf("%s declares no effort field but received one: %s", c.model, bodies[i])
+		}
+		if c.want != "" && !strings.Contains(bodies[i], c.want) {
+			t.Errorf("%s must receive %s: %s", c.model, c.want, bodies[i])
+		}
 	}
-	if !strings.Contains(bodies[1], `"reasoning_effort":"max"`) {
-		t.Fatalf("a reasoning model must receive the selected effort: %s", bodies[1])
+}
+
+// TestOpenAIResponsesEffortFollowsVendorTable: the Responses wire carries the
+// vendor-resolved level (DeepSeek's documented medium→high here) paired with the
+// summary request, while a model of no known vendor keeps reasoning unset.
+func TestOpenAIResponsesEffortFollowsVendorTable(t *testing.T) {
+	messages := []legacyopenai.ChatCompletionMessage{{Role: legacyopenai.ChatMessageRoleUser, Content: "hi"}}
+	cfg := ConfigState{
+		APIFormat:       apiFormatOpenAIResponses,
+		BaseURL:         "https://api.deepseek.com",
+		MaxTokens:       64,
+		ReasoningEffort: reasoningEffortMedium,
+	}
+	body := buildOpenAIResponsesRequest(cfg, "deepseek-flash", messages, nil, nil)
+	if body.Reasoning.Effort != oa.ReasoningEffort(reasoningEffortHigh) {
+		t.Fatalf("reasoning.effort = %q, want %q (DeepSeek's documented translation)", body.Reasoning.Effort, reasoningEffortHigh)
+	}
+	if body.Reasoning.Summary != oa.ReasoningSummaryAuto {
+		t.Fatalf("reasoning.summary = %q, want auto", body.Reasoning.Summary)
+	}
+
+	cfg.ReasoningEffort = reasoningEffortMax
+	body = buildOpenAIResponsesRequest(cfg, "some-unknown-model", messages, nil, nil)
+	if body.Reasoning.Effort != "" || body.Reasoning.Summary != "" {
+		t.Fatalf("reasoning = %+v, want unset for a model of no known vendor", body.Reasoning)
 	}
 }
 
@@ -2115,20 +2906,56 @@ func TestChatAdapterRequiresStreamTerminator(t *testing.T) {
 	}
 }
 
-func TestOpenAIChatPromptCacheKeyStaysOnOfficialEndpoint(t *testing.T) {
-	official := ConfigState{APIFormat: apiFormatOpenAIChat, BaseURL: openAIOfficialAPIBaseURL, responsesPromptCacheKey: "ally:abc"}
-	key := openAIChatPromptCacheKey(official)
-	if key != "ally:abc" {
-		t.Fatalf("official key = %q, want the session key", key)
+// TestPromptCacheKeyFollowsTheVendorTable pins which requests carry the session-sticky
+// prompt_cache_key: the official API and the vendors whose own docs declare the field —
+// Kimi on Chat + Responses, 智谱 and MiniMax on Responses — and nobody else. A vendor
+// that documents it on one protocol only carries exactly that protocol, and an endpoint
+// whose docs never mention the field receives nothing.
+func TestPromptCacheKeyFollowsTheVendorTable(t *testing.T) {
+	key := "ally:abc"
+	official := ConfigState{APIFormat: apiFormatOpenAIChat, BaseURL: openAIOfficialAPIBaseURL, responsesPromptCacheKey: key}
+	if got := promptCacheKeyForRequest(official, apiFormatOpenAIChat, "gpt-5.6"); got != key {
+		t.Fatalf("official key = %q, want the session key", got)
 	}
-	relay := official
-	relay.BaseURL = "https://relay.example.com/v1"
-	if got := openAIChatPromptCacheKey(relay); got != "" {
-		t.Fatalf("relay key = %q, want empty", got)
+	// The rule belongs to the field, not to the adapter: the Responses path asks the
+	// very same predicate.
+	responsesOfficial := official
+	responsesOfficial.APIFormat = apiFormatOpenAIResponses
+	if got := promptCacheKeyForRequest(responsesOfficial, apiFormatOpenAIResponses, "gpt-5.6"); got != key {
+		t.Fatalf("responses official key = %q, want %q", got, key)
 	}
 
+	relay := ConfigState{APIFormat: apiFormatOpenAIResponses, BaseURL: "https://relay.example.com/v1", responsesPromptCacheKey: key}
+	tests := []struct {
+		name      string
+		apiFormat string
+		model     string
+		want      string
+	}{
+		{name: "Kimi Responses", apiFormat: apiFormatOpenAIResponses, model: "kimi-k3", want: key},
+		{name: "Kimi Chat", apiFormat: apiFormatOpenAIChat, model: "kimi-k2.6", want: key},
+		{name: "智谱 Responses", apiFormat: apiFormatOpenAIResponses, model: "glm-5.3", want: key},
+		{name: "MiniMax Responses", apiFormat: apiFormatOpenAIResponses, model: "MiniMax-M2.7", want: key},
+		{name: "智谱 Chat has no such field", apiFormat: apiFormatOpenAIChat, model: "glm-5.3"},
+		{name: "MiniMax Chat has no such field", apiFormat: apiFormatOpenAIChat, model: "MiniMax-M2.7"},
+		{name: "DeepSeek answers 不支持", apiFormat: apiFormatOpenAIResponses, model: "deepseek-v4-pro"},
+		{name: "an unknown relay model keeps it off", apiFormat: apiFormatOpenAIResponses, model: "some-relay-model"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := relay
+			cfg.APIFormat = tc.apiFormat
+			if got := promptCacheKeyForRequest(cfg, tc.apiFormat, tc.model); got != tc.want {
+				t.Fatalf("key = %q, want %q", got, tc.want)
+			}
+		})
+	}
+
+	// store:false travels with the official key alone: it is an OpenAI request field
+	// with no counterpart on a compatible platform's Chat wire (patchChatRequestFields
+	// takes the flag from promptCachePinStore).
 	body := []byte(`{"model":"m","messages":[{"role":"user","content":"q"}]}`)
-	patched, changed := patchChatRequestFields(body, "", nil, key, false)
+	patched, changed := patchChatRequestFields(body, "", nil, key, true, reasoningStopThinkingNone)
 	if !changed {
 		t.Fatal("expected the official request to gain prompt_cache_key and store")
 	}
@@ -2139,7 +2966,7 @@ func TestOpenAIChatPromptCacheKeyStaysOnOfficialEndpoint(t *testing.T) {
 	if string(payload["prompt_cache_key"]) != `"ally:abc"` || string(payload["store"]) != "false" {
 		t.Fatalf("patched body = %s, want prompt_cache_key + store:false", patched)
 	}
-	if untouched, _ := patchChatRequestFields(body, "", nil, "", false); string(untouched) != string(body) {
+	if untouched, _ := patchChatRequestFields(body, "", nil, "", false, reasoningStopThinkingNone); string(untouched) != string(body) {
 		t.Fatalf("a relay body must stay byte-identical: %s", untouched)
 	}
 }
@@ -2389,34 +3216,93 @@ func TestReasoningWireForAdapter(t *testing.T) {
 		name   string
 		cfg    ConfigState
 		format string
+		model  string
 		effort string
 		want   reasoningWirePlan
 	}{
-		{"empty sends nothing", compatible, apiFormatOpenAIChat, "", reasoningWirePlan{}},
-		{"auto leaves it to the provider", compatible, apiFormatOpenAIChat, reasoningEffortAuto, reasoningWirePlan{}},
+		{"empty sends nothing", compatible, apiFormatOpenAIChat, "deepseek-flash", "", reasoningWirePlan{}},
+		{"auto leaves it to the provider", compatible, apiFormatOpenAIChat, "deepseek-flash", reasoningEffortAuto, reasoningWirePlan{}},
 		{
 			"off asks a compatible Chat endpoint to stop thinking",
-			compatible, apiFormatOpenAIChat, reasoningEffortOff, reasoningWirePlan{DisableThinking: true},
+			compatible, apiFormatOpenAIChat, "deepseek-flash", reasoningEffortOff, reasoningWirePlan{StopThinking: reasoningStopThinkingThinkingDisabled},
 		},
 		{
 			"off aliases resolve to the same plan",
-			compatible, apiFormatOpenAIChat, "disabled", reasoningWirePlan{DisableThinking: true},
+			compatible, apiFormatOpenAIChat, "deepseek-flash", "disabled", reasoningWirePlan{StopThinking: reasoningStopThinkingThinkingDisabled},
 		},
 		{
 			"off is spelled as an effort on the Responses wire",
-			compatible, apiFormatOpenAIResponses, reasoningEffortOff, reasoningWirePlan{Effort: reasoningEffortOffWireValue},
+			compatible, apiFormatOpenAIResponses, "deepseek-flash", reasoningEffortOff, reasoningWirePlan{Effort: reasoningEffortOffWireValue},
 		},
 		{
 			"off is spelled as an effort on the official Chat endpoint",
-			official, apiFormatOpenAIChat, reasoningEffortOff, reasoningWirePlan{Effort: reasoningEffortOffWireValue},
+			official, apiFormatOpenAIChat, "gpt-5.5", reasoningEffortOff, reasoningWirePlan{Effort: reasoningEffortOffWireValue},
 		},
-		{"levels pass through", compatible, apiFormatOpenAIChat, reasoningEffortLow, reasoningWirePlan{Effort: reasoningEffortLow}},
-		{"xhigh passes through", compatible, apiFormatOpenAIResponses, reasoningEffortXHigh, reasoningWirePlan{Effort: reasoningEffortXHigh}},
-		{"max passes through", official, apiFormatOpenAIChat, reasoningEffortMax, reasoningWirePlan{Effort: reasoningEffortMax}},
+		{
+			// Its docs say the model cannot stop thinking at all, so off lands on the lowest
+			// level the endpoint does accept instead of sending nothing — nothing would leave
+			// the provider's own (most expensive) default running.
+			"a model that cannot stop thinking falls back to its lowest level",
+			compatible, apiFormatOpenAIResponses, "glm-5.3", reasoningEffortOff, reasoningWirePlan{Effort: reasoningEffortLow},
+		},
+		{
+			"the same fallback applies on a compatible Chat endpoint",
+			compatible, apiFormatOpenAIChat, "kimi-k3", reasoningEffortOff, reasoningWirePlan{Effort: reasoningEffortLow},
+		},
+		{
+			"MiniMax M3.1 falls back the same way",
+			compatible, apiFormatOpenAIChat, "MiniMax-M3.1-Flash-Preview", reasoningEffortOff, reasoningWirePlan{Effort: reasoningEffortLow},
+		},
+		{
+			// The row is keyed on the vendor: a generation whose docs never declared an off
+			// switch still lands on the lowest level, which is one its docs do accept.
+			"MiniMax cannot stop thinking, so off lands on its lowest level",
+			compatible, apiFormatOpenAIChat, "MiniMax-M3", reasoningEffortOff, reasoningWirePlan{Effort: reasoningEffortLow},
+		},
+		{
+			"a declared level passes through",
+			compatible, apiFormatOpenAIChat, "deepseek-flash", reasoningEffortLow, reasoningWirePlan{Effort: reasoningEffortLow},
+		},
+		{
+			"a level the vendor does not declare is translated",
+			compatible, apiFormatOpenAIChat, "kimi-k3", reasoningEffortXHigh, reasoningWirePlan{Effort: reasoningEffortMax},
+		},
+		{
+			"a model of no known vendor sends nothing",
+			compatible, apiFormatOpenAIChat, "some-unknown-model", reasoningEffortHigh, reasoningWirePlan{},
+		},
+		{
+			// 千问's Chat field takes low/medium/xhigh only: high is translated and a
+			// level above the range clamps onto xhigh.
+			"千问 translates high onto xhigh",
+			compatible, apiFormatOpenAIChat, "qwen3.8-max", reasoningEffortHigh, reasoningWirePlan{Effort: reasoningEffortXHigh},
+		},
+		{
+			"千问 clamps a level above its range onto xhigh",
+			compatible, apiFormatOpenAIChat, "qwen3.8-max", reasoningEffortMax, reasoningWirePlan{Effort: reasoningEffortXHigh},
+		},
+		{
+			"off on 千问 is enable_thinking:false, not the generic thinking field",
+			compatible, apiFormatOpenAIChat, "qwen3.8-max", reasoningEffortOff, reasoningWirePlan{StopThinking: reasoningStopThinkingQwenEnableFalse},
+		},
+		{
+			"MiniMax M3.1 declares every level",
+			compatible, apiFormatOpenAIChat, "MiniMax-M3.1-Flash-Preview", reasoningEffortXHigh, reasoningWirePlan{Effort: reasoningEffortXHigh},
+		},
+		{
+			// 非标准值：这一行按厂商分派，所以连文档里没有该字段的那一代也走同一条规则。
+			"an older MiniMax generation takes the same fallback",
+			compatible, apiFormatOpenAIChat, "MiniMax-M2.7", reasoningEffortOff, reasoningWirePlan{Effort: reasoningEffortLow},
+		},
+		{
+			"a level above the row's narrow set clamps onto its top level",
+			compatible, apiFormatOpenAIResponses, "glm-5.2", reasoningEffortXHigh, reasoningWirePlan{Effort: reasoningEffortMax},
+		},
+		{"max passes through", official, apiFormatOpenAIChat, "gpt-5.5", reasoningEffortMax, reasoningWirePlan{Effort: reasoningEffortMax}},
 	}
 	for _, c := range cases {
-		if got := reasoningWireForAdapter(c.cfg, c.format, c.effort); got != c.want {
-			t.Errorf("%s: reasoningWireForAdapter(%q, %q) = %+v, want %+v", c.name, c.format, c.effort, got, c.want)
+		if got := reasoningWireForAdapter(c.cfg, c.format, c.model, c.effort); got != c.want {
+			t.Errorf("%s: reasoningWireForAdapter(%q, %q, %q) = %+v, want %+v", c.name, c.format, c.model, c.effort, got, c.want)
 		}
 	}
 }

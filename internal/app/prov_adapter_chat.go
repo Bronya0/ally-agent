@@ -44,11 +44,13 @@ func (a *App) streamOpenAIChat(ctx context.Context, cfg ConfigState, model strin
 		turnDetails = payload.chatDetailsByCallID()
 	}
 	reasoningKey := chatReasoningBackfillKey(cfg)
-	// "off" reaches a compatible endpoint as the stop-thinking field the body
-	// rewrite adds below; the official endpoint spells it as an effort value
-	// instead (see reasoningWireForAdapter).
-	reasoningWire := reasoningWireForAdapter(cfg, apiFormatOpenAIChat, cfg.ReasoningEffort)
-	disableThinking := reasoningWire.DisableThinking && modelSupportsReasoningEffort(cfg, model)
+	// The plan owns both spellings of the selected level: an effort value resolved
+	// against this model's vendor, and what a compatible endpoint gets for "off" —
+	// the vendor's stop-thinking field, or its lowest level where the docs say the
+	// model cannot stop thinking (see reasoningWireForAdapter and
+	// reasoningEffortFamilies).
+	reasoningWire := reasoningWireForAdapter(cfg, apiFormatOpenAIChat, model, cfg.ReasoningEffort)
+	stopThinking := reasoningWire.StopThinking
 	streamDone := &sseDoneWatcher{}
 	base := modelHTTPClient(cfg, true, 0)
 	rt := base.Transport
@@ -56,13 +58,14 @@ func (a *App) streamOpenAIChat(ctx context.Context, cfg ConfigState, model strin
 		rt = http.DefaultTransport
 	}
 	base.Transport = &chatRequestRewriteTransport{
-		base:            rt,
-		reasoningKey:    reasoningKey,
-		turnDetails:     turnDetails,
-		headers:         sessionAffinityHeaders(cfg),
-		promptCacheKey:  openAIChatPromptCacheKey(cfg),
-		streamDone:      streamDone,
-		disableThinking: disableThinking,
+		base:           rt,
+		reasoningKey:   reasoningKey,
+		turnDetails:    turnDetails,
+		headers:        sessionAffinityHeaders(cfg),
+		promptCacheKey: promptCacheKeyForRequest(cfg, apiFormatOpenAIChat, model),
+		pinStore:       promptCachePinStore(cfg),
+		streamDone:     streamDone,
+		stopThinking:   stopThinking,
 	}
 	clientCfg.HTTPClient = base
 	client := legacyopenai.NewClientWithConfig(clientCfg)
@@ -83,13 +86,12 @@ func (a *App) streamOpenAIChat(ctx context.Context, cfg ConfigState, model strin
 	} else {
 		streamReq.MaxTokens = cfg.MaxTokens
 	}
-	// Thinking strength: send an effort value only when a level was picked AND
-	// the model accepts the parameter. The normalized selection is sent
-	// unchanged — xhigh and max are declared values of the OpenAI SDK enum
-	// (shared.ReasoningEffortXhigh / ReasoningEffortMax) — while "auto" and
-	// non-reasoning models send nothing (see modelSupportsReasoningEffort and
-	// reasoningWireForAdapter).
-	if reasoningWire.Effort != "" && modelSupportsReasoningEffort(cfg, model) {
+	// Thinking strength: the plan already resolved the level against this model's
+	// vendor (see reasoningEffortFamilies) — verbatim, translated, or clamped onto
+	// what the vendor declares — so a non-empty value is exactly what belongs on
+	// the wire, while "auto" and a vendor that declares no effort field leave it
+	// unset.
+	if reasoningWire.Effort != "" {
 		streamReq.ReasoningEffort = reasoningWire.Effort
 	}
 	if len(tools) > 0 {
@@ -113,6 +115,18 @@ func (a *App) streamOpenAIChat(ctx context.Context, cfg ConfigState, model strin
 	// overloaded 之类瞬时错误,错误信息只有文案、不带状态码)。此时重试
 	// 无重复输出风险;已产出内容的中断交给上层 runChat 做整轮重试。
 	for attempt := 1; err != nil && !emitted && ctx.Err() == nil && attempt <= maxRetries && shouldRetryLLMError(err); attempt++ {
+		// Prefer the Retry-After the transport captured for this attempt. This loop
+		// is the only consumer that can still act on it in a single-key pool: the
+		// outer policies read it off the returned error, but they do not retry a
+		// request that already produced output, and on one key there is nothing to
+		// fail over to. Wrapping keeps the error chain intact (retryAfterError
+		// unwraps) so the classification of the next iteration is unchanged, and the
+		// post-loop wrap below stays out of the way.
+		if retryAfterFromError(err) == 0 {
+			if d := retryAfterCap.get(); d > 0 {
+				err = &retryAfterError{inner: err, after: d}
+			}
+		}
 		wait := llmRetryDelayForError(attempt, err)
 		emitLLMRetryEvent(onEvent, attempt, maxRetries, err, wait)
 		select {
@@ -370,20 +384,6 @@ func isStreamOptionsRejectedError(err error) bool {
 		return false
 	}
 	return strings.Contains(strings.ToLower(err.Error()), "stream_options")
-}
-
-// openAIChatPromptCacheKey returns the session-sticky prompt_cache_key for a
-// Chat Completions request, or "" when the field must not be sent. pi attaches
-// it only when the request goes to api.openai.com (openai-completions.ts:810-814)
-// — the official endpoint is the one place the field is documented, and a
-// compatible gateway may answer an unknown top-level parameter with 400. The
-// value is the same hashed session key the Responses adapter uses, so no raw
-// session id leaves the client.
-func openAIChatPromptCacheKey(cfg ConfigState) string {
-	if !isOfficialOpenAIEndpoint(cfg) {
-		return ""
-	}
-	return strings.TrimSpace(cfg.responsesPromptCacheKey)
 }
 
 func normalizeToolsForOpenAIChat(tools []legacyopenai.Tool) []legacyopenai.Tool {

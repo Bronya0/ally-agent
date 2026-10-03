@@ -16,13 +16,17 @@ import (
 )
 
 // TestAnthropicPromptCacheBreakpointsTtlOnlyOnOfficialEndpoint covers the
-// breakpoint marker itself: the three markers are always placed, while the ttl
-// field is spelled out only for the official endpoint — "5m" is the provider
-// default, so every other endpoint gets the same cache lifetime from the fields
-// it knows and never receives a key it could reject. The marshalled request is
-// asserted because "marker without a ttl" and "no marker" are the same Go value.
+// breakpoint markers: the three nested markers are always placed, the ttl field
+// is spelled out only for the official endpoint — "5m" is the provider default,
+// so every other endpoint gets the same cache lifetime from the fields it knows
+// and never receives a key it could reject — and Moonshot's Messages endpoint
+// carries one marker more, the top-level one, which is the only form it honours
+// (such an endpoint ignores the nested markers and writes no cache entry at all
+// without it; see markAnthropicPromptCacheBreakpoints). Any other compatible
+// gateway keeps exactly the nested three. The marshalled request is asserted
+// because "marker without a ttl" and "no marker" are the same Go value.
 func TestAnthropicPromptCacheBreakpointsTtlOnlyOnOfficialEndpoint(t *testing.T) {
-	build := func(official bool) string {
+	build := func(baseURL string) string {
 		t.Helper()
 		params := anthropic.MessageNewParams{
 			Model:     "claude-3-7-sonnet",
@@ -33,7 +37,7 @@ func TestAnthropicPromptCacheBreakpointsTtlOnlyOnOfficialEndpoint(t *testing.T) 
 				anthropic.NewUserMessage(anthropic.NewTextBlock("question")),
 			},
 		}
-		markAnthropicPromptCacheBreakpoints(&params, official)
+		markAnthropicPromptCacheBreakpoints(&params, ConfigState{APIFormat: apiFormatAnthropicMessages, BaseURL: baseURL})
 		raw, err := json.Marshal(params)
 		if err != nil {
 			t.Fatalf("marshal anthropic params: %v", err)
@@ -41,7 +45,7 @@ func TestAnthropicPromptCacheBreakpointsTtlOnlyOnOfficialEndpoint(t *testing.T) 
 		return string(raw)
 	}
 
-	official := build(true)
+	official := build("https://api.anthropic.com")
 	if got := strings.Count(official, "cache_control"); got != 3 {
 		t.Fatalf("official endpoint: %d breakpoints, want 3 (%s)", got, official)
 	}
@@ -49,12 +53,20 @@ func TestAnthropicPromptCacheBreakpointsTtlOnlyOnOfficialEndpoint(t *testing.T) 
 		t.Fatalf("official endpoint must spell out the provider-default ttl: %s", official)
 	}
 
-	compatible := build(false)
-	if got := strings.Count(compatible, "cache_control"); got != 3 {
-		t.Fatalf("compatible endpoint: %d breakpoints, want 3 (%s)", got, compatible)
+	// Three nested markers plus the top-level one: the endpoint that only reads the
+	// top-level form must still get a usable breakpoint.
+	moonshot := build("https://api.moonshot.cn/anthropic")
+	if got := strings.Count(moonshot, "cache_control"); got != 4 {
+		t.Fatalf("Moonshot: %d breakpoints, want 4 (three nested + the top-level marker) (%s)", got, moonshot)
 	}
-	if strings.Contains(compatible, "ttl") {
-		t.Fatalf("compatible endpoint must not receive the ttl field: %s", compatible)
+	if strings.Contains(moonshot, "ttl") {
+		t.Fatalf("a compatible endpoint must not receive the ttl field: %s", moonshot)
+	}
+
+	// A compatible gateway whose docs declare the nested form only gets no extra key.
+	relay := build("https://relay.example.com/anthropic")
+	if got := strings.Count(relay, "cache_control"); got != 3 {
+		t.Fatalf("relay: %d breakpoints, want the nested 3 (%s)", got, relay)
 	}
 }
 

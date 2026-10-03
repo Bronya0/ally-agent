@@ -116,15 +116,38 @@ func TestBuildStatsDailyBucketsAcrossDays(t *testing.T) {
 	}
 }
 
-func TestRecordTokenStatsUsesFallback(t *testing.T) {
+// TestRecordTokenStatsWithoutUsageCountsOutputOnly: a turn whose provider
+// reported no prompt usage contributes output only. Counting the estimated
+// request size instead would invent input tokens — the estimate covers the whole
+// retained context — and put the dashboard at odds with the footer total, which
+// has always refused to count those.
+func TestRecordTokenStatsWithoutUsageCountsOutputOnly(t *testing.T) {
 	app := NewApp()
-	app.recordTokenStats("model", "/workspace", nil, 120, 30)
+	app.recordTokenStats("model", "/workspace", nil, 30)
 	result := app.GetTokenStats()
-	if result.SummaryToday.InputTokens != 120 || result.SummaryToday.OutputTokens != 30 {
-		t.Fatalf("fallback totals = %d/%d, want 120/30", result.SummaryToday.InputTokens, result.SummaryToday.OutputTokens)
+	if result.SummaryToday.InputTokens != 0 || result.SummaryToday.OutputTokens != 30 {
+		t.Fatalf("totals = %d/%d, want 0/30", result.SummaryToday.InputTokens, result.SummaryToday.OutputTokens)
 	}
 	if len(result.ModelWeek) != 1 || result.ModelWeek[0].Name != "model" {
 		t.Fatalf("model week = %#v, want model", result.ModelWeek)
+	}
+}
+
+// TestRecordLLMUsageFeedsBothSinks pins the single accounting entry point: the
+// footer running total and the token dashboard must be two views of one event, so
+// a single call has to reach both. A route that fed only one of them — what
+// sub-agents and compaction used to do — made the two totals irreconcilable for
+// the same workspace.
+func TestRecordLLMUsageFeedsBothSinks(t *testing.T) {
+	app := NewApp()
+	app.recordLLMUsage("model", "/workspace", &modelUsage{PromptTokens: 100, CompletionTokens: 20}, 0)
+
+	if got := app.GetWorkspaceTokenUsage("/workspace"); got.InputTokens != 100 || got.OutputTokens != 20 {
+		t.Fatalf("workspace total = %#v, want 100/20", got)
+	}
+	summary := app.GetTokenStats().SummaryToday
+	if summary.InputTokens != 100 || summary.OutputTokens != 20 || summary.Requests != 1 {
+		t.Fatalf("dashboard summary = %#v, want 100/20 over 1 request", summary)
 	}
 }
 

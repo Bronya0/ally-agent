@@ -930,37 +930,348 @@ func partialTagMatch(s, tag string) int {
 	return 0
 }
 
-// openAIReasoningModelPattern matches OpenAI reasoning-series model names that
-// require max_completion_tokens instead of max_tokens. It mirrors the anchored
-// patterns of kimi-code (/^o\d(?:$|[-.])/ and /^gpt-5(?:$|[-.])/,
-// openai-legacy.ts:130-133): a family prefix without a version boundary
-// ("gpt-50", "o1preview") must NOT match, while every o-digit series ("o2",
-// "o5", ...) must. Provider-routing prefixes such as "openai/o3-mini" are
-// stripped first (pi routes by endpoint/model catalog instead of the name;
-// stripping keeps the predicate correct for gateway-style model ids).
-var openAIReasoningModelPattern = regexp.MustCompile(`^(?:o\d|gpt-5)(?:$|[-.])`)
+// openAIReasoningFirstMajor is the first GPT generation that declares reasoning_effort
+// and max_completion_tokens: gpt-5 onwards, while gpt-4o / gpt-4.1 reject both.
+const openAIReasoningFirstMajor = 5
 
+// isOpenAIReasoningModelName reports whether this id names an OpenAI reasoning family: the
+// o-series (o1, o3, o4 — any later digit run too) or a GPT generation from
+// openAIReasoningFirstMajor on. It is the OpenAI row of reasoningEffortFamilies as well as
+// the token-param routing, so those two can never disagree about who the OpenAI reasoning
+// family is.
+//
+// The rule reads the version NUMBER instead of pinning a generation (kimi-code pins
+// /^gpt-5/, openai-legacy.ts:130-133): a pinned name answers only for the models that
+// existed the day it was written, so the next one — the model catalog already lists
+// gpt-6-astra — would silently lose both fields, leaving the provider's own default
+// running while the UI kept showing the chosen level. What the pinned form does get right
+// is the boundary, and that stays: a version ends at the id or continues after "-" / "."
+// ("gpt-5", "gpt-5.1", "gpt-5-codex"), so a family prefix such as "gpt-5x" or
+// "o1preview" matches nothing.
 func isOpenAIReasoningModelName(model string) bool {
+	m := baseModelName(model)
+	if rest, ok := strings.CutPrefix(m, "gpt-"); ok {
+		digits, tail := leadingDigits(rest)
+		major, err := strconv.Atoi(digits)
+		return err == nil && major >= openAIReasoningFirstMajor && modelIDBoundary(tail)
+	}
+	if rest, ok := strings.CutPrefix(m, "o"); ok {
+		digits, tail := leadingDigits(rest)
+		return digits != "" && modelIDBoundary(tail)
+	}
+	return false
+}
+
+// leadingDigits splits the leading decimal digits off a model id: "5.1" -> "5", ".1".
+func leadingDigits(s string) (digits, rest string) {
+	i := 0
+	for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+		i++
+	}
+	return s[:i], s[i:]
+}
+
+// modelIDBoundary reports whether a version ends here rather than continuing into a longer
+// token: the end of the id, a "-" or a "." end one, the "x" of "gpt-5x" does not.
+func modelIDBoundary(rest string) bool {
+	return rest == "" || rest[0] == '-' || rest[0] == '.'
+}
+
+// baseModelName normalizes a model id for classification: lowercased, trimmed, with the
+// routing metadata dropped — a provider prefix ("openai/o3-mini", "zhipu/glm-5.3") and a
+// region tag ("gpt-5.1@eu", "claude-opus-4-6@eu" — the model catalog lists both forms) —
+// so the id is judged by the model it actually names.
+func baseModelName(model string) string {
 	m := strings.ToLower(strings.TrimSpace(model))
 	if i := strings.LastIndex(m, "/"); i >= 0 && i+1 < len(m) {
 		m = m[i+1:]
 	}
-	return openAIReasoningModelPattern.MatchString(m)
+	if i := strings.Index(m, "@"); i > 0 {
+		m = m[:i]
+	}
+	return m
 }
 
-// modelSupportsReasoningEffort reports whether the reasoning-effort parameter may
-// be sent for this model. pi gates every thinking/effort branch on the model
-// catalog's reasoning flag and only writes the field when the model declares
-// reasoning support (openai-completions.ts:864-935) — the official endpoints
-// reject an effort value the target model does not accept. Ally has no catalog
-// flag, so the positive signals are the model name (the OpenAI o*/gpt-5*
-// families) and a configured reasoning tag: a non-empty tag means the model was
-// observed to stream a reasoning field, which only reasoning-capable models do.
-// Unknown combinations stay unset instead of risking a rejected request.
-func modelSupportsReasoningEffort(cfg ConfigState, model string) bool {
-	return isOpenAIReasoningModelName(model) || strings.TrimSpace(cfg.ReasoningTag) != ""
+// reasoningEffortFamily declares one vendor's support for the reasoning_effort
+// field: which levels it accepts, the translations its own docs state, and what
+// (if anything) "off" means on that field.
+type reasoningEffortFamily struct {
+	// name is for readability and for naming the offending row in test output.
+	name string
+	// matches reports whether a normalized model name (baseModelName already
+	// dropped any provider prefix) belongs to this vendor. It is keyed on the vendor
+	// brand and never on a model version — see reasoningEffortFamilies.
+	matches func(model string) bool
+	// accepts lists the levels this vendor's endpoints accept, lowest first. Where
+	// generations differ it holds the narrowest set the vendor's docs declare, so any
+	// version that declares the field at all accepts what this row writes.
+	accepts []string
+	// alias holds the translations the vendor's docs state (our level -> its
+	// level). A level inside the accepted range that is neither accepted nor
+	// aliased is a gap in this row, which TestReasoningEffortFamiliesStayUsable
+	// fails on instead of letting it silently drop the field at runtime.
+	alias map[string]string
+	// offValue is the value this vendor's docs name for turning thinking off on the
+	// effort field ("none" for DeepSeek / 千问 / the OpenAI reasoning models). It stays
+	// empty for a vendor whose models cannot stop thinking: the lowest accepted level
+	// is then the only lever its docs offer (see offWireValue).
+	offValue string
 }
 
+// reasoningEffortFamilies is the vendor table, ordered by match priority. A model that
+// matches no row receives no effort field at all: a value the vendor never declared can
+// only come back as a 400, while leaving the field out keeps the provider's own default.
+//
+// A row is keyed on the VENDOR, never on a model version. A version-keyed table (the
+// shape this one started with: glm-5.3 / glm-5.2 / kimi-k3 / qwen3.8 / MiniMax-M3.1)
+// answers only for the models that existed the day it was written: the vendor's next
+// release matches no row, the level the user picked is silently dropped, and the provider
+// runs its own default — the exact failure this table exists to prevent. What follows from
+// keying on the vendor: a row states the vendor's CURRENT documented protocol, so a
+// generation whose docs predate the field may receive a key it does not declare. That
+// trade is spelled out per row.
+//
+// This table is the single source of truth for how a level reaches the wire. The previous
+// implementation decided capability by model name shape ("looks like o*/gpt-5*"), so
+// DeepSeek / 智谱 / Kimi silently received nothing: the user's choice of low was never in
+// the request body and the provider ran its own default (DeepSeek high, GLM max, Kimi
+// max) — the most expensive and slowest setting — while the UI kept showing the selected
+// level.
+//
+// 千问's platform endpoint also serves 别家模型（doc 千问 §6 明列 GLM / Kimi / DeepSeek 系列由
+// 千问直供），而那种组合下说得算的是端点自己的字段表 —— 千问给这些模型声明的是
+// `enable_thinking`，不是 `thinking` / `reasoning_effort`。这张表看不到端点主机，所以
+// 那种组合仍按模型名判厂商：按主机分派要把主机传进每一行，而平台只覆盖部分厂商
+// （GLM 在千问那边走 thinking / thinking_budget），暂不做。
+var reasoningEffortFamilies = []reasoningEffortFamily{
+	{
+		// DeepSeek: reasoning_effort takes none/low/high/max, and its docs state the
+		// translations minimal→low, medium→high, xhigh→high; none is 关闭思考模式.
+		name:    "deepseek",
+		matches: vendorModelPrefix("deepseek"),
+		accepts: []string{reasoningEffortLow, reasoningEffortHigh, reasoningEffortMax},
+		alias: map[string]string{
+			reasoningEffortMedium: reasoningEffortHigh,
+			reasoningEffortXHigh:  reasoningEffortHigh,
+		},
+		offValue: reasoningEffortOffWireValue,
+	},
+	{
+		// 智谱 GLM：档位收 low/high/max（其余输入报错），medium 映射 high、xhigh 映射 max ——
+		// 取这组最窄的集合，任何一代只要声明了该字段就都接受（5.2 那代本身还收
+		// medium/xhigh，收到映射值同样合法）。更早的一代（5.1 及以下、4.x）文档里没有这个
+		// 字段，会收到一个它没声明的键 —— 这是按厂商当前一代取值的代价。
+		//
+		// 关不掉思考：两种写法都只写在上一代的表里 —— thinking.type=disabled（当前一代传了报错）
+		// 与 reasoning_effort 的 none/minimal（= 放弃思考，当前一代只收 max/high/low）；两代都
+		// 接受的只有档位本身，所以 offValue 留空 —— off 落到 low（上一代还会把它映射成 high，
+		// 这正是按厂商取最窄集合要付的代价）。
+		name:    "zhipu",
+		matches: vendorModelPrefix("glm"),
+		accepts: []string{reasoningEffortLow, reasoningEffortHigh, reasoningEffortMax},
+		alias: map[string]string{
+			reasoningEffortMedium: reasoningEffortHigh,
+			reasoningEffortXHigh:  reasoningEffortMax,
+		},
+	},
+	{
+		// Kimi / Moonshot：Chat 顶层 reasoning_effort 收 low/high/max（默认 max），
+		// medium 映射 high、xhigh 映射 max；K2.x 那代文档里没有这个字段。
+		//
+		// 关不掉思考：当前这代始终推理，文档给的办法就是把 reasoning_effort 设为 low
+		// （“K3 的思考无法关闭”），所以 offValue 留空 —— off 落到 low。
+		name:    "moonshot",
+		matches: vendorModelPrefix("kimi", "moonshot"),
+		accepts: []string{reasoningEffortLow, reasoningEffortHigh, reasoningEffortMax},
+		alias: map[string]string{
+			reasoningEffortMedium: reasoningEffortHigh,
+			reasoningEffortXHigh:  reasoningEffortMax,
+		},
+	},
+	{
+		// 千问 Qwen：Chat 的 reasoning_effort 收 low/medium/xhigh（默认 xhigh）——没有 high、
+		// 也没有 max，所以 high 按文档收敛到 xhigh，而 max 比该行的最高档还大，由越界收敛落到
+		// 同一个值；更早的一代文档里只声明开关（enable_thinking），没有这个字段。与
+		// thinking_budget 互斥；Ally 只发档位、不发预算。
+		//
+		// 这条线能真的关掉思考：Chat 走 enable_thinking:false（reasoningStopThinkingFamilies），
+		// Responses 的 reasoning.effort 把 none 列进可取值，所以 offValue 是文档里的 none。
+		name:    "qwen",
+		matches: vendorModelPrefix("qwen"),
+		accepts: []string{reasoningEffortLow, reasoningEffortMedium, reasoningEffortXHigh},
+		alias: map[string]string{
+			reasoningEffortHigh: reasoningEffortXHigh,
+		},
+		offValue: reasoningEffortOffWireValue,
+	},
+	{
+		// MiniMax：reasoning_effort 收 low/medium/high/xhigh/max；更早的 M2.x 那代忽略该字段
+		// （文档原文：非当前一代会被忽略，即不报错）。
+		//
+		// 关不掉思考：当前这代强制开启（传 disabled 或 none 报 400，requires adaptive
+		// thinking），所以 offValue 留空 —— off 落到它档位字段的最低档 low（M3 那代也接受，
+		// 只是不调深度）。
+		name:    "minimax",
+		matches: vendorModelPrefix("minimax"),
+		accepts: []string{
+			reasoningEffortLow, reasoningEffortMedium, reasoningEffortHigh,
+			reasoningEffortXHigh, reasoningEffortMax,
+		},
+	},
+	{
+		// OpenAI reasoning models: the level goes out unchanged (the SDK enum
+		// carries xhigh and max).
+		name:    "openai-reasoning",
+		matches: isOpenAIReasoningModelName,
+		accepts: []string{
+			reasoningEffortLow, reasoningEffortMedium, reasoningEffortHigh,
+			reasoningEffortXHigh, reasoningEffortMax,
+		},
+		offValue: reasoningEffortOffWireValue,
+	},
+}
+
+// vendorModelPrefix builds a match rule for one vendor's model ids: the brands the id may
+// start with, on the normalized name — a vendor with two brand spellings lists both (Kimi's
+// kimi / moonshot), which is why this takes a list rather than one brand. The version
+// suffix is deliberately not part of the key: a rule tight enough to name this year's model
+// is also tight enough to miss the next one.
+func vendorModelPrefix(brands ...string) func(string) bool {
+	return func(model string) bool {
+		base := baseModelName(model)
+		for _, brand := range brands {
+			if strings.HasPrefix(base, brand) {
+				return true
+			}
+		}
+		return false
+	}
+}
+
+// reasoningEffortFamilyFor returns the vendor row classifying this model, if any.
+func reasoningEffortFamilyFor(model string) (reasoningEffortFamily, bool) {
+	base := baseModelName(model)
+	for _, family := range reasoningEffortFamilies {
+		if family.matches != nil && family.matches(base) {
+			return family, true
+		}
+	}
+	return reasoningEffortFamily{}, false
+}
+
+// reasoningEffortForModel resolves the selected level onto the value this model's
+// vendor accepts, or "" when the field must not be sent. "auto" stays silent (the
+// provider decides) and a vendor that declares no effort field stays silent too,
+// but a level the user picked is never dropped on a vendor that does declare the
+// field: it goes out verbatim, through the vendor's documented translation, or
+// clamped onto the vendor's range.
+func reasoningEffortForModel(model, effort string) string {
+	level := normalizeReasoningEffort(effort)
+	if level == reasoningEffortAuto {
+		return ""
+	}
+	family, ok := reasoningEffortFamilyFor(model)
+	if !ok {
+		return ""
+	}
+	if level == reasoningEffortOff {
+		return family.offWireValue()
+	}
+	return family.wireValue(level)
+}
+
+// wireValue maps one canonical level onto this family's accepted values.
+func (f reasoningEffortFamily) wireValue(level string) string {
+	if len(f.accepts) == 0 {
+		return ""
+	}
+	for _, accepted := range f.accepts {
+		if accepted == level {
+			return level
+		}
+	}
+	if mapped := f.alias[level]; mapped != "" {
+		return mapped
+	}
+	// Out of range (below the lowest or above the highest accepted level): clamp
+	// onto the range so a selection can never be sent verbatim to a vendor that
+	// does not know it.
+	if lowest := f.accepts[0]; reasoningEffortRank(level) < reasoningEffortRank(lowest) {
+		return lowest
+	}
+	if highest := f.accepts[len(f.accepts)-1]; reasoningEffortRank(level) > reasoningEffortRank(highest) {
+		return highest
+	}
+	// Inside the declared range, not declared itself and without a documented
+	// translation: this row is incomplete. Sending a value the vendor never
+	// declared is worse than sending none — and the row fails
+	// TestReasoningEffortFamiliesStayUsable instead of reaching a request.
+	return ""
+}
+
+// offWireValue resolves the "关闭思考" selection on this family's effort field: the
+// value its docs name for turning thinking off, or — for a model whose docs say it
+// cannot stop thinking — the vendor's lowest accepted level. Sending nothing there
+// would leave the provider's own default running (on those models the most expensive
+// and slowest setting) while the UI keeps showing "关闭". Empty when the model matches
+// no row at all, i.e. the vendor declares no effort field to write.
+func (f reasoningEffortFamily) offWireValue() string {
+	if f.offValue != "" {
+		return f.offValue
+	}
+	if len(f.accepts) == 0 {
+		return ""
+	}
+	return f.accepts[0]
+}
+
+// offIsSubstitute reports whether offWireValue above is a stand-in rather than a real
+// off, which is the case exactly when the docs name no off value. A compatible Chat
+// endpoint reads it to choose between the vendor's stop-thinking field and the lowest
+// level (see reasoningWireForAdapter).
+func (f reasoningEffortFamily) offIsSubstitute() bool { return f.offValue == "" }
+
+// reasoningEffortRanks orders the canonical levels, which is what lets an
+// out-of-range selection be clamped onto a vendor's range. Unknown levels rank 0.
+var reasoningEffortRanks = map[string]int{
+	reasoningEffortLow:    1,
+	reasoningEffortMedium: 2,
+	reasoningEffortHigh:   3,
+	reasoningEffortXHigh:  4,
+	reasoningEffortMax:    5,
+}
+
+func reasoningEffortRank(level string) int { return reasoningEffortRanks[level] }
+
+// maxCompletionTokenVendors lists the vendors whose Chat endpoint documents
+// max_completion_tokens alone, so "auto" must route the output cap there: MiMo's
+// parameter table has max_completion_tokens (default 1024) and no max_tokens at all,
+// so a request carrying the legacy field leaves the cap at the provider's own default
+// and truncates the answer. Kimi / MiniMax / 千问 also call max_tokens deprecated, but
+// they still document and honour it, so "auto" keeps sending it there — the per-model
+// tokenParam switch is how a user asks for the newer field on those.
+var maxCompletionTokenVendors = []struct {
+	name    string
+	matches func(model string) bool
+}{
+	{name: "mimo", matches: vendorModelPrefix("mimo")},
+}
+
+// vendorUsesMaxCompletionTokens reports whether this model's vendor declares the
+// newer output-cap field (see maxCompletionTokenVendors).
+func vendorUsesMaxCompletionTokens(model string) bool {
+	for _, vendor := range maxCompletionTokenVendors {
+		if vendor.matches != nil && vendor.matches(model) {
+			return true
+		}
+	}
+	return false
+}
+
+// shouldUseMaxCompletionTokens resolves which token-limit field the Chat request
+// carries: an explicit per-model choice wins, otherwise OpenAI's reasoning series
+// (which reject max_tokens) and the vendors that document only the newer field get
+// max_completion_tokens, and everything else keeps max_tokens.
 func shouldUseMaxCompletionTokens(param, model string) bool {
 	switch normalizeTokenParam(param) {
 	case tokenParamMaxCompletionTokens:
@@ -968,7 +1279,7 @@ func shouldUseMaxCompletionTokens(param, model string) bool {
 	case tokenParamMaxTokens:
 		return false
 	default:
-		return isOpenAIReasoningModelName(model)
+		return isOpenAIReasoningModelName(model) || vendorUsesMaxCompletionTokens(model)
 	}
 }
 
@@ -998,8 +1309,108 @@ func isOfficialAnthropicEndpoint(cfg ConfigState) bool {
 	return base == defaultAnthropicMessagesURL || strings.HasPrefix(base, defaultAnthropicMessagesURL+"/")
 }
 
+// isDeepSeekAnthropicEndpoint reports whether this Messages request goes to DeepSeek's
+// own Anthropic-compatible endpoint. DeepSeek is the one platform that spells the
+// thinking switch on that wire as a top-level `reasoning` object instead of the
+// thinking block (docs/provider-api-fields.md DeepSeek §4/§6：思考模式开关 =
+// {"reasoning": {"effort": "none/low/high/max"}}（none 表示关闭思考模式），与 OpenAI
+// 格式不同），而 SDK 没有这个字段 —— 那边要按请求补一个 JSON 键，并且不能再写它认识的
+// thinking 块。
+func isDeepSeekAnthropicEndpoint(cfg ConfigState) bool {
+	return strings.Contains(strings.ToLower(baseURLForAPIFormat(cfg)), "api.deepseek.com")
+}
+
 func isOpenRouterEndpoint(cfg ConfigState) bool {
 	return strings.Contains(strings.ToLower(baseURLForAPIFormat(cfg)), "openrouter")
+}
+
+// promptCacheKeyVendors lists the vendors whose own docs declare the
+// session-sticky prompt_cache_key, and on which wire. The field belongs to the OpenAI
+// protocol: the official API documents it, and three of the six platforms Ally
+// targets document it too (docs/provider-api-fields.md) —
+//   - Kimi: Chat §2（Coding Agent 通常是 session id / task id）与 Responses §3；
+//   - 智谱 GLM: Responses §3（用于集群路由，以提高缓存命中率）；
+//   - MiniMax: Responses §3（Prompt 缓存路由标识）。
+//
+// DeepSeek answers it with 不支持（静默忽略）and 千问 documents it nowhere, so those
+// two keep receiving nothing. A relay built for another vendor matches no row on
+// purpose: omitting the key costs only the sticky route, while a top-level key the
+// endpoint does not know can come back as a 400 (pi attaches it only for
+// api.openai.com, openai-completions.ts:810-814).
+//
+// A vendor that documents the field on one protocol and not the other carries exactly
+// the protocol it documents: MiniMax's own note is 选填…（Chat 协议无此字段）, and
+// 智谱 lists it for Responses alone.
+var promptCacheKeyVendors = []struct {
+	name      string
+	matches   func(model string) bool
+	responses bool
+	chat      bool
+}{
+	{
+		name:      "moonshot",
+		matches:   vendorModelPrefix("kimi", "moonshot"),
+		responses: true,
+		chat:      true,
+	},
+	{
+		name:      "zhipu",
+		matches:   vendorModelPrefix("glm"),
+		responses: true,
+	},
+	{
+		name:      "minimax",
+		matches:   vendorModelPrefix("minimax"),
+		responses: true,
+	},
+}
+
+// vendorDocumentsPromptCacheKey reports whether this vendor's docs declare
+// prompt_cache_key on the given wire (see promptCacheKeyVendors).
+func vendorDocumentsPromptCacheKey(model, apiFormat string) bool {
+	format := normalizeAPIFormat(apiFormat)
+	wantChat := format == apiFormatOpenAIChat
+	wantResponses := format == apiFormatOpenAIResponses
+	if !wantChat && !wantResponses {
+		return false
+	}
+	for _, vendor := range promptCacheKeyVendors {
+		if vendor.matches == nil || !vendor.matches(model) {
+			continue
+		}
+		if (wantChat && vendor.chat) || (wantResponses && vendor.responses) {
+			return true
+		}
+	}
+	return false
+}
+
+// promptCacheKeyForRequest returns the session-sticky prompt_cache_key for a request
+// on one of the OpenAI protocols, or "" when the field must not be sent. Both adapters
+// ask this one predicate, because the rule belongs to the field and not to the adapter:
+// the official API and the vendors in promptCacheKeyVendors receive the key, every
+// other endpoint receives nothing. The value is the hashed session key, so no raw
+// session id leaves the client. Sticky routing for a gateway that documents a header of
+// its own travels in sessionAffinityHeaders instead.
+func promptCacheKeyForRequest(cfg ConfigState, apiFormat, model string) string {
+	key := strings.TrimSpace(cfg.responsesPromptCacheKey)
+	if key == "" {
+		return ""
+	}
+	if isOfficialOpenAIEndpoint(cfg) || vendorDocumentsPromptCacheKey(model, apiFormat) {
+		return key
+	}
+	return ""
+}
+
+// promptCachePinStore reports whether this request may also pin `store: false`, the
+// field that keeps a response from being retained server-side. It is an official OpenAI
+// request field (pi pins it to false, openai-completions.ts:810-824); no platform in
+// docs/provider-api-fields.md declares it on a Chat wire — DeepSeek reports it as always
+// false in its responses and the others list it for Responses alone — so a compatible
+// Chat endpoint receives the routing key without it.
+func promptCachePinStore(cfg ConfigState) bool {
+	return isOfficialOpenAIEndpoint(cfg)
 }
 
 // sessionAffinityHeaders returns the sticky-routing headers that keep one
@@ -1374,9 +1785,13 @@ func (acc *toolCallAccumulator) resolve(delta legacyopenai.ToolCall) (int, toolC
 	}
 	// Rule 1: an id no open call owns starts a new call — unless the index still
 	// points at a call that is waiting for the provider id, because some relays
-	// send the id only after the call has already started.
+	// send the id only after the call has already started. The name question of
+	// rule 2 is asked here too: a relay that reuses one index for two calls names
+	// the second one outright, and adopting its id onto the first call would splice
+	// the two into one broken call (name and arguments together) instead of opening
+	// the call the fragment actually declares.
 	if id != "" && !hasID {
-		if hasIndex && acc.synthetic[slotByIndex] {
+		if hasIndex && acc.synthetic[slotByIndex] && nameContinues(acc.calls[slotByIndex].Function.Name, name) {
 			return slotByIndex, toolCallAdoptID
 		}
 		return 0, toolCallAppend
@@ -1598,6 +2013,99 @@ func normalizeReasoningEffort(value string) string {
 	}
 }
 
+// reasoningStopThinking names the shape of the stop-thinking request a Chat call
+// carries for the "off" level. It is a named value rather than the JSON payload so the
+// wire plan stays comparable (the tests compare plans wholesale); the payloads live in
+// one table next to the request rewrite (reasoningStopThinkingFields).
+type reasoningStopThinking string
+
+const (
+	// reasoningStopThinkingNone: this endpoint declares no stop-thinking field anywhere
+	// (MiMo), so nothing is written instead of a key the endpoint does not even know
+	// (see reasoningStopThinkingFamilies). A vendor whose field exists but does nothing
+	// with it is deliberately not this case: it keeps its lowest effort level instead
+	// (see offIsSubstitute).
+	reasoningStopThinkingNone reasoningStopThinking = ""
+	// reasoningStopThinkingThinkingDisabled: `thinking: {"type": "disabled"}` — the
+	// spelling DeepSeek documents (its own sample passes it through extra_body, because
+	// the OpenAI Chat schema has no such field) and that most compatible endpoints read.
+	reasoningStopThinkingThinkingDisabled reasoningStopThinking = "thinking_disabled"
+	// reasoningStopThinkingQwenEnableFalse: `enable_thinking: false` — 千问's spelling.
+	// Its schema has no `thinking` parameter at all, so the generic field would be a
+	// no-op there.
+	reasoningStopThinkingQwenEnableFalse reasoningStopThinking = "enable_thinking_false"
+)
+
+// reasoningStopThinkingFamilies is the vendor table for the "off" level on a Chat
+// wire: which field the request writes, or nothing at all where the endpoint declares
+// no such field (MiMo). A model no row matches keeps the DeepSeek-style
+// thinking:{"type":"disabled"}, which is what today's compatible endpoints read.
+//
+// Every row is keyed on the vendor, never on a model version (see
+// reasoningEffortFamilies for why). A vendor whose models cannot stop thinking does not
+// belong here at all: 智谱 / Kimi / MiniMax reject that field or never declared it, so
+// "off" lands on their lowest effort level instead (see reasoningWireForAdapter). What
+// stays is a vendor with exactly one switch on this wire (千问) or none anywhere (MiMo).
+var reasoningStopThinkingFamilies = []struct {
+	name     string
+	matches  func(model string) bool
+	spelling reasoningStopThinking
+}{
+	{
+		// 千问 opens and closes thinking with enable_thinking (boolean); its Chat
+		// schema lists no `thinking` parameter, so this is the switch on that wire.
+		// 文档的适用范围清单逐个点名型号，没有列最新一代，但它那档写的是“混合模式，可按
+		// 请求开关”，Chat 侧能表达开关的字段只有这一个，所以照发。
+		name:     "qwen",
+		matches:  vendorModelPrefix("qwen"),
+		spelling: reasoningStopThinkingQwenEnableFalse,
+	},
+	{
+		// MiMo documents no thinking switch on either wire: its Messages parameter table
+		// lists model / messages / max_tokens / system / temperature / top_p / stream /
+		// stop_sequences, its OpenAI-compatible page only the seven sampling parameters,
+		// and its §6 states that no reasoning_effort / thinking / enable_thinking field
+		// exists anywhere on the site (it does document reasoning_content on the response
+		// side, which needs no request field). "Off" therefore cannot be expressed there,
+		// and writing a field the endpoint never declared would only be ignored while the
+		// model keeps reasoning, so nothing is sent.
+		name:     "mimo",
+		matches:  vendorModelPrefix("mimo"),
+		spelling: reasoningStopThinkingNone,
+	},
+}
+
+// reasoningStopThinkingFor returns the spelling the "off" level uses on this model's
+// endpoint.
+func reasoningStopThinkingFor(model string) reasoningStopThinking {
+	for _, family := range reasoningStopThinkingFamilies {
+		if family.matches != nil && family.matches(model) {
+			return family.spelling
+		}
+	}
+	return reasoningStopThinkingThinkingDisabled
+}
+
+// reasoningOffHasNoEffect reports whether this model's endpoint declares no
+// stop-thinking switch at all (MiMo: its docs list no reasoning_effort / thinking /
+// enable_thinking anywhere), in which case the off branch writes nothing — a key the
+// endpoint never declared would only be ignored while the model kept reasoning.
+//
+// It is deliberately *not* the rule for the other two outcomes of "off":
+//   - a vendor that rejects the off request outright (kimi-k2.7-code answers 400, so the
+//     request says what the user asked and the user picks something else);
+//   - a vendor that still has a level to fall back on (GLM-5.3, Kimi K3, MiniMax M3.1
+//     land on their lowest; see offIsSubstitute). MiniMax M2.x is the price of a
+//     vendor-keyed row: it ignores the level its M3.1 sibling honours, so "off" writes a
+//     field that changes nothing there, and covering it would mean splitting the vendor
+//     by generation — the mistake these tables exist to avoid.
+//
+// The fact belongs to the vendor rather than to one wire, so the Anthropic adapter
+// reads the same predicate even though it spells the field differently.
+func reasoningOffHasNoEffect(model string) bool {
+	return reasoningStopThinkingFor(model) == reasoningStopThinkingNone
+}
+
 // reasoningWirePlan is what the selected thinking level puts on a non-Anthropic
 // wire. It is the single mapping for every level, so an adapter never decides a
 // spelling of its own.
@@ -1606,35 +2114,46 @@ type reasoningWirePlan struct {
 	// reasoning_effort, Responses: reasoning.effort); "" means the field must not
 	// be sent at all.
 	Effort string
-	// DisableThinking adds the stop-thinking field —
-	// `thinking: {"type": "disabled"}` — to a Chat Completions body.
-	DisableThinking bool
+	// StopThinking is the field the "off" level writes on a Chat Completions
+	// request; reasoningStopThinkingNone means nothing is written.
+	StopThinking reasoningStopThinking
 }
 
 // reasoningWireForAdapter maps the configured level to the fields this request
-// carries. Every level is preserved unchanged, including xhigh and max; the
-// provider is responsible for rejecting a level it does not support.
+// carries. The level is resolved against the model's vendor first (see
+// reasoningEffortFamilies), so a vendor that declares the field receives the level
+// it can honour — verbatim, translated, or clamped — and a vendor that declares
+// nothing receives nothing at all.
 //
-// "off" is the one level with no shared spelling, so it is resolved per wire:
-//   - Responses: effort "none" — DeepSeek documents it as the way to turn
-//     thinking off, and it is the only reasoning field that protocol has.
-//   - Chat on a compatible endpoint: `thinking: {"type": "disabled"}`, the field
-//     DeepSeek documents and whose own sample passes through extra_body, because
-//     the OpenAI Chat schema has no such field (the request rewrite adds it).
-//   - Chat on the official OpenAI API: its own enum value instead, since that
-//     endpoint rejects an unknown field outright.
-func reasoningWireForAdapter(cfg ConfigState, apiFormat, effort string) reasoningWirePlan {
+// "off" is the one level with no shared spelling, and the protocol decides its
+// spelling:
+//   - Responses, and the official OpenAI Chat endpoint: an effort value — the
+//     vendor's own off value ("none" for DeepSeek and the OpenAI reasoning models),
+//     or the vendor's lowest level where the docs say the model cannot stop thinking.
+//   - Chat on a compatible endpoint: the vendor's own spelling of the stop-thinking
+//     request (see reasoningStopThinkingFamilies) — `thinking: {"type": "disabled"}`,
+//     the field DeepSeek documents and whose own sample passes through extra_body, for
+//     most of them, `enable_thinking: false` for 千问, and nothing at all where the
+//     endpoint documents the field as ineffective. The request rewrite adds it. A model
+//     whose docs say it cannot stop thinking skips that field entirely and lands on its
+//     lowest level instead (GLM-5.3 / Kimi K3 / MiniMax M3.1): the field is either one
+//     the endpoint never declared or one it rejects, and the level is the lever its docs
+//     do offer.
+func reasoningWireForAdapter(cfg ConfigState, apiFormat, model, effort string) reasoningWirePlan {
 	level := normalizeReasoningEffort(effort)
-	switch level {
-	case reasoningEffortAuto:
-		return reasoningWirePlan{}
-	case reasoningEffortOff:
-		if normalizeAPIFormat(apiFormat) == apiFormatOpenAIResponses || isOfficialOpenAIEndpoint(cfg) {
-			return reasoningWirePlan{Effort: reasoningEffortOffWireValue}
+	if level == reasoningEffortOff && !reasoningOffTravelsAsEffort(cfg, apiFormat) {
+		if family, ok := reasoningEffortFamilyFor(model); ok && family.offIsSubstitute() {
+			return reasoningWirePlan{Effort: family.offWireValue()}
 		}
-		return reasoningWirePlan{DisableThinking: true}
+		return reasoningWirePlan{StopThinking: reasoningStopThinkingFor(model)}
 	}
-	return reasoningWirePlan{Effort: level}
+	return reasoningWirePlan{Effort: reasoningEffortForModel(model, level)}
+}
+
+// reasoningOffTravelsAsEffort reports whether this request spells "off" as an
+// effort value rather than as the stop-thinking field.
+func reasoningOffTravelsAsEffort(cfg ConfigState, apiFormat string) bool {
+	return normalizeAPIFormat(apiFormat) == apiFormatOpenAIResponses || isOfficialOpenAIEndpoint(cfg)
 }
 
 func normalizeTokenParam(value string) string {

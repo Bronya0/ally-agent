@@ -489,7 +489,7 @@ func TestPatchReasoningContentFields(t *testing.T) {
 	body := []byte(`{"model":"m","messages":[{"role":"user","content":"q1"},{"role":"assistant","content":"plain history"},{"role":"assistant","content":"","tool_calls":[{"id":"c1"}]},{"role":"tool","tool_call_id":"c1","content":"ok"}]}`)
 	// Thinking-mode replay is on (the adapter passes the resolved wire key);
 	// an empty key would mean replay is off and nothing may be backfilled.
-	patched, changed := patchChatRequestFields(body, defaultReasoningTag, nil, "", false)
+	patched, changed := patchChatRequestFields(body, defaultReasoningTag, nil, "", false, reasoningStopThinkingNone)
 	if !changed {
 		t.Fatal("expected the assistant messages to gain reasoning_content")
 	}
@@ -517,7 +517,7 @@ func TestPatchReasoningContentFields(t *testing.T) {
 	// Dialect test: when the configured dialect is "reasoning" (vLLM style),
 	// the empty field must be written under that dialect.
 	vllmBody := []byte(`{"model":"m","messages":[{"role":"user","content":"q"},{"role":"assistant","content":"","tool_calls":[{"id":"c2"}]},{"role":"tool","tool_call_id":"c2","content":"ok"}]}`)
-	vllmPatched, changed := patchChatRequestFields(vllmBody, "reasoning", nil, "", false)
+	vllmPatched, changed := patchChatRequestFields(vllmBody, "reasoning", nil, "", false, reasoningStopThinkingNone)
 	if !changed {
 		t.Fatal("expected the assistant message to be patched under the configured dialect")
 	}
@@ -548,7 +548,7 @@ func TestPatchReasoningContentFieldsCoversRestoredHistory(t *testing.T) {
 		`{"role":"assistant","content":"answer"},` +
 		`{"role":"assistant","content":"spoken","reasoning_content":"real trace"},` +
 		`{"role":"user","content":"q2"}]}`)
-	patched, changed := patchChatRequestFields(body, defaultReasoningTag, nil, "", false)
+	patched, changed := patchChatRequestFields(body, defaultReasoningTag, nil, "", false, reasoningStopThinkingNone)
 	if !changed {
 		t.Fatal("a restored history must gain the missing reasoning fields")
 	}
@@ -572,40 +572,74 @@ func TestPatchReasoningContentFieldsCoversRestoredHistory(t *testing.T) {
 }
 
 // TestPatchChatRequestFieldsAddsStopThinkingField: the "off" level reaches a
-// compatible Chat endpoint as thinking:{"type":"disabled"} — the field DeepSeek
-// documents and passes through extra_body in their own sample, because the typed
-// OpenAI Chat schema has no such field. It is a top-level parameter, so the
-// message prefix stays untouched, it is written once, and it never overwrites a
-// field the caller already set.
+// compatible Chat endpoint in the spelling the model's vendor documents —
+// thinking:{"type":"disabled"} (the field DeepSeek documents and passes through
+// extra_body in its own sample), enable_thinking:false for 千问, and nothing at all
+// where the endpoint documents the field as ineffective (MiniMax M2.x). Every
+// spelling is a top-level parameter, so the message prefix stays untouched, it is
+// written once, and it never overwrites a field the caller already set.
 func TestPatchChatRequestFieldsAddsStopThinkingField(t *testing.T) {
-	body := []byte(`{"model":"m","messages":[{"role":"user","content":"q"}]}`)
-	patched, changed := patchChatRequestFields(body, defaultReasoningTag, nil, "", true)
-	if !changed {
-		t.Fatal("expected the body to gain the stop-thinking field")
+	tests := []struct {
+		name      string
+		spelling  reasoningStopThinking
+		wantKey   string
+		wantValue string
+	}{
+		{
+			name:      "the DeepSeek spelling",
+			spelling:  reasoningStopThinkingThinkingDisabled,
+			wantKey:   "thinking",
+			wantValue: `{"type":"disabled"}`,
+		},
+		{
+			name:      "千问's spelling",
+			spelling:  reasoningStopThinkingQwenEnableFalse,
+			wantKey:   "enable_thinking",
+			wantValue: `false`,
+		},
 	}
-	var payload map[string]json.RawMessage
-	if err := json.Unmarshal(patched, &payload); err != nil {
-		t.Fatalf("unmarshal patched body: %v", err)
-	}
-	if got := string(payload["thinking"]); got != `{"type":"disabled"}` {
-		t.Fatalf("thinking = %s, want {\"type\":\"disabled\"}", got)
-	}
-	if strings.Contains(string(patched), "reasoning_content") {
-		t.Fatalf("the stop-thinking field must not drag a reasoning placeholder along: %s", patched)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			body := []byte(`{"model":"m","messages":[{"role":"user","content":"q"}]}`)
+			patched, changed := patchChatRequestFields(body, defaultReasoningTag, nil, "", false, tc.spelling)
+			if !changed {
+				t.Fatal("expected the body to gain the stop-thinking field")
+			}
+			var payload map[string]json.RawMessage
+			if err := json.Unmarshal(patched, &payload); err != nil {
+				t.Fatalf("unmarshal patched body: %v", err)
+			}
+			if got := string(payload[tc.wantKey]); got != tc.wantValue {
+				t.Fatalf("%s = %s, want %s", tc.wantKey, got, tc.wantValue)
+			}
+			if strings.Contains(string(patched), "reasoning_content") {
+				t.Fatalf("the stop-thinking field must not drag a reasoning placeholder along: %s", patched)
+			}
+
+			// Idempotent: presence is what the provider validates, so the second pass
+			// must leave the body byte-identical.
+			if again, changed := patchChatRequestFields(patched, defaultReasoningTag, nil, "", false, tc.spelling); changed {
+				t.Fatalf("second patch must be a no-op, got %s", again)
+			}
+
+			// A field the caller already set wins.
+			explicit := []byte(`{"model":"m","messages":[],"thinking":{"type":"enabled"}}`)
+			kept, _ := patchChatRequestFields(explicit, defaultReasoningTag, nil, "", false, tc.spelling)
+			if !strings.Contains(string(kept), `"thinking":{"type":"enabled"}`) {
+				t.Fatalf("an existing thinking field must survive: %s", kept)
+			}
+		})
 	}
 
-	// Idempotent: presence is what the provider validates, so the second pass
-	// must leave the body byte-identical.
-	if again, changed := patchChatRequestFields(patched, defaultReasoningTag, nil, "", true); changed {
-		t.Fatalf("second patch must be a no-op, got %s", again)
-	}
-
-	// A field the caller already set wins.
-	explicit := []byte(`{"model":"m","messages":[],"thinking":{"type":"enabled"}}`)
-	kept, _ := patchChatRequestFields(explicit, defaultReasoningTag, nil, "", true)
-	if !strings.Contains(string(kept), `"thinking":{"type":"enabled"}`) {
-		t.Fatalf("an existing thinking field must survive: %s", kept)
-	}
+	// An endpoint whose docs call the field ineffective must not be told anything:
+	// writing it would state something untrue while thinking keeps running and is
+	// still billed.
+	t.Run("a spelling that means nothing writes nothing", func(t *testing.T) {
+		body := []byte(`{"model":"m","messages":[{"role":"user","content":"q"}]}`)
+		if patched, changed := patchChatRequestFields(body, defaultReasoningTag, nil, "", false, reasoningStopThinkingNone); changed {
+			t.Fatalf("no field may be written, got %s", patched)
+		}
+	})
 }
 
 // TestChatReasoningBackfillKey: the placeholder is written for every endpoint
@@ -877,7 +911,7 @@ func TestPatchChatRequestFieldsAddsContent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal details: %v", err)
 	}
-	patched, changed := patchChatRequestFields(body, "", map[string]json.RawMessage{"c1": details}, "", false)
+	patched, changed := patchChatRequestFields(body, "", map[string]json.RawMessage{"c1": details}, "", false, reasoningStopThinkingNone)
 	if !changed {
 		t.Fatal("expected the tool-call and tool messages to be patched")
 	}
@@ -913,7 +947,7 @@ func TestPatchChatRequestFieldsAddsContent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal request: %v", err)
 	}
-	if _, changed := patchChatRequestFields(noTurn, "", map[string]json.RawMessage{"c1": details}, "", false); changed {
+	if _, changed := patchChatRequestFields(noTurn, "", map[string]json.RawMessage{"c1": details}, "", false, reasoningStopThinkingNone); changed {
 		t.Fatal("a history without a matching tool turn must not receive reasoning fields")
 	}
 }
@@ -946,8 +980,8 @@ func TestPatchChatRequestFieldsDetailsPerTurn(t *testing.T) {
 	)
 	turn2 := map[string]any{"model": "m", "messages": turn2Messages}
 
-	patched1, _ := patchChatRequestFields(marshal(turn1), "", map[string]json.RawMessage{"c1": details}, "", false)
-	patched2, _ := patchChatRequestFields(marshal(turn2), "", map[string]json.RawMessage{"c1": details, "c2": details}, "", false)
+	patched1, _ := patchChatRequestFields(marshal(turn1), "", map[string]json.RawMessage{"c1": details}, "", false, reasoningStopThinkingNone)
+	patched2, _ := patchChatRequestFields(marshal(turn2), "", map[string]json.RawMessage{"c1": details, "c2": details}, "", false, reasoningStopThinkingNone)
 	var payload1, payload2 struct {
 		Messages []json.RawMessage `json:"messages"`
 	}

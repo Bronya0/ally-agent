@@ -6,6 +6,8 @@ frontend/wailsjs/
 bin/
 build/bin/
 frontend/dist/
+# 在仓库根直接 go build 会按模块名产出这个二进制（wails3 build 走 bin/）
+/ally-dev
 
 # ── Dependencies ──
 frontend/node_modules/

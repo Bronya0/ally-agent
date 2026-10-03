@@ -78,6 +78,43 @@ func (a *App) compactSessionRunning(sessionID string) bool {
 	return running
 }
 
+// autoCompactAllowed reports whether the threshold tier may run another summary
+// request for this session. A successful compaction rearms it; the overflow tier
+// never consults it.
+func (a *App) autoCompactAllowed(sessionID string) bool {
+	return a.compactFailureCount(sessionID) < maxConsecutiveCompactFailures
+}
+
+// compactFailureCount / noteCompactFailure / clearCompactFailures are the only
+// readers and writers of a.compactFailures. The write path carries the same
+// lazy-init guard as compactingSessions: a nil map write while a.mu is held
+// panics, and the panic leaves the mutex locked forever — App instances built
+// outside NewApp (tests) must not take the process down with them.
+func (a *App) compactFailureCount(sessionID string) int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.compactFailures[sessionID]
+}
+
+func (a *App) noteCompactFailure(sessionID string) int {
+	a.mu.Lock()
+	if a.compactFailures == nil {
+		a.compactFailures = map[string]int{}
+	}
+	a.compactFailures[sessionID]++
+	failures := a.compactFailures[sessionID]
+	a.mu.Unlock()
+	return failures
+}
+
+func (a *App) clearCompactFailures(sessionID string) {
+	a.mu.Lock()
+	if a.compactFailures != nil {
+		delete(a.compactFailures, sessionID)
+	}
+	a.mu.Unlock()
+}
+
 // CompactSession compacts the conversation history for a session. Manual
 // compaction follows the SAME single strategy as the automatic trigger and the
 // overflow recovery (see compactSession): one LLM summary that rewrites the
@@ -222,6 +259,28 @@ const (
 // real compaction failure.
 var errHistoryTooShortToCompact = errors.New("history is too short to compact")
 
+// maxConsecutiveCompactFailures is the threshold tier's circuit breaker; it
+// matches ZCode's MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES. The threshold decision
+// runs at the top of every agent step, so once a summary request fails for a
+// reason that does not fix itself (provider rejection, truncated summary,
+// timeout) an unbounded trigger pays for a fresh long-context summary request on
+// every remaining step of the same run. Overflow recovery is deliberately
+// exempt: it runs after the provider already rejected the request, so it is the
+// last resort and must stay available.
+const maxConsecutiveCompactFailures = 3
+
+// errAutoCompactCircuitOpen is the threshold tier's "we already tried and failed
+// maxConsecutiveCompactFailures times" outcome. It is a skip, not an event: every
+// failure that opened the breaker was already reported to the UI once.
+var errAutoCompactCircuitOpen = errors.New("auto compaction paused after repeated failures")
+
+// isCompactSkip classifies the threshold tier's non-events: a history too short
+// to summarize is a healthy no-op, and an open breaker is the deliberate stop
+// above. Both must stay out of the UI error path.
+func isCompactSkip(err error) bool {
+	return errors.Is(err, errHistoryTooShortToCompact) || errors.Is(err, errAutoCompactCircuitOpen)
+}
+
 // compactRunHistory summarizes history and rebuilds the request message list
 // from the compacted result: system context, then the compacted history, then
 // the current user turn. The compaction call itself carries the trailing user
@@ -231,6 +290,12 @@ var errHistoryTooShortToCompact = errors.New("history is too short to compact")
 // reason labels the compact:start / run:compacted event pair so the UI can tell
 // a threshold compaction from the context-overflow recovery.
 func (a *App) compactRunHistory(ctx context.Context, cfg ConfigState, sessionID, reason string, req ChatRequest, history []openai.ChatCompletionMessage, tokensBefore int) ([]openai.ChatCompletionMessage, map[string]any, error) {
+	// 熔断只拦阈值档（对齐 zcode 的 MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES）：
+	// 阈值判断在每个 step 重跑，失败一次不拦就会逐步重付一次长上下文总结请求；
+	// 溢出档仍要试，它是请求被拒后的最后一根救命绳。
+	if reason == compactReasonThreshold && !a.autoCompactAllowed(sessionID) {
+		return nil, nil, errAutoCompactCircuitOpen
+	}
 	h := sanitizeHistoryMessages(history)
 	if len(h) <= 2 {
 		return nil, nil, errHistoryTooShortToCompact
@@ -238,8 +303,15 @@ func (a *App) compactRunHistory(ctx context.Context, cfg ConfigState, sessionID,
 	a.emit("run:compact", map[string]any{"sessionId": sessionID, "tokensBefore": tokensBefore, "reason": reason})
 	result, err := a.compactHistory(ctx, cfg, sessionID, "", h, tokensBefore)
 	if err != nil {
+		// 失败在唯一一处记账（阈值档与溢出档共用这条路径）：计数到上限说明这套历史
+		// 压不动，继续尝试只会重复烧钱。
+		if failures := a.noteCompactFailure(sessionID); failures == maxConsecutiveCompactFailures {
+			a.logAppError("auto compaction paused after repeated failures", "session", sessionID, "failures", failures)
+		}
 		return nil, nil, err
 	}
+	// 成功即复位：历史已被这次压缩改写，之前“压不动”的结论不再成立。
+	a.clearCompactFailures(sessionID)
 	a.mu.Lock()
 	compacted := sanitizeHistoryMessages(a.histories[sessionID])
 	a.mu.Unlock()
@@ -403,15 +475,15 @@ Rules:
 
 	// Account the compaction LLM call in the workspace/token statistics so the
 	// tokens spent summarizing are visible in the footer and the stats modal.
-	fallbackInput := 0
 	fallbackOutput := 0
-	if usage == nil || usage.PromptTokens <= 0 {
-		fallbackInput = estimateRequestTokens(compactionMessages, nil)
-	}
 	if usage == nil || usage.CompletionTokens <= 0 {
 		fallbackOutput = estimateCompletionTokens(fullSummary, "", nil)
 	}
-	a.recordWorkspaceTokenUsage(cfg.Workspace, usage, fallbackInput, fallbackOutput)
+	// The summary call is ordinary spend by the same workspace, so it goes through
+	// the same accounting entry point as the chat loop and sub-agents: its cost is
+	// visible in the footer total and in the token dashboard, which is where a user
+	// looks for what a compaction actually cost.
+	a.recordLLMUsage(cfg.Model, cfg.Workspace, usage, fallbackOutput)
 
 	// Replace history cleanly with just the compacted summary as a clean start.
 	newHistory := []openai.ChatCompletionMessage{

@@ -33,10 +33,10 @@ const (
 )
 
 // toolResultPlaceholder replaces tool output that is no longer in the model's
-// context — either because the disk profile never persisted it (history profile)
-// or because micro-compaction cleared it to reclaim tokens mid-run. It keeps the
-// message non-empty (validators reject an empty tool message) and tells the model
-// how to get the data back without inviting a re-run of a mutating tool: an idempotent
+// context: the disk profile does not persist tool output (history profile), so a
+// restarted session replays the placeholder in its place. It keeps the message
+// non-empty (validators reject an empty tool message) and tells the model how to
+// get the data back without inviting a re-run of a mutating tool: an idempotent
 // read/inspection can simply be repeated, while `command`/`edit`/`write`/`create` must not.
 const toolResultPlaceholder = "(tool result omitted to save context; re-read the file or re-run read-only tools if you need it again — do not re-run commands, edits, or writes)"
 

@@ -500,13 +500,30 @@ func validLoadedStatsRecord(record statsRecord, dateStr string) bool {
 		record.Requests > 0 && record.Requests <= statsMaxRequestsPerRecord
 }
 
-// recordTokenStats is a fire-and-forget hook called after each LLM step
-// (main chat loop and sub-agents). It never blocks the caller.
-func (a *App) recordTokenStats(model, workspace string, usage *modelUsage, fallbackInput, fallbackOutput int) {
+// recordLLMUsage is the single accounting entry point for one LLM call: the chat
+// loop, sub-agent runs and compaction all go through it, so the footer's running
+// total and the token dashboard are fed from the same event. A route that fed only
+// one of the two sinks (sub-agents fed the dashboard only, compaction the footer
+// only) made the two totals irreconcilable for the same workspace, and the user
+// had no way to tell which one was right.
+func (a *App) recordLLMUsage(model, workspace string, usage *modelUsage, fallbackOutput int) {
+	a.recordWorkspaceTokenUsage(workspace, usage, fallbackOutput)
+	a.recordTokenStats(model, workspace, usage, fallbackOutput)
+}
+
+// recordTokenStats is a fire-and-forget hook called after each LLM step. It never
+// blocks the caller.
+//
+// It counts the same prompt usage as the workspace running total (see
+// recordWorkspaceTokenUsage) and for the same reason: an estimated request size
+// would invent input tokens for a call whose cost is unknown, while the output
+// estimate is the text the model actually produced. A turn with no prompt usage
+// therefore contributes output only.
+func (a *App) recordTokenStats(model, workspace string, usage *modelUsage, fallbackOutput int) {
 	if a.stats == nil {
 		return
 	}
-	input := fallbackInput
+	input := 0
 	output := fallbackOutput
 	cacheHit := 0
 	cacheMiss := 0

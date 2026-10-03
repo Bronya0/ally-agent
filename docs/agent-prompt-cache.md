@@ -72,7 +72,9 @@ OpenAI Responses API 默认采用**隐式自动缓存（Implicit Mode）**：服
   上述字段严格通过 `isOfficialOpenAIEndpoint` 门禁隔离，第三方兼容中转网关（DeepSeek、OneAPI 等）可能对未知顶层参数返回 400 报错，严禁外发。
 
 #### ③ 路由粘性（Affinity）
-* 对官方端点，统一计算会话的稳定散列：`prompt_cache_key: "ally:<sha256(sessionID)[:16]>"`（受 64 字符长度约束，pi 实现了相同的截断），并将 `store: false` 附带发送，驱动集群固定路由。
+* 会话稳定散列统一算作 `prompt_cache_key: "ally:<sha256(sessionID)[:16]>"`（受 64 字符长度约束，pi 实现了相同的截断），驱动集群固定路由。
+* **发给谁由厂商表决定**（`promptCacheKeyVendors`）：官方端点在 Chat 与 Responses 上都发；另有三家的文档自己声明了这个字段——Kimi（Chat + Responses）、智谱 GLM（Responses）、MiniMax（Responses）。其余端点（DeepSeek 文档答「不支持」、千问未声明、以及未知中转）一概不发：漏发只损失粘性，而对方不认识的顶层键可能换回 400。
+* `store: false` 只随官方端点的 key 一起发（`promptCachePinStore`）：它是 OpenAI 官方请求字段，六家兼容平台在 Chat 协议上都没声明它，所以兼容端点只拿到路由键本身。
 
 ---
 
@@ -82,8 +84,9 @@ Chat Completions 是开源模型与中转代理最常用的格式，协议层面
 
 #### ① 请求粘性与长保留
 * **官方端点**：通过 HTTP Transport 拦截改写，注入 `prompt_cache_key: "ally:<hash>"`、`store: false`；开启长保留档时补充 `prompt_cache_retention: "24h"`。
+* **声明了该字段的兼容端点**（当前是 Kimi 的 Chat）：只注入 `prompt_cache_key`，不带 `store`（厂商表见 §1.1 ③）；其余兼容端点不发任何路由键。
 * **OpenRouter 聚合网关**：通过专用 Header `x-session-id: "ally:<hash>"` 实现路由粘性，将多轮对话固定在下游同一个提供商实例上。
-* **DeepSeek 官方端点**：服务端全自动按 64 Token 粒度匹配最长公共前缀，无需且不可发送任何私有保留字段。
+* **DeepSeek 官方端点**：服务端全自动按 64 Token 粒度匹配最长公共前缀，文档把 `prompt_cache_key` 答作「不支持」，因此不发。
 
 #### ② 思考流（Reasoning Content）全局确定性回填
 DeepSeek V3/V4、Kimi K3 等模型在启用思考（Thinking）时，如果多轮历史中某条助手消息（尤其是调了工具的消息）漏掉了 `reasoning_content`，服务端会直接报 400 错：
@@ -125,6 +128,9 @@ for j := len(msg.Content) - 1; j >= 0; j-- {
 * ⚠️ SDK 陷阱：`cache_control` 字段带 `omitzero`，`CacheControlEphemeralParam{}` 这种全零值（`type` 与 `ttl` 都为空）会被**整条丢弃**——看似“发了个不带 ttl 的标记”，实际一个断点都没发。必须用构造函数 `anthropic.NewCacheControlEphemeralParam()` 起手。
 * 1 小时长档（`ttl: "1h"`）目前在实现中未提供，只有 5m。
 
+#### ④ 顶层标记：只发给这样声明的端点
+Moonshot 的 Messages 端点把 `cache_control` 写成**仅顶层传入时生效**，消息体里的标记会被忽略，而且不传时本次请求只尝试读缓存、不写入——只发嵌套三断点时，那边的提示词缓存等于静默关掉。因此顶层标记只对文档如此声明的端点补发（`anthropicTopLevelCacheControlEndpoint`，当前只有 Moonshot）；其余兼容平台把标记声明在 system / tools / 内容块里（MiniMax、千问）、干脆忽略 `cache_control`（DeepSeek），或者全章没有这个字段（智谱 §9.1 只有隐式缓存、无需手动配置——嵌套三断点对它同样是空转），多发一个顶层键只是发了对方没要的字段。官方端点不带顶层标记：在那边它只是重复最后一个块的那个。补上这一份时共 4 个断点，正好是配额上限。
+
 ---
 
 ## 2. 协议字段对照一览表
@@ -132,10 +138,11 @@ for j := len(msg.Content) - 1; j >= 0; j-- {
 | 协议 / 服务商 | 路由粘性参数 | 短档 (默认) | 长档 (Long Retention) | 断点位置策略 |
 | :--- | :--- | :--- | :--- | :--- |
 | **OpenAI Responses** | `prompt_cache_key: "ally:..."` | 保持隐式（无多余参数） | `< gpt-5.6`: `prompt_cache_retention: "24h"`<br>`>= gpt-5.6`: `prompt_cache_options: { ttl: "30m" }` | 默认隐式模式（严禁开 explicit 禁用隐式缓存） |
-| **OpenAI Chat (官方)** | `prompt_cache_key: "ally:..."` | 官方自动 1024 tok 缓存 | `prompt_cache_retention: "24h"` | 纯前缀逐字节单调匹配 |
+| **OpenAI Chat (官方)** | `prompt_cache_key: "ally:..."` + `store: false` | 官方自动 1024 tok 缓存 | `prompt_cache_retention: "24h"` | 纯前缀逐字节单调匹配 |
+| **Kimi（Chat / Responses）、智谱 · MiniMax（Responses）** | `prompt_cache_key: "ally:..."`（各家自己的文档声明，不带 `store`） | 各家自管 | 未提供 | 纯前缀逐字节单调匹配 |
 | **OpenAI Chat (OpenRouter)** | Header `x-session-id: "ally:..."` | 下游网关决定 | 下游网关决定 | 纯前缀逐字节单调匹配 |
 | **DeepSeek (Chat 兼容)** | 无需私有 key（自动前缀匹配） | 64 tok 起自动前缀复用 | 不支持私有字段（防 400） | 依赖历史 `reasoning_content` 确定性回填 |
-| **Anthropic Messages** | 由 API Key / Session 内部维护 | 官方端点 `cache_control: { ttl: "5m" }`，兼容端点不带 ttl | 未提供（仅 5m） | 显式 3 断点（Tool 尾 + System 尾 + 最新消息尾） |
+| **Anthropic Messages** | 由 API Key / Session 内部维护 | 官方端点 `cache_control: { ttl: "5m" }`，兼容端点不带 ttl；Moonshot 另加顶层标记 | 未提供（仅 5m） | 显式 3 断点（Tool 尾 + System 尾 + 最新消息尾），文档声明顶层式的端点再加 1 个 |
 
 ---
 

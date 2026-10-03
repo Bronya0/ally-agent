@@ -1,12 +1,15 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	openai "github.com/sashabaranov/go-openai"
@@ -46,6 +49,11 @@ func TestNewAppInitializesCompactionMaps(t *testing.T) {
 	}
 	if app.sessionModelConfigs == nil {
 		t.Fatal("NewApp() must initialize sessionModelConfigs")
+	}
+	// compactFailures is written under a.mu from the run path (noteCompactFailure),
+	// so it carries the same eager-init requirement as the maps above.
+	if app.compactFailures == nil {
+		t.Fatal("NewApp() must initialize compactFailures")
 	}
 }
 
@@ -294,5 +302,99 @@ func TestLatestPlanSnapshot(t *testing.T) {
 	}
 	if got := latestPlanSnapshot(messages[3:]); got != "" {
 		t.Fatalf("latestPlanSnapshot() without a plan call = %q, want empty", got)
+	}
+}
+
+// TestCompactRunHistoryBreakerStopsRepeatFailures pins the threshold tier's
+// circuit breaker. The threshold is re-evaluated at the top of every agent step
+// (maxAgentSteps), so a persistent failure used to pay for a fresh long-context
+// summary request on every remaining step of the same run; ZCode stops auto
+// compaction after MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES. The failing answer here
+// is a summary the provider cut off at the token limit, which must never replace
+// the history either — and overflow recovery must stay available while the
+// breaker is open, because that is what rearms it.
+func TestCompactRunHistoryBreakerStopsRepeatFailures(t *testing.T) {
+	var requests int32
+	var truncated atomic.Bool
+	truncated.Store(true)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&requests, 1)
+		w.Header().Set("Content-Type", "text/event-stream")
+		if truncated.Load() {
+			fmt.Fprint(w, sseChatChunk("## What Has Been Done\n- 被截断的总结"))
+			fmt.Fprint(w, sseChatFinishChunk("length"))
+		} else {
+			fmt.Fprint(w, sseChatChunk("## What Has Been Done\n- 完整总结"))
+			fmt.Fprint(w, sseChatFinishChunk("stop"))
+		}
+		fmt.Fprint(w, sseDone)
+	}))
+	defer server.Close()
+
+	app := NewApp()
+	app.initialized = true
+	app.stats = nil // skip token-stat persistence
+	app.events = &compactEventRecorder{}
+	app.config = defaultConfigState()
+	app.config.APIFormat = apiFormatOpenAIChat
+	app.config.BaseURL = server.URL
+	app.config.Model = "test-model"
+	app.config.APIKey = "test-key"
+
+	const sessionID = "session-compact-breaker"
+	history := []openai.ChatCompletionMessage{
+		{Role: openai.ChatMessageRoleUser, Content: "go"},
+		{Role: openai.ChatMessageRoleAssistant, Content: "working on it"},
+		{Role: openai.ChatMessageRoleUser, Content: "keep going"},
+	}
+	app.saveHistory(sessionID, history)
+	ctx := context.Background()
+
+	for attempt := 1; attempt <= maxConsecutiveCompactFailures; attempt++ {
+		if _, _, err := app.compactRunHistory(ctx, app.config, sessionID, compactReasonThreshold, ChatRequest{}, history, 5000); err == nil {
+			t.Fatalf("attempt %d: compactRunHistory() error = nil, want the truncated-summary failure", attempt)
+		}
+		if got := atomic.LoadInt32(&requests); got != int32(attempt) {
+			t.Fatalf("after attempt %d the provider saw %d requests, want %d", attempt, got, attempt)
+		}
+	}
+	if app.autoCompactAllowed(sessionID) {
+		t.Fatalf("the threshold tier must stop after %d consecutive failures", maxConsecutiveCompactFailures)
+	}
+	if after := app.loadSessionHistoryCopy(sessionID); len(after) != len(history) {
+		t.Fatalf("history = %d messages, want the original %d: a truncated summary must not replace it", len(after), len(history))
+	}
+
+	// Breaker open: the threshold tier must return before paying for a request,
+	// and the skip must not be reported as an error the user has to act on.
+	_, _, err := app.compactRunHistory(ctx, app.config, sessionID, compactReasonThreshold, ChatRequest{}, history, 5000)
+	if !errors.Is(err, errAutoCompactCircuitOpen) {
+		t.Fatalf("compactRunHistory() error = %v, want errAutoCompactCircuitOpen", err)
+	}
+	if !isCompactSkip(err) {
+		t.Fatalf("an open breaker must classify as a skip, got %v", err)
+	}
+	if got := atomic.LoadInt32(&requests); got != maxConsecutiveCompactFailures {
+		t.Fatalf("the provider saw %d requests, want no request while the breaker is open", got)
+	}
+
+	// Overflow recovery still tries (and fails while the server keeps truncating).
+	if _, _, err := app.compactRunHistory(ctx, app.config, sessionID, compactReasonOverflow, ChatRequest{}, history, 5000); err == nil {
+		t.Fatal("the overflow tier must still attempt a summary while the breaker is open")
+	}
+	if got := atomic.LoadInt32(&requests); got != maxConsecutiveCompactFailures+1 {
+		t.Fatalf("the overflow attempt must reach the provider, requests = %d", got)
+	}
+
+	// A successful compaction rewrites the history and rearms the threshold tier.
+	truncated.Store(false)
+	if _, _, err := app.compactRunHistory(ctx, app.config, sessionID, compactReasonOverflow, ChatRequest{}, history, 5000); err != nil {
+		t.Fatalf("the overflow tier must compact once the provider answers: %v", err)
+	}
+	if !app.autoCompactAllowed(sessionID) {
+		t.Fatal("a successful compaction must clear the failure count")
+	}
+	if after := app.loadSessionHistoryCopy(sessionID); len(after) != 1 {
+		t.Fatalf("history = %d messages, want the single summary message", len(after))
 	}
 }

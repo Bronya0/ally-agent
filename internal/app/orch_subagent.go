@@ -252,21 +252,13 @@ func (a *App) executeDelegate(ctx context.Context, cfg ConfigState, sessionID st
 			run.TotalTokens = run.InputTokens + run.OutputTokens
 			a.subRunsMu.Unlock()
 		}
-		fallbackInput := 0
 		fallbackOutput := 0
-		if modelResp.Usage == nil || modelResp.Usage.PromptTokens <= 0 {
-			fallbackInput = estimateRequestTokens(messages, tools)
-		}
 		if modelResp.Usage == nil || modelResp.Usage.CompletionTokens <= 0 {
 			fallbackOutput = estimateCompletionTokens(modelResp.Content, modelResp.Reasoning, modelResp.ToolCalls)
 		}
-		a.recordTokenStats(
-			model,
-			cfg.Workspace,
-			modelResp.Usage,
-			fallbackInput,
-			fallbackOutput,
-		)
+		// A sub-agent spends the same workspace's tokens: it goes through the single
+		// accounting entry point so the footer and the dashboard agree on the total.
+		a.recordLLMUsage(model, cfg.Workspace, modelResp.Usage, fallbackOutput)
 
 		preparedToolCalls, toolExecutionArgs := prepareToolCallsForExecution(modelResp.ToolCalls)
 		assistantMessage := openai.ChatCompletionMessage{

@@ -206,15 +206,22 @@ type App struct {
 	// compaction so ESC (CancelCompaction) can abort the summary LLM call
 	// instead of waiting out the full timeout.
 	compactingCancels map[string]context.CancelFunc
-	historiesDir      string
-	sessionsDir       string
-	histories         map[string][]openai.ChatCompletionMessage
-	sessionMu         sync.Mutex
-	initialized       bool
-	disabledSkills    []string
-	mcpManager        *McpManager
-	plans             map[string][]PlanStep // sessionID → the plan's steps
-	planRevisions     map[string]int64
+	// compactFailures counts consecutive failed compaction attempts per session.
+	// The threshold tier is re-evaluated at the top of every agent step, so
+	// without this count one persistent failure pays for a fresh long-context
+	// summary request on every remaining step of the run; the tier stops once the
+	// count reaches maxConsecutiveCompactFailures (overflow recovery is never
+	// blocked by it). Any successful compaction clears the entry.
+	compactFailures map[string]int
+	historiesDir    string
+	sessionsDir     string
+	histories       map[string][]openai.ChatCompletionMessage
+	sessionMu       sync.Mutex
+	initialized     bool
+	disabledSkills  []string
+	mcpManager      *McpManager
+	plans           map[string][]PlanStep // sessionID → the plan's steps
+	planRevisions   map[string]int64
 	// sessionWorkspaceMaps freezes the workspace map bytes per session
 	// (sessionID → map text) so the request prefix stays byte-stable across
 	// runs and provider prompt cache survive; guarded by mu (declared in
@@ -391,6 +398,7 @@ func NewApp() *App {
 		runInputs:          map[string]chan string{},
 		compactingSessions: map[string]struct{}{},
 		compactingCancels:  map[string]context.CancelFunc{},
+		compactFailures:    map[string]int{},
 		histories:          map[string][]openai.ChatCompletionMessage{},
 		readCaches:         map[string]*sessionReadCache{},
 		contextLocks:       map[string]*sessionContextLock{},
@@ -1803,6 +1811,7 @@ func (a *App) releaseSession(sessionID string, deleteHistory bool) error {
 	delete(a.sessionWorkspaces, sessionID)
 	delete(a.sessionModelConfigs, sessionID)
 	delete(a.contextAnchors, sessionID)
+	delete(a.compactFailures, sessionID)
 	delete(a.readCaches, sessionID)
 	delete(a.contextLocks, sessionID)
 	a.mu.Unlock()
@@ -2103,8 +2112,14 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 				bd = syncBreakdown(messages, true)
 				usedTokens = bd.Total
 				a.emit("run:compacted", payload)
-			} else if !errors.Is(compactErr, errHistoryTooShortToCompact) {
-				a.emit("run:compacted", map[string]any{"sessionId": sessionID, "error": compactErr.Error()})
+			} else if !isCompactSkip(compactErr) {
+				failure := map[string]any{"sessionId": sessionID, "error": compactErr.Error()}
+				if a.compactFailureCount(sessionID) >= maxConsecutiveCompactFailures {
+					// 熔断已生效：阈值档从下一次判断起不再尝试（见 compactRunHistory），
+					// 用户不自己动手的话上下文只会继续涨。
+					failure["error"] = fmt.Sprintf("%v；连续 %d 次自动压缩失败，已暂停自动压缩，请手动 /compact、删除部分历史或改用窗口更大的模型", compactErr, maxConsecutiveCompactFailures)
+				}
+				a.emit("run:compacted", failure)
 			}
 		}
 
@@ -2271,16 +2286,13 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 				a.emit(toolEvent.Name, toolEvent.Payload)
 			}
 		}
-		fallbackInput := 0
 		fallbackOutput := 0
-		if modelResp.Usage == nil || modelResp.Usage.PromptTokens <= 0 {
-			fallbackInput = estimateRequestTokens(messages, tools)
-		}
 		if modelResp.Usage == nil || modelResp.Usage.CompletionTokens <= 0 {
 			fallbackOutput = estimateCompletionTokens(content, reasoning, toolCalls)
 		}
-		a.recordWorkspaceTokenUsage(cfg.Workspace, modelResp.Usage, fallbackInput, fallbackOutput)
-		a.recordTokenStats(cfg.Model, cfg.Workspace, modelResp.Usage, fallbackInput, fallbackOutput)
+		// One entry point for both accounting sinks: the footer running total and the
+		// token dashboard consume this same event (see recordLLMUsage).
+		a.recordLLMUsage(cfg.Model, cfg.Workspace, modelResp.Usage, fallbackOutput)
 		if modelResp.Usage != nil {
 			runCacheHit += modelResp.Usage.CacheHitTokens
 			runCacheMiss += modelResp.Usage.CacheMissTokens

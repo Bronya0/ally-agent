@@ -511,6 +511,15 @@ var (
 	// Chat schema has no such field — and the compatible gateways follow the same
 	// shape.
 	jsonThinkingDisabled = json.RawMessage(`{"type":"disabled"}`)
+	// reasoningStopThinkingFields maps each stop-thinking spelling onto the top-level
+	// parameters it writes. One entry per spelling keeps the named value and its
+	// payload from drifting apart; reasoningStopThinkingNone has no entry, which is how
+	// "this endpoint documents the field as ineffective" reaches the wire as nothing at
+	// all (see reasoningStopThinkingFamilies).
+	reasoningStopThinkingFields = map[reasoningStopThinking]map[string]json.RawMessage{
+		reasoningStopThinkingThinkingDisabled: {"thinking": jsonThinkingDisabled},
+		reasoningStopThinkingQwenEnableFalse:  {"enable_thinking": jsonBoolFalse},
+	}
 )
 
 // chatReasoningBackfillKey returns the wire field every assistant message of the
@@ -702,10 +711,15 @@ type chatRequestRewriteTransport struct {
 	turnDetails    map[string]json.RawMessage
 	headers        map[string]string
 	promptCacheKey string
-	streamDone     *sseDoneWatcher
-	// disableThinking writes the stop-thinking field the "off" level asks for
-	// (see patchChatRequestFields).
-	disableThinking bool
+	// pinStore writes `store: false` next to the cache key. It is an official OpenAI
+	// field (promptCachePinStore), so a compatible endpoint's Chat wire receives the
+	// routing key on its own.
+	pinStore   bool
+	streamDone *sseDoneWatcher
+	// stopThinking is the spelling the "off" level writes; the named value maps to
+	// the actual parameters in reasoningStopThinkingFields (see
+	// patchChatRequestFields).
+	stopThinking reasoningStopThinking
 }
 
 func (t *chatRequestRewriteTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -728,7 +742,7 @@ func (t *chatRequestRewriteTransport) RoundTrip(req *http.Request) (*http.Respon
 		return nil, err
 	}
 	rewritten := body
-	if patched, ok := patchChatRequestFields(body, t.reasoningKey, t.turnDetails, t.promptCacheKey, t.disableThinking); ok {
+	if patched, ok := patchChatRequestFields(body, t.reasoningKey, t.turnDetails, t.promptCacheKey, t.pinStore, t.stopThinking); ok {
 		rewritten = patched
 	}
 	// Restore a replayable body: the SDK may retry the request object, so
@@ -778,15 +792,19 @@ func (t *chatRequestRewriteTransport) RoundTrip(req *http.Request) (*http.Respon
 //     reasoning field is added at all. "reasoning_details" is an array, so it is
 //     never used as an empty-string placeholder — the captured details array
 //     (when present) fills that slot.
-//  5. The session-sticky prompt cache key (and `store: false`) is attached for
-//     the official OpenAI endpoint only; promptCacheKey is empty everywhere
-//     else, so a compatible gateway never sees an unknown top-level parameter.
-//  6. The stop-thinking field (`thinking: {"type": "disabled"}`) is written when
-//     the selected level is "off" and the endpoint is not the official OpenAI API
-//     (reasoningWireForAdapter). It is a top-level parameter, so the message
+//  5. The session-sticky prompt cache key is attached on the protocols and to the
+//     vendors that document it (promptCacheKeyForRequest) — the official API and
+//     智谱 / Kimi / MiniMax — while `store: false`, an official OpenAI field with no
+//     counterpart on a compatible platform's Chat wire, travels only when pinStore
+//     says so. Both are top-level parameters: a compatible gateway never sees an
+//     unknown one.
+//  6. The stop-thinking request is written when the selected level is "off" and the
+//     endpoint is not the official OpenAI API (reasoningWireForAdapter). Which
+//     parameter it carries depends on the vendor (see
+//     reasoningStopThinkingFamilies). It is a top-level parameter, so the message
 //     prefix the provider hashes stays untouched, and it is only written when
 //     absent — the same bytes every request.
-func patchChatRequestFields(body []byte, defaultKey string, turnDetails map[string]json.RawMessage, promptCacheKey string, disableThinking bool) ([]byte, bool) {
+func patchChatRequestFields(body []byte, defaultKey string, turnDetails map[string]json.RawMessage, promptCacheKey string, pinStore bool, stopThinking reasoningStopThinking) ([]byte, bool) {
 	var payload map[string]json.RawMessage
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return body, false
@@ -801,29 +819,34 @@ func patchChatRequestFields(body []byte, defaultKey string, turnDetails map[stri
 	}
 	changed := false
 
-	// 1. Session-sticky prompt-cache routing, official endpoint only (the key is
-	// empty elsewhere — see openAIChatPromptCacheKey). `store` is documented for
-	// Chat Completions too and pi pins it to false so a response is never
-	// retained server-side (openai-completions.ts:810-824). Both are top-level
-	// parameters: the message prefix the provider hashes for the cache is not
-	// touched.
+	// 1. Session-sticky prompt-cache routing (see promptCacheKeyForRequest). `store`
+	// is documented for the official OpenAI endpoint and pi pins it to false so a
+	// response is never retained server-side (openai-completions.ts:810-824); a
+	// compatible platform's Chat wire declares no such field, so it travels only
+	// when pinStore says so. Both are top-level parameters: the message prefix the
+	// provider hashes for the cache is not touched.
 	if promptCacheKey != "" {
 		if _, exists := payload["prompt_cache_key"]; !exists {
 			payload["prompt_cache_key"] = jsonStringValue(promptCacheKey)
 			changed = true
 		}
-		if _, exists := payload["store"]; !exists {
-			payload["store"] = jsonBoolFalse
-			changed = true
+		if pinStore {
+			if _, exists := payload["store"]; !exists {
+				payload["store"] = jsonBoolFalse
+				changed = true
+			}
 		}
 	}
 
-	// 6. Stop-thinking field for the "off" level (see the doc comment).
-	if disableThinking {
-		if _, exists := payload["thinking"]; !exists {
-			payload["thinking"] = jsonThinkingDisabled
-			changed = true
+	// 6. Stop-thinking request for the "off" level (see the doc comment). Which field
+	// that is belongs to the model's vendor, and an empty spelling means the endpoint
+	// documents the field as ineffective, so nothing is written at all.
+	for key, value := range reasoningStopThinkingFields[stopThinking] {
+		if _, exists := payload[key]; exists {
+			continue
 		}
+		payload[key] = value
+		changed = true
 	}
 
 	// 2. content must be a present key on assistant tool-call and tool
