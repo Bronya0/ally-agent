@@ -94,3 +94,23 @@ test('sandbox denial is reflected in the signature', () => {
     'the denial flag must change the memo signature or the card keeps the success mark',
   );
 });
+
+test('huge content fields enter the signature as a cheap shape, not verbatim', () => {
+  // body 是流式累积出来的完整输出（可以到几 MB），而签名每拍都要算一次：ChatMessages
+  // 的 v-memo，以及 App.vue 那个跨整段会话的 buildDisplayMessagesSignature。整段拼
+  // 进签名等于每拍抄一遍全文，主线程被占满，卡片旁边的动画就跟着掉帧。
+  const huge = 'x'.repeat(2 * 1024 * 1024);
+  const running = { role: 'tool_call', kind: 'command', status: 'running', title: 'go test', body: huge };
+  const sig = toolCardRenderSignature(running);
+  assert.ok(sig.length < 1024, `signature must not embed the whole body (got ${sig.length} chars)`);
+  // 但每一次流式追加仍必须改变签名，否则 v-memo 会把卡片冻在旧内容上。
+  assert.notEqual(sig, toolCardRenderSignature({ ...running, body: `${huge}y` }), 'append must change the signature');
+  assert.notEqual(sig, toolCardRenderSignature({ ...running, body: `y${huge}` }), 'prepend must change the signature');
+  // codeContent 走同一份指纹。
+  const create = { role: 'tool_call', kind: 'create', status: 'running', codeContent: huge };
+  assert.ok(toolCardRenderSignature(create).length < 1024, 'codeContent must not be embedded either');
+  assert.notEqual(
+    toolCardRenderSignature(create),
+    toolCardRenderSignature({ ...create, codeContent: `${huge}y` }),
+  );
+});

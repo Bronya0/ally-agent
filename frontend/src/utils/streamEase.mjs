@@ -32,8 +32,16 @@ export const STREAM_EASE_RATIO = 0.3;
 export const STREAM_MAX_LAG_MS = 1200;
 /** 尾部不超过该长度时每帧重解析：短尾解析成本远低于一帧预算。 */
 export const TAIL_EAGER_MAX_CHARS = 800;
-/** 长尾部（长代码块/长列表）的解析间隔帧数，≈20FPS，保证单帧成本有界。 */
+/** 长尾部（长代码块/长列表）的最短解析间隔帧数，≈20FPS。 */
 export const TAIL_SLOW_FRAME_INTERVAL = 3;
+/**
+ * 长尾部每帧允许解析的字符预算：尾部越长、间隔按它放大，把“每秒解析的字符数”
+ * 封成常数。固定间隔挡不住这个——一个没闭合的代码围栏可以让尾部涨到几 MB，
+ * 面每个间隙都要把这几 MB 重新解析一遍并重建整棵 DOM。
+ */
+export const TAIL_FRAME_CHAR_BUDGET = 8192;
+/** 解析间隔上限（≈2s @60fps）：再长就等于停止刷新了。 */
+export const TAIL_MAX_FRAME_INTERVAL = 120;
 
 /**
  * 单帧推进后的显示长度。目标回退（重试丢弃、内容被截断）时直接对齐，不做
@@ -55,6 +63,19 @@ export function shouldEagerParseTail(tail) {
   const text = String(tail ?? '');
   if (text.length > TAIL_EAGER_MAX_CHARS) return false;
   return !text.includes('$') && !text.includes('![');
+}
+
+/**
+ * 尾部这一帧要不要重解析：返回间隔帧数，1 表示每帧都可以。
+ *
+ * 频率不再是一个固定值：间隔随尾部长度增长，使“每秒解析的字符数”有界，
+ * 而不是让固定间隔一直去解析一个几 MB 的未完成代码块。
+ */
+export function tailParseFrameInterval(tail) {
+  if (shouldEagerParseTail(tail)) return 1;
+  const text = String(tail ?? '');
+  const steps = Math.ceil(text.length / TAIL_FRAME_CHAR_BUDGET);
+  return Math.min(TAIL_MAX_FRAME_INTERVAL, Math.max(TAIL_SLOW_FRAME_INTERVAL, steps));
 }
 
 /**
@@ -98,6 +119,68 @@ export function splitStreamContent(content, limit) {
   return { committedEnd, openFence: fence !== null };
 }
 
+/**
+ * splitStreamContent 的增量版：一帧一帧地喂进更长的 upto，已扫过的**完整行**
+ * 不再重扫。逐帧 O(全文) 的扫描在长回答下和 O(n²) 的前缀重解析一样贵：
+ * 1MB 约 0.9ms/帧，还要为每一行分配一个字符串。
+ *
+ * 与全量版逐帧等价（回归护栏见 streamEase.test.mjs 的对拍用例）：
+ *   - 只有后面确实跟着 \n 的行才固化进状态；文本末行（还没有换行符）每帧现算，
+ *     它的内容会随 upto 增长而变，固化了就会漏掉后来才成立的边界；
+ *   - upto 回退（重试丢弃）时从头重扫；
+ *   - reset() 由调用方在“内容可能整个换过”的强制对齐（挂载/收尾/截断）时调用。
+ */
+export function createStreamScanner() {
+  let offset = 0;
+  let committedEnd = 0;
+  let fence = null;
+  let lastLimit = 0;
+
+  function reset() {
+    offset = 0;
+    committedEnd = 0;
+    fence = null;
+    lastLimit = 0;
+  }
+
+  function scan(text, limit) {
+    const source = String(text ?? '');
+    const bounded = Number.isFinite(limit) ? Math.floor(limit) : source.length;
+    const upto = Math.max(0, Math.min(bounded, source.length));
+    if (upto < lastLimit) reset();
+    lastLimit = upto;
+    while (offset < upto) {
+      const newline = source.indexOf('\n', offset);
+      // 末行还没结束：它的内容还会变，留给下面那段每帧现算。
+      if (newline === -1) break;
+      const line = source.slice(offset, newline);
+      const nextOffset = newline + 1;
+      if (fence) {
+        if (isClosingFence(line, fence)) fence = null;
+      } else {
+        const opened = matchOpeningFence(line);
+        if (opened) fence = opened;
+        else if (line.trim() === '' && nextOffset <= upto) committedEnd = nextOffset;
+      }
+      offset = nextOffset;
+    }
+    // 末行只用于判断“当前在不在围栏里”，结果不写回固化状态。
+    let tailFence = fence;
+    if (offset < source.length) {
+      const line = source.slice(offset);
+      if (tailFence) {
+        if (isClosingFence(line, tailFence)) tailFence = null;
+      } else {
+        const opened = matchOpeningFence(line);
+        if (opened) tailFence = opened;
+      }
+    }
+    return { committedEnd, openFence: tailFence !== null };
+  }
+
+  return { scan, reset };
+}
+
 const FENCE_PATTERN = /^ {0,3}(`{3,}|~{3,})(.*)$/;
 
 function matchOpeningFence(line) {
@@ -123,21 +206,30 @@ function clampCount(value) {
 }
 
 /**
- * 流式渲染状态机：把“已接收内容 + 已显示长度 → (committedHtml, tailHtml)”
+ * 流式渲染状态机：把“已接收内容 + 已显示长度 → (committedBlocks, tailHtml)”
  * 的推进逻辑从 Vue 组件里拿出来。不含任何 Vue/DOM 依赖——组件只负责 rAF
  * 驱动与把结果写进模板，状态机本身可以在 node 里用假节拍跑完整流式序列。
  *
  * render 就是 markdown 渲染函数 `(text, streaming) => html`。
  *
  * 调用契约（回归护栏见 streamEase.test.mjs）：
- *   - committedHtml + tailHtml 永远是已接收内容的一个前缀，长度单调不回退；
- *   - 流式期间不整篇重解析：前缀只在块边界推进时解析，其余解析都落在尾部；
- *   - 收尾（streaming=false）整篇只解析一次。
+ *   - committedBlocks.join('') + tailHtml 覆盖的内容永远是已接收内容的一个前缀，
+ *     长度单调不回退；
+ *   - 流式期间不整篇重解析：前缀按**块**增量追加（只渲染新提交的那一段，并作为
+ *     一个新元素挂到已提交列表末尾），其余解析都落在尾部；
+ *   - 首次、收尾、流式状态翻转、内容被截断导致边界回退这四种情况整篇重渲染一次，
+ *     保证最终结果与“整篇解析”一致（分块渲染在链接引用定义这类跨块语法上会不同，
+ *     收尾那一次会把它纠正回来）。
+ *
+ * 前缀返回的是**块数组**而不是一整段 HTML：拼成单串再交给 v-html，每次追加都会让
+ * 浏览器把整棵已提交子树（长回答可达几千个节点、里面还有渲染好的 mermaid 图）
+ * 重建一遍；一块一个节点时，新增块只插一个新节点，已有的块原地不动。
  */
 export function createStreamRenderState(render) {
   const renderFn = typeof render === 'function' ? render : () => '';
+  const scanner = createStreamScanner();
   let committedEnd = -1;
-  let committedHtml = '';
+  let committedBlocks = [];
   let tailHtml = '';
   let renderedStreaming = null;
   let renderedTail = '';
@@ -146,20 +238,36 @@ export function createStreamRenderState(render) {
   function renderAt(content, shown, streaming, force) {
     const full = String(content ?? '');
     const upto = Math.max(0, Math.min(clampCount(shown), full.length));
-    const { committedEnd: boundary } = splitStreamContent(full, upto);
-    const boundaryMoved = force || boundary !== committedEnd || streaming !== renderedStreaming;
-    if (boundaryMoved) {
-      committedHtml = boundary > 0 ? renderFn(full.slice(0, boundary), streaming) || '' : '';
+    if (force) scanner.reset();
+    const { committedEnd: boundary } = scanner.scan(full, upto);
+    const streamingChanged = streaming !== renderedStreaming;
+    // 前缀只在“边界向前推进、且流式状态没变”时增量追加：每个提交段都是一段独立
+    // 完成的块，前面已经算好的 HTML 再算一遍就是长回答的 O(n²) 来源。
+    const needsFullRender = force || streamingChanged || committedEnd < 0 || boundary < committedEnd;
+    let prefixChanged = false;
+    if (needsFullRender) {
+      const html = boundary > 0 ? renderFn(full.slice(0, boundary), streaming) || '' : '';
+      committedBlocks = html ? [html] : [];
       committedEnd = boundary;
       renderedStreaming = streaming;
       // 前缀变了：尾部必须同帧重算，否则旧尾部会和新前缀重叠、文字重复。
       renderedTail = '';
+      prefixChanged = true;
+    } else if (boundary > committedEnd) {
+      const html = renderFn(full.slice(committedEnd, boundary), streaming) || '';
+      // 建新数组而不是就地 push：组件用 shallowRef 接这个值，靠引用变化触发重渲，
+      // 就地 push 不会惊动它。块数很小（一次流式几十到几百块），复制引用可忽略。
+      if (html) committedBlocks = [...committedBlocks, html];
+      committedEnd = boundary;
+      renderedTail = '';
+      prefixChanged = true;
     }
     const tail = full.slice(committedEnd, upto);
-    if (!boundaryMoved && tail === renderedTail) return;
-    if (!boundaryMoved) {
+    if (!prefixChanged && tail === renderedTail) return;
+    if (!prefixChanged) {
       frameTick += 1;
-      if (!shouldEagerParseTail(tail) && frameTick % TAIL_SLOW_FRAME_INTERVAL !== 0) return;
+      const interval = tailParseFrameInterval(tail);
+      if (interval > 1 && frameTick % interval !== 0) return;
     }
     tailHtml = tail ? renderFn(tail, streaming) || '' : '';
     renderedTail = tail;
@@ -167,12 +275,12 @@ export function createStreamRenderState(render) {
 
   return {
     /**
-     * 推进到指定的已显示长度并渲染两段。返回的字符串在无变化时与上次同一个
-     * 引用/值，组件写回 ref 不会触发多余重渲染。
+     * 推进到指定的已显示长度并渲染两段。无变化时返回的两段与上次同一个引用
+     * （数组与字符串都不重新分配），组件写回 ref 不会触发多余重渲染。
      */
     render(content, shown, streaming, force = false) {
       renderAt(content, shown, streaming, force === true);
-      return { committedHtml, tailHtml };
+      return { committedBlocks, tailHtml };
     },
   };
 }

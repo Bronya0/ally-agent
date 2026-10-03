@@ -640,9 +640,7 @@ function scrollToBottom(options = {}) {
       // below the fold, instead of pinning the scroll to the card's bottom
       // (which would hide the header above the viewport).
       if (alignToLastToolCard) {
-        const root = messagesRootRef.value;
-        const cards = root?.querySelectorAll('.rich-tool-card');
-        const target = cards?.length ? cards[cards.length - 1] : null;
+        const target = lastToolCardElement();
         if (target && viewport) {
           const viewportTop = viewport.getBoundingClientRect().top;
           const targetTop = target.getBoundingClientRect().top;
@@ -664,6 +662,18 @@ function scrollToBottom(options = {}) {
       showJumpToBottom.value = false;
     });
   });
+}
+
+// 末尾那张工具卡的节点：对齐滚动在每个流式刷新（120/400/900ms）都要用一次，
+// 而 querySelectorAll 会把整棵消息子树（最多 180 行、上百张卡）都走一遍。卡片与
+// 消息块是 .messages 的直接子元素，且正在刷新的那张总在末尾附近，从末尾往回走
+// 几步即可（最坏 O(兄弟数)，不再付“扫完整棵子树”的代价）。
+function lastToolCardElement() {
+  const root = messagesRootRef.value;
+  if (!root) return null;
+  let el = root.lastElementChild;
+  while (el && !el.classList.contains('rich-tool-card')) el = el.previousElementSibling;
+  return el;
 }
 
 function jumpToBottom() {

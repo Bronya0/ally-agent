@@ -139,7 +139,7 @@ import { formatToolErrorBody } from '../utils/toolError.mjs';
 import { toolVerbLabel, hasNamedVerb } from '../utils/toolVerb.mjs';
 import { isFixedBodyKind, kindLabelKey, toolShowsDuration } from '../utils/toolKind.mjs';
 import { t } from '../i18n.mjs';
-import { normalizedLines } from '../utils/toolPreview.mjs';
+import { countLinesCapped, normalizedLines, tailLines } from '../utils/toolPreview.mjs';
 import CardGrid from './CardGrid.vue';
 import ToolStatusIcon from './ToolStatusIcon.vue';
 
@@ -351,11 +351,16 @@ function escapeHtml(text) {
 // 但每拍仍会重渲一次卡片，模板里反复调用 lineCount / toolBodyText 会对流式增长中的
 // body 全量切行。这里按消息对象做 WeakMap 记忆化：文本与展开状态不变时直接复用上次的行数。
 const lineCountMemo = new WeakMap();
+// 卡片只问「行数是否超过 4 / 6」，不需要精确行数：数够上限就停（见 toolPreview.mjs
+// 的 countLinesCapped）。流式期间这段文本有几 MB，而卡片每拍都要重渲一次，为一次
+// 比较切完整段是白费的。cap 取两个阈值里更大的那个 + 1，所以 > COMMAND_PREVIEW_LINES
+// 与 > BODY_PREVIEW_LINES 两个判据都仍然成立。
+const LINE_COUNT_CAP = Math.max(BODY_PREVIEW_LINES, COMMAND_PREVIEW_LINES) + 1;
 function lineCount(msg, text) {
   if (!text) return 0;
   let memo = lineCountMemo.get(msg);
   if (!memo || memo.text !== text) {
-    memo = { text, count: normalizedLines(text).length };
+    memo = { text, count: countLinesCapped(text, LINE_COUNT_CAP) };
     lineCountMemo.set(msg, memo);
   }
   return memo.count;
@@ -401,15 +406,14 @@ function computeToolBodyText(msg, body) {
     // Tail preview: skip blank lines so the collapsed rows always end with real
     // output instead of the stray trailing newlines shell output commonly has
     // (an all-blank tail would otherwise render as empty rows).
-    const tail = normalizedLines(body).filter((line) => line !== '');
-    return tail.slice(-TOOL_OUTPUT_PREVIEW_LINES).join('\n');
+    // 只切末尾几行：命令输出是这张卡最热的路径，别为 4 行预览切开整段累积输出
+    // （等价写法见 toolPreview.mjs 的 tailLines）。
+    return tailLines(body, TOOL_OUTPUT_PREVIEW_LINES, { skipBlank: true }).join('\n');
   }
   if (!isBodyPreview(msg)) return body;
-  const lines = normalizedLines(body);
-  if (isServiceReadResult(msg)) {
-    return lines.slice(Math.max(0, lines.length - BODY_PREVIEW_LINES)).join('\n');
-  }
-  return lines.slice(0, BODY_PREVIEW_LINES).join('\n');
+  if (isServiceReadResult(msg)) return tailLines(body, BODY_PREVIEW_LINES).join('\n');
+  // 头部预览保持全量切：这条支路取的是开头若干行。
+  return normalizedLines(body).slice(0, BODY_PREVIEW_LINES).join('\n');
 }
 
 // errorCodeLabel 是错误码的本地化标签：没有译文时返回空串，退回什么由调用方自己

@@ -13,10 +13,13 @@ import assert from 'node:assert/strict';
 import {
   STREAM_MIN_STEP,
   TAIL_EAGER_MAX_CHARS,
+  TAIL_SLOW_FRAME_INTERVAL,
   advanceShown,
   createStreamRenderState,
+  createStreamScanner,
   shouldEagerParseTail,
   splitStreamContent,
+  tailParseFrameInterval,
 } from './streamEase.mjs';
 
 test('advanceShown 每帧只推进一部分差值，多帧内收敛到目标', () => {
@@ -118,13 +121,66 @@ test('shouldEagerParseTail 对短尾部逐帧解析，对长尾/公式/图片降
   assert.equal(shouldEagerParseTail(''), true);
 });
 
+// 固定间隔挡不住“未闭合代码围栏”这种长尾：尾部涨到几 MB，每个间隙还是全量重解析。
+test('尾部解析间隔随长度增长，把每秒解析量封成常数', () => {
+  assert.equal(tailParseFrameInterval('短'), 1, '短尾每帧解析');
+  assert.equal(tailParseFrameInterval('a'.repeat(TAIL_EAGER_MAX_CHARS)), 1);
+  assert.equal(
+    tailParseFrameInterval('行内公式 $x^2$ 之后'),
+    TAIL_SLOW_FRAME_INTERVAL,
+    '公式/图片尾保持原来的降频间隔',
+  );
+  const edge = tailParseFrameInterval('a'.repeat(TAIL_EAGER_MAX_CHARS + 1));
+  assert.equal(edge, TAIL_SLOW_FRAME_INTERVAL, '刚过阈值时仍是原来的固定间隔');
+  const big = tailParseFrameInterval('a'.repeat(1_000_000));
+  assert.ok(big > edge, `越长间隔越大（实际 ${big}）`);
+  assert.ok(tailParseFrameInterval('a'.repeat(100_000_000)) <= 120, '间隔有上限，不会等于不刷新');
+});
+
+// 增量扫描器是 splitStreamContent 的逐帧等价替身：一旦两者对不上，块边界就会
+// 漂移，已提交前缀与尾部会重叠或漏字。
+test('增量扫描器逐帧结果与全量 splitStreamContent 完全一致', () => {
+  const samples = [
+    'a\n\nb',
+    '第一段\n\n第二段还在流',
+    '# 标题\n\n```go\nfunc main() {\n\n}\n',
+    '```go\ncode\n```\n\n尾段',
+    '~~~js\nlet a = 1;\n~~~~\n\ntail',
+    '    ```go\nnot a fence\n\n段落\n',
+    '段落一\n\n',
+    'a\n\nb\n\nc\n\nd\n\n',
+    '\n\n\n',
+    'no newline at all',
+    '```\nx\n``\n',
+    `a\n\n${'x'.repeat(50)}\n\n\`\`\`\n${'y'.repeat(50)}\n`,
+  ];
+  for (const text of samples) {
+    const scanner = createStreamScanner();
+    for (let upto = 0; upto <= text.length; upto++) {
+      assert.deepEqual(
+        scanner.scan(text, upto),
+        splitStreamContent(text, upto),
+        `逐帧不一致：${JSON.stringify(text)} upto=${upto}`,
+      );
+    }
+    // 一次跳到结尾再回退（重试截断）：回退后必须重新与全量一致。
+    scanner.scan(text, text.length);
+    const half = Math.floor(text.length / 2);
+    assert.deepEqual(
+      scanner.scan(text, half),
+      splitStreamContent(text, half),
+      `回退不一致：${JSON.stringify(text)}`,
+    );
+  }
+});
+
 // ── 状态机契约 ────────────────────────────────────────────────────────────
 
 /** 模拟一次流式输出：每批 chars 字符、批间隔 frames 帧，返回解析账本。 */
 function simulateStream(source, { batch = 25, frames = 4 } = {}) {
   const parses = [];
   const frameCalls = []; // 每帧的解析调用次数（结构性护栏：最多前缀 + 尾部各一次）
-  // 渲染函数用恒等实现：这样 committedHtml + tailHtml 就是“屏幕上实际显示的
+  // 渲染函数用恒等实现：这样 committedBlocks.join('') + tailHtml 就是“屏幕上实际显示的
   // 文字”，可以直接断言不重不漏不换序。
   const state = createStreamRenderState((text) => {
     parses.push(text);
@@ -141,7 +197,7 @@ function simulateStream(source, { batch = 25, frames = 4 } = {}) {
       const callsBefore = parses.length;
       shown = advanceShown(shown, content.length);
       const out = state.render(content, shown, true);
-      const text = out.committedHtml + out.tailHtml;
+      const text = out.committedBlocks.join('') + out.tailHtml;
       assert.ok(content.startsWith(text), '显示的必须是已接收内容的前缀（不重不漏不换序）');
       assert.ok(text.length >= displayed.length, '已显示长度不允许回退');
       displayed = text;
@@ -209,15 +265,15 @@ test('状态机：收尾强制渲染等于全文，且整篇只解析一次', ()
   });
   assert.ok(state, '模拟期状态机存在');
   const out = finalState.render(content, content.length, false, true);
-  assert.equal(out.committedHtml + out.tailHtml, content, '收尾必须等于全文');
+  assert.equal(out.committedBlocks.join('') + out.tailHtml, content, '收尾必须等于全文');
   assert.equal(parses.length, 1, '收尾只解析一次整篇');
 });
 
 test('状态机：内容被截断（重试丢弃）时立即对齐到新长度', () => {
   const state = createStreamRenderState((text) => text);
   const long = '甲段文字重复\n\n'.repeat(10);
-  assert.equal(state.render(long, long.length, true).committedHtml.length > 0, true);
+  assert.equal(state.render(long, long.length, true).committedBlocks.join('').length > 0, true);
   const short = '甲段文字重复\n\n';
   const out = state.render(short, short.length, true, true);
-  assert.equal(out.committedHtml + out.tailHtml, short, '截断后显示内容不能多出旧文字');
+  assert.equal(out.committedBlocks.join('') + out.tailHtml, short, '截断后显示内容不能多出旧文字');
 });

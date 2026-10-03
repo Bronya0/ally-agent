@@ -70,6 +70,9 @@ const bodyRef = ref(null);
 let observer = null;
 
 function reportOverflow() {
+  // 展开态不裁剪（上限已撤掉、不再溢出），没必要量；折叠态只有几行，量一次很便宜。
+  // 这条测量每拍都会被内容变化触发，展开态下读 scrollHeight 等于每拍把整棵正文子树重排。
+  if (!props.collapsed) return;
   const el = bodyRef.value;
   if (!el) return;
   emit('overflow', el.scrollHeight - el.clientHeight > 2);

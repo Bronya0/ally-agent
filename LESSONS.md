@@ -162,3 +162,6 @@
 [sdk-required-blocks-doc-shape] 2026-10-04 中危 SDK 必填字段挡住文档的可选形态：用 param.Override 发原始 JSON。@prov_adapter_anthropic.go
 [env-not-allowlisted] 2026-10-04 高危 给第三方子进程别继承整份 os.Environ（含 shell 导出的 key），走白名单＋显式 env。@biz_mcp.go
 [safety-switch-all-exits] 2026-10-04 高危 安全开关要盖全出口：MCP 曾写死 allowPrivate=true 绕过 allowPrivateNetwork。@biz_mcp.go
+[tailscan-loop] 2026-10-03 高危 尾部回扫勿用 lastIndexOf(sep,end-1)：end=0 时按 0 处理，重命中首分隔符，end 原地不动＝死循环，测试挂起。@utils/toolPreview.mjs
+[stream-hotpath-o-n] 2026-10-03 中危 流式热路径勿对整段累积载荷全量处理（split/join/全文正则/逐字符拼串/整篇 v-html 重建）：每拍一次、随输出线性增长，挤掉动画帧。@frontend/src
+[stream-block-render] 2026-10-03 中危 流式正文分块增量渲染：跨块语法（链接引用定义）与整篇解析不同，收尾须整篇重渲兜底；块要一块一节点，拼成单串交 v-html 等于整棵重建。@streamEase.mjs

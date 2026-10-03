@@ -28,7 +28,7 @@ Public License v3. See the LICENSE file for details.
 
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { codePreviewWindow, normalizedLines } from '../utils/toolPreview.mjs'
+import { codePreviewWindow, tailLines } from '../utils/toolPreview.mjs'
 
 // 被裁剪了就要能展开：折叠高度上限按渲染行数卡（6 行），而“有没有更多内容”
 // 若按逻辑行数判，单行超长内容（minified JSON、单行日志）永远是 1 行 → 判成
@@ -46,6 +46,9 @@ const bodyRef = ref(null);
 let observer = null;
 
 function reportOverflow() {
+  // 展开态不裁剪（上限已撤掉、不再溢出），没必要量；折叠态只有几行，量一次很便宜。
+  // 这条测量每拍都会被内容变化触发，展开态下读 scrollHeight 等于每拍把整棵正文子树重排。
+  if (!props.collapsed) return;
   const el = bodyRef.value;
   if (!el) return;
   emit('overflow', el.scrollHeight - el.clientHeight > 2);
@@ -73,22 +76,17 @@ watch(
 // 展开态展示完整原文（含空行）；折叠 tail 预览先剔除空行，保证预览末行
 // 总是真实输出，不被 shell 输出常见的尾随空行占位（拆分前 tool-body 路径
 // 的 computeToolBodyText 同样逻辑，拆分时丢失，在此恢复）。
-const preview = computed(() => {
-  if (!props.collapsed) {
-    return codePreviewWindow(props.text, { mode: 'tail' })
-  }
-  const visible = normalizedLines(props.text).filter((line) => line !== '').join('\n')
-  return codePreviewWindow(visible, {
-    collapsed: true,
-    maxLines: props.maxLines,
-    mode: 'tail',
-  })
-})
-
+//
+// 折叠分支只从尾部取需要的行：旧写法把整段输出切一遍、filter 后 join 回字符串，
+// 再交给 codePreviewWindow 切第二遍——同一段文本每帧被完整切两次。命令输出在
+// 流式期间有几 MB，而这张卡每拍都要重渲（见 utils/toolUpdateFlush.mjs）。
+//
 // 终端输出不做语法高亮：不是源码，高亮只会产生误导（shell 输出混排
 // 任意语言片段），纯文本 + mono 字体就是最正确的呈现。
 const displayLines = computed(() => {
-  const lines = preview.value.lines
-  return lines.length ? lines : []
+  if (!props.collapsed) return codePreviewWindow(props.text, { mode: 'tail' }).lines
+  // maxLines<=0 是不裁剪（codePreviewWindow 在这种情形返回全部行）。
+  const limit = props.maxLines > 0 ? props.maxLines : Number.POSITIVE_INFINITY
+  return tailLines(props.text, limit, { skipBlank: true })
 })
 </script>

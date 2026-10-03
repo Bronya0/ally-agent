@@ -9,15 +9,15 @@ Public License v3. See the LICENSE file for details.
 -->
 <template>
   <div class="message-body markdown-body">
-    <!-- 已完成的块：只在块边界推进时重解析一次 -->
-    <div v-if="committedHtml" class="stream-committed" v-html="committedHtml"></div>
+    <!-- 已完成的块：一块一个节点，块边界推进时只追加一个新节点 -->
+    <div v-for="(html, index) in committedBlocks" :key="index" class="stream-committed" v-html="html"></div>
     <!-- 当前未完成的那一块：逐帧推进，长块（长代码块/公式/图片）自动降频 -->
     <div v-if="tailHtml" class="stream-tail" v-html="tailHtml"></div>
   </div>
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
 import {
   STREAM_MAX_LAG_MS,
   advanceShown,
@@ -39,7 +39,11 @@ const REDUCED_MOTION =
 // ① 用 rAF 把"已显示长度"朝"已接收长度"逼近；② 把状态机产出的两段 HTML 写进模板。
 // 独立渲染作用域：父级 ChatMessages 的 render 函数不订阅流式增量，所以缓冲帧
 // （最多 60FPS）只会重解析本组件的一小段尾部，不会拖累整个消息列表。
-const committedHtml = ref('');
+// 已提交的块是一个数组：一块一个元素，新增块只插一个新节点，已经渲染好的块（连同
+// 里面的 mermaid 图与代码高亮）不再被重建——拼成一整段 HTML 交给 v-html 时，每次都
+// 会把整棵已提交子树重建一遍。用 shallowRef 接住状态机给的数组：它靠引用变化触发
+// 重渲，状态机因此每次追加都建新数组。
+const committedBlocks = shallowRef([]);
 const tailHtml = ref('');
 
 const content = computed(() => String(props.msg?.content ?? ''));
@@ -53,7 +57,7 @@ let lagSince = 0;
 
 function flush(force) {
   const out = renderState.render(content.value, shown, streaming.value, force === true);
-  committedHtml.value = out.committedHtml;
+  committedBlocks.value = out.committedBlocks;
   tailHtml.value = out.tailHtml;
 }
 

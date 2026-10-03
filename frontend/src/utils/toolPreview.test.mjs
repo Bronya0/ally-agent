@@ -12,6 +12,7 @@ import test from 'node:test';
 import {
   assistantRowRenderState,
   codePreviewWindow,
+  countLinesCapped,
   deleteAbsentCount,
   deleteFailedCount,
   deletePathList,
@@ -21,12 +22,14 @@ import {
   formatHttpToolTitle,
   formatPlanArgsTitle,
   isRenderableMessage,
+  normalizedLines,
   scheduledTaskRow,
   scheduledTaskRows,
   serviceListRows,
   serviceRow,
   sshClusterNodeRow,
   sshServerRows,
+  tailLines,
 } from './toolPreview.mjs';
 
 test('collapsed create preview uses the latest generated lines', () => {
@@ -446,4 +449,88 @@ test('scheduledTaskRow reads the single task a create returns', () => {
   assert.equal(scheduledTaskRow({ deleted: 't_1' }), null);
   assert.equal(scheduledTaskRow({ count: 0, tasks: [] }), null);
   assert.equal(scheduledTaskRow(null), null);
+});
+
+// tailLines / countLinesCapped 是 normalizedLines 全量切法的就地替代：折叠预览与
+// 「行数是否超阈值」都不该为了末尾几行切开整段流式输出（命令输出可以到几 MB，而
+// 工具卡每拍就要重渲一次）。这里用同一批输入对拍旧写法，钉住两者逐字一致，边界
+// 覆盖 \r\n、空行、末尾换行与裸 \r。
+test('tailLines agrees with the full split for every input shape', () => {
+  const samples = [
+    '', 'a', 'a\n', 'a\n\n', '\n', '\n\n', '\n\n\n',
+    'a\nb', 'a\nb\n', 'a\n\nb\n',
+    'a\r\nb', 'a\r\nb\r\n', 'a\r', 'a\rb\nc', 'a\r\r\nb',
+    'l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8',
+    `${'x'.repeat(200)}\n${'y'.repeat(200)}`,
+  ];
+  // 空文本的旧写法 normalizedLines('') 是 ['']（一行空），但两个消费方都把它当 0 行
+  // （codePreviewWindow 对空串返回空数组），所以对拍时空串按 [] 期望。
+  const legacy = (text) => (text ? normalizedLines(text) : []);
+  for (const text of samples) {
+    for (const count of [1, 2, 4, 6, 100]) {
+      assert.deepEqual(
+        tailLines(text, count),
+        legacy(text).slice(-count),
+        `plain tail: ${JSON.stringify(text)} count=${count}`,
+      );
+      assert.deepEqual(
+        tailLines(text, count, { skipBlank: true }),
+        legacy(text).filter((line) => line !== '').slice(-count),
+        `non-blank tail: ${JSON.stringify(text)} count=${count}`,
+      );
+    }
+  }
+  assert.deepEqual(tailLines('a\nb', 0), [], 'count<=0 yields nothing');
+});
+
+// 折叠 tail 预览走的是「从尾部取行」快路：它必须与旧的全量切行逐字等价
+// （行、起止行号、两个 omitted 标志都要对得上，否则 gutter 行号会错位）。
+test('折叠 tail 预览与全量切行等价', () => {
+  const legacyWindow = (code, options) => {
+    if (!code) return { lines: [], startLine: 1, totalLines: 0, omittedBefore: false, omittedAfter: false };
+    const collapsed = Boolean(options.collapsed);
+    const maxLines = Number(options.maxLines || 0);
+    const mode = options.mode === 'tail' ? 'tail' : 'head';
+    const lines = normalizedLines(code);
+    const totalLines = lines.length;
+    if (!collapsed || maxLines <= 0 || totalLines <= maxLines) {
+      return { lines, startLine: 1, totalLines, omittedBefore: false, omittedAfter: false };
+    }
+    if (mode === 'tail') {
+      const start = Math.max(0, totalLines - maxLines);
+      return { lines: lines.slice(start), startLine: start + 1, totalLines, omittedBefore: start > 0, omittedAfter: false };
+    }
+    return { lines: lines.slice(0, maxLines), startLine: 1, totalLines, omittedBefore: false, omittedAfter: totalLines > maxLines };
+  };
+  const samples = [
+    '', 'a', 'a\n', 'a\nb', 'a\n\nb\n', '\n\n\n',
+    'l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8',
+    'l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\n',
+    'a\r\nb\r\nc\r\nd\r\ne\r\nf\r\ng',
+    `${'x'.repeat(300)}\n${'y'.repeat(300)}`,
+  ];
+  for (const code of samples) {
+    for (const maxLines of [1, 3, 6, 100]) {
+      const options = { collapsed: true, maxLines, mode: 'tail' };
+      assert.deepEqual(
+        codePreviewWindow(code, options),
+        legacyWindow(code, options),
+        `${JSON.stringify(code)} maxLines=${maxLines}`,
+      );
+    }
+  }
+});
+
+test('countLinesCapped agrees with the full split up to its cap', () => {
+  const samples = ['', 'a', 'a\n', 'a\n\n', '\n', 'a\nb', 'a\nb\n', 'a\r\nb', 'l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8'];
+  for (const text of samples) {
+    const exact = text ? normalizedLines(text).length : 0;
+    for (const cap of [1, 2, 4, 7, 100]) {
+      assert.equal(
+        countLinesCapped(text, cap),
+        Math.min(exact, cap),
+        `line count: ${JSON.stringify(text)} cap=${cap}`,
+      );
+    }
+  }
 });

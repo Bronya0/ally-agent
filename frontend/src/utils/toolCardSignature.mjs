@@ -20,7 +20,23 @@
  * in tests instead of in production.
  *
  * Non-tool messages return an empty string so they add nothing to the memo.
+ *
+ * 内容类的大字段（body / codeContent）只以**形状指纹**进签名，不整段拼进来。
+ * 签名每拍都要算一次（ChatMessages 的 v-memo，以及 App.vue 那个跨整段会话的
+ * buildDisplayMessagesSignature），而 body 是流式累积出来的完整输出，可以到几 MB：
+ * 把它拼进签名字符串等于每拍给整段会话的文本做一次 O(n) 拷贝，主线程被这件事
+ * 占满，卡片旁边的动画（工具卡上那个运行圆点）就跟着掉帧。
+ * 指纹保留了「每一拍的内容变化都会改签名」，成本却是 O(1)。
  */
+// 长文本的廉价指纹：长度 + 首尾片段。V8 的 slice 返回 SlicedString，不复制内容；
+// 短文本直接带全文，避免任何碰撞。
+function contentShape(text) {
+  const src = String(text || '');
+  if (!src) return '0';
+  if (src.length <= 64) return `${src.length}:${src}`;
+  return `${src.length}:${src.slice(0, 32)}:${src.slice(-32)}`;
+}
+
 export function toolCardRenderSignature(msg) {
   if (!msg || msg.role !== 'tool_call') return '';
   const len = (v) => (Array.isArray(v) ? v.length : 0);
@@ -32,7 +48,7 @@ export function toolCardRenderSignature(msg) {
     // card keeps the verb it showed first.
     msg.toolAction,
     msg.title,
-    msg.body,
+    contentShape(msg.body),
     msg.error,
     // 沙箱拒绝同时决定状态标记与那行醒目报错：漏掉它 v-memo 会把卡片冻在绿色 √ 上。
     msg.sandboxDenied,
@@ -70,6 +86,6 @@ export function toolCardRenderSignature(msg) {
     msg.editFilePath || '',
     msg.editAdded || 0,
     msg.editRemoved || 0,
-    msg.codeContent ? msg.codeContent.length : 0,
+    contentShape(msg.codeContent),
   ].join('|');
 }

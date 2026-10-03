@@ -109,6 +109,7 @@ Public License v3. See the LICENSE file for details.
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { toolVerbLabel } from '../utils/toolVerb.mjs';
 import { buildHtmlRenderDocument, buildStandaloneHtmlDocument, normalizeHtmlFrameHeight } from '../utils/htmlRender.mjs';
+import { tailLines } from '../utils/toolPreview.mjs';
 import ToolStatusIcon from './ToolStatusIcon.vue';
 
 const props = defineProps({
@@ -123,15 +124,17 @@ const frameToken = `ally-html-${Date.now()}-${Math.random().toString(36).slice(2
 const statusLabel = computed(() => toolVerbLabel('render_html', 'render_html', props.msg.status));
 const canFullscreen = computed(() => props.msg.status !== 'running' && Boolean(props.msg.htmlContent));
 
-const normalizedLines = computed(() => {
-  const html = String(props.msg.htmlContent || '').replace(/\r\n?/g, '\n');
-  if (!html) return [];
-  const lines = html.split('\n');
-  if (lines.length > 1 && lines[lines.length - 1] === '') lines.pop();
-  return lines;
-});
+// 流式期间每拍（120/400/900ms）都要算一次，而 html 会累积到几百 KB：为末尾 8 行
+// 把整段切一遍是白费的（与命令卡同款修法，见 utils/toolPreview.mjs 的 tailLines）。
+const TAIL_PREVIEW_LINES = 8;
 
-const tailPreview = computed(() => normalizedLines.value.slice(-8).join('\n'));
+const tailPreview = computed(() => {
+  const raw = String(props.msg.htmlContent || '');
+  // 裸 \r（老式换行）也当换行：旧实现一律 replace(/\r\n?/g, '\n') 归一，这里只在
+  // 真的含 \r 时才付那次全文扫描，绝大多数内容直接走尾部截取。
+  const text = raw.indexOf('\r') === -1 ? raw : raw.replace(/\r\n?/g, '\n');
+  return tailLines(text, TAIL_PREVIEW_LINES).join('\n');
+});
 
 const renderedDocument = computed(() => {
   return buildHtmlRenderDocument(props.msg.htmlContent, frameToken);

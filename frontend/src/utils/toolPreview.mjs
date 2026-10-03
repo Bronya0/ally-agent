@@ -15,6 +15,69 @@ export function normalizedLines(text) {
   return lines;
 }
 
+// 折叠预览与"行数是否超阈值"都只需要文本的**一小部分**，但两者过去都先调
+// normalizedLines 把整段切完再说。流式期间这段文本有几 MB（命令输出 / 创建内容
+// 都挂在同一个 body 上），而工具卡每拍就重渲一次（小载荷 120ms，见
+// utils/toolUpdateFlush.mjs），于是每帧都为一个 4 行预览抄一遍全文：主线程被这件
+// 事占满时，卡片旁边正在跑的动画就跟着掉帧（那张卡上的运行圆点尤其明显）。
+// 下面两个函数都从文本尾部/头部就地取，代价与文本总长无关。
+
+/**
+ * 取末尾 count 行，结果与下面两种写法逐字一致：
+ *   skipBlank=false → normalizedLines(text).slice(-count)
+ *   skipBlank=true  → normalizedLines(text).filter((line) => line !== '').slice(-count)
+ * 归一化只吃掉**真正跟在 \n 前面**的那个 \r（等价于 replace(/\r\n/g, '\n')）；
+ * 行内或文本末尾的裸 \r 是内容的一部分，照旧保留。count<=0 返回空数组。
+ */
+export function tailLines(text, count, options = {}) {
+  const src = String(text || '');
+  const max = Math.floor(Number(count) || 0);
+  const skipBlank = options.skipBlank === true;
+  if (!src || max <= 0) return [];
+  const out = [];
+  let end = src.length;
+  let isTailSegment = true;
+  while (out.length < max) {
+    // end === 0 时不能再问 lastIndexOf('\n', -1)：负的 fromIndex 会被当成 0，于是又
+    // 找到索引 0 上那个 \n，end 原地不动 —— 整个循环就成了死循环。
+    // 末尾那段（后面没有 \n）为空时就是 normalizedLines 会 pop 掉的那个空元素，
+    // 任何模式下都不算一行；只有它才不做结尾 \r 的归一化（裸 \r 是内容）。
+    const start = end > 0 ? src.lastIndexOf('\n', end - 1) : -1;
+    const raw = src.slice(start + 1, end);
+    const line = !isTailSegment && raw.endsWith('\r') ? raw.slice(0, -1) : raw;
+    if (line !== '' || (!skipBlank && !isTailSegment)) out.push(line);
+    if (start < 0) break;
+    end = start;
+    isTailSegment = false;
+  }
+  return out.reverse();
+}
+
+/**
+ * 行数封顶：卡片只问「是否超过 4 / 6 行」，不必知道精确行数，数够上限就停。
+ * 返回 min(真实行数, cap)，所以拿它和任何不超过 cap 的阈值比较，结论与精确行数一致。
+ * 语义与 normalizedLines(text).length 对齐（末尾那个空元素只弹一次）。
+ */
+export function countLinesCapped(text, cap) {
+  const src = String(text || '');
+  if (!src) return 0;
+  const limit = Math.max(1, Math.floor(Number(cap) || 0));
+  // 数的是换行个数，不是行数：数满 cap 个换行就已经能下结论了
+  // （末尾那个空元素至多把行数减 1，所以真实行数 ≥ cap），
+  // 而末尾空行的修正只在没数满时才需要，那时行数才是精确值。
+  let newlines = 0;
+  let from = 0;
+  while (newlines < limit) {
+    const at = src.indexOf('\n', from);
+    if (at < 0) break;
+    newlines += 1;
+    from = at + 1;
+  }
+  if (newlines >= limit) return limit;
+  const tailBlank = src.endsWith('\n') ? 1 : 0;
+  return Math.max(1, newlines + 1 - tailBlank);
+}
+
 // formatHttpToolTitle renders the title shown on http_request / web_fetch tool
 // cards. It surfaces enough of the optional fields (method, timeout, body/json
 // presence) that two cards with the same URL but different actual arguments can
@@ -250,6 +313,24 @@ export function codePreviewWindow(code, options = {}) {
   const collapsed = Boolean(options.collapsed);
   const maxLines = Number(options.maxLines || 0);
   const mode = options.mode === 'tail' ? 'tail' : 'head';
+
+  // 折叠 + 尾部（create 卡流式时的正文预览）：只从末尾取需要的行，行数用只数换行的
+  // 计数补出来，不切行数组。流式期间这个函数每拍都要跑一次，而内容会累积到几 MB：
+  // 为末尾 6 行把整段切一遍会顺带产生几万个短命字符串。
+  if (collapsed && mode === 'tail' && maxLines > 0) {
+    const totalLines = countLinesCapped(code, Number.POSITIVE_INFINITY);
+    if (totalLines <= maxLines) {
+      return { lines: normalizedLines(code), startLine: 1, totalLines, omittedBefore: false, omittedAfter: false };
+    }
+    return {
+      lines: tailLines(code, maxLines),
+      startLine: totalLines - maxLines + 1,
+      totalLines,
+      omittedBefore: true,
+      omittedAfter: false,
+    };
+  }
+
   const lines = normalizedLines(code);
   const totalLines = lines.length;
 

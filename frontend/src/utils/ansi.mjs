@@ -60,7 +60,11 @@ export function hasAnsi(text) {
  * Used where HTML rendering is unavailable (clipboard, tool-call bodies).
  */
 export function stripAnsi(text) {
-  return String(text ?? '')
+  const value = String(text ?? '');
+  // 绝大多数终端输出里根本没有 ESC：一次原生 indexOf 就能免掉下面三趟全文正则
+  // （731KB 实测 1.16ms，而命令卡在流式期间每一拍都要跑一次）。
+  if (value.indexOf(ESC) === -1) return value;
+  return value
     .replace(OSC_PATTERN, '')
     .replace(CSI_PATTERN, '')
     .replace(SIMPLE_PATTERN, '');

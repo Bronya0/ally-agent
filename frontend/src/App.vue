@@ -666,6 +666,7 @@ import { fmtCompact, fmtDuration, formatBytes } from './utils/format.mjs';
 import { isSkillActive, normalizeSkillName } from './utils/skills.mjs';
 import {
   assistantRowRenderState,
+  countLinesCapped,
   deleteAbsentCount,
   deleteFailedCount,
   deletePathSummary,
@@ -690,6 +691,7 @@ import {
   phaseLabel,
 } from './utils/runPhase.mjs';
 import { toolCardRenderSignature } from './utils/toolCardSignature.mjs';
+import { parsePartialToolArgs } from './utils/toolArgsPartial.mjs';
 import { toolUpdateFlushDelay } from './utils/toolUpdateFlush.mjs';
 import { isMcpToolName, toolActionFromArgs } from './utils/toolVerb.mjs';
 import { toolKindOf, toolStartsCollapsed } from './utils/toolKind.mjs';
@@ -2837,8 +2839,18 @@ function buildDisplayMessagesSignature(session, expanded) {
   const msgs = session?.messages;
   if (!msgs) return '';
   const parts = [`session:${session?.id || ''}`, `len:${msgs.length}`, `exp:${expanded.has(session?.id) ? 1 : 0}`];
+  // 只有末尾这一小段会真的渲染，前面都在归档行后面。归档区不渲染，只由“这一条
+  // 算不算一条消息”决定归档行上的条数，所以那里只需要一个布尔；给它跑完整的卡片
+  // 签名（每张卡 40+ 个字段、含随流式增长的正文指纹）等于每次 App 重渲染都把整段
+  // 历史重算一遍，而流式期间这是每 120ms 一次。
+  // visibleFrom 取展开态的上限：宁可多算几条，不能把会渲染的行划到廉价判据里。
+  const visibleFrom = Math.max(0, msgs.length - MAX_EXPANDED_RENDER_MESSAGES - 1);
   for (let i = 0; i < msgs.length; i++) {
     const m = msgs[i];
+    if (i < visibleFrom) {
+      parts.push(isRenderableMessage(m) ? '1' : '0');
+      continue;
+    }
     if (m?.role === 'tool_call') {
       parts.push(toolCardRenderSignature(m));
     } else {
@@ -6649,7 +6661,7 @@ function appendToolEventFallback(session, data = {}, status = 'running') {
   if (!session) return null;
   const eventId = toolEventId(data);
   const title = makeToolResultTitle(data.name, data.result, data) || makeToolTitle(data.name, data.args || '', data);
-  const toolAction = toolActionFromArgs(data.name, parseToolArgsBestEffort(data.args || ''));
+  const toolAction = toolActionFromArgs(data.name, parsePartialToolArgs(data.args || ''));
   const payload = {
     role: 'tool_call',
     eventId,
@@ -6731,7 +6743,7 @@ function makeToolResultTitle(name, result, meta = {}) {
   if (name === 'plan' && Array.isArray(d.plan)) {
     // A report names the step the work reached, so the card keeps that title;
     // every other call lets the result say where the plan now stands.
-    return formatPlanArgsTitle(parseToolArgsBestEffort(meta.args || '')) || formatPlanNextStep(d.plan);
+    return formatPlanArgsTitle(parsePartialToolArgs(meta.args || '')) || formatPlanNextStep(d.plan);
   }
 	if ((name === 'edit' || name === 'remote_edit') && Array.isArray(d.files)) return d.files.length === 1 ? (d.files[0]?.path || '') : `${d.files.length} files`;
   if (name === 'remote_read' && Array.isArray(d.files)) {
@@ -6756,54 +6768,19 @@ function makeToolResultTitle(name, result, meta = {}) {
   return '';
 }
 
-const PARTIAL_TOOL_ARG_FIELDS = [
-  'target',
-  'path',
-  'content',
-  'command',
-  'cmd',
-  'pattern',
-  'glob',
-  'expression',
-  'description',
-  'url',
-  'title',
-  'html',
-  'changes',
-  'oldText',
-  'oldString',
-  'newString',
-  'newText',
-];
-
-function parseToolArgsBestEffort(raw) {
-  const text = String(raw || '');
-  if (!text.trim()) return {};
-  try {
-    const parsed = JSON.parse(text);
-    return parsed && typeof parsed === 'object' ? parsed : {};
-  } catch (_) {
-    const partial = {};
-    for (const field of PARTIAL_TOOL_ARG_FIELDS) {
-      const found = readPartialJsonStringField(text, field);
-      if (found.found) partial[field] = found.value;
-    }
-    const lines = readPartialJsonStringArrayField(text, 'lines');
-    if (lines.found) partial.lines = lines.value;
-    return partial;
-  }
-}
-
 // Share one best-effort argument parse between the title and rich preview
 // builders for the same progress event. Output updates carry `output` plus
 // the original `args`; they must never parse the growing command output as
 // JSON tool arguments.
+// 兜底解析本身搬到了 utils/toolArgsPartial.mjs（单遍扫描 + slice 取值）：每个
+// 流式片段都要跑一次，旧写法给每个字段各扫一遍整段参数再逐字符拼值，1MB 累积
+// 参数约 33ms，写大文件的整个流式期间主线程就耗在这一件事上。
 function parseToolArgsForMeta(raw, meta = {}) {
   const text = String(raw || '');
   if (meta && meta.__parsedToolArgsRaw === text && meta.__parsedToolArgs) {
     return meta.__parsedToolArgs;
   }
-  const parsed = parseToolArgsBestEffort(text);
+  const parsed = parsePartialToolArgs(text);
   if (meta && typeof meta === 'object') {
     meta.__parsedToolArgsRaw = text;
     meta.__parsedToolArgs = parsed;
@@ -6811,91 +6788,12 @@ function parseToolArgsForMeta(raw, meta = {}) {
   return parsed;
 }
 
-function readPartialJsonStringField(text, field) {
-  const needle = `"${field}"`;
-  let keyIndex = text.indexOf(needle);
-  while (keyIndex >= 0) {
-    let i = keyIndex + needle.length;
-    while (/\s/.test(text[i] || '')) i++;
-    if (text[i] !== ':') {
-      keyIndex = text.indexOf(needle, keyIndex + needle.length);
-      continue;
-    }
-    i++;
-    while (/\s/.test(text[i] || '')) i++;
-    if (text[i] !== '"') return { found: false, value: '' };
-    return readPartialJsonString(text, i);
-  }
-  return { found: false, value: '' };
-}
-
-function readPartialJsonStringArrayField(text, field) {
-  const needle = `"${field}"`;
-  let keyIndex = text.indexOf(needle);
-  while (keyIndex >= 0) {
-    let i = keyIndex + needle.length;
-    while (/\s/.test(text[i] || '')) i++;
-    if (text[i] !== ':') {
-      keyIndex = text.indexOf(needle, keyIndex + needle.length);
-      continue;
-    }
-    i++;
-    while (/\s/.test(text[i] || '')) i++;
-    if (text[i] !== '[') return { found: false, value: [] };
-    i++;
-    const value = [];
-    while (i < text.length) {
-      while (/[\s,]/.test(text[i] || '')) i++;
-      if (text[i] === ']') return { found: true, value, complete: true };
-      if (text[i] !== '"') return value.length ? { found: true, value, complete: false } : { found: false, value: [] };
-      const item = readPartialJsonString(text, i);
-      if (!item.found) return value.length ? { found: true, value, complete: false } : { found: false, value: [] };
-      value.push(item.value);
-      i = item.nextIndex || text.length;
-      if (!item.complete) return { found: true, value, complete: false };
-    }
-    return { found: true, value, complete: false };
-  }
-  return { found: false, value: [] };
-}
-
-function readPartialJsonString(text, quoteIndex) {
-  let value = '';
-  for (let i = quoteIndex + 1; i < text.length; i++) {
-    const ch = text[i];
-    if (ch === '"') return { found: true, value, complete: true, nextIndex: i + 1 };
-    if (ch !== '\\') {
-      value += ch;
-      continue;
-    }
-    i++;
-    if (i >= text.length) return { found: true, value, complete: false, nextIndex: i };
-    const esc = text[i];
-    if (esc === 'n') value += '\n';
-    else if (esc === 'r') value += '\r';
-    else if (esc === 't') value += '\t';
-    else if (esc === 'b') value += '\b';
-    else if (esc === 'f') value += '\f';
-    else if (esc === 'u') {
-      const hex = text.slice(i + 1, i + 5);
-      if (/^[0-9a-fA-F]{4}$/.test(hex)) {
-        value += String.fromCharCode(parseInt(hex, 16));
-        i += 4;
-      } else {
-        return { found: true, value, complete: false, nextIndex: i };
-      }
-    } else {
-      value += esc;
-    }
-  }
-  return { found: true, value, complete: false, nextIndex: text.length };
-}
-
 function countPreviewLines(text) {
   if (!text) return 0;
-  const lines = String(text).replace(/\r\n/g, '\n').split('\n');
-  if (lines.length > 1 && lines[lines.length - 1] === '') lines.pop();
-  return lines.length;
+  // 精确行数，但不建行数组：这个 chip 每拍都要算一次（create 卡流式期间），而
+  // 内容是整份文件，旧写法每拍切一次全文并产生几万个短命字符串。语义与
+  // normalizedLines(text).length 逐字等价（见 utils/toolPreview.mjs）。
+  return countLinesCapped(text, Number.POSITIVE_INFINITY);
 }
 
 function formatCreateDraftChip(content) {
@@ -8752,6 +8650,9 @@ function normalizeGeneratedImageMarkdown(text) {
 
 function repairStreamingMarkdown(text) {
   let repaired = text;
+  // 流式片段里绝大多数既没有围栏也没有行内代码：一次原生 indexOf 就能跳过下面
+  // 的两趟全文正则和一次逐字符扫描（后者 1MB 约 2ms）。每个流式片段都要跑一遍。
+  if (repaired.indexOf('`') === -1) return repaired;
   const fenceCount = (repaired.match(/```/g) || []).length;
   if (fenceCount % 2 === 1) {
     repaired += '\n```';
