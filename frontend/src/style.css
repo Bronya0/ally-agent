@@ -2657,8 +2657,9 @@ code, pre {
 /* 常驻小点动画的提层提示：只在“在跑”期间挂类、跑完即撤，不会静态摊在长列表
    每一项上（AGENTS.md §4.7）。当前唯一消费方是子代理卡片的 thinking-bounce
    三点（定义见 SubagentInlineCard.vue）。
-   工具卡的运行圆点不列在这里：它是纯 transform 动画（盒恒定、只有 scale 在动），
-   提层交给引擎，不写这个静态提示。 */
+   工具卡的运行圆点不列在这里，但同样有提示：它那个类也只在卡片“正在运行”时
+   存在、跑完即撤，提示写在 ToolStatusIcon.vue 自己的 .running-dot-core 上——
+   同一原则的另一处落点，不是漏写。 */
 .subagent-name-dot {
   will-change: transform, opacity;
 }

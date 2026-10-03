@@ -169,3 +169,4 @@
 [prompt-hardcoded-numbers] 2026-10-03 中危 提示词里写死的阈值（如 read 2000 行）与实现分离、无测试守护：漂移后模型按错数字判断，静默漏读。@biz_prompt.go
 [pinned-tail-placeholder] 2026-10-04 中危 贴底列表尾部的不可见占位行出现/消失会让整条内容上下跳：本轮占位要按「这一轮在跑」留位，别按「正文是否在流式」开关。@ChatMessages.vue
 [hover-reveal-hitbox] 2026-10-04 中危 悬停唤出的行勿把 visibility:hidden 放命中盒：外框不接指针，鼠标落上去唤不回；藏内容盒、外框留命中区。@MessageRoundStats.vue
+[anim-no-layer-hint] 2026-10-03 中危 新增小元素动画（如 6px 点）不会自提层：卡每拍重绘时改由主线程画帧，看着像卡死；须按所动属性动态挂 will-change。@ToolStatusIcon.vue
