@@ -10,7 +10,9 @@ permissions:
 
 env:
   APP_NAME: Ally
-  WAILS_VERSION: v3.0.0-beta.11
+  # 永远装最新的 wails3 CLI：写死 tag 会和 go.mod 里的 runtime 版本悄悄漂移
+  # （曾长期停在 beta.11，而 go.mod 已经是 beta.15）。要临时钉住就换成具体 tag。
+  WAILS_VERSION: latest
   RG_VERSION: 15.2.0
   ALLY_BUILD_VERSION: ${{ github.event.release.tag_name || github.ref_name }}
   NODE_OPTIONS: --max-old-space-size=4096
