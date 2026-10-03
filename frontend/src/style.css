@@ -4707,7 +4707,8 @@ code, pre {
 
 /* 本轮统计行是收尾块的兄弟节点（在 .message 之外，见 ChatMessages）：收尾块
    不许再交出底部外边距，否则缝隙 = 收尾块的 10px + 统计行的 4px，统计行被顶
-   得离正文一截。那段行距改由统计行自己向下承担（MessageRoundStats 的 margin）。
+   得离正文一截。那段行距改由统计行自己向下承担（MessageRoundStats 的 padding，
+   不是 margin：外边距不属于命中区，鼠标滑过会掉进缝里）。
    两档都是 :has()（权重 0,3,0）：`.message` 在组件 scoped 样式里以同权重设过
    margin-bottom，不能靠源码顺序取胜。 */
 .messages > .message:has(+ .turn-stats),

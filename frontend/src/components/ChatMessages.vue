@@ -1043,9 +1043,13 @@ defineExpose({ scrollbarRef, scrollToBottom, scrollToUserQuestion, scrollToBotto
 }
 
 /* 统计行的可见性跟着本轮收尾消息走（行的样式表在 MessageRoundStats.vue）：
-   鼠标压住它前面那条消息（收尾消息）或它自己时浮出。 */
-.messages > *:hover + .turn-stats,
-.turn-stats:hover {
+   鼠标压住它前面那条消息（收尾消息）或统计行这块区域本身时浮出。后者要求
+   「统计行自己」是可命中的 —— 行的外框因此始终可见，隐藏的是它的 .stats-inner，
+   这里显形也只能显形内容盒；若把 visibility:hidden 留在外框上，外框就不接指针，
+   鼠标放到统计行区域什么都不会发生。
+   占位行（is-placeholder，这一轮还在跑）不在显形之列：它只占高度。 */
+.messages > *:hover + .turn-stats:not(.is-placeholder) :deep(.stats-inner),
+.turn-stats:not(.is-placeholder):hover :deep(.stats-inner) {
   visibility: visible;
   opacity: 1;
 }

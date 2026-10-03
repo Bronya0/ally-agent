@@ -9,51 +9,55 @@ Public License v3. See the LICENSE file for details.
 -->
 <template>
   <div :class="['message-duration', { 'is-placeholder': isPlaceholder }]">
-    <span class="duration-text">{{ owner.roundDurationText || '\u00a0' }}<template v-if="owner.completedAtText">{{ '\u00a0' + owner.completedAtText }}</template></span>
-    <span
-      v-if="typeof owner.cacheRate === 'number'"
-      class="cache-rate"
-      :title="`cache hit ${owner.cacheHit} / miss ${owner.cacheMiss} (this run)`"
-    >cache {{ owner.cacheRate }}%</span>
-    <span
-      v-if="owner.runInputTokens > 0 || owner.runOutputTokens > 0"
-      class="run-tokens"
-      :title="`input ${owner.runInputTokens} / output ${owner.runOutputTokens} tokens (this run)`"
-    >↑{{ fmtTokens(owner.runInputTokens) }} ↓{{ fmtTokens(owner.runOutputTokens) }}</span>
-    <span
-      v-if="tokenSpeed"
-      class="run-tokens"
-      :title="`${fmtTokens(owner.runOutputTokens)} output tokens / ${(owner.roundDurationMs / 1000).toFixed(1)}s (whole run)`"
-    >{{ tokenSpeed }} token/s</span>
-    <n-dropdown
-      trigger="click"
-      placement="top-end"
-      :options="exportOptions"
-      @select="(key) => $emit('export', key)"
-    >
-      <button class="export-icon-btn" :title="$t('chat.export.title')" :aria-label="$t('chat.export.title')" @click.stop>
-        <ExportOutlined />
+    <!-- 内容盒：藏起来的是它，不是外框。外框始终可见、专责接住 hover
+         （鼠标放到统计行这块区域也算悬停），里面的按钮在隐藏时不可命中。 -->
+    <span class="stats-inner">
+      <span class="duration-text">{{ owner.roundDurationText || '\u00a0' }}<template v-if="owner.completedAtText">{{ '\u00a0' + owner.completedAtText }}</template></span>
+      <span
+        v-if="typeof owner.cacheRate === 'number'"
+        class="cache-rate"
+        :title="`cache hit ${owner.cacheHit} / miss ${owner.cacheMiss} (this run)`"
+      >cache {{ owner.cacheRate }}%</span>
+      <span
+        v-if="owner.runInputTokens > 0 || owner.runOutputTokens > 0"
+        class="run-tokens"
+        :title="`input ${owner.runInputTokens} / output ${owner.runOutputTokens} tokens (this run)`"
+      >↑{{ fmtTokens(owner.runInputTokens) }} ↓{{ fmtTokens(owner.runOutputTokens) }}</span>
+      <span
+        v-if="tokenSpeed"
+        class="run-tokens"
+        :title="`${fmtTokens(owner.runOutputTokens)} output tokens / ${(owner.roundDurationMs / 1000).toFixed(1)}s (whole run)`"
+      >{{ tokenSpeed }} token/s</span>
+      <n-dropdown
+        trigger="click"
+        placement="top-end"
+        :options="exportOptions"
+        @select="(key) => $emit('export', key)"
+      >
+        <button class="export-icon-btn" :title="$t('chat.export.title')" :aria-label="$t('chat.export.title')" @click.stop>
+          <ExportOutlined />
+        </button>
+      </n-dropdown>
+      <button
+        v-if="isLastAnswer"
+        class="export-icon-btn"
+        :title="$t('chat.copySummary.title')"
+        :aria-label="$t('chat.copySummary.title')"
+        @click.stop="$emit('copySummary')"
+      >
+        <CopyOutlined />
       </button>
-    </n-dropdown>
-    <button
-      v-if="isLastAnswer"
-      class="export-icon-btn"
-      :title="$t('chat.copySummary.title')"
-      :aria-label="$t('chat.copySummary.title')"
-      @click.stop="$emit('copySummary')"
-    >
-      <CopyOutlined />
-    </button>
-    <n-dropdown
-      trigger="click"
-      placement="top-end"
-      :options="quickMessageOptions"
-      @select="(key) => $emit('quickMessage', key)"
-    >
-      <button class="export-icon-btn" :title="$t('chat.quickMessage.title')" :aria-label="$t('chat.quickMessage.title')" @click.stop>
-        <MessageOutlined />
-      </button>
-    </n-dropdown>
+      <n-dropdown
+        trigger="click"
+        placement="top-end"
+        :options="quickMessageOptions"
+        @select="(key) => $emit('quickMessage', key)"
+      >
+        <button class="export-icon-btn" :title="$t('chat.quickMessage.title')" :aria-label="$t('chat.quickMessage.title')" @click.stop>
+          <MessageOutlined />
+        </button>
+      </n-dropdown>
+    </span>
   </div>
 </template>
 
@@ -77,8 +81,9 @@ const props = defineProps({
 defineEmits(['export', 'quickMessage', 'copySummary']);
 
 // 流式期间这条行是占位：只占高度、内容不可见（内容是一个不换行空格），
-// run:done 把时长填进来之后同一位置变可见。可见与否由鼠标悬停控制，
-// 见 ChatMessages 的 `.turn-stats` 规则。
+// run:done 把时长填进来之后同一位置变可见。可见与否由鼠标悬停控制，见
+// ChatMessages 的 `.turn-stats` 规则；这个类同时是那条规则的显形闸门——
+// 占位行不许被悬停唤出来（本轮统计还没到，唤出来的只是几个空按钮）。
 const isPlaceholder = computed(() => !props.owner.roundDurationText);
 
 function fmtTokens(n) {
@@ -103,25 +108,29 @@ const tokenSpeed = computed(() => {
 <style scoped>
 .message-duration {
   display: inline-flex;
-  align-items: center;
-  gap: 6px;
   font-size: var(--ally-sub-font-size, 13px);
   color: var(--ally-text-faint);
   /* 4px 贴合上面那条收尾块（它的底部外边距已被 style.css 的
      `.messages > .message:has(+ .turn-stats)` 规则清零）；10px 是到下一轮的
-     行距——本行已是收尾块的兄弟节点，那段行距必须由它自己承担，不能省。 */
-  margin: 4px 0 10px;
-  /* 统计行默认隐藏但保留占位（visibility 不参与布局收缩，无跳动）。
-     visibility 一起进 transition：显示时立即可见、淡入；隐藏时等 opacity
-     落到 0 才真正 hidden，浮出与淡出双向都有过渡，不突兀 */
+     行距——本行已是收尾块的兄弟节点，那段行距必须由它自己承担，不能省。
+     两段行距都用 padding 撑，不用 margin：外边距不属于命中区，鼠标从正文
+     滑到本行时会掉进一条既非正文也非本行的缝里，行先隐掉、之后再也唤不回来。
+     外框因此始终可见（它就是那条命中区），藏起来的是里面的 .stats-inner。 */
+  padding: 4px 0 10px;
+}
+
+/* 内容盒：默认隐藏但保留占位（visibility 不参与布局收缩，无跳动）。
+   visibility 一起进 transition：显示时立即可见、淡入；隐藏时等 opacity
+   落到 0 才真正 hidden，浮出与淡出双向都有过渡，不突兀。
+   隐藏时盒内按钮不可命中（visibility:hidden 的元素不接指针事件），所以外框
+   那条命中区不会变成误点区。显形由 ChatMessages 的 .turn-stats 规则驱动。 */
+.stats-inner {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   visibility: hidden;
   opacity: 0;
   transition: opacity 0.2s ease, visibility 0.2s;
-}
-
-/* 流式期间的占位行：只占高度，内容不可见 */
-.message-duration.is-placeholder {
-  visibility: hidden;
 }
 
 .duration-text {
