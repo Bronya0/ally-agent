@@ -165,3 +165,4 @@
 [tailscan-loop] 2026-10-03 高危 尾部回扫勿用 lastIndexOf(sep,end-1)：end=0 时按 0 处理，重命中首分隔符，end 原地不动＝死循环，测试挂起。@utils/toolPreview.mjs
 [stream-hotpath-o-n] 2026-10-03 中危 流式热路径勿对整段累积载荷全量处理（split/join/全文正则/逐字符拼串/整篇 v-html 重建）：每拍一次、随输出线性增长，挤掉动画帧。@frontend/src
 [stream-block-render] 2026-10-03 中危 流式正文分块增量渲染：跨块语法（链接引用定义）与整篇解析不同，收尾须整篇重渲兜底；块要一块一节点，拼成单串交 v-html 等于整棵重建。@streamEase.mjs
+[scanner-partial-line] 2026-10-03 中危 增量扫描只能越过已完整显示的行：越过未显示完的空白行会永久丢掉切分点；尾部围栏判据只取当前行。@streamEase.mjs

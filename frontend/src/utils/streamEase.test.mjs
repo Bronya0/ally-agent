@@ -148,6 +148,13 @@ test('增量扫描器逐帧结果与全量 splitStreamContent 完全一致', () 
     '~~~js\nlet a = 1;\n~~~~\n\ntail',
     '    ```go\nnot a fence\n\n段落\n',
     '段落一\n\n',
+    // 长度 ≥1 的纯空白行：显示位置落在这一行中间时，增量扫描器曾把它的切分点永久
+    // 丢掉（纯空行不会触发——offset < upto 自动蕴含 upto 已越过它的末尾——所以旧
+    // 样本恰好绕过了这个 bug）。
+    'a\n  \n',
+    'a\n\t',
+    'a\n\n   ',
+    '~~~\n~~~\n\r',
     'a\n\nb\n\nc\n\nd\n\n',
     '\n\n\n',
     'no newline at all',

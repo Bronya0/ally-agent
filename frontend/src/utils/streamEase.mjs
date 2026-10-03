@@ -110,7 +110,11 @@ export function splitStreamContent(content, limit) {
       const opened = matchOpeningFence(line);
       if (opened) {
         fence = opened;
-      } else if (line.trim() === '' && nextOffset <= upto) {
+      } else if (newline !== -1 && line.trim() === '' && nextOffset <= upto) {
+        // newline !== -1：没有换行符收尾的那一行不提交——它还会继续长（模型正在
+        // 同一行上打字），提交出去后这条边界就落到行中间了，那个块单独渲染会丢掉
+        // 缩进这类行首语义（4 空格代码块被切成两半）。增量版同样不提交，两边取舍
+        // 一致。
         committedEnd = nextOffset;
       }
     }
@@ -124,9 +128,13 @@ export function splitStreamContent(content, limit) {
  * 不再重扫。逐帧 O(全文) 的扫描在长回答下和 O(n²) 的前缀重解析一样贵：
  * 1MB 约 0.9ms/帧，还要为每一行分配一个字符串。
  *
- * 与全量版逐帧等价（回归护栏见 streamEase.test.mjs 的对拍用例）：
+ * 与全量版逐帧等价（护栏见 streamEase.test.mjs 的对拍用例，逐字符推进比对）：
  *   - 只有后面确实跟着 \n 的行才固化进状态；文本末行（还没有换行符）每帧现算，
- *     它的内容会随 upto 增长而变，固化了就会漏掉后来才成立的边界；
+ *     它的内容会随 upto 增长而变，固化了就会漏掉后来才成立的边界（全量版同样
+ *     不提交这一行）；
+ *   - 一行**必须被完整显示**（upto 越过它的换行符）才会被越过：显示位置落在行
+ *     中间时本轮停在它前面。越过就再也回不来——它若是空白行，那个可切分点当场
+ *     永久丢掉，之后 upto 涨上来也没人回头补；
  *   - upto 回退（重试丢弃）时从头重扫；
  *   - reset() 由调用方在“内容可能整个换过”的强制对齐（挂载/收尾/截断）时调用。
  */
@@ -149,25 +157,38 @@ export function createStreamScanner() {
     const upto = Math.max(0, Math.min(bounded, source.length));
     if (upto < lastLimit) reset();
     lastLimit = upto;
+    // 尾部那一行的换行符位置：复用循环里最后一次扫描的结果，别为同一行再扫一遍
+    // 全文（单行大 body 时那是每帧几 MB 的白扫）。
+    let tailNewline = -1;
     while (offset < upto) {
       const newline = source.indexOf('\n', offset);
+      tailNewline = newline;
       // 末行还没结束：它的内容还会变，留给下面那段每帧现算。
       if (newline === -1) break;
-      const line = source.slice(offset, newline);
       const nextOffset = newline + 1;
+      // 这一行还没被完整显示（显示位置落在它中间）：本轮停在它前面。越过它就再
+      // 也回不来——它若是空白行，那个可切分点当场永久丢掉；全量版每帧从头重扫，
+      // 所以它不会丢，只在这一步省略就会分叉。
+      if (nextOffset > upto) break;
+      const line = source.slice(offset, newline);
       if (fence) {
         if (isClosingFence(line, fence)) fence = null;
       } else {
         const opened = matchOpeningFence(line);
         if (opened) fence = opened;
-        else if (line.trim() === '' && nextOffset <= upto) committedEnd = nextOffset;
+        // 上面那道 break 已保证 nextOffset <= upto 成立。
+        else if (line.trim() === '') committedEnd = nextOffset;
       }
       offset = nextOffset;
     }
-    // 末行只用于判断“当前在不在围栏里”，结果不写回固化状态。
+    // 显示位置所在的那一行只用于判断“当前在不在围栏里”，结果不写回固化状态。
+    // 条件必须是 offset < upto（显示位置确实落在这行上）：写成 < source.length 时
+    // upto=0 也会去看下一行，凭空报出“在围栏里”，而全量版那时什么都还没看。
     let tailFence = fence;
-    if (offset < source.length) {
-      const line = source.slice(offset);
+    if (offset < upto) {
+      // 只取这一行：围栏判据是单行正则，喂进多行会静默判成“不是围栏”。这里用的
+      // 是循环里那次扫描的结果（tailNewline === -1 就是走到了没有换行的末行）。
+      const line = tailNewline === -1 ? source.slice(offset) : source.slice(offset, tailNewline);
       if (tailFence) {
         if (isClosingFence(line, tailFence)) tailFence = null;
       } else {
