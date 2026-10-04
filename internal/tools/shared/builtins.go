@@ -130,23 +130,31 @@ func chatToolsUncached() []openai.Tool {
 				"path": map[string]any{"type": "string", "description": "Workspace-relative directory path, or explicit absolute path for read-only listing. Empty means workspace root."},
 			},
 		}),
-		functionTool("screenshot", "Capture a still image of this machine's screen or one window and attach it to the conversation as visual input, or list the visible windows so a follow-up capture can target one by id (action=list; returns id, title, process, rectangle, focused flag; per-window enumeration needs X11 on Linux and is unavailable on Wayland). Default action (capture) captures the primary display; display selects another monitor; region captures a rectangle in virtual-screen pixels (secondary monitors may use negative coordinates). To target one window prefer windowId from an action=list call; a windowTitle substring must match exactly one visible window — zero or several matches fail with the candidate list instead of guessing (E_WINDOW_NOT_FOUND / E_WINDOW_AMBIGUOUS), so a failed attempt by title is itself a way to discover windows. By default the capture shows whatever is visibly on top of the target rectangle; focus=true raises the window first (window captures on macOS always capture the window's own content). Images are downscaled to fit model input limits. Capture only when the user asks to see the screen or a UI element — the screen may contain private data. Error codes: E_WINDOW_NOT_FOUND, E_WINDOW_AMBIGUOUS, E_CAPTURE_UNSUPPORTED, E_CAPTURE_FAILED, E_BAD_ARGS.", map[string]any{
+		// Description kept deliberately terse: the schema sits in every request
+		// prefix, and the parts trimmed here (returned-field lists, platform
+		// trivia, error-code enumeration, the "fail by title to discover
+		// windows" meta-hint) were all either derivable from results or
+		// restated by the runtime error text. The rules that change how the
+		// model calls the tool — unique windowTitle match, mutually exclusive
+		// targets, negative region coordinates, downscaling, the privacy
+		// guard — are all still here.
+		functionTool("screenshot", "Capture a still image of the screen or one window as visual input, or list the visible windows (action=list) so a later capture can target one by id. Default action captures the primary display; display picks another monitor; region is a rectangle in virtual-screen pixels (may be negative on secondary monitors). Prefer windowId from action=list: a windowTitle substring must match exactly one window, and zero or several matches fail with the candidate list (E_WINDOW_NOT_FOUND / E_WINDOW_AMBIGUOUS). The capture shows whatever is visible on top; focus=true raises the window first. windowId, windowTitle and region are mutually exclusive. Images are downscaled to fit model input limits. Capture only when the user asks to see the screen or a UI element — the screen may contain private data. Errors are coded (E_*).", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"action":      map[string]any{"type": "string", "enum": []string{"capture", "list"}, "description": "capture (default) takes the image; list returns the visible windows instead of capturing."},
-				"windowId":    map[string]any{"type": "integer", "minimum": 1, "description": "Window id from action=list. Capture only; cannot be combined with windowTitle or region."},
-				"windowTitle": map[string]any{"type": "string", "minLength": 1, "description": "Case-insensitive substring of one window title or process name; must match exactly one window. Capture only; cannot be combined with windowId or region."},
-				"focus":       map[string]any{"type": "boolean", "description": "Raise and restore the target window before capturing (capture only, default false)."},
-				"display":     map[string]any{"type": "integer", "minimum": 0, "description": "Monitor index for a full-screen capture (0 = primary, OS-reported order). Capture only; ignored for window and region targets."},
-				"title":       map[string]any{"type": "string", "description": "action=list only: case-insensitive substring to filter by window title or process name."},
-				"limit":       map[string]any{"type": "integer", "minimum": 1, "maximum": screenshot.MaxListWindows, "description": fmt.Sprintf("action=list only: row cap (default %d).", screenshot.MaxListWindows)},
+				"action":      map[string]any{"type": "string", "enum": []string{"capture", "list"}, "description": "capture (default) or list (return visible windows instead)."},
+				"windowId":    map[string]any{"type": "integer", "minimum": 1, "description": "Window id from action=list."},
+				"windowTitle": map[string]any{"type": "string", "minLength": 1, "description": "Case-insensitive substring of one window title or process name; must match exactly one window."},
+				"focus":       map[string]any{"type": "boolean", "description": "Raise the target window before capturing (default false)."},
+				"display":     map[string]any{"type": "integer", "minimum": 0, "description": "Monitor index (0 = primary). Capture only."},
+				"title":       map[string]any{"type": "string", "description": "action=list: filter by window title or process name (case-insensitive)."},
+				"limit":       map[string]any{"type": "integer", "minimum": 1, "maximum": screenshot.MaxListWindows, "description": fmt.Sprintf("action=list: row cap (default %d).", screenshot.MaxListWindows)},
 				"region": map[string]any{
 					"type": "object",
 					"properties": map[string]any{
-						"x":      map[string]any{"type": "integer", "description": "Left edge in virtual-screen pixels."},
-						"y":      map[string]any{"type": "integer", "description": "Top edge in virtual-screen pixels."},
-						"width":  map[string]any{"type": "integer", "minimum": 1, "maximum": screenshot.MaxRegionWidthPx, "description": "Region width in pixels."},
-						"height": map[string]any{"type": "integer", "minimum": 1, "maximum": screenshot.MaxRegionHeightPx, "description": "Region height in pixels."},
+						"x":      map[string]any{"type": "integer", "description": "Left edge (virtual-screen px)."},
+						"y":      map[string]any{"type": "integer", "description": "Top edge (virtual-screen px)."},
+						"width":  map[string]any{"type": "integer", "minimum": 1, "maximum": screenshot.MaxRegionWidthPx, "description": "Width in pixels."},
+						"height": map[string]any{"type": "integer", "minimum": 1, "maximum": screenshot.MaxRegionHeightPx, "description": "Height in pixels."},
 					},
 					"required": []string{"x", "y", "width", "height"},
 				},
@@ -510,7 +518,7 @@ var builtinToolExamples = map[string]string{
 	"grep":               `{"pattern":"TODO|FIXME","path":"frontend/src","glob":"*.vue"}`,
 	"read":               `one file: {"files":[{"path":"app.go"}]}; multiple files: {"files":[{"path":"app.go"},{"path":"main.go"}]}; range: {"files":[{"path":"services.go","startLine":1,"endLine":200}]}; tail: {"files":[{"path":"server.log","tailLines":200}]}`,
 	"render_html":        `{"html":"<div id=\"chart\" style=\"width:100%;height:350px;\"></div><script>const c=echarts.init(document.getElementById('chart'),'dark');c.setOption({title:{text:'Metrics'},xAxis:{data:['Mon','Tue','Wed','Thu','Fri']},yAxis:{},series:[{type:'bar',data:[12,34,56,78,90]}]});</script>"}`,
-	"screenshot":         `list windows: {"action":"list"}; list filtered: {"action":"list","title":"ally"}; capture primary display: {}; a window: {"windowId":131076}; by unique title: {"windowTitle":"ally-agent"}; region: {"region":{"x":0,"y":0,"width":1280,"height":800}}`,
+	"screenshot":         `list: {"action":"list"}; a window by id: {"windowId":131076}; by unique title: {"windowTitle":"ally-agent"}; region: {"region":{"x":0,"y":0,"width":1280,"height":800}}`,
 	"subagent":           `{"task":"Inspect the authentication module and report concrete security issues.","role":"code reviewer","maxSteps":20,"description":"Review authentication"}`,
 	"plan":               `start: {"steps":["Inspect code","Run tests"]}; report progress: {"finish":"Inspect code"}; read: {}`,
 }
