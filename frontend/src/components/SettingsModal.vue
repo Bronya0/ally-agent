@@ -328,13 +328,15 @@ Public License v3. See the LICENSE file for details.
                 <div class="config-section-subtitle">{{ $t('settings.advancedSubtitle') }}</div>
               </div>
             </div>
-            <div class="validation-settings-list">
-              <div v-for="item in validationSettings" :key="item.key" class="validation-setting-row">
-                <div class="validation-setting-copy">
-                  <div class="validation-setting-label">{{ item.label }}</div>
-                  <div class="validation-setting-hint">{{ item.hint }}</div>
+            <div class="settings-opt-list">
+              <div v-for="item in validationSettings" :key="item.key" class="settings-opt-row">
+                <div class="settings-opt-main">
+                  <span class="settings-opt-name">{{ item.label }}</span>
+                  <div class="settings-opt-side">
+                    <n-switch v-model:value="draft[item.key]" size="small" />
+                  </div>
                 </div>
-                <n-switch v-model:value="draft[item.key]" />
+                <div v-if="item.hint" class="settings-opt-hint">{{ item.hint }}</div>
               </div>
             </div>
           </template>
@@ -344,20 +346,21 @@ Public License v3. See the LICENSE file for details.
                 <div class="config-section-subtitle">{{ $t('settings.toolsSubtitle') }}</div>
               </div>
             </div>
-            <div class="validation-settings-list">
-              <div v-for="tool in toolSettings" :key="tool.name" class="validation-setting-row">
-                <div class="validation-setting-copy">
-                  <div class="validation-setting-label">
-                    {{ tool.label }}
-                    <span class="tool-id-chip">{{ tool.name }}</span>
+            <div class="settings-opt-list">
+              <div v-for="tool in toolSettings" :key="tool.name" class="settings-opt-row">
+                <div class="settings-opt-main">
+                  <span class="settings-opt-name">{{ tool.label }}</span>
+                  <span class="settings-opt-badge">{{ tool.name }}</span>
+                  <div class="settings-opt-side">
+                    <n-switch
+                      :value="toolEnabled(tool.name)"
+                      :disabled="tool.disabled"
+                      size="small"
+                      @update:value="(value) => setToolEnabled(tool.name, value)"
+                    />
                   </div>
-                  <div v-if="tool.hint" class="validation-setting-hint">{{ tool.hint }}</div>
                 </div>
-                <n-switch
-                  :value="toolEnabled(tool.name)"
-                  :disabled="tool.disabled"
-                  @update:value="(value) => setToolEnabled(tool.name, value)"
-                />
+                <div v-if="tool.hint" class="settings-opt-hint">{{ tool.hint }}</div>
               </div>
             </div>
           </template>
@@ -1398,27 +1401,60 @@ watch(() => props.visible, (visible) => {
   line-height: 1.5;
 }
 
-.validation-settings-list {
-  border-top: 1px solid var(--ally-border);
+/* 与 MCP 服务列表同一套行卡样式：每项一张圆角卡，名称 + 徽标 + 右侧开关，
+   第二行放说明。settings-opt-badge 对应 .mcp-badge，容器对应 .mcp-form-mode。 */
+.settings-opt-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
-.validation-setting-row {
+.settings-opt-row {
+  border: 1px solid var(--ally-border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: var(--ally-hover-faint);
+}
+
+.settings-opt-main {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 12px 2px;
-  border-bottom: 1px solid var(--ally-border-subtle);
-}
-
-.validation-setting-copy {
+  gap: 8px;
   min-width: 0;
 }
 
-.validation-setting-label {
-  color: var(--ally-text-high);
+.settings-opt-name {
+  font-weight: 500;
   font-size: 13px;
-  font-weight: 600;
+  color: var(--ally-text-primary);
+}
+
+.settings-opt-badge {
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  line-height: 1;
+  padding: 3px 6px;
+  border-radius: 4px;
+  background: var(--ally-state-hover);
+  color: var(--ally-text-muted);
+  flex: none;
+}
+
+.settings-opt-side {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+
+.settings-opt-hint {
+  color: var(--ally-text-faint);
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .settings-advanced-tabs {
@@ -1430,27 +1466,6 @@ watch(() => props.visible, (visible) => {
   padding: 6px 10px;
   font-size: 15px;
   color: var(--ally-text-primary);
-}
-
-.tool-id-chip {
-  display: inline-block;
-  margin-left: 10px;
-  padding: 1px 7px;
-  line-height: 1.5;
-  border: 1px solid var(--ally-border-subtle);
-  border-radius: 4px;
-  color: var(--ally-text-muted);
-  font-family: ui-monospace, monospace;
-  font-size: 11px;
-  font-weight: 400;
-  vertical-align: 2px;
-}
-
-.validation-setting-hint {
-  margin-top: 3px;
-  color: var(--ally-text-muted);
-  font-size: 12px;
-  line-height: 1.4;
 }
 
 .settings-field-stack {

@@ -77,6 +77,7 @@ Public License v3. See the LICENSE file for details.
             >{{ sk.path || sk.dir || '-' }}</div>
           </div>
           <n-switch
+            size="small"
             :value="isSkillActive(sk.name, activeSkillNames)"
             :disabled="skillsLoading || skillToggleInFlight === sk.name"
             @update:value="(value) => toggleSkill(sk, value)"
@@ -432,10 +433,12 @@ watch(
   text-align: center;
 }
 
+/* 与 MCP 服务列表同一套行卡：每项一张圆角卡，悬停/激活只加深底色（同
+   .mcp-server-row 的描边卡片语言，设置高级页 settings-opt-* 亦同源）。 */
 .skill-settings-list {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 8px;
 }
 
 .skill-settings-item {
@@ -443,13 +446,14 @@ watch(
   align-items: center;
   justify-content: space-between;
   padding: 8px 10px;
-  border-radius: 6px;
-  transition: background 0.12s;
+  border: 1px solid var(--ally-border);
+  border-radius: 8px;
+  background: var(--ally-hover-faint);
   gap: 10px;
 }
 
 .skill-settings-item:hover {
-  background: var(--ally-hover-faint);
+  background: var(--ally-state-hover);
 }
 
 .skill-settings-item.active {
