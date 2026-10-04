@@ -41,29 +41,48 @@ Public License v3. See the LICENSE file for details.
     </header>
 
     <div class="panel-scroll-body">
-      <div class="config-section-subtitle">{{ t('settings.mcpSubtitle') }}</div>
+      <!-- 与旧高级设置页同一套双 tab 结构：MCP 服务器 / 内置工具启停。
+           内置工具（自高级设置迁入）与 MCP 工具注入同页管理。 -->
+      <n-tabs v-model:value="mcpPageTab" type="line" size="small" class="mcp-page-tabs">
+        <n-tab name="servers">{{ $t('settings.mcpServersTab') }}</n-tab>
+        <n-tab name="builtinTools">{{ $t('settings.toolsTitle') }}</n-tab>
+      </n-tabs>
 
-      <input
-        ref="mcpImportInput"
-        class="model-import-input"
-        type="file"
-        accept="application/json,.json"
-        @change="importMcpConfig"
-      />
+      <template v-if="mcpPageTab === 'servers'">
+        <div class="config-section-subtitle">{{ t('settings.mcpSubtitle') }}</div>
 
-      <div class="mcp-save-scope">{{ t('settings.mcpSaveScope') }}</div>
+        <input
+          ref="mcpImportInput"
+          class="model-import-input"
+          type="file"
+          accept="application/json,.json"
+          @change="importMcpConfig"
+        />
 
-      <!-- Unified server list with live status per row -->
-      <div class="mcp-form-mode">
-        <div v-if="!mcpFormServers.length" class="saved-model-empty">{{ t('settings.mcpEmpty') }}</div>
-        <div v-else-if="!filteredMcpServers.length" class="saved-model-empty">{{ t('common.searchEmpty') }}</div>
-        <div v-for="entry in filteredMcpServers" :key="entry.srv._key" class="mcp-server-row">
-          <div class="mcp-row-main">
-            <span :class="['mcp-dot', mcpStatusFor(entry.srv).status]"></span>
-            <span class="mcp-name">{{ entry.srv.name?.trim() || $t('settings.mcpUnnamedServer') }}</span>
-            <span class="mcp-badge">{{ t(transportLabel(entry.srv.transport)) }}</span>
-            <span v-if="entry.srv.enabled === false" class="mcp-badge off">{{ $t('settings.mcpStatusDisabled') }}</span>
-            <div class="mcp-row-side">
+        <div class="mcp-save-scope">{{ t('settings.mcpSaveScope') }}</div>
+
+        <!-- Unified server grid with live status per card: same auto-fill
+             multi-card row language as the built-in tools tab. Card lines:
+             name+switch / badges+status / tools-entry+actions. -->
+        <div class="mcp-form-mode">
+          <div v-if="!mcpFormServers.length" class="saved-model-empty">{{ t('settings.mcpEmpty') }}</div>
+          <div v-else-if="!filteredMcpServers.length" class="saved-model-empty">{{ t('common.searchEmpty') }}</div>
+        </div>
+        <div class="mcp-server-grid">
+          <div v-for="entry in filteredMcpServers" :key="entry.srv._key" class="mcp-server-row mcp-server-card">
+            <div class="mcp-row-main">
+              <span :class="['mcp-dot', mcpStatusFor(entry.srv).status]"></span>
+              <span class="mcp-name" :title="entry.srv.name?.trim() || $t('settings.mcpUnnamedServer')">{{ entry.srv.name?.trim() || $t('settings.mcpUnnamedServer') }}</span>
+              <div class="mcp-row-side">
+                <n-switch :value="entry.srv.enabled" size="small" @update:value="(value) => toggleMcpEnabled(entry.srv, value)" />
+              </div>
+            </div>
+            <div class="mcp-card-meta">
+              <span class="mcp-badge">{{ t(transportLabel(entry.srv.transport)) }}</span>
+              <span v-if="entry.srv.enabled === false" class="mcp-badge off">{{ $t('settings.mcpStatusDisabled') }}</span>
+              <span :class="['mcp-status-text', mcpStatusFor(entry.srv).status]" :title="mcpStatusFor(entry.srv).error || ''">{{ $t(mcpStatusLabel(mcpStatusFor(entry.srv).status)) }}</span>
+            </div>
+            <div class="mcp-card-actions">
               <button
                 v-if="(mcpStatusFor(entry.srv).tools || []).length"
                 class="mcp-tools-toggle"
@@ -73,29 +92,55 @@ Public License v3. See the LICENSE file for details.
                 {{ $t('settings.mcpToolsToggle', { injected: mcpInjectedCount(entry.srv), total: (mcpStatusFor(entry.srv).tools || []).length }) }}
               </button>
               <span v-else-if="mcpStatusFor(entry.srv).toolCount" class="mcp-tools">{{ $t('tools.count', { count: mcpStatusFor(entry.srv).toolCount }) }}</span>
-              <span :class="['mcp-status-text', mcpStatusFor(entry.srv).status]" :title="mcpStatusFor(entry.srv).error || ''">{{ $t(mcpStatusLabel(mcpStatusFor(entry.srv).status)) }}</span>
-              <n-switch :value="entry.srv.enabled" size="small" @update:value="(value) => toggleMcpEnabled(entry.srv, value)" />
-              <n-button size="tiny" quaternary @click="openMcpEditor(entry.idx)">{{ $t('common.edit') }}</n-button>
-              <n-button size="tiny" quaternary type="error" @click="removeMcpServer(entry.idx)">{{ $t('common.delete') }}</n-button>
+              <div class="mcp-card-buttons">
+                <n-button size="tiny" quaternary @click="openMcpEditor(entry.idx)">{{ $t('common.edit') }}</n-button>
+                <n-button size="tiny" quaternary type="error" @click="removeMcpServer(entry.idx)">{{ $t('common.delete') }}</n-button>
+              </div>
+            </div>
+            <div v-if="mcpStatusFor(entry.srv).error" class="mcp-list-error" :title="mcpStatusFor(entry.srv).error">{{ mcpStatusFor(entry.srv).error }}</div>
+            <!-- Per-server tool injection toggles. Checkbox = injected
+                 (checked by default); storage stays a blacklist
+                 (disabledTools) so server-side additions default on. -->
+            <div v-if="mcpToolsPanelOpen(entry.srv._key) && (mcpStatusFor(entry.srv).tools || []).length" class="mcp-tools-panel">
+              <div class="mcp-tools-hint">{{ $t('settings.mcpToolsHint') }}</div>
+              <n-checkbox-group :value="mcpInjectedTools(entry.srv)" @update:value="(value) => setMcpInjectedTools(entry.srv, value)">
+                <n-checkbox v-for="tool in mcpStatusFor(entry.srv).tools" :key="tool.name" :value="tool.name" class="mcp-tool-check">
+                  <span class="mcp-tool-line">
+                    <span class="mcp-tool-name">{{ tool.name }}</span>
+                    <span v-if="tool.description" class="mcp-tool-desc" :title="tool.description">{{ tool.description }}</span>
+                  </span>
+                </n-checkbox>
+              </n-checkbox-group>
             </div>
           </div>
-          <div v-if="mcpStatusFor(entry.srv).error" class="mcp-list-error" :title="mcpStatusFor(entry.srv).error">{{ mcpStatusFor(entry.srv).error }}</div>
-          <!-- Per-server tool injection toggles. Checkbox = injected
-               (checked by default); storage stays a blacklist
-               (disabledTools) so server-side additions default on. -->
-          <div v-if="mcpToolsPanelOpen(entry.srv._key) && (mcpStatusFor(entry.srv).tools || []).length" class="mcp-tools-panel">
-            <div class="mcp-tools-hint">{{ $t('settings.mcpToolsHint') }}</div>
-            <n-checkbox-group :value="mcpInjectedTools(entry.srv)" @update:value="(value) => setMcpInjectedTools(entry.srv, value)">
-              <n-checkbox v-for="tool in mcpStatusFor(entry.srv).tools" :key="tool.name" :value="tool.name" class="mcp-tool-check">
-                <span class="mcp-tool-line">
-                  <span class="mcp-tool-name">{{ tool.name }}</span>
-                  <span v-if="tool.description" class="mcp-tool-desc" :title="tool.description">{{ tool.description }}</span>
-                </span>
-              </n-checkbox>
-            </n-checkbox-group>
+        </div>
+      </template>
+
+      <template v-else>
+        <!-- 内置工具启停（自高级设置迁入）：停用名单存 config.disabledTools
+             （核心五件锁死），开关即持久化（经 App.vue 的 queueConfigSave），
+             后端只在**新会话**注入 schema 时过滤。布局一行多卡（auto-fill）。 -->
+        <div class="config-section-subtitle">{{ $t('settings.toolsSubtitle') }}</div>
+        <div class="builtin-tool-grid">
+          <div v-for="tool in builtinToolSettings" :key="tool.name" class="mcp-server-row builtin-tool-card">
+            <div class="mcp-row-main">
+              <span class="mcp-name" :title="tool.label">{{ tool.label }}</span>
+              <div class="mcp-row-side">
+                <n-switch
+                  :value="builtinToolEnabled(tool.name)"
+                  :disabled="tool.disabled"
+                  size="small"
+                  @update:value="(value) => setBuiltinToolEnabled(tool.name, value)"
+                />
+              </div>
+            </div>
+            <div class="builtin-tool-meta">
+              <span class="mcp-badge">{{ tool.name }}</span>
+              <span v-if="tool.hint" class="builtin-tool-hint">{{ tool.hint }}</span>
+            </div>
           </div>
         </div>
-      </div>
+      </template>
     </div>
   </div>
 
@@ -156,9 +201,10 @@ Public License v3. See the LICENSE file for details.
 
 <script setup>
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
-import { useMessage } from 'naive-ui';
+import { useDialog, useMessage } from 'naive-ui';
 import { SearchOutlined, AppstoreOutlined } from '@vicons/antd';
 import { saveTextFile } from '../utils/download.mjs';
+import { protectedToolNames, toggleableToolNames } from '../utils/builtinTools.mjs';
 import { t } from '../i18n.mjs';
 import { Browser, Events } from '@wailsio/runtime';
 import { unwrapWailsEvent } from '../utils/wailsEvent.mjs';
@@ -171,9 +217,15 @@ import {
 // editor sub-modal, and live connection statuses. Saves go straight through
 // SaveMcpConfig + ReconcileMcpServers (incremental reconnect) and are
 // reported to App.vue via `mcp-saved` so tool inventories refresh.
-const props = defineProps({ show: { type: Boolean, default: false } });
-const emit = defineEmits(['mcp-saved']);
+const props = defineProps({
+  show: { type: Boolean, default: false },
+  // config.disabledTools（后端已落盘的内置工具停用名单）：开关层只接受已知
+  // 工具名，核心五件在名单层就锁死不可停用。
+  disabledTools: { type: Array, default: () => [] },
+});
+const emit = defineEmits(['mcp-saved', 'builtin-tools-changed']);
 const message = useMessage();
+const dialog = useDialog();
 
 // MCP 市场下拉：均为公开免费站点，点击经系统默认浏览器打开（Browser.OpenURL
 // 由 Wails 走宿主 shell，不经过 WebView 导航）。
@@ -492,6 +544,52 @@ function toggleMcpEnabled(srv, value) {
   autoApplyMcpConfig();
 }
 
+// ── 内置工具启停（自高级设置迁入）──
+// 页内双 tab：MCP 服务器 / 内置工具启停，结构与旧高级设置页一致。
+const mcpPageTab = ref('servers');
+
+// props.disabledTools 就是后端已落盘的状态（App.vue 保存成功后原样传回）：
+// 开关即持久化，与 MCP 配置的 auto-apply 同一交互口径。
+const builtinToolSettings = computed(() => [
+  ...protectedToolNames.map((name) => ({
+    name,
+    label: t(`settings.tool.${name}`),
+    hint: t('settings.toolsProtected'),
+    disabled: true,
+  })),
+  ...toggleableToolNames.map((name) => ({
+    name,
+    label: t(`settings.tool.${name}`),
+    hint: '',
+    disabled: false,
+  })),
+]);
+
+function builtinToolEnabled(name) {
+  return !(Array.isArray(props.disabledTools) && props.disabledTools.includes(name));
+}
+
+function setBuiltinToolEnabled(name, value) {
+  if (value === builtinToolEnabled(name)) return;
+  const label = t(`settings.tool.${name}`);
+  dialog[value ? 'info' : 'warning']({
+    title: t('settings.toolsConfirmTitle'),
+    content: value
+      ? t('settings.toolsConfirmEnable', { name: label })
+      : t('settings.toolsConfirmDisable', { name: label }),
+    positiveText: t('common.confirm'),
+    negativeText: t('common.cancel'),
+    onPositiveClick: () => applyBuiltinToolToggle(name, value),
+  });
+}
+
+function applyBuiltinToolToggle(name, value) {
+  const current = new Set(Array.isArray(props.disabledTools) ? props.disabledTools : []);
+  if (value) current.delete(name);
+  else current.add(name);
+  emit('builtin-tools-changed', Array.from(current));
+}
+
 // Status of one form row, merged from the live server status list by name.
 // The local enabled switch wins over the persisted status: a row switched off
 // but not yet saved shows as disabled instead of its stale connection state.
@@ -661,6 +759,102 @@ watch(
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+/* 页内双 tab（MCP 服务器 / 内置工具启停）：与旧高级设置页同一套呼吸感，
+   小号 n-tabs 默认贴字，撑开点击区。 */
+.mcp-page-tabs {
+  margin-bottom: 10px;
+}
+
+.mcp-page-tabs :deep(.n-tabs-tab) {
+  padding: 6px 10px;
+  font-size: 15px;
+  color: var(--ally-text-primary);
+}
+
+/* 内置工具区：一行多卡，容器窄了自动换行（与 CardGrid 同一 auto-fill 思路）。
+   卡内两行：名称+开关在上，工具名徽标+提示在下，窄卡也放得下。 */
+.builtin-tool-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 8px;
+}
+
+/* 服务器卡片网格：同一 auto-fill 语言；单卡信息多，最小宽比工具卡放宽。 */
+.mcp-server-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 8px;
+}
+
+.mcp-server-card .mcp-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mcp-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* 状态文本吃剩余宽度单行省略，长错误靠 title 悬浮看全。 */
+.mcp-server-card .mcp-status-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mcp-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* 卡内工具入口靠左（旧整行布局的 margin-left:auto 是推向状态区，这里不适用），
+   编辑/删除按钮组推到最右。 */
+.mcp-server-card .mcp-tools-toggle,
+.mcp-server-card .mcp-tools {
+  margin-left: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mcp-card-buttons {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+}
+
+.builtin-tool-card {
+  gap: 6px;
+}
+
+.builtin-tool-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.builtin-tool-hint {
+  font-size: 11px;
+  color: var(--ally-text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .mcp-save-scope {
@@ -850,17 +1044,5 @@ watch(
   font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-@media (max-width: 640px) {
-  .mcp-row-main {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .mcp-row-side {
-    width: 100%;
-    justify-content: flex-end;
-  }
 }
 </style>

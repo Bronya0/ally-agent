@@ -316,54 +316,25 @@ Public License v3. See the LICENSE file for details.
           <div class="settings-field-hint">{{ $t('settings.fontSizeGridHint') }}</div>
         </section>
 
-        <!-- Advanced: two tabs — auto code validation and built-in tool toggles -->
+        <!-- Advanced: auto code validation. The built-in tool toggles that
+             used to share this page now live on the MCP page (McpPanel). -->
         <section v-else-if="page === 'advanced'" class="settings-page">
-          <n-tabs v-model:value="advancedTab" type="line" size="small" class="settings-advanced-tabs">
-            <n-tab name="validation">{{ $t('settings.validationTab') }}</n-tab>
-            <n-tab name="tools">{{ $t('settings.toolsTab') }}</n-tab>
-          </n-tabs>
-          <template v-if="advancedTab === 'validation'">
-            <div class="config-section-header">
-              <div>
-                <div class="config-section-subtitle">{{ $t('settings.advancedSubtitle') }}</div>
-              </div>
+          <div class="config-section-header">
+            <div>
+              <div class="config-section-subtitle">{{ $t('settings.advancedSubtitle') }}</div>
             </div>
-            <div class="settings-opt-list">
-              <div v-for="item in validationSettings" :key="item.key" class="settings-opt-row">
-                <div class="settings-opt-main">
-                  <span class="settings-opt-name">{{ item.label }}</span>
-                  <div class="settings-opt-side">
-                    <n-switch v-model:value="draft[item.key]" size="small" />
-                  </div>
+          </div>
+          <div class="settings-opt-list">
+            <div v-for="item in validationSettings" :key="item.key" class="settings-opt-row">
+              <div class="settings-opt-main">
+                <span class="settings-opt-name">{{ item.label }}</span>
+                <div class="settings-opt-side">
+                  <n-switch v-model:value="draft[item.key]" size="small" />
                 </div>
-                <div v-if="item.hint" class="settings-opt-hint">{{ item.hint }}</div>
               </div>
+              <div v-if="item.hint" class="settings-opt-hint">{{ item.hint }}</div>
             </div>
-          </template>
-          <template v-else>
-            <div class="config-section-header">
-              <div>
-                <div class="config-section-subtitle">{{ $t('settings.toolsSubtitle') }}</div>
-              </div>
-            </div>
-            <div class="settings-opt-list">
-              <div v-for="tool in toolSettings" :key="tool.name" class="settings-opt-row">
-                <div class="settings-opt-main">
-                  <span class="settings-opt-name">{{ tool.label }}</span>
-                  <span class="settings-opt-badge">{{ tool.name }}</span>
-                  <div class="settings-opt-side">
-                    <n-switch
-                      :value="toolEnabled(tool.name)"
-                      :disabled="tool.disabled"
-                      size="small"
-                      @update:value="(value) => setToolEnabled(tool.name, value)"
-                    />
-                  </div>
-                </div>
-                <div v-if="tool.hint" class="settings-opt-hint">{{ tool.hint }}</div>
-              </div>
-            </div>
-          </template>
+          </div>
         </section>
 
         <!-- Network -->
@@ -499,6 +470,7 @@ import { createDiscreteApi, darkTheme } from 'naive-ui';
 import { naiveDateLocale, naiveLocale, t } from '../i18n.mjs';
 import { getStoredMode, THEMES } from '../utils/theme.mjs';
 import { normalizeApiKeysArray } from '../utils/modelConfigIO.mjs';
+import { toggleableToolNames } from '../utils/builtinTools.mjs';
 import { Browser } from '@wailsio/runtime';
 import {
   DetectSystemProxy, TestProxy,
@@ -511,7 +483,7 @@ import {
 // The discrete message API follows the active color mode so toasts never
 // render dark-on-dark / light-on-light after a mode switch.
 const colorModeState = ref(getStoredMode());
-const { message, dialog } = createDiscreteApi(['message', 'dialog'], {
+const { message } = createDiscreteApi(['message'], {
   configProviderProps: computed(() => ({
     theme: colorModeState.value === 'light' ? null : darkTheme,
     locale: naiveLocale,
@@ -640,14 +612,6 @@ const validationSettingKeys = [
 ];
 
 // Deep-clone the config draft so changes don't mutate parent reactively until save
-const protectedToolNames = ['read', 'edit', 'create', 'delete', 'command'];
-const toggleableToolNames = [
-  'list_files', 'grep', 'screenshot', 'service', 'wait', 'ask', 'suggest',
-  'scheduled_task', 'http_request', 'web_fetch',
-  'remote_read', 'remote_edit', 'remote_create_file', 'remote_delete_path', 'remote_run_command',
-  'ssh_cluster', 'calculate', 'render_html', 'plan', 'subagent', 'skill',
-];
-
 const draft = reactive(cloneConfigDraft(props.configDraft));
 
 // Color mode is a pure front-end preference (localStorage, see utils/theme.mjs),
@@ -692,61 +656,9 @@ const proxyModeOptions = computed(() => [
   { label: t('settings.proxySystem'), value: 'system' },
   { label: t('settings.proxyManual'), value: 'manual' },
 ]);
-// ── 高级设置 · 内置工具启停 ──
-// 本地读/写/命令核心五件不可停用（AGENTS.md 工具分层里的基本工作面），其余
-// 内置工具可由用户开关。名单是静态的（工具集随版本走），停用名单保存在
-// config.disabledTools，后端只在**新会话**注入 schema 时过滤（已有会话冻结）。
-const advancedTab = ref('validation');
-
-const toolSettings = computed(() => [
-  ...protectedToolNames.map((name) => ({
-    name,
-    label: t(`settings.tool.${name}`),
-    hint: t('settings.toolsProtected'),
-    disabled: true,
-  })),
-  ...toggleableToolNames.map((name) => ({
-    name,
-    label: t(`settings.tool.${name}`),
-    hint: '',
-    disabled: false,
-  })),
-]);
-
-function toolEnabled(name) {
-  return !(Array.isArray(draft.disabledTools) && draft.disabledTools.includes(name));
-}
-
-// savedDisabledTools 以 props.configDraft 为准（保存成功后父层会刷新它）：
-// 与已存状态相同方向的拨动不弹确认，只有真正改变持久化意图的操作才问。
-function savedToolEnabled(name) {
-  const saved = props.configDraft?.disabledTools;
-  return !(Array.isArray(saved) && saved.includes(name));
-}
-
-function setToolEnabled(name, value) {
-  if (value === savedToolEnabled(name)) {
-    applyToolToggle(name, value);
-    return;
-  }
-  const label = t(`settings.tool.${name}`);
-  dialog[value ? 'info' : 'warning']({
-    title: t('settings.toolsConfirmTitle'),
-    content: value
-      ? t('settings.toolsConfirmEnable', { name: label })
-      : t('settings.toolsConfirmDisable', { name: label }),
-    positiveText: t('common.confirm'),
-    negativeText: t('common.cancel'),
-    onPositiveClick: () => applyToolToggle(name, value),
-  });
-}
-
-function applyToolToggle(name, value) {
-  const current = new Set(Array.isArray(draft.disabledTools) ? draft.disabledTools : []);
-  if (value) current.delete(name);
-  else current.add(name);
-  draft.disabledTools = Array.from(current);
-}
+// ── 高级设置 ──
+// 内置工具启停已迁至 MCP 页（McpPanel.vue，开关即保存）；本页只保留自动
+// 代码校验开关。
 
 const validationSettings = computed(() => [
   { key: 'autoValidationPython', label: t('settings.validationPython'), hint: t('settings.validationPythonHint') },
@@ -1108,6 +1020,17 @@ watch(() => props.configDraft.workspace, (value) => {
   if (draft.workspace !== value) draft.workspace = value;
 });
 
+// 内置工具停用名单已迁至 MCP 页（McpPanel → App.vue 即时保存），是设置弹窗
+// 之外的外部变更路径：与 workspace 同一口径镜像进 draft，防止草稿在下次
+// 保存（含代理字段的静默保存）时把用户在 MCP 页做的开关静默回退。名单在
+// 弹窗内已无可编辑入口，镜像不会冲掉进行中的编辑。
+watch(() => props.configDraft.disabledTools, (value) => {
+  const next = Array.isArray(value) ? [...value] : [];
+  if (JSON.stringify(draft.disabledTools) !== JSON.stringify(next)) {
+    draft.disabledTools = next;
+  }
+});
+
 watch(() => props.visible, (visible) => {
   if (!visible) return;
   if (!draftSynced) {
@@ -1455,17 +1378,6 @@ watch(() => props.visible, (visible) => {
   color: var(--ally-text-faint);
   font-size: 12px;
   line-height: 1.45;
-}
-
-.settings-advanced-tabs {
-  margin-bottom: 10px;
-}
-
-/* 与 SkillsPanel 来源 tabs 同一套呼吸感：小号 n-tabs 默认贴字，撑开点击区 */
-.settings-advanced-tabs :deep(.n-tabs-tab) {
-  padding: 6px 10px;
-  font-size: 15px;
-  color: var(--ally-text-primary);
 }
 
 .settings-field-stack {

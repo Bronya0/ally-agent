@@ -397,7 +397,7 @@ Public License v3. See the LICENSE file for details.
                  sibling; v-show keeps the server list, live statuses, and
                  editor draft across mode switches. -->
             <div v-show="mcpActive" class="settings-page-container">
-              <McpPanel :show="mcpActive" @mcp-saved="onMcpSaved" />
+              <McpPanel :show="mcpActive" :disabled-tools="config.disabledTools" @mcp-saved="onMcpSaved" @builtin-tools-changed="onBuiltinToolsChanged" />
             </div>
 
             <!-- Models page (extracted from Settings onto the mode rail, below
@@ -6055,6 +6055,26 @@ async function chooseWorkspace({ adopt = false } = {}) {
   } catch (err) {
     message.error(t('app.workspace.selectFailed', { error: err }));
     return null;
+  }
+}
+
+// 内置工具启停（MCP 页，自高级设置迁入）：名单存 config.disabledTools，
+// 开关即保存（与 MCP 配置 auto-apply 同一交互口径）；保存后刷新前端工具
+// 缓存，欢迎页表格立即与新名单一致。
+async function onBuiltinToolsChanged(nextDisabled) {
+  const list = Array.isArray(nextDisabled) ? nextDisabled : [];
+  const prev = Array.isArray(config.disabledTools) ? [...config.disabledTools] : config.disabledTools;
+  config.disabledTools = [...list];
+  configDraft.disabledTools = [...list];
+  try {
+    await queueConfigSave({ ...configDraft });
+    refreshToolList();
+  } catch (err) {
+    // 保存失败回滚乐观更新：否则 UI 与后端分叉，下一次设置保存会把
+    // 未落盘的名单固化进磁盘。
+    config.disabledTools = prev;
+    configDraft.disabledTools = Array.isArray(prev) ? [...prev] : prev;
+    message.error(t('app.config.saveFailed', { error: err }));
   }
 }
 
