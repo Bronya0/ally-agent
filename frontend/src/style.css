@@ -673,6 +673,29 @@ html[data-mode="light"] .tool-command .hljs-section,
 html[data-mode="light"] .tool-command .shell-command-word {
   color: var(--ally-accent-strong);
 }
+/* 截图预览：默认限高（等比缩放、圆角与 tool-body 一致），点击切原尺寸。
+   只动 max-height/width（布局属性静态一次），img 本身无动画，不触 GPU 铁律。 */
+.screenshot-preview {
+  margin-top: 6px;
+  max-height: 320px;
+  overflow: hidden;
+  border-radius: 8px;
+  border: 1px solid var(--ally-border-subtle);
+  cursor: zoom-in;
+  line-height: 0;
+}
+
+.screenshot-preview img {
+  max-width: 100%;
+  display: block;
+}
+
+.screenshot-preview.expanded {
+  max-height: none;
+  cursor: zoom-out;
+  overflow-x: auto;
+}
+
 html[data-mode="light"] .tool-body {
   color: var(--ally-text-high);
 }

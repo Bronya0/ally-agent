@@ -75,6 +75,9 @@ export function toolCardRenderSignature(msg) {
     msg.grepTotalHits,
     msg.listCount,
     msg.listTotalItems,
+    // 截图卡正体是图像本体：dataUrl 从无到有（结果到达）必须翻签名，否则
+    // v-memo 把卡片冻在 running 态。只记有无与长度，不整段拼 base64。
+    msg.screenshotDataUrl ? msg.screenshotDataUrl.length : 0,
     msg.durationText,
     msg.subagentId,
     msg.subagentRole,

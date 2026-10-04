@@ -65,6 +65,9 @@ const TOOL_VERBS = {
   web_fetch: ['Fetching', 'Fetched', 'Fetch'],
   http_request: ['Requesting', 'Requested', 'Request'],
   render_html: ['Rendering', 'Rendered', 'Render'],
+  // 截图（内置 screenshot 工具）：名字即动作（capture/list 由标题参数区分），
+  // 不用时态动词——卡片名位显示 Screenshot，参数摘要走标题括号。
+  screenshot: ['Screenshot', 'Screenshot', 'Screenshot'],
   // utility
   calculate: ['Calculating', 'Calculated', 'Calculation'],
   wait: ['Waiting', 'Waited', 'Wait'],

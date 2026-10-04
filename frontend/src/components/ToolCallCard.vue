@@ -105,6 +105,16 @@ Public License v3. See the LICENSE file for details.
       :max-lines="COMMAND_PREVIEW_LINES"
       @overflow="setBodyOverflow(msg, $event)"
     />
+    <!-- 截图：正体就是截到的图（点击在原尺寸与预览高度间切换）。
+         dataUrl 是运行时字段（sanitizeStoredMessage 落盘时剥离），列表动作
+         没有图，回落到通用 body 渲染窗口列表。 -->
+    <div
+      v-else-if="msg.kind === 'screenshot' && msg.screenshotDataUrl && msg.status !== 'error'"
+      :class="['screenshot-preview', { expanded: screenshotExpanded }]"
+      @click.stop="screenshotExpanded = !screenshotExpanded"
+    >
+      <img :src="msg.screenshotDataUrl" alt="screenshot" loading="lazy" />
+    </div>
     <pre v-else-if="msg.body && !cardGrid && msg.status !== 'error' && msg.kind !== 'edit' && msg.kind !== 'read' && msg.kind !== 'remote_read' && msg.kind !== 'calculate' && msg.kind !== 'grep' && msg.kind !== 'plan' && (msg.kind !== 'list' || msg.expanded)" ref="bodyPreRef" :class="['tool-body', { 'fixed-scroll': isFixedBodyKind(msg.kind), 'body-preview': isBodyPreview(msg), 'tail-default': isServiceReadResult(msg), 'scroll-enabled': bodyScrollEnabled && isScrollableBody(msg), 'tool-body-swap': !isBodyLive }]" @click.stop="handleBodyClick(msg)">{{ toolBodyText(msg) }}</pre>
     <div v-if="isValidationWarning(msg)" class="edit-warning-list validation-warning-list" role="status" aria-live="polite">
       <div class="edit-warning validation-warning" :title="msg.validation">
@@ -152,6 +162,8 @@ const COMMAND_PREVIEW_LINES = 4;
 // 于是内容被裁掉又点不开。两处口径必须同源：裁剪与否由被裁的那个盒子实测。
 // 只增不减：展开后上限撤掉、不再溢出，若跟着回落就会失去 clickable 而收不回。
 const bodyOverflow = ref(false);
+// 截图预览默认限高，点击切原尺寸；单卡状态，随消息对象重建无需持久化。
+const screenshotExpanded = ref(false);
 
 function setBodyOverflow(msg, value) {
   if (value) bodyOverflow.value = true;

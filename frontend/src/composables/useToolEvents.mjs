@@ -350,7 +350,27 @@ export function useToolEvents(ctx) {
     if (service) setCardGrid(existing, [serviceCardItem(service, { withStartedAt: true })]);
   }
 
+  // screenshot 的结果适配：标题以结果为准（覆盖 running 阶段的参数摘要）——
+  // capture 报尺寸 + 目标窗口，list 报行数；capture 把 dataUrl 提取到卡片
+  // 字段供正体渲染真实图像（sanitizeStoredMessage 落盘时剥离），body 清空，
+  // 巨大的 base64 永不进 body 文本通道。
+  function applyScreenshotResult(existing, data, resultData) {
+    const d = resultData || {};
+    if (Array.isArray(d.windows)) {
+      existing.title = `${d.total ?? d.windows.length} windows`;
+      return;
+    }
+    if (d.width) {
+      existing.title = d.title ? `${d.width}×${d.height} · ${d.title}` : `${d.width}×${d.height}`;
+    }
+    if (d.dataUrl) {
+      existing.screenshotDataUrl = d.dataUrl;
+      existing.body = '';
+    }
+  }
+
   const toolResultAdapters = {
+    'screenshot': [applyScreenshotResult],
     'edit': [applyEditValidation, applyEditDiff],
     'replace_exact': [applyEditValidation, applyEditDiff],
     'replace_lines': [applyEditValidation, applyEditDiff],

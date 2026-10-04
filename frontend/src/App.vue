@@ -6774,6 +6774,16 @@ function makeToolResultTitle(name, result, meta = {}) {
   if (name === 'web_fetch' || name === 'http_request') {
     return d.url || d.finalUrl || d.URL || d.FinalURL || '';
   }
+  // screenshot result: a capture titles by size (+ target window); a list
+  // result titles by row count.
+  if (name === 'screenshot' && parsed.data) {
+    const d = parsed.data;
+    if (typeof d.total === 'number') return `${d.total} windows`;
+    if (d.width) {
+      const size = `${d.width}×${d.height}`;
+      return d.title ? `${size} · ${d.title}` : size;
+    }
+  }
   // MCP 卡片的标题在 running 阶段已由 makeToolTitle 生成为参数摘要；
   // result 阶段保持原样（返回空串不覆盖），避免重复显示 tool 名。
   return '';
@@ -7316,6 +7326,11 @@ function sanitizeStoredMessage(msg) {
     next.body = '';
     next.codeContent = '';
   } else {
+    if (next.role === 'tool_call' && next.name === 'screenshot') {
+      // 截图预览图与 read 的文件内容同理：体积大且会过期，落盘只留摘要，
+      // 恢复会话后由模型重新截取。
+      next.screenshotDataUrl = '';
+    }
     next.body = truncateStoredText(next.body, MAX_STORED_TOOL_BODY_CHARS, t('app.cache.toolTrimmed'));
     next.codeContent = truncateStoredText(next.codeContent, MAX_STORED_TOOL_BODY_CHARS, t('app.cache.previewTrimmed'));
   }
@@ -8063,6 +8078,17 @@ function makeToolTitle(name, args, meta = {}) {
   if (name === 'render_html') {
     return parsed.title || '';
   }
+  if (name === 'screenshot') {
+    // 参数摘要：list 报目标过滤，capture 报目标窗口/区域；默认全屏留空，
+    // 名位动词 Screenshot 已说明动作。
+    if (String(parsed.action || '').toLowerCase() === 'list') {
+      return parsed.title ? `windows · ${parsed.title}` : 'windows';
+    }
+    if (parsed.windowTitle) return parsed.windowTitle;
+    if (parsed.windowId) return `id ${parsed.windowId}`;
+    if (parsed.region) return `region ${parsed.region.width}×${parsed.region.height}`;
+    return '';
+  }
   if (name === 'skill' || name === 'Skill') {
     const skillName = parsed.skill || '';
     const skillArgs = parsed.args || '';
@@ -8318,6 +8344,21 @@ function formatToolBody(name, body) {
     // hit count is rendered by formatToolChip(); do not retain matching lines
     // in the message body or build a hidden detail preview.
     if (name === 'grep' && parsed.data) return '';
+    // screenshot result: two shapes. A capture's image goes to the model as
+    // image input only — the card keeps a single status line (title/chip
+    // carry the size), and the multi-hundred-KB base64 dataUrl must never
+    // reach the DOM. A list result renders one bounded line per window.
+    if (name === 'screenshot' && parsed.data) {
+      if (Array.isArray(parsed.data.windows)) {
+        const wins = parsed.data.windows;
+        if (!wins.length) return t('tools.windows.none');
+        const lines = wins.slice(0, 60).map(w =>
+          `${w.id} · ${w.title || t('tools.windows.untitled')}${w.process ? ' (' + w.process + ')' : ''}${w.focused ? ' · ' + t('tools.windows.focused') : ''}`);
+        if (wins.length > 60) lines.push(t('tools.windows.more', { count: wins.length - 60 }));
+        return lines.join('\n');
+      }
+      return '';
+    }
     // list_files result: show entries
     if (name === 'list_files' && parsed.data && Array.isArray(parsed.data.entries)) {
       let out = parsed.data.count + ' items';

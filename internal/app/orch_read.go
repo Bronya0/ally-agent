@@ -589,28 +589,44 @@ type readImageCandidate struct {
 	DataURL string
 }
 
-// collectReadImages extracts image DataURLs from a completed read tool result.
-// Non-read tools and read failures contribute nothing.
+// collectReadImages extracts image DataURLs from a completed tool result so
+// the run loop can inject them as image parts into model context. The read
+// tool returns one candidate per image file; the screenshot tool contributes
+// its captured frame.
 func collectReadImages(name string, result *toolResult) []readImageCandidate {
 	if result == nil || !result.OK || result.Data == nil {
 		return nil
 	}
 	switch name {
 	case "read":
+		var r BatchReadResult
+		if !decodeToolData(result.Data, &r) {
+			return nil
+		}
+		var out []readImageCandidate
+		for _, f := range r.Files {
+			if f.DataURL != "" {
+				out = append(out, readImageCandidate{Path: f.Path, DataURL: f.DataURL})
+			}
+		}
+		return out
+	case "screenshot":
+		var r ScreenshotResult
+		if !decodeToolData(result.Data, &r) || r.DataURL == "" {
+			return nil
+		}
+		label := r.Source
+		if r.Title != "" {
+			label = fmt.Sprintf("window %q", r.Title)
+		} else if r.Source == "region" {
+			label = fmt.Sprintf("region %dx%d", r.Width, r.Height)
+		} else if r.Source == "display" {
+			label = fmt.Sprintf("display %d", r.Display)
+		}
+		return []readImageCandidate{{Path: "screenshot: " + label, DataURL: r.DataURL}}
 	default:
 		return nil
 	}
-	var r BatchReadResult
-	if !decodeToolData(result.Data, &r) {
-		return nil
-	}
-	var out []readImageCandidate
-	for _, f := range r.Files {
-		if f.DataURL != "" {
-			out = append(out, readImageCandidate{Path: f.Path, DataURL: f.DataURL})
-		}
-	}
-	return out
 }
 
 func (a *App) readFileWithConfig(cfg ConfigState, req ReadFileRequest) (ReadFileResult, error) {

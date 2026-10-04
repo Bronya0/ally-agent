@@ -47,6 +47,9 @@ const KIND_ENTRIES = [
   // 与所有未知工具同归 other。
   { kind: 'other', names: ['http_request', 'web_fetch'], labelKey: 'tools.kind.tool', noDuration: true, collapsed: true },
   { kind: 'render_html', names: ['render_html'], labelKey: 'tools.kind.renderHtml' },
+  // 截图：action 复用工具（capture/list）；结果本体（图片）进模型上下文，
+  // 卡片只显示摘要，不做耗时角标
+  { kind: 'screenshot', names: ['screenshot'], noDuration: true },
   // 其余：动词已说清动作，不给类型标签（labels 缺这些 kind 是故意的，不是漏抄）
   { kind: 'calculate', names: ['calculate'], labelKey: 'tools.kind.calculate', noDuration: true },
   { kind: 'plan', names: ['plan'], labelKey: 'tools.kind.plan', noDuration: true },

@@ -149,6 +149,27 @@ func toolResultSummary(name string, result *toolResult) string {
 		if json.Unmarshal(data, &r) == nil {
 			return fmt.Sprintf("%d entries", r.Count)
 		}
+	case "screenshot":
+		// One tool, two result shapes: a list result names its shape with a
+		// windows array, a capture result with source.
+		var list ListWindowsResult
+		if decodeToolData(result.Data, &list) && list.Windows != nil {
+			if list.Truncated {
+				return fmt.Sprintf("%d of %d windows", len(list.Windows), list.Total)
+			}
+			return fmt.Sprintf("%d windows", list.Total)
+		}
+		var r ScreenshotResult
+		if decodeToolData(result.Data, &r) {
+			switch r.Source {
+			case "window":
+				return fmt.Sprintf("%dx%d · %q", r.Width, r.Height, r.Title)
+			case "region":
+				return fmt.Sprintf("%dx%d · region", r.Width, r.Height)
+			default:
+				return fmt.Sprintf("%dx%d · display %d", r.Width, r.Height, r.Display)
+			}
+		}
 	case "calculate":
 		var r CalculateResult
 		if decodeToolData(result.Data, &r) {
@@ -241,6 +262,17 @@ func compactToolDataForModel(name string, result toolResult, fullJSON string) st
 			return fullJSON
 		}
 		return renderListFilesResultForModel(r)
+	case "screenshot":
+		// One tool, two result shapes. A capture result carries source; its
+		// image travels as an image part injected right after the tool
+		// results (collectReadImages), so the model-facing block keeps only
+		// the metadata and megabytes of base64 never enter the message
+		// history as text. A list result is small and bounded — plain JSON.
+		var r ScreenshotResult
+		if !decodeToolData(result.Data, &r) || r.Source == "" {
+			return fullJSON
+		}
+		return renderScreenshotResultForModel(r)
 	case "edit", "remote_edit":
 		var r MultiEditResult
 		if !decodeToolData(result.Data, &r) {
@@ -976,6 +1008,31 @@ func renderCommandResultForModel(r CommandResult) string {
 	b.WriteString(">\n")
 	b.WriteString(body)
 	b.WriteString("\n</ally-cmd>")
+	return b.String()
+}
+
+// renderScreenshotResultForModel renders a capture as a single self-closing
+// <ally-screenshot> block. The DataURL is deliberately absent: the image
+// arrives in the user message injected right after the tool results, so the
+// attribute only tells the model where to look for it.
+func renderScreenshotResultForModel(r ScreenshotResult) string {
+	var b strings.Builder
+	b.WriteString(`<ally-screenshot source="` + attrEscape(r.Source) + `"`)
+	switch r.Source {
+	case "window":
+		fmt.Fprintf(&b, ` id="%d" title="%s"`, r.WindowID, attrEscape(r.Title))
+		fmt.Fprintf(&b, ` rect="%d,%d %dx%d"`, r.X, r.Y, r.Width, r.Height)
+	case "region":
+		fmt.Fprintf(&b, ` rect="%d,%d %dx%d"`, r.X, r.Y, r.Width, r.Height)
+	default:
+		fmt.Fprintf(&b, ` display="%d"`, r.Display)
+	}
+	fmt.Fprintf(&b, ` size="%dx%d"`, r.Width, r.Height)
+	if r.Scaled {
+		b.WriteString(` scaled`)
+	}
+	b.WriteString(` image="sent as image input in following message"`)
+	b.WriteString("/>")
 	return b.String()
 }
 
