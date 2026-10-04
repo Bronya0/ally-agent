@@ -30,6 +30,12 @@ Public License v3. See the LICENSE file for details.
         <n-button size="small" secondary @click="openMcpImport">{{ t('settings.modelImport') }}</n-button>
         <n-button size="small" secondary :disabled="!mcpFormServers.length" @click="exportMcpConfig">{{ t('settings.modelExport') }}</n-button>
         <n-button size="small" secondary :loading="mcpLoading" @click="loadMcpConfig">{{ t('common.refresh') }}</n-button>
+        <n-dropdown trigger="click" :options="mcpMarketOptions" @select="openExternalLink">
+          <n-button size="small" secondary :title="t('app.mcp.marketplace')">
+            <template #icon><AppstoreOutlined /></template>
+            {{ t('app.mcp.marketplace') }}
+          </n-button>
+        </n-dropdown>
         <n-button size="small" type="primary" @click="openMcpEditor(-1)">{{ t('common.add') }}</n-button>
       </div>
     </header>
@@ -151,10 +157,10 @@ Public License v3. See the LICENSE file for details.
 <script setup>
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import { useMessage } from 'naive-ui';
-import { SearchOutlined } from '@vicons/antd';
+import { SearchOutlined, AppstoreOutlined } from '@vicons/antd';
 import { saveTextFile } from '../utils/download.mjs';
 import { t } from '../i18n.mjs';
-import { Events } from '@wailsio/runtime';
+import { Browser, Events } from '@wailsio/runtime';
 import { unwrapWailsEvent } from '../utils/wailsEvent.mjs';
 import {
   GetMcpConfig, GetMcpServers, SaveMcpConfig, ReconcileMcpServers,
@@ -168,6 +174,19 @@ import {
 const props = defineProps({ show: { type: Boolean, default: false } });
 const emit = defineEmits(['mcp-saved']);
 const message = useMessage();
+
+// MCP 市场下拉：均为公开免费站点，点击经系统默认浏览器打开（Browser.OpenURL
+// 由 Wails 走宿主 shell，不经过 WebView 导航）。
+const mcpMarketOptions = [
+  { label: '魔搭 ModelScope', key: 'https://www.modelscope.cn/mcp' },
+  { label: '火山引擎 Volcengine', key: 'https://www.volcengine.com/ats' },
+  { label: 'Glama', key: 'https://glama.ai/mcp/servers?sort=recent-github-stargazers%3Adesc' },
+  { label: 'PulseMCP', key: 'https://www.pulsemcp.com/servers' },
+];
+
+function openExternalLink(url) {
+  if (url) Browser.OpenURL(url);
+}
 
 const mcpFormModalStyle = {
   width: 'min(580px, calc(100vw - 48px))',

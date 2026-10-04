@@ -31,6 +31,12 @@ Public License v3. See the LICENSE file for details.
           <template #prefix><SearchOutlined class="panel-search-icon" /></template>
         </n-input>
         <n-button size="small" secondary :loading="skillsLoading" @click="refreshSkillState">{{ t('common.refresh') }}</n-button>
+        <n-dropdown trigger="click" :options="skillMarketOptions" @select="openExternalLink">
+          <n-button size="small" secondary :title="t('app.skills.marketplace')">
+            <template #icon><AppstoreOutlined /></template>
+            {{ t('app.skills.marketplace') }}
+          </n-button>
+        </n-dropdown>
         <n-button size="small" type="primary" @click="openSkillEditor">{{ t('app.skills.add') }}</n-button>
       </div>
     </header>
@@ -134,7 +140,8 @@ Public License v3. See the LICENSE file for details.
 <script setup>
 import { computed, reactive, ref, watch } from 'vue';
 import { useMessage } from 'naive-ui';
-import { SearchOutlined } from '@vicons/antd';
+import { SearchOutlined, AppstoreOutlined } from '@vicons/antd';
+import { Browser } from '@wailsio/runtime';
 import { t } from '../i18n.mjs';
 import { isSkillActive } from '../utils/skills.mjs';
 import {
@@ -163,6 +170,18 @@ const skillToggleInFlight = ref('');
 
 // 头部搜索框：按名称/描述/whenToUse/路径实时过滤。
 const skillSearch = ref('');
+
+// 技能市场下拉：均为公开免费站点，点击经系统默认浏览器打开（Browser.OpenURL
+// 由 Wails 走宿主 shell，不经过 WebView 导航）。
+const skillMarketOptions = [
+  { label: '魔搭 ModelScope', key: 'https://www.modelscope.cn/skills' },
+  { label: 'OpenAgentSkill（中文）', key: 'https://www.openagentskill.com/zh' },
+  { label: 'skills.sh Trending', key: 'https://www.skills.sh/trending' },
+];
+
+function openExternalLink(url) {
+  if (url) Browser.OpenURL(url);
+}
 
 function skillMatchesSearch(sk, needle) {
   if (!needle) return true;
