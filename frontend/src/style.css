@@ -674,10 +674,11 @@ html[data-mode="light"] .tool-command .shell-command-word {
   color: var(--ally-accent-strong);
 }
 /* 截图预览：默认限高（等比缩放、圆角与 tool-body 一致），点击切原尺寸。
+   折叠态只当缩略图用（看一眼确认截对了），细节留给点开后的原图。
    只动 max-height/width（布局属性静态一次），img 本身无动画，不触 GPU 铁律。 */
 .screenshot-preview {
   margin-top: 6px;
-  max-height: 320px;
+  max-height: 168px;
   overflow: hidden;
   border-radius: 8px;
   border: 1px solid var(--ally-border-subtle);
