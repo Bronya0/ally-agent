@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"ally-dev/internal/tools/pathutil"
+	toolshared "ally-dev/internal/tools/shared"
 
 	"golang.org/x/net/http/httpguts"
 
@@ -236,6 +237,7 @@ func (a *App) updateConfigAndPersist(mutate func(*ConfigState)) error {
 func (a *App) saveConfig(cfg ConfigState) error {
 	a.mu.Lock()
 	cfg.DisabledSkills = normalizeSkillNameList(cfg.DisabledSkills)
+	cfg.DisabledTools = toolshared.SanitizeDisabledTools(cfg.DisabledTools)
 	cfg = persistableConfig(cfg)
 	a.config = cfg
 	a.disabledSkills = cloneStringSlice(cfg.DisabledSkills)
@@ -332,6 +334,9 @@ func mergeConfig(base, overlay ConfigState) ConfigState {
 	}
 	if overlay.DisabledSkills != nil {
 		base.DisabledSkills = normalizeSkillNameList(overlay.DisabledSkills)
+	}
+	if overlay.DisabledTools != nil {
+		base.DisabledTools = toolshared.SanitizeDisabledTools(overlay.DisabledTools)
 	}
 	if overlay.LLMRetries > 0 {
 		base.LLMRetries = overlay.LLMRetries
@@ -657,6 +662,7 @@ func (a *App) SaveConfig(req ConfigState) error {
 	a.config.BackgroundOpacity = clampBackgroundOpacity(req.BackgroundOpacity)
 	a.disabledSkills = normalizeSkillNameList(a.config.DisabledSkills)
 	a.config.DisabledSkills = cloneStringSlice(a.disabledSkills)
+	a.config.DisabledTools = toolshared.SanitizeDisabledTools(a.config.DisabledTools)
 	// 落盘不变式（收敛悬空身份 + 清派生模型字段）与写盘都收在同一处，不再在这里
 	// 各写一遍：见 persistableConfig / persistConfigFile。
 	a.config = persistableConfig(a.config)

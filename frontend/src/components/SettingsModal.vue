@@ -314,31 +314,53 @@ Public License v3. See the LICENSE file for details.
             </div>
           </div>
           <div class="settings-field-hint">{{ $t('settings.fontSizeGridHint') }}</div>
-          <div class="settings-page-actions">
-            <n-button type="primary" @click="onSave">{{ $t('common.save') }}</n-button>
-          </div>
         </section>
 
-        <!-- Advanced -->
+        <!-- Advanced: two tabs — auto code validation and built-in tool toggles -->
         <section v-else-if="page === 'advanced'" class="settings-page">
-          <div class="config-section-header">
-            <div>
-              <div class="config-section-title">{{ $t('settings.advancedTitle') }}</div>
-              <div class="config-section-subtitle">{{ $t('settings.advancedSubtitle') }}</div>
-            </div>
-          </div>
-          <div class="validation-settings-list">
-            <div v-for="item in validationSettings" :key="item.key" class="validation-setting-row">
-              <div class="validation-setting-copy">
-                <div class="validation-setting-label">{{ item.label }}</div>
-                <div class="validation-setting-hint">{{ item.hint }}</div>
+          <n-tabs v-model:value="advancedTab" type="line" size="small" class="settings-advanced-tabs">
+            <n-tab name="validation">{{ $t('settings.validationTab') }}</n-tab>
+            <n-tab name="tools">{{ $t('settings.toolsTab') }}</n-tab>
+          </n-tabs>
+          <template v-if="advancedTab === 'validation'">
+            <div class="config-section-header">
+              <div>
+                <div class="config-section-subtitle">{{ $t('settings.advancedSubtitle') }}</div>
               </div>
-              <n-switch v-model:value="draft[item.key]" />
             </div>
-          </div>
-          <div class="settings-page-actions">
-            <n-button type="primary" @click="onSave">{{ $t('common.save') }}</n-button>
-          </div>
+            <div class="validation-settings-list">
+              <div v-for="item in validationSettings" :key="item.key" class="validation-setting-row">
+                <div class="validation-setting-copy">
+                  <div class="validation-setting-label">{{ item.label }}</div>
+                  <div class="validation-setting-hint">{{ item.hint }}</div>
+                </div>
+                <n-switch v-model:value="draft[item.key]" />
+              </div>
+            </div>
+          </template>
+          <template v-else>
+            <div class="config-section-header">
+              <div>
+                <div class="config-section-subtitle">{{ $t('settings.toolsSubtitle') }}</div>
+              </div>
+            </div>
+            <div class="validation-settings-list">
+              <div v-for="tool in toolSettings" :key="tool.name" class="validation-setting-row">
+                <div class="validation-setting-copy">
+                  <div class="validation-setting-label">
+                    {{ tool.label }}
+                    <span class="tool-id-chip">{{ tool.name }}</span>
+                  </div>
+                  <div v-if="tool.hint" class="validation-setting-hint">{{ tool.hint }}</div>
+                </div>
+                <n-switch
+                  :value="toolEnabled(tool.name)"
+                  :disabled="tool.disabled"
+                  @update:value="(value) => setToolEnabled(tool.name, value)"
+                />
+              </div>
+            </div>
+          </template>
         </section>
 
         <!-- Network -->
@@ -486,7 +508,7 @@ import {
 // The discrete message API follows the active color mode so toasts never
 // render dark-on-dark / light-on-light after a mode switch.
 const colorModeState = ref(getStoredMode());
-const { message } = createDiscreteApi(['message'], {
+const { message, dialog } = createDiscreteApi(['message', 'dialog'], {
   configProviderProps: computed(() => ({
     theme: colorModeState.value === 'light' ? null : darkTheme,
     locale: naiveLocale,
@@ -615,6 +637,14 @@ const validationSettingKeys = [
 ];
 
 // Deep-clone the config draft so changes don't mutate parent reactively until save
+const protectedToolNames = ['read', 'edit', 'create', 'delete', 'command'];
+const toggleableToolNames = [
+  'list_files', 'grep', 'screenshot', 'service', 'wait', 'ask', 'suggest',
+  'scheduled_task', 'http_request', 'web_fetch',
+  'remote_read', 'remote_edit', 'remote_create_file', 'remote_delete_path', 'remote_run_command',
+  'ssh_cluster', 'calculate', 'render_html', 'plan', 'subagent', 'skill',
+];
+
 const draft = reactive(cloneConfigDraft(props.configDraft));
 
 // Color mode is a pure front-end preference (localStorage, see utils/theme.mjs),
@@ -659,6 +689,62 @@ const proxyModeOptions = computed(() => [
   { label: t('settings.proxySystem'), value: 'system' },
   { label: t('settings.proxyManual'), value: 'manual' },
 ]);
+// ── 高级设置 · 内置工具启停 ──
+// 本地读/写/命令核心五件不可停用（AGENTS.md 工具分层里的基本工作面），其余
+// 内置工具可由用户开关。名单是静态的（工具集随版本走），停用名单保存在
+// config.disabledTools，后端只在**新会话**注入 schema 时过滤（已有会话冻结）。
+const advancedTab = ref('validation');
+
+const toolSettings = computed(() => [
+  ...protectedToolNames.map((name) => ({
+    name,
+    label: t(`settings.tool.${name}`),
+    hint: t('settings.toolsProtected'),
+    disabled: true,
+  })),
+  ...toggleableToolNames.map((name) => ({
+    name,
+    label: t(`settings.tool.${name}`),
+    hint: '',
+    disabled: false,
+  })),
+]);
+
+function toolEnabled(name) {
+  return !(Array.isArray(draft.disabledTools) && draft.disabledTools.includes(name));
+}
+
+// savedDisabledTools 以 props.configDraft 为准（保存成功后父层会刷新它）：
+// 与已存状态相同方向的拨动不弹确认，只有真正改变持久化意图的操作才问。
+function savedToolEnabled(name) {
+  const saved = props.configDraft?.disabledTools;
+  return !(Array.isArray(saved) && saved.includes(name));
+}
+
+function setToolEnabled(name, value) {
+  if (value === savedToolEnabled(name)) {
+    applyToolToggle(name, value);
+    return;
+  }
+  const label = t(`settings.tool.${name}`);
+  dialog[value ? 'info' : 'warning']({
+    title: t('settings.toolsConfirmTitle'),
+    content: value
+      ? t('settings.toolsConfirmEnable', { name: label })
+      : t('settings.toolsConfirmDisable', { name: label }),
+    positiveText: t('common.confirm'),
+    negativeText: t('common.cancel'),
+    onPositiveClick: () => applyToolToggle(name, value),
+  });
+}
+
+function applyToolToggle(name, value) {
+  const current = new Set(Array.isArray(draft.disabledTools) ? draft.disabledTools : []);
+  if (value) current.delete(name);
+  else current.add(name);
+  draft.disabledTools = Array.from(current);
+}
+
 const validationSettings = computed(() => [
   { key: 'autoValidationPython', label: t('settings.validationPython'), hint: t('settings.validationPythonHint') },
   { key: 'autoValidationGo', label: t('settings.validationGo'), hint: t('settings.validationGoHint') },
@@ -798,6 +884,32 @@ watch([
   emit('save', { ...draft }, true);
 });
 
+// 通用 / 高级两页的字段即改即存（与上方 proxy watcher 同一模式，silent save
+// 第三参 true）。这两页不再有统一保存按钮：网络页的文本域较多，仍走显式保存。
+// kbRoot 虽由目录选择/清除按钮写入，但同样只是改 draft，统一经本 watcher 落盘；
+// 主题（selectColorMode → set-mode）走各自的 set-mode 事件通道，不在此列。
+watch([
+  () => draft.customPrompt,
+  () => draft.allowPrivateNetwork,
+  () => draft.gitBashPath,
+  () => draft.llmRetries,
+  () => draft.compactThreshold,
+  () => draft.compactTimeoutSeconds,
+  () => draft.autoUpdate,
+  () => draft.backgroundOpacity,
+  () => draft.messageFontSize,
+  () => draft.codeFontSize,
+  () => draft.toolFontSize,
+  () => draft.subFontSize,
+  () => draft.auxFontSize,
+  () => draft.kbRoot,
+  ...validationSettingKeys.map((key) => () => draft[key]),
+  () => draft.disabledTools,
+], () => {
+  if (!props.visible) return;
+  emit('save', { ...draft }, true);
+});
+
 const isWindows = computed(() => {
   return document.body.classList.contains('platform-windows') ||
     document.body.classList.contains('platform-win32');
@@ -823,6 +935,11 @@ function cloneConfigDraft(source) {
     // Auto validation is opt-in: only an explicit true keeps a check enabled.
     next[key] = next[key] === true;
   }
+  // 内置工具停用名单：只接受已知工具名（核心五件在开关层就锁死，这里再过滤
+  // 一次作为兜底，与后端 SanitizeDisabledTools 语义一致）。
+  next.disabledTools = Array.isArray(next.disabledTools)
+    ? next.disabledTools.map((name) => String(name || '').trim().toLowerCase()).filter((name) => toggleableToolNames.includes(name))
+    : [];
   return next;
 }
 
@@ -1302,6 +1419,31 @@ watch(() => props.visible, (visible) => {
   color: var(--ally-text-high);
   font-size: 13px;
   font-weight: 600;
+}
+
+.settings-advanced-tabs {
+  margin-bottom: 10px;
+}
+
+/* 与 SkillsPanel 来源 tabs 同一套呼吸感：小号 n-tabs 默认贴字，撑开点击区 */
+.settings-advanced-tabs :deep(.n-tabs-tab) {
+  padding: 6px 10px;
+  font-size: 15px;
+  color: var(--ally-text-primary);
+}
+
+.tool-id-chip {
+  display: inline-block;
+  margin-left: 10px;
+  padding: 1px 7px;
+  line-height: 1.5;
+  border: 1px solid var(--ally-border-subtle);
+  border-radius: 4px;
+  color: var(--ally-text-muted);
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  font-weight: 400;
+  vertical-align: 2px;
 }
 
 .validation-setting-hint {

@@ -30,6 +30,7 @@ import (
 	"github.com/mark3labs/mcp-go/client/transport"
 	"github.com/mark3labs/mcp-go/mcp"
 
+	toolshared "ally-dev/internal/tools/shared"
 	openai "github.com/sashabaranov/go-openai"
 )
 
@@ -1631,8 +1632,9 @@ func (m *McpManager) notifyChange() {
 // buildToolsWithMcp combines static tools with dynamically discovered MCP tools.
 // MCP tools go through GetEnabledTools so a server's disabledTools blacklist
 // keeps those schemas out of the model request entirely.
-func (a *App) buildToolsWithMcp() []openai.Tool {
-	tools := chatTools()
+// buildToolsWithMcp appends the enabled MCP tools to the given builtin set.
+func (a *App) buildToolsWithMcp(builtins []openai.Tool) []openai.Tool {
+	tools := builtins
 	if a.mcpManager == nil {
 		return tools
 	}
@@ -1657,8 +1659,13 @@ func (a *App) buildToolsWithMcp() []openai.Tool {
 	return tools
 }
 
+// buildToolsForConfig is the live toolset for stateless callers (sub-agents,
+// scheduled tasks) and the pre-freeze set for new chat sessions: the built-in
+// list minus the user-disabled tools (cfg.DisabledTools; the local
+// read/edit/create/delete/command core always survives), plus MCP tools.
 func (a *App) buildToolsForConfig(cfg ConfigState) []openai.Tool {
-	return a.buildToolsWithMcp()
+	builtins := toolshared.FilterTools(chatTools(), cfg.DisabledTools)
+	return a.buildToolsWithMcp(builtins)
 }
 
 // buildToolsForSession returns the model-visible tool schemas for a chat
@@ -1737,8 +1744,24 @@ func (a *App) GetMcpServers() []map[string]any {
 }
 
 func (a *App) ListTools() []ToolDefinitionSummary {
-	tools := make([]ToolDefinitionSummary, 0, len(chatTools()))
-	for _, tool := range chatTools() {
+	// 内置工具的 Enabled 跟随设置页的停用名单（cfg.DisabledTools）：被停用的
+	// 工具不再注入模型，清单里以 Enabled=false 呈现（与 MCP 行的 per-server
+	// 黑名单同一口径，UI 按此过滤计数）。
+	a.mu.Lock()
+	disabled := append([]string(nil), a.config.DisabledTools...)
+	a.mu.Unlock()
+	all := chatTools()
+	enabled := make(map[string]bool, len(all))
+	for _, tool := range all {
+		if tool.Function != nil {
+			enabled[tool.Function.Name] = true
+		}
+	}
+	for _, name := range toolshared.SanitizeDisabledTools(disabled) {
+		enabled[name] = false
+	}
+	tools := make([]ToolDefinitionSummary, 0, len(all))
+	for _, tool := range all {
 		if tool.Function == nil {
 			continue
 		}
@@ -1746,7 +1769,7 @@ func (a *App) ListTools() []ToolDefinitionSummary {
 			Name:        tool.Function.Name,
 			Description: strings.TrimSpace(tool.Function.Description),
 			Source:      "built-in",
-			Enabled:     true,
+			Enabled:     enabled[tool.Function.Name],
 		})
 	}
 	if a.mcpManager != nil {

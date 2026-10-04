@@ -6098,6 +6098,11 @@ async function onSettingsSave(draftData, silent = false) {
       }
     }
     refreshContextTokens(activeSessionId.value);
+    // 设置里改了停用名单 / 技能开关后，欢迎页表格与气泡读的是前端缓存
+    // （availableTools / availableSkills+activeSkillNames），在这里强制刷新，
+    // 保证保存后表格计数与清单立即与新配置一致。
+    refreshToolList();
+    try { await refreshSkillState(); } catch (_) { /* 保持旧缓存 */ }
     if (!silent) message.success(t('app.config.saved'));
   } catch (err) {
     message.error(t('app.config.saveFailed', { error: err }));

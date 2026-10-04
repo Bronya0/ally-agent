@@ -546,7 +546,15 @@ type ConfigState struct {
 	// 时把自己的模型身份存进任务记录（见 ScheduledTask.Model）。
 	LastUsedModel  *ModelIdentity `json:"lastUsedModel,omitempty"`
 	DisabledSkills []string       `json:"disabledSkills,omitempty"`
-	LLMRetries     int            `json:"llmRetries,omitempty"`
+	// DisabledTools lists built-in tools the user turned off in Settings →
+	// Advanced → Built-in tools. Disabled names are dropped from the tool
+	// schemas injected for NEW sessions (sessionToolsets freezes a session's
+	// set at its first request, so existing sessions keep what they were
+	// frozen with); MCP tools are never covered by this list. The local
+	// read/edit/create/delete/command core is protected: the Settings UI
+	// offers no switch and the filter/sanitizers refuse those names.
+	DisabledTools []string `json:"disabledTools,omitempty"`
+	LLMRetries    int      `json:"llmRetries,omitempty"`
 	// AutoValidation* are nil for legacy configs (treated as disabled).
 	// Post-write checks only run for languages the user explicitly enabled
 	// in Settings.

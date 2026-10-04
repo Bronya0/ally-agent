@@ -813,6 +813,91 @@ func NormalizeName(name string) string {
 	return strings.ToLower(strings.TrimSpace(name))
 }
 
+// protectedToolNames is the set of local file/command tools that must never
+// leave the model's toolset: without read/edit/create/delete/command the
+// agent cannot inspect or change the workspace at all, so Settings never
+// offers them for disabling and the filter refuses them as a backstop.
+var protectedToolNames = map[string]bool{
+	"read":    true,
+	"edit":    true,
+	"create":  true,
+	"delete":  true,
+	"command": true,
+}
+
+// IsProtectedTool reports whether the named tool is one of the core local
+// file/command tools that must stay enabled.
+func IsProtectedTool(name string) bool {
+	return protectedToolNames[NormalizeName(name)]
+}
+
+// BuiltinToolNames returns the built-in tool names in declaration order —
+// the UI's toggle list reads this instead of hand-copying the names.
+func BuiltinToolNames() []string {
+	tools := chatToolsUncached()
+	names := make([]string, 0, len(tools))
+	for _, tool := range tools {
+		if tool.Function != nil {
+			names = append(names, tool.Function.Name)
+		}
+	}
+	return names
+}
+
+// IsBuiltinTool reports whether name is a built-in tool's canonical name.
+// Legacy aliases (e.g. document_read) normalize like their canonical name,
+// which is what BuiltinSchema keys on, so a disabled-tools entry never needs
+// the alias spelling.
+func IsBuiltinTool(name string) bool {
+	_, ok := BuiltinSchema(name)
+	return ok
+}
+
+// FilterTools drops the disabled non-protected builtins from a tool list.
+// Disabled names are normalized (lower/trim); unknown names and protected
+// tools are ignored — the config may carry stale entries after upgrades, and
+// the core five must survive any config content.
+func FilterTools(tools []openai.Tool, disabled []string) []openai.Tool {
+	if len(disabled) == 0 || len(tools) == 0 {
+		return tools
+	}
+	off := make(map[string]bool, len(disabled))
+	for _, name := range disabled {
+		name = NormalizeName(name)
+		if name != "" && !protectedToolNames[name] {
+			off[name] = true
+		}
+	}
+	if len(off) == 0 {
+		return tools
+	}
+	filtered := make([]openai.Tool, 0, len(tools))
+	for _, tool := range tools {
+		if tool.Function != nil && off[NormalizeName(tool.Function.Name)] {
+			continue
+		}
+		filtered = append(filtered, tool)
+	}
+	return filtered
+}
+
+// SanitizeDisabledTools normalizes a disabled-tools list for persistence:
+// trims, lower-cases, dedupes, and drops entries that are not toggleable
+// builtins (protected tools and unknown names). Order is not meaningful.
+func SanitizeDisabledTools(names []string) []string {
+	out := make([]string, 0, len(names))
+	seen := map[string]bool{}
+	for _, name := range names {
+		name = NormalizeName(name)
+		if name == "" || seen[name] || protectedToolNames[name] || !IsBuiltinTool(name) {
+			continue
+		}
+		seen[name] = true
+		out = append(out, name)
+	}
+	return out
+}
+
 // ParseFrontmatterField reads a single `field: value` line from YAML
 // frontmatter. It is the single shared implementation for Ally's minimal
 // frontmatter needs (skill metadata and memory descriptions); full YAML
