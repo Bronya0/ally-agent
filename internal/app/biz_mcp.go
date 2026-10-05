@@ -115,6 +115,25 @@ type McpClientHandle struct {
 	token *mcpConnToken
 }
 
+// McpManager 的连接生命周期总纲：**无状态——模型用则连，不用就不管**。
+//
+// 连接是易耗品，不是要守护的资产。远程 MCP 的长连流随时会被对端回收（服务端/
+// 网关/代理的空闲超时、会话过期后直接 RST，mcp-go 的 SSE 传输连干净的 EOF 都
+// 触发断连且无内部重连），"用久了就断"是常态而非故障。Ally 因此不做保活、
+// 不做后台重连：心跳换不来什么（调用时全量重连+握手只要几百毫秒），却添一套
+// 常驻状态机；断连只标记 failed，等下一次工具调用由 callToolOnce"先重连再试"
+// 自愈（对齐 ZCode 的按需重连）。
+//
+// 注入必须跟着配置开关走，绝不跟连接状态走（collectTools 只排除 disabled）。
+// 反过来做（曾经的做法：failed 服务端不参与注入）会两头都坏：
+//  1. 模型侧：一次断流就把工具从模型视图整个抽走，冻结的会话工具集缺了它，
+//     整段会话再也调不到，只能重启应用；
+//  2. 缓存侧：工具集中途增减 = 请求前缀漂移，毒化 KV 前缀缓存——注入视图
+//     必须在一个会话内恒定，而连接状态恰恰是会话内最不稳定的东西。
+//
+// 与此配套的两条纪律：断连绝不清 ToolDefs（handleConnectionLost 保留清单，
+// 注入与重连都靠它）；会话工具集冻结在首次请求（sessionToolsets），运行期的
+// 清单变化只影响新会话。
 type McpManager struct {
 	mu             sync.RWMutex
 	reconnectLocks sync.Map // serverName -> *sync.Mutex，per-server 重连互斥
