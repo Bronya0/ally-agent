@@ -74,9 +74,6 @@ Public License v3. See the LICENSE file for details.
           </span>
           <span class="ssh-auth-cell-alias" :title="s.alias">
             {{ s.alias }}
-            <span v-if="s.riskLevel === 'high'" class="ssh-auth-risk-tag">
-              {{ $t('sshCluster.modal.riskHigh') }}
-            </span>
           </span>
           <span class="ssh-auth-cell-endpoint" :title="endpointOf(s)">{{ endpointOf(s) }}</span>
           <span class="ssh-auth-cell-desc" :title="s.description">{{ s.description || '-' }}</span>
@@ -285,15 +282,6 @@ function endpointOf(server) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.ssh-auth-risk-tag {
-  font-size: 10px;
-  padding: 1px 4px;
-  border-radius: 3px;
-  background: rgba(239, 68, 68, 0.15);
-  color: #ef4444;
-  flex-shrink: 0;
 }
 
 .ssh-auth-cell-endpoint {
