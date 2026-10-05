@@ -302,21 +302,18 @@ Public License v3. See the LICENSE file for details.
                   :scheduled-running-count="scheduledTaskRunningCount"
                   :fmt-k="fmtK"
                   :extra-roots="extraRoots"
-                  :ssh-servers="allSSHServers"
                   :allowed-ssh-servers="allowedSSHServersForActiveWorkspace"
-                  :allowed-ssh-servers-ready="allowedSSHServersReadyForActiveWorkspace"
                   :explorer-visible="explorerVisibleFor(activeWorkspaceId)"
                   @add-extra-root="addExtraRoot"
                   @remove-extra-root="removeExtraRoot"
-                  @toggle-ssh-server="toggleSSHServerForActiveWorkspace"
-                  @open-ssh-cluster-manager="openSSHClusterManager"
+                  @open-task-center="openTaskCenter"
+                  @open-ssh-auth="sshAuthModalVisible = true"
                   @switch-model="switchToModel"
                   @open-config="switchMode('models')"
                   @open-git-diff="openGitDiff"
                   @open-workspace="openWorkspaceInFileManager"
                   @open-terminal="openWorkspaceInTerminal"
                   @change-reasoning-effort="changeReasoningEffort"
-                  @open-task-center="openTaskCenter"
                   @toggle-explorer="toggleWorkspaceExplorer"
                   @new-session="createNewSession"
                   @show-sessions="showSessionList"
@@ -443,6 +440,16 @@ Public License v3. See the LICENSE file for details.
             @refresh="refreshTaskCenter"
             @delete-task="deleteScheduledTask"
             @stop-service="stopManagedService"
+          />
+          <!-- 工作区 SSH 授权：从信息栏气泡升级为独立模态框（勾选区太窄）。 -->
+          <SshClusterAuthModal
+            :show="sshAuthModalVisible"
+            :ssh-servers="allSSHServers"
+            :allowed-ssh-servers="allowedSSHServersForActiveWorkspace"
+            :allowed-ssh-servers-ready="allowedSSHServersReadyForActiveWorkspace"
+            @close="sshAuthModalVisible = false"
+            @toggle-ssh-server="toggleSSHServerForActiveWorkspace"
+            @open-manager="openSSHClusterManager"
           />
           <RenderBoundary :label="$t('app.gitChanges')"><GitDiffModal v-model:show="gitDiffVisible" :initial-repo="selectedGitRepo" :git-status="gitStatus" :workspace="activeRunWorkspace" /></RenderBoundary>
 
@@ -642,6 +649,7 @@ import ModelsPanel from './components/ModelsPanel.vue';
 import SSHClusterPanel from './components/SSHClusterPanel.vue';
 import ChatMessages from './components/ChatMessages.vue';
 import TaskCenterPanel from './components/TaskCenterPanel.vue';
+import SshClusterAuthModal from './components/SshClusterAuthModal.vue';
 import TokenStatsModal from './components/TokenStatsModal.vue';
 import GamePanel from './games/GamePanel.vue';
 import { assignConfig, defaultConfig, placeholderModel } from './utils/config.mjs';
@@ -1791,6 +1799,7 @@ const availableTools = ref([]);
 const scheduledTasks = ref([]);
 const services = ref([]);
 const taskCenterVisible = ref(false);
+const sshAuthModalVisible = ref(false);
 // 工具栏两个入口 chip 各自直达对应 Tab（S=后台服务 / C=定时任务）。
 const taskCenterTab = ref('services');
 // Workspace explorer 状态按 Tab 独立保存：切换 Tab 时不会重置或取消任何
@@ -3525,6 +3534,8 @@ watch(
 const settingsModalRef = ref(null);
 
 function openSSHClusterManager() {
+  // 从授权模态框跳转过来时先收掉模态框，别叠在 SSH 集群页上。
+  sshAuthModalVisible.value = false;
   switchMode('ssh');
 }
 
