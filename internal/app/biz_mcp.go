@@ -828,10 +828,11 @@ func mcpProcessExitCause(state *os.ProcessState, err error) string {
 // connecting、删除会先把记录摘掉、退出会整体换掉 map——这些正常路径都不该被
 // 当成故障，更不能让旧连接的死亡打翻刚建好的新连接。
 //
-// 工具清单与 client 都保留：失败服务端本就不参与工具注入，而"下一次调用先
-// 重连再试"要靠它们把连接救回来（对齐 ZCode 的调用前按需重连）。client 不在
-// 这里关闭——本函数可能就跑在传输层的回调/读取路径上，同步关闭有自锁风险；
-// 它持有的管道与句柄会在下一次重连、配置调和或退出时随 Close 一起释放。
+// 工具清单与 client 都保留：失败服务端的工具照常注入（collectTools 只排除
+// disabled），而"下一次调用先重连再试"要靠它们把连接救回来（对齐 ZCode 的调用
+// 前按需重连）。client 不在这里关闭——本函数可能就跑在传输层的回调/读取路径上，
+// 同步关闭有自锁风险；它持有的管道与句柄会在下一次重连、配置调和或退出时随
+// Close 一起释放。
 func (m *McpManager) handleConnectionLost(serverName string, token *mcpConnToken, cause string) {
 	// 先记进 token：连接可能还没被登记到 handle 上（握手刚成功、进程就死），
 	// 登记那一步要靠它把结果落成 failed。
@@ -1416,9 +1417,9 @@ func (m *McpManager) Shutdown() {
 	wg.Wait()
 }
 
-// GetAllTools returns every discovered tool from connected servers regardless
-// of the per-server injection blacklist — the inventory/status layer stays
-// all-visible so the UI can offer toggles for hidden tools.
+// GetAllTools returns every discovered tool regardless of the per-server
+// injection blacklist — the inventory/status layer stays all-visible so the
+// UI can offer toggles for hidden tools.
 func (m *McpManager) GetAllTools() []McpDiscoveredTool {
 	return m.collectTools(false)
 }
@@ -1430,12 +1431,19 @@ func (m *McpManager) GetEnabledTools() []McpDiscoveredTool {
 	return m.collectTools(true)
 }
 
+// collectTools 按"配置开了的 server 就注入"收敛：连接是无状态的，注入不能跟着
+// 连接状态走。曾经只注入 connected 的清单，一次远端断流（长连 SSE 被服务端/代理
+// 回收是常态）就把工具从模型视图里整个抽走——冻结的工具集不再含它，模型从此调
+// 不到，只能重启应用。现在 connecting/failed 的服务端照常注入已发现的 ToolDefs
+// （断连不清清单，见 handleConnectionLost），调用时由 callToolOnce 的"先重连再
+// 试"兜底；首次连接还没拿到清单时 ToolDefs 为空，自然无可注入。"disabled" 是
+// 用户显式关掉的 server，永不注入。
 func (m *McpManager) collectTools(enabledOnly bool) []McpDiscoveredTool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	var all []McpDiscoveredTool
 	for _, handle := range m.clients {
-		if handle.Status != "connected" {
+		if handle.Status == "disabled" {
 			continue
 		}
 		var disabled map[string]bool

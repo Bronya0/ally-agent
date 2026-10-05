@@ -332,6 +332,8 @@ func TestMcpUnknownArgWarningsNamesUndeclaredArguments(t *testing.T) {
 
 // 注入过滤：黑名单内工具不进 GetEnabledTools，但 GetAllTools（清单层）仍全量可见；
 // 黑名单按「对端原始工具名」匹配，未列出的工具（含对端新增）默认启用。
+// 连接状态不参与过滤：failed 服务端已发现的工具照常注入（连接无状态，调用时
+// 按需重连兜底），只有用户显式关掉的 disabled server 才整体排除。
 func TestGetEnabledToolsFiltersDisabledTools(t *testing.T) {
 	manager := NewMcpManager(t.TempDir(), nil)
 	manager.clients = map[string]*McpClientHandle{
@@ -344,16 +346,24 @@ func TestGetEnabledToolsFiltersDisabledTools(t *testing.T) {
 				{ServerName: "fs", Name: "write_file", FunctionName: "mcp__fs__write_file"},
 			},
 		},
+		// 远端断流后的形态：清单保留，状态 failed——工具必须仍在模型视图里，
+		// 否则冻结的会话工具集从此缺它，模型再也调不到，只能重启应用。
+		"dead": {
+			ServerName: "dead",
+			Status:     "failed",
+			Error:      "MCP connection lost: stream error: stream ID 1; INTERNAL_ERROR; received from peer",
+			ToolDefs:   []McpDiscoveredTool{{ServerName: "dead", Name: "search", FunctionName: "mcp__dead__search"}},
+		},
 	}
 	// disabled server: 全部工具都不注入也不出现在任一视图
 	manager.clients["off"] = &McpClientHandle{ServerName: "off", Status: "disabled"}
 
 	enabled := manager.GetEnabledTools()
-	if len(enabled) != 1 || enabled[0].Name != "read_file" {
-		t.Fatalf("enabled view must drop blacklisted tools, got %#v", enabled)
+	if len(enabled) != 2 || enabled[0].ServerName != "dead" || enabled[1].Name != "read_file" {
+		t.Fatalf("enabled view must keep failed-server tools and drop blacklisted ones, got %#v", enabled)
 	}
 	all := manager.GetAllTools()
-	if len(all) != 2 {
+	if len(all) != 3 {
 		t.Fatalf("inventory view must stay all-visible, got %#v", all)
 	}
 	if !manager.IsToolDisabled("fs", "write_file") || manager.IsToolDisabled("fs", "read_file") {
@@ -572,7 +582,7 @@ func TestHandleConnectionLostRequiresCurrentConnection(t *testing.T) {
 		t.Fatalf("a reconnect in flight must not be reported as a failure, got %q/%q", handle.Status, handle.Error)
 	}
 
-	// 当前连接的意外退出：翻 failed，工具清单保留——失败服务端不参与注入，
+	// 当前连接的意外退出：翻 failed，工具清单保留——失败服务端的工具照常注入，
 	// 但下一次调用要靠它把连接救回来。
 	handle.Status = "connected"
 	manager.handleConnectionLost("srv", token, "MCP server process exited (exit status 1)")
@@ -1106,9 +1116,9 @@ func TestReconcileRetriesFailedServerInBackground(t *testing.T) {
 		Error:      "boom",
 	}
 
-	// 配置没变的 failed 服务端也要重试（否则新会话里它的工具已不参与注入，
-	// 模型再也调不到，只能重启应用），但绝不能同步等拨号——一次失败的拨号要
-	// 跑满 4 次尝试，面板的"保存"会被拖成分钟级。
+	// 配置没变的 failed 服务端也要重试（把状态翻回 connected，省掉下一次调用
+	// 的按需重连延迟），但绝不能同步等拨号——一次失败的拨号要跑满 4 次尝试，
+	// 面板的"保存"会被拖成分钟级。
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
