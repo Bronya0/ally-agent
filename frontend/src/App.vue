@@ -224,10 +224,13 @@ Public License v3. See the LICENSE file for details.
                        一次 run 内它不参与挂载/卸载，所以阶段标签出现/消失时不会位移。 -->
                   <RunSpinner v-if="activeSessionRunning || compactLoadingActive" />
                   <!-- 标签为空时整块不渲染（思考阶段之外的所有阶段），既不占位也
-                       不空转动画；在同一个元素里换字不重放流光，观感连续。 -->
-                  <Transition name="composer-label-fade">
-                    <span v-if="composerStatusLabel" class="composer-run-label">{{ composerStatusLabel }}</span>
-                  </Transition>
+                       不空转动画；在同一个元素里换字不重放流光，观感连续。
+                       刻意不用 <Transition>：标签自带 1.8s 无限流光动画，Transition
+                       的自动检测会把动画时长当过渡时长（animationend 对无限动画
+                       永不触发），leave 后留一个 opacity:0 的隐形标签滞留 1.8 秒。
+                       淡入改由标签自身的 animation 承担（与流光合并成一条声明，
+                       见 style.css），消失就是 v-if 同步移除，不可能滞留。 -->
+                  <span v-if="composerStatusLabel" class="composer-run-label">{{ composerStatusLabel }}</span>
                   <span
                     v-if="composerStatusDetail"
                     class="composer-run-prompt"

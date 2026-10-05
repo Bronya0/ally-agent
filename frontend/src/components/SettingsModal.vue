@@ -321,6 +321,7 @@ Public License v3. See the LICENSE file for details.
         <section v-else-if="page === 'advanced'" class="settings-page">
           <div class="config-section-header">
             <div>
+              <div class="config-section-title">{{ $t('settings.advancedTitle') }}</div>
               <div class="config-section-subtitle">{{ $t('settings.advancedSubtitle') }}</div>
             </div>
           </div>

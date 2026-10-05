@@ -2670,7 +2670,14 @@ code, pre {
   background-clip: text;
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
-  animation: composer-shimmer 1.8s linear infinite;
+  /* 淡入与流光合并成一条 animation 声明：淡入是 0.18s 的一次性动画，流光是
+     1.8s 的无限循环。这行元素因此绝不能交给 <Transition>（见 App.vue 状态行
+     注释）——自动检测会把 1.8s 当过渡时长，leave 后隐形滞留。 */
+  animation: composer-label-in 0.18s ease-out, composer-shimmer 1.8s linear infinite;
+}
+
+@keyframes composer-label-in {
+  from { opacity: 0; }
 }
 
 @keyframes composer-shimmer {
@@ -2688,21 +2695,10 @@ code, pre {
   will-change: transform, opacity;
 }
 
-/* 标签只在有内容时挂载（v-if），所以工具执行阶段与压缩空档整块消失。同一行右侧的
-   提示词是右对齐的（.composer-run-prompt 的 margin-left: auto 吃掉全部剩余空间），
-   淡入淡出期间不会有相邻元素被推动，纯 opacity 就够，不触发布局（AGENTS.md §4.7）。 */
-.composer-label-fade-enter-active {
-  transition: opacity 0.18s ease-out;
-}
-
-.composer-label-fade-leave-active {
-  transition: opacity 0.15s ease-in;
-}
-
-.composer-label-fade-enter-from,
-.composer-label-fade-leave-to {
-  opacity: 0;
-}
+/* 标签只在有内容时挂载（v-if），所以工具执行阶段与压缩空档整块消失；淡入由
+   .composer-run-label 自己的 animation 承担（见上），消失是同步移除，没有
+   leave 过渡。同一行右侧的提示词是右对齐的（.composer-run-prompt 的
+   margin-left: auto 吃掉全部剩余空间），纯 opacity 淡入不触发布局（AGENTS.md §4.7）。 */
 
 .composer-run-prompt {
   min-width: 0;
@@ -4713,16 +4709,12 @@ code, pre {
     animation: none;
   }
   /* 流光停用时要退回纯色：只停动画的话，渐变还停在 background-position:0
-     那一帧上，一行字会一半亮一半暗。 */
+     那一帧上，一行字会一半亮一半暗。animation: none 连同淡入一起停掉，
+     减弱动效下标签直接出现/消失。 */
   .composer-run-label {
     background: none;
     animation: none;
     -webkit-text-fill-color: currentColor;
-  }
-  /* 减弱动效下连淡入淡出也免掉：标签直接出现/消失。 */
-  .composer-label-fade-enter-active,
-  .composer-label-fade-leave-active {
-    transition: none;
   }
 }
 
