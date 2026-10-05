@@ -99,7 +99,8 @@ func main() {
 			Windows: application.WindowsWindow{
 				Theme: application.Dark,
 			},
-			URL: "/",
+			KeyBindings: devToolsKeyBindings(),
+			URL:         "/",
 		}
 		// 恢复上次退出时持久化的窗口几何（~/.ally_agent/window.json）；
 		// 无持久化状态时保持上面的默认参数。
