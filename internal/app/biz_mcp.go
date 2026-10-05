@@ -416,6 +416,21 @@ func (m *McpManager) connectOne(ctx context.Context, name string, cfg McpServerC
 	unlock := m.lockServerDial(name)
 	defer unlock()
 
+	// 拿到拨号锁后核对现状：两次并发的 ReconcileConfigs（面板快速连点保存）
+	// 会为同一台 failed 服务端各排一次拨号，赢的那次提交连接后，输的那次若照常
+	// 覆盖 handle，会把刚建好的连接整个换掉、其 client 永远无人 Close。已连接
+	// 或拨号在飞时直接放弃——失败的连接走不到这里（status 已是 failed 才会重试）。
+	m.mu.RLock()
+	existing, ok := m.clients[name]
+	status := ""
+	if ok {
+		status = existing.Status
+	}
+	m.mu.RUnlock()
+	if ok && (status == "connected" || status == "connecting") {
+		return
+	}
+
 	handle := &McpClientHandle{ServerName: name, Config: cfg, Status: "connecting"}
 	m.mu.Lock()
 	m.clients[name] = handle
@@ -636,16 +651,17 @@ func (m *McpManager) newMcpClient(ctx context.Context, name string, cfg McpServe
 		if strings.TrimSpace(cfg.URL) == "" {
 			return nil, errors.New("http MCP server requires url")
 		}
-		// 超时只经 basic client 设定：WithHTTPTimeout 与 WithHTTPBasicClient
-		// 不能并用——后者直接替换 client，会把前者的赋值整个丢掉。用工具调用
-		// 超时（per-server 可覆盖）而不是写死的 60s：否则 http 服务端的
-		// toolTimeoutSec 形同虚设，长任务到 60s 必断。
+		// 超时不经 http.Client 设定（传 0，与 SSE 分支一致）：Client.Timeout 覆盖
+		// 整个请求生命周期（含响应体读取），会把常驻的 GET 监听流（mcp-go
+		// listenForever，服务端→客户端通知通道）每 toolTimeoutSec 掐断一次、靠
+		// 自愈重试白转一圈。单次工具调用的超时由 CallTool 的 per-call ctx 兜底
+		// （mcpToolCallTimeout），握手与 tools/list 各有 initCtx/toolsCtx 上限，
+		// 都不依赖这里。WithHTTPTimeout 与 WithHTTPBasicClient 不能并用——后者
+		// 直接替换 client，会把前者的赋值整个丢掉。
 		mcpClient, err = client.NewStreamableHttpClient(
 			cfg.URL,
 			transport.WithHTTPHeaders(cfg.Headers),
-			// 超时与私网许可都只经 basic client 设定：WithHTTPTimeout 会把
-			// WithHTTPBasicClient 的赋值整个丢掉。
-			transport.WithHTTPBasicClient(proxyHTTPClient(networkCfg, allowPrivate, mcpToolCallTimeout(cfg))),
+			transport.WithHTTPBasicClient(proxyHTTPClient(networkCfg, allowPrivate, 0)),
 		)
 		if err != nil {
 			return nil, fmt.Errorf("http client failed: %w", err)

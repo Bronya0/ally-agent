@@ -187,6 +187,43 @@ func TestGetAllToolsReturnsDeterministicOrder(t *testing.T) {
 	}
 }
 
+// connectOne 的拨号锁内核对：已有 connected/connecting 的 handle 时直接放弃，
+// 绝不覆盖——并发 ReconcileConfigs 为同一台服务端各排一次拨号时，输的那次若
+// 照常覆盖 handle，会把刚建好的连接整个换掉、其 client 永远无人 Close（stdio
+// 即孤儿子进程）。
+func TestConnectOneDoesNotClobberLiveConnection(t *testing.T) {
+	manager := NewMcpManager(t.TempDir(), func(tools []McpDiscoveredTool) {})
+	sentinel := &client.Client{}
+	original := &McpClientHandle{
+		ServerName: "a",
+		Config:     McpServerConfig{Command: "x"},
+		Status:     "connected",
+		Client:     sentinel,
+		ToolDefs:   []McpDiscoveredTool{{ServerName: "a", Name: "t", FunctionName: "mcp__a__t"}},
+	}
+	manager.clients["a"] = original
+
+	manager.connectOne(context.Background(), "a", McpServerConfig{Command: "should-not-spawn"})
+
+	manager.mu.RLock()
+	current := manager.clients["a"]
+	manager.mu.RUnlock()
+	if current != original || current.Status != "connected" || current.Client != sentinel {
+		t.Fatalf("a live connection must not be clobbered by a concurrent dial, got %#v", current)
+	}
+
+	// 拨号在飞（connecting）同理：不能叠第二次拨号。
+	inFlight := &McpClientHandle{ServerName: "a", Config: McpServerConfig{Command: "x"}, Status: "connecting"}
+	manager.clients["a"] = inFlight
+	manager.connectOne(context.Background(), "a", McpServerConfig{Command: "should-not-spawn"})
+	manager.mu.RLock()
+	current = manager.clients["a"]
+	manager.mu.RUnlock()
+	if current != inFlight {
+		t.Fatalf("an in-flight dial must not be superseded, got %#v", current)
+	}
+}
+
 func TestMcpManagerReconcileKeepsUnchangedServers(t *testing.T) {
 	enabled := true
 	disabled := false
