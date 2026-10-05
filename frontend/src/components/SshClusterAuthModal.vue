@@ -40,7 +40,7 @@ Public License v3. See the LICENSE file for details.
         <template #prefix><SearchOutlined class="ssh-auth-search-icon" /></template>
       </n-input>
 
-      <div v-if="servers.length === 0" class="ssh-auth-empty">
+      <div v-if="sshServers.length === 0" class="ssh-auth-empty">
         {{ $t('sshCluster.panel.empty') }}
       </div>
       <div v-else-if="filteredServers.length === 0" class="ssh-auth-empty">
