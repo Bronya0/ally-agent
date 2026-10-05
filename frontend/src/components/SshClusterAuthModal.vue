@@ -129,13 +129,25 @@ const allowedSshAliasSet = computed(() => new Set(
   (Array.isArray(props.allowedSshServers) ? props.allowedSshServers : []).map((s) => String(s || '').toLowerCase().trim()),
 ));
 
-// 已授权的排在顶部（组内保持原顺序，稳定排序），未授权的跟随其后。
-// 列表可能上百行，授权状态一眼可见比记住行号重要。
+// 已授权的排在顶部，且最近勾选的排最前（用户勾完立刻能在表头看到自己刚点的那台）。
+// recentAllowed 记录本次会话内勾选的先后（最近在前）；之前就授权过、本次没动过的
+// 节点没有“勾选时间”，按原始顺序排在已授权组的后面。取消勾选即移出记录。
+const recentAllowed = ref([]);
+
 const sortedServers = computed(() => {
   const allowed = allowedSshAliasSet.value;
   return filteredServers.value
-    .map((s, i) => ({ s, i, allowed: allowed.has(String(s.alias || '').toLowerCase().trim()) }))
-    .sort((a, b) => (a.allowed === b.allowed ? a.i - b.i : a.allowed ? -1 : 1))
+    .map((s, i) => {
+      const key = String(s.alias || '').toLowerCase().trim();
+      const isAllowed = allowed.has(key);
+      const hit = recentAllowed.value.indexOf(key);
+      const rank = isAllowed ? (hit >= 0 ? hit : recentAllowed.value.length + i) : 0;
+      return { s, i, isAllowed, rank };
+    })
+    .sort((a, b) => {
+      if (a.isAllowed !== b.isAllowed) return a.isAllowed ? -1 : 1;
+      return a.isAllowed ? a.rank - b.rank : a.i - b.i;
+    })
     .map(({ s }) => s);
 });
 
@@ -145,6 +157,12 @@ function isServerAllowed(alias) {
 
 function toggleServer(alias) {
   if (!props.allowedSshServersReady) return;
+  const key = String(alias).toLowerCase().trim();
+  if (allowedSshAliasSet.value.has(key)) {
+    recentAllowed.value = recentAllowed.value.filter((a) => a !== key);
+  } else {
+    recentAllowed.value = [key, ...recentAllowed.value];
+  }
   emit('toggle-ssh-server', alias);
 }
 
