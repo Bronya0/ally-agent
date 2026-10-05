@@ -216,17 +216,20 @@ func classifyLLMError(err error) llmErrorKind {
 			return llmErrorKindDeterministic400
 		}
 	}
-	if llmErrorTextMatchesAny(msg, llmBillingMarkers) {
-		return llmErrorKindBilling
-	}
-	if llmErrorTextMatchesAny(msg, llmRateLimitMarkers) {
-		return llmErrorKindRateLimited
-	}
-	if llmErrorTextMatchesAny(msg, llmAuthMarkers) {
-		return llmErrorKindAuth
-	}
+	// 上下文超长先于状态码关键词：超长报错必带 token 数，文案里的数字极易与
+	// 下面的状态码判据撞车（教训见 llmBillingStatusPattern），而超长正则足够
+	// 特异，不会误吞普通限流/认证/计费文案。
 	if llmContextTooLongPattern.MatchString(msg) {
 		return llmErrorKindContextTooLong
+	}
+	if llmErrorTextMatchesAny(msg, llmBillingMarkers) || llmBillingStatusPattern.MatchString(msg) {
+		return llmErrorKindBilling
+	}
+	if llmErrorTextMatchesAny(msg, llmRateLimitMarkers) || llmRateLimitStatusPattern.MatchString(msg) {
+		return llmErrorKindRateLimited
+	}
+	if llmErrorTextMatchesAny(msg, llmAuthMarkers) || llmAuthStatusPattern.MatchString(msg) {
+		return llmErrorKindAuth
 	}
 	if llmErrorTextMatchesAny(msg, llmModelNotFoundMarkers) {
 		return llmErrorKindModelNotFound
@@ -255,20 +258,28 @@ var (
 		"context deadline exceeded", "context canceled", "context was canceled",
 	}
 	llmBillingMarkers = []string{
-		"402", "insufficient_quota", "insufficient_balance", "payment required",
+		"insufficient_quota", "insufficient_balance", "payment required",
 		"exceeded_current_quota_error", "check your account balance", "recharge your account",
 		"please recharge", "account is in arrears", "account in arrears",
 	}
 	llmRateLimitMarkers = []string{
-		"429", "too many requests", "rate limit", "rate exceeded", "rate_limit",
+		"too many requests", "rate limit", "rate exceeded", "rate_limit",
 	}
 	llmAuthMarkers = []string{
-		"401", "403", "invalid api key", "invalid_api_key", "invalid-api-key",
+		"invalid api key", "invalid_api_key", "invalid-api-key",
 		"invalid key", "api key", "api_key", "unauthorized", "authentication failed",
 		"not authorized", "permission denied", "permission", "forbidden",
 		"access denied", "credential",
 	}
-	llmModelNotFoundMarkers = []string{
+	// 数字状态码不进子串清单、单独用词边界正则认：裸 "402" 会命中文案里任何
+	// 含该片段的数字（真实案例："maximum context length is 40960 tokens …
+	// you requested 40232 tokens" 的 "40232" 含 "402"，超长错误被误判成
+	// Billing，溢出压缩恢复被跳过、还误切 key）。词边界只排除长数字里的片段，
+	// 独立成词的状态码（"error code: 402"、"402 Payment Required"）照常命中。
+	llmBillingStatusPattern   = regexp.MustCompile(`\b402\b`)
+	llmRateLimitStatusPattern = regexp.MustCompile(`\b429\b`)
+	llmAuthStatusPattern      = regexp.MustCompile(`\b40[13]\b`)
+	llmModelNotFoundMarkers   = []string{
 		"model not found", "no such model", "does not exist", "not_found",
 		"status code: 404", "404 not found",
 	}

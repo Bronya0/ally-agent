@@ -1493,6 +1493,37 @@ func TestClassifyLLMError429BillingVsRateLimit(t *testing.T) {
 	}
 }
 
+// TestClassifyLLMErrorNumericStatusVersusTokenCounts 锁定数字状态码的词边界判定：
+// 裸 "402"/"429"/"401" 子串曾命中 token 数等任何含该片段的数字，超长报错
+// （必带 token 数）被误判成 Billing/Auth/RateLimited 后，溢出压缩恢复被跳过、
+// 还误切 key。独立成词的状态码仍要各归其位。
+func TestClassifyLLMErrorNumericStatusVersusTokenCounts(t *testing.T) {
+	// 真实形态：文本型 400 的上下文超长（typed 状态码被中转丢掉），token 数里
+	// 带着状态码片段。三种数字都踩一遍。
+	for _, marker := range []string{"40232", "42900", "40137", "40311"} {
+		overflow := errors.New(`responses request failed: 400 Bad Request: {"error":{"message":` +
+			`"This model's maximum context length is 40960 tokens. However, you requested ` + marker + ` tokens"}}`)
+		if kind := classifyLLMError(overflow); kind != llmErrorKindContextTooLong {
+			t.Fatalf("token count %q must not shadow the overflow classification, got %v", marker, kind)
+		}
+	}
+	// 独立成词的状态码照常命中。
+	for _, tc := range []struct {
+		msg  string
+		want llmErrorKind
+	}{
+		{"error code: 402", llmErrorKindBilling},
+		{"402 Payment Required", llmErrorKindBilling},
+		{"429 Too Many Requests", llmErrorKindRateLimited},
+		{"error, status code: 401, message: bad key", llmErrorKindAuth},
+		{"403 Forbidden", llmErrorKindAuth},
+	} {
+		if kind := classifyLLMError(errors.New(tc.msg)); kind != tc.want {
+			t.Fatalf("classifyLLMError(%q) = %v, want %v", tc.msg, kind, tc.want)
+		}
+	}
+}
+
 func TestMoonshotChoicesUsageExtraction(t *testing.T) {
 	raw := []byte(`{
 		"id": "chatcmpl-123",
