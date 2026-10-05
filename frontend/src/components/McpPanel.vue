@@ -61,38 +61,31 @@ Public License v3. See the LICENSE file for details.
 
         <div class="mcp-save-scope">{{ t('settings.mcpSaveScope') }}</div>
 
-        <!-- Unified server grid with live status per card: same auto-fill
-             multi-card row language as the built-in tools tab. Card lines:
-             name+switch / badges+status / tools-entry+actions. -->
+        <!-- Unified server list with live status per row: dot + name + badges
+             on the left; tools entry / status / switch / edit / delete pushed
+             right in the same line. The built-in tools tab keeps its own
+             auto-fill card grid. -->
         <div class="mcp-form-mode">
           <div v-if="!mcpFormServers.length" class="saved-model-empty">{{ t('settings.mcpEmpty') }}</div>
           <div v-else-if="!filteredMcpServers.length" class="saved-model-empty">{{ t('common.searchEmpty') }}</div>
-        </div>
-        <div class="mcp-server-grid">
-          <div v-for="entry in filteredMcpServers" :key="entry.srv._key" class="mcp-server-row mcp-server-card">
+          <div v-for="entry in filteredMcpServers" :key="entry.srv._key" class="mcp-server-row">
             <div class="mcp-row-main">
               <span :class="['mcp-dot', mcpStatusFor(entry.srv).status]"></span>
               <span class="mcp-name" :title="entry.srv.name?.trim() || $t('settings.mcpUnnamedServer')">{{ entry.srv.name?.trim() || $t('settings.mcpUnnamedServer') }}</span>
-              <div class="mcp-row-side">
-                <n-switch :value="entry.srv.enabled" size="small" @update:value="(value) => toggleMcpEnabled(entry.srv, value)" />
-              </div>
-            </div>
-            <div class="mcp-card-meta">
               <span class="mcp-badge">{{ t(transportLabel(entry.srv.transport)) }}</span>
               <span v-if="entry.srv.enabled === false" class="mcp-badge off">{{ $t('settings.mcpStatusDisabled') }}</span>
-              <span :class="['mcp-status-text', mcpStatusFor(entry.srv).status]" :title="mcpStatusFor(entry.srv).error || ''">{{ $t(mcpStatusLabel(mcpStatusFor(entry.srv).status)) }}</span>
-            </div>
-            <div class="mcp-card-actions">
-              <button
-                v-if="(mcpStatusFor(entry.srv).tools || []).length"
-                class="mcp-tools-toggle"
-                :title="$t('settings.mcpToolsHint')"
-                @click="toggleMcpToolsPanel(entry.srv._key)"
-              >
-                {{ $t('settings.mcpToolsToggle', { injected: mcpInjectedCount(entry.srv), total: (mcpStatusFor(entry.srv).tools || []).length }) }}
-              </button>
-              <span v-else-if="mcpStatusFor(entry.srv).toolCount" class="mcp-tools">{{ $t('tools.count', { count: mcpStatusFor(entry.srv).toolCount }) }}</span>
-              <div class="mcp-card-buttons">
+              <div class="mcp-row-side">
+                <button
+                  v-if="(mcpStatusFor(entry.srv).tools || []).length"
+                  class="mcp-tools-toggle"
+                  :title="$t('settings.mcpToolsHint')"
+                  @click="toggleMcpToolsPanel(entry.srv._key)"
+                >
+                  {{ $t('settings.mcpToolsToggle', { injected: mcpInjectedCount(entry.srv), total: (mcpStatusFor(entry.srv).tools || []).length }) }}
+                </button>
+                <span v-else-if="mcpStatusFor(entry.srv).toolCount" class="mcp-tools">{{ $t('tools.count', { count: mcpStatusFor(entry.srv).toolCount }) }}</span>
+                <span :class="['mcp-status-text', mcpStatusFor(entry.srv).status]" :title="mcpStatusFor(entry.srv).error || ''">{{ $t(mcpStatusLabel(mcpStatusFor(entry.srv).status)) }}</span>
+                <n-switch :value="entry.srv.enabled" size="small" @update:value="(value) => toggleMcpEnabled(entry.srv, value)" />
                 <n-button size="tiny" quaternary @click="openMcpEditor(entry.idx)">{{ $t('common.edit') }}</n-button>
                 <n-button size="tiny" quaternary type="error" @click="removeMcpServer(entry.idx)">{{ $t('common.delete') }}</n-button>
               </div>
@@ -781,62 +774,8 @@ watch(
   gap: 8px;
 }
 
-/* 服务器卡片网格：同一 auto-fill 语言；单卡信息多，最小宽比工具卡放宽。 */
-.mcp-server-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: 8px;
-}
-
-.mcp-server-card .mcp-name {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.mcp-card-meta {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
-/* 状态文本吃剩余宽度单行省略，长错误靠 title 悬浮看全。 */
-.mcp-server-card .mcp-status-text {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.mcp-card-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
-/* 卡内工具入口靠左（旧整行布局的 margin-left:auto 是推向状态区，这里不适用），
-   编辑/删除按钮组推到最右。 */
-.mcp-server-card .mcp-tools-toggle,
-.mcp-server-card .mcp-tools {
-  margin-left: 0;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.mcp-card-buttons {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  flex: none;
-}
+/* 服务器列表一行一条：圆点+名称+徽标在左，.mcp-row-side 靠 margin-left:auto
+   推到行尾（工具入口/状态/开关/编辑/删除同行排布），不套卡片网格。 */
 
 .builtin-tool-card {
   gap: 6px;
@@ -972,6 +911,17 @@ watch(
   color: var(--ally-text-primary);
 }
 
+/* 服务器行的名字是这一行里唯一会被用户配置撑长的格：给不出省略规则就会折行把行
+   撑高，或直接顶出卡片边框（旧卡片布局的截断规则随卡片样式一起删掉了，这里按新
+   单行布局补回；全名靠 title 悬浮看）。min-width: 0 才允许它在 flex 行里被压窄。
+   内置工具卡排除在外：卡里标签固定、本来就靠折行容下，保持原样。 */
+.mcp-server-row:not(.builtin-tool-card) .mcp-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .mcp-tools {
   color: var(--ally-text-faint);
   font-size: 11px;
@@ -1044,5 +994,19 @@ watch(
   font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* 窄窗口下服务器行折行：名称独占一行，操作区换行后靠右。:not(.builtin-tool-card)
+   把内置工具卡排除在外——它们保持迁入时的卡片网格，不受此折行影响。 */
+@media (max-width: 640px) {
+  .mcp-server-row:not(.builtin-tool-card) .mcp-row-main {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .mcp-server-row:not(.builtin-tool-card) .mcp-row-side {
+    width: 100%;
+    justify-content: flex-end;
+  }
 }
 </style>

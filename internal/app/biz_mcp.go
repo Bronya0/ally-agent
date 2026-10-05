@@ -120,9 +120,13 @@ type McpClientHandle struct {
 // 连接是易耗品，不是要守护的资产。远程 MCP 的长连流随时会被对端回收（服务端/
 // 网关/代理的空闲超时、会话过期后直接 RST，mcp-go 的 SSE 传输连干净的 EOF 都
 // 触发断连且无内部重连），"用久了就断"是常态而非故障。Ally 因此不做保活、
-// 不做后台重连：心跳换不来什么（调用时全量重连+握手只要几百毫秒），却添一套
-// 常驻状态机；断连只标记 failed，等下一次工具调用由 callToolOnce"先重连再试"
-// 自愈（对齐 ZCode 的按需重连）。
+// 不做后台重连、也不做连接重试：心跳换不来什么（重连+握手只要几百毫秒），却添
+// 一套常驻状态机。连接动作只在三处发生——启动、配置变更、调用时发现没有可用
+// 连接；每次只试一次，成不成如实记账（失败是面板上的一行字，不是待办）。
+//
+// 与"重试"配套的那条纪律：请求**发出过**之后再断的调用绝不重放（服务端可能
+// 已经执行了工具，重放等于把副作用做第二遍），只修连接并把判断权交回模型；
+// 调用前连接就是死的（请求从未发出）才继续执行。
 //
 // 注入必须跟着配置开关走，绝不跟连接状态走（collectTools 只排除 disabled）。
 // 反过来做（曾经的做法：failed 服务端不参与注入）会两头都坏：
@@ -140,7 +144,7 @@ type McpManager struct {
 	clients        map[string]*McpClientHandle
 	toolLookup     map[string]mcpToolRef
 	workDir        string // 构造后不再改，读它无需加锁
-	listener       func(tools []McpDiscoveredTool)
+	listener       func()
 	warnHandler    func(message string)
 	networkConfig  func() ConfigState
 	// toolRefresher 是"通知触发的工具清单重拉"动作，默认 refreshServerTools；
@@ -151,9 +155,18 @@ type McpManager struct {
 	// 不叠加。
 	refreshMu    sync.Mutex
 	refreshSlots map[string]*mcpToolRefreshSlot
-	// configPaths overrides mcpJsonPaths when set; hermetic tests point it at
-	// a temp file so reconcile tests never touch the real user config.
+	// configPaths overrides the default mcp.json path when set; hermetic tests
+	// point it at a temp file so reconcile tests never touch the real user
+	// config.
 	configPaths []string
+	// configSnapshot 是最近一次 LoadConfigs 的结果（StartAll 与 ReconcileConfigs
+	// 都先加载再拨号），connectOne 拿到拨号锁后拿它对账：拨号携带的 cfg 已被
+	// 更新的加载结果取代就放弃，否则旧配置的拨号会把用户刚保存的新配置顶掉。
+	configSnapshot map[string]McpServerConfig
+	// closed 标记 manager 已被 Shutdown（重启换新 manager）：在飞拨号不得再把
+	// 连接提交进来，否则连接挂在无人引用的旧 manager 上，stdio 子进程与传输
+	// goroutine 会悬到进程退出。
+	closed bool
 }
 
 // SetWarningHandler wires the config:warning sink so a broken mcp.json is
@@ -194,7 +207,7 @@ type mcpToolRef struct {
 	ToolName   string
 }
 
-func NewMcpManager(workDir string, listener func(tools []McpDiscoveredTool)) *McpManager {
+func NewMcpManager(workDir string, listener func()) *McpManager {
 	m := &McpManager{
 		clients:      make(map[string]*McpClientHandle),
 		toolLookup:   make(map[string]mcpToolRef),
@@ -206,10 +219,6 @@ func NewMcpManager(workDir string, listener func(tools []McpDiscoveredTool)) *Mc
 	return m
 }
 
-func mcpJsonPaths(workDir string) []string {
-	return []string{mcpUserConfigPath()}
-}
-
 func mcpUserConfigPath() string {
 	return filepath.Join(appDataDir(), "mcp.json")
 }
@@ -218,7 +227,7 @@ func (m *McpManager) LoadConfigs() (map[string]McpServerConfig, error) {
 	merged := make(map[string]McpServerConfig)
 	paths := m.configPaths
 	if len(paths) == 0 {
-		paths = mcpJsonPaths(m.workDir)
+		paths = []string{mcpUserConfigPath()}
 	}
 	for _, path := range paths {
 		data, err := os.ReadFile(path)
@@ -240,7 +249,45 @@ func (m *McpManager) LoadConfigs() (map[string]McpServerConfig, error) {
 			merged[name] = srv
 		}
 	}
+	m.mu.Lock()
+	m.configSnapshot = merged
+	m.mu.Unlock()
 	return merged, nil
+}
+
+// dialConfigSuperseded 报告本次拨号携带的配置已被更新的加载结果取代。生产路径
+// 上 connectOne 的 cfg 总来自某次 LoadConfigs（StartAll / ReconcileConfigs），
+// configSnapshot 就是其中最新的一份：两者对不上，说明拿到拨号锁之前又发生过
+// 一次保存/重载，这次拨号已经过期。snapshot 为 nil（从未加载过，直连拨号的
+// 测试路径）时无从对账，放行。
+func (m *McpManager) dialConfigSuperseded(name string, cfg McpServerConfig) bool {
+	m.mu.RLock()
+	snapshot := m.configSnapshot
+	m.mu.RUnlock()
+	if snapshot == nil {
+		return false
+	}
+	current, ok := snapshot[name]
+	if !ok {
+		return true
+	}
+	return !mcpServerConfigEqual(current, cfg)
+}
+
+// isClosed 报告 manager 是否已被 Shutdown。
+func (m *McpManager) isClosed() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.closed
+}
+
+// registerDisabledServer 只登记一条 "disabled" 记录，不拨号不建客户端：状态
+// 面板因此能看到"配置了但关着"的服务端，而不是把它静默藏掉。登记后照常推送。
+func (m *McpManager) registerDisabledServer(name string, cfg McpServerConfig) {
+	m.mu.Lock()
+	m.clients[name] = &McpClientHandle{ServerName: name, Config: cfg, Status: "disabled"}
+	m.mu.Unlock()
+	m.notifyChange()
 }
 
 func (m *McpManager) StartAll(ctx context.Context) error {
@@ -256,10 +303,7 @@ func (m *McpManager) StartAll(ctx context.Context) error {
 	for name, cfg := range configs {
 		name, cfg := name, cfg
 		if cfg.Enabled != nil && !*cfg.Enabled {
-			m.mu.Lock()
-			m.clients[name] = &McpClientHandle{ServerName: name, Config: cfg, Status: "disabled"}
-			m.mu.Unlock()
-			m.notifyChange()
+			m.registerDisabledServer(name, cfg)
 			continue
 		}
 		wg.Add(1)
@@ -335,7 +379,6 @@ func (m *McpManager) ReconcileConfigs(ctx context.Context) (int, error) {
 
 	m.mu.Lock()
 	var stale []string
-	var failedRetries []string
 	var closing []*client.Client
 	for name, handle := range m.clients {
 		cfg, ok := configs[name]
@@ -346,19 +389,12 @@ func (m *McpManager) ReconcileConfigs(ctx context.Context) (int, error) {
 			}
 			continue
 		}
-		// 配置没变但上次连接失败的：它不会自愈，用户点保存/切换勾选就是显式的
-		// 重试信号（对齐 codex / kimi 的"配置变更即重连"）。这种重试放后台做：
-		// 一次失败的拨号要跑满 4 次尝试（最长可到分钟级），同步等会把面板的
-		// "保存"拖成一直转圈。必须重试的原因：failed 服务端的工具不参与注入，
-		// 新会话里模型再也调不到它，否则只能靠重启应用才能回来。
-		if handle.Status == "failed" {
-			failedRetries = append(failedRetries, name)
-			touched[name] = true
-			continue
-		}
-		// 连接语义未变但勾选变了：原地替换 disabledTools，保持 live 连接，
-		// 只让下一次 buildToolsWithMcp 的注入过滤生效。touched 驱动上层
-		// 失效上下文缓存并发 status。
+		// 连接语义未变（含"上一次连失败"）：一律不动连接。保存/勾选只负责让新配置
+		// 生效，成不成是调用时的事——连接是无状态的，下一次工具调用自己会把连接
+		// 建起来，面板上的失败只是一行如实记账，不值得为它花一次拨号的钱（更不
+		// 该由"保存"这个无关动作触发）。
+		// 勾选变化要原地生效：替换 disabledTools，保持 live 连接，只让下一次
+		// buildToolsWithMcp 的注入过滤生效。touched 驱动上层失效上下文缓存并发 status。
 		if !disabledToolsEqual(handle.Config.DisabledTools, cfg.DisabledTools) {
 			handle.Config.DisabledTools = cfg.DisabledTools
 			touched[name] = true
@@ -379,22 +415,18 @@ func (m *McpManager) ReconcileConfigs(ctx context.Context) (int, error) {
 		}
 		m.refreshMu.Unlock()
 	}
-	// 失败重试走后台：connectOne 会先把状态置 connecting，结果照常经
-	// notifyChange 推给界面，调用方（面板保存）立刻返回。
-	for _, name := range failedRetries {
-		cfg, ok := configs[name]
-		if !ok {
-			continue
-		}
-		name, cfg := name, cfg
-		go func() {
-			m.connectOne(ctx, name, cfg)
-		}()
-	}
 	// Close 在锁外执行：stdio Close 可能等待子进程退出，持锁调用会拖住整个
-	// manager（与 reconnectServer 的锁外 Close 保持对称）。
-	for _, staleClient := range closing {
-		_ = staleClient.Close()
+	// manager（与 reconnectServer 的锁外 Close 保持对称）。且与拨号同理放
+	// 后台：一次 stdio Close 最长可等 2s 优雅 + 3s+3s 强杀（约 8s），同步
+	// 等会把面板的"保存"拖成一直转圈。被换下记录的 client 已从 m.clients
+	// 摘除、读路径不再触达，迟几秒 Close 不影响正确性；stdio 进程另有
+	// KILL_ON_JOB_CLOSE 兜底，退出时不会被这批后台 Close 拖住。
+	if len(closing) > 0 {
+		go func() {
+			for _, staleClient := range closing {
+				_ = staleClient.Close()
+			}
+		}()
 	}
 	if len(stale) > 0 {
 		m.notifyChange()
@@ -402,7 +434,8 @@ func (m *McpManager) ReconcileConfigs(ctx context.Context) (int, error) {
 
 	// (Re)connect everything missing or changed, mirroring StartAll: disabled
 	// configs register a disabled handle instead of a connection attempt.
-	var wg sync.WaitGroup
+	// 拨号放后台：握手与工具清单各有一档超时，同步等会把面板的"保存"按在
+	// 转圈里；状态变化照常经 connectOne 的 notifyChange 推给界面，调用方立即返回。
 	for name, cfg := range configs {
 		name, cfg := name, cfg
 		m.mu.RLock()
@@ -413,19 +446,11 @@ func (m *McpManager) ReconcileConfigs(ctx context.Context) (int, error) {
 		}
 		touched[name] = true
 		if cfg.Enabled != nil && !*cfg.Enabled {
-			m.mu.Lock()
-			m.clients[name] = &McpClientHandle{ServerName: name, Config: cfg, Status: "disabled"}
-			m.mu.Unlock()
-			m.notifyChange()
+			m.registerDisabledServer(name, cfg)
 			continue
 		}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			m.connectOne(ctx, name, cfg)
-		}()
+		go m.connectOne(ctx, name, cfg)
 	}
-	wg.Wait()
 	return len(touched), nil
 }
 
@@ -435,28 +460,72 @@ func (m *McpManager) connectOne(ctx context.Context, name string, cfg McpServerC
 	unlock := m.lockServerDial(name)
 	defer unlock()
 
-	// 拿到拨号锁后核对现状：两次并发的 ReconcileConfigs（面板快速连点保存）
-	// 会为同一台 failed 服务端各排一次拨号，赢的那次提交连接后，输的那次若照常
-	// 覆盖 handle，会把刚建好的连接整个换掉、其 client 永远无人 Close。已连接
-	// 或拨号在飞时直接放弃——失败的连接走不到这里（status 已是 failed 才会重试）。
+	// 拨号前对账：cfg 是某次 ReconcileConfigs / StartAll 快照里的配置，从快照
+	// 到拿到拨号锁之间用户可能又保存了新配置，而那次保存的拨号可能排在本拨号
+	// 之后才拿锁。旧配置若照常连接并提交，会把用户刚保存的新配置整个顶掉，直到
+	// 下次保存——盘是唯一事实源，已被取代的拨号就地放弃，由携带新配置的那次
+	// 拨号完成连接。
+	if m.dialConfigSuperseded(name, cfg) {
+		return
+	}
+	// manager 已被 Shutdown（重启换新 manager）：继续拨号没有意义，连接提交进
+	// 无人引用的旧 manager 只会悬空。
+	if m.isClosed() {
+		return
+	}
+
+	// 拿到拨号锁后核对现状：两次并发的 ReconcileConfigs（面板快速连点保存）会为
+	// 同一台刚变动的服务端各排一次拨号，赢的那次提交连接后，输的那次若照常
+	// 覆盖 handle，会把刚建好的连接整个换掉、其 client 永远无人 Close。配置相同
+	// 的已连接/拨号在飞直接放弃（按需重连排的那次也走这里）。配置不同的不能
+	// 放弃：旧配置的拨号可能在对账之后才把 handle 登记
+	// 回来（对账拦的是"配置已被更新的加载结果取代"的拨号，拦不住这条——盘上
+	// 已是新配置、新配置的拨号正排在锁后面），这里走整体换记录路径把新配置连上。
 	m.mu.RLock()
 	existing, ok := m.clients[name]
 	status := ""
+	var existingCfg McpServerConfig
+	var existingToolDefs []McpDiscoveredTool
+	var existingClient *client.Client
 	if ok {
 		status = existing.Status
+		// Config/ToolDefs 必须在锁内拷出、出锁后再比对：ReconcileConfigs 会
+		// 持写锁原地替换 handle.Config.DisabledTools，refreshServerTools 会
+		// 持写锁整体换 handle.ToolDefs，锁外裸读这两个字段（结构体与 slice
+		// header）就是与它们的数据竞争——status 先拷再出锁是同一课。Client
+		// 的写者都持拨号锁（本函数已持有，天然互斥），一并收进快照只为让
+		// "读 handle"只有一种写法。
+		existingCfg = existing.Config
+		existingToolDefs = existing.ToolDefs
+		existingClient = existing.Client
 	}
 	m.mu.RUnlock()
-	if ok && (status == "connected" || status == "connecting") {
+	if ok && (status == "connected" || status == "connecting") && mcpServerConfigEqual(existingCfg, cfg) {
 		return
 	}
 
 	handle := &McpClientHandle{ServerName: name, Config: cfg, Status: "connecting"}
+	var staleClient *client.Client
+	if ok {
+		// 整体换记录：旧记录按设计留着上一次断连的 client（handleConnectionLost
+		// 不关，见其注释），换记录时必须由这里替它 Close，否则 socket 与传输
+		// goroutine 悬空。ToolDefs 则要继承：注入跟配置走、不跟连接状态走，换
+		// 记录不能让注入视图在本次连接建立期间出现空洞、漂移会话的请求前缀。
+		handle.ToolDefs = existingToolDefs
+		staleClient = existingClient
+	}
 	m.mu.Lock()
 	m.clients[name] = handle
 	m.mu.Unlock()
 	m.notifyChange()
+	if staleClient != nil {
+		_ = staleClient.Close()
+	}
 
-	established, err := m.initializeMcpClientWithRetry(ctx, name, cfg)
+	// 一次尝试，不重试：重试会把同一个服务端的拨号锁占住十几秒（一次工具调用撞
+	// 上去只能干等，最后拿到的还是同一个失败），失败就如实落 failed 等下次用到
+	// 再连（见 McpManager 总纲）。
+	established, err := m.initializeMcpClient(ctx, name, cfg)
 	if err != nil {
 		m.mu.Lock()
 		handle.Status = "failed"
@@ -466,7 +535,18 @@ func (m *McpManager) connectOne(ctx context.Context, name string, cfg McpServerC
 		return
 	}
 
+	// 拨号期间记录可能被并发的 ReconcileConfigs 整体换掉（stale 扫描不跳过
+	// connecting，配置变更会先删再连）：把连接提交到幽灵 handle 上，它永远
+	// 进不了 m.clients，client 也没人关。Shutdown 清空 map（!live）与 closed
+	// 标记（handle 已登记进来）分别拦住两种"提交进废弃 manager"的窗口。与
+	// reconnectServer 的 current != handle 核对对称。
 	m.mu.Lock()
+	current, live := m.clients[name]
+	if !live || current != handle || m.closed {
+		m.mu.Unlock()
+		_ = established.client.Close()
+		return
+	}
 	m.commitConnectionLocked(handle, established)
 	m.mu.Unlock()
 	m.notifyChange()
@@ -569,7 +649,9 @@ func listMcpTools(ctx context.Context, serverName string, mcpClient *client.Clie
 				Schema:       toolSchemaToMap(tool.InputSchema),
 			})
 		}
-		if toolsResult.NextCursor == "" || page >= maxMcpListToolsPages {
+		// page 从 0 计数，已完成 page+1 次请求：上限按已完成的请求数对齐，
+		// 最多发 maxMcpListToolsPages 次（此前 page >= max 会多发第 101 次）。
+		if toolsResult.NextCursor == "" || page+1 >= maxMcpListToolsPages {
 			break
 		}
 		cursor = toolsResult.NextCursor
@@ -580,37 +662,6 @@ func listMcpTools(ctx context.Context, serverName string, mcpClient *client.Clie
 // maxMcpListToolsPages bounds the ListTools pagination loop against servers
 // that always return a nextCursor.
 const maxMcpListToolsPages = 100
-
-// 连接失败的固定重试策略：三条连接路径（启动 StartAll、配置变更
-// ReconcileConfigs、调用期 reconnectServer）共用，覆盖网络瞬时波动，
-// 避免一次失败就定格在 failed 直到手动刷新。
-const (
-	mcpConnectRetries    = 3
-	mcpConnectRetryDelay = 3 * time.Second
-)
-
-// initializeMcpClientWithRetry wraps initializeMcpClient with a fixed number
-// of retries and a fixed delay between attempts. ctx cancellation (app exit,
-// server removed) aborts the wait immediately; the returned error carries the
-// last attempt's cause.
-func (m *McpManager) initializeMcpClientWithRetry(ctx context.Context, name string, cfg McpServerConfig) (mcpEstablished, error) {
-	var lastErr error
-	for attempt := 0; attempt <= mcpConnectRetries; attempt++ {
-		if attempt > 0 {
-			select {
-			case <-ctx.Done():
-				return mcpEstablished{}, lastErr
-			case <-time.After(mcpConnectRetryDelay):
-			}
-		}
-		established, err := m.initializeMcpClient(ctx, name, cfg)
-		if err == nil {
-			return established, nil
-		}
-		lastErr = err
-	}
-	return mcpEstablished{}, fmt.Errorf("connect failed after %d retries: %w", mcpConnectRetries, lastErr)
-}
 
 func (m *McpManager) newMcpClient(ctx context.Context, name string, cfg McpServerConfig, token *mcpConnToken) (*client.Client, error) {
 	transportName := mcpTransportName(cfg)
@@ -713,6 +764,11 @@ func (m *McpManager) newMcpClient(ctx context.Context, name string, cfg McpServe
 // mcpStdioDir 决定 stdio 服务端的工作目录：显式 cwd 优先（相对路径相对工作区
 // 根解析，绝对路径原样，不展开 ~），否则用工作区根；两者都空时返回 ""，交给
 // exec 继承当前目录。
+//
+// 绝对路径的判定不能只看 filepath.IsAbs：Windows 上它要求盘符，配置里从
+// Mac/Linux 文档抄来的 "/opt/mcp" 会被误判成相对路径而拼到工作区根下。以 "/"
+// 开头的 POSIX 风格根路径同样按绝对路径处理（原样保留斜杠方向，不翻成 "\",
+// 用户写什么交什么）。
 func (m *McpManager) mcpStdioDir(cfg McpServerConfig) string {
 	dir := strings.TrimSpace(cfg.Cwd)
 	if dir == "" {
@@ -720,6 +776,9 @@ func (m *McpManager) mcpStdioDir(cfg McpServerConfig) string {
 	}
 	if filepath.IsAbs(dir) {
 		return filepath.Clean(dir)
+	}
+	if strings.HasPrefix(dir, "/") {
+		return filepath.ToSlash(filepath.Clean(dir))
 	}
 	base := strings.TrimSpace(m.workDir)
 	if base == "" {
@@ -1116,15 +1175,28 @@ type mcpCallFailure int
 
 const (
 	mcpCallSucceeded mcpCallFailure = iota
-	// mcpCallReconnectable：传输层断了（子进程死了、管道关了、会话 404 过期）
-	// 或上一次连接已经定格在 failed —— 值得先重连再试一次。
-	mcpCallReconnectable
+	// mcpCallConnectionDead：调用前就没有可用连接（上一次的连接定格在 failed）。
+	// 请求从未发出去，所以重连之后把这次调用执行一遍是安全的——这是"用则连"，
+	// 不是重放。
+	mcpCallConnectionDead
+	// mcpCallTransportBroken：请求已经发出、链路中途断了（子进程死了、管道关了、
+	// 会话 404 过期）。服务端可能已经跑过这个工具、只是结果没回来，所以只修连接、
+	// 绝不重放这次调用（见 replaySafeAfterReconnect）。
+	mcpCallTransportBroken
 	// mcpCallToolFailed：服务端跑过这个工具并回了错误结果（isError:true）。
 	mcpCallToolFailed
 	// mcpCallUnavailable：服务端被停用、仍在连接中、工具不存在，或调用超时
-	// 取消（服务端可能还在跑）——没有可重连的连接，重试也不安全。
+	// 取消（服务端可能还在跑）——没有可重连的连接。
 	mcpCallUnavailable
 )
+
+// replaySafeAfterReconnect 报告一次失败后连接已经修好时，能不能把这次调用继续
+// 跑下去。唯一判据是"请求有没有发出去过"：没发出去过（连接本来就是死的）可以；
+// 其余一律不行——服务端可能已经执行过并产生了副作用，重放就是把副作用做第二遍，
+// 交给模型结合工具语义自己判断更安全。
+func replaySafeAfterReconnect(failure mcpCallFailure) bool {
+	return failure == mcpCallConnectionDead
+}
 
 // mcpCallOutcome 是一次 callToolOnce 的结果信封：文本、当时用的 client
 // （重连时用来核对是不是同一条连接）与失败归类。
@@ -1142,17 +1214,24 @@ func (m *McpManager) CallTool(ctx context.Context, serverName, toolName string, 
 	if err == nil {
 		return outcome.text, nil
 	}
-	if outcome.failure != mcpCallReconnectable {
+	if outcome.failure != mcpCallConnectionDead && outcome.failure != mcpCallTransportBroken {
 		return "", err
 	}
 
-	// 连接不可用了：重连一次再试。重试的是连接，至多重放一次调用——服务端
-	// 已经执行过工具并明确报错（isError / 协议错误码）的一律不走到这里。
-	if reconnectErr := m.reconnectServer(ctx, serverName, outcome.client); reconnectErr != nil {
+	// 连接不可用了：先把连接建回来（用则连）。重连与调用共用 callCtx 的预算——
+	// 重连若超出剩余额度，整个调用按超时失败，而不是"重连成功了、调用却立即
+	// 超时"的自相矛盾结果。
+	if reconnectErr := m.reconnectServer(callCtx, serverName, outcome.client); reconnectErr != nil {
 		return "", fmt.Errorf("MCP call failed: %w; reconnect failed: %w", err, reconnectErr)
 	}
-	retry, retryErr := m.callToolOnce(callCtx, serverName, toolName, args)
-	return retry.text, retryErr
+	if !replaySafeAfterReconnect(outcome.failure) {
+		// 请求已经发出去过：服务端可能跑完了这个工具，再跑一遍就是把副作用做第二遍。
+		// 连接已经修好，把"要不要再来一次"交回模型——它比这里更懂这个工具重做一次
+		// 安不安全。
+		return "", fmt.Errorf("MCP call failed: %w; connection re-established, this call was NOT replayed (the server may already have executed it)", err)
+	}
+	result, callErr := m.callToolOnce(callCtx, serverName, toolName, args)
+	return result.text, callErr
 }
 
 // serverConfig 取某个服务端的当前配置（超时、cwd、env 都从这里读）；服务端已
@@ -1178,11 +1257,12 @@ func (m *McpManager) callToolOnce(ctx context.Context, serverName, toolName stri
 	mcpClient := handle.Client
 	m.mu.RUnlock()
 	if status != "connected" {
-		// failed 是"上一次连接已经死了"，允许调用前重连自愈；disabled 与
-		// connecting 都不该由一次工具调用拉起来（后者已有连接在飞）。
+		// failed 是"上一次连接已经死了"，允许调用前重连（请求从未发出，重连后
+		// 照常执行）；disabled 与 connecting 都不该由一次工具调用拉起来（后者已有
+		// 连接在飞）。
 		failure := mcpCallUnavailable
 		if status == "failed" {
-			failure = mcpCallReconnectable
+			failure = mcpCallConnectionDead
 		}
 		return mcpCallOutcome{client: mcpClient, failure: failure},
 			fmt.Errorf("MCP server %s status: %s/%s", serverName, status, handleErr)
@@ -1204,7 +1284,7 @@ func (m *McpManager) callToolOnce(ctx context.Context, serverName, toolName stri
 		case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
 			// 超时/取消：服务端可能还在跑这个工具，重试就是把副作用放两遍。
 		case isMcpTransportFailure(err):
-			failure = mcpCallReconnectable
+			failure = mcpCallTransportBroken
 		}
 		return mcpCallOutcome{client: mcpClient, failure: failure}, fmt.Errorf("MCP call failed: %w", err)
 	}
@@ -1297,7 +1377,7 @@ func (m *McpManager) reconnectServer(ctx context.Context, serverName string, fai
 		_ = oldClient.Close()
 	}
 
-	established, err := m.initializeMcpClientWithRetry(ctx, serverName, cfg)
+	established, err := m.initializeMcpClient(ctx, serverName, cfg)
 	m.mu.Lock()
 	current, ok := m.clients[serverName]
 	// 记录被换掉时不能往上写（配置调和重建了这台服务端）：否则我们刚连出来的
@@ -1436,6 +1516,7 @@ func (m *McpManager) Shutdown() {
 	}
 	m.clients = make(map[string]*McpClientHandle)
 	m.toolLookup = make(map[string]mcpToolRef)
+	m.closed = true
 	m.mu.Unlock()
 	// Close 必须在锁外、且并行：stdio 的 Close 含 2s 优雅 + 3s+3s 强杀等待，
 	// 持锁逐个关会把整个 manager（状态推送、工具清单）卡住数秒到数十秒（与
@@ -1470,9 +1551,9 @@ func (m *McpManager) GetEnabledTools() []McpDiscoveredTool {
 // 连接状态走。曾经只注入 connected 的清单，一次远端断流（长连 SSE 被服务端/代理
 // 回收是常态）就把工具从模型视图里整个抽走——冻结的工具集不再含它，模型从此调
 // 不到，只能重启应用。现在 connecting/failed 的服务端照常注入已发现的 ToolDefs
-// （断连不清清单，见 handleConnectionLost），调用时由 callToolOnce 的"先重连再
-// 试"兜底；首次连接还没拿到清单时 ToolDefs 为空，自然无可注入。"disabled" 是
-// 用户显式关掉的 server，永不注入。
+// （断连不清清单，见 handleConnectionLost），调用时由 CallTool 先把连接建回来
+// 再说：请求没发出去过就正常执行一次，发出过则只报错、不重放；首次连接还没拿到
+// 清单时 ToolDefs 为空，自然无可注入。"disabled" 是用户显式关掉的 server，永不注入。
 func (m *McpManager) collectTools(enabledOnly bool) []McpDiscoveredTool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -1504,13 +1585,26 @@ func (m *McpManager) collectTools(enabledOnly bool) []McpDiscoveredTool {
 	return all
 }
 
+// activeMcpManager 返回当前 MCP manager 的引用快照。mcpManager 指针在运行期
+// 会被 RestartMcpServers 更换（网络配置变更从后台 goroutine 触发），而聊天流
+// 式路径、前端绑定与 manager 回调都可能同时读它——所有读必须经 a.mu 与写同
+// 步。锁内只拷指针、锁外使用：持 a.mu 时绝不调 manager 方法，避免与回调里的
+// emitMcpStatus → a.mu 形成反向锁序。
+func (a *App) activeMcpManager() *McpManager {
+	a.mu.Lock()
+	manager := a.mcpManager
+	a.mu.Unlock()
+	return manager
+}
+
 // mcpDeclaredParameters returns the parameter declaration Ally sent the model
 // for an MCP tool, or nil when that tool is not part of the current set.
 func (a *App) mcpDeclaredParameters(functionName string) map[string]any {
-	if a.mcpManager == nil {
+	manager := a.activeMcpManager()
+	if manager == nil {
 		return nil
 	}
-	for _, dt := range a.mcpManager.GetEnabledTools() {
+	for _, dt := range manager.GetEnabledTools() {
 		name := dt.FunctionName
 		if name == "" {
 			name = mcpToolFunctionName(dt.ServerName, dt.Name)
@@ -1563,30 +1657,26 @@ func mcpToolFunctionName(serverName, toolName string) string {
 	return mcpFunctionNamePrefix + safeMcpFunctionPart(serverName) + "__" + safeMcpFunctionPart(toolName)
 }
 
+// safeMcpFunctionPart 把 server/tool 的原始名字压成模型可见函数名里的安全段：
+// 只保留 ASCII 字母数字与连字符，中文等字符直接丢弃；尾部追加原始值的 sha256
+// 前 6 位，保证不同原始值（包括被清洗后同形的）不碰撞。空结果兜底为 "mcp"。
 func safeMcpFunctionPart(value string) string {
-	aliases := map[string]string{
-		"知乎搜索":   "zhihu_search",
-		"知乎全网搜索": "zhihu_web_search",
-	}
-	base := aliases[value]
-	if base == "" {
-		var b strings.Builder
-		lastSep := false
-		for _, r := range strings.ToLower(value) {
-			if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
-				b.WriteRune(r)
-				lastSep = false
-			} else if r == '_' || r == '-' {
-				if !lastSep {
-					b.WriteByte('_')
-					lastSep = true
-				}
+	var b strings.Builder
+	lastSep := false
+	for _, r := range strings.ToLower(value) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			lastSep = false
+		} else if r == '_' || r == '-' {
+			if !lastSep {
+				b.WriteByte('_')
+				lastSep = true
 			}
 		}
-		base = strings.Trim(b.String(), "_-")
-		if base == "" {
-			base = "mcp"
-		}
+	}
+	base := strings.Trim(b.String(), "_-")
+	if base == "" {
+		base = "mcp"
 	}
 	if len(base) > 18 {
 		base = base[:18]
@@ -1613,8 +1703,15 @@ const (
 func (m *McpManager) GetServerStatuses() []map[string]any {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	// map 遍历顺序随机，先按 server 名排一遍：设置页每次刷新的服务端顺序要稳定。
+	names := make([]string, 0, len(m.clients))
+	for name := range m.clients {
+		names = append(names, name)
+	}
+	sort.Strings(names)
 	var result []map[string]any
-	for name, handle := range m.clients {
+	for _, name := range names {
+		handle := m.clients[name]
 		// Per-tool injection state rides along so the settings page can offer
 		// checkboxes without a second binding. Disabled servers never
 		// discovered tools, so their list is empty by construction.
@@ -1622,8 +1719,10 @@ func (m *McpManager) GetServerStatuses() []map[string]any {
 		tools := make([]map[string]any, 0, len(handle.ToolDefs))
 		for _, tool := range handle.ToolDefs {
 			description := strings.TrimSpace(tool.Description)
-			if len(description) > mcpStatusToolDescriptionLimit {
-				description = strings.TrimSpace(description[:mcpStatusToolDescriptionLimit]) + "…"
+			// 按字符数截断而不是按字节：中文等多字节字符从中间切开会产生
+			// 非法 UTF-8，序列化后前端看到的是 replacement char 乱码。
+			if runes := []rune(description); len(runes) > mcpStatusToolDescriptionLimit {
+				description = strings.TrimSpace(string(runes[:mcpStatusToolDescriptionLimit])) + "…"
 			}
 			tools = append(tools, map[string]any{
 				"name":        tool.Name,
@@ -1667,7 +1766,7 @@ func (m *McpManager) notifyChange() {
 	if m.listener == nil {
 		return
 	}
-	m.listener(m.GetAllTools())
+	m.listener()
 }
 
 // ── MCP tool exposure and frontend bindings ──────────────────
@@ -1678,10 +1777,11 @@ func (m *McpManager) notifyChange() {
 // buildToolsWithMcp appends the enabled MCP tools to the given builtin set.
 func (a *App) buildToolsWithMcp(builtins []openai.Tool) []openai.Tool {
 	tools := builtins
-	if a.mcpManager == nil {
+	manager := a.activeMcpManager()
+	if manager == nil {
 		return tools
 	}
-	mcpTools := a.mcpManager.GetEnabledTools()
+	mcpTools := manager.GetEnabledTools()
 	for _, dt := range mcpTools {
 		name := dt.FunctionName
 		if name == "" {
@@ -1752,8 +1852,9 @@ func (a *App) sessionToolsetForBreakdown(sessionID string, cfg ConfigState) []op
 	return a.buildToolsForConfig(cfg)
 }
 
-// cloneTools deep-copies the schema maps so a frozen session toolset can never
-// be mutated through a shared map reference.
+// cloneTools deep-copies the tool list so a frozen session toolset can never
+// be mutated through a shared reference: the schema maps are copied recursively
+// (nested properties/required included), not just one level.
 func cloneTools(tools []openai.Tool) []openai.Tool {
 	if tools == nil {
 		return nil
@@ -1761,29 +1862,44 @@ func cloneTools(tools []openai.Tool) []openai.Tool {
 	out := make([]openai.Tool, len(tools))
 	for i, t := range tools {
 		if t.Function != nil {
-			if params, ok := t.Function.Parameters.(map[string]any); ok {
-				copied := make(map[string]any, len(params))
-				for k, v := range params {
-					copied[k] = v
-				}
-				fn := *t.Function
-				fn.Parameters = copied
-				t.Function = &fn
-			} else {
-				fn := *t.Function
-				t.Function = &fn
+			fn := *t.Function
+			if params, ok := fn.Parameters.(map[string]any); ok {
+				fn.Parameters = deepCopyJSONValue(params)
 			}
+			t.Function = &fn
 		}
 		out[i] = t
 	}
 	return out
 }
 
+// deepCopyJSONValue 递归拷贝 JSON Schema 的容器节点（map 与 slice）；标量本就
+// 不可变，原样返回。
+func deepCopyJSONValue(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(typed))
+		for key, val := range typed {
+			out[key] = deepCopyJSONValue(val)
+		}
+		return out
+	case []any:
+		out := make([]any, len(typed))
+		for i, val := range typed {
+			out[i] = deepCopyJSONValue(val)
+		}
+		return out
+	default:
+		return value
+	}
+}
+
 func (a *App) GetMcpServers() []map[string]any {
-	if a.mcpManager == nil {
+	manager := a.activeMcpManager()
+	if manager == nil {
 		return nil
 	}
-	return a.mcpManager.GetServerStatuses()
+	return manager.GetServerStatuses()
 }
 
 func (a *App) ListTools() []ToolDefinitionSummary {
@@ -1815,8 +1931,8 @@ func (a *App) ListTools() []ToolDefinitionSummary {
 			Enabled:     enabled[tool.Function.Name],
 		})
 	}
-	if a.mcpManager != nil {
-		mcpTools := a.mcpManager.GetAllTools()
+	if manager := a.activeMcpManager(); manager != nil {
+		mcpTools := manager.GetAllTools()
 		sort.Slice(mcpTools, func(i, j int) bool {
 			if mcpTools[i].ServerName == mcpTools[j].ServerName {
 				return mcpTools[i].Name < mcpTools[j].Name
@@ -1837,7 +1953,7 @@ func (a *App) ListTools() []ToolDefinitionSummary {
 				Description: description,
 				Source:      "mcp",
 				Server:      tool.ServerName,
-				Enabled:     !a.mcpManager.IsToolDisabled(tool.ServerName, tool.Name),
+				Enabled:     !manager.IsToolDisabled(tool.ServerName, tool.Name),
 			})
 		}
 	}
@@ -1845,10 +1961,11 @@ func (a *App) ListTools() []ToolDefinitionSummary {
 }
 
 func (a *App) emitMcpStatus() {
-	if a.ctx == nil || a.mcpManager == nil {
+	manager := a.activeMcpManager()
+	if a.ctx == nil || manager == nil {
 		return
 	}
-	a.emit("mcp:status", map[string]any{"servers": a.mcpManager.GetServerStatuses()})
+	a.emit("mcp:status", map[string]any{"servers": manager.GetServerStatuses()})
 }
 
 func (a *App) GetMcpConfig() (string, error) {
@@ -1966,17 +2083,27 @@ func (a *App) RestartMcpServers() error {
 	if a.ctx == nil {
 		return errors.New("application context is not ready")
 	}
-	if a.mcpManager != nil {
-		a.mcpManager.Shutdown()
+	// 重启互斥（见 App.mcpRestartMu）：第二条重启必须等第一条把新 manager
+	// 完整落地（StartAll 返回）再动手，否则它 Shutdown 的是前者刚建好、还在
+	// 拨号中的 manager，整轮拨号白跑。调用方都是后台路径（网络配置变更、
+	// manager 缺失时的 Reconcile），串行等待可接受。
+	a.mcpRestartMu.Lock()
+	defer a.mcpRestartMu.Unlock()
+	if old := a.activeMcpManager(); old != nil {
+		old.Shutdown()
 	}
-	manager := NewMcpManager(root, func(tools []McpDiscoveredTool) {
+	manager := NewMcpManager(root, func() {
 		a.emitMcpStatus()
 	})
 	manager.SetNetworkConfigProvider(func() ConfigState { return a.effectiveConfig(ConfigState{}) })
 	manager.SetWarningHandler(func(message string) {
 		a.emit("config:warning", map[string]any{"field": "mcp", "message": message})
 	})
+	// 指针发布持 a.mu：全仓读点都经 activeMcpManager 持锁读，运行期换指针
+	// 必须与它们同步（此前裸赋值是与所有读点的数据竞争）。
+	a.mu.Lock()
 	a.mcpManager = manager
+	a.mu.Unlock()
 	err = manager.StartAll(a.ctx)
 	a.emitMcpStatus()
 	return err
@@ -1993,10 +2120,11 @@ func (a *App) ReconcileMcpServers() error {
 	if a.ctx == nil {
 		return errors.New("application context is not ready")
 	}
-	if a.mcpManager == nil {
+	manager := a.activeMcpManager()
+	if manager == nil {
 		return a.RestartMcpServers()
 	}
-	_, err := a.mcpManager.ReconcileConfigs(a.ctx)
+	_, err := manager.ReconcileConfigs(a.ctx)
 	a.emitMcpStatus()
 	return err
 }
@@ -2004,10 +2132,11 @@ func (a *App) ReconcileMcpServers() error {
 // ── MCP tool execution ───────────────────────────────────────
 
 func (a *App) executeMcpFunctionTool(ctx context.Context, functionName string, args map[string]any) (any, error) {
-	if a.mcpManager == nil {
+	manager := a.activeMcpManager()
+	if manager == nil {
 		return nil, fmt.Errorf("MCP not initialized")
 	}
-	result, err := a.mcpManager.CallToolByFunctionName(ctx, functionName, args)
+	result, err := manager.CallToolByFunctionName(ctx, functionName, args)
 	if err != nil {
 		return nil, fmt.Errorf("MCP tool %s failed: %w", functionName, err)
 	}
@@ -2015,10 +2144,14 @@ func (a *App) executeMcpFunctionTool(ctx context.Context, functionName string, a
 }
 
 func (a *App) mcpToolEventMeta(functionName string) map[string]any {
-	if a.mcpManager == nil || !isMcpToolFunctionName(functionName) {
+	if !isMcpToolFunctionName(functionName) {
 		return nil
 	}
-	ref, ok := a.mcpManager.DescribeFunctionTool(functionName)
+	manager := a.activeMcpManager()
+	if manager == nil {
+		return nil
+	}
+	ref, ok := manager.DescribeFunctionTool(functionName)
 	if !ok {
 		return nil
 	}

@@ -170,23 +170,28 @@ func (a *App) ServiceStartup(ctx context.Context, _ application.ServiceOptions) 
 	if err == nil {
 		root, _ := workspaceRoot(cfg)
 		if root != "" {
-			a.mcpManager = NewMcpManager(root, func(tools []McpDiscoveredTool) {
+			manager := NewMcpManager(root, func() {
 				a.emitMcpStatus()
 			})
-			a.mcpManager.SetNetworkConfigProvider(func() ConfigState { return a.effectiveConfig(ConfigState{}) })
-			a.mcpManager.SetWarningHandler(func(message string) {
+			manager.SetNetworkConfigProvider(func() ConfigState { return a.effectiveConfig(ConfigState{}) })
+			manager.SetWarningHandler(func(message string) {
 				a.emit("config:warning", map[string]any{"field": "mcp", "message": message})
 			})
+			// 指针发布持 a.mu，读点统一走 activeMcpManager：启动期前端绑定
+			// 与聊天可能已经开始并发读这个字段。
+			a.mu.Lock()
+			a.mcpManager = manager
+			a.mu.Unlock()
 			go func() {
-				if err := a.mcpManager.StartAll(ctx); err != nil {
+				if err := manager.StartAll(ctx); err != nil {
 					// MCP start errors are non-fatal.
 				}
 				a.emitMcpStatus()
 			}()
 			go func() {
 				<-ctx.Done()
-				if a.mcpManager != nil {
-					a.mcpManager.Shutdown()
+				if current := a.activeMcpManager(); current != nil {
+					current.Shutdown()
 				}
 			}()
 		}

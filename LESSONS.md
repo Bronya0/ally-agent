@@ -172,3 +172,4 @@
 [anim-no-layer-hint] 2026-10-03 中危 新增小元素动画（如 6px 点）不会自提层：卡每拍重绘时改由主线程画帧，看着像卡死；须按所动属性动态挂 will-change。@ToolStatusIcon.vue
 [request-head-not-history] 2026-10-05 高危 洗历史的函数会删光 system 消息：用它洗整份请求就丢掉系统提示词，整轮无规则。@prov_history_hygiene.go
 [text-status-parity] 2026-10-05 中危 中继只在文案里转述状态码时，关键词表须覆盖 typed 分支认得的每个码：漏 400 就归 unknown，盲重试重发整份上下文。@prov_model.go
+[mcp-no-call-replay] 2026-10-05 高危 MCP 调用失败后重连不得重放那次调用：请求可能已发出并被执行过，重放＝副作用做两遍；只有调用前连接就是死的才可继续。@biz_mcp.go

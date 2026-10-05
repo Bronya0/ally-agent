@@ -22,11 +22,13 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/client/transport"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
+	openai "github.com/sashabaranov/go-openai"
 )
 
 func TestToolSchemaToMapProducesProviderSafeSchema(t *testing.T) {
@@ -146,7 +148,9 @@ func TestStartAllRegistersDisabledServersWithoutConnecting(t *testing.T) {
 
 func TestMcpToolFunctionNameIsSafeForChineseServerNames(t *testing.T) {
 	name := mcpToolFunctionName("知乎全网搜索", "search")
-	if !strings.HasPrefix(name, "mcp__zhihu_web_search_") {
+	// 中文字符不进函数名：base 清洗后为空，兜底成 "mcp"，可读性由注入描述里的
+	// [serverName] 前缀补足；唯一性靠 sha256 后缀保证。
+	if !strings.HasPrefix(name, "mcp__mcp_") {
 		t.Fatalf("unexpected function name prefix: %s", name)
 	}
 	if len(name) > 64 {
@@ -157,6 +161,80 @@ func TestMcpToolFunctionNameIsSafeForChineseServerNames(t *testing.T) {
 			continue
 		}
 		t.Fatalf("function name contains invalid rune %q in %s", r, name)
+	}
+	// 清洗后同形的不同原始值（"知乎搜索" / "知乎全网搜索"）靠哈希后缀区分。
+	if mcpToolFunctionName("知乎搜索", "search") == mcpToolFunctionName("知乎全网搜索", "search") {
+		t.Fatal("distinct raw names must not collide after sanitization")
+	}
+}
+
+func TestGetServerStatusesIsSortedByServerName(t *testing.T) {
+	manager := NewMcpManager(t.TempDir(), nil)
+	manager.clients = map[string]*McpClientHandle{
+		"bravo": {ServerName: "bravo", Status: "disabled"},
+		"alpha": {ServerName: "alpha", Status: "disabled"},
+	}
+	statuses := manager.GetServerStatuses()
+	if len(statuses) != 2 {
+		t.Fatalf("expected 2 statuses, got %d", len(statuses))
+	}
+	if statuses[0]["name"] != "alpha" || statuses[1]["name"] != "bravo" {
+		t.Fatalf("server statuses must be sorted by name, got %v / %v", statuses[0]["name"], statuses[1]["name"])
+	}
+}
+
+// 状态面板的描述截断按字符数而不是字节数：中文等多字节字符从中间切开会产生
+// 非法 UTF-8，序列化后前端看到的是 replacement char 乱码。
+func TestGetServerStatusesTruncatesDescriptionByRune(t *testing.T) {
+	manager := NewMcpManager(t.TempDir(), nil)
+	manager.clients = map[string]*McpClientHandle{
+		"a": {
+			ServerName: "a",
+			Config:     McpServerConfig{Command: "x"},
+			Status:     "connected",
+			ToolDefs: []McpDiscoveredTool{{
+				ServerName:   "a",
+				Name:         "t",
+				FunctionName: "mcp__a__t",
+				Description:  strings.Repeat("汉", mcpStatusToolDescriptionLimit+5),
+			}},
+		},
+	}
+	statuses := manager.GetServerStatuses()
+	tools := statuses[0]["tools"].([]map[string]any)
+	description := tools[0]["description"].(string)
+	if !utf8.ValidString(description) {
+		t.Fatal("truncated description must stay valid UTF-8")
+	}
+	if !strings.HasSuffix(description, "…") {
+		t.Fatalf("truncated description must end with an ellipsis, got %q", description)
+	}
+	if got := len([]rune(description)); got != mcpStatusToolDescriptionLimit+1 {
+		t.Fatalf("truncated description must keep %d runes plus the ellipsis, got %d", mcpStatusToolDescriptionLimit+1, got)
+	}
+}
+
+func TestCloneToolsDeepCopiesSchema(t *testing.T) {
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"path": map[string]any{"type": "string"},
+		},
+		"required": []any{"path"},
+	}
+	tools := []openai.Tool{
+		{Type: "function", Function: &openai.FunctionDefinition{Name: "t", Parameters: schema}},
+	}
+	cloned := cloneTools(tools)
+	props := cloned[0].Function.Parameters.(map[string]any)["properties"].(map[string]any)
+	props["path"].(map[string]any)["type"] = "number"
+	if schema["properties"].(map[string]any)["path"].(map[string]any)["type"] != "string" {
+		t.Fatal("cloneTools must deep-copy nested schema nodes")
+	}
+	required := cloned[0].Function.Parameters.(map[string]any)["required"].([]any)
+	required[0] = "mutated"
+	if schema["required"].([]any)[0] != "path" {
+		t.Fatal("cloneTools must deep-copy nested slices")
 	}
 }
 
@@ -192,8 +270,10 @@ func TestGetAllToolsReturnsDeterministicOrder(t *testing.T) {
 // 照常覆盖 handle，会把刚建好的连接整个换掉、其 client 永远无人 Close（stdio
 // 即孤儿子进程）。
 func TestConnectOneDoesNotClobberLiveConnection(t *testing.T) {
-	manager := NewMcpManager(t.TempDir(), func(tools []McpDiscoveredTool) {})
+	manager := NewMcpManager(t.TempDir(), func() {})
 	sentinel := &client.Client{}
+	// 早退只在配置相同时成立（配置不同必须走替换路径，见下一个测试），所以
+	// 两个场景的 cfg 都与 handle 的配置对齐，确保不会真的拨号。
 	original := &McpClientHandle{
 		ServerName: "a",
 		Config:     McpServerConfig{Command: "x"},
@@ -203,7 +283,7 @@ func TestConnectOneDoesNotClobberLiveConnection(t *testing.T) {
 	}
 	manager.clients["a"] = original
 
-	manager.connectOne(context.Background(), "a", McpServerConfig{Command: "should-not-spawn"})
+	manager.connectOne(context.Background(), "a", McpServerConfig{Command: "x"})
 
 	manager.mu.RLock()
 	current := manager.clients["a"]
@@ -215,12 +295,132 @@ func TestConnectOneDoesNotClobberLiveConnection(t *testing.T) {
 	// 拨号在飞（connecting）同理：不能叠第二次拨号。
 	inFlight := &McpClientHandle{ServerName: "a", Config: McpServerConfig{Command: "x"}, Status: "connecting"}
 	manager.clients["a"] = inFlight
-	manager.connectOne(context.Background(), "a", McpServerConfig{Command: "should-not-spawn"})
+	manager.connectOne(context.Background(), "a", McpServerConfig{Command: "x"})
 	manager.mu.RLock()
 	current = manager.clients["a"]
 	manager.mu.RUnlock()
 	if current != inFlight {
 		t.Fatalf("an in-flight dial must not be superseded, got %#v", current)
+	}
+}
+
+// 竞态回归：failed 重试的旧配置拨号可能在 ReconcileConfigs 删掉记录之后才拿
+// 到拨号锁，把旧配置的 handle 写回并提交成功；随后带着新配置的拨号不能因
+// status==connected 早退，否则用户刚保存的新配置被静默顶掉，旧配置一直跑到
+// 下次保存。配置不同必须走整体换记录路径：旧 client 被 Close、ToolDefs 继承、
+// 新配置的连接提交成功。
+func TestConnectOneReplacesStaleConfigConnection(t *testing.T) {
+	python := mcpTestPython(t)
+	script := filepath.Join(t.TempDir(), "server.py")
+	if err := os.WriteFile(script, []byte(mcpStdioTestServerScript), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	manager := NewMcpManager(t.TempDir(), func() {})
+	defer manager.Shutdown()
+
+	oldCfg := McpServerConfig{Command: python, Args: []string{script}}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	manager.connectOne(ctx, "echo", oldCfg)
+	manager.mu.RLock()
+	stale := manager.clients["echo"]
+	manager.mu.RUnlock()
+	if stale == nil || stale.Status != "connected" {
+		t.Fatalf("旧配置应先真实连上，got %#v", stale)
+	}
+
+	// 与旧配置只差一个 env 标记：相等性判定必须认出"不同"，服务端本身不受影响。
+	newCfg := McpServerConfig{Command: python, Args: []string{script}, Env: map[string]string{"ALLY_MCP_TEST_REPLACED": "1"}}
+	manager.connectOne(ctx, "echo", newCfg)
+
+	manager.mu.RLock()
+	current := manager.clients["echo"]
+	manager.mu.RUnlock()
+	if current == stale {
+		t.Fatal("配置不同的已连接记录必须被替换，不能因 status==connected 早退")
+	}
+	if current.Status != "connected" {
+		t.Fatalf("替换后应按新配置连上，got status %q error %q", current.Status, current.Error)
+	}
+	if !mcpServerConfigEqual(current.Config, newCfg) {
+		t.Fatalf("提交的必须是新配置，got %#v", current.Config)
+	}
+	if len(current.ToolDefs) == 0 {
+		t.Fatal("替换路径必须保住工具清单（继承或重拉），注入视图不能出现空洞")
+	}
+}
+
+// 竞态回归：旧配置的拨号拿到锁时，若已有一个更新的 LoadConfigs 快照取代了它
+// 携带的配置（用户新保存的拨号已经赢下连接），必须就地放弃——否则它会走"配置
+// 不同就整体换记录"的路径，把用户刚保存的新配置整个顶掉，直到下次保存。
+func TestConnectOneAbandonsSupersededConfig(t *testing.T) {
+	configFile := filepath.Join(t.TempDir(), "mcp.json")
+	if err := os.WriteFile(configFile, []byte(
+		`{"mcpServers":{"echo":{"command":"new-server","env":{"MARK":"new"}}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manager := NewMcpManager(t.TempDir(), func() {})
+	manager.configPaths = []string{configFile}
+	if _, err := manager.LoadConfigs(); err != nil {
+		t.Fatal(err)
+	}
+
+	// 新配置拨号已赢的形态：connected 记录挂着新配置。
+	newCfg := McpServerConfig{Command: "new-server", Env: map[string]string{"MARK": "new"}}
+	sentinel := &client.Client{}
+	current := &McpClientHandle{
+		ServerName: "echo",
+		Config:     newCfg,
+		Status:     "connected",
+		Client:     sentinel,
+		ToolDefs:   []McpDiscoveredTool{{ServerName: "echo", Name: "t", FunctionName: "mcp__echo__t"}},
+	}
+	manager.clients["echo"] = current
+
+	// 迟到的旧配置拨号：配置已被快照取代，必须放弃，不得触碰新配置的连接。
+	manager.connectOne(context.Background(), "echo", McpServerConfig{Command: "old-server"})
+
+	manager.mu.RLock()
+	after := manager.clients["echo"]
+	manager.mu.RUnlock()
+	if after != current || after.Status != "connected" || after.Client != sentinel {
+		t.Fatalf("superseded dial must abandon without touching the newer connection, got %#v", after)
+	}
+}
+
+// Shutdown 之后的在飞拨号不得把连接提交进无人引用的旧 manager：stdio 子进程与
+// 传输 goroutine 会一直悬到进程退出。
+func TestConnectOneAfterShutdownIsIgnored(t *testing.T) {
+	python := mcpTestPython(t)
+	script := filepath.Join(t.TempDir(), "server.py")
+	if err := os.WriteFile(script, []byte(mcpStdioTestServerScript), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cfg := McpServerConfig{Command: python, Args: []string{script}}
+	raw, err := json.Marshal(McpServersConfig{McpServers: map[string]McpServerConfig{"echo": cfg}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	configFile := filepath.Join(t.TempDir(), "mcp.json")
+	if err := os.WriteFile(configFile, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manager := NewMcpManager(t.TempDir(), func() {})
+	manager.configPaths = []string{configFile}
+	if _, err := manager.LoadConfigs(); err != nil {
+		t.Fatal(err)
+	}
+	manager.Shutdown()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	manager.connectOne(ctx, "echo", cfg)
+
+	manager.mu.RLock()
+	_, live := manager.clients["echo"]
+	manager.mu.RUnlock()
+	if live {
+		t.Fatal("shutdown 之后的拨号不得再登记连接")
 	}
 }
 
@@ -238,7 +438,7 @@ func TestMcpManagerReconcileKeepsUnchangedServers(t *testing.T) {
 		"a":{"command":"x","enabled":true},
 		"b":{"command":"y","enabled":false}
 	}}`)
-	manager := NewMcpManager(t.TempDir(), func(tools []McpDiscoveredTool) {})
+	manager := NewMcpManager(t.TempDir(), func() {})
 	manager.configPaths = []string{configFile}
 	// Simulated running state: a connected with the same config, b disabled
 	// with the same config, and a leftover server "old" whose config entry is
@@ -422,7 +622,7 @@ func TestReconcileConfigsAppliesDisabledToolsInPlace(t *testing.T) {
 		}
 	}
 	write(`{"mcpServers":{"a":{"command":"x"}}}`)
-	manager := NewMcpManager(t.TempDir(), func(tools []McpDiscoveredTool) {})
+	manager := NewMcpManager(t.TempDir(), func() {})
 	manager.configPaths = []string{configFile}
 	handle := &McpClientHandle{ServerName: "a", Config: McpServerConfig{Command: "x"}, Status: "connected"}
 	manager.clients["a"] = handle
@@ -449,6 +649,51 @@ func TestReconcileConfigsAppliesDisabledToolsInPlace(t *testing.T) {
 	}
 	if changed != 0 {
 		t.Fatalf("reconciling an unchanged config must be a no-op, got %d", changed)
+	}
+}
+
+// reconcile 对新增/变更服务端的拨号放后台（与 failed 重试同一理由：一次失败
+// 拨号最长可到分钟级，不能把面板的"保存"拖住）：调用立即返回，状态随后经
+// notifyChange 异步推进到 connected。
+func TestReconcileConnectsChangedServersInBackground(t *testing.T) {
+	python := mcpTestPython(t)
+	script := filepath.Join(t.TempDir(), "server.py")
+	if err := os.WriteFile(script, []byte(mcpStdioTestServerScript), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	newCfg := McpServerConfig{Command: python, Args: []string{script}}
+	raw, err := json.Marshal(McpServersConfig{McpServers: map[string]McpServerConfig{"a": newCfg}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	configFile := filepath.Join(t.TempDir(), "mcp.json")
+	if err := os.WriteFile(configFile, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manager := NewMcpManager(t.TempDir(), func() {})
+	defer manager.Shutdown()
+	manager.configPaths = []string{configFile}
+	// 运行态里 a 还挂着旧配置的记录（无 client）：保存后的 reconcile 应判定
+	// stale、把拨号排到后台并立刻返回。
+	manager.clients["a"] = &McpClientHandle{ServerName: "a", Config: McpServerConfig{Command: "old"}, Status: "connected"}
+
+	start := time.Now()
+	changed, err := manager.ReconcileConfigs(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed != 1 {
+		t.Fatalf("changed server should count as touched, got %d", changed)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("reconcile must return before the dial finishes, took %s", elapsed)
+	}
+	waitForMcpHandleStatus(t, manager, "a", "connected")
+	manager.mu.RLock()
+	handle := manager.clients["a"]
+	manager.mu.RUnlock()
+	if !mcpServerConfigEqual(handle.Config, newCfg) {
+		t.Fatalf("后台拨号必须按新配置连接，got %#v", handle.Config)
 	}
 }
 
@@ -519,13 +764,14 @@ func TestIsMcpTransportFailure(t *testing.T) {
 }
 
 func TestMcpCallFailureClassification(t *testing.T) {
-	// 服务端状态决定"能不能靠重连自愈"：failed 可以（上一次连接死了），
-	// disabled / connecting 不行——前者是用户明确关掉的，后者已有连接在飞。
+	// 服务端状态决定"请求有没有发出去过"：failed 意味着调用前就没有可用连接
+	// （请求从未发出，重连后照常执行是安全的）；disabled / connecting 不行——
+	// 前者是用户明确关掉的，后者已有连接在飞。
 	cases := []struct {
 		status string
 		want   mcpCallFailure
 	}{
-		{"failed", mcpCallReconnectable},
+		{"failed", mcpCallConnectionDead},
 		{"disabled", mcpCallUnavailable},
 		{"connecting", mcpCallUnavailable},
 	}
@@ -545,6 +791,27 @@ func TestMcpCallFailureClassification(t *testing.T) {
 	outcome, err := manager.callToolOnce(context.Background(), "missing", "tool", nil)
 	if err == nil || outcome.failure != mcpCallUnavailable {
 		t.Fatalf("unknown server must be unavailable, got %#v / %v", outcome, err)
+	}
+}
+
+// 重连之后要不要把这次调用继续跑下去，唯一判据是"请求有没有发出去过"：调用前
+// 连接就是死的（从未发出）可以；请求发出过（链路中途断）不行——服务端可能已经
+// 执行了工具并产生了副作用，重放就是把副作用做第二遍。
+func TestCallReplaySafetyAfterReconnect(t *testing.T) {
+	cases := []struct {
+		failure mcpCallFailure
+		want    bool
+	}{
+		{mcpCallConnectionDead, true},
+		{mcpCallTransportBroken, false},
+		{mcpCallToolFailed, false},
+		{mcpCallUnavailable, false},
+		{mcpCallSucceeded, false},
+	}
+	for _, tc := range cases {
+		if got := replaySafeAfterReconnect(tc.failure); got != tc.want {
+			t.Fatalf("failure %d: replaySafeAfterReconnect = %v, want %v", tc.failure, got, tc.want)
+		}
 	}
 }
 
@@ -876,8 +1143,9 @@ func TestMcpStdioServerUsesWorkspaceDirAndHealsAfterCrash(t *testing.T) {
 	}
 	waitForMcpHandleStatus(t, manager, "echo", "failed")
 
-	// 下一次调用先重连再试（对齐 ZCode 的调用前按需重连）：连接自己救回来，
-	// 而不是把"连接已失效"一直丢给模型。
+	// 下一次调用：状态已经是 failed（这次请求从未发出），所以先重连、再把调用
+	// 正常执行一遍——连接自己救回来，而不是把"连接已失效"一直丢给模型。这不是
+	// 重放：服务端不可能已经跑过它。
 	out, err = manager.CallTool(ctx, "echo", "where", map[string]any{})
 	if err != nil {
 		t.Fatalf("调用前重连自愈失败: %v", err)
@@ -1137,36 +1405,65 @@ func TestCommitConnectionRecordsLossDuringHandshake(t *testing.T) {
 	}
 }
 
-func TestReconcileRetriesFailedServerInBackground(t *testing.T) {
-	enabled := true
+// 保存/勾选不再"顺手补试"连失败的服务端：配置没变就一律不动连接（连接是无状态
+// 的，下一次调用自己会连上），只有勾选变化要原地生效。
+func TestReconcileLeavesFailedServerAlone(t *testing.T) {
 	const missingBinary = "ally-mcp-test-definitely-missing-binary"
 	configFile := filepath.Join(t.TempDir(), "mcp.json")
-	if err := os.WriteFile(configFile, []byte(`{"mcpServers":{"a":{"command":"`+missingBinary+`"}}}`), 0o600); err != nil {
-		t.Fatal(err)
+	write := func(body string) {
+		if err := os.WriteFile(configFile, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
-	manager := NewMcpManager(t.TempDir(), func(tools []McpDiscoveredTool) {})
+	write(`{"mcpServers":{"a":{"command":"` + missingBinary + `"}}}`)
+
+	manager := NewMcpManager(t.TempDir(), func() {})
 	manager.configPaths = []string{configFile}
 	manager.clients["a"] = &McpClientHandle{
 		ServerName: "a",
-		Config:     McpServerConfig{Command: missingBinary, Enabled: &enabled},
+		Config:     McpServerConfig{Command: missingBinary},
 		Status:     "failed",
 		Error:      "boom",
 	}
-
-	// 配置没变的 failed 服务端也要重试（把状态翻回 connected，省掉下一次调用
-	// 的按需重连延迟），但绝不能同步等拨号——一次失败的拨号要跑满 4 次尝试，
-	// 面板的"保存"会被拖成分钟级。
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		_, _ = manager.ReconcileConfigs(context.Background())
-	}()
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("failed 服务端的重试不能阻塞 ReconcileConfigs 的调用方")
+	handleState := func() (string, string, []string) {
+		manager.mu.RLock()
+		defer manager.mu.RUnlock()
+		handle := manager.clients["a"]
+		if handle == nil {
+			return "", "", nil
+		}
+		return handle.Status, handle.Error, handle.Config.DisabledTools
 	}
-	waitForMcpHandleStatus(t, manager, "a", "connecting")
+
+	changed, err := manager.ReconcileConfigs(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed != 0 {
+		t.Fatalf("配置没变的 failed 服务端不该算 touched（那意味着又去拨号了），got %d", changed)
+	}
+	// 等一拍：旧实现会在这里起一次后台拨号，把状态改成 connecting。
+	time.Sleep(150 * time.Millisecond)
+	if status, errText, _ := handleState(); status != "failed" || errText != "boom" {
+		t.Fatalf("配置没变时不得动连接，got status %q error %q", status, errText)
+	}
+
+	// 勾选变化照旧原地生效：不动连接，只换注入黑名单。
+	write(`{"mcpServers":{"a":{"command":"` + missingBinary + `","disabledTools":["t"]}}}`)
+	changed, err = manager.ReconcileConfigs(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed != 1 {
+		t.Fatalf("勾选变化要算一次 touched，got %d", changed)
+	}
+	status, errText, disabled := handleState()
+	if status != "failed" || errText != "boom" {
+		t.Fatalf("勾选变化不该触发拨号，got status %q error %q", status, errText)
+	}
+	if !disabledToolsEqual(disabled, []string{"t"}) {
+		t.Fatalf("勾选变化仍要原地生效，got %#v", disabled)
+	}
 }
 
 func TestToolRefreshCoalescesBurstAndKeepsPending(t *testing.T) {

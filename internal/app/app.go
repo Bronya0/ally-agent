@@ -220,8 +220,14 @@ type App struct {
 	initialized     bool
 	disabledSkills  []string
 	mcpManager      *McpManager
-	plans           map[string][]PlanStep // sessionID → the plan's steps
-	planRevisions   map[string]int64
+	// mcpRestartMu 串行化 MCP 全量重启（RestartMcpServers）：网络配置变更可能
+	// 从后台连发两次，无互斥时第二次会把第一次还在 StartAll 里的新 manager
+	// Shutdown 掉——commit 核对虽能自愈，整轮拨号却白跑。重启耗时可达分钟级，
+	// 与 a.mu 分开（绝不能拿 a.mu 当闸）。mcpManager 指针本身的读写由 a.mu
+	// 守护，统一走 activeMcpManager。
+	mcpRestartMu  sync.Mutex
+	plans         map[string][]PlanStep // sessionID → the plan's steps
+	planRevisions map[string]int64
 	// sessionWorkspaceMaps freezes the workspace map bytes per session
 	// (sessionID → map text) so the request prefix stays byte-stable across
 	// runs and provider prompt cache survive; guarded by mu (declared in
