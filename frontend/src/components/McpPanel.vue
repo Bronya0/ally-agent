@@ -73,7 +73,6 @@ Public License v3. See the LICENSE file for details.
               <span :class="['mcp-dot', mcpStatusFor(entry.srv).status]"></span>
               <span class="mcp-name" :title="entry.srv.name?.trim() || $t('settings.mcpUnnamedServer')">{{ entry.srv.name?.trim() || $t('settings.mcpUnnamedServer') }}</span>
               <span class="mcp-badge">{{ t(transportLabel(entry.srv.transport)) }}</span>
-              <span v-if="entry.srv.enabled === false" class="mcp-badge off">{{ $t('settings.mcpStatusDisabled') }}</span>
               <div class="mcp-row-side">
                 <button
                   v-if="(mcpStatusFor(entry.srv).tools || []).length"
@@ -830,10 +829,6 @@ watch(
   flex: none;
 }
 
-.mcp-badge.off {
-  background: rgba(245, 166, 35, 0.14);
-  color: var(--ally-warning-text);
-}
 
 .mcp-row-side {
   margin-left: auto;
