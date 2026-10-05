@@ -28,7 +28,7 @@ Public License v3. See the LICENSE file for details.
     <div class="ssh-auth-body">
       <div class="ssh-auth-hints">
         <span class="ssh-auth-hint">{{ $t('sshCluster.panel.hint') }}</span>
-        <span v-if="!ready" class="ssh-auth-hint ssh-auth-loading">{{ $t('sshCluster.loading') }}</span>
+        <span v-if="!allowedSshServersReady" class="ssh-auth-hint ssh-auth-loading">{{ $t('sshCluster.loading') }}</span>
       </div>
       <n-input
         v-model:value="searchQuery"
@@ -46,7 +46,10 @@ Public License v3. See the LICENSE file for details.
       <div v-else-if="filteredServers.length === 0" class="ssh-auth-empty">
         {{ $t('common.searchEmpty') }}
       </div>
-      <div v-else class="ssh-auth-table">
+      <!-- 表体限高独立滚动：头部（说明+搜索+表头）保持可见，列表区自己滚，
+           不能让整个模态框跟着内容长高/整体滚动。 -->
+      <div v-else class="ssh-auth-scroll">
+        <div class="ssh-auth-table">
         <div class="ssh-auth-head">
           <span class="ssh-auth-col-check">{{ $t('sshCluster.panel.title') }}</span>
           <span>{{ $t('sshCluster.table.colAlias') }}</span>
@@ -55,16 +58,16 @@ Public License v3. See the LICENSE file for details.
           <span class="ssh-auth-col-risk">{{ $t('sshCluster.table.colRisk') }}</span>
         </div>
         <div
-          v-for="s in filteredServers"
+          v-for="s in sortedServers"
           :key="s.alias"
           class="ssh-auth-row"
-          :class="{ 'risk-high': s.riskLevel === 'high', disabled: !ready }"
+          :class="{ 'risk-high': s.riskLevel === 'high', disabled: !allowedSshServersReady }"
           @click="toggleServer(s.alias)"
         >
           <span class="ssh-auth-col-check">
             <n-checkbox
               :checked="isServerAllowed(s.alias)"
-              :disabled="!ready"
+              :disabled="!allowedSshServersReady"
               @click.stop
               @update:checked="() => toggleServer(s.alias)"
             />
@@ -82,6 +85,7 @@ Public License v3. See the LICENSE file for details.
               {{ s.riskLevel === 'high' ? $t('sshCluster.table.riskHigh') : $t('sshCluster.table.riskLow') }}
             </span>
           </span>
+        </div>
         </div>
       </div>
     </div>
@@ -124,6 +128,16 @@ const filteredServers = computed(() => {
 const allowedSshAliasSet = computed(() => new Set(
   (Array.isArray(props.allowedSshServers) ? props.allowedSshServers : []).map((s) => String(s || '').toLowerCase().trim()),
 ));
+
+// 已授权的排在顶部（组内保持原顺序，稳定排序），未授权的跟随其后。
+// 列表可能上百行，授权状态一眼可见比记住行号重要。
+const sortedServers = computed(() => {
+  const allowed = allowedSshAliasSet.value;
+  return filteredServers.value
+    .map((s, i) => ({ s, i, allowed: allowed.has(String(s.alias || '').toLowerCase().trim()) }))
+    .sort((a, b) => (a.allowed === b.allowed ? a.i - b.i : a.allowed ? -1 : 1))
+    .map(({ s }) => s);
+});
 
 function isServerAllowed(alias) {
   return allowedSshAliasSet.value.has(String(alias || '').toLowerCase().trim());
@@ -178,6 +192,14 @@ function endpointOf(server) {
   font-size: 12px;
   color: var(--ally-text-muted);
   text-align: center;
+}
+
+/* 表体限高独立滚动：几百个节点时整个模态框跟着内容撑爆视口，头部表头也滚走了。 */
+.ssh-auth-scroll {
+  max-height: 52vh;
+  overflow: auto;
+  border: 1px solid var(--ally-border-subtle);
+  border-radius: 6px;
 }
 
 /* 表头与数据行共用同一套 grid 列宽（与 SSHClusterPanel 的表格同一骨架，
