@@ -231,6 +231,9 @@ func classifyLLMError(err error) llmErrorKind {
 	if llmErrorTextMatchesAny(msg, llmModelNotFoundMarkers) {
 		return llmErrorKindModelNotFound
 	}
+	if llmErrorTextMatchesAny(msg, llmHTTP400TextMarkers) {
+		return llmErrorKindDeterministic400
+	}
 	return llmErrorKindUnknown
 }
 
@@ -268,6 +271,13 @@ var (
 	llmModelNotFoundMarkers = []string{
 		"model not found", "no such model", "does not exist", "not_found",
 		"status code: 404", "404 not found",
+	}
+	// 中继把状态码转述进文案、类型化错误丢失时的 400 判据。isProvider400Error 与
+	// classifyLLMError 共用这一份，避免"认得出 400、却不认它是确定性失败"的分叉：
+	// 只剩文案的 400 曾被归入 unknown 按瞬时错误盲重试 LLMRetries 次，每次都把
+	// 整份上下文再发一遍，而同一个 400 不会因为重发而消失。
+	llmHTTP400TextMarkers = []string{
+		"status code: 400", "400 bad request",
 	}
 )
 
@@ -1575,8 +1585,7 @@ func isProvider400Error(err error) bool {
 		return status == 400
 	}
 	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "status code: 400") ||
-		strings.Contains(msg, "400 bad request")
+	return llmErrorTextMatchesAny(msg, llmHTTP400TextMarkers)
 }
 
 // isAnthropicSignatureRejectionError detects provider 400 errors specifically caused by

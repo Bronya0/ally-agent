@@ -107,11 +107,10 @@ func contextLockNamespace(cfg ConfigState) string {
 // 按序排列的消息，别的一概不算。
 func fingerprintHead(messages []openai.ChatCompletionMessage, tools []openai.Tool) (int, string) {
 	head := sha256.New()
-	headCount := 0
-	for headCount < len(messages) && messages[headCount].Role == openai.ChatMessageRoleSystem {
-		writeFramedHash(head, []byte(messages[headCount].Role))
-		writeFramedHash(head, []byte(messages[headCount].Content))
-		headCount++
+	headCount := leadingSystemCount(messages)
+	for i := 0; i < headCount; i++ {
+		writeFramedHash(head, []byte(messages[i].Role))
+		writeFramedHash(head, []byte(messages[i].Content))
 	}
 	if raw, err := json.Marshal(tools); err == nil {
 		writeFramedHash(head, raw)

@@ -44,6 +44,36 @@ func sanitizeHistoryMessages(messages []openai.ChatCompletionMessage) []openai.C
 	return sanitizeHistoryMessagesFor(messages, historyProfileMemory)
 }
 
+// leadingSystemCount returns how many system messages a chat request starts
+// with: the frozen system prompt and, right behind it, the session's workspace
+// map (buildSystemContextMessages). That leading block is the request's own head,
+// not history — it is what the prefix fingerprint measures and what a request
+// repair must leave alone.
+func leadingSystemCount(messages []openai.ChatCompletionMessage) int {
+	head := 0
+	for head < len(messages) && messages[head].Role == openai.ChatMessageRoleSystem {
+		head++
+	}
+	return head
+}
+
+// sanitizeRequestMessages repairs a request the provider rejected with 400: the
+// leading system block is kept verbatim and only the history behind it is
+// sanitized. sanitizeHistoryMessages drops every system message by design — it
+// cleans persisted history, where a system message can only be an injected
+// forgery — so calling it on a whole request deleted the session's standing rules
+// (core rules, project instructions, tool conventions) and sent the retry without
+// them, leaving the rest of the run with no instructions at all.
+func sanitizeRequestMessages(messages []openai.ChatCompletionMessage) []openai.ChatCompletionMessage {
+	head := leadingSystemCount(messages)
+	if head == 0 {
+		return sanitizeHistoryMessages(messages)
+	}
+	out := make([]openai.ChatCompletionMessage, 0, len(messages))
+	out = append(out, messages[:head]...)
+	return append(out, sanitizeHistoryMessages(messages[head:])...)
+}
+
 // sanitizeHistoryMessagesForDisk is the persistence variant: images are not
 // persisted (base64 payloads would bloat disk history and restart replay
 // would re-send them), so attachment images collapse to their text and read

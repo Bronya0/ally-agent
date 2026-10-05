@@ -38,6 +38,15 @@ func (a *App) streamOpenAIResponses(ctx context.Context, cfg ConfigState, model 
 	// byte-identical across agent steps (prompt cache).
 	replayKey := reasoningReplayKey(cfg, model)
 	replay := a.reasoningStash.get(replayKey)
+	if skips := responsesReplaySkips(messages, replay); len(skips) > 0 && endpointRequiresReasoningReplay(cfg) {
+		// 该端点要求每个工具回合把思考交回，而这一回合发的是“没有思考”的形状：
+		// 请求会被服务商回 400（DeepSeek: "The `reasoning_text` in the thinking
+		// mode must be passed back to the API"）。记一行，否则这种拒绝只表现为
+		// “模型忽然报 400”，看不出是回放没命中。
+		a.logAppError("responses reasoning replay did not cover a tool turn",
+			"route", cfg.responsesPromptCacheKey, "model", model,
+			"skips", strings.Join(skips, " "), "messageCount", len(messages))
+	}
 	body := buildOpenAIResponsesRequest(cfg, model, messages, tools, replay)
 
 	maxRetries := effectiveLLMRetries(cfg)
@@ -718,6 +727,47 @@ func responsesTurnItemsComplete(turn *reasoningTurn, calls []legacyopenai.ToolCa
 	return true
 }
 
+// responsesTurnReplay returns the reasoning items to replay on one assistant turn,
+// or nil when the turn cannot be replayed at all. The all-or-nothing rule is
+// OpenAI's: a replayed reasoning item is paired by id with the item that follows it,
+// so a turn with an unknown follower id must replay nothing rather than a dangling
+// item (see responsesTurnItemsComplete).
+//
+// The request builder and the replay diagnostic both ask this one function, so "was
+// this turn replayed?" has a single answer instead of two walks that can drift apart.
+func responsesTurnReplay(turn *reasoningTurn, calls []legacyopenai.ToolCall) []responsesReasoningItem {
+	if !responsesTurnItemsComplete(turn, calls) {
+		return nil
+	}
+	return turn.responses
+}
+
+// responsesReplaySkips reports the tool turns of a request whose reasoning will not be
+// replayed, one entry per turn: the turn's tool-call ids, whether a captured turn was
+// found, and how much reasoning text the history message still carries (that text is
+// what a fallback carrier would have to send). Empty means every such turn replays.
+//
+// It exists to name the one failure that is otherwise invisible from the outside: a
+// provider that requires thinking to be handed back refuses the request, and all the
+// user sees is a 400 on a request that looks well-formed.
+func responsesReplaySkips(messages []legacyopenai.ChatCompletionMessage, replay *sessionReasoningPayload) []string {
+	var skips []string
+	for i := range messages {
+		m := messages[i]
+		if m.Role != legacyopenai.ChatMessageRoleAssistant || len(m.ToolCalls) == 0 {
+			continue
+		}
+		ids := toolCallIDsOf(m.ToolCalls)
+		turn := replay.turnForAny(ids)
+		if len(responsesTurnReplay(turn, m.ToolCalls)) > 0 {
+			continue
+		}
+		skips = append(skips, fmt.Sprintf("%s(captured=%v,historyText=%d)",
+			strings.Join(ids, ","), turn != nil, len(strings.TrimSpace(m.ReasoningContent))))
+	}
+	return skips
+}
+
 func buildOpenAIResponsesInput(messages []legacyopenai.ChatCompletionMessage, replay *sessionReasoningPayload) (string, oaresp.ResponseInputParam) {
 	systemParts := []string{}
 	input := oaresp.ResponseInputParam{}
@@ -750,7 +800,7 @@ func buildOpenAIResponsesInput(messages []legacyopenai.ChatCompletionMessage, re
 				// agent steps. The all-or-nothing guard keeps a reasoning item
 				// from being sent without its follower item id.
 				turn := replay.turnForAny(toolCallIDsOf(m.ToolCalls))
-				if responsesTurnItemsComplete(turn, m.ToolCalls) {
+				if items := responsesTurnReplay(turn, m.ToolCalls); len(items) > 0 {
 					for _, item := range turn.responses {
 						input = append(input, responsesReasoningInputItem(item))
 					}

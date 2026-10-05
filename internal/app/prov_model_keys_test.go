@@ -136,7 +136,10 @@ func TestShouldFailoverKey(t *testing.T) {
 		{"rate limit", errors.New("429 too many requests"), true},
 		{"5xx", errors.New("502 Bad Gateway"), true},
 		{"network reset", errors.New("connection reset by peer"), true},
-		{"plain 400", errors.New("400 Bad Request"), true},
+		// 400 是“这份请求本身不合法”，换 key 改变不了它：带类型化状态码的 400 一直是
+		// 不切换的（classifyLLMError → Deterministic400），中继只在文案里转述 400 时
+		// 曾分到 unknown 而误切换/盲重试。两侧现在同判，不再看状态码是怎么传进来的。
+		{"plain 400", errors.New("400 Bad Request"), false},
 		{"anthropic permission_error", errors.New("permission_error: invalid permissions"), true},
 		{"cloudflare access denied", errors.New("error code: 1020 access denied"), true},
 		{"openai invalid_request_error", errors.New("invalid_request_error: bad request"), true},
@@ -334,6 +337,10 @@ func TestShouldRetryLLMErrorDefaultRetry(t *testing.T) {
 		"error, status code: 400, message: This model's maximum context length is 128000 tokens. However, you requested 200000 tokens",
 		"error, status code: 404, message: The model 'gpt-x' does not exist",
 		"error, status code: 404, message: model not found",
+		// 状态码被中继转述进文案的 400（真实案例：DeepSeek Responses 网关的
+		// "The reasoning_text in the thinking mode must be passed back"）：确定性
+		// 失败，重发同一份请求只会再拿一个同样的 400。
+		`responses request failed: 400 Bad Request: {"error":{"type":"invalid_request_error"}}`,
 	}
 	for _, msg := range fatal {
 		if shouldRetryLLMError(errors.New(msg)) {

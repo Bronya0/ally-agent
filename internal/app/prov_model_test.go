@@ -438,9 +438,15 @@ func TestIsProvider400ErrorUsesTypedStatusCodes(t *testing.T) {
 	if !isProvider400Error(anthropic400) {
 		t.Fatal("anthropic Error with StatusCode 400 must be detected")
 	}
-	// 中继丢掉状态码、仅在文本里转述 400：字符串兜底仍生效。
-	if !isProvider400Error(errors.New("relay says: status code: 400")) {
-		t.Fatal("string fallback for status code: 400 must still work")
+	// 中继丢掉状态码、仅在文本里转述 400：字符串兜底仍生效（Responses 适配器的
+	// 报错形状即 "responses request failed: 400 Bad Request: …"，两种拼写都得认）。
+	for _, msg := range []string{
+		"relay says: status code: 400",
+		`responses request failed: 400 Bad Request: {"error":{}}`,
+	} {
+		if !isProvider400Error(errors.New(msg)) {
+			t.Fatalf("%q must be detected as a 400", msg)
+		}
 	}
 	if isProvider400Error(errors.New("totally unrelated failure")) {
 		t.Fatal("unrelated errors must not match")

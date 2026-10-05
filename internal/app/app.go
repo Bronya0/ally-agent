@@ -2225,7 +2225,9 @@ func (a *App) runChat(ctx context.Context, runID string, req ChatRequest, cfg Co
 					a.emit("run:retry", map[string]any{"runId": runID, "sessionId": sessionID, "attempt": 1, "maxAttempts": 1, "reason": "reasoning signature cleared after provider 400"})
 					continue
 				}
-				repaired := sanitizeHistoryMessages(messages)
+				// 修复只清洗历史：开头的系统段是这份请求自己的（见
+				// sanitizeRequestMessages），丢了它整轮就没有任何规则可依。
+				repaired := sanitizeRequestMessages(messages)
 				if len(repaired) < len(messages) {
 					messages = repaired
 					requestMessages = messages

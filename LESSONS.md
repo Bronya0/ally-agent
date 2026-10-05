@@ -170,3 +170,5 @@
 [pinned-tail-placeholder] 2026-10-04 中危 贴底列表尾部的不可见占位行出现/消失会让整条内容上下跳：本轮占位要按「这一轮在跑」留位，别按「正文是否在流式」开关。@ChatMessages.vue
 [hover-reveal-hitbox] 2026-10-04 中危 悬停唤出的行勿把 visibility:hidden 放命中盒：外框不接指针，鼠标落上去唤不回；藏内容盒、外框留命中区。@MessageRoundStats.vue
 [anim-no-layer-hint] 2026-10-03 中危 新增小元素动画（如 6px 点）不会自提层：卡每拍重绘时改由主线程画帧，看着像卡死；须按所动属性动态挂 will-change。@ToolStatusIcon.vue
+[request-head-not-history] 2026-10-05 高危 洗历史的函数会删光 system 消息：用它洗整份请求就丢掉系统提示词，整轮无规则。@prov_history_hygiene.go
+[text-status-parity] 2026-10-05 中危 中继只在文案里转述状态码时，关键词表须覆盖 typed 分支认得的每个码：漏 400 就归 unknown，盲重试重发整份上下文。@prov_model.go

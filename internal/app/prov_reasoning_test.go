@@ -819,6 +819,45 @@ func TestBuildOpenAIResponsesInputReplaysReasoningPerTurn(t *testing.T) {
 	}
 }
 
+// TestResponsesReplaySkipsNamesTheUncoveredTurn pins the diagnostic that makes the
+// "thinking must be passed back" rejection locatable: a tool turn whose captured
+// reasoning cannot be replayed is reported (with whether anything was captured and how
+// much reasoning text the history still holds), while a turn that replays and an
+// assistant message without tool calls are not.
+func TestResponsesReplaySkipsNamesTheUncoveredTurn(t *testing.T) {
+	replay := &sessionReasoningPayload{turns: []reasoningTurn{{
+		callIDs:        []string{"call_1"},
+		responses:      []responsesReasoningItem{{ID: "rs_1", EncryptedContent: "enc"}},
+		responsesItems: map[string]string{"call_1": "fc_item_1"},
+	}}}
+	messages := []legacyopenai.ChatCompletionMessage{
+		// Replayed: no skip.
+		{Role: legacyopenai.ChatMessageRoleAssistant, ToolCalls: []legacyopenai.ToolCall{{ID: "call_1"}}},
+		// Not a tool turn: no skip.
+		{Role: legacyopenai.ChatMessageRoleAssistant, Content: "answer"},
+		// Nothing captured for this turn (the ledger missed it): a skip, and the
+		// history text is what a fallback carrier would have to send.
+		{Role: legacyopenai.ChatMessageRoleAssistant, ReasoningContent: "thoughts",
+			ToolCalls: []legacyopenai.ToolCall{{ID: "call_2"}}},
+		// Captured, but the turn cannot replay without every follower item id.
+		{Role: legacyopenai.ChatMessageRoleAssistant,
+			ToolCalls: []legacyopenai.ToolCall{{ID: "call_1"}, {ID: "call_3"}}},
+	}
+	skips := responsesReplaySkips(messages, replay)
+	if len(skips) != 2 {
+		t.Fatalf("skips = %v, want exactly the two uncovered turns", skips)
+	}
+	if !strings.Contains(skips[0], "call_2(captured=false,historyText=8)") {
+		t.Fatalf("skip = %q, want the missing turn named with its available history text", skips[0])
+	}
+	if !strings.Contains(skips[1], "call_1,call_3(captured=true") {
+		t.Fatalf("skip = %q, want the incomplete turn named as captured", skips[1])
+	}
+	if got := responsesReplaySkips(messages[:2], replay); len(got) != 0 {
+		t.Fatalf("a fully replayed request must report nothing, got %v", got)
+	}
+}
+
 // TestResponsesReasoningItemKeepsEveryField covers the faithful-replay contract:
 // the item sent back must be a copy of the one the API produced, so every
 // documented field survives capture -> carrier -> request. pi stores the whole

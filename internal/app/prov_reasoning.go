@@ -544,16 +544,34 @@ var (
 // the field must not be added (reasoningWireForAdapter owns how the level itself
 // reaches the wire).
 func chatReasoningBackfillKey(cfg ConfigState) string {
-	if isOfficialOpenAIEndpoint(cfg) {
-		return ""
-	}
-	if normalizeReasoningEffort(cfg.ReasoningEffort) == reasoningEffortOff {
+	if !endpointRequiresReasoningReplay(cfg) {
 		return ""
 	}
 	if isKnownWireReasoningKey(cfg.ReasoningTag) {
 		return strings.TrimSpace(cfg.ReasoningTag)
 	}
 	return defaultReasoningTag
+}
+
+// endpointRequiresReasoningReplay reports whether the endpoint validates that every
+// assistant turn hands its thinking back. The requirement belongs to the provider,
+// not to a protocol spelling: DeepSeek states it for Chat
+// (chatReasoningBackfillKey writes the placeholder field) and enforces the same rule
+// on Responses (a turn sent without its `reasoning_text` is rejected with
+// "The `reasoning_text` in the thinking mode must be passed back to the API"). What
+// differs between the two protocols is only how the thinking is carried — a field on
+// the assistant message versus a `reasoning` input item (see buildOpenAIResponsesInput).
+//
+// Judged by endpoint for the same reason as the Chat side: a model list would be wrong
+// within weeks. The official OpenAI API is the one endpoint left out (its strict
+// message-field validation, and on Responses its own id-paired replay), and "off" is
+// the other case that requires nothing back — the request itself asked the provider to
+// stop thinking, so there is no reasoning to hand back.
+func endpointRequiresReasoningReplay(cfg ConfigState) bool {
+	if isOfficialOpenAIEndpoint(cfg) {
+		return false
+	}
+	return normalizeReasoningEffort(cfg.ReasoningEffort) != reasoningEffortOff
 }
 
 // The stream terminator is an SSE frame: the `data:` field whose payload is
