@@ -769,6 +769,7 @@ watch(
    卡内两行：名称+开关在上，工具名徽标+提示在下，窄卡也放得下。 */
 .builtin-tool-grid {
   display: grid;
+  margin-top: 10px;
   grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
   gap: 8px;
 }
