@@ -362,9 +362,9 @@ Public License v3. See the LICENSE file for details.
             </div>
 
             <!-- Settings page: the modal was replaced by this inline container
-                 on the right of the mode sider. v-show keeps in-page state
-                 (tab, scroll, unsaved draft edits) across mode switches. -->
-            <div v-show="settingsActive" class="settings-page-container">
+                 on the right of the mode sider. v-if unmounts on switch (memory);
+                 configDraft lives in App.vue so draft edits survive. -->
+            <div v-if="settingsActive" class="settings-page-container">
               <SettingsModal
                 ref="settingsModalRef"
                 :visible="settingsActive"
@@ -383,9 +383,8 @@ Public License v3. See the LICENSE file for details.
             </div>
 
             <!-- Skills page (extracted from Settings onto the mode rail):
-                 inline sibling of the settings page; v-show keeps the list
-                 across mode switches. -->
-            <div v-show="skillsActive" class="settings-page-container">
+                 inline sibling of the settings page; v-if unmounts on switch. -->
+            <div v-if="skillsActive" class="settings-page-container">
               <SkillsPanel
                 :show="skillsActive"
                 :project-root="config.workspace || ''"
@@ -394,27 +393,27 @@ Public License v3. See the LICENSE file for details.
             </div>
 
             <!-- MCP page (extracted from Settings onto the mode rail): inline
-                 sibling; v-show keeps the server list, live statuses, and
-                 editor draft across mode switches. -->
-            <div v-show="mcpActive" class="settings-page-container">
+                 sibling; v-if unmounts on switch (memory); unsaved server-editor
+                 drafts are lost on switch (by design). -->
+            <div v-if="mcpActive" class="settings-page-container">
               <McpPanel :show="mcpActive" :disabled-tools="config.disabledTools" @mcp-saved="onMcpSaved" @builtin-tools-changed="onBuiltinToolsChanged" />
             </div>
 
             <!-- Models page (extracted from Settings onto the mode rail, below
-                 MCP): inline sibling; v-show keeps the provider tabs, editor
-                 draft, and lazy catalog across mode switches. -->
-            <div v-show="modelsActive" class="settings-page-container">
+                 MCP): inline sibling; v-if unmounts on switch (memory); the draft
+                 lives in App.vue's configDraft and survives. -->
+            <div v-if="modelsActive" class="settings-page-container">
               <ModelsPanel :show="modelsActive" :config-draft="configDraft" @save="onSettingsSave" />
             </div>
 
             <!-- SSH Clusters page (extracted onto the mode rail, below Models):
-                 inline sibling; v-show keeps list and draft state across mode switches. -->
-            <div v-show="sshActive" class="settings-page-container">
+                 inline sibling; v-if unmounts on switch (memory); list reloads on entry. -->
+            <div v-if="sshActive" class="settings-page-container">
               <SSHClusterPanel :show="sshActive" @servers-changed="refreshSSHClusters" />
             </div>
 
-            <!-- Token stats page: v-show keeps loaded stats across switches. -->
-            <div v-show="statsActive" class="settings-page-container">
+            <!-- Token stats page: v-if unmounts on switch (memory); stats reload on entry. -->
+            <div v-if="statsActive" class="settings-page-container">
               <TokenStatsModal :show="statsActive" @close="closeStats" />
             </div>
 
@@ -649,7 +648,6 @@ import ModelsPanel from './components/ModelsPanel.vue';
 import SSHClusterPanel from './components/SSHClusterPanel.vue';
 import ChatMessages from './components/ChatMessages.vue';
 import TaskCenterPanel from './components/TaskCenterPanel.vue';
-import SshClusterAuthModal from './components/SshClusterAuthModal.vue';
 import TokenStatsModal from './components/TokenStatsModal.vue';
 import GamePanel from './games/GamePanel.vue';
 import { assignConfig, defaultConfig, placeholderModel } from './utils/config.mjs';
@@ -714,6 +712,9 @@ import { useToolEvents } from './composables/useToolEvents.mjs';
 import { unwrapWailsEvent } from './utils/wailsEvent.mjs';
 import { createPromptHistoryStore } from './utils/promptHistoryStore.mjs';
 
+// SSH 授权模态框按需加载：与 GitDiffModal 同款异步分块，首屏不下载这份代码；
+// 关闭时 n-modal 默认 display-directive 为 if，行列表 DOM 也不驻留。
+const SshClusterAuthModal = defineAsyncComponent(() => import('./components/SshClusterAuthModal.vue'));
 const GitDiffModal = defineAsyncComponent(() => import('./components/GitDiffModal.vue'));
 const WorkspaceExplorer = defineAsyncComponent(() => import('./components/WorkspaceExplorer.vue'));
 onErrorCaptured((err, _instance, info) => {

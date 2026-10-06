@@ -246,7 +246,7 @@ Public License v3. See the LICENSE file for details.
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { computed, onMounted, reactive, ref } from 'vue';
 import { useMessage } from 'naive-ui';
 import SearchOutlined from '@vicons/antd/SearchOutlined';
 import { ListAllSSHServers, SaveSSHServer, DeleteSSHServer, TestSSHServer, SelectPrivateKeyFile } from '../../bindings/ally-dev/internal/app/app';
@@ -324,18 +324,11 @@ async function loadServers() {
   }
 }
 
+// 页面由父级 v-if 卸载式挂载：mount 时 show 已为 true，列表加载只走
+// onMounted，无需再监听 show。
 onMounted(() => {
   loadServers();
 });
-
-watch(
-  () => props.show,
-  (active) => {
-    if (active) {
-      loadServers();
-    }
-  }
-);
 
 defineExpose({
   loadServers,

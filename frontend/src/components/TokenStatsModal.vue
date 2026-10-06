@@ -176,15 +176,17 @@ async function load() {
   }
 }
 
-// The page stays mounted (parent v-show): stats persist across mode
+// v-if unmounts the page on mode switch (memory); stats reload on each entry
 // switches, and every entry triggers an in-place refresh (the generation
-// guard discards stale responses). No clearing on hide — that would blank
-// the page the user just left.
+// guard discards stale responses). Each entry reloads (v-if unmount): hide
+// fully unmounts, so there is no hide-state to preserve.
 watch(
   () => props.show,
   (visible) => {
     if (visible) load();
   },
+  // 页面改为 v-if 卸载式挂载：mount 时 show 已为 true，非 immediate 的 watch 不会再触发。
+  { immediate: true },
 );
 
 // ── 统计表：今日 / 近7日 / 本月 ──

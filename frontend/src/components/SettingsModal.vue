@@ -1005,10 +1005,10 @@ function openApiDocs() {
   Browser.OpenURL('https://github.com/Bronya0/ally-agent/blob/main/docs/api.md');
 }
 
-// The panel stays mounted (parent v-show) so in-page state — active tab,
-// scroll position, unsaved draft edits — survives switching sider modes.
-// The draft is synced once on first open, afterwards unsaved edits persist
-// until the user hits 保存.
+// v-if unmounts the panel on mode switch (memory): unsaved draft edits do
+// NOT survive a mode switch (configDraft itself lives in App.vue and does).
+// The draft is synced once per mount (draftSynced), afterwards unsaved edits
+// persist until the user hits 保存.
 let draftSynced = false;
 
 // The settings pages never edit the workspace — it is a pass-through of the
@@ -1041,7 +1041,8 @@ watch(() => props.visible, (visible) => {
   loadApiState();
   if (draft.proxyMode === 'system') detectProxy();
   refreshAutostart();
-});
+  // 页面改为 v-if 卸载式挂载：mount 时 visible 已为 true，非 immediate 的 watch 不会再触发。
+}, { immediate: true });
 </script>
 
 <style scoped>

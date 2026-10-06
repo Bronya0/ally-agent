@@ -849,10 +849,10 @@ function syncDraftFromProps() {
   alignActiveProviderTab(defaultProviderPreference());
 }
 
-// The page stays mounted (parent v-show): re-sync the draft from the parent
-// config each time the page becomes visible so external changes (settings
-// saves, tab-snapshot effort syncs) are picked up; models edits themselves
-// always save immediately, so nothing unsaved is lost.
+// v-if unmounts the page on mode switch (memory): re-sync the draft from the
+// parent config on each mount so external changes (settings saves,
+// tab-snapshot effort syncs) are picked up; models edits themselves always
+// save immediately, so nothing unsaved is lost.
 watch(
   () => props.show,
   (visible) => {

@@ -378,13 +378,15 @@ async function saveSkill() {
   }
 }
 
-// The page stays mounted (parent v-show): the list persists across mode
-// switches and every entry triggers an in-place refresh.
+// v-if unmounts the page on mode switch (memory): state reloads on each entry
+// via the immediate show watch.
 watch(
   () => props.show,
   (visible) => {
     if (visible) refreshSkillState();
   },
+  // 页面改为 v-if 卸载式挂载：mount 时 show 已为 true，非 immediate 的 watch 不会再触发。
+  { immediate: true },
 );
 </script>
 

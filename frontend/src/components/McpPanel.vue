@@ -632,8 +632,8 @@ function transportLabel(transport) {
 }
 
 // Live MCP connection status: statuses pushed by the backend land in the same
-// list the form rows merge from. The page stays mounted (parent v-show), so
-// the subscription simply lives for the component lifetime.
+// list the form rows merge from. The subscription lives for the component
+// lifetime; with v-if pages it is active only while the page is mounted.
 let mcpStatusOff = null;
 onMounted(() => {
   mcpStatusOff = Events.On('mcp:status', (event) => {
@@ -648,13 +648,15 @@ onUnmounted(() => {
   }
 });
 
-// The page stays mounted (parent v-show): the server list persists across
-// mode switches and every entry triggers an in-place refresh.
+// v-if unmounts the page on mode switch (memory): list reloads on each entry
+// via the immediate show watch; unsaved server-editor drafts do not survive.
 watch(
   () => props.show,
   (visible) => {
     if (visible) loadMcpConfig();
   },
+  // 页面改为 v-if 卸载式挂载：mount 时 show 已为 true，非 immediate 的 watch 不会再触发。
+  { immediate: true },
 );
 </script>
 
