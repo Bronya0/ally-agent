@@ -242,7 +242,7 @@ Public License v3. See the LICENSE file for details.
         <div class="context-breakdown-footer">
           <button
             type="button"
-            class="context-compact-btn"
+            class="context-compact-btn context-compact-btn-primary"
             :disabled="running"
             :title="running ? $t('app.compact.wait') : $t('composer.context.compact')"
             @click.stop="onCompactClick"

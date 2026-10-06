@@ -3413,6 +3413,25 @@ code, pre {
   cursor: not-allowed;
 }
 
+/* 上下文气泡里的“压缩上下文”是主操作，用 accent 实底突出（与 Naive primary
+   按钮同一组变量，浅深主题都可读）；其余按钮保持幽灵样式。 */
+.context-compact-btn.context-compact-btn-primary {
+  background: var(--ally-accent);
+  border-color: transparent;
+  color: var(--ally-accent-ink);
+  font-weight: 600;
+}
+
+.context-compact-btn.context-compact-btn-primary:hover:not(:disabled) {
+  background: var(--ally-accent-strong);
+  border-color: transparent;
+  color: var(--ally-accent-ink);
+}
+
+.context-compact-btn.context-compact-btn-primary:disabled {
+  opacity: 0.45;
+}
+
 /* ── Model menu popover ── */
 
 .model-menu .model-menu-search {

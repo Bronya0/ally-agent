@@ -133,7 +133,7 @@ Public License v3. See the LICENSE file for details.
 </template>
 
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, provide, reactive, ref, toRaw } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, provide, reactive, ref, toRaw, watch } from 'vue';
 import { t } from '../i18n.mjs';
 import { copyText } from '../utils/clipboard.mjs';
 import { toolCardRenderSignature } from '../utils/toolCardSignature.mjs';
@@ -437,16 +437,22 @@ function scrollViewportToBottom(viewport) {
   scrollbarRef.value?.scrollTo({ top: BOTTOM_SENTINEL });
   if (viewport) viewport.scrollTop = BOTTOM_SENTINEL;
 }
-// autoFollow 只由"真实用户意图"驱动，绝不根据滚动位置来关闭。程序化滚动
-// （流式增长、大 diff 跨帧展开、alignToLastToolCard 停在卡头、resize 补滚）
-// 触发的 scroll 事件与用户滚动无法区分，所以裸 scroll 事件永远不会关掉跟随；
-// 只有 wheel / touch / 键盘 / 拖动滚动条这类真实手势才暂停跟随。暂停后一旦
-// 用户停止操作（空闲）就自动恢复贴底——自愈兜底，任何原因都不会永久卡死。
+// ── 跟随状态（autoFollow）只有这三条改写路径，别处一律动不了它 ──
+//   ① 用户手势向上离开底部 → 关闭，且是粘性的：一次手势就关掉，之后一直关着；
+//   ② 用户自己滚回底部 / 点「回到底部」/ 新一轮开始 → 恢复；
+//   ③ 会话切换的 restoreToBottom → 恢复。
+// 「离底 ≤96px」只服务 ② 的恢复判定，绝不用于重新打开 ① 刚关掉的跟随：
+// 向上滚一格 ≈100px，减去消息区底部 18px 留白后离底只剩 ~82px，仍在 96px 判定带内，
+// 按位置判会当场把跟随重新打开；紧接着任何一次内容高度变化（收尾整篇重渲染、
+// mermaid 异步落位、content-visibility 占位换成实测高度）就把人拽回底部——表现
+// 就是「慢滚永远滚不上去，只有滚得特别快才行」。贴底回拽自己产生的 scroll 事件
+// 也落在手势窗口内，按位置判同样会自锁。
+// 因此这里没有「空闲自动恢复」：那个 8s 定时器是第四条恢复路径，会在用户读历史
+// 读到一半时把人再拽走一次。
 let userIntentUntil = 0;        // 手势窗口：该时间戳前的 scroll 事件视为用户驱动
-let idleResumeTimer = 0;
+let lastScrollTop = 0;          // 上次 scroll 事件的位置，用来判这一下是往上还是往下
 let restoreRequestId = 0;
 const userIntentWindow = 250;   // 手势后 250ms 内的 scroll 事件按用户处理
-const idleResumeDelay = 8000;   // 停止操作 8s 后自动恢复自动滚动
 // Track pending animation frames so unmounting a closed workspace Tab cannot
 // leave callbacks targeting a disposed scrollbar.
 const pendingRafs = new Set();
@@ -462,6 +468,9 @@ function scheduleRaf(fn) {
 let viewportResizeObserver = null;
 let contentResizeObserver = null;
 let userIntentTarget = null;
+// 拖动滚动条 thumb 期间为真：拖动通常远长于 250ms 手势窗口，窗口过期后最后那几帧
+// 滚动事件会被当成程序化滚动，慢拖就又会自锁，所以拖住期间一直算用户驱动。
+let railDragging = false;
 
 // 贴底的"立即"版本：ResizeObserver 回调跑在 rAF 之后、绘制之前，这里写进去的
 // 滚动位置就是这一帧画出来的位置。scrollToBottom() 是刻意延后两帧的（rAF 套
@@ -508,51 +517,55 @@ function ensureContentResizeObserver() {
   contentResizeObserver.observe(root);
 }
 
-// A run is active while any message is still streaming. Once the run ends the
-// user may scroll up to read freely — nothing should yank them back to the
-// bottom. All auto-resume / auto-follow behavior is gated on this.
-const isRunActive = computed(() => Array.isArray(props.messages) && props.messages.some((m) => m?.streaming));
-
-// 记录一次真实用户手势，并重置空闲恢复计时器。计时器只被用户手势刷新，
-// 程序化滚动不参与，因此不会被流式期间的自动滚动污染。
+// 记录一次真实用户手势：只有手势后 250ms 内的 scroll 事件才可能改写跟随状态，
+// 且只用于「滚回底部」的恢复判定。程序化滚动不经过这里，所以永远改不了跟随。
 function markUserIntent() {
   restoreRequestId += 1;
   userIntentUntil = Date.now() + userIntentWindow;
-  armIdleResume();
 }
 
-function armIdleResume() {
-  // 对话已结束时不再安排"空闲自动贴底"：用户从上往下看不该被拉回底部。
-  if (!isRunActive.value) {
-    clearIdleResume();
-    return;
-  }
-  if (idleResumeTimer) clearTimeout(idleResumeTimer);
-  idleResumeTimer = window.setTimeout(() => {
-    idleResumeTimer = 0;
-    if (!isRunActive.value) return;
-    autoFollow.value = true;
-    showJumpToBottom.value = false;
-    scrollToBottom({ force: true });
-  }, idleResumeDelay);
+// 「用户要离开底部」的唯一写入口：一次向上手势即关闭跟随，之后保持关闭，直到
+// 用户自己滚回底部、点「回到底部」，或新一轮开始（见文件顶部的三条路径）。
+function leaveBottom() {
+  autoFollow.value = false;
+  followMode = 'bottom';
+  showJumpToBottom.value = true;
 }
 
-function clearIdleResume() {
-  if (idleResumeTimer) {
-    clearTimeout(idleResumeTimer);
-    idleResumeTimer = 0;
-  }
-}
+const UP_KEYS = new Set(['PageUp', 'ArrowUp', 'Home']);
+const DOWN_KEYS = new Set(['PageDown', 'ArrowDown', 'End', ' ']);
 
 function onUserKey(e) {
-  if (['PageUp', 'PageDown', 'ArrowUp', 'ArrowDown', 'Home', 'End', ' '].includes(e.key)) {
+  // Shift+Space 是向上翻页，与 PageUp / ArrowUp / Home 同类。
+  if (UP_KEYS.has(e.key) || (e.key === ' ' && e.shiftKey)) {
     markUserIntent();
+    leaveBottom();
+    return;
   }
+  if (DOWN_KEYS.has(e.key)) markUserIntent();
 }
 
-// 拖动 naive-ui 滚动条 rail/thumb 不触发 wheel/touch，这里单独识别。
+function onUserWheel(e) {
+  markUserIntent();
+  // 向上滚 = 用户明确要离开底部：立即关跟随，不等 scroll 事件的位置判定。
+  if (e.deltaY < 0) leaveBottom();
+}
+
+// 拖动 naive-ui 滚动条 rail/thumb 不触发 wheel/touch，这里单独识别：按下即开手势
+// 窗口，并在整个拖动期间保持开启，松手后再补一个窗口收尾。
 function onShellPointerDown(e) {
-  if (e.target?.closest?.('.n-scrollbar-rail')) markUserIntent();
+  if (!e.target?.closest?.('.n-scrollbar-rail')) return;
+  railDragging = true;
+  markUserIntent();
+  window.addEventListener('pointerup', onRailDragEnd, true);
+  window.addEventListener('pointercancel', onRailDragEnd, true);
+}
+
+function onRailDragEnd() {
+  railDragging = false;
+  window.removeEventListener('pointerup', onRailDragEnd, true);
+  window.removeEventListener('pointercancel', onRailDragEnd, true);
+  markUserIntent();
 }
 
 onMounted(() => {
@@ -560,7 +573,7 @@ onMounted(() => {
   ensureContentResizeObserver();
   const viewport = getScrollViewport();
   if (viewport) {
-    viewport.addEventListener('wheel', markUserIntent, { passive: true });
+    viewport.addEventListener('wheel', onUserWheel, { passive: true });
     viewport.addEventListener('touchmove', markUserIntent, { passive: true });
     viewport.addEventListener('keydown', onUserKey);
     const shell = viewport.closest('.messages-scroll-shell') || viewport.parentElement;
@@ -577,9 +590,9 @@ onBeforeUnmount(() => {
   if (scrollRaf) cancelAnimationFrame(scrollRaf);
   for (const id of pendingRafs) cancelAnimationFrame(id);
   pendingRafs.clear();
-  clearIdleResume();
+  if (railDragging) onRailDragEnd();
   if (userIntentTarget) {
-    userIntentTarget.viewport?.removeEventListener('wheel', markUserIntent);
+    userIntentTarget.viewport?.removeEventListener('wheel', onUserWheel);
     userIntentTarget.viewport?.removeEventListener('touchmove', markUserIntent);
     userIntentTarget.viewport?.removeEventListener('keydown', onUserKey);
     userIntentTarget.shell?.removeEventListener('pointerdown', onShellPointerDown, true);
@@ -595,10 +608,9 @@ function getScrollViewport() {
 
 // 贴底判定必须用实测位置，不能用 scrollHeight 算术：.messages .message 挂了
 // content-visibility: auto，离屏消息只占 contain-intrinsic-size 的占位高度，
-// scrollHeight 因此小于真实内容高度，算出来的“离底距离”永远偏小——用户往上滚
-// 到底了仍被判成贴底，autoFollow 一直为真，滚动的每一帧都被内容尺寸变化触发的
-// pinToBottomNow 拽回底部（表现就是“滚不动”）。底部锚点是真实渲染的最后一个
-// 盒子，它与视口底的实际距离不受占位影响。
+// scrollHeight 因此小于真实内容高度，算出来的“离底距离”永远偏小——用户明明已经
+// 滚回中部，却会被判成“还在底部”而恢复跟随，随后每一帧内容尺寸变化都把人拽回
+// 底部。底部锚点是真实渲染的最后一个盒子，它与视口底的实际距离不受占位影响。
 function isNearBottom() {
   const viewport = getScrollViewport();
   if (!viewport) return true;
@@ -612,18 +624,26 @@ function isNearBottom() {
 }
 
 function handleScroll() {
-  // 只在处于用户手势窗口内时才根据位置重算跟随状态；窗口之外的 scroll 事件
-  // 一律视为程序化滚动，完全不改变 autoFollow，从原理上杜绝"程序滚动误关
-  // 自动跟随"这类中断。
-  if (Date.now() > userIntentUntil) return;
-  const nearBottom = isNearBottom();
-  autoFollow.value = nearBottom;
-  showJumpToBottom.value = !nearBottom;
-  if (nearBottom) {
-    // 用户自己滚回底部：跟随目标回到贴底（可能刚从工具卡卡头模式出来）
+  const viewport = getScrollViewport();
+  if (!viewport) return;
+  const top = viewport.scrollTop;
+  const movedUp = top < lastScrollTop;
+  lastScrollTop = top;
+  // 手势窗口之外的 scroll 事件一律视为程序化滚动，完全不改变跟随状态
+  // （流式增长、贴底回拽、resize 补滚都落在这里）；拖动滚动条期间例外，
+  // 见 railDragging。
+  if (!railDragging && Date.now() > userIntentUntil) return;
+  // 往上走 = 用户要离开底部：拖动滚动条、触屏拖动、键盘翻页都靠这条兜底。
+  if (movedUp) {
+    leaveBottom();
+    return;
+  }
+  // 只有「用户自己往下滚、并且已经回到贴底位置」才恢复跟随：位置判据仅此一处使用。
+  if (!autoFollow.value && isNearBottom()) {
+    autoFollow.value = true;
     followMode = 'bottom';
-    clearIdleResume();
-  } else armIdleResume();
+    showJumpToBottom.value = false;
+  }
 }
 
 function scrollToBottom(options = {}) {
@@ -691,7 +711,6 @@ function jumpToBottom() {
   autoFollow.value = true;
   followMode = 'bottom';
   showJumpToBottom.value = false;
-  clearIdleResume();
   scrollToBottom({ force: true });
 }
 
@@ -701,7 +720,6 @@ async function restoreToBottom() {
   autoFollow.value = true;
   followMode = 'bottom';
   showJumpToBottom.value = false;
-  clearIdleResume();
   const requestId = ++restoreRequestId;
   await nextTick();
   const apply = () => {
@@ -717,6 +735,17 @@ async function restoreToBottom() {
     scheduleRaf(apply);
   });
 }
+
+// 新一轮开始即恢复贴底：这是「粘性离开」之外唯一的自动恢复路径（用户自己滚回
+// 底部、点「回到底部」、会话切换是另外几条）。inFlightRunId 只在 run:start 落位、
+// 同一轮内不变，所以整轮只触发一次；用户正在读历史时不会被后续步骤反复拽走。
+watch(() => props.inFlightRunId, (runId) => {
+  if (!runId) return;
+  autoFollow.value = true;
+  followMode = 'bottom';
+  showJumpToBottom.value = false;
+  scrollToBottom({ force: true });
+});
 
 // 供父级在 tool:result 等一次性大内容（如大 diff）注入后调用：
 // 先按当前跟随状态滚到底；若一帧后 diff 仍在展开（content-visibility
@@ -753,7 +782,12 @@ function scrollToUserQuestion(direction) {
 
   // 瞬时跳转：这里刻意不做平滑滚动——连点时两次平滑会相互打断，长距离平滑
   // 滚动也很慢，观感像“页面在飘”。下方按钮（jumpToBottom）本来就不传 behavior。
-  target?.scrollIntoView({ block: 'start', behavior: 'auto' });
+  // 自己跳到某条提问 = 主动离开底部，先关跟随，否则下一次内容高度变化会立刻
+  // 把人拽回底部；跳完若恰好落在贴底位置，handleScroll 的位置判据会自行恢复。
+  // 没有可跳目标时什么也不做，别白关一次跟随。
+  if (!target) return;
+  leaveBottom();
+  target.scrollIntoView({ block: 'start', behavior: 'auto' });
 }
 
 
