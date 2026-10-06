@@ -448,7 +448,7 @@ Public License v3. See the LICENSE file for details.
             :allowed-ssh-servers="allowedSSHServersForActiveWorkspace"
             :allowed-ssh-servers-ready="allowedSSHServersReadyForActiveWorkspace"
             @close="sshAuthModalVisible = false"
-            @toggle-ssh-server="toggleSSHServerForActiveWorkspace"
+            @commit="commitSSHAllowedServers"
             @open-manager="openSSHClusterManager"
           />
           <RenderBoundary :label="$t('app.gitChanges')"><GitDiffModal v-model:show="gitDiffVisible" :initial-repo="selectedGitRepo" :git-status="gitStatus" :workspace="activeRunWorkspace" /></RenderBoundary>
@@ -3478,36 +3478,27 @@ async function loadAllowedSSHServersForWorkspace(ws) {
   }
 }
 
-const sshTogglingLock = new Set();
-
-async function toggleSSHServerForActiveWorkspace(alias) {
+// 授权保存收口在模态框关闭时一次提交：勾选期间组件只改内存草稿，不逐次调
+// SetWorkspaceAllowedServers（每次调用都会触发后端 ssh:clusters-changed 广播，
+// 前端整份重拉集群列表，几百行的列表在勾选过程中反复重渲染）。
+async function commitSSHAllowedServers(aliases) {
   const ws = activeRunWorkspace.value;
-  if (!ws || !alias) return;
+  if (!ws) return;
   // 授权列表未知时不得提交：SetWorkspaceAllowedServers 是整份替换，拿空列表
   // 当基准就会把该工作区其它已授权节点一起撤掉。
   if (!allowedSSHServersReadyForActiveWorkspace.value) {
     message.warning(t('sshCluster.notLoaded'));
     return;
   }
-  const target = String(alias).toLowerCase().trim();
-  const lockKey = `${ws}::${target}`;
-  if (sshTogglingLock.has(lockKey)) return;
-  sshTogglingLock.add(lockKey);
-
   const current = allowedSSHServersForActiveWorkspace.value;
-  let updated;
-  if (current.map((s) => s.toLowerCase().trim()).includes(target)) {
-    updated = current.filter((s) => s.toLowerCase().trim() !== target);
-  } else {
-    updated = [...current, target];
-  }
-  // 乐观更新：点击即刻反馈选中态，无感知等待后端磁盘落盘延迟
+  const next = (Array.isArray(aliases) ? aliases : []).map((s) => String(s).toLowerCase().trim());
+  // 乐观更新本地图：信息栏的 SSH 计数立刻反映关闭模态框那一刻的状态
   allowedSSHServersMap.value = {
     ...allowedSSHServersMap.value,
-    [ws]: updated,
+    [ws]: next,
   };
   try {
-    await SetWorkspaceAllowedServers(ws, updated);
+    await SetWorkspaceAllowedServers(ws, next);
     message.success(t('sshCluster.allowedUpdated'));
   } catch (err) {
     // 失败时回滚
@@ -3516,8 +3507,6 @@ async function toggleSSHServerForActiveWorkspace(alias) {
       [ws]: current,
     };
     message.error(err?.message || 'Update allowed servers failed');
-  } finally {
-    sshTogglingLock.delete(lockKey);
   }
 }
 

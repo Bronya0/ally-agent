@@ -17,10 +17,13 @@ Public License v3. See the LICENSE file for details.
     :title="$t('sshCluster.panel.title')"
     :style="{ width: 'min(760px, calc(100vw - 48px))' }"
     :mask-closable="false"
-    @update:show="(value) => !value && $emit('close')"
+    @update:show="(value) => { if (!value) commitOnClose(); $emit('close'); }"
+    @after-leave="onAfterLeave"
   >
     <template #header-extra>
-      <n-button size="small" secondary @click="$emit('open-manager')">
+      <!-- 跳转管理页前先提交草稿：App 侧关模态框是外部改 show，不会走
+           update:show 的关闭路径，不在这里补提交，勾选就被静默丢了。 -->
+      <n-button size="small" secondary @click="() => { commitOnClose(); $emit('open-manager'); }">
         {{ $t('sshCluster.panel.manage') }}
       </n-button>
     </template>
@@ -30,15 +33,20 @@ Public License v3. See the LICENSE file for details.
         <span class="ssh-auth-hint">{{ $t('sshCluster.panel.hint') }}</span>
         <span v-if="!allowedSshServersReady" class="ssh-auth-hint ssh-auth-loading">{{ $t('sshCluster.loading') }}</span>
       </div>
-      <n-input
-        v-model:value="searchQuery"
-        size="small"
-        clearable
-        :placeholder="$t('common.searchPlaceholder')"
-        class="ssh-auth-search"
-      >
-        <template #prefix><SearchOutlined class="ssh-auth-search-icon" /></template>
-      </n-input>
+      <div class="ssh-auth-toolbar">
+        <n-input
+          v-model:value="searchQuery"
+          size="small"
+          clearable
+          :placeholder="$t('common.searchPlaceholder')"
+          class="ssh-auth-search"
+        >
+          <template #prefix><SearchOutlined class="ssh-auth-search-icon" /></template>
+        </n-input>
+        <n-checkbox v-model:checked="onlyAllowed" size="small" class="ssh-auth-only-allowed">
+          {{ $t('sshCluster.panel.onlyAllowed') }}
+        </n-checkbox>
+      </div>
 
       <div v-if="sshServers.length === 0" class="ssh-auth-empty">
         {{ $t('sshCluster.panel.empty') }}
@@ -90,7 +98,7 @@ Public License v3. See the LICENSE file for details.
 </template>
 
 <script setup>
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import SearchOutlined from '@vicons/antd/SearchOutlined';
 
 const props = defineProps({
@@ -102,14 +110,81 @@ const props = defineProps({
   allowedSshServersReady: { type: Boolean, default: false },
 });
 
-const emit = defineEmits(['close', 'toggle-ssh-server', 'open-manager']);
+const emit = defineEmits(['close', 'commit', 'open-manager']);
 
 const searchQuery = ref('');
+// 只看已授权：过滤开关，不动列表顺序。
+const onlyAllowed = ref(false);
+
+// ── 草稿机制：勾选期间只改内存里的 Set，绝不逐次落盘 ──
+// 每次勾选都调 SetWorkspaceAllowedServers 会触发后端 ssh:clusters-changed
+// 广播 → 前端整份重拉集群列表 → 上百行的列表在勾选期间不停重渲染，行为
+// 不可预测。现在打开模态框时把授权快照进 draft，勾选/取消只改 draft；
+// 关闭模态框时一次性 emit('commit')，由父级整份保存一份。
+const draftAllowed = ref(new Set());
+const draftReady = ref(false);
+// 首次打开时的排序快照：仅打开那一刻的授权状态参与排序。
+const openOrderSnapshot = ref(null);
+
+function normAlias(alias) {
+  return String(alias || '').toLowerCase().trim();
+}
+
+watch(
+  () => props.show,
+  (visible) => {
+    if (visible) {
+      draftAllowed.value = new Set(
+        (Array.isArray(props.allowedSshServers) ? props.allowedSshServers : []).map(normAlias),
+      );
+      draftReady.value = props.allowedSshServersReady;
+      // 打开瞬间的授权快照只用来排一次序（已授权的置顶，组内保持原顺序）。
+      // 之后勾选/取消不再参与排序，行不会动；重开模态框才会重新快照。
+      openOrderSnapshot.value = new Set(draftAllowed.value);
+    }
+  },
+  { immediate: true },
+);
+
+// 授权列表比模态框后到：用户在 ready=false 时（勾选全禁用）就打开了模态框，
+// 后端读到后如果不在原地补快照，勾选会一直禁用、置顶排序也不生效，只能关掉重开。
+watch(
+  () => props.allowedSshServersReady,
+  (ready) => {
+    if (props.show && ready && !draftReady.value) {
+      draftAllowed.value = new Set(
+        (Array.isArray(props.allowedSshServers) ? props.allowedSshServers : []).map(normAlias),
+      );
+      openOrderSnapshot.value = new Set(draftAllowed.value);
+      draftReady.value = true;
+    }
+  },
+);
+
+const sortedServers = computed(() => {
+  const snapshot = openOrderSnapshot.value;
+  if (!snapshot) return filteredServers.value;
+  return filteredServers.value
+    .map((s, i) => ({
+      s,
+      i,
+      atOpen: snapshot.has(normAlias(s.alias)),
+    }))
+    .sort((a, b) => {
+      if (a.atOpen !== b.atOpen) return a.atOpen ? -1 : 1;
+      return a.i - b.i;
+    })
+    .map(({ s }) => s);
+});
 
 const filteredServers = computed(() => {
   const q = searchQuery.value.trim().toLowerCase();
-  if (!q) return props.sshServers;
-  return props.sshServers.filter((s) => {
+  let list = props.sshServers;
+  if (onlyAllowed.value) {
+    list = list.filter((s) => draftAllowed.value.has(normAlias(s.alias)));
+  }
+  if (!q) return list;
+  return list.filter((s) => {
     return (
       (s.alias && s.alias.toLowerCase().includes(q)) ||
       (s.host && s.host.toLowerCase().includes(q)) ||
@@ -119,48 +194,47 @@ const filteredServers = computed(() => {
   });
 });
 
-// One Set per allowedSshServers change: the checkbox list calls isServerAllowed
-// for every row on every render (and on every search keystroke), so the per-call
-// map()/includes() walk made the list O(rows × servers).
-const allowedSshAliasSet = computed(() => new Set(
-  (Array.isArray(props.allowedSshServers) ? props.allowedSshServers : []).map((s) => String(s || '').toLowerCase().trim()),
-));
-
-// 已授权的排在顶部，且最近勾选的排最前（用户勾完立刻能在表头看到自己刚点的那台）。
-// recentAllowed 记录本次会话内勾选的先后（最近在前）；之前就授权过、本次没动过的
-// 节点没有“勾选时间”，按原始顺序排在已授权组的后面。取消勾选即移出记录。
-const recentAllowed = ref([]);
-
-const sortedServers = computed(() => {
-  const allowed = allowedSshAliasSet.value;
-  return filteredServers.value
-    .map((s, i) => {
-      const key = String(s.alias || '').toLowerCase().trim();
-      const isAllowed = allowed.has(key);
-      const hit = recentAllowed.value.indexOf(key);
-      const rank = isAllowed ? (hit >= 0 ? hit : recentAllowed.value.length + i) : 0;
-      return { s, i, isAllowed, rank };
-    })
-    .sort((a, b) => {
-      if (a.isAllowed !== b.isAllowed) return a.isAllowed ? -1 : 1;
-      return a.isAllowed ? a.rank - b.rank : a.i - b.i;
-    })
-    .map(({ s }) => s);
-});
-
 function isServerAllowed(alias) {
-  return allowedSshAliasSet.value.has(String(alias || '').toLowerCase().trim());
+  return draftAllowed.value.has(normAlias(alias));
 }
 
 function toggleServer(alias) {
-  if (!props.allowedSshServersReady) return;
-  const key = String(alias).toLowerCase().trim();
-  if (allowedSshAliasSet.value.has(key)) {
-    recentAllowed.value = recentAllowed.value.filter((a) => a !== key);
+  if (!draftReady.value) return;
+  const key = normAlias(alias);
+  const next = new Set(draftAllowed.value);
+  if (next.has(key)) {
+    next.delete(key);
   } else {
-    recentAllowed.value = [key, ...recentAllowed.value];
+    next.add(key);
   }
-  emit('toggle-ssh-server', alias);
+  draftAllowed.value = next;
+}
+
+// 关闭时先记账，等淡出动画结束（after-leave）再真正 emit 提交：提交会触发
+// 后端广播 + 前端整份重拉集群列表（301 行重渲染），落在淡出动画的半秒里
+// 就是用户看到的“关框瞬间列表闪一下”。
+let commitPending = false;
+
+function commitOnClose() {
+  if (draftReady.value) {
+    commitPending = true;
+  }
+}
+
+function onAfterLeave() {
+  if (!commitPending) return;
+  commitPending = false;
+  // 脏检查：草稿和打开时完全一致就不提交——避免每次关框都触发一次完整落盘
+  // （后端重写文件 + 广播 + 前端重拉）和一条多余的“已更新”提示。
+  const snapshot = openOrderSnapshot.value;
+  if (snapshot && snapshot.size === draftAllowed.value.size) {
+    let same = true;
+    for (const key of snapshot) {
+      if (!draftAllowed.value.has(key)) { same = false; break; }
+    }
+    if (same) return;
+  }
+  emit('commit', [...draftAllowed.value]);
 }
 
 function endpointOf(server) {
@@ -193,13 +267,25 @@ function endpointOf(server) {
   color: var(--ally-warning);
 }
 
-.ssh-auth-search {
-  width: 240px;
+.ssh-auth-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
-.ssh-auth-search .ssh-auth-search-icon {
+.ssh-auth-search {
+  flex: 1;
+  max-width: 280px;
+}
+
+.ssh-auth-toolbar .ssh-auth-search-icon {
   color: var(--ally-text-muted);
   font-size: 12px;
+}
+
+.ssh-auth-only-allowed {
+  flex: none;
+  white-space: nowrap;
 }
 
 .ssh-auth-empty {
@@ -253,6 +339,10 @@ function endpointOf(server) {
   color: var(--ally-text-body);
   cursor: pointer;
   transition: background 0.15s, border-color 0.15s;
+  /* 几百个测试节点时离屏行跳过渲染（铁律：先限长、再跳过）。行高固定可估：
+     padding 9*2 + 12px 单行文本 ≈ 38px；行仍在 DOM，查找/Tab/勾选态不受影响。 */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 38px;
 }
 
 .ssh-auth-row:hover {
