@@ -61,6 +61,8 @@ const SwordsIcon = () => h('svg', {
 const props = defineProps({
   mode: { type: String, default: 'chat' },
   kbRunning: { type: Boolean, default: false },
+  // 高级设置里的隐藏页面名单（mode key 小写）：命中即不在菜单渲染。
+  hiddenModes: { type: Array, default: () => [] },
 });
 const emit = defineEmits(['switch']);
 
@@ -69,6 +71,10 @@ const renderIcon = (icon, dot = false) => () => h('div', { class: 'mode-sider-ic
   dot ? h('span', { class: 'mode-sider-running-dot', 'aria-label': t('header.running') }) : null,
 ]);
 
+const hiddenSet = computed(() => new Set((props.hiddenModes || []).map((key) => String(key || '').trim().toLowerCase())));
+
+// chat/settings 永不隐藏：后端清洗与 assignConfig 都不会产出它们，这里再加一道
+// 最后一道闸——万一名单里混进来，Agent 与设置入口也不能被藏掉。
 const modeOptions = computed(() => [
   { label: t('app.mode.chat'), key: 'chat', icon: renderIcon(SlackOutlined) },
   { label: t('app.mode.kb'), key: 'kb', icon: renderIcon(BookOutlined, props.kbRunning) },
@@ -79,7 +85,7 @@ const modeOptions = computed(() => [
   { label: t('header.tokenStats'), key: 'stats', icon: renderIcon(BarChartOutlined) },
   { label: t('header.games'), key: 'games', icon: renderIcon(SwordsIcon) },
   { label: t('header.settings'), key: 'settings', icon: renderIcon(SettingOutlined) },
-]);
+].filter((item) => item.key === 'chat' || item.key === 'settings' || !hiddenSet.value.has(item.key)));
 
 function onSelect(key) {
   emit('switch', key);

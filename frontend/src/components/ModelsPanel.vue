@@ -279,7 +279,7 @@ import { computed, reactive, ref, watch } from 'vue';
 import { useMessage } from 'naive-ui';
 import { reasoningEffortLabel, t } from '../i18n.mjs';
 import { buildModelConfigExport, mergeModelConfigs, modelConfigIdentity, normalizeApiFormat, normalizeApiKeysArray, normalizeCustomHeaders, normalizeReasoningEffort, parseModelConfigImport, reasoningEffortLevels } from '../utils/modelConfigIO.mjs';
-import { placeholderModel } from '../utils/config.mjs';
+import { normalizeDraftHiddenModes, placeholderModel } from '../utils/config.mjs';
 import { saveTextFile } from '../utils/download.mjs';
 import CloseOutlined from '@vicons/antd/CloseOutlined';
 import PlusOutlined from '@vicons/antd/PlusOutlined';
@@ -836,6 +836,8 @@ function cloneConfigDraft(source) {
     apiKeys: normalizeModelApiKeys(model?.apiKeys || (model?.apiKey ? [model.apiKey] : [])),
   })) : [];
   next.apiKeys = normalizeModelApiKeys(next.apiKeys || (next.apiKey ? [next.apiKey] : []));
+  // 与 SettingsModal 的草稿拷贝共用同一处归一（见 utils/config.mjs）。
+  normalizeDraftHiddenModes(next);
   return next;
 }
 

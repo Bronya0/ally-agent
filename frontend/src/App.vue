@@ -35,7 +35,7 @@ Public License v3. See the LICENSE file for details.
 
             <!-- Main area: mode rail + (chat workbench | KB guidance card) -->
             <div class="main-area" @pointerdown.capture="clearActiveExplorerTreeSelection">
-              <ModeSider :mode="mode" :kb-running="kbSessionRunning" @switch="switchMode" />
+              <ModeSider :mode="mode" :kb-running="kbSessionRunning" :hidden-modes="config.hiddenModes" @switch="switchMode" />
               <n-layout v-show="!kbEmptyActive && !settingsActive && !statsActive && !gamesActive && !skillsActive && !mcpActive && !modelsActive && !sshActive" class="chat-layout" :content-style="chatLayoutContentStyle">
                 <n-tabs
                   class="workspace-content-tabs"
@@ -650,7 +650,7 @@ import ChatMessages from './components/ChatMessages.vue';
 import TaskCenterPanel from './components/TaskCenterPanel.vue';
 import TokenStatsModal from './components/TokenStatsModal.vue';
 import GamePanel from './games/GamePanel.vue';
-import { assignConfig, defaultConfig, placeholderModel } from './utils/config.mjs';
+import { assignConfig, defaultConfig, normalizeHiddenModes, placeholderModel } from './utils/config.mjs';
 import { useSakuraBreeze } from './composables/sakuraBreeze.mjs';
 import { burstDigitalWave } from './composables/digitalWave.mjs';
 
@@ -2332,7 +2332,7 @@ async function addTempWorkspaceTab() {
     return;
   }
   if (!dir) return;
-  mode.value = 'chat';
+  enterChat();
   const tab = createWorkspaceTab(dir, { temp: true });
   tab.kind = 'temp';
   tab.label = t('temp.tabLabel');
@@ -2422,6 +2422,19 @@ const sshActive = computed(() => mode.value === 'ssh');
 const overlayModes = new Set(['settings', 'stats', 'games', 'skills', 'mcp', 'models', 'ssh']);
 function isOverlayMode(value) {
   return overlayModes.has(value);
+}
+
+// 页面显隐（设置 → 高级 → 页面显隐）：hiddenModes 命中的页面不在菜单渲染。
+// chat/settings 永不隐藏（前后端清洗共用同一组键，见 utils/config.mjs）。
+function isModeHidden(key) {
+  return normalizeHiddenModes(config.hiddenModes).includes(String(key || '').trim().toLowerCase());
+}
+
+// 进入 chat 工作台的唯一入口：switchMode 拦得住程序化跳转，但拦不住对
+// mode.value 的直接赋值——header 切 Tab、新建 Tab、Ctrl+T、临时 Tab 都是后者。
+// chat 永不隐藏，所以这里不需要回跳兜底，入口收口在这一处。
+function enterChat() {
+  mode.value = 'chat';
 }
 
 function closeSettings() {
@@ -2562,8 +2575,32 @@ function ensureKbTab() {
   return tab;
 }
 
+// 回到聊天工作台：切到聊天页并聚焦一个聊天 Tab；一个都不剩时按已保存的工作区
+// 静默重建（不弹选择框，免得取消后把界面留在知识库 Tab 上）。
+// switchMode 的聊天分支与关闭 Tab 后的兜底共用这一处，免得两条路径各写一遍。
+async function focusChatWorkspace() {
+  mode.value = 'chat';
+  const chatTabs = workspaceTabs.value.filter((tab) => !isKbTab(tab));
+  const target = chatTabs.find((tab) => tab.id === lastChatWorkspaceId.value)
+    || chatTabs[chatTabs.length - 1];
+  if (target) {
+    if (activeWorkspaceId.value !== target.id) await switchWorkspaceTab(target.id);
+    return;
+  }
+  const tab = createWorkspaceTab(config.workspace || '');
+  workspaceTabs.value.push(tab);
+  await switchWorkspaceTab(tab.id);
+}
+
 async function switchMode(next) {
   if (next === mode.value) return;
+  // 被隐藏的页面不可进入：菜单已不再渲染，这里拦住程序化跳转（含关闭后的
+  // 回跳），回落到可见页面，避免停在一个无入口的页面上。
+  if (next !== 'chat' && next !== 'settings' && isModeHidden(next)) {
+    // chat 永不隐藏，恒为回落页。
+    next = 'chat';
+    if (next === mode.value) return;
+  }
   if (isOverlayMode(next)) {
     if (!isOverlayMode(mode.value)) {
       preOverlayMode.value = mode.value;
@@ -2584,20 +2621,7 @@ async function switchMode(next) {
     refreshKbIndexState();
     return;
   }
-  mode.value = 'chat';
-  const chatTabs = workspaceTabs.value.filter((tab) => !isKbTab(tab));
-  const target = chatTabs.find((tab) => tab.id === lastChatWorkspaceId.value)
-    || chatTabs[chatTabs.length - 1];
-  if (target) {
-    if (activeWorkspaceId.value !== target.id) await switchWorkspaceTab(target.id);
-    return;
-  }
-  // No chat tab remains: rebuild one from the persisted chat workspace
-  // without a dialog, so a cancelled dialog cannot strand chat mode on the
-  // KB tab.
-  const tab = createWorkspaceTab(config.workspace || '');
-  workspaceTabs.value.push(tab);
-  await switchWorkspaceTab(tab.id);
+  await focusChatWorkspace();
 }
 
 const kbPicking = ref(false);
@@ -2625,12 +2649,12 @@ async function pickKbRootFromEmptyState() {
 // Header interactions (tab click / new tab / workspace history) are
 // chat-only by construction, so they always hand control back to chat mode.
 function onHeaderSwitchWorkspace(id) {
-  mode.value = 'chat';
+  enterChat();
   switchWorkspaceTab(id);
 }
 
 function onHeaderAddWorkspace() {
-  mode.value = 'chat';
+  enterChat();
   addWorkspaceTab();
 }
 
@@ -2639,7 +2663,7 @@ function onHeaderAddTempWorkspace() {
 }
 
 function onHeaderHistorySelect(key) {
-  mode.value = 'chat';
+  enterChat();
   onHistorySelect(key);
 }
 
@@ -4060,8 +4084,15 @@ async function closeWorkspaceTab(id) {
     const fallback = remaining.find((tab) => !isKbTab(tab))
       || remaining[Math.min(idx, remaining.length - 1)];
     if (fallback) {
-      if (isKbTab(fallback)) mode.value = 'kb';
-      switchWorkspaceTab(fallback.id);
+      // 只剩知识库 Tab 时本来会切到知识库页，但该页面被隐藏后菜单里没有入口：
+      // 改为回到聊天工作台（没有聊天 Tab 就静默重建一个），别把用户留在一个
+      // 自己关掉了入口的页面上。
+      if (isKbTab(fallback) && isModeHidden('kb')) {
+        await focusChatWorkspace();
+      } else {
+        if (isKbTab(fallback)) mode.value = 'kb';
+        switchWorkspaceTab(fallback.id);
+      }
     }
   }
 }
@@ -6107,6 +6138,8 @@ async function onSettingsSave(draftData, silent = false) {
   resyncTabModelsFromPresets();
   adoptPristineTabModels();
   applyFontSizes(config);
+  // 注意：这里不做“当前页被隐藏就跳走”——保存动作只可能发生在设置页内
+  // （mode恒为settings），回跳由关闭设置时的 switchMode 隐藏拦截兜底。
   try {
     await queueConfigSave({ ...configDraft });
     syncConfigToActiveTab();
@@ -8866,7 +8899,7 @@ function handleGlobalKeydown(event) {
     const tab = createWorkspaceTab(basePath || '');
     workspaceTabs.value.push(tab);
     switchWorkspaceTab(tab.id);
-    mode.value = 'chat';
+    enterChat();
     return;
   }
   if (event.key.toLowerCase() === 'n') {

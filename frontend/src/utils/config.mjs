@@ -17,6 +17,45 @@ export const COMPACT_THRESHOLD_DEFAULT = 0.6;
 export const COMPACT_THRESHOLD_MIN = 0.2;
 export const COMPACT_THRESHOLD_MAX = 0.95;
 
+// 可关闭的页面键：Agent（chat）与设置（settings）永不隐藏。与后端
+// sanitizeHiddenModes 同一组键，两边漂移会导致“界面关了、后端又放回来”。
+export const HIDEABLE_MODES = ['kb', 'skills', 'mcp', 'models', 'ssh', 'stats', 'games'];
+
+// 可关闭页面的显示名（i18n 键）：设置页的开关列表由 HIDEABLE_MODES 派生，键集合
+// 必须与它完全一致——漏一个键就少一个开关（点了没反应），多一个键是死配置。
+// config.test.mjs 钉住两边集合相等。
+export const PAGE_VISIBILITY_LABELS = {
+  kb: 'app.mode.kb',
+  skills: 'app.mode.skills',
+  mcp: 'app.mode.mcp',
+  models: 'app.mode.models',
+  ssh: 'app.mode.sshCluster',
+  stats: 'header.tokenStats',
+  games: 'header.games',
+};
+
+export function normalizeHiddenModes(modes) {
+  if (!Array.isArray(modes)) return [];
+  const out = [];
+  const seen = new Set();
+  for (const item of modes) {
+    const key = String(item || '').trim().toLowerCase();
+    if (!key || seen.has(key) || !HIDEABLE_MODES.includes(key)) continue;
+    seen.add(key);
+    out.push(key);
+  }
+  return out;
+}
+
+// cloneConfigDraft 归一 hiddenModes：SettingsModal 与 ModelsPanel 共用这一处，
+// 免得两份草稿拷贝漂移（只留可关闭的页面键，chat/settings 永不隐藏）。
+export function normalizeDraftHiddenModes(draft) {
+  if (draft && typeof draft === 'object') {
+    draft.hiddenModes = normalizeHiddenModes(draft.hiddenModes);
+  }
+  return draft;
+}
+
 // defaultConfig 只描述持久化配置里**非模型**的部分：模型一律是 models[] 里的预设，
 // 界面在用的那个只存一个身份（lastUsedModel），其余模型字段由后端按身份展开
 // （见 internal/app ConfigState 与 expandLastUsedModel）。界面上"一条模型都没
@@ -35,6 +74,9 @@ export function defaultConfig() {
     proxyNoProxy: '',
     userAgent: '',
     disabledSkills: [],
+    // 左侧模式栏的隐藏页面名单（mode key 小写）：知识库（kb）与设置（settings）
+    // 永不隐藏，后端 sanitizeHiddenModes 同一组键。空数组 = 全部可见。
+    hiddenModes: [],
     models: [],
     // 最近使用模型身份（{providerName, model}，指向 models[] 里的一条）：新 Tab 的
     // 模型种子，也是后端给 HTTP API 会话与计划任务展开模型的依据。
@@ -139,6 +181,9 @@ export function assignConfig(target, source) {
   next.auxFontSize = Number(next.auxFontSize) > 0
     ? Math.min(20, Math.max(10, Number(next.auxFontSize)))
     : 12;
+  // hiddenModes：只留可关闭的页面键（chat/settings 永不隐藏，未知键丢弃），与后端
+  // sanitizeHiddenModes 同一组键；非数组输入回到全部可见。
+  next.hiddenModes = normalizeHiddenModes(next.hiddenModes);
   if (!Array.isArray(next.skippedUpdates)) next.skippedUpdates = [];
   delete target.systemPrompt;
   Object.assign(target, next);

@@ -336,6 +336,22 @@ Public License v3. See the LICENSE file for details.
               <div v-if="item.hint" class="settings-opt-hint">{{ item.hint }}</div>
             </div>
           </div>
+          <div class="config-section-header page-visibility-header">
+            <div>
+              <div class="config-section-title">{{ $t('settings.pageVisibilityTitle') }}</div>
+              <div class="config-section-subtitle">{{ $t('settings.pageVisibilitySubtitle') }}</div>
+            </div>
+          </div>
+          <div class="settings-opt-list">
+            <div v-for="item in pageVisibilitySettings" :key="item.key" class="settings-opt-row">
+              <div class="settings-opt-main">
+                <span class="settings-opt-name">{{ item.label }}</span>
+                <div class="settings-opt-side">
+                  <n-switch :value="!isModeHidden(item.key)" size="small" @update:value="(visible) => setModeVisible(item.key, visible)" />
+                </div>
+              </div>
+            </div>
+          </div>
         </section>
 
         <!-- Network -->
@@ -471,6 +487,7 @@ import { createDiscreteApi, darkTheme } from 'naive-ui';
 import { naiveDateLocale, naiveLocale, t } from '../i18n.mjs';
 import { getStoredMode, THEMES } from '../utils/theme.mjs';
 import { normalizeApiKeysArray } from '../utils/modelConfigIO.mjs';
+import { HIDEABLE_MODES, PAGE_VISIBILITY_LABELS, normalizeDraftHiddenModes, normalizeHiddenModes } from '../utils/config.mjs';
 import { toggleableToolNames } from '../utils/builtinTools.mjs';
 import { Browser } from '@wailsio/runtime';
 import {
@@ -671,6 +688,31 @@ const validationSettings = computed(() => [
   { key: 'autoValidationJson', label: t('settings.validationJson'), hint: t('settings.validationJsonHint') },
 ]);
 
+// 页面显隐：键集合直接取自 HIDEABLE_MODES（与 ModeSider、后端 hideableModes 同一组，
+// chat/settings 永不隐藏），label 走同一份 i18n 键——不在这里重抄一份键，免得加页面时
+// 菜单有、开关没有。开关直接改 draft.hiddenModes，经下方通用 watcher 即改即存
+// （App.vue 收到 save 后落盘并实时隐藏菜单）。
+const pageVisibilitySettings = computed(() => HIDEABLE_MODES.map((key) => ({
+  key,
+  label: t(PAGE_VISIBILITY_LABELS[key]),
+})));
+
+function hiddenModesList() {
+  return normalizeHiddenModes(draft.hiddenModes);
+}
+
+function isModeHidden(key) {
+  return hiddenModesList().includes(String(key || '').trim().toLowerCase());
+}
+
+function setModeVisible(key, visible) {
+  const normalized = String(key || '').trim().toLowerCase();
+  if (!HIDEABLE_MODES.includes(normalized)) return;
+  const next = hiddenModesList().filter((item) => item !== normalized);
+  if (!visible) next.push(normalized);
+  draft.hiddenModes = next;
+}
+
 // Background image picker state. Selecting/clearing persists immediately on
 // the backend (the file write cannot be deferred to Save), so these actions
 // also emit background-changed to let App.vue refresh the data URL live.
@@ -821,6 +863,7 @@ watch([
   () => draft.kbRoot,
   ...validationSettingKeys.map((key) => () => draft[key]),
   () => draft.disabledTools,
+  () => draft.hiddenModes,
 ], () => {
   if (!props.visible) return;
   emit('save', { ...draft }, true);
@@ -856,6 +899,10 @@ function cloneConfigDraft(source) {
   next.disabledTools = Array.isArray(next.disabledTools)
     ? next.disabledTools.map((name) => String(name || '').trim().toLowerCase()).filter((name) => toggleableToolNames.includes(name))
     : [];
+  // 隐藏页面名单：只留可关闭的页面键（chat/settings 永不隐藏），与后端
+  // sanitizeHiddenModes 同一组键。共用 normalizeDraftHiddenModes，免得与
+  // ModelsPanel 的草稿拷贝漂移。
+  normalizeDraftHiddenModes(next);
   return next;
 }
 
@@ -1222,6 +1269,11 @@ watch(() => props.visible, (visible) => {
   font-size: 12px;
   color: var(--ally-text-muted);
   margin-top: 2px;
+}
+
+/* 页面显隐分组与上方校验组拉开距离。 */
+.page-visibility-header {
+  margin-top: 18px;
 }
 
 .settings-toggle-row {

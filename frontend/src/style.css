@@ -3413,23 +3413,14 @@ code, pre {
   cursor: not-allowed;
 }
 
-/* 上下文气泡里的“压缩上下文”是主操作，用 accent 实底突出（与 Naive primary
-   按钮同一组变量，浅深主题都可读）；其余按钮保持幽灵样式。 */
+/* 上下文气泡里的“压缩上下文”是主操作：边框/底色与其它幽灵按钮一致，
+   只有文字用主题色（与资源树旁的 explorer 激活态同变量，浅深主题都可读）。 */
 .context-compact-btn.context-compact-btn-primary {
-  background: var(--ally-accent);
-  border-color: transparent;
-  color: var(--ally-accent-ink);
-  font-weight: 600;
+  color: var(--ally-accent-bright);
 }
 
 .context-compact-btn.context-compact-btn-primary:hover:not(:disabled) {
-  background: var(--ally-accent-strong);
-  border-color: transparent;
-  color: var(--ally-accent-ink);
-}
-
-.context-compact-btn.context-compact-btn-primary:disabled {
-  opacity: 0.45;
+  color: var(--ally-accent-bright);
 }
 
 /* ── Model menu popover ── */

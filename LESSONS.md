@@ -174,3 +174,4 @@
 [text-status-parity] 2026-10-05 中危 中继只在文案里转述状态码时，关键词表须覆盖 typed 分支认得的每个码：漏 400 就归 unknown，盲重试重发整份上下文。@prov_model.go
 [mcp-no-call-replay] 2026-10-05 高危 MCP 调用失败后重连不得重放那次调用：请求可能已发出并被执行过，重放＝副作用做两遍；只有调用前连接就是死的才可继续。@biz_mcp.go
 [sticky-leave-bottom] 2026-10-06 中危 贴底跟随的“离开底部”必须粘性：位置判据(96px 小于一格滚轮 100px)会把刚关的跟随当场重开，慢滚滚不动。@ChatMessages.vue
+[config-field-reset] 2026-10-07 中危 给 defaultConfig 加字段前须确认每个保存入口送整份配置：部分草稿会被 {...defaults,...source} 静默重置。@utils/config.mjs

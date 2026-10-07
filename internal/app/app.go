@@ -560,7 +560,14 @@ type ConfigState struct {
 	// read/edit/create/delete/command core is protected: the Settings UI
 	// offers no switch and the filter/sanitizers refuse those names.
 	DisabledTools []string `json:"disabledTools,omitempty"`
-	LLMRetries    int      `json:"llmRetries,omitempty"`
+	// HiddenModes lists mode-rail pages the user hid in Settings →
+	// Advanced → Page visibility. Values are mode keys (kb, skills, mcp,
+	// models, ssh, stats, games); chat and settings are never hidden — the
+	// sanitizer drops them. The frontend filters the sider menu and bounces
+	// an open page that gets hidden back to a visible one; no other
+	// behavior keys off this list.
+	HiddenModes []string `json:"hiddenModes,omitempty"`
+	LLMRetries  int      `json:"llmRetries,omitempty"`
 	// AutoValidation* are nil for legacy configs (treated as disabled).
 	// Post-write checks only run for languages the user explicitly enabled
 	// in Settings.

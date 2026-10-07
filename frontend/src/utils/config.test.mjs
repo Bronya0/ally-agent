@@ -10,7 +10,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
-import { COMPACT_THRESHOLD_DEFAULT, COMPACT_THRESHOLD_MAX, COMPACT_THRESHOLD_MIN, assignConfig, defaultConfig, placeholderModel } from './config.mjs';
+import { COMPACT_THRESHOLD_DEFAULT, COMPACT_THRESHOLD_MAX, COMPACT_THRESHOLD_MIN, HIDEABLE_MODES, PAGE_VISIBILITY_LABELS, assignConfig, defaultConfig, normalizeHiddenModes, placeholderModel } from './config.mjs';
 
 // 顶层不再有任何模型字段：模型只有 models[] 预设 + lastUsedModel 身份（其余字段
 // 由后端按身份展开）。这条不变式是整个重构的地基，钉住它。
@@ -82,6 +82,25 @@ test('assignConfig keeps the apiKeys pool on model entries', () => {
   assert.deepEqual(draft.models[0].apiKeys, ['k1', 'k2']);
   draft.models[0].apiKeys.push('k3');
   assert.deepEqual(config.models[0].apiKeys, ['k1', 'k2']);
+});
+
+// 可关闭页面键前后端必须是同一组：后端 hideableModes 切片与前端
+// HIDEABLE_MODES 漂移会导致“界面关了、后端又放回来”（或反之）。切片按字面量
+// 钉住顺序——map 块的旧正则到第一个 } 就停，块里加注释即误匹配。
+test('可关闭页面键与后端一致', () => {
+  const bizSource = readFileSync(new URL('../../../internal/app/biz_config.go', import.meta.url), 'utf8');
+  const body = /var hideableModes = \[\]string\{([^}]*)\}/.exec(bizSource);
+  assert.ok(body, 'Go 侧找不到 hideableModes 切片');
+  const goKeys = [...body[1].matchAll(/"([a-z]+)"/g)].map((match) => match[1]);
+  assert.deepEqual([...HIDEABLE_MODES], goKeys);
+  // assignConfig 归一：大小写/空白归一，chat、settings 与未知键丢弃。
+  const draft = defaultConfig();
+  assignConfig(draft, { hiddenModes: [' Skills ', 'Chat', 'KB', 'settings', 'bogus', 'skills'] });
+  assert.deepEqual(draft.hiddenModes, ['skills', 'kb']);
+  assert.deepEqual(normalizeHiddenModes('not-an-array'), []);
+  // 设置页的开关列表由 HIDEABLE_MODES 派生，label 映射必须覆盖全部键：少一个键就少
+  // 一个开关（点了没反应），多一个键则是没人用的死配置。
+  assert.deepEqual(Object.keys(PAGE_VISIBILITY_LABELS).sort(), [...HIDEABLE_MODES].sort());
 });
 
 // 前后端的压缩阈值必须是同一组数（后端 defaultCompactThreshold / clampCompactThreshold）。
