@@ -367,6 +367,14 @@ func TestAnthropicToolsSchemaTypeObject(t *testing.T) {
 		if typ, _ := schema["type"].(string); typ != "object" {
 			t.Fatalf("tool[%d] input_schema.type = %q, want object", i, typ)
 		}
+		// The Messages API refuses a top-level oneOf / anyOf / allOf outright, and
+		// the 400 it answers with fails the whole request: one such declaration
+		// makes every tool of the session unusable.
+		for _, keyword := range []string{"oneOf", "anyOf", "allOf"} {
+			if variants, ok := schema[keyword]; ok {
+				t.Fatalf("tool[%d] input_schema.%s = %#v, want the top level flattened", i, keyword, variants)
+			}
+		}
 	}
 }
 

@@ -26,6 +26,7 @@ package schemautil
 
 import (
 	"encoding/json"
+	"sort"
 	"strings"
 )
 
@@ -70,6 +71,157 @@ func StringSlice(value any) []string {
 	default:
 		return nil
 	}
+}
+
+// topLevelComposites are the composition keywords the Anthropic Messages API
+// refuses on a tool's input_schema root: a declaration that states its shape that
+// way fails the whole request with 400 "tools.N.custom.input_schema: input_schema
+// does not support oneOf, allOf, or anyOf at the top level", which leaves every
+// tool of that session unusable. Only the top level is refused — a composite
+// nested inside a property is accepted.
+var topLevelComposites = []string{"oneOf", "anyOf", "allOf"}
+
+// FlattenTopLevelComposites rewrites a schema whose root states its shape as a
+// set of branches into a plain object schema and drops the branches: each
+// branch's properties are merged into the root (a declaration already on the root
+// wins, because a branch states a narrowing that only holds inside that branch),
+// and `required` keeps what every alternative demands (oneOf/anyOf) or what any
+// conjunct demands (allOf). A branch carrying neither properties nor required — a
+// `not` guard, a scalar alternative — contributes nothing.
+//
+// Anthropic's Messages API needs this (see topLevelComposites); the Chat and
+// Responses wire formats accept the composite forms as they are, so the repair
+// lives at that one boundary instead of on the declarations themselves, which the
+// argument gate still validates untouched. The result only ever *weakens* the
+// root — it accepts a superset of what the root stated — so it can never refuse
+// an argument the runtime accepts.
+//
+// The schema it is given is not mutated: the root, its properties and its
+// required list are rebuilt, while the nested schemas are shared because they are
+// only read.
+func FlattenTopLevelComposites(schema map[string]any) map[string]any {
+	if schema == nil {
+		return nil
+	}
+	var alternatives [][]any
+	for _, key := range []string{"oneOf", "anyOf"} {
+		if branches, ok := schema[key].([]any); ok {
+			alternatives = append(alternatives, branches)
+		}
+	}
+	var conjuncts []any
+	if branches, ok := schema["allOf"].([]any); ok {
+		conjuncts = branches
+	}
+	if len(alternatives) == 0 && len(conjuncts) == 0 {
+		return schema
+	}
+
+	properties := map[string]any{}
+	if declared, ok := schema["properties"].(map[string]any); ok {
+		for name, property := range declared {
+			properties[name] = property
+		}
+	}
+	// The root's own list keeps its order: `required` serializes as an array, so
+	// its bytes must not depend on map iteration — the tool declarations sit in
+	// every request prefix, which providers cache by exact bytes.
+	required := map[string]bool{}
+	ordered := make([]string, 0, 8)
+	for _, name := range StringSlice(schema["required"]) {
+		if required[name] {
+			continue
+		}
+		required[name] = true
+		ordered = append(ordered, name)
+	}
+	add := func(names []string) {
+		for _, name := range names {
+			if required[name] {
+				continue
+			}
+			required[name] = true
+			ordered = append(ordered, name)
+		}
+	}
+
+	for _, branches := range alternatives {
+		var shared map[string]bool
+		for index, branch := range branches {
+			branchMap, _ := branch.(map[string]any)
+			mergeBranchProperties(properties, branchMap)
+			names := branchRequiredNames(branchMap)
+			if index == 0 {
+				shared = names
+				continue
+			}
+			for name := range shared {
+				if !names[name] {
+					delete(shared, name)
+				}
+			}
+		}
+		add(sortedNames(shared))
+	}
+	for _, branch := range conjuncts {
+		branchMap, _ := branch.(map[string]any)
+		mergeBranchProperties(properties, branchMap)
+		add(sortedNames(branchRequiredNames(branchMap)))
+	}
+
+	out := make(map[string]any, len(schema)+1)
+	for key, value := range schema {
+		out[key] = value
+	}
+	for _, key := range topLevelComposites {
+		delete(out, key)
+	}
+	if len(properties) > 0 {
+		out["properties"] = properties
+	}
+	if len(ordered) > 0 {
+		out["required"] = ordered
+	}
+	return out
+}
+
+// mergeBranchProperties adds the properties one composite branch declares to the
+// flattened root. A name the root — or an earlier branch — already declares is
+// kept as it is: a branch property narrows the same field inside that branch
+// only, and carrying the narrowing over would apply it to the alternatives it
+// does not belong to.
+func mergeBranchProperties(target map[string]any, branch map[string]any) {
+	declared, ok := branch["properties"].(map[string]any)
+	if !ok {
+		return
+	}
+	for name, property := range declared {
+		if _, exists := target[name]; exists {
+			continue
+		}
+		target[name] = property
+	}
+}
+
+// branchRequiredNames reads one branch's `required` list as a set. A branch that
+// is not an object schema (or carries no `required`) demands nothing.
+func branchRequiredNames(branch map[string]any) map[string]bool {
+	out := map[string]bool{}
+	for _, name := range StringSlice(branch["required"]) {
+		out[name] = true
+	}
+	return out
+}
+
+// sortedNames gives a name set a deterministic order, because the names it
+// carries are appended to a serialized array (see FlattenTopLevelComposites).
+func sortedNames(names map[string]bool) []string {
+	out := make([]string, 0, len(names))
+	for name := range names {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func cloneMap(m map[string]any) map[string]any {

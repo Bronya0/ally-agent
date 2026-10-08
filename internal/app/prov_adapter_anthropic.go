@@ -1042,6 +1042,12 @@ func convertToolsToAnthropic(tools []legacyopenai.Tool) []anthropic.ToolUnionPar
 }
 
 func anthropicInputSchema(schema map[string]any) anthropic.ToolInputSchemaParam {
+	// The Messages API refuses a tool whose input_schema states its shape with a
+	// top-level oneOf / anyOf / allOf, and the 400 it answers with ("input_schema
+	// does not support oneOf, allOf, or anyOf at the top level") fails the whole
+	// request, not just that tool. The declarations keep those forms for the other
+	// wire formats; the gate still validates against them.
+	schema = schemautil.FlattenTopLevelComposites(schema)
 	result := anthropic.ToolInputSchemaParam{
 		// The Messages API requires input_schema.type = "object". The SDK field
 		// would otherwise serialize empty, which gateways reject with 400

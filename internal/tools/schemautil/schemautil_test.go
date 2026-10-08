@@ -8,7 +8,10 @@
 
 package schemautil
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
 func TestDerefInlinesLocalRefs(t *testing.T) {
 	schema := map[string]any{
@@ -276,5 +279,120 @@ func TestStringSliceCoerces(t *testing.T) {
 	}
 	if got := StringSlice(nil); got != nil {
 		t.Fatalf("StringSlice(nil) = %v, want nil", got)
+	}
+}
+
+// TestFlattenTopLevelCompositesMergesBranches pins the repair the Anthropic
+// Messages adapter runs on every tool declaration: the Messages API refuses a
+// tool whose input_schema root states its shape with oneOf / anyOf / allOf
+// ("tools.N.custom.input_schema: input_schema does not support oneOf, allOf, or
+// anyOf at the top level") and rejects the entire request over it. Dropping the
+// branches would lose what only they declare, so their properties are merged in.
+func TestFlattenTopLevelCompositesMergesBranches(t *testing.T) {
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"action": map[string]any{"type": "string", "enum": []any{"start", "stop"}},
+			"nested": map[string]any{
+				"type": "array",
+				"items": map[string]any{
+					"type":  "object",
+					"oneOf": []any{map[string]any{"required": []any{"id"}}},
+				},
+			},
+		},
+		"required": []string{"action"},
+		"oneOf": []any{
+			map[string]any{
+				"properties": map[string]any{
+					"action":  map[string]any{"const": "start"},
+					"command": map[string]any{"type": "string"},
+				},
+				"required": []any{"command"},
+			},
+			map[string]any{
+				"properties": map[string]any{"id": map[string]any{"type": "string"}},
+				"required":   []any{"id"},
+			},
+		},
+	}
+
+	flat := FlattenTopLevelComposites(schema)
+
+	for _, key := range topLevelComposites {
+		if variants, ok := flat[key]; ok {
+			t.Fatalf("the root must not state its shape with %s: %#v", key, variants)
+		}
+	}
+	// Neither alternative demands `action`, so it stays the root's own requirement
+	// alone: a requirement only one alternative imposes is conditional.
+	if got, ok := flat["required"].([]string); !ok || !reflect.DeepEqual(got, []string{"action"}) {
+		t.Fatalf("required = %#v, want only the root's own list", flat["required"])
+	}
+	properties, ok := flat["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("properties have type %T, want an object", flat["properties"])
+	}
+	if got := properties["action"].(map[string]any)["enum"]; got == nil {
+		t.Fatalf("the root's declaration must win over a branch narrowing, got %#v", properties["action"])
+	}
+	for _, name := range []string{"command", "id"} {
+		if _, ok := properties[name]; !ok {
+			t.Fatalf("a property only a branch declares describes the call and must survive: %#v", properties)
+		}
+	}
+	items := properties["nested"].(map[string]any)["items"].(map[string]any)
+	if _, ok := items["oneOf"]; !ok {
+		t.Fatal("only the root is refused by the API; a nested composite must survive")
+	}
+	if _, ok := schema["oneOf"]; !ok {
+		t.Fatal("the caller's schema must not be repaired in place")
+	}
+	if _, ok := schema["properties"].(map[string]any)["command"]; ok {
+		t.Fatal("the caller's schema must not be repaired in place")
+	}
+}
+
+// TestFlattenTopLevelCompositesKeepsOnlyDemandedRequirements pins the direction of
+// the repair: a requirement survives only where the flattened root really demands
+// it — a name every alternative demands (oneOf/anyOf), or one any conjunct demands
+// (allOf) — because the flattened root must never refuse an argument one of the
+// original alternatives accepted.
+func TestFlattenTopLevelCompositesKeepsOnlyDemandedRequirements(t *testing.T) {
+	flat := FlattenTopLevelComposites(map[string]any{
+		"type": "object",
+		"anyOf": []any{
+			map[string]any{"required": []any{"target", "path"}, "properties": map[string]any{"path": map[string]any{"type": "string"}}},
+			map[string]any{"required": []any{"target"}, "properties": map[string]any{"paths": map[string]any{"type": "array"}}},
+		},
+		"allOf": []any{map[string]any{"required": []any{"recursive"}}},
+	})
+	if got, ok := flat["required"].([]string); !ok || !reflect.DeepEqual(got, []string{"target", "recursive"}) {
+		t.Fatalf("required = %#v, want the alternatives' shared name plus the conjunct's, in a stable order", flat["required"])
+	}
+	properties := flat["properties"].(map[string]any)
+	for _, name := range []string{"path", "paths"} {
+		if _, ok := properties[name]; !ok {
+			t.Fatalf("each alternative's own property must survive: %#v", properties)
+		}
+	}
+
+	// A scalar alternative demands no field of the object, so nothing is shared any
+	// more; it carries no properties to merge either.
+	scalar := FlattenTopLevelComposites(map[string]any{
+		"type":  "object",
+		"oneOf": []any{map[string]any{"required": []any{"a"}}, map[string]any{"type": "string"}},
+	})
+	if _, ok := scalar["required"]; ok {
+		t.Fatalf("required = %#v, want none: a scalar alternative demands no field", scalar["required"])
+	}
+
+	// A schema that states its shape plainly is left alone.
+	plain := map[string]any{"type": "object", "properties": map[string]any{"a": map[string]any{"type": "string"}}}
+	if kept := FlattenTopLevelComposites(plain); len(kept) != len(plain) {
+		t.Fatalf("a plain schema must pass through untouched, got %#v", kept)
+	}
+	if FlattenTopLevelComposites(nil) != nil {
+		t.Fatal("a nil schema stays nil")
 	}
 }
