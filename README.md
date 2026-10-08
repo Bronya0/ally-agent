@@ -73,6 +73,10 @@ Ally is free software licensed under the [GNU General Public License v3.0 only](
 
 Release packages include [ripgrep](https://github.com/BurntSushi/ripgrep) under its own MIT/Unlicense terms. Other third-party resources retain their respective licenses; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
+## Contact
+
+Questions, bug reports, or feedback: [tangssst@qq.com](mailto:tangssst@qq.com)
+
 ## Reference projects
 
 Ally picked up a few implementation details from these projects and engineering articles — credits to their authors. Each follows its own license, and Ally is not affiliated with any of them.

@@ -73,6 +73,10 @@ Ally 是采用 [GNU General Public License v3.0 only](LICENSE)（`GPL-3.0-only`�
 
 发行包包含采用自身 MIT/Unlicense 条款的 [ripgrep](https://github.com/BurntSushi/ripgrep)。其他第三方资源保留各自的许可证，详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
+## 联系方式
+
+问题反馈、建议或合作请联系：[tangssst@qq.com](mailto:tangssst@qq.com)
+
 ## 参考项目
 
 Ally 在部分实现细节上参考了下列项目与工程文章的做法，在此致谢。各项目遵循其自身许可证，Ally 与它们没有隶属关系。
