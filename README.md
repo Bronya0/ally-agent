@@ -75,8 +75,11 @@ Release packages include [ripgrep](https://github.com/BurntSushi/ripgrep) under 
 
 ## Reference projects
 
-Ally picked up a few implementation details from these open-source projects — credits to their authors. Each follows its own license, and Ally is not affiliated with any of them.
+Ally picked up a few implementation details from these projects and engineering articles — credits to their authors. Each follows its own license, and Ally is not affiliated with any of them.
 
+- [Anthropic — Building Effective Agents](https://www.anthropic.com/engineering/building-effective-agents)
+- [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)
+- [Anthropic — Managed Agents](https://www.anthropic.com/engineering/managed-agents)
 - [Kimi Code CLI (kimicode)](https://github.com/MoonshotAI/kimi-code) — light-theme palette, image token estimation, interruption reminders
 - [Codex CLI](https://github.com/openai/codex) — Responses session cache key and usage field handling
 - [pi](https://github.com/earendil-works/pi) — fuzzy edit matching, context estimation, reasoning capability checks, overflow-recovery compaction
