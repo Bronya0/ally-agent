@@ -385,7 +385,7 @@ func TestDetectWriteBatchConflictsBetweenSeparateMutationCalls(t *testing.T) {
 	// order still executes.
 	calls = append(calls, openai.ToolCall{Function: openai.FunctionCall{
 		Name:      "delete",
-		Arguments: `{"path":"sample.txt"}`,
+		Arguments: `{"paths":["sample.txt"]}`,
 	}})
 	conflicts := detectWriteBatchConflicts(cfg, calls)
 	if len(conflicts) != 1 {
@@ -427,7 +427,7 @@ func TestDetectWriteBatchConflictsNormalizesSamePath(t *testing.T) {
 	cfg := ConfigState{Workspace: t.TempDir()}
 	calls := []openai.ToolCall{
 		{Function: openai.FunctionCall{Name: "edit", Arguments: `{"path":"sample.txt","version":"abc123","changes":[{"oldText":"a","newText":"b"}]}`}},
-		{Function: openai.FunctionCall{Name: "delete", Arguments: `{"path":"./sample.txt"}`}},
+		{Function: openai.FunctionCall{Name: "delete", Arguments: `{"paths":["./sample.txt"]}`}},
 		{Function: openai.FunctionCall{Name: "create", Arguments: `{"path":"other.txt"}`}},
 	}
 	conflicts := detectWriteBatchConflicts(cfg, calls)
@@ -442,6 +442,32 @@ func TestDetectWriteBatchConflictsNormalizesSamePath(t *testing.T) {
 	}
 	if _, exists := conflicts[2]; exists {
 		t.Fatalf("different path should not conflict: %#v", conflicts)
+	}
+}
+
+// TestDetectWriteBatchConflictsSeesSinglePathTools locks the delete paths-only
+// migration boundary: single-file tools carry one `path`, not a `paths` list,
+// so the conflict detector must read that shape too. A detector that only reads
+// `paths` sees these calls as touching nothing and lets both run, with the
+// second mutating on a stale pre-first-call state.
+func TestDetectWriteBatchConflictsSeesSinglePathTools(t *testing.T) {
+	cfg := ConfigState{Workspace: t.TempDir()}
+	calls := []openai.ToolCall{
+		{Function: openai.FunctionCall{Name: "create", Arguments: `{"path":"sample.txt","content":"x"}`}},
+		{Function: openai.FunctionCall{Name: "edit", Arguments: `{"path":"sample.txt","version":"abc123","changes":[{"oldText":"a","newText":"b"}]}`}},
+	}
+	conflicts := detectWriteBatchConflicts(cfg, calls)
+	if len(conflicts) != 1 || toolErrorCode(conflicts[1]) != "E_WRITE_BATCH_CONFLICT" {
+		t.Fatalf("create+edit on one path must skip the later call, got %#v", conflicts)
+	}
+
+	remoteCalls := []openai.ToolCall{
+		{Function: openai.FunctionCall{Name: "remote_edit", Arguments: `{"target":"dev:/w","path":"a.txt","version":"abc123","changes":[{"oldText":"a","newText":"b"}]}`}},
+		{Function: openai.FunctionCall{Name: "remote_edit", Arguments: `{"target":"dev:/w","path":"a.txt","version":"abc123","changes":[{"oldText":"a","newText":"c"}]}`}},
+	}
+	remoteConflicts := detectWriteBatchConflicts(cfg, remoteCalls)
+	if len(remoteConflicts) != 1 || toolErrorCode(remoteConflicts[1]) != "E_WRITE_BATCH_CONFLICT" {
+		t.Fatalf("two remote_edits on one path must skip the later call, got %#v", remoteConflicts)
 	}
 }
 

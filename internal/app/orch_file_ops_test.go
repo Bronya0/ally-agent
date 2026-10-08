@@ -42,11 +42,11 @@ func deleteResultOf(t *testing.T, res toolResult) DeletePathsResult {
 	return typed
 }
 
-// TestResolveDeletePathListFoldsBothSpellings pins the one place that turns the
-// two request spellings into one candidate list. Both delete tools and the Wails
-// API (App.DeletePath) go through it, so a divergence between "one path or
-// several" and "at most N" can only be introduced here.
-func TestResolveDeletePathListFoldsBothSpellings(t *testing.T) {
+// TestResolveDeletePathListTakesPathsOnly pins the one place that turns the local
+// delete's paths into one candidate list. The tool call and the Wails API
+// (App.DeletePath) both go through it, so the "at most N" and blank rules can only
+// diverge here.
+func TestResolveDeletePathListTakesPathsOnly(t *testing.T) {
 	tooMany := make([]string, toolshared.DeletePathListLimit+1)
 	for i := range tooMany {
 		tooMany[i] = fmt.Sprintf("f%d.txt", i)
@@ -54,22 +54,20 @@ func TestResolveDeletePathListFoldsBothSpellings(t *testing.T) {
 
 	for _, tc := range []struct {
 		name        string
-		single      string
 		list        []string
 		want        int
 		wantCode    string
 		wantMention string
 	}{
-		{name: "single path", single: "a.txt", want: 1},
+		{name: "single entry", list: []string{"a.txt"}, want: 1},
 		{name: "path list", list: []string{"a.txt", "b.txt"}, want: 2},
 		{name: "at the limit", list: tooMany[:toolshared.DeletePathListLimit], want: toolshared.DeletePathListLimit},
-		{name: "both spellings", single: "a.txt", list: []string{"b.txt"}, wantCode: "E_BAD_ARGS", wantMention: "not both"},
-		{name: "neither spelling", wantCode: "E_BAD_ARGS", wantMention: "non-empty paths"},
+		{name: "empty list", wantCode: "E_BAD_ARGS", wantMention: "non-empty paths"},
 		{name: "blank entry", list: []string{"a.txt", "  "}, wantCode: "E_BAD_ARGS", wantMention: "blank"},
 		{name: "above the limit", list: tooMany, wantCode: "E_BAD_ARGS", wantMention: fmt.Sprintf("%d", toolshared.DeletePathListLimit)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := resolveDeletePathList(tc.single, tc.list)
+			got, err := resolveDeletePathList(tc.list)
 			if tc.wantCode != "" {
 				if err == nil || toolErrorCode(err) != tc.wantCode || !strings.Contains(err.Error(), tc.wantMention) {
 					t.Fatalf("expected %s mentioning %q, got %v", tc.wantCode, tc.wantMention, err)
@@ -124,12 +122,12 @@ func TestCheckDeletePathListRejectsDuplicateAndNesting(t *testing.T) {
 	}
 }
 
-// TestLocalDeleteToolTakesBothSpellings covers the local tool end to end: one
-// call deletes every listed path, a path it cannot delete refuses the whole call
+// TestLocalDeleteToolTakesPathsOnly covers the local tool end to end: one call
+// deletes every listed path, a path it cannot delete refuses the whole call
 // before anything is removed, a path that does not exist comes back as an absent
 // slot without failing the rest, and the gate holds the model to the declared
-// shape (exactly one of path/paths, at most N entries).
-func TestLocalDeleteToolTakesBothSpellings(t *testing.T) {
+// shape (paths only, at least one, at most N entries).
+func TestLocalDeleteToolTakesPathsOnly(t *testing.T) {
 	dir, cfg := deleteTestWorkspace(t)
 	app := NewApp()
 	ctx := t.Context()
@@ -173,7 +171,7 @@ func TestLocalDeleteToolTakesBothSpellings(t *testing.T) {
 	}
 
 	// Single path, nothing there: ok with one absent slot and no error at all.
-	res = app.executeTool(ctx, cfg, "s-1", "delete", encodedToolArgs(t, DeletePathRequest{Path: "gone.txt"}))
+	res = app.executeTool(ctx, cfg, "s-1", "delete", encodedToolArgs(t, DeletePathRequest{Paths: []string{"gone.txt"}}))
 	if !res.OK {
 		t.Fatalf("deleting a missing path must not error, got %v", res.Error)
 	}
@@ -203,7 +201,7 @@ func TestLocalDeleteToolTakesBothSpellings(t *testing.T) {
 		name string
 		args []byte
 	}{
-		{name: "both spellings", args: encodedToolArgs(t, DeletePathRequest{Path: "a.txt", Paths: []string{"b.txt"}})},
+		{name: "path key", args: []byte(`{"path":"a.txt"}`)},
 		{name: "neither spelling", args: encodedToolArgs(t, map[string]any{"recursive": false})},
 		{name: "above the limit", args: encodedToolArgs(t, DeletePathRequest{Paths: tooMany})},
 	} {
@@ -213,8 +211,8 @@ func TestLocalDeleteToolTakesBothSpellings(t *testing.T) {
 		}
 	}
 
-	// The single spelling keeps working, and its result is a one-slot batch.
-	res = app.executeTool(ctx, cfg, "s-1", "delete", encodedToolArgs(t, DeletePathRequest{Path: "sub/c.txt"}))
+	// A one-entry list keeps working, and its result is a one-slot batch.
+	res = app.executeTool(ctx, cfg, "s-1", "delete", encodedToolArgs(t, DeletePathRequest{Paths: []string{"sub/c.txt"}}))
 	if !res.OK {
 		t.Fatalf("single-path delete must still work, got %v", res.Error)
 	}
@@ -246,10 +244,10 @@ func TestDeletePathsFailureSummaryNamesEveryFailedPath(t *testing.T) {
 	}
 }
 
-// TestRemoteDeleteToolGatesPathAndPaths holds the remote tool to the same
-// declared shape. Only gate-level rejections are exercised: they are decided
-// before the SSH target is resolved, so no server is needed.
-func TestRemoteDeleteToolGatesPathAndPaths(t *testing.T) {
+// TestRemoteDeleteToolTakesPathsOnly holds the remote tool to the same declared
+// shape. Only gate-level rejections are exercised: they are decided before the
+// SSH target is resolved, so no server is needed.
+func TestRemoteDeleteToolTakesPathsOnly(t *testing.T) {
 	app := NewApp()
 	cfg := ConfigState{Workspace: t.TempDir()}
 	ctx := t.Context()
@@ -262,8 +260,8 @@ func TestRemoteDeleteToolGatesPathAndPaths(t *testing.T) {
 		name string
 		args []byte
 	}{
-		{name: "neither spelling", args: encodedToolArgs(t, map[string]any{"target": "dev:/srv/app"})},
-		{name: "both spellings", args: encodedToolArgs(t, RemoteDeletePathRequest{Target: "dev:/srv/app", Path: "a.txt", Paths: []string{"b.txt"}})},
+		{name: "missing paths", args: encodedToolArgs(t, map[string]any{"target": "dev:/srv/app"})},
+		{name: "path key", args: []byte(`{"target":"dev:/srv/app","path":"a.txt"}`)},
 		{name: "above the limit", args: encodedToolArgs(t, RemoteDeletePathRequest{Target: "dev:/srv/app", Paths: tooMany})},
 	} {
 		res := app.executeTool(ctx, cfg, "s-1", "remote_delete_path", tc.args)

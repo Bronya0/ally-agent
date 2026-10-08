@@ -378,6 +378,62 @@ func TestAnthropicToolsSchemaTypeObject(t *testing.T) {
 	}
 }
 
+// TestAnthropicMcpRootCompositeFlattened pins the MCP path: an external tool may
+// state its whole shape in a root oneOf (parameters declared only inside the
+// branches). Every tool goes through the same Anthropic boundary, so the root
+// must reach the wire without the composite keyword and with the branch
+// parameters still named — otherwise the model cannot see what to send, and one
+// root composite fails the whole request with 400.
+func TestAnthropicMcpRootCompositeFlattened(t *testing.T) {
+	tools := convertToolsToAnthropic([]openai.Tool{{
+		Type: openai.ToolTypeFunction,
+		Function: &openai.FunctionDefinition{
+			Name:        "mcp__files__locate",
+			Description: "locate a file or a url",
+			Parameters: map[string]any{
+				"type": "object",
+				"oneOf": []any{
+					map[string]any{"properties": map[string]any{"path": map[string]any{"type": "string"}}, "required": []any{"path"}},
+					map[string]any{"properties": map[string]any{"url": map[string]any{"type": "string"}}, "required": []any{"url"}},
+				},
+			},
+		},
+	}})
+	if len(tools) != 1 {
+		t.Fatalf("convertToolsToAnthropic returned %d tools, want 1", len(tools))
+	}
+	raw, err := json.Marshal(tools)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded []map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	toolObj, ok := decoded[0]["tool"].(map[string]any)
+	if !ok {
+		toolObj = decoded[0]
+	}
+	schema, ok := toolObj["input_schema"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing input_schema in %s", raw)
+	}
+	for _, keyword := range []string{"oneOf", "anyOf", "allOf"} {
+		if _, ok := schema[keyword]; ok {
+			t.Fatalf("root %s reached the Anthropic wire: %s", keyword, raw)
+		}
+	}
+	properties, _ := schema["properties"].(map[string]any)
+	for _, name := range []string{"path", "url"} {
+		if _, ok := properties[name]; !ok {
+			t.Fatalf("branch parameter %q was dropped; the model cannot see it: %s", name, raw)
+		}
+	}
+	if required, _ := schema["required"].([]any); len(required) != 0 {
+		t.Fatalf("required = %v, want none: each branch demands a different field", required)
+	}
+}
+
 // TestOpenAIChatToolsParametersTypeObject verifies the openai chat path keeps a
 // top-level "type":"object" on every tool's parameters, so proxies that
 // convert chat->anthropic do not reject the request the same way.

@@ -69,7 +69,7 @@ func TestToolWritesRefuseVCSMetadata(t *testing.T) {
 		t.Fatalf("edit inside .git must be refused, got ok=%v err=%v", res.OK, res.Error)
 	}
 
-	res = app.executeTool(ctx, cfg, "s-1", "delete", encodedToolArgs(t, DeletePathRequest{Path: ".git", Recursive: true}))
+	res = app.executeTool(ctx, cfg, "s-1", "delete", encodedToolArgs(t, DeletePathRequest{Paths: []string{".git"}, Recursive: true}))
 	if res.OK || !strings.Contains(res.Error, "E_PROTECTED_PATH") {
 		t.Fatalf("delete of .git must be refused, got ok=%v err=%v", res.OK, res.Error)
 	}
@@ -91,7 +91,7 @@ func TestToolWritesRefuseVCSMetadata(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		// Win32 drops trailing dots while filepath.Clean keeps them, so ".git."
 		// named the real directory and slipped past the literal name comparison.
-		res = app.executeTool(ctx, cfg, "s-1", "delete", encodedToolArgs(t, DeletePathRequest{Path: ".git.", Recursive: true}))
+		res = app.executeTool(ctx, cfg, "s-1", "delete", encodedToolArgs(t, DeletePathRequest{Paths: []string{".git."}, Recursive: true}))
 		if res.OK || !strings.Contains(res.Error, "E_PROTECTED_PATH") {
 			t.Fatalf("the trailing-dot alias of .git must be refused, got ok=%v err=%v", res.OK, res.Error)
 		}
@@ -141,7 +141,7 @@ func TestSymlinkedVCSMetadataAliasIsRefused(t *testing.T) {
 		t.Fatalf("create through a symlink alias of .git must be refused, got ok=%v err=%v", res.OK, res.Error)
 	}
 
-	res = app.executeTool(ctx, cfg, "s-1", "delete", encodedToolArgs(t, DeletePathRequest{Path: "gh/hooks", Recursive: true}))
+	res = app.executeTool(ctx, cfg, "s-1", "delete", encodedToolArgs(t, DeletePathRequest{Paths: []string{"gh/hooks"}, Recursive: true}))
 	if res.OK || !strings.Contains(res.Error, "E_PROTECTED_PATH") {
 		t.Fatalf("delete through a symlink alias of .git must be refused, got ok=%v err=%v", res.OK, res.Error)
 	}
@@ -344,7 +344,7 @@ func TestDeleteRefusesAllyDataSubtree(t *testing.T) {
 	app := NewApp()
 	cfg := ConfigState{Workspace: t.TempDir()}
 
-	res := app.executeTool(t.Context(), cfg, "s-1", "delete", encodedToolArgs(t, DeletePathRequest{Path: histories, Recursive: true}))
+	res := app.executeTool(t.Context(), cfg, "s-1", "delete", encodedToolArgs(t, DeletePathRequest{Paths: []string{histories}, Recursive: true}))
 	if res.OK || !strings.Contains(res.Error, "E_DELETE_BLOCKED") {
 		t.Fatalf("recursive delete inside ~/.ally_agent must be refused, got ok=%v err=%v", res.OK, res.Error)
 	}
@@ -352,12 +352,12 @@ func TestDeleteRefusesAllyDataSubtree(t *testing.T) {
 		t.Fatalf("saved history must survive: %v", err)
 	}
 
-	res = app.executeTool(t.Context(), cfg, "s-1", "delete", encodedToolArgs(t, DeletePathRequest{Path: sessionDir, Recursive: true}))
+	res = app.executeTool(t.Context(), cfg, "s-1", "delete", encodedToolArgs(t, DeletePathRequest{Paths: []string{sessionDir}, Recursive: true}))
 	if res.OK || !strings.Contains(res.Error, "E_DELETE_BLOCKED") {
 		t.Fatalf("recursive delete of a history subdir must be refused, got ok=%v err=%v", res.OK, res.Error)
 	}
 
-	res = app.executeTool(t.Context(), cfg, "s-1", "delete", encodedToolArgs(t, DeletePathRequest{Path: note}))
+	res = app.executeTool(t.Context(), cfg, "s-1", "delete", encodedToolArgs(t, DeletePathRequest{Paths: []string{note}}))
 	if !res.OK {
 		t.Fatalf("deleting a single memory note must stay allowed, got err=%v", res.Error)
 	}
@@ -398,7 +398,7 @@ func TestDeleteRefusesAllyDataSubtreeThroughSymlink(t *testing.T) {
 		t.Fatalf("the alias must resolve before the guard is exercised: %v", err)
 	}
 
-	res := app.executeTool(t.Context(), cfg, "s-1", "delete", encodedToolArgs(t, DeletePathRequest{Path: aliased, Recursive: true}))
+	res := app.executeTool(t.Context(), cfg, "s-1", "delete", encodedToolArgs(t, DeletePathRequest{Paths: []string{aliased}, Recursive: true}))
 	if res.OK || !strings.Contains(res.Error, "E_DELETE_BLOCKED") {
 		t.Fatalf("a symlinked path into the data directory must be refused, got ok=%v err=%v", res.OK, res.Error)
 	}
@@ -407,7 +407,7 @@ func TestDeleteRefusesAllyDataSubtreeThroughSymlink(t *testing.T) {
 	}
 
 	// The alias must not be usable to delete the data directory itself either.
-	res = app.executeTool(t.Context(), cfg, "s-1", "delete", encodedToolArgs(t, DeletePathRequest{Path: link, Recursive: true}))
+	res = app.executeTool(t.Context(), cfg, "s-1", "delete", encodedToolArgs(t, DeletePathRequest{Paths: []string{link}, Recursive: true}))
 	if res.OK {
 		t.Fatalf("a symlink resolving to the data directory must be refused, got %+v", res.Data)
 	}

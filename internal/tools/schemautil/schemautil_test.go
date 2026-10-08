@@ -396,3 +396,38 @@ func TestFlattenTopLevelCompositesKeepsOnlyDemandedRequirements(t *testing.T) {
 		t.Fatal("a nil schema stays nil")
 	}
 }
+
+// TestFlattenTopLevelCompositesToleratesOddBranchShapes pins the hostile-generator
+// path: a composite keyword that is not an array must still leave the root
+// without the keyword. A lone object counts as one branch (its properties merge,
+// its requirements count); anything else contributes nothing but is still
+// dropped, because the API refuses the keyword regardless of its shape.
+func TestFlattenTopLevelCompositesToleratesOddBranchShapes(t *testing.T) {
+	lone := FlattenTopLevelComposites(map[string]any{
+		"type":  "object",
+		"oneOf": map[string]any{"properties": map[string]any{"path": map[string]any{"type": "string"}}, "required": []any{"path"}},
+	})
+	for _, key := range topLevelComposites {
+		if _, ok := lone[key]; ok {
+			t.Fatalf("a lone %s branch must still leave the root: %#v", key, lone)
+		}
+	}
+	if _, ok := lone["properties"].(map[string]any)["path"]; !ok {
+		t.Fatalf("a lone branch's property must survive: %#v", lone)
+	}
+	if got, ok := lone["required"].([]string); !ok || !reflect.DeepEqual(got, []string{"path"}) {
+		t.Fatalf("required = %#v, want the lone branch's demand", lone["required"])
+	}
+
+	garbage := FlattenTopLevelComposites(map[string]any{
+		"type":       "object",
+		"properties": map[string]any{"a": map[string]any{"type": "string"}},
+		"oneOf":      "not-a-schema",
+	})
+	if _, ok := garbage["oneOf"]; ok {
+		t.Fatalf("an unreadable oneOf must still be dropped: %#v", garbage)
+	}
+	if _, ok := garbage["properties"].(map[string]any)["a"]; !ok {
+		t.Fatalf("the root's own property must survive: %#v", garbage)
+	}
+}

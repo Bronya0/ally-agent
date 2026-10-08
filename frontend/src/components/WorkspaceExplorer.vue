@@ -1670,7 +1670,7 @@ async function confirmDeleteNode(node) {
     onPositiveClick: async () => {
       try {
         const workspace = String(props.workspace || '');
-        await DeletePath({ workspace, path: filePath, recursive: node.dir });
+        await DeletePath({ workspace, paths: [filePath], recursive: node.dir });
         message.success(t('app.workspaceExplorer.deleted'));
         if (activeFile.value?.path === filePath) clearEditor();
         await refreshTree();

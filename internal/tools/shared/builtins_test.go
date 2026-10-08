@@ -112,8 +112,8 @@ func TestRuntimeSensitiveBuiltinSchemas(t *testing.T) {
 		t.Fatal("remote_delete_path description must explain recursive deletion and top-level directory blocking")
 	}
 
-	// Both delete tools declare the same batch spelling, so both must show the
-	// same bounds and the same mutual exclusion: one declaration, read twice.
+	// Both delete tools declare the same batch list, so both must show the same
+	// bounds: one declaration, read twice.
 	for _, name := range []string{"delete", "remote_delete_path"} {
 		params, description := builtinSchemaForTest(t, name)
 		properties := schemaObjectForTest(t, params["properties"])
@@ -121,11 +121,18 @@ func TestRuntimeSensitiveBuiltinSchemas(t *testing.T) {
 		if paths["type"] != "array" || paths["minItems"] != 1 || paths["maxItems"] != DeletePathListLimit {
 			t.Fatalf("%s paths bounds = %#v, want an array of 1..%d entries", name, paths, DeletePathListLimit)
 		}
-		if branches, ok := params["oneOf"].([]any); !ok || len(branches) != 2 {
-			t.Fatalf("%s must keep path and paths mutually exclusive through oneOf, got %#v", name, params["oneOf"])
-		}
 		if !strings.Contains(description, fmt.Sprintf("at most %d", DeletePathListLimit)) {
 			t.Fatalf("%s description must state how many paths one call takes, got %q", name, description)
+		}
+	}
+	// Both delete tools take paths only: no path property and no root composite.
+	for _, name := range []string{"delete", "remote_delete_path"} {
+		params, _ := builtinSchemaForTest(t, name)
+		if _, ok := schemaObjectForTest(t, params["properties"])["path"]; ok {
+			t.Fatalf("%s must not declare a path property: it takes paths only", name)
+		}
+		if _, ok := params["oneOf"]; ok {
+			t.Fatalf("%s must not declare a root oneOf", name)
 		}
 	}
 
@@ -265,17 +272,17 @@ func TestBuiltinGateTreatsEmptyOptionalsAsAbsent(t *testing.T) {
 		{"grep pads outputMode with an empty string", "grep", `{"pattern":"x","outputMode":""}`, false, "", ""},
 		{"remote_run_command pads shell with an empty string", "remote_run_command", `{"target":"t:/w","command":"ls","shell":""}`, false, "", ""},
 		{"web_fetch rejects an unknown format", "web_fetch", `{"url":"https://example.test/","format":"markdown"}`, true, "must be one of", ""},
-		// The two delete tools declare one list with two spellings: padding one of
-		// them must read as "not provided" (the runtime trims it the same way), two
-		// real sources must be refused, and neither must be refused too.
-		{"delete pads paths with a null list", "delete", `{"path":"a.txt","paths":null}`, false, "", ""},
-		{"delete pads path with an empty string", "delete", `{"path":"","paths":["a.txt"]}`, false, "", ""},
-		{"delete supplies both spellings", "delete", `{"path":"a.txt","paths":["b.txt"]}`, true, "must not be combined with", ""},
-		{"delete supplies neither spelling", "delete", `{"recursive":true}`, true, "exactly one allowed shape", ""},
+		// The local delete takes paths only: a list of entries is the one way to name
+		// a target, and the gate refuses the path key outright.
+		{"delete takes a path list", "delete", `{"paths":["a.txt","b.txt"]}`, false, "", ""},
+		{"delete pads recursive with null", "delete", `{"paths":["a.txt"],"recursive":null}`, false, "", ""},
+		{"delete refuses the path key", "delete", `{"path":"a.txt"}`, true, `unsupported parameter "path"`, ""},
+		{"delete refuses a call without paths", "delete", `{"recursive":true}`, true, `missing required parameter "paths"`, ""},
 		{"delete is above the path limit", "delete", tooManyPaths, true, fmt.Sprintf("at most %d items", DeletePathListLimit), ""},
-		{"remote_delete_path pads paths with a null list", "remote_delete_path", `{"target":"t:/w","path":"a.txt","paths":null}`, false, "", ""},
-		{"remote_delete_path supplies both spellings", "remote_delete_path", `{"target":"t:/w","path":"a.txt","paths":["b.txt"]}`, true, "must not be combined with", ""},
-		{"remote_delete_path supplies neither spelling", "remote_delete_path", `{"target":"t:/w"}`, true, "exactly one allowed shape", ""},
+		{"remote_delete_path takes a path list", "remote_delete_path", `{"target":"t:/w","paths":["a.txt","b.txt"]}`, false, "", ""},
+		{"remote_delete_path pads recursive with null", "remote_delete_path", `{"target":"t:/w","paths":["a.txt"],"recursive":null}`, false, "", ""},
+		{"remote_delete_path refuses the path key", "remote_delete_path", `{"target":"t:/w","path":"a.txt"}`, true, `unsupported parameter "path"`, ""},
+		{"remote_delete_path refuses a call without paths", "remote_delete_path", `{"target":"t:/w"}`, true, `missing required parameter "paths"`, ""},
 	}
 	for _, tc := range cases {
 		schema, _ := builtinSchemaForTest(t, tc.tool)

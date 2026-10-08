@@ -1780,7 +1780,7 @@ func (a *App) remoteDeletePath(ctx context.Context, req RemoteDeletePathRequest)
 	if err != nil {
 		return DeletePathsResult{}, err
 	}
-	candidates, err := resolveDeletePathList(req.Path, req.Paths)
+	candidates, err := resolveDeletePathList(req.Paths)
 	if err != nil {
 		return DeletePathsResult{}, err
 	}

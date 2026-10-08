@@ -99,23 +99,49 @@ var topLevelComposites = []string{"oneOf", "anyOf", "allOf"}
 // The schema it is given is not mutated: the root, its properties and its
 // required list are rebuilt, while the nested schemas are shared because they are
 // only read.
+// branchList reads one composite keyword as a branch list. Generators
+// occasionally emit a single object instead of a one-element array; treating it
+// as no branches would let the keyword reach the Anthropic wire untouched and
+// fail the whole request, so a lone branch counts as a one-branch list. Any
+// other shape (a string, a number, nil) is not a branch list and is ignored —
+// the keyword is still dropped from the flattened root below.
+func branchList(value any) []any {
+	if branches, ok := value.([]any); ok {
+		return branches
+	}
+	if branch, ok := value.(map[string]any); ok {
+		return []any{branch}
+	}
+	return nil
+}
+
 func FlattenTopLevelComposites(schema map[string]any) map[string]any {
 	if schema == nil {
 		return nil
 	}
+	hasComposite := false
+	for _, key := range topLevelComposites {
+		if _, ok := schema[key]; ok {
+			hasComposite = true
+			break
+		}
+	}
+	if !hasComposite {
+		return schema
+	}
 	var alternatives [][]any
 	for _, key := range []string{"oneOf", "anyOf"} {
-		if branches, ok := schema[key].([]any); ok {
+		if branches := branchList(schema[key]); branches != nil {
 			alternatives = append(alternatives, branches)
 		}
 	}
 	var conjuncts []any
-	if branches, ok := schema["allOf"].([]any); ok {
+	if branches := branchList(schema["allOf"]); branches != nil {
 		conjuncts = branches
 	}
-	if len(alternatives) == 0 && len(conjuncts) == 0 {
-		return schema
-	}
+	// No early return when both lists are empty: a composite keyword in a shape
+	// branchList does not understand (a string, a number) is still refused by the
+	// API, so it must fall through to the rebuild below that drops the keys.
 
 	properties := map[string]any{}
 	if declared, ok := schema["properties"].(map[string]any); ok {

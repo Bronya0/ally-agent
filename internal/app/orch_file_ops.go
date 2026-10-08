@@ -426,11 +426,11 @@ func copyDroppedFile(src, dst string, perm os.FileMode) error {
 // 逐条对齐：第一遍把每条路径都判定完（含目录树统计），任何一条不通过就整批不动手；
 // 第二遍才逐个删，单条失败只污染它自己的结果槽（与批量 read 的隔离契约一致）。
 //
-// paths 由调用方经 resolveDeletePathList 归一：两种写法与条数上限只在那里判一次，
+// paths 由调用方经 resolveDeletePathList 归一：条数上限与空项只在那里判一次，
 // 所以本地与远端、工具调用与 Wails API 看到的是同一条候选列表。
 func (a *App) deletePathsWithConfig(cfg ConfigState, paths []string, recursive bool) (DeletePathsResult, error) {
 	if len(paths) == 0 {
-		return DeletePathsResult{}, codedToolError("E_BAD_ARGS", errors.New("delete requires a path or a non-empty paths list"))
+		return DeletePathsResult{}, codedToolError("E_BAD_ARGS", errors.New("delete requires a non-empty paths list"))
 	}
 	roots, err := workspaceRoots(cfg)
 	if err != nil {
@@ -1317,24 +1317,17 @@ func formatAllowedRoots(roots []string) string {
 	return pathutil.FormatAllowedRoots(roots)
 }
 
-// 本地 delete 与远端 remote_delete_path 共用的一块：请求里的「一个路径」和
-// 「一串路径」是同一个东西的两种写法，以及「这一串路径彼此之间能不能一起删」。
+// 本地 delete 与远端 remote_delete_path 共用的一块：请求里的这一串路径能不能
+// 一起删。
 //
 // 单条路径的落盘判定各自留在自己的信任域里（本地在 Go 里问本机文件系统，远端
 // 只能在 SSH 另一头问），这里只放与磁盘无关、两端必须一致的那部分：条数上限、
 // 重复、包含。三条判定都收口在这一个文件里，改一处两端同时生效。
 
-// resolveDeletePathList 把两种写法折叠成一条有序候选列表，并守住条数上限。
-// 闸门已用 oneOf 拒过「两个都传」与「一个都没传」，但 Wails API
-// （App.DeletePath，前端资源管理器直接用）不走闸门，所以 handler 侧要有同一
-// 套判定 —— 判据只有这一份。
-func resolveDeletePathList(single string, list []string) ([]string, error) {
-	if strings.TrimSpace(single) != "" {
-		if len(list) > 0 {
-			return nil, codedToolError("E_BAD_ARGS", errors.New("delete takes either path or paths, not both: send `path` for one entry, `paths` for several"))
-		}
-		return []string{single}, nil
-	}
+// resolveDeletePathList 把 delete 的 paths 归一成一条有序候选列表，并守住条数上限。
+// 闸门已用 schema 拒掉缺 paths 的调用；Wails API（App.DeletePath，前端资源管理器
+// 直接用）不走闸门，所以 handler 侧要有同一套判定 —— 判据只有这一份。
+func resolveDeletePathList(list []string) ([]string, error) {
 	candidates := make([]string, 0, len(list))
 	for _, candidate := range list {
 		if strings.TrimSpace(candidate) == "" {
@@ -1343,7 +1336,7 @@ func resolveDeletePathList(single string, list []string) ([]string, error) {
 		candidates = append(candidates, candidate)
 	}
 	if len(candidates) == 0 {
-		return nil, codedToolError("E_BAD_ARGS", errors.New("delete requires a path or a non-empty paths list"))
+		return nil, codedToolError("E_BAD_ARGS", errors.New("delete requires a non-empty paths list"))
 	}
 	if len(candidates) > toolshared.DeletePathListLimit {
 		return nil, codedToolError("E_BAD_ARGS", fmt.Errorf("too many paths (%d); one delete call takes at most %d — split the list and send the rest in a later call", len(candidates), toolshared.DeletePathListLimit))

@@ -193,11 +193,10 @@ func chatToolsUncached() []openai.Tool {
 		functionTool("delete", "Delete a file or directory in the workspace. Directories require recursive=true. Strictly prohibited from deleting drive roots, level 1 and level 2 system backbone directories (e.g. /etc, /var, /usr, /home/*, C:\\Windows, C:\\Users/*), VCS metadata (.git), or protected system targets (e.g. /dev, /proc, /sys, /etc/shadow, /var/local/libs)."+deleteBatchNote(), map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"path":      map[string]any{"type": "string", "description": "One path to delete (cannot be blank). Workspace-relative or authorized path; refuses filesystem root, level 1/2 directories, and sensitive system targets."},
 				"paths":     deletePathsSchema("Workspace-relative or authorized path to delete."),
 				"recursive": map[string]any{"type": "boolean", "description": "Required when deleting a directory; applies to every path in the call."},
 			},
-			"oneOf": deletePathSourceOneOf(),
+			"required": []string{"paths"},
 		}),
 		functionTool("command", "Run a shell command with cwd confined to the workspace. On Windows the shell is Git Bash when available, otherwise PowerShell; on macOS/Linux, bash. Commands may inspect outside paths, redirect to null devices, and create new outside paths; modifying/deleting existing outside paths, explicit deletion commands, and unsafe cwd symlinks are refused. Unmanaged shell deletion commands (e.g. rm, find -delete, rsync --delete) are refused; use the delete tool for workspace files. Recognized managed deletion contexts (e.g. git rm, docker rm, kubectl delete) follow their own rules. On E_PATH_OUTSIDE, read the returned reason and switch target rather than retrying unchanged. When output exceeds the capture limit it is truncated and the result's `full` attribute points to the full output (readable via read), so never re-run a side-effecting command just to see more output; pipe through tail/head yourself when you only need part of a large output. When a command does not exit within its timeout it is NOT killed: it is promoted to a background service and keeps running (ports stay bound); the result carries the `timed-out` and `promoted-to-service` flags and its output names the new service id — continue with the service tool (read/stop) instead of re-running the command.", map[string]any{
 			"type": "object",
@@ -366,12 +365,10 @@ func chatToolsUncached() []openai.Tool {
 			"type": "object",
 			"properties": map[string]any{
 				"target":    sshTargetSchema(),
-				"path":      map[string]any{"type": "string", "description": "One remote path to delete (cannot be blank), relative to the SSH workspace root. Refuses filesystem root, level 1/2 directories, and sensitive system targets."},
 				"paths":     deletePathsSchema("Remote path to delete, relative to the SSH workspace root; absolute paths under that root are accepted and rebased."),
 				"recursive": map[string]any{"type": "boolean", "description": "Required for deleting directories below the workspace root; applies to every path in the call. Immediate child directories of the workspace root and system level 1/2 directories are always blocked."},
 			},
-			"required": []string{"target"},
-			"oneOf":    deletePathSourceOneOf(),
+			"required": []string{"target", "paths"},
 		}),
 		functionTool("remote_run_command", "Run a non-interactive shell command on a remote SSH workspace. Unmanaged shell deletion commands (e.g. rm, find -delete, rsync --delete) are refused; use remote_delete_path to delete workspace files. Recognized managed deletion contexts (e.g. git rm, docker rm, kubectl delete) follow their own rules. Unlike the local command tool, a remote timeout kills the process group instead of promoting it to a background service, output is capped at 128 KiB with no full-output file, and a literal write target outside the workspace fails with E_PATH_OUTSIDE.", map[string]any{
 			"type": "object",
@@ -617,11 +614,11 @@ func httpTimeoutSchema() map[string]any {
 	return map[string]any{"type": "integer", "minimum": 0, "maximum": 120, "description": "Request timeout in seconds; omit or send 0 for the default (60), max 120."}
 }
 
-// deleteBatchNote is the notes both delete tools carry. The two spellings, the
+// deleteBatchNote is the batch note the delete declarations carry: the
 // pre-validation promise, the per-path result and the absent case are one policy,
 // so the wording is written once and appended by both declarations.
 func deleteBatchNote() string {
-	return fmt.Sprintf(" One call may delete several entries: pass `paths` (at most %d) instead of `path` — the two are two spellings of one list, so a call carries exactly one of them. Every path is validated before anything is deleted (one refused path means nothing is deleted), and the result reports each path separately. A path that does not exist is not an error: it comes back as an `absent` slot with nothing deleted, so there is no need to retry it.", DeletePathListLimit)
+	return fmt.Sprintf(" One call may delete several entries: `paths` takes at most %d. Every path is validated before anything is deleted (one refused path means nothing is deleted), and the result reports each path separately. A path that does not exist is not an error: it comes back as an `absent` slot with nothing deleted, so there is no need to retry it.", DeletePathListLimit)
 }
 
 // deletePathsSchema is the batch spelling both delete tools declare, built once
@@ -634,37 +631,7 @@ func deletePathsSchema(itemDescription string) map[string]any {
 		"minItems":    1,
 		"maxItems":    DeletePathListLimit,
 		"items":       map[string]any{"type": "string", "minLength": 1, "pattern": ".*\\S.*", "description": itemDescription},
-		"description": fmt.Sprintf("Several paths to delete in one call, at most %d. `paths` and `path` are two spellings of one list: a call carries exactly one of them, and one refused path refuses the whole call before anything is deleted.", DeletePathListLimit),
-	}
-}
-
-// deletePathSourceOneOf refuses a delete call that carries both spellings or
-// neither. `path` and `paths` mean the same thing, so carrying both is a
-// misreading of the field rather than a merge request; the handlers refuse it
-// with the same rule (resolveDeletePathList), because the Wails API path
-// (App.DeletePath) never passes through the gate.
-//
-// Both branches judge on the effective value, exactly like editSourceOneOf: an
-// empty `path` or an empty `paths` list is "not provided" to the runtime, so
-// padding one of them beside a real source must not read as "both were sent".
-func deletePathSourceOneOf() []any {
-	return []any{
-		map[string]any{
-			"required":   []string{"path"},
-			"properties": map[string]any{"path": map[string]any{"pattern": ".*\\S.*"}},
-			"not": map[string]any{
-				"required":   []string{"paths"},
-				"properties": map[string]any{"paths": map[string]any{"minItems": 1}},
-			},
-		},
-		map[string]any{
-			"required":   []string{"paths"},
-			"properties": map[string]any{"paths": map[string]any{"minItems": 1}},
-			"not": map[string]any{
-				"required":   []string{"path"},
-				"properties": map[string]any{"path": map[string]any{"pattern": ".*\\S.*"}},
-			},
-		},
+		"description": fmt.Sprintf("Paths to delete in one call, at most %d. One refused path refuses the whole call before anything is deleted.", DeletePathListLimit),
 	}
 }
 

@@ -883,7 +883,6 @@ type CopyFileFailure struct {
 
 type DeletePathRequest struct {
 	Workspace string   `json:"workspace,omitempty"`
-	Path      string   `json:"path"`
 	Paths     []string `json:"paths"`
 	Recursive bool     `json:"recursive"`
 }
@@ -1229,7 +1228,6 @@ type RemoteCreateFileRequest struct {
 
 type RemoteDeletePathRequest struct {
 	Target    string   `json:"target"`
-	Path      string   `json:"path"`
 	Paths     []string `json:"paths"`
 	Recursive bool     `json:"recursive"`
 }
@@ -2768,7 +2766,7 @@ func (a *App) executeTool(ctx context.Context, cfg ConfigState, sessionID, name 
 		err, argWarnings = decodeJSON(&req)
 		var deletePaths []string
 		if err == nil {
-			deletePaths, err = resolveDeletePathList(req.Path, req.Paths)
+			deletePaths, err = resolveDeletePathList(req.Paths)
 		}
 		if err == nil {
 			err = kbDenyCheckPaths(ctx, cfg, deletePaths...)
@@ -3379,9 +3377,9 @@ func (a *App) DeletePath(req DeletePathRequest) error {
 	if err != nil {
 		return err
 	}
-	// 这条入口不走工具闸门，所以两种写法与条数上限在这里再判一次：判据与工具
-	// 调用路径是同一份（resolveDeletePathList）。
-	paths, err := resolveDeletePathList(req.Path, req.Paths)
+	// 这条入口不走工具闸门，所以空项与条数上限在这里再判一次：判据与工具调用
+	// 路径是同一份（resolveDeletePathList）。
+	paths, err := resolveDeletePathList(req.Paths)
 	if err != nil {
 		return err
 	}

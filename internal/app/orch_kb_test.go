@@ -111,11 +111,11 @@ func TestKBDenyBlocksCreateEditDeleteViaExecuteTool(t *testing.T) {
 	}
 
 	// delete of a sources/ path is denied; deleting the entry works.
-	res = app.executeTool(ctx, cfg, "s-1", "delete", []byte(`{"path":"sources/note.md"}`))
+	res = app.executeTool(ctx, cfg, "s-1", "delete", []byte(`{"paths":["sources/note.md"]}`))
 	if res.OK || !strings.Contains(res.Error, "E_KB_SOURCES_READONLY") {
 		t.Fatalf("delete under sources/ must be denied, got ok=%v err=%v", res.OK, res.Error)
 	}
-	res = app.executeTool(ctx, cfg, "s-1", "delete", []byte(`{"path":"entry.md"}`))
+	res = app.executeTool(ctx, cfg, "s-1", "delete", []byte(`{"paths":["entry.md"]}`))
 	if !res.OK {
 		t.Fatalf("delete outside sources/ must succeed, got err=%v", res.Error)
 	}
