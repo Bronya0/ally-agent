@@ -437,22 +437,29 @@ func (a *App) storePristinePackage(srcPath, target string, packagedData bool) er
 	if !packagedData {
 		return copyFile(srcPath, dest)
 	}
-	temp := dest + ".tmp"
-	file, err := os.OpenFile(temp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	// 临时文件刻意建在插件根目录（而不是 target 里），名字以 `.` 开头：下面这趟
+	// WritePackage 重新打包的正是 target，临时文件落在里面会被它自己扫进去——包里凭空
+	// 多出一个 0 字节的 `package.zip.tmp`，并被之后每一次默认导出一路传下去。点开头
+	// 同时保证目录扫描（Discover）与打包都不会把它当成插件内容。
+	file, err := os.CreateTemp(a.pluginRoot(), ".pkg-*.tmp")
 	if err != nil {
 		return err
 	}
+	temp := file.Name()
 	writeErr := plugin.WritePackage(file, target, nil)
 	closeErr := file.Close()
-	if writeErr != nil {
+	if writeErr != nil || closeErr != nil {
 		_ = os.Remove(temp)
-		return writeErr
-	}
-	if closeErr != nil {
-		_ = os.Remove(temp)
+		if writeErr != nil {
+			return writeErr
+		}
 		return closeErr
 	}
-	return os.Rename(temp, dest)
+	if err := os.Rename(temp, dest); err != nil {
+		_ = os.Remove(temp)
+		return err
+	}
+	return nil
 }
 
 // adoptPackagedData 处理包里自带的 data.json（导出时勾了「包含数据」）：插件数据

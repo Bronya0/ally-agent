@@ -329,6 +329,8 @@ export async function mountPlugin(plugin, element, env, ui) {
     setActive(active) {
       host.__host.emit(active ? 'shown' : 'hidden');
     },
+    // dispose 会清空 element，所以调用方必须传「本次挂载专属」的容器：传共享容器时，
+    // 过期的那次挂载回头清理就会把后来者已渲染的内容一起清掉（见 PluginPage.vue）。
     dispose: () => {
       try {
         host.__host.emit('hidden');

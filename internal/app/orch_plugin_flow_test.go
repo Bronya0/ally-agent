@@ -8,8 +8,11 @@
 package app
 
 import (
+	"archive/zip"
 	"os"
 	"path/filepath"
+	"slices"
+	"sort"
 	"testing"
 
 	"ally-dev/internal/tools/plugin"
@@ -228,6 +231,34 @@ func TestPluginExportNeverLeaksPackagedData(t *testing.T) {
 	}
 	if raw, err := app.PluginStoreGet("demo-toolkit"); err != nil || raw != `{"token":"secret"}` {
 		t.Fatalf("包里的数据没被采纳：%q err = %v", raw, err)
+	}
+
+	// 留存的原始包必须是干净的「无数据形态」：内容 = 源包去掉 data.json，一个条目都
+	// 不多。重写时用的临时文件若建在插件目录里，就会被这趟重新打包自己收进去
+	// （曾经真的发生过：包里多出 0 字节的 package.zip.tmp，之后每次默认导出都带着它）。
+	source, err := plugin.InspectPackage(pkg)
+	if err != nil {
+		t.Fatalf("源包无法再校验：%v", err)
+	}
+	want := make([]string, 0, len(source.Files))
+	for _, name := range source.Files {
+		if name != plugin.DataName {
+			want = append(want, name)
+		}
+	}
+	sort.Strings(want)
+	stored, err := zip.OpenReader(filepath.Join(dir, plugin.PackageName))
+	if err != nil {
+		t.Fatalf("留存包打不开：%v", err)
+	}
+	defer stored.Close()
+	got := make([]string, 0, len(stored.File))
+	for _, entry := range stored.File {
+		got = append(got, entry.Name)
+	}
+	sort.Strings(got)
+	if !slices.Equal(got, want) {
+		t.Fatalf("留存包内容不对：got %v want %v", got, want)
 	}
 
 	plain := filepath.Join(t.TempDir(), "plain.zip")

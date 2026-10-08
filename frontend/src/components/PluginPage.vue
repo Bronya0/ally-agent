@@ -44,6 +44,9 @@ const mountPoint = ref(null);
 const error = ref('');
 const loading = ref(false);
 let handle = null;
+// container 是当前会话**专属**的挂载容器（每次 start 新建一个）。挂载是异步的，过期
+// 的那次回来时必须只能清掉自己的 DOM——共用 mountPoint 会把它清成空白页。
+let container = null;
 
 function notify(text, type) {
   const target = message[String(type || 'info')];
@@ -58,13 +61,17 @@ let runToken = 0;
 
 async function dispose() {
   const current = handle;
+  const node = container;
   handle = null;
-  if (!current) return;
-  try {
-    current.dispose();
-  } catch (err) {
-    console.error('[plugin] 卸载出错', err);
+  container = null;
+  if (current) {
+    try {
+      current.dispose();
+    } catch (err) {
+      console.error('[plugin] 卸载出错', err);
+    }
   }
+  if (node && node.parentNode) node.parentNode.removeChild(node);
 }
 
 function teardown() {
@@ -78,18 +85,24 @@ async function start() {
   error.value = '';
   const element = mountPoint.value;
   if (!element || !props.plugin) return;
-  element.innerHTML = '';
+  // 每次挂载都用一个新容器：过期的那次只清得掉自己的容器，碰不到后来者已经渲染的
+  // DOM（共享容器时正好相反：它一清，新页面就空白了）。
+  const node = document.createElement('div');
+  node.className = 'plugin-page-mount';
+  element.appendChild(node);
+  container = node;
   loading.value = true;
   try {
     const session = await mountPlugin(
       props.plugin,
-      element,
+      node,
       { version: buildVersion, locale, workspace: props.workspace },
       { notify, onDenied: (info) => emit('denied', info) },
     );
     if (token !== runToken) {
-      // 这次挂载已被后来者（重挂载或卸载）取代：直接释放，不许挂上去。
+      // 这次挂载已被后来者（重挂载或卸载）取代：释放句柄并摘掉自己那个容器，不许挂上去。
       session.dispose();
+      if (node.parentNode) node.parentNode.removeChild(node);
       return;
     }
     handle = session;
@@ -138,6 +151,12 @@ watch(
   min-height: 0;
   background: var(--ally-surface-content);
   overflow: hidden;
+}
+
+/* 每次挂载的专属容器。display:contents 让它自己不产生盒子：插件的顶层子元素仍然直接
+   参与 .plugin-page-body 的布局，与「没有这层容器」时完全一致。 */
+.plugin-page-mount {
+  display: contents;
 }
 
 /* 插件自己的页面在这里渲染：只给基础留白与滚动，其余全部交给插件。 */
