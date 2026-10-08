@@ -1,0 +1,10 @@
+{
+  "id": "demo-toolkit",
+  "name": "演示插件 Demo Toolkit",
+  "version": "1.0.0",
+  "author": "twh",
+  "description": "插件系统自检：主题跟随、存储读写、后端 HTTP 代理（含白名单拒绝路径）、工作区只读浏览。",
+  "entry": "index.js",
+  "menu": [{ "key": "demo", "title": "演示插件", "icon": "BugOutlined" }],
+  "permissions": { "http": ["example.com"], "workspace": "read" }
+}

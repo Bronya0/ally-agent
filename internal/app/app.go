@@ -187,9 +187,14 @@ type App struct {
 	notifier               completionNotifier
 	lastCompletionNotifyAt time.Time
 
-	mu          sync.Mutex
-	config      ConfigState
-	configPath  string
+	mu         sync.Mutex
+	config     ConfigState
+	configPath string
+	// pluginMu 串行化插件的安装/删除/启停。安装不是原子操作（挪旧版本到 .old → 新内容
+	// rename 上位），两条导入并发跑时第二次会先 RemoveAll 掉第一次刚挪过去的备份、随后
+	// rename 失败滚进回滚分支——只有串行能把这一串变成原子的。持锁期间只调不会再拿
+	// pluginMu 的助手（它们内部拿 a.mu，顺序恒为 pluginMu → a.mu，不存在反向等待）。
+	pluginMu    sync.Mutex
 	runs        map[string]context.CancelFunc
 	runSessions map[string]string
 	// runInputs queues user messages injected into a live run (runID → buffered
@@ -560,6 +565,10 @@ type ConfigState struct {
 	// read/edit/create/delete/command core is protected: the Settings UI
 	// offers no switch and the filter/sanitizers refuse those names.
 	DisabledTools []string `json:"disabledTools,omitempty"`
+	// DisabledPlugins 是用户在插件页关掉的插件 id。被禁用的插件从侧栏消失且不可
+	// 进入（页面可见性判定与隐藏页面同源）。清洗收口在 persistableConfig，所以
+	// 每条落盘路径共用同一条规则；加载侧直接读配置，不另设内存镜像。
+	DisabledPlugins []string `json:"disabledPlugins,omitempty"`
 	// HiddenModes lists mode-rail pages the user hid in Settings →
 	// Advanced → Page visibility. Values are mode keys (kb, skills, mcp,
 	// models, ssh, stats, games); chat and settings are never hidden — the
@@ -1129,6 +1138,10 @@ type HTTPRequestToolRequest struct {
 	FollowRedirects     *bool             `json:"followRedirects,omitempty"`
 	AllowPrivateNetwork *bool             `json:"allowPrivateNetwork,omitempty"`
 	InsecureSkipVerify  *bool             `json:"insecureSkipVerify,omitempty"`
+	// AllowedHosts 是主机白名单（插件 HTTP 代理专用），刻意标记 json:"-"：任何
+	// JSON 入口（模型工具调用、本地 HTTP API）都无法设置它，只有编排层在代码里
+	// 赋值。非空即接管请求目标判定——名单外的目标（含重定向后的目标）直接拒绝。
+	AllowedHosts []string `json:"-"`
 }
 
 type HTTPRequestToolResult struct {

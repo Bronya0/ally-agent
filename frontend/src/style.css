@@ -1714,6 +1714,17 @@ code, pre {
   box-shadow: 0 0 6px rgba(126, 201, 126, 0.8);
 }
 
+/* 一级菜单图标上的小点：组内有页面正在显示。 */
+.mode-sider-group-dot {
+  position: absolute;
+  top: -1px;
+  right: -3px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ally-accent);
+}
+
 /* Empty-tree hint (KB mode / empty directories): a quiet centered note
    instead of an unexplained blank area. */
 .workspace-explorer-empty-hint {
@@ -5409,10 +5420,11 @@ code, pre {
   transform: translate(-50%, -65%) rotate(45deg);
 }
 
+/* 计划条目和聊天区共用同一个 n-scrollbar：滚动条宽度、颜色、悬停才浮现
+   都由组件一致给出（见 --n-scrollbar-width）。这里只管占满剩余高度，
+   滚动视口的定位在 scrollPlanPanelToFocus。 */
 .plan-panel-list {
   min-height: 0;
-  overflow-y: auto;
-  padding: 4px 0;
   flex: 1;
 }
 

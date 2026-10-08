@@ -175,3 +175,16 @@
 [mcp-no-call-replay] 2026-10-05 高危 MCP 调用失败后重连不得重放那次调用：请求可能已发出并被执行过，重放＝副作用做两遍；只有调用前连接就是死的才可继续。@biz_mcp.go
 [sticky-leave-bottom] 2026-10-06 中危 贴底跟随的“离开底部”必须粘性：位置判据(96px 小于一格滚轮 100px)会把刚关的跟随当场重开，慢滚滚不动。@ChatMessages.vue
 [config-field-reset] 2026-10-07 中危 给 defaultConfig 加字段前须确认每个保存入口送整份配置：部分草稿会被 {...defaults,...source} 静默重置。@utils/config.mjs
+[resolve-read-no-fence] 2026-10-08 中危 别把 resolveReadPath 当工作区围栏：绝对路径直接放行（只对相对路径 SafeJoin），要围栏得自己 insideRoot。@infra_bridges.go
+[nscrollbar-ref] 2026-10-08 中危 n-scrollbar 的 ref 是组件实例：当滚动元素用会失效，滚动的是 $el 内的 .n-scrollbar-container。@App.vue
+[page-mode-gate-one-place] 2026-10-08 中危 整页模式的让位判定收口 fullPageActive：散成条件链新增页面必漏改，上页的资源树/面板残留在新页面。@App.vue
+[plugin-page-sticky-gap] 2026-10-08 中危 插件页容器带内边距，跨容器 sticky 吸顶必差一条缝露出下面内容：插件要自己撑满并自管滚动。@PluginPage.vue
+[plugin-install-parity] 2026-10-08 中危 zip 与目录两条安装路径必须同一套落位：外层目录只在一边处理，装出来就是打不开的插件。@orch_plugin.go
+[plugin-identity-key] 2026-10-08 中危 插件身份比较与拼路径共用 IdentityKey：大小写不一致会让禁用/删除静默失效（开关自己弹回）。@orch_plugin.go
+[plugin-asset-stamp] 2026-10-08 中危 插件模块缓存戳必须放 URL 目录段：放查询串时相对 import 不继承，重新导入仍跑旧子模块。@pluginHost.mjs
+[plugin-size-declared-vs-real] 2026-10-08 高危 插件体积上限不能只信 zip 头声明的 UncompressedSize64：谎报一个小值就能让静态校验失效，而 extractZip 用的是自更新那套宽松限额（单文件 1GB）。落位前必须按盘上真实字节复验（VerifyContentSizes），包本体大小也要单独卡。@orch_plugin.go
+[plugin-install-post-steps] 2026-10-08 中危 插件本体落位之后的步骤（存原始包副本 / 采纳包内数据）失败不可抛回"导入失败"——那时旧版本已被顶替，界面说失败、插件其实装好了。降级处理并清掉半成品（半截 package.zip 会让导出复制出坏包）。@orch_plugin.go
+[plugin-dir-case-exact] 2026-10-08 中危 目录名与清单 id 必须逐字符一致（含大小写）：只按 IdentityKey 比会在大小写敏感 FS 上留下"列表可用、点进去全打不开"的半截支持（下游拼路径一律用清单 id）。@tools/plugin/plugin.go
+[plugin-install-serialize] 2026-10-08 中危 安装/删除/启停要串行化：挪备份 + rename 上位不是原子操作，并发两次导入会互相毁掉 .old 备份并滚进回滚分支。@orch_plugin.go
+[plugin-disabled-snapshot-stale] 2026-10-08 中危 保存配置时禁用名单不能用内存快照：刷新失败时快照停在上一版，会把刚做的启停静默回退。现取一次真相，取不到就摘键后端保留 base。@App.vue
+[plugin-stamp-second-precision] 2026-10-08 低危 插件缓存戳取目录 mtime 的 RFC3339（秒级）：同一秒内连续两次覆盖升级会撞出同一个戳，入口 URL 不变、模块表命中旧实例。戳要带纳秒。@orch_plugin.go

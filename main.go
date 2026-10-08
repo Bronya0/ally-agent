@@ -63,6 +63,11 @@ func main() {
 		},
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(assets),
+			// 插件资源由 app 包提供（/plugins/<id>/... 从 ~/.ally_agent/plugins 读），
+			// 与页面同源，所以插件能用原生相对 import 加载自己的多文件 bundle。
+			// application.Middleware 的底层类型就是 func(http.Handler) http.Handler，
+			// 所以实现留在 app 包、这里只接线，不把 Wails 依赖带进去。
+			Middleware: backend.PluginAssetMiddleware(app),
 		},
 		Windows: application.WindowsOptions{
 			WndClass: backend.WindowsWindowClassName,

@@ -35,8 +35,8 @@ Public License v3. See the LICENSE file for details.
 
             <!-- Main area: mode rail + (chat workbench | KB guidance card) -->
             <div class="main-area" @pointerdown.capture="clearActiveExplorerTreeSelection">
-              <ModeSider :mode="mode" :kb-running="kbSessionRunning" :hidden-modes="config.hiddenModes" @switch="switchMode" />
-              <n-layout v-show="!kbEmptyActive && !settingsActive && !statsActive && !gamesActive && !skillsActive && !mcpActive && !modelsActive && !sshActive" class="chat-layout" :content-style="chatLayoutContentStyle">
+              <ModeSider :mode="mode" :kb-running="kbSessionRunning" :hidden-modes="config.hiddenModes" :plugin-items="pluginRailItems" @switch="switchMode" />
+              <n-layout v-show="workspacePageActive" class="chat-layout" :content-style="chatLayoutContentStyle">
                 <n-tabs
                   class="workspace-content-tabs"
                   :value="activeWorkspaceId"
@@ -94,10 +94,11 @@ Public License v3. See the LICENSE file for details.
                           <span class="plan-panel-count">{{ planDoneCountFor(tab) }}/{{ orderedPlanEntriesFor(tab).length }}</span>
                           <span :class="['plan-panel-toggle', { expanded: !isPlanPanelCollapsed(tab) }]"></span>
                         </button>
-                        <div
+                        <n-scrollbar
                           v-show="!isPlanPanelCollapsed(tab)"
                           :ref="(el) => setPlanPanelListRef(tab.id, el)"
                           class="plan-panel-list"
+                          content-style="padding: 4px 0;"
                         >
                           <div
                             v-for="item in orderedPlanEntriesFor(tab)"
@@ -108,7 +109,7 @@ Public License v3. See the LICENSE file for details.
                             <span class="plan-number">{{ item.number }}.</span>
                             <span class="plan-title">{{ item.title }}</span>
                           </div>
-                        </div>
+                        </n-scrollbar>
                       </div>
                     </Transition>
 
@@ -330,7 +331,7 @@ Public License v3. See the LICENSE file for details.
                  tree is a normal right-hand flex column, not an overflow escape. -->
             <template v-for="tab in workspaceTabs" :key="`explorer-${tab.id}`">
               <div
-                v-if="explorerVisibleFor(tab.id) && !kbEmptyActive && !settingsActive && !statsActive && !gamesActive && !skillsActive && !mcpActive && !modelsActive && !sshActive"
+                v-if="explorerVisibleFor(tab.id) && workspacePageActive"
                 v-show="tab.id === activeWorkspaceId"
                 class="workspace-explorer-slot"
               >
@@ -410,6 +411,40 @@ Public License v3. See the LICENSE file for details.
                  inline sibling; v-if unmounts on switch (memory); list reloads on entry. -->
             <div v-if="sshActive" class="settings-page-container">
               <SSHClusterPanel :show="sshActive" @servers-changed="refreshSSHClusters" />
+            </div>
+
+            <!-- 插件管理页：导入 / 导出 / 启停 / 删除。权限摘要不是装饰——安装时
+                 不弹确认框，这里是用户唯一的事后感知手段（见 docs/plugin-system.md）。 -->
+            <div v-if="pluginsActive" class="settings-page-container">
+              <PluginsPanel
+                :show="pluginsActive"
+                :mount-errors="pluginMountErrors"
+                :denials="pluginDenials"
+                @plugins-changed="refreshPlugins"
+              />
+            </div>
+
+            <!-- 插件页：只为「打开过」的插件渲染（openedPlugins），未打开过的插件一行
+                 代码都不会执行。存活策略看插件清单的 keepAlive（后端已归一，见
+                 PluginInfo.keepAlive）：默认保留——用 v-show 藏起来，留住页面自己的状态
+                 （表单草稿、插件自己的连接），与 GamePanel 同一个理由；声明
+                 keepAlive:false 的页面则从 mountedPlugins 里移除，切走即销毁。 -->
+            <div
+              v-for="plugin in mountedPlugins"
+              v-show="activePlugin && activePlugin.id === plugin.id"
+              :key="plugin.mode"
+              class="settings-page-container"
+            >
+              <RenderBoundary :label="plugin.name || plugin.id">
+                <PluginPage
+                  :plugin="plugin"
+                  :workspace="activeRunWorkspace"
+                  :active="!!activePlugin && activePlugin.id === plugin.id"
+                  @mounted="clearPluginError"
+                  @failed="recordPluginError"
+                  @denied="recordPluginDenial"
+                />
+              </RenderBoundary>
             </div>
 
             <!-- Token stats page: v-if unmounts on switch (memory); stats reload on entry. -->
@@ -646,11 +681,14 @@ import SkillsPanel from './components/SkillsPanel.vue';
 import McpPanel from './components/McpPanel.vue';
 import ModelsPanel from './components/ModelsPanel.vue';
 import SSHClusterPanel from './components/SSHClusterPanel.vue';
+import PluginsPanel from './components/PluginsPanel.vue';
+import PluginPage from './components/PluginPage.vue';
 import ChatMessages from './components/ChatMessages.vue';
 import TaskCenterPanel from './components/TaskCenterPanel.vue';
 import TokenStatsModal from './components/TokenStatsModal.vue';
 import GamePanel from './games/GamePanel.vue';
 import { assignConfig, defaultConfig, normalizeHiddenModes, placeholderModel } from './utils/config.mjs';
+import { enabledPlugins, fetchPlugins, pluginIdFromMode } from './utils/pluginHost.mjs';
 import { useSakuraBreeze } from './composables/sakuraBreeze.mjs';
 import { burstDigitalWave } from './composables/digitalWave.mjs';
 
@@ -2417,18 +2455,122 @@ const modelsActive = computed(() => mode.value === 'models');
 const sshActive = computed(() => mode.value === 'ssh');
 
 // Overlay pages fill the main area instead of the chat workbench. This set is
-// the single source of truth for switchMode's pre-overlay tracking, the
-// main-area v-show guards, and the ESC-back handler.
-const overlayModes = new Set(['settings', 'stats', 'games', 'skills', 'mcp', 'models', 'ssh']);
+// the source of truth for switchMode's pre-overlay tracking and the ESC-back
+// handler; 主区显隐的判断不靠它，而是正向的 workspacePageActive（见下）。
+const overlayModes = new Set(['settings', 'stats', 'games', 'skills', 'mcp', 'models', 'ssh', 'plugins']);
+// 插件页同样是「整块区域」形态，但 key 是动态的，所以判定要把 plugin: 前缀算进来。
 function isOverlayMode(value) {
-  return overlayModes.has(value);
+  return overlayModes.has(value) || pluginIdFromMode(value) !== '';
 }
+
+// 内置页面键＝侧栏能渲染的全部一级页面（工作区页 + 上面那批整页覆盖，含插件管理页）。
+// 判定「这个 key 能不能进」用它，而不是反向排除：菜单外的拼法（插件分组 `group:<key>`、
+// 以后新增的 key）默认不可进，于是会回落到 chat，而不是停在一块什么都没有的空白区域上。
+const builtinModes = new Set(['chat', 'kb', ...overlayModes]);
 
 // 页面显隐（设置 → 高级 → 页面显隐）：hiddenModes 命中的页面不在菜单渲染。
 // chat/settings 永不隐藏（前后端清洗共用同一组键，见 utils/config.mjs）。
+// 插件页不走这套：它们的显隐由各自的启用状态决定（见 isModeEnterable）。
 function isModeHidden(key) {
   return normalizeHiddenModes(config.hiddenModes).includes(String(key || '').trim().toLowerCase());
 }
+
+// ── 插件页状态 ──
+// plugins 是后端列表的快照；openedPluginIds 记录「打开过」的插件（只为它们渲染组件，
+// 未打开过的插件一行代码都不会执行）；pluginMountErrors 按 id 记录挂载失败，管理页
+// 会把它展示出来——否则插件报错只会躺在控制台里。
+const plugins = ref([]);
+const pluginMountErrors = reactive({});
+// 被白名单拒绝的请求（默认拒绝下，这是用户知道插件试过什么的唯一途径）：按插件 id
+// 记“次数 + 最后一条”。列表加载成功与否也要记：保存配置时不能把“读不到”当成“空名单”。
+const pluginDenials = reactive({});
+const pluginsLoaded = ref(false);
+const openedPluginIds = reactive(new Set());
+const enabledPluginList = computed(() => enabledPlugins(plugins.value));
+const pluginRailItems = computed(() => enabledPluginList.value.map((plugin) => ({
+  mode: plugin.mode,
+  title: (plugin.menu && plugin.menu.title) || plugin.name || plugin.id,
+  icon: (plugin.menu && plugin.menu.icon) || '',
+  // 一级菜单：清单声明了 group 才带上。同 key 的插件在侧栏自动合到一起；没声明
+  // 就留 null，由侧栏放在顶层——所以插件之间不需要约定谁先谁后。
+  group: plugin.group && plugin.group.key
+    ? {
+      key: plugin.group.key,
+      title: plugin.group.title || plugin.group.key,
+      icon: plugin.group.icon || '',
+    }
+    : null,
+})));
+const pluginsActive = computed(() => mode.value === 'plugins');
+
+// pluginForMode 把菜单 key（plugin:<id>）翻成当前启用中的那条插件记录。
+function pluginForMode(value) {
+  const id = pluginIdFromMode(value);
+  if (!id) return null;
+  return enabledPluginList.value.find((plugin) => plugin.id === id) || null;
+}
+
+const activePlugin = computed(() => pluginForMode(mode.value));
+const pluginPageActive = computed(() => !!activePlugin.value);
+const openedPlugins = computed(() => enabledPluginList.value.filter((plugin) => openedPluginIds.has(plugin.id)));
+// mountedPlugins 决定“这一刻该挂哪几个插件页”：keepAlive 的页面切走时留在列表里被
+// v-show 藏起来，插件自己的状态因此保住；声明 keepAlive:false 的页面一离开就从列表里
+// 移除——v-for 少一项即销毁组件，下次进来重新挂载（插件先拿到 hidden，清理函数被调用）。
+// 归一后的默认值由后端给（PluginInfo.keepAlive），这里只把 undefined 当保留兜底。
+const mountedPlugins = computed(() => openedPlugins.value.filter(
+  (plugin) => plugin.keepAlive !== false
+    || (activePlugin.value && activePlugin.value.id === plugin.id),
+));
+// isModeEnterable：这个 mode key 现在能不能进。内置页看隐藏名单；插件页看它是否还装着
+// 且启用中——菜单已不再渲染的页面必须连程序化跳转一起拦住，否则会停在空页面上。
+// 两边都不是（插件分组 `group:<key>`、拼错的名字）一律不可进。
+function isModeEnterable(key) {
+  if (pluginIdFromMode(key)) return !!pluginForMode(key);
+  return builtinModes.has(String(key || '')) && !isModeHidden(key);
+}
+
+async function refreshPlugins() {
+  try {
+    plugins.value = await fetchPlugins();
+    pluginsLoaded.value = true;
+  } catch (err) {
+    // 列表读不出来（目录权限、磁盘错误）不该打断界面：先当没有插件。
+    console.error('[plugin] 读取插件列表失败', err);
+  }
+}
+
+function recordPluginError({ id, message }) {
+  if (id) pluginMountErrors[id] = String(message || '');
+}
+
+function recordPluginDenial({ id, message }) {
+  if (!id) return;
+  const current = pluginDenials[id] || { count: 0, message: '' };
+  pluginDenials[id] = {
+    count: current.count + 1,
+    message: String(message || ''),
+  };
+}
+
+function clearPluginError(id) {
+  if (id && pluginMountErrors[id]) delete pluginMountErrors[id];
+}
+
+// 插件被禁用/删除后：丢掉它的「已打开」记录（组件随之卸载、host 被释放），
+// 若正停在该页面则回落到 chat。
+watch(plugins, () => {
+  const live = new Set(enabledPluginList.value.map((plugin) => plugin.id));
+  for (const id of [...openedPluginIds]) {
+    if (!live.has(id)) {
+      openedPluginIds.delete(id);
+      delete pluginMountErrors[id];
+      delete pluginDenials[id];
+    }
+  }
+  // 当前正停在某个插件页、而它已经不在启用列表里（被禁用/删除）：回落到 chat。
+  // 判据必须看 mode 本身：activePlugin 这时已经跟着变空，拿它当条件会恒假。
+  if (pluginIdFromMode(mode.value) && !activePlugin.value) switchMode('chat');
+});
 
 // 进入 chat 工作台的唯一入口：switchMode 拦得住程序化跳转，但拦不住对
 // mode.value 的直接赋值——header 切 Tab、新建 Tab、Ctrl+T、临时 Tab 都是后者。
@@ -2479,9 +2621,27 @@ function closeSSH() {
   nextTick(() => focusPromptInput());
 }
 
+// 插件管理页也走 ESC 返回（插件页本身故意不进：那块键盘归插件自己）。
+function closePlugins() {
+  if (!pluginsActive.value) return;
+  switchMode(['chat', 'kb'].includes(preOverlayMode.value) ? preOverlayMode.value : 'chat');
+  nextTick(() => focusPromptInput());
+}
+
 // KB mode with nothing to show yet: no configured root (or the tab could not
 // be created). The chat workbench is hidden and the guidance card takes over.
 const kbEmptyActive = computed(() => mode.value === 'kb' && !kbTab());
+
+// workspacePageActive：当前页面是不是「工作区页」——只有 Agent（chat）与知识库（kb）
+// 这两种页面有聊天区与工作区资源树，其余页面（设置、统计、游戏、技能、MCP、模型、
+// SSH、插件管理、插件页）都是整页覆盖，一并让位。
+// 写成正向白名单而不是「列出所有整页」：反向条件链每加一个页面就要补一笔，漏一处
+// 就会把上一个页面打开的树/面板留在新页面上（看着像状态污染）；正向写氪时，忘登记
+// 的页面默认是什么都不显示，最多是多了个空页，不会把别的页面的东西带过去。
+// kb 无实际 Tab 时只有引导卡，不算工作区页（等同原来的 kbEmptyActive 让位）。
+const workspacePageActive = computed(() => (
+  mode.value === 'chat' || (mode.value === 'kb' && !kbEmptyActive.value)
+));
 
 const kbSessionRunning = computed(() => {
   const tab = kbTab();
@@ -2594,10 +2754,10 @@ async function focusChatWorkspace() {
 
 async function switchMode(next) {
   if (next === mode.value) return;
-  // 被隐藏的页面不可进入：菜单已不再渲染，这里拦住程序化跳转（含关闭后的
-  // 回跳），回落到可见页面，避免停在一个无入口的页面上。
-  if (next !== 'chat' && next !== 'settings' && isModeHidden(next)) {
-    // chat 永不隐藏，恒为回落页。
+  // 不可进入的页面（内置页被隐藏、插件被禁用/删除）：菜单已不再渲染，这里拦住
+  // 程序化跳转（含关闭后的回跳），回落到 chat，避免停在一个无入口的页面上。
+  if (next !== 'chat' && next !== 'settings' && !isModeEnterable(next)) {
+    // chat 永不可隐藏，恒为回落页。
     next = 'chat';
     if (next === mode.value) return;
   }
@@ -2605,6 +2765,9 @@ async function switchMode(next) {
     if (!isOverlayMode(mode.value)) {
       preOverlayMode.value = mode.value;
     }
+    // 记下「打开过」：只有打开过的插件页才渲染组件。
+    const plugin = pluginForMode(next);
+    if (plugin) openedPluginIds.add(plugin.id);
     mode.value = next;
     return;
   }
@@ -2777,17 +2940,20 @@ function scrollPlanPanelToFocus(tabId) {
   const tab = workspaceTabs.value.find((item) => item.id === tabId);
   if (!tab || tab.id !== activeWorkspaceId.value || isPlanPanelCollapsed(tab)) return;
   nextTick(() => {
-    const list = planPanelListRefsByTab.get(tabId);
-    if (!list) return;
+    // n-scrollbar 的 ref 是组件实例：真正滚动的是它内部那层容器，
+    // 条目本身仍在外层节点里（聊天区读视口用的是同一个类名）。
+    const root = planPanelListRefsByTab.get(tabId)?.$el;
+    const viewport = root?.querySelector?.('.n-scrollbar-container');
+    if (!viewport) return;
     // 面板按原始顺序显示，固定滚到顶部会把进行中任务挤出可视区。
     // 改为把当前 in_progress 项滚动到列表中部；没有进行中项时才回到顶部。
-    const current = list.querySelector('.plan-item.in_progress');
+    const current = root.querySelector('.plan-item.in_progress');
     if (current) {
-      const delta = planFocusScrollDelta(list.getBoundingClientRect(), current.getBoundingClientRect());
-      list.scrollTop += delta;
+      const delta = planFocusScrollDelta(viewport.getBoundingClientRect(), current.getBoundingClientRect());
+      viewport.scrollTop += delta;
       return;
     }
-    list.scrollTop = 0;
+    viewport.scrollTop = 0;
   });
 }
 
@@ -3103,9 +3269,26 @@ function prepareFooterStatsForTarget(tabId, workspace) {
 }
 
 function queueConfigSave(snapshot) {
+  const payload = { ...snapshot };
   const save = configSaveQueue
     .catch(() => {})
-    .then(() => SaveConfig(snapshot));
+    .then(async () => {
+      // 插件启停由绑定直接写后端配置，前端这份快照可能滞后：保存前**现取**一次真相，
+      // 否则一次设置保存会把旧名单整份回写、静默把插件禁用回去（与 workspace /
+      // lastUsedModel 同一个处理口径，见 onSettingsSave 的收口点）。
+      // 用内存快照是不够的：refreshPlugins 失败时 pluginsLoaded 仍为 true、列表停在
+      // 上一版，之后保存就会把刚做的启停回退掉。取不到就摘掉这个键——「读不到」不能
+      // 当成「空名单」（那会静默启用所有插件），摘键时后端保留 base。
+      try {
+        plugins.value = await fetchPlugins();
+        pluginsLoaded.value = true;
+        payload.disabledPlugins = plugins.value.filter((item) => !item.enabled).map((item) => item.id);
+      } catch (err) {
+        console.error('[plugin] 保存前读取插件列表失败，本次不写禁用名单', err);
+        delete payload.disabledPlugins;
+      }
+      return SaveConfig(payload);
+    });
   configSaveQueue = save.catch(() => {});
   return save;
 }
@@ -8859,9 +9042,9 @@ function handleGlobalKeydown(event) {
     event.stopPropagation();
     return;
   }
-  if (event.key === 'Escape' && (settingsActive.value || statsActive.value || gamesActive.value || skillsActive.value || mcpActive.value || modelsActive.value || sshActive.value)) {
-    // Settings / stats / games / skills / mcp / models / ssh are inline pages now:
-    // ESC navigates back.
+  if (event.key === 'Escape' && (settingsActive.value || statsActive.value || gamesActive.value || skillsActive.value || mcpActive.value || modelsActive.value || sshActive.value || pluginsActive.value)) {
+    // Settings / stats / games / skills / mcp / models / ssh / plugins are inline
+    // pages now: ESC navigates back.
     event.preventDefault();
     event.stopPropagation();
     if (gamesActive.value) closeGames();
@@ -8870,6 +9053,7 @@ function handleGlobalKeydown(event) {
     else if (mcpActive.value) closeMcp();
     else if (modelsActive.value) closeModels();
     else if (sshActive.value) closeSSH();
+    else if (pluginsActive.value) closePlugins();
     else closeSettings();
     return;
   }
@@ -9197,6 +9381,7 @@ onMounted(async () => {
   window.addEventListener('resize', refreshWindowMaximisedState);
   window.addEventListener('focus', refreshWindowMaximisedState);
   bindRuntimeEvents();
+  void refreshPlugins();
   void checkForUpdates();
   // Schedule a periodic re-check so long-running sessions (tray mode) still
   // discover new releases without requiring a restart. The first interval

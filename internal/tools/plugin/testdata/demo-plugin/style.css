@@ -1,0 +1,104 @@
+/* 演示插件的样式：全部用宿主的公开主题 token，所以切主题/切明暗会自动跟着变。 */
+
+.demo-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-width: 900px;
+}
+
+.demo-title {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--ally-text-primary);
+}
+
+.demo-sub {
+  color: var(--ally-text-faint);
+  font-size: var(--ally-sub-font-size);
+}
+
+.demo-card {
+  padding: 12px 14px;
+  border: 1px solid var(--ally-border-input);
+  border-radius: 8px;
+  background: var(--ally-surface-panel);
+}
+
+.demo-card-title {
+  font-weight: 600;
+  color: var(--ally-text-high);
+  margin-bottom: 8px;
+}
+
+.demo-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.demo-btn {
+  padding: 5px 12px;
+  border: 1px solid var(--ally-border-input);
+  border-radius: 6px;
+  background: var(--ally-surface-raised);
+  color: var(--ally-text-body);
+  font-size: var(--ally-sub-font-size);
+  cursor: pointer;
+}
+
+.demo-btn:hover {
+  background: var(--ally-hover-strong);
+}
+
+.demo-btn.primary {
+  border-color: transparent;
+  background: var(--ally-accent);
+  color: var(--ally-accent-ink);
+}
+
+.demo-input {
+  flex: 1;
+  min-width: 220px;
+  padding: 5px 10px;
+  border: 1px solid var(--ally-border-input);
+  border-radius: 6px;
+  background: var(--ally-surface-deep);
+  color: var(--ally-text-body);
+  font-family: var(--ally-mono-font), monospace;
+  font-size: var(--ally-sub-font-size);
+}
+
+.demo-swatch {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--ally-accent);
+  border: 1px solid var(--ally-border-input);
+}
+
+.demo-pre {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  max-height: 220px;
+  overflow: auto;
+  border-radius: 6px;
+  background: var(--ally-surface-deep);
+  color: var(--ally-text-soft);
+  font-family: var(--ally-mono-font), monospace;
+  font-size: var(--ally-aux-font-size);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.demo-ok {
+  color: var(--ally-success-text);
+}
+
+.demo-bad {
+  color: var(--ally-danger-text);
+}

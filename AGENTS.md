@@ -58,7 +58,7 @@ git push origin main
 3. **前端 WebView2 交互区**:
    - `.app-header` 声明了 `--wails-draggable: drag`；其内部所有可交互元素（Tab 标签、按钮、输入框、下拉菜单）必须显式标记 `--wails-draggable: no-drag`，否则点击/拖拽手势会被 WebView2 窗口拖拽劫持。
 4. **单测安全隔离**:
-   - 单元测试**绝对禁止**读写或删除真实磁盘路径（`~`、`~/.ally_agent`、源码树、系统目录）。所有文件系统操作必须在 `t.TempDir()` 沙箱内完成，读取用户主目录的逻辑需通过 `t.Setenv("HOME", t.TempDir())` 隔离。
+   - 单元测试**绝对禁止**读写或删除真实磁盘路径（`~`、`~/.ally_agent`、源码树、系统目录）。所有文件系统操作必须在 `t.TempDir()` 沙箱内完成，读取用户主目录的逻辑需同时设 `t.Setenv("HOME", dir)` 与 `t.Setenv("USERPROFILE", dir)` 隔离——Windows 的 `os.UserHomeDir()` 只认后者，少设一个隔离就静默失效（代码拿去真实家目录，测试却报认证/找不到文件）。
 5. **本地编辑契约 (Edit Protocol)**:
    - 模型侧修改文件必须先 `read` 获取 `version` token，再调用 `edit`（单次调用修改单一文件；跨文件修改在同轮返回中并行调用 `edit`，由后端执行原子校验与批次写入）。
 6. **本地文本缓存必须结构性有界**:

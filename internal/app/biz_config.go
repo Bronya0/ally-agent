@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"ally-dev/internal/tools/pathutil"
+	"ally-dev/internal/tools/plugin"
 	toolshared "ally-dev/internal/tools/shared"
 
 	"golang.org/x/net/http/httpguts"
@@ -194,15 +195,16 @@ func (a *App) getConfig() (ConfigState, error) {
 	return a.config, nil
 }
 
-// persistableConfig 施加落盘前的三条不变式：悬空身份收敛（展开不出东西的身份等于
+// persistableConfig 施加落盘前的四条不变式：悬空身份收敛（展开不出东西的身份等于
 // “没有最近使用模型”）+ 派生模型字段清空（磁盘上只留 models[] 与 lastUsedModel）+
-// 隐藏页面名单清洗（只留可关闭的页面键，知识库与设置永不隐藏）。
-// 三条落盘路径共用这一份，免得新加的写入方漏掉其中一条。
+// 隐藏页面名单清洗（只留可关闭的页面键，知识库与设置永不隐藏）+ 禁用插件名单清洗
+// （只留合法 id）。落盘路径共用这一份，免得新加的写入方漏掉其中一条。
 func persistableConfig(cfg ConfigState) ConfigState {
 	convergeLastUsedModel(&cfg)
 	// 派生模型字段不落盘（见 ConfigState 的注释）：读回来时再按身份展开。
 	stripModelFields(&cfg)
 	cfg.HiddenModes = sanitizeHiddenModes(cfg.HiddenModes)
+	cfg.DisabledPlugins = plugin.NormalizeIDList(cfg.DisabledPlugins)
 	return cfg
 }
 
@@ -253,7 +255,7 @@ func (a *App) saveConfig(cfg ConfigState) error {
 // 永不隐藏，清洗时丢弃。名单收口一处：后端清洗、前端开关与一致性测试共用同一组键
 // （前端镜像是 HIDEABLE_MODES，见 frontend/src/utils/config.mjs）。有序而不用 map：
 // 测试按字面量钉住时不受迭代顺序影响，改名只改这一处。
-var hideableModes = []string{"kb", "skills", "mcp", "models", "ssh", "stats", "games"}
+var hideableModes = []string{"kb", "skills", "mcp", "models", "ssh", "stats", "games", "plugins"}
 
 // isHideableMode 报告 mode 是否可关闭（chat/settings 与未知键返回 false）。
 func isHideableMode(mode string) bool {
@@ -370,6 +372,11 @@ func mergeConfig(base, overlay ConfigState) ConfigState {
 	}
 	if overlay.DisabledTools != nil {
 		base.DisabledTools = toolshared.SanitizeDisabledTools(overlay.DisabledTools)
+	}
+	// DisabledPlugins：non-nil overlay 整体替换（含空切片表示“插件全部启用”）；
+	// nil 表示字段没携带，保留 base——否则一次旧前端保存就会把禁用名单洗掉。
+	if overlay.DisabledPlugins != nil {
+		base.DisabledPlugins = plugin.NormalizeIDList(overlay.DisabledPlugins)
 	}
 	// HiddenModes：non-nil overlay 整体替换（含空切片表示“全部可见”）；nil 表示
 	// 字段没携带（旧前端），保留 base。赋值前清洗：只留可关闭的页面键，kb 与

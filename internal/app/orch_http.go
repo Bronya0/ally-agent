@@ -31,6 +31,8 @@ import (
 
 	toolshared "ally-dev/internal/tools/shared"
 
+	"ally-dev/internal/tools/plugin"
+
 	"codeberg.org/readeck/go-readability/v2"
 
 	"github.com/andybalholm/brotli"
@@ -211,7 +213,7 @@ func (a *App) doHTTPRequest(parent context.Context, cfg ConfigState, req HTTPReq
 	if err != nil {
 		return httpFetchResult{}, codedToolError("E_HTTP_BAD_URL", err)
 	}
-	if err := validateHTTPURLAccessForConfig(target, allowPrivateNetwork, cfg); err != nil {
+	if err := validateHTTPTargetAccess(target, allowPrivateNetwork, cfg, req.AllowedHosts); err != nil {
 		return httpFetchResult{}, err
 	}
 
@@ -281,7 +283,7 @@ func (a *App) doHTTPRequest(parent context.Context, cfg ConfigState, req HTTPReq
 			if len(via) >= 5 {
 				return errors.New("stopped after 5 redirects")
 			}
-			if err := validateHTTPURLAccessForConfig(next.URL, allowPrivateNetwork, cfg); err != nil {
+			if err := validateHTTPTargetAccess(next.URL, allowPrivateNetwork, cfg, req.AllowedHosts); err != nil {
 				return err
 			}
 			redirects = append(redirects, next.URL.String())
@@ -516,6 +518,29 @@ func validateHTTPURLAccessForConfig(target *url.URL, allowPrivate bool, cfg Conf
 	}
 	// Proxy DNS may resolve names that are intentionally unavailable locally.
 	// Keep literal private IP blocking, but let the configured proxy resolve hostnames.
+	return nil
+}
+
+// validateHTTPTargetAccess 是「这个 URL 能不能请求」的唯一判定入口：
+//
+//   - allowedHosts 非空（插件 HTTP 代理）：白名单说了算。不在名单里直接拒绝，且
+//     不再看 allowPrivateNetwork——公司内网服务本来就该由插件自己声明放行；
+//   - allowedHosts 为空（模型侧 http_request / web_fetch）：完全走原有的 SSRF
+//     判定，行为与以前完全一致。
+//
+// 首包与重定向目标共用这一个函数，所以重定向不可能绕过白名单。
+func validateHTTPTargetAccess(target *url.URL, allowPrivate bool, cfg ConfigState, allowedHosts []string) error {
+	if len(allowedHosts) == 0 {
+		return validateHTTPURLAccessForConfig(target, allowPrivate, cfg)
+	}
+	// 先做 scheme/host 的基础校验（allowPrivate=true 表示这一趟不查私网）。
+	if err := validateHTTPURLAccess(target, true); err != nil {
+		return err
+	}
+	host := target.Hostname()
+	if !plugin.HostAllowed(host, allowedHosts) {
+		return codedToolError("E_PLUGIN_HOST_DENIED", fmt.Errorf("主机 %s 不在插件声明的 permissions.http 里", host))
+	}
 	return nil
 }
 

@@ -19,7 +19,9 @@ export const COMPACT_THRESHOLD_MAX = 0.95;
 
 // 可关闭的页面键：Agent（chat）与设置（settings）永不隐藏。与后端
 // sanitizeHiddenModes 同一组键，两边漂移会导致“界面关了、后端又放回来”。
-export const HIDEABLE_MODES = ['kb', 'skills', 'mcp', 'models', 'ssh', 'stats', 'games'];
+// 插件管理页（plugins）是内置页面，所以在这里；插件的**页面**不走这套，它们的显隐
+// 由各自的启用开关表达（见 App.vue 的 isModeEnterable）。
+export const HIDEABLE_MODES = ['kb', 'skills', 'mcp', 'models', 'ssh', 'stats', 'games', 'plugins'];
 
 // 可关闭页面的显示名（i18n 键）：设置页的开关列表由 HIDEABLE_MODES 派生，键集合
 // 必须与它完全一致——漏一个键就少一个开关（点了没反应），多一个键是死配置。
@@ -32,6 +34,7 @@ export const PAGE_VISIBILITY_LABELS = {
   ssh: 'app.mode.sshCluster',
   stats: 'header.tokenStats',
   games: 'header.games',
+  plugins: 'app.mode.plugins',
 };
 
 export function normalizeHiddenModes(modes) {

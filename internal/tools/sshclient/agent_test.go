@@ -131,6 +131,17 @@ func (f *fakeAgent) signers() ([]ssh.Signer, error) {
 	return agent.NewClient(conn).Signers()
 }
 
+// setFakeHome 把「家目录」指向 dir：类 Unix 的 os.UserHomeDir() 读 HOME，Windows 读
+// USERPROFILE——只设 HOME 的话，Windows 上 sshclient 会去**真实**用户目录里找 ~/.ssh，
+// 「临时家目录」这份隔离就静默失效了（表现为认证失败，而不是环境错误，很难往隔离上想）。
+// 仓库里其它包（internal/app 的 redirectAppStateDir、internal/tools/command）也是两个
+// 都设，见 LESSONS 的 home-isolation。
+func setFakeHome(t *testing.T, dir string) {
+	t.Helper()
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
+}
+
 // writeDefaultPrivateKey 在临时 HOME 下放一份无口令私钥，等价于本机已配好的
 // ~/.ssh/id_ed25519，并把它作为默认私钥的来源。
 func writeDefaultPrivateKey(t *testing.T) ssh.Signer {
@@ -144,14 +155,15 @@ func writeDefaultPrivateKey(t *testing.T) ssh.Signer {
 	if err != nil {
 		t.Fatalf("MarshalPrivateKey: %v", err)
 	}
-	sshDir := filepath.Join(t.TempDir(), ".ssh")
+	home := t.TempDir()
+	sshDir := filepath.Join(home, ".ssh")
 	if err := os.MkdirAll(sshDir, 0o700); err != nil {
 		t.Fatalf("mkdir .ssh: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(sshDir, "id_ed25519"), pem.EncodeToMemory(block), 0o600); err != nil {
 		t.Fatalf("write id_ed25519: %v", err)
 	}
-	t.Setenv("HOME", filepath.Dir(sshDir))
+	setFakeHome(t, home)
 	return signer
 }
 
