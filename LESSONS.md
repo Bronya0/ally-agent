@@ -189,3 +189,4 @@
 [plugin-disabled-snapshot-stale] 2026-10-08 中危 保存配置时禁用名单不能用内存快照：刷新失败时快照停在上一版，会把刚做的启停静默回退。现取一次真相，取不到就摘键后端保留 base。@App.vue
 [plugin-stamp-second-precision] 2026-10-08 低危 插件缓存戳取目录 mtime 的 RFC3339（秒级）：同一秒内连续两次覆盖升级会撞出同一个戳，入口 URL 不变、模块表命中旧实例。戳要带纳秒。@orch_plugin.go
 [root-composite] 2026-10-08 高危 schema 顶层 oneOf/anyOf/allOf：Anthropic 整个请求 400、全部工具失效，适配层须展平。@prov_adapter_anthropic.go
+[target-set-per-call] 2026-10-09 中危 一次调用的写目标是集合：同一路径重复列出（含两种写法）登记两次会被判成与自己冲突，枚举时按身份键去重。@orch_batch_policy.go

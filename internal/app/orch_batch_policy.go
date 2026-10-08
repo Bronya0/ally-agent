@@ -289,7 +289,8 @@ type fileMutationTarget struct{ key, display string }
 
 // fileMutationTargets resolves the paths one mutation call would touch. name is
 // normalized first for the same reason as isOrderedFileMutationTool: every branch
-// below compares against the canonical lowercase tool names.
+// below compares against the canonical lowercase tool names. The result is a set:
+// one path, one target (see dedupeMutationTargets).
 func fileMutationTargets(cfg ConfigState, name, arguments string) []fileMutationTarget {
 	name = normalizeToolName(name)
 	if name == "edit" {
@@ -336,7 +337,7 @@ func fileMutationTargets(cfg ConfigState, name, arguments string) []fileMutation
 			cleanPath := path.Clean(strings.ReplaceAll(strings.TrimSpace(p), "\\", "/"))
 			targets = append(targets, fileMutationTarget{remoteMutationKey(target, cleanPath), target + " · " + cleanPath})
 		}
-		return targets
+		return dedupeMutationTargets(targets)
 	}
 	for _, p := range paths {
 		target, ok := localMutationTarget(cfg, p)
@@ -345,7 +346,25 @@ func fileMutationTargets(cfg ConfigState, name, arguments string) []fileMutation
 		}
 		targets = append(targets, target)
 	}
-	return targets
+	return dedupeMutationTargets(targets)
+}
+
+// dedupeMutationTargets keeps one target per identity key. A call that names the
+// same path twice — including two spellings of it — touches that path once, so a
+// repeated key must not reach the conflict grouping: it would read as the call
+// conflicting with itself, while a duplicated list is that call's own rule's
+// business (checkDeletePathList).
+func dedupeMutationTargets(targets []fileMutationTarget) []fileMutationTarget {
+	seen := make(map[string]bool, len(targets))
+	unique := make([]fileMutationTarget, 0, len(targets))
+	for _, target := range targets {
+		if seen[target.key] {
+			continue
+		}
+		seen[target.key] = true
+		unique = append(unique, target)
+	}
+	return unique
 }
 
 // remoteMutationKey 是远端变更目标的唯一键：批次写冲突判定与一次远端删除调用

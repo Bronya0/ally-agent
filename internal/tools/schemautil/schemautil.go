@@ -99,22 +99,6 @@ var topLevelComposites = []string{"oneOf", "anyOf", "allOf"}
 // The schema it is given is not mutated: the root, its properties and its
 // required list are rebuilt, while the nested schemas are shared because they are
 // only read.
-// branchList reads one composite keyword as a branch list. Generators
-// occasionally emit a single object instead of a one-element array; treating it
-// as no branches would let the keyword reach the Anthropic wire untouched and
-// fail the whole request, so a lone branch counts as a one-branch list. Any
-// other shape (a string, a number, nil) is not a branch list and is ignored —
-// the keyword is still dropped from the flattened root below.
-func branchList(value any) []any {
-	if branches, ok := value.([]any); ok {
-		return branches
-	}
-	if branch, ok := value.(map[string]any); ok {
-		return []any{branch}
-	}
-	return nil
-}
-
 func FlattenTopLevelComposites(schema map[string]any) map[string]any {
 	if schema == nil {
 		return nil
@@ -209,6 +193,22 @@ func FlattenTopLevelComposites(schema map[string]any) map[string]any {
 		out["required"] = ordered
 	}
 	return out
+}
+
+// branchList reads one composite keyword as a branch list. Generators
+// occasionally emit a single object instead of a one-element array; treating it
+// as no branches would let the keyword reach the Anthropic wire untouched and
+// fail the whole request, so a lone branch counts as a one-branch list. Any
+// other shape (a string, a number, nil) is not a branch list and is ignored —
+// the keyword is still dropped from the flattened root.
+func branchList(value any) []any {
+	if branches, ok := value.([]any); ok {
+		return branches
+	}
+	if branch, ok := value.(map[string]any); ok {
+		return []any{branch}
+	}
+	return nil
 }
 
 // mergeBranchProperties adds the properties one composite branch declares to the

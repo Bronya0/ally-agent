@@ -471,6 +471,37 @@ func TestDetectWriteBatchConflictsSeesSinglePathTools(t *testing.T) {
 	}
 }
 
+// TestDetectWriteBatchConflictsCollapsesRepeatWithinOneCall pins the set semantics
+// of one call's targets: a delete — local or remote — that names the same path
+// twice (here in two spellings of it) touches that path once, so it must not be
+// reported as a batch conflict with itself. The malformed list is the call's own
+// duplicate rule's business (checkDeletePathList); a later call in the same batch
+// is still skipped.
+func TestDetectWriteBatchConflictsCollapsesRepeatWithinOneCall(t *testing.T) {
+	cfg := ConfigState{Workspace: t.TempDir()}
+	calls := []openai.ToolCall{
+		{Function: openai.FunctionCall{Name: "delete", Arguments: `{"paths":["sample.txt","./sample.txt"]}`}},
+	}
+	if conflicts := detectWriteBatchConflicts(cfg, calls); len(conflicts) != 0 {
+		t.Fatalf("a repeated path inside one call is not a batch conflict, got %#v", conflicts)
+	}
+
+	calls = append(calls, openai.ToolCall{Function: openai.FunctionCall{Name: "edit", Arguments: `{"path":"sample.txt","version":"abc123","changes":[{"oldText":"a","newText":"b"}]}`}})
+	conflicts := detectWriteBatchConflicts(cfg, calls)
+	if len(conflicts) != 1 || toolErrorCode(conflicts[1]) != "E_WRITE_BATCH_CONFLICT" {
+		t.Fatalf("the earlier call still owns the path, got %#v", conflicts)
+	}
+
+	// The remote branch carries the same set semantics: remoteMutationKey cleans the
+	// separators and the `.` segments, so the two spellings are one target.
+	remoteCalls := []openai.ToolCall{
+		{Function: openai.FunctionCall{Name: "remote_delete_path", Arguments: `{"target":"dev:/w","paths":["a.txt","./a.txt"]}`}},
+	}
+	if remoteConflicts := detectWriteBatchConflicts(cfg, remoteCalls); len(remoteConflicts) != 0 {
+		t.Fatalf("a repeated remote path inside one call is not a batch conflict, got %#v", remoteConflicts)
+	}
+}
+
 // 表里的名字必须是真实注册的内置工具：拼错一个字母就会静默退回并发池
 // （等于没生效），而这类错不会在别处报出来。
 func TestToolBatchPhasesOnlyNamesRegisteredTools(t *testing.T) {
